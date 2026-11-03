@@ -335,7 +335,7 @@ describe('genereazaConvocator', () => {
     const baza = complet()
     const gen = (text_gdpr, permiteIncomplet) => genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon(), permiteIncomplet })
     const PROPRII = /adrese web proprii/
-    const EXTERNE = /adrese web externe neaprobate.*permise doar: https:\/\/www\.dataprotection\.ro/
+    const EXTERNE = /adrese web externe neaprobate.*permise doar: dataprotection\.ro, www\.dataprotection\.ro/
     const refuzate = [
       ['Detalii: gazpet.ro/gdpr oricând.', /adrese web proprii.*„gazpet\.ro”, în word\/document\.xml/],
       ['Detalii: www.gazpet.ro/x.', PROPRII],
@@ -346,8 +346,8 @@ describe('genereazaConvocator', () => {
       ['Formular: https://exemplu.invalid/redari/raspuns/tok.', /adrese web proprii.*„\/redari\/raspuns”/],
       ['Informare: exemplu.invalid/redari/informare.', /adrese web proprii.*„\/redari\/informare”/],
       ['Sistem pontaj-pro intern.', /adrese web proprii.*„pontaj-pro”/],
-      ['Detalii la https://exemplu.com.', /adrese web externe neaprobate.*„:\/\/”/],
-      ['Detalii la www.alt-site.ro.', /adrese web externe neaprobate.*„www\.”/],
+      ['Detalii la https://exemplu.com.', /adrese web externe neaprobate.*„exemplu\.com”/],
+      ['Detalii la www.alt-site.ro.', /adrese web externe neaprobate.*„alt-site\.ro”/],
       // #970 r8 (Jakarinos P2-01 + P2-02): schemă, port, utilizator, IP, userinfo, domeniu lipit după excepție
       ['Detalii la ftp://dataprotection.ro/x.', EXTERNE],
       ['Detalii la custom://dataprotection.ro/x.', EXTERNE],
@@ -358,7 +358,11 @@ describe('genereazaConvocator', () => {
       ['Detalii la https://gazpet.ro@example.com/x.', EXTERNE],
       ['Detalii la https://dataprotection.ro.example.com/x.', EXTERNE],
       ['Detalii la xhttps://dataprotection.ro/x.', EXTERNE],
-      ['Detalii la https://dataprotection.ro/a:b.', EXTERNE],
+      // #970 r12: tokenuri — URL-uri externe fără schemă, terminații oarecare
+      ['Detalii la exemplu.ro.xyz/gdpr.', EXTERNE],
+      ['Detalii la portal.com.uk/gdpr.', EXTERNE],
+      ['Detalii la dataprotection.ro.a.com/gdpr.', EXTERNE],
+      ['Detalii la a.ro și x.y.com.', EXTERNE],
       // #970 r9: URL lipit de un e-mail cu virgulă / punct și virgulă
       ['Site: www.gazpet.ro,contact@example.com', PROPRII],
       ['Site: www.exemplu.ro,contact@example.com', EXTERNE],
@@ -392,14 +396,14 @@ describe('genereazaConvocator', () => {
     expect(adresaWebNepermisa('redari@www.gazpet.ro')).toBeNull()
     expect(adresaWebNepermisa('HTTPS://WWW.DATAPROTECTION.RO')).toBeNull()
     expect(adresaWebNepermisa('https://dataprotection.ro/index.jsp?page=plangeri')).toBeNull()
-    expect(adresaWebNepermisa('https://dataprotection.ro:443/x')).toEqual({ adresa: '://', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('https://ion@dataprotection.ro/x')).toEqual({ adresa: '://', categorie: 'neaprobata' })
+    expect(adresaWebNepermisa('https://dataprotection.ro:443/x')).toEqual({ adresa: 'dataprotection.ro', categorie: 'neaprobata' })
+    expect(adresaWebNepermisa('https://ion@dataprotection.ro/x')).toEqual({ adresa: 'dataprotection.ro', categorie: 'neaprobata' })
     expect(adresaWebNepermisa('www.gazpet.ro')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
     // #970 r9 (Jakarinos P2): e-mailul strict nu mai înghite un URL lipit cu virgulă / punct și virgulă
     expect(adresaWebNepermisa('Site: www.gazpet.ro,contact@example.com')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
-    expect(adresaWebNepermisa('www.exemplu.ro,contact@example.com')).toEqual({ adresa: 'www.', categorie: 'neaprobata' })
+    expect(adresaWebNepermisa('www.exemplu.ro,contact@example.com')).toEqual({ adresa: 'example.com', categorie: 'neaprobata' })
     expect(adresaWebNepermisa('www.gazpet.ro;a@b.ro')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
-    expect(adresaWebNepermisa('Scrieți la www.x@exemplu.ro')).toEqual({ adresa: 'www.', categorie: 'neaprobata' })
+    expect(adresaWebNepermisa('Scrieți la www.x@exemplu.ro')).toEqual({ adresa: 'exemplu.ro', categorie: 'neaprobata' })
     expect(adresaWebNepermisa('contact@example.com')).toBeNull()
     expect(adresaWebNepermisa('Scrieți la (contact@example.com), „redari@gazpet.ro”; ion@www.dataprotection.ro.')).toBeNull()
     // #970 r10 (Copilot P2-01): adresa proprie ascunsă în calea unui URL permis
@@ -416,7 +420,10 @@ describe('genereazaConvocator', () => {
     // #970 r11 (Jakarinos P2): lista albă doar pentru domeniul ÎNTREG; etichete de o literă prinse
     const refuzateR11 = [
       ['Detalii la dataprotection.ro.a.com/gdpr.', 'dataprotection.ro.a.com'], ['Detalii la dataprotection.ro.xyz/gdpr.', 'dataprotection.ro.xyz'], ['Detalii la evil-dataprotection.ro.', 'evil-dataprotection.ro'],
-      ['Detalii la www.dataprotection.ro.evil.com', 'www.'], ['Detalii la https://dataprotection.ro.x.ro/', '://'],
+      ['Detalii la www.dataprotection.ro.evil.com', 'dataprotection.ro.evil.com'], ['Detalii la https://dataprotection.ro.x.ro/', 'dataprotection.ro.x.ro'],
+      ['Detalii la exemplu.ro.xyz/gdpr', 'exemplu.ro.xyz'], ['Detalii la portal.com.uk/gdpr', 'portal.com.uk'],
+      ['Detalii la https://192.168.1.10/x', '192.168.1.10'], ['Detalii la ftp://dataprotection.ro/x', 'dataprotection.ro'],
+      ['Detalii la https://gazpet.ro@example.com/x', 'example.com'], ['Detalii la http://[::1]/x', '(URL neanalizabil)'],
       ['Detalii la a.ro', 'a.ro'], ['Detalii la x.y.com', 'x.y.com'], ['Detalii la dataprotection.ro-evil.ro', 'dataprotection.ro-evil.ro'],
     ]
     for (const [t, adresa] of refuzateR11) {
@@ -424,7 +431,11 @@ describe('genereazaConvocator', () => {
       expect(g?.categorie, t).toBe('neaprobata')
       if (adresa !== '://') expect(g.adresa, t).toBe(adresa)
     }
-    for (const t of ['(dataprotection.ro)', 'Plângere la dataprotection.ro.', 'Plângere la dataprotection.ro', 'Vezi www.dataprotection.ro/legislatie', 'Vezi dataprotection.ro/legislatie, apoi acces.']) {
+    for (const t of ['(dataprotection.ro)', 'Plângere la dataprotection.ro.', 'Plângere la dataprotection.ro', 'Vezi www.dataprotection.ro/legislatie', 'Vezi dataprotection.ro/legislatie, apoi acces.',
+      // #970 r12: calea nu se clasifică drept domeniu
+      'Vezi dataprotection.ro/legislatie/dataprotection.ro.pdf.', 'Vezi https://dataprotection.ro/a:b/x.y.com', 'HTTPS://WWW.DATAPROTECTION.RO', 'redari@www.gazpet.ro', 'ion@www.dataprotection.ro',
+      // fără alarmă pe textul juridic, inclusiv lipit („lit.c”, „art.6”) și rânduri cu „Data:03.11.2026”
+      'S.N.T.G.N. S.R.L. lit.c art.6 H.G. nr. 1.234/2022 pct. 5.2 A.P.M. Nr. 123/2026 Data:03.11.2026 ora 09:00 13.00–16.00 ș.a. [UAT].']) {
       expect(adresaWebNepermisa(t), t).toBeNull()
     }
     // fără alarme false pe textul juridic: abrevieri, articole, numere, „Primăria Comunei X.”, default-ul text_gdpr din BD
@@ -475,7 +486,7 @@ describe('genereazaConvocator', () => {
     const alternativ = text => '<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wps:txbx><w:txbxContent><w:p><w:r><w:t>Text curat</w:t></w:r></w:p></w:txbxContent></wps:txbx></w:drawing></mc:Choice>' +
       `<mc:Fallback><w:pict><v:shape><w:r><w:t>${text}</w:t></w:r></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>`
     const doarPict = text => `<w:p><w:r><w:pict><v:shape><w:r><w:t>${text}</w:t></w:r></v:shape></w:pict></w:r></w:p>`
-    for (const [p, adresa, categorie] of [[alternativ('Vezi https://exemplu.com/x'), '://', 'neaprobata'], [alternativ('Vezi portal.gazpet.ro'), 'gazpet.ro', 'proprie'], [doarPict('Vezi https://exemplu.com/x'), '://', 'neaprobata']]) {
+    for (const [p, adresa, categorie] of [[alternativ('Vezi https://exemplu.com/x'), 'exemplu.com', 'neaprobata'], [alternativ('Vezi portal.gazpet.ro'), 'gazpet.ro', 'proprie'], [doarPict('Vezi https://exemplu.com/x'), 'exemplu.com', 'neaprobata']]) {
       const t = await sablonCu({ 'word/document.xml': inainteDeSect(p) })
       expect(await adresaProprieInDocx(t), p).toEqual({ parte: 'word/document.xml', adresa, categorie })
       await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t })).rejects.toThrow(/Convocatorul poștal nu poate tipări adrese web/)

@@ -386,63 +386,70 @@ export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat, {
   return plin(linkInformareConfigurat) && !areVerso ? `${baza}\n${TRIMITERE_VERSO_GDPR}` : baza
 }
 
-// #970 r8–r10: regula LITERALĂ a adreselor web pe convocatorul completat (adresaWebNepermisa):
-//  1. se scot adresele de e-mail (o adresă de e-mail nu e adresă web): `redari@www.gazpet.ro` nu declanșează nimic;
-//  2. (r10, Copilot P2-01) adresele PROPRII (MARCAJE_PROPRII) se caută ACUM, înaintea excepțiilor, ca să nu se ascundă în calea
-//     unui URL permis (`https://dataprotection.ro/redari.gazpet.ro/x`) — găsite = refuz;
-//  3. se scot excepțiile permise, scrise LITERAL (URL_EXTERNE_PERMISE, fără deosebire de majuscule), urmate cel mult de `/` și
-//     o cale fără spații, `@` sau `:`, apoi de spațiu alb, de final sau de punctuație de frază urmată de spațiu / final;
-//  4. dacă în ce rămâne apare `://` sau `www.` → refuz;
-//  5. (r10, Copilot P2-02) dacă rămâne un domeniu fără schemă (DOMENIU_FARA_PREFIX: etichete de cel puțin 2 caractere, terminația
-//     .ro .com .eu .net .org .info .io .app, cu limite de cuvânt), altul decât DOMENII_PERMISE_FARA_PREFIX → refuz.
+// #970 r12: adresele web pe convocatorul completat se clasifică pe TOKENURI (adresaWebNepermisa), fără regexuri de domeniu:
+//  A. adresele PROPRII (MARCAJE_PROPRII) se caută ca subșir pe text, după scoaterea e-mailurilor și înaintea oricărei excepții,
+//     ca să nu se ascundă în calea unui URL permis (`https://dataprotection.ro/redari.gazpet.ro/x`) — găsite = refuz;
+//  B. textul se împarte la spații albe; fiecare token pierde punctuația de la margini (`()[]{}«»„”“"'`, iar la dreapta și
+//     `.,;:!?`); un token care e în întregime un e-mail valid (RX_EMAIL_INTREG) e permis;
+//  C. gazda: cu `://`, partea dintre `://` și primul `/`, `?` sau `#`; altfel, dacă tokenul începe cu `www.` sau partea dinainte
+//     de primul `/` are un punct, acea parte; ce e în cale nu se clasifică;
+//  D. gazda e „web” dacă tokenul are `://` sau începe cu `www.`, ori dacă gazda (fără `user@` și `:port`) are un punct și ultima
+//     etichetă e alfabetică, de 2–24 litere. O gazdă web cu `@`, `:`, `[` sau `]`, cu altă schemă decât http/https sau alta
+//     decât GAZDE_PERMISE (exact, fără deosebire de majuscule) e refuzată.
+// Textul juridic nu se termină într-o etichetă alfabetică de 2+ litere după punct („S.N.T.G.N.”, „lit.c”, „art.6”, „pct. 5.2”).
 // Calea informării e scrisă escapat, ca în domeniuPublic.js (ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal).
-export const URL_EXTERNE_PERMISE = ['https://www.dataprotection.ro', 'http://www.dataprotection.ro', 'https://dataprotection.ro', 'www.dataprotection.ro']
-export const DOMENII_PERMISE_FARA_PREFIX = ['dataprotection.ro']
+export const GAZDE_PERMISE = ['dataprotection.ro', 'www.dataprotection.ro']
 export const MARCAJE_PROPRII = [/gazpet\.ro/i, /vercel\.app/i, /pontaj-pro/i, /\/redari\/raspuns/i, /\/redari\/informare/i]
-// pasul 1 (#970 r9): e-mail STRICT — partea locală [A-Za-z0-9._%+-]+ (nu începe cu „www.”), domeniul [A-Za-z0-9.-]+.tld, cu
-// limite: nu e lipit în stânga de un caracter de e-mail și nu continuă în dreapta. Virgula, punctul și virgula, ghilimelele,
-// parantezele, „:” și „/” nu intră în e-mail, deci „www.gazpet.ro,contact@example.com” lasă „www.gazpet.ro” de verificat, iar
-// „https://ion@dataprotection.ro” lasă „https://” (refuzat)
+// #970 r9: e-mail STRICT — partea locală [A-Za-z0-9._%+-]+ (nu începe cu „www.”), domeniul [A-Za-z0-9.-]+.tld, cu limite;
+// virgula, „;”, ghilimelele, parantezele, „:” și „/” nu intră în e-mail (folosit la pasul A, pe tot textul)
 const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9-])/gi
-const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
-// pasul 3: excepțiile, cea mai lungă întâi; nu lipite de alt text în stânga
-const RX_PERMISE = new RegExp(`(?<![\\w.+\\-/:@])(?:${[...URL_EXTERNE_PERMISE].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@:]*)?(?=$|[\\s\\u00a0)\\]"'”»]|[.,;!?](?:[\\s\\u00a0]|$))`, 'gi')
-const RX_WEB = /:\/\/|www\./i
-// pasul 5: grupul 1 = domeniul ÎNTREG (fără cale), comparat EXACT cu lista albă. #970 r11: etichete de cel puțin 1 caracter
-// („dataprotection.ro.a.com” e un singur domeniu, nu „dataprotection.ro” + rest), iar domeniul nu se poate opri înaintea
-// unui „.” + literă / cifră (altfel „dataprotection.ro.xyz” ar fi recunoscut ca „dataprotection.ro”)
-const RX_DOMENIU_FARA_PREFIX = /(?<![\w.@/-])([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ro|com|eu|net|org|info|io|app))(?:\/\S*)?(?![\w-]|\.[a-z0-9])/gi
+// același e-mail, ancorat pe tot tokenul (pasul B)
+const RX_EMAIL_INTREG = /^(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/i
+const RX_MARGINE_STANGA = /^[()[\]{}«»„”“"']+/
+const RX_MARGINE_DREAPTA = /[()[\]{}«»„”“"'.,;:!?]+$/
+const RX_ETICHETA_WEB = /^[a-z]{2,24}$/i
+
+/** Clasifică un token (deja curățat de margini): null = permis / nu e adresă web; altfel { adresa, categorie: 'neaprobata' }. */
+function clasificaToken(token) {
+  if (!token || RX_EMAIL_INTREG.test(token)) return null
+  const iSchema = token.indexOf('://')
+  let gazda = null
+  let schema = null
+  if (iSchema >= 0) {
+    schema = token.slice(0, iSchema).toLowerCase()
+    gazda = token.slice(iSchema + 3).split(/[/?#]/)[0]
+  } else {
+    const inainte = token.split('/')[0]
+    if (/^www\./i.test(token) || inainte.includes('.')) gazda = inainte
+  }
+  if (gazda === null) return null
+  // nucleul gazdei, fără „user@” și „:port”, pentru clasificare și pentru mesaj (fără utilizator în mesaj)
+  const nucleu = gazda.replace(/^.*@/, '').replace(/:.*$/, '').toLowerCase()
+  const etichete = nucleu.split('.')
+  const web = iSchema >= 0 || /^www\./i.test(token) || (etichete.length > 1 && RX_ETICHETA_WEB.test(etichete.at(-1)))
+  if (!web) return null
+  const adresa = /[[\]]/.test(gazda) || !nucleu ? '(URL neanalizabil)' : nucleu.replace(/^www\./, '')
+  if (/[@:[\]]/.test(gazda)) return { adresa, categorie: 'neaprobata' }
+  if (schema !== null && schema !== 'http' && schema !== 'https') return { adresa, categorie: 'neaprobata' }
+  return GAZDE_PERMISE.includes(gazda.toLowerCase()) ? null : { adresa, categorie: 'neaprobata' }
+}
 
 /**
  * Prima adresă web nepermisă dintr-un text: `{ adresa, categorie: 'proprie' | 'neaprobata' }` sau null. `adresa` = doar
- * marcajul găsit (adresa proprie, „://” / „www.” sau domeniul fără schemă), fără text din jur. Cu `doarProprii` (textul
- * concatenat, unde lipirea poate crea forme false) contează doar adresele proprii.
+ * marcajul propriu sau gazda (fără utilizator, cale sau text din jur). Cu `doarProprii` (textul concatenat, unde lipirea poate
+ * crea forme false) contează doar adresele proprii.
  */
 export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
-  const faraEmail = String(text ?? '').replace(RX_EMAIL, ' ')
+  const t = String(text ?? '')
+  const faraEmail = t.replace(RX_EMAIL, ' ')
   for (const r of MARCAJE_PROPRII) {
     const m = r.exec(faraEmail)
     if (m) return { adresa: m[0].toLowerCase(), categorie: 'proprie' }
   }
   if (doarProprii) return null
-  const ramas = faraEmail.replace(RX_PERMISE, ' ')
-  const w = RX_WEB.exec(ramas)
-  if (w) return { adresa: w[0].toLowerCase(), categorie: 'neaprobata' }
-  for (const m of ramas.matchAll(RX_DOMENIU_FARA_PREFIX)) {
-    const domeniu = m[1].toLowerCase()
-    if (!DOMENII_PERMISE_FARA_PREFIX.includes(domeniu)) return { adresa: domeniu, categorie: 'neaprobata' }
-  }
-  // #970 r11: orice apariție a unui domeniu din lista albă trebuie să fie domeniul ÎNTREG — tokenul de domeniu din jurul ei
-  // (litere, cifre, „.”, „-”, fără punctul final de frază) se compară exact, ca „dataprotection.ro.xyz” să nu treacă
-  for (const permis of DOMENII_PERMISE_FARA_PREFIX) {
-    for (const m of ramas.matchAll(new RegExp(escRx(permis), 'gi'))) {
-      let s = m.index
-      while (s > 0 && /[a-z0-9.-]/i.test(ramas[s - 1])) s -= 1
-      let e = m.index + m[0].length
-      while (e < ramas.length && /[a-z0-9.-]/i.test(ramas[e])) e += 1
-      const token = ramas.slice(s, e).toLowerCase().replace(/\.+$/, '')
-      if (!DOMENII_PERMISE_FARA_PREFIX.includes(token)) return { adresa: token, categorie: 'neaprobata' }
-    }
+  for (const brut of t.split(/[\s ]+/)) {
+    const gasit = clasificaToken(brut.replace(RX_MARGINE_STANGA, '').replace(RX_MARGINE_DREAPTA, ''))
+    if (gasit) return gasit
   }
   return null
 }
@@ -456,9 +463,11 @@ export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
  */
 const RX_PARTE_TIPARIBILA = /^word\/(?:document|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/
 
-// textul unei porțiuni XML: <w:t> decodate, run-urile lipite, un rând nou la fiecare sfârșit de paragraf
-const textCuParagrafe = xml => [...String(xml).matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<\/w:p>/g)]
-  .map(m => (m[1] !== undefined ? unescapeXml(m[1]) : '\n')).join('')
+// textul unei porțiuni XML: <w:t> decodate, run-urile lipite, un rând nou la fiecare sfârșit de paragraf; #970 r12: un rând
+// nou în paragraf (<w:br/>, <w:cr/>) și tabul sunt spațiu alb tipărit, deci despart tokenurile („Husnicioara.” + rând nou +
+// „Destinatari” nu e „Husnicioara.Destinatari”)
+const textCuParagrafe = xml => [...String(xml).matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<\/w:p>|<w:(?:br|cr|tab)(?:\s[^>]*)?\/>/g)]
+  .map(m => (m[1] !== undefined ? unescapeXml(m[1]) : m[0] === '</w:p>' ? '\n' : ' ')).join('')
 // blocurile de casetă de text și reprezentările lor alternative (mc:Fallback, VML w:pict)
 const RX_FALLBACK = /<mc:Fallback[\s>][\s\S]*?<\/mc:Fallback>/g
 const RX_CASETA = /<w:txbxContent[\s>][\s\S]*?<\/w:txbxContent>/g
@@ -501,7 +510,7 @@ export async function adresaProprieInDocx(docx) {
 const mesajAdresaNepermisa = g => (g.categorie === 'proprie'
   ? `Convocatorul poștal nu poate tipări adrese web proprii — răspuns sau informare („${g.adresa}”, în ${g.parte}). Scoateți adresa din textul de pe proiect (de ex. text_gdpr).`
   : g.categorie === 'neaprobata'
-    ? `Convocatorul poștal nu poate tipări adrese web externe neaprobate („${g.adresa}”, în ${g.parte}); permise doar: ${URL_EXTERNE_PERMISE.join(', ')}. Scoateți adresa din textul de pe proiect (de ex. text_gdpr).`
+    ? `Convocatorul poștal nu poate tipări adrese web externe neaprobate („${g.adresa}”, în ${g.parte}); permise doar: ${GAZDE_PERMISE.join(', ')}. Scoateți adresa din textul de pe proiect (de ex. text_gdpr).`
     : `Convocatorul poștal nu poate fi verificat: ${g.adresa} în ${g.parte}. Folosiți șablonul convocatorului fără conținut importat (altChunk).`)
 
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null

@@ -89,29 +89,28 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): prima propoziție cu marcaj devine
     „Informarea completă se află pe verso.” (celelalte se scot); fără marcaj, trimiterea se adaugă la final dacă proiectul are
     `link_informare_gdpr`. Dacă textul pomenește deja versoul, în orice formulare (r10), nu se mai adaugă nimic.
-- **Regula LITERALĂ a adreselor web pe documentul completat (r8–r10)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
-  strict și la previzualizare; constantele unice `URL_EXTERNE_PERMISE`, `DOMENII_PERMISE_FARA_PREFIX`, `MARCAJE_PROPRII` din
-  `docx.js`), în 5 pași:
-  1. se scot adresele de e-mail, cu regex STRICT (r9): partea locală `[A-Za-z0-9._%+-]+` (nu începe cu `www.`), domeniul
-     `[A-Za-z0-9.-]+.tld`, cu limite de cuvânt; virgula, `;`, ghilimelele, parantezele, `:` și `/` nu intră în e-mail.
-     `redari@gazpet.ro`, `redari@www.gazpet.ro`, `ion@www.dataprotection.ro` nu declanșează nimic, dar
-     `www.gazpet.ro,contact@example.com` lasă `www.gazpet.ro` de verificat (refuzat);
-  2. (r10) se caută adresele PROPRII (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns, calea de informare) ÎNAINTE de
-     excepții, ca să nu se ascundă în calea unui URL permis (`https://dataprotection.ro/redari.gazpet.ro/x`) → refuz;
-  3. se scot excepțiile permise, LITERAL și fără deosebire de majuscule: `https://www.dataprotection.ro`,
-     `http://www.dataprotection.ro`, `https://dataprotection.ro`, `www.dataprotection.ro` (ANSPDCP), nelipite în stânga de alt
-     text, urmate cel mult de `/` și o cale fără spații, `@` sau `:`, apoi de spațiu alb, final, paranteză / ghilimele sau
-     punctuație urmată de spațiu / final;
-  4. dacă în ce rămâne apare `://` sau `www.` → refuz (alt domeniu, IP, port, utilizator, altă schemă precum `ftp://`);
-  5. (r10–r11) un domeniu fără schemă (`[a-z0-9-]+(.[a-z0-9-]+)*.(ro|com|eu|net|org|info|io|app)`, cu limite de cuvânt, ÎNTREG —
-     nu se oprește înaintea unui „.” + literă / cifră; ex. `exemplu.ro/pagina`, `portal.transgaz.ro/gdpr`, `a.ro`), altul
-     decât `dataprotection.ro` → refuz. În plus, orice apariție a lui `dataprotection.ro` trebuie să fie domeniul întreg
-     (tokenul de litere / cifre / `.` / `-` din jur, fără punctul de final, comparat exact): `dataprotection.ro.a.com`,
-     `dataprotection.ro.xyz`, `evil-dataprotection.ro` → refuz. Textul juridic („S.N.T.G.N.”, „S.R.L.”, „lit. c”, „art. 6”,
-     „Nr. 123/2026”, „A.P.M.”) nu se termină în terminațiile de mai sus, deci nu dă alarme; verificat în teste împreună cu
-     default-ul `text_gdpr` din migrare și textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD
-     (LOT1, TEST-RAZVAN) nu au fost citite aici; o alarmă falsă pe ele apare ca refuz clar la generare;
-  - mesajul de eroare are doar partea DOCX și marcajul găsit (`gazpet.ro`, `://` …), fără text din document (PII);
+- **Adresele web pe documentul completat: clasificare pe TOKENURI (r12)** (`adresaWebNepermisa`, apelată de
+  `genereazaConvocator`, strict și la previzualizare; constantele unice `GAZDE_PERMISE`, `MARCAJE_PROPRII` din `docx.js`):
+  1. adresele PROPRII (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns, calea de informare) se caută ca subșir pe
+     text, după scoaterea e-mailurilor (regex strict r9: partea locală `[A-Za-z0-9._%+-]+`, care nu începe cu `www.`, domeniul
+     `[A-Za-z0-9.-]+.tld`, cu limite) și ÎNAINTEA oricărei excepții, ca să nu se ascundă în calea unui URL permis
+     (`https://dataprotection.ro/redari.gazpet.ro/x`) → refuz; `www.gazpet.ro,contact@example.com` lasă `www.gazpet.ro` → refuz;
+  2. textul se împarte la spații albe (inclusiv rândurile noi și taburile din paragraf, `<w:br/>` / `<w:tab/>`); fiecare token
+     pierde punctuația de la margini (`()[]{}«»„”“"'`, iar la dreapta și `.,;:!?`); un token care e în întregime un e-mail
+     valid (același regex, ancorat) e permis: `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`;
+  3. gazda: cu `://`, partea dintre `://` și primul `/`, `?` sau `#`; altfel, dacă tokenul începe cu `www.` sau partea dinainte
+     de primul `/` are un punct, acea parte. Ce e în cale (după primul `/`) NU se clasifică drept domeniu
+     (`dataprotection.ro/legislatie/dataprotection.ro.pdf` e permis);
+  4. gazda e „web” dacă tokenul are `://` sau începe cu `www.`, ori dacă gazda (fără `user@` și `:port`) are un punct și ultima
+     etichetă e alfabetică, de 2–24 litere. O gazdă web e permisă DOAR dacă e exact `dataprotection.ro` sau
+     `www.dataprotection.ro` (fără deosebire de majuscule), cu schema http / https (dacă are) și fără `@`, `:` (port), `[` sau
+     `]`. Orice altă gazdă web e refuzată: `exemplu.ro.xyz`, `portal.com.uk`, `dataprotection.ro.a.com`, `a.ro`, `x.y.com`,
+     IP-uri cu schemă, `:443`, `ftp://`, `user@gazdă`;
+  - textul juridic nu dă alarme: „S.N.T.G.N.”, „S.R.L.”, „lit.c”, „art.6”, „H.G. nr. 1.234/2022”, „pct. 5.2”, „A.P.M.”,
+    „Nr. 123/2026”, „Data:03.11.2026” nu au ultima etichetă alfabetică de 2+ litere; verificat în teste împreună cu default-ul
+    `text_gdpr` din migrare și textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD (LOT1, TEST-RAZVAN) nu au fost
+    citite aici; o alarmă falsă pe ele apare ca refuz clar la generare (de ex. un punct fără spațiu după el: „Primăria.Comuna”);
+  - mesajul de eroare are doar partea DOCX și marcajul propriu sau gazda găsită (fără utilizator, cale sau text din document — PII);
   - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
     `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare se verifică TOATE textele: fluxul exterior cu
     casetele de text (`w:txbxContent`), `mc:Fallback` și `w:pict` scoase; fiecare casetă, fiecare `mc:Fallback` și fiecare
