@@ -133,6 +133,8 @@ REVOKE EXECUTE ON FUNCTION public.fn_red_cheie_persoana(uuid) FROM PUBLIC, anon,
 --  * toate gărzile care pot schimba apartenența la plic (convocare poștală nouă / reactivată, nume, adresă, ștergere / mutare de deținător,
 --    ștergere / reactivare de parcelă) îl ÎNCEARCĂ fără așteptare, indiferent de starea rândului (și pentru deținători șterși), și abia apoi
 --    citesc identitatea; dacă e ținut, eroare reîncercabilă 55P03. Gărzile nu mai așteaptă niciun lock de rând -> fără cicluri de așteptare.
+--  * plicuirea, expedierea și propagarea de pe plic blochează rândurile membrilor (convocări, deținători, contacte, parcele, plicuri) în ordinea id-ului
+--    și FĂRĂ așteptare (NOWAIT -> 55P03): un UPDATE multi-rând concurent, în altă ordine, nu poate forma ciclu cu ele (harness conc29i S6, r10).
 --  Două gărzi pe același UAT se serializează între ele; plicuirea / expedierea văd starea comisă a oricărei gărzi (sau gărzile le văd pe ele).
 --  Tranzacțiile din aplicație sunt scurte (o cerere = o tranzacție), deci coliziunile sunt rare; eroarea cere doar reîncercarea.
 CREATE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid) RETURNS void
@@ -271,9 +273,13 @@ BEGIN
     -- Jakarinos r7 P2-01: executorul a blocat deja randul plicului inaintea triggerului, deci aici lock-ul UAT se INCEARCA (nu se asteapta):
     -- doua expedieri / o expediere si o plicuire in acelasi UAT nu pot forma ciclu; cea care pierde primeste 55P03 si reincearca
     PERFORM public.fn_red_plic_incearca_lock(NEW.uat_id);
-    PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR SHARE;
-    PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY k.detinator_id FOR SHARE;
-    PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE;
+    BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
+    PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR SHARE NOWAIT;
+    PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY k.detinator_id FOR SHARE NOWAIT;
+    PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE NOWAIT;
+    EXCEPTION WHEN lock_not_available THEN
+      RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+    END;
     -- Jakarinos r3 P2: fiecare membru reverificat pe TOT criteriul de eligibilitate (parcela nestearsa, acelasi proiect si UAT), blocat FOR SHARE
     IF EXISTS (SELECT 1 FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
                 WHERE c.plic_id = NEW.id
@@ -320,7 +326,11 @@ BEGIN
   -- harness conc29i S6e: randurile atinse se blocheaza intai in ordinea id-ului (aceeasi ordine ca plicuirea / expedierea), apoi se actualizeaza
   IF (NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL) OR (NEW.data_ar IS NOT NULL AND OLD.data_ar IS NULL)
      OR (NEW.retur IS NOT NULL AND OLD.retur IS NULL) OR (NEW.stare = 'anulat' AND OLD.stare = 'activ') THEN
-    PERFORM 1 FROM public.red_convocari WHERE plic_id = NEW.id ORDER BY id FOR UPDATE;
+    BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
+    PERFORM 1 FROM public.red_convocari WHERE plic_id = NEW.id ORDER BY id FOR UPDATE NOWAIT;
+    EXCEPTION WHEN lock_not_available THEN
+      RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+    END;
   END IF;
   IF NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL THEN
     UPDATE public.red_convocari SET data_expediere = NEW.data_expediere, nr_tracking = NEW.awb WHERE plic_id = NEW.id;
@@ -331,7 +341,11 @@ BEGIN
   IF NEW.retur IS NOT NULL AND OLD.retur IS NULL THEN
     UPDATE public.red_convocari SET retur = NEW.retur, retur_data = NEW.retur_data, retur_detaliu = NEW.retur_detaliu WHERE plic_id = NEW.id;
     IF NEW.retur = 'decedat' THEN
-      PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR UPDATE;
+      BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
+      PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR UPDATE NOWAIT;
+      EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+      END;
       UPDATE public.red_detinatori d SET decedat = true
         WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) AND d.decedat IS NOT TRUE;
     END IF;
@@ -489,13 +503,17 @@ BEGIN
     FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
    WHERE c.id = p_convocari[1];
   -- blocare în ordine fixă (id), ca două plicuiri concurente să nu se blocheze reciproc
-  PERFORM 1 FROM public.red_convocari WHERE id = ANY(p_convocari) ORDER BY id FOR UPDATE;
+  BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
+  PERFORM 1 FROM public.red_convocari WHERE id = ANY(p_convocari) ORDER BY id FOR UPDATE NOWAIT;
   -- Jakarinos r3 P1: identitatea (nume + adresa) se stabilizeaza: detinatorii si contactele lor blocate FOR SHARE pana la commit
   -- (o schimbare de nume/adresa asteapta, apoi e refuzata de garda de identitate fiindca persoana are plic)
-  PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY d.id FOR SHARE;
-  PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY k.detinator_id FOR SHARE;
+  PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY d.id FOR SHARE NOWAIT;
+  PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY k.detinator_id FOR SHARE NOWAIT;
   -- Jakarinos r4 P2: si parcelele, inainte de validarea eligibilitatii (o stergere logica concurenta asteapta si apoi e refuzata de garda)
-  PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.id = ANY(p_convocari)) ORDER BY p.id FOR SHARE;
+  PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.id = ANY(p_convocari)) ORDER BY p.id FOR SHARE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+  END;
   SELECT count(*), min(p.uat_id::text)::uuid, count(DISTINCT p.uat_id), array_agg(DISTINCT coalesce(public.fn_red_cheie_persoana(c.detinator_id), '<fara>'))
     INTO v_gasite, v_uat, v_n, v_chei
     FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
@@ -548,7 +566,11 @@ BEGIN
     RAISE EXCEPTION 'redari: lot invalid (1..2000 plicuri, data obligatorie)' USING ERRCODE = '22023';
   END IF;
   IF (SELECT count(DISTINCT x) FROM unnest(p_plicuri) x) <> cardinality(p_plicuri) THEN RAISE EXCEPTION 'redari: plicuri duplicate in lista' USING ERRCODE = '22023'; END IF;
-  PERFORM 1 FROM public.red_plicuri WHERE id = ANY(p_plicuri) ORDER BY id FOR UPDATE;
+  BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
+  PERFORM 1 FROM public.red_plicuri WHERE id = ANY(p_plicuri) ORDER BY id FOR UPDATE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+  END;
   SELECT count(*) INTO v_gasite FROM public.red_plicuri
    WHERE id = ANY(p_plicuri) AND proiect_id = p_proiect_id AND stare = 'activ' AND lot_id IS NULL AND data_expediere IS NULL;
   IF v_gasite <> cardinality(p_plicuri) THEN
