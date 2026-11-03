@@ -73,7 +73,11 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   „Prin formularul online, scanând cu telefonul codul QR de mai jos, la telefon {{contact_telefon}} …”. QR-ul duce în continuare
   la formularul de răspuns (`https://redari.gazpet.ro/redari/raspuns/<token>`); generatorul refuză un convocator care mai are
   `{{link}}` sau o adresă web în text, iar `src/redari/sabloaneA4.test.js` cere schimbarea exact o dată și, refăcută înapoi,
-  amprenta textului de dinainte (nimic altceva schimbat). Unde modelul a rupt un câmp în mai
+  amprenta textului de dinainte (nimic altceva schimbat). Tot din (8), pe documentul completat: `{{text_gdpr}}` de pe față
+  nu primește linkul informării (`textGdprFataConvocator` din `docx.js`: marcajul „Informarea completă: <URL | [link]>” devine
+  „Informarea completă se află pe verso.”, adăugată la final când proiectul are `link_informare_gdpr` și textul n-o are;
+  `text_gdpr` din BD nu se schimbă), iar `genereazaConvocator` refuză documentul completat dacă textul lui conține
+  `http://`, `https://`, `www.` sau `redari.gazpet.ro` (QR-ul e imagine, nu text). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
 - Fiecare placeholder stă întreg într-un singur `<w:t>` → `docx.js` înlocuiește local, fără consolidare de run-uri (limita 1).

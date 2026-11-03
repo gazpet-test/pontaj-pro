@@ -335,6 +335,24 @@ export const textGdprPentruUat = (text, numeUat, linkInformare) => {
   return exista ? baza.replace(RX_INFO, (m, punct) => `Informarea completă: ${linkInformare}${punct || ''}`) : `${baza}\nInformarea completă: ${linkInformare}`
 }
 
+/** Trimiterea de pe fața convocatorului poștal la informarea completă (tipărită pe verso, PR #939). */
+export const TRIMITERE_VERSO_GDPR = 'Informarea completă se află pe verso.'
+// marcajul „Informarea completă: <URL>” sau „Informarea completă: [link …]”, cu punctul final opțional al frazei
+const RX_INFO_FATA = /Informarea completă:[ \t]*(?:\[[^\]]*\]|https?:\/\/\S+?|www\.\S+?)[.]?(?=[ \t\n]|$)/gi
+/**
+ * Textul GDPR de pe FAȚA convocatorului poștal (decizia 03.11 seara: fără niciun link tipărit). `{uat}` / `[UAT]` → UAT-ul;
+ * marcajul „Informarea completă: <URL | [link]>” devine TRIMITERE_VERSO_GDPR. Dacă marcajul lipsește, dar proiectul are informarea
+ * completă configurată (`linkInformareConfigurat`), trimiterea la verso se adaugă la final. `text_gdpr` din BD nu se modifică.
+ */
+export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat) => {
+  const baza = textGdprPentruUat(text, numeUat)
+  if (new RegExp(RX_INFO_FATA.source, 'i').test(baza)) return baza.replace(RX_INFO_FATA, () => TRIMITERE_VERSO_GDPR)
+  return plin(linkInformareConfigurat) ? `${baza}\n${TRIMITERE_VERSO_GDPR}` : baza
+}
+
+// adresă web în text (nu în relații): pe convocatorul poștal nu se tipărește niciuna
+const RX_ADRESA_WEB = /https?:\/\/|www\.|redari\.gazpet\.ro/i
+
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
 /**
@@ -417,7 +435,8 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     contact_nume: c.nume ?? pr.contact_nume ?? '',
     contact_telefon: c.telefon ?? pr.contact_telefon ?? '',
     contact_email: c.email ?? pr.contact_email ?? '',
-    text_gdpr: textGdprPentruUat(pr.text_gdpr, u.nume, pr.link_informare_gdpr ?? null),
+    // fața nu tipărește linkul informării: trimiterea e la verso (PR #939)
+    text_gdpr: textGdprFataConvocator(pr.text_gdpr, u.nume, pr.link_informare_gdpr),
     reprezentant_tgz: semnatarTgz,
     reprezentant_tgz_telefon: pr.reprezentant_tgz_telefon ?? '',
     semnatar_gazpet: semnatarGazpet,
@@ -425,6 +444,12 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   }
   const qr = await genereazaQr(link)
   const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
+  // garda pe documentul COMPLETAT: niciun URL în textul din <w:t> (QR-ul e imagine, relația lui nu e text)
+  const xmlDoc = await (await JSZip.loadAsync(await blob.arrayBuffer())).file('word/document.xml').async('string')
+  const cuWeb = [...xmlDoc.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).find(t => RX_ADRESA_WEB.test(t))
+  if (cuWeb !== undefined) {
+    throw new Error(`Convocatorul poștal nu poate tipări adrese web („${RX_ADRESA_WEB.exec(cuWeb)[0]}” în „${cuWeb.slice(0, 80)}”). Scoateți adresa din textul de pe proiect (de ex. text_gdpr); informarea completă se tipărește pe verso.`)
+  }
   const hash = await hashBlob(blob)
   return { blob, hash, link, campuri, lipsuri }
 }

@@ -7,6 +7,7 @@ import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
   reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, linkRaspunsCu, adresaDetinator, textGdprPentruUat,
+  textGdprFataConvocator, TRIMITERE_VERSO_GDPR,
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
@@ -259,6 +260,40 @@ describe('genereazaConvocator', () => {
       if (vechi === undefined) delete globalThis.window
       else globalThis.window = vechi
     }
+  }, 10000)
+
+  // Jakarinos #970 r2 P2: cu informarea completă configurată, fața poștală tot nu tipărește URL (trimiterea e la verso, PR #939)
+  it('link_informare_gdpr setat: convocatorul nu conține URL, paragraful GDPR se termină cu trimiterea la verso, QR-ul e același', async () => {
+    const asteptat = 'https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk'
+    const qrAsteptat = (await genereazaQr(asteptat)).split(',')[1]
+    const baza = complet()
+    const texte = [baza.proiect.text_gdpr, 'Operatori: Gazpet și Primăria {uat}. Informarea completă: [link scurt].', 'Operatori: Gazpet. Informarea completă: https://example.invalid/gdpr.']
+    for (const text_gdpr of texte) {
+      const r = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr, link_informare_gdpr: 'https://example.invalid/informare' }, templateArrayBuffer: citesteSablon() })
+      expect(r.link).toBe(asteptat)
+      expect(r.campuri.text_gdpr, text_gdpr).toMatch(/Informarea completă se află pe verso\.$/)
+      expect(r.campuri.text_gdpr).not.toMatch(/https?:\/\/|www\.|\[link/)
+      const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
+      expect(textDin(xml)).not.toMatch(/https?:\/\/|www\.|redari\.gazpet\.ro/)
+      expect(await zip.file('word/media/qr.png').async('base64')).toBe(qrAsteptat)
+    }
+    // fără informare configurată și fără marcaj: textul rămâne cel din BD (doar UAT-ul înlocuit)
+    expect(textGdprFataConvocator('Operatori: Primăria {uat}.', 'Godeanu', null)).toBe('Operatori: Primăria Godeanu.')
+    // marcajul din mijlocul textului se înlocuiește pe loc, fără punct dublu
+    expect(textGdprFataConvocator('A. Informarea completă: https://x.invalid/a. B.', 'G', '')).toBe(`A. ${TRIMITERE_VERSO_GDPR} B.`)
+  }, 10000)
+
+  it('garda pe documentul completat: un URL în corpul text_gdpr (sau www., redari.gazpet.ro) e refuzat cu mesaj clar', async () => {
+    const baza = complet()
+    const cazuri = [['Detalii la https://example.invalid/gdpr oricând.', 'https://'], ['Vezi www.exemplu.invalid pentru detalii.', 'www.'], ['Răspuns pe redari.gazpet.ro.', 'redari.gazpet.ro']]
+    for (const [text_gdpr, gasit] of cazuri) {
+      const p = genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })
+      await expect(p).rejects.toThrow(/Convocatorul poștal nu poate tipări adrese web/)
+      await expect(genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })).rejects.toThrow(gasit)
+    }
+    // și la previzualizare
+    const prev = genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr: 'x http://a.invalid' }, templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
+    await expect(prev).rejects.toThrow(/adrese web/)
   }, 10000)
 
   it('construiește toate cele 35 de chei (SABLOANE.md §2.1), QR (linkul doar în rezultat), hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
