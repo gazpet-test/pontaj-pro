@@ -12,7 +12,7 @@
 -- sesiunea inceputa (creare / aprobare / intre transe / cron), ne_eligibil la rezervare, coada_golita + campania, set_hash (TEST2-TEST13).
 -- Starile „in timp” (sesiune trecuta, transa deja plecata, coada_golita) se scriu cu triggerele oprite, doar in tranzactia de proba.
 -- r3 (NO-GO Jakarinos pe r2): expirarea pe clock_timestamp() dupa lock-uri (TEST15), un mesaj pe persoana la rezervare dupa ce doua
--- persoane devin una (TEST16).
+-- persoane devin una (TEST16). r4: opt-out-ul nu consuma locul persoanei la regrupare (TEST17).
 CREATE FUNCTION pg_temp.s3c_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -688,6 +688,62 @@ BEGIN
     RAISE EXCEPTION 'TEST16 FAIL: a doua transa';
   END IF;
   RAISE NOTICE 'TEST16 OK doua persoane unite dupa corectarea numelui / adresei: la rezervare pleaca 1 mesaj, celalalt anulat / duplicat_persoana (si la transa urmatoare)';
+END $t$;
+
+-- ── TEST17 (r4 P2): persoana unita dupa creare, primul ei telefon are acum opt-out -> pleaca SMS-ul pe al doilea telefon ─────────
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+DO $t$
+DECLARE v_u uuid; p1 uuid; p2 uuid; v_id uuid; d record;
+BEGIN
+  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet, sesiune_zi1, program_zi1)
+  VALUES (pg_temp.s3c_g('pr')::uuid, 'Optout', 'TSK', 'Test', pg_temp.s3c_g('azi')::date + 3, '10:00') RETURNING id INTO v_u;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.s3c_g('pr')::uuid, v_u, 'TSK-0001', 1) RETURNING id INTO p1;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.s3c_g('pr')::uuid, v_u, 'TSK-0002', 1) RETURNING id INTO p2;
+  FOR d IN SELECT * FROM (VALUES ('D26', p1, 'Test Sms C Opt Unu', '0700000226', 'Strada Test 26'),
+                                 ('D27', p2, 'Test Sms C Opt Doi', '0700000227', 'Strada Test 27')) AS x(k, parcela, nume, tel, strada) LOOP
+    INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (d.parcela, d.nume, upper(d.nume), 'proprietar') RETURNING id INTO v_id;
+    INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta, telefon)
+    VALUES (v_id, d.strada, 'Sat Test', 'Testeni', 'Test', '000000', true, d.tel);
+    INSERT INTO public.red_convocari (detinator_id, canal) VALUES (v_id, 'telefon');
+    PERFORM pg_temp.s3c_s(d.k, v_id::text);
+  END LOOP;
+  PERFORM pg_temp.s3c_s('uk', v_u::text);
+END $t$;
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('ured')::uuid, 'authenticated');
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('uk')::uuid, NULL, NULL, true);
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('uk')::uuid, j->>'text_final', j->>'set_hash', false);
+  IF (j->>'nr_destinatari')::integer <> 2 THEN RAISE EXCEPTION 'TEST17 FAIL: lotul L6 (2 persoane) %', j; END IF;
+  PERFORM pg_temp.s3c_s('L6', j->>'lot_id');
+  j := public.fn_sms_lot_aproba((j->>'lot_id')::uuid, (public.fn_sms_lot_destinatari((j->>'lot_id')::uuid)->>'versiune')::integer);
+  IF j->>'stare' <> 'aprobat' THEN RAISE EXCEPTION 'TEST17 FAIL: aprobarea L6'; END IF;
+END $t$;
+-- identitatea se corecteaza (D27 = D26) si telefonul mesajului care ar fi pastrat primul (creat_la, id) primeste opt-out
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+UPDATE public.red_detinatori SET nume = 'Test Sms C Opt Unu', nume_normalizat = 'TEST SMS C OPT UNU' WHERE id = pg_temp.s3c_g('D27')::uuid;
+UPDATE public.red_detinatori_contact SET adresa_strada = 'Strada Test 26' WHERE detinator_id = pg_temp.s3c_g('D27')::uuid;
+SELECT pg_temp.s3c_s('tel_primul', (SELECT m.telefon FROM public.sms_mesaje m WHERE m.lot_id = pg_temp.s3c_g('L6')::uuid ORDER BY m.creat_la, m.id LIMIT 1));
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('own')::uuid, 'authenticated');
+SELECT public.fn_sms_optout_seteaza('0' || substr(pg_temp.s3c_g('tel_primul'), 4), true, 'DRY fictiv') IS NOT NULL AS optout_primul;
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+DO $t$
+DECLARE j jsonb; v_lot uuid := pg_temp.s3c_g('L6')::uuid; v_primul text := pg_temp.s3c_g('tel_primul');
+BEGIN
+  IF public.fn_red_cheie_persoana(pg_temp.s3c_g('D26')::uuid) IS DISTINCT FROM public.fn_red_cheie_persoana(pg_temp.s3c_g('D27')::uuid)
+     OR NOT EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = v_primul AND o.activ) THEN
+    RAISE EXCEPTION 'TEST17 FAIL: pregatire (cheie / opt-out)';
+  END IF;
+  j := public.fn_sms_rezerva(v_lot, 50, 'simulator', pg_temp.s3c_g('ured')::uuid);
+  IF j->>'motiv' NOT IN ('ok', 'gata', 'in_afara_orelor') THEN RAISE EXCEPTION 'TEST17 FAIL: rezervarea L6 %', j->>'motiv'; END IF;
+  IF (SELECT m.stare || '/' || coalesce(m.cod_eroare, '') FROM public.sms_mesaje m WHERE m.lot_id = v_lot AND m.telefon = v_primul) IS DISTINCT FROM 'anulat/optout'
+     OR (SELECT m.stare FROM public.sms_mesaje m WHERE m.lot_id = v_lot AND m.telefon <> v_primul) NOT IN ('in_coada', 'necunoscut')
+     OR EXISTS (SELECT 1 FROM public.sms_mesaje m WHERE m.lot_id = v_lot AND m.cod_eroare = 'duplicat_persoana')
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(j->'mesaje', '[]')) x WHERE x->>'telefon' = v_primul) THEN
+    RAISE EXCEPTION 'TEST17 FAIL: opt-out-ul primului telefon a consumat locul persoanei';
+  END IF;
+  RAISE NOTICE 'TEST17 OK persoana unita, primul telefon cu opt-out: el e anulat / optout (nu duplicat_persoana), pleaca mesajul pe al doilea telefon (rezervare: %)', j->>'motiv';
 END $t$;
 
 -- ── TEST14: comutatorul Redari oprit = creare (si previzualizare) refuzata, ca inainte, si pentru owner ─────────────────────────

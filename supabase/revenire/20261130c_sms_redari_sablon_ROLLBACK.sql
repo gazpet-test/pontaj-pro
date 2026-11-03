@@ -24,7 +24,7 @@ BEGIN
   END IF;
   -- corpurile de acum sunt cele din 20261130c (altceva = schimbat de altcineva intre timp: nu suprascriem orb)
   IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '06e942cb552fb0cb26e17151a6cd9dc2'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> '3a518ba51fc177946ddee662167e8827' THEN
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'f8d93924d16a0d0568c1f78d156be87c' THEN
     RAISE EXCEPTION '20261130c revenire: fn_sms_loturi_reguli / fn_sms_rezerva nu sunt cele din 20261130c';
   END IF;
 END $pre$;

@@ -33,7 +33,8 @@
 --     randul a disparut) trec ATOMIC in `anulat` cu cod_eroare 'ne_eligibil' si nu pleaca; lista fixata ramane pentru audit;
 --   * r3 (Jakarinos P2): tot la rezervare, mesajele se regrupeaza pe cheia ACTUALA a persoanei (fn_red_cheie_persoana): cel mult UN
 --     mesaj pe persoana pleaca (cel deja rezervat / trimis, altfel primul in ordinea creat_la, id); restul in_coada -> anulat,
---     cod_eroare 'duplicat_persoana';
+--     cod_eroare 'duplicat_persoana'; r4 (Jakarinos P2): opt-out-ul se aplica INAINTE de regrupare (mesajul cu opt-out -> anulat 'optout'),
+--     deci un telefon care nu mai poate primi nu ocupa locul persoanei si pleaca mesajul pe telefonul ei valabil;
 --   * fn_sms_lot_redari_creeaza (text liber) ramane in BD, fara drept de apel pentru aplicatie.
 -- Ordinea lock-urilor (neschimbata): setari -> cont de test -> lot -> mesaje; crearea din sablon ia doar lock-ul UAT-ului
 -- ('sms_redari_uat:<uat>'), inaintea lotului nou; nicio alta cale nu ia acest lock.
@@ -483,6 +484,11 @@ BEGIN
     )
     UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'ne_eligibil'
      WHERE m.lot_id = l.id AND m.stare = 'in_coada' AND NOT EXISTS (SELECT 1 FROM e WHERE e.det = m.destinatar_id);
+    -- r4 (Jakarinos P2): opt-out-ul se aplica INAINTE de regrupare (acelasi UPDATE ca mai jos, mutat aici pentru loturile din sablon):
+    -- un mesaj care nu poate pleca nu ocupa locul persoanei. Singura conditie pe mesaj la rezervare e opt-out-ul (telefonul e deja
+    -- +407xxxxxxxx prin CHECK pe sms_mesaje; restul conditiilor sunt pe lot)
+    UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'optout'
+     WHERE m.lot_id = l.id AND m.stare = 'in_coada' AND EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = m.telefon AND o.activ);
     -- r3: cel mult UN mesaj pe persoana, regrupat pe cheia ACTUALA (nume / adresa corectate dupa creare): ramane cel deja plecat
     -- (orice stare in afara de anulat si in_coada), altfel primul in ordinea creat_la, id; restul din coada -> duplicat_persoana
     WITH k AS MATERIALIZED (
@@ -560,7 +566,7 @@ BEGIN
   END IF;
   -- corpurile inlocuite sunt exact cele generate (20261130b + blocurile 20261130c)
   IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '06e942cb552fb0cb26e17151a6cd9dc2'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> '3a518ba51fc177946ddee662167e8827' THEN
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'f8d93924d16a0d0568c1f78d156be87c' THEN
     RAISE EXCEPTION '20261130c: corpurile fn_sms_loturi_reguli / fn_sms_rezerva nu sunt cele generate';
   END IF;
   FOR v_o IN SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sms!_%' ESCAPE '!' LOOP
