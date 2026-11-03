@@ -116,7 +116,7 @@ există în contract (strânse în §3). „Oblig.” = obligatoriu la generarea
 | `{{zi1..3}}` | red_uat.sesiune_zi1..3 | da | |
 | `{{program1..3}}` | red_uat.program_zi1..3 | da | model: „09:00 – 16:00”, ziua 2 „09:00 – 19:00 (program prelungit)” |
 | `{{sate_zi1..3}}` | **FĂRĂ SURSĂ** → red_uat.sate_zi1..3 text | nu | coloana „Sate / tarlale programate” |
-| `{{link}}` | calcul `linkRaspuns(origin, red_detinatori.token_raspuns)` | da | |
+| `{{link}}` | calcul `linkRaspuns(red_detinatori.token_raspuns)`, mereu pe `https://redari.gazpet.ro` | da | |
 | `{{qr}}` | imagine (genereazaQr(link)) | da | paragraf nou, singur |
 | `{{contact_telefon}}` ×2 | red_proiecte.contact_telefon | da | „la telefon …” + contact Gazpet (în model telefonul era gol) |
 | `{{contact_nume}}`, `{{contact_email}}` | red_proiecte.contact_nume, .contact_email | da | în model „Ramona Brehui” / „redari@gazpet.ro” = valorile de pus în red_proiecte |

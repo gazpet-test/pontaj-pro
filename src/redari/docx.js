@@ -22,6 +22,7 @@
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
 import { COL_UAT, termenAfisare, mesajTermenAfisare } from './setari.js'
+import { ORIGINE_PUBLICA_REDARI } from './domeniuPublic.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
 export const ANTREPRENOR = 'GAZPET INSTAL S.R.L.'
@@ -306,8 +307,10 @@ export const formatNumarRo = (n) => {
   return isNaN(x) ? String(n) : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 2 }).format(x)
 }
 
-/** Linkul public de răspuns (contract §8). */
-export const linkRaspuns = (origin, token) => `${String(origin || '').replace(/\/+$/, '')}/redari/raspuns/${token}`
+// Doar pentru teste: aceeași formă a linkului pe altă origine. Codul de producție folosește linkRaspuns.
+export const linkRaspunsCu = (origin, token) => `${String(origin ?? '').replace(/\/+$/, '')}/redari/raspuns/${token}`
+/** Linkul public de răspuns (contract §8), mereu pe redari.gazpet.ro. */
+export const linkRaspuns = (token) => linkRaspunsCu(ORIGINE_PUBLICA_REDARI, token)
 
 const plin = (v) => v !== null && v !== undefined && String(v).trim() !== ''
 
@@ -376,13 +379,14 @@ export const CHEI_CONVOCATOR = ['contract_nr', 'contract_data', 'proiect_denumir
  * pentru salvare.
  * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string>, lipsuri: string[] }>}
  */
-export async function genereazaConvocator({ detinator, contactDetinator, contact, parcela, uat, proiect, nrDocument, token, origin, templateArrayBuffer, dataDocument, permiteIncomplet = false }) {
+export async function genereazaConvocator({ detinator, contactDetinator, contact, parcela, uat, proiect, nrDocument, token, templateArrayBuffer, dataDocument, permiteIncomplet = false }) {
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
   const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator })
   if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
   if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
   const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}, d = detinator || {}
-  const link = linkRaspuns(origin ?? (typeof window !== 'undefined' ? window.location.origin : ''), token)
+  // Linkul și QR-ul merg mereu pe domeniul public; un `origin` trimis de apelant se ignoră (nu mai e parametru)
+  const link = linkRaspuns(token)
   const semnatarTgz = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(plin).join(', ')
   const semnatarGazpet = [pr.reprezentant_gazpet_nume, pr.reprezentant_gazpet_functie].filter(plin).join(', ')
   const campuri = {

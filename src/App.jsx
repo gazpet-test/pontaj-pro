@@ -1,6 +1,7 @@
 import { employeeFieldRead, EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeePersonalWrite } from './employeesPersonal.js'
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
+import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
@@ -8961,8 +8962,17 @@ function TichetModulGate() {
   return <TichetModulButton profile={profile} />
 }
 
+// Redări (03.11.2026): garda pe host-ul public la navigarea din aplicație (main.jsx o face la încărcare, vercel.json înaintea ambelor)
+function GardaHostPublicRedari({ children }) {
+  const loc = useLocation()
+  const tinta = tintaRedirectHostPublic({ hostname: window.location.hostname, pathname: loc.pathname, search: loc.search, hash: loc.hash })
+  useEffect(() => { if (tinta) window.location.replace(tinta) }, [tinta])
+  return tinta ? null : children
+}
+
 export default function App() {
   return (
+    <GardaHostPublicRedari>
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage/>}/>
@@ -9018,6 +9028,7 @@ export default function App() {
       <BugReportGate />
       <TichetModulGate />
     </AuthProvider>
+    </GardaHostPublicRedari>
   )
 }
 

@@ -6,6 +6,8 @@ import App from './App.jsx'
 // Redări teren (01.11.2026, review Jakarinos P1-4 / P2-3): tokenul public din /redari/raspuns/<token> NU ajunge în telemetrie —
 // src/redari/sentryScrub.js (testat în sentryScrub.test.js) redactează URL-uri, variante %2F, `p_token`, chei, la orice adâncime.
 import { scrubSentryEvent, scrubSentrySpan, esteDinFormularulPublic } from './redari/sentryScrub.js'
+// Redări (03.11.2026): pe redari.gazpet.ro se deschid doar paginile publice; orice altă cale merge pe domeniul principal
+import { tintaRedirectHostPublic, HOST_PUBLIC_REDARI } from './redari/domeniuPublic.js'
 
 // Forțează tema întunecată pentru controalele native (dropdown-uri select,
 // scrollbars, input-uri) pe tot ERP-ul, indiferent de setarea OS light/dark.
@@ -28,14 +30,19 @@ Sentry.init({
   denyUrls: [/^iabjs:\/\//i, /fbcdn\.net/i, /connect\.facebook\.net/i, /_next-live\//i, /vercel\.live/i],
 })
 
-// PWA: service worker doar în producție (în dev ar încurca hot-reload-ul)
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+// A doua barieră după regula din vercel.json: cale ERP pe host-ul public → domeniul principal, fără să pornească aplicația
+const tintaErp = tintaRedirectHostPublic(window.location)
+const pePublic = window.location.hostname.toLowerCase() === HOST_PUBLIC_REDARI
+
+// PWA: service worker doar în producție (în dev ar încurca hot-reload-ul); nu pe host-ul public Redări
+if (import.meta.env.PROD && !pePublic && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   })
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+if (tintaErp) window.location.replace(tintaErp)
+else ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <App />

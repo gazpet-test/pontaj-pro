@@ -314,7 +314,7 @@ Nu se actualizeaza atributele persoanelor/parcelelor deja existente. Importul re
   de înlocuire), escape XML pe valori; `{{qr}}` → imagine PNG inserată (QR generat local cu `qrcode`, `toDataURL`).
 - Convocator: `public/redari/sabloane/convocator.docx` (Model_1 v5 cu 36 de placeholder-e — harta completă în `docs/redari/SABLOANE.md`
   §2.1; calea stă în `SABLON_CONVOCATOR` din `src/redari/ui/comune.jsx`). `genereazaConvocator({ detinator, contactDetinator, contact, parcela,
-  uat, proiect, nrDocument, token, origin, templateArrayBuffer, … })` furnizează cheile `CHEI_CONVOCATOR` (cele 36 + `id_parcela` pentru corelare);
+  uat, proiect, nrDocument, token, templateArrayBuffer, … })` (linkul și QR-ul mereu pe `https://redari.gazpet.ro`, fără parametru `origin`) furnizează cheile `CHEI_CONVOCATOR` (cele 36 + `id_parcela` pentru corelare);
   `contactDetinator` = rândul din `red_detinatori_contact` (PII — doar admin/editor îl pot citi; din el se compune `{{adresa}}`), separat de
   `contact` = persoana de contact Gazpet (fallback `proiect.contact_*`). `verificaDateConvocator` blochează generarea de trimis când lipsesc
   câmpurile obligatorii (contract, împuternicire, sesiune cu program, contact, text GDPR, reprezentant TGZ, adresă cunoscută). Convocatorul
