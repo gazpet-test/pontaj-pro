@@ -26,7 +26,7 @@ BEGIN
   IF (SELECT count(*) FROM public.red_corespondenta WHERE stare='draft' AND aprobat_la IS NULL) <> 10 THEN RAISE EXCEPTION 'TEST0 FAIL: lista initiala'; END IF;
   RAISE NOTICE 'TEST0 OK';
 END $t$;
--- (TEST5 retras: revenirea nu mai sterge date — muta tabelul in arhiva; vezi revenirea si TEST7 de mai jos)
+-- (TEST5 retras: revenirea nu mai sterge date — muta tabelul in arhiva; runnerul ruleaza revenirea dupa teste si verifica starea finala)
 -- TEST1: editorul nu aproba, nu marcheaza trimis fara aprobare, nu schimba codul, nu scrie aprobat_de, nu sterge
 SELECT pg_temp.r29h_ca(pg_temp.r29h_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
