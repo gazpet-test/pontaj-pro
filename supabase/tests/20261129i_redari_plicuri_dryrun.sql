@@ -26,7 +26,7 @@ BEGIN
     WHERE a.module='redari' AND a.access_level='viewer' AND p.is_owner IS NOT TRUE ORDER BY a.id LIMIT 1;
   IF own IS NULL OR ed IS NULL OR vw IS NULL THEN RAISE EXCEPTION 'TEST0 FAIL: identitati'; END IF;
   IF EXISTS (SELECT 1 FROM public.red_numere WHERE cheie IN ('PL-ZXH','PP')) OR EXISTS (SELECT 1 FROM public.red_uat WHERE uat3='ZXH') THEN RAISE EXCEPTION 'TEST0 FAIL: ZXH/PP folosite'; END IF;
-  INSERT INTO public.red_proiecte(cod,denumire) VALUES('TEST-29I','FICTIV plicuri') RETURNING id INTO pr;
+  INSERT INTO public.red_proiecte(cod,denumire) VALUES('TEST-29I','FICTIV plicuri') RETURNING id INTO pr;   -- fara imputernicire (TEST2e)
   INSERT INTO public.red_uat(proiect_id,nume,uat3,judet) VALUES(pr,'FICTIV ZXH','ZXH','Test') RETURNING id INTO u;
   FOR i IN 1..6 LOOP
     INSERT INTO public.red_parcele(proiect_id,uat_id,id_parcela,poz_hg) VALUES(pr,u,'ZXH-000'||i,(10+i)::text) RETURNING id INTO d;
@@ -83,13 +83,29 @@ DO $t$ DECLARE lot public.red_loturi_plicuire; BEGIN
   RAISE NOTICE 'TEST2a OK';
 END $t$;
 SELECT pg_temp.r29i_ca(NULL,'postgres');
-INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuire/'||pg_temp.r29i_g('lot')||'/pv-1.pdf','{"mimetype":"application/pdf"}'::jsonb);
+INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuire/'||pg_temp.r29i_g('lot')||'/pv-1.pdf','{"mimetype":"application/pdf"}'::jsonb),
+  ('redari','plicuri/'||pg_temp.r29i_g('plA')||'/opis-1.docx','{"mimetype":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}'::jsonb);
 SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET pv_path='plicuire/%s/pv-1.pdf', semnatar1='FICTIV 1' WHERE id=%L$q$,pg_temp.r29i_g('lot'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: PV fara al doilea semnatar'; END IF;
-  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET pv_path='plicuire/%s/../pv-1.pdf', semnatar1='FICTIV 1', semnatar2='FICTIV 2' WHERE id=%L$q$,pg_temp.r29i_g('lot'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: cale PV'; END IF;
-  UPDATE public.red_loturi_plicuire SET pv_path='plicuire/'||pg_temp.r29i_g('lot')||'/pv-1.pdf', semnatar1='FICTIV 1', semnatar2='FICTIV 2' WHERE id=pg_temp.r29i_g('lot')::uuid;
-  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET semnatar2='ALTUL' WHERE id=%L$q$,pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: semnatar schimbat dupa PV'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET pv_path='plicuire/%s/pv-1.pdf', semnatar1_id=%L WHERE id=%L$q$,pg_temp.r29i_g('lot'),pg_temp.r29i_g('editor'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: PV fara al doilea semnatar'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET semnatar1_id=%L, semnatar2_id=%L WHERE id=%L$q$,pg_temp.r29i_g('editor'),pg_temp.r29i_g('editor'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: acelasi semnatar de doua ori'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET semnatar1_id=%L, semnatar2_id=(SELECT p.id FROM public.profiles p WHERE NOT p.is_owner AND NOT EXISTS (SELECT 1 FROM public.user_module_access a WHERE a.profile_id=p.id AND a.module='redari') LIMIT 1) WHERE id=%L$q$,pg_temp.r29i_g('editor'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: semnatar fara drept pe Redari'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET pv_path='plicuire/%s/../pv-1.pdf', semnatar1_id=%L, semnatar2_id=%L WHERE id=%L$q$,pg_temp.r29i_g('lot'),pg_temp.r29i_g('editor'),pg_temp.r29i_g('owner'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: cale PV'; END IF;
+  UPDATE public.red_loturi_plicuire SET pv_path='plicuire/'||pg_temp.r29i_g('lot')||'/pv-1.pdf', semnatar1_id=pg_temp.r29i_g('editor')::uuid, semnatar2_id=pg_temp.r29i_g('owner')::uuid WHERE id=pg_temp.r29i_g('lot')::uuid;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET semnatar2_id=semnatar1_id WHERE id=%L$q$,pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: semnatar schimbat dupa PV'; END IF;
+  -- juridic#021: fara imputernicire si fara opis atasat nu se expediaza
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-03' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2e FAIL: expediere fara imputernicire'; END IF;
+  RAISE NOTICE 'TEST2e OK';
+END $t$;
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+UPDATE public.red_proiecte SET imputernicire_nr='TEST-1', imputernicire_data='2026-11-01' WHERE id=pg_temp.r29i_g('pr')::uuid;
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-03' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2f FAIL: expediere fara opis'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET opis_path='plicuri/%s/opis-2.docx' WHERE id=%L$q$,pg_temp.r29i_g('plA'),pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2f FAIL: opis inexistent'; END IF;
+  UPDATE public.red_plicuri SET opis_path='plicuri/'||pg_temp.r29i_g('plA')||'/opis-1.docx' WHERE id=pg_temp.r29i_g('plA')::uuid;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET opis_path=NULL WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2f FAIL: opis scos'; END IF;
+  RAISE NOTICE 'TEST2f OK';
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-02' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: expediere inaintea plicuirii'; END IF;
   RAISE NOTICE 'TEST2b OK';
 END $t$;
@@ -131,9 +147,11 @@ INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuri/'
   ('redari','alt_folder/ar.pdf','{"mimetype":"application/pdf"}'::jsonb);
 SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET data_ar='2026-11-05', ar_scan_path='alt_folder/ar.pdf' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: scan in alt folder'; END IF;
-  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET data_ar='2026-11-01', ar_scan_path='plicuri/%s/ar.pdf' WHERE id=%L$q$,pg_temp.r29i_g('plA'),pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: AR inainte de expediere'; END IF;
-  UPDATE public.red_plicuri SET data_ar='2026-11-05', ar_scan_path='plicuri/'||pg_temp.r29i_g('plA')||'/ar.pdf' WHERE id=pg_temp.r29i_g('plA')::uuid;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET data_ar='2026-11-05', ar_scan_path='alt_folder/ar.pdf', ar_primit_de='destinatar' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: scan in alt folder'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET data_ar='2026-11-01', ar_scan_path='plicuri/%s/ar.pdf', ar_primit_de='destinatar' WHERE id=%L$q$,pg_temp.r29i_g('plA'),pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: AR inainte de expediere'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET data_ar='2026-11-05', ar_scan_path='plicuri/%s/ar.pdf' WHERE id=%L$q$,pg_temp.r29i_g('plA'),pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: AR fara primit de'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET data_ar='2026-11-05', ar_scan_path='plicuri/%s/ar.pdf', ar_primit_de='alta_persoana' WHERE id=%L$q$,pg_temp.r29i_g('plA'),pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: alta persoana fara mentiune'; END IF;
+  UPDATE public.red_plicuri SET data_ar='2026-11-05', ar_scan_path='plicuri/'||pg_temp.r29i_g('plA')||'/ar.pdf', ar_primit_de='alta_persoana', ar_mentiune='FICTIV: membru de familie' WHERE id=pg_temp.r29i_g('plA')::uuid;
   IF (SELECT count(*) FROM public.red_convocari WHERE plic_id=pg_temp.r29i_g('plA')::uuid AND data_confirmare_primire='2026-11-05') <> 2 THEN RAISE EXCEPTION 'TEST3 FAIL: propagare AR'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET retur='refuz', retur_data='2026-11-06', retur_scan_path='plicuri/%s/ar.pdf' WHERE id=%L$q$,pg_temp.r29i_g('plA'),pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: retur dupa AR'; END IF;
   RAISE NOTICE 'TEST3 OK';
@@ -148,10 +166,12 @@ DO $t$ DECLARE pl public.red_plicuri; BEGIN
   RAISE NOTICE 'TEST4a OK';
 END $t$;
 SELECT pg_temp.r29i_ca(NULL,'postgres');
-INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuire/'||pg_temp.r29i_g('lotB')||'/pv-1.pdf','{"mimetype":"application/pdf"}'::jsonb);
+INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuire/'||pg_temp.r29i_g('lotB')||'/pv-1.pdf','{"mimetype":"application/pdf"}'::jsonb),
+  ('redari','plicuri/'||pg_temp.r29i_g('plB')||'/opis-1.pdf','{"mimetype":"application/pdf"}'::jsonb);
 SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
-  UPDATE public.red_loturi_plicuire SET pv_path='plicuire/'||pg_temp.r29i_g('lotB')||'/pv-1.pdf', semnatar1='FICTIV 1', semnatar2='FICTIV 2' WHERE id=pg_temp.r29i_g('lotB')::uuid;
+  UPDATE public.red_loturi_plicuire SET pv_path='plicuire/'||pg_temp.r29i_g('lotB')||'/pv-1.pdf', semnatar1_id=pg_temp.r29i_g('editor')::uuid, semnatar2_id=pg_temp.r29i_g('owner')::uuid WHERE id=pg_temp.r29i_g('lotB')::uuid;
+  UPDATE public.red_plicuri SET opis_path='plicuri/'||pg_temp.r29i_g('plB')||'/opis-1.pdf' WHERE id=pg_temp.r29i_g('plB')::uuid;
   UPDATE public.red_plicuri SET awb='RR000000002RO', data_expediere='2026-11-03' WHERE id=pg_temp.r29i_g('plB')::uuid;
   RAISE NOTICE 'TEST4b OK';
 END $t$;

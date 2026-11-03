@@ -36,14 +36,16 @@ CREATE TABLE public.red_loturi_plicuire (
   proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id),
   nr_lot text NOT NULL UNIQUE CHECK (nr_lot ~ '^PP-[0-9]{4}$'),
   data_plicuire date NOT NULL,
-  semnatar1 text CHECK (semnatar1 IS NULL OR length(semnatar1) <= 200),
-  semnatar2 text CHECK (semnatar2 IS NULL OR length(semnatar2) <= 200),
+  -- juridic#021 pct. 4: semnatarii se aleg din utilizatorii cu drept pe Redari, 2 persoane diferite (cine plicuieste / cine verifica)
+  semnatar1_id uuid REFERENCES public.profiles(id),
+  semnatar2_id uuid REFERENCES public.profiles(id),
   pv_path text CHECK (pv_path IS NULL OR length(pv_path) <= 500),
   observatii text CHECK (observatii IS NULL OR length(observatii) <= 4000),
   versiune integer NOT NULL DEFAULT 1,
   created_by uuid DEFAULT auth.uid(),
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT red_loturi_semnatari_diferiti CHECK (semnatar1_id IS NULL OR semnatar2_id IS NULL OR semnatar1_id <> semnatar2_id)
 );
 COMMENT ON TABLE public.red_loturi_plicuire IS 'Redări: lot de plicuire (PV de plicuire PP-nnnn, 2 semnături). Se creează doar prin fn_red_lot_plicuire_creeaza.';
 
@@ -59,6 +61,9 @@ CREATE TABLE public.red_plicuri (
   data_expediere date,
   data_ar date,
   ar_scan_path text,
+  ar_primit_de text CHECK (ar_primit_de IS NULL OR ar_primit_de IN ('destinatar', 'alta_persoana')),   -- juridic#021 pct. 5
+  ar_mentiune text CHECK (ar_mentiune IS NULL OR length(ar_mentiune) <= 500),
+  opis_path text,                                                                                       -- juridic#021 pct. 3: exemplarul de la dosar
   retur text CHECK (retur IS NULL OR retur IN ('destinatar_necunoscut', 'mutat', 'avizat_neridicat', 'refuz', 'adresa_incompleta', 'decedat', 'altul')),
   retur_detaliu text CHECK (retur_detaliu IS NULL OR length(retur_detaliu) <= 1000),
   retur_data date,
@@ -70,7 +75,9 @@ CREATE TABLE public.red_plicuri (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT red_plicuri_expediere CHECK ((awb IS NULL) = (data_expediere IS NULL)),
-  CONSTRAINT red_plicuri_ar_scan CHECK ((data_ar IS NULL) = (ar_scan_path IS NULL)),
+  CONSTRAINT red_plicuri_ar_scan CHECK ((data_ar IS NULL) = (ar_scan_path IS NULL) AND (data_ar IS NULL) = (ar_primit_de IS NULL)),
+  CONSTRAINT red_plicuri_ar_mentiune CHECK ((ar_primit_de IS DISTINCT FROM 'alta_persoana' AND ar_mentiune IS NULL)
+                                            OR (ar_primit_de = 'alta_persoana' AND length(btrim(coalesce(ar_mentiune, ''))) > 0)),
   CONSTRAINT red_plicuri_retur_complet CHECK ((retur IS NULL AND retur_data IS NULL AND retur_scan_path IS NULL AND retur_detaliu IS NULL)
                                               OR (retur IS NOT NULL AND retur_data IS NOT NULL AND retur_scan_path IS NOT NULL)),
   CONSTRAINT red_plicuri_retur_altul CHECK (retur IS DISTINCT FROM 'altul' OR length(btrim(coalesce(retur_detaliu, ''))) > 0),
@@ -204,9 +211,14 @@ BEGIN
   END IF;
   IF NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL THEN
     IF NEW.lot_id IS NULL THEN RAISE EXCEPTION 'redari: plicul se expediaza doar dupa PV-ul de plicuire (lot)' USING ERRCODE = '23514'; END IF;
+    -- juridic#021: fara imputernicire nu pleaca nimic (pasul 4 din planul de verificare, cap. 6); opisul de la dosar e atasat
+    IF NOT EXISTS (SELECT 1 FROM public.red_proiecte pr WHERE pr.id = NEW.proiect_id AND length(btrim(coalesce(pr.imputernicire_nr, ''))) > 0 AND pr.imputernicire_data IS NOT NULL) THEN
+      RAISE EXCEPTION 'redari: proiectul nu are inca imputernicirea Beneficiarului (nr. + data); plicurile nu pleaca' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.opis_path IS NULL THEN RAISE EXCEPTION 'redari: atasati intai opisul plicului (exemplarul de la dosar)' USING ERRCODE = '23514'; END IF;
     -- Jakarinos r1 P1-02 / Gemini r1: lotul trebuie finalizat (PV semnat atasat, ambii semnatari) si datat inainte de expediere; blocat FOR SHARE
     IF NOT EXISTS (SELECT 1 FROM public.red_loturi_plicuire l WHERE l.id = NEW.lot_id AND l.pv_path IS NOT NULL
-                     AND length(btrim(coalesce(l.semnatar1, ''))) > 0 AND length(btrim(coalesce(l.semnatar2, ''))) > 0 AND l.data_plicuire <= NEW.data_expediere FOR SHARE) THEN
+                     AND l.semnatar1_id IS NOT NULL AND l.semnatar2_id IS NOT NULL AND l.data_plicuire <= NEW.data_expediere FOR SHARE) THEN
       RAISE EXCEPTION 'redari: PV-ul de plicuire nu e finalizat (PV semnat atasat, 2 semnatari) sau expedierea e inaintea plicuirii' USING ERRCODE = '23514';
     END IF;
     -- Jakarinos r2 P1/P2: la expediere se reverifica, sub acelasi advisory lock, ca plicul e complet si identitatea postala neschimbata
@@ -223,7 +235,14 @@ BEGIN
     END IF;
     NEW.awb := upper(regexp_replace(NEW.awb, '\s', '', 'g'));
   END IF;
-  IF (OLD.data_ar IS NOT NULL AND (NEW.data_ar, NEW.ar_scan_path) IS DISTINCT FROM (OLD.data_ar, OLD.ar_scan_path))
+  IF OLD.opis_path IS NOT NULL AND NEW.opis_path IS DISTINCT FROM OLD.opis_path THEN
+    RAISE EXCEPTION 'redari: opisul plicului e deja atasat' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.opis_path IS NOT NULL AND OLD.opis_path IS NULL AND NOT (NEW.opis_path ~ ('^plicuri/' || NEW.id::text || '/[A-Za-z0-9._-]+\.(docx|DOCX|pdf|PDF)$')
+     AND EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = NEW.opis_path)) THEN
+    RAISE EXCEPTION 'redari: opisul lipseste din Storage (plicuri/<id>/...)' USING ERRCODE = '23514';
+  END IF;
+  IF (OLD.data_ar IS NOT NULL AND (NEW.data_ar, NEW.ar_scan_path, NEW.ar_primit_de, NEW.ar_mentiune) IS DISTINCT FROM (OLD.data_ar, OLD.ar_scan_path, OLD.ar_primit_de, OLD.ar_mentiune))
      OR (OLD.retur IS NOT NULL AND (NEW.retur, NEW.retur_data, NEW.retur_scan_path, NEW.retur_detaliu) IS DISTINCT FROM (OLD.retur, OLD.retur_data, OLD.retur_scan_path, OLD.retur_detaliu)) THEN
     RAISE EXCEPTION 'redari: AR-ul / returul plicului e deja inregistrat' USING ERRCODE = '23514';
   END IF;
@@ -272,11 +291,17 @@ BEGIN
   IF (NEW.proiect_id, NEW.nr_lot, NEW.data_plicuire, NEW.created_by, NEW.created_at) IS DISTINCT FROM (OLD.proiect_id, OLD.nr_lot, OLD.data_plicuire, OLD.created_by, OLD.created_at) THEN
     RAISE EXCEPTION 'redari: identitatea lotului de plicuire nu se schimba' USING ERRCODE = '23514';
   END IF;
-  IF OLD.pv_path IS NOT NULL AND (NEW.pv_path, NEW.semnatar1, NEW.semnatar2) IS DISTINCT FROM (OLD.pv_path, OLD.semnatar1, OLD.semnatar2) THEN
+  IF OLD.pv_path IS NOT NULL AND (NEW.pv_path, NEW.semnatar1_id, NEW.semnatar2_id) IS DISTINCT FROM (OLD.pv_path, OLD.semnatar1_id, OLD.semnatar2_id) THEN
     RAISE EXCEPTION 'redari: PV-ul de plicuire e deja atasat; semnatarii nu se mai schimba' USING ERRCODE = '23514';
   END IF;
-  IF NEW.pv_path IS NOT NULL AND OLD.pv_path IS NULL AND (length(btrim(coalesce(NEW.semnatar1, ''))) = 0 OR length(btrim(coalesce(NEW.semnatar2, ''))) = 0) THEN
+  IF NEW.pv_path IS NOT NULL AND OLD.pv_path IS NULL AND (NEW.semnatar1_id IS NULL OR NEW.semnatar2_id IS NULL) THEN
     RAISE EXCEPTION 'redari: PV-ul de plicuire cere ambii semnatari' USING ERRCODE = '23514';
+  END IF;
+  -- juridic#021: semnatarii sunt utilizatori cu drept pe Redari (owner sau acces explicit la modulul redari)
+  IF EXISTS (SELECT 1 FROM unnest(ARRAY[NEW.semnatar1_id, NEW.semnatar2_id]) x(uid) WHERE x.uid IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = x.uid AND pr.is_owner)
+               AND NOT EXISTS (SELECT 1 FROM public.user_module_access a WHERE a.profile_id = x.uid AND a.module = 'redari')) THEN
+    RAISE EXCEPTION 'redari: semnatarul PV-ului de plicuire trebuie sa aiba drept pe Redari' USING ERRCODE = '23514';
   END IF;
   IF NEW.pv_path IS NOT NULL AND OLD.pv_path IS NULL AND NOT (NEW.pv_path ~ ('^plicuire/' || NEW.id::text || '/[A-Za-z0-9._-]+\.(pdf|PDF|jpg|JPG|jpeg|JPEG|png|PNG)$')
      AND EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = NEW.pv_path)) THEN
