@@ -332,7 +332,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 -- (aceeasi forma ca plicuirea / expedierea, ordonat), apoi refuz daca: (a) detinatorul e intr-un plic activ neexpediat si identitatea / stergerea
 -- se schimba; (b) detinatorul are o convocare postala eligibila si intra (cheie noua sau reactivare) intr-o identitate care are deja plic neexpediat.
 DECLARE v_det uuid; v_uat uuid; v_veche text; v_noua text; v_nr text; v_k text; v_chei text[]; v_reactivat boolean := false;
-        v_nume text; v_c public.red_detinatori_contact;
+        v_nume text; v_c public.red_detinatori_contact; v_mutat boolean := false;
 BEGIN
   IF session_user = 'postgres' AND coalesce(current_setting('request.jwt.claims', true), '') = '' THEN RETURN NEW; END IF;
   IF TG_TABLE_NAME = 'red_parcele' THEN
@@ -359,6 +359,7 @@ BEGIN
     v_veche := CASE WHEN OLD.sters_la IS NULL THEN public.fn_red_cheie_calc(OLD.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
     v_noua := CASE WHEN NEW.sters_la IS NULL THEN public.fn_red_cheie_calc(NEW.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
     v_reactivat := OLD.sters_la IS NOT NULL AND NEW.sters_la IS NULL;
+    v_mutat := NEW.parcela_id IS DISTINCT FROM OLD.parcela_id;
   ELSE   -- red_detinatori_contact (INSERT / UPDATE)
     IF TG_OP = 'UPDATE' AND (NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta)
        IS NOT DISTINCT FROM (OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) THEN RETURN NEW; END IF;
@@ -374,7 +375,7 @@ BEGIN
     FOREACH v_k IN ARRAY v_chei LOOP PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || v_uat::text || ':' || v_k, 0)); END LOOP;
   END IF;
   -- (a) membru al unui plic neexpediat: identitatea / stergerea nu se schimba
-  IF v_veche IS DISTINCT FROM v_noua OR (TG_TABLE_NAME = 'red_detinatori' AND NEW.parcela_id IS DISTINCT FROM OLD.parcela_id) THEN
+  IF v_veche IS DISTINCT FROM v_noua OR v_mutat THEN
     SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
      WHERE c.detinator_id = v_det AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
     IF v_nr IS NOT NULL THEN
