@@ -19,6 +19,7 @@
 -- r7 (NO-GO Jakarinos pe r6): in fn_sms_rezerva reperul final v_acum vine dupa revalidare, iar dupa el nu se mai asteapta lock-uri (TEST22).
 -- r8 (NO-GO Copilot pe r7): sesiunea mutata pe aceeasi ZZ.LL din alt an = sesiune_schimbata (TEST23); raspuns pe un rand decedat al
 -- persoanei = a raspuns (TEST24); versiunea sablonului (TEST23).
+-- r9 (NO-GO Copilot pe r8): sablonul provizoriu blocat pe proiectele reale, permis pe TEST-% (TEST25); rezervat_la = reperul rezervarii (TEST26).
 CREATE FUNCTION pg_temp.s3c_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -863,7 +864,7 @@ BEGIN
      OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure) ~ 'now[(][)]'
      OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure) ~ 'now[(][)]'
      OR (SELECT provolatile FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure) <> 'v'
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure) !~ 'NEW[.]rezervat_la := clock_timestamp[(][)];' THEN
+     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure) !~ 'NEW[.]rezervat_la := CASE WHEN v_rez IS NOT NULL' THEN
     RAISE EXCEPTION 'TEST20 FAIL: reperul de timp al trimiterii nu e clock_timestamp dupa lock-uri';
   END IF;
   RAISE NOTICE 'TEST20 OK fereastra 08-20: 19:59:59 da, 20:00:02 nu (si vara, UTC+3); rezervarea, consumul zi / luna, bugetul de test si rezervat_la pe clock_timestamp, dupa lock-uri';
@@ -1039,6 +1040,114 @@ BEGIN
   RAISE NOTICE 'TEST24 OK raspuns pe un rand decedat al aceleiasi persoane (UAT) = a raspuns, 0 SMS; randul decedat nu creeaza destinatari';
 END $t$;
 SELECT pg_temp.s3c_ca(NULL, 'postgres');
+
+-- ── TEST25 (r9 P2-01): sablon provizoriu: proiect real = creare refuzata, sablon_neaprobat la aprobare / rezervare; TEST-% = permis ─
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+DO $t$
+DECLARE v_pr uuid; v_u uuid; v_p uuid; v_id uuid;
+BEGIN
+  INSERT INTO public.red_proiecte (cod, denumire, activ, contact_telefon) VALUES ('DRY-REAL-SMS-C', 'Proiect REAL simulat SMS (DRY, fictiv)', true, '0700 000 199')
+  RETURNING id INTO v_pr;
+  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet, sesiune_zi1, program_zi1)
+  VALUES (v_pr, 'Real', 'TRL', 'Test', pg_temp.s3c_g('azi')::date + 3, '10:00') RETURNING id INTO v_u;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (v_pr, v_u, 'TRL-0001', 1) RETURNING id INTO v_p;
+  INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (v_p, 'Test Sms C Real', 'TEST SMS C REAL', 'proprietar') RETURNING id INTO v_id;
+  INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta, telefon)
+  VALUES (v_id, 'Strada Test 37', 'Sat Test', 'Testeni', 'Test', '000000', true, '0700000237');
+  INSERT INTO public.red_convocari (detinator_id, canal) VALUES (v_id, 'telefon');
+  PERFORM pg_temp.s3c_s('prr', v_pr::text); PERFORM pg_temp.s3c_s('urr', v_u::text); PERFORM pg_temp.s3c_s('D37', v_id::text);
+END $t$;
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('ured')::uuid, 'authenticated');
+DO $t$
+DECLARE j jsonb; e text;
+BEGIN
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('prr')::uuid, pg_temp.s3c_g('urr')::uuid, NULL, NULL, true);
+  IF (j->>'sablon_aprobat')::boolean IS NOT FALSE OR (j->>'nr_destinatari')::integer <> 1 THEN RAISE EXCEPTION 'TEST25 FAIL: previzualizarea pe proiectul real %', j - 'text_final'; END IF;
+  PERFORM pg_temp.s3c_s('t_real', j->>'text_final'); PERFORM pg_temp.s3c_s('zi_real', j->>'zi');
+  e := pg_temp.s3c_eroare(format('SELECT public.fn_sms_lot_redari_sablon_creeaza(%L, %L, %L, %L, false)', pg_temp.s3c_g('prr'), pg_temp.s3c_g('urr'), j->>'text_final', j->>'set_hash'));
+  IF e IS NULL OR e NOT LIKE '42501%sablonul e provizoriu%' THEN RAISE EXCEPTION 'TEST25 FAIL: crearea pe proiectul real (%)', e; END IF;
+  -- proiectul de test (TEST-%): permis
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('uc')::uuid, NULL, NULL, true);
+  IF (j->>'sablon_aprobat')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TEST25 FAIL: proiectul TEST- trebuie permis'; END IF;
+END $t$;
+-- loturi deja existente pe proiectul real (de ex. dinainte de r9): scrise de mentenanta, cu triggerele oprite, doar in tranzactia de proba
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+ALTER TABLE public.sms_loturi DISABLE TRIGGER trg_sms_loturi_reguli;
+ALTER TABLE public.sms_mesaje DISABLE TRIGGER trg_sms_mesaje_reguli;
+DO $t$
+DECLARE v_a uuid; v_b uuid; v_f jsonb := jsonb_build_object('uat_id', pg_temp.s3c_g('urr'), 'sablon', 'redari_v1', 'sablon_versiune', 'provizoriu-2026-11-03',
+                                                           'zi', pg_temp.s3c_g('zi_real'), 'ora', '10:00');
+BEGIN
+  INSERT INTO public.sms_loturi (categorie, text, proiect_id, uat_id, filtru, nr_destinatari, segmente, cost_estimat_eur, stare, creat_de, creat_nivel,
+                                 aprobat_de, aprobat_la, aprobat_nivel, aprobat_autorizare_nr, aprobat_autorizare_data)
+  VALUES ('redari', pg_temp.s3c_g('t_real'), pg_temp.s3c_g('prr')::uuid, pg_temp.s3c_g('urr')::uuid, v_f, 1, 1, 0.049, 'aprobat', pg_temp.s3c_g('ured')::uuid, 'utilizator',
+          pg_temp.s3c_g('ured')::uuid, now(), 'utilizator', 'TGZ-DRY-C', pg_temp.s3c_g('azi')::date) RETURNING id INTO v_a;
+  INSERT INTO public.sms_loturi (categorie, text, proiect_id, uat_id, filtru, nr_destinatari, segmente, cost_estimat_eur, stare, creat_de, creat_nivel)
+  VALUES ('redari', pg_temp.s3c_g('t_real'), pg_temp.s3c_g('prr')::uuid, pg_temp.s3c_g('urr')::uuid, v_f, 1, 1, 0.049, 'draft', pg_temp.s3c_g('ured')::uuid, 'utilizator')
+  RETURNING id INTO v_b;
+  INSERT INTO public.sms_mesaje (lot_id, telefon, destinatar_tip, destinatar_id) VALUES (v_a, '+40700000237', 'detinator', pg_temp.s3c_g('D37')),
+                                                                                  (v_b, '+40700000237', 'detinator', pg_temp.s3c_g('D37'));
+  PERFORM pg_temp.s3c_s('LRa', v_a::text); PERFORM pg_temp.s3c_s('LRb', v_b::text);
+END $t$;
+ALTER TABLE public.sms_mesaje ENABLE TRIGGER trg_sms_mesaje_reguli;
+ALTER TABLE public.sms_loturi ENABLE TRIGGER trg_sms_loturi_reguli;
+DO $t$
+DECLARE j jsonb; l public.sms_loturi;
+BEGIN
+  j := public.fn_sms_rezerva(pg_temp.s3c_g('LRa')::uuid, 50, 'simulator', pg_temp.s3c_g('ured')::uuid);
+  IF j->>'motiv' <> 'sablon_neaprobat' OR jsonb_array_length(j->'mesaje') <> 0 THEN RAISE EXCEPTION 'TEST25 FAIL: rezervarea pe proiectul real %', j->>'motiv'; END IF;
+  -- versiunea finala simulata (helperul testabil): acelasi lot, cu versiune fara provizoriu -> permis (textul si sesiunea sunt valabile)
+  SELECT * INTO l FROM public.sms_loturi WHERE id = pg_temp.s3c_g('LRa')::uuid;
+  IF public.fn_sms_redari_lot_motiv(l) IS DISTINCT FROM 'sablon_neaprobat' THEN RAISE EXCEPTION 'TEST25 FAIL: motivul pe proiectul real'; END IF;
+  l.filtru := jsonb_set(l.filtru, '{sablon_versiune}', '"final-2026-12-01"');
+  IF public.fn_sms_redari_lot_motiv(l) IS NOT NULL OR NOT public.fn_sms_redari_sablon_aprobat('final-2026-12-01', pg_temp.s3c_g('prr')::uuid)
+     OR NOT public.fn_sms_redari_sablon_aprobat('provizoriu-2026-11-03', pg_temp.s3c_g('pr')::uuid)
+     OR public.fn_sms_redari_sablon_aprobat('provizoriu-2026-11-03', pg_temp.s3c_g('prr')::uuid) THEN
+    RAISE EXCEPTION 'TEST25 FAIL: versiunea finala simulata / proiectul TEST-';
+  END IF;
+END $t$;
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('ured')::uuid, 'authenticated');
+DO $t$
+DECLARE e text;
+BEGIN
+  e := pg_temp.s3c_eroare(format('SELECT public.fn_sms_lot_aproba(%L, %s)', pg_temp.s3c_g('LRb'),
+         (public.fn_sms_lot_destinatari(pg_temp.s3c_g('LRb')::uuid)->>'versiune')::integer));
+  IF e IS NULL OR e NOT LIKE '22023%sablon_neaprobat%' THEN RAISE EXCEPTION 'TEST25 FAIL: aprobarea pe proiectul real (%)', e; END IF;
+  RAISE NOTICE 'TEST25 OK sablon provizoriu: proiect real = previzualizare cu avertisment, creare refuzata, sablon_neaprobat la aprobare si rezervare; proiect TEST- = permis; versiune finala simulata = permis';
+END $t$;
+
+-- ── TEST26 (r9 P3-01): rezervat_la = reperul rezervarii (v_acum), acelasi pe toata transa; valoare neplauzibila = momentul efectiv ──
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+ALTER TABLE public.sms_loturi DISABLE TRIGGER trg_sms_loturi_reguli;
+ALTER TABLE public.sms_mesaje DISABLE TRIGGER trg_sms_mesaje_reguli;
+DO $t$
+DECLARE v_a uuid; v_b uuid;
+BEGIN
+  INSERT INTO public.sms_loturi (categorie, text, nr_destinatari, segmente, cost_estimat_eur, stare, aprobat_de, aprobat_la)
+  VALUES ('intern', 'Test DRY rezervat_la (fictiv)', 3, 1, 0.147, 'aprobat', pg_temp.s3c_g('own')::uuid, now()) RETURNING id INTO v_a;
+  INSERT INTO public.sms_loturi (categorie, text, nr_destinatari, segmente, cost_estimat_eur, stare, aprobat_de, aprobat_la)
+  VALUES ('intern', 'Test DRY rezervat_la direct (fictiv)', 1, 1, 0.049, 'in_trimitere', pg_temp.s3c_g('own')::uuid, now()) RETURNING id INTO v_b;
+  INSERT INTO public.sms_mesaje (lot_id, telefon, destinatar_tip, destinatar_id) VALUES
+    (v_a, '+40700000261', 'angajat', 'fictiv-261'), (v_a, '+40700000262', 'angajat', 'fictiv-262'), (v_a, '+40700000263', 'angajat', 'fictiv-263'),
+    (v_b, '+40700000264', 'angajat', 'fictiv-264');
+  PERFORM pg_temp.s3c_s('LI1', v_a::text); PERFORM pg_temp.s3c_s('LI2', v_b::text);
+END $t$;
+ALTER TABLE public.sms_mesaje ENABLE TRIGGER trg_sms_mesaje_reguli;
+ALTER TABLE public.sms_loturi ENABLE TRIGGER trg_sms_loturi_reguli;
+DO $t$
+DECLARE j jsonb; v_n integer; v_d integer; v_min timestamptz; v_max timestamptz;
+BEGIN
+  j := public.fn_sms_rezerva(pg_temp.s3c_g('LI1')::uuid, 50, 'simulator', NULL);
+  SELECT count(*), count(DISTINCT rezervat_la), min(rezervat_la), max(rezervat_la) INTO v_n, v_d, v_min, v_max
+    FROM public.sms_mesaje WHERE lot_id = pg_temp.s3c_g('LI1')::uuid AND stare = 'necunoscut';
+  IF j->>'motiv' <> 'ok' OR v_n <> 3 OR v_d <> 1 OR v_min < now() OR v_max > clock_timestamp() THEN
+    RAISE EXCEPTION 'TEST26 FAIL: rezervat_la pe transa (% %, % distincte)', j->>'motiv', v_n, v_d;
+  END IF;
+  -- scriere directa (mentenanta) cu o valoare neplauzibila: triggerul pune momentul efectiv
+  UPDATE public.sms_mesaje SET stare = 'necunoscut', furnizor = 'simulator', rezervat_la = '2000-01-01 00:00:00+00' WHERE lot_id = pg_temp.s3c_g('LI2')::uuid;
+  IF (SELECT rezervat_la FROM public.sms_mesaje WHERE lot_id = pg_temp.s3c_g('LI2')::uuid) < now() THEN RAISE EXCEPTION 'TEST26 FAIL: valoarea neplauzibila a fost pastrata'; END IF;
+  RAISE NOTICE 'TEST26 OK rezervat_la = reperul rezervarii (acelasi pe cele 3 mesaje ale transei), deci numarat in aceeasi zi / luna ca decizia; valoare neplauzibila -> momentul efectiv';
+END $t$;
 
 -- ── TEST14: comutatorul Redari oprit = creare (si previzualizare) refuzata, ca inainte, si pentru owner ─────────────────────────
 SELECT pg_temp.s3c_ca(pg_temp.s3c_g('own')::uuid, 'authenticated');

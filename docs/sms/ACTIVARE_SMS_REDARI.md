@@ -14,9 +14,18 @@ Comutatorul Redări (`sms_setari.redari_autorizat`, din 📱 SMS → Setări, do
 
 Loturile create cu un text vechi nu se mai pot trimite după schimbarea lui: aprobarea și rezervarea dau `text_schimbat`. Se anulează din 📱 SMS → Istoric și se refac.
 
-Nu există o coloană separată pentru „text aprobat”: poarta e această procedură, plus marcajul de versiune din lot (`filtru.sablon_versiune`).
+Nu există o coloană separată pentru „text aprobat”. Poarta e această procedură, plus marcajul de versiune din lot (`filtru.sablon_versiune`).
+
+**Blocaj tehnic** (r9, varianta implicită, de confirmat de Razvan):
+- Cât timp versiunea începe cu `provizoriu` (sau lipsește), un lot din șablon primește `sablon_neaprobat` la aprobare, la rezervare și la cron.
+- Excepție: proiectele cu codul `TEST-…` (de ex. `TEST-RAZVAN`). Acolo fluxul se poate testa înainte de textul final.
+- Pe proiectele reale, previzualizarea arată avertismentul „șablon provizoriu, nu poate fi aprobat”, iar crearea e refuzată, ca să nu rămână loturi blocate.
+- Regula e în `fn_sms_redari_sablon_aprobat(versiune, proiect)`.
+- La textul final, migrarea nouă schimbă `fn_sms_redari_sablon_versiune()` într-o valoare fără `provizoriu`. Loturile provizorii create între timp pe proiecte TEST- dau apoi `text_schimbat`, dacă textul s-a schimbat, și se anulează.
 
 ## Limite cunoscute (acceptate)
 
 - **Eligibilitatea** e garantată la momentul revalidării de la rezervare, nu la livrare. Un răspuns înregistrat după revalidare, în aceeași fracțiune de secundă, nu oprește un SMS deja rezervat.
-- **`rezervat_la`** e momentul rândului. Deciziile rezervării (sesiune, fereastra 08–20, plafoane, buget) se iau pe reperul final al rezervării. Diferența dintre cele două e de microsecunde, în aceeași tranzacție.
+- **`rezervat_la`** intră în numărarea consumului (`fn_sms_consum_la`, `fn_sms_test_consum_zi_la`).
+  - Din r9, `fn_sms_rezerva` scrie `rezervat_la` = reperul final al rezervării (`v_acum`), în același UPDATE. Mesajele unei tranșe se numără deci în aceeași zi / lună în care s-au verificat plafonul și bugetul.
+  - O valoare neplauzibilă (în viitor sau mai veche de un minut) e înlocuită de trigger cu momentul efectiv.

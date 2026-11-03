@@ -2,7 +2,7 @@
 -- Fail-closed:
 --   * fn_sms_loturi_reguli, fn_sms_rezerva, fn_sms_mesaje_reguli, fn_sms_test_consum_zi revin EXACT la corpurile 20261130b, iar
 --     fn_sms_consum la corpul 20261130a (copiate de generator, nu de mana; md5 verificat la final); CREATE OR REPLACE pastreaza drepturile;
---   * cele 10 functii noi (sablonul, eligibilitatea, valabilitatea lotului, fereastra, consumul pe moment dat, crearea) se scot (DROP);
+--   * cele 11 functii noi (sablonul, eligibilitatea, valabilitatea lotului, fereastra, consumul pe moment dat, crearea) se scot (DROP);
 --   * fn_sms_lot_redari_creeaza (textul liber) NU se redeschide: dupa revenire nimeni nu mai creeaza loturi Redari din aplicatie,
 --     pana la o migrare noua. Loturile interne, aprobarea, trimiterea si istoricul raman exact ca in 20261130b.
 -- NU sterge date: loturile Redari deja create din sablon raman in sms_loturi (filtru->>'sablon' = 'redari_v1'), cu mesajele lor.
@@ -22,13 +22,14 @@ BEGIN
      OR to_regprocedure('public.fn_sms_redari_lot_motiv(public.sms_loturi)') IS NULL OR to_regclass('public.sms_loturi') IS NULL
      OR to_regprocedure('public.fn_sms_redari_lot_motiv_la(public.sms_loturi,timestamptz)') IS NULL
      OR to_regprocedure('public.fn_sms_fereastra_externa(timestamptz)') IS NULL OR to_regprocedure('public.fn_sms_consum_la(timestamptz)') IS NULL
-     OR to_regprocedure('public.fn_sms_test_consum_zi_la(uuid,timestamptz)') IS NULL OR to_regprocedure('public.fn_sms_redari_sablon_versiune()') IS NULL THEN
+     OR to_regprocedure('public.fn_sms_test_consum_zi_la(uuid,timestamptz)') IS NULL OR to_regprocedure('public.fn_sms_redari_sablon_versiune()') IS NULL
+     OR to_regprocedure('public.fn_sms_redari_sablon_aprobat(text,uuid)') IS NULL THEN
     RAISE EXCEPTION '20261130c revenire: migrarea 20261130c lipseste';
   END IF;
   -- corpurile de acum sunt cele din 20261130c (altceva = schimbat de altcineva intre timp: nu suprascriem orb)
-  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '9910b4bb68f6b9543fc73f171cfe0103'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'c9a1d180dd01da8484338c911579b92b'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure), chr(13), '')) <> '15ac579d87cd38f650a4b3181b0b50d1'
+  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '88991164518c47220941896f7d53deb6'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'b565d0c4c1ff62320c14ae384ed6bb94'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure), chr(13), '')) <> '92fc70b6d4e983507c79ff800b54c56d'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure), chr(13), '')) <> '6c1c05fade70afc21fc9bc4508be5a3c'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure), chr(13), '')) <> 'ff5ade8a377dba2ca7be28efa3c8f999' THEN
     RAISE EXCEPTION '20261130c revenire: corpurile inlocuite nu sunt cele din 20261130c';
@@ -342,6 +343,7 @@ DROP FUNCTION public.fn_sms_redari_sablon_model();
 DROP FUNCTION public.fn_sms_fereastra_externa(timestamptz);
 DROP FUNCTION public.fn_sms_consum_la(timestamptz);
 DROP FUNCTION public.fn_sms_redari_sablon_versiune();
+DROP FUNCTION public.fn_sms_redari_sablon_aprobat(text, uuid);
 DROP FUNCTION public.fn_sms_test_consum_zi_la(uuid, timestamptz);
 
 DO $post$

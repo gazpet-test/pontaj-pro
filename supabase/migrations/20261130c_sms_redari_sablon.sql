@@ -51,15 +51,20 @@
 -- r8 (Copilot P2-02): raspunsul se cauta pe TOATE randurile persoanei din UAT (si arhivate, si decedate); eligibilitatea pozitiva doar pe
 --   randurile active, nedecedate, convocate.
 -- Limite documentate (r8, Copilot P3):
---   * rezervat_la (fn_sms_mesaje_reguli) e momentul RANDULUI, scris cand mesajul e rezervat; deciziile rezervarii (sesiune, fereastra,
---     plafoane, buget) se iau pe reperul final v_acum. rezervat_la nu intra in predicatele acestei decizii, ci doar ca data in consumul
---     rezervarilor urmatoare; diferenta fata de v_acum e de ordinul microsecundelor (aceeasi tranzactie). Am ales documentarea: a scrie
---     v_acum in rezervat_la ar cere o cale noua de scriere in trigger (P3-01);
+--   * rezervat_la: r9 (Copilot P3-01) rezervat_la INTRA in numarare (fn_sms_consum_la si fn_sms_test_consum_zi_la numara mesajele dupa
+--     rezervat_la >= limita zilei / lunii). Ca sa nu existe abatere peste o limita calendaristica (v_acum 23:59:59.999, rand scris la
+--     00:00:00.001), fn_sms_rezerva scrie rezervat_la = v_acum in acelasi UPDATE, iar fn_sms_mesaje_reguli il pastreaza daca e plauzibil
+--     (in ultimul minut, nu in viitor; altfel clock_timestamp). Fara alta cale de scriere: acelasi UPDATE, aceleasi drepturi;
 --   * eligibilitatea e garantata la momentul revalidarii, nu la livrare: un raspuns inregistrat dupa revalidare (aceeasi fractiune de
 --     secunda) nu opreste un SMS deja rezervat; limita acceptata (P3-02);
 --   * sablonul e PROVIZORIU (fn_sms_redari_sablon_versiune() = SABLON_REDARI_VERSIUNE din src/sms/sablonRedari.js =
 --     'provizoriu-2026-11-03', scris si in filtru.sablon_versiune al lotului). Comutatorul Redari se porneste DOAR dupa textul final
 --     aprobat de Juridic + Razvan si refacerea paritatii SQL / JS (docs/sms/ACTIVARE_SMS_REDARI.md) (P3-03).
+--   * r9 (Copilot P2-01, varianta implicita, de confirmat de Razvan): blocaj TEHNIC: un lot cu versiune provizoriu-* (sau fara versiune)
+--     primeste 'sablon_neaprobat' la aprobare, rezervare si cron (fn_sms_redari_sablon_aprobat), CU EXCEPTIA proiectelor al caror cod
+--     incepe cu 'TEST-' (Razvan testeaza fluxul pe TEST-RAZVAN inainte de textul final). Pe proiectele reale crearea e REFUZATA cat timp
+--     sablonul e provizoriu (previzualizarea arata avertismentul, sablon_aprobat = false), ca sa nu ramana loturi blocate. Textul final:
+--     migrare noua cu fn_sms_redari_sablon_versiune() fara prefixul provizoriu.
 -- Ordinea in fn_sms_rezerva (r7, Jakarinos P2): lock-uri (setari FOR UPDATE -> lot FOR UPDATE) -> revalidarea mesajelor (opt-out,
 -- ne_eligibil, duplicat_persoana: singurele UPDATE-uri care pot astepta randuri) -> v_acum (reperul final, clock_timestamp) -> verificari
 -- (motivul lotului, fereastra 08-20, consum, plafon, buget de test) -> rezervare (FOR UPDATE SKIP LOCKED); dupa v_acum nimic nu asteapta.
@@ -147,6 +152,14 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $fn$
   SELECT 'Gazpet pt Transgaz: sesiune redare teren la Primaria {COMUNA}, {ZI} ora {ORA}. Raspuns si online, cu QR-ul din scrisoare. Tel {TEL}'::text
 $fn$;
 COMMENT ON FUNCTION public.fn_sms_redari_sablon_model() IS 'SMS Redari (pura, interna): textul PROVIZORIU al sablonului fix, oglinda SABLON_REDARI din src/sms/sablonRedari.js. Se schimba doar printr-o migrare noua, impreuna cu constanta din UI si cu fn_sms_redari_sablon_versiune().';
+
+-- r9 (Copilot P2-01): sablonul poate pleca pe proiectul dat? versiune provizoriu-* (sau lipsa) = doar pe proiectele cu codul 'TEST-%'
+CREATE FUNCTION public.fn_sms_redari_sablon_aprobat(p_versiune text, p_proiect_id uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT coalesce((coalesce(p_versiune, '') ~ '[^[:space:]]' AND left(coalesce(p_versiune, ''), 10) <> 'provizoriu')
+                  OR EXISTS (SELECT 1 FROM public.red_proiecte pr WHERE pr.id = p_proiect_id AND pr.cod LIKE 'TEST-%'), false)
+$fn$;
+COMMENT ON FUNCTION public.fn_sms_redari_sablon_aprobat(text, uuid) IS 'SMS Redari (intern): true daca un lot cu aceasta versiune de sablon poate fi creat / aprobat / trimis pe proiect: versiune nevida care nu incepe cu provizoriu, sau proiect de test (cod TEST-%). Varianta implicita r9, de confirmat de Razvan.';
 
 -- r8 (Copilot P3-03): marcajul de versiune al textului, oglinda SABLON_REDARI_VERSIUNE din src/sms/sablonRedari.js
 CREATE FUNCTION public.fn_sms_redari_sablon_versiune() RETURNS text
@@ -244,6 +257,8 @@ BEGIN
   IF p_lot.categorie IS DISTINCT FROM 'redari' THEN RETURN NULL; END IF;
   -- r5 (Copilot P2-02): un lot Redari fara sablonul recunoscut (text liber, dinainte de 20261130c) nu se mai aproba / trimite
   IF (p_lot.filtru->>'sablon') IS DISTINCT FROM 'redari_v1' THEN RETURN 'lot_vechi_fara_sablon'; END IF;
+  -- r9 (Copilot P2-01): sablonul provizoriu pleaca doar pe proiectele TEST-%
+  IF NOT public.fn_sms_redari_sablon_aprobat(p_lot.filtru->>'sablon_versiune', p_lot.proiect_id) THEN RETURN 'sablon_neaprobat'; END IF;
   -- inceputul sesiunii din lot (ora Romaniei); lipsa / invalid = expirat (fail-closed)
   IF coalesce(p_lot.filtru->>'zi', '') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' OR coalesce(p_lot.filtru->>'ora', '') !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' THEN
     RETURN 'sesiune_expirata';
@@ -361,6 +376,11 @@ BEGIN
     RAISE EXCEPTION 'sms redari: textul sablonului are % caractere GSM-7 (%); maximum 160', v_s->>'lungime', v_s->>'motiv' USING ERRCODE = '22023';
   END IF;
   v_text := v_s->>'text';
+  -- r9 (Copilot P2-01): sablon provizoriu pe un proiect real = previzualizare cu avertisment, creare refuzata (nu raman loturi blocate)
+  IF NOT v_preview AND NOT public.fn_sms_redari_sablon_aprobat(public.fn_sms_redari_sablon_versiune(), p_proiect_id) THEN
+    RAISE EXCEPTION 'sms redari: sablonul e provizoriu (neaprobat de Juridic + Razvan): nu poate fi creat pe un proiect real, doar pe proiecte TEST-'
+      USING ERRCODE = '42501';
+  END IF;
   IF NOT v_preview AND p_text_afisat IS DISTINCT FROM v_text THEN
     RAISE EXCEPTION 'sms redari: textul s-a schimbat fata de cel afisat (setarile UAT / proiectului sau ziua); refa previzualizarea' USING ERRCODE = '40001';
   END IF;
@@ -424,7 +444,8 @@ BEGIN
     'nr_destinatari', v_nr, 'candidati', v_cand, 'excluse_pv_semnat', v_pv, 'excluse_a_raspuns', v_rasp, 'excluse_fara_mobil', v_fara,
     'excluse_optout', v_opt, 'excluse_duplicat', v_dup, 'cost_estimat_eur', v_cost,
     'plafon_zi', CASE WHEN v_niv = 'owner' THEN v_plafon END, 'depaseste_plafon_zi', v_nr > coalesce(v_plafon, 0),
-    'lot_activ_uat', v_activ, 'campanie_existenta', v_campanie, 'preview', v_preview, 'nivel', v_niv);
+    'lot_activ_uat', v_activ, 'campanie_existenta', v_campanie, 'preview', v_preview, 'nivel', v_niv,
+    'sablon_aprobat', public.fn_sms_redari_sablon_aprobat(public.fn_sms_redari_sablon_versiune(), p_proiect_id));
 END $fn$;
 COMMENT ON FUNCTION public.fn_sms_lot_redari_sablon_creeaza(uuid, uuid, text, text, boolean) IS 'SMS Redari: previzualizeaza / creeaza (draft) lotul din sablonul fix pe un UAT. Textul il completeaza BD-ul (fn_sms_redari_sablon_calc, sesiunea care nu a inceput); la creare p_text_afisat si p_set_hash (din previzualizare) trebuie sa fie identice (altfel 40001). Destinatari: fn_sms_redari_persoane (fara raspuns pe nicio parcela, cu parcele fara PV semnat), un SMS de persoana si de telefon. Un singur lot activ pe UAT si o singura campanie UAT + zi + sablon neanulata. Niveluri ca 20261130b.';
 
@@ -491,6 +512,7 @@ BEGIN
           CASE v_motiv WHEN 'sesiune_expirata' THEN 'sesiunea din text a inceput deja'
                        WHEN 'lot_vechi_fara_sablon' THEN 'lot Redari vechi, cu text liber (fara sablon)'
                        WHEN 'sesiune_schimbata' THEN 'ziua (cu an) sau ora sesiunii s-au schimbat in Setari UAT'
+                       WHEN 'sablon_neaprobat' THEN 'sablonul e provizoriu (neaprobat de Juridic + Razvan); permis doar pe proiecte TEST-'
                        ELSE 'textul nu mai corespunde setarilor UAT / proiectului' END
           USING ERRCODE = '22023';
       END IF;
@@ -643,7 +665,7 @@ BEGIN
   WITH x AS (
     SELECT m.id FROM public.sms_mesaje m WHERE m.lot_id = l.id AND m.stare = 'in_coada' ORDER BY m.creat_la, m.id LIMIT v_n FOR UPDATE SKIP LOCKED
   ), u AS (
-    UPDATE public.sms_mesaje m SET stare = 'necunoscut', furnizor = p_furnizor FROM x WHERE m.id = x.id RETURNING m.id, m.telefon, m.segmente
+    UPDATE public.sms_mesaje m SET stare = 'necunoscut', furnizor = p_furnizor, rezervat_la = v_acum FROM x WHERE m.id = x.id RETURNING m.id, m.telefon, m.segmente
   )
   SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'telefon', u.telefon, 'segmente', u.segmente) ORDER BY u.id), '[]'::jsonb) INTO v_arr FROM u;
   SELECT count(*) INTO v_ram FROM public.sms_mesaje m WHERE m.lot_id = l.id AND m.stare = 'in_coada';
@@ -655,7 +677,7 @@ END $fn$;
 
 CREATE OR REPLACE FUNCTION public.fn_sms_mesaje_reguli() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE l public.sms_loturi; s public.sms_setari; v_cd uuid; v_cn text;
+DECLARE l public.sms_loturi; s public.sms_setari; v_cd uuid; v_cn text; v_rez timestamptz; v_acum timestamptz;
 BEGIN
   IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'sms: mesajele nu se sterg (sunt jurnalul trimiterii)' USING ERRCODE = '42501'; END IF;
   IF TG_OP = 'INSERT' THEN
@@ -695,6 +717,8 @@ BEGIN
      OR (OLD.furnizor_id IS NOT NULL AND NEW.furnizor_id IS DISTINCT FROM OLD.furnizor_id) THEN
     RAISE EXCEPTION 'sms: furnizorul si id-ul de la furnizor se scriu o singura data' USING ERRCODE = '23514';
   END IF;
+  -- 20261130c r9: valoarea propusa de UPDATE pentru rezervat_la (fn_sms_rezerva trimite reperul ei, v_acum), retinuta inainte de reset
+  v_rez := NEW.rezervat_la;
   NEW.rezervat_la := OLD.rezervat_la; NEW.trimis_la := OLD.trimis_la; NEW.livrat_la := OLD.livrat_la;
   IF OLD.stare = 'in_coada' AND NEW.stare = 'necunoscut' THEN
     -- rezervarea: din lot in trimitere, cu trimiterea pornita, Redari doar autorizat, fara opt-out, fara id inca
@@ -730,8 +754,11 @@ BEGIN
     IF EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = NEW.telefon AND o.activ) THEN
       RAISE EXCEPTION 'sms: numarul are opt-out' USING ERRCODE = '23514';
     END IF;
-    -- 20261130c r5: acelasi reper de timp ca plafoanele / bugetul (clock_timestamp dupa lock-uri), nu inceputul tranzactiei
-    NEW.rezervat_la := clock_timestamp();
+    -- 20261130c r5 / r9 (Copilot P3-01): rezervat_la = reperul deciziei rezervarii (v_acum din fn_sms_rezerva, trimis in acelasi UPDATE),
+    -- ca plafonul / bugetul verificate pe ziua lui v_acum sa numere mesajele tot in ziua lui v_acum; acceptat doar daca e plauzibil
+    -- (in ultimul minut, nu in viitor), altfel momentul efectiv
+    v_acum := clock_timestamp();
+    NEW.rezervat_la := CASE WHEN v_rez IS NOT NULL AND v_rez <= v_acum AND v_rez > v_acum - interval '1 minute' THEN v_rez ELSE v_acum END;
   ELSIF OLD.stare = 'in_coada' AND NEW.stare = 'anulat' THEN
     NULL;
   ELSIF OLD.stare = 'necunoscut' AND NEW.stare = 'trimis' THEN
@@ -771,7 +798,8 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_sms_redari_sablon_model(), public.fn_sms_redari_sablon_calc(text, date[], text[], text, timestamp),
   public.fn_sms_redari_persoane(uuid, uuid), public.fn_sms_redari_lot_motiv(public.sms_loturi), public.fn_sms_redari_lot_motiv_la(public.sms_loturi, timestamptz),
   public.fn_sms_lot_redari_sablon_creeaza(uuid, uuid, text, text, boolean), public.fn_sms_fereastra_externa(timestamptz),
-  public.fn_sms_consum_la(timestamptz), public.fn_sms_test_consum_zi_la(uuid, timestamptz), public.fn_sms_redari_sablon_versiune()
+  public.fn_sms_consum_la(timestamptz), public.fn_sms_test_consum_zi_la(uuid, timestamptz), public.fn_sms_redari_sablon_versiune(),
+  public.fn_sms_redari_sablon_aprobat(text, uuid)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_sms_lot_redari_sablon_creeaza(uuid, uuid, text, text, boolean) TO authenticated;
 -- textul liber + convocarile active ale proiectului: nu mai e o cale a aplicatiei (decizia: un singur sablon, destinatarii filtrati in BD)
@@ -792,7 +820,11 @@ DECLARE v_o oid; v_n integer; v_j jsonb; v_src text; v_p1 integer; v_fin integer
     'public.fn_sms_fereastra_externa(timestamptz)', 'public.fn_sms_redari_sablon_versiune()']::regprocedure[];
 BEGIN
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sms!_%' ESCAPE '!';
-  IF v_n <> 50 THEN RAISE EXCEPTION '20261130c: % functii fn_sms_* (asteptat 50)', v_n; END IF;
+  IF v_n <> 51 THEN RAISE EXCEPTION '20261130c: % functii fn_sms_* (asteptat 51)', v_n; END IF;
+  IF public.fn_sms_redari_sablon_aprobat('provizoriu-2026-11-03', NULL) OR NOT public.fn_sms_redari_sablon_aprobat('final-2026-12-01', NULL)
+     OR public.fn_sms_redari_sablon_aprobat(NULL, NULL) OR public.fn_sms_redari_sablon_aprobat(' ', NULL) THEN
+    RAISE EXCEPTION '20261130c: regula sablonului aprobat';
+  END IF;
   IF public.fn_sms_redari_sablon_versiune() IS DISTINCT FROM 'provizoriu-2026-11-03' THEN RAISE EXCEPTION '20261130c: versiunea sablonului'; END IF;
   -- r6 (Jakarinos P2): niciun clock_timestamp() in predicate (WHERE / JOIN / FILTER / argumente): doar in atribuiri „:= clock_timestamp()”
   FOR v_o IN SELECT unnest(ARRAY['public.fn_sms_consum()', 'public.fn_sms_consum_la(timestamptz)', 'public.fn_sms_test_consum_zi(uuid)',
@@ -825,7 +857,8 @@ BEGIN
   IF (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure) ~ 'now[(][)]'
      OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure) ~ 'now[(][)]'
      OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure) ~ 'now[(][)]'
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure) !~ 'NEW[.]rezervat_la := clock_timestamp[(][)];'
+     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure) !~ 'NEW[.]rezervat_la := CASE WHEN v_rez IS NOT NULL'
+     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure) !~ 'rezervat_la = v_acum FROM x'
      OR public.fn_sms_fereastra_externa('2026-11-03 19:59:59+02') IS NOT TRUE OR public.fn_sms_fereastra_externa('2026-11-03 20:00:00+02')
      OR public.fn_sms_fereastra_externa('2026-11-03 07:59:59+02') OR public.fn_sms_fereastra_externa('2026-07-01 17:00:00+00')
      OR public.fn_sms_fereastra_externa(NULL) THEN
@@ -849,9 +882,9 @@ BEGIN
     RAISE EXCEPTION '20261130c: expirarea trebuie decisa pe clock_timestamp()';
   END IF;
   -- corpurile inlocuite sunt exact cele generate (20261130b + blocurile 20261130c)
-  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '9910b4bb68f6b9543fc73f171cfe0103'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'c9a1d180dd01da8484338c911579b92b'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure), chr(13), '')) <> '15ac579d87cd38f650a4b3181b0b50d1'
+  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '88991164518c47220941896f7d53deb6'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'b565d0c4c1ff62320c14ae384ed6bb94'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure), chr(13), '')) <> '92fc70b6d4e983507c79ff800b54c56d'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure), chr(13), '')) <> '6c1c05fade70afc21fc9bc4508be5a3c'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure), chr(13), '')) <> 'ff5ade8a377dba2ca7be28efa3c8f999' THEN
     RAISE EXCEPTION '20261130c: corpurile inlocuite nu sunt cele generate';

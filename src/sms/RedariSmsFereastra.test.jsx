@@ -79,6 +79,8 @@ describe('RedariSmsFereastra — șablonul fix', () => {
     expect(motivBlocareCreare(s, { ...p, lot_activ_uat: 'l1' })).toMatch(/lot activ/)
     expect(motivBlocareCreare(s, { ...p, campanie_existenta: 'l0' })).toMatch(/această zi de sesiune există deja/)
     expect(motivBlocareCreare(s, { ...p, set_hash: null })).toMatch(/nu a fixat lista/)
+    expect(motivBlocareCreare(s, { ...p, sablon_aprobat: false })).toMatch(/Șablon provizoriu, nu poate fi aprobat/)
+    expect(motivBlocareCreare(s, { ...p, sablon_aprobat: true })).toBeNull()
     expect(motivBlocareCreare(s, { ...p, nr_destinatari: 0 })).toMatch(/Niciun proprietar/)
     expect(motivBlocareCreare(s, p)).toBeNull()
     const html = randeaza({ uatInitial: 'u1', previewInitial: { text_final: TEXT, nr_destinatari: 3, candidati: 3, lot_activ_uat: 'l1' } })
