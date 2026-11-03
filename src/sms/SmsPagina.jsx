@@ -54,7 +54,7 @@ export function SoldSmslink({ soldInitial = null }) {
   }
   const simulator = sold?.simulator === true
   // r5 (Copilot r4 P2-01): sub prag „activ” doar cu monitorizarea pornită și furnizorul configurat; altfel soldul e istoric
-  const istoric = sold?.monitorizare_oprita === true || sold?.furnizor_neconfigurat === true
+  const istoric = sold?.monitorizare_oprita === true || sold?.furnizor_neconfigurat === true || sold?.citire_veche === true || sold?.eroare_dupa_citire === true
   const subActiv = !simulator && !istoric && sold?.sub_prag === true
   const culoare = simulator ? G.muted : subActiv ? G.red : sold?.alerta ? G.yellow : G.muted
   return <span style={{ ...S.row, gap: 6 }}>

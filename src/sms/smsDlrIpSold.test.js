@@ -13,6 +13,10 @@ const PAROLA = 'parola-de-test-fictiva'
 const UID_O = '00000000-0000-4000-8000-0000000000a1'
 const UID_U = '00000000-0000-4000-8000-0000000000a2'
 // lista comunicată de SMSLink pe 03.11.2026, copiată din brief (sursă independentă de constanta din cod)
+// r6: „acum” fixat în testele de UI (momentul alertei nu poate trece de el)
+const ACUM_UI = Date.parse('2026-11-10T00:00:00Z')
+const alerteUi = (st, acum = ACUM_UI) => alerteSmsSold(st, acum)
+const momentUi = (st, acum = ACUM_UI) => momentAlertaSold(st, acum)
 const LISTA_BRIEF = ['146.70.213.194', '146.70.213.195', '146.70.213.200', '89.33.246.226', '89.33.246.227', '89.33.246.228', '89.33.246.234']
 
 // ── sms-dlr: filtrul de IP ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -278,27 +282,61 @@ describe('soldul în UI', () => {
     expect(s).toMatchObject({ ownerOnly: true, path: '/admin?tab=sms' })
     expect(areAccesSursa({ id: 'x', is_owner: false, module_access: ['admin_alerte', 'sms'] }, s)).toBe(false)
     expect(areAccesSursa({ id: 'o', is_owner: true, module_access: ['admin_alerte'] }, s)).toBe(true)
-    expect(alerteSmsSold({ credit: 900, alerta: false, prag: 150 })).toEqual([])
-    expect(alerteSmsSold(null)).toEqual([])
-    const [sub] = alerteSmsSold({ credit: 120, prag: 150, sub_prag: true, alerta: true, citit_la: '2026-11-04T05:10:00Z' })
+    expect(alerteUi({ credit: 900, alerta: false, prag: 150 })).toEqual([])
+    expect(alerteUi(null)).toEqual([])
+    const [sub] = alerteUi({ credit: 120, prag: 150, sub_prag: true, alerta: true, citit_la: '2026-11-04T05:10:00Z' })
     expect(sub).toMatchObject({ id: 'sms_sold:sold', priority: 'week' })
     expect(sub.title).toBe('Sold SMSLink sub prag (150): sold 120 SMS (la 04.11.2026, 07:10)')
-    expect(alerteSmsSold({ credit: 0, prag: 150, sub_prag: true, alerta: true })[0].priority).toBe('critical')
-    expect(alerteSmsSold({ credit: 500, prag: 150, eroare_dupa_citire: true, eroare: 'smslink_7', alerta: true })[0]).toMatchObject({ priority: 'missing', title: 'Soldul SMSLink nu s-a putut citi (smslink_7)' })
-    expect(alerteSmsSold({ credit: null, prag: 150, citire_veche: true, alerta: true })[0]).toMatchObject({ reference: 'Nicio citire reușită încă', title: 'Soldul SMSLink nu a fost citit încă' })
+    expect(alerteUi({ credit: 0, prag: 150, sub_prag: true, alerta: true })[0].priority).toBe('critical')
+    expect(alerteUi({ credit: 500, prag: 150, eroare_dupa_citire: true, eroare: 'smslink_7', alerta: true })[0]).toMatchObject({ priority: 'missing', title: 'Soldul SMSLink nu s-a putut citi (smslink_7)' })
+    expect(alerteUi({ credit: null, prag: 150, citire_veche: true, alerta: true })[0]).toMatchObject({ reference: 'Nicio citire reușită încă', title: 'Soldul SMSLink nu a fost citit încă' })
   })
   it('r2 P2-07: sub prag + vechi + eroare → O alertă cu TOATE motivele, „ultimul sold cunoscut”, ora = eroarea (mai nouă)', () => {
-    const [a] = alerteSmsSold({ credit: 120, prag: 150, sub_prag: true, citire_veche: true, eroare_dupa_citire: true, eroare: 'http_502',
+    const [a] = alerteUi({ credit: 120, prag: 150, sub_prag: true, citire_veche: true, eroare_dupa_citire: true, eroare: 'http_502',
       alerta: true, citit_la: '2026-10-30T05:10:00Z', eroare_la: '2026-11-04T05:10:00Z' })
-    expect(a.title).toBe('Sold SMSLink sub prag (150): ultimul sold cunoscut 120 SMS (la 30.10.2026, 07:10) — neactualizat')
-    expect(a.impact).toContain('Reîncarcă creditul')
+    // r6 (Copilot r5 P2-02): soldul e neactualizat → titlul e eroarea, „sub prag” doar ca ultimul sold cunoscut, fără reîncărcare
+    expect(a.title).toBe('Soldul SMSLink nu s-a putut citi (http_502)')
+    expect(a.priority).toBe('missing')
+    expect(a.impact).toContain('Ultimul sold cunoscut era sub prag (120 < 150)')
+    expect(a.impact).not.toContain('Reîncarcă creditul')
     expect(a.impact).toContain('Ultima încercare a eșuat (http_502')
     expect(a.impact).toContain('05:10 UTC = 07:10 iarna / 08:10 vara')
     expect(a.timestamp).toBe('2026-11-04T05:10:00.000Z')
     expect(a.reference).toBe('Ultimul sold cunoscut 120 SMS (la 30.10.2026, 07:10)')
   })
+  it('r6 P2-01 (scenariul Jakarinos): citire 01.11 05:10Z + eroare 04.11 05:10Z → momentul = 04.11 05:10Z, niciodată în viitor', () => {
+    const st = { credit: 400, prag: 150, citire_veche: true, eroare_dupa_citire: true, eroare: 'http_502', alerta: true,
+      citit_la: '2026-11-01T05:10:00Z', eroare_la: '2026-11-04T05:10:00Z', furnizor_ultim: 'smslink', furnizor_la: '2026-11-04T05:10:00Z' }
+    const acum = Date.parse('2026-11-04T06:00:00Z')
+    expect(momentAlertaSold(st, acum)).toBe('2026-11-04T05:10:00.000Z')
+    expect(alerteSmsSold(st, acum)[0].timestamp).toBe('2026-11-04T05:10:00.000Z')
+    // doar citire veche: citit_la + 36 h; dacă acel moment e încă în viitor, motivul nu e activ → nu trece de „acum”
+    const veche = { citire_veche: true, citit_la: '2026-11-03T05:10:00Z', alerta: true }
+    expect(momentAlertaSold(veche, Date.parse('2026-11-10T00:00:00Z'))).toBe('2026-11-04T17:10:00.000Z')
+    expect(Date.parse(momentAlertaSold(veche, Date.parse('2026-11-04T06:00:00Z')))).toBeLessThanOrEqual(Date.parse('2026-11-04T06:00:00Z'))
+    // monitorizare oprită: max(furnizor_la, citit_la) + 36 h, limitat la acum
+    const op = { monitorizare_oprita: true, citire_veche: true, citit_la: '2026-11-01T05:10:00Z', furnizor_la: '2026-11-03T05:10:00Z', alerta: true }
+    expect(momentAlertaSold(op, Date.parse('2026-11-10T00:00:00Z'))).toBe('2026-11-04T17:10:00.000Z')
+    for (const acumT of [Date.parse('2026-11-04T06:00:00Z'), Date.parse('2026-11-02T00:00:00Z')]) {
+      expect(Date.parse(momentAlertaSold(op, acumT))).toBeLessThanOrEqual(acumT)
+    }
+  })
+  it('r6 P2-02: sold sub prag dar neactualizat (citire veche / eroare / monitorizare oprită) → nu critic, fără reîncărcare; actualizat → critic la 0', () => {
+    const baza = { credit: 0, prag: 150, sub_prag: true, alerta: true, citit_la: '2026-11-01T05:10:00Z' }
+    for (const extra of [{ citire_veche: true }, { eroare_dupa_citire: true, eroare: 'http_502', eroare_la: '2026-11-02T05:10:00Z' },
+      { monitorizare_oprita: true, citire_veche: true, furnizor_la: '2026-11-02T05:10:00Z' }]) {
+      const [a] = alerteUi({ ...baza, ...extra })
+      expect(a.priority).toBe('missing')
+      expect(a.impact).not.toContain('Reîncarcă creditul')
+      expect(a.impact).toContain('Ultimul sold cunoscut era sub prag (0 < 150)')
+      expect(a.title.startsWith('Sold SMSLink sub prag')).toBe(false)
+    }
+    const [activ] = alerteUi(baza)
+    expect(activ).toMatchObject({ priority: 'critical', title: 'Sold SMSLink sub prag (150): sold 0 SMS (la 01.11.2026, 07:10)' })
+    expect(activ.impact).toContain('Reîncarcă creditul')
+  })
   it('r4 P2: simulator neconfirmat de 36 h (BD: simulator=false, monitorizare_oprita) → alertă „monitorizare oprită”, ora = max(furnizor_la, citit_la) + 36 h', () => {
-    const [a] = alerteSmsSold({ credit: 900, prag: 150, citire_veche: true, monitorizare_oprita: true, simulator: false, alerta: true,
+    const [a] = alerteUi({ credit: 900, prag: 150, citire_veche: true, monitorizare_oprita: true, simulator: false, alerta: true,
       citit_la: '2026-10-20T05:10:00Z', furnizor_ultim: 'simulator', furnizor_la: '2026-10-25T05:10:00Z' })
     expect(a.title).toBe('Monitorizarea soldului SMSLink e oprită (niciun apel sms-sold de peste 36 de ore); ultimul sold cunoscut 900 SMS (la 20.10.2026, 08:10)')
     expect(a.timestamp).toBe('2026-10-26T17:10:00.000Z')
@@ -308,7 +346,7 @@ describe('soldul în UI', () => {
   it('r5 P2-01: simulator expirat (BD: simulator=false, monitorizare_oprita, sub_prag pe soldul istoric) → nu e sold activ, nu cere reîncărcare', () => {
     const st = { credit: 120, prag: 150, sub_prag: true, citire_veche: true, monitorizare_oprita: true, simulator: false, alerta: true,
       citit_la: '2026-11-01T05:10:00Z', furnizor_ultim: 'simulator', furnizor_la: '2026-11-02T05:10:00Z' }
-    const [a] = alerteSmsSold(st)
+    const [a] = alerteUi(st)
     expect(a.title).toBe('Monitorizarea soldului SMSLink e oprită (niciun apel sms-sold de peste 36 de ore); ultimul sold cunoscut 120 SMS (la 01.11.2026, 07:10)')
     expect(a.priority).toBe('missing')
     expect(a.impact).not.toContain('Reîncarcă creditul')
@@ -321,17 +359,17 @@ describe('soldul în UI', () => {
     // citire 01.11, eroare SMSLink 02.11, apeluri simulator până la 03.11, apoi cronul oprit
     const st = { credit: 500, prag: 150, citire_veche: true, monitorizare_oprita: true, eroare_dupa_citire: true, eroare: 'http_502', alerta: true,
       citit_la: '2026-11-01T05:10:00Z', eroare_la: '2026-11-02T05:10:00Z', furnizor_ultim: 'simulator', furnizor_la: '2026-11-03T05:10:00Z' }
-    expect(momentAlertaSold(st)).toBe('2026-11-04T17:10:00.000Z')
-    const [a] = alerteSmsSold(st)
+    expect(momentUi(st)).toBe('2026-11-04T17:10:00.000Z')
+    const [a] = alerteUi(st)
     expect(a.timestamp).toBe('2026-11-04T17:10:00.000Z')
     expect(a.title.startsWith('Monitorizarea soldului SMSLink e oprită')).toBe(true)
     // eroarea MAI NOUĂ decât expirarea câștigă
-    expect(momentAlertaSold({ ...st, eroare_la: '2026-11-06T05:10:00Z' })).toBe('2026-11-06T05:10:00.000Z')
+    expect(momentUi({ ...st, eroare_la: '2026-11-06T05:10:00Z' })).toBe('2026-11-06T05:10:00.000Z')
     // doar eroare (monitorizare activă) = momentul erorii
-    expect(momentAlertaSold({ eroare_dupa_citire: true, eroare_la: '2026-11-04T06:00:00Z', citit_la: '2026-11-04T05:10:00Z' })).toBe('2026-11-04T06:00:00.000Z')
+    expect(momentUi({ eroare_dupa_citire: true, eroare_la: '2026-11-04T06:00:00Z', citit_la: '2026-11-04T05:10:00Z' })).toBe('2026-11-04T06:00:00.000Z')
   })
   it('r5 P3-01: furnizor neconfigurat are prioritate în titlu chiar dacă ultimul sold cunoscut e sub prag', () => {
-    const [a] = alerteSmsSold({ credit: 100, prag: 150, sub_prag: true, eroare_dupa_citire: true, eroare: 'furnizor_neconfigurat', alerta: true,
+    const [a] = alerteUi({ credit: 100, prag: 150, sub_prag: true, eroare_dupa_citire: true, eroare: 'furnizor_neconfigurat', alerta: true,
       citit_la: '2026-11-03T05:10:00Z', eroare_la: '2026-11-04T05:10:00Z', furnizor_ultim: 'necunoscut', furnizor_neconfigurat: true })
     expect(a.title).toBe('SMS: furnizorul nu e configurat (SMS_FURNIZOR) — soldul SMSLink nu se citește')
     expect(a.priority).toBe('missing')
@@ -341,14 +379,14 @@ describe('soldul în UI', () => {
   it('r4 P3-01: furnizor neconfigurat → alertă de configurare (nu sold SMSLink activ); panoul spune „furnizor neconfigurat”', () => {
     const st = { credit: 500, prag: 150, citit_la: '2026-11-04T05:10:00Z', eroare: 'furnizor_neconfigurat', eroare_la: '2026-11-04T06:10:00Z',
       eroare_dupa_citire: true, alerta: true, furnizor_ultim: 'necunoscut', furnizor_neconfigurat: true, simulator: false }
-    const [a] = alerteSmsSold(st)
+    const [a] = alerteUi(st)
     expect(a.title).toBe('SMS: furnizorul nu e configurat (SMS_FURNIZOR) — soldul SMSLink nu se citește')
     expect(a.impact).toContain('SMS_FURNIZOR lipsește sau are o valoare necunoscută')
     expect(a.timestamp).toBe('2026-11-04T06:10:00.000Z')
     expect(textSold(st)).toBe('Sold SMSLink: furnizor neconfigurat (SMS_FURNIZOR) · ultimul cunoscut: 500 la 04.11 07:10')
   })
   it('r3 P3-01: cronul oprit (citire veche, fără eroare nouă) → ora alertei = citit_la + 36 h, nu ora ultimei citiri', () => {
-    const [a] = alerteSmsSold({ credit: 900, prag: 150, citire_veche: true, alerta: true, citit_la: '2026-10-25T05:10:00Z' })
+    const [a] = alerteUi({ credit: 900, prag: 150, citire_veche: true, alerta: true, citit_la: '2026-10-25T05:10:00Z' })
     expect(a.timestamp).toBe('2026-10-26T17:10:00.000Z')
     expect(a.title).toBe('Soldul SMSLink nu a mai fost citit de peste 36 de ore')
     expect(a.reference).toBe('Ultimul sold cunoscut 900 SMS (la 25.10.2026, 07:10)')
@@ -356,8 +394,8 @@ describe('soldul în UI', () => {
   it('r3 P2-01: comutare SMSLink → simulator, fără click: nici alertă (chiar dacă BD ar marca sub prag), iar panoul arată „ultimul cunoscut”', async () => {
     const randSim = { id: true, credit: 120, prag: 150, sub_prag: false, alerta: false, citire_veche: false, eroare_dupa_citire: false,
       citit_la: '2026-11-04T05:10:00Z', furnizor_ultim: 'simulator', furnizor_la: '2026-11-04T06:00:00Z', simulator: true }
-    expect(alerteSmsSold(randSim)).toEqual([])
-    expect(alerteSmsSold({ ...randSim, sub_prag: true, alerta: true })).toEqual([])
+    expect(alerteUi(randSim)).toEqual([])
+    expect(alerteUi({ ...randSim, sub_prag: true, alerta: true })).toEqual([])
     const client = { from: () => { const q = { select: () => q, order: () => q, range: () => q, abortSignal: async () => ({ data: [randSim], error: null, count: 1 }) }; return q } }
     const r = await incarcaSursaAdmin(client, SURSE_ADMIN.find(x => x.id === 'sms_sold'), { id: 'o', is_owner: true, module_access: ['admin_alerte'] })
     expect(r).toMatchObject({ state: 'ok', rows: [] })

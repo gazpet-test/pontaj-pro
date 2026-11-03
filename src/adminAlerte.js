@@ -332,16 +332,23 @@ export function alerteGmail(proiecte) {
 //     nu un sold SMSLink activ (nu se cere reîncărcarea pe baza lui);
 //   * momentul alertei = motivul activ cel mai recent: expirarea (max(furnizor_la, citit_la) + 36 h) pentru monitorizare oprită / citire
 //     veche; eroarea DOAR dacă e mai nouă decât expirarea.
-export function momentAlertaSold(st) {
+// r6 (Copilot r5 P2-01 = Jakarinos r5 P3): momentul alertei = momentul la care motivul activ cel mai recent a DEVENIT activ, niciodată
+// după „acum”: citire veche = citit_la + 36 h; monitorizare oprită = max(furnizor_la, citit_la) + 36 h; eroare = eroare_la. Un moment
+// calculat în viitor înseamnă că motivul nu e încă activ (nu intră); rezultatul e limitat la min(…, acum).
+export function momentAlertaSold(st, acum = Date.now()) {
   const ms = v => { const t = v ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null }
-  const repere = [ms(st.furnizor_la), ms(st.citit_la)].filter(t => t != null)
-  const expirare = (st.monitorizare_oprita === true || st.citire_veche === true) && repere.length ? Math.max(...repere) + 36 * 3600 * 1000 : null
-  const eroare = st.eroare_dupa_citire === true ? ms(st.eroare_la) : null
-  const t = expirare != null && eroare != null ? Math.max(expirare, eroare) : expirare ?? eroare ?? ms(st.citit_la) ?? ms(st.eroare_la)
-  return t == null ? null : new Date(t).toISOString()
+  const ZI_SI_JUM = 36 * 3600 * 1000
+  const citit = ms(st.citit_la), furn = ms(st.furnizor_la)
+  const candidati = [
+    st.citire_veche === true && citit != null ? citit + ZI_SI_JUM : null,
+    st.monitorizare_oprita === true && (furn != null || citit != null) ? Math.max(furn ?? -Infinity, citit ?? -Infinity) + ZI_SI_JUM : null,
+    st.eroare_dupa_citire === true ? ms(st.eroare_la) : null,
+  ].filter(t => t != null && t <= acum)
+  const t = candidati.length ? Math.max(...candidati) : (citit ?? ms(st.eroare_la))
+  return t == null ? null : new Date(Math.min(t, acum)).toISOString()
 }
 
-export function alerteSmsSold(st) {
+export function alerteSmsSold(st, acum = Date.now()) {
   if (!st || st.alerta !== true || st.simulator === true) return []
   const credit = Number.isInteger(st.credit) ? st.credit : null
   const fmt = v => new Date(v).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' })
@@ -349,7 +356,9 @@ export function alerteSmsSold(st) {
   const oprita = st.monitorizare_oprita === true, neconf = st.furnizor_neconfigurat === true || (err && st.eroare === 'furnizor_neconfigurat')
   const istoric = veche || err || oprita || neconf
   const sold = credit == null ? null : `${istoric ? 'ultimul sold cunoscut' : 'sold'} ${credit} SMS${st.citit_la ? ` (la ${fmt(st.citit_la)})` : ''}`
-  const subActiv = sub && !oprita && !neconf
+  // r6 (Copilot r5 P2-02): „sub prag” activ (prioritate + reîncărcare) DOAR pe un sold actualizat: fără citire veche, monitorizare oprită,
+  // eroare după citire sau furnizor neconfigurat; altfel e doar „ultimul sold cunoscut era sub prag”, prioritate „date lipsă”
+  const subActiv = sub && !oprita && !neconf && !veche && !err
   const titlu = neconf ? 'SMS: furnizorul nu e configurat (SMS_FURNIZOR) — soldul SMSLink nu se citește'
     : oprita ? `Monitorizarea soldului SMSLink e oprită (niciun apel sms-sold de peste 36 de ore)${sold ? `; ${sold}` : ''}`
       : subActiv ? `Sold SMSLink sub prag (${st.prag}): ${sold}${veche || err ? ' — neactualizat' : ''}`
@@ -367,7 +376,7 @@ export function alerteSmsSold(st) {
     title: titlu,
     reference: sold ? sold[0].toUpperCase() + sold.slice(1) : 'Nicio citire reușită încă',
     priority: subActiv ? (credit === 0 ? 'critical' : 'week') : 'missing',
-    timestamp: momentAlertaSold(st),
+    timestamp: momentAlertaSold(st, acum),
     owner: 'Owner · cont SMSLink',
     impact,
     reason: 'Calculat în BD (fn_sold_sms_stare) din ultima citire mode=Credit a cronului zilnic. Nu se trimite nimic automat.',
@@ -384,7 +393,7 @@ export async function incarcaSursaAdmin(client, source, profile, { signal, now =
     if (source.id === 'ofertare') rows = alerteOfertare(await read('ofertare_licitatii', q => q.in('status', ['identificata', 'analiza', 'go', 'in_lucru'])), now)
     if (source.id === 'hr') rows = alerteHr(await read('v_hr_autorizatii_status'), today)
     if (source.id === 'conturi') rows = alerteConturi(await read('v_admin_conturi_alerte'), today)
-    if (source.id === 'sms_sold') rows = alerteSmsSold((await read('v_sms_sold'))[0] ?? null)
+    if (source.id === 'sms_sold') rows = alerteSmsSold((await read('v_sms_sold'))[0] ?? null, now.getTime())
     if (source.id === 'gmail') rows = alerteGmail(await read('executie_proiecte', q => q.eq('activ', true)))
     if (source.id === 'firma') rows = alerteFirma(await read('documente_firma', q => q.eq('activ', true)), today)
     if (source.id === 'flota') {
