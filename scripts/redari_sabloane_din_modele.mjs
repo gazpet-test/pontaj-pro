@@ -10,7 +10,7 @@
 //    adresa_uat (celelalte 7 rânduri goale se șterg); (3) docProps: fără miniatură și fără „ultima modificare de”;
 //    (4) celulele goale din tabele nu mai au run în modelele resalvate de Word → primesc un run cu w:sz=19 (formatul celulelor
 //    de date din aceleași tabele); (5) paragraful nou {{pv_a_referinta}} sub „Nume:” în PV B (decizia 02.11, PR #935).
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
@@ -304,18 +304,42 @@ for (const [sablon, reteta] of Object.entries(RETETE)) {
   const chei = [...new Set([...(await (await JSZip.loadAsync(buf)).file('word/document.xml').async('string')).matchAll(/\{\{([A-Za-z0-9_.]+)\}\}/g)].map(m => m[1]))]
   construite.push({ sablon, reteta, buf, chei })
 }
-let diferente = 0
-for (const { sablon, reteta, buf, chei } of construite) {
-  const tinta = resolve(OUT, sablon)
-  if (VERIFICA) {
+if (VERIFICA) {
+  let diferente = 0
+  for (const { sablon, reteta, buf } of construite) {
     let acum = null
-    try { acum = readFileSync(tinta) } catch { acum = null }
+    try { acum = readFileSync(resolve(OUT, sablon)) } catch { acum = null }
     const egal = acum && Buffer.compare(acum, buf) === 0
     if (!egal) diferente += 1
     console.log(`${egal ? 'identic' : 'DIFERĂ'}  ${sablon}  ←  ${reteta.model}`)
-  } else {
-    writeFileSync(tinta, buf)
-    console.log(`scris ${sablon} (${buf.length} octeți, ${chei.length} placeholder-e distincte)  ←  ${reteta.model}`)
+  }
+  if (diferente) process.exit(1)
+} else {
+  // Copilot f-v2 r3 P3-02: publicare în doi pași. (1) toate 5 se scriu în fișiere temporare lângă destinație și se recitesc
+  // octet cu octet; un eșec aici șterge temporarele și NU atinge șabloanele. (2) abia apoi rename temporar → destinație.
+  // Limita (Windows, 5 fișiere): fiecare rename e atomic, dar cele 5 nu formează o tranzacție; un eșec la pasul (2) (fișier
+  // deschis în Word / blocat de antivirus) e raportat cu lista celor deja publicate, iar `--verifica` arată ce a rămas vechi.
+  const temporar = sablon => resolve(OUT, `.${sablon}.tmp-${process.pid}`)
+  const scrise = []
+  try {
+    for (const { sablon, buf } of construite) {
+      writeFileSync(temporar(sablon), buf)
+      scrise.push(sablon)
+      asigura(Buffer.compare(readFileSync(temporar(sablon)), buf) === 0, `${sablon}: fișierul temporar nu corespunde`)
+    }
+  } catch (e) {
+    for (const s of scrise) rmSync(temporar(s), { force: true })
+    throw new Error(`Nimic publicat (șabloanele au rămas cele vechi): ${e.message}`)
+  }
+  const publicate = []
+  try {
+    for (const { sablon, reteta, buf, chei } of construite) {
+      renameSync(temporar(sablon), resolve(OUT, sablon))
+      publicate.push(sablon)
+      console.log(`scris ${sablon} (${buf.length} octeți, ${chei.length} placeholder-e distincte)  ←  ${reteta.model}`)
+    }
+  } catch (e) {
+    for (const { sablon } of construite) if (!publicate.includes(sablon)) rmSync(temporar(sablon), { force: true })
+    throw new Error(`Publicare parțială: ${publicate.join(', ') || 'niciunul'} sunt noi, restul au rămas vechi (${e.message}). Rulează din nou scriptul.`)
   }
 }
-if (VERIFICA && diferente) process.exit(1)

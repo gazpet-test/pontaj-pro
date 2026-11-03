@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob } from '../docx.js'
-import { citesteFisierPostal, ghicesteMaparea, propune, aplica } from '../importPostal.js'
+import { citesteFisierPostal, ghicesteMaparea, propune, aplica, confirmariAplicare } from '../importPostal.js'
 import { G, S, Camp, Gol, msgEroare, fmtDate, MOTIVE_RETUR, etichetaRetur, citestePaginat } from './comune.jsx'
+import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 
 const TIPURI = { expediere: 'Expediere', ar: 'Confirmare primire (AR)', retur: 'Retur' }
 const CAMPURI = { nr_document: 'Nr. plic (PL-XXX-nnnn)', nr_tracking: 'Tracking', data: 'Data', eveniment: 'Eveniment', motiv: 'Motiv retur' }
@@ -10,8 +11,12 @@ const CAMPURI = { nr_document: 'Nr. plic (PL-XXX-nnnn)', nr_tracking: 'Tracking'
 // Only project-scoped IDs, keyset to EMPTY page, at most 100 IDs per URL.
 export async function citesteConvocariPostal(client, proiectId, esteCurent) {
   return citestePaginat(() => client.from('red_plicuri')
-    .select('id,proiect_id,nr_plic,lot_id,opis_path,awb,data_expediere,data_ar,retur,retur_data,stare,versiune')
+    .select('id,proiect_id,uat_id,nr_plic,lot_id,opis_path,awb,data_expediere,data_ar,retur,retur_data,stare,versiune')
     .eq('proiect_id', proiectId), { cheie: 'id', esteCurent })
+}
+// Copilot f-v2 r3 P2-01: UAT-urile proiectului, citite proaspăt la previzualizare, pentru termenul de expediere (ziua 1 − 10 zile)
+export async function citesteUatPostal(client, proiectId, esteCurent) {
+  return citestePaginat(() => client.from('red_uat').select('id,nume,sesiune_zi1').eq('proiect_id', proiectId), { cheie: 'id', esteCurent })
 }
 function schimbari(patch) {
   return Object.entries(patch || {}).map(([k, v]) => `${k}: ${k === 'retur' ? etichetaRetur(v) : k === 'awb' ? v : fmtDate(v)}`).join('; ')
@@ -27,7 +32,8 @@ function Tabel({ titlu, randuri }) {
       </tr></thead><tbody>{randuri.slice(0, 200).map((r, i) => <tr key={`${r.rand}/${i}`}>
         <td style={S.td}>{r.rand}</td><td style={S.td}>{r.nr_document || '-'}</td>
         <td style={S.td}>{r.tracking || '-'}</td><td style={S.td}>{TIPURI[r.tip] || '-'}</td>
-        <td style={S.td}>{r.motiv || schimbari(r.patch) || 'Deja înregistrat'}</td>
+        <td style={S.td}>{r.motiv || schimbari(r.patch) || 'Deja înregistrat'}
+          {r.avertisment && <div role="alert" style={{ color: G.yellow }}>⚠ {r.avertisment}</div>}</td>
       </tr>)}</tbody></table>
     </> : <Gol />}
   </div>
@@ -72,16 +78,17 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     const curent = incepe()
     setPreview(null); setRaport(null)
     try {
-      let convocari
-      try { convocari = await citesteConvocariPostal(supabase, proiect.id, curent) }
-      catch { throw new Error('Nu s-au putut citi toate plicurile. Previzualizarea nu a fost creată.') }
-      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari, { date1904: !!fisier.date1904, imputernicire: !!(String(proiect?.imputernicire_nr || '').trim() && proiect?.imputernicire_data) }))
+      let convocari, uats
+      try { [convocari, uats] = await Promise.all([citesteConvocariPostal(supabase, proiect.id, curent), citesteUatPostal(supabase, proiect.id, curent)]) }
+      catch { throw new Error('Nu s-au putut citi toate plicurile și UAT-urile. Previzualizarea nu a fost creată.') }
+      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari, { date1904: !!fisier.date1904, imputernicire: !!(String(proiect?.imputernicire_nr || '').trim() && proiect?.imputernicire_data), uats }))
     } catch (e) { if (curent()) setMesaj(msgEroare(e)) }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
   async function confirma() {
     if (ocupat.current || !poateScrie || !preview?.aplicabile.length || raport) return
-    if (!window.confirm(`Aplică ${preview.aplicabile.length} modificări poștale în proiectul ${proiect.cod}?\nDeja: ${preview.deja.length}. Excepții: ${preview.exceptii.length}.\nConflictele rămân pentru verificare manuală în Plicuri.`)) return
+    // a doua confirmare numără expedierile după termenul de 10 zile; oricare refuz = nu se aplică nimic
+    for (const m of confirmariAplicare(preview, proiect.cod)) if (!window.confirm(m)) return
     const curent = incepe()
     try {
       const r = await aplica(supabase, preview.aplicabile, { esteCurent: curent })
@@ -127,6 +134,7 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     {preview && <>
       <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
         {[['De aplicat', preview.aplicabile.length], ['Deja', preview.deja.length], ['Excepții', preview.exceptii.length]].map(([k, n]) => <div key={k} style={S.card}>{k}: <b>{n}</b></div>)}
+        {preview.aplicabile.some(a => a.avertisment) && <div role="alert" style={{ ...S.card, color: G.yellow }}>După termenul de {TERMEN_CONVOCARE_ZILE} zile: <b>{preview.aplicabile.filter(a => a.avertisment).length}</b> (se înregistrează, cu confirmare)</div>}
       </div>
       <Tabel titlu="Propuneri" randuri={preview.aplicabile} /><Tabel titlu="Deja înregistrate" randuri={preview.deja} />
       <Tabel titlu="Excepții / conflicte / erori" randuri={exceptii} />

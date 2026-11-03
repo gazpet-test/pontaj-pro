@@ -330,12 +330,13 @@ acțiuni: generează convocator, marchează expediat / AR primit / retur, înreg
 raport + commit). Restul (Dashboard, UAT, Sesiune, Setări, PV A/B/C) = după. Pagina publică: `src/RedariRaspunsPublic.jsx`,
 ruta `/redari/raspuns/:token` fără login.
 
-## 10. Șabloane reale (Model_1..7, v5 din 01.11.2026 după review R3) — adăugat 01.11.2026, branch `redari/sabloane`
+## 10. Șabloane reale (Model_1..7, Final_v2 din 03.11.2026; înlocuiesc v5 din 01.11.2026) — adăugat 01.11.2026, actualizat 03.11.2026 (PR #964)
 Harta completă placeholder → sursă: `docs/redari/SABLOANE.md`. Originalele: `docs/redari/referinta/` (Model_1..5 .docx Final_v2 din
 03.11.2026 — înlocuiesc v5, Model_6 registru .xlsx și cele 3 PDF-uri din pachetul v3, Model_7 tipizat Anexa 7 .xlsx v5 și v6). Șabloanele cu placeholder-e,
-verificate cu `node scripts/redari_sabloane_verifica.mjs` (0 placeholder-e rupte) și completate de probă cu `completeazaDocx`
-strict: `public/redari/sabloane/convocator.docx` (Model 1, 36 placeholder-e), `pv_a.docx` (Model 2, 54), `pv_b.docx`
-(Model 3, 77), `adresa_uat.docx` (Model 4, 44, inclusiv rândul-șablon `{{rand.*}}`), `pv_c.docx` (Model 5, 23).
+refăcute cu `node scripts/redari_sabloane_din_modele.mjs`, verificate cu `node scripts/redari_sabloane_verifica.mjs` (0 placeholder-e rupte) și
+completate de probă cu `completeazaDocx` strict: `public/redari/sabloane/convocator.docx` (Model 1, 36 placeholder-e), `pv_a.docx`
+(Model 2, 51 — fără fotografii), `pv_b.docx` (Model 3, 72 — fără foto / topo / jurnal), `adresa_uat.docx` (Model 4, 40, inclusiv
+rândul-șablon `{{rand.*}}`; Final_v2 nu mai are antetul firmei), `pv_c.docx` (Model 5, 23).
 `convocator_provizoriu.docx` rămâne doar până trece codul pe `convocator.docx`.
 
 Schimbări față de §8 (convocatorul): placeholder-e noi `{{calitate}} {{adresa}} {{poz_hg}} {{tronson}} {{sate_zi1..3}}

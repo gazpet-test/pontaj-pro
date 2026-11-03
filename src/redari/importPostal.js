@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx-js-style'
+import { avertismentExpediere } from './plicuri.js'
+import { TERMEN_CONVOCARE_ZILE } from './setari.js'
 
 const text = v => v == null ? '' : String(v).trim()
 const simplu = v => text(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -129,10 +131,13 @@ export function motivRetur(v) {
 }
 
 // Gemini f10 r1 P2: aceleași precondiții ca BD și ca ecranul Plicuri — împuternicirea proiectului și opisul de la dosar (altfel excepții clare, nu erori la aplicare)
-export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = false, imputernicire = true } = {}) {
+// Copilot f-v2 r3 P2-01: `uats` (id, nume, sesiune_zi1) → expedierea după termenul de 10 zile primește `avertisment` (rândul NU se refuză:
+// data expedierii e un fapt); aceeași funcție ca ecranul Plicuri (avertismentExpediere). UAT necunoscut / fără ziua 1 = termen nejudecat.
+export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = false, imputernicire = true, uats = [] } = {}) {
   if (!['expediere', 'ar', 'retur'].includes(modImplicit)) throw new Error('Mod implicit invalid.')
   if ((!mapare.nr_document && !mapare.nr_tracking) || !mapare.data) throw new Error('Mapează numărul plicului sau AWB-ul și data.')
   const rezultat = { aplicabile: [], deja: [], exceptii: [] }, docs = new Map(), tracks = new Map()
+  const uatPe = new Map((uats || []).map(u => [u.id, u]))
   for (const p of plicuri) {
     for (const [map, k] of [[docs, document(p.nr_plic)], [tracks, tracking(p.awb)]]) {
       if (k) map.set(k, [...(map.get(k) || []), p])
@@ -177,7 +182,8 @@ export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = fals
     if (p.versiune == null || !p.proiect_id) return exceptie('snapshot incomplet; reîncarcă plicurile')
     const patch = { awb, data_expediere: data }
     const conditii = Object.fromEntries(CAMPURI.map(k => [k, p[k] ?? null]))
-    valide.push({ fel: 'aplicabil', item: { ...item, patch, conditii }, baza })
+    const avertisment = avertismentExpediere(uatPe.get(p.uat_id), data)
+    valide.push({ fel: 'aplicabil', item: { ...item, patch, conditii, ...(avertisment ? { avertisment } : {}) }, baza })
   })
   // Două treceri: un rând invalid nu rezervă plicul; toate evenimentele valide duplicate devin excepții.
   const pe = new Map()
@@ -189,6 +195,17 @@ export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = fals
   }
   rezultat.exceptii.sort((a, b) => a.rand - b.rand)
   return rezultat
+}
+
+/** Confirmările cerute înainte de „Aplică”, în ordine; oricare refuzată = nu se aplică nimic. A doua numără expedierile tardive. */
+export function confirmariAplicare(preview, proiectCod) {
+  const tardive = (preview?.aplicabile || []).filter(a => a.avertisment)
+  const mesaje = [`Aplică ${preview.aplicabile.length} modificări poștale în proiectul ${proiectCod}?\nDeja: ${preview.deja.length}. Excepții: ${preview.exceptii.length}.\nConflictele rămân pentru verificare manuală în Plicuri.`]
+  if (tardive.length) {
+    mesaje.push(`${tardive.length} din ${preview.aplicabile.length} expedieri sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2): ` +
+      `${tardive.map(a => a.nr_document).join(', ')}.\nSe înregistrează cu data reală, dar termenul nu e respectat. Le înregistrezi totuși?`)
+  }
+  return mesaje
 }
 
 export async function aplica(supabase, aplicabile, { esteCurent = () => true } = {}) {
