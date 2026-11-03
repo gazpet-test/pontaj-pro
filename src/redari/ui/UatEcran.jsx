@@ -6,7 +6,7 @@ import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
 import { verificaDateAdresaUat, genereazaAdresaUat, salveazaAdresaUat, descarcaBlob, versiuneMaximaInBucket, caleAdresaUat, aziBucuresti, BUCKET_REDARI } from '../docx.js'
 import { uat3 as uat3Din } from '../idParcela.js'
-import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, lipsuriUat, rezumatZile, conflicteConcurente } from '../setari.js'
+import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, avertismenteUat, lipsuriUat, rezumatZile, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
 
 const CHEI_SESIUNE = [...ZILE_SESIUNE, 'program_zi1', 'program_zi2', 'program_zi3']
@@ -103,6 +103,8 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
   const ocupat = useRef(false)
   useEffect(() => { generatie.current++; return () => { generatie.current++ } }, [uat.id, proiect?.id])
   const lipsuriAdresa = verificaDateAdresaUat({ proiect, uat, nrDocument: uat.adresa_nr || 'AU-rezervat-la-generare' })
+  // termenul de 10 zile al afișării (plan pct. 4.3): vizibil mereu, confirmat la salvare, fără blocaj (data afișării e un fapt)
+  const avertismente = avertismenteUat(form)
   const nesalvat = schimbate.length > 0 || codSchimbat
   const adresa = async (doarDescarca = false) => {
     if (ocupat.current || lucru) return
@@ -195,6 +197,8 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
     if (e.length) return
     if (!schimbate.length && !codSchimbat) { show('Nimic de salvat.', 'info'); return }
     if (lucru) return
+    const atingeTermen = schimbate.some(k => k === 'sesiune_zi1' || k === 'afisare_data_start')
+    // Jakarinos f-v2 r2 P2: confirmarea termenului se cere DUPĂ recitirea rândului, pe valorile combinate (ale mele + ale altui admin)
     // Jakarinos f2 r3 P2: formularul (inclusiv codul) se blochează ÎNAINTE de primul await și se deblochează pe toate ieșirile;
     // form / schimbate / cod sunt fixate aici, iar câmpurile nu mai acceptă tastare până la final.
     const atingeSesiuni = schimbate.some(k => CHEI_SESIUNE.includes(k))
@@ -229,6 +233,9 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
         const etichete = conf.map(k => k === 'uat3' ? 'Cod UAT' : (CAMPURI_UAT.find(c => c.cheie === k)?.eticheta || k))
         if (conf.length && !window.confirm(`Alt administrator a schimbat între timp: ${etichete.join(', ')}.\nSuprascrii cu valorile tale?`)) return
       }
+      // termenul de 10 zile pe rândul care va rezulta: rândul de acum din BD + patch-ul meu (un câmp schimbat de altcineva intră în calcul)
+      const avertismenteFinale = atingeTermen ? avertismenteUat({ ...acum, ...patch }) : []
+      if (avertismenteFinale.length && !window.confirm(`${avertismenteFinale.join('\n')}\n\nSalvezi totuși?`)) return
       const { data, error } = await supabase.from('red_uat').update(patch).eq('id', uat.id).eq('versiune', acum.versiune).select(COL_UAT)
       if (!curent()) return
       if (error) throw error
@@ -254,6 +261,11 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       </div>
       <FormularCampuri campuri={CAMPURI_UAT} form={form} doarCitire={!esteAdmin} blocat={lucru} schimbate={schimbate}
         onChange={(k, v) => { if (!lucru) setForm(f => ({ ...f, [k]: v })) }} />
+      {avertismente.length > 0 && (
+        <div role="alert" style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.yellowDim, color: G.yellow, fontSize: 12.5 }}>
+          {avertismente.map(a => <div key={a}>⚠ {a}</div>)}
+        </div>
+      )}
       {(esteAdmin || (poateDescarca && uat.adresa_nr)) && <div style={{ marginTop: 14 }}>
         {poateDescarca && uat.adresa_nr && <button style={S.btnS} disabled={lucru} onClick={() => adresa(true)}>Descarcă adresa {uat.adresa_nr}</button>}
         {esteAdmin && uat.adresa_nr && <>{' '}<button style={S.btnS} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Regenerează</button></>}

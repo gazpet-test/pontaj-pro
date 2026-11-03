@@ -3,7 +3,9 @@ import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob } from '../docx.js'
 import { sesiuneEcran } from '../corespondenta.js'
 import { propune, aplica } from '../importPostal.js'
-import { grupeazaPentruPlicuri, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire } from '../plicuri.js'
+import { grupeazaPentruPlicuri, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire,
+  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita } from '../plicuri.js'
+import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
 
@@ -99,6 +101,11 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
   const imputernicire = areImputernicire(proiect)
   const pePlic = randuri.reduce((a, r) => { if (r.plic_id) (a[r.plic_id] ||= []).push(r); return a }, {})
   const grupare = grupeazaPentruPlicuri(randuri.filter(r => !r.plic_id && !r.data_expediere))
+  // plan pct. 4.2: termenul de expediere pe UAT (ziua 1 − 10 zile), pentru UAT-urile care au de expediat (plicuri propuse sau neexpediate)
+  const uatDe = id => uats.find(u => u.id === id)
+  const azi = dataBucuresti()
+  const uatDeExpediat = [...new Set([...grupare.grupuri.map(g => g.uat_id), ...plicuri.filter(p => p.stare === 'activ' && !p.data_expediere).map(p => p.uat_id)])]
+    .map(uatDe).filter(Boolean).sort((a, b) => String(a.nume).localeCompare(String(b.nume), 'ro'))
   async function executa(fn, scriere = false) {
     if (ocupat.current || incarcare || (scriere && (!poateScrie || !date))) return
     ocupat.current = true; setLucru(true); setMesaj('')
@@ -109,6 +116,12 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
   }
   function deschide(tip, rand) { setModal({ tip, rand }); setF({ data: dataBucuresti(), awb: '', motiv: MOTIVE_RETUR[0].cod, detaliu: '', semnatar1_id: rand?.semnatar1_id || '', semnatar2_id: rand?.semnatar2_id || '', observatii: rand?.observatii || '', primit_de: 'destinatar', calitate: '', mentiune: '' }) }
   const camp = (k, v) => setF(x => ({ ...x, [k]: v }))
+  // coloana „AWB / expediat”: neexpediat → data-limită; expediat după limită → semnalat (plan pct. 4.2)
+  const textExpediat = p => {
+    const baza = `${p.awb || '-'} / ${fmtDate(p.data_expediere)}`
+    if (p.data_expediere) return termenExpediere(uatDe(p.uat_id), p.data_expediere).depasit ? `${baza} ⚠ după termen` : baza
+    return p.stare === 'activ' ? `${baza} · ${textTermenExpediere(uatDe(p.uat_id))}` : baza
+  }
   const btn = (titlu, fn, disabled = false) => <button style={S.btnX} disabled={lucru || incarcare || disabled} onClick={fn}>{titlu}</button>
   async function creeaza(curent) {
     let create = 0, consecutive = 0, procesate = 0; const erori = []
@@ -182,6 +195,10 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       const preview = propune([{ doc: r.nr_plic, awb: f.awb, data: f.data }], { nr_document: 'doc', nr_tracking: 'awb', data: 'data' }, 'expediere', plicuri, { imputernicire })   // Gemini f10 r2 P3
       if (preview.exceptii.length) invalid(preview.exceptii.map(e => e.motiv).join('; '))
       if (preview.deja.length) { if (curent()) setModal(null); return 'Expedierea este deja înregistrată.' }
+      // Copilot f-v2 r4 P2: ziua 1 recitită din BD chiar acum; confirmarea termenului de 10 zile se calculează pe valoarea recitită
+      const termen = await confirmaExpediereRecitita(supabase, { uatId: r.uat_id, data: f.data, confirm: m => window.confirm(m) })
+      if (!curent()) return
+      if (!termen.ok) return 'Expedierea nu s-a salvat: este după termenul de 10 zile și nu ai confirmat.'
       const raport = await aplica(supabase, preview.aplicabile, { esteCurent: curent })
       if (!curent()) return
       if (raport.erori.length || raport.neprocesate.length) throw new Error('Expediere neconfirmată.')
@@ -221,8 +238,14 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
     <h3>Plicuri de făcut</h3>
     {poateScrie ? <>
       <p>{grupare.grupuri.length} plicuri propuse. Maximum 200 de convocări într-un plic.</p>
+      {uatDeExpediat.length > 0 && <div style={{ ...S.card, marginBottom: 10 }}>
+        <b>Termen de expediere</b> (plan pct. 4.2: recomandata pleacă cu cel puțin {TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 de sesiune)
+        {uatDeExpediat.map(u => <div key={u.id} style={{ color: termenExpediere(u, azi).depasit ? G.red : undefined }}>
+          {u.nume}: {textTermenExpediere(u)}{termenExpediere(u, azi).depasit ? ' — termenul a trecut: expedierea de azi nu mai respectă cele ' + TERMEN_CONVOCARE_ZILE + ' zile' : ''}
+        </div>)}
+      </div>}
       {grupare.prea_mari?.length > 0 && <p style={{ color: G.yellow }}>Peste 200 de convocări la aceeași persoană în același UAT (nu se împart, serverul cere un singur plic complet): {grupare.prea_mari.map(g => `${g.destinatar} (${g.convocari.length})`).join('; ')}. Necesită o decizie separată.</p>}
-      {grupare.grupuri.map(g => <details key={g.cheie} style={{ marginBottom: 8 }}><summary>{g.uat3} · {g.destinatar} · {adresaPlic(g.convocari[0]?.adresa)} · {g.convocari.length} convocări</summary><p>{g.convocari.map(c => `${c.nr_document} (${c.id_parcela})`).join('; ')}</p></details>)}
+      {grupare.grupuri.map(g => <details key={g.cheie} style={{ marginBottom: 8 }}><summary>{g.uat3} · {g.destinatar} · {adresaPlic(g.convocari[0]?.adresa)} · {g.convocari.length} convocări · {textTermenExpediere(uatDe(g.uat_id))}</summary><p>{g.convocari.map(c => `${c.nr_document} (${c.id_parcela})`).join('; ')}</p></details>)}
       {btn(`Creează ${grupare.grupuri.length} plicuri`, () => { if (window.confirm(`Creează ${grupare.grupuri.length} plicuri în ${proiect.cod}?`)) executa(creeaza, true) }, !date || !grupare.grupuri.length)}
       <p>Fără adresă (afișare): {grupare.fara_adresa.length}</p>
       {grupare.fara_adresa.map(c => <p key={c.conv_id}>{c.nr_document} · {c.detinator_nume} · {c.id_parcela}</p>)}
@@ -238,7 +261,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
     {!date ? <Gol text="Date indisponibile sau în curs de încărcare." /> : <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse' }}><thead><tr>{['', 'Nr. plic', 'UAT', 'Destinatar', 'Convocări', 'Lot', 'AWB / expediat', 'AR', 'Retur', 'Stare', 'Acțiuni'].map((h, i) => <th key={i} style={S.th}>{h}</th>)}</tr></thead><tbody>
       {plicuri.filter(p => (!uatId || p.uat_id === uatId) && (!filtru || starea(p) === filtru)).map(p => <tr key={p.id}>
         <td style={S.td}>{poateScrie && starea(p) === 'fara_lot' && <input type="checkbox" disabled={lucru} checked={selectate.includes(p.id)} onChange={e => setSelectate(a => e.target.checked ? [...a, p.id] : a.filter(id => id !== p.id))} />}</td>
-        {[p.nr_plic, p.uat_nume, p.destinatar_nume, (pePlic[p.id] || []).length, loturi.find(l => l.id === p.lot_id)?.nr_lot || '-', `${p.awb || '-'} / ${fmtDate(p.data_expediere)}`,
+        {[p.nr_plic, p.uat_nume, p.destinatar_nume, (pePlic[p.id] || []).length, loturi.find(l => l.id === p.lot_id)?.nr_lot || '-', textExpediat(p),
           p.data_ar ? `${fmtDate(p.data_ar)}${descriereArPlic(p)}` : '-', p.retur || '-', `${starea(p)}${p.opis_path ? '' : ' · fără opis la dosar'}`].map((v, i) => <td key={i} style={S.td}>{v}</td>)}
         <td style={S.td}>
           {btn(p.opis_path ? 'Opis (DOCX)' : 'Opis (DOCX) + exemplar la dosar', () => executa(c => document('opis', p, c), !p.opis_path), !poateScrie || !(pePlic[p.id]?.length))}
@@ -267,6 +290,9 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       <div style={{ display: 'grid', gap: 12 }}>
         {['lot', 'expediere', 'ar', 'retur'].includes(modal.tip) && <Camp eticheta="Data"><input style={S.input} disabled={lucru} type="date" min={['ar', 'retur'].includes(modal.tip) ? modal.rand.data_expediere : undefined} value={f.data} onChange={e => camp('data', e.target.value)} /></Camp>}
         {modal.tip === 'expediere' && <Camp eticheta="AWB"><input style={S.input} disabled={lucru} value={f.awb} onChange={e => camp('awb', e.target.value)} /></Camp>}
+        {modal.tip === 'expediere' && <p style={{ margin: 0 }}>{modal.rand.uat_nume || 'UAT'}: {textTermenExpediere(uatDe(modal.rand.uat_id))} (cu cel puțin {TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2).</p>}
+        {modal.tip === 'expediere' && avertismentExpediere(uatDe(modal.rand.uat_id), f.data) && <p role="alert" style={{ margin: 0, padding: 8, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
+          ⚠ {avertismentExpediere(uatDe(modal.rand.uat_id), f.data)} Se poate salva (data e cea reală), dar termenul de convocare nu e respectat.</p>}
         {modal.tip === 'retur' && <><Camp eticheta="Motiv retur"><select style={S.select} disabled={lucru} value={f.motiv} onChange={e => camp('motiv', e.target.value)}>{MOTIVE_RETUR.map(m => <option key={m.cod} value={m.cod}>{m.eticheta}</option>)}</select></Camp>{f.motiv === 'decedat' && <p style={{ color: G.yellow }}>Deținătorii din plic vor fi marcați decedați; cererea către TGZ pentru moștenitori se face separat.</p>}</>}
         {(modal.tip === 'anulare' || modal.tip === 'retur') && <Camp eticheta="Motiv / detaliu"><textarea style={S.input} disabled={lucru} value={f.detaliu} onChange={e => camp('detaliu', e.target.value)} /></Camp>}
         {['ar', 'retur', 'pv_semnat'].includes(modal.tip) && <Camp eticheta="Un singur fișier PDF / JPG / PNG, maximum 15 MB (față-verso într-un PDF)"><input disabled={lucru} type="file" accept="application/pdf,image/jpeg,image/png" onChange={e => setF(x => ({ ...x, fisier: e.target.files?.[0], path: null }))} /></Camp>}

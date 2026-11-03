@@ -21,7 +21,7 @@
 
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
-import { COL_UAT } from './setari.js'
+import { COL_UAT, termenAfisare, mesajTermenAfisare } from './setari.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
 export const ANTREPRENOR = 'GAZPET INSTAL S.R.L.'
@@ -547,8 +547,10 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
 }
 
 // Adresa UAT (Model 4): lista este comparată cu șablonul real în docx.test.js.
+// Final_v2 (03.11.2026): modelul nu mai are antetul firmei, deci nici contract_nr / contract_data / proiect_denumire (40 de chei);
+// genereazaAdresaUat le calculează în continuare, iar verificaDateAdresaUat le cere (contractul rămâne obligatoriu pe proiect).
 export const CHEI_ADRESA_UAT = [
-  'contract_nr', 'contract_data', 'proiect_denumire', 'uat', 'judet', 'nr_document', 'data',
+  'uat', 'judet', 'nr_document', 'data',
   'imputernicire_nr', 'imputernicire_data', 'zi1', 'zi2', 'zi3', 'program1', 'program2', 'program3',
   'sate_zi1', 'sate_zi2', 'sate_zi3', 'afisare_data_start', 'afisare_data_end', 'afisare_pv_nr',
   'termen_confirmare', 'contact_nume', 'contact_telefon', 'contact_email', 'reprezentant_tgz',
@@ -574,6 +576,9 @@ export function verificaDateAdresaUat({ proiect = {}, uat = {}, nrDocument } = {
   if (!['contact_nume', 'contact_telefon', 'contact_email'].some(k => plin(proiect[k]))) lipsuri.push('Lipsește contactul Gazpet (nume, telefon sau e-mail)')
   cere(uat.nume, 'Lipsește numele UAT-ului')
   cere(uat.judet, 'Lipsește județul UAT-ului')
+  // adresa cere afișarea „începând cu data de X (cu cel puțin 10 zile înainte de prima sesiune)”: cu X prea târziu nu se generează
+  const termen = termenAfisare(uat)
+  if (termen.depasit) lipsuri.push(mesajTermenAfisare(termen))
   return lipsuri
 }
 
