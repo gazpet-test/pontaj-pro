@@ -84,7 +84,7 @@ CREATE TRIGGER trg_red_versiune BEFORE UPDATE ON public.red_corespondenta FOR EA
 CREATE TRIGGER trg_red_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.red_corespondenta FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal();
 
 ALTER TABLE public.red_corespondenta ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.red_corespondenta FROM PUBLIC, anon;
+REVOKE ALL ON public.red_corespondenta FROM PUBLIC, anon, authenticated;   -- privilegiile implicite Supabase dau ALL pe tabelele noi
 GRANT SELECT, INSERT, UPDATE ON public.red_corespondenta TO authenticated;
 GRANT ALL ON public.red_corespondenta TO service_role;
 CREATE POLICY red_corespondenta_sel ON public.red_corespondenta FOR SELECT TO authenticated USING (public.fn_red_nivel() IS NOT NULL);
