@@ -20,6 +20,9 @@ BEGIN
   EXECUTE format('CREATE TABLE %I.numere_plic AS SELECT * FROM public.red_numere WHERE cheie = ''PP'' OR cheie LIKE ''PL-%%''', v_schema);   -- numerele nu se refolosesc
   EXECUTE format('CREATE TABLE %I.convocari_plic AS SELECT id, plic_id, retur_detaliu FROM public.red_convocari WHERE plic_id IS NOT NULL OR retur_detaliu IS NOT NULL', v_schema);
   DROP TRIGGER trg_red_convocari_posta_garda ON public.red_convocari;
+  DROP TRIGGER trg_red_plic_identitate ON public.red_detinatori;
+  DROP TRIGGER trg_red_plic_identitate ON public.red_detinatori_contact;
+  DROP TRIGGER trg_red_plic_identitate ON public.red_parcele;
   DROP INDEX public.idx_red_convocari_plic;
   ALTER TABLE public.red_convocari DROP COLUMN plic_id;
   ALTER TABLE public.red_convocari DROP COLUMN retur_detaliu;
@@ -42,6 +45,7 @@ BEGIN
   DROP FUNCTION public.fn_red_plic_scan_exista(uuid, text);
   DROP FUNCTION public.fn_red_convocari_posta_garda();
   DROP FUNCTION public.fn_red_plic_garda_persoana(uuid);
+  DROP FUNCTION public.fn_red_plic_identitate_garda();
   EXECUTE format('ALTER TABLE public.red_plic_sare SET SCHEMA %I', v_schema);   -- sarea pleaca odata cu cheile (arhiva fara drepturi)
   IF to_regclass('public.red_plicuri') IS NOT NULL OR to_regclass(format('%I.red_plicuri', v_schema)) IS NULL
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_convocari' AND column_name IN ('plic_id', 'retur_detaliu')) THEN

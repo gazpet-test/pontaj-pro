@@ -212,7 +212,8 @@ BEGIN
   IF NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL THEN
     IF NEW.lot_id IS NULL THEN RAISE EXCEPTION 'redari: plicul se expediaza doar dupa PV-ul de plicuire (lot)' USING ERRCODE = '23514'; END IF;
     -- juridic#021: fara imputernicire nu pleaca nimic (pasul 4 din planul de verificare, cap. 6); opisul de la dosar e atasat
-    IF NOT EXISTS (SELECT 1 FROM public.red_proiecte pr WHERE pr.id = NEW.proiect_id AND length(btrim(coalesce(pr.imputernicire_nr, ''))) > 0 AND pr.imputernicire_data IS NOT NULL) THEN
+    -- Jakarinos r3 P2: proiectul citit si blocat FOR SHARE (retragerea concurenta a imputernicirii asteapta sau e vazuta)
+    IF NOT EXISTS (SELECT 1 FROM public.red_proiecte pr WHERE pr.id = NEW.proiect_id AND length(btrim(coalesce(pr.imputernicire_nr, ''))) > 0 AND pr.imputernicire_data IS NOT NULL FOR SHARE) THEN
       RAISE EXCEPTION 'redari: proiectul nu are inca imputernicirea Beneficiarului (nr. + data); plicurile nu pleaca' USING ERRCODE = '23514';
     END IF;
     IF NEW.opis_path IS NULL THEN RAISE EXCEPTION 'redari: atasati intai opisul plicului (exemplarul de la dosar)' USING ERRCODE = '23514'; END IF;
@@ -223,8 +224,13 @@ BEGIN
     END IF;
     -- Jakarinos r2 P1/P2: la expediere se reverifica, sub acelasi advisory lock, ca plicul e complet si identitatea postala neschimbata
     PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || NEW.uat_id::text || ':' || NEW.cheie_persoana, 0));
-    IF EXISTS (SELECT 1 FROM public.red_convocari c WHERE c.plic_id = NEW.id
-                 AND (c.stare <> 'activ' OR c.sters_la IS NOT NULL OR public.fn_red_cheie_persoana(c.detinator_id) IS DISTINCT FROM NEW.cheie_persoana)) THEN
+    PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE;
+    PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY k.detinator_id FOR SHARE;
+    -- Jakarinos r3 P2: fiecare membru reverificat pe TOT criteriul de eligibilitate (parcela nestearsa, acelasi proiect si UAT), blocat FOR SHARE
+    IF EXISTS (SELECT 1 FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
+                WHERE c.plic_id = NEW.id
+                  AND (c.stare <> 'activ' OR c.sters_la IS NOT NULL OR d.sters_la IS NOT NULL OR p.sters_la IS NOT NULL
+                       OR p.proiect_id <> NEW.proiect_id OR p.uat_id <> NEW.uat_id OR public.fn_red_cheie_persoana(c.detinator_id) IS DISTINCT FROM NEW.cheie_persoana)) THEN
       RAISE EXCEPTION 'redari: plicul % nu mai corespunde (nume / adresa schimbate sau convocare anulata); anuleaza-l si refa-l', NEW.nr_plic USING ERRCODE = '23514';
     END IF;
     IF EXISTS (SELECT 1 FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
@@ -311,6 +317,36 @@ BEGIN
 END $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_red_lot_reguli() FROM PUBLIC, anon, authenticated;
 
+-- Jakarinos r3 P1: numele / adresa / stergerea logica a unui detinator (sau a parcelei lui) dintr-un plic activ neexpediat nu se schimba
+-- din aplicatie: plicul se anuleaza intai (si se reface). Mentenanta postgres fara JWT ramane permisa (expedierea reverifica oricum).
+CREATE FUNCTION public.fn_red_plic_identitate_garda() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_det uuid[]; v_nr text;
+BEGIN
+  IF session_user = 'postgres' AND coalesce(current_setting('request.jwt.claims', true), '') = '' THEN RETURN NEW; END IF;
+  IF TG_TABLE_NAME = 'red_detinatori' THEN
+    IF (NEW.nume_normalizat, NEW.sters_la, NEW.parcela_id) IS NOT DISTINCT FROM (OLD.nume_normalizat, OLD.sters_la, OLD.parcela_id) THEN RETURN NEW; END IF;
+    v_det := ARRAY[OLD.id];
+  ELSIF TG_TABLE_NAME = 'red_detinatori_contact' THEN
+    IF (NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta)
+       IS NOT DISTINCT FROM (OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) THEN RETURN NEW; END IF;
+    v_det := ARRAY[OLD.detinator_id];
+  ELSE   -- red_parcele
+    IF NEW.sters_la IS NOT DISTINCT FROM OLD.sters_la THEN RETURN NEW; END IF;
+    SELECT array_agg(d.id) INTO v_det FROM public.red_detinatori d WHERE d.parcela_id = OLD.id;
+  END IF;
+  SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
+   WHERE c.detinator_id = ANY(v_det) AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
+  IF v_nr IS NOT NULL THEN
+    RAISE EXCEPTION 'redari: detinatorul e in plicul neexpediat %; anuleaza intai plicul (numele / adresa / stergerea schimba plicuirea)', v_nr USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $fn$;
+REVOKE EXECUTE ON FUNCTION public.fn_red_plic_identitate_garda() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER trg_red_plic_identitate BEFORE UPDATE ON public.red_detinatori FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_identitate_garda();
+CREATE TRIGGER trg_red_plic_identitate BEFORE UPDATE ON public.red_detinatori_contact FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_identitate_garda();
+CREATE TRIGGER trg_red_plic_identitate BEFORE UPDATE ON public.red_parcele FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_identitate_garda();
+
 CREATE TRIGGER trg_red_plic_reguli BEFORE INSERT OR UPDATE ON public.red_plicuri FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_reguli();
 CREATE TRIGGER trg_red_versiune BEFORE UPDATE ON public.red_plicuri FOR EACH ROW EXECUTE FUNCTION public.fn_red_versiune_creste();
 CREATE TRIGGER trg_red_plic_propaga AFTER UPDATE ON public.red_plicuri FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_propaga();
@@ -342,6 +378,10 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || v_uat0::text || ':' || v_cheie0, 0));
   -- blocare în ordine fixă (id), ca două plicuiri concurente să nu se blocheze reciproc
   PERFORM 1 FROM public.red_convocari WHERE id = ANY(p_convocari) ORDER BY id FOR UPDATE;
+  -- Jakarinos r3 P1: identitatea (nume + adresa) se stabilizeaza: detinatorii si contactele lor blocate FOR SHARE pana la commit
+  -- (o schimbare de nume/adresa asteapta, apoi e refuzata de garda de identitate fiindca persoana are plic)
+  PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY d.id FOR SHARE;
+  PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY k.detinator_id FOR SHARE;
   SELECT count(*), min(p.uat_id::text)::uuid, count(DISTINCT p.uat_id), array_agg(DISTINCT coalesce(public.fn_red_cheie_persoana(c.detinator_id), '<fara>'))
     INTO v_gasite, v_uat, v_n, v_chei
     FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
@@ -353,6 +393,9 @@ BEGIN
   IF v_n <> 1 THEN RAISE EXCEPTION 'redari: convocarile sunt din UAT-uri diferite' USING ERRCODE = 'P0001'; END IF;
   IF cardinality(v_chei) <> 1 OR v_chei[1] = '<fara>' THEN
     RAISE EXCEPTION 'redari: convocarile nu sunt ale aceleiasi persoane cu adresa cunoscuta (nume + adresa)' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_chei[1] IS DISTINCT FROM v_cheie0 OR v_uat IS DISTINCT FROM v_uat0 THEN
+    RAISE EXCEPTION 'redari: numele / adresa s-au schimbat in timpul plicuirii; reincercati' USING ERRCODE = 'P0001';
   END IF;
   -- r1 P1: plicul cuprinde TOATE convocarile eligibile ale persoanei din UAT (nu se fac plicuri partiale)
   SELECT count(*) INTO v_lipsa

@@ -66,6 +66,9 @@ DO $t$ DECLARE pl public.red_plicuri; BEGIN
   IF NOT pg_temp.r29i_refuza(format($q$SELECT public.fn_red_plic_creeaza(%L, ARRAY[%L]::uuid[])$q$,pg_temp.r29i_g('pr'),pg_temp.r29i_g('cA1')),'P0001') THEN RAISE EXCEPTION 'TEST1 FAIL: deja in plic'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_convocari SET plic_id=NULL WHERE id=%L$q$,pg_temp.r29i_g('cA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: plic_id direct'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_convocari SET sters_la=now(), sters_motiv='x' WHERE id=%L$q$,pg_temp.r29i_g('cA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: stergere logica din plic activ'; END IF;
+  -- r3 P1: nume / adresa / stergerea parcelei pentru un membru al plicului neexpediat -> refuz din aplicatie
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_detinatori_contact SET adresa_strada='Str. Alta' WHERE detinator_id=%L$q$,pg_temp.r29i_g('dA2')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: adresa schimbata cu plic'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_detinatori SET nume_normalizat='ALT NUME' WHERE id=%L$q$,pg_temp.r29i_g('dA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: nume schimbat cu plic'; END IF;
   PERFORM set_config('r29i.plA',pl.id::text,true);
   -- r2 P1: convocare postala noua pentru aceeasi persoana, cat plicul e neexpediat -> refuz
   IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(%L,'posta','C-T29I-A3','activ')$q$,pg_temp.r29i_g('dA3')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: convocare noua cu plic neexpediat'; END IF;
@@ -128,6 +131,14 @@ DO $t$ BEGIN
 END $t$;
 SELECT pg_temp.r29i_ca(NULL,'postgres');
 UPDATE public.red_detinatori_contact SET adresa_strada='Str. Test A' WHERE detinator_id=pg_temp.r29i_g('dA2')::uuid;
+UPDATE public.red_parcele SET sters_la=now(), sters_motiv='test' WHERE id=(SELECT parcela_id FROM public.red_detinatori WHERE id=pg_temp.r29i_g('dA1')::uuid);
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-03' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2g FAIL: expediere cu parcela stearsa'; END IF;
+  RAISE NOTICE 'TEST2g OK';
+END $t$;
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+UPDATE public.red_parcele SET sters_la=NULL, sters_motiv=NULL WHERE id=(SELECT parcela_id FROM public.red_detinatori WHERE id=pg_temp.r29i_g('dA1')::uuid);
 SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
   UPDATE public.red_plicuri SET awb='rr 000000001 ro', data_expediere='2026-11-03' WHERE id=pg_temp.r29i_g('plA')::uuid;
