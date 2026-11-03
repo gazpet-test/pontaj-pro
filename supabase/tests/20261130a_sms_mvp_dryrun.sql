@@ -2,7 +2,8 @@
 -- Identitati reale: owner-ul + un cont non-owner cu modulul redari (editor/admin) + anon + service_role, prin helperii pg_temp (ca la 29h).
 -- Date: numai fictive (telefoane 0700…, proiect TEST-SMS-DRY); singura citire de date reale e numaratoarea angajatilor cu mobil (TEST4),
 -- fara niciun telefon afisat. Nu se apeleaza niciun furnizor: DRY-ul nu trimite nimic (fn_sms_rezerva doar rezerva, in tranzactia anulata).
--- Ordinea testelor conteaza (consumul de plafon se aduna in tranzactie).
+-- Ordinea testelor conteaza (consumul de plafon se aduna in tranzactie). r2: lista fixata (fn_sms_lot_destinatari), coada_golita,
+-- reconcilierea DLR repetat (TEST6d), raportul anularii partiale (TEST8c). Concurenta reala: scripts/test_sms_concurenta.sh (cluster local).
 CREATE FUNCTION pg_temp.s30_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -66,6 +67,7 @@ BEGIN
   FOREACH q IN ARRAY ARRAY['SELECT count(*) FROM public.sms_setari', 'SELECT count(*) FROM public.sms_loturi', 'SELECT count(*) FROM public.sms_mesaje',
       'SELECT count(*) FROM public.sms_optout', 'SELECT count(*) FROM public.sms_dlr', 'SELECT count(*) FROM public.sms_v_loturi',
       'SELECT public.fn_sms_panou()', 'SELECT public.fn_sms_e_owner()', $q$SELECT public.fn_sms_lot_intern_creeaza('x')$q$,
+      'SELECT public.fn_sms_lot_destinatari(gen_random_uuid())',
       $q$SELECT public.fn_sms_rezerva(NULL, 1, 'simulator')$q$, $q$SELECT public.fn_sms_dlr_aplica('simulator', 'sim-1', true, now())$q$] LOOP
     IF NOT pg_temp.s30_refuza(q, '42501') THEN RAISE EXCEPTION 'TEST1 FAIL: anon: %', q; END IF;
   END LOOP;
@@ -111,6 +113,7 @@ BEGIN
   FOREACH q IN ARRAY ARRAY['SELECT public.fn_sms_panou()', 'SELECT count(*) FROM public.fn_sms_angajati_lista()',
       $q$SELECT public.fn_sms_lot_intern_creeaza('Test DRY', NULL, NULL, true)$q$, $q$SELECT public.fn_sms_lot_redari_creeaza('Test DRY', gen_random_uuid(), NULL, true)$q$,
       $q$SELECT public.fn_sms_lot_aproba(gen_random_uuid(), 1)$q$, $q$SELECT public.fn_sms_lot_anuleaza(gen_random_uuid(), 'x')$q$,
+      $q$SELECT public.fn_sms_lot_destinatari(gen_random_uuid())$q$,
       $q$SELECT public.fn_sms_setari_salveaza(false, 200, 1500, 1)$q$, $q$SELECT public.fn_sms_redari_autorizare_seteaza(true, 'X', current_date, 1)$q$,
       $q$SELECT public.fn_sms_optout_seteaza('0700000001', true, 'x')$q$] LOOP
     IF NOT pg_temp.s30_refuza(q, '42501') THEN RAISE EXCEPTION 'TEST2 FAIL: non-owner: %', q; END IF;
@@ -187,12 +190,24 @@ BEGIN
     RAISE EXCEPTION 'TEST4 FAIL: creare';
   END IF;
   IF NOT pg_temp.s30_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 99)', v_lot), '40001') THEN RAISE EXCEPTION 'TEST4 FAIL: aprobare pe alta versiune'; END IF;
-  RAISE NOTICE 'TEST4a OK previzualizare + creare (% destinatari)', j->>'nr_destinatari';
+  -- lista FIXATA in lot, vazuta inainte de aprobare: exact mesajele din sms_mesaje, cu nume si telefon mascat, plus versiunea
+  j := public.fn_sms_lot_destinatari(v_lot);
+  IF (j->>'versiune')::integer <> 1 OR jsonb_array_length(j->'destinatari') <> pg_temp.s30_g('n_asteptat')::integer
+     OR j->>'text' <> 'Sedinta generala maine, ora 8:00, la sediu.' OR (j->>'segmente')::integer <> 1 OR (j->>'lungime')::integer <> 43
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(j->'destinatari') e
+                 WHERE e->>'telefon_mascat' !~ '^07[*]{2} [*]{3} [0-9]{3}$' OR coalesce(e->>'nume', '') IN ('', '(destinatar indisponibil)')
+                    OR e->>'destinatar_tip' <> 'angajat' OR e->>'stare' <> 'in_coada' OR e ? 'telefon')
+     OR (SELECT count(*) FROM jsonb_array_elements(j->'destinatari') e JOIN public.sms_mesaje m ON m.id = (e->>'mesaj_id')::uuid AND m.lot_id = v_lot)
+          <> pg_temp.s30_g('n_asteptat')::integer THEN
+    RAISE EXCEPTION 'TEST4 FAIL: lista fixata a lotului';
+  END IF;
+  RAISE NOTICE 'TEST4a OK previzualizare + creare + lista fixata (% destinatari)', jsonb_array_length(j->'destinatari');
 END $t$;
 SELECT pg_temp.s30_ca(pg_temp.s30_g('editor')::uuid, 'authenticated');
 DO $t$ BEGIN
   IF NOT pg_temp.s30_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s30_g('lot_real')), '42501') THEN RAISE EXCEPTION 'TEST4 FAIL: non-owner aproba'; END IF;
-  RAISE NOTICE 'TEST4b OK non-owner nu aproba';
+  IF NOT pg_temp.s30_refuza(format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s30_g('lot_real')), '42501') THEN RAISE EXCEPTION 'TEST4 FAIL: non-owner vede lista'; END IF;
+  RAISE NOTICE 'TEST4b OK non-owner nu aproba si nu vede lista';
 END $t$;
 SELECT pg_temp.s30_ca(NULL, 'postgres');
 DO $t$ BEGIN
@@ -212,7 +227,7 @@ BEGIN
   END IF;
   IF NOT pg_temp.s30_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 2)', v_lot), '23514') THEN RAISE EXCEPTION 'TEST4 FAIL: dubla aprobare'; END IF;
   j := public.fn_sms_lot_anuleaza(v_lot, 'DRY');
-  IF (j->>'mesaje_anulate')::integer <> pg_temp.s30_g('n_asteptat')::integer
+  IF (j->>'mesaje_anulate')::integer <> pg_temp.s30_g('n_asteptat')::integer OR (j->>'deja_predate')::integer <> 0
      OR (SELECT stare <> 'anulat' OR anulat_de IS DISTINCT FROM pg_temp.s30_g('owner')::uuid OR motiv_anulare <> 'DRY' FROM public.sms_loturi WHERE id = v_lot)
      OR EXISTS (SELECT 1 FROM public.sms_mesaje WHERE lot_id = v_lot AND (stare <> 'anulat' OR cod_eroare <> 'lot_anulat')) THEN
     RAISE EXCEPTION 'TEST4 FAIL: anulare';
@@ -305,7 +320,7 @@ BEGIN
   j := public.fn_sms_rezerva(v_lot, 5, 'simulator');
   IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 1 OR (j->>'ramase')::integer <> 0 THEN RAISE EXCEPTION 'TEST5 FAIL: ultimul mesaj'; END IF;
   j := public.fn_sms_rezerva(v_lot, 5, 'simulator');
-  IF j->>'motiv' <> 'lot_trimis' THEN RAISE EXCEPTION 'TEST5 FAIL: lot inchis (%)', j->>'motiv'; END IF;
+  IF j->>'motiv' <> 'lot_coada_golita' THEN RAISE EXCEPTION 'TEST5 FAIL: lot cu coada golita (%)', j->>'motiv'; END IF;
   RAISE NOTICE 'TEST5f OK lotul se inchide cand coada e goala';
 END $t$;
 SELECT pg_temp.s30_ca(pg_temp.s30_g('owner')::uuid, 'authenticated');
@@ -320,9 +335,9 @@ END $t$;
 -- ── TEST6: rezultatul trimiterii si DLR-ul (monoton, deduplicat, nu porneste nimic) ────────────────────────────────────────
 SELECT pg_temp.s30_ca(NULL, 'postgres');
 DO $t$ BEGIN
-  IF (SELECT stare FROM public.sms_loturi WHERE id = pg_temp.s30_g('L1')::uuid) <> 'trimis'
+  IF (SELECT stare <> 'coada_golita' OR coada_golita_la IS NULL FROM public.sms_loturi WHERE id = pg_temp.s30_g('L1')::uuid)
      OR (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = pg_temp.s30_g('L1')::uuid AND stare = 'necunoscut') <> 3 THEN
-    RAISE EXCEPTION 'TEST6 FAIL: pregatire (lot trimis, 3 mesaje in zbor)';
+    RAISE EXCEPTION 'TEST6 FAIL: pregatire (lot cu coada golita, 3 mesaje in zbor — necunoscut, nu „trimis”)';
   END IF;
   PERFORM pg_temp.s30_s('m1', pg_temp.s30_msg(pg_temp.s30_g('L1')::uuid, '+40700000001')::text);
   PERFORM pg_temp.s30_s('m3', pg_temp.s30_msg(pg_temp.s30_g('L1')::uuid, '+40700000003')::text);
@@ -391,6 +406,44 @@ BEGIN
   END IF;
   IF (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = v_lot) <> 4 THEN RAISE EXCEPTION 'TEST6 FAIL: DLR-ul a creat mesaje'; END IF;
   RAISE NOTICE 'TEST6c OK stari finale monotone, jurnal minim';
+END $t$;
+-- TEST6d (Jakarinos r1 P2): jurnal DLR ramas neaplicat + mesajul primit id-ul pe alta cale => DLR-ul repetat il aplica (reconciliere)
+DO $t$ BEGIN
+  PERFORM pg_temp.s30_s('L3', pg_temp.s30_lot('intern', ARRAY['+40700000031'], NULL)::text);
+END $t$;
+SELECT pg_temp.s30_ca(pg_temp.s30_g('owner')::uuid, 'authenticated');
+DO $t$ BEGIN
+  PERFORM public.fn_sms_lot_aproba(pg_temp.s30_g('L3')::uuid, 1);
+  PERFORM public.fn_sms_setari_salveaza(false, 200, 1500, pg_temp.s30_vs());
+END $t$;
+SELECT pg_temp.s30_ca(NULL, 'service_role');
+DO $t$ BEGIN
+  IF jsonb_array_length(public.fn_sms_rezerva(pg_temp.s30_g('L3')::uuid, 5, 'simulator')->'mesaje') <> 1 THEN RAISE EXCEPTION 'TEST6d FAIL: rezervare L3'; END IF;
+  IF public.fn_sms_dlr_aplica('simulator', 'sim-dry-31', true, now()) <> 'necunoscut' THEN RAISE EXCEPTION 'TEST6d FAIL: DLR inainte de id'; END IF;
+END $t$;
+SELECT pg_temp.s30_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  -- simuleaza cursa pierduta: id-ul ajunge pe mesaj fara ca jurnalul sa fie aplicat
+  UPDATE public.sms_mesaje SET stare = 'trimis', furnizor_id = 'sim-dry-31' WHERE lot_id = pg_temp.s30_g('L3')::uuid;
+  IF (SELECT rezultat FROM public.sms_dlr WHERE furnizor_id = 'sim-dry-31') <> 'necunoscut' THEN RAISE EXCEPTION 'TEST6d FAIL: pregatire'; END IF;
+END $t$;
+SELECT pg_temp.s30_ca(NULL, 'service_role');
+DO $t$
+DECLARE v text;
+BEGIN
+  v := public.fn_sms_dlr_aplica('simulator', 'sim-dry-31', true, now());
+  IF v <> 'reconciliat' THEN RAISE EXCEPTION 'TEST6d FAIL: DLR repetat nu a reconciliat (%)', v; END IF;
+  IF public.fn_sms_dlr_aplica('simulator', 'sim-dry-31', true, now()) <> 'duplicat' THEN RAISE EXCEPTION 'TEST6d FAIL: al treilea DLR'; END IF;
+  RAISE NOTICE 'TEST6d OK reconciliere la DLR repetat';
+END $t$;
+SELECT pg_temp.s30_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  IF (SELECT stare <> 'livrat' OR livrat_la IS NULL FROM public.sms_mesaje WHERE lot_id = pg_temp.s30_g('L3')::uuid)
+     OR (SELECT rezultat FROM public.sms_dlr WHERE furnizor_id = 'sim-dry-31') <> 'aplicat_tarziu'
+     OR (SELECT stare FROM public.sms_loturi WHERE id = pg_temp.s30_g('L3')::uuid) <> 'coada_golita' THEN
+    RAISE EXCEPTION 'TEST6d FAIL: stare dupa reconciliere';
+  END IF;
+  RAISE NOTICE 'TEST6e OK stari dupa reconciliere';
 END $t$;
 
 -- ── TEST7: Redari — blocat in BD cat timp nu e autorizat; apoi lotul din convocari (fixture fictiv) ───────────────────────
@@ -462,6 +515,12 @@ BEGIN
      OR (SELECT categorie <> 'redari' OR uat_id IS DISTINCT FROM pg_temp.s30_g('uat')::uuid FROM public.sms_loturi WHERE id = (j->>'lot_id')::uuid) THEN
     RAISE EXCEPTION 'TEST7 FAIL: lot redari creat';
   END IF;
+  j := public.fn_sms_lot_destinatari(pg_temp.s30_g('R1')::uuid);
+  IF jsonb_array_length(j->'destinatari') <> 1 OR j->>'categorie' <> 'redari'
+     OR (j->'destinatari'->0->>'nume') NOT IN ('Test Sms Unu', 'Test Sms Trei') OR j->'destinatari'->0->>'telefon_mascat' <> '07** *** 011'
+     OR j->'destinatari'->0->>'destinatar_tip' <> 'detinator' THEN
+    RAISE EXCEPTION 'TEST7 FAIL: lista fixata redari';
+  END IF;
   j := public.fn_sms_lot_redari_creeaza('Al doilea lot (DRY).', pg_temp.s30_g('pr')::uuid, NULL, false);
   PERFORM pg_temp.s30_s('R2', j->>'lot_id');
   j := public.fn_sms_lot_aproba(pg_temp.s30_g('R1')::uuid, 1);
@@ -516,7 +575,8 @@ DECLARE v_l2 uuid;
 BEGIN
   v_l2 := pg_temp.s30_lot('intern', ARRAY['+40700000021'], NULL);
   PERFORM pg_temp.s30_s('L2', v_l2::text);
-  IF NOT pg_temp.s30_refuza(format($q$UPDATE public.sms_loturi SET stare = 'trimis' WHERE id = %L$q$, v_l2), '23514')
+  IF NOT pg_temp.s30_refuza(format($q$UPDATE public.sms_loturi SET stare = 'coada_golita' WHERE id = %L$q$, v_l2), '23514')
+     OR NOT pg_temp.s30_refuza(format($q$UPDATE public.sms_loturi SET stare = 'trimis' WHERE id = %L$q$, v_l2), '23514')
      OR NOT pg_temp.s30_refuza(format($q$UPDATE public.sms_loturi SET stare = 'in_trimitere' WHERE id = %L$q$, v_l2), '23514')
      OR NOT pg_temp.s30_refuza(format($q$UPDATE public.sms_loturi SET nr_destinatari = 2 WHERE id = %L$q$, v_l2), '23514')
      OR NOT pg_temp.s30_refuza(format('DELETE FROM public.sms_loturi WHERE id = %L', v_l2), '42501')
@@ -539,9 +599,33 @@ END $t$;
 SELECT pg_temp.s30_ca(pg_temp.s30_g('owner')::uuid, 'authenticated');
 DO $t$ BEGIN
   PERFORM public.fn_sms_lot_anuleaza(pg_temp.s30_g('L2')::uuid, NULL);
-  IF NOT pg_temp.s30_refuza(format($q$SELECT public.fn_sms_lot_anuleaza(%L, 'x')$q$, pg_temp.s30_g('L1')), '23514') THEN RAISE EXCEPTION 'TEST8 FAIL: anulare lot trimis'; END IF;
+  IF NOT pg_temp.s30_refuza(format($q$SELECT public.fn_sms_lot_anuleaza(%L, 'x')$q$, pg_temp.s30_g('L1')), '23514') THEN RAISE EXCEPTION 'TEST8 FAIL: anulare lot cu coada golita'; END IF;
   IF NOT pg_temp.s30_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 2)', pg_temp.s30_g('L2')), '23514') THEN RAISE EXCEPTION 'TEST8 FAIL: aprobare lot anulat'; END IF;
   RAISE NOTICE 'TEST8b OK loturile inchise raman inchise';
+END $t$;
+SELECT pg_temp.s30_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  PERFORM pg_temp.s30_s('L4', pg_temp.s30_lot('intern', ARRAY['+40700000041', '+40700000042', '+40700000043'], NULL)::text);
+END $t$;
+SELECT pg_temp.s30_ca(pg_temp.s30_g('owner')::uuid, 'authenticated');
+DO $t$ BEGIN
+  PERFORM public.fn_sms_lot_aproba(pg_temp.s30_g('L4')::uuid, 1);
+  PERFORM public.fn_sms_setari_salveaza(false, 200, 1500, pg_temp.s30_vs());
+END $t$;
+SELECT pg_temp.s30_ca(NULL, 'service_role');
+DO $t$ BEGIN
+  IF jsonb_array_length(public.fn_sms_rezerva(pg_temp.s30_g('L4')::uuid, 1, 'simulator')->'mesaje') <> 1 THEN RAISE EXCEPTION 'TEST8c FAIL: rezervare partiala'; END IF;
+END $t$;
+SELECT pg_temp.s30_ca(pg_temp.s30_g('owner')::uuid, 'authenticated');
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_lot_anuleaza(pg_temp.s30_g('L4')::uuid, 'oprire DRY');
+  IF (j->>'mesaje_anulate')::integer <> 2 OR (j->>'deja_predate')::integer <> 1 OR (j->>'deja_rezervate_necunoscut')::integer <> 1
+     OR (j->>'deja_trimise')::integer <> 0 OR (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = pg_temp.s30_g('L4')::uuid AND stare = 'necunoscut') <> 1 THEN
+    RAISE EXCEPTION 'TEST8c FAIL: raportul anularii partiale %', j;
+  END IF;
+  RAISE NOTICE 'TEST8c OK anulare partiala: 2 scoase din coada, 1 deja predat (ramane necunoscut, nu se opreste)';
 END $t$;
 
 -- ── TEST9: vederea de istoric (owner) si RLS (non-owner / anon) ─────────────────────────────────────────────────────────────
@@ -549,7 +633,7 @@ DO $t$
 DECLARE r record;
 BEGIN
   SELECT * INTO r FROM public.sms_v_loturi WHERE id = pg_temp.s30_g('L1')::uuid;
-  IF r.n_livrat <> 2 OR r.n_esuat <> 1 OR r.n_anulat <> 1 OR r.n_in_coada <> 0 OR r.n_necunoscut <> 0 OR r.stare <> 'trimis' THEN
+  IF r.n_livrat <> 2 OR r.n_esuat <> 1 OR r.n_anulat <> 1 OR r.n_in_coada <> 0 OR r.n_necunoscut <> 0 OR r.stare <> 'coada_golita' THEN
     RAISE EXCEPTION 'TEST9 FAIL: numaratori in vedere';
   END IF;
   IF (SELECT count(*) FROM public.fn_sms_angajati_lista()) <> pg_temp.s30_g('n_activi')::integer THEN RAISE EXCEPTION 'TEST9 FAIL: lista angajati'; END IF;

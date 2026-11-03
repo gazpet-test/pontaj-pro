@@ -40,6 +40,7 @@ BEGIN
   DROP FUNCTION public.fn_sms_angajati_lista();
   DROP FUNCTION public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean);
   DROP FUNCTION public.fn_sms_lot_redari_creeaza(text, uuid, uuid, boolean);
+  DROP FUNCTION public.fn_sms_lot_destinatari(uuid);
   DROP FUNCTION public.fn_sms_lot_aproba(uuid, integer);
   DROP FUNCTION public.fn_sms_lot_anuleaza(uuid, text);
   DROP FUNCTION public.fn_sms_setari_salveaza(boolean, integer, integer, integer);

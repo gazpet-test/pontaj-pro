@@ -8,16 +8,23 @@
 --   * aplicatia NU scrie direct in nicio tabela sms_* (fara INSERT/UPDATE/DELETE pentru anon / authenticated / service_role);
 --     scrierea trece doar prin RPC-urile SECURITY DEFINER de mai jos, iar triggerele verifica din nou fiecare trecere de stare;
 --   * citirea (RLS) si toate RPC-urile UI: DOAR owner-ul (profiles.is_owner); aprobarea unui lot: DOAR owner-ul, pe versiunea vazuta;
---   * nimic nu pleaca fara lot aprobat; kill-switch-ul (pornit la instalare) si plafoanele (200/zi, 1500/luna) se verifica ATOMIC
---     la rezervare (fn_sms_rezerva tine randul de setari FOR UPDATE: rezervarile se serializeaza); erorile de configurare / credit
---     de la furnizor opresc automat trimiterea (kill-switch);
+--   * nimic nu pleaca fara lot aprobat, pe versiunea vazuta; inainte de aprobare owner-ul vede lista FIXATA a destinatarilor lotului
+--     (fn_sms_lot_destinatari: nume + telefon mascat + text + segmente + cost); kill-switch-ul (pornit la instalare) si plafoanele
+--     (200/zi, 1500/luna) se verifica ATOMIC la rezervare (fn_sms_rezerva tine randul de setari FOR UPDATE: rezervarile si
+--     schimbarile de opt-out se serializeaza); erorile de configurare / credit de la furnizor opresc automat trimiterea;
+--   * lotul NU are stare „trimis”: cand coada lui e goala devine `coada_golita`; rezultatul real ramane pe mesaje
+--     (livrat / esuat / necunoscut / anulat);
 --   * categoria `redari` e construita complet, dar BLOCATA cat timp sms_setari.redari_autorizat = false (il seteaza doar owner-ul, cu
 --     nr. + data autorizarii scrise Transgaz): crearea, aprobarea si rezervarea unui lot redari sunt refuzate in BD; extern doar 08-20;
 --   * textul: GSM-7 fara diacritice (transliterare ș→s, ț→t, ă/â→a, î→i), maximum 160 (concatenarea oprita) — aceeasi tabela ca
 --     _shared/smsText.mjs (UI + edge);
---   * DLR-ul doar muta starea inainte (trimis → livrat | esuat), deduplicat; nu poate porni nicio trimitere;
---   * timeout dupa trimitere = `necunoscut`, fara retrimitere; codul de eroare e doar un cod scurt ([a-z0-9_]), niciodata textul
---     furnizorului (eroarea 7 SMSLink contine parola).
+--   * DLR-ul doar muta starea inainte (trimis → livrat | esuat), deduplicat; nu poate porni nicio trimitere; DLR-ul si rezultatul
+--     trimiterii pentru acelasi id de furnizor se serializeaza prin pg_advisory_xact_lock (niciun raport pierdut la concurenta);
+--   * timeout dupa trimitere sau cod de eroare necunoscut = `necunoscut`, fara retrimitere; codul de eroare e doar un cod scurt
+--     ([a-z0-9_]), niciodata textul furnizorului (eroarea 7 SMSLink contine parola).
+-- r2 (03.11.2026, porti Jakarinos / Copilot / Gemini r1): lista fixata inainte de aprobare, lock consultativ DLR / rezultat +
+--   reconciliere la DLR repetat, starea lotului `coada_golita` (fara „trimis”), opt-out serializat cu rezervarea, anularea raporteaza
+--   separat mesajele scoase din coada si cele deja predate furnizorului.
 -- Fara date reale atinse (doar randul de setari). Revenire: supabase/revenire/20261130a_sms_mvp_ROLLBACK.sql (NU sterge: muta tabelele
 -- cu date in schema sms_retras_<data>). DRY: supabase/tests/20261130a_sms_mvp_dryrun.sql. Izolare: READ COMMITTED (ca PostgREST).
 DO $pre$
@@ -75,7 +82,7 @@ CREATE TABLE public.sms_loturi (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   categorie text NOT NULL CHECK (categorie IN ('intern', 'redari')),
   text text NOT NULL CHECK (length(text) BETWEEN 1 AND 160),
-  stare text NOT NULL DEFAULT 'draft' CHECK (stare IN ('draft', 'aprobat', 'in_trimitere', 'trimis', 'anulat')),
+  stare text NOT NULL DEFAULT 'draft' CHECK (stare IN ('draft', 'aprobat', 'in_trimitere', 'coada_golita', 'anulat')),
   proiect_id uuid REFERENCES public.red_proiecte(id),
   uat_id uuid REFERENCES public.red_uat(id),
   filtru jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -93,14 +100,14 @@ CREATE TABLE public.sms_loturi (
   anulat_de uuid,
   anulat_la timestamptz,
   motiv_anulare text CHECK (motiv_anulare IS NULL OR length(motiv_anulare) <= 500),
-  trimis_la timestamptz,
+  coada_golita_la timestamptz,
   versiune integer NOT NULL DEFAULT 1,
   CONSTRAINT sms_loturi_proiect CHECK ((categorie = 'redari') = (proiect_id IS NOT NULL) AND (uat_id IS NULL OR categorie = 'redari')),
-  CONSTRAINT sms_loturi_aprobare CHECK (stare NOT IN ('aprobat', 'in_trimitere', 'trimis') OR (aprobat_de IS NOT NULL AND aprobat_la IS NOT NULL)),
+  CONSTRAINT sms_loturi_aprobare CHECK (stare NOT IN ('aprobat', 'in_trimitere', 'coada_golita') OR (aprobat_de IS NOT NULL AND aprobat_la IS NOT NULL)),
   CONSTRAINT sms_loturi_aprobare_redari CHECK (categorie <> 'redari' OR aprobat_la IS NULL OR (aprobat_autorizare_nr IS NOT NULL AND aprobat_autorizare_data IS NOT NULL))
 );
 CREATE INDEX idx_sms_loturi_stare ON public.sms_loturi (stare, aprobat_la);
-COMMENT ON TABLE public.sms_loturi IS 'SMS: un lot = un text (GSM-7, max 160) + destinatarii lui = O aprobare a owner-ului. Continutul e imuabil dupa creare (se anuleaza si se creeaza altul). draft -> aprobat (doar owner) -> in_trimitere -> trimis; anulat din orice stare deschisa (doar owner).';
+COMMENT ON TABLE public.sms_loturi IS 'SMS: un lot = un text (GSM-7, max 160) + destinatarii lui = O aprobare a owner-ului. Continutul e imuabil dupa creare (se anuleaza si se creeaza altul). draft -> aprobat (doar owner) -> in_trimitere -> coada_golita (nimic in coada; rezultatul e pe mesaje); anulat din draft / aprobat / in_trimitere (doar owner).';
 
 CREATE TABLE public.sms_mesaje (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -265,7 +272,7 @@ BEGIN
     END IF;
     NEW.creat_de := auth.uid(); NEW.creat_la := now(); NEW.aprobat_de := NULL; NEW.aprobat_la := NULL;
     NEW.aprobat_autorizare_nr := NULL; NEW.aprobat_autorizare_data := NULL; NEW.anulat_de := NULL; NEW.anulat_la := NULL;
-    NEW.motiv_anulare := NULL; NEW.trimis_la := NULL; NEW.versiune := 1;
+    NEW.motiv_anulare := NULL; NEW.coada_golita_la := NULL; NEW.versiune := 1;
     RETURN NEW;
   END IF;
   IF (NEW.id, NEW.categorie, NEW.text, NEW.proiect_id, NEW.uat_id, NEW.filtru, NEW.nr_destinatari, NEW.segmente, NEW.cost_estimat_eur,
@@ -276,12 +283,12 @@ BEGIN
   END IF;
   IF NOT ((OLD.stare = 'draft' AND NEW.stare IN ('aprobat', 'anulat'))
        OR (OLD.stare = 'aprobat' AND NEW.stare IN ('in_trimitere', 'anulat'))
-       OR (OLD.stare = 'in_trimitere' AND NEW.stare IN ('trimis', 'anulat'))) THEN
+       OR (OLD.stare = 'in_trimitere' AND NEW.stare IN ('coada_golita', 'anulat'))) THEN
     RAISE EXCEPTION 'sms: trecere de stare nepermisa pentru lot: % -> %', OLD.stare, NEW.stare USING ERRCODE = '23514';
   END IF;
   NEW.aprobat_de := OLD.aprobat_de; NEW.aprobat_la := OLD.aprobat_la;
   NEW.aprobat_autorizare_nr := OLD.aprobat_autorizare_nr; NEW.aprobat_autorizare_data := OLD.aprobat_autorizare_data;
-  NEW.anulat_de := OLD.anulat_de; NEW.anulat_la := OLD.anulat_la; NEW.trimis_la := OLD.trimis_la;
+  NEW.anulat_de := OLD.anulat_de; NEW.anulat_la := OLD.anulat_la; NEW.coada_golita_la := OLD.coada_golita_la;
   IF NEW.stare <> 'anulat' THEN NEW.motiv_anulare := OLD.motiv_anulare; END IF;
   IF NEW.stare = 'aprobat' THEN
     IF NOT public.fn_sms_e_owner() THEN RAISE EXCEPTION 'sms: doar owner-ul aproba un lot' USING ERRCODE = '42501'; END IF;
@@ -304,7 +311,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM public.sms_mesaje m WHERE m.lot_id = NEW.id AND m.stare = 'in_coada') THEN
       RAISE EXCEPTION 'sms: lotul mai are mesaje in coada' USING ERRCODE = '23514';
     END IF;
-    NEW.trimis_la := now();
+    NEW.coada_golita_la := now();
   END IF;
   NEW.versiune := OLD.versiune + 1;
   RETURN NEW;
@@ -412,7 +419,7 @@ CREATE POLICY sms_dlr_sel ON public.sms_dlr FOR SELECT TO authenticated USING ((
 CREATE VIEW public.sms_v_loturi WITH (security_invoker = on) AS
 SELECT l.id, l.categorie, l.text, l.stare, l.proiect_id, l.uat_id, l.filtru, l.nr_destinatari, l.segmente, l.cost_estimat_eur,
        l.excluse_optout, l.excluse_fara_mobil, l.creat_de, l.creat_la, l.aprobat_de, l.aprobat_la, l.aprobat_autorizare_nr,
-       l.aprobat_autorizare_data, l.anulat_la, l.motiv_anulare, l.trimis_la, l.versiune,
+       l.aprobat_autorizare_data, l.anulat_la, l.motiv_anulare, l.coada_golita_la, l.versiune,
        count(m.id) FILTER (WHERE m.stare = 'in_coada')::integer AS n_in_coada,
        count(m.id) FILTER (WHERE m.stare = 'necunoscut')::integer AS n_necunoscut,
        count(m.id) FILTER (WHERE m.stare = 'trimis')::integer AS n_trimis,
@@ -555,12 +562,41 @@ BEGIN
     'depaseste_plafon_zi', v_nr > coalesce(v_plafon, 0), 'preview', coalesce(p_doar_preview, true));
 END $fn$;
 
+-- Lista FIXATA in lot (Jakarinos r1 P1): ce vede owner-ul inainte de „Aproba” = exact mesajele din sms_mesaje (nume, telefon mascat),
+-- plus textul, segmentele, costul si versiunea; aprobarea se trimite pe aceasta versiune (alta => 40001 si reincarcare).
+CREATE FUNCTION public.fn_sms_lot_destinatari(p_lot_id uuid) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE l public.sms_loturi; v_lista jsonb; v_lungime integer;
+BEGIN
+  PERFORM public.fn_sms_cere_owner();
+  SELECT * INTO l FROM public.sms_loturi WHERE id = p_lot_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'sms: lotul nu exista' USING ERRCODE = 'P0002'; END IF;
+  SELECT f.lungime INTO v_lungime FROM public.fn_sms_text_verifica(l.text) f;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('mesaj_id', x.id, 'destinatar_tip', x.destinatar_tip, 'nume', x.nume,
+           'telefon_mascat', '07** *** ' || right(x.telefon, 3), 'stare', x.stare, 'cod_eroare', x.cod_eroare) ORDER BY x.nume, x.id), '[]'::jsonb)
+    INTO v_lista
+    FROM (SELECT m.id, m.destinatar_tip, m.telefon, m.stare, m.cod_eroare,
+                 coalesce(CASE WHEN m.destinatar_tip = 'angajat' THEN e.name ELSE d.nume END, '(destinatar indisponibil)') AS nume
+            FROM public.sms_mesaje m
+            LEFT JOIN public.employees e
+              ON e.id = CASE WHEN m.destinatar_tip = 'angajat' AND m.destinatar_id ~ '^[0-9]{1,9}$' THEN m.destinatar_id::integer END
+            LEFT JOIN public.red_detinatori d
+              ON d.id = CASE WHEN m.destinatar_tip = 'detinator' AND m.destinatar_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                             THEN m.destinatar_id::uuid END
+           WHERE m.lot_id = l.id) x;
+  RETURN jsonb_build_object('lot_id', l.id, 'categorie', l.categorie, 'stare', l.stare, 'versiune', l.versiune, 'text', l.text,
+    'lungime', v_lungime, 'segmente', l.segmente, 'nr_destinatari', l.nr_destinatari, 'cost_estimat_eur', l.cost_estimat_eur,
+    'excluse_optout', l.excluse_optout, 'excluse_fara_mobil', l.excluse_fara_mobil, 'proiect_id', l.proiect_id, 'uat_id', l.uat_id,
+    'creat_la', l.creat_la, 'destinatari', v_lista);
+END $fn$;
+
 CREATE FUNCTION public.fn_sms_lot_aproba(p_lot_id uuid, p_versiune integer) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE l public.sms_loturi; s public.sms_setari; v_n integer;
 BEGIN
   PERFORM public.fn_sms_cere_owner();
-  SELECT * INTO s FROM public.sms_setari WHERE id FOR SHARE;   -- ordinea lock-urilor: setari -> lot (ca la rezervare)
+  -- ordinea lock-urilor: setari -> lot (ca la rezervare)
+  SELECT * INTO s FROM public.sms_setari WHERE id FOR SHARE;
   SELECT * INTO l FROM public.sms_loturi WHERE id = p_lot_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'sms: lotul nu exista' USING ERRCODE = 'P0002'; END IF;
   IF l.stare <> 'draft' THEN RAISE EXCEPTION 'sms: doar un lot in draft se aproba (starea: %)', l.stare USING ERRCODE = '23514'; END IF;
@@ -581,7 +617,7 @@ END $fn$;
 
 CREATE FUNCTION public.fn_sms_lot_anuleaza(p_lot_id uuid, p_motiv text DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE l public.sms_loturi; v_n integer;
+DECLARE l public.sms_loturi; v_n integer; c record;
 BEGIN
   PERFORM public.fn_sms_cere_owner();
   SELECT * INTO l FROM public.sms_loturi WHERE id = p_lot_id FOR UPDATE;
@@ -592,7 +628,13 @@ BEGIN
   UPDATE public.sms_mesaje SET stare = 'anulat', cod_eroare = 'lot_anulat' WHERE lot_id = l.id AND stare = 'in_coada';
   GET DIAGNOSTICS v_n = ROW_COUNT;
   UPDATE public.sms_loturi SET stare = 'anulat', motiv_anulare = left(nullif(btrim(p_motiv), ''), 500) WHERE id = l.id RETURNING * INTO l;
-  RETURN jsonb_build_object('lot_id', l.id, 'stare', l.stare, 'mesaje_anulate', v_n);
+  -- ce NU mai pleaca (scoase acum din coada) separat de ce era deja rezervat / predat furnizorului (ramane in istoric, nu se opreste)
+  SELECT count(*) FILTER (WHERE m.stare = 'necunoscut') AS necunoscut, count(*) FILTER (WHERE m.stare = 'trimis') AS trimis,
+         count(*) FILTER (WHERE m.stare = 'livrat') AS livrat, count(*) FILTER (WHERE m.stare = 'esuat') AS esuat
+    INTO c FROM public.sms_mesaje m WHERE m.lot_id = l.id;
+  RETURN jsonb_build_object('lot_id', l.id, 'stare', l.stare, 'mesaje_anulate', v_n,
+    'deja_predate', c.necunoscut + c.trimis + c.livrat + c.esuat,
+    'deja_rezervate_necunoscut', c.necunoscut, 'deja_trimise', c.trimis, 'deja_livrate', c.livrat, 'deja_esuate', c.esuat);
 END $fn$;
 
 CREATE FUNCTION public.fn_sms_setari_salveaza(p_kill_switch boolean, p_plafon_zi integer, p_plafon_luna integer, p_versiune integer) RETURNS jsonb
@@ -642,6 +684,8 @@ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS 
 DECLARE v_tel text; o public.sms_optout;
 BEGIN
   PERFORM public.fn_sms_cere_owner();
+  -- aceeasi ordine globala de lock ca fn_sms_rezerva (setari FOR UPDATE intai): un opt-out nu se intercaleaza cu o rezervare
+  PERFORM 1 FROM public.sms_setari WHERE id FOR UPDATE;
   v_tel := public.fn_sms_tel_normalizat(p_telefon);
   IF v_tel IS NULL THEN RAISE EXCEPTION 'sms: numar de mobil RO invalid' USING ERRCODE = '22023'; END IF;
   IF p_activ IS NULL THEN RAISE EXCEPTION 'sms: alege activ / inactiv' USING ERRCODE = '22023'; END IF;
@@ -666,7 +710,8 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'sms: setarile lipsesc' USING ERRCODE = 'P0002'; END IF;
   IF s.kill_switch THEN RETURN jsonb_build_object('motiv', 'kill_switch', 'mesaje', '[]'::jsonb); END IF;
   v_ora := extract(hour FROM now() AT TIME ZONE 'Europe/Bucharest')::integer;
-  IF p_lot_id IS NULL THEN   -- cron intern: cel mai vechi lot aprobat care poate pleca acum
+  -- cron intern (fara lot): cel mai vechi lot aprobat care poate pleca acum
+  IF p_lot_id IS NULL THEN
     SELECT * INTO l FROM public.sms_loturi x
      WHERE x.stare IN ('aprobat', 'in_trimitere') AND (x.categorie = 'intern' OR (s.redari_autorizat AND v_ora BETWEEN 8 AND 19))
      ORDER BY x.aprobat_la, x.id LIMIT 1 FOR UPDATE;
@@ -694,7 +739,8 @@ BEGIN
   )
   SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'telefon', u.telefon, 'segmente', u.segmente) ORDER BY u.id), '[]'::jsonb) INTO v_arr FROM u;
   SELECT count(*) INTO v_ram FROM public.sms_mesaje m WHERE m.lot_id = l.id AND m.stare = 'in_coada';
-  IF v_ram = 0 THEN UPDATE public.sms_loturi SET stare = 'trimis' WHERE id = l.id AND stare = 'in_trimitere'; END IF;
+  -- coada goala: lotul NU e „trimis” (mesajele pot fi inca necunoscut); rezultatul real ramane pe mesaje
+  IF v_ram = 0 THEN UPDATE public.sms_loturi SET stare = 'coada_golita' WHERE id = l.id AND stare = 'in_trimitere'; END IF;
   RETURN jsonb_build_object('motiv', CASE WHEN jsonb_array_length(v_arr) > 0 THEN 'ok' ELSE 'gata' END, 'lot_id', l.id, 'categorie', l.categorie,
     'text', l.text, 'mesaje', v_arr, 'ramase', v_ram);
 END $fn$;
@@ -702,21 +748,31 @@ COMMENT ON FUNCTION public.fn_sms_rezerva(uuid, integer, text) IS 'SMS (doar ser
 
 CREATE FUNCTION public.fn_sms_rezultat(p_mesaj_id uuid, p_ok boolean, p_furnizor_id text, p_cod_eroare text, p_clasa text) RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE m public.sms_mesaje; d public.sms_dlr;
+DECLARE m public.sms_mesaje; d public.sms_dlr; v_furnizor text;
 BEGIN
   IF p_ok IS NULL THEN RAISE EXCEPTION 'sms: rezultat fara ok' USING ERRCODE = '22023'; END IF;
-  SELECT * INTO m FROM public.sms_mesaje WHERE id = p_mesaj_id FOR UPDATE;
+  IF p_ok AND (p_furnizor_id IS NULL OR p_furnizor_id !~ '^[A-Za-z0-9._:-]{1,64}$') THEN
+    RAISE EXCEPTION 'sms: id de furnizor invalid' USING ERRCODE = '22023';
+  END IF;
+  -- furnizorul mesajului e scris o singura data, la rezervare (citit fara lock); apoi lock-ul consultativ pe (furnizor, id), cu asteptare,
+  -- INAINTEA lock-ului pe mesaj: aceeasi ordine ca fn_sms_dlr_aplica => un DLR concurent pentru acelasi id e fie comis si vazut aici,
+  -- fie asteapta si vede apoi id-ul scris aici (Jakarinos r1 P2)
+  SELECT x.furnizor INTO v_furnizor FROM public.sms_mesaje x WHERE x.id = p_mesaj_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'sms: mesaj necunoscut' USING ERRCODE = 'P0002'; END IF;
-  IF m.stare <> 'necunoscut' OR m.furnizor_id IS NOT NULL THEN RETURN 'ignorat'; END IF;
+  IF p_ok AND v_furnizor IS NOT NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('sms_msg:' || v_furnizor || ':' || p_furnizor_id, 0));
+  END IF;
+  SELECT * INTO m FROM public.sms_mesaje WHERE id = p_mesaj_id FOR UPDATE;
+  IF m.stare <> 'necunoscut' OR m.furnizor_id IS NOT NULL OR m.furnizor IS DISTINCT FROM v_furnizor THEN RETURN 'ignorat'; END IF;
   IF p_ok THEN
-    IF p_furnizor_id IS NULL OR p_furnizor_id !~ '^[A-Za-z0-9._:-]{1,64}$' THEN RAISE EXCEPTION 'sms: id de furnizor invalid' USING ERRCODE = '22023'; END IF;
     UPDATE public.sms_mesaje SET stare = 'trimis', furnizor_id = p_furnizor_id, cod_eroare = NULL WHERE id = m.id;
-    -- DLR sosit inaintea raspunsului de trimitere (jurnal 'necunoscut' cu acelasi id): se aplica acum
+    -- DLR deja comis pentru acest id (sosit inaintea raspunsului de trimitere): se aplica acum, cel mai recent; restul -> ignorat
     SELECT * INTO d FROM public.sms_dlr x WHERE x.furnizor = m.furnizor AND x.furnizor_id = p_furnizor_id AND x.rezultat = 'necunoscut'
      ORDER BY x.id DESC LIMIT 1 FOR UPDATE;
     IF FOUND THEN
       UPDATE public.sms_mesaje SET stare = d.status, cod_eroare = CASE WHEN d.status = 'esuat' THEN 'dlr_nelivrat' END WHERE id = m.id;
-      UPDATE public.sms_dlr SET rezultat = 'aplicat_tarziu' WHERE id = d.id;
+      UPDATE public.sms_dlr x SET rezultat = CASE WHEN x.id = d.id THEN 'aplicat_tarziu' ELSE 'ignorat' END
+       WHERE x.furnizor = m.furnizor AND x.furnizor_id = p_furnizor_id AND x.rezultat = 'necunoscut';
       RETURN 'trimis_' || d.status;
     END IF;
     RETURN 'trimis';
@@ -732,7 +788,8 @@ BEGIN
     RETURN 'necunoscut';
   END IF;
   UPDATE public.sms_mesaje SET stare = 'esuat', cod_eroare = p_cod_eroare WHERE id = m.id;
-  IF p_clasa IN ('config', 'credit') THEN   -- cont / parola / IP / credit: opreste toata trimiterea pana o reporneste owner-ul
+  -- cont / parola / IP / credit: opreste toata trimiterea pana o reporneste owner-ul
+  IF p_clasa IN ('config', 'credit') THEN
     UPDATE public.sms_setari SET kill_switch = true, kill_motiv = 'oprire automata: ' || p_cod_eroare WHERE id AND NOT kill_switch;
   END IF;
   RETURN 'esuat';
@@ -741,27 +798,34 @@ COMMENT ON FUNCTION public.fn_sms_rezultat(uuid, boolean, text, text, text) IS '
 
 CREATE FUNCTION public.fn_sms_dlr_aplica(p_furnizor text, p_furnizor_id text, p_livrat boolean, p_raportat_la timestamptz) RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_id bigint; v_status text; m public.sms_mesaje;
+DECLARE v_id bigint; v_status text; m public.sms_mesaje; j public.sms_dlr;
 BEGIN
   IF p_furnizor IS NULL OR p_furnizor NOT IN ('smslink', 'simulator') OR p_livrat IS NULL
      OR p_furnizor_id IS NULL OR p_furnizor_id !~ '^[A-Za-z0-9._:-]{1,64}$' THEN
     RAISE EXCEPTION 'sms: raport de livrare invalid' USING ERRCODE = '22023';
   END IF;
+  -- lock consultativ pe (furnizor, id), cu asteptare, INAINTEA oricarei citiri / scrieri: serializat cu fn_sms_rezultat (Jakarinos r1 P2)
+  PERFORM pg_advisory_xact_lock(hashtextextended('sms_msg:' || p_furnizor || ':' || p_furnizor_id, 0));
   v_status := CASE WHEN p_livrat THEN 'livrat' ELSE 'esuat' END;
   INSERT INTO public.sms_dlr (furnizor, furnizor_id, status, rezultat, raportat_la)
   VALUES (p_furnizor, p_furnizor_id, v_status, 'necunoscut',
           CASE WHEN p_raportat_la BETWEEN now() - interval '30 days' AND now() + interval '1 day' THEN p_raportat_la END)
   ON CONFLICT (furnizor, furnizor_id, status) DO NOTHING
   RETURNING id INTO v_id;
-  IF v_id IS NULL THEN RETURN 'duplicat'; END IF;
+  IF v_id IS NULL THEN
+    -- DLR repetat: daca jurnalul lui e inca neaplicat si mesajul exista acum (raport pierdut inainte), se aplica acum (reconciliere)
+    SELECT * INTO j FROM public.sms_dlr x WHERE x.furnizor = p_furnizor AND x.furnizor_id = p_furnizor_id AND x.status = v_status FOR UPDATE;
+    IF j.rezultat IS DISTINCT FROM 'necunoscut' THEN RETURN 'duplicat'; END IF;
+    v_id := j.id;
+  END IF;
   SELECT * INTO m FROM public.sms_mesaje x WHERE x.furnizor = p_furnizor AND x.furnizor_id = p_furnizor_id FOR UPDATE;
-  IF NOT FOUND THEN RETURN 'necunoscut'; END IF;
+  IF NOT FOUND THEN RETURN CASE WHEN j.id IS NULL THEN 'necunoscut' ELSE 'duplicat' END; END IF;
   IF m.stare <> 'trimis' THEN UPDATE public.sms_dlr SET rezultat = 'ignorat' WHERE id = v_id; RETURN 'ignorat'; END IF;
   UPDATE public.sms_mesaje SET stare = v_status, cod_eroare = CASE WHEN p_livrat THEN NULL ELSE 'dlr_nelivrat' END WHERE id = m.id;
-  UPDATE public.sms_dlr SET rezultat = 'aplicat' WHERE id = v_id;
-  RETURN 'aplicat';
+  UPDATE public.sms_dlr SET rezultat = CASE WHEN j.id IS NULL THEN 'aplicat' ELSE 'aplicat_tarziu' END WHERE id = v_id;
+  RETURN CASE WHEN j.id IS NULL THEN 'aplicat' ELSE 'reconciliat' END;
 END $fn$;
-COMMENT ON FUNCTION public.fn_sms_dlr_aplica(text, text, boolean, timestamptz) IS 'SMS (doar service_role, din edge sms-dlr dupa secretul din URL): jurnal + mutare monotona trimis -> livrat | esuat; repetat = duplicat; nu porneste nicio trimitere.';
+COMMENT ON FUNCTION public.fn_sms_dlr_aplica(text, text, boolean, timestamptz) IS 'SMS (doar service_role, din edge sms-dlr dupa secretul din URL): lock consultativ pe (furnizor, id), jurnal + mutare monotona trimis -> livrat | esuat; repetat = duplicat sau reconciliere (jurnal neaplicat + mesaj gasit acum); nu porneste nicio trimitere.';
 
 -- ─── 8. Drepturi (privilegiile implicite Supabase dau ALL pe tabele / EXECUTE pe functii: se scot explicit) ─────────────────
 REVOKE ALL ON public.sms_setari, public.sms_loturi, public.sms_mesaje, public.sms_optout, public.sms_dlr, public.sms_v_loturi
@@ -773,14 +837,16 @@ REVOKE ALL ON FUNCTION
   public.fn_sms_e_owner(), public.fn_sms_cere_owner(), public.fn_sms_consum(),
   public.fn_sms_setari_reguli(), public.fn_sms_loturi_reguli(), public.fn_sms_mesaje_reguli(), public.fn_sms_optout_reguli(), public.fn_sms_dlr_reguli(),
   public.fn_sms_panou(), public.fn_sms_angajati_lista(), public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean),
-  public.fn_sms_lot_redari_creeaza(text, uuid, uuid, boolean), public.fn_sms_lot_aproba(uuid, integer), public.fn_sms_lot_anuleaza(uuid, text),
+  public.fn_sms_lot_redari_creeaza(text, uuid, uuid, boolean), public.fn_sms_lot_destinatari(uuid), public.fn_sms_lot_aproba(uuid, integer),
+  public.fn_sms_lot_anuleaza(uuid, text),
   public.fn_sms_setari_salveaza(boolean, integer, integer, integer), public.fn_sms_redari_autorizare_seteaza(boolean, text, date, integer),
   public.fn_sms_optout_seteaza(text, boolean, text),
   public.fn_sms_rezerva(uuid, integer, text), public.fn_sms_rezultat(uuid, boolean, text, text, text), public.fn_sms_dlr_aplica(text, text, boolean, timestamptz)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION
   public.fn_sms_e_owner(), public.fn_sms_panou(), public.fn_sms_angajati_lista(), public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean),
-  public.fn_sms_lot_redari_creeaza(text, uuid, uuid, boolean), public.fn_sms_lot_aproba(uuid, integer), public.fn_sms_lot_anuleaza(uuid, text),
+  public.fn_sms_lot_redari_creeaza(text, uuid, uuid, boolean), public.fn_sms_lot_destinatari(uuid), public.fn_sms_lot_aproba(uuid, integer),
+  public.fn_sms_lot_anuleaza(uuid, text),
   public.fn_sms_setari_salveaza(boolean, integer, integer, integer), public.fn_sms_redari_autorizare_seteaza(boolean, text, date, integer),
   public.fn_sms_optout_seteaza(text, boolean, text)
   TO authenticated;
@@ -794,7 +860,8 @@ DO $post$
 DECLARE v_t text; v_o oid; v_n integer;
   v_expuse regprocedure[] := ARRAY['public.fn_sms_e_owner()', 'public.fn_sms_panou()', 'public.fn_sms_angajati_lista()',
     'public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)', 'public.fn_sms_lot_redari_creeaza(text,uuid,uuid,boolean)',
-    'public.fn_sms_lot_aproba(uuid,integer)', 'public.fn_sms_lot_anuleaza(uuid,text)', 'public.fn_sms_setari_salveaza(boolean,integer,integer,integer)',
+    'public.fn_sms_lot_destinatari(uuid)', 'public.fn_sms_lot_aproba(uuid,integer)', 'public.fn_sms_lot_anuleaza(uuid,text)',
+    'public.fn_sms_setari_salveaza(boolean,integer,integer,integer)',
     'public.fn_sms_redari_autorizare_seteaza(boolean,text,date,integer)', 'public.fn_sms_optout_seteaza(text,boolean,text)']::regprocedure[];
   v_serviciu regprocedure[] := ARRAY['public.fn_sms_rezerva(uuid,integer,text)', 'public.fn_sms_rezultat(uuid,boolean,text,text,text)',
     'public.fn_sms_dlr_aplica(text,text,boolean,timestamptz)']::regprocedure[];
@@ -825,7 +892,7 @@ BEGIN
   END IF;
   -- functiile: search_path fixat, SECURITY DEFINER (in afara celor pure), fara EXECUTE pentru PUBLIC / anon, EXECUTE exact pe liste
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sms!_%' ESCAPE '!';
-  IF v_n <> 24 THEN RAISE EXCEPTION '20261130a: % functii fn_sms_* (asteptat 24)', v_n; END IF;
+  IF v_n <> 25 THEN RAISE EXCEPTION '20261130a: % functii fn_sms_* (asteptat 25)', v_n; END IF;
   FOR v_o IN SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sms!_%' ESCAPE '!' LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_o AND 'search_path=public, pg_temp' = ANY (p.proconfig))
        OR (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = v_o) IS DISTINCT FROM (NOT (v_o::regprocedure = ANY (v_pure)))
