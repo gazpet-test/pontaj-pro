@@ -17,19 +17,23 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
   const [editat, setEditat] = useState(null)   // { rand|null, f }
   const [lucru, setLucru] = useState(false)
   const generatie = useRef(0)
+  // Jakarinos r2 P2-01: proiectul curent într-un ref — o salvare pornită pe alt proiect nu mai reîncarcă / nu mai anunță peste proiectul nou
+  const proiectCurent = useRef(proiect.id)
 
   const incarca = async () => {
     const token = ++generatie.current, curent = () => token === generatie.current
     setEroare('')
     try {
       // o listă scurtă (zeci de rânduri): o singură citire, sortată după ordine; limita evită o listă tăiată în tăcere
-      const { data, error } = await supabase.from('red_corespondenta').select(COL_CORESPONDENTA).eq('proiect_id', proiect.id).order('ordine').order('cod').limit(501)
+      const pid = proiectCurent.current
+      const { data, error } = await supabase.from('red_corespondenta').select(COL_CORESPONDENTA).eq('proiect_id', pid).order('ordine').order('cod').limit(501)
       if (error) throw error
       if (data.length > 500) throw new Error('Prea multe rânduri de corespondență pentru afișare (peste 500).')
       if (curent()) setRanduri(data)
     } catch (e) { if (curent()) { setRanduri([]); setEroare(mesajEroareCoresp(e)) } }
   }
-  useEffect(() => { setRanduri(null); setEditat(null); incarca(); return () => { generatie.current++ } }, [proiect.id])
+  useEffect(() => { proiectCurent.current = proiect.id; setRanduri(null); setEditat(null); setLucru(false); incarca(); return () => { generatie.current++ } }, [proiect.id])
+  const peAltProiect = pid => proiectCurent.current !== pid
 
   const deschide = rand => setEditat({ rand, f: rand ? { ...GOL, ...Object.fromEntries(Object.entries(rand).map(([k, v]) => [k, v ?? ''])) } : { ...GOL } })
 
@@ -38,31 +42,36 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     const nou = !editat.rand
     const { erori, valori } = valideazaCorespondenta(editat.f, { nou })
     if (erori.length) { show(erori.join(' '), 'error'); return }
+    const pid = proiect.id
     setLucru(true)
     try {
       if (nou) {
-        const { error } = await supabase.from('red_corespondenta').insert({ ...valori, proiect_id: proiect.id }).select('id')
+        const { error } = await supabase.from('red_corespondenta').insert({ ...valori, proiect_id: pid }).select('id')
         if (error) throw error
       } else {
         const { data, error } = await supabase.from('red_corespondenta').update(valori).eq('id', editat.rand.id).eq('versiune', editat.rand.versiune).select('id')
         if (error) throw error
+        if (peAltProiect(pid)) return
         if (!data?.length) { show('Rândul a fost modificat între timp de altcineva — l-am reîncărcat, verifică și salvează din nou.', 'error'); setEditat(null); await incarca(); return }
       }
+      if (peAltProiect(pid)) return
       show(nou ? 'Corespondența a fost adăugată.' : 'Corespondența a fost salvată.', 'success'); setEditat(null); await incarca()
-    } catch (e) { show(mesajEroareCoresp(e), 'error') } finally { setLucru(false) }
+    } catch (e) { if (!peAltProiect(pid)) show(mesajEroareCoresp(e), 'error') } finally { if (!peAltProiect(pid)) setLucru(false) }
   }
 
   const aproba = async rand => {
     if (lucru || !poateAproba(rand, esteOwner)) return
     if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite nimic.`)) return
+    const pid = proiect.id
     setLucru(true)
     try {
       const { data, error } = await supabase.from('red_corespondenta').update({ stare: 'aprobat' }).eq('id', rand.id).eq('versiune', rand.versiune).select('id')
       if (error) throw error
+      if (peAltProiect(pid)) return
       if (!data?.length) show('Rândul a fost modificat între timp — reîncarc.', 'error')
       else show(`${rand.cod} aprobat.`, 'success')
       await incarca()
-    } catch (e) { show(mesajEroareCoresp(e), 'error') } finally { setLucru(false) }
+    } catch (e) { if (!peAltProiect(pid)) show(mesajEroareCoresp(e), 'error') } finally { if (!peAltProiect(pid)) setLucru(false) }
   }
 
   const urm = urmatorul(randuri)

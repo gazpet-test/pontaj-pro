@@ -100,9 +100,10 @@ DO $t$ BEGIN
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta' AND actiune='insert') < 10 THEN RAISE EXCEPTION 'TEST4 FAIL: jurnal insert'; END IF;
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta' AND actiune='update') < 5 THEN RAISE EXCEPTION 'TEST4 FAIL: jurnal update'; END IF;
   RAISE NOTICE 'TEST4 OK';
-  -- TEST5 (Jakarinos r1 P2-04/05): dupa folosire, conditia de refuz a revenirii e adevarata (revenirea curata e dovedita de runner pe starea initiala)
+  -- TEST5 (Jakarinos r1 P2-04/05, r2 P2-02): dupa folosire, conditia de refuz a revenirii e adevarata (revenirea curata e dovedita de runner pe starea initiala)
   IF NOT (EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') OR (SELECT count(*) FROM public.red_corespondenta) <> 10
-     OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_corespondenta' AND (actiune <> 'insert' OR user_id IS NOT NULL))
-     OR (SELECT count(*) FROM public.red_jurnal WHERE tabela = 'red_corespondenta') <> 10) THEN RAISE EXCEPTION 'TEST5 FAIL: revenirea ar trece dupa folosire'; END IF;
+     OR EXISTS (SELECT 1 FROM public.red_jurnal j WHERE j.tabela = 'red_corespondenta'
+                  AND j.created_at >= (SELECT min(c.created_at) FROM public.red_corespondenta c)
+                  AND (j.actiune <> 'insert' OR j.user_id IS NOT NULL OR j.inregistrare_id NOT IN (SELECT c.id FROM public.red_corespondenta c)))) THEN RAISE EXCEPTION 'TEST5 FAIL: revenirea ar trece dupa folosire'; END IF;
   RAISE NOTICE 'TEST5 OK';
 END $t$;

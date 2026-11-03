@@ -10,8 +10,10 @@ BEGIN
   LOCK TABLE public.red_corespondenta IN ACCESS EXCLUSIVE MODE;
   -- Jakarinos r1 P2-04: „nefolosit” = in jurnal exista DOAR cele 10 inserari ale migrarii (fara utilizator); orice update / delete / insert din aplicatie = folosit
   IF EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') OR (SELECT count(*) FROM public.red_corespondenta) <> 10
-     OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_corespondenta' AND (actiune <> 'insert' OR user_id IS NOT NULL))
-     OR (SELECT count(*) FROM public.red_jurnal WHERE tabela = 'red_corespondenta') <> 10 THEN
+     -- Jakarinos r2 P2-02: doar jurnalul acestei aplicari (de la crearea randurilor); intrarile unei aplicari anterioare (dupa o revenire) nu conteaza
+     OR EXISTS (SELECT 1 FROM public.red_jurnal j WHERE j.tabela = 'red_corespondenta'
+                  AND j.created_at >= (SELECT min(c.created_at) FROM public.red_corespondenta c)
+                  AND (j.actiune <> 'insert' OR j.user_id IS NOT NULL OR j.inregistrare_id NOT IN (SELECT c.id FROM public.red_corespondenta c))) THEN
     RAISE EXCEPTION '20261129h revenire: evidenta a fost folosita — refuz (exporta intai randurile)';
   END IF;
 END $pre$;

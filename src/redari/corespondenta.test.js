@@ -25,6 +25,7 @@ describe('corespondenta de trimis', () => {
     expect(mesajEroareCoresp({ code: '42501', message: 'redari: doar Razvan (owner) aproba o corespondenta' })).toMatch(/Doar Răzvan/)
     expect(mesajEroareCoresp({ code: '23514', message: 'redari: o corespondenta se marcheaza trimisa doar dupa aprobarea owner-ului' })).toMatch(/după aprobarea/)
     expect(etichetaStareCoresp('la_avocat')).toBe('La avocat')
+    expect(mesajEroareCoresp({ code: '42501', message: 'new row violates row-level security policy' })).toMatch(/Nu ai drept de scriere/)
     expect(mesajEroareCoresp({ code: '23514', message: 'redari: continutul s-a schimbat dupa aprobare; treci randul in draft' })).toMatch(/cere din nou aprobarea/)
   })
 })

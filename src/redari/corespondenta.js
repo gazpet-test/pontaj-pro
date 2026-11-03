@@ -58,7 +58,8 @@ export function valideazaCorespondenta(f, { nou = false } = {}) {
 // Mesajul pentru erorile din BD (triggerul / RLS), pe înțelesul echipei.
 export function mesajEroareCoresp(e) {
   const m = String(e?.message || e || '')
-  if (e?.code === '42501' || /doar Razvan/.test(m)) return 'Doar Răzvan poate aproba o corespondență.'
+  if (/doar Razvan/.test(m)) return 'Doar Răzvan poate aproba o corespondență.'
+  if (e?.code === '42501') return 'Nu ai drept de scriere în Redări (sau accesul s-a schimbat). Reîncarcă pagina.'
   if (/doar dupa aprobarea/.test(m)) return 'Se marchează „Trimis” doar după aprobarea lui Răzvan.'
   if (/continutul s-a schimbat/.test(m)) return 'Ai schimbat destinatarul / ce se trimite / expeditorul / documentele după aprobare: trece rândul în Draft sau La avocat și cere din nou aprobarea.'
   if (/nu se schimba/.test(m)) return 'Codul și proiectul unei corespondențe nu se schimbă.'
