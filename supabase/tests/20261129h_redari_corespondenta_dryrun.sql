@@ -11,13 +11,6 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN RETURN SQLSTATE=p_stare;
 END $h$;
 CREATE FUNCTION pg_temp.r29h_g(p text) RETURNS text LANGUAGE sql STABLE AS $h$ SELECT nullif(current_setting('r29h.'||p,true),''); $h$;
--- Aceeasi conditie ca revenirea (supabase/revenire/20261129h_…): true = evidenta folosita -> revenirea refuza
-CREATE FUNCTION pg_temp.r29h_folosit() RETURNS boolean LANGUAGE sql AS $h$
-  SELECT EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') OR (SELECT count(*) FROM public.red_corespondenta) <> 10
-     OR EXISTS (SELECT 1 FROM public.red_jurnal j WHERE j.tabela = 'red_corespondenta'
-                  AND j.created_at >= public.fn_red_corespondenta_instalat()
-                  AND (j.actiune <> 'insert' OR j.user_id IS NOT NULL OR j.inregistrare_id NOT IN (SELECT c.id FROM public.red_corespondenta c)));
-$h$;
 GRANT EXECUTE ON FUNCTION pg_temp.r29h_ca(uuid,text),pg_temp.r29h_refuza(text,text),pg_temp.r29h_g(text) TO authenticated,anon,service_role;
 DO $t$
 DECLARE own uuid; ed uuid; vw uuid;
@@ -33,48 +26,7 @@ BEGIN
   IF (SELECT count(*) FROM public.red_corespondenta WHERE stare='draft' AND aprobat_la IS NULL) <> 10 THEN RAISE EXCEPTION 'TEST0 FAIL: lista initiala'; END IF;
   RAISE NOTICE 'TEST0 OK';
 END $t$;
--- TEST5 (Jakarinos r3 P3-01): conditia revenirii, scenarii izolate (fiecare in savepoint, anulat)
--- 5a: stare curata -> NEfolosit
-DO $t$ BEGIN IF pg_temp.r29h_folosit() THEN RAISE EXCEPTION 'TEST5a FAIL: curat vazut ca folosit'; END IF; RAISE NOTICE 'TEST5a OK'; END $t$;
--- 5b: reaplicare dupa o revenire = intrari de jurnal mai VECHI pentru tabela -> tot NEfolosit
-SAVEPOINT t5b;
-INSERT INTO public.red_jurnal(tabela, inregistrare_id, actiune, date_vechi, date_noi, user_id, created_at)
-  VALUES ('red_corespondenta', gen_random_uuid(), 'update', '{}'::jsonb, '{}'::jsonb, NULL, now() - interval '1 day');
-DO $t$ BEGIN IF pg_temp.r29h_folosit() THEN RAISE EXCEPTION 'TEST5b FAIL: jurnalul vechi blocheaza revenirea'; END IF; RAISE NOTICE 'TEST5b OK'; END $t$;
-ROLLBACK TO SAVEPOINT t5b;
--- 5c: service_role sterge un rand seed si insereaza unul identic (tot 10 randuri, versiune 1, draft) -> FOLOSIT doar prin ramura jurnalului
-SAVEPOINT t5c;
-SELECT pg_temp.r29h_ca(NULL,'service_role');
-DO $t$ DECLARE r public.red_corespondenta; BEGIN
-  SELECT * INTO r FROM public.red_corespondenta WHERE cod='B3';
-  DELETE FROM public.red_corespondenta WHERE cod='B3';
-  INSERT INTO public.red_corespondenta(proiect_id,cod,ordine,destinatar,subiect,expeditor,documente,depinde_de,observatii)
-    VALUES (r.proiect_id,r.cod,r.ordine,r.destinatar,r.subiect,r.expeditor,r.documente,r.depinde_de,r.observatii);
-END $t$;
-SELECT pg_temp.r29h_ca(NULL,'postgres');
-DO $t$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') AND (SELECT count(*) FROM public.red_corespondenta) = 10 THEN
-    IF NOT pg_temp.r29h_folosit() THEN RAISE EXCEPTION 'TEST5c FAIL: inlocuirea prin service_role nu e vazuta'; END IF;
-  ELSE RAISE EXCEPTION 'TEST5c FAIL: scenariul nu izoleaza ramura jurnalului'; END IF;
-  RAISE NOTICE 'TEST5c OK';
-END $t$;
-ROLLBACK TO SAVEPOINT t5c;
--- 5e (Jakarinos r4 P2-01): service_role sterge TOATE cele 10 randuri si reinsereaza 10 identice -> FOLOSIT (pragul e reperul fix, nu randurile)
-SAVEPOINT t5e;
-SELECT pg_temp.r29h_ca(NULL,'service_role');
-DO $t$ BEGIN
-  CREATE TEMP TABLE r29h_copie ON COMMIT DROP AS SELECT * FROM public.red_corespondenta;
-  DELETE FROM public.red_corespondenta;
-  INSERT INTO public.red_corespondenta(proiect_id,cod,ordine,destinatar,subiect,expeditor,documente,depinde_de,observatii)
-    SELECT proiect_id,cod,ordine,destinatar,subiect,expeditor,documente,depinde_de,observatii FROM r29h_copie;
-END $t$;
-SELECT pg_temp.r29h_ca(NULL,'postgres');
-DO $t$ BEGIN
-  IF (SELECT count(*) FROM public.red_corespondenta WHERE versiune = 1 AND stare = 'draft') <> 10 THEN RAISE EXCEPTION 'TEST5e FAIL: scenariu'; END IF;
-  IF NOT pg_temp.r29h_folosit() THEN RAISE EXCEPTION 'TEST5e FAIL: reinserarea completa nu e vazuta'; END IF;
-  RAISE NOTICE 'TEST5e OK';
-END $t$;
-ROLLBACK TO SAVEPOINT t5e;
+-- (TEST5 retras: revenirea nu mai sterge date — muta tabelul in arhiva; vezi revenirea si TEST7 de mai jos)
 -- TEST1: editorul nu aproba, nu marcheaza trimis fara aprobare, nu schimba codul, nu scrie aprobat_de, nu sterge
 SELECT pg_temp.r29h_ca(pg_temp.r29h_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
@@ -149,6 +101,5 @@ DO $t$ BEGIN
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta' AND actiune='insert') < 10 THEN RAISE EXCEPTION 'TEST4 FAIL: jurnal insert'; END IF;
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta' AND actiune='update') < 5 THEN RAISE EXCEPTION 'TEST4 FAIL: jurnal update'; END IF;
   RAISE NOTICE 'TEST4 OK';
-  IF NOT pg_temp.r29h_folosit() THEN RAISE EXCEPTION 'TEST5d FAIL: dupa folosire revenirea ar trece'; END IF;
-  RAISE NOTICE 'TEST5d OK';
+
 END $t$;

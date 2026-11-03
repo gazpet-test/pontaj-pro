@@ -5,7 +5,7 @@
 -- Regula lui Răzvan („nimic nu pleacă fără da-ul meu pe rând”) e în BD: starea `aprobat` o pune DOAR owner-ul (is_owner), cu aprobat_de/aprobat_la
 -- puse de trigger; `trimis` / `raspuns_primit` sunt permise doar după `aprobat` și cer data trimiterii. Tabelul NU trimite nimic — e doar evidență.
 -- Date: lista inițială din dialog\CHECKLIST_MAILURI_REDARI.md (instituții + expeditori interni, fără date personale ale proprietarilor).
--- Revenire: supabase/revenire/20261129h_redari_corespondenta_ROLLBACK.sql. DRY: supabase/tests/20261129h_redari_corespondenta_dryrun.sql.
+-- Revenire: supabase/revenire/20261129h_redari_corespondenta_ROLLBACK.sql (NU sterge: muta tabelul cu date in schema redari_retras_<data>). DRY: supabase/tests/20261129h_redari_corespondenta_dryrun.sql.
 DO $pre$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261129h_redari_corespondenta:' || txid_current() THEN
@@ -17,7 +17,7 @@ BEGIN
      OR to_regprocedure('public.fn_red_versiune_creste()') IS NULL THEN
     RAISE EXCEPTION '20261129h: lipseste schema Redari (red_proiecte / fn_red_nivel / fn_red_jurnal / fn_red_versiune_creste)';
   END IF;
-  IF to_regprocedure('public.fn_red_corespondenta_reguli()') IS NOT NULL OR to_regprocedure('public.fn_red_corespondenta_instalat()') IS NOT NULL THEN RAISE EXCEPTION '20261129h: functia exista deja'; END IF;
+  IF to_regprocedure('public.fn_red_corespondenta_reguli()') IS NOT NULL THEN RAISE EXCEPTION '20261129h: functia exista deja'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.red_proiecte WHERE cod = 'LOT1-PRUNISOR-JUPA') THEN RAISE EXCEPTION '20261129h: proiectul LOT1 lipseste'; END IF;
 END $pre$;
 
@@ -104,14 +104,6 @@ CREATE POLICY red_corespondenta_ins ON public.red_corespondenta FOR INSERT TO au
 CREATE POLICY red_corespondenta_upd ON public.red_corespondenta FOR UPDATE TO authenticated
   USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
 
--- Jakarinos r4 P2-01: reper PERSISTENT al instalării (independent de rândurile mutabile), folosit de revenire ca prag pentru jurnal.
--- Funcție creată de migrare (owner postgres): service_role / aplicația nu o pot schimba.
-DO $reper$ BEGIN
-  EXECUTE format('CREATE FUNCTION public.fn_red_corespondenta_instalat() RETURNS timestamptz LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS %L',
-    format('SELECT %L::timestamptz', now()));
-END $reper$;
-REVOKE EXECUTE ON FUNCTION public.fn_red_corespondenta_instalat() FROM PUBLIC, anon, authenticated;
-
 -- Lista inițială (CHECKLIST_MAILURI_REDARI.md, 02.11.2026), toate în `draft`. D1/D2 (mesaje interne către Ramona / R. Toma, deja trimise) nu intră: aici e doar corespondența externă.
 INSERT INTO public.red_corespondenta (proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, observatii)
 SELECT p.id, v.cod, v.ordine, v.destinatar, v.subiect, v.expeditor, v.documente, v.depinde_de, 'draft', v.observatii
@@ -142,5 +134,4 @@ BEGIN
     RAISE EXCEPTION '20261129h: functia de reguli are setari gresite';
   END IF;
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_corespondenta'::regclass AND NOT tgisinternal) <> 3 THEN RAISE EXCEPTION '20261129h: triggere'; END IF;
-  IF public.fn_red_corespondenta_instalat() IS DISTINCT FROM now() THEN RAISE EXCEPTION '20261129h: reperul instalarii'; END IF;
 END $post$;
