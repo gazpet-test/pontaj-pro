@@ -58,12 +58,14 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   operație caută textul EXACT din model și cere numărul declarat de apariții — un model schimbat oprește scriptul, nu produce
   un șablon greșit. Ieșirea e deterministă (dată fixă pe intrările modificate, fără intrări de director).
 - S-a modificat DOAR textul din `<w:t>` în `word/document.xml` (modelele nu au antete/subsoluri Word); formatarea e a
-  originalului. Excepții structurale: (1) în `convocator.docx` un paragraf nou, centrat, care conține doar `{{qr}}`, imediat
-  după paragraful cu `{{link}}` (textul „codul QR alăturat” → „codul QR de mai jos”); (2) în `adresa_uat.docx` tabelul „Lista
+  originalului, cu excepțiile (6) și (7) de mai jos. Excepții structurale: (1) în `convocator.docx` un paragraf nou care conține
+  doar `{{qr}}`, imediat după paragraful cu `{{link}}` (textul „codul QR alăturat” → „codul QR de mai jos”; din 03.11 paragraful
+  e un cadru aliniat la dreapta, §9); (2) în `adresa_uat.docx` tabelul „Lista
   parcelelor” rămâne cu UN rând-șablon (`{{rand.*}}`), celelalte 7 rânduri goale se șterg; (3) `docProps`: fără miniatură și
   fără „ultima modificare de”; (4) **nou la Final_v2**: Word a salvat celulele goale ale tabelelor fără run (`<w:p …/>`) — ele
   primesc un run `<w:rPr><w:sz w:val="19"/></w:rPr><w:t>{{…}}</w:t>` (formatul celulelor de date din aceleași tabele, ca la v5);
-  (5) în `pv_b.docx` paragraful `{{pv_a_referinta}}` sub „Nume:” (decizia 02.11, PR #935). Unde modelul a rupt un câmp în mai
+  (5) în `pv_b.docx` paragraful `{{pv_a_referinta}}` sub „Nume:” (decizia 02.11, PR #935); (6) toate cele 5 trec de pe Letter
+  pe A4, cu lățimile tabelelor scalate; (7) convocatorul are formatarea strânsă ca fața să încapă pe o pagină A4 (ambele §9). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
 - Fiecare placeholder stă întreg într-un singur `<w:t>` → `docx.js` înlocuiește local, fără consolidare de run-uri (limita 1).
@@ -312,7 +314,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | „constatare pe teren cerută? (data)” (Model 6 col. AB) | registru | v5 spune „la data stabilită de comisie” → data vine din comisie, nu de la deținător: `red_raspunsuri.constatare_teren_data` (setată de operator) | — |
 | conținut fix de parametrizat la alt proiect | toate | A.P.M. Mehedinți, Acordul de mediu, „Lider al Asocierii …”, Prunișor–Jupa în corp | nu acum (Lot 1) |
 
-## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (03.11.2026, Final_v2)
+## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (03.11.2026, Final_v2 + A4)
 
 ```text
 # Verificare șabloane Redări — 6 fișiere din public/redari/sabloane (2026-11-03)
@@ -321,6 +323,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - părți citite: word/document.xml; paragrafe cu text: 59
 - placeholder-e distincte: 40 (apariții: 54); rupte între run-uri: 0
 - `{{afisare_data_end}}` `{{afisare_data_start}}`×3 `{{afisare_ora}}` `{{afisare_pv_nr}}` `{{contact_email}}`×3 `{{contact_nume}}`×2 `{{contact_telefon}}`×3 `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{judet}}` `{{nr_document}}` `{{numar_parcele}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{program_text}}` `{{rand.nr}}` `{{rand.nr_cadastral}}` `{{rand.poz_hg}}` `{{rand.sat}}` `{{rand.tarla}}` `{{rand.tronson}}` `{{reprezentant_gazpet}}` `{{reprezentant_gazpet_nume}}` `{{reprezentant_tgz}}`×2 `{{reprezentant_tgz_telefon}}`×2 `{{reprezentant_uat_functie}}` `{{reprezentant_uat_nume}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_uat}}` `{{termen_confirmare}}` `{{uat}}`×5 `{{zi1}}` `{{zi2}}` `{{zi3}}` `{{zile_sesiune_text}}`×2
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
 - relații externe (.rels TargetMode=External): niciuna
 - rând-șablon (repetat de `repetaRand` înaintea câmpurilor simple): `{{rand.nr}}` `{{rand.nr_cadastral}}` `{{rand.poz_hg}}` `{{rand.sat}}` `{{rand.tarla}}` `{{rand.tronson}}`
 - resturi intenționate: 4× dezafișarea se consemnează de mână, la final (PV afișare); 2× linie de semnătură olografă
@@ -329,12 +332,14 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - părți citite: word/document.xml; paragrafe cu text: 16
 - placeholder-e distincte: 12 (apariții: 15); rupte între run-uri: 0
 - `{{antreprenor}}`×2 `{{beneficiar}}` `{{contact_email}}` `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{functie}}`×2 `{{nr_document}}` `{{proiect_denumire}}` `{{reprezentant_gazpet}}`×2 `{{reprezentant_tgz}}` `{{uat_lista}}`
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 2.00/2.00/2.00/2.00; corp Normal: 12 pt
 - relații externe (.rels TargetMode=External): niciuna
 
 ## convocator.docx — OK
 - părți citite: word/document.xml; paragrafe cu text: 55
 - placeholder-e distincte: 36 (apariții: 38); rupte între run-uri: 0
 - `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{link}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
 - {{qr}} singur în paragraf: da
 - relații externe (.rels TargetMode=External): niciuna
 - resturi intenționate: 3× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
@@ -343,6 +348,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - părți citite: word/document.xml; paragrafe cu text: 46
 - placeholder-e distincte: 51 (apariții: 54); rupte între run-uri: 0
 - `{{act_doveditor}}` `{{act_identitate}}` `{{alte_observatii}}` `{{bifa_altele}}` `{{bifa_arat}}` `{{bifa_constatare_sediu}}` `{{bifa_constatare_teren}}` `{{bifa_cu_obiectii}}` `{{bifa_da}}` `{{bifa_da_cu_obiectii}}` `{{bifa_discuit}}` `{{bifa_drum}}` `{{bifa_fara_obiectii}}` `{{bifa_gard}}` `{{bifa_insamantare}}` `{{bifa_nivelare}}` `{{bifa_plan_da}}` `{{bifa_plan_nu}}` `{{bifa_sol_fertil}}` `{{bifa_st_alta}}` `{{bifa_st_gard_drum}}` `{{bifa_st_insamantat}}` `{{bifa_st_nivelat}}` `{{bifa_st_strat_vegetal}}` `{{calitate_cota}}` `{{categoria_folosinta}}` `{{categoria_initiala}}` `{{contract_data}}`×2 `{{contract_nr}}`×2 `{{data_pv}}` `{{locul}}` `{{lucrari_altele}}` `{{nr_cadastral}}` `{{nr_pv}}` `{{nume}}` `{{obiectii_text}}` `{{poz_hg}}` `{{proiect_denumire}}` `{{reverificare_la}}` `{{sat}}` `{{semnatar_detinator}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{stare_teren_alta}}` `{{suprafata}}` `{{tarla}}` `{{termen_remediere}}` `{{tronson}}`×2 `{{uat}}` `{{verificare_data}}` `{{verificare_de}}`
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
 - relații externe (.rels TargetMode=External): niciuna
 - resturi intenționate: 1× antet de coloană (PV A), nu câmp; 3× linie de semnătură olografă
 
@@ -350,6 +356,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - părți citite: word/document.xml; paragrafe cu text: 63
 - placeholder-e distincte: 72 (apariții: 74); rupte între run-uri: 0
 - `{{afisare_data_end}}` `{{afisare_data_start}}`×2 `{{afisare_pv_nr}}` `{{bifa_alt_raspuns}}` `{{bifa_altele}}` `{{bifa_arat}}` `{{bifa_conv_primita}}` `{{bifa_conv_returnata}}` `{{bifa_discuit}}` `{{bifa_drum}}` `{{bifa_fara_adresa}}` `{{bifa_fara_raspuns}}` `{{bifa_gard}}` `{{bifa_insamantare}}` `{{bifa_neidentificat}}` `{{bifa_neprezentat}}` `{{bifa_nivelare}}` `{{bifa_raspuns_fara_obiectii}}` `{{bifa_reluare_fara_raspuns}}` `{{bifa_reluare_nu_e_cazul}}` `{{bifa_reluare_raspuns}}` `{{bifa_sit_declaratie}}` `{{bifa_sit_neidentificat}}` `{{bifa_sit_neprezentat}}` `{{bifa_sit_refuz}}` `{{bifa_sol_fertil}}` `{{bifa_st_alta}}` `{{bifa_st_gard_drum}}` `{{bifa_st_insamantat}}` `{{bifa_st_nivelat}}` `{{bifa_st_strat_vegetal}}` `{{categoria_folosinta}}` `{{categoria_initiala}}` `{{contract_data}}` `{{contract_nr}}` `{{conv_data_confirmare}}` `{{conv_data_expediere}}` `{{conv_nr_tracking}}` `{{conv_retur}}` `{{data_pv}}` `{{locul}}` `{{lucrari_altele}}` `{{nr_cadastral}}` `{{nr_pv}}` `{{nume}}` `{{poz_hg}}` `{{proiect_denumire}}` `{{pv_a_referinta}}` `{{raspuns_alt_text}}` `{{raspuns_canal}}` `{{raspuns_data}}` `{{reluare_adresa_tgz_nr}}` `{{reluare_data}}` `{{reluare_nr_tracking}}` `{{reluare_raspuns_text}}` `{{reprezentant_uat_nume}}` `{{sat}}` `{{semnatar_apm}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{semnatar_uat}}` `{{stare_teren_alta}}` `{{suprafata}}` `{{tarla}}` `{{tronson}}` `{{uat}}`×2 `{{verificare_data}}` `{{verificare_de_gazpet}}` `{{verificare_de_tgz}}` `{{zi1}}` `{{zi2}}` `{{zi3}}`
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
 - relații externe (.rels TargetMode=External): niciuna
 - resturi intenționate: 4× linie de semnătură olografă
 
@@ -357,6 +364,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - părți citite: word/document.xml; paragrafe cu text: 40
 - placeholder-e distincte: 23 (apariții: 23); rupte între run-uri: 0
 - `{{contract_data}}` `{{contract_nr}}` `{{data_pv}}` `{{km_de_la}}` `{{km_pana_la}}` `{{nr_pv}}` `{{numar_parcele}}` `{{obiectii_deschise_mp}}` `{{obiectii_deschise_nr}}` `{{proiect_denumire}}` `{{pva_corespondenta_mp}}` `{{pva_corespondenta_nr}}` `{{pva_sesiune_mp}}` `{{pva_sesiune_nr}}` `{{pvb_mp}}` `{{pvb_nr}}` `{{semnatar_apm}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{total_mp}}` `{{total_nr}}` `{{tronson}}` `{{uat_uri}}`
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
 - relații externe (.rels TargetMode=External): niciuna
 - resturi intenționate: 3× linie de semnătură olografă
 
@@ -733,3 +741,53 @@ pentru **data expedierii** recomandatei (nu a primirii) și pentru **începutul 
 
 În BD nu există CHECK pentru termen (`valideazaUat` rămâne oglinda CHECK-urilor din 20261127a). Propunerea de CHECK (fără
 migrare în acest PR) e în descrierea PR-ului.
+
+## 9. Format A4 + fața convocatorului pe o pagină (03.11)
+
+Decizia lui Răzvan din 03.11.2026 („varianta A”): convocatorul se tipărește față-verso pe o foaie A4 — pe față convocatorul,
+pe verso informarea GDPR completă (PR #939, separat). Se schimbă **doar formatarea**; textul juridic rămâne identic, cuvânt cu
+cuvânt: `construieste()` din `scripts/redari_sabloane_din_modele.mjs` refuză orice pas de formatare care schimbă textul
+concatenat din `<w:t>`, iar `src/redari/sabloaneA4.test.js` compară amprenta SHA-256 a acestui text cu cea a șabloanelor de
+dinainte (main @ `ac7afa7c`), pe toate 5.
+
+**Ce era**: modelele Final_v2 sunt salvate pe **Letter** (12240×15840 twips), iar convocatorul ocupa 2 pagini (`docProps/app.xml`;
+Word marca trecerea la pagina 2 înainte de „În lipsa participării…”, ceea ce estimarea de mai jos reproduce).
+
+**Excepția (6), toate 5 șabloanele**: `w:pgSz` → A4 (11906×16838). Lățimile tabelelor (`w:gridCol`, `w:tcW` dxa) se scalează cu
+raportul lățimilor utile, ca tabelele să rămână între margini (PV A, PV B, PV C, adresa UAT: marginile din model, 1,8 / 2 cm,
+lățimea tabelelor ×0,966). `cerere_imputernicire.docx` era deja A4 și nu e atins.
+
+**Excepția (7), doar convocatorul** (`CONVOCATOR_FORMAT` în generator):
+
+| Ce | Înainte (model) | Acum |
+|---|---|---|
+| margini sus/jos, stânga/dreapta | 1,8 cm / 2 cm | **1,27 cm / 1,5 cm** |
+| spațiere după paragraf (docDefaults) | 10 pt | 0 pt |
+| interlinie (docDefaults) | 1,15 | 1,0 |
+| corpul stilului Normal | 10,5 pt | **9,5 pt** (limita de jos cerută) |
+| paragrafele goale de separare (5) | 10,5 pt / 8 pt | 4 pt |
+| coloanele tabelului parcelei | 6 egale | 17 / 19 / 20 / 12 / 20 / 12 % |
+| coloanele programului sesiunilor | 4 egale | 12 / 16 / 27 / 45 % (Ziua / Data / Program / Sate) |
+| QR (3 cm, `QR_CM` din `docx.js`) | paragraf centrat, pe rândul lui | cadru de 3,2 cm la dreapta (`w:framePr`), opțiunile de răspuns curg în stânga lui |
+| marcajul `lastRenderedPageBreak` | prezent | scos (era poziția paginii 2) |
+
+Rămân neschimbate: titlul (13 pt), tabelele (9,5 pt), antetul firmei (8 pt), blocul „Date personale” (9 / 8,5 pt), rândul de
+semnătură (două rânduri libere), mărimea QR-ului. Marginile sunt sub sugestia inițială (1,5 / 1,8 cm) pentru rezerva de 15%.
+
+**Estimarea paginii** (fără Word / LibreOffice pe server): metrici reale Calibri / Calibri Bold / Italic (tabelele `hmtx` +
+`OS/2` win din `C:\Windows\Fonts`), încadrare greedy pe cuvinte la lățimea utilă (minus marginile celulelor de 0,19 cm), înălțimea
+rândului = 1,2207 × corpul × interlinia, rândurile tabelelor = cea mai înaltă celulă + bordura, QR-ul 85 pt în cadru (textul de
+lângă el pe lățimea utilă minus 3,5 cm). Calibrare: pe modelul Letter, estimarea pune trecerea la pagina 2 exact unde a pus-o
+Word. Previzualizarea e completată cu `completeazaDocx` (date fictive, QR real); textul GDPR de pe față = textul scurt din
+Model_1 + „Informarea completă: <link>” (cazul cel mai lung din `textGdprPentruUat`).
+
+| Date fictive | Conținut | Înălțime utilă A4 | Umplere | Rezervă | Cu lățimi +5% |
+|---|---|---|---|---|---|
+| lungi (nume și adresă lungi, program „09:00 – 19:00 (program prelungit)”, sate lungi, URL de 94 de caractere) | 631 pt | 770 pt | 82,0% | **18,0%** | 15,0% |
+| tipice | 610 pt | 770 pt | 79,2% | **20,8%** | 17,8% |
+
+Estimarea nu înlocuiește verificarea în Word: previzualizarea DOCX se deschide în Word (bara de stare: „Pagina 1 din 1”) înainte
+de primul lot tipărit. `docProps/app.xml` din șablon păstrează statisticile salvate de Word în model (`<Pages>2</Pages>`): sunt
+valoarea veche, nu paginarea nouă, și se actualizează când Word salvează documentul. Dacă Word arată totuși 2 pagini, primele
+de strâns sunt marginile (1 cm) — nu corpul de literă, care e la limită. Textul GDPR de pe față vine din `red_proiecte.text_gdpr`:
+un text mai lung decât cel din Model_1 consumă din rezervă (~10 pt pe fiecare rând în plus, la 8,5 pt).
