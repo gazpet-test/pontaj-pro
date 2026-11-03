@@ -11,7 +11,9 @@
 //    (4) celulele goale din tabele nu mai au run în modelele resalvate de Word → primesc un run cu w:sz=19 (formatul celulelor
 //    de date din aceleași tabele); (5) paragraful nou {{pv_a_referinta}} sub „Nume:” în PV B (decizia 02.11, PR #935);
 //    (6) toate cele 5 trec de pe Letter pe A4, cu lățimile tabelelor scalate (decizia 03.11, „varianta A”);
-//    (7) convocatorul: margini, spațiere, interlinie și corp de literă strânse, ca fața să încapă pe o pagină A4 (tot 03.11).
+//    (7) convocatorul: margini, spațiere, interlinie și corp de literă strânse, ca fața să încapă pe o pagină A4 (tot 03.11);
+//    (8) convocatorul pleacă prin poștă doar cu codul QR: adresa web de răspuns nu se mai tipărește, fraza trimite doar la QR
+//    (decizia Răzvan 03.11 seara; singura reformulare de text juridic, declarată în CONVOCATOR_DOAR_QR).
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -243,6 +245,15 @@ function stiluriConvocator(st) {
     .replace(normal, () => normal.replace('<w:sz w:val="21"/>', `<w:sz w:val="${f.corp}"/>`))
 }
 
+// excepția (8), decizia Răzvan 03.11 seara: convocatorul pleacă prin poștă cu DOAR codul QR (QR-ul duce în continuare la
+// formularul de răspuns, linkul e calculat de docx.js doar pentru imagine); adresa web nu se tipărește, deci nici {{link}}.
+// Singura diferență de text juridic față de model; testul din src/redari/sabloaneA4.test.js o cere exact, o singură dată.
+const CONVOCATOR_DOAR_QR = {
+  fraza: 'Prin formularul online de la adresa ______________________ (sau scanând codul QR alăturat), la telefon ______________ sau prin răspuns scris la adresa de mai jos. Puteți alege una dintre opțiunile:',
+  vechi: ' de la adresa ______________________ (sau scanând codul QR alăturat)',
+  nou: ', scanând cu telefonul codul QR de mai jos',
+}
+
 const ANTET_VECHI ='Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. 30/22.01.2025 · Conductă de transport gaze naturale Prunișor–Orșova–Băile Herculane–Jupa, LOT 1'
 const ANTET_NOU = 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}'
 const NR_LOC = ['Nr. ________ / ___.___.2026        Locul încheierii: ______________________', 'Nr. {{nr_pv}} / {{data_pv}}        Locul încheierii: {{locul}}']
@@ -266,12 +277,12 @@ const RETETE = {
       x = inlocuiesteWt(x, '09:00 – 16:00', ['{{program1}}', '{{program3}}'])
       x = inlocuiesteWt(x, '09:00 – 19:00 (program prelungit)', '{{program2}}')
       for (const i of [1, 2, 3]) x = celulaGoala(x, `Ziua ${i}`, 3, `{{sate_zi${i}}}`)
-      const link = 'Prin formularul online de la adresa ______________________ (sau scanând codul QR alăturat), la telefon ______________ sau prin răspuns scris la adresa de mai jos. Puteți alege una dintre opțiunile:'
-      x = inWt(x, link, [['adresa ______________________ (sau scanând codul QR alăturat)', 'adresa {{link}} (sau scanând codul QR de mai jos)'], ['telefon ______________', 'telefon {{contact_telefon}}']])
-      // excepția (1): paragraf nou, doar cu {{qr}}, imediat după paragraful cu {{link}}
+      // excepția (8): fraza din model cerea adresa web; pe hârtie rămâne doar trimiterea la QR (CONVOCATOR_DOAR_QR)
+      const raspuns = [[CONVOCATOR_DOAR_QR.vechi, CONVOCATOR_DOAR_QR.nou], ['telefon ______________', 'telefon {{contact_telefon}}']]
+      x = inWt(x, CONVOCATOR_DOAR_QR.fraza, raspuns)
+      // excepția (1): paragraf nou, doar cu {{qr}}, imediat după paragraful opțiunilor de răspuns
       // poziția lui (cadrul la dreapta) e un pas de formatare, mai jos în `formatare`
-      x = paragrafDupa(x, link.replace('adresa ______________________ (sau scanând codul QR alăturat)', 'adresa {{link}} (sau scanând codul QR de mai jos)').replace('telefon ______________', 'telefon {{contact_telefon}}'),
-        PARAGRAF_QR)
+      x = paragrafDupa(x, raspuns.reduce((t, [cauta, pune]) => t.replace(cauta, () => pune), CONVOCATOR_DOAR_QR.fraza), PARAGRAF_QR)
       // informarea GDPR: tot paragraful de sub „Date personale” = {{text_gdpr}} (textul rămâne cel din ERP, red_proiecte.text_gdpr)
       x = uneste(x, ['Transgaz folosește datele dumneavoastră ca să organizeze verificarea terenului după lucrările la conducta de gaze. Gazpet', ' Instal',
         ' vă trimite această convocare în numele Transgaz. Datele nu sunt folosite pentru reclamă. Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră (inclusiv temeiurile legale); le găsiți și scanând codul QR sau la [link scurt].'], '{{text_gdpr}}')
@@ -435,6 +446,8 @@ async function construieste(sablon, { model, pasi, formatare = [], margini, stil
     asigura(textWt(nou) === referinta, `${sablon}: pasul de formatare „${nume}” a schimbat textul din <w:t>`)
   }
   asigura(!/\{\{(?![A-Za-z0-9_.]+\}\})/.test(nou), `${sablon}: acoladă malformată`)
+  // excepția (8): pe convocator nu rămâne nicio adresă web de răspuns (nici placeholder, nici text)
+  if (sablon === 'convocator.docx') asigura(!/\{\{link\}\}|redari\.gazpet\.ro|https?:\/\//.test(textWt(nou)), `${sablon}: a rămas o adresă web de răspuns`)
   zip.file('word/document.xml', nou, { date: DATA_FIXA, createFolders: false })
   // excepția (7): stilurile convocatorului (spațiere, interlinie, corp de literă)
   if (stiluri) zip.file('word/styles.xml', stiluri(await zip.file('word/styles.xml').async('string')), { date: DATA_FIXA, createFolders: false })

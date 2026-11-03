@@ -364,14 +364,16 @@ export function verificaDateConvocator({ nrDocument, token, uat, contact, proiec
   return lipsuri
 }
 
-/** Cheile pe care le furnizează genereazaConvocator (cele 36 din convocator.docx, SABLOANE.md §2.1, + id_parcela pentru corelare). */
+/** Cheile pe care le furnizează genereazaConvocator (cele 35 din convocator.docx, SABLOANE.md §2.1, + id_parcela pentru corelare).
+ * Fără `link` (decizia 03.11 seara): pe hârtie e doar QR-ul; linkul se întoarce separat, în rezultat. */
 export const CHEI_CONVOCATOR = ['contract_nr', 'contract_data', 'proiect_denumire', 'imputernicire_nr', 'imputernicire_data', 'nr_document', 'data',
   'nume', 'calitate', 'adresa', 'uat', 'sat', 'tarla', 'nr_cadastral', 'poz_hg', 'suprafata', 'tronson', 'zi1', 'program1', 'sate_zi1',
-  'zi2', 'program2', 'sate_zi2', 'zi3', 'program3', 'sate_zi3', 'link', 'qr', 'contact_telefon', 'contact_nume', 'contact_email', 'text_gdpr',
+  'zi2', 'program2', 'sate_zi2', 'zi3', 'program3', 'sate_zi3', 'qr', 'contact_telefon', 'contact_nume', 'contact_email', 'text_gdpr',
   'reprezentant_tgz', 'reprezentant_tgz_telefon', 'semnatar_gazpet', 'semnatar_tgz', 'id_parcela']
 
 /**
- * Construiește câmpurile convocatorului real (SABLOANE.md §2.1, 36 placeholder-e), completează șablonul, calculează hash-ul.
+ * Construiește câmpurile convocatorului real (SABLOANE.md §2.1, 35 placeholder-e), completează șablonul, calculează hash-ul.
+ * Linkul de răspuns intră doar în QR și în rezultat (`link`), nu și în document (convocatorul pleacă prin poștă, doar cu QR).
  * `contact` = persoana de contact Gazpet { nume, telefon, email } (fallback: proiect.contact_*); `contactDetinator` = rândul
  * din red_detinatori_contact (adresa; fallback detinator.contact); `dataDocument` opțional (implicit azi).
  * Implicit STRICT: Error în română dacă lipsesc date obligatorii (verificaDateConvocator) sau dacă rămâne un placeholder
@@ -386,6 +388,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
   const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}, d = detinator || {}
   // Linkul și QR-ul merg mereu pe domeniul public; un `origin` trimis de apelant se ignoră (nu mai e parametru)
+  // linkul nu se tipărește (03.11 seara): îl folosesc doar QR-ul și rezultatul întors
   const link = linkRaspuns(token)
   const semnatarTgz = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(plin).join(', ')
   const semnatarGazpet = [pr.reprezentant_gazpet_nume, pr.reprezentant_gazpet_functie].filter(plin).join(', ')
@@ -411,7 +414,6 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     zi1: formatDataRo(u.sesiune_zi1), program1: u.program_zi1 ?? '', sate_zi1: u.sate_zi1 ?? '',
     zi2: formatDataRo(u.sesiune_zi2), program2: u.program_zi2 ?? '', sate_zi2: u.sate_zi2 ?? '',
     zi3: formatDataRo(u.sesiune_zi3), program3: u.program_zi3 ?? '', sate_zi3: u.sate_zi3 ?? '',
-    link,
     contact_nume: c.nume ?? pr.contact_nume ?? '',
     contact_telefon: c.telefon ?? pr.contact_telefon ?? '',
     contact_email: c.email ?? pr.contact_email ?? '',

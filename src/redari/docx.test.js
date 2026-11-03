@@ -10,7 +10,7 @@ import {
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
-const SABLON = resolve(process.cwd(), 'public/redari/sabloane/convocator.docx') // Model_1 v5, 36 placeholder-e (SABLOANE.md §2.1)
+const SABLON = resolve(process.cwd(), 'public/redari/sabloane/convocator.docx') // Model_1 v6, 35 placeholder-e (SABLOANE.md §2.1)
 const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 const citesteSablon = () => { const b = readFileSync(SABLON); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) }
 
@@ -102,9 +102,11 @@ describe('completeazaDocx — înlocuire placeholder-e', () => {
     await expect(completeazaDocx(await zip.generateAsync({ type: 'arraybuffer' }), {})).rejects.toThrow(/document\.xml/)
   })
 
-  it('șablonul REAL convocator.docx: cele 35 de câmpuri text + qr se completează strict, niciun {{ rămas', async () => {
+  it('șablonul REAL convocator.docx: cele 34 de câmpuri text + qr se completează strict, niciun {{ rămas', async () => {
     const chei = CHEI_CONVOCATOR.filter(k => k !== 'qr' && k !== 'id_parcela')
-    expect(chei).toHaveLength(35)
+    expect(chei).toHaveLength(34)
+    // decizia 03.11 seara: convocatorul prin poștă are doar QR, fără link tipărit
+    expect(chei).not.toContain('link')
     const campuriToate = Object.fromEntries(chei.map(k => [k, `<${k}>`]))
     const blob = await completeazaDocx(citesteSablon(), campuriToate, { imagini: { qr: PNG_1x1 }, strict: true })
     const { zip } = await xmlDin(blob, 'word/document.xml')
@@ -244,8 +246,11 @@ describe('genereazaConvocator', () => {
       for (const extra of [{}, { origin: 'https://altceva' }, { origin: 'https://pontaj-pro-sooty.vercel.app' }]) {
         const r = await genereazaConvocator({ ...faraOrigin, ...extra, templateArrayBuffer: citesteSablon() })
         expect(r.link, JSON.stringify(extra)).toBe(asteptat)
-        expect(r.campuri.link).toBe(asteptat)
-        const { zip } = await xmlDin(r.blob, 'word/document.xml')
+        // linkul nu mai intră în document (03.11 seara): nici cheie în câmpuri, nici text tipărit
+        expect(r.campuri).not.toHaveProperty('link')
+        const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
+        expect(textDin(xml)).not.toContain(asteptat)
+        expect(textDin(xml)).not.toMatch(/redari\.gazpet\.ro|https?:\/\//)
         const pngDoc = await zip.file('word/media/qr.png').async('base64')
         expect(pngDoc).toBe(qrAsteptat)
         expect(pngDoc).not.toBe(qrAltceva)
@@ -256,7 +261,7 @@ describe('genereazaConvocator', () => {
     }
   }, 10000)
 
-  it('construiește toate cele 36 de chei (SABLOANE.md §2.1), link + QR, hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
+  it('construiește toate cele 35 de chei (SABLOANE.md §2.1), QR (linkul doar în rezultat), hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
     const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: citesteSablon() })
     // origin din complet() e ignorat: linkul e mereu pe domeniul public
     expect(r.link).toBe('https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk')
