@@ -115,6 +115,11 @@ describe('termenul de expediere (plan pct. 4.2)', () => {
     expect(termenExpediere(uat, '01.12.2026').depasit).toBe(false)
     expect(termenExpediere(uat, '').depasit).toBe(false)
   })
+  it('dată de expediere imposibilă în calendar: limita se calculează, termenul nu se judecă, fără eroare (Jakarinos f-v2 r2 P3)', () => {
+    expect(termenExpediere(uat, '2026-12-40')).toEqual({ limita: '2026-11-30', depasit: false })
+    expect(termenExpediere(uat, '2026-02-30')).toEqual({ limita: '2026-11-30', depasit: false })
+    expect(avertismentExpediere(uat, '2026-12-40')).toBeNull()
+  })
   it('textul afișat și avertismentul vizibil', () => {
     expect(textTermenExpediere(uat)).toBe('expediați până la 30.11.2026')
     expect(textTermenExpediere({ nume: 'Fără zile' })).toBe('termen de expediere necunoscut (ziua 1 de sesiune necompletată)')

@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import { TERMEN_CONVOCARE_ZILE, dataLimitaConvocare } from './setari.js'
+import { TERMEN_CONVOCARE_ZILE, dataLimitaConvocare, dataValida } from './setari.js'
 
 // Validat de Juridic (juridic#021, 03.11.2026; validarea finală a formulărilor rămâne la avocat). Textele AR sunt centralizate aici.
 // Pe AR apar MEREU: nr. plicului, nr. de convocări (N) și UAT-ul. Numerele convocărilor: până la 6 enumerate, sau ca interval când sunt consecutive;
@@ -37,7 +37,8 @@ const dataText = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d.split('-').reverse
 export function termenExpediere(uat, data) {
   const limita = dataLimitaConvocare(uat?.sesiune_zi1)
   const d = txt(data)
-  return { limita, depasit: !!(limita && /^\d{4}-\d{2}-\d{2}$/.test(d) && d > limita) }
+  // dată imposibilă (ex. 2026-12-40) = nu se judecă, ca la termenAfisare (Jakarinos f-v2 r2 P3)
+  return { limita, depasit: !!(limita && dataValida(d) && d > limita) }
 }
 /** „expediați până la ZZ.LL.AAAA” pentru UAT-ul dat; fără ziua 1, spune că termenul nu se poate calcula. */
 export function textTermenExpediere(uat) {

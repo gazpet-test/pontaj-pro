@@ -188,6 +188,32 @@ describe('ecranul UAT', () => {
     const inTermen = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-30' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
     expect(inTermen).not.toContain('Afișarea la primărie începe pe')
   })
+  it.each([[false, 0], [true, 1]])('concurent (Jakarinos f-v2 r2 P2): termenul se judecă pe rândul recitit + patch, înainte de UPDATE (confirmă=%s)', async (raspuns, update) => {
+    const confirm = vi.fn(() => raspuns)
+    vi.stubGlobal('window', { confirm })
+    try {
+      const h = harness(), gata = vi.fn()
+      const baza = { ...uats[0], sesiune_zi1: '2026-12-20', afisare_data_start: '2026-11-20', afisare_data_end: '2026-12-22', versiune: 1 }
+      const props = { proiect, uat: baza, uats, esteAdmin: true, show: vi.fn(), onClose: () => {}, onGata: gata }
+      let tree = h.render(ModalUat, props)
+      elemente(tree, FormularCampuri)[0].props.onChange('afisare_data_start', '2026-12-05')
+      tree = h.render(ModalUat, props)
+      // pe formular (ziua 1 = 20.12, limita 10.12) afișarea de 05.12 e în termen: fără casetă, fără confirmare înainte de recitire
+      expect(renderToString(tree)).not.toContain('Afișarea la primărie începe pe')
+      const pending = elemente(tree, 'button').find(b => String(b.props.children).startsWith('Salvează')).props.onClick()
+      expect(confirm).not.toHaveBeenCalled()
+      // între timp alt admin a mutat ziua 1 la 10.12 (câmp distinct, deci fără conflict) → limita devine 30.11
+      raspunsuri.liste.push({ data: [{ ...baza, sesiune_zi1: '2026-12-10', afisare_data_start: '2026-12-05', versiune: 3 }], error: null })
+      raspunsuri.singure[0]({ data: { ...baza, sesiune_zi1: '2026-12-10', versiune: 2 }, error: null })
+      await pending
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(confirm.mock.calls[0][0]).toContain('Afișarea la primărie începe pe 05.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026)')
+      const updates = raspunsuri.apeluri.filter(x => x[0] === 'red_uat' && x[1] === 'update')
+      expect(updates).toHaveLength(update)
+      if (update) { expect(updates[0][2]).toEqual({ afisare_data_start: '2026-12-05' }); expect(gata).toHaveBeenCalledTimes(1) }
+      else expect(gata).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
   it('fără UAT-uri: mesaj gol', () => {
     expect(renderToString(<UatEcran proiect={proiect} uats={[]} nivel="admin" show={show} onSchimbat={() => {}} />)).toContain('Proiectul nu are UAT-uri')
   })

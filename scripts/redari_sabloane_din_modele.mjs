@@ -296,9 +296,16 @@ async function construieste(sablon, { model, pasi }) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
-let diferente = 0
+// Jakarinos f-v2 r2 P3: toate cele 5 se construiesc și se validează în memorie; pe disc se scrie doar dacă au trecut TOATE
+// (un eșec la un model nu mai lasă șabloanele dinainte suprascrise)
+const construite = []
 for (const [sablon, reteta] of Object.entries(RETETE)) {
   const buf = await construieste(sablon, reteta)
+  const chei = [...new Set([...(await (await JSZip.loadAsync(buf)).file('word/document.xml').async('string')).matchAll(/\{\{([A-Za-z0-9_.]+)\}\}/g)].map(m => m[1]))]
+  construite.push({ sablon, reteta, buf, chei })
+}
+let diferente = 0
+for (const { sablon, reteta, buf, chei } of construite) {
   const tinta = resolve(OUT, sablon)
   if (VERIFICA) {
     let acum = null
@@ -308,7 +315,6 @@ for (const [sablon, reteta] of Object.entries(RETETE)) {
     console.log(`${egal ? 'identic' : 'DIFERĂ'}  ${sablon}  ←  ${reteta.model}`)
   } else {
     writeFileSync(tinta, buf)
-    const chei = [...new Set([...(await (await JSZip.loadAsync(buf)).file('word/document.xml').async('string')).matchAll(/\{\{([A-Za-z0-9_.]+)\}\}/g)].map(m => m[1]))]
     console.log(`scris ${sablon} (${buf.length} octeți, ${chei.length} placeholder-e distincte)  ←  ${reteta.model}`)
   }
 }

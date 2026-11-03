@@ -198,7 +198,7 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
     if (!schimbate.length && !codSchimbat) { show('Nimic de salvat.', 'info'); return }
     if (lucru) return
     const atingeTermen = schimbate.some(k => k === 'sesiune_zi1' || k === 'afisare_data_start')
-    if (atingeTermen && avertismente.length && !window.confirm(`${avertismente.join('\n')}\n\nSalvezi totuși?`)) return
+    // Jakarinos f-v2 r2 P2: confirmarea termenului se cere DUPĂ recitirea rândului, pe valorile combinate (ale mele + ale altui admin)
     // Jakarinos f2 r3 P2: formularul (inclusiv codul) se blochează ÎNAINTE de primul await și se deblochează pe toate ieșirile;
     // form / schimbate / cod sunt fixate aici, iar câmpurile nu mai acceptă tastare până la final.
     const atingeSesiuni = schimbate.some(k => CHEI_SESIUNE.includes(k))
@@ -233,6 +233,9 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
         const etichete = conf.map(k => k === 'uat3' ? 'Cod UAT' : (CAMPURI_UAT.find(c => c.cheie === k)?.eticheta || k))
         if (conf.length && !window.confirm(`Alt administrator a schimbat între timp: ${etichete.join(', ')}.\nSuprascrii cu valorile tale?`)) return
       }
+      // termenul de 10 zile pe rândul care va rezulta: rândul de acum din BD + patch-ul meu (un câmp schimbat de altcineva intră în calcul)
+      const avertismenteFinale = atingeTermen ? avertismenteUat({ ...acum, ...patch }) : []
+      if (avertismenteFinale.length && !window.confirm(`${avertismenteFinale.join('\n')}\n\nSalvezi totuși?`)) return
       const { data, error } = await supabase.from('red_uat').update(patch).eq('id', uat.id).eq('versiune', acum.versiune).select(COL_UAT)
       if (!curent()) return
       if (error) throw error
