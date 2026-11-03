@@ -350,8 +350,11 @@ export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat) =
   return plin(linkInformareConfigurat) ? `${baza}\n${TRIMITERE_VERSO_GDPR}` : baza
 }
 
-// adresă web în text (nu în relații): pe convocatorul poștal nu se tipărește niciuna
-const RX_ADRESA_WEB = /https?:\/\/|www\.|redari\.gazpet\.ro/i
+// #970 r3: pe convocatorul poștal nu se tipărește nicio adresă a NOASTRĂ (răspuns, informare); trimiterile la autorități
+// (ex. „ANSPDCP (www.dataprotection.ro)”) rămân permise. Lista unică a domeniilor și căilor noastre, ca regex
+// (calea informării e scrisă escapat, ca în domeniuPublic.js: ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal)
+export const ADRESE_PROPRII_INTERZISE = [/redari\.gazpet\.ro/, /\.vercel\.app/, /pontaj-pro/, /\/redari\/raspuns\//, /\/redari\/informare/]
+const RX_ADRESA_WEB = new RegExp(ADRESE_PROPRII_INTERZISE.map(r => r.source).join('|'), 'i')
 
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
@@ -448,7 +451,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   const xmlDoc = await (await JSZip.loadAsync(await blob.arrayBuffer())).file('word/document.xml').async('string')
   const cuWeb = [...xmlDoc.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).find(t => RX_ADRESA_WEB.test(t))
   if (cuWeb !== undefined) {
-    throw new Error(`Convocatorul poștal nu poate tipări adrese web („${RX_ADRESA_WEB.exec(cuWeb)[0]}” în „${cuWeb.slice(0, 80)}”). Scoateți adresa din textul de pe proiect (de ex. text_gdpr); informarea completă se tipărește pe verso.`)
+    throw new Error(`Convocatorul poștal nu poate tipări adrese web proprii — răspuns sau informare („${RX_ADRESA_WEB.exec(cuWeb)[0]}” în „${cuWeb.slice(0, 80)}”). Scoateți adresa din textul de pe proiect (de ex. text_gdpr); informarea completă se tipărește pe verso.`)
   }
   const hash = await hashBlob(blob)
   return { blob, hash, link, campuri, lipsuri }

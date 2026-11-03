@@ -76,8 +76,9 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   amprenta textului de dinainte (nimic altceva schimbat). Tot din (8), pe documentul completat: `{{text_gdpr}}` de pe față
   nu primește linkul informării (`textGdprFataConvocator` din `docx.js`: marcajul „Informarea completă: <URL | [link]>” devine
   „Informarea completă se află pe verso.”, adăugată la final când proiectul are `link_informare_gdpr` și textul n-o are;
-  `text_gdpr` din BD nu se schimbă), iar `genereazaConvocator` refuză documentul completat dacă textul lui conține
-  `http://`, `https://`, `www.` sau `redari.gazpet.ro` (QR-ul e imagine, nu text). Unde modelul a rupt un câmp în mai
+  `text_gdpr` din BD nu se schimbă), iar `genereazaConvocator` refuză documentul completat dacă textul lui conține o adresă
+  a NOASTRĂ (`ADRESE_PROPRII_INTERZISE`: `redari.gazpet.ro`, `*.vercel.app`, `pontaj-pro`, căile de răspuns și de informare);
+  trimiterile la autorități (ex. „ANSPDCP (www.dataprotection.ro)”) rămân permise (#970 r3). QR-ul e imagine, nu text. Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
 - Fiecare placeholder stă întreg într-un singur `<w:t>` → `docx.js` înlocuiește local, fără consolidare de run-uri (limita 1).

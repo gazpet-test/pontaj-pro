@@ -283,17 +283,36 @@ describe('genereazaConvocator', () => {
     expect(textGdprFataConvocator('A. Informarea completă: https://x.invalid/a. B.', 'G', '')).toBe(`A. ${TRIMITERE_VERSO_GDPR} B.`)
   }, 10000)
 
-  it('garda pe documentul completat: un URL în corpul text_gdpr (sau www., redari.gazpet.ro) e refuzat cu mesaj clar', async () => {
+  it('garda pe documentul completat: o adresă a NOASTRĂ în corpul text_gdpr e refuzată cu mesaj clar', async () => {
     const baza = complet()
-    const cazuri = [['Detalii la https://example.invalid/gdpr oricând.', 'https://'], ['Vezi www.exemplu.invalid pentru detalii.', 'www.'], ['Răspuns pe redari.gazpet.ro.', 'redari.gazpet.ro']]
+    const cazuri = [
+      ['Răspuns la https://redari.gazpet.ro/redari/raspuns/abc oricând.', 'redari.gazpet.ro'],
+      ['Detalii la https://pontaj-pro-sooty.vercel.app/redari/informare/x.', 'vercel.app'],
+      ['Vezi alt-proiect.vercel.app pentru detalii.', '.vercel.app'],
+      ['Formular: https://exemplu.invalid/redari/raspuns/tok.', '/redari/raspuns/'],
+      ['Informare: exemplu.invalid/redari/informare.', '/redari/informare'],
+      ['Sistem pontaj-pro intern.', 'pontaj-pro'],
+    ]
     for (const [text_gdpr, gasit] of cazuri) {
       const p = genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })
-      await expect(p).rejects.toThrow(/Convocatorul poștal nu poate tipări adrese web/)
+      await expect(p, text_gdpr).rejects.toThrow(/Convocatorul poștal nu poate tipări adrese web proprii/)
       await expect(genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })).rejects.toThrow(gasit)
     }
     // și la previzualizare
-    const prev = genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr: 'x http://a.invalid' }, templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
-    await expect(prev).rejects.toThrow(/adrese web/)
+    const prev = genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr: 'x https://redari.gazpet.ro/y' }, templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
+    await expect(prev).rejects.toThrow(/adrese web proprii/)
+  }, 10000)
+
+  // #970 r3: trimiterile la autorități (ANSPDCP) din informarea GDPR rămân permise și neschimbate
+  it('text_gdpr cu „(www.dataprotection.ro)” trece, iar textul rămâne neschimbat (cu și fără link_informare_gdpr)', async () => {
+    const baza = complet()
+    const text_gdpr = 'Aveți dreptul să depuneți plângere la ANSPDCP (www.dataprotection.ro) sau la https://www.dataprotection.ro.'
+    const r = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })
+    expect(r.campuri.text_gdpr).toBe(text_gdpr)
+    const { xml } = await xmlDin(r.blob, 'word/document.xml')
+    expect(textDin(xml)).toContain(text_gdpr)
+    const cuInfo = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr, link_informare_gdpr: 'https://example.invalid/i' }, templateArrayBuffer: citesteSablon() })
+    expect(cuInfo.campuri.text_gdpr).toBe(`${text_gdpr}\n${TRIMITERE_VERSO_GDPR}`)
   }, 10000)
 
   it('construiește toate cele 35 de chei (SABLOANE.md §2.1), QR (linkul doar în rezultat), hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
