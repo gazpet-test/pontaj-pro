@@ -82,6 +82,11 @@ DO $t$ DECLARE pl public.red_plicuri; BEGIN
   PERFORM set_config('r29i.plA',pl.id::text,true);
   -- r2 P1: convocare postala noua pentru aceeasi persoana, cat plicul e neexpediat -> refuz
   IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(%L,'posta','C-T29I-A3','activ')$q$,pg_temp.r29i_g('dA3')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: convocare noua cu plic neexpediat'; END IF;
+  -- harness F2: upsert-ul de contact din aplicatie (doar telefonul schimbat) trece pentru un membru al plicului neexpediat; cu adresa schimbata e refuzat
+  INSERT INTO public.red_detinatori_contact AS k (detinator_id,adresa_strada,adresa_sat,adresa_comuna,adresa_judet,cod_postal,adresa_cunoscuta,telefon)
+    SELECT detinator_id,adresa_strada,adresa_sat,adresa_comuna,adresa_judet,cod_postal,adresa_cunoscuta,'0000000000' FROM public.red_detinatori_contact WHERE detinator_id=pg_temp.r29i_g('dA2')::uuid
+    ON CONFLICT (detinator_id) DO UPDATE SET telefon=EXCLUDED.telefon, adresa_strada=EXCLUDED.adresa_strada;
+  IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_detinatori_contact(detinator_id,adresa_strada,adresa_comuna,adresa_judet,adresa_cunoscuta) VALUES(%L,'Str. Alta','Comuna Test','Test',true) ON CONFLICT (detinator_id) DO UPDATE SET adresa_strada=EXCLUDED.adresa_strada$q$,pg_temp.r29i_g('dA2')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: upsert cu adresa schimbata'; END IF;
   -- r6: contactul nu se muta pe alt detinator; lock-urile de UAT nu sunt apelabile din aplicatie
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_detinatori_contact SET detinator_id=%L WHERE detinator_id=%L$q$,pg_temp.r29i_g('dE'),pg_temp.r29i_g('dD')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: contact mutat'; END IF;
   RAISE NOTICE 'TEST1 OK';

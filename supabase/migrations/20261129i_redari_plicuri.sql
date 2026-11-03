@@ -317,6 +317,11 @@ REVOKE EXECUTE ON FUNCTION public.fn_red_plic_reguli() FROM PUBLIC, anon, authen
 CREATE FUNCTION public.fn_red_plic_propaga() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 BEGIN
+  -- harness conc29i S6e: randurile atinse se blocheaza intai in ordinea id-ului (aceeasi ordine ca plicuirea / expedierea), apoi se actualizeaza
+  IF (NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL) OR (NEW.data_ar IS NOT NULL AND OLD.data_ar IS NULL)
+     OR (NEW.retur IS NOT NULL AND OLD.retur IS NULL) OR (NEW.stare = 'anulat' AND OLD.stare = 'activ') THEN
+    PERFORM 1 FROM public.red_convocari WHERE plic_id = NEW.id ORDER BY id FOR UPDATE;
+  END IF;
   IF NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL THEN
     UPDATE public.red_convocari SET data_expediere = NEW.data_expediere, nr_tracking = NEW.awb WHERE plic_id = NEW.id;
   END IF;
@@ -326,6 +331,7 @@ BEGIN
   IF NEW.retur IS NOT NULL AND OLD.retur IS NULL THEN
     UPDATE public.red_convocari SET retur = NEW.retur, retur_data = NEW.retur_data, retur_detaliu = NEW.retur_detaliu WHERE plic_id = NEW.id;
     IF NEW.retur = 'decedat' THEN
+      PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR UPDATE;
       UPDATE public.red_detinatori d SET decedat = true
         WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) AND d.decedat IS NOT TRUE;
     END IF;
@@ -414,6 +420,9 @@ BEGIN
     END IF;
     IF TG_OP = 'UPDATE' AND (NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta)
        IS NOT DISTINCT FROM (OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) THEN RETURN NEW; END IF;
+    -- harness conc29i F2: upsert-ul din aplicatie (INSERT ... ON CONFLICT (detinator_id) DO UPDATE) declanseaza intai BEFORE INSERT; daca
+    -- contactul exista deja (PK detinator_id), INSERT-ul devine UPDATE si e verificat de ramura UPDATE (cu adresa veche reala) -> aici nu se refuza
+    IF TG_OP = 'INSERT' AND EXISTS (SELECT 1 FROM public.red_detinatori_contact k WHERE k.detinator_id = NEW.detinator_id) THEN RETURN NEW; END IF;
     v_det := NEW.detinator_id;
     -- Jakarinos r6 P1: lock-ul UAT-ului ÎNAINTE de citirea numelui, și pentru deținătorii șterși logic (reactivarea concurentă ia același lock)
     v_uat := public.fn_red_plic_incearca_lock_detinator(v_det);
