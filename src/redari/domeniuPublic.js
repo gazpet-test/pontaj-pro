@@ -7,10 +7,8 @@ export const HOST_PUBLIC_REDARI = 'redari.gazpet.ro'
 export const ORIGINE_PUBLICA_REDARI = `https://${HOST_PUBLIC_REDARI}`
 export const ORIGINE_ERP = 'https://pontaj-pro-sooty.vercel.app'
 
-// Pagina publică cu informarea GDPR completă (sugestie pentru câmpul link_informare_gdpr din Setări proiect)
-export const LINK_INFORMARE_REDARI = `${ORIGINE_PUBLICA_REDARI}/redari/informare`
-
 // Căile de pagină permise pe host-ul public; aceeași listă ca în vercel.json (testul domeniuPublic.test.js le compară)
+// A doua cale (informarea GDPR) e doar rezervată: ruta vine cu PR #939; pe main nimic nu trimite încă la ea
 const RX_CAI_PUBLICE = [/^\/redari\/raspuns\/[^/]+\/?$/, /^\/redari\/informare\/?$/]
 
 export const esteCalePublicaRedari = (pathname) => RX_CAI_PUBLICE.some(rx => rx.test(String(pathname || '')))

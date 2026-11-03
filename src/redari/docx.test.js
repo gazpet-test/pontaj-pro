@@ -6,7 +6,7 @@ import JSZip from 'jszip'
 import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
-  reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, adresaDetinator, textGdprPentruUat,
+  reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, linkRaspunsCu, adresaDetinator, textGdprPentruUat,
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
@@ -207,12 +207,12 @@ describe('formatări + link', () => {
     expect(formatNumarRo(1234.5)).toBe('1.234,5')
     expect(formatNumarRo('')).toBe('')
   })
-  it('linkRaspuns taie slash-ul final', () => {
-    expect(linkRaspuns('https://pontaj-pro-sooty.vercel.app/', 'tok')).toBe('https://pontaj-pro-sooty.vercel.app/redari/raspuns/tok')
+  it('linkRaspunsCu (doar teste) taie slash-ul final', () => {
+    expect(linkRaspunsCu('https://pontaj-pro-sooty.vercel.app/', 'tok')).toBe('https://pontaj-pro-sooty.vercel.app/redari/raspuns/tok')
   })
-  it('linkRaspuns fără origin → domeniul public redari.gazpet.ro', () => {
-    expect(linkRaspuns(undefined, 'tok')).toBe('https://redari.gazpet.ro/redari/raspuns/tok')
-    expect(linkRaspuns(null, 'tok')).toBe('https://redari.gazpet.ro/redari/raspuns/tok')
+  it('linkRaspuns(token) → mereu domeniul public redari.gazpet.ro', () => {
+    expect(linkRaspuns('tok')).toBe('https://redari.gazpet.ro/redari/raspuns/tok')
+    expect(linkRaspuns.length).toBe(1)
   })
 })
 
@@ -232,20 +232,24 @@ describe('genereazaConvocator', () => {
     nrDocument: 'C-0001', token: 'tokenfictiv1234567890abcdefghijk', origin: 'https://exemplu.test', dataDocument: '2026-11-02',
   })
 
-  it('fără origin: linkul și QR-ul sunt pe https://redari.gazpet.ro, chiar dacă window.location.origin e alt domeniu', async () => {
+  it('linkul și QR-ul sunt pe https://redari.gazpet.ro: fără origin, cu origin străin, cu window.location.origin pe alt domeniu', async () => {
     const vechi = globalThis.window
     globalThis.window = { location: { origin: 'https://pontaj-pro-sooty.vercel.app', hostname: 'pontaj-pro-sooty.vercel.app' } }
     try {
       const { origin, ...faraOrigin } = complet()
-      const r = await genereazaConvocator({ ...faraOrigin, templateArrayBuffer: citesteSablon() })
       const asteptat = 'https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk'
-      expect(r.link).toBe(asteptat)
-      expect(r.campuri.link).toBe(asteptat)
-      // QR-ul din document = QR-ul generat independent pentru linkul așteptat (nu pentru window.location.origin)
-      const { zip } = await xmlDin(r.blob, 'word/document.xml')
-      const pngDoc = await zip.file('word/media/qr.png').async('base64')
-      expect(pngDoc).toBe((await genereazaQr(asteptat)).split(',')[1])
-      expect(pngDoc).not.toBe((await genereazaQr('https://pontaj-pro-sooty.vercel.app/redari/raspuns/tokenfictiv1234567890abcdefghijk')).split(',')[1])
+      // QR-ul așteptat e generat independent, pentru linkul așteptat
+      const qrAsteptat = (await genereazaQr(asteptat)).split(',')[1]
+      const qrAltceva = (await genereazaQr('https://altceva/redari/raspuns/tokenfictiv1234567890abcdefghijk')).split(',')[1]
+      for (const extra of [{}, { origin: 'https://altceva' }, { origin: 'https://pontaj-pro-sooty.vercel.app' }]) {
+        const r = await genereazaConvocator({ ...faraOrigin, ...extra, templateArrayBuffer: citesteSablon() })
+        expect(r.link, JSON.stringify(extra)).toBe(asteptat)
+        expect(r.campuri.link).toBe(asteptat)
+        const { zip } = await xmlDin(r.blob, 'word/document.xml')
+        const pngDoc = await zip.file('word/media/qr.png').async('base64')
+        expect(pngDoc).toBe(qrAsteptat)
+        expect(pngDoc).not.toBe(qrAltceva)
+      }
     } finally {
       if (vechi === undefined) delete globalThis.window
       else globalThis.window = vechi
@@ -254,7 +258,8 @@ describe('genereazaConvocator', () => {
 
   it('construiește toate cele 36 de chei (SABLOANE.md §2.1), link + QR, hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
     const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: citesteSablon() })
-    expect(r.link).toBe('https://exemplu.test/redari/raspuns/tokenfictiv1234567890abcdefghijk')
+    // origin din complet() e ignorat: linkul e mereu pe domeniul public
+    expect(r.link).toBe('https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk')
     expect(r.lipsuri).toEqual([])
     for (const k of CHEI_CONVOCATOR.filter(k => k !== 'qr')) expect(r.campuri, k).toHaveProperty(k)
     expect(r.campuri).toMatchObject({

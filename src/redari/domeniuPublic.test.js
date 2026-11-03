@@ -1,8 +1,8 @@
 // Redări — domeniul public redari.gazpet.ro: garda din client + regula din vercel.json. Date fictive, fără PII.
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { tintaRedirectHostPublic, esteCalePublicaRedari, ORIGINE_PUBLICA_REDARI, ORIGINE_ERP, HOST_PUBLIC_REDARI, LINK_INFORMARE_REDARI } from './domeniuPublic.js'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { resolve, join, relative } from 'node:path'
+import { tintaRedirectHostPublic, esteCalePublicaRedari, ORIGINE_PUBLICA_REDARI, ORIGINE_ERP, HOST_PUBLIC_REDARI } from './domeniuPublic.js'
 import { CAMPURI_PROIECT } from './setari.js'
 
 const TOK = 'tokenfictiv1234567890abcdefghijk'
@@ -17,10 +17,26 @@ describe('constante', () => {
     expect(ORIGINE_PUBLICA_REDARI).toBe('https://redari.gazpet.ro')
     expect(HOST_PUBLIC_REDARI).toBe('redari.gazpet.ro')
     expect(ORIGINE_ERP).toBe('https://pontaj-pro-sooty.vercel.app')
-    expect(LINK_INFORMARE_REDARI).toBe('https://redari.gazpet.ro/redari/informare')
   })
-  it('Setări proiect: câmpul link_informare_gdpr sugerează pagina de pe domeniul public (doar placeholder)', () => {
-    expect(CAMPURI_PROIECT.find(c => c.cheie === 'link_informare_gdpr').exemplu).toBe('https://redari.gazpet.ro/redari/informare')
+})
+
+// Ruta /redari/informare vine cu PR #939 (nepublicat până la aprobarea Transgaz). Pe main e doar rezervată în vercel.json și în gardă;
+// nicio componentă nu are voie să o sugereze sau să trimită la ea (altfel proprietarul ar ajunge pe login-ul ERP).
+describe('/redari/informare nu e sugerată pe main', () => {
+  const fisiere = (dir) => readdirSync(dir).flatMap(n => {
+    const p = join(dir, n)
+    return statSync(p).isDirectory() ? fisiere(p) : [p]
+  })
+  it('Setări proiect: câmpul link_informare_gdpr nu are sugestie de link', () => {
+    expect(CAMPURI_PROIECT.find(c => c.cheie === 'link_informare_gdpr').exemplu).toBeUndefined()
+  })
+  it('nicio sursă din src (în afara testelor) nu conține calea /redari/informare', () => {
+    const src = resolve(process.cwd(), 'src')
+    const cuCalea = fisiere(src)
+      .filter(p => /\.(jsx?|mjs)$/.test(p) && !/\.test\.(jsx?|mjs)$/.test(p))
+      .filter(p => /redari\/informare/i.test(readFileSync(p, 'utf8')))
+      .map(p => relative(src, p))
+    expect(cuCalea).toEqual([])
   })
 })
 
@@ -40,6 +56,10 @@ describe('garda din client (tintaRedirectHostPublic)', () => {
     for (const h of ['pontaj-pro-sooty.vercel.app', 'localhost', 'pontaj-pro-git-x.vercel.app', 'redari.gazpet.ro.exemplu.test'])
       for (const p of [...PAGINI_PUBLICE, ...CAI_ERP]) expect(pe(h, p), `${h}${p}`).toBeNull()
     expect(tintaRedirectHostPublic(null)).toBeNull()
+  })
+  it('resursă statică inexistentă care a căzut pe fallback-ul SPA (/assets/inexistent.js) → redirect, aplicația nu rămâne pe host-ul public', () => {
+    expect(pe('redari.gazpet.ro', '/assets/inexistent.js')).toBe('https://pontaj-pro-sooty.vercel.app/assets/inexistent.js')
+    expect(pe('redari.gazpet.ro', '/manifest.webmanifest')).toBe('https://pontaj-pro-sooty.vercel.app/manifest.webmanifest')
   })
 })
 
