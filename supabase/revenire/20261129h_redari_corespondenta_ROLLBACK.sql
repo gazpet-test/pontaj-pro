@@ -10,18 +10,19 @@ BEGIN
   LOCK TABLE public.red_corespondenta IN ACCESS EXCLUSIVE MODE;
   -- Jakarinos r1 P2-04: „nefolosit” = in jurnal exista DOAR cele 10 inserari ale migrarii (fara utilizator); orice update / delete / insert din aplicatie = folosit
   IF EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') OR (SELECT count(*) FROM public.red_corespondenta) <> 10
-     -- Jakarinos r2 P2-02: doar jurnalul acestei aplicari (de la crearea randurilor); intrarile unei aplicari anterioare (dupa o revenire) nu conteaza
+     -- Jakarinos r2 P2-02 / r4 P2-01: doar jurnalul acestei aplicari (de la reperul fix al instalarii); intrarile unei aplicari anterioare (dupa o revenire) nu conteaza
      OR EXISTS (SELECT 1 FROM public.red_jurnal j WHERE j.tabela = 'red_corespondenta'
-                  AND j.created_at >= (SELECT min(c.created_at) FROM public.red_corespondenta c)
+                  AND j.created_at >= public.fn_red_corespondenta_instalat()   -- r4: reper fix al instalarii, nu randurile curente
                   AND (j.actiune <> 'insert' OR j.user_id IS NOT NULL OR j.inregistrare_id NOT IN (SELECT c.id FROM public.red_corespondenta c))) THEN
     RAISE EXCEPTION '20261129h revenire: evidenta a fost folosita — refuz (exporta intai randurile)';
   END IF;
 END $pre$;
 DROP TABLE public.red_corespondenta;
 DROP FUNCTION public.fn_red_corespondenta_reguli();
+DROP FUNCTION public.fn_red_corespondenta_instalat();
 DO $post$
 BEGIN
-  IF to_regclass('public.red_corespondenta') IS NOT NULL OR to_regprocedure('public.fn_red_corespondenta_reguli()') IS NOT NULL THEN
+  IF to_regclass('public.red_corespondenta') IS NOT NULL OR to_regprocedure('public.fn_red_corespondenta_reguli()') IS NOT NULL OR to_regprocedure('public.fn_red_corespondenta_instalat()') IS NOT NULL THEN
     RAISE EXCEPTION '20261129h revenire: obiecte ramase';
   END IF;
 END $post$;

@@ -15,7 +15,7 @@ CREATE FUNCTION pg_temp.r29h_g(p text) RETURNS text LANGUAGE sql STABLE AS $h$ S
 CREATE FUNCTION pg_temp.r29h_folosit() RETURNS boolean LANGUAGE sql AS $h$
   SELECT EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') OR (SELECT count(*) FROM public.red_corespondenta) <> 10
      OR EXISTS (SELECT 1 FROM public.red_jurnal j WHERE j.tabela = 'red_corespondenta'
-                  AND j.created_at >= (SELECT min(c.created_at) FROM public.red_corespondenta c)
+                  AND j.created_at >= public.fn_red_corespondenta_instalat()
                   AND (j.actiune <> 'insert' OR j.user_id IS NOT NULL OR j.inregistrare_id NOT IN (SELECT c.id FROM public.red_corespondenta c)));
 $h$;
 GRANT EXECUTE ON FUNCTION pg_temp.r29h_ca(uuid,text),pg_temp.r29h_refuza(text,text),pg_temp.r29h_g(text) TO authenticated,anon,service_role;
@@ -59,6 +59,22 @@ DO $t$ BEGIN
   RAISE NOTICE 'TEST5c OK';
 END $t$;
 ROLLBACK TO SAVEPOINT t5c;
+-- 5e (Jakarinos r4 P2-01): service_role sterge TOATE cele 10 randuri si reinsereaza 10 identice -> FOLOSIT (pragul e reperul fix, nu randurile)
+SAVEPOINT t5e;
+SELECT pg_temp.r29h_ca(NULL,'service_role');
+DO $t$ BEGIN
+  CREATE TEMP TABLE r29h_copie ON COMMIT DROP AS SELECT * FROM public.red_corespondenta;
+  DELETE FROM public.red_corespondenta;
+  INSERT INTO public.red_corespondenta(proiect_id,cod,ordine,destinatar,subiect,expeditor,documente,depinde_de,observatii)
+    SELECT proiect_id,cod,ordine,destinatar,subiect,expeditor,documente,depinde_de,observatii FROM r29h_copie;
+END $t$;
+SELECT pg_temp.r29h_ca(NULL,'postgres');
+DO $t$ BEGIN
+  IF (SELECT count(*) FROM public.red_corespondenta WHERE versiune = 1 AND stare = 'draft') <> 10 THEN RAISE EXCEPTION 'TEST5e FAIL: scenariu'; END IF;
+  IF NOT pg_temp.r29h_folosit() THEN RAISE EXCEPTION 'TEST5e FAIL: reinserarea completa nu e vazuta'; END IF;
+  RAISE NOTICE 'TEST5e OK';
+END $t$;
+ROLLBACK TO SAVEPOINT t5e;
 -- TEST1: editorul nu aproba, nu marcheaza trimis fara aprobare, nu schimba codul, nu scrie aprobat_de, nu sterge
 SELECT pg_temp.r29h_ca(pg_temp.r29h_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
