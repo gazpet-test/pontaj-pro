@@ -157,6 +157,7 @@ function Compune({ panou, onCreat, setMesaj }) {
       {preview.depaseste_plafon_zi && (preview.plafon_zi != null
         ? <p style={{ ...S.small, color: G.yellow, margin: '4px 0' }}>Peste plafonul zilnic ({preview.plafon_zi}): lotul pleacă în ~{zileLaPlafon(preview.nr_destinatari, preview.plafon_zi)} zile, dacă nu mărești plafonul.</p>
         : <p style={{ ...S.small, color: G.yellow, margin: '4px 0' }}>Peste plafonul zilnic: lotul pleacă în mai multe zile (plafonul îl stabilește owner-ul).</p>)}
+      {preview.coada_libera != null && <p style={{ ...S.small, color: preview.coada_libera < preview.nr_destinatari ? G.red : G.muted, margin: '4px 0' }}>Coada contului de test: mai încap {preview.coada_libera} mesaje în așteptare{preview.coada_libera < preview.nr_destinatari ? ' — lotul nu se poate crea până nu trimiți sau anulezi din cele în așteptare.' : '.'}</p>}
       <p style={{ fontSize: 13, margin: '6px 0 0', padding: 10, background: G.bg, borderRadius: 7 }}><b>Textul trimis (din BD):</b> {preview.text_final}</p>
     </div>}
     {panou?.kill_switch && <p style={S.small}>Trimiterea e oprită: poți crea și aproba loturi, dar nu pleacă nimic până nu {panou?.nivel === 'owner' ? 'o pornești din Setări' : 'o pornește owner-ul'}.</p>}

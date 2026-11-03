@@ -14,6 +14,8 @@
 -- doar cu comutatorul pornit (TEST6c).
 -- r3: coada contului de test (TEST5d la creare, TEST12 la aprobare), revalidarea creatorului la rezervare (TEST7c), testul nu vede un
 -- lot inconsistent de peste 5 (TEST12: scris de mentenanta cu triggerele oprite, doar in tranzactia de proba).
+-- r4: previzualizarea merge cu coada plina (TEST5d); promovarea test -> utilizator nu opreste loturile de test deja facute, limitele
+-- lor raman (TEST7d: pleaca si se numara in bugetul de test; TEST7c: bugetul atins; TEST12: coada la aprobare).
 CREATE FUNCTION pg_temp.s3b_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -365,11 +367,16 @@ BEGIN
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
 DO $t$
-DECLARE e text;
+DECLARE e text; j jsonb;
 BEGIN
   e := pg_temp.s3b_eroare(format($q$SELECT public.fn_sms_lot_intern_creeaza('Test DRY: unul.', NULL, %L::integer[], false)$q$, (pg_temp.s3b_g('ang3')::integer[])[1:1]));
   IF e IS NULL OR e NOT LIKE '42501%cel mult 10 mesaje nerezervate%' THEN RAISE EXCEPTION 'TEST5d FAIL: RPC — al 11-lea mesaj in coada (%)', e; END IF;
-  RAISE NOTICE 'TEST5d OK coada contului de test: 10 nerezervate, al 11-lea refuzat la creare (RPC si trigger)';
+  -- r4: previzualizarea nu e refuzata de coada (nu ia lock-ul contului); arata doar capacitatea libera
+  j := public.fn_sms_lot_intern_creeaza('Test DRY: unul.', NULL, (pg_temp.s3b_g('ang3')::integer[])[1:1], true);
+  IF (j->>'preview')::boolean IS NOT TRUE OR (j->>'nr_destinatari')::integer <> 1 OR (j->>'coada_libera')::integer IS DISTINCT FROM 0 OR j->>'lot_id' IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST5d FAIL: previzualizarea cu coada plina %', j - 'text_final';
+  END IF;
+  RAISE NOTICE 'TEST5d OK coada contului de test: 10 nerezervate, al 11-lea refuzat la creare (RPC si trigger); previzualizarea merge (coada libera 0)';
 END $t$;
 SELECT pg_temp.s3b_ca(NULL, 'postgres');
 
@@ -508,11 +515,25 @@ BEGIN
   RAISE NOTICE 'TEST7a OK rezervarea verifica nivelul apelantului (test: lotul lui da, O6 / TX / R1 fara_lot; fara drept refuzat)';
 END $t$;
 -- P2-01: bugetul zilnic al contului de test (10 / zi, peste toate loturile lui): al 11-lea mesaj e refuzat, oricine porneste trimiterea
+-- ── TEST7d (r4): promovarea viewer -> editor (test -> utilizator) NU opreste lotul de test deja aprobat; limitele lui raman ─────
+SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  UPDATE public.user_module_access SET access_level = 'editor' WHERE profile_id = pg_temp.s3b_g('tst')::uuid AND module = 'sms';
+  IF public.fn_sms_nivel_cont(pg_temp.s3b_g('tst')::uuid) IS DISTINCT FROM 'utilizator' THEN RAISE EXCEPTION 'TEST7d FAIL: promovarea'; END IF;
+END $t$;
+SELECT pg_temp.s3b_ca(NULL, 'service_role');
 DO $t$
 DECLARE j jsonb;
 BEGIN
   j := public.fn_sms_rezerva(pg_temp.s3b_g('TG')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
-  IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 4 THEN RAISE EXCEPTION 'TEST7b FAIL: mesajele 4-7 (%)', j->>'motiv'; END IF;
+  IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 4 THEN RAISE EXCEPTION 'TEST7d FAIL: lotul de test al contului promovat nu pleaca (%)', j->>'motiv'; END IF;
+END $t$;
+SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  -- mesajele 4-7 ale zilei se numara tot in bugetul de test al creatorului (limitele lotului dupa creat_nivel, nu dupa nivelul actual)
+  IF public.fn_sms_test_consum_zi(pg_temp.s3b_g('tst')::uuid) <> 7 THEN RAISE EXCEPTION 'TEST7d FAIL: bugetul de test nu mai numara lotul'; END IF;
+  UPDATE public.user_module_access SET access_level = 'viewer' WHERE profile_id = pg_temp.s3b_g('tst')::uuid AND module = 'sms';
+  RAISE NOTICE 'TEST7d OK promovarea test -> utilizator: lotul de test aprobat pleaca, si se numara in bugetul de test (7 / 10)';
 END $t$;
 -- coada eliberata de rezervari (T1 3 ramase): TH (5) incape acum (3 + 5 = 8)
 SELECT pg_temp.s3b_jwt(pg_temp.s3b_g('tst')::uuid);
@@ -596,7 +617,7 @@ BEGIN
   DELETE FROM public.user_module_access WHERE profile_id = pg_temp.s3b_g('tst')::uuid AND module = 'sms';
   IF public.fn_sms_nivel_cont(pg_temp.s3b_g('tst')::uuid) IS NOT NULL THEN RAISE EXCEPTION 'TEST7c FAIL: dreptul nu s-a retras'; END IF;
   e := pg_temp.s3b_eroare(format($q$UPDATE public.sms_mesaje SET stare = 'necunoscut', furnizor = 'simulator' WHERE lot_id = %L$q$, pg_temp.s3b_g('TI')));
-  IF e IS NULL OR e NOT LIKE '42501%nu mai are nivelul test%' THEN RAISE EXCEPTION 'TEST7c FAIL: trigger — rezervare directa dupa retragere (%)', e; END IF;
+  IF e IS NULL OR e NOT LIKE '42501%nu mai are niciun drept SMS%' THEN RAISE EXCEPTION 'TEST7c FAIL: trigger — rezervare directa dupa retragere (%)', e; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(NULL, 'service_role');
 DO $t$
@@ -612,7 +633,19 @@ BEGIN
 END $t$;
 SELECT pg_temp.s3b_ca(NULL, 'postgres');
 DO $t$ BEGIN
-  INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES (pg_temp.s3b_g('tst')::uuid, 'sms', 'viewer');
+  -- r4: dreptul redat ca editor (utilizator): lotul nu mai e blocat de creator, dar bugetul de test (10 / zi) ramane atins
+  INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES (pg_temp.s3b_g('tst')::uuid, 'sms', 'editor');
+END $t$;
+SELECT pg_temp.s3b_ca(NULL, 'service_role');
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_rezerva(pg_temp.s3b_g('TI')::uuid, 5, 'simulator', pg_temp.s3b_g('own')::uuid);
+  IF j->>'motiv' <> 'buget_test_zi' THEN RAISE EXCEPTION 'TEST7c FAIL: dupa promovare, bugetul de test nu mai e aplicat (%)', j->>'motiv'; END IF;
+END $t$;
+SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  UPDATE public.user_module_access SET access_level = 'viewer' WHERE profile_id = pg_temp.s3b_g('tst')::uuid AND module = 'sms';
   RAISE NOTICE 'TEST7c OK dreptul test retras: lotul lui aprobat nu mai pleaca (owner / cron: creator_fara_drept, trigger: 42501), refacut pentru restul';
 END $t$;
 
@@ -778,6 +811,21 @@ DO $t$ BEGIN
   IF public.fn_sms_rezerva(pg_temp.s3b_g('TZ')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid)->>'motiv' <> 'fara_lot' THEN
     RAISE EXCEPTION 'TEST12 FAIL: contul de test trimite lotul inconsistent';
   END IF;
+END $t$;
+-- r4: si dupa promovarea test -> utilizator, aprobarea lotului lui de test respecta coada (limitele dupa creat_nivel)
+SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  UPDATE public.user_module_access SET access_level = 'editor' WHERE profile_id = pg_temp.s3b_g('tst')::uuid AND module = 'sms';
+END $t$;
+SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s3b_g('TK')), '42501') THEN
+    RAISE EXCEPTION 'TEST12 FAIL: contul promovat aproba peste coada de test';
+  END IF;
+END $t$;
+SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  UPDATE public.user_module_access SET access_level = 'viewer' WHERE profile_id = pg_temp.s3b_g('tst')::uuid AND module = 'sms';
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('own')::uuid, 'authenticated');
 DO $t$ BEGIN

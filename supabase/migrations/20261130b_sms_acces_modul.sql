@@ -29,11 +29,16 @@
 -- doar cu comutatorul pornit; P3-01 insertul de mesaje se serializeaza pe lot.
 -- r3 (03.11.2026, GO cu observatii Jakarinos + Copilot pe r2): coada contului de test plafonata (fn_sms_test_coada_max() = 10 mesaje
 -- nerezervate in loturile lui active), verificata atomic la creare si la aprobare (lock consultativ pe cont); la rezervare (si pe calea
--- cronului) nivelul ACTUAL al creatorului unui lot de test e revalidat (fara drept test = creator_fara_drept); testul nu vede loturi
--- cu peste 5 destinatari (nici la vedere); bugetul din triggerul mesajelor se serializeaza cu fn_sms_rezerva fara asteptare (NOWAIT).
+-- cronului) creatorul unui lot de test trebuie sa aiba INCA un drept SMS (r4: oricare nivel; fara drept = creator_fara_drept); testul nu vede loturi
+-- cu peste 5 destinatari (nici la vedere); bugetul din triggerul mesajelor se serializeaza cu fn_sms_rezerva fara asteptare.
 -- Ordinea lock-urilor (aceeasi peste tot, fara cicluri): setari (FOR SHARE / FOR UPDATE) -> contul de test (lock consultativ
--- 'sms_test_coada:<uid>') -> lot (FOR UPDATE) -> mesaje. RPC-urile asteapta lock-urile in aceasta ordine; triggerele NU asteapta
--- niciodata un lock (pg_try_advisory_xact_lock / FOR UPDATE NOWAIT): in RPC il au deja, la scrierea directa esueaza imediat (55P03).
+-- 'sms_test_coada:<uid>') -> lot (FOR UPDATE) -> mesaje. ASTEAPTA doar RPC-urile, in aceasta ordine: fn_sms_lot_aproba (setari
+-- FOR SHARE, cont, lot), fn_sms_lot_anuleaza (lot), fn_sms_rezerva (setari FOR UPDATE, lot, mesaje cu SKIP LOCKED), crearea (cont).
+-- Triggerele NU asteapta niciodata un lock: contul cu pg_try_advisory_xact_lock, lotul (INSERT pe mesaje) si randul de setari
+-- (bugetul la rezervare) cu FOR UPDATE SKIP LOCKED. Un lock tinut de ACEEASI tranzactie (RPC-ul care a creat lotul / fn_sms_rezerva)
+-- nu e sarit, deci calea legitima merge; tinut de ALTA tranzactie => 55P03 imediat, cu mesaj (r4).
+-- r4 (03.11.2026, GO cu observatii pe r3): coada nu mai blocheaza previzualizarea (doar crearea efectiva); promovarea test -> utilizator
+-- nu mai opreste loturile de test deja facute (limitele lor raman, dupa creat_nivel); triggerul INSERT pe mesaje nu mai asteapta lotul.
 -- Ordinea de livrare: intai migrarea, apoi edge-ul sms-trimite. Intre ele edge-ul vechi nu mai gaseste fn_sms_rezerva cu 3 argumente:
 -- nu trimite nimic (fail-closed).
 -- Fara date reale atinse. Revenire: supabase/revenire/20261130b_sms_acces_modul_ROLLBACK.sql (fail-closed: inapoi la doar owner,
@@ -349,8 +354,12 @@ BEGIN
     -- r3: ordinea lock-urilor cont de test -> lot (ca la aprobare); contul fara asteptare (in RPC lock-ul e deja luat)
     SELECT x.creat_de, x.creat_nivel INTO v_cd, v_cn FROM public.sms_loturi x WHERE x.id = NEW.lot_id;
     IF v_cn = 'test' THEN PERFORM public.fn_sms_test_coada_lock(v_cd, false); END IF;
-    -- 20261130b r2 (P3-01): randul lotului blocat FOR UPDATE inainte de numarare: inserturile concurente in acelasi lot se serializeaza
-    SELECT * INTO l FROM public.sms_loturi x WHERE x.id = NEW.lot_id FOR UPDATE;
+    -- 20261130b r2 (P3-01): randul lotului blocat FOR UPDATE inainte de numarare: inserturile concurente in acelasi lot se serializeaza.
+    -- r4 (P3-02): fara asteptare (SKIP LOCKED): RPC-ul care a creat lotul il tine deja (nu e sarit); alta tranzactie => 55P03 imediat
+    SELECT * INTO l FROM public.sms_loturi x WHERE x.id = NEW.lot_id FOR UPDATE SKIP LOCKED;
+    IF NOT FOUND AND EXISTS (SELECT 1 FROM public.sms_loturi x WHERE x.id = NEW.lot_id) THEN
+      RAISE EXCEPTION 'sms: lotul e modificat chiar acum de altcineva; scrierea directa nu asteapta (reincearca)' USING ERRCODE = '55P03';
+    END IF;
     IF l.stare IS DISTINCT FROM 'draft' THEN
       RAISE EXCEPTION 'sms: mesajele se adauga doar la crearea lotului (draft)' USING ERRCODE = '23514';
     END IF;
@@ -394,17 +403,16 @@ BEGIN
       RAISE EXCEPTION 'sms test: lotul unui cont de test pleaca doar intern, cu maximum 5 destinatari' USING ERRCODE = '42501';
     END IF;
     IF l.creat_nivel = 'test' THEN
-      -- r3 (P2-01 a): nivelul ACTUAL al creatorului (dreptul sms viewer inca exista); altfel lotul nu mai pleaca
-      IF public.fn_sms_nivel_cont(l.creat_de) IS DISTINCT FROM 'test' THEN
-        RAISE EXCEPTION 'sms test: creatorul lotului nu mai are nivelul test (dreptul sms viewer); lotul nu mai pleaca' USING ERRCODE = '42501';
+      -- r3 (P2-01 a) / r4: creatorul trebuie sa aiba INCA un drept SMS (test, utilizator sau owner); limitele lotului raman cele de test
+      IF public.fn_sms_nivel_cont(l.creat_de) IS NULL THEN
+        RAISE EXCEPTION 'sms test: creatorul lotului de test nu mai are niciun drept SMS; lotul nu mai pleaca' USING ERRCODE = '42501';
       END IF;
       -- r3 (P3-01 Jakarinos): bugetul se verifica sub acelasi lock ca fn_sms_rezerva (randul de setari). Din fn_sms_rezerva lock-ul e deja
-      -- luat (NOWAIT reuseste); la o scriere directa privilegiata nu se asteapta niciodata (55P03), deci nu exista ciclu de lock-uri
-      BEGIN
-        PERFORM 1 FROM public.sms_setari x WHERE x.id FOR UPDATE NOWAIT;
-      EXCEPTION WHEN lock_not_available THEN
-        RAISE EXCEPTION 'sms test: o rezervare e in curs; scrierea directa nu asteapta (reincearca)' USING ERRCODE = '55P03';
-      END;
+      -- al tranzactiei (SKIP LOCKED nu il sare); la o scriere directa privilegiata nu se asteapta niciodata (55P03), deci nu exista ciclu
+      PERFORM 1 FROM public.sms_setari x WHERE x.id FOR UPDATE SKIP LOCKED;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'sms: o rezervare e in curs; scrierea directa nu asteapta (reincearca)' USING ERRCODE = '55P03';
+      END IF;
       -- 20261130b r2 (P2-01): bugetul zilnic al contului de test, si la scriere directa (randurile deja rezervate in aceeasi comanda se vad)
       IF public.fn_sms_test_consum_zi(l.creat_de) + NEW.segmente > public.fn_sms_test_buget_zi() THEN
         RAISE EXCEPTION 'sms test: bugetul zilnic al contului de test (% SMS) e atins', public.fn_sms_test_buget_zi() USING ERRCODE = '42501';
@@ -509,14 +517,15 @@ BEGIN
   IF v_niv = 'test' AND v_nr > 5 THEN
     RAISE EXCEPTION 'sms test: contul de test trimite unui lot de maximum 5 destinatari (selectia are %)', v_nr USING ERRCODE = '42501';
   END IF;
-  -- r3 (P2-01 b): coada contului de test, atomic pe cont (lock consultativ cu asteptare, inainte de orice alt lock; tinut pana la final)
-  IF v_niv = 'test' THEN
-    PERFORM public.fn_sms_test_coada_lock(auth.uid(), true);
-    PERFORM public.fn_sms_test_coada_cere(auth.uid(), v_nr);
-  END IF;
   v_cost := round(v_nr * 0.049, 3);
   SELECT s.plafon_zi INTO v_plafon FROM public.sms_setari s WHERE s.id;
   IF NOT coalesce(p_doar_preview, true) THEN
+    -- r3 (P2-01 b) / r4: coada contului de test DOAR la crearea efectiva (previzualizarea nu ia lock si nu e refuzata de coada):
+    -- lock consultativ pe cont cu asteptare, inaintea oricarui alt lock, tinut pana la final
+    IF v_niv = 'test' THEN
+      PERFORM public.fn_sms_test_coada_lock(auth.uid(), true);
+      PERFORM public.fn_sms_test_coada_cere(auth.uid(), v_nr);
+    END IF;
     INSERT INTO public.sms_loturi (categorie, text, filtru, nr_destinatari, segmente, cost_estimat_eur, excluse_optout, excluse_fara_mobil)
     VALUES ('intern', v_text, jsonb_build_object('departamente', to_jsonb(p_departamente), 'angajati_selectati', coalesce(cardinality(p_angajati), 0)),
             v_nr, 1, v_cost, v_opt, v_fara)
@@ -531,7 +540,8 @@ BEGIN
     'nr_destinatari', v_nr, 'candidati', v_cand, 'excluse_optout', v_opt, 'excluse_fara_mobil', v_fara,
     'excluse_duplicat', v_cand - v_fara - v_opt - v_nr, 'cost_estimat_eur', v_cost,
     'plafon_zi', CASE WHEN v_niv = 'owner' THEN v_plafon END, 'depaseste_plafon_zi', v_nr > coalesce(v_plafon, 0),
-    'preview', coalesce(p_doar_preview, true), 'nivel', v_niv);
+    'preview', coalesce(p_doar_preview, true), 'nivel', v_niv,
+    'coada_libera', CASE WHEN v_niv = 'test' THEN greatest(0, public.fn_sms_test_coada_max() - public.fn_sms_test_coada(auth.uid())) END);
 END $fn$;
 
 CREATE OR REPLACE FUNCTION public.fn_sms_lot_redari_creeaza(p_text text, p_proiect_id uuid, p_uat_id uuid DEFAULT NULL, p_doar_preview boolean DEFAULT true)
@@ -693,10 +703,11 @@ BEGIN
   IF v_niv = 'test' AND (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = l.id) > 5 THEN
     RAISE EXCEPTION 'sms test: contul de test aproba doar loturi de maximum 5 destinatari' USING ERRCODE = '42501';
   END IF;
-  -- r3 (P2-01): lotul unui cont de test se aproba doar daca acel cont mai are nivelul test si coada lui (cu lotul acesta) e in plafon
+  -- r3 (P2-01) / r4: lotul unui cont de test se aproba doar cat creatorul mai are un drept SMS (oricare) si coada lui (cu lotul acesta)
+  -- e in plafon; limitele raman cele de test (dupa creat_nivel), si dupa o promovare test -> utilizator
   IF l.creat_nivel = 'test' THEN
-    IF public.fn_sms_nivel_cont(l.creat_de) IS DISTINCT FROM 'test' THEN
-      RAISE EXCEPTION 'sms test: creatorul lotului nu mai are nivelul test (dreptul sms viewer); lotul nu se mai aproba' USING ERRCODE = '42501';
+    IF public.fn_sms_nivel_cont(l.creat_de) IS NULL THEN
+      RAISE EXCEPTION 'sms test: creatorul lotului de test nu mai are niciun drept SMS; lotul nu se mai aproba' USING ERRCODE = '42501';
     END IF;
     IF v_cn IS DISTINCT FROM 'test' THEN PERFORM public.fn_sms_test_coada_lock(l.creat_de, true); END IF;
     PERFORM public.fn_sms_test_coada_cere(l.creat_de, 0);
@@ -765,7 +776,7 @@ BEGIN
        AND NOT ('test' IN (coalesce(x.creat_nivel, ''), coalesce(x.aprobat_nivel, ''))
                 AND NOT public.fn_sms_lot_permis('test', false, true, x.categorie, x.nr_destinatari, true))
        AND NOT coalesce(x.creat_nivel = 'test' AND public.fn_sms_test_consum_zi(x.creat_de) + x.segmente > public.fn_sms_test_buget_zi(), false)
-       AND NOT coalesce(x.creat_nivel = 'test' AND public.fn_sms_nivel_cont(x.creat_de) IS DISTINCT FROM 'test', false)
+       AND NOT coalesce(x.creat_nivel = 'test' AND public.fn_sms_nivel_cont(x.creat_de) IS NULL, false)
      ORDER BY x.aprobat_la, x.id LIMIT 1 FOR UPDATE;
   ELSE
     SELECT * INTO l FROM public.sms_loturi x WHERE x.id = p_lot_id FOR UPDATE;
@@ -779,9 +790,9 @@ BEGIN
     END IF;
     PERFORM public.fn_sms_cere_lot(p_apelant, v_niv, l);
   END IF;
-  -- r3 (P2-01 a): lotul unui cont de test pleaca doar cat creatorul are INCA nivelul test (dreptul sms viewer), oricine porneste
-  -- trimiterea (contul, owner-ul, cronul): un drept retras opreste coada lui, fara sa astepte anularea loturilor
-  IF l.creat_nivel = 'test' AND public.fn_sms_nivel_cont(l.creat_de) IS DISTINCT FROM 'test' THEN
+  -- r3 (P2-01 a) / r4: lotul unui cont de test pleaca doar cat creatorul are INCA un drept SMS (test, utilizator sau owner), oricine
+  -- porneste trimiterea (contul, owner-ul, cronul): un drept retras opreste coada lui; o promovare nu (limitele de test raman mai jos)
+  IF l.creat_nivel = 'test' AND public.fn_sms_nivel_cont(l.creat_de) IS NULL THEN
     RETURN jsonb_build_object('motiv', 'creator_fara_drept', 'lot_id', l.id, 'mesaje', '[]'::jsonb);
   END IF;
   -- lotul unui cont de test, sau trimis de un cont de test: doar intern, maximum 5 mesaje (numarate acum, nu doar declarate)
