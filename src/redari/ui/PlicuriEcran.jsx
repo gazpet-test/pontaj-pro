@@ -130,7 +130,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
     // Jakarinos + Copilot f10 UI P2: opisul atașat la dosar se descarcă EXACT cum e arhivat (fără regenerare), ca exemplarul din plic să fie identic
     if (tip === 'opis' && rand.opis_path) {
       const { data: arhivat, error } = await supabase.storage.from('redari').download(rand.opis_path)
-      if (error || !arhivat) throw new Error('Exemplarul de la dosar nu poate fi citit; nu se regenerează un opis diferit. Reîncearcă sau verifică în Storage.')
+      if (error || !arhivat) throw { code: 'P0001', message: 'Exemplarul de la dosar nu poate fi citit; nu se regenerează un opis diferit. Reîncearcă sau verifică în Storage.' }   // Copilot r2 P3-01: mesaj vizibil
       if (curent()) descarcaBlob(arhivat, `${rand.nr_plic}-opis.docx`)
       return 'Opis descărcat (exemplarul arhivat la dosar).'
     }
@@ -141,7 +141,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       if (!curent()) return
       const path = `plicuri/${rand.id}/opis-${stampila()}.docx`
       const { error } = await supabase.storage.from('redari').upload(path, blob, { upsert: false, contentType: blob.type })
-      if (error) throw new Error('Exemplarul de la dosar nu s-a încărcat; opisul NU s-a descărcat. Reîncearcă „Opis”.')
+      if (error) throw { code: 'P0001', message: 'Exemplarul de la dosar nu s-a încărcat; opisul NU s-a descărcat. Reîncearcă „Opis”.' }
       if (!curent()) return
       await actualizeaza('red_plicuri', rand, { opis_path: path }, curent)
       if (curent()) descarcaBlob(blob, `${rand.nr_plic}-opis.docx`)
