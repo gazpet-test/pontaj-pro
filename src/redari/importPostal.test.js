@@ -3,10 +3,10 @@ import * as XLSX from 'xlsx-js-style'
 import { citesteFisierPostal, ghicesteMaparea, parseazaData, clasificaEveniment, motivRetur, propune, aplica } from './importPostal.js'
 
 const mapare = { nr_document: 'doc', nr_tracking: 'awb', data: 'data', eveniment: 'status', motiv: 'motiv' }
-const convocare = (extra = {}) => ({ id: 'conv-fictiva-1', nr_document: 'C-0012', nr_tracking: null,
-  data_expediere: null, data_confirmare_primire: null, retur: null, retur_data: null, ...extra })
-const rand = (extra = {}) => ({ doc: 'C-0012', data: '02.11.2026', __rand: 7, ...extra })
-const propunere = (r = {}, c = {}, mod = 'expediere') => propune([rand(r)], mapare, mod, [convocare(c)])
+const plic = (extra = {}) => ({ id: 'plic-fictiv-1', proiect_id: 'proiect-fictiv', nr_plic: 'PL-HUS-0001', lot_id: 'lot-fictiv', awb: null,
+  data_expediere: null, data_ar: null, retur: null, retur_data: null, stare: 'activ', versiune: 3, ...extra })
+const rand = (extra = {}) => ({ doc: 'PL-HUS-0001', awb: 'AB123', data: '02.11.2026', __rand: 7, ...extra })
+const propunere = (r = {}, p = {}, mod = 'expediere') => propune([rand(r)], mapare, mod, [plic(p)])
 const bytes = s => new TextEncoder().encode(s).buffer
 
 describe('citesteFisierPostal', () => {
@@ -69,169 +69,119 @@ describe('date, mapare si clasificare', () => {
   it('foloseste modul implicit necunoscutului', () => expect(clasificaEveniment('alt status', 'retur')).toBe('retur'))
 })
 
-describe('propune', () => {
-  it('expediere noua cu patch si snapshot CAS, normalizare document si tracking', () => {
-    const r = propunere({ doc: 'c 12', awb: ' ab 123 ' }).aplicabile[0]
-    expect(r).toMatchObject({ conv_id: 'conv-fictiva-1', nr_document: 'C-0012', rand: 7, tip: 'expediere',
-      patch: { data_expediere: '2026-11-02', nr_tracking: 'AB123' }, vechi: { data_expediere: null, nr_tracking: null } })
-    expect(propunere({ doc: 'c-0012' }).aplicabile).toHaveLength(1)
+describe('propune pe plicuri', () => {
+  it('expediere completă, PL normalizat, snapshot de versiune/proiect/lot', () => {
+    expect(propunere({ doc: ' pl-hus-0001 ', awb: ' ab 123 ' }).aplicabile[0]).toMatchObject({
+      plic_id: 'plic-fictiv-1', nr_document: 'PL-HUS-0001', rand: 7,
+      patch: { awb: 'AB123', data_expediere: '2026-11-02' },
+      conditii: { versiune: 3, proiect_id: 'proiect-fictiv', lot_id: 'lot-fictiv', awb: null, data_expediere: null },
+    })
+    expect(propunere({}, { lot_id: null }).exceptii[0].motiv).toBe('plicul nu are PV de plicuire (lot)')
+    expect(propunere({ awb: '' }).exceptii[0].motiv).toMatch(/AWB obligatoriu/)
+    expect(propunere({}, { stare: 'anulat' }).exceptii[0].motiv).toBe('plic anulat')
+    expect(propunere({}, { versiune: null }).exceptii[0].motiv).toMatch(/snapshot incomplet/)
   })
-  it('expediere deja / conflict si tracking existent nu se suprascrie', () => {
-    expect(propunere({ awb: 'ab123' }, { data_expediere: '2026-11-02', nr_tracking: 'AB123' }).deja).toHaveLength(1)
-    expect(propunere({}, { data_expediere: '2026-11-01' }).exceptii[0].motiv).toMatch(/conflict/)
-    expect(propunere({ awb: 'alt' }, { nr_tracking: 'AB123' }).exceptii[0].motiv).toMatch(/tracking/)
-    expect(propunere({ awb: 'ab123' }, { nr_tracking: 'AB123' }).aplicabile[0].patch).toEqual({ data_expediere: '2026-11-02' })
-    expect(propunere({ awb: 'nou' }, { data_expediere: '2026-11-02' }).exceptii).toHaveLength(1)
-  })
-  it('AR cere expediere, ordine cronologica si absenta returului', () => {
-    expect(propunere({}, {}, 'ar').exceptii[0].motiv).toMatch(/fără expediere/)
-    expect(propunere({}, { data_expediere: '2026-11-03' }, 'ar').exceptii[0].motiv).toMatch(/înainte/)
-    expect(propunere({}, { data_expediere: '2026-11-01', retur: 'refuz' }, 'ar').exceptii[0].motiv).toMatch(/are retur/)
-    expect(propunere({}, { data_expediere: '2026-11-02' }, 'ar').aplicabile[0].patch).toEqual({ data_confirmare_primire: '2026-11-02' })
-    expect(propunere({}, { data_expediere: '2026-11-01', data_confirmare_primire: '2026-11-02' }, 'ar').deja).toHaveLength(1)
-    expect(propunere({}, { data_expediere: '2026-11-01', data_confirmare_primire: '2026-11-01' }, 'ar').exceptii[0].motiv).toMatch(/conflict/)
-  })
-  it('retur cere motiv, refuza AR si trateaza deja/conflict inclusiv retur_data orfan', () => {
-    expect(propunere({}, {}, 'retur').exceptii[0].motiv).toMatch(/motiv/)
-    const exp = { data_expediere: '2026-11-01' }
-    expect(propunere({ motiv: 'refuz' }, { ...exp, data_confirmare_primire: '2026-11-01' }, 'retur').exceptii[0].motiv).toMatch(/are AR/)
-    expect(propunere({ motiv: 'refuz' }, exp, 'retur').aplicabile[0].patch).toEqual({ retur: 'refuz', retur_data: '2026-11-02' })
-    expect(propunere({ motiv: 'refuz' }, { ...exp, retur: 'refuz', retur_data: '2026-11-02' }, 'retur').deja).toHaveLength(1)
-    expect(propunere({ motiv: 'refuz' }, { ...exp, retur: 'mutat', retur_data: '2026-11-02' }, 'retur').exceptii).toHaveLength(1)
-    expect(propunere({ motiv: 'refuz' }, { ...exp, retur_data: '2026-11-02' }, 'retur').exceptii).toHaveLength(1)
-    // Gemini f9 r1 P2: retur fara expediere / inainte de expediere -> exceptie
-    expect(propunere({ motiv: 'refuz' }, {}, 'retur').exceptii[0].motiv).toBe('retur fără expediere')
-    expect(propunere({ motiv: 'refuz' }, { data_expediere: '2026-11-05' }, 'retur').exceptii[0].motiv).toBe('retur înainte de expediere')
-  })
-  it('tracking unic ca rezerva, ambiguu refuzat, document prioritar', () => {
-    expect(propunere({ doc: '', awb: ' ab 123 ' }, { nr_tracking: 'AB123' }).aplicabile).toHaveLength(1)
-    const cs = [convocare({ nr_tracking: 'AB123' }), convocare({ id: 'conv-fictiva-2', nr_document: 'C-0013', nr_tracking: 'AB123' })]
-    expect(propune([rand({ doc: '', awb: 'ab123' })], mapare, 'expediere', cs).exceptii[0].motiv).toMatch(/mai multe/)
-    // Copilot f9 r1 P2-01: documentul gasit, dar AWB-ul e (si) al altei convocari -> exceptie, nu alegere tacita
-    expect(propune([rand({ awb: 'ab123' })], mapare, 'expediere', cs).exceptii[0].motiv).toMatch(/altei convoc/)
-    expect(propune([rand({ awb: 'ab123' })], mapare, 'expediere', [cs[0]]).aplicabile).toHaveLength(1)
-    expect(propune([rand({ awb: 'ab123' })], mapare, 'expediere', [convocare({ nr_tracking: null })]).aplicabile[0].conv_id).toBe('conv-fictiva-1')
-    expect(propunere({ doc: 'C-9999' }).exceptii[0].motiv).toBe('convocare inexistentă pentru numărul din fișier')
-    // Gemini f9 r1 P2: numar gresit + tracking al altei convocari -> NU cade pe tracking
-    expect(propune([rand({ doc: 'C-9999', awb: 'ab123' })], mapare, 'expediere', cs).exceptii[0].motiv).toMatch(/inexistent/)
-    expect(propune([rand({ awb: 'ZZ999', status: 'livrat' })], mapare, 'expediere', [convocare({ nr_tracking: 'AB123', data_expediere: '2026-11-01' })]).exceptii[0].motiv).toMatch(/tracking diferit/)
-  })
-  it('duplicatul nu dispare si evenimentul poate schimba modul implicit', () => {
-    // Copilot f9 r1 P3-02: doua randuri valide pe aceeasi convocare -> AMBELE la exceptii (nu castiga primul)
-    const r = propune([rand(), rand({ __rand: 8 })], mapare, 'expediere', [convocare()])
-    expect(r.aplicabile).toHaveLength(0)
-    expect(r.exceptii.map(e => e.motiv)).toEqual(['mai multe evenimente pentru aceeași convocare în fișier', 'mai multe evenimente pentru aceeași convocare în fișier'])
-    // un rand invalid nu blocheaza randul valid de dupa el
-    const r2 = propune([rand({ data: 'invalid' }), rand({ __rand: 8 })], mapare, 'expediere', [convocare()])
-    expect(r2.aplicabile).toHaveLength(1); expect(r2.exceptii).toHaveLength(1)
-    // Copilot f9 r1 P2-02: acelasi AWB nou pe doua convocari diferite in fisier -> ambele exceptii
-    const doua = [convocare({ nr_tracking: null }), convocare({ id: 'conv-fictiva-2', nr_document: 'C-0013', nr_tracking: null })]
-    const r3 = propune([rand({ awb: 'NOU1' }), rand({ doc: 'C-0013', awb: 'NOU1', __rand: 8 })], mapare, 'expediere', doua)
-    expect(r3.aplicabile).toHaveLength(0); expect(r3.exceptii.every(e => /același AWB/.test(e.motiv))).toBe(true)
-    expect(propunere({ status: 'livrat' }, { data_expediere: '2026-11-01' }).aplicabile[0].tip).toBe('ar')
+  it('deja versus conflict, AWB izolat nu se suprascrie', () => {
+    expect(propunere({}, { awb: 'AB123', data_expediere: '2026-11-02' }).deja).toHaveLength(1)
+    expect(propunere({}, { awb: 'ALT', data_expediere: '2026-11-02' }).exceptii[0].motiv).toMatch(/conflict/)
+    expect(propunere({}, { awb: 'AB123' }).exceptii[0].motiv).toMatch(/AWB existent/)
+    expect(propunere({}, { data_ar: '2026-11-02' }).exceptii[0].motiv).toMatch(/AR sau retur/)
     expect(propunere({ data: 'invalid' }).exceptii).toHaveLength(1)
+  })
+  it.each(['ar', 'retur'])('%s devine excepție cu scan, indiferent de snapshot sau motiv', mod => {
+    for (const p of [{}, { data_expediere: '2026-11-01', awb: 'AB123' }, { data_ar: '2026-11-02', retur: 'refuz' }]) {
+      const r = propunere({ motiv: 'refuz' }, p, mod)
+      expect(r.aplicabile).toEqual([]); expect(r.deja).toEqual([])
+      expect(r.exceptii[0].motiv).toBe('Se înregistrează pe plic, cu scanul (Plicuri -> AR / Retur).')
+    }
+    expect(propunere({ status: mod === 'ar' ? 'livrat' : 'returnat' }).exceptii[0].motiv).toMatch(/cu scanul/)
+  })
+  it('statusul decedat nu poate fi confundat cu o expediere implicită', () => {
+    expect(propunere({ status: 'Decedat' }).exceptii[0].motiv).toMatch(/cu scanul/)
+    expect(propunere({ status: 'Decedat' }).aplicabile).toEqual([])
+  })
+  it('AWB ca rezervă, document greșit nu cade pe AWB, conflicte și ambiguități', () => {
+    expect(propunere({ doc: '', awb: 'AB123' }, { awb: 'AB123', data_expediere: '2026-11-02' }).deja).toHaveLength(1)
+    expect(propunere({ doc: 'C-0012' }).exceptii[0].motiv).toMatch(/inexistent/)
+    expect(propunere({ doc: 'PL-HUS-9999' }, { awb: 'AB123' }).exceptii[0].motiv).toMatch(/inexistent/)
+    const ps = [plic(), plic({ id: 'plic-fictiv-2', nr_plic: 'PL-HUS-0002', awb: 'AB123' })]
+    expect(propune([rand()], mapare, 'expediere', ps).exceptii[0].motiv).toMatch(/altui plic/)
+    const ambigue = [plic({ awb: 'AB123' }), plic({ id: 'plic-fictiv-2', nr_plic: 'PL-HUS-0002', awb: 'AB123' })]
+    expect(propune([rand({ doc: '' })], mapare, 'expediere', ambigue).exceptii[0].motiv).toMatch(/mai multe/)
+  })
+  it('două treceri: duplicatele sunt toate excepții; invalidul nu rezervă plicul', () => {
+    const r = propune([rand(), rand({ __rand: 8 })], mapare, 'expediere', [plic()])
+    expect(r.aplicabile).toEqual([]); expect(r.exceptii).toHaveLength(2)
+    expect(r.exceptii.every(e => /același plic/.test(e.motiv))).toBe(true)
+    const r2 = propune([rand({ data: 'invalid' }), rand({ __rand: 8 })], mapare, 'expediere', [plic()])
+    expect(r2.aplicabile).toHaveLength(1); expect(r2.exceptii).toHaveLength(1)
+    const ps = [plic(), plic({ id: 'plic-fictiv-2', nr_plic: 'PL-HUS-0002' })]
+    const r3 = propune([rand(), rand({ doc: 'PL-HUS-0002', __rand: 8 })], mapare, 'expediere', ps)
+    expect(r3.aplicabile).toEqual([]); expect(r3.exceptii.every(e => /același AWB/.test(e.motiv))).toBe(true)
     expect(() => propune([], {}, 'expediere', [])).toThrow()
+    expect(() => propune([], mapare, 'invalid', [])).toThrow()
   })
 })
 
-// scrierile (update) intra in calls; recitirile AWB de dinainte de scriere (select fara update) intra in pre si raspund din alteAwb
-function fakeSupabase(responses, apres = () => {}, alteAwb = {}) {
+function fakeSupabase(responses = [], apres = () => {}, alte = []) {
   const calls = [], pre = []
   return { calls, pre, from(table) {
-    const call = { table, filtres: [] }
-    const citire = { filtres: [], eq(k, v) { this.filtres.push(['eq', k, v]); return this }, neq(k, v) { this.filtres.push(['neq', k, v]); return this },
-      limit() { return this }, then(ok, ko) { const awb = this.filtres.find(f => f[1] === 'nr_tracking')?.[2]; return Promise.resolve({ data: alteAwb[awb] || [], error: null }).then(ok, ko) } }
-    const q = {
+    const call = { table, filtre: [] }, q = {
       update(patch) { call.patch = patch; calls.push(call); return q },
-      eq(k, v) { call.filtres.push(['eq', k, v]); return q },
-      is(k, v) { call.filtres.push(['is', k, v]); return q },
-      select(cols) {
-        if (!call.patch) { pre.push(citire); return citire }
-        call.select = cols; apres(calls.length)
-        return (async () => { const r = responses.shift(); if (r instanceof Error) throw r; return r ?? { data: [{ id: 'conv-fictiva-1' }], error: null } })()
-      },
-    }
-    return q
+      eq(k, v) { call.filtre.push(['eq', k, v]); return q },
+      neq(k, v) { call.filtre.push(['neq', k, v]); return q },
+      is(k, v) { call.filtre.push(['is', k, v]); return q },
+      limit() { return q },
+      select(cols) { call.select = cols; if (!call.patch) return q; apres(calls.length); const r = responses.shift(); return r instanceof Error ? Promise.reject(r) : Promise.resolve(r || { data: [{ id: 'plic-fictiv-1' }] }) },
+      then(ok, ko) { pre.push(call); return Promise.resolve({ data: alte }).then(ok, ko) },
+    }; return q
   } }
 }
 
-describe('aplica CAS', () => {
-  const a = () => propunere({ awb: 'AB123' }).aplicabile[0]
-  it('0 randuri = conflict; filtrele includ id, activ, posta, nesters, campuri NULL si select', async () => {
-    const db = fakeSupabase([{ data: [], error: null }]), r = await aplica(db, [a()])
-    expect(r.conflicte).toHaveLength(1); expect(r.aplicate).toHaveLength(0)
-    expect(db.calls[0]).toMatchObject({ table: 'red_convocari', select: 'id', patch: { data_expediere: '2026-11-02', nr_tracking: 'AB123' } })
-    expect(db.calls[0].filtres).toEqual(expect.arrayContaining([
-      ['eq', 'id', 'conv-fictiva-1'], ['eq', 'stare', 'activ'], ['eq', 'canal', 'posta'], ['is', 'sters_la', null],
-      ['is', 'data_expediere', null], ['is', 'nr_tracking', null], ['is', 'retur', null], ['is', 'data_confirmare_primire', null],
+describe('aplica CAS pe plic', () => {
+  const a = () => propunere().aplicabile[0]
+  it('WHERE pe proiect, lot, versiune, activ și ambele NULL; zero rânduri = conflict', async () => {
+    const db = fakeSupabase([{ data: [] }]), r = await aplica(db, [a()])
+    expect(r.conflicte).toHaveLength(1)
+    expect(db.calls[0]).toMatchObject({ table: 'red_plicuri', select: 'id', patch: { awb: 'AB123', data_expediere: '2026-11-02' } })
+    expect(db.calls[0].filtre).toEqual(expect.arrayContaining([
+      ['eq', 'id', 'plic-fictiv-1'], ['eq', 'proiect_id', 'proiect-fictiv'], ['eq', 'lot_id', 'lot-fictiv'], ['eq', 'versiune', 3],
+      ['eq', 'stare', 'activ'], ['is', 'awb', null], ['is', 'data_expediere', null], ['is', 'data_ar', null], ['is', 'retur', null],
     ]))
   })
-  it('snapshot AR protejeaza expedierea si absenta returului; tracking existent nu cere NULL', async () => {
-    const db = fakeSupabase([])
-    await aplica(db, propunere({}, { nr_tracking: 'VECHI', data_expediere: '2026-11-01' }, 'ar').aplicabile)
-    expect(db.calls[0].filtres).toEqual(expect.arrayContaining([['eq', 'data_expediere', '2026-11-01'], ['eq', 'nr_tracking', 'VECHI'], ['is', 'retur', null]]))
-    expect(db.calls[0].filtres).not.toContainEqual(['is', 'nr_tracking', null])
+  it('AWB preluat între timp: fără UPDATE', async () => {
+    const db = fakeSupabase([], () => {}, [{ id: 'plic-fictiv-2' }])
+    expect((await aplica(db, [a()])).conflicte).toHaveLength(1)
+    expect(db.calls).toEqual([])
+    expect(db.pre[0].filtre).toEqual([['eq', 'awb', 'AB123'], ['neq', 'id', 'plic-fictiv-1']])
   })
-  it('AWB-ul ajuns intre timp pe alta convocare -> conflict, fara scriere (Copilot f9 r2 P2-01)', async () => {
-    const db = fakeSupabase([], () => {}, { AB123: [{ id: 'conv-fictiva-9' }] })
-    const r = await aplica(db, [a()])
-    expect(r.conflicte).toHaveLength(1); expect(r.conflicte[0].motiv).toMatch(/altă convocare/)
-    expect(db.calls).toHaveLength(0); expect(db.pre[0].filtres).toEqual([['eq', 'nr_tracking', 'AB123'], ['neq', 'id', 'conv-fictiva-1']])
+  it('oprește la cinci erori, nu reîncearcă automat, succesul resetează contorul', async () => {
+    const err = { error: { message: 'fictiv' } }
+    const db = fakeSupabase([err, new Error('rețea'), { data: [{ id: 'plic-fictiv-1' }] }, ...Array(6).fill(err)])
+    const r = await aplica(db, Array.from({ length: 10 }, a))
+    expect(r.aplicate).toHaveLength(1); expect(r.erori).toHaveLength(7); expect(r.neprocesate).toHaveLength(2)
+    expect(db.calls).toHaveLength(8)
   })
-  it('eroare continua, fara retry; succesul reseteaza numarul erorilor consecutive', async () => {
-    const err = { data: null, error: { message: 'eroare fictiva' } }
-    const db = fakeSupabase([err, new Error('retea fictiva'), { data: [{ id: 'conv-fictiva-1' }] }, err, err, err, err])
-    const r = await aplica(db, Array.from({ length: 7 }, a))
-    expect(r.aplicate).toHaveLength(1); expect(r.erori).toHaveLength(6); expect(db.calls).toHaveLength(7)
-  })
-  it('opreste dupa 5 erori consecutive si raporteaza neprocesatele', async () => {
-    const db = fakeSupabase(Array.from({ length: 8 }, () => ({ error: { message: 'eroare fictiva' } })))
-    const r = await aplica(db, Array.from({ length: 8 }, a))
-    expect(db.calls).toHaveLength(5); expect(r.erori).toHaveLength(5); expect(r.neprocesate).toHaveLength(3)
-  })
-  it('esteCurent false opreste inainte de primul UPDATE si la limita de 25', async () => {
-    const db = fakeSupabase([])
-    expect((await aplica(db, [a()], { esteCurent: () => false })).neprocesate).toHaveLength(1)
-    expect(db.calls).toHaveLength(0)
-    let curent = true
-    const db2 = fakeSupabase([], n => { if (n === 25) curent = false })
-    const r = await aplica(db2, Array.from({ length: 30 }, a), { esteCurent: () => curent })
-    expect(r.aplicate).toHaveLength(25); expect(r.neprocesate).toHaveLength(5)
-  })
-  it('raspuns fara lista nu este succes sau conflict determinist', async () => {
+  it('lipsa listei este rezultat necunoscut, nu succes', async () => {
     const r = await aplica(fakeSupabase([{ data: null }]), [a()])
-    expect(r.erori).toHaveLength(1); expect(r.aplicate).toHaveLength(0)
+    expect(r.aplicate).toEqual([]); expect(r.erori).toHaveLength(1)
   })
-  it('schimbarea proiectului opreste si in interiorul lotului', async () => {
+  it('anularea sesiunii oprește înainte de scriere și între rânduri', async () => {
+    const db = fakeSupabase()
+    expect((await aplica(db, [a()], { esteCurent: () => false })).neprocesate).toHaveLength(1)
+    expect(db.calls).toEqual([])
     let curent = true
-    const db = fakeSupabase([], () => { curent = false })
-    const r = await aplica(db, [a(), a(), a()], { esteCurent: () => curent })
-    expect(db.calls).toHaveLength(1)
+    const db2 = fakeSupabase([], () => { curent = false })
+    const r = await aplica(db2, [a(), a(), a()], { esteCurent: () => curent })
     expect(r.aplicate).toHaveLength(1); expect(r.neprocesate).toHaveLength(2)
+    let citiri = 0
+    const db3 = fakeSupabase()
+    const r3 = await aplica(db3, [a()], { esteCurent: () => ++citiri < 2 })
+    expect(r3.neprocesate).toHaveLength(1); expect(db3.calls).toEqual([])
   })
-  it('AR si retur din acelasi snapshot nu se pot aplica amandoua', async () => {
-    const c = convocare({ data_expediere: '2026-11-01' })
-    // in acelasi fisier ambele devin exceptii; aici simulam doua importuri pe acelasi snapshot (doua ferestre deschise)
-    expect(propune([rand({ status: 'AR' }), rand({ status: 'retur', motiv: 'refuz', __rand: 8 })], mapare, 'expediere', [c]).aplicabile).toHaveLength(0)
-    const prop = { aplicabile: [...propune([rand({ status: 'AR' })], mapare, 'expediere', [c]).aplicabile, ...propune([rand({ status: 'retur', motiv: 'refuz' })], mapare, 'expediere', [c]).aplicabile] }
-    expect(prop.aplicabile).toHaveLength(2)
-    const stare = { ...c, stare: 'activ', canal: 'posta', sters_la: null }
-    const db = { from() {
-      const filtre = []; let patch
-      const q = {
-        update(p) { patch = p; return q },
-        eq(k, v) { filtre.push([k, v]); return q },
-        is(k, v) { filtre.push([k, v]); return q },
-        async select() {
-          if (!filtre.every(([k, v]) => stare[k] === v)) return { data: [] }
-          Object.assign(stare, patch)
-          return { data: [{ id: stare.id }] }
-        },
-      }
-      return q
-    } }
-    const r = await aplica(db, prop.aplicabile)
-    expect(r.aplicate).toHaveLength(1); expect(r.conflicte).toHaveLength(1)
-    expect(stare.data_confirmare_primire).toBe('2026-11-02'); expect(stare.retur).toBeNull()
+  it('nu acceptă intenții AR/retur construite în afara propune', async () => {
+    const db = fakeSupabase()
+    expect((await aplica(db, [{ ...a(), tip: 'ar' }])).erori).toHaveLength(1)
+    expect(db.calls).toEqual([])
   })
 })
