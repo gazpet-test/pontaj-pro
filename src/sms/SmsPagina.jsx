@@ -48,7 +48,7 @@ function StarePanou({ panou }) {
     <div style={S.row}>
       {owner
         ? <span style={S.small}>Azi: <b>{panou.consum_zi}</b> / {panou.plafon_zi} · Luna: <b>{panou.consum_luna}</b> / {panou.plafon_luna}</span>
-        : <span style={S.small}>Mai pot pleca azi: <b>{panou.ramas_zi ?? '—'}</b> SMS</span>}
+        : <span style={S.small}>Mai pot pleca azi: <b>{panou.ramas_zi ?? '—'}</b> SMS{panou.buget_test_zi ? ` (bugetul contului de test: ${panou.buget_test_zi} / zi)` : ''}</span>}
       {(owner || panou.redari_modul === true) && <Badge color={panou.redari_autorizat ? G.green : G.yellow}>{panou.redari_autorizat ? `Redări autorizat${owner && panou.redari_autorizare_nr ? ` (${panou.redari_autorizare_nr})` : ''}` : 'Redări: așteaptă autorizarea Transgaz'}</Badge>}
     </div>
   </section>
@@ -252,8 +252,8 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
   return <section aria-label="Istoric loturi" style={{ ...S.panel, padding: 0 }}>
     {loturi.map(l => {
       const [eticheta, culoare] = STARI_LOT[l.stare] || [l.stare, G.muted]
-      // butoanele de acțiune doar unde nivelul are voie (BD-ul refuză oricum: RPC-uri, triggere, fn_sms_rezerva)
-      const actiune = poateActiona(l, panou, true)
+      // butoanele de acțiune doar unde nivelul are voie: actiune_permisa vine din BD (fn_sms_loturi_lista); BD-ul refuză oricum
+      const permis = typeof l.actiune_permisa === 'boolean' ? l.actiune_permisa : poateActiona(l, panou, true)
       const cine = [l.creat_nivel && `creat: ${NIVELURI[l.creat_nivel] || l.creat_nivel}`, l.aprobat_nivel && `aprobat: ${NIVELURI[l.aprobat_nivel] || l.aprobat_nivel}`,
         l.anulat_nivel && `anulat: ${NIVELURI[l.anulat_nivel] || l.anulat_nivel}`].filter(Boolean).join(' · ')
       return <article key={l.id} style={{ padding: '14px 16px', borderBottom: `1px solid ${G.border}`, background: l.id === evidentiat ? '#E9F1F5' : undefined }}>
@@ -265,18 +265,18 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
         <div style={S.small}>{l.nr_destinatari} destinatari · {fmtEur(l.cost_estimat_eur)} · <b>{rezumatMesaje(l)}</b>
           {l.aprobat_autorizare_nr ? ` · autorizare TGZ ${l.aprobat_autorizare_nr} / ${l.aprobat_autorizare_data}` : ''}{l.motiv_anulare ? ` · motiv anulare: ${l.motiv_anulare}` : ''}
           {cine ? ` · ${cine}` : ''}</div>
-        {!actiune && poateAnula(l) && <p style={{ ...S.small, color: G.yellow, margin: '6px 0 0' }}>Nivelul tău doar vede acest lot{panou?.nivel === 'test' ? ` (contul de test acționează doar pe loturi interne de maximum ${MAX_TEST} destinatari)` : ''}.</p>}
+        {!permis && poateAnula(l) && <p style={{ ...S.small, color: G.yellow, margin: '6px 0 0' }}>Nivelul tău doar vede acest lot{panou?.nivel === 'test' ? ` (contul de test acționează doar pe loturile lui interne, de maximum ${MAX_TEST} destinatari)` : ''}.</p>}
         <div style={{ ...S.row, marginTop: 8 }}>
-          {actiune && poateAproba(l) && <button type="button" style={S.primar} disabled={lucru} aria-expanded={revizie === l.id} onClick={() => setRevizie(r => r === l.id ? null : l.id)}>🔍 Verifică lista și aprobă</button>}
-          {actiune && (l.stare === 'aprobat' || l.stare === 'in_trimitere') && <button type="button" style={{ ...S.primar, opacity: poateTrimite(l, panou) ? 1 : 0.5 }} disabled={lucru || !poateTrimite(l, panou)}
+          {permis && poateAproba(l) && <button type="button" style={S.primar} disabled={lucru} aria-expanded={revizie === l.id} onClick={() => setRevizie(r => r === l.id ? null : l.id)}>🔍 Verifică lista și aprobă</button>}
+          {permis && (l.stare === 'aprobat' || l.stare === 'in_trimitere') && <button type="button" style={{ ...S.primar, opacity: poateTrimite(l, panou) ? 1 : 0.5 }} disabled={lucru || !poateTrimite(l, panou)}
             title={poateTrimite(l, panou) ? '' : 'Trimiterea e oprită (kill-switch) — o pornește owner-ul din Setări'} onClick={() => trimite(l)}>📤 Trimite</button>}
-          {actiune && poateAnula(l) && <button type="button" style={{ ...S.button, color: G.red }} disabled={lucru} onClick={() => anuleaza(l)}>Anulează</button>}
+          {permis && poateAnula(l) && <button type="button" style={{ ...S.button, color: G.red }} disabled={lucru} onClick={() => anuleaza(l)}>Anulează</button>}
           <button type="button" style={{ ...S.button, border: 'none', color: G.blue, background: 'transparent' }} aria-expanded={deschis === l.id} onClick={() => setDeschis(d => d === l.id ? null : l.id)}>{deschis === l.id ? 'Închide mesajele' : 'Mesajele lotului'}</button>
         </div>
-        {revizie === l.id && actiune && poateAproba(l) && <RevizieLot lotId={l.id} onAprobat={dupaAprobare} onInchide={() => setRevizie(null)} />}
+        {revizie === l.id && permis && poateAproba(l) && <RevizieLot lotId={l.id} onAprobat={dupaAprobare} onInchide={() => setRevizie(null)} />}
         {deschis === l.id && <div style={{ marginTop: 8, maxHeight: 260, overflow: 'auto', background: G.bg, borderRadius: 7, padding: 8 }}>
-          {!mesaje ? <span style={S.small}>Se încarcă…</span> : mesaje.map(m => <div key={m.id} style={{ ...S.row, fontSize: 12, padding: '3px 0' }}>
-            <span style={{ minWidth: 110 }}>{mascheazaTelefon(m.telefon)}</span><span style={{ minWidth: 170 }}>{STARI_MESAJ[m.stare] || m.stare}</span>
+          {!mesaje ? <span style={S.small}>Se încarcă…</span> : mesaje.map(m => <div key={m.mesaj_id} style={{ ...S.row, fontSize: 12, padding: '3px 0' }}>
+            <span style={{ minWidth: 110 }}>{m.telefon_mascat}</span><span style={{ minWidth: 170 }}>{STARI_MESAJ[m.stare] || m.stare}</span>
             <span style={S.small}>{m.cod_eroare || ''} {m.livrat_la ? `livrat ${fmtData(m.livrat_la)}` : m.trimis_la ? `trimis ${fmtData(m.trimis_la)}` : ''}</span>
           </div>)}
         </div>}

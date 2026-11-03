@@ -7,9 +7,10 @@ const date = ({ data, error }) => { if (error) throw error; return data }
 export const smsApi = {
   panou: async () => date(await supabase.rpc('fn_sms_panou')),
   angajati: async () => date(await supabase.rpc('fn_sms_angajati_lista')) || [],
-  loturi: async () => date(await supabase.from('sms_v_loturi').select('*').order('creat_la', { ascending: false }).limit(50)) || [],
-  mesaje: async lotId => date(await supabase.from('sms_mesaje').select('id, telefon, destinatar_tip, stare, cod_eroare, rezervat_la, trimis_la, livrat_la')
-    .eq('lot_id', lotId).order('creat_la').order('id').limit(5000)) || [],
+  // r2 (P1): istoricul și mesajele vin DOAR prin RPC-uri (loturile pe care nivelul le vede, numărători, telefon mascat);
+  // citirea directă a sms_mesaje / sms_v_loturi rămâne a owner-ului în BD, iar ecranul nu o mai folosește deloc
+  loturi: async () => date(await supabase.rpc('fn_sms_loturi_lista', { p_limit: 50 })) || [],
+  mesaje: async lotId => (date(await supabase.rpc('fn_sms_lot_destinatari', { p_lot_id: lotId })) || {}).destinatari || [],
   optout: async () => date(await supabase.from('sms_optout').select('telefon, activ, motiv, actualizat_la').order('actualizat_la', { ascending: false })) || [],
   creeazaIntern: async ({ text, p_departamente, p_angajati, preview }) =>
     date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview })),

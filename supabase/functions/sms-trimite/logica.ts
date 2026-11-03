@@ -4,7 +4,8 @@
 //   JWT verificat cu auth.getUser (sesiune validă) + RPC fn_sms_nivel() apelat CU JWT-ul lui (nivelul îl spune BD-ul pentru acel
 //   token: owner / utilizator / test; NULL sau eroare → 401). Altceva → 401, fără nicio citire / rezervare / trimitere.
 //   Un cont trebuie să numească lotul. uid-ul lui merge la fn_sms_rezerva (p_apelant), care îi recalculează nivelul în BD
-//   (test = doar loturi interne de maximum 5 destinatari; Redări doar cu modulul Redări + comutatorul owner-ului).
+//   (test = doar loturile lui, interne, de maximum 5 destinatari, cel mult 10 SMS / zi pe cont; Redări doar cu modulul Redări +
+//   comutatorul owner-ului). Motivele BD-ului (ex. buget_test_zi) trec neschimbate în răspuns.
 // Ce face: în runde de câte 5 — fn_sms_rezerva (atomic în BD: lot aprobat, kill-switch, plafon zi / lună, opt-out, Redări doar autorizat
 //   și 08–20, nivelul apelantului) → adaptorul (_shared/smsFurnizor.ts, SMSLink sau simulator) → fn_sms_rezultat. Erorile de
 //   configurare / credit opresc automat trimiterea (kill-switch în BD) și runda. Un rezultat nescris lasă mesajul `necunoscut`.

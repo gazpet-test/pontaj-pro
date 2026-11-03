@@ -10,16 +10,23 @@
 --   * reguli in BD (RPC-uri si triggere), nu doar in UI:
 --       owner + utilizator + test: compun, previzualizeaza, creeaza lot intern, vad lista fixata, aproba pe versiunea afisata, pornesc
 --         trimiterea si anuleaza;
---       test: DOAR loturi interne cu maximum 5 destinatari (verificat la creare, la aprobare si la rezervare, si in triggere), niciun lot
---         Redari, nici la vedere;
---       utilizator: loturi Redari doar cu comutatorul Redari pornit de owner (regula existenta) SI cu modulul Redari editor / admin
---         (contactul proprietarilor ramane in spatele drepturilor Redari: red_detinatori_contact il arata doar editor / admin Redari);
+--       test: DOAR loturile create de el (creat_de = contul, creat_nivel = 'test'), interne, cu maximum 5 destinatari (verificat la
+--         creare, la aprobare, la anulare, la lista fixata si la rezervare, si in triggere); niciun lot Redari, nici la vedere; plus un
+--         buget pe cont: fn_sms_test_buget_zi() = 10 SMS / zi (ora Romaniei), rezervat atomic, numara si mesajele „necunoscut”,
+--         nu se elibereaza prin anulare sau recreare;
+--       utilizator: loturi Redari (la vedere si la actiune) doar cu comutatorul Redari pornit de owner SI cu modulul Redari
+--         editor / admin (contactul proprietarilor ramane in spatele drepturilor Redari);
 --       DOAR owner: kill-switch, plafoane, autorizarea Redari, opt-out, setari (functiile 20261130a raman neschimbate);
---   * RLS SELECT pe sms_loturi / sms_mesaje (deci si pe vederea sms_v_loturi): owner + nivelurile SMS (test: doar loturile interne;
---     utilizator: Redari doar cu modulul Redari); setarile, opt-out-ul si jurnalul DLR raman doar ale owner-ului;
+--   * citirea DIRECTA a tabelelor si a vederii sms_v_loturi ramane DOAR a owner-ului (politicile RLS 20261130a nu se ating:
+--     RLS limiteaza randuri, nu coloane, iar sms_mesaje.telefon e in clar). Utilizatorul si testul citesc prin RPC-uri SECURITY
+--     DEFINER care aplica aceeasi regula de vizibilitate si intorc doar telefonul mascat: fn_sms_loturi_lista (loturi + numaratori),
+--     fn_sms_lot_destinatari (lista fixata / mesajele lotului);
 --   * pe lot raman creat_de / aprobat_de / anulat_de si, nou, nivelul cu care s-a facut fiecare pas (creat_nivel / aprobat_nivel /
 --     anulat_nivel), scrise de trigger, nu de aplicatie;
 --   * fn_sms_rezerva primeste apelantul (p_apelant = uid-ul verificat de edge; NULL = cronul intern) si ii verifica nivelul in BD.
+-- r2 (03.11.2026, NO-GO Jakarinos + Copilot pe r1): P1 citirea directa a sms_mesaje / sms_loturi / sms_v_loturi ramane doar owner
+-- (r1 deschidea telefoanele complete); P2-02 testul doar pe loturile lui; P2-01 bugetul zilnic pe contul de test; P2-03 Redari la vedere
+-- doar cu comutatorul pornit; P3-01 insertul de mesaje se serializeaza pe lot.
 -- Ordinea de livrare: intai migrarea, apoi edge-ul sms-trimite. Intre ele edge-ul vechi nu mai gaseste fn_sms_rezerva cu 3 argumente:
 -- nu trimite nimic (fail-closed).
 -- Fara date reale atinse. Revenire: supabase/revenire/20261130b_sms_acces_modul_ROLLBACK.sql (fail-closed: inapoi la doar owner,
@@ -127,21 +134,38 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 $fn$;
 COMMENT ON FUNCTION public.fn_sms_redari_modul_cont(uuid) IS 'SMS (intern): contul are modulul Redari editor / admin (aceiasi care vad contactul proprietarilor).';
 
-CREATE FUNCTION public.fn_sms_lot_permis(p_nivel text, p_redari_modul boolean, p_categorie text, p_nr integer, p_actiune boolean) RETURNS boolean
+CREATE FUNCTION public.fn_sms_lot_permis(p_nivel text, p_redari_ok boolean, p_al_testului boolean, p_categorie text, p_nr integer, p_actiune boolean)
+RETURNS boolean
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $fn$
   SELECT coalesce(CASE p_nivel
            WHEN 'owner' THEN true
-           WHEN 'utilizator' THEN p_categorie = 'intern' OR (p_categorie = 'redari' AND p_redari_modul IS TRUE)
-           WHEN 'test' THEN p_categorie = 'intern' AND (p_actiune IS NOT TRUE OR p_nr BETWEEN 1 AND 5)
+           WHEN 'utilizator' THEN p_categorie = 'intern' OR (p_categorie = 'redari' AND p_redari_ok IS TRUE)
+           WHEN 'test' THEN p_categorie = 'intern' AND p_al_testului IS TRUE AND (p_actiune IS NOT TRUE OR p_nr BETWEEN 1 AND 5)
          END, false)
 $fn$;
-COMMENT ON FUNCTION public.fn_sms_lot_permis(text, boolean, text, integer, boolean) IS 'SMS (pura, interna): ce poate un nivel pe un lot. p_actiune = false: vede lotul; true: il creeaza / aproba / anuleaza / trimite. test: doar intern, actiunile doar pe maximum 5 destinatari; utilizator: Redari doar cu modulul Redari editor / admin.';
+COMMENT ON FUNCTION public.fn_sms_lot_permis(text, boolean, boolean, text, integer, boolean) IS 'SMS (pura, interna): ce poate un nivel pe un lot. p_actiune = false: vede lotul; true: il creeaza / aproba / anuleaza / trimite. p_redari_ok = modulul Redari editor / admin SI comutatorul Redari pornit; p_al_testului = lotul e creat de acest cont, cu nivelul test. test: doar loturile lui, interne, actiunile doar pe maximum 5 destinatari; utilizator: Redari doar cu p_redari_ok.';
+
+-- bugetul zilnic al unui cont de test (P2-01, Copilot r1 pe 30b): constanta, o schimba Razvan cu CREATE OR REPLACE (migrare noua)
+CREATE FUNCTION public.fn_sms_test_buget_zi() RETURNS integer
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $fn$
+  SELECT 10
+$fn$;
+COMMENT ON FUNCTION public.fn_sms_test_buget_zi() IS 'SMS (pura, interna): cate SMS (segmente) poate rezerva pe zi (ora Romaniei) un cont de test, peste toate loturile lui. Constanta: 10.';
+
+CREATE FUNCTION public.fn_sms_test_consum_zi(p_uid uuid) RETURNS integer
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT coalesce(sum(m.segmente), 0)::integer
+    FROM public.sms_mesaje m JOIN public.sms_loturi l ON l.id = m.lot_id
+   WHERE p_uid IS NOT NULL AND l.creat_de = p_uid AND l.creat_nivel = 'test'
+     AND m.rezervat_la >= (date_trunc('day', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest')
+$fn$;
+COMMENT ON FUNCTION public.fn_sms_test_consum_zi(uuid) IS 'SMS (intern): segmentele rezervate azi (ora Romaniei) din loturile create de acest cont cu nivelul test. Orice mesaj rezervat se numara (si necunoscut / esuat / din lot anulat ulterior): bugetul nu se elibereaza prin anulare sau recreare.';
 
 CREATE FUNCTION public.fn_sms_nivel() RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
   SELECT public.fn_sms_nivel_cont(auth.uid())
 $fn$;
-COMMENT ON FUNCTION public.fn_sms_nivel() IS 'SMS: nivelul utilizatorului curent: owner / utilizator / test / NULL. Fara parametru (nu poate sonda alte conturi). Folosita de RLS, de UI si de poarta edge-ului sms-trimite (apelata cu JWT-ul utilizatorului).';
+COMMENT ON FUNCTION public.fn_sms_nivel() IS 'SMS: nivelul utilizatorului curent: owner / utilizator / test / NULL. Fara parametru (nu poate sonda alte conturi). Folosita de UI si de poarta edge-ului sms-trimite (apelata cu JWT-ul utilizatorului).';
 
 CREATE FUNCTION public.fn_sms_redari_permis() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -151,7 +175,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
            ELSE false
          END
 $fn$;
-COMMENT ON FUNCTION public.fn_sms_redari_permis() IS 'SMS: utilizatorul curent poate lucra cu loturi Redari (owner, sau utilizator SMS cu modulul Redari editor / admin). Comutatorul Redari (autorizarea scrisa Transgaz) se verifica separat.';
+COMMENT ON FUNCTION public.fn_sms_redari_permis() IS 'SMS (intern): utilizatorul curent are dreptul Redari in SMS (owner, sau utilizator SMS cu modulul Redari editor / admin). Comutatorul Redari (autorizarea scrisa Transgaz) se verifica separat.';
 
 CREATE FUNCTION public.fn_sms_cere_nivel() RETURNS text
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -163,19 +187,29 @@ BEGIN
   RETURN v;
 END $fn$;
 
-CREATE FUNCTION public.fn_sms_cere_lot(p_uid uuid, p_nivel text, p_categorie text, p_nr integer) RETURNS void
+-- regula unica de vizibilitate / actiune pe un lot (RPC-urile UI, triggerele, rezervarea): comutatorul Redari citit din setari
+CREATE FUNCTION public.fn_sms_lot_acces(p_uid uuid, p_nivel text, p_lot public.sms_loturi, p_actiune boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT public.fn_sms_lot_permis(p_nivel,
+           public.fn_sms_redari_modul_cont(p_uid) AND coalesce((SELECT s.redari_autorizat FROM public.sms_setari s WHERE s.id), false),
+           coalesce(p_uid IS NOT NULL AND (p_lot).creat_de = p_uid AND (p_lot).creat_nivel = 'test', false),
+           (p_lot).categorie, (p_lot).nr_destinatari, p_actiune)
+$fn$;
+COMMENT ON FUNCTION public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean) IS 'SMS (intern): contul / nivelul vede (p_actiune = false) sau poate actiona (true) pe lot. test: doar loturile create de el; utilizator: Redari doar cu modulul Redari si comutatorul pornit.';
+
+CREATE FUNCTION public.fn_sms_cere_lot(p_uid uuid, p_nivel text, p_lot public.sms_loturi) RETURNS void
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 BEGIN
-  IF public.fn_sms_lot_permis(p_nivel, public.fn_sms_redari_modul_cont(p_uid), p_categorie, p_nr, true) THEN RETURN; END IF;
+  IF public.fn_sms_lot_acces(p_uid, p_nivel, p_lot, true) THEN RETURN; END IF;
   IF p_nivel = 'test' THEN
-    RAISE EXCEPTION 'sms test: contul de test lucreaza doar cu loturi interne de maximum 5 destinatari (fara Redari)' USING ERRCODE = '42501';
+    RAISE EXCEPTION 'sms test: contul de test lucreaza doar cu loturile lui interne, de maximum 5 destinatari (fara Redari)' USING ERRCODE = '42501';
   END IF;
-  IF p_categorie = 'redari' THEN
-    RAISE EXCEPTION 'sms redari: lotul Redari cere si modulul Redari (editor / admin)' USING ERRCODE = '42501';
+  IF p_lot.categorie = 'redari' THEN
+    RAISE EXCEPTION 'sms redari: lotul Redari cere modulul Redari (editor / admin) si autorizarea Transgaz pornita' USING ERRCODE = '42501';
   END IF;
   RAISE EXCEPTION 'sms: nivelul tau nu permite actiunea pe acest lot' USING ERRCODE = '42501';
 END $fn$;
-COMMENT ON FUNCTION public.fn_sms_cere_lot(uuid, text, text, integer) IS 'SMS (intern): refuza (42501, cu motivul) o actiune pe lot pe care nivelul nu o permite.';
+COMMENT ON FUNCTION public.fn_sms_cere_lot(uuid, text, public.sms_loturi) IS 'SMS (intern): refuza (42501, cu motivul) o actiune pe lot pe care nivelul nu o permite.';
 
 -- ─── 3. Triggere (aparare in adancime: si pentru postgres / service_role) ─────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.fn_sms_loturi_reguli() RETURNS trigger
@@ -198,11 +232,11 @@ BEGIN
     IF NEW.uat_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.red_uat u WHERE u.id = NEW.uat_id AND u.proiect_id = NEW.proiect_id) THEN
       RAISE EXCEPTION 'sms: UAT-ul nu e al proiectului' USING ERRCODE = '23514';
     END IF;
-    -- 20261130b: test = doar intern, maximum 5 destinatari; utilizator pe Redari = si modulul Redari editor / admin
-    IF v_niv IS NOT NULL THEN PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, NEW.categorie, NEW.nr_destinatari); END IF;
     NEW.creat_de := auth.uid(); NEW.creat_la := now(); NEW.creat_nivel := v_niv; NEW.aprobat_de := NULL; NEW.aprobat_la := NULL;
     NEW.aprobat_nivel := NULL; NEW.aprobat_autorizare_nr := NULL; NEW.aprobat_autorizare_data := NULL; NEW.anulat_de := NULL;
     NEW.anulat_la := NULL; NEW.anulat_nivel := NULL; NEW.motiv_anulare := NULL; NEW.coada_golita_la := NULL; NEW.versiune := 1;
+    -- 20261130b: test = doar intern, maximum 5 destinatari; utilizator pe Redari = modulul Redari editor / admin si comutatorul pornit
+    IF v_niv IS NOT NULL THEN PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, NEW); END IF;
     RETURN NEW;
   END IF;
   IF (NEW.id, NEW.categorie, NEW.text, NEW.proiect_id, NEW.uat_id, NEW.filtru, NEW.nr_destinatari, NEW.segmente, NEW.cost_estimat_eur,
@@ -222,7 +256,7 @@ BEGIN
   IF NEW.stare <> 'anulat' THEN NEW.motiv_anulare := OLD.motiv_anulare; END IF;
   IF NEW.stare = 'aprobat' THEN
     IF v_niv IS NULL THEN RAISE EXCEPTION 'sms: doar un cont cu acces SMS (owner / utilizator / test) aproba un lot' USING ERRCODE = '42501'; END IF;
-    PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, NEW.categorie, NEW.nr_destinatari);
+    PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, NEW);
     IF NEW.categorie = 'redari' THEN
       IF NOT coalesce(s.redari_autorizat, false) THEN
         RAISE EXCEPTION 'sms redari: blocat - asteapta autorizarea scrisa Transgaz (comutatorul redari_autorizat e oprit)' USING ERRCODE = '42501';
@@ -232,7 +266,7 @@ BEGIN
     NEW.aprobat_de := auth.uid(); NEW.aprobat_la := now(); NEW.aprobat_nivel := v_niv;
   ELSIF NEW.stare = 'anulat' THEN
     IF v_niv IS NULL THEN RAISE EXCEPTION 'sms: doar un cont cu acces SMS (owner / utilizator / test) anuleaza un lot' USING ERRCODE = '42501'; END IF;
-    PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, NEW.categorie, NEW.nr_destinatari);
+    PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, NEW);
     NEW.anulat_de := auth.uid(); NEW.anulat_la := now(); NEW.anulat_nivel := v_niv;
   ELSIF NEW.stare = 'in_trimitere' THEN
     IF coalesce(s.kill_switch, true) THEN RAISE EXCEPTION 'sms: trimiterea e oprita (kill-switch)' USING ERRCODE = '42501'; END IF;
@@ -241,7 +275,7 @@ BEGIN
     END IF;
     -- 20261130b: lotul creat / aprobat de un cont test pleaca doar daca e intern, cu maximum 5 destinatari
     IF 'test' IN (coalesce(NEW.creat_nivel, ''), coalesce(NEW.aprobat_nivel, ''))
-       AND NOT public.fn_sms_lot_permis('test', false, NEW.categorie, NEW.nr_destinatari, true) THEN
+       AND NOT public.fn_sms_lot_permis('test', false, true, NEW.categorie, NEW.nr_destinatari, true) THEN
       RAISE EXCEPTION 'sms test: lotul unui cont de test pleaca doar intern, cu maximum 5 destinatari' USING ERRCODE = '42501';
     END IF;
   ELSE
@@ -260,7 +294,8 @@ DECLARE l public.sms_loturi; s public.sms_setari;
 BEGIN
   IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'sms: mesajele nu se sterg (sunt jurnalul trimiterii)' USING ERRCODE = '42501'; END IF;
   IF TG_OP = 'INSERT' THEN
-    SELECT * INTO l FROM public.sms_loturi x WHERE x.id = NEW.lot_id;
+    -- 20261130b r2 (P3-01): randul lotului blocat FOR UPDATE inainte de numarare: inserturile concurente in acelasi lot se serializeaza
+    SELECT * INTO l FROM public.sms_loturi x WHERE x.id = NEW.lot_id FOR UPDATE;
     IF l.stare IS DISTINCT FROM 'draft' THEN
       RAISE EXCEPTION 'sms: mesajele se adauga doar la crearea lotului (draft)' USING ERRCODE = '23514';
     END IF;
@@ -295,8 +330,12 @@ BEGIN
     END IF;
     -- 20261130b: lotul unui cont de test pleaca doar intern, cu maximum 5 destinatari
     IF 'test' IN (coalesce(l.creat_nivel, ''), coalesce(l.aprobat_nivel, ''))
-       AND NOT public.fn_sms_lot_permis('test', false, l.categorie, l.nr_destinatari, true) THEN
+       AND NOT public.fn_sms_lot_permis('test', false, true, l.categorie, l.nr_destinatari, true) THEN
       RAISE EXCEPTION 'sms test: lotul unui cont de test pleaca doar intern, cu maximum 5 destinatari' USING ERRCODE = '42501';
+    END IF;
+    -- 20261130b r2 (P2-01): bugetul zilnic al contului de test, si la scriere directa (randurile deja rezervate in aceeasi comanda se vad)
+    IF l.creat_nivel = 'test' AND public.fn_sms_test_consum_zi(l.creat_de) + NEW.segmente > public.fn_sms_test_buget_zi() THEN
+      RAISE EXCEPTION 'sms test: bugetul zilnic al contului de test (% SMS) e atins', public.fn_sms_test_buget_zi() USING ERRCODE = '42501';
     END IF;
     IF NEW.furnizor IS NULL OR NEW.furnizor_id IS NOT NULL THEN RAISE EXCEPTION 'sms: rezervarea cere furnizorul, fara id' USING ERRCODE = '23514'; END IF;
     IF EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = NEW.telefon AND o.activ) THEN
@@ -320,33 +359,9 @@ BEGIN
   RETURN NEW;
 END $fn$;
 
--- ─── 4. RLS: owner + nivelurile SMS pe loturi / mesaje (vederea le mosteneste); restul ramane doar owner ───────────────────
-ALTER POLICY sms_loturi_sel ON public.sms_loturi USING (
-  CASE (SELECT public.fn_sms_nivel())
-    WHEN 'owner' THEN true
-    WHEN 'utilizator' THEN categorie = 'intern' OR (categorie = 'redari' AND (SELECT public.fn_sms_redari_permis()))
-    WHEN 'test' THEN categorie = 'intern'
-    ELSE false
-  END);
--- un mesaj se vede exact cand se vede lotul lui (subinterogarea pe sms_loturi trece prin politica de mai sus)
-ALTER POLICY sms_mesaje_sel ON public.sms_mesaje USING (
-  (SELECT public.fn_sms_nivel()) = 'owner'
-  OR ((SELECT public.fn_sms_nivel()) IS NOT NULL AND EXISTS (SELECT 1 FROM public.sms_loturi l WHERE l.id = lot_id)));
-
-CREATE OR REPLACE VIEW public.sms_v_loturi WITH (security_invoker = on) AS
-SELECT l.id, l.categorie, l.text, l.stare, l.proiect_id, l.uat_id, l.filtru, l.nr_destinatari, l.segmente, l.cost_estimat_eur,
-       l.excluse_optout, l.excluse_fara_mobil, l.creat_de, l.creat_la, l.aprobat_de, l.aprobat_la, l.aprobat_autorizare_nr,
-       l.aprobat_autorizare_data, l.anulat_la, l.motiv_anulare, l.coada_golita_la, l.versiune,
-       count(m.id) FILTER (WHERE m.stare = 'in_coada')::integer AS n_in_coada,
-       count(m.id) FILTER (WHERE m.stare = 'necunoscut')::integer AS n_necunoscut,
-       count(m.id) FILTER (WHERE m.stare = 'trimis')::integer AS n_trimis,
-       count(m.id) FILTER (WHERE m.stare = 'livrat')::integer AS n_livrat,
-       count(m.id) FILTER (WHERE m.stare = 'esuat')::integer AS n_esuat,
-       count(m.id) FILTER (WHERE m.stare = 'anulat')::integer AS n_anulat,
-       l.creat_nivel, l.aprobat_nivel, l.anulat_nivel, l.anulat_de
-  FROM public.sms_loturi l LEFT JOIN public.sms_mesaje m ON m.lot_id = l.id
- GROUP BY l.id;
-COMMENT ON VIEW public.sms_v_loturi IS 'SMS: loturile cu numaratoarea mesajelor pe stari si nivelul cu care s-a creat / aprobat / anulat (security_invoker: aceeasi RLS ca tabelele = owner + nivelurile SMS).';
+-- ─── 4. RLS si vederea sms_v_loturi: NESCHIMBATE (doar owner, ca in 20261130a) ─────────────────────────────────────────────
+-- r2 (P1): RLS limiteaza randuri, nu coloane: o politica pe niveluri ar da utilizatorului / testului sms_mesaje.telefon in clar.
+-- Utilizatorul si testul citesc DOAR prin fn_sms_loturi_lista si fn_sms_lot_destinatari (mai jos), cu telefonul mascat.
 
 -- ─── 5. RPC-uri pentru UI: owner + utilizator + test (setarile raman ale owner-ului, neschimbate) ────────────────────────────
 CREATE OR REPLACE FUNCTION public.fn_sms_panou() RETURNS jsonb
@@ -357,6 +372,10 @@ BEGIN
   SELECT * INTO s FROM public.sms_setari WHERE id;
   SELECT * INTO c FROM public.fn_sms_consum();
   v_ramas := greatest(0, least(s.plafon_zi - c.zi, s.plafon_luna - c.luna));
+  -- contul de test: si bugetul lui zilnic (loturile lui)
+  IF v_niv = 'test' THEN
+    v_ramas := greatest(0, least(v_ramas, public.fn_sms_test_buget_zi() - public.fn_sms_test_consum_zi(auth.uid())));
+  END IF;
   IF v_niv = 'owner' THEN
     RETURN jsonb_build_object('nivel', v_niv, 'kill_switch', s.kill_switch, 'kill_motiv', s.kill_motiv, 'plafon_zi', s.plafon_zi,
       'plafon_luna', s.plafon_luna, 'consum_zi', c.zi, 'consum_luna', c.luna, 'ramas_zi', v_ramas, 'redari_autorizat', s.redari_autorizat,
@@ -366,7 +385,7 @@ BEGIN
   -- utilizator / test: starea trimiterii si cat se mai poate trimite azi, fara setari (plafoane, motive, versiune, autorizare)
   RETURN jsonb_build_object('nivel', v_niv, 'kill_switch', s.kill_switch, 'ramas_zi', v_ramas, 'redari_autorizat', s.redari_autorizat,
     'redari_modul', public.fn_sms_redari_permis(), 'max_destinatari', CASE WHEN v_niv = 'test' THEN 5 ELSE 5000 END,
-    'tarif_eur', 0.049, 'max_caractere', 160);
+    'buget_test_zi', CASE WHEN v_niv = 'test' THEN public.fn_sms_test_buget_zi() END, 'tarif_eur', 0.049, 'max_caractere', 160);
 END $fn$;
 
 CREATE OR REPLACE FUNCTION public.fn_sms_angajati_lista() RETURNS TABLE (id integer, nume text, departament text, telefon_mascat text, optout boolean)
@@ -499,23 +518,23 @@ BEGIN
     'preview', coalesce(p_doar_preview, true), 'nivel', v_niv);
 END $fn$;
 
--- Lista FIXATA in lot: ce vede contul inainte de „Aproba” = exact mesajele din sms_mesaje (nume, telefon mascat), plus textul, segmentele,
--- costul, versiunea si daca nivelul lui permite actiunea. Un lot pe care nivelul nu il vede = inexistent (P0002).
+-- Lista FIXATA in lot (si „Mesajele lotului”): exact mesajele din sms_mesaje (nume, telefon MASCAT, stare, momente), plus textul,
+-- segmentele, costul, versiunea si daca nivelul permite actiunea. Un lot pe care contul nu il vede = inexistent (P0002).
 CREATE OR REPLACE FUNCTION public.fn_sms_lot_destinatari(p_lot_id uuid) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE l public.sms_loturi; v_lista jsonb; v_lungime integer; v_niv text; v_red boolean;
+DECLARE l public.sms_loturi; v_lista jsonb; v_lungime integer; v_niv text;
 BEGIN
   v_niv := public.fn_sms_cere_nivel();
-  v_red := public.fn_sms_redari_modul_cont(auth.uid());
   SELECT * INTO l FROM public.sms_loturi WHERE id = p_lot_id;
-  IF NOT FOUND OR NOT public.fn_sms_lot_permis(v_niv, v_red, l.categorie, l.nr_destinatari, false) THEN
+  IF NOT FOUND OR NOT public.fn_sms_lot_acces(auth.uid(), v_niv, l, false) THEN
     RAISE EXCEPTION 'sms: lotul nu exista' USING ERRCODE = 'P0002';
   END IF;
   SELECT f.lungime INTO v_lungime FROM public.fn_sms_text_verifica(l.text) f;
   SELECT coalesce(jsonb_agg(jsonb_build_object('mesaj_id', x.id, 'destinatar_tip', x.destinatar_tip, 'nume', x.nume,
-           'telefon_mascat', '07** *** ' || right(x.telefon, 3), 'stare', x.stare, 'cod_eroare', x.cod_eroare) ORDER BY x.nume, x.id), '[]'::jsonb)
+           'telefon_mascat', '07** *** ' || right(x.telefon, 3), 'stare', x.stare, 'cod_eroare', x.cod_eroare,
+           'rezervat_la', x.rezervat_la, 'trimis_la', x.trimis_la, 'livrat_la', x.livrat_la) ORDER BY x.nume, x.id), '[]'::jsonb)
     INTO v_lista
-    FROM (SELECT m.id, m.destinatar_tip, m.telefon, m.stare, m.cod_eroare,
+    FROM (SELECT m.id, m.destinatar_tip, m.telefon, m.stare, m.cod_eroare, m.rezervat_la, m.trimis_la, m.livrat_la,
                  coalesce(CASE WHEN m.destinatar_tip = 'angajat' THEN e.name ELSE d.nume END, '(destinatar indisponibil)') AS nume
             FROM public.sms_mesaje m
             LEFT JOIN public.employees e
@@ -528,8 +547,42 @@ BEGIN
     'lungime', v_lungime, 'segmente', l.segmente, 'nr_destinatari', l.nr_destinatari, 'cost_estimat_eur', l.cost_estimat_eur,
     'excluse_optout', l.excluse_optout, 'excluse_fara_mobil', l.excluse_fara_mobil, 'proiect_id', l.proiect_id, 'uat_id', l.uat_id,
     'creat_la', l.creat_la, 'creat_nivel', l.creat_nivel, 'aprobat_nivel', l.aprobat_nivel, 'nivel', v_niv,
-    'actiune_permisa', public.fn_sms_lot_permis(v_niv, v_red, l.categorie, l.nr_destinatari, true), 'destinatari', v_lista);
+    'actiune_permisa', public.fn_sms_lot_acces(auth.uid(), v_niv, l, true), 'destinatari', v_lista);
 END $fn$;
+
+-- Istoricul loturilor pentru UI (r2, P1): doar loturile pe care contul le vede (aceeasi regula), cu numaratorile pe stari calculate aici
+-- (sursa autorizata, fara telefoane). Inlocuieste citirea directa a vederii sms_v_loturi, care ramane doar a owner-ului.
+CREATE FUNCTION public.fn_sms_loturi_lista(p_limit integer DEFAULT 50) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_niv text; v_uid uuid := auth.uid(); v_lista jsonb;
+BEGIN
+  v_niv := public.fn_sms_cere_nivel();
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 200 THEN RAISE EXCEPTION 'sms: p_limit in afara 1..200' USING ERRCODE = '22023'; END IF;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', x.id, 'categorie', x.categorie, 'text', x.text, 'stare', x.stare,
+           'proiect_id', x.proiect_id, 'uat_id', x.uat_id, 'nr_destinatari', x.nr_destinatari, 'segmente', x.segmente,
+           'cost_estimat_eur', x.cost_estimat_eur, 'excluse_optout', x.excluse_optout, 'excluse_fara_mobil', x.excluse_fara_mobil,
+           'creat_de', x.creat_de, 'creat_la', x.creat_la, 'creat_nivel', x.creat_nivel, 'aprobat_de', x.aprobat_de, 'aprobat_la', x.aprobat_la,
+           'aprobat_nivel', x.aprobat_nivel, 'aprobat_autorizare_nr', x.aprobat_autorizare_nr, 'aprobat_autorizare_data', x.aprobat_autorizare_data,
+           'anulat_de', x.anulat_de, 'anulat_la', x.anulat_la, 'anulat_nivel', x.anulat_nivel, 'motiv_anulare', x.motiv_anulare,
+           'coada_golita_la', x.coada_golita_la, 'versiune', x.versiune, 'al_meu', x.creat_de IS NOT DISTINCT FROM v_uid,
+           'actiune_permisa', x.actiune_permisa, 'n_in_coada', x.n_in_coada, 'n_necunoscut', x.n_necunoscut, 'n_trimis', x.n_trimis,
+           'n_livrat', x.n_livrat, 'n_esuat', x.n_esuat, 'n_anulat', x.n_anulat) ORDER BY x.creat_la DESC, x.id), '[]'::jsonb)
+    INTO v_lista
+    FROM (SELECT l.*, public.fn_sms_lot_acces(v_uid, v_niv, l, true) AS actiune_permisa, k.*
+            FROM public.sms_loturi l
+            CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE m.stare = 'in_coada')::integer AS n_in_coada,
+                                       count(*) FILTER (WHERE m.stare = 'necunoscut')::integer AS n_necunoscut,
+                                       count(*) FILTER (WHERE m.stare = 'trimis')::integer AS n_trimis,
+                                       count(*) FILTER (WHERE m.stare = 'livrat')::integer AS n_livrat,
+                                       count(*) FILTER (WHERE m.stare = 'esuat')::integer AS n_esuat,
+                                       count(*) FILTER (WHERE m.stare = 'anulat')::integer AS n_anulat
+                                  FROM public.sms_mesaje m WHERE m.lot_id = l.id) k
+           WHERE public.fn_sms_lot_acces(v_uid, v_niv, l, false)
+           ORDER BY l.creat_la DESC, l.id
+           LIMIT p_limit) x;
+  RETURN v_lista;
+END $fn$;
+COMMENT ON FUNCTION public.fn_sms_loturi_lista(integer) IS 'SMS: istoricul loturilor vizibile contului curent (owner: toate; utilizator: interne + Redari cu modulul Redari si comutatorul pornit; test: doar loturile create de el), cu numaratorile pe stari. Fara telefoane.';
 
 CREATE OR REPLACE FUNCTION public.fn_sms_lot_aproba(p_lot_id uuid, p_versiune integer) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -539,10 +592,10 @@ BEGIN
   -- ordinea lock-urilor: setari -> lot (ca la rezervare)
   SELECT * INTO s FROM public.sms_setari WHERE id FOR SHARE;
   SELECT * INTO l FROM public.sms_loturi WHERE id = p_lot_id FOR UPDATE;
-  IF NOT FOUND OR NOT public.fn_sms_lot_permis(v_niv, public.fn_sms_redari_modul_cont(auth.uid()), l.categorie, l.nr_destinatari, false) THEN
+  IF NOT FOUND OR NOT public.fn_sms_lot_acces(auth.uid(), v_niv, l, false) THEN
     RAISE EXCEPTION 'sms: lotul nu exista' USING ERRCODE = 'P0002';
   END IF;
-  PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, l.categorie, l.nr_destinatari);
+  PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, l);
   IF l.stare <> 'draft' THEN RAISE EXCEPTION 'sms: doar un lot in draft se aproba (starea: %)', l.stare USING ERRCODE = '23514'; END IF;
   IF p_versiune IS DISTINCT FROM l.versiune THEN
     RAISE EXCEPTION 'sms: lotul s-a schimbat de la previzualizare; reincarca si verifica din nou' USING ERRCODE = '40001';
@@ -570,10 +623,10 @@ DECLARE l public.sms_loturi; v_n integer; c record; v_niv text;
 BEGIN
   v_niv := public.fn_sms_cere_nivel();
   SELECT * INTO l FROM public.sms_loturi WHERE id = p_lot_id FOR UPDATE;
-  IF NOT FOUND OR NOT public.fn_sms_lot_permis(v_niv, public.fn_sms_redari_modul_cont(auth.uid()), l.categorie, l.nr_destinatari, false) THEN
+  IF NOT FOUND OR NOT public.fn_sms_lot_acces(auth.uid(), v_niv, l, false) THEN
     RAISE EXCEPTION 'sms: lotul nu exista' USING ERRCODE = 'P0002';
   END IF;
-  PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, l.categorie, l.nr_destinatari);
+  PERFORM public.fn_sms_cere_lot(auth.uid(), v_niv, l);
   IF l.stare NOT IN ('draft', 'aprobat', 'in_trimitere') THEN
     RAISE EXCEPTION 'sms: lotul e deja inchis (%)', l.stare USING ERRCODE = '23514';
   END IF;
@@ -595,6 +648,7 @@ DROP FUNCTION public.fn_sms_rezerva(uuid, integer, text);
 CREATE FUNCTION public.fn_sms_rezerva(p_lot_id uuid, p_max integer, p_furnizor text, p_apelant uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE s public.sms_setari; l public.sms_loturi; c record; v_ora integer; v_rest integer; v_n integer; v_arr jsonb; v_ram integer; v_niv text;
+        v_test integer;
 BEGIN
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'sms: rezervarea cere izolarea READ COMMITTED' USING ERRCODE = '0A000';
@@ -613,27 +667,30 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'sms: setarile lipsesc' USING ERRCODE = 'P0002'; END IF;
   IF s.kill_switch THEN RETURN jsonb_build_object('motiv', 'kill_switch', 'mesaje', '[]'::jsonb); END IF;
   v_ora := extract(hour FROM now() AT TIME ZONE 'Europe/Bucharest')::integer;
-  -- cron intern (fara lot): cel mai vechi lot aprobat care poate pleca acum (niciodata un lot de test in afara limitelor)
+  -- cron intern (fara lot): cel mai vechi lot aprobat care poate pleca acum (niciodata un lot de test in afara limitelor sau cu
+  -- bugetul zilnic al contului atins)
   IF p_lot_id IS NULL THEN
     SELECT * INTO l FROM public.sms_loturi x
      WHERE x.stare IN ('aprobat', 'in_trimitere') AND (x.categorie = 'intern' OR (s.redari_autorizat AND v_ora BETWEEN 8 AND 19))
        AND NOT ('test' IN (coalesce(x.creat_nivel, ''), coalesce(x.aprobat_nivel, ''))
-                AND NOT public.fn_sms_lot_permis('test', false, x.categorie, x.nr_destinatari, true))
+                AND NOT public.fn_sms_lot_permis('test', false, true, x.categorie, x.nr_destinatari, true))
+       AND NOT coalesce(x.creat_nivel = 'test' AND public.fn_sms_test_consum_zi(x.creat_de) + x.segmente > public.fn_sms_test_buget_zi(), false)
      ORDER BY x.aprobat_la, x.id LIMIT 1 FOR UPDATE;
   ELSE
     SELECT * INTO l FROM public.sms_loturi x WHERE x.id = p_lot_id FOR UPDATE;
   END IF;
   IF NOT FOUND THEN RETURN jsonb_build_object('motiv', 'fara_lot', 'mesaje', '[]'::jsonb); END IF;
-  -- 20261130b: nivelul apelantului pe lotul cerut (un lot pe care nu il vede = ca inexistent; vazut, dar nepermis = refuz)
+  -- 20261130b: nivelul apelantului pe lotul cerut (un lot pe care nu il vede = ca inexistent; vazut, dar nepermis = refuz).
+  -- r2: testul vede doar loturile create de el; utilizatorul vede Redari doar cu modulul Redari si comutatorul pornit.
   IF p_apelant IS NOT NULL THEN
-    IF NOT public.fn_sms_lot_permis(v_niv, public.fn_sms_redari_modul_cont(p_apelant), l.categorie, l.nr_destinatari, false) THEN
+    IF NOT public.fn_sms_lot_acces(p_apelant, v_niv, l, false) THEN
       RETURN jsonb_build_object('motiv', 'fara_lot', 'mesaje', '[]'::jsonb);
     END IF;
-    PERFORM public.fn_sms_cere_lot(p_apelant, v_niv, l.categorie, l.nr_destinatari);
+    PERFORM public.fn_sms_cere_lot(p_apelant, v_niv, l);
   END IF;
   -- lotul unui cont de test, sau trimis de un cont de test: doar intern, maximum 5 mesaje (numarate acum, nu doar declarate)
   IF coalesce(v_niv, '') = 'test' OR 'test' IN (coalesce(l.creat_nivel, ''), coalesce(l.aprobat_nivel, '')) THEN
-    IF NOT public.fn_sms_lot_permis('test', false, l.categorie, l.nr_destinatari, true)
+    IF NOT public.fn_sms_lot_permis('test', false, true, l.categorie, l.nr_destinatari, true)
        OR (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = l.id) > 5 THEN
       RAISE EXCEPTION 'sms test: contul de test trimite doar loturi interne de maximum 5 destinatari (fara Redari)' USING ERRCODE = '42501';
     END IF;
@@ -647,6 +704,15 @@ BEGIN
   v_rest := least(s.plafon_zi - c.zi, s.plafon_luna - c.luna) / l.segmente;
   v_n := least(p_max, v_rest);
   IF v_n < 1 THEN RETURN jsonb_build_object('motiv', 'plafon_zi', 'lot_id', l.id, 'consum_zi', c.zi, 'mesaje', '[]'::jsonb); END IF;
+  -- 20261130b r2 (P2-01): bugetul zilnic al contului de test (toate loturile create de el), oricine porneste trimiterea; atomic, sub
+  -- randul de setari blocat mai sus; numara orice mesaj rezervat azi (si necunoscut), deci nu se elibereaza prin anulare sau recreare
+  IF l.creat_nivel = 'test' THEN
+    v_test := public.fn_sms_test_buget_zi() - public.fn_sms_test_consum_zi(l.creat_de);
+    IF v_test < l.segmente THEN
+      RETURN jsonb_build_object('motiv', 'buget_test_zi', 'lot_id', l.id, 'buget_test_zi', public.fn_sms_test_buget_zi(), 'mesaje', '[]'::jsonb);
+    END IF;
+    v_n := least(v_n, v_test / l.segmente);
+  END IF;
   IF l.stare = 'aprobat' THEN UPDATE public.sms_loturi SET stare = 'in_trimitere' WHERE id = l.id; END IF;
   -- opt-out verificat din nou la trimitere: numarul iese din lot (anulat), nu pleaca
   UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'optout'
@@ -663,20 +729,21 @@ BEGIN
   RETURN jsonb_build_object('motiv', CASE WHEN jsonb_array_length(v_arr) > 0 THEN 'ok' ELSE 'gata' END, 'lot_id', l.id, 'categorie', l.categorie,
     'text', l.text, 'mesaje', v_arr, 'ramase', v_ram);
 END $fn$;
-COMMENT ON FUNCTION public.fn_sms_rezerva(uuid, integer, text, uuid) IS 'SMS (doar service_role, din edge sms-trimite dupa poarta owner / nivel SMS / cron intern): rezerva ATOMIC pana la p_max mesaje ale unui lot aprobat, sub kill-switch si plafoane. p_apelant = uid-ul care a pornit trimiterea (nivelul i se recalculeaza aici; test = doar intern, maximum 5 destinatari); NULL = cronul intern. Mesajele rezervate trec in necunoscut (fara rezultat = nu se retrimit).';
+COMMENT ON FUNCTION public.fn_sms_rezerva(uuid, integer, text, uuid) IS 'SMS (doar service_role, din edge sms-trimite dupa poarta owner / nivel SMS / cron intern): rezerva ATOMIC pana la p_max mesaje ale unui lot aprobat, sub kill-switch, plafoane si bugetul zilnic al contului de test. p_apelant = uid-ul care a pornit trimiterea (nivelul i se recalculeaza aici; test = doar loturile lui, interne, maximum 5 destinatari); NULL = cronul intern. Mesajele rezervate trec in necunoscut (fara rezultat = nu se retrimit).';
 
 -- ─── 7. Drepturi (privilegiile implicite Supabase dau EXECUTE pe functii noi: se scot explicit) ────────────────────────────
 REVOKE ALL ON FUNCTION
-  public.fn_sms_nivel_cont(uuid), public.fn_sms_redari_modul_cont(uuid), public.fn_sms_lot_permis(text, boolean, text, integer, boolean),
-  public.fn_sms_nivel(), public.fn_sms_redari_permis(), public.fn_sms_cere_nivel(), public.fn_sms_cere_lot(uuid, text, text, integer),
-  public.fn_sms_rezerva(uuid, integer, text, uuid)
+  public.fn_sms_nivel_cont(uuid), public.fn_sms_redari_modul_cont(uuid), public.fn_sms_lot_permis(text, boolean, boolean, text, integer, boolean),
+  public.fn_sms_test_buget_zi(), public.fn_sms_test_consum_zi(uuid), public.fn_sms_nivel(), public.fn_sms_redari_permis(),
+  public.fn_sms_cere_nivel(), public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean), public.fn_sms_cere_lot(uuid, text, public.sms_loturi),
+  public.fn_sms_loturi_lista(integer), public.fn_sms_rezerva(uuid, integer, text, uuid)
   FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_sms_nivel(), public.fn_sms_redari_permis() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_sms_nivel(), public.fn_sms_loturi_lista(integer) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_sms_rezerva(uuid, integer, text, uuid) TO service_role;
 
 DO $post$
 DECLARE v_t text; v_o oid; v_n integer;
-  v_expuse regprocedure[] := ARRAY['public.fn_sms_e_owner()', 'public.fn_sms_nivel()', 'public.fn_sms_redari_permis()', 'public.fn_sms_panou()',
+  v_expuse regprocedure[] := ARRAY['public.fn_sms_e_owner()', 'public.fn_sms_nivel()', 'public.fn_sms_loturi_lista(integer)', 'public.fn_sms_panou()',
     'public.fn_sms_angajati_lista()', 'public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)',
     'public.fn_sms_lot_redari_creeaza(text,uuid,uuid,boolean)', 'public.fn_sms_lot_destinatari(uuid)', 'public.fn_sms_lot_aproba(uuid,integer)',
     'public.fn_sms_lot_anuleaza(uuid,text)', 'public.fn_sms_setari_salveaza(boolean,integer,integer,integer)',
@@ -684,15 +751,15 @@ DECLARE v_t text; v_o oid; v_n integer;
   v_serviciu regprocedure[] := ARRAY['public.fn_sms_rezerva(uuid,integer,text,uuid)', 'public.fn_sms_rezultat(uuid,boolean,text,text,text)',
     'public.fn_sms_dlr_aplica(text,text,boolean,timestamptz)']::regprocedure[];
   v_pure regprocedure[] := ARRAY['public.fn_sms_tel_normalizat(text)', 'public.fn_sms_text_final(text)', 'public.fn_sms_text_verifica(text)',
-    'public.fn_sms_text_valid(text)', 'public.fn_sms_lot_permis(text,boolean,text,integer,boolean)']::regprocedure[];
+    'public.fn_sms_text_valid(text)', 'public.fn_sms_lot_permis(text,boolean,boolean,text,integer,boolean)', 'public.fn_sms_test_buget_zi()']::regprocedure[];
 BEGIN
+  -- r2 (P1): politicile RLS si vederea raman exact cele din 20261130a (citirea directa = doar owner)
   FOREACH v_t IN ARRAY ARRAY['sms_setari', 'sms_loturi', 'sms_mesaje', 'sms_optout', 'sms_dlr'] LOOP
     IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = ('public.' || v_t)::regclass) THEN RAISE EXCEPTION '20261130b: RLS oprit pe %', v_t; END IF;
     IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = v_t) <> 1
        OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = v_t AND cmd = 'SELECT' AND roles = '{authenticated}') <> 1
-       OR (SELECT qual ~ (CASE WHEN v_t IN ('sms_loturi', 'sms_mesaje') THEN 'fn_sms_nivel' ELSE 'fn_sms_e_owner' END)
-             FROM pg_policies WHERE schemaname = 'public' AND tablename = v_t) IS NOT TRUE THEN
-      RAISE EXCEPTION '20261130b: politici gresite pe %', v_t;
+       OR (SELECT qual = '( SELECT fn_sms_e_owner() AS fn_sms_e_owner)' FROM pg_policies WHERE schemaname = 'public' AND tablename = v_t) IS NOT TRUE THEN
+      RAISE EXCEPTION '20261130b: politici gresite pe % (trebuie sa ramana doar owner)', v_t;
     END IF;
     IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = ('public.' || v_t)::regclass AND NOT tgisinternal) <> 1 THEN RAISE EXCEPTION '20261130b: triggere pe %', v_t; END IF;
     IF has_table_privilege('anon', 'public.' || v_t, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
@@ -706,12 +773,12 @@ BEGIN
      OR has_table_privilege('service_role', 'public.sms_v_loturi', 'SELECT')
      OR NOT has_table_privilege('authenticated', 'public.sms_v_loturi', 'SELECT')
      OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.sms_v_loturi'::regclass AND reloptions::text ~ 'security_invoker=(on|true)')
-     OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sms_v_loturi') <> 32 THEN
-    RAISE EXCEPTION '20261130b: vederea sms_v_loturi are setari gresite';
+     OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sms_v_loturi') <> 28 THEN
+    RAISE EXCEPTION '20261130b: vederea sms_v_loturi trebuie sa ramana cea din 20261130a';
   END IF;
   -- functiile: search_path fixat, SECURITY DEFINER (in afara celor pure), fara EXECUTE pentru PUBLIC / anon, EXECUTE exact pe liste
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sms!_%' ESCAPE '!';
-  IF v_n <> 32 THEN RAISE EXCEPTION '20261130b: % functii fn_sms_* (asteptat 32)', v_n; END IF;
+  IF v_n <> 36 THEN RAISE EXCEPTION '20261130b: % functii fn_sms_* (asteptat 36)', v_n; END IF;
   IF to_regprocedure('public.fn_sms_rezerva(uuid,integer,text)') IS NOT NULL THEN RAISE EXCEPTION '20261130b: fn_sms_rezerva cu 3 argumente a ramas'; END IF;
   FOR v_o IN SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sms!_%' ESCAPE '!' LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_o AND 'search_path=public, pg_temp' = ANY (p.proconfig))
@@ -731,11 +798,14 @@ BEGIN
   END LOOP;
   IF NOT EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'sms' AND is_active AND parent_key IS NULL) THEN RAISE EXCEPTION '20261130b: cheia de modul sms lipseste'; END IF;
   IF EXISTS (SELECT 1 FROM public.user_module_access WHERE module = 'sms') THEN RAISE EXCEPTION '20261130b: migrarea nu acorda drepturi SMS'; END IF;
-  -- nivelurile se citesc pe valorile acceptate de tabela (CHECK-ul existent nu se atinge)
-  IF public.fn_sms_lot_permis('test', false, 'intern', 5, true) IS NOT TRUE OR public.fn_sms_lot_permis('test', false, 'intern', 6, true)
-     OR public.fn_sms_lot_permis('test', true, 'redari', 1, false) OR public.fn_sms_lot_permis('utilizator', false, 'redari', 1, false)
-     OR public.fn_sms_lot_permis('utilizator', true, 'redari', 1, true) IS NOT TRUE OR public.fn_sms_lot_permis(NULL, true, 'intern', 1, false)
-     OR public.fn_sms_nivel_cont(NULL) IS NOT NULL THEN
+  -- regulile de nivel (pure): test doar pe loturile lui, interne, actiuni pe 1-5; utilizator pe Redari doar cu p_redari_ok
+  IF public.fn_sms_lot_permis('test', false, true, 'intern', 5, true) IS NOT TRUE OR public.fn_sms_lot_permis('test', false, true, 'intern', 6, true)
+     OR public.fn_sms_lot_permis('test', false, false, 'intern', 1, false) OR public.fn_sms_lot_permis('test', true, true, 'redari', 1, false)
+     OR public.fn_sms_lot_permis('utilizator', false, false, 'redari', 1, false)
+     OR public.fn_sms_lot_permis('utilizator', true, false, 'redari', 1, true) IS NOT TRUE
+     OR public.fn_sms_lot_permis('utilizator', false, false, 'intern', 4000, true) IS NOT TRUE
+     OR public.fn_sms_lot_permis(NULL, true, true, 'intern', 1, false) OR public.fn_sms_nivel_cont(NULL) IS NOT NULL
+     OR public.fn_sms_test_buget_zi() <> 10 THEN
     RAISE EXCEPTION '20261130b: regulile de nivel nu sunt cele asteptate';
   END IF;
 END $post$;

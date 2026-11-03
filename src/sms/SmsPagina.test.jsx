@@ -37,7 +37,7 @@ describe('Revizia — nivelul contului (20261130b)', () => {
 
 const panouOwner = { nivel: 'owner', kill_switch: true, plafon_zi: 200, plafon_luna: 1500, consum_zi: 0, consum_luna: 0, ramas_zi: 200, redari_autorizat: false, redari_modul: true, versiune: 1, max_destinatari: 5000 }
 const panouUtilizator = { nivel: 'utilizator', kill_switch: false, ramas_zi: 150, redari_autorizat: false, redari_modul: false, max_destinatari: 5000 }
-const panouTest = { nivel: 'test', kill_switch: false, ramas_zi: 150, redari_autorizat: true, redari_modul: false, max_destinatari: 5 }
+const panouTest = { nivel: 'test', kill_switch: false, ramas_zi: 7, redari_autorizat: true, redari_modul: false, max_destinatari: 5, buget_test_zi: 10 }
 
 describe('📱 SMS — acces pe nivel (ruta /sms și Administrator)', () => {
   it('fără modulul sms și fără owner: nu randează nimic din modul', () => {
@@ -59,6 +59,9 @@ describe('📱 SMS — acces pe nivel (ruta /sms și Administrator)', () => {
     const html = renderToStaticMarkup(<SmsPagina profile={{ id: 't', is_owner: false, module_access: ['sms'] }} panouInitial={panouTest} />)
     expect(html).toContain('Cont de test: maximum 5 destinatari într-un lot, doar intern (fără Redări)')
     expect(html).toContain('Cont de test SMS')
+    // r2 (P2-01 / P2-02): bugetul zilnic al contului și „doar loturile create de tine”
+    expect(html).toContain('Mai pot pleca azi: <b>7</b> SMS (bugetul contului de test: 10 / zi)')
+    expect(html).toContain('doar loturile create de tine, cel mult 10 SMS pe zi')
     for (const t of ['>⚙ Setări<', '>🚫 Opt-out<']) expect(html).not.toContain(t)
     expect(html).toMatch(/<input type="radio" name="sms-mod" checked=""\/>Selecție manuală/)
   })

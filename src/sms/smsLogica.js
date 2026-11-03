@@ -31,7 +31,8 @@ export const MOTIVE_TRIMITERE = {
   lot_anulat: 'Lotul e anulat.',
   lot_draft: 'Lotul nu e aprobat.',
   eroare_rezervare: 'Rezervarea în BD a fost refuzată — reîncarcă și verifică starea lotului.',
-  acces_refuzat: 'Nivelul tău nu permite trimiterea acestui lot (contul de test: doar loturi interne de maximum 5 destinatari; Redări: cere și modulul Redări).',
+  acces_refuzat: 'Nivelul tău nu permite trimiterea acestui lot (contul de test: doar loturile lui interne, de maximum 5 destinatari; Redări: cere și modulul Redări).',
+  buget_test_zi: 'Contul de test și-a atins bugetul de SMS pe ziua de azi (nu se eliberează prin anulare). Restul pleacă mâine.',
 }
 export const motivTrimitere = m => MOTIVE_TRIMITERE[m] || `Oprit: ${m || 'motiv necunoscut'}.`
 
@@ -48,21 +49,23 @@ export const NIVELURI = {
 export const areModulSms = profile =>
   profile?.is_owner === true || (profile?.module_access || []).some(m => m === 'sms' || String(m).startsWith('sms.'))
 
-/** Ce poate nivelul pe un lot — oglinda lui fn_sms_lot_permis din BD. actiune = false: vede lotul; true: aprobă / trimite / anulează. */
+/** Ce poate nivelul pe un lot — oglinda lui fn_sms_lot_acces din BD (BD-ul trimite oricum actiune_permisa în istoric).
+ *  actiune = false: vede lotul; true: aprobă / trimite / anulează. test: doar loturile create de el (al_meu + creat_nivel test);
+ *  utilizator: Redări doar cu modulul Redări și comutatorul pornit. */
 export function poateActiona(lot, panou, actiune = true) {
   const nivel = panou?.nivel
   if (nivel === 'owner') return true
-  if (nivel === 'utilizator') return lot?.categorie === 'intern' || (lot?.categorie === 'redari' && panou?.redari_modul === true)
+  if (nivel === 'utilizator') return lot?.categorie === 'intern' || (lot?.categorie === 'redari' && panou?.redari_modul === true && panou?.redari_autorizat === true)
   if (nivel === 'test') {
     const nr = Number(lot?.nr_destinatari)
-    return lot?.categorie === 'intern' && (!actiune || (nr >= 1 && nr <= MAX_TEST))
+    return lot?.categorie === 'intern' && lot?.al_meu === true && lot?.creat_nivel === 'test' && (!actiune || (nr >= 1 && nr <= MAX_TEST))
   }
   return false
 }
 
 /** Banda de sub titlu, pe nivel (null = nimic de spus). */
 export function notaNivel(panou) {
-  if (panou?.nivel === 'test') return `Cont de test: maximum ${MAX_TEST} destinatari într-un lot, doar intern (fără Redări). Setările, plafoanele și opt-out-ul le gestionează owner-ul.`
+  if (panou?.nivel === 'test') return `Cont de test: maximum ${MAX_TEST} destinatari într-un lot, doar intern (fără Redări), doar loturile create de tine, cel mult ${panou?.buget_test_zi || 10} SMS pe zi. Setările, plafoanele și opt-out-ul le gestionează owner-ul.`
   if (panou?.nivel === 'utilizator') return 'Setările (kill-switch, plafoane, autorizarea Redări, opt-out) le gestionează owner-ul.'
   return null
 }

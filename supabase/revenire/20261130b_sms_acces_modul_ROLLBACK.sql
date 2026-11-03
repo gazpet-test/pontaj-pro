@@ -1,6 +1,7 @@
 -- Revenire 20261130b_sms_acces_modul. Runner: o tranzactie, GUC gazpet.revenire_20261130b = 'SMS_ACCES_SCOS:'||txid_current().
--- Fail-closed: modulul SMS revine la „doar owner”, exact ca in 20261130a: corpurile celor 9 functii inlocuite, politicile RLS de pe
--- sms_loturi / sms_mesaje, vederea sms_v_loturi si fn_sms_rezerva cu 3 argumente (la final, md5-ul tuturor celor 25 de functii = 20261130a).
+-- Fail-closed: modulul SMS revine la „doar owner”, exact ca in 20261130a: corpurile celor 9 functii inlocuite si fn_sms_rezerva cu 3
+-- argumente (la final, md5-ul tuturor celor 25 de functii = 20261130a). Politicile RLS si vederea sms_v_loturi nu le atinge 20261130b r2
+-- (au ramas doar owner); revenirea doar verifica asta.
 -- NU sterge nimic:
 --   * coloanele creat_nivel / aprobat_nivel / anulat_nivel raman pe sms_loturi, cu datele lor (dupa revenire nu le mai scrie nimic);
 --   * cheia de modul `sms` si eventualele randuri user_module_access cu module = 'sms' raman (stergerea cheii ar sterge in cascada
@@ -19,29 +20,8 @@ BEGIN
   END IF;
 END $pre$;
 
--- ─── 1. RLS: inapoi la doar owner (politicile nu mai depind de functiile 20261130b) ────────────────────────────────────────
-ALTER POLICY sms_loturi_sel ON public.sms_loturi USING ((SELECT public.fn_sms_e_owner()));
-ALTER POLICY sms_mesaje_sel ON public.sms_mesaje USING ((SELECT public.fn_sms_e_owner()));
 
--- ─── 2. Vederea din 20261130a (fara coloanele de nivel; CREATE OR REPLACE nu poate scoate coloane) ─────────────────────────
-DROP VIEW public.sms_v_loturi;
-CREATE VIEW public.sms_v_loturi WITH (security_invoker = on) AS
-SELECT l.id, l.categorie, l.text, l.stare, l.proiect_id, l.uat_id, l.filtru, l.nr_destinatari, l.segmente, l.cost_estimat_eur,
-       l.excluse_optout, l.excluse_fara_mobil, l.creat_de, l.creat_la, l.aprobat_de, l.aprobat_la, l.aprobat_autorizare_nr,
-       l.aprobat_autorizare_data, l.anulat_la, l.motiv_anulare, l.coada_golita_la, l.versiune,
-       count(m.id) FILTER (WHERE m.stare = 'in_coada')::integer AS n_in_coada,
-       count(m.id) FILTER (WHERE m.stare = 'necunoscut')::integer AS n_necunoscut,
-       count(m.id) FILTER (WHERE m.stare = 'trimis')::integer AS n_trimis,
-       count(m.id) FILTER (WHERE m.stare = 'livrat')::integer AS n_livrat,
-       count(m.id) FILTER (WHERE m.stare = 'esuat')::integer AS n_esuat,
-       count(m.id) FILTER (WHERE m.stare = 'anulat')::integer AS n_anulat
-  FROM public.sms_loturi l LEFT JOIN public.sms_mesaje m ON m.lot_id = l.id
- GROUP BY l.id;
-COMMENT ON VIEW public.sms_v_loturi IS 'SMS: loturile cu numaratoarea mesajelor pe stari (security_invoker: aceeasi RLS ca tabelele = doar owner).';
-REVOKE ALL ON public.sms_v_loturi FROM PUBLIC, anon, authenticated, service_role;
-GRANT SELECT ON public.sms_v_loturi TO authenticated;
-
--- ─── 3. Corpurile 20261130a ale functiilor inlocuite (CREATE OR REPLACE pastreaza drepturile) ──────────────────────────────
+-- ─── 1. Corpurile 20261130a ale functiilor inlocuite (CREATE OR REPLACE pastreaza drepturile) ──────────────────────────────
 CREATE OR REPLACE FUNCTION public.fn_sms_loturi_reguli() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE s public.sms_setari; v record;
@@ -366,7 +346,7 @@ BEGIN
     'deja_rezervate_necunoscut', c.necunoscut, 'deja_trimise', c.trimis, 'deja_livrate', c.livrat, 'deja_esuate', c.esuat);
 END $fn$;
 
--- ─── 4. fn_sms_rezerva cu 3 argumente (20261130a), doar service_role ──────────────────────────────────────────────────────
+-- ─── 2. fn_sms_rezerva cu 3 argumente (20261130a), doar service_role ──────────────────────────────────────────────────────
 DROP FUNCTION public.fn_sms_rezerva(uuid, integer, text, uuid);
 CREATE FUNCTION public.fn_sms_rezerva(p_lot_id uuid, p_max integer, p_furnizor text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -420,12 +400,16 @@ COMMENT ON FUNCTION public.fn_sms_rezerva(uuid, integer, text) IS 'SMS (doar ser
 REVOKE ALL ON FUNCTION public.fn_sms_rezerva(uuid, integer, text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_sms_rezerva(uuid, integer, text) TO service_role;
 
--- ─── 5. Functiile noi din 20261130b (nimic nu le mai foloseste) ─────────────────────────────────────────────────────────────
-DROP FUNCTION public.fn_sms_cere_lot(uuid, text, text, integer);
+-- ─── 3. Functiile noi din 20261130b (nimic nu le mai foloseste) ─────────────────────────────────────────────────────────────
+DROP FUNCTION public.fn_sms_loturi_lista(integer);
+DROP FUNCTION public.fn_sms_cere_lot(uuid, text, public.sms_loturi);
+DROP FUNCTION public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean);
 DROP FUNCTION public.fn_sms_cere_nivel();
 DROP FUNCTION public.fn_sms_redari_permis();
 DROP FUNCTION public.fn_sms_nivel();
-DROP FUNCTION public.fn_sms_lot_permis(text, boolean, text, integer, boolean);
+DROP FUNCTION public.fn_sms_test_consum_zi(uuid);
+DROP FUNCTION public.fn_sms_test_buget_zi();
+DROP FUNCTION public.fn_sms_lot_permis(text, boolean, boolean, text, integer, boolean);
 DROP FUNCTION public.fn_sms_redari_modul_cont(uuid);
 DROP FUNCTION public.fn_sms_nivel_cont(uuid);
 
@@ -484,7 +468,7 @@ BEGIN
   END LOOP;
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('sms_setari', 'sms_loturi', 'sms_mesaje', 'sms_optout', 'sms_dlr')) <> 5
      OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename LIKE 'sms!_%' ESCAPE '!'
-                 AND (qual !~ 'fn_sms_e_owner' OR qual ~ 'fn_sms_nivel' OR cmd <> 'SELECT' OR roles <> '{authenticated}')) THEN
+                 AND (qual IS DISTINCT FROM '( SELECT fn_sms_e_owner() AS fn_sms_e_owner)' OR cmd <> 'SELECT' OR roles <> '{authenticated}')) THEN
     RAISE EXCEPTION '20261130b revenire: politicile RLS nu sunt cele din 20261130a';
   END IF;
   IF has_table_privilege('anon', 'public.sms_v_loturi', 'SELECT') OR has_table_privilege('service_role', 'public.sms_v_loturi', 'SELECT')

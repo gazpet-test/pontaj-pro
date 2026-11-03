@@ -1,5 +1,5 @@
--- DRY 20261130b_sms_acces_modul. Runner: o singura tranzactie ANULATA (migrare 20261130b + teste + revenire + ROLLBACK), izolare
--- READ COMMITTED, peste 20261130a aplicata. Identitati reale prin helperii pg_temp (ca la 20261130a):
+-- DRY 20261130b_sms_acces_modul (r2). Runner: o singura tranzactie ANULATA (migrare 20261130b + teste + revenire + ROLLBACK), izolare
+-- READ COMMITTED, peste 20261130a aplicata. Identitati reale prin helperii pg_temp (ca la 20261130a), cu JWT-ul fiecarui cont:
 --   own  = owner-ul (profiles.is_owner);
 --   ured = cont non-owner cu Redari editor / admin  -> primeste aici SMS editor (= utilizator, cu Redari);
 --   util = cont non-owner fara Redari editor / admin -> primeste aici SMS editor (= utilizator, fara Redari);
@@ -7,8 +7,11 @@
 --   fara = cont non-owner fara drept SMS; plus anon si service_role.
 -- Drepturile SMS de mai sus se dau DOAR in tranzactia de proba (INSERT in user_module_access, anulat la final): nu ramane nimic.
 -- Date: fictive (telefoane 0700…, proiect TEST-SMS-DRY-B). Singura citire de date reale: id-urile a 3 / 6 angajati activi cu mobil
--- (lotul contului test, care se anuleaza fara rezervare) si numaratoarea lor, fara niciun telefon afisat. Niciun furnizor apelat:
+-- (lotul T1 al contului test, care se anuleaza fara rezervare) si numaratoarea lor, fara niciun telefon afisat. Niciun furnizor apelat:
 -- fn_sms_rezerva doar rezerva, in tranzactia anulata, si numai pe loturile cu telefoane fictive.
+-- r2: P1 citirea directa (sms_mesaje / sms_loturi / sms_v_loturi) doar owner, istoricul prin fn_sms_loturi_lista (TEST9);
+-- P2-02 testul doar pe loturile lui (TEST6b / TEST7 / TEST8); P2-01 bugetul zilnic al contului de test (TEST7b); P2-03 Redari la vedere
+-- doar cu comutatorul pornit (TEST6c).
 CREATE FUNCTION pg_temp.s3b_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -48,8 +51,23 @@ CREATE FUNCTION pg_temp.s3b_vs() RETURNS integer LANGUAGE sql STABLE AS $h$ SELE
 CREATE FUNCTION pg_temp.s3b_tels(p_de integer, p_cate integer) RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
   SELECT array_agg('+40700000' || lpad((p_de + g)::text, 3, '0') ORDER BY g) FROM generate_series(0, p_cate - 1) g;
 $h$;
+-- ce vede contul curent din istoric (fn_sms_loturi_lista), restrans la loturile DRY: id-urile, in ordine
+CREATE FUNCTION pg_temp.s3b_lista_dry() RETURNS text LANGUAGE sql AS $h$
+  SELECT coalesce(string_agg(n.nume, ',' ORDER BY n.nume COLLATE "C"), '')
+    FROM jsonb_array_elements(public.fn_sms_loturi_lista(200)) e
+    JOIN (SELECT k AS nume, pg_temp.s3b_g(k)::uuid AS id FROM unnest(ARRAY['T1', 'TF', 'TG', 'TH', 'TI', 'TX', 'O6', 'O2', 'R1', 'R2']) k) n ON n.id = (e->>'id')::uuid
+$h$;
+-- citirea DIRECTA (PostgREST GET) a tabelelor / vederii, cu telefonul complet: pentru non-owner trebuie 0 / 0 / 0
+CREATE FUNCTION pg_temp.s3b_direct() RETURNS text LANGUAGE sql AS $h$
+  SELECT (SELECT count(*) FROM (SELECT m.lot_id, m.telefon, m.destinatar_id FROM public.sms_mesaje m) x) || '/'
+      || (SELECT count(*) FROM public.sms_loturi) || '/' || (SELECT count(*) FROM public.sms_v_loturi)
+$h$;
+CREATE FUNCTION pg_temp.s3b_lot_din_lista(p_lot uuid) RETURNS jsonb LANGUAGE sql AS $h$
+  SELECT e FROM jsonb_array_elements(public.fn_sms_loturi_lista(200)) e WHERE (e->>'id')::uuid = p_lot
+$h$;
 GRANT EXECUTE ON FUNCTION pg_temp.s3b_ca(uuid, text), pg_temp.s3b_refuza(text, text), pg_temp.s3b_eroare(text), pg_temp.s3b_g(text),
-  pg_temp.s3b_s(text, text), pg_temp.s3b_ver(uuid), pg_temp.s3b_vs(), pg_temp.s3b_tels(integer, integer) TO authenticated, anon, service_role;
+  pg_temp.s3b_s(text, text), pg_temp.s3b_ver(uuid), pg_temp.s3b_vs(), pg_temp.s3b_tels(integer, integer), pg_temp.s3b_lista_dry(),
+  pg_temp.s3b_direct(), pg_temp.s3b_lot_din_lista(uuid) TO authenticated, anon, service_role;
 
 -- ── TEST0: garda, identitati, starea de instalare, drepturile de proba, maparea nivelurilor ─────────────────────────────────
 DO $t$
@@ -88,35 +106,38 @@ BEGIN
      OR public.fn_sms_nivel_cont(tst) IS DISTINCT FROM 'test' OR public.fn_sms_nivel_cont(fara) IS NOT NULL OR public.fn_sms_nivel_cont(NULL) IS NOT NULL THEN
     RAISE EXCEPTION 'TEST0 FAIL: maparea nivelurilor';
   END IF;
-  RAISE NOTICE 'TEST0 OK identitati + drepturi de proba (editor = utilizator, viewer = test, admin = utilizator)';
+  IF public.fn_sms_test_buget_zi() <> 10 OR public.fn_sms_test_consum_zi(tst) <> 0 THEN RAISE EXCEPTION 'TEST0 FAIL: bugetul contului de test'; END IF;
+  RAISE NOTICE 'TEST0 OK identitati + drepturi de proba (editor = utilizator, viewer = test, admin = utilizator), buget test 10/zi';
 END $t$;
 
--- ── TEST1: fn_sms_nivel / fn_sms_redari_permis pe fiecare identitate; anon, service_role, functiile interne ────────────────────
+-- ── TEST1: fn_sms_nivel pe fiecare identitate; anon, service_role, functiile interne ─────────────────────────────────────────
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('own')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF public.fn_sms_nivel() IS DISTINCT FROM 'owner' OR NOT public.fn_sms_redari_permis() THEN RAISE EXCEPTION 'TEST1 FAIL: owner'; END IF;
+  IF public.fn_sms_nivel() IS DISTINCT FROM 'owner' THEN RAISE EXCEPTION 'TEST1 FAIL: owner'; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('ured')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF public.fn_sms_nivel() IS DISTINCT FROM 'utilizator' OR NOT public.fn_sms_redari_permis() THEN RAISE EXCEPTION 'TEST1 FAIL: utilizator cu Redari'; END IF;
+  IF public.fn_sms_nivel() IS DISTINCT FROM 'utilizator' THEN RAISE EXCEPTION 'TEST1 FAIL: utilizator cu Redari'; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('util')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF public.fn_sms_nivel() IS DISTINCT FROM 'utilizator' OR public.fn_sms_redari_permis() THEN RAISE EXCEPTION 'TEST1 FAIL: utilizator fara Redari'; END IF;
+  IF public.fn_sms_nivel() IS DISTINCT FROM 'utilizator' THEN RAISE EXCEPTION 'TEST1 FAIL: utilizator fara Redari'; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF public.fn_sms_nivel() IS DISTINCT FROM 'test' OR public.fn_sms_redari_permis() THEN RAISE EXCEPTION 'TEST1 FAIL: test (are Redari, dar nu are voie la Redari)'; END IF;
+  IF public.fn_sms_nivel() IS DISTINCT FROM 'test' THEN RAISE EXCEPTION 'TEST1 FAIL: test'; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('fara')::uuid, 'authenticated');
 DO $t$
 DECLARE q text;
 BEGIN
-  IF public.fn_sms_nivel() IS NOT NULL OR public.fn_sms_redari_permis() THEN RAISE EXCEPTION 'TEST1 FAIL: fara drept'; END IF;
+  IF public.fn_sms_nivel() IS NOT NULL THEN RAISE EXCEPTION 'TEST1 FAIL: fara drept'; END IF;
   -- functiile interne nu se apeleaza din aplicatie (nici sondarea altui cont prin uid)
   FOREACH q IN ARRAY ARRAY[format('SELECT public.fn_sms_nivel_cont(%L)', pg_temp.s3b_g('own')), format('SELECT public.fn_sms_redari_modul_cont(%L)', pg_temp.s3b_g('ured')),
-      $q$SELECT public.fn_sms_lot_permis('owner', true, 'intern', 1, true)$q$, 'SELECT public.fn_sms_cere_nivel()',
-      format($q$SELECT public.fn_sms_cere_lot(%L, 'owner', 'intern', 1)$q$, pg_temp.s3b_g('own')),
+      $q$SELECT public.fn_sms_lot_permis('owner', true, true, 'intern', 1, true)$q$, 'SELECT public.fn_sms_cere_nivel()', 'SELECT public.fn_sms_redari_permis()',
+      'SELECT public.fn_sms_test_buget_zi()', format('SELECT public.fn_sms_test_consum_zi(%L)', pg_temp.s3b_g('tst')),
+      $q$SELECT public.fn_sms_lot_acces(NULL, 'owner', NULL::public.sms_loturi, false)$q$,
+      $q$SELECT public.fn_sms_cere_lot(NULL, 'owner', NULL::public.sms_loturi)$q$,
       $q$SELECT public.fn_sms_rezerva(NULL, 1, 'simulator', NULL)$q$] LOOP
     IF NOT pg_temp.s3b_refuza(q, '42501') THEN RAISE EXCEPTION 'TEST1 FAIL: authenticated: %', q; END IF;
   END LOOP;
@@ -125,7 +146,7 @@ SELECT pg_temp.s3b_ca(NULL, 'anon');
 DO $t$
 DECLARE q text;
 BEGIN
-  FOREACH q IN ARRAY ARRAY['SELECT public.fn_sms_nivel()', 'SELECT public.fn_sms_redari_permis()', 'SELECT public.fn_sms_panou()',
+  FOREACH q IN ARRAY ARRAY['SELECT public.fn_sms_nivel()', 'SELECT public.fn_sms_loturi_lista(50)', 'SELECT public.fn_sms_panou()',
       'SELECT count(*) FROM public.sms_loturi', 'SELECT count(*) FROM public.sms_mesaje', 'SELECT count(*) FROM public.sms_v_loturi'] LOOP
     IF NOT pg_temp.s3b_refuza(q, '42501') THEN RAISE EXCEPTION 'TEST1 FAIL: anon: %', q; END IF;
   END LOOP;
@@ -134,8 +155,8 @@ SELECT pg_temp.s3b_ca(NULL, 'service_role');
 DO $t$
 DECLARE q text;
 BEGIN
-  FOREACH q IN ARRAY ARRAY['SELECT public.fn_sms_nivel()', 'SELECT public.fn_sms_panou()', 'SELECT count(*) FROM public.sms_loturi',
-      format('SELECT public.fn_sms_nivel_cont(%L)', pg_temp.s3b_g('own'))] LOOP
+  FOREACH q IN ARRAY ARRAY['SELECT public.fn_sms_nivel()', 'SELECT public.fn_sms_loturi_lista(50)', 'SELECT public.fn_sms_panou()',
+      'SELECT count(*) FROM public.sms_loturi', format('SELECT public.fn_sms_nivel_cont(%L)', pg_temp.s3b_g('own'))] LOOP
     IF NOT pg_temp.s3b_refuza(q, '42501') THEN RAISE EXCEPTION 'TEST1 FAIL: service_role: %', q; END IF;
   END LOOP;
   -- rezervarea cu 3 argumente (edge-ul vechi) nu mai exista: edge-ul vechi nu poate trimite nimic (fail-closed)
@@ -148,7 +169,7 @@ SELECT pg_temp.s3b_ca(pg_temp.s3b_g('fara')::uuid, 'authenticated');
 DO $t$
 DECLARE q text;
 BEGIN
-  FOREACH q IN ARRAY ARRAY['SELECT public.fn_sms_panou()', 'SELECT count(*) FROM public.fn_sms_angajati_lista()',
+  FOREACH q IN ARRAY ARRAY['SELECT public.fn_sms_panou()', 'SELECT count(*) FROM public.fn_sms_angajati_lista()', 'SELECT public.fn_sms_loturi_lista(50)',
       $q$SELECT public.fn_sms_lot_intern_creeaza('Test DRY', NULL, NULL, true)$q$, $q$SELECT public.fn_sms_lot_redari_creeaza('Test DRY', gen_random_uuid(), NULL, true)$q$,
       'SELECT public.fn_sms_lot_destinatari(gen_random_uuid())', 'SELECT public.fn_sms_lot_aproba(gen_random_uuid(), 1)',
       $q$SELECT public.fn_sms_lot_anuleaza(gen_random_uuid(), 'x')$q$, 'SELECT public.fn_sms_setari_salveaza(false, 200, 1500, 1)',
@@ -180,6 +201,7 @@ DECLARE j jsonb; q text;
 BEGIN
   j := public.fn_sms_panou();
   IF j->>'nivel' <> 'test' OR (j->>'max_destinatari')::integer <> 5 OR (j->>'redari_modul')::boolean IS NOT FALSE
+     OR (j->>'buget_test_zi')::integer <> 10 OR (j->>'ramas_zi')::integer > 10
      OR j ?| ARRAY['plafon_zi', 'plafon_luna', 'consum_zi', 'kill_motiv', 'versiune', 'redari_autorizare_nr', 'redari_autorizare_data'] THEN
     RAISE EXCEPTION 'TEST3 FAIL: panoul contului test %', j;
   END IF;
@@ -197,7 +219,7 @@ DO $t$
 DECLARE j jsonb; q text;
 BEGIN
   j := public.fn_sms_panou();
-  IF j->>'nivel' <> 'utilizator' OR (j->>'max_destinatari')::integer <> 5000 OR (j->>'redari_modul')::boolean IS NOT TRUE
+  IF j->>'nivel' <> 'utilizator' OR (j->>'max_destinatari')::integer <> 5000 OR (j->>'redari_modul')::boolean IS NOT TRUE OR j->>'buget_test_zi' IS NOT NULL
      OR j ?| ARRAY['plafon_zi', 'plafon_luna', 'consum_zi', 'kill_motiv', 'versiune', 'redari_autorizare_nr'] THEN
     RAISE EXCEPTION 'TEST3 FAIL: panoul utilizatorului %', j;
   END IF;
@@ -213,7 +235,7 @@ END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('util')::uuid, 'authenticated');
 DO $t$ BEGIN
   IF (public.fn_sms_panou()->>'redari_modul')::boolean IS NOT FALSE THEN RAISE EXCEPTION 'TEST3 FAIL: utilizator fara Redari'; END IF;
-  RAISE NOTICE 'TEST3 OK setarile doar owner; panoul fara setari pentru utilizator / test';
+  RAISE NOTICE 'TEST3 OK setarile doar owner; panoul fara setari pentru utilizator / test (test: buget 10/zi)';
 END $t$;
 
 -- ── TEST4: pregatire — owner porneste trimiterea (plafon relativ) si autorizeaza Redari; fixture Redari fictiv; angajati ──────
@@ -251,7 +273,7 @@ BEGIN
   RAISE NOTICE 'TEST4 OK pregatire (% angajati cu mobil; fixture Redari fictiv)', v_n;
 END $t$;
 
--- ── TEST5: contul test la CREARE: maximum 5 destinatari, fara Redari (RPC + triggere) ────────────────────────────────────────
+-- ── TEST5: contul test la CREARE: maximum 5 destinatari, fara Redari (RPC + triggere); loturile lui si ale altui cont de test ──
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
 DO $t$
 DECLARE j jsonb; e text;
@@ -273,9 +295,10 @@ BEGIN
   END IF;
   j := public.fn_sms_lot_intern_creeaza('Test DRY: sedinta maine la 8.', NULL, pg_temp.s3b_g('ang3')::integer[], false);
   PERFORM pg_temp.s3b_s('T1', j->>'lot_id');
-  IF (SELECT creat_de IS DISTINCT FROM pg_temp.s3b_g('tst')::uuid OR creat_nivel IS DISTINCT FROM 'test' OR stare <> 'draft' OR nr_destinatari <> 3
-        FROM public.sms_loturi WHERE id = (j->>'lot_id')::uuid) IS NOT FALSE
-     OR (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = (j->>'lot_id')::uuid) <> 3 THEN
+  -- (r2: contul de test nu citeste direct sms_loturi; lotul se vede prin istoricul RPC)
+  IF (SELECT x.l->>'creat_de' IS DISTINCT FROM pg_temp.s3b_g('tst') OR x.l->>'creat_nivel' IS DISTINCT FROM 'test' OR x.l->>'stare' <> 'draft'
+             OR (x.l->>'nr_destinatari')::integer <> 3 OR (x.l->>'al_meu')::boolean IS NOT TRUE OR (x.l->>'actiune_permisa')::boolean IS NOT TRUE
+        FROM pg_temp.s3b_lot_din_lista((j->>'lot_id')::uuid) AS x(l)) IS NOT FALSE THEN
     RAISE EXCEPTION 'TEST5 FAIL: lotul contului test';
   END IF;
   j := public.fn_sms_lot_destinatari((j->>'lot_id')::uuid);
@@ -297,15 +320,36 @@ DO $t$ BEGIN
   IF NOT pg_temp.s3b_refuza(format('SELECT pg_temp.s3b_lot(%L, 1, %L::text[], %L)', 'redari', pg_temp.s3b_tels(221, 1), pg_temp.s3b_g('pr')), '42501') THEN
     RAISE EXCEPTION 'TEST5 FAIL: trigger — lot Redari al contului test';
   END IF;
+  -- loturile fictive ale contului test: TF (3), TG (5), TH (5) — bugetul zilnic (TEST7b)
   PERFORM pg_temp.s3b_s('TF', pg_temp.s3b_lot('intern', 3, pg_temp.s3b_tels(231, 3), NULL)::text);
-  IF (SELECT creat_nivel IS DISTINCT FROM 'test' OR creat_de IS DISTINCT FROM pg_temp.s3b_g('tst')::uuid FROM public.sms_loturi WHERE id = pg_temp.s3b_g('TF')::uuid) THEN
+  PERFORM pg_temp.s3b_s('TG', pg_temp.s3b_lot('intern', 5, pg_temp.s3b_tels(261, 5), NULL)::text);
+  PERFORM pg_temp.s3b_s('TH', pg_temp.s3b_lot('intern', 5, pg_temp.s3b_tels(271, 5), NULL)::text);
+  IF (SELECT count(*) FROM public.sms_loturi WHERE id IN (pg_temp.s3b_g('TF')::uuid, pg_temp.s3b_g('TG')::uuid, pg_temp.s3b_g('TH')::uuid)
+        AND creat_nivel = 'test' AND creat_de = pg_temp.s3b_g('tst')::uuid) <> 3 THEN
     RAISE EXCEPTION 'TEST5 FAIL: trigger — nivelul creatorului';
   END IF;
   RAISE NOTICE 'TEST5b OK triggerele tin limita de 5 si Redari pentru test si fara RPC';
 END $t$;
-
--- ── TEST6: APROBARE — test doar pe loturi interne <= 5; utilizator fara Redari nu vede Redari; nivelul ramane pe lot ─────────
+-- al doilea cont de test (contul util, trecut temporar pe viewer): lotul TX e „test”, dar NU al lui tst (P2-02)
 SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  UPDATE public.user_module_access SET access_level = 'viewer' WHERE profile_id = pg_temp.s3b_g('util')::uuid AND module = 'sms';
+END $t$;
+SELECT pg_temp.s3b_jwt(pg_temp.s3b_g('util')::uuid);
+DO $t$ BEGIN
+  PERFORM pg_temp.s3b_s('TX', pg_temp.s3b_lot('intern', 2, pg_temp.s3b_tels(281, 2), NULL)::text);
+END $t$;
+SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  UPDATE public.user_module_access SET access_level = 'editor' WHERE profile_id = pg_temp.s3b_g('util')::uuid AND module = 'sms';
+  IF (SELECT creat_nivel IS DISTINCT FROM 'test' OR creat_de IS DISTINCT FROM pg_temp.s3b_g('util')::uuid FROM public.sms_loturi WHERE id = pg_temp.s3b_g('TX')::uuid)
+     OR public.fn_sms_nivel_cont(pg_temp.s3b_g('util')::uuid) IS DISTINCT FROM 'utilizator' THEN
+    RAISE EXCEPTION 'TEST5 FAIL: lotul altui cont de test';
+  END IF;
+  RAISE NOTICE 'TEST5c OK lotul TX al altui cont de test (creat_nivel test, creat_de alt cont)';
+END $t$;
+
+-- ── TEST6: APROBARE — test doar pe loturile LUI (P2-02); utilizator fara Redari nu vede Redari; Redari doar cu comutatorul (P2-03) ──
 DO $t$ BEGIN
   PERFORM pg_temp.s3b_s('O6', pg_temp.s3b_lot('intern', 6, pg_temp.s3b_tels(241, 6), NULL)::text);
   PERFORM pg_temp.s3b_s('O2', pg_temp.s3b_lot('intern', 2, pg_temp.s3b_tels(251, 2), NULL)::text);
@@ -318,8 +362,9 @@ BEGIN
   PERFORM pg_temp.s3b_s('R1', j->>'lot_id');
   j := public.fn_sms_lot_redari_creeaza('Test DRY: al doilea lot.', pg_temp.s3b_g('pr')::uuid, NULL, false);
   PERFORM pg_temp.s3b_s('R2', j->>'lot_id');
-  IF (SELECT count(*) FROM public.sms_loturi WHERE id IN (pg_temp.s3b_g('R1')::uuid, pg_temp.s3b_g('R2')::uuid) AND categorie = 'redari'
-        AND creat_nivel = 'utilizator' AND nr_destinatari = 2) <> 2 THEN
+  IF (SELECT count(*) FROM jsonb_array_elements(public.fn_sms_loturi_lista(200)) e
+       WHERE (e->>'id')::uuid IN (pg_temp.s3b_g('R1')::uuid, pg_temp.s3b_g('R2')::uuid) AND e->>'categorie' = 'redari'
+         AND e->>'creat_nivel' = 'utilizator' AND (e->>'nr_destinatari')::integer = 2 AND (e->>'al_meu')::boolean) <> 2 THEN
     RAISE EXCEPTION 'TEST6 FAIL: utilizatorul cu Redari creeaza loturi Redari';
   END IF;
 END $t$;
@@ -333,36 +378,41 @@ BEGIN
      OR NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s3b_g('R1')), 'P0002') THEN
     RAISE EXCEPTION 'TEST6 FAIL: utilizator fara Redari vede / aproba lotul Redari';
   END IF;
+  -- utilizatorul vede si loturile conturilor de test (owner-ul si utilizatorul raman ca in r1)
+  IF jsonb_array_length(public.fn_sms_lot_destinatari(pg_temp.s3b_g('TX')::uuid)->'destinatari') <> 2 THEN RAISE EXCEPTION 'TEST6 FAIL: utilizator nu vede lotul de test'; END IF;
   PERFORM public.fn_sms_lot_aproba(pg_temp.s3b_g('O6')::uuid, 1);
-  IF (SELECT stare <> 'aprobat' OR aprobat_nivel IS DISTINCT FROM 'utilizator' OR aprobat_de IS DISTINCT FROM pg_temp.s3b_g('util')::uuid
-        FROM public.sms_loturi WHERE id = pg_temp.s3b_g('O6')::uuid) THEN
+  IF (SELECT x.l->>'stare' <> 'aprobat' OR x.l->>'aprobat_nivel' IS DISTINCT FROM 'utilizator' OR x.l->>'aprobat_de' IS DISTINCT FROM pg_temp.s3b_g('util')
+        FROM pg_temp.s3b_lot_din_lista(pg_temp.s3b_g('O6')::uuid) AS x(l)) IS NOT FALSE THEN
     RAISE EXCEPTION 'TEST6 FAIL: aprobarea utilizatorului (6 destinatari)';
   END IF;
-  RAISE NOTICE 'TEST6a OK utilizator: intern aprobat (6), Redari fara modulul Redari = invizibil / refuzat';
+  RAISE NOTICE 'TEST6a OK utilizator: intern aprobat (6), lotul de test vizibil, Redari fara modulul Redari = invizibil / refuzat';
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
 DO $t$
-DECLARE j jsonb; e text;
+DECLARE j jsonb; q text;
 BEGIN
-  -- lista fixata a unui lot intern de 6: vizibila, dar fara drept de actiune pentru test
-  j := public.fn_sms_lot_destinatari(pg_temp.s3b_g('O6')::uuid);
-  IF (j->>'actiune_permisa')::boolean IS NOT FALSE THEN RAISE EXCEPTION 'TEST6 FAIL: test are actiune pe lotul de 6'; END IF;
-  -- lotul intern de 2 (scris de mentenanta, fara nivel): test il poate aproba; nivelul aprobarii ramane „test”
-  PERFORM public.fn_sms_lot_aproba(pg_temp.s3b_g('O2')::uuid, 1);
-  e := pg_temp.s3b_eroare(format('SELECT public.fn_sms_lot_aproba(%L, %s)', pg_temp.s3b_g('O6'), pg_temp.s3b_ver(pg_temp.s3b_g('O6')::uuid)));
-  IF e IS NULL OR e NOT LIKE '42501%maximum 5%' THEN RAISE EXCEPTION 'TEST6 FAIL: test pe lotul de 6 (%)', e; END IF;
-  IF NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s3b_g('R2')), 'P0002')
-     OR NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s3b_g('R1')), 'P0002') THEN
-    RAISE EXCEPTION 'TEST6 FAIL: test vede / aproba Redari';
-  END IF;
+  -- P2-02: loturile altora (mentenanta, utilizator, alt cont de test, Redari) = inexistente pentru test, la vedere si la actiune
+  FOREACH q IN ARRAY ARRAY[format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s3b_g('O6')), format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s3b_g('O2')),
+      format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s3b_g('O2')), format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s3b_g('TX')),
+      format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s3b_g('TX')), format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s3b_g('R1')),
+      format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s3b_g('R2'))] LOOP
+    IF NOT pg_temp.s3b_refuza(q, 'P0002') THEN RAISE EXCEPTION 'TEST6 FAIL: test vede / aproba lotul altuia: %', q; END IF;
+  END LOOP;
   IF NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 99)', pg_temp.s3b_g('T1')), '40001') THEN RAISE EXCEPTION 'TEST6 FAIL: aprobare pe alta versiune'; END IF;
   j := public.fn_sms_lot_aproba(pg_temp.s3b_g('T1')::uuid, 1);
   PERFORM public.fn_sms_lot_aproba(pg_temp.s3b_g('TF')::uuid, 1);
-  IF (SELECT count(*) FROM public.sms_loturi WHERE id IN (pg_temp.s3b_g('T1')::uuid, pg_temp.s3b_g('TF')::uuid) AND stare = 'aprobat'
-        AND aprobat_nivel = 'test' AND aprobat_de = pg_temp.s3b_g('tst')::uuid) <> 2 OR j->>'aprobat_nivel' <> 'test' THEN
-    RAISE EXCEPTION 'TEST6 FAIL: aprobarea contului test';
+  PERFORM public.fn_sms_lot_aproba(pg_temp.s3b_g('TG')::uuid, 1);
+  PERFORM public.fn_sms_lot_aproba(pg_temp.s3b_g('TH')::uuid, 1);
+  IF (SELECT count(*) FROM jsonb_array_elements(public.fn_sms_loturi_lista(200)) e
+       WHERE (e->>'id')::uuid IN (pg_temp.s3b_g('T1')::uuid, pg_temp.s3b_g('TF')::uuid, pg_temp.s3b_g('TG')::uuid, pg_temp.s3b_g('TH')::uuid)
+         AND e->>'stare' = 'aprobat' AND e->>'aprobat_nivel' = 'test' AND e->>'aprobat_de' = pg_temp.s3b_g('tst')) <> 4 OR j->>'aprobat_nivel' <> 'test' THEN
+    RAISE EXCEPTION 'TEST6 FAIL: aprobarea contului test pe loturile lui';
   END IF;
-  RAISE NOTICE 'TEST6b OK test: aproba doar interne <= 5; lotul de 6 refuzat; Redari invizibil';
+  RAISE NOTICE 'TEST6b OK test: aproba doar loturile lui; ale mentenantei / utilizatorului / altui cont de test / Redari = P0002';
+END $t$;
+SELECT pg_temp.s3b_ca(pg_temp.s3b_g('own')::uuid, 'authenticated');
+DO $t$ BEGIN
+  IF public.fn_sms_lot_aproba(pg_temp.s3b_g('O2')::uuid, 1)->>'aprobat_nivel' <> 'owner' THEN RAISE EXCEPTION 'TEST6 FAIL: aprobarea owner-ului'; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('ured')::uuid, 'authenticated');
 DO $t$
@@ -372,20 +422,27 @@ BEGIN
   IF jsonb_array_length(j->'destinatari') <> 2 OR (j->>'actiune_permisa')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TEST6 FAIL: lista Redari pentru utilizator'; END IF;
   j := public.fn_sms_lot_aproba(pg_temp.s3b_g('R1')::uuid, 1);
   IF j->>'aprobat_autorizare_nr' <> 'TGZ-DRY-B' OR j->>'aprobat_nivel' <> 'utilizator' THEN RAISE EXCEPTION 'TEST6 FAIL: aprobare Redari de utilizator %', j; END IF;
+  IF pg_temp.s3b_lista_dry() <> 'O2,O6,R1,R2,T1,TF,TG,TH,TX' THEN RAISE EXCEPTION 'TEST6 FAIL: istoricul utilizatorului cu Redari (comutator pornit) %', pg_temp.s3b_lista_dry(); END IF;
 END $t$;
--- utilizator: Redari doar cat comutatorul e pornit de owner (regula existenta)
+-- P2-03: comutatorul Redari oprit de owner => loturile Redari dispar pentru utilizator (la vedere si la actiune); owner-ul le vede mereu
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('own')::uuid, 'authenticated');
 DO $t$ BEGIN
   PERFORM public.fn_sms_redari_autorizare_seteaza(false, NULL, NULL, pg_temp.s3b_vs());
+  IF pg_temp.s3b_lista_dry() <> 'O2,O6,R1,R2,T1,TF,TG,TH,TX' THEN RAISE EXCEPTION 'TEST6 FAIL: owner cu comutatorul oprit %', pg_temp.s3b_lista_dry(); END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('ured')::uuid, 'authenticated');
 DO $t$
 DECLARE e text;
 BEGIN
+  IF pg_temp.s3b_lista_dry() <> 'O2,O6,T1,TF,TG,TH,TX' THEN RAISE EXCEPTION 'TEST6 FAIL: utilizatorul vede Redari cu comutatorul oprit %', pg_temp.s3b_lista_dry(); END IF;
+  IF NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_destinatari(%L)', pg_temp.s3b_g('R1')), 'P0002')
+     OR NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s3b_g('R2')), 'P0002')
+     OR NOT pg_temp.s3b_refuza(format($q$SELECT public.fn_sms_lot_anuleaza(%L, 'x')$q$, pg_temp.s3b_g('R2')), 'P0002') THEN
+    RAISE EXCEPTION 'TEST6 FAIL: utilizator pe Redari cu comutatorul oprit';
+  END IF;
   e := pg_temp.s3b_eroare(format($q$SELECT public.fn_sms_lot_redari_creeaza('Test DRY.', %L, NULL, true)$q$, pg_temp.s3b_g('pr')));
   IF e IS NULL OR e NOT LIKE '42501%autorizarea scrisa Transgaz%' THEN RAISE EXCEPTION 'TEST6 FAIL: Redari cu comutatorul oprit (%)', e; END IF;
-  IF NOT pg_temp.s3b_refuza(format('SELECT public.fn_sms_lot_aproba(%L, 1)', pg_temp.s3b_g('R2')), '42501') THEN RAISE EXCEPTION 'TEST6 FAIL: aprobare Redari cu comutatorul oprit'; END IF;
-  RAISE NOTICE 'TEST6c OK utilizator cu Redari: doar cu comutatorul pornit de owner';
+  RAISE NOTICE 'TEST6c OK comutatorul Redari oprit: utilizatorul nu mai vede / atinge loturile Redari, owner-ul da';
 END $t$;
 SELECT pg_temp.s3b_ca(NULL, 'postgres');
 DO $t$ BEGIN
@@ -396,21 +453,21 @@ DO $t$ BEGIN
   RAISE NOTICE 'TEST6d OK fara cont SMS nu se aproba';
 END $t$;
 
--- ── TEST7: REZERVARE (edge, service_role) cu apelantul: test doar <= 5 intern; invizibil = fara_lot; fara drept = refuz ─────
+-- ── TEST7: REZERVARE (edge, service_role) cu apelantul: test doar loturile lui; invizibil = fara_lot; fara drept = refuz ──────
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('own')::uuid, 'authenticated');
 DO $t$ BEGIN
   PERFORM public.fn_sms_redari_autorizare_seteaza(true, 'TGZ-DRY-B', pg_temp.s3b_g('azi')::date, pg_temp.s3b_vs());
 END $t$;
 SELECT pg_temp.s3b_ca(NULL, 'service_role');
 DO $t$
-DECLARE j jsonb; e text;
+DECLARE j jsonb; v text;
 BEGIN
   j := public.fn_sms_rezerva(pg_temp.s3b_g('TF')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
   IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 3 OR (j->>'ramase')::integer <> 0 THEN RAISE EXCEPTION 'TEST7 FAIL: test trimite lotul lui de 3 (%)', j->>'motiv'; END IF;
-  e := pg_temp.s3b_eroare(format($q$SELECT public.fn_sms_rezerva(%L, 5, 'simulator', %L)$q$, pg_temp.s3b_g('O6'), pg_temp.s3b_g('tst')));
-  IF e IS NULL OR e NOT LIKE '42501%maximum 5%' THEN RAISE EXCEPTION 'TEST7 FAIL: test trimite lotul de 6 (%)', e; END IF;
-  j := public.fn_sms_rezerva(pg_temp.s3b_g('R1')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
-  IF j->>'motiv' <> 'fara_lot' OR jsonb_array_length(j->'mesaje') <> 0 THEN RAISE EXCEPTION 'TEST7 FAIL: test trimite Redari (%)', j->>'motiv'; END IF;
+  FOREACH v IN ARRAY ARRAY['O6', 'TX', 'R1'] LOOP
+    j := public.fn_sms_rezerva(pg_temp.s3b_g(v)::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
+    IF j->>'motiv' <> 'fara_lot' OR jsonb_array_length(j->'mesaje') <> 0 THEN RAISE EXCEPTION 'TEST7 FAIL: test trimite lotul % al altuia (%)', v, j->>'motiv'; END IF;
+  END LOOP;
   j := public.fn_sms_rezerva(pg_temp.s3b_g('R1')::uuid, 5, 'simulator', pg_temp.s3b_g('util')::uuid);
   IF j->>'motiv' <> 'fara_lot' THEN RAISE EXCEPTION 'TEST7 FAIL: utilizator fara Redari trimite Redari (%)', j->>'motiv'; END IF;
   IF NOT pg_temp.s3b_refuza(format($q$SELECT public.fn_sms_rezerva(NULL, 5, 'simulator', %L)$q$, pg_temp.s3b_g('tst')), '22023') THEN
@@ -422,27 +479,81 @@ BEGIN
   j := public.fn_sms_rezerva(pg_temp.s3b_g('O6')::uuid, 2, 'simulator', pg_temp.s3b_g('util')::uuid);
   IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 2 THEN RAISE EXCEPTION 'TEST7 FAIL: utilizator trimite lotul de 6 (%)', j->>'motiv'; END IF;
   j := public.fn_sms_rezerva(pg_temp.s3b_g('O2')::uuid, 5, 'simulator', NULL);
-  IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 2 THEN RAISE EXCEPTION 'TEST7 FAIL: cronul intern pe lotul aprobat de test (%)', j->>'motiv'; END IF;
+  IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 2 THEN RAISE EXCEPTION 'TEST7 FAIL: cronul intern pe lotul aprobat de owner (%)', j->>'motiv'; END IF;
   j := public.fn_sms_rezerva(pg_temp.s3b_g('O6')::uuid, 5, 'simulator', pg_temp.s3b_g('own')::uuid);
   IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 4 OR (j->>'ramase')::integer <> 0 THEN RAISE EXCEPTION 'TEST7 FAIL: owner (%)', j->>'motiv'; END IF;
-  RAISE NOTICE 'TEST7 OK rezervarea verifica nivelul apelantului (test 3 da / 6 refuzat / Redari fara_lot; fara drept refuzat)';
+  RAISE NOTICE 'TEST7a OK rezervarea verifica nivelul apelantului (test: lotul lui da, O6 / TX / R1 fara_lot; fara drept refuzat)';
+END $t$;
+-- P2-01: bugetul zilnic al contului de test (10 / zi, peste toate loturile lui): al 11-lea mesaj e refuzat, oricine porneste trimiterea
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_rezerva(pg_temp.s3b_g('TG')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
+  IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 5 THEN RAISE EXCEPTION 'TEST7b FAIL: mesajele 4-8 (%)', j->>'motiv'; END IF;
+  j := public.fn_sms_rezerva(pg_temp.s3b_g('TH')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
+  IF j->>'motiv' <> 'ok' OR jsonb_array_length(j->'mesaje') <> 2 OR (j->>'ramase')::integer <> 3 THEN
+    RAISE EXCEPTION 'TEST7b FAIL: mesajele 9-10 (doar 2 din 5) (%, %)', j->>'motiv', jsonb_array_length(j->'mesaje');
+  END IF;
+  j := public.fn_sms_rezerva(pg_temp.s3b_g('TH')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
+  IF j->>'motiv' <> 'buget_test_zi' OR jsonb_array_length(j->'mesaje') <> 0 THEN RAISE EXCEPTION 'TEST7b FAIL: al 11-lea mesaj al zilei (%)', j->>'motiv'; END IF;
+  j := public.fn_sms_rezerva(pg_temp.s3b_g('TH')::uuid, 5, 'simulator', pg_temp.s3b_g('own')::uuid);
+  IF j->>'motiv' <> 'buget_test_zi' THEN RAISE EXCEPTION 'TEST7b FAIL: owner-ul ocoleste bugetul contului de test (%)', j->>'motiv'; END IF;
+  j := public.fn_sms_rezerva(pg_temp.s3b_g('TH')::uuid, 5, 'simulator', NULL);
+  IF j->>'motiv' <> 'buget_test_zi' THEN RAISE EXCEPTION 'TEST7b FAIL: cronul ocoleste bugetul contului de test (%)', j->>'motiv'; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(NULL, 'postgres');
 DO $t$ BEGIN
-  IF (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = pg_temp.s3b_g('TF')::uuid AND stare = 'necunoscut' AND rezervat_la IS NOT NULL) <> 3
+  IF public.fn_sms_test_consum_zi(pg_temp.s3b_g('tst')::uuid) <> 10
+     OR (SELECT count(*) FROM public.sms_mesaje m JOIN public.sms_loturi l ON l.id = m.lot_id
+          WHERE l.creat_de = pg_temp.s3b_g('tst')::uuid AND l.creat_nivel = 'test' AND m.rezervat_la IS NOT NULL AND m.stare = 'necunoscut') <> 10
+     OR (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = pg_temp.s3b_g('O6')::uuid AND stare = 'necunoscut') <> 6
      OR (SELECT stare FROM public.sms_loturi WHERE id = pg_temp.s3b_g('O6')::uuid) <> 'coada_golita'
      OR EXISTS (SELECT 1 FROM public.sms_mesaje WHERE lot_id = pg_temp.s3b_g('T1')::uuid AND stare <> 'in_coada') THEN
-    RAISE EXCEPTION 'TEST7 FAIL: stari dupa rezervare (lotul T1, cu angajati reali, nu se rezerva)';
+    RAISE EXCEPTION 'TEST7b FAIL: consumul contului de test (10 necunoscut) / starile (lotul T1, cu angajati reali, nu se rezerva)';
   END IF;
 END $t$;
-
--- ── TEST8: ANULARE — test doar pe loturile lui de <= 5; utilizator fara Redari nu atinge Redari ─────────────────────────────
+-- anularea si recrearea NU elibereaza bugetul
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
 DO $t$
 DECLARE j jsonb;
 BEGIN
-  IF NOT pg_temp.s3b_refuza(format($q$SELECT public.fn_sms_lot_anuleaza(%L, 'x')$q$, pg_temp.s3b_g('O6')), '42501') THEN RAISE EXCEPTION 'TEST8 FAIL: test anuleaza lotul de 6'; END IF;
-  IF NOT pg_temp.s3b_refuza(format($q$SELECT public.fn_sms_lot_anuleaza(%L, 'x')$q$, pg_temp.s3b_g('R2')), 'P0002') THEN RAISE EXCEPTION 'TEST8 FAIL: test anuleaza Redari'; END IF;
+  j := public.fn_sms_lot_anuleaza(pg_temp.s3b_g('TH')::uuid, 'DRY buget');
+  IF (j->>'mesaje_anulate')::integer <> 3 OR (j->>'deja_predate')::integer <> 2 THEN RAISE EXCEPTION 'TEST7b FAIL: anularea TH %', j; END IF;
+END $t$;
+SELECT pg_temp.s3b_jwt(pg_temp.s3b_g('tst')::uuid);
+DO $t$ BEGIN
+  PERFORM pg_temp.s3b_s('TI', pg_temp.s3b_lot('intern', 1, pg_temp.s3b_tels(291, 1), NULL)::text);
+END $t$;
+SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
+DO $t$ BEGIN
+  PERFORM public.fn_sms_lot_aproba(pg_temp.s3b_g('TI')::uuid, 1);
+  IF (public.fn_sms_panou()->>'ramas_zi')::integer <> 0 THEN RAISE EXCEPTION 'TEST7b FAIL: panoul contului test arata buget ramas'; END IF;
+END $t$;
+SELECT pg_temp.s3b_ca(NULL, 'service_role');
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_rezerva(pg_temp.s3b_g('TI')::uuid, 5, 'simulator', pg_temp.s3b_g('tst')::uuid);
+  IF j->>'motiv' <> 'buget_test_zi' THEN RAISE EXCEPTION 'TEST7b FAIL: lotul recreat elibereaza bugetul (%)', j->>'motiv'; END IF;
+END $t$;
+-- aparare in adancime: si rezervarea directa (ocolind fn_sms_rezerva) e oprita de triggerul mesajelor
+SELECT pg_temp.s3b_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  UPDATE public.sms_loturi SET stare = 'in_trimitere' WHERE id = pg_temp.s3b_g('TI')::uuid;
+  IF NOT pg_temp.s3b_refuza(format($q$UPDATE public.sms_mesaje SET stare = 'necunoscut', furnizor = 'simulator' WHERE lot_id = %L$q$, pg_temp.s3b_g('TI')), '42501') THEN
+    RAISE EXCEPTION 'TEST7b FAIL: trigger — rezervare directa peste buget';
+  END IF;
+  RAISE NOTICE 'TEST7b OK bugetul contului de test: 10 / zi, al 11-lea refuzat (si prin owner / cron / trigger), anularea + recrearea nu il elibereaza';
+END $t$;
+
+-- ── TEST8: ANULARE — test doar pe loturile lui; utilizator fara Redari nu atinge Redari ──────────────────────────────────────
+SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
+DO $t$
+DECLARE j jsonb; v text;
+BEGIN
+  FOREACH v IN ARRAY ARRAY['O6', 'TX', 'R2'] LOOP
+    IF NOT pg_temp.s3b_refuza(format($q$SELECT public.fn_sms_lot_anuleaza(%L, 'x')$q$, pg_temp.s3b_g(v)), 'P0002') THEN RAISE EXCEPTION 'TEST8 FAIL: test anuleaza lotul % al altuia', v; END IF;
+  END LOOP;
   j := public.fn_sms_lot_anuleaza(pg_temp.s3b_g('T1')::uuid, 'DRY test');
   IF (j->>'mesaje_anulate')::integer <> 3 OR j->>'anulat_nivel' <> 'test' THEN RAISE EXCEPTION 'TEST8 FAIL: anularea contului test %', j; END IF;
 END $t$;
@@ -456,45 +567,57 @@ DECLARE j jsonb;
 BEGIN
   j := public.fn_sms_lot_anuleaza(pg_temp.s3b_g('R2')::uuid, 'DRY utilizator');
   IF (j->>'mesaje_anulate')::integer <> 2 OR j->>'anulat_nivel' <> 'utilizator' THEN RAISE EXCEPTION 'TEST8 FAIL: anularea utilizatorului %', j; END IF;
-  RAISE NOTICE 'TEST8 OK anulare pe niveluri';
+  RAISE NOTICE 'TEST8 OK anulare pe niveluri (test doar pe loturile lui)';
 END $t$;
 
--- ── TEST9: RLS pe istoric / mesaje / vedere: owner + nivelurile SMS (test: doar interne; utilizator fara Redari: fara Redari) ──
-SELECT pg_temp.s3b_ca(NULL, 'postgres');
-DO $t$ BEGIN
-  PERFORM pg_temp.s3b_s('dry', ARRAY[pg_temp.s3b_g('T1'), pg_temp.s3b_g('TF'), pg_temp.s3b_g('O6'), pg_temp.s3b_g('O2'), pg_temp.s3b_g('R1'), pg_temp.s3b_g('R2')]::text);
-END $t$;
-CREATE FUNCTION pg_temp.s3b_vede() RETURNS text LANGUAGE sql STABLE AS $h$
-  SELECT (SELECT count(*) FROM public.sms_loturi WHERE id = ANY (pg_temp.s3b_g('dry')::uuid[])) || '/'
-      || (SELECT count(*) FROM public.sms_v_loturi WHERE id = ANY (pg_temp.s3b_g('dry')::uuid[])) || '/'
-      || (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = ANY (pg_temp.s3b_g('dry')::uuid[])) || '/'
-      || (SELECT count(*) FROM public.sms_loturi WHERE categorie = 'redari') || '/'
-      || (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = pg_temp.s3b_g('R1')::uuid) || '/'
-      || coalesce((SELECT n_necunoscut FROM public.sms_v_loturi WHERE id = pg_temp.s3b_g('O6')::uuid), -1)
-$h$;
-GRANT EXECUTE ON FUNCTION pg_temp.s3b_vede() TO authenticated;
-DO $t$ BEGIN
-  PERFORM pg_temp.s3b_s('redari_toate', (SELECT count(*) FROM public.sms_loturi WHERE categorie = 'redari')::text);
-END $t$;
+-- ── TEST9 (P1): citirea DIRECTA = doar owner (telefonul complet nu ajunge la utilizator / test); istoricul prin fn_sms_loturi_lista ──
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('own')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF pg_temp.s3b_vede() <> '6/6/18/' || pg_temp.s3b_g('redari_toate') || '/2/6' THEN RAISE EXCEPTION 'TEST9 FAIL: owner vede %', pg_temp.s3b_vede(); END IF;
+  IF pg_temp.s3b_lista_dry() <> 'O2,O6,R1,R2,T1,TF,TG,TH,TI,TX' THEN RAISE EXCEPTION 'TEST9 FAIL: istoricul owner-ului %', pg_temp.s3b_lista_dry(); END IF;
+  IF (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = pg_temp.s3b_g('TF')::uuid AND telefon ~ '^[+]407[0-9]{8}$') <> 3 THEN
+    RAISE EXCEPTION 'TEST9 FAIL: owner-ul citeste direct sms_mesaje (ca in 20261130a)';
+  END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('ured')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF pg_temp.s3b_vede() <> '6/6/18/' || pg_temp.s3b_g('redari_toate') || '/2/6' THEN RAISE EXCEPTION 'TEST9 FAIL: utilizator cu Redari vede %', pg_temp.s3b_vede(); END IF;
+  IF pg_temp.s3b_direct() <> '0/0/0' THEN RAISE EXCEPTION 'TEST9 FAIL: utilizatorul cu Redari citeste direct %', pg_temp.s3b_direct(); END IF;
+  IF pg_temp.s3b_lista_dry() <> 'O2,O6,R1,R2,T1,TF,TG,TH,TI,TX' THEN RAISE EXCEPTION 'TEST9 FAIL: istoricul utilizatorului cu Redari %', pg_temp.s3b_lista_dry(); END IF;
+  IF (pg_temp.s3b_lot_din_lista(pg_temp.s3b_g('R2')::uuid)->>'n_anulat')::integer <> 2 THEN RAISE EXCEPTION 'TEST9 FAIL: numaratorile Redari pentru utilizator'; END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('util')::uuid, 'authenticated');
-DO $t$ BEGIN
-  IF pg_temp.s3b_vede() <> '4/4/14/0/0/6' THEN RAISE EXCEPTION 'TEST9 FAIL: utilizator fara Redari vede %', pg_temp.s3b_vede(); END IF;
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  IF pg_temp.s3b_direct() <> '0/0/0' THEN RAISE EXCEPTION 'TEST9 FAIL: utilizatorul citeste direct %', pg_temp.s3b_direct(); END IF;
+  IF pg_temp.s3b_lista_dry() <> 'O2,O6,T1,TF,TG,TH,TI,TX' THEN RAISE EXCEPTION 'TEST9 FAIL: istoricul utilizatorului fara Redari %', pg_temp.s3b_lista_dry(); END IF;
+  j := pg_temp.s3b_lot_din_lista(pg_temp.s3b_g('O6')::uuid);
+  IF (j->>'n_necunoscut')::integer <> 6 OR (j->>'actiune_permisa')::boolean IS NOT TRUE OR j->>'aprobat_nivel' <> 'utilizator' THEN
+    RAISE EXCEPTION 'TEST9 FAIL: numaratorile din sursa autorizata %', j;
+  END IF;
 END $t$;
 SELECT pg_temp.s3b_ca(pg_temp.s3b_g('tst')::uuid, 'authenticated');
-DO $t$ BEGIN
-  IF pg_temp.s3b_vede() <> '4/4/14/0/0/6' THEN RAISE EXCEPTION 'TEST9 FAIL: test vede %', pg_temp.s3b_vede(); END IF;
-  IF (SELECT creat_nivel || '/' || aprobat_nivel || '/' || anulat_nivel FROM public.sms_v_loturi WHERE id = pg_temp.s3b_g('T1')::uuid) <> 'test/test/test' THEN
-    RAISE EXCEPTION 'TEST9 FAIL: nivelurile in vedere';
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  -- „GET /rest/v1/sms_mesaje?select=lot_id,telefon,destinatar_id” cu JWT-ul contului de test: 0 randuri (si pe loturile LUI)
+  IF pg_temp.s3b_direct() <> '0/0/0' OR (SELECT count(*) FROM public.sms_mesaje WHERE lot_id = pg_temp.s3b_g('TF')::uuid) <> 0 THEN
+    RAISE EXCEPTION 'TEST9 FAIL: contul de test citeste direct %', pg_temp.s3b_direct();
   END IF;
-  RAISE NOTICE 'TEST9 OK RLS: owner / utilizator cu Redari 6 loturi; utilizator fara Redari si test 4 (fara Redari), numaratori identice';
+  IF pg_temp.s3b_lista_dry() <> 'T1,TF,TG,TH,TI' THEN RAISE EXCEPTION 'TEST9 FAIL: istoricul contului de test (doar loturile lui) %', pg_temp.s3b_lista_dry(); END IF;
+  j := public.fn_sms_loturi_lista(200);
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(j) e WHERE e ? 'telefon' OR e ? 'telefoane' OR e::text ~ '[+]407[0-9]{8}') THEN
+    RAISE EXCEPTION 'TEST9 FAIL: istoricul contine telefoane';
+  END IF;
+  j := pg_temp.s3b_lot_din_lista(pg_temp.s3b_g('TF')::uuid);
+  IF (j->>'n_necunoscut')::integer <> 3 OR (j->>'al_meu')::boolean IS NOT TRUE OR j->>'creat_nivel' <> 'test' THEN RAISE EXCEPTION 'TEST9 FAIL: numaratorile lotului TF %', j; END IF;
+  -- mesajele lotului (lista fixata) prin RPC: telefon MASCAT, starea si momentul rezervarii
+  j := public.fn_sms_lot_destinatari(pg_temp.s3b_g('TF')::uuid);
+  IF jsonb_array_length(j->'destinatari') <> 3 OR j::text ~ '[+]407[0-9]{8}'
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(j->'destinatari') d
+                 WHERE d ? 'telefon' OR d->>'telefon_mascat' !~ '^07[*]{2} [*]{3} [0-9]{3}$' OR d->>'stare' <> 'necunoscut' OR d->>'rezervat_la' IS NULL) THEN
+    RAISE EXCEPTION 'TEST9 FAIL: mesajele lotului TF prin RPC';
+  END IF;
+  RAISE NOTICE 'TEST9 OK P1: citirea directa 0/0/0 pentru utilizator / test; istoricul si mesajele prin RPC, cu numaratori si telefon mascat';
 END $t$;
 
 -- ── TEST10: cine a creat / aprobat / anulat ramane pe lot; nivelul nu se rescrie ────────────────────────────────────────────
@@ -503,15 +626,17 @@ DO $t$ BEGIN
   IF (SELECT creat_de IS DISTINCT FROM pg_temp.s3b_g('tst')::uuid OR aprobat_de IS DISTINCT FROM pg_temp.s3b_g('tst')::uuid
          OR anulat_de IS DISTINCT FROM pg_temp.s3b_g('tst')::uuid OR (creat_nivel, aprobat_nivel, anulat_nivel) IS DISTINCT FROM ('test', 'test', 'test')
         FROM public.sms_loturi WHERE id = pg_temp.s3b_g('T1')::uuid)
-     OR (SELECT creat_nivel IS NOT NULL OR aprobat_nivel IS DISTINCT FROM 'test' FROM public.sms_loturi WHERE id = pg_temp.s3b_g('O2')::uuid)
+     OR (SELECT creat_nivel IS NOT NULL OR aprobat_nivel IS DISTINCT FROM 'owner' FROM public.sms_loturi WHERE id = pg_temp.s3b_g('O2')::uuid)
      OR (SELECT creat_de IS DISTINCT FROM pg_temp.s3b_g('ured')::uuid OR (creat_nivel, aprobat_nivel) IS DISTINCT FROM ('utilizator', 'utilizator')
            OR aprobat_autorizare_nr IS DISTINCT FROM 'TGZ-DRY-B' FROM public.sms_loturi WHERE id = pg_temp.s3b_g('R1')::uuid)
-     OR (SELECT anulat_de IS DISTINCT FROM pg_temp.s3b_g('ured')::uuid OR anulat_nivel IS DISTINCT FROM 'utilizator' FROM public.sms_loturi WHERE id = pg_temp.s3b_g('R2')::uuid) THEN
+     OR (SELECT anulat_de IS DISTINCT FROM pg_temp.s3b_g('ured')::uuid OR anulat_nivel IS DISTINCT FROM 'utilizator' FROM public.sms_loturi WHERE id = pg_temp.s3b_g('R2')::uuid)
+     OR (SELECT creat_de IS DISTINCT FROM pg_temp.s3b_g('util')::uuid OR creat_nivel IS DISTINCT FROM 'test' FROM public.sms_loturi WHERE id = pg_temp.s3b_g('TX')::uuid) THEN
     RAISE EXCEPTION 'TEST10 FAIL: urma pe lot';
   END IF;
   IF NOT pg_temp.s3b_refuza(format($q$UPDATE public.sms_loturi SET creat_nivel = 'owner' WHERE id = %L$q$, pg_temp.s3b_g('T1')), '23514')
-     OR NOT pg_temp.s3b_refuza(format($q$UPDATE public.sms_loturi SET aprobat_nivel = 'owner' WHERE id = %L$q$, pg_temp.s3b_g('O2')), '23514') THEN
-    RAISE EXCEPTION 'TEST10 FAIL: nivelul de pe lot se poate rescrie';
+     OR NOT pg_temp.s3b_refuza(format($q$UPDATE public.sms_loturi SET creat_de = %L WHERE id = %L$q$, pg_temp.s3b_g('tst'), pg_temp.s3b_g('TX')), '23514')
+     OR NOT pg_temp.s3b_refuza(format($q$UPDATE public.sms_loturi SET aprobat_nivel = 'test' WHERE id = %L$q$, pg_temp.s3b_g('O2')), '23514') THEN
+    RAISE EXCEPTION 'TEST10 FAIL: nivelul / creatorul de pe lot se poate rescrie';
   END IF;
   RAISE NOTICE 'TEST10 OK creat / aprobat / anulat (cine + nivel) raman pe lot';
 END $t$;
