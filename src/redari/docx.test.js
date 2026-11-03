@@ -367,6 +367,9 @@ describe('genereazaConvocator', () => {
       ['Detalii la exemplu.ro?formular=1 sau exemplu.ro#informare.', EXTERNE],
       ['Site:www.exemplu.ro', EXTERNE],
       ['Info:https://exemplu.ro', EXTERNE],
+      // #970 r14
+      ['Detalii la https://dataprotection.ro:parola@exemplu.ro', EXTERNE],
+      ['Detalii la Site:exemplu.ro și exemplu.ro#informare.', EXTERNE],
       // #970 r9: URL lipit de un e-mail cu virgulă / punct și virgulă
       ['Site: www.gazpet.ro,contact@example.com', PROPRII],
       ['Site: www.exemplu.ro,contact@example.com', EXTERNE],
@@ -433,6 +436,10 @@ describe('genereazaConvocator', () => {
       ['Site:www.exemplu.ro', 'exemplu.ro'], ['Site:exemplu.ro', 'exemplu.ro'], ['Info:https://exemplu.ro', 'exemplu.ro'],
       ['Detalii la https://dataprotection.ro:443/x', 'dataprotection.ro'], ['Detalii la dataprotection.ro:443/x', 'dataprotection.ro'],
       ['Info:www.dataprotection.ro.evil.com', 'dataprotection.ro.evil.com'],
+      // #970 r14 (Jakarinos P2): parolă / utilizator în autoritate; schemă lipită de etichetă
+      ['Detalii la https://dataprotection.ro:parola@exemplu.ro', 'exemplu.ro'], ['Detalii la https://dataprotection.ro:parola@dataprotection.ro/x', 'dataprotection.ro'],
+      ['Detalii la Info:xhttps://dataprotection.ro/x', 'dataprotection.ro'], ['Detalii la www.dataprotection.ro:8080', 'dataprotection.ro'],
+      ['Detalii la www.ion@dataprotection.ro/x', 'dataprotection.ro'],
       ['Detalii la a.ro', 'a.ro'], ['Detalii la x.y.com', 'x.y.com'], ['Detalii la dataprotection.ro-evil.ro', 'dataprotection.ro-evil.ro'],
     ]
     for (const [t, adresa] of refuzateR11) {
@@ -446,7 +453,9 @@ describe('genereazaConvocator', () => {
       // fără alarmă pe textul juridic, inclusiv lipit („lit.c”, „art.6”) și rânduri cu „Data:03.11.2026”
       'S.N.T.G.N. S.R.L. lit.c art.6 H.G. nr. 1.234/2022 pct. 5.2 A.P.M. Nr. 123/2026 Data:03.11.2026 ora 09:00 13.00–16.00 ș.a. [UAT].',
       // #970 r13: „:” urmat de cifră nu desparte; permise după „:”
-      'Data:03.11.2026 Tel:0244 435 005 ora:13.00 Nr.:12', 'Info:(www.dataprotection.ro)', 'Plângere: www.dataprotection.ro', 'Plângere:dataprotection.ro.']) {
+      'Data:03.11.2026 Tel:0244 435 005 ora:13.00 Nr.:12', 'Info:(www.dataprotection.ro)', 'Plângere: www.dataprotection.ro', 'Plângere:dataprotection.ro.',
+      // #970 r14: calea / query-ul unui URL permis nu se analizează
+      'Vezi https://dataprotection.ro/legislatie/art:exemplu.ro', 'Vezi https://dataprotection.ro/?referinta=art:exemplu.ro', 'Vezi Info:https://www.dataprotection.ro/a#b:c.ro']) {
       expect(adresaWebNepermisa(t), t).toBeNull()
     }
     // fără alarme false pe textul juridic: abrevieri, articole, numere, „Primăria Comunei X.”, default-ul text_gdpr din BD

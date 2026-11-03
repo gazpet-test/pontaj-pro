@@ -386,16 +386,18 @@ export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat, {
   return plin(linkInformareConfigurat) && !areVerso ? `${baza}\n${TRIMITERE_VERSO_GDPR}` : baza
 }
 
-// #970 r12: adresele web pe convocatorul completat se clasifică pe TOKENURI (adresaWebNepermisa), fără regexuri de domeniu:
+// #970 r12–r14: adresele web pe convocatorul completat se clasifică pe TOKENURI (adresaWebNepermisa), fără regexuri de domeniu:
 //  A. adresele PROPRII (MARCAJE_PROPRII) se caută ca subșir pe text, după scoaterea e-mailurilor și înaintea oricărei excepții,
 //     ca să nu se ascundă în calea unui URL permis (`https://dataprotection.ro/redari.gazpet.ro/x`) — găsite = refuz;
 //  B. textul se împarte la spații albe; fiecare token pierde punctuația de la margini (`()[]{}«»„”“"'`, iar la dreapta și
 //     `.,;:!?`); un token care e în întregime un e-mail valid (RX_EMAIL_INTREG) e permis;
-//  C. gazda: cu `://`, partea dintre `://` și primul `/`, `?` sau `#`; altfel, dacă tokenul începe cu `www.` sau partea dinainte
-//     de primul `/` are un punct, acea parte; ce e în cale nu se clasifică;
-//  D. gazda e „web” dacă tokenul are `://` sau începe cu `www.`, ori dacă gazda (fără `user@` și `:port`) are un punct și ultima
-//     etichetă e alfabetică, de 2–24 litere. O gazdă web cu `@`, `:`, `[` sau `]`, cu altă schemă decât http/https sau alta
-//     decât GAZDE_PERMISE (exact, fără deosebire de majuscule) e refuzată.
+//  C. (r14) token cu `://`: URL-ul începe la schema (literele) dinaintea primului `://`; ce e înainte (ex. „Info:”) e etichetă.
+//     Autoritatea = de după `://` până la primul `/`, `?` sau `#`; cu `@` sau `:` (utilizator, parolă, port) → refuz; altfel
+//     gazda trebuie să fie exact în GAZDE_PERMISE și schema http / https. Calea, query-ul și fragmentul nu se analizează;
+//  D. (r14) altfel, `www.` în partea dinainte de primul `/`, `?` sau `#`: URL-ul începe la `www.`, aceleași verificări;
+//  E. (r14) altfel: partea dinainte de primul `/`, `?` sau `#`; dacă are `:` neurmat de cifră, contează ce e după ultimul
+//     (eticheta „Site:”); e gazdă web dacă (fără `user@` și `:port`) are un punct și ultima etichetă are 2–24 litere — atunci
+//     e permisă doar exact din GAZDE_PERMISE, fără `@` sau `:`. „Data:03.11.2026”, „Tel:0244”, „ora:13.00” nu sunt gazde web.
 // Textul juridic nu se termină într-o etichetă alfabetică de 2+ litere după punct („S.N.T.G.N.”, „lit.c”, „art.6”, „pct. 5.2”).
 // Calea informării e scrisă escapat, ca în domeniuPublic.js (ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal).
 export const GAZDE_PERMISE = ['dataprotection.ro', 'www.dataprotection.ro']
@@ -408,33 +410,40 @@ const RX_EMAIL_INTREG = /^(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,
 const RX_MARGINE_STANGA = /^[()[\]{}«»„”“"']+/
 const RX_MARGINE_DREAPTA = /[()[\]{}«»„”“"'.,;:!?]+$/
 const RX_ETICHETA_WEB = /^[a-z]{2,24}$/i
-// `:` care desparte un token în bucăți: nu face parte dintr-un `://` și nu e urmat de o cifră (port, oră, dată, telefon)
-const RX_DOUA_PUNCTE = /:(?!\/\/)(?!\d)/
+const RX_SFARSIT_AUTORITATE = /[/?#]/
+// nucleul gazdei pentru clasificare și mesaj: fără „user@” și „:port”, litere mici, fără „www.” în mesaj
+const nucleuGazda = a => a.replace(/^.*@/, '').replace(/:.*$/, '').toLowerCase()
+const refuz = autoritate => {
+  const nucleu = nucleuGazda(autoritate)
+  return { adresa: /[[\]]/.test(autoritate) || !nucleu ? '(URL neanalizabil)' : nucleu.replace(/^www\./, ''), categorie: 'neaprobata' }
+}
+
+/** Verifică autoritatea unui URL recunoscut (C, D): permisă doar exact din GAZDE_PERMISE, fără utilizator, parolă sau port. */
+function verificaAutoritate(autoritate, schema) {
+  if (/[@:[\]]/.test(autoritate) || !autoritate) return refuz(autoritate)
+  if (schema !== null && schema !== 'http' && schema !== 'https') return refuz(autoritate)
+  return GAZDE_PERMISE.includes(autoritate.toLowerCase()) ? null : refuz(autoritate)
+}
 
 /** Clasifică un token (deja curățat de margini): null = permis / nu e adresă web; altfel { adresa, categorie: 'neaprobata' }. */
 function clasificaToken(token) {
   if (!token || RX_EMAIL_INTREG.test(token)) return null
+  // C: schema = literele (și + . -) lipite înaintea primului „://”; fără ele, schema e goală (refuz)
   const iSchema = token.indexOf('://')
-  let gazda = null
-  let schema = null
   if (iSchema >= 0) {
-    schema = token.slice(0, iSchema).toLowerCase()
-    gazda = token.slice(iSchema + 3).split(/[/?#]/)[0]
-  } else {
-    // #970 r13: gazda se termină la primul `/`, `?` sau `#` și fără schemă („exemplu.ro?formular=1”, „exemplu.ro#informare”)
-    const inainte = token.split(/[/?#]/)[0]
-    if (/^www\./i.test(token) || inainte.includes('.')) gazda = inainte
+    const schema = (/[A-Za-z][A-Za-z0-9+.-]*$/.exec(token.slice(0, iSchema))?.[0] ?? '').toLowerCase()
+    return verificaAutoritate(token.slice(iSchema + 3).split(RX_SFARSIT_AUTORITATE)[0], schema)
   }
-  if (gazda === null) return null
-  // nucleul gazdei, fără „user@” și „:port”, pentru clasificare și pentru mesaj (fără utilizator în mesaj)
-  const nucleu = gazda.replace(/^.*@/, '').replace(/:.*$/, '').toLowerCase()
-  const etichete = nucleu.split('.')
-  const web = iSchema >= 0 || /^www\./i.test(token) || (etichete.length > 1 && RX_ETICHETA_WEB.test(etichete.at(-1)))
-  if (!web) return null
-  const adresa = /[[\]]/.test(gazda) || !nucleu ? '(URL neanalizabil)' : nucleu.replace(/^www\./, '')
-  if (/[@:[\]]/.test(gazda)) return { adresa, categorie: 'neaprobata' }
-  if (schema !== null && schema !== 'http' && schema !== 'https') return { adresa, categorie: 'neaprobata' }
-  return GAZDE_PERMISE.includes(gazda.toLowerCase()) ? null : { adresa, categorie: 'neaprobata' }
+  const inainte = token.split(RX_SFARSIT_AUTORITATE)[0]
+  // D: „www.” înaintea căii
+  const iWww = inainte.toLowerCase().indexOf('www.')
+  if (iWww >= 0) return verificaAutoritate(inainte.slice(iWww), null)
+  // E: eticheta „Site:” (ultimul „:” neurmat de cifră) se lasă deoparte
+  const eticheta = [...inainte.matchAll(/:(?!\d)/g)].at(-1)
+  const gazda = eticheta ? inainte.slice(eticheta.index + 1) : inainte
+  const etichete = nucleuGazda(gazda).split('.')
+  if (!(etichete.length > 1 && RX_ETICHETA_WEB.test(etichete.at(-1)))) return null
+  return verificaAutoritate(gazda, null)
 }
 
 /**
@@ -450,15 +459,9 @@ export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
     if (m) return { adresa: m[0].toLowerCase(), categorie: 'proprie' }
   }
   if (doarProprii) return null
-  const curata = s => s.replace(RX_MARGINE_STANGA, '').replace(RX_MARGINE_DREAPTA, '')
   for (const brut of t.split(/[\s ]+/)) {
-    // #970 r13: tokenul se împarte și la `:` care NU e începutul unui `://` și NU e urmat de o cifră („Site:www.exemplu.ro” →
-    // „Site” + „www.exemplu.ro”); „:cifră” rămâne lipit, ca portul („dataprotection.ro:443”) să fie văzut și refuzat, iar
-    // „Data:03.11.2026”, „Tel:0244”, „ora:13.00” să nu devină bucăți separate
-    for (const bucata of curata(brut).split(RX_DOUA_PUNCTE)) {
-      const gasit = clasificaToken(curata(bucata))
-      if (gasit) return gasit
-    }
+    const gasit = clasificaToken(brut.replace(RX_MARGINE_STANGA, '').replace(RX_MARGINE_DREAPTA, ''))
+    if (gasit) return gasit
   }
   return null
 }

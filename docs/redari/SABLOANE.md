@@ -89,7 +89,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): prima propoziție cu marcaj devine
     „Informarea completă se află pe verso.” (celelalte se scot); fără marcaj, trimiterea se adaugă la final dacă proiectul are
     `link_informare_gdpr`. Dacă textul pomenește deja versoul, în orice formulare (r10), nu se mai adaugă nimic.
-- **Adresele web pe documentul completat: clasificare pe TOKENURI (r12)** (`adresaWebNepermisa`, apelată de
+- **Adresele web pe documentul completat: clasificare pe TOKENURI (r12–r14)** (`adresaWebNepermisa`, apelată de
   `genereazaConvocator`, strict și la previzualizare; constantele unice `GAZDE_PERMISE`, `MARCAJE_PROPRII` din `docx.js`):
   1. adresele PROPRII (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns, calea de informare) se caută ca subșir pe
      text, după scoaterea e-mailurilor (regex strict r9: partea locală `[A-Za-z0-9._%+-]+`, care nu începe cu `www.`, domeniul
@@ -97,18 +97,19 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
      (`https://dataprotection.ro/redari.gazpet.ro/x`) → refuz; `www.gazpet.ro,contact@example.com` lasă `www.gazpet.ro` → refuz;
   2. textul se împarte la spații albe (inclusiv rândurile noi și taburile din paragraf, `<w:br/>` / `<w:tab/>`); fiecare token
      pierde punctuația de la margini (`()[]{}«»„”“"'`, iar la dreapta și `.,;:!?`); un token care e în întregime un e-mail
-     valid (același regex, ancorat) e permis: `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`. (r13) Tokenul se împarte
-     și la `:` care nu face parte dintr-un `://` și nu e urmat de o cifră: `Site:www.exemplu.ro` → `Site` + `www.exemplu.ro`;
-     „:cifră” rămâne lipit, deci portul (`dataprotection.ro:443`) e văzut și refuzat, iar „Data:03.11.2026”, „Tel:0244”,
-     „ora:13.00”, „Nr.:12” nu dau alarme;
-  3. gazda: cu `://`, partea dintre `://` și primul `/`, `?` sau `#`; altfel, dacă tokenul începe cu `www.` sau partea dinainte
-     de primul `/`, `?` sau `#` (r13) are un punct, acea parte. Ce e în cale (după primul `/`) NU se clasifică drept domeniu
-     (`dataprotection.ro/legislatie/dataprotection.ro.pdf` e permis);
-  4. gazda e „web” dacă tokenul are `://` sau începe cu `www.`, ori dacă gazda (fără `user@` și `:port`) are un punct și ultima
-     etichetă e alfabetică, de 2–24 litere. O gazdă web e permisă DOAR dacă e exact `dataprotection.ro` sau
-     `www.dataprotection.ro` (fără deosebire de majuscule), cu schema http / https (dacă are) și fără `@`, `:` (port), `[` sau
-     `]`. Orice altă gazdă web e refuzată: `exemplu.ro.xyz`, `portal.com.uk`, `dataprotection.ro.a.com`, `a.ro`, `x.y.com`,
-     IP-uri cu schemă, `:443`, `ftp://`, `user@gazdă`;
+     valid (același regex, ancorat) e permis: `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`;
+  3. (r14) token cu `://`: URL-ul începe la schema (literele lipite) dinaintea primului `://`; ce e înainte (ex. `Info:`) e
+     etichetă. Autoritatea = de după `://` până la primul `/`, `?` sau `#`: cu `@` sau `:` (utilizator, parolă, port) → refuz;
+     altfel gazda trebuie să fie exact `dataprotection.ro` / `www.dataprotection.ro` și schema `http` / `https`. Calea,
+     query-ul și fragmentul NU se analizează (`https://dataprotection.ro/legislatie/art:exemplu.ro` e permis);
+  4. (r14) altfel, `www.` înaintea primului `/`, `?` sau `#`: URL-ul începe la `www.`, aceleași verificări ale autorității
+     (`Info:(www.dataprotection.ro)` permis, `Site:www.exemplu.ro` refuzat);
+  5. (r14) altfel: partea dinainte de primul `/`, `?` sau `#`; dacă are `:` neurmat de cifră, contează ce e după ultimul
+     (eticheta `Site:`). E gazdă web dacă (fără `user@` și `:port`) are un punct și ultima etichetă are 2–24 litere — atunci e
+     permisă doar exact din lista albă, fără `@` sau `:` (`Site:exemplu.ro`, `exemplu.ro?formular=1`, `exemplu.ro#informare`,
+     `dataprotection.ro:443/x` refuzate; `Plângere:dataprotection.ro.` permis). „Data:03.11.2026”, „Tel:0244”, „ora:13.00”,
+     „Nr.:12” nu sunt gazde web. Orice altă gazdă web e refuzată: `exemplu.ro.xyz`, `portal.com.uk`, `dataprotection.ro.a.com`,
+     `a.ro`, `x.y.com`;
   - textul juridic nu dă alarme: „S.N.T.G.N.”, „S.R.L.”, „lit.c”, „art.6”, „H.G. nr. 1.234/2022”, „pct. 5.2”, „A.P.M.”,
     „Nr. 123/2026”, „Data:03.11.2026” nu au ultima etichetă alfabetică de 2+ litere; verificat în teste împreună cu default-ul
     `text_gdpr` din migrare și textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD (LOT1, TEST-RAZVAN) nu au fost
