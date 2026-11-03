@@ -121,7 +121,7 @@ jobs:
   # Harness-urile SQL pe Postgres 16 efemer din runner (loturi 20261024b + proveniență 20261025a) — decizia B Răzvan 12.10.2026:
   # nimic instalat pe serverul AI, fără secrete de producție (scheletele refuză orice altă bază decât ofertare_loturi_test pe 127.0.0.1).
   loturi-provenienta:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
