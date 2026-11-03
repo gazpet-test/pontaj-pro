@@ -344,26 +344,35 @@ export const TRIMITERE_VERSO_GDPR = 'Informarea completă se află pe verso.'
 export const VERSO_INFORMARE_INCLUS = false
 // marcajul „Informarea completă: <URL>” sau „Informarea completă: [link …]”, cu punctul final opțional al frazei
 const RX_INFO_FATA = /Informarea completă:[ \t]*(?:\[[^\]]*\]|https?:\/\/\S+?|www\.\S+?)[.]?(?=[ \t\n]|$)/gi
-// trimiterea la verso deja scrisă în text (cu sau fără diacritice)
-const RX_VERSO_FATA = /Informarea[ \t]+complet[aă][ \t]+se[ \t]+afl[aă][ \t]+pe[ \t]+verso[.]?/gi
-const normalizeazaText = t => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+// pentru comparații: fără diacritice, litere mici, orice spațiu alb (inclusiv \n, \r, NBSP) comprimat într-un spațiu
+const normalizeazaText = t => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[\s ]+/g, ' ').trim()
 const VERSO_NORMALIZAT = normalizeazaText(TRIMITERE_VERSO_GDPR).replace(/\.$/, '')
 // după o propoziție scoasă: fără spații duble, fără spațiu înainte de rând nou, fără rânduri goale
-const curataDupaScoatere = t => t.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/\n{2,}/g, '\n').trim()
+const curataDupaScoatere = t => t.replace(/[ \t ]{2,}/g, ' ').replace(/[ \t ]+\n/g, '\n').replace(/\n[ \t ]+/g, '\n').replace(/\n{2,}/g, '\n').trim()
+// o propoziție = textul până la . ! ? urmat de spațiu alb sau de final (un rând nou fără punct nu încheie propoziția);
+// o abreviere („S.A.”) scurtează propoziția, deci la scoatere se scoate mai puțin, niciodată mai mult
+const RX_PROPOZITIE = /[^.!?]*(?:[.!?]+(?=[\s ]|$)|[.!?]+|$)/g
+/**
+ * #970 r7 (Jakarinos P2-02), regula pe propoziție: cu versoul neinclus, din `text_gdpr` (paragraful „Date personale”, deci
+ * orice mențiune a versoului se referă la informarea despre date) se scoate ORICE propoziție care conține cuvântul „verso”
+ * (după normalizare: fără diacritice, litere mici, spații albe comprimate) — ex. „Informarea completă se află pe verso.”,
+ * „Pe verso găsiți informațiile complete …”, „… pe verso.”, și pe mai multe rânduri.
+ */
+const scoatePropozitiiVerso = t => (t.match(RX_PROPOZITIE) ?? []).filter(p => !/\bverso\b/.test(normalizeazaText(p))).join('')
 
 /**
  * Textul GDPR de pe FAȚA convocatorului poștal (decizia 03.11 seara: fără niciun link tipărit). `{uat}` / `[UAT]` → UAT-ul.
  * `text_gdpr` din BD nu se modifică; se schimbă doar textul tipărit pe față:
- *  - versoInclus = false (main): propoziția „Informarea completă: <URL | [link]>” se scoate întreagă; nu se adaugă nicio
- *    trimitere la verso (nici cu `link_informare_gdpr` setat), iar o trimitere la verso deja scrisă în text se scoate (ar fi falsă);
+ *  - versoInclus = false (main): propoziția „Informarea completă: <URL | [link]>” se scoate întreagă, la fel orice propoziție
+ *    care pomenește versoul (scoatePropozitiiVerso); nu se adaugă nicio trimitere la verso, nici cu `link_informare_gdpr` setat;
  *  - versoInclus = true (#939): marcajul devine TRIMITERE_VERSO_GDPR; dacă lipsește, dar proiectul are informarea completă
- *    configurată, trimiterea se adaugă la final; fraza nu se dublează (comparație fără diacritice, litere mici, spații comprimate).
+ *    configurată, trimiterea se adaugă la final; fraza nu se dublează (comparație normalizată).
  */
 export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat, { versoInclus = VERSO_INFORMARE_INCLUS } = {}) => {
   const baza = textGdprPentruUat(text, numeUat)
   const areMarcaj = new RegExp(RX_INFO_FATA.source, 'i').test(baza)
   if (!versoInclus) {
-    const fara = baza.replace(RX_INFO_FATA, '').replace(RX_VERSO_FATA, '')
+    const fara = scoatePropozitiiVerso(baza.replace(RX_INFO_FATA, ''))
     return fara === baza ? baza : curataDupaScoatere(fara)
   }
   const areVerso = normalizeazaText(baza).includes(VERSO_NORMALIZAT)
@@ -379,35 +388,63 @@ export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat, {
   return plin(linkInformareConfigurat) && !areVerso ? `${baza}\n${TRIMITERE_VERSO_GDPR}` : baza
 }
 
-// #970 r6 (Copilot P2-01): politica adreselor WEB pe convocatorul completat. Adresele de e-mail (ex. redari@gazpet.ro) nu sunt
-// adrese web și sunt permise. Constantele unice:
-//  - domeniile noastre (domeniul și orice subdomeniu): interzise;
-//  - marcajele noastre fără domeniu (numele aplicației, căile de răspuns și de informare): interzise; calea informării e scrisă
-//    escapat, ca în domeniuPublic.js (ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal);
-//  - lista albă a URL-urilor externe: orice alt URL extern e refuzat.
+// #970 r7 (Jakarinos P2-01): regula STRICTĂ a adreselor web pe convocatorul completat. Constantele unice:
+//  - URL_EXTERNE_PERMISE: singurele gazde acceptate pentru un URL (exact, fără utilizator, parolă sau port);
+//  - DOMENII_PROPRII: domeniile noastre (și subdomeniile), căutate și fără prefix (http:// / www.);
+//  - MARCAJE_PROPRII: numele aplicației, căile de răspuns și de informare (calea informării e scrisă escapat, ca în
+//    domeniuPublic.js: ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal).
+// Adresele de e-mail (ex. redari@gazpet.ro) nu sunt adrese web și rămân permise.
+export const URL_EXTERNE_PERMISE = ['dataprotection.ro', 'www.dataprotection.ro']
 export const DOMENII_PROPRII = ['gazpet.ro', 'vercel.app']
 export const MARCAJE_PROPRII = [/pontaj-pro/i, /\/redari\/raspuns\//i, /\/redari\/informare/i]
-export const URL_EXTERNE_PERMISE = ['dataprotection.ro']
-// fără prefix (http/https/www), un domeniu e recunoscut doar pe terminațiile de mai jos (altfel „parcela.De” ar fi un URL)
-const TLD_FARA_PREFIX = /^(?:ro|com|eu|net|org|app|io|info|gov|online|site)$/i
-// e-mailurile se scot înainte de căutare: domeniul unui e-mail nu e adresă web
 const RX_EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
-// grupuri: 1 = prefixul (http(s):// și/sau www.), 2 = gazda, 3 = terminația, 4 = calea
-const RX_ADRESA = /(?<![\w.@-])((?:https?:\/\/)?(?:www\.)?)((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,24}))(?![\w@-])(\/[^\s)\]"”'„,;<>]*)?/gi
+// orice apariție de „://” sau „www.” = URL
+const RX_INCEPUT_URL = /:\/\/|www\./gi
+// limitele tokenului: spațiu alb, paranteze, ghilimele, <>; la final se taie punctuația de frază
+const LIMITA_TOKEN = /[\s ()[\]{}<>"'„”“«»]/
 const eDomeniu = (gazda, domenii) => domenii.some(d => gazda === d || gazda.endsWith(`.${d}`))
+const RX_PROPRIU_FARA_PREFIX = new RegExp(`(?<![\\w.@-])(?:[a-z0-9-]+\\.)*(?:${DOMENII_PROPRII.map(d => d.replace(/\./g, '\\.')).join('|')})(?![\\w-])`, 'gi')
 
-/** Prima adresă web nepermisă dintr-un text: `{ adresa, categorie: 'proprie' | 'neaprobata' }` sau null. `adresa` = doar domeniul / marcajul. */
+/** Tokenul URL care conține poziția `i`: de la limita din stânga până la limita din dreapta, fără punctuația de final. */
+function tokenUrl(t, i) {
+  let s = i
+  while (s > 0 && !LIMITA_TOKEN.test(t[s - 1])) s -= 1
+  let e = i
+  while (e < t.length && !LIMITA_TOKEN.test(t[e])) e += 1
+  return { inceput: s, token: t.slice(s, e).replace(/[.,;:!?]+$/, '') }
+}
+
+/**
+ * Prima adresă web nepermisă dintr-un text: `{ adresa, categorie: 'proprie' | 'neaprobata' }` sau null; `adresa` = doar gazda
+ * analizată (sau marcajul / „(URL neanalizabil)”), fără restul tokenului. Cu `doarProprii`, se raportează doar adresele proprii
+ * (pentru textul concatenat, unde lipirea poate crea URL-uri false).
+ */
 export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
-  const t = String(text ?? '').replace(RX_EMAIL, ' ')
-  for (const m of t.matchAll(RX_ADRESA)) {
-    const gazda = m[2].toLowerCase().replace(/^www\./, '')
-    if (!m[1] && !TLD_FARA_PREFIX.test(m[3])) continue
-    if (eDomeniu(gazda, DOMENII_PROPRII) || MARCAJE_PROPRII.some(r => r.test(`${gazda}${m[4] ?? ''}`))) return { adresa: gazda, categorie: 'proprie' }
-    if (!doarProprii && !eDomeniu(gazda, URL_EXTERNE_PERMISE)) return { adresa: gazda, categorie: 'neaprobata' }
+  const t = String(text ?? '')
+  const vazute = new Set()
+  for (const m of t.matchAll(RX_INCEPUT_URL)) {
+    const { inceput, token } = tokenUrl(t, m.index)
+    if (vazute.has(inceput)) continue
+    vazute.add(inceput)
+    let u = null
+    try { u = new URL(token.includes('://') ? token : `http://${token}`) } catch { u = null }
+    if (!u) {
+      if (!doarProprii) return { adresa: '(URL neanalizabil)', categorie: 'neaprobata' }
+      continue
+    }
+    const gazda = u.hostname.toLowerCase()
+    const propriu = eDomeniu(gazda, DOMENII_PROPRII) || MARCAJE_PROPRII.some(r => r.test(`${gazda}${u.pathname}`))
+    if (propriu) return { adresa: gazda.replace(/^www\./, ''), categorie: 'proprie' }
+    const permis = URL_EXTERNE_PERMISE.includes(gazda) && !u.username && !u.password && !u.port
+    if (!permis && !doarProprii) return { adresa: gazda.replace(/^www\./, '') || '(URL neanalizabil)', categorie: 'neaprobata' }
   }
+  // fără prefix: doar domeniile și marcajele noastre; din e-mailuri nu se caută nimic
+  const faraEmail = t.replace(RX_EMAIL, ' ')
+  const d = new RegExp(RX_PROPRIU_FARA_PREFIX.source, 'i').exec(faraEmail)
+  if (d) return { adresa: d[0].toLowerCase().replace(/^www\./, ''), categorie: 'proprie' }
   for (const r of MARCAJE_PROPRII) {
-    const m = r.exec(t)
-    if (m) return { adresa: m[0], categorie: 'proprie' }
+    const mm = r.exec(faraEmail)
+    if (mm) return { adresa: mm[0], categorie: 'proprie' }
   }
   return null
 }
@@ -430,15 +467,15 @@ const RX_CASETA = /<w:txbxContent[\s>][\s\S]*?<\/w:txbxContent>/g
 const RX_PICT = /<w:pict[\s>][\s\S]*?<\/w:pict>/g
 
 /**
- * Textele verificate ale unei părți (#970 r5 + r6): (1) fluxul exterior, cu casetele de text, mc:Fallback și w:pict SCOASE —
- * o adresă spartă în jurul unei casete se reîntregește; (2) fiecare casetă de text, separat; (3) textul complet, ca înainte.
- * Paragrafele sunt despărțite prin rând nou (o adresă web nu trece dintr-un paragraf în altul), run-urile sunt lipite.
- * La (3) contează doar adresele PROPRII: lipirea textului unei casete de fluxul exterior poate crea un „domeniu” fals
- * (ex. „Text caseta” + „protection.ro” = „casetaprotection.ro”), care nu trebuie raportat ca URL extern neaprobat.
+ * Textele verificate ale unei părți (#970 r5–r7) — nimic nu rămâne neverificat:
+ * (1) fluxul exterior, cu casetele de text, mc:Fallback și w:pict scoase (o adresă spartă în jurul unei casete se reîntregește);
+ * (2) fiecare casetă de text, separat; (3) fiecare mc:Fallback și fiecare w:pict, separat; (4) textul complet.
+ * Paragrafele sunt despărțite prin rând nou, run-urile sunt lipite. La (4) contează doar adresele PROPRII: lipirea textului
+ * unei casete de fluxul exterior poate crea URL-uri false (ex. „www.data” + „Text caseta” + „protection.ro”).
  */
 const texteDeVerificat = xml => [
   { text: textCuParagrafe(xml.replace(RX_FALLBACK, '').replace(RX_CASETA, '').replace(RX_PICT, '')), doarProprii: false },
-  ...[...xml.matchAll(RX_CASETA)].map(m => ({ text: textCuParagrafe(m[0]), doarProprii: false })),
+  ...[...xml.matchAll(RX_CASETA), ...xml.matchAll(RX_FALLBACK), ...xml.matchAll(RX_PICT)].map(m => ({ text: textCuParagrafe(m[0]), doarProprii: false })),
   { text: textCuParagrafe(xml), doarProprii: true },
 ]
 

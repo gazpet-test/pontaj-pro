@@ -76,28 +76,36 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   amprenta textului de dinainte (nimic altceva schimbat în șablon). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
-- **Documentul COMPLETAT (tot excepția (8), #970 r2–r6)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
+- **Documentul COMPLETAT (tot excepția (8), #970 r2–r7)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`:
   - `VERSO_INFORMARE_INCLUS = false` (main; versoul cu informarea completă vine cu PR #939): propoziția
     „Informarea completă: <URL | [link …]>” se SCOATE întreagă și nu se adaugă nicio trimitere la verso, nici când proiectul are
-    `link_informare_gdpr`; o trimitere „Informarea completă se află pe verso.” deja scrisă în text se scoate și ea (ar fi falsă);
+    `link_informare_gdpr`. **Regula pe propoziție (r7)**: se scoate ORICE propoziție din `text_gdpr` care conține cuvântul
+    „verso” (după normalizare: fără diacritice, litere mici, spații albe — inclusiv `\n`, `\r`, NBSP — comprimate), ex.
+    „Informarea completă se află pe verso.”, „Pe verso găsiți informațiile complete …”, „Detalii pe verso.”. `text_gdpr` e
+    paragraful „Date personale”, deci orice mențiune a versoului de acolo se referă la informare. Propoziția = textul până la
+    `.` `!` `?` urmat de spațiu alb sau final (un rând nou fără punct nu o încheie); o abreviere („S.A.”) scurtează propoziția,
+    deci se scoate mai puțin, niciodată mai mult;
   - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): marcajul devine „Informarea completă se află
-    pe verso.”, adăugată la final dacă proiectul are `link_informare_gdpr` și textul n-o are deja (comparație fără diacritice,
-    litere mici, spații comprimate — fără dublare).
-- **Politica adreselor web pe documentul completat** (`genereazaConvocator`, strict și la previzualizare; constantele unice
-  `DOMENII_PROPRII`, `MARCAJE_PROPRII`, `URL_EXTERNE_PERMISE` din `docx.js`):
-  - interzise: `gazpet.ro` și orice subdomeniu (`www.`, `redari.`, `portal.` …), `*.vercel.app`, `pontaj-pro`, calea de răspuns
-    și cea de informare;
-  - permise: adresele de e-mail (ex. `redari@gazpet.ro` nu e adresă web) și URL-urile externe din lista albă (`dataprotection.ro`,
-    ANSPDCP); orice alt URL extern (cu `http(s)://` / `www.` sau pe terminațiile `.ro .com .eu .net .org .app .io .info .gov
-    .online .site`) e refuzat;
-  - mesajul de eroare are doar partea DOCX și domeniul găsit, fără text din document (PII);
+    pe verso.”, adăugată la final dacă proiectul are `link_informare_gdpr` și textul n-o are deja (comparație normalizată, fără
+    dublare).
+- **Regula STRICTĂ a adreselor web pe documentul completat (r7)** (`genereazaConvocator`, strict și la previzualizare;
+  constantele unice `URL_EXTERNE_PERMISE`, `DOMENII_PROPRII`, `MARCAJE_PROPRII` din `docx.js`):
+  - ORICE apariție de `://` sau `www.` (fără deosebire de majuscule) e un URL: tokenul (până la spațiu alb, paranteză, ghilimele)
+    se analizează cu `new URL(…)` (`www.` primește `http://`). Se acceptă DOAR gazda exact `dataprotection.ro` /
+    `www.dataprotection.ro` (ANSPDCP), fără utilizator, parolă sau port. Orice altceva e refuzat: IP-uri, `user@gazdă`,
+    alt domeniu, altă schemă, URL neanalizabil;
+  - fără prefix se caută doar domeniile și marcajele PROPRII: `gazpet.ro` și `vercel.app` cu subdomeniile lor, `pontaj-pro`,
+    calea de răspuns și cea de informare;
+  - adresele de e-mail (ex. `redari@gazpet.ro`) nu sunt adrese web și sunt permise;
+  - mesajul de eroare are doar partea DOCX și gazda găsită, fără text din document (PII);
   - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
-    `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare: fluxul exterior cu casetele de text
-    (`w:txbxContent`, `mc:Fallback`, `w:pict`) scoase, fiecare casetă separat și textul complet (acesta doar pentru adresele
-    proprii); run-urile se lipesc, paragrafele se despart. Un DOCX cu `w:altChunk` e refuzat. **Limite declarate**: nu se
-    verifică glosarul (`word/glossary/*`), obiectele / diagramele încorporate, textul din imagini și câmpurile calculate de Word
-    la deschidere; șabloanele convocatorului nu au asemenea structuri.
+    `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare se verifică TOATE textele: fluxul exterior cu
+    casetele de text (`w:txbxContent`), `mc:Fallback` și `w:pict` scoase; fiecare casetă, fiecare `mc:Fallback` și fiecare
+    `w:pict`, separat; textul complet (aici doar adresele proprii, ca lipirea textelor să nu dea URL-uri false). Run-urile se
+    lipesc, paragrafele se despart. Un DOCX cu `w:altChunk` e refuzat. **Limite declarate**: nu se verifică glosarul
+    (`word/glossary/*`), obiectele / diagramele încorporate, textul din imagini și câmpurile calculate de Word la deschidere;
+    șabloanele convocatorului nu au asemenea structuri.
 - Fiecare placeholder stă întreg într-un singur `<w:t>` → `docx.js` înlocuiește local, fără consolidare de run-uri (limita 1).
 - Antetul de firmă (adresă, CUI, telefon, „Lider al Asocierii …”) rămâne text fix; din antet s-au parametrizat doar
   `Contract Transgaz nr. {{contract_nr}}/{{contract_data}}` și `{{proiect_denumire}}` (convocator, PV A, PV B, PV C; adresa UAT nu
