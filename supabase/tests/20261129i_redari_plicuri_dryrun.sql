@@ -28,7 +28,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.red_numere WHERE cheie IN ('PL-ZXH','PP')) OR EXISTS (SELECT 1 FROM public.red_uat WHERE uat3='ZXH') THEN RAISE EXCEPTION 'TEST0 FAIL: ZXH/PP folosite'; END IF;
   INSERT INTO public.red_proiecte(cod,denumire) VALUES('TEST-29I','FICTIV plicuri') RETURNING id INTO pr;
   INSERT INTO public.red_uat(proiect_id,nume,uat3,judet) VALUES(pr,'FICTIV ZXH','ZXH','Test') RETURNING id INTO u;
-  FOR i IN 1..5 LOOP
+  FOR i IN 1..6 LOOP
     INSERT INTO public.red_parcele(proiect_id,uat_id,id_parcela,poz_hg) VALUES(pr,u,'ZXH-000'||i,(10+i)::text) RETURNING id INTO d;
     par := par || d;
   END LOOP;
@@ -43,6 +43,10 @@ BEGIN
     PERFORM set_config('r29i.c'||k,(SELECT id FROM public.red_convocari WHERE nr_document='C-T29I-'||k)::text,true);
     PERFORM set_config('r29i.d'||k,d::text,true);
   END LOOP;
+  -- A3: aceeasi persoana ca A, pe parcela 6, fara convocare deocamdata (pentru testele de completitudine)
+  INSERT INTO public.red_detinatori(parcela_id,nume,nume_normalizat,calitate) VALUES(par[6],'FICTIV A','FICTIV A','proprietar') RETURNING id INTO d;
+  INSERT INTO public.red_detinatori_contact(detinator_id,adresa_strada,adresa_comuna,adresa_judet,adresa_cunoscuta) VALUES(d,'Str. Test A','Comuna Test','Test',true);
+  PERFORM set_config('r29i.dA3',d::text,true);
   PERFORM set_config('r29i.owner',own::text,true); PERFORM set_config('r29i.editor',ed::text,true); PERFORM set_config('r29i.viewer',vw::text,true);
   PERFORM set_config('r29i.pr',pr::text,true);
   RAISE NOTICE 'TEST0 OK';
@@ -63,6 +67,8 @@ DO $t$ DECLARE pl public.red_plicuri; BEGIN
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_convocari SET plic_id=NULL WHERE id=%L$q$,pg_temp.r29i_g('cA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: plic_id direct'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_convocari SET sters_la=now(), sters_motiv='x' WHERE id=%L$q$,pg_temp.r29i_g('cA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: stergere logica din plic activ'; END IF;
   PERFORM set_config('r29i.plA',pl.id::text,true);
+  -- r2 P1: convocare postala noua pentru aceeasi persoana, cat plicul e neexpediat -> refuz
+  IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(%L,'posta','C-T29I-A3','activ')$q$,pg_temp.r29i_g('dA3')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: convocare noua cu plic neexpediat'; END IF;
   RAISE NOTICE 'TEST1 OK';
 END $t$;
 
@@ -85,6 +91,29 @@ DO $t$ BEGIN
   UPDATE public.red_loturi_plicuire SET pv_path='plicuire/'||pg_temp.r29i_g('lot')||'/pv-1.pdf', semnatar1='FICTIV 1', semnatar2='FICTIV 2' WHERE id=pg_temp.r29i_g('lot')::uuid;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET semnatar2='ALTUL' WHERE id=%L$q$,pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: semnatar schimbat dupa PV'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-02' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: expediere inaintea plicuirii'; END IF;
+  RAISE NOTICE 'TEST2b OK';
+END $t$;
+-- r2 P1 (secvential): o convocare noua a aceleiasi persoane aparuta dupa plicuire (aici inserata ca postgres, ocolind garda) blocheaza expedierea
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(pg_temp.r29i_g('dA3')::uuid,'posta','C-T29I-A3','activ');
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-03' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: expediere cu plic incomplet'; END IF;
+  RAISE NOTICE 'TEST2c OK';
+END $t$;
+-- r2 P2: adresa unui detinator din plic schimbata dupa plicuire -> expedierea refuzata; convocarea noua anulata
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+UPDATE public.red_convocari SET stare='anulat', motiv_anulare='test' WHERE nr_document='C-T29I-A3';
+UPDATE public.red_detinatori_contact SET adresa_strada='Str. Alta' WHERE detinator_id=pg_temp.r29i_g('dA2')::uuid;
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-03' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: expediere cu adresa schimbata'; END IF;
+  RAISE NOTICE 'TEST2d OK';
+END $t$;
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+UPDATE public.red_detinatori_contact SET adresa_strada='Str. Test A' WHERE detinator_id=pg_temp.r29i_g('dA2')::uuid;
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
   UPDATE public.red_plicuri SET awb='rr 000000001 ro', data_expediere='2026-11-03' WHERE id=pg_temp.r29i_g('plA')::uuid;
   IF (SELECT count(*) FROM public.red_convocari WHERE plic_id=pg_temp.r29i_g('plA')::uuid AND data_expediere='2026-11-03' AND nr_tracking='RR000000001RO') <> 2 THEN RAISE EXCEPTION 'TEST2 FAIL: propagare expediere'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000009RO' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: awb schimbat'; END IF;
