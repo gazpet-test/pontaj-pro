@@ -335,6 +335,174 @@ export const textGdprPentruUat = (text, numeUat, linkInformare) => {
   return exista ? baza.replace(RX_INFO, (m, punct) => `Informarea completă: ${linkInformare}${punct || ''}`) : `${baza}\nInformarea completă: ${linkInformare}`
 }
 
+/** Trimiterea de pe fața convocatorului poștal la informarea completă (tipărită pe verso, PR #939). */
+export const TRIMITERE_VERSO_GDPR = 'Informarea completă se află pe verso.'
+/**
+ * #970 r6 (Copilot P2-02): pe main versoul cu informarea completă NU se generează (vine cu PR #939). Cât e `false`,
+ * fața nu trimite la verso; #939 îl comută pe `true` odată cu generarea versoului.
+ */
+export const VERSO_INFORMARE_INCLUS = false
+// pentru comparații: fără diacritice, litere mici, orice spațiu alb (inclusiv \n, \r, NBSP) comprimat într-un spațiu
+const normalizeazaText = t => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[\s ]+/g, ' ').trim()
+// după o frază scoasă: fără spații duble, fără spațiu înainte / după rând nou, fără rânduri goale
+const curataDupaScoatere = t => t.replace(/\r\n?/g, '\n').replace(/[ \t ]{2,}/g, ' ').replace(/[ \t ]+\n/g, '\n').replace(/\n[ \t ]+/g, '\n').replace(/\n{2,}/g, '\n').trim()
+// #970 r18: regula LITERALĂ pentru trimiterile la informarea completă / la verso, în locul decupajului pe propoziții (r7–r17, unde
+// fiecare rundă găsea alt caz în care se pierdea un câmp GDPR): se scot DOAR frazele cunoscute din FRAZE_VERSO, exact (fără
+// deosebire de majuscule, cu sau fără diacritice, cu orice spațiu alb între cuvinte, cu margini de cuvânt). Dacă după aceea textul
+// mai pomenește „verso” sau „Informarea completă”, generarea se OPREȘTE (EroareTrimitereGdpr): textul se corectează pe proiect,
+// nimic nu se taie pe ghicite.
+export const FRAZE_VERSO = [
+  'Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră.', // text_gdpr real (LOT1, 04.11)
+  TRIMITERE_VERSO_GDPR,
+]
+const LITERE_DIACRITICE = { a: '[aăâ]', i: '[iî]', s: '[sșş]', t: '[tțţ]' }
+const escRxFraza = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+const rxFraza = f => new RegExp('(?<![\\p{L}\\p{N}])' + f.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().split(/\s+/)
+  .map(cuv => escRxFraza(cuv).replace(/[aist]/gi, ch => LITERE_DIACRITICE[ch.toLowerCase()])).join('[\\s\\u00a0]+') + '(?![\\p{L}\\p{N}])', 'giu')
+const RX_FRAZE_VERSO = FRAZE_VERSO.map(rxFraza)
+// r19 (Copilot r18 P2-01): și formele articulate / de plural („versoul”, „versoului”, „reversul”), fără „Versoix”
+const pomenesteVersoSauInformarea = t => /\b(?:verso|revers)(?:ul|ului|uri|urile|urilor)?\b|informarea completa/.test(normalizeazaText(t))
+
+export class EroareTrimitereGdpr extends Error {}
+const MESAJ_TRIMITERE_GDPR = 'Convocatorul nu poate fi generat: textul GDPR de pe proiect (text_gdpr) trimite la informarea completă sau la verso într-o formulare pe care generatorul nu o recunoaște. Pe convocatorul poștal nu se tipărește niciun link. Scoateți fraza din text (Redări → Setări proiect) sau folosiți formularea: „' + FRAZE_VERSO[0] + '”.'
+
+/**
+ * Textul GDPR de pe FAȚA convocatorului poștal (decizia 03.11 seara: fără niciun link tipărit). `{uat}` / `[UAT]` → UAT-ul.
+ * `text_gdpr` din BD nu se modifică. Regula literală (r18):
+ *  - frazele din FRAZE_VERSO se scot (toate aparițiile); dacă textul mai pomenește apoi „verso” sau „Informarea completă” (orice
+ *    formulare, inclusiv „Informarea completă: <link>”) → EroareTrimitereGdpr, la generare și la previzualizare;
+ *  - versoInclus = false (main): nu se adaugă nicio trimitere la verso;
+ *  - versoInclus = true (#939): se adaugă la final TRIMITERE_VERSO_GDPR, o singură dată, dacă textul avea o frază din FRAZE_VERSO
+ *    sau proiectul are informarea configurată (`link_informare_gdpr`).
+ */
+export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat, { versoInclus = VERSO_INFORMARE_INCLUS } = {}) => {
+  const brut = textGdprPentruUat(text, numeUat)
+  const baza = brut.normalize('NFC')
+  let curat = baza
+  for (const rx of RX_FRAZE_VERSO) curat = curat.replace(rx, ' ')
+  const aveaFraza = curat !== baza
+  if (pomenesteVersoSauInformarea(curat)) throw new EroareTrimitereGdpr(MESAJ_TRIMITERE_GDPR)
+  const rezultat = aveaFraza ? curataDupaScoatere(curat) : brut
+  if (!versoInclus || !(aveaFraza || plin(linkInformareConfigurat))) return rezultat
+  return rezultat ? `${rezultat}\n${TRIMITERE_VERSO_GDPR}` : TRIMITERE_VERSO_GDPR
+}
+
+// #970 r15: regula LITERALĂ a adreselor web pe convocatorul completat (adresaWebNepermisa), fără interpretare de tokenuri:
+//  1. adresele PROPRII (MARCAJE_PROPRII) se caută ca subșir pe textul cu e-mailurile scoase → găsite = refuz (înaintea oricărei
+//     excepții, ca să nu se ascundă în calea unui URL permis);
+//  2. e-mailurile se înlocuiesc cu un spațiu (RX_EMAIL);
+//  3. excepțiile literale (EXCEPTII_WEB, fără deosebire de majuscule), urmate opțional de o cale `/…` fără spații și fără `@`,
+//     se înlocuiesc cu un spațiu, doar cu margini stricte: la stânga început de text sau un caracter care NU e literă, cifră,
+//     `.`, `-`, `@`, `:` sau `/`; la dreapta (după cale) final, spațiu alb sau o înșiruire de `.,;!?)]»”"'` urmată de spațiu
+//     alb / final (ex. „(www.dataprotection.ro).”);
+//  4. pe ce rămâne, refuz dacă apare `://`, `www` sau RX_DOMENIU (un caracter alfanumeric / `-`, punct, cel puțin 2 litere:
+//     `x.ro`, `x.com`, „Primăria.Comuna”). Abrevierile juridice au o singură literă sau cifre după punct (S.R.L., S.N.T.G.N.,
+//     A.P.M., H.G., lit.c, art.6, pct.5.2, Nr.:12, 03.11.2026, 13.00), deci nu dau alarme.
+// Calea informării e scrisă escapat, ca în domeniuPublic.js (ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal).
+export const EXCEPTII_WEB = ['https://www.dataprotection.ro', 'http://www.dataprotection.ro', 'https://dataprotection.ro', 'http://dataprotection.ro', 'www.dataprotection.ro', 'dataprotection.ro']
+export const MARCAJE_PROPRII = [/gazpet\.ro/i, /vercel\.app/i, /pontaj-pro/i, /\/redari\/raspuns/i, /\/redari\/informare/i]
+// #970 r9 + r15: e-mail STRICT — partea locală [A-Za-z0-9._%+-]+ (nu începe cu „www.”), domeniul [A-Za-z0-9.-]+.tld, cu limite
+// la stânga și la dreapta. r15: după domeniu nu poate urma `/`, `@`, `-`, alfanumeric sau „.alfanumeric” — un e-mail urmat de o
+// cale nu e e-mail („user@www.dataprotection.ro/x” rămâne întreg și e refuzat la pasul 4, pe „www”)
+// r16 (Jakarinos P2-01): margine dreaptă STRICTĂ — după e-mail doar final, spațiu alb sau o înșiruire de `.,;:!?)]»”"'` urmată
+// de spațiu alb / final; „user@www.exemplu.ro:8080/x”, „…ro?formular=1”, „…ro#informare” nu mai sunt e-mailuri (rămân întregi)
+const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=$|\s|[.,;:!?)\]»”"']+(?:\s|$))/gi
+const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+const RX_EXCEPTII = new RegExp(`(?<![A-Za-z0-9.\\-@:/])(?:${[...EXCEPTII_WEB].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@]*)?(?=$|\\s|[.,;!?)\\]»”"']+(?:\\s|$))`, 'gi')
+// r18 + r19 (Copilot r17 P2-02, Jakarinos r18 P2-01): și domenii internaționalizate (litere Unicode cu semne combinante, ex.
+// „primărie.ro”, „пример.рф”, „example.भारत”)
+const RX_DOMENIU = /[\p{L}\p{M}\p{N}-]\.\p{L}[\p{L}\p{M}]+/u
+// #970 r17 (Copilot P2-01): adresă IPv4 fără schemă (patru octeți 0–255; datele „03.11.2026” au trei grupuri, deci nu dau alarme)
+const RX_IPV4 = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d]|\.\d)/
+
+/**
+ * Prima adresă web nepermisă dintr-un text: `{ adresa, categorie: 'proprie' | 'neaprobata' }` sau null. `adresa` = marcajul
+ * propriu, `://`, `www` sau fragmentul de domeniu găsit (litere / cifre / `.` / `-`), fără text din jur. Cu `doarProprii`
+ * (textul concatenat, unde lipirea poate crea forme false) contează doar adresele proprii.
+ */
+export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
+  // r19 (Copilot r18 P2-02): forma canonică înaintea oricărei reguli — NFKC (litere / puncte „lățite” → ASCII) și separatoarele de
+  // domeniu IDNA (。 ． ｡) → „.”
+  const faraEmail = String(text ?? '').normalize('NFKC').replace(/[。．｡]/g, '.').replace(RX_EMAIL, ' ')
+  for (const r of MARCAJE_PROPRII) {
+    const m = r.exec(faraEmail)
+    if (m) return { adresa: m[0].toLowerCase(), categorie: 'proprie' }
+  }
+  if (doarProprii) return null
+  const ramas = faraEmail.replace(RX_EXCEPTII, ' ')
+  if (ramas.includes('://')) return { adresa: '://', categorie: 'neaprobata' }
+  if (/www/i.test(ramas)) return { adresa: 'www', categorie: 'neaprobata' }
+  const ip = RX_IPV4.exec(ramas)
+  if (ip) return { adresa: ip[0], categorie: 'neaprobata' }
+  const d = RX_DOMENIU.exec(ramas)
+  if (!d) return null
+  // fragmentul de domeniu din jur, doar din litere / cifre / „.” / „-” (fără alt text din document), scurtat
+  let s = d.index
+  while (s > 0 && /[\p{L}\p{M}\p{N}.-]/u.test(ramas[s - 1])) s -= 1
+  let e = d.index + d[0].length
+  while (e < ramas.length && /[\p{L}\p{M}\p{N}.-]/u.test(ramas[e])) e += 1
+  return { adresa: ramas.slice(s, e).replace(/\.+$/, '').toLowerCase().slice(0, 60), categorie: 'neaprobata' }
+}
+
+/**
+ * Părțile verificate (P3-02): EXACT word/document.xml, word/header*.xml, word/footer*.xml, word/footnotes.xml,
+ * word/endnotes.xml și word/comments.xml (cele care există; comentariile apar la tipărirea cu marcaje). Un DOCX cu conținut
+ * importat prin altChunk (w:altChunk în oricare dintre aceste părți) e refuzat, ca să nu treacă necontrolat.
+ * Limite declarate: nu se verifică glosarul (word/glossary/*), diagramele / obiectele încorporate, textul din imagini și
+ * câmpurile calculate de Word la deschidere. Șabloanele convocatorului nu au asemenea structuri.
+ */
+const RX_PARTE_TIPARIBILA = /^word\/(?:document|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/
+
+// textul unei porțiuni XML: <w:t> decodate, run-urile lipite, un rând nou la fiecare sfârșit de paragraf; #970 r12: un rând
+// nou în paragraf (<w:br/>, <w:cr/>) și tabul sunt spațiu alb tipărit, deci despart tokenurile („Husnicioara.” + rând nou +
+// „Destinatari” nu e „Husnicioara.Destinatari”)
+const textCuParagrafe = xml => [...String(xml).matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<\/w:p>|<w:(?:br|cr|tab)(?:\s[^>]*)?\/>/g)]
+  .map(m => (m[1] !== undefined ? unescapeXml(m[1]) : m[0] === '</w:p>' ? '\n' : ' ')).join('')
+// blocurile de casetă de text și reprezentările lor alternative (mc:Fallback, VML w:pict)
+const RX_FALLBACK = /<mc:Fallback[\s>][\s\S]*?<\/mc:Fallback>/g
+const RX_CASETA = /<w:txbxContent[\s>][\s\S]*?<\/w:txbxContent>/g
+const RX_PICT = /<w:pict[\s>][\s\S]*?<\/w:pict>/g
+
+/**
+ * Textele verificate ale unei părți (#970 r5–r7) — nimic nu rămâne neverificat:
+ * (1) fluxul exterior, cu casetele de text, mc:Fallback și w:pict scoase (o adresă spartă în jurul unei casete se reîntregește);
+ * (2) fiecare casetă de text, separat; (3) fiecare mc:Fallback și fiecare w:pict, separat; (4) textul complet.
+ * Paragrafele sunt despărțite prin rând nou, run-urile sunt lipite. La (4) contează doar adresele PROPRII: lipirea textului
+ * unei casete de fluxul exterior poate crea URL-uri false (ex. „www.data” + „Text caseta” + „protection.ro”).
+ */
+const texteDeVerificat = xml => [
+  { text: textCuParagrafe(xml.replace(RX_FALLBACK, '').replace(RX_CASETA, '').replace(RX_PICT, '')), doarProprii: false },
+  ...[...xml.matchAll(RX_CASETA), ...xml.matchAll(RX_FALLBACK), ...xml.matchAll(RX_PICT)].map(m => ({ text: textCuParagrafe(m[0]), doarProprii: false })),
+  { text: textCuParagrafe(xml), doarProprii: true },
+]
+
+/**
+ * Prima adresă web nepermisă din textul tipăribil al unui DOCX, sau null (#970 r4–r6). Rezultatul NU conține text din
+ * document (P3-03): doar partea, domeniul / marcajul găsit și categoria.
+ * @returns {Promise<null | { parte: string, adresa: string, categorie: 'proprie' | 'neaprobata' }>}
+ */
+export async function adresaProprieInDocx(docx) {
+  const sursa = docx instanceof Blob ? await docx.arrayBuffer() : docx
+  const zip = await JSZip.loadAsync(sursa)
+  const parti = Object.keys(zip.files).filter(p => RX_PARTE_TIPARIBILA.test(p)).sort()
+  for (const parte of parti) {
+    const xml = await zip.file(parte).async('string')
+    if (/<w:altChunk[\s>/]/.test(xml)) return { parte, adresa: '(conținut neverificat: altChunk)', categorie: 'neverificat' }
+    for (const { text, doarProprii } of texteDeVerificat(xml)) {
+      const gasit = adresaWebNepermisa(text, { doarProprii })
+      if (gasit) return { parte, ...gasit }
+    }
+  }
+  return null
+}
+
+// mesajul pentru operator: doar partea și domeniul (fără fragmente din document, care pot avea PII)
+const mesajAdresaNepermisa = g => (g.categorie === 'proprie'
+  ? `Convocatorul poștal nu poate tipări adrese web proprii — răspuns sau informare („${g.adresa}”, în ${g.parte}). Scoateți adresa din textul de pe proiect (de ex. text_gdpr).`
+  : g.categorie === 'neaprobata'
+    ? `Convocatorul poștal nu poate tipări adrese web externe neaprobate („${g.adresa}”, în ${g.parte}); permise doar: dataprotection.ro, www.dataprotection.ro (cu http / https). Scoateți adresa din textul de pe proiect (de ex. text_gdpr).`
+    : `Convocatorul poștal nu poate fi verificat: ${g.adresa} în ${g.parte}. Folosiți șablonul convocatorului fără conținut importat (altChunk).`)
+
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
 /**
@@ -364,14 +532,16 @@ export function verificaDateConvocator({ nrDocument, token, uat, contact, proiec
   return lipsuri
 }
 
-/** Cheile pe care le furnizează genereazaConvocator (cele 36 din convocator.docx, SABLOANE.md §2.1, + id_parcela pentru corelare). */
+/** Cheile pe care le furnizează genereazaConvocator (cele 35 din convocator.docx, SABLOANE.md §2.1, + id_parcela pentru corelare).
+ * Fără `link` (decizia 03.11 seara): pe hârtie e doar QR-ul; linkul se întoarce separat, în rezultat. */
 export const CHEI_CONVOCATOR = ['contract_nr', 'contract_data', 'proiect_denumire', 'imputernicire_nr', 'imputernicire_data', 'nr_document', 'data',
   'nume', 'calitate', 'adresa', 'uat', 'sat', 'tarla', 'nr_cadastral', 'poz_hg', 'suprafata', 'tronson', 'zi1', 'program1', 'sate_zi1',
-  'zi2', 'program2', 'sate_zi2', 'zi3', 'program3', 'sate_zi3', 'link', 'qr', 'contact_telefon', 'contact_nume', 'contact_email', 'text_gdpr',
+  'zi2', 'program2', 'sate_zi2', 'zi3', 'program3', 'sate_zi3', 'qr', 'contact_telefon', 'contact_nume', 'contact_email', 'text_gdpr',
   'reprezentant_tgz', 'reprezentant_tgz_telefon', 'semnatar_gazpet', 'semnatar_tgz', 'id_parcela']
 
 /**
- * Construiește câmpurile convocatorului real (SABLOANE.md §2.1, 36 placeholder-e), completează șablonul, calculează hash-ul.
+ * Construiește câmpurile convocatorului real (SABLOANE.md §2.1, 35 placeholder-e), completează șablonul, calculează hash-ul.
+ * Linkul de răspuns intră doar în QR și în rezultat (`link`), nu și în document (convocatorul pleacă prin poștă, doar cu QR).
  * `contact` = persoana de contact Gazpet { nume, telefon, email } (fallback: proiect.contact_*); `contactDetinator` = rândul
  * din red_detinatori_contact (adresa; fallback detinator.contact); `dataDocument` opțional (implicit azi).
  * Implicit STRICT: Error în română dacă lipsesc date obligatorii (verificaDateConvocator) sau dacă rămâne un placeholder
@@ -386,6 +556,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
   const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}, d = detinator || {}
   // Linkul și QR-ul merg mereu pe domeniul public; un `origin` trimis de apelant se ignoră (nu mai e parametru)
+  // linkul nu se tipărește (03.11 seara): îl folosesc doar QR-ul și rezultatul întors
   const link = linkRaspuns(token)
   const semnatarTgz = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(plin).join(', ')
   const semnatarGazpet = [pr.reprezentant_gazpet_nume, pr.reprezentant_gazpet_functie].filter(plin).join(', ')
@@ -411,18 +582,28 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     zi1: formatDataRo(u.sesiune_zi1), program1: u.program_zi1 ?? '', sate_zi1: u.sate_zi1 ?? '',
     zi2: formatDataRo(u.sesiune_zi2), program2: u.program_zi2 ?? '', sate_zi2: u.sate_zi2 ?? '',
     zi3: formatDataRo(u.sesiune_zi3), program3: u.program_zi3 ?? '', sate_zi3: u.sate_zi3 ?? '',
-    link,
     contact_nume: c.nume ?? pr.contact_nume ?? '',
     contact_telefon: c.telefon ?? pr.contact_telefon ?? '',
     contact_email: c.email ?? pr.contact_email ?? '',
-    text_gdpr: textGdprPentruUat(pr.text_gdpr, u.nume, pr.link_informare_gdpr ?? null),
+    // fața nu tipărește linkul informării; trimiterea la verso doar cu VERSO_INFORMARE_INCLUS (PR #939)
+    text_gdpr: textGdprFataConvocator(pr.text_gdpr, u.nume, pr.link_informare_gdpr),
     reprezentant_tgz: semnatarTgz,
     reprezentant_tgz_telefon: pr.reprezentant_tgz_telefon ?? '',
     semnatar_gazpet: semnatarGazpet,
     semnatar_tgz: semnatarTgz,
   }
+  // #970 r15 (Copilot P2-02): postcondiție — un text GDPR nevid nu poate dispărea întreg prin filtrare
+  if (plin(pr.text_gdpr) && !plin(campuri.text_gdpr)) {
+    throw new Error('Convocatorul nu poate fi generat: după scoaterea trimiterilor la informarea completă / la verso, textul GDPR de pe proiect (text_gdpr) rămâne gol. Completați în text operatorii, scopul și drepturile.')
+  }
   const qr = await genereazaQr(link)
   const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
+  // garda pe documentul COMPLETAT: nicio adresă web proprie sau externă neaprobată în textul tipăribil, strict și la previzualizare
+  // (QR-ul e imagine, relația lui nu e text)
+  const gasit = await adresaProprieInDocx(blob)
+  if (gasit) {
+    throw new Error(mesajAdresaNepermisa(gasit))
+  }
   const hash = await hashBlob(blob)
   return { blob, hash, link, campuri, lipsuri }
 }

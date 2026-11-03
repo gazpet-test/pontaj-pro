@@ -59,15 +59,69 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   un șablon greșit. Ieșirea e deterministă (dată fixă pe intrările modificate, fără intrări de director).
 - S-a modificat DOAR textul din `<w:t>` în `word/document.xml` (modelele nu au antete/subsoluri Word); formatarea e a
   originalului, cu excepțiile (6) și (7) de mai jos. Excepții structurale: (1) în `convocator.docx` un paragraf nou care conține
-  doar `{{qr}}`, imediat după paragraful cu `{{link}}` (textul „codul QR alăturat” → „codul QR de mai jos”; din 03.11 paragraful
-  e un cadru aliniat la dreapta, §9); (2) în `adresa_uat.docx` tabelul „Lista
+  doar `{{qr}}`, imediat după paragraful opțiunilor de răspuns (textul „codul QR alăturat” → „codul QR de mai jos”; din 03.11
+  paragraful e un cadru aliniat la dreapta, §9); (2) în `adresa_uat.docx` tabelul „Lista
   parcelelor” rămâne cu UN rând-șablon (`{{rand.*}}`), celelalte 7 rânduri goale se șterg; (3) `docProps`: fără miniatură și
   fără „ultima modificare de”; (4) **nou la Final_v2**: Word a salvat celulele goale ale tabelelor fără run (`<w:p …/>`) — ele
   primesc un run `<w:rPr><w:sz w:val="19"/></w:rPr><w:t>{{…}}</w:t>` (formatul celulelor de date din aceleași tabele, ca la v5);
   (5) în `pv_b.docx` paragraful `{{pv_a_referinta}}` sub „Nume:” (decizia 02.11, PR #935); (6) toate cele 5 trec de pe Letter
-  pe A4, cu lățimile tabelelor scalate; (7) convocatorul are formatarea strânsă ca fața să încapă pe o pagină A4 (ambele §9). Unde modelul a rupt un câmp în mai
+  pe A4, cu lățimile tabelelor scalate; (7) convocatorul are formatarea strânsă ca fața să încapă pe o pagină A4 (ambele §9);
+  (8) **convocatorul doar cu QR** (decizia Răzvan 03.11 seara: „dacă trimitem link-ul, trimitem degeaba, nu o să-l deschidă
+  nimeni”): convocatorul pleacă prin poștă, deci adresa web de răspuns nu se mai tipărește și `{{link}}` dispare din șablon.
+  Singura reformulare a textului juridic din ȘABLON (modelul necompletat), declarată în `CONVOCATOR_DOAR_QR` (generator):
+  „Prin formularul online de la adresa ______________________ (sau scanând codul QR alăturat), la telefon …” →
+  „Prin formularul online, scanând cu telefonul codul QR de mai jos, la telefon {{contact_telefon}} …”. QR-ul duce în continuare
+  la formularul de răspuns (`https://redari.gazpet.ro/redari/raspuns/<token>`); generatorul refuză un convocator care mai are
+  `{{link}}` sau o adresă web în text, iar `src/redari/sabloaneA4.test.js` cere schimbarea exact o dată și, refăcută înapoi,
+  amprenta textului de dinainte (nimic altceva schimbat în șablon). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
+- **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
+  (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
+  decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):
+  - se scot DOAR frazele cunoscute din `FRAZE_VERSO` („Pe verso găsiți informațiile complete despre folosirea datelor și drepturile
+    dumneavoastră.” — textul real LOT1 — și „Informarea completă se află pe verso.”), exact: fără deosebire de majuscule, cu sau
+    fără diacritice, cu orice spațiu alb între cuvinte (`\n`, `\r\n`, NBSP), cu margini de cuvânt;
+  - dacă după aceea textul mai pomenește cuvântul „verso” sau „Informarea completă” (orice formulare, inclusiv
+    „Informarea completă: <link>”), generarea se OPREȘTE (`EroareTrimitereGdpr`, strict și la previzualizare), cu mesaj clar:
+    textul se corectează pe proiect. Nimic nu se taie pe ghicite;
+  - `VERSO_INFORMARE_INCLUS = false` (main; versoul vine cu PR #939): nu se adaugă nicio trimitere la verso;
+  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939): „Informarea completă se află pe verso.” se adaugă o singură dată, la final,
+    dacă textul avea o frază cunoscută sau proiectul are `link_informare_gdpr`;
+  - **Postcondiție (r15)**: dacă `text_gdpr` era nevid și a rămas gol după scoaterea frazelor, generarea e refuzată, cu mesaj clar.
+- **Adresele web pe documentul completat: regula LITERALĂ (r15)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
+  strict și la previzualizare; constantele unice `EXCEPTII_WEB`, `MARCAJE_PROPRII` din `docx.js`), fără interpretare de tokenuri:
+  1. adresele PROPRII (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns, calea de informare) se caută ca subșir pe
+     textul cu e-mailurile scoase → refuz (înaintea oricărei excepții, ca să nu se ascundă în calea unui URL permis);
+  2. e-mailurile se înlocuiesc cu un spațiu (regex strict: partea locală `[A-Za-z0-9._%+-]+`, care nu începe cu `www.`, domeniul
+     `[A-Za-z0-9.-]+.tld`, cu limite; după domeniu nu poate urma `/`, `@`, `-`, alfanumeric sau „.alfanumeric”, deci
+     `user@www.dataprotection.ro/x` nu e e-mail). Etichetele lipite (`E-mail:redari@gazpet.ro`, `Contact:ion@exemplu.ro`) nu
+     dau alarme;
+  3. excepțiile literale, fără deosebire de majuscule — `https://www.dataprotection.ro`, `http://www.dataprotection.ro`,
+     `https://dataprotection.ro`, `http://dataprotection.ro`, `www.dataprotection.ro`, `dataprotection.ro` — urmate opțional de
+     o cale `/…` fără spații și fără `@`, se înlocuiesc cu un spațiu, doar cu margini stricte: la stânga început de text sau un
+     caracter care NU e literă, cifră, `.`, `-`, `@`, `:` sau `/`; la dreapta final, spațiu alb sau o înșiruire de
+     `.,;!?)]»”"'` urmată de spațiu alb / final;
+  4. pe ce rămâne, refuz dacă apare `://`, `www` sau un caracter alfanumeric / `-` urmat de `.` și cel puțin 2 litere (`x.ro`,
+     `x.com`, „Primăria.Comuna”). Refuzate, de ex.: `evil.www.dataprotection.ro/x`, `evilwww.dataprotection.ro`,
+     `user@www.dataprotection.ro/x`, `https://dataprotection.ro:parola@exemplu.ro`, `https://dataprotection.ro:443/x`,
+     `exemplu.ro:dataprotection.ro`, `exemplu.ro:detalii`, `exemplu.ro?x`, `Site:www.exemplu.ro`, `dataprotection.ro.a.com`,
+     `portal.com.uk`, și (margini stricte) `Plângere:dataprotection.ro.` lipit de „:”. Permise: `(www.dataprotection.ro)`,
+     `Plângere: www.dataprotection.ro.`, `https://dataprotection.ro/legislatie/art:exemplu.ro`, `HTTPS://WWW.DATAPROTECTION.RO`,
+     `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`;
+  - textul juridic nu dă alarme: abrevierile au o singură literă sau cifre după punct (S.R.L., S.N.T.G.N., A.P.M., H.G.,
+    lit.c, art.6, pct.5.2, Nr.:12, 03.11.2026, 13.00); verificat în teste împreună cu default-ul `text_gdpr` din migrare și
+    textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD (LOT1, TEST-RAZVAN) verificate de Claude pe 04.11 (r18): fără adrese, iar fraza
+    LOT1 despre verso e în FRAZE_VERSO; o alarmă falsă pe alt text apare ca refuz clar la generare (de ex. un punct fără spațiu după el: „Primăria.Comuna”);
+  - mesajul de eroare are doar partea DOCX și marcajul găsit (adresa proprie, `://`, `www` sau fragmentul de domeniu), fără alt
+    text din document (PII);
+  - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
+    `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare se verifică TOATE textele: fluxul exterior cu
+    casetele de text (`w:txbxContent`), `mc:Fallback` și `w:pict` scoase; fiecare casetă, fiecare `mc:Fallback` și fiecare
+    `w:pict`, separat; textul complet (aici doar adresele proprii, ca lipirea textelor să nu dea URL-uri false). Run-urile se
+    lipesc, paragrafele se despart. Un DOCX cu `w:altChunk` e refuzat. **Limite declarate**: nu se verifică glosarul
+    (`word/glossary/*`), obiectele / diagramele încorporate, textul din imagini și câmpurile calculate de Word la deschidere;
+    șabloanele convocatorului nu au asemenea structuri.
 - Fiecare placeholder stă întreg într-un singur `<w:t>` → `docx.js` înlocuiește local, fără consolidare de run-uri (limita 1).
 - Antetul de firmă (adresă, CUI, telefon, „Lider al Asocierii …”) rămâne text fix; din antet s-au parametrizat doar
   `Contract Transgaz nr. {{contract_nr}}/{{contract_data}}` și `{{proiect_denumire}}` (convocator, PV A, PV B, PV C; adresa UAT nu
@@ -97,7 +151,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
 Legendă coloană „sursă”: `t.coloană` = tabela din CONTRACT_SCHEMA.md §2; **calcul** = compus în cod; **FĂRĂ SURSĂ** = nu
 există în contract (strânse în §3). „Oblig.” = obligatoriu la generarea de trimis (nu la previzualizare).
 
-### 2.1 `convocator.docx` (Model 1) — per deținător, 36 placeholder-e
+### 2.1 `convocator.docx` (Model 1) — per deținător, 35 placeholder-e (fără `{{link}}` din 03.11 seara, excepția (8))
 
 | placeholder | sursă în BD | oblig. | observații |
 |---|---|---|---|
@@ -118,11 +172,10 @@ există în contract (strânse în §3). „Oblig.” = obligatoriu la generarea
 | `{{zi1..3}}` | red_uat.sesiune_zi1..3 | da | |
 | `{{program1..3}}` | red_uat.program_zi1..3 | da | model: „09:00 – 16:00”, ziua 2 „09:00 – 19:00 (program prelungit)” |
 | `{{sate_zi1..3}}` | **FĂRĂ SURSĂ** → red_uat.sate_zi1..3 text | nu | coloana „Sate / tarlale programate” |
-| `{{link}}` | calcul `linkRaspuns(red_detinatori.token_raspuns)`, mereu pe `https://redari.gazpet.ro` | da | |
-| `{{qr}}` | imagine (genereazaQr(link)) | da | paragraf nou, singur |
+| `{{qr}}` | imagine `genereazaQr(linkRaspuns(red_detinatori.token_raspuns))`, mereu pe `https://redari.gazpet.ro` | da | paragraf nou, singur; linkul NU se tipărește (excepția (8)), `genereazaConvocator` îl întoarce doar în rezultat (`link`) |
 | `{{contact_telefon}}` ×2 | red_proiecte.contact_telefon | da | „la telefon …” + contact Gazpet (în model telefonul era gol) |
 | `{{contact_nume}}`, `{{contact_email}}` | red_proiecte.contact_nume, .contact_email | da | în model „Ramona Brehui” / „redari@gazpet.ro” = valorile de pus în red_proiecte |
-| `{{text_gdpr}}` | red_proiecte.text_gdpr | da | TOT paragraful de sub titlul „Date personale” (Final_v2). În Model_1 v6 aici e „TEXTUL SCURT” din `A3_Informare_GDPR_Lot1_v3_final` („Transgaz folosește datele … Pe verso găsiți informațiile complete …”); ERP-ul păstrează textul din BD până la aprobarea Transgaz (PR #939). Istoric v5: textul din Model_1 v5 = valoarea implicită; conține „Destinatari: Primăria ____” și „Informarea completă: ____” → **de decis**: textul din BD ține UAT-ul generic („Primăria comunei pe raza căreia se află parcela”) sau codul înlocuiește un marcaj `{uat}` în text; linkul informării complete intră în text |
+| `{{text_gdpr}}` | red_proiecte.text_gdpr | da | TOT paragraful de sub titlul „Date personale” (Final_v2). În Model_1 v6 aici e „TEXTUL SCURT” din `A3_Informare_GDPR_Lot1_v3_final` („Transgaz folosește datele … Pe verso găsiți informațiile complete …”); ERP-ul păstrează textul din BD până la aprobarea Transgaz (PR #939). **Regula actuală (03.11 seara, §1 excepția (8))**: pe față NU se tipărește niciun link; se scot doar frazele exacte din `FRAZE_VERSO` (r18); orice altă trimitere la verso / „Informarea completă: …” OPREȘTE generarea (textul se corectează pe proiect), iar trimiterea la verso apare doar cu `VERSO_INFORMARE_INCLUS` (PR #939). **Istoric** (înlocuit de regula actuală), v5: textul din Model_1 v5 = valoarea implicită; conține „Destinatari: Primăria ____” și „Informarea completă: ____” → **de decis**: textul din BD ține UAT-ul generic („Primăria comunei pe raza căreia se află parcela”) sau codul înlocuiește un marcaj `{uat}` în text; linkul informării complete intra în text (istoric, nu mai e valabil) |
 | `{{reprezentant_tgz}}` | calcul: red_proiecte.reprezentant_tgz_nume + _functie | nu | „Contact TRANSGAZ (DRFT / ofițer de legătură)” |
 | `{{reprezentant_tgz_telefon}}` | **FĂRĂ SURSĂ** → red_proiecte.reprezentant_tgz_telefon | nu | |
 | `{{semnatar_gazpet}}` | calcul: red_proiecte.reprezentant_gazpet_nume + _functie | nu | sub semnătura Antreprenor |
@@ -289,7 +342,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `sate_zi1..3` | convocator, adresa_uat | `red_uat.sate_zi1, sate_zi2, sate_zi3 text` | — |
 | `reprezentant_tgz_telefon` | convocator, adresa_uat | `red_proiecte.reprezentant_tgz_telefon text` | — |
 | `reprezentant_uat_telefon` | (nominalizare v5, Model 4 pct. 3) | `red_uat.reprezentant_uat_telefon text` (20261127a) | — |
-| `text_gdpr` cu UAT + link | convocator | `{uat}` înlocuit de cod; `red_proiecte.link_informare_gdpr` (20261128a) | **D4 DECIS**: gol → propoziția „Informarea completă” se omite; HTTPS → link configurat |
+| `text_gdpr` cu UAT + link | convocator | `{uat}` înlocuit de cod; `red_proiecte.link_informare_gdpr` (20261128a) | **D4 DECIS** pentru `textGdprPentruUat` (gol → propoziția „Informarea completă” se omite; HTTPS → link configurat); **pe fața convocatorului poștal** linkul nu se tipărește (03.11 seara, §1 excepția (8), `textGdprFataConvocator`) |
 | `act_identitate`, `act_doveditor` | pv_a | DECIS 02.11: actul de identitate NU se stocheaza; `red_procese_verbale.identitate_verificata boolean`; actul doveditor = `red_detinatori.act_doveditor_cunoscut boolean` DA/NU/NULL, fara continutul actului | 20261129a |
 | lucrari, lucrari_altele | pv_a, pv_b | DECIS 02.11: `red_procese_verbale.lucrari jsonb`, obiect confirmat de operator; propunerea din articol_deviz se face ulterior in UI | 20261129a |
 | stare_teren | pv_a, pv_b | DECIS 02.11: `red_procese_verbale.stare_teren jsonb`, obiect cu 4 bife si alta text; structura interna definita ulterior in UI | 20261129a |
@@ -314,7 +367,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | „constatare pe teren cerută? (data)” (Model 6 col. AB) | registru | v5 spune „la data stabilită de comisie” → data vine din comisie, nu de la deținător: `red_raspunsuri.constatare_teren_data` (setată de operator) | — |
 | conținut fix de parametrizat la alt proiect | toate | A.P.M. Mehedinți, Acordul de mediu, „Lider al Asocierii …”, Prunișor–Jupa în corp | nu acum (Lot 1) |
 
-## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (03.11.2026, Final_v2 + A4)
+## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (03.11.2026, Final_v2 + A4 + convocator doar cu QR)
 
 ```text
 # Verificare șabloane Redări — 6 fișiere din public/redari/sabloane (2026-11-03)
@@ -337,8 +390,8 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 
 ## convocator.docx — OK
 - părți citite: word/document.xml; paragrafe cu text: 55
-- placeholder-e distincte: 36 (apariții: 38); rupte între run-uri: 0
-- `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{link}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
+- placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
+- `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
 - {{qr}} singur în paragraf: da
 - relații externe (.rels TargetMode=External): niciuna
@@ -368,7 +421,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - relații externe (.rels TargetMode=External): niciuna
 - resturi intenționate: 3× linie de semnătură olografă
 
-## Toate placeholder-ele (141)
+## Toate placeholder-ele (140)
 
 | placeholder | șabloane |
 |---|---|
@@ -439,7 +492,6 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{judet}}` | adresa_uat |
 | `{{km_de_la}}` | pv_c |
 | `{{km_pana_la}}` | pv_c |
-| `{{link}}` | convocator |
 | `{{locul}}` | pv_a, pv_b |
 | `{{lucrari_altele}}` | pv_a, pv_b |
 | `{{nr_cadastral}}` | convocator, pv_a, pv_b |
@@ -781,12 +833,15 @@ semnătură (două rânduri libere), mărimea QR-ului. Marginile sunt sub sugest
 rândului = 1,2207 × corpul × interlinia, rândurile tabelelor = cea mai înaltă celulă + bordura, QR-ul 85 pt în cadru (textul de
 lângă el pe lățimea utilă minus 3,5 cm). Calibrare: pe modelul Letter, estimarea pune trecerea la pagina 2 exact unde a pus-o
 Word. Previzualizarea e completată cu `completeazaDocx` (date fictive, QR real); textul GDPR de pe față = textul scurt din
-Model_1 + „Informarea completă: <link>” (cazul cel mai lung din `textGdprPentruUat`).
+Model_1 + „Informarea completă: <link>” (cazul cel mai lung din `textGdprPentruUat`; istoric: din 03.11 seara propoziția nu se mai tipărește pe față, deci textul real e mai scurt).
 
 | Date fictive | Conținut | Înălțime utilă A4 | Umplere | Rezervă | Cu lățimi +5% |
 |---|---|---|---|---|---|
 | lungi (nume și adresă lungi, program „09:00 – 19:00 (program prelungit)”, sate lungi, URL de 94 de caractere) | 631 pt | 770 pt | 82,0% | **18,0%** | 15,0% |
 | tipice | 610 pt | 770 pt | 79,2% | **20,8%** | 17,8% |
+
+Din 03.11 seara (excepția (8), §1) linkul de răspuns nu se mai tipărește în fraza opțiunilor: textul feței doar s-a scurtat, iar
+formatarea a rămas aceeași, deci față de estimarea de mai sus umplerea poate doar să scadă (rezerva doar să crească).
 
 Estimarea nu înlocuiește verificarea în Word: previzualizarea DOCX se deschide în Word (bara de stare: „Pagina 1 din 1”) înainte
 de primul lot tipărit. `docProps/app.xml` din șablon păstrează statisticile salvate de Word în model (`<Pages>2</Pages>`): sunt

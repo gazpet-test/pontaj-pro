@@ -15,6 +15,11 @@ const TEXT_INAINTE = {
   adresa_uat: [4843, '0113e3a3295b35cfec8e0457066b531c6d6c1540799115657d35b41ba189a066'],
   pv_c: [1836, 'e99eb57eb97fdeb57515ce0b9f0fff81145682c26922f54416ed5ef6d5b05a9d'],
 }
+// Singura schimbare de text de după reformatare (decizia Răzvan 03.11 seara, excepția (8) din SABLOANE.md §1): convocatorul
+// pleacă prin poștă doar cu QR-ul, deci fraza nu mai cere adresa web. [înainte, după], în textul din <w:t> (escapat XML).
+const SCHIMBARI_TEXT = {
+  convocator: [[' de la adresa {{link}} (sau scanând codul QR de mai jos)', ', scanând cu telefonul codul QR de mai jos']],
+}
 // A4 în twips (210 × 297 mm; 1 mm = 56,69 twips)
 const A4 = { w: 11906, h: 16838 }
 const CM = 567
@@ -59,8 +64,15 @@ describe('șabloanele pe A4', () => {
     }
   })
 
-  it.each(Object.keys(TEXT_INAINTE))('%s: textul din <w:t> e identic cu cel de dinainte de reformatare', async nume => {
-    const t = textWt((await citeste(nume)).doc)
+  it.each(Object.keys(TEXT_INAINTE))('%s: textul din <w:t> e identic cu cel de dinainte de reformatare (în afara schimbărilor declarate)', async nume => {
+    let t = textWt((await citeste(nume)).doc)
+    // fiecare schimbare declarată apare exact o dată, iar vechea formă nu mai apare; refăcută înapoi, textul trebuie să dea
+    // exact amprenta de dinainte, deci nimic altceva nu s-a schimbat
+    for (const [inainte, dupa] of SCHIMBARI_TEXT[nume] ?? []) {
+      expect(t.split(dupa).length - 1).toBe(1)
+      expect(t).not.toContain(inainte)
+      t = t.replace(dupa, () => inainte)
+    }
     const [lungime, sha] = TEXT_INAINTE[nume]
     expect(t.length).toBe(lungime)
     expect(createHash('sha256').update(t).digest('hex')).toBe(sha)
@@ -132,6 +144,16 @@ describe('convocatorul: fața pe o pagină A4', () => {
     // niciun placeholder rămas
     expect(textWt(doc)).not.toMatch(/\{\{|\}\}/)
     expect(textWt(doc)).toContain('TEST nr_document')
+  })
+
+  it('doar QR, fără link tipărit: niciun {{link}} și nicio adresă web în șablon; fraza de răspuns trimite la QR', async () => {
+    const { doc } = await citeste('convocator')
+    const t = textWt(doc)
+    expect(t).not.toContain('{{link}}')
+    expect(t).not.toMatch(/redari\.gazpet\.ro|https?:\/\/|www\./)
+    expect(CHEI_CONVOCATOR).not.toContain('link')
+    expect(t).toContain('Prin formularul online, scanând cu telefonul codul QR de mai jos, la telefon {{contact_telefon}} sau prin răspuns scris la adresa de mai jos.')
+    expect(t.match(/\{\{qr\}\}/g)).toHaveLength(1)
   })
 
   it('fără marcajul de pagină vechi (lastRenderedPageBreak) și fără sfârșit de pagină forțat pe față', async () => {
