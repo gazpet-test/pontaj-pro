@@ -307,7 +307,7 @@ export const SELECT_ADMIN = {
   logistica_comenzi_transport: 'id,numar_comanda,data_transport,status',
   v_admin_conturi_alerte: 'id,cod,profile_id,email,tip_cont,is_owner,employee_id,employee_name,employee_active,termination_date,banned_until,jurnal_id,inchis_la,candidati,alocari',
   executie_proiecte: 'id,nume,cod_intern,eticheta_gmail,activ',
-  v_sms_sold: 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta',
+  v_sms_sold: 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta,furnizor_ultim,furnizor_la,simulator',
 }
 
 // Proiect activ fără etichetă Gmail: corespondența lui rămâne nesortată (sau ajunge în coada „de repartizat”).
@@ -327,7 +327,8 @@ export function alerteGmail(proiecte) {
 // r2 (#971, Copilot P2-07): O alertă combinată, cu TOATE motivele active; un sold vechi e „ultimul sold cunoscut”, nu sold curent;
 // ora de sortare = evenimentul relevant (eroarea, dacă e mai nouă decât citirea). P3-02: ora cronului 05:10 UTC (07:10 / 08:10 RO).
 export function alerteSmsSold(st) {
-  if (!st || st.alerta !== true) return []
+  // r3 (Copilot r2 P2-01): în modul simulator BD-ul nu dă alertă (soldul rămas e doar „ultimul cunoscut”); dublat aici, explicit
+  if (!st || st.alerta !== true || st.simulator === true) return []
   const credit = Number.isInteger(st.credit) ? st.credit : null
   const fmt = v => new Date(v).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' })
   const sub = st.sub_prag === true, veche = st.citire_veche === true, err = st.eroare_dupa_citire === true
@@ -345,7 +346,11 @@ export function alerteSmsSold(st) {
     title: titlu,
     reference: sold ? sold[0].toUpperCase() + sold.slice(1) : 'Nicio citire reușită încă',
     priority: sub ? (credit === 0 ? 'critical' : 'week') : 'missing',
-    timestamp: (err ? st.eroare_la : st.citit_la) || st.eroare_la || st.citit_la || null,
+    // r3 (Copilot r2 P3-01): fără citire de 36 h și fără eroare nouă (cronul nu mai rulează) = momentul apariției problemei,
+    // citit_la + 36 h, nu momentul ultimei citiri
+    timestamp: err ? (st.eroare_la || null)
+      : veche && st.citit_la ? new Date(Date.parse(st.citit_la) + 36 * 3600 * 1000).toISOString()
+        : (st.citit_la || st.eroare_la || null),
     owner: 'Owner · cont SMSLink',
     impact,
     reason: 'Calculat în BD (fn_sold_sms_stare) din ultima citire mode=Credit a cronului zilnic. Nu se trimite nimic automat.',

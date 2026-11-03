@@ -31,6 +31,18 @@
 --     jos (aceeasi ca in 20261011a) refuza migrarea daca o functie executabila / o vedere citibila de anon / authenticated din alta
 --     schema atinge coada sau raspunsurile. Cine poate citi coada direct: rolurile cu acces SQL (postgres, service_role prin SQL,
 --     supabase_admin) — aceleasi care pot citi oricum Vault-ul.
+-- r3 (#971, Copilot r2 NO-GO P2-01 + P3, Jakarinos r2 GO cu P3):
+--   * P2-01: furnizorul curent se afla din BD, nu doar dupa un click: la FIECARE apel, sms-sold scrie furnizor_ultim + furnizor_la
+--     (smslink / simulator, CAS pe momentul de start), fara sa atinga soldul. Am ales doua coloane pe randul existent (nu o tabela
+--     sau un secret citit din BD): un singur scriitor, aceeasi functie, acelasi lock. Cu furnizor_ultim = simulator, fn_sold_sms_stare
+--     intoarce simulator = true si toate flagurile de alerta false: soldul ramas e doar „ultimul cunoscut” (panou + Alerte), fara
+--     „sub prag” pe un sold vechi. La revenirea pe smslink, primul apel reface furnizorul si alerta se calculeaza din nou.
+--   * Jakarinos P3: amprenta include si privilegiile pe coloane (attacl) si proisstrict.
+--   * P3-02 (documentat): precondiția 0g pe coada pg_net e o verificare PUNCTUALA, la instalare, nu un control permanent. La deploy
+--     (si dupa orice schimbare a schemelor expuse / a politicilor) se face o proba HTTP reala ca anon si ca utilizator autentificat
+--     ca /rest/v1 nu da acces la net.* (asteptat: PGRST106 / 4xx).
+--   * P3-03 (documentat): modul STRICT al filtrului IP din sms-dlr cere validarea reala a infrastructurii (DLR-uri reale + proba de
+--     falsificare a antetului din retea); testele unitare valideaza doar parserul si decizia.
 -- Fara mail, fara SMS, fara date reale atinse (doar randul nou din sms_sold). Ordinea de livrare: deploy edge sms-sold (NO_JWT), apoi
 -- migrarea (pana la primul deploy cronul ar primi 404 — fara efect). Revenire: supabase/revenire/20261130d_sms_sold_ROLLBACK.sql.
 -- DRY: supabase/tests/20261130d_sms_sold_dryrun.sql. Izolare: READ COMMITTED (ca PostgREST).
@@ -92,9 +104,13 @@ CREATE TABLE public.sms_sold (
   citit_la timestamptz,
   eroare text CHECK (eroare IS NULL OR eroare ~ '^[a-z0-9_]{1,40}$'),
   eroare_la timestamptz,
+  furnizor_ultim text CHECK (furnizor_ultim IS NULL OR furnizor_ultim IN ('smslink', 'simulator')),
+  furnizor_la timestamptz,
   CONSTRAINT sms_sold_citire CHECK ((credit IS NULL) = (citit_la IS NULL)),
-  CONSTRAINT sms_sold_eroare CHECK ((eroare IS NULL) = (eroare_la IS NULL))
+  CONSTRAINT sms_sold_eroare CHECK ((eroare IS NULL) = (eroare_la IS NULL)),
+  CONSTRAINT sms_sold_furnizor CHECK ((furnizor_ultim IS NULL) = (furnizor_la IS NULL))
 );
+COMMENT ON COLUMN public.sms_sold.furnizor_ultim IS 'SMS (r3): furnizorul configurat la ULTIMUL apel sms-sold (smslink / simulator), scris la fiecare apel, fara sa atinga soldul. simulator = soldul ramas e doar „ultimul cunoscut”, fara alerta.';
 COMMENT ON TABLE public.sms_sold IS 'SMS: soldul SMSLink, un singur rand. credit + citit_la = ultima citire buna (mode=Credit; citit_la = momentul de START al citirii); eroare + eroare_la = ultima eroare (doar cod scurt, niciodata textul furnizorului). Scris DOAR de fn_sold_sms_inregistreaza (edge sms-sold, CAS pe momentul de start), citit DOAR prin fn_sold_sms_citeste (owner). 20261130d.';
 ALTER TABLE public.sms_sold ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.sms_sold FROM PUBLIC, anon, authenticated, service_role;
@@ -110,21 +126,29 @@ COMMENT ON FUNCTION public.fn_sold_sms_prag() IS 'SMS (pura, interna): pragul de
 CREATE FUNCTION public.fn_sold_sms_stare() RETURNS jsonb
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
   SELECT jsonb_build_object('credit', x.credit, 'citit_la', x.citit_la, 'eroare', x.eroare, 'eroare_la', x.eroare_la, 'prag', x.prag,
-           'sub_prag', x.sub_prag, 'citire_veche', x.veche, 'eroare_dupa_citire', x.err,
-           'alerta', x.sub_prag OR x.veche OR x.err)
-    FROM (SELECT s.credit, s.citit_la, s.eroare, s.eroare_la, public.fn_sold_sms_prag() AS prag,
+           'furnizor_ultim', x.furnizor_ultim, 'furnizor_la', x.furnizor_la, 'simulator', x.sim,
+           'sub_prag', x.sub_prag AND NOT x.sim, 'citire_veche', x.veche AND NOT x.sim, 'eroare_dupa_citire', x.err AND NOT x.sim,
+           'alerta', (x.sub_prag OR x.veche OR x.err) AND NOT x.sim)
+    FROM (SELECT s.credit, s.citit_la, s.eroare, s.eroare_la, s.furnizor_ultim, s.furnizor_la, public.fn_sold_sms_prag() AS prag,
+                 (s.furnizor_ultim IS NOT DISTINCT FROM 'simulator') AS sim,
                  (s.credit IS NOT NULL AND s.credit < public.fn_sold_sms_prag()) AS sub_prag,
                  (s.citit_la IS NULL OR s.citit_la < now() - interval '36 hours') AS veche,
                  (s.eroare_la IS NOT NULL AND (s.citit_la IS NULL OR s.eroare_la > s.citit_la)) AS err
             FROM public.sms_sold s WHERE s.id) x
 $fn$;
-COMMENT ON FUNCTION public.fn_sold_sms_stare() IS 'SMS (intern, fara drept de apel): starea soldului + SINGURA definitie a alertei: sub_prag (credit < fn_sold_sms_prag()), citire_veche (nicio citire buna in ultimele 36 h), eroare_dupa_citire (ultima incercare a esuat). alerta = oricare.';
+COMMENT ON FUNCTION public.fn_sold_sms_stare() IS 'SMS (intern, fara drept de apel): starea soldului + SINGURA definitie a alertei: sub_prag (credit < fn_sold_sms_prag()), citire_veche (nicio citire buna in ultimele 36 h), eroare_dupa_citire (ultima incercare a esuat). alerta = oricare. r3: cu furnizor_ultim = simulator, soldul ramas e doar „ultimul cunoscut” si toate flagurile de alerta sunt false (simulator = true).';
 
-CREATE FUNCTION public.fn_sold_sms_inregistreaza(p_credit integer, p_eroare text, p_inceput timestamptz) RETURNS jsonb
+CREATE FUNCTION public.fn_sold_sms_inregistreaza(p_credit integer, p_eroare text, p_inceput timestamptz, p_furnizor text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_n integer; v_gasit boolean;
 BEGIN
-  IF (p_credit IS NULL) = (p_eroare IS NULL) THEN
+  IF p_furnizor IS NULL OR p_furnizor NOT IN ('smslink', 'simulator') THEN
+    RAISE EXCEPTION 'sms sold: furnizor necunoscut' USING ERRCODE = '22023';
+  END IF;
+  IF p_furnizor = 'simulator' AND (p_credit IS NOT NULL OR p_eroare IS NOT NULL) THEN
+    RAISE EXCEPTION 'sms sold: simulatorul nu are sold si nici eroare de sold' USING ERRCODE = '22023';
+  END IF;
+  IF p_furnizor = 'smslink' AND (p_credit IS NULL) = (p_eroare IS NULL) THEN
     RAISE EXCEPTION 'sms sold: exact unul dintre credit si eroare' USING ERRCODE = '22023';
   END IF;
   IF p_inceput IS NULL OR p_inceput > now() + interval '2 minutes' OR p_inceput < now() - interval '15 minutes' THEN
@@ -139,15 +163,19 @@ BEGIN
   -- randul unic, blocat: doua citiri concurente se serializeaza aici; CAS pe momentul de start (o citire mai veche nu suprascrie)
   SELECT true INTO v_gasit FROM public.sms_sold WHERE id FOR UPDATE;
   IF v_gasit IS NOT TRUE THEN RAISE EXCEPTION 'sms sold: randul de sold lipseste' USING ERRCODE = 'P0002'; END IF;
+  -- furnizorul curent (r3): la fiecare apel, tot CAS pe momentul de start; nu atinge soldul / eroarea
+  UPDATE public.sms_sold SET furnizor_ultim = p_furnizor, furnizor_la = p_inceput WHERE id AND (furnizor_la IS NULL OR furnizor_la < p_inceput);
+  v_n := 0;
   IF p_credit IS NOT NULL THEN
     UPDATE public.sms_sold SET credit = p_credit, citit_la = p_inceput WHERE id AND (citit_la IS NULL OR citit_la < p_inceput);
-  ELSE
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSIF p_eroare IS NOT NULL THEN
     UPDATE public.sms_sold SET eroare = p_eroare, eroare_la = p_inceput WHERE id AND (eroare_la IS NULL OR eroare_la < p_inceput);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
   END IF;
-  GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN public.fn_sold_sms_stare() || jsonb_build_object('scris', v_n = 1);
 END $fn$;
-COMMENT ON FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz) IS 'SMS (doar service_role, din edge sms-sold dupa poarta cron intern / owner): scrie ultima citire buna (p_credit) SAU ultima eroare (p_eroare = cod scurt [a-z0-9_]), cu momentul de START al citirii (p_inceput, CAS: doar daca e mai nou decat cel existent); cealalta pereche ramane neatinsa. Intoarce fn_sold_sms_stare() + scris.';
+COMMENT ON FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz, text) IS 'SMS (doar service_role, din edge sms-sold dupa poarta cron intern / owner): scrie furnizorul curent (p_furnizor smslink / simulator, la fiecare apel) si, pentru smslink, ultima citire buna (p_credit) SAU ultima eroare (p_eroare = cod scurt [a-z0-9_]); simulator = doar furnizorul, fara sold. Toate cu momentul de START al citirii (p_inceput, CAS: doar daca e mai nou). Intoarce fn_sold_sms_stare() + scris (soldul / eroarea).';
 
 CREATE FUNCTION public.fn_sold_sms_citeste() RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -160,15 +188,16 @@ END $fn$;
 COMMENT ON FUNCTION public.fn_sold_sms_citeste() IS 'SMS (owner): soldul SMSLink + alerta (fn_sold_sms_stare). VOLATILE ca vederea v_sms_sold sa o evalueze mereu (refuz 42501 pentru non-owner, si la count). Folosita de panoul SMS si de Administrator -> Alerte.';
 
 -- privilegiile implicite Supabase dau EXECUTE pe functii noi: se scot explicit, apoi exact cine trebuie
-REVOKE ALL ON FUNCTION public.fn_sold_sms_prag(), public.fn_sold_sms_stare(), public.fn_sold_sms_inregistreaza(integer, text, timestamptz),
+REVOKE ALL ON FUNCTION public.fn_sold_sms_prag(), public.fn_sold_sms_stare(), public.fn_sold_sms_inregistreaza(integer, text, timestamptz, text),
   public.fn_sold_sms_citeste() FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz) TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz, text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.fn_sold_sms_citeste() TO authenticated;
 
 CREATE VIEW public.v_sms_sold WITH (security_invoker = on) AS
 SELECT true AS id, (x.s->>'credit')::integer AS credit, (x.s->>'citit_la')::timestamptz AS citit_la, x.s->>'eroare' AS eroare,
        (x.s->>'eroare_la')::timestamptz AS eroare_la, (x.s->>'prag')::integer AS prag, (x.s->>'sub_prag')::boolean AS sub_prag,
-       (x.s->>'citire_veche')::boolean AS citire_veche, (x.s->>'eroare_dupa_citire')::boolean AS eroare_dupa_citire, (x.s->>'alerta')::boolean AS alerta
+       (x.s->>'citire_veche')::boolean AS citire_veche, (x.s->>'eroare_dupa_citire')::boolean AS eroare_dupa_citire, (x.s->>'alerta')::boolean AS alerta,
+       x.s->>'furnizor_ultim' AS furnizor_ultim, (x.s->>'furnizor_la')::timestamptz AS furnizor_la, (x.s->>'simulator')::boolean AS simulator
   FROM (SELECT public.fn_sold_sms_citeste() AS s) x;
 COMMENT ON VIEW public.v_sms_sold IS 'SMS: soldul SMSLink + alerta, un rand, din fn_sold_sms_citeste() (VOLATILE: doar owner, altfel 42501 la orice citire). security_invoker. Sursa SMS sold din Administrator -> Alerte. 20261130d.';
 REVOKE ALL ON public.v_sms_sold FROM PUBLIC, anon, authenticated, service_role;
@@ -179,7 +208,7 @@ SELECT cron.schedule('sms_sold_zilnic', '10 5 * * *', $cmd$SELECT net.http_post(
 
 DO $post$
 DECLARE v_o oid; v_s jsonb; v_amprenta text;
-  v_toate regprocedure[] := ARRAY['public.fn_sold_sms_prag()', 'public.fn_sold_sms_stare()', 'public.fn_sold_sms_inregistreaza(integer,text,timestamptz)',
+  v_toate regprocedure[] := ARRAY['public.fn_sold_sms_prag()', 'public.fn_sold_sms_stare()', 'public.fn_sold_sms_inregistreaza(integer,text,timestamptz,text)',
     'public.fn_sold_sms_citeste()']::regprocedure[];
 BEGIN
   -- textul din catalog (regprocedure, pg_get_viewdef) depinde de search_path: fixat pentru amprenta (doar in aceasta tranzactie)
@@ -211,7 +240,7 @@ BEGIN
        OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = v_o AND a.grantee = 0)
        OR has_function_privilege('anon', v_o, 'EXECUTE')
        OR has_function_privilege('authenticated', v_o, 'EXECUTE') IS DISTINCT FROM (v_o = 'public.fn_sold_sms_citeste()'::regprocedure)
-       OR has_function_privilege('service_role', v_o, 'EXECUTE') IS DISTINCT FROM (v_o = 'public.fn_sold_sms_inregistreaza(integer,text,timestamptz)'::regprocedure) THEN
+       OR has_function_privilege('service_role', v_o, 'EXECUTE') IS DISTINCT FROM (v_o = 'public.fn_sold_sms_inregistreaza(integer,text,timestamptz,text)'::regprocedure) THEN
       RAISE EXCEPTION '20261130d: functia % are setari / drepturi gresite', v_o::regprocedure;
     END IF;
   END LOOP;
@@ -237,7 +266,7 @@ BEGIN
   END IF;
   -- AMPRENTA 20261130d (identica in migrare si in revenire): structura exacta, fara date
   SELECT md5(concat_ws(E'\n',
-    (SELECT string_agg(format('%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-')), ';' ORDER BY a.attnum)
+    (SELECT string_agg(format('%s:%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-'), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(a.attacl) x), '-')), ';' ORDER BY a.attnum)
        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
       WHERE a.attrelid = 'public.sms_sold'::regclass AND a.attnum > 0 AND NOT a.attisdropped),
     (SELECT string_agg(c.conname || '=' || pg_get_constraintdef(c.oid), ';' ORDER BY c.conname) FROM pg_constraint c WHERE c.conrelid = 'public.sms_sold'::regclass),
@@ -247,14 +276,14 @@ BEGIN
     (SELECT count(*)::text FROM pg_policy WHERE polrelid = 'public.sms_sold'::regclass) || ':'
       || (SELECT count(*)::text FROM pg_trigger WHERE tgrelid = 'public.sms_sold'::regclass AND NOT tgisinternal),
     md5(replace(pg_get_viewdef('public.v_sms_sold'::regclass), chr(13), '')),
-    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, coalesce(array_to_string(p.proconfig, ','), '-'),
+    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.proisstrict, p.provolatile, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.proname)
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sold!_sms!_%' ESCAPE '!'),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
        FROM cron.job j WHERE j.jobname = 'sms_sold_zilnic'))) INTO v_amprenta;
-  IF v_amprenta IS DISTINCT FROM '3b27dc51d6aea6793867e79025528d47' THEN
-    RAISE EXCEPTION '20261130d: amprenta obiectelor = % (asteptat 3b27dc51d6aea6793867e79025528d47)', v_amprenta;
+  IF v_amprenta IS DISTINCT FROM '33cbff5fea50460503f200095b4eb370' THEN
+    RAISE EXCEPTION '20261130d: amprenta obiectelor = % (asteptat 33cbff5fea50460503f200095b4eb370)', v_amprenta;
   END IF;
 END $post$;
 

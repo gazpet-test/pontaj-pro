@@ -36,11 +36,12 @@ function Mesaj({ m }) {
 }
 
 // ── Soldul SMSLink (20261130d): doar owner-ul (fn_sold_sms_citeste refuză în BD pe oricine altcineva) ──────────────────────────
-export function SoldSmslink({ soldInitial = null, simulatorInitial = false }) {
+// r3 (Copilot r2 P2-01): modul simulator vine din BD (sold.simulator = furnizor_ultim simulator, scris de sms-sold la fiecare apel),
+// deci e corect și la încărcarea paginii, fără click; flagurile de alertă sunt deja false în BD în modul simulator.
+export function SoldSmslink({ soldInitial = null }) {
   const [sold, setSold] = useState(soldInitial)
   const [eroare, setEroare] = useState('')
   const [lucru, setLucru] = useState(false)
-  const [simulator, setSimulator] = useState(simulatorInitial)
   useEffect(() => {
     if (soldInitial) return
     let activ = true
@@ -49,17 +50,13 @@ export function SoldSmslink({ soldInitial = null, simulatorInitial = false }) {
   }, [soldInitial])
   const citesteAcum = async () => {
     setLucru(true); setEroare('')
-    try {
-      const r = await smsApi.citesteSold()
-      // simulatorul nu are sold (nu se scrie nimic în BD): se spune explicit, nu „încă necitit”
-      setSimulator(r?.furnizor === 'simulator')
-      setSold(await smsApi.sold())
-    } catch (e) { setEroare(mesajEroare(e)) } finally { setLucru(false) }
+    try { await smsApi.citesteSold(); setSold(await smsApi.sold()) } catch (e) { setEroare(mesajEroare(e)) } finally { setLucru(false) }
   }
+  const simulator = sold?.simulator === true
   const culoare = simulator ? G.muted : sold?.sub_prag ? G.red : sold?.alerta ? G.yellow : G.muted
   return <span style={{ ...S.row, gap: 6 }}>
-    <span style={{ ...S.small, color: culoare }} title={sold?.sub_prag ? `Sub pragul de ${sold.prag} SMS: reîncarcă creditul` : sold?.eroare_dupa_citire ? `Ultima citire a eșuat (${sold.eroare})` : ''}>
-      {eroare ? `Sold SMSLink: eroare (${eroare})` : textSold(sold, { simulator })}{!simulator && sold?.sub_prag ? ' ⚠' : ''}
+    <span style={{ ...S.small, color: culoare }} title={simulator ? 'SMS_FURNIZOR = simulator: soldul SMSLink nu se citește; valoarea e doar ultima cunoscută' : sold?.sub_prag ? `Sub pragul de ${sold.prag} SMS: reîncarcă creditul` : sold?.eroare_dupa_citire ? `Ultima citire a eșuat (${sold.eroare})` : ''}>
+      {eroare ? `Sold SMSLink: eroare (${eroare})` : textSold(sold)}{!simulator && sold?.sub_prag ? ' ⚠' : ''}
     </span>
     <button type="button" style={{ ...S.button, minHeight: 28, padding: '3px 8px', fontSize: 12 }} aria-label="Citește soldul SMSLink acum" title="Citește soldul acum" disabled={lucru} onClick={citesteAcum}>{lucru ? '…' : '↻'}</button>
   </span>

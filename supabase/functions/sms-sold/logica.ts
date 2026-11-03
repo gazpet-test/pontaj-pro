@@ -57,12 +57,19 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const inceput = new Date(deps.acum ? deps.acum() : Date.now()).toISOString()
   let s: Sold
   try { s = await citesteSold(deps.env, { fetch: deps.fetch }) } catch (_) { s = { ok: false, eroare: 'adaptor_exceptie' } }
-  // r2 (P2-01, implicit): simulatorul nu are sold — nu se scrie nimic (nici „citire reușită”, nici eroare)
+  // r2 (P2-01, implicit): simulatorul nu are sold — nu se scrie nici „citire reușită”, nici eroare. r3 (Copilot r2 P2-01): se scrie DOAR
+  // furnizorul curent (furnizor_ultim = simulator), ca panoul și Alertele să știe din BD, fără click, că soldul rămas e doar „ultimul cunoscut”.
   if ('simulator' in s) {
+    const { error } = await deps.sb.rpc('fn_sold_sms_inregistreaza', { p_credit: null, p_eroare: null, p_inceput: inceput, p_furnizor: 'simulator' })
+    if (error) {
+      console.error('sms-sold: furnizor nescris', { cod: error.code ?? null })
+      return json(500, { ok: false, error: 'scriere_bd' })
+    }
     console.log('sms-sold', { apelant, furnizor: 'simulator' })
     return json(200, { ok: true, apelant, furnizor: 'simulator', sold: null })
   }
-  const args = s.ok ? { p_credit: s.credit, p_eroare: null, p_inceput: inceput } : { p_credit: null, p_eroare: s.eroare, p_inceput: inceput }
+  const args = s.ok ? { p_credit: s.credit, p_eroare: null, p_inceput: inceput, p_furnizor: 'smslink' }
+    : { p_credit: null, p_eroare: s.eroare, p_inceput: inceput, p_furnizor: 'smslink' }
   const { data, error } = await deps.sb.rpc('fn_sold_sms_inregistreaza', args)
   if (error) {
     console.error('sms-sold: sold nescris', { cod: error.code ?? null })

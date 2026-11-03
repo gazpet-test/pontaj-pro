@@ -215,15 +215,19 @@ describe('sms-sold — poarta (cron intern sau owner) și scrierea', () => {
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual({ ok: true, apelant: 'cron', furnizor: 'smslink', credit: 120, scris: true, prag: 150, sub_prag: true })
     expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza'))
-      .toEqual([['fn_sold_sms_inregistreaza', { p_credit: 120, p_eroare: null, p_inceput: '2026-11-04T05:10:00.000Z' }]])
+      .toEqual([['fn_sold_sms_inregistreaza', { p_credit: 120, p_eroare: null, p_inceput: '2026-11-04T05:10:00.000Z', p_furnizor: 'smslink' }]])
   })
-  it('r2 P2-01 (implicit): simulatorul → nimic scris, { furnizor: simulator, sold: null }', async () => {
+  it('r2/r3 P2-01: simulatorul → fără sold și fără eroare; se scrie DOAR furnizorul curent; { furnizor: simulator, sold: null }', async () => {
     const sb = sbSold(), f = fetchFals({ json: { credit: 1 } })
     const r = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sb, { env: { SMS_FURNIZOR: 'simulator' }, fetch: f }))
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual({ ok: true, apelant: 'cron', furnizor: 'simulator', sold: null })
-    expect(nuAScris(sb)).toBe(true)
+    expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza'))
+      .toEqual([['fn_sold_sms_inregistreaza', { p_credit: null, p_eroare: null, p_inceput: '2026-11-04T05:10:00.000Z', p_furnizor: 'simulator' }]])
     expect(f.cereri).toHaveLength(0)
+    // furnizorul nescris → 500 (nu „ok”)
+    const r2 = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sbSold({ eroareRpc: true }), { env: { SMS_FURNIZOR: 'simulator' } }))
+    expect(r2.status).toBe(500)
   })
   it('owner-ul (nivelul cerut cu JWT-ul lui) → poate citi acum; nivelul nu se cere cu service_role', async () => {
     const sb = sbSold({ user: UID_O, nivel: 'owner' })
@@ -240,7 +244,7 @@ describe('sms-sold — poarta (cron intern sau owner) și scrierea', () => {
     expect(JSON.parse(corp)).toMatchObject({ ok: false, eroare: 'smslink_7' })
     expect(corp).not.toContain(PAROLA)
     expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza'))
-      .toEqual([['fn_sold_sms_inregistreaza', { p_credit: null, p_eroare: 'smslink_7', p_inceput: '2026-11-04T05:10:00.000Z' }]])
+      .toEqual([['fn_sold_sms_inregistreaza', { p_credit: null, p_eroare: 'smslink_7', p_inceput: '2026-11-04T05:10:00.000Z', p_furnizor: 'smslink' }]])
   })
   it('RPC-ul de scriere eșuează → 500 (nu „ok”)', async () => {
     const r = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sbSold({ eroareRpc: true })))
@@ -255,7 +259,8 @@ describe('soldul în UI', () => {
     expect(textSold({ credit: 842, citit_la: '2026-11-04T05:10:30Z', citire_veche: true })).toBe('Sold SMSLink: 842 (la 04.11 07:10) · neactualizat')
     expect(textSold({ credit: null, citit_la: null })).toBe('Sold SMSLink: încă necitit')
     expect(textSold(null)).toBe('Sold SMSLink: —')
-    expect(textSold(null, { simulator: true })).toBe('Sold SMSLink: simulator, fără sold')
+    expect(textSold(null, { simulator: true })).toBe('simulator — sold SMSLink necitit')
+    expect(textSold({ simulator: true, credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: false })).toBe('simulator — sold SMSLink necitit (ultimul cunoscut: 120 la 04.11 07:10)')
   })
   it('Administrator → Alerte: sursa e doar a owner-ului; alerta apare doar când BD-ul spune alerta', () => {
     const s = SURSE_ADMIN.find(x => x.id === 'sms_sold')
@@ -281,6 +286,22 @@ describe('soldul în UI', () => {
     expect(a.timestamp).toBe('2026-11-04T05:10:00Z')
     expect(a.reference).toBe('Ultimul sold cunoscut 120 SMS (la 30.10.2026, 07:10)')
   })
+  it('r3 P3-01: cronul oprit (citire veche, fără eroare nouă) → ora alertei = citit_la + 36 h, nu ora ultimei citiri', () => {
+    const [a] = alerteSmsSold({ credit: 900, prag: 150, citire_veche: true, alerta: true, citit_la: '2026-10-25T05:10:00Z' })
+    expect(a.timestamp).toBe('2026-10-26T17:10:00.000Z')
+    expect(a.title).toBe('Soldul SMSLink nu a mai fost citit de peste 36 de ore')
+    expect(a.reference).toBe('Ultimul sold cunoscut 900 SMS (la 25.10.2026, 07:10)')
+  })
+  it('r3 P2-01: comutare SMSLink → simulator, fără click: nici alertă (chiar dacă BD ar marca sub prag), iar panoul arată „ultimul cunoscut”', async () => {
+    const randSim = { id: true, credit: 120, prag: 150, sub_prag: false, alerta: false, citire_veche: false, eroare_dupa_citire: false,
+      citit_la: '2026-11-04T05:10:00Z', furnizor_ultim: 'simulator', furnizor_la: '2026-11-04T06:00:00Z', simulator: true }
+    expect(alerteSmsSold(randSim)).toEqual([])
+    expect(alerteSmsSold({ ...randSim, sub_prag: true, alerta: true })).toEqual([])
+    const client = { from: () => { const q = { select: () => q, order: () => q, range: () => q, abortSignal: async () => ({ data: [randSim], error: null, count: 1 }) }; return q } }
+    const r = await incarcaSursaAdmin(client, SURSE_ADMIN.find(x => x.id === 'sms_sold'), { id: 'o', is_owner: true, module_access: ['admin_alerte'] })
+    expect(r).toMatchObject({ state: 'ok', rows: [] })
+    expect(textSold(randSim)).toBe('simulator — sold SMSLink necitit (ultimul cunoscut: 120 la 04.11 07:10)')
+  })
   it('sursa citește vederea v_sms_sold (fără rpc), cu proiecția explicită; 42501 din BD → „Acces insuficient”', async () => {
     const cereri = []
     const client = rand => ({ from: t => { const q = { select: (c, o) => { cereri.push([t, c, o]); return q }, order: () => q, range: () => q,
@@ -290,7 +311,7 @@ describe('soldul în UI', () => {
     const r = await incarcaSursaAdmin(client({ id: true, credit: 80, prag: 150, sub_prag: true, alerta: true, citit_la: '2026-11-04T05:10:00Z' }), s, owner)
     expect(r.state).toBe('ok')
     expect(r.rows.map(x => x.id)).toEqual(['sms_sold:sold'])
-    expect(cereri[0]).toEqual(['v_sms_sold', 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta', { count: 'exact' }])
+    expect(cereri[0]).toEqual(['v_sms_sold', 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta,furnizor_ultim,furnizor_la,simulator', { count: 'exact' }])
     const e = Object.assign(new Error('doar owner'), { code: '42501' })
     expect((await incarcaSursaAdmin(client(e), s, owner)).state).toBe('denied')
   })

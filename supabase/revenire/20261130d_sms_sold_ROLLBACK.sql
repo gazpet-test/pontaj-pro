@@ -1,6 +1,6 @@
 -- Revenire 20261130d_sms_sold. Runner: o tranzactie, GUC gazpet.revenire_20261130d = 'SMS_SOLD_SCOS:'||txid_current().
 -- Fail-closed: refuza (nimic schimbat) daca obiectele nu mai sunt EXACT cele create de 20261130d. r2 (#971, Copilot P2-08 + Jakarinos
--- P3): AMPRENTA completa, aceeasi interogare si aceeasi constanta ca in postconditia migrarii: coloane + valori implicite, DEFINITIILE
+-- P3; r3: + privilegiile pe coloane attacl si proisstrict): AMPRENTA completa, aceeasi interogare si aceeasi constanta ca in postconditia migrarii: coloane + valori implicite, DEFINITIILE
 -- constrangerilor (nu doar numarul), proprietar / RLS / FORCE RLS / ACL / optiuni pe tabela si vedere, numarul de politici si triggere,
 -- definitia vederii, iar pe fiecare functie: semnatura, SECURITY DEFINER, volatilitatea, proconfig, proprietarul, ACL-ul si corpul;
 -- plus jobul sms_sold_zilnic (program, md5 comanda, activ, utilizator). Apoi: un singur rand, nicio ALTA vedere dependenta.
@@ -24,7 +24,7 @@ BEGIN
   -- tabela nu se mai schimba sub noi pana la COMMIT (edge-ul care scrie in ea asteapta sau primeste eroare)
   LOCK TABLE public.sms_sold IN ACCESS EXCLUSIVE MODE;
   SELECT md5(concat_ws(E'\n',
-    (SELECT string_agg(format('%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-')), ';' ORDER BY a.attnum)
+    (SELECT string_agg(format('%s:%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-'), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(a.attacl) x), '-')), ';' ORDER BY a.attnum)
        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
       WHERE a.attrelid = 'public.sms_sold'::regclass AND a.attnum > 0 AND NOT a.attisdropped),
     (SELECT string_agg(c.conname || '=' || pg_get_constraintdef(c.oid), ';' ORDER BY c.conname) FROM pg_constraint c WHERE c.conrelid = 'public.sms_sold'::regclass),
@@ -34,13 +34,13 @@ BEGIN
     (SELECT count(*)::text FROM pg_policy WHERE polrelid = 'public.sms_sold'::regclass) || ':'
       || (SELECT count(*)::text FROM pg_trigger WHERE tgrelid = 'public.sms_sold'::regclass AND NOT tgisinternal),
     md5(replace(pg_get_viewdef('public.v_sms_sold'::regclass), chr(13), '')),
-    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, coalesce(array_to_string(p.proconfig, ','), '-'),
+    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.proisstrict, p.provolatile, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.proname)
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sold!_sms!_%' ESCAPE '!'),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
        FROM cron.job j WHERE j.jobname = 'sms_sold_zilnic'))) INTO v_amprenta;
-  IF v_amprenta IS DISTINCT FROM '3b27dc51d6aea6793867e79025528d47' THEN
+  IF v_amprenta IS DISTINCT FROM '33cbff5fea50460503f200095b4eb370' THEN
     RAISE EXCEPTION '20261130d revenire: obiectele nu mai sunt exact cele din 20261130d (amprenta %)', v_amprenta;
   END IF;
   IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sold!_sms!_%' ESCAPE '!') <> 4
@@ -61,7 +61,7 @@ END $pre$;
 SELECT cron.unschedule('sms_sold_zilnic');
 DROP VIEW public.v_sms_sold;
 DROP FUNCTION public.fn_sold_sms_citeste();
-DROP FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz);
+DROP FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz, text);
 DROP FUNCTION public.fn_sold_sms_stare();
 DROP FUNCTION public.fn_sold_sms_prag();
 DROP TABLE public.sms_sold;

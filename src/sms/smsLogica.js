@@ -158,15 +158,22 @@ export function valideazaPlafoane(zi, luna) {
 
 /** Rândul de sold din panoul owner-ului: „Sold SMSLink: N (la ZZ.LL HH:MM)”; alerta o decide BD-ul (fn_sold_sms_stare). */
 // r2 (#971): simulatorul nu are sold (P2-01, implicit); un sold vechi / după o citire eșuată e marcat „neactualizat” (P2-07).
-export function textSold(st, { simulator = false } = {}) {
-  if (simulator) return 'Sold SMSLink: simulator, fără sold'
-  if (!st) return 'Sold SMSLink: —'
-  if (!Number.isInteger(st.credit) || !st.citit_la) return 'Sold SMSLink: încă necitit'
-  const d = new Date(st.citit_la)
+// r3 (Copilot r2 P2-01): modul simulator vine din BD (st.simulator = furnizor_ultim simulator), nu doar după un click; soldul rămas
+// e „ultimul cunoscut”, nu sold activ.
+const laRo = v => {
   const p = Object.fromEntries(new Intl.DateTimeFormat('ro-RO', { timeZone: 'Europe/Bucharest', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-    .formatToParts(d).map(x => [x.type, x.value]))
+    .formatToParts(new Date(v)).map(x => [x.type, x.value]))
+  return `${p.day}.${p.month} ${p.hour}:${p.minute}`
+}
+export function textSold(st, { simulator = false } = {}) {
+  const areSold = !!st && Number.isInteger(st.credit) && !!st.citit_la
+  if (simulator || st?.simulator === true) {
+    return `simulator — sold SMSLink necitit${areSold ? ` (ultimul cunoscut: ${st.credit} la ${laRo(st.citit_la)})` : ''}`
+  }
+  if (!st) return 'Sold SMSLink: —'
+  if (!areSold) return 'Sold SMSLink: încă necitit'
   const vechi = st.citire_veche === true || st.eroare_dupa_citire === true
-  return `Sold SMSLink: ${st.credit} (la ${p.day}.${p.month} ${p.hour}:${p.minute})${vechi ? ' · neactualizat' : ''}`
+  return `Sold SMSLink: ${st.credit} (la ${laRo(st.citit_la)})${vechi ? ' · neactualizat' : ''}`
 }
 
 export const fmtEur = n => `${(Number(n) || 0).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} EUR`

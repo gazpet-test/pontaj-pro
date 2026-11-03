@@ -6,7 +6,7 @@
 --   ROLLBACK;
 -- Identitati reale prin helperii pg_temp, cu JWT-ul fiecarui cont: own = un owner (profiles.is_owner), alt = un cont non-owner;
 -- plus anon si service_role. Date: niciuna reala scrisa (doar randul sms_sold din tranzactia anulata); niciun furnizor apelat,
--- nicio cerere pg_net (jobul doar se programeaza, in tranzactia anulata). NOTICE-uri asteptate: TEST1 OK … TEST9 OK.
+-- nicio cerere pg_net (jobul doar se programeaza, in tranzactia anulata). NOTICE-uri asteptate: TEST1 OK … TEST10 OK.
 -- now() e acelasi in toata tranzactia: momentele de start ale citirilor sunt pg_temp.s3d_t(k) = now() - 10 min + k secunde.
 CREATE FUNCTION pg_temp.s3d_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
@@ -51,7 +51,7 @@ END $t$;
 SELECT pg_temp.s3d_ca(NULL, 'anon');
 DO $t$ BEGIN
   IF NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_citeste()', '42501') OR NOT pg_temp.s3d_refuza('SELECT count(*) FROM public.sms_sold', '42501')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(1, NULL, now())', '42501')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(1, NULL, now(), ''smslink'')', '42501')
      OR NOT pg_temp.s3d_refuza('SELECT count(*) FROM public.v_sms_sold', '42501') THEN
     RAISE EXCEPTION 'TEST2 FAIL: anon';
   END IF;
@@ -59,7 +59,7 @@ END $t$;
 SELECT pg_temp.s3d_ca(pg_temp.s3d_g('alt')::uuid, 'authenticated');
 DO $t$ BEGIN
   IF NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_citeste()', '42501') OR NOT pg_temp.s3d_refuza('SELECT count(*) FROM public.sms_sold', '42501')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(1, NULL, now())', '42501')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(1, NULL, now(), ''smslink'')', '42501')
      OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_stare()', '42501')
      OR NOT pg_temp.s3d_refuza('UPDATE public.sms_sold SET credit = 1, citit_la = now()', '42501')
      OR NOT pg_temp.s3d_refuza('SELECT count(*) FROM public.v_sms_sold', '42501')
@@ -75,7 +75,7 @@ SELECT pg_temp.s3d_ca(pg_temp.s3d_g('own')::uuid, 'authenticated');
 DO $t$ BEGIN
   IF (public.fn_sold_sms_citeste()->>'prag')::integer IS DISTINCT FROM 150
      OR (SELECT count(*) FROM public.v_sms_sold WHERE prag = 150 AND alerta AND citire_veche AND credit IS NULL) <> 1
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(1, NULL, now())', '42501')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(1, NULL, now(), ''smslink'')', '42501')
      OR NOT pg_temp.s3d_refuza('SELECT count(*) FROM public.sms_sold', '42501') THEN
     RAISE EXCEPTION 'TEST3 FAIL: owner';
   END IF;
@@ -86,22 +86,22 @@ DO $t$ BEGIN
      OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_stare()', '42501') OR NOT pg_temp.s3d_refuza('SELECT count(*) FROM public.v_sms_sold', '42501') THEN
     RAISE EXCEPTION 'TEST3 FAIL: service_role citeste';
   END IF;
-  IF (public.fn_sold_sms_inregistreaza(1000, NULL, pg_temp.s3d_t(1))->>'credit')::integer IS DISTINCT FROM 1000 THEN RAISE EXCEPTION 'TEST3 FAIL: service_role scrie'; END IF;
+  IF (public.fn_sold_sms_inregistreaza(1000, NULL, pg_temp.s3d_t(1), 'smslink')->>'credit')::integer IS DISTINCT FROM 1000 THEN RAISE EXCEPTION 'TEST3 FAIL: service_role scrie'; END IF;
   RAISE NOTICE 'TEST3 OK owner: doar citeste (RPC + vederea); service_role: doar fn_sold_sms_inregistreaza';
 END $t$;
 
 -- ── TEST4: validarea intrarii (exact una dintre credit / eroare; limite; cod scurt; momentul de start in fereastra) ───────────
 DO $t$ BEGIN
-  IF NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, NULL, now())', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, ''smslink_7'', now())', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(-1, NULL, now())', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(10000001, NULL, now())', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, ''Password X is not approved!'', now())', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, ''' || repeat('a', 41) || ''', now())', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, '''', now())', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, NULL)', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now() + interval ''3 minutes'')', '22023')
-     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now() - interval ''20 minutes'')', '22023') THEN
+  IF NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, NULL, now(), ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, ''smslink_7'', now(), ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(-1, NULL, now(), ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(10000001, NULL, now(), ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, ''Password X is not approved!'', now(), ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, ''' || repeat('a', 41) || ''', now(), ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, '''', now(), ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, NULL, ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now() + interval ''3 minutes'', ''smslink'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now() - interval ''20 minutes'', ''smslink'')', '22023') THEN
     RAISE EXCEPTION 'TEST4 FAIL: validarea';
   END IF;
   RAISE NOTICE 'TEST4 OK intrarile invalide refuzate (22023): ambele / niciuna, limite, text liber, cod lung / gol, start lipsa / viitor / prea vechi';
@@ -111,13 +111,13 @@ END $t$;
 DO $t$
 DECLARE v jsonb;
 BEGIN
-  v := public.fn_sold_sms_inregistreaza(1000, NULL, pg_temp.s3d_t(10));
+  v := public.fn_sold_sms_inregistreaza(1000, NULL, pg_temp.s3d_t(10), 'smslink');
   IF (v->>'sub_prag')::boolean OR (v->>'alerta')::boolean OR (v->>'citire_veche')::boolean OR NOT (v->>'scris')::boolean THEN RAISE EXCEPTION 'TEST5 FAIL: 1000 %', v; END IF;
-  v := public.fn_sold_sms_inregistreaza(150, NULL, pg_temp.s3d_t(11));
+  v := public.fn_sold_sms_inregistreaza(150, NULL, pg_temp.s3d_t(11), 'smslink');
   IF (v->>'sub_prag')::boolean OR (v->>'alerta')::boolean THEN RAISE EXCEPTION 'TEST5 FAIL: 150 %', v; END IF;
-  v := public.fn_sold_sms_inregistreaza(149, NULL, pg_temp.s3d_t(12));
+  v := public.fn_sold_sms_inregistreaza(149, NULL, pg_temp.s3d_t(12), 'smslink');
   IF NOT (v->>'sub_prag')::boolean OR NOT (v->>'alerta')::boolean THEN RAISE EXCEPTION 'TEST5 FAIL: 149 %', v; END IF;
-  v := public.fn_sold_sms_inregistreaza(0, NULL, pg_temp.s3d_t(13));
+  v := public.fn_sold_sms_inregistreaza(0, NULL, pg_temp.s3d_t(13), 'smslink');
   IF NOT (v->>'sub_prag')::boolean OR (v->>'credit')::integer <> 0 THEN RAISE EXCEPTION 'TEST5 FAIL: 0 %', v; END IF;
   RAISE NOTICE 'TEST5 OK pragul 150: 1000 si 150 fara alerta, 149 si 0 sub prag';
 END $t$;
@@ -126,13 +126,13 @@ END $t$;
 DO $t$
 DECLARE v jsonb;
 BEGIN
-  PERFORM public.fn_sold_sms_inregistreaza(500, NULL, pg_temp.s3d_t(20));
-  v := public.fn_sold_sms_inregistreaza(NULL, 'smslink_7', pg_temp.s3d_t(21));
+  PERFORM public.fn_sold_sms_inregistreaza(500, NULL, pg_temp.s3d_t(20), 'smslink');
+  v := public.fn_sold_sms_inregistreaza(NULL, 'smslink_7', pg_temp.s3d_t(21), 'smslink');
   IF (v->>'credit')::integer IS DISTINCT FROM 500 OR v->>'eroare' IS DISTINCT FROM 'smslink_7' OR NOT (v->>'eroare_dupa_citire')::boolean
      OR NOT (v->>'alerta')::boolean OR (v->>'sub_prag')::boolean THEN
     RAISE EXCEPTION 'TEST6 FAIL: eroarea dupa citire %', v;
   END IF;
-  v := public.fn_sold_sms_inregistreaza(400, NULL, pg_temp.s3d_t(22));
+  v := public.fn_sold_sms_inregistreaza(400, NULL, pg_temp.s3d_t(22), 'smslink');
   IF (v->>'eroare_dupa_citire')::boolean OR (v->>'alerta')::boolean OR v->>'eroare' IS DISTINCT FROM 'smslink_7' THEN
     RAISE EXCEPTION 'TEST6 FAIL: citirea buna dupa eroare %', v;
   END IF;
@@ -144,20 +144,56 @@ DO $t$
 DECLARE v jsonb;
 BEGIN
   -- B incepe la t40 si se termina primul (80 SMS); A, inceputa la t35, raspunde dupa (200 SMS): A NU se scrie
-  v := public.fn_sold_sms_inregistreaza(80, NULL, pg_temp.s3d_t(40));
+  v := public.fn_sold_sms_inregistreaza(80, NULL, pg_temp.s3d_t(40), 'smslink');
   IF NOT (v->>'scris')::boolean OR (v->>'credit')::integer <> 80 THEN RAISE EXCEPTION 'TEST9 FAIL: B %', v; END IF;
-  v := public.fn_sold_sms_inregistreaza(200, NULL, pg_temp.s3d_t(35));
+  v := public.fn_sold_sms_inregistreaza(200, NULL, pg_temp.s3d_t(35), 'smslink');
   IF (v->>'scris')::boolean OR (v->>'credit')::integer <> 80 OR NOT (v->>'sub_prag')::boolean THEN RAISE EXCEPTION 'TEST9 FAIL: A veche a suprascris %', v; END IF;
   -- acelasi moment (dubla livrare) nu rescrie
-  v := public.fn_sold_sms_inregistreaza(300, NULL, pg_temp.s3d_t(40));
+  v := public.fn_sold_sms_inregistreaza(300, NULL, pg_temp.s3d_t(40), 'smslink');
   IF (v->>'scris')::boolean OR (v->>'credit')::integer <> 80 THEN RAISE EXCEPTION 'TEST9 FAIL: acelasi moment %', v; END IF;
   -- o eroare inceputa INAINTEA citirii bune existente nu devine „eroare dupa citire”; una mai veche decat eroarea existenta nu o inlocuieste
-  v := public.fn_sold_sms_inregistreaza(NULL, 'retea_timeout', pg_temp.s3d_t(38));
+  v := public.fn_sold_sms_inregistreaza(NULL, 'retea_timeout', pg_temp.s3d_t(38), 'smslink');
   IF NOT (v->>'scris')::boolean OR (v->>'eroare_dupa_citire')::boolean THEN RAISE EXCEPTION 'TEST9 FAIL: eroare veche fata de citire %', v; END IF;
-  v := public.fn_sold_sms_inregistreaza(NULL, 'http_502', pg_temp.s3d_t(37));
+  v := public.fn_sold_sms_inregistreaza(NULL, 'http_502', pg_temp.s3d_t(37), 'smslink');
   IF (v->>'scris')::boolean OR v->>'eroare' IS DISTINCT FROM 'retea_timeout' THEN RAISE EXCEPTION 'TEST9 FAIL: eroare mai veche a inlocuit %', v; END IF;
   RAISE NOTICE 'TEST9 OK CAS: citirea inceputa mai devreme (raspuns intarziat) si dublura nu suprascriu; ordinea erorilor dupa momentul de start';
 END $t$;
+
+-- ── TEST10 (r3, Copilot P2-01): comutarea pe simulator — soldul real ramas e doar „ultimul cunoscut”, fara alerta; inapoi pe smslink ─
+DO $t$
+DECLARE v jsonb;
+BEGIN
+  IF NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now(), ''simulator'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, ''x'', now(), ''simulator'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now(), ''twilio'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now(), NULL)', '22023') THEN
+    RAISE EXCEPTION 'TEST10 FAIL: validarea furnizorului';
+  END IF;
+  v := public.fn_sold_sms_inregistreaza(120, NULL, pg_temp.s3d_t(50), 'smslink');
+  IF NOT (v->>'sub_prag')::boolean OR (v->>'simulator')::boolean OR v->>'furnizor_ultim' IS DISTINCT FROM 'smslink' THEN RAISE EXCEPTION 'TEST10 FAIL: smslink 120 %', v; END IF;
+  -- cronul ruleaza cu simulatorul: nu scrie sold, doar furnizorul; soldul 120 ramane, dar fara alerta
+  v := public.fn_sold_sms_inregistreaza(NULL, NULL, pg_temp.s3d_t(51), 'simulator');
+  IF NOT (v->>'simulator')::boolean OR (v->>'scris')::boolean OR (v->>'credit')::integer <> 120 OR (v->>'sub_prag')::boolean
+     OR (v->>'alerta')::boolean OR (v->>'citire_veche')::boolean OR (v->>'eroare_dupa_citire')::boolean THEN
+    RAISE EXCEPTION 'TEST10 FAIL: simulator %', v;
+  END IF;
+  -- un apel smslink inceput INAINTEA simulatorului (raspuns intarziat) nu reface furnizorul
+  v := public.fn_sold_sms_inregistreaza(NULL, 'retea_timeout', pg_temp.s3d_t(45), 'smslink');
+  IF NOT (v->>'simulator')::boolean THEN RAISE EXCEPTION 'TEST10 FAIL: furnizorul suprascris de un apel mai vechi %', v; END IF;
+  -- inapoi pe smslink: alerta se calculeaza din nou
+  v := public.fn_sold_sms_inregistreaza(110, NULL, pg_temp.s3d_t(52), 'smslink');
+  IF (v->>'simulator')::boolean OR NOT (v->>'sub_prag')::boolean OR NOT (v->>'alerta')::boolean THEN RAISE EXCEPTION 'TEST10 FAIL: inapoi pe smslink %', v; END IF;
+  PERFORM public.fn_sold_sms_inregistreaza(NULL, NULL, pg_temp.s3d_t(53), 'simulator');
+  RAISE NOTICE 'TEST10 OK simulator: soldul ramas doar „ultimul cunoscut”, fara alerta; apelul smslink mai vechi nu reface furnizorul; inapoi pe smslink = alerta';
+END $t$;
+SELECT pg_temp.s3d_ca(pg_temp.s3d_g('own')::uuid, 'authenticated');
+DO $t$ BEGIN
+  IF (SELECT count(*) FROM public.v_sms_sold WHERE simulator AND furnizor_ultim = 'simulator' AND credit = 110 AND NOT alerta AND NOT sub_prag) <> 1 THEN
+    RAISE EXCEPTION 'TEST10 FAIL: vederea in modul simulator';
+  END IF;
+END $t$;
+SELECT pg_temp.s3d_ca(NULL, 'service_role');
+SELECT public.fn_sold_sms_inregistreaza(400, NULL, pg_temp.s3d_t(54), 'smslink') IS NOT NULL AS inapoi_smslink;
 SELECT pg_temp.s3d_ca(NULL, 'postgres');
 
 -- ── TEST7: citirea veche (peste 36 h) = alerta, si pentru owner prin RPC-ul UI si prin vedere ──────────────────────────────────

@@ -58,10 +58,11 @@ describe('📱 SMS — acces pe nivel (ruta /sms și Administrator)', () => {
     const u = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} soldInitial={sold} />)
     expect(u).not.toContain('Sold SMSLink')
   })
-  it('r2 P2-01: cu simulatorul, banda spune „simulator, fără sold” (nu un sold, nu ⚠)', () => {
-    const html = renderToStaticMarkup(<SoldSmslink soldInitial={{ credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: true, prag: 150 }} simulatorInitial />)
-    expect(html).toContain('Sold SMSLink: simulator, fără sold')
+  it('r3 P2-01: modul simulator din BD (fără click) → „simulator — sold SMSLink necitit (ultimul cunoscut …)”, fără ⚠', () => {
+    const html = renderToStaticMarkup(<SoldSmslink soldInitial={{ credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: true, prag: 150, simulator: true, furnizor_ultim: 'simulator' }} />)
+    expect(html).toContain('simulator — sold SMSLink necitit (ultimul cunoscut: 120 la 04.11 07:10)')
     expect(html).not.toContain('⚠')
+    expect(html).not.toContain('Sold SMSLink: 120')
   })
   it('utilizator: compune / istoric, fără Setări și Opt-out, fără plafoane', () => {
     const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} />)
