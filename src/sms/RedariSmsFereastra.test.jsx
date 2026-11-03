@@ -65,7 +65,7 @@ describe('RedariSmsFereastra — șablonul fix', () => {
   })
   it('previzualizarea: câți primesc, câți sunt excluși și de ce, costul; crearea activă', () => {
     const preview = { text_final: TEXT, nr_destinatari: 2, candidati: 9, excluse_a_raspuns: 2, excluse_pv_semnat: 2, excluse_fara_mobil: 1, excluse_optout: 1,
-      excluse_duplicat: 1, cost_estimat_eur: 0.098, depaseste_plafon_zi: false, lot_activ_uat: null, campanie_existenta: null, set_hash: 'h' }
+      excluse_duplicat: 1, cost_estimat_eur: 0.098, depaseste_plafon_zi: false, lot_activ_uat: null, campanie_existenta: null, set_hash: 'h', sablon_aprobat: true }
     const html = randeaza({ uatInitial: 'u1', previewInitial: preview })
     for (const t of ['<b>2</b> proprietari primesc SMS-ul', 'Din 9 proprietari convocați în UAT', '2 au răspuns', '2 cu PV semnat', '1 fără mobil RO', '1 opt-out', '1 telefon dublat', 'Textul trimis (din BD):'])
       expect(html).toContain(t)
@@ -73,7 +73,7 @@ describe('RedariSmsFereastra — șablonul fix', () => {
   })
   it('blocarea creării: text BD diferit, lot activ pe UAT, zero destinatari', () => {
     const s = { ok: true, text: TEXT }
-    const p = { text_final: TEXT, nr_destinatari: 2, set_hash: 'h' }
+    const p = { text_final: TEXT, nr_destinatari: 2, set_hash: 'h', sablon_aprobat: true }
     expect(motivBlocareCreare(s, null)).toBe('Previzualizează întâi')
     expect(motivBlocareCreare(s, { ...p, text_final: TEXT + 'x' })).toMatch(/diferă de cel afișat/)
     expect(motivBlocareCreare(s, { ...p, lot_activ_uat: 'l1' })).toMatch(/lot activ/)
@@ -81,9 +81,14 @@ describe('RedariSmsFereastra — șablonul fix', () => {
     expect(motivBlocareCreare(s, { ...p, set_hash: null })).toMatch(/nu a fixat lista/)
     expect(motivBlocareCreare(s, { ...p, sablon_aprobat: false })).toMatch(/Șablon provizoriu, nu poate fi aprobat/)
     expect(motivBlocareCreare(s, { ...p, sablon_aprobat: true })).toBeNull()
+    // r10 (Copilot P3-01): câmpul lipsă din răspuns = blocat (fail-closed)
+    const { sablon_aprobat, ...faraCamp } = p
+    expect(sablon_aprobat).toBe(true)
+    expect(motivBlocareCreare(s, faraCamp)).toMatch(/Șablon provizoriu, nu poate fi aprobat/)
+    expect(motivBlocareCreare(s, { ...p, sablon_aprobat: null })).toMatch(/Șablon provizoriu/)
     expect(motivBlocareCreare(s, { ...p, nr_destinatari: 0 })).toMatch(/Niciun proprietar/)
     expect(motivBlocareCreare(s, p)).toBeNull()
-    const html = randeaza({ uatInitial: 'u1', previewInitial: { text_final: TEXT, nr_destinatari: 3, candidati: 3, lot_activ_uat: 'l1' } })
+    const html = randeaza({ uatInitial: 'u1', previewInitial: { text_final: TEXT, nr_destinatari: 3, candidati: 3, lot_activ_uat: 'l1', sablon_aprobat: true, set_hash: 'h' } })
     expect(html).toContain('UAT-ul are deja un lot activ')
     expect(butonDezactivat(html, '＋ Creează lot')).toBe(true)
   })

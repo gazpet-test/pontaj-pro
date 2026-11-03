@@ -19,8 +19,9 @@ import { MAX_GSM } from '../../supabase/functions/_shared/smsText.mjs'
 /** Ce blochează crearea după previzualizare (null = se poate crea). */
 export function motivBlocareCreare(sablon, preview) {
   if (!preview) return 'Previzualizează întâi'
-  // r9: șablonul provizoriu (neaprobat de Juridic + Razvan) nu poate fi creat pe un proiect real; pe proiectele TEST- e permis
-  if (preview.sablon_aprobat === false) return 'Șablon provizoriu, nu poate fi aprobat: textul final trebuie aprobat de Juridic + Razvan (permis doar pe proiectele TEST-)'
+  // r9 / r10: șablonul provizoriu (neaprobat de Juridic + Razvan) nu poate fi creat pe un proiect real; pe proiectele TEST- doar până la
+  // 5 destinatari. Fail-closed: și când BD-ul nu trimite câmpul (răspuns vechi / incomplet)
+  if (preview.sablon_aprobat !== true) return 'Șablon provizoriu, nu poate fi aprobat: textul final trebuie aprobat de Juridic + Razvan (permis doar pe proiectele TEST-)'
   if (preview.text_final !== sablon?.text) return 'Textul din BD diferă de cel afișat (setările UAT / proiectului s-au schimbat între timp): închide și redeschide fereastra'
   if (preview.lot_activ_uat) return 'UAT-ul are deja un lot activ (draft / aprobat / în trimitere / mesaje în curs): anulează-l sau așteaptă-l din 📱 SMS → Istoric'
   if (preview.campanie_existenta) return 'Pentru acest UAT și această zi de sesiune există deja un lot (neanulat): nu se trimite de două ori'
