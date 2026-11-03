@@ -334,6 +334,19 @@ describe('genereazaConvocator', () => {
     expect((await adresaProprieInDocx(ent))?.adresa).toBe('pontaj-pro')
   }, 10000)
 
+  // #970 r5: paragraf exterior cu adresă proprie + casetă de text imbricată (RX_PARAGRAF nu izolează paragraful exterior)
+  const pCuCaseta = (textExterior) => '<w:p><w:r><w:t>' + textExterior + '</w:t></w:r><w:r><w:pict><v:shape><v:textbox><w:txbxContent>' +
+    '<w:p><w:r><w:t>Text caseta</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>'
+  it('garda: paragraf exterior cu adresă proprie și casetă de text imbricată → refuzat; www.dataprotection.ro în același loc trece', async () => {
+    const t = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => pCuCaseta('Răspuns: https://redari.gazpet.ro/x') + m) })
+    expect(await adresaProprieInDocx(t)).toEqual({ parte: 'word/document.xml', adresa: 'redari.gazpet.ro', paragraf: null })
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t })).rejects.toThrow(/adrese web proprii.*redari\.gazpet\.ro.*word\/document\.xml/)
+    const ok = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => pCuCaseta('Plângere la ANSPDCP (www.dataprotection.ro)') + m) })
+    expect(await adresaProprieInDocx(ok)).toBeNull()
+    const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: ok })
+    expect(r.blob.size).toBeGreaterThan(0)
+  }, 10000)
+
   it('garda: adresă proprie în antet (prin câmp, completeazaDocx) și în notele de subsol (genereazaConvocator) → găsită / refuzată', async () => {
     // antet completat printr-un câmp, pe un șablon de test construit în memorie
     const zip = new JSZip()

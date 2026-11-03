@@ -360,8 +360,9 @@ const RX_PARTE_TIPARIBILA = /^word\/(?:document|header\d*|footer\d*|footnotes|en
 
 /**
  * #970 r4: prima adresă proprie (ADRESE_PROPRII_INTERZISE) din textul tipăribil al unui DOCX, sau null.
- * Textul se citește decodat (entități XML) și reunit pe paragraf, deci o adresă spartă în mai multe run-uri e găsită.
- * @returns {Promise<null | { parte: string, adresa: string, paragraf: string }>}
+ * Textul se citește decodat (entități XML) și reunit pe paragraf, deci o adresă spartă în mai multe run-uri e găsită; apoi
+ * textul complet al părții (r5), care prinde și casetele de text imbricate — atunci `paragraf` e null.
+ * @returns {Promise<null | { parte: string, adresa: string, paragraf: string | null }>}
  */
 export async function adresaProprieInDocx(docx) {
   const sursa = docx instanceof Blob ? await docx.arrayBuffer() : docx
@@ -374,6 +375,11 @@ export async function adresaProprieInDocx(docx) {
       const a = RX_ADRESA_WEB.exec(paragraf)
       if (a) return { parte, adresa: a[0], paragraf }
     }
+    // #970 r5: și textul complet al părții (toate <w:t>, decodate, în ordinea documentului, fără separatori), ca să prindă
+    // paragrafele exterioare care conțin casete de text (<w:txbxContent> cu <w:p> propriu), pe care RX_PARAGRAF nu le izolează
+    // aici paragraful nu e identificabil: se raportează doar partea (paragraf = null)
+    const a = RX_ADRESA_WEB.exec(textParagraf(xml))
+    if (a) return { parte, adresa: a[0], paragraf: null }
   }
   return null
 }
@@ -472,7 +478,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   // garda pe documentul COMPLETAT: nicio adresă proprie în textul tipăribil (QR-ul e imagine, relația lui nu e text)
   const gasit = await adresaProprieInDocx(blob)
   if (gasit) {
-    throw new Error(`Convocatorul poștal nu poate tipări adrese web proprii — răspuns sau informare („${gasit.adresa}” în ${gasit.parte}: „${gasit.paragraf.slice(0, 80)}”). Scoateți adresa din textul de pe proiect (de ex. text_gdpr); informarea completă se tipărește pe verso.`)
+    throw new Error(`Convocatorul poștal nu poate tipări adrese web proprii — răspuns sau informare („${gasit.adresa}” în ${gasit.parte}${gasit.paragraf === null ? '' : `: „${gasit.paragraf.slice(0, 80)}”`}). Scoateți adresa din textul de pe proiect (de ex. text_gdpr); informarea completă se tipărește pe verso.`)
   }
   const hash = await hashBlob(blob)
   return { blob, hash, link, campuri, lipsuri }
