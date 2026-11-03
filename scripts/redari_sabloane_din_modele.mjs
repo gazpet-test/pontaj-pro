@@ -9,7 +9,9 @@
 //  - excepții structurale, numite în cod: (1) paragraful nou {{qr}} în convocator; (2) un singur rând-șablon {{rand.*}} în
 //    adresa_uat (celelalte 7 rânduri goale se șterg); (3) docProps: fără miniatură și fără „ultima modificare de”;
 //    (4) celulele goale din tabele nu mai au run în modelele resalvate de Word → primesc un run cu w:sz=19 (formatul celulelor
-//    de date din aceleași tabele); (5) paragraful nou {{pv_a_referinta}} sub „Nume:” în PV B (decizia 02.11, PR #935).
+//    de date din aceleași tabele); (5) paragraful nou {{pv_a_referinta}} sub „Nume:” în PV B (decizia 02.11, PR #935);
+//    (6) toate cele 5 trec de pe Letter pe A4, cu lățimile tabelelor scalate (decizia 03.11, „varianta A”);
+//    (7) convocatorul: margini, spațiere, interlinie și corp de literă strânse, ca fața să încapă pe o pagină A4 (tot 03.11).
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -123,7 +125,125 @@ function paragrafDupa(xml, text, paragrafNou) {
   return xml.slice(0, end) + paragrafNou + xml.slice(end)
 }
 
-const ANTET_VECHI = 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. 30/22.01.2025 · Conductă de transport gaze naturale Prunișor–Orșova–Băile Herculane–Jupa, LOT 1'
+// excepția (6), decizia Răzvan 03.11 („varianta A”): toate șabloanele trec de pe Letter (12240×15840) pe A4 (11906×16838);
+// lățimile din tabele (w:gridCol, w:tcW dxa, w:tblW dxa) se scalează cu raportul lățimilor utile, ca tabelele să rămână în margini.
+// Se schimbă doar formatarea; textul din <w:t> rămâne identic (verificat la construire și în src/redari/sabloaneA4.test.js).
+const LETTER = { w: 12240, h: 15840 }
+const A4 = { w: 11906, h: 16838 }
+function paginaA4(xml, margini = null) {
+  const sect = xml.match(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g) ?? []
+  asigura(sect.length === 1, `secțiuni: ${sect.length}, așteptată 1`)
+  const pgSz = `<w:pgSz w:w="${LETTER.w}" w:h="${LETTER.h}"/>`
+  asigura(sect[0].includes(pgSz), 'modelul nu mai e pe Letter: rețeta A4 trebuie revăzută')
+  const RX_MAR = /<w:pgMar w:top="(\d+)" w:right="(\d+)" w:bottom="(\d+)" w:left="(\d+)"( [^>]*)\/>/
+  const m = RX_MAR.exec(sect[0])
+  asigura(m, 'w:pgMar în altă formă decât cea știută')
+  const [top, right, bottom, left] = margini ? [margini.sus, margini.dreapta, margini.jos, margini.stanga] : [m[1], m[2], m[3], m[4]].map(Number)
+  // baza = cea mai mare dintre lățimea utilă veche, suma unui tblGrid și suma w:tcW a unui rând (în modele unele rânduri
+  // depășesc cu 1 twip lățimea utilă); așa, după scalare, nicio sumă nu trece de lățimea utilă A4
+  const suma = s => [...s.matchAll(/w:w="(\d+)"/g)].reduce((a, x) => a + Number(x[1]), 0)
+  const sumeGrid = [...xml.matchAll(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/g)].map(g => suma(g[0]))
+  const sumeRand = [...xml.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(r => suma([...r[0].matchAll(/<w:tcW w:w="\d+" w:type="dxa"\/>/g)].join('')))
+  const tblWDxa = [...xml.matchAll(/<w:tblW w:w="(\d+)" w:type="dxa"\/>/g)].map(x => Number(x[1]))
+  const baza = Math.max(LETTER.w - Number(m[4]) - Number(m[2]), ...sumeGrid, ...sumeRand, ...tblWDxa)
+  const factor = (A4.w - left - right) / baza
+  const nouSect = sect[0].replace(pgSz, `<w:pgSz w:w="${A4.w}" w:h="${A4.h}"/>`)
+    .replace(RX_MAR, `<w:pgMar w:top="${top}" w:right="${right}" w:bottom="${bottom}" w:left="${left}"$5/>`)
+  const scal = v => String(Math.floor(Number(v) * factor))
+  return xml.replace(sect[0], () => nouSect)
+    .replace(/<w:gridCol w:w="(\d+)"\/>/g, (t, v) => `<w:gridCol w:w="${scal(v)}"/>`)
+    .replace(/<w:tcW w:w="(\d+)" w:type="dxa"\/>/g, (t, v) => `<w:tcW w:w="${scal(v)}" w:type="dxa"/>`)
+    .replace(/<w:tblW w:w="(\d+)" w:type="dxa"\/>/g, (t, v) => `<w:tblW w:w="${scal(v)}" w:type="dxa"/>`)
+}
+
+// excepția (7), tot 03.11: fața convocatorului pe O pagină A4 (pe verso se tipărește informarea GDPR completă, PR #939).
+// Se strânge doar formatarea: margini, spațierea și interlinia implicite, corpul de literă al stilului Normal, paragrafele goale
+// de separare, lățimile coloanelor din două tabele și poziția QR-ului (cadru la dreapta). Titlurile, tabelele și textul GDPR
+// au mărimi proprii pe run și rămân neschimbate; QR-ul rămâne 3 cm (docx.js, QR_CM).
+const CONVOCATOR_FORMAT = {
+  // twips (567 = 1 cm): 1,27 cm sus/jos, 1,5 cm stânga/dreapta; înainte 1,8 / 2 cm. Sub sugestia inițială (1,5 / 1,8 cm),
+  // pentru rezerva de minimum 15% din estimare pe datele cele mai lungi (SABLOANE.md §9)
+  margini: { sus: 720, jos: 720, stanga: 850, dreapta: 850 },
+  // twips după fiecare paragraf; înainte 200 (10 pt). Separarea o dau paragrafele goale de 4 pt din model
+  spatiereDupa: 0,
+  // 1,0; înainte 276 (1,15)
+  interlinie: 240,
+  // jumătăți de punct: 9,5 pt (limita de jos cerută); înainte 21 (10,5 pt). Titlul rămâne 13 pt, tabelele 9,5 pt
+  corp: 19,
+  // paragrafele goale de separare din model: marcajul de paragraf la 4 pt (înainte 10,5 pt / 8 pt)
+  golMic: 8,
+  // câte paragrafe goale are corpul convocatorului din model (altfel rețeta trebuie revăzută)
+  golAsteptate: 5,
+  // proporțiile coloanelor: tabelul parcelei (UAT, Sat / Tarla, Nr. cadastral, Poz. HG, Suprafață, Tronson) și programul sesiunilor
+  coloaneParcela: [0.17, 0.19, 0.20, 0.12, 0.20, 0.12],
+  coloaneProgram: [0.12, 0.16, 0.27, 0.45],
+  // QR-ul (3 cm) într-un cadru aliniat la dreapta: opțiunile de răspuns curg în stânga lui, în loc să stea sub el
+  cadruQr: '<w:framePr w:w="1814" w:hSpace="170" w:wrap="around" w:vAnchor="text" w:hAnchor="margin" w:xAlign="right" w:y="1"/>',
+}
+// lățimile coloanelor din tabelul care conține <w:t>`antet` (unic), după proporții (suma lățimilor rămâne aceeași);
+// tabelele convocatorului au lățimi egale în model, iar coloanele cu text scurt („Ziua 1”, „Poz. HG”) lăsau rânduri înalte
+function latimiColoane(xml, antet, proportii) {
+  const tabele = [...xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].filter(m => m[0].includes(`>${esc(antet)}</w:t>`))
+  asigura(tabele.length === 1, `tabelul cu „${antet}”: ${tabele.length} apariții, așteptat 1`)
+  const t = tabele[0]
+  asigura(!/<w:gridSpan|<w:tbl>[\s\S]*<w:tbl>/.test(t[0]), `tabelul cu „${antet}” are celule unite sau tabele imbricate`)
+  const vechi = [...t[0].matchAll(/<w:gridCol w:w="(\d+)"\/>/g)].map(m => Number(m[1]))
+  asigura(vechi.length === proportii.length, `tabelul cu „${antet}”: ${vechi.length} coloane, așteptate ${proportii.length}`)
+  asigura(Math.abs(proportii.reduce((a, b) => a + b, 0) - 1) < 1e-9, 'proporțiile nu însumează 1')
+  const total = vechi.reduce((a, b) => a + b, 0)
+  const noi = proportii.map(p => Math.floor(total * p))
+  noi[noi.length - 1] += total - noi.reduce((a, b) => a + b, 0)
+  let g = 0
+  let nou = t[0].replace(/<w:gridCol w:w="\d+"\/>/g, () => `<w:gridCol w:w="${noi[g++]}"/>`)
+  nou = nou.replace(/<w:tr[\s>][\s\S]*?<\/w:tr>/g, tr => {
+    let k = 0
+    const r = tr.replace(/<w:tcW w:w="\d+" w:type="dxa"\/>/g, () => `<w:tcW w:w="${noi[k++]}" w:type="dxa"/>`)
+    asigura(k === noi.length, `tabelul cu „${antet}”: un rând are ${k} celule, așteptate ${noi.length}`)
+    return r
+  })
+  return xml.slice(0, t.index) + nou + xml.slice(t.index + t[0].length)
+}
+
+// paragraful {{qr}} inserat de excepția (1); pasul `cadruQr` îi dă poziția (cadru la dreapta, CONVOCATOR_FORMAT.cadruQr)
+const PARAGRAF_QR = '<w:p><w:r><w:t>{{qr}}</w:t></w:r></w:p>'
+function cadruQr(xml) {
+  asigura(xml.split(PARAGRAF_QR).length === 2, 'paragraful {{qr}} nu e unic sau are altă formă')
+  return xml.replace(PARAGRAF_QR, () => `<w:p><w:pPr>${CONVOCATOR_FORMAT.cadruQr}<w:spacing w:after="0"/><w:jc w:val="right"/></w:pPr><w:r><w:t>{{qr}}</w:t></w:r></w:p>`)
+}
+
+// paragrafele fără text (fără <w:t>, <w:br/> sau imagine) primesc marcajul de paragraf la `sz` jumătăți de punct
+function paragrafeGoaleMici(xml, sz, asteptate) {
+  const RX_P = /<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>/])[\s\S])*?<\/w:p>/g
+  let n = 0
+  const nou = xml.replace(RX_P, p => {
+    if (/<w:t[\s>/]|<w:br\/>|<w:drawing>|<w:framePr/.test(p)) return p
+    n += 1
+    const marc = `<w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>`
+    if (p.endsWith('/>')) return p.replace(/\/>$/, `><w:pPr><w:rPr>${marc}</w:rPr></w:pPr></w:p>`)
+    asigura(/^<w:p(?:\s[^>]*)?><w:pPr>[\s\S]*<\/w:pPr><\/w:p>$/.test(p), `paragraf gol în formă neștiută: ${p.slice(0, 80)}`)
+    if (/<w:rPr>[\s\S]*<w:sz w:val="\d+"\/>/.test(p)) return p.replace(/<w:sz w:val="\d+"\/>/, `<w:sz w:val="${sz}"/>`)
+    // ordinea din schemă (CT_RPr): sz/szCs stau înaintea lui w:lang; alte elemente după sz nu apar în model
+    const rPr = /<w:rPr>([\s\S]*?)<\/w:rPr><\/w:pPr>/.exec(p)
+    if (rPr) {
+      asigura(/^(?:<w:b\/>|<w:i\/>|<w:lang [^>]*\/>)*$/.test(rPr[1]), `paragraf gol cu rPr neștiut: ${rPr[1].slice(0, 80)}`)
+      return p.replace(rPr[0], `<w:rPr>${rPr[1].replace(/(<w:lang [^>]*\/>)?$/, `${marc}$1`)}</w:rPr></w:pPr>`)
+    }
+    return p.replace('</w:pPr>', `<w:rPr>${marc}</w:rPr></w:pPr>`)
+  })
+  asigura(n === asteptate, `paragrafe goale: ${n}, așteptate ${asteptate}`)
+  return nou
+}
+function stiluriConvocator(st) {
+  const f = CONVOCATOR_FORMAT
+  const def = '<w:pPrDefault><w:pPr><w:spacing w:after="200" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>'
+  asigura(st.split(def).length === 2, 'styles.xml: spațierea implicită nu mai e cea din model')
+  const normal = '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rsid w:val="00FC693F"/><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:style>'
+  asigura(st.split(normal).length === 2, 'styles.xml: stilul Normal nu mai e cel din model')
+  return st.replace(def, () => `<w:pPrDefault><w:pPr><w:spacing w:after="${f.spatiereDupa}" w:line="${f.interlinie}" w:lineRule="auto"/></w:pPr></w:pPrDefault>`)
+    .replace(normal, () => normal.replace('<w:sz w:val="21"/>', `<w:sz w:val="${f.corp}"/>`))
+}
+
+const ANTET_VECHI ='Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. 30/22.01.2025 · Conductă de transport gaze naturale Prunișor–Orșova–Băile Herculane–Jupa, LOT 1'
 const ANTET_NOU = 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}'
 const NR_LOC = ['Nr. ________ / ___.___.2026        Locul încheierii: ______________________', 'Nr. {{nr_pv}} / {{data_pv}}        Locul încheierii: {{locul}}']
 const PARCELA_7 = ['{{uat}}', '{{sat}} / {{tarla}}', '{{nr_cadastral}}', '{{poz_hg}}', '{{suprafata}}', '{{categoria_folosinta}}', '{{tronson}}']
@@ -148,9 +268,10 @@ const RETETE = {
       for (const i of [1, 2, 3]) x = celulaGoala(x, `Ziua ${i}`, 3, `{{sate_zi${i}}}`)
       const link = 'Prin formularul online de la adresa ______________________ (sau scanând codul QR alăturat), la telefon ______________ sau prin răspuns scris la adresa de mai jos. Puteți alege una dintre opțiunile:'
       x = inWt(x, link, [['adresa ______________________ (sau scanând codul QR alăturat)', 'adresa {{link}} (sau scanând codul QR de mai jos)'], ['telefon ______________', 'telefon {{contact_telefon}}']])
-      // excepția (1): paragraf nou, centrat, doar cu {{qr}}, imediat după paragraful cu {{link}}
+      // excepția (1): paragraf nou, doar cu {{qr}}, imediat după paragraful cu {{link}}
+      // poziția lui (cadrul la dreapta) e un pas de formatare, mai jos în `formatare`
       x = paragrafDupa(x, link.replace('adresa ______________________ (sau scanând codul QR alăturat)', 'adresa {{link}} (sau scanând codul QR de mai jos)').replace('telefon ______________', 'telefon {{contact_telefon}}'),
-        '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{{qr}}</w:t></w:r></w:p>')
+        PARAGRAF_QR)
       // informarea GDPR: tot paragraful de sub „Date personale” = {{text_gdpr}} (textul rămâne cel din ERP, red_proiecte.text_gdpr)
       x = uneste(x, ['Transgaz folosește datele dumneavoastră ca să organizeze verificarea terenului după lucrările la conducta de gaze. Gazpet', ' Instal',
         ' vă trimite această convocare în numele Transgaz. Datele nu sunt folosite pentru reclamă. Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră (inclusiv temeiurile legale); le găsiți și scanând codul QR sau la [link scurt].'], '{{text_gdpr}}')
@@ -159,6 +280,20 @@ const RETETE = {
       x = inlocuiesteWt(x, NCD, ['{{semnatar_gazpet}}', '{{semnatar_tgz}}'])
       return x
     },
+    // excepția (7): pașii de formatare; după FIECARE, construieste() cere textul din <w:t> neschimbat
+    formatare: [
+      // marcajul de pagină salvat de Word în model (unde cădea pagina 2) nu mai corespunde paginării noi
+      ['lastRenderedPageBreak', x => {
+        asigura(x.split('<w:lastRenderedPageBreak/>').length === 2, 'convocator: marcajul lastRenderedPageBreak nu mai e unic')
+        return x.replace('<w:lastRenderedPageBreak/>', '')
+      }],
+      ['paragrafe goale', x => paragrafeGoaleMici(x, CONVOCATOR_FORMAT.golMic, CONVOCATOR_FORMAT.golAsteptate)],
+      ['coloane parcelă', x => latimiColoane(x, 'Suprafață afectată temporar (mp)', CONVOCATOR_FORMAT.coloaneParcela)],
+      ['coloane program', x => latimiColoane(x, 'Sate / tarlale programate', CONVOCATOR_FORMAT.coloaneProgram)],
+      ['cadru QR', cadruQr],
+    ],
+    margini: CONVOCATOR_FORMAT.margini,
+    stiluri: stiluriConvocator,
   },
   'pv_a.docx': {
     model: 'Model_2_PV_tip_A_cu_proprietarul_v5_final.docx',
@@ -283,12 +418,26 @@ const RETETE = {
   },
 }
 
-async function construieste(sablon, { model, pasi }) {
+// textul concatenat din <w:t> (comparația „textul nu s-a schimbat” la pașii de formatare)
+const textWt = xml => [...xml.matchAll(RX_WT)].map(m => m[1]).join('')
+
+async function construieste(sablon, { model, pasi, formatare = [], margini, stiluri }) {
   const zip = await JSZip.loadAsync(readFileSync(resolve(REF, model)), { createFolders: false })
   const doc = await zip.file('word/document.xml').async('string')
-  const nou = pasi(doc)
+  const cuText = pasi(doc)
+  // textul de referință se ia ÎNAINTE de orice pas de formatare și se compară după FIECARE pas
+  const referinta = textWt(cuText)
+  // excepția (6): A4 pe toate (cu marginile proprii doar la convocator), ultimul pas
+  const pasiFormatare = [...formatare, ['A4', x => paginaA4(x, margini)]]
+  let nou = cuText
+  for (const [nume, pas] of pasiFormatare) {
+    nou = pas(nou)
+    asigura(textWt(nou) === referinta, `${sablon}: pasul de formatare „${nume}” a schimbat textul din <w:t>`)
+  }
   asigura(!/\{\{(?![A-Za-z0-9_.]+\}\})/.test(nou), `${sablon}: acoladă malformată`)
   zip.file('word/document.xml', nou, { date: DATA_FIXA, createFolders: false })
+  // excepția (7): stilurile convocatorului (spațiere, interlinie, corp de literă)
+  if (stiluri) zip.file('word/styles.xml', stiluri(await zip.file('word/styles.xml').async('string')), { date: DATA_FIXA, createFolders: false })
   // excepția (3): fără miniatură (nu mai corespunde) și fără numele ultimului editor în docProps
   if (zip.file('docProps/thumbnail.jpeg')) zip.remove('docProps/thumbnail.jpeg')
   const core = await zip.file('docProps/core.xml')?.async('string')
