@@ -1024,3 +1024,110 @@ Raport L01-L25 (dovezi in cod/teste scrise, fara pretentie de executie):
 | L23 | ImportPostal.jsx:11 citesteConvocariPostal: keyset id pana la gol prin citestePaginat, filtre server-side, loturi .in de maximum 100; fara citesteIn cu offset. |
 | L24 | ImportPostal.jsx:55 efect/cleanup, incepe si actiuni: token generatie + id proiect, ref ocupat/setLucru inainte de await, reset preview; aplica verifica esteCurent intre loturi si randuri, callback explicit onSchimbat dupa succes. |
 | L25 | importPostal.test.js: expected literale si fixture-uri fictive, fake verifica filtrele reale eq/is/select si schimbarea starii. Teste NERULATE; RLS, PostgREST, concurenta reala si browser nedovedite local. |
+
+### 4.1p — Felia 10: plicul comun (aplicație, 03.11.2026)
+
+Implementare numai în worktree, pe contractul migrației 20261129i furnizat în brief. Secțiunea înlocuiește semantica importului din 4.1o: CSV-ul nu mai scrie pe convocări și nu mai aplică AR/retur.
+Nu s-au scris migrări sau Edge Functions și nu s-au rulat Git, instalări, Node,
+credențiale, cereri către BD/Storage sau deploy. Instrucțiunea „No Git commit”
+prevalează asupra cererii contradictorii de commit local. Acest raport este inclus
+în README pentru a respecta lista închisă de fișiere permise.
+
+Fișiere și comportament:
+
+- `src/redari/plicuri.js`: grupare UAT/persoană/adresă, maximum 200 convocări/plic,
+  separarea celor fără adresă, text AR scurt/lung, DOCX minimal cu JSZip, opis,
+  PV de plicuire cu doi semnatari și CSV UTF-8 cu BOM și protecție la formule.
+  `TEXTE_AR` centralizează formulările DE VALIDAT de Juridic, claude#020.
+  Pragul scurt este 250 de caractere pentru textul complet, inclusiv expeditorul;
+  peste prag se folosește opisul chiar dacă sunt cel mult patru convocări.
+- `src/redari/ui/PlicuriEcran.jsx`: trei secțiuni, filtre UAT/stare, creare RPC
+  secvențială cu oprire la cinci erori consecutive, selecție de maximum 2000 de
+  plicuri pentru lot, descărcare automată și regenerare PV, editare semnatari/
+  observații, atașare PV semnat, opis și etichete. Expedierea manuală reutilizează
+  `propune`/`aplica` din importul poștal. AR/retur cer dată și un singur scan;
+  „Altul” cere detaliu, „Decedat” are avertisment. Anularea cere motiv.
+- Upload-urile acceptă PDF/JPEG/PNG, maximum 15 MB, `upsert:false`, căi cu
+  timestamp Europe/Bucharest în `plicuri/<id>/ar-...`, `retur-...` și
+  `plicuire/<id>/pv-...`. Un fișier urcat nu se șterge după eroare sau timeout.
+  În formular se păstrează calea confirmată pentru reconciliere. O coliziune de
+  timestamp este eroare, fără suprascriere sau retry automat.
+- `src/redari/importPostal.js` și `ui/ImportPostal.jsx`: potrivire pe nr. plic
+  PL-XXX-nnnn sau AWB existent, expediere numai cu lot și ambele câmpuri poștale
+  NULL. Un singur UPDATE `{awb,data_expediere}`, CAS pe versiune/proiect/lot și
+  snapshot; zero rânduri întoarse înseamnă conflict. AR/retur din CSV sunt
+  întotdeauna excepții care cer scanul. Parserul și testele de parsare sunt păstrate.
+  Două treceri păstrează toate duplicatele ca excepții; numărul explicit greșit
+  nu cade pe AWB, iar același AWB pe mai multe plicuri este refuzat.
+- `src/redari/ui/comune.jsx`: numai cele două motive noi de retur.
+- `src/Redari.jsx`: Poștă include importul și plicurile și este vizibil și pentru
+  viewer; formularele de expediere/AR/retur redirecționează canalul poștal spre
+  Plicuri și păstrează selectorul pentru celelalte canale.
+
+Viewer-ul vede plicurile/loturile, textul AR și poate descărca PV; nu se citesc
+contactele restricționate. Opisul și etichetele cu adresă sunt disponibile numai
+admin/editor, pentru a nu produce documente cu adresă goală sub rolul viewer.
+Drepturile efective și toate porțile de business rămân în RLS/RPC/trigger-ele
+migrației; nu s-au schimbat drepturi de acces în BD.
+
+Teste SCRISE, NERULATE:
+
+- `plicuri.test.js`: aceeași persoană pe două parcele, normalizare adresă,
+  adrese/persoane/UAT diferite, adresă necunoscută/goală, împărțire 401 în
+  200+200+1 fără pierderi; AR scurt/lung și prag 250/251; ZIP DOCX, escape XML,
+  rânduri/celule/borduri/font, conținut opis și PV; CSV BOM, separator,
+  ghilimele și formule inclusiv după spații/tab/LF.
+- `importPostal.test.js`: păstrează CSV/XLSX/date/calendar/mapare/clasificare;
+  schimbă scenariile de aplicare pe plic, cu lot, versiune, AWB obligatoriu,
+  deja/conflict, AWB izolat, AR/retur numai cu scan, document greșit, ambiguități,
+  duplicate, CAS și RETURNING gol, cinci erori consecutive/reset după succes,
+  răspuns fără listă și oprire înainte de UPDATE la schimbarea sesiunii.
+  Fake-ul verifică requesturile; nu reprezintă concurență Postgres reală.
+
+Cazul plicului anulat după crearea lotului este tratat explicit: PV-ul regenerat îl menționează separat, în afara tabelului de expediere; etichetele includ numai plicuri active și raportează excluderile. Există test DOCX pentru acest caz. Statusul CSV „Decedat” devine retur cu scan obligatoriu, cu test de regresie.
+
+Nu am rulat npm/npx/vitest/Node, build, browser sau API real: worktree-ul nu are
+node_modules, iar brief-ul rezervă aceste verificări lui Claude. Verificare
+locală exclusiv statică: fișierele permise, citirea codului, UTF-8 strict fără
+BOM și punctele de integrare. Nu declar testele sau build-ul trecute.
+
+De verificat de Claude înainte de integrare: cele două suite vitest și regresiile
+Redări, build/Word pentru DOCX, clipboard și fișiere în browser; proiect cu peste
+1000 de convocări, schimbare proiect A→B→A/unmount în timpul operațiilor, viewer
+fără contacte și admin/editor cu ele; query-uri pe PostgREST real, privilegiile
+coloanelor, RPC-uri și CAS AR versus retur/anulare/expediere în două sesiuni;
+scan lipsă, MIME/mărime, cale greșită, upload reușit urmat de răspuns UPDATE pierdut.
+Nu s-au verificat existența sau aplicarea efectivă a migrației 20261129i.
+Recitirea AWB înainte de scriere păstrează garda existentă, dar nu poate garanta
+singură unicitatea între două plicuri scrise simultan; contractul dat nu precizează
+o constrângere unică pentru AWB. Nu s-a introdus o garanție fictivă în client.
+
+Raport L01–L25 (dovezi în cod și teste scrise, fără pretenție de execuție):
+
+| Regulă | Respectare / dovadă |
+|---|---|
+| L01 | `importPostal.test.js`, test „WHERE pe proiect, lot, versiune, activ și ambele NULL”: CAS și zero rânduri = conflict. `PlicuriEcran.jsx:43 actualizeaza`: versiune, proiect și câmpurile deciziei + select id. Lock-urile serverului nu sunt modificate/verificate. |
+| L02 | Creările folosesc exclusiv cele două RPC-uri din contract. Un eveniment este un singur UPDATE. Upload precedă UPDATE conform contractului, fără ștergere compensatorie; documentul lotului se regenerează după eșec, fără recrearea lotului. |
+| L03 | `importPostal.js:131 propune` include versiunea în snapshot; `PlicuriEcran.jsx:43 actualizeaza` verifică versiunea la scriere. Testul CAS verifică explicit versiunea 3. |
+| L04 | n/a — fără bani/cantități/mail; numerele și asocierile se creează exclusiv prin RPC-urile furnizate, fără retry client automat. |
+| L05 | `importPostal.test.js`, teste „oprește la cinci erori…” și „lipsa listei…”; `PlicuriEcran.jsx executa/salveaza`: rezultat neconfirmat cere recitire, fără ștergerea scanului, fără retry automat. |
+| L06 | n/a — fără lock-uri/RPC-uri/trigger-e noi. |
+| L07 | `PlicuriEcran.jsx` și `ImportPostal.jsx`: admin/editor pentru scrieri; viewer nu citește contacte și nu primește formulare. Serverul rămâne responsabil de autorizarea directă API; necesită verificarea lui Claude. |
+| L08 | n/a — fără identitate/coloane de proveniență furnizate de client, DEFINER sau service_role. |
+| L09 | `PlicuriEcran.jsx:13 citesteDatePlicuri`: proiect explicit pentru plicuri/loturi/parcele, apoi FK în loturi de maximum 100; UPDATE include proiect_id. |
+| L10 | Erorile tehnice de scriere și încărcare sunt mesaje generice; se afișează numai motivele de business din contract. Fără secrete/tokenuri/contacte suplimentare în proiecții. |
+| L11 | `importPostal.test.js`, test „AWB ca rezervă, document greșit…”: potrivire exactă după normalizare, ambiguitate refuzată, document explicit prioritar. CSV-ul nu dovedește AR/retur. |
+| L12 | `plicuri.test.js`, test 401→200+200+1; importul păstrează fiecare rând în aplicabile/deja/excepții și raportează neprocesatele; crearea plicurilor raportează create/erori/neprocesate. |
+| L13 | Testele de parsare calendar/CSV și clasificare păstrate; documentele folosesc escape XML pentru toate cele cinci metacaractere; testul DOCX are expected literal. |
+| L14 | n/a — fără migrări. |
+| L15 | n/a — fără schemă/ACL/RLS modificate. |
+| L16 | `plicuri.test.js`, normalizare și separare UAT/adresă/persoană; aceeași cheie canonică pentru toate grupările. Paritatea efectivă cu SQL și unicitatea AWB necesită verificare pe migrarea reală, nu sunt declarate dovedite. |
+| L17 | `plicuri.js:13 dataBucuresti` și `PlicuriEcran.jsx stampila`: Europe/Bucharest explicit, fără offset fix; documentele formatează data ISO pe componente. Parserul poștal păstrează validarea calendaristică existentă. |
+| L18 | `importPostal.test.js`, „lipsa listei…”; loaderul aruncă la eroare, nu fabrică liste goale. RPC fără id = rezultat neconfirmat; RETURNING gol = conflict; motivul de retur este validat pe lista comună. |
+| L19 | Expedierea manuală reutilizează `propune/aplica`, nu copiază validările importului. MOTIVE_RETUR, citestePaginat, sesiuneEcran și generatoarele de documente sunt comune. Normalizarea JS/SQL necesită încă proba de paritate la Claude. |
+| L20 | Testele acoperă expediere validă, deja, conflict, anulat, fără lot/AWB, snapshot incomplet; AR/retur sunt refuzate în CSV chiar cu expediere validă. UI/trigger-ele reale rămân de verificat. |
+| L21 | n/a — fără AI. |
+| L22 | n/a — fără AI sau apeluri plătite. |
+| L23 | `PlicuriEcran.jsx:13 citesteDatePlicuri` și `ImportPostal.jsx:11 citesteConvocariPostal`: keyset id/detinator_id până la pagina goală, loturi de maximum 100 id-uri, proiecții explicite. Filtrele UI operează pe setul complet, fără limită ascunsă. |
+| L24 | `PlicuriEcran.jsx` folosește sesiuneEcran + identitate proiect/nivel, cleanup și verificări după await; ref ocupat și setLucru înaintea acțiunilor async, stare separată de încărcare, reload explicit după scrieri. ImportPostal păstrează generația și id-ul proiectului. Scenariul browser A→B→A rămâne de rulat. |
+| L25 | `plicuri.test.js` și `importPostal.test.js`: fixture-uri fictive, expected literale independente, fake verificând formele reale eq/is/select. NERULATE; nicio afirmație de test RLS, PostgREST, Word sau concurență reală. |

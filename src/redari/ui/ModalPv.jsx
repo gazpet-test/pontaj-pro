@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
+import { COL_PLIC_AR, atasezaMentiuniAr } from '../arMentiune.js'
 import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, detinatoriFaraPvA, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
 import { Modal, Camp, S, msgEroare, citestePaginat, COL_RASPUNS } from './comune.jsx'
 
@@ -67,6 +68,10 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
       d.adresa_cunoscuta = cont.data?.adresa_cunoscuta ?? false
       convocari.push(...conv); raspunsuri.push(...ras)
     }
+    // juridic#021: mențiunea „primit de altă persoană” de pe plic, în PV B
+    const plicIds = [...new Set(convocari.map(c => c.plic_id).filter(Boolean))]
+    const plicuriAr = plicIds.length ? await citestePaginat(() => supabase.from('red_plicuri').select(COL_PLIC_AR).in('id', plicIds), opt) : []
+    convocari.splice(0, convocari.length, ...atasezaMentiuniAr(convocari, plicuriAr))
     const semnate = await citestePaginat(() => supabase.from('red_procese_verbale').select('id,parcela_id,detinator_id,tip,stare,sters_la,nr_pv,data_pv,semnat_primit_data').eq('parcela_id',parcelaId).eq('tip','A').eq('stare','semnat').is('sters_la',null),opt)
     return {parcela,detinator,proiect,uat,pv:rasp.data,detinatori,convocari,raspunsuri,pvs:semnate,areASemnat:semnate.length > 0,
       totiAuASemnat:detinatori.length > 0 && !detinatoriFaraPvA({detinatori,pvs:semnate,parcela}).length}

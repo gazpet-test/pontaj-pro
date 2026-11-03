@@ -1,6 +1,7 @@
 import { completeazaDocx, hashBlob, formatDataRo, formatNumarRo, ETICHETA_CALITATE,
   caleAdresaUat, versiuneMaximaInBucket, MIME_DOCX, MAX_INCERCARI_VERSIUNE } from './docx.js'
 import { ultimulRaspuns } from './stare.js'
+import { mentiuneAr } from './arMentiune.js'
 
 export const BIFA_DA = "\u2612"
 export const BIFA_NU = "\u2610"
@@ -142,7 +143,8 @@ export async function genereazaPvB(date) {
     bifa_neidentificat:bifa(!activi.length || activi.some(d => d.calitate === 'neidentificat')),
     bifa_fara_adresa:bifa(activi.some(d => d.adresa_cunoscuta === false)),
     conv_data_expediere:formatDataRo(conv?.data_expediere), conv_nr_tracking:conv?.nr_tracking ?? '',
-    conv_data_confirmare:formatDataRo(conv?.data_confirmare_primire), conv_retur:conv?.retur ?? '',
+    // PV B ajunge la TGZ: fără textul liber de pe AR (Jakarinos f10 UI P2-1); comentariul stă pe rândul lui (Copilot + Jakarinos r2: înghițea conv_retur)
+    conv_data_confirmare:formatDataRo(conv?.data_confirmare_primire) + mentiuneAr(conv, { detaliat: false }), conv_retur:conv?.retur ?? '',
     bifa_conv_primita:bifa(plin(conv?.data_confirmare_primire)), bifa_conv_returnata:bifa(plin(conv?.retur)),
     raspuns_data:formatDataRo(rasp?.data), raspuns_canal:rasp?.canal ?? '',
     raspuns_alt_text:rasp?.obiectii_text || rasp?.optiune || '',

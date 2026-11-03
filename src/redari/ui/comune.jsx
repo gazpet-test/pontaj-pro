@@ -119,6 +119,8 @@ export const MOTIVE_RETUR = [
   { cod:'avizat_neridicat', eticheta:'Avizat, neridicat' },
   { cod:'refuz', eticheta:'Refuz' },
   { cod:'adresa_incompleta', eticheta:'Adresă incompletă' },
+  { cod:'decedat', eticheta:'Decedat' },
+  { cod:'altul', eticheta:'Altul (detaliu)' },
 ]
 export const OPTIUNI_RASPUNS = [
   { cod:'particip', eticheta:'Particip la sesiune' },

@@ -14,6 +14,7 @@ import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CA
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
 import ImportPostal from './redari/ui/ImportPostal.jsx'
+import PlicuriEcran from './redari/ui/PlicuriEcran.jsx'
 import CorespondentaEcran from './redari/ui/CorespondentaEcran.jsx'
 import UatEcran from './redari/ui/UatEcran.jsx'
 import SetariProiect from './redari/ui/SetariProiect.jsx'
@@ -124,7 +125,7 @@ export default function Redari() {
     { cod:'fisa', eticheta:'📄 Fișa parcelei', dezactivat: !parcelaFisa },
     { cod:'tronsoane', eticheta:'🛤️ Tronsoane / PV C' },
     { cod:'import', eticheta:'📥 Import TGZ' },
-    ...(['admin', 'editor'].includes(nivel) ? [{ cod:'posta', eticheta:'✉️ Poștă' }] : []),
+    { cod:'posta', eticheta:'✉️ Poștă' },
     { cod:'corespondenta', eticheta:'📨 Corespondență' },
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
@@ -164,7 +165,7 @@ export default function Redari() {
           {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
-          {tab === 'posta' && ['admin', 'editor'].includes(nivel) && <ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} />}
+          {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
           {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
           {tab === 'uat' && <UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
@@ -466,6 +467,12 @@ function ModalExpediat({ rand, show, onClose, onGata }) {
   const [lucru, setLucru] = useState(false)
   useEffect(() => { if (lista && !convId) setConvId((lista.find(c => !c.data_expediere) || lista[0])?.id || '') }, [lista, convId])
 
+  if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
+    <Modal titlu="Înregistrare poștală" onClose={onClose}>
+      <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
+      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+    </Modal>
+  )
   const salveaza = async () => {
     if (!convId) { show('Alege o convocare.', 'error'); return }
     if (!data) { show('Data expedierii e obligatorie.', 'error'); return }
@@ -504,6 +511,12 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
   const conv = lista?.find(c => c.id === convId)
   const arDupaRetur = mod === 'ar' && !!conv?.retur   // P2-10: se permite, dar explicit
 
+  if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
+    <Modal titlu="Înregistrare poștală" onClose={onClose}>
+      <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
+      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+    </Modal>
+  )
   const salveaza = async () => {
     if (!convId) { show('Alege o convocare.', 'error'); return }
     if (!data) { show('Data e obligatorie.', 'error'); return }

@@ -78,6 +78,14 @@ const dateB = () => {
   return d
 }
 const sablonB=()=>readFileSync('public/redari/sabloane/pv_b.docx')
+it('PV B: conv_retur prezent și mențiunea AR doar scurtă (fără textul liber, către TGZ) — regresie Copilot/Jakarinos f10 r2',async()=>{
+  const b=dateB()
+  b.convocari=[{id:'c1',detinator_id:'d1',canal:'posta',stare:'activ',sters_la:null,created_at:'2026-11-01',data_expediere:'2026-11-02',data_confirmare_primire:'2026-11-05',retur:'decedat',ar_alta_persoana:'membru de familie'}]
+  const {campuri}=await genereazaPvB({...b,templateArrayBuffer:sablonB()})
+  expect(campuri.conv_retur).toBe('decedat')
+  expect(campuri.conv_data_confirmare).toBe('05.11.2026 (primit de altă persoană)')
+  expect(JSON.stringify(campuri)).not.toContain('membru de familie')
+})
 it('PV A si B accepta parcela fara tronson si lasa campul DOCX gol',async()=>{
   const a=date(), b=dateB()
   a.parcela.tronson=null;b.parcela.tronson=null

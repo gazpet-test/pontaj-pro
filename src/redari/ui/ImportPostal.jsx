@@ -5,28 +5,16 @@ import { citesteFisierPostal, ghicesteMaparea, propune, aplica } from '../import
 import { G, S, Camp, Gol, msgEroare, fmtDate, MOTIVE_RETUR, etichetaRetur, citestePaginat } from './comune.jsx'
 
 const TIPURI = { expediere: 'Expediere', ar: 'Confirmare primire (AR)', retur: 'Retur' }
-const CAMPURI = { nr_document: 'Nr. document', nr_tracking: 'Tracking', data: 'Data', eveniment: 'Eveniment', motiv: 'Motiv retur' }
+const CAMPURI = { nr_document: 'Nr. plic (PL-XXX-nnnn)', nr_tracking: 'Tracking', data: 'Data', eveniment: 'Eveniment', motiv: 'Motiv retur' }
 
 // Only project-scoped IDs, keyset to EMPTY page, at most 100 IDs per URL.
 export async function citesteConvocariPostal(client, proiectId, esteCurent) {
-  const pagini = fabrica => citestePaginat(fabrica, { cheie: 'id', esteCurent })
-  const parcele = await pagini(() => client.from('red_parcele').select('id').eq('proiect_id', proiectId).is('sters_la', null))
-  const inLoturi = async (ids, fabrica, coloana) => {
-    const tot = [], unice = [...new Set(ids)]
-    for (let i = 0; i < unice.length; i += 100) {
-      if (!esteCurent()) throw new Error('Citire abandonată.')
-      tot.push(...await pagini(() => fabrica().in(coloana, unice.slice(i, i + 100))))
-    }
-    return tot
-  }
-  const detinatori = await inLoturi(parcele.map(p => p.id), () => client.from('red_detinatori').select('id').is('sters_la', null), 'parcela_id')
-  return inLoturi(detinatori.map(d => d.id), () => client.from('red_convocari')
-    .select('id,nr_document,nr_tracking,data_expediere,data_confirmare_primire,retur,retur_data')
-    .eq('stare', 'activ').eq('canal', 'posta').is('sters_la', null), 'detinator_id')
+  return citestePaginat(() => client.from('red_plicuri')
+    .select('id,proiect_id,nr_plic,lot_id,opis_path,awb,data_expediere,data_ar,retur,retur_data,stare,versiune')
+    .eq('proiect_id', proiectId), { cheie: 'id', esteCurent })
 }
-
 function schimbari(patch) {
-  return Object.entries(patch || {}).map(([k, v]) => `${k}: ${k === 'retur' ? etichetaRetur(v) : k === 'nr_tracking' ? v : fmtDate(v)}`).join('; ')
+  return Object.entries(patch || {}).map(([k, v]) => `${k}: ${k === 'retur' ? etichetaRetur(v) : k === 'awb' ? v : fmtDate(v)}`).join('; ')
 }
 
 function Tabel({ titlu, randuri }) {
@@ -86,20 +74,20 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     try {
       let convocari
       try { convocari = await citesteConvocariPostal(supabase, proiect.id, curent) }
-      catch { throw new Error('Nu s-au putut citi toate convocările. Previzualizarea nu a fost creată.') }
-      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari, { date1904: !!fisier.date1904 }))
+      catch { throw new Error('Nu s-au putut citi toate plicurile. Previzualizarea nu a fost creată.') }
+      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari, { date1904: !!fisier.date1904, imputernicire: !!(String(proiect?.imputernicire_nr || '').trim() && proiect?.imputernicire_data) }))
     } catch (e) { if (curent()) setMesaj(msgEroare(e)) }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
   async function confirma() {
     if (ocupat.current || !poateScrie || !preview?.aplicabile.length || raport) return
-    if (!window.confirm(`Aplică ${preview.aplicabile.length} modificări poștale în proiectul ${proiect.cod}?\nDeja: ${preview.deja.length}. Excepții: ${preview.exceptii.length}.\nConflictele rămân pentru verificare manuală în Registru.`)) return
+    if (!window.confirm(`Aplică ${preview.aplicabile.length} modificări poștale în proiectul ${proiect.cod}?\nDeja: ${preview.deja.length}. Excepții: ${preview.exceptii.length}.\nConflictele rămân pentru verificare manuală în Plicuri.`)) return
     const curent = incepe()
     try {
       const r = await aplica(supabase, preview.aplicabile, { esteCurent: curent })
       if (!curent()) return
       setRaport(r)
-      setMesaj(`Aplicate: ${r.aplicate.length}; conflicte: ${r.conflicte.length}; erori cu rezultat neconfirmat: ${r.erori.length}; neprocesate: ${r.neprocesate.length}. Verifică în Registru înainte de reluare.`)
+      setMesaj(`Aplicate: ${r.aplicate.length}; conflicte: ${r.conflicte.length}; erori cu rezultat neconfirmat: ${r.erori.length}; neprocesate: ${r.neprocesate.length}. Verifică în Plicuri înainte de reluare.`)
       if (r.aplicate.length) onSchimbat?.()
     } finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
@@ -116,16 +104,16 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
   }
   if (!poateScrie) return null
   return <div>
-    <p>Nimic nu se scrie fără confirmare; conflictele rămân pentru verificare manuală în Registru.</p>
+    <p>CSV-ul înregistrează numai expedierea plicurilor cu lot. AR și retur se înregistrează cu scanul în Plicuri. Nimic nu se scrie fără confirmare; conflictele rămân pentru verificare manuală în Plicuri.</p>
     <div style={{ ...S.card, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
       <Camp eticheta="1. Fișier poștal (XLSX / XLS / CSV UTF-8)"><input ref={input} style={S.input} type="file" accept=".xlsx,.xls,.csv" disabled={lucru} onChange={alege} /></Camp>
       <Camp eticheta="Mod implicit"><select style={S.select} disabled={lucru} value={mod} onChange={e => { reset(); setMod(e.target.value) }}>
-        {Object.entries(TIPURI).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        {Object.entries(TIPURI).filter(([k]) => k === 'expediere').map(([k, v]) => <option key={k} value={k}>{v}</option>)}   {/* AR / retur doar în Plicuri, cu scan (Copilot f10 UI P3-03) */}
       </select></Camp>
     </div>
     {fisier && <div style={{ ...S.card, marginTop: 12 }}>
       <b>2. Mapare coloane ({fisier.randuri.length} rânduri)</b>
-      <p style={{ color: G.muted }}>Obligatoriu: document sau tracking și data. Coloana eveniment poate înlocui modul implicit pentru fiecare rând. Motivul de retur se citește din coloana mapată.</p>
+      <p style={{ color: G.muted }}>Obligatoriu: număr de plic sau AWB și data. Coloana eveniment poate înlocui modul implicit pentru fiecare rând. Motivul de retur se citește din coloana mapată.</p>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>{Object.entries(CAMPURI).map(([k, label]) => <Camp key={k} eticheta={label}>
         <select style={S.select} value={mapare[k] || ''} disabled={lucru} onChange={e => { reset(); setMapare(m => ({ ...m, [k]: e.target.value })) }}>
           <option value="">— Nemapat —</option>{fisier.coloane.map(c => <option key={c} value={c}>{c}</option>)}

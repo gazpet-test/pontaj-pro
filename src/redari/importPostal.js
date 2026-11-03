@@ -7,7 +7,7 @@ const document = v => {
   const s = tracking(v), m = s.match(/^C-?(\d{1,4})$/)
   return m ? `C-${m[1].padStart(4, '0')}` : s
 }
-const CAMPURI = ['nr_document', 'data_expediere', 'nr_tracking', 'data_confirmare_primire', 'retur', 'retur_data']
+const CAMPURI = ['proiect_id', 'lot_id', 'versiune', 'opis_path', 'awb', 'data_expediere', 'data_ar', 'retur', 'retur_data']
 
 // CSV strict: quoted separators/newlines, physical source line numbers, no silent truncation.
 function csv(s, sep) {
@@ -78,7 +78,7 @@ export function citesteFisierPostal(arrayBuffer, numeFisier) {
 
 export function ghicesteMaparea(coloane) {
   const reguli = {
-    nr_document: /convocar|nr\.?\s*doc|referin|nr\.?\s*intern/,
+    nr_document: /plic|convocar|nr\.?\s*doc|referin|nr\.?\s*intern/,
     nr_tracking: /awb|tracking|recomandat|cod\s*(trimitere|bare)|nr\.?\s*expedi/,
     data: /data|date/, eveniment: /stare|status|eveniment/, motiv: /motiv|observ/,
   }
@@ -111,7 +111,7 @@ export function parseazaData(v, { date1904 = false } = {}) {
 
 export function clasificaEveniment(v, modImplicit) {
   const s = simplu(v)
-  if (/\b(?:retur\w*|returnat\w*|neridicat\w*|refuz\w*|necunoscut\w*|mutat\w*|incomplet\w*)\b/.test(s)) return 'retur'
+  if (/\b(?:retur\w*|returnat\w*|neridicat\w*|refuz\w*|necunoscut\w*|mutat\w*|incomplet\w*|decedat\w*)\b/.test(s)) return 'retur'
   if (/\bpredat la posta\b/.test(s)) return 'expediere'
   if (/\b(?:livrat\w*|predat\w*|primit\w*|confirmat\w*|ar)\b/.test(s)) return 'ar'
   if (/\b(?:expediat\w*|depus\w*|preluat\w*)\b/.test(s)) return 'expediere'
@@ -128,82 +128,62 @@ export function motivRetur(v) {
   return null
 }
 
-export function propune(randuri, mapare, modImplicit, convocari, { date1904 = false } = {}) {
+// Gemini f10 r1 P2: aceleași precondiții ca BD și ca ecranul Plicuri — împuternicirea proiectului și opisul de la dosar (altfel excepții clare, nu erori la aplicare)
+export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = false, imputernicire = true } = {}) {
   if (!['expediere', 'ar', 'retur'].includes(modImplicit)) throw new Error('Mod implicit invalid.')
-  if ((!mapare.nr_document && !mapare.nr_tracking) || !mapare.data) throw new Error('Mapează documentul sau tracking-ul și data.')
-  const rezultat = { aplicabile: [], deja: [], exceptii: [] }
-  const docs = new Map(), tracks = new Map()
-  for (const c of convocari) {
-    for (const [map, k] of [[docs, document(c.nr_document)], [tracks, tracking(c.nr_tracking)]]) {
-      if (k) map.set(k, [...(map.get(k) || []), c])
+  if ((!mapare.nr_document && !mapare.nr_tracking) || !mapare.data) throw new Error('Mapează numărul plicului sau AWB-ul și data.')
+  const rezultat = { aplicabile: [], deja: [], exceptii: [] }, docs = new Map(), tracks = new Map()
+  for (const p of plicuri) {
+    for (const [map, k] of [[docs, document(p.nr_plic)], [tracks, tracking(p.awb)]]) {
+      if (k) map.set(k, [...(map.get(k) || []), p])
     }
   }
-  // Copilot f9 r1 P2-02: același AWB din fișier pe rânduri cu numere de convocare diferite = contradicție, toate rândurile la excepții
   const docuriPeAwb = new Map()
   for (const r of randuri) {
     const t = tracking(r[mapare.nr_tracking]); if (!t) continue
-    const d = document(r[mapare.nr_document]) || '(fără număr)'
     if (!docuriPeAwb.has(t)) docuriPeAwb.set(t, new Set())
-    docuriPeAwb.get(t).add(d)   // Copilot f9 r2 P3-01: fără copii repetate ale setului
+    docuriPeAwb.get(t).add(document(r[mapare.nr_document]) || '(fără număr)')
   }
-  const valide = []   // trecerea 1: fiecare rând se evaluează independent; nimic nu „rezervă” convocarea
+  const valide = []
   randuri.forEach((r, i) => {
     const nr_document = document(r[mapare.nr_document]), nr_tracking = tracking(r[mapare.nr_tracking])
     const baza = { rand: r.__rand ?? i + 2, nr_document, tracking: nr_tracking }
     const exceptie = motiv => rezultat.exceptii.push({ ...baza, motiv })
-    if (nr_tracking && docuriPeAwb.get(nr_tracking)?.size > 1) return exceptie('același AWB apare la mai multe convocări în fișier')
-    // un nr_document dat explicit, dar inexistent, NU cade pe tracking (Gemini/Copilot f9 r1)
-    if (nr_document && !docs.get(nr_document)?.length) return exceptie('convocare inexistentă pentru numărul din fișier')
-    const lista = nr_document ? docs.get(nr_document) : (nr_tracking ? tracks.get(nr_tracking) : null)
-    if (!lista?.length) return exceptie('fără convocare')
-    if (lista.length !== 1) return exceptie('tracking pe mai multe convocări / document ambiguu')
-    const c = lista[0], tip = clasificaEveniment(r[mapare.eveniment], modImplicit)
-    // Copilot f9 r1 P2-01: numărul și AWB-ul trebuie să indice aceeași convocare
-    if (nr_tracking && (tracks.get(nr_tracking) || []).some(x => x.id !== c.id)) return exceptie('AWB-ul aparține altei convocări')
-    if (tip !== 'expediere' && nr_tracking && c.nr_tracking && tracking(c.nr_tracking) !== nr_tracking) return exceptie(`tracking diferit de cel al convocării (${c.nr_tracking})`)
-    const item = { ...baza, nr_document: c.nr_document, conv_id: c.id, tip }
+    const tip = clasificaEveniment(r[mapare.eveniment], modImplicit)
+    if (tip !== 'expediere') return exceptie('Se înregistrează pe plic, cu scanul (Plicuri -> AR / Retur).')
+    if (nr_tracking && docuriPeAwb.get(nr_tracking)?.size > 1) return exceptie('același AWB apare la mai multe plicuri în fișier')
+    if (nr_document && !docs.get(nr_document)?.length) return exceptie('plic inexistent pentru numărul din fișier')
+    const lista = nr_document ? docs.get(nr_document) : tracks.get(nr_tracking)
+    if (!lista?.length) return exceptie('fără plic')
+    if (lista.length !== 1) return exceptie('AWB pe mai multe plicuri / număr ambiguu')
+    const p = lista[0]
+    if (p.stare !== 'activ') return exceptie('plic anulat')
+    if (nr_tracking && (tracks.get(nr_tracking) || []).some(x => x.id !== p.id)) return exceptie('AWB-ul aparține altui plic')
+    if (!p.lot_id) return exceptie('plicul nu are PV de plicuire (lot)')
+    if (!imputernicire) return exceptie('proiectul nu are încă împuternicirea Beneficiarului; plicurile nu pleacă')
+    if (!p.opis_path) return exceptie('plicul nu are opisul atașat la dosar (Plicuri → Opis)')
     const data = parseazaData(r[mapare.data], { date1904 })
     if (!data) return exceptie('dată lipsă sau invalidă (2025–2030)')
-    let patch
-    if (tip === 'expediere') {
-      if (nr_tracking && c.nr_tracking != null && tracking(c.nr_tracking) !== nr_tracking) return exceptie(`conflict: deja expediată la ${c.data_expediere || '-'} / tracking ${c.nr_tracking}`)
-      if (c.data_expediere != null) {
-        if (c.data_expediere === data && (!nr_tracking || tracking(c.nr_tracking) === nr_tracking)) return valide.push({ fel: 'deja', item, baza })
-        return exceptie(`conflict: deja expediată la ${c.data_expediere} / tracking ${c.nr_tracking || '-'}`)
-      }
-      patch = { data_expediere: data }
-      if (nr_tracking && c.nr_tracking == null) patch.nr_tracking = nr_tracking
-    } else if (tip === 'ar') {
-      if (!c.data_expediere) return exceptie('AR fără expediere')
-      if (data < c.data_expediere) return exceptie('AR înainte de expediere')
-      if (c.retur) return exceptie('are retur — verifică manual')
-      if (c.data_confirmare_primire != null) {
-        if (c.data_confirmare_primire === data) return valide.push({ fel: 'deja', item, baza })
-        return exceptie('conflict: AR înregistrat la altă dată')
-      }
-      patch = { data_confirmare_primire: data }
-    } else {
-      const motiv = motivRetur(r[mapare.motiv])
-      if (!motiv) return exceptie('motiv de retur lipsă sau nerecunoscut')
-      if (!c.data_expediere) return exceptie('retur fără expediere')
-      if (data < c.data_expediere) return exceptie('retur înainte de expediere')
-      if (c.data_confirmare_primire) return exceptie('are AR — verifică manual')
-      if (c.retur != null || c.retur_data != null) {
-        if (c.retur === motiv && c.retur_data === data) return valide.push({ fel: 'deja', item, baza })
-        return exceptie('conflict: retur deja înregistrat')
-      }
-      patch = { retur: motiv, retur_data: data }
+    const awb = nr_tracking || tracking(p.awb)
+    if (!awb) return exceptie('AWB obligatoriu pentru expediere')
+    const item = { ...baza, nr_document: p.nr_plic, plic_id: p.id, tip }
+    if (p.data_expediere != null) {
+      if (p.data_expediere === data && tracking(p.awb) === awb) return valide.push({ fel: 'deja', item, baza })
+      return exceptie('conflict: plic deja expediat cu altă dată sau alt AWB')
     }
-    const vechi = Object.fromEntries(Object.keys(patch).map(k => [k, c[k] ?? null]))
-    // Snapshot of ALL decision fields protects AR vs retur and concurrent tracking edits.
-    const conditii = Object.fromEntries(CAMPURI.map(k => [k, c[k] ?? null]))
-    valide.push({ fel: 'aplicabil', item: { ...item, patch, vechi, conditii }, baza })
+    // Contractul cere AMBELE câmpuri NULL: un AWB izolat necesită reconciliere, nu suprascriere.
+    if (p.awb != null) return exceptie('conflict: AWB existent fără expediere; verifică plicul')
+    if (p.data_ar != null || p.retur != null || p.retur_data != null) return exceptie('conflict: plic cu AR sau retur')
+    if (p.versiune == null || !p.proiect_id) return exceptie('snapshot incomplet; reîncarcă plicurile')
+    const patch = { awb, data_expediere: data }
+    const conditii = Object.fromEntries(CAMPURI.map(k => [k, p[k] ?? null]))
+    valide.push({ fel: 'aplicabil', item: { ...item, patch, conditii }, baza })
   })
-  // Trecerea 2 (Copilot f9 r1 P3-02): mai multe rânduri valide pe aceeași convocare nu se rezolvă după ordine — toate devin excepții
+  // Două treceri: un rând invalid nu rezervă plicul; toate evenimentele valide duplicate devin excepții.
   const pe = new Map()
-  for (const v of valide) pe.set(v.item.conv_id, (pe.get(v.item.conv_id) || 0) + 1)
+  for (const v of valide) pe.set(v.item.plic_id, (pe.get(v.item.plic_id) || 0) + 1)
   for (const v of valide) {
-    if (pe.get(v.item.conv_id) > 1) rezultat.exceptii.push({ ...v.baza, motiv: 'mai multe evenimente pentru aceeași convocare în fișier' })
+    if (pe.get(v.item.plic_id) > 1) rezultat.exceptii.push({ ...v.baza, motiv: 'mai multe evenimente pentru același plic în fișier' })
     else if (v.fel === 'deja') rezultat.deja.push(v.item)
     else rezultat.aplicabile.push(v.item)
   }
@@ -214,35 +194,28 @@ export function propune(randuri, mapare, modImplicit, convocari, { date1904 = fa
 export async function aplica(supabase, aplicabile, { esteCurent = () => true } = {}) {
   const rezultat = { aplicate: [], conflicte: [], erori: [], neprocesate: [] }
   let consecutive = 0, i = 0
-  lots: for (let debut = 0; debut < aplicabile.length; debut += 25) {
-    if (!esteCurent() || consecutive >= 5) break
-    const fin = Math.min(debut + 25, aplicabile.length)
-    for (; i < fin; i++) {
-      // Sequential requests; cancellation also stops inside a batch.
-      if (!esteCurent() || consecutive >= 5) break lots
-      const a = aplicabile[i]
-      try {
-        // Copilot f9 r2 P2-01: AWB-ul nou se recitește chiar înainte de scriere — dacă între timp a ajuns pe altă convocare (alt import / altă fereastră), conflict.
-        // Unicitatea în BD (index) e o decizie de business în așteptare: un plic poate conține legitim mai multe convocări ale aceluiași om.
-        if (a.patch.nr_tracking) {
-          const { data: alte, error: eT } = await supabase.from('red_convocari').select('id').eq('nr_tracking', a.patch.nr_tracking).neq('id', a.conv_id).limit(1)
-          if (eT) { rezultat.erori.push({ ...a, motiv: 'Recitirea AWB-ului a eșuat; nimic nu s-a scris pentru acest rând.' }); consecutive++; continue }   // Copilot f9 r3 P3-02
-          if (alte?.length) { rezultat.conflicte.push({ ...a, motiv: 'AWB-ul a fost înregistrat între timp pe altă convocare; verifică manual.' }); consecutive = 0; continue }
-        }
-        let q = supabase.from('red_convocari').update(a.patch).eq('id', a.conv_id)
-          .eq('stare', 'activ').eq('canal', 'posta').is('sters_la', null)
-        for (const k of Object.keys(a.patch)) q = q.is(k, null)
-        for (const [k, v] of Object.entries(a.conditii || a.vechi || {})) q = v == null ? q.is(k, null) : q.eq(k, v)
-        const { data, error } = await q.select('id')
-        if (error) throw error
-        if (!Array.isArray(data) || data.length > 1) throw new Error('Răspuns de scriere nevalid; rezultat necunoscut.')
-        if (data.length) rezultat.aplicate.push(a)
-        else rezultat.conflicte.push({ ...a, motiv: 'Modificată între timp sau inaccesibilă; reîncarcă previzualizarea.' })
-        consecutive = 0
-      } catch {
-        rezultat.erori.push({ ...a, motiv: 'Scriere neconfirmată; verifică în Registru înainte de reluare.' })
-        consecutive++
-      }
+  for (; i < aplicabile.length && consecutive < 5 && esteCurent(); i++) {
+    const a = aplicabile[i]
+    try {
+      if (a.tip !== 'expediere' || !a.patch?.awb || !a.patch?.data_expediere || !a.conditii?.lot_id || !a.conditii.opis_path || a.conditii.versiune == null || !a.conditii.proiect_id) throw new Error('Propunere nevalidă.')
+      const { data: alte, error: eT } = await supabase.from('red_plicuri').select('id').eq('awb', a.patch.awb).neq('id', a.plic_id).limit(1)
+      if (eT || !Array.isArray(alte)) throw new Error('Recitire AWB eșuată.')
+      if (!esteCurent()) break
+      if (alte.length) { rezultat.conflicte.push({ ...a, motiv: 'AWB-ul există pe alt plic; verifică manual.' }); consecutive = 0; continue }
+      let q = supabase.from('red_plicuri').update(a.patch).eq('id', a.plic_id).eq('stare', 'activ').is('awb', null).is('data_expediere', null)
+      for (const [k, v] of Object.entries(a.conditii)) q = v == null ? q.is(k, null) : q.eq(k, v)
+      const { data, error } = await q.select('id')
+      if (error) throw error
+      if (!Array.isArray(data) || data.length > 1) throw new Error('Rezultat necunoscut.')
+      if (data.length) rezultat.aplicate.push(a)
+      else rezultat.conflicte.push({ ...a, motiv: 'Modificat între timp sau inaccesibil; reîncarcă previzualizarea.' })
+      consecutive = 0
+    } catch (e) {
+      // Jakarinos + Copilot f10 UI P2: codul BD rămâne vizibil — 55P03 = operație concurentă (reîncearcă), 23514 / P0001 = refuz cu motiv
+      const motiv = e?.code === '55P03' ? 'Operație concurentă în același UAT; reîncarcă și reîncearcă peste câteva secunde (rândurile deja aplicate se recunosc).'
+        : (e?.code === '23514' || e?.code === 'P0001') ? `Refuzat: ${String(e?.message || '').replace(/^redari:\s*/, '')}`
+        : e?.code === '42501' ? 'Acces de scriere refuzat.' : 'Scriere neconfirmată; verifică în Plicuri înainte de reluare.'
+      rezultat.erori.push({ ...a, motiv, cod: e?.code || null }); consecutive++
     }
   }
   rezultat.neprocesate = aplicabile.slice(i)
