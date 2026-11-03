@@ -52,10 +52,19 @@ describe('Model_6', () => {
     // datele si AWB-ul nu sunt confundate cu telefoane in varianta TGZ
     const cu = {...baza(), convocari:[conv('c1','2026-02-01',{nr_tracking:'RO123456789RO', data_confirmare_primire:'2026-02-05'})]}
     expect(randuriRegistru([cu],{pentruTgz:true})[0]).toMatchObject({ Q:'01.02.2026', R:'RO123456789RO', S:'05.02.2026' })
-    // juridic#021: AR semnat de altă persoană — mențiunea în registru; către TGZ fără textul liber
-    const alt = {...baza(), convocari:[conv('c1','2026-02-01',{data_confirmare_primire:'2026-02-05', ar_alta_persoana:'membru de familie'})]}
-    expect(randuriRegistru([alt])[0].S).toBe('05.02.2026 (primit de altă persoană: membru de familie)')
-    expect(randuriRegistru([alt],{pentruTgz:true})[0].S).toBe('05.02.2026 (primit de altă persoană)')
+    // juridic#021 + juridic#026: AR semnat de altă persoană — în registrul intern calitatea + textul liber; către TGZ DOAR calitatea
+    const alt = {...baza(), convocari:[conv('c1','2026-02-01',{data_confirmare_primire:'2026-02-05', ar_alta_persoana:'FICTIV text liber', ar_alta_calitate:'membru_familie'})]}
+    expect(randuriRegistru([alt])[0].S).toBe('05.02.2026 (primit de altă persoană — membru de familie: FICTIV text liber)')
+    expect(randuriRegistru([alt],{pentruTgz:true})[0].S).toBe('05.02.2026 (primit de altă persoană: membru de familie)')
+    expect(JSON.stringify(randuriRegistru([alt],{pentruTgz:true}))).not.toContain('FICTIV text liber')
+    // randTgz aplicat de doua ori (randuriRegistru TGZ + construiesteWorkbook TGZ) pastreaza calitatea
+    const dublu = XLSX.utils.sheet_to_json(construiesteWorkbook({registru:randuriRegistru([alt],{pentruTgz:true}),pentruTgz:true}).Sheets.Registru,{header:1})
+    expect(JSON.stringify(dublu)).toContain('05.02.2026 (primit de altă persoană: membru de familie)')
+    expect(JSON.stringify(dublu)).not.toContain('FICTIV text liber')
+    // date vechi fara calitate: ca inainte
+    const vechi = {...baza(), convocari:[conv('c1','2026-02-01',{data_confirmare_primire:'2026-02-05', ar_alta_persoana:'FICTIV text liber'})]}
+    expect(randuriRegistru([vechi])[0].S).toBe('05.02.2026 (primit de altă persoană: FICTIV text liber)')
+    expect(randuriRegistru([vechi],{pentruTgz:true})[0].S).toBe('05.02.2026 (primit de altă persoană)')
     // Copilot f6 r1 P3-01: abrevierile de adresa in coloanele text ramase
     for (const t of ['Str. Lalelelor 7','Bd. Unirii 3','Aleea Rozelor','sos. Nationala']) {
       const x = {...baza(), detinator:{...baza().detinator, cota:t}}
@@ -141,6 +150,23 @@ describe('citirea exportului', () => {
     const agregat = clientFictiv(tabele)
     await citesteDateExport(agregat,'proiect','centralizator',()=>true)
     expect([...new Set(agregat.apeluri.map(a=>a[0]))]).toEqual(['red_uat','red_v_centralizator_uat'])
+  })
+  it('juridic#026: TGZ citeste de pe plic doar calitatea (fara textul liber); intern citeste si mentiunea', async () => {
+    const tabele = () => ({red_uat:[[{id:'u1',nume:'Fictiv'}]], red_v_centralizator_uat:[[{uat_id:'u1',stare:'CONVOCAT_FARA_RASPUNS',numar:1}]],
+      red_v_parcele:[[{id:'p1',uat_id:'u1',id_parcela:'TEST'}]], red_detinatori:[[{id:'d1',parcela_id:'p1',nume:'FICTIV'}]],
+      red_detinatori_contact:[[{detinator_id:'d1',adresa_cunoscuta:true}]],
+      red_convocari:[[{id:'c1',detinator_id:'d1',plic_id:'pl1',nr_document:'C1',data_expediere:'2026-02-01',data_confirmare_primire:'2026-02-05',stare:'activ',sters_la:null}]],
+      red_plicuri:[[{id:'pl1',ar_primit_de:'alta_persoana',ar_primit_calitate:'vecin',ar_mentiune:'FICTIV text liber'}]],
+      red_v_stare_parcela:[[{parcela_id:'p1',detinator_id:'d1',stare:'CONVOCAT_FARA_RASPUNS'}]]})
+    const tgz = clientFictiv(tabele())
+    const r = await citesteDateExport(tgz,'proiect','TGZ',()=>true)
+    expect([...new Set(tgz.apeluri.filter(a=>a[0]==='red_plicuri' && a[1]==='select').map(a=>a[2]))]).toEqual(['id,ar_primit_de,ar_primit_calitate'])
+    expect(r.registru[0].S).toBe('05.02.2026 (primit de altă persoană: vecin)')
+    expect(JSON.stringify(r.registru)).not.toContain('FICTIV text liber')
+    const intern = clientFictiv(tabele())
+    const ri = await citesteDateExport(intern,'proiect','intern',()=>true)
+    expect([...new Set(intern.apeluri.filter(a=>a[0]==='red_plicuri' && a[1]==='select').map(a=>a[2]))]).toEqual(['id,ar_primit_de,ar_primit_calitate,ar_mentiune'])
+    expect(ri.registru[0].S).toBe('05.02.2026 (primit de altă persoană — vecin: FICTIV text liber)')
   })
   it('stare schimbata intre centralizator si registru refuza exportul (Copilot f6 r1 P2-01)', async () => {
     const tabele = {red_uat:[[{id:'u1',nume:'Fictiv'}]], red_v_centralizator_uat:[[{uat_id:'u1',stare:'DE_CONVOCAT',numar:1}]],
