@@ -55,24 +55,39 @@ DO $t$ DECLARE pl public.red_plicuri; BEGIN
   IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_plicuri(proiect_id,uat_id,nr_plic,cheie_persoana,destinatar_nume) SELECT %L,uat_id,'PL-ZXH-0099','x','y' FROM public.red_parcele WHERE proiect_id=%L LIMIT 1$q$,pg_temp.r29i_g('pr'),pg_temp.r29i_g('pr')),'42501') THEN RAISE EXCEPTION 'TEST1 FAIL: insert direct plic'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$SELECT public.fn_red_plic_creeaza(%L, ARRAY[%L,%L]::uuid[])$q$,pg_temp.r29i_g('pr'),pg_temp.r29i_g('cB'),pg_temp.r29i_g('cD')),'P0001') THEN RAISE EXCEPTION 'TEST1 FAIL: persoane diferite'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$SELECT public.fn_red_plic_creeaza(%L, ARRAY[%L]::uuid[])$q$,pg_temp.r29i_g('pr'),pg_temp.r29i_g('cC')),'P0001') THEN RAISE EXCEPTION 'TEST1 FAIL: fara adresa'; END IF;
+  -- r1 P1: plic partial (doar A1, desi A2 e eligibila pentru aceeasi persoana) -> refuz
+  IF NOT pg_temp.r29i_refuza(format($q$SELECT public.fn_red_plic_creeaza(%L, ARRAY[%L]::uuid[])$q$,pg_temp.r29i_g('pr'),pg_temp.r29i_g('cA1')),'P0001') THEN RAISE EXCEPTION 'TEST1 FAIL: plic partial'; END IF;
   pl := public.fn_red_plic_creeaza(pg_temp.r29i_g('pr')::uuid, ARRAY[pg_temp.r29i_g('cA1')::uuid, pg_temp.r29i_g('cA2')::uuid]);
   IF pl.nr_plic <> 'PL-ZXH-0001' OR (SELECT count(*) FROM public.red_convocari WHERE plic_id=pl.id) <> 2 THEN RAISE EXCEPTION 'TEST1 FAIL: plic A'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$SELECT public.fn_red_plic_creeaza(%L, ARRAY[%L]::uuid[])$q$,pg_temp.r29i_g('pr'),pg_temp.r29i_g('cA1')),'P0001') THEN RAISE EXCEPTION 'TEST1 FAIL: deja in plic'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_convocari SET plic_id=NULL WHERE id=%L$q$,pg_temp.r29i_g('cA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: plic_id direct'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_convocari SET sters_la=now(), sters_motiv='x' WHERE id=%L$q$,pg_temp.r29i_g('cA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: stergere logica din plic activ'; END IF;
   PERFORM set_config('r29i.plA',pl.id::text,true);
   RAISE NOTICE 'TEST1 OK';
 END $t$;
 
--- TEST2: expedierea cere lot (PV de plicuire); lotul doar prin RPC; dupa expediere AWB-ul nu se mai schimba; propagare pe convocari
+-- TEST2: expedierea cere lot FINALIZAT (PV semnat atasat + 2 semnatari, data plicuirii <= expedierea); lotul doar prin RPC; propagare
 DO $t$ DECLARE lot public.red_loturi_plicuire; BEGIN
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-03' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: expediere fara lot'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET lot_id=gen_random_uuid() WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: lot direct'; END IF;
   lot := public.fn_red_lot_plicuire_creeaza(pg_temp.r29i_g('pr')::uuid, ARRAY[pg_temp.r29i_g('plA')::uuid], DATE '2026-11-03');
   IF lot.nr_lot <> 'PP-0001' OR (SELECT lot_id FROM public.red_plicuri WHERE id=pg_temp.r29i_g('plA')::uuid) IS DISTINCT FROM lot.id THEN RAISE EXCEPTION 'TEST2 FAIL: lot'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-03' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: expediere cu lot nefinalizat'; END IF;
+  PERFORM set_config('r29i.lot',lot.id::text,true);
+  RAISE NOTICE 'TEST2a OK';
+END $t$;
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuire/'||pg_temp.r29i_g('lot')||'/pv-1.pdf','{"mimetype":"application/pdf"}'::jsonb);
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET pv_path='plicuire/%s/pv-1.pdf', semnatar1='FICTIV 1' WHERE id=%L$q$,pg_temp.r29i_g('lot'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: PV fara al doilea semnatar'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET pv_path='plicuire/%s/../pv-1.pdf', semnatar1='FICTIV 1', semnatar2='FICTIV 2' WHERE id=%L$q$,pg_temp.r29i_g('lot'),pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: cale PV'; END IF;
+  UPDATE public.red_loturi_plicuire SET pv_path='plicuire/'||pg_temp.r29i_g('lot')||'/pv-1.pdf', semnatar1='FICTIV 1', semnatar2='FICTIV 2' WHERE id=pg_temp.r29i_g('lot')::uuid;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_loturi_plicuire SET semnatar2='ALTUL' WHERE id=%L$q$,pg_temp.r29i_g('lot')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: semnatar schimbat dupa PV'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000001RO', data_expediere='2026-11-02' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: expediere inaintea plicuirii'; END IF;
   UPDATE public.red_plicuri SET awb='rr 000000001 ro', data_expediere='2026-11-03' WHERE id=pg_temp.r29i_g('plA')::uuid;
   IF (SELECT count(*) FROM public.red_convocari WHERE plic_id=pg_temp.r29i_g('plA')::uuid AND data_expediere='2026-11-03' AND nr_tracking='RR000000001RO') <> 2 THEN RAISE EXCEPTION 'TEST2 FAIL: propagare expediere'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_plicuri SET awb='RR000000009RO' WHERE id=%L$q$,pg_temp.r29i_g('plA')),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: awb schimbat'; END IF;
-  PERFORM set_config('r29i.lot',lot.id::text,true);
   RAISE NOTICE 'TEST2 OK';
 END $t$;
 
@@ -99,10 +114,17 @@ END $t$;
 DO $t$ DECLARE pl public.red_plicuri; BEGIN
   pl := public.fn_red_plic_creeaza(pg_temp.r29i_g('pr')::uuid, ARRAY[pg_temp.r29i_g('cB')::uuid]);
   IF pl.nr_plic <> 'PL-ZXH-0002' THEN RAISE EXCEPTION 'TEST4 FAIL: numar'; END IF;
-  PERFORM public.fn_red_lot_plicuire_creeaza(pg_temp.r29i_g('pr')::uuid, ARRAY[pl.id], DATE '2026-11-03');
-  UPDATE public.red_plicuri SET awb='RR000000002RO', data_expediere='2026-11-03' WHERE id=pl.id;
+  PERFORM set_config('r29i.lotB',(public.fn_red_lot_plicuire_creeaza(pg_temp.r29i_g('pr')::uuid, ARRAY[pl.id], DATE '2026-11-03')).id::text,true);
   PERFORM set_config('r29i.plB',pl.id::text,true);
   RAISE NOTICE 'TEST4a OK';
+END $t$;
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuire/'||pg_temp.r29i_g('lotB')||'/pv-1.pdf','{"mimetype":"application/pdf"}'::jsonb);
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  UPDATE public.red_loturi_plicuire SET pv_path='plicuire/'||pg_temp.r29i_g('lotB')||'/pv-1.pdf', semnatar1='FICTIV 1', semnatar2='FICTIV 2' WHERE id=pg_temp.r29i_g('lotB')::uuid;
+  UPDATE public.red_plicuri SET awb='RR000000002RO', data_expediere='2026-11-03' WHERE id=pg_temp.r29i_g('plB')::uuid;
+  RAISE NOTICE 'TEST4b OK';
 END $t$;
 SELECT pg_temp.r29i_ca(NULL,'postgres');
 INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','plicuri/'||pg_temp.r29i_g('plB')||'/retur.pdf','{"mimetype":"application/pdf"}'::jsonb);
@@ -144,6 +166,8 @@ END $t$;
 SELECT pg_temp.r29i_ca(NULL,'service_role');
 DO $t$ BEGIN
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_convocari SET data_confirmare_primire='2026-11-08' WHERE id=%L$q$,pg_temp.r29i_g('cD')),'23514') THEN RAISE EXCEPTION 'TEST6 FAIL: service_role ocoleste garda'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_plicuri(proiect_id,uat_id,nr_plic,cheie_persoana,destinatar_nume) SELECT %L,uat_id,'PL-ZXH-0098','x','y' FROM public.red_plicuri LIMIT 1$q$,pg_temp.r29i_g('pr')),'42501') THEN RAISE EXCEPTION 'TEST6 FAIL: service_role insereaza plic'; END IF;
+  IF NOT pg_temp.r29i_refuza(format($q$DELETE FROM public.red_loturi_plicuire WHERE id=%L$q$,pg_temp.r29i_g('lot')),'42501') THEN RAISE EXCEPTION 'TEST6 FAIL: service_role sterge lot'; END IF;
   RAISE NOTICE 'TEST6c OK';
 END $t$;
 -- TEST7: celelalte canale raman cu evidenta directa; jurnalul a primit plicurile si lotul

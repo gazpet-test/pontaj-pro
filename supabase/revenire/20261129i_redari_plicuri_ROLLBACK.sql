@@ -12,11 +12,12 @@ BEGIN
   IF to_regclass('public.red_plicuri') IS NULL THEN RAISE EXCEPTION '20261129i revenire: migrarea lipseste'; END IF;
   IF to_regnamespace(v_schema) IS NOT NULL THEN RAISE EXCEPTION '20261129i revenire: schema de arhiva exista deja (%)', v_schema; END IF;
   LOCK TABLE public.red_convocari, public.red_plicuri, public.red_loturi_plicuire IN ACCESS EXCLUSIVE MODE;
-  IF EXISTS (SELECT 1 FROM public.red_convocari WHERE retur IN ('decedat', 'altul')) THEN
+  IF EXISTS (SELECT 1 FROM public.red_convocari WHERE retur IN ('decedat', 'altul')) OR EXISTS (SELECT 1 FROM public.red_plicuri WHERE retur IN ('decedat', 'altul')) THEN
     RAISE EXCEPTION '20261129i revenire: exista convocari cu retur decedat/altul — refuz';
   END IF;
   EXECUTE format('CREATE SCHEMA %I', v_schema);
   EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC, anon, authenticated, service_role', v_schema);
+  EXECUTE format('CREATE TABLE %I.numere_plic AS SELECT * FROM public.red_numere WHERE cheie = ''PP'' OR cheie LIKE ''PL-%%''', v_schema);   -- numerele nu se refolosesc
   EXECUTE format('CREATE TABLE %I.convocari_plic AS SELECT id, plic_id, retur_detaliu FROM public.red_convocari WHERE plic_id IS NOT NULL OR retur_detaliu IS NOT NULL', v_schema);
   DROP TRIGGER trg_red_convocari_posta_garda ON public.red_convocari;
   DROP INDEX public.idx_red_convocari_plic;

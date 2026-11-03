@@ -25,7 +25,8 @@ BEGIN
   END IF;
   LOCK TABLE public.red_convocari IN SHARE ROW EXCLUSIVE MODE;
   -- regula „poștă doar prin plic” e sigură doar cât nu există convocări poștale cu evidență scrisă direct
-  IF EXISTS (SELECT 1 FROM public.red_convocari WHERE canal='posta' AND (data_expediere IS NOT NULL OR data_confirmare_primire IS NOT NULL OR retur IS NOT NULL)) THEN
+  IF EXISTS (SELECT 1 FROM public.red_convocari WHERE canal='posta' AND (data_expediere IS NOT NULL OR nr_tracking IS NOT NULL OR data_confirmare_primire IS NOT NULL
+             OR retur IS NOT NULL OR retur_data IS NOT NULL)) THEN   -- Jakarinos r1 P2-05: toate campurile postale protejate
     RAISE EXCEPTION '20261129i: exista convocari postale cu evidenta directa — se trateaza intai';
   END IF;
 END $pre$;
@@ -69,17 +70,20 @@ CREATE TABLE public.red_plicuri (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT red_plicuri_expediere CHECK ((awb IS NULL) = (data_expediere IS NULL)),
-  CONSTRAINT red_plicuri_ar_scan CHECK (data_ar IS NULL OR ar_scan_path IS NOT NULL),
+  CONSTRAINT red_plicuri_ar_scan CHECK ((data_ar IS NULL) = (ar_scan_path IS NULL)),
   CONSTRAINT red_plicuri_retur_complet CHECK ((retur IS NULL AND retur_data IS NULL AND retur_scan_path IS NULL AND retur_detaliu IS NULL)
                                               OR (retur IS NOT NULL AND retur_data IS NOT NULL AND retur_scan_path IS NOT NULL)),
   CONSTRAINT red_plicuri_retur_altul CHECK (retur IS DISTINCT FROM 'altul' OR length(btrim(coalesce(retur_detaliu, ''))) > 0),
   CONSTRAINT red_plicuri_ar_sau_retur CHECK (NOT (data_ar IS NOT NULL AND retur IS NOT NULL)),
   CONSTRAINT red_plicuri_dupa_expediere CHECK ((data_ar IS NULL AND retur IS NULL) OR data_expediere IS NOT NULL),
   CONSTRAINT red_plicuri_cronologie CHECK ((data_ar IS NULL OR data_ar >= data_expediere) AND (retur_data IS NULL OR retur_data >= data_expediere)),
-  CONSTRAINT red_plicuri_anulare CHECK (stare <> 'anulat' OR (length(btrim(coalesce(motiv_anulare, ''))) > 0 AND data_expediere IS NULL))
+  CONSTRAINT red_plicuri_anulare CHECK ((stare = 'anulat' AND length(btrim(coalesce(motiv_anulare, ''))) > 0 AND data_expediere IS NULL)
+                                        OR (stare = 'activ' AND motiv_anulare IS NULL))
 );
 CREATE UNIQUE INDEX red_plicuri_awb_uq ON public.red_plicuri (awb) WHERE awb IS NOT NULL AND stare = 'activ';
 CREATE INDEX idx_red_plicuri_proiect ON public.red_plicuri (proiect_id, uat_id);
+-- Gemini/Jakarinos r1 P1: un singur plic activ neexpediat pe persoana si UAT (plicuirea completa e verificata si in RPC)
+CREATE UNIQUE INDEX red_plicuri_persoana_uq ON public.red_plicuri (proiect_id, uat_id, cheie_persoana) WHERE stare = 'activ' AND data_expediere IS NULL;
 CREATE INDEX idx_red_plicuri_lot ON public.red_plicuri (lot_id);
 COMMENT ON TABLE public.red_plicuri IS 'Redări: plicul comun (un deținător + un UAT). Expediere / AR / retur doar aici, propagate pe convocări; AR și retur cer scan în Storage.';
 
@@ -111,7 +115,7 @@ BEGIN
     RAISE EXCEPTION 'redari: evidenta postala se tine pe plic (Redari -> Posta)' USING ERRCODE = '23514';
   END IF;
   -- o convocare dintr-un plic activ nu se anuleaza direct (plicul ar ramane cu o convocare anulata inauntru)
-  IF NEW.stare = 'anulat' AND OLD.stare <> 'anulat' AND OLD.plic_id IS NOT NULL
+  IF ((NEW.stare = 'anulat' AND OLD.stare <> 'anulat') OR (NEW.sters_la IS NOT NULL AND OLD.sters_la IS NULL)) AND OLD.plic_id IS NOT NULL   -- r1: si stergerea logica
      AND EXISTS (SELECT 1 FROM public.red_plicuri p WHERE p.id = OLD.plic_id AND p.stare = 'activ') THEN
     RAISE EXCEPTION 'redari: convocarea e intr-un plic activ; anuleaza intai plicul' USING ERRCODE = '23514';
   END IF;
@@ -123,7 +127,7 @@ CREATE TRIGGER trg_red_convocari_posta_garda BEFORE INSERT OR UPDATE ON public.r
 -- Scanul există în Storage, în folderul plicului (nu orice cale).
 CREATE FUNCTION public.fn_red_plic_scan_exista(p_plic uuid, p_path text) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-  SELECT p_path IS NOT NULL AND p_path LIKE 'plicuri/' || p_plic::text || '/%' AND p_path NOT LIKE '%..%'
+  SELECT p_path IS NOT NULL AND p_path ~ ('^plicuri/' || p_plic::text || '/[A-Za-z0-9._-]+\.(pdf|PDF|jpg|JPG|jpeg|JPEG|png|PNG)$')   -- r1: cale stricta
      AND EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = p_path);
 $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_red_plic_scan_exista(uuid, text) FROM PUBLIC, anon, authenticated;
@@ -155,6 +159,11 @@ BEGIN
   END IF;
   IF NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL THEN
     IF NEW.lot_id IS NULL THEN RAISE EXCEPTION 'redari: plicul se expediaza doar dupa PV-ul de plicuire (lot)' USING ERRCODE = '23514'; END IF;
+    -- Jakarinos r1 P1-02 / Gemini r1: lotul trebuie finalizat (PV semnat atasat, ambii semnatari) si datat inainte de expediere; blocat FOR SHARE
+    IF NOT EXISTS (SELECT 1 FROM public.red_loturi_plicuire l WHERE l.id = NEW.lot_id AND l.pv_path IS NOT NULL
+                     AND length(btrim(coalesce(l.semnatar1, ''))) > 0 AND length(btrim(coalesce(l.semnatar2, ''))) > 0 AND l.data_plicuire <= NEW.data_expediere FOR SHARE) THEN
+      RAISE EXCEPTION 'redari: PV-ul de plicuire nu e finalizat (PV semnat atasat, 2 semnatari) sau expedierea e inaintea plicuirii' USING ERRCODE = '23514';
+    END IF;
     NEW.awb := upper(regexp_replace(NEW.awb, '\s', '', 'g'));
   END IF;
   IF (OLD.data_ar IS NOT NULL AND (NEW.data_ar, NEW.ar_scan_path) IS DISTINCT FROM (OLD.data_ar, OLD.ar_scan_path))
@@ -206,10 +215,13 @@ BEGIN
   IF (NEW.proiect_id, NEW.nr_lot, NEW.data_plicuire, NEW.created_by, NEW.created_at) IS DISTINCT FROM (OLD.proiect_id, OLD.nr_lot, OLD.data_plicuire, OLD.created_by, OLD.created_at) THEN
     RAISE EXCEPTION 'redari: identitatea lotului de plicuire nu se schimba' USING ERRCODE = '23514';
   END IF;
-  IF OLD.pv_path IS NOT NULL AND NEW.pv_path IS DISTINCT FROM OLD.pv_path THEN
-    RAISE EXCEPTION 'redari: PV-ul de plicuire e deja atasat' USING ERRCODE = '23514';
+  IF OLD.pv_path IS NOT NULL AND (NEW.pv_path, NEW.semnatar1, NEW.semnatar2) IS DISTINCT FROM (OLD.pv_path, OLD.semnatar1, OLD.semnatar2) THEN
+    RAISE EXCEPTION 'redari: PV-ul de plicuire e deja atasat; semnatarii nu se mai schimba' USING ERRCODE = '23514';
   END IF;
-  IF NEW.pv_path IS NOT NULL AND OLD.pv_path IS NULL AND NOT (NEW.pv_path LIKE 'plicuire/' || NEW.id::text || '/%' AND NEW.pv_path NOT LIKE '%..%'
+  IF NEW.pv_path IS NOT NULL AND OLD.pv_path IS NULL AND (length(btrim(coalesce(NEW.semnatar1, ''))) = 0 OR length(btrim(coalesce(NEW.semnatar2, ''))) = 0) THEN
+    RAISE EXCEPTION 'redari: PV-ul de plicuire cere ambii semnatari' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.pv_path IS NOT NULL AND OLD.pv_path IS NULL AND NOT (NEW.pv_path ~ ('^plicuire/' || NEW.id::text || '/[A-Za-z0-9._-]+\.(pdf|PDF|jpg|JPG|jpeg|JPEG|png|PNG)$')
      AND EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = NEW.pv_path)) THEN
     RAISE EXCEPTION 'redari: PV-ul de plicuire lipseste din Storage (plicuire/<id>/...)' USING ERRCODE = '23514';
   END IF;
@@ -228,7 +240,8 @@ CREATE TRIGGER trg_red_jurnal AFTER INSERT OR UPDATE OR DELETE ON public.red_lot
 -- Cheia persoanei: numele normalizat + adresa de corespondență normalizată (fără spații multiple, litere mici). Fără adresă cunoscută = fără plic.
 CREATE FUNCTION public.fn_red_cheie_persoana(p_detinator uuid) RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-  SELECT CASE WHEN c.adresa_cunoscuta IS TRUE AND length(btrim(coalesce(c.adresa_strada, '') || coalesce(c.adresa_sat, '') || coalesce(c.adresa_comuna, ''))) > 0
+  SELECT CASE WHEN c.adresa_cunoscuta IS TRUE AND length(btrim(coalesce(d.nume_normalizat, ''))) > 0   -- r1: fara nume = fara cheie
+              AND length(btrim(coalesce(c.adresa_strada, '') || coalesce(c.adresa_sat, '') || coalesce(c.adresa_comuna, ''))) > 0
     THEN md5(lower(btrim(d.nume_normalizat)) || '|' || lower(regexp_replace(btrim(coalesce(c.adresa_strada, '')) || '|' || btrim(coalesce(c.adresa_sat, '')) || '|'
              || btrim(coalesce(c.adresa_comuna, '')) || '|' || btrim(coalesce(c.adresa_judet, '')) || '|' || btrim(coalesce(c.cod_postal, '')), '\s+', ' ', 'g')))
     ELSE NULL END
@@ -241,12 +254,21 @@ REVOKE EXECUTE ON FUNCTION public.fn_red_cheie_persoana(uuid) FROM PUBLIC, anon,
 CREATE FUNCTION public.fn_red_plic_creeaza(p_proiect_id uuid, p_convocari uuid[]) RETURNS public.red_plicuri
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s' AS $fn$
 DECLARE v_n integer; v_uat uuid; v_uat3 text; v_chei text[]; v_nr integer; v_plic public.red_plicuri; v_nume text; v_gasite integer;
+        v_cheie0 text; v_uat0 uuid; v_lipsa integer; v_exista text;
 BEGIN
   IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor') THEN RAISE EXCEPTION 'redari: fara drept de plicuire' USING ERRCODE = '42501'; END IF;
   IF p_proiect_id IS NULL OR p_convocari IS NULL OR cardinality(p_convocari) = 0 OR cardinality(p_convocari) > 200 THEN
     RAISE EXCEPTION 'redari: lista de convocari invalida (1..200)' USING ERRCODE = '22023';
   END IF;
   IF (SELECT count(DISTINCT x) FROM unnest(p_convocari) x) <> cardinality(p_convocari) THEN RAISE EXCEPTION 'redari: convocari duplicate in lista' USING ERRCODE = '22023'; END IF;
+  -- r1 P1: serializare pe persoana + UAT (advisory lock pe cheie), inainte de blocarea randurilor; doua plicuiri pe aceeasi persoana se asteapta
+  SELECT public.fn_red_cheie_persoana(c.detinator_id), p.uat_id INTO v_cheie0, v_uat0
+    FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
+   WHERE c.id = p_convocari[1];
+  IF v_cheie0 IS NULL OR v_uat0 IS NULL THEN
+    RAISE EXCEPTION 'redari: convocarea nu are o persoana cu adresa cunoscuta (nume + adresa)' USING ERRCODE = 'P0001';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || v_uat0::text || ':' || v_cheie0, 0));
   -- blocare în ordine fixă (id), ca două plicuiri concurente să nu se blocheze reciproc
   PERFORM 1 FROM public.red_convocari WHERE id = ANY(p_convocari) ORDER BY id FOR UPDATE;
   SELECT count(*), min(p.uat_id::text)::uuid, count(DISTINCT p.uat_id), array_agg(DISTINCT coalesce(public.fn_red_cheie_persoana(c.detinator_id), '<fara>'))
@@ -260,6 +282,19 @@ BEGIN
   IF v_n <> 1 THEN RAISE EXCEPTION 'redari: convocarile sunt din UAT-uri diferite' USING ERRCODE = 'P0001'; END IF;
   IF cardinality(v_chei) <> 1 OR v_chei[1] = '<fara>' THEN
     RAISE EXCEPTION 'redari: convocarile nu sunt ale aceleiasi persoane cu adresa cunoscuta (nume + adresa)' USING ERRCODE = 'P0001';
+  END IF;
+  -- r1 P1: plicul cuprinde TOATE convocarile eligibile ale persoanei din UAT (nu se fac plicuri partiale)
+  SELECT count(*) INTO v_lipsa
+    FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
+   WHERE p.proiect_id = p_proiect_id AND p.uat_id = v_uat AND p.sters_la IS NULL AND d.sters_la IS NULL
+     AND c.stare = 'activ' AND c.sters_la IS NULL AND c.canal = 'posta' AND c.plic_id IS NULL AND c.data_expediere IS NULL
+     AND NOT (c.id = ANY(p_convocari)) AND public.fn_red_cheie_persoana(c.detinator_id) = v_chei[1];
+  IF v_lipsa > 0 THEN
+    RAISE EXCEPTION 'redari: plicul trebuie sa cuprinda toate convocarile persoanei din UAT (lipsesc %)', v_lipsa USING ERRCODE = 'P0001';
+  END IF;
+  SELECT nr_plic INTO v_exista FROM public.red_plicuri WHERE proiect_id = p_proiect_id AND uat_id = v_uat AND cheie_persoana = v_chei[1] AND stare = 'activ' AND data_expediere IS NULL;
+  IF v_exista IS NOT NULL THEN
+    RAISE EXCEPTION 'redari: persoana are deja plicul neexpediat %; anuleaza-l si refa-l cu toate convocarile', v_exista USING ERRCODE = 'P0001';
   END IF;
   SELECT u.uat3 INTO v_uat3 FROM public.red_uat u WHERE u.id = v_uat AND u.proiect_id = p_proiect_id FOR SHARE;
   IF v_uat3 IS NULL THEN RAISE EXCEPTION 'redari: UAT inexistent in proiect' USING ERRCODE = '23503'; END IF;
@@ -304,9 +339,9 @@ GRANT EXECUTE ON FUNCTION public.fn_red_lot_plicuire_creeaza(uuid, uuid[], date)
 
 ALTER TABLE public.red_plicuri ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.red_loturi_plicuire ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.red_plicuri, public.red_loturi_plicuire FROM PUBLIC, anon, authenticated;   -- privilegiile implicite Supabase dau ALL
-GRANT SELECT, UPDATE ON public.red_plicuri, public.red_loturi_plicuire TO authenticated;          -- INSERT doar prin RPC; fără DELETE
-GRANT ALL ON public.red_plicuri, public.red_loturi_plicuire TO service_role;
+REVOKE ALL ON public.red_plicuri, public.red_loturi_plicuire FROM PUBLIC, anon, authenticated, service_role;   -- privilegiile implicite Supabase dau ALL
+-- INSERT doar prin RPC; fără DELETE / TRUNCATE nici pentru service_role (Jakarinos r1 P1-03: BYPASSRLS ar ocoli RPC-ul și regulile de INSERT)
+GRANT SELECT, UPDATE ON public.red_plicuri, public.red_loturi_plicuire TO authenticated, service_role;
 CREATE POLICY red_plicuri_sel ON public.red_plicuri FOR SELECT TO authenticated USING (public.fn_red_nivel() IS NOT NULL);
 CREATE POLICY red_plicuri_upd ON public.red_plicuri FOR UPDATE TO authenticated
   USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
@@ -317,6 +352,9 @@ CREATE POLICY red_loturi_plicuire_upd ON public.red_loturi_plicuire FOR UPDATE T
 DO $post$
 BEGIN
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('red_plicuri', 'red_loturi_plicuire')) <> 4 THEN RAISE EXCEPTION '20261129i: politici'; END IF;
+  IF has_table_privilege('service_role', 'public.red_plicuri', 'INSERT') OR has_table_privilege('service_role', 'public.red_plicuri', 'DELETE')
+     OR has_table_privilege('service_role', 'public.red_plicuri', 'TRUNCATE') OR has_table_privilege('service_role', 'public.red_loturi_plicuire', 'INSERT')
+     OR has_table_privilege('service_role', 'public.red_loturi_plicuire', 'DELETE') THEN RAISE EXCEPTION '20261129i: drepturi service_role'; END IF;
   IF has_table_privilege('anon', 'public.red_plicuri', 'SELECT') OR has_table_privilege('authenticated', 'public.red_plicuri', 'INSERT')
      OR has_table_privilege('authenticated', 'public.red_plicuri', 'DELETE') OR has_table_privilege('authenticated', 'public.red_loturi_plicuire', 'INSERT') THEN
     RAISE EXCEPTION '20261129i: drepturi prea largi';
