@@ -53,10 +53,13 @@ export function SoldSmslink({ soldInitial = null }) {
     try { await smsApi.citesteSold(); setSold(await smsApi.sold()) } catch (e) { setEroare(mesajEroare(e)) } finally { setLucru(false) }
   }
   const simulator = sold?.simulator === true
-  const culoare = simulator ? G.muted : sold?.sub_prag ? G.red : sold?.alerta ? G.yellow : G.muted
+  // r5 (Copilot r4 P2-01): sub prag „activ” doar cu monitorizarea pornită și furnizorul configurat; altfel soldul e istoric
+  const istoric = sold?.monitorizare_oprita === true || sold?.furnizor_neconfigurat === true
+  const subActiv = !simulator && !istoric && sold?.sub_prag === true
+  const culoare = simulator ? G.muted : subActiv ? G.red : sold?.alerta ? G.yellow : G.muted
   return <span style={{ ...S.row, gap: 6 }}>
-    <span style={{ ...S.small, color: culoare }} title={simulator ? 'SMS_FURNIZOR = simulator: soldul SMSLink nu se citește; valoarea e doar ultima cunoscută' : sold?.sub_prag ? `Sub pragul de ${sold.prag} SMS: reîncarcă creditul` : sold?.eroare_dupa_citire ? `Ultima citire a eșuat (${sold.eroare})` : ''}>
-      {eroare ? `Sold SMSLink: eroare (${eroare})` : textSold(sold)}{!simulator && sold?.sub_prag ? ' ⚠' : ''}
+    <span style={{ ...S.small, color: culoare }} title={simulator ? 'SMS_FURNIZOR = simulator: soldul SMSLink nu se citește; valoarea e doar ultima cunoscută' : istoric ? 'Soldul nu mai e actualizat: valoarea e doar ultima cunoscută' : subActiv ? `Sub pragul de ${sold.prag} SMS: reîncarcă creditul` : sold?.eroare_dupa_citire ? `Ultima citire a eșuat (${sold.eroare})` : ''}>
+      {eroare ? `Sold SMSLink: eroare (${eroare})` : textSold(sold)}{subActiv ? ' ⚠' : ''}
     </span>
     <button type="button" style={{ ...S.button, minHeight: 28, padding: '3px 8px', fontSize: 12 }} aria-label="Citește soldul SMSLink acum" title="Citește soldul acum" disabled={lucru} onClick={citesteAcum}>{lucru ? '…' : '↻'}</button>
   </span>

@@ -173,6 +173,11 @@ export function textSold(st, { simulator = false } = {}) {
   if (!st) return 'Sold SMSLink: —'
   // r4 (Copilot r3 P3-01): SMS_FURNIZOR lipsă / necunoscut = eroare de configurare, nu sold SMSLink activ
   if (st.furnizor_neconfigurat === true) return `Sold SMSLink: furnizor neconfigurat (SMS_FURNIZOR)${areSold ? ` · ultimul cunoscut: ${st.credit} la ${laRo(st.citit_la)}` : ''}`
+  // r5 (Copilot r4 P2-01): monitorizarea oprită (inclusiv simulatorul expirat) = soldul e doar istoric, nu sold SMSLink activ
+  if (st.monitorizare_oprita === true) {
+    const sim = st.furnizor_ultim === 'simulator' ? ' (ultimul furnizor: simulator)' : ''
+    return `Sold SMSLink: monitorizare oprită${sim}; ${areSold ? `ultimul sold cunoscut: ${st.credit} la ${laRo(st.citit_la)}` : 'niciun sold cunoscut'}`
+  }
   if (!areSold) return 'Sold SMSLink: încă necitit'
   const vechi = st.citire_veche === true || st.eroare_dupa_citire === true
   return `Sold SMSLink: ${st.credit} (la ${laRo(st.citit_la)})${vechi ? ' · neactualizat' : ''}`
