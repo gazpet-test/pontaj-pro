@@ -22,6 +22,7 @@
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
 import { COL_UAT, termenAfisare, mesajTermenAfisare } from './setari.js'
+import { TEXT_INFORMARE_LOT1, INFORMARE_LOT1_PUBLICATA, informareGata, blocuri, segmenteInline } from './informareGdpr.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
 export const ANTREPRENOR = 'GAZPET INSTAL S.R.L.'
@@ -332,15 +333,63 @@ export const textGdprPentruUat = (text, numeUat, linkInformare) => {
   return exista ? baza.replace(RX_INFO, (m, punct) => `Informarea completă: ${linkInformare}${punct || ''}`) : `${baza}\nInformarea completă: ${linkInformare}`
 }
 
+// ─── Versoul convocatorului: informarea GDPR completă (aceeași sursă ca pagina /redari/informare) ──────────────
+// Informarea implicită = textul Lot 1 din informareGdpr.js; parametrul `informare` există doar ca testele să poată
+// verifica și calea „aprobată”. Cât informarea nu e gata (nepublicată sau cu câmpuri [ ]), expedierea se refuză.
+const INFORMARE_IMPLICITA = { text: TEXT_INFORMARE_LOT1, publicata: INFORMARE_LOT1_PUBLICATA }
+export const MESAJ_INFORMARE_NEGATA = 'informarea GDPR de pe verso nu e aprobată / completă (INFORMARE_LOT1_PUBLICATA = false sau câmpuri [ ] necompletate) — convocatorul nu se poate expedia'
+const FONT_VERSO = '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>'
+// mărimea în jumătăți de punct: 9 pt, ca informarea să încapă pe o pagină
+const SZ_VERSO = 18
+const runVerso = (text, { bold = false, galben = false, rosu = false, sz = SZ_VERSO } = {}) =>
+  `<w:r><w:rPr>${FONT_VERSO}${bold ? '<w:b/>' : ''}${rosu ? '<w:color w:val="B42318"/>' : ''}<w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
+  `${galben ? '<w:highlight w:val="yellow"/>' : ''}</w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`
+const runuriInline = (text, proiect, totBold = false) => segmenteInline(text).map(s =>
+  runVerso(s.text, { bold: totBold || s.tip === 'bold', galben: proiect && s.tip === 'camp' })).join('')
+const pVerso = (runuri, { dupa = 60, inainte = 0, indent = 0, agatat = 0, centrat = false } = {}) =>
+  `<w:p><w:pPr><w:spacing w:before="${inainte}" w:after="${dupa}" w:line="240" w:lineRule="auto"/>` +
+  `${indent ? `<w:ind w:left="${indent}" w:hanging="${agatat}"/>` : ''}${centrat ? '<w:jc w:val="center"/>' : ''}</w:pPr>${runuri}</w:p>`
+
+/** Paragrafele WordprocessingML ale versoului (salt de pagină + titlu + secțiuni + liste). `proiect` = marcaj PROIECT vizibil. */
+export function xmlVersoInformare(text, { proiect = false } = {}) {
+  let xml = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
+  if (proiect) xml += pVerso(runVerso('PROIECT – nu se tipărește (informarea GDPR nu e încă aprobată / completă)', { bold: true, rosu: true, sz: 22 }), { dupa: 120, centrat: true })
+  xml += pVerso(runVerso('Informare privind folosirea datelor personale – proprietarii de teren, Lot 1', { bold: true, sz: 24 }), { dupa: 100, centrat: true })
+  for (const b of blocuri(text)) {
+    if (b.tip === 'titlu') xml += pVerso(runuriInline(b.text, proiect, true), { inainte: 100, dupa: 40 })
+    else if (b.tip === 'lista') for (const e of b.elemente) xml += pVerso(runVerso('•') + '<w:r><w:tab/></w:r>' + runuriInline(e, proiect), { dupa: 20, indent: 284, agatat: 284 })
+    else xml += pVerso(runuriInline(b.text, proiect))
+  }
+  return xml
+}
+
+/** Adaugă versoul la sfârșitul corpului documentului, înaintea sectPr-ului final (dacă există). Determinist (OPT_ZIP). */
+export async function adaugaVersoInformare(blob, text, { proiect = false } = {}) {
+  const zip = await JSZip.loadAsync(await blob.arrayBuffer(), { createFolders: false })
+  const xml = await zip.file('word/document.xml').async('string')
+  const iBody = xml.lastIndexOf('</w:body>')
+  if (iBody < 0) throw new Error('Convocatorul generat nu are </w:body> — versoul nu se poate adăuga')
+  const corp = xml.slice(0, iBody)
+  const iSect = corp.lastIndexOf('<w:sectPr')
+  // sectPr-ul de corp e ultimul copil al lui <w:body>: după el nu mai urmează niciun paragraf
+  // <w:pgSz>/<w:pgMar> din sectPr nu sunt paragrafe: se caută doar <w:p> / <w:p ...>
+  const poz = iSect >= 0 && /^<w:sectPr[\s>][\s\S]*<\/w:sectPr>\s*$/.test(corp.slice(iSect)) && !/<w:p[\s>]/.test(corp.slice(iSect)) ? iSect : iBody
+  zip.file('word/document.xml', xml.slice(0, poz) + xmlVersoInformare(text, { proiect }) + xml.slice(poz), OPT_ZIP)
+  const u8 = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+  return new Blob([u8], { type: MIME_DOCX })
+}
+
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
 /**
  * Lipsurile care blochează generarea unui convocator de trimis (nu de previzualizat). Întoarce lista mesajelor (goală = OK).
  * `contactDetinator` = rândul din red_detinatori_contact (PII; doar admin/editor îl pot citi).
  */
-export function verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator }) {
+export function verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator, informare = INFORMARE_IMPLICITA }) {
   const u = uat || {}, pr = proiect || {}, c = contact || {}
   const lipsuri = []
+  // Prima verificare: în Redari.jsx rulează ÎNAINTE de fn_red_numar_document, deci refuzul nu consumă un număr
+  if (!informareGata(informare?.text, informare?.publicata)) lipsuri.push(MESAJ_INFORMARE_NEGATA)
   if (!plin(nrDocument)) lipsuri.push('numărul documentului (nr_document)')
   if (!plin(token)) lipsuri.push('tokenul de răspuns al deținătorului')
   if (!plin(pr.contract_nr) || !plin(pr.contract_data)) lipsuri.push('numărul și data contractului (proiect.contract_nr + contract_data)')
@@ -376,9 +425,9 @@ export const CHEI_CONVOCATOR = ['contract_nr', 'contract_data', 'proiect_denumir
  * pentru salvare.
  * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string>, lipsuri: string[] }>}
  */
-export async function genereazaConvocator({ detinator, contactDetinator, contact, parcela, uat, proiect, nrDocument, token, origin, templateArrayBuffer, dataDocument, permiteIncomplet = false }) {
+export async function genereazaConvocator({ detinator, contactDetinator, contact, parcela, uat, proiect, nrDocument, token, origin, templateArrayBuffer, dataDocument, permiteIncomplet = false, informare = INFORMARE_IMPLICITA }) {
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
-  const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator })
+  const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator, informare })
   if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
   if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
   const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}, d = detinator || {}
@@ -418,7 +467,9 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     semnatar_tgz: semnatarTgz,
   }
   const qr = await genereazaQr(link)
-  const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
+  const fata = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
+  // Versoul: informarea completă după un salt de pagină; în previzualizare, cu marcaj PROIECT cât nu e gata
+  const blob = await adaugaVersoInformare(fata, informare?.text, { proiect: !informareGata(informare?.text, informare?.publicata) })
   const hash = await hashBlob(blob)
   return { blob, hash, link, campuri, lipsuri }
 }

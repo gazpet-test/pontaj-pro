@@ -5,34 +5,19 @@
 // Cât INFORMARE_LOT1_PUBLICATA = false sau textul are câmpuri [ ] necompletate, pagina arată banda „PROIECT” și noindex.
 // ═════════════════════════════════════════════════════════════════
 import { useEffect } from 'react'
-import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, INFORMARE_LOT1_PUBLICATA } from './redari/informareGdpr.js'
+import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, INFORMARE_LOT1_PUBLICATA, campuriNecompletate, informareGata, blocuri, segmenteInline } from './redari/informareGdpr.js'
 
 // Aceeași paletă deschisă ca formularul public (se citește în soare, de pe telefon)
 const G = { bg: '#f4f6f8', card: '#fff', text: '#1a2733', muted: '#5a6b7b', blue: '#0b4f8a', red: '#b42318', amber: '#8a5a00', border: '#cdd6de', galben: '#fff4cc' }
 
-// Câmpurile încă necompletate din text: [__], [de completat], [link scurt] etc.
-export const campuriNecompletate = (text) => (String(text || '').match(/\[[^\]]*\]/g) || [])
-export const informareGata = (text, publicata) => publicata === true && campuriNecompletate(text).length === 0
-
-// Markdown minimal (doar ce folosește textul juridic): ### titlu, - listă, **îngroșat**, paragrafe
-export function blocuri(text) {
-  const out = []
-  for (const bucata of String(text || '').split(/\n\s*\n/)) {
-    const linii = bucata.split('\n').map(l => l.trimEnd()).filter(l => l.trim())
-    if (!linii.length) continue
-    if (/^#{1,6}\s/.test(linii[0]) && linii.length === 1) out.push({ tip: 'titlu', text: linii[0].replace(/^#{1,6}\s+/, '') })
-    else if (linii.every(l => /^\s*-\s/.test(l))) out.push({ tip: 'lista', elemente: linii.map(l => l.replace(/^\s*-\s+/, '')) })
-    else out.push({ tip: 'paragraf', text: linii.join(' ') })
-  }
-  return out
-}
+// Helper-ele stau în informareGdpr.js (aceeași definiție și pentru versoul DOCX); re-exportate pentru teste
+export { campuriNecompletate, informareGata, blocuri }
 
 // **x** → <strong>, [x] → evidențiat (câmp necompletat); restul text simplu (fără HTML din sursă)
 function Inline({ text }) {
-  const parti = String(text).split(/(\*\*[^*]+\*\*|\[[^\]]*\])/g).filter(Boolean)
-  return parti.map((p, i) => p.startsWith('**') && p.endsWith('**') ? <strong key={i}>{p.slice(2, -2)}</strong>
-    : p.startsWith('[') && p.endsWith(']') ? <mark key={i} style={{ background: G.galben, color: G.amber, padding: '0 3px', borderRadius: 3 }}>{p}</mark>
-    : <span key={i}>{p}</span>)
+  return segmenteInline(text).map((p, i) => p.tip === 'bold' ? <strong key={i}>{p.text}</strong>
+    : p.tip === 'camp' ? <mark key={i} style={{ background: G.galben, color: G.amber, padding: '0 3px', borderRadius: 3 }}>{p.text}</mark>
+    : <span key={i}>{p.text}</span>)
 }
 
 export default function RedariInformarePublic() {
