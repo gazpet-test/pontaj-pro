@@ -360,7 +360,8 @@ const escRxFraza = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 const rxFraza = f => new RegExp('(?<![\\p{L}\\p{N}])' + f.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().split(/\s+/)
   .map(cuv => escRxFraza(cuv).replace(/[aist]/gi, ch => LITERE_DIACRITICE[ch.toLowerCase()])).join('[\\s\\u00a0]+') + '(?![\\p{L}\\p{N}])', 'giu')
 const RX_FRAZE_VERSO = FRAZE_VERSO.map(rxFraza)
-const pomenesteVersoSauInformarea = t => /\bverso\b|informarea completa/.test(normalizeazaText(t))
+// r19 (Copilot r18 P2-01): și formele articulate / de plural („versoul”, „versoului”, „reversul”), fără „Versoix”
+const pomenesteVersoSauInformarea = t => /\b(?:verso|revers)(?:ul|ului|uri|urile|urilor)?\b|informarea completa/.test(normalizeazaText(t))
 
 export class EroareTrimitereGdpr extends Error {}
 const MESAJ_TRIMITERE_GDPR = 'Convocatorul nu poate fi generat: textul GDPR de pe proiect (text_gdpr) trimite la informarea completă sau la verso într-o formulare pe care generatorul nu o recunoaște. Pe convocatorul poștal nu se tipărește niciun link. Scoateți fraza din text (Redări → Setări proiect) sau folosiți formularea: „' + FRAZE_VERSO[0] + '”.'
@@ -408,8 +409,9 @@ export const MARCAJE_PROPRII = [/gazpet\.ro/i, /vercel\.app/i, /pontaj-pro/i, /\
 const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=$|\s|[.,;:!?)\]»”"']+(?:\s|$))/gi
 const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 const RX_EXCEPTII = new RegExp(`(?<![A-Za-z0-9.\\-@:/])(?:${[...EXCEPTII_WEB].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@]*)?(?=$|\\s|[.,;!?)\\]»”"']+(?:\\s|$))`, 'gi')
-// r18 (Copilot r17 P2-02): și domenii internaționalizate (litere Unicode, ex. „primărie.ro”, „пример.рф”)
-const RX_DOMENIU = /[\p{L}\p{N}-]\.\p{L}{2,}/u
+// r18 + r19 (Copilot r17 P2-02, Jakarinos r18 P2-01): și domenii internaționalizate (litere Unicode cu semne combinante, ex.
+// „primărie.ro”, „пример.рф”, „example.भारत”)
+const RX_DOMENIU = /[\p{L}\p{M}\p{N}-]\.\p{L}[\p{L}\p{M}]+/u
 // #970 r17 (Copilot P2-01): adresă IPv4 fără schemă (patru octeți 0–255; datele „03.11.2026” au trei grupuri, deci nu dau alarme)
 const RX_IPV4 = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d]|\.\d)/
 
@@ -419,7 +421,9 @@ const RX_IPV4 = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4
  * (textul concatenat, unde lipirea poate crea forme false) contează doar adresele proprii.
  */
 export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
-  const faraEmail = String(text ?? '').replace(RX_EMAIL, ' ')
+  // r19 (Copilot r18 P2-02): forma canonică înaintea oricărei reguli — NFKC (litere / puncte „lățite” → ASCII) și separatoarele de
+  // domeniu IDNA (。 ． ｡) → „.”
+  const faraEmail = String(text ?? '').normalize('NFKC').replace(/[。．｡]/g, '.').replace(RX_EMAIL, ' ')
   for (const r of MARCAJE_PROPRII) {
     const m = r.exec(faraEmail)
     if (m) return { adresa: m[0].toLowerCase(), categorie: 'proprie' }
@@ -434,9 +438,9 @@ export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
   if (!d) return null
   // fragmentul de domeniu din jur, doar din litere / cifre / „.” / „-” (fără alt text din document), scurtat
   let s = d.index
-  while (s > 0 && /[\p{L}\p{N}.-]/u.test(ramas[s - 1])) s -= 1
+  while (s > 0 && /[\p{L}\p{M}\p{N}.-]/u.test(ramas[s - 1])) s -= 1
   let e = d.index + d[0].length
-  while (e < ramas.length && /[\p{L}\p{N}.-]/u.test(ramas[e])) e += 1
+  while (e < ramas.length && /[\p{L}\p{M}\p{N}.-]/u.test(ramas[e])) e += 1
   return { adresa: ramas.slice(s, e).replace(/\.+$/, '').toLowerCase().slice(0, 60), categorie: 'neaprobata' }
 }
 

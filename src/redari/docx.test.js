@@ -313,6 +313,9 @@ describe('genereazaConvocator', () => {
       'Operatori: Gazpet. Pe verso găsiți informațiile complete.',
       'Operatori: Gazpet. Informații despre date: PE VERSO!',
       'Operatori: Gazpet. Informarea completă se află\npe verso, la pagina 2.',
+      // r19 (Copilot r18 P2-01): formele articulate și „reversul”
+      'Operatori: Gazpet. Pe versoul convocatorului găsiți informațiile privind utilizarea datelor.',
+      'Operatori: Gazpet. Detalii în VERSOUL scrisorii.', 'Operatori: Gazpet. Pe reversul documentului găsiți detalii.',
       `Operatori: Gazpet. ${FRAZE_VERSO[0]}x`,
     ]
     for (const text of refuzate) {
@@ -433,6 +436,8 @@ describe('genereazaConvocator', () => {
       'Detalii la 192.168.1.10/gdpr.', '10.0.0.1', 'Vezi 255.255.255.255:8080', '(8.8.8.8)',
       // r18 (Copilot r17 P2-02): domenii internaționalizate fără schemă
       'Detalii la primărie.ro/gdpr', 'Vezi пример.рф', 'Detalii: exemplu.ελ.', 'Vezi ex.ăîș',
+      // r19 (Jakarinos r18 P2-01 + Copilot r18 P2-02): IDN cu semne combinante, separatoare IDNA, caractere lățite
+      'Detalii: example.भारत/gdpr', 'Vezi example.বাংলা', 'redari。gazpet。ro', 'ｐｏｒｔａｌ．ｃｏｍ', 'portal｡com', 'ｗｗｗ.exemplu.ro',
     ]
     // refuzate: neaprobate sau proprii („https://gazpet.ro@example.com/x” — nu e e-mail, deci „gazpet.ro” e adresă proprie)
     for (const t of refuzate) expect(adresaWebNepermisa(t), t).not.toBeNull()
