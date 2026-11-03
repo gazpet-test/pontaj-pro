@@ -7,7 +7,7 @@ import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
   reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, linkRaspunsCu, adresaDetinator, textGdprPentruUat,
-  textGdprFataConvocator, TRIMITERE_VERSO_GDPR,
+  textGdprFataConvocator, TRIMITERE_VERSO_GDPR, adresaProprieInDocx,
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
@@ -313,6 +313,41 @@ describe('genereazaConvocator', () => {
     expect(textDin(xml)).toContain(text_gdpr)
     const cuInfo = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr, link_informare_gdpr: 'https://example.invalid/i' }, templateArrayBuffer: citesteSablon() })
     expect(cuInfo.campuri.text_gdpr).toBe(`${text_gdpr}\n${TRIMITERE_VERSO_GDPR}`)
+  }, 10000)
+
+  // #970 r4 (Jakarinos P2): garda citește textul decodat și reunit pe paragraf, în toate părțile tipăribile
+  const sablonCu = async (parti) => {
+    const zip = await JSZip.loadAsync(citesteSablon())
+    for (const [cale, f] of Object.entries(parti)) zip.file(cale, f(await zip.file(cale)?.async('string')))
+    return zip.generateAsync({ type: 'arraybuffer' })
+  }
+  const NS_W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+  // fiecare run luat separat nu conține nicio adresă proprie; reunite pe paragraf dau https://redari.gazpet.ro/redari/raspuns/abc
+  const P_SPART = '<w:p><w:r><w:t>Răspuns: https://redari.</w:t></w:r><w:r><w:t>gazpet.ro/redari/</w:t></w:r><w:r><w:t>raspuns/abc</w:t></w:r></w:p>'
+
+  it('garda: adresă proprie spartă în 3 run-uri în corp → refuzată (și găsită de adresaProprieInDocx)', async () => {
+    const t = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => P_SPART + m) })
+    expect(await adresaProprieInDocx(t)).toMatchObject({ parte: 'word/document.xml', adresa: 'redari.gazpet.ro', paragraf: 'Răspuns: https://redari.gazpet.ro/redari/raspuns/abc' })
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t })).rejects.toThrow(/adrese web proprii.*redari\.gazpet\.ro.*word\/document\.xml/)
+    // entitățile XML se decodează înainte de verificare
+    const ent = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => '<w:p><w:r><w:t>pontaj&#45;pro</w:t></w:r></w:p>' + m) })
+    expect((await adresaProprieInDocx(ent))?.adresa).toBe('pontaj-pro')
+  }, 10000)
+
+  it('garda: adresă proprie în antet (prin câmp, completeazaDocx) și în notele de subsol (genereazaConvocator) → găsită / refuzată', async () => {
+    // antet completat printr-un câmp, pe un șablon de test construit în memorie
+    const zip = new JSZip()
+    zip.file('word/document.xml', `<w:document ${NS_W}><w:body><w:p><w:r><w:t>Corp curat</w:t></w:r></w:p></w:body></w:document>`)
+    zip.file('word/header1.xml', `<w:hdr ${NS_W}><w:p><w:r><w:t>{{adresa_web}}</w:t></w:r></w:p></w:hdr>`)
+    const completat = await completeazaDocx(await zip.generateAsync({ type: 'arraybuffer' }), { adresa_web: 'https://pontaj-pro-sooty.vercel.app/x' }, { strict: true })
+    expect(await adresaProprieInDocx(completat)).toMatchObject({ parte: 'word/header1.xml', adresa: 'pontaj-pro' })
+    const curat = await completeazaDocx(await zip.generateAsync({ type: 'arraybuffer' }), { adresa_web: 'www.dataprotection.ro' }, { strict: true })
+    expect(await adresaProprieInDocx(curat)).toBeNull()
+    // subsol și note de subsol pe convocatorul real: genereazaConvocator refuză și numește partea
+    for (const parte of ['word/footer1.xml', 'word/footnotes.xml', 'word/endnotes.xml']) {
+      const t = await sablonCu({ [parte]: () => `<w:ftr ${NS_W}>${P_SPART}</w:ftr>` })
+      await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t }), parte).rejects.toThrow(new RegExp(`adrese web proprii.*${parte.replace(/[./]/g, '\\$&')}`))
+    }
   }, 10000)
 
   it('construiește toate cele 35 de chei (SABLOANE.md §2.1), QR (linkul doar în rezultat), hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {

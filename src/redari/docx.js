@@ -355,6 +355,28 @@ export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat) =
 // (calea informării e scrisă escapat, ca în domeniuPublic.js: ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal)
 export const ADRESE_PROPRII_INTERZISE = [/redari\.gazpet\.ro/, /\.vercel\.app/, /pontaj-pro/, /\/redari\/raspuns\//, /\/redari\/informare/]
 const RX_ADRESA_WEB = new RegExp(ADRESE_PROPRII_INTERZISE.map(r => r.source).join('|'), 'i')
+// părțile tipăribile ale unui DOCX: corpul, antetele, subsolurile, notele de subsol și de final
+const RX_PARTE_TIPARIBILA = /^word\/(?:document|header\d*|footer\d*|footnotes|endnotes)\.xml$/
+
+/**
+ * #970 r4: prima adresă proprie (ADRESE_PROPRII_INTERZISE) din textul tipăribil al unui DOCX, sau null.
+ * Textul se citește decodat (entități XML) și reunit pe paragraf, deci o adresă spartă în mai multe run-uri e găsită.
+ * @returns {Promise<null | { parte: string, adresa: string, paragraf: string }>}
+ */
+export async function adresaProprieInDocx(docx) {
+  const sursa = docx instanceof Blob ? await docx.arrayBuffer() : docx
+  const zip = await JSZip.loadAsync(sursa)
+  const parti = Object.keys(zip.files).filter(p => RX_PARTE_TIPARIBILA.test(p)).sort()
+  for (const parte of parti) {
+    const xml = await zip.file(parte).async('string')
+    for (const m of xml.matchAll(RX_PARAGRAF)) {
+      const paragraf = textParagraf(m[0])
+      const a = RX_ADRESA_WEB.exec(paragraf)
+      if (a) return { parte, adresa: a[0], paragraf }
+    }
+  }
+  return null
+}
 
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
@@ -447,11 +469,10 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   }
   const qr = await genereazaQr(link)
   const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
-  // garda pe documentul COMPLETAT: niciun URL în textul din <w:t> (QR-ul e imagine, relația lui nu e text)
-  const xmlDoc = await (await JSZip.loadAsync(await blob.arrayBuffer())).file('word/document.xml').async('string')
-  const cuWeb = [...xmlDoc.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).find(t => RX_ADRESA_WEB.test(t))
-  if (cuWeb !== undefined) {
-    throw new Error(`Convocatorul poștal nu poate tipări adrese web proprii — răspuns sau informare („${RX_ADRESA_WEB.exec(cuWeb)[0]}” în „${cuWeb.slice(0, 80)}”). Scoateți adresa din textul de pe proiect (de ex. text_gdpr); informarea completă se tipărește pe verso.`)
+  // garda pe documentul COMPLETAT: nicio adresă proprie în textul tipăribil (QR-ul e imagine, relația lui nu e text)
+  const gasit = await adresaProprieInDocx(blob)
+  if (gasit) {
+    throw new Error(`Convocatorul poștal nu poate tipări adrese web proprii — răspuns sau informare („${gasit.adresa}” în ${gasit.parte}: „${gasit.paragraf.slice(0, 80)}”). Scoateți adresa din textul de pe proiect (de ex. text_gdpr); informarea completă se tipărește pe verso.`)
   }
   const hash = await hashBlob(blob)
   return { blob, hash, link, campuri, lipsuri }
