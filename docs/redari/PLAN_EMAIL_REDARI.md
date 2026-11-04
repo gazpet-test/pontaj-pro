@@ -1,23 +1,27 @@
-# Plan: e-mail Redări prin `redari@gazpet.ro` — r5 (04.11.2026)
+# Plan: e-mail Redări prin `redari@gazpet.ro` — r6 (04.11.2026)
 
 Doar plan de design: fără cod de producție, fără scrieri în BD, fără secrete. Fiecare felie se livrează separat, cu porțile ei.
-**r5** = revizia după NO-GO Jakarinos + Copilot pe r4 (`07fe5e8b`). Tabelul de rezolvare pe toate rundele e la §9. Ce rămâne intenționat pentru implementare, cu criteriul de acceptanță, e la §8.
+**r6** = revizia după NO-GO Jakarinos pe r5 (`5feaee20`, fără P1): propunerile celor 8 puncte integrate în corpul planului. Tabelul de rezolvare pe toate rundele e la §9. Ce rămâne intenționat pentru implementare, cu criteriul de acceptanță, e la §8.
 
-## Stare review (după r5)
-- **Puncte de review tratate în r5**: toate cele din verdictele r4 (Jak P1-01, P1-02, P2-01..07, P3-01..02; Cop P2-01..03, P3-01..02). Niciun punct cunoscut nu e lăsat fără rezolvare sau fără criteriu în §8.
+## Stare review (după r6)
+- **Puncte de review tratate în r6** (verdictul Jakarinos r5, fără niciun P1; Copilot r5 nu a fost rulat):
+  - **Jak r5 P2-01** tombstone fără expirare calendaristică → §1.2, §1.8 (tabelul), §1.12, §8; mecanismul verificării: punct deschis mai jos;
+  - **Jak r5 P2-02** limita exactă `internalDate ≥ data_start`, `data_start` fixat înaintea capturii `historyId` → §1.1 (modul test, prima activare, recuperarea), §3 F1 (teste);
+  - **Jak r5 P2-03** căsuță de test separată în locul `redari+test@` → §1.1 (modul test), §2.2, §4, §3 F1, §7.1 — *implicit (l)*, nou;
+  - **Jak r5 P2-04** `red_raspunsuri.data` = `primit_la`, pus de RPC → §1.10, §3 F1 (teste);
+  - **Jak r5 P2-05** poarta GDPR pentru domeniul (k) → §2.7 (punctul 6), §1.8 (alerta de 60 de zile), §8; mesajul automat de răspuns: punct deschis mai jos;
+  - **Jak r5 P2-06** inventarul unic → §1.12 „Schema F1” (nou), §1.1, §3 F1 (migrarea + postcondițiile);
+  - **Jak r5 P3-01** grația = durata maximă a worker-ului + 10 min → §1.8, §8;
+  - **Jak r5 P3-02** fișa a–e pentru `fn_red_raspuns_public` extins + `trimis_la` în fișa citirii → §2.4.
+- **Rămân deschise** (r6 nu le decide, pentru că ar cere o decizie nouă; comportamentul dependent nu se implementează până la răspuns):
+  - **R6-01 (din Jak r5 P2-01)** — verificarea „mesajul nu mai există” cu `messages.get` cere `gmail_id` brut, care devine NULL la golire (§1.8), iar tombstone-ul ține doar HMAC-ul. Variante: (A) verificarea prin `messages.list` complet al domeniului captat + HMAC calculat pe fiecare id și comparat cu tombstone-urile (fără date brute păstrate); (B) tombstone-ul păstrează și `gmail_id` brut (contrazice „doar `casuta`, HMAC, versiune, dată”). Tot aici: unde se ține primul pas al verificării (cele două verificări la 30 de zile distanță). Până la decizie, **niciun tombstone nu se șterge**.
+  - **R6-02 (din Jak r5 P2-05)** — „mesaj automat de răspuns cu informarea” ar fi o trimitere automată din `redari@`, contrar deciziei lui Razvan „fără niciun automatism” la trimitere și §6 („nu răspunde automat”). Variante: (A) răspuns automat Gmail (setat în căsuță, nu din ERP) — cere „da” explicit, ca excepție; (B) informarea doar pe convocator, în formular și pe paginile unde apare adresa, fără răspuns automat. Juridic validează varianta aleasă (§2.7 punctul 6).
+  - **R6-03 (din Jak r5 P2-04)** — propunerea fixează `data` doar pentru răspunsurile din mail; pentru `fn_red_mail_inregistreaza_raspuns_manual` (fără `primit_la`) data rămâne nedefinită (de decis: data declarată de operator, cu aceeași confirmare „mai vechi decât cel curent”, sau `now()`).
 - **De discutat cu Razvan dimineață** (nu sunt defecte, ci confirmări fără de care felia dependentă nu începe):
-  1. deciziile implicite **(a)–(k)** din §7.1, mai ales cele noi din r5: **(i)** „ignorat” doar pentru netriate, de owner / admin; **(j)** convocarea pe e-mail nu intră în `red_convocari` și nu schimbă starea juridică a parcelei; **(k)** se captează toată corespondența primită după activare, nu doar ce stă în INBOX;
+  1. deciziile implicite **(a)–(l)** din §7.1, mai ales: **(i)** „ignorat” doar pentru netriate, de owner / admin; **(j)** convocarea pe e-mail nu intră în `red_convocari` și nu schimbă starea juridică a parcelei; **(k)** se captează toată corespondența primită după activare, nu doar ce stă în INBOX; **(l)**, nouă în r6: căsuță de test separată (de ex. `redari-test@`, client OAuth de test, regulă Workspace care respinge expeditorii externi) în locul `redari+test@`;
   2. formularea „o singură ședință” din decizia 2A, înlocuită de (g) cu două ședințe;
-  3. probele din §8 (fixture-uri Gmail reale, Juridic pentru modul test și pentru metadatele de audit, durata backup-urilor).
-- **Verdictul r5** (`5feaee20`): **Jakarinos NO-GO, fără niciun P1**; Copilot r5 nu a fost rulat. Punctele de mai jos rămân deschise și sunt **de rezolvat înainte de F1, după discuția cu Razvan**. Pentru fiecare: ce cere / varianta propusă.
-  - **Jak r5 P2-01 — tombstone-urile nu pot expira doar calendaristic**: termenul Vault nu dovedește că originalul a dispărut din Gmail. *Propunere*: tombstone-ul nu expiră niciodată singur (rândul are doar `casuta`, HMAC, versiune, dată). Se șterge doar după o verificare făcută de citire (`messages.get` → `404`, cu doi pași la 30 de zile distanță) că mesajul nu mai există; test cu politica Vault prelungită.
-  - **Jak r5 P2-02 — recuperarea admite mesaje de dinainte de activare**: suprapunerea de 5 minute reimportă după un `404` mesaje sosite chiar înainte de activare. *Propunere*: limita de admitere e exactă, `internalDate ≥ data_start` (suprapunerea rămâne doar în interogarea Gmail); `data_start` se fixează **înainte** de capturarea `historyId`, iar mesajele dintre cele două momente le prinde recuperarea pe baza `data_start`; test cu mesaje înainte / în timpul / după activare, apoi `404`.
-  - **Jak r5 P2-03 — modul test nu impune tehnic expeditorul intern**: oricine poate scrie la `redari+test@`. *Propunere*: renunțăm la `redari+test@` și folosim o **căsuță de test separată** (de ex. `redari-test@`, client OAuth de test), cu o regulă Workspace care respinge expeditorii externi; testul verifică faptul că un mesaj extern nu ajunge la citirea corpului.
-  - **Jak r5 P2-04 — `red_raspunsuri.data` fără contract**: un mesaj vechi, înregistrat târziu, ar deveni „ultimul răspuns” prin `data = now()`. *Propunere*: `data` = `primit_la` al mailului (momentul în care proprietarul a răspuns), pus de RPC, nu `now()`; dacă există deja un răspuns mai recent pentru deținător, RPC-ul cere confirmarea explicită „răspuns mai vechi decât cel curent” și nu schimbă rezultatul centralizării; test inclusiv pe importul istoric.
-  - **Jak r5 P2-05 — poarta GDPR pentru domeniul (k)**: captarea întregii corespondențe aduce și mesaje străine de proiect. *Propunere*: înainte de F1, Juridic validează expres domeniul (k), utilizarea exclusivă a căsuței pentru Redări (mesaj automat de răspuns cu informarea), tratarea mesajelor străine (marcate `ignorat` de admin, cu motiv) și un responsabil numit pentru triere, cu escaladare la owner după 60 de zile; alerta nu e prezentată ca termen de retenție.
-  - **Jak r5 P2-06 — inventarul schemei F1 inconsistent**: `flux = 'import'` lipsește din enum, `red_mail_dedup` lipsește din lista migrării, `mod_test` lipsește din contractul fluxului. *Propunere*: o secțiune nouă „Schema F1” cu inventarul unic (tabele, coloane, enumuri complete, chei, constrângeri), pe care postcondițiile migrării o verifică punct cu punct.
-  - **Jak r5 P3-01 — perioada de grație la ștergere**: timeout-ul de 30 s nu acoperă durata maximă a unui worker Supabase (~400 s pe planurile plătite). *Propunere*: grația = durata maximă a worker-ului + 10 minute, socotită de la `stergere_autorizata_la`, cu valoarea citită din documentația Supabase și notată în plan.
-  - **Jak r5 P3-02 — fișele a–e**: lipsește fișa pentru RPC-ul public extins în F1b, iar fișa citirii mai spune `data_expediere`. *Propunere*: fișa a–e pentru `fn_red_raspuns_public` extins (intrare anonimă, scrie doar în propuneri, rate limit existent, confirmare umană) + `trimis_la` în fișa citirii.
+  3. punctele deschise R6-01..R6-03 de mai sus;
+  4. probele din §8 (fixture-uri Gmail reale, validarea Juridic a domeniului (k) și a metadatelor de audit, durata backup-urilor, durata maximă a worker-ului Supabase).
 
 **Deciziile lui Razvan (03.11.2026)**
 - Căsuța `redari@gazpet.ro` există (Google Workspace). Autorizarea Gmail API o facem împreună (formularea inițială „într-o singură ședință” e înlocuită de *implicit (g)*: două ședințe, câte una pe felie, §7.1).
@@ -37,7 +41,8 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
 - **(h)** aprobarea unui lot expiră după 7 zile, doar pentru mesajele `in_coada` (§1.3) — înainte de F2;
 - **(i)** un mesaj care a fost **vreodată** asociat unui proprietar nu poate fi marcat `ignorat`; doar netriatele / neasociatele pot, cu motiv, de owner sau admin (§1.8, §1.10) — înainte de F1;
 - **(j)** convocarea pe e-mail **nu se înregistrează în `red_convocari`** și nu schimbă niciodată starea juridică a parcelei (convocat / expediat AR); are stare proprie în `red_mail_mesaje` (§1.5) — înainte de F2;
-- **(k)** domeniul captat = **toată corespondența primită în `redari@` după activare**, oriunde ar fi mutată (arhivată, etichetată, coș), mai puțin spamul, care doar se numără (§1.1) — înainte de F1.
+- **(k)** domeniul captat = **toată corespondența primită în `redari@` după activare**, oriunde ar fi mutată (arhivată, etichetată, coș), mai puțin spamul, care doar se numără (§1.1) — înainte de F1;
+- **(l)** modul test folosește o **căsuță de test separată** (de ex. `redari-test@gazpet.ro`), cu client OAuth de test și o regulă Workspace care respinge expeditorii externi, în locul `redari+test@` (§1.1) — înainte de F1.
 
 **Surse citite**: `CLAUDE.md`, `docs/paw/LECTII_REVIEW.md` (L01–L25), `docs/sms/RAPORT_SMS_2026-11-03.md`, migrările `20261130a_sms_mvp.sql` / `20261130b_sms_acces_modul.sql`, `20261126a_redari_teren.sql` (politicile `red_raspunsuri_*`, `red_jurnal_sel`, `red_storage_*`, `fn_red_jurnal`), `20261129e`, `20261129h_redari_corespondenta.sql`, consumatorii `red_raspunsuri` din `src/redari/` și `src/Redari.jsx`, `docs/redari/README.md`, `SABLOANE.md`, `CONTRACT_SCHEMA.md`, edge-urile `redirect-mai-gov`, `noutati-mail`, `ofertare-rfq-inbox`, `ingest-document`, `vicare`, `olx-api`, plus `claude_docs.registru_automatizari` (doar SELECT pe rândurile despre mail/Gmail), DNS-ul public al `gazpet.ro` (03.11) și verdictele r1/r2 Jakarinos + Copilot (citite ca date).
 
@@ -105,30 +110,30 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
 **Pornire și lease**
 - `pg_cron` la 5 minute (decizia 12A) → `pg_net` cu `x-intern-secret` (`poartaCron.ts`), sau owner-ul logat (`?dry=1`, contractul mai jos).
 - `citire_activa` (implicit `false`), doar owner.
-- **Starea pe flux** (Jak r3 P2-06): tabelul `red_mail_flux`, cheie `(casuta, flux)`, `flux` ∈ {`inbox`, `sent`}. Fiecare rând are **propriile** `history_id` (`numeric(20,0)`), `mod_cursor` (`neinitializat` / `normal` / `recuperare`), `data_start`, `recuperare_tip`, `recuperare_history_id`, `recuperare_page_token`, lease (`lease_token`, `lease_pana`, ~4 min), `versiune`. INBOX și SENT nu împart niciun checkpoint: unul poate fi în recuperare în timp ce celălalt merge normal.
+- **Starea pe flux** (Jak r3 P2-06): tabelul `red_mail_flux`, cheie `(casuta, flux)`, `flux` ∈ {`inbox`, `sent`, `import`} (enumul complet și coloanele la §1.12). Fiecare rând are **propriile** `history_id` (`numeric(20,0)`), `mod_cursor` (`neinitializat` / `normal` / `recuperare`), `data_start`, `recuperare_tip`, `recuperare_history_id`, `recuperare_page_token`, `mod_test`, `data_import_de_la` (doar la `import`), lease (`lease_token`, `lease_pana`, ~4 min), `versiune`. INBOX și SENT nu împart niciun checkpoint: unul poate fi în recuperare în timp ce celălalt merge normal.
 - **Lease**: `fn_red_mail_flux_lease(p_flux, p_token, p_secunde)`, CAS pe rândul fluxului. O rulare procesează fluxurile pe rând (INBOX, apoi SENT), fiecare sub lease-ul lui.
 - **Orice scriere de progres** (cursor, `mod_cursor`, `recuperare_*`, starea unui mesaj) e CAS pe **lease-ul curent al fluxului + `versiune` + starea așteptată**. O invocare cu lease expirat nu poate suprascrie progresul uneia noi: RPC-ul întoarce `lease_pierdut`, iar edge-ul se oprește imediat.
 - **Rândul `sent`** se creează în F2, la activarea trimiterii, cu aceeași regulă de pornire ca INBOX (*implicit (b)*): `history_id` = `getProfile().historyId` capturat la activare, fără scanare retroactivă a SENT.
 
 **Contractul `?dry=1`** (Jak r3 P3-01)
-- Permis: refresh token, `history.list` / `messages.list` și `messages.get?format=metadata` (doar antetele `Delivered-To`, `Message-ID`, `Date` și `sizeEstimate`). Răspunsul conține doar numărători și coduri.
+- Permis: refresh token, `history.list` / `messages.list` și `messages.get?format=metadata` (doar antetele `Message-ID`, `Date` și `sizeEstimate`). Răspunsul conține doar numărători și coduri.
 - Interzis: `format=full` / `raw` / `attachments.get`, orice scriere în Storage, manifest, rânduri `red_mail_*` (în afara evenimentului `dry_rulat`), cursoare, reconciliere.
 - Dry-ul pe căsuța reală e tot prelucrare: e permis doar după condițiile §2.7. Înainte de §2.7 se testează doar pe fixture-uri (teste Deno fără rețea) și în **modul test** de mai jos.
 
-**Modul test** (înainte de §2.7, pe căsuța reală)
-- `red_mail_flux.mod_test = true`: ingestia ia în considerare **doar** mesajele adresate `redari+test@gazpet.ro` (plus-addressing Gmail). Selecția se face pe `Delivered-To`, citit cu `format=metadata`. Celelalte mesaje se sar fără citirea corpului, fără scriere și fără eveniment cu identificatorul lor.
-- Mesajele de test le trimit doar căsuțe interne `@gazpet.ro`.
-- Citirea antetului `Delivered-To` al mesajelor reale e totuși o prelucrare minimă. Dacă Juridic n-o acceptă înainte de §2.7, se folosește o căsuță de test separată (§8).
-- **Mesajele reale sosite în modul test** nu se importă și nu se marchează nicăieri: se consideră „înainte de activare” (*implicit (b)*). Dacă Razvan le vrea, intră prin importul istoric de mai jos.
-- **Trecerea în producție** (Jak r4 P2-04) e un singur RPC, `fn_red_mail_trece_productie`, sub lease-ul fluxului: `mod_test = false`, `C_start = getProfile().historyId` capturat din nou **în același pas**, `data_start = now()`, `mod_cursor = 'normal'`. Cursorul din modul test se aruncă (nu se continuă de la el). Momentul de la care începe prelucrarea reală = `data_start` al trecerii. Mesajele de test deja importate rămân, marcate `test = true`, și sunt excluse din numărători și din retenția de proiect (se golesc ca `ignorat`).
+**Modul test** (*implicit (l)*, Jak r5 P2-03; înainte de §2.7, **fără** căsuța reală)
+- Testele se fac pe o **căsuță de test separată** (de ex. `redari-test@gazpet.ro`), nu pe `redari@` și nu prin `redari+test@` (plus-addressing-ul lăsa pe oricine să scrie la adresa de test și cerea citirea `Delivered-To` al mesajelor reale). Căsuța reală nu e citită deloc înainte de activare.
+- Căsuța de test are **client OAuth de test** propriu (scope `gmail.readonly`, verificarea căsuței ca în §2.3, cu `getProfile().emailAddress` == adresa de test) și rânduri proprii în `red_mail_flux` (`casuta` = adresa de test, `mod_test = true`). Mesajele importate de acolo au `test = true`.
+- **Expeditorul intern e impus tehnic**: o regulă Workspace (Admin Console, Razvan) respinge la intrare orice expeditor din afara `@gazpet.ro` pentru căsuța de test. Test: un mesaj extern trimis la adresa de test nu ajunge la citirea corpului (respins de Workspace, deci absent din Gmail).
+- Aceleași reguli ca pentru `redari@`: conturile AI nu primesc acces (§2.2), codul are aceeași cale ca în producție (diferă doar `casuta` și secretele).
+- **Trecerea în producție** (Jak r4 P2-04, Jak r5 P2-02) = **prima activare** a rândului `inbox` al `redari@` (mai jos), făcută de owner sub lease-ul acelui flux. Rândurile căsuței de test nu se continuă în producție: rămân `mod_test = true` și se opresc. Mesajele de test importate rămân, marcate `test = true`, și sunt excluse din numărători și din retenția de proiect (se golesc ca `ignorat`).
 
 **Domeniul captat** (*implicit (k)*, Jak r4 P2-05, Cop r4 P2-03): toată corespondența **primită** în `redari@` după `data_start`, indiferent unde a fost mutată ulterior (INBOX, arhivă, altă etichetă, coș). Excluse: mesajele trimise (`SENT`, au fluxul lor), ciornele, chat-urile; spamul (`SPAM`) nu se importă, dar se numără pe rulare (eveniment cu număr, fără identificatori), ca să se vadă dacă filtrul Google înghite răspunsuri. Precondiție F1 (Admin Console, Razvan): pe `redari@` fără filtre Gmail care șterg sau mută mesajele; regula de operare „nimeni nu șterge mesaje din Gmail” (ștersele merg în coș, iar coșul e inclus).
 
-**Prima activare** (*implicit (b)*)
+**Prima activare** (*implicit (b)*, Jak r5 P2-02)
 - Starea inițială a rândului `inbox`: `mod_cursor = 'neinitializat'`, `history_id = NULL`.
-- La activare (owner), sub lease: `C_start = users.getProfile().historyId`, `data_start = now()` (`timestamptz`), apoi `history_id = C_start` și `mod_cursor = 'normal'`.
+- La activare (owner), sub lease, **în această ordine**: (1) `data_start = now()` (`timestamptz`), scris în BD; (2) abia apoi `C_start = users.getProfile().historyId`; (3) `history_id = C_start`, `mod_cursor = 'recuperare'`, `recuperare_tip = 'activare'`, `recuperare_history_id = C_start`. Prima rulare face scanarea de recuperare de mai jos (pașii 2–4 de la „Istoric expirat”) pe baza `data_start`, care prinde mesajele sosite între `data_start` și captura `C_start` (istoricul de la `C_start` nu le mai conține); la final `mod_cursor = 'normal'`.
 - **Fără import retroactiv**: mesajele aflate în căsuță înainte de activare nu intră în ERP.
-- Mesajele sosite după captură le aduce istoricul de la `C_start`, iar filtrul suplimentar `internalDate ≥ data_start − 5 min` (suprapunere de siguranță, dedup-ul o absoarbe) se aplică fluxului `inbox`.
+- **Limita de admitere e exactă**: `internalDate ≥ data_start`, pe toate căile fluxului `inbox` (istoric, recuperare, activare). Suprapunerea de siguranță (o oră) rămâne **doar în interogarea Gmail** (`after:`), nu în filtrul din cod; un mesaj cu `internalDate < data_start` nu se importă niciodată pe fluxul `inbox`, nici după un `404`. Test: mesaje sosite înainte / în timpul / după activare, apoi `404` → intră doar cele cu `internalDate ≥ data_start`, fiecare o singură dată.
 - **Importul istoric** (Jak r4 P2-04) se face doar la cererea explicită a lui Razvan („da” separat), ca **flux separat**: rândul `red_mail_flux` cu `flux = 'import'`, checkpoint propriu, **filtrul exact `data_import_de_la ≤ internalDate < data_start`** (nu filtrul fluxului normal). Scanarea: `messages.list?q=after:<epoch(data_import_de_la) − 3600> before:<epoch(data_start) + 3600> -in:sent -in:drafts -in:chats&includeSpamTrash=true`, cu limitele exacte aplicate în cod. Nu atinge cursorul `inbox`; mesajele de la granița `data_start` le acoperă dedup-ul. Test: import în timp ce sosesc mesaje noi → fiecare intră o singură dată.
 
 **Mod normal**
@@ -141,7 +146,7 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
 
 **Istoric expirat (`404`)** — istoricul poate expira în câteva ore, deci e caz normal:
 1. Sub lease se capturează **ÎNAINTE de scanare** `C_nou = getProfile().historyId` → `recuperare_history_id`, `mod_cursor = 'recuperare'`, `recuperare_tip = 'cursor_expirat'`.
-2. Scanare completă a domeniului captat (*implicit (k)*), nu doar a INBOX-ului actual: `messages.list?q=after:<epoch_secunde(data_start) − 3600> -in:sent -in:drafts -in:chats&includeSpamTrash=true`, apoi în cod filtrul exact `internalDate ≥ data_start − 5 min`, spamul numărat și sărit. Un mesaj sosit în timpul întreruperii și arhivat sau mutat în coș înainte de recuperare e găsit. Test: mesaj sosit după activare, arhivat înainte de un `404` → importat. `after:` cu **epoch în secunde** (nu `AAAA/LL/ZZ`, care depinde de fusul orar Gmail), cu o oră de suprapunere: limita Gmail e tratată ca aproximativă, limita exactă e cea din cod.
+2. Scanare completă a domeniului captat (*implicit (k)*), nu doar a INBOX-ului actual: `messages.list?q=after:<epoch_secunde(data_start) − 3600> -in:sent -in:drafts -in:chats&includeSpamTrash=true`, apoi în cod filtrul exact `internalDate ≥ data_start` (fără suprapunere, Jak r5 P2-02), spamul numărat și sărit. Un mesaj sosit în timpul întreruperii și arhivat sau mutat în coș înainte de recuperare e găsit. Test: mesaj sosit după activare, arhivat înainte de un `404` → importat. `after:` cu **epoch în secunde** (nu `AAAA/LL/ZZ`, care depinde de fusul orar Gmail), cu o oră de suprapunere: limita Gmail e tratată ca aproximativă, limita exactă e cea din cod.
 3. Progresul (`recuperare_page_token`) e durabil, scris cu CAS pe lease. **`pageToken` respins** (`400` / invalid) → scanarea **repornește de la început**, cu același `C_nou`; dedup-ul sare ce e final.
 4. La final: `history_id = C_nou`, `mod_cursor = 'normal'`. Rularea următoare citește istoricul de la `C_nou`, deci prinde și ce a sosit în timpul scanării.
 
@@ -172,7 +177,8 @@ Doar plan de design: fără cod de producție, fără scrieri în BD, fără sec
   - **`UNIQUE (casuta, gmail_id_hmac)`** pe toate rândurile, inclusiv cele golite (`gmail_id` brut, păstrat cât timp mesajul e activ pentru apelurile API, are și el UNIQUE parțial pe rândurile negolite);
   - `fn_red_mail_ingestie_incepe` face **întâi** `INSERT … ON CONFLICT (casuta, gmail_id_hmac) DO NOTHING RETURNING`, apoi `SELECT` pe cheie (L04). Rând existent `golit` → întoarce `deja_golit`, **fără nicio descărcare** de corp sau atașamente; rând `in_curs` → reluare; `ok` / `neprocesabil` → sărit. Două rulări concurente pe același id → un singur rând (testat cu barieră);
   - **rotația cheii**: cheile vechi rămân în Vault (`REDARI_MAIL_REF_SECRET_V<n>`) doar pentru căutare; ingestia caută cu toate versiunile active, scrie cu cea curentă. O cheie veche se retrage doar după ce n-a mai rămas niciun rând sau tombstone cu versiunea ei;
-  - **după ștergerea finală a auditului** rămâne un tombstone minim în `red_mail_dedup` (`casuta`, `gmail_id_hmac`, `hmac_versiune`, `golit_la`, fără altceva), cât timp originalul poate fi încă în Gmail: termenul politicii Google Vault pentru `redari@` + 30 de zile. Apoi tombstone-ul se șterge, iar recuperarea nu mai poate atinge acele mesaje, pentru că nu mai există în Gmail. Ingestia verifică și `red_mail_dedup`;
+  - **după ștergerea finală a auditului** rămâne un tombstone minim în `red_mail_dedup` (`casuta`, `gmail_id_hmac`, `hmac_versiune`, `golit_la`, fără altceva). Ingestia verifică și `red_mail_dedup`;
+  - **tombstone-ul nu expiră niciodată singur** (Jak r5 P2-01): termenul politicii Google Vault nu dovedește că originalul a dispărut din Gmail, deci nu există ștergere calendaristică. Un tombstone se șterge **doar** după o verificare făcută de citire că mesajul nu mai există în Gmail (`messages.get` → `404`), în **doi pași la 30 de zile distanță**, ambii cu `404`. Cum se face verificarea fără `gmail_id` brut (golit la §1.8) e punctul deschis R6-01; până la decizie, niciun tombstone nu se șterge. Test: politica Vault prelungită (originalul încă în Gmail) → tombstone-ul rămâne, recuperarea dă `deja_golit`;
   - test: golire → `404` → recuperare → `deja_golit`, nimic reimportat; la fel după ștergerea finală (tombstone).
 - `rfc_message_id` e index **neunic**, doar pentru corelare: coliziunile se păstrează și se semnalează (`coliziune_message_id`). `raw_sha256` e doar indiciu.
 - **„Cunoscut” nu înseamnă „complet”.** Ingestia are stări:
@@ -285,7 +291,7 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
 | `red_mail_setari` (un rând) | F1 (+ F2) | `citire_activa`, `ultima_eroare_cod`, `retentie_activa` + lease-ul global de retenție (cursoarele stau în `red_mail_flux`); F2: `trimitere_oprita` (implicit `true`), plafoane, `extern_permis` (implicit `false`); `versiune` |
 | `red_mail_primite` | F1 | `casuta` + `gmail_id_hmac` + `hmac_versiune` (UNIQUE pe `(casuta, gmail_id_hmac)`, §1.2), `gmail_id` (UNIQUE parțial pe rândurile negolite), `a_fost_asociat` (imuabil odată `true`, §1.8), `test`, `rfc_message_id` (neunic) + `coliziune_message_id`, `raw_sha256` (neunic), `thread_id`, `in_reply_to`, `references_ids`, `de_la_adresa`, `de_la_nume`, `reply_to`, `catre`, `subiect`, `corp_text`, steagurile de decodare, `primit_la` (= `internalDate`), `data_declarata`, `auth_*` + `auth_sursa`, `stare_ingestie` (`in_curs` / `ok` / `neprocesabil`) + `motiv_cod`, indiciile (§1.10), legăturile confirmate, `stare` (`nou` / `asociat` / `rezolvat` / `ignorat`) + `ignorat_la` / `ignorat_de` / `ignorat_motiv`, `verificare` + `verificare_nota` (§1.10), `nota`, `cere_dezabonare`, `inregistrat_in_registru` (§1.10), `retentie_stare` (`activ` / `in_golire` / `golit`), `golire_claim_token` / `_pana`, `blocaj_stare` (`fara` / `cerut` / `activ`) + `retentie_blocata_motiv`, `gmail_id_hmac`, `versiune` |
 | `red_mail_obiecte` | F1 | manifestul (§1.2): `primit_id`, `tip` (`eml` / `atasament`), `nr`, `cale`, `nume` curățat, `mime_declarat`, `mime_detectat`, `marime_declarata`, `marime`, `sha256`, `stare` (`asteptat` / `stocat` / `respins_tip` / `respins_marime` / `respins_structura` / `respins_buget` / `conflict_obiect` / `in_stergere` / `sters`), `stergere_autorizata_la` |
-| `red_mail_dedup` | F1 | tombstone după ștergerea finală: `casuta`, `gmail_id_hmac`, `hmac_versiune`, `golit_la` (§1.2) |
+| `red_mail_dedup` | F1 | tombstone după ștergerea finală: `casuta`, `gmail_id_hmac`, `hmac_versiune`, `golit_la`; fără expirare calendaristică (§1.2) |
 | `red_mail_evenimente` | F1 | ingestie / recuperare / retenție / reconciliere / SENT / descărcări: `tip`, id-uri, numărători, `cod`. Fără adrese, subiecte, nume de fișier sau text. |
 | `red_mail_flux` | F1 (rândul `sent` în F2) | starea pe flux, cheie `(casuta, flux)` (§1.1) |
 | `red_mail_raspuns_sursa` | F1 | `raspuns_id` (UNIQUE), `tip_sursa` (`gmail_redari` / `manual_verificat` / `gmail_redari_sters`), `primit_id` (obligatoriu la `gmail_redari`), `detinator_id`, **UNIQUE `(primit_id, detinator_id)`**, **`operatie_id` (UUID UNIQUE, generat de UI înainte de primul apel)**, `cerere_sha256` (hash-ul argumentelor, pentru idempotență), `metoda_verificare`, `verificat_de/la`; scris doar de RPC-urile de la §1.10 |
@@ -308,7 +314,7 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
   | Categorie | Regula |
   |---|---|
   | `ignorat` (spam / irelevant), **marcat de owner / admin, cu motiv**, pe un mesaj care n-a fost niciodată asociat (*implicit (i)*) | golire automată la **90 de zile** de la `ignorat_la` (nu de la primire: un mesaj marcat ignorat în ziua 89 nu dispare a doua zi), dacă nu e blocat |
-  | `nou` / „de triat” (neasociat, netriat) | **niciodată golit automat**. Alertă către admin la **60 de zile** („de triat vechi”), repetată săptămânal; rămâne până îl clasifică un om |
+  | `nou` / „de triat” (neasociat, netriat) | **niciodată golit automat**. Alertă către responsabilul numit pentru triere (§2.7 punctul 6) la **60 de zile** („de triat vechi”), repetată săptămânal, cu escaladare la owner; rămâne până îl clasifică un om. Alerta **nu** e termen de retenție și nu se prezintă ca atare (Jak r5 P2-05) |
   | `neprocesabil` | **niciodată golit automat**. Circuit manual: admin-ul îl verifică (originalul e încă în Gmail) și îl marchează `ignorat` sau îl asociază manual |
   | `asociat` / `rezolvat` (corespondența unui proprietar) | **fără golire automată**: urmează retenția din `text_gdpr`. La termenul `red_proiecte.retentie_mail_pana` (fixat de owner) panoul îl propune la golire, iar golirea se face ca operație pe date reale (pct. 3: preview → „da” → apply), nu de cron |
   | mesajele trimise (`red_mail_mesaje`) | ca `asociat`: la termenul proiectului, golire doar cu „da” |
@@ -345,7 +351,7 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
   - **Lease global de retenție** (`red_mail_setari.retentie_lease_*`): o singură rulare de retenție la un moment dat.
   - **Claim exclusiv per mesaj**: `fn_red_mail_golire_incepe(primit_id)` ia `FOR UPDATE`, refuză dacă `blocaj_stare` ≠ `fara` sau dacă eligibilitatea nu mai e îndeplinită, apoi scrie `in_golire` + `golire_claim_token` + `golire_claim_pana` + lista exactă de obiecte. Un mesaj cu claim activ nu poate primi alt claim.
   - Obiectele se șterg **secvențial**. Înainte de FIECARE `DELETE`, `fn_red_mail_golire_poate(primit_id, obiect_id, claim_token)` (`FOR UPDATE`) verifică claim-ul propriu, `blocaj_stare = 'fara'`, starea obiectului și **faptul că niciun alt obiect al mesajului nu e `in_stergere`**, apoi marchează obiectul `in_stergere` (valoare din enumul manifestului, §1.8) cu `stergere_autorizata_la`. Răspuns negativ → oprire; rândul revine în `activ` cu obiectele rămase.
-  - **Recuperarea unui obiect `in_stergere`** (Jak r4 P2-01): dacă claim-ul a expirat (worker suspendat), noul worker **nu autorizează niciun alt obiect al mesajului** până nu clarifică obiectul `in_stergere`. Clarificarea se face după o perioadă de grație (10 minute peste timeout-ul maxim al unui `DELETE` din edge, care e de 30 s): Storage confirmă că obiectul lipsește → `sters`; există încă → `stocat` din nou. Abia apoi se poate da un claim nou, dacă blocajul și eligibilitatea o mai permit.
+  - **Recuperarea unui obiect `in_stergere`** (Jak r4 P2-01): dacă claim-ul a expirat (worker suspendat), noul worker **nu autorizează niciun alt obiect al mesajului** până nu clarifică obiectul `in_stergere`. Clarificarea se face după o perioadă de grație (Jak r5 P3-01) = **durata maximă a unui worker Supabase + 10 minute**, socotită de la `stergere_autorizata_la` (timeout-ul de 30 s al unui `DELETE` nu ajunge: un worker suspendat poate relua `DELETE`-ul până la limita lui de durată, ~400 s pe planurile plătite); valoarea exactă se citește din documentația Supabase și se notează în plan (§8): Storage confirmă că obiectul lipsește → `sters`; există încă → `stocat` din nou. Abia apoi se poate da un claim nou, dacă blocajul și eligibilitatea o mai permit.
   - **Blocajul are două stări** (`blocaj_stare`): `fn_red_mail_blocaj_seteaza` (owner / admin, același `FOR UPDATE`) setează imediat `cerut` și oprește orice autorizare nouă. Dacă niciun obiect al mesajului nu e `in_stergere`, trece direct în `activ`; altfel rămâne `cerut` până la clarificarea acelui obiect, apoi `activ`. UI-ul arată: „blocaj cerut — X obiecte deja șterse, 1 în ștergere” / „blocaj activ, nicio operație în curs”.
   - Garanția, demonstrabilă și în scenariul cu worker întârziat: în orice moment există **cel mult un obiect autorizat la ștergere pe mesaj** (verificarea „niciun alt `in_stergere`” e sub `FOR UPDATE` pe mesaj), deci după `cerut` se mai poate șterge cel mult acel obiect. Niciun claim nou nu se mai dă.
   - Asocierea, verificarea sau înregistrarea unui răspuns pe un rând `in_golire` / `golit` e refuzată.
@@ -370,11 +376,13 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
 **Verificarea identității**: `verificare` = `neverificat` (implicit) / `verificat_telefon` / `verificat_semnatura` / `verificat_prezenta` / `verificat_alt` + autor + notă, prin `fn_red_mail_verifica` (admin / editor).
 
 **Intrarea în Registru** (*implicit (d)*) — contractul pentru toți consumatorii:
-- **Un răspuns din mail intră în `red_raspunsuri` doar după verificare**, printr-un singur RPC atomic: `fn_red_mail_inregistreaza_raspuns(primit_id, detinator_id, optiune, zi, metoda_verificare, nota, versiune)`. În aceeași tranzacție:
+- **Un răspuns din mail intră în `red_raspunsuri` doar după verificare**, printr-un singur RPC atomic: `fn_red_mail_inregistreaza_raspuns(primit_id, detinator_id, optiune, zi, metoda_verificare, nota, versiune, confirma_mai_vechi)`. În aceeași tranzacție:
   - `FOR UPDATE` pe rândul `red_mail_primite` (L01: serializează apelurile concurente pe același mesaj);
   - verifică faptul că mesajul e `asociat`, `ok`, `retentie_stare = 'activ'`, iar `detinator_id` e deținătorul asociat (sau unul din coproprietarii aceleiași parcele, confirmați la asociere);
   - setează `verificare` (dacă nu era) cu metoda dată;
   - inserează `red_raspunsuri` (`canal = 'email'`) + `red_mail_raspuns_sursa`.
+  - **`red_raspunsuri.data` = `primit_la` al mailului** (`internalDate`, momentul în care proprietarul a răspuns), pus de RPC, **nu `now()`** și nu din argumente (Jak r5 P2-04). Un mesaj vechi înregistrat târziu nu devine astfel „ultimul răspuns” doar prin momentul înregistrării;
+  - dacă deținătorul are deja în `red_raspunsuri` un răspuns cu `data` mai recentă, RPC-ul refuză (`raspuns_mai_vechi`) până la confirmarea explicită a operatorului („răspuns mai vechi decât cel curent”, `confirma_mai_vechi = true`). Și confirmat, rândul nu schimbă rezultatul centralizării (`ultimulRaspuns`, starea, PV, Model_6 rămân pe răspunsul mai recent). Test: inclusiv pe mesajele din importul istoric (§1.1), răspuns vechi înregistrat după unul nou → refuz, apoi confirmat → starea parcelei neschimbată;
 - **Idempotența și cardinalitatea** (Jak r3 P2-01, Cop r3 P2-02):
   - un mesaj poate privi mai mulți deținători (coproprietari care scriu împreună), dar **cel mult un răspuns per (mesaj, deținător)**: `UNIQUE (primit_id, detinator_id)` în `red_mail_raspuns_sursa`;
   - `cerere_sha256` = hash peste argumentele canonice (`primit_id`, `detinator_id`, `optiune`, `zi`, `metoda_verificare`);
@@ -402,6 +410,23 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
 - **Confirmarea**: `fn_red_mail_adresa_confirma` (admin / editor), după verificarea pe alt canal (telefon / prezență / procedura aprobată de Juridic, §8). Abia atunci adresa se scrie în `red_detinatori_contact.email` (dacă e gol; dacă există alta, se cere alegerea explicită), jurnalizat.
 - **Până la confirmare**, adresa nu intră în niciun lot și nu primește nimic (nici mail de confirmare automat: ar fi o trimitere).
 - Test obligatoriu: contact gol, token public valid, adresă controlată de altcineva → rând `propusa`, contactul rămâne gol, lotul F2 nu o vede.
+
+### 1.12 Schema F1 — inventarul unic (Jak r5 P2-06)
+Sursa unică pentru migrarea F1: tabelele, coloanele-cheie, enumurile **complete**, cheile și constrângerile. Celelalte secțiuni descriu comportamentul și trimit aici. **Postcondițiile migrării F1 verifică punct cu punct** fiecare rând de mai jos (existența coloanei, valorile exacte ale fiecărui `CHECK` / enum, fiecare `UNIQUE`, RLS pornit, nicio politică de scriere pentru roluri). Orice element nou în alt paragraf al planului intră și aici, în aceeași revizie. Coloanele F2+ (trimitere, `red_mail_loturi` / `_mesaje` / `_optout`, F4) au inventarul lor la felia respectivă.
+| Tabel | Chei și constrângeri | Enumuri (valori complete) | Alte coloane |
+|---|---|---|---|
+| `red_mail_setari` | un singur rând (`CHECK id = 1`) | — | `citire_activa` (implicit `false`), `ultima_eroare_cod`, `retentie_activa` (implicit `false`), `retentie_lease_token` / `_pana`, `versiune` |
+| `red_mail_flux` | PK `(casuta, flux)` | `flux` ∈ {`inbox`, `sent`, `import`} (`sent` folosit din F2, `import` doar la cerere); `mod_cursor` ∈ {`neinitializat`, `normal`, `recuperare`}; `recuperare_tip` ∈ {`activare`, `cursor_expirat`} sau NULL | `casuta` ∈ {`redari@gazpet.ro`, adresa căsuței de test (*implicit (l)*)}, `history_id` `numeric(20,0)`, `data_start` `timestamptz`, `data_import_de_la` (doar `import`, altfel NULL, `CHECK`), `recuperare_history_id`, `recuperare_page_token`, **`mod_test`** (boolean, `true` doar pe căsuța de test), `lease_token`, `lease_pana`, `versiune` |
+| `red_mail_primite` | `UNIQUE (casuta, gmail_id_hmac)`; `UNIQUE (casuta, gmail_id) WHERE gmail_id IS NOT NULL`; index neunic pe `rfc_message_id` | `stare_ingestie` ∈ {`in_curs`, `ok`, `neprocesabil`}; `stare` ∈ {`nou`, `asociat`, `rezolvat`, `ignorat`}; `verificare` ∈ {`neverificat`, `verificat_telefon`, `verificat_semnatura`, `verificat_prezenta`, `verificat_alt`}; `retentie_stare` ∈ {`activ`, `in_golire`, `golit`}; `blocaj_stare` ∈ {`fara`, `cerut`, `activ`}; `auth_sursa` ∈ {`mx_google`, `necunoscut`}; `eml_absent` ∈ {`prea_mare`} sau NULL | `gmail_id_hmac`, `hmac_versiune`, `gmail_id`, `test`, `a_fost_asociat` (imuabil odată `true`), `motiv_cod`, `primit_la` (= `internalDate`), `data_declarata`, restul coloanelor de la §1.8 |
+| `red_mail_obiecte` | FK `primit_id`; `UNIQUE (primit_id, tip, nr)`; `UNIQUE cale` | `tip` ∈ {`eml`, `atasament`}; `stare` ∈ {`asteptat`, `stocat`, `respins_tip`, `respins_marime`, `respins_structura`, `respins_buget`, `conflict_obiect`, `in_stergere`, `sters`} | `cale`, `nume`, `mime_declarat`, `mime_detectat`, `marime_declarata`, `marime`, `sha256`, `stergere_autorizata_la` |
+| `red_mail_dedup` | PK `(casuta, gmail_id_hmac)` | — | `hmac_versiune`, `golit_la`; nimic altceva; fără termen de expirare (§1.2, R6-01) |
+| `red_mail_evenimente` | PK `id`; FK opțional `primit_id` | `tip`: listă închisă în migrare (F1: ingestie, `disparut`, recuperare, `dry_rulat`, spam numărat, descărcare, retenție, alerte; F2 o extinde cu reconcilierea și SENT) | `gmail_id_hmac` (niciodată `gmail_id` brut), id-uri ERP, numărători, `cod`, `creat_la` |
+| `red_mail_raspuns_sursa` | `UNIQUE raspuns_id`; `UNIQUE (primit_id, detinator_id)`; `UNIQUE operatie_id`; `CHECK (tip_sursa <> 'gmail_redari' OR primit_id IS NOT NULL)` | `tip_sursa` ∈ {`gmail_redari`, `manual_verificat`, `gmail_redari_sters`}; `metoda_verificare` ∈ {`verificat_telefon`, `verificat_semnatura`, `verificat_prezenta`, `verificat_alt`} | `detinator_id`, `cerere_sha256`, `verificat_de` / `_la` |
+| `red_mail_adrese_propuse` | FK `detinator_id`; FK opțional `primit_id` | `sursa` ∈ {`formular_public`, `mail_primit`}; `stare` ∈ {`propusa`, `confirmata`, `respinsa`} | `email` normalizat, `propus_la`, `confirmat_de` / `_la`, `metoda_verificare`, `nota` |
+| `red_mail_oauth_state` | `UNIQUE state_sha256` | `scop` ∈ {`citire`, `citire_test` (*implicit (l)*)} în F1; `trimitere` adăugat de migrarea F2 | `owner_id`, `expira_la`, `consumat_la` |
+| `red_proiecte` (existent) | — | — | coloana nouă `retentie_mail_pana` |
+- `motiv_cod` (`red_mail_primite`) ∈ {`prea_mare`, `structura_invalida`, `decodare_imposibila`, `raspuns_peste_plafon`, `conflict_obiect`, `ingestie_blocata`}: lista închisă din §1.1–1.2, verificată de postcondiții la fel ca enumurile.
+- Triggerele și constrângerile pe tabelele existente (`red_raspunsuri`: constraint trigger amânat, `BEFORE UPDATE` pe `canal` și pe câmpurile rândurilor din mail; `red_jurnal_sel`, `fn_red_jurnal`; politicile Storage pentru `mail/`) sunt tot în inventar, cu postcondiția lor (§1.10, §1.8, §2.1).
 
 ---
 
@@ -436,7 +461,7 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
 ### 2.2 Accesul conturilor AI la căsuță
 - **Conturile AI (inclusiv `claude@gazpet.ro`) NU primesc acces direct la `redari@`**: fără delegare, fără parolă, fără sesiune logată în vreun browser de pe serverul AI.
 - Singurul acces e tokenul OAuth al ERP-ului, prin porțile ERP.
-- Testele se fac prin ERP, către și dinspre adrese `@gazpet.ro`; rezultatul se verifică pe ecranul ERP.
+- Testele se fac prin ERP, către și dinspre adrese `@gazpet.ro`; rezultatul se verifică pe ecranul ERP. Aceeași regulă pentru căsuța de test (*implicit (l)*, §1.1): conturile AI nu primesc acces la ea.
 - Consimțământul OAuth îl dă Razvan, logat el ca `redari@`.
 
 ### 2.3 Tokenurile, riscul rezidual și callback-ul OAuth
@@ -487,7 +512,7 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
 
 **`redari-mail-citeste` (F1)**
 - **(a)**: tot ce intră în `redari@` (antete, corp, atașamente) + SENT (antete, `X-Gazpet-Redari`, atașamentul la reconciliere).
-- **(b)**: scrie `red_mail_primite` / `_obiecte` / `_evenimente`, obiecte în `mail/`, cursoarele; la reconciliere doar `necunoscut → trimis` + `data_expediere`; alertele SENT. **Nu trimite, nu modifică Gmail.** (a) ∩ (b) doar ca date.
+- **(b)**: scrie `red_mail_primite` / `_obiecte` / `_evenimente`, obiecte în `mail/`, cursoarele, `red_mail_dedup`; din F2, la reconciliere doar `red_mail_mesaje`: `necunoscut → trimis` + `trimis_la` (nimic în `red_convocari`, §1.5); alertele SENT. **Nu trimite, nu modifică Gmail.** (a) ∩ (b) doar ca date.
 - **(c)**: `service_role` după poartă: nimeni din aplicație nu are voie să fabrice un mesaj primit sau proveniența lui (L08). RPC-uri cu EXECUTE doar `service_role`.
 - **(d)**: cron cu `x-intern-secret` sau owner (reconcilierea manuală și admin). Teste: anon 401, utilizator obișnuit 403.
 - **(e)**: nu trimite. Efectele le face omul. Activarea: owner, după §2.7.
@@ -505,6 +530,13 @@ Codul existent tratează orice convocare activă cu `data_expediere` ca „exped
 - **(c)**: `service_role` pentru citirea din Storage (prefixul `mail/` nu are politici pentru utilizatori), după autorizarea în RPC.
 - **(d)**: utilizator logat; nivelul, apartenența obiectului și starea se verifică în `fn_red_mail_fisier_autorizeaza`. Teste: viewer 403, editor pe `.eml` 403, `obiect_id` al altui mesaj / golit / respins → 404 generic.
 - **(e)**: fiecare descărcare e o acțiune explicită a unui om.
+
+**`fn_red_raspuns_public` extins (F1b, câmpul `email`, Jak r5 P3-02)**
+- **(a)**: intrare **anonimă** din formularul public (deținătorul tokenului): adresa de e-mail tastată, extern și nevalidat.
+- **(b)**: scrie **doar** un rând `propusa` în `red_mail_adrese_propuse` (`sursa = formular_public`); nu atinge `red_detinatori_contact`, nu trimite nimic (nici mail de confirmare), nu atinge bani sau drepturi. (a) ∩ (b) doar ca date nevalidate.
+- **(c)**: funcția existentă, SECURITY DEFINER, apelabilă de `anon` ca azi; partea nouă scrie doar în tabelul de propuneri, fără `service_role` din edge.
+- **(d)**: oricine are un token public valid; **rate limit-ul existent** al funcției se aplică și câmpului nou; validare strictă a adresei (aceeași funcție SQL ca la §1.6). Teste ca anon: injecție, adresă invalidă, prima introducere malițioasă (§1.11).
+- **(e)**: **confirmare umană** obligatorie (`fn_red_mail_adresa_confirma`, admin / editor, după verificarea pe alt canal) înainte ca adresa să intre în contact sau într-un lot (*implicit (a)*).
 
 **`redari-mail-retentie` (F1, oprită)**
 - **(a)**: nimic extern; rândurile proprii, termenele, lista prefixului `mail/`.
@@ -540,6 +572,7 @@ F1 se poate livra și testa cu `citire_activa = false` și cu mailuri interne de
 3. **Informarea aplicabilă** pe canalele unde apare `redari@`: scop, temei, destinatari (inclusiv Google), retenție, transferuri, drepturi. `text_gdpr` implicit nu menționează azi e-mailul; informarea v3 (PR #939 draft) nu e în repo.
 4. `retentie_mail_pana` fixat pe proiect.
 5. Precondiția de traseu de la §2.6 (fără rutare / import / POP).
+6. **Poarta GDPR pentru domeniul captat** (Jak r5 P2-05, *implicit (k)*): Juridic validează **expres, înainte de F1**: (i) domeniul (k) — toată corespondența primită, inclusiv mesajele străine de proiect; (ii) utilizarea exclusivă a căsuței pentru Redări și informarea expeditorilor (propunerea Jak: mesaj automat de răspuns cu informarea — punctul deschis R6-02, pentru că ar fi o trimitere automată); (iii) tratarea mesajelor străine: marcate `ignorat` de admin, cu motiv (*implicit (i)*), golite la 90 de zile; (iv) un **responsabil numit** pentru triere, cu escaladare la owner după 60 de zile (§1.8). Alerta de 60 de zile nu e prezentată ca termen de retenție. Validarea se notează (dată, cine) în §7.1 la (k). Spre deosebire de punctele 1–5 (condiții de activare), punctul 6 e condiție **înainte de începerea F1**.
 
 F1b cere în plus informarea din formular și procedura de confirmare a adreselor (Juridic). F2: textul mailurilor validat de Juridic + DKIM / DMARC. F4: verificarea separată (§2.5).
 
@@ -555,8 +588,8 @@ Porți comune: branch din `origin/main`; GO Jakarinos + Copilot pe diff; DRY ver
 §4 (fără conectarea OAuth); condițiile §2.7 pornite (Juridic, Transgaz); DKIM / DMARC; verificarea traseului `redari@` (fără rutare / import / POP).
 
 ### F1 — Primirea + schema minimă comună
-- **Migrare: da.** `red_mail_setari` (coloanele de citire), `red_mail_flux` (rândul `inbox`), `red_mail_primite`, `red_mail_obiecte`, `red_mail_evenimente`, `red_mail_raspuns_sursa`, `red_mail_adrese_propuse`, `red_mail_oauth_state`, `red_proiecte.retentie_mail_pana`; RPC-urile §1.1–1.2, §1.8, §1.10–1.11, §2.1 (numărătorile), §2.3 (Vault, state); triggerele de proveniență pe `red_raspunsuri` (constraint trigger amânat, `BEFORE UPDATE` pe `canal`, `BEFORE UPDATE` pe câmpurile rândurilor din mail) + preflight-ul pe răspunsurile `email` preexistente; modificarea `red_jurnal_sel` și a `fn_red_jurnal` pentru `red_mail_*`; politicile Storage pentru `mail/`; vederile noi. Cronurile se creează oprite. **`red_v_stare_parcela` nu se modifică** (r2 o modifica; r3 n-are nevoie, §1.10).
-- **Edge: da.** `redari-mail-oauth` (doar `citire`), `redari-mail-citeste` (INBOX; monitorizarea SENT și reconcilierea vin în F2), `redari-mail-fisier`, `redari-mail-retentie`, `_shared/gmailCitire.ts`.
+- **Migrare: da**, exact inventarul de la §1.12 (postcondițiile îl verifică punct cu punct): `red_mail_setari` (coloanele de citire), `red_mail_flux` (rândul `inbox` al `redari@` + rândurile căsuței de test, *implicit (l)*), `red_mail_primite`, `red_mail_obiecte`, `red_mail_dedup`, `red_mail_evenimente`, `red_mail_raspuns_sursa`, `red_mail_adrese_propuse`, `red_mail_oauth_state`, `red_proiecte.retentie_mail_pana`; RPC-urile §1.1–1.2, §1.8, §1.10–1.11, §2.1 (numărătorile), §2.3 (Vault, state); triggerele de proveniență pe `red_raspunsuri` (constraint trigger amânat, `BEFORE UPDATE` pe `canal`, `BEFORE UPDATE` pe câmpurile rândurilor din mail) + preflight-ul pe răspunsurile `email` preexistente; modificarea `red_jurnal_sel` și a `fn_red_jurnal` pentru `red_mail_*`; politicile Storage pentru `mail/`; vederile noi. Cronurile se creează oprite. **`red_v_stare_parcela` nu se modifică** (r2 o modifica; r3 n-are nevoie, §1.10).
+- **Edge: da.** `redari-mail-oauth` (doar `citire` și `citire_test`), `redari-mail-citeste` (INBOX; monitorizarea SENT și reconcilierea vin în F2), `redari-mail-fisier`, `redari-mail-retentie`, `_shared/gmailCitire.ts`.
 - **UI: da.** `src/redari/ui/MesajeEcran.jsx` (Nou / De triat / Asociat / Rezolvat / Ignorat, firul, indiciile cu conflicte, autentificarea cu „necunoscut”, steagurile, verificarea, atașamentele prin proxy, „Înregistrează răspuns” → RPC-ul atomic, adresele propuse din mail); „Istoric e-mail” pe `FisaParcela.jsx` (admin / editor); contorul pe Dashboard (pentru viewer prin RPC-ul de numărători); panoul owner (comutatoare, activare, termen, conectare / revocare OAuth de citire).
 - **Amânate explicit în F2**: indiciul de fir, reconcilierea, monitorizarea SENT, opt-out-ul (în F1 doar steagul `cere_dezabonare`), OAuth de trimitere.
 - **DRY / teste**:
@@ -568,11 +601,12 @@ Porți comune: branch din `origin/main`; GO Jakarinos + Copilot pe diff; DRY ver
   - proveniența: INSERT direct `canal = email` refuzat, schimbarea `canal` refuzată, PATCH ca editor pe fiecare câmp protejat al unui răspuns din mail → refuz fără urmă în jurnal, RPC-ul atomic (eșec la mijloc → nimic scris), idempotența (concurență, reluare, conflict), asociere înghețată după înregistrare, răspunsurile `email` preexistente neatinse, un mail neverificat nu apare în `ultimulRaspuns` / PV / export / `deja_raspuns`;
   - contractul de identitate (§2.4, punctul 4);
   - fluxurile INBOX / SENT: ambele cursoare expirate, întrerupere și reluare fără suprascriere reciprocă (cu rândul `sent` din fixture);
-  - `?dry=1`: nicio scriere în afara evenimentului, niciun `full` / `raw`; modul test: un mesaj real (nu `redari+test@`) nu e citit dincolo de `Delivered-To`;
-  - dedup după golire (`deja_golit`, tombstone), corp livrat prin `attachmentId`, domeniul captat (mesaj arhivat / în coș înainte de `404` → importat; spam numărat), trecerea test → producție și importul istoric cu mesaje sosite în timpul tranziției (fiecare o singură dată);
+  - `?dry=1`: nicio scriere în afara evenimentului, niciun `full` / `raw`; modul test (*implicit (l)*): un mesaj de la un expeditor extern către căsuța de test nu ajunge la citirea corpului (respins de regula Workspace), iar `redari@` nu e citită deloc în modul test;
+  - dedup după golire (`deja_golit`, tombstone), corp livrat prin `attachmentId`, domeniul captat (mesaj arhivat / în coș înainte de `404` → importat; spam numărat), trecerea test → producție și importul istoric cu mesaje sosite în timpul tranziției (fiecare o singură dată); limita exactă `internalDate ≥ data_start`: mesaje înainte / în timpul / după activare, apoi `404` → nimic de dinainte de `data_start` (Jak r5 P2-02); tombstone cu politica Vault prelungită → păstrat (§1.2);
+  - `red_raspunsuri.data` = `primit_la` (nu `now()`); răspuns mai vechi decât cel curent → refuz fără confirmare, cu confirmare centralizarea neschimbată, inclusiv pe importul istoric (§1.10);
   - retenția în dry-run și pe fixture-uri: `nou` de 120 de zile **nu** se golește (doar alertă), `neprocesabil` vechi nu se golește, `ignorat` (de admin, fără legătură juridică) la 90 de zile de la `ignorat_la` se golește, **`ignorat` refuzat pe un mesaj asociat / înregistrat / redeschis după asociere, iar la 91 de zile conținutul e intact (`neeligibil_asociat`)**, worker întârziat cu obiect `in_stergere` + claim preluat + blocaj (§1.8), propunere din formular neconfirmată la 180 de zile, blocaj cerut în timpul `in_golire` cu două procese de retenție intercalate, eșec după ștergerea parțială, `Date` retrodatat; după golire, **fiecare coloană** din inventar e verificată (NULL / HMAC);
   - callback OAuth: state expirat / refolosit / alt owner, scope în plus / lipsă, altă căsuță → revocare.
-- Probă pe prod: înainte de §2.7 doar **modul test** (`redari+test@`, mesaje trimise din căsuțe interne); după §2.7, `?dry=1` de owner, apoi activarea.
+- Probă pe prod: înainte de §2.7 doar **modul test**, pe căsuța de test separată (*implicit (l)*, mesaje trimise din căsuțe interne); după §2.7, `?dry=1` de owner pe `redari@`, apoi activarea.
 
 ### F1b — Câmpul de e-mail în formularul public (*implicit (a)*)
 - **Migrare: da**: `fn_red_raspuns_public` primește un câmp opțional `email`, validat, scris **doar** în `red_mail_adrese_propuse` (`sursa = formular_public`), cu rate limit-ul existent. **UI**: `RedariRaspunsPublic.jsx` + informarea.
@@ -601,12 +635,12 @@ Porți comune: branch din `origin/main`; GO Jakarinos + Copilot pe diff; DRY ver
 2. **Clienții OAuth**: Gmail API activat, ecran **Internal**, clienții Web „ERP Redări citire” și „ERP Redări trimitere” (redirect = URL-ul `redari-mail-oauth`), **în proiecte GCP separate** (*implicit (g)*, §7.1); în Admin Console, aplicațiile marcate de încredere, limitate la scope-urile lor.
 3. **Două ședințe de consimțământ** (*implicit (g)*): la activarea F1, Razvan, în ERP ca owner, apasă „Conectează citire”; la activarea F2, „Conectează trimitere” (butonul există doar după aplicarea F2). De fiecare dată Google cere logarea **lui** ca `redari@`. Tokenurile ajung direct în Vault. Clienții stau în proiecte GCP separate (*implicit (g)*).
 4. **Secretele** (doar nume):
-   - Edge Secrets: `REDARI_GMAIL_CITIRE_CLIENT_ID`, `REDARI_GMAIL_CITIRE_CLIENT_SECRET`, `REDARI_GMAIL_TRIMITERE_CLIENT_ID`, `REDARI_GMAIL_TRIMITERE_CLIENT_SECRET`;
-   - Vault: `REDARI_GMAIL_CITIRE_REFRESH_TOKEN`, `REDARI_GMAIL_TRIMITERE_REFRESH_TOKEN` (scrise de callback), `REDARI_MAIL_REF_SECRET`;
+   - Edge Secrets: `REDARI_GMAIL_CITIRE_CLIENT_ID`, `REDARI_GMAIL_CITIRE_CLIENT_SECRET`, `REDARI_GMAIL_TRIMITERE_CLIENT_ID`, `REDARI_GMAIL_TRIMITERE_CLIENT_SECRET`; pentru căsuța de test (*implicit (l)*): `REDARI_GMAIL_TEST_CLIENT_ID`, `REDARI_GMAIL_TEST_CLIENT_SECRET`;
+   - Vault: `REDARI_GMAIL_CITIRE_REFRESH_TOKEN`, `REDARI_GMAIL_TRIMITERE_REFRESH_TOKEN` (scrise de callback), `REDARI_GMAIL_TEST_REFRESH_TOKEN` (*implicit (l)*), `REDARI_MAIL_REF_SECRET`;
    - refolosit: `INTERN_EDGE_SECRET`; doar F4: `ANTHROPIC_API_KEY`;
    - **nu se refolosesc** `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN`.
-5. **DNS / Admin Console**: DKIM + DMARC (§0.4); `redari@` fără rutare / import / POP / redirecționare; retenție în Google Vault; DPA acceptat.
-6. **Juridic / Transgaz**: §2.7 + procedura de confirmare a adreselor (F1b).
+5. **DNS / Admin Console**: DKIM + DMARC (§0.4); `redari@` fără rutare / import / POP / redirecționare; retenție în Google Vault; DPA acceptat; căsuța de test separată (*implicit (l)*) cu regula care respinge expeditorii din afara `@gazpet.ro`.
+6. **Juridic / Transgaz**: §2.7 (inclusiv poarta GDPR a domeniului (k), punctul 6, înainte de F1) + procedura de confirmare a adreselor (F1b).
 7. **Registre**: rândurile în `public.automatizari` (citire, trimitere, oauth, fișier, retenție, F4) + secțiunea „E-mail Redări” în `registru_automatizari`, cu procedura de revocare.
 
 ## 5. Ce cere „da” separat
@@ -645,7 +679,8 @@ Regula (Jak r3 P3-02): comportamentul care depinde de o decizie din tabel **nu s
 | (h) | Aprobarea unui lot expiră după 7 zile, doar pentru `in_coada` | §1.3 | F2 | — |
 | (i) | Un mesaj asociat vreodată nu poate fi `ignorat`; `ignorat` doar pentru netriate / neasociate, de owner / admin, cu motiv | §1.8, §1.10 | F1 | — |
 | (j) | Convocarea pe e-mail nu intră în `red_convocari` și nu schimbă starea juridică a parcelei; stare proprie în `red_mail_mesaje` | §1.5 | F2 | — |
-| (k) | Domeniul captat = toată corespondența primită după activare (inclusiv arhivată / coș), spamul doar numărat; mesajele reale din modul test nu se importă | §1.1 | F1 | — |
+| (k) | Domeniul captat = toată corespondența primită după activare (inclusiv arhivată / coș), spamul doar numărat; mesajele reale din modul test nu se importă. **Plus validarea Juridic expresă** (§2.7 punctul 6) | §1.1, §2.7 | F1 | — (Razvan: —; Juridic: —) |
+| (l) | Modul test pe o căsuță de test separată (de ex. `redari-test@`), client OAuth de test, regulă Workspace care respinge expeditorii externi, în locul `redari+test@` | §1.1, §4 | F1 | — |
 
 ---
 
@@ -660,18 +695,20 @@ Regula (Jak r3 P3-02): comportamentul care depinde de o decizie din tabel **nu s
 | F1b | Procedura Juridic de confirmare a adreselor propuse | Text aprobat, metoda de verificare în enum, fără mail automat de confirmare |
 | F2 | Semantica lui `429` / `403 rateLimitExceeded` | Tratat ca `necunoscut` (tabelul §1.3); dacă documentația Google confirmă neacceptarea sigură, se poate trece prin owner la „repune în coadă” cu același `Message-ID`, după o reconciliere negativă |
 | F1 | Răspunsurile `canal = 'email'` preexistente | Numărate și listate de preflight; dacă > 0, Razvan decide (lăsate / `manual_verificat`) înainte de apply, ca operație pe date reale |
-| F1 | Modul test pe căsuța reală (`Delivered-To` al mesajelor reale citit înainte de §2.7) | Acceptat de Juridic; altfel o căsuță de test separată, iar codul are aceeași cale de test |
+| F1 | Modul test pe căsuța de test separată (*implicit (l)*, înlocuiește `redari+test@` și citirea `Delivered-To` pe căsuța reală) | Căsuța creată, client OAuth de test conectat, regula Workspace activă (captură fără PII); test: mesaj extern → nu ajunge la citirea corpului; codul are aceeași cale ca în producție |
+| F1 (înainte de start) | Poarta GDPR pentru domeniul (k) (§2.7 punctul 6) | Validarea expresă a Juridic (domeniul, utilizarea exclusivă și informarea — varianta de la R6-02, mesajele străine, responsabilul de triere cu escaladare la 60 de zile), notată în §7.1 la (k) |
+| F1 | Durata maximă a unui worker Supabase (perioada de grație, §1.8) | Valoarea citită din documentația Supabase pentru planul proiectului și notată aici; grația = valoarea + 10 minute, de la `stergere_autorizata_la` |
 | F1 / F2 | Scope-urile întoarse de Google | Fixture-uri reale ale endpoint-ului de token (callback + refresh, pentru ambii clienți); normalizarea acoperă doar echivalențele din lista închisă; orice altceva → oprire |
 | F1 | Temeiul păstrării metadatelor de audit | Confirmat de Juridic (decizia (f)); trecut în informare |
 | F2 | `X-Gazpet-Redari` păstrat în copia din SENT; corpul decodat din SENT dă aceeași formă canonică | Test pe o căsuță internă: antetul există, iar hash-ul recalculat din SENT = `mesaj_sha256` (Gmail nu transformă corpurile `base64`) |
 | F2 | Limitele Google la zi | Citite pe pagina oficială și notate; plafoanele proprii rămân sub ele |
 | F2 | Convocări `canal = 'email'` preexistente în `red_convocari` | Preflight-ul le numără (așteptat 0); dacă > 0, Razvan decide înainte de apply, ca operație pe date reale |
-| F1 | Termenul politicii Google Vault pentru `redari@` | Fixat de Razvan în Admin Console și notat; din el se calculează viața tombstone-urilor din `red_mail_dedup` (termen + 30 de zile) |
+| F1 | Termenul politicii Google Vault pentru `redari@` | Fixat de Razvan în Admin Console și notat (informare, aliniere cu retenția). **Nu** mai stabilește viața tombstone-urilor din `red_mail_dedup` (Jak r5 P2-01): acestea se șterg doar după verificarea de citire în doi pași (§1.2), cu mecanismul decis la R6-01; test cu politica Vault prelungită |
 | F1 | Fără filtre Gmail care mută / șterg pe `redari@` | Captură din Admin Console / setările căsuței atașată la PR (fără PII); alerta de spam numărat funcționează pe fixture |
 
 ---
 
-## 9. Tabelul de rezolvare (r1 → r2 → r3 → r4 → r5)
+## 9. Tabelul de rezolvare (r1 → r2 → r3 → r4 → r5 → r6)
 Rezolvările marcate „cond. (x)” depind de o decizie implicită din §7.1 și se implementează doar după confirmarea ei.
 | Runda / punct | Rezolvare |
 |---|---|
@@ -718,7 +755,7 @@ Rezolvările marcate „cond. (x)” depind de o decizie implicită din §7.1 ș
 | r3 Jak P2-04 revocarea comună în același proiect GCP | §2.3: proiecte GCP separate — cond. (g); varianta „același proiect” doar explicit, cu oprirea și reconectarea ambelor fluxuri |
 | r3 Jak P2-05 reconcilierea nu verifică corpul | §1.3: forma canonică (RFC 8785, NFC, `\n`, fără `X-Gazpet-Redari` / delimitatori); §1.4: hash recalculat din copia SENT, manifest complet de atașamente, `h=` doar indiciu; SENT: `trimis_modificat` / `trimis_duplicat`; test cu corp modificat |
 | r3 Jak P2-06 starea comună a două cursoare | §1.1: `red_mail_flux` cu cheie `(casuta, flux)`, lease și checkpoint pe flux; rândul `sent` creat la F2, fără scanare retroactivă; test cu ambele cursoare expirate |
-| r3 Jak P3-01 contractul `?dry=1` | §1.1: operații permise / interzise; dry pe căsuța reală doar după §2.7; modul test `redari+test@` (varianta cu căsuță separată în §8) |
+| r3 Jak P3-01 contractul `?dry=1` | §1.1: operații permise / interzise; dry pe căsuța reală doar după §2.7; modul test `redari+test@` (varianta cu căsuță separată în §8). **Înlocuit în r6** de căsuța de test separată (*implicit (l)*, r5 Jak P2-03) |
 | r3 Jak P3-02 deciziile implicite înaintea feliei | Introducere + §7.1: tabel cu felia și coloana „confirmat (data, de către)”; regula „nu se implementează până la confirmare”; în §9 rezolvările dependente sunt marcate „cond.” |
 | **r3 Cop P1-01** ștergerea automată a netriatelor | §1.8: nicio golire automată pentru `nou` / `neprocesabil` / asociate / trimise; automat doar `ignorat` (om + motiv), la 90 de zile de la marcare; alertă la 60 de zile; asociatele la termen doar cu „da”; §2.4 (b) actualizat — cond. (e) |
 | r3 Cop P2-01 fereastra blocajului legal | §1.8: lease global de retenție, claim exclusiv per mesaj, ștergere secvențială cu `in_stergere`, blocaj `cerut` → `activ`; garanția „cel mult obiectul deja în ștergere”; test cu două procese + admin |
@@ -734,10 +771,18 @@ Rezolvările marcate „cond. (x)” depind de o decizie implicită din §7.1 ș
 | r4 Jak P2-01 claim expirat vs. blocaj | §1.8: cel mult un obiect `in_stergere` per mesaj (sub `FOR UPDATE`), clarificarea obiectului după grație înainte de orice altă autorizare, `in_stergere` în enum; test worker întârziat + claim preluat + blocaj |
 | r4 Jak P2-02 / Cop P2-02 dedup după golire | §1.2: `gmail_id_hmac` de la prima ingestie, `UNIQUE (casuta, gmail_id_hmac)`, `INSERT … ON CONFLICT` înaintea manifestului, `deja_golit` fără descărcare, versiuni de cheie, tombstone `red_mail_dedup` cât trăiește originalul în Gmail; teste concurente |
 | r4 Jak P2-03 corpul livrat prin `attachmentId` | §1.1: părțile de corp descărcate separat (2 MB), decodate ca text, nestocate ca fișier; fixture-uri `text/plain` + `text/html` |
-| r4 Jak P2-04 trecerea test → producție, importul istoric | §1.1: `fn_red_mail_trece_productie` atomic (cursor recapturat, `data_start` nou, mesajele reale din test neimportate — cond. (k)); importul = flux `import` separat, filtrul `data_import_de_la ≤ internalDate < data_start`; teste cu mesaje în tranziție |
+| r4 Jak P2-04 trecerea test → producție, importul istoric | §1.1: `fn_red_mail_trece_productie` atomic (cursor recapturat, `data_start` nou, mesajele reale din test neimportate — cond. (k)); importul = flux `import` separat, filtrul `data_import_de_la ≤ internalDate < data_start`; teste cu mesaje în tranziție. **r6**: trecerea = prima activare a `redari@` (căsuța de test separată, r5 Jak P2-03) |
 | r4 Jak P2-05 / Cop P2-03 mesaje arhivate înainte de recuperare | §1.1: domeniul captat = toată corespondența primită (fără filtru INBOX în istoric, recuperare cu `includeSpamTrash`, fără `in:inbox`), spam numărat, precondiția „fără filtre care mută / șterg”; test arhivat înainte de `404` — cond. (k) |
 | r4 Jak P2-06 kill-switch / opt-out verificate prea devreme | §1.3: `apel_incepe` re-verifică kill-switch, opt-out, `extern_permis`, starea lotului sub aceeași ordine de lock; `in_apel` nu se poate retrage (declarat); test cu barieră |
 | r4 Jak P2-07 / Cop P3-01 identificatori în evenimente / jurnal | §1.8: evenimentele doar cu `gmail_id_hmac` (metadate pseudonimizate) și termen de ștergere; `red_jurnal` cu identificatorii angajaților, regulă existentă; proveniența minimă (`red_mail_raspuns_sursa` cu `gmail_redari_sters`) păstrată cât există răspunsul |
 | r4 Jak P3-01 lista pozitivă vs. politica păstrată | §2.1: lista = informația provenită din e-mail; restul coloanelor ca la orice răspuns; testul aliniat |
 | r4 Jak P3-02 formulări depășite | Introducere („o singură ședință” marcată ca înlocuită), §4 („proiecte GCP separate”), §9 (regula 60 / 90 pentru netriate marcată ca înlocuită) |
 | r4 Cop P3-02 idempotența răspunsurilor manuale | §1.10: `operatie_id` UUID generat înainte de primul apel, `UNIQUE` + `cerere_sha256`, conflict la argumente diferite; test timeout + reluare |
+| r5 Jak P2-01 tombstone expirat calendaristic | §1.2: tombstone fără expirare, șters doar după verificarea de citire (`404`, doi pași la 30 de zile); test cu politica Vault prelungită; §8 (rândul Vault). Mecanismul fără `gmail_id` brut: deschis (R6-01), până atunci niciun tombstone nu se șterge |
+| r5 Jak P2-02 recuperarea admite mesaje de dinainte de activare | §1.1: `data_start` fixat înaintea capturii `historyId`, limita exactă `internalDate ≥ data_start` (suprapunerea doar în `after:`), scanare de recuperare `activare` pentru intervalul dintre cele două momente; test înainte / în timpul / după activare + `404` |
+| r5 Jak P2-03 modul test fără expeditor intern impus | §1.1, §2.2, §4, §3 F1, §8: căsuță de test separată, client OAuth de test, regulă Workspace pentru expeditorii externi; `redari+test@` și citirea `Delivered-To` scoase — cond. (l) |
+| r5 Jak P2-04 `red_raspunsuri.data` fără contract | §1.10: `data` = `primit_la`, pus de RPC; răspuns mai vechi decât cel curent → refuz până la `confirma_mai_vechi`, centralizarea neschimbată; test pe importul istoric. Data la RPC-ul manual: deschis (R6-03) — cond. (d) |
+| r5 Jak P2-05 poarta GDPR pentru domeniul (k) | §2.7 punctul 6 (condiție înainte de F1), §1.8 (responsabil de triere, escaladare la 60 de zile, alerta ≠ retenție), §7.1 (k), §8. Mesajul automat de răspuns: deschis (R6-02) — cond. (k) |
+| r5 Jak P2-06 inventarul schemei F1 | §1.12 nou: tabele, enumuri complete (`flux` cu `import`, `recuperare_tip`, `scop`), chei, `red_mail_dedup`, `mod_test`; §3 F1: migrarea = inventarul, postcondiții punct cu punct |
+| r5 Jak P3-01 grația la ștergere | §1.8: grația = durata maximă a worker-ului Supabase + 10 min, de la `stergere_autorizata_la`; valoarea în §8 |
+| r5 Jak P3-02 fișele a–e | §2.4: fișa `fn_red_raspuns_public` extins (F1b); fișa citirii cu `trimis_la` în `red_mail_mesaje`, nu `data_expediere` |
