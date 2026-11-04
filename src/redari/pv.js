@@ -29,7 +29,8 @@ export function propuneLucrari(articolDeviz) {
 }
 // L3 / D5 (04.11.2026): valori implicite la crearea PV A / PV B, ca PV-ul să se poată genera fără tastare când datele există.
 // Sunt propuneri editabile; garda verificaDatePvA / verificaDatePvB rămâne neschimbată. Se completează DOAR câmpurile goale.
-// Starea terenului se propune din lucrările din deviz (aceeași sursă ca propuneLucrari); fără potrivire -> „nivelat”.
+// Starea terenului se propune din lucrările din deviz (aceeași sursă ca propuneLucrari); fără potrivire -> rămâne goală și garda cere bifa
+// (decizie conservatoare 04.11.2026: PV-ul e document juridic, fără rezervă „nivelat”).
 export const STARE_DIN_LUCRARI = { nivelare: 'nivelat', sol_fertil: 'strat_vegetal', insamantare: 'insamantat', gard: 'gard_drum', drum: 'gard_drum' }
 const ZILE_SESIUNE_UAT = ['sesiune_zi1', 'sesiune_zi2', 'sesiune_zi3']
 export function loculImplicit({ uat = {}, parcela = {}, mod = 'sediu' } = {}) {
@@ -42,7 +43,7 @@ const stareGoala = st => !st || (!STARI_TEREN.slice(0, -1).some(k => st[k] === t
 export function propuneStareTeren(lucrari) {
   const st = {}
   for (const [k, v] of Object.entries(STARE_DIN_LUCRARI)) if (lucrari?.[k] === true) st[v] = true
-  return Object.keys(st).length ? st : { nivelat: true }
+  return Object.keys(st).length ? st : null
 }
 // raspuns = ultimul răspuns al deținătorului (doar PV A). laCreare: data_pv vine din RPC (azi) și poate fi înlocuită cu ziua aleasă.
 export function valoriImplicitePv({ tip = 'A', pv = {}, uat = {}, parcela = {}, raspuns = null, laCreare = false } = {}) {
@@ -50,7 +51,10 @@ export function valoriImplicitePv({ tip = 'A', pv = {}, uat = {}, parcela = {}, 
   const patch = {}
   const optiune = tip === 'A' ? raspuns?.optiune : null
   if (pv.lucrari == null) patch.lucrari = propuneLucrari(parcela.articol_deviz)
-  if (stareGoala(pv.stare_teren)) patch.stare_teren = propuneStareTeren(patch.lucrari ?? pv.lucrari)
+  if (stareGoala(pv.stare_teren)) {
+    const st = propuneStareTeren(patch.lucrari ?? pv.lucrari)
+    if (st) patch.stare_teren = st
+  }
   if (tip === 'A' && !['sediu', 'teren'].includes(pv.constatare_mod)) patch.constatare_mod = optiune === 'constatare_teren' ? 'teren' : 'sediu'
   if (!plin(pv.locul)) {
     const locul = loculImplicit({ uat, parcela, mod: patch.constatare_mod ?? pv.constatare_mod ?? 'sediu' })

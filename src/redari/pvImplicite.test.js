@@ -26,9 +26,16 @@ describe('valoriImplicitePv', () => {
     expect(loculImplicit({ uat:{ nume:'X' }, parcela:{ sat:'S' }, mod:'teren' })).toBe('Pe teren, sat S, UAT X')
     expect(valoriImplicitePv({ tip:'A', pv:pvNou(), uat:{}, parcela:{} })).not.toHaveProperty('locul')
   })
-  it('stare: fără potrivire în deviz -> nivelat; gard și drum -> gard / drum refăcut', () => {
-    expect(propuneStareTeren(null)).toEqual({ nivelat:true })
+  it('stare: fără potrivire în deviz -> goală, garda cere bifa; gard și drum -> gard / drum refăcut', () => {
+    expect(propuneStareTeren(null)).toBeNull()
+    expect(propuneStareTeren({ arat:true })).toBeNull()
     expect(propuneStareTeren({ gard:true, drum:true })).toEqual({ gard_drum:true })
+    const pv = pvNou()
+    const p = valoriImplicitePv({ tip:'A', pv, uat:uat(), parcela:{ ...parcela(), articol_deviz:'Lucrari diverse' }, laCreare:true })
+    expect(p).not.toHaveProperty('stare_teren')
+    Object.assign(pv, p)
+    expect(verificaDatePvA({ proiect:{ contract_nr:'1', contract_data:'2026-01-01' }, uat:uat(), parcela:parcela(), detinator:{ nume:'FICTIV' }, pv }))
+      .toEqual(['starea terenului'])
   })
   it('participă la o zi a UAT-ului -> data PV = ziua aleasă (la creare); zi străină de UAT -> ignorată', () => {
     const r = { optiune:'particip', zi_sesiune_aleasa:'2026-11-21' }
