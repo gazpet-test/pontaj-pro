@@ -13,7 +13,7 @@ import { etichetaRolFisier, ACCEPT_FISIER_CORESP, roluriPermise, valideazaFisier
 import { STARI_CORESPONDENTA, etichetaStareCoresp, culoareStareCoresp, COL_CORESPONDENTA, stariPermise, poateAproba, urmatorul,
   valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran, stariInFormular, stareEfectiva } from '../corespondenta.js'
 import { citesteFisiereKeyset } from '../corespondentaFisiere.js'
-import { COL_MAIL_CORESP, motivFaraMail, ultimulMail, etichetaStareMail, mesajRezultatMail, OFFICE } from '../corespondentaMail.js'
+import { COL_MAIL_CORESP, motivFaraMail, ultimulMail, etichetaStareMail, mesajRezultatMail, OFFICE, intentieNoua, stareMailRand } from '../corespondentaMail.js'
 
 const GOL = { cod: '', ordine: '', destinatar: '', subiect: '', expeditor: '', documente: '', depinde_de: '', stare: 'draft', trimis_la: '', nr_inregistrare: '', observatii: '',
   destinatar_email: '', mail_subiect: '', mail_text: '', expeditor_email: '' }
@@ -32,6 +32,8 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
   const [seIncarca, setSeIncarca] = useState(true)    // Jakarinos r1 J-P1-1: cât timp citirea e în curs, aprobarea e blocată
   const [orfaneRand, setOrfaneRand] = useState(null)  // { randId, lista|null, eroare } — obiecte urcate dar neînregistrate (doar admin/editor)
   const generatie = useRef(0)
+  const intentiiRef = useRef(new Map())   // r2: randId → intenția de mail în curs / neconfirmată din acest ecran (intentie_id, versiune, fisier_id)
+  const [, setIntentiiTick] = useState(0)
   const genOrfane = useRef(0)          // Jakarinos r2 J-P3-4 / Copilot C-P3-01: generație separată pentru citirea orfanilor
   const fisPentruRef = useRef(null)    // rândul cu modalul deschis, pentru verificarea rezultatelor vechi
   // Jakarinos r2 J-P2-2: încercarea activă { id, randId, fisier, path, sha, rol, observatii, stare } — calea păstrată ÎNAINTE de upload.
@@ -72,7 +74,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     } catch (e) { if (curent()) { setRanduri([]); setFisiere([]); setMailuri([]); setEroare(mesajEroareCoresp(e)) } }
     finally { if (curent()) setSeIncarca(false) }
   }
-  useEffect(() => { proiectCurent.current = proiect.id; sesiune.current.noua(); setRanduri(null); setFisiere([]); setMailuri([]); setFisPentru(null); setOrfaneRand(null); incercari.current.reseteaza(); genOrfane.current++; setEditat(null); setLucru(false); incarca(); return () => { generatie.current++; sesiune.current.noua() } }, [proiect.id])
+  useEffect(() => { proiectCurent.current = proiect.id; sesiune.current.noua(); setRanduri(null); setFisiere([]); setMailuri([]); intentiiRef.current.clear(); setFisPentru(null); setOrfaneRand(null); incercari.current.reseteaza(); genOrfane.current++; setEditat(null); setLucru(false); incarca(); return () => { generatie.current++; sesiune.current.noua() } }, [proiect.id])
 
   const deschide = rand => setEditat({ rand, f: rand ? { ...GOL, ...Object.fromEntries(Object.entries(rand).map(([k, v]) => [k, v ?? ''])) } : { ...GOL } })
 
@@ -117,23 +119,32 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     } catch (e) { if (!expirat()) { show(mesajEroareCoresp(e), 'error'); await incarca() } } finally { if (!expirat()) setLucru(false) }
   }
 
-  // 20261130f: „📧 Pregătește mailul” — edge redari-coresp-mail (JWT-ul utilizatorului). Poarta reală e în BD (RPC): admin/editor, rând aprobat cu PDF aprobat,
-  // eTag neschimbat, câmpuri complete, @gazpet.ro, 60 s, 20/zi/proiect. Un rezultat „necunoscut” NU se reîncearcă singur.
-  const pregatesteMail = async rand => {
+  // 20261130f: „📧 Pregătește mailul” — edge redari-coresp-mail (JWT-ul utilizatorului). Poarta reală e în BD (RPC): admin/editor, versiunea și fișierul
+  // VĂZUTE (J-P2-3), rând aprobat cu PDF aprobat, eTag neschimbat, câmpuri complete, @gazpet.ro, 60 s, 20/zi/proiect.
+  // r2 (J-P2-2 / C-P2-01): intenție durabilă — intentie_id generat la primul click și păstrat (în memorie + în urmă) până la un rezultat definitiv.
+  // Un rezultat neconfirmat NU se retrimite automat: „Reia aceeași încercare” (aceeași cheie Resend) sau, separat, „Pregătește încă un mail” (alt mail).
+  const pregatesteMail = async (rand, { reluare = null, alt = false } = {}) => {
     if (lucru || seIncarca) return
     const fa = fisiere.find(x => x.id === rand.aprobat_fisier_id) || null
     const motiv = motivFaraMail(rand, { poateScrie, fisierAprobat: fa })
     if (motiv) { show(motiv, 'error'); return }
-    if (!window.confirm(`Pregătești mailul pentru ${rand.cod}?\n\nPlatforma trimite un mail INTERN la ${rand.expeditor_email} (CC ${OFFICE}) cu:\n• adresa instituției: ${rand.destinatar_email}\n• subiectul: ${rand.mail_subiect}\n• textul mailului\n• PDF-ul aprobat: ${numeFisier(fa)}\n\nExpeditorul îl copiază într-un mail NOU și îl trimite el. Nimic nu pleacă în afara firmei.`)) return
+    const intro = reluare ? `Reiei ACEEAȘI încercare pentru ${rand.cod} (aceeași cheie: dacă mailul plecase deja, Resend nu îl trimite a doua oară).`
+      : alt ? `Pregătești ÎNCĂ UN mail pentru ${rand.cod}.\n\n⚠ Ultima încercare are rezultat neconfirmat: dacă a plecat deja, acesta POATE PRODUCE UN DUPLICAT. Verifică întâi inboxul expeditorului.`
+      : `Pregătești mailul pentru ${rand.cod}?`
+    if (!window.confirm(`${intro}\n\nPlatforma trimite un mail INTERN la ${rand.expeditor_email} (CC ${OFFICE}) cu:\n• adresa instituției: ${rand.destinatar_email}\n• subiectul: ${rand.mail_subiect}\n• textul mailului\n• PDF-ul aprobat: ${numeFisier(fa)}\n\nExpeditorul îl copiază într-un mail NOU și îl trimite el. Nimic nu pleacă în afara firmei.`)) return
+    const intentie = reluare || intentieNoua(rand)
+    if (!intentie.intentie_id) { show('Browserul nu poate genera identificatorul încercării (crypto.randomUUID); actualizează browserul.', 'error'); return }
     const expirat = sesiune.current.captureaza()
+    intentiiRef.current.set(rand.id, intentie); setIntentiiTick(t => t + 1)   // păstrată ÎNAINTE de apel: un rezultat ambiguu se reia cu aceeași intenție
     setLucru(true)
     try {
-      const rez = await supabase.functions.invoke('redari-coresp-mail', { body: { corespondenta_id: rand.id } })
+      const rez = await supabase.functions.invoke('redari-coresp-mail', { body: { corespondenta_id: rand.id, intentie_id: intentie.intentie_id, versiune: intentie.versiune, fisier_id: intentie.fisier_id } })
       const msg = await mesajRezultatMail(rez)
+      if (msg.definitiv && intentiiRef.current.get(rand.id)?.intentie_id === intentie.intentie_id) { intentiiRef.current.delete(rand.id); setIntentiiTick(t => t + 1) }
       if (expirat()) return
-      show(msg.ok ? msg.text : (msg.necunoscut ? '⚠ ' : '') + 'Pregătește mailul: ' + msg.text, msg.ok ? 'success' : 'error')
+      show(msg.ok ? msg.text : '⚠ Pregătește mailul: ' + msg.text, msg.ok ? 'success' : 'error')
       await incarca()
-    } catch (e) { if (!expirat()) { show('Pregătește mailul: ' + (e?.message || String(e)), 'error'); await incarca() } } finally { if (!expirat()) setLucru(false) }
+    } catch (e) { if (!expirat()) { show('⚠ Pregătește mailul: rezultat neconfirmat — verifică inboxul expeditorului. (' + (e?.message || String(e)) + ')', 'error'); await incarca() } } finally { if (!expirat()) setLucru(false) }
   }
 
   // Orfanii rândului (obiecte urcate dar neînregistrate). Doar admin / editor (listarea cere red_storage_sel). Rezultatul se acceptă doar dacă generația,
@@ -320,7 +331,9 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
                 <td style={{ ...S.td, whiteSpace:'nowrap' }}>
                   <button style={{ ...S.btnS, marginRight:6 }} onClick={() => setFisPentru(r.id)} title="Fișierele corespondenței">📎 {fisiereRand(fisiere, r.id).length}</button>
                   {poateAproba(r, esteOwner) && <BtnAproba fa={fisierDeAprobat(fisiereRand(fisiere, r.id))} lucru={lucru || seIncarca} onClick={() => aproba(r)} />}
-                  {poateScrie && r.stare === 'aprobat' && <BtnMail motiv={motivFaraMail(r, { poateScrie, fisierAprobat: fisiere.find(x => x.id === r.aprobat_fisier_id) || null })} lucru={lucru || seIncarca} onClick={() => pregatesteMail(r)} />}
+                  {poateScrie && r.stare === 'aprobat' && <BtnMail motiv={motivFaraMail(r, { poateScrie, fisierAprobat: fisiere.find(x => x.id === r.aprobat_fisier_id) || null })} lucru={lucru || seIncarca}
+                    sm={stareMailRand({ ultim: ultimulMail(mailuri, r.id), pending: intentiiRef.current.get(r.id), profileId: profile?.id })}
+                    onNou={() => pregatesteMail(r)} onReia={rel => pregatesteMail(r, { reluare: rel })} onAlt={() => pregatesteMail(r, { alt: true })} />}
                   {poateScrie && <button style={S.btnS} onClick={() => deschide(r)} disabled={lucru}>Editează</button>}
                 </td>
               </tr>))}</tbody>
@@ -374,8 +387,16 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
 const numeFisier = f => f ? (f.nume_original || String(f.path || '').split('/').pop()) : ''
 
 // 20261130f: „📧 Pregătește mailul” — vizibil admin/editor pe rânduri aprobate; dezactivat cu motivul în tooltip când lipsește ceva.
-export function BtnMail({ motiv, lucru, onClick }) {
-  return <button style={{ ...S.btnS, borderColor:G.blue, color:G.blue, marginRight:6, opacity: motiv ? .45 : 1, cursor: motiv ? 'not-allowed' : 'pointer' }} onClick={onClick}
+export function BtnMail({ motiv, lucru, sm, onNou, onReia, onAlt }) {
+  const st = (activ, culoare) => ({ ...S.btnS, borderColor:culoare, color:culoare, marginRight:6, opacity: activ ? 1 : .45, cursor: activ ? 'pointer' : 'not-allowed' })
+  if (sm?.neconfirmat) return (
+    <span style={{ display:'inline-flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
+      <span style={{ fontSize:11, color:G.yellow, marginRight:4 }} title="Ultima încercare are rezultat neconfirmat — verifică inboxul expeditorului">⚠ neconfirmat — verifică inboxul</span>
+      <button style={st(!motiv && !!sm.reluare, G.blue)} disabled={lucru || !!motiv || !sm.reluare} onClick={() => onReia(sm.reluare)}
+        title={motiv || (sm.reluare ? 'Aceeași încercare, aceeași cheie de idempotență: dacă mailul plecase, nu se trimite a doua oară' : 'Doar cel care a pornit încercarea o poate relua')}>↻ Reia aceeași încercare</button>
+      <button style={st(!motiv, G.yellow)} disabled={lucru || !!motiv} onClick={onAlt} title={motiv || 'Alt mail (intenție nouă) — poate produce un duplicat'}>＋ Pregătește încă un mail</button>
+    </span>)
+  return <button style={st(!motiv, G.blue)} onClick={onNou}
     disabled={lucru || !!motiv} title={motiv || 'Trimite un mail INTERN expeditorului (CC office@) cu adresa, subiectul, textul și PDF-ul aprobat'}>📧 Pregătește mailul</button>
 }
 // „pregătit de X la Y” din ultimul rând al urmei

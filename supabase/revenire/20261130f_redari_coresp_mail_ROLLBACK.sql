@@ -2,7 +2,7 @@
 -- Ca la 20261130e: revenirea NU sterge date. Tabelul red_corespondenta_mailuri (cu randuri, indecsi, constrangeri) si valorile coloanelor noi
 -- (id, cod, destinatar_email, mail_subiect, mail_text, expeditor_email din red_corespondenta) se muta / copiaza intr-o schema de arhiva proprie
 -- (redari_retras_<data_ora>), fara acces pentru aplicatie. FK-urile arhivei spre tabelele active se scot (valorile raman), ca arhiva sa nu blocheze
--- tabelele active. fn_red_corespondenta_reguli() revine TEXTUAL la versiunea din 20261130e (md5 pe corp 0705e04f3e26656c2116b6d1b9f87c6e, verificat),
+-- tabelele active. RPC-urile (inclusiv verificatorul baseline) se scot. fn_red_corespondenta_reguli() revine TEXTUAL la versiunea din 20261130e (md5 pe corp 0705e04f3e26656c2116b6d1b9f87c6e, verificat),
 -- apoi coloanele noi se scot, iar RPC-urile si triggerul urmei se scot. red_jurnal ramane neatins. Edge function-ul redari-coresp-mail se opreste separat
 -- (fara RPC-uri raspunde cu eroare; nu trimite nimic).
 -- Numele schemei de arhiva si numaratorile trec intre pasi prin GUC-uri LOCALE tranzactiei (set_config(..., true)), verificate in pasul 2.
@@ -136,12 +136,13 @@ BEGIN
   FOREACH v_fk IN ARRAY ARRAY['red_corespondenta_mailuri_coresp_fk', 'red_corespondenta_mailuri_proiect_fk', 'red_corespondenta_mailuri_fisier_fk'] LOOP
     EXECUTE format('ALTER TABLE %I.red_corespondenta_mailuri DROP CONSTRAINT %I', v_schema, v_fk);
   END LOOP;
-  DROP FUNCTION public.fn_red_coresp_mail_incepe(uuid);
+  DROP FUNCTION public.fn_red_coresp_mail_incepe(uuid, uuid, integer, uuid);
   DROP FUNCTION public.fn_red_coresp_mail_inchide(uuid, text, text, text);
   DROP FUNCTION public.fn_red_coresp_mail_inainte();
+  DROP FUNCTION public.fn_red_coresp_mail_verifica_baza(text);
   IF to_regclass('public.red_corespondenta_mailuri') IS NOT NULL OR to_regclass(format('%I.red_corespondenta_mailuri', v_schema)) IS NULL
-     OR to_regprocedure('public.fn_red_coresp_mail_incepe(uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_coresp_mail_inchide(uuid,text,text,text)') IS NOT NULL
-     OR to_regprocedure('public.fn_red_coresp_mail_inainte()') IS NOT NULL
+     OR to_regprocedure('public.fn_red_coresp_mail_incepe(uuid,uuid,integer,uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_coresp_mail_inchide(uuid,text,text,text)') IS NOT NULL
+     OR to_regprocedure('public.fn_red_coresp_mail_inainte()') IS NOT NULL OR to_regprocedure('public.fn_red_coresp_mail_verifica_baza(text)') IS NOT NULL
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_corespondenta'
                  AND column_name IN ('destinatar_email', 'mail_subiect', 'mail_text', 'expeditor_email'))
      OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_corespondenta_reguli()'::regprocedure) IS DISTINCT FROM '0705e04f3e26656c2116b6d1b9f87c6e'
