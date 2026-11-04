@@ -148,11 +148,40 @@ export function dataLimitaConvocare(zi1) {
   return d.toISOString().slice(0, 10)
 }
 
-/** Termenul afișării la primărie (plan pct. 4.3): `depasit` = afișarea începe DUPĂ data-limită. Fără ambele date nu se judecă. */
+// juridic#031 (04.11.2026, decis de Răzvan): pe lângă limita fermă (ziua 1 − 11, de mai sus), ținta RECOMANDATĂ = ziua 1 − 15,
+// pentru cele 3–5 zile cât livrează poșta. Doar avertisment NON-blocant (fără confirmare la salvare / aplicare), aceeași regulă pentru
+// expedierea convocărilor și pentru începutul afișării. Constanta e singura sursă a țintei (UAT, plicuri, import poștal).
+export const TERMEN_RECOMANDAT_ZILE = 15
+export const MESAJ_TERMEN_RECOMANDAT = `recomandat cu cel puțin ${TERMEN_RECOMANDAT_ZILE} zile înainte, pentru livrarea poștei`
+
+/** Ținta recomandată 'AAAA-LL-ZZ' = ziua 1 minus TERMEN_RECOMANDAT_ZILE zile calendaristice; null fără ziua 1 validă (ca dataLimitaConvocare). */
+export function dataTintaRecomandata(zi1) {
+  const z = normalizeazaValoare(zi1)
+  if (!z || !dataValida(z)) return null
+  const d = new Date(z + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() - TERMEN_RECOMANDAT_ZILE)
+  return d.toISOString().slice(0, 10)
+}
+
+/** `true` când data dată (validă) e după ținta recomandată, dar NU și după limita fermă (acolo vorbește avertismentul de termen). */
+export function subTintaRecomandata(zi1, data) {
+  const tinta = dataTintaRecomandata(zi1), limita = dataLimitaConvocare(zi1), d = normalizeazaValoare(data)
+  return !!(tinta && limita && d && dataValida(d) && d > tinta && !(d > limita))
+}
+
+/** Termenul afișării la primărie (plan pct. 4.3): `depasit` = afișarea începe DUPĂ data-limită; `subRecomandat` = după ținta
+ *  recomandată (ziua 1 − 15), dar înainte de limită. Fără ambele date nu se judecă. */
 export function termenAfisare(uat) {
   const zi1 = normalizeazaValoare(uat?.sesiune_zi1), start = normalizeazaValoare(uat?.afisare_data_start)
-  const limita = dataLimitaConvocare(zi1)
-  return { zi1, start, limita, depasit: !!(limita && start && dataValida(start) && start > limita) }
+  const limita = dataLimitaConvocare(zi1), tinta = dataTintaRecomandata(zi1)
+  return { zi1, start, limita, tinta, depasit: !!(limita && start && dataValida(start) && start > limita), subRecomandat: subTintaRecomandata(zi1, start) }
+}
+
+/** Mesajul NON-blocant pentru o afișare care începe după ținta recomandată (null când nu e cazul). */
+export function mesajTintaAfisare(t) {
+  if (!t?.subRecomandat) return null
+  return `Afișarea la primărie începe pe ${dataRo(t.start)}, după ținta recomandată ${dataRo(t.tinta)} (ziua 1: ${dataRo(t.zi1)}) — ` +
+    `${MESAJ_TERMEN_RECOMANDAT}; limita fermă rămâne ${dataRo(t.limita)}`
 }
 
 /** Mesajul complet pentru un termen de afișare depășit (formularul UAT, adresa UAT). */
@@ -250,6 +279,13 @@ export function mesajTermenConstatare(t) {
 export function avertismenteUat(form) {
   const t = termenAfisare(form)
   return t.depasit ? [mesajTermenAfisare(t)] : []
+}
+
+/** Recomandările unui UAT (juridic#031, ținta ziua 1 − 15): doar informare, NU intră în confirmarea la salvare și nu schimbă
+ *  „Gata de convocare?”. Separate de avertismenteUat ca să nu ceară confirmare. */
+export function recomandariUat(uat) {
+  const m = mesajTintaAfisare(termenAfisare(uat))
+  return m ? [m] : []
 }
 
 /** Erorile unui UAT (în română), aceleași reguli ca CHECK-urile din BD: zile în ordine, termen înaintea zilei 1, afișare ordonată.

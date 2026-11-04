@@ -4,7 +4,7 @@ import { descarcaBlob } from '../docx.js'
 import { sesiuneEcran } from '../corespondenta.js'
 import { propune, aplica } from '../importPostal.js'
 import { grupeazaPentruPlicuri, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire,
-  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita } from '../plicuri.js'
+  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita, textTintaExpediere, recomandareExpediere } from '../plicuri.js'
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
@@ -119,7 +119,8 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
   // coloana „AWB / expediat”: neexpediat → data-limită; expediat după limită → semnalat (plan pct. 4.2)
   const textExpediat = p => {
     const baza = `${p.awb || '-'} / ${fmtDate(p.data_expediere)}`
-    if (p.data_expediere) return termenExpediere(uatDe(p.uat_id), p.data_expediere).depasit ? `${baza} ⚠ după termen` : baza
+    if (p.data_expediere) return termenExpediere(uatDe(p.uat_id), p.data_expediere).depasit ? `${baza} ⚠ după termen`
+      : recomandareExpediere(uatDe(p.uat_id), p.data_expediere) ? `${baza} · după ținta recomandată` : baza
     return p.stare === 'activ' ? `${baza} · ${textTermenExpediere(uatDe(p.uat_id))}` : baza
   }
   const btn = (titlu, fn, disabled = false) => <button style={S.btnX} disabled={lucru || incarcare || disabled} onClick={fn}>{titlu}</button>
@@ -241,7 +242,8 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       {uatDeExpediat.length > 0 && <div style={{ ...S.card, marginBottom: 10 }}>
         <b>Termen de expediere</b> (plan pct. 4.2: recomandata pleacă cu cel puțin {TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1 de sesiune)
         {uatDeExpediat.map(u => <div key={u.id} style={{ color: termenExpediere(u, azi).depasit ? G.red : undefined }}>
-          {u.nume}: {textTermenExpediere(u)}{termenExpediere(u, azi).depasit ? ' — termenul a trecut: expedierea de azi nu mai respectă cele ' + TERMEN_CONVOCARE_ZILE + ' zile libere' : ''}
+          {u.nume}: {textTermenExpediere(u)}{textTintaExpediere(u) ? `; ${textTintaExpediere(u)}` : ''}{termenExpediere(u, azi).depasit ? ' — termenul a trecut: expedierea de azi nu mai respectă cele ' + TERMEN_CONVOCARE_ZILE + ' zile libere'
+            : recomandareExpediere(u, azi) ? ' — ținta recomandată a trecut (încă în limita fermă)' : ''}
         </div>)}
       </div>}
       {grupare.prea_mari?.length > 0 && <p style={{ color: G.yellow }}>Peste 200 de convocări la aceeași persoană în același UAT (nu se împart, serverul cere un singur plic complet): {grupare.prea_mari.map(g => `${g.destinatar} (${g.convocari.length})`).join('; ')}. Necesită o decizie separată.</p>}
@@ -290,7 +292,9 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       <div style={{ display: 'grid', gap: 12 }}>
         {['lot', 'expediere', 'ar', 'retur'].includes(modal.tip) && <Camp eticheta="Data"><input style={S.input} disabled={lucru} type="date" min={['ar', 'retur'].includes(modal.tip) ? modal.rand.data_expediere : undefined} value={f.data} onChange={e => camp('data', e.target.value)} /></Camp>}
         {modal.tip === 'expediere' && <Camp eticheta="AWB"><input style={S.input} disabled={lucru} value={f.awb} onChange={e => camp('awb', e.target.value)} /></Camp>}
-        {modal.tip === 'expediere' && <p style={{ margin: 0 }}>{modal.rand.uat_nume || 'UAT'}: {textTermenExpediere(uatDe(modal.rand.uat_id))} (cu cel puțin {TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1, plan pct. 4.2).</p>}
+        {modal.tip === 'expediere' && <p style={{ margin: 0 }}>{modal.rand.uat_nume || 'UAT'}: {textTermenExpediere(uatDe(modal.rand.uat_id))} (cu cel puțin {TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1, plan pct. 4.2){textTintaExpediere(uatDe(modal.rand.uat_id)) ? `; ${textTintaExpediere(uatDe(modal.rand.uat_id))}` : ''}.</p>}
+        {modal.tip === 'expediere' && recomandareExpediere(uatDe(modal.rand.uat_id), f.data) && <p role="status" style={{ margin: 0, padding: 8, borderRadius: 6, border: `1px solid ${G.border2}`, color: G.muted }}>
+          ℹ {recomandareExpediere(uatDe(modal.rand.uat_id), f.data)}</p>}
         {modal.tip === 'expediere' && avertismentExpediere(uatDe(modal.rand.uat_id), f.data) && <p role="alert" style={{ margin: 0, padding: 8, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
           ⚠ {avertismentExpediere(uatDe(modal.rand.uat_id), f.data)} Se poate salva (data e cea reală), dar termenul de convocare nu e respectat.</p>}
         {modal.tip === 'retur' && <><Camp eticheta="Motiv retur"><select style={S.select} disabled={lucru} value={f.motiv} onChange={e => camp('motiv', e.target.value)}>{MOTIVE_RETUR.map(m => <option key={m.cod} value={m.cod}>{m.eticheta}</option>)}</select></Camp>{f.motiv === 'decedat' && <p style={{ color: G.yellow }}>Deținătorii din plic vor fi marcați decedați; cererea către TGZ pentru moștenitori se face separat.</p>}</>}
