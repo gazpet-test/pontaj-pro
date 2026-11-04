@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate } from './comune.jsx'
 import { STARI_CORESPONDENTA, etichetaStareCoresp, culoareStareCoresp, COL_CORESPONDENTA, stariPermise, poateAproba, urmatorul,
-  valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran, stariInFormular } from '../corespondenta.js'
+  valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran, stariInFormular, stareEfectiva } from '../corespondenta.js'
 
 const GOL = { cod: '', ordine: '', destinatar: '', subiect: '', expeditor: '', documente: '', depinde_de: '', stare: 'draft', trimis_la: '', nr_inregistrare: '', observatii: '' }
 
@@ -43,7 +43,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
   const salveaza = async () => {
     if (lucru || !editat) return
     const nou = !editat.rand
-    const { erori, valori } = valideazaCorespondenta(editat.f, { nou })
+    const { erori, valori } = valideazaCorespondenta({ ...editat.f, stare: stareEfectiva(editat.rand, editat.f) }, { nou })
     if (erori.length) { show(erori.join(' '), 'error'); return }
     const pid = proiect.id, expirat = sesiune.current.captureaza()
     setLucru(true)
@@ -126,7 +126,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
             <Camp eticheta="Destinatar" span={2}><input style={S.input} value={f.destinatar} onChange={e => set('destinatar', e.target.value)} maxLength={300} /></Camp>
             <Camp eticheta="Ce se trimite" span={2}><input style={S.input} value={f.subiect} onChange={e => set('subiect', e.target.value)} maxLength={500} /></Camp>
             <Camp eticheta="Expeditor"><input style={S.input} value={f.expeditor} onChange={e => set('expeditor', e.target.value)} maxLength={200} /></Camp>
-            <Camp eticheta="Stare"><select style={{ ...S.select, width:'100%' }} value={f.stare} onChange={e => set('stare', e.target.value)}>
+            <Camp eticheta="Stare"><select style={{ ...S.select, width:'100%' }} value={stareEfectiva(editat.rand, f)} onChange={e => set('stare', e.target.value)}>
               {stariInFormular(editat.rand, f).map(c => <option key={c} value={c}>{etichetaStareCoresp(c)}</option>)}
             </select></Camp>
             <Camp eticheta="Documente (fișiere / unde se generează)" span={2}><input style={S.input} value={f.documente} onChange={e => set('documente', e.target.value)} maxLength={2000} /></Camp>
@@ -135,7 +135,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
             <Camp eticheta="Nr. de înregistrare"><input style={S.input} value={f.nr_inregistrare} onChange={e => set('nr_inregistrare', e.target.value)} maxLength={100} /></Camp>
             <Camp eticheta="Observații" span={2}><textarea style={{ ...S.input, minHeight:60 }} value={f.observatii} onChange={e => set('observatii', e.target.value)} maxLength={4000} /></Camp>
           </div>
-          {editat.rand && ['draft', 'la_avocat'].includes(f.stare) && editat.rand.aprobat_la && <div style={{ color:G.yellow, fontSize:12.5, marginTop:8 }}>⚠ Revenirea la {etichetaStareCoresp(f.stare)} anulează aprobarea lui Răzvan (textul se schimbă → alt „da”).</div>}
+          {editat.rand && ['draft', 'la_avocat'].includes(stareEfectiva(editat.rand, f)) && editat.rand.aprobat_la && <div style={{ color:G.yellow, fontSize:12.5, marginTop:8 }}>⚠ Revenirea la {etichetaStareCoresp(stareEfectiva(editat.rand, f))} anulează aprobarea lui Răzvan (textul se schimbă → alt „da”).</div>}
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14 }}>
             <button style={S.btnS} onClick={() => setEditat(null)} disabled={lucru}>Renunță</button>
             <button style={S.btnP} onClick={salveaza} disabled={lucru}>Salvează</button>

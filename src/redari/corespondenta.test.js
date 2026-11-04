@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp, sesiuneEcran, stariInFormular } from './corespondenta.js'
+import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp, sesiuneEcran, stariInFormular, stareEfectiva } from './corespondenta.js'
 
 describe('corespondenta de trimis', () => {
   it('trimis / raspuns primit apar doar dupa aprobare; aprobat nu se alege din lista', () => {
@@ -43,5 +43,13 @@ describe('corespondenta de trimis', () => {
     expect(stariInFormular(r, { ...r })).toContain('trimis')
     expect(stariInFormular(r, { ...r, destinatar: 'alt' })).toEqual(['draft', 'la_avocat', 'anulat'])
     expect(stariInFormular(null, {})).toEqual(['draft', 'la_avocat'])
+  })
+  it('stare efectiva: aprobat cu expeditor schimbat -> draft (ce arata lista), nu aprobat (bug B1 04.11)', () => {
+    const r = { stare: 'aprobat', aprobat_la: '2026-11-03T08:00:00Z', destinatar: 'ISC', subiect: 'x', expeditor: 'de stabilit', documente: 'd' }
+    expect(stareEfectiva(r, { ...r, expeditor: 'Cristina' })).toBe('draft')
+    expect(stareEfectiva(r, { ...r, expeditor: 'Cristina', stare: 'la_avocat' })).toBe('la_avocat')
+    expect(stareEfectiva(r, { ...r })).toBe('aprobat')
+    const { erori, valori } = valideazaCorespondenta({ ...r, cod: 'B1', ordine: 30, expeditor: 'Cristina', stare: stareEfectiva(r, { ...r, expeditor: 'Cristina' }) }, { nou: false })
+    expect(erori).toEqual([]); expect(valori.stare).toBe('draft')
   })
 })

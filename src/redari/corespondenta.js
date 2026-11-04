@@ -32,6 +32,13 @@ export function stariInFormular(rand, f) {
   return stariPermise(rand)
 }
 
+// Bug 04.11 (Răzvan, B1): cu conținut schimbat pe un rând aprobat, `aprobat` dispare din listă; <select> afișa „Draft” dar starea rămânea
+// `aprobat` → BD refuza salvarea. Starea efectivă = cea aleasă dacă e permisă, altfel prima permisă (cea pe care o vede utilizatorul).
+export function stareEfectiva(rand, f) {
+  const opt = stariInFormular(rand, f)
+  return opt.includes(f?.stare) ? f.stare : opt[0]
+}
+
 export const poateAproba = (rand, esteOwner) => !!esteOwner && ['draft', 'la_avocat'].includes(rand?.stare)
 
 // Următorul pas: primul rând (după ordine) care nu e încheiat. Rândurile `aprobat` sunt „de trimis acum”.
