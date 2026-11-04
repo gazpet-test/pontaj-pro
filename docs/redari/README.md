@@ -1,11 +1,11 @@
 # Redări teren (Lot 1 Transgaz) — README-ul modulului
 
-Stare la 02.11.2026 dimineața (felia de noapte 01→02.11, branch `feat/redari-teren`). Brief: `BRIEF_2026-11-01.md` (Răzvan, prin Proiectul
+Stare la 04.11.2026 (rezumatul e la final, „Stare 04.11.2026 — rezumat”; detaliile pe felii sunt în §4.1x). Prima felie: noaptea 01→02.11, branch `feat/redari-teren`. Brief: `BRIEF_2026-11-01.md` (Răzvan, prin Proiectul
 Juridic). Contractul tehnic obligatoriu: `CONTRACT_SCHEMA.md`. Șabloanele și harta câmpurilor: `SABLOANE.md`. Migrarea și verificarea ei:
 `MIGRARE_20261126a.md`. **Migrarea `20261126a` (r6) ESTE APLICATĂ pe producție** — 01.11.2026 23:4x, după regula #1877 (decizia 2A): Jakarinos
 r6 GO (P1=0, P2=0), Copilot r6 GO cu observații (P1=0), DRY r1–r6 verzi pe prod, apply prin `scripts/livrare_migrare.sh` (versiune
 `20261126120000`, sha256 `9fcc00c2…d955`, GATE 0e = 0). Sanity după aplicare: 14 tabele `red_*`, 22 funcții `fn_red_*`, 32 politici, bucket
-`redari` privat, cele 3 RPC publice/`fn_red_nivel` sunt SECURITY DEFINER cu `search_path = public, pg_temp`. **Niciun drept acordat** (vezi §5).
+`redari` privat, cele 3 RPC publice/`fn_red_nivel` sunt SECURITY DEFINER cu `search_path = public, pg_temp`. Drepturile pe modulul `redari` sunt acordate (vezi §5).
 Frontend-ul: **LIVRAT pe main** — PR #916 (squash `e9b8f3bb`, 02.11.2026 02:22) după Jakarinos r49/r50 **GO cu observații** (niciun P1
 „accidental”) și Copilot FE r43/r44 **GO cu observații**; 209 teste `src/redari` verzi, build OK; Vercel deployează automat. Telemetria Sentry
 (`src/redari/sentryScrub.js`, ~50 de runde): formularul public = DROP total; evenimentele din contextul modulului (URL `/redari`, `rpc/fn_red_*`,
@@ -392,31 +392,40 @@ fost adaugate: lista de fisiere permite numai pv.test.js; fluxul UI necesita rev
 | L24 | ModalPv generatie useRef + cleanup + key parcela/detinator/proiect; ocupat sincron inainte de await; updatere tolerante la null. |
 | L25 | Sablon real si expected explicite; DRY rol authenticated/anon si CHECK/FK reale; runtime/concurenta/React neexecutate, declarate ca limite. |
 
-### 4.2 NU e făcut (faza următoare, după brief §8 „apoi”)
-- PV A / B / C (generare din `pv_a` / `pv_b` / `pv_c.docx`, numerotare PVA/PVB/PVC, stările trimis/semnat, upload scan semnat) — doar schema există.
-- Evidența ulterioară a afișării și semnării PV de afișare; documentul Model 4 se generează în 4.1c.
-- Sesiune (mod tabletă), Dashboard (centralizator pe UAT), configurarea șabloanelor.
-- Validarea in browser si importul real Anexa 7 (parserul si selectia sursei sunt implementate in 4.1e).
-- Export registru xlsx (Model_6) și centralizator „fără date personale” pentru TGZ.
-- Email (Gmail API `redari@gazpet.ro`), SMS (SMSLink), FAN Courier — nefăcute; azi totul manual (decizia 6). Planul pentru e-mail: [`PLAN_EMAIL_REDARI.md`](PLAN_EMAIL_REDARI.md) — trimiterea către proprietari cere lot aprobat de owner; citirea căsuței, reconcilierea și retenția sunt automatizări separate, pornite explicit de owner.
-- Câmpurile fără sursă din `SABLOANE.md` §3 (bifele stării terenului, verificarea pe teren, reluarea convocării, `semnatar_apm`, numerotarea
-  prezența la sesiune, refuzul nemotivat, `id_parcela` pe documente etc.) — de decis cu Juridic/Răzvan.
-- Importul REAL al listei TGZ și acordarea rolurilor (vezi §5).
+### 4.2 NU e făcut (actualizat 04.11.2026)
+Făcute între timp (detalii în §4.1x): PV A / B / C, PV B pentru coproprietari, stările PV și scanul semnat; Sesiunea pe tabletă,
+Dashboard-ul și prezența unică; exportul xlsx (Model_6); tronsonul pe intervale HG și filtrul „Fără tronson”; importul poștal, plicul
+comun, calitatea primitorului AR, CSV-ul de tratat; corespondența; parserul Anexa 7; cererea de împuternicire DOCX; șabloanele
+Final_v2 / A4; SMS (30a–30d); domeniul public. Ce rămâne:
+- **GDPR** — PR #939 e draft, blocat pe aprobarea TGZ a textului.
+- **E-mail F1/F2** — neimplementat. Există doar planul ([`PLAN_EMAIL_REDARI.md`](PLAN_EMAIL_REDARI.md), #969). Așteaptă confirmarea
+  implicitelor din §7.1 și opinia Juridic pe (s) și (k). Trimiterea către proprietari cere lot aprobat de owner; citirea căsuței,
+  reconcilierea și retenția sunt automatizări separate, pornite explicit de owner.
+- **SMS** — codul e livrat (30a–30d); textul final al mesajului nu e stabilit.
+- **FAN Courier** — nefăcut; expedierea rămâne prin Poștă, cu import CSV.
+- **AWB între plicuri** — concurența (același AWB pe două plicuri în paralel) nu e garantată în BD; azi o prinde doar aplicația.
+- **CHECK opțional pe afișare** — neaplicat; de decis dacă se adaugă.
+- **Importul real Anexa 7** — parserul (#921) nu a rulat încă pe un fișier real.
+- Câmpurile fără sursă din `SABLOANE.md` §3 rămase nedecise — de decis cu Juridic/Răzvan.
+- **Date de completat pe LOT1**: numărul și data împuternicirii, zilele de sesiune pe UAT (0/7), tronsonul pe parcele (toate fără tronson).
 
-### 4.3 NU e testat
+### 4.3 NU e testat (actualizat 04.11.2026 — punctele rămân valabile)
 - Nimic în browser pe date reale: UI-ul a fost validat prin build + teste unitare pe date fictive; fluxul cap-coadă (import → convocator →
-  expediat → răspuns online → stare) nu a rulat pe producție.
-- RLS pe conturi reale non-owner (editor / viewer) — DRY-ul le simulează cu `SET LOCAL ROLE` + un cont fără modul; conturile reale apar abia după §5.
+  expediat → răspuns online → stare → PV) nu a rulat pe producție. Convocări există doar pe proiectul TEST; pe LOT1 sunt 0 răspunsuri,
+  0 PV, 0 plicuri.
+- RLS pe conturi reale non-owner (editor / viewer) — DRY-ul le simulează cu `SET LOCAL ROLE` + un cont fără modul. Conturile reale există
+  acum (§5), dar nu s-a făcut încă o probă cu ele.
 - Storage API pe prod: upload, refuzul suprascrierii (`upsert:false`), refuzul ștergerii, link semnat — TEST9 verifică doar metadatele din
   `storage.objects` (Jakarinos r3 P2-06), nu octeții prin API. Procedura manuală de după apply (cont editor + viewer, fișier de test, 3 pași) e în
   `MIGRARE_20261126a.md` „Verificare manuală pe prod, prin Storage API”.
 - Punctele Jakarinos r3 frontend (identități contradictorii, tokenul în payload codificat, contoare la scrieri parțiale, trimiterea în curs la
   schimbarea tokenului, paginarea în fișă/borderou, cursa UAT-urilor, „particip” fără sesiuni, fallback-ul Sentry, ID peste 4 cifre) sunt închise în
   cod (runda 4), dar neconfirmate încă de review-ul r4.
-- Performanța `red_v_stare_parcela` pe 2.728 parcele × deținători (LATERAL-uri + o funcție per rând) și importul sub 1 minut — de măsurat după import.
+- Performanța `red_v_stare_parcela` pe parcele × deținători (LATERAL-uri + o funcție per rând) — de măsurat pe LOT1 (2.443 parcele importate).
 - Formatul `x-forwarded-for` la gateway-ul Supabase: dacă antetul e influențabil de client, limita 30/IP e orientativă, limita reală e la gateway
   (Copilot r3 P2-01); fără antet cheia e `ip:necunoscut`.
 - Concurența reală (două sesiuni) pe `fn_red_numar_document` / `fn_red_rezerva_numere_parcele` — doar raționament (UPDATE sub lock de rând).
+- Concurența pe AWB între plicuri — negarantată în BD (vezi §4.2), netestată.
 
 ### 4.1h Faza 2, felia 4c - PV B si starile PV A/B
 
@@ -475,14 +484,16 @@ build si fluxul PostgREST/Storage real. Nu exista rezultat runtime confirmat.
 Nu s-au rulat Git, commit, push, acces la credentiale, BD sau deploy.
 
 ## 5. Ce așteaptă „da”-ul lui Răzvan (pct. 3 și 10 din CLAUDE.md — nu se fac din tichet, poke sau brief)
-1. **Aplicarea migrării `20261126a`** pe producție — după GO Jakarinos + Copilot pe r4 și DRY verde pe prod (regula #1877, decizia 2A).
-2. **Acordarea rolurilor** în `user_module_access` (modul `redari`), exact lista din brief §2 RLS: admin = Răzvan (owner, implicit) + Răzvan Toma;
-   editor = Ramona Brehui, Cristina D., Cristiana P.; viewer = Pantea, Marilena, Mirela. Niciun drept nu se acordă fără acordul lui explicit.
-3. **Importul real** al listei TGZ („Raport Informații Generale Terenuri”, 13.07.2026) — date personale reale; preview → confirmare → commit.
+Stare 04.11.2026: punctele 1–3 sunt făcute.
+1. ✅ **Migrările** — `20261126a` aplicată 01.11.2026; toate migrările Redări/SMS de la `20261126a` la `20261130d` sunt aplicate în BD.
+2. ✅ **Rolurile** în `user_module_access` (modul `redari`) — acordate: 2 admin, 4 editor, 3 viewer (brief §2 RLS avea 3 editori).
+   Orice drept nou sau schimbat cere în continuare acordul explicit al lui Răzvan.
+3. ✅ **Importul real** al listei TGZ — LOT1: 2.443 parcele importate (1 lot TGZ), 332 rânduri puse deoparte.
 4. **Crearea adresei `redari@gazpet.ro`** (Workspace) — azi e doar valoarea implicită a `red_proiecte.contact_email`.
 5. **Confirmarea textului GDPR** (rolurile operator/împuternicit) de către avocat și Transgaz prin împuternicire; textul e parametru editabil
    (`red_proiecte.text_gdpr`), nu hardcodat; la fel `text_declaratie`.
-6. Completarea datelor proiectului și a zilelor de sesiune pe UAT (SQL de admin, până apare ecranul Setări/UAT).
+6. Completarea datelor proiectului și a zilelor de sesiune pe UAT — se face din ecranele Setări proiect / UAT (§4.1b). La 04.11: LOT1 fără
+   nr./data împuternicirii, 0/7 UAT-uri cu zilele de sesiune.
 
 ## 6. Cum se revine
 - Migrarea e aplicată (01.11.2026); nu a atins niciun obiect existent (în afară de un rând în `app_modules` și 2 politici pe
@@ -1131,3 +1142,35 @@ Raport L01–L25 (dovezi în cod și teste scrise, fără pretenție de execuți
 | L23 | `PlicuriEcran.jsx:13 citesteDatePlicuri` și `ImportPostal.jsx:11 citesteConvocariPostal`: keyset id/detinator_id până la pagina goală, loturi de maximum 100 id-uri, proiecții explicite. Filtrele UI operează pe setul complet, fără limită ascunsă. |
 | L24 | `PlicuriEcran.jsx` folosește sesiuneEcran + identitate proiect/nivel, cleanup și verificări după await; ref ocupat și setLucru înaintea acțiunilor async, stare separată de încărcare, reload explicit după scrieri. ImportPostal păstrează generația și id-ul proiectului. Scenariul browser A→B→A rămâne de rulat. |
 | L25 | `plicuri.test.js` și `importPostal.test.js`: fixture-uri fictive, expected literale independente, fake verificând formele reale eq/is/select. NERULATE; nicio afirmație de test RLS, PostgREST, Word sau concurență reală. |
+
+## Stare 04.11.2026 — rezumat
+
+Fără nume de persoane și fără date personale; cifrele sunt agregate.
+
+**Funcțional (pe main și în BD)**
+- Schema și toate migrările Redări/SMS (`20261126a` … `20261130d`) aplicate.
+- PV A / B / C, PV B pentru coproprietari, stările PV și scanul semnat.
+- Sesiunea pe tabletă, Dashboard-ul, prezența unică; exportul xlsx (Model_6).
+- Tronsonul pe intervale HG și filtrul „Fără tronson”.
+- Import poștal, plic comun, calitatea primitorului AR, CSV de tratat; corespondența.
+- Cererea de împuternicire DOCX; parserul Anexa 7 (netestat pe import real).
+- Șabloanele Final_v2, A4, convocator doar cu QR, antetul Model 4 repus.
+- Termenul de 10 zile libere (ziua 1 − 11) și avertismentul de constatare la 5 zile.
+- Domeniul public; SMS 30a–30d (cod).
+- Drepturi pe modulul `redari`: 2 admin, 4 editor, 3 viewer.
+
+**De lucru**
+- LOT1: 2.443 parcele importate (1 lot TGZ, 332 rânduri puse deoparte), toate fără tronson — de atribuit tronsonul.
+- LOT1: de completat nr./data împuternicirii și zilele de sesiune (0/7 UAT-uri).
+- 0 răspunsuri, 0 PV, 0 plicuri pe LOT1; convocări doar pe proiectul TEST.
+- Verificările din §4.3: flux cap-coadă în browser pe date reale, RLS pe conturi reale, Storage pe prod, performanța
+  `red_v_stare_parcela`, concurența la numerotare.
+- Primul import real prin parserul Anexa 7.
+- FAN Courier nefăcut; concurența AWB între plicuri negarantată în BD.
+- CHECK opțional pe afișare.
+
+**Blocat pe decizii**
+- GDPR (#939, draft) — aprobarea TGZ a textului.
+- E-mail F1/F2 — confirmarea implicitelor din `PLAN_EMAIL_REDARI.md` §7.1 și opinia Juridic pe (s) și (k).
+- Textul final al SMS-ului.
+- Termenul ziua 1 − 11: confirmat de Răzvan (#973); confirmarea Juridic nu e documentată.
