@@ -45,6 +45,7 @@ function harness() {
       if (!efecte[i] || deps.some((v, j) => v !== efecte[i].deps[j])) { efecte[i]?.curata?.(); efecte[i] = { deps, curata: f() } }
     },
     render: (component, props) => { index = 0; hooks.current = h; return component(props) },
+    unmount: () => { for (const e of efecte) e?.curata?.() },   // cleanup-ul tuturor efectelor, ca la demontarea componentei
   }
   return h
 }
@@ -58,7 +59,7 @@ const buton = (tree, inceput) => elemente(tree, 'button').find(b => textButon(b)
 const asteapta = () => new Promise(r => setTimeout(r, 0))
 
 // ordinea useState în ImportTgz: fisier, versiune, sursa, tronsonPeUat, preview, nota, lucru, progres, raport, subTab, loturi, loturiStare
-const I = { versiune: 1, preview: 4, raport: 8, loturi: 10 }
+const I = { versiune: 1, preview: 4, lucru: 6, raport: 8, loturi: 10 }
 const props = (id, cod, show) => ({ proiect: { id, cod }, uats: [{ id: 'uat-fictiv', nume: 'Comuna Fictivă', uat3: 'FIC' }], nivel: 'editor', show, onImportat: vi.fn() })
 const LOT_A = [{ id: 'lot-A', created_at: '2026-11-04T10:00:00', stare: 'finalizat', versiune_lista_tgz: 'v-A', sursa: 'TGZ', randuri_total: 1, diferente: { erori: [{ rand: 4, motiv: 'Nr.Crt. invalid „x”' }] } }]
 
@@ -86,26 +87,37 @@ describe('ImportTgz — istoricul loturilor nu se aplică peste alt proiect', ()
 describe('ImportTgz — finalizarea unui import pornit pe A nu scrie raportul în B', () => {
   const preview = { parcele: [{ cheie: 'FIC:1', cheie_sursa: 'FIC|HG 1||', ambigua: false }], detinatori: [], contacte: [], erori: [], ambigue: [], fara_cheie: [],
     statistici: { parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1 } }
-  const porneste = async (schimba) => {
+  const porneste = async (mod) => {
     amanate.import = amanat()
     vi.stubGlobal('window', { confirm: () => true })
     const h = harness(); const show = vi.fn()
-    h.render(ImportTgz, props('proiect-A', 'TEST-A', show))
+    const pA = props('proiect-A', 'TEST-A', show)
+    h.render(ImportTgz, pA)
     h.valori[I.versiune] = 'v-fictiv'; h.valori[I.preview] = preview
-    const tree = h.render(ImportTgz, props('proiect-A', 'TEST-A', show))
+    const tree = h.render(ImportTgz, pA)
     const gata = buton(tree, '📥 Importă').props.onClick()
-    if (schimba) h.render(ImportTgz, props('proiect-B', 'TEST-B', show))
+    if (mod === 'B') h.render(ImportTgz, props('proiect-B', 'TEST-B', show))
+    if (mod === 'unmount') h.unmount()
     amanate.import.rezolva({ lotId: 'lot-fictiv', parceleNoi: 1, detinatoriNoi: 1, diferente: {} })
     await gata
-    return { h, show }
+    return { h, show, pA }
   }
   it('control: pe același proiect raportul se afișează', async () => {
-    const { h } = await porneste(false)
+    const { h, pA } = await porneste('acelasi')
     expect(h.valori[I.raport]).toMatchObject({ lotId: 'lot-fictiv', esuat: false })
+    expect(h.valori[I.lucru]).toBe(false)
+    expect(pA.onImportat).toHaveBeenCalledTimes(1)
   })
   it('după trecerea pe B: raportul NU se scrie, doar un mesaj care numește proiectul A', async () => {
-    const { h, show } = await porneste(true)
+    const { h, show } = await porneste('B')
     expect(h.valori[I.raport]).toBeNull()
+    expect(show.mock.calls.at(-1)[0]).toMatch(/Importul în TEST-A s-a terminat/)
+  })
+  it('Copilot r3 P2-03: componenta demontată în timpul importului → nicio actualizare locală, niciun onImportat', async () => {
+    const { h, show, pA } = await porneste('unmount')
+    expect(h.valori[I.raport]).toBeNull()
+    expect(h.valori[I.lucru]).toBe(true)   // starea ecranului demontat nu mai e atinsă (nici în finally)
+    expect(pA.onImportat).not.toHaveBeenCalled()
     expect(show.mock.calls.at(-1)[0]).toMatch(/Importul în TEST-A s-a terminat/)
   })
 })

@@ -53,8 +53,11 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const genLoturi = useRef(0)                       // L24: rezultatul se aplică doar dacă e al ultimei cereri și al proiectului curent
   const proiectRef = useRef(proiect?.id)            // r3 (C-P2-02): proiectul CURENT, citit la aplicarea rezultatelor (nu din închiderea veche)
   proiectRef.current = proiect?.id
+  const montat = useRef(true)                        // r4 (C-P2-03): după unmount, finalizarea unui import nu mai atinge starea ecranului
+  const genImport = useRef(0)                        // r4 (Jakarinos r3 L24): generația ciclului de import (crește la start, la schimbarea proiectului, la unmount)
+  useEffect(() => { montat.current = true; return () => { montat.current = false; genImport.current++ } }, [])
   // L24: la schimbarea proiectului și la unmount, cererea în zbor se invalidează (Copilot r1 P3-02)
-  useEffect(() => { genLoturi.current++; setLoturi(null); setLoturiStare({ lucru: false, eroare: null }); return () => { genLoturi.current++ } }, [proiect?.id])
+  useEffect(() => { genLoturi.current++; genImport.current++; setLoturi(null); setLoturiStare({ lucru: false, eroare: null }); return () => { genLoturi.current++ } }, [proiect?.id])
 
   const incarcaLoturi = async () => {
     const gen = ++genLoturi.current; const proiectId = proiectRef.current
@@ -100,7 +103,9 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
     if (!window.confirm(`Import ${nParc} parcele, ${cifre.detinatori} deținători și ${cifre.contacte} contacte în ${proiect.cod} (lista „${versiune.trim()}”)${sarite ? `.\n${sarite} rânduri NU se importă (fără cheie / ambigue) — ${SUGESTIE_SARITE}` : '?'}`)) return
     const judetDiferit = preview.statistici?.judet_diferit || 0
     const proiectImport = proiect.id; const codImport = proiect.cod
-    const altProiect = () => proiectRef.current !== proiectImport   // r3 (C-P2-02): finalizarea unui import vechi nu se aplică peste alt proiect
+    const gen = ++genImport.current
+    // r3/r4 (C-P2-02 / C-P2-03): rezultatul se aplică doar pe ACELAȘI ecran montat, aceeași generație, același proiect
+    const altProiect = () => !montat.current || gen !== genImport.current || proiectRef.current !== proiectImport
     setLucru(true); setProgres({ facut: 0, total: nParc, etapa: 'pornire' })
     // starea lotului (in_curs / finalizat / esuat + eroare) se citește din BD, nu se presupune
     const citesteLot = async (lotId) => {
@@ -112,7 +117,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
       const rez = await scrieImport(supabase, preview, { proiectId: proiect.id, versiune: versiune.trim(), sursa, fisierNume: fisier?.name || null,
         onProgress: ({ etapa, facut, total } = {}) => { if (!altProiect()) setProgres({ etapa: etapa || '', facut: facut ?? 0, total: total ?? nParc }) } })
       const lot = await citesteLot(rez.lotId)
-      if (altProiect()) { show(`Importul în ${codImport} s-a terminat (lot ${lot?.stare || '?'}); raportul e în istoricul acelui proiect.`, 'info'); return }
+      if (altProiect()) { show(`Importul în ${codImport} s-a terminat (lot ${lot?.stare || '?'}); raportul e în istoricul loturilor acelui proiect.`, 'info'); return }
       setRaport({ ...rez, lot, esuat: lot?.stare === 'esuat', judetDiferit }); setPreview(null); setFisier(null)
       show(`Import terminat: ${rez.parceleNoi ?? 0} parcele noi, ${rez.detinatoriNoi ?? 0} deținători${(rez.parceleRefolosite ?? (Array.isArray(rez.existente) ? rez.existente.length : 0)) ? `, ${rez.parceleRefolosite ?? rez.existente.length} parcele existente refolosite` : ''}.`, 'success')
       onImportat?.()
@@ -124,7 +129,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
       setRaport({ esuat: true, lotId: e?.lotId || null, lot, mesaj: msgEroare(e) })
       show('Import eșuat: ' + msgEroare(e), 'error')
     }
-    finally { setLucru(false); setProgres(null) }
+    finally { if (montat.current) { setLucru(false); setProgres(null) } }
   }
 
   const st = preview?.statistici || {}
@@ -252,6 +257,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>Lot import: <span style={S.mono}>{raport.lotId || '-'}</span> · lista „{versiune}” · {sursa}</div>
           {/* r3 (C-P2-03): CSV-ul rezultatului EFECTIV (după verificarea în BD, cu Nr.Crt. incompatibile și stările reconciliate) */}
           {raport.diferente && randuriDeTratat(raport.diferente).length > 0 && <button style={{ ...S.btnS, marginTop:8 }} onClick={() => descarcaCsvDeTratat(randuriDeTratat(raport.diferente), `${versiune || 'tgz'}-rezultat`)}>⬇ Rândurile de tratat după import ({numarRanduriPuseDeoparte(randuriDeTratat(raport.diferente))} rânduri, fără nume)</button>}
+          {Array.isArray(raport.refolosite_fara_nr_crt) && raport.refolosite_fara_nr_crt.length > 0 && <div style={{ fontSize:12.5, color:G.yellow, marginTop:8 }}>ℹ {raport.refolosite_fara_nr_crt.length} parcele existente cu subnumăr Nr.Crt. au fost completate dintr-o sursă fără Nr.Crt. (Anexa 7), pe aceeași cheie: {raport.refolosite_fara_nr_crt.map(x => `${x.id_parcela} (${x.nr_crt_grup})`).join(', ')}.</div>}
           {raport.judetDiferit > 0 && <div style={{ fontSize:12.5, color:G.yellow, marginTop:8 }}>ℹ La {raport.judetDiferit} rânduri județul din adresă diferă de județul terenului — s-a păstrat județul din adresă la contact și s-a notat în observațiile parcelei.</div>}
           {[['fara_cheie', 'Rânduri fără cheie — NU au fost importate', G.orange], ['ambigue', 'Rânduri ambigue — NU au fost importate', G.red], ['nr_crt_incompatibil', 'Nr.Crt. incompatibil cu parcela existentă — NU au fost importate', G.red]].map(([k, titlu, culoare]) => Array.isArray(raport[k]) && raport[k].length > 0 && (
             <div key={k} style={{ marginTop:10 }}>
