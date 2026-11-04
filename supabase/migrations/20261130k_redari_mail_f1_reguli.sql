@@ -32,7 +32,15 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130k_redari_mail_f1_reguli:' || txid_current() THEN
     RAISE EXCEPTION '20261130k: garda start invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  -- Jak #987 r3 P1: migrarea e VICTIMA la conflict. lock_timeout = 500 ms, strict sub deadlock_timeout (verificat, altfel refuz): orice așteptare
+  -- a migrării expiră înaintea detectorului de deadlock al ei, deci la o blocare reciprocă cu un scriitor al aplicației migrarea renunță
+  -- (tranzacția se anulează întreagă, fără efect), iar scriitorul continuă. Limita, declarată: dacă scriitorul a început să aștepte cu
+  -- > deadlock_timeout − 500 ms ÎNAINTEA migrării, detectorul lui poate rula primul; ordinea unică de mai jos face acest caz rar.
+  -- La conflict, migrarea renunță; se reia în fereastra de noapte.
+  PERFORM set_config('lock_timeout', '500ms', true);
+  IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN
+    RAISE EXCEPTION '%: deadlock_timeout (%) trebuie sa fie strict peste lock_timeout (%)', '20261130k', current_setting('deadlock_timeout'), current_setting('lock_timeout');
+  END IF;
   IF to_regprocedure('public.fn_red_mail_verifica_baza(text)') IS NULL OR to_regclass('public.red_mail_primite') IS NULL THEN
     RAISE EXCEPTION '20261130k: 20261130j nu e aplicata';
   END IF;
@@ -627,16 +635,16 @@ BEGIN
       ('red_proiecte', 'trg_red_proiecte_retentie_mail', 'public.fn_red_mail_proiect_retentie()', 23)
     ) AS b(t, nume, fn, tip) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = ('public.' || r.t)::regclass AND t.tgname = r.nume AND NOT t.tgisinternal
-                    AND t.tgfoid = to_regprocedure(r.fn) AND t.tgtype = r.tip AND t.tgenabled = 'O') THEN
+                    AND t.tgfoid = to_regprocedure(r.fn) AND t.tgtype = r.tip AND t.tgenabled = 'O' AND cardinality(t.tgattr::int2[]) = 0) THEN
       RAISE EXCEPTION '20261130k post: triggerul %.% nu e cel asteptat', r.t, r.nume;
     END IF;
   END LOOP;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_raspunsuri'::regclass AND tgname = 'trg_red_raspunsuri_mail_sursa' AND tgconstraint <> 0
-                  AND tgdeferrable AND tginitdeferred AND tgnargs = 0
+                  AND tgdeferrable AND tginitdeferred AND tgnargs = 0 AND cardinality(tgattr::int2[]) = 0
                   AND pg_get_triggerdef(oid) = 'CREATE CONSTRAINT TRIGGER trg_red_raspunsuri_mail_sursa AFTER INSERT ON public.red_raspunsuri DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((new.canal = ''email''::text)) EXECUTE FUNCTION fn_red_mail_raspuns_sursa_ceruta()')
      -- Jak #987 P2-4: niciun alt trigger nou nu are condiție WHEN sau argumente
      OR EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND NOT t.tgisinternal
-                 AND (c.relname ~ '^red_mail_' OR t.tgname IN ('trg_red_raspunsuri_zz_mail', 'trg_red_proiecte_retentie_mail')) AND (t.tgqual IS NOT NULL OR t.tgnargs <> 0))
+                 AND (c.relname ~ '^red_mail_' OR t.tgname IN ('trg_red_raspunsuri_zz_mail', 'trg_red_proiecte_retentie_mail')) AND (t.tgqual IS NOT NULL OR t.tgnargs <> 0 OR cardinality(t.tgattr::int2[]) <> 0))
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_raspunsuri'::regclass AND NOT tgisinternal) <> 5
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_proiecte'::regclass AND NOT tgisinternal) <> 3
      OR (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND c.relname ~ '^red_mail_' AND NOT t.tgisinternal) <> 7 + 15 THEN

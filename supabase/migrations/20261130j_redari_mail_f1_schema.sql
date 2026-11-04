@@ -35,10 +35,18 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130j_redari_mail_f1_schema:' || txid_current() THEN
     RAISE EXCEPTION '20261130j: garda start invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  -- Jak #987 r3 P1: migrarea e VICTIMA la conflict. lock_timeout = 500 ms, strict sub deadlock_timeout (verificat, altfel refuz): orice așteptare
+  -- a migrării expiră înaintea detectorului de deadlock al ei, deci la o blocare reciprocă cu un scriitor al aplicației migrarea renunță
+  -- (tranzacția se anulează întreagă, fără efect), iar scriitorul continuă. Limita, declarată: dacă scriitorul a început să aștepte cu
+  -- > deadlock_timeout − 500 ms ÎNAINTEA migrării, detectorul lui poate rula primul; ordinea unică de mai jos face acest caz rar.
+  -- La conflict, migrarea renunță; se reia în fereastra de noapte.
+  PERFORM set_config('lock_timeout', '500ms', true);
+  IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN
+    RAISE EXCEPTION '%: deadlock_timeout (%) trebuie sa fie strict peste lock_timeout (%)', '20261130j', current_setting('deadlock_timeout'), current_setting('lock_timeout');
+  END IF;
   -- Jak #987 P1-3 / r2 P1 (L01 / L06): TOATE blocările migrării, explicite, la început (înaintea verificărilor „fără date”), ținute până la commit,
   -- fiecare direct în modul cerut mai jos (fără upgrade de lock), în ORDINEA UNICĂ red_mail F1 (aceeași în j, k și în reveniri):
-  --   (1) tabelele Redări existente, copiii înaintea părinților: red_raspunsuri → red_detinatori → red_parcele → red_corespondenta → red_proiecte
+  --   (1) tabelele Redări existente, copiii înaintea părinților: red_raspunsuri → red_detinatori → red_parcele → red_corespondenta → red_corespondenta_fisiere → red_proiecte
   --   (2) storage.objects   (3) red_jurnal   (4) red_mail_* (alfabetic)
   -- Ordinea aplicației: un scriitor Redări ia întâi tabela lui (ROW EXCLUSIVE), apoi verificările FK iau ROW SHARE pe părinți (red_detinatori,
   -- red_parcele, red_proiecte), triggerele BEFORE citesc eventual storage.objects (corespondența), iar triggerul AFTER de jurnal scrie la final
@@ -47,12 +55,16 @@ BEGIN
   -- FK ale copiilor) e ultimul dintre tabele, după copiii pe care îi blochează migrarea.
   -- Modurile: ținte ale FK-urilor noi SHARE ROW EXCLUSIVE (= modul luat de ADD FOREIGN KEY; compatibil cu ROW SHARE); red_proiecte ACCESS
   -- EXCLUSIVE (ADD COLUMN); storage.objects / red_jurnal ACCESS EXCLUSIVE (ALTER POLICY). Test: concurenta_local.sh S5 (scriitor telefonic).
-  -- Limită: o tranzacție a aplicației care ar lua aceste obiecte în altă ordine (de ex. scrie în red_jurnal și abia apoi într-o tabelă Redări)
-  -- poate intra în deadlock cu migrarea; PostgreSQL anulează atunci UNA dintre tranzacții (nu e garantat care) — nicio stare parțială.
+  -- Scriitorii indirecți (r3): inserarea unui fișier de corespondență (red_corespondenta_fisiere) citește red_proiecte, blochează rândul
+  -- red_corespondenta (FOR UPDATE) și, în triggerul AFTER, face UPDATE pe red_corespondenta. red_corespondenta_fisiere (citit de politica
+  -- storage red_storage_coresp_sel) se blochează și el, înaintea red_proiecte, ca o inserare nouă să aștepte migrarea de la început.
+  -- O tranzacție a aplicației care ia aceste obiecte în altă ordine poate totuși intra în conflict cu migrarea: atunci migrarea e victima
+  -- (lock_timeout 500 ms < deadlock_timeout, mai sus) — renunță întreagă, scriitorul termină; se reia în fereastra de noapte.
   LOCK TABLE public.red_raspunsuri IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_detinatori IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_parcele IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_corespondenta IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_corespondenta_fisiere IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;
@@ -140,15 +152,15 @@ BEGIN
   -- Jak #987 P2-4: protecțiile append-only ale red_jurnal — exact cele 2 triggere (funcție, tip, activ, fără argumente / WHEN)
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_jurnal'::regclass AND NOT tgisinternal) <> 2
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_jurnal'::regclass AND tgname = 'trg_red_jurnal_imuabil' AND tgfoid = 'public.fn_red_jurnal_imuabil()'::regprocedure
-                     AND tgtype = 27 AND tgenabled = 'O' AND tgnargs = 0 AND tgqual IS NULL)
+                     AND tgtype = 27 AND tgenabled = 'O' AND tgnargs = 0 AND cardinality(tgattr::int2[]) = 0 AND tgqual IS NULL)
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_jurnal'::regclass AND tgname = 'trg_red_jurnal_fara_truncate' AND tgfoid = 'public.fn_red_jurnal_imuabil()'::regprocedure
-                     AND tgtype = 34 AND tgenabled = 'O' AND tgnargs = 0 AND tgqual IS NULL) THEN
+                     AND tgtype = 34 AND tgenabled = 'O' AND tgnargs = 0 AND cardinality(tgattr::int2[]) = 0 AND tgqual IS NULL) THEN
     RAISE EXCEPTION 'redari mail baza (%): protectiile append-only ale red_jurnal nu sunt cele din baseline', p_faza;
   END IF;
   -- Jak #987 P2-4: red_raspunsuri — cele 3 triggere din baseline (k adaugă 2, verificate de k), politicile, privilegiile pe tabel și pe coloană
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_jurnal' AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_legaturi' AND t.tgfoid = 'public.fn_red_legaturi()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_raspunsuri_valideaza' AND t.tgfoid = 'public.fn_red_raspunsuri_valideaza()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_jurnal' AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND cardinality(tgattr::int2[]) = 0 AND t.tgqual IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_legaturi' AND t.tgfoid = 'public.fn_red_legaturi()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND cardinality(tgattr::int2[]) = 0 AND t.tgqual IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_raspunsuri_valideaza' AND t.tgfoid = 'public.fn_red_raspunsuri_valideaza()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND cardinality(tgattr::int2[]) = 0 AND t.tgqual IS NULL)
      OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND NOT t.tgisinternal AND t.tgenabled <> 'O')
      OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND NOT t.tgisinternal
            AND t.tgname NOT IN ('trg_red_jurnal', 'trg_red_legaturi', 'trg_red_raspunsuri_valideaza', 'trg_red_raspunsuri_mail_sursa', 'trg_red_raspunsuri_zz_mail')) <> 0 THEN
@@ -156,8 +168,8 @@ BEGIN
   END IF;
   -- Jak #987 r2 P2: red_proiecte — cele 2 triggere din baseline, exact (funcție, tip, activ, fără argumente / WHEN); singurul alt trigger
   -- permis e cel adăugat de k (verificat exact de k). Un trg_red_versiune redirecționat spre altă funcție = refuz.
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_jurnal' AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_versiune' AND t.tgfoid = 'public.fn_red_versiune_creste()'::regprocedure AND t.tgtype = 19 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_jurnal' AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND cardinality(tgattr::int2[]) = 0 AND t.tgqual IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_versiune' AND t.tgfoid = 'public.fn_red_versiune_creste()'::regprocedure AND t.tgtype = 19 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND cardinality(tgattr::int2[]) = 0 AND t.tgqual IS NULL)
      OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND NOT t.tgisinternal
                  AND t.tgname NOT IN ('trg_red_jurnal', 'trg_red_versiune', 'trg_red_proiecte_retentie_mail')) THEN
     RAISE EXCEPTION 'redari mail baza (%): triggerele red_proiecte nu sunt cele din baseline', p_faza;
@@ -827,7 +839,7 @@ BEGIN
   -- (6) triggerele de jurnal: exact pe cele 7 tabele, AFTER INSERT OR UPDATE OR DELETE, ROW, fn_red_jurnal, active
   IF (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND c.relname ~ '^red_mail_' AND NOT t.tgisinternal) <> 7
      OR (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND NOT t.tgisinternal AND t.tgname = 'trg_red_jurnal'
-           AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O'
+           AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL AND cardinality(t.tgattr::int2[]) = 0
            AND c.relname IN ('red_mail_setari', 'red_mail_flux', 'red_mail_primite', 'red_mail_obiecte', 'red_mail_dedup', 'red_mail_raspuns_sursa', 'red_mail_adrese_propuse')) <> 7 THEN
     RAISE EXCEPTION '20261130j post: triggerele de jurnal pe red_mail_* nu sunt cele asteptate';
   END IF;

@@ -8,7 +8,15 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261130k', true) IS DISTINCT FROM 'REDARI_MAIL_F1_REGULI_SCOS:' || txid_current() THEN
     RAISE EXCEPTION '20261130k revenire: garda invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  -- Jak #987 r3 P1: migrarea e VICTIMA la conflict. lock_timeout = 500 ms, strict sub deadlock_timeout (verificat, altfel refuz): orice așteptare
+  -- a migrării expiră înaintea detectorului de deadlock al ei, deci la o blocare reciprocă cu un scriitor al aplicației migrarea renunță
+  -- (tranzacția se anulează întreagă, fără efect), iar scriitorul continuă. Limita, declarată: dacă scriitorul a început să aștepte cu
+  -- > deadlock_timeout − 500 ms ÎNAINTEA migrării, detectorul lui poate rula primul; ordinea unică de mai jos face acest caz rar.
+  -- La conflict, migrarea renunță; se reia în fereastra de noapte.
+  PERFORM set_config('lock_timeout', '500ms', true);
+  IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN
+    RAISE EXCEPTION '%: deadlock_timeout (%) trebuie sa fie strict peste lock_timeout (%)', '20261130k revenire', current_setting('deadlock_timeout'), current_setting('lock_timeout');
+  END IF;
   IF to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NULL THEN RAISE EXCEPTION '20261130k revenire: migrarea lipseste'; END IF;
   -- Jak #987 P1-3 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date”, ținute până la commit (ACCESS EXCLUSIVE = modul cerut de DROP TRIGGER).
   -- Ordinea unică red_mail F1 (antetul preflight-ului 20261130j): red_raspunsuri → red_proiecte → (storage.objects, red_jurnal: neatinse)

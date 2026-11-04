@@ -99,32 +99,57 @@ verifica "B comis, A refuzată cu motivul exact, obiectul prezent, j neaplicată
   "$(are "$OUT_A" '20261130j: exista deja obiecte sub redari/mail/ (asteptat 0)')" \
   "$(q s4 "SELECT to_regclass('public.red_mail_primite') IS NULL AND EXISTS (SELECT 1 FROM storage.objects WHERE name = 'mail/redari/x')")")"
 
-# S5 (r2 P1): scriitorul telefonic manual (editor) a atins deja red_raspunsuri (ROW EXCLUSIVE) când pornește j; apoi, cu j blocată, își face
-# INSERT-ul, care are nevoie de red_jurnal (triggerul de jurnal). Cu ordinea j (red_raspunsuri înaintea red_jurnal): j așteaptă, B termină,
-# apoi j termină. Controlul cu ordinea veche (red_jurnal blocat înainte, FK-ul pe red_raspunsuri luat implicit mai târziu) => deadlock.
-TEL="LOCK TABLE public.red_raspunsuri IN ROW EXCLUSIVE MODE; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000a3\",\"role\":\"authenticated\"}', true)"
-TEL_PAS2="SET LOCAL ROLE authenticated; INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES ('00000000-0000-0000-0000-00000000e002', 'telefon', 'nu_particip_fara_obiectii')"
-cursa_tel() { # ca cursa(), dar B face al doilea pas (INSERT-ul) DUPĂ barieră
+# Regula r3 (Jak #987): la conflict MIGRAREA e victima — lock_timeout 500 ms < deadlock_timeout => migrarea renunță cu „lock timeout”,
+# scriitorul termină; niciodată „deadlock detected”. Controalele rulează aceeași cursă cu lock_timeout 5 s (> deadlock_timeout): apare deadlock-ul.
+# cursa2: $1 = db, $2 = pasul 1 al lui B (ține deja ce ține un scriitor real), $3 = pasul 2 al lui B (după barieră), $4 = fișierul j pentru A
+cursa2() {
   local db=$1
-  printf "SET application_name = 'scriitor_B';\nBEGIN;\n%s;\nDO \$w\$ DECLARE %s \$w\$;\n%s;\nCOMMIT;\n" "$TEL" \
-    "$(printf "$BUCLA" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'migrare_A' AND wait_event_type = 'Lock')" "bariera_B")" "$TEL_PAS2" > "$TMP/b_$db.sql"
+  printf "SET application_name = 'scriitor_B';\nBEGIN;\n%s;\nDO \$w\$ DECLARE %s \$w\$;\n%s;\nCOMMIT;\n" "$2" \
+    "$(printf "$BUCLA" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'migrare_A' AND wait_event_type = 'Lock')" "bariera_B")" "$3" > "$TMP/b_$db.sql"
   "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$db" -f "$TMP/b_$db.sql" > "$TMP/b_$db.out" 2>&1 &
   local pb=$!
-  bariera "$db" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'scriitor_B' AND state = 'active' AND query LIKE '%bariera_B%')" "B_a_atins_red_raspunsuri"
-  aplica "$db" j "$2" > "$TMP/a_$db.out" 2>&1 &
+  bariera "$db" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'scriitor_B' AND state = 'active' AND query LIKE '%bariera_B%')" "B_pasul_1"
+  aplica "$db" j "$4" > "$TMP/a_$db.out" 2>&1 &
   local pa=$!
   wait $pa; RC_A=$?; wait $pb; RC_B=$?
   OUT_A=$(cat "$TMP/a_$db.out"); OUT_B=$(cat "$TMP/b_$db.out")
 }
-echo "S5 (r2 P1): scriitor telefonic manual concurent cu apply j — fără deadlock, ambele termină"
-baza s5 -; cursa_tel s5 "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql"
-verifica "ambele rc=0, fără deadlock, răspunsul telefonic al lui B comis, j aplicată" "$(si "$([ $RC_A = 0 ] && [ $RC_B = 0 ] && echo t)" \
-  "$(are "$OUT_A$OUT_B" 'deadlock' | tr tf ft)" \
-  "$(q s5 "SELECT EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE canal = 'telefon' AND detinator_id = '00000000-0000-0000-0000-00000000e002') AND to_regclass('public.red_mail_primite') IS NOT NULL")")"
-echo "S5-control (mutație): j cu ordinea veche (red_jurnal blocat înaintea tabelelor Redări, FK-urile luate implicit mai târziu)"
-grep -v -E '^  LOCK TABLE public[.]red_(raspunsuri|detinatori|parcele|corespondenta) IN' "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql" > "$TMP/j_ordine_veche.sql"
-baza s5m -; cursa_tel s5m "$TMP/j_ordine_veche.sql"
-verifica "bug reprodus: deadlock detectat, una dintre tranzacții anulată" "$(si "$(are "$OUT_A$OUT_B" 'deadlock detected')" "$([ $RC_A != 0 ] || [ $RC_B != 0 ] && echo t)")"
+# rezultatul acceptat al migrării: fie a reușit (j aplicată), fie a renunțat cu „lock timeout” (j absentă); în ambele cazuri fără deadlock
+migrare_ok_sau_renunta() { # $1 = db
+  if [ $RC_A = 0 ]; then q "$1" "SELECT to_regclass('public.red_mail_primite') IS NOT NULL"
+  else si "$(are "$OUT_A" 'canceling statement due to lock timeout')" "$(q "$1" "SELECT to_regclass('public.red_mail_primite') IS NULL")"; fi
+}
+cu_5s() { sed -e "s/PERFORM set_config('lock_timeout', '500ms', true);/PERFORM set_config('lock_timeout', '5s', true);/" -e "s/IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN/IF false THEN/" "$1"; }
 
-for d in s1 s1m s2 s2m s3 s4 s5 s5m; do "$PSQL" -X -q -h localhost -p "$PORT" -U postgres -d postgres -c "DROP DATABASE IF EXISTS $d" > /dev/null 2>&1; done
+# S5 (r2 P1): scriitorul telefonic manual (editor) a atins deja red_raspunsuri (ROW EXCLUSIVE) când pornește j; apoi, cu j blocată, își face
+# INSERT-ul, care are nevoie de red_jurnal (triggerul de jurnal).
+TEL="LOCK TABLE public.red_raspunsuri IN ROW EXCLUSIVE MODE; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000a3\",\"role\":\"authenticated\"}', true)"
+TEL_PAS2="SET LOCAL ROLE authenticated; INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES ('00000000-0000-0000-0000-00000000e002', 'telefon', 'nu_particip_fara_obiectii')"
+echo "S5 (r2 P1 + regula r3): scriitor telefonic manual concurent cu apply j"
+baza s5 -; cursa2 s5 "$TEL" "$TEL_PAS2" "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql"
+verifica "B comis (răspunsul telefonic prezent), fără deadlock, migrarea reușită sau renunțată cu lock timeout (A rc=$RC_A)" "$(si "$([ $RC_B = 0 ] && echo t)" \
+  "$(are "$OUT_A$OUT_B" 'deadlock' | tr tf ft)" "$(migrare_ok_sau_renunta s5)" \
+  "$(q s5 "SELECT EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE canal = 'telefon' AND detinator_id = '00000000-0000-0000-0000-00000000e002')")")"
+echo "S5-control (mutație): j cu ordinea veche (red_jurnal înaintea tabelelor Redări) și lock_timeout 5 s"
+grep -v -E '^  LOCK TABLE public[.]red_(raspunsuri|detinatori|parcele|corespondenta|corespondenta_fisiere) IN' "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql" > "$TMP/j_v1.sql"
+cu_5s "$TMP/j_v1.sql" > "$TMP/j_ordine_veche.sql"
+baza s5m -; cursa2 s5m "$TEL" "$TEL_PAS2" "$TMP/j_ordine_veche.sql"
+verifica "bug reprodus: deadlock detectat" "$(are "$OUT_A$OUT_B" 'deadlock detected')"
+
+# S6 (r3 P1): inserarea unui fișier de_trimis (triggerele LIVE din schelet). Pasul 1 al lui B = ce face triggerul BEFORE înainte de inserare:
+# citește red_proiecte și blochează rândul red_corespondenta (FOR UPDATE OF c); pasul 2 = INSERT-ul real (BEFORE + AFTER: UPDATE red_corespondenta).
+FIS1="SELECT c.stare FROM public.red_corespondenta c JOIN public.red_proiecte p ON p.id = c.proiect_id WHERE c.id = '00000000-0000-0000-0000-00000000f001' FOR UPDATE OF c"
+FIS2="INSERT INTO public.red_corespondenta_fisiere (corespondenta_id, rol, path, marime, sha256, storage_etag) VALUES ('00000000-0000-0000-0000-00000000f001', 'de_trimis', 'TEST-MAIL/corespondenta/C1/d1.pdf', 10, repeat('a', 64), 'x')"
+obiect_fis() { q "$1" "INSERT INTO storage.objects (bucket_id, name, metadata) VALUES ('redari', 'TEST-MAIL/corespondenta/C1/d1.pdf', jsonb_build_object('eTag', 'e1', 'size', 10))" > /dev/null; }
+fis_comis() { q "$1" "SELECT EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere WHERE path = 'TEST-MAIL/corespondenta/C1/d1.pdf' AND storage_etag = 'e1') AND (SELECT versiune FROM public.red_corespondenta WHERE id = '00000000-0000-0000-0000-00000000f001') = 2"; }
+echo "S6 (r3 P1): inserare fișier de_trimis intercalată cu apply j"
+baza s6 -; obiect_fis s6; cursa2 s6 "$FIS1" "$FIS2" "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql"
+verifica "B comis (fișierul + UPDATE-ul corespondenței), fără deadlock, migrarea renunțată cu lock timeout sau reușită (A rc=$RC_A)" "$(si "$([ $RC_B = 0 ] && echo t)" \
+  "$(are "$OUT_A$OUT_B" 'deadlock' | tr tf ft)" "$(migrare_ok_sau_renunta s6)" "$(fis_comis s6)")"
+echo "S6-control (mutație): aceeași cursă cu lock_timeout 5 s (peste deadlock_timeout)"
+cu_5s "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql" > "$TMP/j_5s.sql"
+baza s6m -; obiect_fis s6m; cursa2 s6m "$FIS1" "$FIS2" "$TMP/j_5s.sql"
+verifica "bug reprodus: deadlock detectat (fără regula r3, detectorul decide)" "$(are "$OUT_A$OUT_B" 'deadlock detected')"
+
+for d in s1 s1m s2 s2m s3 s4 s5 s5m s6 s6m; do "$PSQL" -X -q -h localhost -p "$PORT" -U postgres -d postgres -c "DROP DATABASE IF EXISTS $d" > /dev/null 2>&1; done
 [ $ESEC = 0 ] && echo "CONCURENȚĂ: TOATE OK" || { echo "CONCURENȚĂ: EȘEC"; exit 1; }

@@ -10,7 +10,15 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261130j', true) IS DISTINCT FROM 'REDARI_MAIL_F1_SCHEMA_SCOS:' || txid_current() THEN
     RAISE EXCEPTION '20261130j revenire: garda invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  -- Jak #987 r3 P1: migrarea e VICTIMA la conflict. lock_timeout = 500 ms, strict sub deadlock_timeout (verificat, altfel refuz): orice așteptare
+  -- a migrării expiră înaintea detectorului de deadlock al ei, deci la o blocare reciprocă cu un scriitor al aplicației migrarea renunță
+  -- (tranzacția se anulează întreagă, fără efect), iar scriitorul continuă. Limita, declarată: dacă scriitorul a început să aștepte cu
+  -- > deadlock_timeout − 500 ms ÎNAINTEA migrării, detectorul lui poate rula primul; ordinea unică de mai jos face acest caz rar.
+  -- La conflict, migrarea renunță; se reia în fereastra de noapte.
+  PERFORM set_config('lock_timeout', '500ms', true);
+  IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN
+    RAISE EXCEPTION '%: deadlock_timeout (%) trebuie sa fie strict peste lock_timeout (%)', '20261130j revenire', current_setting('deadlock_timeout'), current_setting('lock_timeout');
+  END IF;
   IF to_regclass('public.red_mail_primite') IS NULL OR to_regprocedure('public.fn_red_mail_verifica_baza(text)') IS NULL THEN
     RAISE EXCEPTION '20261130j revenire: migrarea lipseste';
   END IF;
@@ -21,12 +29,14 @@ BEGIN
   -- Jak #987 P1-3 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date”, ținute până la commit. ACCESS EXCLUSIVE = modul cerut oricum de
   -- DROP COLUMN / ALTER POLICY / DROP TABLE. storage.objects blocat oprește și upload-urile service_role (ocolesc RLS, dar nu blocările).
   -- Ordinea unică red_mail F1 (antetul preflight-ului 20261130j): red_raspunsuri → red_detinatori → red_parcele → red_corespondenta →
-  -- red_proiecte → storage.objects → red_jurnal → red_mail_* (alfabetic). Țintele FK-urilor: ACCESS EXCLUSIVE, modul luat de DROP TABLE pe
-  -- tabelele referite (măsurat în PG17 local, pg_locks), deci fără upgrade de lock mai jos.
+  -- red_corespondenta_fisiere → red_proiecte → storage.objects → red_jurnal → red_mail_* (alfabetic). Țintele FK-urilor: ACCESS EXCLUSIVE,
+  -- modul luat de DROP TABLE pe tabelele referite (măsurat în PG17 local, pg_locks), deci fără upgrade de lock mai jos.
+  -- La conflict, revenirea e victima (lock_timeout 500 ms < deadlock_timeout, mai sus): renunță întreagă; se reia în fereastra de noapte.
   LOCK TABLE public.red_raspunsuri IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.red_detinatori IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.red_parcele IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.red_corespondenta IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_corespondenta_fisiere IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;

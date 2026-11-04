@@ -395,6 +395,71 @@ BEGIN
 END $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.fn_red_coresp_fisier_dupa()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF NEW.rol = 'de_trimis' THEN
+    UPDATE public.red_corespondenta
+       SET stare = CASE WHEN stare = 'aprobat' AND aprobat_la IS NOT NULL THEN 'draft' ELSE stare END
+     WHERE id = NEW.corespondenta_id;
+  END IF;
+  RETURN NULL;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.fn_red_coresp_fisier_imutabil()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'redari: fisierele corespondentei sunt imutabile; urca o varianta noua' USING ERRCODE = '23514';
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.fn_red_coresp_fisier_inainte()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_mentenanta boolean; v_stare text; v_prefix text; v_meta jsonb; v_gasit boolean;
+BEGIN
+  v_mentenanta := session_user = 'postgres' AND coalesce(nullif(current_setting('request.jwt.claims', true), ''), '') = '';
+  -- blocarea randului parinte serializeaza urcarea cu aprobarea (UPDATE pe acelasi rand): aprobarea vede fisierul, sau fisierul vede aprobarea
+  SELECT c.stare, p.cod || '/corespondenta/' || c.cod || '/' INTO v_stare, v_prefix
+    FROM public.red_corespondenta c JOIN public.red_proiecte p ON p.id = c.proiect_id
+   WHERE c.id = NEW.corespondenta_id FOR UPDATE OF c;
+  IF NOT FOUND THEN RAISE EXCEPTION 'redari: corespondenta nu exista' USING ERRCODE = '23503'; END IF;
+  IF NEW.rol = 'de_trimis' AND v_stare IN ('trimis', 'raspuns_primit', 'anulat') THEN
+    RAISE EXCEPTION 'redari: fisierul de trimis nu se mai urca dupa trimitere / anulare; urca dovada sau raspunsul' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.path IS NULL OR NOT starts_with(NEW.path, v_prefix)
+     OR substr(NEW.path, length(v_prefix) + 1) !~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.([Pp][Dd][Ff]|[Dd][Oo][Cc][Xx]|[Jj][Pp][Ee]?[Gg]|[Pp][Nn][Gg])$'
+     OR NEW.path LIKE '%..%' THEN
+    RAISE EXCEPTION 'redari: calea fisierului nu e in folderul corespondentei (%...)', v_prefix USING ERRCODE = '23514';
+  END IF;
+  SELECT true, o.metadata INTO v_gasit, v_meta FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = NEW.path;
+  IF v_gasit IS NOT TRUE THEN RAISE EXCEPTION 'redari: fisierul lipseste din Storage (%)', NEW.path USING ERRCODE = '23514'; END IF;
+  -- amprenta serverului: eTag-ul din metadata Storage (pe live, 04.11.2026, toate obiectele din redari / ofertare / templates il au)
+  IF nullif(btrim(v_meta ->> 'eTag'), '') IS NULL THEN
+    RAISE EXCEPTION 'redari: obiectul nu are amprenta (eTag) in Storage; reincearca urcarea' USING ERRCODE = '23514';
+  END IF;
+  NEW.storage_etag := left(btrim(v_meta ->> 'eTag'), 200);
+  -- marimea si tipul le da Storage-ul cand le are (nu clientul); sha256 vine din browser (declarat)
+  IF (v_meta ->> 'size') ~ '^[0-9]+$' THEN NEW.marime := (v_meta ->> 'size')::bigint; END IF;
+  IF nullif(v_meta ->> 'mimetype', '') IS NOT NULL THEN NEW.mime := left(v_meta ->> 'mimetype', 200); END IF;
+  IF NOT v_mentenanta THEN NEW.created_by := auth.uid(); END IF;
+  NEW.created_at := clock_timestamp();   -- clock_timestamp: ordinea „ultimul de_trimis” e stricta si in aceeasi tranzactie
+  RETURN NEW;
+END $function$
+;
+
 -- ---------------------------------------------------------------- ACL-urile / owner-ii live ai funcțiilor
 ALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;
 ALTER FUNCTION auth.jwt() OWNER TO supabase_auth_admin;
@@ -443,8 +508,19 @@ CREATE TABLE public.red_jurnal (
   id bigserial PRIMARY KEY, tabela text NOT NULL, inregistrare_id uuid, actiune text NOT NULL, date_vechi jsonb, date_noi jsonb, user_id uuid, user_email text,
   created_at timestamp with time zone DEFAULT now() NOT NULL,
   CONSTRAINT red_jurnal_actiune_check CHECK ((actiune = ANY (ARRAY['insert'::text, 'update'::text, 'delete'::text]))));
-CREATE TABLE public.red_corespondenta (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id));
-CREATE TABLE public.red_corespondenta_fisiere (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), corespondenta_id uuid NOT NULL REFERENCES public.red_corespondenta(id), path text NOT NULL UNIQUE);
+-- red_corespondenta: coloanele citite / scrise de triggerele fișierelor (scriitorul indirect din Jak #987 r3); fn_red_corespondenta_reguli
+-- (regulile aprobării, pe același rând) NU e în schelet — nu ia alte blocări de tabel decât rândul și fișierele corespondenței.
+CREATE TABLE public.red_corespondenta (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id),
+  cod text NOT NULL, stare text NOT NULL DEFAULT 'draft', aprobat_la timestamptz, versiune integer NOT NULL DEFAULT 1);
+-- red_corespondenta_fisiere: forma din 20261130e, cu triggerele LIVE (inainte / imutabil / dupa / jurnal, corpurile mai sus)
+CREATE TABLE public.red_corespondenta_fisiere (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  corespondenta_id uuid NOT NULL CONSTRAINT red_corespondenta_fisiere_coresp_fk REFERENCES public.red_corespondenta(id),
+  rol text NOT NULL CHECK (rol IN ('de_trimis', 'dovada_trimitere', 'raspuns', 'altul')),
+  path text NOT NULL CHECK (length(path) BETWEEN 1 AND 500),
+  nume_original text, mime text, marime bigint NOT NULL CHECK (marime > 0 AND marime <= 26214400), sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  storage_etag text NOT NULL, observatii text, created_by uuid, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT red_corespondenta_fisiere_path_uq UNIQUE (path));
 DO $t$
 DECLARE t text;
 BEGIN
@@ -461,6 +537,13 @@ CREATE TRIGGER trg_red_jurnal AFTER INSERT OR DELETE OR UPDATE ON public.red_pro
 CREATE TRIGGER trg_red_versiune BEFORE UPDATE ON public.red_proiecte FOR EACH ROW EXECUTE FUNCTION public.fn_red_versiune_creste();
 CREATE TRIGGER trg_red_jurnal_fara_truncate BEFORE TRUNCATE ON public.red_jurnal FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_jurnal_imuabil();
 CREATE TRIGGER trg_red_jurnal_imuabil BEFORE DELETE OR UPDATE ON public.red_jurnal FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal_imuabil();
+CREATE TRIGGER trg_red_jurnal AFTER INSERT OR DELETE OR UPDATE ON public.red_corespondenta FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal();
+CREATE TRIGGER trg_red_versiune BEFORE UPDATE ON public.red_corespondenta FOR EACH ROW EXECUTE FUNCTION public.fn_red_versiune_creste();
+CREATE TRIGGER trg_red_coresp_fisier_inainte BEFORE INSERT ON public.red_corespondenta_fisiere FOR EACH ROW EXECUTE FUNCTION public.fn_red_coresp_fisier_inainte();
+CREATE TRIGGER trg_red_coresp_fisier_imutabil BEFORE UPDATE OR DELETE ON public.red_corespondenta_fisiere FOR EACH ROW EXECUTE FUNCTION public.fn_red_coresp_fisier_imutabil();
+CREATE TRIGGER trg_red_coresp_fisier_dupa AFTER INSERT ON public.red_corespondenta_fisiere FOR EACH ROW EXECUTE FUNCTION public.fn_red_coresp_fisier_dupa();
+CREATE TRIGGER trg_red_jurnal AFTER INSERT OR DELETE OR UPDATE ON public.red_corespondenta_fisiere FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal();
+REVOKE EXECUTE ON FUNCTION public.fn_red_coresp_fisier_inainte(), public.fn_red_coresp_fisier_dupa(), public.fn_red_coresp_fisier_imutabil() FROM PUBLIC, anon, authenticated;
 -- politicile și privilegiile live
 CREATE POLICY red_proiecte_ins ON public.red_proiecte FOR INSERT TO authenticated WITH CHECK ((( SELECT public.fn_red_nivel() AS fn_red_nivel) = 'admin'::text));
 CREATE POLICY red_proiecte_sel ON public.red_proiecte FOR SELECT TO authenticated USING ((( SELECT public.fn_red_nivel() AS fn_red_nivel) IS NOT NULL));
@@ -536,7 +619,7 @@ INSERT INTO public.red_detinatori (id, parcela_id, nume, nume_normalizat, calita
   ('00000000-0000-0000-0000-00000000e001', '00000000-0000-0000-0000-00000000d001', 'TEST UNU', 'TEST UNU', 'proprietar'),
   ('00000000-0000-0000-0000-00000000e002', '00000000-0000-0000-0000-00000000d001', 'TEST DOI', 'TEST DOI', 'coproprietar'),
   ('00000000-0000-0000-0000-00000000e003', '00000000-0000-0000-0000-00000000d002', 'TEST TREI', 'TEST TREI', 'proprietar');
-INSERT INTO public.red_corespondenta (id, proiect_id) VALUES ('00000000-0000-0000-0000-00000000f001', '00000000-0000-0000-0000-00000000b001');
+INSERT INTO public.red_corespondenta (id, proiect_id, cod) VALUES ('00000000-0000-0000-0000-00000000f001', '00000000-0000-0000-0000-00000000b001', 'C1');
 -- un răspuns preexistent (telefon) — trebuie să rămână editabil ca azi după 20261130k
 INSERT INTO public.red_raspunsuri (id, detinator_id, canal, data, optiune) VALUES
   ('00000000-0000-0000-0000-0000000001a1', '00000000-0000-0000-0000-00000000e003', 'telefon', now() - interval '2 days', 'nu_particip_fara_obiectii');
