@@ -1,13 +1,14 @@
 -- DRY LOCAL 20261130l_redari_convocare_rezerva (r3: RPC SECURITY INVOKER) — DOAR pe clusterul PG17 de unica folosinta creat de
 -- scripts/redari_30l_dry_local.sh (schelet 20261130l_..._schelet.sql cu functiile LIVE reale, inclusiv lock-ul de plic pe UAT + migrarea, COMISE).
 -- NU se ruleaza pe productie: scrie date fictive si comite (concurenta reala intre conexiuni prin dblink cere tranzactii comise).
+-- r8: fișierul rulează ca supabase_admin (superuser-ul clusterului local, necesar pentru dblink); conexiunile de test se fac ca postgres (NOSUPERUSER) + SET ROLE.
 -- Garda TEST0: GUC gazpet.dry_local = 'DA'. Proiectul fictiv are codul TEST-RAZVAN, ca DRY-ul de productie sa poata rula si aici, dupa revenire.
 -- Identitati fictive: owner (admin), editor, viewer, un profil fara nivel; anon si authenticated fara sub. Fiecare apel ruleaza pe o conexiune
 -- dblink proprie cu request.jwt.claims + SET ROLE (ca PostgREST). public.t_stare(sql) intoarce 'OK:<valoare>' sau '<SQLSTATE>:<mesaj>'.
 -- psql: -v port=<portul clusterului local>.
 SELECT set_config('t.port', :'port', false);
 DO $g$ BEGIN
-  IF current_setting('gazpet.dry_local', true) IS DISTINCT FROM 'DA' OR current_user <> 'postgres' THEN RAISE EXCEPTION 'TEST0 FAIL: garda (doar cluster local)'; END IF;
+  IF current_setting('gazpet.dry_local', true) IS DISTINCT FROM 'DA' OR current_user <> 'supabase_admin' THEN RAISE EXCEPTION 'TEST0 FAIL: garda (doar cluster local)'; END IF;
   IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NULL THEN RAISE EXCEPTION 'TEST0 FAIL: migrarea lipseste'; END IF;
 END $g$;
 CREATE EXTENSION IF NOT EXISTS dblink;

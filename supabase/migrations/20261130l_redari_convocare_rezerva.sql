@@ -30,13 +30,15 @@
 -- r5 (Copilot NO-GO #989):
 --   P1-01: RPC-ul întoarce și identitatea folosită de server (parcela_id, uat_id, proiect_id); clientul o compară cu documentul pe care îl generează.
 --   P1-02: protocolul e impus în BD pentru ORICE INSERT în red_convocari: trigger nou trg_red_convocari_garda_rezerva (BEFORE INSERT) cere
---     gazpet.convocare_rezerva = 'activ'. r6 (poarta 0e: nicio funcție expusă nu scrie GUC-uri dinamic): valoarea vine DOAR din clauza STATICĂ
---     a lui fn_red_convocare_rezerva — SET gazpet.convocare_rezerva = 'activ' (proconfig; PostgreSQL o aplică la intrarea în funcție și o
---     restaurează la ieșire, deci e vizibilă numai triggerelor INSERT-ului din acest apel). Poarta 0e semnalează din proconfig doar
---     role / session_authorization / request.jwt*, deci clauza trece. Clientul nu poate seta GUC-ul: PostgREST execută doar SELECT/INSERT/
---     UPDATE/DELETE pe tabele și apeluri /rpc din schemele expuse (public, graphql_public), nu SET; pg_catalog (funcția de scriere a GUC-urilor)
---     nu e expus; nicio funcție publică executabilă de anon/authenticated nu scrie GUC-uri (poarta 0e = 0 rânduri); postcondiția cere ca
---     fn_red_convocare_rezerva să fie SINGURA funcție cu acest proconfig. Un client vechi (număr C + INSERT direct) primește RD004.
+--     gazpet.convocare_rezerva = 'activ'. r8: valoarea o pune DOAR instrucțiunea STATICĂ `SET LOCAL gazpet.convocare_rezerva = 'activ'` din corpul
+--     lui fn_red_convocare_rezerva, imediat înainte de număr + INSERT, și o anulează (`'inactiv'`) imediat după INSERT. (r6 folosea clauza SET a
+--     funcției — pe Supabase, unde postgres NU e superuser, clauza pe un GUC placeholder e refuzată la CREATE: „permission denied to set
+--     parameter”; reprodus local cu postgres NOSUPERUSER.) Poarta 0e: nu semnalează SET LOCAL pe alt parametru decât role / session_authorization /
+--     request.jwt* (regulile ei: set_config, request.jwt, session_authorization, set/reset role, execute, interpretoare SQL) — verificat rulând
+--     scripts/control_0e.sql pe schelet + migrare (0 rânduri). Clientul nu poate seta GUC-ul: PostgREST execută doar operații pe tabele și
+--     apeluri /rpc din schemele expuse (public, graphql_public), nu SET; pg_catalog nu e expus; nicio funcție publică executabilă de anon /
+--     authenticated nu scrie GUC-uri (0e = 0 rânduri); postcondiția cere ca marcajul să nu apară în proconfig-ul nici unei funcții.
+--     Un client vechi (număr C + INSERT direct) primește RD005 / RD004.
 --     Inventarul căilor de INSERT (read-only, 05.11.2026): în src/ doar docx.salveazaConvocator (nefolosit de UI după #989); în BD nicio funcție nu
 --     inserează în red_convocari (fn_red_plic_* doar actualizează). Excepție explicită: current_user = 'postgres' (mentenanță / migrări /
 --     fixture-uri SQL, ca trg_red_convocari_posta_garda). Toate canalele (posta / sms / email / afisare) trec prin RPC; 'telefon' nu e generat din UI.
@@ -224,7 +226,7 @@ END $function$
 
 CREATE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta')
 RETURNS TABLE (convocare_id uuid, nr_document text, parcela_id uuid, uat_id uuid, proiect_id uuid)
-LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp SET gazpet.convocare_rezerva = 'activ' AS $fn$
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
 #variable_conflict error
 DECLARE v_proiect_cheie uuid; v_proiect uuid; v_parcela uuid; v_uat uuid; v_uat3 text; v_tronson integer; v_calitate text; v_lipsa text[] := '{}';
   v_existente text; v_nr text; v_id uuid; pr record; u record;
@@ -281,10 +283,12 @@ BEGIN
     RAISE EXCEPTION 'redari: detinatorul are deja convocare % neexpediata (%)', p_canal, v_existente USING ERRCODE = 'RD001';
   END IF;
   -- (6) numărul + rândul; triggerele (garda rezervării, garda de plic pe persoană, legături, jurnal) și RLS-ul se aplică utilizatorului.
-  -- r6: INSERT-ul e autorizat de clauza statică SET gazpet.convocare_rezerva = 'activ' a funcției (proconfig: valabilă DOAR pe durata acestui
-  -- apel, restaurată automat la ieșire); trg_red_convocari_garda_rezerva o verifică. Fără scriere dinamică de GUC în corp (poarta 0e).
+  -- r8: INSERT-ul (și numărul C) sunt autorizate de instrucțiunea STATICĂ SET LOCAL de mai jos (pe Supabase, postgres nu e superuser: clauza SET a
+  -- funcției pe un GUC placeholder e refuzată la CREATE). SET LOCAL ține până la sfârșitul tranzacției, deci se anulează explicit imediat după INSERT.
+  SET LOCAL gazpet.convocare_rezerva = 'activ';
   v_nr := public.fn_red_numar_document('C', v_uat3, v_tronson);
   INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (p_detinator_id, p_canal, v_nr) RETURNING id INTO v_id;
+  SET LOCAL gazpet.convocare_rezerva = 'inactiv';
   -- r5 P1-01: identitatea folosită de server (clientul o compară cu documentul pe care îl generează)
   RETURN QUERY SELECT v_id, v_nr, v_parcela, v_uat, v_proiect;
 END $fn$;
@@ -323,13 +327,13 @@ BEGIN
     RAISE EXCEPTION '20261130l: fn_red_numar_document nu are corpul / setarile asteptate dupa garda C (md5=%)', (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure AND NOT prosecdef AND provolatile = 'v'
-                  AND proconfig = ARRAY['search_path=public, pg_temp', 'gazpet.convocare_rezerva=activ']::text[] AND pg_get_userbyid(proowner) = 'postgres') THEN
+                  AND proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(proowner) = 'postgres') THEN
     RAISE EXCEPTION '20261130l: functia are setari gresite (INVOKER / VOLATILE / search_path + marcaj static / owner)';
   END IF;
-  -- r6: marcajul autorizării INSERT-ului îl poartă o SINGURĂ funcție (aceasta), static, în proconfig
+  -- r8: marcajul NU apare în proconfig-ul nici unei funcții (pe Supabase ar cere superuser; doar SET LOCAL static în corpul RPC-ului)
   IF (SELECT array_agg(p.oid::regprocedure::text) FROM pg_proc p, unnest(p.proconfig) c WHERE c LIKE 'gazpet.convocare_rezerva=%')
-       IS DISTINCT FROM ARRAY['fn_red_convocare_rezerva(uuid,boolean,text)'] THEN
-    RAISE EXCEPTION '20261130l: marcajul gazpet.convocare_rezerva apare si in alte functii';
+       IS NOT NULL THEN
+    RAISE EXCEPTION '20261130l: marcajul gazpet.convocare_rezerva apare in proconfig-ul unei functii';
   END IF;
   IF (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure)
        IS DISTINCT FROM ARRAY['authenticated=X/postgres', 'postgres=X/postgres']::text[] THEN

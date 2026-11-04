@@ -72,7 +72,7 @@ END $t$;
 -- TEST1: setari, ACL, iesire
 DO $t$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure AND NOT prosecdef AND provolatile = 'v'
-                  AND proconfig = ARRAY['search_path=public, pg_temp', 'gazpet.convocare_rezerva=activ']::text[] AND pg_get_userbyid(proowner) = 'postgres') THEN RAISE EXCEPTION 'TEST1 FAIL: setari'; END IF;
+                  AND proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(proowner) = 'postgres') THEN RAISE EXCEPTION 'TEST1 FAIL: setari'; END IF;
   IF NOT has_function_privilege('authenticated', 'public.fn_red_convocare_rezerva(uuid,boolean,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.fn_red_convocare_rezerva(uuid,boolean,text)', 'EXECUTE')
      OR has_function_privilege('service_role', 'public.fn_red_convocare_rezerva(uuid,boolean,text)', 'EXECUTE') THEN RAISE EXCEPTION 'TEST1 FAIL: ACL'; END IF;
