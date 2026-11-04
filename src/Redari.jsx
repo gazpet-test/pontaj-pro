@@ -177,7 +177,7 @@ export default function Redari() {
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
           {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
           {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
-          {tab === 'notificari' && <NotificariEcran key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} />}
+          {tab === 'notificari' && <NotificariEcran key={`${proiect.id}|${nivel}|${profile?.id || ''}`} proiect={proiect} uats={uats} nivel={nivel} utilizatorId={profile?.id || null} />}
           {tab === 'uat' && <UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
         </div>

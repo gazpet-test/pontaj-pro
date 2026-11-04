@@ -95,7 +95,7 @@ export function TabelCanale({ statistici }) {
     <thead><tr>{['Canal', 'Unde intră în ERP', 'Cum se înregistrează', 'Activ?', 'Răspunsuri (toate)', 'Înregistrări deținător (ultimul răspuns)'].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
     <tbody>{CANALE_RASPUNS.map(c => <tr key={c.cod} data-canal={c.cod}>
       <td style={{ ...S.td, fontWeight: 600 }}>{c.nume}</td><td style={{ ...S.td, fontSize: 12.5 }}>{c.intra}</td><td style={{ ...S.td, fontSize: 12.5 }}>{c.cum}</td>
-      <td style={S.td}>{c.activ ? <span style={{ color: G.green }}>da</span> : <span style={{ color: G.yellow }}>nu (manual)</span>}</td>
+      <td style={S.td} data-activ={String(c.activ)}>{c.activ === true ? <span style={{ color: G.green }}>da</span> : c.activ === 'manual' ? <span style={{ color: G.green }}>activ — înregistrare manuală</span> : <span style={{ color: G.yellow }}>nu (până la F1)</span>}</td>
       <td style={S.td}>{statistici ? statistici.toate[c.canal] || 0 : '…'}</td><td style={S.td}>{statistici ? statistici.ultim[c.canal] || 0 : '…'}</td>
     </tr>)}</tbody>
   </table></div>
@@ -133,24 +133,27 @@ export function ListaDetinatori({ lista }) {
 //   dateInitiale = { proiectId?, ghid: { corespondenta, smsPanou, smsPanouEroare }, centralizator: rezultatul citesteCentralizator }
 // Copilot #992 P2-02: fiecare rezultat ține id-ul proiectului pentru care a fost citit; la randarea cu alt proiect (aceeași instanță,
 // înainte ca efectul să reseteze) nu se afișează și nu se exportă nimic din proiectul anterior. În Redari.jsx montarea are și key={proiect.id}.
-export default function NotificariEcran({ proiect, uats = [], nivel, dateInitiale = null, subtabInitial = 'ghid', uatInitial = '' }) {
+// Copilot #992 r2 P2-04: proveniența include și contextul de autorizare (nivel, poateContact, utilizator): datele citite ca admin
+// (cu „fără telefon”) nu se mai afișează / exportă după trecerea la viewer, nici măcar la primul render, înainte de recitire.
+export default function NotificariEcran({ proiect, uats = [], nivel, utilizatorId = null, dateInitiale = null, subtabInitial = 'ghid', uatInitial = '' }) {
   const [subtab, setSubtab] = useState(subtabInitial)
-  const idInitial = dateInitiale ? (dateInitiale.proiectId ?? proiect.id) : null
+  const poateContact = nivel === 'admin' || nivel === 'editor'
+  const context = `${proiect.id}|${nivel ?? ''}|${poateContact ? 'contact' : '-'}|${utilizatorId ?? ''}`
+  const idInitial = dateInitiale ? (dateInitiale.context ?? `${dateInitiale.proiectId ?? proiect.id}|${nivel ?? ''}|${poateContact ? 'contact' : '-'}|${utilizatorId ?? ''}`) : null
   const [ghidStare, setGhidSurse] = useState(dateInitiale?.ghid ? { proiectId: idInitial, v: dateInitiale.ghid } : null)
   const [ghidEroareStare, setGhidEroare] = useState(null)
   const [dateStare, setDate] = useState(dateInitiale?.centralizator ? { proiectId: idInitial, v: dateInitiale.centralizator } : null)
   const [eroareStare, setEroare] = useState(null)
-  const alProiectului = x => (x && x.proiectId === proiect.id ? x.v : null)
+  const alProiectului = x => (x && x.proiectId === context ? x.v : null)   // proiectId = cheia de proveniență (proiect + autorizare)
   const ghidSurse = alProiectului(ghidStare), date = alProiectului(dateStare)
   const ghidEroare = alProiectului(ghidEroareStare) || '', eroare = alProiectului(eroareStare) || ''
   const [reload, setReload] = useState(0)
   const [uatId, setUatId] = useState(uatInitial), [filtru, setFiltru] = useState('')
   const generatie = useRef(0)
-  const poateContact = nivel === 'admin' || nivel === 'editor'
 
   useEffect(() => {
     if (dateInitiale) return
-    const token = ++generatie.current, id = proiect.id, curent = () => token === generatie.current
+    const token = ++generatie.current, id = proiect.id, ctx = context, curent = () => token === generatie.current
     setGhidSurse(null); setGhidEroare(null); setDate(null); setEroare(null)
     ;(async () => {
       let corespondenta = null, corespEroare = ''
@@ -158,13 +161,13 @@ export default function NotificariEcran({ proiect, uats = [], nivel, dateInitial
       catch (e) { corespEroare = msgEroare(e) }
       let smsPanou = null, smsPanouEroare = null
       try { smsPanou = await smsApi.panou() } catch (e) { smsPanouEroare = e?.code === '42501' ? 'fără nivel pe SMS' : mesajEroare(e) }
-      if (curent()) setGhidSurse({ proiectId: id, v: { corespondenta, corespEroare, smsPanou, smsPanouEroare } })
-    })().catch(e => { if (curent()) setGhidEroare({ proiectId: id, v: msgEroare(e) }) })
+      if (curent()) setGhidSurse({ proiectId: ctx, v: { corespondenta, corespEroare, smsPanou, smsPanouEroare } })
+    })().catch(e => { if (curent()) setGhidEroare({ proiectId: ctx, v: msgEroare(e) }) })
     citesteCentralizator(supabase, id, { poateContact }, curent)
-      .then(d => { if (curent()) setDate({ proiectId: id, v: d }) })
-      .catch(e => { if (curent()) setEroare({ proiectId: id, v: msgEroare(e) }) })
+      .then(d => { if (curent()) setDate({ proiectId: ctx, v: d }) })
+      .catch(e => { if (curent()) setEroare({ proiectId: ctx, v: msgEroare(e) }) })
     return () => { generatie.current++ }
-  }, [proiect.id, reload, poateContact, dateInitiale])
+  }, [proiect.id, reload, context, dateInitiale])
 
   const inregistrari = useMemo(() => (date ? agregaDetinatori({ ...date, uats }) : null), [date, uats])
   const modele = useMemo(() => ghidModele({ proiect, uats, smsPanou: ghidSurse?.smsPanou || null, smsPanouEroare: ghidSurse ? ghidSurse.smsPanouEroare : null,

@@ -114,10 +114,27 @@ describe('Copilot #992 P2-02 — schimbarea proiectului pe aceeași instanță',
     expect(x).not.toContain('data-coresp="A1"')
     expect(x).toContain('Se încarcă corespondența')
   })
+  it('r2 P2-04: date citite ca admin, randate pentru viewer (primul render, înainte de recitire) → nimic afișat / exportat', () => {
+    const cuTel = { ...centralizator, cuTelefon: new Set([ID]), avertismente: [] }
+    const admin = h(<NotificariEcran proiect={proiect} uats={uats} nivel="admin" utilizatorId="U1" subtabInitial="centralizator" dateInitiale={{ ghid: {}, centralizator: cuTel }} />)
+    expect(admin).toContain('Persoana Unu')
+    const x = h(<NotificariEcran proiect={proiect} uats={uats} nivel="viewer" utilizatorId="U1" subtabInitial="centralizator"
+      dateInitiale={{ context: `${proiect.id}|admin|contact|U1`, ghid: {}, centralizator: cuTel }} />)
+    expect(x).toContain('Se încarcă'); expect(x).not.toContain('Persoana Unu'); expect(x).not.toContain('Export CSV')
+    // alt utilizator, același nivel: tot nu
+    const y = h(<NotificariEcran proiect={proiect} uats={uats} nivel="admin" utilizatorId="U2" subtabInitial="centralizator"
+      dateInitiale={{ context: `${proiect.id}|admin|contact|U1`, ghid: {}, centralizator: cuTel }} />)
+    expect(y).not.toContain('Persoana Unu')
+  })
+  it('P3: canalele scris / SMS „activ — înregistrare manuală”; e-mail inactiv până la F1', () => {
+    const x = h(<TabelCanale statistici={null} />)
+    expect(x).toMatch(/data-canal="sms"[\s\S]*?data-activ="manual"[\s\S]*?activ — înregistrare manuală/)
+    expect(x).toMatch(/data-canal="email"[\s\S]*?data-activ="false"/)
+  })
   it('Redari.jsx montează tabul cu key={proiect.id}', async () => {
     const { readFileSync } = await import('node:fs')
     const src = readFileSync(new URL('../../Redari.jsx', import.meta.url), 'utf8')
-    expect(src).toContain("{tab === 'notificari' && <NotificariEcran key={proiect.id} ")
+    expect(src).toContain("{tab === 'notificari' && <NotificariEcran key={`${proiect.id}|${nivel}|${profile?.id || ''}`} ")
   })
   it('antetul centralizatorului arată unitatea fiecărei coloane', () => {
     const x = h(<TabelCentralizator cent={centralizeaza(agregaDetinatori({ ...centralizator, sms: new Map(), cuTelefon: new Set(), uats }))} />)

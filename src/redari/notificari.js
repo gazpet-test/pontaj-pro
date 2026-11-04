@@ -193,9 +193,9 @@ export const CANALE_RASPUNS = [
   { cod: 'sesiune', canal: 'sesiune', nume: 'La sesiune (prezent)', intra: 'red_raspunsuri (canal sesiune, „particip”).',
     cum: '🗓️ Sesiune → Prezent (PV A / PV B din același ecran); sau 📞 Răspuns cu canalul „La sesiune”.', activ: true },
   { cod: 'scris', canal: 'scris', nume: 'Scris / poștă (scrisoare de la proprietar)', intra: 'red_raspunsuri (canal scris) + nota cu operatorul și nr. de înregistrare.',
-    cum: '📋 Registru → 📞 Răspuns, canal „Scris / poștă”. AR / retur NU sunt răspunsuri: se trec pe plic, în ✉️ Poștă.', activ: true },
+    cum: '📋 Registru → 📞 Răspuns, canal „Scris / poștă”. AR / retur NU sunt răspunsuri: se trec pe plic, în ✉️ Poștă.', activ: 'manual' },
   { cod: 'sms', canal: 'sms', nume: 'SMS', intra: 'red_raspunsuri (canal sms), înregistrat de operator: SMS-ul ERP e doar de ieșire, nu se citesc SMS-urile primite.',
-    cum: '📋 Registru → 📞 Răspuns, canal „SMS primit” (la sursă: de pe ce telefon a venit).', activ: false },
+    cum: '📋 Registru → 📞 Răspuns, canal „SMS primit” (la sursă: de pe ce telefon a venit).', activ: 'manual' },
   { cod: 'email', canal: 'email', nume: 'E-mail redari@gazpet.ro', intra: 'Neactiv: citirea căsuței e felia F1 (PR #987 draft, migrări neaplicate). Canalul „email” se va scrie doar cu sursa din F1 (PLAN §1.10).',
     cum: 'Până atunci: 📞 Răspuns, canal „Scris / poștă”, la sursă „primit pe e-mail”. Mailul către instituții merge prin 📨 Corespondență.', activ: false },
 ]
