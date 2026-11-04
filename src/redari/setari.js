@@ -326,6 +326,17 @@ export function lipsuriUat(uat) {
   return l
 }
 
+/** Audit D6: motivele „Gata de convocare?” fără dubluri — lipsurile UAT-ului + motivul de blocare al convocatorului (șir „a; b; c”),
+ *  fără „UAT fără zi de sesiune cu program” când lipsurile spun deja „nicio zi de sesiune cu program”. */
+export function motiveGataConvocare(lipsuri, motivBlocare) {
+  const l = [...(lipsuri || [])]
+  const faraZi = l.includes('nicio zi de sesiune cu program')
+  const din = String(motivBlocare || '').split('; ').map(x => x.trim()).filter(Boolean)
+    .filter(x => !(faraZi && x === 'UAT fără zi de sesiune cu program'))
+  for (const x of din) if (!l.includes(x)) l.push(x)
+  return l
+}
+
 /** Rezumatul zilelor pentru tabel: „10.12 · 11.12 · 12.12” (fără an), '-' dacă nu există. */
 export function rezumatZile(uat) {
   const z = ZILE_SESIUNE.map(k => uat?.[k]).filter(v => !gol(v)).map(v => { const [, l, d] = String(v).split('-'); return `${d}.${l}` })
