@@ -788,8 +788,10 @@ prezentat după convocarea și afișarea de 10 zile”.
 
 Regula în ERP: zile **calendaristice** (planul nu spune „lucrătoare”), față de **ziua 1 de sesiune** (`red_uat.sesiune_zi1`),
 pentru **data expedierii** recomandatei (nu a primirii) și pentru **începutul afișării** (`red_uat.afisare_data_start`). Data-limită
-= ziua 1 − 10 zile; o expediere / afișare chiar pe data-limită e în termen, din ziua următoare e după termen. O singură constantă:
-`TERMEN_CONVOCARE_ZILE = 10` în `src/redari/setari.js` (`dataLimitaConvocare`, `termenAfisare`).
+= ziua 1 − 11 zile („10 zile libere”: nu se numără nici ziua expedierii / începerii afișării, nici ziua 1; #973, confirmat Răzvan
+04.11.2026, confirmarea Juridic nedocumentată); o expediere / afișare chiar pe data-limită e în termen, din ziua următoare e după termen.
+Constantele: `TERMEN_CONVOCARE_ZILE = 10` + `ZILE_EXCLUSE_DIN_TERMEN = 1` în `src/redari/setari.js` (`dataLimitaConvocare`,
+`termenAfisare`). Revenire la ziua 1 − 10: `ZILE_EXCLUSE_DIN_TERMEN = 0` (și testele de limită).
 
 | Unde | Ce face | Fel |
 |---|---|---|
