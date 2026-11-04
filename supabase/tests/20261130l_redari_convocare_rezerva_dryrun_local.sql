@@ -8,7 +8,7 @@
 SELECT set_config('t.port', :'port', false);
 DO $g$ BEGIN
   IF current_setting('gazpet.dry_local', true) IS DISTINCT FROM 'DA' OR current_user <> 'postgres' THEN RAISE EXCEPTION 'TEST0 FAIL: garda (doar cluster local)'; END IF;
-  IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean)') IS NULL THEN RAISE EXCEPTION 'TEST0 FAIL: migrarea lipseste'; END IF;
+  IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NULL THEN RAISE EXCEPTION 'TEST0 FAIL: migrarea lipseste'; END IF;
 END $g$;
 CREATE EXTENSION IF NOT EXISTS dblink;
 CREATE FUNCTION public.t_stare(p_sql text) RETURNS text LANGUAGE plpgsql AS $f$
@@ -28,8 +28,8 @@ BEGIN
     CASE WHEN p_uid IS NULL THEN jsonb_build_object('role', p_rol) ELSE jsonb_build_object('sub', p_uid, 'role', p_rol) END::text)) AS t(x text);
   PERFORM dblink_exec(p_nume, format('SET ROLE %I', p_rol));
 END $f$;
-CREATE FUNCTION public.t_sql_rez(p_det uuid, p_confirmat boolean DEFAULT false) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
-  SELECT format('SELECT public.t_stare(%L)', format('SELECT nr_document FROM public.fn_red_convocare_rezerva(%L::uuid, %L)', p_det, p_confirmat)) $f$;
+CREATE FUNCTION public.t_sql_rez(p_det uuid, p_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta') RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+  SELECT format('SELECT public.t_stare(%L)', format('SELECT nr_document FROM public.fn_red_convocare_rezerva(%L::uuid, %L, %L)', p_det, p_confirmat, p_canal)) $f$;
 CREATE FUNCTION public.t_rez(p_conn text, p_det text, p_confirmat boolean DEFAULT false) RETURNS text LANGUAGE sql AS $f$
   SELECT r FROM dblink(p_conn, public.t_sql_rez(p_det::uuid, p_confirmat)) AS t(r text) $f$;
 CREATE FUNCTION public.t_det(p_cheie text) RETURNS uuid LANGUAGE sql STABLE AS $f$ SELECT id FROM public.red_detinatori WHERE nume = 'DRY30L ' || p_cheie $f$;
@@ -60,15 +60,17 @@ INSERT INTO public.profiles (id, email, name, is_owner) VALUES
   ('00000000-0000-0000-0000-0000000000a5', 'fara.test@exemplu.local', 'FARA NIVEL', false);
 INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
   ('00000000-0000-0000-0000-0000000000a2', 'redari', 'editor'), ('00000000-0000-0000-0000-0000000000a3', 'redari', 'viewer');
-INSERT INTO public.red_proiecte (id, cod, denumire, contract_nr, contract_data, imputernicire_nr, imputernicire_data, reprezentant_tgz_nume, contact_nume, text_gdpr)
-  VALUES ('00000000-0000-0000-0000-00000000b001', 'TEST-RAZVAN', 'Proiect DRY (fictiv)', '12', '2026-10-01', '7', '2026-10-20', 'R. TGZ', 'Ion Test', 'Operator: test.');
+INSERT INTO public.red_proiecte (id, cod, denumire, contract_nr, contract_data, imputernicire_nr, imputernicire_data, reprezentant_tgz_nume, reprezentant_tgz_telefon,
+  contact_nume, contact_telefon, contact_email, text_gdpr)
+  VALUES ('00000000-0000-0000-0000-00000000b001', 'TEST-RAZVAN', 'Proiect DRY (fictiv)', '12', '2026-10-01', '7', '2026-10-20', 'R. TGZ', '0700000001',
+  'Ion Test', '0700000002', 'test@exemplu.local', 'Operator: test.');
 INSERT INTO public.red_uat (id, proiect_id, nume, uat3, sesiune_zi1, program_zi1)
   VALUES ('00000000-0000-0000-0000-00000000c001', '00000000-0000-0000-0000-00000000b001', 'Test', 'TST', '2026-12-01', '09-15');
 INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela, tronson)
   SELECT ('00000000-0000-0000-0000-0000000d' || lpad(i::text, 4, '0'))::uuid, '00000000-0000-0000-0000-00000000b001', '00000000-0000-0000-0000-00000000c001',
-         'TST-' || lpad(i::text, 4, '0'), 1 FROM generate_series(1, 14) i;
+         'TST-' || lpad(i::text, 4, '0'), 1 FROM generate_series(1, 16) i;
 INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate)
-  SELECT ('00000000-0000-0000-0000-0000000d' || lpad(i::text, 4, '0'))::uuid, 'DRY30L D' || i, 'dry30l d' || i, 'proprietar' FROM generate_series(1, 14) i;
+  SELECT ('00000000-0000-0000-0000-0000000d' || lpad(i::text, 4, '0'))::uuid, 'DRY30L D' || i, 'dry30l d' || i, 'proprietar' FROM generate_series(1, 16) i;
 INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta)
   SELECT id, 'Str. Test 1', 'Testeni', 'Testeni', 'Mehedinti', '200000', true FROM public.red_detinatori;
 UPDATE public.red_detinatori SET sters_la = now() WHERE nume = 'DRY30L D8';
@@ -122,7 +124,7 @@ END $t$;
 
 -- TEST1c: SECURITY INVOKER (RLS + triggerele utilizatorului)
 DO $t$ BEGIN
-  IF (SELECT prosecdef FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean)'::regprocedure) THEN RAISE EXCEPTION 'TEST1c FAIL: e DEFINER'; END IF;
+  IF (SELECT prosecdef FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure) THEN RAISE EXCEPTION 'TEST1c FAIL: e DEFINER'; END IF;
   RAISE NOTICE 'TEST1c OK';
 END $t$;
 
@@ -314,12 +316,46 @@ BEGIN
   RAISE NOTICE 'TEST9b OK (stergerea a asteptat rezervarea comisa)';
 END $t$;
 
+-- TEST10: calea INDIVIDUALĂ (modal: canal ales, fără bifă) concurentă cu LOTUL (poștă) pe același deținător → o singură convocare
+DO $t$
+DECLARE r1 text; r2 text; n0 int := public.t_nr();
+BEGIN
+  PERFORM dblink_exec('c1', 'BEGIN');
+  r1 := (SELECT x FROM dblink('c1', public.t_sql_rez(public.t_det('D15'), false, 'posta')) AS t(x text));   -- individual
+  IF r1 NOT LIKE 'OK:C-%' THEN RAISE EXCEPTION 'TEST10 FAIL individual: %', r1; END IF;
+  PERFORM dblink_send_query('c2', public.t_sql_rez(public.t_det('D15')));                                    -- lotul
+  PERFORM pg_sleep(0.3);
+  IF dblink_is_busy('c2') <> 1 THEN RAISE EXCEPTION 'TEST10 FAIL: lotul nu asteapta'; END IF;
+  PERFORM dblink_exec('c1', 'COMMIT');
+  r2 := public.t_rezultat('c2');
+  IF r2 NOT LIKE 'RD001:%' OR public.t_active('D15') <> 1 OR public.t_nr() <> n0 + 1 THEN RAISE EXCEPTION 'TEST10 FAIL: % / %', r2, public.t_active('D15'); END IF;
+  -- bifa explicită din modal (p_numar_nou_confirmat) = singura excepție
+  r2 := (SELECT x FROM dblink('ed', public.t_sql_rez(public.t_det('D15'), true, 'posta')) AS t(x text));
+  IF r2 NOT LIKE 'OK:C-%' OR public.t_active('D15') <> 2 THEN RAISE EXCEPTION 'TEST10 FAIL confirmat: %', r2; END IF;
+  RAISE NOTICE 'TEST10 OK (individual vs lot: o convocare; bifa explicita = a doua)';
+END $t$;
+
+-- TEST11: canalul — RD001 pe ACELAȘI canal; canal invalid → 22023
+DO $t$
+DECLARE r text;
+BEGIN
+  r := (SELECT x FROM dblink('ed', public.t_sql_rez(public.t_det('D16'), false, 'email')) AS t(x text));
+  IF r NOT LIKE 'OK:C-%' OR (SELECT canal FROM public.red_convocari WHERE nr_document = substr(r, 4)) <> 'email' THEN RAISE EXCEPTION 'TEST11 FAIL email: %', r; END IF;
+  r := (SELECT x FROM dblink('ed', public.t_sql_rez(public.t_det('D16'), false, 'email')) AS t(x text));
+  IF r NOT LIKE 'RD001:%email%' THEN RAISE EXCEPTION 'TEST11 FAIL email dublu: %', r; END IF;
+  r := (SELECT x FROM dblink('ed', public.t_sql_rez(public.t_det('D16'), false, 'posta')) AS t(x text));
+  IF r NOT LIKE 'OK:C-%' THEN RAISE EXCEPTION 'TEST11 FAIL posta dupa email: %', r; END IF;
+  r := (SELECT x FROM dblink('ed', public.t_sql_rez(public.t_det('D16'), false, 'telefon')) AS t(x text));
+  IF r NOT LIKE '22023:%' THEN RAISE EXCEPTION 'TEST11 FAIL telefon: %', r; END IF;
+  RAISE NOTICE 'TEST11 OK';
+END $t$;
+
 -- TEST8: ACL + setari
 DO $t$
 BEGIN
-  IF NOT has_function_privilege('authenticated', 'public.fn_red_convocare_rezerva(uuid,boolean)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.fn_red_convocare_rezerva(uuid,boolean)', 'EXECUTE')
-     OR has_function_privilege('service_role', 'public.fn_red_convocare_rezerva(uuid,boolean)', 'EXECUTE') THEN RAISE EXCEPTION 'TEST8 FAIL: ACL'; END IF;
+  IF NOT has_function_privilege('authenticated', 'public.fn_red_convocare_rezerva(uuid,boolean,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.fn_red_convocare_rezerva(uuid,boolean,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.fn_red_convocare_rezerva(uuid,boolean,text)', 'EXECUTE') THEN RAISE EXCEPTION 'TEST8 FAIL: ACL'; END IF;
   RAISE NOTICE 'TEST8 OK';
 END $t$;
 SELECT dblink_disconnect(c) FROM unnest(dblink_get_connections()) c;

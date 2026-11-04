@@ -166,20 +166,24 @@ describe('convocatorNeexpediat', () => {
     expect(aparuteDupaVerificare(null, [{ id: 'a' }])).toHaveLength(1)
   })
 
-  it('r4 P2-01 (c): rezervaNumarConvocare — azi fn_red_numar_document; eroare / gol → aruncă', async () => {
+  it('#989 r4: rezervaNumarConvocare = RPC-ul atomic fn_red_convocare_rezerva (bifa → p_numar_nou_confirmat, canal), fără cale alternativă', async () => {
     const apeluri = []
     const sb = (rez) => ({ rpc: async (f, a) => { apeluri.push([f, a]); return rez } })
-    expect(await rezervaNumarConvocare(sb({ data: 'C-0103', error: null }), { uat3: 'HUS', tronson: 3, detinatorId: 'd1', confirmateIds: ['a'] })).toBe('C-0103')
-    expect(apeluri[0]).toEqual(['fn_red_numar_document', { p_tip: 'C', p_uat3: 'HUS', p_tronson: 3 }])
-    await rezervaNumarConvocare(sb({ data: 'C-0104', error: null }), { uat3: 'HUS' })
-    expect(apeluri[1][1].p_tronson).toBeNull()
-    await expect(rezervaNumarConvocare(sb({ data: null, error: { message: 'interzis' } }), { uat3: 'HUS' })).rejects.toMatchObject({ message: 'interzis' })
-    await expect(rezervaNumarConvocare(sb({ data: null, error: null }), { uat3: 'HUS' })).rejects.toThrow(/nu a fost generat/)
+    expect(await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv1', nr_document: 'C-0103' }], error: null }), { detinatorId: 'd1', confirmat: true, canal: 'email' }))
+      .toEqual({ convocareId: 'cv1', nrDocument: 'C-0103' })
+    expect(apeluri[0]).toEqual(['fn_red_convocare_rezerva', { p_detinator_id: 'd1', p_numar_nou_confirmat: true, p_canal: 'email' }])
+    await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv2', nr_document: 'C-0104' }], error: null }), { detinatorId: 'd1', confirmat: 'da' })
+    expect(apeluri[1][1]).toEqual({ p_detinator_id: 'd1', p_numar_nou_confirmat: false, p_canal: 'posta' })   // doar `true` explicit confirmă
+    expect(apeluri.every(([f]) => f !== 'fn_red_numar_document')).toBe(true)
+    await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'PGRST202', message: 'x' }, status: 404 }), { detinatorId: 'd1' }))
+      .rejects.toMatchObject({ code: 'FARA_RPC', message: expect.stringMatching(/aplicați migrarea 20261130l/) })
+    await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'RD001', message: 'are deja' } }), { detinatorId: 'd1' })).rejects.toMatchObject({ code: 'RD001' })
+    await expect(rezervaNumarConvocare(sb({ data: [], error: null }), { detinatorId: 'd1' })).rejects.toThrow(/nu a întors/)
+    await expect(rezervaNumarConvocare(sb({ data: [], error: null }), {})).rejects.toThrow(/deținătorul/)
   })
 
-  it('r4 P2-01 (a): avertismentul nu promite garanție', () => {
-    expect(AVERTISMENT_CONCURENTA).toMatch(/alt utilizator poate genera în paralel/)
-    expect(AVERTISMENT_CONCURENTA).toMatch(/Verificarea finală o va face serverul, după activarea protecției/)
+  it('avertismentul descrie verificarea finală a serverului', () => {
+    expect(AVERTISMENT_CONCURENTA).toMatch(/verificarea finală o face serverul la rezervare/)
   })
 
   it('textul confirmării numește numerele existente și consumul unui număr nou', () => {

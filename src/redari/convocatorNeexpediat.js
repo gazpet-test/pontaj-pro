@@ -164,19 +164,29 @@ export function aparuteDupaVerificare(confirmate, proaspete) {
   return (proaspete || []).filter(c => !vazute.has(c.id))
 }
 
+// ─── #989 r4 (Jakarinos r3 P1): protocolul atomic, COMUN căii individuale și generării în masă ──────────────────────
+
+export const RPC_REZERVA = 'fn_red_convocare_rezerva'
+export const MESAJ_FARA_PROTECTIE = 'protecția la concurență nu e activă — aplicați migrarea 20261130l (fn_red_convocare_rezerva)'
+/** Răspunsul PostgREST pentru o funcție inexistentă (migrarea 20261130l neaplicată). */
+export const esteFaraRpc = (res) => res?.status === 404 || res?.error?.code === 'PGRST202'
+
 /**
- * P2-01 (c): PUNCTUL DE INTEGRARE pentru rezervarea numărului unui convocator NOU.
- * AZI: `fn_red_numar_document('C', uat3, tronson)` — verificarea „există deja un convocator neexpediat” e făcută în UI
- * (avertisment + recitire chiar înainte de rezervare), NU e atomică: alt utilizator poate genera în paralel.
- * DUPĂ aplicarea migrării `20261130l_redari_convocare_rezerva` (PR #989): aici se cheamă RPC-ul atomic (blochează
- * deținătorul, recitește convocările active neexpediate și refuză fără confirmare), cu `detinatorId` și `confirmateIds`.
+ * PUNCTUL DE INTEGRARE pentru un convocator NOU (ambele căi): RPC-ul atomic `fn_red_convocare_rezerva` (migrarea 20261130l) —
+ * lock pe (proiect, deținător), recitire sub lock (deținător + parcelă, gărzile proiect/UAT → RD002), RD001 dacă există deja o convocare
+ * activă neexpediată pe ACELAȘI canal (excepția: `confirmat` = bifa EXPLICITĂ din modal), apoi numărul C și INSERT-ul rândului în
+ * aceeași tranzacție. Clientul NU mai inserează rândul: după rezervare încarcă doar fișierul (reincarcaConvocator pe `convocareId`).
+ * Fără RPC → eroare cu `code: 'FARA_RPC'` și MESAJ_FARA_PROTECTIE (fără cale alternativă).
+ * @returns {Promise<{ convocareId: string, nrDocument: string }>}
  */
-export async function rezervaNumarConvocare(supabase, { uat3, tronson, detinatorId, confirmateIds = [] } = {}) {
-  void detinatorId; void confirmateIds   // folosite de RPC-ul atomic din #989, după activarea protecției
-  const { data, error } = await supabase.rpc('fn_red_numar_document', { p_tip: 'C', p_uat3: uat3, p_tronson: tronson ?? null })
-  if (error) throw error
-  if (!data) throw new Error('Numărul de document nu a fost generat.')
-  return data
+export async function rezervaNumarConvocare(supabase, { detinatorId, confirmat = false, canal = 'posta' } = {}) {
+  if (!detinatorId) throw new Error('Lipsește deținătorul pentru rezervare.')
+  const res = await supabase.rpc(RPC_REZERVA, { p_detinator_id: detinatorId, p_numar_nou_confirmat: confirmat === true, p_canal: canal })
+  if (esteFaraRpc(res)) throw Object.assign(new Error(MESAJ_FARA_PROTECTIE), { code: 'FARA_RPC' })
+  if (res.error) throw res.error
+  const r0 = Array.isArray(res.data) ? res.data[0] : res.data
+  if (!r0?.convocare_id || !r0?.nr_document) throw new Error('Rezervarea nu a întors convocarea și numărul.')
+  return { convocareId: r0.convocare_id, nrDocument: r0.nr_document }
 }
 
-export const AVERTISMENT_CONCURENTA = 'Verificarea e făcută pe această pagină: alt utilizator poate genera în paralel un convocator pentru același deținător. Verificarea finală o va face serverul, după activarea protecției.'
+export const AVERTISMENT_CONCURENTA = 'Lista de mai sus e citită pe această pagină; verificarea finală o face serverul la rezervare (atomic): dacă între timp alt utilizator a generat un convocator pe același canal, rezervarea e refuzată, iar un număr nou se dă doar cu bifa de confirmare.'

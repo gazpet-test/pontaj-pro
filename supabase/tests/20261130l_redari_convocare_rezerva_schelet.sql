@@ -59,7 +59,7 @@ GRANT EXECUTE ON FUNCTION auth.jwt() TO postgres;
 CREATE TABLE public.profiles (id uuid PRIMARY KEY, email text, name text, is_owner boolean NOT NULL DEFAULT false);
 CREATE TABLE public.user_module_access (id bigserial PRIMARY KEY, profile_id uuid NOT NULL, module text NOT NULL, access_level text);
 CREATE TABLE public.red_proiecte (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), cod text NOT NULL, denumire text, contract_nr text, contract_data date,
-  imputernicire_nr text, imputernicire_data date, reprezentant_tgz_nume text, contact_nume text, contact_telefon text, contact_email text DEFAULT 'redari@gazpet.ro'::text,
+  imputernicire_nr text, imputernicire_data date, reprezentant_tgz_nume text, reprezentant_tgz_telefon text, contact_nume text, contact_telefon text, contact_email text DEFAULT 'redari@gazpet.ro'::text,
   text_gdpr text NOT NULL DEFAULT 'Operatori: test.');
 CREATE TABLE public.red_uat (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id), nume text NOT NULL, uat3 text NOT NULL,
   sesiune_zi1 date, sesiune_zi2 date, sesiune_zi3 date, program_zi1 text, program_zi2 text, program_zi3 text);
@@ -411,10 +411,17 @@ ALTER TABLE public.red_parcele ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.red_numere ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.red_uat ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.red_proiecte ENABLE ROW LEVEL SECURITY;
-GRANT SELECT, INSERT, UPDATE ON public.red_convocari, public.red_detinatori, public.red_uat, public.red_proiecte TO authenticated;
+-- ACL exact ca pe live (relacl + attacl pe coloanele citite de RPC; amprentate în migrare)
+GRANT SELECT, INSERT, UPDATE ON public.red_convocari, public.red_detinatori, public.red_uat, public.red_proiecte TO authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE ON public.red_parcele TO service_role;
 GRANT SELECT (id, proiect_id, uat_id, id_parcela, tronson, sters_la) ON public.red_parcele TO authenticated;
+GRANT INSERT (id, proiect_id, uat_id, id_parcela, tronson, sters_la) ON public.red_parcele TO authenticated;
 GRANT UPDATE (id_parcela, tronson, sters_la, uat_id, proiect_id) ON public.red_parcele TO authenticated;
-GRANT SELECT ON public.red_numere TO authenticated;
+GRANT SELECT ON public.red_numere TO authenticated, service_role;
+CREATE POLICY red_detinatori_ins ON public.red_detinatori FOR INSERT TO authenticated WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
+CREATE POLICY red_parcele_ins ON public.red_parcele FOR INSERT TO authenticated WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
+CREATE POLICY red_uat_ins ON public.red_uat FOR INSERT TO authenticated WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = 'admin'::text);
+CREATE POLICY red_proiecte_ins ON public.red_proiecte FOR INSERT TO authenticated WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = 'admin'::text);
 CREATE POLICY red_convocari_sel ON public.red_convocari FOR SELECT TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
 CREATE POLICY red_convocari_ins ON public.red_convocari FOR INSERT TO authenticated WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
 CREATE POLICY red_convocari_upd ON public.red_convocari FOR UPDATE TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text])) WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));

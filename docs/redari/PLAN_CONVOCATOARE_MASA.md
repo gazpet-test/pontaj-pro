@@ -38,9 +38,10 @@ Locul: tab-ul UAT-uri (două linii în `Redari.jsx`: importul și randarea tab-u
    Clientul încarcă fișierul prin `reincarcaConvocator`. **Fără fallback**: dacă RPC-ul lipsește (`PGRST202` / 404, proba fără efecte
    `p_detinator_id = null` → `22023`), „Verifică” blochează lotul cu „protecția la concurență nu e activă — aplicați migrarea 20261130l”, iar o
    dispariție în timpul rulării oprește restul lotului. `55P03` (UAT ocupat de o plicuire) = eroare pe rând, reîncercabilă.
-   **Calea individuală** (ModalConvocator) NU se schimbă aici: punctul de integrare e `rezervaNumarConvocare` din #991 (nu e încă pe main;
-   integrarea în acest PR ar aduce tot #991 și ar intra în conflict pe `Redari.jsx`). Se integrează după merge-ul ambelor; până atunci calea
-   individuală nu ia lock-ul.
+   **Calea individuală (r4)**: #991 e înglobat în acest PR (merge, nu rebase). `rezervaNumarConvocare` (src/redari/convocatorNeexpediat.js) e
+   punctul COMUN: cheamă RPC-ul cu `p_numar_nou_confirmat` = bifa explicită din modal și `p_canal` = canalul ales; INSERT-ul rândului se face în
+   RPC, iar ModalConvocator încarcă apoi doar fișierul prin `reincarcaConvocator`. Fără RPC, și calea individuală refuză cu același mesaj.
+   RD001 se decide pe același canal. Lotul folosește aceeași funcție (canal poștă, fără confirmare).
    Proiectul și UAT-ul se recitesc și în client înaintea fiecărui rând (amprentă față de „Verifică”), iar documentul se face din datele recitite.
 7. **Progres + oprire**: contor `i / n`; **Oprește** se verifică înainte de fiecare rând (restul → „oprit”).
 8. **Erori per rând**: notate (cu numărul rezervat, dacă e cazul), lotul continuă. Planul se invalidează din clipa în care pornește execuția

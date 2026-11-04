@@ -39,7 +39,7 @@ grep -E "TEST[0-9a-z]+ OK|FAIL|ERROR|TESTE_LOCAL_OK" "$TMP/teste.out" | sed 's/^
 grep -q "TESTE_LOCAL_OK" "$TMP/teste.out" || REZ=1
 { echo "BEGIN;"; echo "SELECT set_config('gazpet.revenire_20261130l', 'REDARI_CONVOCARE_REZERVA_SCOS:' || txid_current(), true);"
   echo "\\i $TW/$(basename "$R")"
-  echo "DO \$v\$ BEGIN IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean)') IS NOT NULL THEN RAISE EXCEPTION 'REVENIRE_INCOMPLETA'; END IF; END \$v\$;"
+  echo "DO \$v\$ BEGIN IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NOT NULL THEN RAISE EXCEPTION 'REVENIRE_INCOMPLETA'; END IF; END \$v\$;"
   echo "SELECT 'CONVOCARI_RAMASE=' || count(*) FROM public.red_convocari;"; echo "COMMIT;"; } > "$TMP/rev.sql"
 if $PSQL -At -f "$TW/rev.sql" >"$TMP/rev.out" 2>&1; then echo "REVENIRE_OK"; grep CONVOCARI_RAMASE "$TMP/rev.out"; else echo "ESEC revenire"; cat "$TMP/rev.out"; REZ=1; fi
 # DRY-ul de PRODUCTIE rulat si pe clusterul local (datele fictive de mai sus, functia scoasa de revenire): exact secventa runnerului de productie,
@@ -48,9 +48,22 @@ P=$RAD/supabase/tests/20261130l_redari_convocare_rezerva_dryrun.sql; tr -d '\r' 
 { echo "BEGIN ISOLATION LEVEL READ COMMITTED;"; echo "SELECT set_config('gazpet.livrare_migrare', '20261130l_redari_convocare_rezerva:' || txid_current(), true);"
   echo "\\i $TW/$(basename "$M")"; echo "\\i $TW/$(basename "$P")"; echo "RESET ROLE;"; echo "SELECT set_config('request.jwt.claims', '', true);"
   echo "SELECT set_config('gazpet.revenire_20261130l', 'REDARI_CONVOCARE_REZERVA_SCOS:' || txid_current(), true);"; echo "\\i $TW/$(basename "$R")"
-  echo "ROLLBACK;"; echo "SELECT 'DUPA_ROLLBACK fn=' || (to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean)') IS NOT NULL)::text;"; } > "$TMP/prod.sql"
+  echo "ROLLBACK;"; echo "SELECT 'DUPA_ROLLBACK fn=' || (to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NOT NULL)::text;"; } > "$TMP/prod.sql"
 if $PSQL -f "$TW/prod.sql" >"$TMP/prod.out" 2>&1 && grep -q "DUPA_ROLLBACK fn=false" "$TMP/prod.out" && grep -q "DRY productie 20261130l: teste OK" "$TMP/prod.out"; then
   grep -E "TEST[0-9a-z]+ (OK|SARIT)" "$TMP/prod.out" | sed 's/^.*NOTICE:  /PROD_SIM /' | cut -c1-200; echo "DRY_PROD_PE_LOCAL_OK"
 else echo "ESEC DRY productie pe local"; cat "$TMP/prod.out" | tail -20; REZ=1; fi
+# mutanți de poartă L15 (r4): o schimbare de politică / drept / funcție din lanț → migrarea TREBUIE să refuze (tranzacție anulată)
+mutant() {   # $1 = eticheta, $2 = SQL-ul mutației, $3 = textul de refuz așteptat
+  { echo "BEGIN;"; echo "$2"; echo "SELECT set_config('gazpet.livrare_migrare', '20261130l_redari_convocare_rezerva:' || txid_current(), true);"
+    echo "\\i $TW/$(basename "$M")"; echo "ROLLBACK;"; } > "$TMP/mut.sql"
+  if $PSQL -f "$TW/mut.sql" >"$TMP/mut.out" 2>&1; then echo "ESEC MUTANT $1: migrarea a trecut"; REZ=1
+  elif grep -q "$3" "$TMP/mut.out"; then echo "MUTANT_$1_REFUZAT_OK"; else echo "ESEC MUTANT $1: alt refuz"; tail -3 "$TMP/mut.out"; REZ=1; fi
+}
+mutant POLITICA_SELECT "ALTER POLICY red_convocari_sel ON public.red_convocari USING (true);" "politicile RLS"
+mutant POLITICA_IN_PLUS "CREATE POLICY red_convocari_extra ON public.red_convocari AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (true);" "politicile RLS"
+mutant DREPT_TABEL "GRANT DELETE ON public.red_convocari TO authenticated;" "drepturile pe tabelele"
+mutant DREPT_COLOANA "REVOKE UPDATE (sters_la) ON public.red_parcele FROM authenticated;" "drepturile pe tabelele"
+mutant TRIGGER_DEFINER "ALTER FUNCTION public.fn_red_convocari_posta_garda() SECURITY DEFINER;" "lantul de functii"
+mutant LOCK_UAT "CREATE OR REPLACE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$ BEGIN RETURN; END \$f\$;" "lantul de functii"
 [ "$REZ" = "0" ] && echo "DRY_LOCAL=VERDE" || echo "DRY_LOCAL=ROSU"
 exit $REZ

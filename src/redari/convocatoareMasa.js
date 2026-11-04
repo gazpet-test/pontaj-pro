@@ -9,14 +9,15 @@ import JSZip from 'jszip'
 import * as XLSX from 'xlsx-js-style'
 import { genereazaConvocator, verificaDateConvocator, reincarcaConvocator, borderouCsv, BUCKET_REDARI } from './docx.js'
 import { motivBlocareConvocator, citestePaginat, LOT_IN, COL_DETINATOR, COL_CONVOCARE } from './ui/comune.jsx'
+// r4: același punct de rezervare ca la calea individuală (ModalConvocator) — un singur protocol atomic
+import { rezervaNumarConvocare, RPC_REZERVA, MESAJ_FARA_PROTECTIE, esteFaraRpc } from './convocatorNeexpediat.js'
+export { RPC_REZERVA, MESAJ_FARA_PROTECTIE }
 
 export const LIMITA_LOT = 200
-export const RPC_REZERVA = 'fn_red_convocare_rezerva'
 // SQLSTATE-uri din fn_red_convocare_rezerva: RD001 = există deja convocare poștală activă neexpediată; RD002 = gărzile proiect/UAT/deținător
 // recitite sub lock nu trec; P0002 = deținătorul / parcela au fost șterse; 55P03 = UAT ocupat (plicuire / modificare de deținători în curs)
 export const CODURI_SCHIMBAT = ['RD001', 'RD002', 'P0002']
 export const COL_PARCELA_CONVOCATOR = 'id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta, sters_la'
-export const MESAJ_FARA_PROTECTIE = 'protecția la concurență nu e activă — aplicați migrarea 20261130l (fn_red_convocare_rezerva)'
 
 export const ACTIUNI = { nou: 'nou', reia: 'reluat', reincarca: 'reîncărcat' }
 const compara = (a, b) => String(a ?? '').localeCompare(String(b ?? ''), 'ro', { numeric: true })
@@ -42,7 +43,6 @@ export async function citesteInChei(fabrica, coloana, ids, cheie, esteCurent = (
   return tot
 }
 
-const esteFaraRpc = (res) => res?.status === 404 || res?.error?.code === 'PGRST202'
 
 /** Există RPC-ul de rezervare atomică? Probă fără efecte: p_detinator_id = null → 22023 dacă funcția există. */
 export async function detecteazaRezervare(client) {
@@ -219,6 +219,8 @@ export async function executaLot(client, { plan, proiect, uat, templateArrayBuff
           recitesteRand(client, { detinatorId: p.rand.detinator_id, parcelaId: p.rand.parcela_id, esteCurent }),
           recitesteProiectUat(client, { proiectId: proiect.id, uatId: uat.id }),
         ])
+        // r4 (Jakarinos r3 P2): generația / identitatea UI se verifică IMEDIAT după recitiri, înainte de rezervare (un răspuns întârziat nu rezervă)
+        if (!esteCurent()) { oprit = true; raport.push({ ...baza, stare: 'oprit', motiv: motivOprire }); continue }
         if (!pu.proiect || !pu.uat || amprentaObiect(pu.proiect, cheiProiect) + amprentaObiect(pu.uat, cheiUat) !== amprentaPU) {
           raport.push({ ...baza, stare: 'schimbat', motiv: 'proiectul sau UAT-ul s-a schimbat între timp — rulează din nou „Verifică”' }); continue
         }
@@ -231,16 +233,15 @@ export async function executaLot(client, { plan, proiect, uat, templateArrayBuff
         let convocareId = p.conv?.id
         if (p.actiune === 'nou') {
           // rezervarea atomică (lock + recitire sub lock + RD001/RD002 + număr + INSERT, o tranzacție). Fără RPC → oprire, fără cale alternativă.
-          const res = await client.rpc(RPC_REZERVA, { p_detinator_id: p.rand.detinator_id })
-          if (esteFaraRpc(res)) {
-            oprit = true; motivOprire = `neprocesat: ${MESAJ_FARA_PROTECTIE}`
-            raport.push({ ...baza, stare: 'eroare', motiv: MESAJ_FARA_PROTECTIE }); continue
+          // r4: același punct ca ModalConvocator (rezervaNumarConvocare) — lotul: canal poștă, fără confirmare
+          let rez
+          try { rez = await rezervaNumarConvocare(client, { detinatorId: p.rand.detinator_id, confirmat: false, canal: 'posta' }) }
+          catch (e) {
+            if (e?.code === 'FARA_RPC') { oprit = true; motivOprire = `neprocesat: ${MESAJ_FARA_PROTECTIE}`; raport.push({ ...baza, stare: 'eroare', motiv: MESAJ_FARA_PROTECTIE }); continue }
+            if (CODURI_SCHIMBAT.includes(e?.code)) { raport.push({ ...baza, stare: 'schimbat', motiv: `schimbat între timp: ${e.message || e.code}` }); continue }
+            throw e
           }
-          if (CODURI_SCHIMBAT.includes(res.error?.code)) { raport.push({ ...baza, stare: 'schimbat', motiv: `schimbat între timp: ${res.error.message || res.error.code}` }); continue }
-          if (res.error) throw res.error
-          const r0 = Array.isArray(res.data) ? res.data[0] : res.data
-          if (!r0?.convocare_id || !r0?.nr_document) throw new Error('Rezervarea nu a întors convocarea și numărul.')
-          convocareId = r0.convocare_id; nrDocument = r0.nr_document; rezervat = true
+          convocareId = rez.convocareId; nrDocument = rez.nrDocument; rezervat = true
         }
         // rândul există (din RPC sau convocarea fără fișier): documentul se încarcă prin calea versionată existentă (v1 la primul upload)
         const g = await genereaza({ ...intrare, nrDocument, ...(p.actiune === 'reincarca' ? { dataDocument: p.conv.created_at } : {}) })

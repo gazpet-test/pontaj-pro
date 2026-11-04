@@ -9,7 +9,9 @@
 -- (SECURITY DEFINER: scrie red_numere), fn_red_plic_garda_persoana; red_convocari arw + politicile red_convocari_ins / _sel (admin/editor);
 -- red_detinatori arw + _sel / _upd (FOR SHARE cere UPDATE: admin/editor); red_parcele SELECT + UPDATE pe coloane + _sel / _upd; red_uat, red_proiecte
 -- SELECT + _sel. pg_advisory_xact_lock / hashtextextended: PUBLIC.
--- Ce face fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false) RETURNS TABLE (convocare_id, nr_document),
+-- r4: AMBELE căi folosesc funcția — generarea în masă (p_canal 'posta', fără confirmare) și calea individuală din Registru (ModalConvocator, prin
+-- rezervaNumarConvocare: p_numar_nou_confirmat = bifa explicită din modal, p_canal = canalul ales). RD001 se decide pe ACELAȘI canal.
+-- Ce face fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta') RETURNS TABLE (convocare_id, nr_document),
 -- într-o singură tranzacție (cea a apelului PostgREST):
 --   1. poarta: fn_red_nivel() ∈ {admin, editor}, altfel 42501; parametri NULL → 22023 (proba fără efecte a clientului); doar READ COMMITTED (25001);
 --   2. citire preliminară deținător → (proiect, uat) DOAR pentru cheia lock-ului; P0002 dacă lipsește;
@@ -24,11 +26,11 @@
 --      orice eroare anulează împreună numărul și rândul. created_by = DEFAULT auth.uid().
 --   Fișierul (cale + hash) îl pune apoi clientul prin reincarcaConvocator (UPDATE pe rând, RLS existent).
 -- Limite (documentate): proiectul / UAT-ul se citesc fără lock de rând (editorul nu are UPDATE pe ele); o schimbare de admin comisă după citire
--- și înainte de COMMIT nu e prinsă. Calea individuală (ModalConvocator) NU e schimbată aici: o integrează #991 (rezervaNumarConvocare) după merge.
+-- și înainte de COMMIT nu e prinsă. Fișa parcelei (reîncărcarea cu același număr) nu rezervă numere.
 -- Revenire: supabase/revenire/20261130l_redari_convocare_rezerva_ROLLBACK.sql (DROP FUNCTION; convocările create rămân convocări obișnuite).
 -- DRY producție (doar citiri, fără rezervare reușită): supabase/tests/20261130l_redari_convocare_rezerva_dryrun.sql.
 -- DRY local PG17 (concurență prin dblink, funcțiile live reale): supabase/tests/20261130l_..._schelet.sql + _dryrun_local.sql, scripts/redari_30l_dry_local.sh.
--- NEAPLICATĂ: se aplică doar după GO Jakarinos + Copilot și DRY verde (regula 01.11). Fără ea, generarea în masă refuză (fără fallback).
+-- NEAPLICATĂ: se aplică doar după GO Jakarinos + Copilot și DRY verde (regula 01.11). Fără ea, ambele căi refuză (fără fallback).
 DO $pre$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130l_redari_convocare_rezerva:' || txid_current() THEN
@@ -39,7 +41,7 @@ BEGIN
      OR to_regclass('public.red_uat') IS NULL OR to_regclass('public.red_proiecte') IS NULL OR to_regclass('public.red_numere') IS NULL THEN
     RAISE EXCEPTION '20261130l: lipseste schema Redari (red_convocari, red_detinatori, red_parcele, red_uat, red_proiecte, red_numere)';
   END IF;
-  IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean)') IS NOT NULL THEN RAISE EXCEPTION '20261130l: functia exista deja'; END IF;
+  IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NOT NULL THEN RAISE EXCEPTION '20261130l: functia exista deja'; END IF;
   -- coloanele citite / scrise (baseline read-only pe live 04.11.2026)
   IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_convocari'
         AND column_name IN ('id', 'detinator_id', 'canal', 'nr_document', 'data_expediere', 'stare', 'sters_la', 'created_by', 'created_at', 'plic_id')) <> 10
@@ -50,7 +52,7 @@ BEGIN
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_uat'
            AND column_name IN ('id', 'proiect_id', 'uat3', 'sesiune_zi1', 'sesiune_zi2', 'sesiune_zi3', 'program_zi1', 'program_zi2', 'program_zi3')) <> 9
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_proiecte'
-           AND column_name IN ('id', 'contract_nr', 'contract_data', 'imputernicire_nr', 'imputernicire_data', 'contact_nume', 'contact_telefon', 'contact_email', 'text_gdpr', 'reprezentant_tgz_nume')) <> 10 THEN
+           AND column_name IN ('id', 'contract_nr', 'contract_data', 'imputernicire_nr', 'imputernicire_data', 'contact_nume', 'contact_telefon', 'contact_email', 'text_gdpr', 'reprezentant_tgz_nume', 'reprezentant_tgz_telefon')) <> 11 THEN
     RAISE EXCEPTION '20261130l: coloanele Redari au alta forma';
   END IF;
   IF (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.red_convocari'::regclass AND conname = 'red_convocari_canal_check')
@@ -103,6 +105,49 @@ BEGIN
               AND (NOT relrowsecurity OR relforcerowsecurity OR pg_get_userbyid(relowner) <> 'postgres')) THEN
     RAISE EXCEPTION '20261130l: RLS / owner neasteptat pe tabelele atinse';
   END IF;
+  -- r4 (L15 pe RLS, Jakarinos r3 P2): politicile EXACTE ale tabelelor atinse — nume, comandă, permissive/restrictive, roluri, USING, WITH CHECK;
+  -- o politică în plus, lipsă sau modificată = refuz. Baseline citit read-only pe live 04.11.2026.
+  IF (SELECT string_agg(f, ';' ORDER BY f COLLATE "C") FROM (
+        SELECT polrelid::regclass::text || '.' || polname::text || '|' || polcmd::text || '|' || polpermissive::text || '|'
+               || (SELECT string_agg(r::regrole::text, ',' ORDER BY r::regrole::text COLLATE "C") FROM unnest(polroles) r) || '|'
+               || coalesce(pg_get_expr(polqual, polrelid), '') || '|' || coalesce(pg_get_expr(polwithcheck, polrelid), '') AS f
+          FROM pg_policy WHERE polrelid IN ('public.red_convocari'::regclass, 'public.red_detinatori'::regclass, 'public.red_parcele'::regclass,
+                                            'public.red_uat'::regclass, 'public.red_proiecte'::regclass, 'public.red_numere'::regclass)) z)
+     IS DISTINCT FROM
+       'red_convocari.red_convocari_ins|a|true|authenticated||(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]));'
+    || 'red_convocari.red_convocari_sel|r|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)|;'
+    || 'red_convocari.red_convocari_upd|w|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]))|(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]));'
+    || 'red_detinatori.red_detinatori_ins|a|true|authenticated||(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]));'
+    || 'red_detinatori.red_detinatori_sel|r|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)|;'
+    || 'red_detinatori.red_detinatori_upd|w|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]))|(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]));'
+    || 'red_numere.red_numere_sel|r|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)|;'
+    || 'red_parcele.red_parcele_ins|a|true|authenticated||(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]));'
+    || 'red_parcele.red_parcele_sel|r|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)|;'
+    || 'red_parcele.red_parcele_upd|w|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]))|(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]));'
+    || 'red_proiecte.red_proiecte_ins|a|true|authenticated||(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text);'
+    || 'red_proiecte.red_proiecte_sel|r|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)|;'
+    || 'red_proiecte.red_proiecte_upd|w|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text);'
+    || 'red_uat.red_uat_ins|a|true|authenticated||(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text);'
+    || 'red_uat.red_uat_sel|r|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)|;'
+    || 'red_uat.red_uat_upd|w|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)' THEN
+    RAISE EXCEPTION '20261130l: politicile RLS pe tabelele atinse nu sunt cele revizuite';
+  END IF;
+  -- drepturile pe tabele (relacl) și pe coloanele red_parcele citite / blocate de RPC (attacl) — exact ca baseline-ul
+  IF (SELECT string_agg(f, ';' ORDER BY f COLLATE "C") FROM (
+        SELECT c.relname || '|' || coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)::text, '') AS f
+          FROM pg_class c WHERE c.oid IN ('public.red_convocari'::regclass, 'public.red_detinatori'::regclass, 'public.red_parcele'::regclass,
+                                          'public.red_uat'::regclass, 'public.red_proiecte'::regclass, 'public.red_numere'::regclass)) z)
+     IS DISTINCT FROM 'red_convocari|{authenticated=arw/postgres,postgres=arwdDxtm/postgres,service_role=arw/postgres};red_detinatori|{authenticated=arw/postgres,postgres=arwdDxtm/postgres,service_role=arw/postgres};'
+                   || 'red_numere|{authenticated=r/postgres,postgres=arwdDxtm/postgres,service_role=r/postgres};red_parcele|{postgres=arwdDxtm/postgres,service_role=arw/postgres};'
+                   || 'red_proiecte|{authenticated=arw/postgres,postgres=arwdDxtm/postgres,service_role=arw/postgres};red_uat|{authenticated=arw/postgres,postgres=arwdDxtm/postgres,service_role=arw/postgres}'
+     OR (SELECT string_agg(f, ';' ORDER BY f COLLATE "C") FROM (
+        SELECT c.relname || '.' || a.attname || '|' || coalesce((SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(a.attacl::text[]) x)::text, '') AS f
+          FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+         WHERE c.oid = 'public.red_parcele'::regclass AND a.attname IN ('id', 'proiect_id', 'uat_id', 'tronson', 'sters_la')) z)
+     IS DISTINCT FROM 'red_parcele.id|{authenticated=ar/postgres};red_parcele.proiect_id|{authenticated=arw/postgres};red_parcele.sters_la|{authenticated=arw/postgres};'
+                   || 'red_parcele.tronson|{authenticated=arw/postgres};red_parcele.uat_id|{authenticated=arw/postgres}' THEN
+    RAISE EXCEPTION '20261130l: drepturile pe tabelele / coloanele atinse nu sunt cele revizuite';
+  END IF;
   -- drepturile de care are nevoie authenticated EXISTA deja (nu se acorda nimic aici)
   IF NOT has_function_privilege('authenticated', 'public.fn_red_numar_document(text,text,integer)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.fn_red_nivel()', 'EXECUTE')
@@ -115,7 +160,7 @@ BEGIN
   END IF;
 END $pre$;
 
-CREATE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false)
+CREATE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta')
 RETURNS TABLE (convocare_id uuid, nr_document text)
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
 DECLARE v_proiect uuid; v_uat uuid; v_uat3 text; v_tronson integer; v_calitate text; v_lipsa text[] := '{}'; v_existente text; v_nr text; v_id uuid;
@@ -124,7 +169,9 @@ BEGIN
   IF coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor') THEN
     RAISE EXCEPTION 'redari: fara drept de rezervare a convocarii' USING ERRCODE = '42501';
   END IF;
-  IF p_detinator_id IS NULL OR p_numar_nou_confirmat IS NULL THEN RAISE EXCEPTION 'redari: parametri lipsa' USING ERRCODE = '22023'; END IF;
+  IF p_detinator_id IS NULL OR p_numar_nou_confirmat IS NULL OR p_canal IS NULL THEN RAISE EXCEPTION 'redari: parametri lipsa' USING ERRCODE = '22023'; END IF;
+  -- canalele pe care UI-ul le generează cu număr C (generarea în masă: doar 'posta'; calea individuală: alegerea din modal, fără 'telefon')
+  IF p_canal NOT IN ('posta', 'sms', 'email', 'afisare') THEN RAISE EXCEPTION 'redari: canal invalid (%)', p_canal USING ERRCODE = '22023'; END IF;
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'redari: rezervarea convocarii doar in READ COMMITTED' USING ERRCODE = '25001';
   END IF;
@@ -148,43 +195,47 @@ BEGIN
   IF btrim(coalesce(pr.imputernicire_nr, '')) = '' OR pr.imputernicire_data IS NULL THEN v_lipsa := array_append(v_lipsa, 'proiect fara nr./data imputernicire Transgaz'); END IF;
   IF NOT ((u.sesiune_zi1 IS NOT NULL AND btrim(coalesce(u.program_zi1, '')) <> '') OR (u.sesiune_zi2 IS NOT NULL AND btrim(coalesce(u.program_zi2, '')) <> '')
           OR (u.sesiune_zi3 IS NOT NULL AND btrim(coalesce(u.program_zi3, '')) <> '')) THEN v_lipsa := array_append(v_lipsa, 'UAT fara zi de sesiune cu program'); END IF;
-  IF btrim(coalesce(pr.contact_nume, '')) = '' AND btrim(coalesce(pr.contact_telefon, '')) = '' AND btrim(coalesce(pr.contact_email, '')) = '' THEN
-    v_lipsa := array_append(v_lipsa, 'proiect fara persoana de contact'); END IF;
+  -- D3 (#991): șablonul tipărește numele, telefonul și e-mailul de contact + telefonul TGZ → fiecare obligatoriu (ca motivBlocareConvocator)
+  IF btrim(coalesce(pr.contact_nume, '')) = '' THEN v_lipsa := array_append(v_lipsa, 'proiect fara persoana de contact Gazpet'); END IF;
+  IF btrim(coalesce(pr.contact_telefon, '')) = '' THEN v_lipsa := array_append(v_lipsa, 'proiect fara telefonul de contact Gazpet'); END IF;
+  IF btrim(coalesce(pr.contact_email, '')) = '' THEN v_lipsa := array_append(v_lipsa, 'proiect fara e-mailul de contact Gazpet'); END IF;
   IF btrim(coalesce(pr.text_gdpr, '')) = '' THEN v_lipsa := array_append(v_lipsa, 'proiect fara text GDPR'); END IF;
   IF btrim(coalesce(pr.reprezentant_tgz_nume, '')) = '' THEN v_lipsa := array_append(v_lipsa, 'proiect fara reprezentant TGZ'); END IF;
+  IF btrim(coalesce(pr.reprezentant_tgz_telefon, '')) = '' THEN v_lipsa := array_append(v_lipsa, 'proiect fara telefonul reprezentantului TGZ'); END IF;
   IF cardinality(v_lipsa) > 0 THEN
     RAISE EXCEPTION 'redari: convocatorul nu se poate rezerva: %', array_to_string(v_lipsa, '; ') USING ERRCODE = 'RD002';
   END IF;
   -- (5) decizia pe EXISTS (prinde și convocările fără nr_document); agregarea doar pentru mesaj
-  IF NOT p_numar_nou_confirmat AND EXISTS (SELECT 1 FROM public.red_convocari c WHERE c.detinator_id = p_detinator_id AND c.canal = 'posta'
+  -- pe ACELAȘI canal (lotul și calea individuală pe poștă se exclud reciproc); excepția explicită = p_numar_nou_confirmat (bifa din modal)
+  IF NOT p_numar_nou_confirmat AND EXISTS (SELECT 1 FROM public.red_convocari c WHERE c.detinator_id = p_detinator_id AND c.canal = p_canal
                                              AND c.stare = 'activ' AND c.data_expediere IS NULL AND c.sters_la IS NULL) THEN
     SELECT string_agg(coalesce(c.nr_document, '(fara numar)'), ', ' ORDER BY c.created_at, c.id) INTO v_existente FROM public.red_convocari c
-     WHERE c.detinator_id = p_detinator_id AND c.canal = 'posta' AND c.stare = 'activ' AND c.data_expediere IS NULL AND c.sters_la IS NULL;
-    RAISE EXCEPTION 'redari: detinatorul are deja convocare postala neexpediata (%)', v_existente USING ERRCODE = 'RD001';
+     WHERE c.detinator_id = p_detinator_id AND c.canal = p_canal AND c.stare = 'activ' AND c.data_expediere IS NULL AND c.sters_la IS NULL;
+    RAISE EXCEPTION 'redari: detinatorul are deja convocare % neexpediata (%)', p_canal, v_existente USING ERRCODE = 'RD001';
   END IF;
   -- (6) numărul + rândul; triggerele (garda de plic pe persoană, legături, jurnal) și RLS-ul se aplică utilizatorului
   v_nr := public.fn_red_numar_document('C', v_uat3, v_tronson);
-  INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (p_detinator_id, 'posta', v_nr) RETURNING id INTO v_id;
+  INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (p_detinator_id, p_canal, v_nr) RETURNING id INTO v_id;
   RETURN QUERY SELECT v_id, v_nr;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean) IS 'Redări: rezervare atomică a unei convocări poștale (SECURITY INVOKER: RLS + triggere ale utilizatorului). '
+COMMENT ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean, text) IS 'Redări: rezervare atomică a unei convocări poștale (SECURITY INVOKER: RLS + triggere ale utilizatorului). '
   'Lock pe proiect + deținător, recitire sub lock (FOR SHARE deținător + parcelă, gărzi proiect/UAT → RD002), RD001 dacă există convocare neexpediată '
   '(fără p_numar_nou_confirmat), număr C prin fn_red_numar_document, INSERT. Doar admin/editor. Antet: migrarea 20261130l.';
-REVOKE ALL ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean) FROM PUBLIC, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean, text) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean, text) TO authenticated;
 
 DO $post$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean)'::regprocedure AND NOT prosecdef AND provolatile = 'v'
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure AND NOT prosecdef AND provolatile = 'v'
                   AND proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(proowner) = 'postgres') THEN
     RAISE EXCEPTION '20261130l: functia are setari gresite (INVOKER / VOLATILE / search_path / owner)';
   END IF;
-  IF (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_convocare_rezerva(uuid,boolean)'::regprocedure)
+  IF (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure)
        IS DISTINCT FROM ARRAY['authenticated=X/postgres', 'postgres=X/postgres']::text[] THEN
     RAISE EXCEPTION '20261130l: privilegii gresite pe fn_red_convocare_rezerva (doar authenticated + owner)';
   END IF;
   IF (SELECT array_agg(n ORDER BY o) FROM pg_proc p, unnest(p.proargnames, p.proargmodes) WITH ORDINALITY AS a(n, md, o)
-       WHERE p.oid = 'public.fn_red_convocare_rezerva(uuid,boolean)'::regprocedure AND a.md = 't')
+       WHERE p.oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure AND a.md = 't')
      IS DISTINCT FROM ARRAY['convocare_id', 'nr_document']::text[] THEN
     RAISE EXCEPTION '20261130l: coloanele de iesire nu sunt cele asteptate';
   END IF;

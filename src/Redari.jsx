@@ -8,7 +8,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
-import { genereazaConvocator, verificaDateConvocator, salveazaConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
+import { genereazaConvocator, verificaDateConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
 // D4: convocatoarele generate dar neexpediate (citire separată din red_convocari, fără migrare)
 import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
   poateDeschideConvocator, dataDocumentConvocare, useConvocariNeexpediate, aparuteDupaVerificare, rezervaNumarConvocare,
@@ -487,7 +487,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
   )
 }
 
-// ─── Convocator: fn_red_numar_document('C') → genereazaConvocator → salveazaConvocator → descărcare ──────────────
+// ─── Convocator: rezervaNumarConvocare (RPC atomic fn_red_convocare_rezerva: număr + rând) → genereazaConvocator → reincarcaConvocator → descărcare ──
 function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   const [canal, setCanal] = useState('posta')
   const [lucru, setLucru] = useState(false)
@@ -538,7 +538,7 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   }
 
   // Ordinea (P2-8): date + contactul deținătorului → verificaDateConvocator (lipsuri → afișate, FĂRĂ număr consumat)
-  // → fn_red_numar_document('C') → genereazaConvocator → salveazaConvocator (rând → upload → update) → descărcare.
+  // → rezervaNumarConvocare (RPC atomic, migrarea 20261130l: număr C + rând, RD001 / RD002) → genereazaConvocator → reincarcaConvocator (upload → update) → descărcare.
   const genereaza = async () => {
     if (motiv) { show(`Nu se poate genera: ${motiv}.`, 'error'); return }
     if (!nouPermis) { show(existente?.length ? 'Există deja un convocator neexpediat: bifează confirmarea pentru un număr nou.' : 'Convocatoarele existente nu sunt încă verificate.', 'error'); return }
@@ -562,18 +562,19 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
       }
       setPas('Rezerv numărul de document…')
       scris = true
-      // r4 P2-01 (c): punctul de integrare pentru RPC-ul atomic din #989 (azi fn_red_numar_document)
-      const nrDocument = await rezervaNumarConvocare(supabase, { uat3: rand.uat3, tronson: rand.tronson, detinatorId: rand.detinator_id, confirmateIds: (vazute || []).map(c => c.id) })
-      // de aici scrierea e începută: continuă până la capăt (altfel numărul rămâne fără rând) și se reconciliază
+      // #989 r4: protocolul atomic comun cu generarea în masă — RPC-ul fn_red_convocare_rezerva rezervă numărul ȘI inserează rândul
+      // (lock pe deținător, RD001 dacă între timp a apărut o convocare pe același canal; număr nou doar cu bifa explicită). Fără RPC → refuz.
+      const { convocareId, nrDocument } = await rezervaNumarConvocare(supabase, { detinatorId: rand.detinator_id, confirmat: confirmNou === true && (vazute || []).length > 0, canal })
+      // de aici rândul există: fișierul se încarcă prin salvarea versionată existentă (v1 la primul upload) și se reconciliază
       setPas(`Generez ${nrDocument}…`)
       const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument })
       setPas('Salvez în arhivă…')
-      const { path } = await salveazaConvocator(supabase, { blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument, detinatorId: rand.detinator_id, canal })
+      const { path } = await reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument })
       if (!activ(tok)) return   // salvarea s-a făcut; fereastra nu mai e a acestei acțiuni → fără descărcare / toast / onGata
       descarcaBlob(blob, `${nrDocument}_${rand.id_parcela}.docx`)
       show(`Convocator ${nrDocument} generat și salvat (${path}).`, 'success')
       onGata()
-    } catch (e) { if (activ(tok)) show('Convocator: ' + msgEroare(e), 'error') }
+    } catch (e) { if (activ(tok)) show(e?.code === 'RD001' ? `Între timp a fost generat un convocator pentru acest deținător (${msgEroare(e)}) — verifică lista și bifează confirmarea dacă vrei totuși un număr nou.` : 'Convocator: ' + msgEroare(e), 'error') }
     finally { if (scris) reconciliaza(tok); if (montat.current) { setLucru(false); setPas('') } }   // citesteExistente pune sincron „se citește” → număr nou blocat până la reconciliere
   }
 
