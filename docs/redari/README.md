@@ -398,7 +398,7 @@ fost adaugate: lista de fisiere permite numai pv.test.js; fluxul UI necesita rev
 - Sesiune (mod tabletă), Dashboard (centralizator pe UAT), configurarea șabloanelor.
 - Validarea in browser si importul real Anexa 7 (parserul si selectia sursei sunt implementate in 4.1e).
 - Export registru xlsx (Model_6) și centralizator „fără date personale” pentru TGZ.
-- Email (Gmail API `redari@gazpet.ro`), SMS (SMSLink), FAN Courier — niciun canal automat; totul manual (decizia 6).
+- Email (Gmail API `redari@gazpet.ro`), SMS (SMSLink), FAN Courier — nefăcute; azi totul manual (decizia 6). Planul pentru e-mail: [`PLAN_EMAIL_REDARI.md`](PLAN_EMAIL_REDARI.md) — trimiterea către proprietari cere lot aprobat de owner; citirea căsuței, reconcilierea și retenția sunt automatizări separate, pornite explicit de owner.
 - Câmpurile fără sursă din `SABLOANE.md` §3 (bifele stării terenului, verificarea pe teren, reluarea convocării, `semnatar_apm`, numerotarea
   prezența la sesiune, refuzul nemotivat, `id_parcela` pe documente etc.) — de decis cu Juridic/Răzvan.
 - Importul REAL al listei TGZ și acordarea rolurilor (vezi §5).
