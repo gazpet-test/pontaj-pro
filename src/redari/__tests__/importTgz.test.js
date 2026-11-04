@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx-js-style'
+import { readFileSync } from 'node:fs'
 import { parseazaTgz, scrieImport, parseazaNrCrt, imparteAdresa, cheieSursa, cadastruGol, cadastruSuspect, randuriDeTratat, numarRanduriPuseDeoparte, csvRanduriDeTratat,
-  LOT, LOT_CITIRE, RPC_REZERVA_NUMERE, MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU, MOTIV_CADASTRU_SUSPECT, MOTIV_NRCRT_INCOMPATIBIL, STARE_ELIGIBILA, STARE_NECONFIRMATA } from '../importTgz.js'
+  LOT, LOT_CITIRE, RPC_REZERVA_NUMERE, MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU, MOTIV_CADASTRU_SUSPECT, MOTIV_NRCRT_INCOMPATIBIL, STARE_ELIGIBILA, STARE_NECONFIRMATA,
+  RE_NR_CRT_GRUP_SQL, NR_CRT_GRUP_MAX, grupNrCrtValid } from '../importTgz.js'
 
 // ───────── fixture: xlsx fictiv construit în test (antet pe rândul 3) ─────────
 const ANTET = ['Nr.Crt.', 'Nr.Poz.Hg.', 'UAT', 'Județ', 'Nume Deținător', 'Adresă', 'Suprafață Afectată Temporar',
@@ -485,6 +487,7 @@ describe('scrieImport — fake supabase', () => {
       'insert:red_parcele', 'update:red_import_loturi', 'select:red_parcele',          // contorul imediat după INSERT, apoi recitirea id-urilor (P2-1)
       'insert:red_detinatori', 'update:red_import_loturi', 'select:red_detinatori',
       'insert:red_detinatori_contact', 'update:red_import_loturi',
+      'select:red_parcele',            // r5 (C-P2-04): reconcilierea recitește din BD parcelele scrise / refolosite
       'update:red_import_loturi',
     ])
     expect(progres.map(e => e.etapa)).toEqual(['parcele', 'detinatori', 'contacte', 'gata'])
@@ -504,7 +507,8 @@ describe('scrieImport — fake supabase', () => {
     expect(LOT).toBe(200); expect(LOT_CITIRE).toBe(100)
     expect(selecturi(sb).every(a => a.in <= 100 && a.pagini >= 1)).toBe(true)
     // existență: 450 chei → 5 selecturi; citiri id după insert: 200→2, 200→2, 50→1
-    expect(selecturi(sb).filter(a => a.tabel === 'red_parcele').map(a => a.in)).toEqual([100, 100, 100, 100, 50, 100, 100, 100, 100, 50])
+    // r5: + reconcilierea pe cele 450 de chei (100/100/100/100/50)
+    expect(selecturi(sb).filter(a => a.tabel === 'red_parcele').map(a => a.in)).toEqual([100, 100, 100, 100, 50, 100, 100, 100, 100, 50, 100, 100, 100, 100, 50])
     const idx = (op, tabel, ultimul = false) => { const l = sb.apeluri.map((a, i) => (a.op === op && a.tabel === tabel ? i : -1)).filter(i => i >= 0); return ultimul ? l[l.length - 1] : l[0] }
     expect(idx('insert', 'red_import_loturi')).toBe(0)
     expect(idx('insert', 'red_parcele', true)).toBeLessThan(idx('insert', 'red_detinatori'))
@@ -604,7 +608,7 @@ describe('scrieImport — fake supabase', () => {
     expect(sel.every(a => a.in <= 100)).toBe(true)
     // 250 chei → loturi 100/100/50; fiecare lot de 100 se citește în 3 pagini de 40 (0-39, 40-79, 80-119), lotul de 50 în 2 — un query per pagină
     const pagini = [[100, 0], [100, 40], [100, 80], [100, 0], [100, 40], [100, 80], [50, 0], [50, 40]]
-    expect(sel.filter(a => a.tabel === 'red_parcele').map(a => [a.in, a.de_la])).toEqual(pagini)
+    expect(sel.filter(a => a.tabel === 'red_parcele').map(a => [a.in, a.de_la])).toEqual([...pagini, ...pagini])   // r5: existență + reconcilierea cu BD
     expect(sel.filter(a => a.tabel === 'red_detinatori').map(a => [a.in, a.de_la])).toEqual(pagini)
     expect(sel.every(a => a.pagini === 1)).toBe(true)
     expect(sel.filter(a => a.tabel === 'red_detinatori_contact').map(a => a.in)).toEqual([100, 100, 50])
@@ -887,7 +891,7 @@ describe('04.11.2026 r4 — reimport: chei neschimbate; grupul Nr.Crt. comparat 
     expect(sb.tabele.red_parcele.map(p => [p.cheie_sursa, p.nr_crt_grup])).toEqual([['HUS|HG 1|123##|T1#', null], ['HUS|HG 2|#123#|T2#', null], ['HUS|HG 3|##|T3#', null], ['HUS||##|T4#', null], ['HUS||-|T5#', null]])
     const r2 = await scrieImport(sb, parseazaTgz(xlsxDin(FISIER), { ...OPT, versiune: 'v2' }), { proiectId: 'proiect-1', versiune: 'v2' })
     expect(r2).toMatchObject({ parceleNoi: 0, parceleRefolosite: 4, detinatoriNoi: 0, contacteNoi: 0, nr_crt_incompatibil: [] })
-    expect(r2.reconciliere).toEqual({ eligibile: 4, noi: 0, refolosite: 4, oprite: 0, ok: true })
+    expect(r2.reconciliere).toMatchObject({ eligibile: 4, noi: 0, refolosite: 4, oprite: 0, ok: true, confirmate_bd: 4, randuri_fisier: { randuri: 5, in_parcele: 5, erori: 0, ok: true } })
     expect(r2.fara_cheie.map(f => f.rand)).toEqual([7])   // parcela „falsă” existentă: neatinsă, raportată de tratat; „-” rămâne identitate ca în main
     expect(sb.tabele.red_parcele).toHaveLength(5)
     expect(sb.tabele.red_detinatori).toHaveLength(5)
@@ -990,5 +994,74 @@ describe('04.11.2026 r4 — reimport: chei neschimbate; grupul Nr.Crt. comparat 
     const lot = sb.tabele.red_import_loturi.at(-1)
     expect(lot).toMatchObject({ stare: 'esuat', parcele_noi: 1 })
     expect(lot.diferente.cadastru_suspect.map(c => c.stare)).toEqual(['parcela NU s-a importat (Nr.Crt. incompatibil)', 'parcela existentă (refolosire neîncheiată — import oprit; deținătorii pot lipsi)', 'parcela nouă inserată'])
+  })
+})
+
+// ───────── r5 (Jakarinos r4 P2 / Copilot r4 P2-01): regula grupului — O SINGURĂ definiție, paritate JS ↔ SQL ─────────
+const MIGRARE_30H = readFileSync(new URL('../../../supabase/migrations/20261130h_redari_parcele_nr_crt_grup.sql', import.meta.url), 'utf8')
+const DRY_30H = readFileSync(new URL('../../../supabase/tests/20261130h_redari_parcele_nr_crt_grup_dryrun.sql', import.meta.url), 'utf8')
+const listaDry = marcaj => { const l = DRY_30H.split('\n').find(x => x.includes(`-- ${marcaj}`)); return [...l.slice(0, l.indexOf(`-- ${marcaj}`)).matchAll(/'([^']*)'/g)].map(m => m[1]) }
+describe('r5 — paritatea regulii nr_crt_grup între parser și CHECK-ul migrării 20261130h', () => {
+  it('regex-ul și lungimea din CHECK sunt EXACT cele din parser', () => {
+    const m = MIGRARE_30H.match(/CONSTRAINT red_parcele_nr_crt_grup_forma CHECK \(nr_crt_grup IS NULL OR \(length\(nr_crt_grup\) <= (\d+) AND nr_crt_grup ~ '([^']+)'\)\)/)
+    expect(m).not.toBeNull()
+    expect(m[2]).toBe(RE_NR_CRT_GRUP_SQL)
+    expect(Number(m[1])).toBe(NR_CRT_GRUP_MAX)
+  })
+  it('tabelul de cazuri din DRY (rulat în PostgreSQL) dă același rezultat în JS', () => {
+    const invalide = listaDry('PARITATE_INVALIDE'); const valide = listaDry('PARITATE_VALIDE')
+    expect(invalide.length).toBeGreaterThan(10); expect(valide.length).toBeGreaterThan(3)
+    for (const v of invalide) expect(grupNrCrtValid(v), JSON.stringify(v)).toBe(false)
+    for (const v of valide) expect(grupNrCrtValid(v), v).toBe(true)
+  })
+  it('parserul respinge (eroare pe rând) grupurile peste limita BD; fără subnumăr limita nu se aplică', () => {
+    expect(parseazaNrCrt('999999999.999999999/1')).toMatchObject({ grup: '999999999.999999999' })
+    for (const v of ['1000000000.1/1', '1.1000000000/1', '1000000000.1', '1.1000000000']) expect(parseazaNrCrt(v), v).toBeNull()
+    expect(parseazaNrCrt('1000000000/1')).toMatchObject({ x: 1000000000, sub: null, grup: '1000000000' })
+    const p = parseazaTgz(xlsxDin([randF('1000000000.1/1', 'HG 1', 'Test A', 'T1', 'CF 1'), randF('2', 'HG 2', 'Test B', 'T2', 'CF 2')]), OPT)
+    expect(p.erori.map(e => [e.rand, e.motiv])).toEqual([[4, 'Nr.Crt. invalid „1000000000.1/1”']])
+    expect(p.statistici.reconciliere_randuri).toEqual({ randuri: 2, in_parcele: 1, erori: 1, ok: true })
+  })
+  it('scrieImport: un grup invalid ajuns totuși în preview (modificat) e oprit „de tratat”, fără încercare de INSERT', async () => {
+    const sb = creeazaFakeSupabase()
+    const pv = parseazaTgz(xlsxDin([randF('166.1/1', 'HG 1', 'Test A', 'T1', 'CF 1'), randF('2', 'HG 2', 'Test B', 'T2', 'CF 2')]), OPT)
+    pv.parcele[0].grup_sub = '1000000000.1'
+    const r = await scrieImport(sb, pv, { proiectId: 'proiect-1', versiune: 'v1' })
+    expect(r).toMatchObject({ parceleNoi: 1 })
+    expect(r.nr_crt_incompatibil.map(x => [x.rand, x.detaliu])).toEqual([[4, 'grup Nr.Crt. invalid „1000000000.1” (max 9 + 9 cifre)']])
+    expect(sb.tabele.red_parcele.map(x => x.nr_crt_grup)).toEqual([null])
+  })
+})
+
+describe('r5 — sursa Anexa 7 explicită, preview legat de proiect, reconcilierea cu BD', () => {
+  const importa = async (sb, randuri, versiune) => scrieImport(sb, parseazaTgz(xlsxDin(randuri), { ...OPT, versiune }), { proiectId: 'proiect-1', versiune })
+  it('Copilot r4 P2-02: un preview TGZ cu nr_crt null NU primește excepția Anexa 7 — oprit față de parcela „166.1”', async () => {
+    const sb = creeazaFakeSupabase()
+    await importa(sb, [randF('166.1/1', 'HG 1', 'Test A', 'T1#', '123##')], 'v1')
+    const pv = parseazaTgz(xlsxDin([randF('1', 'HG 1', 'Test Fals', 'T1#', '123##')]), { ...OPT, versiune: 'v2' })
+    const modificat = { ...pv, parcele: pv.parcele.map(p => ({ ...p, nr_crt: null, grup_sub: null })) }
+    const r = await scrieImport(sb, modificat, { proiectId: 'proiect-1', versiune: 'v2', sursa: 'TGZ' })
+    expect(r).toMatchObject({ parceleRefolosite: 0, detinatoriNoi: 0, refolosite_fara_nr_crt: [] })
+    expect(r.nr_crt_incompatibil).toHaveLength(1)
+  })
+  it('Copilot r4 P1-03: previzualizarea calculată pentru alt proiect e refuzată înainte de orice scriere', async () => {
+    const sb = creeazaFakeSupabase()
+    const pv = parseazaTgz(xlsxDin([randF('1', 'HG 1', 'Test A', 'T1', 'CF 1')]), OPT)
+    pv.proiect_id_previzualizare = 'proiect-A'
+    await expect(scrieImport(sb, pv, { proiectId: 'proiect-B', versiune: 'v1' })).rejects.toThrow(/alt proiect/)
+    expect(sb.apeluri).toEqual([])
+    const r = await scrieImport(sb, pv, { proiectId: 'proiect-A', versiune: 'v1' })
+    expect(r).toMatchObject({ parceleNoi: 1 })
+  })
+  it('Copilot r4 P2-04: reconcilierea recitește BD — o parcelă care nu mai are grupul scris ⇒ lot esuat, nu „finalizat”', async () => {
+    const sb = creeazaFakeSupabase()
+    const pv = parseazaTgz(xlsxDin([randF('166.1/1', 'HG 1', 'Test A', 'T1', 'CF 1'), randF('2', 'HG 2', 'Test B', 'T2', 'CF 2')]), OPT)
+    const onProgress = ({ etapa }) => { if (etapa === 'contacte') sb.tabele.red_parcele[0].nr_crt_grup = '166.9' }   // schimbare „din afară” între scriere și reconciliere
+    await expect(scrieImport(sb, pv, { proiectId: 'proiect-1', versiune: 'v1', onProgress })).rejects.toThrow(/Reconcilierea cu BD: 1 parcele/)
+    expect(sb.tabele.red_import_loturi.at(-1).stare).toBe('esuat')
+    const sb2 = creeazaFakeSupabase()
+    const r = await scrieImport(sb2, pv, { proiectId: 'proiect-1', versiune: 'v1' })
+    expect(r.reconciliere).toMatchObject({ noi: 2, confirmate_bd: 2, ok: true })
+    expect(sb2.tabele.red_import_loturi.at(-1).diferente.reconciliere).toMatchObject({ confirmate_bd: 2 })
   })
 })

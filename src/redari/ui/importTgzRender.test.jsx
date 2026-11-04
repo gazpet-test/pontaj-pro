@@ -4,7 +4,7 @@ import React from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
 const hooks = vi.hoisted(() => ({ current: null }))
-const amanate = vi.hoisted(() => ({ loturi: null, import: null }))
+const amanate = vi.hoisted(() => ({ loturi: null, import: null, apeluriImport: [] }))
 const amanat = () => { let rezolva; const promisiune = new Promise(r => { rezolva = r }); return { promisiune, rezolva } }
 vi.mock('react', async original => {
   const real = await original()
@@ -24,7 +24,7 @@ vi.mock('../../lib/supabase.js', () => ({ supabase: { from: tabel => {
   q.maybeSingle = () => { unul = true; return q }
   return q
 } } }))
-vi.mock('../importTgz.js', async original => ({ ...(await original()), scrieImport: () => amanate.import.promisiune }))
+vi.mock('../importTgz.js', async original => ({ ...(await original()), scrieImport: (sb, preview, opt) => { amanate.apeluriImport.push({ preview, opt }); return amanate.import.promisiune } }))
 afterEach(() => { hooks.current = null; vi.unstubAllGlobals() })
 
 import ImportTgz from './ImportTgz.jsx'
@@ -86,9 +86,9 @@ describe('ImportTgz — istoricul loturilor nu se aplică peste alt proiect', ()
 
 describe('ImportTgz — finalizarea unui import pornit pe A nu scrie raportul în B', () => {
   const preview = { parcele: [{ cheie: 'FIC:1', cheie_sursa: 'FIC|HG 1||', ambigua: false }], detinatori: [], contacte: [], erori: [], ambigue: [], fara_cheie: [],
-    statistici: { parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1 } }
+    statistici: { parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1 }, proiect_id_previzualizare: 'proiect-A' }
   const porneste = async (mod) => {
-    amanate.import = amanat()
+    amanate.import = amanat(); amanate.apeluriImport.length = 0
     vi.stubGlobal('window', { confirm: () => true })
     const h = harness(); const show = vi.fn()
     const pA = props('proiect-A', 'TEST-A', show)
@@ -96,7 +96,7 @@ describe('ImportTgz — finalizarea unui import pornit pe A nu scrie raportul î
     h.valori[I.versiune] = 'v-fictiv'; h.valori[I.preview] = preview
     const tree = h.render(ImportTgz, pA)
     const gata = buton(tree, '📥 Importă').props.onClick()
-    if (mod === 'B') h.render(ImportTgz, props('proiect-B', 'TEST-B', show))
+    if (mod === 'B') { h.render(ImportTgz, props('proiect-B', 'TEST-B', show)); h.valori[I.lucru] = true }   // B pornește propria operație
     if (mod === 'unmount') h.unmount()
     amanate.import.rezolva({ lotId: 'lot-fictiv', parceleNoi: 1, detinatoriNoi: 1, diferente: {} })
     await gata
@@ -111,6 +111,7 @@ describe('ImportTgz — finalizarea unui import pornit pe A nu scrie raportul î
   it('după trecerea pe B: raportul NU se scrie, doar un mesaj care numește proiectul A', async () => {
     const { h, show } = await porneste('B')
     expect(h.valori[I.raport]).toBeNull()
+    expect(h.valori[I.lucru]).toBe(true)   // r5 (C-P2-03): finally-ul importului A nu resetează starea lui B
     expect(show.mock.calls.at(-1)[0]).toMatch(/Importul în TEST-A s-a terminat/)
   })
   it('Copilot r3 P2-03: componenta demontată în timpul importului → nicio actualizare locală, niciun onImportat', async () => {
@@ -119,5 +120,43 @@ describe('ImportTgz — finalizarea unui import pornit pe A nu scrie raportul î
     expect(h.valori[I.lucru]).toBe(true)   // starea ecranului demontat nu mai e atinsă (nici în finally)
     expect(pA.onImportat).not.toHaveBeenCalled()
     expect(show.mock.calls.at(-1)[0]).toMatch(/Importul în TEST-A s-a terminat/)
+  })
+})
+
+// r5 (Copilot r4 P1-03): previzualizarea calculată pentru A nu poate fi importată în B
+describe('ImportTgz — previzualizarea e legată de proiect', () => {
+  const preview = { parcele: [{ cheie: 'FIC:1', cheie_sursa: 'FIC|HG 1||', ambigua: false }], detinatori: [], contacte: [], erori: [], ambigue: [], fara_cheie: [],
+    statistici: { parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1 }, proiect_id_previzualizare: 'proiect-A' }
+  it('preview A → trecere pe B: previzualizarea se golește, butonul nu mai există, nimic nu ajunge la scrieImport', async () => {
+    amanate.import = amanat(); amanate.apeluriImport.length = 0
+    vi.stubGlobal('window', { confirm: () => true })
+    const h = harness(); const show = vi.fn()
+    h.render(ImportTgz, props('proiect-A', 'TEST-A', show))
+    h.valori[I.versiune] = 'v-fictiv'; h.valori[I.preview] = preview
+    const treeA = h.render(ImportTgz, props('proiect-A', 'TEST-A', show))
+    const butonA = buton(treeA, '📥 Importă')
+    expect(butonA.props.disabled).toBe(false)
+    h.render(ImportTgz, props('proiect-B', 'TEST-B', show))   // efectul [proiect.id] golește starea (harness: efectul rulează în render)
+    const treeB = h.render(ImportTgz, props('proiect-B', 'TEST-B', show))   // re-render-ul de după setState, ca în React
+    expect(h.valori[I.preview]).toBeNull()
+    expect(buton(treeB, '📥 Importă')).toBeUndefined()
+    // chiar dacă cineva ar reinjecta previzualizarea lui A în B: butonul e dezactivat, iar handlerul refuză
+    h.valori[I.preview] = preview
+    const treeB2 = h.render(ImportTgz, props('proiect-B', 'TEST-B', show))
+    const butonB = buton(treeB2, '📥 Importă')
+    expect(butonB.props.disabled).toBe(true)
+    await butonB.props.onClick()
+    expect(amanate.apeluriImport).toEqual([])
+    expect(show.mock.calls.at(-1)[0]).toMatch(/alt proiect/)
+  })
+  it('control: pe proiectul A importul trimite previzualizarea cu proiectul A', async () => {
+    amanate.import = amanat(); amanate.apeluriImport.length = 0
+    vi.stubGlobal('window', { confirm: () => true })
+    const h = harness(); const show = vi.fn()
+    h.render(ImportTgz, props('proiect-A', 'TEST-A', show))
+    h.valori[I.versiune] = 'v-fictiv'; h.valori[I.preview] = preview
+    const gata = buton(h.render(ImportTgz, props('proiect-A', 'TEST-A', show)), '📥 Importă').props.onClick()
+    amanate.import.rezolva({ lotId: 'lot-fictiv', parceleNoi: 1, detinatoriNoi: 1, diferente: {} }); await gata
+    expect(amanate.apeluriImport.map(a => [a.preview.proiect_id_previzualizare, a.opt.proiectId])).toEqual([['proiect-A', 'proiect-A']])
   })
 })

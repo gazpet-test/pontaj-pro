@@ -51,7 +51,8 @@ describe('import 8b - identitate fara tronson',()=>{
             let data=[]
             if(op==='insert'&&tabela==='red_import_loturi')data={id:'lot-test'}
             if(op==='insert'&&tabela==='red_parcele')scrise.push(...payload)
-            if(op==='select'&&tabela==='red_parcele'&&campuri==='id, id_parcela')data=scrise.map((p,i)=>({...p,id:'p'+i}))
+            // r5: și recitirea de reconciliere (id, id_parcela, cheie_sursa, nr_crt_grup) vede parcelele scrise; înainte de INSERT lista e goală
+            if(op==='select'&&tabela==='red_parcele'&&(campuri==='id, id_parcela'||campuri==='id, id_parcela, cheie_sursa, nr_crt_grup'))data=scrise.map((p,i)=>({...p,id:'p'+i}))
             return Promise.resolve({data,error:null}).then(resolve,reject)
           },
         };return q

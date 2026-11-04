@@ -5,7 +5,8 @@
 -- Ce face: coloana red_parcele.nr_crt_grup (text, NULL):
 --   • NULL = grup fără subnumăr (orice „x”, „x/y”) — TOATE parcelele existente (importate cu regula veche, care respingea „x.y/z” și citea „x.y” ca x/y;
 --     verificat read-only 04.11.2026: niciun import n-a creat vreodată un grup „x.y”);
---   • 'x.y' (ex. '166.1') = grupul cu subnumăr din TGZ, pus DOAR la INSERT de import (CHECK de formă: fără zero în față, fără „0”, max 9+9 cifre).
+--   • 'x.y' (ex. '166.1') = grupul cu subnumăr din TGZ, pus DOAR la INSERT de import (CHECK de formă: fără zero în față, fără „0”, max 9+9 cifre —
+--     aceeași regulă ca parserul: RE_NR_CRT_GRUP_SQL în src/redari/importTgz.js, cu test de paritate); doar pe rânduri cu cheie_sursa (al doilea CHECK).
 --   • IMUTABILĂ: trigger BEFORE UPDATE refuză orice schimbare (inclusiv NULL -> valoare și valoare -> NULL) în afara mentenanței
 --     (sesiune SQL directă ca postgres, fără claims JWT — același tipar ca 20261129h / 20261130e).
 --   • Privilegii pe coloană (red_parcele are privilegii PE COLOANĂ pentru authenticated, ex. valoare_lei fără niciun drept): authenticated primește
@@ -14,7 +15,8 @@
 -- Ordinea față de 20261130g (PR #982, NEAPLICATĂ): independente. 30g schimbă doar politicile (ALTER POLICY) și indexuri FK, nu triggere / coloane;
 -- 30h nu atinge politicile. Preflight-ul 30h numără triggerele relativ (n + 1), DRY-ul 30g proiectează coloanele cu SELECT dinamic în ambele faze.
 -- Codul (src/redari/importTgz.js) cere coloana: se livrează DUPĂ aplicarea acestei migrări.
--- Revenire: supabase/revenire/20261130h_redari_parcele_nr_crt_grup_ROLLBACK.sql (valorile nenule merg în redari_retras_<data>, apoi DROP COLUMN).
+-- Revenire: supabase/revenire/20261130h_redari_parcele_nr_crt_grup_ROLLBACK.sql — posibilă DOAR cât nu există valori nenule (altfel refuz explicit:
+-- scoaterea coloanei ar pierde identitatea „x.y”, iar o reaplicare ar lăsa NULL = „fără subnumăr”, adică asocierea tacită 166 <-> 166.1; Copilot r4 P1-01).
 -- DRY: supabase/tests/20261130h_redari_parcele_nr_crt_grup_dryrun.sql.
 DO $pre$
 DECLARE v_trg integer;
@@ -45,6 +47,10 @@ END $pre$;
 
 ALTER TABLE public.red_parcele ADD COLUMN nr_crt_grup text NULL
   CONSTRAINT red_parcele_nr_crt_grup_forma CHECK (nr_crt_grup IS NULL OR (length(nr_crt_grup) <= 19 AND nr_crt_grup ~ '^[1-9][0-9]{0,8}[.][1-9][0-9]{0,8}$'));
+-- r5 (Copilot r4 P1-02, atenuare): grupul vine doar din import, iar importul scrie mereu cheie_sursa (parcelele fara cheie nu se comit) -> un rand cu grup
+-- trebuie sa aiba cheie_sursa; un INSERT manual fara cheie nu poate purta grup, iar cheia nu se mai poate goli pe o parcela cu grup.
+-- Risc rezidual DECLARAT: un admin / editor care fabrica un rand „ca la import” (cheie_sursa + grup valid) — BD nu poate dovedi provenienta.
+ALTER TABLE public.red_parcele ADD CONSTRAINT red_parcele_nr_crt_grup_cu_cheie CHECK (nr_crt_grup IS NULL OR cheie_sursa IS NOT NULL);
 COMMENT ON COLUMN public.red_parcele.nr_crt_grup IS 'Grupul Nr.Crt. cu subnumăr din TGZ (ex. 166.1 = parcelă separată de 166, decizia Răzvan 04.11.2026). NULL = grup fără subnumăr (toate parcelele importate înainte de 20261130h). '
   'Pus doar la INSERT de import; imutabil (trg_red_parcele_nr_crt_grup). La reimport, o parcelă existentă se refolosește doar dacă grupul din fișier e EXACT acesta (NULL = fără subnumăr).';
 
@@ -70,8 +76,9 @@ BEGIN
     RAISE EXCEPTION '20261130h: coloana lipseste sau are alta forma';
   END IF;
   IF (SELECT count(*) FROM public.red_parcele WHERE nr_crt_grup IS NOT NULL) <> 0 THEN RAISE EXCEPTION '20261130h: parcelele existente trebuie sa ramana NULL'; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_parcele'::regclass AND conname = 'red_parcele_nr_crt_grup_forma' AND contype = 'c' AND convalidated) THEN
-    RAISE EXCEPTION '20261130h: CHECK-ul de forma lipseste';
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_parcele'::regclass AND conname = 'red_parcele_nr_crt_grup_forma' AND contype = 'c' AND convalidated)
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_parcele'::regclass AND conname = 'red_parcele_nr_crt_grup_cu_cheie' AND contype = 'c' AND convalidated) THEN
+    RAISE EXCEPTION '20261130h: CHECK-urile (forma / cu cheie) lipsesc';
   END IF;
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_parcele'::regclass AND NOT tgisinternal) <> current_setting('gazpet.m30h_triggere')::integer + 1
      OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_parcele'::regclass AND t.tgname = 'trg_red_parcele_nr_crt_grup' AND t.tgenabled = 'O'

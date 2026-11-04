@@ -54,10 +54,18 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const proiectRef = useRef(proiect?.id)            // r3 (C-P2-02): proiectul CURENT, citit la aplicarea rezultatelor (nu din închiderea veche)
   proiectRef.current = proiect?.id
   const montat = useRef(true)                        // r4 (C-P2-03): după unmount, finalizarea unui import nu mai atinge starea ecranului
+  const genPreview = useRef(0)                       // r5: generația previzualizării (parsarea e async)
   const genImport = useRef(0)                        // r4 (Jakarinos r3 L24): generația ciclului de import (crește la start, la schimbarea proiectului, la unmount)
   useEffect(() => { montat.current = true; return () => { montat.current = false; genImport.current++ } }, [])
   // L24: la schimbarea proiectului și la unmount, cererea în zbor se invalidează (Copilot r1 P3-02)
-  useEffect(() => { genLoturi.current++; genImport.current++; setLoturi(null); setLoturiStare({ lucru: false, eroare: null }); return () => { genLoturi.current++ } }, [proiect?.id])
+  // r5 (Copilot r4 P1-03 / P2-03): la schimbarea proiectului se golește TOT ce depinde de proiect (fișier, previzualizare, raport, progres, tronsoane),
+  // iar generațiile cresc — un import / o previzualizare / un istoric vechi nu se mai aplică peste proiectul nou
+  useEffect(() => {
+    genLoturi.current++; genImport.current++; genPreview.current++
+    setLoturi(null); setLoturiStare({ lucru: false, eroare: null })
+    setPreview(null); setFisier(null); setRaport(null); setProgres(null); setLucru(false); setNota(''); setTronsonPeUat({})
+    return () => { genLoturi.current++ }
+  }, [proiect?.id])
 
   const incarcaLoturi = async () => {
     const gen = ++genLoturi.current; const proiectId = proiectRef.current
@@ -80,22 +88,26 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
     if (!fisier) { show('Alege un fișier Excel (.xlsx).', 'error'); return }
     if (!versiune.trim()) { show('Versiunea listei e obligatorie (ex. „TGZ 13.07.2026”).', 'error'); return }
     if (!uats.length) { show('Proiectul nu are UAT-uri.', 'error'); return }
+    const gen = ++genPreview.current; const proiectStart = proiectRef.current
     setLucru(true); setRaport(null); setPreview(null); setNota('')
     try {
       const ab = await fisier.arrayBuffer()
       // fără idStart: numerele finale se rezervă server-side la import; previzualizarea arată id-uri provizorii
       const parser = sursa === 'ANEXA7' ? parseazaAnexa7 : parseazaTgz
       const rez = parser(ab, { uats: uats.map(u => ({ id: u.id, nume: u.nume, uat3: u.uat3, judet: u.judet })), tronsonPeUat: tronsoane, versiune: versiune.trim(), sursa })
+      if (gen !== genPreview.current || proiectStart !== proiectRef.current) return   // proiectul s-a schimbat în timpul citirii: rezultatul nu se aplică
+      rez.proiect_id_previzualizare = proiectStart   // r5 (C-P1-03): previzualizarea e LEGATĂ de proiectul pentru care s-a calculat (verificat și în scrieImport)
       setPreview(rez)
       const sarite = (rez.fara_cheie?.length || 0) + (rez.ambigue?.length || 0)
       if (rez.erori?.length) show(`${rez.erori.length} rânduri cu erori — vezi tab-ul „Erori”.`, 'error')
       else { const c = cifreDeImportat(rez); show(`Previzualizare gata: ${c.parcele} parcele și ${c.detinatori} deținători de importat${sarite ? `; ${sarite} rânduri NU se importă (fără cheie / ambigue)` : ''}.`, sarite ? 'info' : 'success') }
-    } catch (e) { show('Citire fișier: ' + msgEroare(e), 'error') }
-    finally { setLucru(false) }
+    } catch (e) { if (gen === genPreview.current) show('Citire fișier: ' + msgEroare(e), 'error') }
+    finally { if (montat.current && gen === genPreview.current) setLucru(false) }
   }
 
   const importa = async () => {
     if (!poateScrie || !preview) return
+    if (!previewAlProiectului) { show('Previzualizarea e pentru alt proiect; refă previzualizarea.', 'error'); setPreview(null); return }
     const cifre = cifreDeImportat(preview)
     const nParc = cifre.parcele
     if (!nParc) { show('Nu e nimic de importat (toate rândurile sunt fără cheie / ambigue sau cu erori).', 'error'); return }
@@ -129,10 +141,12 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
       setRaport({ esuat: true, lotId: e?.lotId || null, lot, mesaj: msgEroare(e) })
       show('Import eșuat: ' + msgEroare(e), 'error')
     }
-    finally { if (montat.current) { setLucru(false); setProgres(null) } }
+    finally { if (!altProiect()) { setLucru(false); setProgres(null) } }   // r5 (C-P2-03): doar pe ecranul / proiectul / generația care l-a pornit
   }
 
   const st = preview?.statistici || {}
+  // r5 (C-P1-03): butonul de import cere ca previzualizarea să fie a proiectului CURENT
+  const previewAlProiectului = !!preview && preview.proiect_id_previzualizare === proiect?.id
   const deTratat = useMemo(() => (preview ? randuriDeTratat(preview) : []), [preview])   // Copilot r1 P3-04: o singură dată per preview
   const nrPuseDeoparte = useMemo(() => numarRanduriPuseDeoparte(deTratat), [deTratat])
   const nrCoproprietari = useMemo(() => (preview?.detinatori || []).filter(d => d.calitate === 'coproprietar').length, [preview])
@@ -228,7 +242,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {progres && <span style={{ fontSize:12.5, color:G.muted }}>{progres.etapa ? progres.etapa + ' · ' : ''}{progres.facut} / {progres.total}</span>}
             {progres && <div style={{ width:160, height:6, background:G.border2, borderRadius:3, overflow:'hidden' }}><div style={{ width:`${progres.total ? Math.min(100, Math.round(progres.facut / progres.total * 100)) : 0}%`, height:'100%', background:G.green }} /></div>}
             {!poateScrie && <span style={{ fontSize:12.5, color:G.muted }}>Doar admin/editor pot importa.</span>}
-            {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !cifreDeImportat(preview).parcele}>{lucru ? 'Import în curs…' : `📥 Importă ${cifreDeImportat(preview).parcele} parcele / ${cifreDeImportat(preview).detinatori} deținători`}</button>}
+            {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !previewAlProiectului || !cifreDeImportat(preview).parcele}>{lucru ? 'Import în curs…' : `📥 Importă ${cifreDeImportat(preview).parcele} parcele / ${cifreDeImportat(preview).detinatori} deținători`}</button>}
           </div>
           {preview.erori?.length > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ Rândurile cu erori nu intră în import; corectează fișierul sau continuă fără ele.</div>}
           {/* fără nume / adrese / contacte — doar rândul din Excel, UAT, Nr.Crt., cheia parcelei și motivul (pentru corectarea fișierului) */}

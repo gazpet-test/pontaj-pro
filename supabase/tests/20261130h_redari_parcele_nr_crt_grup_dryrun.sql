@@ -47,7 +47,7 @@ END $t$;
 
 -- TEST1: editorul insereaza cu grup valid si fara grup; formele invalide sunt refuzate de CHECK (23514)
 SELECT pg_temp.r30h_ca(pg_temp.r30h_g('editor')::uuid, 'authenticated');
-DO $t$ DECLARE v text; BEGIN
+DO $t$ DECLARE v text; i integer := 0; BEGIN
   EXECUTE pg_temp.r30h_ins('9901', '166.1');
   EXECUTE pg_temp.r30h_ins('9902', NULL);
   EXECUTE pg_temp.r30h_ins('9903', '198.12');
@@ -55,10 +55,28 @@ DO $t$ DECLARE v text; BEGIN
      OR (SELECT nr_crt_grup FROM public.red_parcele WHERE id_parcela = pg_temp.r30h_g('uat3') || '-9902' AND proiect_id = pg_temp.r30h_g('proiect')::uuid) IS NOT NULL THEN
     RAISE EXCEPTION 'TEST1 FAIL: valorile inserate';
   END IF;
-  FOREACH v IN ARRAY ARRAY['166', '166.0', '166.01', '0.1', '07.1', '166.1.2', '166.', '.1', 'abc', '166,1', ' 166.1', '166.1 ', '1234567890.1', '1.1234567890', ''] LOOP
+  -- PARITATE cu parserul (src/redari/__tests__/importTgz.test.js citeste aceste doua liste si le trece prin grupNrCrtValid — acelasi rezultat obligatoriu)
+  FOREACH v IN ARRAY ARRAY['166', '166.0', '166.01', '0.1', '07.1', '166.1.2', '166.', '.1', 'abc', '166,1', ' 166.1', '166.1 ', '1234567890.1', '1.1234567890', '', '1000000000.1', '1.1000000000'] LOOP   -- PARITATE_INVALIDE
     IF NOT pg_temp.r30h_refuza(pg_temp.r30h_ins('9909', v), '23514') THEN RAISE EXCEPTION 'TEST1 FAIL: forma invalida acceptata: [%]', v; END IF;
   END LOOP;
+  FOREACH v IN ARRAY ARRAY['1.1', '999999999.999999999', '166.7', '7.2', '123456789.1'] LOOP   -- PARITATE_VALIDE
+    i := i + 1;
+    EXECUTE pg_temp.r30h_ins((9910 + i)::text, v);   -- parcele DRY 9911..9915 (fara DELETE: authenticated nu are drept de stergere)
+  END LOOP;
   RAISE NOTICE 'TEST1 OK';
+END $t$;
+
+-- TEST1b (r5, Copilot r4 P1-02): grup doar pe randuri cu cheie_sursa — INSERT manual fara cheie refuzat; cheia nu se poate goli pe o parcela cu grup
+SELECT pg_temp.r30h_ca(pg_temp.r30h_g('editor')::uuid, 'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r30h_refuza(format($q$INSERT INTO public.red_parcele(proiect_id, uat_id, id_parcela, nr_crt_grup) VALUES (%L, %L, %L, '166.9')$q$,
+                                    pg_temp.r30h_g('proiect'), pg_temp.r30h_g('uat'), pg_temp.r30h_g('uat3') || '-9907'), '23514') THEN
+    RAISE EXCEPTION 'TEST1b FAIL: grup fara cheie_sursa acceptat';
+  END IF;
+  IF NOT pg_temp.r30h_refuza(format($q$UPDATE public.red_parcele SET cheie_sursa = NULL WHERE id_parcela = %L AND proiect_id = %L$q$, pg_temp.r30h_g('uat3') || '-9901', pg_temp.r30h_g('proiect')), '23514') THEN
+    RAISE EXCEPTION 'TEST1b FAIL: cheia golita pe o parcela cu grup';
+  END IF;
+  RAISE NOTICE 'TEST1b OK';
 END $t$;
 
 -- TEST2: UPDATE pe nr_crt_grup refuzat pentru editor si admin (nu au privilegiu pe coloana: 42501); celelalte coloane raman editabile
@@ -120,7 +138,7 @@ DO $t$ BEGIN
     RAISE EXCEPTION 'TEST5 FAIL: mentenanta';
   END IF;
   IF (SELECT count(*) FROM public.red_parcele WHERE nr_crt_grup IS NOT NULL AND NOT (proiect_id = pg_temp.r30h_g('proiect')::uuid AND id_parcela LIKE pg_temp.r30h_g('uat3') || '-99__')) <> 0
-     OR (SELECT count(*) FROM public.red_parcele) <> pg_temp.r30h_g('existente')::bigint + 3 THEN
+     OR (SELECT count(*) FROM public.red_parcele) <> pg_temp.r30h_g('existente')::bigint + 8 THEN
     RAISE EXCEPTION 'TEST5 FAIL: parcelele existente atinse';
   END IF;
   RAISE NOTICE 'TEST5 OK';

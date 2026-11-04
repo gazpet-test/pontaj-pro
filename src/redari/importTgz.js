@@ -43,6 +43,12 @@ export const MOTIV_CADASTRU_SUSPECT = 'cadastru suspect (posibilă valoare-umplu
 export const MOTIV_NRCRT_INCOMPATIBIL = 'Nr.Crt. incompatibil cu parcela existentă cu aceeași identitate (subnumăr „x.y” față de „x”) — de verificat, nu se importă'
 // r4: grupul cu subnumăr se păstrează în BD în red_parcele.nr_crt_grup (migrarea 20261130h): NULL = fără subnumăr, '166.1' = grupul; pus doar la INSERT,
 // imutabil (trigger), fără UPDATE pentru authenticated. Codul CERE coloana (se livrează după migrare).
+// r5 (J-P2 / C-P2-01): O SINGURĂ regulă pentru grupul cu subnumăr, identică textual cu CHECK-ul red_parcele_nr_crt_grup_forma din 20261130h
+// (testul de paritate citește regex-ul din migrare și îl compară cu acesta, pe același tabel de cazuri). Grup invalid = Nr.Crt. invalid (eroare pe rând).
+export const RE_NR_CRT_GRUP_SQL = '^[1-9][0-9]{0,8}[.][1-9][0-9]{0,8}$'
+export const NR_CRT_GRUP_MAX = 19
+const RE_NR_CRT_GRUP = new RegExp(RE_NR_CRT_GRUP_SQL)
+export const grupNrCrtValid = g => typeof g === 'string' && g.length <= NR_CRT_GRUP_MAX && RE_NR_CRT_GRUP.test(g)
 export const STARE_NECONFIRMATA = 'necunoscut — importul s-a oprit înainte de confirmare; verificați parcela în BD'
 // câmpurile consolidate pe grupul Nr.Crt. x (P1-2 r7): [câmp, eticheta din detaliu]
 const CAMPURI_GRUP = [['poz_hg', 'HG'], ['nr_cadastral', 'cadastru'], ['tarla', 'tarla'], ['suprafata_temporara_mp', 'suprafață'], ['categoria_folosinta', 'categorie'], ['regim', 'regim']]
@@ -94,7 +100,9 @@ export function parseazaNrCrt(v) {
   if (!m) return null
   const x = Number(m[1]); const sub = m[2] != null ? Number(m[2]) : null; const y = m[3] != null ? Number(m[3]) : null
   if (!ok(x) || (sub != null && !ok(sub)) || (y != null && !ok(y))) return null
-  return { x, sub, y, grup: sub != null ? `${x}.${sub}` : String(x), punct_fara_slash: sub != null && y == null }
+  const grup = sub != null ? `${x}.${sub}` : String(x)
+  if (sub != null && !grupNrCrtValid(grup)) return null   // r5: aceeași limită ca BD (max 9 + 9 cifre) — altfel INSERT-ul lotului ar pica
+  return { x, sub, y, grup, punct_fara_slash: sub != null && y == null }
 }
 
 /**
@@ -411,6 +419,9 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
   statistici.fara_cheie = fara_cheie.length; statistici.ambigue = ambigue.length; statistici.cadastru_suspect = cadastru_suspect.length
   // rândurile DISTINCTE puse deoparte (erori + ambigue + fără cheie), fiecare numărat o singură dată (pct. 1)
   statistici.randuri_de_tratat = numarRanduriPuseDeoparte(randuriDeTratat({ erori, ambigue, fara_cheie }))   // L19: aceeași definiție ca în CSV / UI
+  // r5 (C-P2-04, L12): numitorul fișierului — fiecare rând de date e ori într-un grup de parcelă (inclusiv dublurile), ori o eroare pe rând
+  const inParcele = parcele.reduce((n, p) => n + p.randuri.length, 0); const eroriRand = erori.filter(e => e.rand != null).length
+  statistici.reconciliere_randuri = { randuri: statistici.randuri_total, in_parcele: inParcele, erori: eroriRand, ok: statistici.randuri_total === inParcele + eroriRand }
   return { parcele, detinatori, contacte, dubluri, neidentificati, fara_cheie, ambigue, cadastru_suspect, erori, statistici, antet: { rand: antet.rand + 1, coloane: col } }
 }
 
@@ -460,6 +471,11 @@ function primulNumar(data) {
  */
 export async function scrieImport(supabase, preview, { proiectId, versiune, sursa = 'TGZ', fisierNume = null, onProgress, pagina = PAGINA, lotCitire = LOT_CITIRE } = {}) {
   if (!proiectId) throw new Error('scrieImport: proiectId lipsă')
+  // r5 (C-P1-03): o previzualizare calculată pentru alt proiect nu se scrie aici (UI-ul o leagă prin proiect_id_previzualizare)
+  if (preview?.proiect_id_previzualizare != null && preview.proiect_id_previzualizare !== proiectId) {
+    throw new Error('scrieImport: previzualizarea a fost calculată pentru alt proiect; refă previzualizarea')
+  }
+  const sursaAnexa7 = sursa === 'ANEXA7'   // r5 (C-P2-02): excepția „fără Nr.Crt.” DOAR pentru sursa declarată Anexa 7
   const progres = (etapa, facut, total) => { if (typeof onProgress === 'function') onProgress({ etapa, facut, total }) }
   const parceleToate = preview?.parcele ?? []
   const detinatoriToti = preview?.detinatori ?? []
@@ -532,9 +548,10 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
       const row = existentaDupaSursa.get(p.cheie_sursa)
       if (!row) continue
       const grupBd = row.nr_crt_grup ?? null
-      if (p.nr_crt == null) {
+      const grupFisier = p.grup_sub ?? null
+      if (sursaAnexa7 && p.nr_crt == null) {
         if (grupBd != null) refolosite_fara_nr_crt.push({ id_parcela: row.id_parcela, nr_crt_grup: grupBd, cheie_sursa: p.cheie_sursa, rand: p.rand ?? null })
-      } else if ((p.grup_sub ?? null) !== grupBd) {
+      } else if (grupFisier !== grupBd) {
         opriteNrCrt.add(p.cheie)
         const detaliu = `parcela existentă ${row.id_parcela} (${grupBd ? `grup ${grupBd}` : 'fără subnumăr'}) ≠ grupul din fișier ${p.grup_sub ?? p.nr_crt ?? '-'}`
         for (const r of (p.randuri || [{ rand: p.rand ?? null, nr_crt: String(p.nr_crt ?? '') }])) nr_crt_incompatibil.push({ rand: r.rand ?? null, nr_crt: r.nr_crt ?? null, uat: p.uat3, cheie_sursa: p.cheie_sursa, motiv: MOTIV_NRCRT_INCOMPATIBIL, detaliu })
@@ -545,6 +562,13 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     if (nr_crt_incompatibil.length) diferenteBaza.nr_crt_incompatibil = nr_crt_incompatibil
     if (refolosite_fara_nr_crt.length) diferenteBaza.refolosite_fara_nr_crt = refolosite_fara_nr_crt
     stari.oprite = opriteNrCrt
+    // r5: un grup care nu respectă regula BD (preview modificat / vechi) nu se încearcă la INSERT — „de tratat”
+    for (const p of parcele) {
+      if (parcelaDupaCheie.has(p.cheie) || opriteNrCrt.has(p.cheie) || p.grup_sub == null || grupNrCrtValid(p.grup_sub)) continue
+      opriteNrCrt.add(p.cheie)
+      for (const r of (p.randuri || [{ rand: p.rand ?? null, nr_crt: String(p.nr_crt ?? '') }])) nr_crt_incompatibil.push({ rand: r.rand ?? null, nr_crt: r.nr_crt ?? null, uat: p.uat3, cheie_sursa: p.cheie_sursa, motiv: MOTIV_NRCRT_INCOMPATIBIL, detaliu: `grup Nr.Crt. invalid „${p.grup_sub}” (max 9 + 9 cifre)` })
+    }
+    if (nr_crt_incompatibil.length) diferenteBaza.nr_crt_incompatibil = nr_crt_incompatibil
     const parceleNoi = parcele.filter(p => !parcelaDupaCheie.has(p.cheie) && !opriteNrCrt.has(p.cheie))
     const parceleRefolosite = parcele.filter(p => parcelaDupaCheie.has(p.cheie))
     stari.parcelaDupaCheie = parcelaDupaCheie
@@ -570,7 +594,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
         sat: p.sat ?? null, tarla: p.tarla ?? null, nr_cadastral: p.nr_cadastral ?? null, poz_hg: p.poz_hg ?? null,
         suprafata_temporara_mp: p.suprafata_temporara_mp ?? null, categoria_folosinta: p.categoria_folosinta ?? null,
         observatii: p.observatii ?? null,
-        nr_crt_grup: p.nr_crt == null ? null : (p.grup_sub ?? null),   // 20261130h: doar la INSERT; Anexa 7 (fără Nr.Crt.) = NULL
+        nr_crt_grup: sursaAnexa7 && p.nr_crt == null ? null : (p.grup_sub ?? null),   // 20261130h: doar la INSERT; Anexa 7 (fără Nr.Crt.) = NULL
       }))
       for (const { p } of lotP) stari.inCurs.add(p.cheie)   // L05: dacă INSERT-ul pică, starea acestor parcele e NECUNOSCUTĂ
       verifica(await supabase.from('red_parcele').insert(randuri), 'inserare parcele')
@@ -653,9 +677,26 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     }
 
     // 6. lotul: finalizat + cifre. Copilot r3 P3-02: reconciliere deterministă — eligibilele din preview = noi + refolosite + oprite la verificarea în BD
+    // r5 (C-P2-04): partiția clientului e doar verificare internă; dovada e recitirea din BD — fiecare parcelă scrisă / refolosită există pe cheia ei,
+    // cu id-ul și grupul Nr.Crt. așteptate; numitorul fișierului (rândurile de date) vine din statistici.reconciliere_randuri (parser).
     const reconciliere = { eligibile: parcele.length, noi: randuriParcele.length, refolosite: parceleRefolosite.length, oprite: opriteNrCrt.size }
     reconciliere.ok = reconciliere.eligibile === reconciliere.noi + reconciliere.refolosite + reconciliere.oprite
     if (!reconciliere.ok) throw new Error(`Reconcilierea importului nu se închide (${JSON.stringify(reconciliere)}); verificați lotul`)
+    const asteptate = [...randuriParcele.map(({ p }) => p), ...parceleRefolosite]
+    const dinBd = new Map()
+    for (const lotC of loturi(asteptate.map(p => p.cheie_sursa), lotCitire)) {
+      const data = await citesteTot(() => supabase.from('red_parcele').select('id, id_parcela, cheie_sursa, nr_crt_grup').eq('proiect_id', proiectId).in('cheie_sursa', lotC), 'reconciliere parcele', pagina)
+      for (const row of data) dinBd.set(row.cheie_sursa, row)
+    }
+    const lipsa = []
+    for (const p of asteptate) {
+      const m = parcelaDupaCheie.get(p.cheie); const row = dinBd.get(p.cheie_sursa)
+      const grupAsteptat = m?.existenta ? (existentaDupaSursa.get(p.cheie_sursa)?.nr_crt_grup ?? null) : (sursaAnexa7 && p.nr_crt == null ? null : (p.grup_sub ?? null))
+      if (!row || row.id !== m?.id || (row.nr_crt_grup ?? null) !== grupAsteptat) lipsa.push(m?.id_parcela ?? p.cheie)
+    }
+    reconciliere.confirmate_bd = asteptate.length - lipsa.length
+    reconciliere.randuri_fisier = preview?.statistici?.reconciliere_randuri ?? null
+    if (lipsa.length) throw new Error(`Reconcilierea cu BD: ${lipsa.length} parcele nu se regăsesc cum au fost scrise (${lipsa.slice(0, 10).join(', ')}); verificați lotul`)
     const existente = parceleRefolosite.map(p => parcelaDupaCheie.get(p.cheie).id_parcela)
     const detinatoriExistenti = [...uuidDetinator.values()].filter(v => v.existent).length
     await actualizeazaLot({
