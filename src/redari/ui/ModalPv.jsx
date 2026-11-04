@@ -281,7 +281,8 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
   const eticheteLista = chei => chei.map(k => ETICHETE[k] ?? k).join(', ')
   // B: Final_v2 a scos planul de situație din PV B (rămâne în BD); A: plan DA/NU rămâne
   const booleene = tip==='A' ? ['identitate_verificata','plan_situatie','obiectii_redare'] : ['obiectii_redare']
-  return <Modal titlu={sursa?.pv?.nr_pv || 'PV '+tip} latime={760} onClose={inchide}>
+  // #988: modificat={false} dezactivează euristica din Modal (ar dubla confirmarea); fundalul și ✕ trec prin inchide()
+  return <Modal titlu={sursa?.pv?.nr_pv || 'PV '+tip} latime={760} modificat={false} onClose={inchide}>
     {mesaj && <p role="alert">{mesaj}</p>}
     <button style={S.btnS} disabled={lucru} onClick={reload}>Reîncarcă</button>
     {tip==='B' && sursa?.areASemnat && <p>Există PV A semnat pe parcelă; PV B privește doar coproprietarii fără PV A.</p>}

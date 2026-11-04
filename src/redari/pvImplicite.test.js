@@ -52,7 +52,7 @@ describe('valoriImplicitePv', () => {
   it('obiecții din răspuns -> bifa „cu obiecții” + textul; fără text nu se bifează', () => {
     // Jakarinos #990 P2-3: textul se copiază exact (cu spațiile / liniile de la capete), plin() doar validează
     const text = '\n  Gard nerefăcut \n'
-    const p = valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_cu_obiectii', obiectii_text:text } })
+    const p = valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_cu_obiectii', obiectii_text:text }, laCreare:true })
     expect(p).toMatchObject({ obiectii_redare:true, obiectii_text:text })
     expect(valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_cu_obiectii', obiectii_text:' ' } })).not.toHaveProperty('obiectii_redare')
     expect(valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_fara_obiectii' } })).not.toHaveProperty('obiectii_redare')
@@ -60,6 +60,21 @@ describe('valoriImplicitePv', () => {
   it('constatare pe teren cu obiecții („Gard rupt”) -> mod teren + bifa cu obiecții + textul (Jakarinos #990 P1-1)', () => {
     const p = valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'constatare_teren', obiectii_text:'Gard rupt' }, laCreare:true })
     expect(p).toMatchObject({ constatare_mod:'teren', obiectii_redare:true, obiectii_text:'Gard rupt' })
+  })
+  it('PV existent redeschis: alegerile salvate („fără obiecții”, lucrări toate false, stare fără bife) nu se rescriu (Copilot #990 P2-01)', () => {
+    const existent = { ...pvNou(), locul:'Ales', constatare_mod:'sediu', obiectii_redare:false, obiectii_text:null,
+      lucrari:{ sol_fertil:false, nivelare:false, arat:false, discuit:false, insamantare:false, gard:false, drum:false, altele:'' },
+      stare_teren:{ nivelat:false } }
+    for (const raspuns of [{ optiune:'nu_particip_cu_obiectii', obiectii_text:'Gard nerefăcut' }, { optiune:'constatare_teren', obiectii_text:'Gard rupt' }]) {
+      expect(valoriImplicitePv({ tip:'A', pv:existent, uat:uat(), parcela:parcela(), raspuns, laCreare:false })).toEqual({})
+      expect(valoriImplicitePv({ tip:'A', pv:{ ...existent, stare_teren:{} }, uat:uat(), parcela:parcela(), raspuns })).toEqual({})
+    }
+    // PV nou cu același răspuns preia obiecțiile (inclusiv constatare pe teren)
+    expect(valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'constatare_teren', obiectii_text:'Gard rupt' }, laCreare:true }))
+      .toMatchObject({ obiectii_redare:true, obiectii_text:'Gard rupt' })
+    // câmpurile nedecise (null) ale unui PV vechi primesc în continuare propuneri, dar fără obiecții
+    const vechi = valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_cu_obiectii', obiectii_text:'X' } })
+    expect(vechi).toHaveProperty('locul'); expect(vechi).not.toHaveProperty('obiectii_redare')
   })
   it('nu suprascrie câmpurile completate; PV final și PV C neatinse; PV B fără mod / răspuns', () => {
     const plin = { ...pvNou(), locul:'Ales', constatare_mod:'teren', lucrari:{ arat:true }, stare_teren:{ alta:'X' }, obiectii_redare:true, obiectii_text:'Ob' }

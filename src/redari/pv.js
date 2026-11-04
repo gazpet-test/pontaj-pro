@@ -39,7 +39,6 @@ export function loculImplicit({ uat = {}, parcela = {}, mod = 'sediu' } = {}) {
   if (mod === 'teren') return ['Pe teren', plin(parcela.sat) ? 'sat ' + String(parcela.sat).trim() : '', 'UAT ' + nume].filter(Boolean).join(', ')
   return 'Sediul Primăriei ' + nume + (plin(uat.primarie_adresa) ? ', ' + String(uat.primarie_adresa).trim() : '')
 }
-const stareGoala = st => !st || (!STARI_TEREN.slice(0, -1).some(k => st[k] === true) && !plin(st.alta))
 export function propuneStareTeren(lucrari) {
   const st = {}
   for (const [k, v] of Object.entries(STARE_DIN_LUCRARI)) if (lucrari?.[k] === true) st[v] = true
@@ -51,11 +50,12 @@ export function valoriImplicitePv({ tip = 'A', pv = {}, uat = {}, parcela = {}, 
   const patch = {}
   const optiune = tip === 'A' ? raspuns?.optiune : null
   if (pv.lucrari == null) patch.lucrari = propuneLucrari(parcela.articol_deviz)
-  if (stareGoala(pv.stare_teren)) {
+  // Copilot #990 P2-01: doar câmpurile NEDECISE (null) primesc propuneri; o alegere salvată (false, {}, bife toate false) nu se rescrie
+  if (pv.stare_teren == null) {
     const st = propuneStareTeren(patch.lucrari ?? pv.lucrari)
     if (st) patch.stare_teren = st
   }
-  if (tip === 'A' && !['sediu', 'teren'].includes(pv.constatare_mod)) patch.constatare_mod = optiune === 'constatare_teren' ? 'teren' : 'sediu'
+  if (tip === 'A' && pv.constatare_mod == null) patch.constatare_mod = optiune === 'constatare_teren' ? 'teren' : 'sediu'
   if (!plin(pv.locul)) {
     const locul = loculImplicit({ uat, parcela, mod: patch.constatare_mod ?? pv.constatare_mod ?? 'sediu' })
     if (locul) patch.locul = locul
@@ -65,7 +65,8 @@ export function valoriImplicitePv({ tip = 'A', pv = {}, uat = {}, parcela = {}, 
   const ziValida = zi !== '' && ZILE_SESIUNE_UAT.some(k => String(uat[k] ?? '').slice(0, 10) === zi)
   if (ziValida && (laCreare || !plin(pv.data_pv)) && pv.data_pv !== zi) patch.data_pv = zi
   // Jakarinos #990 P1-1 / P2-3: și „constatare pe teren” poartă obiecții (schema cere textul); textul se copiază EXACT (plin() doar validează)
-  if (OPTIUNI_CU_OBIECTII.includes(optiune) && pv.obiectii_redare !== true && !plin(pv.obiectii_text) && plin(raspuns?.obiectii_text)) {
+  // obiectii_redare e NOT NULL DEFAULT false în BD: false salvat nu se poate deosebi de „nedecis” -> obiecțiile se propun DOAR la creare
+  if (laCreare && OPTIUNI_CU_OBIECTII.includes(optiune) && pv.obiectii_redare !== true && !plin(pv.obiectii_text) && plin(raspuns?.obiectii_text)) {
     patch.obiectii_redare = true
     patch.obiectii_text = raspuns.obiectii_text
   }
