@@ -5,6 +5,8 @@ import { supabase } from '../../lib/supabase.js'
 import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
+import { termenConstatare, mesajTermenConstatare } from '../setari.js'
+import { dataBucuresti } from '../plicuri.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns, citestePaginat, citesteIn } from './comune.jsx'
 
@@ -16,6 +18,14 @@ const CAMPURI_PARCELA = [
 ]
 const CAMPURI_CONTACT = [['adresa_strada', 'Stradă / nr.'], ['adresa_sat', 'Sat'], ['adresa_comuna', 'Comună / oraș'], ['adresa_judet', 'Județ'], ['cod_postal', 'Cod poștal'], ['telefon', 'Telefon'], ['email', 'Email']]
 const nrSauNull = (v) => (v === '' || v === null || v === undefined) ? null : Number(v)
+
+/** Plan pct. 4.6: linia de avertisment neblocant pe rândul deținătorului (de confirmat claude#026 î.5). Exportată pentru testul de randare. */
+export function AvertismentConstatare({ uat, detinator, raspunsuri, pvs, azi }) {
+  if (!detinator || detinator.sters_la) return null
+  const t = termenConstatare({ uat, detinatorId: detinator.id, raspunsuri, pvs, azi })
+  const m = mesajTermenConstatare(t)
+  return m ? <div data-testid="avertisment-constatare" style={{ fontSize:12.5, marginTop:4, color: t.depasit ? G.red : G.yellow }}>⚠ {m}</div> : null
+}
 
 export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, show, onInapoi, onSchimbat }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
@@ -247,6 +257,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                 <div style={{ fontSize:12, color:G.muted, marginTop:3 }}>
                   {d.sursa_date && <span>sursă: {d.sursa_date} · </span>}{d.versiune_lista_tgz && <span>listă: {d.versiune_lista_tgz}</span>}
                 </div>
+                <AvertismentConstatare uat={uat} detinator={d} raspunsuri={raspunsuri} pvs={pvs} azi={dataBucuresti()} />
                 {poateScrie && (
                   <div style={{ fontSize:12.5, marginTop:4 }}>
                     {c ? (<>
