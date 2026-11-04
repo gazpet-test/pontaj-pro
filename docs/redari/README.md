@@ -513,6 +513,17 @@ Stare 04.11.2026: punctele 1–3 sunt făcute.
   Mentenanța (SQL direct ca postgres, fără JWT) rămâne scutită.
 - O urcare cu rezultat neclar (rețea / timeout) păstrează calea: „Reia pe aceeași cale” înregistrează obiectul dacă a ajuns, altfel îl urcă o singură dată.
 
+### 5c. „📧 Pregătește mailul” (migrarea `20261130f` NEAPLICATĂ, edge `redari-coresp-mail` NEDEPLOYAT, 04.11.2026)
+- Pe un rând **aprobat** de Răzvan, cu PDF „de trimis” aprobat, admin / editor apasă „📧 Pregătește mailul”: platforma trimite un mail **INTERN** la
+  `expeditor_email` (doar @gazpet.ro, CHECK în BD + verificare în RPC și edge), CC `office@gazpet.ro`, cu adresa instituției, subiectul, textul și
+  PDF-ul aprobat (verificat cu eTag-ul aprobat în BD și în antetul descărcării). Expeditorul îl copiază într-un mail nou și îl trimite el.
+  **Platforma nu trimite nimic în afara firmei.**
+- Câmpurile `destinatar_email`, `mail_subiect`, `mail_text`, `expeditor_email` (Editează → „📧 Mailul”) intră în conținutul aprobat: schimbarea lor
+  după aprobare face aprobarea să cadă.
+- Urma: `red_corespondenta_mailuri` (o încercare = un rând; in_curs → trimis / eroare / necunoscut). Fereastră 60 s pe rând, plafon 20 încercări / zi / proiect.
+- Ordinea livrării: (1) migrarea `20261130f` (după `20261130e`), (2) deploy edge `redari-coresp-mail` cu verify_jwt=false, (3) merge UI-ul
+  (UI-ul citește coloanele noi: fără migrare, ecranul Corespondență dă eroare). Fișa de securitate: `docs/redari/AUTOMATIZARE_CORESP_MAIL.md`.
+
 ## 6. Cum se revine
 - Migrarea e aplicată (01.11.2026); nu a atins niciun obiect existent (în afară de un rând în `app_modules` și 2 politici pe
   `storage.objects`, create de ea).
