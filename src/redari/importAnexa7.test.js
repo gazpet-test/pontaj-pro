@@ -142,6 +142,13 @@ describe('parseazaAnexa7', () => {
     expect(pv.contacte[1].adresa_judet).toBe('Judet Test')   // implicit, din UAT, doar unde nimeni nu a dat judet
   })
 
+  it('PR #981 r3 (C-P3-01): fara HG + cadastru doar „#” = fara cheie (randuri neunite, raportate); „-” ramane identitate ca in main', () => {
+    const pv = parseazaAnexa7(excel([rand({ 3: '##', 4: '' }), rand({ 3: ' # ', 4: '', 8: 'ALT TEST NUME' }), rand({ 3: '-', 4: '' })]), opt)
+    expect(pv.parcele.map(p => p.cheie_sursa)).toEqual([null, null, 'HUS||-|T12'])
+    expect(pv.fara_cheie).toHaveLength(2)
+    expect(pv.statistici).toMatchObject({ parcele_fara_cheie: 2, fara_cheie: 2, parcele_de_importat: 1 })
+  })
+
   it('foloseste cheia TGZ completa: aceeasi HG cu cadastru diferit ramane parcela diferita', () => {
     const pv = parseazaAnexa7(excel([rand(), rand({ 3: 'CF101' })]), opt)
     expect(pv.parcele.map(p => p.cheie_sursa)).toEqual([cheieSursa('HUS', '10', 'CF100', 'T12'), cheieSursa('HUS', '10', 'CF101', 'T12')])

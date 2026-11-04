@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx-js-style'
 import { parseazaTgz, scrieImport, parseazaNrCrt, imparteAdresa, cheieSursa, cadastruGol, cadastruSuspect, randuriDeTratat, numarRanduriPuseDeoparte, csvRanduriDeTratat,
-  LOT, LOT_CITIRE, RPC_REZERVA_NUMERE, MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU, MOTIV_CADASTRU_SUSPECT, MOTIV_NRCRT_PUNCT } from '../importTgz.js'
+  LOT, LOT_CITIRE, RPC_REZERVA_NUMERE, MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU, MOTIV_CADASTRU_SUSPECT, MOTIV_NRCRT_INCOMPATIBIL, STARE_ELIGIBILA, grupDinObservatii, marcajNrCrt } from '../importTgz.js'
 
 // ───────── fixture: xlsx fictiv construit în test (antet pe rândul 3) ─────────
 const ANTET = ['Nr.Crt.', 'Nr.Poz.Hg.', 'UAT', 'Județ', 'Nume Deținător', 'Adresă', 'Suprafață Afectată Temporar',
@@ -751,8 +751,15 @@ describe('04.11.2026 r2 — cheieSursa identică cu main pentru orice rând cu i
   })
   it('singura schimbare: fără HG și cu cadastru gol (doar „#” / spații) → fără cheie', () => {
     for (const cad of ['##', '#', ' # # ', '', null]) expect(cheieSursa('HUS', '', cad, 'T5#'), String(cad)).toBeNull()
-    expect(cadastruGol('##')).toBe(true); expect(cadastruGol(' # ')).toBe(true)
+    expect(cadastruGol('##')).toBe(true); expect(cadastruGol(' # ')).toBe(true); expect(cadastruGol('')).toBe(true)
     expect(cadastruGol('#1#')).toBe(false); expect(cadastruGol('##UA')).toBe(false)
+  })
+  it('r3 (J-P2-1 / C-P2-01): alte semne fără litere/cifre („-”, „---”, „?”, „...”, „/”, „*”) rămân identitate EXACT ca în main', () => {
+    // așteptările = regula din main (normalizeazaNume strânge punctuația repetată: „---” → „-”), scrise de mână
+    for (const [cad, inCheie] of [['-', '-'], ['---', '-'], ['?', '?'], ['???', '?'], ['...', '.'], ['/', '/'], ['*', '*'], ['#-#', '#-#'], ['#?#', '#?#']]) {
+      expect(cadastruGol(cad), cad).toBe(false)
+      expect(cheieSursa('HUS', '', cad, 'T1'), cad).toBe(`HUS||${inCheie}|T1`)
+    }
   })
   it('cadastruSuspect: marcaj pe subcâmpuri umplutură (0, 000, 999…, fără cifre); numere reale și gol → nu', () => {
     for (const v of ['0', '000', '999', '9999', '#999#', '999##', 'DE', '##DE']) expect(cadastruSuspect(v), v).toBe(true)
@@ -784,9 +791,9 @@ describe('04.11.2026 r2 — parseazaTgz pe formatele LOT1 (fictive)', () => {
     const p = parseazaTgz(xlsxDin([randF('166/1', 'HG 1', 'Test A', 'T1#', '100##'), randF('166/2', 'HG 1', 'Test B', 'T1#', '100##'),
       randF('166.1/1', 'HG 2', 'Test C', 'T1#', '101##'), randF('166.1/2', 'HG 2', 'Test D', 'T1#', '101##')]), OPT)
     expect(p.erori).toEqual([])
-    expect(p.parcele.map(x => [x.cheie, x.nr_crt, x.cheie_sursa, x.nr_cadastral, x.nr_detinatori, x.ambigua, x.punct_fara_slash])).toEqual([
-      ['HUS:166', 166, 'HUS|HG 1|100##|T1#', '100##', 2, false, false],
-      ['HUS:166.1', '166.1', 'HUS|HG 2|101##|T1#', '101##', 2, false, false],
+    expect(p.parcele.map(x => [x.cheie, x.nr_crt, x.cheie_sursa, x.nr_cadastral, x.nr_detinatori, x.ambigua, x.grup_sub, x.observatii])).toEqual([
+      ['HUS:166', 166, 'HUS|HG 1|100##|T1#', '100##', 2, false, null, 'Regim juridic: privat'],
+      ['HUS:166.1', '166.1', 'HUS|HG 2|101##|T1#', '101##', 2, false, '166.1', 'Regim juridic: privat; Nr.Crt. TGZ: 166.1'],
     ])
   })
   it('„123##” și „#123#” pe Nr.Crt. diferite = două parcele distincte, neambigue (nu se contopesc)', () => {
@@ -816,7 +823,7 @@ describe('04.11.2026 r2 — parseazaTgz pe formatele LOT1 (fictive)', () => {
       randF('8', 'HG 8', 'Test C', 'T8#', '0##'), randF('9', 'HG 8', 'Test D', 'T8#', '0##'),         // coliziune 8 ↔ 9 ⇒ nu se importă
     ]), OPT)
     expect(p.cadastru_suspect.map(c => [c.rand, c.nr_crt, c.detaliu])).toEqual([
-      [5, '7/2', 'cadastru: „999##”; parcela se importă'],
+      [5, '7/2', `cadastru: „999##”; ${STARE_ELIGIBILA}`],
       [6, '8', 'cadastru: „0##”; parcela NU se importă (ambiguă)'], [7, '9', 'cadastru: „0##”; parcela NU se importă (ambiguă)'],
     ])
     expect(p.parcele[0]).toMatchObject({ cheie_sursa: 'HUS|HG 7|999##|T1#', ambigua: false })   // marcajul nu schimbă cheia
@@ -868,40 +875,91 @@ describe('04.11.2026 r2 — randuriDeTratat pe un lot finalizat VECHI', () => {
   })
 })
 
-describe('04.11.2026 r2 — reimport: chei neschimbate și Nr.Crt. „x.y” fără „/”', () => {
+describe('04.11.2026 r3 — reimport: chei neschimbate; grupul Nr.Crt. trebuie dovedit compatibil cu parcela existentă', () => {
   const FISIER = [randF('1', 'HG 1', 'Test Unu', 'T1#', '123##'), randF('2', 'HG 2', 'Test Doi', 'T2#', '#123#'), randF('3', 'HG 3', 'Test Trei', 'T3#', '##'),
-    randF('4', '', 'Test Fals', 'T4#', '##')]
-  it('parcelele cu identitate se potrivesc pe cheile din BD (aceeași formă ca în main) → 0 noi; rândul fără HG + „##” = fără cheie, nu se dublează', async () => {
+    randF('4', '', 'Test Fals', 'T4#', '##'), randF('5', '', 'Test Liniuta', 'T5#', '-')]
+  it('parcelele cu identitate se potrivesc pe cheile din BD (aceeași formă ca în main) → 0 noi; doar rândul fără HG + „##” devine fără cheie', async () => {
     const sb = creeazaFakeSupabase()
     // BD „legacy”: cheile scrise de regula din main, INCLUSIV identitatea falsă „HUS||##|T4#” (ca la cele 9 parcele LOT1)
     const vechi = parseazaTgz(xlsxDin(FISIER), OPT)
     vechi.parcele[3].cheie_sursa = 'HUS||##|T4#'
     await scrieImport(sb, vechi, { proiectId: 'proiect-1', versiune: 'v1' })
-    expect(sb.tabele.red_parcele.map(p => p.cheie_sursa)).toEqual(['HUS|HG 1|123##|T1#', 'HUS|HG 2|#123#|T2#', 'HUS|HG 3|##|T3#', 'HUS||##|T4#'])
+    expect(sb.tabele.red_parcele.map(p => p.cheie_sursa)).toEqual(['HUS|HG 1|123##|T1#', 'HUS|HG 2|#123#|T2#', 'HUS|HG 3|##|T3#', 'HUS||##|T4#', 'HUS||-|T5#'])
     const r2 = await scrieImport(sb, parseazaTgz(xlsxDin(FISIER), { ...OPT, versiune: 'v2' }), { proiectId: 'proiect-1', versiune: 'v2' })
-    expect(r2).toMatchObject({ parceleNoi: 0, parceleRefolosite: 3, detinatoriNoi: 0, contacteNoi: 0 })
-    expect(r2.fara_cheie.map(f => f.rand)).toEqual([7])   // parcela „falsă” existentă: neatinsă, raportată de tratat
-    expect(sb.tabele.red_parcele).toHaveLength(4)
-    expect(sb.tabele.red_detinatori).toHaveLength(4)
+    expect(r2).toMatchObject({ parceleNoi: 0, parceleRefolosite: 4, detinatoriNoi: 0, contacteNoi: 0, nr_crt_incompatibil: [] })
+    expect(r2.fara_cheie.map(f => f.rand)).toEqual([7])   // parcela „falsă” existentă: neatinsă, raportată de tratat; „-” rămâne identitate ca în main
+    expect(sb.tabele.red_parcele).toHaveLength(5)
+    expect(sb.tabele.red_detinatori).toHaveLength(5)
   })
-  it('„7.2” fără „/” cu identitate deja în BD (importată de regula veche ca 7/2) → oprit „de tratat”: nu se refolosește, nu se inserează', async () => {
-    const sb = creeazaFakeSupabase()
-    await scrieImport(sb, parseazaTgz(xlsxDin([randF('7/2', 'HG 7', 'Test Vechi', 'T7', 'CF 7')]), OPT), { proiectId: 'proiect-1', versiune: 'v1' })
-    const pv = parseazaTgz(xlsxDin([randF('7.2', 'HG 7', 'Test Nou', 'T7', 'CF 7'), randF('8', 'HG 8', 'Test Opt', 'T8', 'CF 8')]), { ...OPT, versiune: 'v2' })
-    expect(pv.parcele.map(p => [p.cheie, p.punct_fara_slash])).toEqual([['HUS:7.2', true], ['HUS:8', false]])
+  // Copilot r2 P1-01 + r1 P2-01: nicio asociere tacită între grupuri Nr.Crt. distincte
+  const legacy = async (randuri) => { const sb = creeazaFakeSupabase(); await scrieImport(sb, parseazaTgz(xlsxDin(randuri), OPT), { proiectId: 'proiect-1', versiune: 'v1' }); return sb }
+  it.each([
+    ['166.1/1 peste parcela veche 166 (166/1)', [randF('166/1', 'HG 1', 'Test Vechi', 'T1#', '123##')], '166.1/1'],
+    ['166.1-1 peste parcela veche 166', [randF('166/1', 'HG 1', 'Test Vechi', 'T1#', '123##')], '166.1-1'],
+    ['7.2 peste parcela veche 7 (regula veche citea 7/2)', [randF('7/2', 'HG 1', 'Test Vechi', 'T1#', '123##')], '7.2'],
+  ])('%s → oprit: niciun deținător nou pe parcela veche, niciun INSERT, raport explicit', async (_, vechi, nrNou) => {
+    const sb = await legacy(vechi)
+    const pv = parseazaTgz(xlsxDin([randF(nrNou, 'HG 1', 'Test Nou', 'T1#', '123##'), randF('8', 'HG 8', 'Test Opt', 'T8', 'CF 8')]), { ...OPT, versiune: 'v2' })
+    expect(pv.parcele[0]).toMatchObject({ grup_sub: nrNou.split(/[\/-]/)[0], cheie_sursa: 'HUS|HG 1|123##|T1#' })
     const r = await scrieImport(sb, pv, { proiectId: 'proiect-1', versiune: 'v2' })
     expect(r).toMatchObject({ parceleNoi: 1, parceleRefolosite: 0, detinatoriNoi: 1 })
-    expect(r.nr_crt_punct).toEqual([{ rand: 4, nr_crt: '7.2', uat: 'HUS', cheie_sursa: 'HUS|HG 7|CF 7|T7', motiv: MOTIV_NRCRT_PUNCT, detaliu: 'parcela existentă HUS-0001' }])
+    expect(r.nr_crt_incompatibil).toEqual([{ rand: 4, nr_crt: nrNou, uat: 'HUS', cheie_sursa: 'HUS|HG 1|123##|T1#', motiv: MOTIV_NRCRT_INCOMPATIBIL,
+      detaliu: `parcela existentă HUS-0001 (fără subnumăr) ≠ grupul din fișier ${nrNou.split(/[\/-]/)[0]}` }])
+    expect(sb.tabele.red_parcele.map(p => p.id_parcela)).toEqual(['HUS-0001', 'HUS-0002'])
     expect(sb.tabele.red_detinatori.map(d => d.nume)).toEqual(['Test Vechi', 'Test Opt'])   // „Test Nou” NU s-a lipit pe parcela veche
     const lot = sb.tabele.red_import_loturi.at(-1)
-    expect(lot.diferente.nr_crt_punct).toEqual(r.nr_crt_punct)
+    expect(lot.diferente.nr_crt_incompatibil).toEqual(r.nr_crt_incompatibil)
     const tratat = randuriDeTratat(lot.diferente)
-    expect(tratat.map(x => [x.rand, x.categorie])).toEqual([[4, 'Nr.Crt. „x.y”']])
+    expect(tratat.map(x => [x.rand, x.categorie])).toEqual([[4, 'Nr.Crt. incompatibil']])
     expect(numarRanduriPuseDeoparte(tratat)).toBe(1)
   })
-  it('„7.2” fără „/” cu identitate NOUĂ → se importă normal (parcelă separată)', async () => {
+  it('invers: „166” peste o parcelă importată ca „166.1” (marcaj în observatii) → oprit', async () => {
+    const sb = await legacy([randF('166.1/1', 'HG 1', 'Test Vechi', 'T1#', '123##')])
+    expect(sb.tabele.red_parcele[0].observatii).toBe('Regim juridic: privat; Nr.Crt. TGZ: 166.1')
+    const r = await scrieImport(sb, parseazaTgz(xlsxDin([randF('166/2', 'HG 1', 'Test Nou', 'T1#', '123##')]), { ...OPT, versiune: 'v2' }), { proiectId: 'proiect-1', versiune: 'v2' })
+    expect(r).toMatchObject({ parceleNoi: 0, parceleRefolosite: 0, detinatoriNoi: 0 })
+    expect(r.nr_crt_incompatibil[0].detaliu).toBe('parcela existentă HUS-0001 (grup 166.1) ≠ grupul din fișier 166')
+  })
+  it('reimportul legitim al unui „166.1” importat cu regula nouă (marcaj identic) → refolosit, 0 noi', async () => {
+    const randuri = [randF('166.1/1', 'HG 1', 'Test A', 'T1#', '123##'), randF('166.1/2', 'HG 1', 'Test B', 'T1#', '123##')]
+    const sb = await legacy(randuri)
+    const r = await scrieImport(sb, parseazaTgz(xlsxDin(randuri), { ...OPT, versiune: 'v2' }), { proiectId: 'proiect-1', versiune: 'v2' })
+    expect(r).toMatchObject({ parceleNoi: 0, parceleRefolosite: 1, detinatoriNoi: 0, nr_crt_incompatibil: [] })
+  })
+  it('marcajul altui grup („166.2”) sau marcaj șters manual → oprit (sigur, nu se ghicește)', async () => {
+    const sb = await legacy([randF('166.1/1', 'HG 1', 'Test Vechi', 'T1#', '123##')])
+    const r = await scrieImport(sb, parseazaTgz(xlsxDin([randF('166.2/1', 'HG 1', 'Test Nou', 'T1#', '123##')]), { ...OPT, versiune: 'v2' }), { proiectId: 'proiect-1', versiune: 'v2' })
+    expect(r.nr_crt_incompatibil).toHaveLength(1)
+    sb.tabele.red_parcele[0].observatii = 'Regim juridic: privat'
+    const r2 = await scrieImport(sb, parseazaTgz(xlsxDin([randF('166.1/1', 'HG 1', 'Test Vechi', 'T1#', '123##')]), { ...OPT, versiune: 'v3' }), { proiectId: 'proiect-1', versiune: 'v3' })
+    expect(r2.nr_crt_incompatibil).toHaveLength(1)
+    expect(sb.tabele.red_detinatori).toHaveLength(1)
+  })
+  it('grupDinObservatii: doar marcajul exact, delimitat; alt text nu se ia drept marcaj', () => {
+    expect(grupDinObservatii('Nr.Crt. TGZ: 166.1')).toBe('166.1')
+    expect(grupDinObservatii('Regim juridic: privat; Nr.Crt. TGZ: 166.1; județ adresă ≠ teren')).toBe('166.1')
+    for (const v of [null, '', 'Nr.Crt. TGZ: 166', 'Nr.Crt. TGZ: 166.1x', 'xNr.Crt. TGZ: 166.1', 'Nr.Crt. TGZ: 166.01']) expect(grupDinObservatii(v), String(v)).toBeNull()
+    expect(marcajNrCrt('166.1')).toBe('Nr.Crt. TGZ: 166.1')
+  })
+  it('„7.2” cu identitate NOUĂ → se importă normal (parcelă separată, cu marcaj)', async () => {
     const sb = creeazaFakeSupabase()
     const r = await scrieImport(sb, parseazaTgz(xlsxDin([randF('7.2', 'HG 7', 'Test Nou', 'T7', 'CF 7')]), OPT), { proiectId: 'proiect-1', versiune: 'v1' })
-    expect(r).toMatchObject({ parceleNoi: 1, nr_crt_punct: [] })
+    expect(r).toMatchObject({ parceleNoi: 1, nr_crt_incompatibil: [] })
+    expect(grupDinObservatii(sb.tabele.red_parcele[0].observatii)).toBe('7.2')
+  })
+  it('cadastru suspect: starea din lot e reconciliată cu decizia efectivă (J-P2-3 / C-P2-04)', async () => {
+    const sb = await legacy([randF('7/2', 'HG 1', 'Test Vechi', 'T1#', '999##'), randF('9', 'HG 9', 'Test Noua', 'T9', '0')])
+    const pv = parseazaTgz(xlsxDin([randF('7.2', 'HG 1', 'Test Nou', 'T1#', '999##'), randF('9', 'HG 9', 'Test Noua', 'T9', '0'), randF('10', 'HG 10', 'Test Zece', 'T10', '000')]), { ...OPT, versiune: 'v2' })
+    expect(pv.cadastru_suspect.map(c => c.detaliu)).toEqual([
+      `cadastru: „999##”; ${STARE_ELIGIBILA}`, `cadastru: „0”; ${STARE_ELIGIBILA}`, `cadastru: „000”; ${STARE_ELIGIBILA}`,
+    ])
+    const r = await scrieImport(sb, pv, { proiectId: 'proiect-1', versiune: 'v2' })
+    expect(r.diferente.cadastru_suspect.map(c => [c.rand, c.detaliu])).toEqual([
+      [4, 'cadastru: „999##”; parcela NU s-a importat (Nr.Crt. incompatibil)'], [5, 'cadastru: „0”; parcela existentă refolosită'], [6, 'cadastru: „000”; parcela nouă importată'],
+    ])
+    expect(sb.tabele.red_import_loturi.at(-1).diferente.cadastru_suspect).toEqual(r.diferente.cadastru_suspect)
+    const tratat = randuriDeTratat(r.diferente)
+    expect(tratat.find(x => x.rand === 4)).toMatchObject({ categorie: 'Nr.Crt. incompatibil + cadastru suspect', informativ: false })
+    expect(tratat.find(x => x.rand === 4).detaliu).not.toMatch(/eligibilă|se importă/)
   })
 })
