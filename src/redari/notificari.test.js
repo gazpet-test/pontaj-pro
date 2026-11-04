@@ -149,3 +149,32 @@ describe('ghidModele', () => {
     expect(r.map(x => [x.cod, x.eticheta])).toEqual([['A1', 'Aprobat'], ['B1', 'Draft']])
   })
 })
+
+describe('modalul 📞 Răspuns — canalele manuale', () => {
+  it('doar valori din CHECK red_raspunsuri_canal_check, fără online / email; implicit telefon', async () => {
+    const { CANALE_RASPUNS_MANUAL } = await import('./notificari.js')
+    const CHECK = ['online', 'telefon', 'scris', 'sesiune', 'email', 'sms']   // pg_constraint, citit 04.11.2026
+    const coduri = CANALE_RASPUNS_MANUAL.map(c => c.cod)
+    expect(coduri[0]).toBe('telefon')
+    expect(coduri.every(c => CHECK.includes(c))).toBe(true)
+    expect(coduri).not.toContain('email'); expect(coduri).not.toContain('online')
+    expect([...coduri].sort()).toEqual(['scris', 'sesiune', 'sms', 'telefon'])
+  })
+  it('nota: canalul + operatorul + sursa, max 500; canal nepermis = eroare', async () => {
+    const { notaRaspunsManual } = await import('./notificari.js')
+    expect(notaRaspunsManual('scris', 'Ion', ' primit pe e-mail ')).toBe('răspuns scris, operator Ion — primit pe e-mail')
+    expect(notaRaspunsManual('telefon', '', '')).toBe('telefon, operator operator')
+    expect(notaRaspunsManual('sms', 'A', 'x'.repeat(600))).toHaveLength(500)
+    expect(() => notaRaspunsManual('email', 'A', '')).toThrow(/nepermis/)
+    expect(() => notaRaspunsManual('online', 'A', '')).toThrow(/nepermis/)
+  })
+  it('Redari.jsx: modalul scrie canalul ales (nu mai e fix „telefon”) și nota din helper', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('../Redari.jsx', import.meta.url), 'utf8')
+    const modal = src.slice(src.indexOf('function ModalRaspunsTelefon'))
+    expect(modal).toContain('detinator_id: rand.detinator_id, canal, optiune,')
+    expect(modal).not.toContain("canal:'telefon'")
+    expect(modal).toContain('notaRaspunsManual(canal, operator, sursa)')
+    expect(modal).toContain('CANALE_RASPUNS_MANUAL.map')
+  })
+})

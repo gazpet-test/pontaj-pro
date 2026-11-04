@@ -52,13 +52,17 @@ aceeași dată după ordinea înregistrării. Istoricul rămâne întreg, iar un
 | Canal | Unde intră | Cum se înregistrează | Activ? |
 |---|---|---|---|
 | **Formular online** (QR / link) | Singur, prin `fn_red_raspuns_public`, cu canalul „online” | Operatorul nu face nimic. Dacă proprietarul răspunde de două ori pe același cod, se păstrează ambele răspunsuri și contează ultimul | da |
-| **Telefon** | Canalul „telefon”, plus o notă cu operatorul și sursa | 📋 Registru → 📞 Răspuns pe rândul deținătorului: opțiunea, ziua (doar din zilele UAT-ului), obiecțiile, declarația confirmată verbal | da |
-| **La sesiune** | Canalul „sesiune” („particip”) | 🗓️ Sesiune → Prezent; PV A / PV B din același ecran | da |
-| **Scris / poștă** (scrisoare de la proprietar) | Canalul „scris” există în BD, dar nu are buton | Azi: 📞 Răspuns cu nota „răspuns scris, nr. înregistrare …”; rămâne pe canalul telefon. **AR-ul și returul nu sunt răspunsuri**: se trec pe plic, în ✉️ Poștă | manual |
-| **SMS** | Nu există SMS de intrare. SMS-ul e doar de ieșire, iar înapoi vine numai raportul de livrare | Dacă proprietarul răspunde prin SMS: 📞 Răspuns cu nota „SMS” | manual |
-| **E-mail redari@gazpet.ro** | Neactiv. Citirea căsuței e felia F1 (PR #987 draft, migrări neaplicate) | Până atunci: 📞 Răspuns cu nota „e-mail” | manual |
+| **Telefon** | Canalul „telefon”, plus o notă cu operatorul și sursa | 📋 Registru → 📞 Răspuns, canal „Telefon” (implicit): opțiunea, ziua (doar din zilele UAT-ului), obiecțiile, declarația confirmată verbal | da |
+| **La sesiune** | Canalul „sesiune” („particip”) | 🗓️ Sesiune → Prezent; PV A / PV B din același ecran. Sau 📞 Răspuns, canal „La sesiune” | da |
+| **Scris / poștă** (scrisoare de la proprietar) | Canalul „scris”, plus nota cu operatorul și nr. de înregistrare | 📋 Registru → 📞 Răspuns, canal „Scris / poștă”. **AR-ul și returul nu sunt răspunsuri**: se trec pe plic, în ✉️ Poștă | da (manual) |
+| **SMS** | Canalul „sms”, înregistrat de operator. SMS-ul din ERP e doar de ieșire, nu se citesc SMS-urile primite | 📋 Registru → 📞 Răspuns, canal „SMS primit”; la sursă, numărul de pe care a venit | da (manual) |
+| **E-mail redari@gazpet.ro** | Neactiv. Citirea căsuței e felia F1 (PR #987 draft, migrări neaplicate) | Până atunci: 📞 Răspuns, canal „Scris / poștă”, cu sursa „primit pe e-mail” | manual |
 
-De decis: un buton pentru răspunsul scris / e-mail / SMS, cu canalul corect (BD-ul le acceptă deja). E doar de cod.
+Modalul 📞 Răspuns are selectorul de canal: Telefon (implicit), Scris / poștă, SMS primit, La sesiune. „Online” îl scrie doar formularul
+public. **„E-mail” nu apare intenționat.** După F1, planul (`PLAN_EMAIL_REDARI.md` §1.10) cere ca un răspuns pe canalul e-mail să aibă
+sursa: mesajul din redari@ sau calea manuală verificată (`fn_red_mail_inregistreaza_raspuns_manual`, `tip_sursa = 'manual_verificat'`).
+Un răspuns scris direct cu canalul e-mail ar ocoli această proveniență. Până la F1, un răspuns venit pe e-mail se trece „scris”, cu
+sursa „primit pe e-mail”. Opțiunea e-mail se adaugă în modal odată cu F1, prin RPC-ul manual.
 
 ## 3. Centralizatorul — ce am trimis, ce mai avem de trimis, lipsurile
 

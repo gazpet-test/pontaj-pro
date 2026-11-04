@@ -171,15 +171,15 @@ export const CANALE_RASPUNS = [
   { cod: 'online', canal: 'online', nume: 'Formular online (QR / link)', intra: 'Singur, prin fn_red_raspuns_public → red_raspunsuri (canal online) + metadatele tehnice.',
     cum: 'Operatorul nu face nimic. Al doilea răspuns pe același token e păstrat; contează ultimul.', activ: true },
   { cod: 'telefon', canal: 'telefon', nume: 'Telefon', intra: 'red_raspunsuri (canal telefon) + nota cu operatorul și sursa în red_raspunsuri_meta.',
-    cum: '📋 Registru → 📞 Răspuns pe rândul deținătorului (opțiune, ziua din zilele UAT-ului, obiecții, declarația confirmată verbal).', activ: true },
+    cum: '📋 Registru → 📞 Răspuns, canal „Telefon” (implicit): opțiune, ziua din zilele UAT-ului, obiecții, declarația confirmată verbal.', activ: true },
   { cod: 'sesiune', canal: 'sesiune', nume: 'La sesiune (prezent)', intra: 'red_raspunsuri (canal sesiune, „particip”).',
-    cum: '🗓️ Sesiune → Prezent; PV A / PV B din același ecran.', activ: true },
-  { cod: 'scris', canal: 'scris', nume: 'Scris / poștă (scrisoare de la proprietar)', intra: 'Canalul „scris” există în BD, dar nu are buton.',
-    cum: 'Azi: 📞 Răspuns cu nota „răspuns scris, nr. înregistrare …” (rămâne pe canalul telefon). AR / retur NU sunt răspunsuri: se trec pe plic, în ✉️ Poștă.', activ: false },
-  { cod: 'sms', canal: 'sms', nume: 'SMS', intra: 'Nu există SMS de intrare: SMS-ul e doar de ieșire; se primește numai raportul de livrare.',
-    cum: 'Dacă un proprietar răspunde prin SMS, se trece manual din 📞 Răspuns, cu nota „SMS”.', activ: false },
-  { cod: 'email', canal: 'email', nume: 'E-mail redari@gazpet.ro', intra: 'Neactiv: citirea căsuței e felia F1 (PR #987 draft, migrări neaplicate).',
-    cum: 'Până atunci: 📞 Răspuns cu nota „e-mail”. Mailul către instituții merge prin 📨 Corespondență.', activ: false },
+    cum: '🗓️ Sesiune → Prezent (PV A / PV B din același ecran); sau 📞 Răspuns cu canalul „La sesiune”.', activ: true },
+  { cod: 'scris', canal: 'scris', nume: 'Scris / poștă (scrisoare de la proprietar)', intra: 'red_raspunsuri (canal scris) + nota cu operatorul și nr. de înregistrare.',
+    cum: '📋 Registru → 📞 Răspuns, canal „Scris / poștă”. AR / retur NU sunt răspunsuri: se trec pe plic, în ✉️ Poștă.', activ: true },
+  { cod: 'sms', canal: 'sms', nume: 'SMS', intra: 'red_raspunsuri (canal sms), înregistrat de operator: SMS-ul ERP e doar de ieșire, nu se citesc SMS-urile primite.',
+    cum: '📋 Registru → 📞 Răspuns, canal „SMS primit” (la sursă: de pe ce telefon a venit).', activ: false },
+  { cod: 'email', canal: 'email', nume: 'E-mail redari@gazpet.ro', intra: 'Neactiv: citirea căsuței e felia F1 (PR #987 draft, migrări neaplicate). Canalul „email” se va scrie doar cu sursa din F1 (PLAN §1.10).',
+    cum: 'Până atunci: 📞 Răspuns, canal „Scris / poștă”, la sursă „primit pe e-mail”. Mailul către instituții merge prin 📨 Corespondență.', activ: false },
 ]
 
 // Câte răspunsuri (toate, nu doar ultimul) și câți deținători cu ULTIMUL răspuns pe fiecare canal.
@@ -188,6 +188,24 @@ export function statisticiCanale(raspunsuri, inregistrari) {
   for (const r of raspunsuri || []) toate[r.canal] = (toate[r.canal] || 0) + 1
   for (const d of inregistrari || []) if (d.raspuns_canal) ultim[d.raspuns_canal] = (ultim[d.raspuns_canal] || 0) + 1
   return { toate, ultim }
+}
+
+// Canalele pe care operatorul le poate alege în modalul „📞 Răspuns” (Registru). Valorile = CHECK red_raspunsuri_canal_check
+// (online, telefon, scris, sesiune, email, sms). „online” îl scrie doar formularul public. „email” NU se oferă: după F1 (PR #987,
+// PLAN_EMAIL_REDARI §1.10) un răspuns cu canal email cere sursa (mesajul din redari@ sau calea manuală fn_red_mail_inregistreaza_raspuns_manual
+// cu verificare) — un INSERT direct cu email ar ocoli proveniența. Până atunci, un răspuns venit pe e-mail se trece „scris”, cu nota „primit pe e-mail”.
+export const CANALE_RASPUNS_MANUAL = [
+  { cod: 'telefon', eticheta: 'Telefon' },
+  { cod: 'scris', eticheta: 'Scris / poștă (sau primit pe e-mail)' },
+  { cod: 'sms', eticheta: 'SMS primit' },
+  { cod: 'sesiune', eticheta: 'La sesiune (prezent)' },
+]
+const PREFIX_NOTA = { telefon: 'telefon', scris: 'răspuns scris', sms: 'SMS primit', sesiune: 'la sesiune' }
+/** Nota din red_raspunsuri_meta.ip_sau_sursa: canalul, operatorul și sursa (max 500). Canal în afara listei = eroare. */
+export function notaRaspunsManual(canal, operator, sursa) {
+  if (!PREFIX_NOTA[canal]) throw new Error(`Canal de răspuns nepermis aici: ${canal}`)
+  const s = String(sursa ?? '').trim()
+  return `${PREFIX_NOTA[canal]}, operator ${operator || 'operator'}${s ? ' — ' + s : ''}`.slice(0, 500)
 }
 
 // ───────────────────────── Centralizatorul pe deținător ─────────────────────────
