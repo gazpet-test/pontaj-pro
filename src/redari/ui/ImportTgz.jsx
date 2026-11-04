@@ -1,9 +1,9 @@
 // Import Excel TGZ: fișier → parseazaTgz (client-side) → previzualizare + statistici → scrieImport cu progres → raport.
 // Contract: docs/redari/CONTRACT_SCHEMA.md §7. Tronsonul este optional. UI-ul NU calculează numerele parcelelor (P2-6/P1-1):
 // previzualizarea arată id-uri provizorii (HUS-????), iar scrieImport le rezervă server-side (fn_red_rezerva_numere_parcele).
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat } from '../importTgz.js'
+import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat, numarRanduriPuseDeoparte } from '../importTgz.js'
 import { parseazaAnexa7 } from '../importAnexa7.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
 
@@ -28,6 +28,11 @@ const EXPLICATII = {
   fara_cheie: 'Rânduri la care lipsesc ȘI poziția HG, ȘI nr. cadastral (tarla singură nu ajunge): nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
   ambigue: 'Rânduri cu aceeași identitate (poziție HG / nr. cadastral) pe Nr.Crt. DIFERITE, sau cu identități CONTRADICTORII sub același Nr.Crt.: nu se poate ști care e parcela (vezi coloana „motiv” și detaliul din Erori). NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
 }
+// CSV-ul „rânduri de tratat” (fără nume) — același pentru un preview și pentru `diferente` dintr-un lot finalizat
+const descarcaCsvDeTratat = (randuri, eticheta) => {
+  const url = URL.createObjectURL(new Blob([csvRanduriDeTratat(randuri)], { type:'text/csv;charset=utf-8' }))
+  const a = document.createElement('a'); a.href = url; a.download = `randuri-de-tratat-${String(eticheta || 'tgz').trim().replace(/[^\w.-]+/g, '_')}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 const SUGESTIE_SARITE = 'necesită completarea poziției HG / nr. cadastral în Excel și reimport (reimportul aceluiași fișier completează doar ce lipsește).'
 
 export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
@@ -42,6 +47,21 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const [progres, setProgres] = useState(null)   // { facut, total, etapa }
   const [raport, setRaport] = useState(null)
   const [subTab, setSubTab] = useState('parcele')
+  const [loturi, setLoturi] = useState(null)       // loturile anterioare ale proiectului (pentru CSV-ul de tratat), încărcate la cerere
+  const [loturiStare, setLoturiStare] = useState({ lucru: false, eroare: null })
+  const genLoturi = useRef(0)                       // L24: rezultatul se aplică doar dacă e al ultimei cereri și al proiectului curent
+  useEffect(() => { genLoturi.current++; setLoturi(null); setLoturiStare({ lucru: false, eroare: null }) }, [proiect?.id])
+
+  const incarcaLoturi = async () => {
+    const gen = ++genLoturi.current; const proiectId = proiect?.id
+    setLoturiStare({ lucru: true, eroare: null })
+    const { data, error } = await supabase.from('red_import_loturi').select('id, created_at, stare, versiune_lista_tgz, sursa, randuri_total, diferente')
+      .eq('proiect_id', proiectId).order('created_at', { ascending: false }).limit(20)
+    if (gen !== genLoturi.current || proiectId !== proiect?.id) return
+    if (error) { setLoturi(null); setLoturiStare({ lucru: false, eroare: msgEroare(error) }); return }   // L18: eroare ≠ listă goală
+    setLoturi((data || []).map(l => { const r = randuriDeTratat(l.diferente || {}); return { ...l, diferente: undefined, randuri: r, puseDeoparte: numarRanduriPuseDeoparte(r) } }))
+    setLoturiStare({ lucru: false, eroare: null })
+  }
 
   // uats pot veni după primul render — nu atribuie implicit tronsonul
   const tronsoane = useMemo(() => ({ ...tronsonPeUat }), [tronsonPeUat])
@@ -164,10 +184,12 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {statCard('Ambigue (nu se importă)', fmtNum(st.ambigue ?? preview.ambigue?.length), (st.ambigue || preview.ambigue?.length) ? G.red : G.text)}
             {statCard('Județ adresă ≠ teren', fmtNum(st.judet_diferit || 0), st.judet_diferit ? G.yellow : G.text)}
             {statCard('Erori', fmtNum(preview.erori?.length || 0), preview.erori?.length ? G.red : G.text)}
+            {statCard('Rânduri puse deoparte (distincte)', fmtNum(numarRanduriPuseDeoparte(randuriDeTratat(preview))), numarRanduriPuseDeoparte(randuriDeTratat(preview)) ? G.orange : G.text)}
+            {statCard('Cadastru suspect (se importă)', fmtNum(preview.cadastru_suspect?.length || 0), preview.cadastru_suspect?.length ? G.yellow : G.text)}
           </div>
           <div style={{ display:'flex', gap:4, borderBottom:`1px solid ${G.border2}`, marginBottom:8, flexWrap:'wrap' }}>
             {[['parcele', 'Parcele'], ['detinatori', 'Deținători'], ['contacte', 'Contacte'], ['dubluri', 'Dubluri'], ['neidentificati', 'Neidentificați'],
-              ['fara_cheie', 'Fără cheie — nu se importă'], ['ambigue', 'Ambigue — nu se importă'], ['erori', 'Erori']].map(([k, et]) => (
+              ['fara_cheie', 'Fără cheie — nu se importă'], ['ambigue', 'Ambigue — nu se importă'], ['cadastru_suspect', 'Cadastru suspect'], ['erori', 'Erori']].map(([k, et]) => (
               <button key={k} onClick={() => setSubTab(k)} style={{ padding:'6px 12px', background:'transparent', border:'none', borderBottom: subTab === k ? `2px solid ${G.green}` : '2px solid transparent', color: subTab === k ? G.text : G.muted, cursor:'pointer', fontSize:12.5, fontWeight:600 }}>
                 {et} ({Array.isArray(preview[k]) ? preview[k].length : 0})
               </button>
@@ -192,11 +214,8 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !cifreDeImportat(preview).parcele}>{lucru ? 'Import în curs…' : `📥 Importă ${cifreDeImportat(preview).parcele} parcele / ${cifreDeImportat(preview).detinatori} deținători`}</button>}
           </div>
           {preview.erori?.length > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ Rândurile cu erori nu intră în import; corectează fișierul sau continuă fără ele.</div>}
-          {randuriDeTratat(preview).length > 0 && <button style={{ ...S.btnS, marginTop:8 }} onClick={() => {
-            // fără nume / adrese / contacte — doar rândul din Excel, UAT, Nr.Crt., cheia parcelei și motivul (pentru corectarea fișierului)
-            const url = URL.createObjectURL(new Blob([csvRanduriDeTratat(randuriDeTratat(preview))], { type:'text/csv;charset=utf-8' }))
-            const a = document.createElement('a'); a.href = url; a.download = `randuri-de-tratat-${(versiune || 'tgz').trim().replace(/[^\w.-]+/g, '_')}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
-          }}>⬇ Descarcă rândurile de tratat ({randuriDeTratat(preview).length}, fără nume)</button>}
+          {/* fără nume / adrese / contacte — doar rândul din Excel, UAT, Nr.Crt., cheia parcelei și motivul (pentru corectarea fișierului) */}
+          {randuriDeTratat(preview).length > 0 && <button style={{ ...S.btnS, marginTop:8 }} onClick={() => descarcaCsvDeTratat(randuriDeTratat(preview), versiune || 'tgz')}>⬇ Descarcă rândurile de tratat ({numarRanduriPuseDeoparte(randuriDeTratat(preview))} rânduri{preview.cadastru_suspect?.length ? ` + ${preview.cadastru_suspect.length} cadastru suspect` : ''}, fără nume)</button>}
           {((preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)) > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ {preview.fara_cheie?.length || 0} rânduri fără cheie și {preview.ambigue?.length || 0} ambigue NU se importă — {SUGESTIE_SARITE}</div>}
         </div>
       )}
@@ -242,6 +261,27 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           )}
         </div>
       )}
+
+      <div style={{ ...S.card, marginTop:12 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+          <div style={{ fontWeight:700 }}>Loturi importate anterior — rândurile de tratat</div>
+          <button style={S.btnS} onClick={incarcaLoturi} disabled={loturiStare.lucru}>{loturiStare.lucru ? 'Încarc…' : (loturi ? '↻ Reîncarcă' : 'Arată loturile')}</button>
+        </div>
+        {loturiStare.eroare && <div style={{ fontSize:12.5, color:G.red, marginTop:8 }}>Nu am putut citi loturile: {loturiStare.eroare}</div>}
+        {loturi && (loturi.length === 0 ? <Gol text="Niciun lot de import pe acest proiect." /> : (
+          <div style={{ marginTop:8 }}>
+            {loturi.map(l => (
+              <div key={l.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 0', borderTop:`1px solid ${G.border}`, fontSize:12.5, flexWrap:'wrap' }}>
+                <span style={S.mono}>{String(l.created_at || '').slice(0, 16).replace('T', ' ')}</span>
+                <span>„{l.versiune_lista_tgz || '-'}” · {l.sursa || '-'} · {fmtNum(l.randuri_total)} rânduri · stare <b>{l.stare}</b></span>
+                <span style={{ color: l.puseDeoparte ? G.orange : G.muted }}>{fmtNum(l.puseDeoparte)} rânduri puse deoparte</span>
+                {l.randuri.length > 0 && <button style={S.btnS} onClick={() => descarcaCsvDeTratat(l.randuri, `${l.versiune_lista_tgz || 'lot'}-${String(l.created_at || '').slice(0, 10)}`)}>⬇ CSV (fără nume)</button>}
+              </div>
+            ))}
+            <div style={{ fontSize:12, color:G.muted, marginTop:6 }}>Ultimele 20 de loturi. La loturile vechi, rândurile ambigue care apăreau și la erori sunt numărate o singură dată.</div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
