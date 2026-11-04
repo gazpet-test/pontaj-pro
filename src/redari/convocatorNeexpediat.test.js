@@ -1,6 +1,31 @@
 // D4 (audit 04.11.2026): starea „convocator generat, neexpediat” — Registru + gardă la număr nou în ModalConvocator.
 import { describe, it, expect } from 'vitest'
-import { COL_CONV_NEEXPEDIAT, filtruNeexpediate, fabricaNeexpediate, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou } from './convocatorNeexpediat.js'
+import { COL_CONV_NEEXPEDIAT, filtruNeexpediate, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou,
+  citesteNeexpediatePeDetinatori, poateDescarcaExistent, poateDeschideConvocator, cititorCuGeneratie } from './convocatorNeexpediat.js'
+
+// fake red_convocari: filtrează pe detinator_id (in) și id > cursor (gt), ordonează pe id, plafonează pagina la `plafon`
+// (indiferent de limit — ca un server cu max-rows mai mic). `suprascrie(n)` poate înlocui răspunsul paginii n.
+const fakeConvocari = (randuri, { plafon = 1000, suprascrie = () => null } = {}) => {
+  const cereri = []
+  const supabase = { from: (tabel) => ({ select: (col) => {
+    const st = { tabel, col, filtre: [], in: null, gt: null, limit: null }
+    const q = {
+      eq: (c, v) => { st.filtre.push(['eq', c, v]); return q }, is: (c, v) => { st.filtre.push(['is', c, v]); return q },
+      in: (c, v) => { st.in = v; return q }, gt: (c, v) => { st.gt = v; return q }, order: () => q,
+      limit: (n) => { st.limit = n; return q },
+      then: (rez, rej) => {
+        const n = cereri.push(st) - 1
+        const alt = suprascrie(n, st)
+        if (alt) return Promise.resolve(alt).then(rez, rej)
+        const date = randuri.filter(r => st.in.includes(r.detinator_id) && (st.gt === null || r.id > st.gt)).sort((a, b) => a.id.localeCompare(b.id))
+        return Promise.resolve({ data: date.slice(0, Math.min(plafon, st.limit)), error: null }).then(rez, rej)
+      },
+    }
+    return q
+  } }) }
+  return { supabase, cereri }
+}
+const id = (i) => `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`
 
 // fake PostgREST: înregistrează lanțul de apeluri
 const lant = () => {
@@ -16,12 +41,7 @@ describe('convocatorNeexpediat', () => {
     expect(apeluri).toEqual([['eq', 'stare', 'activ'], ['is', 'data_expediere', null], ['is', 'sters_la', null]])
   })
 
-  it('fabrica: interogare nouă la fiecare apel, pe red_convocari, fără PII, ordonare stabilă (pentru paginare)', () => {
-    const tabele = []
-    const supabase = { from: (t) => { tabele.push(t); const { q, apeluri } = lant(); q.__apeluri = apeluri; return { select: (c) => { apeluri.push(['select', c]); return q } } } }
-    const f = fabricaNeexpediate(supabase)
-    f(); f()
-    expect(tabele).toEqual(['red_convocari', 'red_convocari'])
+  it('coloanele citite: fără PII, cu numărul și fișierul', () => {
     expect(COL_CONV_NEEXPEDIAT).not.toMatch(/adresa|telefon|token|email/)
     expect(COL_CONV_NEEXPEDIAT).toMatch(/nr_document/)
     expect(COL_CONV_NEEXPEDIAT).toMatch(/fisier_convocator_path/)
@@ -56,6 +76,65 @@ describe('convocatorNeexpediat', () => {
     expect(poateGeneraNou({ existente: [{ nr_document: 'C-0002' }] })).toBe(false)
     expect(poateGeneraNou({ existente: [{ nr_document: 'C-0002' }], confirmat: 'da' })).toBe(false)
     expect(poateGeneraNou({ existente: [{ nr_document: 'C-0002' }], confirmat: true })).toBe(true)
+  })
+
+  it('r2 P2-3: keyset complet — 800 de rânduri cu plafon server 500 → toate 800, până la pagina goală, pe loturi de deținători', async () => {
+    const randuri = Array.from({ length: 800 }, (_, i) => ({ id: id(i + 1), detinator_id: i < 790 ? 'd1' : `d${i}` }))
+    const { supabase, cereri } = fakeConvocari(randuri, { plafon: 500 })
+    const ids = ['d1', ...Array.from({ length: 150 }, (_, i) => `d${i + 700}`)]
+    const tot = await citesteNeexpediatePeDetinatori(supabase, ids)
+    expect(tot).toHaveLength(800)
+    expect(new Set(tot.map(r => r.id)).size).toBe(800)
+    expect(cereri[0].tabel).toBe('red_convocari')
+    expect(cereri[0].filtre).toEqual([['eq', 'stare', 'activ'], ['is', 'data_expediere', null], ['is', 'sters_la', null]])
+    expect(Math.max(...cereri.map(c => c.in.length))).toBeLessThanOrEqual(100)
+    expect(cereri.every(c => c.limit === 1000)).toBe(true)
+    expect(await citesteNeexpediatePeDetinatori(supabase, [])).toEqual([])
+  })
+
+  it('r2 P2-3: eroare, răspuns fără listă și paginare care nu avansează → aruncă (nu „nicio convocare”)', async () => {
+    const randuri = [{ id: id(1), detinator_id: 'd1' }, { id: id(2), detinator_id: 'd1' }]
+    await expect(citesteNeexpediatePeDetinatori(fakeConvocari(randuri, { suprascrie: () => ({ data: null, error: { message: 'RLS' } }) }).supabase, ['d1'])).rejects.toMatchObject({ message: 'RLS' })
+    await expect(citesteNeexpediatePeDetinatori(fakeConvocari(randuri, { suprascrie: () => ({ data: null, error: null }) }).supabase, ['d1'])).rejects.toThrow(/fără listă/)
+    await expect(citesteNeexpediatePeDetinatori(fakeConvocari(randuri, { suprascrie: (n) => (n === 1 ? { data: null, error: null } : null), plafon: 1 }).supabase, ['d1'])).rejects.toThrow(/fără listă/)
+    await expect(citesteNeexpediatePeDetinatori(fakeConvocari(randuri, { suprascrie: () => ({ data: [randuri[0]], error: null }) }).supabase, ['d1'])).rejects.toThrow(/nu avansează/)
+  })
+
+  it('r2 P1-2: descărcarea unui fișier arhivat nu depinde de gărzile pentru document nou', () => {
+    expect(poateDescarcaExistent({ fisier_convocator_path: 'P/HUS/x/C-0002-v1.docx' })).toBe(true)
+    expect(poateDescarcaExistent({ fisier_convocator_path: null })).toBe(false)
+    expect(poateDeschideConvocator({ motiv: null, existente: null })).toBe(true)
+    expect(poateDeschideConvocator({ motiv: 'proiect fără contact', existente: [{ fisier_convocator_path: 'p' }] })).toBe(true)
+    expect(poateDeschideConvocator({ motiv: 'proiect fără contact', existente: [{ fisier_convocator_path: null }] })).toBe(false)
+    expect(poateDeschideConvocator({ motiv: 'proiect fără contact', existente: [] })).toBe(false)
+    expect(poateDeschideConvocator({ motiv: 'proiect fără contact', existente: null })).toBe(false)
+  })
+
+  it('r2 P2-5: citire cu generație — răspunsuri inversate: doar ultima cerere se aplică; după invalideaza nimic', async () => {
+    const amanate = []
+    const citeste = (cheie) => new Promise((res, rej) => amanate.push({ cheie, res, rej }))
+    const aplicate = []
+    const c = cititorCuGeneratie(citeste, (x) => aplicate.push(x))
+    const p1 = c.porneste('d1')
+    const p2 = c.porneste('d1')
+    expect(aplicate).toEqual([{ cheie: 'd1', existente: null, eroare: null }, { cheie: 'd1', existente: null, eroare: null }])
+    amanate[1].res([{ nr_document: 'C-0003' }])   // răspunsul nou sosește primul
+    await p2
+    amanate[0].res([])                              // răspunsul vechi („nimic”) sosește apoi — ignorat
+    await p1
+    expect(aplicate.at(-1)).toEqual({ cheie: 'd1', existente: [{ nr_document: 'C-0003' }], eroare: null })
+    expect(aplicate).toHaveLength(3)
+    // eroare veche după succes nou: ignorată
+    const p3 = c.porneste('d2'); const p4 = c.porneste('d2')
+    amanate[3].res([]); await p4
+    amanate[2].rej(new Error('veche')); await p3
+    expect(aplicate.at(-1)).toEqual({ cheie: 'd2', existente: [], eroare: null })
+    // unmount: răspunsul întârziat nu mai e aplicat
+    const n = aplicate.length
+    const p5 = c.porneste('d3'); c.invalideaza()
+    amanate[4].res([{ nr_document: 'C-0009' }]); await p5
+    expect(aplicate).toHaveLength(n + 1)   // doar starea sincronă „se citește”
+    expect(aplicate.at(-1).existente).toBeNull()
   })
 
   it('textul confirmării numește numerele existente și consumul unui număr nou', () => {

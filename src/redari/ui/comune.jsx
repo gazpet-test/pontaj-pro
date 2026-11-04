@@ -85,6 +85,9 @@ export function motivBlocareConvocator(proiect, uat, rand) {
   if (!String(proiect?.reprezentant_tgz_telefon || '').trim()) lipsa.push('proiect fără telefonul reprezentantului TGZ (Setări proiect → Reprezentanți)')
   return lipsa.length ? lipsa.join('; ') : null
 }
+// r2 (Jakarinos #991 P1-2): numele explicit — gărzile de mai sus țin de PRODUCEREA unui document (nou sau regenerat). Descărcarea
+// unui fișier deja arhivat NU trece prin ele (convocatorNeexpediat.js: poateDescarcaExistent / poateDeschideConvocator).
+export const motivBlocareGenerareNoua = motivBlocareConvocator
 
 export const G = { bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   blue:'#58A6FF', green:'#3FB950', red:'#F85149', yellow:'#D29922', purple:'#BC8CFF', orange:'#F0883E', pink:'#F778BA',
