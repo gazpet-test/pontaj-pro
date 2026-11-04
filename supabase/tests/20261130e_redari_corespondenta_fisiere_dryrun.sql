@@ -51,6 +51,7 @@ BEGIN
     ('redari',pfx||'Z1/20261104-100005-ffffffff-orfan.pdf','{"mimetype":"application/pdf","size":600,"eTag":"\"etag-600\""}'::jsonb),
     ('redari',pfx||'Z2/20261104-100006-11111111-dovada.pdf','{"mimetype":"application/pdf","size":700,"eTag":"\"etag-700\""}'::jsonb),
     ('redari',pfx||'Z1/20261104-100007-22222222-fara-etag.pdf','{"mimetype":"application/pdf","size":900}'::jsonb),
+    ('redari',pfx||'Z2/20261104-100008-33333333-scrisoare.pdf','{"mimetype":"application/pdf","size":950,"eTag":"\"etag-950\""}'::jsonb),
     ('redari','TEST-RAZVAN/TST/0001/test-v1.docx','{"mimetype":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","size":800,"eTag":"\"etag-800\""}'::jsonb);
   IF (SELECT count(*) FROM public.red_corespondenta WHERE cod IN ('D1','D2') AND stare='trimis' AND aprobat_fisier_id IS NULL) <> 2 THEN RAISE EXCEPTION 'TEST0 FAIL: D1/D2 istorice'; END IF;
   RAISE NOTICE 'TEST0 OK';
@@ -144,6 +145,17 @@ DO $t$ BEGIN
   RAISE NOTICE 'TEST5 OK';
 END $t$;
 
+-- TEST5c (r4, C-P2-01): garda eTag si la trimis -> raspuns_primit
+SELECT pg_temp.r30e_ca(NULL,'postgres');
+UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-schimbat\""}'::jsonb WHERE bucket_id='redari' AND name='TEST-RAZVAN/corespondenta/Z1/20261104-100002-cccccccc-scrisoare-v3.pdf';
+SELECT pg_temp.r30e_ca(pg_temp.r30e_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r30e_refuza(format($q$UPDATE public.red_corespondenta SET stare='raspuns_primit' WHERE id=%L$q$,pg_temp.r30e_g('Z1')),'23514') THEN RAISE EXCEPTION 'TEST5c FAIL: trimis->raspuns_primit cu obiect schimbat'; END IF;
+  RAISE NOTICE 'TEST5c OK';
+END $t$;
+SELECT pg_temp.r30e_ca(NULL,'postgres');
+UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-3000\""}'::jsonb WHERE bucket_id='redari' AND name='TEST-RAZVAN/corespondenta/Z1/20261104-100002-cccccccc-scrisoare-v3.pdf';
+
 -- TEST6: storage — viewer-ul vede DOAR fisierele inregistrate sub /corespondenta/; editorul vede tot bucket-ul (red_storage_sel)
 SELECT pg_temp.r30e_ca(pg_temp.r30e_g('viewer')::uuid,'authenticated');
 DO $t$ BEGIN
@@ -211,4 +223,28 @@ DO $t$ BEGIN
   UPDATE storage.buckets SET public = false WHERE id = 'redari';
   PERFORM public.fn_red_storage_verifica_redari(true);
   RAISE NOTICE 'TEST9 OK';
+END $t$;
+
+-- TEST10 (r4, C-P1-01 + J-P2-2): aprobare dinainte de fisiere (Z2, aprobat de mentenanta fara fisier in TEST8) -> trimis refuzat; dupa de_trimis +
+-- reaprobare -> trimis ok; D1/D2 (trimise istoric fara fisier) trec trimis -> raspuns_primit
+SELECT pg_temp.r30e_ca(pg_temp.r30e_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF (SELECT stare<>'aprobat' OR aprobat_fisier_id IS NOT NULL FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z2')::uuid) THEN RAISE EXCEPTION 'TEST10 FAIL: precondititie Z2'; END IF;
+  IF NOT pg_temp.r30e_refuza(format($q$UPDATE public.red_corespondenta SET stare='trimis', trimis_la='2026-11-04' WHERE id=%L$q$,pg_temp.r30e_g('Z2')),'23514') THEN RAISE EXCEPTION 'TEST10 FAIL: aprobat legacy -> trimis'; END IF;
+  BEGIN UPDATE public.red_corespondenta SET stare='trimis', trimis_la='2026-11-04' WHERE id=pg_temp.r30e_g('Z2')::uuid;
+  EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE '%aprobarea e dinainte de fisiere%' THEN RAISE EXCEPTION 'TEST10 FAIL: mesaj %', SQLERRM; END IF; END;
+  EXECUTE pg_temp.r30e_ins('Z2','de_trimis','TEST-RAZVAN/corespondenta/Z2/20261104-100008-33333333-scrisoare.pdf',repeat('3',64));
+  IF (SELECT stare<>'draft' FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z2')::uuid) THEN RAISE EXCEPTION 'TEST10 FAIL: de_trimis nu a dus Z2 in draft'; END IF;
+  UPDATE public.red_corespondenta SET stare='raspuns_primit' WHERE cod IN ('D1','D2') AND aprobat_fisier_id IS NULL AND stare='trimis';
+  IF (SELECT count(*) FROM public.red_corespondenta WHERE cod IN ('D1','D2') AND stare='raspuns_primit') <> 2 THEN RAISE EXCEPTION 'TEST10 FAIL: D1/D2 trimis->raspuns_primit'; END IF;
+  RAISE NOTICE 'TEST10a OK';
+END $t$;
+SELECT pg_temp.r30e_ca(pg_temp.r30e_g('owner')::uuid,'authenticated');
+DO $t$ BEGIN EXECUTE pg_temp.r30e_aproba('Z2',pg_temp.r30e_fis(repeat('3',64))); RAISE NOTICE 'TEST10b OK'; END $t$;
+SELECT pg_temp.r30e_ca(pg_temp.r30e_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  UPDATE public.red_corespondenta SET stare='trimis', trimis_la='2026-11-04' WHERE id=pg_temp.r30e_g('Z2')::uuid;
+  UPDATE public.red_corespondenta SET stare='raspuns_primit' WHERE id=pg_temp.r30e_g('Z2')::uuid;
+  IF (SELECT stare<>'raspuns_primit' OR aprobat_storage_etag IS DISTINCT FROM '"etag-950"' FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z2')::uuid) THEN RAISE EXCEPTION 'TEST10 FAIL: dupa reaprobare'; END IF;
+  RAISE NOTICE 'TEST10c OK';
 END $t$;

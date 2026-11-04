@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { roluriPermise, valideazaFisierCoresp, slugNume, stampilaUtc, caleFisierCoresp, sha8, sha256Hex, fisierDeAprobat, fisiereRand, mimeFisier,
   MAX_FISIER_CORESP, fmtMarime, aleator8, citesteFisiereProiect, citesteFisiereRand, listeazaFolder, orfani, folderCoresp, EMBED_PROIECT, gasesteOrfani,
-  asiguraObiect, reconciliazaInregistrare, eAmbigua } from './corespondentaFisiere.js'
+  asiguraObiect, reconciliazaInregistrare, eAmbigua, registruIncercari } from './corespondentaFisiere.js'
 import { mesajEroareCoresp, COL_CORESPONDENTA } from './corespondenta.js'
 
 const SHA = 'ab'.repeat(32)
@@ -59,7 +59,7 @@ function fakeBD(randuri, opt = {}) {
       return Promise.resolve({ data: { path }, error: null })
     },
   }) }
-  return { apeluri, obiecte, from, storage }
+  return { apeluri, obiecte, from, storage, randuri: () => tabel.map(r => ({ ...r })) }
 }
 
 describe('fisierele corespondentei', () => {
@@ -168,6 +168,35 @@ describe('fisierele corespondentei', () => {
     // retea cazuta si la citire -> neconfirmat
     expect((await reconciliazaInregistrare(fakeBD([], { timeoutLaInsert: true, citireCazuta: true }), pl)).rez).toBe('neconfirmat')
     expect((await reconciliazaInregistrare(fakeBD([]), pl)).rez).toBe('ok')
+  })
+  it('r3 C-P2-02: timeout dupa INSERT, reluare cu observatii / nume diferite -> conflict explicit (toate campurile imutabile)', async () => {
+    const pl = { corespondenta_id: 'r1', rol: 'de_trimis', path: 'P/corespondenta/A1/f.pdf', sha256: SHA, nume_original: 'f.pdf', observatii: 'prima' }
+    const sb = fakeBD([], { timeoutDupaInsert: true })
+    expect((await reconciliazaInregistrare(sb, pl)).rez).toBe('ok')   // randul a ajuns, raspunsul s-a pierdut
+    const dupa = fakeBD(sb.randuri())
+    expect((await reconciliazaInregistrare(dupa, { ...pl, observatii: 'alta' })).rez).toBe('conflict')
+    expect((await reconciliazaInregistrare(dupa, { ...pl, nume_original: 'alt.pdf' })).rez).toBe('conflict')
+    expect((await reconciliazaInregistrare(dupa, { ...pl })).rez).toBe('ok')   // acelasi payload (cum il reia UI-ul) -> ok
+    expect((await reconciliazaInregistrare(fakeBD([{ id: 'x', created_at: 't', ...pl, observatii: null }]), { ...pl, observatii: undefined })).rez).toBe('ok')   // null ~ lipsa
+  })
+  it('r3 J-P2-1 / C-P2-03: doua incercari suprapuse A -> B rezolvate in ordine inversa: A nu atinge incercarea activa B (succes / ambiguu / refuz)', () => {
+    for (const rezultatA of [null, { stare: 'neconfirmat' }, { stare: 'refuzat' }]) {
+      for (const rezultatB of [null, { stare: 'neconfirmat' }, { stare: 'refuzat' }]) {
+        const vazute = []
+        const reg = registruIncercari(v => vazute.push(v))
+        const A = reg.porneste({ path: 'a', stare: 'in_curs' })
+        const B = reg.porneste({ path: 'b', stare: 'in_curs' })   // ex. proiect schimbat / sesiune noua, alt upload
+        expect(reg.actualizeaza(B.id, rezultatB)).toBe(true)        // B se termina primul
+        const dupaB = reg.curenta()
+        expect(reg.actualizeaza(A.id, rezultatA)).toBe(false)       // A, terminat mai tarziu, e ignorat
+        expect(reg.curenta()).toBe(dupaB)
+        expect(dupaB === null ? null : dupaB.path).toBe(rezultatB === null ? null : 'b')
+      }
+    }
+    const reg = registruIncercari()
+    const A = reg.porneste({ path: 'a' }); expect(reg.actualizeaza(A.id, { stare: 'neconfirmat' })).toBe(true)
+    expect(reg.curenta()).toMatchObject({ id: A.id, path: 'a', stare: 'neconfirmat' })
+    reg.reseteaza(); expect(reg.actualizeaza(A.id, null)).toBe(false); expect(reg.curenta()).toBeNull()
   })
   it('mesajele noi din BD sunt traduse; coloanele noi sunt citite', () => {
     expect(mesajEroareCoresp({ code: '23514', message: 'redari: aproba doar dupa ce ai urcat fisierul de trimis' })).toMatch(/Urcă întâi/)

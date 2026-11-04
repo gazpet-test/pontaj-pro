@@ -174,9 +174,11 @@ export async function asiguraObiect(supabase, path, fisier, contentType) {
   return (await existaObiect(supabase, path)) === true ? 'exista' : 'neconfirmat'
 }
 
-// Copilot r2 C-P2-03: INSERT + reconciliere pe payload-ul SEMANTIC imutabil (corespondenta_id, rol, sha256 declarat, path). La eroare / rezultat necunoscut
+// Copilot r2 C-P2-03 + r3 C-P2-02: INSERT + reconciliere pe TOATE câmpurile imutabile date de utilizator (corespondenta_id, rol, sha256 declarat, path,
+// nume_original, observatii; mime / marime le normalizează Storage-ul, deci nu se compară). La eroare / rezultat necunoscut
 // citește rândul după `path`: identic → 'ok'; există cu alte atribute → 'conflict' (nu ok); lipsește și BD-ul a refuzat clar → aruncă; altfel 'neconfirmat'.
-export const CAMPURI_SEMANTICE = ['corespondenta_id', 'rol', 'sha256', 'path']
+export const CAMPURI_SEMANTICE = ['corespondenta_id', 'rol', 'sha256', 'path', 'nume_original', 'observatii']
+const egal = (a, b) => (a ?? null) === (b ?? null)
 export async function reconciliazaInregistrare(supabase, payload) {
   let eIns = null
   try {
@@ -186,10 +188,28 @@ export async function reconciliazaInregistrare(supabase, payload) {
   } catch (e) { eIns = e }
   let rand = null, citit = false
   try {
-    const { data, error } = await supabase.from('red_corespondenta_fisiere').select('id, corespondenta_id, rol, sha256, path').eq('path', payload.path).limit(1)
+    const { data, error } = await supabase.from('red_corespondenta_fisiere').select(`id, ${CAMPURI_SEMANTICE.join(', ')}`).eq('path', payload.path).limit(1)
     if (!error) { citit = true; rand = data?.[0] || null }
   } catch { /* necunoscut */ }
-  if (rand) return CAMPURI_SEMANTICE.every(k => rand[k] === payload[k]) ? { rez: 'ok' } : { rez: 'conflict', rand }
+  if (rand) return CAMPURI_SEMANTICE.every(k => egal(rand[k], payload[k])) ? { rez: 'ok' } : { rez: 'conflict', rand }
   if (citit && eIns?.code) throw eIns
   return { rez: 'neconfirmat', eroare: eIns }
+}
+
+// Jakarinos r3 J-P2-1 / Copilot r3 C-P2-03: registrul încercării de urcare ACTIVE. Fiecare încercare nouă primește un id stabil; o operație veche
+// (capturată cu id-ul ei) nu mai poate modifica / goli încercarea activă a alteia — `actualizeaza(id, …)` întoarce false dacă id-ul nu mai e cel curent.
+// Payload-ul (cale, sha, rol, observații) se fixează la prima încercare și se refolosește la reluare (Copilot r3 C-P2-02).
+export function registruIncercari(laSchimbare = () => {}) {
+  let curenta = null, n = 0
+  return {
+    curenta: () => curenta,
+    porneste(date) { curenta = { ...date, id: ++n }; laSchimbare(curenta); return curenta },
+    actualizeaza(id, patch) {
+      if (!curenta || curenta.id !== id) return false
+      curenta = patch === null ? null : { ...curenta, ...patch }
+      laSchimbare(curenta)
+      return true
+    },
+    reseteaza() { curenta = null; laSchimbare(null) },
+  }
 }

@@ -505,9 +505,12 @@ Stare 04.11.2026: punctele 1–3 sunt făcute.
 - SHA-256 din tabel e **declarat** de cel care a urcat (calculat în browser); amprenta serverului e `storage_etag` (metadata eTag din Storage).
 - **Decizie 04.11.2026, aprobat de Răzvan (varianta A, review Copilot r1 C-P1-01):** modelul de încredere = obiectul din Storage e imutabil pentru
   utilizatori + eTag-ul Storage e amprenta serverului; `service_role` / mentenanța = risc acceptat; SHA-256 declarat rămâne informativ. Fără edge function.
-- Garda la trimitere: un rând aprobat se poate marca `trimis` / `raspuns_primit` doar dacă obiectul fișierului aprobat există în Storage și are
-  același eTag ca la aprobare (altfel 23514 „fișierul aprobat s-a schimbat sau lipsește din Storage”). Scutite: mentenanța și aprobările fără fișier
-  (D1/D2 istorice și rândurile aprobate înainte de 20261130e).
+- Garda la trimitere: la ORICE trecere în `trimis` / `raspuns_primit` (inclusiv `trimis` → `raspuns_primit`) rândul trebuie să aibă fișierul aprobat,
+  iar obiectul lui să existe în Storage cu același eTag ca la aprobare (altfel 23514 „fișierul aprobat s-a schimbat sau lipsește din Storage”).
+- **Aprobările dinainte de fișiere NU mai pot fi marcate trimis după migrare**: un rând `aprobat` fără `aprobat_fisier_id` primește 23514
+  „aprobarea e dinainte de fișiere: urcă PDF-ul de trimis și cere din nou aprobarea” (urcarea unui „de trimis” îl readuce în Draft, apoi Răzvan aprobă).
+  La 04.11.2026 sunt 2 astfel de rânduri pe LOT1. Singura excepție: rândurile deja trimise istoric fără fișier (D1/D2) pot trece `trimis` → `raspuns_primit`.
+  Mentenanța (SQL direct ca postgres, fără JWT) rămâne scutită.
 - O urcare cu rezultat neclar (rețea / timeout) păstrează calea: „Reia pe aceeași cale” înregistrează obiectul dacă a ajuns, altfel îl urcă o singură dată.
 
 ## 6. Cum se revine

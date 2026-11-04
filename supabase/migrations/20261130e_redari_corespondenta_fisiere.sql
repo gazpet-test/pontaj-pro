@@ -12,7 +12,8 @@
 --   • Amprenta: sha256 e DECLARAT de cel care a urcat (calculat în browser); amprenta SERVERULUI e storage_etag, copiat de trigger din
 --     storage.objects.metadata->>'eTag' (clientul nu-l poate alege). Argumentul principal e imutabilitatea obiectului (vezi COMMENT pe tabel).
 --     Decizie 04.11.2026, aprobat de Răzvan (varianta A): obiect imutabil pentru utilizatori + eTag = amprenta serverului; service_role / mentenanța = risc acceptat.
---   • La trecerea în trimis / raspuns_primit, obiectul aprobat trebuie să existe în Storage cu același eTag (altfel 23514).
+--   • La orice trecere în trimis / raspuns_primit (și trimis → raspuns_primit), obiectul aprobat trebuie să existe în Storage cu același eTag (altfel 23514).
+--     Rândurile `aprobat` dinainte de fișiere NU se mai pot marca trimis: urcă PDF-ul de trimis și cere din nou aprobarea. Excepție: D1/D2 (deja trimise istoric).
 -- fn_red_corespondenta_reguli() se înlocuiește (CREATE OR REPLACE) păstrând TOATĂ logica din 20261129h; garda de start cere ca versiunea curentă
 -- să fie exact cea din 20261129h (md5 pe corp), iar revenirea o readuce textual.
 -- Revenire: supabase/revenire/20261130e_redari_corespondenta_fisiere_ROLLBACK.sql (NU șterge: tabelul cu date și legăturile aprobărilor merg în
@@ -241,13 +242,19 @@ BEGIN
   IF NEW.stare IN ('trimis', 'raspuns_primit') AND NOT v_era_aprobat THEN
     RAISE EXCEPTION 'redari: o corespondenta se marcheaza trimisa doar dupa aprobarea owner-ului' USING ERRCODE = '23514';
   END IF;
-  -- 20261130e r3 (Copilot C-P1-01, partea fara edge function): la trecerea in trimis / raspuns_primit, obiectul fisierului aprobat exista in Storage
-  -- si are ACELASI eTag ca la aprobare. Scutite: mentenanta si aprobarile fara fisier (date de mentenanta: D1/D2 istorice, randuri aprobate inainte de 20261130e).
-  IF NEW.stare IN ('trimis', 'raspuns_primit') AND (TG_OP = 'INSERT' OR OLD.stare NOT IN ('trimis', 'raspuns_primit')) AND NOT v_mentenanta
-     AND (NEW.aprobat_fisier_id IS NOT NULL OR NEW.aprobat_storage_etag IS NOT NULL)
-     AND NOT EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere f JOIN storage.objects o ON o.bucket_id = 'redari' AND o.name = f.path
-                      WHERE f.id = NEW.aprobat_fisier_id AND left(btrim(o.metadata ->> 'eTag'), 200) = NEW.aprobat_storage_etag) THEN
-    RAISE EXCEPTION 'redari: fisierul aprobat s-a schimbat sau lipseste din Storage; nu se poate marca trimis' USING ERRCODE = '23514';
+  -- 20261130e r3/r4 (Copilot C-P1-01, partea fara edge function): la ORICE schimbare de stare spre trimis / raspuns_primit (inclusiv trimis -> raspuns_primit),
+  -- in afara mentenantei, randul trebuie sa aiba fisierul aprobat, iar obiectul lui sa existe in Storage cu ACELASI eTag ca la aprobare.
+  -- Singura exceptie: randurile deja trimise istoric fara fisier (D1/D2: OLD in trimis / raspuns_primit cu aprobat_fisier_id NULL) pot trece intre
+  -- cele doua stari finale. Un rand `aprobat` dinainte de fisiere (fara aprobat_fisier_id) NU se mai poate marca trimis: cere fisier + o aprobare noua.
+  IF NEW.stare IN ('trimis', 'raspuns_primit') AND (TG_OP = 'INSERT' OR NEW.stare IS DISTINCT FROM OLD.stare) AND NOT v_mentenanta
+     AND NOT (TG_OP = 'UPDATE' AND OLD.stare IN ('trimis', 'raspuns_primit') AND OLD.aprobat_fisier_id IS NULL) THEN
+    IF NEW.aprobat_fisier_id IS NULL THEN
+      RAISE EXCEPTION 'redari: aprobarea e dinainte de fisiere: urca PDF-ul de trimis si cere din nou aprobarea' USING ERRCODE = '23514';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere f JOIN storage.objects o ON o.bucket_id = 'redari' AND o.name = f.path
+                    WHERE f.id = NEW.aprobat_fisier_id AND left(btrim(o.metadata ->> 'eTag'), 200) = NEW.aprobat_storage_etag) THEN
+      RAISE EXCEPTION 'redari: fisierul aprobat s-a schimbat sau lipseste din Storage; nu se poate marca trimis' USING ERRCODE = '23514';
+    END IF;
   END IF;
   -- revenirea din aprobat/trimis la draft/la_avocat sterge aprobarea (alt „da” la urmatoarea trimitere)
   IF NEW.stare IN ('draft', 'la_avocat') THEN
@@ -293,7 +300,7 @@ BEGIN
     RAISE EXCEPTION '20261130e: verificatorul storage are setari gresite';
   END IF;
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_corespondenta_reguli()'::regprocedure) = 'dd78583b43f54010962aad0e0d69ae9c'
-     OR (SELECT prosrc NOT LIKE '%v_cerut IS DISTINCT FROM v_fis_id%' OR prosrc NOT LIKE '%fisierul aprobat s-a schimbat sau lipseste%' FROM pg_proc WHERE oid = 'public.fn_red_corespondenta_reguli()'::regprocedure) THEN
+     OR (SELECT prosrc NOT LIKE '%v_cerut IS DISTINCT FROM v_fis_id%' OR prosrc NOT LIKE '%fisierul aprobat s-a schimbat sau lipseste%' OR prosrc NOT LIKE '%aprobarea e dinainte de fisiere%' FROM pg_proc WHERE oid = 'public.fn_red_corespondenta_reguli()'::regprocedure) THEN
     RAISE EXCEPTION '20261130e: functia de reguli nu a fost inlocuita';
   END IF;
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_corespondenta_fisiere'::regclass AND NOT tgisinternal) <> 4
