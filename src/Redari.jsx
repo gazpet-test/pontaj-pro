@@ -17,6 +17,7 @@ import ImportPostal from './redari/ui/ImportPostal.jsx'
 import PlicuriEcran from './redari/ui/PlicuriEcran.jsx'
 import CorespondentaEcran from './redari/ui/CorespondentaEcran.jsx'
 import UatEcran from './redari/ui/UatEcran.jsx'
+import ConvocatoareMasa from './redari/ui/ConvocatoareMasa.jsx'   // L1: convocatoare în masă pe UAT (zip + borderou + opis)
 import SetariProiect from './redari/ui/SetariProiect.jsx'
 import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
@@ -174,7 +175,7 @@ export default function Redari() {
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
           {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
           {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
-          {tab === 'uat' && <UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} />}
+          {tab === 'uat' && <><ConvocatoareMasa proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /><UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /></>}
           {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
         </div>
       )}
