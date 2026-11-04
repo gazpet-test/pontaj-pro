@@ -21,6 +21,7 @@ import SetariProiect from './redari/ui/SetariProiect.jsx'
 import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
+import NotificariEcran from './redari/ui/NotificariEcran.jsx'
 // 📱 SMS proprietari (owner sau utilizator SMS cu Redari editor / admin, 20261130b; blocat in BD pana la autorizarea Transgaz)
 import RedariSmsButon from './sms/RedariSmsButon.jsx'
 // 📱 Starea SMS pe deținător (fn_red_sms_stare, 20261130i): doar agregate, fără text / telefon
@@ -134,6 +135,7 @@ export default function Redari() {
     { cod:'import', eticheta:'📥 Import TGZ' },
     { cod:'posta', eticheta:'✉️ Poștă' },
     { cod:'corespondenta', eticheta:'📨 Corespondență' },
+    { cod:'notificari', eticheta:'📬 Notificări' },
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
   ]
@@ -174,6 +176,7 @@ export default function Redari() {
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
           {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
           {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
+          {tab === 'notificari' && <NotificariEcran proiect={proiect} uats={uats} nivel={nivel} />}
           {tab === 'uat' && <UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
         </div>
