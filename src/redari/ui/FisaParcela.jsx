@@ -8,6 +8,7 @@ import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
 import { dataDocumentConvocare } from '../convocatorNeexpediat.js'   // #991 r3: aceeași dată civilă București ca în Registru
 import { termenConstatare, mesajTermenConstatare } from '../setari.js'
 import { dataBucuresti } from '../plicuri.js'
+import { afiseazaCadastru, titluCadastru } from '../cadastru.js'
 import { citesteSmsStare, stareSmsPentru, rezumatSms, textBadge, intrariCronologie, STARI_SMS } from '../smsStare.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns, citestePaginat, citesteIn } from './comune.jsx'
@@ -20,6 +21,12 @@ const CAMPURI_PARCELA = [
 ]
 const CAMPURI_CONTACT = [['adresa_strada', 'Stradă / nr.'], ['adresa_sat', 'Sat'], ['adresa_comuna', 'Comună / oraș'], ['adresa_judet', 'Județ'], ['cod_postal', 'Cod poștal'], ['telefon', 'Telefon'], ['email', 'Email']]
 const nrSauNull = (v) => (v === '' || v === null || v === undefined) ? null : Number(v)
+
+/** Audit D2: cadastrul TGZ („52#”, „#44#”, „##”) afișat curat; valoarea brută rămâne în tooltip. Doar ecran — editarea și documentele folosesc valoarea brută. */
+export function ValoareCadastru({ v }) {
+  const t = titluCadastru(v)
+  return <span data-testid="valoare-cadastru" title={t} style={t ? { cursor:'help' } : undefined}>{afiseazaCadastru(v)}</span>
+}
 
 /** Rândul „SMS: …” la fiecare deținător (20261130i, doar agregate). sms = { harta, eroare }; eroarea se afișează, nu devine „niciun SMS” (L18).
  *  Exportată pentru testul de randare. */
@@ -258,7 +265,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         <div style={S.card}>
           <div style={{ fontWeight:700, marginBottom:8 }}>Parcelă</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'6px 12px', fontSize:13 }}>
-            {CAMPURI_PARCELA.map(([k, et, tip]) => <React.Fragment key={k}><span style={{ color:G.muted }}>{et}</span><span>{tip === 'number' ? fmtNum(parcela[k]) : (parcela[k] || '-')}</span></React.Fragment>)}
+            {CAMPURI_PARCELA.map(([k, et, tip]) => <React.Fragment key={k}><span style={{ color:G.muted }}>{et}</span>{k === 'nr_cadastral' ? <ValoareCadastru v={parcela[k]} /> : <span>{tip === 'number' ? fmtNum(parcela[k]) : (parcela[k] || '-')}</span>}</React.Fragment>)}
             {esteAdmin && <><span style={{ color:G.muted }}>Valoare (lei)</span><span>{fmtNum(valoare)}</span></>}
             <span style={{ color:G.muted }}>Observații</span><span>{parcela.observatii || '-'}</span>
             <span style={{ color:G.muted }}>Creată</span><span>{fmtDateTime(parcela.created_at)}</span>

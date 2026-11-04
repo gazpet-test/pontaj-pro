@@ -6,7 +6,28 @@ import { renderToString } from 'react-dom/server'
 
 vi.mock('../../lib/supabase.js', () => ({ supabase: { from: () => { throw new Error('fără BD în test') }, rpc: () => { throw new Error('fără BD în test') } } }))
 
-import { AvertismentConstatare } from './FisaParcela.jsx'
+import { AvertismentConstatare, ValoareCadastru } from './FisaParcela.jsx'
+
+describe('FisaParcela — ValoareCadastru (audit D2)', () => {
+  const r = (v) => renderToString(<ValoareCadastru v={v} />)
+  it('„#44#” → „44”, cu valoarea brută în title', () => {
+    const h = r('#44#')
+    expect(h).toContain('>44</span>')
+    expect(h).toContain('title="Valoare TGZ: #44#"')
+  })
+  it('„50029#30#” → „50029 / 30”; „##” → „—” cu title', () => {
+    expect(r('50029#30#')).toContain('>50029 / 30</span>')
+    const h = r('##')
+    expect(h).toContain('>—</span>')
+    expect(h).toContain('title="Valoare TGZ: ##"')
+  })
+  it('fără „#”: valoarea ca atare, fără title; null → „—”', () => {
+    const h = r('123/4')
+    expect(h).toContain('>123/4</span>')
+    expect(h).not.toContain('title=')
+    expect(r(null)).toContain('>—</span>')
+  })
+})
 import { G } from './comune.jsx'
 
 const uat = { sesiune_zi1: '2026-12-08', program_zi1: '09:00 – 16:00', sesiune_zi2: '2026-12-10', program_zi2: '09:00 – 16:00' }
