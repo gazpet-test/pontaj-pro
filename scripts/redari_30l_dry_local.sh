@@ -31,6 +31,12 @@ echo "SCHELET_OK"
   echo "\\i $TW/$(basename "$M")"; echo "COMMIT;"; } > "$TMP/mig.sql"
 $PSQL -f "$TW/mig.sql" >"$TMP/mig.out" 2>&1 || { echo "ESEC migrare"; cat "$TMP/mig.out"; exit 1; }
 echo "MIGRARE_OK"
+# r6: poarta 0e (scripts/control_0e.sql, neschimbată) pe schelet + migrare, ÎNAINTE de funcțiile de test (care folosesc dblink / EXECUTE): 0 rânduri
+tr -d '\r' < "$RAD/scripts/control_0e.sql" > "$TMP/control_0e.sql"
+if $PSQL -At -f "$TW/control_0e.sql" >"$TMP/c0e.out" 2>&1; then
+  N0E=$(grep -c . "$TMP/c0e.out" || true)
+  if [ "$N0E" = "0" ]; then echo "C0E_LOCAL_OK (0 randuri)"; else echo "ESEC C0E local: $N0E randuri"; cat "$TMP/c0e.out"; REZ=1; fi
+else echo "ESEC C0E local (eroare)"; cat "$TMP/c0e.out"; REZ=1; fi
 # a doua aplicare trebuie refuzata (functia exista deja)
 if $PSQL -f "$TW/mig.sql" >"$TMP/mig2.out" 2>&1; then echo "ESEC: a doua aplicare a trecut"; REZ=1
 else grep -q "functia exista deja" "$TMP/mig2.out" && echo "REAPLICARE_REFUZATA_OK" || { echo "ESEC reaplicare"; cat "$TMP/mig2.out"; REZ=1; }; fi

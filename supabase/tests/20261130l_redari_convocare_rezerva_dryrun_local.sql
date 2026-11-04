@@ -378,7 +378,12 @@ BEGIN
   IF (SELECT count(*) FROM public.red_convocari WHERE detinator_id = public.t_det('D18')) <> 0 THEN RAISE EXCEPTION 'TEST12 FAIL: rand scris'; END IF;
   r := public.t_rez('ed', public.t_det('D18')::text);
   IF r NOT LIKE 'OK:C-%' THEN RAISE EXCEPTION 'TEST12 FAIL RPC: %', r; END IF;
-  IF current_setting('gazpet.convocare_rezerva', true) IS NOT NULL AND current_setting('gazpet.convocare_rezerva', true) <> '' THEN RAISE EXCEPTION 'TEST12 FAIL: marcaj scurs'; END IF;
+  -- r6: marcajul static (proconfig) nu rămâne în sesiunea apelantului după RPC: un INSERT direct imediat după, în aceeași sesiune, e tot refuzat
+  SELECT x INTO r FROM dblink('ed', $q$SELECT coalesce(current_setting('gazpet.convocare_rezerva', true), '')$q$) AS t(x text);
+  IF r <> '' THEN RAISE EXCEPTION 'TEST12 FAIL: marcaj scurs in sesiune (%)', r; END IF;
+  SELECT x INTO r FROM dblink('ed', format($q$SELECT public.t_stare(%L)$q$,
+    format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L, ''sms'', ''DUPA-RPC'') RETURNING id::text', public.t_det('D18')))) AS t(x text);
+  IF r NOT LIKE 'RD004:%' THEN RAISE EXCEPTION 'TEST12 FAIL: INSERT direct dupa RPC: %', r; END IF;
   RAISE NOTICE 'TEST12 OK (INSERT direct refuzat pe toate canalele, client vechi refuzat, RPC ok)';
 END $t$;
 
