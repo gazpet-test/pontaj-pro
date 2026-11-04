@@ -49,10 +49,13 @@ ALTER TABLE public.red_parcele ADD COLUMN nr_crt_grup text NULL
   CONSTRAINT red_parcele_nr_crt_grup_forma CHECK (nr_crt_grup IS NULL OR (length(nr_crt_grup) <= 19 AND nr_crt_grup ~ '^[1-9][0-9]{0,8}[.][1-9][0-9]{0,8}$'));
 -- r5 (Copilot r4 P1-02, atenuare): grupul vine doar din import, iar importul scrie mereu cheie_sursa (parcelele fara cheie nu se comit) -> un rand cu grup
 -- trebuie sa aiba cheie_sursa; un INSERT manual fara cheie nu poate purta grup, iar cheia nu se mai poate goli pe o parcela cu grup.
--- Risc rezidual DECLARAT: un admin / editor care fabrica un rand „ca la import” (cheie_sursa + grup valid) — BD nu poate dovedi provenienta.
+-- Risc rezidual: un admin / editor care fabrica un rand „ca la import” (cheie_sursa + grup valid) — BD nu poate dovedi provenienta.
+-- DECIZIE 04.11.2026, aprobat de Razvan, risc acceptat (varianta A): 6 conturi Gazpet de incredere, actiune deliberata, urma in red_jurnal,
+-- consecinta = oprire „de tratat” la reimport, nu pierdere de date. Fara cale server dedicata.
 ALTER TABLE public.red_parcele ADD CONSTRAINT red_parcele_nr_crt_grup_cu_cheie CHECK (nr_crt_grup IS NULL OR cheie_sursa IS NOT NULL);
 COMMENT ON COLUMN public.red_parcele.nr_crt_grup IS 'Grupul Nr.Crt. cu subnumăr din TGZ (ex. 166.1 = parcelă separată de 166, decizia Răzvan 04.11.2026). NULL = grup fără subnumăr (toate parcelele importate înainte de 20261130h). '
-  'Pus doar la INSERT de import; imutabil (trg_red_parcele_nr_crt_grup). La reimport, o parcelă existentă se refolosește doar dacă grupul din fișier e EXACT acesta (NULL = fără subnumăr).';
+  'Pus doar la INSERT de import; imutabil (trg_red_parcele_nr_crt_grup); doar pe rânduri cu cheie_sursa. La reimport, o parcelă ACTIVĂ existentă se refolosește doar dacă grupul din fișier e EXACT acesta (NULL = fără subnumăr). '
+  'DECIZIE 04.11.2026, aprobat de Răzvan, risc acceptat (varianta A): un admin / editor Redări poate insera manual o parcelă cu cheie_sursa și un grup valid (proveniența nu e dovedită de BD) — 6 conturi Gazpet de încredere, acțiune deliberată, urmă în red_jurnal, consecința e o oprire „de tratat”, nu pierdere de date.';
 
 -- BEFORE UPDATE: nr_crt_grup nu se schimba, pentru nimeni in afara mentenantei. SECURITY DEFINER + search_path fix (ca restul functiilor red_*).
 CREATE FUNCTION public.fn_red_parcele_nr_crt_grup_imutabil() RETURNS trigger

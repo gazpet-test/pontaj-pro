@@ -58,8 +58,8 @@ describe('import 8b - identitate fara tronson',()=>{
         };return q
       },
     }
-    const parcele=[null,3,11].map((tronson,i)=>({cheie:'p'+i,cheie_sursa:'HUS|'+i,uat_id:'uat-test',uat3:'HUS',tronson}))
-    const r=await scrieImport(db,{parcele,detinatori:[],contacte:[]},{proiectId:'proiect-test'})
+    const parcele=[null,3,11].map((tronson,i)=>({cheie:'p'+i,cheie_sursa:'HUS|'+i,uat_id:'uat-test',uat3:'HUS',tronson,nr_crt:i+1}))   // r6: parcela TGZ fără Nr.Crt. ar fi „de tratat”
+    const r=await scrieImport(db,{parcele,detinatori:[],contacte:[],proiect_id_previzualizare:'proiect-test',statistici:{reconciliere_randuri:{randuri:3,in_parcele:3,erori:0,ok:true}}},{proiectId:'proiect-test'})
     expect(r.parceleNoi).toBe(3)
     expect(apeluri).toEqual([{nume:'fn_red_rezerva_numere_parcele',args:{p_uat3:'HUS',p_n:3}}])
     expect(scrise.map(p=>[p.id_parcela,p.tronson])).toEqual([['HUS-0001',null],['HUS-0002',3],['HUS-0003',11]])

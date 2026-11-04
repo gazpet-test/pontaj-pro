@@ -513,6 +513,17 @@ Stare 04.11.2026: punctele 1–3 sunt făcute.
   Mentenanța (SQL direct ca postgres, fără JWT) rămâne scutită.
 - O urcare cu rezultat neclar (rețea / timeout) păstrează calea: „Reia pe aceeași cale” înregistrează obiectul dacă a ajuns, altfel îl urcă o singură dată.
 
+### 5c. Grupul Nr.Crt. al parcelei (migrarea `20261130h`, NEAPLICATĂ la 04.11.2026, PR #981)
+- `red_parcele.nr_crt_grup`: NULL = grup fără subnumăr (toate parcelele existente), `'166.1'` = parcelă separată de 166 (decizia lui Răzvan 04.11.2026).
+  Pus doar la INSERT-ul de import, imutabil (trigger), fără UPDATE pentru aplicație; doar pe rânduri cu `cheie_sursa`. Codul de import o cere: migrarea
+  se aplică ÎNAINTE de deploy-ul PR-ului. La reimport, grupul din fișier trebuie să fie EXACT cel din BD, altfel rândurile sunt „de tratat”.
+- Parcelele **șterse logic** (`sters_la` nenul) nu se refolosesc, nu se reactivează și nu se dublează: un rând din fișier cu aceeași identitate ca o
+  parcelă ștearsă (și fără una activă) e „de tratat” (identitate ștearsă logic) — reactivarea sau re-crearea e o decizie manuală.
+- **Decizie 04.11.2026, aprobat de Răzvan, risc acceptat (varianta A, review Jakarinos / Copilot r4–r5 P1-02):** un admin / editor Redări poate
+  insera manual o parcelă cu `cheie_sursa` și un `nr_crt_grup` valid; BD nu dovedește proveniența. Acceptat: 6 conturi Gazpet de încredere, acțiune
+  deliberată, urmă în `red_jurnal`, iar consecința e o oprire „de tratat” la reimport, nu pierdere de date. Fără cale server dedicată.
+- Revenirea (`supabase/revenire/20261130h_…_ROLLBACK.sql`) e posibilă DOAR cât nu există valori nenule; altfel refuză explicit.
+
 ## 6. Cum se revine
 - Migrarea e aplicată (01.11.2026); nu a atins niciun obiect existent (în afară de un rând în `app_modules` și 2 politici pe
   `storage.objects`, create de ea).

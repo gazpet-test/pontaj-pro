@@ -25,6 +25,7 @@ const cifreDeImportat = (pv) => {
   }
 }
 const EXPLICATII = {
+  identitate_stearsa: 'Identitatea (HG / cadastru) există doar pe o parcelă ștearsă logic: importul nu o reactivează și nu creează alta peste ea. Reactivarea sau re-crearea parcelei se decide manual.',
   nr_crt_incompatibil: 'Identitatea (HG / cadastru) există deja în BD pe o parcelă cu alt grup Nr.Crt.: de ex. „166.1/1” sau „7.2” peste o parcelă importată ca „166” / „7” (regula veche citea „7.2” ca 7/2), ori „166” peste o parcelă „166.1”. NU s-a importat și NU s-a refolosit — verificați cu TGZ care e parcela corectă.',
   fara_cheie: 'Rânduri la care lipsesc ȘI poziția HG, ȘI un nr. cadastral real (un cadastru doar cu „#”, ex. „##”, e gol; tarla singură nu ajunge): nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
   ambigue: 'Rânduri cu aceeași identitate (poziție HG / nr. cadastral) pe Nr.Crt. DIFERITE, sau cu identități CONTRADICTORII sub același Nr.Crt.: nu se poate ști care e parcela (vezi coloanele „motiv” și „detaliu” din acest tab). NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
@@ -56,7 +57,8 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const montat = useRef(true)                        // r4 (C-P2-03): după unmount, finalizarea unui import nu mai atinge starea ecranului
   const genPreview = useRef(0)                       // r5: generația previzualizării (parsarea e async)
   const genImport = useRef(0)                        // r4 (Jakarinos r3 L24): generația ciclului de import (crește la start, la schimbarea proiectului, la unmount)
-  useEffect(() => { montat.current = true; return () => { montat.current = false; genImport.current++ } }, [])
+  // r6 (Jakarinos r5 P3, Copilot r5 P2-03): la unmount cresc și generația previzualizării, nu doar a importului
+  useEffect(() => { montat.current = true; return () => { montat.current = false; genImport.current++; genPreview.current++ } }, [])
   // L24: la schimbarea proiectului și la unmount, cererea în zbor se invalidează (Copilot r1 P3-02)
   // r5 (Copilot r4 P1-03 / P2-03): la schimbarea proiectului se golește TOT ce depinde de proiect (fișier, previzualizare, raport, progres, tronsoane),
   // iar generațiile cresc — un import / o previzualizare / un istoric vechi nu se mai aplică peste proiectul nou
@@ -95,13 +97,13 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
       // fără idStart: numerele finale se rezervă server-side la import; previzualizarea arată id-uri provizorii
       const parser = sursa === 'ANEXA7' ? parseazaAnexa7 : parseazaTgz
       const rez = parser(ab, { uats: uats.map(u => ({ id: u.id, nume: u.nume, uat3: u.uat3, judet: u.judet })), tronsonPeUat: tronsoane, versiune: versiune.trim(), sursa })
-      if (gen !== genPreview.current || proiectStart !== proiectRef.current) return   // proiectul s-a schimbat în timpul citirii: rezultatul nu se aplică
+      if (!montat.current || gen !== genPreview.current || proiectStart !== proiectRef.current) return   // demontat / alt proiect / altă citire: rezultatul nu se aplică
       rez.proiect_id_previzualizare = proiectStart   // r5 (C-P1-03): previzualizarea e LEGATĂ de proiectul pentru care s-a calculat (verificat și în scrieImport)
       setPreview(rez)
       const sarite = (rez.fara_cheie?.length || 0) + (rez.ambigue?.length || 0)
       if (rez.erori?.length) show(`${rez.erori.length} rânduri cu erori — vezi tab-ul „Erori”.`, 'error')
       else { const c = cifreDeImportat(rez); show(`Previzualizare gata: ${c.parcele} parcele și ${c.detinatori} deținători de importat${sarite ? `; ${sarite} rânduri NU se importă (fără cheie / ambigue)` : ''}.`, sarite ? 'info' : 'success') }
-    } catch (e) { if (gen === genPreview.current) show('Citire fișier: ' + msgEroare(e), 'error') }
+    } catch (e) { if (montat.current && gen === genPreview.current) show('Citire fișier: ' + msgEroare(e), 'error') }
     finally { if (montat.current && gen === genPreview.current) setLucru(false) }
   }
 
@@ -273,7 +275,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           {raport.diferente && randuriDeTratat(raport.diferente).length > 0 && <button style={{ ...S.btnS, marginTop:8 }} onClick={() => descarcaCsvDeTratat(randuriDeTratat(raport.diferente), `${versiune || 'tgz'}-rezultat`)}>⬇ Rândurile de tratat după import ({numarRanduriPuseDeoparte(randuriDeTratat(raport.diferente))} rânduri, fără nume)</button>}
           {Array.isArray(raport.refolosite_fara_nr_crt) && raport.refolosite_fara_nr_crt.length > 0 && <div style={{ fontSize:12.5, color:G.yellow, marginTop:8 }}>ℹ {raport.refolosite_fara_nr_crt.length} parcele existente cu subnumăr Nr.Crt. au fost completate dintr-o sursă fără Nr.Crt. (Anexa 7), pe aceeași cheie: {raport.refolosite_fara_nr_crt.map(x => `${x.id_parcela} (${x.nr_crt_grup})`).join(', ')}.</div>}
           {raport.judetDiferit > 0 && <div style={{ fontSize:12.5, color:G.yellow, marginTop:8 }}>ℹ La {raport.judetDiferit} rânduri județul din adresă diferă de județul terenului — s-a păstrat județul din adresă la contact și s-a notat în observațiile parcelei.</div>}
-          {[['fara_cheie', 'Rânduri fără cheie — NU au fost importate', G.orange], ['ambigue', 'Rânduri ambigue — NU au fost importate', G.red], ['nr_crt_incompatibil', 'Nr.Crt. incompatibil cu parcela existentă — NU au fost importate', G.red]].map(([k, titlu, culoare]) => Array.isArray(raport[k]) && raport[k].length > 0 && (
+          {[['fara_cheie', 'Rânduri fără cheie — NU au fost importate', G.orange], ['ambigue', 'Rânduri ambigue — NU au fost importate', G.red], ['nr_crt_incompatibil', 'Nr.Crt. incompatibil cu parcela existentă — NU au fost importate', G.red], ['identitate_stearsa', 'Identitate pe o parcelă ștearsă logic — NU au fost importate (reactivare / re-creare doar manual)', G.red]].map(([k, titlu, culoare]) => Array.isArray(raport[k]) && raport[k].length > 0 && (
             <div key={k} style={{ marginTop:10 }}>
               <div style={{ fontSize:12.5, fontWeight:600, marginBottom:4, color: culoare }}>{titlu} ({raport[k].length})</div>
               <div style={{ maxHeight:220, overflow:'auto', border:`1px solid ${G.border}`, borderRadius:7 }}>

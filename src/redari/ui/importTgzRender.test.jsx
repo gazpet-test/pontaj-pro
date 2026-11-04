@@ -160,3 +160,30 @@ describe('ImportTgz — previzualizarea e legată de proiect', () => {
     expect(amanate.apeluriImport.map(a => [a.preview.proiect_id_previzualizare, a.opt.proiectId])).toEqual([['proiect-A', 'proiect-A']])
   })
 })
+
+// r6 (Jakarinos r5 P3, Copilot r5 P2-03): parsarea asincronă terminată după unmount nu mai atinge ecranul
+describe('ImportTgz — previzualizarea terminată după unmount', () => {
+  const porneste = async (demonteaza) => {
+    const citire = amanat()
+    const h = harness(); const show = vi.fn()
+    const p = props('proiect-A', 'TEST-A', show)
+    h.render(ImportTgz, p)
+    h.valori[0] = { arrayBuffer: () => citire.promisiune }   // fișierul ales (starea `fisier`)
+    h.valori[I.versiune] = 'v-fictiv'
+    const gata = buton(h.render(ImportTgz, p), '🔍 Previzualizează').props.onClick()
+    if (demonteaza) h.unmount()
+    citire.rezolva(new ArrayBuffer(8))   // nu e Excel: parserul întoarce o eroare, fără excepție
+    await gata
+    return { h, show }
+  }
+  it('control: montat → previzualizarea (cu eroarea de fișier) se aplică și se anunță', async () => {
+    const { h, show } = await porneste(false)
+    expect(h.valori[I.preview]).toMatchObject({ proiect_id_previzualizare: 'proiect-A' })
+    expect(show).toHaveBeenCalled()
+  })
+  it('demontat înainte de terminarea citirii → nicio previzualizare, niciun mesaj', async () => {
+    const { h, show } = await porneste(true)
+    expect(h.valori[I.preview]).toBeNull()
+    expect(show).not.toHaveBeenCalled()
+  })
+})

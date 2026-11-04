@@ -1,9 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx-js-style'
 import { readFileSync } from 'node:fs'
-import { parseazaTgz, scrieImport, parseazaNrCrt, imparteAdresa, cheieSursa, cadastruGol, cadastruSuspect, randuriDeTratat, numarRanduriPuseDeoparte, csvRanduriDeTratat,
-  LOT, LOT_CITIRE, RPC_REZERVA_NUMERE, MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU, MOTIV_CADASTRU_SUSPECT, MOTIV_NRCRT_INCOMPATIBIL, STARE_ELIGIBILA, STARE_NECONFIRMATA,
+import { parseazaTgz, scrieImport as scrieImportReal, parseazaNrCrt, imparteAdresa, cheieSursa, cadastruGol, cadastruSuspect, randuriDeTratat, numarRanduriPuseDeoparte, csvRanduriDeTratat,
+  LOT, LOT_CITIRE, RPC_REZERVA_NUMERE, MOTIV_AMBIGUU, MOTIV_CONTRADICTORIU, MOTIV_CADASTRU_SUSPECT, MOTIV_NRCRT_INCOMPATIBIL, STARE_ELIGIBILA, STARE_NECONFIRMATA, MOTIV_IDENTITATE_STEARSA,
   RE_NR_CRT_GRUP_SQL, NR_CRT_GRUP_MAX, grupNrCrtValid } from '../importTgz.js'
+
+// r6 (Copilot r5 P2-01 / P2-04): scrieImport cere previzualizarea legată de proiect și numitorul fișierului închis. Testele de flux le leagă aici
+// (cum face UI-ul); refuzurile se testează explicit cu scrieImportReal, mai jos.
+const leaga = (pv, opt) => {
+  if (!pv || typeof pv !== 'object') return pv
+  const st = pv.statistici || {}
+  return { ...pv, proiect_id_previzualizare: pv.proiect_id_previzualizare === undefined ? opt?.proiectId : pv.proiect_id_previzualizare,
+    statistici: st.reconciliere_randuri === undefined ? { ...st, reconciliere_randuri: { randuri: null, in_parcele: null, erori: null, ok: true } } : st }
+}
+const scrieImport = (sb, pv, opt) => scrieImportReal(sb, leaga(pv, opt), opt)
 
 // ───────── fixture: xlsx fictiv construit în test (antet pe rândul 3) ─────────
 const ANTET = ['Nr.Crt.', 'Nr.Poz.Hg.', 'UAT', 'Județ', 'Nume Deținător', 'Adresă', 'Suprafață Afectată Temporar',
@@ -1063,5 +1073,70 @@ describe('r5 — sursa Anexa 7 explicită, preview legat de proiect, reconcilier
     const r = await scrieImport(sb2, pv, { proiectId: 'proiect-1', versiune: 'v1' })
     expect(r.reconciliere).toMatchObject({ noi: 2, confirmate_bd: 2, ok: true })
     expect(sb2.tabele.red_import_loturi.at(-1).diferente.reconciliere).toMatchObject({ confirmate_bd: 2 })
+  })
+})
+
+// ───────── r6: parcele șterse logic, previzualizare legată obligatoriu, numitorul fișierului, TGZ fără Nr.Crt. ─────────
+describe('r6 — parcele șterse logic (Jakarinos r5 P2): potrivire doar pe parcela ACTIVĂ; identitate doar pe șterse = „de tratat”', () => {
+  const importa = async (sb, randuri, versiune) => scrieImport(sb, parseazaTgz(xlsxDin(randuri), { ...OPT, versiune }), { proiectId: 'proiect-1', versiune })
+  it('identitate existentă DOAR pe o parcelă ștearsă → nu se reactivează, nu se inserează alta, nu se lipesc deținători', async () => {
+    const sb = creeazaFakeSupabase()
+    await importa(sb, [randF('7/1', 'HG 1', 'Test Vechi', 'T1', 'CF 1'), randF('8', 'HG 8', 'Test Opt', 'T8', 'CF 8')], 'v1')
+    sb.tabele.red_parcele[0].sters_la = '2026-11-04T10:00:00Z'   // ștearsă logic de un utilizator
+    const r = await importa(sb, [randF('7/1', 'HG 1', 'Test Vechi', 'T1', 'CF 1'), randF('7/2', 'HG 1', 'Test Nou', 'T1', 'CF 1'), randF('8', 'HG 8', 'Test Opt', 'T8', 'CF 8')], 'v2')
+    expect(r).toMatchObject({ parceleNoi: 0, parceleRefolosite: 1, detinatoriNoi: 0 })
+    expect(r.identitate_stearsa.map(x => [x.rand, x.motiv, x.detaliu])).toEqual([[4, MOTIV_IDENTITATE_STEARSA, 'parcela ștearsă logic: HUS-0001'], [5, MOTIV_IDENTITATE_STEARSA, 'parcela ștearsă logic: HUS-0001']])
+    expect(sb.tabele.red_parcele).toHaveLength(2)
+    expect(sb.tabele.red_parcele[0].sters_la).toBe('2026-11-04T10:00:00Z')
+    expect(r.reconciliere).toMatchObject({ eligibile: 2, refolosite: 1, oprite: 1, ok: true, confirmate_bd: 1 })
+    const tratat = randuriDeTratat(sb.tabele.red_import_loturi.at(-1).diferente)
+    expect(tratat.map(x => [x.rand, x.categorie])).toEqual([[4, 'identitate ștearsă'], [5, 'identitate ștearsă']])
+  })
+  it.each([['ștearsa înaintea celei active', true], ['ștearsa după cea activă', false]])('aceeași cheie pe o parcelă activă (fără subnumăr) și una ștearsă („166.1”), %s → se refolosește cea ACTIVĂ', async (_, inainte) => {
+    const sb = creeazaFakeSupabase()
+    await importa(sb, [randF('166/1', 'HG 1', 'Test Activ', 'T1#', '123##')], 'v1')
+    const stearsa = { ...sb.tabele.red_parcele[0], id: 'uuid-stearsa', id_parcela: 'HUS-0099', nr_crt_grup: '166.1', sters_la: '2026-11-01T00:00:00Z' }
+    if (inainte) sb.tabele.red_parcele.unshift(stearsa); else sb.tabele.red_parcele.push(stearsa)
+    const r = await importa(sb, [randF('166/2', 'HG 1', 'Test Nou', 'T1#', '123##')], 'v2')
+    expect(r).toMatchObject({ parceleRefolosite: 1, parceleNoi: 0, nr_crt_incompatibil: [], identitate_stearsa: [] })
+    expect(r.existente).toEqual(['HUS-0001'])
+    expect(r.reconciliere).toMatchObject({ confirmate_bd: 1, ok: true })
+    const activa = sb.tabele.red_parcele.find(p => p.id_parcela === 'HUS-0001')
+    expect(sb.tabele.red_detinatori.filter(d => d.parcela_id === activa.id).map(d => d.nume)).toEqual(['Test Activ', 'Test Nou'])
+  })
+})
+
+describe('r6 — refuzurile la intrarea în scrieImport (Copilot r5 P2-01 / P2-04) și TGZ fără Nr.Crt. (P2-02)', () => {
+  it('previzualizare fără proiect_id_previzualizare → refuz, nicio scriere', async () => {
+    const sb = creeazaFakeSupabase()
+    const pv = parseazaTgz(xlsxDin([randF('1', 'HG 1', 'Test A', 'T1', 'CF 1')]), OPT)
+    await expect(scrieImportReal(sb, pv, { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/nu e legată de un proiect/)
+    expect(sb.apeluri).toEqual([])
+  })
+  it('TGZ cu numitorul fișierului neînchis (sau lipsă) → refuz înainte de lot; Anexa 7 fără numitor = acceptat, marcat „neverificat”', async () => {
+    const sb = creeazaFakeSupabase()
+    const pv = { ...parseazaTgz(xlsxDin([randF('1', 'HG 1', 'Test A', 'T1', 'CF 1')]), OPT), proiect_id_previzualizare: 'proiect-1' }
+    const strica = { ...pv, statistici: { ...pv.statistici, reconciliere_randuri: { randuri: 2, in_parcele: 1, erori: 0, ok: false } } }
+    await expect(scrieImportReal(sb, strica, { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/numitorul fișierului nu se închide/)
+    const fara = { ...pv, statistici: { ...pv.statistici, reconciliere_randuri: undefined } }
+    await expect(scrieImportReal(sb, fara, { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/numitorul fișierului/)
+    expect(sb.apeluri).toEqual([])
+    const anexa = { ...fara, parcele: fara.parcele.map(p => ({ ...p, nr_crt: null, grup_sub: null })) }
+    const r = await scrieImportReal(sb, anexa, { proiectId: 'proiect-1', versiune: 'a7', sursa: 'ANEXA7' })
+    expect(r).toMatchObject({ parceleNoi: 1 })
+    expect(r.reconciliere.randuri_fisier).toMatch(/neverificat/)
+    const sb2 = creeazaFakeSupabase()
+    const r2 = await scrieImportReal(sb2, pv, { proiectId: 'proiect-1', versiune: 'v2' })
+    expect(r2.reconciliere.randuri_fisier).toEqual({ randuri: 1, in_parcele: 1, erori: 0, ok: true })
+  })
+  it('TGZ cu nr_crt null peste o parcelă legacy (grup NULL) → „de tratat”, nu refolosire tacită; fără parcelă existentă → nici inserare', async () => {
+    const sb = creeazaFakeSupabase()
+    await scrieImport(sb, parseazaTgz(xlsxDin([randF('7/1', 'HG 1', 'Test Vechi', 'T1', 'CF 1')]), OPT), { proiectId: 'proiect-1', versiune: 'v1' })
+    const pv = parseazaTgz(xlsxDin([randF('7/2', 'HG 1', 'Test Nou', 'T1', 'CF 1'), randF('9', 'HG 9', 'Test Noua', 'T9', 'CF 9')]), { ...OPT, versiune: 'v2' })
+    const modificat = { ...pv, parcele: pv.parcele.map(p => ({ ...p, nr_crt: null, grup_sub: null })) }
+    const r = await scrieImport(sb, modificat, { proiectId: 'proiect-1', versiune: 'v2', sursa: 'TGZ' })
+    expect(r).toMatchObject({ parceleRefolosite: 0, parceleNoi: 0, detinatoriNoi: 0 })
+    expect(r.nr_crt_incompatibil.map(x => [x.rand, x.detaliu])).toEqual([[4, 'Nr.Crt. lipsă în previzualizarea TGZ (grup nedovedit)'], [5, 'Nr.Crt. lipsă în previzualizarea TGZ (grup nedovedit)']])
+    expect(sb.tabele.red_parcele).toHaveLength(1)
   })
 })
