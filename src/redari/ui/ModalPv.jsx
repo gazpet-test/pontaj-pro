@@ -2,23 +2,44 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
 import { COL_PLIC_AR_TGZ, atasezaMentiuniAr } from '../arMentiune.js'
-import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, detinatoriFaraPvA, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
+import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, detinatoriFaraPvA, valoriImplicitePv, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
+import { ultimulRaspuns } from '../stare.js'
 import { Modal, Camp, S, msgEroare, citestePaginat, COL_RASPUNS } from './comune.jsx'
 
 const COMISIE = ['verificare_data','verificare_de_gazpet','verificare_de_tgz']
+// foto_nr rămâne în BD și în CAMPURI (CAS / comparații), dar nu se mai afișează: Final_v2 a scos fotografiile din PV A și PV B (SABLOANE §2.2–2.3)
 const CAMPURI = ['data_pv','locul','constatare_mod','identitate_verificata','lucrari','stare_teren','plan_situatie',
   'foto_nr','obiectii_redare','obiectii_text','termen_remediere','reverificare_la','alte_observatii','motiv_pv_b','remediat_la']
+// D5 (b): etichete în română clară, după textele din șabloanele Final_v2
+const ETICHETE = {
+  data_pv:'Data procesului-verbal', locul:'Locul încheierii', constatare_mod:'Constatarea s-a făcut',
+  identitate_verificata:'Identitatea deținătorului verificată', plan_situatie:'Plan de situație anexat',
+  obiectii_redare:'Obiecții privind readucerea terenului', obiectii_text:'Textul obiecțiilor',
+  termen_remediere:'Termen de remediere convenit', reverificare_la:'Reverificare la',
+  alte_observatii:'Alte observații (despăgubiri, servitute etc.)', remediat_la:'Remediat la data',
+  motiv_pv_b:'Situația (motivul PV B)', lucrari:'Lucrări de readucere executate', stare_teren:'Starea terenului la data constatării',
+  verificare_data:'Data verificării pe teren', verificare_de_gazpet:'Verificat de (Gazpet)', verificare_de_tgz:'Verificat de (Transgaz)',
+}
+const ETICHETE_LUCRARI = { sol_fertil:'Împrăștierea stratului de sol fertil', nivelare:'Nivelare', arat:'Arat', discuit:'Discuit / grăpat',
+  insamantare:'Însămânțare', gard:'Refacere gard', drum:'Refacere drum de acces', altele:'Altele (descriere)' }
+const ETICHETE_STARE = { nivelat:'Nivelat', strat_vegetal:'Strat vegetal refăcut', insamantat:'Însămânțat', gard_drum:'Gard / drum refăcut', alta:'Alta (descriere)' }
+const ETICHETE_MOTIV = { declaratie:'A declarat că nu participă și nu are obiecții', neprezentat:'Nu s-a prezentat după convocare și afișare',
+  neidentificat:'Deținător neidentificat / fără adresă cunoscută', refuz:'A refuzat semnarea fără obiecții' }
+const ETICHETE_STARE_PV = { generat:'generat', trimis_spre_semnare:'trimis spre semnare', semnat:'semnat', anulat:'anulat' }
+const implicite = s => s?.pv ? valoriImplicitePv({ tip: s.pv.tip, pv: s.pv, uat: s.uat, parcela: s.parcela, raspuns: s.raspuns }) : {}
 // Gemini f4b r1 P2: jsonb reordonează cheile -> comparăm forma canonică (chei sortate), nu JSON.stringify brut
 const canonic = v => v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o,k)=>(o[k]=canonic(v[k]),o),{}) : v
 const egal = (a,b) => JSON.stringify(canonic(a ?? null)) === JSON.stringify(canonic(b ?? null))
 const cas = (q, vechi, chei) => chei.reduce((r,k) => vechi[k] == null ? r.is(k,null) : r.eq(k,typeof vechi[k] === 'object' ? JSON.stringify(canonic(vechi[k])) : vechi[k]),q)
-const forma = s => !s ? {} : (s.pv?.tip === 'C' || ['semnat','anulat'].includes(s.pv?.stare)) ? {...s.pv} : { ...s.pv, lucrari: s.pv?.lucrari ?? propuneLucrari(s.parcela?.articol_deviz), stare_teren: s.pv?.stare_teren ?? {} }
-const conflict = () => new Error('Modificat de altcineva, reincarca.')
+// L3: câmpurile goale primesc valorile implicite (propuneri nesalvate, editabile); PV final / PV C rămân cum sunt în BD
+const forma = s => !s ? {} : (s.pv?.tip === 'C' || ['semnat','anulat'].includes(s.pv?.stare)) ? {...s.pv} : { ...s.pv, stare_teren: s.pv?.stare_teren ?? {}, ...implicite(s) }
+const conflict = () => new Error('Modificat de altcineva, reîncarcă.')
 export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiectId, tip = 'A', nivel, show, onClose, onGata, dinSesiune = false }) {
   const [sursa,setSursa] = useState(null), [form,setForm] = useState({}), [comisie,setComisie] = useState({})
   const [lucru,setLucru] = useState(false), [mesaj,setMesaj] = useState('')
   const [dataStare,setDataStare] = useState(aziBucuresti), [motivAnulare,setMotivAnulare] = useState('')
   const [scan,setScan] = useState(null), [fizic,setFizic] = useState(false), [sesiune,setSesiune] = useState(dinSesiune)
+  const [auto,setAuto] = useState([])   // câmpurile completate automat la creare (salvate), afișate ca notă de verificat
   const generatie = useRef(0), ocupat = useRef(false)
   const poateScrie = nivel === 'admin' || (tip !== 'C' && nivel === 'editor')
   const final = ['semnat','anulat'].includes(sursa?.pv?.stare)
@@ -51,11 +72,13 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
       unul('red_v_parcele',parcelaId),tip === 'A' ? unul('red_detinatori',detinatorId) : Promise.resolve(null),unul('red_proiecte',proiectId),
     ])
     if (parcela.proiect_id !== proiectId || parcela.sters_la || (tip === 'A' && (detinator.parcela_id !== parcelaId || detinator.sters_la))) throw new Error('Parcela/detinator inactiv sau incompatibil.')
-    const [uat, rasp] = await Promise.all([unul('red_uat',parcela.uat_id),
-      supabase.from('red_procese_verbale').select('*').eq('tip',tip).eq(tip === 'A'?'detinator_id':'parcela_id',tip === 'A'?detinatorId:parcelaId).neq('stare','anulat').is('sters_la',null).maybeSingle()])
-    if (rasp.error) throw rasp.error
-    if (tip === 'A') return {parcela,detinator,proiect,uat,pv:rasp.data}
     const opt = {cheie:'id',esteCurent:curent}
+    // L3: răspunsul deținătorului (ultimul) precompletează PV A — ziua aleasă, modul (constatare pe teren), obiecțiile
+    const [uat, rasp, raspDet] = await Promise.all([unul('red_uat',parcela.uat_id),
+      supabase.from('red_procese_verbale').select('*').eq('tip',tip).eq(tip === 'A'?'detinator_id':'parcela_id',tip === 'A'?detinatorId:parcelaId).neq('stare','anulat').is('sters_la',null).maybeSingle(),
+      tip === 'A' ? citestePaginat(() => supabase.from('red_raspunsuri').select(COL_RASPUNS).eq('detinator_id',detinatorId),opt) : Promise.resolve([])])
+    if (rasp.error) throw rasp.error
+    if (tip === 'A') return {parcela,detinator,proiect,uat,pv:rasp.data,raspuns:ultimulRaspuns(raspDet)}
     const detinatori = await citestePaginat(() => supabase.from('red_detinatori').select('*').eq('parcela_id',parcelaId).is('sters_la',null),opt)
     const convocari = [], raspunsuri = []
     for (const d of detinatori) {
@@ -76,10 +99,10 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     return {parcela,detinator,proiect,uat,pv:rasp.data,detinatori,convocari,raspunsuri,pvs:semnate,areASemnat:semnate.length > 0,
       totiAuASemnat:detinatori.length > 0 && !detinatoriFaraPvA({detinatori,pvs:semnate,parcela}).length}
   }
-  const aplica = s => { setSursa(s); setForm(dinSesiune && s.pv?.tip === 'A' && !['semnat','anulat'].includes(s.pv?.stare) && s.pv?.constatare_mod == null ? { ...forma(s), constatare_mod: 'sediu' } : forma(s)); setComisie(Object.fromEntries(COMISIE.map(k=>[k,s.parcela[k] ?? null]))) }
+  const aplica = s => { setSursa(s); setForm(forma(s)); setComisie(Object.fromEntries(COMISIE.map(k=>[k,s.parcela[k] ?? null]))) }
   useEffect(() => {
     const token = ++generatie.current
-    ocupat.current = true; setLucru(true); setSursa(null); setMesaj(''); setScan(null); setMotivAnulare(''); setDataStare(aziBucuresti()); setFizic(false); setSesiune(dinSesiune)
+    ocupat.current = true; setLucru(true); setSursa(null); setMesaj(''); setScan(null); setMotivAnulare(''); setDataStare(aziBucuresti()); setFizic(false); setSesiune(dinSesiune); setAuto([])
     citeste(() => generatie.current === token).then(s => { if (generatie.current === token) aplica(s) })
       .catch(e => { if (generatie.current === token) setMesaj(msgEroare(e)) })
       .finally(() => { if (generatie.current === token) { ocupat.current=false; setLucru(false) } })
@@ -105,10 +128,22 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     // Reconcile ambiguous errors; never repeat creation automatically.
     const s=await citeste(curent)
     if (!curent()) return
-    aplica(s); onGata?.()
-    if(error && !s.pv) throw new Error('Creare neconfirmata; reincarca inainte de reluare. '+msgEroare(error))
-    if (!s.pv || (!error && !data?.id)) throw new Error('Creare fara rand confirmat; reincarca.')
-    show(error ? 'PV-ul existent a fost deschis.' : 'PV '+tip+' creat.','success')
+    if(error && !s.pv) { aplica(s); onGata?.(); throw new Error('Creare neconfirmată; reîncarcă înainte de reluare. '+msgEroare(error)) }
+    if (!s.pv || (!error && !data?.id)) { aplica(s); onGata?.(); throw new Error('Creare fără rând confirmat; reîncarcă.') }
+    // L3: PV nou -> valorile implicite se salvează imediat (CAS pe valorile citite), ca „Generează” să nu fie blocat de propuneri nesalvate.
+    // Un PV existent deschis (error de unicitate) NU se completează automat: propunerile rămân în formular, nesalvate.
+    const patch = error ? {} : valoriImplicitePv({ tip, pv:s.pv, uat:s.uat, parcela:s.parcela, raspuns:s.raspuns, laCreare:true })
+    const chei = Object.keys(patch)
+    let finalS = s, nota = ''
+    if (chei.length) {
+      const r = await cas(supabase.from('red_procese_verbale').update(patch).eq('id',s.pv.id).eq('created_at',s.pv.created_at)
+        .eq('stare',s.pv.stare).is('sters_la',null),s.pv,chei).select('*')
+      if (!curent()) return
+      if (!r.error && r.data?.length === 1) { finalS = {...s,pv:r.data[0]}; setAuto(chei) }
+      else nota = ' Valorile implicite nu s-au salvat; verifică formularul și apasă „Salvează PV”.'
+    }
+    aplica(finalS); onGata?.()
+    show((error ? 'PV-ul existent a fost deschis.' : 'PV '+tip+' creat.') + nota, nota ? 'error' : 'success')
   })
   const schimbate = sursa?.pv ? CAMPURI.filter(k=>!egal(form[k],sursa.pv[k])) : []
   const comSchimbate = sursa ? COMISIE.filter(k=>!egal(comisie[k],sursa.parcela[k])) : []
@@ -208,54 +243,66 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     aplica({...s,pv:data[0]});setScan(null);show('PV: '+stare+'.','success');onGata?.()
   })
   const schimba=(k,v)=>{if(!ocupat.current)setForm(f=>({...f,[k]:v}))}
-  const text=(k,tip='text')=><Camp key={k} eticheta={k}><input style={S.input} type={tip} value={form[k]??''}
+  const text=(k,tip='text')=><Camp key={k} eticheta={ETICHETE[k] ?? k}><input style={S.input} type={tip} value={form[k]??''}
     step={tip==='number'?1:undefined}
     onChange={e=>{ if(tip==='number'){ const v=e.target.value; if(v===''){schimba(k,null);return} const n=Number(v); if(Number.isInteger(n)&&n>=0) schimba(k,n); return } schimba(k,e.target.value||null) }} min={tip==='number'?0:undefined}/></Camp>
-  return <Modal titlu={sursa?.pv?.nr_pv || 'PV '+tip} latime={760} onClose={()=>{if(!ocupat.current)onClose()}}>
+  // D9: formularul cu modificări nesalvate nu se închide din greșeală (click pe fundal / ✕) fără confirmare
+  const nesalvate = schimbate.length > 0 || comSchimbate.length > 0
+  const inchide = () => {
+    if (ocupat.current) return
+    if (nesalvate && poateScrie && !final && !window.confirm('Ai modificări nesalvate în PV. Închizi formularul și le pierzi?')) return
+    onClose()
+  }
+  const propuse = sursa?.pv && poateScrie && !final ? Object.keys(implicite(sursa)).filter(k => schimbate.includes(k)) : []
+  const eticheteLista = chei => chei.map(k => ETICHETE[k] ?? k).join(', ')
+  // B: Final_v2 a scos planul de situație din PV B (rămâne în BD); A: plan DA/NU rămâne
+  const booleene = tip==='A' ? ['identitate_verificata','plan_situatie','obiectii_redare'] : ['obiectii_redare']
+  return <Modal titlu={sursa?.pv?.nr_pv || 'PV '+tip} latime={760} onClose={inchide}>
     {mesaj && <p role="alert">{mesaj}</p>}
-    <button style={S.btnS} disabled={lucru} onClick={reload}>Reincarca</button>
-    {tip==='B' && sursa?.areASemnat && <p>Exista PV A semnat pe parcela; PV B priveste doar coproprietarii fara PV A.</p>}
-    {tip==='B' && sursa?.totiAuASemnat && <p>Toti detinatorii au PV A semnat; crearea si generarea PV B sunt dezactivate.</p>}
-    {sursa && !sursa.pv && poateScrie && <button style={S.btnP} disabled={lucru||(tip==='B'&&sursa.totiAuASemnat)} onClick={creeaza}>Creeaza PV {tip}</button>}
+    <button style={S.btnS} disabled={lucru} onClick={reload}>Reîncarcă</button>
+    {tip==='B' && sursa?.areASemnat && <p>Există PV A semnat pe parcelă; PV B privește doar coproprietarii fără PV A.</p>}
+    {tip==='B' && sursa?.totiAuASemnat && <p>Toți deținătorii au PV A semnat; crearea și generarea PV B sunt dezactivate.</p>}
+    {sursa && !sursa.pv && poateScrie && <button style={S.btnP} disabled={lucru||(tip==='B'&&sursa.totiAuASemnat)} onClick={creeaza}>Creează PV {tip}</button>}
     {sursa?.pv && <>
-      <p>{sursa.detinator?.nume || (tip==='C'?'PV C (tronson)':'PV B (parcela)')} - {sursa.pv.stare}</p>
+      <p>{sursa.detinator?.nume || (tip==='C'?'PV C (tronson)':'PV B (parcelă)')} - {ETICHETE_STARE_PV[sursa.pv.stare] ?? sursa.pv.stare}</p>
+      {auto.length > 0 && !final && <p>Completat automat la creare: {eticheteLista(auto)}. Verifică înainte de generare; totul se poate modifica.</p>}
+      {propuse.length > 0 && <p>Propuneri automate (nesalvate): {eticheteLista(propuse)}. Verifică și apasă „Salvează PV”.</p>}
       <fieldset disabled={lucru || !poateScrie || final}>
         {text('data_pv','date')}{tip!=='C' && text('locul')}
-        {tip==='B' && <Camp eticheta="Motiv PV B (obligatoriu)"><select style={S.input} value={form.motiv_pv_b??''} onChange={e=>schimba('motiv_pv_b',e.target.value||null)}><option value="">Alege</option>{MOTIVE_PV_B.map(k=><option key={k} value={k}>{k}</option>)}</select></Camp>}
-        {tip==='A' && <Camp eticheta="Constatare"><select style={S.input} value={form.constatare_mod??''} onChange={e=>schimba('constatare_mod',e.target.value||null)}>
-          <option value="">Alege</option><option value="sediu">Sediu</option><option value="teren">Teren</option></select></Camp>}
-        {tip!=='C' && <>{(tip==='A'?['identitate_verificata','plan_situatie','obiectii_redare']:['plan_situatie','obiectii_redare']).map(k=><Camp key={k} eticheta={k}>
+        {tip==='B' && <Camp eticheta={ETICHETE.motiv_pv_b + ' (obligatoriu)'}><select style={S.input} value={form.motiv_pv_b??''} onChange={e=>schimba('motiv_pv_b',e.target.value||null)}><option value="">Alege</option>{MOTIVE_PV_B.map(k=><option key={k} value={k}>{ETICHETE_MOTIV[k] ?? k}</option>)}</select></Camp>}
+        {tip==='A' && <Camp eticheta={ETICHETE.constatare_mod}><select style={S.input} value={form.constatare_mod??''} onChange={e=>schimba('constatare_mod',e.target.value||null)}>
+          <option value="">Alege</option><option value="sediu">La sediul Primăriei</option><option value="teren">Pe teren, în prezența deținătorului</option></select></Camp>}
+        {tip!=='C' && <>{booleene.map(k=><Camp key={k} eticheta={ETICHETE[k]}>
           <select style={S.input} value={form[k]==null?'':String(form[k])} onChange={e=>schimba(k,e.target.value===''?null:e.target.value==='true')}>
             {k!=='obiectii_redare'&&<option value="">Necunoscut</option>}<option value="true">Da</option><option value="false">Nu</option>
           </select></Camp>)}
-        {sursa.pv.lucrari===null && <p>propunere din deviz - confirma prin Salvare PV</p>}
-        {[['lucrari',LUCRARI],['stare_teren',STARI_TEREN]].map(([grup,chei])=><fieldset key={grup}><legend>{grup}</legend>
-          {chei.map((k,i)=>i===chei.length-1 ? <Camp key={k} eticheta={k}><input style={S.input} value={form[grup]?.[k]??''} onChange={e=>schimba(grup,{...form[grup],[k]:e.target.value})}/></Camp>
-            : <label key={k} style={{display:'block'}}><input type="checkbox" checked={form[grup]?.[k]===true} onChange={e=>schimba(grup,{...form[grup],[k]:e.target.checked})}/>{k}</label>)}
+        {[['lucrari',LUCRARI,ETICHETE_LUCRARI],['stare_teren',STARI_TEREN,ETICHETE_STARE]].map(([grup,chei,et])=><fieldset key={grup}><legend>{ETICHETE[grup]}</legend>
+          {chei.map((k,i)=>i===chei.length-1 ? <Camp key={k} eticheta={et[k]}><input style={S.input} value={form[grup]?.[k]??''} onChange={e=>schimba(grup,{...form[grup],[k]:e.target.value})}/></Camp>
+            : <label key={k} style={{display:'block'}}><input type="checkbox" checked={form[grup]?.[k]===true} onChange={e=>schimba(grup,{...form[grup],[k]:e.target.checked})}/>{et[k]}</label>)}
         </fieldset>)}
-        {text('foto_nr','number')}{text('termen_remediere','date')}{text('reverificare_la','date')}
-        </>}{(tip==='C'?[]:['obiectii_text','alte_observatii']).map(k=><Camp key={k} eticheta={k}><textarea style={S.input} value={form[k]??''} onChange={e=>schimba(k,e.target.value||null)}/></Camp>)}
+        {text('termen_remediere','date')}{text('reverificare_la','date')}
+        </>}{(tip==='C'?[]:['obiectii_text','alte_observatii']).map(k=><Camp key={k} eticheta={ETICHETE[k]}><textarea style={S.input} value={form[k]??''} onChange={e=>schimba(k,e.target.value||null)}/></Camp>)}
       </fieldset>
       {tip!=='C' && <fieldset disabled={lucru||!poateScrie}>{text('remediat_la','date')}</fieldset>}
-      {poateScrie && <button style={S.btnP} disabled={lucru||!schimbate.length} onClick={()=>salveaza()}>Salveaza PV</button>}
-      {tip!=='C' && <><fieldset disabled={lucru||!poateScrie||final}><legend>Verificare parcela (obligatorie PV B; salvare separata)</legend>
-        {COMISIE.map(k=><Camp key={k} eticheta={k}><input style={S.input} type={k==='verificare_data'?'date':'text'} value={comisie[k]??''}
+      {poateScrie && <button style={S.btnP} disabled={lucru||!schimbate.length} onClick={()=>salveaza()}>Salvează PV</button>}
+      {tip!=='C' && <><fieldset disabled={lucru||!poateScrie||final}><legend>Verificarea parcelei pe teren (obligatorie la PV B; se salvează separat)</legend>
+        {COMISIE.map(k=><Camp key={k} eticheta={ETICHETE[k]}><input style={S.input} type={k==='verificare_data'?'date':'text'} value={comisie[k]??''}
           onChange={e=>{if(!ocupat.current)setComisie(f=>({...f,[k]:e.target.value||null}))}}/></Camp>)}
       </fieldset>
-      {poateScrie && <button style={S.btnS} disabled={lucru||final||!comSchimbate.length} onClick={()=>salveaza(true)}>Salveaza verificarea parcelei</button>}</>}
-      <p>Salveaza toate modificarile inainte de generare.</p>
-      {poateScrie && <button style={S.btnP} disabled={lucru||final||!!schimbate.length||!!comSchimbate.length||(tip==='B'&&sursa.totiAuASemnat)} onClick={genereaza}>{sursa.pv.fisier_generat_path?'Regenereaza':'Genereaza DOCX'}</button>}
-      <button style={S.btnS} disabled={lucru||!sursa.pv.fisier_generat_path} onClick={()=>descarca()}>Descarca</button>
-      {sursa.pv.fisier_semnat_path && <button style={S.btnS} disabled={lucru} onClick={()=>descarca(true)}>Descarca scanul semnat</button>}
-      {poateScrie && !final && <fieldset disabled={lucru||!!schimbate.length||!!comSchimbate.length}><legend>Stare PV</legend>
+      {poateScrie && <button style={S.btnS} disabled={lucru||final||!comSchimbate.length} onClick={()=>salveaza(true)}>Salvează verificarea parcelei</button>}</>}
+      {poateScrie && !final && nesalvate && <p>Salvează modificările ({eticheteLista([...schimbate,...comSchimbate])}) înainte de generare.</p>}
+      {poateScrie && <button style={S.btnP} disabled={lucru||final||!!schimbate.length||!!comSchimbate.length||(tip==='B'&&sursa.totiAuASemnat)} onClick={genereaza}>{sursa.pv.fisier_generat_path?'Regenerează':'Generează DOCX'}</button>}
+      <button style={S.btnS} disabled={lucru||!sursa.pv.fisier_generat_path} onClick={()=>descarca()}>Descarcă</button>
+      {sursa.pv.fisier_semnat_path && <button style={S.btnS} disabled={lucru} onClick={()=>descarca(true)}>Descarcă scanul semnat</button>}
+      {poateScrie && !final && <fieldset disabled={lucru||!!schimbate.length||!!comSchimbate.length}><legend>Starea PV-ului</legend>
         <Camp eticheta="Data trimiterii / primirii"><input style={S.input} type="date" value={dataStare} onChange={e=>setDataStare(e.target.value)}/></Camp>
-        {sursa.pv.stare==='generat' && <button style={S.btnS} onClick={()=>tranzitie('trimis_spre_semnare')}>Marcheaza trimis spre semnare</button>}
+        {sursa.pv.stare==='generat' && <button style={S.btnS} onClick={()=>tranzitie('trimis_spre_semnare')}>Marchează trimis spre semnare</button>}
         <input type="file" accept="application/pdf,image/jpeg,image/png" onChange={e=>setScan(e.target.files?.[0]??null)}/>
         <label><input type="checkbox" checked={fizic} onChange={e=>setFizic(e.target.checked)}/>Semnat fizic</label>
         <label><input type="checkbox" checked={sesiune} onChange={e=>setSesiune(e.target.checked)}/>Semnat la sesiune</label>
-        <button style={S.btnP} onClick={()=>tranzitie('semnat')}>Incarca PV semnat</button>
-        <Camp eticheta="Motiv anulare"><input style={S.input} value={motivAnulare} onChange={e=>setMotivAnulare(e.target.value)}/></Camp>
-        <button style={S.btnS} onClick={()=>tranzitie('anulat')}>Anuleaza</button>
+        <button style={S.btnP} onClick={()=>tranzitie('semnat')}>Încarcă PV semnat</button>
+        <Camp eticheta="Motivul anulării"><input style={S.input} value={motivAnulare} onChange={e=>setMotivAnulare(e.target.value)}/></Camp>
+        <button style={S.btnS} onClick={()=>tranzitie('anulat')}>Anulează</button>
       </fieldset>}
     </>}
   </Modal>

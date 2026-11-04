@@ -27,6 +27,45 @@ export function propuneLucrari(articolDeviz) {
     insamantare: /insamant|semanat/, gard: /gard/, drum: /drum/ }
   return { ...Object.fromEntries(Object.entries(cuvinte).map(([k, rx]) => [k, rx.test(t)])), altele: '' }
 }
+// L3 / D5 (04.11.2026): valori implicite la crearea PV A / PV B, ca PV-ul să se poată genera fără tastare când datele există.
+// Sunt propuneri editabile; garda verificaDatePvA / verificaDatePvB rămâne neschimbată. Se completează DOAR câmpurile goale.
+// Starea terenului se propune din lucrările din deviz (aceeași sursă ca propuneLucrari); fără potrivire -> „nivelat”.
+export const STARE_DIN_LUCRARI = { nivelare: 'nivelat', sol_fertil: 'strat_vegetal', insamantare: 'insamantat', gard: 'gard_drum', drum: 'gard_drum' }
+const ZILE_SESIUNE_UAT = ['sesiune_zi1', 'sesiune_zi2', 'sesiune_zi3']
+export function loculImplicit({ uat = {}, parcela = {}, mod = 'sediu' } = {}) {
+  const nume = String(uat.nume ?? '').trim()
+  if (!nume) return ''
+  if (mod === 'teren') return ['Pe teren', plin(parcela.sat) ? 'sat ' + String(parcela.sat).trim() : '', 'UAT ' + nume].filter(Boolean).join(', ')
+  return 'Sediul Primăriei ' + nume + (plin(uat.primarie_adresa) ? ', ' + String(uat.primarie_adresa).trim() : '')
+}
+const stareGoala = st => !st || (!STARI_TEREN.slice(0, -1).some(k => st[k] === true) && !plin(st.alta))
+export function propuneStareTeren(lucrari) {
+  const st = {}
+  for (const [k, v] of Object.entries(STARE_DIN_LUCRARI)) if (lucrari?.[k] === true) st[v] = true
+  return Object.keys(st).length ? st : { nivelat: true }
+}
+// raspuns = ultimul răspuns al deținătorului (doar PV A). laCreare: data_pv vine din RPC (azi) și poate fi înlocuită cu ziua aleasă.
+export function valoriImplicitePv({ tip = 'A', pv = {}, uat = {}, parcela = {}, raspuns = null, laCreare = false } = {}) {
+  if (!pv || tip === 'C' || ['semnat', 'anulat'].includes(pv.stare)) return {}
+  const patch = {}
+  const optiune = tip === 'A' ? raspuns?.optiune : null
+  if (pv.lucrari == null) patch.lucrari = propuneLucrari(parcela.articol_deviz)
+  if (stareGoala(pv.stare_teren)) patch.stare_teren = propuneStareTeren(patch.lucrari ?? pv.lucrari)
+  if (tip === 'A' && !['sediu', 'teren'].includes(pv.constatare_mod)) patch.constatare_mod = optiune === 'constatare_teren' ? 'teren' : 'sediu'
+  if (!plin(pv.locul)) {
+    const locul = loculImplicit({ uat, parcela, mod: patch.constatare_mod ?? pv.constatare_mod ?? 'sediu' })
+    if (locul) patch.locul = locul
+  }
+  // data = ziua de sesiune aleasă de deținător (doar dacă e una dintre zilele UAT-ului); altfel rămâne data din RPC
+  const zi = optiune === 'particip' ? String(raspuns?.zi_sesiune_aleasa ?? '').slice(0, 10) : ''
+  const ziValida = zi !== '' && ZILE_SESIUNE_UAT.some(k => String(uat[k] ?? '').slice(0, 10) === zi)
+  if (ziValida && (laCreare || !plin(pv.data_pv)) && pv.data_pv !== zi) patch.data_pv = zi
+  if (optiune === 'nu_particip_cu_obiectii' && pv.obiectii_redare !== true && !plin(pv.obiectii_text) && plin(raspuns?.obiectii_text)) {
+    patch.obiectii_redare = true
+    patch.obiectii_text = String(raspuns.obiectii_text).trim()
+  }
+  return patch
+}
 export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const lipsuri = []
   for (const [v, et] of [[proiect.contract_nr,'numarul contractului'],[proiect.contract_data,'data contractului'],
