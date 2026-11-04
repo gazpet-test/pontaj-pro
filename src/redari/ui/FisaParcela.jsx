@@ -7,6 +7,7 @@ import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
 import { termenConstatare, mesajTermenConstatare } from '../setari.js'
 import { dataBucuresti } from '../plicuri.js'
+import { citesteSmsStare, stareSmsPentru, rezumatSms, textBadge, intrariCronologie, STARI_SMS } from '../smsStare.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns, citestePaginat, citesteIn } from './comune.jsx'
 
@@ -18,6 +19,21 @@ const CAMPURI_PARCELA = [
 ]
 const CAMPURI_CONTACT = [['adresa_strada', 'Stradă / nr.'], ['adresa_sat', 'Sat'], ['adresa_comuna', 'Comună / oraș'], ['adresa_judet', 'Județ'], ['cod_postal', 'Cod poștal'], ['telefon', 'Telefon'], ['email', 'Email']]
 const nrSauNull = (v) => (v === '' || v === null || v === undefined) ? null : Number(v)
+
+/** Rândul „SMS: …” la fiecare deținător (20261130i, doar agregate). sms = { harta, eroare }; eroarea se afișează, nu devine „niciun SMS” (L18).
+ *  Exportată pentru testul de randare. */
+export function RandSms({ sms, detinatorId }) {
+  if (!sms || sms.eroare) return <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4, color:G.red }}>SMS: ⚠ starea nu s-a putut citi{sms?.eroare ? ` (${sms.eroare})` : ''}</div>
+  if (!sms.harta) return <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4, color:G.dim }}>SMS: …</div>
+  const s = stareSmsPentru(sms.harta, detinatorId)
+  if (!s) return <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4, color:G.dim }}>SMS: niciun SMS</div>
+  return (
+    <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4 }}>
+      SMS: <span data-sms={s.ultima_stare} style={{ color:STARI_SMS[s.ultima_stare].culoare, fontWeight:600 }}>{textBadge(s)}</span>
+      <span style={{ color:G.muted }}> · {rezumatSms(s)}</span>
+    </div>
+  )
+}
 
 /** Plan pct. 4.6: linia de avertisment neblocant pe rândul deținătorului (de confirmat claude#026 î.5). Exportată pentru testul de randare. */
 export function AvertismentConstatare({ uat, detinator, raspunsuri, pvs, azi }) {
@@ -74,6 +90,19 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
   const [jurnal, setJurnal] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)        // { tip:'parcela'|'detinator'|'sterge', ... }
+  // SMS pe deținător (fn_red_sms_stare): un apel pe proiect, cu token de generație (L24) — un răspuns pentru alt proiect / parcelă se ignoră
+  const [sms, setSms] = useState({ harta: null, eroare: null })
+  const generatieSms = useRef(0)
+  const incarcaSms = useCallback(async () => {
+    const g = ++generatieSms.current
+    setSms({ harta: null, eroare: null })
+    try {
+      const harta = await citesteSmsStare(supabase, proiect.id, () => g === generatieSms.current)
+      if (g !== generatieSms.current) return
+      setSms({ harta, eroare: null })
+    } catch (e) { if (g === generatieSms.current) setSms({ harta: null, eroare: msgEroare(e) }) }
+  }, [proiect.id])
+  useEffect(() => { incarcaSms(); return () => { generatieSms.current++ } }, [incarcaSms, parcelaId])
 
   const incarca = useCallback(async () => {
     setLoading(true)
@@ -139,10 +168,12 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       ev.push({ t: p.created_at, tip:'pv', text:`PV ${p.tip} ${p.nr_pv} — ${p.stare}${p.obiectii_redare ? ' · cu obiecții' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_generat_path })
       if (p.semnat_primit_data) ev.push({ t: p.semnat_primit_data, tip:'pv', text:`PV ${p.nr_pv} semnat${p.semnat_fizic ? ' (fizic)' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_semnat_path })
     })
+    // SMS: din agregate se știu cert doar ultima trimitere și ultima livrare (fără date per mesaj — rezumatul complet e pe rândul deținătorului)
+    if (sms.harta) detinatori.forEach(d => intrariCronologie(stareSmsPentru(sms.harta, d.id)).forEach(x => ev.push({ t: x.data, tip:'sms', text: x.eticheta, cine: d.nume })))
     jurnal.forEach(j => ev.push({ t: j.created_at, tip:'jurnal', text:`${j.actiune} ${j.tabela.replace('red_', '')}`, cine: j.user_email || '', jurnal: true, jurnalId: j.id }))
     // cronologic crescător; la aceeași clipă răspunsurile se despart după seq (contract [r2])
     return ev.sort((a, b) => (new Date(a.t) - new Date(b.t)) || ((a.seq ?? 0) - (b.seq ?? 0)))
-  }, [convocari, raspunsuri, metaRaspuns, pvs, jurnal, numeDet])
+  }, [convocari, raspunsuri, metaRaspuns, pvs, jurnal, numeDet, sms.harta, detinatori])
 
   const fisiere = useMemo(() => [
     // P2-8: convocările active fără fișier (upload-ul a picat după inserarea rândului) apar „neîncărcat” + Reîncarcă
@@ -163,7 +194,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
     } catch (e) { show('Fișier: ' + msgEroare(e), 'error') }
   }
 
-  const culoareTip = { convocare: G.blue, retur: G.orange, raspuns: G.green, pv: G.purple, jurnal: G.dim }
+  const culoareTip = { convocare: G.blue, retur: G.orange, raspuns: G.green, pv: G.purple, sms: G.pink, jurnal: G.dim }
   const [arataJurnal, setArataJurnal] = useState(false)
   const [jurnalDetalii, setJurnalDetalii] = useState(null)   // { id, date_vechi, date_noi } — doar admin, la cerere
   const [reincarcId, setReincarcId] = useState(null)
@@ -258,6 +289,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                   {d.sursa_date && <span>sursă: {d.sursa_date} · </span>}{d.versiune_lista_tgz && <span>listă: {d.versiune_lista_tgz}</span>}
                 </div>
                 <AvertismentConstatare uat={uat} detinator={d} raspunsuri={raspunsuri} pvs={pvs} azi={dataBucuresti()} />
+                <RandSms sms={sms} detinatorId={d.id} />
                 {poateScrie && (
                   <div style={{ fontSize:12.5, marginTop:4 }}>
                     {c ? (<>

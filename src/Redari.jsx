@@ -23,6 +23,10 @@ import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
 // 📱 SMS proprietari (owner sau utilizator SMS cu Redari editor / admin, 20261130b; blocat in BD pana la autorizarea Transgaz)
 import RedariSmsButon from './sms/RedariSmsButon.jsx'
+// 📱 Starea SMS pe deținător (fn_red_sms_stare, 20261130i): doar agregate, fără text / telefon
+import { citesteSmsStare, stareSmsPentru, potrivesteFiltru, csvListaSms } from './redari/smsStare.js'
+import { CelulaSms, FiltruSms } from './redari/ui/SmsRegistru.jsx'
+import { paginiExport } from './redari/ui/ExportEcran.jsx'
 
 const PAGINA = 100
 // Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2). text_gdpr / text_declaratie / contact_email NU se trimit:
@@ -196,11 +200,52 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   const [lucru, setLucru] = useState(false)
   const [borderouRez, setBorderouRez] = useState(null) // { randuri, exclusi } — rezultatul borderoului, înainte de descărcare
   const generatie = useRef(0)   // r6 P2-1: contor de generație — răspunsul unei cereri depășite (filtru/pagină schimbate între timp) se ignoră
+  // SMS (20261130i): un singur apel fn_red_sms_stare(proiect.id) → Map detinator_id → agregate. Eroarea e afișată, NU tratată ca „niciun SMS” (L18).
+  const [fSms, setFSms] = useState('')
+  const [sms, setSms] = useState({ harta: null, eroare: null })
+  const generatieSms = useRef(0)
+  const incarcaSms = useCallback(async () => {
+    const g = ++generatieSms.current
+    setSms({ harta: null, eroare: null })
+    try {
+      const harta = await citesteSmsStare(supabase, proiect.id, () => g === generatieSms.current)
+      if (g !== generatieSms.current) return
+      setSms({ harta, eroare: null })
+    } catch (e) { if (g === generatieSms.current) setSms({ harta: null, eroare: msgEroare(e) }) }
+  }, [proiect.id])
+  useEffect(() => { incarcaSms(); return () => { generatieSms.current++ } }, [incarcaSms])
+  const smsGata = !!sms.harta && !sms.eroare
+
+  // Toate rândurile filtrelor de server (UAT / tronson / stare), paginate keyset pe cheia unică (parcela_id, detinator_id) — pentru filtrul SMS
+  // (care nu există în vedere) și pentru CSV-ul „Lista SMS”. Căutarea se aplică apoi local (aceeași regulă: subșir, fără diferență de majuscule).
+  const citesteToate = useCallback(async (curent) => {
+    const tot = await paginiExport(() => {
+      let q = supabase.from('red_v_stare_parcela').select('*').eq('proiect_id', proiect.id)
+      if (fUat) q = q.eq('uat_id', fUat)
+      if (fTronson === 'fara') q = q.is('tronson', null)
+      else if (fTronson) q = q.eq('tronson', Number(fTronson))
+      if (fStare) q = q.eq('stare', fStare)
+      return q
+    }, ['parcela_id', 'detinator_id'], curent)
+    const t = cautareAplicata.replace(/[%,()]/g, ' ').trim().toLowerCase()
+    const cautat = t ? tot.filter(r => String(r.id_parcela ?? '').toLowerCase().includes(t) || String(r.nume ?? '').toLowerCase().includes(t)) : tot
+    return cautat.sort((a, b) => String(a.id_parcela ?? '').localeCompare(String(b.id_parcela ?? ''), 'ro', { numeric: true })
+      || String(a.nume ?? '').localeCompare(String(b.nume ?? ''), 'ro') || String(a.detinator_id).localeCompare(String(b.detinator_id)))
+  }, [proiect.id, fUat, fTronson, fStare, cautareAplicata])
 
   const incarca = useCallback(async () => {
     const g = ++generatie.current
     setLoading(true)
     try {
+      if (fSms) {
+        // filtrul SMS se aplică pe TOATE rândurile filtrelor (nu pe pagina curentă), apoi se paginează local
+        if (sms.eroare) throw new Error(`filtrul SMS nu se poate aplica: ${sms.eroare}`)
+        if (!smsGata) { setRanduri([]); setTotal(0); return }   // harta încă se încarcă: incarca() rulează din nou când sosește (deps)
+        const toate = (await citesteToate(() => g === generatie.current)).filter(r => potrivesteFiltru(stareSmsPentru(sms.harta, r.detinator_id), fSms))
+        if (g !== generatie.current) return
+        setRanduri(toate.slice(pagina * PAGINA, pagina * PAGINA + PAGINA)); setTotal(toate.length)
+        return
+      }
       let q = supabase.from('red_v_stare_parcela').select('*', { count:'exact' }).eq('proiect_id', proiect.id)
       if (fUat) q = q.eq('uat_id', fUat)
       if (fTronson === 'fara') q = q.is('tronson', null)   // parcelele încă neatribuite (după importul fără tronson)
@@ -217,11 +262,11 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       setRanduri(data || []); setTotal(count || 0)
     } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); setSelectie(new Set()); show('Registru: ' + msgEroare(e), 'error') } }   // r8/r9 P2-1: o încărcare eșuată nu lasă rândurile sau selecția anterioare (borderoul le-ar exporta)
     finally { if (g === generatie.current) setLoading(false) }
-  }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show])
+  }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
   useEffect(() => { incarca() }, [incarca])
-  useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata])
+  useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata, fSms])
   // P1-4: selecția e a rândurilor VĂZUTE — se golește la orice schimbare de filtre / pagină
-  useEffect(() => { setSelectie(new Set()); setRanduri([]) }, [fUat, fTronson, fStare, cautareAplicata, pagina])   // r8 P2-1: și rândurile se invalidează
+  useEffect(() => { setSelectie(new Set()); setRanduri([]) }, [fUat, fTronson, fStare, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
 
   const nrPagini = Math.max(1, Math.ceil(total / PAGINA))
   const toateSelectate = randuri.length > 0 && randuri.every(r => selectie.has(r.detinator_id))
@@ -268,6 +313,21 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
     setBorderouRez(null)
   }
 
+  // CSV „Lista SMS” (intern, fără telefon): toate rândurile filtrelor curente (inclusiv filtrul SMS), nu doar pagina
+  const listaSms = async () => {
+    if (!smsGata) { show(sms.eroare ? `Lista SMS: ${sms.eroare}` : 'Starea SMS încă se încarcă.', 'error'); return }
+    const g = generatie.current
+    setLucru(true)
+    try {
+      const toate = (await citesteToate(() => g === generatie.current)).filter(r => potrivesteFiltru(stareSmsPentru(sms.harta, r.detinator_id), fSms))
+      if (g !== generatie.current) throw new Error('filtrele s-au schimbat între timp — reîncearcă')
+      if (!toate.length) { show('Lista SMS: niciun rând pentru filtrele alese.', 'error'); return }
+      descarcaBlob(new Blob([csvListaSms(toate, sms.harta)], { type: 'text/csv;charset=utf-8' }), `lista_sms_${proiect.cod}_${azi()}.csv`)
+      show(`Lista SMS descărcată: ${toate.length} rânduri.`, 'success')
+    } catch (e) { show('Lista SMS: ' + msgEroare(e), 'error') }
+    finally { setLucru(false) }
+  }
+
   const dupaActiune = () => { setActiune(null); incarca() }
   const tronsoane = useMemo(() => Array.from({ length: 11 }, (_, i) => i + 1), [])
 
@@ -288,6 +348,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
           <option value="">Toate stările</option>
           {STARI.map(s => <option key={s.cod} value={s.cod}>{s.eticheta}</option>)}
         </select>
+        <FiltruSms valoare={fSms} onChange={setFSms} sms={sms} />
         <form onSubmit={e => { e.preventDefault(); setCautareAplicata(cautare.trim()) }} style={{ display:'flex', gap:6 }}>
           <input value={cautare} onChange={e => setCautare(e.target.value)} placeholder="Caută id parcelă / nume…" style={{ ...S.input, width:240 }} />
           <button type="submit" style={S.btnS}>Caută</button>
@@ -297,8 +358,14 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
         {/* r7 P2-1: blocat și cât se încarcă rândurile filtrului curent — altfel borderoul ar lua rândurile filtrului anterior */}
         {poateScrie && <button onClick={borderou} disabled={lucru || loading} style={S.btnS} title="CSV pentru Poștă: selecția sau rândurile afișate">📮 Borderou CSV {selectie.size ? `(${selectie.size})` : ''}</button>}
         {(profile?.is_owner === true || poateScrie) && <RedariSmsButon proiect={proiect} uats={uats} uatId={fUat} show={show} />}
-        <button onClick={incarca} style={S.btnS} title="Reîncarcă">↻</button>
+        <button onClick={listaSms} disabled={lucru || loading || !smsGata} style={S.btnS} title="CSV intern: ID parcelă, UAT, deținător, SMS trimise / livrate / eșuate, ultima stare, date (fără telefon)">📱 Lista SMS</button>
+        <button onClick={() => { incarca(); incarcaSms() }} style={S.btnS} title="Reîncarcă">↻</button>
       </div>
+      {sms.eroare && (
+        <div role="alert" style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, padding:'8px 12px', marginBottom:10 }}>
+          ⚠ Starea SMS nu s-a putut citi ({sms.eroare}). Coloana „SMS” nu e completă — nu înseamnă „niciun SMS”. <button style={S.btnX} onClick={incarcaSms}>Reîncearcă</button>
+        </div>
+      )}
 
       <div style={{ ...S.card, padding:0, overflow:'auto' }}>
         <table style={{ width:'100%', borderCollapse:'collapse' }}>
@@ -306,13 +373,13 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
             <tr>
               {poateScrie && <th style={S.th}><input type="checkbox" checked={toateSelectate} onChange={comutaToate} /></th>}
               <th style={S.th}>ID parcelă</th><th style={S.th}>UAT</th><th style={S.th}>T</th><th style={S.th}>Deținător</th><th style={S.th}>Calitate</th>
-              <th style={S.th}>Stare</th><th style={S.th}>Convocare</th><th style={S.th}>Răspuns</th><th style={S.th}>PV</th>
+              <th style={S.th}>Stare</th><th style={S.th}>Convocare</th><th style={S.th}>Răspuns</th><th style={S.th}>PV</th><th style={S.th}>SMS</th>
               {poateScrie && <th style={S.th}>Acțiuni</th>}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={12} style={{ ...S.td, color:G.muted, textAlign:'center' }}>Se încarcă…</td></tr>}
-            {!loading && randuri.length === 0 && <tr><td colSpan={12} style={S.td}><Gol text="Nicio parcelă pentru filtrele alese." /></td></tr>}
+            {loading && <tr><td colSpan={13} style={{ ...S.td, color:G.muted, textAlign:'center' }}>Se încarcă…</td></tr>}
+            {!loading && randuri.length === 0 && <tr><td colSpan={13} style={S.td}><Gol text="Nicio parcelă pentru filtrele alese." /></td></tr>}
             {!loading && randuri.map(r => (
               <tr key={`${r.parcela_id}-${r.detinator_id}`} style={{ cursor:'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#1C2128'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                 {poateScrie && <td style={S.td} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selectie.has(r.detinator_id)} onChange={() => comuta(r.detinator_id)} /></td>}
@@ -325,6 +392,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}>{fmtDate(r.ultima_convocare_data)}</td>
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)} title={fmtDate(r.ultimul_raspuns_data)}>{r.ultimul_raspuns_optiune ? etichetaOptiune(r.ultimul_raspuns_optiune) : '-'}</td>
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}>{r.pv_nr ? `${r.pv_nr} · ${r.pv_stare}` : '-'}</td>
+                <td style={{ ...S.td, whiteSpace:'nowrap' }} onClick={() => onDeschideFisa(r.parcela_id)}><CelulaSms sms={sms} detinatorId={r.detinator_id} /></td>
                 {poateScrie && (
                   <td style={{ ...S.td, whiteSpace:'nowrap' }}>
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
