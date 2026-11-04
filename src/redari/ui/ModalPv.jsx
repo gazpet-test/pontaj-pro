@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
 import { COL_PLIC_AR_TGZ, atasezaMentiuniAr } from '../arMentiune.js'
-import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, detinatoriFaraPvA, valoriImplicitePv, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
+import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, detinatoriFaraPvA, valoriImplicitePv, salveazaImpliciteLaCreare, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
 import { ultimulRaspuns } from '../stare.js'
 import { Modal, Camp, S, msgEroare, citestePaginat, COL_RASPUNS } from './comune.jsx'
 
@@ -132,15 +132,29 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     if (!s.pv || (!error && !data?.id)) { aplica(s); onGata?.(); throw new Error('Creare fără rând confirmat; reîncarcă.') }
     // L3: PV nou -> valorile implicite se salvează imediat (CAS pe valorile citite), ca „Generează” să nu fie blocat de propuneri nesalvate.
     // Un PV existent deschis (error de unicitate) NU se completează automat: propunerile rămân în formular, nesalvate.
-    const patch = error ? {} : valoriImplicitePv({ tip, pv:s.pv, uat:s.uat, parcela:s.parcela, raspuns:s.raspuns, laCreare:true })
-    const chei = Object.keys(patch)
+    // Jakarinos #990 P1-2: sursele (UAT / parcelă / răspuns) se recitesc înainte și după UPDATE (salveazaImpliciteLaCreare)
     let finalS = s, nota = ''
-    if (chei.length) {
-      const r = await cas(supabase.from('red_procese_verbale').update(patch).eq('id',s.pv.id).eq('created_at',s.pv.created_at)
-        .eq('stare',s.pv.stare).is('sters_la',null),s.pv,chei).select('*')
-      if (!curent()) return
-      if (!r.error && r.data?.length === 1) { finalS = {...s,pv:r.data[0]}; setAuto(chei) }
-      else nota = ' Valorile implicite nu s-au salvat; verifică formularul și apasă „Salvează PV”.'
+    if (!error) {
+      try {
+        let ultim = s
+        const r = await salveazaImpliciteLaCreare({ tip, sursa: s,
+          recitesteSurse: async () => { const t = await citeste(curent); if (!curent()) throw new Error('abandonat'); ultim = t; return t },
+          confirma: async p => window.confirm('Datele UAT-ului / răspunsul deținătorului s-au schimbat de la deschidere. Salvez valorile implicite recalculate (' + Object.keys(p).map(k => ETICHETE[k] ?? k).join(', ') + ')?'),
+          scrie: async (pv, patch) => {
+            const q = await cas(supabase.from('red_procese_verbale').update(patch).eq('id',pv.id).eq('created_at',pv.created_at)
+              .eq('stare',pv.stare).is('sters_la',null),pv,Object.keys(patch)).select('*')
+            if (q.error || q.data?.length !== 1) throw new Error('nesalvat')
+            return q.data[0]
+          } })
+        if (!curent()) return
+        if (r.stare === 'salvat') {
+          finalS = {...ultim,pv:r.pv}; setAuto(Object.keys(r.patch))
+          if (r.schimbatDupa) nota = ' Sursele s-au schimbat chiar după completarea automată; reîncarcă și verifică valorile.'
+        } else if (r.stare === 'renuntat') { finalS = ultim; nota = ' Valorile implicite nu s-au salvat; sunt propuse în formular.' }
+      } catch {
+        if (!curent()) return
+        nota = ' Valorile implicite nu s-au salvat; verifică formularul și apasă „Salvează PV”.'
+      }
     }
     aplica(finalS); onGata?.()
     show((error ? 'PV-ul existent a fost deschis.' : 'PV '+tip+' creat.') + nota, nota ? 'error' : 'success')
@@ -250,7 +264,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
   const nesalvate = schimbate.length > 0 || comSchimbate.length > 0
   const inchide = () => {
     if (ocupat.current) return
-    if (nesalvate && poateScrie && !final && !window.confirm('Ai modificări nesalvate în PV. Închizi formularul și le pierzi?')) return
+    if (nesalvate && poateScrie && !window.confirm('Ai modificări nesalvate în PV. Închizi formularul și le pierzi?')) return
     onClose()
   }
   const propuse = sursa?.pv && poateScrie && !final ? Object.keys(implicite(sursa)).filter(k => schimbate.includes(k)) : []

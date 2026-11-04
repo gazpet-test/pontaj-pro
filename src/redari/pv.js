@@ -64,11 +64,36 @@ export function valoriImplicitePv({ tip = 'A', pv = {}, uat = {}, parcela = {}, 
   const zi = optiune === 'particip' ? String(raspuns?.zi_sesiune_aleasa ?? '').slice(0, 10) : ''
   const ziValida = zi !== '' && ZILE_SESIUNE_UAT.some(k => String(uat[k] ?? '').slice(0, 10) === zi)
   if (ziValida && (laCreare || !plin(pv.data_pv)) && pv.data_pv !== zi) patch.data_pv = zi
-  if (optiune === 'nu_particip_cu_obiectii' && pv.obiectii_redare !== true && !plin(pv.obiectii_text) && plin(raspuns?.obiectii_text)) {
+  // Jakarinos #990 P1-1 / P2-3: și „constatare pe teren” poartă obiecții (schema cere textul); textul se copiază EXACT (plin() doar validează)
+  if (OPTIUNI_CU_OBIECTII.includes(optiune) && pv.obiectii_redare !== true && !plin(pv.obiectii_text) && plin(raspuns?.obiectii_text)) {
     patch.obiectii_redare = true
-    patch.obiectii_text = String(raspuns.obiectii_text).trim()
+    patch.obiectii_text = raspuns.obiectii_text
   }
   return patch
+}
+const OPTIUNI_CU_OBIECTII = ['nu_particip_cu_obiectii', 'constatare_teren']
+// Jakarinos #990 P1-2: amprenta surselor din care s-au calculat implicitele (UAT, parcelă, ultimul răspuns)
+export function amprentaSurseImplicite({ uat = {}, parcela = {}, raspuns = null } = {}) {
+  return JSON.stringify([uat?.id ?? null, uat?.versiune ?? null, uat?.nume ?? null, uat?.primarie_adresa ?? null,
+    ...ZILE_SESIUNE_UAT.map(k => uat?.[k] ?? null), parcela?.id ?? null, parcela?.articol_deviz ?? null, parcela?.sat ?? null,
+    raspuns?.id ?? null, raspuns?.seq ?? null, raspuns?.optiune ?? null, raspuns?.zi_sesiune_aleasa ?? null, raspuns?.obiectii_text ?? null])
+}
+// Salvarea implicitelor la creare, fără date vechi tăcute: recitește sursele înainte de UPDATE; dacă s-au schimbat față de calcul,
+// recalculează și cere confirmare; după UPDATE recitește încă o dată și raportează o schimbare apărută între timp (nu o ascunde).
+// recitesteSurse() -> { pv, uat, parcela, raspuns }; scrie(pv, patch) -> rândul PV salvat; confirma(patch) -> boolean.
+export async function salveazaImpliciteLaCreare({ tip, sursa, recitesteSurse, scrie, confirma }) {
+  const calc = (s) => valoriImplicitePv({ tip, pv: s.pv, uat: s.uat, parcela: s.parcela, raspuns: s.raspuns, laCreare: true })
+  const initial = calc(sursa)
+  if (!Object.keys(initial).length) return { stare: 'nimic', patch: {} }
+  const proaspat = await recitesteSurse()
+  if (!proaspat?.pv || proaspat.pv.id !== sursa.pv?.id) throw new Error('PV schimbat între citire și completarea automată; reîncarcă.')
+  const patch = calc(proaspat)
+  if (!Object.keys(patch).length) return { stare: 'nimic', patch: {} }
+  const schimbat = amprentaSurseImplicite(proaspat) !== amprentaSurseImplicite(sursa) || JSON.stringify(patch) !== JSON.stringify(initial)
+  if (schimbat && !(await confirma(patch))) return { stare: 'renuntat', patch }
+  const pv = await scrie(proaspat.pv, patch)
+  const dupa = await recitesteSurse()
+  return { stare: 'salvat', patch, pv, schimbatDupa: amprentaSurseImplicite(dupa) !== amprentaSurseImplicite(proaspat) }
 }
 export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const lipsuri = []

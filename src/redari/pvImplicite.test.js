@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
-import { BIFA_DA, BIFA_NU, valoriImplicitePv, loculImplicit, propuneStareTeren, verificaDatePvA, verificaDatePvB, genereazaPvA } from './pv.js'
+import { BIFA_DA, BIFA_NU, valoriImplicitePv, salveazaImpliciteLaCreare, loculImplicit, propuneStareTeren, verificaDatePvA, verificaDatePvB, genereazaPvA } from './pv.js'
 
 // L3 / D5 (04.11.2026): valorile implicite la creare; fixture fictiv, fără date reale
 const uat = () => ({ nume:'UAT TEST', primarie_adresa:'Str. Principală nr. 1', sesiune_zi1:'2026-11-20', sesiune_zi2:'2026-11-21', sesiune_zi3:null })
@@ -50,10 +50,16 @@ describe('valoriImplicitePv', () => {
     expect(p.locul).toBe('Pe teren, sat Satu Test, UAT UAT TEST')
   })
   it('obiecții din răspuns -> bifa „cu obiecții” + textul; fără text nu se bifează', () => {
-    const p = valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_cu_obiectii', obiectii_text:'  Gard nerefăcut ' } })
-    expect(p).toMatchObject({ obiectii_redare:true, obiectii_text:'Gard nerefăcut' })
+    // Jakarinos #990 P2-3: textul se copiază exact (cu spațiile / liniile de la capete), plin() doar validează
+    const text = '\n  Gard nerefăcut \n'
+    const p = valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_cu_obiectii', obiectii_text:text } })
+    expect(p).toMatchObject({ obiectii_redare:true, obiectii_text:text })
     expect(valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_cu_obiectii', obiectii_text:' ' } })).not.toHaveProperty('obiectii_redare')
     expect(valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'nu_particip_fara_obiectii' } })).not.toHaveProperty('obiectii_redare')
+  })
+  it('constatare pe teren cu obiecții („Gard rupt”) -> mod teren + bifa cu obiecții + textul (Jakarinos #990 P1-1)', () => {
+    const p = valoriImplicitePv({ tip:'A', pv:pvNou(), uat:uat(), parcela:parcela(), raspuns:{ optiune:'constatare_teren', obiectii_text:'Gard rupt' }, laCreare:true })
+    expect(p).toMatchObject({ constatare_mod:'teren', obiectii_redare:true, obiectii_text:'Gard rupt' })
   })
   it('nu suprascrie câmpurile completate; PV final și PV C neatinse; PV B fără mod / răspuns', () => {
     const plin = { ...pvNou(), locul:'Ales', constatare_mod:'teren', lucrari:{ arat:true }, stare_teren:{ alta:'X' }, obiectii_redare:true, obiectii_text:'Ob' }
@@ -91,5 +97,50 @@ describe('PV A generat din valorile implicite, fără tastare (fixture complet)'
     expect(r.campuri.bifa_st_nivelat).toBe(BIFA_DA)
     expect(r.campuri.bifa_nivelare).toBe(BIFA_DA)
     expect(r.campuri.bifa_fara_obiectii).toBe(BIFA_DA)
+  })
+})
+
+// Jakarinos #990 P1-2: sursele implicitelor se verifică între citire și salvare
+describe('salveazaImpliciteLaCreare — prospețimea surselor', () => {
+  const sursa = (u = uat(), raspuns = { id:'r1', seq:1, optiune:'particip', zi_sesiune_aleasa:'2026-11-20' }) =>
+    ({ pv:pvNou(), uat:{ id:'u1', versiune:1, ...u }, parcela:{ id:'p1', ...parcela() }, raspuns })
+  const scrieMock = () => { const apeluri = []; return { apeluri, scrie: async (pv, patch) => { apeluri.push(patch); return { ...pv, ...patch } } } }
+
+  it('surse neschimbate -> salvează fără confirmare', async () => {
+    const s = sursa(), { apeluri, scrie } = scrieMock(), confirma = async () => { throw new Error('nu trebuia') }
+    const r = await salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => s, scrie, confirma })
+    expect(r.stare).toBe('salvat')
+    expect(r.schimbatDupa).toBe(false)
+    expect(apeluri[0].data_pv).toBe('2026-11-20')
+  })
+  it('ziua de sesiune mutată între citire și salvare -> recalculează și cere confirmare; refuzul nu scrie nimic', async () => {
+    const s = sursa()
+    // UAT-ul mută ziua 1 pe 22.11; ziua aleasă (20.11) nu mai e zi a UAT-ului -> data nu se mai propune
+    const nou = sursa({ ...uat(), sesiune_zi1:'2026-11-22' }); nou.uat.versiune = 2
+    const { apeluri, scrie } = scrieMock(), cerute = []
+    const r = await salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => nou, scrie, confirma: async p => { cerute.push(p); return false } })
+    expect(r.stare).toBe('renuntat')
+    expect(apeluri).toEqual([])
+    expect(cerute[0]).not.toHaveProperty('data_pv')
+  })
+  it('răspuns nou între citire și salvare -> la confirmare se scriu valorile recalculate, nu cele vechi', async () => {
+    const s = sursa()
+    const nou = sursa(uat(), { id:'r2', seq:2, optiune:'constatare_teren', obiectii_text:'Gard rupt' })
+    const { apeluri, scrie } = scrieMock()
+    const r = await salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => nou, scrie, confirma: async () => true })
+    expect(r.stare).toBe('salvat')
+    expect(apeluri[0]).toMatchObject({ constatare_mod:'teren', obiectii_redare:true, obiectii_text:'Gard rupt' })
+    expect(apeluri[0]).not.toHaveProperty('data_pv')
+  })
+  it('schimbare apărută după UPDATE -> raportată (schimbatDupa), nu ascunsă', async () => {
+    const s = sursa(), dupa = sursa(); dupa.uat.versiune = 3
+    let n = 0
+    const r = await salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => (n++ === 0 ? s : dupa), scrie: scrieMock().scrie, confirma: async () => true })
+    expect(r).toMatchObject({ stare:'salvat', schimbatDupa:true })
+  })
+  it('PV schimbat la recitire -> eroare, fără scriere', async () => {
+    const s = sursa(), alt = { ...sursa(), pv:{ ...pvNou(), id:'pv2' } }, { apeluri, scrie } = scrieMock()
+    await expect(salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => alt, scrie, confirma: async () => true })).rejects.toThrow('PV schimbat')
+    expect(apeluri).toEqual([])
   })
 })
