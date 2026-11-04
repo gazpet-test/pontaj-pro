@@ -28,7 +28,7 @@ BEGIN
     RAISE EXCEPTION '20261130l revenire: stare finala gresita';
   END IF;
   -- r7: fn_red_numar_document trebuie să fie EXACT corpul pus de migrare (gardă 'C'), ca restaurarea de mai jos să plece dintr-o stare cunoscută
-  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure) IS DISTINCT FROM '1de3107ee7139a8bdf9918be015171fd' THEN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure) IS DISTINCT FROM '002a8dbb14f9a69db48d0b4c0428fef0' THEN
     RAISE EXCEPTION '20261130l revenire REFUZATA: fn_red_numar_document nu mai e corpul migrarii (schimbat intre timp)' USING ERRCODE = '55000';
   END IF;
   RAISE NOTICE '20261130l revenire: fn_red_convocare_rezerva + garda rezervarii scoase';

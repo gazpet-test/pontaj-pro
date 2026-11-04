@@ -47,28 +47,44 @@ Locul: tab-ul UAT-uri (două linii în `Redari.jsx`: importul și randarea tab-u
 8. **Erori per rând**: notate (cu numărul rezervat, dacă e cazul), lotul continuă. Planul se invalidează din clipa în care pornește execuția
    (nu se mai poate reexecuta), rezultatele rămân pentru **„Descarcă din nou zip-ul”** dacă arhiva eșuează.
 
-## Protecția în BD (migrarea 20261130l, r5–r7)
-- `trg_red_convocari_garda_rezerva` (BEFORE INSERT, primul): orice INSERT în `red_convocari` cere `gazpet.convocare_rezerva = 'activ'`, valoare
-  pusă DOAR de clauza statică `SET` a lui `fn_red_convocare_rezerva` (proconfig, valabilă numai pe durata apelului) → altfel RD004.
+## Protecția în BD (migrarea 20261130l, r5–r9)
+- **Mecanismul**: instrucțiunea statică `SET LOCAL gazpet.convocare_rezerva = 'activ'` din CORPUL lui `fn_red_convocare_rezerva`, chiar înainte de
+  număr + INSERT; durată tranzacțională, dezactivată explicit (`'inactiv'`) imediat după INSERT, anulată automat la rollback. NU clauză SET /
+  proconfig pe funcție (pe Supabase `postgres` nu e superuser, clauza pe un GUC placeholder e refuzată la CREATE — reprodus local cu postgres
+  NOSUPERUSER). Postcondiția migrării (și TEST1b din DRY-ul de producție): în toate schemele non-sistem, singura funcție care SCRIE marcajul
+  (SET [LOCAL] / set_config) e `fn_red_convocare_rezerva`; mutant „a doua funcție cu SET LOCAL pe marcaj” → migrarea refuză.
+- `trg_red_convocari_garda_rezerva` (BEFORE INSERT, primul): orice INSERT în `red_convocari` cere marcajul `'activ'` → altfel RD004. Garda doar citește.
 - `fn_red_numar_document('C')` cere același marcaj, ÎNAINTE de increment → altfel RD005 (un tab vechi nu mai consumă numere fără convocare).
-  Celelalte tipuri (AU / PVA / PVB / PVC) neschimbate; revenirea restaurează corpul live exact.
+  Celelalte tipuri (AU / PVA / PVB / PVC) neschimbate; doar citește marcajul.
 - **Limita** (Copilot r2 P2-02): marcajul e o poartă de protocol, nu o dovadă nefalsificabilă. Ține cât timp rolurile aplicației nu au cale de
-  SQL arbitrar și nicio funcție expusă nu scrie GUC-uri — invariantă verificată fail-closed de poarta 0e (`scripts/control_0e.sql`) la fiecare
-  livrare. O conexiune SQL directă cu drepturi de rol nu are modelul de încredere al unui client PostgREST.
+  SQL arbitrar și nicio funcție expusă nu scrie GUC-uri. Poarta 0e (`scripts/control_0e.sql`) verifică fail-closed funcțiile expuse, dar NU
+  detectează `SET LOCAL` pe un parametru oarecare — verificarea explicită din postcondiție / TEST1b o acoperă pentru acest marcaj. O conexiune SQL
+  directă cu drepturi de rol nu are modelul de încredere al unui client PostgREST.
 - „Reia” (fișier deja arhivat) cere doar identitatea, convocarea activă / neexpediată și aceeași cale; nu gărzile de generare nouă.
 
 ## Procedura de livrare (ordinea contează)
 1. **Merge #989 + deploy client ÎNTÂI** (Vercel). Clientul nou fără migrare: RPC-ul lipsește (PGRST202) → generarea nouă refuză pe ambele căi cu
    „protecția la concurență nu e activă — aplicați migrarea 20261130l”; **nu consumă niciun număr** (nu mai cheamă `fn_red_numar_document` direct).
    Descărcarea / regenerarea cu același număr merg în continuare.
-2. **Apoi apply 20261130l** (după GO Jak + Copilot și DRY de producție verde, `run_30l_dry.sh`).
-3. **Tab-uri vechi rămase deschise** după apply: `fn_red_numar_document('C')` → RD005 fără consum de număr; INSERT direct → RD004 „reîncarcă pagina”.
-4. Revenire: întâi codul (sau lăsat clientul nou — refuză fără consum), apoi `supabase/revenire/20261130l_..._ROLLBACK.sql`.
+2. **Suspendare scurtă a generării C** între deploy și confirmarea apply: anunț intern (Redări) „nu generați convocatoare noi până la confirmare”;
+   tab-urile vechi încă deschise ar putea folosi vechea secvență până la apply (după apply sunt refuzate fără consum).
+3. **Apply 20261130l** (după GO Jak + Copilot și DRY de producție verde, `run_30l_dry.sh`).
+4. **Verificări explicite după apply** (pe TEST-RAZVAN):
+   - rezervare prin RPC (un convocator nou din aplicație) — DOAR dacă gărzile de conținut ale proiectului trec (altfel se verifică doar
+     refuzul RD002, fără rezervare);
+   - număr C cerut direct (`fn_red_numar_document('C')`, ca un tab vechi) → RD005, contorul C neschimbat;
+   - INSERT direct în `red_convocari` → RD004.
+   Abia apoi se ridică suspendarea.
+5. **Tab-uri vechi rămase deschise** după apply: număr C → RD005 fără consum; INSERT direct → RD004 „reîncarcă pagina”.
+6. Revenire: întâi codul (sau lăsat clientul nou — refuză fără consum), apoi `supabase/revenire/20261130l_..._ROLLBACK.sql`.
 
 ## Ce NU face
 - nu marchează nimic expediat, nu trimite nimic (poștă, SMS, e-mail);
-- nu schimbă calea individuală (ModalConvocator), RLS-ul sau numerotarea; migrarea 20261130l doar adaugă funcția (revenire = DROP FUNCTION);
-- nu generează pentru alt canal decât poșta.
+- nu schimbă RLS-ul, politicile sau drepturile. Migrarea 20261130l **adaugă** RPC-ul `fn_red_convocare_rezerva` + funcția și triggerul de gardă
+  (`fn_red_convocari_rezerva_garda` / `trg_red_convocari_garda_rezerva`) și **modifică** `fn_red_numar_document` (garda pe tipul 'C');
+  revenirea scoate RPC-ul, garda și triggerul și restaurează corpul vechi al lui `fn_red_numar_document` (md5 b943…);
+- generarea în masă e doar pe poștă (calea individuală păstrează alegerea canalului, tot prin RPC).
+
 
 ## Teste
 - vitest (client fals, fără BD): gărzi, idempotență, 201 rânduri / două rulări, limita doar pe „nou”, fără fallback (blocat la „Verifică”,

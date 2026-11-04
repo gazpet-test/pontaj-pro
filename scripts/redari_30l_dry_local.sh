@@ -81,6 +81,7 @@ mutant POLITICA_IN_PLUS "CREATE POLICY red_convocari_extra ON public.red_convoca
 mutant DREPT_TABEL "GRANT DELETE ON public.red_convocari TO authenticated;" "drepturile pe tabelele"
 mutant DREPT_COLOANA "REVOKE UPDATE (sters_la) ON public.red_parcele FROM authenticated;" "drepturile pe tabelele"
 mutant TRIGGER_DEFINER "ALTER FUNCTION public.fn_red_convocari_posta_garda() SECURITY DEFINER;" "lantul de functii"
+mutant A_DOUA_FUNCTIE_MARCAJ "CREATE FUNCTION public.mutant_marcaj() RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN SET LOCAL gazpet.convocare_rezerva = 'activ'; END \$f\$;" "e scris si de alte functii"
 mutant LOCK_UAT "CREATE OR REPLACE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$ BEGIN RETURN; END \$f\$;" "lantul de functii"
 [ "$REZ" = "0" ] && echo "DRY_LOCAL=VERDE" || echo "DRY_LOCAL=ROSU"
 exit $REZ

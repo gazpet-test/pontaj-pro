@@ -79,6 +79,20 @@ DO $t$ BEGIN
   RAISE NOTICE 'TEST1 OK';
 END $t$;
 
+-- TEST1b (r9): în toate schemele non-sistem, singura funcție care SCRIE marcajul gazpet.convocare_rezerva (SET [LOCAL] / set_config)
+-- e fn_red_convocare_rezerva; garda INSERT și fn_red_numar_document doar îl citesc (poarta 0e nu detectează SET LOCAL)
+DO $t$ BEGIN
+  IF (SELECT array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text COLLATE "C") FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_toast'
+         AND (p.prosrc ~* 'set\s+(local\s+|session\s+)?gazpet\.convocare_rezerva' OR p.prosrc ~* 'set_config\s*\(\s*''gazpet\.convocare_rezerva'))
+     IS DISTINCT FROM ARRAY['fn_red_convocare_rezerva(uuid,boolean,text)']::text[]
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocari_rezerva_garda()'::regprocedure AND prosrc ILIKE '%current_setting(''gazpet.convocare_rezerva''%')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure AND prosrc ILIKE '%current_setting(''gazpet.convocare_rezerva''%') THEN
+    RAISE EXCEPTION 'TEST1b FAIL: marcajul e scris de alte functii / garzile nu-l citesc';
+  END IF;
+  RAISE NOTICE 'TEST1b OK (marcaj scris doar de fn_red_convocare_rezerva)';
+END $t$;
+
 -- TEST2: refuzuri inainte de orice scriere
 SELECT pg_temp.r30l_ca(NULL, 'anon');
 DO $t$ DECLARE r text := pg_temp.r30l_stare(format('SELECT * FROM public.fn_red_convocare_rezerva(%L::uuid)', pg_temp.r30l_g('det'))); BEGIN

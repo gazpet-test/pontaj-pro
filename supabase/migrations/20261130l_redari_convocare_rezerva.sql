@@ -201,8 +201,9 @@ BEGIN
   END IF;
   CASE p_tip
     WHEN 'C' THEN
-      -- 20261130l: numarul C se rezerva DOAR din fn_red_convocare_rezerva (marcajul static din proconfig-ul ei); un tab vechi
-      -- (numar separat + INSERT direct) e refuzat AICI, inainte de increment: niciun numar consumat fara convocare.
+      -- 20261130l: numarul C se rezerva DOAR din fn_red_convocare_rezerva: marcajul e pus de instructiunea statica SET LOCAL din corpul ei
+      -- (durata tranzactionala, dezactivat explicit dupa INSERT, anulat la rollback); aici doar se CITESTE. Un tab vechi (numar separat +
+      -- INSERT direct) e refuzat AICI, inainte de increment: niciun numar consumat fara convocare.
       IF current_setting('gazpet.convocare_rezerva', true) IS DISTINCT FROM 'activ' THEN
         RAISE EXCEPTION 'redari: numarul C se rezerva doar prin fn_red_convocare_rezerva. Reincarca pagina (Ctrl+Shift+R) si incearca din nou.' USING ERRCODE = 'RD005';
       END IF;
@@ -311,7 +312,9 @@ BEGIN
   END IF;
   RETURN NEW;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_convocari_rezerva_garda() IS 'Redări: INSERT în red_convocari doar din fn_red_convocare_rezerva (clauza ei statică SET gazpet.convocare_rezerva = activ, valabilă doar pe durata apelului); RD004 altfel. Migrarea 20261130l.';
+COMMENT ON FUNCTION public.fn_red_convocari_rezerva_garda() IS 'Redări: INSERT în red_convocari doar din fn_red_convocare_rezerva — marcajul gazpet.convocare_rezerva = activ '
+  'e pus de instrucțiunea statică SET LOCAL din corpul RPC-ului (durată tranzacțională, dezactivat explicit după INSERT, anulat la rollback; '
+  'nu clauză SET / proconfig). Garda doar citește marcajul; RD004 altfel. Migrarea 20261130l.';
 REVOKE ALL ON FUNCTION public.fn_red_convocari_rezerva_garda() FROM PUBLIC, anon, authenticated, service_role;
 CREATE TRIGGER trg_red_convocari_garda_rezerva BEFORE INSERT ON public.red_convocari FOR EACH ROW EXECUTE FUNCTION public.fn_red_convocari_rezerva_garda();
 
@@ -321,7 +324,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language g ON g.oid = p.prolang
                   WHERE p.oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure AND g.lanname = 'plpgsql' AND p.prosecdef AND p.provolatile = 'v'
                     AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres'
-                    AND md5(p.prosrc) = '1de3107ee7139a8bdf9918be015171fd')
+                    AND md5(p.prosrc) = '002a8dbb14f9a69db48d0b4c0428fef0')
      OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure)
        IS DISTINCT FROM ARRAY['authenticated=X/postgres', 'postgres=X/postgres', 'service_role=X/postgres']::text[] THEN
     RAISE EXCEPTION '20261130l: fn_red_numar_document nu are corpul / setarile asteptate dupa garda C (md5=%)', (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure);
@@ -334,6 +337,14 @@ BEGIN
   IF (SELECT array_agg(p.oid::regprocedure::text) FROM pg_proc p, unnest(p.proconfig) c WHERE c LIKE 'gazpet.convocare_rezerva=%')
        IS NOT NULL THEN
     RAISE EXCEPTION '20261130l: marcajul gazpet.convocare_rezerva apare in proconfig-ul unei functii';
+  END IF;
+  -- r9 (Jak r6 / Copilot r3): în TOATE schemele non-sistem, SINGURA funcție care SCRIE marcajul (SET [LOCAL] / set_config) e
+  -- fn_red_convocare_rezerva; garda și fn_red_numar_document doar îl citesc. (Poarta 0e nu detectează SET LOCAL — verificarea de aici o acoperă.)
+  IF (SELECT array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text COLLATE "C") FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_toast'
+         AND (p.prosrc ~* 'set\s+(local\s+|session\s+)?gazpet\.convocare_rezerva' OR p.prosrc ~* 'set_config\s*\(\s*''gazpet\.convocare_rezerva'))
+     IS DISTINCT FROM ARRAY['fn_red_convocare_rezerva(uuid,boolean,text)']::text[] THEN
+    RAISE EXCEPTION '20261130l: marcajul gazpet.convocare_rezerva e scris si de alte functii decat fn_red_convocare_rezerva';
   END IF;
   IF (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure)
        IS DISTINCT FROM ARRAY['authenticated=X/postgres', 'postgres=X/postgres']::text[] THEN
