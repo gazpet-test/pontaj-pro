@@ -4,7 +4,8 @@
 -- puse de 30g (altfel cineva le-a schimbat intre timp -> refuz), iar indexurile exact cele create de 30g. Lock-uri in ordine alfabetica (L06 / L14).
 -- red_corespondenta_mailuri_sel (20261130f) se readuce doar daca tabelul exista (simetric cu migrarea). Daca 30f a fost aplicata DUPA 30g,
 -- politica ei e inca in forma veche (creata asa de 30f): garda accepta DOAR pe acea politica forma veche sau noua (ambele legitime), restul strict.
--- Testat local (PG 17.6, harness cu stub-uri): apply -> revenire -> re-apply, cu si fara red_corespondenta_mailuri.
+-- Testat local (PG 17.6, harness cu stub-uri): apply -> revenire -> re-apply, cu si fara red_corespondenta_mailuri, refuz la a doua revenire si la drift.
+-- Politicile / DROP INDEX stau intr-un bloc DO care reverifica garda + tabela temp a preflight-ului (refuz daca e rulat in afara runner-ului).
 DO $rev$
 DECLARE v_dif text[]; v_n integer;
 BEGIN
@@ -100,66 +101,71 @@ BEGIN
 END $rev$;
 SELECT public.fn_red_storage_verifica_redari(true);
 
--- politicile: inapoi la forma din 04.11.2026 (apel direct, per rand)
-ALTER POLICY red_convocari_ins ON public.red_convocari WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_convocari_sel ON public.red_convocari USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_convocari_upd ON public.red_convocari USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_corespondenta_ins ON public.red_corespondenta WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_corespondenta_sel ON public.red_corespondenta USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_corespondenta_upd ON public.red_corespondenta USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_corespondenta_fisiere_ins ON public.red_corespondenta_fisiere WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_corespondenta_fisiere_sel ON public.red_corespondenta_fisiere USING (public.fn_red_nivel() IS NOT NULL);
-DO $mail$
+DO $apl$
 BEGIN
+  -- aceeasi garda ca preflight-ul + dovada ca preflight-ul a rulat in ACEEASI tranzactie (tabela temp a lui): rulat in afara runner-ului
+  -- (autocommit, fara ON_ERROR_STOP), blocul refuza in loc sa aplice politicile / indexurile fara verificari
+  IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261130g', true) IS DISTINCT FROM 'REDARI_RLS_INITPLAN_SCOASA:' || txid_current() OR to_regclass('pg_temp.r30g_rev_pol') IS NULL THEN
+    RAISE EXCEPTION '20261130g revenire: garda / preflight lipsa in aceasta tranzactie';
+  END IF;
+-- politicile: inapoi la forma din 04.11.2026 (apel direct, per rand)
+  ALTER POLICY red_convocari_ins ON public.red_convocari WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_convocari_sel ON public.red_convocari USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_convocari_upd ON public.red_convocari USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_corespondenta_ins ON public.red_corespondenta WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_corespondenta_sel ON public.red_corespondenta USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_corespondenta_upd ON public.red_corespondenta USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_corespondenta_fisiere_ins ON public.red_corespondenta_fisiere WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_corespondenta_fisiere_sel ON public.red_corespondenta_fisiere USING (public.fn_red_nivel() IS NOT NULL);
   IF to_regclass('public.red_corespondenta_mailuri') IS NOT NULL THEN   -- simetric cu migrarea
     ALTER POLICY red_corespondenta_mailuri_sel ON public.red_corespondenta_mailuri USING (public.fn_red_nivel() IS NOT NULL);
   END IF;
-END $mail$;
-ALTER POLICY red_detinatori_ins ON public.red_detinatori WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_detinatori_sel ON public.red_detinatori USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_detinatori_upd ON public.red_detinatori USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_contact_ins ON public.red_detinatori_contact WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_contact_sel ON public.red_detinatori_contact USING (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_contact_upd ON public.red_detinatori_contact USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_token_sel ON public.red_detinatori_token USING (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_import_loturi_ins ON public.red_import_loturi WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_import_loturi_sel ON public.red_import_loturi USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_import_loturi_upd ON public.red_import_loturi USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_jurnal_sel ON public.red_jurnal
-  USING (public.fn_red_nivel() IS NOT NULL AND (tabela NOT IN ('red_detinatori_contact', 'red_raspunsuri_meta') OR public.fn_red_nivel() IN ('admin', 'editor')));
-ALTER POLICY red_loturi_plicuire_sel ON public.red_loturi_plicuire USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_loturi_plicuire_upd ON public.red_loturi_plicuire USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_numere_sel ON public.red_numere USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_parcele_ins ON public.red_parcele WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_parcele_sel ON public.red_parcele USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_parcele_upd ON public.red_parcele USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_plicuri_sel ON public.red_plicuri USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_plicuri_upd ON public.red_plicuri USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_pv_ins ON public.red_procese_verbale WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_pv_sel ON public.red_procese_verbale USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_pv_upd ON public.red_procese_verbale USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_proiecte_ins ON public.red_proiecte WITH CHECK (public.fn_red_nivel() = 'admin');
-ALTER POLICY red_proiecte_sel ON public.red_proiecte USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_proiecte_upd ON public.red_proiecte USING (public.fn_red_nivel() = 'admin') WITH CHECK (public.fn_red_nivel() = 'admin');
-ALTER POLICY red_raspunsuri_ins ON public.red_raspunsuri WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_raspunsuri_sel ON public.red_raspunsuri USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_raspunsuri_upd ON public.red_raspunsuri USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_meta_ins ON public.red_raspunsuri_meta WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_meta_sel ON public.red_raspunsuri_meta USING (public.fn_red_nivel() IN ('admin', 'editor'));
-ALTER POLICY red_uat_ins ON public.red_uat WITH CHECK (public.fn_red_nivel() = 'admin');
-ALTER POLICY red_uat_sel ON public.red_uat USING (public.fn_red_nivel() IS NOT NULL);
-ALTER POLICY red_uat_upd ON public.red_uat USING (public.fn_red_nivel() = 'admin') WITH CHECK (public.fn_red_nivel() = 'admin');
+  ALTER POLICY red_detinatori_ins ON public.red_detinatori WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_detinatori_sel ON public.red_detinatori USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_detinatori_upd ON public.red_detinatori USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_contact_ins ON public.red_detinatori_contact WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_contact_sel ON public.red_detinatori_contact USING (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_contact_upd ON public.red_detinatori_contact USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_token_sel ON public.red_detinatori_token USING (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_import_loturi_ins ON public.red_import_loturi WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_import_loturi_sel ON public.red_import_loturi USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_import_loturi_upd ON public.red_import_loturi USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_jurnal_sel ON public.red_jurnal
+    USING (public.fn_red_nivel() IS NOT NULL AND (tabela NOT IN ('red_detinatori_contact', 'red_raspunsuri_meta') OR public.fn_red_nivel() IN ('admin', 'editor')));
+  ALTER POLICY red_loturi_plicuire_sel ON public.red_loturi_plicuire USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_loturi_plicuire_upd ON public.red_loturi_plicuire USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_numere_sel ON public.red_numere USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_parcele_ins ON public.red_parcele WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_parcele_sel ON public.red_parcele USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_parcele_upd ON public.red_parcele USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_plicuri_sel ON public.red_plicuri USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_plicuri_upd ON public.red_plicuri USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_pv_ins ON public.red_procese_verbale WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_pv_sel ON public.red_procese_verbale USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_pv_upd ON public.red_procese_verbale USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_proiecte_ins ON public.red_proiecte WITH CHECK (public.fn_red_nivel() = 'admin');
+  ALTER POLICY red_proiecte_sel ON public.red_proiecte USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_proiecte_upd ON public.red_proiecte USING (public.fn_red_nivel() = 'admin') WITH CHECK (public.fn_red_nivel() = 'admin');
+  ALTER POLICY red_raspunsuri_ins ON public.red_raspunsuri WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_raspunsuri_sel ON public.red_raspunsuri USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_raspunsuri_upd ON public.red_raspunsuri USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_meta_ins ON public.red_raspunsuri_meta WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_meta_sel ON public.red_raspunsuri_meta USING (public.fn_red_nivel() IN ('admin', 'editor'));
+  ALTER POLICY red_uat_ins ON public.red_uat WITH CHECK (public.fn_red_nivel() = 'admin');
+  ALTER POLICY red_uat_sel ON public.red_uat USING (public.fn_red_nivel() IS NOT NULL);
+  ALTER POLICY red_uat_upd ON public.red_uat USING (public.fn_red_nivel() = 'admin') WITH CHECK (public.fn_red_nivel() = 'admin');
 
 
-DROP INDEX public.idx_red_corespondenta_aprobat_fisier;
-DROP INDEX public.idx_red_import_loturi_proiect;
-DROP INDEX public.idx_red_loturi_plicuire_proiect;
-DROP INDEX public.idx_red_loturi_plicuire_semnatar1;
-DROP INDEX public.idx_red_loturi_plicuire_semnatar2;
-DROP INDEX public.idx_red_plicuri_uat;
-DROP INDEX public.idx_red_uat_responsabil;
-DROP INDEX public.idx_sms_loturi_proiect;
-DROP INDEX public.idx_sms_loturi_uat;
+  DROP INDEX public.idx_red_corespondenta_aprobat_fisier;
+  DROP INDEX public.idx_red_import_loturi_proiect;
+  DROP INDEX public.idx_red_loturi_plicuire_proiect;
+  DROP INDEX public.idx_red_loturi_plicuire_semnatar1;
+  DROP INDEX public.idx_red_loturi_plicuire_semnatar2;
+  DROP INDEX public.idx_red_plicuri_uat;
+  DROP INDEX public.idx_red_uat_responsabil;
+  DROP INDEX public.idx_sms_loturi_proiect;
+  DROP INDEX public.idx_sms_loturi_uat;
+END $apl$;
 
 DO $post$
 DECLARE v_dif text[];
