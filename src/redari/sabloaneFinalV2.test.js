@@ -95,11 +95,19 @@ describe('șabloanele Final_v2', () => {
     expect(paragrafe).toContain('În lipsa participării sau a unui răspuns, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului.')
   })
 
-  it('adresa UAT: termenul din text = TERMEN_CONVOCARE_ZILE, un singur rând-șablon, fără antet și fără „online”', async () => {
-    const { xml, text } = await citeste('adresa_uat')
+  it('adresa UAT: termenul din text = TERMEN_CONVOCARE_ZILE, un singur rând-șablon, antetul firmei din convocator și fără „online”', async () => {
+    const { xml, text, paragrafe } = await citeste('adresa_uat')
     expect(text).toContain(`(cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de prima sesiune)`)
     expect(xml.match(/\{\{rand\.nr\}\}/g)).toHaveLength(1)
-    expect(text).not.toMatch(/contract_nr|proiect_denumire|online la/)
+    expect(text).not.toMatch(/online la/)
+    // excepția (9), DE CONFIRMAT (claude#026 întrebarea 1): antetul = exact primul paragraf din convocator, la începutul documentului
+    const { paragrafe: conv } = await citeste('convocator')
+    expect(conv[0]).toContain('Lider al Asocierii')
+    expect(paragrafe[0]).toBe(conv[0])
+    expect(paragrafe[0]).toBe('GAZPET INSTAL S.R.L. · Str. Fluturilor nr. 34, Ploiești, jud. Prahova · CUI RO 22029920 · Tel./Fax 0244 435 005 · office@gazpet.ro'
+      + 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}')
+    expect(paragrafe[1]).toMatch(/^ADRESĂ către Primăria \{\{uat\}\}/)
+    expect(text.match(/Lider al Asocierii/g)).toHaveLength(1)
     expect(text).toContain('GAZPET INSTAL S.R.L. – {{reprezentant_gazpet}}')
   })
 })

@@ -14,6 +14,8 @@
 //    (7) convocatorul: margini, spațiere, interlinie și corp de literă strânse, ca fața să încapă pe o pagină A4 (tot 03.11);
 //    (8) convocatorul pleacă prin poștă doar cu codul QR: adresa web de răspuns nu se mai tipărește, fraza trimite doar la QR
 //    (decizia Răzvan 03.11 seara; singura reformulare de text juridic, declarată în CONVOCATOR_DOAR_QR).
+//    (9) adresa UAT primește antetul firmei din convocator (primele două paragrafe din Model_1, cu contractul și proiectul
+//    parametrizate) — varianta implicită pentru claude#026 întrebarea 1, DE CONFIRMAT de Răzvan (04.11).
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -256,6 +258,33 @@ const CONVOCATOR_DOAR_QR = {
 
 const ANTET_VECHI ='Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. 30/22.01.2025 · Conductă de transport gaze naturale Prunișor–Orșova–Băile Herculane–Jupa, LOT 1'
 const ANTET_NOU = 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}'
+// excepția (9), varianta implicită claude#026 întrebarea 1 (DE CONFIRMAT de Răzvan, 04.11): Model_4 din Final_v2 nu mai are
+// antetul firmei; se repun în adresa UAT, la începutul documentului, EXACT primele două paragrafe din Model_1 (convocator):
+// paragraful antetului (denumire, adresă, CUI, telefon, e-mail + „Lider al Asocierii …”, cu contractul și proiectul
+// parametrizate ca în convocator) și paragraful gol de după el. Nicio dată nouă: textul și formatarea sunt ale convocatorului.
+const ANTET_FIRMA = 'GAZPET INSTAL S.R.L. · Str. Fluturilor nr. 34, Ploiești, jud. Prahova · CUI RO 22029920 · Tel./Fax 0244 435 005 · office@gazpet.ro'
+async function antetDinConvocator() {
+  const zip = await JSZip.loadAsync(readFileSync(resolve(REF, 'Model_1_Convocator_proprietar_v6_final.docx')), { createFolders: false })
+  const doc = await zip.file('word/document.xml').async('string')
+  const i = doc.indexOf('<w:body>')
+  asigura(i >= 0 && doc.indexOf('<w:body>', i + 1) < 0, 'Model_1: <w:body> lipsă sau multiplu')
+  const RX_P = /<w:p(?:\s[^>]*)?\/>|<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>/])[\s\S])*?<\/w:p>/y
+  RX_P.lastIndex = i + '<w:body>'.length
+  const p1 = RX_P.exec(doc)?.[0]
+  const p2 = RX_P.exec(doc)?.[0]
+  asigura(p1 && p2, 'Model_1: primele două paragrafe ale corpului nu se pot citi')
+  const texte = p => [...p.matchAll(RX_WT)].map(m => m[1])
+  asigura(JSON.stringify(texte(p1)) === JSON.stringify([esc(ANTET_FIRMA), esc(ANTET_VECHI)]), 'Model_1: primul paragraf nu mai e antetul firmei așteptat')
+  asigura(texte(p2).length === 0 && !/<w:r[\s>]/.test(p2), 'Model_1: paragraful de după antet nu mai e gol')
+  return inlocuiesteWt(p1 + p2, ANTET_VECHI, ANTET_NOU)
+}
+function antetLaInceput(xml, antet) {
+  asigura(!xml.includes('Lider al Asocierii'), 'adresa UAT: modelul are deja antetul firmei — excepția (9) nu mai e necesară')
+  const parti = xml.split('<w:body>')
+  asigura(parti.length === 2, 'adresa UAT: <w:body> lipsă sau multiplu')
+  return `${parti[0]}<w:body>${antet}${parti[1]}`
+}
+const ANTET_CONVOCATOR = await antetDinConvocator()
 const NR_LOC = ['Nr. ________ / ___.___.2026        Locul încheierii: ______________________', 'Nr. {{nr_pv}} / {{data_pv}}        Locul încheierii: {{locul}}']
 const PARCELA_7 = ['{{uat}}', '{{sat}} / {{tarla}}', '{{nr_cadastral}}', '{{poz_hg}}', '{{suprafata}}', '{{categoria_folosinta}}', '{{tronson}}']
 const NCD = 'Nume, calitate, data'
@@ -373,6 +402,8 @@ const RETETE = {
   'adresa_uat.docx': {
     model: 'Model_4_Adresa_UAT_convocare_afisare_PV_v5_finala.docx',
     pasi: x => {
+      // excepția (9): antetul firmei, copiat din convocator (DE CONFIRMAT, claude#026 întrebarea 1)
+      x = antetLaInceput(x, ANTET_CONVOCATOR)
       x = inlocuiesteWt(x, 'ADRESĂ către Primăria ______________________', 'ADRESĂ către Primăria {{uat}}')
       x = inlocuiesteWt(x, 'Nr. ________ / ___.___.2026', ['Nr. {{nr_document}} / {{data}}', 'Nr. {{afisare_pv_nr}} / {{afisare_data_start}}'])
       x = inlocuiesteWt(x, 'Către: Primăria comunei ______________________, jud. Mehedinți', 'Către: Primăria comunei {{uat}}, jud. {{judet}}')

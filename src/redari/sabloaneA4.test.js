@@ -20,6 +20,12 @@ const TEXT_INAINTE = {
 const SCHIMBARI_TEXT = {
   convocator: [[' de la adresa {{link}} (sau scanând codul QR de mai jos)', ', scanând cu telefonul codul QR de mai jos']],
 }
+// Text ADĂUGAT la începutul documentului (excepția (9) din SABLOANE.md §1, 04.11, DE CONFIRMAT — claude#026 întrebarea 1):
+// antetul firmei din convocator, repus pe adresa UAT. Scos de la început, textul trebuie să dea amprenta de dinainte.
+const ADAOS_INCEPUT = {
+  adresa_uat: 'GAZPET INSTAL S.R.L. · Str. Fluturilor nr. 34, Ploiești, jud. Prahova · CUI RO 22029920 · Tel./Fax 0244 435 005 · office@gazpet.ro'
+    + 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}',
+}
 // A4 în twips (210 × 297 mm; 1 mm = 56,69 twips)
 const A4 = { w: 11906, h: 16838 }
 const CM = 567
@@ -72,6 +78,12 @@ describe('șabloanele pe A4', () => {
       expect(t.split(dupa).length - 1).toBe(1)
       expect(t).not.toContain(inainte)
       t = t.replace(dupa, () => inainte)
+    }
+    const adaos = ADAOS_INCEPUT[nume]
+    if (adaos) {
+      expect(t.startsWith(adaos)).toBe(true)
+      expect(t.split(adaos).length - 1).toBe(1)
+      t = t.slice(adaos.length)
     }
     const [lungime, sha] = TEXT_INAINTE[nume]
     expect(t.length).toBe(lungime)

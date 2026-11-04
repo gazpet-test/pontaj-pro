@@ -732,10 +732,11 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
 }
 
 // Adresa UAT (Model 4): lista este comparată cu șablonul real în docx.test.js.
-// Final_v2 (03.11.2026): modelul nu mai are antetul firmei, deci nici contract_nr / contract_data / proiect_denumire (40 de chei);
-// genereazaAdresaUat le calculează în continuare, iar verificaDateAdresaUat le cere (contractul rămâne obligatoriu pe proiect).
+// Final_v2 (03.11.2026) scosese antetul firmei; din 04.11 (excepția (9), DE CONFIRMAT, claude#026 întrebarea 1) antetul e
+// repus din convocator, deci contract_nr / contract_data / proiect_denumire sunt din nou în șablon (43 de chei).
+// verificaDateAdresaUat cere contractul (obligatoriu pe proiect).
 export const CHEI_ADRESA_UAT = [
-  'uat', 'judet', 'nr_document', 'data',
+  'contract_nr', 'contract_data', 'proiect_denumire', 'uat', 'judet', 'nr_document', 'data',
   'imputernicire_nr', 'imputernicire_data', 'zi1', 'zi2', 'zi3', 'program1', 'program2', 'program3',
   'sate_zi1', 'sate_zi2', 'sate_zi3', 'afisare_data_start', 'afisare_data_end', 'afisare_pv_nr',
   'termen_confirmare', 'contact_nume', 'contact_telefon', 'contact_email', 'reprezentant_tgz',
