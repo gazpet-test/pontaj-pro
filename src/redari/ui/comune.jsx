@@ -1,6 +1,6 @@
 // Redări teren — paletă, stiluri și helper-e comune celor trei ecrane (Registru, Fișa parcelei, Import).
 // Contract: docs/redari/CONTRACT_SCHEMA.md §9. Fără date reale aici.
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { STARI } from '../stare.js'
 
@@ -160,10 +160,24 @@ export function useToast() {
 }
 
 // ─── Modal simplu ───────────────────────────────────────────────────────────
+// Audit D9 (04.11): un click pe fundal nu mai pierde un formular completat. Orice modificare într-un câmp din modal (change capturat pe container)
+// îl marchează „atins”; după aceea fundalul cere confirmare. Modalele fără câmpuri atinse se închid ca înainte. ✕ închide direct (acțiune explicită).
+// Click-ul contează doar dacă și apăsarea a început pe fundal (o selecție de text începută în formular și eliberată afară nu închide).
+export const MESAJ_INCHIDE_MODAL = 'Ai modificări nesalvate în fereastră. O închizi fără să salvezi?'
+export function inchidePeFundal({ atins, confirma, onClose }) {
+  if (atins && !confirma(MESAJ_INCHIDE_MODAL)) return false
+  onClose?.(); return true
+}
 export function Modal({ titlu, onClose, children, latime = 520 }) {
+  const atins = useRef(false), apasatPeFundal = useRef(false)
+  const peFundal = e => {
+    const dinFundal = apasatPeFundal.current && e.target === e.currentTarget
+    apasatPeFundal.current = false
+    if (dinFundal) inchidePeFundal({ atins: atins.current, confirma: m => window.confirm(m), onClose })
+  }
   return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:9000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
-      <div onClick={e => e.stopPropagation()} style={{ ...S.card, width:'100%', maxWidth:latime, maxHeight:'92vh', overflow:'auto', padding:18 }}>
+    <div onMouseDown={e => { apasatPeFundal.current = e.target === e.currentTarget }} onClick={peFundal} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:9000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div onClick={e => e.stopPropagation()} onChangeCapture={() => { atins.current = true }} style={{ ...S.card, width:'100%', maxWidth:latime, maxHeight:'92vh', overflow:'auto', padding:18 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
           <div style={{ fontSize:15, fontWeight:700 }}>{titlu}</div>
           <button onClick={onClose} style={{ ...S.btnX, border:'none', fontSize:16 }} title="Închide">✕</button>

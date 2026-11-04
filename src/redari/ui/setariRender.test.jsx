@@ -24,7 +24,7 @@ vi.mock('../../lib/supabase.js', () => ({ supabase: { from: tabel => {
   return q
 } } }))
 
-import UatEcran, { ModalUat, ModalUatNou } from './UatEcran.jsx'
+import UatEcran, { ModalUat, ModalUatNou, numarParcele } from './UatEcran.jsx'
 import SetariProiect from './SetariProiect.jsx'
 import FormularCampuri from './FormularCampuri.jsx'
 import LegaturaExecutie from './LegaturaExecutie.jsx'
@@ -171,6 +171,10 @@ describe('ecranul UAT', () => {
     expect(h).toContain('UAT nou')
     expect(h).toContain('nicio zi de sesiune cu program')        // u2 nu e gata
     expect(h).toContain('proiect fără nr./dată contract')        // proiectul de test nu are contract
+    expect(h).not.toContain('UAT fără zi de sesiune cu program')   // audit D6: motivul nu mai apare de două ori
+  })
+  it('audit D8: „1 parcelă” la singular', () => {
+    expect(numarParcele(1)).toBe('1 parcelă'); expect(numarParcele(0)).toBe('0 parcele'); expect(numarParcele(12)).toBe('12 parcele')
   })
   it('viewer: fără butonul de UAT nou', () => {
     const h = renderToString(<UatEcran proiect={proiect} uats={uats} nivel="viewer" show={show} onSchimbat={() => {}} />)
