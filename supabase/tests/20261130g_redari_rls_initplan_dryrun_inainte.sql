@@ -1,5 +1,5 @@
 -- DRY 20261130g_redari_rls_initplan — PASUL 1 din 2 („înainte”). Se rulează ÎNAINTEA migrării, în ACEEAȘI tranzacție anulată:
---   BEGIN;
+--   BEGIN ISOLATION LEVEL REPEATABLE READ;     -- OBLIGATORIU: un singur snapshot pentru „înainte” și „după” (pasul 1 refuză altfel)
 --   SELECT set_config('gazpet.livrare_migrare', '20261130g_redari_rls_initplan:' || txid_current(), true);
 --   \i supabase/tests/20261130g_redari_rls_initplan_dryrun_inainte.sql     -- instantaneul „inainte” (forma veche, per rând)
 --   \i supabase/migrations/20261130g_redari_rls_initplan.sql
@@ -23,8 +23,13 @@
 --     independent (nivelul identității din user_module_access / profiles pus în locul funcției);
 --   • timpii (NOTICE) pe interogările REALE ale aplicației, ca viewer: DashboardEcran (red_v_centralizator_uat, red_v_tronson) și ultima pagină
 --     din Registru (red_v_stare_parcela cu count exact + ORDER BY id_parcela, nume + LIMIT 100 OFFSET ultima pagină), pe proiectul cu cele mai
---     multe parcele; md5 pe rezultat agregat cu ORDER BY total (identic înainte / după).
+--     multe parcele; ordine totală înainte de LIMIT (cheile UI + toată linia) și md5 agregat cu ORDER BY (identic înainte / după).
 -- Identități (reale, simulate prin request.jwt.claims + SET LOCAL ROLE): owner, admin non-owner, editor, viewer, fără acces, anon.
+-- Izolare (Jakarinos r3 P2-01): tranzacția DRY e REPEATABLE READ, deci toate citirile (înainte, după, benchmark, alegerea proiectului) văd
+--   ACELAȘI snapshot, luat la prima interogare din acest fișier; scrierile concurente comise între faze nu produc diferențe false. Migrarea nu
+--   cere READ COMMITTED: face doar DDL (ALTER POLICY, CREATE INDEX) și citiri de catalog (care folosesc snapshot de catalog propriu).
+-- Termen (Copilot r3 P2-01): la final se pune gazpet.r30g_buget_ms = 20000 — bugetul CUMULATIV al ferestrei de lock (migrare + verificări),
+--   măsurat de migrare de dinaintea PRIMULUI lock; pasul 2 dă fiecărei instrucțiuni statement_timeout = timpul rămas (pg_temp.r30g_termen).
 CREATE FUNCTION pg_temp.r30g_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -44,6 +49,9 @@ DECLARE own uuid; adm uuid; ed uuid; vw uuid; fara uuid;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130g_redari_rls_initplan:' || txid_current() THEN
     RAISE EXCEPTION 'DRY30g inainte FAIL: garda (ruleaza in tranzactia migrarii, inaintea ei)';
+  END IF;
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'repeatable read' THEN
+    RAISE EXCEPTION 'DRY30g inainte FAIL: tranzactia trebuie sa fie REPEATABLE READ (BEGIN ISOLATION LEVEL REPEATABLE READ), nu %', current_setting('transaction_isolation');
   END IF;
   IF EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.red_uat'::regclass AND pg_get_expr(p.polqual, p.polrelid) LIKE '%SELECT fn_red_nivel%') THEN
     RAISE EXCEPTION 'DRY30g inainte FAIL: politicile sunt deja in forma noua (ruleaza fisierul INAINTEA migrarii)';
@@ -150,6 +158,7 @@ BEGIN
 END $h$;
 
 -- timpi ca viewer pe interogarile reale ale aplicatiei (min din 3; informativ, NOTICE) + md5 pe rezultat (trebuie identic intre faze)
+--   ordine TOTALA inainte de LIMIT / OFFSET: cheile UI-ului + t::text (toata linia vederii), deci setul de randuri e determinist (Copilot r3 P3-01)
 CREATE FUNCTION pg_temp.r30g_cronometreaza(p_faza text) RETURNS void LANGUAGE plpgsql AS $h$
 DECLARE v_vw uuid := (SELECT uid FROM pg_temp.r30g_id WHERE eticheta = 'viewer'); v_pr uuid; o record; k integer; t0 timestamptz;
         v_min numeric; v_ms numeric; v_h text; v_n bigint; v_rez jsonb := '{}'::jsonb;
@@ -159,19 +168,19 @@ BEGIN
   PERFORM pg_temp.r30g_ca(v_vw, 'authenticated');
   FOR o IN SELECT * FROM (VALUES
       ('dashboard_centralizator', format('SELECT md5(coalesce(string_agg(q::text, %L ORDER BY q::text), %L)) FROM (SELECT uat_id, uat3, uat_nume, stare, numar, total_uat, procent_inchise'
-         || ' FROM public.red_v_centralizator_uat WHERE stare IS NOT NULL AND proiect_id = %L ORDER BY uat_id, stare LIMIT 1000) q', '|', '', v_pr)),
+         || ' FROM public.red_v_centralizator_uat t WHERE stare IS NOT NULL AND proiect_id = %L ORDER BY uat_id, stare, t::text LIMIT 1000) q', '|', '', v_pr)),
       ('dashboard_tronson', format('SELECT md5(coalesce(string_agg(q::text, %L ORDER BY q::text), %L)) FROM (SELECT parcela_id, tronson, tip_pv, obiectii_deschise'
-         || ' FROM public.red_v_tronson WHERE proiect_id = %L ORDER BY parcela_id LIMIT 1000) q', '|', '', v_pr)),
+         || ' FROM public.red_v_tronson t WHERE proiect_id = %L ORDER BY parcela_id, t::text LIMIT 1000) q', '|', '', v_pr)),
       ('registru_ultima_pagina', NULL)) AS v(obiect, q) LOOP
     v_min := NULL;
     FOR k IN 1..3 LOOP
       t0 := clock_timestamp();
       IF o.q IS NOT NULL THEN
         EXECUTE o.q INTO v_h;
-      ELSE   -- Registru: count exact + pagina 100 (ORDER BY id_parcela, nume ca UI-ul; + detinator_id = pagina determinista), ultima pagina
+      ELSE   -- Registru: count exact + pagina 100 (ORDER BY id_parcela, nume ca UI-ul; + t::text = ordine totala), ultima pagina
         EXECUTE 'SELECT count(*) FROM public.red_v_stare_parcela WHERE proiect_id = $1' INTO v_n USING v_pr;
-        EXECUTE 'SELECT md5(coalesce(string_agg(q::text, ''|'' ORDER BY q::text), '''')) FROM (SELECT * FROM public.red_v_stare_parcela WHERE proiect_id = $1'
-             || ' ORDER BY id_parcela, nume, detinator_id LIMIT 100 OFFSET $2) q' INTO v_h USING v_pr, greatest(0, ((v_n - 1) / 100) * 100);
+        EXECUTE 'SELECT md5(coalesce(string_agg(q::text, ''|'' ORDER BY q::text), '''')) FROM (SELECT t.* FROM public.red_v_stare_parcela t WHERE proiect_id = $1'
+             || ' ORDER BY id_parcela, nume, t::text LIMIT 100 OFFSET $2) q' INTO v_h USING v_pr, greatest(0, ((v_n - 1) / 100) * 100);
         v_h := v_n || ':' || v_h;
       END IF;
       v_ms := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
@@ -198,6 +207,15 @@ BEGIN
   RAISE NOTICE 'DRY30g OK: % = % pe % (identitate, obiect)', p_a, p_b, v_n;
 END $h$;
 
+-- termenul cumulativ al ferestrei de lock (pentru pasul 2): refuz peste buget, altfel statement_timeout = timpul ramas pentru urmatoarea instructiune
+CREATE FUNCTION pg_temp.r30g_termen() RETURNS void LANGUAGE plpgsql AS $h$
+DECLARE v_rest numeric := current_setting('gazpet.r30g_buget_ms')::numeric
+                          - extract(epoch FROM clock_timestamp() - current_setting('gazpet.r30g_lock_la')::timestamptz) * 1000;
+BEGIN
+  IF v_rest <= 0 THEN RAISE EXCEPTION 'DRY30g FAIL: fereastra de lock a depasit bugetul de % ms (criteriu de abandon)', current_setting('gazpet.r30g_buget_ms'); END IF;
+  PERFORM set_config('statement_timeout', ceil(v_rest)::bigint || 'ms', true);
+END $h$;
+
 SELECT pg_temp.r30g_numara('inainte');
 SELECT pg_temp.r30g_evalueaza('inainte');
 SELECT pg_temp.r30g_cronometreaza('inainte');
@@ -206,3 +224,4 @@ DO $t$ BEGIN
   RAISE NOTICE 'DRY30g inainte OK: % randuri in instantaneu, % evaluari de politica', (SELECT count(*) FROM pg_temp.r30g_snap WHERE faza = 'inainte'),
                (SELECT count(*) FROM pg_temp.r30g_eval WHERE faza = 'inainte');
 END $t$;
+SELECT set_config('gazpet.r30g_buget_ms', '20000', true);   -- bugetul ferestrei de lock: migrare + pasul 2

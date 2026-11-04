@@ -22,9 +22,11 @@
 -- Postcondiție: forma nouă exactă pe fiecare politică, același număr de politici, RLS activ pe toate tabelele red_* / sms_*, storage neschimbat,
 --   indexurile valide pe coloana corectă.
 -- Ordinea lock-urilor (L06): tabelele în ordine alfabetică, înainte de orice verificare. Lock-uri MINIME: ACCESS EXCLUSIVE doar pe tabelele cu politici
---   (îl cere oricum ALTER POLICY); sms_loturi (doar CREATE INDEX, fără politici atinse) în SHARE. lock_timeout 2s: dacă un tabel e ocupat, migrarea
---   renunță repede în loc să țină coada de așteptare. Fereastra de lock (măsurată în DRY ca NOTICE): doar verificări de catalog + 42 ALTER POLICY +
---   9 indexuri pe tabele de sub ~6,7k rânduri — estimat sub 1 s pe prod.
+--   (îl cere oricum ALTER POLICY); sms_loturi (doar CREATE INDEX, fără politici atinse) în SHARE. Fereastra de lock are un TERMEN CUMULATIV:
+--   începe înaintea primului LOCK (gazpet.r30g_lock_la), lock-urile se iau unul câte unul cu lock_timeout = min(2 s, timpul rămas), iar fiecare
+--   instrucțiune următoare primește statement_timeout = timpul rămas (inclusiv CREATE INDEX și verificările DRY de după); buget implicit 10 s
+--   (gazpet.r30g_buget_ms), DRY-ul pune 20 s. LOCK-ul dinamic (EXECUTE format %I) are tabelele și modurile dintr-o listă fixă din fișier.
+--   Conținut: verificări de catalog + 42 ALTER POLICY + 9 indexuri pe tabele de sub ~6,7k rânduri — estimat sub 1 s pe prod.
 -- ALTER POLICY e idempotent, deci rulat în afara runner-ului (autocommit, fără ON_ERROR_STOP) s-ar aplica fără preflight: de aceea politicile și
 --   indexurile stau într-un bloc DO care reverifică garda și existența tabelei temp a preflight-ului din ACEEAȘI tranzacție (testat local).
 -- Testat local (PG 17.6, harness cu stub-uri, expresii identice cu live): DRY complet, apply → revenire → re-apply, cu / fără red_corespondenta_mailuri
@@ -32,12 +34,11 @@
 -- Revenire: supabase/revenire/20261130g_redari_rls_initplan_ROLLBACK.sql. DRY: supabase/tests/20261130g_redari_rls_initplan_dryrun.sql.
 -- Atenție: revenirile mai vechi care compară md5-ul politicilor (ex. 20261129a_redari_pv_schema_ROLLBACK) cer întâi revenirea 30g.
 DO $pre$
-DECLARE v_lipsa text[]; v_dif text[]; v_n integer;
+DECLARE v_lipsa text[]; v_dif text[]; v_n integer; v_t text; v_mod text; v_rest numeric;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130g_redari_rls_initplan:' || txid_current() THEN
     RAISE EXCEPTION '20261130g: garda start invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '2s', true);
   -- deparsare determinista a expresiilor (fara „public.”), restaurata in postconditie
   PERFORM set_config('gazpet.r30g_search_path', current_setting('search_path'), true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
@@ -55,14 +56,37 @@ BEGIN
               AND p.proacl::text = '{=X/supabase_auth_admin,supabase_auth_admin=X/supabase_auth_admin,dashboard_user=X/supabase_auth_admin}')) <> 2 THEN
     RAISE EXCEPTION '20261130g: fn_red_nivel / auth.uid nu mai sunt cele din baseline (corp / limbaj / volatilitate / definer / search_path / owner / EXECUTE)';
   END IF;
-  -- L06: lock-uri in ordine alfabetica, inainte de verificari
-  LOCK TABLE public.red_convocari, public.red_corespondenta, public.red_corespondenta_fisiere IN ACCESS EXCLUSIVE MODE;
-  IF to_regclass('public.red_corespondenta_mailuri') IS NOT NULL THEN LOCK TABLE public.red_corespondenta_mailuri IN ACCESS EXCLUSIVE MODE; END IF;
-  LOCK TABLE public.red_detinatori, public.red_detinatori_contact, public.red_detinatori_token, public.red_import_loturi, public.red_jurnal,
-             public.red_loturi_plicuire, public.red_numere, public.red_parcele, public.red_plicuri, public.red_procese_verbale, public.red_proiecte,
-             public.red_raspunsuri, public.red_raspunsuri_meta, public.red_uat IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE public.sms_loturi IN SHARE MODE;   -- doar CREATE INDEX (cere SHARE); politicile sms_* nu se ating
-  PERFORM set_config('gazpet.r30g_lock_la', clock_timestamp()::text, true);   -- inceputul ferestrei de lock (DRY-ul o raporteaza)
+  -- L06: lock-uri in ordine alfabetica, inainte de verificari, UNUL CATE UNUL sub termenul cumulativ: fereastra incepe INAINTEA primului lock
+  --   (gazpet.r30g_lock_la), fiecare asteptare primeste lock_timeout = min(2 s, timpul ramas), deci suma asteptarilor nu poate depasi bugetul
+  --   (gazpet.r30g_buget_ms; implicit 10 s, DRY-ul pune 20 s pentru migrare + verificari)
+  IF current_setting('gazpet.r30g_buget_ms', true) IS NULL OR current_setting('gazpet.r30g_buget_ms', true) !~ '^[0-9]{3,6}$' THEN
+    PERFORM set_config('gazpet.r30g_buget_ms', '10000', true);
+  END IF;
+  PERFORM set_config('gazpet.r30g_lock_la', clock_timestamp()::text, true);
+  FOR v_t, v_mod IN SELECT t, m FROM (VALUES ('red_convocari', 'ACCESS EXCLUSIVE'),
+      ('red_corespondenta', 'ACCESS EXCLUSIVE'),
+      ('red_corespondenta_fisiere', 'ACCESS EXCLUSIVE'),
+      ('red_corespondenta_mailuri', 'ACCESS EXCLUSIVE'),
+      ('red_detinatori', 'ACCESS EXCLUSIVE'),
+      ('red_detinatori_contact', 'ACCESS EXCLUSIVE'),
+      ('red_detinatori_token', 'ACCESS EXCLUSIVE'),
+      ('red_import_loturi', 'ACCESS EXCLUSIVE'),
+      ('red_jurnal', 'ACCESS EXCLUSIVE'),
+      ('red_loturi_plicuire', 'ACCESS EXCLUSIVE'),
+      ('red_numere', 'ACCESS EXCLUSIVE'),
+      ('red_parcele', 'ACCESS EXCLUSIVE'),
+      ('red_plicuri', 'ACCESS EXCLUSIVE'),
+      ('red_procese_verbale', 'ACCESS EXCLUSIVE'),
+      ('red_proiecte', 'ACCESS EXCLUSIVE'),
+      ('red_raspunsuri', 'ACCESS EXCLUSIVE'),
+      ('red_raspunsuri_meta', 'ACCESS EXCLUSIVE'),
+      ('red_uat', 'ACCESS EXCLUSIVE'),
+      ('sms_loturi', 'SHARE')) x(t, m) WHERE to_regclass('public.' || t) IS NOT NULL ORDER BY t LOOP
+    v_rest := current_setting('gazpet.r30g_buget_ms')::numeric - extract(epoch FROM clock_timestamp() - current_setting('gazpet.r30g_lock_la')::timestamptz) * 1000;
+    IF v_rest <= 0 THEN RAISE EXCEPTION '20261130g: termenul ferestrei de lock depasit la %', v_t; END IF;
+    PERFORM set_config('lock_timeout', least(2000, ceil(v_rest))::bigint || 'ms', true);
+    EXECUTE format('LOCK TABLE public.%I IN %s MODE', v_t, v_mod);
+  END LOOP;
 
   -- baseline: expresiile live din 04.11.2026 (N = IS NOT NULL, AE = admin/editor, A = admin, J = jurnal); forma noua = fn_red_nivel() -> InitPlan
   CREATE TEMP TABLE r30g_pol ON COMMIT DROP AS
@@ -143,10 +167,15 @@ BEGIN
       OR EXISTS (SELECT 1 FROM pg_index x JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = x.indkey[0]
                   WHERE x.indrelid = to_regclass('public.' || i.tabela) AND a.attname = i.coloana);
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION '20261130g: indexuri deja existente / FK-uri schimbate: %', v_lipsa; END IF;
+  -- termen CUMULATIV al ferestrei de lock: urmatoarea instructiune primeste doar timpul ramas (statement_timeout), peste termen = refuz
+  v_rest := current_setting('gazpet.r30g_buget_ms')::numeric - extract(epoch FROM clock_timestamp() - current_setting('gazpet.r30g_lock_la')::timestamptz) * 1000;
+  IF v_rest <= 0 THEN RAISE EXCEPTION '%: termenul ferestrei de lock (% ms) depasit', '20261130g', current_setting('gazpet.r30g_buget_ms'); END IF;
+  PERFORM set_config('statement_timeout', ceil(v_rest)::bigint || 'ms', true);
 END $pre$;
 SELECT public.fn_red_storage_verifica_redari(true);   -- storage neschimbat (3 politici red_storage_*, predicatele din 26a / 30e)
 
 DO $apl$
+DECLARE v_rest numeric;
 BEGIN
   -- aceeasi garda ca preflight-ul + dovada ca preflight-ul a rulat in ACEEASI tranzactie (tabela temp a lui): rulat in afara runner-ului
   -- (autocommit, fara ON_ERROR_STOP), blocul refuza in loc sa aplice politicile / indexurile fara verificari
@@ -210,10 +239,14 @@ BEGIN
   CREATE INDEX idx_red_uat_responsabil ON public.red_uat (responsabil_id);
   CREATE INDEX idx_sms_loturi_proiect ON public.sms_loturi (proiect_id);
   CREATE INDEX idx_sms_loturi_uat ON public.sms_loturi (uat_id);
+  -- termen CUMULATIV al ferestrei de lock: urmatoarea instructiune primeste doar timpul ramas (statement_timeout), peste termen = refuz
+  v_rest := current_setting('gazpet.r30g_buget_ms')::numeric - extract(epoch FROM clock_timestamp() - current_setting('gazpet.r30g_lock_la')::timestamptz) * 1000;
+  IF v_rest <= 0 THEN RAISE EXCEPTION '%: termenul ferestrei de lock (% ms) depasit', '20261130g', current_setting('gazpet.r30g_buget_ms'); END IF;
+  PERFORM set_config('statement_timeout', ceil(v_rest)::bigint || 'ms', true);
 END $apl$;
 
 DO $post$
-DECLARE v_dif text[];
+DECLARE v_dif text[]; v_rest numeric;
 BEGIN
   IF current_setting('search_path') IS DISTINCT FROM 'public, pg_temp' THEN RAISE EXCEPTION '20261130g: search_path schimbat in timpul migrarii'; END IF;
   -- fiecare politica are EXACT forma noua, aceleasi roluri / comanda, nicio politica noua sau disparuta
@@ -240,4 +273,8 @@ BEGIN
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261130g: indexuri lipsa / gresite: %', v_dif; END IF;
   PERFORM public.fn_red_storage_verifica_redari(true);
   PERFORM set_config('search_path', current_setting('gazpet.r30g_search_path'), true);
+  -- termen CUMULATIV al ferestrei de lock: urmatoarea instructiune primeste doar timpul ramas (statement_timeout), peste termen = refuz
+  v_rest := current_setting('gazpet.r30g_buget_ms')::numeric - extract(epoch FROM clock_timestamp() - current_setting('gazpet.r30g_lock_la')::timestamptz) * 1000;
+  IF v_rest <= 0 THEN RAISE EXCEPTION '%: termenul ferestrei de lock (% ms) depasit', '20261130g', current_setting('gazpet.r30g_buget_ms'); END IF;
+  PERFORM set_config('statement_timeout', ceil(v_rest)::bigint || 'ms', true);
 END $post$;
