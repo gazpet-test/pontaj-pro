@@ -4,6 +4,7 @@
    Fără migrare: citire separată din red_convocari (keyset complet, pe loturi de id-uri — citesteNeexpediatePeDetinatori, L18/L23).
    Propunere de migrare (NU aplicată): coloanele `conv_neexpediat_nr` / `conv_neexpediat_nr_count` în red_v_stare_parcela. */
 
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { dataCivilaBucuresti } from './setari.js'
 
 // coloanele necesare (fără PII): numărul, canalul, fișierul (pentru „Descarcă din nou”) și data generării
@@ -129,3 +130,53 @@ export function dataDocumentConvocare(c) {
   if (!d) throw new Error(`Convocarea ${c?.nr_document ?? ''} nu are o dată de generare validă (created_at) — regenerarea cu același număr e oprită.`)
   return d
 }
+
+// ─── r4 (Copilot #991) ──────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * P2-03 (L24): hook-ul citirii din modal. Un cititor NOU la fiecare setup al efectului (legat de deținător), invalidat la
+ * cleanup-ul LUI — robust la React StrictMode (setup → cleanup → setup) și la schimbarea deținătorului.
+ * `citeste(detinatorId)` → Promise<lista>; `laCitire()` e chemat când starea trece pe „se citește” (ex. resetarea bifei).
+ * @returns {{ existente: object[] | null, eroare: any, reciteste: () => Promise<void> }}
+ */
+export function useConvocariNeexpediate(detinatorId, citeste, { laCitire } = {}) {
+  const [st, setSt] = useState({ cheie: null, existente: null, eroare: null })
+  const cititorRef = useRef(null)
+  const citesteRef = useRef(citeste); citesteRef.current = citeste
+  const laCitireRef = useRef(laCitire); laCitireRef.current = laCitire
+  useEffect(() => {
+    const c = cititorCuGeneratie(k => citesteRef.current(k), (x) => { setSt(x); if (x.existente === null && !x.eroare) laCitireRef.current?.() })
+    cititorRef.current = c
+    c.porneste(detinatorId)
+    return () => { c.invalideaza(); if (cititorRef.current === c) cititorRef.current = null }
+  }, [detinatorId])
+  const reciteste = useCallback(() => (cititorRef.current ? cititorRef.current.porneste(detinatorId) : Promise.resolve()), [detinatorId])
+  const curenta = st.cheie === detinatorId
+  return { existente: curenta ? st.existente : null, eroare: curenta ? st.eroare : null, reciteste }
+}
+
+/**
+ * P2-01: convocările active neexpediate apărute între citirea afișată (și eventual confirmată) și momentul rezervării.
+ * `confirmate` = lista văzută de operator (null = necunoscută → toate proaspetele sunt „noi”).
+ */
+export function aparuteDupaVerificare(confirmate, proaspete) {
+  const vazute = new Set((confirmate || []).map(c => c.id))
+  return (proaspete || []).filter(c => !vazute.has(c.id))
+}
+
+/**
+ * P2-01 (c): PUNCTUL DE INTEGRARE pentru rezervarea numărului unui convocator NOU.
+ * AZI: `fn_red_numar_document('C', uat3, tronson)` — verificarea „există deja un convocator neexpediat” e făcută în UI
+ * (avertisment + recitire chiar înainte de rezervare), NU e atomică: alt utilizator poate genera în paralel.
+ * DUPĂ aplicarea migrării `20261130l_redari_convocare_rezerva` (PR #989): aici se cheamă RPC-ul atomic (blochează
+ * deținătorul, recitește convocările active neexpediate și refuză fără confirmare), cu `detinatorId` și `confirmateIds`.
+ */
+export async function rezervaNumarConvocare(supabase, { uat3, tronson, detinatorId, confirmateIds = [] } = {}) {
+  void detinatorId; void confirmateIds   // folosite de RPC-ul atomic din #989, după activarea protecției
+  const { data, error } = await supabase.rpc('fn_red_numar_document', { p_tip: 'C', p_uat3: uat3, p_tronson: tronson ?? null })
+  if (error) throw error
+  if (!data) throw new Error('Numărul de document nu a fost generat.')
+  return data
+}
+
+export const AVERTISMENT_CONCURENTA = 'Verificarea e făcută pe această pagină: alt utilizator poate genera în paralel un convocator pentru același deținător. Verificarea finală o va face serverul, după activarea protecției.'

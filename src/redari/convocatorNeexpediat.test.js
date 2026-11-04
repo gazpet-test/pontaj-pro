@@ -1,7 +1,8 @@
 // D4 (audit 04.11.2026): starea „convocator generat, neexpediat” — Registru + gardă la număr nou în ModalConvocator.
 import { describe, it, expect } from 'vitest'
 import { COL_CONV_NEEXPEDIAT, filtruNeexpediate, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou,
-  citesteNeexpediatePeDetinatori, poateDescarcaExistent, poateDeschideConvocator, cititorCuGeneratie, dataDocumentConvocare } from './convocatorNeexpediat.js'
+  citesteNeexpediatePeDetinatori, poateDescarcaExistent, poateDeschideConvocator, cititorCuGeneratie, dataDocumentConvocare,
+  aparuteDupaVerificare, rezervaNumarConvocare, AVERTISMENT_CONCURENTA } from './convocatorNeexpediat.js'
 import { formatDataRo } from './docx.js'
 
 // fake red_convocari: filtrează pe detinator_id (in) și id > cursor (gt), ordonează pe id, plafonează pagina la `plafon`
@@ -155,6 +156,30 @@ describe('convocatorNeexpediat', () => {
     expect(formatDataRo(dataDocumentConvocare({ created_at: '2026-11-03T22:30:00Z' }))).toBe('04.11.2026')
     expect(() => dataDocumentConvocare({ nr_document: 'C-0002', created_at: null })).toThrow(/C-0002.*dată de generare validă/)
     expect(() => dataDocumentConvocare({ created_at: 'nu e dată' })).toThrow(/dată de generare validă/)
+  })
+
+  it('r4 P2-01 (b): convocările apărute după verificare (alt utilizator / altă fereastră)', () => {
+    expect(aparuteDupaVerificare([], [])).toEqual([])
+    expect(aparuteDupaVerificare([], [{ id: 'a', nr_document: 'C-0101' }]).map(c => c.nr_document)).toEqual(['C-0101'])
+    expect(aparuteDupaVerificare([{ id: 'a' }], [{ id: 'a' }, { id: 'b', nr_document: 'C-0102' }]).map(c => c.id)).toEqual(['b'])
+    expect(aparuteDupaVerificare([{ id: 'a' }, { id: 'b' }], [{ id: 'a' }])).toEqual([])   // una expediată între timp: nimic nou
+    expect(aparuteDupaVerificare(null, [{ id: 'a' }])).toHaveLength(1)
+  })
+
+  it('r4 P2-01 (c): rezervaNumarConvocare — azi fn_red_numar_document; eroare / gol → aruncă', async () => {
+    const apeluri = []
+    const sb = (rez) => ({ rpc: async (f, a) => { apeluri.push([f, a]); return rez } })
+    expect(await rezervaNumarConvocare(sb({ data: 'C-0103', error: null }), { uat3: 'HUS', tronson: 3, detinatorId: 'd1', confirmateIds: ['a'] })).toBe('C-0103')
+    expect(apeluri[0]).toEqual(['fn_red_numar_document', { p_tip: 'C', p_uat3: 'HUS', p_tronson: 3 }])
+    await rezervaNumarConvocare(sb({ data: 'C-0104', error: null }), { uat3: 'HUS' })
+    expect(apeluri[1][1].p_tronson).toBeNull()
+    await expect(rezervaNumarConvocare(sb({ data: null, error: { message: 'interzis' } }), { uat3: 'HUS' })).rejects.toMatchObject({ message: 'interzis' })
+    await expect(rezervaNumarConvocare(sb({ data: null, error: null }), { uat3: 'HUS' })).rejects.toThrow(/nu a fost generat/)
+  })
+
+  it('r4 P2-01 (a): avertismentul nu promite garanție', () => {
+    expect(AVERTISMENT_CONCURENTA).toMatch(/alt utilizator poate genera în paralel/)
+    expect(AVERTISMENT_CONCURENTA).toMatch(/Verificarea finală o va face serverul, după activarea protecției/)
   })
 
   it('textul confirmării numește numerele existente și consumul unui număr nou', () => {
