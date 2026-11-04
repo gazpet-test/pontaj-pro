@@ -99,3 +99,28 @@ describe('citesteCentralizator', () => {
     await expect(citesteCentralizator(client({ eroareConv: true }), 'p', { poateContact: false }, () => true)).rejects.toMatchObject({ message: 'permission denied' })
   })
 })
+
+describe('Copilot #992 P2-02 — schimbarea proiectului pe aceeași instanță', () => {
+  // Starea ținută de instanță vine din proiectul A (proiectId 'A'); props-urile noi sunt ale proiectului B. Randarea pe server
+  // reproduce primul render după schimbare (înainte ca efectul să reseteze): nimic din A nu se afișează / exportă.
+  it('date citite pentru alt proiect → „Se încarcă”, fără rândurile proiectului anterior', () => {
+    const x = h(<NotificariEcran proiect={{ ...proiect, id: 'B', cod: 'TEST-B' }} uats={uats} nivel="viewer" subtabInitial="centralizator" dateInitiale={{ proiectId: 'A', ghid: {}, centralizator }} />)
+    expect(x).toContain('Se încarcă')
+    expect(x).not.toContain('Persoana Unu')
+    expect(x).not.toContain('Export xlsx')
+  })
+  it('ghidul nu folosește corespondența proiectului anterior', () => {
+    const x = h(<NotificariEcran proiect={{ ...proiect, id: 'B' }} uats={uats} nivel="viewer" dateInitiale={{ proiectId: 'A', ghid: { corespondenta: [{ cod: 'A1', ordine: 1, stare: 'draft' }] }, centralizator }} />)
+    expect(x).not.toContain('data-coresp="A1"')
+    expect(x).toContain('Se încarcă corespondența')
+  })
+  it('Redari.jsx montează tabul cu key={proiect.id}', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('../../Redari.jsx', import.meta.url), 'utf8')
+    expect(src).toContain("{tab === 'notificari' && <NotificariEcran key={proiect.id} ")
+  })
+  it('antetul centralizatorului arată unitatea fiecărei coloane', () => {
+    const x = h(<TabelCentralizator cent={centralizeaza(agregaDetinatori({ ...centralizator, sms: new Map(), cuTelefon: new Set(), uats }))} />)
+    expect(x).toContain('data-unitate="parcele"'); expect(x).toContain('data-unitate="perechi"')
+  })
+})

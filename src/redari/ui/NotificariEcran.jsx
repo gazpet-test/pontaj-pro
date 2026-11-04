@@ -12,7 +12,7 @@ import { COL_CORESPONDENTA } from '../corespondenta.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
 import { smsApi, mesajEroare } from '../../sms/smsApi.js'
 import { STARI_MODEL, ghidModele, CANALE_RASPUNS, agregaDetinatori, centralizeaza, filtreaza, FILTRE_NOTIF, COLOANE_CENTRALIZATOR,
-  ANTET_DETINATORI, randDetinator, foaieCentralizatorNotif, csvDetinatori, randuriCorespondenta, statisticiCanale } from '../notificari.js'
+  ANTET_DETINATORI, randDetinator, foaieCentralizatorNotif, csvDetinatori, randuriCorespondenta, statisticiCanale, UNITATI } from '../notificari.js'
 
 const LOT = 100, PARALEL = 4, AFISATE = 200
 
@@ -92,7 +92,7 @@ export function TabelCorespondenta({ randuri, eroare }) {
 
 export function TabelCanale({ statistici }) {
   return <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse' }}>
-    <thead><tr>{['Canal', 'Unde intră în ERP', 'Cum se înregistrează', 'Activ?', 'Răspunsuri', 'Deținători (ultimul răspuns)'].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
+    <thead><tr>{['Canal', 'Unde intră în ERP', 'Cum se înregistrează', 'Activ?', 'Răspunsuri (toate)', 'Înregistrări deținător (ultimul răspuns)'].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
     <tbody>{CANALE_RASPUNS.map(c => <tr key={c.cod} data-canal={c.cod}>
       <td style={{ ...S.td, fontWeight: 600 }}>{c.nume}</td><td style={{ ...S.td, fontSize: 12.5 }}>{c.intra}</td><td style={{ ...S.td, fontSize: 12.5 }}>{c.cum}</td>
       <td style={S.td}>{c.activ ? <span style={{ color: G.green }}>da</span> : <span style={{ color: G.yellow }}>nu (manual)</span>}</td>
@@ -104,7 +104,7 @@ export function TabelCanale({ statistici }) {
 const celula = v => (v == null ? <span title="sursa nu s-a putut citi" style={{ color: G.yellow }}>?</span> : v)
 export function TabelCentralizator({ cent }) {
   return <div style={{ overflowX: 'auto' }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
-    <thead><tr><th style={S.th}>UAT</th>{COLOANE_CENTRALIZATOR.map(([k, e]) => <th key={k} style={S.th}>{e}</th>)}</tr></thead>
+    <thead><tr><th style={S.th}>UAT</th>{COLOANE_CENTRALIZATOR.map(([k, e, , u]) => <th key={k} style={S.th} data-unitate={u}>{e}<div style={{ fontSize: 10, color: G.dim, textTransform: 'none' }}>{UNITATI[u]}</div></th>)}</tr></thead>
     <tbody>
       {cent.randuri.map(r => <tr key={r.uat_id} data-uat={r.uat_id}><td style={S.td}>{r.uat_nume}</td>{COLOANE_CENTRALIZATOR.map(([k]) => <td key={k} style={S.td}>{celula(r[k])}</td>)}</tr>)}
       <tr data-total="1"><td style={{ ...S.td, fontWeight: 700 }}>TOTAL</td>{COLOANE_CENTRALIZATOR.map(([k]) => <td key={k} style={{ ...S.td, fontWeight: 700 }}>{celula(cent.total[k])}</td>)}</tr>
@@ -129,14 +129,20 @@ export function ListaDetinatori({ lista }) {
   </div>
 }
 
-// dateInitiale: doar pentru teste (randare fără rețea) — { ghid: { corespondenta, smsPanou, smsPanouEroare }, centralizator: rezultatul citesteCentralizator }
-// dateInitiale / subtabInitial / uatInitial: doar pentru teste (randare fără rețea)
+// dateInitiale / subtabInitial / uatInitial: doar pentru teste (randare fără rețea) —
+//   dateInitiale = { proiectId?, ghid: { corespondenta, smsPanou, smsPanouEroare }, centralizator: rezultatul citesteCentralizator }
+// Copilot #992 P2-02: fiecare rezultat ține id-ul proiectului pentru care a fost citit; la randarea cu alt proiect (aceeași instanță,
+// înainte ca efectul să reseteze) nu se afișează și nu se exportă nimic din proiectul anterior. În Redari.jsx montarea are și key={proiect.id}.
 export default function NotificariEcran({ proiect, uats = [], nivel, dateInitiale = null, subtabInitial = 'ghid', uatInitial = '' }) {
   const [subtab, setSubtab] = useState(subtabInitial)
-  const [ghidSurse, setGhidSurse] = useState(dateInitiale?.ghid || null)
-  const [ghidEroare, setGhidEroare] = useState('')
-  const [date, setDate] = useState(dateInitiale?.centralizator || null)
-  const [eroare, setEroare] = useState('')
+  const idInitial = dateInitiale ? (dateInitiale.proiectId ?? proiect.id) : null
+  const [ghidStare, setGhidSurse] = useState(dateInitiale?.ghid ? { proiectId: idInitial, v: dateInitiale.ghid } : null)
+  const [ghidEroareStare, setGhidEroare] = useState(null)
+  const [dateStare, setDate] = useState(dateInitiale?.centralizator ? { proiectId: idInitial, v: dateInitiale.centralizator } : null)
+  const [eroareStare, setEroare] = useState(null)
+  const alProiectului = x => (x && x.proiectId === proiect.id ? x.v : null)
+  const ghidSurse = alProiectului(ghidStare), date = alProiectului(dateStare)
+  const ghidEroare = alProiectului(ghidEroareStare) || '', eroare = alProiectului(eroareStare) || ''
   const [reload, setReload] = useState(0)
   const [uatId, setUatId] = useState(uatInitial), [filtru, setFiltru] = useState('')
   const generatie = useRef(0)
@@ -145,18 +151,18 @@ export default function NotificariEcran({ proiect, uats = [], nivel, dateInitial
   useEffect(() => {
     if (dateInitiale) return
     const token = ++generatie.current, id = proiect.id, curent = () => token === generatie.current
-    setGhidSurse(null); setGhidEroare(''); setDate(null); setEroare('')
+    setGhidSurse(null); setGhidEroare(null); setDate(null); setEroare(null)
     ;(async () => {
       let corespondenta = null, corespEroare = ''
       try { corespondenta = await paginiExport(() => supabase.from('red_corespondenta').select(COL_CORESPONDENTA).eq('proiect_id', id), ['id'], curent) }
       catch (e) { corespEroare = msgEroare(e) }
       let smsPanou = null, smsPanouEroare = null
       try { smsPanou = await smsApi.panou() } catch (e) { smsPanouEroare = e?.code === '42501' ? 'fără nivel pe SMS' : mesajEroare(e) }
-      if (curent()) setGhidSurse({ corespondenta, corespEroare, smsPanou, smsPanouEroare })
-    })().catch(e => { if (curent()) setGhidEroare(msgEroare(e)) })
+      if (curent()) setGhidSurse({ proiectId: id, v: { corespondenta, corespEroare, smsPanou, smsPanouEroare } })
+    })().catch(e => { if (curent()) setGhidEroare({ proiectId: id, v: msgEroare(e) }) })
     citesteCentralizator(supabase, id, { poateContact }, curent)
-      .then(d => { if (curent()) setDate(d) })
-      .catch(e => { if (curent()) setEroare(msgEroare(e)) })
+      .then(d => { if (curent()) setDate({ proiectId: id, v: d }) })
+      .catch(e => { if (curent()) setEroare({ proiectId: id, v: msgEroare(e) }) })
     return () => { generatie.current++ }
   }, [proiect.id, reload, poateContact, dateInitiale])
 
@@ -171,12 +177,13 @@ export default function NotificariEcran({ proiect, uats = [], nivel, dateInitial
 
   const numeFisier = ext => `notificari_${String(proiect.cod || 'proiect').replace(/[^A-Za-z0-9_-]/g, '_')}_${aziBucuresti()}${filtru ? '_' + filtru : ''}.${ext}`
   const exportaXlsx = () => {
+    if (!date || !cent) return   // fără date ale proiectului curent nu se exportă nimic
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(foaieCentralizatorNotif(cent)), 'Centralizator')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([ANTET_DETINATORI, ...filtrate.map(randDetinator)]), 'Detinatori')
     descarcaBlob(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), numeFisier('xlsx'))
   }
-  const exportaCsv = () => descarcaBlob(new Blob([csvDetinatori(filtrate)], { type: 'text/csv;charset=utf-8' }), numeFisier('csv'))
+  const exportaCsv = () => date && descarcaBlob(new Blob([csvDetinatori(filtrate)], { type: 'text/csv;charset=utf-8' }), numeFisier('csv'))
 
   return <div style={S.card}>
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
@@ -215,7 +222,7 @@ export default function NotificariEcran({ proiect, uats = [], nivel, dateInitial
           <button style={S.btnS} onClick={exportaXlsx}>📥 Export xlsx (fără telefoane)</button>
           <button style={S.btnS} onClick={exportaCsv}>📥 Export CSV</button>
         </div>
-        <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>Un rând = o pereche parcelă × deținător. „De trimis” = fără niciun canal reușit (AR primit, SMS livrat, răspuns pe orice canal, PV semnat, afișare la Primărie pentru neidentificați / fără adresă); „plecat, neconfirmat” = expediat fără AR sau SMS fără confirmare. „?” / „necunoscut” = sursa nu s-a putut citi (SMS) sau adresa nu se poate deduce: nu se numără nici „da”, nici „nu”.</p>
+        <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>Unitatea e scrisă sub fiecare coloană: „perechi” = înregistrări parcelă × deținător (o persoană cu 3 parcele = 3 perechi); „parcele” = parcele distincte (PV B e un document pe parcelă). „De trimis” = fără niciun canal reușit (AR primit, SMS livrat, răspuns pe orice canal, PV semnat, afișare la Primărie pentru neidentificați / fără adresă); „plecat, neconfirmat” = expediat fără AR sau SMS fără confirmare. „?” / „necunoscut” = sursa nu s-a putut citi (SMS) sau adresa nu se poate deduce: nu se numără nici „da”, nici „nu”.</p>
         <TabelCentralizator cent={cent} />
         <h3 style={{ fontSize: 14.5, fontWeight: 700, margin: '18px 0 6px' }}>Deținătorii pe filtrul ales ({filtrate.length})</h3>
         <ListaDetinatori lista={filtrate} />

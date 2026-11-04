@@ -72,7 +72,12 @@ total se numără:
 - **Convocator generat / expediat / AR primit / retur**. Returul contează doar dacă nu a venit un AR după el (aceeași regulă ca starea din Registru).
 - **SMS trimis / livrat / eșuat**, din `fn_red_sms_stare`.
 - **Răspuns primit**: total și pe canalul ultimului răspuns.
-- **PV A generat / semnat**, **PV B (parcelă) / semnat**.
+- **PV A generat / semnat** (perechi), **PV B (parcelă) / semnat** (parcele distincte: PV B e un document pe parcelă, deci o parcelă cu
+  doi coproprietari se numără o dată).
+
+Unitatea e scrisă sub fiecare coloană și în antetul exportului. **Perechi** înseamnă înregistrări parcelă × deținător: o persoană cu trei
+parcele înseamnă trei perechi. **Parcele** înseamnă parcele distincte: coloana „Parcele” și cele două de PV B. La canalele de răspuns,
+„Răspunsuri (toate)” numără rândurile din `red_raspunsuri`, iar „Înregistrări deținător (ultimul răspuns)” numără deținătorii distincți.
 - **Afișat la Primărie**: neidentificați sau fără adresă, într-un UAT cu afișarea completă: data de început, data de sfârșit și nr. PV
   de afișare. Ghidul folosește aceeași regulă la modelul „Afișarea la Primărie”.
 - **De trimis**: deținătorii fără **niciun canal reușit**. Canal reușit înseamnă AR primit, SMS livrat, un răspuns pe orice canal, PV semnat

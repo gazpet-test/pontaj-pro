@@ -224,3 +224,33 @@ describe('modalul 📞 Răspuns — canalele manuale', () => {
     expect(modal).toContain('CANALE_RASPUNS_MANUAL.map')
   })
 })
+
+describe('Copilot #992 — unitățile coloanelor', () => {
+  it('P2-03: 2 deținători pe aceeași parcelă, 1 PV B semnat → PV B = 1 (parcele), deținători = 2 (perechi)', () => {
+    const r = [rand(21, U1, { parcela_id: 'pX' }), rand(22, U1, { parcela_id: 'pX' })]
+    const d = agregaDetinatori({ randuri: r, pvs: [{ id: 'b', tip: 'B', parcela_id: 'pX', stare: 'semnat', sters_la: null }], sms: new Map(), uats: [U1] })
+    expect(d.map(x => x.pv_b)).toEqual(['semnat', 'semnat'])   // pe rând, ambii au PV B-ul parcelei
+    expect(centralizeaza(d).total).toMatchObject({ total: 2, parcele: 1, pv_b_generat: 1, pv_b_semnat: 1 })
+  })
+  it('P2-01: „ultimul răspuns” numărat pe detinator_id distinct; o persoană pe 3 parcele = 3 înregistrări (perechi)', () => {
+    const dublu = agregaDetinatori({ randuri: [randuri[5], randuri[5], randuri[5]], raspunsuri, sms: new Map(), uats: [U2] })
+    expect(statisticiCanale(raspunsuri, dublu).ultim).toEqual({ online: 1 })
+    // aceeași persoană (același nume) pe 3 parcele = 3 înregistrări red_detinatori, fiecare cu răspunsul ei
+    const trei = [31, 32, 33].map(n => rand(n, U2, { nume: 'Aceeași Persoană' }))
+    const rs = trei.map((r, i) => ({ id: 'r' + i, detinator_id: r.detinator_id, canal: 'telefon', data: '2026-11-15T10:00:00Z', seq: i }))
+    const inr = agregaDetinatori({ randuri: trei, raspunsuri: rs, sms: new Map(), uats: [U2] })
+    expect(statisticiCanale(rs, inr)).toEqual({ toate: { telefon: 3 }, ultim: { telefon: 3 } })
+    expect(centralizeaza(inr).total).toMatchObject({ total: 3, parcele: 3, raspuns: 3 })
+  })
+  it('fiecare coloană are unitatea; foaia xlsx o scrie în antet', async () => {
+    const { COLOANE_CENTRALIZATOR, UNITATI } = await import('./notificari.js')
+    expect(COLOANE_CENTRALIZATOR.every(c => UNITATI[c[3]])).toBe(true)
+    expect(COLOANE_CENTRALIZATOR.filter(c => c[3] === 'parcele').map(c => c[0])).toEqual(['parcele', 'pv_b_generat', 'pv_b_semnat'])
+    const cap = foaieCentralizatorNotif(centralizeaza(toate()))[0]
+    expect(cap).toContain('Deținători (perechi)'); expect(cap).toContain('PV B semnat (parcele)')
+  })
+  it('neidentificat: aceeași sursă ca starea NEIDENTIFICAT_AFISARE a vederii (calitate)', () => {
+    const [x] = agregaDetinatori({ randuri: [rand(41, U2, { calitate: 'neidentificat', adresa_cunoscuta: null, stare: 'NEIDENTIFICAT_AFISARE' })], sms: new Map(), uats: [U2] })
+    expect(x).toMatchObject({ neidentificat: true, fara_adresa: false, afisat: false, de_trimis: true })
+  })
+})

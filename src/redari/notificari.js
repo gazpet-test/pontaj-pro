@@ -204,7 +204,12 @@ export const CANALE_RASPUNS = [
 export function statisticiCanale(raspunsuri, inregistrari) {
   const toate = {}, ultim = {}
   for (const r of raspunsuri || []) toate[r.canal] = (toate[r.canal] || 0) + 1
-  for (const d of inregistrari || []) if (d.raspuns_canal) ultim[d.raspuns_canal] = (ultim[d.raspuns_canal] || 0) + 1
+  // „ultim” numără înregistrări de deținător distincte (detinator_id), nu rânduri: un rând duplicat nu dublează cifra (Copilot #992 P2-01)
+  const vazuti = new Set()
+  for (const d of inregistrari || []) {
+    if (!d.raspuns_canal || vazuti.has(d.detinator_id)) continue
+    vazuti.add(d.detinator_id); ultim[d.raspuns_canal] = (ultim[d.raspuns_canal] || 0) + 1
+  }
   return { toate, ultim }
 }
 
@@ -321,33 +326,38 @@ export function filtreaza(inregistrari, { uatId = '', filtru = '' } = {}) {
 // Coloanele centralizatorului: [cheie, etichetă, numărare]. Numărarea întoarce null când sursa e necunoscută (SMS / telefon necitite).
 const numara = (lista, f) => lista.reduce((n, d) => n + (f(d) ? 1 : 0), 0)
 const numaraSauNull = (lista, camp, f) => (lista.some(d => d[camp] === null) ? null : numara(lista, f))
+// Unitatea fiecărei coloane (Copilot #992): „perechi” = înregistrări parcelă × deținător (red_detinatori: un deținător aparține unei parcele,
+// deci o persoană cu 3 parcele = 3 perechi); „parcele” = parcele distincte (PV B e un document pe parcelă, nu pe deținător).
+export const UNITATI = { perechi: 'perechi', parcele: 'parcele' }
+const parceleDistincte = (lista, f) => new Set(lista.filter(f).map(d => d.parcela_id)).size
 export const COLOANE_CENTRALIZATOR = [
-  ['total', 'Deținători', l => l.length],
-  ['convocator', 'Convocator generat', l => numara(l, d => d.convocator)],
-  ['expediat', 'Expediat', l => numara(l, d => d.expediat)],
-  ['ar', 'AR primit', l => numara(l, d => d.ar)],
-  ['retur', 'Retur', l => numara(l, d => d.retur)],
-  ['sms_trimis', 'SMS trimis', l => numaraSauNull(l, 'sms', d => d.sms_trimise > 0)],
-  ['sms_livrat', 'SMS livrat', l => numaraSauNull(l, 'sms', d => d.sms === 'livrat')],
-  ['sms_esuat', 'SMS eșuat', l => numaraSauNull(l, 'sms', d => d.sms === 'esuat')],
-  ['raspuns', 'Răspuns primit', l => numara(l, d => d.raspunsuri > 0)],
-  ['r_online', '· online', l => numara(l, d => d.raspuns_canal === 'online')],
-  ['r_telefon', '· telefon', l => numara(l, d => d.raspuns_canal === 'telefon')],
-  ['r_sesiune', '· la sesiune', l => numara(l, d => d.raspuns_canal === 'sesiune')],
-  ['r_alt', '· alt canal', l => numara(l, d => d.raspuns_canal && !['online', 'telefon', 'sesiune'].includes(d.raspuns_canal))],
-  ['pv_a_generat', 'PV A generat', l => numara(l, d => !!d.pv_a)],
-  ['pv_a_semnat', 'PV A semnat', l => numara(l, d => d.pv_a === 'semnat')],
-  ['pv_b_generat', 'PV B (parcelă)', l => numara(l, d => !!d.pv_b)],
-  ['pv_b_semnat', 'PV B semnat', l => numara(l, d => d.pv_b === 'semnat')],
-  ['afisat', 'Afișat la Primărie', l => numara(l, d => d.afisat === true)],
-  ['afisat_nec', '· afișat: necunoscut', l => numara(l, d => d.afisat === null)],
-  ['de_trimis', 'De trimis', l => numara(l, d => d.de_trimis === true)],
-  ['de_trimis_nec', '· de trimis: necunoscut', l => numara(l, d => d.de_trimis === null)],
-  ['in_curs', '· plecat, neconfirmat', l => numara(l, d => d.in_curs === true)],
-  ['fara_adresa', 'Fără adresă', l => numara(l, d => d.fara_adresa === true)],
-  ['fara_adresa_nec', '· adresă: necunoscut', l => numara(l, d => d.fara_adresa === null)],
-  ['neidentificat', 'Neidentificat', l => numara(l, d => d.neidentificat)],
-  ['fara_telefon', 'Fără telefon', l => numaraSauNull(l, 'fara_telefon', d => d.fara_telefon === true)],
+  ['total', 'Deținători', l => l.length, 'perechi'],
+  ['parcele', 'Parcele', l => parceleDistincte(l, () => true), 'parcele'],
+  ['convocator', 'Convocator generat', l => numara(l, d => d.convocator), 'perechi'],
+  ['expediat', 'Expediat', l => numara(l, d => d.expediat), 'perechi'],
+  ['ar', 'AR primit', l => numara(l, d => d.ar), 'perechi'],
+  ['retur', 'Retur', l => numara(l, d => d.retur), 'perechi'],
+  ['sms_trimis', 'SMS trimis', l => numaraSauNull(l, 'sms', d => d.sms_trimise > 0), 'perechi'],
+  ['sms_livrat', 'SMS livrat', l => numaraSauNull(l, 'sms', d => d.sms === 'livrat'), 'perechi'],
+  ['sms_esuat', 'SMS eșuat', l => numaraSauNull(l, 'sms', d => d.sms === 'esuat'), 'perechi'],
+  ['raspuns', 'Răspuns primit', l => numara(l, d => d.raspunsuri > 0), 'perechi'],
+  ['r_online', '· online', l => numara(l, d => d.raspuns_canal === 'online'), 'perechi'],
+  ['r_telefon', '· telefon', l => numara(l, d => d.raspuns_canal === 'telefon'), 'perechi'],
+  ['r_sesiune', '· la sesiune', l => numara(l, d => d.raspuns_canal === 'sesiune'), 'perechi'],
+  ['r_alt', '· alt canal', l => numara(l, d => d.raspuns_canal && !['online', 'telefon', 'sesiune'].includes(d.raspuns_canal)), 'perechi'],
+  ['pv_a_generat', 'PV A generat', l => numara(l, d => !!d.pv_a), 'perechi'],
+  ['pv_a_semnat', 'PV A semnat', l => numara(l, d => d.pv_a === 'semnat'), 'perechi'],
+  ['pv_b_generat', 'PV B (parcelă)', l => parceleDistincte(l, d => !!d.pv_b), 'parcele'],
+  ['pv_b_semnat', 'PV B semnat', l => parceleDistincte(l, d => d.pv_b === 'semnat'), 'parcele'],
+  ['afisat', 'Afișat la Primărie', l => numara(l, d => d.afisat === true), 'perechi'],
+  ['afisat_nec', '· afișat: necunoscut', l => numara(l, d => d.afisat === null), 'perechi'],
+  ['de_trimis', 'De trimis', l => numara(l, d => d.de_trimis === true), 'perechi'],
+  ['de_trimis_nec', '· de trimis: necunoscut', l => numara(l, d => d.de_trimis === null), 'perechi'],
+  ['in_curs', '· plecat, neconfirmat', l => numara(l, d => d.in_curs === true), 'perechi'],
+  ['fara_adresa', 'Fără adresă', l => numara(l, d => d.fara_adresa === true), 'perechi'],
+  ['fara_adresa_nec', '· adresă: necunoscut', l => numara(l, d => d.fara_adresa === null), 'perechi'],
+  ['neidentificat', 'Neidentificat', l => numara(l, d => d.neidentificat), 'perechi'],
+  ['fara_telefon', 'Fără telefon', l => numaraSauNull(l, 'fara_telefon', d => d.fara_telefon === true), 'perechi'],
 ]
 
 /** centralizeaza(inregistrari) → { randuri: [{ uat_id, uat_nume, ...cifre }], total: {...cifre} } — UAT-urile sortate după nume. */
@@ -375,7 +385,7 @@ export function randDetinator(d) {
     d.canale_reusite.join(', '), daNuNec(d.de_trimis), daNuNec(d.in_curs), daNuNec(d.fara_adresa), daNu(d.neidentificat), d.fara_telefon == null ? 'necunoscut' : daNu(d.fara_telefon)]
 }
 export function foaieCentralizatorNotif({ randuri, total }) {
-  const cap = ['UAT', ...COLOANE_CENTRALIZATOR.map(([, e]) => e)]
+  const cap = ['UAT', ...COLOANE_CENTRALIZATOR.map(([, e, , u]) => `${e} (${UNITATI[u]})`)]
   const val = v => (v == null ? 'necunoscut' : v)
   return [cap, ...randuri.map(r => [r.uat_nume, ...COLOANE_CENTRALIZATOR.map(([k]) => val(r[k]))]), ['TOTAL', ...COLOANE_CENTRALIZATOR.map(([k]) => val(total[k]))]]
 }
