@@ -5,6 +5,8 @@ import { supabase } from '../../lib/supabase.js'
 import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
+import { termenConstatare, mesajTermenConstatare } from '../setari.js'
+import { dataBucuresti } from '../plicuri.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns, citestePaginat, citesteIn } from './comune.jsx'
 
@@ -247,6 +249,12 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                 <div style={{ fontSize:12, color:G.muted, marginTop:3 }}>
                   {d.sursa_date && <span>sursă: {d.sursa_date} · </span>}{d.versiune_lista_tgz && <span>listă: {d.versiune_lista_tgz}</span>}
                 </div>
+                {(() => {   // plan pct. 4.6: avertisment neblocant (de confirmat claude#026 î.5)
+                  if (d.sters_la) return null
+                  const t = termenConstatare({ uat, detinatorId: d.id, raspunsuri, pvs, azi: dataBucuresti() })
+                  const m = mesajTermenConstatare(t)
+                  return m && <div data-testid="avertisment-constatare" style={{ fontSize:12.5, marginTop:4, color: t.depasit ? G.red : G.yellow }}>⚠ {m}</div>
+                })()}
                 {poateScrie && (
                   <div style={{ fontSize:12.5, marginTop:4 }}>
                     {c ? (<>

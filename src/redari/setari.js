@@ -1,6 +1,7 @@
 /* setari.js — Redări faza 2, felia 1: câmpurile ecranelor UAT + Setări proiect, normalizare și validări (oglinda constrângerilor din
    20261126a / 20261127a). Fără React, fără Supabase — testabil cu vitest. Deciziile Răzvan 02.11.2026: link_afisare scos din adresa UAT,
    adresele UAT pe seria AU-0001, refuzul la PV B = motiv pe PV (felia PV). */
+import { ultimulRaspuns } from './stare.js'
 
 export const MAX_TEXT_SCURT = 200
 export const MAX_TELEFON = 40
@@ -154,6 +155,56 @@ export function termenAfisare(uat) {
 export function mesajTermenAfisare(t) {
   return `Afișarea la primărie începe pe ${dataRo(t.start)}, sub ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 (${dataRo(t.zi1)}): ` +
     `trebuie să înceapă cel târziu pe ${dataRo(t.limita)} (plan pct. 4.3)`
+}
+
+// Plan de verificare rev49 pct. 4.6: „constatarea pe teren în maximum 5 zile de la sesiune”. Zile calendaristice (planul nu spune
+// „lucrătoare”), numărate de la ULTIMA zi de sesiune completată a UAT-ului. AVERTISMENT neblocant, nu eroare: varianta implicită
+// propusă de Claude, DE CONFIRMAT de Răzvan (claude#026 întrebarea 5). Fără coloană nouă: cererea = ultimul răspuns al deținătorului
+// e `constatare_teren`; constatarea = PV A activ al deținătorului cu constatare_mod 'teren' și data_pv completată.
+export const TERMEN_CONSTATARE_ZILE = 5
+const dataCivila = (v) => { const s = normalizeazaValoare(v)?.slice(0, 10); return s && dataValida(s) ? s : null }
+
+/** Ultima zi de sesiune validă a UAT-ului ('AAAA-LL-ZZ') sau null. */
+export function ultimaZiSesiune(uat) {
+  const z = ZILE_SESIUNE.map(k => dataCivila(uat?.[k])).filter(Boolean).sort()
+  return z.length ? z[z.length - 1] : null
+}
+
+/** Ultima zi de sesiune + TERMEN_CONSTATARE_ZILE zile calendaristice; null fără zi validă (aritmetică pe data civilă, ca dataLimitaConvocare). */
+export function dataLimitaConstatare(ultimaZi) {
+  const z = dataCivila(ultimaZi)
+  if (!z) return null
+  const d = new Date(z + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + TERMEN_CONSTATARE_ZILE)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Termenul constatării pe teren pentru UN deținător (plan pct. 4.6).
+ *  `raspunsuri` / `pvs` = rândurile deținătorului (PV-urile altor deținători sau PV B se ignoră). `azi` opțional ('AAAA-LL-ZZ', ca la
+ *  termenExpediere): folosit doar cât constatarea nu e consemnată și PV A nu e semnat.
+ *  → { cerut, ultimaZi, limita, dataConstatare, depasit, judecat }. Fără cerere, fără zi de sesiune sau fără termen de comparat: judecat=false. */
+export function termenConstatare({ uat, detinatorId, raspunsuri = [], pvs = [], azi = null } = {}) {
+  const ale = (Array.isArray(raspunsuri) ? raspunsuri : []).filter(r => r && (detinatorId == null || r.detinator_id === detinatorId))
+  const cerut = ultimulRaspuns(ale)?.optiune === 'constatare_teren'
+  const ultimaZi = ultimaZiSesiune(uat), limita = dataLimitaConstatare(ultimaZi)
+  const pvA = (Array.isArray(pvs) ? pvs : []).filter(p => p && p.tip === 'A' && p.sters_la == null && p.stare !== 'anulat'
+    && (detinatorId == null || p.detinator_id === detinatorId))
+  const dateTeren = pvA.filter(p => p.constatare_mod === 'teren').map(p => dataCivila(p.data_pv)).filter(Boolean).sort()
+  const dataConstatare = dateTeren[0] || null
+  const gol = { cerut, ultimaZi, limita, dataConstatare, depasit: false, judecat: false }
+  if (!cerut || !limita) return gol
+  if (dataConstatare) return { ...gol, depasit: dataConstatare > limita, judecat: true }
+  if (pvA.some(p => p.stare === 'semnat')) return gol
+  const a = dataCivila(azi)
+  return a ? { ...gol, depasit: a > limita, judecat: true } : gol
+}
+
+/** Textul avertismentului (null când nu e nimic de spus). */
+export function mesajTermenConstatare(t) {
+  if (!t?.cerut || !t.limita) return null
+  const baza = `Constatare pe teren cerută: termen ${dataRo(t.limita)} (${TERMEN_CONSTATARE_ZILE} zile de la ultima zi de sesiune, ${dataRo(t.ultimaZi)}; plan pct. 4.6)`
+  if (t.dataConstatare) return t.depasit ? `${baza} — constatarea din ${dataRo(t.dataConstatare)} e după termen` : null
+  return t.depasit ? `${baza} — termen depășit, constatarea nu e consemnată` : baza
 }
 
 /** Avertismentele unui UAT: NU blochează salvarea (data afișării e un fapt, consemnat în PV de afișare); se confirmă la salvare. */
