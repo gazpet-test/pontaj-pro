@@ -495,6 +495,15 @@ Stare 04.11.2026: punctele 1–3 sunt făcute.
 6. Completarea datelor proiectului și a zilelor de sesiune pe UAT — se face din ecranele Setări proiect / UAT (§4.1b). La 04.11: LOT1 fără
    nr./data împuternicirii, 0/7 UAT-uri cu zilele de sesiune.
 
+### 5b. Fișierele corespondenței (migrarea `20261130e`, NEAPLICATĂ la 04.11.2026)
+- Fișierele din „📨 Corespondență” (`red_corespondenta_fisiere`, bucket `redari`, `{proiect}/corespondenta/{cod}/…`) sunt **imutabile**: aplicația
+  nu le modifică și nu le șterge (fără politici UPDATE / DELETE pe bucket, upload cu `upsert:false`, trigger care refuză UPDATE / DELETE pe rânduri).
+- **Fișiere orfane** (urcate în Storage, dar fără rând în tabel — înregistrarea a eșuat sau nu s-a confirmat): admin / editor le văd în modalul 📎
+  la „Fișiere urcate dar neînregistrate” și le pot **înregistra** (aplicația descarcă obiectul, recalculează SHA-256, face INSERT). Nu se reurcă.
+- Orfanii care NU trebuie păstrați rămân în bucket; nu se șterg din aplicație. Ștergerea lor se face **doar de owner**, manual, prin SQL /
+  dashboard, cu preview (listă de căi + verificarea că nu au rând în `red_corespondenta_fisiere`) și „da”-ul lui Răzvan (pct. 3). Fără automatizare.
+- SHA-256 din tabel e **declarat** de cel care a urcat (calculat în browser); amprenta serverului e `storage_etag` (metadata eTag din Storage).
+
 ## 6. Cum se revine
 - Migrarea e aplicată (01.11.2026); nu a atins niciun obiect existent (în afară de un rând în `app_modules` și 2 politici pe
   `storage.objects`, create de ea).

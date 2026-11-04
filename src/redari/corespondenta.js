@@ -14,7 +14,7 @@ const PE_COD = Object.fromEntries(STARI_CORESPONDENTA.map(s => [s.cod, s]))
 export const etichetaStareCoresp = cod => PE_COD[cod]?.eticheta ?? String(cod ?? '')
 export const culoareStareCoresp = cod => PE_COD[cod]?.culoare ?? '#8B949E'
 
-export const COL_CORESPONDENTA = 'id, proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, aprobat_de, aprobat_la, trimis_la, nr_inregistrare, observatii, versiune, updated_at, aprobat_fisier_id, aprobat_sha256'
+export const COL_CORESPONDENTA = 'id, proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, aprobat_de, aprobat_la, trimis_la, nr_inregistrare, observatii, versiune, updated_at, aprobat_fisier_id, aprobat_sha256, aprobat_storage_etag'
 
 // Stările pe care le poate alege cineva dintr-un rând (fără `aprobat`, care are buton separat, doar pentru owner).
 export function stariPermise(rand) {
@@ -77,6 +77,9 @@ export function mesajEroareCoresp(e) {
   if (/doar Razvan/.test(m)) return 'Doar Răzvan poate aproba o corespondență.'
   // 20261130e: fișierele corespondenței
   if (/aproba doar dupa ce ai urcat fisierul de trimis/.test(m)) return 'Urcă întâi fișierul „de trimis” (varianta finală) — aprobarea se leagă de el.'
+  if (/intre timp s-a urcat alt fisier de trimis/.test(m)) return 'Între timp s-a urcat alt fișier „de trimis”: reîncarcă, verifică fișierul nou și aprobă din nou.'
+  if (/trebuie sa indice fisierul de trimis/.test(m)) return 'Aprobarea trebuie să indice fișierul „de trimis” confirmat: reîncarcă și aprobă din nou.'
+  if (/nu are amprenta \(eTag\)/.test(m)) return 'Obiectul din Storage nu are amprentă (eTag); reîncearcă urcarea.'
   if (/fisierul de trimis nu se mai urca/.test(m)) return 'După trimitere / anulare nu se mai urcă „de trimis”; urcă dovada trimiterii sau răspunsul.'
   if (/fisierul lipseste din Storage/.test(m)) return 'Fișierul nu a ajuns în Storage; reîncearcă urcarea.'
   if (/calea fisierului nu e in folderul/.test(m)) return 'Calea fișierului nu e în folderul corespondenței (reîncarcă pagina și reîncearcă).'

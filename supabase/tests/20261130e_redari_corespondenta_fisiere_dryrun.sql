@@ -15,10 +15,16 @@ END $h$;
 CREATE FUNCTION pg_temp.r30e_g(p text) RETURNS text LANGUAGE sql STABLE AS $h$ SELECT nullif(current_setting('r30e.'||p,true),''); $h$;
 -- insert de fisier (textul SQL), ca sa poata fi folosit si prin r30e_refuza
 CREATE FUNCTION pg_temp.r30e_ins(p_cod text,p_rol text,p_path text,p_sha text) RETURNS text LANGUAGE sql STABLE AS $h$
-  SELECT format($q$INSERT INTO public.red_corespondenta_fisiere(corespondenta_id,rol,path,nume_original,mime,marime,sha256) VALUES (%L,%L,%L,'test.pdf','application/pdf',5,%L)$q$,
+  SELECT format($q$INSERT INTO public.red_corespondenta_fisiere(corespondenta_id,rol,path,nume_original,mime,marime,sha256,storage_etag) VALUES (%L,%L,%L,'test.pdf','application/pdf',5,%L,'ales-de-client')$q$,
                 pg_temp.r30e_g(p_cod), p_rol, p_path, p_sha);
 $h$;
 GRANT EXECUTE ON FUNCTION pg_temp.r30e_ca(uuid,text),pg_temp.r30e_refuza(text,text),pg_temp.r30e_g(text),pg_temp.r30e_ins(text,text,text,text) TO authenticated,anon,service_role;
+
+CREATE FUNCTION pg_temp.r30e_aproba(p_cod text,p_fis text) RETURNS text LANGUAGE sql STABLE AS $h$
+  SELECT format($q$UPDATE public.red_corespondenta SET stare='aprobat', aprobat_fisier_id=%L WHERE id=%L$q$, p_fis, pg_temp.r30e_g(p_cod));
+$h$;
+CREATE FUNCTION pg_temp.r30e_fis(p_sha text) RETURNS text LANGUAGE sql STABLE AS $h$ SELECT id::text FROM public.red_corespondenta_fisiere WHERE sha256=p_sha; $h$;
+GRANT EXECUTE ON FUNCTION pg_temp.r30e_aproba(text,text),pg_temp.r30e_fis(text) TO authenticated,anon,service_role;
 
 -- TEST0: garda, identitati, date fictive (ca postgres = mentenanta)
 DO $t$
@@ -37,14 +43,15 @@ BEGIN
   PERFORM set_config('r30e.owner',own::text,true); PERFORM set_config('r30e.editor',ed::text,true); PERFORM set_config('r30e.viewer',vw::text,true);
   PERFORM set_config('r30e.Z1',z1::text,true); PERFORM set_config('r30e.Z2',z2::text,true);
   INSERT INTO storage.objects(bucket_id,name,metadata) VALUES
-    ('redari',pfx||'Z1/20261104-100000-aaaaaaaa-scrisoare.pdf','{"mimetype":"application/pdf","size":1000}'::jsonb),
-    ('redari',pfx||'Z1/20261104-100001-bbbbbbbb-scrisoare-v2.pdf','{"mimetype":"application/pdf","size":2000}'::jsonb),
-    ('redari',pfx||'Z1/20261104-100002-cccccccc-scrisoare-v3.pdf','{"mimetype":"application/pdf","size":3000}'::jsonb),
-    ('redari',pfx||'Z1/20261104-100003-dddddddd-dovada.pdf','{"mimetype":"application/pdf","size":400}'::jsonb),
-    ('redari',pfx||'Z1/20261104-100004-eeeeeeee-tarziu.pdf','{"mimetype":"application/pdf","size":500}'::jsonb),
-    ('redari',pfx||'Z1/20261104-100005-ffffffff-orfan.pdf','{"mimetype":"application/pdf","size":600}'::jsonb),
-    ('redari',pfx||'Z2/20261104-100006-11111111-dovada.pdf','{"mimetype":"application/pdf","size":700}'::jsonb),
-    ('redari','TEST-RAZVAN/TST/0001/test-v1.docx','{"mimetype":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","size":800}'::jsonb);
+    ('redari',pfx||'Z1/20261104-100000-aaaaaaaa-scrisoare.pdf','{"mimetype":"application/pdf","size":1000,"eTag":"\"etag-1000\""}'::jsonb),
+    ('redari',pfx||'Z1/20261104-100001-bbbbbbbb-scrisoare-v2.pdf','{"mimetype":"application/pdf","size":2000,"eTag":"\"etag-2000\""}'::jsonb),
+    ('redari',pfx||'Z1/20261104-100002-cccccccc-scrisoare-v3.pdf','{"mimetype":"application/pdf","size":3000,"eTag":"\"etag-3000\""}'::jsonb),
+    ('redari',pfx||'Z1/20261104-100003-dddddddd-dovada.pdf','{"mimetype":"application/pdf","size":400,"eTag":"\"etag-400\""}'::jsonb),
+    ('redari',pfx||'Z1/20261104-100004-eeeeeeee-tarziu.pdf','{"mimetype":"application/pdf","size":500,"eTag":"\"etag-500\""}'::jsonb),
+    ('redari',pfx||'Z1/20261104-100005-ffffffff-orfan.pdf','{"mimetype":"application/pdf","size":600,"eTag":"\"etag-600\""}'::jsonb),
+    ('redari',pfx||'Z2/20261104-100006-11111111-dovada.pdf','{"mimetype":"application/pdf","size":700,"eTag":"\"etag-700\""}'::jsonb),
+    ('redari',pfx||'Z1/20261104-100007-22222222-fara-etag.pdf','{"mimetype":"application/pdf","size":900}'::jsonb),
+    ('redari','TEST-RAZVAN/TST/0001/test-v1.docx','{"mimetype":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","size":800,"eTag":"\"etag-800\""}'::jsonb);
   IF (SELECT count(*) FROM public.red_corespondenta WHERE cod IN ('D1','D2') AND stare='trimis' AND aprobat_fisier_id IS NULL) <> 2 THEN RAISE EXCEPTION 'TEST0 FAIL: D1/D2 istorice'; END IF;
   RAISE NOTICE 'TEST0 OK';
 END $t$;
@@ -65,26 +72,31 @@ DO $t$ DECLARE v1 integer; v2 integer; BEGIN
   IF NOT pg_temp.r30e_refuza(pg_temp.r30e_ins('Z1','altul','TEST-RAZVAN/TST/0001/test-v1.docx',repeat('a',64)),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: cale in afara corespondentei'; END IF;
   IF NOT pg_temp.r30e_refuza(pg_temp.r30e_ins('Z1','de_trimis','TEST-RAZVAN/corespondenta/Z1/20261104-100000-aaaaaaaa-scrisoare.pdf','NU-E-SHA'),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: sha invalid'; END IF;
   IF NOT pg_temp.r30e_refuza(pg_temp.r30e_ins('Z1','alt_rol','TEST-RAZVAN/corespondenta/Z1/20261104-100000-aaaaaaaa-scrisoare.pdf',repeat('a',64)),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: rol invalid'; END IF;
+  IF NOT pg_temp.r30e_refuza(pg_temp.r30e_ins('Z1','de_trimis','TEST-RAZVAN/corespondenta/Z1/20261104-100007-22222222-fara-etag.pdf',repeat('2',64)),'23514') THEN RAISE EXCEPTION 'TEST2 FAIL: obiect fara eTag'; END IF;
   SELECT versiune INTO v1 FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid;
   EXECUTE pg_temp.r30e_ins('Z1','de_trimis','TEST-RAZVAN/corespondenta/Z1/20261104-100000-aaaaaaaa-scrisoare.pdf',repeat('a',64));
   SELECT versiune INTO v2 FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid;
   IF v2 <> v1 + 1 THEN RAISE EXCEPTION 'TEST2 FAIL: de_trimis nu creste versiunea parintelui (CAS)'; END IF;
-  IF (SELECT created_by IS DISTINCT FROM pg_temp.r30e_g('editor')::uuid OR marime <> 1000 FROM public.red_corespondenta_fisiere WHERE sha256=repeat('a',64)) THEN RAISE EXCEPTION 'TEST2 FAIL: autor / marime din Storage'; END IF;
+  IF (SELECT created_by IS DISTINCT FROM pg_temp.r30e_g('editor')::uuid OR marime <> 1000 OR storage_etag <> '"etag-1000"' FROM public.red_corespondenta_fisiere WHERE sha256=repeat('a',64)) THEN RAISE EXCEPTION 'TEST2 FAIL: autor / marime / eTag din Storage'; END IF;
   IF NOT pg_temp.r30e_refuza(pg_temp.r30e_ins('Z1','dovada_trimitere','TEST-RAZVAN/corespondenta/Z1/20261104-100000-aaaaaaaa-scrisoare.pdf',repeat('9',64)),'23505') THEN RAISE EXCEPTION 'TEST2 FAIL: aceeasi cale de doua ori'; END IF;
   EXECUTE pg_temp.r30e_ins('Z1','de_trimis','TEST-RAZVAN/corespondenta/Z1/20261104-100001-bbbbbbbb-scrisoare-v2.pdf',repeat('b',64));
   EXECUTE pg_temp.r30e_ins('Z2','dovada_trimitere','TEST-RAZVAN/corespondenta/Z2/20261104-100006-11111111-dovada.pdf',repeat('1',64));
   IF NOT pg_temp.r30e_refuza($q$UPDATE public.red_corespondenta_fisiere SET observatii='x'$q$,'42501') THEN RAISE EXCEPTION 'TEST2 FAIL: editor UPDATE'; END IF;
   IF NOT pg_temp.r30e_refuza($q$DELETE FROM public.red_corespondenta_fisiere$q$,'42501') THEN RAISE EXCEPTION 'TEST2 FAIL: editor DELETE'; END IF;
-  IF NOT pg_temp.r30e_refuza(format($q$UPDATE public.red_corespondenta SET stare='aprobat' WHERE id=%L$q$,pg_temp.r30e_g('Z1')),'42501') THEN RAISE EXCEPTION 'TEST2 FAIL: editor aproba'; END IF;
+  IF NOT pg_temp.r30e_refuza(pg_temp.r30e_aproba('Z1',pg_temp.r30e_fis(repeat('b',64))),'42501') THEN RAISE EXCEPTION 'TEST2 FAIL: editor aproba'; END IF;
   RAISE NOTICE 'TEST2 OK';
 END $t$;
 
 -- TEST3: owner-ul: fara de_trimis -> refuz; cu de_trimis -> aprobarea retine ULTIMUL fisier de_trimis (id + sha256)
 SELECT pg_temp.r30e_ca(pg_temp.r30e_g('owner')::uuid,'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.r30e_refuza(format($q$UPDATE public.red_corespondenta SET stare='aprobat' WHERE id=%L$q$,pg_temp.r30e_g('Z2')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: aprobare fara de_trimis (doar dovada)'; END IF;
-  UPDATE public.red_corespondenta SET stare='aprobat' WHERE id=pg_temp.r30e_g('Z1')::uuid;
-  IF (SELECT c.aprobat_fisier_id IS DISTINCT FROM f.id OR c.aprobat_sha256 IS DISTINCT FROM repeat('b',64) OR c.aprobat_de IS DISTINCT FROM pg_temp.r30e_g('owner')::uuid
+  IF NOT pg_temp.r30e_refuza(pg_temp.r30e_aproba('Z2',pg_temp.r30e_fis(repeat('1',64))),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: aprobare fara de_trimis (doar dovada)'; END IF;
+  IF NOT pg_temp.r30e_refuza(format($q$UPDATE public.red_corespondenta SET stare='aprobat' WHERE id=%L$q$,pg_temp.r30e_g('Z1')),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: aprobare fara id de fisier'; END IF;
+  IF NOT pg_temp.r30e_refuza(pg_temp.r30e_aproba('Z1',pg_temp.r30e_fis(repeat('a',64))),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: aprobare cu id vechi (F1, ultimul e F2)'; END IF;
+  IF NOT pg_temp.r30e_refuza(pg_temp.r30e_aproba('Z1',pg_temp.r30e_fis(repeat('1',64))),'23514') THEN RAISE EXCEPTION 'TEST3 FAIL: aprobare cu fisier din alt rand'; END IF;
+  EXECUTE pg_temp.r30e_aproba('Z1',pg_temp.r30e_fis(repeat('b',64)));
+  IF (SELECT c.aprobat_fisier_id IS DISTINCT FROM f.id OR c.aprobat_sha256 IS DISTINCT FROM repeat('b',64) OR c.aprobat_storage_etag IS DISTINCT FROM '"etag-2000"'
+             OR c.aprobat_de IS DISTINCT FROM pg_temp.r30e_g('owner')::uuid
         FROM public.red_corespondenta c JOIN public.red_corespondenta_fisiere f ON f.sha256=repeat('b',64) WHERE c.id=pg_temp.r30e_g('Z1')::uuid) THEN
     RAISE EXCEPTION 'TEST3 FAIL: aprobarea nu retine ultimul de_trimis';
   END IF;
@@ -94,10 +106,10 @@ END $t$;
 -- TEST4: editorul nu poate scrie aprobat_fisier_id; un de_trimis nou dupa aprobare -> draft, aprobat_* golite
 SELECT pg_temp.r30e_ca(pg_temp.r30e_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
-  UPDATE public.red_corespondenta SET aprobat_fisier_id=NULL, aprobat_sha256=repeat('0',64), observatii='test' WHERE id=pg_temp.r30e_g('Z1')::uuid;
-  IF (SELECT aprobat_sha256 IS DISTINCT FROM repeat('b',64) OR aprobat_fisier_id IS NULL FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid) THEN RAISE EXCEPTION 'TEST4 FAIL: aprobat_* scrise din aplicatie'; END IF;
+  UPDATE public.red_corespondenta SET aprobat_fisier_id=NULL, aprobat_sha256=repeat('0',64), aprobat_storage_etag='x', observatii='test' WHERE id=pg_temp.r30e_g('Z1')::uuid;
+  IF (SELECT aprobat_sha256 IS DISTINCT FROM repeat('b',64) OR aprobat_fisier_id IS NULL OR aprobat_storage_etag IS DISTINCT FROM '"etag-2000"' FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid) THEN RAISE EXCEPTION 'TEST4 FAIL: aprobat_* scrise din aplicatie'; END IF;
   EXECUTE pg_temp.r30e_ins('Z1','de_trimis','TEST-RAZVAN/corespondenta/Z1/20261104-100002-cccccccc-scrisoare-v3.pdf',repeat('c',64));
-  IF (SELECT stare<>'draft' OR aprobat_la IS NOT NULL OR aprobat_de IS NOT NULL OR aprobat_fisier_id IS NOT NULL OR aprobat_sha256 IS NOT NULL FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid) THEN
+  IF (SELECT stare<>'draft' OR aprobat_la IS NOT NULL OR aprobat_de IS NOT NULL OR aprobat_fisier_id IS NOT NULL OR aprobat_sha256 IS NOT NULL OR aprobat_storage_etag IS NOT NULL FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid) THEN
     RAISE EXCEPTION 'TEST4 FAIL: aprobarea nu a cazut la de_trimis nou';
   END IF;
   RAISE NOTICE 'TEST4 OK';
@@ -106,7 +118,8 @@ END $t$;
 -- TEST5: owner reaproba (-> v3); dupa trimis: de_trimis refuzat, dovada acceptata
 SELECT pg_temp.r30e_ca(pg_temp.r30e_g('owner')::uuid,'authenticated');
 DO $t$ BEGIN
-  UPDATE public.red_corespondenta SET stare='aprobat' WHERE id=pg_temp.r30e_g('Z1')::uuid;
+  IF NOT pg_temp.r30e_refuza(pg_temp.r30e_aproba('Z1',pg_temp.r30e_fis(repeat('b',64))),'23514') THEN RAISE EXCEPTION 'TEST5 FAIL: reaprobare cu fisierul vechi'; END IF;
+  EXECUTE pg_temp.r30e_aproba('Z1',pg_temp.r30e_fis(repeat('c',64)));
   IF (SELECT aprobat_sha256 IS DISTINCT FROM repeat('c',64) FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid) THEN RAISE EXCEPTION 'TEST5 FAIL: reaprobare'; END IF;
   RAISE NOTICE 'TEST5a OK';
 END $t$;
@@ -156,4 +169,25 @@ DO $t$ BEGIN
   IF (SELECT aprobat_la IS NULL OR aprobat_fisier_id IS NOT NULL FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z2')::uuid) THEN RAISE EXCEPTION 'TEST8 FAIL: mentenanta aproba fara fisier'; END IF;
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta_fisiere' AND actiune='insert') < 5 THEN RAISE EXCEPTION 'TEST8 FAIL: jurnal'; END IF;
   RAISE NOTICE 'TEST8 OK';
+END $t$;
+
+-- TEST9 (J-P2-4 / C-P2-02): verificatorul storage trece pe starea curenta si opreste orice politica prea larga / bucket public / predicat slabit
+SELECT pg_temp.r30e_ca(NULL,'postgres');
+DO $t$ BEGIN
+  PERFORM public.fn_red_storage_verifica_redari(true);
+  IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(false)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: numaratoarea red_storage_*'; END IF;
+  CREATE POLICY zz_test_prea_larg ON storage.objects FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+  IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: SELECT prea larg neprins'; END IF;
+  DROP POLICY zz_test_prea_larg ON storage.objects;
+  CREATE POLICY zz_test_ins ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'redari' OR bucket_id = 'alt');
+  IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: INSERT cu OR neprins'; END IF;
+  DROP POLICY zz_test_ins ON storage.objects;
+  ALTER POLICY red_storage_sel ON storage.objects USING (bucket_id = 'redari' AND public.fn_red_nivel() IS NOT NULL);
+  IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: predicat slabit neprins'; END IF;
+  ALTER POLICY red_storage_sel ON storage.objects USING (bucket_id = 'redari' AND public.fn_red_nivel() IN ('admin', 'editor'));
+  UPDATE storage.buckets SET public = true WHERE id = 'redari';
+  IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: bucket public neprins'; END IF;
+  UPDATE storage.buckets SET public = false WHERE id = 'redari';
+  PERFORM public.fn_red_storage_verifica_redari(true);
+  RAISE NOTICE 'TEST9 OK';
 END $t$;

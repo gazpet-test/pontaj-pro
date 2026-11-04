@@ -30,6 +30,17 @@ describe('Corespondență — modalul de fișiere', () => {
     const html = renderToString(<ModalFisiere rand={{ id: 'r1', cod: 'A1', stare: 'trimis', subiect: 's', destinatar: 'd' }} fisiere={[]} poateScrie lucru={false} onClose={fara} onUrca={fara} onDescarca={fara} />)
     expect(html).not.toContain('value="de_trimis"'); expect(html).toContain('value="dovada_trimitere"'); expect(html).toContain('Niciun fișier urcat')
   })
+  it('editor: fișierele urcate dar neînregistrate apar cu „Înregistrează” (viewer nu le vede); SHA-256 marcat „declarat”', () => {
+    const rand = { id: 'r1', cod: 'A1', stare: 'draft', subiect: 's', destinatar: 'd' }
+    const orfane = { randId: 'r1', lista: [{ path: 'P/corespondenta/A1/x-orfan.pdf', nume: 'x-orfan.pdf', marime: 10 }], eroare: '' }
+    const ed = renderToString(<ModalFisiere rand={rand} fisiere={fis} poateScrie lucru={false} orfane={orfane} onClose={fara} onUrca={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(ed).toContain('Fișiere urcate dar neînregistrate'); expect(ed).toContain('x-orfan.pdf'); expect(ed).toContain('Înregistrează')
+    expect(ed).toContain('SHA-256 declarat')
+    const vw = renderToString(<ModalFisiere rand={rand} fisiere={fis} poateScrie={false} lucru={false} orfane={orfane} onClose={fara} onUrca={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(vw).not.toContain('neînregistrate')
+    const gol = renderToString(<ModalFisiere rand={rand} fisiere={fis} poateScrie lucru={false} orfane={{ randId: 'r1', lista: [], eroare: '' }} onClose={fara} onUrca={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(gol).not.toContain('neînregistrate')
+  })
   it('„Aprob” dezactivat fără fișier de trimis, cu tooltip', () => {
     expect(renderToString(<BtnAproba fa={null} lucru={false} onClick={fara} />)).toMatch(/disabled=""[^>]*title="urcă întâi fișierul de trimis"|title="urcă întâi fișierul de trimis"[^>]*disabled=""/)
     const ok = renderToString(<BtnAproba fa={fis[0]} lucru={false} onClick={fara} />)
