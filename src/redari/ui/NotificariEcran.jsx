@@ -35,12 +35,14 @@ export async function citesteCentralizator(client, proiectId, { poateContact }, 
     .select('parcela_id,detinator_id,uat_id,uat3,uat_nume,id_parcela,tronson,nume,calitate,adresa_cunoscuta,stare').eq('proiect_id', proiectId),
   ['parcela_id', 'detinator_id'], curent)
   const ids = randuri.map(r => r.detinator_id), parcele = randuri.map(r => r.parcela_id)
-  const [convocari, raspunsuri, pvs] = await Promise.all([
+  const [convocari, raspunsuri, pvs, tronsoane] = await Promise.all([
     inLoturi(() => client.from('red_convocari').select('id,detinator_id,canal,nr_document,data_expediere,data_confirmare_primire,retur,retur_data,fisier_convocator_path,stare,sters_la')
       .eq('stare', 'activ').is('sters_la', null), 'detinator_id', ids, ['id'], curent),
     inLoturi(() => client.from('red_raspunsuri').select('id,detinator_id,canal,data,optiune,seq,created_at'), 'detinator_id', ids, ['id'], curent),
     inLoturi(() => client.from('red_procese_verbale').select('id,tip,parcela_id,detinator_id,stare,sters_la').is('sters_la', null).neq('stare', 'anulat'),
       'parcela_id', parcele, ['id'], curent),
+    // pentru ghidul PV C: parcelele reale pe tronson (aceeași vedere ca Dashboard / Tronsoane)
+    paginiExport(() => client.from('red_v_tronson').select('parcela_id,tronson,tip_pv,suprafata_temporara_mp').eq('proiect_id', proiectId), ['parcela_id'], curent),
   ])
   const avertismente = []
   let sms = null
@@ -52,7 +54,7 @@ export async function citesteCentralizator(client, proiectId, { poateContact }, 
       cuTelefon = new Set(c.map(x => x.detinator_id))
     } catch (e) { if (!curent()) throw e; avertismente.push('Telefon: ' + msgEroare(e)) }
   } else avertismente.push('Telefon: necunoscut (contactul îl văd doar admin / editor).')
-  return { randuri, convocari, raspunsuri, pvs, sms, cuTelefon, avertismente }
+  return { randuri, convocari, raspunsuri, pvs, tronsoane, sms, cuTelefon, avertismente }
 }
 
 const SUBTABURI = [['ghid', '📚 Ghidul modelelor'], ['raspuns', '↩ Canalele de răspuns'], ['centralizator', '📊 Centralizator']]
@@ -113,13 +115,14 @@ export function TabelCentralizator({ cent }) {
 export function ListaDetinatori({ lista }) {
   if (!lista.length) return <Gol text="Niciun deținător pe filtrul ales." />
   return <div style={{ overflowX: 'auto' }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
-    <thead><tr>{['ID parcelă', 'UAT', 'Deținător', 'Stare', 'Convocare', 'SMS', 'Răspuns', 'PV', 'Lipsuri'].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
+    <thead><tr>{['ID parcelă', 'UAT', 'Deținător', 'Stare', 'De trimis', 'Convocare', 'SMS', 'Răspuns', 'PV', 'Lipsuri'].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
     <tbody>{lista.slice(0, AFISATE).map(d => <tr key={d.parcela_id + '/' + d.detinator_id}>
       <td style={{ ...S.td, ...S.mono }}>{d.id_parcela}</td><td style={S.td}>{d.uat_nume}</td><td style={S.td}>{d.nume}</td><td style={S.td}><TagStare cod={d.stare} /></td>
+      <td style={S.td} data-de-trimis={String(d.de_trimis)}>{d.de_trimis === null ? <span title={`necunoscut: ${d.canale_necunoscute.join(', ')}`} style={{ color: G.yellow }}>?</span> : d.de_trimis ? 'da' : 'nu'}</td>
       <td style={{ ...S.td, fontSize: 12.5 }}>{[d.convocator && 'generat', d.expediat && 'expediat', d.ar && 'AR', d.retur && 'retur'].filter(Boolean).join(' · ') || '-'}</td>
       <td style={S.td}>{d.sms == null ? '?' : d.sms === 'fara' ? '-' : d.sms}</td><td style={S.td}>{d.raspuns_canal || '-'}</td>
       <td style={{ ...S.td, fontSize: 12.5 }}>{[d.pv_a && `A ${d.pv_a}`, d.pv_b && `B ${d.pv_b}`].filter(Boolean).join(' · ') || '-'}</td>
-      <td style={{ ...S.td, fontSize: 12.5, color: G.yellow }}>{[d.neidentificat && 'neidentificat', d.fara_adresa && 'fără adresă', d.fara_telefon && 'fără telefon'].filter(Boolean).join(' · ')}</td>
+      <td style={{ ...S.td, fontSize: 12.5, color: G.yellow }}>{[d.neidentificat && 'neidentificat', d.fara_adresa === true && 'fără adresă', d.fara_adresa === null && 'adresă ?', d.fara_telefon && 'fără telefon'].filter(Boolean).join(' · ')}</td>
     </tr>)}</tbody>
   </table>
   {lista.length > AFISATE && <p style={{ fontSize: 12, color: G.muted }}>Se afișează primii {AFISATE} din {lista.length}. Lista completă: exportul.</p>}
@@ -127,14 +130,15 @@ export function ListaDetinatori({ lista }) {
 }
 
 // dateInitiale: doar pentru teste (randare fără rețea) — { ghid: { corespondenta, smsPanou, smsPanouEroare }, centralizator: rezultatul citesteCentralizator }
-export default function NotificariEcran({ proiect, uats = [], nivel, dateInitiale = null, subtabInitial = 'ghid' }) {
+// dateInitiale / subtabInitial / uatInitial: doar pentru teste (randare fără rețea)
+export default function NotificariEcran({ proiect, uats = [], nivel, dateInitiale = null, subtabInitial = 'ghid', uatInitial = '' }) {
   const [subtab, setSubtab] = useState(subtabInitial)
   const [ghidSurse, setGhidSurse] = useState(dateInitiale?.ghid || null)
   const [ghidEroare, setGhidEroare] = useState('')
   const [date, setDate] = useState(dateInitiale?.centralizator || null)
   const [eroare, setEroare] = useState('')
   const [reload, setReload] = useState(0)
-  const [uatId, setUatId] = useState(''), [filtru, setFiltru] = useState('')
+  const [uatId, setUatId] = useState(uatInitial), [filtru, setFiltru] = useState('')
   const generatie = useRef(0)
   const poateContact = nivel === 'admin' || nivel === 'editor'
 
@@ -157,10 +161,11 @@ export default function NotificariEcran({ proiect, uats = [], nivel, dateInitial
   }, [proiect.id, reload, poateContact, dateInitiale])
 
   const inregistrari = useMemo(() => (date ? agregaDetinatori({ ...date, uats }) : null), [date, uats])
-  const faraTronson = useMemo(() => (inregistrari ? new Set(inregistrari.filter(d => d.tronson == null).map(d => d.parcela_id)).size : null), [inregistrari])
   const modele = useMemo(() => ghidModele({ proiect, uats, smsPanou: ghidSurse?.smsPanou || null, smsPanouEroare: ghidSurse ? ghidSurse.smsPanouEroare : null,
-    corespondenta: ghidSurse?.corespondenta ?? null, parceleFaraTronson: faraTronson }), [proiect, uats, ghidSurse, faraTronson])
-  const filtrate = useMemo(() => (inregistrari ? filtreaza(inregistrari, { uatId, filtru }) : []), [inregistrari, uatId, filtru])
+    corespondenta: ghidSurse?.corespondenta ?? null, tronsoane: date?.tronsoane ?? null }), [proiect, uats, ghidSurse, date])
+  useEffect(() => { setUatId(''); setFiltru('') }, [proiect.id])
+  const uatValid = uats.some(u => u.id === uatId) ? uatId : ''   // Jak #992 P2-5: un UAT din alt proiect nu mai filtrează
+  const filtrate = useMemo(() => (inregistrari ? filtreaza(inregistrari, { uatId: uatValid, filtru }) : []), [inregistrari, uatValid, filtru])
   const cent = useMemo(() => (inregistrari ? centralizeaza(filtrate) : null), [inregistrari, filtrate])
   const statistici = useMemo(() => (date ? statisticiCanale(date.raspunsuri, inregistrari) : null), [date, inregistrari])
 
@@ -200,7 +205,7 @@ export default function NotificariEcran({ proiect, uats = [], nivel, dateInitial
       {date && <>
         {date.avertismente?.length > 0 && <div role="status" style={{ fontSize: 12.5, color: G.yellow, marginBottom: 8 }}>{date.avertismente.map(a => <div key={a}>⚠ {a}</div>)}</div>}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-          <select aria-label="UAT" value={uatId} onChange={e => setUatId(e.target.value)} style={S.select}>
+          <select aria-label="UAT" value={uatValid} onChange={e => setUatId(e.target.value)} style={S.select}>
             <option value="">Toate UAT-urile</option>{[...uats].sort((a, b) => String(a.nume).localeCompare(String(b.nume), 'ro')).map(u => <option key={u.id} value={u.id}>{u.nume}</option>)}
           </select>
           <select aria-label="Filtru" value={filtru} onChange={e => setFiltru(e.target.value)} style={S.select}>
@@ -210,7 +215,7 @@ export default function NotificariEcran({ proiect, uats = [], nivel, dateInitial
           <button style={S.btnS} onClick={exportaXlsx}>📥 Export xlsx (fără telefoane)</button>
           <button style={S.btnS} onClick={exportaCsv}>📥 Export CSV</button>
         </div>
-        <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>Un rând = o pereche parcelă × deținător. „De trimis” = fără niciun canal reușit (AR primit, SMS livrat, răspuns pe orice canal, PV semnat, afișare la Primărie pentru neidentificați / fără adresă); „plecat, neconfirmat” = expediat fără AR sau SMS fără confirmare. „?” = sursa nu s-a putut citi.</p>
+        <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>Un rând = o pereche parcelă × deținător. „De trimis” = fără niciun canal reușit (AR primit, SMS livrat, răspuns pe orice canal, PV semnat, afișare la Primărie pentru neidentificați / fără adresă); „plecat, neconfirmat” = expediat fără AR sau SMS fără confirmare. „?” / „necunoscut” = sursa nu s-a putut citi (SMS) sau adresa nu se poate deduce: nu se numără nici „da”, nici „nu”.</p>
         <TabelCentralizator cent={cent} />
         <h3 style={{ fontSize: 14.5, fontWeight: 700, margin: '18px 0 6px' }}>Deținătorii pe filtrul ales ({filtrate.length})</h3>
         <ListaDetinatori lista={filtrate} />

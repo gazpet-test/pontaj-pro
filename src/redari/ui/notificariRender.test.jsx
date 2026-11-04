@@ -45,6 +45,17 @@ describe('NotificariEcran', () => {
   it('fără date inițiale: „Se încarcă” până la citire (fără rețea în randarea pe server)', () => {
     expect(h(<NotificariEcran proiect={proiect} uats={uats} nivel="admin" subtabInitial="centralizator" />)).toContain('Se încarcă')
   })
+  it('Jak #992 P2-5: un UAT ales din alt proiect nu golește lista (se ignoră, selectorul arată „Toate”)', () => {
+    const x = h(<NotificariEcran proiect={proiect} uats={uats} nivel="viewer" subtabInitial="centralizator" uatInitial="uat-din-proiectul-A" dateInitiale={{ ghid: {}, centralizator }} />)
+    expect(x).toContain('Persoana Unu')
+    expect(x).toContain('Deținătorii pe filtrul ales (1)')
+    expect(x).toMatch(/<option value="" selected="">Toate UAT-urile<\/option>/)
+  })
+  it('Jak #992 P1-1: „de trimis” necunoscut apare ca „?” în listă, nu „da”', () => {
+    const x = h(<NotificariEcran proiect={proiect} uats={uats} nivel="viewer" subtabInitial="centralizator" dateInitiale={{ ghid: {}, centralizator }} />)
+    expect(x).toContain('data-de-trimis="null"')
+    expect(x).not.toContain('data-de-trimis="true"')
+  })
   it('tabelul centralizatorului randat din agregare', () => {
     const x = h(<TabelCentralizator cent={centralizeaza(agregaDetinatori({ ...centralizator, sms: new Map(), cuTelefon: new Set(), uats }))} />)
     expect(x).toContain('data-uat="u1"')

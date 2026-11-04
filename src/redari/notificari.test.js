@@ -137,10 +137,56 @@ describe('ghidModele', () => {
     expect(m.coresp.stare).toBe('blocat')   // corespondența necitită ≠ „nimic de trimis”
   })
   it('PV B cere reprezentantul UAT; PV C semnalează perechile fără tronson; fără UAT-uri = blocat', () => {
-    const m = pe(ghidModele({ proiect: proiectGata, uats: [{ ...uatGata, reprezentant_uat_nume: '' }], parceleFaraTronson: 5 }))
+    const tr = [1, 2, 3, 4, 5].map(n => ({ parcela_id: 'x' + n, tronson: null, tip_pv: null, suprafata_temporara_mp: 1 }))
+    const m = pe(ghidModele({ proiect: proiectGata, uats: [{ ...uatGata, reprezentant_uat_nume: '' }], tronsoane: tr }))
     expect(m.pv_b.lipsuri.join(' ')).toMatch(/reprezentantul UAT/)
     expect(m.pv_c.lipsuri.join(' ')).toMatch(/5 parcele fără tronson/)
     expect(pe(ghidModele({ proiect: proiectGata, uats: [] })).convocator.stare).toBe('blocat')
+  })
+})
+
+describe('Jakarinos #992 — reproducerile', () => {
+  const proiectGata = { cod: 'LOT1-PRUNISOR-JUPA', contract_nr: '30', contract_data: '2025-01-22' }
+  const pe = l => Object.fromEntries(l.map(m => [m.cod, m]))
+  it('P1-1: SMS necitit și niciun alt canal → „de trimis” necunoscut (null), nu „da”; totaluri separate; export „necunoscut”', () => {
+    const [x] = agregaDetinatori({ randuri: [randuri[1]], convocari: [], uats: [U1] })   // sms = null (necitit)
+    expect(x.de_trimis).toBeNull(); expect(x.in_curs).toBeNull(); expect(x.canale_necunoscute).toEqual(['sms'])
+    const t = centralizeaza([x]).total
+    expect(t.de_trimis).toBe(0); expect(t.de_trimis_nec).toBe(1)
+    expect(filtreaza([x], { filtru: 'de_trimis' })).toHaveLength(0)
+    expect(filtreaza([x], { filtru: 'de_trimis_necunoscut' })).toHaveLength(1)
+    const rand = csvDetinatori([x]).trim().split('\r\n')[1].split(';')
+    expect(rand[ANTET_DETINATORI.indexOf('De trimis')]).toBe('necunoscut')
+    // cu un canal cert reușit, SMS-ul necunoscut nu mai schimbă rezultatul
+    const [y] = agregaDetinatori({ randuri: [randuri[0]], convocari, uats: [U1] })
+    expect(y.de_trimis).toBe(false)
+  })
+  it('P1-2: viewer (adresa_cunoscuta NULL) — starea FARA_ADRESA_AFISARE din vedere = fără adresă, cu afișare completă = afișat', () => {
+    const r = rand(8, U1, { adresa_cunoscuta: null, stare: 'FARA_ADRESA_AFISARE' })
+    const [x] = agregaDetinatori({ randuri: [r], sms: new Map(), uats: [U1] })
+    expect(x).toMatchObject({ fara_adresa: true, afisat: true, de_trimis: false })
+    const [y] = agregaDetinatori({ randuri: [rand(9, U1, { adresa_cunoscuta: null, stare: 'DE_CONVOCAT' })], sms: new Map(), uats: [U1] })
+    expect(y).toMatchObject({ fara_adresa: false, afisat: false, de_trimis: true })
+    // stare avansată, adresa nededucibilă → necunoscut, nu „adresă cunoscută”
+    const [z] = agregaDetinatori({ randuri: [rand(10, U1, { adresa_cunoscuta: null, stare: 'EXPEDIAT_ASTEPTAM_AR' })], sms: new Map(), uats: [U1] })
+    expect(z).toMatchObject({ fara_adresa: null, afisat: null, de_trimis: null })
+    expect(centralizeaza([z]).total).toMatchObject({ fara_adresa: 0, fara_adresa_nec: 1, afisat: 0, afisat_nec: 1 })
+  })
+  it('P2-3: afișarea fără data de sfârșit nu e completă → neidentificatul rămâne „de trimis”', () => {
+    const U3 = { ...U1, id: 'u3', afisare_data_end: null }
+    const [x] = agregaDetinatori({ randuri: [rand(11, U3, { calitate: 'neidentificat' })], sms: new Map(), uats: [U3] })
+    expect(x).toMatchObject({ afisat: false, de_trimis: true })
+    expect(pe(ghidModele({ proiect: proiectGata, uats: [U3] })).afisare.lipsuri.join(' ')).toMatch(/perioada afișării/)
+  })
+  it('P2-4: PV C pe parcelele reale; necitit = necunoscut, nu „gata”', () => {
+    expect(pe(ghidModele({ proiect: proiectGata, uats: [U1] })).pv_c.stare).toBe('necunoscut')
+    const tr = [{ parcela_id: 'a', tronson: 3, tip_pv: 'A', suprafata_temporara_mp: 10 }, { parcela_id: 'b', tronson: 3, tip_pv: null, suprafata_temporara_mp: null }]
+    const m = pe(ghidModele({ proiect: proiectGata, uats: [U1], tronsoane: tr })).pv_c
+    expect(m.stare).toBe('blocat')
+    expect(m.lipsuri).toEqual(['T3: parcele fara PV A semnat sau PV B', 'T3: suprafata temporara lipsa la 1 parcele'])
+    const gata = pe(ghidModele({ proiect: proiectGata, uats: [U1], tronsoane: [tr[0]] })).pv_c
+    expect([gata.stare, gata.lipsuri]).toEqual(['gata', []])
+    expect(pe(ghidModele({ proiect: proiectGata, uats: [U1], tronsoane: [] })).pv_c.lipsuri).toEqual(['nicio parcelă atribuită unui tronson'])
   })
   it('comaseazaLipsuri și corespondența sortată, „Aprobat” fără nume', () => {
     expect(comaseazaLipsuri([{ nume: 'A', lipsuri: ['x', 'y'] }, { nume: 'B', lipsuri: ['x'] }])).toEqual(['x (toate UAT-urile)', 'y: A'])

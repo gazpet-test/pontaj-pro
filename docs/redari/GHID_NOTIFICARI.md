@@ -73,13 +73,24 @@ total se numără:
 - **SMS trimis / livrat / eșuat**, din `fn_red_sms_stare`.
 - **Răspuns primit**: total și pe canalul ultimului răspuns.
 - **PV A generat / semnat**, **PV B (parcelă) / semnat**.
-- **Afișat la Primărie**: neidentificați sau fără adresă, într-un UAT cu perioada și nr. PV de afișare completate.
+- **Afișat la Primărie**: neidentificați sau fără adresă, într-un UAT cu afișarea completă: data de început, data de sfârșit și nr. PV
+  de afișare. Ghidul folosește aceeași regulă la modelul „Afișarea la Primărie”.
 - **De trimis**: deținătorii fără **niciun canal reușit**. Canal reușit înseamnă AR primit, SMS livrat, un răspuns pe orice canal, PV semnat
   sau afișare (pentru neidentificați / fără adresă). Dintre ei, **plecat, neconfirmat** înseamnă convocare expediată fără AR și fără retur,
   sau SMS plecat fără confirmare. Restul n-au primit încă nimic.
 - **Lipsuri**: fără adresă, neidentificat, fără telefon. Telefonul îl văd doar admin și editor; pentru viewer coloana arată „?”.
 
-Filtrele: UAT, apoi „de trimis”, „netrimis deloc”, „plecat, fără confirmare”, „fără răspuns”, „cu retur”, „SMS eșuat”, „fără adresă”,
+**Necunoscut nu e nici „da”, nici „nu”.** Uneori o sursă lipsește și ar putea schimba rezultatul: SMS-ul nu s-a putut citi, sau adresa
+nu se poate deduce. Adresa nu se poate deduce pentru viewer, care nu vede contactul, într-o stare mai avansată decât „De convocat” /
+„Fără adresă”. Atunci „de trimis”, „afișat” și „fără adresă” sunt **necunoscute**:
+- în listă apar cu „?”;
+- în centralizator se numără separat, în coloanele „· … necunoscut”;
+- în export apar ca „necunoscut”;
+- au filtrul lor: „De trimis: necunoscut”.
+
+Pentru viewer, „fără adresă” se ia din starea calculată de vedere (Fără adresă — afișare / De convocat), care e permisă și lui.
+
+Filtrele: UAT, apoi „de trimis”, „de trimis: necunoscut”, „netrimis deloc”, „plecat, fără confirmare”, „fără răspuns”, „cu retur”, „SMS eșuat”, „fără adresă”,
 „neidentificat”, „fără telefon”. Exportul (xlsx cu foile Centralizator + Deținători, sau CSV) ține cont de filtrele alese și **nu conține
 telefoane**.
 

@@ -22,10 +22,21 @@ export const STARI_MODEL = {
   blocat: { eticheta: 'blocat', culoare: '#F85149' },
   nelivrat: { eticheta: 'nelivrat încă', culoare: '#8B949E' },
   manual: { eticheta: 'manual', culoare: '#58A6FF' },
+  necunoscut: { eticheta: 'necunoscut', culoare: '#D29922' },
 }
 
 const plin = v => v != null && String(v).trim() !== ''
 const numeUat = u => u?.nume || u?.uat3 || '?'
+// Afișarea la Primărie e completă când UAT-ul are perioada întreagă (început + sfârșit) și nr. PV de afișare. O singură definiție,
+// folosită și de ghid (lipsurile „afișare”) și de centralizator (canalul „afișat”) — Jak #992 P2-3.
+export function lipsuriAfisare(uat) {
+  const l = []
+  if (!plin(uat?.afisare_data_start) || !plin(uat?.afisare_data_end)) l.push('perioada afișării')
+  if (!plin(uat?.afisare_pv_nr)) l.push('nr. PV de afișare')
+  return l
+}
+export const afisareCompleta = uat => !!uat && lipsuriAfisare(uat).length === 0
+
 const sorteazaUat = uats => [...(uats || [])].sort((a, b) => String(a?.nume ?? '').localeCompare(String(b?.nume ?? ''), 'ro'))
 
 // Lipsuri pe UAT → o listă: ce lipsește la TOATE UAT-urile apare o dată, restul cu numele UAT-urilor.
@@ -57,7 +68,7 @@ const PARCELA_MARTOR = { verificare_data: '2000-01-01', verificare_de_gazpet: 'x
  * → [{ cod, model, ce, cui, canal, unde, lipsuri: [text], stare: cod din STARI_MODEL, nota }]
  * smsPanou: răspunsul fn_sms_panou (null dacă nu s-a citit); smsPanouEroare: textul erorii (eroare ≠ „nimic de spus”, L18).
  */
-export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouEroare = null, corespondenta = null, parceleFaraTronson = null } = {}) {
+export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouEroare = null, corespondenta = null, tronsoane = null } = {}) {
   const fara = !uats?.length ? ['proiectul nu are UAT-uri'] : []
   const stare = (lipsuri, ok = 'gata') => (lipsuri.length ? 'blocat' : ok)
   const out = []
@@ -109,23 +120,30 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
     cui: 'Comisia (Gazpet / TGZ / UAT); deținătorul dacă e prezent', canal: 'Pe teren / la sesiune', unde: '📄 Fișa parcelei → PV B (parcela)',
     lipsuri: lPvB, stare: stare(lPvB), nota: 'Pe fiecare PV: motivul PV B, data verificării și comisia parcelei.' })
 
-  const lPvC = verificaDatePvC({ proiect, pv: PV_MARTOR, randuriTronson: [{ tip_pv: 'A', suprafata_temporara_mp: 1 }] })
-  if (Number(parceleFaraTronson) > 0) lPvC.push(`${parceleFaraTronson} parcele fără tronson (🛤️ Tronsoane → atribuire pe interval HG)`)
+  // PV C (Jak #992 P2-4): parcelele REALE din red_v_tronson, pe fiecare tronson; martor doar pentru câmpurile documentului (data PV).
+  // tronsoane null = necitit / eroare → stare necunoscută, nu „gata”.
+  const lPvC = []
+  let starePvC = 'necunoscut'
+  if (Array.isArray(tronsoane)) {
+    const pe = grupeaza(tronsoane.filter(t => t.tronson != null), 'tronson')
+    const faraTr = new Set(tronsoane.filter(t => t.tronson == null).map(t => t.parcela_id)).size
+    if (!pe.size) lPvC.push('nicio parcelă atribuită unui tronson')
+    for (const [t, randuriTronson] of [...pe].sort((a, b) => a[0] - b[0])) {
+      for (const l of verificaDatePvC({ proiect, pv: { data_pv: PV_MARTOR.data_pv, tronson: Number(t) }, randuriTronson })) lPvC.push(`T${t}: ${l}`)
+    }
+    if (faraTr) lPvC.push(`${faraTr} parcele fără tronson (🛤️ Tronsoane → atribuire pe interval HG)`)
+    starePvC = lPvC.length ? 'blocat' : 'gata'
+  } else lPvC.push('parcelele pe tronson nu au fost citite')
   out.push({ cod: 'pv_c', model: 'PV C (Model 5) — centralizator pe tronson', ce: 'PV-ul de tronson, după ce toate parcelele au PV A semnat sau PV B.',
     cui: 'Transgaz (beneficiar)', canal: 'Predare la Beneficiar', unde: '🛤️ Tronsoane / PV C', lipsuri: lPvC,
-    stare: lPvC.length ? 'blocat' : 'gata', nota: 'Pe fiecare tronson se verifică și că nu rămân parcele fără PV.' })
+    stare: starePvC, nota: 'Aceeași verificare ca butonul din Tronsoane, pe parcelele fiecărui tronson.' })
 
   const lAu = [...fara, ...lipsuriProiectSiUat(uats, u => verificaDateAdresaUat({ proiect, uat: u, nrDocument: u?.adresa_nr || 'AU-martor' }))]
   out.push({ cod: 'adresa_uat', model: 'Adresa către Primărie (Model 4, AU-nnnn)', ce: 'Înștiințarea Primăriei: afișarea, zilele și sala sesiunii, reprezentantul UAT; anexele cu parcelele.',
     cui: 'Primăria fiecărui UAT', canal: 'Registratură / poștă / e-mail (rândul C1 din Corespondență)', unde: '🏛️ UAT-uri → editare UAT → Generează adresa',
     lipsuri: lAu, stare: stare(lAu), nota: '' })
 
-  const lAfis = [...fara, ...lipsuriProiectSiUat(uats, u => {
-    const l = []
-    if (!plin(u?.afisare_data_start) || !plin(u?.afisare_data_end)) l.push('perioada afișării')
-    if (!plin(u?.afisare_pv_nr)) l.push('nr. PV de afișare')
-    return l
-  })]
+  const lAfis = [...fara, ...lipsuriProiectSiUat(uats, lipsuriAfisare)]
   out.push({ cod: 'afisare', model: 'Afișarea la Primărie', ce: 'Convocarea prin afișare pentru deținătorii neidentificați sau fără adresă; PV-ul de afișare îl dă Primăria.',
     cui: 'Neidentificați / fără adresă', canal: 'Afișare', unde: '🏛️ UAT-uri → câmpurile afișării (perioadă, nr. PV afișare)',
     lipsuri: lAfis, stare: stare(lAfis), nota: 'Termenul: cel puțin 10 zile calendaristice înainte de ziua 1 de sesiune.' })
@@ -216,6 +234,16 @@ const grupeaza = (randuri, cheie) => {
   for (const r of randuri || []) { const k = r?.[cheie]; if (k == null) continue; if (!m.has(k)) m.set(k, []); m.get(k).push(r) }
   return m
 }
+// Fără adresă (Jak #992 P1-2): adresa_cunoscuta din vedere e NULL pentru viewer (RLS pe contact) sau fără rând de contact. Atunci se
+// folosește starea derivată din vedere (calculată cu fn_red_adresa_cunoscuta, autorizată și pentru viewer): FARA_ADRESA_AFISARE = fără
+// adresă, DE_CONVOCAT = adresă cunoscută; în stările mai avansate adresa nu se poate deduce → null (necunoscut).
+export function faraAdresaDin(r) {
+  if (r?.adresa_cunoscuta === false) return true
+  if (r?.adresa_cunoscuta === true) return false
+  if (r?.stare === 'FARA_ADRESA_AFISARE') return true
+  if (r?.stare === 'DE_CONVOCAT') return false
+  return null
+}
 const nivelPv = lista => (lista.some(p => p.stare === 'semnat') ? 'semnat' : lista.some(p => p.stare === 'trimis_spre_semnare') ? 'trimis' : lista.length ? 'generat' : null)
 
 /**
@@ -237,13 +265,17 @@ export function agregaDetinatori({ randuri = [], convocari = [], raspunsuri = []
     const s = sms ? (sms.get(String(r.detinator_id).toLowerCase()) || null) : undefined
     const uat = uatPeId.get(r.uat_id)
     const neidentificat = r.calitate === 'neidentificat'
-    const faraAdresa = !neidentificat && r.adresa_cunoscuta === false
-    const afisat = (neidentificat || faraAdresa) && !!(uat && plin(uat.afisare_pv_nr) && plin(uat.afisare_data_start))
+    const faraAdresa = neidentificat ? false : faraAdresaDin(r)
+    // afișat: trivalent — adresă necunoscută într-un UAT cu afișare completă = necunoscut (null)
+    const afisat = !afisareCompleta(uat) ? false : neidentificat || faraAdresa === true ? true : faraAdresa === null ? null : false
     const nivA = nivelPv(pvA.get(r.detinator_id) || []), nivB = nivelPv(pvB.get(r.parcela_id) || [])
     const ar = c.some(x => plin(x.data_confirmare_primire))
-    const smsLivrat = s ? s.categorie === 'livrat' : s === null ? false : null
-    const reusit = { ar, sms: smsLivrat === true, raspuns: !!ultim, pv: nivA === 'semnat' || nivB === 'semnat', afisare: afisat }
-    const areCanal = Object.values(reusit).some(Boolean)
+    const smsLivrat = s === undefined ? null : !!s && s.categorie === 'livrat'
+    // canalele reușite: true / false / null (sursa necunoscută: SMS necitit, adresă necunoscută) — Jak #992 P1-1
+    const reusit = { ar, sms: smsLivrat, raspuns: !!ultim, pv: nivA === 'semnat' || nivB === 'semnat', afisare: afisat }
+    const valori = Object.values(reusit)
+    const areCanal = valori.some(v => v === true) ? true : valori.some(v => v === null) ? null : false
+    const deTrimis = areCanal === null ? null : !areCanal
     const expediat = c.some(x => plin(x.data_expediere))
     const retur = calculeazaStare({ convocari: c }).stare === 'CONVOCARE_RETURNATA'
     // plecat, neconfirmat: o convocare expediată fără AR și fără retur, sau un SMS plecat fără confirmare de livrare
@@ -257,9 +289,11 @@ export function agregaDetinatori({ randuri = [], convocari = [], raspunsuri = []
       raspuns_canal: ultim ? ultim.canal : null, raspuns_optiune: ultim ? ultim.optiune : null, raspunsuri: rs.length,
       pv_a: nivA, pv_b: nivB, afisat, neidentificat, fara_adresa: faraAdresa,
       fara_telefon: cuTelefon ? !cuTelefon.has(r.detinator_id) : null,
-      canal_reusit: areCanal, canale_reusite: Object.keys(reusit).filter(k => reusit[k]),
-      // „de trimis” = fără niciun canal reușit; dintre ei, „în curs” = plecat (expediat fără AR / SMS fără confirmare), restul = netrimis deloc
-      de_trimis: !areCanal, in_curs: !areCanal && inCurs,
+      canal_reusit: areCanal, canale_reusite: Object.keys(reusit).filter(k => reusit[k] === true),
+      canale_necunoscute: Object.keys(reusit).filter(k => reusit[k] === null),
+      // „de trimis” = fără niciun canal reușit: true / false / null (necunoscut — niciodată „da” pe date incomplete);
+      // dintre ei, „în curs” = plecat (expediat fără AR / SMS fără confirmare), restul = netrimis deloc
+      de_trimis: deTrimis, in_curs: deTrimis === null ? null : deTrimis && inCurs,
     }
   })
 }
@@ -267,13 +301,14 @@ export function agregaDetinatori({ randuri = [], convocari = [], raspunsuri = []
 // Filtrele centralizatorului (aplicate pe înregistrări; cod necunoscut = eroare, nu „toate” tacit).
 export const FILTRE_NOTIF = [
   { cod: '', eticheta: 'Toți deținătorii' },
-  { cod: 'de_trimis', eticheta: 'De trimis (fără canal reușit)', f: d => d.de_trimis },
-  { cod: 'netrimis', eticheta: 'Netrimis deloc', f: d => d.de_trimis && !d.in_curs },
-  { cod: 'in_curs', eticheta: 'Plecat, fără confirmare', f: d => d.in_curs },
+  { cod: 'de_trimis', eticheta: 'De trimis (fără canal reușit)', f: d => d.de_trimis === true },
+  { cod: 'de_trimis_necunoscut', eticheta: 'De trimis: necunoscut (date incomplete)', f: d => d.de_trimis === null },
+  { cod: 'netrimis', eticheta: 'Netrimis deloc', f: d => d.de_trimis === true && d.in_curs === false },
+  { cod: 'in_curs', eticheta: 'Plecat, fără confirmare', f: d => d.in_curs === true },
   { cod: 'fara_raspuns', eticheta: 'Fără răspuns', f: d => !d.raspunsuri },
   { cod: 'retur', eticheta: 'Cu retur', f: d => d.retur },
   { cod: 'sms_esuat', eticheta: 'SMS eșuat', f: d => d.sms === 'esuat' },
-  { cod: 'fara_adresa', eticheta: 'Fără adresă', f: d => d.fara_adresa },
+  { cod: 'fara_adresa', eticheta: 'Fără adresă', f: d => d.fara_adresa === true },
   { cod: 'neidentificat', eticheta: 'Neidentificat', f: d => d.neidentificat },
   { cod: 'fara_telefon', eticheta: 'Fără telefon', f: d => d.fara_telefon === true },
 ]
@@ -304,10 +339,13 @@ export const COLOANE_CENTRALIZATOR = [
   ['pv_a_semnat', 'PV A semnat', l => numara(l, d => d.pv_a === 'semnat')],
   ['pv_b_generat', 'PV B (parcelă)', l => numara(l, d => !!d.pv_b)],
   ['pv_b_semnat', 'PV B semnat', l => numara(l, d => d.pv_b === 'semnat')],
-  ['afisat', 'Afișat la Primărie', l => numara(l, d => d.afisat)],
-  ['de_trimis', 'De trimis', l => numara(l, d => d.de_trimis)],
-  ['in_curs', '· plecat, neconfirmat', l => numara(l, d => d.in_curs)],
-  ['fara_adresa', 'Fără adresă', l => numara(l, d => d.fara_adresa)],
+  ['afisat', 'Afișat la Primărie', l => numara(l, d => d.afisat === true)],
+  ['afisat_nec', '· afișat: necunoscut', l => numara(l, d => d.afisat === null)],
+  ['de_trimis', 'De trimis', l => numara(l, d => d.de_trimis === true)],
+  ['de_trimis_nec', '· de trimis: necunoscut', l => numara(l, d => d.de_trimis === null)],
+  ['in_curs', '· plecat, neconfirmat', l => numara(l, d => d.in_curs === true)],
+  ['fara_adresa', 'Fără adresă', l => numara(l, d => d.fara_adresa === true)],
+  ['fara_adresa_nec', '· adresă: necunoscut', l => numara(l, d => d.fara_adresa === null)],
   ['neidentificat', 'Neidentificat', l => numara(l, d => d.neidentificat)],
   ['fara_telefon', 'Fără telefon', l => numaraSauNull(l, 'fara_telefon', d => d.fara_telefon === true)],
 ]
@@ -327,13 +365,14 @@ export function centralizeaza(inregistrari) {
 
 // ───────────────────────── Export (fără telefoane) ─────────────────────────
 const daNu = v => (v === true ? 'DA' : v === false ? 'NU' : '')
+const daNuNec = v => (v === true ? 'DA' : v === false ? 'NU' : 'necunoscut')   // câmpurile trivalente: null se marchează explicit
 const ETICHETE_SMS = { livrat: 'livrat', trimis: 'trimis (neconfirmat)', in_curs: 'în curs', esuat: 'eșuat', fara: 'fără SMS' }
 export const ANTET_DETINATORI = ['ID parcelă', 'UAT', 'Tronson', 'Deținător', 'Calitate', 'Stare', 'Convocator', 'Expediat', 'AR primit', 'Retur',
   'SMS', 'Răspuns (canal)', 'Nr. răspunsuri', 'PV A', 'PV B', 'Afișat', 'Canale reușite', 'De trimis', 'Plecat, neconfirmat', 'Fără adresă', 'Neidentificat', 'Fără telefon']
 export function randDetinator(d) {
   return [d.id_parcela ?? '', d.uat_nume ?? '', d.tronson ?? '', d.nume ?? '', d.calitate ?? '', d.stare ?? '', daNu(d.convocator), daNu(d.expediat), daNu(d.ar), daNu(d.retur),
-    d.sms == null ? 'necunoscut' : ETICHETE_SMS[d.sms] ?? d.sms, d.raspuns_canal ?? '', d.raspunsuri, d.pv_a ?? '', d.pv_b ?? '', daNu(d.afisat),
-    d.canale_reusite.join(', '), daNu(d.de_trimis), daNu(d.in_curs), daNu(d.fara_adresa), daNu(d.neidentificat), d.fara_telefon == null ? 'necunoscut' : daNu(d.fara_telefon)]
+    d.sms == null ? 'necunoscut' : ETICHETE_SMS[d.sms] ?? d.sms, d.raspuns_canal ?? '', d.raspunsuri, d.pv_a ?? '', d.pv_b ?? '', daNuNec(d.afisat),
+    d.canale_reusite.join(', '), daNuNec(d.de_trimis), daNuNec(d.in_curs), daNuNec(d.fara_adresa), daNu(d.neidentificat), d.fara_telefon == null ? 'necunoscut' : daNu(d.fara_telefon)]
 }
 export function foaieCentralizatorNotif({ randuri, total }) {
   const cap = ['UAT', ...COLOANE_CENTRALIZATOR.map(([, e]) => e)]
