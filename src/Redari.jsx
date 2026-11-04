@@ -25,7 +25,7 @@ import DashboardEcran from './redari/ui/DashboardEcran.jsx'
 import RedariSmsButon from './sms/RedariSmsButon.jsx'
 // 📱 Starea SMS pe deținător (fn_red_sms_stare, 20261130i): doar agregate, fără text / telefon
 import { citesteSmsStare, stareSmsPentru, potrivesteFiltru, csvListaSms } from './redari/smsStare.js'
-import { CelulaSms, FiltruSms } from './redari/ui/SmsRegistru.jsx'
+import { CelulaSms, FiltruSms, RandStareRegistru } from './redari/ui/SmsRegistru.jsx'
 import { filtruCautareSql, potrivesteCautare } from './redari/cautare.js'   // r3: aceeași regulă de căutare pe calea SQL și pe cea locală
 import { paginiExport } from './redari/ui/ExportEcran.jsx'
 
@@ -191,6 +191,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   const [total, setTotal] = useState(0)
   const [pagina, setPagina] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [eroareRegistru, setEroareRegistru] = useState(null)   // r4 (P2-02): eroarea încărcării, separată de „zero rânduri”
   const [fUat, setFUat] = useState('')
   const [fTronson, setFTronson] = useState('')
   const [fStare, setFStare] = useState('')
@@ -242,7 +243,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   const incarca = useCallback(async () => {
     const g = ++generatie.current
     let asteaptaSms = false   // r2 (P2-3): filtru SMS activ + hartă încă necitită = rămâne „Se încarcă…”, nu „Nicio parcelă”
-    setLoading(true)
+    setLoading(true); setEroareRegistru(null)
     try {
       if (fSms) {
         // filtrul SMS se aplică pe TOATE rândurile filtrelor (nu pe pagina curentă), apoi se paginează local
@@ -265,7 +266,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       if (g !== generatie.current) return   // a pornit o cerere mai nouă: rândurile și totalul acesteia nu se mai aplică
       if (error) throw error
       setRanduri(data || []); setTotal(count || 0)
-    } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); setSelectie(new Set()); show('Registru: ' + msgEroare(e), 'error') } }   // r8/r9 P2-1: o încărcare eșuată nu lasă rândurile sau selecția anterioare (borderoul le-ar exporta)
+    } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); setSelectie(new Set()); setEroareRegistru(msgEroare(e)); show('Registru: ' + msgEroare(e), 'error') } }   // r8/r9 P2-1: o încărcare eșuată nu lasă rândurile sau selecția anterioare (borderoul le-ar exporta)
     finally { if (g === generatie.current && !asteaptaSms) setLoading(false) }
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
   useEffect(() => { incarca() }, [incarca])
@@ -384,8 +385,8 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={13} style={{ ...S.td, color:G.muted, textAlign:'center' }}>Se încarcă…</td></tr>}
-            {!loading && randuri.length === 0 && <tr><td colSpan={13} style={S.td}><Gol text="Nicio parcelă pentru filtrele alese." /></td></tr>}
+            <RandStareRegistru loading={loading} eroare={eroareRegistru} fSms={fSms} nrRanduri={randuri.length} colSpan={13}
+              onReincearca={() => { if (sms.eroare) incarcaSms(); else incarca() }} />
             {!loading && randuri.map(r => (
               <tr key={`${r.parcela_id}-${r.detinator_id}`} style={{ cursor:'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#1C2128'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                 {poateScrie && <td style={S.td} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selectie.has(r.detinator_id)} onChange={() => comuta(r.detinator_id)} /></td>}

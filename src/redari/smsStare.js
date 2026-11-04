@@ -13,11 +13,11 @@ export const STARI_SMS = {
 }
 const CATEGORII = ['livrat', 'trimis', 'in_curs', 'esuat']
 
-// Filtrul din Registru. „nelivrat” = categorie trimis SAU in_curs (a plecat / pleacă, fără confirmare de livrare).
+// Filtrul din Registru. „nelivrat” = categorie trimis SAU in_curs (a plecat / pleacă, fără confirmare de livrare); eticheta r4: „neconfirmat”.
 export const FILTRE_SMS = [
   { cod: '', eticheta: 'SMS: toate' },
   { cod: 'fara', eticheta: 'SMS: fără SMS' },
-  { cod: 'nelivrat', eticheta: 'SMS: trimis, nelivrat' },
+  { cod: 'nelivrat', eticheta: 'SMS: neconfirmat (trimis / în curs)' },
   { cod: 'livrat', eticheta: 'SMS: livrat' },
   { cod: 'esuat', eticheta: 'SMS: eșuat' },
 ]

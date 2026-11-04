@@ -2,6 +2,7 @@
 -- r2 (Jakarinos NO-GO P1): FARA fixture SMS si FARA ALTER TABLE / DISABLE TRIGGER pe sms_* — un DISABLE / ENABLE TRIGGER ia SHARE ROW EXCLUSIVE
 -- tinut pana la ROLLBACK si ar bloca workerul SMS. Aici NU se scrie nimic in tabele: migrarea creeaza doar functia (fara blocari de tabel),
 -- testele sunt citiri (ACL, coloane, refuzuri, cifrele pe datele REALE TEST-RAZVAN comparate cu un calcul independent din tabele).
+-- r4: tranzactia runnerului e REPEATABLE READ (garda in TEST0): asteptatul si RPC-ul citesc acelasi snapshot chiar daca workerul SMS scrie intre ele.
 -- r3: revenirea NU mai e copiata aici — runnerul (C:/Users/Public/livrare/run_30i_dry.sh) ruleaza dupa acest fisier RESET ROLE + claims goale,
 -- marcajul gazpet.revenire_20261130i, fisierul supabase/revenire/20261130i_redari_sms_stare_ROLLBACK.sql, o verificare ca functia a disparut,
 -- apoi ROLLBACK explicit (scris de runner, ultima instructiune a tranzactiei).
@@ -37,6 +38,11 @@ DECLARE ad uuid; ed uuid; vw uuid; fa uuid; pr uuid;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130i_redari_sms_stare:' || txid_current() THEN
     RAISE EXCEPTION 'TEST0 FAIL: garda';
+  END IF;
+  -- r4 (Copilot #984 P2-01): asteptatul (calculat aici din tabele) si rezultatul RPC (TEST2) trebuie sa vada ACELASI snapshot — altfel un mesaj
+  -- scris de workerul SMS intre ele ar da un fals FAIL / fals OK. Runnerul porneste cu BEGIN ISOLATION LEVEL REPEATABLE READ.
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'repeatable read' THEN
+    RAISE EXCEPTION 'TEST0 FAIL: DRY-ul de productie cere REPEATABLE READ (snapshot comun pentru asteptat si RPC), nu %', current_setting('transaction_isolation');
   END IF;
   SELECT id INTO ad FROM public.profiles WHERE is_owner ORDER BY id LIMIT 1;
   SELECT a.profile_id INTO ed FROM public.user_module_access a JOIN public.profiles p ON p.id = a.profile_id

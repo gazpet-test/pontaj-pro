@@ -6,7 +6,7 @@ import { renderToString } from 'react-dom/server'
 
 vi.mock('../../lib/supabase.js', () => ({ supabase: { from: () => { throw new Error('fără BD în test') }, rpc: () => { throw new Error('fără BD în test') } } }))
 
-import { CelulaSms, FiltruSms } from './SmsRegistru.jsx'
+import { CelulaSms, FiltruSms, RandStareRegistru } from './SmsRegistru.jsx'
 import { RandSms } from './FisaParcela.jsx'
 import { hartaSms } from '../smsStare.js'
 
@@ -38,12 +38,45 @@ describe('Registru — coloana SMS', () => {
 describe('Registru — filtrul SMS', () => {
   it('opțiunile cerute, activ când harta e citită', () => {
     const x = h(<FiltruSms valoare="" onChange={() => {}} sms={{ harta, eroare: null }} />)
-    for (const t of ['SMS: toate', 'SMS: fără SMS', 'SMS: trimis, nelivrat', 'SMS: livrat', 'SMS: eșuat']) expect(x).toContain(t)
+    for (const t of ['SMS: toate', 'SMS: fără SMS', 'SMS: neconfirmat (trimis / în curs)', 'SMS: livrat', 'SMS: eșuat']) expect(x).toContain(t)
     expect(x).not.toContain('disabled')
   })
   it('dezactivat la eroare (nu filtrează pe o hartă lipsă), dar rămâne activ dacă e deja ales (se poate reseta)', () => {
     expect(h(<FiltruSms valoare="" onChange={() => {}} sms={{ harta: null, eroare: 'x' }} />)).toContain('disabled')
     expect(h(<FiltruSms valoare="livrat" onChange={() => {}} sms={{ harta: null, eroare: 'x' }} />)).not.toContain('disabled')
+  })
+})
+
+describe('Registru — rândul de stare (r4, P2-02): eroare ≠ gol', () => {
+  // găsește recursiv primul element <button> din arborele întors de componentă (fără DOM)
+  const gasesteButon = (el) => {
+    if (!el || typeof el !== 'object') return null
+    if (el.type === 'button') return el
+    const copii = [].concat(el.props?.children ?? [])
+    for (const c of copii) { const b = gasesteButon(c); if (b) return b }
+    return null
+  }
+  const props = { loading: false, eroare: null, fSms: 'livrat', nrRanduri: 0, colSpan: 13, onReincearca: () => {} }
+  it('filtru SMS activ + RPC 5xx: „Nu s-a putut determina lista pentru filtrul SMS” + Reîncearcă, NU „Nicio parcelă”', () => {
+    const x = h(<table><tbody><RandStareRegistru {...props} eroare="500: upstream request timeout" /></tbody></table>)
+    expect(x).toContain('data-testid="registru-eroare"')
+    expect(x).toContain('Nu s-a putut determina lista pentru filtrul SMS')
+    expect(x).toContain('500: upstream request timeout')
+    expect(x).toContain('Reîncearcă')
+    expect(x).not.toContain('Nicio parcelă')
+  })
+  it('Reîncearcă apelează handler-ul (care reîncarcă harta SMS / registrul)', () => {
+    let apeluri = 0
+    const b = gasesteButon(RandStareRegistru({ ...props, eroare: '503', onReincearca: () => { apeluri++ } }))
+    expect(b).not.toBeNull()
+    b.props.onClick(); expect(apeluri).toBe(1)
+  })
+  it('fără filtru SMS: mesaj generic de eroare; „Nicio parcelă” doar după succes cu 0 rânduri; încărcare = „Se încarcă…”', () => {
+    expect(h(<table><tbody><RandStareRegistru {...props} fSms="" eroare="x" /></tbody></table>)).toContain('Nu s-a putut încărca registrul')
+    expect(h(<table><tbody><RandStareRegistru {...props} /></tbody></table>)).toContain('Nicio parcelă pentru filtrele alese.')
+    const inc = h(<table><tbody><RandStareRegistru {...props} loading eroare="x" /></tbody></table>)
+    expect(inc).toContain('Se încarcă…'); expect(inc).not.toContain('Nicio parcelă')
+    expect(RandStareRegistru({ ...props, nrRanduri: 3 })).toBeNull()
   })
 })
 

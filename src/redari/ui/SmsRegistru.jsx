@@ -1,7 +1,7 @@
 // Registru — coloana „SMS” și filtrul SMS (20261130i). Componente pure (props → markup), testate prin randare (smsRegistruRender.test.jsx).
 // sms = { harta: Map|null, eroare: string|null }: harta null fără eroare = se încarcă; eroare = afișată, NU „niciun SMS” (L18).
 import React from 'react'
-import { G, S } from './comune.jsx'
+import { G, S, Gol } from './comune.jsx'
 import { stareSmsPentru, textBadge, rezumatSms, FILTRE_SMS, STARI_SMS } from '../smsStare.js'
 
 // „—” fără SMS; badge cu ultima stare + ×N + data ultimei trimiteri; tooltip cu cifrele
@@ -23,4 +23,19 @@ export function FiltruSms({ valoare, onChange, sms }) {
       {FILTRE_SMS.map(f => <option key={f.cod} value={f.cod}>{f.eticheta}</option>)}
     </select>
   )
+}
+
+// r4 (Copilot #984 P2-02, L18): rândul de stare al tabelului Registrului — încărcare / eroare / gol sunt TREI stări distincte.
+// „Nicio parcelă pentru filtrele alese.” apare DOAR după o încărcare reușită cu zero rânduri; o eroare (inclusiv RPC-ul SMS picat cu filtrul
+// SMS activ) spune că lista nu s-a putut determina și oferă Reîncearcă.
+export function RandStareRegistru({ loading, eroare, fSms, nrRanduri, colSpan, onReincearca }) {
+  if (loading) return <tr><td colSpan={colSpan} style={{ ...S.td, color:G.muted, textAlign:'center' }}>Se încarcă…</td></tr>
+  if (eroare) return (
+    <tr><td colSpan={colSpan} role="alert" data-testid="registru-eroare" style={{ ...S.td, color:G.red, textAlign:'center' }}>
+      ⚠ {fSms ? 'Nu s-a putut determina lista pentru filtrul SMS' : 'Nu s-a putut încărca registrul'} ({eroare}).{' '}
+      <button type="button" style={S.btnX} onClick={onReincearca}>↻ Reîncearcă</button>
+    </td></tr>
+  )
+  if (nrRanduri === 0) return <tr><td colSpan={colSpan} style={S.td}><Gol text="Nicio parcelă pentru filtrele alese." /></td></tr>
+  return null
 }
