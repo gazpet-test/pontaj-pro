@@ -94,12 +94,12 @@ SELECT public.fn_red_coresp_mail_verifica_baza('0705e04f3e26656c2116b6d1b9f87c6e
 -- Coloanele mailului. Regex-urile = aceleasi ca in supabase/functions/_shared/redariCorespMail.mjs (RX_EMAIL / RX_GAZPET); paritatea e testata in DRY.
 ALTER TABLE public.red_corespondenta
   ADD COLUMN destinatar_email text CONSTRAINT red_corespondenta_destinatar_email_ck CHECK (destinatar_email IS NULL OR (length(destinatar_email) <= 254
-    AND destinatar_email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$')),
+    AND destinatar_email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:[.][A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$')),
   ADD COLUMN mail_subiect text CONSTRAINT red_corespondenta_mail_subiect_ck CHECK (mail_subiect IS NULL OR (length(mail_subiect) <= 300
-    AND mail_subiect ~ '[^[:space:]]' AND mail_subiect !~ '[\r\n]')),
+    AND mail_subiect ~ '[^[:space:]]' AND mail_subiect !~ E'[\\r\\n]')),
   ADD COLUMN mail_text text CONSTRAINT red_corespondenta_mail_text_ck CHECK (mail_text IS NULL OR (length(mail_text) <= 20000 AND mail_text ~ '[^[:space:]]')),
   ADD COLUMN expeditor_email text CONSTRAINT red_corespondenta_expeditor_email_ck CHECK (expeditor_email IS NULL OR (length(expeditor_email) <= 254
-    AND lower(expeditor_email) ~ '^[a-z0-9._%+-]+@gazpet\.ro$'));
+    AND lower(expeditor_email) ~ '^[a-z0-9._%+-]+@gazpet[.]ro$'));
 COMMENT ON COLUMN public.red_corespondenta.destinatar_email IS 'Adresa de e-mail a instituției (o copiază expeditorul în mailul lui). Intră în conținutul aprobat.';
 COMMENT ON COLUMN public.red_corespondenta.expeditor_email IS 'Cine trimite mailul către instituție: DOAR @gazpet.ro (CHECK). Primește mailul intern „Pregătește mailul”. Intră în conținutul aprobat.';
 
@@ -111,7 +111,7 @@ CREATE TABLE public.red_corespondenta_mailuri (
   fisier_id uuid NOT NULL CONSTRAINT red_corespondenta_mailuri_fisier_fk REFERENCES public.red_corespondenta_fisiere(id),
   versiune_confirmata integer NOT NULL,
   fisier_etag text NOT NULL CHECK (length(fisier_etag) BETWEEN 3 AND 200 AND fisier_etag ~ '^"[^"]+"$'),
-  catre text NOT NULL CHECK (length(catre) <= 254 AND lower(catre) ~ '^[a-z0-9._%+-]+@gazpet\.ro$'),
+  catre text NOT NULL CHECK (length(catre) <= 254 AND lower(catre) ~ '^[a-z0-9._%+-]+@gazpet[.]ro$'),
   -- CC = office@; EXCEPTIE documentata (decizia Razvan 04.11.2026, r4 C-P3-01): daca expeditorul e chiar office@, CC se omite (aceeasi adresa)
   -- r5 (J-P3-01 / C-P3-01): IS TRUE pe toata expresia — un NULL nu trece in afara exceptiei office@
   cc text CONSTRAINT red_corespondenta_mailuri_cc_ck CHECK (((lower(catre) <> 'office@gazpet.ro' AND cc = 'office@gazpet.ro') OR (lower(catre) = 'office@gazpet.ro' AND cc IS NULL)) IS TRUE),
@@ -195,7 +195,7 @@ BEGIN
   IF c.stare IS DISTINCT FROM 'aprobat' OR c.aprobat_la IS NULL OR c.aprobat_fisier_id IS NULL OR c.aprobat_storage_etag IS NULL THEN
     RAISE EXCEPTION 'redari: mailul se pregateste doar pentru un rand aprobat de owner, cu fisier de trimis aprobat' USING ERRCODE = '23514';
   END IF;
-  IF c.expeditor_email IS NULL OR lower(c.expeditor_email) !~ '^[a-z0-9._%+-]+@gazpet\.ro$' THEN
+  IF c.expeditor_email IS NULL OR lower(c.expeditor_email) !~ '^[a-z0-9._%+-]+@gazpet[.]ro$' THEN
     RAISE EXCEPTION 'redari: expeditorul mailului trebuie sa aiba o adresa @gazpet.ro' USING ERRCODE = '23514';
   END IF;
   IF c.destinatar_email IS NULL OR c.mail_subiect IS NULL OR c.mail_text IS NULL THEN
@@ -203,7 +203,7 @@ BEGIN
   END IF;
   SELECT * INTO f FROM public.red_corespondenta_fisiere WHERE id = c.aprobat_fisier_id AND corespondenta_id = c.id AND rol = 'de_trimis';
   IF NOT FOUND THEN RAISE EXCEPTION 'redari: fisierul aprobat nu e fisierul de trimis al randului' USING ERRCODE = '23514'; END IF;
-  IF lower(f.path) !~ '\.pdf$' THEN RAISE EXCEPTION 'redari: fisierul aprobat nu e PDF' USING ERRCODE = '23514'; END IF;
+  IF lower(f.path) !~ '[.]pdf$' THEN RAISE EXCEPTION 'redari: fisierul aprobat nu e PDF' USING ERRCODE = '23514'; END IF;
   -- r4 (J-P2-01 / C-P2-02): eTag-ul curent = un ETag HTTP PUTERNIC ("...", fara W/), citit integral (fara btrim / left), cel mult 200 de caractere
   -- (limita de stocare din red_corespondenta_fisiere / aprobat_storage_etag: peste ea = refuz explicit, nu taiere), apoi egal EXACT cu cel aprobat.
   SELECT o.metadata ->> 'eTag' INTO v_etag FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = f.path;
