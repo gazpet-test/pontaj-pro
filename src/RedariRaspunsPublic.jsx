@@ -57,7 +57,10 @@ const S = {
   trimite: (dezactivat) => ({ marginTop: 18, width: '100%', minHeight: 52, padding: 13, background: G.green, color: '#fff', border: 'none', borderRadius: 10, fontSize: 17, fontWeight: 700, cursor: dezactivat ? 'default' : 'pointer', opacity: dezactivat ? .6 : 1, fontFamily: 'inherit' }),
   subsol: { textAlign: 'center', fontSize: 11.5, color: '#8a99a8', marginTop: 16, lineHeight: 1.5 },
   fieldset: { border: 'none', padding: 0, margin: 0, minWidth: 0 },
+  linkInformare: { display: 'inline-block', fontSize: 14, fontWeight: 700, color: G.blue, textDecoration: 'underline', margin: '0 0 12px', padding: '6px 0', minHeight: 24 },
 }
+// Pagina publică a informării (RedariInformarePublic.jsx, aceeași origine) — se deschide în tab nou, formularul rămâne completat
+export const LINK_INFORMARE = '/redari/informare'
 
 // Datele de contact apar DOAR dacă RPC-ul le trimite (contract §5 nu le promite; dacă vin, le afișăm)
 function Contact({ f }) {
@@ -79,6 +82,8 @@ function Antet({ f }) {
     <>
       <h1 style={S.h1}>GAZPET INSTAL S.R.L.</h1>
       <div style={S.sub}>Readucerea terenului la starea inițială — răspuns la convocare</div>
+      {/* juridic#031 „Canale”: sus, pe pagina formularului, link vizibil către informarea GDPR (pagină fără date individuale) */}
+      <a href={LINK_INFORMARE} target="_blank" rel="noopener noreferrer" style={S.linkInformare}>Informarea privind datele personale</a>
       {f?.ok && (
         <div style={{ ...S.info, marginBottom: 4 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: G.blue }}>Parcela {f.id_parcela || '—'}{f.uat_nume ? ` · ${f.uat_nume}` : ''}</div>

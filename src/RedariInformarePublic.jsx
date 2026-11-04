@@ -1,6 +1,8 @@
 // ═════════════════════════════════════════════════════════════════
 // RedariInformarePublic.jsx — pagină PUBLICĂ (fără login): informarea GDPR completă, Lot 1.
-// /redari/informare — ținta linkului / QR-ului din convocator („Informarea completă: …”, red_proiecte.link_informare_gdpr).
+// /redari/informare — juridic#031 „Canale”: QR-ul de pe hârtie duce la formularul de răspuns (/redari/raspuns/:token),
+// care are sus linkul „Informarea privind datele personale” către această pagină; în mailuri apare și linkul direct.
+// Pe hârtie, informarea completă e pe verso.
 // Fără date individuale, fără apeluri la BD, fără urmărire externă, fără fonturi externe (NOTĂ INTERNĂ pct. 5 din Informare v3).
 // Cât INFORMARE_LOT1_PUBLICATA = false sau textul are câmpuri [ ] necompletate, pagina arată banda „PROIECT” și noindex.
 // ═════════════════════════════════════════════════════════════════
