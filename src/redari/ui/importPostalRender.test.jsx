@@ -78,7 +78,7 @@ describe('ImportPostal — termenul de 10 zile', () => {
   it('previzualizarea arată avertismentul doar pe rândul tardiv și numărul tardivelor', () => {
     const { tree } = ecranCuPrevizualizare()
     const html = renderToString(tree).replace(/<!-- -->/g, '')
-    expect(html).toContain('După termenul de 10 zile: <b>1</b>')
+    expect(html).toContain('După termenul de 10 zile libere: <b>1</b>')
     expect(html).toContain('⚠ Data expedierii (03.12.2026) e după termen')
     expect(html).not.toContain('Data expedierii (20.11.2026)')
   })

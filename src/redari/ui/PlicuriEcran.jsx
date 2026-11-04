@@ -198,7 +198,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       // Copilot f-v2 r4 P2: ziua 1 recitită din BD chiar acum; confirmarea termenului de 10 zile se calculează pe valoarea recitită
       const termen = await confirmaExpediereRecitita(supabase, { uatId: r.uat_id, data: f.data, confirm: m => window.confirm(m) })
       if (!curent()) return
-      if (!termen.ok) return 'Expedierea nu s-a salvat: este după termenul de 10 zile și nu ai confirmat.'
+      if (!termen.ok) return 'Expedierea nu s-a salvat: este după termenul de 10 zile libere și nu ai confirmat.'
       const raport = await aplica(supabase, preview.aplicabile, { esteCurent: curent })
       if (!curent()) return
       if (raport.erori.length || raport.neprocesate.length) throw new Error('Expediere neconfirmată.')
@@ -239,7 +239,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
     {poateScrie ? <>
       <p>{grupare.grupuri.length} plicuri propuse. Maximum 200 de convocări într-un plic.</p>
       {uatDeExpediat.length > 0 && <div style={{ ...S.card, marginBottom: 10 }}>
-        <b>Termen de expediere</b> (plan pct. 4.2: recomandata pleacă cu cel puțin {TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 de sesiune)
+        <b>Termen de expediere</b> (plan pct. 4.2: recomandata pleacă cu cel puțin {TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1 de sesiune)
         {uatDeExpediat.map(u => <div key={u.id} style={{ color: termenExpediere(u, azi).depasit ? G.red : undefined }}>
           {u.nume}: {textTermenExpediere(u)}{termenExpediere(u, azi).depasit ? ' — termenul a trecut: expedierea de azi nu mai respectă cele ' + TERMEN_CONVOCARE_ZILE + ' zile libere' : ''}
         </div>)}
@@ -290,7 +290,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       <div style={{ display: 'grid', gap: 12 }}>
         {['lot', 'expediere', 'ar', 'retur'].includes(modal.tip) && <Camp eticheta="Data"><input style={S.input} disabled={lucru} type="date" min={['ar', 'retur'].includes(modal.tip) ? modal.rand.data_expediere : undefined} value={f.data} onChange={e => camp('data', e.target.value)} /></Camp>}
         {modal.tip === 'expediere' && <Camp eticheta="AWB"><input style={S.input} disabled={lucru} value={f.awb} onChange={e => camp('awb', e.target.value)} /></Camp>}
-        {modal.tip === 'expediere' && <p style={{ margin: 0 }}>{modal.rand.uat_nume || 'UAT'}: {textTermenExpediere(uatDe(modal.rand.uat_id))} (cu cel puțin {TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2).</p>}
+        {modal.tip === 'expediere' && <p style={{ margin: 0 }}>{modal.rand.uat_nume || 'UAT'}: {textTermenExpediere(uatDe(modal.rand.uat_id))} (cu cel puțin {TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1, plan pct. 4.2).</p>}
         {modal.tip === 'expediere' && avertismentExpediere(uatDe(modal.rand.uat_id), f.data) && <p role="alert" style={{ margin: 0, padding: 8, borderRadius: 6, background: G.yellowDim, color: G.yellow }}>
           ⚠ {avertismentExpediere(uatDe(modal.rand.uat_id), f.data)} Se poate salva (data e cea reală), dar termenul de convocare nu e respectat.</p>}
         {modal.tip === 'retur' && <><Camp eticheta="Motiv retur"><select style={S.select} disabled={lucru} value={f.motiv} onChange={e => camp('motiv', e.target.value)}>{MOTIVE_RETUR.map(m => <option key={m.cod} value={m.cod}>{m.eticheta}</option>)}</select></Camp>{f.motiv === 'decedat' && <p style={{ color: G.yellow }}>Deținătorii din plic vor fi marcați decedați; cererea către TGZ pentru moștenitori se face separat.</p>}</>}
