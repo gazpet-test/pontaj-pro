@@ -62,7 +62,6 @@ describe('termen constatare pe teren (plan 4.6)', () => {
     const t = termenConstatare({ uat, detinatorId: 7, raspunsuri: [cerere()], pvs: [pvTeren('2026-12-20', { constatare_mod: 'sediu' })], azi: '2027-01-01' })
     expect(t).toMatchObject({ judecat: false, depasit: false })
     expect(mesajTermenConstatare(t)).toBeNull()
-    expect(termenConstatare({ uat, detinatorId: 7, raspunsuri: [cerere()], pvs: [pvTeren('2026-12-09', { constatare_mod: null })], azi: '2027-01-01' }).judecat).toBe(false)
   })
   it('P2-02: PV A generat / trimis (nesemnat) nu închide avertismentul', () => {
     for (const stare of ['generat', 'trimis_spre_semnare']) {
@@ -99,5 +98,29 @@ describe('termen constatare pe teren (plan 4.6)', () => {
     const rv = [cerere({ data: '2026-07-14T21:15:00Z' })]
     expect(termenConstatare({ uat: vara, detinatorId: 7, raspunsuri: rv, pvs: [pvTeren('2026-07-14')], azi: '2026-07-20' })).toMatchObject({ dataConstatare: null, depasit: true })
     expect(termenConstatare({ uat: vara, detinatorId: 7, raspunsuri: rv, pvs: [pvTeren('2026-07-15')] })).toMatchObject({ dataConstatare: '2026-07-15', depasit: false, limita: '2026-07-15' })
+  })
+  it('r2 P2-01: cerere fără dată — niciun PV nu o închide, rămâne comparația cu azi', () => {
+    for (const data of [null, '', 'nu e data']) {
+      const r = [cerere({ data, created_at: '2026-12-01T10:00:00Z' })]
+      const t = termenConstatare({ uat, detinatorId: 7, raspunsuri: r, pvs: [pvTeren('2026-12-11'), pvTeren('2026-12-11', { constatare_mod: 'sediu' })], azi: '2026-12-20' })
+      expect(t).toMatchObject({ dataConstatare: null, depasit: true, judecat: true })
+      expect(t.inchis).toBeUndefined()
+    }
+  })
+  it('r2 P2-02: constatare_mod lipsă / necunoscut nu închide (nu e „sediu”)', () => {
+    for (const constatare_mod of [null, undefined, '', 'altceva', 'TEREN']) {
+      const t = termenConstatare({ uat, detinatorId: 7, raspunsuri: [cerere()], pvs: [pvTeren('2026-12-11', { constatare_mod })], azi: '2026-12-20' })
+      expect(t).toMatchObject({ dataConstatare: null, depasit: true, judecat: true })
+      expect(mesajTermenConstatare(t)).toMatch(/termen depășit/)
+    }
+  })
+  it('r2 P3-01: aceeași zi — cu ore, ordinea reală decide; fără ore, aceeași zi se acceptă', () => {
+    const r = [cerere({ data: '2026-12-12T12:00:00Z' })]
+    const inainte = pvTeren('2026-12-12', { created_at: '2026-12-12T09:00:00Z' })
+    const dupa = pvTeren('2026-12-12', { created_at: '2026-12-12T13:00:00Z' })
+    expect(termenConstatare({ uat, detinatorId: 7, raspunsuri: r, pvs: [inainte], azi: '2026-12-20' })).toMatchObject({ dataConstatare: null, depasit: true })
+    expect(termenConstatare({ uat, detinatorId: 7, raspunsuri: r, pvs: [dupa] })).toMatchObject({ dataConstatare: '2026-12-12', depasit: false })
+    expect(termenConstatare({ uat, detinatorId: 7, raspunsuri: r, pvs: [pvTeren('2026-12-12')] }).dataConstatare).toBe('2026-12-12')
+    expect(termenConstatare({ uat, detinatorId: 7, raspunsuri: [cerere({ data: '2026-12-12' })], pvs: [inainte] }).dataConstatare).toBe('2026-12-12')
   })
 })

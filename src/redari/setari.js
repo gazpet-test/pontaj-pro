@@ -195,11 +195,20 @@ export function dataLimitaConstatare(ultimaZi) {
   return d.toISOString().slice(0, 10)
 }
 
+// Valorile reale ale red_procese_verbale.constatare_mod (CHECK red_pv_constatare_ck din 20261129a: NULL, 'sediu', 'teren').
+// Închid subiectul doar modurile cunoscute; NULL / orice altă valoare = necunoscut, nu se tratează ca „la sediu” (review #974 r2 P2-02).
+const MODURI_CONSTATARE = ['sediu', 'teren']
+const areOra = (v) => { const s = normalizeazaValoare(v); return !!s && !RX_DATA.test(s) && !Number.isNaN(Date.parse(s)) }
+
 /** Termenul constatării pe teren pentru UN deținător (plan pct. 4.6).
- *  `raspunsuri` / `pvs` = rândurile deținătorului (PV-urile altor deținători sau PV B se ignoră). PV-ul care închide = cel mai vechi
- *  PV A activ semnat cu data_pv ≥ data cererii și ≥ prima zi de sesiune: dacă e „pe teren”, data lui se compară cu limita; dacă e
- *  în alt mod (ex. sediu), subiectul e închis și nu se mai judecă. Fără PV care închide se compară cu `azi` ('AAAA-LL-ZZ', opțional,
- *  ca la termenExpediere). → { cerut, ultimaZi, limita, dataConstatare, depasit, judecat, inchis? }; fără cerere / zi de sesiune / termen: judecat=false. */
+ *  `raspunsuri` / `pvs` = rândurile deținătorului (PV-urile altor deținători sau PV B se ignoră).
+ *  PV-ul care închide = cel mai vechi PV A activ SEMNAT, cu constatare_mod cunoscut ('sediu'/'teren'), cu data_pv ≥ prima zi de
+ *  sesiune și ulterior cererii: data_pv > data cererii (civilă, București) sau aceeași zi. În aceeași zi, dacă cererea are oră și PV-ul
+ *  are created_at, ordinea reală decide (PV creat după cerere); altfel (fără ore) aceeași zi se acceptă — nu avem un moment mai fin.
+ *  Cerere fără dată = niciun PV nu poate dovedi că e ulterior: nu închide (review #974 r2 P2-01).
+ *  'teren' → data lui se compară cu limita; 'sediu' → închis, fără avertisment. Fără PV care închide se compară cu `azi`
+ *  ('AAAA-LL-ZZ', opțional, ca la termenExpediere). → { cerut, ultimaZi, limita, dataConstatare, depasit, judecat, inchis? };
+ *  fără cerere / zi de sesiune / termen: judecat=false. */
 export function termenConstatare({ uat, detinatorId, raspunsuri = [], pvs = [], azi = null } = {}) {
   const ale = (Array.isArray(raspunsuri) ? raspunsuri : []).filter(r => r && (detinatorId == null || r.detinator_id === detinatorId))
   const ultim = ultimulRaspuns(ale)
@@ -209,13 +218,20 @@ export function termenConstatare({ uat, detinatorId, raspunsuri = [], pvs = [], 
   const gol0 = { cerut, ultimaZi, limita, dataConstatare: null, depasit: false, judecat: false }
   if (!cerut || !limita) return gol0
   const dataCerere = dataCivilaBucuresti(ultim.data)
-  const inchide = (Array.isArray(pvs) ? pvs : [])
-    .filter(p => p && p.tip === 'A' && p.sters_la == null && p.stare === 'semnat' && (detinatorId == null || p.detinator_id === detinatorId))
+  const momentCerere = areOra(ultim.data) ? Date.parse(ultim.data) : null
+  const dupaCerere = (p, d) => {
+    if (!dataCerere) return false
+    if (d !== dataCerere) return d > dataCerere
+    return momentCerere == null || !areOra(p.created_at) || Date.parse(p.created_at) >= momentCerere
+  }
+  const inchide = dataCerere && (Array.isArray(pvs) ? pvs : [])
+    .filter(p => p && p.tip === 'A' && p.sters_la == null && p.stare === 'semnat' && MODURI_CONSTATARE.includes(p.constatare_mod)
+      && (detinatorId == null || p.detinator_id === detinatorId))
     .map(p => ({ p, d: dataCivila(p.data_pv) }))
-    .filter(x => x.d && x.d >= primaZi && (!dataCerere || x.d >= dataCerere))
+    .filter(x => x.d && x.d >= primaZi && dupaCerere(x.p, x.d))
     .sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0))[0]
   if (inchide) {
-    if (inchide.p.constatare_mod !== 'teren') return { ...gol0, inchis: true }   // închis în alt mod: fără avertisment
+    if (inchide.p.constatare_mod === 'sediu') return { ...gol0, inchis: true }   // închis la sediu: fără avertisment
     return { ...gol0, dataConstatare: inchide.d, depasit: inchide.d > limita, judecat: true }
   }
   const a = dataCivila(azi)
