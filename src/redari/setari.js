@@ -158,15 +158,21 @@ export function mesajTermenAfisare(t) {
 }
 
 // Plan de verificare rev49 pct. 4.6: „constatarea pe teren în maximum 5 zile de la sesiune”. Zile calendaristice (planul nu spune
-// „lucrătoare”), numărate de la ULTIMA zi de sesiune completată a UAT-ului. AVERTISMENT neblocant, nu eroare: varianta implicită
-// propusă de Claude, DE CONFIRMAT de Răzvan (claude#026 întrebarea 5). Fără coloană nouă: cererea = ultimul răspuns al deținătorului
-// e `constatare_teren`; constatarea = PV A activ al deținătorului cu constatare_mod 'teren' și data_pv completată.
+// „lucrătoare”), numărate de la ULTIMA zi de sesiune a UAT-ului care are și program. AVERTISMENT neblocant, nu eroare: varianta
+// implicită propusă de Claude, DE CONFIRMAT de Răzvan (claude#026 întrebarea 5). Fără coloană nouă: cererea = ultimul răspuns al
+// deținătorului e `constatare_teren`; subiectul se închide DOAR printr-un PV A activ SEMNAT (stare 'semnat', ca în stare.js) cu
+// data_pv ≥ data cererii și ≥ prima zi de sesiune (review #974 r1 P2-01/P2-02). PV A generat/nesemnat sau mai vechi nu închide.
 export const TERMEN_CONSTATARE_ZILE = 5
 const dataCivila = (v) => { const s = normalizeazaValoare(v)?.slice(0, 10); return s && dataValida(s) ? s : null }
 
-/** Ultima zi de sesiune validă a UAT-ului ('AAAA-LL-ZZ') sau null. */
+/** Zilele de sesiune valide ale UAT-ului care au și program completat (review #974 r1 P3-01), sortate. */
+function zileSesiuneCuProgram(uat) {
+  return [1, 2, 3].filter(i => !gol(uat?.[`program_zi${i}`])).map(i => dataCivila(uat?.[`sesiune_zi${i}`])).filter(Boolean).sort()
+}
+
+/** Ultima zi de sesiune validă cu program a UAT-ului ('AAAA-LL-ZZ') sau null. */
 export function ultimaZiSesiune(uat) {
-  const z = ZILE_SESIUNE.map(k => dataCivila(uat?.[k])).filter(Boolean).sort()
+  const z = zileSesiuneCuProgram(uat)
   return z.length ? z[z.length - 1] : null
 }
 
@@ -180,28 +186,35 @@ export function dataLimitaConstatare(ultimaZi) {
 }
 
 /** Termenul constatării pe teren pentru UN deținător (plan pct. 4.6).
- *  `raspunsuri` / `pvs` = rândurile deținătorului (PV-urile altor deținători sau PV B se ignoră). `azi` opțional ('AAAA-LL-ZZ', ca la
- *  termenExpediere): folosit doar cât constatarea nu e consemnată și PV A nu e semnat.
- *  → { cerut, ultimaZi, limita, dataConstatare, depasit, judecat }. Fără cerere, fără zi de sesiune sau fără termen de comparat: judecat=false. */
+ *  `raspunsuri` / `pvs` = rândurile deținătorului (PV-urile altor deținători sau PV B se ignoră). PV-ul care închide = cel mai vechi
+ *  PV A activ semnat cu data_pv ≥ data cererii și ≥ prima zi de sesiune: dacă e „pe teren”, data lui se compară cu limita; dacă e
+ *  în alt mod (ex. sediu), subiectul e închis și nu se mai judecă. Fără PV care închide se compară cu `azi` ('AAAA-LL-ZZ', opțional,
+ *  ca la termenExpediere). → { cerut, ultimaZi, limita, dataConstatare, depasit, judecat, inchis? }; fără cerere / zi de sesiune / termen: judecat=false. */
 export function termenConstatare({ uat, detinatorId, raspunsuri = [], pvs = [], azi = null } = {}) {
   const ale = (Array.isArray(raspunsuri) ? raspunsuri : []).filter(r => r && (detinatorId == null || r.detinator_id === detinatorId))
-  const cerut = ultimulRaspuns(ale)?.optiune === 'constatare_teren'
-  const ultimaZi = ultimaZiSesiune(uat), limita = dataLimitaConstatare(ultimaZi)
-  const pvA = (Array.isArray(pvs) ? pvs : []).filter(p => p && p.tip === 'A' && p.sters_la == null && p.stare !== 'anulat'
-    && (detinatorId == null || p.detinator_id === detinatorId))
-  const dateTeren = pvA.filter(p => p.constatare_mod === 'teren').map(p => dataCivila(p.data_pv)).filter(Boolean).sort()
-  const dataConstatare = dateTeren[0] || null
-  const gol = { cerut, ultimaZi, limita, dataConstatare, depasit: false, judecat: false }
-  if (!cerut || !limita) return gol
-  if (dataConstatare) return { ...gol, depasit: dataConstatare > limita, judecat: true }
-  if (pvA.some(p => p.stare === 'semnat')) return gol
+  const ultim = ultimulRaspuns(ale)
+  const cerut = ultim?.optiune === 'constatare_teren'
+  const zile = zileSesiuneCuProgram(uat)
+  const primaZi = zile[0] || null, ultimaZi = zile.length ? zile[zile.length - 1] : null, limita = dataLimitaConstatare(ultimaZi)
+  const gol0 = { cerut, ultimaZi, limita, dataConstatare: null, depasit: false, judecat: false }
+  if (!cerut || !limita) return gol0
+  const dataCerere = dataCivila(ultim.data)
+  const inchide = (Array.isArray(pvs) ? pvs : [])
+    .filter(p => p && p.tip === 'A' && p.sters_la == null && p.stare === 'semnat' && (detinatorId == null || p.detinator_id === detinatorId))
+    .map(p => ({ p, d: dataCivila(p.data_pv) }))
+    .filter(x => x.d && x.d >= primaZi && (!dataCerere || x.d >= dataCerere))
+    .sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0))[0]
+  if (inchide) {
+    if (inchide.p.constatare_mod !== 'teren') return { ...gol0, inchis: true }   // închis în alt mod: fără avertisment
+    return { ...gol0, dataConstatare: inchide.d, depasit: inchide.d > limita, judecat: true }
+  }
   const a = dataCivila(azi)
-  return a ? { ...gol, depasit: a > limita, judecat: true } : gol
+  return a ? { ...gol0, depasit: a > limita, judecat: true } : gol0
 }
 
 /** Textul avertismentului (null când nu e nimic de spus). */
 export function mesajTermenConstatare(t) {
-  if (!t?.cerut || !t.limita) return null
+  if (!t?.cerut || !t.limita || t.inchis) return null
   const baza = `Constatare pe teren cerută: termen ${dataRo(t.limita)} (${TERMEN_CONSTATARE_ZILE} zile de la ultima zi de sesiune, ${dataRo(t.ultimaZi)}; plan pct. 4.6)`
   if (t.dataConstatare) return t.depasit ? `${baza} — constatarea din ${dataRo(t.dataConstatare)} e după termen` : null
   return t.depasit ? `${baza} — termen depășit, constatarea nu e consemnată` : baza
