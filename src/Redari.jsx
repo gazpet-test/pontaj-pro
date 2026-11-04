@@ -204,6 +204,12 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   const [fSms, setFSms] = useState('')
   const [sms, setSms] = useState({ harta: null, eroare: null })
   const generatieSms = useRef(0)
+  // r2 (Jakarinos P2-2, L24): exportul „Lista SMS” are generația lui, invalidată la unmount și la schimbarea proiectului / filtrelor;
+  // proiectCurent = proiectul afișat acum (verificat înainte de descărcare / toast)
+  const generatieExport = useRef(0)
+  const proiectCurent = useRef(proiect.id)
+  proiectCurent.current = proiect.id
+  useEffect(() => () => { generatieExport.current++; generatie.current++ }, [])
   const incarcaSms = useCallback(async () => {
     const g = ++generatieSms.current
     setSms({ harta: null, eroare: null })
@@ -235,12 +241,13 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
 
   const incarca = useCallback(async () => {
     const g = ++generatie.current
+    let asteaptaSms = false   // r2 (P2-3): filtru SMS activ + hartă încă necitită = rămâne „Se încarcă…”, nu „Nicio parcelă”
     setLoading(true)
     try {
       if (fSms) {
         // filtrul SMS se aplică pe TOATE rândurile filtrelor (nu pe pagina curentă), apoi se paginează local
         if (sms.eroare) throw new Error(`filtrul SMS nu se poate aplica: ${sms.eroare}`)
-        if (!smsGata) { setRanduri([]); setTotal(0); return }   // harta încă se încarcă: incarca() rulează din nou când sosește (deps)
+        if (!smsGata) { asteaptaSms = true; setRanduri([]); setTotal(0); return }   // harta încă se încarcă: incarca() rulează din nou când sosește (deps)
         const toate = (await citesteToate(() => g === generatie.current)).filter(r => potrivesteFiltru(stareSmsPentru(sms.harta, r.detinator_id), fSms))
         if (g !== generatie.current) return
         setRanduri(toate.slice(pagina * PAGINA, pagina * PAGINA + PAGINA)); setTotal(toate.length)
@@ -261,12 +268,12 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       if (error) throw error
       setRanduri(data || []); setTotal(count || 0)
     } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); setSelectie(new Set()); show('Registru: ' + msgEroare(e), 'error') } }   // r8/r9 P2-1: o încărcare eșuată nu lasă rândurile sau selecția anterioare (borderoul le-ar exporta)
-    finally { if (g === generatie.current) setLoading(false) }
+    finally { if (g === generatie.current && !asteaptaSms) setLoading(false) }
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
   useEffect(() => { incarca() }, [incarca])
   useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata, fSms])
   // P1-4: selecția e a rândurilor VĂZUTE — se golește la orice schimbare de filtre / pagină
-  useEffect(() => { setSelectie(new Set()); setRanduri([]) }, [fUat, fTronson, fStare, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
+  useEffect(() => { setSelectie(new Set()); setRanduri([]); generatieExport.current++ }, [fUat, fTronson, fStare, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
 
   const nrPagini = Math.max(1, Math.ceil(total / PAGINA))
   const toateSelectate = randuri.length > 0 && randuri.every(r => selectie.has(r.detinator_id))
@@ -316,16 +323,17 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   // CSV „Lista SMS” (intern, fără telefon): toate rândurile filtrelor curente (inclusiv filtrul SMS), nu doar pagina
   const listaSms = async () => {
     if (!smsGata) { show(sms.eroare ? `Lista SMS: ${sms.eroare}` : 'Starea SMS încă se încarcă.', 'error'); return }
-    const g = generatie.current
+    const g = ++generatieExport.current, proiectId = proiect.id, cod = proiect.cod, harta = sms.harta
+    const curent = () => g === generatieExport.current && proiectCurent.current === proiectId
     setLucru(true)
     try {
-      const toate = (await citesteToate(() => g === generatie.current)).filter(r => potrivesteFiltru(stareSmsPentru(sms.harta, r.detinator_id), fSms))
-      if (g !== generatie.current) throw new Error('filtrele s-au schimbat între timp — reîncearcă')
+      const toate = (await citesteToate(curent)).filter(r => potrivesteFiltru(stareSmsPentru(harta, r.detinator_id), fSms))
+      if (!curent()) return   // Registru demontat / alt proiect / filtre schimbate: fără descărcare și fără toast
       if (!toate.length) { show('Lista SMS: niciun rând pentru filtrele alese.', 'error'); return }
-      descarcaBlob(new Blob([csvListaSms(toate, sms.harta)], { type: 'text/csv;charset=utf-8' }), `lista_sms_${proiect.cod}_${azi()}.csv`)
+      descarcaBlob(new Blob([csvListaSms(toate, harta)], { type: 'text/csv;charset=utf-8' }), `lista_sms_${cod}_${azi()}.csv`)
       show(`Lista SMS descărcată: ${toate.length} rânduri.`, 'success')
-    } catch (e) { show('Lista SMS: ' + msgEroare(e), 'error') }
-    finally { setLucru(false) }
+    } catch (e) { if (curent()) show('Lista SMS: ' + msgEroare(e), 'error') }
+    finally { setLucru(false) }   // butonul e blocat cât rulează (lucru), deci nu există alt export concurent de păstrat
   }
 
   const dupaActiune = () => { setActiune(null); incarca() }

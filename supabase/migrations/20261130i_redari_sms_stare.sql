@@ -21,7 +21,10 @@
 --     categorie (o singură definiție, L19; filtrul UI o folosește ca atare): 'livrat' dacă există o livrare; altfel 'trimis' dacă există un mesaj
 --       acceptat fără confirmare încă; altfel 'in_curs' dacă există unul în curs; altfel 'esuat' (toate încercările au eșuat).
 --     Un deținător fără niciun mesaj numărat NU apare în rezultat (UI: „fără SMS”).
--- Revenire: supabase/revenire/20261130i_redari_sms_stare_ROLLBACK.sql. DRY: supabase/tests/20261130i_redari_sms_stare_dryrun.sql.
+-- Revenire: supabase/revenire/20261130i_redari_sms_stare_ROLLBACK.sql.
+-- DRY productie (r2): supabase/tests/20261130i_redari_sms_stare_dryrun.sql — doar citiri + revenire, fara fixture SMS si fara ALTER TABLE pe sms_*.
+-- DRY local (PG17 de test): supabase/tests/20261130i_redari_sms_stare_dryrun_local.sql + _schelet.sql — cazurile pe stari, cu fixture.
+-- r2 (Jakarinos NO-GO 04.11.2026): preflight cu text EXACT al CHECK-urilor de stare + amprenta fn_red_nivel(); DRY de productie fara blocari.
 -- Codul (src/redari/smsStare.js + Registru / Fișa parcelei) cere funcția: se livrează DUPĂ aplicarea acestei migrări.
 DO $pre$
 BEGIN
@@ -43,12 +46,24 @@ BEGIN
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_detinatori' AND column_name IN ('id', 'parcela_id')) <> 2 THEN
     RAISE EXCEPTION '20261130i: coloanele SMS / Redari au alta forma';
   END IF;
-  -- starile pe care le clasifica functia trebuie sa fie exact cele din CHECK-urile 20261130a (o stare noua = review, nu clasificare tacita)
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.sms_mesaje'::regclass AND contype = 'c'
-                  AND pg_get_constraintdef(oid) LIKE '%in_coada%trimis%livrat%esuat%necunoscut%anulat%')
-     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.sms_loturi'::regclass AND contype = 'c'
-                  AND pg_get_constraintdef(oid) LIKE '%draft%aprobat%in_trimitere%coada_golita%anulat%') THEN
-    RAISE EXCEPTION '20261130i: CHECK-urile de stare SMS nu mai sunt cele din 20261130a';
+  -- r2 (Jakarinos NO-GO P2-4): starile pe care le clasifica functia trebuie sa fie EXACT cele din CHECK-urile 20261130a — comparatie de text integral
+  -- cu baseline-ul citit read-only pe live 04.11.2026 (o stare noua = CHECK schimbat = refuz aici + review, nu clasificare tacita in NULL / „fara SMS”).
+  -- Un CHECK suplimentar poate doar restrange starile, nu le poate extinde; extinderea cere schimbarea acestor doua constrangeri.
+  IF (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.sms_mesaje'::regclass AND contype = 'c' AND conname = 'sms_mesaje_stare_check')
+       IS DISTINCT FROM 'CHECK ((stare = ANY (ARRAY[''in_coada''::text, ''trimis''::text, ''livrat''::text, ''esuat''::text, ''necunoscut''::text, ''anulat''::text])))'
+     OR (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.sms_loturi'::regclass AND contype = 'c' AND conname = 'sms_loturi_stare_check')
+       IS DISTINCT FROM 'CHECK ((stare = ANY (ARRAY[''draft''::text, ''aprobat''::text, ''in_trimitere''::text, ''coada_golita''::text, ''anulat''::text])))'
+     OR (SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sms_mesaje' AND column_name = 'stare') IS DISTINCT FROM 'text'
+     OR (SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sms_loturi' AND column_name = 'stare') IS DISTINCT FROM 'text' THEN
+    RAISE EXCEPTION '20261130i: CHECK-urile de stare SMS nu mai sunt exact cele din 20261130a';
+  END IF;
+  -- r2 (P2-4, L15): amprenta lui fn_red_nivel() — singura poarta de acces a functiei noi: SQL, SECURITY DEFINER, STABLE, fara argumente, RETURNS text,
+  -- search_path fix, owner postgres si corpul exact (md5(prosrc) citit read-only pe live 04.11.2026). Orice schimbare = refuz + review.
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language g ON g.oid = p.prolang
+                  WHERE p.oid = 'public.fn_red_nivel()'::regprocedure AND g.lanname = 'sql' AND p.prosecdef AND p.provolatile = 's' AND p.pronargs = 0
+                    AND p.prorettype = 'text'::regtype AND NOT p.proretset AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+                    AND pg_get_userbyid(p.proowner) = 'postgres' AND md5(p.prosrc) = '21db8e5d4b69b7f19e571a7087c361ae') THEN
+    RAISE EXCEPTION '20261130i: fn_red_nivel() nu mai are amprenta revizuita (SQL / DEFINER / STABLE / () -> text / search_path / owner / corp)';
   END IF;
   -- functia citeste ca owner (postgres) peste RLS: owner-ul tabelelor trebuie sa fie postgres, fara FORCE RLS
   IF EXISTS (SELECT 1 FROM pg_class WHERE oid IN ('public.sms_loturi'::regclass, 'public.sms_mesaje'::regclass, 'public.red_detinatori'::regclass, 'public.red_parcele'::regclass)
