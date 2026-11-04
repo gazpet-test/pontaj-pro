@@ -202,7 +202,7 @@ export function confirmariAplicare(preview, proiectCod) {
   const tardive = (preview?.aplicabile || []).filter(a => a.avertisment)
   const mesaje = [`Aplică ${preview.aplicabile.length} modificări poștale în proiectul ${proiectCod}?\nDeja: ${preview.deja.length}. Excepții: ${preview.exceptii.length}.\nConflictele rămân pentru verificare manuală în Plicuri.`]
   if (tardive.length) {
-    mesaje.push(`${tardive.length} din ${preview.aplicabile.length} expedieri sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2): ` +
+    mesaje.push(`${tardive.length} din ${preview.aplicabile.length} expedieri sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1, plan pct. 4.2): ` +
       `${tardive.map(a => a.nr_document).join(', ')}.\nSe înregistrează cu data reală, dar termenul nu e respectat. Le înregistrezi totuși?`)
   }
   return mesaje
@@ -229,7 +229,7 @@ export function reevalueazaTermene(aplicabile, uats) {
 export function confirmareTermeneSchimbate(aplicabile) {
   const tardive = aplicabile.filter(a => a.avertisment)
   return `Ziua 1 de sesiune s-a schimbat între timp pentru UAT-urile acestor plicuri. Pe valorile de acum, ${tardive.length} din ${aplicabile.length} expedieri ` +
-    `sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2)${tardive.length ? `: ${tardive.map(a => a.nr_document).join(', ')}` : ''}.` +
+    `sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1, plan pct. 4.2)${tardive.length ? `: ${tardive.map(a => a.nr_document).join(', ')}` : ''}.` +
     `\n${tardive.map(a => a.avertisment).join('\n')}\n\nAplici totuși?`
 }
 

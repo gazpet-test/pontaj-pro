@@ -57,7 +57,7 @@ const elemente = (node, tip) => {
 }
 const textButon = b => [].concat(b.props.children).join('')
 
-// ziua 1 = 10.12.2026 → limita 30.11.2026; un plic în termen, unul după termen
+// ziua 1 = 10.12.2026 → limita 29.11.2026 (10 zile libere); un plic în termen, unul după termen
 const uats = [{ id: 'uat-fictiv', nume: 'Comuna Fictivă', sesiune_zi1: '2026-12-10' }]
 const plic = (id, nr) => ({ id, proiect_id: 'proiect-fictiv', uat_id: 'uat-fictiv', nr_plic: nr, lot_id: 'lot-fictiv', opis_path: `plicuri/${id}/opis.docx`, awb: null,
   data_expediere: null, data_ar: null, retur: null, retur_data: null, stare: 'activ', versiune: 1 })
@@ -110,7 +110,7 @@ describe('ImportPostal — ziua 1 mutată între previzualizare și aplicare', (
     await elemente(tree, 'button').find(b => textButon(b).startsWith('4. Aplică')).props.onClick()
     return { h, props }
   }
-  it('mutată mai devreme (01.12 → limita 21.11): a treia confirmare, pe valoarea nouă; refuz = nimic aplicat, previzualizarea arată termenul nou', async () => {
+  it('mutată mai devreme (01.12 → limita 20.11): a treia confirmare, pe valoarea nouă; refuz = nimic aplicat, previzualizarea arată termenul nou', async () => {
     bd.uats = [{ ...uats[0], sesiune_zi1: '2026-12-01' }]
     const raspunsuri = [true, true, false]
     const confirm = vi.fn(() => raspunsuri.shift())
@@ -119,7 +119,7 @@ describe('ImportPostal — ziua 1 mutată între previzualizare și aplicare', (
     expect(confirm).toHaveBeenCalledTimes(3)
     expect(confirm.mock.calls[2][0]).toMatch(/^Ziua 1 de sesiune s-a schimbat între timp/)
     expect(confirm.mock.calls[2][0]).toContain('1 din 2 expedieri')
-    expect(confirm.mock.calls[2][0]).toContain('ziua 1 (01.12.2026), adică până la 21.11.2026')
+    expect(confirm.mock.calls[2][0]).toContain('ziua 1 (01.12.2026), adică până la 20.11.2026')
     expect(new Set(apeluri)).toEqual(new Set(['red_uat']))
     expect(h.valori[6]).toMatch(/nu s-a aplicat nimic/)
     const html = renderToString(h.render(ImportPostal, props)).replace(/<!-- -->/g, '')

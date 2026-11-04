@@ -1007,13 +1007,13 @@ describe('Model 4: adresă UAT', () => {
     expect(verificaDateAdresaUat({ ...complet, nrDocument: null })).toContain('Lipsește nr. documentului')
     expect(verificaDateAdresaUat({ ...complet, uat: {} })).toContain('Lipsește o zi de sesiune cu program')
   })
-  it('plan pct. 4.3: adresa nu se generează cu afișarea sub 10 zile înainte de ziua 1 (textul ei promite „cel puțin 10 zile”)', async () => {
+  it('plan pct. 4.3: adresa nu se generează cu afișarea sub 10 zile libere înainte de ziua 1 (textul ei promite „cel puțin 10 zile”)', async () => {
     const complet = { proiect: PR_ADRESA, parcele: [], nrDocument: 'AU-0001' }
-    // ziua 1 = 10.12.2026 → afișarea începe cel târziu pe 30.11.2026 (numărat în calendar)
-    expect(verificaDateAdresaUat({ ...complet, uat: { ...UAT_ADRESA, afisare_data_start: '2026-11-30' } })).toEqual([])
-    const tarziu = { ...UAT_ADRESA, afisare_data_start: '2026-12-01' }
-    expect(verificaDateAdresaUat({ ...complet, uat: tarziu })).toEqual(['Afișarea la primărie începe pe 01.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026): trebuie să înceapă cel târziu pe 30.11.2026 (plan pct. 4.3)'])
-    await expect(genereazaAdresaUat({ ...complet, uat: tarziu, templateArrayBuffer: sablonAdresa() })).rejects.toThrow('cel târziu pe 30.11.2026')
+    // ziua 1 = 10.12.2026 → afișarea începe cel târziu pe 29.11.2026 (ziua 1 − 11 = 10 zile libere, numărat în calendar)
+    expect(verificaDateAdresaUat({ ...complet, uat: { ...UAT_ADRESA, afisare_data_start: '2026-11-29' } })).toEqual([])
+    const tarziu = { ...UAT_ADRESA, afisare_data_start: '2026-11-30' }
+    expect(verificaDateAdresaUat({ ...complet, uat: tarziu })).toEqual(['Afișarea la primărie începe pe 30.11.2026, sub 10 zile libere înainte de ziua 1 (10.12.2026): trebuie să înceapă cel târziu pe 29.11.2026 (plan pct. 4.3)'])
+    await expect(genereazaAdresaUat({ ...complet, uat: tarziu, templateArrayBuffer: sablonAdresa() })).rejects.toThrow('cel târziu pe 29.11.2026')
   })
   it('zile din luni/ani diferiți sunt explicite', () => {
     expect(zileSesiuneText({ sesiune_zi1: '2026-12-31', sesiune_zi2: '2027-01-02' })).toBe('31 decembrie 2026 și 2 ianuarie 2027')

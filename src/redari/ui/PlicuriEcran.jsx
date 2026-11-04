@@ -241,7 +241,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       {uatDeExpediat.length > 0 && <div style={{ ...S.card, marginBottom: 10 }}>
         <b>Termen de expediere</b> (plan pct. 4.2: recomandata pleacă cu cel puțin {TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 de sesiune)
         {uatDeExpediat.map(u => <div key={u.id} style={{ color: termenExpediere(u, azi).depasit ? G.red : undefined }}>
-          {u.nume}: {textTermenExpediere(u)}{termenExpediere(u, azi).depasit ? ' — termenul a trecut: expedierea de azi nu mai respectă cele ' + TERMEN_CONVOCARE_ZILE + ' zile' : ''}
+          {u.nume}: {textTermenExpediere(u)}{termenExpediere(u, azi).depasit ? ' — termenul a trecut: expedierea de azi nu mai respectă cele ' + TERMEN_CONVOCARE_ZILE + ' zile libere' : ''}
         </div>)}
       </div>}
       {grupare.prea_mari?.length > 0 && <p style={{ color: G.yellow }}>Peste 200 de convocări la aceeași persoană în același UAT (nu se împart, serverul cere un singur plic complet): {grupare.prea_mari.map(g => `${g.destinatar} (${g.convocari.length})`).join('; ')}. Necesită o decizie separată.</p>}

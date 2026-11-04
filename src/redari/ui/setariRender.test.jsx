@@ -178,14 +178,14 @@ describe('ecranul UAT', () => {
     expect(h).toContain('Doar administratorul modifică UAT-urile')
   })
   it('termenul de 10 zile (plan pct. 4.3): avertisment în modal și în tabel, fără să blocheze; în termen nu apare nimic', () => {
-    const tarziu = { ...uats[0], afisare_data_start: '2026-12-01', afisare_data_end: '2026-12-12' }
+    const tarziu = { ...uats[0], afisare_data_start: '2026-11-30', afisare_data_end: '2026-12-12' }
     const modal = renderToString(<ModalUat proiect={proiect} uat={tarziu} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
-    expect(modal).toContain('Afișarea la primărie începe pe 01.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026)')
-    expect(modal).toContain('cel târziu pe 30.11.2026')
+    expect(modal).toContain('Afișarea la primărie începe pe 30.11.2026, sub 10 zile libere înainte de ziua 1 (10.12.2026)')
+    expect(modal).toContain('cel târziu pe 29.11.2026')
     expect(modal).toMatch(/<button[^>]*>Salvează/)
     const tabel = renderToString(<UatEcran proiect={proiect} uats={[tarziu]} nivel="admin" show={show} onSchimbat={() => {}} />)
-    expect(tabel).toContain('afișarea începe după 30.11.2026')
-    const inTermen = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-30' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
+    expect(tabel).toContain('afișarea începe după 29.11.2026')
+    const inTermen = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-29' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
     expect(inTermen).not.toContain('Afișarea la primărie începe pe')
   })
   it.each([[false, 0], [true, 1]])('concurent (Jakarinos f-v2 r2 P2): termenul se judecă pe rândul recitit + patch, înainte de UPDATE (confirmă=%s)', async (raspuns, update) => {
@@ -198,16 +198,16 @@ describe('ecranul UAT', () => {
       let tree = h.render(ModalUat, props)
       elemente(tree, FormularCampuri)[0].props.onChange('afisare_data_start', '2026-12-05')
       tree = h.render(ModalUat, props)
-      // pe formular (ziua 1 = 20.12, limita 10.12) afișarea de 05.12 e în termen: fără casetă, fără confirmare înainte de recitire
+      // pe formular (ziua 1 = 20.12, limita 09.12) afișarea de 05.12 e în termen: fără casetă, fără confirmare înainte de recitire
       expect(renderToString(tree)).not.toContain('Afișarea la primărie începe pe')
       const pending = elemente(tree, 'button').find(b => String(b.props.children).startsWith('Salvează')).props.onClick()
       expect(confirm).not.toHaveBeenCalled()
-      // între timp alt admin a mutat ziua 1 la 10.12 (câmp distinct, deci fără conflict) → limita devine 30.11
+      // între timp alt admin a mutat ziua 1 la 10.12 (câmp distinct, deci fără conflict) → limita devine 29.11
       raspunsuri.liste.push({ data: [{ ...baza, sesiune_zi1: '2026-12-10', afisare_data_start: '2026-12-05', versiune: 3 }], error: null })
       raspunsuri.singure[0]({ data: { ...baza, sesiune_zi1: '2026-12-10', versiune: 2 }, error: null })
       await pending
       expect(confirm).toHaveBeenCalledTimes(1)
-      expect(confirm.mock.calls[0][0]).toContain('Afișarea la primărie începe pe 05.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026)')
+      expect(confirm.mock.calls[0][0]).toContain('Afișarea la primărie începe pe 05.12.2026, sub 10 zile libere înainte de ziua 1 (10.12.2026)')
       const updates = raspunsuri.apeluri.filter(x => x[0] === 'red_uat' && x[1] === 'update')
       expect(updates).toHaveLength(update)
       if (update) { expect(updates[0][2]).toEqual({ afisare_data_start: '2026-12-05' }); expect(gata).toHaveBeenCalledTimes(1) }

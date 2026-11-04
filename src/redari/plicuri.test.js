@@ -101,15 +101,16 @@ describe('csvEtichete', () => {
 })
 
 // Plan A1 rev49 pct. 4.2: recomandata se expediază „cu cel puțin 10 zile înainte de prima zi de sesiune” (zile calendaristice).
+// Lectura „10 zile libere” (ZILE_EXCLUSE_DIN_TERMEN = 1): nu se numără ziua expedierii și nici ziua 1 → limita = ziua 1 − 11.
 // Datele așteptate sunt numărate în calendar, nu calculate cu funcția testată.
 describe('termenul de expediere (plan pct. 4.2)', () => {
   const uat = { nume: 'Comuna Fictivă', sesiune_zi1: '2026-12-10' }
-  it('data-limită = ziua 1 minus 10 zile; pe limită e în termen, a doua zi e după termen', () => {
-    expect(termenExpediere(uat)).toEqual({ limita: '2026-11-30', depasit: false })
-    expect(termenExpediere(uat, '2026-11-30').depasit).toBe(false)
+  it('data-limită = ziua 1 minus 11 zile (10 zile libere); pe limită e în termen, a doua zi e după termen', () => {
+    expect(termenExpediere(uat)).toEqual({ limita: '2026-11-29', depasit: false })
+    expect(termenExpediere(uat, '2026-11-29').depasit).toBe(false)
     expect(termenExpediere(uat, '2026-11-02').depasit).toBe(false)
-    expect(termenExpediere(uat, '2026-12-01').depasit).toBe(true)
-    expect(termenExpediere({ sesiune_zi1: '2027-01-05' }, '2026-12-27')).toEqual({ limita: '2026-12-26', depasit: true })
+    expect(termenExpediere(uat, '2026-11-30').depasit).toBe(true)
+    expect(termenExpediere({ sesiune_zi1: '2027-01-05' }, '2026-12-26')).toEqual({ limita: '2026-12-25', depasit: true })
   })
   it('fără ziua 1 sau cu dată invalidă nu se judecă (nu inventăm termenul)', () => {
     expect(termenExpediere({}, '2026-12-01')).toEqual({ limita: null, depasit: false })
@@ -123,7 +124,7 @@ describe('termenul de expediere (plan pct. 4.2)', () => {
     return { apeluri, from(t) { const q = { select: c => { apeluri.push([t, 'select', c]); return q }, eq: (k, v) => { apeluri.push([t, 'eq', k, v]); return q }, maybeSingle: async () => ({ data: rand, error }) }; return q } }
   }
   it('modal: ziua 1 mutată de alt admin după deschidere → confirmarea se cere pe valoarea recitită', async () => {
-    // în ecran (cache) ziua 1 = 20.12 → limita 10.12, deci 03.12 ar fi în termen; în BD acum ziua 1 = 10.12 → limita 30.11
+    // în ecran (cache) ziua 1 = 20.12 → limita 09.12, deci 03.12 ar fi în termen; în BD acum ziua 1 = 10.12 → limita 29.11
     const inEcran = { nume: 'Comuna Fictivă', sesiune_zi1: '2026-12-20' }
     expect(avertismentExpediere(inEcran, '2026-12-03')).toBeNull()
     const db = client({ id: 'uat-fictiv', nume: 'Comuna Fictivă', sesiune_zi1: '2026-12-10' })
@@ -131,7 +132,7 @@ describe('termenul de expediere (plan pct. 4.2)', () => {
     const r = await confirmaExpediereRecitita(db, { uatId: 'uat-fictiv', data: '2026-12-03', confirm })
     expect(db.apeluri).toContainEqual(['red_uat', 'eq', 'id', 'uat-fictiv'])
     expect(confirm).toHaveBeenCalledTimes(1)
-    expect(confirm.mock.calls[0][0]).toContain('ziua 1 (10.12.2026), adică până la 30.11.2026')
+    expect(confirm.mock.calls[0][0]).toContain('ziua 1 (10.12.2026), adică până la 29.11.2026')
     expect(r).toEqual({ ok: false, avertisment: expect.stringContaining('03.12.2026') })
     expect((await confirmaExpediereRecitita(db, { uatId: 'uat-fictiv', data: '2026-12-03', confirm: () => true })).ok).toBe(true)
   })
@@ -144,15 +145,15 @@ describe('termenul de expediere (plan pct. 4.2)', () => {
     expect(confirm).not.toHaveBeenCalled()
   })
   it('dată de expediere imposibilă în calendar: limita se calculează, termenul nu se judecă, fără eroare (Jakarinos f-v2 r2 P3)', () => {
-    expect(termenExpediere(uat, '2026-12-40')).toEqual({ limita: '2026-11-30', depasit: false })
-    expect(termenExpediere(uat, '2026-02-30')).toEqual({ limita: '2026-11-30', depasit: false })
+    expect(termenExpediere(uat, '2026-12-40')).toEqual({ limita: '2026-11-29', depasit: false })
+    expect(termenExpediere(uat, '2026-02-30')).toEqual({ limita: '2026-11-29', depasit: false })
     expect(avertismentExpediere(uat, '2026-12-40')).toBeNull()
   })
   it('textul afișat și avertismentul vizibil', () => {
-    expect(textTermenExpediere(uat)).toBe('expediați până la 30.11.2026')
+    expect(textTermenExpediere(uat)).toBe('expediați până la 29.11.2026')
     expect(textTermenExpediere({ nume: 'Fără zile' })).toBe('termen de expediere necunoscut (ziua 1 de sesiune necompletată)')
-    expect(avertismentExpediere(uat, '2026-11-30')).toBeNull()
-    expect(avertismentExpediere(uat, '2026-12-03')).toBe('Data expedierii (03.12.2026) e după termen: pentru Comuna Fictivă convocările trebuie expediate cu cel puțin 10 zile înainte de ziua 1 (10.12.2026), adică până la 30.11.2026 (plan pct. 4.2).')
+    expect(avertismentExpediere(uat, '2026-11-29')).toBeNull()
+    expect(avertismentExpediere(uat, '2026-12-03')).toBe('Data expedierii (03.12.2026) e după termen: pentru Comuna Fictivă convocările trebuie expediate cu cel puțin 10 zile libere înainte de ziua 1 (10.12.2026), adică până la 29.11.2026 (plan pct. 4.2).')
     expect(avertismentExpediere({}, '2026-12-03')).toBeNull()
   })
 })
