@@ -36,13 +36,26 @@ BEGIN
     RAISE EXCEPTION '20261130j: garda start invalida';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
-  -- Jak #987 P1-3 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date”, ținute până la commit; ordinea UNICĂ a migrărilor / revenirilor
-  -- red_mail F1: red_proiecte → red_raspunsuri → red_jurnal → storage.objects → red_mail_* (scriitorii Redări iau tabela lor, apoi red_jurnal
-  -- din triggerul de jurnal — aceeași ordine). ACCESS EXCLUSIVE = modul pe care îl cer oricum ADD COLUMN / ALTER POLICY mai jos (fără upgrade).
-  -- Un deadlock cu un scriitor concurent e rezolvat de PostgreSQL: migrarea se anulează întreagă, fără efect.
+  -- Jak #987 P1-3 / r2 P1 (L01 / L06): TOATE blocările migrării, explicite, la început (înaintea verificărilor „fără date”), ținute până la commit,
+  -- fiecare direct în modul cerut mai jos (fără upgrade de lock), în ORDINEA UNICĂ red_mail F1 (aceeași în j, k și în reveniri):
+  --   (1) tabelele Redări existente, copiii înaintea părinților: red_raspunsuri → red_detinatori → red_parcele → red_corespondenta → red_proiecte
+  --   (2) storage.objects   (3) red_jurnal   (4) red_mail_* (alfabetic)
+  -- Ordinea aplicației: un scriitor Redări ia întâi tabela lui (ROW EXCLUSIVE), apoi verificările FK iau ROW SHARE pe părinți (red_detinatori,
+  -- red_parcele, red_proiecte), triggerele BEFORE citesc eventual storage.objects (corespondența), iar triggerul AFTER de jurnal scrie la final
+  -- în red_jurnal. Migrarea ia aceleași obiecte în aceeași ordine: așteaptă scriitorii deja porniți să termine (aceștia nu au nevoie de nimic
+  -- din ce ține migrarea în acel moment), iar cei noi o așteaptă pe ea. red_proiecte (ACCESS EXCLUSIVE, incompatibil cu ROW SHARE-ul verificărilor
+  -- FK ale copiilor) e ultimul dintre tabele, după copiii pe care îi blochează migrarea.
+  -- Modurile: ținte ale FK-urilor noi SHARE ROW EXCLUSIVE (= modul luat de ADD FOREIGN KEY; compatibil cu ROW SHARE); red_proiecte ACCESS
+  -- EXCLUSIVE (ADD COLUMN); storage.objects / red_jurnal ACCESS EXCLUSIVE (ALTER POLICY). Test: concurenta_local.sh S5 (scriitor telefonic).
+  -- Limită: o tranzacție a aplicației care ar lua aceste obiecte în altă ordine (de ex. scrie în red_jurnal și abia apoi într-o tabelă Redări)
+  -- poate intra în deadlock cu migrarea; PostgreSQL anulează atunci UNA dintre tranzacții (nu e garantat care) — nicio stare parțială.
+  LOCK TABLE public.red_raspunsuri IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_detinatori IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_parcele IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_corespondenta IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname ~ '^red_mail_')
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname ~ '^fn_red_mail_') THEN
     RAISE EXCEPTION '20261130j: exista deja obiecte red_mail_* / fn_red_mail_*';
@@ -140,6 +153,14 @@ BEGIN
      OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND NOT t.tgisinternal
            AND t.tgname NOT IN ('trg_red_jurnal', 'trg_red_legaturi', 'trg_red_raspunsuri_valideaza', 'trg_red_raspunsuri_mail_sursa', 'trg_red_raspunsuri_zz_mail')) <> 0 THEN
     RAISE EXCEPTION 'redari mail baza (%): triggerele red_raspunsuri nu sunt cele din baseline', p_faza;
+  END IF;
+  -- Jak #987 r2 P2: red_proiecte — cele 2 triggere din baseline, exact (funcție, tip, activ, fără argumente / WHEN); singurul alt trigger
+  -- permis e cel adăugat de k (verificat exact de k). Un trg_red_versiune redirecționat spre altă funcție = refuz.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_jurnal' AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND t.tgname = 'trg_red_versiune' AND t.tgfoid = 'public.fn_red_versiune_creste()'::regprocedure AND t.tgtype = 19 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
+     OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND NOT t.tgisinternal
+                 AND t.tgname NOT IN ('trg_red_jurnal', 'trg_red_versiune', 'trg_red_proiecte_retentie_mail')) THEN
+    RAISE EXCEPTION 'redari mail baza (%): triggerele red_proiecte nu sunt cele din baseline', p_faza;
   END IF;
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_raspunsuri') <> 3
      OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_raspunsuri' AND policyname = 'red_raspunsuri_sel' AND cmd = 'SELECT' AND permissive = 'PERMISSIVE'

@@ -39,9 +39,11 @@ BEGIN
   -- Jak #987 P1-2 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date” (k se poate aplica separat de j), ținute până la commit.
   -- SHARE ROW EXCLUSIVE = modul cerut oricum de CREATE TRIGGER; așteaptă scriitorii în curs (ROW EXCLUSIVE) și îi oprește pe cei noi, deci un
   -- răspuns email inserat concurent și necomis e fie văzut de verificare (după commit-ul lui), fie blocat până după instalarea protecției.
-  -- Ordinea unică red_mail F1: red_proiecte → red_raspunsuri → (red_jurnal, storage.objects: neatinse de k) → red_mail_* (alfabetic).
-  LOCK TABLE public.red_proiecte IN SHARE ROW EXCLUSIVE MODE;
+  -- Ordinea unică red_mail F1 (antetul preflight-ului 20261130j): red_raspunsuri → (red_detinatori, red_parcele, red_corespondenta: neatinse)
+  -- → red_proiecte → (storage.objects, red_jurnal: neatinse de k) → red_mail_* (alfabetic). SHARE ROW EXCLUSIVE e compatibil cu ROW SHARE-ul
+  -- verificărilor FK ale copiilor red_proiecte.
   LOCK TABLE public.red_raspunsuri IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_proiecte IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_mail_adrese_propuse, public.red_mail_dedup, public.red_mail_evenimente, public.red_mail_flux, public.red_mail_oauth_state,
              public.red_mail_obiecte, public.red_mail_primite, public.red_mail_raspuns_sursa, public.red_mail_setari IN SHARE ROW EXCLUSIVE MODE;
   -- între j și k un admin putea fixa retentie_mail_pana (gardul owner vine abia cu k): trebuie să fie încă NULL peste tot

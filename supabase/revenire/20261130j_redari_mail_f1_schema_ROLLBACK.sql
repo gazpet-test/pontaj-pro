@@ -20,10 +20,16 @@ BEGIN
   END IF;
   -- Jak #987 P1-3 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date”, ținute până la commit. ACCESS EXCLUSIVE = modul cerut oricum de
   -- DROP COLUMN / ALTER POLICY / DROP TABLE. storage.objects blocat oprește și upload-urile service_role (ocolesc RLS, dar nu blocările).
-  -- Ordinea unică red_mail F1: red_proiecte → red_raspunsuri (neatins aici) → red_jurnal → storage.objects → red_mail_* (alfabetic).
+  -- Ordinea unică red_mail F1 (antetul preflight-ului 20261130j): red_raspunsuri → red_detinatori → red_parcele → red_corespondenta →
+  -- red_proiecte → storage.objects → red_jurnal → red_mail_* (alfabetic). Țintele FK-urilor: ACCESS EXCLUSIVE, modul luat de DROP TABLE pe
+  -- tabelele referite (măsurat în PG17 local, pg_locks), deci fără upgrade de lock mai jos.
+  LOCK TABLE public.red_raspunsuri IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_detinatori IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_parcele IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_corespondenta IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.red_mail_adrese_propuse, public.red_mail_dedup, public.red_mail_evenimente, public.red_mail_flux, public.red_mail_oauth_state,
              public.red_mail_obiecte, public.red_mail_primite, public.red_mail_raspuns_sursa, public.red_mail_setari IN ACCESS EXCLUSIVE MODE;
   -- nicio dată reală: doar rândurile inițiale, neatinse
