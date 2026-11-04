@@ -27,6 +27,12 @@ describe('FisaParcela — AvertismentConstatare', () => {
     expect(h).toContain('termen depășit')
     expect(h).toContain(`color:${G.red}`)
   })
+  it('cerere fără dată: avertismentul rămâne, cu textul „nu are dată”, chiar și cu PV A semnat', () => {
+    const pv = { id: 9, tip: 'A', detinator_id: 7, stare: 'semnat', sters_la: null, constatare_mod: 'sediu', data_pv: '2026-12-12' }
+    const h = html({ azi: '2026-12-20', raspunsuri: [{ ...cerere, data: null }], pvs: [pv] })
+    expect(h).toContain('cererea de constatare nu are dată; avertismentul rămâne până la verificare')
+    expect(h).not.toContain('constatarea nu e consemnată')
+  })
   it('dispare după PV A semnat (teren în termen sau sediu), fără cerere și pentru deținător șters', () => {
     const pv = (constatare_mod) => ({ id: 9, tip: 'A', detinator_id: 7, stare: 'semnat', sters_la: null, constatare_mod, data_pv: '2026-12-12' })
     expect(html({ azi: '2026-12-20', pvs: [pv('teren')] })).toBe('')
