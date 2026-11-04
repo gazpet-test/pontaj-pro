@@ -1200,7 +1200,7 @@ Fără nume de persoane și fără date personale; cifrele sunt agregate.
 - Import poștal, plic comun, calitatea primitorului AR, CSV de tratat; corespondența.
 - Cererea de împuternicire DOCX; parserul Anexa 7 (netestat pe import real).
 - Șabloanele Final_v2, A4, convocator doar cu QR, antetul Model 4 repus.
-- Termenul de 10 zile libere (ziua 1 − 11) și avertismentul de constatare la 5 zile.
+- Termenul de 10 zile libere (limita fermă ziua 1 − 11, ținta de lucru ziua 1 − 15; confirmat 04.11.2026) și avertismentul de constatare la 5 zile.
 - Domeniul public; SMS 30a–30d (cod).
 - Drepturi pe modulul `redari`: 2 admin, 4 editor, 3 viewer.
 
@@ -1216,6 +1216,5 @@ Fără nume de persoane și fără date personale; cifrele sunt agregate.
 
 **Blocat pe decizii**
 - GDPR (#939, draft) — aprobarea TGZ a textului.
-- E-mail F1/F2 — confirmarea implicitelor din `PLAN_EMAIL_REDARI.md` §7.1 și opinia Juridic pe (s) și (k).
+- E-mail F1/F2 — confirmarea implicitelor din `PLAN_EMAIL_REDARI.md` §7.1 ((k) și (s) închise de Răzvan pe 04.11.2026, r19 — de trecut prin review înainte de F1).
 - Textul final al SMS-ului.
-- Termenul ziua 1 − 11: confirmat de Răzvan (#973); confirmarea Juridic nu e documentată.
