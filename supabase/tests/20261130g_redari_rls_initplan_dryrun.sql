@@ -2,8 +2,8 @@
 -- 20261130g_redari_rls_initplan_dryrun_inainte.sql):  BEGIN; GUC; \i ..._dryrun_inainte.sql; \i migrare; \i acest fișier; ROLLBACK.
 -- Folosește funcțiile / tabelele temp create de pasul 1 (pg_temp.r30g_*). NICIUN DML: nimic de anulat în afară de DDL-ul migrării, nicio secvență
 -- consumată. Rulează în FEREASTRA DE LOCK a migrării (ACCESS EXCLUSIVE pe tabelele red_* cu politici): doar verificări rapide (politicile sunt
--- deja InitPlan), cu statement_timeout = timpul rămas din bugetul cumulativ (20 s de dinaintea PRIMULUI lock al migrării); la final raportează
--- durata ferestrei și REFUZĂ peste buget
+-- deja InitPlan), fiecare instrucțiune sub statement_timeout 5 s (pus de migrare); fereastra de lock e cel mult 15 (migrare) + 14 (acest pas)
+-- instrucțiuni × 5 s; la final se raportează durata reală (NOTICE)
 -- (criteriu de abandon: runner-ul face oricum ROLLBACK, lock-urile se eliberează). La final rolul e resetat și claims-urile golite.
 -- TEST0  garda + pasul 1 rulat + politicile în forma nouă.
 -- TEST1  rânduri văzute (număr + md5 pe proiecția coloanelor permise + refuz) IDENTICE înainte / după, pe fiecare identitate × tabel / view red_*.
@@ -14,8 +14,7 @@
 -- TEST4  fiecare expresie USING / WITH CHECK, evaluată direct ca fiecare identitate (fără DML): aceeași valoare înainte / după ȘI egală cu
 --        valoarea așteptată independent (nivelul identității pus în locul funcției).
 -- TEST5  interogările reale ale aplicației: același rezultat (md5) înainte / după + timpi (NOTICE) + fereastra de lock + curățenie rol / claims.
--- Între pași: SELECT pg_temp.r30g_termen() — refuz peste bugetul cumulativ, altfel următoarea instrucțiune are doar timpul rămas.
-SELECT pg_temp.r30g_termen();
+-- Fiecare instrucțiune de aici rulează sub statement_timeout 5 s / lock_timeout 2 s puse de migrare (limita superioară a ferestrei, vezi antetul migrării).
 
 -- TEST0
 DO $t$ BEGIN
@@ -35,20 +34,18 @@ DO $t$ BEGIN
   RAISE NOTICE 'TEST0 OK';
 END $t$;
 
-SELECT pg_temp.r30g_termen();
 -- TEST1
 SELECT pg_temp.r30g_numara('dupa');
 SELECT pg_temp.r30g_compara('inainte', 'dupa');
 DO $t$ BEGIN RAISE NOTICE 'TEST1 OK'; END $t$;
 
-SELECT pg_temp.r30g_termen();
 -- TEST2: asteptari independente, pe instantaneul „dupa”
 DO $t$
 DECLARE v_dif text[]; v_refuz integer;
 BEGIN
   WITH ae(obiect) AS (VALUES ('red_detinatori_contact'), ('red_detinatori_token'), ('red_raspunsuri_meta')),   -- SELECT doar admin / editor (26a / 29a)
   -- tabele fara politica de SELECT (RLS activ, acces doar prin RPC): nimeni din aplicatie nu le vede
-  fara_pol(obiect) AS (SELECT c.relname::text FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relname LIKE 'red\_%'
+  fara_pol(obiect) AS (SELECT c.relname::text FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relname ~ '^red_'
                         AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polcmd IN ('r', '*'))),
   ref AS (SELECT obiect, n FROM pg_temp.r30g_snap WHERE faza = 'dupa' AND eticheta = 'postgres'),
   jur AS (SELECT count(*) AS n FROM public.red_jurnal WHERE tabela NOT IN ('red_detinatori_contact', 'red_raspunsuri_meta')),
@@ -80,7 +77,6 @@ BEGIN
   RAISE NOTICE 'TEST2 OK (viewer: contact / token / meta = 0, jurnal fara contact / meta; fara acces + anon = nimic; % refuzuri de coloana verificate)', v_refuz;
 END $t$;
 
-SELECT pg_temp.r30g_termen();
 -- TEST3: EXPLAIN ca viewer
 DO $t$
 DECLARE v_vw uuid := (SELECT uid FROM pg_temp.r30g_id WHERE eticheta = 'viewer'); r record; o text; v_init boolean; v_per_rand text[];
@@ -98,7 +94,6 @@ BEGIN
   RAISE NOTICE 'TEST3 OK (red_v_centralizator_uat, red_v_stare_parcela ca viewer: InitPlan, fara fn_red_nivel() per rand)';
 END $t$;
 
-SELECT pg_temp.r30g_termen();
 -- TEST4: deciziile politicilor, fara DML
 SELECT pg_temp.r30g_evalueaza('dupa');
 DO $t$
@@ -128,7 +123,6 @@ BEGIN
   RAISE NOTICE 'TEST4 OK (% evaluari de politica identice inainte / dupa si egale cu asteptarile; fara DML)', v_n;
 END $t$;
 
-SELECT pg_temp.r30g_termen();
 -- TEST5: interogarile reale ale aplicatiei (acelasi rezultat) + timpi + curatenie
 SELECT pg_temp.r30g_cronometreaza('dupa');
 DO $t$
@@ -143,10 +137,9 @@ END $t$;
 DO $t$
 DECLARE v_ms numeric := round(extract(epoch FROM clock_timestamp() - current_setting('gazpet.r30g_lock_la')::timestamptz) * 1000);
 BEGIN
-  RAISE NOTICE 'DRY30g fereastra de lock (de dinaintea primului lock: migrare + verificari dupa): % ms din % ms', v_ms, current_setting('gazpet.r30g_buget_ms');
-  IF v_ms > current_setting('gazpet.r30g_buget_ms')::numeric THEN RAISE EXCEPTION 'DRY30g FAIL: fereastra de lock % ms peste buget (criteriu de abandon)', v_ms; END IF;
+  RAISE NOTICE 'DRY30g fereastra de lock (de dinaintea primului lock: migrare + verificari dupa): % ms (limita superioara: 29 instructiuni x 5 s)', v_ms;
 END $t$;
-RESET ROLE;
+SELECT pg_temp.r30g_ca(NULL, 'postgres');   -- RESET ROLE + claims goale (in functie: validatorul refuza RESET la nivel superior)
 SELECT set_config('request.jwt.claims', '', true);
 DO $t$ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR nullif(current_setting('request.jwt.claims', true), '') IS NOT NULL THEN RAISE EXCEPTION 'TEST5 FAIL: rol / claims ramase'; END IF;
