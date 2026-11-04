@@ -99,8 +99,10 @@ verifica "B comis, A refuzată cu motivul exact, obiectul prezent, j neaplicată
   "$(are "$OUT_A" '20261130j: exista deja obiecte sub redari/mail/ (asteptat 0)')" \
   "$(q s4 "SELECT to_regclass('public.red_mail_primite') IS NULL AND EXISTS (SELECT 1 FROM storage.objects WHERE name = 'mail/redari/x')")")"
 
-# Regula r3 (Jak #987): la conflict MIGRAREA e victima — lock_timeout 500 ms < deadlock_timeout => migrarea renunță cu „lock timeout”,
-# scriitorul termină; niciodată „deadlock detected”. Controalele rulează aceeași cursă cu lock_timeout 5 s (> deadlock_timeout): apare deadlock-ul.
+# Regula r3 / r4 (Jak #987): lock_timeout 500ms (per achiziție de lock) reduce riscul ca o tranzacție a aplicației să fie anulată;
+# NU îl elimină — un scriitor care așteaptă deja poate fi ales de detectorul de deadlock (presupune deadlock_timeout implicit și în sesiunea lui).
+# Risc rezidual acceptat doar prin aplicare noaptea, cu reluare la eșec.
+# În cursele de mai jos (scriitorul începe să aștepte DUPĂ migrare) scriitorul termină și nu apare „deadlock detected”. Controalele rulează aceeași cursă cu lock_timeout 5 s (> deadlock_timeout): apare deadlock-ul.
 # cursa2: $1 = db, $2 = pasul 1 al lui B (ține deja ce ține un scriitor real), $3 = pasul 2 al lui B (după barieră), $4 = fișierul j pentru A
 cursa2() {
   local db=$1

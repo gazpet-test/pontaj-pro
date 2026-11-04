@@ -32,11 +32,9 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130k_redari_mail_f1_reguli:' || txid_current() THEN
     RAISE EXCEPTION '20261130k: garda start invalida';
   END IF;
-  -- Jak #987 r3 P1: migrarea e VICTIMA la conflict. lock_timeout = 500 ms, strict sub deadlock_timeout (verificat, altfel refuz): orice așteptare
-  -- a migrării expiră înaintea detectorului de deadlock al ei, deci la o blocare reciprocă cu un scriitor al aplicației migrarea renunță
-  -- (tranzacția se anulează întreagă, fără efect), iar scriitorul continuă. Limita, declarată: dacă scriitorul a început să aștepte cu
-  -- > deadlock_timeout − 500 ms ÎNAINTEA migrării, detectorul lui poate rula primul; ordinea unică de mai jos face acest caz rar.
-  -- La conflict, migrarea renunță; se reia în fereastra de noapte.
+  -- Jak #987 r3 / r4: lock_timeout 500ms (per achiziție de lock) reduce riscul ca o tranzacție a aplicației să fie anulată; NU îl elimină —
+  -- un scriitor care așteaptă deja poate fi ales de detectorul de deadlock (presupune deadlock_timeout implicit și în sesiunea lui).
+  -- Risc rezidual acceptat doar prin aplicare noaptea, cu reluare la eșec. Preflight: deadlock_timeout strict peste lock_timeout, altfel refuz.
   PERFORM set_config('lock_timeout', '500ms', true);
   IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN
     RAISE EXCEPTION '%: deadlock_timeout (%) trebuie sa fie strict peste lock_timeout (%)', '20261130k', current_setting('deadlock_timeout'), current_setting('lock_timeout');

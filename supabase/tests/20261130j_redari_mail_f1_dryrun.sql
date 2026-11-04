@@ -12,8 +12,9 @@
 -- sunt în DRY-ul LOCAL (_dryrun_local.sql, PG17 de test), unde se pot scrie rânduri.
 -- BLOCĂRI (de știut la rularea pe prod): migrarea ia ACCESS EXCLUSIVE pe storage.objects (ALTER POLICY), red_jurnal (ALTER POLICY),
 -- red_proiecte (ADD COLUMN) și SHARE ROW EXCLUSIVE pe red_raspunsuri (CREATE TRIGGER) până la ROLLBACK — deci DRY-ul se rulează scurt,
--- în afara orelor de lucru Redări; lock_timeout 500 ms în migrări / reveniri (sub deadlock_timeout: la conflict DRY-ul renunță, nu utilizatorul;
--- se reia în fereastra de noapte), la fel pentru citirile de aici.
+-- în afara orelor de lucru Redări. lock_timeout 500ms (per achiziție de lock) reduce riscul ca o tranzacție a aplicației să fie anulată;
+-- NU îl elimină — un scriitor care așteaptă deja poate fi ales de detectorul de deadlock (presupune deadlock_timeout implicit și în sesiunea lui).
+-- Risc rezidual acceptat doar prin aplicare noaptea, cu reluare la eșec. Aceeași valoare pentru citirile de aici.
 -- Identități REALE din user_module_access (owner, editor / viewer ne-owner pe redari) + un profil FĂRĂ nivel Redări, simulate prin
 -- request.jwt.claims + SET LOCAL ROLE (ca DRY-ul 20261130i); anon și service_role.
 SELECT set_config('lock_timeout', '500ms', true);

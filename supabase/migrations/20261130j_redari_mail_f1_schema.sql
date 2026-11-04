@@ -35,11 +35,9 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130j_redari_mail_f1_schema:' || txid_current() THEN
     RAISE EXCEPTION '20261130j: garda start invalida';
   END IF;
-  -- Jak #987 r3 P1: migrarea e VICTIMA la conflict. lock_timeout = 500 ms, strict sub deadlock_timeout (verificat, altfel refuz): orice așteptare
-  -- a migrării expiră înaintea detectorului de deadlock al ei, deci la o blocare reciprocă cu un scriitor al aplicației migrarea renunță
-  -- (tranzacția se anulează întreagă, fără efect), iar scriitorul continuă. Limita, declarată: dacă scriitorul a început să aștepte cu
-  -- > deadlock_timeout − 500 ms ÎNAINTEA migrării, detectorul lui poate rula primul; ordinea unică de mai jos face acest caz rar.
-  -- La conflict, migrarea renunță; se reia în fereastra de noapte.
+  -- Jak #987 r3 / r4: lock_timeout 500ms (per achiziție de lock) reduce riscul ca o tranzacție a aplicației să fie anulată; NU îl elimină —
+  -- un scriitor care așteaptă deja poate fi ales de detectorul de deadlock (presupune deadlock_timeout implicit și în sesiunea lui).
+  -- Risc rezidual acceptat doar prin aplicare noaptea, cu reluare la eșec. Preflight: deadlock_timeout strict peste lock_timeout, altfel refuz.
   PERFORM set_config('lock_timeout', '500ms', true);
   IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN
     RAISE EXCEPTION '%: deadlock_timeout (%) trebuie sa fie strict peste lock_timeout (%)', '20261130j', current_setting('deadlock_timeout'), current_setting('lock_timeout');
@@ -58,8 +56,8 @@ BEGIN
   -- Scriitorii indirecți (r3): inserarea unui fișier de corespondență (red_corespondenta_fisiere) citește red_proiecte, blochează rândul
   -- red_corespondenta (FOR UPDATE) și, în triggerul AFTER, face UPDATE pe red_corespondenta. red_corespondenta_fisiere (citit de politica
   -- storage red_storage_coresp_sel) se blochează și el, înaintea red_proiecte, ca o inserare nouă să aștepte migrarea de la început.
-  -- O tranzacție a aplicației care ia aceste obiecte în altă ordine poate totuși intra în conflict cu migrarea: atunci migrarea e victima
-  -- (lock_timeout 500 ms < deadlock_timeout, mai sus) — renunță întreagă, scriitorul termină; se reia în fereastra de noapte.
+  -- O tranzacție a aplicației care ia aceste obiecte în altă ordine poate totuși intra în conflict cu migrarea: vezi lock_timeout mai sus
+  -- (reduce riscul ca tranzacția aplicației să fie anulată, NU îl elimină; risc rezidual acceptat doar prin aplicare noaptea, cu reluare la eșec).
   LOCK TABLE public.red_raspunsuri IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_detinatori IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_parcele IN SHARE ROW EXCLUSIVE MODE;
