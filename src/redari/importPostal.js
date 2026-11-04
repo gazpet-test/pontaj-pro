@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx-js-style'
-import { avertismentExpediere } from './plicuri.js'
+import { avertismentExpediere, recomandareExpediere } from './plicuri.js'
 import { TERMEN_CONVOCARE_ZILE } from './setari.js'
 
 const text = v => v == null ? '' : String(v).trim()
@@ -183,7 +183,9 @@ export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = fals
     const patch = { awb, data_expediere: data }
     const conditii = Object.fromEntries(CAMPURI.map(k => [k, p[k] ?? null]))
     const avertisment = avertismentExpediere(uatPe.get(p.uat_id), data)
-    valide.push({ fel: 'aplicabil', item: { ...item, patch, conditii, ...(avertisment ? { avertisment } : {}) }, baza })
+    // juridic#031: ținta recomandată (ziua 1 − 15) = doar informare, fără confirmare (nu intră în confirmariAplicare)
+    const recomandare = avertisment ? null : recomandareExpediere(uatPe.get(p.uat_id), data)
+    valide.push({ fel: 'aplicabil', item: { ...item, patch, conditii, ...(avertisment ? { avertisment } : {}), ...(recomandare ? { recomandare } : {}) }, baza })
   })
   // Două treceri: un rând invalid nu rezervă plicul; toate evenimentele valide duplicate devin excepții.
   const pe = new Map()
@@ -218,9 +220,12 @@ export function reevalueazaTermene(aplicabile, uats) {
   const noi = aplicabile.map(a => {
     const avertisment = avertismentExpediere(uatPe.get(a.uat_id), a.patch?.data_expediere)
     if ((avertisment || null) !== (a.avertisment || null)) schimbat = true
+    // ținta recomandată se recalculează și ea, dar NU marchează `schimbat` (e non-blocantă, nu cere confirmare)
+    const recomandare = avertisment ? null : recomandareExpediere(uatPe.get(a.uat_id), a.patch?.data_expediere)
     const rest = { ...a }
     delete rest.avertisment
-    return avertisment ? { ...rest, avertisment } : rest
+    delete rest.recomandare
+    return { ...rest, ...(avertisment ? { avertisment } : {}), ...(recomandare ? { recomandare } : {}) }
   })
   return { aplicabile: noi, schimbat }
 }

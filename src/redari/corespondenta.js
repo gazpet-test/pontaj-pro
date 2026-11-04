@@ -1,5 +1,6 @@
 // Redări — corespondența de trimis (red_corespondenta, migrarea 20261129h). Logică pură, fără React / Supabase.
-// Evidență: ERP-ul NU trimite nimic. Regula „nimic nu pleacă fără da-ul lui Răzvan” e în BD (trigger): `aprobat` doar owner,
+import { eEmailValid, eEmailGazpet, normEmail, MAX_SUBIECT_MAIL, MAX_TEXT_MAIL } from '../../supabase/functions/_shared/redariCorespMail.mjs'
+// Evidență: ERP-ul NU trimite nimic către instituții. Regula „nimic nu pleacă fără da-ul lui Răzvan” e în BD (trigger): `aprobat` doar owner,
 // `trimis` / `raspuns_primit` doar după aprobare și cu data trimiterii. Aici doar oglindim regulile ca UI-ul să nu ofere pași care vor fi refuzați.
 
 export const STARI_CORESPONDENTA = [
@@ -14,7 +15,7 @@ const PE_COD = Object.fromEntries(STARI_CORESPONDENTA.map(s => [s.cod, s]))
 export const etichetaStareCoresp = cod => PE_COD[cod]?.eticheta ?? String(cod ?? '')
 export const culoareStareCoresp = cod => PE_COD[cod]?.culoare ?? '#8B949E'
 
-export const COL_CORESPONDENTA = 'id, proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, aprobat_de, aprobat_la, trimis_la, nr_inregistrare, observatii, versiune, updated_at, aprobat_fisier_id, aprobat_sha256, aprobat_storage_etag'
+export const COL_CORESPONDENTA = 'id, proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, aprobat_de, aprobat_la, trimis_la, nr_inregistrare, observatii, versiune, updated_at, aprobat_fisier_id, aprobat_sha256, aprobat_storage_etag, destinatar_email, mail_subiect, mail_text, expeditor_email'
 
 // Stările pe care le poate alege cineva dintr-un rând (fără `aprobat`, care are buton separat, doar pentru owner).
 export function stariPermise(rand) {
@@ -24,7 +25,8 @@ export function stariPermise(rand) {
 }
 
 // Gemini r1 P3: dacă în formular s-a schimbat conținutul unui rând aprobat, aprobarea cade (BD) → oferim doar stările permise atunci.
-export const CAMPURI_CONTINUT = ['destinatar', 'subiect', 'expeditor', 'documente']
+// 20261130f: e-mailul instituției, subiectul / textul mailului și e-mailul expeditorului intră și ele în conținutul aprobat (BD: fn_red_corespondenta_reguli).
+export const CAMPURI_CONTINUT = ['destinatar', 'subiect', 'expeditor', 'documente', 'destinatar_email', 'mail_subiect', 'mail_text', 'expeditor_email']
 export const continutSchimbat = (rand, f) => !!rand && CAMPURI_CONTINUT.some(k => String(rand[k] ?? '').trim() !== String(f?.[k] ?? '').trim())
 export function stariInFormular(rand, f) {
   if (!rand) return ['draft', 'la_avocat']
@@ -48,6 +50,8 @@ export function urmatorul(randuri) {
 }
 
 const txt = (v, max) => { const t = String(v ?? '').trim(); return t ? t.slice(0, max) : null }
+// 20261130f: e-mailurile se salvează normalizate (fără spații, litere mici); goale = null
+const eml = v => { const t = normEmail(v); return t || null }
 
 // Validare + normalizare pentru salvare. Întoarce { erori:[], valori:{} }. `nou` = rând nou (cere cod).
 export function valideazaCorespondenta(f, { nou = false } = {}) {
@@ -57,6 +61,8 @@ export function valideazaCorespondenta(f, { nou = false } = {}) {
     destinatar: txt(f.destinatar, 300), subiect: txt(f.subiect, 500), expeditor: txt(f.expeditor, 200),
     documente: txt(f.documente, 2000), depinde_de: txt(f.depinde_de, 1000), stare: f.stare || 'draft',
     trimis_la: f.trimis_la || null, nr_inregistrare: txt(f.nr_inregistrare, 100), observatii: txt(f.observatii, 4000),
+    destinatar_email: eml(f.destinatar_email), expeditor_email: eml(f.expeditor_email),
+    mail_subiect: String(f.mail_subiect ?? '').trim() || null, mail_text: String(f.mail_text ?? '').replace(/\r\n/g, '\n').trim() || null,
   }
   if (nou) {
     valori.cod = String(f.cod ?? '').trim().toUpperCase()
@@ -68,6 +74,11 @@ export function valideazaCorespondenta(f, { nou = false } = {}) {
   if (!valori.subiect) erori.push('Ce se trimite e obligatoriu.')
   if (['trimis', 'raspuns_primit'].includes(valori.stare) && !valori.trimis_la) erori.push('Pentru „Trimis” completează data trimiterii.')
   if (valori.trimis_la && !/^\d{4}-\d{2}-\d{2}$/.test(valori.trimis_la)) erori.push('Data trimiterii nu e validă.')
+  // 20261130f: aceleași reguli ca CHECK-urile din BD (fără trunchiere tăcută: peste limită = eroare, L21)
+  if (valori.destinatar_email && !eEmailValid(valori.destinatar_email)) erori.push('E-mailul instituției nu e o adresă validă.')
+  if (valori.expeditor_email && !eEmailGazpet(valori.expeditor_email)) erori.push('E-mailul expeditorului trebuie să fie o adresă @gazpet.ro.')
+  if (valori.mail_subiect && (valori.mail_subiect.length > MAX_SUBIECT_MAIL || /[\r\n]/.test(valori.mail_subiect))) erori.push('Subiectul mailului: un singur rând, cel mult 300 de caractere.')
+  if (valori.mail_text && valori.mail_text.length > MAX_TEXT_MAIL) erori.push('Textul mailului are cel mult 20000 de caractere.')
   return { erori, valori }
 }
 
@@ -86,8 +97,13 @@ export function mesajEroareCoresp(e) {
   if (/sunt imutabile/.test(m)) return 'Fișierele urcate nu se modifică și nu se șterg; urcă o variantă nouă.'
   if (e?.code === '23505' && /path/.test(m)) return 'Există deja un fișier cu aceeași cale; reîncearcă urcarea.'
   if (e?.code === '42501') return 'Nu ai drept de scriere în Redări (sau accesul s-a schimbat). Reîncarcă pagina.'
+  // 20261130f: CHECK-urile câmpurilor de mail
+  if (/red_corespondenta_expeditor_email_ck/.test(m)) return 'E-mailul expeditorului trebuie să fie o adresă @gazpet.ro.'
+  if (/red_corespondenta_destinatar_email_ck/.test(m)) return 'E-mailul instituției nu e o adresă validă.'
+  if (/red_corespondenta_mail_subiect_ck/.test(m)) return 'Subiectul mailului: un singur rând, cel mult 300 de caractere.'
+  if (/red_corespondenta_mail_text_ck/.test(m)) return 'Textul mailului e gol sau prea lung (max. 20000 de caractere).'
   if (/doar dupa aprobarea/.test(m)) return 'Se marchează „Trimis” doar după aprobarea lui Răzvan.'
-  if (/continutul s-a schimbat/.test(m)) return 'Ai schimbat destinatarul / ce se trimite / expeditorul / documentele după aprobare: trece rândul în Draft sau La avocat și cere din nou aprobarea.'
+  if (/continutul s-a schimbat/.test(m)) return 'Ai schimbat destinatarul / ce se trimite / expeditorul / documentele / câmpurile mailului după aprobare: trece rândul în Draft sau La avocat și cere din nou aprobarea.'
   if (/nu se schimba/.test(m)) return 'Codul și proiectul unei corespondențe nu se schimbă.'
   if (e?.code === '23505') return 'Codul există deja în proiect.'
   return m || 'Eroare la salvare.'
