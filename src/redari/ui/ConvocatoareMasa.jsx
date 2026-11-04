@@ -131,6 +131,7 @@ export default function ConvocatoareMasa({ proiect, uats, nivel, show, onSchimba
       {progres && <div style={{ fontSize: 12.5, marginTop: 8, color: G.blue }}>{progres.n != null && progres.i ? `${progres.i} / ${progres.n} · ` : ''}{progres.text}</div>}
 
       {pregatit?.blocat && <div style={{ ...S.card, borderColor: G.red, color: G.red, fontSize: 12.5, marginTop: 10 }}>⛔ Lotul nu se poate genera: {pregatit.blocat}. Niciun număr consumat.</div>}
+      {pregatit && !pregatit.blocat && pregatit.blocatGenerare && <div style={{ ...S.card, borderColor: G.yellow, color: G.yellow, fontSize: 12.5, marginTop: 10 }}>⚠ Convocatoare noi / regenerate blocate: {pregatit.blocatGenerare}. Cele deja generate (neexpediate, cu fișier) se pot redescărca — bifează „include și cele deja generate”.</div>}
       {pregatit && !pregatit.blocat && (
         <div style={{ fontSize: 13, marginTop: 10 }}>
           <div>În lotul ăsta: <b>{nr('nou')}</b> noi (numere C rezervate) · <b>{nr('reincarca')}</b> reîncărcate · <b>{nr('reia')}</b> reluate

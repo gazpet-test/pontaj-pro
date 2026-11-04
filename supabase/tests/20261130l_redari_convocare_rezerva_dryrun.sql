@@ -125,6 +125,14 @@ DO $t$ DECLARE r text; BEGIN
   IF r NOT LIKE 'RD004:%' THEN RAISE EXCEPTION 'TEST3b FAIL: %', r; END IF;
   RAISE NOTICE 'TEST3b OK (INSERT direct refuzat: RD004)';
 END $t$;
+-- TEST3d (r7, Copilot r2 P1-01): clientul vechi — numărul C cerut separat de editorul real → RD005 ÎNAINTE de increment (contorul C neschimbat,
+-- verificat imediat și în TEST4); apoi INSERT direct → RD004 (TEST3b). Nicio rezervare reușită.
+DO $t$ DECLARE r text; n0 int := coalesce((SELECT ultimul FROM public.red_numere WHERE cheie = 'C'), 0); BEGIN
+  r := pg_temp.r30l_stare('SELECT public.fn_red_numar_document(''C'', ''TST'', 1)');
+  IF r NOT LIKE 'RD005:%' THEN RAISE EXCEPTION 'TEST3d FAIL: %', r; END IF;
+  IF coalesce((SELECT ultimul FROM public.red_numere WHERE cheie = 'C'), 0) <> n0 THEN RAISE EXCEPTION 'TEST3d FAIL: contorul C s-a schimbat'; END IF;
+  RAISE NOTICE 'TEST3d OK (numar C direct refuzat: RD005, contor neschimbat)';
+END $t$;
 SELECT pg_temp.r30l_ca(NULL, 'postgres');
 -- TEST3c: garda rezervării — INVOKER, fără EXECUTE public, trigger BEFORE INSERT primul în ordine
 DO $t$ BEGIN

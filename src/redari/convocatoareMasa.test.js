@@ -111,18 +111,33 @@ const ruleaza = async (c, opt = {}) => {
 const activeNeexp = (t, d) => t.red_convocari.filter(c => c.detinator_id === d && c.stare === 'activ' && !c.data_expediere && !c.sters_la)
 
 describe('pregatesteLot — gărzi', () => {
-  it('proiect fără împuternicire → tot lotul blocat, nicio citire, niciun RPC', async () => {
+  it('r7: proiect fără împuternicire → generarea nouă blocată (motiv), niciun nou în plan, nicio rezervare', async () => {
     const c = clientFals(date())
-    const spy = vi.spyOn(c, 'from')
     const rez = await pregatesteLot(c, { proiect: { ...PROIECT, imputernicire_nr: '' }, uat: UAT })
-    expect(rez.blocat).toMatch(/împuternicire/)
+    expect(rez.blocat).toBeNull()
+    expect(rez.blocatGenerare).toMatch(/împuternicire/)
     expect(rez.plan).toEqual([])
-    expect(spy).not.toHaveBeenCalled()
-    expect(c.jurnal.rpc).toEqual([])
+    expect(rez.exclusi.every(x => /împuternicire/.test(x.motiv))).toBe(true)
+    expect(c.jurnal.apeluriRezerva).toBe(0)
   })
-  it('UAT fără zi de sesiune cu program → blocat', async () => {
+  it('r7: UAT fără zi de sesiune cu program → generarea nouă blocată', async () => {
     const rez = await pregatesteLot(clientFals(date()), { proiect: PROIECT, uat: { ...UAT, program_zi1: '' } })
-    expect(rez.blocat).toMatch(/zi de sesiune/)
+    expect(rez.blocatGenerare).toMatch(/zi de sesiune/)
+  })
+  it('r7 (Copilot r2 P2-01): contact incomplet → „reia” (fișier arhivat) merge; nou și regenerarea blocate', async () => {
+    const t = date(3)
+    t.red_convocari = [conv({ id: 'cv1', detinator_id: 'd0001', nr_document: 'C-0011', fisier_convocator_path: 'a/C-0011-v1.docx' }),
+      conv({ id: 'cv2', detinator_id: 'd0002', nr_document: 'C-0012' })]
+    const fara = { ...PROIECT, contact_telefon: '' }
+    t.red_proiecte = [{ ...fara }]
+    const c = clientFals(t)
+    const p = await pregatesteLot(c, { proiect: fara, uat: UAT })
+    expect(p.blocatGenerare).toMatch(/contact/)
+    expect(p.plan.map(x => [x.rand.detinator_id, x.actiune])).toEqual([['d0001', 'reia']])
+    expect(p.exclusi.map(x => x.rand.detinator_id)).toEqual(['d0002', 'd0003'])
+    const r = await executaLot(c, { plan: p.plan, proiect: fara, uat: UAT, templateArrayBuffer: TPL, protectie: true, includeGenerate: true, deps: depsReale })
+    expect(r.raport.map(x => x.stare)).toEqual(['ok'])
+    expect(c.jurnal.download).toEqual(['a/C-0011-v1.docx']); expect(c.jurnal.apeluriRezerva).toBe(0)
   })
   it('r3 (fără fallback): migrarea 20261130l neaplicată (PGRST202) → lot blocat, nicio citire de date', async () => {
     const c = clientFals(date(), { cuRpc: false })
@@ -369,12 +384,13 @@ describe('executaLot', () => {
     expect(c2.jurnal.numere).toBe(0)
   })
 
-  it('proiectul argument fără împuternicire → aruncă înainte de orice RPC', async () => {
+  it('proiectul argument fără împuternicire → rândurile noi „schimbat” (generare blocată), nicio rezervare', async () => {
     const c = clientFals(date(2))
     const p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
-    const inainte = c.jurnal.rpc.length
-    await expect(executaLot(c, { plan: p.plan, proiect: { ...PROIECT, imputernicire_data: null }, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })).rejects.toThrow(/împuternicire/)
-    expect(c.jurnal.rpc.length).toBe(inainte)
+    const r = await executaLot(c, { plan: p.plan, proiect: { ...PROIECT, imputernicire_data: null }, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
+    expect(r.raport.map(x => x.stare)).toEqual(['schimbat', 'schimbat'])
+    expect(r.raport[0].motiv).toMatch(/împuternicire/)
+    expect(c.jurnal.apeluriRezerva).toBe(0)
   })
 })
 

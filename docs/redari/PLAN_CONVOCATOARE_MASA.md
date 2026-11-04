@@ -47,6 +47,24 @@ Locul: tab-ul UAT-uri (două linii în `Redari.jsx`: importul și randarea tab-u
 8. **Erori per rând**: notate (cu numărul rezervat, dacă e cazul), lotul continuă. Planul se invalidează din clipa în care pornește execuția
    (nu se mai poate reexecuta), rezultatele rămân pentru **„Descarcă din nou zip-ul”** dacă arhiva eșuează.
 
+## Protecția în BD (migrarea 20261130l, r5–r7)
+- `trg_red_convocari_garda_rezerva` (BEFORE INSERT, primul): orice INSERT în `red_convocari` cere `gazpet.convocare_rezerva = 'activ'`, valoare
+  pusă DOAR de clauza statică `SET` a lui `fn_red_convocare_rezerva` (proconfig, valabilă numai pe durata apelului) → altfel RD004.
+- `fn_red_numar_document('C')` cere același marcaj, ÎNAINTE de increment → altfel RD005 (un tab vechi nu mai consumă numere fără convocare).
+  Celelalte tipuri (AU / PVA / PVB / PVC) neschimbate; revenirea restaurează corpul live exact.
+- **Limita** (Copilot r2 P2-02): marcajul e o poartă de protocol, nu o dovadă nefalsificabilă. Ține cât timp rolurile aplicației nu au cale de
+  SQL arbitrar și nicio funcție expusă nu scrie GUC-uri — invariantă verificată fail-closed de poarta 0e (`scripts/control_0e.sql`) la fiecare
+  livrare. O conexiune SQL directă cu drepturi de rol nu are modelul de încredere al unui client PostgREST.
+- „Reia” (fișier deja arhivat) cere doar identitatea, convocarea activă / neexpediată și aceeași cale; nu gărzile de generare nouă.
+
+## Procedura de livrare (ordinea contează)
+1. **Merge #989 + deploy client ÎNTÂI** (Vercel). Clientul nou fără migrare: RPC-ul lipsește (PGRST202) → generarea nouă refuză pe ambele căi cu
+   „protecția la concurență nu e activă — aplicați migrarea 20261130l”; **nu consumă niciun număr** (nu mai cheamă `fn_red_numar_document` direct).
+   Descărcarea / regenerarea cu același număr merg în continuare.
+2. **Apoi apply 20261130l** (după GO Jak + Copilot și DRY de producție verde, `run_30l_dry.sh`).
+3. **Tab-uri vechi rămase deschise** după apply: `fn_red_numar_document('C')` → RD005 fără consum de număr; INSERT direct → RD004 „reîncarcă pagina”.
+4. Revenire: întâi codul (sau lăsat clientul nou — refuză fără consum), apoi `supabase/revenire/20261130l_..._ROLLBACK.sql`.
+
 ## Ce NU face
 - nu marchează nimic expediat, nu trimite nimic (poștă, SMS, e-mail);
 - nu schimbă calea individuală (ModalConvocator), RLS-ul sau numerotarea; migrarea 20261130l doar adaugă funcția (revenire = DROP FUNCTION);

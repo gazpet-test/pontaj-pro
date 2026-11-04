@@ -71,14 +71,16 @@ function clasifica({ proiect, uat, rand, detinator, parcela, contact, token, con
   // r5 (Copilot P1-01): relația deținător → parcelă → proiect → UAT (aceeași regulă ca în ModalConvocator)
   const motivRel = motivRelatieSchimbata({ detinator, parcela, proiect, uat })
   if (motivRel) return { motiv: motivRel }
+  const expediate = convocari.filter(c => c.data_expediere), neexp = convocari.filter(c => !c.data_expediere)
+  if (neexp.length > 1) return { motiv: `are ${neexp.length} convocări poștale neexpediate (${neexp.map(c => c.nr_document).join(', ')}) — rezolvă în Fișa parcelei` }
+  // r7 (Copilot r2 P2-01): „reia” = descărcarea unui fișier deja arhivat; cere DOAR identitatea (relația de mai sus), convocarea activă,
+  // neexpediată, cu fișier — NU gărzile pentru producerea unui document nou (ca ModalConvocator: poateDescarcaExistent)
+  if (neexp.length === 1 && neexp[0].fisier_convocator_path) return { actiune: 'reia', conv: neexp[0] }
   const r = { ...rand, calitate: detinator.calitate, adresa_cunoscuta: contact ? contact.adresa_cunoscuta : rand.adresa_cunoscuta }
   const motivRand = motivBlocareConvocator(proiect, uat, r)
   if (motivRand) return { motiv: motivRand }
-  const expediate = convocari.filter(c => c.data_expediere), neexp = convocari.filter(c => !c.data_expediere)
-  if (neexp.length > 1) return { motiv: `are ${neexp.length} convocări poștale neexpediate (${neexp.map(c => c.nr_document).join(', ')}) — rezolvă în Fișa parcelei` }
   if (neexp.length === 1) {
     const c = neexp[0]
-    if (c.fisier_convocator_path) return { actiune: 'reia', conv: c }
     const lipsa = verificaDateConvocator({ nrDocument: c.nr_document, token, uat, contact: null, proiect, detinator, contactDetinator: contact })
     if (lipsa.length) return { motiv: `${c.nr_document} fără fișier, nu se poate regenera: ${lipsa.join('; ')}` }
     return { actiune: 'reincarca', conv: c }
@@ -101,12 +103,12 @@ const qConvocari = (client) => client.from('red_convocari').select(COL_CONVOCARE
 export async function pregatesteLot(client, { proiect, uat, esteCurent = () => true }) {
   if (!client) throw new Error('Lipsește clientul Supabase')
   if (!proiect?.id || !uat?.id) throw new Error('Alege proiectul și UAT-ul.')
-  const blocat = motivBlocareConvocator(proiect, uat, null)
-  if (blocat) return { blocat, plan: [], exclusi: [], protectie: null }
+  // r7 (Copilot r2 P2-01): gărzile proiectului / UAT-ului blochează doar documentele NOI / regenerate; „reia” (fișier deja arhivat) rămâne posibil
+  const blocatGenerare = motivBlocareConvocator(proiect, uat, null)
   // r3 (fără fallback): fără RPC-ul atomic, lotul e blocat — nicio citire de date, nimic de consumat
   const protectie = await detecteazaRezervare(client)
   if (!esteCurent()) throw abandonat()
-  if (!protectie) return { blocat: MESAJ_FARA_PROTECTIE, plan: [], exclusi: [], protectie: false }
+  if (!protectie) return { blocat: MESAJ_FARA_PROTECTIE, blocatGenerare, plan: [], exclusi: [], protectie: false }
 
   // detinator_id e unic în vedere (un deținător are o singură parcelă) → cheie keyset stabilă
   const randuri = await citestePaginat(() => client.from('red_v_stare_parcela')
@@ -133,9 +135,10 @@ export async function pregatesteLot(client, { proiect, uat, esteCurent = () => t
       token: tMap[rand.detinator_id]?.token_raspuns || null, convocari: convPeDet[rand.detinator_id] || [] }
     const k = clasifica({ proiect, uat, rand, ...date })
     if (k.motiv) { exclusi.push({ rand, motiv: k.motiv }); continue }
-    plan.push({ rand, actiune: k.actiune, conv: k.conv, detinator: date.detinator, parcela: date.parcela, contact: date.contact, token: date.token, amprenta: amprentaRand(date) })
+    plan.push({ rand, actiune: k.actiune, conv: k.conv, detinator: date.detinator, parcela: date.parcela, contact: date.contact, token: date.token, amprenta: amprentaRand(date),
+      caleArhivata: k.actiune === 'reia' ? k.conv.fisier_convocator_path : null })   // instantaneu (string) al căii văzute la „Verifică”
   }
-  return { blocat: null, plan, exclusi, protectie }
+  return { blocat: null, blocatGenerare, plan, exclusi, protectie }
 }
 
 /** P1-3: recitirea unui rând din BD chiar înainte de acțiune. */
@@ -190,8 +193,7 @@ export async function executaLot(client, { plan, proiect, uat, templateArrayBuff
   if (!client) throw new Error('Lipsește clientul Supabase')
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului')
   if (protectie !== true) throw new Error(`Generarea în masă e oprită: ${MESAJ_FARA_PROTECTIE}.`)   // r3: fără fallback
-  const blocat = motivBlocareConvocator(proiect, uat, null)
-  if (blocat) throw new Error(`Nu se poate genera: ${blocat}.`)
+  const blocatGenerare = motivBlocareConvocator(proiect, uat, null)   // r7: blochează doar „nou” / „reincarca”, nu și „reia”
   const { genereaza = genereazaConvocator, reincarca = reincarcaConvocator } = deps
   const lim = limitaValida(limita)
   const selectie = selecteazaLot(plan, { limita: lim, includeGenerate })
@@ -218,18 +220,27 @@ export async function executaLot(client, { plan, proiect, uat, templateArrayBuff
       ])
       // r4 (Jakarinos r3 P2): generația / identitatea UI se verifică IMEDIAT după recitiri, înainte de rezervare (un răspuns întârziat nu rezervă)
       if (!esteCurent()) { oprit = true; raport.push({ ...baza, stare: 'oprit', motiv: motivOprire }); continue }
-      if (!pu.proiect || !pu.uat || amprentaObiect(pu.proiect, cheiProiect) + amprentaObiect(pu.uat, cheiUat) !== amprentaPU) {
-        raport.push({ ...baza, stare: 'schimbat', motiv: 'proiectul sau UAT-ul s-a schimbat între timp — rulează din nou „Verifică”' }); continue
-      }
-      if (amprentaRand(proaspat) !== p.amprenta) { raport.push({ ...baza, stare: 'schimbat', motiv: 'schimbat între timp (date, relație parcelă / UAT sau convocări) — rulează din nou „Verifică”' }); continue }
-      const k = clasifica({ proiect: pu.proiect, uat: pu.uat, rand: p.rand, ...proaspat })
-      if (k.motiv || k.actiune !== p.actiune) { raport.push({ ...baza, stare: 'schimbat', motiv: `schimbat între timp: ${k.motiv || 'altă acțiune'}` }); continue }
-      date = { ...p, ...proaspat }
+      if (!pu.proiect || !pu.uat) { raport.push({ ...baza, stare: 'schimbat', motiv: 'proiectul sau UAT-ul nu mai e accesibil' }); continue }
       if (p.actiune === 'reia') {
+        // r7 (Copilot r2 P2-01): „reia” verifică doar identitatea + aceeași convocare (activă, neexpediată, aceeași cale de fișier), nu gărzile de generare
+        const k = clasifica({ proiect: pu.proiect, uat: pu.uat, rand: p.rand, ...proaspat })
+        if (k.actiune !== 'reia' || k.conv.id !== p.conv.id || k.conv.fisier_convocator_path !== p.caleArhivata) {
+          raport.push({ ...baza, stare: 'schimbat', motiv: `schimbat între timp: ${k.motiv || 'convocarea nu mai e cea arhivată, neexpediată'}` }); continue
+        }
+        date = { ...p, ...proaspat }
         const { data, error } = await client.storage.from(BUCKET_REDARI).download(k.conv.fisier_convocator_path)
         if (error || !data) throw new Error(`descărcarea ${k.conv.fisier_convocator_path} a eșuat: ${error?.message || error || 'fișier gol'}`)
         blob = data
       } else {
+        // documente NOI / regenerate: gărzile complete pe datele recitite (proiect / UAT neschimbate, amprenta rândului, clasificarea)
+        if (blocatGenerare) { raport.push({ ...baza, stare: 'schimbat', motiv: `generare blocată: ${blocatGenerare}` }); continue }
+        if (amprentaObiect(pu.proiect, cheiProiect) + amprentaObiect(pu.uat, cheiUat) !== amprentaPU) {
+          raport.push({ ...baza, stare: 'schimbat', motiv: 'proiectul sau UAT-ul s-a schimbat între timp — rulează din nou „Verifică”' }); continue
+        }
+        if (amprentaRand(proaspat) !== p.amprenta) { raport.push({ ...baza, stare: 'schimbat', motiv: 'schimbat între timp (date, relație parcelă / UAT sau convocări) — rulează din nou „Verifică”' }); continue }
+        const k = clasifica({ proiect: pu.proiect, uat: pu.uat, rand: p.rand, ...proaspat })
+        if (k.motiv || k.actiune !== p.actiune) { raport.push({ ...baza, stare: 'schimbat', motiv: `schimbat între timp: ${k.motiv || 'altă acțiune'}` }); continue }
+        date = { ...p, ...proaspat }
         const intrare = { detinator: date.detinator, contactDetinator: date.contact, contact: null, parcela: date.parcela, uat: pu.uat, proiect: pu.proiect, token: date.token, templateArrayBuffer }
         const cale = { proiectCod: pu.proiect.cod, uat3: p.rand.uat3, idParcela: p.rand.id_parcela }
         let convocareId = p.conv?.id, dataDocument

@@ -363,18 +363,27 @@ END $t$;
 
 -- TEST12 (r5 P1-02): INSERT direct în red_convocari (client vechi / PostgREST direct) → RD004, pe orice canal; prin RPC → OK
 DO $t$
-DECLARE r text; c text;
+DECLARE r text; c text; n0 int;
 BEGIN
   FOREACH c IN ARRAY ARRAY['posta', 'sms', 'email', 'afisare', 'telefon'] LOOP
     SELECT x INTO r FROM dblink('ed', format($q$SELECT public.t_stare(%L)$q$,
       format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L, %L, %L) RETURNING id::text', public.t_det('D18'), c, 'VECHI-' || c))) AS t(x text);
     IF r NOT LIKE 'RD004:%Reincarca pagina%' THEN RAISE EXCEPTION 'TEST12 FAIL canal %: %', c, r; END IF;
   END LOOP;
-  -- vechea secvență a clientului: număr C separat + INSERT direct → INSERT-ul e refuzat (numărul vechi rămâne gol în serie, ca înainte)
+  -- r7 (Copilot r2 P1-01): vechea secvență a clientului, în DOUĂ tranzacții separate (autocommit pe conexiunea 'ed'):
+  -- (1) fn_red_numar_document('C') → RD005 ÎNAINTE de increment (red_numere.ultimul neschimbat); (2) INSERT direct → RD004
+  n0 := public.t_nr();
   SELECT x INTO r FROM dblink('ed', $q$SELECT public.t_stare('SELECT public.fn_red_numar_document(''C'', ''TST'', 1)')$q$) AS t(x text);
+  IF r NOT LIKE 'RD005:%' OR public.t_nr() <> n0 THEN RAISE EXCEPTION 'TEST12 FAIL client vechi (numar C): % / contor % -> %', r, n0, public.t_nr(); END IF;
   SELECT x INTO r FROM dblink('ed', format($q$SELECT public.t_stare(%L)$q$,
-    format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L, ''posta'', %L) RETURNING id::text', public.t_det('D18'), substr(r, 4)))) AS t(x text);
-  IF r NOT LIKE 'RD004:%' THEN RAISE EXCEPTION 'TEST12 FAIL client vechi: %', r; END IF;
+    format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L, ''posta'', %L) RETURNING id::text', public.t_det('D18'), 'C-9999'))) AS t(x text);
+  IF r NOT LIKE 'RD004:%' THEN RAISE EXCEPTION 'TEST12 FAIL client vechi (INSERT): %', r; END IF;
+  IF public.t_nr() <> n0 THEN RAISE EXCEPTION 'TEST12 FAIL: contor C schimbat de clientul vechi'; END IF;
+  -- celelalte tipuri de numere rămân neschimbate (PV A / B, AU, PV C — apelate de funcțiile lor, nu de RPC)
+  SELECT x INTO r FROM dblink('ed', $q$SELECT public.t_stare('SELECT public.fn_red_numar_document(''PVA'', ''TST'', NULL)')$q$) AS t(x text);
+  IF r NOT LIKE 'OK:PVA-TST-%' THEN RAISE EXCEPTION 'TEST12 FAIL PVA: %', r; END IF;
+  SELECT x INTO r FROM dblink('ed', $q$SELECT public.t_stare('SELECT public.fn_red_numar_document(''AU'', NULL, NULL)')$q$) AS t(x text);
+  IF r NOT LIKE 'OK:AU-%' THEN RAISE EXCEPTION 'TEST12 FAIL AU: %', r; END IF;
   IF (SELECT count(*) FROM public.red_convocari WHERE detinator_id = public.t_det('D18')) <> 0 THEN RAISE EXCEPTION 'TEST12 FAIL: rand scris'; END IF;
   r := public.t_rez('ed', public.t_det('D18')::text);
   IF r NOT LIKE 'OK:C-%' THEN RAISE EXCEPTION 'TEST12 FAIL RPC: %', r; END IF;

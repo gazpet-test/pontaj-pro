@@ -40,6 +40,12 @@
 --     Inventarul căilor de INSERT (read-only, 05.11.2026): în src/ doar docx.salveazaConvocator (nefolosit de UI după #989); în BD nicio funcție nu
 --     inserează în red_convocari (fn_red_plic_* doar actualizează). Excepție explicită: current_user = 'postgres' (mentenanță / migrări /
 --     fixture-uri SQL, ca trg_red_convocari_posta_garda). Toate canalele (posta / sms / email / afisare) trec prin RPC; 'telefon' nu e generat din UI.
+--   r7 (Copilot r2): fn_red_numar_document refuză tipul 'C' (RD005) fără același marcaj, ÎNAINTE de increment — un tab vechi nu mai consumă
+--     numere fără convocare. Celelalte tipuri (AU / PVA / PVB / PVC) neschimbate; revenirea restaurează corpul live exact (md5 b943…).
+--   LIMITA marcajului (Copilot r2 P2-02): e o POARTĂ DE PROTOCOL, nu o dovadă nefalsificabilă. Un GUC personalizat poate fi setat de orice sesiune
+--     SQL care execută cod sub rolul respectiv; protecția depinde de invarianta că rolurile aplicației (anon / authenticated) NU au cale de SQL
+--     arbitrar și nicio funcție expusă nu scrie GUC-uri. Verificarea fail-closed a acestei invariante = poarta 0e (scripts/control_0e.sql, rulată
+--     la fiecare livrare). O conexiune SQL directă cu drepturi de rol (nu prin PostgREST) NU are același model de încredere ca un client PostgREST.
 --   P2-03: cheia advisory se păstrează separat; dacă proiectul recitit sub lock diferă de cel din cheie → RD003 (conflict, reîncearcă).
 -- Revenire: supabase/revenire/20261130l_redari_convocare_rezerva_ROLLBACK.sql (DROP TRIGGER + funcțiile; convocările create rămân convocări obișnuite).
 -- DRY producție (doar citiri, fără rezervare reușită): supabase/tests/20261130l_redari_convocare_rezerva_dryrun.sql.
@@ -176,6 +182,46 @@ BEGIN
   END IF;
 END $pre$;
 
+-- r7 (Copilot r2 P1-01): fn_red_numar_document — corpul LIVE neschimbat, plus o singură gardă pe tipul 'C' (înainte de increment).
+-- Inventar read-only 05.11.2026 al apelanților: în BD fn_red_adresa_uat_rezerva ('AU'), fn_red_pv_c_creeaza ('PVC'), fn_red_pv_creeaza ('PVA' / 'PVB');
+-- în src/ niciun apel direct (după #989); singurul apelant legitim cu 'C' = fn_red_convocare_rezerva. Owner, ACL și proconfig rămân (CREATE OR REPLACE).
+CREATE OR REPLACE FUNCTION public.fn_red_numar_document(p_tip text, p_uat3 text, p_tronson integer)
+ RETURNS text
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_cheie text; v_n int;
+BEGIN
+  IF coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor') THEN
+    RAISE EXCEPTION 'redari: fara drept de numerotare' USING ERRCODE = '42501';
+  END IF;
+  CASE p_tip
+    WHEN 'C' THEN
+      -- 20261130l: numarul C se rezerva DOAR din fn_red_convocare_rezerva (marcajul static din proconfig-ul ei); un tab vechi
+      -- (numar separat + INSERT direct) e refuzat AICI, inainte de increment: niciun numar consumat fara convocare.
+      IF current_setting('gazpet.convocare_rezerva', true) IS DISTINCT FROM 'activ' THEN
+        RAISE EXCEPTION 'redari: numarul C se rezerva doar prin fn_red_convocare_rezerva. Reincarca pagina (Ctrl+Shift+R) si incearca din nou.' USING ERRCODE = 'RD005';
+      END IF;
+      v_cheie := 'C';
+    WHEN 'AU' THEN v_cheie := 'AU';
+    WHEN 'PVA', 'PVB' THEN
+      IF p_uat3 IS NULL OR p_uat3 !~ '^[A-Z]{3}$' THEN RAISE EXCEPTION 'redari: uat3 invalid (%)', p_uat3; END IF;
+      v_cheie := p_tip || '-' || p_uat3;
+    WHEN 'PVC' THEN
+      IF p_tronson IS NULL OR p_tronson NOT BETWEEN 1 AND 11 THEN RAISE EXCEPTION 'redari: tronson invalid (%)', p_tronson; END IF;
+      v_cheie := 'PVC-T' || p_tronson;
+    ELSE RAISE EXCEPTION 'redari: tip document necunoscut (%)', p_tip;
+  END CASE;
+  INSERT INTO public.red_numere (cheie, ultimul) VALUES (v_cheie, 1)
+  ON CONFLICT (cheie) DO UPDATE SET ultimul = red_numere.ultimul + 1
+  RETURNING ultimul INTO v_n;
+  IF v_n > 9999 THEN RAISE EXCEPTION 'redari: numerotarea pe % depaseste 9999', v_cheie; END IF;
+  RETURN v_cheie || '-' || lpad(v_n::text, 4, '0');
+END $function$
+;
+
 CREATE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta')
 RETURNS TABLE (convocare_id uuid, nr_document text, parcela_id uuid, uat_id uuid, proiect_id uuid)
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp SET gazpet.convocare_rezerva = 'activ' AS $fn$
@@ -267,6 +313,15 @@ CREATE TRIGGER trg_red_convocari_garda_rezerva BEFORE INSERT ON public.red_convo
 
 DO $post$
 BEGIN
+  -- r7: fn_red_numar_document = corpul nou EXACT (gardă 'C'); setările, owner-ul și ACL-ul de dinainte neschimbate
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language g ON g.oid = p.prolang
+                  WHERE p.oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure AND g.lanname = 'plpgsql' AND p.prosecdef AND p.provolatile = 'v'
+                    AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres'
+                    AND md5(p.prosrc) = '1de3107ee7139a8bdf9918be015171fd')
+     OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure)
+       IS DISTINCT FROM ARRAY['authenticated=X/postgres', 'postgres=X/postgres', 'service_role=X/postgres']::text[] THEN
+    RAISE EXCEPTION '20261130l: fn_red_numar_document nu are corpul / setarile asteptate dupa garda C (md5=%)', (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure);
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure AND NOT prosecdef AND provolatile = 'v'
                   AND proconfig = ARRAY['search_path=public, pg_temp', 'gazpet.convocare_rezerva=activ']::text[] AND pg_get_userbyid(proowner) = 'postgres') THEN
     RAISE EXCEPTION '20261130l: functia are setari gresite (INVOKER / VOLATILE / search_path + marcaj static / owner)';
