@@ -26,6 +26,8 @@ import SetariProiect from './redari/ui/SetariProiect.jsx'
 import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
+import NotificariEcran from './redari/ui/NotificariEcran.jsx'
+import { CANALE_RASPUNS_MANUAL, notaRaspunsManual } from './redari/notificari.js'
 // 📱 SMS proprietari (owner sau utilizator SMS cu Redari editor / admin, 20261130b; blocat in BD pana la autorizarea Transgaz)
 import RedariSmsButon from './sms/RedariSmsButon.jsx'
 // 📱 Starea SMS pe deținător (fn_red_sms_stare, 20261130i): doar agregate, fără text / telefon
@@ -139,6 +141,7 @@ export default function Redari() {
     { cod:'import', eticheta:'📥 Import TGZ' },
     { cod:'posta', eticheta:'✉️ Poștă' },
     { cod:'corespondenta', eticheta:'📨 Corespondență' },
+    { cod:'notificari', eticheta:'📬 Notificări' },
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
   ]
@@ -179,6 +182,7 @@ export default function Redari() {
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
           {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
           {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
+          {tab === 'notificari' && <NotificariEcran key={`${proiect.id}|${nivel}|${profile?.id || ''}`} proiect={proiect} uats={uats} nivel={nivel} utilizatorId={profile?.id || null} />}
           {tab === 'uat' && <><ConvocatoareMasa proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /><UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /></>}
           {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
         </div>
@@ -793,6 +797,7 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
   const [zi, setZi] = useState(zile[0] || '')
   const [obiectii, setObiectii] = useState('')
   const [sursa, setSursa] = useState('')
+  const [canal, setCanal] = useState('telefon')            // canalul real al răspunsului (CHECK red_raspunsuri.canal; fără online / email)
   const [declaratie, setDeclaratie] = useState(false)     // P2-2: bifă explicită pentru „nu particip – fără obiecții”
   const [raspunsId, setRaspunsId] = useState(null)        // P2-2: răspunsul s-a salvat, nota (meta) nu — se reîncearcă fără a pierde nimic
   const [lucru, setLucru] = useState(false)
@@ -803,7 +808,7 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
 
   const scrieNota = async (id) => {
     const operator = profile?.name || profile?.email || 'operator'
-    const { error } = await supabase.from('red_raspunsuri_meta').insert({ raspuns_id: id, ip_sau_sursa: `telefon, operator ${operator}${sursa.trim() ? ' — ' + sursa.trim() : ''}`.slice(0, 500) })
+    const { error } = await supabase.from('red_raspunsuri_meta').insert({ raspuns_id: id, ip_sau_sursa: notaRaspunsManual(canal, operator, sursa) })
     if (error) throw error
   }
 
@@ -818,7 +823,7 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
       if (!id) {
         // [r2] red_raspunsuri nu mai are ip_sau_sursa: rândul principal întâi, apoi nota în red_raspunsuri_meta
         const { data: rasp, error } = await supabase.from('red_raspunsuri').insert({
-          detinator_id: rand.detinator_id, canal:'telefon', optiune,
+          detinator_id: rand.detinator_id, canal, optiune,
           zi_sesiune_aleasa: cereZi ? zi : null,                       // doar pentru „particip”
           obiectii_text: cereObiectii ? obiectii.trim() : null,
           declaratie_confirmata: cereDeclaratie ? true : null,         // bifa explicită de mai sus
@@ -829,15 +834,21 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
       }
       try { await scrieNota(id) }
       catch (eMeta) { show('Răspunsul s-a salvat, dar nota (sursa) nu: ' + msgEroare(eMeta) + '. Apasă „Reîncearcă nota”.', 'error'); return }
-      show('Răspunsul telefonic a fost înregistrat.', 'success')
+      show('Răspunsul a fost înregistrat.', 'success')
       onGata()
     } catch (e) { show('Răspuns: ' + msgEroare(e), 'error') }
     finally { setLucru(false) }
   }
   return (
-    <Modal titlu={`Răspuns telefonic — ${rand.nume}`} onClose={onClose}>
+    <Modal titlu={`Răspuns — ${rand.nume}`} onClose={onClose}>
       {raspunsId && <div style={{ ...S.card, borderColor:G.yellow, color:G.yellow, fontSize:12.5, marginBottom:10 }}>Răspunsul e salvat; a rămas de scris nota cu sursa. Poți corecta sursa și apăsa „Reîncearcă nota”.</div>}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+        <Camp eticheta="Canal (cum a răspuns)" span={2}>
+          <select aria-label="Canal" value={canal} onChange={e => setCanal(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}>
+            {CANALE_RASPUNS_MANUAL.map(c => <option key={c.cod} value={c.cod}>{c.eticheta}</option>)}
+          </select>
+          {canal === 'scris' && <div style={{ fontSize:12, color:G.muted, marginTop:4 }}>Răspuns venit pe e-mail: alege „Scris” și scrie la sursă „primit pe e-mail” (canalul e-mail vine odată cu citirea căsuței redari@, felia F1).</div>}
+        </Camp>
         <Camp eticheta="Opțiune" span={2}>
           <select value={optiune} onChange={e => setOptiune(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}>
             {OPTIUNI_RASPUNS.map(o => <option key={o.cod} value={o.cod} disabled={o.cod === 'particip' && faraSesiune}>{o.eticheta}{o.cod === 'particip' && faraSesiune ? ' — indisponibil: UAT-ul nu are zile de sesiune' : ''}</option>)}
@@ -849,7 +860,7 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
             <select value={zi} onChange={e => setZi(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}><option value="">—</option>{zile.map((z, i) => <option key={z} value={z}>Ziua {i + 1}: {fmtDate(z)}{uat?.[`program_zi${i + 1}`] ? ` · ${uat[`program_zi${i + 1}`]}` : ''}</option>)}</select>
           </Camp>
         )}
-        <Camp eticheta="Sursa (nr. telefon apelat / notă)"><input value={sursa} onChange={e => setSursa(e.target.value)} style={S.input} placeholder="opțional" /></Camp>
+        <Camp eticheta="Sursa (nr. telefon / nr. înregistrare / „primit pe e-mail”)"><input value={sursa} onChange={e => setSursa(e.target.value)} style={S.input} placeholder="opțional" /></Camp>
         {cereDeclaratie && (
           <div style={{ gridColumn:'span 2' }}>
             <div style={{ ...S.card, fontSize:12.5, color:G.muted, marginBottom:6 }}>{textDeclaratie}</div>
