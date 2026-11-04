@@ -1,7 +1,9 @@
 -- Revenire 20261130l_redari_convocare_rezerva. Runner: o tranzactie, GUC gazpet.revenire_20261130l = 'REDARI_CONVOCARE_REZERVA_SCOS:'||txid_current().
 -- Migrarea creeaza DOAR functia fn_red_convocare_rezerva(uuid, boolean, text) (fara tabele, date, politici) -> revenirea = DROP FUNCTION.
 -- Convocarile create prin ea raman convocari obisnuite (nr C + rand red_convocari), nicio pierdere de date.
--- Dupa revenire, clientul (src/redari/convocatoareMasa.js) primeste PGRST202 si trece pe calea veche, cu avertismentul „protectia lipseste”.
+-- ATENTIE: NU exista fallback. Dupa revenire, clientul primeste PGRST202 si AMBELE cai (generarea in masa si convocatorul individual din
+-- Registru, prin rezervaNumarConvocare) REFUZA orice convocator nou („protectia la concurenta nu e activa — aplicati migrarea 20261130l”).
+-- Descarcarea / regenerarea cu acelasi numar raman disponibile. Ordinea la livrare: migrarea activa INAINTEA clientului; la revenire, intai codul.
 DO $rev$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261130l', true) IS DISTINCT FROM 'REDARI_CONVOCARE_REZERVA_SCOS:' || txid_current() THEN
