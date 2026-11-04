@@ -1,6 +1,6 @@
 // Anexa 7: antet dupa continut, identitate comuna cu TGZ, fara Nr.Crt.
 import * as XLSX from 'xlsx-js-style'
-import { cheie, text, numar, cheieSursa, cheieSursaVeche, idParcelaProvizoriu, tronsonOptional, tronsonDatInvalid } from './importTgz.js'
+import { cheie, text, numar, cheieSursa, idParcelaProvizoriu, tronsonOptional, tronsonDatInvalid } from './importTgz.js'
 import { normalizeazaNume } from './idParcela.js'
 
 const ANTETE = [
@@ -86,7 +86,7 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
     let p = parcele.get(cheieP)
     if (!p) {
       contoare.set(uat.uat3, (contoare.get(uat.uat3) || 0) + 1)
-      p = { cheie: cheieP, cheie_sursa: cheieS, cheie_sursa_veche: cheieS ? cheieSursaVeche(uat.uat3, v('poz_hg'), v('nr_cadastral'), v('tarla')) : null, ambigua: false, motiv_ambiguitate: null, nr_crt: null, uat_id: uat.id ?? null, uat3: uat.uat3, tronson, id_parcela: idParcelaProvizoriu(uat.uat3), nr_provizoriu: contoare.get(uat.uat3), ...atribute, observatii: null, note: [], rand, randuri: [], nr_detinatori: 0 }
+      p = { cheie: cheieP, cheie_sursa: cheieS, ambigua: false, motiv_ambiguitate: null, nr_crt: null, uat_id: uat.id ?? null, uat3: uat.uat3, tronson, id_parcela: idParcelaProvizoriu(uat.uat3), nr_provizoriu: contoare.get(uat.uat3), ...atribute, observatii: null, note: [], rand, randuri: [], nr_detinatori: 0 }
       parcele.set(cheieP, p); rez.parcele.push(p); s.parcele++
       if (!cheieS) st.parcele_fara_cheie++
     } else {
