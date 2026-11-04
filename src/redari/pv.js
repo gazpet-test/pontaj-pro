@@ -27,6 +27,85 @@ export function propuneLucrari(articolDeviz) {
     insamantare: /insamant|semanat/, gard: /gard/, drum: /drum/ }
   return { ...Object.fromEntries(Object.entries(cuvinte).map(([k, rx]) => [k, rx.test(t)])), altele: '' }
 }
+// L3 / D5 (04.11.2026): valori implicite la crearea PV A / PV B, ca PV-ul să se poată genera fără tastare când datele există.
+// Sunt propuneri editabile; garda verificaDatePvA / verificaDatePvB rămâne neschimbată. Se completează DOAR câmpurile goale.
+// Starea terenului se propune din lucrările din deviz (aceeași sursă ca propuneLucrari); fără potrivire -> rămâne goală și garda cere bifa
+// (decizie conservatoare 04.11.2026: PV-ul e document juridic, fără rezervă „nivelat”).
+export const STARE_DIN_LUCRARI = { nivelare: 'nivelat', sol_fertil: 'strat_vegetal', insamantare: 'insamantat', gard: 'gard_drum', drum: 'gard_drum' }
+const ZILE_SESIUNE_UAT = ['sesiune_zi1', 'sesiune_zi2', 'sesiune_zi3']
+export function loculImplicit({ uat = {}, parcela = {}, mod = 'sediu' } = {}) {
+  const nume = String(uat.nume ?? '').trim()
+  if (!nume) return ''
+  if (mod === 'teren') return ['Pe teren', plin(parcela.sat) ? 'sat ' + String(parcela.sat).trim() : '', 'UAT ' + nume].filter(Boolean).join(', ')
+  return 'Sediul Primăriei ' + nume + (plin(uat.primarie_adresa) ? ', ' + String(uat.primarie_adresa).trim() : '')
+}
+export function propuneStareTeren(lucrari) {
+  const st = {}
+  for (const [k, v] of Object.entries(STARE_DIN_LUCRARI)) if (lucrari?.[k] === true) st[v] = true
+  return Object.keys(st).length ? st : null
+}
+// raspuns = ultimul răspuns al deținătorului (doar PV A). laCreare: data_pv vine din RPC (azi) și poate fi înlocuită cu ziua aleasă.
+export function valoriImplicitePv({ tip = 'A', pv = {}, uat = {}, parcela = {}, raspuns = null, laCreare = false } = {}) {
+  if (!pv || tip === 'C' || ['semnat', 'anulat'].includes(pv.stare)) return {}
+  const patch = {}
+  const optiune = tip === 'A' ? raspuns?.optiune : null
+  if (pv.lucrari == null) patch.lucrari = propuneLucrari(parcela.articol_deviz)
+  // Copilot #990 P2-01: doar câmpurile NEDECISE (null) primesc propuneri; o alegere salvată (false, {}, bife toate false) nu se rescrie
+  if (pv.stare_teren == null) {
+    const st = propuneStareTeren(patch.lucrari ?? pv.lucrari)
+    if (st) patch.stare_teren = st
+  }
+  if (tip === 'A' && pv.constatare_mod == null) patch.constatare_mod = optiune === 'constatare_teren' ? 'teren' : 'sediu'
+  if (!plin(pv.locul)) {
+    const locul = loculImplicit({ uat, parcela, mod: patch.constatare_mod ?? pv.constatare_mod ?? 'sediu' })
+    if (locul) patch.locul = locul
+  }
+  // data = ziua de sesiune aleasă de deținător (doar dacă e una dintre zilele UAT-ului); altfel rămâne data din RPC
+  const zi = optiune === 'particip' ? String(raspuns?.zi_sesiune_aleasa ?? '').slice(0, 10) : ''
+  const ziValida = zi !== '' && ZILE_SESIUNE_UAT.some(k => String(uat[k] ?? '').slice(0, 10) === zi)
+  if (ziValida && (laCreare || !plin(pv.data_pv)) && pv.data_pv !== zi) patch.data_pv = zi
+  // Jakarinos #990 P1-1 / P2-3: și „constatare pe teren” poartă obiecții (schema cere textul); textul se copiază EXACT (plin() doar validează)
+  // obiectii_redare e NOT NULL DEFAULT false în BD: false salvat nu se poate deosebi de „nedecis” -> obiecțiile se propun DOAR la creare
+  if (laCreare && OPTIUNI_CU_OBIECTII.includes(optiune) && pv.obiectii_redare !== true && !plin(pv.obiectii_text) && plin(raspuns?.obiectii_text)) {
+    patch.obiectii_redare = true
+    patch.obiectii_text = raspuns.obiectii_text
+  }
+  return patch
+}
+const OPTIUNI_CU_OBIECTII = ['nu_particip_cu_obiectii', 'constatare_teren']
+// Jakarinos #990 P1-2: amprenta surselor din care s-au calculat implicitele (UAT, parcelă, ultimul răspuns)
+export function amprentaSurseImplicite({ uat = {}, parcela = {}, raspuns = null } = {}) {
+  return JSON.stringify([uat?.id ?? null, uat?.versiune ?? null, uat?.nume ?? null, uat?.primarie_adresa ?? null,
+    ...ZILE_SESIUNE_UAT.map(k => uat?.[k] ?? null), parcela?.id ?? null, parcela?.articol_deviz ?? null, parcela?.sat ?? null,
+    raspuns?.id ?? null, raspuns?.seq ?? null, raspuns?.optiune ?? null, raspuns?.zi_sesiune_aleasa ?? null, raspuns?.obiectii_text ?? null])
+}
+// Salvarea implicitelor la creare, fără date vechi tăcute: recitește sursele înainte de UPDATE; dacă s-au schimbat față de calcul,
+// recalculează și cere confirmare; după UPDATE recitește încă o dată și raportează o schimbare apărută între timp (nu o ascunde).
+// recitesteSurse() -> { pv, uat, parcela, raspuns }; confirma(patch) -> boolean;
+// scrie(pv, patch, cheiCas) -> { rand } (1 rând) | { conflict: true } (0 rânduri) | { ambiguu: true } (eroare / rezultat neclar).
+// Jakarinos #990 r2 P1: CAS pe toate câmpurile PV citite de valoriImplicitePv, nu doar pe cheile din patch.
+export const CHEI_PV_IMPLICITE = ['lucrari', 'stare_teren', 'constatare_mod', 'locul', 'data_pv', 'obiectii_redare', 'obiectii_text']
+// Rezultate: nimic | renuntat | conflict (nescris) | necunoscut (UPDATE ambiguu) | salvat (+ schimbatDupa / neverificat)
+export async function salveazaImpliciteLaCreare({ tip, sursa, recitesteSurse, scrie, confirma }) {
+  const calc = (s) => valoriImplicitePv({ tip, pv: s.pv, uat: s.uat, parcela: s.parcela, raspuns: s.raspuns, laCreare: true })
+  const initial = calc(sursa)
+  if (!Object.keys(initial).length) return { stare: 'nimic', patch: {} }
+  const proaspat = await recitesteSurse()
+  if (!proaspat?.pv || proaspat.pv.id !== sursa.pv?.id) throw new Error('PV schimbat între citire și completarea automată; reîncarcă.')
+  const patch = calc(proaspat)
+  if (!Object.keys(patch).length) return { stare: 'nimic', patch: {} }
+  const schimbat = amprentaSurseImplicite(proaspat) !== amprentaSurseImplicite(sursa) || JSON.stringify(patch) !== JSON.stringify(initial)
+  if (schimbat && !(await confirma(patch))) return { stare: 'renuntat', patch }
+  const cheiCas = [...new Set([...CHEI_PV_IMPLICITE, ...Object.keys(patch)])]
+  let r
+  try { r = await scrie(proaspat.pv, patch, cheiCas) } catch { return { stare: 'necunoscut', patch } }
+  if (r?.conflict) return { stare: 'conflict', patch }
+  if (!r?.rand) return { stare: 'necunoscut', patch }
+  // Jakarinos #990 r2 P2: scrierea confirmată rămâne confirmată chiar dacă reverificarea surselor eșuează
+  let dupa
+  try { dupa = await recitesteSurse() } catch { return { stare: 'salvat', patch, pv: r.rand, neverificat: true, schimbatDupa: false } }
+  return { stare: 'salvat', patch, pv: r.rand, neverificat: false, schimbatDupa: amprentaSurseImplicite(dupa) !== amprentaSurseImplicite(proaspat) }
+}
 export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const lipsuri = []
   for (const [v, et] of [[proiect.contract_nr,'numarul contractului'],[proiect.contract_data,'data contractului'],
