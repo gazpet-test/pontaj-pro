@@ -51,7 +51,7 @@ export default function Redari() {
   const [profile, setProfile] = useState(null)
   const [nivel, setNivel] = useState(null)         // 'admin' | 'editor' | 'viewer' | null
   const [gataProfil, setGataProfil] = useState(false)
-  const [tab, setTab] = useState('registru')        // 'registru' | 'fisa' | 'import' | 'uat' | 'setari'
+  const [tab, setTab] = useState('registru')        // codurile din TABURI: 'dashboard' | 'sesiune' | 'tronsoane' | 'registru' | 'fisa' | 'import' | 'posta' | 'corespondenta' | 'uat' | 'setari'
   const [proiecte, setProiecte] = useState([])
   const [proiectId, setProiectId] = useState('')
   const [uats, setUats] = useState([])
@@ -172,7 +172,7 @@ export default function Redari() {
           {tab === 'dashboard' && <DashboardEcran proiect={proiect} />}
           {tab === 'sesiune' && <SesiuneEcran proiect={proiect} nivel={nivel} show={show} />}
           {tab === 'tronsoane' && <TronsoaneEcran proiect={proiect} nivel={nivel} show={show} />} 
-          {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
+          {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} onPosta={() => setTab('posta')} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
           {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
@@ -189,7 +189,7 @@ export default function Redari() {
 // ════════════════════════════════════════════════════════════════════════════
 // REGISTRU — tabel din red_v_stare_parcela (o linie per parcelă × deținător)
 // ════════════════════════════════════════════════════════════════════════════
-function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
+function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
   const [randuri, setRanduri] = useState([])
   const [total, setTotal] = useState(0)
@@ -389,7 +389,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
             </tr>
           </thead>
           <tbody>
-            <RandStareRegistru loading={loading} eroare={eroareRegistru} fSms={fSms} nrRanduri={randuri.length} colSpan={13}
+            <RandStareRegistru loading={loading} eroare={eroareRegistru} fSms={fSms} nrRanduri={randuri.length} colSpan={poateScrie ? 12 : 10}
               onReincearca={() => { if (sms.eroare) incarcaSms(); else incarca() }} />
             {!loading && randuri.map(r => (
               <tr key={`${r.parcela_id}-${r.detinator_id}`} style={{ cursor:'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#1C2128'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -431,9 +431,9 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       </div>
 
       {actiune?.tip === 'convocator' && <ModalConvocator rand={actiune.rand} proiect={proiect} uats={uats} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
-      {actiune?.tip === 'expediat' && <ModalExpediat rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
-      {actiune?.tip === 'ar' && <ModalArRetur mod="ar" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
-      {actiune?.tip === 'retur' && <ModalArRetur mod="retur" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
+      {actiune?.tip === 'expediat' && <ModalExpediat rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} onPosta={onPosta} />}
+      {actiune?.tip === 'ar' && <ModalArRetur mod="ar" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} onPosta={onPosta} />}
+      {actiune?.tip === 'retur' && <ModalArRetur mod="retur" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} onPosta={onPosta} />}
       {actiune?.tip === 'telefon' && <ModalRaspunsTelefon rand={actiune.rand} profile={profile} uats={uats} proiect={proiect} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
       {borderouRez && (
         <Modal titlu="Borderou Poștă" onClose={() => setBorderouRez(null)} latime={640}>
@@ -541,7 +541,18 @@ function useConvocariDetinator(detinatorId, show) {
 }
 const etichetaConvocare = (c) => `${c.nr_document} · ${c.canal} · ${c.data_expediere ? 'expediat ' + fmtDate(c.data_expediere) : 'neexpediat'}${c.data_confirmare_primire ? ' · AR ' + fmtDate(c.data_confirmare_primire) : ''}${c.retur ? ' · retur' : ''}`
 
-function ModalExpediat({ rand, show, onClose, onGata }) {
+// audit D10: convocările prin poștă se înregistrează pe plic — modalul are ieșire directă spre Poștă, nu doar textul.
+function IesirePosta({ onPosta, onClose }) {
+  return <>
+    <p>Convocarea pleacă prin poștă: expedierea, AR-ul și returul se înregistrează pe plic, în Redări → Poștă → Plicuri.</p>
+    <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14 }}>
+      <button style={S.btnS} onClick={onClose}>Închide</button>
+      {onPosta && <button style={S.btnP} onClick={() => { onClose(); onPosta() }}>✉️ Deschide Poșta</button>}
+    </div>
+  </>
+}
+
+function ModalExpediat({ rand, show, onClose, onGata, onPosta }) {
   const lista = useConvocariDetinator(rand.detinator_id, show)
   const [convId, setConvId] = useState('')
   const [data, setData] = useState(azi())
@@ -552,7 +563,7 @@ function ModalExpediat({ rand, show, onClose, onGata }) {
   if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
     <Modal titlu="Înregistrare poștală" onClose={onClose}>
       <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
-      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+      <IesirePosta onPosta={onPosta} onClose={onClose} />
     </Modal>
   )
   const salveaza = async () => {
@@ -583,7 +594,7 @@ function ModalExpediat({ rand, show, onClose, onGata }) {
   )
 }
 
-function ModalArRetur({ mod, rand, show, onClose, onGata }) {
+function ModalArRetur({ mod, rand, show, onClose, onGata, onPosta }) {
   const lista = useConvocariDetinator(rand.detinator_id, show)
   const [convId, setConvId] = useState('')
   const [data, setData] = useState(azi())
@@ -596,7 +607,7 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
   if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
     <Modal titlu="Înregistrare poștală" onClose={onClose}>
       <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
-      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+      <IesirePosta onPosta={onPosta} onClose={onClose} />
     </Modal>
   )
   const salveaza = async () => {

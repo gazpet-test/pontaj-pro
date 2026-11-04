@@ -17,7 +17,7 @@ async function pagini(fabrica, cheie, curent) {
     const { data, error } = await q
     if (error) throw error
     if (!curent()) return null
-    if (!Array.isArray(data)) throw new Error('Citire incompleta: lipseste lista.')
+    if (!Array.isArray(data)) throw new Error('Citire incompletă: lipsește lista.')
     if (!data.length) return tot
     const nou = data.at(-1)[cheie]
     if (nou == null || nou === ultim) throw new Error('Paginarea nu a avansat.')
@@ -106,11 +106,11 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
       setDate(nou)
       // Copilot f5 r1 P2-02: a doua tableta primeste 23505 de la indexul unic -> prezenta exista deja
       if (error?.code === '23505' && String(error.message||'').includes('red_raspunsuri_prezenta_uq')) setMesaj('Prezența era deja înregistrată (altă tabletă).')
-      else if (error) setMesaj(msgEroare(error) + (nou.prezenti.has(rand.detinator_id) ? ' Prezenta exista la recitire.' : ' Prezenta neconfirmata; verifica inainte de reluare.'))
-      else if (!confirmat) setMesaj('Scriere neconfirmata; verifica prezentele reincarcate.')
+      else if (error) setMesaj(msgEroare(error) + (nou.prezenti.has(rand.detinator_id) ? ' Prezența există la recitire.' : ' Prezența e neconfirmată; verifică înainte de reluare.'))
+      else if (!confirmat) setMesaj('Scriere neconfirmată; verifică prezențele reîncărcate.')
       else setMesaj('Prezența a fost înregistrată.')
     } catch (e) {
-      if (curent()) { setDate(null); setMesaj((confirmat ? 'Prezenta salvata, reincarcarea a esuat: ' : 'Rezultat neconfirmat; reincarca inainte de reluare: ') + msgEroare(e)) }
+      if (curent()) { setDate(null); setMesaj((confirmat ? 'Prezența a fost salvată, reîncărcarea a eșuat: ' : 'Rezultat neconfirmat; reîncarcă înainte de reluare: ') + msgEroare(e)) }
     } finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
   const randuri = date ? filtreazaSesiune(date.randuri, { cauta, doarNesemnate }) : []

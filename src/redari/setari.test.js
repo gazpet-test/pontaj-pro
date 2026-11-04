@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CAMPURI_PROIECT, CAMPURI_UAT, COL_PROIECT, COL_UAT, normalizeaza, normalizeazaValoare, cheiSchimbate, valideazaUat, valideazaProiect,
-  lipsuriUat, rezumatZile, dataValida, conflicteConcurente, contractDinExecutie } from './setari.js'
+  lipsuriUat, motiveGataConvocare, rezumatZile, dataValida, conflicteConcurente, contractDinExecutie } from './setari.js'
 import { TERMEN_CONVOCARE_ZILE, ZILE_EXCLUSE_DIN_TERMEN, dataLimitaConvocare, termenAfisare, avertismenteUat } from './setari.js'
 
 const uatBun = () => ({ nume: 'Test UAT', sesiune_zi1: '2026-12-10', program_zi1: '09:00 – 16:00', sesiune_zi2: '2026-12-11', program_zi2: '09:00 – 19:00',
@@ -179,5 +179,17 @@ describe('termenul de 10 zile libere (plan pct. 4.2 și 4.3)', () => {
   it('lista „Gata de convocare?” arată termenul depășit', () => {
     expect(lipsuriUat({ ...uatBun(), afisare_data_start: '2026-11-30' })).toEqual(['afișarea începe după 29.11.2026 (sub 10 zile libere înainte de ziua 1)'])
     expect(lipsuriUat({ ...uatBun(), afisare_data_start: '2026-11-29' })).toEqual([])
+  })
+})
+
+describe('audit D6: „Gata de convocare?” fără motiv dublat', () => {
+  it('„UAT fără zi de sesiune cu program” dispare când lipsurile spun deja „nicio zi de sesiune cu program”', () => {
+    expect(motiveGataConvocare(['nicio zi de sesiune cu program'], 'proiect fără nr./dată împuternicire Transgaz; UAT fără zi de sesiune cu program'))
+      .toEqual(['nicio zi de sesiune cu program', 'proiect fără nr./dată împuternicire Transgaz'])
+  })
+  it('fără lipsuri: motivul de blocare rămâne întreg; fără nimic: listă goală', () => {
+    expect(motiveGataConvocare([], 'UAT fără zi de sesiune cu program')).toEqual(['UAT fără zi de sesiune cu program'])
+    expect(motiveGataConvocare([], null)).toEqual([])
+    expect(motiveGataConvocare(['fără reprezentant nominalizat de primărie'], 'a; a')).toEqual(['fără reprezentant nominalizat de primărie', 'a'])
   })
 })
