@@ -1,5 +1,5 @@
 /* CorespondentaEcran.jsx — Redări: „Corespondență de trimis” (cerere Răzvan 03.11.2026): ce mailuri / adrese pleacă, în ce ordine, de la cine,
-   în ce stare sunt. EVIDENȚĂ — ERP-ul nu trimite nimic. „Aprobat” îl pune doar Răzvan (owner); „Trimis” doar după aprobare (garda e în BD).
+   în ce stare sunt. EVIDENȚĂ — ERP-ul nu trimite direct către instituții; „Pregătește mailul” trimite doar către adresele interne @gazpet.ro. „Aprobat” îl pune doar Răzvan (owner); „Trimis” doar după aprobare (garda e în BD).
    Scriu admin/editor (RLS); viewer vede doar. Salvările folosesc versiunea citită (CAS): dacă altcineva a modificat rândul între timp, nu se suprascrie.
    Fișiere (20261130e, decizia Răzvan 04.11): „📎 n” pe fiecare rând — descarcă oricine are acces la Redări, urcă admin/editor; fișierele sunt imutabile.
    Aprobarea se leagă de ultimul fișier „de trimis” (BD: aprobat_fisier_id + aprobat_sha256); un „de trimis” nou după aprobare o face să cadă.
@@ -116,7 +116,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     // citit sub blocarea rândului (altfel 23514 „între timp s-a urcat alt fișier”). În plus, CAS pe versiune (un „de trimis” nou o crește).
     const deAprobat = fisierDeAprobat(fisiereRand(fisiere, rand.id))
     if (!deAprobat) { show('Urcă întâi fișierul „de trimis” (📎), apoi aprobă.', 'error'); return }
-    if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nFișierul aprobat: ${numeFisier(deAprobat)}\nAmprenta serverului (eTag Storage): ${deAprobat.storage_etag || '-'}\n(informativ: SHA-256 declarat la urcare ${sha8(deAprobat.sha256)})\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite nimic.`)) return
+    if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nFișierul aprobat: ${numeFisier(deAprobat)}\nAmprenta serverului (eTag Storage): ${deAprobat.storage_etag || '-'}\n(informativ: SHA-256 declarat la urcare ${sha8(deAprobat.sha256)})\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite direct către instituții; „Pregătește mailul” trimite doar către adresele interne @gazpet.ro.`)) return
     const expirat = sesiune.current.captureaza()
     setLucru(true)
     try {
@@ -305,7 +305,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     <div>
       <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:10 }}>
         <div style={{ fontSize:13, color:G.muted, flex:1, minWidth:260 }}>
-          Ce pleacă, în ce ordine și în ce stare. <b>Evidență</b> — ERP-ul nu trimite nimic. „Aprobat” îl pune doar owner-ul (contul cu drept de aprobare; numele lui apare pe rând); „Trimis” se poate marca doar după aprobare.
+          Ce pleacă, în ce ordine și în ce stare. <b>Evidență</b> — ERP-ul nu trimite direct către instituții; „Pregătește mailul” trimite doar către adresele interne @gazpet.ro. „Aprobat” îl pune doar owner-ul (contul cu drept de aprobare; numele lui apare pe rând); „Trimis” se poate marca doar după aprobare.
           Ordinea comunicărilor: Planul de verificare, cap. 6 „Succesiunea comunicărilor”. Evidența se ține numai aici (decizia Răzvan 03.11).
         </div>
         <button style={S.btnS} onClick={incarca} disabled={lucru}>↻ Reîncarcă</button>
@@ -431,7 +431,8 @@ export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, incerca
     if (await onUrca({ ...form, rol }) && idForm.current === id) { schimba({ rol: roluri[0], fisier: null, observatii: '' }); setCheieInput(k => k + 1) }
   }
   return (
-    <Modal titlu={`Fișierele corespondenței ${rand.cod}`} onClose={onClose} latime={780}>
+    <Modal titlu={`Fișierele corespondenței ${rand.cod}`} onClose={onClose} latime={780}
+      modificat={!!form.fisier || !!String(form.observatii || '').trim() || rol !== roluri[0]}>{/* Copilot #988 P2-02: modalul rămâne deschis după „Urcă”; starea reală a formularului decide */}
       <div style={{ fontSize:12.5, color:G.muted, marginBottom:10 }}>{rand.subiect} → {rand.destinatar}</div>
       {fisiere.length === 0 ? <Gol text="Niciun fișier urcat." /> : (
         <div style={{ overflowX:'auto' }}>

@@ -9,9 +9,12 @@ import { renderToString } from 'react-dom/server'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-vi.mock('../../lib/supabase.js', () => ({ supabase: { from: () => ({}) } }))
+// insert reușit pentru apelantul real ModalUatNou (P2-02); storage pentru importurile din CorespondentaEcran
+vi.mock('../../lib/supabase.js', () => ({ supabase: { from: () => ({ insert: async () => ({ error: null }) }), storage: { from: () => ({}) } } }))
 
 import { Modal, inchidePeFundal, controlModal, MESAJ_INCHIDE_MODAL } from './comune.jsx'
+import { ModalUatNou } from './UatEcran.jsx'
+import { ModalFisiere } from './CorespondentaEcran.jsx'
 
 const fundal = { target: 'F', currentTarget: 'F' }, interior = { target: 'I', currentTarget: 'F' }
 
@@ -53,12 +56,15 @@ try {
   for (const s of surse) { try { JSDOM = createRequire(s)('jsdom').JSDOM; break } catch { /* următoarea sursă */ } }
 } catch { JSDOM = null }
 
+// Copilot #988 P2-01: fără jsdom, suitele DOM se sar VIZIBIL (mesaj în output + în numele suitei), nu în tăcere.
+const MOTIV_SARIT = 'SĂRIT: lipsește jsdom (nu e dependență a proiectului; rulează cu REDARI_JSDOM_DIR=<dir cu jsdom instalat>)'
+if (!JSDOM) console.warn(`[comuneModal.test] ${MOTIV_SARIT}`)
 const dom = JSDOM ? describe : describe.skip
-dom('Modal — montat în DOM (jsdom + react-dom)', () => {
-  let curata = []
-  afterEach(() => { curata.forEach(f => f()); curata = [] })
+const numeDom = t => JSDOM ? t : `${t} — ${MOTIV_SARIT}`
 
-  async function monteaza(element) {
+let curata = []
+afterEach(() => { curata.forEach(f => f()); curata = [] })
+async function monteaza(element) {
     const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
     const vechi = { window: globalThis.window, document: globalThis.document }
     Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -78,7 +84,9 @@ dom('Modal — montat în DOM (jsdom + react-dom)', () => {
       el.dispatchEvent(new w.Event('input', { bubbles: true }))
     })
     return { w, d, act, fire, clickFundal, scrie }
-  }
+}
+
+dom(numeDom('Modal — montat în DOM (jsdom + react-dom)'), () => {
   function Formular({ onClose, cheie }) {
     const [t, setT] = useState(''), [o, setO] = useState('a'), [b, setB] = useState(false)
     return <Modal titlu="F" onClose={onClose} cheieSalvare={cheie}>
@@ -134,6 +142,41 @@ dom('Modal — montat în DOM (jsdom + react-dom)', () => {
     function G() { const [t, setT] = useState(''); return <Modal titlu="G" onClose={onClose} modificat={false}><input id="t" value={t} onChange={e => setT(e.target.value)} /></Modal> }
     const u = await monteaza(<G />)
     await u.scrie(u.d.getElementById('t'), 'x')
+    u.w.confirm = vi.fn(() => false)
+    await u.clickFundal()
+    expect(u.w.confirm).not.toHaveBeenCalled(); expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Copilot #988 P2-02: apelanți reali. (a) demontare după succes (ModalUatNou → onGata închide); (b) modal care rămâne deschis după salvare
+// (ModalFisiere după „Urcă”) — `modificat` e legat de starea reală a formularului, deci fundalul nu mai avertizează fals.
+dom(numeDom('Modal — apelanți reali'), () => {
+  it('ModalUatNou: după „Adaugă” reușit, părintele îl demontează (nu rămâne niciun „atins”)', async () => {
+    const show = vi.fn()
+    function Gazda() { const [d, setD] = useState(true); return d ? <ModalUatNou proiect={{ id: 'p1' }} uats={[]} show={show} onClose={() => setD(false)} onGata={() => setD(false)} /> : <p id="gata">închis</p> }
+    const u = await monteaza(<Gazda />)
+    const nume = u.d.querySelector('input')
+    await u.scrie(nume, 'Sat FICTIV')
+    const adauga = [...u.d.querySelectorAll('button')].find(b => b.textContent === 'Adaugă')
+    await u.fire(adauga, 'click')
+    expect(show).toHaveBeenCalledWith('UAT Sat FICTIV adăugat.', 'success')
+    expect(u.d.querySelector('[data-modal-fundal]')).toBe(null); expect(u.d.getElementById('gata')).not.toBe(null)
+  })
+  it('ModalFisiere: fișier ales → fundalul cere confirmare; după „Urcă” reușit (modal deschis) → se închide fără confirmare', async () => {
+    const onClose = vi.fn(), onUrca = vi.fn(async () => true)
+    const u = await monteaza(<ModalFisiere rand={{ id: 'r1', cod: 'A1', stare: 'draft', subiect: 's', destinatar: 'd' }} fisiere={[]} poateScrie lucru={false}
+      onClose={onClose} onUrca={onUrca} onInregistreaza={() => {}} onDescarca={() => {}} />)
+    const inp = u.d.querySelector('input[type=file]')
+    await u.act(async () => {
+      Object.defineProperty(inp, 'files', { configurable: true, value: [new u.w.File(['x'], 'a.pdf', { type: 'application/pdf' })] })
+      inp.dispatchEvent(new u.w.Event('change', { bubbles: true }))
+    })
+    u.w.confirm = vi.fn(() => false)
+    await u.clickFundal()
+    expect(u.w.confirm).toHaveBeenCalledWith(MESAJ_INCHIDE_MODAL); expect(onClose).not.toHaveBeenCalled()
+    const urca = [...u.d.querySelectorAll('button')].find(b => b.textContent.includes('Urcă'))
+    await u.fire(urca, 'click')
+    expect(onUrca).toHaveBeenCalledTimes(1)
     u.w.confirm = vi.fn(() => false)
     await u.clickFundal()
     expect(u.w.confirm).not.toHaveBeenCalled(); expect(onClose).toHaveBeenCalledTimes(1)
