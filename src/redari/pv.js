@@ -80,7 +80,11 @@ export function amprentaSurseImplicite({ uat = {}, parcela = {}, raspuns = null 
 }
 // Salvarea implicitelor la creare, fără date vechi tăcute: recitește sursele înainte de UPDATE; dacă s-au schimbat față de calcul,
 // recalculează și cere confirmare; după UPDATE recitește încă o dată și raportează o schimbare apărută între timp (nu o ascunde).
-// recitesteSurse() -> { pv, uat, parcela, raspuns }; scrie(pv, patch) -> rândul PV salvat; confirma(patch) -> boolean.
+// recitesteSurse() -> { pv, uat, parcela, raspuns }; confirma(patch) -> boolean;
+// scrie(pv, patch, cheiCas) -> { rand } (1 rând) | { conflict: true } (0 rânduri) | { ambiguu: true } (eroare / rezultat neclar).
+// Jakarinos #990 r2 P1: CAS pe toate câmpurile PV citite de valoriImplicitePv, nu doar pe cheile din patch.
+export const CHEI_PV_IMPLICITE = ['lucrari', 'stare_teren', 'constatare_mod', 'locul', 'data_pv', 'obiectii_redare', 'obiectii_text']
+// Rezultate: nimic | renuntat | conflict (nescris) | necunoscut (UPDATE ambiguu) | salvat (+ schimbatDupa / neverificat)
 export async function salveazaImpliciteLaCreare({ tip, sursa, recitesteSurse, scrie, confirma }) {
   const calc = (s) => valoriImplicitePv({ tip, pv: s.pv, uat: s.uat, parcela: s.parcela, raspuns: s.raspuns, laCreare: true })
   const initial = calc(sursa)
@@ -91,9 +95,15 @@ export async function salveazaImpliciteLaCreare({ tip, sursa, recitesteSurse, sc
   if (!Object.keys(patch).length) return { stare: 'nimic', patch: {} }
   const schimbat = amprentaSurseImplicite(proaspat) !== amprentaSurseImplicite(sursa) || JSON.stringify(patch) !== JSON.stringify(initial)
   if (schimbat && !(await confirma(patch))) return { stare: 'renuntat', patch }
-  const pv = await scrie(proaspat.pv, patch)
-  const dupa = await recitesteSurse()
-  return { stare: 'salvat', patch, pv, schimbatDupa: amprentaSurseImplicite(dupa) !== amprentaSurseImplicite(proaspat) }
+  const cheiCas = [...new Set([...CHEI_PV_IMPLICITE, ...Object.keys(patch)])]
+  let r
+  try { r = await scrie(proaspat.pv, patch, cheiCas) } catch { return { stare: 'necunoscut', patch } }
+  if (r?.conflict) return { stare: 'conflict', patch }
+  if (!r?.rand) return { stare: 'necunoscut', patch }
+  // Jakarinos #990 r2 P2: scrierea confirmată rămâne confirmată chiar dacă reverificarea surselor eșuează
+  let dupa
+  try { dupa = await recitesteSurse() } catch { return { stare: 'salvat', patch, pv: r.rand, neverificat: true, schimbatDupa: false } }
+  return { stare: 'salvat', patch, pv: r.rand, neverificat: false, schimbatDupa: amprentaSurseImplicite(dupa) !== amprentaSurseImplicite(proaspat) }
 }
 export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const lipsuri = []

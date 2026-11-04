@@ -140,17 +140,27 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
         const r = await salveazaImpliciteLaCreare({ tip, sursa: s,
           recitesteSurse: async () => { const t = await citeste(curent); if (!curent()) throw new Error('abandonat'); ultim = t; return t },
           confirma: async p => window.confirm('Datele UAT-ului / răspunsul deținătorului s-au schimbat de la deschidere. Salvez valorile implicite recalculate (' + Object.keys(p).map(k => ETICHETE[k] ?? k).join(', ') + ')?'),
-          scrie: async (pv, patch) => {
+          // Jakarinos #990 r2: CAS pe toate câmpurile PV citite de calcul (cheiCas); 0 rânduri = conflict, eroare = stare necunoscută
+          scrie: async (pv, patch, cheiCas) => {
             const q = await cas(supabase.from('red_procese_verbale').update(patch).eq('id',pv.id).eq('created_at',pv.created_at)
-              .eq('stare',pv.stare).is('sters_la',null),pv,Object.keys(patch)).select('*')
-            if (q.error || q.data?.length !== 1) throw new Error('nesalvat')
-            return q.data[0]
+              .eq('stare',pv.stare).is('sters_la',null),pv,cheiCas).select('*')
+            if (q.error) return { ambiguu: true }
+            if (q.data?.length === 0) return { conflict: true }
+            return q.data?.length === 1 ? { rand: q.data[0] } : { ambiguu: true }
           } })
         if (!curent()) return
+        let reincarca = false
         if (r.stare === 'salvat') {
           finalS = {...ultim,pv:r.pv}; setAuto(Object.keys(r.patch))
-          if (r.schimbatDupa) nota = ' Sursele s-au schimbat chiar după completarea automată; reîncarcă și verifică valorile.'
+          if (r.neverificat) { nota = ' Valorile implicite s-au salvat; sursele nu s-au putut reverifica. Reîncarc datele.'; reincarca = true }
+          else if (r.schimbatDupa) nota = ' Sursele s-au schimbat chiar după completarea automată; reîncarcă și verifică valorile.'
         } else if (r.stare === 'renuntat') { finalS = ultim; nota = ' Valorile implicite nu s-au salvat; sunt propuse în formular.' }
+        else if (r.stare === 'conflict') { finalS = ultim; nota = ' PV-ul a fost modificat de altcineva între timp; valorile implicite NU s-au salvat. Reîncarc datele.'; reincarca = true }
+        else if (r.stare === 'necunoscut') { finalS = ultim; nota = ' Starea salvării valorilor implicite e necunoscută; reîncarc datele — verifică formularul.'; reincarca = true }
+        if (reincarca) {
+          try { const t = await citeste(curent); if (!curent()) return; finalS = r.stare === 'salvat' && t.pv?.id !== r.pv?.id ? finalS : t }
+          catch { if (!curent()) return; nota += ' Reîncărcarea a eșuat; apasă „Reîncarcă”.' }
+        }
       } catch {
         if (!curent()) return
         nota = ' Valorile implicite nu s-au salvat; verifică formularul și apasă „Salvează PV”.'

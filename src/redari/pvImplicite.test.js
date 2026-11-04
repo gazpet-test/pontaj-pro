@@ -104,7 +104,43 @@ describe('PV A generat din valorile implicite, fără tastare (fixture complet)'
 describe('salveazaImpliciteLaCreare — prospețimea surselor', () => {
   const sursa = (u = uat(), raspuns = { id:'r1', seq:1, optiune:'particip', zi_sesiune_aleasa:'2026-11-20' }) =>
     ({ pv:pvNou(), uat:{ id:'u1', versiune:1, ...u }, parcela:{ id:'p1', ...parcela() }, raspuns })
-  const scrieMock = () => { const apeluri = []; return { apeluri, scrie: async (pv, patch) => { apeluri.push(patch); return { ...pv, ...patch } } } }
+  const scrieMock = () => { const apeluri = []; return { apeluri, scrie: async (pv, patch) => { apeluri.push(patch); return { rand: { ...pv, ...patch } } } } }
+  // „BD” în memorie cu CAS: UPDATE doar dacă fiecare cheie din cheiCas are valoarea citită (ca .eq / .is din ModalPv)
+  const bdCas = (rand) => ({ rand, scrieri: 0, scrie: async function (pv, patch, cheiCas) {
+    if (!cheiCas.every(k => JSON.stringify(this.rand[k] ?? null) === JSON.stringify(pv[k] ?? null))) return { conflict: true }
+    this.scrieri++; this.rand = { ...this.rand, ...patch }; return { rand: this.rand } } })
+
+  it('lucrari schimbate de alt utilizator între citire și UPDATE -> conflict, nimic scris (Jakarinos #990 r2 P1)', async () => {
+    // PV cu lucrări deja completate și stare goală: calculul propune „nivelat” din lucrari={nivelare:true}
+    const pv = { ...pvNou(), lucrari:{ nivelare:true }, locul:'Ales', constatare_mod:'sediu' }
+    const s = { ...sursa(uat(), null), pv }
+    const bd = bdCas({ ...pv, lucrari:{ arat:true } })   // alt utilizator a schimbat lucrările după citire
+    const r = await salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => s, scrie: (...a) => bd.scrie(...a), confirma: async () => true })
+    expect(r.stare).toBe('conflict')
+    expect(bd.scrieri).toBe(0)
+    expect(bd.rand.stare_teren).toBeNull()
+  })
+  it('cheiCas acoperă toate câmpurile PV citite de calcul, nu doar patch-ul', async () => {
+    const s = sursa(), chei = []
+    await salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => s, confirma: async () => true,
+      scrie: async (pv, patch, cheiCas) => { chei.push(...cheiCas); return { rand: { ...pv, ...patch } } } })
+    expect(chei).toEqual(expect.arrayContaining(['lucrari','stare_teren','constatare_mod','locul','data_pv','obiectii_redare','obiectii_text']))
+  })
+  it('UPDATE reușit, recitirea eșuează -> salvat + neverificat, rezultatul confirmat păstrat (r2 P2)', async () => {
+    const s = sursa()
+    let n = 0
+    const r = await salveazaImpliciteLaCreare({ tip:'A', sursa:s, scrie: scrieMock().scrie, confirma: async () => true,
+      recitesteSurse: async () => { if (n++ === 0) return s; throw new Error('rețea') } })
+    expect(r).toMatchObject({ stare:'salvat', neverificat:true })
+    expect(r.pv.locul).toBe('Sediul Primăriei UAT TEST, Str. Principală nr. 1')
+  })
+  it('UPDATE cu rezultat ambiguu (eroare / excepție) -> stare necunoscută, fără recitire tăcută (r2 P2)', async () => {
+    const s = sursa()
+    for (const scrie of [async () => ({ ambiguu:true }), async () => { throw new Error('timeout') }, async () => ({})]) {
+      const r = await salveazaImpliciteLaCreare({ tip:'A', sursa:s, recitesteSurse: async () => s, scrie, confirma: async () => true })
+      expect(r.stare).toBe('necunoscut')
+    }
+  })
 
   it('surse neschimbate -> salvează fără confirmare', async () => {
     const s = sursa(), { apeluri, scrie } = scrieMock(), confirma = async () => { throw new Error('nu trebuia') }
