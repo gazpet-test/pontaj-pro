@@ -1,5 +1,5 @@
 /* CorespondentaEcran.jsx — Redări: „Corespondență de trimis” (cerere Răzvan 03.11.2026): ce mailuri / adrese pleacă, în ce ordine, de la cine,
-   în ce stare sunt. EVIDENȚĂ — ERP-ul nu trimite nimic. „Aprobat” îl pune doar Răzvan (owner); „Trimis” doar după aprobare (garda e în BD).
+   în ce stare sunt. EVIDENȚĂ — ERP-ul nu trimite direct către instituții; „Pregătește mailul” trimite doar către adresele interne @gazpet.ro. „Aprobat” îl pune doar Răzvan (owner); „Trimis” doar după aprobare (garda e în BD).
    Scriu admin/editor (RLS); viewer vede doar. Salvările folosesc versiunea citită (CAS): dacă altcineva a modificat rândul între timp, nu se suprascrie.
    Fișiere (20261130e, decizia Răzvan 04.11): „📎 n” pe fiecare rând — descarcă oricine are acces la Redări, urcă admin/editor; fișierele sunt imutabile.
    Aprobarea se leagă de ultimul fișier „de trimis” (BD: aprobat_fisier_id + aprobat_sha256); un „de trimis” nou după aprobare o face să cadă.
@@ -11,7 +11,7 @@ import { G, S, Modal, Camp, Gol, fmtDate, fmtDateTime } from './comune.jsx'
 import { etichetaRolFisier, ACCEPT_FISIER_CORESP, roluriPermise, valideazaFisierCoresp, mimeFisier, caleFisierCoresp, folderCoresp, sha8, sha256Hex,
   fisierDeAprobat, fisiereRand, fmtMarime, citesteFisiereProiect, gasesteOrfani, numeDinCale, asiguraObiect, reconciliazaInregistrare, registruIncercari, existaObiect, diferentaReluare } from '../corespondentaFisiere.js'
 import { STARI_CORESPONDENTA, etichetaStareCoresp, culoareStareCoresp, COL_CORESPONDENTA, stariPermise, poateAproba, urmatorul,
-  valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran, stariInFormular, stareEfectiva } from '../corespondenta.js'
+  valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran, stariInFormular, stareEfectiva, etichetaRandCoresp, numeAprobator } from '../corespondenta.js'
 import { citesteFisiereKeyset } from '../corespondentaFisiere.js'
 import { COL_MAIL_CORESP, motivFaraMail, ultimulMail, etichetaStareMail, mesajRezultatMail, OFFICE, MESAJ_INCERT } from '../corespondentaMail.js'
 
@@ -28,6 +28,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
   const [fisiere, setFisiere] = useState([])          // toate fișierele rândurilor proiectului curent
   const [eroareFis, setEroareFis] = useState('')
   const [mailuri, setMailuri] = useState([])          // urma „Pregătește mailul” a proiectului curent (created_at desc, id desc)
+  const [aprobatori, setAprobatori] = useState({})    // audit D1: { [aprobat_de]: profiles.name } — cine a pus „da”-ul, afișat pe rând
   const [fisPentru, setFisPentru] = useState(null)    // id-ul rândului cu modalul de fișiere deschis
   const [seIncarca, setSeIncarca] = useState(true)    // Jakarinos r1 J-P1-1: cât timp citirea e în curs, aprobarea e blocată
   const [orfaneRand, setOrfaneRand] = useState(null)  // { randId, lista|null, eroare } — obiecte urcate dar neînregistrate (doar admin/editor)
@@ -69,8 +70,18 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       try { ml = await citesteFisiereKeyset(() => supabase.from('red_corespondenta_mailuri').select(COL_MAIL_CORESP).eq('proiect_id', pid), { esteCurent: curent }) }
       catch (e) { ml = []; mlOk = false; eFis = (eFis ? eFis + ' ' : '') + 'Nu am putut citi istoricul mailurilor — reîncarcă (' + mesajEroareCoresp(e) + ').' }
       if (!curent() || ml === null) return
-      setRanduri(data); setFisiere(fis); setMailuri(ml); setIstoricCitit(mlOk); setEroareFis(eFis)
-    } catch (e) { if (curent()) { setRanduri([]); setFisiere([]); setMailuri([]); setIstoricCitit(false); setEroare(mesajEroareCoresp(e)) } }
+      // audit D1: numele celor care au aprobat (profiles, ca în Poștă / Export). O eroare aici nu ascunde nimic: rândul arată doar „Aprobat”.
+      let ap = {}
+      const idsAp = [...new Set(data.map(r => r.aprobat_de).filter(Boolean))]
+      if (idsAp.length) {
+        try {
+          const { data: pr, error: ePr } = await supabase.from('profiles').select('id,name').in('id', idsAp)
+          if (!ePr) ap = Object.fromEntries((pr || []).map(p => [p.id, p.name]))
+        } catch { ap = {} }
+        if (!curent()) return
+      }
+      setRanduri(data); setFisiere(fis); setMailuri(ml); setIstoricCitit(mlOk); setEroareFis(eFis); setAprobatori(ap)
+    } catch (e) { if (curent()) { setRanduri([]); setFisiere([]); setMailuri([]); setIstoricCitit(false); setAprobatori({}); setEroare(mesajEroareCoresp(e)) } }
     finally { if (curent()) setSeIncarca(false) }
   }
   useEffect(() => { proiectCurent.current = proiect.id; sesiune.current.noua(); setRanduri(null); setFisiere([]); setMailuri([]); setIstoricCitit(false); setFisPentru(null); setOrfaneRand(null); incercari.current.reseteaza(); genOrfane.current++; setEditat(null); setLucru(false); incarca(); return () => { generatie.current++; sesiune.current.noua() } }, [proiect.id])
@@ -105,7 +116,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     // citit sub blocarea rândului (altfel 23514 „între timp s-a urcat alt fișier”). În plus, CAS pe versiune (un „de trimis” nou o crește).
     const deAprobat = fisierDeAprobat(fisiereRand(fisiere, rand.id))
     if (!deAprobat) { show('Urcă întâi fișierul „de trimis” (📎), apoi aprobă.', 'error'); return }
-    if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nFișierul aprobat: ${numeFisier(deAprobat)}\nAmprenta serverului (eTag Storage): ${deAprobat.storage_etag || '-'}\n(informativ: SHA-256 declarat la urcare ${sha8(deAprobat.sha256)})\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite nimic.`)) return
+    if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nFișierul aprobat: ${numeFisier(deAprobat)}\nAmprenta serverului (eTag Storage): ${deAprobat.storage_etag || '-'}\n(informativ: SHA-256 declarat la urcare ${sha8(deAprobat.sha256)})\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite direct către instituții; „Pregătește mailul” trimite doar către adresele interne @gazpet.ro.`)) return
     const expirat = sesiune.current.captureaza()
     setLucru(true)
     try {
@@ -294,7 +305,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     <div>
       <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:10 }}>
         <div style={{ fontSize:13, color:G.muted, flex:1, minWidth:260 }}>
-          Ce pleacă, în ce ordine și în ce stare. <b>Evidență</b> — ERP-ul nu trimite nimic. „Aprobat” îl pune doar Răzvan; „Trimis” se poate marca doar după aprobare.
+          Ce pleacă, în ce ordine și în ce stare. <b>Evidență</b> — ERP-ul nu trimite direct către instituții; „Pregătește mailul” trimite doar către adresele interne @gazpet.ro. „Aprobat” îl pune doar owner-ul (contul cu drept de aprobare; numele lui apare pe rând); „Trimis” se poate marca doar după aprobare.
           Ordinea comunicărilor: Planul de verificare, cap. 6 „Succesiunea comunicărilor”. Evidența se ține numai aici (decizia Răzvan 03.11).
         </div>
         <button style={S.btnS} onClick={incarca} disabled={lucru}>↻ Reîncarcă</button>
@@ -303,7 +314,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       {eroare && <div role="alert" style={{ color:G.red, marginBottom:8 }}>{eroare}</div>}
       {eroareFis && <div role="alert" style={{ color:G.yellow, marginBottom:8 }}>{eroareFis}</div>}
       {urm && <div style={{ ...S.card, borderColor: urm.stare === 'aprobat' ? G.green : G.yellow, marginBottom:10, fontSize:13 }}>
-        ▶ Următorul pas: <b>{urm.cod}</b> — {urm.subiect} → {urm.destinatar} <span style={{ color:culoareStareCoresp(urm.stare) }}>({etichetaStareCoresp(urm.stare)})</span>
+        ▶ Următorul pas: <b>{urm.cod}</b> — {urm.subiect} → {urm.destinatar} <span style={{ color:culoareStareCoresp(urm.stare) }}>({etichetaRandCoresp(urm, aprobatori)})</span>
         {urm.depinde_de ? <span style={{ color:G.muted }}> · depinde de: {urm.depinde_de}</span> : null}
       </div>}
       {randuri === null ? <Gol text="Se încarcă…" /> : randuri.length === 0 ? <Gol text="Nicio corespondență în evidență." /> : (
@@ -319,8 +330,8 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
                 <td style={S.td}>{r.expeditor || '-'}</td>
                 <td style={{ ...S.td, fontSize:12, color:G.muted }}>{r.documente || '-'}</td>
                 <td style={{ ...S.td, fontSize:12, color:G.muted }}>{r.depinde_de || '-'}</td>
-                <td style={S.td}><span style={{ color:culoareStareCoresp(r.stare), fontWeight:700, whiteSpace:'nowrap' }}>{etichetaStareCoresp(r.stare)}</span>
-                  {r.aprobat_la ? <div style={{ fontSize:11, color:G.muted }}>aprobat {fmtDate(r.aprobat_la)}</div> : null}
+                <td style={S.td}><span style={{ color:culoareStareCoresp(r.stare), fontWeight:700, whiteSpace:'nowrap' }}>{etichetaRandCoresp(r, aprobatori)}</span>
+                  {r.aprobat_la ? <div style={{ fontSize:11, color:G.muted }}>aprobat {fmtDate(r.aprobat_la)}{r.stare !== 'aprobat' && numeAprobator(r, aprobatori) ? ` de ${numeAprobator(r, aprobatori)}` : ''}</div> : null}
                   {r.aprobat_la && r.aprobat_fisier_id ? <div style={{ fontSize:11, color:G.blue }} title={`Amprenta serverului (eTag Storage): ${r.aprobat_storage_etag || '-'}\nSHA-256 declarat (informativ): ${r.aprobat_sha256 || '-'}`}>📄 {numeFisier(fisiere.find(x => x.id === r.aprobat_fisier_id)) || 'fișier'} (eTag {r.aprobat_storage_etag || '-'})</div> : null}
                   <InfoMail m={ultimulMail(mailuri, r.id)} /></td>
                 <td style={{ ...S.td, whiteSpace:'nowrap' }}>{r.trimis_la ? fmtDate(r.trimis_la) : '-'}{r.nr_inregistrare ? <div style={{ fontSize:11, color:G.muted }}>nr. {r.nr_inregistrare}</div> : null}</td>
@@ -359,7 +370,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
             <Camp eticheta="Subiectul mailului" span={2}><input style={S.input} value={f.mail_subiect} onChange={e => set('mail_subiect', e.target.value)} maxLength={300} /></Camp>
             <Camp eticheta="Textul mailului" span={2}><textarea style={{ ...S.input, minHeight:120 }} value={f.mail_text} onChange={e => set('mail_text', e.target.value)} maxLength={20000} /></Camp>
           </div>
-          {editat.rand && ['draft', 'la_avocat'].includes(stareEfectiva(editat.rand, f)) && editat.rand.aprobat_la && <div style={{ color:G.yellow, fontSize:12.5, marginTop:8 }}>⚠ Revenirea la {etichetaStareCoresp(stareEfectiva(editat.rand, f))} anulează aprobarea lui Răzvan (textul se schimbă → alt „da”).</div>}
+          {editat.rand && ['draft', 'la_avocat'].includes(stareEfectiva(editat.rand, f)) && editat.rand.aprobat_la && <div style={{ color:G.yellow, fontSize:12.5, marginTop:8 }}>⚠ Revenirea la {etichetaStareCoresp(stareEfectiva(editat.rand, f))} anulează aprobarea (textul se schimbă → alt „da” al owner-ului).</div>}
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14 }}>
             <button style={S.btnS} onClick={() => setEditat(null)} disabled={lucru}>Renunță</button>
             <button style={S.btnP} onClick={salveaza} disabled={lucru}>Salvează</button>
@@ -374,7 +385,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
         onRenunta={() => renuntaLaIncercare(randFis)}
         onReincarcaOrfane={() => incarcaOrfane(randFis)}
         onInregistreaza={(o, rol, obs) => inregistreazaOrfan(randFis, o, rol, obs)} onDescarca={descarca} />}
-      <div style={{ fontSize:11.5, color:G.dim, marginTop:10 }}>Stări: {STARI_CORESPONDENTA.map(s => s.eticheta).join(' → ')}. Ce se trimite efectiv (mail / poștă) rămâne la expeditor.</div>
+      <div style={{ fontSize:11.5, color:G.dim, marginTop:10 }}>Stări: {STARI_CORESPONDENTA.map(s => s.eticheta).join(' → ')}. „Aprobat” arată pe rând cine a aprobat (contul din evidență). Ce se trimite efectiv (mail / poștă) rămâne la expeditor.</div>
     </div>
   )
 }
@@ -420,7 +431,8 @@ export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, incerca
     if (await onUrca({ ...form, rol }) && idForm.current === id) { schimba({ rol: roluri[0], fisier: null, observatii: '' }); setCheieInput(k => k + 1) }
   }
   return (
-    <Modal titlu={`Fișierele corespondenței ${rand.cod}`} onClose={onClose} latime={780}>
+    <Modal titlu={`Fișierele corespondenței ${rand.cod}`} onClose={onClose} latime={780}
+      modificat={!!form.fisier || !!String(form.observatii || '').trim() || rol !== roluri[0]}>{/* Copilot #988 P2-02: modalul rămâne deschis după „Urcă”; starea reală a formularului decide */}
       <div style={{ fontSize:12.5, color:G.muted, marginBottom:10 }}>{rand.subiect} → {rand.destinatar}</div>
       {fisiere.length === 0 ? <Gol text="Niciun fișier urcat." /> : (
         <div style={{ overflowX:'auto' }}>
@@ -485,7 +497,7 @@ export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, incerca
               onChange={e => { const fisier = e.target.files?.[0] || null; schimba(x => ({ ...x, fisier })); onFisierNou?.() }} /></Camp>
             <Camp eticheta="Observații" span={2}><input style={S.input} value={form.observatii} maxLength={1000} disabled={lucru} onChange={e => schimba(x => ({ ...x, observatii: e.target.value }))} /></Camp>
           </div>
-          {rol === 'de_trimis' && rand.stare === 'aprobat' && <div style={{ color:G.yellow, fontSize:12.5, marginTop:8 }}>⚠ Un fișier „de trimis” nou anulează aprobarea lui Răzvan (rândul revine în Draft).</div>}
+          {rol === 'de_trimis' && rand.stare === 'aprobat' && <div style={{ color:G.yellow, fontSize:12.5, marginTop:8 }}>⚠ Un fișier „de trimis” nou anulează aprobarea (rândul revine în Draft și cere din nou „da”-ul owner-ului).</div>}
           {!roluri.includes('de_trimis') && <div style={{ color:G.muted, fontSize:12, marginTop:8 }}>Rândul e {rand.stare === 'anulat' ? 'anulat' : 'trimis'}: se pot urca doar dovada trimiterii, răspunsul sau alte fișiere.</div>}
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:10 }}>
             <button style={S.btnP} onClick={trimite} disabled={lucru || !form.fisier || !!dif} title={dif ? 'rolul / observațiile diferă de încercarea neconfirmată — vezi mai sus' : undefined}>⬆ Urcă</button>

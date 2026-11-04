@@ -180,9 +180,9 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             <input type="file" accept=".xlsx,.xls" onChange={e => { setFisier(e.target.files?.[0] || null); setRaport(null); invalideaza('alt fișier') }} style={{ ...S.input, padding:5 }} disabled={lucru} />
           </Camp>
           <Camp eticheta="Versiunea listei (obligatoriu)"><input value={versiune} onChange={e => { setVersiune(e.target.value); invalideaza('versiunea s-a schimbat') }} style={S.input} placeholder="ex. TGZ 13.07.2026" disabled={lucru} /></Camp>
-          <Camp eticheta="Sursa"><select value={sursa} onChange={e => { setSursa(e.target.value); invalideaza('sursa s-a schimbat') }} style={{ ...S.select, width:'100%' }} disabled={lucru}><option value="TGZ">TGZ</option><option value="ANEXA7">Anexa 7 - tipizat Beneficiar</option></select><div style={{ fontSize:12, color:G.muted, marginTop:4 }}>{sursa === 'ANEXA7' ? 'Model 7: 30 de coloane, antet pe randul 5; adresa pe coloane separate.' : 'Format TGZ vechi: Nr.Crt., Nume Detinator si adresa intr-o singura coloana.'}</div></Camp>
+          <Camp eticheta="Sursa"><select value={sursa} onChange={e => { setSursa(e.target.value); invalideaza('sursa s-a schimbat') }} style={{ ...S.select, width:'100%' }} disabled={lucru}><option value="TGZ">TGZ</option><option value="ANEXA7">Anexa 7 - tipizat Beneficiar</option></select><div style={{ fontSize:12, color:G.muted, marginTop:4 }}>{sursa === 'ANEXA7' ? 'Model 7: 30 de coloane, antet pe rândul 5; adresa pe coloane separate.' : 'Format TGZ vechi: Nr.Crt., Nume Deținător și adresa într-o singură coloană.'}</div></Camp>
         </div>
-        <div style={{ fontWeight:700, margin:'14px 0 8px' }}>2. Tronson optional - se poate atribui ulterior din Tronsoane</div><p>Tronsonul se atribuie dupa import pe intervale de pozitie HG.</p>
+        <div style={{ fontWeight:700, margin:'14px 0 8px' }}>2. Tronson opțional — se poate atribui ulterior din Tronsoane</div><p>Tronsonul se atribuie după import, pe intervale de poziție HG.</p>
         {uats.length === 0 ? <Gol text="Proiectul nu are UAT-uri." /> : (
           <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
             {uats.map(u => (
