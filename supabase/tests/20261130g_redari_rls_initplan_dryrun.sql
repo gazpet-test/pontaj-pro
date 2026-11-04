@@ -1,15 +1,19 @@
 -- DRY 20261130g_redari_rls_initplan — PASUL 2 din 2 („după”). Runner (o singură tranzacție ANULATĂ; ordinea completă e în capul fișierului
--- 20261130g_redari_rls_initplan_dryrun_inainte.sql):  BEGIN; GUC; \i ..._dryrun_inainte.sql; \i migrare; \i acest fișier; [revenire]; ROLLBACK.
--- Folosește funcțiile / tabelele temp create de pasul 1 (pg_temp.r30g_*). Probele de scriere rulează într-o subtranzacție anulată explicit,
--- deci instantaneul „revenire” se poate compara cu „înainte”. La final rolul e resetat (RESET ROLE) și claims-urile golite.
+-- 20261130g_redari_rls_initplan_dryrun_inainte.sql):  BEGIN; GUC; \i ..._dryrun_inainte.sql; \i migrare; \i acest fișier; ROLLBACK.
+-- Folosește funcțiile / tabelele temp create de pasul 1 (pg_temp.r30g_*). NICIUN DML: nimic de anulat în afară de DDL-ul migrării, nicio secvență
+-- consumată. Rulează în FEREASTRA DE LOCK a migrării (ACCESS EXCLUSIVE pe tabelele red_* cu politici): doar verificări rapide (politicile sunt
+-- deja InitPlan), cu statement_timeout 10 s pe fiecare instrucțiune; la final raportează durata ferestrei (de la lock-uri) și REFUZĂ peste 20 s
+-- (criteriu de abandon: runner-ul face oricum ROLLBACK, lock-urile se eliberează). La final rolul e resetat și claims-urile golite.
 -- TEST0  garda + pasul 1 rulat + politicile în forma nouă.
 -- TEST1  rânduri văzute (număr + md5 pe proiecția coloanelor permise + refuz) IDENTICE înainte / după, pe fiecare identitate × tabel / view red_*.
 -- TEST2  așteptări independente (din definiția nivelurilor, nu din instantaneu): owner / admin / editor văd tot; viewer vede tot în afară de
 --        contact / token / meta și de jurnalul pe contact / meta; fără acces și anon nu văd nimic; coloanele fără GRANT (ex. valoare_lei)
 --        rămân refuzate (42501) pentru TOATE identitățile aplicației.
 -- TEST3  EXPLAIN ca viewer pe red_v_centralizator_uat și red_v_stare_parcela: InitPlan prezent, niciun Filter cu fn_red_nivel() per rând.
--- TEST4  deciziile de scriere identice înainte / după ȘI egale cu rezultatul EXACT așteptat (fără „orice eroare ≠ 42501”).
--- TEST5  interogările reale ale aplicației: același rezultat (md5) înainte / după + timpi (NOTICE) + curățenie rol / claims.
+-- TEST4  fiecare expresie USING / WITH CHECK, evaluată direct ca fiecare identitate (fără DML): aceeași valoare înainte / după ȘI egală cu
+--        valoarea așteptată independent (nivelul identității pus în locul funcției).
+-- TEST5  interogările reale ale aplicației: același rezultat (md5) înainte / după + timpi (NOTICE) + fereastra de lock + curățenie rol / claims.
+SET LOCAL statement_timeout = '10s';
 
 -- TEST0
 DO $t$ BEGIN
@@ -19,8 +23,8 @@ DO $t$ BEGIN
   IF to_regclass('pg_temp.r30g_snap') IS NULL THEN
     RAISE EXCEPTION 'TEST0 FAIL: lipseste instantaneul inainte (ruleaza intai 20261130g_redari_rls_initplan_dryrun_inainte.sql, inaintea migrarii)';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_temp.r30g_snap WHERE faza = 'inainte') OR NOT EXISTS (SELECT 1 FROM pg_temp.r30g_scr WHERE faza = 'inainte') THEN
-    RAISE EXCEPTION 'TEST0 FAIL: instantaneul / probele inainte lipsesc';
+  IF NOT EXISTS (SELECT 1 FROM pg_temp.r30g_snap WHERE faza = 'inainte') OR NOT EXISTS (SELECT 1 FROM pg_temp.r30g_eval WHERE faza = 'inainte') THEN
+    RAISE EXCEPTION 'TEST0 FAIL: instantaneul / evaluarile inainte lipsesc';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.red_uat'::regclass AND p.polname = 'red_uat_sel'
                   AND pg_get_expr(p.polqual, p.polrelid) = '(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)') THEN
@@ -89,34 +93,34 @@ BEGIN
   RAISE NOTICE 'TEST3 OK (red_v_centralizator_uat, red_v_stare_parcela ca viewer: InitPlan, fara fn_red_nivel() per rand)';
 END $t$;
 
--- TEST4: deciziile de scriere (subtranzactie anulata: nimic nu ramane)
-SELECT pg_temp.r30g_probe('dupa');
+-- TEST4: deciziile politicilor, fara DML
+SELECT pg_temp.r30g_evalueaza('dupa');
 DO $t$
-DECLARE v_dif text[];
+DECLARE v_dif text[]; v_n integer;
 BEGIN
-  -- (a) identice inainte / dupa
-  SELECT array_agg(coalesce(a.eticheta, b.eticheta) || '/' || coalesce(a.proba, b.proba) || ': ' || coalesce(a.rez, '-') || ' -> ' || coalesce(b.rez, '-') ORDER BY 1) INTO v_dif
-    FROM (SELECT * FROM pg_temp.r30g_scr WHERE faza = 'inainte') a
-    FULL JOIN (SELECT * FROM pg_temp.r30g_scr WHERE faza = 'dupa') b ON b.eticheta = a.eticheta AND b.proba = a.proba
+  -- (a) aceeasi valoare inainte / dupa, pe fiecare (identitate, politica, USING / WITH CHECK); acelasi set de politici
+  SELECT array_agg(coalesce(a.eticheta, b.eticheta) || '/' || coalesce(a.politica, b.politica) || '/' || coalesce(a.tip, b.tip) || ': '
+                   || coalesce(a.rez, '-') || ' -> ' || coalesce(b.rez, '-') ORDER BY 1) INTO v_dif
+    FROM (SELECT * FROM pg_temp.r30g_eval WHERE faza = 'inainte') a
+    FULL JOIN (SELECT * FROM pg_temp.r30g_eval WHERE faza = 'dupa') b ON b.eticheta = a.eticheta AND b.politica = a.politica AND b.tip = a.tip
    WHERE a.rez IS DISTINCT FROM b.rez;
-  IF v_dif IS NOT NULL THEN RAISE EXCEPTION 'TEST4 FAIL: decizii de scriere diferite inainte / dupa: %', v_dif; END IF;
-  -- (b) rezultatul EXACT asteptat, din definitia nivelurilor (A = owner/admin, AE = owner/admin/editor; anon nu are GRANT pe aceste tabele)
-  WITH astept(eticheta, proba, rez) AS (
-    SELECT e, p, CASE
-      WHEN e = 'anon' THEN 'err:42501'
-      WHEN p = 'uat_upd'  THEN CASE WHEN e IN ('owner', 'admin') THEN 'rows:1' ELSE 'rows:0' END
-      WHEN p = 'parc_upd' THEN CASE WHEN e IN ('owner', 'admin', 'editor') THEN 'rows:1' ELSE 'rows:0' END
-      WHEN p = 'pr_dup'   THEN CASE WHEN e IN ('owner', 'admin') THEN 'err:23505' ELSE 'err:42501' END   -- WITH CHECK trece -> unicitate
-      WHEN p = 'pr_nou'   THEN CASE WHEN e IN ('owner', 'admin') THEN 'rows:1' ELSE 'err:42501' END END
-      FROM unnest(ARRAY['owner', 'admin', 'editor', 'viewer', 'fara_acces', 'anon']) e, unnest(ARRAY['uat_upd', 'parc_upd', 'pr_dup', 'pr_nou']) p)
-  SELECT array_agg(x.eticheta || '/' || x.proba || ': ' || coalesce(s.rez, '-') || ' <> ' || x.rez ORDER BY 1) INTO v_dif
-    FROM astept x LEFT JOIN pg_temp.r30g_scr s ON s.faza = 'dupa' AND s.eticheta = x.eticheta AND s.proba = x.proba
-   WHERE s.rez IS DISTINCT FROM x.rez;
-  IF v_dif IS NOT NULL THEN RAISE EXCEPTION 'TEST4 FAIL: decizii diferite de asteptari: %', v_dif; END IF;
-  RAISE NOTICE 'TEST4 OK (24 probe identice inainte / dupa si egale cu asteptarile; scrierile probelor anulate)';
+  IF v_dif IS NOT NULL THEN RAISE EXCEPTION 'TEST4 FAIL: expresii cu alta valoare inainte / dupa: %', v_dif; END IF;
+  -- (b) egala cu asteptarea independenta (nivelul identitatii in locul functiei; anon = 42501, nu are EXECUTE)
+  SELECT array_agg(x.eticheta || '/' || x.politica || '/' || x.tip || ': ' || coalesce(d.rez, '-') || ' <> ' || x.rez ORDER BY 1) INTO v_dif
+    FROM (SELECT * FROM pg_temp.r30g_eval WHERE faza = 'asteptat') x
+    LEFT JOIN pg_temp.r30g_eval d ON d.faza = 'dupa' AND d.eticheta = x.eticheta AND d.politica = x.politica AND d.tip = x.tip
+   WHERE d.rez IS DISTINCT FROM x.rez;
+  IF v_dif IS NOT NULL THEN RAISE EXCEPTION 'TEST4 FAIL: expresii diferite de asteptari: %', v_dif; END IF;
+  -- (c) sanity: viewer-ul NU trece WITH CHECK-ul de INSERT pe red_uat, editorul trece pe red_parcele, adminul pe red_proiecte (din valori, nu din cod)
+  IF (SELECT rez FROM pg_temp.r30g_eval WHERE faza = 'dupa' AND eticheta = 'viewer' AND politica = 'red_uat.red_uat_ins' AND tip = 'w') IS DISTINCT FROM '{f,f,f}'
+     OR (SELECT rez FROM pg_temp.r30g_eval WHERE faza = 'dupa' AND eticheta = 'editor' AND politica = 'red_parcele.red_parcele_ins' AND tip = 'w') IS DISTINCT FROM '{t,t,t}'
+     OR (SELECT rez FROM pg_temp.r30g_eval WHERE faza = 'dupa' AND eticheta = 'admin' AND politica = 'red_proiecte.red_proiecte_ins' AND tip = 'w') IS DISTINCT FROM '{t,t,t}'
+     OR (SELECT rez FROM pg_temp.r30g_eval WHERE faza = 'dupa' AND eticheta = 'viewer' AND politica = 'red_jurnal.red_jurnal_sel' AND tip = 'q') IS DISTINCT FROM '{f,t,f}' THEN
+    RAISE EXCEPTION 'TEST4 FAIL: valori de control gresite';
+  END IF;
+  SELECT count(*) INTO v_n FROM pg_temp.r30g_eval WHERE faza = 'dupa';
+  RAISE NOTICE 'TEST4 OK (% evaluari de politica identice inainte / dupa si egale cu asteptarile; fara DML)', v_n;
 END $t$;
-SELECT pg_temp.r30g_numara('dupa_probe');
-SELECT pg_temp.r30g_compara('dupa', 'dupa_probe');   -- probele nu au lasat nimic in urma
 
 -- TEST5: interogarile reale ale aplicatiei (acelasi rezultat) + timpi + curatenie
 SELECT pg_temp.r30g_cronometreaza('dupa');
@@ -128,6 +132,12 @@ BEGIN
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION 'TEST5 FAIL: interogarile aplicatiei dau alt rezultat dupa migrare: %', v_dif; END IF;
   RAISE NOTICE 'DRY30g timpi viewer (ms): %', (SELECT jsonb_object_agg(a.obiect, jsonb_build_object('inainte', a.ms, 'dupa', b.ms))
                                                  FROM pg_temp.r30g_timp a JOIN pg_temp.r30g_timp b ON b.obiect = a.obiect AND b.faza = 'dupa' WHERE a.faza = 'inainte');
+END $t$;
+DO $t$
+DECLARE v_ms numeric := round(extract(epoch FROM clock_timestamp() - current_setting('gazpet.r30g_lock_la')::timestamptz) * 1000);
+BEGIN
+  RAISE NOTICE 'DRY30g fereastra de lock (migrare + verificari dupa): % ms', v_ms;
+  IF v_ms > 20000 THEN RAISE EXCEPTION 'DRY30g FAIL: fereastra de lock % ms > 20 s (criteriu de abandon)', v_ms; END IF;
 END $t$;
 RESET ROLE;
 SELECT set_config('request.jwt.claims', '', true);

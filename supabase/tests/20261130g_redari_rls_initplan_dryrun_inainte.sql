@@ -4,23 +4,26 @@
 --   \i supabase/tests/20261130g_redari_rls_initplan_dryrun_inainte.sql     -- instantaneul „inainte” (forma veche, per rând)
 --   \i supabase/migrations/20261130g_redari_rls_initplan.sql
 --   \i supabase/tests/20261130g_redari_rls_initplan_dryrun.sql             -- instantaneul „dupa” + comparație + EXPLAIN + timpi
---   -- opțional, revenirea în aceeași tranzacție:
---   -- SELECT set_config('gazpet.revenire_20261130g', 'REDARI_RLS_INITPLAN_SCOASA:' || txid_current(), true);
---   -- \i supabase/revenire/20261130g_redari_rls_initplan_ROLLBACK.sql
---   -- SELECT pg_temp.r30g_numara('revenire'); SELECT pg_temp.r30g_compara('inainte', 'revenire');
 --   ROLLBACK;
+-- Revenirea NU se rulează în tranzacția DRY de pe live: după ea politicile sunt iar per rând (lente) și s-ar citi sub ACCESS EXCLUSIVE.
+--   Pe live revenirea se verifică prin postcondiția ei (expresiile vechi EXACTE); ciclul apply → revenire → re-apply + „înainte = revenire” e în harness.
+-- Fereastra de lock (L06 / Copilot r2 P2-01): tot ce e greu (instantaneul pe 6 identități cu politicile vechi, per rând; benchmark-ul „înainte”) rulează
+--   AICI, ÎNAINTEA migrării — tranzacția ține doar ACCESS SHARE (nu blochează citirile / scrierile aplicației, doar DDL concurent). După \i migrare
+--   rămân doar verificări rapide (politicile sunt deja InitPlan); pasul 2 raportează durata ferestrei și refuză peste prag.
 -- De ce două fișiere: după migrare forma veche nu mai există, deci instantaneul „înainte” se ia înainte de \i migrare, într-o tabelă TEMP
 -- (ON COMMIT DROP, dispare la ROLLBACK), scrisă doar ca postgres.
 -- Ce reține, pe fiecare identitate × fiecare tabel / view red_*:
 --   • număr de rânduri VĂZUTE + md5 pe conținut, pe PROIECȚIA coloanelor pe care authenticated are SELECT (privilegii reale pe coloană,
 --     ex. red_parcele fără valoare_lei; aceeași proiecție și pentru referința postgres), sau SQLSTATE-ul refuzului;
 --   • pentru fiecare coloană fără SELECT pentru authenticated, obiectul „tabel.coloana”: refuzul (42501) trebuie să rămână refuz;
---   • deciziile de scriere (TEST4): UPDATE pe o coloană cu privilegiu de UPDATE, INSERT duplicat, INSERT valid — rulate într-o subtranzacție
---     ANULATĂ EXPLICIT și la succes (RAISE + EXCEPTION), deci nicio scriere / trigger / jurnal nu rămâne între instantanee (doar valorile de
---     secvență consumate de jurnal nu se întorc — comportament normal PostgreSQL, fără efect asupra rândurilor);
+--   • deciziile politicilor (TEST4), FĂRĂ NICIUN DML: expresia USING / WITH CHECK a fiecărei politici e evaluată direct ca fiecare identitate
+--     (SELECT <expr> FROM (VALUES <tabela>) — singura coloană de rând folosită e red_jurnal.tabela). Nicio scriere, niciun trigger, nicio secvență
+--     consumată (Jakarinos r2 P2-01). Echivalența de scriere rezultă din: expresia nouă = expresia veche cu fn_red_nivel() → (select fn_red_nivel())
+--     (comparată EXACT în preflight + postcondiție) + aceeași valoare a expresiei pe fiecare identitate înainte / după + valoarea așteptată
+--     independent (nivelul identității din user_module_access / profiles pus în locul funcției);
 --   • timpii (NOTICE) pe interogările REALE ale aplicației, ca viewer: DashboardEcran (red_v_centralizator_uat, red_v_tronson) și ultima pagină
 --     din Registru (red_v_stare_parcela cu count exact + ORDER BY id_parcela, nume + LIMIT 100 OFFSET ultima pagină), pe proiectul cu cele mai
---     multe parcele; rezultatele (md5) trebuie să fie identice înainte / după.
+--     multe parcele; md5 pe rezultat agregat cu ORDER BY total (identic înainte / după).
 -- Identități (reale, simulate prin request.jwt.claims + SET LOCAL ROLE): owner, admin non-owner, editor, viewer, fără acces, anon.
 CREATE FUNCTION pg_temp.r30g_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
@@ -34,7 +37,7 @@ GRANT EXECUTE ON FUNCTION pg_temp.r30g_ca(uuid, text) TO authenticated, anon;
 CREATE TEMP TABLE r30g_id (eticheta text PRIMARY KEY, uid uuid, rol text NOT NULL) ON COMMIT DROP;
 CREATE TEMP TABLE r30g_snap (faza text, eticheta text, obiect text, n bigint, h text, eroare text, PRIMARY KEY (faza, eticheta, obiect)) ON COMMIT DROP;
 CREATE TEMP TABLE r30g_timp (faza text, obiect text, ms numeric, h text, PRIMARY KEY (faza, obiect)) ON COMMIT DROP;
-CREATE TEMP TABLE r30g_scr (faza text, eticheta text, proba text, rez text, PRIMARY KEY (faza, eticheta, proba)) ON COMMIT DROP;
+CREATE TEMP TABLE r30g_eval (faza text, eticheta text, politica text, tip text, rez text, PRIMARY KEY (faza, eticheta, politica, tip)) ON COMMIT DROP;
 
 DO $t$
 DECLARE own uuid; adm uuid; ed uuid; vw uuid; fara uuid;
@@ -102,46 +105,48 @@ BEGIN
   END LOOP;
 END $h$;
 
--- o proba de scriere ca identitate: 'rows:N' sau 'err:SQLSTATE' (eroarea e prinsa local; rolul revine la postgres)
-CREATE FUNCTION pg_temp.r30g_scrie(p_eticheta text, p_sql text) RETURNS text LANGUAGE plpgsql AS $h$
-DECLARE v_n bigint; v_rez text;
+-- deciziile politicilor, fara DML: fiecare expresie (USING = q, WITH CHECK = w) a fiecarei politici red_* evaluata ca fiecare identitate
+--   pe cele 3 valori relevante ale coloanei de rand red_jurnal.tabela (celelalte politici nu folosesc coloane); rezultat = vectorul de boolean
+--   sau 'err:SQLSTATE'. Expresiile se deparseaza cu search_path = public, pg_temp (ca baseline-ul migrarii).
+CREATE FUNCTION pg_temp.r30g_evalueaza(p_faza text) RETURNS void LANGUAGE plpgsql AS $h$
+DECLARE i record; x record; v_sp text := current_setting('search_path'); v_r text; v_exp jsonb; v_rez jsonb;
 BEGIN
-  PERFORM pg_temp.r30g_ca((SELECT uid FROM pg_temp.r30g_id WHERE eticheta = p_eticheta), (SELECT rol FROM pg_temp.r30g_id WHERE eticheta = p_eticheta));
-  BEGIN
-    EXECUTE p_sql; GET DIAGNOSTICS v_n = ROW_COUNT; v_rez := 'rows:' || v_n;
-  EXCEPTION WHEN OTHERS THEN v_rez := 'err:' || SQLSTATE;
-  END;
-  PERFORM pg_temp.r30g_ca(NULL, 'postgres');
-  RETURN v_rez;
-END $h$;
-
--- deciziile de scriere (USING / WITH CHECK), toate intr-o subtranzactie anulata explicit la final (R3G00), si la succes:
---   uat_upd   UPDATE red_uat SET nume = nume            (coloana cu UPDATE pentru authenticated; politica A)
---   parc_upd  UPDATE red_parcele SET observatii = observatii (coloana cu UPDATE; politica AE; triggerele de legatura / plic nu refuza valori egale)
---   pr_dup    INSERT duplicat (acelasi rand red_proiecte): WITH CHECK (42501) inaintea unicitatii (23505)
---   pr_nou    INSERT valid red_proiecte (id + cod noi): calea legitima
-CREATE FUNCTION pg_temp.r30g_probe(p_faza text) RETURNS void LANGUAGE plpgsql AS $h$
-DECLARE v_uat uuid; v_par uuid; v_pr text; e text; v_rez jsonb := '{}'::jsonb;
-BEGIN
-  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'DRY30g: r30g_probe se apeleaza ca postgres'; END IF;
-  SELECT id INTO v_uat FROM public.red_uat ORDER BY id LIMIT 1;
-  SELECT id INTO v_par FROM public.red_parcele WHERE sters_la IS NULL ORDER BY id LIMIT 1;
-  SELECT to_jsonb(p)::text INTO v_pr FROM public.red_proiecte p ORDER BY p.id LIMIT 1;
-  IF v_uat IS NULL OR v_par IS NULL OR v_pr IS NULL THEN RAISE EXCEPTION 'DRY30g FAIL: fara red_uat / red_parcele / red_proiecte pentru probe'; END IF;
-  BEGIN
-    FOR e IN SELECT eticheta FROM pg_temp.r30g_id ORDER BY eticheta LOOP
-      v_rez := v_rez
-        || jsonb_build_object(e || '/uat_upd', pg_temp.r30g_scrie(e, format('UPDATE public.red_uat SET nume = nume WHERE id = %L', v_uat)))
-        || jsonb_build_object(e || '/parc_upd', pg_temp.r30g_scrie(e, format('UPDATE public.red_parcele SET observatii = observatii WHERE id = %L', v_par)))
-        || jsonb_build_object(e || '/pr_dup', pg_temp.r30g_scrie(e, format('INSERT INTO public.red_proiecte SELECT (jsonb_populate_record(NULL::public.red_proiecte, %L::jsonb)).*', v_pr)))
-        || jsonb_build_object(e || '/pr_nou', pg_temp.r30g_scrie(e, format('INSERT INTO public.red_proiecte (id, cod, denumire) VALUES (%L, %L, %L)',
-                                                                         gen_random_uuid(), 'R30G-DRY-' || e || '-' || p_faza, 'DRY 30g (anulat)')));
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'DRY30g: r30g_evalueaza se apeleaza ca postgres'; END IF;
+  PERFORM set_config('search_path', 'public, pg_temp', true);
+  SELECT jsonb_agg(jsonb_build_object('p', c.relname || '.' || p.polname, 't', t.tip, 'e', t.expr) ORDER BY c.relname, p.polname, t.tip) INTO v_exp
+    FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+    CROSS JOIN LATERAL (VALUES ('q', pg_get_expr(p.polqual, p.polrelid)), ('w', pg_get_expr(p.polwithcheck, p.polrelid))) t(tip, expr)
+   WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'red\_%' AND t.expr IS NOT NULL;
+  FOR i IN SELECT * FROM pg_temp.r30g_id ORDER BY eticheta LOOP
+    v_rez := '{}'::jsonb;
+    PERFORM pg_temp.r30g_ca(i.uid, i.rol);
+    FOR x IN SELECT e ->> 'p' AS p, e ->> 't' AS t, e ->> 'e' AS expr FROM jsonb_array_elements(v_exp) e LOOP
+      BEGIN
+        EXECUTE format('SELECT array_agg((%s) ORDER BY v.tabela)::text FROM (VALUES (%L), (%L), (%L)) v(tabela)', x.expr,
+                       'red_detinatori_contact', 'red_parcele', 'red_raspunsuri_meta') INTO v_r;
+      EXCEPTION WHEN OTHERS THEN v_r := 'err:' || SQLSTATE;
+      END;
+      v_rez := v_rez || jsonb_build_object(x.p || '|' || x.t, v_r);
     END LOOP;
-    RAISE EXCEPTION 'r30g: anulare probe' USING ERRCODE = 'R3G00';   -- anuleaza TOATE scrierile probelor (randuri, versiuni, jurnal, triggere)
-  EXCEPTION WHEN SQLSTATE 'R3G00' THEN NULL;
-  END;
-  PERFORM pg_temp.r30g_ca(NULL, 'postgres');
-  INSERT INTO pg_temp.r30g_scr SELECT p_faza, split_part(k, '/', 1), split_part(k, '/', 2), v #>> '{}' FROM jsonb_each(v_rez) x(k, v);
+    PERFORM pg_temp.r30g_ca(NULL, 'postgres');
+    INSERT INTO pg_temp.r30g_eval SELECT p_faza, i.eticheta, split_part(k, '|', 1), split_part(k, '|', 2), v #>> '{}' FROM jsonb_each(v_rez) e(k, v);
+  END LOOP;
+  -- asteptarea independenta (doar in faza inainte): aceeasi expresie veche, cu fn_red_nivel() inlocuit de nivelul ASTEPTAT al identitatii
+  --   (cel dupa care a fost aleasa din user_module_access / profiles, nu din functie), evaluata ca postgres; anon nu are EXECUTE pe fn_red_nivel
+  IF p_faza = 'inainte' THEN
+    FOR i IN SELECT r.eticheta, CASE r.eticheta WHEN 'owner' THEN 'admin' WHEN 'admin' THEN 'admin' WHEN 'editor' THEN 'editor' WHEN 'viewer' THEN 'viewer' END AS niv
+               FROM pg_temp.r30g_id r ORDER BY 1 LOOP
+      FOR x IN SELECT e ->> 'p' AS p, e ->> 't' AS t, e ->> 'e' AS expr FROM jsonb_array_elements(v_exp) e LOOP
+        IF i.eticheta = 'anon' THEN v_r := 'err:42501';
+        ELSE
+          EXECUTE format('SELECT array_agg((%s) ORDER BY v.tabela)::text FROM (VALUES (%L), (%L), (%L)) v(tabela)',
+                         replace(x.expr, 'fn_red_nivel()', quote_nullable(i.niv) || '::text'), 'red_detinatori_contact', 'red_parcele', 'red_raspunsuri_meta') INTO v_r;
+        END IF;
+        INSERT INTO pg_temp.r30g_eval VALUES ('asteptat', i.eticheta, x.p, x.t, v_r);
+      END LOOP;
+    END LOOP;
+  END IF;
+  PERFORM set_config('search_path', v_sp, true);
 END $h$;
 
 -- timpi ca viewer pe interogarile reale ale aplicatiei (min din 3; informativ, NOTICE) + md5 pe rezultat (trebuie identic intre faze)
@@ -153,9 +158,9 @@ BEGIN
   SELECT proiect_id INTO v_pr FROM public.red_parcele GROUP BY proiect_id ORDER BY count(*) DESC, proiect_id LIMIT 1;
   PERFORM pg_temp.r30g_ca(v_vw, 'authenticated');
   FOR o IN SELECT * FROM (VALUES
-      ('dashboard_centralizator', format('SELECT md5(coalesce(string_agg(q::text, %L), %L)) FROM (SELECT uat_id, uat3, uat_nume, stare, numar, total_uat, procent_inchise'
+      ('dashboard_centralizator', format('SELECT md5(coalesce(string_agg(q::text, %L ORDER BY q::text), %L)) FROM (SELECT uat_id, uat3, uat_nume, stare, numar, total_uat, procent_inchise'
          || ' FROM public.red_v_centralizator_uat WHERE stare IS NOT NULL AND proiect_id = %L ORDER BY uat_id, stare LIMIT 1000) q', '|', '', v_pr)),
-      ('dashboard_tronson', format('SELECT md5(coalesce(string_agg(q::text, %L), %L)) FROM (SELECT parcela_id, tronson, tip_pv, obiectii_deschise'
+      ('dashboard_tronson', format('SELECT md5(coalesce(string_agg(q::text, %L ORDER BY q::text), %L)) FROM (SELECT parcela_id, tronson, tip_pv, obiectii_deschise'
          || ' FROM public.red_v_tronson WHERE proiect_id = %L ORDER BY parcela_id LIMIT 1000) q', '|', '', v_pr)),
       ('registru_ultima_pagina', NULL)) AS v(obiect, q) LOOP
     v_min := NULL;
@@ -163,10 +168,10 @@ BEGIN
       t0 := clock_timestamp();
       IF o.q IS NOT NULL THEN
         EXECUTE o.q INTO v_h;
-      ELSE   -- Registru: count exact + pagina 100 (ORDER BY id_parcela, nume), ultima pagina, ca PostgREST
+      ELSE   -- Registru: count exact + pagina 100 (ORDER BY id_parcela, nume ca UI-ul; + detinator_id = pagina determinista), ultima pagina
         EXECUTE 'SELECT count(*) FROM public.red_v_stare_parcela WHERE proiect_id = $1' INTO v_n USING v_pr;
-        EXECUTE 'SELECT md5(coalesce(string_agg(q::text, ''|''), '''')) FROM (SELECT * FROM public.red_v_stare_parcela WHERE proiect_id = $1'
-             || ' ORDER BY id_parcela, nume LIMIT 100 OFFSET $2) q' INTO v_h USING v_pr, greatest(0, ((v_n - 1) / 100) * 100);
+        EXECUTE 'SELECT md5(coalesce(string_agg(q::text, ''|'' ORDER BY q::text), '''')) FROM (SELECT * FROM public.red_v_stare_parcela WHERE proiect_id = $1'
+             || ' ORDER BY id_parcela, nume, detinator_id LIMIT 100 OFFSET $2) q' INTO v_h USING v_pr, greatest(0, ((v_n - 1) / 100) * 100);
         v_h := v_n || ':' || v_h;
       END IF;
       v_ms := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
@@ -194,12 +199,10 @@ BEGIN
 END $h$;
 
 SELECT pg_temp.r30g_numara('inainte');
-SELECT pg_temp.r30g_probe('inainte');
-SELECT pg_temp.r30g_numara('inainte_dupa_probe');
-SELECT pg_temp.r30g_compara('inainte', 'inainte_dupa_probe');   -- probele nu au lasat nimic in urma
+SELECT pg_temp.r30g_evalueaza('inainte');
 SELECT pg_temp.r30g_cronometreaza('inainte');
 DO $t$ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR nullif(current_setting('request.jwt.claims', true), '') IS NOT NULL THEN RAISE EXCEPTION 'DRY30g inainte FAIL: rol / claims ramase'; END IF;
-  RAISE NOTICE 'DRY30g inainte OK: % randuri in instantaneu, % probe de scriere', (SELECT count(*) FROM pg_temp.r30g_snap WHERE faza = 'inainte'),
-               (SELECT count(*) FROM pg_temp.r30g_scr WHERE faza = 'inainte');
+  RAISE NOTICE 'DRY30g inainte OK: % randuri in instantaneu, % evaluari de politica', (SELECT count(*) FROM pg_temp.r30g_snap WHERE faza = 'inainte'),
+               (SELECT count(*) FROM pg_temp.r30g_eval WHERE faza = 'inainte');
 END $t$;

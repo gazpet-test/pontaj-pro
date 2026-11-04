@@ -12,7 +12,7 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261130g', true) IS DISTINCT FROM 'REDARI_RLS_INITPLAN_SCOASA:' || txid_current() THEN
     RAISE EXCEPTION '20261130g revenire: garda invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  PERFORM set_config('lock_timeout', '2s', true);
   PERFORM set_config('gazpet.r30g_search_path', current_setting('search_path'), true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   IF to_regprocedure('public.fn_red_storage_verifica_redari(boolean)') IS NULL THEN RAISE EXCEPTION '20261130g revenire: lipseste verificatorul storage (30e)'; END IF;
@@ -21,7 +21,7 @@ BEGIN
   IF to_regclass('public.red_corespondenta_mailuri') IS NOT NULL THEN LOCK TABLE public.red_corespondenta_mailuri IN ACCESS EXCLUSIVE MODE; END IF;
   LOCK TABLE public.red_detinatori, public.red_detinatori_contact, public.red_detinatori_token, public.red_import_loturi, public.red_jurnal,
              public.red_loturi_plicuire, public.red_numere, public.red_parcele, public.red_plicuri, public.red_procese_verbale, public.red_proiecte,
-             public.red_raspunsuri, public.red_raspunsuri_meta, public.red_uat, public.sms_loturi IN ACCESS EXCLUSIVE MODE;
+             public.red_raspunsuri, public.red_raspunsuri_meta, public.red_uat, public.sms_loturi IN ACCESS EXCLUSIVE MODE;   -- sms_loturi: DROP INDEX cere ACCESS EXCLUSIVE
 
   -- acelasi baseline ca in migrare (copiat textual din 20261130g)
   CREATE TEMP TABLE r30g_rev_pol ON COMMIT DROP AS

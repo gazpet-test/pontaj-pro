@@ -21,7 +21,10 @@
 --   comanda așteptată, numărul de politici red_* neschimbat; indexurile lipsesc și FK-urile există. Altfel refuz (cineva a schimbat schema între timp).
 -- Postcondiție: forma nouă exactă pe fiecare politică, același număr de politici, RLS activ pe toate tabelele red_* / sms_*, storage neschimbat,
 --   indexurile valide pe coloana corectă.
--- Ordinea lock-urilor (L06): tabelele în ordine alfabetică, ACCESS EXCLUSIVE, înainte de orice verificare.
+-- Ordinea lock-urilor (L06): tabelele în ordine alfabetică, înainte de orice verificare. Lock-uri MINIME: ACCESS EXCLUSIVE doar pe tabelele cu politici
+--   (îl cere oricum ALTER POLICY); sms_loturi (doar CREATE INDEX, fără politici atinse) în SHARE. lock_timeout 2s: dacă un tabel e ocupat, migrarea
+--   renunță repede în loc să țină coada de așteptare. Fereastra de lock (măsurată în DRY ca NOTICE): doar verificări de catalog + 42 ALTER POLICY +
+--   9 indexuri pe tabele de sub ~6,7k rânduri — estimat sub 1 s pe prod.
 -- ALTER POLICY e idempotent, deci rulat în afara runner-ului (autocommit, fără ON_ERROR_STOP) s-ar aplica fără preflight: de aceea politicile și
 --   indexurile stau într-un bloc DO care reverifică garda și existența tabelei temp a preflight-ului din ACEEAȘI tranzacție (testat local).
 -- Testat local (PG 17.6, harness cu stub-uri, expresii identice cu live): DRY complet, apply → revenire → re-apply, cu / fără red_corespondenta_mailuri
@@ -34,7 +37,7 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261130g_redari_rls_initplan:' || txid_current() THEN
     RAISE EXCEPTION '20261130g: garda start invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  PERFORM set_config('lock_timeout', '2s', true);
   -- deparsare determinista a expresiilor (fara „public.”), restaurata in postconditie
   PERFORM set_config('gazpet.r30g_search_path', current_setting('search_path'), true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
@@ -48,7 +51,8 @@ BEGIN
               AND p.provolatile = 's' AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
               AND p.proacl::text = '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}')
           OR (p.oid = 'auth.uid()'::regprocedure AND md5(p.prosrc) = 'cdef18c69c4f4cbbced2eaf81e628b49' AND l.lanname = 'sql'
-              AND p.provolatile = 's' AND NOT p.prosecdef AND p.proconfig IS NULL AND pg_get_userbyid(p.proowner) = 'supabase_auth_admin')) <> 2 THEN
+              AND p.provolatile = 's' AND NOT p.prosecdef AND p.proconfig IS NULL AND pg_get_userbyid(p.proowner) = 'supabase_auth_admin'
+              AND p.proacl::text = '{=X/supabase_auth_admin,supabase_auth_admin=X/supabase_auth_admin,dashboard_user=X/supabase_auth_admin}')) <> 2 THEN
     RAISE EXCEPTION '20261130g: fn_red_nivel / auth.uid nu mai sunt cele din baseline (corp / limbaj / volatilitate / definer / search_path / owner / EXECUTE)';
   END IF;
   -- L06: lock-uri in ordine alfabetica, inainte de verificari
@@ -56,7 +60,9 @@ BEGIN
   IF to_regclass('public.red_corespondenta_mailuri') IS NOT NULL THEN LOCK TABLE public.red_corespondenta_mailuri IN ACCESS EXCLUSIVE MODE; END IF;
   LOCK TABLE public.red_detinatori, public.red_detinatori_contact, public.red_detinatori_token, public.red_import_loturi, public.red_jurnal,
              public.red_loturi_plicuire, public.red_numere, public.red_parcele, public.red_plicuri, public.red_procese_verbale, public.red_proiecte,
-             public.red_raspunsuri, public.red_raspunsuri_meta, public.red_uat, public.sms_loturi IN ACCESS EXCLUSIVE MODE;
+             public.red_raspunsuri, public.red_raspunsuri_meta, public.red_uat IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.sms_loturi IN SHARE MODE;   -- doar CREATE INDEX (cere SHARE); politicile sms_* nu se ating
+  PERFORM set_config('gazpet.r30g_lock_la', clock_timestamp()::text, true);   -- inceputul ferestrei de lock (DRY-ul o raporteaza)
 
   -- baseline: expresiile live din 04.11.2026 (N = IS NOT NULL, AE = admin/editor, A = admin, J = jurnal); forma noua = fn_red_nivel() -> InitPlan
   CREATE TEMP TABLE r30g_pol ON COMMIT DROP AS
