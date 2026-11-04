@@ -17,7 +17,7 @@ R=$RAD/supabase/revenire/20261130l_redari_convocare_rezerva_ROLLBACK.sql
 S=$RAD/supabase/tests/20261130l_redari_convocare_rezerva_schelet.sql
 T=$RAD/supabase/tests/20261130l_redari_convocare_rezerva_dryrun_local.sql
 for f in "$M" "$R" "$S" "$T"; do tr -d '\r' < "$f" > "$TMP/$(basename "$f")" || exit 90; done
-curata() { "$BIN/pg_ctl" -D "$DATA" -m immediate stop >/dev/null 2>&1; rm -rf "$TMP"; }
+curata() { [ "${PASTREAZA:-}" = 1 ] && { echo "CLUSTER PASTRAT: $DATA port $PORT"; return; }; "$BIN/pg_ctl" -D "$DATA" -m immediate stop >/dev/null 2>&1; rm -rf "$TMP"; }
 trap curata EXIT
 "$BIN/initdb" -D "$DATA" -U postgres -A trust -E UTF8 --locale=C >"$TMP/initdb.log" 2>&1 || { cat "$TMP/initdb.log"; exit 91; }
 "$BIN/pg_ctl" -D "$DATA" -o "-p $PORT -c listen_addresses=127.0.0.1" -l "$TW/pg.log" -w start >/dev/null || { cat "$TMP/pg.log"; exit 92; }
@@ -35,7 +35,7 @@ echo "MIGRARE_OK"
 if $PSQL -f "$TW/mig.sql" >"$TMP/mig2.out" 2>&1; then echo "ESEC: a doua aplicare a trecut"; REZ=1
 else grep -q "functia exista deja" "$TMP/mig2.out" && echo "REAPLICARE_REFUZATA_OK" || { echo "ESEC reaplicare"; cat "$TMP/mig2.out"; REZ=1; }; fi
 PGOPTIONS="-c gazpet.dry_local=DA" $PSQL -v port="$PORT" -f "$TW/$(basename "$T")" >"$TMP/teste.out" 2>&1 || { echo "ESEC teste"; REZ=1; }
-grep -E "TEST[0-9a-z]+ OK|FAIL|ERROR|TESTE_LOCAL_OK" "$TMP/teste.out" | sed 's/^.*NOTICE:  //' | cut -c1-220
+grep -E "TEST[0-9a-z]+ OK|FAIL|ERROR|TESTE_LOCAL_OK" "$TMP/teste.out" | sed 's/^.*NOTICE:  //' | sed "s|^psql:[^ ]*sql:[0-9]*: ||" | cut -c1-300
 grep -q "TESTE_LOCAL_OK" "$TMP/teste.out" || REZ=1
 { echo "BEGIN;"; echo "SELECT set_config('gazpet.revenire_20261130l', 'REDARI_CONVOCARE_REZERVA_SCOS:' || txid_current(), true);"
   echo "\\i $TW/$(basename "$R")"

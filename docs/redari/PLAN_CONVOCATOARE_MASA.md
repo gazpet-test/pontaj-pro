@@ -1,6 +1,6 @@
 # Plan — convocatoarele în masă pe UAT (L1, BRIEF §4.1)
 
-04.11.2026 · branch `redari/convocatoare-masa` · PR #989 · r2 după Jakarinos NO-GO (P1-1..P1-3, P2).
+04.11.2026 · branch `redari/convocatoare-masa` · PR #989 · r3 după Jakarinos NO-GO r1 + r2 (direcția coordonatorului: INVOKER, fără fallback).
 
 ## Ce face
 Pe tab-ul **🏛️ UAT-uri**, un panou nou (admin / editor): alegi UAT-ul → **Verifică** (citește, nu scrie nimic) → **📦 Generează
@@ -29,11 +29,19 @@ Locul: tab-ul UAT-uri (două linii în `Redari.jsx`: importul și randarea tab-u
 5. **Recitire înainte de acțiune (r2, P1-3)**: pentru fiecare rând nou / reîncărcat se recitesc din BD deținătorul (sters_la, calitate, nume),
    parcela, contactul, tokenul și convocările lui active; dacă amprenta diferă de cea din „Verifică” sau gărzile pică pe datele proaspete →
    „schimbat între timp”, fără număr. Documentul se generează din datele recitite.
-6. **Rezervarea (r2, P1-1)**: `rpc('fn_red_convocare_rezerva', { p_detinator_id })` — migrarea **20261130l** (NEAPLICATĂ): sub
-   `pg_advisory_xact_lock` pe (proiect, deținător) verifică „nicio convocare poștală activă neexpediată” (altfel `RD001`), garda de plic,
-   apoi `fn_red_numar_document('C')` și INSERT-ul în `red_convocari`, în aceeași tranzacție; clientul încarcă fișierul prin `reincarcaConvocator`.
-   **Până la aplicarea migrării** (`PGRST202` / 404, detectat la „Verifică” cu o probă fără efecte `p_detinator_id = null` → `22023`): calea veche
-   (`fn_red_numar_document('C')` + `salveazaConvocator`), cu avertisment vizibil în panou și în confirmare. Calea individuală nu se schimbă în PR.
+6. **Rezervarea (r3)**: `rpc('fn_red_convocare_rezerva', { p_detinator_id })` — migrarea **20261130l** (NEAPLICATĂ), **SECURITY INVOKER**
+   (RLS + toate triggerele utilizatorului, inclusiv garda de plic din `trg_red_convocari_posta_garda`; nimic acordat — drepturile existente
+   verificate read-only pe live și în preflight). Într-o tranzacție: poarta admin/editor → `pg_advisory_xact_lock` pe (proiect, deținător) →
+   recitire SUB lock a deținătorului + parcelei active (`FOR SHARE`: o ștergere concurentă e așteptată / recitită → `P0002`) și a proiectului /
+   UAT-ului (gărzile lui `motivBlocareConvocator` → `RD002`) → `EXISTS` convocare poștală activă neexpediată (inclusiv fără număr) → `RD001`
+   (excepția explicită: `p_numar_nou_confirmat`) → `fn_red_numar_document('C')` + INSERT. Orice eroare anulează împreună numărul și rândul.
+   Clientul încarcă fișierul prin `reincarcaConvocator`. **Fără fallback**: dacă RPC-ul lipsește (`PGRST202` / 404, proba fără efecte
+   `p_detinator_id = null` → `22023`), „Verifică” blochează lotul cu „protecția la concurență nu e activă — aplicați migrarea 20261130l”, iar o
+   dispariție în timpul rulării oprește restul lotului. `55P03` (UAT ocupat de o plicuire) = eroare pe rând, reîncercabilă.
+   **Calea individuală** (ModalConvocator) NU se schimbă aici: punctul de integrare e `rezervaNumarConvocare` din #991 (nu e încă pe main;
+   integrarea în acest PR ar aduce tot #991 și ar intra în conflict pe `Redari.jsx`). Se integrează după merge-ul ambelor; până atunci calea
+   individuală nu ia lock-ul.
+   Proiectul și UAT-ul se recitesc și în client înaintea fiecărui rând (amprentă față de „Verifică”), iar documentul se face din datele recitite.
 7. **Progres + oprire**: contor `i / n`; **Oprește** se verifică înainte de fiecare rând (restul → „oprit”).
 8. **Erori per rând**: notate (cu numărul rezervat, dacă e cazul), lotul continuă. Planul se invalidează din clipa în care pornește execuția
    (nu se mai poate reexecuta), rezultatele rămân pentru **„Descarcă din nou zip-ul”** dacă arhiva eșuează.
@@ -44,12 +52,17 @@ Locul: tab-ul UAT-uri (două linii în `Redari.jsx`: importul și randarea tab-u
 - nu generează pentru alt canal decât poșta.
 
 ## Teste
-- vitest (client fals, fără BD): gărzi, idempotență, 201 rânduri / două rulări, limita doar pe „nou”, RD001 (alt tab), fallback PGRST202 cu
-  avertisment, recitire (adresă / calitate / ștergere / token / convocare nouă), paginare plafonată la 7 rânduri, oprire, erori per rând, zip;
-  randare + StrictMode (setup → cleanup → setup) și răspuns întârziat după demontare.
-- DRY local PG17 (`scripts/redari_30l_dry_local.sh`): schelet cu textul exact al funcțiilor live, migrarea + reaplicare refuzată, refuzuri
-  (anon, fără sub, viewer, fără nivel, service_role, NULL, șters, REPEATABLE READ), rezervare, RD001, `p_numar_nou_confirmat`, garda de plic,
-  **concurență prin dblink** (același deținător → o singură convocare și un singur număr; ROLLBACK în primul → al doilea rezervă; deținători
-  diferiți nu se blochează), ACL, revenire; apoi DRY-ul de producție rulat pe clusterul local. Mutant fără lock → roșu.
+- vitest (client fals, fără BD): gărzi, idempotență, 201 rânduri / două rulări, limita doar pe „nou”, fără fallback (blocat la „Verifică”,
+  refuz în executaLot, oprire la PGRST202 în timpul rulării), RD001 / RD002 / P0002 / 55P03, proiect / UAT schimbate în BD după „Verifică”,
+  recitire (adresă / calitate / ștergere / token / convocare nouă), recitirea completă a convocărilor (61 de rânduri, pagină de 7), paginare,
+  oprire și generație depășită, erori per rând, zip; randare + StrictMode, răspuns întârziat după demontare, schimbarea proiectului în timpul
+  generării (fără raport / onSchimbat / zip — mutant roșu) și cazul normal (zip o dată).
+- DRY local PG17 (`scripts/redari_30l_dry_local.sh`): schelet cu textul și ACL-ul EXACT al tuturor funcțiilor din lanț (inclusiv lock-ul real de
+  plic pe UAT), migrarea (preflight cu amprenta completă) + reaplicare refuzată, refuzuri (anon, fără sub, viewer, fără nivel, service_role,
+  NULL, șters, REPEATABLE READ), INVOKER, rezervare, RD001 (și fără număr), `p_numar_nou_confirmat`, garda de plic din trigger, RD002 (împuternicire
+  / sesiune / neidentificat), **concurență prin dblink**: același deținător → o convocare / un număr; ROLLBACK → al doilea rezervă; deținători
+  diferiți → al doilea așteaptă contorul și reușește; UAT ocupat de plicuire → 55P03 fără consum; ștergere concurentă → P0002; rezervare deschisă
+  → ștergerea așteaptă. ACL, revenire, apoi DRY-ul de producție pe clusterul local. Mutanți: fără advisory lock → roșu; fără `FOR SHARE` → roșu.
+  Clusterul se oprește și se șterge la final.
 - DRY producție (`supabase/tests/20261130l_..._dryrun.sql`): doar refuzuri și RD001, fără nicio rezervare reușită; preflight-ul migrării a trecut
   pe live într-o tranzacție READ ONLY (04.11.2026). Nu s-a consumat niciun număr C (contorul `C` e global, comun cu LOT1).

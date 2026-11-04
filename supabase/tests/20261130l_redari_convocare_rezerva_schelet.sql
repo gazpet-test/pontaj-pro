@@ -1,13 +1,13 @@
 -- Schelet LOCAL pentru 20261130l_redari_convocare_rezerva (PG17 de unica folosinta, creat si sters de scripts/redari_30l_dry_local.sh).
--- NU se ruleaza pe productie. Reproduce ce citeste / apeleaza 20261130l:
---   * rolurile Supabase (anon, authenticated, service_role, supabase_auth_admin, dashboard_user), schema auth cu auth.uid() exact ca pe live;
---   * tabelele atinse, cu coloanele, valorile implicite si CHECK-urile citite read-only pe live 04.11.2026 (doar coloanele folosite);
---   * functiile amprentate de migrare, cu textul EXACT de pe live (pg_get_functiondef, citit read-only 04.11.2026, UTF-8):
---     fn_red_nivel, fn_red_numar_document, fn_red_plic_garda_persoana, fn_red_plic_incearca_lock_detinator, fn_red_cheie_persoana,
---     fn_red_convocari_posta_garda, fn_red_legaturi, fn_red_jurnal;
---   * nivelul 3 (neamprentat de migrare) ca STUB-uri: fn_red_plic_uat_detinator, fn_red_plic_incearca_lock (fara lock), fn_red_cheie_calc
---     (cheie = nume|strada|sat|comuna|judet|cod daca adresa e cunoscuta) — suficient ca garda de plic sa poata refuza in TEST5;
---   * triggerele red_convocari / red_numere cu numele si tipurile de pe live; RLS activ, owner postgres, fara FORCE.
+-- NU se ruleaza pe productie. Reproduce ce citeste / apeleaza 20261130l (r3: RPC SECURITY INVOKER):
+--   * rolurile Supabase (anon, authenticated, service_role, supabase_auth_admin, dashboard_user), schema auth cu auth.uid / jwt / role EXACT ca pe live;
+--   * tabelele atinse, cu coloanele, valorile implicite si CHECK-urile citite read-only pe live 04.11.2026 (doar coloanele folosite), granturile si
+--     politicile RLS de pe live pentru authenticated (sel = orice nivel; ins/upd = admin/editor; red_uat / red_proiecte upd = admin);
+--   * TOATE functiile amprentate de migrare, cu textul EXACT de pe live (pg_get_functiondef, citit read-only 04.11.2026, UTF-8) si ACL-urile live:
+--     fn_red_nivel, fn_red_numar_document, fn_red_plic_garda_persoana, fn_red_plic_incearca_lock_detinator, fn_red_plic_incearca_lock (REAL:
+--     pg_try_advisory_xact_lock pe UAT, 55P03), fn_red_plic_uat_detinator, fn_red_cheie_persoana, fn_red_cheie_calc (+ tabela red_plic_sare),
+--     fn_red_convocari_posta_garda, fn_red_legaturi, fn_red_jurnal, auth.uid / auth.jwt / auth.role;
+--   * triggerele red_convocari / red_numere cu numele, tipurile, WHEN / argumentele de pe live; RLS activ, owner postgres, fara FORCE.
 DO $r$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
@@ -25,16 +25,44 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $f$
     (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
   )::uuid
 $f$;
+CREATE OR REPLACE FUNCTION auth.jwt()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+  select 
+    coalesce(
+        nullif(current_setting('request.jwt.claim', true), ''),
+        nullif(current_setting('request.jwt.claims', true), '')
+    )::jsonb
+$function$
+;
+CREATE OR REPLACE FUNCTION auth.role()
+ RETURNS text
+ LANGUAGE sql
+ STABLE
+AS $function$
+  select 
+  coalesce(
+    nullif(current_setting('request.jwt.claim.role', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
+  )::text
+$function$
+;
 ALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;
-REVOKE ALL ON FUNCTION auth.uid() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION auth.uid() TO PUBLIC, supabase_auth_admin, dashboard_user;
-CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $f$ SELECT nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role' $f$;
-CREATE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql STABLE AS $f$ SELECT coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $f$;
+ALTER FUNCTION auth.jwt() OWNER TO supabase_auth_admin;
+ALTER FUNCTION auth.role() OWNER TO supabase_auth_admin;
+REVOKE ALL ON FUNCTION auth.uid(), auth.jwt(), auth.role() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION auth.uid(), auth.jwt(), auth.role() TO PUBLIC, supabase_auth_admin, dashboard_user;
+GRANT EXECUTE ON FUNCTION auth.jwt() TO postgres;
 
 CREATE TABLE public.profiles (id uuid PRIMARY KEY, email text, name text, is_owner boolean NOT NULL DEFAULT false);
 CREATE TABLE public.user_module_access (id bigserial PRIMARY KEY, profile_id uuid NOT NULL, module text NOT NULL, access_level text);
-CREATE TABLE public.red_proiecte (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), cod text NOT NULL, denumire text);
-CREATE TABLE public.red_uat (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id), nume text NOT NULL, uat3 text NOT NULL);
+CREATE TABLE public.red_proiecte (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), cod text NOT NULL, denumire text, contract_nr text, contract_data date,
+  imputernicire_nr text, imputernicire_data date, reprezentant_tgz_nume text, contact_nume text, contact_telefon text, contact_email text DEFAULT 'redari@gazpet.ro'::text,
+  text_gdpr text NOT NULL DEFAULT 'Operatori: test.');
+CREATE TABLE public.red_uat (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), proiect_id uuid NOT NULL REFERENCES public.red_proiecte(id), nume text NOT NULL, uat3 text NOT NULL,
+  sesiune_zi1 date, sesiune_zi2 date, sesiune_zi3 date, program_zi1 text, program_zi2 text, program_zi3 text);
 CREATE TABLE public.red_parcele (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), proiect_id uuid NOT NULL, uat_id uuid NOT NULL REFERENCES public.red_uat(id),
   id_parcela text NOT NULL, tronson integer, sters_la timestamptz);
 CREATE TABLE public.red_detinatori (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), parcela_id uuid NOT NULL REFERENCES public.red_parcele(id), nume text NOT NULL,
@@ -42,6 +70,8 @@ CREATE TABLE public.red_detinatori (id uuid PRIMARY KEY DEFAULT gen_random_uuid(
 CREATE TABLE public.red_detinatori_contact (detinator_id uuid PRIMARY KEY REFERENCES public.red_detinatori(id), adresa_strada text, adresa_sat text, adresa_comuna text,
   adresa_judet text, cod_postal text, adresa_cunoscuta boolean);
 CREATE TABLE public.red_plicuri (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), uat_id uuid NOT NULL, nr_plic text, cheie_persoana text, stare text NOT NULL DEFAULT 'activ', data_expediere date);
+CREATE TABLE public.red_plic_sare (id boolean PRIMARY KEY DEFAULT true, sare text NOT NULL);
+INSERT INTO public.red_plic_sare (id, sare) VALUES (true, 'sare-locala-dry');
 CREATE TABLE public.red_convocari (
   id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY, detinator_id uuid NOT NULL REFERENCES public.red_detinatori(id), canal text NOT NULL, nr_document text UNIQUE,
   data_expediere date, nr_tracking text, data_confirmare_primire date, retur text, retur_data date, continut_hash text, fisier_convocator_path text,
@@ -53,14 +83,46 @@ CREATE TABLE public.red_numere (cheie text PRIMARY KEY, ultimul integer NOT NULL
 CREATE TABLE public.red_jurnal (id bigserial PRIMARY KEY, tabela text, inregistrare_id uuid, actiune text, date_vechi jsonb, date_noi jsonb, user_id uuid, user_email text,
   created_at timestamptz DEFAULT now());
 
--- nivel 3: stub-uri (neamprentate de migrare)
-CREATE FUNCTION public.fn_red_plic_uat_detinator(p_detinator uuid) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  SELECT p.uat_id FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = p_detinator $f$;
-CREATE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN; END $f$;
-CREATE FUNCTION public.fn_red_cheie_calc(p_nume text, p_strada text, p_sat text, p_comuna text, p_judet text, p_cod text, p_cunoscuta boolean) RETURNS text
-  LANGUAGE sql IMMUTABLE AS $f$ SELECT CASE WHEN p_cunoscuta IS TRUE THEN concat_ws('|', p_nume, p_strada, p_sat, p_comuna, p_judet, p_cod) END $f$;
-
--- ===== functiile de pe live (text exact) =====
+-- ===== functiile de pe live (text exact) — intai cele apelate de functiile SQL validate la creare =====
+CREATE OR REPLACE FUNCTION public.fn_red_cheie_calc(p_nume text, p_strada text, p_sat text, p_comuna text, p_judet text, p_cod text, p_cunoscuta boolean)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT CASE WHEN p_cunoscuta IS TRUE AND length(btrim(coalesce(p_nume, ''))) > 0
+              AND length(btrim(coalesce(p_strada, '') || coalesce(p_sat, '') || coalesce(p_comuna, ''))) > 0
+    THEN md5((SELECT s.sare FROM public.red_plic_sare s) || '|' || lower(btrim(p_nume)) || '|' || lower(regexp_replace(btrim(coalesce(p_strada, '')) || '|' || btrim(coalesce(p_sat, '')) || '|'
+             || btrim(coalesce(p_comuna, '')) || '|' || btrim(coalesce(p_judet, '')) || '|' || btrim(coalesce(p_cod, '')), '\s+', ' ', 'g')))
+    ELSE NULL END;
+$function$
+;
+CREATE OR REPLACE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  -- Jakarinos 29i r9 P2-02: protocolul (lock UAT + recitirea starii comise) presupune READ COMMITTED; alta izolare ar citi un snapshot vechi
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'redari: plicuirea si garzile plicurilor cer izolarea READ COMMITTED' USING ERRCODE = '0A000';
+  END IF;
+  IF p_uat IS NULL THEN RETURN; END IF;
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('red_plic_uat:' || p_uat::text, 0)) THEN
+    RAISE EXCEPTION 'redari: o plicuire / expediere sau o modificare de deținători e în curs în acest UAT; reîncercați peste câteva secunde' USING ERRCODE = '55P03';
+  END IF;
+END $function$
+;
+CREATE OR REPLACE FUNCTION public.fn_red_plic_uat_detinator(p_detinator uuid)
+ RETURNS uuid
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT p.uat_id FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = p_detinator;
+$function$
+;
 CREATE OR REPLACE FUNCTION public.fn_red_cheie_persoana(p_detinator uuid)
  RETURNS text
  LANGUAGE sql
@@ -332,13 +394,13 @@ BEGIN
 END $function$
 ;
 
--- ===== ACL, triggere, RLS ca pe live =====
-REVOKE ALL ON FUNCTION public.fn_red_nivel() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.fn_red_nivel() TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.fn_red_numar_document(text, text, integer) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.fn_red_numar_document(text, text, integer) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.fn_red_plic_garda_persoana(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.fn_red_plic_garda_persoana(uuid) TO authenticated, service_role;
+-- ===== ACL, triggere, RLS ca pe live (04.11.2026) =====
+REVOKE ALL ON FUNCTION public.fn_red_nivel(), public.fn_red_numar_document(text, text, integer), public.fn_red_plic_garda_persoana(uuid),
+  public.fn_red_plic_incearca_lock_detinator(uuid), public.fn_red_plic_incearca_lock(uuid), public.fn_red_plic_uat_detinator(uuid), public.fn_red_cheie_persoana(uuid),
+  public.fn_red_cheie_calc(text, text, text, text, text, text, boolean), public.fn_red_convocari_posta_garda(), public.fn_red_legaturi(), public.fn_red_jurnal() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.fn_red_nivel(), public.fn_red_numar_document(text, text, integer), public.fn_red_plic_garda_persoana(uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_plic_incearca_lock_detinator(uuid), public.fn_red_plic_incearca_lock(uuid), public.fn_red_plic_uat_detinator(uuid),
+  public.fn_red_cheie_persoana(uuid), public.fn_red_cheie_calc(text, text, text, text, text, text, boolean), public.fn_red_convocari_posta_garda() TO service_role;
 CREATE TRIGGER trg_red_convocari_posta_garda BEFORE INSERT OR UPDATE ON public.red_convocari FOR EACH ROW EXECUTE FUNCTION public.fn_red_convocari_posta_garda();
 CREATE TRIGGER trg_red_jurnal AFTER INSERT OR DELETE OR UPDATE ON public.red_convocari FOR EACH ROW EXECUTE FUNCTION public.fn_red_jurnal();
 CREATE TRIGGER trg_red_legaturi BEFORE INSERT OR UPDATE ON public.red_convocari FOR EACH ROW EXECUTE FUNCTION public.fn_red_legaturi();
@@ -348,8 +410,20 @@ ALTER TABLE public.red_detinatori ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.red_parcele ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.red_numere ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.red_uat ENABLE ROW LEVEL SECURITY;
-GRANT SELECT, INSERT, UPDATE ON public.red_convocari, public.red_detinatori TO authenticated;
+ALTER TABLE public.red_proiecte ENABLE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE ON public.red_convocari, public.red_detinatori, public.red_uat, public.red_proiecte TO authenticated;
+GRANT SELECT (id, proiect_id, uat_id, id_parcela, tronson, sters_la) ON public.red_parcele TO authenticated;
+GRANT UPDATE (id_parcela, tronson, sters_la, uat_id, proiect_id) ON public.red_parcele TO authenticated;
 GRANT SELECT ON public.red_numere TO authenticated;
-CREATE POLICY red_convocari_sel ON public.red_convocari FOR SELECT USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
-CREATE POLICY red_convocari_ins ON public.red_convocari FOR INSERT WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
-CREATE POLICY red_numere_sel ON public.red_numere FOR SELECT USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
+CREATE POLICY red_convocari_sel ON public.red_convocari FOR SELECT TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
+CREATE POLICY red_convocari_ins ON public.red_convocari FOR INSERT TO authenticated WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
+CREATE POLICY red_convocari_upd ON public.red_convocari FOR UPDATE TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text])) WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
+CREATE POLICY red_detinatori_sel ON public.red_detinatori FOR SELECT TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
+CREATE POLICY red_detinatori_upd ON public.red_detinatori FOR UPDATE TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text])) WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
+CREATE POLICY red_parcele_sel ON public.red_parcele FOR SELECT TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
+CREATE POLICY red_parcele_upd ON public.red_parcele FOR UPDATE TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text])) WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY['admin'::text, 'editor'::text]));
+CREATE POLICY red_uat_sel ON public.red_uat FOR SELECT TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
+CREATE POLICY red_uat_upd ON public.red_uat FOR UPDATE TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) = 'admin'::text) WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = 'admin'::text);
+CREATE POLICY red_proiecte_sel ON public.red_proiecte FOR SELECT TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);
+CREATE POLICY red_proiecte_upd ON public.red_proiecte FOR UPDATE TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) = 'admin'::text) WITH CHECK (( SELECT fn_red_nivel() AS fn_red_nivel) = 'admin'::text);
+CREATE POLICY red_numere_sel ON public.red_numere FOR SELECT TO authenticated USING (( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL);

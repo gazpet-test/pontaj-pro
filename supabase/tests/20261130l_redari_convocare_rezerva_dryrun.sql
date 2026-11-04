@@ -1,5 +1,6 @@
 -- DRY PRODUCTIE 20261130l_redari_convocare_rezerva. Runner: o singura tranzactie ANULATA, READ COMMITTED
 -- (marcaj gazpet.livrare_migrare + migrare + acest fisier + RESET ROLE + revenire + verificare + ROLLBACK explicit, ca la 20261130i).
+-- r3: functia e SECURITY INVOKER (RLS + triggerele utilizatorului); refuzurile testate aici pica toate INAINTE de numar si de INSERT.
 -- DOAR CITIRI: nicio rezervare reusita (o rezervare ar lua randul 'C' din red_numere pana la ROLLBACK si ar bloca generarea individuala).
 -- Se testeaza: setarile + ACL-ul functiei, refuzurile care pica INAINTE de orice scriere (anon, authenticated fara sub, viewer real,
 -- profil fara nivel Redari, service_role, parametri NULL, detinator inexistent) si — daca TEST-RAZVAN are o convocare postala activa
@@ -51,7 +52,7 @@ END $t$;
 
 -- TEST1: setari, ACL, iesire
 DO $t$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean)'::regprocedure AND prosecdef AND provolatile = 'v'
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean)'::regprocedure AND NOT prosecdef AND provolatile = 'v'
                   AND proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(proowner) = 'postgres') THEN RAISE EXCEPTION 'TEST1 FAIL: setari'; END IF;
   IF NOT has_function_privilege('authenticated', 'public.fn_red_convocare_rezerva(uuid,boolean)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.fn_red_convocare_rezerva(uuid,boolean)', 'EXECUTE')
