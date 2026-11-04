@@ -100,9 +100,12 @@ export function construiesteMailIntern(d) {
   return { catre, cc, subiect, html, text: textSimplu }
 }
 
-// ── Fluxul edge-ului (r2): logică pură cu dependențe injectate, ca să fie testată în vitest (Resend / BD / Storage simulate) ─────────────────────
+// ── Fluxul edge-ului: logică pură cu dependențe injectate, ca să fie testată în vitest (Resend / BD / Storage simulate) ─────────────────────────
 // dep.rpc(nume, argumente) → { data, error } (clientul UTILIZATORULUI); dep.descarca(path) → Response; dep.trimiteResend(corp, cheie) → Response;
-// dep.b64(Uint8Array) → string. cerere = { corespondenta_id, intentie_id, versiune, fisier_id, userEmail }. Întoarce { status, body }. Fără throw.
+// dep.b64(Uint8Array) → string. cerere = { corespondenta_id, versiune, fisier_id, userEmail }. Întoarce { status, body }. Fără throw.
+// DECIZIE 04.11.2026, aprobat de Răzvan (varianta A, „simplificăm”), risc acceptat: mail intern dublu — fără reluare / intenție. Un rezultat incert
+// (rețea, timeout, 5xx, eroare RPC netransparentă, închidere neconfirmată) întoarce `incert: true`; utilizatorul verifică inboxul și poate apăsa din
+// nou după 60 s. Idempotency-Key la Resend = id-ul încercării (inofensiv, doar în cadrul aceleiași execuții).
 export const MAX_PDF = 25 * 1024 * 1024
 const RX_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const numeAtasament = (nume, path) => {
@@ -111,35 +114,38 @@ export const numeAtasament = (nume, path) => {
 }
 // mesajele RPC-ului („redari: …”) → text pentru UI; erorile neașteptate nu se trimit brut (L10)
 export const mesajRpc = e => { const m = String(e?.message || ''); return /^redari: /.test(m) ? m.replace(/^redari: /, '').slice(0, 300) : 'pregătirea mailului a eșuat (eroare internă)' }
-export const MESAJ_URMA_NECONFIRMATA = 'Resend a confirmat mailul, dar înregistrarea nu s-a confirmat — NU retrimite; verifică inboxul expeditorului.'
-export const MESAJ_NECUNOSCUT = 'Rezultat neconfirmat — verifică inboxul expeditorului înainte de orice reluare.'
+export const MESAJ_INCERT = 'Rezultat incert — verifică inboxul expeditorului; dacă mailul nu a venit, poți apăsa din nou după 60 s (poate produce un mail intern dublu).'
+// refuzuri de business CLARE din RPC (nimic scris, nimic trimis) → afișate ca atare
+const COD_CLAR = { '42501': 403, 'P0002': 404, '23514': 409 }
 const anuleaza = async r => { try { await r?.body?.cancel?.() } catch { /* nimic */ } }
 
 export async function pregatesteMailIntern(cerere, dep) {
   const raspuns = (status, body) => ({ status, body })
-  const { corespondenta_id: cid, intentie_id: iid, versiune, fisier_id: fid } = cerere || {}
-  if (!RX_UUID.test(String(cid || '')) || !RX_UUID.test(String(iid || '')) || !RX_UUID.test(String(fid || '')) || !Number.isInteger(versiune)) {
-    return raspuns(400, { error: 'corespondenta_id, intentie_id, versiune și fisier_id sunt obligatorii' })
+  const { corespondenta_id: cid, versiune, fisier_id: fid } = cerere || {}
+  if (!RX_UUID.test(String(cid || '')) || !RX_UUID.test(String(fid || '')) || !Number.isInteger(versiune)) {
+    return raspuns(400, { error: 'corespondenta_id, versiune și fisier_id sunt obligatorii' })
   }
-  // 1. Poarta + intenția (pas atomic în BD, cu JWT-ul utilizatorului)
-  const ri0 = await Promise.resolve().then(() => dep.rpc('fn_red_coresp_mail_incepe', { p_corespondenta_id: cid, p_intentie_id: iid, p_versiune_confirmata: versiune, p_fisier_id_confirmat: fid })).catch(() => null)
-  if (ri0 === null) return raspuns(502, { error: 'BD indisponibilă la pornirea încercării; reia aceeași încercare', necunoscut: true })
-  if (ri0.error) { const e = ri0.error; return raspuns(e.code === '42501' ? 403 : e.code === 'P0002' ? 404 : e.code === '23514' ? 409 : 500, { error: mesajRpc(e) }) }
-  const p = ri0.data
+  // 1. Poarta + încercarea (pas atomic în BD, cu JWT-ul utilizatorului). Anti-bug edge: nicio scriere în BD din interiorul unui catch —
+  //    excepțiile de rețea devin valori (null), tratate după.
+  const r0 = await Promise.resolve().then(() => dep.rpc('fn_red_coresp_mail_incepe', { p_corespondenta_id: cid, p_versiune_confirmata: versiune, p_fisier_id_confirmat: fid })).catch(() => null)
+  if (r0 === null) return raspuns(502, { error: MESAJ_INCERT, incert: true })
+  if (r0.error) {
+    const st = COD_CLAR[r0.error.code]
+    return st ? raspuns(st, { error: mesajRpc(r0.error) }) : raspuns(500, { error: MESAJ_INCERT, incert: true })
+  }
+  const p = r0.data
   const mailId = String(p?.mail_id || '')
-  const baza = { mail_id: mailId, intentie_id: iid, catre: p?.expeditor_email, cc: [p?.cc].filter(Boolean) }
-  if (p?.mod === 'deja_trimis') return raspuns(200, { ok: true, deja_trimis: true, resend_id: p.resend_id, ...baza })
-  const reluare = p?.mod === 'reluare'
-  // închiderea intenției proprii: { ok, stare } sau { ok:false, eroare } — fără throw, fără scriere din catch
+  const baza = { mail_id: mailId, catre: p?.expeditor_email, cc: [p?.cc].filter(Boolean) }
+  // închiderea încercării proprii, o singură dată: { ok, stare } sau { ok:false, eroare }
   const inchide = async (stare, resendId, eroare) => {
     const rz = await Promise.resolve().then(() => dep.rpc('fn_red_coresp_mail_inchide', { p_mail_id: mailId, p_stare: stare, p_resend_id: resendId, p_eroare: eroare ? String(eroare).slice(0, 500) : null })).catch(() => null)
     if (rz === null) return { ok: false, eroare: 'închiderea urmei nu s-a confirmat (rețea / timeout)' }
     return rz.error ? { ok: false, eroare: mesajRpc(rz.error) } : { ok: true, stare: rz.data }
   }
-  // eșec ÎNAINTE de trimitere: la intenție nouă = eroare; la reluare rămâne necunoscut (o încercare anterioară cu aceeași cheie poate fi plecat)
+  // refuz sigur ÎNAINTE de trimitere (nimic plecat): urma = eroare, mesajul afișat ca atare
   const esec = async (motiv, status = 409) => {
-    const r = await inchide(reluare ? 'necunoscut' : 'eroare', null, motiv)
-    return raspuns(status, { error: motiv, necunoscut: reluare, urma_inchisa: r.ok, ...baza })
+    const r = await inchide('eroare', null, motiv)
+    return raspuns(status, { error: motiv, urma_inchisa: r.ok, ...baza })
   }
   // 2. Destinatarul mailului intern: obligatoriu @gazpet.ro (a doua verificare, după CHECK + RPC)
   const catre = normEmail(p?.expeditor_email)
@@ -148,15 +154,14 @@ export async function pregatesteMailIntern(cerere, dep) {
   const path = String(fis.path || '')
   if (!path || !/\.pdf$/i.test(path)) return esec('fișierul aprobat nu e PDF')
   // 3. PDF-ul aprobat, descărcat cu JWT-ul UTILIZATORULUI; eTag-ul din ACELAȘI răspuns = cel aprobat (puternic, exact)
-  // anti-bug edge: nicio scriere în BD din interiorul unui catch — excepțiile de rețea devin valori (null), tratate după
   const r = await Promise.resolve().then(() => dep.descarca(path)).catch(() => null)
-  if (r === null) return esec('descărcarea PDF-ului aprobat a eșuat (rețea / timeout)', 502)
-  if (!r?.ok) { await anuleaza(r); return esec(`descărcarea PDF-ului aprobat a fost refuzată (${r?.status})`, r?.status === 404 ? 409 : 502) }
+  if (r === null) return esec('descărcarea PDF-ului aprobat a eșuat (rețea / timeout); nimic trimis', 502)
+  if (!r?.ok) { await anuleaza(r); return esec(`descărcarea PDF-ului aprobat a fost refuzată (${r?.status}); nimic trimis`, r?.status === 404 ? 409 : 502) }
   if (!etagPuternicEgal(r.headers.get('etag'), fis.etag)) { await anuleaza(r); return esec('PDF-ul din Storage nu are amprenta aprobată (eTag diferit, slab sau lipsă); nu se trimite nimic') }
   const lung = Number(r.headers.get('content-length'))
   if (Number.isFinite(lung) && lung > MAX_PDF) { await anuleaza(r); return esec('PDF-ul depășește 25 MB') }
   const buf = await Promise.resolve().then(() => r.arrayBuffer()).catch(() => null)
-  if (buf === null) return esec('descărcarea PDF-ului aprobat s-a întrerupt', 502)
+  if (buf === null) return esec('descărcarea PDF-ului aprobat s-a întrerupt; nimic trimis', 502)
   const bytes = new Uint8Array(buf)
   if (bytes.length === 0 || bytes.length > MAX_PDF) return esec('PDF-ul descărcat e gol sau depășește 25 MB')
   if (!ePdf(bytes)) return esec('fișierul aprobat nu e un PDF valid')
@@ -166,27 +171,27 @@ export async function pregatesteMailIntern(cerere, dep) {
     mailText: p.mail_text, expeditorEmail: catre, fisierNume: numeF, fisierEtag: fis.etag, aprobatLa: p.aprobat_la, aprobatDeNume: p.aprobat_de_nume, pregatitDeNume: p.pregatit_de_nume })
   if (m.erori) return esec(m.erori.join(' '))
   if (m.catre !== catre || m.cc.some(e => e !== OFFICE)) return esec('destinatarii mailului intern nu sunt cei așteptați')
-  // 5. Trimiterea, cu Idempotency-Key = intentie_id (aceeași la reluare → Resend deduplică)
+  // 5. Trimiterea (Idempotency-Key = id-ul încercării)
   const corp = { from: 'PontajPRO <rapoarte@gazpet.ro>', to: [m.catre], cc: m.cc.length ? m.cc : undefined, reply_to: replyToIntern(cerere.userEmail),
     subject: m.subiect, html: m.html, text: m.text, attachments: [{ filename: numeF, content: dep.b64(bytes) }] }
-  const rr = await Promise.resolve().then(() => dep.trimiteResend(corp, iid)).catch(() => null)
+  const rr = await Promise.resolve().then(() => dep.trimiteResend(corp, mailId)).catch(() => null)
   if (rr === null) {
     const ri = await inchide('necunoscut', null, 'Resend: rețea / timeout — nu se știe dacă mailul a plecat')
-    return raspuns(502, { error: MESAJ_NECUNOSCUT, necunoscut: true, urma_inchisa: ri.ok, ...baza })
+    return raspuns(502, { error: MESAJ_INCERT, incert: true, urma_inchisa: ri.ok, ...baza })
   }
   const j = (await Promise.resolve().then(() => rr.json()).catch(() => null)) || {}
   if (rr.ok && j?.id) {
     const ri = await inchide('trimis', String(j.id), null)
-    // r2 (J-P3-5 / C-P2-02): succes complet DOAR dacă și urma s-a închis „trimis”
+    // J-P3-5 / C-P2-02: succes complet DOAR dacă și urma s-a închis „trimis”; altfel incert (Resend a acceptat, înregistrarea nu s-a confirmat)
     if (ri.ok && ri.stare === 'trimis') return raspuns(200, { ok: true, resend_id: j.id, ...baza, catre: m.catre, cc: m.cc })
-    return raspuns(200, { ok: false, resend_acceptat: true, urma_inchisa: false, resend_id: j.id, error: MESAJ_URMA_NECONFIRMATA, ...baza })
+    return raspuns(200, { ok: false, incert: true, resend_acceptat: true, urma_inchisa: false, resend_id: j.id, error: MESAJ_INCERT, ...baza })
   }
-  // fără id / 5xx / 429 / 409 (cerere concurentă sau cheie refolosită) / orice răspuns la o reluare = necunoscut (L05)
-  if (rr.ok || rr.status >= 500 || rr.status === 429 || rr.status === 409 || reluare) {
+  // fără id / 5xx / 429 / 409 = incert (L05)
+  if (rr.ok || rr.status >= 500 || rr.status === 429 || rr.status === 409) {
     const ri = await inchide('necunoscut', null, `Resend ${rr.status}: rezultat neconfirmat`)
-    return raspuns(502, { error: `${MESAJ_NECUNOSCUT} (Resend ${rr.status})`, necunoscut: true, urma_inchisa: ri.ok, ...baza })
+    return raspuns(502, { error: MESAJ_INCERT, incert: true, urma_inchisa: ri.ok, ...baza })
   }
   const detaliu = String(j?.message || j?.name || '').slice(0, 200)
   const ri = await inchide('eroare', null, `Resend ${rr.status}: ${detaliu}`)
-  return raspuns(502, { error: `Resend a refuzat mailul (${rr.status}): ${detaliu}`, urma_inchisa: ri.ok, ...baza })
+  return raspuns(502, { error: `Resend a refuzat mailul (${rr.status}): ${detaliu}; nimic trimis`, urma_inchisa: ri.ok, ...baza })
 }

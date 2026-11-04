@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { eEmailValid, eEmailGazpet, CAZURI_EMAIL, construiesteMailIntern, subiectIntern, OFFICE, motivFaraMail, ultimulMail, mesajRezultatMail, stareMailRand, intentieNoua } from './corespondentaMail.js'
-import { etagPuternicEgal, replyToIntern, ePdf, escHtml, pregatesteMailIntern, MESAJ_URMA_NECONFIRMATA } from '../../supabase/functions/_shared/redariCorespMail.mjs'
+import { eEmailValid, eEmailGazpet, CAZURI_EMAIL, construiesteMailIntern, subiectIntern, OFFICE, motivFaraMail, ultimulMail, mesajRezultatMail, MESAJ_INCERT } from './corespondentaMail.js'
+import { etagPuternicEgal, replyToIntern, ePdf, escHtml, pregatesteMailIntern } from '../../supabase/functions/_shared/redariCorespMail.mjs'
 import { CAMPURI_CONTINUT, stariInFormular, valideazaCorespondenta, mesajEroareCoresp, COL_CORESPONDENTA } from './corespondenta.js'
 
 const BAZA = {
@@ -90,6 +90,8 @@ describe('butonul „Pregateste mailul”', () => {
   it('activ doar pentru admin/editor, rand aprobat, PDF aprobat, campuri complete', () => {
     expect(motivFaraMail(rand, { poateScrie: true, fisierAprobat: fa })).toBeNull()
     expect(motivFaraMail(rand, { poateScrie: false, fisierAprobat: fa })).toMatch(/admin \/ editor/)
+    // Copilot r2 P2-04: istoricul mailurilor necitit -> buton oprit
+    expect(motivFaraMail(rand, { poateScrie: true, fisierAprobat: fa, istoricCitit: false })).toBe('Nu am putut citi istoricul mailurilor — reîncarcă.')
     expect(motivFaraMail({ ...rand, stare: 'draft', aprobat_la: null }, { poateScrie: true, fisierAprobat: fa })).toMatch(/după aprobarea/)
     expect(motivFaraMail({ ...rand, aprobat_fisier_id: null }, { poateScrie: true, fisierAprobat: null })).toMatch(/fișier/)
     expect(motivFaraMail(rand, { poateScrie: true, fisierAprobat: { ...fa, path: 'P/corespondenta/B1/x.docx' } })).toMatch(/nu e PDF/)
@@ -102,37 +104,24 @@ describe('butonul „Pregateste mailul”', () => {
     expect(ultimulMail(l, 'r1').id).toBe('m2')
     expect(ultimulMail(l, 'r9')).toBeNull()
   })
-  it('rezultatul edge: ok / deja trimis / eroare definitiva / necunoscut / Resend acceptat fara urma', async () => {
-    expect(await mesajRezultatMail({ data: { ok: true, catre: 'c@gazpet.ro', cc: [OFFICE] }, error: null })).toMatchObject({ ok: true, definitiv: true })
-    expect((await mesajRezultatMail({ data: { ok: true, deja_trimis: true }, error: null })).text).toMatch(/deja trimis; nu s-a retrimis/)
-    const r = await mesajRezultatMail({ data: null, error: { message: 'Edge Function returned a non-2xx status code', context: { json: async () => ({ error: 'mailul a fost deja pregatit acum 12 s; asteapta un minut' }) } } })
-    expect(r).toEqual({ ok: false, necunoscut: false, definitiv: true, text: 'mailul a fost deja pregatit acum 12 s; asteapta un minut' })
-    const n = await mesajRezultatMail({ data: null, error: { message: 'x', context: { json: async () => ({ error: 'Nu se știe', necunoscut: true }) } } })
-    expect(n).toMatchObject({ necunoscut: true, definitiv: false })
-    expect(n.text).toMatch(/verifică inboxul/)
-    const retea = await mesajRezultatMail({ data: null, error: { message: 'Failed to fetch' } })
-    expect(retea).toMatchObject({ ok: false, necunoscut: true, definitiv: false })
-    const ra = await mesajRezultatMail({ data: { ok: false, resend_acceptat: true, urma_inchisa: false, mail_id: 'm' }, error: null })
-    expect(ra).toMatchObject({ ok: false, resendAcceptat: true, definitiv: true })
-    expect(ra.text).toMatch(/NU retrimite/)
-  })
-  it('r2 J-P2-2: intentie noua cu versiunea si fisierul vazute; neconfirmat -> reia aceeasi intentie (doar autorul) sau alt mail separat', () => {
-    expect(intentieNoua({ versiune: 7, aprobat_fisier_id: 'f1' }, 'u-1')).toEqual({ intentie_id: 'u-1', versiune: 7, fisier_id: 'f1' })
-    expect(intentieNoua({ versiune: 7, aprobat_fisier_id: 'f1' }).intentie_id).toMatch(/^[0-9a-f-]{36}$/)
-    expect(stareMailRand({ ultim: { stare: 'trimis' } })).toEqual({ neconfirmat: false, reluare: null })
-    expect(stareMailRand({ ultim: null })).toEqual({ neconfirmat: false, reluare: null })
-    const ultim = { stare: 'necunoscut', created_by: 'eu', intentie_id: 'i1', versiune_confirmata: 3, fisier_id: 'f1' }
-    expect(stareMailRand({ ultim, profileId: 'eu' })).toEqual({ neconfirmat: true, reluare: { intentie_id: 'i1', versiune: 3, fisier_id: 'f1' } })
-    expect(stareMailRand({ ultim: { ...ultim, stare: 'in_curs' }, profileId: 'altul' })).toEqual({ neconfirmat: true, reluare: null })
-    // intentia din memorie (rezultat ambiguu, poate fara rand in urma) are prioritate
-    expect(stareMailRand({ ultim: { stare: 'trimis' }, pending: { intentie_id: 'i9', versiune: 4, fisier_id: 'f2' } }).reluare).toEqual({ intentie_id: 'i9', versiune: 4, fisier_id: 'f2' })
+  it('rezultatul edge (varianta A): ok; refuz clar afisat ca atare; orice rezultat incert -> mesajul standard', async () => {
+    expect(MESAJ_INCERT).toBe('Rezultat incert — verifică inboxul expeditorului; dacă mailul nu a venit, poți apăsa din nou după 60 s (poate produce un mail intern dublu).')
+    expect(await mesajRezultatMail({ data: { ok: true, catre: 'c@gazpet.ro', cc: [OFFICE] }, error: null })).toMatchObject({ ok: true, incert: false })
+    const clar = await mesajRezultatMail({ data: null, error: { message: 'Edge Function returned a non-2xx status code', context: { json: async () => ({ error: 'mailul a fost deja pregatit acum 12 s; asteapta un minut' }) } } })
+    expect(clar).toEqual({ ok: false, incert: false, text: 'mailul a fost deja pregatit acum 12 s; asteapta un minut' })
+    for (const rez of [
+      { data: null, error: { message: 'x', context: { json: async () => ({ error: 'orice', incert: true }) } } },   // 5xx / timeout Resend / RPC netransparent
+      { data: null, error: { message: 'Failed to fetch' } },                                                             // retea
+      { data: null, error: { message: 'x', context: { json: async () => { throw new Error('html') } } } },             // raspuns fara corp JSON
+      { data: { ok: false, incert: true, resend_acceptat: true, urma_inchisa: false, error: 'x' }, error: null },       // inchidere neconfirmata
+    ]) expect(await mesajRezultatMail(rez)).toEqual({ ok: false, incert: true, text: MESAJ_INCERT })
   })
 })
 
 // ── Fluxul edge-ului cu BD / Storage / Resend simulate (r2: J-P3-5, C-P2-02, C-P2-03, C-P3-01, J-P2-2) ─────────────────────────────────────────
-const CID = '11111111-1111-4111-8111-111111111111', IID = '22222222-2222-4222-8222-222222222222', FID = '33333333-3333-4333-8333-333333333333'
+const CID = '11111111-1111-4111-8111-111111111111', MID = '44444444-4444-4444-8444-444444444444', FID = '33333333-3333-4333-8333-333333333333'
 const PDF = new TextEncoder().encode('%PDF-1.7\nx')
-const payloadRpc = (extra = {}) => ({ mod: 'nou', mail_id: 'm-1', intentie_id: IID, cod: 'B1', proiect_cod: 'TEST-RAZVAN', destinatar: 'ISC', destinatar_email: 'reg@isc.ro',
+const payloadRpc = (extra = {}) => ({ mail_id: MID, cod: 'B1', proiect_cod: 'TEST-RAZVAN', destinatar: 'ISC', destinatar_email: 'reg@isc.ro',
   mail_subiect: 'Subiect', mail_text: 'Text', expeditor_email: 'cristina@gazpet.ro', cc: OFFICE, aprobat_la: '2026-11-04T08:00:00Z', aprobat_de_nume: 'TRUSU', pregatit_de_nume: 'CRISTINA',
   fisier: { id: FID, path: 'TEST-RAZVAN/corespondenta/B1/x.pdf', nume_original: 'x.pdf', marime: 10, etag: '"etag-1"' }, ...extra })
 const raspunsStorage = (etag = '"etag-1"', ok = true) => ({ ok, status: ok ? 200 : 403, headers: { get: k => (k === 'etag' ? etag : k === 'content-length' ? String(PDF.length) : null) }, arrayBuffer: async () => PDF.buffer, body: { cancel: async () => {} } })
@@ -146,30 +135,30 @@ function fals({ incepe = { data: payloadRpc(), error: null }, inchide = n => ({ 
   }
   return { dep, apeluri }
 }
-const CERERE = { corespondenta_id: CID, intentie_id: IID, versiune: 3, fisier_id: FID, userEmail: 'cristina@gazpet.ro' }
+const CERERE = { corespondenta_id: CID, versiune: 3, fisier_id: FID, userEmail: 'cristina@gazpet.ro' }
 const inchideri = a => a.rpc.filter(([n]) => n === 'fn_red_coresp_mail_inchide').map(([, x]) => x.p_stare)
 
 describe('fluxul edge pregatesteMailIntern', () => {
-  it('succes: RPC cu intentia + versiunea + fisierul confirmat, Idempotency-Key = intentie_id, urma inchisa trimis', async () => {
+  it('succes: RPC cu versiunea + fisierul confirmat (J-P2-3), Idempotency-Key = id-ul incercarii, urma inchisa trimis', async () => {
     const { dep, apeluri } = fals()
     const r = await pregatesteMailIntern(CERERE, dep)
     expect(r.status).toBe(200); expect(r.body).toMatchObject({ ok: true, resend_id: 're_1', catre: 'cristina@gazpet.ro', cc: [OFFICE] })
-    expect(apeluri.rpc[0]).toEqual(['fn_red_coresp_mail_incepe', { p_corespondenta_id: CID, p_intentie_id: IID, p_versiune_confirmata: 3, p_fisier_id_confirmat: FID }])
-    expect(apeluri.resend).toHaveLength(1); expect(apeluri.resend[0].cheie).toBe(IID)
+    expect(apeluri.rpc[0]).toEqual(['fn_red_coresp_mail_incepe', { p_corespondenta_id: CID, p_versiune_confirmata: 3, p_fisier_id_confirmat: FID }])
+    expect(apeluri.resend).toHaveLength(1); expect(apeluri.resend[0].cheie).toBe(MID)
     expect(apeluri.resend[0].corp.to).toEqual(['cristina@gazpet.ro']); expect(apeluri.resend[0].corp.cc).toEqual([OFFICE])
     expect(inchideri(apeluri)).toEqual(['trimis'])
   })
-  it('J-P3-5 / C-P2-02: Resend 200 + eroare la inchiderea urmei -> resend_acceptat, urma_inchisa false, fara retrimitere', async () => {
+  it('J-P3-5 / C-P2-02: Resend 200 + eroare la inchiderea urmei -> incert (resend_acceptat, urma_inchisa false), o singura trimitere', async () => {
     const { dep, apeluri } = fals({ inchide: { data: null, error: { code: '23514', message: 'redari: x' } } })
     const r = await pregatesteMailIntern(CERERE, dep)
     expect(r.status).toBe(200)
-    expect(r.body).toMatchObject({ ok: false, resend_acceptat: true, urma_inchisa: false, mail_id: 'm-1', error: MESAJ_URMA_NECONFIRMATA })
+    expect(r.body).toMatchObject({ ok: false, incert: true, resend_acceptat: true, urma_inchisa: false, mail_id: MID, error: MESAJ_INCERT })
     expect(apeluri.resend).toHaveLength(1)
   })
-  it('J-P3-5: Resend 200 + timeout (exceptie) la inchidere -> acelasi raspuns distinct', async () => {
+  it('J-P3-5: Resend 200 + timeout (exceptie) la inchidere -> incert', async () => {
     const { dep } = fals({ inchide: () => { throw new Error('timeout') } })
     const r = await pregatesteMailIntern(CERERE, dep)
-    expect(r.body).toMatchObject({ ok: false, resend_acceptat: true, urma_inchisa: false })
+    expect(r.body).toMatchObject({ ok: false, incert: true, resend_acceptat: true, urma_inchisa: false })
   })
   it('C-P2-03: utilizator cu adresa externa -> reply_to office@; @gazpet.ro -> adresa lui', async () => {
     const a = fals(); await pregatesteMailIntern({ ...CERERE, userEmail: 'admin@gmail.com' }, a.dep)
@@ -183,35 +172,28 @@ describe('fluxul edge pregatesteMailIntern', () => {
     expect(r.status).toBe(409); expect(r.body.error).toMatch(/eTag/)
     expect(apeluri.resend).toHaveLength(0); expect(inchideri(apeluri)).toEqual(['eroare'])
   })
-  it('J-P2-2: deja trimis -> nu descarca, nu retrimite', async () => {
-    const { dep, apeluri } = fals({ incepe: { data: payloadRpc({ mod: 'deja_trimis', resend_id: 're_0' }), error: null } })
-    const r = await pregatesteMailIntern(CERERE, dep)
-    expect(r.body).toMatchObject({ ok: true, deja_trimis: true, resend_id: 're_0' })
-    expect(apeluri.descarca).toBe(0); expect(apeluri.resend).toHaveLength(0)
-  })
-  it('reluare: aceeasi cheie; esec inainte de trimitere ramane necunoscut (nu eroare); orice raspuns Resend non-ok la reluare = necunoscut', async () => {
-    const a = fals({ incepe: { data: payloadRpc({ mod: 'reluare' }), error: null }, storage: new Error('retea') })
-    const r = await pregatesteMailIntern(CERERE, a.dep)
-    expect(r.body).toMatchObject({ necunoscut: true }); expect(inchideri(a.apeluri)).toEqual(['necunoscut'])
-    const b = fals({ incepe: { data: payloadRpc({ mod: 'reluare' }), error: null }, resend: { ok: false, status: 422, json: async () => ({ message: 'invalid_idempotent_request' }) } })
-    await pregatesteMailIntern(CERERE, b.dep)
-    expect(b.apeluri.resend[0].cheie).toBe(IID); expect(inchideri(b.apeluri)).toEqual(['necunoscut'])
-  })
-  it('Resend: 5xx / exceptie -> necunoscut; 422 la intentie noua -> eroare', async () => {
+  it('Resend: 5xx / 429 / exceptie -> incert (urma necunoscut); 422 -> refuz clar (urma eroare); niciun retry automat', async () => {
     const a = fals({ resend: { ok: false, status: 503, json: async () => ({}) } }); const ra = await pregatesteMailIntern(CERERE, a.dep)
-    expect(ra.body.necunoscut).toBe(true); expect(inchideri(a.apeluri)).toEqual(['necunoscut'])
-    const b = fals({ resend: new Error('timeout') }); await pregatesteMailIntern(CERERE, b.dep)
-    expect(inchideri(b.apeluri)).toEqual(['necunoscut'])
-    const c = fals({ resend: { ok: false, status: 422, json: async () => ({ message: 'bad' }) } }); await pregatesteMailIntern(CERERE, c.dep)
-    expect(inchideri(c.apeluri)).toEqual(['eroare'])
+    expect(ra.body).toMatchObject({ incert: true, error: MESAJ_INCERT }); expect(inchideri(a.apeluri)).toEqual(['necunoscut']); expect(a.apeluri.resend).toHaveLength(1)
+    const b = fals({ resend: new Error('timeout') }); const rb = await pregatesteMailIntern(CERERE, b.dep)
+    expect(rb.body.incert).toBe(true); expect(inchideri(b.apeluri)).toEqual(['necunoscut'])
+    const c = fals({ resend: { ok: false, status: 422, json: async () => ({ message: 'bad' }) } }); const rc = await pregatesteMailIntern(CERERE, c.dep)
+    expect(rc.body.incert).toBeUndefined(); expect(rc.body.error).toMatch(/Resend a refuzat/); expect(inchideri(c.apeluri)).toEqual(['eroare'])
+  })
+  it('esec inainte de trimitere (descarcare cazuta) -> refuz clar, urma eroare, nimic trimis', async () => {
+    const a = fals({ storage: new Error('retea') }); const r = await pregatesteMailIntern(CERERE, a.dep)
+    expect(r.body.incert).toBeUndefined(); expect(inchideri(a.apeluri)).toEqual(['eroare']); expect(a.apeluri.resend).toHaveLength(0)
   })
   it('refuzurile RPC trec mai departe (403 / 409), fara descarcare; eroare neasteptata nu se expune; cerere incompleta -> 400 fara RPC', async () => {
     const a = fals({ incepe: { data: null, error: { code: '42501', message: 'redari: doar admin / editor pe Redari pregatesc mailul' } } })
     expect(await pregatesteMailIntern(CERERE, a.dep)).toEqual({ status: 403, body: { error: 'doar admin / editor pe Redari pregatesc mailul' } })
     const b = fals({ incepe: { data: null, error: { code: '23514', message: 'redari: randul s-a schimbat intre timp; reincarca si verifica' } } })
     expect((await pregatesteMailIntern(CERERE, b.dep)).status).toBe(409); expect(b.apeluri.descarca).toBe(0)
+    // eroare RPC netransparenta -> incert, fara text brut (L10)
     const c = fals({ incepe: { data: null, error: { code: 'XX000', message: 'connection string secreta' } } })
-    expect((await pregatesteMailIntern(CERERE, c.dep)).body.error).toBe('pregătirea mailului a eșuat (eroare internă)')
+    expect(await pregatesteMailIntern(CERERE, c.dep)).toEqual({ status: 500, body: { error: MESAJ_INCERT, incert: true } })
+    const e = fals({ incepe: () => { throw new Error('retea') } })
+    expect((await pregatesteMailIntern(CERERE, e.dep)).body).toEqual({ error: MESAJ_INCERT, incert: true })
     const d = fals(); expect((await pregatesteMailIntern({ ...CERERE, versiune: '3' }, d.dep)).status).toBe(400); expect(d.apeluri.rpc).toHaveLength(0)
   })
   it('expeditor din afara firmei in payload -> nimic trimis; fisier care nu e PDF -> nimic trimis', async () => {
@@ -254,12 +236,13 @@ describe('continutul aprobat include campurile mailului (oglinda triggerului 202
 describe('edge function redari-coresp-mail (verificari statice)', () => {
   const src = readFileSync(new URL('../../supabase/functions/redari-coresp-mail/index.ts', import.meta.url), 'utf8')
   const flux = readFileSync(new URL('../../supabase/functions/_shared/redariCorespMail.mjs', import.meta.url), 'utf8')
-  it('foloseste fluxul partajat, fara service_role, getUser, Idempotency-Key = intentia', () => {
+  it('foloseste fluxul partajat, fara service_role, getUser, Idempotency-Key = id-ul incercarii', () => {
     expect(src).toContain("import { pregatesteMailIntern } from '../_shared/redariCorespMail.mjs'")
     expect(src + flux).not.toMatch(/SERVICE_ROLE/)
     expect(src).toContain('uc.auth.getUser(jwt)')
     expect(src).toContain("'Idempotency-Key': cheie")
-    expect(src).toMatch(/intentie_id: body\?\.intentie_id/)
+    expect(src + flux).not.toMatch(/intentie/)
+    expect(flux).toContain('dep.trimiteResend(corp, mailId)')
   })
   it('fara scriere in BD din interiorul vreunui catch (anti-bug worker killed)', () => {
     expect(src.slice(src.lastIndexOf('} catch (_e) {'))).not.toMatch(/rpc\(|inchide\(|\.from\(/)

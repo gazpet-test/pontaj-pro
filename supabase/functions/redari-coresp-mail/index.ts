@@ -1,5 +1,5 @@
-// redari-coresp-mail — Redări → Corespondență: „📧 Pregătește mailul” (deciziile lui Răzvan 04.11.2026, migrarea 20261130f; r2 după review r1).
-// POST { corespondenta_id, intentie_id, versiune, fisier_id } → un mail INTERN către expeditorul rândului (@gazpet.ro), CC office@gazpet.ro, cu adresa
+// redari-coresp-mail — Redări → Corespondență: „📧 Pregătește mailul” (deciziile lui Răzvan 04.11.2026, migrarea 20261130f; r3 = varianta A).
+// POST { corespondenta_id, versiune, fisier_id } → un mail INTERN către expeditorul rândului (@gazpet.ro), CC office@gazpet.ro, cu adresa
 // instituției, subiectul și textul gata scrise + PDF-ul APROBAT atașat. Expeditorul le copiază într-un mail NOU și îl trimite el.
 // Platforma NU trimite nimic în afara firmei. Fluxul (logică pură, testată în vitest) e în ../_shared/redariCorespMail.mjs → pregatesteMailIntern;
 // aici doar autentificarea, clientul utilizatorului, descărcarea din Storage și apelul Resend.
@@ -9,14 +9,15 @@
 //     Toate se tratează ca DATE: textul e escapat HTML (escHtml), adresa instituției apare doar ca text (fără mailto / linkuri generate de noi),
 //     subiectul intern e un singur rând (CR/LF scoase), PDF-ul se atașează ca octeți (verificat %PDF-). Nu se urmează nimic din conținut.
 // (b) Ce scrie / trimite: UN mail prin Resend, DOAR către expeditor_email (@gazpet.ro, verificat în BD — CHECK + RPC — și aici) cu CC office@gazpet.ro,
-//     reply_to = adresa utilizatorului doar dacă e @gazpet.ro, altfel office@; un rând de intenție în red_corespondenta_mailuri. Nu atinge bani / drepturi.
+//     reply_to = adresa utilizatorului doar dacă e @gazpet.ro, altfel office@; un rând de încercare în red_corespondenta_mailuri. Nu atinge bani / drepturi.
 // (c) Identitate: JWT-ul UTILIZATORULUI pe tot drumul (RPC-uri SECURITY DEFINER cu auth.uid() din JWT; descărcarea din bucket-ul `redari` prin
 //     politica red_storage_sel = admin/editor). FĂRĂ service_role. Secrete: RESEND_API_KEY (+ SUPABASE_URL / SUPABASE_ANON_KEY standard).
 // (d) Cine o poate porni: verify_jwt=false (validăm noi tokenul cu getUser — cheia anon e și ea un JWT valid, PR #318), apoi POARTA DE ROL în BD:
 //     fn_red_coresp_mail_incepe cere fn_red_nivel() IN ('admin','editor'); viewer / fără Redări / anon → 403.
 // (e) Confirmare umană: aprobarea owner-ului pe rând (legată de fișierul exact + eTag; orice schimbare a câmpurilor mailului o face să cadă) + click-ul
-//     unui admin/editor care confirmă versiunea și fișierul VĂZUTE (RPC le compară sub lock). Intenție nouă: 60 s / rând (orice stare), 20 / zi / proiect.
-//     Resend: Idempotency-Key = intentie_id (aceeași la „Reia aceeași încercare”). Un rezultat necunoscut nu se retrimite automat.
+//     unui admin/editor care confirmă versiunea și fișierul VĂZUTE (RPC le compară sub lock); 60 s / rând (orice stare), 20 / zi / proiect.
+//     DECIZIE 04.11.2026, aprobat de Răzvan (varianta A), risc acceptat: mail intern dublu — fără reluare; un rezultat incert se verifică în inbox,
+//     apoi se poate apăsa din nou după 60 s. Idempotency-Key la Resend = id-ul încercării (inofensiv).
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { pregatesteMailIntern } from '../_shared/redariCorespMail.mjs';
 
@@ -45,7 +46,7 @@ Deno.serve(async (req: Request) => {
 
     let body: any = {}; try { body = await req.json(); } catch { /* gol */ }
     const rez = await pregatesteMailIntern(
-      { corespondenta_id: body?.corespondenta_id, intentie_id: body?.intentie_id, versiune: body?.versiune, fisier_id: body?.fisier_id, userEmail: ud.user.email },
+      { corespondenta_id: body?.corespondenta_id, versiune: body?.versiune, fisier_id: body?.fisier_id, userEmail: ud.user.email },
       {
         rpc: (nume: string, arg: Record<string, unknown>) => uc.rpc(nume, arg),
         // descărcarea cu JWT-ul UTILIZATORULUI (politica storage red_storage_sel); antetul ETag al aceluiași răspuns se compară cu cel aprobat
@@ -60,7 +61,7 @@ Deno.serve(async (req: Request) => {
       });
     return json(rez.body, rez.status);
   } catch (_e) {
-    // neașteptat: fără scriere în BD din catch (anti-bug worker killed); intenția rămâne in_curs = neconfirmată în UI
-    return json({ error: 'eroare internă la pregătirea mailului; verifică inboxul înainte să reiei', necunoscut: true }, 500);
+    // neașteptat: fără scriere în BD din catch (anti-bug worker killed); încercarea rămâne in_curs = neconfirmată în UI
+    return json({ error: 'eroare internă la pregătirea mailului; verifică inboxul expeditorului; dacă mailul nu a venit, poți apăsa din nou după 60 s (poate produce un mail intern dublu)', incert: true }, 500);
   }
 });

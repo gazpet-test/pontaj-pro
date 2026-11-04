@@ -1,4 +1,4 @@
--- DRY 20261130f_redari_coresp_mail (r2). Runner: o singura tranzactie ANULATA (migrare + teste + revenire + ROLLBACK).
+-- DRY 20261130f_redari_coresp_mail (r3, varianta A: fara reluare / intentie). Runner: o singura tranzactie ANULATA (migrare + teste + revenire + ROLLBACK).
 -- Date fictive: corespondentele Z1 / Z2 pe proiectul TEST-RAZVAN si obiecte fictive in storage.objects (bucket redari), toate anulate la ROLLBACK.
 -- Identitati: owner / admin / editor / viewer reale din user_module_access (ca DRY-ul 20261130e), simulate prin request.jwt.claims + SET LOCAL ROLE.
 -- Revenirea (rulata de runner dupa acest fisier) isi verifica singura md5-ul functiei de reguli (0705e04f… = 20261130e) si numaratorile arhivei.
@@ -20,17 +20,17 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN RETURN SQLSTATE=p_stare AND SQLERRM LIKE '%'||p_mesaj||'%';
 END $h$;
 CREATE FUNCTION pg_temp.r30f_g(p text) RETURNS text LANGUAGE sql STABLE AS $h$ SELECT nullif(current_setting('r30f.'||p,true),''); $h$;
--- apelul RPC-ului cu versiunea si fisierul aprobat CURENTE ale randului (ce „vede” utilizatorul) si intentia data
-CREATE FUNCTION pg_temp.r30f_incepe(p_cod text,p_intentie text) RETURNS text LANGUAGE sql STABLE AS $h$
-  SELECT format($q$SELECT public.fn_red_coresp_mail_incepe(%1$L, %2$L, (SELECT versiune FROM public.red_corespondenta WHERE id=%1$L), (SELECT aprobat_fisier_id FROM public.red_corespondenta WHERE id=%1$L))$q$,
-                pg_temp.r30f_g(p_cod), p_intentie);
+-- apelul RPC-ului cu versiunea si fisierul aprobat CURENTE ale randului (ce „vede” utilizatorul)
+CREATE FUNCTION pg_temp.r30f_incepe(p_cod text) RETURNS text LANGUAGE sql STABLE AS $h$
+  SELECT format($q$SELECT public.fn_red_coresp_mail_incepe(%1$L, (SELECT versiune FROM public.red_corespondenta WHERE id=%1$L), (SELECT aprobat_fisier_id FROM public.red_corespondenta WHERE id=%1$L))$q$,
+                pg_temp.r30f_g(p_cod));
 $h$;
 -- apelul cu versiune / fisier dati explicit (pentru testele „randul s-a schimbat”)
-CREATE FUNCTION pg_temp.r30f_incepe_x(p_cod text,p_intentie text,p_versiune integer,p_fisier text) RETURNS text LANGUAGE sql STABLE AS $h$
-  SELECT format($q$SELECT public.fn_red_coresp_mail_incepe(%L, %L, %s, %L)$q$, pg_temp.r30f_g(p_cod), p_intentie, p_versiune, p_fisier);
+CREATE FUNCTION pg_temp.r30f_incepe_x(p_cod text,p_versiune integer,p_fisier text) RETURNS text LANGUAGE sql STABLE AS $h$
+  SELECT format($q$SELECT public.fn_red_coresp_mail_incepe(%L, %s, %L)$q$, pg_temp.r30f_g(p_cod), p_versiune, p_fisier);
 $h$;
-GRANT EXECUTE ON FUNCTION pg_temp.r30f_ca(uuid,text),pg_temp.r30f_refuza(text,text),pg_temp.r30f_refuza_m(text,text,text),pg_temp.r30f_g(text),pg_temp.r30f_incepe(text,text),
-  pg_temp.r30f_incepe_x(text,text,integer,text) TO authenticated,anon,service_role;
+GRANT EXECUTE ON FUNCTION pg_temp.r30f_ca(uuid,text),pg_temp.r30f_refuza(text,text),pg_temp.r30f_refuza_m(text,text,text),pg_temp.r30f_g(text),pg_temp.r30f_incepe(text),
+  pg_temp.r30f_incepe_x(text,integer,text) TO authenticated,anon,service_role;
 
 -- TEST0: garda, identitati, date fictive (ca postgres = mentenanta)
 DO $t$
@@ -52,10 +52,6 @@ BEGIN
   PERFORM set_config('r30f.owner',own::text,true); PERFORM set_config('r30f.admin',adm::text,true);
   PERFORM set_config('r30f.editor',ed::text,true); PERFORM set_config('r30f.viewer',vw::text,true);
   PERFORM set_config('r30f.Z1',z1::text,true); PERFORM set_config('r30f.Z2',z2::text,true); PERFORM set_config('r30f.pr',pr::text,true);
-  -- intentii fixe (UUID-uri de test)
-  PERFORM set_config('r30f.I1','11111111-1111-4111-8111-111111111111',true); PERFORM set_config('r30f.I2','22222222-2222-4222-8222-222222222222',true);
-  PERFORM set_config('r30f.I3','33333333-3333-4333-8333-333333333333',true); PERFORM set_config('r30f.I4','44444444-4444-4444-8444-444444444444',true);
-  PERFORM set_config('r30f.I5','55555555-5555-4555-8555-555555555555',true); PERFORM set_config('r30f.I6','66666666-6666-4666-8666-666666666666',true);
   INSERT INTO storage.objects(bucket_id,name,metadata) VALUES
     ('redari',pfx||'Z1/20261104-110000-aaaaaaaa-scrisoare.pdf','{"mimetype":"application/pdf","size":1000,"eTag":"\"etag-z1\""}'::jsonb),
     ('redari',pfx||'Z2/20261104-110001-bbbbbbbb-scrisoare.pdf','{"mimetype":"application/pdf","size":2000,"eTag":"\"etag-z2\""}'::jsonb);
@@ -136,9 +132,9 @@ DO $t$ BEGIN
   INSERT INTO public.red_corespondenta_fisiere(corespondenta_id,rol,path,nume_original,mime,marime,sha256,storage_etag)
     VALUES (pg_temp.r30f_g('Z2')::uuid,'de_trimis','TEST-RAZVAN/corespondenta/Z2/20261104-110001-bbbbbbbb-scrisoare.pdf','scrisoare2.pdf','application/pdf',5,repeat('b',64),'x');
   -- RPC pe rand neaprobat -> refuz (fisierul confirmat = NULL ≠ ... → intai lipsa fisierului confirmat)
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',pg_temp.r30f_g('I1'),(SELECT versiune FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid),
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',(SELECT versiune FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid),
          (SELECT id::text FROM public.red_corespondenta_fisiere WHERE sha256=repeat('a',64))),'23514','randul s-a schimbat') THEN RAISE EXCEPTION 'TEST2 FAIL: mail pe rand neaprobat'; END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I1')),'23514','lipsesc intentia, versiunea sau fisierul') THEN RAISE EXCEPTION 'TEST2 FAIL: fara fisier confirmat'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514','lipsesc versiunea sau fisierul') THEN RAISE EXCEPTION 'TEST2 FAIL: fara fisier confirmat'; END IF;
   RAISE NOTICE 'TEST2 OK';
 END $t$;
 
@@ -176,16 +172,16 @@ END $t$;
 -- TEST5: viewer: nu porneste RPC-ul, nu insereaza in urma; anon: nimic; service_role: fara INSERT / UPDATE / DELETE pe urma
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('viewer')::uuid,'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I1')),'42501','doar admin / editor') THEN RAISE EXCEPTION 'TEST5 FAIL: viewer porneste mailul'; END IF;
-  IF NOT pg_temp.r30f_refuza(format($q$INSERT INTO public.red_corespondenta_mailuri(intentie_id,corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,amprenta,catre,cc,subiect,created_by)
-       SELECT gen_random_uuid(), id, proiect_id, aprobat_fisier_id, versiune, 'x', md5('x'), 'a@gazpet.ro', 'office@gazpet.ro', 's', %L FROM public.red_corespondenta WHERE id=%L$q$, pg_temp.r30f_g('viewer'), pg_temp.r30f_g('Z1')),'42501') THEN
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'42501','doar admin / editor') THEN RAISE EXCEPTION 'TEST5 FAIL: viewer porneste mailul'; END IF;
+  IF NOT pg_temp.r30f_refuza(format($q$INSERT INTO public.red_corespondenta_mailuri(corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,catre,cc,subiect,created_by)
+       SELECT id, proiect_id, aprobat_fisier_id, versiune, 'x', 'a@gazpet.ro', 'office@gazpet.ro', 's', %L FROM public.red_corespondenta WHERE id=%L$q$, pg_temp.r30f_g('viewer'), pg_temp.r30f_g('Z1')),'42501') THEN
     RAISE EXCEPTION 'TEST5 FAIL: viewer insereaza direct';
   END IF;
   RAISE NOTICE 'TEST5a OK';
 END $t$;
 SELECT pg_temp.r30f_ca(NULL,'anon');
 DO $t$ BEGIN
-  IF NOT pg_temp.r30f_refuza(format($q$SELECT public.fn_red_coresp_mail_incepe(%L,%L,1,%L)$q$,pg_temp.r30f_g('Z1'),pg_temp.r30f_g('I1'),gen_random_uuid()),'42501') THEN RAISE EXCEPTION 'TEST5 FAIL: anon porneste mailul'; END IF;
+  IF NOT pg_temp.r30f_refuza(format($q$SELECT public.fn_red_coresp_mail_incepe(%L,1,%L)$q$,pg_temp.r30f_g('Z1'),gen_random_uuid()),'42501') THEN RAISE EXCEPTION 'TEST5 FAIL: anon porneste mailul'; END IF;
   IF NOT pg_temp.r30f_refuza('SELECT count(*) FROM public.red_corespondenta_mailuri','42501') THEN RAISE EXCEPTION 'TEST5 FAIL: anon citeste urma'; END IF;
   IF NOT pg_temp.r30f_refuza(format($q$SELECT public.fn_red_coresp_mail_inchide(%L,'trimis','x',NULL)$q$,gen_random_uuid()),'42501') THEN RAISE EXCEPTION 'TEST5 FAIL: anon inchide'; END IF;
   RAISE NOTICE 'TEST5b OK';
@@ -197,34 +193,32 @@ DO $t$ BEGIN
   RAISE NOTICE 'TEST5c OK';
 END $t$;
 
--- TEST6: editorul porneste intentia I1 -> rand in_curs (autor pus de server); aceeasi intentie -> reluare (acelasi rand, reluari+1, fara rand nou);
--- versiune / fisier diferite de cele curente -> refuz; intentie NOUA < 60 s -> refuz; INSERT / UPDATE / DELETE direct refuzate
+-- TEST6: editorul porneste mailul -> rand in_curs (autor pus de server); al doilea click < 60 s -> refuz; versiune / fisier diferite de cele curente
+-- -> refuz; INSERT / UPDATE / DELETE direct refuzate
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
-DO $t$ DECLARE j jsonb; j2 jsonb; v_id uuid; v_ver integer; BEGIN
-  EXECUTE pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I1')) INTO j;
+DO $t$ DECLARE j jsonb; v_id uuid; v_ver integer; BEGIN
+  EXECUTE pg_temp.r30f_incepe('Z1') INTO j;
   v_id := (j->>'mail_id')::uuid;
-  IF j->>'mod' <> 'nou' OR j->>'intentie_id' <> pg_temp.r30f_g('I1') OR j->>'expeditor_email' <> 'cristina.dumitrescu@gazpet.ro' OR j->>'cc' <> 'office@gazpet.ro'
+  IF j->>'expeditor_email' <> 'cristina.dumitrescu@gazpet.ro' OR j->>'cc' <> 'office@gazpet.ro'
      OR j->>'destinatar_email' <> 'registratura@isc-mehedinti.ro' OR j#>>'{fisier,etag}' <> '"etag-z1"' OR j#>>'{fisier,path}' NOT LIKE 'TEST-RAZVAN/corespondenta/Z1/%.pdf'
-     OR j->>'proiect_cod' <> 'TEST-RAZVAN' THEN
+     OR j->>'proiect_cod' <> 'TEST-RAZVAN' OR j ? 'mod' THEN
     RAISE EXCEPTION 'TEST6 FAIL: payload %', j;
   END IF;
   IF (SELECT stare<>'in_curs' OR created_by IS DISTINCT FROM pg_temp.r30f_g('editor')::uuid OR catre<>'cristina.dumitrescu@gazpet.ro' OR fisier_etag<>'"etag-z1"' OR finalizat_la IS NOT NULL
-             OR reluari<>0 OR amprenta !~ '^[0-9a-f]{32}$' FROM public.red_corespondenta_mailuri WHERE id=v_id) THEN RAISE EXCEPTION 'TEST6 FAIL: randul de urma'; END IF;
-  EXECUTE pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I1')) INTO j2;
-  IF j2->>'mod' <> 'reluare' OR (j2->>'mail_id')::uuid <> v_id OR (j2->>'reluari')::int <> 1
-     OR (SELECT count(*) FROM public.red_corespondenta_mailuri WHERE corespondenta_id=pg_temp.r30f_g('Z1')::uuid) <> 1 THEN RAISE EXCEPTION 'TEST6 FAIL: aceeasi intentie nu e reluare %', j2; END IF;
+             OR versiune_confirmata IS DISTINCT FROM (SELECT versiune FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid)
+        FROM public.red_corespondenta_mailuri WHERE id=v_id) THEN RAISE EXCEPTION 'TEST6 FAIL: randul de urma'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514','deja pregatit acum') THEN RAISE EXCEPTION 'TEST6 FAIL: al doilea click < 60 s'; END IF;
   SELECT versiune INTO v_ver FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',pg_temp.r30f_g('I1'),v_ver-1,(SELECT aprobat_fisier_id::text FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid)),'23514','randul s-a schimbat') THEN
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',v_ver-1,(SELECT aprobat_fisier_id::text FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid)),'23514','randul s-a schimbat') THEN
     RAISE EXCEPTION 'TEST6 FAIL: versiune veche acceptata';
   END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',pg_temp.r30f_g('I1'),v_ver,(SELECT id::text FROM public.red_corespondenta_fisiere WHERE sha256=repeat('b',64))),'23514','randul s-a schimbat') THEN
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',v_ver,(SELECT id::text FROM public.red_corespondenta_fisiere WHERE sha256=repeat('b',64))),'23514','randul s-a schimbat') THEN
     RAISE EXCEPTION 'TEST6 FAIL: alt fisier acceptat';
   END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I2')),'23514','deja pregatit acum') THEN RAISE EXCEPTION 'TEST6 FAIL: intentie noua < 60 s'; END IF;
   IF NOT pg_temp.r30f_refuza(format($q$UPDATE public.red_corespondenta_mailuri SET stare='trimis', resend_id='x' WHERE id=%L$q$,v_id),'42501') THEN RAISE EXCEPTION 'TEST6 FAIL: UPDATE direct'; END IF;
   IF NOT pg_temp.r30f_refuza($q$DELETE FROM public.red_corespondenta_mailuri$q$,'42501') THEN RAISE EXCEPTION 'TEST6 FAIL: DELETE direct'; END IF;
-  IF NOT pg_temp.r30f_refuza(format($q$INSERT INTO public.red_corespondenta_mailuri(intentie_id,corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,amprenta,catre,cc,subiect,created_by)
-       SELECT gen_random_uuid(), id, proiect_id, aprobat_fisier_id, versiune, 'x', md5('x'), 'a@gazpet.ro', 'office@gazpet.ro', 's', %L FROM public.red_corespondenta WHERE id=%L$q$, pg_temp.r30f_g('editor'), pg_temp.r30f_g('Z1')),'42501') THEN
+  IF NOT pg_temp.r30f_refuza(format($q$INSERT INTO public.red_corespondenta_mailuri(corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,catre,cc,subiect,created_by)
+       SELECT id, proiect_id, aprobat_fisier_id, versiune, 'x', 'a@gazpet.ro', 'office@gazpet.ro', 's', %L FROM public.red_corespondenta WHERE id=%L$q$, pg_temp.r30f_g('editor'), pg_temp.r30f_g('Z1')),'42501') THEN
     RAISE EXCEPTION 'TEST6 FAIL: editor insereaza direct (ocolind RPC-ul)';
   END IF;
   IF NOT pg_temp.r30f_refuza_m(format($q$SELECT public.fn_red_coresp_mail_inchide(%L,'trimis',NULL,NULL)$q$,v_id),'23514','fara id Resend') THEN RAISE EXCEPTION 'TEST6 FAIL: trimis fara id'; END IF;
@@ -235,35 +229,29 @@ END $t$;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('admin')::uuid,'authenticated');
 DO $t$ BEGIN
   IF NOT pg_temp.r30f_refuza_m(format($q$SELECT public.fn_red_coresp_mail_inchide(%L,'trimis','re_alt',NULL)$q$,pg_temp.r30f_g('mail1')),'23514','nu e a ta') THEN RAISE EXCEPTION 'TEST6 FAIL: alt utilizator inchide'; END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I1')),'23514','alt autor') THEN RAISE EXCEPTION 'TEST6 FAIL: alt utilizator reia intentia'; END IF;
   RAISE NOTICE 'TEST6b OK';
 END $t$;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
-DO $t$ DECLARE j jsonb; BEGIN
+DO $t$ BEGIN
   IF public.fn_red_coresp_mail_inchide(pg_temp.r30f_g('mail1')::uuid,'trimis','re_123',NULL) <> 'trimis' THEN RAISE EXCEPTION 'TEST6 FAIL: inchidere trimis'; END IF;
   IF (SELECT stare<>'trimis' OR resend_id<>'re_123' OR finalizat_la IS NULL FROM public.red_corespondenta_mailuri WHERE id=pg_temp.r30f_g('mail1')::uuid) THEN RAISE EXCEPTION 'TEST6 FAIL: inchidere'; END IF;
-  -- un trimis nu se retrogradeaza (a doua reluare concurenta raporteaza necunoscut / eroare)
-  IF public.fn_red_coresp_mail_inchide(pg_temp.r30f_g('mail1')::uuid,'necunoscut',NULL,'x') <> 'trimis'
-     OR (SELECT stare<>'trimis' OR resend_id<>'re_123' FROM public.red_corespondenta_mailuri WHERE id=pg_temp.r30f_g('mail1')::uuid) THEN RAISE EXCEPTION 'TEST6 FAIL: trimis retrogradat'; END IF;
-  EXECUTE pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I1')) INTO j;
-  IF j->>'mod' <> 'deja_trimis' OR j->>'resend_id' <> 're_123' OR (SELECT count(*) FROM public.red_corespondenta_mailuri WHERE corespondenta_id=pg_temp.r30f_g('Z1')::uuid) <> 1 THEN
-    RAISE EXCEPTION 'TEST6 FAIL: intentie trimisa reluata %', j;
-  END IF;
+  -- o singura inchidere: a doua (orice stare) e refuzata, randul ramane trimis
+  IF NOT pg_temp.r30f_refuza_m(format($q$SELECT public.fn_red_coresp_mail_inchide(%L,'necunoscut',NULL,'x')$q$,pg_temp.r30f_g('mail1')),'23514','deja inchisa') THEN RAISE EXCEPTION 'TEST6 FAIL: a doua inchidere'; END IF;
+  IF (SELECT stare<>'trimis' OR resend_id<>'re_123' FROM public.red_corespondenta_mailuri WHERE id=pg_temp.r30f_g('mail1')::uuid) THEN RAISE EXCEPTION 'TEST6 FAIL: trimis schimbat'; END IF;
   RAISE NOTICE 'TEST6c OK';
 END $t$;
 
--- TEST7 (r2, J-P2-1): fereastra de 60 s pe TOATE intentiile: o eroare inchisa de apelant NU deblocheaza; o intentie eroare nu se reia;
--- necunoscut -> reluare cu aceeasi intentie (in_curs, reluari + 1)
+-- TEST7 (J-P2-1): fereastra de 60 s pe TOATE incercarile: o eroare inchisa de apelant NU deblocheaza; dupa 60 s se poate din nou (varianta A:
+-- un rezultat necunoscut se verifica in inbox; un nou click dupa 60 s e permis — risc acceptat: mail intern dublu)
 SELECT pg_temp.r30f_ca(NULL,'postgres');
 ALTER TABLE public.red_corespondenta_mailuri DISABLE TRIGGER trg_red_coresp_mail_inainte;
 UPDATE public.red_corespondenta_mailuri SET created_at = clock_timestamp() - interval '2 minutes' WHERE corespondenta_id = pg_temp.r30f_g('Z1')::uuid;
 ALTER TABLE public.red_corespondenta_mailuri ENABLE TRIGGER trg_red_coresp_mail_inainte;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('admin')::uuid,'authenticated');
 DO $t$ DECLARE j jsonb; BEGIN
-  EXECUTE pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I3')) INTO j;
+  EXECUTE pg_temp.r30f_incepe('Z1') INTO j;
   IF public.fn_red_coresp_mail_inchide((j->>'mail_id')::uuid,'eroare',NULL,'Resend 422: test') <> 'eroare' THEN RAISE EXCEPTION 'TEST7 FAIL: inchidere eroare'; END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I4')),'23514','deja pregatit acum') THEN RAISE EXCEPTION 'TEST7 FAIL: eroarea inchisa de apelant deblocheaza fereastra'; END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I3')),'23514','esuat definitiv') THEN RAISE EXCEPTION 'TEST7 FAIL: intentie eroare reluata'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514','deja pregatit acum') THEN RAISE EXCEPTION 'TEST7 FAIL: eroarea inchisa de apelant deblocheaza fereastra'; END IF;
   RAISE NOTICE 'TEST7a OK';
 END $t$;
 SELECT pg_temp.r30f_ca(NULL,'postgres');
@@ -271,39 +259,37 @@ ALTER TABLE public.red_corespondenta_mailuri DISABLE TRIGGER trg_red_coresp_mail
 UPDATE public.red_corespondenta_mailuri SET created_at = clock_timestamp() - interval '2 minutes' WHERE corespondenta_id = pg_temp.r30f_g('Z1')::uuid;
 ALTER TABLE public.red_corespondenta_mailuri ENABLE TRIGGER trg_red_coresp_mail_inainte;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('admin')::uuid,'authenticated');
-DO $t$ DECLARE j jsonb; j2 jsonb; BEGIN
-  EXECUTE pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I5')) INTO j;
+DO $t$ DECLARE j jsonb; BEGIN
+  EXECUTE pg_temp.r30f_incepe('Z1') INTO j;
   IF public.fn_red_coresp_mail_inchide((j->>'mail_id')::uuid,'necunoscut',NULL,'timeout') <> 'necunoscut' THEN RAISE EXCEPTION 'TEST7 FAIL: inchidere necunoscut'; END IF;
-  EXECUTE pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I5')) INTO j2;
-  IF j2->>'mod' <> 'reluare' OR j2->>'mail_id' <> j->>'mail_id'
-     OR (SELECT stare<>'in_curs' OR reluari<>1 OR finalizat_la IS NOT NULL FROM public.red_corespondenta_mailuri WHERE id=(j->>'mail_id')::uuid) THEN RAISE EXCEPTION 'TEST7 FAIL: reluarea necunoscut %', j2; END IF;
-  PERFORM public.fn_red_coresp_mail_inchide((j->>'mail_id')::uuid,'necunoscut',NULL,'timeout 2');
-  IF (SELECT count(*) FROM public.red_corespondenta_mailuri WHERE corespondenta_id=pg_temp.r30f_g('Z1')::uuid) <> 3 THEN RAISE EXCEPTION 'TEST7 FAIL: numar intentii'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(format($q$SELECT public.fn_red_coresp_mail_inchide(%L,'trimis','re_x',NULL)$q$,j->>'mail_id'),'23514','deja inchisa') THEN RAISE EXCEPTION 'TEST7 FAIL: necunoscut redeschis'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514','deja pregatit acum') THEN RAISE EXCEPTION 'TEST7 FAIL: necunoscut deblocheaza fereastra'; END IF;
+  IF (SELECT count(*) FROM public.red_corespondenta_mailuri WHERE corespondenta_id=pg_temp.r30f_g('Z1')::uuid) <> 3 THEN RAISE EXCEPTION 'TEST7 FAIL: numar incercari'; END IF;
   RAISE NOTICE 'TEST7b OK';
 END $t$;
--- TEST7c: aceeasi intentie cu alt payload (randul s-a schimbat: versiune noua) -> refuz; cu versiunea veche -> „randul s-a schimbat”
-SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
-UPDATE public.red_corespondenta SET observatii='nota noua' WHERE id=pg_temp.r30f_g('Z1')::uuid;
+-- TEST7c (J-P2-3): randul s-a schimbat dupa ce utilizatorul l-a vazut (versiune noua) -> pornirea cu versiunea veche e refuzata
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('admin')::uuid,'authenticated');
-DO $t$ BEGIN
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I5')),'23514','aceeasi intentie cu alt continut') THEN RAISE EXCEPTION 'TEST7c FAIL: alt payload acceptat'; END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',pg_temp.r30f_g('I5'),(SELECT versiune_confirmata FROM public.red_corespondenta_mailuri WHERE intentie_id=pg_temp.r30f_g('I5')::uuid),
-         (SELECT aprobat_fisier_id::text FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid)),'23514','randul s-a schimbat') THEN RAISE EXCEPTION 'TEST7c FAIL: versiune veche'; END IF;
+DO $t$ DECLARE v_vechi integer; BEGIN
+  SELECT versiune INTO v_vechi FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid;
+  UPDATE public.red_corespondenta SET observatii='nota noua' WHERE id=pg_temp.r30f_g('Z1')::uuid;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe_x('Z1',v_vechi,(SELECT aprobat_fisier_id::text FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z1')::uuid)),'23514','randul s-a schimbat') THEN
+    RAISE EXCEPTION 'TEST7c FAIL: versiune veche';
+  END IF;
   RAISE NOTICE 'TEST7c OK';
 END $t$;
 
 -- TEST8: Z2 aprobat dar fara campurile mailului -> refuz; eTag schimbat in Storage -> refuz; randul inexistent -> P0002
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z2',pg_temp.r30f_g('I6')),'23514','@gazpet.ro') THEN RAISE EXCEPTION 'TEST8 FAIL: Z2 fara expeditor'; END IF;
-  IF NOT pg_temp.r30f_refuza(format($q$SELECT public.fn_red_coresp_mail_incepe(%L,%L,1,%L)$q$,gen_random_uuid(),pg_temp.r30f_g('I6'),gen_random_uuid()),'P0002') THEN RAISE EXCEPTION 'TEST8 FAIL: rand inexistent'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z2'),'23514','@gazpet.ro') THEN RAISE EXCEPTION 'TEST8 FAIL: Z2 fara expeditor'; END IF;
+  IF NOT pg_temp.r30f_refuza(format($q$SELECT public.fn_red_coresp_mail_incepe(%L,1,%L)$q$,gen_random_uuid(),gen_random_uuid()),'P0002') THEN RAISE EXCEPTION 'TEST8 FAIL: rand inexistent'; END IF;
   RAISE NOTICE 'TEST8a OK';
 END $t$;
 SELECT pg_temp.r30f_ca(NULL,'postgres');
 UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-schimbat\""}'::jsonb WHERE bucket_id='redari' AND name='TEST-RAZVAN/corespondenta/Z1/20261104-110000-aaaaaaaa-scrisoare.pdf';
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I6')),'23514','s-a schimbat sau lipseste din Storage') THEN RAISE EXCEPTION 'TEST8 FAIL: eTag schimbat'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514','s-a schimbat sau lipseste din Storage') THEN RAISE EXCEPTION 'TEST8 FAIL: eTag schimbat'; END IF;
   RAISE NOTICE 'TEST8b OK';
 END $t$;
 SELECT pg_temp.r30f_ca(NULL,'postgres');
@@ -312,15 +298,15 @@ UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-z1\""}'::json
 -- TEST9: plafonul de 20 / zi / proiect (17 intentii fictive azi + cele 3 de pe Z1 = 20) -> refuz; viewer-ul vede urma
 ALTER TABLE public.red_corespondenta_mailuri DISABLE TRIGGER trg_red_coresp_mail_inainte;
 UPDATE public.red_corespondenta_mailuri SET created_at = clock_timestamp() - interval '2 minutes' WHERE corespondenta_id = pg_temp.r30f_g('Z1')::uuid;
-INSERT INTO public.red_corespondenta_mailuri(intentie_id,corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,amprenta,catre,cc,subiect,stare,eroare,created_by,created_at,finalizat_la)
-  SELECT gen_random_uuid(), c.id, c.proiect_id, c.aprobat_fisier_id, c.versiune, '"etag-z2"', md5(g::text), 'a@gazpet.ro', 'office@gazpet.ro', 'fictiv', 'eroare', 'fictiv',
+INSERT INTO public.red_corespondenta_mailuri(corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,catre,cc,subiect,stare,eroare,created_by,created_at,finalizat_la)
+  SELECT c.id, c.proiect_id, c.aprobat_fisier_id, c.versiune, '"etag-z2"', 'a@gazpet.ro', 'office@gazpet.ro', 'fictiv', 'eroare', 'fictiv',
          pg_temp.r30f_g('editor')::uuid, clock_timestamp() - interval '5 minutes', clock_timestamp()
     FROM public.red_corespondenta c, generate_series(1,17) g WHERE c.id = pg_temp.r30f_g('Z2')::uuid;
 ALTER TABLE public.red_corespondenta_mailuri ENABLE TRIGGER trg_red_coresp_mail_inainte;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
   IF (SELECT count(*) FROM public.red_corespondenta_mailuri WHERE proiect_id=pg_temp.r30f_g('pr')::uuid) <> 20 THEN RAISE EXCEPTION 'TEST9 FAIL: preconditie 20'; END IF;
-  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I6')),'23514','plafonul de 20') THEN RAISE EXCEPTION 'TEST9 FAIL: plafon'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514','plafonul de 20') THEN RAISE EXCEPTION 'TEST9 FAIL: plafon'; END IF;
   RAISE NOTICE 'TEST9a OK';
 END $t$;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('viewer')::uuid,'authenticated');
@@ -332,7 +318,7 @@ END $t$;
 -- TEST10: jurnal + mentenanta (fara JWT) nu porneste mailul
 SELECT pg_temp.r30f_ca(NULL,'postgres');
 DO $t$ BEGIN
-  IF NOT pg_temp.r30f_refuza(pg_temp.r30f_incepe('Z1',pg_temp.r30f_g('I6')),'42501') THEN RAISE EXCEPTION 'TEST10 FAIL: mentenanta porneste mailul'; END IF;
+  IF NOT pg_temp.r30f_refuza(pg_temp.r30f_incepe('Z1'),'42501') THEN RAISE EXCEPTION 'TEST10 FAIL: mentenanta porneste mailul'; END IF;
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta_mailuri') < 3 THEN RAISE EXCEPTION 'TEST10 FAIL: jurnal'; END IF;
   RAISE NOTICE 'TEST10 OK';
 END $t$;

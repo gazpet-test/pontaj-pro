@@ -520,9 +520,11 @@ Stare 04.11.2026: punctele 1–3 sunt făcute.
   **Platforma nu trimite nimic în afara firmei.**
 - Câmpurile `destinatar_email`, `mail_subiect`, `mail_text`, `expeditor_email` (Editează → „📧 Mailul”) intră în conținutul aprobat: schimbarea lor
   după aprobare face aprobarea să cadă.
-- Urma: `red_corespondenta_mailuri` (o INTENȚIE = un rând, `intentie_id` de la UI = Idempotency-Key Resend; in_curs → trimis / eroare / necunoscut;
-  reluarea aceleiași intenții nu retrimite un mail deja trimis). Fereastră 60 s pe rând (orice stare), plafon 20 intenții / zi / proiect.
-  Click-ul confirmă versiunea + fișierul văzute. Rezultat neconfirmat → „Reia aceeași încercare” sau, separat, „Pregătește încă un mail”.
+- Urma: `red_corespondenta_mailuri` (append-only: o încercare = un rând, închisă o singură dată din in_curs → trimis / eroare / necunoscut).
+  Fereastră 60 s pe rând (orice stare), plafon 20 / zi / proiect. Click-ul confirmă versiunea + fișierul văzute.
+- **Decizie 04.11.2026, aprobat de Răzvan (varianta A, „simplificăm”), risc acceptat: mail intern dublu.** Fără reluare / intenție: la rezultat
+  incert UI-ul spune „Rezultat incert — verifică inboxul expeditorului; dacă mailul nu a venit, poți apăsa din nou după 60 s (poate produce un mail
+  intern dublu)”. Dacă istoricul mailurilor nu se poate citi, butonul e oprit.
 - Ordinea livrării: (1) migrarea `20261130f` (după `20261130e`), (2) deploy edge `redari-coresp-mail` cu verify_jwt=false, (3) merge UI-ul
   (UI-ul citește coloanele noi: fără migrare, ecranul Corespondență dă eroare). Fișa de securitate: `docs/redari/AUTOMATIZARE_CORESP_MAIL.md`.
 

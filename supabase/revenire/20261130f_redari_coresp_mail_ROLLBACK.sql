@@ -136,12 +136,12 @@ BEGIN
   FOREACH v_fk IN ARRAY ARRAY['red_corespondenta_mailuri_coresp_fk', 'red_corespondenta_mailuri_proiect_fk', 'red_corespondenta_mailuri_fisier_fk'] LOOP
     EXECUTE format('ALTER TABLE %I.red_corespondenta_mailuri DROP CONSTRAINT %I', v_schema, v_fk);
   END LOOP;
-  DROP FUNCTION public.fn_red_coresp_mail_incepe(uuid, uuid, integer, uuid);
+  DROP FUNCTION public.fn_red_coresp_mail_incepe(uuid, integer, uuid);
   DROP FUNCTION public.fn_red_coresp_mail_inchide(uuid, text, text, text);
   DROP FUNCTION public.fn_red_coresp_mail_inainte();
   DROP FUNCTION public.fn_red_coresp_mail_verifica_baza(text);
   IF to_regclass('public.red_corespondenta_mailuri') IS NOT NULL OR to_regclass(format('%I.red_corespondenta_mailuri', v_schema)) IS NULL
-     OR to_regprocedure('public.fn_red_coresp_mail_incepe(uuid,uuid,integer,uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_coresp_mail_inchide(uuid,text,text,text)') IS NOT NULL
+     OR to_regprocedure('public.fn_red_coresp_mail_incepe(uuid,integer,uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_coresp_mail_inchide(uuid,text,text,text)') IS NOT NULL
      OR to_regprocedure('public.fn_red_coresp_mail_inainte()') IS NOT NULL OR to_regprocedure('public.fn_red_coresp_mail_verifica_baza(text)') IS NOT NULL
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_corespondenta'
                  AND column_name IN ('destinatar_email', 'mail_subiect', 'mail_text', 'expeditor_email'))
