@@ -353,14 +353,17 @@ describe('verso convocator: informarea GDPR completă', () => {
     expect(INFORMARE_LOT1_PUBLICATA).toBe(false)
     expect(verificaDateConvocator(baza())).toEqual([MESAJ_INFORMARE_NEGATA])
     await expect(genereazaConvocator({ ...baza(), templateArrayBuffer: citesteSablon() })).rejects.toThrow(/informarea GDPR de pe verso nu e aprobată \/ completă/)
-    // publicată, dar cu câmpuri [ ] rămase → tot refuz
-    expect(verificaDateConvocator({ ...baza(), informare: { text: TEXT_INFORMARE_LOT1, publicata: true } })).toEqual([MESAJ_INFORMARE_NEGATA])
+    // publicată, dar cu câmpuri [ ] rămase → tot refuz (v3.2 nu mai are câmpuri: se adaugă unul de test)
+    const cuCamp = `${TEXT_INFORMARE_LOT1}\n\nSursa [de confirmat].`
+    expect(verificaDateConvocator({ ...baza(), informare: { text: cuCamp, publicata: true } })).toEqual([MESAJ_INFORMARE_NEGATA])
     const prev = await genereazaConvocator({ ...baza(), templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
     expect(prev.lipsuri).toEqual([MESAJ_INFORMARE_NEGATA])
     const { xml } = await xmlDin(prev.blob, 'word/document.xml')
     expect(textDin(xml)).toContain('PROIECT – nu se tipărește')
-    // câmpurile [ ] evidențiate
-    expect(xml).toContain('<w:highlight w:val="yellow"/>')
+    // v3.2: textul real nu mai are câmpuri [ ], deci nimic evidențiat; un câmp rămas ar fi evidențiat
+    expect(xml).not.toContain('<w:highlight')
+    const prevCamp = await genereazaConvocator({ ...baza(), informare: { text: cuCamp, publicata: false }, templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
+    expect((await xmlDin(prevCamp.blob, 'word/document.xml')).xml).toContain('<w:highlight w:val="yellow"/>')
   })
 
   it('versoul vine după un salt de pagină, înaintea sectPr-ului final, cu elementele cheie; fața rămâne neschimbată', async () => {
