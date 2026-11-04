@@ -95,7 +95,7 @@ export function construiesteMailIntern(d) {
     bloc('2. Subiect', escHtml(subInst)) +
     bloc('3. Text', escHtml(text)) +
     `<p style="margin:12px 0 0">4. Atașament: <b>${escHtml(linie(d.fisierNume))}</b> — fișierul aprobat (amprenta serverului, eTag: <span style="font-family:Consolas,monospace">${escHtml(linie(d.fisierEtag))}</span>).</p>` +
-    `<p style="color:#8a99a8;font-size:12px;margin-top:18px">Pregătit din Gazpet ERP (Redări → Corespondență) de ${escHtml(linie(d.pregatitDeNume) || '-')}. CC ${escHtml(OFFICE)} pentru evidență.</p></div>`
+    `<p style="color:#8a99a8;font-size:12px;margin-top:18px">Pregătit din Gazpet ERP (Redări → Corespondență) de ${escHtml(linie(d.pregatitDeNume) || '-')}.${cc.includes(OFFICE) ? ` CC ${escHtml(OFFICE)} pentru evidență.` : ''}</p></div>`
   const textSimplu = `Mail de trimis: ${linie(d.cod)} — ${linie(d.destinatar)}\n` +
     `Aprobat de ${linie(d.aprobatDeNume) || 'owner'} la ${fmtMoment(d.aprobatLa)}.\n\n` +
     `Deschide un mail NOU (nu Forward), copiază adresa, subiectul și textul, atașează PDF-ul și trimite-l tu.\n\n` +

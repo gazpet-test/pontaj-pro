@@ -113,7 +113,8 @@ CREATE TABLE public.red_corespondenta_mailuri (
   fisier_etag text NOT NULL CHECK (length(fisier_etag) BETWEEN 3 AND 200 AND fisier_etag ~ '^"[^"]+"$'),
   catre text NOT NULL CHECK (length(catre) <= 254 AND lower(catre) ~ '^[a-z0-9._%+-]+@gazpet\.ro$'),
   -- CC = office@; EXCEPTIE documentata (decizia Razvan 04.11.2026, r4 C-P3-01): daca expeditorul e chiar office@, CC se omite (aceeasi adresa)
-  cc text CHECK ((lower(catre) <> 'office@gazpet.ro' AND cc = 'office@gazpet.ro') OR (lower(catre) = 'office@gazpet.ro' AND cc IS NULL)),
+  -- r5 (J-P3-01 / C-P3-01): IS TRUE pe toata expresia — un NULL nu trece in afara exceptiei office@
+  cc text CONSTRAINT red_corespondenta_mailuri_cc_ck CHECK (((lower(catre) <> 'office@gazpet.ro' AND cc = 'office@gazpet.ro') OR (lower(catre) = 'office@gazpet.ro' AND cc IS NULL)) IS TRUE),
   subiect text NOT NULL CHECK (length(subiect) BETWEEN 1 AND 300),
   stare text NOT NULL DEFAULT 'in_curs' CHECK (stare IN ('in_curs', 'trimis', 'eroare', 'necunoscut')),
   resend_id text CHECK (resend_id IS NULL OR length(resend_id) <= 200),

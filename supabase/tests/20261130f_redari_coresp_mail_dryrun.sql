@@ -354,6 +354,18 @@ INSERT INTO public.red_corespondenta_mailuri(corespondenta_id,proiect_id,fisier_
   SELECT c.id, c.proiect_id, c.aprobat_fisier_id, c.versiune, '"etag-z2"', 'a@gazpet.ro', 'office@gazpet.ro', 'fictiv', 'eroare', 'fictiv',
          pg_temp.r30f_g('editor')::uuid, clock_timestamp() - interval '5 minutes', clock_timestamp()
     FROM public.red_corespondenta c, generate_series(1,16) g WHERE c.id = pg_temp.r30f_g('Z2')::uuid;
+-- TEST9c (r5, J-P3-01 / C-P3-01): CHECK-ul CC cu IS TRUE — catre <> office@ cu cc NULL e refuzat; catre office@ cu cc office@ e refuzat
+DO $t$ BEGIN
+  IF NOT pg_temp.r30f_refuza(format($q$INSERT INTO public.red_corespondenta_mailuri(corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,catre,cc,subiect,created_by)
+       SELECT id, proiect_id, aprobat_fisier_id, versiune, '"x"', 'a@gazpet.ro', NULL, 's', %L FROM public.red_corespondenta WHERE id=%L$q$, pg_temp.r30f_g('editor'), pg_temp.r30f_g('Z2')),'23514') THEN
+    RAISE EXCEPTION 'TEST9c FAIL: cc NULL acceptat pentru alt expeditor';
+  END IF;
+  IF NOT pg_temp.r30f_refuza(format($q$INSERT INTO public.red_corespondenta_mailuri(corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,catre,cc,subiect,created_by)
+       SELECT id, proiect_id, aprobat_fisier_id, versiune, '"x"', 'office@gazpet.ro', 'office@gazpet.ro', 's', %L FROM public.red_corespondenta WHERE id=%L$q$, pg_temp.r30f_g('editor'), pg_temp.r30f_g('Z2')),'23514') THEN
+    RAISE EXCEPTION 'TEST9c FAIL: CC dublat pentru office@ acceptat';
+  END IF;
+  RAISE NOTICE 'TEST9c OK';
+END $t$;
 ALTER TABLE public.red_corespondenta_mailuri ENABLE TRIGGER trg_red_coresp_mail_inainte;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN

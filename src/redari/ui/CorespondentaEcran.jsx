@@ -137,8 +137,8 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       const rez = await supabase.functions.invoke('redari-coresp-mail', { body: { corespondenta_id: rand.id, versiune: rand.versiune, fisier_id: rand.aprobat_fisier_id } })
       const msg = await mesajRezultatMail(rez)
       if (expirat()) return
-      show(msg.ok ? msg.text : (msg.incert ? '⚠ ' : 'Pregătește mailul: ') + msg.text, msg.ok ? 'success' : 'error')
-      if (msg.avertisment) show('⚠ ' + msg.avertisment, 'error')   // r4: separat de „nimic trimis”
+      // r4/r5: avertismentul despre urma neînchisă e o propoziție SEPARATĂ în același mesaj (Copilot r4: două show() consecutive se pot suprascrie)
+      show((msg.ok ? msg.text : (msg.incert ? '⚠ ' : 'Pregătește mailul: ') + msg.text) + (msg.avertisment ? ' ⚠ ' + msg.avertisment : ''), msg.ok ? 'success' : 'error')
       await incarca()
     } catch { if (!expirat()) { show('⚠ ' + MESAJ_INCERT, 'error'); await incarca() } } finally { if (!expirat()) setLucru(false) }
   }

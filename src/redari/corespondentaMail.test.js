@@ -41,7 +41,11 @@ describe('mailul intern', () => {
     expect(m.html).not.toMatch(/mailto:/)
   })
   it('expeditorul = office@ -> fara CC dublat', () => {
-    expect(construiesteMailIntern({ ...BAZA, expeditorEmail: 'office@gazpet.ro' }).cc).toEqual([])
+    const o = construiesteMailIntern({ ...BAZA, expeditorEmail: 'office@gazpet.ro' })
+    expect(o.cc).toEqual([])
+    // r5 (J-P3-02 / C-P3-02): subsolul nu mai afirma CC-ul cand e omis
+    expect(o.html).not.toMatch(/pentru evidență/)
+    expect(construiesteMailIntern(BAZA).html).toContain('CC office@gazpet.ro pentru evidență.')
   })
   it('refuza expeditor din afara firmei si campuri lipsa (nu construieste nimic)', () => {
     expect(construiesteMailIntern({ ...BAZA, expeditorEmail: 'cineva@gmail.com' }).erori).toContain('Expeditorul trebuie să aibă o adresă @gazpet.ro.')
