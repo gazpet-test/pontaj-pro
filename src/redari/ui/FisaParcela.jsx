@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase.js'
 import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
+import { dataDocumentConvocare } from '../convocatorNeexpediat.js'   // #991 r3: aceeași dată civilă București ca în Registru
 import { termenConstatare, mesajTermenConstatare } from '../setari.js'
 import { dataBucuresti } from '../plicuri.js'
 import { citesteSmsStare, stareSmsPentru, rezumatSms, textBadge, intrariCronologie, STARI_SMS } from '../smsStare.js'
@@ -222,7 +223,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
       // fișierele din bucket sunt imutabile: reincarcaConvocator scrie o cale nouă versionată ({nr_document}-v{n}.docx) și mută *_path
-      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: c.created_at })
+      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: dataDocumentConvocare(c) })
       const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
       show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
       incarca()
@@ -237,8 +238,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
     <div>
  
       {modal?.tip === 'pv' && <ModalPv key={parcelaId + ':' + (modal.det?.id || 'B') + ':' + proiect.id} parcelaId={parcelaId} detinatorId={modal.det?.id} tip={modal.det?'A':'B'} proiectId={proiect.id} nivel={nivel} show={show} onClose={() => setModal(null)} onGata={() => { incarca(); onSchimbat?.() }} />}
-      {(poateScrie || pvs.some(p => p.tip === 'B' && p.stare !== 'anulat' && !p.sters_la)) && <button style={S.btnP} onClick={() => setModal({tip:'pv'})}>PV B (parcela)</button>}
-     <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, flexWrap:'wrap' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, flexWrap:'wrap' }}>
         <button style={S.btnS} onClick={onInapoi}>‹ Registru</button>
         <div style={{ fontSize:17, fontWeight:700, ...S.mono }}>{parcela.id_parcela}</div>
         <span style={{ color:G.muted, fontSize:13 }}>{uat ? `${uat.nume} (${uat.uat3})` : ''} · tronson {parcela.tronson ?? '-'}</span>
@@ -247,6 +247,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         </select></label>}
         {parcela.sters_la && <span style={{ ...S.tag, background:G.redDim, color:G.red }}>ȘTEARSĂ · {parcela.sters_motiv}</span>}
         <div style={{ flex:1 }} />
+        {/* audit D14: PV B stă în bara fișei, nu deasupra ei */}
+        {(poateScrie || pvs.some(p => p.tip === 'B' && p.stare !== 'anulat' && !p.sters_la)) && <button style={S.btnP} onClick={() => setModal({tip:'pv'})}>PV B (parcelă)</button>}
         {poateScrie && !parcela.sters_la && <button style={S.btnS} onClick={() => setModal({ tip:'parcela' })}>✎ Editează parcela</button>}
         {poateScrie && !parcela.sters_la && <button style={S.btnD} onClick={() => setModal({ tip:'sterge', tabela:'red_parcele', id: parcela.id, ce:`parcela ${parcela.id_parcela}` })}>Șterge</button>}
       </div>

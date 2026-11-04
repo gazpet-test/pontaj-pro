@@ -6,7 +6,7 @@ import { eEmailValid, eEmailGazpet, normEmail, MAX_SUBIECT_MAIL, MAX_TEXT_MAIL }
 export const STARI_CORESPONDENTA = [
   { cod: 'draft',          eticheta: 'Draft',           culoare: '#8B949E' },
   { cod: 'la_avocat',      eticheta: 'La avocat',       culoare: '#D29922' },
-  { cod: 'aprobat',        eticheta: 'Aprobat Răzvan',  culoare: '#58A6FF' },
+  { cod: 'aprobat',        eticheta: 'Aprobat (owner)', culoare: '#58A6FF' },
   { cod: 'trimis',         eticheta: 'Trimis',          culoare: '#2EA043' },
   { cod: 'raspuns_primit', eticheta: 'Răspuns primit',  culoare: '#3FB950' },
   { cod: 'anulat',         eticheta: 'Anulat',          culoare: '#6E7681' },
@@ -14,6 +14,18 @@ export const STARI_CORESPONDENTA = [
 const PE_COD = Object.fromEntries(STARI_CORESPONDENTA.map(s => [s.cod, s]))
 export const etichetaStareCoresp = cod => PE_COD[cod]?.eticheta ?? String(cod ?? '')
 export const culoareStareCoresp = cod => PE_COD[cod]?.culoare ?? '#8B949E'
+
+// Audit D1 (04.11): cine a aprobat se ia din `aprobat_de` (contul care a pus „da”-ul), nu se presupune. Pe un rând aprobat: „Aprobat de {nume}”;
+// fără nume rezolvat (profil necitit / lipsă): doar „Aprobat”. `numeDupaId` = { [profiles.id]: name }.
+export const numeAprobator = (rand, numeDupaId) => {
+  const n = rand?.aprobat_de ? String(numeDupaId?.[rand.aprobat_de] ?? '').trim() : ''
+  return n || null
+}
+export function etichetaRandCoresp(rand, numeDupaId) {
+  if (rand?.stare !== 'aprobat') return etichetaStareCoresp(rand?.stare)
+  const n = numeAprobator(rand, numeDupaId)
+  return n ? `Aprobat de ${n}` : 'Aprobat'
+}
 
 export const COL_CORESPONDENTA = 'id, proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, aprobat_de, aprobat_la, trimis_la, nr_inregistrare, observatii, versiune, updated_at, aprobat_fisier_id, aprobat_sha256, aprobat_storage_etag, destinatar_email, mail_subiect, mail_text, expeditor_email'
 

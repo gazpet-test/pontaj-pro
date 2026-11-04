@@ -270,12 +270,12 @@ describe('sms-sold — poarta (cron intern sau owner) și scrierea', () => {
 // ── UI: textul din panou și alerta din Administrator ──────────────────────────────────────────────────────────────────────
 describe('soldul în UI', () => {
   it('panoul owner-ului: „Sold SMSLink: N (la ZZ.LL HH:MM)” în ora României; vechi = „neactualizat”; simulator explicit', () => {
-    expect(textSold({ credit: 842, citit_la: '2026-11-04T05:10:30Z' })).toBe('Sold SMSLink: 842 (la 04.11 07:10)')
-    expect(textSold({ credit: 842, citit_la: '2026-11-04T05:10:30Z', citire_veche: true })).toBe('Sold SMSLink: 842 (la 04.11 07:10) · neactualizat')
+    expect(textSold({ credit: 842, citit_la: '2026-11-04T05:10:30Z' })).toBe('Sold SMSLink: 842 SMS (la 04.11 07:10)')
+    expect(textSold({ credit: 842, citit_la: '2026-11-04T05:10:30Z', citire_veche: true })).toBe('Sold SMSLink: 842 SMS (la 04.11 07:10) · neactualizat')
     expect(textSold({ credit: null, citit_la: null })).toBe('Sold SMSLink: încă necitit')
     expect(textSold(null)).toBe('Sold SMSLink: —')
     expect(textSold(null, { simulator: true })).toBe('simulator — sold SMSLink necitit')
-    expect(textSold({ simulator: true, credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: false })).toBe('simulator — sold SMSLink necitit (ultimul cunoscut: 120 la 04.11 07:10)')
+    expect(textSold({ simulator: true, credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: false })).toBe('simulator — sold SMSLink necitit (ultimul cunoscut: 120 SMS la 04.11 07:10)')
   })
   it('Administrator → Alerte: sursa e doar a owner-ului; alerta apare doar când BD-ul spune alerta', () => {
     const s = SURSE_ADMIN.find(x => x.id === 'sms_sold')
@@ -352,7 +352,7 @@ describe('soldul în UI', () => {
     expect(a.impact).not.toContain('Reîncarcă creditul')
     expect(a.impact).toContain('Ultimul sold cunoscut era sub prag (120 < 150)')
     expect(a.timestamp).toBe('2026-11-03T17:10:00.000Z')
-    expect(textSold(st)).toBe('Sold SMSLink: monitorizare oprită (ultimul furnizor: simulator); ultimul sold cunoscut: 120 la 01.11 07:10')
+    expect(textSold(st)).toBe('Sold SMSLink: monitorizare oprită (ultimul furnizor: simulator); ultimul sold cunoscut: 120 SMS la 01.11 07:10')
     expect(textSold({ ...st, credit: null, citit_la: null })).toBe('Sold SMSLink: monitorizare oprită (ultimul furnizor: simulator); niciun sold cunoscut')
   })
   it('r5 P2-02 / Jakarinos P3: eroare veche (înaintea ultimului apel simulator) + monitorizare oprită → momentul = expirarea, nu eroarea veche', () => {
@@ -383,7 +383,7 @@ describe('soldul în UI', () => {
     expect(a.title).toBe('SMS: furnizorul nu e configurat (SMS_FURNIZOR) — soldul SMSLink nu se citește')
     expect(a.impact).toContain('SMS_FURNIZOR lipsește sau are o valoare necunoscută')
     expect(a.timestamp).toBe('2026-11-04T06:10:00.000Z')
-    expect(textSold(st)).toBe('Sold SMSLink: furnizor neconfigurat (SMS_FURNIZOR) · ultimul cunoscut: 500 la 04.11 07:10')
+    expect(textSold(st)).toBe('Sold SMSLink: furnizor neconfigurat (SMS_FURNIZOR) · ultimul cunoscut: 500 SMS la 04.11 07:10')
   })
   it('r3 P3-01: cronul oprit (citire veche, fără eroare nouă) → ora alertei = citit_la + 36 h, nu ora ultimei citiri', () => {
     const [a] = alerteUi({ credit: 900, prag: 150, citire_veche: true, alerta: true, citit_la: '2026-10-25T05:10:00Z' })
@@ -399,7 +399,7 @@ describe('soldul în UI', () => {
     const client = { from: () => { const q = { select: () => q, order: () => q, range: () => q, abortSignal: async () => ({ data: [randSim], error: null, count: 1 }) }; return q } }
     const r = await incarcaSursaAdmin(client, SURSE_ADMIN.find(x => x.id === 'sms_sold'), { id: 'o', is_owner: true, module_access: ['admin_alerte'] })
     expect(r).toMatchObject({ state: 'ok', rows: [] })
-    expect(textSold(randSim)).toBe('simulator — sold SMSLink necitit (ultimul cunoscut: 120 la 04.11 07:10)')
+    expect(textSold(randSim)).toBe('simulator — sold SMSLink necitit (ultimul cunoscut: 120 SMS la 04.11 07:10)')
   })
   it('sursa citește vederea v_sms_sold (fără rpc), cu proiecția explicită; 42501 din BD → „Acces insuficient”', async () => {
     const cereri = []

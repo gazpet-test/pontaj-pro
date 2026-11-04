@@ -240,7 +240,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
     {poateScrie ? <>
       <p>{grupare.grupuri.length} plicuri propuse. Maximum 200 de convocări într-un plic.</p>
       {uatDeExpediat.length > 0 && <div style={{ ...S.card, marginBottom: 10 }}>
-        <b>Termen de expediere</b> (plan pct. 4.2: recomandata pleacă cu cel puțin {TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1 de sesiune)
+        <b>Termen de expediere</b> (plan pct. 4.2: scrisoarea recomandată pleacă cu cel puțin {TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1 de sesiune)
         {uatDeExpediat.map(u => <div key={u.id} style={{ color: termenExpediere(u, azi).depasit ? G.red : undefined }}>
           {u.nume}: {textTermenExpediere(u)}{textTintaExpediere(u) ? `; ${textTintaExpediere(u)}` : ''}{termenExpediere(u, azi).depasit ? ' — termenul a trecut: expedierea de azi nu mai respectă cele ' + TERMEN_CONVOCARE_ZILE + ' zile libere'
             : recomandareExpediere(u, azi) ? ' — ținta recomandată a trecut (încă în limita fermă)' : ''}

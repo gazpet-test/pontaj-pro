@@ -1,6 +1,6 @@
 // Redări teren — paletă, stiluri și helper-e comune celor trei ecrane (Registru, Fișa parcelei, Import).
 // Contract: docs/redari/CONTRACT_SCHEMA.md §9. Fără date reale aici.
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { STARI } from '../stare.js'
 
@@ -77,11 +77,17 @@ export function motivBlocareConvocator(proiect, uat, rand) {
   if (!String(proiect?.imputernicire_nr || '').trim() || !proiect?.imputernicire_data) lipsa.push('proiect fără nr./dată împuternicire Transgaz')
   if (!uat) lipsa.push('UAT necunoscut')
   else if (![1, 2, 3].some(i => uat[`sesiune_zi${i}`] && String(uat[`program_zi${i}`] || '').trim())) lipsa.push('UAT fără zi de sesiune cu program')
-  if (!String(proiect?.contact_nume || '').trim() && !String(proiect?.contact_telefon || '').trim() && !String(proiect?.contact_email || '').trim()) lipsa.push('proiect fără persoană de contact')
+  // D3: șablonul tipărește numele, telefonul și e-mailul de contact + telefonul TGZ → fiecare e obligatoriu (Setări proiect)
+  const faraContact = [['contact_nume', 'persoană'], ['contact_telefon', 'telefon'], ['contact_email', 'e-mail']].filter(([k]) => !String(proiect?.[k] || '').trim()).map(([, e]) => e)
+  if (faraContact.length) lipsa.push(`proiect fără contact Gazpet: ${faraContact.join(', ')} (Setări proiect → Contact pe convocări)`)
   if (!String(proiect?.text_gdpr || '').trim()) lipsa.push('proiect fără text GDPR')
   if (!String(proiect?.reprezentant_tgz_nume || '').trim()) lipsa.push('proiect fără reprezentant TGZ')
+  if (!String(proiect?.reprezentant_tgz_telefon || '').trim()) lipsa.push('proiect fără telefonul reprezentantului TGZ (Setări proiect → Reprezentanți)')
   return lipsa.length ? lipsa.join('; ') : null
 }
+// r2 (Jakarinos #991 P1-2): numele explicit — gărzile de mai sus țin de PRODUCEREA unui document (nou sau regenerat). Descărcarea
+// unui fișier deja arhivat NU trece prin ele (convocatorNeexpediat.js: poateDescarcaExistent / poateDeschideConvocator).
+export const motivBlocareGenerareNoua = motivBlocareConvocator
 
 export const G = { bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   blue:'#58A6FF', green:'#3FB950', red:'#F85149', yellow:'#D29922', purple:'#BC8CFF', orange:'#F0883E', pink:'#F778BA',
@@ -160,10 +166,41 @@ export function useToast() {
 }
 
 // ─── Modal simplu ───────────────────────────────────────────────────────────
-export function Modal({ titlu, onClose, children, latime = 520 }) {
+// Audit D9 (04.11): un click pe fundal nu mai pierde un formular completat. Orice modificare într-un câmp din modal (change capturat pe container)
+// îl marchează „atins”; după aceea fundalul cere confirmare. Modalele fără câmpuri atinse se închid ca înainte. ✕ închide direct (acțiune explicită).
+// Click-ul contează doar dacă și apăsarea a început pe fundal (o selecție de text începută în formular și eliberată afară nu închide).
+// Jakarinos #988 P2: după o salvare cu modalul deschis, „atins” nu trebuie să rămână adevărat. Două căi, ambele opționale:
+//   `modificat` (boolean, controlat de părinte) — când e dat, decide el (starea reală de modificare); altfel se folosește „atins”;
+//   `cheieSalvare` — orice schimbare a valorii (ex. versiunea / momentul ultimei salvări) resetează „atins”.
+export const MESAJ_INCHIDE_MODAL = 'Ai modificări nesalvate în fereastră. O închizi fără să salvezi?'
+export function inchidePeFundal({ atins, confirma, onClose }) {
+  if (atins && !confirma(MESAJ_INCHIDE_MODAL)) return false
+  onClose?.(); return true
+}
+// Logica de închidere, fără React (testabilă fără DOM). `ev` = { target, currentTarget }.
+export function controlModal() {
+  let atins = false, apasat = false, cheie
+  return {
+    get atins() { return atins },
+    sincronizeazaCheie(k) { if (k !== cheie) { cheie = k; atins = false } },
+    laSchimbare() { atins = true },
+    laApasare(ev) { apasat = ev.target === ev.currentTarget },
+    laClick(ev, { modificat, confirma, onClose }) {
+      const dinFundal = apasat && ev.target === ev.currentTarget
+      apasat = false
+      if (!dinFundal) return false
+      return inchidePeFundal({ atins: modificat === undefined ? atins : !!modificat, confirma, onClose })
+    },
+  }
+}
+export function Modal({ titlu, onClose, children, latime = 520, modificat, cheieSalvare }) {
+  const ctl = useRef(null)
+  if (!ctl.current) { ctl.current = controlModal(); ctl.current.sincronizeazaCheie(cheieSalvare) }
+  ctl.current.sincronizeazaCheie(cheieSalvare)
   return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:9000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
-      <div onClick={e => e.stopPropagation()} style={{ ...S.card, width:'100%', maxWidth:latime, maxHeight:'92vh', overflow:'auto', padding:18 }}>
+    <div data-modal-fundal="" onMouseDown={e => ctl.current.laApasare(e)} onClick={e => ctl.current.laClick(e, { modificat, confirma: m => window.confirm(m), onClose })}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:9000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div onClick={e => e.stopPropagation()} onChangeCapture={() => ctl.current.laSchimbare()} style={{ ...S.card, width:'100%', maxWidth:latime, maxHeight:'92vh', overflow:'auto', padding:18 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
           <div style={{ fontSize:15, fontWeight:700 }}>{titlu}</div>
           <button onClick={onClose} style={{ ...S.btnX, border:'none', fontSize:16 }} title="Închide">✕</button>

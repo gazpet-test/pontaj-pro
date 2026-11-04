@@ -8,9 +8,13 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
-import { genereazaConvocator, verificaDateConvocator, salveazaConvocator, borderouCsv, descarcaBlob } from './redari/docx.js'
+import { genereazaConvocator, verificaDateConvocator, salveazaConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
+// D4: convocatoarele generate dar neexpediate (citire separată din red_convocari, fără migrare)
+import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
+  poateDeschideConvocator, dataDocumentConvocare, useConvocariNeexpediate, aparuteDupaVerificare, rezervaNumarConvocare,
+  AVERTISMENT_CONCURENTA } from './redari/convocatorNeexpediat.js'
 import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune, etichetaRetur,
-  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator, citesteIn } from './redari/ui/comune.jsx'
+  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareGenerareNoua, citesteIn } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
 import ImportPostal from './redari/ui/ImportPostal.jsx'
@@ -50,7 +54,7 @@ export default function Redari() {
   const [profile, setProfile] = useState(null)
   const [nivel, setNivel] = useState(null)         // 'admin' | 'editor' | 'viewer' | null
   const [gataProfil, setGataProfil] = useState(false)
-  const [tab, setTab] = useState('registru')        // 'registru' | 'fisa' | 'import' | 'uat' | 'setari'
+  const [tab, setTab] = useState('registru')        // codurile din TABURI: 'dashboard' | 'sesiune' | 'tronsoane' | 'registru' | 'fisa' | 'import' | 'posta' | 'corespondenta' | 'uat' | 'setari'
   const [proiecte, setProiecte] = useState([])
   const [proiectId, setProiectId] = useState('')
   const [uats, setUats] = useState([])
@@ -170,7 +174,7 @@ export default function Redari() {
           {tab === 'dashboard' && <DashboardEcran proiect={proiect} />}
           {tab === 'sesiune' && <SesiuneEcran proiect={proiect} nivel={nivel} show={show} />}
           {tab === 'tronsoane' && <TronsoaneEcran proiect={proiect} nivel={nivel} show={show} />} 
-          {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
+          {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} onPosta={() => setTab('posta')} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
           {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
@@ -186,7 +190,7 @@ export default function Redari() {
 // ════════════════════════════════════════════════════════════════════════════
 // REGISTRU — tabel din red_v_stare_parcela (o linie per parcelă × deținător)
 // ════════════════════════════════════════════════════════════════════════════
-function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
+function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
   const [randuri, setRanduri] = useState([])
   const [total, setTotal] = useState(0)
@@ -271,6 +275,21 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
     finally { if (g === generatie.current && !asteaptaSms) setLoading(false) }
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
   useEffect(() => { incarca() }, [incarca])
+  // D4: convocatoarele generate, neexpediate, ale deținătorilor din pagina afișată (citire paginată pe loturi, L23).
+  // Eroarea se afișează — nu e tratată ca „niciun convocator neexpediat”.
+  const [neexp, setNeexp] = useState({ harta: null, eroare: null })
+  const generatieNeexp = useRef(0)
+  const incarcaNeexp = useCallback(async () => {
+    const g = ++generatieNeexp.current
+    const ids = [...new Set(randuri.map(r => r.detinator_id).filter(Boolean))]
+    if (!ids.length) { setNeexp({ harta: new Map(), eroare: null }); return }
+    setNeexp({ harta: null, eroare: null })
+    try {
+      const rows = await citesteNeexpediatePeDetinatori(supabase, ids)   // r2 P2-3: keyset complet, refuză răspunsul fără listă
+      if (g === generatieNeexp.current) setNeexp({ harta: grupeazaNeexpediate(rows), eroare: null })
+    } catch (e) { if (g === generatieNeexp.current) setNeexp({ harta: null, eroare: msgEroare(e) }) }
+  }, [randuri])
+  useEffect(() => { incarcaNeexp(); return () => { generatieNeexp.current++ } }, [incarcaNeexp])
   useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata, fSms])
   // P1-4: selecția e a rândurilor VĂZUTE — se golește la orice schimbare de filtre / pagină
   useEffect(() => { setSelectie(new Set()); setRanduri([]); generatieExport.current++ }, [fUat, fTronson, fStare, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
@@ -369,6 +388,11 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
         <button onClick={listaSms} disabled={lucru || loading || !smsGata} style={S.btnS} title="CSV intern: ID parcelă, UAT, deținător, SMS trimise / livrate / eșuate, ultima stare, date (fără telefon)">📱 Lista SMS</button>
         <button onClick={() => { incarca(); incarcaSms() }} style={S.btnS} title="Reîncarcă">↻</button>
       </div>
+      {neexp.eroare && (
+        <div role="alert" style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, padding:'8px 12px', marginBottom:10 }}>
+          ⚠ Convocatoarele generate și neexpediate nu s-au putut citi ({neexp.eroare}). Coloana „Convocare” nu le arată — nu înseamnă că nu există. <button style={S.btnX} onClick={incarcaNeexp}>Reîncearcă</button>
+        </div>
+      )}
       {sms.eroare && (
         <div role="alert" style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, padding:'8px 12px', marginBottom:10 }}>
           ⚠ Starea SMS nu s-a putut citi ({sms.eroare}). Coloana „SMS” nu e completă — nu înseamnă „niciun SMS”. <button style={S.btnX} onClick={incarcaSms}>Reîncearcă</button>
@@ -386,7 +410,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
             </tr>
           </thead>
           <tbody>
-            <RandStareRegistru loading={loading} eroare={eroareRegistru} fSms={fSms} nrRanduri={randuri.length} colSpan={13}
+            <RandStareRegistru loading={loading} eroare={eroareRegistru} fSms={fSms} nrRanduri={randuri.length} colSpan={poateScrie ? 12 : 10}
               onReincearca={() => { if (sms.eroare) incarcaSms(); else incarca() }} />
             {!loading && randuri.map(r => (
               <tr key={`${r.parcela_id}-${r.detinator_id}`} style={{ cursor:'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#1C2128'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -397,15 +421,22 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}>{r.nume}{r.decedat ? <span title="decedat" style={{ color:G.muted }}> †</span> : null}{r.cota ? <span style={{ color:G.dim, fontSize:11.5 }}> · {r.cota}</span> : null}</td>
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}>{r.calitate}</td>
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}><TagStare cod={r.stare} /></td>
-                <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}>{fmtDate(r.ultima_convocare_data)}</td>
+                <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}>
+                  {fmtDate(r.ultima_convocare_data)}
+                  {neexp.harta?.get(r.detinator_id)?.length > 0 && <div style={{ color:G.yellow, fontSize:11.5, whiteSpace:'nowrap' }} title="Generat, încă neexpediat. Un convocator nou ar consuma alt număr.">📄 {etichetaNeexpediat(neexp.harta.get(r.detinator_id))}</div>}
+                </td>
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)} title={fmtDate(r.ultimul_raspuns_data)}>{r.ultimul_raspuns_optiune ? etichetaOptiune(r.ultimul_raspuns_optiune) : '-'}</td>
                 <td style={S.td} onClick={() => onDeschideFisa(r.parcela_id)}>{r.pv_nr ? `${r.pv_nr} · ${r.pv_stare}` : '-'}</td>
                 <td style={{ ...S.td, whiteSpace:'nowrap' }} onClick={() => onDeschideFisa(r.parcela_id)}><CelulaSms sms={sms} detinatorId={r.detinator_id} /></td>
                 {poateScrie && (
                   <td style={{ ...S.td, whiteSpace:'nowrap' }}>
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                      {(() => { const motiv = motivBlocareConvocator(proiect, uats.find(u => u.id === r.uat_id), r); return (
-                        <button style={{ ...S.btnX, opacity: motiv ? 0.45 : 1, cursor: motiv ? 'not-allowed' : 'pointer' }} disabled={!!motiv} title={motiv ? `Nu se poate genera: ${motiv}` : 'Generează convocator (DOCX)'} onClick={() => setActiune({ tip:'convocator', rand:r })}>📄 Convocator</button>
+                      {(() => { const motiv = motivBlocareGenerareNoua(proiect, uats.find(u => u.id === r.uat_id), r); const exista = neexp.harta?.get(r.detinator_id) || []
+                        // r2 P1-2: cu un fișier arhivat neexpediat, modalul rămâne accesibil pentru „Descarcă din nou” chiar dacă un document nou e blocat
+                        const deschis = poateDeschideConvocator({ motiv, existente: neexp.harta ? exista : null }); return (
+                        <button style={{ ...S.btnX, opacity: deschis ? 1 : 0.45, cursor: deschis ? 'pointer' : 'not-allowed', ...(exista.length ? { borderColor:G.yellow, color:G.yellow } : {}) }} disabled={!deschis}
+                          title={!deschis ? `Nu se poate genera: ${motiv}` : exista.length ? `${etichetaNeexpediat(exista)} — deschide pentru descărcare / regenerare cu același număr${motiv ? ` (document nou blocat: ${motiv})` : ''}` : 'Generează convocator (DOCX)'}
+                          onClick={() => setActiune({ tip:'convocator', rand:r })}>📄 Convocator{exista.length ? ' ⚠' : ''}</button>
                       ) })()}
                       <button style={S.btnX} title="Marchează expediat" onClick={() => setActiune({ tip:'expediat', rand:r })}>📤 Expediat</button>
                       <button style={S.btnX} title="Confirmare de primire (AR)" onClick={() => setActiune({ tip:'ar', rand:r })}>✅ AR</button>
@@ -428,9 +459,9 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       </div>
 
       {actiune?.tip === 'convocator' && <ModalConvocator rand={actiune.rand} proiect={proiect} uats={uats} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
-      {actiune?.tip === 'expediat' && <ModalExpediat rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
-      {actiune?.tip === 'ar' && <ModalArRetur mod="ar" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
-      {actiune?.tip === 'retur' && <ModalArRetur mod="retur" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
+      {actiune?.tip === 'expediat' && <ModalExpediat rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} onPosta={onPosta} />}
+      {actiune?.tip === 'ar' && <ModalArRetur mod="ar" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} onPosta={onPosta} />}
+      {actiune?.tip === 'retur' && <ModalArRetur mod="retur" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} onPosta={onPosta} />}
       {actiune?.tip === 'telefon' && <ModalRaspunsTelefon rand={actiune.rand} profile={profile} uats={uats} proiect={proiect} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
       {borderouRez && (
         <Modal titlu="Borderou Poștă" onClose={() => setBorderouRez(null)} latime={640}>
@@ -463,65 +494,173 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   const [pas, setPas] = useState('')
   const [lipsuri, setLipsuri] = useState([])   // din verificaDateConvocator — afișate în modal, fără număr consumat
   const uat = uats.find(u => u.id === rand.uat_id)
-  const motiv = motivBlocareConvocator(proiect, uat, rand)   // P2-11: precondiții (sesiune cu program, contact, GDPR, reprezentant TGZ, contract, împuternicire, calitate, adresă)
+  const motiv = motivBlocareGenerareNoua(proiect, uat, rand)   // P2-11: precondiții (sesiune cu program, contact, GDPR, reprezentant TGZ, contract, împuternicire, calitate, adresă)
+  // D4: convocatoarele generate și neexpediate ale deținătorului, citite PROASPĂT la deschidere (nu din Registru, care poate fi vechi).
+  // null = se citește; eroare = generarea cu număr nou rămâne blocată (fail-closed) până la o citire reușită.
+  // r2 P2-5 (L24): o singură citire valabilă (generație), legată de deținătorul ei (cheie), invalidată la unmount
+  // r4 P2-03: cititor nou la fiecare setup al efectului (StrictMode / alt deținător), invalidat la cleanup-ul lui
+  const [confirmNou, setConfirmNou] = useState(false)
+  const citesteProaspat = useCallback(async (detId) => grupeazaNeexpediate(await citesteNeexpediatePeDetinatori(supabase, [detId])).get(detId) || [], [])
+  const { existente, eroare: eroareCitire, reciteste: citesteExistente } = useConvocariNeexpediate(rand.detinator_id, citesteProaspat, { laCitire: () => setConfirmNou(false) })
+  const eroareExistente = eroareCitire ? msgEroare(eroareCitire) : null
+  // r3 P2-2 + r4 P2-02: montat + tokenul acțiunii — după fiecare await, nicio scriere NOUĂ, niciun show / onGata dacă acțiunea nu mai e curentă
+  const montat = useRef(true)
+  const tokenActiune = useRef(0)
+  useEffect(() => { montat.current = true; return () => { montat.current = false; tokenActiune.current++ } }, [])
+  const activ = (tok) => montat.current && tok === tokenActiune.current
+  const reconciliaza = (tok) => { if (activ(tok)) citesteExistente() }
+  // r4 P2-02: cât rulează o acțiune, ✕ și fundalul nu închid (scrierea începută trebuie terminată și reconciliată)
+  const inchide = () => { if (lucru) { show('Așteaptă terminarea operației în curs — fereastra se poate închide după ce scrierea începută e finalizată și verificată.', 'error'); return } onClose() }
+  const nouPermis = poateGeneraNou({ existente, eroare: eroareExistente, confirmat: confirmNou })
+
+  // Datele comune (generare nouă și regenerare cu același număr): deținător, parcelă, contact (PII), token, verificare, șablon.
+  // Întoarce null când lipsesc date (afișate în modal, FĂRĂ număr consumat).
+  const pregatesteIntrare = async (tok) => {
+    setPas('Citesc datele…')
+    const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token] = await Promise.all([
+      supabase.from('red_detinatori').select(COL_DETINATOR).eq('id', rand.detinator_id).single(),
+      supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta').eq('id', rand.parcela_id).single(),
+      supabase.from('red_detinatori_contact').select('*').eq('detinator_id', rand.detinator_id).maybeSingle(),   // PII — doar admin/editor ajung aici
+      citesteTokenRaspuns(rand.detinator_id),
+    ])
+    if (e1 || e3 || e4) throw (e1 || e3 || e4)
+    if (!activ(tok)) return null
+    setPas('Verific datele…')
+    // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
+    const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect, detinator: det, contactDetinator: contactDetinator || null })
+    if (lipsa.length) { setLipsuri(lipsa); show('Convocatorul nu se poate genera — vezi lipsurile din fereastră.', 'error'); return null }
+    setPas('Descarc șablonul…')
+    const rs = await fetch(SABLON_CONVOCATOR)
+    if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
+    const templateArrayBuffer = await rs.arrayBuffer()
+    if (!activ(tok)) return null
+    return { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect, token, templateArrayBuffer }
+  }
 
   // Ordinea (P2-8): date + contactul deținătorului → verificaDateConvocator (lipsuri → afișate, FĂRĂ număr consumat)
   // → fn_red_numar_document('C') → genereazaConvocator → salveazaConvocator (rând → upload → update) → descărcare.
   const genereaza = async () => {
     if (motiv) { show(`Nu se poate genera: ${motiv}.`, 'error'); return }
+    if (!nouPermis) { show(existente?.length ? 'Există deja un convocator neexpediat: bifează confirmarea pentru un număr nou.' : 'Convocatoarele existente nu sunt încă verificate.', 'error'); return }
     setLucru(true); setLipsuri([])
+    const tok = ++tokenActiune.current
+    let scris = false   // r2 P1-1: din clipa rezervării numărului, orice ieșire (succes parțial, eroare) cere reconcilierea existentelor
+    const vazute = existente   // lista văzută (și, dacă e nevidă, confirmată cu bifa) de operator
     try {
-      setPas('Citesc datele…')
-      const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token] = await Promise.all([
-        supabase.from('red_detinatori').select(COL_DETINATOR).eq('id', rand.detinator_id).single(),
-        supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta').eq('id', rand.parcela_id).single(),
-        supabase.from('red_detinatori_contact').select('*').eq('detinator_id', rand.detinator_id).maybeSingle(),   // PII — doar admin/editor ajung aici
-        citesteTokenRaspuns(rand.detinator_id),
-      ])
-      if (e1 || e3 || e4) throw (e1 || e3 || e4)
-      setPas('Verific datele…')
-      // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
-      const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect, detinator: det, contactDetinator: contactDetinator || null })
-      if (lipsa.length) { setLipsuri(lipsa); show('Convocatorul nu se poate genera — vezi lipsurile din fereastră.', 'error'); return }
-      setPas('Descarc șablonul…')
-      const rs = await fetch(SABLON_CONVOCATOR)
-      if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
-      const templateArrayBuffer = await rs.arrayBuffer()
-      const intrare = { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect, token, templateArrayBuffer }
+      const intrare = await pregatesteIntrare(tok)
+      if (!intrare) return
+      // r4 P2-01 (b): recitire proaspătă chiar înainte de rezervare — dacă între timp a apărut un convocator neexpediat
+      // (alt utilizator / altă fereastră), oprim și cerem din nou bifa. Micșorează fereastra; NU e garanție atomică.
+      setPas('Verific din nou convocatoarele existente…')
+      const proaspete = await citesteProaspat(rand.detinator_id)
+      if (!activ(tok)) return
+      const noi = aparuteDupaVerificare(vazute, proaspete)
+      if (noi.length) {
+        citesteExistente()   // afișează lista nouă și resetează bifa
+        show(`Între timp a fost generat ${noi.map(c => c.nr_document).join(', ')} pentru acest deținător — verifică lista și confirmă din nou dacă vrei totuși un număr nou.`, 'error')
+        return
+      }
       setPas('Rezerv numărul de document…')
-      const { data: nrDocument, error: eNr } = await supabase.rpc('fn_red_numar_document', { p_tip:'C', p_uat3: rand.uat3, p_tronson: rand.tronson ?? null })
-      if (eNr) throw eNr
-      if (!nrDocument) throw new Error('Numărul de document nu a fost generat.')
+      scris = true
+      // r4 P2-01 (c): punctul de integrare pentru RPC-ul atomic din #989 (azi fn_red_numar_document)
+      const nrDocument = await rezervaNumarConvocare(supabase, { uat3: rand.uat3, tronson: rand.tronson, detinatorId: rand.detinator_id, confirmateIds: (vazute || []).map(c => c.id) })
+      // de aici scrierea e începută: continuă până la capăt (altfel numărul rămâne fără rând) și se reconciliază
       setPas(`Generez ${nrDocument}…`)
       const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument })
       setPas('Salvez în arhivă…')
       const { path } = await salveazaConvocator(supabase, { blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument, detinatorId: rand.detinator_id, canal })
+      if (!activ(tok)) return   // salvarea s-a făcut; fereastra nu mai e a acestei acțiuni → fără descărcare / toast / onGata
       descarcaBlob(blob, `${nrDocument}_${rand.id_parcela}.docx`)
       show(`Convocator ${nrDocument} generat și salvat (${path}).`, 'success')
       onGata()
-    } catch (e) { show('Convocator: ' + msgEroare(e), 'error') }
-    finally { setLucru(false); setPas('') }
+    } catch (e) { if (activ(tok)) show('Convocator: ' + msgEroare(e), 'error') }
+    finally { if (scris) reconciliaza(tok); if (montat.current) { setLucru(false); setPas('') } }   // citesteExistente pune sincron „se citește” → număr nou blocat până la reconciliere
+  }
+
+  // D4: același număr, fără număr nou consumat — fișierul existent din arhivă (imutabil) se descarcă din nou
+  const descarcaDinNou = async (c) => {
+    setLucru(true)
+    try {
+      const { data: blob, error } = await supabase.storage.from(BUCKET_REDARI).download(c.fisier_convocator_path)
+      if (error) throw error
+      if (!montat.current) return
+      descarcaBlob(blob, `${c.nr_document}_${rand.id_parcela}.docx`)
+      show(`Convocator ${c.nr_document} descărcat din arhivă (niciun număr nou).`, 'success')
+    } catch (e) { if (montat.current) show('Descărcare: ' + msgEroare(e), 'error') }
+    finally { if (montat.current) setLucru(false) }
+  }
+
+  // D4: regenerează cu ACELAȘI număr (date actualizate) → versiune nouă {nr}-v{n}.docx, aceeași convocare (reincarcaConvocator)
+  const regenereazaAcelasi = async (c) => {
+    if (motiv) { show(`Nu se poate genera: ${motiv}.`, 'error'); return }
+    setLucru(true); setLipsuri([])
+    const tok = ++tokenActiune.current
+    let scris = false
+    try {
+      const intrare = await pregatesteIntrare(tok)
+      if (!intrare) return
+      const dataDocument = dataDocumentConvocare(c)   // r3 P2-1: data civilă București a convocării (nu prefixul UTC)
+      setPas(`Regenerez ${c.nr_document}…`)
+      scris = true
+      // r2 P2-4: aceeași dată ca documentul original (paritate cu Fișa parcelei și generarea în masă)
+      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument: c.nr_document, dataDocument })
+      setPas('Salvez versiunea nouă…')
+      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument: c.nr_document })
+      if (!activ(tok)) return
+      descarcaBlob(blob, `${c.nr_document}_${rand.id_parcela}.docx`)
+      show(`Convocator ${c.nr_document} regenerat cu același număr (${path}).`, 'success')
+      onGata()
+    } catch (e) { if (activ(tok)) show('Convocator: ' + msgEroare(e), 'error') }
+    finally { if (scris) reconciliaza(tok); if (montat.current) { setLucru(false); setPas('') } }
   }
 
   return (
-    <Modal titlu={`Generează convocator — ${rand.id_parcela}`} onClose={onClose}>
+    <Modal titlu={`Generează convocator — ${rand.id_parcela}`} onClose={inchide}>
       <div style={{ fontSize:13, color:G.muted, marginBottom:10 }}>Deținător: <b style={{ color:G.text }}>{rand.nume}</b> · {rand.calitate} · UAT {uat?.nume || rand.uat3}</div>
-      {motiv && <div style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, marginBottom:10 }}>⛔ Nu se poate genera: {motiv}. Completează datele UAT-ului / proiectului și revino.</div>}
+      {motiv && <div style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, marginBottom:10 }}>⛔ Nu se poate genera un document (nou sau regenerat): {motiv}. Completează datele UAT-ului / proiectului și revino.{existente?.some(poateDescarcaExistent) ? ' Fișierele deja arhivate se pot descărca mai jos.' : ''}</div>}
       {lipsuri.length > 0 && (
         <div style={{ ...S.card, borderColor:G.red, fontSize:12.5, marginBottom:10 }}>
           <div style={{ color:G.red, fontWeight:600, marginBottom:4 }}>⛔ Lipsesc date (niciun număr consumat):</div>
           <ul style={{ margin:0, paddingLeft:18, color:G.text }}>{lipsuri.map((l, i) => <li key={i}>{l}</li>)}</ul>
         </div>
       )}
+      {existente === null && !eroareExistente && <div style={{ fontSize:12.5, color:G.muted, marginBottom:10 }}>Verific convocatoarele deja generate…</div>}
+      {eroareExistente && (
+        <div role="alert" style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, marginBottom:10 }}>
+          ⚠ Nu am putut verifica dacă există deja un convocator neexpediat ({eroareExistente}). Generarea cu număr nou e blocată până la o verificare reușită. <button style={S.btnX} onClick={citesteExistente} disabled={lucru}>Reîncearcă</button>
+        </div>
+      )}
+      {existente?.length > 0 && (
+        <div style={{ ...S.card, borderColor:G.yellow, fontSize:12.5, marginBottom:10 }}>
+          <div style={{ color:G.yellow, fontWeight:600, marginBottom:6 }}>⚠ Deținătorul are deja {existente.length === 1 ? 'un convocator generat, neexpediat' : `${existente.length} convocatoare generate, neexpediate`}:</div>
+          {existente.map(c => (
+            <div key={c.id} style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:6 }}>
+              <span style={S.mono}>{c.nr_document}</span>
+              <span style={{ color:G.muted }}>{c.canal} · generat {fmtDate(c.created_at)}{c.fisier_convocator_path ? '' : ' · fișier neîncărcat'}</span>
+              <div style={{ flex:1 }} />
+              {poateDescarcaExistent(c) && <button style={S.btnX} disabled={lucru} onClick={() => descarcaDinNou(c)} title="Descarcă fișierul din arhivă — fără număr nou">⬇ Descarcă din nou</button>}
+              <button style={S.btnX} disabled={lucru || !!motiv} onClick={() => regenereazaAcelasi(c)} title="Regenerează cu datele actuale și ACELAȘI număr (versiune nouă a fișierului) — fără număr nou">🔁 Regenerează același număr</button>
+            </div>
+          ))}
+          <label style={{ display:'flex', gap:6, alignItems:'flex-start', marginTop:6, color:G.text, cursor:'pointer' }}>
+            <input type="checkbox" checked={confirmNou} onChange={e => setConfirmNou(e.target.checked)} disabled={lucru} style={{ marginTop:2 }} />
+            <span>{textConfirmareNumarNou(existente)}</span>
+          </label>
+          <div style={{ color:G.muted, fontSize:11.5, marginTop:4 }}>ⓘ {AVERTISMENT_CONCURENTA}</div>
+        </div>
+      )}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <Camp eticheta="Canal">
+        <Camp eticheta="Canal (convocator nou)">
           <select value={canal} onChange={e => setCanal(e.target.value)} style={{ ...S.select, width:'100%' }}>{CANALE_CONVOCARE.filter(c => c !== 'telefon').map(c => <option key={c} value={c}>{c}</option>)}</select>
         </Camp>
       </div>
       <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14, alignItems:'center' }}>
         {pas && <span style={{ fontSize:12, color:G.muted }}>{pas}</span>}
         <button style={S.btnS} onClick={onClose} disabled={lucru}>Renunță</button>
-        <button style={{ ...S.btnP, opacity: motiv ? 0.5 : 1 }} onClick={genereaza} disabled={lucru || !!motiv} title={motiv || ''}>{lucru ? 'Lucrez…' : 'Generează și descarcă'}</button>
+        <button style={{ ...S.btnP, opacity: motiv || !nouPermis ? 0.5 : 1 }} onClick={genereaza} disabled={lucru || !!motiv || !nouPermis}
+          title={motiv || (eroareExistente ? 'Convocatoarele existente nu s-au putut verifica' : existente === null ? 'Se verifică convocatoarele existente…' : existente.length && !confirmNou ? 'Bifează confirmarea: se consumă un număr nou' : '')}>
+          {lucru ? 'Lucrez…' : existente?.length ? 'Generează unul NOU (număr nou)' : 'Generează și descarcă'}
+        </button>
       </div>
     </Modal>
   )
@@ -538,7 +677,18 @@ function useConvocariDetinator(detinatorId, show) {
 }
 const etichetaConvocare = (c) => `${c.nr_document} · ${c.canal} · ${c.data_expediere ? 'expediat ' + fmtDate(c.data_expediere) : 'neexpediat'}${c.data_confirmare_primire ? ' · AR ' + fmtDate(c.data_confirmare_primire) : ''}${c.retur ? ' · retur' : ''}`
 
-function ModalExpediat({ rand, show, onClose, onGata }) {
+// audit D10: convocările prin poștă se înregistrează pe plic — modalul are ieșire directă spre Poștă, nu doar textul.
+function IesirePosta({ onPosta, onClose }) {
+  return <>
+    <p>Convocarea pleacă prin poștă: expedierea, AR-ul și returul se înregistrează pe plic, în Redări → Poștă → Plicuri.</p>
+    <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14 }}>
+      <button style={S.btnS} onClick={onClose}>Închide</button>
+      {onPosta && <button style={S.btnP} onClick={() => { onClose(); onPosta() }}>✉️ Deschide Poșta</button>}
+    </div>
+  </>
+}
+
+function ModalExpediat({ rand, show, onClose, onGata, onPosta }) {
   const lista = useConvocariDetinator(rand.detinator_id, show)
   const [convId, setConvId] = useState('')
   const [data, setData] = useState(azi())
@@ -549,7 +699,7 @@ function ModalExpediat({ rand, show, onClose, onGata }) {
   if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
     <Modal titlu="Înregistrare poștală" onClose={onClose}>
       <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
-      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+      <IesirePosta onPosta={onPosta} onClose={onClose} />
     </Modal>
   )
   const salveaza = async () => {
@@ -580,7 +730,7 @@ function ModalExpediat({ rand, show, onClose, onGata }) {
   )
 }
 
-function ModalArRetur({ mod, rand, show, onClose, onGata }) {
+function ModalArRetur({ mod, rand, show, onClose, onGata, onPosta }) {
   const lista = useConvocariDetinator(rand.detinator_id, show)
   const [convId, setConvId] = useState('')
   const [data, setData] = useState(azi())
@@ -593,7 +743,7 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
   if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
     <Modal titlu="Înregistrare poștală" onClose={onClose}>
       <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
-      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+      <IesirePosta onPosta={onPosta} onClose={onClose} />
     </Modal>
   )
   const salveaza = async () => {

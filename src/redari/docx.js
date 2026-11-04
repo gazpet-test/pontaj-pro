@@ -503,6 +503,17 @@ const mesajAdresaNepermisa = g => (g.categorie === 'proprie'
     ? `Convocatorul poștal nu poate tipări adrese web externe neaprobate („${g.adresa}”, în ${g.parte}); permise doar: dataprotection.ro, www.dataprotection.ro (cu http / https). Scoateți adresa din textul de pe proiect (de ex. text_gdpr).`
     : `Convocatorul poștal nu poate fi verificat: ${g.adresa} în ${g.parte}. Folosiți șablonul convocatorului fără conținut importat (altChunk).`)
 
+// Câmpurile de contact tipărite pe convocator: cheia din `contact` (persoana Gazpet) → coloana din red_proiecte (rezerva)
+export const CAMPURI_CONTACT_CONVOCATOR = [['nume', 'contact_nume'], ['telefon', 'contact_telefon'], ['email', 'contact_email']]
+// unde se completează (operatorul vede mesajul în modal / în titlul butonului)
+export const LOC_SETARI_PROIECT = 'se completează în ⚙️ Setări proiect'
+export const ETICHETA_CAMP_PROIECT = {
+  contact_nume: 'persoana de contact Gazpet (Contact pe convocări → Persoană de contact)',
+  contact_telefon: 'telefonul de contact Gazpet (Contact pe convocări → Telefon de contact)',
+  contact_email: 'e-mailul de contact Gazpet (Contact pe convocări → E-mail de contact)',
+  reprezentant_tgz_telefon: 'telefonul reprezentantului Transgaz (Reprezentanți → Telefon reprezentant Transgaz)',
+}
+
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
 /**
@@ -526,9 +537,15 @@ export function verificaDateConvocator({ nrDocument, token, uat, contact, proiec
   }
   const ziCuProgram = [1, 2, 3].some(i => plin(u[`sesiune_zi${i}`]) && plin(u[`program_zi${i}`]))
   if (!ziCuProgram) lipsuri.push('cel puțin o zi de sesiune cu program pe UAT (sesiune_zi1..3 + program_zi1..3)')
-  if (!(plin(c.nume ?? pr.contact_nume) || plin(c.telefon ?? pr.contact_telefon) || plin(c.email ?? pr.contact_email))) lipsuri.push('persoana de contact (nume, telefon sau e-mail)')
+  // D3 (audit 04.11): șablonul tipărește FIECARE câmp de contact („la telefon {{contact_telefon}} sau…”, „Contact GAZPET INSTAL:
+  // {{contact_nume}}, tel. {{contact_telefon}}, e-mail {{contact_email}}”, „Contact TRANSGAZ …: {{reprezentant_tgz}}, tel.
+  // {{reprezentant_tgz_telefon}}”), deci se cer toate — exact valorile care ajung în document (aceeași regulă ca în `campuri`).
+  for (const [k, cheie] of CAMPURI_CONTACT_CONVOCATOR) {
+    if (!plin(c[k] ?? pr[cheie])) lipsuri.push(`${ETICHETA_CAMP_PROIECT[cheie]} (${LOC_SETARI_PROIECT})`)
+  }
   if (!plin(pr.text_gdpr)) lipsuri.push('textul de informare GDPR (proiect.text_gdpr)')
   if (!plin(pr.reprezentant_tgz_nume)) lipsuri.push('reprezentantul Transgaz (proiect.reprezentant_tgz_nume)')
+  if (!plin(pr.reprezentant_tgz_telefon)) lipsuri.push(`${ETICHETA_CAMP_PROIECT.reprezentant_tgz_telefon} (${LOC_SETARI_PROIECT})`)
   return lipsuri
 }
 
