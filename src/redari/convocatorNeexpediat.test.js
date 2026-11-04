@@ -1,7 +1,8 @@
 // D4 (audit 04.11.2026): starea „convocator generat, neexpediat” — Registru + gardă la număr nou în ModalConvocator.
 import { describe, it, expect } from 'vitest'
 import { COL_CONV_NEEXPEDIAT, filtruNeexpediate, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou,
-  citesteNeexpediatePeDetinatori, poateDescarcaExistent, poateDeschideConvocator, cititorCuGeneratie } from './convocatorNeexpediat.js'
+  citesteNeexpediatePeDetinatori, poateDescarcaExistent, poateDeschideConvocator, cititorCuGeneratie, dataDocumentConvocare } from './convocatorNeexpediat.js'
+import { formatDataRo } from './docx.js'
 
 // fake red_convocari: filtrează pe detinator_id (in) și id > cursor (gt), ordonează pe id, plafonează pagina la `plafon`
 // (indiferent de limit — ca un server cu max-rows mai mic). `suprascrie(n)` poate înlocui răspunsul paginii n.
@@ -135,6 +136,25 @@ describe('convocatorNeexpediat', () => {
     amanate[4].res([{ nr_document: 'C-0009' }]); await p5
     expect(aplicate).toHaveLength(n + 1)   // doar starea sincronă „se citește”
     expect(aplicate.at(-1).existente).toBeNull()
+  })
+
+  it('r3 P2-2: invalideaza → porneste → nimic citit, nimic aplicat (reconcilierea după închiderea modalului)', async () => {
+    let citiri = 0
+    const aplicate = []
+    const c = cititorCuGeneratie(async () => { citiri++; return [{ nr_document: 'C-0001' }] }, (x) => aplicate.push(x))
+    c.invalideaza()
+    await c.porneste('d1')
+    expect(citiri).toBe(0)
+    expect(aplicate).toEqual([])
+  })
+
+  it('r3 P2-1: data documentului la regenerare = data civilă București (limita zilei), nu prefixul UTC; fără dată → eroare', async () => {
+    expect(dataDocumentConvocare({ created_at: '2026-11-03T22:30:00Z' })).toBe('2026-11-04')
+    expect(dataDocumentConvocare({ created_at: '2026-11-03T21:59:59+00:00' })).toBe('2026-11-03')
+    expect(dataDocumentConvocare({ created_at: '2026-07-01T21:30:00.123456+00:00' })).toBe('2026-07-02')   // EEST (UTC+3)
+    expect(formatDataRo(dataDocumentConvocare({ created_at: '2026-11-03T22:30:00Z' }))).toBe('04.11.2026')
+    expect(() => dataDocumentConvocare({ nr_document: 'C-0002', created_at: null })).toThrow(/C-0002.*dată de generare validă/)
+    expect(() => dataDocumentConvocare({ created_at: 'nu e dată' })).toThrow(/dată de generare validă/)
   })
 
   it('textul confirmării numește numerele existente și consumul unui număr nou', () => {

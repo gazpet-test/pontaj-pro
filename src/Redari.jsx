@@ -11,7 +11,7 @@ import { uat3 } from './redari/idParcela.js'
 import { genereazaConvocator, verificaDateConvocator, salveazaConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
 // D4: convocatoarele generate dar neexpediate (citire separată din red_convocari, fără migrare)
 import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
-  poateDeschideConvocator, cititorCuGeneratie } from './redari/convocatorNeexpediat.js'
+  poateDeschideConvocator, cititorCuGeneratie, dataDocumentConvocare } from './redari/convocatorNeexpediat.js'
 import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareGenerareNoua, citesteIn } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
@@ -504,7 +504,11 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
     ({ cheie, existente, eroare }) => { setStareExistente({ cheie, existente, eroare: eroare ? msgEroare(eroare) : null }); if (existente === null) setConfirmNou(false) })
   const citesteExistente = useCallback(() => cititor.current.porneste(rand.detinator_id), [rand.detinator_id])
   useEffect(() => { citesteExistente() }, [citesteExistente])
-  useEffect(() => () => cititor.current?.invalideaza(), [])
+  // r3 P2-2: montat + tokenul acțiunii — reconcilierea din finally pornește doar pentru acțiunea curentă, cu modalul încă deschis
+  const montat = useRef(true)
+  const tokenActiune = useRef(0)
+  useEffect(() => { montat.current = true; return () => { montat.current = false; tokenActiune.current++; cititor.current?.invalideaza() } }, [])
+  const reconciliaza = (tok) => { if (montat.current && tok === tokenActiune.current) citesteExistente() }
   const aCurenta = stareExistente.cheie === rand.detinator_id
   const existente = aCurenta ? stareExistente.existente : null
   const eroareExistente = aCurenta ? stareExistente.eroare : null
@@ -538,6 +542,7 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
     if (motiv) { show(`Nu se poate genera: ${motiv}.`, 'error'); return }
     if (!nouPermis) { show(existente?.length ? 'Există deja un convocator neexpediat: bifează confirmarea pentru un număr nou.' : 'Convocatoarele existente nu sunt încă verificate.', 'error'); return }
     setLucru(true); setLipsuri([])
+    const tok = ++tokenActiune.current
     let scris = false   // r2 P1-1: din clipa rezervării numărului, orice ieșire (succes parțial, eroare) cere reconcilierea existentelor
     try {
       const intrare = await pregatesteIntrare()
@@ -555,7 +560,7 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
       show(`Convocator ${nrDocument} generat și salvat (${path}).`, 'success')
       onGata()
     } catch (e) { show('Convocator: ' + msgEroare(e), 'error') }
-    finally { if (scris) citesteExistente(); setLucru(false); setPas('') }   // citesteExistente pune sincron „se citește” → număr nou blocat până la reconciliere
+    finally { if (scris) reconciliaza(tok); setLucru(false); setPas('') }   // citesteExistente pune sincron „se citește” → număr nou blocat până la reconciliere
   }
 
   // D4: același număr, fără număr nou consumat — fișierul existent din arhivă (imutabil) se descarcă din nou
@@ -574,21 +579,23 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   const regenereazaAcelasi = async (c) => {
     if (motiv) { show(`Nu se poate genera: ${motiv}.`, 'error'); return }
     setLucru(true); setLipsuri([])
+    const tok = ++tokenActiune.current
     let scris = false
     try {
       const intrare = await pregatesteIntrare()
       if (!intrare) return
+      const dataDocument = dataDocumentConvocare(c)   // r3 P2-1: data civilă București a convocării (nu prefixul UTC)
       setPas(`Regenerez ${c.nr_document}…`)
       scris = true
       // r2 P2-4: aceeași dată ca documentul original (paritate cu Fișa parcelei și generarea în masă)
-      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument: c.nr_document, dataDocument: c.created_at })
+      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument: c.nr_document, dataDocument })
       setPas('Salvez versiunea nouă…')
       const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument: c.nr_document })
       descarcaBlob(blob, `${c.nr_document}_${rand.id_parcela}.docx`)
       show(`Convocator ${c.nr_document} regenerat cu același număr (${path}).`, 'success')
       onGata()
     } catch (e) { show('Convocator: ' + msgEroare(e), 'error') }
-    finally { if (scris) citesteExistente(); setLucru(false); setPas('') }
+    finally { if (scris) reconciliaza(tok); setLucru(false); setPas('') }
   }
 
   return (

@@ -4,6 +4,8 @@
    Fără migrare: citire separată din red_convocari (keyset complet, pe loturi de id-uri — citesteNeexpediatePeDetinatori, L18/L23).
    Propunere de migrare (NU aplicată): coloanele `conv_neexpediat_nr` / `conv_neexpediat_nr_count` în red_v_stare_parcela. */
 
+import { dataCivilaBucuresti } from './setari.js'
+
 // coloanele necesare (fără PII): numărul, canalul, fișierul (pentru „Descarcă din nou”) și data generării
 export const COL_CONV_NEEXPEDIAT = 'id, detinator_id, canal, nr_document, fisier_convocator_path, created_at'
 
@@ -96,12 +98,15 @@ export const poateDeschideConvocator = ({ motiv, existente }) => !motiv || (Arra
 /**
  * P2-5 (L24): citire cu generație. Fiecare `porneste(cheie)` invalidează cererile anterioare; doar ultima își aplică
  * rezultatul. `aplica({ cheie, existente, eroare })` primește întâi, sincron, starea „se citește” (existente null).
- * `invalideaza()` (la unmount) face ca niciun răspuns întârziat să nu mai fie aplicat.
+ * `invalideaza()` (la unmount) e DEFINITIV (r3 P2-2): niciun răspuns întârziat nu mai e aplicat și niciun `porneste`
+ * ulterior (ex. reconcilierea din `finally` după ce modalul s-a închis) nu mai citește și nu mai aplică nimic.
  */
 export function cititorCuGeneratie(citeste, aplica) {
   let g = 0
+  let inchis = false
   return {
     async porneste(cheie) {
+      if (inchis) return
       const eu = ++g
       aplica({ cheie, existente: null, eroare: null })
       try {
@@ -111,6 +116,16 @@ export function cititorCuGeneratie(citeste, aplica) {
         if (eu === g) aplica({ cheie, existente: null, eroare: e })
       }
     },
-    invalideaza() { g++ },
+    invalideaza() { inchis = true; g++ },
   }
+}
+
+/**
+ * r3 P2-1 (L17): data documentului la regenerarea cu ACELAȘI număr = data civilă Europe/Bucharest a convocării
+ * (created_at e timestamptz în UTC: 2026-11-03T22:30:00Z → 2026-11-04). Fără dată validă → eroare (nu „azi”).
+ */
+export function dataDocumentConvocare(c) {
+  const d = dataCivilaBucuresti(c?.created_at)
+  if (!d) throw new Error(`Convocarea ${c?.nr_document ?? ''} nu are o dată de generare validă (created_at) — regenerarea cu același număr e oprită.`)
+  return d
 }
