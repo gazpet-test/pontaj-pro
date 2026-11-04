@@ -10,6 +10,12 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NULL THEN RAISE EXCEPTION '20261130k revenire: migrarea lipseste'; END IF;
+  -- Jak #987 P1-3 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date”, ținute până la commit (ACCESS EXCLUSIVE = modul cerut de DROP TRIGGER).
+  -- Ordinea unică red_mail F1: red_proiecte → red_raspunsuri → (red_jurnal, storage.objects: neatinse aici) → red_mail_* (alfabetic).
+  LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_raspunsuri IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_mail_adrese_propuse, public.red_mail_dedup, public.red_mail_evenimente, public.red_mail_flux, public.red_mail_oauth_state,
+             public.red_mail_obiecte, public.red_mail_primite, public.red_mail_raspuns_sursa, public.red_mail_setari IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE canal = 'email') OR EXISTS (SELECT 1 FROM public.red_mail_raspuns_sursa)
      OR EXISTS (SELECT 1 FROM public.red_mail_primite) OR EXISTS (SELECT 1 FROM public.red_mail_obiecte) OR EXISTS (SELECT 1 FROM public.red_mail_dedup)
      OR EXISTS (SELECT 1 FROM public.red_mail_evenimente) OR EXISTS (SELECT 1 FROM public.red_mail_adrese_propuse) OR EXISTS (SELECT 1 FROM public.red_mail_oauth_state)

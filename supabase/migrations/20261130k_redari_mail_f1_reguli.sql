@@ -36,6 +36,18 @@ BEGIN
   IF to_regprocedure('public.fn_red_mail_verifica_baza(text)') IS NULL OR to_regclass('public.red_mail_primite') IS NULL THEN
     RAISE EXCEPTION '20261130k: 20261130j nu e aplicata';
   END IF;
+  -- Jak #987 P1-2 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date” (k se poate aplica separat de j), ținute până la commit.
+  -- SHARE ROW EXCLUSIVE = modul cerut oricum de CREATE TRIGGER; așteaptă scriitorii în curs (ROW EXCLUSIVE) și îi oprește pe cei noi, deci un
+  -- răspuns email inserat concurent și necomis e fie văzut de verificare (după commit-ul lui), fie blocat până după instalarea protecției.
+  -- Ordinea unică red_mail F1: red_proiecte → red_raspunsuri → (red_jurnal, storage.objects: neatinse de k) → red_mail_* (alfabetic).
+  LOCK TABLE public.red_proiecte IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_raspunsuri IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_mail_adrese_propuse, public.red_mail_dedup, public.red_mail_evenimente, public.red_mail_flux, public.red_mail_oauth_state,
+             public.red_mail_obiecte, public.red_mail_primite, public.red_mail_raspuns_sursa, public.red_mail_setari IN SHARE ROW EXCLUSIVE MODE;
+  -- între j și k un admin putea fixa retentie_mail_pana (gardul owner vine abia cu k): trebuie să fie încă NULL peste tot
+  IF EXISTS (SELECT 1 FROM public.red_proiecte WHERE retentie_mail_pana IS NOT NULL) THEN
+    RAISE EXCEPTION '20261130k: red_proiecte.retentie_mail_pana are deja valori (fixate fara gardul owner); decizia lui Razvan inainte de apply';
+  END IF;
   IF to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NOT NULL OR to_regprocedure('public.fn_red_mail_numaratori(uuid)') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND NOT t.tgisinternal
                  AND t.tgname ~ '^trg_red_(mail|raspunsuri_zz_mail|raspunsuri_mail|proiecte_retentie)') THEN
@@ -152,6 +164,11 @@ CREATE CONSTRAINT TRIGGER trg_red_raspunsuri_mail_sursa AFTER INSERT ON public.r
 CREATE FUNCTION public.fn_red_mail_raspuns_protejat() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 BEGIN
+  -- Jak #987 P1-1: id-ul e imuabil pe TOT red_raspunsuri (nicio cale existentă nu-l schimbă — verificat în repo 04.11.2026). Altfel un INSERT email
+  -- cu id A + UPDATE id = B în aceeași tranzacție ar face ca verificarea amânată (care caută A) să nu mai găsească rândul.
+  IF NEW.id IS DISTINCT FROM OLD.id THEN
+    RAISE EXCEPTION 'redari: id-ul unui raspuns e imuabil' USING ERRCODE = '42501';
+  END IF;
   IF NEW.canal IS DISTINCT FROM OLD.canal AND (NEW.canal = 'email' OR OLD.canal = 'email') THEN
     RAISE EXCEPTION 'redari: canalul email nu se schimba (nici spre, nici dinspre)' USING ERRCODE = '42501';
   END IF;
@@ -613,11 +630,29 @@ BEGIN
     END IF;
   END LOOP;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_raspunsuri'::regclass AND tgname = 'trg_red_raspunsuri_mail_sursa' AND tgconstraint <> 0
-                  AND tgdeferrable AND tginitdeferred AND tgqual IS NOT NULL)
+                  AND tgdeferrable AND tginitdeferred AND tgnargs = 0
+                  AND pg_get_triggerdef(oid) = 'CREATE CONSTRAINT TRIGGER trg_red_raspunsuri_mail_sursa AFTER INSERT ON public.red_raspunsuri DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((new.canal = ''email''::text)) EXECUTE FUNCTION fn_red_mail_raspuns_sursa_ceruta()')
+     -- Jak #987 P2-4: niciun alt trigger nou nu are condiție WHEN sau argumente
+     OR EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND NOT t.tgisinternal
+                 AND (c.relname ~ '^red_mail_' OR t.tgname IN ('trg_red_raspunsuri_zz_mail', 'trg_red_proiecte_retentie_mail')) AND (t.tgqual IS NOT NULL OR t.tgnargs <> 0))
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_raspunsuri'::regclass AND NOT tgisinternal) <> 5
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_proiecte'::regclass AND NOT tgisinternal) <> 3
      OR (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND c.relname ~ '^red_mail_' AND NOT t.tgisinternal) <> 7 + 15 THEN
     RAISE EXCEPTION '20261130k post: numarul / forma triggerelor nu e cea asteptata';
+  END IF;
+  -- Jak #987 P1-2: verificările de date repetate după instalarea protecțiilor (sub aceleași blocări)
+  IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE canal = 'email') OR EXISTS (SELECT 1 FROM public.red_proiecte WHERE retentie_mail_pana IS NOT NULL)
+     OR EXISTS (SELECT 1 FROM public.red_mail_primite) OR EXISTS (SELECT 1 FROM public.red_mail_raspuns_sursa) THEN
+    RAISE EXCEPTION '20261130k post: au aparut date (raspunsuri email / termene / mesaje) in timpul migrarii';
+  END IF;
+  -- Jak #987 P2-4: configurația completă a funcțiilor noi (limbaj + volatilitate, pe lângă DEFINER / search_path / owner / EXECUTE de mai sus)
+  IF (SELECT string_agg(p.proname || ':' || l.lanname || ':' || p.provolatile::text, ',' ORDER BY p.proname) FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+       WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^fn_red_mail_' AND p.proname <> 'fn_red_mail_verifica_baza')
+     IS DISTINCT FROM 'fn_red_mail_adrese_reguli:plpgsql:v,fn_red_mail_are_legatura_juridica:sql:s,fn_red_mail_dedup_reguli:plpgsql:v,fn_red_mail_evenimente_reguli:plpgsql:v,'
+       || 'fn_red_mail_flux_reguli:plpgsql:v,fn_red_mail_gmail_tranzitie_ok:sql:i,fn_red_mail_numaratori:plpgsql:s,fn_red_mail_oauth_state_reguli:plpgsql:v,'
+       || 'fn_red_mail_obiecte_reguli:plpgsql:v,fn_red_mail_primite_reguli:plpgsql:v,fn_red_mail_proiect_retentie:plpgsql:v,fn_red_mail_raspuns_protejat:plpgsql:v,'
+       || 'fn_red_mail_raspuns_sursa_ceruta:plpgsql:v,fn_red_mail_referinta_obiectii:sql:i,fn_red_mail_setari_reguli:plpgsql:v,fn_red_mail_sursa_reguli:plpgsql:v' THEN
+    RAISE EXCEPTION '20261130k post: limbajul / volatilitatea functiilor noi nu sunt cele asteptate';
   END IF;
   -- cele 3 rânduri inițiale neatinse
   IF (SELECT versiune FROM public.red_mail_setari WHERE id = 1) <> 1 OR (SELECT count(*) FROM public.red_mail_flux WHERE versiune = 1 AND NOT activ) <> 2 THEN

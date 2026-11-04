@@ -36,6 +36,13 @@ BEGIN
     RAISE EXCEPTION '20261130j: garda start invalida';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  -- Jak #987 P1-3 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date”, ținute până la commit; ordinea UNICĂ a migrărilor / revenirilor
+  -- red_mail F1: red_proiecte → red_raspunsuri → red_jurnal → storage.objects → red_mail_* (scriitorii Redări iau tabela lor, apoi red_jurnal
+  -- din triggerul de jurnal — aceeași ordine). ACCESS EXCLUSIVE = modul pe care îl cer oricum ADD COLUMN / ALTER POLICY mai jos (fără upgrade).
+  -- Un deadlock cu un scriitor concurent e rezolvat de PostgreSQL: migrarea se anulează întreagă, fără efect.
+  LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname ~ '^red_mail_')
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname ~ '^fn_red_mail_') THEN
     RAISE EXCEPTION '20261130j: exista deja obiecte red_mail_* / fn_red_mail_*';
@@ -81,7 +88,12 @@ BEGIN
       ('public.fn_red_nivel()',                     '21db8e5d4b69b7f19e571a7087c361ae', 'sql',     true,  's', ARRAY['authenticated=X/postgres', 'postgres=X/postgres', 'service_role=X/postgres']),
       ('public.fn_red_jurnal()',                    CASE WHEN p_faza = 'inainte' THEN v_jurnal_vechi ELSE v_jurnal_nou END, 'plpgsql', true, 'v', ARRAY['postgres=X/postgres']),
       ('public.fn_red_storage_expr_bucket(text)',   '9c54aa8fe03d15337ad2646ef0f75bc0', 'plpgsql', true,  'i', ARRAY['postgres=X/postgres']),
-      ('public.fn_red_storage_verifica_redari(boolean)', 'b325d52f469a4c23cbb5f9afccfde6a3', 'plpgsql', false, 's', ARRAY['postgres=X/postgres'])
+      ('public.fn_red_storage_verifica_redari(boolean)', 'b325d52f469a4c23cbb5f9afccfde6a3', 'plpgsql', false, 's', ARRAY['postgres=X/postgres']),
+      -- Jak #987 P2-4: și funcțiile pe care se sprijină regulile din k (triggerele existente pe red_raspunsuri / red_jurnal / red_proiecte)
+      ('public.fn_red_jurnal_imuabil()',            '8507fc337ca5046311232ee49e67ae9c', 'plpgsql', true,  'v', ARRAY['postgres=X/postgres']),
+      ('public.fn_red_legaturi()',                  'd1912ec6514cba162babea3bcebdfb24', 'plpgsql', true,  'v', ARRAY['postgres=X/postgres']),
+      ('public.fn_red_raspunsuri_valideaza()',      '3528222d7d8379dbbe8f3d2e64c60b94', 'plpgsql', true,  'v', ARRAY['postgres=X/postgres']),
+      ('public.fn_red_versiune_creste()',           'e7ab9318de671f0a94c678ee382250db', 'plpgsql', false, 'v', ARRAY['postgres=X/postgres', 'service_role=X/postgres'])
     ) AS b(fn, md5_corp, limbaj, definer, vol, acl) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                     WHERE p.oid = to_regprocedure(r.fn) AND md5(replace(p.prosrc, chr(13), '')) = r.md5_corp AND l.lanname = r.limbaj AND p.prosecdef = r.definer
@@ -98,6 +110,63 @@ BEGIN
      OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'auth.uid()'::regprocedure)
        IS DISTINCT FROM ARRAY['=X/supabase_auth_admin', 'dashboard_user=X/supabase_auth_admin', 'supabase_auth_admin=X/supabase_auth_admin']::text[] THEN
     RAISE EXCEPTION 'redari mail baza (%): auth.uid() nu mai are amprenta revizuita', p_faza;
+  END IF;
+  -- Jak #987 P2-4: auth.role() (contextul de aplicație al gardului owner din k) și auth.jwt() (user_email în jurnal) — baseline live 04.11.2026
+  FOR r IN SELECT * FROM (VALUES
+      ('auth.role()', 'text',  'f31486fed08a7402e89d4aa71b0ad273', ARRAY['=X/supabase_auth_admin', 'dashboard_user=X/supabase_auth_admin', 'supabase_auth_admin=X/supabase_auth_admin']),
+      ('auth.jwt()',  'jsonb', '2db09c3fc855ba90e71d3ae28cfadae3', ARRAY['=X/supabase_auth_admin', 'dashboard_user=X/supabase_auth_admin', 'postgres=X/supabase_auth_admin', 'supabase_auth_admin=X/supabase_auth_admin'])
+    ) AS b(fn, ret, md5_corp, acl) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language g ON g.oid = p.prolang
+                    WHERE p.oid = to_regprocedure(r.fn) AND g.lanname = 'sql' AND NOT p.prosecdef AND p.provolatile = 's' AND p.pronargs = 0
+                      AND p.prorettype = r.ret::regtype AND NOT p.proretset AND p.proconfig IS NULL
+                      AND pg_get_userbyid(p.proowner) = 'supabase_auth_admin' AND md5(replace(p.prosrc, chr(13), '')) = r.md5_corp)
+       OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = to_regprocedure(r.fn)) IS DISTINCT FROM r.acl::text[] THEN
+      RAISE EXCEPTION 'redari mail baza (%): % nu mai are amprenta revizuita', p_faza, r.fn;
+    END IF;
+  END LOOP;
+  -- Jak #987 P2-4: protecțiile append-only ale red_jurnal — exact cele 2 triggere (funcție, tip, activ, fără argumente / WHEN)
+  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_jurnal'::regclass AND NOT tgisinternal) <> 2
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_jurnal'::regclass AND tgname = 'trg_red_jurnal_imuabil' AND tgfoid = 'public.fn_red_jurnal_imuabil()'::regprocedure
+                     AND tgtype = 27 AND tgenabled = 'O' AND tgnargs = 0 AND tgqual IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_jurnal'::regclass AND tgname = 'trg_red_jurnal_fara_truncate' AND tgfoid = 'public.fn_red_jurnal_imuabil()'::regprocedure
+                     AND tgtype = 34 AND tgenabled = 'O' AND tgnargs = 0 AND tgqual IS NULL) THEN
+    RAISE EXCEPTION 'redari mail baza (%): protectiile append-only ale red_jurnal nu sunt cele din baseline', p_faza;
+  END IF;
+  -- Jak #987 P2-4: red_raspunsuri — cele 3 triggere din baseline (k adaugă 2, verificate de k), politicile, privilegiile pe tabel și pe coloană
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_jurnal' AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_legaturi' AND t.tgfoid = 'public.fn_red_legaturi()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_raspunsuri_valideaza' AND t.tgfoid = 'public.fn_red_raspunsuri_valideaza()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O' AND t.tgnargs = 0 AND t.tgqual IS NULL)
+     OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND NOT t.tgisinternal AND t.tgenabled <> 'O')
+     OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND NOT t.tgisinternal
+           AND t.tgname NOT IN ('trg_red_jurnal', 'trg_red_legaturi', 'trg_red_raspunsuri_valideaza', 'trg_red_raspunsuri_mail_sursa', 'trg_red_raspunsuri_zz_mail')) <> 0 THEN
+    RAISE EXCEPTION 'redari mail baza (%): triggerele red_raspunsuri nu sunt cele din baseline', p_faza;
+  END IF;
+  IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_raspunsuri') <> 3
+     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_raspunsuri' AND policyname = 'red_raspunsuri_sel' AND cmd = 'SELECT' AND permissive = 'PERMISSIVE'
+                     AND roles = ARRAY['authenticated']::name[] AND with_check IS NULL AND qual = '(( SELECT fn_red_nivel() AS fn_red_nivel) IS NOT NULL)')
+     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_raspunsuri' AND policyname = 'red_raspunsuri_ins' AND cmd = 'INSERT' AND permissive = 'PERMISSIVE'
+                     AND roles = ARRAY['authenticated']::name[] AND qual IS NULL AND with_check = '(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]))')
+     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_raspunsuri' AND policyname = 'red_raspunsuri_upd' AND cmd = 'UPDATE' AND permissive = 'PERMISSIVE'
+                     AND roles = ARRAY['authenticated']::name[] AND qual = '(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]))'
+                     AND with_check = '(( SELECT fn_red_nivel() AS fn_red_nivel) = ANY (ARRAY[''admin''::text, ''editor''::text]))') THEN
+    RAISE EXCEPTION 'redari mail baza (%): politicile red_raspunsuri nu sunt cele din baseline', p_faza;
+  END IF;
+  FOR r IN SELECT * FROM (VALUES
+      ('public.red_raspunsuri', ARRAY['authenticated=r/postgres', 'postgres=arwdDxtm/postgres', 'service_role=arw/postgres']),
+      ('public.red_jurnal',     ARRAY['authenticated=r/postgres', 'postgres=arwdDxtm/postgres', 'service_role=r/postgres']),
+      ('public.red_proiecte',   ARRAY['authenticated=arw/postgres', 'postgres=arwdDxtm/postgres', 'service_role=arw/postgres'])
+    ) AS b(t, acl) LOOP
+    IF (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_class c, unnest(c.relacl::text[]) a WHERE c.oid = r.t::regclass) IS DISTINCT FROM r.acl::text[] THEN
+      RAISE EXCEPTION 'redari mail baza (%): privilegiile pe % nu sunt cele din baseline', p_faza, r.t;
+    END IF;
+  END LOOP;
+  IF (SELECT string_agg(attname || '=' || (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(attacl::text[]) a)::text, ';' ORDER BY attname)
+        FROM pg_attribute WHERE attrelid = 'public.red_raspunsuri'::regclass AND attacl IS NOT NULL)
+     IS DISTINCT FROM 'canal={authenticated=aw/postgres};created_by={authenticated=a/postgres};data={authenticated=aw/postgres};declaratie_confirmata={authenticated=aw/postgres};'
+       || 'detinator_id={authenticated=a/postgres};id={authenticated=a/postgres};obiectii_text={authenticated=aw/postgres};optiune={authenticated=aw/postgres};'
+       || 'semnatura_electronica_ref={authenticated=aw/postgres};zi_sesiune_aleasa={authenticated=aw/postgres}'
+     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid IN ('public.red_jurnal'::regclass, 'public.red_proiecte'::regclass) AND attacl IS NOT NULL) THEN
+    RAISE EXCEPTION 'redari mail baza (%): privilegiile pe coloana (red_raspunsuri / red_jurnal / red_proiecte) nu sunt cele din baseline', p_faza;
   END IF;
   -- tabelele atinse: owner postgres, RLS pornit, fără FORCE RLS
   IF EXISTS (SELECT 1 FROM pg_class WHERE oid IN ('public.red_raspunsuri'::regclass, 'public.red_jurnal'::regclass, 'public.red_proiecte'::regclass,

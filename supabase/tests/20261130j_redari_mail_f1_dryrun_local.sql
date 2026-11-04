@@ -557,6 +557,25 @@ DO $t$ BEGIN
 END $t$;
 SELECT pg_temp.ca(NULL, 'postgres');
 
+-- TEST14b (Jak #987 P1-1): ocolirea prin schimbarea id-ului în aceeași tranzacție, ca service_role (are UPDATE pe red_raspunsuri):
+-- INSERT email cu id A fără sursă → UPDATE id = B → la commit (SET CONSTRAINTS … IMMEDIATE) → refuz; id-ul nu se schimbă nici pe un rând telefon
+SELECT pg_temp.ca(NULL, 'service_role');
+DO $t$ BEGIN
+  PERFORM pg_temp.ok(pg_temp.refuza('INSERT INTO public.red_raspunsuri (id, detinator_id, canal, optiune) VALUES (''00000000-0000-0000-0000-0000000005a1'', ''00000000-0000-0000-0000-00000000e001'', ''email'', ''nu_particip_fara_obiectii''); '
+                        || 'UPDATE public.red_raspunsuri SET id = ''00000000-0000-0000-0000-0000000005a2'' WHERE id = ''00000000-0000-0000-0000-0000000005a1''; '
+                        || 'SET CONSTRAINTS trg_red_raspunsuri_mail_sursa IMMEDIATE', '42501'), 'TEST14b.1 id schimbat inainte de commit');
+  PERFORM pg_temp.ok(pg_temp.refuza('INSERT INTO public.red_raspunsuri (id, detinator_id, canal, optiune) VALUES (''00000000-0000-0000-0000-0000000005a1'', ''00000000-0000-0000-0000-00000000e001'', ''email'', ''nu_particip_fara_obiectii''); '
+                        || 'SET CONSTRAINTS trg_red_raspunsuri_mail_sursa IMMEDIATE', '42501'), 'TEST14b.2 service_role fara sursa');
+  PERFORM pg_temp.ok(pg_temp.refuza('UPDATE public.red_raspunsuri SET id = gen_random_uuid() WHERE id = ''00000000-0000-0000-0000-0000000001a1''', '42501'), 'TEST14b.3 id imuabil pe orice raspuns');
+  PERFORM pg_temp.ok(NOT EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE canal = 'email'), 'TEST14b.4 nimic ramas');
+  RAISE NOTICE 'TEST14b OK';
+END $t$;
+SELECT pg_temp.ca(NULL, 'postgres');
+DO $t$ BEGIN
+  PERFORM pg_temp.ok(pg_temp.refuza('UPDATE public.red_raspunsuri SET id = gen_random_uuid() WHERE id = ''00000000-0000-0000-0000-0000000001a1''', '42501'), 'TEST14b.5 nici postgres');
+  RAISE NOTICE 'TEST14c OK';
+END $t$;
+
 -- TEST15: răspuns e-mail legitim (ce va face RPC-ul pasului 4): m2 asociat cu e001 + răspuns + sursă, în aceeași tranzacție → commit OK;
 -- apoi PATCH ca editor pe FIECARE câmp protejat → refuz, fără urmă în red_jurnal; viewer-ul vede exact lista pozitivă (c)
 DO $t$

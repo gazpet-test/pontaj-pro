@@ -18,6 +18,14 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname ~ '^fn_red_mail_' AND proname <> 'fn_red_mail_verifica_baza') THEN
     RAISE EXCEPTION '20261130j revenire: intai revenirea 20261130k (regulile)';
   END IF;
+  -- Jak #987 P1-3 (L01 / L06): blocările ÎNAINTEA verificărilor „fără date”, ținute până la commit. ACCESS EXCLUSIVE = modul cerut oricum de
+  -- DROP COLUMN / ALTER POLICY / DROP TABLE. storage.objects blocat oprește și upload-urile service_role (ocolesc RLS, dar nu blocările).
+  -- Ordinea unică red_mail F1: red_proiecte → red_raspunsuri (neatins aici) → red_jurnal → storage.objects → red_mail_* (alfabetic).
+  LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_jurnal IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.red_mail_adrese_propuse, public.red_mail_dedup, public.red_mail_evenimente, public.red_mail_flux, public.red_mail_oauth_state,
+             public.red_mail_obiecte, public.red_mail_primite, public.red_mail_raspuns_sursa, public.red_mail_setari IN ACCESS EXCLUSIVE MODE;
   -- nicio dată reală: doar rândurile inițiale, neatinse
   IF EXISTS (SELECT 1 FROM public.red_mail_primite) OR EXISTS (SELECT 1 FROM public.red_mail_obiecte) OR EXISTS (SELECT 1 FROM public.red_mail_dedup)
      OR EXISTS (SELECT 1 FROM public.red_mail_evenimente) OR EXISTS (SELECT 1 FROM public.red_mail_raspuns_sursa) OR EXISTS (SELECT 1 FROM public.red_mail_adrese_propuse)

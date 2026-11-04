@@ -401,6 +401,7 @@ ALTER FUNCTION auth.jwt() OWNER TO supabase_auth_admin;
 ALTER FUNCTION auth.role() OWNER TO supabase_auth_admin;
 REVOKE ALL ON FUNCTION auth.uid(), auth.jwt(), auth.role() FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
 GRANT EXECUTE ON FUNCTION auth.uid(), auth.jwt(), auth.role() TO PUBLIC, supabase_auth_admin, dashboard_user;
+GRANT EXECUTE ON FUNCTION auth.jwt() TO postgres;   -- ACL live: auth.jwt are și postgres=X (auth.uid / auth.role nu)
 REVOKE ALL ON FUNCTION public.fn_red_nivel() FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_nivel() TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_red_jurnal(), public.fn_red_jurnal_imuabil(), public.fn_red_legaturi(), public.fn_red_raspunsuri_valideaza(),
