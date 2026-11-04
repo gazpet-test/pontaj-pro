@@ -11,7 +11,7 @@ import { uat3 } from './redari/idParcela.js'
 import { genereazaConvocator, verificaDateConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
 // D4: convocatoarele generate dar neexpediate (citire separată din red_convocari, fără migrare)
 import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
-  poateDeschideConvocator, dataDocumentConvocare, useConvocariNeexpediate, aparuteDupaVerificare, rezervaNumarConvocare,
+  poateDeschideConvocator, dataDocumentConvocare, useConvocariNeexpediate, aparuteDupaVerificare, rezervaNumarConvocare, motivRelatieSchimbata, motivIdentitateDiferita,
   AVERTISMENT_CONCURENTA } from './redari/convocatorNeexpediat.js'
 import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareGenerareNoua, citesteIn } from './redari/ui/comune.jsx'
@@ -519,12 +519,15 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
     setPas('Citesc datele…')
     const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token] = await Promise.all([
       supabase.from('red_detinatori').select(COL_DETINATOR).eq('id', rand.detinator_id).single(),
-      supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta').eq('id', rand.parcela_id).single(),
+      supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta, sters_la').eq('id', rand.parcela_id).single(),
       supabase.from('red_detinatori_contact').select('*').eq('detinator_id', rand.detinator_id).maybeSingle(),   // PII — doar admin/editor ajung aici
       citesteTokenRaspuns(rand.detinator_id),
     ])
     if (e1 || e3 || e4) throw (e1 || e3 || e4)
     if (!activ(tok)) return null
+    // #989 r5 (P1-01): relația deținător → parcelă → proiect → UAT a datelor documentului, verificată înainte de orice rezervare
+    const motivRel = motivRelatieSchimbata({ detinator: det, parcela, proiect, uat })
+    if (motivRel) { setLipsuri([motivRel]); show(`Convocatorul nu se poate genera: ${motivRel}.`, 'error'); return null }
     setPas('Verific datele…')
     // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
     const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect, detinator: det, contactDetinator: contactDetinator || null })
@@ -564,7 +567,11 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
       scris = true
       // #989 r4: protocolul atomic comun cu generarea în masă — RPC-ul fn_red_convocare_rezerva rezervă numărul ȘI inserează rândul
       // (lock pe deținător, RD001 dacă între timp a apărut o convocare pe același canal; număr nou doar cu bifa explicită). Fără RPC → refuz.
-      const { convocareId, nrDocument } = await rezervaNumarConvocare(supabase, { detinatorId: rand.detinator_id, confirmat: confirmNou === true && (vazute || []).length > 0, canal })
+      const rez = await rezervaNumarConvocare(supabase, { detinatorId: rand.detinator_id, confirmat: confirmNou === true && (vazute || []).length > 0, canal })
+      const { convocareId, nrDocument } = rez
+      // #989 r5 (P1-01): documentul se face DOAR pe identitatea folosită de server; altfel rândul rămâne „fișier neîncărcat” (regenerare ulterioară)
+      const difera = motivIdentitateDiferita(rez, { parcelaId: intrare.parcela.id, uatId: intrare.uat?.id, proiectId: intrare.proiect?.id })
+      if (difera) { if (activ(tok)) show(difera + '.', 'error'); return }
       // de aici rândul există: fișierul se încarcă prin salvarea versionată existentă (v1 la primul upload) și se reconciliază
       setPas(`Generez ${nrDocument}…`)
       const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument })

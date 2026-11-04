@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { COL_CONV_NEEXPEDIAT, filtruNeexpediate, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou,
   citesteNeexpediatePeDetinatori, poateDescarcaExistent, poateDeschideConvocator, cititorCuGeneratie, dataDocumentConvocare,
-  aparuteDupaVerificare, rezervaNumarConvocare, AVERTISMENT_CONCURENTA } from './convocatorNeexpediat.js'
+  aparuteDupaVerificare, rezervaNumarConvocare, motivRelatieSchimbata, motivIdentitateDiferita, AVERTISMENT_CONCURENTA } from './convocatorNeexpediat.js'
 import { formatDataRo } from './docx.js'
 
 // fake red_convocari: filtrează pe detinator_id (in) și id > cursor (gt), ordonează pe id, plafonează pagina la `plafon`
@@ -169,10 +169,10 @@ describe('convocatorNeexpediat', () => {
   it('#989 r4: rezervaNumarConvocare = RPC-ul atomic fn_red_convocare_rezerva (bifa → p_numar_nou_confirmat, canal), fără cale alternativă', async () => {
     const apeluri = []
     const sb = (rez) => ({ rpc: async (f, a) => { apeluri.push([f, a]); return rez } })
-    expect(await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv1', nr_document: 'C-0103' }], error: null }), { detinatorId: 'd1', confirmat: true, canal: 'email' }))
-      .toEqual({ convocareId: 'cv1', nrDocument: 'C-0103' })
+    expect(await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv1', nr_document: 'C-0103', parcela_id: 'p1', uat_id: 'u1', proiect_id: 'pr1' }], error: null }), { detinatorId: 'd1', confirmat: true, canal: 'email' }))
+      .toEqual({ convocareId: 'cv1', nrDocument: 'C-0103', parcelaId: 'p1', uatId: 'u1', proiectId: 'pr1' })
     expect(apeluri[0]).toEqual(['fn_red_convocare_rezerva', { p_detinator_id: 'd1', p_numar_nou_confirmat: true, p_canal: 'email' }])
-    await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv2', nr_document: 'C-0104' }], error: null }), { detinatorId: 'd1', confirmat: 'da' })
+    await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv2', nr_document: 'C-0104', parcela_id: 'p1', uat_id: 'u1', proiect_id: 'pr1' }], error: null }), { detinatorId: 'd1', confirmat: 'da' })
     expect(apeluri[1][1]).toEqual({ p_detinator_id: 'd1', p_numar_nou_confirmat: false, p_canal: 'posta' })   // doar `true` explicit confirmă
     expect(apeluri.every(([f]) => f !== 'fn_red_numar_document')).toBe(true)
     await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'PGRST202', message: 'x' }, status: 404 }), { detinatorId: 'd1' }))
@@ -180,6 +180,20 @@ describe('convocatorNeexpediat', () => {
     await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'RD001', message: 'are deja' } }), { detinatorId: 'd1' })).rejects.toMatchObject({ code: 'RD001' })
     await expect(rezervaNumarConvocare(sb({ data: [], error: null }), { detinatorId: 'd1' })).rejects.toThrow(/nu a întors/)
     await expect(rezervaNumarConvocare(sb({ data: [], error: null }), {})).rejects.toThrow(/deținătorul/)
+  })
+
+  it('#989 r5 P1-01: relația deținător → parcelă → proiect → UAT și identitatea întoarsă de server', () => {
+    const det = { id: 'd1', parcela_id: 'p1', sters_la: null }, parcela = { id: 'p1', proiect_id: 'pr1', uat_id: 'u1', sters_la: null }
+    const proiect = { id: 'pr1' }, uat = { id: 'u1' }
+    expect(motivRelatieSchimbata({ detinator: det, parcela, proiect, uat })).toBeNull()
+    expect(motivRelatieSchimbata({ detinator: { ...det, parcela_id: 'p2' }, parcela, proiect, uat })).toMatch(/nu mai e pe parcela afișată/)
+    expect(motivRelatieSchimbata({ detinator: det, parcela: { ...parcela, uat_id: 'u2' }, proiect, uat })).toMatch(/UAT-ul afișat/)
+    expect(motivRelatieSchimbata({ detinator: det, parcela: { ...parcela, proiect_id: 'x' }, proiect, uat })).toMatch(/proiectul afișat/)
+    expect(motivRelatieSchimbata({ detinator: { ...det, sters_la: 't' }, parcela, proiect, uat })).toMatch(/deținătorul/)
+    expect(motivRelatieSchimbata({ detinator: det, parcela: { ...parcela, sters_la: 't' }, proiect, uat })).toMatch(/parcela/)
+    const rez = { nrDocument: 'C-0007', parcelaId: 'p1', uatId: 'u1', proiectId: 'pr1' }
+    expect(motivIdentitateDiferita(rez, { parcelaId: 'p1', uatId: 'u1', proiectId: 'pr1' })).toBeNull()
+    expect(motivIdentitateDiferita({ ...rez, parcelaId: 'p2' }, { parcelaId: 'p1', uatId: 'u1', proiectId: 'pr1' })).toMatch(/C-0007.*fișier neîncărcat/)
   })
 
   it('avertismentul descrie verificarea finală a serverului', () => {

@@ -68,9 +68,9 @@ INSERT INTO public.red_uat (id, proiect_id, nume, uat3, sesiune_zi1, program_zi1
   VALUES ('00000000-0000-0000-0000-00000000c001', '00000000-0000-0000-0000-00000000b001', 'Test', 'TST', '2026-12-01', '09-15');
 INSERT INTO public.red_parcele (id, proiect_id, uat_id, id_parcela, tronson)
   SELECT ('00000000-0000-0000-0000-0000000d' || lpad(i::text, 4, '0'))::uuid, '00000000-0000-0000-0000-00000000b001', '00000000-0000-0000-0000-00000000c001',
-         'TST-' || lpad(i::text, 4, '0'), 1 FROM generate_series(1, 16) i;
+         'TST-' || lpad(i::text, 4, '0'), 1 FROM generate_series(1, 18) i;
 INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate)
-  SELECT ('00000000-0000-0000-0000-0000000d' || lpad(i::text, 4, '0'))::uuid, 'DRY30L D' || i, 'dry30l d' || i, 'proprietar' FROM generate_series(1, 16) i;
+  SELECT ('00000000-0000-0000-0000-0000000d' || lpad(i::text, 4, '0'))::uuid, 'DRY30L D' || i, 'dry30l d' || i, 'proprietar' FROM generate_series(1, 18) i;
 INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta)
   SELECT id, 'Str. Test 1', 'Testeni', 'Testeni', 'Mehedinti', '200000', true FROM public.red_detinatori;
 UPDATE public.red_detinatori SET sters_la = now() WHERE nume = 'DRY30L D8';
@@ -348,6 +348,70 @@ BEGIN
   r := (SELECT x FROM dblink('ed', public.t_sql_rez(public.t_det('D16'), false, 'telefon')) AS t(x text));
   IF r NOT LIKE '22023:%' THEN RAISE EXCEPTION 'TEST11 FAIL telefon: %', r; END IF;
   RAISE NOTICE 'TEST11 OK';
+END $t$;
+
+-- TEST2b (r5 P1-01): RPC-ul întoarce identitatea folosită de server (parcela / UAT / proiect)
+DO $t$
+DECLARE r text;
+BEGIN
+  SELECT x INTO r FROM dblink('ed', format($q$SELECT public.t_stare(%L)$q$,
+    format('SELECT nr_document || ''|'' || parcela_id || ''|'' || uat_id || ''|'' || proiect_id FROM public.fn_red_convocare_rezerva(%L::uuid)', public.t_det('D17')))) AS t(x text);
+  IF r NOT LIKE 'OK:C-%|' || (SELECT parcela_id FROM public.red_detinatori WHERE id = public.t_det('D17')) || '|00000000-0000-0000-0000-00000000c001|00000000-0000-0000-0000-00000000b001' THEN
+    RAISE EXCEPTION 'TEST2b FAIL: %', r; END IF;
+  RAISE NOTICE 'TEST2b OK (identitatea serverului intoarsa)';
+END $t$;
+
+-- TEST12 (r5 P1-02): INSERT direct în red_convocari (client vechi / PostgREST direct) → RD004, pe orice canal; prin RPC → OK
+DO $t$
+DECLARE r text; c text;
+BEGIN
+  FOREACH c IN ARRAY ARRAY['posta', 'sms', 'email', 'afisare', 'telefon'] LOOP
+    SELECT x INTO r FROM dblink('ed', format($q$SELECT public.t_stare(%L)$q$,
+      format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L, %L, %L) RETURNING id::text', public.t_det('D18'), c, 'VECHI-' || c))) AS t(x text);
+    IF r NOT LIKE 'RD004:%Reincarca pagina%' THEN RAISE EXCEPTION 'TEST12 FAIL canal %: %', c, r; END IF;
+  END LOOP;
+  -- vechea secvență a clientului: număr C separat + INSERT direct → INSERT-ul e refuzat (numărul vechi rămâne gol în serie, ca înainte)
+  SELECT x INTO r FROM dblink('ed', $q$SELECT public.t_stare('SELECT public.fn_red_numar_document(''C'', ''TST'', 1)')$q$) AS t(x text);
+  SELECT x INTO r FROM dblink('ed', format($q$SELECT public.t_stare(%L)$q$,
+    format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L, ''posta'', %L) RETURNING id::text', public.t_det('D18'), substr(r, 4)))) AS t(x text);
+  IF r NOT LIKE 'RD004:%' THEN RAISE EXCEPTION 'TEST12 FAIL client vechi: %', r; END IF;
+  IF (SELECT count(*) FROM public.red_convocari WHERE detinator_id = public.t_det('D18')) <> 0 THEN RAISE EXCEPTION 'TEST12 FAIL: rand scris'; END IF;
+  r := public.t_rez('ed', public.t_det('D18')::text);
+  IF r NOT LIKE 'OK:C-%' THEN RAISE EXCEPTION 'TEST12 FAIL RPC: %', r; END IF;
+  IF current_setting('gazpet.convocare_rezerva', true) IS NOT NULL AND current_setting('gazpet.convocare_rezerva', true) <> '' THEN RAISE EXCEPTION 'TEST12 FAIL: marcaj scurs'; END IF;
+  RAISE NOTICE 'TEST12 OK (INSERT direct refuzat pe toate canalele, client vechi refuzat, RPC ok)';
+END $t$;
+
+-- TEST12b (mutant): fără trigger, INSERT-ul direct ar trece → triggerul e cel care impune protocolul
+DO $t$
+DECLARE r text;
+BEGIN
+  PERFORM public.t_pg('ALTER TABLE public.red_convocari DISABLE TRIGGER trg_red_convocari_garda_rezerva');
+  SELECT x INTO r FROM dblink('ed', format($q$SELECT public.t_stare(%L)$q$,
+    format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L, ''email'', ''MUTANT-1'') RETURNING id::text', public.t_det('D18')))) AS t(x text);
+  PERFORM public.t_pg('ALTER TABLE public.red_convocari ENABLE TRIGGER trg_red_convocari_garda_rezerva');
+  IF r NOT LIKE 'OK:%' THEN RAISE EXCEPTION 'TEST12b FAIL: mutantul (fara trigger) ar fi trebuit sa permita INSERT-ul: %', r; END IF;
+  PERFORM public.t_pg('DELETE FROM public.red_convocari WHERE nr_document = ''MUTANT-1''');
+  RAISE NOTICE 'TEST12b OK (mutant fara trigger -> INSERT direct permis; triggerul repornit)';
+END $t$;
+
+-- TEST13 (r5 P2-03): proiectul se schimbă între citirea cheii și lock (parcelă mutată, comisă în timp ce RPC-ul așteaptă la FOR SHARE) → RD003
+DO $t$
+DECLARE r2 text; n0 int := public.t_nr();
+BEGIN
+  PERFORM public.t_pg($q$INSERT INTO public.red_proiecte (id, cod, denumire, contract_nr, contract_data, imputernicire_nr, imputernicire_data, reprezentant_tgz_nume,
+    reprezentant_tgz_telefon, contact_nume, contact_telefon, contact_email, text_gdpr) VALUES ('00000000-0000-0000-0000-00000000b002', 'ALT-DRY', 'Alt', '1', '2026-10-01', '1',
+    '2026-10-01', 'R', '07', 'N', '07', 'a@b.local', 'Operator: test.') ON CONFLICT DO NOTHING$q$);
+  PERFORM dblink_exec('c3', 'BEGIN');
+  PERFORM dblink_exec('c3', format('UPDATE public.red_parcele SET proiect_id = %L WHERE id = (SELECT parcela_id FROM public.red_detinatori WHERE id = %L)',
+    '00000000-0000-0000-0000-00000000b002', public.t_det('D10')));
+  PERFORM dblink_send_query('c2', public.t_sql_rez(public.t_det('D10')));
+  PERFORM pg_sleep(0.3);
+  IF dblink_is_busy('c2') <> 1 THEN RAISE EXCEPTION 'TEST13 FAIL: c2 nu asteapta'; END IF;
+  PERFORM dblink_exec('c3', 'COMMIT');
+  r2 := public.t_rezultat('c2');
+  IF r2 NOT LIKE 'RD003:%' OR public.t_nr() <> n0 OR public.t_active('D10') <> 0 THEN RAISE EXCEPTION 'TEST13 FAIL: % / %', r2, public.t_nr(); END IF;
+  RAISE NOTICE 'TEST13 OK (proiect schimbat sub lock: RD003, nimic consumat)';
 END $t$;
 
 -- TEST8: ACL + setari

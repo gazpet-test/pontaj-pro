@@ -186,7 +186,31 @@ export async function rezervaNumarConvocare(supabase, { detinatorId, confirmat =
   if (res.error) throw res.error
   const r0 = Array.isArray(res.data) ? res.data[0] : res.data
   if (!r0?.convocare_id || !r0?.nr_document) throw new Error('Rezervarea nu a întors convocarea și numărul.')
-  return { convocareId: r0.convocare_id, nrDocument: r0.nr_document }
+  if (!r0.parcela_id || !r0.uat_id || !r0.proiect_id) throw new Error('Rezervarea nu a întors identitatea parcelei / UAT-ului / proiectului.')
+  return { convocareId: r0.convocare_id, nrDocument: r0.nr_document, parcelaId: r0.parcela_id, uatId: r0.uat_id, proiectId: r0.proiect_id }
+}
+
+/**
+ * #989 r5 (Copilot P1-01): relația deținător → parcelă → proiect → UAT a datelor din care se face documentul, verificată ÎNAINTE de rezervare
+ * (ambele căi). Întoarce null când e coerentă, altfel motivul (fără rezervare).
+ */
+export function motivRelatieSchimbata({ detinator, parcela, proiect, uat }) {
+  if (!detinator || detinator.sters_la) return 'deținătorul nu mai e activ'
+  if (!parcela || parcela.sters_la) return 'parcela nu mai e activă'
+  if (detinator.parcela_id !== parcela.id) return 'deținătorul nu mai e pe parcela afișată (registrul e vechi — reîncarcă)'
+  if (parcela.proiect_id !== proiect?.id) return 'parcela nu mai e în proiectul afișat'
+  if (parcela.uat_id !== uat?.id) return 'parcela nu mai e în UAT-ul afișat'
+  return null
+}
+
+/**
+ * #989 r5 (Copilot P1-01): identitatea folosită de server la rezervare trebuie să fie EXACT cea a documentului care urmează să fie generat.
+ * La nepotrivire NU se generează nimic: convocarea rămâne „fișier neîncărcat”, iar „Regenerează același număr” (Fișă / modal) o face pe datele noi.
+ */
+export function motivIdentitateDiferita(rez, { parcelaId, uatId, proiectId }) {
+  if (rez.parcelaId === parcelaId && rez.uatId === uatId && rez.proiectId === proiectId) return null
+  return `convocarea ${rez.nrDocument} a fost rezervată pe altă parcelă / UAT decât cea afișată (date schimbate între timp); nu am generat documentul — `
+    + 'convocarea rămâne cu „fișier neîncărcat”; regenerează-o cu același număr după reîncărcarea registrului'
 }
 
 export const AVERTISMENT_CONCURENTA = 'Lista de mai sus e citită pe această pagină; verificarea finală o face serverul la rezervare (atomic): dacă între timp alt utilizator a generat un convocator pe același canal, rezervarea e refuzată, iar un număr nou se dă doar cu bifa de confirmare.'

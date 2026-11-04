@@ -27,7 +27,17 @@
 --   Fișierul (cale + hash) îl pune apoi clientul prin reincarcaConvocator (UPDATE pe rând, RLS existent).
 -- Limite (documentate): proiectul / UAT-ul se citesc fără lock de rând (editorul nu are UPDATE pe ele); o schimbare de admin comisă după citire
 -- și înainte de COMMIT nu e prinsă. Fișa parcelei (reîncărcarea cu același număr) nu rezervă numere.
--- Revenire: supabase/revenire/20261130l_redari_convocare_rezerva_ROLLBACK.sql (DROP FUNCTION; convocările create rămân convocări obișnuite).
+-- r5 (Copilot NO-GO #989):
+--   P1-01: RPC-ul întoarce și identitatea folosită de server (parcela_id, uat_id, proiect_id); clientul o compară cu documentul pe care îl generează.
+--   P1-02: protocolul e impus în BD pentru ORICE INSERT în red_convocari: trigger nou trg_red_convocari_garda_rezerva (BEFORE INSERT) cere marcajul
+--     tranzacțional gazpet.convocare_rezerva = txid_current(), pus DOAR de fn_red_convocare_rezerva chiar înainte de INSERT (și șters imediat după).
+--     PostgREST nu expune pg_catalog (set_config) și nicio funcție public executabilă de authenticated nu apelează set_config (verificat read-only
+--     04.11.2026; poarta 0e rămâne). Un client vechi (fn_red_numar_document + INSERT direct) primește RD004 „reîncarcă pagina”.
+--     Inventarul căilor de INSERT (read-only, 05.11.2026): în src/ doar docx.salveazaConvocator (nefolosit de UI după #989); în BD nicio funcție nu
+--     inserează în red_convocari (fn_red_plic_* doar actualizează). Excepție explicită: current_user = 'postgres' (mentenanță / migrări /
+--     fixture-uri SQL, ca trg_red_convocari_posta_garda). Toate canalele (posta / sms / email / afisare) trec prin RPC; 'telefon' nu e generat din UI.
+--   P2-03: cheia advisory se păstrează separat; dacă proiectul recitit sub lock diferă de cel din cheie → RD003 (conflict, reîncearcă).
+-- Revenire: supabase/revenire/20261130l_redari_convocare_rezerva_ROLLBACK.sql (DROP TRIGGER + funcțiile; convocările create rămân convocări obișnuite).
 -- DRY producție (doar citiri, fără rezervare reușită): supabase/tests/20261130l_redari_convocare_rezerva_dryrun.sql.
 -- DRY local PG17 (concurență prin dblink, funcțiile live reale): supabase/tests/20261130l_..._schelet.sql + _dryrun_local.sql, scripts/redari_30l_dry_local.sh.
 -- NEAPLICATĂ: se aplică doar după GO Jakarinos + Copilot și DRY verde (regula 01.11). Fără ea, ambele căi refuză (fără fallback).
@@ -42,6 +52,8 @@ BEGIN
     RAISE EXCEPTION '20261130l: lipseste schema Redari (red_convocari, red_detinatori, red_parcele, red_uat, red_proiecte, red_numere)';
   END IF;
   IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NOT NULL THEN RAISE EXCEPTION '20261130l: functia exista deja'; END IF;
+  IF to_regprocedure('public.fn_red_convocari_rezerva_garda()') IS NOT NULL OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_red_convocari_garda_rezerva') THEN
+    RAISE EXCEPTION '20261130l: garda rezervarii exista deja'; END IF;
   -- coloanele citite / scrise (baseline read-only pe live 04.11.2026)
   IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_convocari'
         AND column_name IN ('id', 'detinator_id', 'canal', 'nr_document', 'data_expediere', 'stare', 'sters_la', 'created_by', 'created_at', 'plic_id')) <> 10
@@ -161,10 +173,11 @@ BEGIN
 END $pre$;
 
 CREATE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta')
-RETURNS TABLE (convocare_id uuid, nr_document text)
+RETURNS TABLE (convocare_id uuid, nr_document text, parcela_id uuid, uat_id uuid, proiect_id uuid)
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
-DECLARE v_proiect uuid; v_uat uuid; v_uat3 text; v_tronson integer; v_calitate text; v_lipsa text[] := '{}'; v_existente text; v_nr text; v_id uuid;
-  pr record; u record;
+#variable_conflict error
+DECLARE v_proiect_cheie uuid; v_proiect uuid; v_parcela uuid; v_uat uuid; v_uat3 text; v_tronson integer; v_calitate text; v_lipsa text[] := '{}';
+  v_existente text; v_nr text; v_id uuid; pr record; u record;
 BEGIN
   IF coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor') THEN
     RAISE EXCEPTION 'redari: fara drept de rezervare a convocarii' USING ERRCODE = '42501';
@@ -176,16 +189,20 @@ BEGIN
     RAISE EXCEPTION 'redari: rezervarea convocarii doar in READ COMMITTED' USING ERRCODE = '25001';
   END IF;
   -- (2) doar cheia lock-ului; starea se verifica DUPA lock
-  SELECT p.proiect_id INTO v_proiect FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = p_detinator_id;
-  IF v_proiect IS NULL THEN RAISE EXCEPTION 'redari: detinator inexistent' USING ERRCODE = 'P0002'; END IF;
+  SELECT p.proiect_id INTO v_proiect_cheie FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = p_detinator_id;
+  IF v_proiect_cheie IS NULL THEN RAISE EXCEPTION 'redari: detinator inexistent' USING ERRCODE = 'P0002'; END IF;
   -- (3)
-  PERFORM pg_advisory_xact_lock(hashtextextended('red_convocare_posta:' || v_proiect::text || ':' || p_detinator_id::text, 0));
-  -- (4) sub lock: deținător + parcelă ACTIVE, blocate FOR SHARE (o ștergere logică concurentă e așteptată și recitită)
-  SELECT p.proiect_id, p.uat_id, p.tronson, d.calitate INTO v_proiect, v_uat, v_tronson, v_calitate
+  PERFORM pg_advisory_xact_lock(hashtextextended('red_convocare_posta:' || v_proiect_cheie::text || ':' || p_detinator_id::text, 0));
+  -- (4) sub lock: deținător + parcelă ACTIVE, blocate FOR SHARE (o ștergere logică / mutare concurentă e așteptată și recitită)
+  SELECT p.id, p.proiect_id, p.uat_id, p.tronson, d.calitate INTO v_parcela, v_proiect, v_uat, v_tronson, v_calitate
     FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id
    WHERE d.id = p_detinator_id AND d.sters_la IS NULL AND p.sters_la IS NULL
      FOR SHARE OF d, p;
   IF v_uat IS NULL THEN RAISE EXCEPTION 'redari: detinatorul sau parcela au fost sterse' USING ERRCODE = 'P0002'; END IF;
+  -- r5 P2-03: cheia lock-ului trebuie să fie a proiectului recitit sub lock (altfel două tranzacții ar putea bloca chei diferite)
+  IF v_proiect IS DISTINCT FROM v_proiect_cheie THEN
+    RAISE EXCEPTION 'redari: detinatorul a fost mutat in alt proiect intre timp; reincercati' USING ERRCODE = 'RD003';
+  END IF;
   SELECT * INTO u FROM public.red_uat x WHERE x.id = v_uat AND x.proiect_id = v_proiect;
   SELECT * INTO pr FROM public.red_proiecte x WHERE x.id = v_proiect;
   IF u.id IS NULL OR pr.id IS NULL THEN RAISE EXCEPTION 'redari: proiect / UAT inaccesibil' USING ERRCODE = 'P0002'; END IF;
@@ -213,16 +230,37 @@ BEGIN
      WHERE c.detinator_id = p_detinator_id AND c.canal = p_canal AND c.stare = 'activ' AND c.data_expediere IS NULL AND c.sters_la IS NULL;
     RAISE EXCEPTION 'redari: detinatorul are deja convocare % neexpediata (%)', p_canal, v_existente USING ERRCODE = 'RD001';
   END IF;
-  -- (6) numărul + rândul; triggerele (garda de plic pe persoană, legături, jurnal) și RLS-ul se aplică utilizatorului
+  -- (6) numărul + rândul; triggerele (garda rezervării, garda de plic pe persoană, legături, jurnal) și RLS-ul se aplică utilizatorului.
+  -- r5 P1-02: marcajul tranzacțional care autorizează EXACT acest INSERT (trg_red_convocari_garda_rezerva), șters imediat după.
   v_nr := public.fn_red_numar_document('C', v_uat3, v_tronson);
+  PERFORM set_config('gazpet.convocare_rezerva', txid_current()::text, true);
   INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (p_detinator_id, p_canal, v_nr) RETURNING id INTO v_id;
-  RETURN QUERY SELECT v_id, v_nr;
+  PERFORM set_config('gazpet.convocare_rezerva', '', true);
+  -- r5 P1-01: identitatea folosită de server (clientul o compară cu documentul pe care îl generează)
+  RETURN QUERY SELECT v_id, v_nr, v_parcela, v_uat, v_proiect;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean, text) IS 'Redări: rezervare atomică a unei convocări poștale (SECURITY INVOKER: RLS + triggere ale utilizatorului). '
-  'Lock pe proiect + deținător, recitire sub lock (FOR SHARE deținător + parcelă, gărzi proiect/UAT → RD002), RD001 dacă există convocare neexpediată '
-  '(fără p_numar_nou_confirmat), număr C prin fn_red_numar_document, INSERT. Doar admin/editor. Antet: migrarea 20261130l.';
+COMMENT ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean, text) IS 'Redări: rezervare atomică a unei convocări (SECURITY INVOKER: RLS + triggere ale utilizatorului). '
+  'Lock pe proiect + deținător (RD003 dacă proiectul se schimbă sub lock), recitire sub lock (FOR SHARE deținător + parcelă, gărzi proiect/UAT → RD002), '
+  'RD001 dacă există convocare neexpediată pe același canal (fără p_numar_nou_confirmat), număr C prin fn_red_numar_document, INSERT autorizat prin marcaj. '
+  'Întoarce și parcela / UAT / proiect folosite. Doar admin/editor. Antet: migrarea 20261130l.';
 REVOKE ALL ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean, text) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_convocare_rezerva(uuid, boolean, text) TO authenticated;
+
+-- r5 P1-02: garda care impune protocolul pentru ORICE INSERT în red_convocari (clienți vechi, apeluri PostgREST directe)
+CREATE FUNCTION public.fn_red_convocari_rezerva_garda()
+RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  -- excepție explicită: mentenanță / migrări / fixture-uri SQL ca owner (aceeași regulă ca trg_red_convocari_posta_garda)
+  IF current_user = 'postgres' THEN RETURN NEW; END IF;
+  IF current_setting('gazpet.convocare_rezerva', true) IS DISTINCT FROM txid_current()::text THEN
+    RAISE EXCEPTION 'redari: convocatorul se genereaza doar prin rezervarea atomica (fn_red_convocare_rezerva). Reincarca pagina (Ctrl+Shift+R) si incearca din nou.'
+      USING ERRCODE = 'RD004';
+  END IF;
+  RETURN NEW;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_convocari_rezerva_garda() IS 'Redări: INSERT în red_convocari doar prin fn_red_convocare_rezerva (marcaj gazpet.convocare_rezerva = txid_current()); RD004 altfel. Migrarea 20261130l.';
+REVOKE ALL ON FUNCTION public.fn_red_convocari_rezerva_garda() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_red_convocari_garda_rezerva BEFORE INSERT ON public.red_convocari FOR EACH ROW EXECUTE FUNCTION public.fn_red_convocari_rezerva_garda();
 
 DO $post$
 BEGIN
@@ -236,7 +274,22 @@ BEGIN
   END IF;
   IF (SELECT array_agg(n ORDER BY o) FROM pg_proc p, unnest(p.proargnames, p.proargmodes) WITH ORDINALITY AS a(n, md, o)
        WHERE p.oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure AND a.md = 't')
-     IS DISTINCT FROM ARRAY['convocare_id', 'nr_document']::text[] THEN
+     IS DISTINCT FROM ARRAY['convocare_id', 'nr_document', 'parcela_id', 'uat_id', 'proiect_id']::text[] THEN
     RAISE EXCEPTION '20261130l: coloanele de iesire nu sunt cele asteptate';
+  END IF;
+  -- garda nouă: INVOKER, search_path fix, owner postgres, fără EXECUTE pentru nimeni în afară de owner; triggerele finale exacte
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocari_rezerva_garda()'::regprocedure AND NOT prosecdef
+                  AND proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(proowner) = 'postgres')
+     OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_convocari_rezerva_garda()'::regprocedure)
+       IS DISTINCT FROM ARRAY['postgres=X/postgres']::text[] THEN
+    RAISE EXCEPTION '20261130l: garda trg_red_convocari_garda_rezerva are setari / privilegii gresite';
+  END IF;
+  IF (SELECT string_agg(f, ';' ORDER BY f COLLATE "C") FROM (
+        SELECT tgrelid::regclass::text || '.' || tgname::text || '=' || tgfoid::regprocedure::text || '/' || tgenabled::text || '/' || tgtype::text || '/'
+               || coalesce(pg_get_expr(tgqual, tgrelid), '') || '/' || tgnargs::text || '/' || encode(tgargs, 'hex') || '/' || tgattr::text AS f
+          FROM pg_trigger WHERE tgrelid = 'public.red_convocari'::regclass AND NOT tgisinternal) z)
+     IS DISTINCT FROM 'red_convocari.trg_red_convocari_garda_rezerva=fn_red_convocari_rezerva_garda()/O/7//0//;red_convocari.trg_red_convocari_posta_garda=fn_red_convocari_posta_garda()/O/23//0//;'
+                   || 'red_convocari.trg_red_jurnal=fn_red_jurnal()/O/29//0//;red_convocari.trg_red_legaturi=fn_red_legaturi()/O/23//0//' THEN
+    RAISE EXCEPTION '20261130l: triggerele finale pe red_convocari nu sunt cele asteptate';
   END IF;
 END $post$;

@@ -118,7 +118,23 @@ DO $t$ DECLARE r text; v_lipsa text := coalesce(pg_temp.r30l_g('lipsa_c'), ''); 
     RAISE NOTICE 'TEST3 OK (RD002 inaintea RD001 pe %, garzi de continut neindeplinite pe datele reale: %)', pg_temp.r30l_g('nrc'), v_lipsa;
   END IF;
 END $t$;
+-- TEST3b (r5 P1-02): INSERT direct în red_convocari ca editor real (client vechi / PostgREST direct) → RD004, înaintea oricărei alte gărzi
+-- (triggerul trg_red_convocari_garda_rezerva rulează primul: nu ia lock-ul de plic). Subtranzacția se anulează oricum (r30l_stare).
+DO $t$ DECLARE r text; BEGIN
+  r := pg_temp.r30l_stare(format('INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (%L::uuid, ''posta'', ''DRY30L-INSERT-DIRECT'')', pg_temp.r30l_g('det')));
+  IF r NOT LIKE 'RD004:%' THEN RAISE EXCEPTION 'TEST3b FAIL: %', r; END IF;
+  RAISE NOTICE 'TEST3b OK (INSERT direct refuzat: RD004)';
+END $t$;
 SELECT pg_temp.r30l_ca(NULL, 'postgres');
+-- TEST3c: garda rezervării — INVOKER, fără EXECUTE public, trigger BEFORE INSERT primul în ordine
+DO $t$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocari_rezerva_garda()'::regprocedure AND NOT prosecdef)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.red_convocari'::regclass AND tgname = 'trg_red_convocari_garda_rezerva' AND tgenabled = 'O' AND tgtype = 7)
+     OR (SELECT min(tgname::text COLLATE "C") FROM pg_trigger WHERE tgrelid = 'public.red_convocari'::regclass AND NOT tgisinternal AND (tgtype & 2) = 2) <> 'trg_red_convocari_garda_rezerva' THEN
+    RAISE EXCEPTION 'TEST3c FAIL: garda rezervarii';
+  END IF;
+  RAISE NOTICE 'TEST3c OK';
+END $t$;
 -- TEST4: nimic scris (contorul C si numarul de convocari neschimbate)
 DO $t$ BEGIN
   IF (SELECT coalesce((SELECT ultimul FROM public.red_numere WHERE cheie = 'C'), 0) || '|' || (SELECT count(*) FROM public.red_convocari)) IS DISTINCT FROM current_setting('r30l.amprenta') THEN

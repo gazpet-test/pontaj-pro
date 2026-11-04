@@ -20,7 +20,7 @@ function date(n = 3) {
     const d = `d${idx(i)}`, p = `p${idx(i)}`, idp = `TST-${idx(i)}`
     view.push({ parcela_id: p, detinator_id: d, proiect_id: 'pr1', uat_id: 'u1', uat3: 'TST', id_parcela: idp, tronson: 1, nume: `POPESCU ${idx(i)}`, calitate: 'proprietar', adresa_cunoscuta: true })
     det.push({ id: d, parcela_id: p, nume: `POPESCU ${idx(i)}`, calitate: 'proprietar', sters_la: null })
-    parc.push({ id: p, id_parcela: idp, uat_id: 'u1', tronson: 1, sters_la: null })
+    parc.push({ id: p, proiect_id: 'pr1', id_parcela: idp, uat_id: 'u1', tronson: 1, sters_la: null })
     cont.push(contact(d))
     tok.push({ detinator_id: d, token_raspuns: `tok${i}` })
   }
@@ -90,7 +90,7 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
       jurnal.numere++
       const r = conv({ id: `c${++contor}`, detinator_id: d.id, canal, nr_document: `C-${idx(jurnal.numere)}`, created_at: '2026-11-04' })
       tabele.red_convocari.push(r); jurnal.inserturi.push(r)
-      return { data: [{ convocare_id: r.id, nr_document: r.nr_document }], error: null, status: 200 }
+      return { data: [{ convocare_id: r.id, nr_document: r.nr_document, parcela_id: p.id, uat_id: p.uat_id, proiect_id: p.proiect_id }], error: null, status: 200 }
     },
     storage: { from: () => ({
       upload: async (path) => { jurnal.upload.push(path); return uploadEsueaza.has(path) ? { error: { message: 'storage picat' } } : { error: null } },
@@ -411,6 +411,57 @@ describe('r4: protocolul comun cale individuală / lot', () => {
     const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale, esteCurent: () => curent })
     expect(c.jurnal.apeluriRezerva).toBe(0); expect(c.jurnal.numere).toBe(0)
     expect(r.raport.map(x => x.stare)).toEqual(['oprit', 'oprit', 'oprit'])
+  })
+})
+
+describe('r5 (Copilot #989)', () => {
+  it('P1-01: deținătorul mutat pe altă parcelă după „Verifică” → zero documente, zero rezervări', async () => {
+    const t = date(2), c = clientFals(t)
+    const p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+    t.red_detinatori[0].parcela_id = 'p0002'
+    const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
+    expect(r.raport.map(x => x.stare)).toEqual(['schimbat', 'ok'])
+    expect(r.fisiere.map(f => f.nume)).toEqual(['C-0001_TST-0002.docx'])
+    expect(c.jurnal.upload.every(u => !u.includes('TST-0001'))).toBe(true)
+  })
+  it('P1-01: parcela mutată în alt UAT / categorie schimbată → „schimbat” (amprenta include uat_id / categoria_folosinta)', async () => {
+    const t = date(2), c = clientFals(t)
+    const p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+    t.red_parcele[0].categoria_folosinta = 'pasune'
+    t.red_parcele[1].uat_id = 'u2'
+    const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
+    expect(r.raport.map(x => x.stare)).toEqual(['schimbat', 'schimbat'])
+    expect(c.jurnal.apeluriRezerva).toBe(0)
+  })
+  it('P1-01: serverul a rezervat pe altă parcelă / UAT (mutare între recitire și RPC) → niciun document, convocarea rămâne „fișier neîncărcat”', async () => {
+    const t = date(1)
+    const c = clientFals(t, { inainteDeRezervare: () => { t.red_parcele[0].uat_id = 'u9' } })
+    genFals.mockClear()
+    const r = await ruleaza(c)
+    expect(r.raport[0]).toMatchObject({ stare: 'eroare', nrDocument: 'C-0001' })
+    expect(r.raport[0].motiv).toMatch(/altă parcelă \/ UAT.*fișier neîncărcat/)
+    expect(genFals).not.toHaveBeenCalled(); expect(c.jurnal.upload).toEqual([]); expect(r.fisiere).toEqual([])
+    expect(activeNeexp(t, 'd0001').map(x => x.fisier_convocator_path)).toEqual([null])
+  })
+  it('P2-01: regenerarea în masă folosește data civilă București (2026-11-03T22:30:00Z → 2026-11-04)', async () => {
+    const t = date(1)
+    t.red_convocari = [conv({ id: 'cv1', detinator_id: 'd0001', nr_document: 'C-0050', created_at: '2026-11-03T22:30:00Z' })]
+    const c = clientFals(t); genFals.mockClear()
+    const r = await ruleaza(c)
+    expect(r.raport[0]).toMatchObject({ actiune: 'reincarca', stare: 'ok' })
+    expect(genFals.mock.calls[0][0].dataDocument).toBe('2026-11-04')
+  })
+  it('P2-02: „reia” recitește eligibilitatea — convocarea expediată după „Verifică” nu mai intră în zip / borderou', async () => {
+    const t = date(2)
+    t.red_convocari = [conv({ id: 'cv1', detinator_id: 'd0001', nr_document: 'C-0011', fisier_convocator_path: 'a/C-0011-v1.docx' }),
+      conv({ id: 'cv2', detinator_id: 'd0002', nr_document: 'C-0012', fisier_convocator_path: 'a/C-0012-v1.docx' })]
+    const c = clientFals(t)
+    const p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+    t.red_convocari[0].data_expediere = '2026-11-05'
+    t.red_convocari[1].fisier_convocator_path = 'a/C-0012-v2.docx'
+    const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, includeGenerate: true, deps: depsReale })
+    expect(r.raport.map(x => x.stare)).toEqual(['schimbat', 'schimbat'])
+    expect(c.jurnal.download).toEqual([]); expect(r.fisiere).toEqual([])
   })
 })
 
