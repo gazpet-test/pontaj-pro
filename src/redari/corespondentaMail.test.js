@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { eEmailValid, eEmailGazpet, CAZURI_EMAIL, construiesteMailIntern, subiectIntern, OFFICE, motivFaraMail, ultimulMail, mesajRezultatMail, MESAJ_INCERT } from './corespondentaMail.js'
-import { etagPuternicEgal, replyToIntern, ePdf, escHtml, pregatesteMailIntern } from '../../supabase/functions/_shared/redariCorespMail.mjs'
+import { etagPuternicEgal, replyToIntern, ePdf, escHtml, pregatesteMailIntern, AVERTISMENT_URMA, RESEND_ESEC_SIGUR } from '../../supabase/functions/_shared/redariCorespMail.mjs'
 import { CAMPURI_CONTINUT, stariInFormular, valideazaCorespondenta, mesajEroareCoresp, COL_CORESPONDENTA } from './corespondenta.js'
 
 const BAZA = {
@@ -66,7 +66,17 @@ describe('mailul intern', () => {
     expect(etagPuternicEgal('W/"abc"', '"abc"')).toBe(false)
     expect(etagPuternicEgal('w/"abc"', '"abc"')).toBe(false)
     expect(etagPuternicEgal('"abc"', '"abc"')).toBe(true)
-    expect(etagPuternicEgal(' "abc" ', '"abc"')).toBe(true)
+    // r4 (J-P2-01 / C-P2-02): forma stricta + comparatie integrala (fara trim / trunchiere)
+    expect(etagPuternicEgal(' "abc" ', '"abc"')).toBe(false)
+    expect(etagPuternicEgal('abc', 'abc')).toBe(false)               // fara ghilimele, chiar egale
+    expect(etagPuternicEgal('W/"abc"', 'W/"abc"')).toBe(false)       // slab egal
+    expect(etagPuternicEgal('"abc"', '"abd"')).toBe(false)           // puternic diferit
+    expect(etagPuternicEgal('""', '""')).toBe(false)                 // gol intre ghilimele
+    expect(etagPuternicEgal(undefined, undefined)).toBe(false)       // lipsa
+    const lung = '"' + 'a'.repeat(250) + '"'
+    expect(etagPuternicEgal(lung, '"' + 'a'.repeat(249) + 'b"')).toBe(false)   // diferenta dupa caracterul 200
+    expect(etagPuternicEgal(lung, lung.slice(0, 200))).toBe(false)             // prefix de 200 (cum l-ar taia o stocare) != integral
+    expect(etagPuternicEgal(lung, lung)).toBe(true)
     expect(etagPuternicEgal('abc', '"abc"')).toBe(false)
     expect(etagPuternicEgal(null, '"abc"')).toBe(false)
     expect(etagPuternicEgal('', '')).toBe(false)
@@ -179,6 +189,35 @@ describe('fluxul edge pregatesteMailIntern', () => {
     expect(rb.body.incert).toBe(true); expect(inchideri(b.apeluri)).toEqual(['necunoscut'])
     const c = fals({ resend: { ok: false, status: 422, json: async () => ({ message: 'bad' }) } }); const rc = await pregatesteMailIntern(CERERE, c.dep)
     expect(rc.body.incert).toBeUndefined(); expect(rc.body.error).toMatch(/Resend a refuzat/); expect(inchideri(c.apeluri)).toEqual(['eroare'])
+  })
+  it('r4 C-P2-01: Resend 408 (si orice cod nedeterminist) -> incert; doar 400/401/403/404/422 -> esec sigur', async () => {
+    expect(RESEND_ESEC_SIGUR).toEqual([400, 401, 403, 404, 422])
+    for (const status of [408, 409, 429, 418, 500, 503]) {
+      const f = fals({ resend: { ok: false, status, json: async () => ({}) } }); const r = await pregatesteMailIntern(CERERE, f.dep)
+      expect(r.body).toMatchObject({ incert: true, error: MESAJ_INCERT }); expect(inchideri(f.apeluri)).toEqual(['necunoscut'])
+    }
+    const ok = fals({ resend: { ok: true, status: 200, json: async () => ({}) } }); expect((await pregatesteMailIntern(CERERE, ok.dep)).body.incert).toBe(true)   // 2xx fara id
+    for (const status of RESEND_ESEC_SIGUR) {
+      const f = fals({ resend: { ok: false, status, json: async () => ({ message: 'x' }) } }); const r = await pregatesteMailIntern(CERERE, f.dep)
+      expect(r.body.incert).toBeUndefined(); expect(r.body.error).toMatch(/nimic trimis/); expect(inchideri(f.apeluri)).toEqual(['eroare'])
+    }
+  })
+  it('r4 J-P3-01 / C-P3-02: esec sigur + inchiderea urmei neconfirmata -> „nimic trimis” + avertisment separat (inainte de Resend si dupa 4xx determinist)', async () => {
+    const eroareInchidere = { data: null, error: { code: '23514', message: 'redari: x' } }
+    const a = fals({ storage: raspunsStorage('W/"etag-1"'), inchide: eroareInchidere }); const ra = await pregatesteMailIntern(CERERE, a.dep)
+    expect(ra.body).toMatchObject({ urma_inchisa: false, avertisment: AVERTISMENT_URMA }); expect(ra.body.error).toMatch(/nimic trimis/); expect(a.apeluri.resend).toHaveLength(0)
+    const b = fals({ resend: { ok: false, status: 422, json: async () => ({ message: 'bad' }) }, inchide: () => { throw new Error('timeout') } }); const rb = await pregatesteMailIntern(CERERE, b.dep)
+    expect(rb.body).toMatchObject({ urma_inchisa: false, avertisment: AVERTISMENT_URMA }); expect(rb.body.error).toMatch(/Resend a refuzat.*nimic trimis/); expect(rb.body.incert).toBeUndefined()
+    const c = fals(); const rc = await pregatesteMailIntern(CERERE, { ...c.dep, descarca: async () => raspunsStorage('W/"etag-1"') })
+    expect(rc.body.avertisment).toBeUndefined(); expect(rc.body.urma_inchisa).toBe(true)
+    // UI: refuzul ramane afisat ca atare, avertismentul vine separat
+    const m = await mesajRezultatMail({ data: null, error: { message: 'x', context: { json: async () => ra.body } } })
+    expect(m).toMatchObject({ ok: false, incert: false, avertisment: AVERTISMENT_URMA }); expect(m.text).toMatch(/nimic trimis/)
+  })
+  it('r4 C-P3-01 (exceptie documentata): expeditorul = office@ -> CC omis', async () => {
+    const f = fals({ incepe: { data: payloadRpc({ expeditor_email: 'office@gazpet.ro', cc: null }), error: null } }); const r = await pregatesteMailIntern(CERERE, f.dep)
+    expect(r.body).toMatchObject({ ok: true, catre: 'office@gazpet.ro', cc: [] })
+    expect(f.apeluri.resend[0].corp.to).toEqual(['office@gazpet.ro']); expect(f.apeluri.resend[0].corp.cc).toBeUndefined()
   })
   it('esec inainte de trimitere (descarcare cazuta) -> refuz clar, urma eroare, nimic trimis', async () => {
     const a = fals({ storage: new Error('retea') }); const r = await pregatesteMailIntern(CERERE, a.dep)

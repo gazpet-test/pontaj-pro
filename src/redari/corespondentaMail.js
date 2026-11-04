@@ -1,8 +1,8 @@
 // Redări — „📧 Pregătește mailul” (decizia Răzvan 04.11.2026, migrarea 20261130f, edge function redari-coresp-mail). Logică pură, fără React.
 // Regulile tari sunt în BD (RPC fn_red_coresp_mail_incepe: admin/editor, rând aprobat cu fișier, eTag neschimbat, @gazpet.ro, 60 s, 20/zi/proiect)
 // și în edge (descărcare cu JWT-ul utilizatorului, eTag din antet = cel aprobat). Aici doar oglindim regulile, ca UI-ul să nu ofere un buton refuzat.
-export { OFFICE, RX_EMAIL, RX_GAZPET, eEmailValid, eEmailGazpet, normEmail, construiesteMailIntern, subiectIntern, CAZURI_EMAIL, MESAJ_INCERT } from '../../supabase/functions/_shared/redariCorespMail.mjs'
-import { eEmailValid, eEmailGazpet, MESAJ_INCERT } from '../../supabase/functions/_shared/redariCorespMail.mjs'
+export { OFFICE, RX_EMAIL, RX_GAZPET, eEmailValid, eEmailGazpet, normEmail, construiesteMailIntern, subiectIntern, CAZURI_EMAIL, MESAJ_INCERT, AVERTISMENT_URMA } from '../../supabase/functions/_shared/redariCorespMail.mjs'
+import { eEmailValid, eEmailGazpet, MESAJ_INCERT, AVERTISMENT_URMA } from '../../supabase/functions/_shared/redariCorespMail.mjs'
 
 export const COL_MAIL_CORESP = 'id, corespondenta_id, proiect_id, fisier_id, versiune_confirmata, catre, cc, subiect, stare, resend_id, eroare, pregatit_de_nume, created_by, created_at, finalizat_la'
 export const PLAFON_ZI_PROIECT = 20
@@ -40,5 +40,6 @@ export async function mesajRezultatMail(rez) {
   if (error?.context && typeof error.context.json === 'function') { try { corp = await error.context.json() } catch { corp = null } }
   if (!error && corp?.ok) return { ok: true, incert: false, text: `Mailul a fost pregătit și trimis intern la ${corp.catre} (CC ${corp.cc?.join(', ') || '-'}). Verifică inboxul și trimite-l tu.` }
   if (!corp || corp.incert || !corp.error) return { ok: false, incert: true, text: MESAJ_INCERT }
-  return { ok: false, incert: false, text: String(corp.error) }
+  // r4 (J-P3-01 / C-P3-02): refuz sigur („nimic trimis”), dar închiderea urmei neconfirmată → avertisment SEPARAT
+  return { ok: false, incert: false, text: String(corp.error), ...(corp.urma_inchisa === false ? { avertisment: AVERTISMENT_URMA } : {}) }
 }

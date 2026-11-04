@@ -16,7 +16,7 @@ BEGIN
   IF to_regclass('public.red_corespondenta_mailuri') IS NULL THEN RAISE EXCEPTION '20261130f revenire: migrarea lipseste'; END IF;
   IF to_regnamespace(v_schema) IS NOT NULL THEN RAISE EXCEPTION '20261130f revenire: schema de arhiva exista deja (%)', v_schema; END IF;
   -- functia de reguli trebuie sa fie versiunea din 20261130f (altfel s-a schimbat intre timp si revenirea textuala ar pierde munca altcuiva)
-  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.fn_red_corespondenta_reguli()')) IS DISTINCT FROM 'e49bf054b32057acea04c3913a5c76f5' THEN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.fn_red_corespondenta_reguli()')) IS DISTINCT FROM '6eaa5e9e3e6b19d3e93567dbe2f3eaa4' THEN
     RAISE EXCEPTION '20261130f revenire: fn_red_corespondenta_reguli nu e versiunea din 20261130f';
   END IF;
   -- LOCK inainte de numarare (L14): nimic nu se mai scrie in urma / in coloanele noi pana la COMMIT

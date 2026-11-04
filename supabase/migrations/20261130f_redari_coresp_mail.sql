@@ -110,9 +110,10 @@ CREATE TABLE public.red_corespondenta_mailuri (
   proiect_id uuid NOT NULL CONSTRAINT red_corespondenta_mailuri_proiect_fk REFERENCES public.red_proiecte(id),
   fisier_id uuid NOT NULL CONSTRAINT red_corespondenta_mailuri_fisier_fk REFERENCES public.red_corespondenta_fisiere(id),
   versiune_confirmata integer NOT NULL,
-  fisier_etag text NOT NULL CHECK (length(fisier_etag) BETWEEN 1 AND 200),
+  fisier_etag text NOT NULL CHECK (length(fisier_etag) BETWEEN 3 AND 200 AND fisier_etag ~ '^"[^"]+"$'),
   catre text NOT NULL CHECK (length(catre) <= 254 AND lower(catre) ~ '^[a-z0-9._%+-]+@gazpet\.ro$'),
-  cc text NOT NULL CHECK (cc = 'office@gazpet.ro'),
+  -- CC = office@; EXCEPTIE documentata (decizia Razvan 04.11.2026, r4 C-P3-01): daca expeditorul e chiar office@, CC se omite (aceeasi adresa)
+  cc text CHECK ((lower(catre) <> 'office@gazpet.ro' AND cc = 'office@gazpet.ro') OR (lower(catre) = 'office@gazpet.ro' AND cc IS NULL)),
   subiect text NOT NULL CHECK (length(subiect) BETWEEN 1 AND 300),
   stare text NOT NULL DEFAULT 'in_curs' CHECK (stare IN ('in_curs', 'trimis', 'eroare', 'necunoscut')),
   resend_id text CHECK (resend_id IS NULL OR length(resend_id) <= 200),
@@ -202,8 +203,16 @@ BEGIN
   SELECT * INTO f FROM public.red_corespondenta_fisiere WHERE id = c.aprobat_fisier_id AND corespondenta_id = c.id AND rol = 'de_trimis';
   IF NOT FOUND THEN RAISE EXCEPTION 'redari: fisierul aprobat nu e fisierul de trimis al randului' USING ERRCODE = '23514'; END IF;
   IF lower(f.path) !~ '\.pdf$' THEN RAISE EXCEPTION 'redari: fisierul aprobat nu e PDF' USING ERRCODE = '23514'; END IF;
-  SELECT left(btrim(o.metadata ->> 'eTag'), 200) INTO v_etag FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = f.path;
-  IF v_etag IS NULL OR v_etag IS DISTINCT FROM c.aprobat_storage_etag THEN
+  -- r4 (J-P2-01 / C-P2-02): eTag-ul curent = un ETag HTTP PUTERNIC ("...", fara W/), citit integral (fara btrim / left), cel mult 200 de caractere
+  -- (limita de stocare din red_corespondenta_fisiere / aprobat_storage_etag: peste ea = refuz explicit, nu taiere), apoi egal EXACT cu cel aprobat.
+  SELECT o.metadata ->> 'eTag' INTO v_etag FROM storage.objects o WHERE o.bucket_id = 'redari' AND o.name = f.path;
+  IF v_etag IS NULL OR v_etag !~ '^"[^"]+"$' THEN
+    RAISE EXCEPTION 'redari: fisierul aprobat lipseste din Storage sau nu are un eTag puternic; mailul nu se pregateste' USING ERRCODE = '23514';
+  END IF;
+  IF length(v_etag) > 200 THEN
+    RAISE EXCEPTION 'redari: eTag-ul fisierului depaseste limita de stocare (200); mailul nu se pregateste' USING ERRCODE = '23514';
+  END IF;
+  IF c.aprobat_storage_etag !~ '^"[^"]+"$' OR v_etag IS DISTINCT FROM c.aprobat_storage_etag THEN
     RAISE EXCEPTION 'redari: fisierul aprobat s-a schimbat sau lipseste din Storage; mailul nu se pregateste' USING ERRCODE = '23514';
   END IF;
   -- J-P2-1: fereastra de 60 s pe rand, pe TOATE incercarile, indiferent de stare (o eroare inchisa de apelant nu deblocheaza)
@@ -218,7 +227,9 @@ BEGIN
   SELECT count(*) INTO v_n FROM public.red_corespondenta_mailuri x WHERE x.proiect_id = c.proiect_id AND x.created_at >= v_zi;
   IF v_n >= 20 THEN RAISE EXCEPTION 'redari: plafonul de 20 de mailuri pregatite pe zi pe proiect a fost atins' USING ERRCODE = '23514'; END IF;
   INSERT INTO public.red_corespondenta_mailuri (corespondenta_id, proiect_id, fisier_id, versiune_confirmata, fisier_etag, catre, cc, subiect, created_by)
-  VALUES (c.id, c.proiect_id, f.id, c.versiune, v_etag, lower(c.expeditor_email), 'office@gazpet.ro', left(c.mail_subiect, 300), v_uid)
+  VALUES (c.id, c.proiect_id, f.id, c.versiune, v_etag, lower(c.expeditor_email),
+          CASE WHEN lower(c.expeditor_email) = 'office@gazpet.ro' THEN NULL ELSE 'office@gazpet.ro' END,   -- expeditor = office@ -> fara CC (decizie r4)
+          left(c.mail_subiect, 300), v_uid)
   RETURNING * INTO m;
   SELECT p.cod INTO v_proiect_cod FROM public.red_proiecte p WHERE p.id = c.proiect_id;
   SELECT left(p.name, 200) INTO v_aprobat_de FROM public.profiles p WHERE p.id = c.aprobat_de;
@@ -317,7 +328,9 @@ BEGIN
       RAISE EXCEPTION 'redari: aprobarea e dinainte de fisiere: urca PDF-ul de trimis si cere din nou aprobarea' USING ERRCODE = '23514';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere f JOIN storage.objects o ON o.bucket_id = 'redari' AND o.name = f.path
-                    WHERE f.id = NEW.aprobat_fisier_id AND left(btrim(o.metadata ->> 'eTag'), 200) = NEW.aprobat_storage_etag) THEN
+                    WHERE f.id = NEW.aprobat_fisier_id
+                      -- 20261130f r4: eTag HTTP PUTERNIC ("...", fara W/), comparat integral (fara btrim / trunchiere)
+                      AND NEW.aprobat_storage_etag ~ '^"[^"]+"$' AND (o.metadata ->> 'eTag') = NEW.aprobat_storage_etag) THEN
       RAISE EXCEPTION 'redari: fisierul aprobat s-a schimbat sau lipseste din Storage; nu se poate marca trimis' USING ERRCODE = '23514';
     END IF;
   END IF;
@@ -338,7 +351,7 @@ CREATE POLICY red_corespondenta_mailuri_sel ON public.red_corespondenta_mailuri 
 DO $post$
 BEGIN
   -- baseline L15 dupa inlocuire: corpul 30f al regulilor, restul neschimbat
-  PERFORM public.fn_red_coresp_mail_verifica_baza('e49bf054b32057acea04c3913a5c76f5');
+  PERFORM public.fn_red_coresp_mail_verifica_baza('6eaa5e9e3e6b19d3e93567dbe2f3eaa4');
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_corespondenta_mailuri') <> 1 THEN RAISE EXCEPTION '20261130f: politici'; END IF;
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.red_corespondenta_mailuri'::regclass) THEN RAISE EXCEPTION '20261130f: RLS oprit'; END IF;
   IF has_table_privilege('anon', 'public.red_corespondenta_mailuri', 'SELECT')

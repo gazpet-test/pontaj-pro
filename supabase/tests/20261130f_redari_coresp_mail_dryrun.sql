@@ -98,27 +98,27 @@ END $t$;
 -- TEST1b (r2, J-P2-4): baseline L15 trece pe starea curenta si refuza un trigger de reguli dezactivat / un fn_red_nivel cu corp schimbat
 -- (fiecare abatere in subtranzactie anulata, refacuta automat)
 DO $t$ BEGIN
-  PERFORM public.fn_red_coresp_mail_verifica_baza('e49bf054b32057acea04c3913a5c76f5');
+  PERFORM public.fn_red_coresp_mail_verifica_baza('6eaa5e9e3e6b19d3e93567dbe2f3eaa4');
   IF NOT pg_temp.r30f_refuza_m($q$SELECT public.fn_red_coresp_mail_verifica_baza('0705e04f3e26656c2116b6d1b9f87c6e')$q$,'P0001','fn_red_corespondenta_reguli') THEN RAISE EXCEPTION 'TEST1b FAIL: md5 vechi acceptat'; END IF;
   BEGIN
     ALTER TABLE public.red_corespondenta DISABLE TRIGGER trg_red_corespondenta_reguli;
-    IF NOT pg_temp.r30f_refuza_m($q$SELECT public.fn_red_coresp_mail_verifica_baza('e49bf054b32057acea04c3913a5c76f5')$q$,'P0001','trg_red_corespondenta_reguli') THEN RAISE EXCEPTION 'TEST1b FAIL: trigger dezactivat neprins'; END IF;
+    IF NOT pg_temp.r30f_refuza_m($q$SELECT public.fn_red_coresp_mail_verifica_baza('6eaa5e9e3e6b19d3e93567dbe2f3eaa4')$q$,'P0001','trg_red_corespondenta_reguli') THEN RAISE EXCEPTION 'TEST1b FAIL: trigger dezactivat neprins'; END IF;
     RAISE EXCEPTION 'r30f_anuleaza';
   EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'r30f_anuleaza' THEN RAISE; END IF;
   END;
   BEGIN
     CREATE OR REPLACE FUNCTION public.fn_red_nivel() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$ SELECT 'admin'::text $fn$;
-    IF NOT pg_temp.r30f_refuza_m($q$SELECT public.fn_red_coresp_mail_verifica_baza('e49bf054b32057acea04c3913a5c76f5')$q$,'P0001','fn_red_nivel') THEN RAISE EXCEPTION 'TEST1b FAIL: fn_red_nivel schimbat neprins'; END IF;
+    IF NOT pg_temp.r30f_refuza_m($q$SELECT public.fn_red_coresp_mail_verifica_baza('6eaa5e9e3e6b19d3e93567dbe2f3eaa4')$q$,'P0001','fn_red_nivel') THEN RAISE EXCEPTION 'TEST1b FAIL: fn_red_nivel schimbat neprins'; END IF;
     RAISE EXCEPTION 'r30f_anuleaza';
   EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'r30f_anuleaza' THEN RAISE; END IF;
   END;
   BEGIN
     GRANT EXECUTE ON FUNCTION public.fn_red_corespondenta_reguli() TO authenticated;
-    IF NOT pg_temp.r30f_refuza_m($q$SELECT public.fn_red_coresp_mail_verifica_baza('e49bf054b32057acea04c3913a5c76f5')$q$,'P0001','EXECUTE') THEN RAISE EXCEPTION 'TEST1b FAIL: EXECUTE nou neprins'; END IF;
+    IF NOT pg_temp.r30f_refuza_m($q$SELECT public.fn_red_coresp_mail_verifica_baza('6eaa5e9e3e6b19d3e93567dbe2f3eaa4')$q$,'P0001','EXECUTE') THEN RAISE EXCEPTION 'TEST1b FAIL: EXECUTE nou neprins'; END IF;
     RAISE EXCEPTION 'r30f_anuleaza';
   EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'r30f_anuleaza' THEN RAISE; END IF;
   END;
-  PERFORM public.fn_red_coresp_mail_verifica_baza('e49bf054b32057acea04c3913a5c76f5');   -- refacut
+  PERFORM public.fn_red_coresp_mail_verifica_baza('6eaa5e9e3e6b19d3e93567dbe2f3eaa4');   -- refacut
   RAISE NOTICE 'TEST1b OK';
 END $t$;
 
@@ -277,6 +277,23 @@ DO $t$ DECLARE v_vechi integer; BEGIN
   END IF;
   RAISE NOTICE 'TEST7c OK';
 END $t$;
+-- TEST7d (r4, C-P3-01 — exceptie documentata, decizia Razvan): expeditorul = office@ -> CC omis (cc NULL in urma si in payload)
+SELECT pg_temp.r30f_ca(NULL,'postgres');
+ALTER TABLE public.red_corespondenta_mailuri DISABLE TRIGGER trg_red_coresp_mail_inainte;
+UPDATE public.red_corespondenta_mailuri SET created_at = clock_timestamp() - interval '2 minutes' WHERE corespondenta_id = pg_temp.r30f_g('Z1')::uuid;
+ALTER TABLE public.red_corespondenta_mailuri ENABLE TRIGGER trg_red_coresp_mail_inainte;
+SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
+UPDATE public.red_corespondenta SET expeditor_email='Office@Gazpet.ro', stare='draft' WHERE id=pg_temp.r30f_g('Z1')::uuid;
+SELECT pg_temp.r30f_ca(pg_temp.r30f_g('owner')::uuid,'authenticated');
+UPDATE public.red_corespondenta SET stare='aprobat', aprobat_fisier_id=(SELECT id FROM public.red_corespondenta_fisiere WHERE sha256=repeat('a',64)) WHERE id=pg_temp.r30f_g('Z1')::uuid;
+SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
+DO $t$ DECLARE j jsonb; BEGIN
+  EXECUTE pg_temp.r30f_incepe('Z1') INTO j;
+  IF j->>'expeditor_email' <> 'office@gazpet.ro' OR j->'cc' <> 'null'::jsonb
+     OR (SELECT catre<>'office@gazpet.ro' OR cc IS NOT NULL FROM public.red_corespondenta_mailuri WHERE id=(j->>'mail_id')::uuid) THEN RAISE EXCEPTION 'TEST7d FAIL: CC office@ %', j; END IF;
+  PERFORM public.fn_red_coresp_mail_inchide((j->>'mail_id')::uuid,'trimis','re_office',NULL);
+  RAISE NOTICE 'TEST7d OK';
+END $t$;
 
 -- TEST8: Z2 aprobat dar fara campurile mailului -> refuz; eTag schimbat in Storage -> refuz; randul inexistent -> P0002
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
@@ -292,16 +309,51 @@ DO $t$ BEGIN
   IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514','s-a schimbat sau lipseste din Storage') THEN RAISE EXCEPTION 'TEST8 FAIL: eTag schimbat'; END IF;
   RAISE NOTICE 'TEST8b OK';
 END $t$;
+-- TEST8c (r4, J-P2-01 / C-P2-02): forma eTag-ului curent: slab egal, fara ghilimele, lipsa, cu spatiu (fara btrim) -> refuz
+SELECT pg_temp.r30f_ca(NULL,'postgres');
+DO $t$ DECLARE r record; v_cale text := 'TEST-RAZVAN/corespondenta/Z1/20261104-110000-aaaaaaaa-scrisoare.pdf'; BEGIN
+  FOR r IN SELECT * FROM (VALUES ('W/"etag-z1"','nu are un eTag puternic'), ('w/"etag-z1"','nu are un eTag puternic'), ('etag-z1','nu are un eTag puternic'),
+                                 (' "etag-z1"','nu are un eTag puternic'), (NULL,'nu are un eTag puternic'), ('"etag-alt"','s-a schimbat sau lipseste')) AS v(etag, mesaj) LOOP
+    PERFORM pg_temp.r30f_ca(NULL,'postgres');
+    UPDATE storage.objects SET metadata = CASE WHEN r.etag IS NULL THEN metadata - 'eTag' ELSE metadata || jsonb_build_object('eTag', r.etag) END WHERE bucket_id='redari' AND name=v_cale;
+    PERFORM pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
+    IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z1'),'23514',r.mesaj) THEN RAISE EXCEPTION 'TEST8c FAIL: eTag % acceptat', coalesce(r.etag,'(lipsa)'); END IF;
+  END LOOP;
+  PERFORM pg_temp.r30f_ca(NULL,'postgres');
+  UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-z1\""}'::jsonb WHERE bucket_id='redari' AND name=v_cale;
+  RAISE NOTICE 'TEST8c OK';
+END $t$;
+-- TEST8d (r4): eTag mai lung de 200 (30e l-a retinut taiat la 200 la aprobare) -> refuz explicit „depaseste limita”, nu comparatie pe prefix
+SELECT pg_temp.r30f_ca(NULL,'postgres');
+DO $t$ DECLARE z3 uuid; BEGIN
+  INSERT INTO public.red_corespondenta(proiect_id,cod,ordine,destinatar,subiect,destinatar_email,mail_subiect,mail_text,expeditor_email)
+    VALUES (pg_temp.r30f_g('pr')::uuid,'Z3',903,'Destinatar 3','Subiect 3','a@b.ro','S3','T3','cristina.dumitrescu@gazpet.ro') RETURNING id INTO z3;
+  PERFORM set_config('r30f.Z3',z3::text,true);
+  INSERT INTO storage.objects(bucket_id,name,metadata) VALUES ('redari','TEST-RAZVAN/corespondenta/Z3/20261104-110009-cccccccc-lung.pdf',
+    jsonb_build_object('mimetype','application/pdf','size',10,'eTag','"'||repeat('a',250)||'"'));
+END $t$;
+SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
+INSERT INTO public.red_corespondenta_fisiere(corespondenta_id,rol,path,nume_original,mime,marime,sha256,storage_etag)
+  VALUES (pg_temp.r30f_g('Z3')::uuid,'de_trimis','TEST-RAZVAN/corespondenta/Z3/20261104-110009-cccccccc-lung.pdf','lung.pdf','application/pdf',5,repeat('c',64),'x');
+SELECT pg_temp.r30f_ca(pg_temp.r30f_g('owner')::uuid,'authenticated');
+UPDATE public.red_corespondenta SET stare='aprobat', aprobat_fisier_id=(SELECT id FROM public.red_corespondenta_fisiere WHERE sha256=repeat('c',64)) WHERE id=pg_temp.r30f_g('Z3')::uuid;
+SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF (SELECT length(aprobat_storage_etag) FROM public.red_corespondenta WHERE id=pg_temp.r30f_g('Z3')::uuid) <> 200 THEN RAISE EXCEPTION 'TEST8d FAIL: preconditie (eTag taiat la 200 de 30e)'; END IF;
+  IF NOT pg_temp.r30f_refuza_m(pg_temp.r30f_incepe('Z3'),'23514','depaseste limita de stocare') THEN RAISE EXCEPTION 'TEST8d FAIL: eTag peste 200 acceptat'; END IF;
+  IF (SELECT count(*) FROM public.red_corespondenta_mailuri WHERE corespondenta_id=pg_temp.r30f_g('Z3')::uuid) <> 0 THEN RAISE EXCEPTION 'TEST8d FAIL: rand scris'; END IF;
+  RAISE NOTICE 'TEST8d OK';
+END $t$;
 SELECT pg_temp.r30f_ca(NULL,'postgres');
 UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-z1\""}'::jsonb WHERE bucket_id='redari' AND name='TEST-RAZVAN/corespondenta/Z1/20261104-110000-aaaaaaaa-scrisoare.pdf';
 
--- TEST9: plafonul de 20 / zi / proiect (17 intentii fictive azi + cele 3 de pe Z1 = 20) -> refuz; viewer-ul vede urma
+-- TEST9: plafonul de 20 / zi / proiect (16 incercari fictive azi + cele 4 de pe Z1 = 20) -> refuz; viewer-ul vede urma
 ALTER TABLE public.red_corespondenta_mailuri DISABLE TRIGGER trg_red_coresp_mail_inainte;
 UPDATE public.red_corespondenta_mailuri SET created_at = clock_timestamp() - interval '2 minutes' WHERE corespondenta_id = pg_temp.r30f_g('Z1')::uuid;
 INSERT INTO public.red_corespondenta_mailuri(corespondenta_id,proiect_id,fisier_id,versiune_confirmata,fisier_etag,catre,cc,subiect,stare,eroare,created_by,created_at,finalizat_la)
   SELECT c.id, c.proiect_id, c.aprobat_fisier_id, c.versiune, '"etag-z2"', 'a@gazpet.ro', 'office@gazpet.ro', 'fictiv', 'eroare', 'fictiv',
          pg_temp.r30f_g('editor')::uuid, clock_timestamp() - interval '5 minutes', clock_timestamp()
-    FROM public.red_corespondenta c, generate_series(1,17) g WHERE c.id = pg_temp.r30f_g('Z2')::uuid;
+    FROM public.red_corespondenta c, generate_series(1,16) g WHERE c.id = pg_temp.r30f_g('Z2')::uuid;
 ALTER TABLE public.red_corespondenta_mailuri ENABLE TRIGGER trg_red_coresp_mail_inainte;
 SELECT pg_temp.r30f_ca(pg_temp.r30f_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN

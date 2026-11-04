@@ -525,6 +525,7 @@ Stare 04.11.2026: punctele 1–3 sunt făcute.
 - **Decizie 04.11.2026, aprobat de Răzvan (varianta A, „simplificăm”), risc acceptat: mail intern dublu.** Fără reluare / intenție: la rezultat
   incert UI-ul spune „Rezultat incert — verifică inboxul expeditorului; dacă mailul nu a venit, poți apăsa din nou după 60 s (poate produce un mail
   intern dublu)”. Dacă istoricul mailurilor nu se poate citi, butonul e oprit.
+- r4: eTag strict ("..." puternic, comparat integral) în RPC și în edge; Resend 408 = incert; excepție documentată: expeditor = office@ → fără CC.
 - Ordinea livrării: (1) migrarea `20261130f` (după `20261130e`), (2) deploy edge `redari-coresp-mail` cu verify_jwt=false, (3) merge UI-ul
   (UI-ul citește coloanele noi: fără migrare, ecranul Corespondență dă eroare). Fișa de securitate: `docs/redari/AUTOMATIZARE_CORESP_MAIL.md`.
 

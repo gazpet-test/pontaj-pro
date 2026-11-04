@@ -37,6 +37,8 @@ subiectul și textul gata scrise și PDF-ul aprobat atașat. Expeditorul le copi
   `reply_to` = adresa utilizatorului DOAR dacă e @gazpet.ro, altfel office@; un rând în `red_corespondenta_mailuri` (in_curs, apoi o singură
   închidere: trimis / eroare / necunoscut). Nu atinge bani, drepturi, alte tabele; nu trimite nimic în afara domeniului gazpet.ro.
   **Risc acceptat (decizia Răzvan 04.11.2026, varianta A): mail intern dublu** după un rezultat incert urmat de un nou click.
+  **Excepție documentată (decizia Răzvan 04.11.2026, r4 C-P3-01):** dacă `expeditor_email` = `office@gazpet.ro`, CC se omite (aceeași adresă);
+  în urmă `cc` = NULL (CHECK: CC = office@ pentru orice alt expeditor, NULL doar când expeditorul e office@).
 - **(c) Identitate:** JWT-ul utilizatorului pe tot drumul — RPC-urile SECURITY DEFINER iau identitatea din `auth.uid()` (JWT), descărcarea PDF-ului
   din bucket-ul `redari` se face cu JWT-ul utilizatorului (politica `red_storage_sel` = admin / editor). **Fără `service_role`.** DEFINER e necesar
   doar ca să scrie urma fără drept de INSERT direct și să citească `storage.objects` (eTag) — ambele sub verificarea explicită de nivel din funcție.
@@ -47,10 +49,13 @@ subiectul și textul gata scrise și PDF-ul aprobat atașat. Expeditorul le copi
   sau un PDF nou face aprobarea să cadă) + click-ul unui admin / editor cu confirmare în fereastră; click-ul trimite versiunea și fișierul aprobat
   VĂZUTE, iar RPC-ul le compară sub `FOR UPDATE` (diferență = „rândul s-a schimbat; reîncarcă”). Limite în RPC, sub blocare: 60 s pe rând pe TOATE
   încercările, indiferent de stare; 20 de încercări / zi (Europe/Bucharest) / proiect. PDF-ul: eTag-ul din `storage.objects` = cel aprobat (RPC) și
-  antetul ETag al descărcării = valoarea puternică aprobată, exact (`W/…` refuzat). Succes doar dacă Resend a acceptat ȘI urma s-a închis `trimis`;
-  orice rezultat incert (rețea, timeout, 5xx, eroare RPC netransparentă, închidere neconfirmată) → UI: „Rezultat incert — verifică inboxul
+  antetul ETag al descărcării = valoarea aprobată; în AMBELE locuri eTag-ul trebuie să fie un ETag HTTP puternic (`"..."`, fără `W/`, nevid),
+  comparat integral, fără trim / trunchiere (r4); peste limita de stocare de 200 = refuz explicit. Succes doar dacă Resend a acceptat ȘI urma s-a închis `trimis`;
+  orice rezultat incert (rețea, timeout, Resend 408 / 409 / 429 / 5xx / orice cod în afară de 400 / 401 / 403 / 404 / 422, eroare RPC netransparentă,
+  închidere neconfirmată) → UI: „Rezultat incert — verifică inboxul
   expeditorului; dacă mailul nu a venit, poți apăsa din nou după 60 s (poate produce un mail intern dublu)”. Refuzurile de business clare
-  (42501 / 23514 / P0002) apar ca atare. Dacă istoricul mailurilor nu se poate citi, butonul e oprit („Nu am putut citi istoricul mailurilor — reîncarcă”).
+  (42501 / 23514 / P0002, Resend 400 / 401 / 403 / 404 / 422) apar ca atare, cu „nimic trimis”; dacă la un astfel de refuz închiderea urmei nu se
+  confirmă, UI-ul afișează separat „Închiderea urmei nu s-a confirmat; istoricul poate rămâne neconfirmat”. Dacă istoricul mailurilor nu se poate citi, butonul e oprit („Nu am putut citi istoricul mailurilor — reîncarcă”).
   Migrarea verifică baseline-ul L15 al obiectelor de care depinde (corp + setări + owner + EXECUTE pentru regulile corespondenței, `fn_red_nivel`,
   `fn_red_jurnal`, `fn_red_versiune_creste`; cele 3 triggere de pe `red_corespondenta`: funcție, activ, tip) — fără extindere la tot catalogul
   (observația Copilot r2 P3-01 rămâne acceptată).

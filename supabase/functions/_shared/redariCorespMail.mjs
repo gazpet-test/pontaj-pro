@@ -43,11 +43,12 @@ export const CAZURI_EMAIL = [
 export const escHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 const linie = s => String(s ?? '').replace(/[\r\n\t]+/g, ' ').trim()
 
-// r2 (C-P3-01): eTag-ul din antetul descărcării trebuie să fie PUTERNIC (fără „W/”) și EXACT egal cu valoarea aprobată (din storage.objects.metadata,
-// cu ghilimele, ca antetul). Un ETag slab nu garantează aceiași octeți → refuz. Doar spațiile de la capete se ignoră.
+// r4 (J-P2-01 / C-P2-02): ETag HTTP PUTERNIC = încadrat în ghilimele duble ("..."), nevid, fără prefix W/ (orice majuscule); aceeași formă ca
+// în RPC (fn_red_coresp_mail_incepe: '^"[^"]+"$'). Comparație INTEGRALĂ și exactă (fără trim, fără trunchiere): slab, fără ghilimele, gol = refuz.
+export const RX_ETAG_PUTERNIC = /^"[^"]+"$/
+export const eEtagPuternic = v => typeof v === 'string' && RX_ETAG_PUTERNIC.test(v)
 export function etagPuternicEgal(antet, aprobat) {
-  const a = String(antet ?? '').trim(), b = String(aprobat ?? '').trim()
-  return a.length > 0 && !/^W\//i.test(a) && !/^W\//i.test(b) && a === b
+  return eEtagPuternic(antet) && eEtagPuternic(aprobat) && antet === aprobat
 }
 // r2 (C-P2-03): reply_to = adresa utilizatorului DOAR dacă e @gazpet.ro, altfel office@ (fără adrese externe în mailul intern)
 export const replyToIntern = email => eEmailGazpet(email) ? normEmail(email) : OFFICE
@@ -76,6 +77,8 @@ export function construiesteMailIntern(d) {
   if (String(d?.mailText ?? '').length > MAX_TEXT_MAIL) erori.push('Textul mailului e prea lung.')
   if (!String(d?.fisierNume ?? '').trim()) erori.push('Fișierul aprobat lipsește.')
   if (erori.length) return { erori }
+  // CC = office@. EXCEPȚIE DOCUMENTATĂ (decizia Răzvan 04.11.2026, r4 C-P3-01): dacă expeditorul e chiar office@, CC se omite (aceeași adresă);
+  // în urmă cc rămâne NULL (CHECK în BD).
   const cc = [OFFICE].filter(e => e !== catre)
   const destEmail = String(d.destinatarEmail).trim()
   const subiect = subiectIntern(d.cod, d.mailSubiect)
@@ -115,6 +118,9 @@ export const numeAtasament = (nume, path) => {
 // mesajele RPC-ului („redari: …”) → text pentru UI; erorile neașteptate nu se trimit brut (L10)
 export const mesajRpc = e => { const m = String(e?.message || ''); return /^redari: /.test(m) ? m.replace(/^redari: /, '').slice(0, 300) : 'pregătirea mailului a eșuat (eroare internă)' }
 export const MESAJ_INCERT = 'Rezultat incert — verifică inboxul expeditorului; dacă mailul nu a venit, poți apăsa din nou după 60 s (poate produce un mail intern dublu).'
+export const AVERTISMENT_URMA = 'Închiderea urmei nu s-a confirmat; istoricul poate rămâne neconfirmat.'
+// r4 (C-P2-01): „eșec sigur” la Resend DOAR pentru 4xx explicit deterministe; orice alt cod (408, 409, 429, 5xx, 2xx fără id), timeout, rețea = incert
+export const RESEND_ESEC_SIGUR = [400, 401, 403, 404, 422]
 // refuzuri de business CLARE din RPC (nimic scris, nimic trimis) → afișate ca atare
 const COD_CLAR = { '42501': 403, 'P0002': 404, '23514': 409 }
 const anuleaza = async r => { try { await r?.body?.cancel?.() } catch { /* nimic */ } }
@@ -142,14 +148,16 @@ export async function pregatesteMailIntern(cerere, dep) {
     if (rz === null) return { ok: false, eroare: 'închiderea urmei nu s-a confirmat (rețea / timeout)' }
     return rz.error ? { ok: false, eroare: mesajRpc(rz.error) } : { ok: true, stare: rz.data }
   }
-  // refuz sigur ÎNAINTE de trimitere (nimic plecat): urma = eroare, mesajul afișat ca atare
+  // refuz sigur (nimic plecat): urma = eroare; mesajul spune mereu „nimic trimis”. r4 (J-P3-01 / C-P3-02): dacă închiderea urmei nu se confirmă,
+  // răspunsul are separat `avertisment` (afișat distinct în UI).
   const esec = async (motiv, status = 409) => {
     const r = await inchide('eroare', null, motiv)
-    return raspuns(status, { error: motiv, urma_inchisa: r.ok, ...baza })
+    const text = /nimic trimis/.test(motiv) ? motiv : `${motiv} — nimic trimis`
+    return raspuns(status, { error: text, urma_inchisa: r.ok, ...(r.ok ? {} : { avertisment: AVERTISMENT_URMA }), ...baza })
   }
   // 2. Destinatarul mailului intern: obligatoriu @gazpet.ro (a doua verificare, după CHECK + RPC)
   const catre = normEmail(p?.expeditor_email)
-  if (!eEmailGazpet(catre)) return esec('expeditorul nu are o adresă @gazpet.ro; nu se trimite nimic')
+  if (!eEmailGazpet(catre)) return esec('expeditorul nu are o adresă @gazpet.ro')
   const fis = p?.fisier || {}
   const path = String(fis.path || '')
   if (!path || !/\.pdf$/i.test(path)) return esec('fișierul aprobat nu e PDF')
@@ -157,7 +165,7 @@ export async function pregatesteMailIntern(cerere, dep) {
   const r = await Promise.resolve().then(() => dep.descarca(path)).catch(() => null)
   if (r === null) return esec('descărcarea PDF-ului aprobat a eșuat (rețea / timeout); nimic trimis', 502)
   if (!r?.ok) { await anuleaza(r); return esec(`descărcarea PDF-ului aprobat a fost refuzată (${r?.status}); nimic trimis`, r?.status === 404 ? 409 : 502) }
-  if (!etagPuternicEgal(r.headers.get('etag'), fis.etag)) { await anuleaza(r); return esec('PDF-ul din Storage nu are amprenta aprobată (eTag diferit, slab sau lipsă); nu se trimite nimic') }
+  if (!etagPuternicEgal(r.headers.get('etag'), fis.etag)) { await anuleaza(r); return esec('PDF-ul din Storage nu are amprenta aprobată (eTag diferit, slab, fără ghilimele sau lipsă)') }
   const lung = Number(r.headers.get('content-length'))
   if (Number.isFinite(lung) && lung > MAX_PDF) { await anuleaza(r); return esec('PDF-ul depășește 25 MB') }
   const buf = await Promise.resolve().then(() => r.arrayBuffer()).catch(() => null)
@@ -186,12 +194,11 @@ export async function pregatesteMailIntern(cerere, dep) {
     if (ri.ok && ri.stare === 'trimis') return raspuns(200, { ok: true, resend_id: j.id, ...baza, catre: m.catre, cc: m.cc })
     return raspuns(200, { ok: false, incert: true, resend_acceptat: true, urma_inchisa: false, resend_id: j.id, error: MESAJ_INCERT, ...baza })
   }
-  // fără id / 5xx / 429 / 409 = incert (L05)
-  if (rr.ok || rr.status >= 500 || rr.status === 429 || rr.status === 409) {
+  // r4 (C-P2-01): doar 400 / 401 / 403 / 404 / 422 = refuz sigur; restul (408, 409, 429, 5xx, 2xx fără id, alte coduri) = incert (L05)
+  if (!RESEND_ESEC_SIGUR.includes(rr.status)) {
     const ri = await inchide('necunoscut', null, `Resend ${rr.status}: rezultat neconfirmat`)
     return raspuns(502, { error: MESAJ_INCERT, incert: true, urma_inchisa: ri.ok, ...baza })
   }
   const detaliu = String(j?.message || j?.name || '').slice(0, 200)
-  const ri = await inchide('eroare', null, `Resend ${rr.status}: ${detaliu}`)
-  return raspuns(502, { error: `Resend a refuzat mailul (${rr.status}): ${detaliu}; nimic trimis`, urma_inchisa: ri.ok, ...baza })
+  return esec(`Resend a refuzat mailul (${rr.status}): ${detaliu}`, 502)
 }

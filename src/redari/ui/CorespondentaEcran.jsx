@@ -138,6 +138,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       const msg = await mesajRezultatMail(rez)
       if (expirat()) return
       show(msg.ok ? msg.text : (msg.incert ? '⚠ ' : 'Pregătește mailul: ') + msg.text, msg.ok ? 'success' : 'error')
+      if (msg.avertisment) show('⚠ ' + msg.avertisment, 'error')   // r4: separat de „nimic trimis”
       await incarca()
     } catch { if (!expirat()) { show('⚠ ' + MESAJ_INCERT, 'error'); await incarca() } } finally { if (!expirat()) setLucru(false) }
   }
