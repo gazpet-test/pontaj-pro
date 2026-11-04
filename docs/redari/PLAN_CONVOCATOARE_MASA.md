@@ -1,48 +1,55 @@
 # Plan — convocatoarele în masă pe UAT (L1, BRIEF §4.1)
 
-04.11.2026 · branch `redari/convocatoare-masa` · fără migrări, fără reguli noi în client.
+04.11.2026 · branch `redari/convocatoare-masa` · PR #989 · r2 după Jakarinos NO-GO (P1-1..P1-3, P2).
 
 ## Ce face
 Pe tab-ul **🏛️ UAT-uri**, un panou nou (admin / editor): alegi UAT-ul → **Verifică** (citește, nu scrie nimic) → **📦 Generează
-convocatoarele UAT-ului** → la final descarcă un singur zip:
+convocatoarele UAT-ului** → un singur zip:
 `convocatoare_{proiect}_{UAT3}_{data}.zip` = DOCX-urile (`{nr_document}_{id_parcela}.docx`, același nume ca la generarea pe rând)
 + `borderou.csv` (formatul existent `borderouCsv`, contract §8) + `opis.xlsx` (foi: „Opis” = toate rândurile cu stare și motiv,
 „Borderou” = doar convocările din zip).
 
-Locul: tab-ul UAT-uri (un rând schimbat în `Redari.jsx`, la randarea tab-ului), ca să nu ating zona convocatorului din Registru
+Locul: tab-ul UAT-uri (două linii în `Redari.jsx`: importul și randarea tab-ului), ca să nu ating zona convocatorului din Registru
 (~390–420), `docx.js` sau `PlicuriEcran.jsx`. Logica pură: `src/redari/convocatoareMasa.js`; UI: `src/redari/ui/ConvocatoareMasa.jsx`.
 
 ## Pași
-1. **Pregătire (read-only)**: rândurile UAT-ului din `red_v_stare_parcela` (paginat), apoi în loturi de 100 id-uri: `red_detinatori`
-   (COL_DETINATOR), `red_parcele`, `red_detinatori_contact`, `red_detinatori_token`, `red_convocari` active.
+1. **Pregătire (read-only)**: rândurile UAT-ului din `red_v_stare_parcela`, apoi în loturi de 100 de id-uri: `red_detinatori`, `red_parcele`,
+   `red_detinatori_contact`, `red_detinatori_token`, `red_convocari` poștale active **neșterse logic** (`sters_la IS NULL`). Paginare keyset
+   pe o cheie unică (până la pagina goală, cu verificarea avansării — L23); generația UI ajunge în fiecare buclă (L24).
 2. **Gărzi, aceleași ca la generarea pe rând** (funcțiile existente, importate):
-   - pe UAT / proiect: `motivBlocareConvocator(proiect, uat, null)` — fără împuternicire, fără zi de sesiune cu program, fără contract,
-     contact, GDPR sau reprezentant TGZ → **tot lotul blocat**, cu motivul, nimic consumat (azi LOT1 se oprește aici: fără împuternicire);
-   - pe rând: `motivBlocareConvocator(proiect, uat, rand)` (neidentificat, adresă necunoscută) și `verificaDateConvocator(...)` cu
-     contactul PII și tokenul (adresă, calitate, token etc.) → rândul e **exclus cu motiv**, fără număr consumat.
-3. **Idempotență** (pe convocările poștale `stare = 'activ'` ale deținătorului):
-   - una neexpediată **cu fișier** → **nu primește număr nou**; documentul existent se descarcă din bucket și intră în zip („reluat”);
-   - una neexpediată **fără fișier** (upload / legare eșuate anterior) → același număr, documentul se regenerează cu data convocării
-     și se încarcă prin `reincarcaConvocator` (calea versionată existentă), apoi intră în zip („reîncărcat”);
-   - mai multe neexpediate → exclus, „rezolvă în Fișa parcelei” (nu alegem noi);
-   - una deja **expediată** → exclus („are deja convocare poștală expediată”); re-trimiterea rămâne pe rând, din Fișă;
-   - altfel → **nou**: `supabase.rpc('fn_red_numar_document', { p_tip:'C', p_uat3, p_tronson })` (EXACT apelul din `ModalConvocator`)
-     → `genereazaConvocator` → `salveazaConvocator(..., canal:'posta')` (INSERT → upload v1 → UPDATE, ca pe rând).
-   Rerularea aceluiași UAT după o întrerupere reia de unde a rămas: ce s-a generat devine „reluat”, nu consumă alt număr.
-4. **Limită pe lot**: implicit și maxim **200** de rânduri acționabile pe rulare; restul rămân „amânat — rulează din nou”.
-5. **Progres + oprire**: contor `i / n` și pasul curent; butonul **Oprește** se verifică înainte de fiecare rând (rândul în lucru se
-   termină, restul → „neprocesat (oprit)”). Zip-ul se face și după oprire, cu ce s-a generat.
-6. **Erori per rând**: o eroare (RPC, generare, upload, legare, descărcare) se notează pe rând (cu numărul deja rezervat, dacă e cazul)
-   și lotul continuă. Raport final în panou + în foaia „Opis”: generate / reluate / reîncărcate / excluse / erori / amânate.
-   Un rând cu număr rezervat dar fără convocare salvată = gol în numerotare (exact ca la generarea pe rând); cu rând salvat dar
-   fără fișier → următoarea rulare îl ia pe „reîncărcat”.
+   - pe UAT / proiect: `motivBlocareConvocator(proiect, uat, null)` → **tot lotul blocat**, cu motivul, nimic consumat (azi LOT1: fără împuternicire);
+   - pe rând: `motivBlocareConvocator(proiect, uat, rand)` + `verificaDateConvocator(...)` → **exclus cu motiv**, fără număr.
+3. **Idempotență** (convocări poștale active, neșterse):
+   - neexpediată **cu fișier** → nu primește număr nou („deja generat”); intră în zip doar cu bifa **„include și cele deja generate”**;
+   - neexpediată **fără fișier** → același număr, regenerată cu data convocării, încărcată prin `reincarcaConvocator` („reîncărcat”);
+   - mai multe neexpediate → exclus („rezolvă în Fișa parcelei”); deja **expediată** → exclus;
+   - altfel → **nou**.
+4. **Limita (r2, P1-2)**: implicit și maxim **200 de convocatoare NOI** pe rulare. Cele deja generate și cele reîncărcate nu consumă loc,
+   deci rulările succesive avansează (201 rânduri → două rulări → toate generate).
+5. **Recitire înainte de acțiune (r2, P1-3)**: pentru fiecare rând nou / reîncărcat se recitesc din BD deținătorul (sters_la, calitate, nume),
+   parcela, contactul, tokenul și convocările lui active; dacă amprenta diferă de cea din „Verifică” sau gărzile pică pe datele proaspete →
+   „schimbat între timp”, fără număr. Documentul se generează din datele recitite.
+6. **Rezervarea (r2, P1-1)**: `rpc('fn_red_convocare_rezerva', { p_detinator_id })` — migrarea **20261130l** (NEAPLICATĂ): sub
+   `pg_advisory_xact_lock` pe (proiect, deținător) verifică „nicio convocare poștală activă neexpediată” (altfel `RD001`), garda de plic,
+   apoi `fn_red_numar_document('C')` și INSERT-ul în `red_convocari`, în aceeași tranzacție; clientul încarcă fișierul prin `reincarcaConvocator`.
+   **Până la aplicarea migrării** (`PGRST202` / 404, detectat la „Verifică” cu o probă fără efecte `p_detinator_id = null` → `22023`): calea veche
+   (`fn_red_numar_document('C')` + `salveazaConvocator`), cu avertisment vizibil în panou și în confirmare. Calea individuală nu se schimbă în PR.
+7. **Progres + oprire**: contor `i / n`; **Oprește** se verifică înainte de fiecare rând (restul → „oprit”).
+8. **Erori per rând**: notate (cu numărul rezervat, dacă e cazul), lotul continuă. Planul se invalidează din clipa în care pornește execuția
+   (nu se mai poate reexecuta), rezultatele rămân pentru **„Descarcă din nou zip-ul”** dacă arhiva eșuează.
 
 ## Ce NU face
-- nu marchează nimic expediat (`data_expediere` rămâne NULL), nu trimite nimic (poștă, SMS, e-mail);
-- nu schimbă RLS, schema, RPC-uri, numerotarea sau gărzile (doar le importă);
-- nu generează pentru alt canal decât poșta; afișarea la primărie rămâne pe fluxul ei (Adresa UAT).
+- nu marchează nimic expediat, nu trimite nimic (poștă, SMS, e-mail);
+- nu schimbă calea individuală (ModalConvocator), RLS-ul sau numerotarea; migrarea 20261130l doar adaugă funcția (revenire = DROP FUNCTION);
+- nu generează pentru alt canal decât poșta.
 
-## Teste (vitest, client fals, fără BD)
-Blocare pe proiect (fără împuternicire → zero RPC), excluderi cu motiv, idempotență (reluat / reîncărcat / nou), limita, oprirea,
-eroare pe un rând fără oprirea lotului, zip + opis + borderou. Notă: `fn_red_numar_document('C')` are un contor **global** (cheia `C`,
-nu pe proiect) — o probă reală pe TEST-RAZVAN consumă numere din aceeași serie cu LOT1, deci nu s-a făcut nicio probă reală.
+## Teste
+- vitest (client fals, fără BD): gărzi, idempotență, 201 rânduri / două rulări, limita doar pe „nou”, RD001 (alt tab), fallback PGRST202 cu
+  avertisment, recitire (adresă / calitate / ștergere / token / convocare nouă), paginare plafonată la 7 rânduri, oprire, erori per rând, zip;
+  randare + StrictMode (setup → cleanup → setup) și răspuns întârziat după demontare.
+- DRY local PG17 (`scripts/redari_30l_dry_local.sh`): schelet cu textul exact al funcțiilor live, migrarea + reaplicare refuzată, refuzuri
+  (anon, fără sub, viewer, fără nivel, service_role, NULL, șters, REPEATABLE READ), rezervare, RD001, `p_numar_nou_confirmat`, garda de plic,
+  **concurență prin dblink** (același deținător → o singură convocare și un singur număr; ROLLBACK în primul → al doilea rezervă; deținători
+  diferiți nu se blochează), ACL, revenire; apoi DRY-ul de producție rulat pe clusterul local. Mutant fără lock → roșu.
+- DRY producție (`supabase/tests/20261130l_..._dryrun.sql`): doar refuzuri și RD001, fără nicio rezervare reușită; preflight-ul migrării a trecut
+  pe live într-o tranzacție READ ONLY (04.11.2026). Nu s-a consumat niciun număr C (contorul `C` e global, comun cu LOT1).
