@@ -213,3 +213,12 @@ export function registruIncercari(laSchimbare = () => {}) {
     reseteaza() { curenta = null; laSchimbare(null) },
   }
 }
+
+// Copilot r4 C-P3-01: „Urcă” pe același fișier după o încercare neconfirmată / refuzată folosește payload-ul FIXAT al încercării. Dacă rolul sau
+// observațiile din formular diferă, nu reluăm în tăcere: întoarce { rol, observatii } ale încercării (de afișat), altfel null.
+export const normObs = v => String(v ?? '').trim() || null
+export function diferentaReluare(incercare, form) {
+  if (!incercare || !form || incercare.fisier !== form.fisier) return null
+  if (incercare.rol === form.rol && normObs(incercare.observatii) === normObs(form.observatii)) return null
+  return { rol: incercare.rol, observatii: normObs(incercare.observatii) }
+}

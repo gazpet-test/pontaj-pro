@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { roluriPermise, valideazaFisierCoresp, slugNume, stampilaUtc, caleFisierCoresp, sha8, sha256Hex, fisierDeAprobat, fisiereRand, mimeFisier,
   MAX_FISIER_CORESP, fmtMarime, aleator8, citesteFisiereProiect, citesteFisiereRand, listeazaFolder, orfani, folderCoresp, EMBED_PROIECT, gasesteOrfani,
-  asiguraObiect, reconciliazaInregistrare, eAmbigua, registruIncercari } from './corespondentaFisiere.js'
+  asiguraObiect, reconciliazaInregistrare, eAmbigua, registruIncercari, diferentaReluare } from './corespondentaFisiere.js'
 import { mesajEroareCoresp, COL_CORESPONDENTA } from './corespondenta.js'
 
 const SHA = 'ab'.repeat(32)
@@ -197,6 +197,16 @@ describe('fisierele corespondentei', () => {
     const A = reg.porneste({ path: 'a' }); expect(reg.actualizeaza(A.id, { stare: 'neconfirmat' })).toBe(true)
     expect(reg.curenta()).toMatchObject({ id: A.id, path: 'a', stare: 'neconfirmat' })
     reg.reseteaza(); expect(reg.actualizeaza(A.id, null)).toBe(false); expect(reg.curenta()).toBeNull()
+  })
+  it('r4 C-P3-01: „Urcă” pe același fișier după o încercare neconfirmată cu alt rol / alte observații -> diferență afișată, nu reluare tăcută', () => {
+    const f = new Blob(['x'])
+    const inc = { fisier: f, rol: 'de_trimis', observatii: 'prima', stare: 'neconfirmat' }
+    expect(diferentaReluare(inc, { fisier: f, rol: 'de_trimis', observatii: ' prima ' })).toBeNull()
+    expect(diferentaReluare(inc, { fisier: f, rol: 'altul', observatii: 'prima' })).toEqual({ rol: 'de_trimis', observatii: 'prima' })
+    expect(diferentaReluare(inc, { fisier: f, rol: 'de_trimis', observatii: '' })).toEqual({ rol: 'de_trimis', observatii: 'prima' })
+    expect(diferentaReluare(inc, { fisier: new Blob(['x']), rol: 'altul', observatii: '' })).toBeNull()   // alt fișier ales = încercare nouă
+    expect(diferentaReluare(null, { fisier: f })).toBeNull()
+    expect(diferentaReluare({ ...inc, observatii: null }, { fisier: f, rol: 'de_trimis', observatii: '  ' })).toBeNull()
   })
   it('mesajele noi din BD sunt traduse; coloanele noi sunt citite', () => {
     expect(mesajEroareCoresp({ code: '23514', message: 'redari: aproba doar dupa ce ai urcat fisierul de trimis' })).toMatch(/Urcă întâi/)

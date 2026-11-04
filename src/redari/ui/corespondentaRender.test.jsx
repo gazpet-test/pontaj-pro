@@ -51,6 +51,16 @@ describe('Corespondență — modalul de fișiere', () => {
       onClose={fara} onUrca={fara} onInregistreaza={fara} onDescarca={fara} />)
     expect(inc).toContain('Listă posibil incompletă')
   })
+  it('r4: „Renunță la încercare” doar cât obiectul nu e confirmat în Storage; altfel doar „Înregistrează cu payload-ul inițial”; câmpurile blocate cât lucrează', () => {
+    const rand = { id: 'r1', cod: 'A1', stare: 'draft', subiect: 's', destinatar: 'd' }
+    const inc = { randId: 'r1', path: 'P/corespondenta/A1/x.pdf', stare: 'neconfirmat', rol: 'de_trimis', observatii: null }
+    const h1 = renderToString(<ModalFisiere rand={rand} fisiere={[]} poateScrie lucru={false} incercare={inc} onClose={fara} onUrca={fara} onReia={fara} onRenunta={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(h1).toContain('Renunță la încercare'); expect(h1).toContain('Reia pe aceeași cale')
+    const h2 = renderToString(<ModalFisiere rand={rand} fisiere={[]} poateScrie lucru={false} incercare={{ ...inc, obiectExista: true }} onClose={fara} onUrca={fara} onReia={fara} onRenunta={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(h2).not.toContain('Renunță la încercare'); expect(h2).toContain('Înregistrează cu payload-ul inițial')
+    const h3 = renderToString(<ModalFisiere rand={rand} fisiere={[]} poateScrie lucru incercare={null} onClose={fara} onUrca={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(h3.match(/<select[^>]*disabled=""/g)?.length).toBe(1); expect(h3).toMatch(/type="file"[^>]*disabled=""/); expect(h3).toMatch(/maxLength="1000" disabled=""|disabled=""[^>]*maxLength="1000"/)
+  })
   it('„Aprob” dezactivat fără fișier de trimis, cu tooltip', () => {
     expect(renderToString(<BtnAproba fa={null} lucru={false} onClick={fara} />)).toMatch(/disabled=""[^>]*title="urcă întâi fișierul de trimis"|title="urcă întâi fișierul de trimis"[^>]*disabled=""/)
     const ok = renderToString(<BtnAproba fa={fis[0]} lucru={false} onClick={fara} />)
