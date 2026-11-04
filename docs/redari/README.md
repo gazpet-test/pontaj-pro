@@ -503,6 +503,12 @@ Stare 04.11.2026: punctele 1–3 sunt făcute.
 - Orfanii care NU trebuie păstrați rămân în bucket; nu se șterg din aplicație. Ștergerea lor se face **doar de owner**, manual, prin SQL /
   dashboard, cu preview (listă de căi + verificarea că nu au rând în `red_corespondenta_fisiere`) și „da”-ul lui Răzvan (pct. 3). Fără automatizare.
 - SHA-256 din tabel e **declarat** de cel care a urcat (calculat în browser); amprenta serverului e `storage_etag` (metadata eTag din Storage).
+- **Decizie 04.11.2026, aprobat de Răzvan (varianta A, review Copilot r1 C-P1-01):** modelul de încredere = obiectul din Storage e imutabil pentru
+  utilizatori + eTag-ul Storage e amprenta serverului; `service_role` / mentenanța = risc acceptat; SHA-256 declarat rămâne informativ. Fără edge function.
+- Garda la trimitere: un rând aprobat se poate marca `trimis` / `raspuns_primit` doar dacă obiectul fișierului aprobat există în Storage și are
+  același eTag ca la aprobare (altfel 23514 „fișierul aprobat s-a schimbat sau lipsește din Storage”). Scutite: mentenanța și aprobările fără fișier
+  (D1/D2 istorice și rândurile aprobate înainte de 20261130e).
+- O urcare cu rezultat neclar (rețea / timeout) păstrează calea: „Reia pe aceeași cale” înregistrează obiectul dacă a ajuns, altfel îl urcă o singură dată.
 
 ## 6. Cum se revine
 - Migrarea e aplicată (01.11.2026); nu a atins niciun obiect existent (în afară de un rând în `app_modules` și 2 politici pe

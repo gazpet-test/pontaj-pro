@@ -78,35 +78,118 @@ export const fisiereRand = (toate, randId) => (toate || []).filter(f => f.coresp
 
 export const fmtMarime = n => !(n > 0) ? '-' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
 
-// Jakarinos L23: fișierele proiectului, paginate KEYSET pe (created_at desc, id desc) — fără offset, fără plafon tăcut. Filtrul pe proiect prin
-// embed !inner cu numele FK-ului (între cele două tabele sunt două FK-uri: fără nume, PostgREST ar refuza embed-ul ca ambiguu).
-export const EMBED_PROIECT = 'red_corespondenta!red_corespondenta_fisiere_coresp_fk!inner(proiect_id)'
-export async function citesteFisiereProiect(supabase, proiectId, { pagina = 500, esteCurent = () => true } = {}) {
-  const tot = []
+// Jakarinos L23 + r2 J-P2-1 / C-P2-02: citire KEYSET pe (created_at desc, id desc) — fără offset; se oprește DOAR la pagina GOALĂ (nu la „mai puțin
+// decât pagina”: PostgREST poate plafona răspunsul sub limita cerută, db-max-rows). `fabrica()` = query-ul filtrat (select + eq), fără ordine / limită.
+export async function citesteFisiereKeyset(fabrica, { pagina = 500, esteCurent = () => true, maxPasi = 2000 } = {}) {
+  const tot = [], vazute = new Set()
   let ultim = null
-  for (let pas = 0; pas < 1000; pas++) {
-    let q = supabase.from('red_corespondenta_fisiere').select(`${COL_FISIER_CORESP}, ${EMBED_PROIECT}`).eq('red_corespondenta.proiect_id', proiectId)
+  for (let pas = 0; pas < maxPasi; pas++) {
+    let q = fabrica()
     if (ultim) q = q.or(`created_at.lt."${ultim.created_at}",and(created_at.eq."${ultim.created_at}",id.lt.${ultim.id})`)
     const { data, error } = await q.order('created_at', { ascending: false }).order('id', { ascending: false }).limit(pagina)
     if (error) throw error
     if (!esteCurent()) return null
-    for (const r of data || []) { const { red_corespondenta: _, ...f } = r; tot.push(f) }
-    if (!data || data.length < pagina) return tot
+    if (!data?.length) return tot
+    for (const r of data) { if (vazute.has(r.id)) continue; vazute.add(r.id); const { red_corespondenta: _, ...f } = r; tot.push(f) }
     ultim = data[data.length - 1]
   }
   throw new Error('Prea multe fișiere de corespondență pentru afișare.')
 }
+// Filtrul pe proiect prin embed !inner cu numele FK-ului (între cele două tabele sunt două FK-uri: fără nume, PostgREST ar refuza embed-ul ca ambiguu).
+export const EMBED_PROIECT = 'red_corespondenta!red_corespondenta_fisiere_coresp_fk!inner(proiect_id)'
+export const citesteFisiereProiect = (supabase, proiectId, opt) =>
+  citesteFisiereKeyset(() => supabase.from('red_corespondenta_fisiere').select(`${COL_FISIER_CORESP}, ${EMBED_PROIECT}`).eq('red_corespondenta.proiect_id', proiectId), opt)
+export const citesteFisiereRand = (supabase, randId, opt) =>
+  citesteFisiereKeyset(() => supabase.from('red_corespondenta_fisiere').select(COL_FISIER_CORESP).eq('corespondenta_id', randId), opt)
 
-// Obiectele din folderul unui rând (listare Storage paginată; folderul e imutabil — doar adăugări — deci offset-ul nu sare obiecte vechi).
-export async function listeazaFolder(supabase, folder, { pagina = 100 } = {}) {
-  const tot = []
-  for (let offset = 0; offset < 100000; offset += pagina) {
+// Obiectele din folderul unui rând (listare Storage, singura paginare oferită e offset). Folderul e doar-adăugări, dar o listare paralelă poate
+// dubla / sări rânduri: deduplicăm după cale și marcăm `incompleta` când apar dubluri sau s-a atins plafonul de pagini.
+export async function listeazaFolder(supabase, folder, { pagina = 100, maxPasi = 1000 } = {}) {
+  const pePath = new Map()
+  let incompleta = false
+  for (let pas = 0, offset = 0; ; pas++, offset += pagina) {
+    if (pas >= maxPasi) { incompleta = true; break }
     const { data, error } = await supabase.storage.from('redari').list(folder, { limit: pagina, offset, sortBy: { column: 'name', order: 'asc' } })
     if (error) throw error
-    tot.push(...(data || []).filter(o => o && o.id && o.name).map(o => ({ path: `${folder}/${o.name}`, nume: o.name, marime: o.metadata?.size ?? null, creat: o.created_at || null })))
-    if (!data || data.length < pagina) return tot
+    if (!data?.length) break
+    for (const o of data) {
+      if (!o?.id || !o.name) continue   // „foldere” virtuale
+      const path = `${folder}/${o.name}`
+      if (pePath.has(path)) { incompleta = true; continue }
+      pePath.set(path, { path, nume: o.name, marime: o.metadata?.size ?? null, creat: o.created_at || null })
+    }
   }
-  throw new Error('Prea multe obiecte în folderul corespondenței.')
+  return { lista: [...pePath.values()], incompleta }
 }
-// Copilot r1 C-P2-01: obiecte urcate dar neînregistrate (orfane) = din folder, fără rând în tabel.
 export const orfani = (obiecte, fisiere) => { const cunoscute = new Set((fisiere || []).map(f => f.path)); return (obiecte || []).filter(o => !cunoscute.has(o.path)) }
+
+// Copilot r1 C-P2-01 + r2 J-P2-1: orfanii unui rând = obiecte din folder fără rând în tabel. Căile înregistrate se citesc keyset (fără plafon), iar fiecare
+// candidat e verificat încă o dată după `path` înainte de afișare. Întoarce { lista, incompleta } sau null dacă între timp citirea a expirat.
+export async function gasesteOrfani(supabase, { folder, randId, esteCurent = () => true }) {
+  const { lista: obiecte, incompleta: listaIncompleta } = await listeazaFolder(supabase, folder)
+  if (!esteCurent()) return null
+  const inregistrate = await citesteFisiereRand(supabase, randId, { esteCurent })
+  if (inregistrate === null) return null
+  let incompleta = listaIncompleta
+  const lista = []
+  for (const o of orfani(obiecte, inregistrate)) {
+    const { data, error } = await supabase.from('red_corespondenta_fisiere').select('id').eq('path', o.path).limit(1)
+    if (!esteCurent()) return null
+    if (error) { incompleta = true; continue }
+    if (!data?.length) lista.push(o)
+  }
+  return { lista, incompleta }
+}
+
+// ── Urcarea cu rezultat ambiguu (Jakarinos r2 J-P2-2 / Copilot C-P2-01) ───────────────────────────────────────────────────────────────────
+// Supabase Storage la upload pe o cheie existentă (upsert false): 409 / „already exists” / „Duplicate” (ca în docx.js)
+export const eExistaDeja = e => !!e && (String(e.statusCode ?? e.status ?? '') === '409' || /already exists|duplicate/i.test(`${e.message || ''} ${e.error || ''}`))
+// Ambiguu = nu știm dacă obiectul a ajuns: rețea / timeout / 5xx / fără cod. Un 4xx clar (400/401/403/413/415…) e refuz sigur.
+export function eAmbigua(e) {
+  if (!e) return false
+  const st = Number(e.statusCode ?? e.status)
+  if (Number.isFinite(st) && st > 0) return st >= 500 || st === 408 || st === 429
+  return true
+}
+// Obiectul există la calea exactă? true / false / null (necunoscut)
+export async function existaObiect(supabase, path) {
+  const i = path.lastIndexOf('/'), folder = path.slice(0, i), nume = path.slice(i + 1)
+  try {
+    const { data, error } = await supabase.storage.from('redari').list(folder, { limit: 100, offset: 0, search: nume })
+    if (error) return null
+    return (data || []).some(o => o?.id && o.name === nume)
+  } catch { return null }
+}
+// Pune obiectul la `path` fără suprascriere. 'urcat' | 'exista' (deja acolo: o încercare anterioară a ajuns) | 'neconfirmat'; aruncă la refuz sigur.
+// Calea e unică pe încercare (sufix aleator) și se refolosește DOAR pentru același fișier ales, deci „exista” = încercarea noastră anterioară.
+export async function asiguraObiect(supabase, path, fisier, contentType) {
+  let err = null
+  try {
+    const { error } = await supabase.storage.from('redari').upload(path, fisier, { upsert: false, contentType })
+    if (!error) return 'urcat'
+    err = error
+  } catch (e) { err = e }
+  if (eExistaDeja(err)) return 'exista'
+  if (!eAmbigua(err)) throw err
+  return (await existaObiect(supabase, path)) === true ? 'exista' : 'neconfirmat'
+}
+
+// Copilot r2 C-P2-03: INSERT + reconciliere pe payload-ul SEMANTIC imutabil (corespondenta_id, rol, sha256 declarat, path). La eroare / rezultat necunoscut
+// citește rândul după `path`: identic → 'ok'; există cu alte atribute → 'conflict' (nu ok); lipsește și BD-ul a refuzat clar → aruncă; altfel 'neconfirmat'.
+export const CAMPURI_SEMANTICE = ['corespondenta_id', 'rol', 'sha256', 'path']
+export async function reconciliazaInregistrare(supabase, payload) {
+  let eIns = null
+  try {
+    const { error } = await supabase.from('red_corespondenta_fisiere').insert(payload).select('id')
+    if (!error) return { rez: 'ok' }
+    eIns = error
+  } catch (e) { eIns = e }
+  let rand = null, citit = false
+  try {
+    const { data, error } = await supabase.from('red_corespondenta_fisiere').select('id, corespondenta_id, rol, sha256, path').eq('path', payload.path).limit(1)
+    if (!error) { citit = true; rand = data?.[0] || null }
+  } catch { /* necunoscut */ }
+  if (rand) return CAMPURI_SEMANTICE.every(k => rand[k] === payload[k]) ? { rez: 'ok' } : { rez: 'conflict', rand }
+  if (citit && eIns?.code) throw eIns
+  return { rez: 'neconfirmat', eroare: eIns }
+}

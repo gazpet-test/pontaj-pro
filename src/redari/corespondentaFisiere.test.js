@@ -1,18 +1,65 @@
 import { describe, it, expect } from 'vitest'
 import { roluriPermise, valideazaFisierCoresp, slugNume, stampilaUtc, caleFisierCoresp, sha8, sha256Hex, fisierDeAprobat, fisiereRand, mimeFisier,
-  MAX_FISIER_CORESP, fmtMarime, aleator8, citesteFisiereProiect, listeazaFolder, orfani, folderCoresp, EMBED_PROIECT } from './corespondentaFisiere.js'
+  MAX_FISIER_CORESP, fmtMarime, aleator8, citesteFisiereProiect, citesteFisiereRand, listeazaFolder, orfani, folderCoresp, EMBED_PROIECT, gasesteOrfani,
+  asiguraObiect, reconciliazaInregistrare, eAmbigua } from './corespondentaFisiere.js'
 import { mesajEroareCoresp, COL_CORESPONDENTA } from './corespondenta.js'
 
 const SHA = 'ab'.repeat(32)
 
-// fake minimal pentru query builder-ul PostgREST: înregistrează apelurile, întoarce paginile pe rând
-function fakeSupabase(pagini, obiecte = []) {
+// fake pentru PostgREST + Storage: tabel cu keyset real (or created_at/id), plafon de server, insert cu 23505, storage cu upload / list / timeout
+function fakeBD(randuri, opt = {}) {
+  const tabel = randuri.map(r => ({ ...r }))
+  const obiecte = (opt.obiecte || []).map(o => ({ ...o }))
   const apeluri = []
-  return { apeluri, from: tabel => {
-    const q = { _f: [] }
-    for (const op of ['select', 'eq', 'or', 'order', 'limit']) q[op] = (...a) => { q._f.push([op, ...a]); if (op === 'limit') { apeluri.push([tabel, ...q._f]); return Promise.resolve({ data: pagini.shift() || [], error: null }) } return q }
+  const desc = (a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+  let tarziu = [...(opt.inregistrateTarziu || [])]
+  const from = () => {
+    const f = []
+    const q = {
+      select: (...a) => { f.push(['select', ...a]); return q },
+      eq: (...a) => { f.push(['eq', ...a]); return q },
+      or: (...a) => { f.push(['or', ...a]); return q },
+      order: (...a) => { f.push(['order', ...a]); return q },
+      limit: n => {
+        f.push(['limit', n]); apeluri.push(['tabel', ...f])
+        if (opt.citireCazuta) return Promise.reject(new Error('Failed to fetch'))
+        let rez = [...tabel]
+        for (const [op, k, v] of f) if (op === 'eq') {
+          if (k === 'red_corespondenta.proiect_id') rez = rez.filter(r => r.red_corespondenta?.proiect_id === v)
+          else if (k === 'path' && tarziu.includes(v)) { tarziu = tarziu.filter(x => x !== v); return Promise.resolve({ data: [{ id: 'tarziu' }], error: null }) }
+          else rez = rez.filter(r => r[k] === v)
+        }
+        const o = f.find(x => x[0] === 'or')
+        if (o) { const m = /^created_at\.lt\."(.*)",and\(created_at\.eq\."(.*)",id\.lt\.(.*)\)$/.exec(o[1]); rez = rez.filter(r => r.created_at < m[1] || (r.created_at === m[2] && r.id < m[3])) }
+        rez.sort(desc)
+        return Promise.resolve({ data: rez.slice(0, Math.min(n, opt.plafon || Infinity)), error: null })
+      },
+      insert: row => ({ select: () => {
+        if (opt.timeoutLaInsert) return Promise.reject(new Error('Failed to fetch'))
+        if (opt.refuzInsert) return Promise.resolve({ data: null, error: opt.refuzInsert })
+        if (tabel.some(r => r.path === row.path)) return Promise.resolve({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "red_corespondenta_fisiere_path_uq"' } })
+        tabel.push({ id: 'nou', created_at: 'z', ...row })
+        if (opt.timeoutDupaInsert) return Promise.reject(new Error('Failed to fetch'))
+        return Promise.resolve({ data: [{ id: 'nou' }], error: null })
+      } }),
+    }
     return q
-  }, storage: { from: () => ({ list: (folder, o) => { apeluri.push(['list', folder, o]); return Promise.resolve({ data: obiecte.slice(o.offset, o.offset + o.limit), error: null }) } }) } }
+  }
+  const storage = { from: () => ({
+    list: (folder, o) => { apeluri.push(['list', folder, o])
+      let l = obiecte.filter(x => !x.folder || x.folder === folder)
+      if (o.search) l = l.filter(x => x.name.includes(o.search))
+      return Promise.resolve({ data: l.slice(o.offset, o.offset + o.limit), error: null }) },
+    upload: (path, blob) => {
+      const i = path.lastIndexOf('/'), folder = path.slice(0, i), name = path.slice(i + 1)
+      if (opt.refuzUpload) return Promise.resolve({ data: null, error: { statusCode: opt.refuzUpload, message: 'refuz' } })
+      if (obiecte.some(x => x.folder === folder && x.name === name)) return Promise.resolve({ data: null, error: { statusCode: '409', message: 'The resource already exists' } })
+      if (!opt.nuSalveaza) obiecte.push({ id: 'o' + obiecte.length, folder, name })
+      if (opt.timeoutLaUpload) return Promise.reject(new Error('Failed to fetch'))
+      return Promise.resolve({ data: { path }, error: null })
+    },
+  }) }
+  return { apeluri, obiecte, from, storage }
 }
 
 describe('fisierele corespondentei', () => {
@@ -72,30 +119,55 @@ describe('fisierele corespondentei', () => {
     expect(fisierDeAprobat(fisiereRand(f, 'r1')).id).toBe('a')
     expect(fisierDeAprobat(f.filter(x => x.rol !== 'de_trimis'))).toBeNull()
   })
-  it('L23: citirea fisierelor proiectului e keyset pe (created_at desc, id desc), fara plafon tacut', async () => {
-    const p1 = [{ id: 'f3', created_at: 't3', red_corespondenta: { proiect_id: 'p' } }, { id: 'f2', created_at: 't2', red_corespondenta: { proiect_id: 'p' } }]
-    const p2 = [{ id: 'f1', created_at: 't1', red_corespondenta: { proiect_id: 'p' } }]
-    const sb = fakeSupabase([p1, p2])
-    const r = await citesteFisiereProiect(sb, 'p', { pagina: 2 })
-    expect(r.map(x => x.id)).toEqual(['f3', 'f2', 'f1'])
-    expect(r[0].red_corespondenta).toBeUndefined()
-    expect(sb.apeluri).toHaveLength(2)
+  it('L23 / r2 J-P2-1: keyset (created_at desc, id desc), oprire DOAR la pagina goala — si cu plafon de server sub pagina, peste 1000 de randuri', async () => {
+    const pad = n => String(n).padStart(5, '0')
+    const randuri = Array.from({ length: 1203 }, (_, i) => ({ id: `f${pad(i)}`, created_at: `2026-11-04T10:${pad(Math.floor(i / 3))}`, corespondenta_id: 'r1', red_corespondenta: { proiect_id: 'p' } }))
+    const sb = fakeBD(randuri, { plafon: 100 })   // serverul taie la 100, clientul cere 500
+    const r = await citesteFisiereProiect(sb, 'p', { pagina: 500 })
+    expect(r).toHaveLength(1203); expect(new Set(r.map(x => x.id)).size).toBe(1203)
+    expect(r[0].created_at >= r[1202].created_at).toBe(true); expect(r[0].red_corespondenta).toBeUndefined()
+    expect(sb.apeluri.length).toBe(14)   // 12 pagini plafonate la 100 + una de 3 + una goala
     const [, sel, eq, ...rest1] = sb.apeluri[0]
     expect(sel[1]).toContain(EMBED_PROIECT); expect(eq).toEqual(['eq', 'red_corespondenta.proiect_id', 'p'])
-    expect(rest1).toEqual([['order', 'created_at', { ascending: false }], ['order', 'id', { ascending: false }], ['limit', 2]])
-    expect(sb.apeluri[1]).toContainEqual(['or', 'created_at.lt."t2",and(created_at.eq."t2",id.lt.f2)'])
-    // pagina plina exact la limita -> mai citeste o data (aici goala)
-    const sb2 = fakeSupabase([p1, []])
-    expect((await citesteFisiereProiect(sb2, 'p', { pagina: 2 })).length).toBe(2); expect(sb2.apeluri).toHaveLength(2)
-    expect(await citesteFisiereProiect(fakeSupabase([p1]), 'p', { pagina: 5, esteCurent: () => false })).toBeNull()
+    expect(rest1).toEqual([['order', 'created_at', { ascending: false }], ['order', 'id', { ascending: false }], ['limit', 500]])
+    expect(sb.apeluri[1].find(a => a[0] === 'or')[1]).toMatch(/^created_at\.lt\."[^"]+",and\(created_at\.eq\."[^"]+",id\.lt\.f\d+\)$/)
+    expect(await citesteFisiereRand(fakeBD(randuri), 'r1', { pagina: 500, esteCurent: () => false })).toBeNull()
   })
-  it('Copilot C-P2-01: orfanii = obiecte din folder fara rand in tabel (listare paginata, fara foldere)', async () => {
-    const ob = [{ id: '1', name: 'a.pdf', metadata: { size: 5 } }, { id: null, name: 'sub' }, { id: '2', name: 'b.pdf' }, { id: '3', name: 'c.pdf' }]
-    const sb = fakeSupabase([], ob)
-    const lista = await listeazaFolder(sb, 'P/corespondenta/A1', { pagina: 2 })
-    expect(lista.map(o => o.path)).toEqual(['P/corespondenta/A1/a.pdf', 'P/corespondenta/A1/b.pdf', 'P/corespondenta/A1/c.pdf'])
-    expect(sb.apeluri.map(a => a[2].offset)).toEqual([0, 2, 4])
-    expect(orfani(lista, [{ path: 'P/corespondenta/A1/b.pdf' }]).map(o => o.nume)).toEqual(['a.pdf', 'c.pdf'])
+  it('C-P2-01 / r2 J-P2-1: orfanii = obiecte din folder fara rand (dedup, verificare finala pe path, lista posibil incompleta)', async () => {
+    const ob = [{ id: '1', name: 'a.pdf', metadata: { size: 5 } }, { id: null, name: 'sub' }, { id: '2', name: 'b.pdf' }, { id: '3', name: 'c.pdf' }, { id: '3', name: 'c.pdf' }]
+    const sb = fakeBD([{ id: 'x', created_at: 't', path: 'P/corespondenta/A1/b.pdf', corespondenta_id: 'r1' }], { obiecte: ob, inregistrateTarziu: ['P/corespondenta/A1/c.pdf'] })
+    const { lista, incompleta } = await listeazaFolder(sb, 'P/corespondenta/A1', { pagina: 2 })
+    expect(lista.map(o => o.nume)).toEqual(['a.pdf', 'b.pdf', 'c.pdf']); expect(incompleta).toBe(true)   // dublura c.pdf
+    const rez = await gasesteOrfani(sb, { folder: 'P/corespondenta/A1', randId: 'r1' })
+    expect(rez.lista.map(o => o.nume)).toEqual(['a.pdf'])   // c.pdf a aparut in tabel intre timp -> eliminat la verificarea finala
+    expect(rez.incompleta).toBe(true)
+    expect(orfani([{ path: 'x' }, { path: 'y' }], [{ path: 'y' }]).map(o => o.path)).toEqual(['x'])
+  })
+  it('r2 J-P2-2 / C-P2-01: storage salveaza, clientul primeste timeout -> obiectul e gasit, fara reupload; reincercarea pe aceeasi cale nu creeaza alt obiect', async () => {
+    const sb = fakeBD([], { timeoutLaUpload: true })
+    const f = new Blob(['x'], { type: 'application/pdf' })
+    expect(await asiguraObiect(sb, 'P/corespondenta/A1/f.pdf', f, 'application/pdf')).toBe('exista')
+    expect(await asiguraObiect(sb, 'P/corespondenta/A1/f.pdf', f, 'application/pdf')).toBe('exista')   // retry: 409, nimic nou
+    expect(sb.obiecte.filter(o => o.name === 'f.pdf')).toHaveLength(1)
+    expect(await asiguraObiect(fakeBD([]), 'P/corespondenta/A1/g.pdf', f, 'application/pdf')).toBe('urcat')
+    const pierdut = fakeBD([], { timeoutLaUpload: true, nuSalveaza: true })
+    expect(await asiguraObiect(pierdut, 'P/corespondenta/A1/h.pdf', f, 'application/pdf')).toBe('neconfirmat')
+    await expect(asiguraObiect(fakeBD([], { refuzUpload: 403 }), 'P/corespondenta/A1/i.pdf', f, 'application/pdf')).rejects.toMatchObject({ statusCode: 403 })
+    expect(eAmbigua({ message: 'Failed to fetch' })).toBe(true); expect(eAmbigua({ statusCode: 503 })).toBe(true); expect(eAmbigua({ statusCode: 400 })).toBe(false)
+  })
+  it('r2 C-P2-03: reconcilierea INSERT compara payload-ul semantic (corespondenta_id, rol, sha256, path)', async () => {
+    const pl = { corespondenta_id: 'r1', rol: 'de_trimis', path: 'P/corespondenta/A1/f.pdf', sha256: SHA }
+    // timeout dupa INSERT reusit -> randul identic exista -> ok
+    expect((await reconciliazaInregistrare(fakeBD([], { timeoutDupaInsert: true }), pl)).rez).toBe('ok')
+    // 23505: aceeasi cale, alt rol -> conflict (NU ok)
+    const ex = fakeBD([{ id: 'x', ...pl, rol: 'altul', created_at: 't' }])
+    const c = await reconciliazaInregistrare(ex, pl)
+    expect(c.rez).toBe('conflict'); expect(c.rand.rol).toBe('altul')
+    // refuz clar al BD-ului (trigger) si randul nu exista -> arunca
+    await expect(reconciliazaInregistrare(fakeBD([], { refuzInsert: { code: '23514', message: 'redari: fisierul lipseste din Storage (x)' } }), pl)).rejects.toMatchObject({ code: '23514' })
+    // retea cazuta si la citire -> neconfirmat
+    expect((await reconciliazaInregistrare(fakeBD([], { timeoutLaInsert: true, citireCazuta: true }), pl)).rez).toBe('neconfirmat')
+    expect((await reconciliazaInregistrare(fakeBD([]), pl)).rez).toBe('ok')
   })
   it('mesajele noi din BD sunt traduse; coloanele noi sunt citite', () => {
     expect(mesajEroareCoresp({ code: '23514', message: 'redari: aproba doar dupa ce ai urcat fisierul de trimis' })).toMatch(/Urcă întâi/)

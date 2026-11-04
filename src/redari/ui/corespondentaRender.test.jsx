@@ -9,7 +9,7 @@ import CorespondentaEcran, { ModalFisiere, BtnAproba } from './CorespondentaEcra
 
 const SHA = 'cd'.repeat(32)
 const fis = [
-  { id: 'f1', corespondenta_id: 'r1', rol: 'de_trimis', path: 'P/corespondenta/A1/20261104-090000-cdcdcdcd-scrisoare.pdf', nume_original: 'Scrisoare.pdf', marime: 2048, sha256: SHA, created_at: '2026-11-04T09:00:00+00:00' },
+  { id: 'f1', corespondenta_id: 'r1', rol: 'de_trimis', path: 'P/corespondenta/A1/20261104-090000-cdcdcdcd-scrisoare.pdf', nume_original: 'Scrisoare.pdf', marime: 2048, sha256: SHA, storage_etag: '"etag-f1"', created_at: '2026-11-04T09:00:00+00:00' },
   { id: 'f2', corespondenta_id: 'r1', rol: 'dovada_trimitere', path: 'P/corespondenta/A1/20261104-100000-eeeeeeee-dovada.pdf', nume_original: 'Dovada.pdf', marime: 100, sha256: 'e'.repeat(64), created_at: '2026-11-04T10:00:00+00:00' },
 ]
 const fara = () => {}
@@ -41,10 +41,20 @@ describe('Corespondență — modalul de fișiere', () => {
     const gol = renderToString(<ModalFisiere rand={rand} fisiere={fis} poateScrie lucru={false} orfane={{ randId: 'r1', lista: [], eroare: '' }} onClose={fara} onUrca={fara} onInregistreaza={fara} onDescarca={fara} />)
     expect(gol).not.toContain('neînregistrate')
   })
+  it('r2 J-P2-2: urcare neconfirmată -> panou cu calea păstrată și „Reia pe aceeași cale”; eTag-ul serverului e afișat', () => {
+    const rand = { id: 'r1', cod: 'A1', stare: 'draft', subiect: 's', destinatar: 'd' }
+    const html = renderToString(<ModalFisiere rand={rand} fisiere={fis} poateScrie lucru={false} incercare={{ randId: 'r1', path: 'P/corespondenta/A1/20261104-090000-cdcdcdcd-0123abcd-x.pdf', stare: 'neconfirmat' }}
+      onClose={fara} onUrca={fara} onReia={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(html).toContain('Urcare neconfirmată'); expect(html).toContain('Reia pe aceeași cale'); expect(html).toContain('0123abcd-x.pdf')
+    expect(html).toContain('eTag (server)'); expect(html).toContain('&quot;etag-f1&quot;')
+    const inc = renderToString(<ModalFisiere rand={rand} fisiere={[]} poateScrie lucru={false} orfane={{ randId: 'r1', lista: [], eroare: '', incompleta: true }}
+      onClose={fara} onUrca={fara} onInregistreaza={fara} onDescarca={fara} />)
+    expect(inc).toContain('Listă posibil incompletă')
+  })
   it('„Aprob” dezactivat fără fișier de trimis, cu tooltip', () => {
     expect(renderToString(<BtnAproba fa={null} lucru={false} onClick={fara} />)).toMatch(/disabled=""[^>]*title="urcă întâi fișierul de trimis"|title="urcă întâi fișierul de trimis"[^>]*disabled=""/)
     const ok = renderToString(<BtnAproba fa={fis[0]} lucru={false} onClick={fara} />)
-    expect(ok).not.toContain('disabled'); expect(ok).toContain('Scrisoare.pdf (cdcdcdcd)')
+    expect(ok).not.toContain('disabled'); expect(ok).toContain('Scrisoare.pdf (eTag &quot;etag-f1&quot;)')
   })
   it('ecranul se randează (încărcare)', () => {
     const html = renderToString(<CorespondentaEcran proiect={{ id: 'p1', cod: 'P' }} nivel="viewer" profile={{}} show={fara} />)

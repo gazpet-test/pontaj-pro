@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate, fmtDateTime } from './comune.jsx'
 import { etichetaRolFisier, ACCEPT_FISIER_CORESP, roluriPermise, valideazaFisierCoresp, mimeFisier, caleFisierCoresp, folderCoresp, sha8, sha256Hex,
-  fisierDeAprobat, fisiereRand, fmtMarime, citesteFisiereProiect, listeazaFolder, orfani, numeDinCale } from '../corespondentaFisiere.js'
+  fisierDeAprobat, fisiereRand, fmtMarime, citesteFisiereProiect, gasesteOrfani, numeDinCale, asiguraObiect, reconciliazaInregistrare } from '../corespondentaFisiere.js'
 import { STARI_CORESPONDENTA, etichetaStareCoresp, culoareStareCoresp, COL_CORESPONDENTA, stariPermise, poateAproba, urmatorul,
   valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran, stariInFormular, stareEfectiva } from '../corespondenta.js'
 
@@ -26,6 +26,11 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
   const [seIncarca, setSeIncarca] = useState(true)    // Jakarinos r1 J-P1-1: cât timp citirea e în curs, aprobarea e blocată
   const [orfaneRand, setOrfaneRand] = useState(null)  // { randId, lista|null, eroare } — obiecte urcate dar neînregistrate (doar admin/editor)
   const generatie = useRef(0)
+  const genOrfane = useRef(0)          // Jakarinos r2 J-P3-4 / Copilot C-P3-01: generație separată pentru citirea orfanilor
+  const fisPentruRef = useRef(null)    // rândul cu modalul deschis, pentru verificarea rezultatelor vechi
+  const incercareRef = useRef(null)    // Jakarinos r2 J-P2-2: { randId, fisier, path, sha, rol, observatii, stare } — calea păstrată ÎNAINTE de upload
+  const [incercare, setIncercareSt] = useState(null)
+  const setIncercare = v => { incercareRef.current = v; setIncercareSt(v) }
   // Jakarinos r2/r3 P2-01: proiectul curent + un token de SESIUNE a ecranului, invalidat la orice schimbare de proiect (inclusiv A→B→A) și la demontare.
   // O operație veche (salvare / aprobare) verifică tokenul după fiecare await, în catch și în finally: nu mai închide formulare noi, nu mai deblochează
   // alte operații, nu mai anunță și nu mai reîncarcă. Separat de `generatie` (citirile), care crește la fiecare incarca().
@@ -35,6 +40,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
 
   const incarca = async () => {
     const token = ++generatie.current, curent = () => token === generatie.current
+    genOrfane.current++   // o citire nouă invalidează orice citire de orfani în curs
     setEroare(''); setSeIncarca(true)
     try {
       // o listă scurtă (zeci de rânduri): o singură citire, sortată după ordine; limita evită o listă tăiată în tăcere
@@ -53,7 +59,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     } catch (e) { if (curent()) { setRanduri([]); setFisiere([]); setEroare(mesajEroareCoresp(e)) } }
     finally { if (curent()) setSeIncarca(false) }
   }
-  useEffect(() => { proiectCurent.current = proiect.id; sesiune.current.noua(); setRanduri(null); setFisiere([]); setFisPentru(null); setOrfaneRand(null); setEditat(null); setLucru(false); incarca(); return () => { generatie.current++; sesiune.current.noua() } }, [proiect.id])
+  useEffect(() => { proiectCurent.current = proiect.id; sesiune.current.noua(); setRanduri(null); setFisiere([]); setFisPentru(null); setOrfaneRand(null); setIncercare(null); genOrfane.current++; setEditat(null); setLucru(false); incarca(); return () => { generatie.current++; sesiune.current.noua() } }, [proiect.id])
 
   const deschide = rand => setEditat({ rand, f: rand ? { ...GOL, ...Object.fromEntries(Object.entries(rand).map(([k, v]) => [k, v ?? ''])) } : { ...GOL } })
 
@@ -85,7 +91,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     // citit sub blocarea rândului (altfel 23514 „între timp s-a urcat alt fișier”). În plus, CAS pe versiune (un „de trimis” nou o crește).
     const deAprobat = fisierDeAprobat(fisiereRand(fisiere, rand.id))
     if (!deAprobat) { show('Urcă întâi fișierul „de trimis” (📎), apoi aprobă.', 'error'); return }
-    if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nFișierul aprobat: ${numeFisier(deAprobat)} (SHA-256 declarat ${sha8(deAprobat.sha256)})\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite nimic.`)) return
+    if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nFișierul aprobat: ${numeFisier(deAprobat)}\nAmprenta serverului (eTag Storage): ${deAprobat.storage_etag || '-'}\n(informativ: SHA-256 declarat la urcare ${sha8(deAprobat.sha256)})\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite nimic.`)) return
     const expirat = sesiune.current.captureaza()
     setLucru(true)
     try {
@@ -98,41 +104,36 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     } catch (e) { if (!expirat()) { show(mesajEroareCoresp(e), 'error'); await incarca() } } finally { if (!expirat()) setLucru(false) }
   }
 
-  // Obiectele din folderul rândului fără rând în tabel (urcate, dar înregistrarea a eșuat / nu s-a confirmat). Doar admin / editor (listarea cere red_storage_sel).
+  // Orfanii rândului (obiecte urcate dar neînregistrate). Doar admin / editor (listarea cere red_storage_sel). Rezultatul se acceptă doar dacă generația,
+  // proiectul și rândul deschis sunt încă cele curente (r2 J-P3-4 / C-P3-01).
   const incarcaOrfane = async rand => {
     if (!poateScrie || !rand) return
-    const expirat = sesiune.current.captureaza()
-    setOrfaneRand({ randId: rand.id, lista: null, eroare: '' })
+    const g = ++genOrfane.current, pid = proiectCurent.current
+    const curent = () => g === genOrfane.current && pid === proiectCurent.current && fisPentruRef.current === rand.id
+    setOrfaneRand({ randId: rand.id, lista: null, eroare: '', incompleta: false })
     try {
-      const obiecte = await listeazaFolder(supabase, folderCoresp(proiect.cod, rand.cod))
-      const { data, error } = await supabase.from('red_corespondenta_fisiere').select('path').eq('corespondenta_id', rand.id).limit(10000)
-      if (error) throw error
-      if (expirat()) return
-      setOrfaneRand(x => x?.randId === rand.id ? { randId: rand.id, lista: orfani(obiecte, data), eroare: '' } : x)
-    } catch (e) { if (!expirat()) setOrfaneRand(x => x?.randId === rand.id ? { randId: rand.id, lista: [], eroare: mesajEroareCoresp(e) } : x) }
+      const rez = await gasesteOrfani(supabase, { folder: folderCoresp(proiect.cod, rand.cod), randId: rand.id, esteCurent: curent })
+      if (rez === null || !curent()) return
+      setOrfaneRand({ randId: rand.id, lista: rez.lista, eroare: '', incompleta: rez.incompleta })
+    } catch (e) { if (curent()) setOrfaneRand({ randId: rand.id, lista: [], eroare: mesajEroareCoresp(e), incompleta: true }) }
   }
-  useEffect(() => { const r = fisPentru ? (randuri || []).find(x => x.id === fisPentru) : null; if (r) incarcaOrfane(r); else setOrfaneRand(null) }, [fisPentru])
+  useEffect(() => {
+    fisPentruRef.current = fisPentru; genOrfane.current++   // schimbare de rând / închiderea modalului invalidează citirea orfanilor
+    const r = fisPentru ? (randuri || []).find(x => x.id === fisPentru) : null
+    if (r) incarcaOrfane(r); else setOrfaneRand(null)
+  }, [fisPentru])
 
-  // INSERT-ul rândului de fișier; la eroare / rezultat necunoscut (Jakarinos r1 J-P2-3) citește înapoi după `path`: dacă rândul există, e succes.
-  // Întoarce 'ok' | 'neconfirmat' (aruncă eroarea BD-ului dacă rândul sigur nu există și BD-ul a spus de ce).
+  // Înregistrarea rândului (INSERT + reconciliere pe payload-ul semantic). 'ok' | 'conflict' | 'neconfirmat'; aruncă la refuz clar al BD-ului.
   const inregistreaza = async (rand, { path, rol, nume, mime, marime, sha, observatii }) => {
-    let eIns = null
-    try {
-      const { error } = await supabase.from('red_corespondenta_fisiere').insert({ corespondenta_id: rand.id, rol, path, nume_original: String(nume || '').slice(0, 255),
-        mime, marime, sha256: sha, observatii: String(observatii || '').trim() || null }).select('id')
-      if (!error) return 'ok'
-      eIns = error
-    } catch (e) { eIns = e }
-    try {
-      const { data, error } = await supabase.from('red_corespondenta_fisiere').select('id').eq('path', path).limit(1)
-      if (!error && data?.length) return 'ok'
-      if (!error && eIns?.code) throw eIns   // BD-ul a răspuns clar (trigger / RLS) și rândul nu există
-    } catch (e) { if (e === eIns) throw e }
-    return 'neconfirmat'
+    const { rez } = await reconciliazaInregistrare(supabase, { corespondenta_id: rand.id, rol, path, nume_original: String(nume || '').slice(0, 255),
+      mime, marime, sha256: sha, observatii: String(observatii || '').trim() || null })
+    return rez
   }
+  const MESAJ_CONFLICT = 'La aceeași cale există deja un fișier înregistrat cu alt rol / altă amprentă declarată. Nu s-a înregistrat nimic nou; verifică lista.'
 
-  // Urcarea unui fișier: sha256 în browser → upload (upsert:false, cale nouă, sufix aleator) → INSERT (cu citire înapoi). Legarea e pe rand.id (nu pe
-  // proiectul curent): dacă între timp s-a schimbat proiectul, INSERT-ul se face tot pentru rândul ales (altfel fișierul ar rămâne orfan), dar UI-ul vechi nu mai anunță.
+  // Urcarea: sha256 în browser → calea se PĂSTREAZĂ (state + ref) înainte de upload → upload fără suprascriere → INSERT reconciliat.
+  // r2 J-P2-2 / C-P2-01: pentru același fișier ales se refolosește aceeași cale (o reîncercare nu creează alt obiect); o cale nouă doar pentru un fișier nou.
+  // Legarea e pe rand.id (nu pe proiectul curent): dacă între timp s-a schimbat proiectul, înregistrarea se face tot pentru rândul ales; UI-ul vechi nu mai anunță.
   const urca = async (rand, form) => {
     if (lucru) return false
     const erori = valideazaFisierCoresp(form.fisier)
@@ -140,33 +141,45 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     if (String(form.observatii || '').length > 1000) erori.push('Observațiile au cel mult 1000 de caractere.')
     if (erori.length) { show(erori.join(' '), 'error'); return false }
     const expirat = sesiune.current.captureaza(), proiectCod = proiect.cod
-    let urcat = null
     setLucru(true)
     try {
-      const sha = await sha256Hex(form.fisier)
-      const path = caleFisierCoresp({ proiectCod, corespCod: rand.cod, sha256: sha, nume: form.fisier.name })
-      const { error: eUp } = await supabase.storage.from('redari').upload(path, form.fisier, { upsert: false, contentType: mimeFisier(form.fisier) })
-      if (eUp) throw eUp
-      urcat = path
-      const rez = await inregistreaza(rand, { path, rol: form.rol, nume: form.fisier.name, mime: mimeFisier(form.fisier), marime: form.fisier.size, sha, observatii: form.observatii })
-      if (expirat()) return rez === 'ok'
-      if (rez === 'neconfirmat') {
-        show(`Fișierul e în Storage (${path}), dar înregistrarea nu s-a confirmat. NU îl urca din nou: reîncarcă și folosește „Înregistrează” la „Fișiere urcate dar neînregistrate”.`, 'error')
-        await incarca(); await incarcaOrfane(rand); return false
+      let inc = incercareRef.current
+      if (!inc || inc.randId !== rand.id || inc.fisier !== form.fisier) {
+        const sha = await sha256Hex(form.fisier)
+        inc = { randId: rand.id, fisier: form.fisier, sha, path: caleFisierCoresp({ proiectCod, corespCod: rand.cod, sha256: sha, nume: form.fisier.name }) }
       }
-      show(form.rol === 'de_trimis' && rand.stare === 'aprobat' ? 'Fișierul a fost urcat. Aprobarea a căzut: rândul a revenit în Draft și cere din nou „da”-ul lui Răzvan.' : 'Fișierul a fost urcat.', 'success')
+      inc = { ...inc, rol: form.rol, observatii: form.observatii, stare: 'in_curs' }
+      setIncercare(inc)
+      const ob = await asiguraObiect(supabase, inc.path, form.fisier, mimeFisier(form.fisier))
+      if (ob === 'neconfirmat') {
+        setIncercare({ ...inc, stare: 'neconfirmat' })
+        if (!expirat()) show(`Urcarea nu s-a confirmat (${inc.path}). Apasă „Reia pe aceeași cale” — nu se creează alt obiect.`, 'error')
+        return false
+      }
+      const rez = await inregistreaza(rand, { path: inc.path, rol: inc.rol, nume: form.fisier.name, mime: mimeFisier(form.fisier), marime: form.fisier.size, sha: inc.sha, observatii: inc.observatii })
+      if (rez === 'neconfirmat') {
+        setIncercare({ ...inc, stare: 'neconfirmat' })
+        if (!expirat()) { show(`Fișierul e în Storage (${inc.path}), dar înregistrarea nu s-a confirmat. NU îl urca din nou: apasă „Reia pe aceeași cale”.`, 'error'); await incarca(); await incarcaOrfane(rand) }
+        return false
+      }
+      setIncercare(null)
+      if (expirat()) return rez === 'ok'
+      if (rez === 'conflict') { show(MESAJ_CONFLICT, 'error'); await incarca(); await incarcaOrfane(rand); return false }
+      show(inc.rol === 'de_trimis' && rand.stare === 'aprobat' ? 'Fișierul a fost urcat. Aprobarea a căzut: rândul a revenit în Draft și cere din nou „da”-ul lui Răzvan.' : 'Fișierul a fost urcat.', 'success')
       await incarca(); await incarcaOrfane(rand)
       return true
     } catch (e) {
+      const inc = incercareRef.current
       if (!expirat()) {
-        show(urcat ? `Fișierul e în Storage (${urcat}), dar înregistrarea lui a fost refuzată: ${mesajEroareCoresp(e)} Fișierul rămâne în bucket (nu se șterge din aplicație) și apare la „Fișiere urcate dar neînregistrate”.` : mesajEroareCoresp(e), 'error')
-        if (urcat) await incarcaOrfane(rand)
+        show(inc ? `Urcarea / înregistrarea a fost refuzată: ${mesajEroareCoresp(e)} (calea ${inc.path}; dacă obiectul a ajuns în Storage, apare la „Fișiere urcate dar neînregistrate”).` : mesajEroareCoresp(e), 'error')
+        await incarcaOrfane(rand)
       }
+      if (inc) setIncercare({ ...inc, stare: 'refuzat' })
       return false
     } finally { if (!expirat()) setLucru(false) }
   }
 
-  // Copilot r1 C-P2-01: înregistrarea unui obiect deja urcat (orfan): descarcă obiectul, recalculează sha256 în browser, INSERT cu rolul ales. Fără reupload.
+  // Copilot r1 C-P2-01: înregistrarea unui obiect deja urcat (orfan): descarcă obiectul, recalculează sha256 în browser, INSERT reconciliat. Fără reupload.
   const inregistreazaOrfan = async (rand, obiect, rol, observatii) => {
     if (lucru) return false
     if (!roluriPermise(rand).includes(rol)) { show('După trimitere / anulare nu se mai înregistrează „de trimis”.', 'error'); return false }
@@ -181,11 +194,13 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       const sha = await sha256Hex(blob)
       const rez = await inregistreaza(rand, { path: obiect.path, rol, nume, mime: mimeFisier({ name: nume, type: blob.type }), marime: blob.size, sha, observatii })
       if (expirat()) return rez === 'ok'
-      if (rez === 'neconfirmat') { show('Înregistrarea nu s-a confirmat; reîncarcă și verifică lista.', 'error'); return false }
-      show('Fișierul a fost înregistrat.', 'success')
+      if (rez === 'neconfirmat') show('Înregistrarea nu s-a confirmat; reîncarcă și verifică lista.', 'error')
+      else if (rez === 'conflict') show(MESAJ_CONFLICT, 'error')
+      else show('Fișierul a fost înregistrat.', 'success')
+      if (incercareRef.current?.path === obiect.path && rez === 'ok') setIncercare(null)
       await incarca(); await incarcaOrfane(rand)
-      return true
-    } catch (e) { if (!expirat()) show(mesajEroareCoresp(e), 'error'); return false } finally { if (!expirat()) setLucru(false) }
+      return rez === 'ok'
+    } catch (e) { if (!expirat()) { show(mesajEroareCoresp(e), 'error'); await incarcaOrfane(rand) } return false } finally { if (!expirat()) setLucru(false) }
   }
 
   // link semnat 10 min, deschis printr-un <a target=_blank> (ca în Fișa parcelei). Copilot C-P3-01 / L24: tokenul de sesiune verificat după await.
@@ -272,6 +287,9 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       )}
       {randFis && <ModalFisiere rand={randFis} fisiere={fisiereRand(fisiere, randFis.id)} poateScrie={poateScrie} lucru={lucru}
         orfane={orfaneRand?.randId === randFis.id ? orfaneRand : null} onClose={() => !lucru && setFisPentru(null)} onUrca={form => urca(randFis, form)}
+        incercare={incercare?.randId === randFis.id && ['neconfirmat', 'refuzat'].includes(incercare.stare) ? incercare : null}
+        onReia={() => incercareRef.current && urca(randFis, { fisier: incercareRef.current.fisier, rol: incercareRef.current.rol, observatii: incercareRef.current.observatii })}
+        onFisierNou={() => { if (incercareRef.current?.randId === randFis.id) setIncercare(null) }} onReincarcaOrfane={() => incarcaOrfane(randFis)}
         onInregistreaza={(o, rol, obs) => inregistreazaOrfan(randFis, o, rol, obs)} onDescarca={descarca} />}
       <div style={{ fontSize:11.5, color:G.dim, marginTop:10 }}>Stări: {STARI_CORESPONDENTA.map(s => s.eticheta).join(' → ')}. Ce se trimite efectiv (mail / poștă) rămâne la expeditor.</div>
     </div>
@@ -283,12 +301,12 @@ const numeFisier = f => f ? (f.nume_original || String(f.path || '').split('/').
 // „Aprob” dezactivat până există un fișier „de trimis” (BD refuză oricum: 23514).
 export function BtnAproba({ fa, lucru, onClick }) {
   return <button style={{ ...S.btnS, borderColor:G.green, color:G.green, marginRight:6, opacity: fa ? 1 : .45, cursor: fa ? 'pointer' : 'not-allowed' }} onClick={onClick}
-    disabled={lucru || !fa} title={fa ? `Aprobi fișierul ${numeFisier(fa)} (${sha8(fa.sha256)})` : 'urcă întâi fișierul de trimis'}>✅ Aprob</button>
+    disabled={lucru || !fa} title={fa ? `Aprobi fișierul ${numeFisier(fa)} (eTag ${fa.storage_etag || '-'})` : 'urcă întâi fișierul de trimis'}>✅ Aprob</button>
 }
 
 // Modalul de fișiere al unui rând: listă + descărcare (toți) și urcare / înregistrarea fișierelor neînregistrate (admin / editor).
 // Fără ștergere / înlocuire: fișierele sunt imutabile.
-export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, onClose, onUrca, onInregistreaza, onDescarca }) {
+export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, incercare, onClose, onUrca, onReia, onFisierNou, onReincarcaOrfane, onInregistreaza, onDescarca }) {
   const roluri = roluriPermise(rand)
   const [form, setForm] = useState({ rol: roluri[0], fisier: null, observatii: '' })
   const [rolOrfan, setRolOrfan] = useState(roluri[0])
@@ -305,7 +323,7 @@ export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, onClose
       {fisiere.length === 0 ? <Gol text="Niciun fișier urcat." /> : (
         <div style={{ overflowX:'auto' }}>
           <table style={{ width:'100%', borderCollapse:'collapse' }}>
-            <thead><tr>{['Rol', 'Fișier', 'Urcat', 'Mărime', 'SHA-256 declarat', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <thead><tr>{['Rol', 'Fișier', 'Urcat', 'Mărime', 'eTag (server)', 'SHA-256 declarat', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
             <tbody>{fisiere.map(f => (
               <tr key={f.id}>
                 <td style={{ ...S.td, whiteSpace:'nowrap' }}>{etichetaRolFisier(f.rol)}
@@ -314,15 +332,28 @@ export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, onClose
                 <td style={S.td}>{numeFisier(f)}{f.observatii ? <div style={{ fontSize:11.5, color:G.muted }}>{f.observatii}</div> : null}</td>
                 <td style={{ ...S.td, whiteSpace:'nowrap' }}>{fmtDateTime(f.created_at)}</td>
                 <td style={{ ...S.td, whiteSpace:'nowrap' }}>{fmtMarime(f.marime)}</td>
-                <td style={{ ...S.td, ...S.mono }} title={`SHA-256 declarat de cel care a urcat: ${f.sha256}\neTag Storage (amprenta serverului): ${f.storage_etag || '-'}`}>{sha8(f.sha256)}</td>
+                <td style={{ ...S.td, ...S.mono, fontSize:11.5, wordBreak:'break-all' }} title="Amprenta serverului: eTag-ul obiectului din Storage la înregistrare">{f.storage_etag || '-'}</td>
+                <td style={{ ...S.td, ...S.mono, color:G.muted }} title={`SHA-256 declarat de cel care a urcat (informativ): ${f.sha256}`}>{sha8(f.sha256)}</td>
                 <td style={S.td}><button style={S.btnX} onClick={() => onDescarca(f)}>⬇ Descarcă</button></td>
               </tr>))}</tbody>
           </table>
         </div>
       )}
-      {poateScrie && orfane && (orfane.lista === null || orfane.lista.length > 0 || orfane.eroare) && (
+      {poateScrie && incercare && (
+        <div style={{ border:`1px solid ${G.red}`, borderRadius:8, marginTop:12, padding:10, fontSize:12.5 }}>
+          <div style={{ fontWeight:700, color:G.red, marginBottom:4 }}>{incercare.stare === 'neconfirmat' ? 'Urcare neconfirmată' : 'Urcare refuzată'}</div>
+          <div style={{ ...S.mono, wordBreak:'break-all', color:G.muted }}>{incercare.path}</div>
+          <div style={{ color:G.muted, marginTop:4 }}>Reia pe aceeași cale: dacă obiectul a ajuns deja în Storage, doar se înregistrează; altfel se urcă o singură dată, fără suprascriere.</div>
+          <div style={{ display:'flex', justifyContent:'flex-end', marginTop:6 }}><button style={S.btnS} onClick={onReia} disabled={lucru}>↻ Reia pe aceeași cale</button></div>
+        </div>
+      )}
+      {poateScrie && orfane && (orfane.lista === null || orfane.lista.length > 0 || orfane.eroare || orfane.incompleta) && (
         <div style={{ border:`1px solid ${G.yellow}`, borderRadius:8, marginTop:12, padding:10 }}>
-          <div style={{ fontSize:12.5, fontWeight:700, color:G.yellow, marginBottom:6 }}>Fișiere urcate dar neînregistrate</div>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+            <div style={{ fontSize:12.5, fontWeight:700, color:G.yellow, flex:1 }}>Fișiere urcate dar neînregistrate</div>
+            <button style={S.btnX} onClick={onReincarcaOrfane} disabled={lucru}>↻</button>
+          </div>
+          {orfane.incompleta ? <div style={{ fontSize:11.5, color:G.yellow, marginBottom:4 }}>Listă posibil incompletă (listarea Storage nu a fost sigură); reîmprospătează.</div> : null}
           {orfane.lista === null ? <div style={{ fontSize:12, color:G.muted }}>Se verifică folderul…</div> : orfane.eroare ? <div style={{ fontSize:12, color:G.red }}>{orfane.eroare}</div> : <>
             <div style={{ fontSize:11.5, color:G.muted, marginBottom:6 }}>Sunt în Storage, dar fără rând în evidență (înregistrarea a eșuat sau nu s-a confirmat). Nu le urca din nou: înregistrează-le.
               Din aplicație nu se șterg (vezi README Redări).</div>
@@ -345,7 +376,7 @@ export function ModalFisiere({ rand, fisiere, poateScrie, lucru, orfane, onClose
               {roluri.map(c => <option key={c} value={c}>{etichetaRolFisier(c)}</option>)}
             </select></Camp>
             <Camp eticheta="Fișier (PDF, DOCX, JPG, PNG; max. 25 MB)"><input key={cheieInput} type="file" accept={ACCEPT_FISIER_CORESP} style={S.input}
-              onChange={e => { const fisier = e.target.files?.[0] || null; setForm(x => ({ ...x, fisier })) }} /></Camp>
+              onChange={e => { const fisier = e.target.files?.[0] || null; setForm(x => ({ ...x, fisier })); onFisierNou?.() }} /></Camp>
             <Camp eticheta="Observații" span={2}><input style={S.input} value={form.observatii} maxLength={1000} onChange={e => setForm(x => ({ ...x, observatii: e.target.value }))} /></Camp>
           </div>
           {rol === 'de_trimis' && rand.stare === 'aprobat' && <div style={{ color:G.yellow, fontSize:12.5, marginTop:8 }}>⚠ Un fișier „de trimis” nou anulează aprobarea lui Răzvan (rândul revine în Draft).</div>}

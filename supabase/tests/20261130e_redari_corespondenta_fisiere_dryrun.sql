@@ -123,6 +123,17 @@ DO $t$ BEGIN
   IF (SELECT aprobat_sha256 IS DISTINCT FROM repeat('c',64) FROM public.red_corespondenta WHERE id=pg_temp.r30e_g('Z1')::uuid) THEN RAISE EXCEPTION 'TEST5 FAIL: reaprobare'; END IF;
   RAISE NOTICE 'TEST5a OK';
 END $t$;
+-- TEST5b (r3, C-P1-01): obiectul aprobat schimbat in Storage (alt eTag) sau lipsa -> marcarea trimis e refuzata
+SELECT pg_temp.r30e_ca(NULL,'postgres');
+UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-schimbat\""}'::jsonb WHERE bucket_id='redari' AND name='TEST-RAZVAN/corespondenta/Z1/20261104-100002-cccccccc-scrisoare-v3.pdf';
+SELECT pg_temp.r30e_ca(pg_temp.r30e_g('editor')::uuid,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r30e_refuza(format($q$UPDATE public.red_corespondenta SET stare='trimis', trimis_la='2026-11-04' WHERE id=%L$q$,pg_temp.r30e_g('Z1')),'23514') THEN RAISE EXCEPTION 'TEST5b FAIL: trimis cu obiect schimbat'; END IF;
+  IF NOT pg_temp.r30e_refuza(format($q$UPDATE public.red_corespondenta SET stare='raspuns_primit', trimis_la='2026-11-04' WHERE id=%L$q$,pg_temp.r30e_g('Z1')),'23514') THEN RAISE EXCEPTION 'TEST5b FAIL: raspuns_primit cu obiect schimbat'; END IF;
+  RAISE NOTICE 'TEST5b OK';
+END $t$;
+SELECT pg_temp.r30e_ca(NULL,'postgres');
+UPDATE storage.objects SET metadata = metadata || '{"eTag":"\"etag-3000\""}'::jsonb WHERE bucket_id='redari' AND name='TEST-RAZVAN/corespondenta/Z1/20261104-100002-cccccccc-scrisoare-v3.pdf';
 SELECT pg_temp.r30e_ca(pg_temp.r30e_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
   UPDATE public.red_corespondenta SET stare='trimis', trimis_la='2026-11-04' WHERE id=pg_temp.r30e_g('Z1')::uuid;
@@ -182,6 +193,16 @@ DO $t$ BEGIN
   CREATE POLICY zz_test_ins ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'redari' OR bucket_id = 'alt');
   IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: INSERT cu OR neprins'; END IF;
   DROP POLICY zz_test_ins ON storage.objects;
+  -- r3 (J-P2-3 / C-P2-04): politica viewer cu „conditiile corecte OR true” -> refuz (comparatie integrala)
+  ALTER POLICY red_storage_coresp_sel ON storage.objects USING ((bucket_id = 'redari' AND (storage.foldername(name))[2] = 'corespondenta' AND public.fn_red_nivel() = 'viewer'
+         AND EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere f WHERE f.path = objects.name)) OR true);
+  IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: viewer OR true neprins'; END IF;
+  ALTER POLICY red_storage_coresp_sel ON storage.objects USING (bucket_id = 'redari' AND (storage.foldername(name))[2] = 'corespondenta' AND public.fn_red_nivel() = 'editor'
+         AND EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere f WHERE f.path = objects.name));
+  IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: viewer->editor neprins'; END IF;
+  ALTER POLICY red_storage_coresp_sel ON storage.objects USING (bucket_id = 'redari' AND (storage.foldername(name))[2] = 'corespondenta' AND public.fn_red_nivel() = 'viewer'
+         AND EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere f WHERE f.path = objects.name));
+  PERFORM public.fn_red_storage_verifica_redari(true);
   ALTER POLICY red_storage_sel ON storage.objects USING (bucket_id = 'redari' AND public.fn_red_nivel() IS NOT NULL);
   IF NOT pg_temp.r30e_refuza('SELECT public.fn_red_storage_verifica_redari(true)','P0001') THEN RAISE EXCEPTION 'TEST9 FAIL: predicat slabit neprins'; END IF;
   ALTER POLICY red_storage_sel ON storage.objects USING (bucket_id = 'redari' AND public.fn_red_nivel() IN ('admin', 'editor'));
