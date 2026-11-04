@@ -12,7 +12,8 @@
 --   Nicio politică red_* nu apelează auth.uid() direct (doar prin fn_red_nivel), deci nu e nimic de schimbat acolo.
 --   De ce nu storage: în bucket-ul redari sunt 6 obiecte (din ~15,9k în storage.objects); bucket_id = 'redari' (cost mic) e evaluat înaintea funcției
 --   (cost 100), deci fn_red_nivel() rulează doar pe obiectele bucket-ului. Câștig neglijabil vs riscul de a rescrie și verificatorul textual din 30e.
--- Ordinea față de 20261130f (PR #980, neaplicată la 04.11): 30f apoi 30g. Dacă 30g se aplică înainte, politica red_corespondenta_mailuri_sel rămâne
+-- Ordinea față de 20261130f (PR #980): 30f apoi 30g. La 04.11 seara 30f e APLICATĂ live (verificat read-only: red_corespondenta_mailuri există,
+--   RLS activ, o singură politică red_corespondenta_mailuri_sel FOR SELECT TO authenticated, PERMISSIVE, „(fn_red_nivel() IS NOT NULL)” → 42 de politici). Dacă 30g se aplică înainte, politica red_corespondenta_mailuri_sel rămâne
 --   în forma per rând (corectă, doar mai lentă) și se tratează într-o migrare ulterioară; revenirea 30g acceptă ambele forme pe acea politică.
 --   fn_red_coresp_mail_verifica_baza (30f) verifică doar funcții (md5 corp, ACL, owner) și triggerele red_corespondenta — nu politicile — deci 30g
 --   nu îl strică; 30g nu atinge fn_red_nivel / fn_red_jurnal / fn_red_corespondenta_reguli / fn_red_versiune_creste și niciun trigger.
@@ -40,10 +41,15 @@ BEGIN
   IF to_regprocedure('public.fn_red_nivel()') IS NULL OR to_regprocedure('public.fn_red_storage_verifica_redari(boolean)') IS NULL THEN
     RAISE EXCEPTION '20261130g: lipseste fn_red_nivel / fn_red_storage_verifica_redari (30e)';
   END IF;
-  -- functia trebuie sa fie cea revizuita (STABLE, SECURITY DEFINER, corpul din baseline): pe ea se sprijina echivalenta per rand = o data pe interogare
-  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_nivel()'::regprocedure AND md5(prosrc) = '21db8e5d4b69b7f19e571a7087c361ae'
-                  AND provolatile = 's' AND prosecdef AND proconfig = ARRAY['search_path=public, pg_temp']) THEN
-    RAISE EXCEPTION '20261130g: fn_red_nivel nu mai e cea din baseline';
+  -- L15: functia (si callee-ul ei auth.uid()) trebuie sa fie cea revizuita; pe ea se sprijina echivalenta „per rand” = „o data pe interogare”
+  --   (STABLE, nu depinde de rand). Baseline live 04.11.2026: corp, limbaj, volatilitate, SECURITY DEFINER, proconfig, owner, ACL EXACT.
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+       WHERE (p.oid = 'public.fn_red_nivel()'::regprocedure AND md5(p.prosrc) = '21db8e5d4b69b7f19e571a7087c361ae' AND l.lanname = 'sql'
+              AND p.provolatile = 's' AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
+              AND p.proacl::text = '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}')
+          OR (p.oid = 'auth.uid()'::regprocedure AND md5(p.prosrc) = 'cdef18c69c4f4cbbced2eaf81e628b49' AND l.lanname = 'sql'
+              AND p.provolatile = 's' AND NOT p.prosecdef AND p.proconfig IS NULL AND pg_get_userbyid(p.proowner) = 'supabase_auth_admin')) <> 2 THEN
+    RAISE EXCEPTION '20261130g: fn_red_nivel / auth.uid nu mai sunt cele din baseline (corp / limbaj / volatilitate / definer / search_path / owner / EXECUTE)';
   END IF;
   -- L06: lock-uri in ordine alfabetica, inainte de verificari
   LOCK TABLE public.red_convocari, public.red_corespondenta, public.red_corespondenta_fisiere IN ACCESS EXCLUSIVE MODE;
