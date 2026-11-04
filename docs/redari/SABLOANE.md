@@ -35,7 +35,7 @@ termenul de 10 zile, §8), `A1_Scrisoare_Transgaz_plan_Lot1_rev9_final.docx`, `A
   Gazpet); obiecțiile au o a doua linie de scris (rămâne goală în șablon, textul vine din `{{obiectii_text}}`).
 - **Model_3 (PV B)**: fără „Extras jurnal de șantier”, fără „Măsurători topo / plan de situație anexat” și fără fotografii.
 - **Model_4 (adresa UAT)**: fără antetul firmei (deci fără contract și denumirea proiectului) — **abatere declarată în șablon: antet
-  repus din convocator, DE CONFIRMAT** (excepția (9), §1); pct. 4, termenul de confirmare,
+  repus din convocator, confirmat de Răzvan 04.11.2026 (merge #975)** (excepția (9), §1); pct. 4, termenul de confirmare,
   contactul și anexele sunt într-un singur paragraf; ziua 2 „09:00 – 19:00”. „sau online la ____” din Anexa 2 s-a scos din
   nou în șablon (decizia D1, 02.11: nu există pagină publică pe UAT).
 - **Model_5 (PV C)**: același text, doar corecturi.
@@ -69,8 +69,8 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   pe A4, cu lățimile tabelelor scalate; (7) convocatorul are formatarea strânsă ca fața să încapă pe o pagină A4 (ambele §9);
   (8) **convocatorul doar cu QR** (decizia Răzvan 03.11 seara: „dacă trimitem link-ul, trimitem degeaba, nu o să-l deschidă
   nimeni”): convocatorul pleacă prin poștă, deci adresa web de răspuns nu se mai tipărește și `{{link}}` dispare din șablon.
-  (9) **adresa UAT cu antetul firmei repus — DE CONFIRMAT** (04.11, varianta implicită propusă de Claude pentru claude#026
-  întrebarea 1; Răzvan confirmă sau cere scoaterea): Model_4 din Final_v2 a pierdut antetul. Generatorul copiază EXACT primele
+  (9) **adresa UAT cu antetul firmei repus — confirmat de Răzvan 04.11.2026 (merge #975)** (04.11, varianta implicită propusă de Claude pentru claude#026
+  întrebarea 1): Model_4 din Final_v2 a pierdut antetul. Generatorul copiază EXACT primele
   două paragrafe ale corpului din Model_1 (antetul: „GAZPET INSTAL S.R.L. · Str. Fluturilor nr. 34, Ploiești, jud. Prahova · CUI RO
   22029920 · Tel./Fax 0244 435 005 · office@gazpet.ro” + „Lider al Asocierii … · Contract Transgaz nr.
   {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}”, și paragraful gol de după) la începutul adresei — aceleași
@@ -133,7 +133,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
     șabloanele convocatorului nu au asemenea structuri.
 - Fiecare placeholder stă întreg într-un singur `<w:t>` → `docx.js` înlocuiește local, fără consolidare de run-uri (limita 1).
 - Antetul de firmă (adresă, CUI, telefon, „Lider al Asocierii …”) rămâne text fix; din antet s-au parametrizat doar
-  `Contract Transgaz nr. {{contract_nr}}/{{contract_data}}` și `{{proiect_denumire}}` (convocator, PV A, PV B, PV C și — din 04.11, excepția (9), DE CONFIRMAT — adresa UAT, cu antetul copiat din convocator). Corpul rămâne specific Lot 1 (Prunișor–Jupa, Acordul de mediu nr. 4/18.07.2022, A.P.M. Mehedinți,
+  `Contract Transgaz nr. {{contract_nr}}/{{contract_data}}` și `{{proiect_denumire}}` (convocator, PV A, PV B, PV C și — din 04.11, excepția (9), confirmată de Răzvan 04.11.2026, #975 — adresa UAT, cu antetul copiat din convocator). Corpul rămâne specific Lot 1 (Prunișor–Jupa, Acordul de mediu nr. 4/18.07.2022, A.P.M. Mehedinți,
   jud. Mehedinți în adresa UAT devine `{{judet}}`) — **șabloanele sunt ale Lot 1**.
 - Textele celor 4 opțiuni de răspuns din convocator rămân FIXE (text juridic); informarea GDPR e `{{text_gdpr}}` (tot
   paragraful de sub „Date personale”), contactul Gazpet e `{{contact_nume}} {{contact_telefon}} {{contact_email}}`.
@@ -268,11 +268,11 @@ activi au PV A semnat. Un alt coproprietar cu PV A semnat nu blocheaza PV B; mod
 Constatarea nu poate contrazice PV A; schimbarea terenului cere verificare noua datata, nu o presupunere.
 Reprezentantul UAT semneaza numai PV B. Prezenta/refuzul nu se inventeaza din starea agregata.
 
-### 2.4 `adresa_uat.docx` (Model 4) — per UAT, 43 placeholder-e (antet + adresa + Anexa 2 + Anexa 3; antetul repus, DE CONFIRMAT)
+### 2.4 `adresa_uat.docx` (Model 4) — per UAT, 43 placeholder-e (antet + adresa + Anexa 2 + Anexa 3; antetul repus, confirmat de Răzvan 04.11.2026, #975)
 
 | placeholder | sursă în BD | oblig. | observații |
 |---|---|---|---|
-| `{{contract_nr}}`, `{{contract_data}}`, `{{proiect_denumire}}` | red_proiecte.contract_nr, .contract_data, .denumire | da (contractul) | antet copiat din convocator (excepția (9), 04.11, DE CONFIRMAT); Final_v2 nu îl mai avea |
+| `{{contract_nr}}`, `{{contract_data}}`, `{{proiect_denumire}}` | red_proiecte.contract_nr, .contract_data, .denumire | da (contractul) | antet copiat din convocator (excepția (9), 04.11, confirmat de Răzvan, #975); Final_v2 nu îl mai avea |
 | `{{uat}}` ×5, `{{judet}}` | red_uat.nume, .judet | da | |
 | `{{nr_document}}`, `{{data}}` | `fn_red_numar_document('AU', NULL, NULL)` → `AU-0001`; `red_uat.adresa_nr, adresa_data` | da | azi, Europe/Bucharest; regenerarea păstrează numărul |
 | `{{imputernicire_nr}}`, `{{imputernicire_data}}` | red_proiecte | da | |
@@ -788,8 +788,10 @@ prezentat după convocarea și afișarea de 10 zile”.
 
 Regula în ERP: zile **calendaristice** (planul nu spune „lucrătoare”), față de **ziua 1 de sesiune** (`red_uat.sesiune_zi1`),
 pentru **data expedierii** recomandatei (nu a primirii) și pentru **începutul afișării** (`red_uat.afisare_data_start`). Data-limită
-= ziua 1 − 10 zile; o expediere / afișare chiar pe data-limită e în termen, din ziua următoare e după termen. O singură constantă:
-`TERMEN_CONVOCARE_ZILE = 10` în `src/redari/setari.js` (`dataLimitaConvocare`, `termenAfisare`).
+= ziua 1 − 11 zile („10 zile libere”: nu se numără nici ziua expedierii / începerii afișării, nici ziua 1; #973, confirmat Răzvan
+04.11.2026, confirmarea Juridic nedocumentată); o expediere / afișare chiar pe data-limită e în termen, din ziua următoare e după termen.
+Constantele: `TERMEN_CONVOCARE_ZILE = 10` + `ZILE_EXCLUSE_DIN_TERMEN = 1` în `src/redari/setari.js` (`dataLimitaConvocare`,
+`termenAfisare`). Revenire la ziua 1 − 10: `ZILE_EXCLUSE_DIN_TERMEN = 0` (și testele de limită).
 
 | Unde | Ce face | Fel |
 |---|---|---|
