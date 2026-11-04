@@ -186,7 +186,14 @@ describe('ecranul UAT', () => {
     const tabel = renderToString(<UatEcran proiect={proiect} uats={[tarziu]} nivel="admin" show={show} onSchimbat={() => {}} />)
     expect(tabel).toContain('afișarea începe după 29.11.2026')
     const inTermen = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-29' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
-    expect(inTermen).not.toContain('Afișarea la primărie începe pe')
+    expect(inTermen).not.toContain('sub 10 zile libere înainte de ziua 1')
+    // juridic#031: pe limita fermă, dar după ținta recomandată (ziua 1 − 15 = 25.11) → doar informarea non-blocantă
+    expect(inTermen).toContain('după ținta recomandată 25.11.2026')
+    expect(inTermen).toContain('recomandat cu cel puțin 15 zile înainte, pentru livrarea poștei')
+    const inTinta = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-25' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
+    expect(inTinta).not.toContain('Afișarea la primărie începe pe')
+    // tabelul „Gata de convocare?” arată ținta recomandată ca informare
+    expect(renderToString(<UatEcran proiect={proiect} uats={[{ ...tarziu, afisare_data_start: '2026-11-20' }]} nivel="admin" show={show} onSchimbat={() => {}} />)).toContain('ținta recomandată 25.11.2026')
   })
   it.each([[false, 0], [true, 1]])('concurent (Jakarinos f-v2 r2 P2): termenul se judecă pe rândul recitit + patch, înainte de UPDATE (confirmă=%s)', async (raspuns, update) => {
     const confirm = vi.fn(() => raspuns)
