@@ -26,9 +26,18 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE canal = 'email') OR EXISTS (SELECT 1 FROM public.red_mail_raspuns_sursa)
      OR EXISTS (SELECT 1 FROM public.red_mail_primite) OR EXISTS (SELECT 1 FROM public.red_mail_obiecte) OR EXISTS (SELECT 1 FROM public.red_mail_dedup)
      OR EXISTS (SELECT 1 FROM public.red_mail_evenimente) OR EXISTS (SELECT 1 FROM public.red_mail_adrese_propuse) OR EXISTS (SELECT 1 FROM public.red_mail_oauth_state)
-     OR (SELECT count(*) FROM public.red_mail_flux) <> 2 OR EXISTS (SELECT 1 FROM public.red_mail_flux WHERE activ OR mod_cursor <> 'neinitializat' OR data_start IS NOT NULL)
-     OR EXISTS (SELECT 1 FROM public.red_mail_setari WHERE citire_activa OR retentie_activa OR golire_gmail_activa) THEN
-    RAISE EXCEPTION '20261130k revenire REFUZATA: regulile protejeaza deja date (raspunsuri email / sursa / mesaje / adrese / fluxuri pornite)' USING ERRCODE = '55000';
+     -- Copilot #987 P2-01: rândurile inițiale NEATINSE (versiune 1 = niciun UPDATE de când există triggerul de versiune din k; plus valorile
+     -- de configurare), nu doar comutatoarele; și niciun termen retentie_mail_pana (fără k, gardul owner ar dispărea peste o valoare existentă)
+     OR (SELECT count(*) FROM public.red_mail_setari) <> 1
+     OR NOT EXISTS (SELECT 1 FROM public.red_mail_setari WHERE id = 1 AND NOT citire_activa AND NOT retentie_activa AND NOT golire_gmail_activa
+                     AND ultima_eroare_cod IS NULL AND retentie_lease_token IS NULL AND retentie_lease_pana IS NULL AND versiune = 1)
+     OR (SELECT count(*) FROM public.red_mail_flux) <> 2
+     OR (SELECT count(*) FROM public.red_mail_flux WHERE flux = 'inbox' AND casuta IN ('redari@gazpet.ro', 'redari-test@gazpet.ro') AND NOT activ
+           AND mod_cursor = 'neinitializat' AND history_id IS NULL AND data_start IS NULL AND data_import_de_la IS NULL AND recuperare_tip IS NULL
+           AND recuperare_history_id IS NULL AND recuperare_page_token IS NULL AND lease_token IS NULL AND lease_pana IS NULL AND ultima_eroare_cod IS NULL
+           AND versiune = 1) <> 2
+     OR EXISTS (SELECT 1 FROM public.red_proiecte WHERE retentie_mail_pana IS NOT NULL) THEN
+    RAISE EXCEPTION '20261130k revenire REFUZATA: regulile protejeaza deja date (raspunsuri email / sursa / mesaje / adrese / setari / fluxuri atinse / termene retentie_mail_pana)' USING ERRCODE = '55000';
   END IF;
   DROP TRIGGER trg_red_raspunsuri_mail_sursa ON public.red_raspunsuri;
   DROP TRIGGER trg_red_raspunsuri_zz_mail ON public.red_raspunsuri;

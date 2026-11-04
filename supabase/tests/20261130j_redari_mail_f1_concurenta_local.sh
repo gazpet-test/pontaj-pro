@@ -153,5 +153,57 @@ cu_5s "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql" > "$TMP/j_5s.
 baza s6m -; obiect_fis s6m; cursa2 s6m "$FIS1" "$FIS2" "$TMP/j_5s.sql"
 verifica "bug reprodus: deadlock detectat (fără regula r3, detectorul decide)" "$(are "$OUT_A$OUT_B" 'deadlock detected')"
 
-for d in s1 s1m s2 s2m s3 s4 s5 s5m s6 s6m; do "$PSQL" -X -q -h localhost -p "$PORT" -U postgres -d postgres -c "DROP DATABASE IF EXISTS $d" > /dev/null 2>&1; done
+# S0 (Copilot #987 P2-01, o singură sesiune): owner-ul a fixat retentie_mail_pana după j + k → revenirea k REFUZĂ (altfel gardul owner ar
+# dispărea peste o valoare existentă); la fel dacă rândul inițial red_mail_flux a fost atins (versiune 2), chiar cu comutatoarele oprite.
+echo "S0 (Copilot P2-01): revenirea k cu retentie_mail_pana fixată / cu rândul inițial de flux atins"
+baza s0 jk
+q s0 "UPDATE public.red_proiecte SET retentie_mail_pana = DATE '2031-12-31'" > /dev/null
+RC_B=0; OUT_B=""; OUT_A=$(aplica s0 rk "$R/supabase/revenire/20261130k_redari_mail_f1_reguli_ROLLBACK.sql"); RC_A=$?
+verifica "revenirea k refuzată (REFUZATA … termene retentie_mail_pana), regulile și gardul owner rămân" "$(si "$([ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130k revenire REFUZATA: regulile protejeaza deja date')" \
+  "$(q s0 "SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_red_proiecte_retentie_mail') AND (SELECT count(*) FROM public.red_proiecte WHERE retentie_mail_pana IS NOT NULL) = 1")")"
+baza s0b jk
+q s0b "UPDATE public.red_mail_flux SET ultima_eroare_cod = 'x' WHERE casuta = 'redari-test@gazpet.ro'; UPDATE public.red_mail_flux SET ultima_eroare_cod = NULL WHERE casuta = 'redari-test@gazpet.ro'" > /dev/null
+OUT_A=$(aplica s0b rk "$R/supabase/revenire/20261130k_redari_mail_f1_reguli_ROLLBACK.sql"); RC_A=$?
+verifica "revenirea k refuzată cu fluxul atins (versiune 3, valori revenite la implicit)" "$(si "$([ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130k revenire REFUZATA')" "$(q s0b "SELECT to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NOT NULL")")"
+
+# S7 (Copilot #987 P2-02): două sesiuni marchează simultan obiecte DIFERITE ale aceluiași mesaj în ștergere. Triggerul (EXISTS) nu vede
+# rândul necomis al celeilalte sesiuni; indexul UNIQUE parțial (primit_id) WHERE stare = 'in_stergere' serializează: exact una trece.
+cursa_sql() { # $1 = db, $2 = SQL B (necomis până A e blocat pe B SAU a comis deja altă ștergere — controlul fără index), $3 = SQL A
+  local db=$1
+  printf "SET application_name = 'scriitor_B';\nBEGIN;\n%s;\nDO \$w\$ DECLARE %s \$w\$;\nCOMMIT;\n" "$2" \
+    "$(printf "$BUCLA" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'migrare_A' AND wait_event_type = 'Lock') OR (SELECT count(*) FROM public.red_mail_obiecte WHERE stare = 'in_stergere') >= 2" "bariera_B")" > "$TMP/b_$db.sql"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$db" -f "$TMP/b_$db.sql" > "$TMP/b_$db.out" 2>&1 &
+  local pb=$!
+  bariera "$db" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'scriitor_B' AND state = 'active' AND query LIKE '%bariera_B%')" "B_a_marcat"
+  printf "SET application_name = 'migrare_A';\nBEGIN;\n%s;\nCOMMIT;\n" "$3" > "$TMP/a_$db.sql"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$db" -f "$TMP/a_$db.sql" > "$TMP/a_$db.out" 2>&1 &
+  local pa=$!
+  wait $pa; RC_A=$?; wait $pb; RC_B=$?
+  OUT_A=$(cat "$TMP/a_$db.out"); OUT_B=$(cat "$TMP/b_$db.out")
+}
+H7=$(printf '7%.0s' $(seq 1 64))
+mesaj_in_golire() { # un mesaj cu 2 obiecte stocate, în golire (pașii valizi ai mașinii de stări, ca mentenanța)
+  q "$1" "INSERT INTO public.red_mail_primite (id, casuta, test, gmail_id, gmail_id_hmac, hmac_versiune, primit_la) VALUES ('00000000-0000-0000-0000-0000000007a1', 'redari@gazpet.ro', false, 'g7', '$H7', 1, now());
+          INSERT INTO public.red_mail_obiecte (id, primit_id, tip, nr, cale) VALUES
+            ('00000000-0000-0000-0000-0000000007b1', '00000000-0000-0000-0000-0000000007a1', 'eml', 0, 'mail/redari/carantina/$H7.eml'),
+            ('00000000-0000-0000-0000-0000000007b2', '00000000-0000-0000-0000-0000000007a1', 'atasament', 1, 'mail/redari/atasamente/$H7/1');
+          UPDATE public.red_mail_obiecte SET stare = 'stocat', sha256 = repeat('e', 64), marime = 1 WHERE primit_id = '00000000-0000-0000-0000-0000000007a1';
+          UPDATE public.red_mail_primite SET stare_ingestie = 'ok', ingestie_finalizata_la = now() WHERE id = '00000000-0000-0000-0000-0000000007a1';
+          UPDATE public.red_mail_primite SET retentie_stare = 'in_golire', golire_claim_token = gen_random_uuid(), golire_claim_pana = now() + interval '5 minutes' WHERE id = '00000000-0000-0000-0000-0000000007a1';" > /dev/null
+}
+STERGE1="UPDATE public.red_mail_obiecte SET stare = 'in_stergere', stergere_autorizata_la = now() WHERE id = '00000000-0000-0000-0000-0000000007b1'"
+STERGE2="UPDATE public.red_mail_obiecte SET stare = 'in_stergere', stergere_autorizata_la = now() WHERE id = '00000000-0000-0000-0000-0000000007b2'"
+echo "S7 (Copilot P2-02): două autorizări de ștergere concurente pe același mesaj"
+baza s7 jk; mesaj_in_golire s7; cursa_sql s7 "$STERGE1" "$STERGE2"
+verifica "exact una trece: B comis, A refuzată de indexul unic (23505), un singur obiect in_stergere" "$(si "$([ $RC_B = 0 ] && [ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" 'red_mail_obiecte_un_in_stergere_uq')" \
+  "$(q s7 "SELECT (SELECT count(*) FROM public.red_mail_obiecte WHERE stare = 'in_stergere') = 1 AND EXISTS (SELECT 1 FROM public.red_mail_obiecte WHERE id = '00000000-0000-0000-0000-0000000007b1' AND stare = 'in_stergere')")")"
+echo "S7-control (mutație): aceeași cursă fără indexul unic parțial"
+baza s7m jk; mesaj_in_golire s7m; q s7m "DROP INDEX public.red_mail_obiecte_un_in_stergere_uq" > /dev/null; cursa_sql s7m "$STERGE1" "$STERGE2"
+verifica "bug reprodus: ambele trec, două obiecte in_stergere pe același mesaj" "$(si "$([ $RC_B = 0 ] && [ $RC_A = 0 ] && echo t)" \
+  "$(q s7m "SELECT (SELECT count(*) FROM public.red_mail_obiecte WHERE stare = 'in_stergere') = 2")")"
+
+for d in s0 s0b s1 s1m s2 s2m s3 s4 s5 s5m s6 s6m s7 s7m; do "$PSQL" -X -q -h localhost -p "$PORT" -U postgres -d postgres -c "DROP DATABASE IF EXISTS $d" > /dev/null 2>&1; done
 [ $ESEC = 0 ] && echo "CONCURENȚĂ: TOATE OK" || { echo "CONCURENȚĂ: EȘEC"; exit 1; }

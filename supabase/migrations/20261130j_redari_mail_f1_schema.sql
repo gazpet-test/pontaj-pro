@@ -449,6 +449,9 @@ CREATE TABLE public.red_mail_obiecte (
   CONSTRAINT red_mail_obiecte_stocat_ck CHECK (stare NOT IN ('stocat', 'in_stergere') OR (sha256 IS NOT NULL AND marime IS NOT NULL)),
   CONSTRAINT red_mail_obiecte_stergere_ck CHECK (stare <> 'in_stergere' OR stergere_autorizata_la IS NOT NULL)
 );
+-- Copilot #987 P2-02 (L01 / L16): „cel mult un obiect autorizat la ștergere pe mesaj” (§1.8) garantat de BD și sub concurență — triggerul
+-- din 20261130k doar dă mesajul clar; două tranzacții care marchează simultan obiecte diferite ale aceluiași mesaj: exact una trece (23505).
+CREATE UNIQUE INDEX red_mail_obiecte_un_in_stergere_uq ON public.red_mail_obiecte (primit_id) WHERE stare = 'in_stergere';
 COMMENT ON TABLE public.red_mail_obiecte IS 'Redări e-mail: manifestul obiectelor unui mesaj (.eml în carantină + atașamentele PDF / JPEG / PNG). Cale deterministă pe (casuta, gmail_id_hmac); respinsele au doar metadate. Descărcarea doar prin proxy (redari-mail-fisier), niciodată URL semnat.';
 
 -- Tombstone-ul de dedup după ștergerea finală a auditului, doar cât deduplicarea e deschisă (§1.2 r19c / r19e).
@@ -797,7 +800,9 @@ BEGIN
   END LOOP;
   IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'red_mail_primite_casuta_gmail_id_uq'
                   AND indexdef = 'CREATE UNIQUE INDEX red_mail_primite_casuta_gmail_id_uq ON public.red_mail_primite USING btree (casuta, gmail_id) WHERE (gmail_id IS NOT NULL)')
-     OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_red_mail_primite_msgid' AND indexdef NOT LIKE 'CREATE UNIQUE%') THEN
+     OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_red_mail_primite_msgid' AND indexdef NOT LIKE 'CREATE UNIQUE%')
+     OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'red_mail_obiecte_un_in_stergere_uq'
+                     AND indexdef = 'CREATE UNIQUE INDEX red_mail_obiecte_un_in_stergere_uq ON public.red_mail_obiecte USING btree (primit_id) WHERE (stare = ''in_stergere''::text)') THEN
     RAISE EXCEPTION '20261130j post: indexul UNIQUE parțial (casuta, gmail_id) / indexul neunic pe rfc_message_id lipsesc';
   END IF;
   -- (4) RLS pornit pe toate, fără FORCE; politici: exact una de SELECT pe tabel (oauth_state: zero), niciuna de scriere; privilegii: doar SELECT
