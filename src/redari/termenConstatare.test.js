@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { TERMEN_CONSTATARE_ZILE, ultimaZiSesiune, dataLimitaConstatare, termenConstatare, mesajTermenConstatare } from './setari.js'
+import { dataCivilaBucuresti, TERMEN_CONSTATARE_ZILE, ultimaZiSesiune, dataLimitaConstatare, termenConstatare, mesajTermenConstatare } from './setari.js'
 
 const uat = { sesiune_zi1: '2026-12-08', program_zi1: '09:00 – 16:00', sesiune_zi2: '2026-12-09', program_zi2: '09:00 – 16:00',
   sesiune_zi3: '2026-12-10', program_zi3: '09:00 – 16:00' }
@@ -83,5 +83,21 @@ describe('termen constatare pe teren (plan 4.6)', () => {
   it('două PV A semnate valabile: contează cel mai vechi', () => {
     const t = termenConstatare({ uat, detinatorId: 7, raspunsuri: [cerere()], pvs: [pvTeren('2026-12-18', { id: 2 }), pvTeren('2026-12-14', { id: 3 })] })
     expect(t).toMatchObject({ dataConstatare: '2026-12-14', depasit: false })
+  })
+  it('P2 r2: data cererii (timestamptz) = data civilă București, iarna (UTC+2) și vara (UTC+3)', () => {
+    expect(dataCivilaBucuresti('2026-12-12T22:30:00Z')).toBe('2026-12-13')
+    expect(dataCivilaBucuresti('2026-12-12T21:59:00Z')).toBe('2026-12-12')
+    expect(dataCivilaBucuresti('2026-07-14T21:15:00Z')).toBe('2026-07-15')
+    expect(dataCivilaBucuresti('2026-07-14T20:59:00+00:00')).toBe('2026-07-14')
+    expect(dataCivilaBucuresti('2026-12-12')).toBe('2026-12-12')
+    expect(dataCivilaBucuresti('2026-02-30')).toBeNull()
+    expect(dataCivilaBucuresti('nu e data')).toBeNull()
+    const r = [cerere({ data: '2026-12-12T22:30:00Z' })]
+    expect(termenConstatare({ uat, detinatorId: 7, raspunsuri: r, pvs: [pvTeren('2026-12-12')], azi: '2026-12-20' })).toMatchObject({ dataConstatare: null, depasit: true })
+    expect(termenConstatare({ uat, detinatorId: 7, raspunsuri: r, pvs: [pvTeren('2026-12-13')], azi: '2026-12-20' })).toMatchObject({ dataConstatare: '2026-12-13', depasit: false })
+    const vara = { sesiune_zi1: '2026-07-10', program_zi1: '09:00 – 16:00' }
+    const rv = [cerere({ data: '2026-07-14T21:15:00Z' })]
+    expect(termenConstatare({ uat: vara, detinatorId: 7, raspunsuri: rv, pvs: [pvTeren('2026-07-14')], azi: '2026-07-20' })).toMatchObject({ dataConstatare: null, depasit: true })
+    expect(termenConstatare({ uat: vara, detinatorId: 7, raspunsuri: rv, pvs: [pvTeren('2026-07-15')] })).toMatchObject({ dataConstatare: '2026-07-15', depasit: false, limita: '2026-07-15' })
   })
 })

@@ -164,6 +164,16 @@ export function mesajTermenAfisare(t) {
 // data_pv ≥ data cererii și ≥ prima zi de sesiune (review #974 r1 P2-01/P2-02). PV A generat/nesemnat sau mai vechi nu închide.
 export const TERMEN_CONSTATARE_ZILE = 5
 const dataCivila = (v) => { const s = normalizeazaValoare(v)?.slice(0, 10); return s && dataValida(s) ? s : null }
+// Data civilă Europe/Bucharest a unui timestamptz (red_raspunsuri.data), același Intl ca dataBucuresti (plicuri.js) / aziBucuresti (docx.js),
+// care însă dau doar „azi” (fără argument), iar plicuri.js importă setari.js. 'AAAA-LL-ZZ' simplu rămâne neschimbat (review #974 r2 P2).
+const FMT_BUCURESTI = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' })
+export function dataCivilaBucuresti(v) {
+  const s = normalizeazaValoare(v)
+  if (!s) return null
+  if (RX_DATA.test(s)) return dataValida(s) ? s : null
+  const t = Date.parse(s)
+  return Number.isNaN(t) ? null : FMT_BUCURESTI.format(new Date(t))
+}
 
 /** Zilele de sesiune valide ale UAT-ului care au și program completat (review #974 r1 P3-01), sortate. */
 function zileSesiuneCuProgram(uat) {
@@ -198,7 +208,7 @@ export function termenConstatare({ uat, detinatorId, raspunsuri = [], pvs = [], 
   const primaZi = zile[0] || null, ultimaZi = zile.length ? zile[zile.length - 1] : null, limita = dataLimitaConstatare(ultimaZi)
   const gol0 = { cerut, ultimaZi, limita, dataConstatare: null, depasit: false, judecat: false }
   if (!cerut || !limita) return gol0
-  const dataCerere = dataCivila(ultim.data)
+  const dataCerere = dataCivilaBucuresti(ultim.data)
   const inchide = (Array.isArray(pvs) ? pvs : [])
     .filter(p => p && p.tip === 'A' && p.sters_la == null && p.stare === 'semnat' && (detinatorId == null || p.detinator_id === detinatorId))
     .map(p => ({ p, d: dataCivila(p.data_pv) }))
