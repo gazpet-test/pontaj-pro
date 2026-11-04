@@ -1,8 +1,12 @@
 -- DRY PRODUCTIE 20261130i_redari_sms_stare. Runner: o singura tranzactie ANULATA (marcaj + migrare + acest fisier + ROLLBACK).
 -- r2 (Jakarinos NO-GO P1): FARA fixture SMS si FARA ALTER TABLE / DISABLE TRIGGER pe sms_* — un DISABLE / ENABLE TRIGGER ia SHARE ROW EXCLUSIVE
 -- tinut pana la ROLLBACK si ar bloca workerul SMS. Aici NU se scrie nimic in tabele: migrarea creeaza doar functia (fara blocari de tabel),
--- testele sunt citiri (ACL, coloane, refuzuri, cifrele pe datele REALE TEST-RAZVAN comparate cu un calcul independent din tabele), apoi revenirea
--- (DROP FUNCTION, acelasi corp ca supabase/revenire/20261130i_redari_sms_stare_ROLLBACK.sql) si ROLLBACK. lock_timeout scurt (2s) pe toata tranzactia.
+-- testele sunt citiri (ACL, coloane, refuzuri, cifrele pe datele REALE TEST-RAZVAN comparate cu un calcul independent din tabele).
+-- r3: revenirea NU mai e copiata aici — runnerul (C:/Users/Public/livrare/run_30i_dry.sh) ruleaza dupa acest fisier RESET ROLE + claims goale,
+-- marcajul gazpet.revenire_20261130i, fisierul supabase/revenire/20261130i_redari_sms_stare_ROLLBACK.sql, o verificare ca functia a disparut,
+-- apoi ROLLBACK explicit (scris de runner, ultima instructiune a tranzactiei).
+-- lock_timeout: preflight-ul migrarii pune 5s, acest fisier pune 2s pentru teste, revenirea pune din nou 5s (set_config local in DO-ul ei);
+-- nicio etapa nu ia blocari de tabel pe sms_* / red_* (CREATE / DROP FUNCTION + citiri).
 -- Cazurile pe stari (trimis / livrat / esuat / in curs / ignorate / ordine / loturi) sunt in DRY-ul LOCAL (..._dryrun_local.sql, PG17 de test).
 -- Identitati REALE din user_module_access (admin = owner, editor / viewer ne-owner pe modulul redari) + un profil FARA nivel Redari, simulate prin
 -- request.jwt.claims + SET LOCAL ROLE; anon si authenticated fara sub. La final: RESET ROLE + claims goale.
@@ -151,28 +155,6 @@ DO $t$ BEGIN
   IF (SELECT provolatile <> 's' OR NOT prosecdef FROM pg_proc WHERE oid = 'public.fn_red_sms_stare(uuid)'::regprocedure) THEN RAISE EXCEPTION 'TEST6 FAIL: volatilitate / definer'; END IF;
   PERFORM count(*) FROM public.fn_red_sms_stare(pg_temp.r30i_g('proiect')::uuid);
   RAISE NOTICE 'TEST6 OK';
-END $t$;
-
--- TEST7: revenirea in aceeasi tranzactie (corpul din supabase/revenire/20261130i_redari_sms_stare_ROLLBACK.sql), apoi ROLLBACK-ul runnerului anuleaza tot
-SELECT pg_temp.r30i_ca(NULL, 'postgres');
-SELECT set_config('gazpet.revenire_20261130i', 'REDARI_SMS_STARE_SCOS:' || txid_current(), true);
-DO $rev$
-BEGIN
-  IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261130i', true) IS DISTINCT FROM 'REDARI_SMS_STARE_SCOS:' || txid_current() THEN
-    RAISE EXCEPTION '20261130i revenire: garda invalida';
-  END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
-  IF to_regprocedure('public.fn_red_sms_stare(uuid)') IS NULL THEN RAISE EXCEPTION '20261130i revenire: migrarea lipseste'; END IF;
-  IF EXISTS (SELECT 1 FROM pg_depend WHERE refobjid = 'public.fn_red_sms_stare(uuid)'::regprocedure AND deptype = 'n') THEN
-    RAISE EXCEPTION '20261130i revenire REFUZATA: alte obiecte depind de fn_red_sms_stare' USING ERRCODE = '55000';
-  END IF;
-  DROP FUNCTION public.fn_red_sms_stare(uuid);
-  IF to_regprocedure('public.fn_red_sms_stare(uuid)') IS NOT NULL THEN RAISE EXCEPTION '20261130i revenire: stare finala gresita'; END IF;
-  RAISE NOTICE '20261130i revenire: fn_red_sms_stare scoasa';
-END $rev$;
-DO $t$ BEGIN
-  IF to_regprocedure('public.fn_red_sms_stare(uuid)') IS NOT NULL THEN RAISE EXCEPTION 'TEST7 FAIL: revenire'; END IF;
-  RAISE NOTICE 'TEST7 OK';
 END $t$;
 
 -- final: sesiunea revine la postgres, fara claims

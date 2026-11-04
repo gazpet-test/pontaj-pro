@@ -65,6 +65,20 @@ BEGIN
                     AND pg_get_userbyid(p.proowner) = 'postgres' AND md5(p.prosrc) = '21db8e5d4b69b7f19e571a7087c361ae') THEN
     RAISE EXCEPTION '20261130i: fn_red_nivel() nu mai are amprenta revizuita (SQL / DEFINER / STABLE / () -> text / search_path / owner / corp)';
   END IF;
+  -- r3 (Jakarinos r2 P2, L15 tranzitiv): ACL-ul lui fn_red_nivel() si amprenta lui auth.uid() (singurul apel al lui fn_red_nivel in afara tabelelor).
+  -- Baseline citit read-only pe live 04.11.2026. ACL comparat ca multime (elementele sortate COLLATE "C"), ca ordinea interna din proacl sa nu conteze.
+  IF (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'public.fn_red_nivel()'::regprocedure)
+       IS DISTINCT FROM ARRAY['authenticated=X/postgres', 'postgres=X/postgres', 'service_role=X/postgres']::text[] THEN
+    RAISE EXCEPTION '20261130i: ACL-ul lui fn_red_nivel() nu e cel revizuit';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language g ON g.oid = p.prolang
+                  WHERE p.oid = 'auth.uid()'::regprocedure AND g.lanname = 'sql' AND NOT p.prosecdef AND p.provolatile = 's' AND p.pronargs = 0
+                    AND p.prorettype = 'uuid'::regtype AND NOT p.proretset AND p.proconfig IS NULL
+                    AND pg_get_userbyid(p.proowner) = 'supabase_auth_admin' AND md5(p.prosrc) = 'cdef18c69c4f4cbbced2eaf81e628b49')
+     OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'auth.uid()'::regprocedure)
+       IS DISTINCT FROM ARRAY['=X/supabase_auth_admin', 'dashboard_user=X/supabase_auth_admin', 'supabase_auth_admin=X/supabase_auth_admin']::text[] THEN
+    RAISE EXCEPTION '20261130i: auth.uid() nu mai are amprenta revizuita (SQL / INVOKER / STABLE / () -> uuid / owner / corp / ACL)';
+  END IF;
   -- functia citeste ca owner (postgres) peste RLS: owner-ul tabelelor trebuie sa fie postgres, fara FORCE RLS
   IF EXISTS (SELECT 1 FROM pg_class WHERE oid IN ('public.sms_loturi'::regclass, 'public.sms_mesaje'::regclass, 'public.red_detinatori'::regclass, 'public.red_parcele'::regclass)
               AND (relforcerowsecurity OR pg_get_userbyid(relowner) <> 'postgres')) THEN

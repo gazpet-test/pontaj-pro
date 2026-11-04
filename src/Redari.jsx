@@ -26,6 +26,7 @@ import RedariSmsButon from './sms/RedariSmsButon.jsx'
 // 📱 Starea SMS pe deținător (fn_red_sms_stare, 20261130i): doar agregate, fără text / telefon
 import { citesteSmsStare, stareSmsPentru, potrivesteFiltru, csvListaSms } from './redari/smsStare.js'
 import { CelulaSms, FiltruSms } from './redari/ui/SmsRegistru.jsx'
+import { filtruCautareSql, potrivesteCautare } from './redari/cautare.js'   // r3: aceeași regulă de căutare pe calea SQL și pe cea locală
 import { paginiExport } from './redari/ui/ExportEcran.jsx'
 
 const PAGINA = 100
@@ -233,8 +234,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       if (fStare) q = q.eq('stare', fStare)
       return q
     }, ['parcela_id', 'detinator_id'], curent)
-    const t = cautareAplicata.replace(/[%,()]/g, ' ').trim().toLowerCase()
-    const cautat = t ? tot.filter(r => String(r.id_parcela ?? '').toLowerCase().includes(t) || String(r.nume ?? '').toLowerCase().includes(t)) : tot
+    const cautat = tot.filter(r => potrivesteCautare(r, cautareAplicata))
     return cautat.sort((a, b) => String(a.id_parcela ?? '').localeCompare(String(b.id_parcela ?? ''), 'ro', { numeric: true })
       || String(a.nume ?? '').localeCompare(String(b.nume ?? ''), 'ro') || String(a.detinator_id).localeCompare(String(b.detinator_id)))
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata])
@@ -258,10 +258,8 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       if (fTronson === 'fara') q = q.is('tronson', null)   // parcelele încă neatribuite (după importul fără tronson)
       else if (fTronson) q = q.eq('tronson', Number(fTronson))
       if (fStare) q = q.eq('stare', fStare)
-      if (cautareAplicata) {
-        const t = cautareAplicata.replace(/[%,()]/g, ' ').trim()
-        if (t) q = q.or(`id_parcela.ilike.%${t}%,nume.ilike.%${t}%`)
-      }
+      const fCautare = filtruCautareSql(cautareAplicata)   // termen literal: wildcard-urile ILIKE / PostgREST scoase (src/redari/cautare.js)
+      if (fCautare) q = q.or(fCautare)
       q = q.order('id_parcela').order('nume').range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1)
       const { data, error, count } = await q
       if (g !== generatie.current) return   // a pornit o cerere mai nouă: rândurile și totalul acesteia nu se mai aplică

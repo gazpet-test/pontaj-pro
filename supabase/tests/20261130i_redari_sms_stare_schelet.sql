@@ -13,6 +13,25 @@ CREATE FUNCTION public.fn_red_nivel() RETURNS text LANGUAGE sql STABLE SECURITY 
     ELSE (SELECT uma.access_level FROM public.user_module_access uma WHERE uma.profile_id = auth.uid() AND uma.module = 'redari')
   END;
 $f$;
+-- r3 (L15 tranzitiv): ACL-ul lui fn_red_nivel ca pe live: doar postgres / authenticated / service_role (fara PUBLIC, fara anon)
+REVOKE ALL ON FUNCTION public.fn_red_nivel() FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_nivel() TO authenticated, service_role;
+-- r3: auth.uid() ca pe live (citit read-only 04.11.2026): corpul exact, owner supabase_auth_admin, EXECUTE pentru PUBLIC + dashboard_user
+DO $r$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN CREATE ROLE supabase_auth_admin NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dashboard_user') THEN CREATE ROLE dashboard_user NOLOGIN; END IF;
+END $r$;
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $f$
+  select 
+  coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )::uuid
+$f$;
+ALTER FUNCTION auth.uid() OWNER TO supabase_auth_admin;
+REVOKE ALL ON FUNCTION auth.uid() FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
+GRANT EXECUTE ON FUNCTION auth.uid() TO PUBLIC, supabase_auth_admin, dashboard_user;
 INSERT INTO public.profiles (id, email, name, is_owner) VALUES ('00000000-0000-0000-0000-0000000000a5', 'test5.test@exemplu.local', 'PROFIL TEST CINCI', false);
 INSERT INTO public.red_proiecte (id, cod, denumire) VALUES
   ('00000000-0000-0000-0000-00000000b001', 'TEST-RAZVAN', 'Proiect test'), ('00000000-0000-0000-0000-00000000b002', 'ALT-TEST', 'Alt proiect');
