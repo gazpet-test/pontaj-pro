@@ -106,7 +106,8 @@ describe('export', () => {
 
 describe('ghidModele', () => {
   const proiectGata = { cod: 'LOT1-PRUNISOR-JUPA', denumire: 'Lot', beneficiar: 'TGZ', contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '12', imputernicire_data: '2026-11-01',
-    reprezentant_tgz_nume: 'R', reprezentant_gazpet_nume: 'G', reprezentant_gazpet_functie: 'f', contact_nume: 'C', contact_telefon: '0700000000', contact_email: 'a@gazpet.ro',
+    // merge #989 (gărzile D3 din #991): telefonul reprezentantului TGZ e obligatoriu pentru convocator
+    reprezentant_tgz_nume: 'R', reprezentant_tgz_telefon: '0700000001', reprezentant_gazpet_nume: 'G', reprezentant_gazpet_functie: 'f', contact_nume: 'C', contact_telefon: '0700000000', contact_email: 'a@gazpet.ro',
     text_gdpr: 'text', link_informare_gdpr: '' }
   const uatGata = { id: 'u1', nume: 'Alfa', judet: 'MH', sesiune_zi1: '2099-12-10', program_zi1: '09:00-15:00', reprezentant_uat_nume: 'Primar', afisare_pv_nr: '1',
     afisare_data_start: '2099-11-01', afisare_data_end: '2099-12-12', termen_confirmare: '2099-12-01', adresa_nr: 'AU-0001' }

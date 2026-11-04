@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase.js'
 import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
+import { dataDocumentConvocare } from '../convocatorNeexpediat.js'   // #991 r3: aceeași dată civilă București ca în Registru
 import { termenConstatare, mesajTermenConstatare } from '../setari.js'
 import { dataBucuresti } from '../plicuri.js'
 import { citesteSmsStare, stareSmsPentru, rezumatSms, textBadge, intrariCronologie, STARI_SMS } from '../smsStare.js'
@@ -222,7 +223,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
       // fișierele din bucket sunt imutabile: reincarcaConvocator scrie o cale nouă versionată ({nr_document}-v{n}.docx) și mută *_path
-      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: c.created_at })
+      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: dataDocumentConvocare(c) })
       const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
       show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
       incarca()

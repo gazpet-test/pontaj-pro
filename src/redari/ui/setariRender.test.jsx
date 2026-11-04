@@ -29,7 +29,7 @@ import SetariProiect from './SetariProiect.jsx'
 import FormularCampuri from './FormularCampuri.jsx'
 import LegaturaExecutie from './LegaturaExecutie.jsx'
 import { CAMPURI_UAT } from '../setari.js'
-import { citestePaginat } from './comune.jsx'
+import { citestePaginat, motivBlocareConvocator } from './comune.jsx'
 
 const proiect = { id: 'p1', cod: 'TEST-PR', denumire: 'Proiect test', text_gdpr: 'Text GDPR de test', text_declaratie: 'Declarație de test', contact_email: 'test@example.invalid' }
 const uats = [
@@ -330,5 +330,18 @@ describe('ecranul Setări proiect', () => {
     expect(h).not.toContain('<textarea')
     expect(h).not.toContain('Salvează')
     expect(h).toContain('Text GDPR de test')
+  })
+})
+
+// D3 (audit 04.11): butonul 📄 Convocator e blocat dacă lipsește oricare câmp de contact tipărit de șablon
+describe('motivBlocareConvocator — contactul tipărit pe convocator', () => {
+  const uat = { sesiune_zi1: '2026-11-10', program_zi1: '09-16' }
+  const pr = { contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '1', imputernicire_data: '2026-10-01', text_gdpr: 'x',
+    reprezentant_tgz_nume: 'R', reprezentant_tgz_telefon: '0711', contact_nume: 'N', contact_telefon: '0700', contact_email: 'a@b.test' }
+  it('complet → null; fiecare câmp lipsă e numit, cu locul din Setări proiect', () => {
+    expect(motivBlocareConvocator(pr, uat, null)).toBeNull()
+    expect(motivBlocareConvocator({ ...pr, contact_telefon: ' ' }, uat, null)).toBe('proiect fără contact Gazpet: telefon (Setări proiect → Contact pe convocări)')
+    expect(motivBlocareConvocator({ ...pr, contact_nume: '', contact_email: null }, uat, null)).toBe('proiect fără contact Gazpet: persoană, e-mail (Setări proiect → Contact pe convocări)')
+    expect(motivBlocareConvocator({ ...pr, reprezentant_tgz_telefon: '' }, uat, null)).toMatch(/telefonul reprezentantului TGZ \(Setări proiect → Reprezentanți\)/)
   })
 })

@@ -77,11 +77,17 @@ export function motivBlocareConvocator(proiect, uat, rand) {
   if (!String(proiect?.imputernicire_nr || '').trim() || !proiect?.imputernicire_data) lipsa.push('proiect fără nr./dată împuternicire Transgaz')
   if (!uat) lipsa.push('UAT necunoscut')
   else if (![1, 2, 3].some(i => uat[`sesiune_zi${i}`] && String(uat[`program_zi${i}`] || '').trim())) lipsa.push('UAT fără zi de sesiune cu program')
-  if (!String(proiect?.contact_nume || '').trim() && !String(proiect?.contact_telefon || '').trim() && !String(proiect?.contact_email || '').trim()) lipsa.push('proiect fără persoană de contact')
+  // D3: șablonul tipărește numele, telefonul și e-mailul de contact + telefonul TGZ → fiecare e obligatoriu (Setări proiect)
+  const faraContact = [['contact_nume', 'persoană'], ['contact_telefon', 'telefon'], ['contact_email', 'e-mail']].filter(([k]) => !String(proiect?.[k] || '').trim()).map(([, e]) => e)
+  if (faraContact.length) lipsa.push(`proiect fără contact Gazpet: ${faraContact.join(', ')} (Setări proiect → Contact pe convocări)`)
   if (!String(proiect?.text_gdpr || '').trim()) lipsa.push('proiect fără text GDPR')
   if (!String(proiect?.reprezentant_tgz_nume || '').trim()) lipsa.push('proiect fără reprezentant TGZ')
+  if (!String(proiect?.reprezentant_tgz_telefon || '').trim()) lipsa.push('proiect fără telefonul reprezentantului TGZ (Setări proiect → Reprezentanți)')
   return lipsa.length ? lipsa.join('; ') : null
 }
+// r2 (Jakarinos #991 P1-2): numele explicit — gărzile de mai sus țin de PRODUCEREA unui document (nou sau regenerat). Descărcarea
+// unui fișier deja arhivat NU trece prin ele (convocatorNeexpediat.js: poateDescarcaExistent / poateDeschideConvocator).
+export const motivBlocareGenerareNoua = motivBlocareConvocator
 
 export const G = { bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   blue:'#58A6FF', green:'#3FB950', red:'#F85149', yellow:'#D29922', purple:'#BC8CFF', orange:'#F0883E', pink:'#F778BA',

@@ -596,19 +596,19 @@ ${TRIMITERE_VERSO_GDPR}`]) {
     expect(adresaDetinator({})).toBe('')
     expect(textGdprPentruUat('Primăria {uat} / Primăria [UAT] / {UAT}', 'Godeanu')).toBe('Primăria Godeanu / Primăria Godeanu / Godeanu')
     expect(textGdprPentruUat(null, 'X')).toBe('')
-    // reprezentant_tgz_telefon și sate_zi lipsă → gol, fără eroare
-    const l = verificaDateConvocator({ ...complet(), uat: { ...complet().uat, sate_zi1: undefined }, proiect: { ...complet().proiect, reprezentant_tgz_telefon: null } })
+    // sate_zi lipsă → gol, fără eroare (reprezentant_tgz_telefon e obligatoriu din D3: șablonul tipărește „tel. {{reprezentant_tgz_telefon}}”)
+    const l = verificaDateConvocator({ ...complet(), uat: { ...complet().uat, sate_zi1: undefined } })
     expect(l).toEqual([])
   })
 
   it('verificaDateConvocator listează toate lipsurile, inclusiv cele noi (contract, împuternicire, calitate, adresă)', () => {
     expect(verificaDateConvocator(complet())).toEqual([])
     const l = verificaDateConvocator({ nrDocument: '', token: null, uat: { sesiune_zi1: '2026-11-10' }, contact: {}, proiect: {}, detinator: null })
-    expect(l).toHaveLength(9)
-    expect(l.join(' | ')).toMatch(/nr_document.*token.*contract.*împuternicir.*deținătorul.*zi de sesiune cu program.*contact.*GDPR.*Transgaz/)
+    expect(l).toHaveLength(12)   // D3: nume, telefon și e-mail de contact + telefonul TGZ, fiecare separat
+    expect(l.join(' | ')).toMatch(/nr_document.*token.*contract.*împuternicir.*deținătorul.*zi de sesiune cu program.*persoana de contact.*telefonul de contact.*e-mailul de contact.*GDPR.*Transgaz.*telefonul reprezentantului Transgaz/)
     // zi fără program nu e suficientă; contactul poate veni din proiect
     expect(verificaDateConvocator({ ...complet(), uat: { sesiune_zi1: '2026-11-10', program_zi2: 'x' } })).toHaveLength(1)
-    expect(verificaDateConvocator({ ...complet(), contact: null, proiect: { ...complet().proiect, contact_telefon: '07' } })).toEqual([])
+    expect(verificaDateConvocator({ ...complet(), contact: null, proiect: { ...complet().proiect, contact_nume: 'N', contact_telefon: '07', contact_email: 'a@b.test' } })).toEqual([])
     // contract / împuternicire: ambele părți (nr + dată)
     expect(verificaDateConvocator({ ...complet(), proiect: { ...complet().proiect, contract_data: null } }).join()).toMatch(/contract_nr \+ contract_data/)
     expect(verificaDateConvocator({ ...complet(), proiect: { ...complet().proiect, imputernicire_nr: '' } }).join()).toMatch(/fără împuternicire nu se trimite/)
@@ -620,6 +620,37 @@ ${TRIMITERE_VERSO_GDPR}`]) {
     expect(verificaDateConvocator({ ...complet(), contactDetinator: { adresa_strada: '', cod_postal: null } }).join()).toMatch(/fără adresă/)
     expect(verificaDateConvocator({ ...complet(), contactDetinator: { ...complet().contactDetinator, adresa_cunoscuta: false } }).join()).toMatch(/fără adresă/)
     expect(verificaDateConvocator({ ...complet(), contactDetinator: undefined, detinator: { ...complet().detinator, contact: complet().contactDetinator } })).toEqual([])
+  })
+
+  it('D3: garda cere exact câmpurile de contact tipărite de șablon (fără „la telefon  sau…” / „tel. ,”) și spune unde se completează', async () => {
+    const t = citesteSablon()
+    const sablon = textDin((await xmlDin(new Blob([t]), 'word/document.xml')).xml)
+    // șablonul tipărește fiecare câmp — de aceea fiecare e obligatoriu
+    expect(sablon).toContain('la telefon {{contact_telefon}} sau')
+    expect(sablon).toContain('Contact GAZPET INSTAL: {{contact_nume}}, tel. {{contact_telefon}}, e-mail {{contact_email}}')
+    expect(sablon).toContain('{{reprezentant_tgz}}, tel. {{reprezentant_tgz_telefon}}')
+    const faraContact = { ...complet(), contact: null }
+    const pr = complet().proiect
+    for (const [cheie, rx] of [['contact_nume', /persoana de contact Gazpet/], ['contact_telefon', /telefonul de contact Gazpet/], ['contact_email', /e-mailul de contact Gazpet/]]) {
+      const proiect = { ...pr, contact_nume: 'N', contact_telefon: '07', contact_email: 'a@b.test', [cheie]: '  ' }
+      const l = verificaDateConvocator({ ...faraContact, proiect })
+      expect(l, cheie).toHaveLength(1)
+      expect(l[0]).toMatch(rx)
+      expect(l[0]).toMatch(/Setări proiect/)
+      await expect(genereazaConvocator({ ...faraContact, proiect, templateArrayBuffer: t })).rejects.toThrow(rx)
+    }
+    // contactul trimis explicit are prioritate; un câmp gol acolo NU e completat din proiect (e exact ce s-ar tipări)
+    expect(verificaDateConvocator({ ...complet(), contact: { ...complet().contact, telefon: '' }, proiect: { ...pr, contact_telefon: '07' } }).join()).toMatch(/telefonul de contact/)
+    const l = verificaDateConvocator({ ...complet(), proiect: { ...pr, reprezentant_tgz_telefon: ' ' } })
+    expect(l).toHaveLength(1)
+    expect(l[0]).toMatch(/telefonul reprezentantului Transgaz.*Setări proiect/)
+    // cu toate câmpurile: nicio frază ruptă în documentul completat
+    const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: t })
+    const text = textDin((await xmlDin(r.blob, 'word/document.xml')).xml)
+    expect(text).not.toMatch(/la telefon\s+sau|tel\.\s*,|e-mail\s*Contact TRANSGAZ/)
+    expect(text).toContain('la telefon 0700000000 sau')
+    expect(text).toContain('Contact GAZPET INSTAL: Operator Test, tel. 0700000000, e-mail redari@exemplu.test')
+    expect(text).toContain('Reprezentant Test, inginer, tel. 0711111111')
   })
 
   it('date obligatorii lipsă ⇒ Error în română cu lista; permiteIncomplet le lasă goale și întoarce lipsurile', async () => {
@@ -635,7 +666,7 @@ ${TRIMITERE_VERSO_GDPR}`]) {
     await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, contactDetinator: null })).rejects.toThrow(/deținător fără adresă — convocare prin afișare/)
     await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, proiect: { ...complet().proiect, imputernicire_data: null } })).rejects.toThrow(/împuternicir/)
     const prev = await genereazaConvocator({ ...complet(), templateArrayBuffer: t, uat: { nume: 'Husnicioara' }, proiect: {}, contactDetinator: null, permiteIncomplet: true })
-    expect(prev.lipsuri.length).toBe(6) // contract, împuternicire, adresă, zi cu program, GDPR, reprezentant TGZ
+    expect(prev.lipsuri.length).toBe(7) // contract, împuternicire, adresă, zi cu program, GDPR, reprezentant TGZ, telefon reprezentant TGZ
     expect(prev.campuri.zi1).toBe('')
     expect(prev.campuri.adresa).toBe('')
     expect(prev.blob.size).toBeGreaterThan(0)
@@ -706,7 +737,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       contact: null, parcela: { id_parcela: 'T3-HUS-0001', sat: 'Sat', tarla: '1', nr_cadastral: '1', poz_hg: '1', suprafata_temporara_mp: 10, tronson: 3 },
       uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-20', program_zi1: '09:00 – 16:00' },
       proiect: { cod: 'LOT1-PRUNISOR-JUPA', denumire: 'Lot 1 (fictiv)', contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '1', imputernicire_data: '2026-10-01', contact_nume: 'Operator', contact_email: 'redari@exemplu.test',
-        reprezentant_tgz_nume: 'Reprezentant', link_informare_gdpr: 'https://example.invalid/informare',
+        contact_telefon: '0700000000', reprezentant_tgz_nume: 'Reprezentant', reprezentant_tgz_telefon: '0711111111', link_informare_gdpr: 'https://example.invalid/informare',
         text_gdpr: 'Operatori: Transgaz și Primăria {uat}. Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră. Drepturi: plângere la ANSPDCP (www.dataprotection.ro).' },
       token, templateArrayBuffer: citesteSablon(),
     }
