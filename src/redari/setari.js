@@ -132,15 +132,19 @@ export function contractDinExecutie(rand) {
 // afișarea la primărie ÎNCEPE „cu cel puțin 10 zile înainte de prima zi de sesiune”. Zile calendaristice: planul nu spune „lucrătoare”.
 // Constanta e singura sursă a termenului: avertisment în UAT, blocaj la adresa UAT (docx.js), data-limită la plicuri (plicuri.js).
 export const TERMEN_CONVOCARE_ZILE = 10
+// DE CONFIRMAT (Răzvan + Juridic, claude#026 întrebarea 4): lectura „10 zile LIBERE” — nu se numără nici ziua expedierii / a
+// începerii afișării, nici ziua 1 a sesiunii, deci limita = ziua 1 − (10 + 1). Varianta implicită propusă de Claude pe 04.11;
+// cu 0 se revine la lectura veche (ziua 1 − 10). Textele tipărite spun în continuare „cel puțin 10 zile”.
+export const ZILE_EXCLUSE_DIN_TERMEN = 1
 const dataRo = (s) => String(s).split('-').reverse().join('.')
 
-/** Data-limită 'AAAA-LL-ZZ' = ziua 1 minus TERMEN_CONVOCARE_ZILE zile calendaristice; null dacă ziua 1 lipsește sau e invalidă.
+/** Data-limită 'AAAA-LL-ZZ' = ziua 1 minus (TERMEN_CONVOCARE_ZILE + ZILE_EXCLUSE_DIN_TERMEN) zile calendaristice; null dacă ziua 1 lipsește sau e invalidă.
  *  Aritmetică pe data civilă (UTC la miezul nopții, fără fus orar și fără „azi”), deci aceeași în orice fus. */
 export function dataLimitaConvocare(zi1) {
   const z = normalizeazaValoare(zi1)
   if (!z || !dataValida(z)) return null
   const d = new Date(z + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() - TERMEN_CONVOCARE_ZILE)
+  d.setUTCDate(d.getUTCDate() - TERMEN_CONVOCARE_ZILE - ZILE_EXCLUSE_DIN_TERMEN)
   return d.toISOString().slice(0, 10)
 }
 
@@ -153,7 +157,7 @@ export function termenAfisare(uat) {
 
 /** Mesajul complet pentru un termen de afișare depășit (formularul UAT, adresa UAT). */
 export function mesajTermenAfisare(t) {
-  return `Afișarea la primărie începe pe ${dataRo(t.start)}, sub ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 (${dataRo(t.zi1)}): ` +
+  return `Afișarea la primărie începe pe ${dataRo(t.start)}, sub ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1 (${dataRo(t.zi1)}): ` +
     `trebuie să înceapă cel târziu pe ${dataRo(t.limita)} (plan pct. 4.3)`
 }
 
@@ -282,7 +286,7 @@ export function lipsuriUat(uat) {
   if (![1, 2, 3].some(i => !gol(uat?.[`sesiune_zi${i}`]) && !gol(uat?.[`program_zi${i}`]))) l.push('nicio zi de sesiune cu program')
   if (gol(uat?.reprezentant_uat_nume)) l.push('fără reprezentant nominalizat de primărie')
   const t = termenAfisare(uat)
-  if (t.depasit) l.push(`afișarea începe după ${dataRo(t.limita)} (sub ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1)`)
+  if (t.depasit) l.push(`afișarea începe după ${dataRo(t.limita)} (sub ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1)`)
   return l
 }
 

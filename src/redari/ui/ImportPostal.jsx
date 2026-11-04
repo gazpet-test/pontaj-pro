@@ -147,7 +147,7 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     {preview && <>
       <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
         {[['De aplicat', preview.aplicabile.length], ['Deja', preview.deja.length], ['Excepții', preview.exceptii.length]].map(([k, n]) => <div key={k} style={S.card}>{k}: <b>{n}</b></div>)}
-        {preview.aplicabile.some(a => a.avertisment) && <div role="alert" style={{ ...S.card, color: G.yellow }}>După termenul de {TERMEN_CONVOCARE_ZILE} zile: <b>{preview.aplicabile.filter(a => a.avertisment).length}</b> (se înregistrează, cu confirmare)</div>}
+        {preview.aplicabile.some(a => a.avertisment) && <div role="alert" style={{ ...S.card, color: G.yellow }}>După termenul de {TERMEN_CONVOCARE_ZILE} zile libere: <b>{preview.aplicabile.filter(a => a.avertisment).length}</b> (se înregistrează, cu confirmare)</div>}
       </div>
       <Tabel titlu="Propuneri" randuri={preview.aplicabile} /><Tabel titlu="Deja înregistrate" randuri={preview.deja} />
       <Tabel titlu="Excepții / conflicte / erori" randuri={exceptii} />
