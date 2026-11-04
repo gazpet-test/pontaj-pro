@@ -118,8 +118,8 @@ for (const f of fisiere) {
   const eroriResturi = r.resturi.filter(x => !x.intentionat)
   // relații externe: hyperlink-urile (deschise doar la clic) se acceptă; orice altceva (imagine/OLE/etc. externă) e problemă
   const externeRele = r.externe.filter(x => x.tip !== 'hyperlink')
-  // Final_v2 (03.11.2026): Model_4 nu mai are antetul firmei → 40 de chei (fără contract_nr / contract_data / proiect_denumire)
-  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 40 && !nume.includes('link_afisare') && r.externe.length === 0)
+  // Final_v2 (03.11.2026) scosese antetul din Model_4; excepția (9) (04.11, DE CONFIRMAT) îl repune din convocator → 43 de chei
+  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 43 && ['contract_nr', 'contract_data', 'proiect_denumire'].every(k => nume.includes(k)) && !nume.includes('link_afisare') && r.externe.length === 0)
   const paginaCorecta = r.pagina.a4 && r.pagina.corp >= 9.5
   const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0 && adresaCorecta && paginaCorecta
   if (!ok) probleme += 1

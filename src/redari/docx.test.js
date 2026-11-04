@@ -944,11 +944,11 @@ const sablonAdresa = () => readFileSync(resolve(process.cwd(), 'public/redari/sa
 const pTest = i => ({ id_parcela: `T1-TST-000${i}`, sat: `Sat ${i} <&>`, tarla: `Tarla ${i}`, nr_cadastral: `CAD-${i}`, poz_hg: `HG-${i}`, tronson: 1, sters_la: null })
 
 describe('Model 4: adresă UAT', () => {
-  it('CHEI_ADRESA_UAT coincide exact cu cele 40 de chei din șablonul real (Final_v2, fără antet); fără link și relații externe', async () => {
+  it('CHEI_ADRESA_UAT coincide exact cu cele 43 de chei din șablonul real (antetul firmei repus, excepția (9)); fără link și relații externe', async () => {
     const zip = await JSZip.loadAsync(sablonAdresa())
     const xml = await zip.file('word/document.xml').async('string')
     const chei = [...new Set([...xml.matchAll(/\{\{([\w.]+)\}\}/g)].map(m => m[1]))].sort()
-    expect(chei).toHaveLength(40)
+    expect(chei).toHaveLength(43)
     expect([...CHEI_ADRESA_UAT].sort()).toEqual(chei)
     expect(xml).not.toContain('link_afisare')
     for (const f of Object.keys(zip.files).filter(f => f.endsWith('.rels'))) expect(await zip.file(f).async('string')).not.toContain('TargetMode="External"')
