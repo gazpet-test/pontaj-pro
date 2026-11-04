@@ -46,6 +46,25 @@ BEGIN
    ORDER BY c.created_at, c.id LIMIT 1;
   PERFORM set_config('r30l.editor', ed::text, true); PERFORM set_config('r30l.viewer', vw::text, true); PERFORM set_config('r30l.fara', fa::text, true);
   PERFORM set_config('r30l.det', det::text, true); PERFORM set_config('r30l.detc', coalesce(detc::text, ''), true); PERFORM set_config('r30l.nrc', coalesce(nrc, ''), true);
+  -- r5: gărzile de conținut (RD002) se verifică ÎNAINTEA RD001 — ordinea dorită. Așteptatul pentru TEST3 se calculează aici, INDEPENDENT de RPC,
+  -- din datele reale (fără să le modificăm): lista exactă a lipsurilor pentru deținătorul detc, în ordinea mesajului din RPC.
+  IF detc IS NOT NULL THEN
+    PERFORM set_config('r30l.lipsa_c', coalesce((
+      SELECT array_to_string(array_remove(ARRAY[
+               CASE WHEN d.calitate = 'neidentificat' THEN 'detinator neidentificat (afisare la Primarie)' END,
+               CASE WHEN btrim(coalesce(x.contract_nr, '')) = '' OR x.contract_data IS NULL THEN 'proiect fara nr./data contract' END,
+               CASE WHEN btrim(coalesce(x.imputernicire_nr, '')) = '' OR x.imputernicire_data IS NULL THEN 'proiect fara nr./data imputernicire Transgaz' END,
+               CASE WHEN NOT ((u.sesiune_zi1 IS NOT NULL AND btrim(coalesce(u.program_zi1, '')) <> '') OR (u.sesiune_zi2 IS NOT NULL AND btrim(coalesce(u.program_zi2, '')) <> '')
+                              OR (u.sesiune_zi3 IS NOT NULL AND btrim(coalesce(u.program_zi3, '')) <> '')) THEN 'UAT fara zi de sesiune cu program' END,
+               CASE WHEN btrim(coalesce(x.contact_nume, '')) = '' THEN 'proiect fara persoana de contact Gazpet' END,
+               CASE WHEN btrim(coalesce(x.contact_telefon, '')) = '' THEN 'proiect fara telefonul de contact Gazpet' END,
+               CASE WHEN btrim(coalesce(x.contact_email, '')) = '' THEN 'proiect fara e-mailul de contact Gazpet' END,
+               CASE WHEN btrim(coalesce(x.text_gdpr, '')) = '' THEN 'proiect fara text GDPR' END,
+               CASE WHEN btrim(coalesce(x.reprezentant_tgz_nume, '')) = '' THEN 'proiect fara reprezentant TGZ' END,
+               CASE WHEN btrim(coalesce(x.reprezentant_tgz_telefon, '')) = '' THEN 'proiect fara telefonul reprezentantului TGZ' END], NULL), '; ')
+        FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id JOIN public.red_uat u ON u.id = p.uat_id JOIN public.red_proiecte x ON x.id = p.proiect_id
+       WHERE d.id = detc), ''), true);
+  END IF;
   PERFORM set_config('r30l.amprenta', (SELECT coalesce((SELECT ultimul FROM public.red_numere WHERE cheie = 'C'), 0) || '|' || (SELECT count(*) FROM public.red_convocari)), true);
   RAISE NOTICE 'TEST0 OK (amprenta numere|convocari = %, convocare neexpediata pe TEST-RAZVAN: %)', current_setting('r30l.amprenta'), coalesce(nrc, 'niciuna');
 END $t$;
@@ -86,12 +105,18 @@ DO $t$ DECLARE r text; BEGIN
   IF r NOT LIKE 'P0002:%' THEN RAISE EXCEPTION 'TEST2 FAIL inexistent: %', r; END IF;
   RAISE NOTICE 'TEST2f OK (editor: 22023 / P0002)';
 END $t$;
--- TEST3: RD001 pe o convocare reala neexpediata a TEST-RAZVAN (daca exista) — refuz dupa lock, inainte de numar
-DO $t$ DECLARE r text; BEGIN
+-- TEST3: pe o convocare reala neexpediata a TEST-RAZVAN (daca exista) — refuz dupa lock, inainte de numar. Determinist pe datele reale:
+-- gărzile de conținut trec → RD001 cu numărul existent; altfel → EXACT RD002 cu lista calculată în TEST0 (RD002 înaintea RD001).
+DO $t$ DECLARE r text; v_lipsa text := coalesce(pg_temp.r30l_g('lipsa_c'), ''); BEGIN
   IF pg_temp.r30l_g('detc') IS NULL THEN RAISE NOTICE 'TEST3 SARIT (TEST-RAZVAN nu are convocare postala activa neexpediata)'; RETURN; END IF;
   r := pg_temp.r30l_stare(format('SELECT * FROM public.fn_red_convocare_rezerva(%L::uuid)', pg_temp.r30l_g('detc')));
-  IF r NOT LIKE 'RD001:%' || pg_temp.r30l_g('nrc') || '%' THEN RAISE EXCEPTION 'TEST3 FAIL: %', r; END IF;
-  RAISE NOTICE 'TEST3 OK (RD001 pe %)', pg_temp.r30l_g('nrc');
+  IF v_lipsa = '' THEN
+    IF r NOT LIKE 'RD001:%' || pg_temp.r30l_g('nrc') || '%' THEN RAISE EXCEPTION 'TEST3 FAIL (gărzi OK, aștept RD001): %', r; END IF;
+    RAISE NOTICE 'TEST3 OK (RD001 pe %)', pg_temp.r30l_g('nrc');
+  ELSE
+    IF r IS DISTINCT FROM 'RD002:redari: convocatorul nu se poate rezerva: ' || v_lipsa THEN RAISE EXCEPTION 'TEST3 FAIL (aștept RD002: %): %', v_lipsa, r; END IF;
+    RAISE NOTICE 'TEST3 OK (RD002 inaintea RD001 pe %, garzi de continut neindeplinite pe datele reale: %)', pg_temp.r30l_g('nrc'), v_lipsa;
+  END IF;
 END $t$;
 SELECT pg_temp.r30l_ca(NULL, 'postgres');
 -- TEST4: nimic scris (contorul C si numarul de convocari neschimbate)

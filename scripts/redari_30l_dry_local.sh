@@ -45,13 +45,18 @@ if $PSQL -At -f "$TW/rev.sql" >"$TMP/rev.out" 2>&1; then echo "REVENIRE_OK"; gre
 # DRY-ul de PRODUCTIE rulat si pe clusterul local (datele fictive de mai sus, functia scoasa de revenire): exact secventa runnerului de productie,
 # intr-o tranzactie READ COMMITTED anulata (marcaj + migrare + DRY + RESET ROLE + revenire + verificare + ROLLBACK)
 P=$RAD/supabase/tests/20261130l_redari_convocare_rezerva_dryrun.sql; tr -d '\r' < "$P" > "$TMP/$(basename "$P")"
-{ echo "BEGIN ISOLATION LEVEL READ COMMITTED;"; echo "SELECT set_config('gazpet.livrare_migrare', '20261130l_redari_convocare_rezerva:' || txid_current(), true);"
-  echo "\\i $TW/$(basename "$M")"; echo "\\i $TW/$(basename "$P")"; echo "RESET ROLE;"; echo "SELECT set_config('request.jwt.claims', '', true);"
-  echo "SELECT set_config('gazpet.revenire_20261130l', 'REDARI_CONVOCARE_REZERVA_SCOS:' || txid_current(), true);"; echo "\\i $TW/$(basename "$R")"
-  echo "ROLLBACK;"; echo "SELECT 'DUPA_ROLLBACK fn=' || (to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NOT NULL)::text;"; } > "$TMP/prod.sql"
-if $PSQL -f "$TW/prod.sql" >"$TMP/prod.out" 2>&1 && grep -q "DUPA_ROLLBACK fn=false" "$TMP/prod.out" && grep -q "DRY productie 20261130l: teste OK" "$TMP/prod.out"; then
-  grep -E "TEST[0-9a-z]+ (OK|SARIT)" "$TMP/prod.out" | sed 's/^.*NOTICE:  /PROD_SIM /' | cut -c1-200; echo "DRY_PROD_PE_LOCAL_OK"
-else echo "ESEC DRY productie pe local"; cat "$TMP/prod.out" | tail -20; REZ=1; fi
+prod_sim() {   # $1 = eticheta, $2 = SQL de pregătire în aceeași tranzacție anulată (ex. ca pe prod: proiect fără telefon TGZ), $3 = textul TEST3 așteptat
+  { echo "BEGIN ISOLATION LEVEL READ COMMITTED;"; echo "$2"; echo "SELECT set_config('gazpet.livrare_migrare', '20261130l_redari_convocare_rezerva:' || txid_current(), true);"
+    echo "\\i $TW/$(basename "$M")"; echo "\\i $TW/$(basename "$P")"; echo "RESET ROLE;"; echo "SELECT set_config('request.jwt.claims', '', true);"
+    echo "SELECT set_config('gazpet.revenire_20261130l', 'REDARI_CONVOCARE_REZERVA_SCOS:' || txid_current(), true);"; echo "\\i $TW/$(basename "$R")"
+    echo "ROLLBACK;"; echo "SELECT 'DUPA_ROLLBACK fn=' || (to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text)') IS NOT NULL)::text;"; } > "$TMP/prod.sql"
+  if $PSQL -f "$TW/prod.sql" >"$TMP/prod.out" 2>&1 && grep -q "DUPA_ROLLBACK fn=false" "$TMP/prod.out" && grep -q "DRY productie 20261130l: teste OK" "$TMP/prod.out" && grep -q "$3" "$TMP/prod.out"; then
+    grep -E "TEST[0-9a-z]+ (OK|SARIT)" "$TMP/prod.out" | sed "s/^.*NOTICE:  /PROD_SIM_$1 /" | cut -c1-220; echo "DRY_PROD_PE_LOCAL_$1_OK"
+  else echo "ESEC DRY productie pe local ($1)"; cat "$TMP/prod.out" | tail -20; REZ=1; fi
+}
+prod_sim GARZI_OK "SELECT 1;" "TEST3 OK (RD001 pe"
+# ca pe producția de azi (05.11): TEST-RAZVAN fără telefonul reprezentantului TGZ → TEST3 trebuie să aștepte exact RD002 (gărzile înaintea RD001)
+prod_sim FARA_TEL_TGZ "UPDATE public.red_proiecte SET reprezentant_tgz_telefon = NULL WHERE cod = 'TEST-RAZVAN';" "TEST3 OK (RD002 inaintea RD001 pe C-0001, garzi de continut neindeplinite pe datele reale: proiect fara telefonul reprezentantului TGZ)"
 # mutanți de poartă L15 (r4): o schimbare de politică / drept / funcție din lanț → migrarea TREBUIE să refuze (tranzacție anulată)
 mutant() {   # $1 = eticheta, $2 = SQL-ul mutației, $3 = textul de refuz așteptat
   { echo "BEGIN;"; echo "$2"; echo "SELECT set_config('gazpet.livrare_migrare', '20261130l_redari_convocare_rezerva:' || txid_current(), true);"
