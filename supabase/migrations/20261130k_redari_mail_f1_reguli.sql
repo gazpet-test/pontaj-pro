@@ -48,9 +48,9 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_jurnal' AND t.tgfoid = 'public.fn_red_jurnal()'::regprocedure AND t.tgtype = 29 AND t.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_legaturi' AND t.tgfoid = 'public.fn_red_legaturi()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.red_raspunsuri'::regclass AND t.tgname = 'trg_red_raspunsuri_valideaza' AND t.tgfoid = 'public.fn_red_raspunsuri_valideaza()'::regprocedure AND t.tgtype = 23 AND t.tgenabled = 'O')
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_legaturi()'::regprocedure AND md5(prosrc) = 'd1912ec6514cba162babea3bcebdfb24')
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_raspunsuri_valideaza()'::regprocedure AND md5(prosrc) = '3528222d7d8379dbbe8f3d2e64c60b94')
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_versiune_creste()'::regprocedure AND md5(prosrc) = 'e7ab9318de671f0a94c678ee382250db') THEN
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_legaturi()'::regprocedure AND md5(replace(prosrc, chr(13), '')) = 'd1912ec6514cba162babea3bcebdfb24')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_raspunsuri_valideaza()'::regprocedure AND md5(replace(prosrc, chr(13), '')) = '3528222d7d8379dbbe8f3d2e64c60b94')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_versiune_creste()'::regprocedure AND md5(replace(prosrc, chr(13), '')) = 'e7ab9318de671f0a94c678ee382250db') THEN
     RAISE EXCEPTION '20261130k: triggerele / functiile red_raspunsuri nu sunt cele din baseline';
   END IF;
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_proiecte'::regclass AND NOT tgisinternal) <> 2 THEN

@@ -84,7 +84,7 @@ BEGIN
       ('public.fn_red_storage_verifica_redari(boolean)', 'b325d52f469a4c23cbb5f9afccfde6a3', 'plpgsql', false, 's', ARRAY['postgres=X/postgres'])
     ) AS b(fn, md5_corp, limbaj, definer, vol, acl) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
-                    WHERE p.oid = to_regprocedure(r.fn) AND md5(p.prosrc) = r.md5_corp AND l.lanname = r.limbaj AND p.prosecdef = r.definer
+                    WHERE p.oid = to_regprocedure(r.fn) AND md5(replace(p.prosrc, chr(13), '')) = r.md5_corp AND l.lanname = r.limbaj AND p.prosecdef = r.definer
                       AND p.provolatile = r.vol AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres')
        OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = to_regprocedure(r.fn)) IS DISTINCT FROM r.acl::text[] THEN
       RAISE EXCEPTION 'redari mail baza (%): % nu mai e cea din baseline (corp / limbaj / DEFINER / volatilitate / search_path / owner / ACL)', p_faza, r.fn;
@@ -94,7 +94,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language g ON g.oid = p.prolang
                   WHERE p.oid = 'auth.uid()'::regprocedure AND g.lanname = 'sql' AND NOT p.prosecdef AND p.provolatile = 's' AND p.pronargs = 0
                     AND p.prorettype = 'uuid'::regtype AND NOT p.proretset AND p.proconfig IS NULL
-                    AND pg_get_userbyid(p.proowner) = 'supabase_auth_admin' AND md5(p.prosrc) = 'cdef18c69c4f4cbbced2eaf81e628b49')
+                    AND pg_get_userbyid(p.proowner) = 'supabase_auth_admin' AND md5(replace(p.prosrc, chr(13), '')) = 'cdef18c69c4f4cbbced2eaf81e628b49')
      OR (SELECT array_agg(a ORDER BY a COLLATE "C") FROM pg_proc p, unnest(p.proacl::text[]) a WHERE p.oid = 'auth.uid()'::regprocedure)
        IS DISTINCT FROM ARRAY['=X/supabase_auth_admin', 'dashboard_user=X/supabase_auth_admin', 'supabase_auth_admin=X/supabase_auth_admin']::text[] THEN
     RAISE EXCEPTION 'redari mail baza (%): auth.uid() nu mai are amprenta revizuita', p_faza;
