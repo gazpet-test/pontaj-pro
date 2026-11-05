@@ -83,7 +83,11 @@ Send are numele exact `Send` sau `Send message`. URL-ul rezultat trebuie să fie
 `https://chatgpt.com/codex/tasks/task_<16..64 hex lowercase>`. Alte forme se refuză,
 inclusiv URL de chat ChatGPT obișnuit, query, fragment, port, userinfo sau redirect.
 Mesajele au `data-message-author-role=user/assistant`, identitate stabilă
-`data-message-id` (pe mesaj sau strămoș), ori `id` pe mesaj. După Send, AMBELE
+`data-message-id` (pentru user poate fi și pe strămoș), ori `id` pe mesaj.
+Assistant-ul trebuie să aibă PROPRIUL `data-message-id` sau `id` pe elementul său;
+ID-ul containerului/turnului/strămoșului nu este identitate de răspuns. Lipsa lui
+produce refuz explicit `identitate_raspuns_neconfirmata`, fără stare=gata.
+După Send, AMBELE
 moduri cer exact +1 mesaje user și ultimul text identic cu brief-ul normalizat.
 Numai după această dovadă apare `trimis`, se oprește driverul de trimitere și se
 eliberează lock-ul. URL-ul neschimbat la continuare nu este dovadă de trimitere.
@@ -97,11 +101,14 @@ pe el → completed unic vizibil fără busy, text nevid identic la 3 citiri con
 (2 secunde între citiri în watch). Lipsa identității/scope-ului refuză, iar lipsa
 tranziției/stabilității expiră. Verifică atributele pe UI-ul real înaintea probei.
 
-Confirmarea detectată în draft înainte de Send produce tot exit 0 și
+Confirmarea detectată oricând în pregătire, inclusiv înaintea accesării composerului
+sau dacă un dialog blochează o operație de pregătire, produce tot exit 0 și
 `PAW_GATA <id> stare=asteapta_confirmare`, cu `submitted=false` și URL-ul actual,
 fără `trimis` sau Send. Pentru chat nou, URL-ul poate fi `/codex`: încă nu există
 un task. Această excepție nu este acceptată pentru un task trimis/complet sau
-pentru cxw-continua. OFF rămâne obligatoriu pentru trimitere.
+pentru cxw-continua. OFF rămâne obligatoriu pentru trimitere. Click-ul Send real
+este în afara handlerului de pregătire: un rezultat ambiguu după încercarea Send
+nu se declară în mod fals `submitted=false` și nu declanșează retry.
 
 ```cmd
 run_paw.cmd cxw C:\Users\Public\paw-data\brief\cxw-proba.txt C:\Users\Public\paw-data\out\cxw-proba.log pontaj-pro

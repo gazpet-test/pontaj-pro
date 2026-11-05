@@ -263,7 +263,9 @@ TURN_SNAPSHOT = r"""({index}) => {
  const statuses = states.filter(visible).map(el => el.getAttribute('data-task-status'));
  const busy = statuses.some(s => s === 'running' || s === 'queued') ||
    [...container.querySelectorAll('button[aria-label="Stop"], button[aria-label="Stop generating"]')].some(visible);
- return {...base, response_key: key(reply) || container.getAttribute('data-testid'),
+ // Only an identity on the assistant element can retain BUSY evidence.
+ // A stable wrapper/turn ID survives replacement of an anonymous reply.
+ return {...base, response_present: true, response_key: reply.getAttribute('data-message-id') || reply.id || null,
    text: reply.innerText, status: statuses.length === 1 ? statuses[0] : null, busy,
    links: [...reply.querySelectorAll('a[href]')].map(el => el.href)};
 }"""
@@ -320,6 +322,11 @@ class TurnProgress:
             self.last_text = None
             self.stable = 0
         if not key:
+            self.saw_busy = False
+            self.last_text = None
+            self.stable = 0
+            if frame.get('response_present'):
+                raise Refuz('identitate_raspuns_neconfirmata')
             return None
         self.saw_busy = self.saw_busy or busy
         decision = outcome(text, status, busy, False)
@@ -358,45 +365,67 @@ def confirmation_before_send(page, brief):
 def submit(context, mode, target, brief, deadline):
     # All interaction uses page-scoped locators (no clipboard/global keyboard).
     # Lock order: inherited launcher installation barrier -> short cxw lock.
-    if mode == 'cxw':
-        page = context.new_page()
-        page.set_default_timeout(remaining(deadline, 10) * 1000)
-        page.goto(HOME, wait_until='domcontentloaded')
-        if page.url != HOME or page.locator(USER + ', ' + ASSISTANT).count():
-            raise Refuz('chat_nou_neconfirmat')
-        unique(page.get_by_role('button', name='Choose environment', exact=True), 'selector_mediu_necunoscut').click()
-        unique(page.get_by_role('option', name=target, exact=True), 'mediu_absent_sau_ambiguu').click()
-        # Selected environment must be independently visible before submission.
-        unique(page.get_by_role('button', name=target, exact=True), 'mediu_neconfirmat')
-    else:
-        matches = [p for p in context.pages if p.url == target]
-        if len(matches) > 1:
-            raise Refuz('tab_chat_ambiguu')
-        page = matches[0] if matches else context.new_page()
-        page.set_default_timeout(remaining(deadline, 10) * 1000)
-        if not matches:
-            page.goto(target, wait_until='domcontentloaded')
-        if page.url != target:
-            raise Refuz('redirect_chat_refuzat')
-    unique(page.get_by_role('button', name='pontaj-pro', exact=True), 'mediu_neconfirmat')
-    # Do not replace an existing draft or interrupt a running task.
-    if page.locator(BUSY).count():
-        raise Refuz('chat_ocupat')
-    editor = unique(page.locator(EDITOR), 'composer_necunoscut')
-    current = editor.input_value() if editor.evaluate('(e) => e.tagName === "TEXTAREA"') else editor.inner_text()
-    if current.strip():
-        raise Refuz('ciorna_existenta')
-    check_approval(page)
-    users = page.locator(USER).count()
-    editor.fill(brief)
-    if draft_guard(page, editor, brief):
-        return confirmation_before_send(page, brief)
-    unique(page.get_by_role('button', name='pontaj-pro', exact=True), 'mediu_neconfirmat')
-    if page.locator(BUSY).count():
-        raise Refuz('chat_ocupat')
-    remaining(deadline)
-    # Exactly one message submission; no retry, including after ambiguous timeout.
-    unique(page.get_by_role('button', name=re.compile(r'^(Send|Send message)$')), 'send_necunoscut').click(timeout=remaining(deadline, 10) * 1000)
+    page = None
+    try:
+        if mode == 'cxw':
+            page = context.new_page()
+            page.set_default_timeout(remaining(deadline, 10) * 1000)
+            page.goto(HOME, wait_until='domcontentloaded')
+            if pending_confirmation(page):
+                return confirmation_before_send(page, brief)
+            if page.url != HOME or page.locator(USER + ', ' + ASSISTANT).count():
+                raise Refuz('chat_nou_neconfirmat')
+            unique(page.get_by_role('button', name='Choose environment', exact=True), 'selector_mediu_necunoscut').click()
+            unique(page.get_by_role('option', name=target, exact=True), 'mediu_absent_sau_ambiguu').click()
+            # Selected environment must be independently visible before submission.
+            unique(page.get_by_role('button', name=target, exact=True), 'mediu_neconfirmat')
+        else:
+            matches = [p for p in context.pages if p.url == target]
+            if len(matches) > 1:
+                raise Refuz('tab_chat_ambiguu')
+            page = matches[0] if matches else context.new_page()
+            page.set_default_timeout(remaining(deadline, 10) * 1000)
+            if not matches:
+                page.goto(target, wait_until='domcontentloaded')
+            if page.url != target:
+                raise Refuz('redirect_chat_refuzat')
+        if pending_confirmation(page):
+            return confirmation_before_send(page, brief)
+        unique(page.get_by_role('button', name='pontaj-pro', exact=True), 'mediu_neconfirmat')
+        # Do not replace an existing draft or interrupt a running task.
+        if page.locator(BUSY).count():
+            raise Refuz('chat_ocupat')
+        editor = unique(page.locator(EDITOR), 'composer_necunoscut')
+        current = editor.input_value() if editor.evaluate('(e) => e.tagName === "TEXTAREA"') else editor.inner_text()
+        if pending_confirmation(page):
+            return confirmation_before_send(page, brief)
+        if current.strip():
+            raise Refuz('ciorna_existenta')
+        check_approval(page)
+        users = page.locator(USER).count()
+        editor.fill(brief)
+        if draft_guard(page, editor, brief):
+            return confirmation_before_send(page, brief)
+        unique(page.get_by_role('button', name='pontaj-pro', exact=True), 'mediu_neconfirmat')
+        if page.locator(BUSY).count():
+            raise Refuz('chat_ocupat')
+        remaining(deadline)
+        send = unique(page.get_by_role('button', name=re.compile(r'^(Send|Send message)$')), 'send_necunoscut')
+        if pending_confirmation(page):
+            return confirmation_before_send(page, brief)
+    except Exception:
+        # Composer/env/approval/send-locator may be blocked by a dialog appearing
+        # during any preparation step. No Send has been attempted in this scope.
+        try:
+            waiting = page is not None and pending_confirmation(page)
+        except Exception:
+            waiting = False  # Keep the original failure; never continue to Send.
+        if waiting:
+            return confirmation_before_send(page, brief)
+        raise
+    # The actual click is deliberately OUTSIDE the preparation handler: after
+    # an ambiguous Send, we cannot claim submitted=false or retry automatically.
+    send.click(timeout=remaining(deadline, 10) * 1000)
     page.wait_for_url(lambda u: CHAT.fullmatch(str(u)) is not None, timeout=remaining(deadline, 30) * 1000)
     url = chat_url(page.url)
     if mode == 'cxw-continua' and url != target:

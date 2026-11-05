@@ -267,7 +267,7 @@ class SubmitGuards(unittest.TestCase):
 
     def test_approval_on_before_fill_no_send(self):
         page,context,editor=self.setup_page()
-        with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval',side_effect=c.Refuz('approve_for_me_pornit_sau_necunoscut')):
+        with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval',side_effect=c.Refuz('approve_for_me_pornit_sau_necunoscut')), patch.object(c,'pending_confirmation',return_value=False):
             with self.assertRaisesRegex(c.Refuz,'^approve_for_me_pornit_sau_necunoscut$'):
                 c.submit(context,'cxw-continua',URL,'synthetic brief',c.time.monotonic()+60)
         editor.fill.assert_not_called()
@@ -275,7 +275,7 @@ class SubmitGuards(unittest.TestCase):
 
     def test_approval_changes_after_fill_no_send(self):
         page,context,editor=self.setup_page()
-        with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval',side_effect=[None,c.Refuz('approve_for_me_pornit_sau_necunoscut')]):
+        with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval',side_effect=[None,c.Refuz('approve_for_me_pornit_sau_necunoscut')]), patch.object(c,'pending_confirmation',return_value=False):
             with self.assertRaisesRegex(c.Refuz,'^approve_for_me_pornit_sau_necunoscut$'):
                 c.submit(context,'cxw-continua',URL,'synthetic brief',c.time.monotonic()+60)
         editor.fill.assert_called_once_with('synthetic brief')
@@ -299,6 +299,65 @@ class SubmitGuards(unittest.TestCase):
             self.assertFalse(payload['submitted'])
             self.assertEqual(payload['chat_url'],c.HOME if mode == 'cxw' else URL)
             self.assertNotIn('trimis',out.getvalue())
+
+    def test_confirmation_blocks_composer_before_any_editor_access(self):
+        for mode in ('cxw','cxw-continua'):
+            page,context,editor=self.setup_page()
+            page.url=c.HOME if mode == 'cxw' else URL;context.new_page.return_value=page
+            page.locator.side_effect=AssertionError('composer access forbidden by dialog')
+            out=io.StringIO()
+            with patch.object(c,'pending_confirmation',return_value=True), contextlib.redirect_stdout(out):
+                result=c.submit(context,mode,'pontaj-pro' if mode == 'cxw' else URL,'synthetic brief',c.time.monotonic()+60)
+            self.assertTrue(result['waiting'])
+            self.assertEqual(json.loads(out.getvalue())['state'],'asteapta_confirmare')
+            page.locator.assert_not_called();editor.fill.assert_not_called()
+            page.get_by_role.assert_not_called()
+
+    def test_confirmation_during_each_pre_send_step_in_both_modes(self):
+        from unittest.mock import MagicMock
+        for mode in ('cxw','cxw-continua'):
+            for phase in ('editor_lookup','fill','draft_approval','send_lookup','before_click'):
+                with self.subTest(mode=mode,phase=phase):
+                    page,context,editor=self.setup_page()
+                    page.url=c.HOME if mode == 'cxw' else URL;context.new_page.return_value=page
+                    send=MagicMock();waiting={'value':False};approvals={'n':0}
+                    page.get_by_role.side_effect=lambda role,**kwargs: send if isinstance(kwargs.get('name'),type(c.CHAT)) else MagicMock()
+                    def unique(locator,code):
+                        if (phase == 'editor_lookup' and locator is editor) or (phase == 'send_lookup' and locator is send):
+                            waiting['value']=True;raise RuntimeError('dialog blocks locator')
+                        if phase == 'before_click' and locator is send:
+                            waiting['value']=True
+                        return locator
+                    def fill(text):
+                        if phase == 'fill':
+                            waiting['value']=True;raise RuntimeError('dialog blocks fill')
+                    def approval(_):
+                        approvals['n'] += 1
+                        if phase == 'draft_approval' and approvals['n'] == 2:
+                            waiting['value']=True;raise c.Refuz('approval control hidden by dialog')
+                    editor.fill.side_effect=fill
+                    out=io.StringIO()
+                    with patch.object(c,'unique',side_effect=unique), patch.object(c,'check_approval',side_effect=approval), patch.object(c,'pending_confirmation',side_effect=lambda _:waiting['value']), contextlib.redirect_stdout(out):
+                        result=c.submit(context,mode,'pontaj-pro' if mode == 'cxw' else URL,'synthetic brief',c.time.monotonic()+60)
+                    self.assertTrue(result['waiting'])
+                    payload=json.loads(out.getvalue())
+                    self.assertEqual(payload['state'],'asteapta_confirmare');self.assertFalse(payload['submitted'])
+                    self.assertEqual(payload['chat_url'],c.HOME if mode == 'cxw' else URL)
+                    self.assertNotIn('trimis',out.getvalue())
+                    send.click.assert_not_called();page.wait_for_url.assert_not_called()
+
+    def test_ambiguous_actual_send_is_never_reported_as_unsubmitted(self):
+        from unittest.mock import MagicMock
+        page,context,editor=self.setup_page();send=MagicMock();waiting={'value':False}
+        page.get_by_role.side_effect=lambda role,**kwargs: send if isinstance(kwargs.get('name'),type(c.CHAT)) else MagicMock()
+        def ambiguous(**kwargs):
+            waiting['value']=True
+            raise RuntimeError('click outcome unknown')
+        send.click.side_effect=ambiguous;out=io.StringIO()
+        with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval'), patch.object(c,'pending_confirmation',side_effect=lambda _:waiting['value']), contextlib.redirect_stdout(out):
+            with self.assertRaisesRegex(RuntimeError,'^click outcome unknown$'):
+                c.submit(context,'cxw-continua',URL,'synthetic brief',c.time.monotonic()+60)
+        self.assertEqual(out.getvalue(),'');send.click.assert_called_once()
 
 
 class Deadline(unittest.TestCase):
@@ -415,6 +474,39 @@ class DomScope(unittest.TestCase):
         user=children.pop(2)
         children[-1]['children'].insert(0,user)
         self.assertTrue(self.snapshot(children)['scope_invalid'])
+
+    def test_anonymous_replacement_in_same_turn_never_inherits_busy(self):
+        progress=c.TurnProgress()
+        for status,text in [('running','Assistant A'),('completed','Assistant B'),
+                            ('completed','Assistant B'),('completed','Assistant B')]:
+            children=self.fixture(status)
+            reply=children[-1]['children'][0]
+            del reply['attrs']['data-message-id'];reply['text']=text
+            # Both a turn testid and ancestor message-id remain unchanged.
+            children[-1]['attrs']['data-message-id']='stable-wrapper'
+            result=self.snapshot(children)
+            self.assertIsNone(result['response_key'])
+            with self.assertRaisesRegex(c.Refuz,'^identitate_raspuns_neconfirmata$'):
+                progress.observe(result)
+            self.assertFalse(progress.saw_busy);self.assertEqual(progress.stable,0)
+
+    def test_own_dom_id_is_accepted_without_wrapper_fallback(self):
+        progress=c.TurnProgress()
+        for index,status in enumerate(['running','completed','completed','completed']):
+            children=self.fixture(status);reply=children[-1]['children'][0]
+            del reply['attrs']['data-message-id'];reply['attrs']['id']='own-reply-id'
+            result=self.snapshot(children)
+            self.assertEqual(result['response_key'],'own-reply-id')
+            self.assertEqual(progress.observe(result),'gata' if index == 3 else None)
+
+    def test_missing_own_identity_clears_previously_valid_busy(self):
+        progress=c.TurnProgress()
+        self.assertIsNone(progress.observe(self.snapshot(self.fixture('running'))))
+        self.assertTrue(progress.saw_busy)
+        children=self.fixture('completed');del children[-1]['children'][0]['attrs']['data-message-id']
+        with self.assertRaisesRegex(c.Refuz,'^identitate_raspuns_neconfirmata$'):
+            progress.observe(self.snapshot(children))
+        self.assertFalse(progress.saw_busy);self.assertEqual(progress.stable,0)
 
 
 class Brief(unittest.TestCase):

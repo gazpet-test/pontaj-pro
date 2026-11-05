@@ -523,11 +523,15 @@ starea; ultima linie a outputului este `PAW_GATA <id> stare=gata` sau
 `PAW_GATA <id> stare=asteapta_confirmare`. Niciun buton de confirmare/publicare/
 aprobare nu se apasă; nicio întrebare nu primește răspuns automat. Erorile și
 timeout-ul produc `PAW_EROARE`; nu există retry automat după trimitere ambiguă.
-O confirmare din draft înainte de Send produce aceeași stare de așteptare, cu
+O confirmare detectată în pregătire, inclusiv dacă blochează composerul înainte
+de fill, produce aceeași stare de așteptare, cu
 `submitted=false` și URL actual (pentru chat nou poate fi `/codex`), fără `trimis`.
 Finalizarea cere status și text din containerul răspunsului de după mesajul user
 confirmat: BUSY → completed pe aceeași identitate, text stabil 3 citiri. Un completed
-global/vechi nu este folosit. Protecția anti-brief se aplică și linkurilor PR.
+global/vechi nu este folosit. Identitatea assistant-ului trebuie să fie proprie,
+pe elementul său (`data-message-id` sau `id`); fără fallback la containerul turnului.
+Un răspuns fără identitate proprie produce refuz explicit, fără gata. Protecția
+anti-brief se aplică și linkurilor PR.
 Deadline-ul începe înainte de pregătire; helperul primește timpul rămas, iar
 verificările listener/orfani sunt în arborele local limitat de același buget.
 Timeout-ul omoară arborele local, dar nu anulează sarcina cloud: omul verifică URL-ul.
