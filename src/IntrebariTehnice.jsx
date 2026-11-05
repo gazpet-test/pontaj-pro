@@ -48,20 +48,28 @@ export default function IntrebariTehnice({ profile }) {
   const fileRef = useRef(null)
   const selectat = Number(params.get('id')) || null
 
+  const [detaliu, setDetaliu] = useState(null)   // întrebarea deschisă, citită separat după id (poate fi în afara listei)
+  const gen = useRef(0)                          // generația încărcării: un răspuns vechi sosit târziu nu suprascrie unul nou
+  const COL = 'id, autor, titlu, context, intrebare, atasamente, stare, raspuns_md, model, eroare, creat_la, raspuns_la, profiles(name)'
+
   async function incarca() {
-    const { data, error } = await supabase.from('intrebari_tehnice')
-      .select('id, autor, titlu, context, intrebare, atasamente, stare, raspuns_md, model, eroare, creat_la, raspuns_la, profiles(name)')
-      .order('creat_la', { ascending:false }).limit(100)
-    if (error) setErr('Nu s-au putut încărca întrebările: ' + error.message)
-    else setLista(data || [])
+    const g = ++gen.current
+    const [l, d] = await Promise.all([
+      supabase.from('intrebari_tehnice').select(COL).order('creat_la', { ascending:false }).limit(100),
+      selectat ? supabase.from('intrebari_tehnice').select(COL).eq('id', selectat).maybeSingle() : Promise.resolve({ data:null, error:null }),
+    ])
+    if (g !== gen.current) return
+    if (l.error || d.error) { setErr('Nu s-au putut încărca întrebările: ' + (l.error || d.error).message); return }
+    setLista(l.data || []); setDetaliu(d.data || null)
   }
-  useEffect(() => { incarca() }, [])
-  const asteapta = lista.some(q => q.stare === 'noua' || q.stare === 'in_lucru')
+  useEffect(() => { incarca() }, [selectat])   // eslint-disable-line react-hooks/exhaustive-deps
+  const inAsteptare = x => x && (x.stare === 'noua' || x.stare === 'in_lucru')
+  const asteapta = lista.some(inAsteptare) || inAsteptare(detaliu)
   useEffect(() => {
     if (!asteapta) return
     const t = setInterval(incarca, 20000)
     return () => clearInterval(t)
-  }, [asteapta])
+  }, [asteapta, selectat])   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!poateIntreba(profile)) {
     return <div style={{ minHeight:'100vh', background:G.bg, color:G.text, padding:24 }}>Nu ai acces la Întreabă echipa. <Link to="/" style={{ color:G.blue }}>← Acasă</Link></div>
@@ -101,7 +109,7 @@ export default function IntrebariTehnice({ profile }) {
     } catch (e) { setErr(e.message) } finally { setLucru(false) }
   }
 
-  const q = lista.find(x => x.id === selectat)
+  const q = selectat ? detaliu : null
 
   return (
     <div style={{ minHeight:'100vh', background:G.bg, color:G.text, padding:'16px 16px 48px', fontFamily:'system-ui, sans-serif' }}>
@@ -115,6 +123,8 @@ export default function IntrebariTehnice({ profile }) {
           Verifică temeiurile marcate „[DE VERIFICAT]” înainte să te bazezi pe ele. Decizia e a ta.
         </div>
 
+        {err && q && <div style={{ color:G.red, fontSize:13, marginBottom:10 }}>{err}</div>}
+        {selectat && !q && !err && <div style={{ color:G.muted, fontSize:13, marginBottom:10 }}>Se încarcă… <button style={S.btnS} onClick={() => setParams({})}>← Toate întrebările</button></div>}
         {q ? (
           <div style={S.card}>
             <button style={{ ...S.btnS, marginBottom:12 }} onClick={() => setParams({})}>← Toate întrebările</button>
@@ -132,7 +142,7 @@ export default function IntrebariTehnice({ profile }) {
                 : <div style={{ color:G.muted }}>{ETICHETA_STARE[q.stare]?.t} Pagina se actualizează singură.</div>}
             </div>
           </div>
-        ) : <>
+        ) : !selectat && <>
           <div style={{ ...S.card, marginBottom:16 }}>
             <label style={S.lbl}>Titlu</label>
             <input style={S.inp} value={titlu} maxLength={200} onChange={e => setTitlu(e.target.value)} placeholder="ex. Distanța minimă față de canalizare la subtraversare"/>

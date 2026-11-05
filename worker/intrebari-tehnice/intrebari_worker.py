@@ -6,8 +6,8 @@ scrie răspunsul înapoi prin edge. Pornit de Task Scheduler la 2 minute („Int
 
 Reguli (fișa în migrare): întrebarea și atașamentele sunt DATE pentru model, nu instrucțiuni; modelul nu are unelte (fără web,
 fără fișiere, fără BD) — doar textul primit. Răspunsul e informativ. Jurnalul (jurnal.jsonl) ține doar id, stare, tokeni, durată —
-fără conținutul întrebării și fără secrete. Fără reîncercare automată a unui apel API eșuat: întrebarea rămâne „în lucru” și BD o
-redă după 30 de minute (max 3 încercări, apoi „eroare”).
+fără conținutul întrebării și fără secrete. Reîncercare DOAR la refuz cert fără cost (429/529 → „amana”, max 3);
+un rezultat incert (timeout, rețea) se închide cu eroare — costul lui e necunoscut și nu se repetă (L22).
 """
 import base64, datetime, json, os, pathlib, sys, time, urllib.error, urllib.request
 
@@ -77,15 +77,20 @@ def cheie_api():
     return k
 
 
+class AtasamentIndisponibil(Exception):
+    pass
+
+
 def construieste_mesaj(q):
-    blocuri, note, ramas = [], [], MAX_OCTETI_ATASAMENTE
+    """Toate atașamentele sau nimic: un document lipsă ar face analiza să pară completă (review P1-3)."""
+    blocuri, ramas = [], MAX_OCTETI_ATASAMENTE
     for a in q.get('atasamente') or []:
-        nume, mime = a.get('nume') or 'atasament', a.get('mime') or ''
-        if mime not in MIME_OK: note.append(f'{nume}: tip nesuportat, ignorat'); continue
+        nume, mime, url = a.get('nume') or 'atasament', a.get('mime') or '', a.get('url')
+        if mime not in MIME_OK or not url: raise AtasamentIndisponibil(nume)
         try:
-            date = descarca(a['url'], ramas)
+            date = descarca(url, ramas)
         except Exception:
-            note.append(f'{nume}: nu a putut fi descărcat sau depășește limita totală de 20 MB, ignorat'); continue
+            raise AtasamentIndisponibil(nume)
         ramas -= len(date)
         sursa = {'type': 'base64', 'media_type': mime, 'data': base64.b64encode(date).decode('ascii')}
         blocuri.append({'type': 'document' if mime == 'application/pdf' else 'image', 'source': sursa})
@@ -93,12 +98,12 @@ def construieste_mesaj(q):
     text = f"<speta>\n<titlu>{q.get('titlu') or ''}</titlu>\n"
     if q.get('context'): text += f"<context>{q['context']}</context>\n"
     text += f"<intrebare>\n{q.get('intrebare') or ''}\n</intrebare>\n</speta>"
-    if note: text += '\n\nNote despre atașamente (de la sistem): ' + '; '.join(note)
     text += '\n\nRăspunde la speța de mai sus după regulile tale.'
-    return blocuri + [{'type': 'text', 'text': text}], note
+    return blocuri + [{'type': 'text', 'text': text}]
 
 
 def intreaba_claude(cheie, continut):
+    """(status, corp). status None = rezultat INCERT (timeout / rețea după trimitere): costul e necunoscut, nu se reia."""
     corp = {'model': MODEL, 'max_tokens': MAX_TOKENS, 'system': SISTEM, 'messages': [{'role': 'user', 'content': continut}]}
     req = urllib.request.Request(API, data=json.dumps(corp).encode('utf-8'), method='POST',
                                  headers={'content-type': 'application/json', 'x-api-key': cheie, 'anthropic-version': '2023-06-01'})
@@ -107,62 +112,74 @@ def intreaba_claude(cheie, continut):
     except urllib.error.HTTPError as e:
         try: return e.code, json.loads(e.read() or b'{}')
         except Exception: return e.code, {}
+    except Exception:
+        return None, {}
 
 
 def proceseaza(secret, cheie, q):
-    t0 = time.time()
-    continut, note = construieste_mesaj(q)
+    t0, qid, inc = time.time(), q['id'], q['incercare']
+    def eroare(mesaj, **k):
+        st, _ = edge(secret, {'actiune': 'eroare', 'id': qid, 'incercare': inc, 'eroare': mesaj})
+        jurnal(id=qid, stare='eroare', scriere=st, **k)
+    try:
+        continut = construieste_mesaj(q)
+    except AtasamentIndisponibil as e:
+        return eroare(f'Atașamentul „{str(e)[:100]}” nu a putut fi citit. Pune întrebarea din nou.', motiv='atasament')
     status, r = intreaba_claude(cheie, continut)
+    if status is None:   # L22: rezultat incert — nu se reia automat, rămâne evidența în jurnal
+        return eroare('Serviciul AI nu a răspuns la timp. Pune întrebarea din nou.', motiv='incert')
     if status != 200:
         tip = ((r or {}).get('error') or {}).get('type', '')
-        if status in (429, 500, 502, 503, 529) or tip in ('overloaded_error', 'rate_limit_error', 'api_error'):
-            jurnal(id=q['id'], stare='amanat', http=status, tip=tip)     # rămâne „în lucru”; BD o redă după 30 min (max 3)
-            return
-        mesaj = 'Limita lunară a contului API a fost atinsă' if 'credit' in json.dumps(r).lower() or 'billing' in json.dumps(r).lower() \
-            else f'Răspunsul AI a eșuat (HTTP {status})'
-        edge(secret, {'actiune': 'eroare', 'id': q['id'], 'eroare': mesaj})
-        jurnal(id=q['id'], stare='eroare', http=status, tip=tip)
-        return
-    text = ''.join(b.get('text', '') for b in r.get('content') or [] if b.get('type') == 'text').strip()
-    if r.get('stop_reason') == 'max_tokens': text += '\n\n_(Răspunsul a fost tăiat la limita de lungime.)_'
-    if note: text += '\n\n---\n_Atașamente necitite: ' + '; '.join(note) + '_'
-    if not text:
-        edge(secret, {'actiune': 'eroare', 'id': q['id'], 'eroare': 'Răspuns AI gol'}); jurnal(id=q['id'], stare='gol'); return
+        if status in (429, 529) or tip in ('overloaded_error', 'rate_limit_error'):   # refuz CERT, fără cost → înapoi în coadă
+            st, _ = edge(secret, {'actiune': 'amana', 'id': qid, 'incercare': inc})
+            return jurnal(id=qid, stare='amanat', http=status, scriere=st)
+        brut = json.dumps(r).lower()
+        mesaj = 'Limita lunară a contului API a fost atinsă' if 'credit' in brut or 'billing' in brut else f'Răspunsul AI a eșuat (HTTP {status})'
+        return eroare(mesaj, http=status, motiv=tip or 'http')
     u = r.get('usage') or {}
     tokeni = {k: u.get(k) for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens') if u.get(k) is not None}
-    st, rr = edge(secret, {'actiune': 'raspunde', 'id': q['id'], 'raspuns_md': text[:60000], 'model': r.get('model') or MODEL, 'tokeni': tokeni})
-    jurnal(id=q['id'], stare='raspuns' if st == 200 else f'scriere_{st}', model=r.get('model'), tokeni=tokeni, sec=round(time.time() - t0, 1))
+    text = ''.join(b.get('text', '') for b in r.get('content') or [] if b.get('type') == 'text').strip()
+    oprire = r.get('stop_reason')
+    if oprire not in ('end_turn', 'stop_sequence'):   # L21: refuz / tăiat la limită = nu e un răspuns valid
+        return eroare('Răspunsul AI a fost refuzat sau a ieșit incomplet. Reformulează sau împarte întrebarea.', motiv=str(oprire), tokeni=tokeni)
+    if not text or len(text) > 60000:
+        return eroare('Răspunsul AI a fost gol sau prea lung.', motiv='lungime', tokeni=tokeni)
+    st, _ = edge(secret, {'actiune': 'raspunde', 'id': qid, 'incercare': inc, 'raspuns_md': text, 'model': r.get('model') or MODEL, 'tokeni': tokeni})
+    jurnal(id=qid, stare='raspuns' if st == 200 else f'scriere_{st}', model=r.get('model'), tokeni=tokeni, sec=round(time.time() - t0, 1))
 
 
 def main():
+    import msvcrt
     DIR.mkdir(parents=True, exist_ok=True)
-    lock = DIR / 'worker.lock'
+    f = open(DIR / 'worker.lock', 'a+b')   # lock de sistem: se eliberează singur la ieșirea procesului (review P2-6)
     try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        if time.time() - lock.stat().st_mtime < 3600: return 0      # altă rulare e în curs
-        lock.unlink(missing_ok=True); fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        f.close(); return 0   # altă rulare e în curs
     try:
-        os.write(fd, str(os.getpid()).encode()); os.close(fd)
         secret = SECRET_FILE.read_text(encoding='utf-8').strip()
-        if len(secret) != 64: raise RuntimeError('secretul workerului lipsește sau are alt format')
+        if len(secret) != 64: raise RuntimeError('secret')
         cheie = None
         for _ in range(MAX_PE_RULARE):
             st, r = edge(secret, {'actiune': 'preia'})
             if st != 200: jurnal(stare='preia_esuat', http=st); return 1
             q = r.get('intrebare')
             if not q: return 0
-            cheie = cheie or cheie_api()
             try:
+                cheie = cheie or cheie_api()
                 proceseaza(secret, cheie, q)
-            except Exception as e:   # o eroare neprevăzută nu blochează coada: întrebarea se redă de BD după 30 min
+            except Exception as e:   # neprevăzut: se închide cu eroare vizibilă; BD închide oricum după 30 min
                 jurnal(id=q.get('id'), stare='exceptie', eroare=type(e).__name__)
+                try: edge(secret, {'actiune': 'eroare', 'id': q['id'], 'incercare': q['incercare'], 'eroare': 'Eroare internă la procesare. Pune întrebarea din nou.'})
+                except Exception: pass
         return 0
     except Exception as e:
-        jurnal(stare='exceptie_rulare', eroare=f'{type(e).__name__}: {str(e)[:200]}')
+        jurnal(stare='exceptie_rulare', eroare=type(e).__name__)   # doar tipul: fără text care ar putea conține date
         return 1
     finally:
-        lock.unlink(missing_ok=True)
+        try: msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError: pass
+        f.close()
 
 
 if __name__ == '__main__':

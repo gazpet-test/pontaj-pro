@@ -32,7 +32,7 @@ CREATE FUNCTION public.fn_are_acces_intrebari() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
   SELECT auth.uid() IS NOT NULL AND (
     EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid() AND pr.is_owner)
-    OR EXISTS (SELECT 1 FROM public.user_module_access uma WHERE uma.profile_id = auth.uid() AND uma.module = 'intrebari_tehnice')
+    OR EXISTS (SELECT 1 FROM public.user_module_access uma WHERE uma.profile_id = auth.uid() AND (uma.module = 'intrebari_tehnice' OR uma.module LIKE 'intrebari\_tehnice.%'))
   );
 $$;
 REVOKE ALL ON FUNCTION public.fn_are_acces_intrebari() FROM PUBLIC, anon;
@@ -51,7 +51,8 @@ CREATE TABLE public.intrebari_tehnice (
   model       text,
   tokeni      jsonb,
   eroare      text CHECK (eroare IS NULL OR char_length(eroare) <= 500),
-  incercari   smallint NOT NULL DEFAULT 0,
+  incercari   smallint NOT NULL DEFAULT 0,                                         -- de câte ori a fost preluată (amânările certe o readuc în coadă)
+  incercare_id uuid,                                                               -- identitatea preluării curente; finalizarea o cere exact (review Jakarinos P1-1)
   creat_la    timestamptz NOT NULL DEFAULT now(),
   preluat_la  timestamptz,
   raspuns_la  timestamptz,
@@ -70,7 +71,7 @@ BEGIN
   IF auth.uid() IS NULL OR NOT public.fn_are_acces_intrebari() THEN RAISE EXCEPTION 'Nu ai acces la Întreabă echipa'; END IF;
   NEW.autor := auth.uid();
   NEW.stare := 'noua'; NEW.raspuns_md := NULL; NEW.model := NULL; NEW.tokeni := NULL; NEW.eroare := NULL;
-  NEW.incercari := 0; NEW.creat_la := now(); NEW.preluat_la := NULL; NEW.raspuns_la := NULL;
+  NEW.incercari := 0; NEW.incercare_id := NULL; NEW.creat_la := now(); NEW.preluat_la := NULL; NEW.raspuns_la := NULL;
   NEW.titlu := btrim(NEW.titlu); NEW.intrebare := btrim(NEW.intrebare); NEW.context := nullif(btrim(coalesce(NEW.context, '')), '');
   SELECT coalesce(is_owner, false) INTO v_owner FROM public.profiles WHERE id = NEW.autor;
   PERFORM pg_advisory_xact_lock(hashtext('intrebari_tehnice:' || NEW.autor::text));
@@ -115,31 +116,48 @@ CREATE POLICY intrebari_storage_sel ON storage.objects FOR SELECT TO authenticat
          OR EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = (SELECT auth.uid()) AND pr.is_owner)));
 
 -- ─── worker (doar service_role, prin edge-ul intrebari-tehnice-worker) ─────
--- Preia cea mai veche întrebare nouă; o întrebare rămasă „în lucru” peste 30 min (worker oprit) se reia, max 3 încercări.
+-- Preia cea mai veche întrebare nouă, cu o identitate de preluare nouă. O întrebare rămasă „în lucru” peste 30 min (worker oprit în
+-- timpul apelului AI) NU se reia automat — costul apelului întrerupt e necunoscut (L22) — ci se închide cu eroare vizibilă autorului.
 CREATE FUNCTION public.fn_intrebari_preia() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE r public.intrebari_tehnice;
+DECLARE r public.intrebari_tehnice; v_inc uuid := gen_random_uuid();
 BEGIN
-  UPDATE public.intrebari_tehnice SET stare = 'eroare', eroare = 'Nu s-a putut răspunde după 3 încercări', raspuns_la = now()
-   WHERE stare = 'in_lucru' AND preluat_la < now() - interval '30 minutes' AND incercari >= 3;
-  SELECT * INTO r FROM public.intrebari_tehnice
-   WHERE stare = 'noua' OR (stare = 'in_lucru' AND preluat_la < now() - interval '30 minutes')
-   ORDER BY creat_la LIMIT 1 FOR UPDATE SKIP LOCKED;
+  WITH expirate AS (
+    UPDATE public.intrebari_tehnice
+       SET stare = 'eroare', eroare = 'Procesarea a fost întreruptă. Pune întrebarea din nou.', raspuns_la = now(), incercare_id = NULL
+     WHERE stare = 'in_lucru' AND preluat_la < now() - interval '30 minutes'
+     RETURNING autor, titlu, id)
+  INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
+  SELECT autor, 'info', 'Întreabă echipa', '❓ Întrebarea nu a primit răspuns', left(titlu, 200), '/intrebari?id=' || id FROM expirate;
+  SELECT * INTO r FROM public.intrebari_tehnice WHERE stare = 'noua' ORDER BY creat_la LIMIT 1 FOR UPDATE SKIP LOCKED;
   IF NOT FOUND THEN RETURN NULL; END IF;
-  UPDATE public.intrebari_tehnice SET stare = 'in_lucru', preluat_la = now(), incercari = incercari + 1 WHERE id = r.id;
-  RETURN jsonb_build_object('id', r.id, 'titlu', r.titlu, 'intrebare', r.intrebare, 'context', r.context,
+  UPDATE public.intrebari_tehnice SET stare = 'in_lucru', preluat_la = now(), incercari = incercari + 1, incercare_id = v_inc WHERE id = r.id;
+  RETURN jsonb_build_object('id', r.id, 'incercare', v_inc, 'titlu', r.titlu, 'intrebare', r.intrebare, 'context', r.context,
                             'atasamente', r.atasamente, 'creat_la', r.creat_la);
 END $$;
 
-CREATE FUNCTION public.fn_intrebari_raspunde(p_id bigint, p_raspuns text, p_model text, p_tokeni jsonb, p_eroare text) RETURNS boolean
+-- Amânare CERTĂ (API a refuzat fără cost: 429 / 529): înapoi în coadă; după 3 preluări → eroare.
+CREATE FUNCTION public.fn_intrebari_amana(p_id bigint, p_incercare uuid) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  UPDATE public.intrebari_tehnice
+     SET stare = CASE WHEN incercari >= 3 THEN 'eroare' ELSE 'noua' END,
+         eroare = CASE WHEN incercari >= 3 THEN 'Serviciul AI a fost ocupat de 3 ori. Pune întrebarea din nou mai târziu.' END,
+         raspuns_la = CASE WHEN incercari >= 3 THEN now() END,
+         preluat_la = NULL, incercare_id = NULL
+   WHERE id = p_id AND stare = 'in_lucru' AND incercare_id = p_incercare;
+  RETURN FOUND;
+END $$;
+
+CREATE FUNCTION public.fn_intrebari_raspunde(p_id bigint, p_incercare uuid, p_raspuns text, p_model text, p_tokeni jsonb, p_eroare text) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_autor uuid; v_titlu text;
 BEGIN
   IF (p_raspuns IS NULL) = (p_eroare IS NULL) THEN RAISE EXCEPTION 'exact unul dintre raspuns / eroare'; END IF;
   UPDATE public.intrebari_tehnice
      SET stare = CASE WHEN p_raspuns IS NULL THEN 'eroare' ELSE 'raspuns' END,
-         raspuns_md = p_raspuns, model = left(p_model, 80), tokeni = p_tokeni, eroare = left(p_eroare, 500), raspuns_la = now()
-   WHERE id = p_id AND stare = 'in_lucru'
+         raspuns_md = p_raspuns, model = left(p_model, 80), tokeni = p_tokeni, eroare = left(p_eroare, 500), raspuns_la = now(), incercare_id = NULL
+   WHERE id = p_id AND stare = 'in_lucru' AND incercare_id = p_incercare
    RETURNING autor, titlu INTO v_autor, v_titlu;
   IF NOT FOUND THEN RETURN false; END IF;
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
@@ -149,9 +167,11 @@ BEGIN
   RETURN true;
 END $$;
 REVOKE ALL ON FUNCTION public.fn_intrebari_preia() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.fn_intrebari_raspunde(bigint, text, text, jsonb, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_intrebari_amana(bigint, uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_intrebari_raspunde(bigint, uuid, text, text, jsonb, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_intrebari_preia() TO service_role;
-GRANT EXECUTE ON FUNCTION public.fn_intrebari_raspunde(bigint, text, text, jsonb, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_intrebari_amana(bigint, uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_intrebari_raspunde(bigint, uuid, text, text, jsonb, text) TO service_role;
 
 DO $final$
 BEGIN
@@ -161,8 +181,23 @@ BEGIN
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.intrebari_tehnice'::regclass)
      OR has_table_privilege('anon', 'public.intrebari_tehnice', 'SELECT')
      OR has_table_privilege('authenticated', 'public.intrebari_tehnice', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.intrebari_tehnice', 'DELETE')
+     OR has_table_privilege('anon', 'public.intrebari_tehnice', 'INSERT')
      OR has_function_privilege('authenticated', 'public.fn_intrebari_preia()', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.fn_are_acces_intrebari()', 'EXECUTE') THEN
+     OR has_function_privilege('anon', 'public.fn_intrebari_preia()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.fn_intrebari_amana(bigint, uuid)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.fn_intrebari_amana(bigint, uuid)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.fn_intrebari_raspunde(bigint, uuid, text, text, jsonb, text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.fn_intrebari_raspunde(bigint, uuid, text, text, jsonb, text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.fn_are_acces_intrebari()', 'EXECUTE')
+     OR has_sequence_privilege('authenticated', pg_get_serial_sequence('public.intrebari_tehnice', 'id'), 'UPDATE')
+     OR has_sequence_privilege('anon', pg_get_serial_sequence('public.intrebari_tehnice', 'id'), 'USAGE')
+     OR NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'intrebari-tehnice' AND public IS FALSE) THEN
     RAISE EXCEPTION '20261105a: verificarea finală a drepturilor a eșuat';
+  END IF;
+  -- politicile Storage se combină prin OR: nicio politică permisivă pe storage.objects fără filtru pe bucket (review P2-7)
+  IF EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND permissive = 'PERMISSIVE'
+               AND coalesce(qual, '') || coalesce(with_check, '') NOT LIKE '%bucket_id%') THEN
+    RAISE EXCEPTION '20261105a: exista politici storage.objects fara filtru pe bucket — atasamentele n-ar fi izolate';
   END IF;
 END $final$;

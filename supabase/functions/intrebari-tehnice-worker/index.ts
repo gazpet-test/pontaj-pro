@@ -2,10 +2,12 @@
 // DEPLOY cu verify_jwt = false: poarta e secretul din Vault INTREBARI_WORKER_SECRET (64 hex), antetul x-intrebari-secret.
 //
 // Cereri (POST, JSON):
-//   { "actiune": "preia" }                                          → 200 { intrebare: null } sau { intrebare: {id, titlu, intrebare,
-//                                                                       context, creat_la, atasamente: [{nume, mime, url}]} } (URL 5 min)
-//   { "actiune": "raspunde", "id": n, "raspuns_md": "...", "model": "...", "tokeni": {...} }   → 200 { ok }
-//   { "actiune": "eroare",   "id": n, "eroare": "..." }                                       → 200 { ok }
+//   { "actiune": "preia" }  → 200 { intrebare: null } sau { intrebare: {id, incercare, titlu, intrebare, context, creat_la,
+//                              atasamente: [{nume, mime, url}]} } — url = null dacă semnarea a eșuat (workerul NU răspunde atunci)
+//   { "actiune": "raspunde", "id": n, "incercare": uuid, "raspuns_md": "...", "model": "...", "tokeni": {...} } → 200 / 409
+//   { "actiune": "eroare",   "id": n, "incercare": uuid, "eroare": "..." }                                       → 200 / 409
+//   { "actiune": "amana",    "id": n, "incercare": uuid }  — doar refuz CERT fără cost (429/529)                 → 200 / 409
+// 409 = preluarea nu mai e cea curentă (expirată / finalizată): rezultatul întârziat nu închide altă preluare.
 //
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 //  (a) conținut EXTERN: întrebările și atașamentele utilizatorilor trec prin edge spre worker — nu sunt interpretate aici;
@@ -21,6 +23,7 @@ const ANTET = 'x-intrebari-secret'
 const NUME_SECRET = 'INTREBARI_WORKER_SECRET'
 const BUCKET = 'intrebari-tehnice'
 const VALABIL_SEC = 300
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CALE = /^[0-9a-f-]{36}\/[0-9a-f-]{36}\.(pdf|jpg|jpeg|png|webp)$/
 
 Deno.serve(async (req: Request) => {
@@ -45,25 +48,37 @@ Deno.serve(async (req: Request) => {
     const { data, error } = await sb.rpc('fn_intrebari_preia')
     if (error) return raspuns(500, { error: 'Eroare internă' })
     if (!esteObiect(data)) return raspuns(200, { intrebare: null })
-    const atasamente: { nume: string; mime: string; url: string }[] = []
+    const atasamente: { nume: string; mime: string; url: string | null }[] = []
     for (const a of (Array.isArray(data.atasamente) ? data.atasamente : [])) {
-      if (!esteObiect(a) || typeof a.path !== 'string' || !CALE.test(a.path)) continue
-      const { data: s, error: e } = await sb.storage.from(BUCKET).createSignedUrl(a.path, VALABIL_SEC)
-      if (e || !s?.signedUrl) continue
-      atasamente.push({ nume: String(a.nume || '').slice(0, 200), mime: String(a.mime || ''), url: s.signedUrl })
+      const nume = esteObiect(a) ? String(a.nume || 'atașament').slice(0, 200) : 'atașament'
+      let semnat: string | null = null
+      if (esteObiect(a) && typeof a.path === 'string' && CALE.test(a.path)) {
+        const { data: s, error: e } = await sb.storage.from(BUCKET).createSignedUrl(a.path, VALABIL_SEC)
+        if (!e && s?.signedUrl) semnat = s.signedUrl
+      }
+      // atașament indisponibil = url null, nu omis: workerul refuză să răspundă pe documente incomplete (review P1-3)
+      atasamente.push({ nume, mime: esteObiect(a) ? String(a.mime || '') : '', url: semnat })
     }
-    return raspuns(200, { intrebare: { id: data.id, titlu: data.titlu, intrebare: data.intrebare, context: data.context ?? null,
+    return raspuns(200, { intrebare: { id: data.id, incercare: data.incercare, titlu: data.titlu, intrebare: data.intrebare, context: data.context ?? null,
                                        creat_la: data.creat_la, atasamente } })
   }
 
+  if ((corp.actiune === 'raspunde' || corp.actiune === 'eroare' || corp.actiune === 'amana')
+      && (!esteId(corp.id) || typeof corp.incercare !== 'string' || !UUID.test(corp.incercare))) {
+    return raspuns(400, { error: 'id / incercare invalide' })
+  }
+  if (corp.actiune === 'amana') {
+    const { data, error } = await sb.rpc('fn_intrebari_amana', { p_id: corp.id, p_incercare: corp.incercare })
+    if (error) return raspuns(500, { error: 'Eroare internă' })
+    return raspuns(data === true ? 200 : 409, { ok: data === true })
+  }
   if (corp.actiune === 'raspunde' || corp.actiune === 'eroare') {
-    if (!esteId(corp.id)) return raspuns(400, { error: 'id invalid' })
     const eRaspuns = corp.actiune === 'raspunde'
     const text = eRaspuns ? corp.raspuns_md : corp.eroare
     if (typeof text !== 'string' || !text.trim() || text.length > (eRaspuns ? 60000 : 500)) return raspuns(400, { error: 'Text invalid' })
     const tokeni = esteObiect(corp.tokeni) ? corp.tokeni : null
     const { data, error } = await sb.rpc('fn_intrebari_raspunde', {
-      p_id: corp.id, p_raspuns: eRaspuns ? text : null, p_model: typeof corp.model === 'string' ? corp.model : null,
+      p_id: corp.id, p_incercare: corp.incercare, p_raspuns: eRaspuns ? text : null, p_model: typeof corp.model === 'string' ? corp.model : null,
       p_tokeni: tokeni, p_eroare: eRaspuns ? null : text,
     })
     if (error) return raspuns(500, { error: 'Eroare internă' })

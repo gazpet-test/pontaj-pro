@@ -9,7 +9,7 @@ const EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png',
 export function poateIntreba(profile) {
   if (!profile) return false
   if (profile.is_owner === true) return true
-  return (profile.module_access || []).some(m => m === MODUL_INTREBARI || String(m).startsWith(MODUL_INTREBARI + '.'))
+  return (profile.module_access || []).some(m => m === MODUL_INTREBARI || String(m).startsWith(MODUL_INTREBARI + '.'))   // la fel în SQL (fn_are_acces_intrebari)
 }
 
 /** Calea în bucket: <uid>/<uuid>.<ext> — exact forma acceptată de triggerul din BD. */
