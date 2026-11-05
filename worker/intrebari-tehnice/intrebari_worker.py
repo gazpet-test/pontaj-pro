@@ -118,10 +118,17 @@ def intreaba_claude(cheie, continut):
 
 def proceseaza(secret, cheie, q):
     t0, qid, inc = time.time(), q['id'], q['incercare']
+    def scrie(corp):   # scrierea rezultatului se reîncearcă (max 3, fără să repete apelul AI); 409 = preluarea nu mai e a noastră
+        st = None
+        for i in range(3):
+            st, _ = edge(secret, corp)
+            if st in (200, 400, 409): return st
+            time.sleep(5 * (i + 1))
+        return st
     def eroare(mesaj, tokeni=None, **k):   # tokenii (sau „necunoscut”) ajung în BD și la erori — evidența costului (review r2 P1-2)
         corp = {'actiune': 'eroare', 'id': qid, 'incercare': inc, 'eroare': mesaj}
         if tokeni: corp['tokeni'] = tokeni
-        st, _ = edge(secret, corp)
+        st = scrie(corp)
         jurnal(id=qid, stare='eroare', scriere=st, tokeni=tokeni, **k)
     try:
         continut = construieste_mesaj(q)
@@ -137,7 +144,8 @@ def proceseaza(secret, cheie, q):
             return jurnal(id=qid, stare='amanat', http=status, scriere=st)
         brut = json.dumps(r).lower()
         mesaj = 'Limita lunară a contului API a fost atinsă' if 'credit' in brut or 'billing' in brut else f'Răspunsul AI a eșuat (HTTP {status})'
-        return eroare(mesaj, http=status, motiv=tip or 'http')
+        # 4xx de validare/credit = respins înainte de generare; 5xx = incert (review r3 P2-4)
+        return eroare(mesaj, tokeni={'cost_necunoscut': True} if status >= 500 else None, http=status, motiv=tip or 'http')
     u = r.get('usage') or {}
     tokeni = {k: u.get(k) for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens') if u.get(k) is not None} \
         or {'cost_necunoscut': True}
@@ -147,7 +155,7 @@ def proceseaza(secret, cheie, q):
         return eroare('Răspunsul AI a fost refuzat sau a ieșit incomplet. Reformulează sau împarte întrebarea.', motiv=str(oprire), tokeni=tokeni)
     if not text or len(text) > 60000:
         return eroare('Răspunsul AI a fost gol sau prea lung.', motiv='lungime', tokeni=tokeni)
-    st, _ = edge(secret, {'actiune': 'raspunde', 'id': qid, 'incercare': inc, 'raspuns_md': text, 'model': r.get('model') or MODEL, 'tokeni': tokeni})
+    st = scrie({'actiune': 'raspunde', 'id': qid, 'incercare': inc, 'raspuns_md': text, 'model': r.get('model') or MODEL, 'tokeni': tokeni})
     jurnal(id=qid, stare='raspuns' if st == 200 else f'scriere_{st}', model=r.get('model'), tokeni=tokeni, sec=round(time.time() - t0, 1))
 
 

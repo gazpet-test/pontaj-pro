@@ -50,31 +50,49 @@ export default function IntrebariTehnice({ profile }) {
 
   const [detaliu, setDetaliu] = useState(null)   // { id, rand } — întrebarea deschisă, citită separat după id (poate fi în afara listei)
   const [errDet, setErrDet] = useState('')
-  const [limita, setLimita] = useState(100)
+  const [vechi, setVechi] = useState([])         // pagini mai vechi (keyset pe creat_la, id), adăugate la cerere
+  const [maiSunt, setMaiSunt] = useState(false)
+  const PAG = 50
   const gen = useRef(0)                          // generația încărcării: un răspuns vechi sosit târziu nu suprascrie unul nou
   const COL = 'id, autor, titlu, context, intrebare, atasamente, stare, raspuns_md, model, eroare, creat_la, raspuns_la, profiles(name)'
 
   async function incarca() {
     const g = ++gen.current
     const [l, d] = await Promise.all([
-      supabase.from('intrebari_tehnice').select(COL).order('creat_la', { ascending:false }).limit(limita),
+      supabase.from('intrebari_tehnice').select(COL).order('creat_la', { ascending:false }).order('id', { ascending:false }).limit(PAG),
       selectat ? supabase.from('intrebari_tehnice').select(COL).eq('id', selectat).maybeSingle() : Promise.resolve({ data:null, error:null }),
     ])
     if (g !== gen.current) return
-    if (l.error) setErr('Nu s-au putut încărca întrebările: ' + l.error.message); else setLista(l.data || [])
+    if (l.error) setErr('Nu s-au putut încărca întrebările: ' + l.error.message)
+    else { setLista(l.data || []); if (!vechi.length) setMaiSunt((l.data || []).length === PAG) }
     if (selectat) {
       if (d.error) setErrDet('Întrebarea nu a putut fi încărcată: ' + d.error.message)
       else if (!d.data) setErrDet('Întrebarea nu există sau nu ai acces la ea.')
       else { setErrDet(''); setDetaliu({ id: selectat, rand: d.data }) }
     }
   }
-  useEffect(() => { setErrDet(''); incarca() }, [selectat, limita])   // eslint-disable-line react-hooks/exhaustive-deps
+  const incarcaRef = useRef(incarca)
+  incarcaRef.current = incarca            // intervalul cheamă mereu versiunea curentă (review r3 P2-3)
+  useEffect(() => { setErrDet(''); incarca() }, [selectat])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function incarcaVechi() {
+    const toate = [...lista, ...vechi]
+    const ultim = toate[toate.length - 1]
+    if (!ultim) return
+    const { data, error } = await supabase.from('intrebari_tehnice').select(COL)
+      .or(`creat_la.lt.${ultim.creat_la},and(creat_la.eq.${ultim.creat_la},id.lt.${ultim.id})`)
+      .order('creat_la', { ascending:false }).order('id', { ascending:false }).limit(PAG)
+    if (error) return setErr('Nu s-au putut încărca întrebările mai vechi: ' + error.message)
+    const ids = new Set(toate.map(x => x.id))
+    setVechi(v => [...v, ...(data || []).filter(x => !ids.has(x.id))])
+    setMaiSunt((data || []).length === PAG)
+  }
   const inAsteptare = x => x && (x.stare === 'noua' || x.stare === 'in_lucru')
   const q = selectat && detaliu?.id === selectat ? detaliu.rand : null   // niciodată detaliul altei întrebări sub URL-ul curent
   const asteapta = lista.some(inAsteptare) || inAsteptare(q)
   useEffect(() => {
     if (!asteapta) return
-    const t = setInterval(incarca, 20000)
+    const t = setInterval(() => incarcaRef.current(), 20000)
     return () => clearInterval(t)
   }, [asteapta, selectat])   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -175,7 +193,7 @@ export default function IntrebariTehnice({ profile }) {
 
           <div style={{ fontSize:14, fontWeight:700, margin:'0 0 8px' }}>Întrebările {profile.is_owner ? 'tuturor' : 'mele'}</div>
           {lista.length === 0 && <div style={{ color:G.muted, fontSize:13 }}>Nicio întrebare încă.</div>}
-          {lista.map(x => (
+          {[...lista, ...vechi.filter(v => !lista.some(x => x.id === v.id))].map(x => (
             <div key={x.id} onClick={() => setParams({ id: String(x.id) })} style={{ ...S.card, padding:12, marginBottom:8, cursor:'pointer', display:'flex', gap:10, alignItems:'center' }}>
               <span style={{ fontSize:11, fontWeight:700, color:ETICHETA_STARE[x.stare]?.c, border:`1px solid ${ETICHETA_STARE[x.stare]?.c}`, borderRadius:6, padding:'2px 6px', whiteSpace:'nowrap' }}>{ETICHETA_STARE[x.stare]?.t}</span>
               <div style={{ flex:1, minWidth:0 }}>
@@ -184,7 +202,7 @@ export default function IntrebariTehnice({ profile }) {
               </div>
             </div>
           ))}
-          {lista.length >= limita && <button style={S.btnS} onClick={() => setLimita(n => n + 100)}>Încarcă întrebările mai vechi</button>}
+          {maiSunt && <button style={S.btnS} onClick={incarcaVechi}>Încarcă întrebările mai vechi</button>}
         </>}
       </div>
     </div>

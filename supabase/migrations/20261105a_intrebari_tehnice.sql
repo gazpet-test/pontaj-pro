@@ -129,7 +129,8 @@ DECLARE r public.intrebari_tehnice; v_inc uuid := gen_random_uuid();
 BEGIN
   WITH expirate AS (
     UPDATE public.intrebari_tehnice
-       SET stare = 'eroare', eroare = 'Procesarea a fost întreruptă. Pune întrebarea din nou.', raspuns_la = now(), incercare_id = NULL
+       SET stare = 'eroare', eroare = 'Procesarea a fost întreruptă. Pune întrebarea din nou.', raspuns_la = now(), incercare_id = NULL,
+           tokeni = coalesce(tokeni, '{"cost_necunoscut": true}'::jsonb)   -- apelul AI întrerupt poate fi fost facturat (review r3 P2-4)
      WHERE stare = 'in_lucru' AND preluat_la < now() - interval '30 minutes'
      RETURNING autor, titlu, id)
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
