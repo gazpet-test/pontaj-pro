@@ -212,6 +212,7 @@ GRANT EXECUTE ON FUNCTION public.fn_red_parcela_acoperita_a(uuid) TO authenticat
 CREATE FUNCTION public.fn_red_pv_calitate_semnatar() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
 DECLARE v_calitate text; v_generare boolean := false;
+  v_cod text; v_uat3 text; v_prefix text; v_cale text; v_parti text[]; v_vechi text[]; v_versiune_veche integer := 0;
 BEGIN
   -- Nicio cale INSERT (inclusiv PostgREST) nu poate sari cerintele tranzitiei de semnare.
   IF TG_OP='INSERT' AND NEW.stare IS DISTINCT FROM 'generat' THEN
@@ -254,6 +255,42 @@ BEGIN
     SELECT d.calitate INTO v_calitate FROM public.red_detinatori d
       WHERE d.id=NEW.detinator_id AND d.parcela_id=NEW.parcela_id AND d.sters_la IS NULL FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'PV: detinator indisponibil' USING ERRCODE='42501'; END IF;
+    IF v_generare OR (NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat') THEN
+      SELECT pr.cod,u.uat3 INTO v_cod,v_uat3 FROM public.red_parcele p
+        JOIN public.red_proiecte pr ON pr.id=p.proiect_id
+        JOIN public.red_uat u ON u.id=p.uat_id AND u.proiect_id=p.proiect_id
+        WHERE p.id=NEW.parcela_id AND u.id=NEW.uat_id;
+      IF NOT FOUND THEN RAISE EXCEPTION 'PV: proiect/UAT incompatibil' USING ERRCODE='23514'; END IF;
+      v_prefix := v_cod || '/' || v_uat3 || '/pv/' || NEW.nr_pv;
+      v_cale := CASE WHEN v_generare THEN NEW.fisier_generat_path ELSE OLD.fisier_generat_path END;
+      -- Forma identica cu citesteCalePvA din JS; fara regex construit din nr_pv/proiect.
+      v_parti := regexp_match(v_cale,'^([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Z]{3})/pv/(PVA-[A-Z]{3}-[0-9]{4})_v([1-9][0-9]{0,8})_(proprietar|coproprietar|mostenitor|neidentificat|utilizator|arendas)[.]docx$');
+      IF v_parti IS NULL OR position('..' in v_parti[1])>0
+         OR v_parti[1] IS DISTINCT FROM v_cod OR v_parti[2] IS DISTINCT FROM v_uat3
+         OR v_parti[3] IS DISTINCT FROM NEW.nr_pv
+         OR v_cale IS DISTINCT FROM v_prefix || '_v' || v_parti[4] || '_' || v_parti[5] || '.docx' THEN
+        RAISE EXCEPTION 'PV: cale DOCX invalida; regenereaza documentul' USING ERRCODE='23514';
+      END IF;
+      IF v_parti[5] IS DISTINCT FROM v_calitate OR NEW.calitate_document IS DISTINCT FROM v_calitate THEN
+        IF NOT v_generare THEN RAISE EXCEPTION 'PV: calitatea s-a schimbat dupa generare - regenereaza documentul si semneaza noua versiune' USING ERRCODE='23514'; END IF;
+        RAISE EXCEPTION 'PV: calitatea caii DOCX difera de calitatea curenta; regenereaza documentul' USING ERRCODE='23514';
+      END IF;
+      IF v_generare THEN
+        -- Pentru legacy fara rol pastram si versiunea numerica veche, daca exista.
+        -- Noua cale nu poate fi stearsa/resetata: astfel maximul curent nu se poate pierde.
+        IF left(OLD.fisier_generat_path,char_length(v_prefix))=v_prefix THEN
+          v_vechi := regexp_match(substring(OLD.fisier_generat_path from char_length(v_prefix)+1),
+            '^_v([1-9][0-9]{0,8})(_(proprietar|coproprietar|mostenitor|neidentificat|utilizator|arendas))?[.]docx$');
+          IF v_vechi IS NOT NULL THEN v_versiune_veche := v_vechi[1]::integer; END IF;
+        END IF;
+        IF OLD.fisier_generat_path IS NOT NULL AND v_vechi IS NULL THEN
+          RAISE EXCEPTION 'PV: versiunea DOCX curenta nu poate fi determinata' USING ERRCODE='23514';
+        END IF;
+        IF v_parti[4]::integer <= v_versiune_veche THEN
+          RAISE EXCEPTION 'PV: versiunea DOCX trebuie sa creasca strict' USING ERRCODE='23514';
+        END IF;
+      END IF;
+    END IF;
     IF NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat' THEN
       -- Semnarea nu poate servi drept regenerare; scanul trebuie sa apartina versiunii deja generate.
       IF NEW.fisier_generat_path IS DISTINCT FROM OLD.fisier_generat_path
@@ -356,7 +393,7 @@ DO $post$
 BEGIN
   IF EXISTS (SELECT 1 FROM (VALUES
     ('public.fn_red_parcela_acoperita_a(uuid)','b932aaf307761d3c504608a30c117bca'),
-    ('public.fn_red_pv_calitate_semnatar()','c47235d62aedbf6b3efccba60702b95b'),
+    ('public.fn_red_pv_calitate_semnatar()','1976124ce240eb0f04dec22cf8acd862'),
     ('public.fn_red_pv_creeaza(text,uuid,uuid,integer)','290f8f0c3ba78d8499db7ef50d0d8bcd'),
     ('public.fn_red_pv_b_semnare()','728fc279beee0b34f9adcfb425b2dd9f')
   ) b(sig,corp) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(b.sig)

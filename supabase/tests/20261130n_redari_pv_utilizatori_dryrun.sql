@@ -58,6 +58,28 @@ BEGIN
   END LOOP;
 END $fixture$;
 GRANT SELECT,UPDATE ON pr1_cazuri,pr1_det TO authenticated;
+-- Tabel comun de paritate JS/SQL pentru contractul caii; expected literal, independent de implementare.
+CREATE TEMP TABLE pr1_cai(nume text, date jsonb, acceptat boolean);
+INSERT INTO pr1_cai VALUES
+ ('initial','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1_proprietar.docx","rol":"proprietar"}'::jsonb,true),
+ ('p_q','{"vechi":"TEST-PR1-PV/ZXP/pv/{nr}_v1_proprietar.docx","nou":"TEST-PR1-PV/ZXP/pv/{nr}_v2_arendas.docx","rol":"arendas"}'::jsonb,true),
+ ('q_p_reetichetat','{"vechi":"TEST-PR1-PV/ZXP/pv/{nr}_v2_arendas.docx","nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1_proprietar.docx","rol":"arendas"}'::jsonb,false),
+ ('q_p_rol_corect','{"vechi":"TEST-PR1-PV/ZXP/pv/{nr}_v2_arendas.docx","nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1_proprietar.docx","rol":"proprietar"}'::jsonb,false),
+ ('cale_veche','{"vechi":"TEST-PR1-PV/ZXP/pv/{nr}_v3_arendas.docx","nou":"TEST-PR1-PV/ZXP/pv/{nr}_v2_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('versiune_egala','{"vechi":"TEST-PR1-PV/ZXP/pv/{nr}_v2_proprietar.docx","nou":"TEST-PR1-PV/ZXP/pv/{nr}_v2_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('rol_gresit','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1_proprietar.docx","rol":"arendas"}'::jsonb,false),
+ ('zero','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v0_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('zero_initial','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v01_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('overflow','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1000000000_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('sufix','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1_arendas.docx.bak","rol":"arendas"}'::jsonb,false),
+ ('linie_noua','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1_arendas.docx\n","rol":"arendas"}'::jsonb,false),
+ ('alt_proiect','{"vechi":null,"nou":"ALT/ZXP/pv/{nr}_v1_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('alt_uat','{"vechi":null,"nou":"TEST-PR1-PV/ALT/pv/{nr}_v1_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('alt_nr','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/PVA-ALT-0001_v1_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('legacy_regenerat','{"vechi":"TEST-PR1-PV/ZXP/pv/{nr}_v7.docx","nou":"TEST-PR1-PV/ZXP/pv/{nr}_v8_arendas.docx","rol":"arendas"}'::jsonb,true),
+ ('legacy_versiune_veche','{"vechi":"TEST-PR1-PV/ZXP/pv/{nr}_v7.docx","nou":"TEST-PR1-PV/ZXP/pv/{nr}_v6_arendas.docx","rol":"arendas"}'::jsonb,false),
+ ('legacy_nou_fara_rol','{"vechi":null,"nou":"TEST-PR1-PV/ZXP/pv/{nr}_v1.docx","rol":"arendas"}'::jsonb,false);
+GRANT SELECT ON pr1_cai TO authenticated;
 SET LOCAL ROLE authenticated;
 -- INSERT direct ca editor non-owner: inclusiv cu scan/data, numai generat este permis.
 SAVEPOINT pr1_insert;
@@ -111,6 +133,37 @@ BEGIN
 END $soft_delete$;
 ROLLBACK TO SAVEPOINT pr1_soft_delete;
 RELEASE SAVEPOINT pr1_soft_delete;
+-- Apeluri reale INSERT/PATCH sub authenticated, fiecare caz izolat si anulat.
+DO $cai$
+DECLARE r record; p uuid; u uuid; d uuid; v public.red_procese_verbale; nr text; vechi text; nou text; acceptat boolean;
+BEGIN
+  SELECT parcela INTO p FROM pr1_cazuri WHERE nume='utilizator_trimis';
+  SELECT uat_id INTO u FROM public.red_parcele WHERE id=p;
+  FOR r IN SELECT * FROM pr1_cai LOOP
+    BEGIN
+      INSERT INTO public.red_detinatori(parcela_id,nume,nume_normalizat,calitate)
+        VALUES(p,'FICTIV CALE',upper('FICTIV '||gen_random_uuid()),r.date->>'rol') RETURNING id INTO d;
+      nr:=public.fn_red_numar_document('PVA','ZXP',NULL);
+      vechi:=replace(r.date->>'vechi','{nr}',nr); nou:=replace(r.date->>'nou','{nr}',nr);
+      -- INSERT-ul modeleaza si randul legacy fara calitate_document, caruia i se cere regenerare.
+      INSERT INTO public.red_procese_verbale(tip,parcela_id,detinator_id,uat_id,nr_pv,data_pv,stare,fisier_generat_path)
+        VALUES('A',p,d,u,nr,'2026-11-05','generat',vechi) RETURNING * INTO v;
+      acceptat:=true;
+      BEGIN
+        UPDATE public.red_procese_verbale SET fisier_generat_path=nou,calitate_document=r.date->>'rol' WHERE id=v.id;
+      EXCEPTION WHEN check_violation THEN
+        IF SQLERRM NOT IN ('PV: cale DOCX invalida; regenereaza documentul',
+          'PV: calitatea caii DOCX difera de calitatea curenta; regenereaza documentul',
+          'PV: versiunea DOCX trebuie sa creasca strict') THEN RAISE; END IF;
+        acceptat:=false;
+      END;
+      IF acceptat IS DISTINCT FROM r.acceptat THEN RAISE EXCEPTION 'DRY paritate cale %',r.nume; END IF;
+      RAISE NOTICE 'PARITATE CALE OK %',r.nume;
+      RAISE SQLSTATE 'ZX004' USING MESSAGE='fixture cale anulat';
+    EXCEPTION WHEN SQLSTATE 'ZX004' THEN NULL;
+    END;
+  END LOOP;
+END $cai$;
 DO $sign$
 DECLARE r record; v public.red_procese_verbale;
 BEGIN
@@ -120,7 +173,7 @@ BEGIN
     IF v.calitate_semnatar IS DISTINCT FROM (r.spec->>'rol') THEN RAISE EXCEPTION 'DRY: calitate server creare'; END IF;
     UPDATE pr1_det SET pv=v.id WHERE id=r.id;
     IF r.spec->>'stare'='semnat' THEN
-      UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/'||v.id||'_v1.docx',calitate_document=r.spec->>'rol' WHERE id=v.id;
+      UPDATE public.red_procese_verbale SET fisier_generat_path='TEST-PR1-PV/ZXP/pv/'||v.nr_pv||'_v1_'||(r.spec->>'rol')||'.docx',calitate_document=r.spec->>'rol' WHERE id=v.id;
       UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/scan.pdf' WHERE id=v.id;
     ELSIF r.spec->>'stare'='anulat' THEN
       UPDATE public.red_procese_verbale SET stare='anulat',motiv_anulare='FICTIV' WHERE id=v.id;
@@ -184,12 +237,15 @@ BEGIN
 END $freeze$;
 -- Race regression: B generated before user signs, signing B afterward must fail; cancellation stays legal.
 DO $late$
-DECLARE p uuid; d uuid; a public.red_procese_verbale; b public.red_procese_verbale; refuz boolean:=false;
+DECLARE p uuid; d uuid; a public.red_procese_verbale; b public.red_procese_verbale; refuz boolean:=false; cale_p text; cale_q text;
 BEGIN
   SELECT parcela,id,pv INTO p,d,a.id FROM pr1_det WHERE caz='utilizator_trimis';
   SELECT * INTO STRICT b FROM public.red_procese_verbale WHERE parcela_id=p AND tip='B' AND stare='generat';
+  SELECT v.* INTO STRICT a FROM public.red_procese_verbale v WHERE v.id=a.id;
+  cale_p:='TEST-PR1-PV/ZXP/pv/'||a.nr_pv||'_v1_proprietar.docx';
+  cale_q:='TEST-PR1-PV/ZXP/pv/'||a.nr_pv||'_v2_arendas.docx';
   UPDATE public.red_detinatori SET calitate='proprietar' WHERE id=d;
-  UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/regenerat.docx',calitate_document='proprietar' WHERE id=a.id;
+  UPDATE public.red_procese_verbale SET fisier_generat_path=cale_p,calitate_document='proprietar' WHERE id=a.id;
   IF (SELECT calitate_semnatar FROM public.red_procese_verbale WHERE id=a.id) IS DISTINCT FROM 'proprietar' THEN
     RAISE EXCEPTION 'DRY snapshot regenerare nu urmeaza detinatorul'; END IF;
   UPDATE public.red_detinatori SET calitate='arendas' WHERE id=d;
@@ -206,10 +262,30 @@ BEGIN
   IF NOT refuz THEN RAISE EXCEPTION 'DRY calitate document modificata fara regenerare'; END IF;
   refuz:=false;
   BEGIN
-    UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/sursa-veche.docx',calitate_document='proprietar' WHERE id=a.id;
-  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: calitatea s-a schimbat in timpul generarii - regenereaza documentul'; END;
+    UPDATE public.red_procese_verbale SET fisier_generat_path='TEST-PR1-PV/ZXP/pv/'||a.nr_pv||'_v2_proprietar.docx',calitate_document='arendas' WHERE id=a.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: calitatea caii DOCX difera de calitatea curenta; regenereaza documentul'; END;
   IF NOT refuz THEN RAISE EXCEPTION 'DRY rol citit vechi acceptat la legarea DOCX'; END IF;
-  UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/arendas-v2.docx',calitate_document='arendas' WHERE id=a.id;
+  UPDATE public.red_procese_verbale SET fisier_generat_path=cale_q,calitate_document='arendas' WHERE id=a.id;
+  -- Exploit exact P(proprietar) -> Q(arendas) -> P reetichetat arendas.
+  refuz:=false;
+  BEGIN
+    UPDATE public.red_procese_verbale SET fisier_generat_path=cale_p,calitate_document='arendas' WHERE id=a.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: calitatea caii DOCX difera de calitatea curenta; regenereaza documentul'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY reetichetare P vechi permisa'; END IF;
+  -- Chiar cu rolul corect, versiunea nu poate reveni la P.
+  UPDATE public.red_detinatori SET calitate='proprietar' WHERE id=d;
+  refuz:=false;
+  BEGIN
+    UPDATE public.red_procese_verbale SET fisier_generat_path=cale_p,calitate_document='proprietar' WHERE id=a.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: versiunea DOCX trebuie sa creasca strict'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY reutilizare P cu rol corect permisa'; END IF;
+  UPDATE public.red_detinatori SET calitate='arendas' WHERE id=d;
+  UPDATE public.red_procese_verbale SET fisier_generat_path='TEST-PR1-PV/ZXP/pv/'||a.nr_pv||'_v3_arendas.docx',calitate_document='arendas' WHERE id=a.id;
+  refuz:=false;
+  BEGIN
+    UPDATE public.red_procese_verbale SET fisier_generat_path=cale_q,calitate_document='arendas' WHERE id=a.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: versiunea DOCX trebuie sa creasca strict'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY reutilizare Q vechi permisa'; END IF;
   UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/a-late.pdf' WHERE id=a.id;
   IF (SELECT calitate_semnatar FROM public.red_procese_verbale WHERE id=a.id) IS DISTINCT FROM 'arendas' THEN
     RAISE EXCEPTION 'DRY calitate recitita la semnare'; END IF;

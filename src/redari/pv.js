@@ -3,12 +3,36 @@ import { completeazaDocx, hashBlob, formatDataRo, formatNumarRo, ETICHETA_CALITA
 import { ultimulRaspuns } from './stare.js'
 import { mentiuneAr } from './arMentiune.js'
 
+export const ROLURI_PV_A = ['proprietar','coproprietar','mostenitor','neidentificat','utilizator','arendas']
+// Contract identic cu regexp_match din fn_red_pv_calitate_semnatar; maxim 9 cifre (fara overflow).
+export function citesteCalePvA(path, {proiectCod,uat3,nrPv}) {
+  if (typeof path !== 'string') return null
+  const m=/^([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Z]{3})\/pv\/(PVA-[A-Z]{3}-[0-9]{4})_v([1-9][0-9]{0,8})_(proprietar|coproprietar|mostenitor|neidentificat|utilizator|arendas)[.]docx$/.exec(path)
+  if (!m || m[0] !== path || m[1].includes('..') || m[1]!==proiectCod || m[2]!==uat3 || m[3]!==nrPv) return null
+  return {versiune:Number(m[4]),calitate:m[5]}
+}
+export function versiuneCurentaPvA(path, cheie) {
+  if (path == null) return 0
+  const curent=citesteCalePvA(path,cheie)
+  if (curent) return curent.versiune
+  // Legacy fara calitate_document: trebuie regenerat, pastrand totusi versiunea numerica.
+  const m=/_v([1-9][0-9]{0,8})[.]docx$/.exec(path)
+  if (m && path===calePv({...cheie,calitate:undefined,versiune:Number(m[1])})) return Number(m[1])
+  throw new Error('Versiunea DOCX curenta nu poate fi determinata; reincarca.')
+}
+export function verificaCaleNouaPvA(path, cheie, caleCurenta, calitate) {
+  const nou=citesteCalePvA(path,cheie)
+  if (!nou || nou.calitate!==calitate) return false
+  try { return nou.versiune > versiuneCurentaPvA(caleCurenta,cheie) } catch { return false }
+}
+
 // Rolul folosit in DOCX este preconditie; serverul il verifica sub lock.
-export function patchGenerarePv({pv, detinator}, path) {
+export function patchGenerarePv({pv, detinator, proiect, uat}, path) {
   if (pv.tip !== 'A') return {fisier_generat_path:path}
-  if (!['proprietar','coproprietar','mostenitor','neidentificat','utilizator','arendas'].includes(detinator?.calitate)) {
+  if (!ROLURI_PV_A.includes(detinator?.calitate)) {
     throw new Error('Calitatea detinatorului lipseste; reincarca inainte de generare.')
   }
+  if (!verificaCaleNouaPvA(path,{proiectCod:proiect?.cod,uat3:uat?.uat3,nrPv:pv.nr_pv},pv.fisier_generat_path,detinator.calitate)) throw new Error('Cale sau versiune DOCX invalida; regenereaza.')
   return {fisier_generat_path:path, calitate_document:detinator.calitate}
 }
 export function cheiCasPv(pv, chei) {
@@ -284,12 +308,18 @@ export async function genereazaPvB(date) {
   for (const i of [1,2,3]) campuri['zi'+i] = formatDataRo(uat['sesiune_zi'+i])
   return documentPv(campuri, date.templateArrayBuffer, date.strict !== false)
 }
-export function calePv({ proiectCod, uat3, nrPv, versiune = 1, extensieSemnat }) {
+export function calePv({ proiectCod, uat3, nrPv, versiune = 1, extensieSemnat, calitate }) {
   // Reuse segment/version validation; replace only the fixed directory.
   const parti = caleAdresaUat({ proiectCod, uat3, nrDocument: nrPv, versiune }).split('/')
   parti[2] = 'pv'
   const path = parti.join('/')
   if (extensieSemnat && !['pdf','jpg','png'].includes(extensieSemnat)) throw new Error('Format scan invalid')
+  if (!extensieSemnat && calitate != null) {
+    if (!ROLURI_PV_A.includes(calitate) || !Number.isSafeInteger(versiune) || versiune>999999999 || !/^PVA-[A-Z]{3}-[0-9]{4}$/.test(nrPv)) throw new Error('Calitate/versiune PV A invalida')
+    const nou=path.replace(/[.]docx$/, '_' + calitate + '.docx')
+    if (!citesteCalePvA(nou,{proiectCod,uat3,nrPv})) throw new Error('Cale PV A invalida')
+    return nou
+  }
   return extensieSemnat ? path.replace(/_v\d+\.docx$/, `_semnat_v${versiune}.${extensieSemnat}`) : path
 }
 export function extensieScan(blob) {
@@ -322,12 +352,30 @@ async function maximScan(supabase, cheie, esteCurent) {
   }
   throw new Error('Listarea scanurilor este incompleta.')
 }
-export async function salveazaPv(supabase, { blob, proiectCod, uat3, nrPv, semnat = false, esteCurent = () => true }) {
+async function maximPvA(supabase, cheie, esteCurent) {
+  const folder=calePv({...cheie,calitate:undefined}).split('/').slice(0,-1).join('/')
+  let max=0, offset=0
+  for (let p=0;p<100;p++) {
+    if (!esteCurent()) throw new Error('Operatie abandonata: PV schimbat')
+    const {data,error}=await supabase.storage.from('redari').list(folder,{limit:1000,offset,sortBy:{column:'name',order:'asc'}})
+    if (error || !Array.isArray(data)) throw new Error('Nu pot lista versiunile PV A; reincarca.')
+    if (!data.length) return max
+    for (const f of data) {
+      if (f.name?.startsWith(cheie.nrPv+'_v')) {
+        max=Math.max(max,versiuneCurentaPvA(folder+'/'+f.name,cheie))
+      }
+    }
+    offset+=data.length
+  }
+  throw new Error('Listarea versiunilor PV A este incompleta.')
+}
+export async function salveazaPv(supabase, { blob, proiectCod, uat3, nrPv, semnat = false, calitate, caleCurenta, esteCurent = () => true }) {
   const extensieSemnat = semnat ? extensieScan(blob) : undefined
-  const cheie = {proiectCod,uat3,nrPv,extensieSemnat}
+  const cheie = {proiectCod,uat3,nrPv,extensieSemnat,calitate:semnat?undefined:calitate}
   calePv(cheie)
-  const max = semnat ? await maximScan(supabase,cheie,esteCurent) : await versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela: 'pv', nrDocument: nrPv, adresa: true }, { esteCurent })
-  if (max == null) throw new Error('Nu pot lista versiunile PV; reincarca si verifica starea.')
+  const maxBucket = semnat ? await maximScan(supabase,cheie,esteCurent) : calitate != null ? await maximPvA(supabase,cheie,esteCurent) : await versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela: 'pv', nrDocument: nrPv, adresa: true }, { esteCurent })
+  if (maxBucket == null) throw new Error('Nu pot lista versiunile PV; reincarca si verifica starea.')
+  const max=calitate!=null && !semnat ? Math.max(maxBucket,versiuneCurentaPvA(caleCurenta,cheie)) : maxBucket
   for (let i = 1; i <= MAX_INCERCARI_VERSIUNE; i++) {
     if (!esteCurent()) throw new Error('Operatie abandonata: PV schimbat')
     const versiune = max + i

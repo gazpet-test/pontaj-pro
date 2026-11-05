@@ -204,7 +204,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     if(!curent()) return
     const {blob}=await (tip==='C'?genereazaPvC:tip==='B'?genereazaPvB:genereazaPvA)({...s,templateArrayBuffer})
     if(!curent()) return
-    const {path}=await salveazaPv(supabase,{blob,proiectCod:s.proiect.cod,uat3:s.uat.uat3,nrPv:s.pv.nr_pv,esteCurent:curent})
+    const {path}=await salveazaPv(supabase,{blob,proiectCod:s.proiect.cod,uat3:s.uat.uat3,nrPv:s.pv.nr_pv,calitate:tip==='A'?s.detinator.calitate:undefined,caleCurenta:s.pv.fisier_generat_path,esteCurent:curent})
     if(!curent()) return
     const dupa=await citeste(curent)
     if(!curent()) return
@@ -250,7 +250,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
         if (!scan) throw new Error('Alege scanul semnat.')
         await verificaContinutScan(scan)
         if (!curent()) return
-        const r=await salveazaPv(supabase,{blob:scan,semnat:true,proiectCod:s.proiect.cod,uat3:s.uat.uat3,nrPv:s.pv.nr_pv,esteCurent:curent})
+        const r=await salveazaPv(supabase,{blob:scan,semnat:true,proiectCod:s.proiect.cod,uat3:s.uat.uat3,nrPv:s.pv.nr_pv,calitate:tip==='A'?s.detinator.calitate:undefined,caleCurenta:s.pv.fisier_generat_path,esteCurent:curent})
         path=r.path
         if (!curent()) return
         // Copilot f4c r1 P2-02: dupa upload recitim sursele; daca s-au schimbat, nu legam scanul (il raportam separat)

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { patchGenerarePv, cheiCasPv, pvComparabil, parcelaAcoperitaA, detinatoriFaraPvA, numeDestinatariPvB, verificaDatePvB, genereazaPvB, genereazaPvA, referintaPvA } from './pv.js'
+import { calePv, salveazaPv, citesteCalePvA, verificaCaleNouaPvA, patchGenerarePv, cheiCasPv, pvComparabil, parcelaAcoperitaA, detinatoriFaraPvA, numeDestinatariPvB, verificaDatePvB, genereazaPvB, genereazaPvA, referintaPvA } from './pv.js'
 
 // Acelasi tabel de cazuri ca DRY SQL; expected este decizia juridica, nu calculat din implementare.
 const dry = readFileSync('supabase/tests/20261130n_redari_pv_utilizatori_dryrun.sql', 'utf8')
@@ -65,10 +65,10 @@ it('PV A semnat nu deduce din rolul curent un snapshot lipsa', async () => {
 })
 
 it('generarea transmite rolul DOCX curent ca preconditie, nu snapshot-ul draftului', async () => {
-  const date={strict:false,pv:{tip:'A',stare:'generat',calitate_semnatar:'proprietar'},detinator:{calitate:'arendas'},
+  const date={strict:false,pv:{tip:'A',nr_pv:'PVA-ZXP-0001',stare:'generat',calitate_semnatar:'proprietar'},proiect:{cod:'TEST'},uat:{uat3:'ZXP'},detinator:{calitate:'arendas'},
     templateArrayBuffer:readFileSync('public/redari/sabloane/pv_a.docx')}
   expect((await genereazaPvA(date)).campuri.calitate_cota).toBe('arendaș')
-  expect(patchGenerarePv(date,'FICTIV/v2.docx')).toEqual({fisier_generat_path:'FICTIV/v2.docx',calitate_document:'arendas'})
+  expect(patchGenerarePv(date,'TEST/ZXP/pv/PVA-ZXP-0001_v2_arendas.docx')).toEqual({fisier_generat_path:'TEST/ZXP/pv/PVA-ZXP-0001_v2_arendas.docx',calitate_document:'arendas'})
   expect(date.pv.calitate_semnatar).toBe('proprietar')
   expect(patchGenerarePv({pv:{tip:'B'}},'FICTIV/b.docx')).toEqual({fisier_generat_path:'FICTIV/b.docx'})
   expect(()=>patchGenerarePv({pv:{tip:'A'},detinator:{}},'FICTIV/v.docx')).toThrow('Calitatea detinatorului lipseste')
@@ -86,4 +86,27 @@ it('CAS draft ignora snapshot-ul derivat si pastreaza versiunea DOCX si editaril
     expect(cheiCasPv({stare},chei)).toEqual(chei)
     expect(pvComparabil({tip:'A',stare,calitate_semnatar:'arendas'})).toHaveProperty('calitate_semnatar','arendas')
   }
+})
+
+const cai=[...dry.matchAll(/ \('([a-z_]+)','(\{[^\n]*\})'::jsonb,(true|false)\)/g)]
+  .map(([,nume,date,ok])=>({nume,...JSON.parse(date),ok:ok==='true'}))
+const cheieCale={proiectCod:'TEST-PR1-PV',uat3:'ZXP',nrPv:'PVA-ZXP-0001'}
+it('paritate cai: toate cele 18 cazuri SQL sunt prezente',()=>expect(cai).toHaveLength(18))
+it.each(cai)('paritate cale $nume', c=>{
+  const cale=v=>v?.replace('{nr}',cheieCale.nrPv) ?? null
+  expect(verificaCaleNouaPvA(cale(c.nou),cheieCale,cale(c.vechi),c.rol)).toBe(c.ok)
+  if(c.ok) expect(citesteCalePvA(cale(c.nou),cheieCale)?.calitate).toBe(c.rol)
+})
+it('upload-ul PV A alege maximul peste toate rolurile, legacy, orfani si calea curenta',async()=>{
+  const {vi}=await import('vitest')
+  const list=vi.fn().mockResolvedValueOnce({data:[{name:'PVA-ZXP-0001_v7_proprietar.docx'},
+    {name:'PVA-ZXP-0001_v9_utilizator.docx'},{name:'PVA-ZXP-0001_v11.docx'}]}).mockResolvedValue({data:[]})
+  const upload=vi.fn().mockResolvedValueOnce({error:{statusCode:409}}).mockResolvedValue({error:null})
+  const s={storage:{from:()=>({list,upload})}}
+  const r=await salveazaPv(s,{...cheieCale,blob:new Blob(['FICTIV']),calitate:'arendas',
+    caleCurenta:'TEST-PR1-PV/ZXP/pv/PVA-ZXP-0001_v15_proprietar.docx'})
+  expect(r).toEqual({path:'TEST-PR1-PV/ZXP/pv/PVA-ZXP-0001_v17_arendas.docx',versiune:17})
+  expect(upload.mock.calls[0][2].upsert).toBe(false)
+  expect(list).toHaveBeenCalledTimes(2)
+  expect(calePv({...cheieCale,calitate:'arendas',versiune:17})).toBe(r.path)
 })
