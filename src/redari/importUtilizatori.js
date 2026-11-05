@@ -97,10 +97,19 @@ export function planUtilizatori(candidati, { parcele = [], detinatori = [] } = {
     if (!p) { negasite.push({ rand: c.rand, uat3: c.uat3, cheie_sursa: c.cheie_sursa, motiv: MOTIV_PARCELA_NEGASITA }); continue }
     const k = `${p.id}|${c.nume_normalizat}`
     if (existenti.has(k)) { deja.push({ rand: c.rand, uat3: c.uat3, id_parcela: p.id_parcela, parcela_id: p.id, nume_normalizat: c.nume_normalizat, contact: c.contact, motiv: MOTIV_DEJA }); continue }
-    if (alese.has(k)) { coliziuni.push({ rand: c.rand, rand_ales: alese.get(k), uat3: c.uat3, id_parcela: p.id_parcela, motiv: 'aceeași persoană pe aceeași parcelă din alt rând al fișierului (după potrivire)' }); continue }
-    alese.set(k, c.rand)
-    noi.push({ ...c, parcela_id: p.id, id_parcela: p.id_parcela, potrivire })
+    if (alese.has(k)) {
+      const primul = alese.get(k)
+      // r3 (Cop r2 P2-01): contacte diferite pentru aceeași persoană → nu se alege automat; ambele rânduri ies din import, de verificat
+      const diferit = JSON.stringify(primul.contact) !== JSON.stringify(c.contact)
+      coliziuni.push({ rand: c.rand, rand_ales: primul.rand, uat3: c.uat3, id_parcela: p.id_parcela, motiv: diferit ? 'aceeași persoană pe aceeași parcelă, cu adrese diferite — exclusă, de verificat' : 'aceeași persoană pe aceeași parcelă din alt rând al fișierului (după potrivire)' })
+      if (diferit) primul.exclus = true
+      continue
+    }
+    const nou = { ...c, parcela_id: p.id, id_parcela: p.id_parcela, potrivire }
+    alese.set(k, nou)
+    noi.push(nou)
   }
+  for (let x = noi.length - 1; x >= 0; x--) if (noi[x].exclus) noi.splice(x, 1)
   const persoane = new Set(noi.map(n => n.nume_normalizat))
   return { noi, deja_detinatori: deja, parcela_negasita: negasite, coliziuni,
     statistici: { candidati: candidati.length, noi: noi.length, persoane_noi: persoane.size, deja_detinatori: deja.length, parcela_negasita: negasite.length,
@@ -114,16 +123,20 @@ function verifica(rezultat, ce) {
   return rezultat?.data ?? null
 }
 // r2 (Jak P2-4): paginare keyset pe id până la pagina GOALĂ — o limită de server mai mică decât pagina cerută nu mai taie tacit rezultatul
-async function citesteTot(construieste, ce, pagina) {
+// r3 (Jak r2 P1 / Cop r2 P1-01): coloana cursorului e parametru (red_detinatori_contact NU are `id`: cheia e detinator_id); cursorul trebuie să
+// existe în proiecție și să avanseze strict, altfel eroare (nu buclă)
+async function citesteTot(construieste, ce, pagina, cursor = 'id') {
   const tot = []
   let ultim = null
   for (;;) {
     let q = construieste()
-    if (ultim != null) q = q.gt('id', ultim)
-    const data = verifica(await q.order('id').limit(pagina), ce) || []
+    if (ultim != null) q = q.gt(cursor, ultim)
+    const data = verifica(await q.order(cursor).limit(pagina), ce) || []
     if (!data.length) break
+    const nou = data[data.length - 1][cursor]
+    if (nou == null || (ultim != null && !(String(nou) > String(ultim)))) throw new Error(`${ce}: cursorul „${cursor}” lipsește din rezultat sau nu avansează`)
     tot.push(...data)
-    ultim = data[data.length - 1].id
+    ultim = nou
   }
   return tot
 }
@@ -144,14 +157,22 @@ export async function citesteDatePlan(supabase, proiectId, { pagina = PAGINA, lo
  * Recitește deținătorii parcelelor țintă imediat înainte de scriere (alt import / altă fereastră între timp → sare, nu dublează).
  * Oprit cât IMPORT_UTILIZATORI_ACTIV = false (vezi antetul); `permite: true` doar în teste.
  */
-export async function scrieUtilizatori(supabase, plan, { proiectId, versiune, fisierNume = null, permite = IMPORT_UTILIZATORI_ACTIV, pagina = PAGINA, lotCitire = LOT_CITIRE } = {}) {
+export async function scrieUtilizatori(supabase, plan, optiuni = {}) {
+  // r3 (Cop r2 P2-03): API-ul productiv NU poate ocoli poarta; doar __scrieUtilizatoriTest (teste) primește `permite`
+  return scrie(supabase, plan, { ...optiuni, permite: IMPORT_UTILIZATORI_ACTIV })
+}
+export const __scrieUtilizatoriTest = (supabase, plan, optiuni = {}) => scrie(supabase, plan, optiuni)
+
+async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, permite = false, pagina = PAGINA, lotCitire = LOT_CITIRE } = {}) {
   if (!permite) throw new Error('Importul utilizatorilor e oprit până la convocatorul pentru utilizatori (PR3, docs/redari/PLAN_UTILIZATORI.md)')
   if (!proiectId) throw new Error('scrieUtilizatori: proiectId lipsă')
   if (!String(versiune || '').trim()) throw new Error('scrieUtilizatori: versiunea listei e obligatorie')
   const noi = plan?.noi ?? []
   const lot = verifica(await supabase.from('red_import_loturi').insert({
     proiect_id: proiectId, versiune_lista_tgz: versiune, sursa: SURSA_UTILIZATORI, fisier_nume: fisierNume, stare: 'in_curs',
-    randuri_total: plan?.statistici?.candidati ?? noi.length, parcele_noi: 0, detinatori_noi: 0, dubluri: plan?.deja_detinatori?.length ?? 0, neidentificati: 0,
+    randuri_total: plan?.statistici?.candidati ?? noi.length, parcele_noi: 0, detinatori_noi: 0,
+    // r3 (Cop r2 P2-02): dubluri = coliziunile din fișier; neidentificati = rândurile fără parcelă; „deja deținători” stă în diferente
+    dubluri: plan?.coliziuni?.length ?? 0, neidentificati: plan?.parcela_negasita?.length ?? 0,
     // fără date de contact în lot (deja_detinatori poartă contactul candidatului pentru reparare)
     diferente: { deja_detinatori: (plan?.deja_detinatori ?? []).map(({ contact, nume_normalizat, ...d }) => d), parcela_negasita: plan?.parcela_negasita ?? [], coliziuni: plan?.coliziuni ?? [], contacte_noi: 0 },
   }).select('id').single(), 'creare lot import utilizatori')
@@ -160,7 +181,7 @@ export async function scrieUtilizatori(supabase, plan, { proiectId, versiune, fi
   const actualizeaza = async (v, ce) => verifica(await supabase.from('red_import_loturi').update(v).eq('id', lotId), ce)
   try {
     // recitire proaspătă: cine e deja pe parcelele țintă (cu sursa, ca să recunoaștem rândurile scrise de un import anterior al acestui fișier)
-    const tinte = [...noi, ...(plan?.deja_detinatori ?? []).filter(d => d.parcela_id)]
+    const tinte = [...noi, ...(plan?.deja_detinatori ?? []).filter(d => d.parcela_id)]   // (contactele: și pentru rândurile scrise la o rulare anterioară)
     const ids = [...new Set(tinte.map(n => n.parcela_id))]
     const existenti = new Map()
     for (const lotI of loturi(ids, lotCitire)) {
@@ -168,11 +189,24 @@ export async function scrieUtilizatori(supabase, plan, { proiectId, versiune, fi
         existenti.set(`${d.parcela_id}|${d.nume_normalizat}`, d)
       }
     }
-    const deScris = noi.filter(n => !existenti.has(`${n.parcela_id}|${n.nume_normalizat}`))
-    const sarite = noi.length - deScris.length
+    // r3 (Cop r2 P1-02): parcelele țintă se reverifică ACUM — active, din proiect; potrivirile pe HG: HG-ul e tot unic în UAT. Orice neconcordanță → rândul
+    // NU se scrie (raportat). Fereastra rămasă (schimbare între această citire și INSERT) e acoperită de indexul unic pe (parcela_id, nume) doar pentru dubluri.
+    const acum = await citesteDatePlan(supabase, proiectId, { pagina, lotCitire })
+    const parcelaAcum = new Map(acum.parcele.map(p => [p.id, p]))
+    const hgAcum = new Map()
+    for (const p of acum.parcele) if (p.uat3 && p.poz_hg != null && String(p.poz_hg).trim() !== '') { const k = `${p.uat3}|${normalizeazaNume(p.poz_hg)}`; hgAcum.set(k, (hgAcum.get(k) || 0) + 1) }
+    const schimbate = []
+    const valide = noi.filter(n => {
+      const p = parcelaAcum.get(n.parcela_id)
+      const ok = p && (n.potrivire !== 'hg' || hgAcum.get(`${n.uat3}|${n.poz_hg}`) === 1) && (n.potrivire !== 'cheie' || p.cheie_sursa === n.cheie_sursa)
+      if (!ok) schimbate.push({ rand: n.rand, uat3: n.uat3, id_parcela: n.id_parcela, motiv: 'parcela s-a schimbat între plan și scriere (ștearsă / altă cheie / HG nu mai e unic) — nescris' })
+      return ok
+    })
+    const deScris = valide.filter(n => !existenti.has(`${n.parcela_id}|${n.nume_normalizat}`))
+    const sarite = valide.length - deScris.length
     let detinatoriNoi = 0, contacteNoi = 0
     const diferente = () => ({ deja_detinatori: (plan?.deja_detinatori ?? []).map(({ contact, nume_normalizat, ...d }) => d), parcela_negasita: plan?.parcela_negasita ?? [],
-      coliziuni: plan?.coliziuni ?? [], contacte_noi: contacteNoi })
+      coliziuni: plan?.coliziuni ?? [], schimbate_la_scriere: schimbate, contacte_noi: contacteNoi })
     for (const bucata of loturi(deScris)) {
       const randuri = bucata.map(n => ({ parcela_id: n.parcela_id, nume: n.nume, nume_normalizat: n.nume_normalizat, calitate: CALITATE_UTILIZATOR,
         cota: null, decedat: false, sursa_date: `${SURSA_UTILIZATORI}: TGZ Despăgubiri LOT 1 – date de contact utilizatori (col. 24–26), rândul ${n.rand}`, versiune_lista_tgz: versiune }))
@@ -190,7 +224,7 @@ export async function scrieUtilizatori(supabase, plan, { proiectId, versiune, fi
     const candidatiContact = tinte.map(n => ({ n, d: existenti.get(`${n.parcela_id}|${n.nume_normalizat}`) })).filter(x => alAcestuiImport(x.d))
     const auContact = new Set()
     for (const lotI of loturi([...new Set(candidatiContact.map(x => x.d.id))], lotCitire)) {
-      for (const c of await citesteTot(() => supabase.from('red_detinatori_contact').select('detinator_id').in('detinator_id', lotI), 'citire contacte', pagina)) auContact.add(c.detinator_id)
+      for (const c of await citesteTot(() => supabase.from('red_detinatori_contact').select('detinator_id').in('detinator_id', lotI), 'citire contacte', pagina, 'detinator_id')) auContact.add(c.detinator_id)
     }
     const contacteDeScris = []; const vazut = new Set()
     for (const { n, d } of candidatiContact) { if (!auContact.has(d.id) && !vazut.has(d.id) && n.contact) { vazut.add(d.id); contacteDeScris.push({ detinator_id: d.id, ...n.contact }) } }
@@ -202,7 +236,7 @@ export async function scrieUtilizatori(supabase, plan, { proiectId, versiune, fi
     const lipsaContact = candidatiContact.filter(x => !auContact.has(x.d.id) && !vazut.has(x.d.id)).length
     await actualizeaza({ stare: 'finalizat', eroare: null, detinatori_noi: detinatoriNoi,
       diferente: { ...diferente(), sarite_la_scriere: sarite, contacte_reparate: contacteDeScris.filter(c => !deScris.some(n => existenti.get(`${n.parcela_id}|${n.nume_normalizat}`)?.id === c.detinator_id)).length, fara_contact: lipsaContact } }, 'finalizare lot')
-    return { lotId, detinatoriNoi, contacteNoi, sarite }
+    return { lotId, detinatoriNoi, contacteNoi, sarite, schimbate: schimbate.length }
   } catch (e) {
     // ca în scrieImport: eroarea de la marcarea „esuat” nu se înghite — rămâne pe eroarea originală (e.lotNeinchis), lotul fiind încă in_curs
     try { await actualizeaza({ stare: 'esuat', eroare: String(e?.message || e).slice(0, 500) }, 'marcare lot eșuat') } catch (e2) { if (e && typeof e === 'object') e.lotNeinchis = String(e2?.message || e2) }

@@ -1,7 +1,7 @@
 // Redări PR4 (juridic#040): importul utilizatorilor / arendașilor — citire, plan, scriere (client fals). Date fictive, fără PII.
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx-js-style'
-import { parseazaUtilizatori, planUtilizatori, scrieUtilizatori, telefonValid, IMPORT_UTILIZATORI_ACTIV, CALITATE_UTILIZATOR, SURSA_UTILIZATORI, COL } from './importUtilizatori.js'
+import { parseazaUtilizatori, planUtilizatori, scrieUtilizatori, __scrieUtilizatoriTest, telefonValid, IMPORT_UTILIZATORI_ACTIV, CALITATE_UTILIZATOR, SURSA_UTILIZATORI, COL } from './importUtilizatori.js'
 
 const UATS = [{ id: 'u1', nume: 'Husnicioara', uat3: 'HUS' }, { id: 'u2', nume: 'Bâlvănești', uat3: 'BAL' }]
 // un rând de date: 27 de coloane, completate doar cele folosite
@@ -82,19 +82,30 @@ describe('planUtilizatori', () => {
 })
 
 // client Supabase fals: inserturi / update-uri / citiri keyset (.in().is().gt().order().limit()); limitaServer simulează o limită de server
-function clientFals({ existentiDupaPlan = [], esueazaContacte = 0, limitaServer = Infinity, unic = true } = {}) {
-  const tabele = { red_detinatori: [...existentiDupaPlan], red_detinatori_contact: [], red_import_loturi: [] }
+const PARCELE_TEST = [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1', poz_hg: null, sters_la: null, red_uat: { uat3: 'HUS' } }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2', poz_hg: null, sters_la: null, red_uat: { uat3: 'HUS' } }]
+const COLOANE = { red_detinatori_contact: ['detinator_id', 'adresa_strada', 'adresa_sat', 'adresa_comuna', 'adresa_judet', 'cod_postal', 'adresa_cunoscuta', 'telefon', 'email'] }
+function clientFals({ existentiDupaPlan = [], esueazaContacte = 0, limitaServer = Infinity, unic = true, parcele = PARCELE_TEST, contacteExistente = [] } = {}) {
+  const tabele = { red_detinatori: [...existentiDupaPlan], red_detinatori_contact: [...contacteExistente], red_import_loturi: [], red_parcele: parcele.map(p => ({ ...p })) }
   let n = 0, esecuriRamase = esueazaContacte
   const jurnal = { inserturi: [], update: [] }
   const from = (tab) => {
     const q = { _f: [], _lim: Infinity }
-    q.select = () => q; q.order = () => q; q.not = () => q; q.eq = () => q
+    q.select = (cols) => { q._cols = String(cols || '*').split(',').map(c => c.trim().replace(/\(.*$/, '')); return q }
+    q.not = () => q; q.eq = () => q
+    // realist: ordonarea / cursorul pe o coloană inexistentă = eroare ca în PostgREST
+    q.order = (col) => { const cols = COLOANE[tab]; if (cols && !cols.includes(col)) q._err = { code: '42703', message: `column ${tab}.${col} does not exist` }; return q }
     q.in = (col, vals) => { q._f.push(r => vals.includes(r[col])); return q }
     q.is = (col, v) => { q._f.push(r => (r[col] ?? null) === v); return q }
     q.gt = (col, v) => { q._f.push(r => String(r[col]) > String(v)); return q }
-    q.limit = async (k) => ({ data: (tabele[tab] || []).filter(r => q._f.every(f => f(r))).sort((a, b) => String(a.id) < String(b.id) ? -1 : 1).slice(0, Math.min(k, limitaServer)), error: null })
+    q.limit = async (k) => {
+      if (q._err) return { data: null, error: q._err }
+      const cheie = tab === 'red_detinatori_contact' ? 'detinator_id' : 'id'
+      const rows = (tabele[tab] || []).filter(r => q._f.every(f => f(r))).sort((a, b) => String(a[cheie]) < String(b[cheie]) ? -1 : 1).slice(0, Math.min(k, limitaServer))
+      // proiecția: doar coloanele cerute (ca PostgREST); red_uat(uat3) rămâne obiect
+      return { data: rows.map(r => q._cols && !q._cols.includes('*') ? Object.fromEntries(q._cols.map(c => [c, r[c]])) : r), error: null }
+    }
     q.insert = (rows) => {
-      const arr = (Array.isArray(rows) ? rows : [rows]).map(r => ({ id: `${tab}-${String(++n).padStart(4, '0')}`, sters_la: null, ...r }))
+      const arr = (Array.isArray(rows) ? rows : [rows]).map(r => tab === 'red_detinatori_contact' ? { ...r } : ({ id: `${tab}-${String(++n).padStart(4, '0')}`, sters_la: null, ...r }))
       let rez = { data: arr, error: null }
       if (tab === 'red_detinatori_contact' && esecuriRamase > 0) { esecuriRamase--; rez = { data: null, error: { message: 'contact picat' } } }
       else if (tab === 'red_detinatori' && unic && arr.some(a => tabele.red_detinatori.some(d => !d.sters_la && d.parcela_id === a.parcela_id && d.nume_normalizat === a.nume_normalizat))) rez = { data: null, error: { code: '23505', message: 'duplicate key' } }
@@ -115,12 +126,12 @@ describe('scrieUtilizatori', () => {
   it('oprit implicit până la PR3 (IMPORT_UTILIZATORI_ACTIV = false)', async () => {
     expect(IMPORT_UTILIZATORI_ACTIV).toBe(false)
     const { supabase, jurnal } = clientFals()
-    await expect(scrieUtilizatori(supabase, plan, { proiectId: 'pr', versiune: 'v' })).rejects.toThrow(/oprit/)
+    await expect(__scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v' })).rejects.toThrow(/oprit/)
     expect(jurnal.inserturi).toEqual([])
   })
   it('scrie utilizatorii (calitate utilizator) + contactele, lot finalizat; cine a apărut între timp pe parcelă e sărit', async () => {
     const { supabase, tabele } = clientFals({ existentiDupaPlan: [{ id: 'd0', parcela_id: 'p2', nume_normalizat: 'B (FICTIV)', sters_la: null }] })
-    const r = await scrieUtilizatori(supabase, plan, { proiectId: 'pr', versiune: 'TGZ 13.07.2026 utilizatori', permite: true })
+    const r = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'TGZ 13.07.2026 utilizatori', permite: true })
     expect(r).toMatchObject({ detinatoriNoi: 1, contacteNoi: 1, sarite: 1 })
     const nou = tabele.red_detinatori.find(d => d.nume_normalizat === 'A (FICTIV)')
     expect(nou).toMatchObject({ parcela_id: 'p1', calitate: CALITATE_UTILIZATOR, versiune_lista_tgz: 'TGZ 13.07.2026 utilizatori' })
@@ -131,51 +142,79 @@ describe('scrieUtilizatori', () => {
   })
   it('eroare la contacte → lot „esuat”, eroarea originală urcă, cu lotId; deținătorii scriși apar în lot', async () => {
     const { supabase, tabele } = clientFals({ esueazaContacte: 1 })
-    const e = await scrieUtilizatori(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true }).catch(x => x)
+    const e = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true }).catch(x => x)
     expect(e.message).toMatch(/contact picat/)
     expect(e.lotId).toBe(tabele.red_import_loturi[0].id)
     expect(tabele.red_import_loturi[0]).toMatchObject({ stare: 'esuat', detinatori_noi: 2 })
   })
   it('r2 (Jak P1-2): reluarea după un import întrerupt completează contactele lipsă ale utilizatorilor scriși de acest import', async () => {
     const { supabase, tabele } = clientFals({ esueazaContacte: 1 })
-    await scrieUtilizatori(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true }).catch(() => {})
+    await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true }).catch(() => {})
     expect(tabele.red_detinatori).toHaveLength(2); expect(tabele.red_detinatori_contact).toHaveLength(0)
     // a doua rulare: planul refăcut din BD îi vede ca „deja deținători” — contactele se repară, nimic nu se dublează
     const din = [{ parcela_id: 'p1', nume_normalizat: 'A (FICTIV)' }, { parcela_id: 'p2', nume_normalizat: 'B (FICTIV)' }]
     const plan2 = planUtilizatori(plan.noi.map(({ parcela_id, id_parcela, potrivire, ...c }) => c), { parcele: [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1' }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2' }], detinatori: din })
     expect(plan2.noi).toHaveLength(0); expect(plan2.deja_detinatori).toHaveLength(2)
-    const r = await scrieUtilizatori(supabase, plan2, { proiectId: 'pr', versiune: 'v', permite: true })
+    const r = await __scrieUtilizatoriTest(supabase, plan2, { proiectId: 'pr', versiune: 'v', permite: true })
     expect(r).toMatchObject({ detinatoriNoi: 0, contacteNoi: 2 })
     expect(tabele.red_detinatori).toHaveLength(2); expect(tabele.red_detinatori_contact).toHaveLength(2)
     // a treia rulare: nimic de făcut
-    expect(await scrieUtilizatori(supabase, plan2, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 0, contacteNoi: 0 })
+    expect(await __scrieUtilizatoriTest(supabase, plan2, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 0, contacteNoi: 0 })
   })
   it('r2: contactul unui proprietar existent (altă sursă) NU se atinge la reluare', async () => {
     const { supabase, tabele } = clientFals({ existentiDupaPlan: [{ id: 'd0', parcela_id: 'p1', nume_normalizat: 'A (FICTIV)', calitate: 'proprietar', sursa_date: 'TGZ', sters_la: null }] })
     const plan3 = planUtilizatori(plan.noi.map(({ parcela_id, id_parcela, potrivire, ...c }) => c), { parcele: [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1' }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2' }], detinatori: [{ parcela_id: 'p1', nume_normalizat: 'A (FICTIV)' }] })
-    await scrieUtilizatori(supabase, plan3, { proiectId: 'pr', versiune: 'v', permite: true })
+    await __scrieUtilizatoriTest(supabase, plan3, { proiectId: 'pr', versiune: 'v', permite: true })
     expect(tabele.red_detinatori_contact.map(c => c.detinator_id)).not.toContain('d0')
   })
   it('r2: conflict UNIQUE (alt import în paralel) → mesaj clar de reluare', async () => {
     const { supabase, tabele } = clientFals()
     tabele.red_detinatori.push({ id: 'zz', parcela_id: 'p1', nume_normalizat: 'A (FICTIV)', sters_la: null, ascuns: true })
-    // recitirea îl vede și îl sare; forțăm cursa scoțându-l din recitire printr-un filtru: simulăm apariția lui DUPĂ recitire
+    // rândul „ascuns” e scris de alt import după toate citirile noastre: recitirile nu-l văd, INSERT-ul lovește indexul unic
     const plan4 = { ...plan }
     const orig = supabase.from
     let citiri = 0
-    supabase.from = (tab) => { const q = orig(tab); if (tab === 'red_detinatori') { const lim = q.limit; q.limit = async (k) => { citiri++; const r = await lim(k); return citiri === 1 ? { ...r, data: r.data.filter(d => !d.ascuns) } : r } } return q }
-    const e = await scrieUtilizatori(supabase, plan4, { proiectId: 'pr', versiune: 'v', permite: true }).catch(x => x)
+    supabase.from = (tab) => { const q = orig(tab); if (tab === 'red_detinatori') { const lim = q.limit; q.limit = async (k) => { citiri++; const r = await lim(k); return { ...r, data: (r.data || []).filter(d => d.id !== 'zz' && !(d.parcela_id === 'p1' && d.nume_normalizat === 'A (FICTIV)' && !d.calitate)) } } } return q }
+    const e = await __scrieUtilizatoriTest(supabase, plan4, { proiectId: 'pr', versiune: 'v', permite: true }).catch(x => x)
     expect(e.message).toMatch(/alt import a scris între timp/)
+  })
+  it('r3 (Jak r2 P1): reluarea cu un contact deja salvat — contactele (fără id) se citesc pe detinator_id, fără buclă, limită server 1', async () => {
+    const { supabase, tabele } = clientFals({ esueazaContacte: 0, limitaServer: 1 })
+    await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true })
+    expect(tabele.red_detinatori_contact).toHaveLength(2)
+    expect(tabele.red_detinatori_contact.every(c => !('id' in c))).toBe(true)
+    const din = [{ parcela_id: 'p1', nume_normalizat: 'A (FICTIV)' }, { parcela_id: 'p2', nume_normalizat: 'B (FICTIV)' }]
+    const plan2 = planUtilizatori(plan.noi.map(({ parcela_id, id_parcela, potrivire, ...c }) => c), { parcele: [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1' }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2' }], detinatori: din })
+    expect(await __scrieUtilizatoriTest(supabase, plan2, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 0, contacteNoi: 0 })
+    expect(tabele.red_detinatori_contact).toHaveLength(2)
+  })
+  it('r3 (Cop r2 P1-02): parcela ștearsă / HG ne-unic între plan și scriere → rândul nu se scrie, raportat', async () => {
+    const parcele = [{ ...PARCELE_TEST[0], sters_la: '2026-11-05' }, PARCELE_TEST[1]]
+    const { supabase, tabele } = clientFals({ parcele })
+    const r = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true })
+    expect(r).toMatchObject({ detinatoriNoi: 1, schimbate: 1 })
+    expect(tabele.red_detinatori.map(d => d.parcela_id)).toEqual(['p2'])
+    expect(tabele.red_import_loturi[0].diferente.schimbate_la_scriere).toMatchObject([{ rand: 4 }])
+    const planHg = { ...plan, noi: [{ ...plan.noi[1], potrivire: 'hg', poz_hg: '9', uat3: 'HUS' }] }
+    const p2 = [PARCELE_TEST[0], { ...PARCELE_TEST[1], poz_hg: '9' }, { id: 'p9', cheie_sursa: null, id_parcela: 'X9', poz_hg: '9', sters_la: null, red_uat: { uat3: 'HUS' } }]
+    const c2 = clientFals({ parcele: p2 })
+    expect(await __scrieUtilizatoriTest(c2.supabase, planHg, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 0, schimbate: 1 })
+  })
+  it('r3 (Cop r2 P2-01): aceeași persoană pe aceeași parcelă cu adrese diferite → ambele rânduri excluse, raportate', () => {
+    const c = [{ rand: 20, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S1', adresa_cunoscuta: true, telefon: null } },
+               { rand: 21, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S2', adresa_cunoscuta: true, telefon: null } }]
+    const p = planUtilizatori(c, { parcele: [{ id: 'p10', cheie_sursa: 'HUS|50|1|', uat3: 'HUS', poz_hg: '50' }] })
+    expect(p.noi).toEqual([]); expect(p.coliziuni[0].motiv).toMatch(/adrese diferite/)
   })
   it('r2 (Jak P2-4): citirea keyset nu se oprește la o limită de server mai mică decât pagina', async () => {
     const { supabase, tabele } = clientFals({ limitaServer: 1 })
-    const r = await scrieUtilizatori(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true, pagina: 1000 })
+    const r = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true, pagina: 1000 })
     expect(r.detinatoriNoi).toBe(2); expect(tabele.red_detinatori_contact).toHaveLength(2)
   })
   it('fără proiect / versiune → refuz înainte de orice scriere', async () => {
     const { supabase, jurnal } = clientFals()
-    await expect(scrieUtilizatori(supabase, plan, { versiune: 'v', permite: true })).rejects.toThrow(/proiectId/)
-    await expect(scrieUtilizatori(supabase, plan, { proiectId: 'pr', versiune: ' ', permite: true })).rejects.toThrow(/versiunea/)
+    await expect(__scrieUtilizatoriTest(supabase, plan, { versiune: 'v', permite: true })).rejects.toThrow(/proiectId/)
+    await expect(__scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: ' ', permite: true })).rejects.toThrow(/versiunea/)
     expect(jurnal.inserturi).toEqual([])
   })
 })
