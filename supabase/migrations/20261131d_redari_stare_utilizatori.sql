@@ -71,7 +71,7 @@ INSERT INTO pg_temp.pr2_functii VALUES
 -- 20261129d_redari_pv_c.sql
 ('public.fn_red_pv_c_neacoperite(uuid,integer)','ad42b1c7c1e4be49a2ea99a5eca9e3dd','bigint',false,'plpgsql',true,'v',ARRAY['search_path=public, pg_temp','lock_timeout=5s']::text[],ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261130n_redari_pv_utilizatori.sql
-('public.fn_red_pv_calitate_semnatar()','c47235d62aedbf6b3efccba60702b95b','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres']::text[]),
+('public.fn_red_pv_calitate_semnatar()','1976124ce240eb0f04dec22cf8acd862','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres']::text[]),
 -- 20261129c_redari_pv_stari.sql
 ('public.fn_red_pv_stare_tranzitie()','2d69244951387ad650e2b1ed91a19308','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261126a_redari_teren.sql

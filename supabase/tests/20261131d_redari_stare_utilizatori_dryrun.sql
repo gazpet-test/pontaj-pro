@@ -132,7 +132,7 @@ BEGIN
       v:=public.fn_red_pv_creeaza('A',r.parcela,r.id,NULL);
       UPDATE pr2_det SET pv=v.id WHERE id=r.id;
       IF r.spec->>'pv'='semnat' THEN
-        UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/'||v.id||'.docx',calitate_document=r.spec->>'rol' WHERE id=v.id;
+        UPDATE public.red_procese_verbale SET fisier_generat_path='TEST-PR2-STARE/ZXS/pv/'||v.nr_pv||'_v1_'||(r.spec->>'rol')||'.docx',calitate_document=r.spec->>'rol' WHERE id=v.id;
         UPDATE public.red_procese_verbale SET stare='semnat',fisier_semnat_path='FICTIV/scan.pdf',semnat_primit_data='2026-11-05' WHERE id=v.id;
       ELSIF r.spec->>'pv'='anulat' THEN
         UPDATE public.red_procese_verbale SET stare='anulat',motiv_anulare='FICTIV' WHERE id=v.id;

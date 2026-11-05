@@ -1,6 +1,6 @@
 # PR2 — stare și UI pentru utilizatori / arendași (juridic#040)
 
-Branch: `codex/redari-pr2-stare-ui`, pornit din `9966d45adf5eec61a8b3e777bf497e5da1e9e976` al `codex/redari-pr1-regula-pv` (PR #998, deschis). PR DRAFT către **codex/redari-pr1-regula-pv**, fără merge. Deciziile Răzvan din claude_context #1920 sunt baza regulii. Numai fișiere; fără acces Supabase, aplicare de migrări sau date reale.
+Branch: `codex/redari-pr2-stare-ui`, pornit din `e52e673975a2f39541d5a8cbe873a8a97f573d15` al `codex/redari-pr1-regula-pv` (PR #998, deschis). PR DRAFT către **codex/redari-pr1-regula-pv**, fără merge. Deciziile Răzvan din claude_context #1920 sunt baza regulii. Baza a fost actualizată înainte de publicare la runda 4 a PR1: amprenta triggerului și calea DOCX a fixture-urilor DRY urmează noul contract, fără editarea fișierelor PR1. Numai fișiere; fără acces Supabase, aplicare de migrări sau date reale.
 
 ## Regula și comportamentul
 
