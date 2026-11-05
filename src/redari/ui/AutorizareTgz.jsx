@@ -49,9 +49,13 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
 
   const salveaza = async () => {
     if (!esteOwner || ocupat.current) return
+    // r3 (Jakarinos r2 P2-1): baza CAS se fixează la începutul salvării; dacă proiectul se reîncarcă între timp (baza.current e alt obiect),
+    // salvarea se oprește — numărul, data și fișierul aparțin intenției de la început
+    const b = baza.current
+    const contextSchimbat = () => baza.current !== b
     const nrT = nr.trim()
     if (!nrT || !data) { show('Completează numărul și data autorizării.', 'error'); return }
-    if (!fisier && !baza.current.autorizare_tgz_fisier) { show('Încarcă PDF-ul autorizării.', 'error'); return }
+    if (!fisier && !b.autorizare_tgz_fisier) { show('Încarcă PDF-ul autorizării.', 'error'); return }
     if (fisier && (fisier.type !== 'application/pdf' && !/\.pdf$/i.test(fisier.name))) { show('Autorizarea se încarcă doar ca PDF.', 'error'); return }
     if (fisier && fisier.size > MAX_PDF) { show('PDF-ul are peste 15 MB.', 'error'); return }
     if (!window.confirm(`Salvezi autorizarea Transgaz nr. ${nrT} din ${data}?\n\nCu nr. + dată + PDF, informarea GDPR a proiectului ${proiect.cod} devine PUBLICATĂ: pagina publică arată informarea, iar convocatoarele se pot genera pentru expediere.`)) return
@@ -59,17 +63,18 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
     try {
       const { data: acum, error: ea } = await supabase.from('red_proiecte').select(COL).eq('id', proiect.id).maybeSingle()
       if (ea) throw ea
-      if (autorizareSchimbata(baza.current, acum)) throw new Error('Proiectul sau autorizarea s-au schimbat între timp; reîncarcă pagina și verifică înainte de a salva')
-      let cale = baza.current.autorizare_tgz_fisier
+      if (contextSchimbat() || autorizareSchimbata(b, acum)) throw new Error('Proiectul sau autorizarea s-au schimbat între timp; reîncarcă pagina și verifică înainte de a salva')
+      let cale = b.autorizare_tgz_fisier
       if (fisier) {
         cale = caleAutorizare(proiect.cod, fisier.name)
         const { error: eu } = await supabase.storage.from('redari').upload(cale, fisier, { upsert: false, contentType: 'application/pdf' })
         if (eu) throw eu
+        if (contextSchimbat()) throw new Error('Proiectul s-a reîncărcat în timpul salvării; PDF-ul e urcat, dar autorizarea nu e salvată — verifică și salvează din nou')
       }
       // CAS pe versiunea pe care a văzut-o formularul (nu pe una recitită acum)
       const { data: rez, error } = await supabase.from('red_proiecte')
         .update({ autorizare_tgz_nr: nrT, autorizare_tgz_data: data, autorizare_tgz_fisier: cale })
-        .eq('id', proiect.id).eq('versiune', baza.current.versiune).select(COL)
+        .eq('id', proiect.id).eq('versiune', b.versiune).select(COL)
       if (error) throw error
       if (!rez?.length) throw new Error('Proiectul a fost modificat între timp; reîncarcă pagina și reîncearcă')
       setFisier(null)

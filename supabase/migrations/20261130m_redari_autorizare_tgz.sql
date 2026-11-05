@@ -61,20 +61,25 @@ BEGIN
                     AND p.prorettype = 'uuid'::regtype AND md5(p.prosrc) = 'cdef18c69c4f4cbbced2eaf81e628b49') THEN
     RAISE EXCEPTION '20261130m: auth.uid() nu mai are amprenta revizuita';
   END IF;
-  -- triggerele existente: exact cele revizuite, toate active ('O')
-  IF (SELECT array_agg(t.tgname || ':' || t.tgenabled::text ORDER BY t.tgname COLLATE "C") FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND NOT t.tgisinternal)
-       IS DISTINCT FROM ARRAY['trg_red_jurnal:O', 'trg_red_proiecte_retentie_mail:O', 'trg_red_versiune:O']::text[] THEN
+  -- r3 (Jakarinos r2 P2-2, L15): triggerele existente pe red_proiecte / red_convocari / storage.objects = exact cele revizuite
+  -- (nume, activare, tip, functie, conditie WHEN); baseline citit read-only pe live 05.11.2026
+  IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text || '|' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), ''), E'\n' ORDER BY t.tgname))
+        FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND NOT t.tgisinternal) IS DISTINCT FROM '7c38249f4202bd6ce16605a394565d97' THEN
     RAISE EXCEPTION '20261130m: triggerele de pe red_proiecte nu sunt cele revizuite';
   END IF;
-  IF (SELECT array_agg(t.tgname || ':' || t.tgenabled::text ORDER BY t.tgname COLLATE "C") FROM pg_trigger t WHERE t.tgrelid = 'public.red_convocari'::regclass AND NOT t.tgisinternal)
-       IS DISTINCT FROM ARRAY['trg_red_convocari_garda_rezerva:O', 'trg_red_convocari_posta_garda:O', 'trg_red_jurnal:O', 'trg_red_legaturi:O']::text[] THEN
+  IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text || '|' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), ''), E'\n' ORDER BY t.tgname))
+        FROM pg_trigger t WHERE t.tgrelid = 'public.red_convocari'::regclass AND NOT t.tgisinternal) IS DISTINCT FROM '2d4f1baef2ebed5532ab20a98af70b45' THEN
     RAISE EXCEPTION '20261130m: triggerele de pe red_convocari nu sunt cele revizuite';
   END IF;
-  -- politicile storage pe bucket-ul redari (nu se ating; legarea PDF-ului se bazeaza pe owner_id pus de Storage la upload)
-  IF (SELECT md5(string_agg(policyname || '|' || cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''), E'\n' ORDER BY policyname))
-        FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND (qual LIKE '%redari%' OR with_check LIKE '%redari%'))
-       IS DISTINCT FROM 'c165b7304b43059c6a6d2c303e54f555' THEN
-    RAISE EXCEPTION '20261130m: politicile storage pe bucket-ul redari nu sunt cele revizuite';
+  IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text, E'\n' ORDER BY t.tgname))
+        FROM pg_trigger t WHERE t.tgrelid = 'storage.objects'::regclass AND NOT t.tgisinternal) IS DISTINCT FROM '5affd4b1d5b2be31d40fe6c81fabac52' THEN
+    RAISE EXCEPTION '20261130m: triggerele de pe storage.objects nu sunt cele revizuite';
+  END IF;
+  -- r3 (Jakarinos r2 P2-2): TOATE politicile de pe storage.objects (nu doar cele care pomenesc bucket-ul): o politica globala permisiva ar
+  -- acoperi si obiectele autorizarii. Legarea PDF-ului se bazeaza pe owner_id pus de Storage la upload si pe id-ul obiectului.
+  IF (SELECT md5(string_agg(policyname || '|' || permissive || '|' || cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''), E'\n' ORDER BY policyname))
+        FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects') IS DISTINCT FROM '8fa9339261517543c8a20f97ea4d751b' THEN
+    RAISE EXCEPTION '20261130m: politicile de pe storage.objects nu sunt cele revizuite (132 politici, baseline 05.11.2026)';
   END IF;
 END $pre$;
 
