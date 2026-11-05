@@ -6,8 +6,11 @@
 -- nu se completează certificarea până la eliminarea lor sau inventarierea explicită.
 CREATE FUNCTION pg_temp.f2_preflight() RETURNS void LANGUAGE plpgsql AS $gate$
 DECLARE
-  -- PLACEHOLDER_LIVE: singurul bloc de constante de completat înainte de DRY.
-  baseline constant jsonb := '{"functii":"PLACEHOLDER_LIVE","relatii":"PLACEHOLDER_LIVE","triggere":"PLACEHOLDER_LIVE","revizie_callee":"PLACEHOLDER_LIVE"}';
+  -- Baseline live citit 05.11.2026 (Claude, READ ONLY REPEATABLE READ, exact interogările de mai jos). Revizie callee: funcțiile
+  -- din inventar + toate triggerele de pe red_convocari/red_proiecte/red_mail_setari/red_mail_evenimente/red_jurnal/red_numere/
+  -- red_detinatori(_contact): fără EXECUTE dinamic, search_path fix, apeluri doar public/auth; singurul callee extern
+  -- (extensions.gen_random_bytes în fn_red_detinatori_token_dupa) stă pe red_detinatori, pe care migrarea NU o scrie.
+  baseline constant jsonb := '{"functii":"521ee4e08a2f5f9daf71c54933608f46","relatii":"504a337c3058e111413d90e4f6720ec1","triggere":"464c264f4d6d6f9555c254448ec81452","revizie_callee":"revizuit_fara_dynamic_sau_callee_externe"}';
   r record; obiecte jsonb;
 BEGIN
   FOR r IN SELECT * FROM (VALUES
