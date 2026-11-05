@@ -1,4 +1,5 @@
--- Baseline 30l/30m preluat din fisierele revizuite din repo, NU recitit live in aceasta sesiune.
+-- R6: baseline productie PG 17.6 (inclusiv 30j), apoi #998 / 30n si #1003 / 31d; NU recitit live.
+-- ORDINE: #998 -> #1003 -> #1002 (31c) -> #1004 -> #1000. 31d numara coloanele convocarilor INAINTE de calitate_document.
 -- PR3a juridic#040. DOAR FISIERE, NEAPLICATA. Niciun sablon / import / date reale.
 -- Runner: BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261131c_redari_poarta_utilizatori:' || txid_current(), true);
 -- apoi acest fisier; COMMIT (sau DRY + ROLLBACK). Garda cu txid interzice pornirea accidentala.
@@ -41,7 +42,7 @@ BEGIN
   -- owner, md5(corp), ACL (sortat). Baseline citit read-only pe live 04.11.2026. Orice schimbare = refuz + review.
   IF (SELECT string_agg(f, ';' ORDER BY f COLLATE "C") FROM (
         SELECT p.oid::regprocedure::text || '|' || l.lanname || '|' || p.prosecdef::text || '|' || p.provolatile::text || '|' || coalesce(p.proconfig::text, '') || '|'
-               || pg_get_userbyid(p.proowner) || '|' || md5(p.prosrc) || '|' || coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(p.proacl::text[]) a)::text, '') AS f
+               || pg_get_userbyid(p.proowner) || '|' || md5(replace(p.prosrc, chr(13), '')) || '|' || coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(p.proacl::text[]) a)::text, '') AS f
           FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
          WHERE p.oid IN (to_regprocedure('public.fn_red_nivel()'), to_regprocedure('public.fn_red_numar_document(text,text,integer)'),
                          to_regprocedure('public.fn_red_plic_garda_persoana(uuid)'), to_regprocedure('public.fn_red_plic_incearca_lock_detinator(uuid)'),
@@ -56,7 +57,7 @@ BEGIN
     || 'fn_red_cheie_calc(text,text,text,text,text,text,boolean)|sql|true|s|{"search_path=public, pg_temp"}|postgres|826d79dd53dc47c14410ed8ce0a6ce12|{postgres=X/postgres,service_role=X/postgres};'
     || 'fn_red_cheie_persoana(uuid)|sql|true|s|{"search_path=public, pg_temp"}|postgres|2d2a98bf9d8747668718c5a7eb6404e7|{postgres=X/postgres,service_role=X/postgres};'
     || 'fn_red_convocari_posta_garda()|plpgsql|false|v|{"search_path=public, pg_temp"}|postgres|27f9e3fd61880e97cb43fc7599536ed3|{postgres=X/postgres,service_role=X/postgres};'
-    || 'fn_red_jurnal()|plpgsql|true|v|{"search_path=public, pg_temp"}|postgres|27479409c823996f436459089945c789|{postgres=X/postgres};'
+    || 'fn_red_jurnal()|plpgsql|true|v|{"search_path=public, pg_temp"}|postgres|41ab451b7fcb499a2284c9c82367069e|{postgres=X/postgres};'
     || 'fn_red_legaturi()|plpgsql|true|v|{"search_path=public, pg_temp"}|postgres|d1912ec6514cba162babea3bcebdfb24|{postgres=X/postgres};'
     || 'fn_red_nivel()|sql|true|s|{"search_path=public, pg_temp"}|postgres|21db8e5d4b69b7f19e571a7087c361ae|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres};'
     || 'fn_red_numar_document(text,text,integer)|plpgsql|true|v|{"search_path=public, pg_temp"}|postgres|002a8dbb14f9a69db48d0b4c0428fef0|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres};'
@@ -108,6 +109,7 @@ BEGIN
     || 'red_uat.red_uat_upd|w|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)' THEN
     RAISE EXCEPTION '20261131c_redari_poarta_utilizatori: politicile RLS pe tabelele atinse nu sunt cele revizuite';
   END IF;
+  -- PG 17.6: ACL-ul postgres pe TABELE include MAINTAIN (m); vederile de mai jos nu au m.
   -- drepturile pe tabele (relacl) și pe coloanele red_parcele citite / blocate de RPC (attacl) — exact ca baseline-ul
   IF (SELECT string_agg(f, ';' ORDER BY f COLLATE "C") FROM (
         SELECT c.relname || '|' || coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)::text, '') AS f
@@ -144,11 +146,13 @@ BEGIN
     ('fn_red_autorizare_tgz_garda()', 'ebcee139e54a3267dbc1cb5add595c57', 'plpgsql', true, 'v', '{postgres=X/postgres,service_role=X/postgres}'),
     ('fn_red_versiune_creste()', 'e7ab9318de671f0a94c678ee382250db', 'plpgsql', false, 'v', '{postgres=X/postgres,service_role=X/postgres}'),
     ('fn_red_mail_proiect_retentie()', '1aff1430b7f87e43275f52306e7dfcfd', 'plpgsql', true, 'v', '{postgres=X/postgres}'),
+    ('fn_red_adresa_cunoscuta(uuid)', '55cb31fc3f291cb27bea16a2b9291146', 'sql', true, 's', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+    ('fn_red_parcela_acoperita_a(uuid)', 'b932aaf307761d3c504608a30c117bca', 'sql', false, 's', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
     ('fn_sms_e_owner()', '4ea29d605a2a8b491594f9d43da7385c', 'sql', true, 's', '{authenticated=X/postgres,postgres=X/postgres}')
   ) AS b(sig, hash, limbaj, definer, volatilitate, acl)
   LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.sig)
   LEFT JOIN pg_language g ON g.oid = p.prolang
-  WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
+  WHERE p.oid IS NULL OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
     OR p.prosecdef IS DISTINCT FROM b.definer OR p.provolatile::text IS DISTINCT FROM b.volatilitate
     OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'
     OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
@@ -167,7 +171,7 @@ BEGIN
   ) b(sig, hash, limbaj, definer, volatilitate, acl, config)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.sig)
     LEFT JOIN pg_language g ON g.oid = p.prolang
-  WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
+  WHERE p.oid IS NULL OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
     OR p.prosecdef IS DISTINCT FROM b.definer OR p.provolatile::text IS DISTINCT FROM b.volatilitate
     OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres' OR p.proconfig IS DISTINCT FROM b.config
     OR coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(p.proacl::text[]) a)::text, '') IS DISTINCT FROM b.acl) THEN
@@ -217,6 +221,93 @@ BEGIN
         FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects') IS DISTINCT FROM '8fa9339261517543c8a20f97ea4d751b' THEN
     RAISE EXCEPTION '20261130m: politicile de pe storage.objects nu sunt cele revizuite (132 politici, baseline 05.11.2026)';
   END IF;
+  -- R6: preconditia #998 -> #1003 este verificata, nu doar documentata. Baseline textual din 31d (#1003).
+  -- Clientul lotului citeste red_v_stare_parcela; centralizatorul pereche confirma aceeasi felie 31d.
+  -- CREATE TEMP VIEW static (fara EXECUTE), apoi comparatie canonica PG + owner/ACL/security_invoker; nu citim/modificam date.
+  CREATE TEMP VIEW pg_temp.pr3a_stare_31d_asteptat WITH (security_invoker = on) AS
+  SELECT p.id AS parcela_id, d.id AS detinator_id, p.proiect_id, p.uat_id, u.uat3, u.nume AS uat_nume, p.id_parcela, p.tronson,
+         d.nume, d.calitate, d.cota, d.decedat, c.adresa_cunoscuta,
+         CASE WHEN a.stare IS DISTINCT FROM 'semnat' AND ac.acoperita_a THEN 'PV_A_ACOPERIT_PARCELA' ELSE CASE o.stare_ordine
+           WHEN 1 THEN 'PV_A_SEMNAT' WHEN 2 THEN 'PV_B_CONSTATARE' WHEN 3 THEN 'PV_TRIMIS_SPRE_SEMNARE' WHEN 4 THEN 'OBIECTII_DE_TRATAT'
+           WHEN 5 THEN 'A_RASPUNS_FARA_OBIECTII' WHEN 6 THEN 'A_RASPUNS_PARTICIPA' WHEN 7 THEN 'CONVOCARE_RETURNATA' WHEN 8 THEN 'CONVOCAT_FARA_RASPUNS'
+           WHEN 9 THEN 'EXPEDIAT_ASTEPTAM_AR' WHEN 10 THEN 'NEIDENTIFICAT_AFISARE' WHEN 11 THEN 'FARA_ADRESA_AFISARE' ELSE 'DE_CONVOCAT' END END AS stare,
+         o.stare_ordine,
+         k.ultima_convocare_data, r.optiune AS ultimul_raspuns_optiune, r.data AS ultimul_raspuns_data,
+         a.nr_pv AS pv_nr, a.stare AS pv_stare
+    FROM public.red_parcele p
+    JOIN public.red_detinatori d ON d.parcela_id = p.id AND d.sters_la IS NULL
+    JOIN public.red_uat u ON u.id = p.uat_id
+    LEFT JOIN public.red_detinatori_contact c ON c.detinator_id = d.id
+    LEFT JOIN LATERAL (
+      SELECT pv.nr_pv, pv.stare FROM public.red_procese_verbale pv
+       WHERE pv.detinator_id = d.id AND pv.tip = 'A' AND pv.sters_la IS NULL AND pv.stare <> 'anulat'
+       ORDER BY CASE pv.stare WHEN 'semnat' THEN 1 WHEN 'trimis_spre_semnare' THEN 2 ELSE 3 END, pv.created_at DESC
+       LIMIT 1) a ON true
+    LEFT JOIN LATERAL (
+      SELECT r1.optiune, r1.data FROM public.red_raspunsuri r1 WHERE r1.detinator_id = d.id
+       ORDER BY r1.data DESC, r1.seq DESC LIMIT 1) r ON true
+    CROSS JOIN LATERAL (
+      SELECT max(cv.data_expediere) AS ultima_convocare_data,
+             -- retur „neacoperit”: nicio convocare activă confirmată la/după data returului (sau a expedierii; fără nicio dată, orice
+             -- confirmare contează) — aceeași regulă ca src/redari/stare.js
+             coalesce(bool_or(cv.retur IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM public.red_convocari c2
+                WHERE c2.detinator_id = d.id AND c2.stare = 'activ' AND c2.sters_la IS NULL AND c2.data_confirmare_primire IS NOT NULL
+                  AND (coalesce(cv.retur_data, cv.data_expediere) IS NULL OR c2.data_confirmare_primire >= coalesce(cv.retur_data, cv.data_expediere)))), false) AS returnata,
+             coalesce(bool_or(cv.data_confirmare_primire IS NOT NULL), false) AS confirmata,
+             coalesce(bool_or(cv.data_expediere IS NOT NULL AND cv.data_confirmare_primire IS NULL AND cv.retur IS NULL), false) AS expediata
+        FROM public.red_convocari cv WHERE cv.detinator_id = d.id AND cv.stare = 'activ' AND cv.sters_la IS NULL) k
+    CROSS JOIN LATERAL (SELECT public.fn_red_parcela_acoperita_a(p.id) AS acoperita_a) ac
+    CROSS JOIN LATERAL (
+      SELECT CASE
+        WHEN a.stare = 'semnat' OR ac.acoperita_a THEN 1
+        WHEN EXISTS (SELECT 1 FROM public.red_procese_verbale pb WHERE pb.parcela_id = p.id AND pb.tip = 'B' AND pb.sters_la IS NULL AND pb.stare <> 'anulat') THEN 2
+        WHEN a.stare = 'trimis_spre_semnare' THEN 3
+        WHEN r.optiune IN ('nu_particip_cu_obiectii', 'constatare_teren') THEN 4
+        WHEN r.optiune = 'nu_particip_fara_obiectii' THEN 5
+        WHEN r.optiune = 'particip' THEN 6
+        WHEN k.returnata THEN 7
+        WHEN k.confirmata THEN 8
+        WHEN k.expediata THEN 9
+        WHEN d.calitate = 'neidentificat' THEN 10
+        WHEN coalesce(public.fn_red_adresa_cunoscuta(d.id), false) = false THEN 11
+        ELSE 12 END AS stare_ordine) o
+   WHERE p.sters_la IS NULL;
+  IF pg_get_viewdef(to_regclass('public.red_v_stare_parcela'), true) IS DISTINCT FROM pg_get_viewdef('pg_temp.pr3a_stare_31d_asteptat'::regclass, true)
+    OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.red_v_stare_parcela') AND c.relkind = 'v'
+      AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
+      AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
+        = ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres']::text[])
+    OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_stare_parcela') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '31c: prerechizit #1003 / 31d - red_v_stare_parcela difera (corp/owner/ACL/security_invoker)';
+  END IF;
+  DROP VIEW pg_temp.pr3a_stare_31d_asteptat;
+  CREATE TEMP VIEW pg_temp.pr3a_centralizator_31d_asteptat WITH (security_invoker = on) AS
+  WITH parcele AS (
+    SELECT v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.parcela_id,
+      CASE WHEN bool_or(v.stare='PV_A_ACOPERIT_PARCELA') THEN 'PV_A_ACOPERIT_PARCELA'
+           WHEN bool_and(v.stare='PV_A_SEMNAT') THEN 'PV_A_SEMNAT'
+           WHEN bool_or(v.stare='PV_B_CONSTATARE') THEN 'PV_B_CONSTATARE'
+           ELSE (array_agg(v.stare ORDER BY v.stare_ordine DESC, v.stare COLLATE "C"))[1] END AS stare
+    FROM public.red_v_stare_parcela v
+    GROUP BY v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.parcela_id
+  )
+  SELECT v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.stare,
+         count(*)::int AS numar,
+         (sum(count(*)) OVER (PARTITION BY v.uat_id))::int AS total_uat,
+         round(100.0 * coalesce(sum(count(*)) FILTER (WHERE v.stare IN ('PV_A_SEMNAT', 'PV_A_ACOPERIT_PARCELA', 'PV_B_CONSTATARE')) OVER (PARTITION BY v.uat_id), 0)
+               / sum(count(*)) OVER (PARTITION BY v.uat_id), 1) AS procent_inchise
+    FROM parcele v
+   GROUP BY v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.stare;
+  IF pg_get_viewdef(to_regclass('public.red_v_centralizator_uat'), true) IS DISTINCT FROM pg_get_viewdef('pg_temp.pr3a_centralizator_31d_asteptat'::regclass, true)
+    OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.red_v_centralizator_uat') AND c.relkind = 'v'
+      AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
+      AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
+        = ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres']::text[])
+    OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_centralizator_uat') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '31c: prerechizit #1003 / 31d - red_v_centralizator_uat difera (corp/owner/ACL/security_invoker)';
+  END IF;
+  DROP VIEW pg_temp.pr3a_centralizator_31d_asteptat;
 END $pre$;
 
 -- Aceeasi ordine DDL ca 30m; lock inaintea verificarilor de date.
@@ -546,19 +637,19 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure
     AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
-    AND md5(prosrc) = 'bd01044b09be4a2849e3a85831fc22af'
+    AND md5(replace(prosrc, chr(13), '')) = 'bd01044b09be4a2849e3a85831fc22af'
     AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
     RAISE EXCEPTION '31c: RPC / ACL nu sunt cele asteptate';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text,text)'::regprocedure
     AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
-    AND md5(prosrc) = 'dd56a8227b0e9bfab9c7c2ca2ca57b02'
+    AND md5(replace(prosrc, chr(13), '')) = 'dd56a8227b0e9bfab9c7c2ca2ca57b02'
     AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
     RAISE EXCEPTION '31c: RPC calitate asteptata / ACL nu sunt cele asteptate';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_leaga(uuid,text,text,text)'::regprocedure
     AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
-    AND md5(prosrc) = 'e2f2c12a4ec0b23c20a0be4d5ce19075'
+    AND md5(replace(prosrc, chr(13), '')) = 'e2f2c12a4ec0b23c20a0be4d5ce19075'
     AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
     RAISE EXCEPTION '31c: RPC legare / ACL nu sunt cele asteptate';
   END IF;

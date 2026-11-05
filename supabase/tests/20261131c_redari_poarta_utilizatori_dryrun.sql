@@ -1,10 +1,18 @@
--- PR3a DRY — NUMAI pe o clona izolata cu schema completa (30l + 30m + 31c).
--- Nu foloseste identitati/proiecte reale. psql -v ON_ERROR_STOP=1 -f acest_fisier.
--- Tranzactie explicit ANULATA. Nu aplica migrari. La orice eroare runnerul trebuie sa opreasca sesiunea.
-BEGIN;
+-- R6 DRY: numai clona izolata a schemei productie PG 17.6, postgres NOSUPERUSER, fara date reale.
+-- ORDINE: #998 -> #1003 -> #1002 (31c) -> #1004 -> #1000; #998 si #1003 sunt prerechizite ale clonei.
+-- Runner psql -v ON_ERROR_STOP=1, o SINGURA tranzactie, anulata inclusiv pentru aplicarea 31c:
+-- BEGIN;
+-- SELECT set_config('gazpet.livrare_migrare','20261131c_redari_poarta_utilizatori:' || txid_current(), true);
+-- \i supabase/migrations/20261131c_redari_poarta_utilizatori.sql
+-- \i supabase/tests/20261131c_redari_poarta_utilizatori_dryrun.sql
+-- ROLLBACK;
+-- Acest fisier NU deschide/inchide tranzactia si NU aplica 31c; ruleaza DUPA aplicarea sa in aceeasi tranzactie.
 SET LOCAL request.jwt.claims = '';
 DO $g$
 BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261131c_redari_poarta_utilizatori:' || txid_current() THEN
+    RAISE EXCEPTION 'DRY31C cere aplicarea 31c in aceeasi tranzactie armata de runner';
+  END IF;
   IF current_user <> 'postgres' OR (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
     RAISE EXCEPTION 'DRY31C cere postgres NOSUPERUSER, ca in productie';
   END IF;
@@ -31,7 +39,7 @@ BEGIN
   ) b(sig, hash, limbaj, definer, volatilitate, acl, config)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.sig)
     LEFT JOIN pg_language g ON g.oid = p.prolang
-  WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
+  WHERE p.oid IS NULL OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
     OR p.prosecdef IS DISTINCT FROM b.definer OR p.provolatile::text IS DISTINCT FROM b.volatilitate
     OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres' OR p.proconfig IS DISTINCT FROM b.config
     OR coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(p.proacl::text[]) a)::text, '') IS DISTINCT FROM b.acl) THEN
@@ -71,11 +79,17 @@ END $mutant_test$;
 INSERT INTO auth.users (id, email, aud, role) VALUES
   ('31310000-0000-0000-0000-000000000001', 'owner31c@example.invalid', 'authenticated', 'authenticated'),
   ('31310000-0000-0000-0000-000000000002', 'admin31c@example.invalid', 'authenticated', 'authenticated');
--- Compatibil si cu triggerul auth care creeaza deja profiles; sunt exclusiv UUID-urile fictive verificate mai sus.
-INSERT INTO public.profiles (id, email, name, is_owner) VALUES
-  ('31310000-0000-0000-0000-000000000001', 'owner31c@example.invalid', 'OWNER FICTIV 31C', true),
-  ('31310000-0000-0000-0000-000000000002', 'admin31c@example.invalid', 'ADMIN FICTIV 31C', false)
-ON CONFLICT (id) DO UPDATE SET is_owner = EXCLUDED.is_owner;
+-- on_auth_user_created creeaza deja profiles. Nu facem INSERT/fallback care ar ascunde lipsa triggerului.
+DO $profile_fixture$
+BEGIN
+  IF (SELECT count(*) FROM public.profiles WHERE id IN ('31310000-0000-0000-0000-000000000001','31310000-0000-0000-0000-000000000002')) <> 2 THEN
+    RAISE EXCEPTION 'DRY31C: on_auth_user_created nu a creat cele doua profiluri fictive';
+  END IF;
+END $profile_fixture$;
+UPDATE public.profiles SET role = 'manager_santier',
+  name = CASE WHEN id = '31310000-0000-0000-0000-000000000001' THEN 'OWNER FICTIV 31C' ELSE 'ADMIN FICTIV 31C' END,
+  is_owner = (id = '31310000-0000-0000-0000-000000000001')
+  WHERE id IN ('31310000-0000-0000-0000-000000000001','31310000-0000-0000-0000-000000000002');
 INSERT INTO public.user_module_access (profile_id, module, access_level)
   VALUES ('31310000-0000-0000-0000-000000000002', 'redari', 'admin');
 INSERT INTO storage.objects (id, bucket_id, name, owner_id, metadata)
@@ -329,4 +343,4 @@ END $normal$;
 
 RESET ROLE;
 SET LOCAL request.jwt.claims = '';
-ROLLBACK;
+-- ROLLBACK este executat de runner; include aplicarea migrarii si toate fixture-urile.
