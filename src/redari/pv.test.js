@@ -287,7 +287,7 @@ describe('PV B coproprietari - felia 7',()=>{
       expect(referintaPvA({parcela:{id:'p'},pvs:[aSemnat(schimbare)]})).toBe('')
   })
   it('un PV A: numar si data documentului, fara nume',()=>{
-    expect(referintaPvA({parcela:{id:'p'},detinatori:[{id:'d1',nume:'NUME SECRET'}],pvs:[aSemnat()]})).toBe(textReferinta)
+    expect(referintaPvA({parcela:{id:'p'},detinatori:[{id:'d1',nume:'NUME SECRET'},{id:'d2'}],pvs:[aSemnat()]})).toBe(textReferinta)
   })
   it('doua PV A, ordonare stabila, ignora anulate/sterse, compara cu cea mai recenta primire',()=>{
     const d={parcela:{id:'p',verificare_data:'2026-11-15'},pvs:[
@@ -310,9 +310,9 @@ describe('PV B coproprietari - felia 7',()=>{
     expect(detinatoriFaraPvA(d).map(x=>x.id)).toEqual(['d2'])
     expect(verificaDatePvB(d)).toEqual([])
     d.pvs.push(aSemnat({id:'a2',detinator_id:'d2'}))
-    expect(verificaDatePvB(d)).toContain('toti detinatorii au PV A semnat')
+    expect(verificaDatePvB(d)).toContain('parcela acoperita prin PV A semnat')
     d.detinatori=[]
-    expect(verificaDatePvB(d)).not.toContain('toti detinatorii au PV A semnat')
+    expect(verificaDatePvB(d)).not.toContain('parcela acoperita prin PV A semnat')
   })
   it('sablon real: doar absentii, referinta completata, 72 chei consumate',async()=>{
     const d=dateB();d.parcela.id='p';d.pvs=[aSemnat()]
@@ -328,6 +328,6 @@ describe('PV B coproprietari - felia 7',()=>{
     for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name))) expect(await f.async('string')).not.toContain('{{')
     expect(await z.file('word/document.xml').async('string')).toContain(textReferinta)
     d.pvs.push(aSemnat({id:'a2',detinator_id:'d2'}))
-    await expect(genereazaPvB({...d,templateArrayBuffer:sablonB()})).rejects.toThrow('toti detinatorii au PV A semnat')
+    await expect(genereazaPvB({...d,templateArrayBuffer:sablonB()})).rejects.toThrow('parcela acoperita prin PV A semnat')
   })
 })

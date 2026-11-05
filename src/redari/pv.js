@@ -119,7 +119,8 @@ export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinato
 }
 function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const campuri = Object.fromEntries(CHEI_PV_A.map(k => [k, '']))
-  const calitate = ETICHETA_CALITATE[detinator.calitate] ?? detinator.calitate ?? ''
+  const rol = pv.calitate_semnatar ?? detinator.calitate
+  const calitate = ETICHETA_CALITATE[rol] ?? rol ?? ''
   Object.assign(campuri, {
     contract_nr: proiect.contract_nr ?? '', contract_data: formatDataRo(proiect.contract_data),
     proiect_denumire: proiect.denumire ?? '', uat: uat.nume ?? '', nr_pv: pv.nr_pv ?? '',
@@ -178,13 +179,24 @@ export const CHEI_PV_B = [
 function pvsASemnate({ pvs = [], parcela = {} }) {
   return pvs.filter(p => parcela.id != null && p.parcela_id === parcela.id && p.tip === 'A' && p.stare === 'semnat' && p.sters_la == null)
 }
+export const esteUtilizator = calitate => ['utilizator', 'arendas'].includes(calitate)
+// Oglinda fn_red_parcela_acoperita_a; calitatea PV semnat este istorica, fara fallback la rolul actual.
+export function parcelaAcoperitaA({ detinatori = [], ...date }) {
+  const semnate = pvsASemnate(date)
+  if (semnate.some(p => esteUtilizator(p.calitate_semnatar))) return true
+  const proprietari = detinatori.filter(d => d.sters_la == null && !esteUtilizator(d.calitate))
+  const semnatari = new Set(semnate.map(p => p.detinator_id))
+  return proprietari.length > 0 && proprietari.every(d => semnatari.has(d.id))
+}
 export function detinatoriFaraPvA({ detinatori = [], ...date }) {
+  if (parcelaAcoperitaA({detinatori, ...date})) return []
   const semnatari = new Set(pvsASemnate(date).map(p => p.detinator_id))
   return detinatori.filter(d => d.sters_la == null && !semnatari.has(d.id))
 }
 export function referintaPvA(date) {
   const semnate = pvsASemnate(date).slice().sort((a,b) => (a.data_pv ?? '').localeCompare(b.data_pv ?? '') || a.nr_pv.localeCompare(b.nr_pv))
   if (!semnate.length) return ''
+  if (parcelaAcoperitaA(date)) return 'Parcela acoperita prin PV A semnat; PV B nu este necesar.'
   // Calendar dates from DB: compare YYYY-MM-DD without timezone conversion.
   const ultimaData = semnate.map(p => p.semnat_primit_data || p.data_pv).filter(Boolean).sort().at(-1)
   const referinte = semnate.map(p => p.nr_pv + ' din ' + formatDataRo(p.data_pv)).join(', ')
@@ -195,12 +207,20 @@ export function referintaPvA(date) {
 export function verificaDatePvB({ proiect = {}, uat = {}, parcela = {}, pv = {}, detinatori = [], pvs = [] }) {
   const lipsuri = verificaDatePvA({proiect,uat,parcela,pv,detinator:{nume:'B'}})
     .filter(k => k !== 'modul constatarii')
-  if (detinatori.some(d => d.sters_la == null) && !detinatoriFaraPvA({detinatori,pvs,parcela}).length) lipsuri.push('toti detinatorii au PV A semnat')
+  if (parcelaAcoperitaA({detinatori,pvs,parcela})) lipsuri.push('parcela acoperita prin PV A semnat')
   if (!MOTIVE_PV_B.includes(pv.motiv_pv_b)) lipsuri.push('motivul PV B')
   if (!plin(parcela.verificare_data)) lipsuri.push('data verificarii pe teren')
   if (![parcela.verificare_de_gazpet,parcela.verificare_de_tgz].some(plin)) lipsuri.push('comisia de verificare')
   if (!plin(uat.reprezentant_uat_nume)) lipsuri.push('reprezentantul UAT')
   return lipsuri
+}
+export function numeDestinatariPvB(activi) {
+  const nume = lista => lista.map(d => d.nume).filter(plin).join('; ') || 'neidentificat'
+  const utilizatori = activi.filter(d => esteUtilizator(d.calitate))
+  if (!utilizatori.length) return nume(activi)
+  const proprietari = activi.filter(d => !esteUtilizator(d.calitate))
+  return (proprietari.length ? 'Proprietari: ' + nume(proprietari) + '\n' : '') +
+    'Utilizatori / arendasi: ' + nume(utilizatori)
 }
 export async function genereazaPvB(date) {
   const { proiect = {}, uat = {}, parcela = {}, pv = {}, detinatori = [], convocari = [], raspunsuri = [] } = date
@@ -219,7 +239,8 @@ export async function genereazaPvB(date) {
   const raspRel = rel && rel.data_expediere ? ultimulRaspuns(raspunsuri.filter(r => r.detinator_id === rel.detinator_id && r.data >= rel.data_expediere)) : null
   Object.assign(campuri, {
     pv_a_referinta: referintaPvA(date),
-    nume: activi.map(d => d.nume).filter(plin).join('; ') || 'neidentificat',
+    // Pastreaza contractul sablonului: sectiuni distincte in campul multiline existent.
+    nume: numeDestinatariPvB(activi),
     bifa_neidentificat:bifa(!activi.length || activi.some(d => d.calitate === 'neidentificat')),
     bifa_fara_adresa:bifa(activi.some(d => d.adresa_cunoscuta === false)),
     conv_data_expediere:formatDataRo(conv?.data_expediere), conv_nr_tracking:conv?.nr_tracking ?? '',
