@@ -52,7 +52,8 @@ export default function RedariInformarePublic() {
         <div style={{ background: G.card, border: `1px solid ${G.border}`, borderRadius: 10, padding: '18px 18px 8px' }}>
           <h1 style={{ fontSize: 22, margin: '0 0 6px', color: G.blue }}>Informare privind folosirea datelor personale</h1>
           <div style={{ color: G.muted, fontSize: 14, marginBottom: 12 }}>Proprietarii de teren — Lot 1, conducta Prunișor – Orșova – Băile Herculane – Jupa</div>
-          {blocuri(TEXT_INFORMARE_LOT1).map((b, i) => b.tip === 'titlu' ? <h2 key={i} style={{ fontSize: 18, margin: '20px 0 6px', color: G.blue }}><Inline text={b.text} /></h2>
+          {!gata && <p style={{ margin: '8px 0', color: G.muted }}>{publicata === null ? 'Se încarcă…' : 'Informarea va fi publicată aici după aprobarea Transgaz. Pentru întrebări: redari@gazpet.ro.'}</p>}
+          {gata && blocuri(TEXT_INFORMARE_LOT1).map((b, i) => b.tip === 'titlu' ? <h2 key={i} style={{ fontSize: 18, margin: '20px 0 6px', color: G.blue }}><Inline text={b.text} /></h2>
             : b.tip === 'lista' ? <ul key={i} style={{ margin: '6px 0 10px', paddingLeft: 22 }}>{b.elemente.map((e, j) => <li key={j} style={{ marginBottom: 4 }}><Inline text={e} /></li>)}</ul>
             : <p key={i} style={{ margin: '8px 0' }}><Inline text={b.text} /></p>)}
         </div>

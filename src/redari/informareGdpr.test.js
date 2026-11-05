@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, TRIMITERE_VERSO_GDPR, COD_PROIECT_INFORMARE_LOT1, autorizareTgzCompleta } from './informareGdpr.js'
+import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, TRIMITERE_VERSO_GDPR, COD_PROIECT_INFORMARE_LOT1, autorizareTgzCompleta, informarePublicataServer, cuInformarePublicata, informarePublicataPeProiect } from './informareGdpr.js'
 import * as docx from './docx.js'
 import { blocuri, campuriNecompletate, informareGata } from '../RedariInformarePublic.jsx'
 
@@ -67,6 +67,23 @@ describe('informarea GDPR publica (Lot 1)', () => {
     expect(cap(5)).toContain('Mesajele primite la redari@gazpet.ro se păstrează în evidența proiectului, pe aceeași durată.')
     expect(t).toContain('**Gazpet Instal** (GAZPET INSTAL S.R.L.')
     expect(t).not.toMatch(/Gazpet(?! Instal|\.ro)/)
+  })
+  it('#939 r2: indicatorul vine de la server (RPC), fail-closed la eroare / exceptie / cod gol; textul gol nu e niciodata gata', async () => {
+    const apeluri = []
+    const client = (rasp) => ({ rpc: async (fn, args) => { apeluri.push([fn, args]); if (rasp instanceof Error) throw rasp; return rasp } })
+    expect(await informarePublicataServer(client({ data: true, error: null }), 'LOT1-PRUNISOR-JUPA')).toBe(true)
+    expect(apeluri.at(-1)).toEqual(['fn_red_informare_publicata', { p_cod: 'LOT1-PRUNISOR-JUPA' }])
+    expect(await informarePublicataServer(client({ data: false, error: null }), 'X')).toBe(false)
+    expect(await informarePublicataServer(client({ data: true, error: { code: 'PGRST202' } }), 'X')).toBe(false)
+    expect(await informarePublicataServer(client({ data: 'true', error: null }), 'X')).toBe(false)
+    expect(await informarePublicataServer(client(new Error('retea')), 'X')).toBe(false)
+    expect(await informarePublicataServer(client({ data: true, error: null }), '  ')).toBe(false)
+    expect(await informarePublicataServer(null, 'X')).toBe(false)
+    const p = await cuInformarePublicata(client({ data: true, error: null }), { id: 1, cod: 'LOT1-PRUNISOR-JUPA' })
+    expect(p).toEqual({ id: 1, cod: 'LOT1-PRUNISOR-JUPA', informare_publicata: true })
+    expect(informarePublicataPeProiect(p)).toBe(true)
+    expect(informarePublicataPeProiect({ informare_publicata: 1 })).toBe(false)
+    for (const t of ['', '   ', null, undefined, 42]) expect(informareGata(t, true)).toBe(false)
   })
   it('v3.3 (juridic#040): utilizatorul / arendasul apare la cap. 2 si cap. 3', () => {
     const t = TEXT_INFORMARE_LOT1

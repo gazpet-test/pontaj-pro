@@ -10,7 +10,7 @@ import {
   textGdprFataConvocator, TRIMITERE_VERSO_GDPR, VERSO_INFORMARE_INCLUS, FRAZE_VERSO, EroareTrimitereGdpr, adresaProprieInDocx, adresaWebNepermisa,
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE, xmlVersoInformare, MESAJ_INFORMARE_NEGATA,
 } from './docx.js'
-import { TEXT_INFORMARE_LOT1, autorizareTgzCompleta } from './informareGdpr.js'
+import { TEXT_INFORMARE_LOT1, autorizareTgzCompleta, informarePublicataPeProiect } from './informareGdpr.js'
 
 const SABLON = resolve(process.cwd(), 'public/redari/sabloane/convocator.docx') // Model_1 v6, 35 placeholder-e (SABLOANE.md §2.1)
 const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
@@ -222,8 +222,9 @@ describe('formatări + link', () => {
 
 // informare de test „aprobată”: textul real cu câmpurile [ ] completate fictiv și marcată publicată
 const INFORMARE_APROBATA = { text: TEXT_INFORMARE_LOT1.replace(/\[[^\]]*\]/g, 'COMPLETAT'), publicata: true }
-// #939 (20261130m): autorizarea Transgaz art. 28 completă pe rândul de proiect = informarea publicată (fără parametrul `informare`)
-const AUTORIZARE = { autorizare_tgz_nr: 'A-1 (fictiv)', autorizare_tgz_data: '2026-11-05', autorizare_tgz_fisier: 'LOT1-PRUNISOR-JUPA/autorizare_tgz/1_fictiv.pdf' }
+// #939 r2: câmpurile autorizării + indicatorul calculat de server (cuInformarePublicata → fn_red_informare_publicata), fără parametrul `informare`
+const CAMPURI_AUT = { autorizare_tgz_nr: 'A-1 (fictiv)', autorizare_tgz_data: '2026-11-05', autorizare_tgz_fisier: 'LOT1-PRUNISOR-JUPA/autorizare_tgz/1_fictiv.pdf' }
+const AUTORIZARE = { ...CAMPURI_AUT, informare_publicata: true }
 
 describe('genereazaConvocator', () => {
   const complet = () => ({
@@ -741,14 +742,18 @@ describe('verso convocator: informarea GDPR completă', () => {
     expect((await xmlDin(prevCamp.blob, 'word/document.xml')).xml).toContain('<w:highlight w:val="yellow"/>')
   })
 
-  it('#939: autorizarea Transgaz completă pe proiect (nr. + dată + PDF) publică informarea fără alt parametru; una lipsă → refuz', async () => {
+  it('#939 r2: doar indicatorul calculat de server publică informarea; câmpurile autorizării singure NU (PDF mutat / proiect inactiv)', async () => {
     const pr = { ...baza().proiect, ...AUTORIZARE }
-    expect(autorizareTgzCompleta(pr)).toBe(true)
+    expect(informarePublicataPeProiect(pr)).toBe(true)
     expect(verificaDateConvocator({ ...baza(), proiect: pr })).toEqual([])
     const r = await genereazaConvocator({ ...baza(), proiect: pr, templateArrayBuffer: citesteSablon() })
     expect(textDin((await xmlDin(r.blob, 'word/document.xml')).xml)).not.toContain('PROIECT – nu se tipărește')
-    for (const lipsa of ['autorizare_tgz_nr', 'autorizare_tgz_data', 'autorizare_tgz_fisier']) {
-      expect(verificaDateConvocator({ ...baza(), proiect: { ...pr, [lipsa]: lipsa === 'autorizare_tgz_data' ? null : '  ' } }), lipsa).toEqual([MESAJ_INFORMARE_NEGATA])
+    // câmpurile completate, dar serverul spune „nu” (PDF mutat, proiect inactiv) sau indicatorul lipsește (proiect din memorie) → refuz
+    const doarCampuri = { ...baza().proiect, ...CAMPURI_AUT }
+    expect(autorizareTgzCompleta(doarCampuri)).toBe(true)
+    for (const proiect of [doarCampuri, { ...doarCampuri, informare_publicata: false }, { ...doarCampuri, informare_publicata: 'true' }]) {
+      expect(verificaDateConvocator({ ...baza(), proiect }), JSON.stringify(proiect.informare_publicata)).toEqual([MESAJ_INFORMARE_NEGATA])
+      await expect(genereazaConvocator({ ...baza(), proiect, templateArrayBuffer: citesteSablon() })).rejects.toThrow(/nu e publicată/)
     }
   })
 

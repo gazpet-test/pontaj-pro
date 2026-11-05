@@ -22,7 +22,7 @@
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
 import { COL_UAT, termenAfisare, mesajTermenAfisare } from './setari.js'
-import { TEXT_INFORMARE_LOT1, autorizareTgzCompleta, informareGata, blocuri, segmenteInline, TRIMITERE_VERSO_GDPR } from './informareGdpr.js'
+import { TEXT_INFORMARE_LOT1, informarePublicataPeProiect, informareGata, blocuri, segmenteInline, TRIMITERE_VERSO_GDPR } from './informareGdpr.js'
 import { ORIGINE_PUBLICA_REDARI } from './domeniuPublic.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
@@ -337,9 +337,10 @@ export const textGdprPentruUat = (text, numeUat, linkInformare) => {
 }
 
 // ─── Versoul convocatorului: informarea GDPR completă (aceeași sursă ca pagina /redari/informare) ──────────────
-// Informarea implicită = textul Lot 1 din informareGdpr.js, publicată doar dacă PROIECTUL are autorizarea Transgaz (art. 28) completă
-// (nr. + dată + PDF, 20261130m). Parametrul `informare` rămâne pentru teste. Cât informarea nu e gata, expedierea se refuză.
-export const informareProiect = (proiect) => ({ text: TEXT_INFORMARE_LOT1, publicata: autorizareTgzCompleta(proiect) })
+// Informarea implicită = textul Lot 1 din informareGdpr.js, publicată doar dacă SERVERUL a spus „publicată” pentru proiect
+// (proiect.informare_publicata, pus de cuInformarePublicata imediat înainte de generare; 20261130m: autorizarea Transgaz art. 28 + PDF legat).
+// Lipsă = nepublicat. Parametrul `informare` rămâne pentru teste. Cât informarea nu e gata, expedierea se refuză (și BD-ul refuză rezervarea).
+export const informareProiect = (proiect) => ({ text: TEXT_INFORMARE_LOT1, publicata: informarePublicataPeProiect(proiect) })
 export const MESAJ_INFORMARE_NEGATA = 'informarea GDPR de pe verso nu e publicată: lipsește autorizarea Transgaz (art. 28) — nr., dată și PDF în ⚙️ Setări proiect (doar owner-ul) — convocatorul nu se poate expedia'
 const FONT_VERSO = '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>'
 // mărimea în jumătăți de punct: 9 pt, ca informarea să încapă pe o pagină

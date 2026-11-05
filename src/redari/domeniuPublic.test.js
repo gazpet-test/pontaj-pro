@@ -34,7 +34,8 @@ describe('/redari/informare apare doar în fișierele #939', () => {
     const src = resolve(process.cwd(), 'src')
     const cuCalea = fisiere(src)
       .filter(p => /\.(jsx?|mjs)$/.test(p) && !/\.test\.(jsx?|mjs)$/.test(p))
-      .filter(p => /redari\/informare/i.test(readFileSync(p, 'utf8')))
+      // calea de pagină, nu și importul modulului „./redari/informareGdpr.js”
+      .filter(p => /redari\/informare(?![A-Za-z])/i.test(readFileSync(p, 'utf8')))
       .map(p => relative(src, p).split('\\').join('/'))
       .sort()
     expect(cuCalea).toEqual(['App.jsx', 'RedariInformarePublic.jsx', 'RedariRaspunsPublic.jsx', 'redari/docx.js', 'redari/informareGdpr.js'])

@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase.js'
 import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
+import { cuInformarePublicata } from '../informareGdpr.js'
 import { dataDocumentConvocare } from '../convocatorNeexpediat.js'   // #991 r3: aceeași dată civilă București ca în Registru
 import { termenConstatare, mesajTermenConstatare } from '../setari.js'
 import { dataBucuresti } from '../plicuri.js'
@@ -226,11 +227,12 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
     try {
       const det = detinatori.find(d => d.id === c.detinator_id)
       if (!det) throw new Error('Deținătorul convocării nu mai e pe parcelă.')
-      const [token, rs] = await Promise.all([citesteTokenRaspuns(c.detinator_id), fetch(SABLON_CONVOCATOR)])
+      // #939 r2: informarea publicată se cere proaspăt serverului; nepublicată → generarea strictă se refuză (și BD-ul refuză fișierul nou)
+      const [token, rs, proiectI] = await Promise.all([citesteTokenRaspuns(c.detinator_id), fetch(SABLON_CONVOCATOR), cuInformarePublicata(supabase, proiect)])
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
       // fișierele din bucket sunt imutabile: reincarcaConvocator scrie o cale nouă versionată ({nr_document}-v{n}.docx) și mută *_path
-      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: dataDocumentConvocare(c) })
+      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect: proiectI, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: dataDocumentConvocare(c) })
       const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
       show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
       incarca()

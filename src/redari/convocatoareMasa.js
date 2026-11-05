@@ -8,6 +8,7 @@
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx-js-style'
 import { genereazaConvocator, verificaDateConvocator, reincarcaConvocator, borderouCsv, BUCKET_REDARI } from './docx.js'
+import { cuInformarePublicata } from './informareGdpr.js'
 import { motivBlocareConvocator, citestePaginat, LOT_IN, COL_DETINATOR, COL_CONVOCARE } from './ui/comune.jsx'
 // r4: același punct de rezervare ca la calea individuală (ModalConvocator) — un singur protocol atomic
 import { rezervaNumarConvocare, RPC_REZERVA, MESAJ_FARA_PROTECTIE, esteFaraRpc, motivRelatieSchimbata, motivIdentitateDiferita, dataDocumentConvocare } from './convocatorNeexpediat.js'
@@ -103,6 +104,9 @@ const qConvocari = (client) => client.from('red_convocari').select(COL_CONVOCARE
 export async function pregatesteLot(client, { proiect, uat, esteCurent = () => true }) {
   if (!client) throw new Error('Lipsește clientul Supabase')
   if (!proiect?.id || !uat?.id) throw new Error('Alege proiectul și UAT-ul.')
+  // #939 r2: verificarea rândurilor (verificaDateConvocator) cere indicatorul „informare publicată” proaspăt de la server
+  proiect = await cuInformarePublicata(client, proiect)
+  if (!esteCurent()) throw abandonat()
   // r7 (Copilot r2 P2-01): gărzile proiectului / UAT-ului blochează doar documentele NOI / regenerate; „reia” (fișier deja arhivat) rămâne posibil
   const blocatGenerare = motivBlocareConvocator(proiect, uat, null)
   // r3 (fără fallback): fără RPC-ul atomic, lotul e blocat — nicio citire de date, nimic de consumat
@@ -164,7 +168,8 @@ export async function recitesteProiectUat(client, { proiectId, uatId }) {
     una(client.from('red_proiecte').select('*').eq('id', proiectId).maybeSingle()),
     una(client.from('red_uat').select('*').eq('id', uatId).maybeSingle()),
   ])
-  return { proiect, uat }
+  // #939 r2: indicatorul „informare publicată” vine proaspăt de la server (nu intră în amprenta cheilor primite de la UI)
+  return { proiect: proiect && await cuInformarePublicata(client, proiect), uat }
 }
 
 /** Ce intră în rulare: limita se aplică DOAR acțiunilor `nou` (P1-2); `reia` doar cu includeGenerate; `reincarca` mereu (nu consumă număr). */

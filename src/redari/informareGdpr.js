@@ -11,10 +11,24 @@
 // (docx.js, verificaDateConvocator). Pagina publică întreabă BD-ul prin fn_red_informare_publicata(cod) (doar da / nu).
 export const VERSIUNE_INFORMARE_LOT1 = 'v3.3 05.11.2026'
 export const COD_PROIECT_INFORMARE_LOT1 = 'LOT1-PRUNISOR-JUPA'
-// Autorizarea Transgaz completă pe rândul de proiect (aceeași regulă ca fn_red_informare_publicata, fără verificarea PDF-ului în storage,
-// pe care o face triggerul trg_red_autorizare_tgz la scriere)
+// Câmpurile autorizării completate pe rândul de proiect — DOAR indiciu pentru formular. Decizia „publicată” o dă serverul
+// (fn_red_informare_publicata: proiect activ + PDF-ul legat încă în storage), citită proaspăt înainte de generare (r2 Jakarinos P1-3 / Copilot P1-02).
 const plinText = v => v != null && String(v).trim() !== ''
 export const autorizareTgzCompleta = (proiect) => !!proiect && plinText(proiect.autorizare_tgz_nr) && plinText(proiect.autorizare_tgz_data) && plinText(proiect.autorizare_tgz_fisier)
+// Indicatorul calculat de server, atașat pe obiectul proiectului de cuInformarePublicata (altfel lipsă = nepublicat)
+export const informarePublicataPeProiect = (proiect) => proiect?.informare_publicata === true
+/** Întreabă serverul (RPC) dacă informarea proiectului e publicată; eroare / RPC lipsă → false (fail-closed). */
+export async function informarePublicataServer(client, cod) {
+  if (!client || !plinText(cod)) return false
+  try {
+    const { data, error } = await client.rpc('fn_red_informare_publicata', { p_cod: cod })
+    return !error && data === true
+  } catch { return false }
+}
+/** Proiectul cu indicatorul proaspăt de la server (`informare_publicata`), pentru generarea convocatorului. */
+export async function cuInformarePublicata(client, proiect) {
+  return { ...(proiect || {}), informare_publicata: await informarePublicataServer(client, proiect?.cod) }
+}
 // Trimiterea de pe FAȚA convocatorului poștal la informarea de pe verso (text v3.2, exact).
 // La rezolvarea conflictelor #939 ↔ main: docx.js de pe main are propria constantă TRIMITERE_VERSO_GDPR
 // ('Informarea completă se află pe verso.') — se înlocuiește cu importul de aici (testul de paritate din informareGdpr.test.js o cere).
@@ -24,7 +38,8 @@ export const TEXT_INFORMARE_LOT1 = "Proiectul „Conductă de transport gaze nat
 // Câmpurile încă necompletate din text: [__], [de completat], [de confirmat] etc.
 export const campuriNecompletate = (text) => (String(text || '').match(/\[[^\]]*\]/g) || [])
 // Gata de publicat/tipărit doar dacă e marcată explicit publicată ȘI nu mai are câmpuri [ ]
-export const informareGata = (text, publicata) => publicata === true && campuriNecompletate(text).length === 0
+// r2 (Copilot P2-05): un text lipsă / gol nu e niciodată „gata”
+export const informareGata = (text, publicata) => publicata === true && typeof text === 'string' && text.trim().length > 0 && campuriNecompletate(text).length === 0
 
 // Markdown minimal (doar ce folosește textul juridic): ### titlu, - listă, **îngroșat**, paragrafe.
 // Folosit identic de pagina web și de versoul DOCX (o singură definiție).
