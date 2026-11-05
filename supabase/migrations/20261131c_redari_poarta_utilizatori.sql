@@ -109,7 +109,7 @@ BEGIN
     || 'red_uat.red_uat_upd|w|true|authenticated|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)|(( SELECT fn_red_nivel() AS fn_red_nivel) = ''admin''::text)' THEN
     RAISE EXCEPTION '20261131c_redari_poarta_utilizatori: politicile RLS pe tabelele atinse nu sunt cele revizuite';
   END IF;
-  -- PG 17.6: ACL-ul postgres pe TABELE include MAINTAIN (m); vederile de mai jos nu au m.
+  -- PG 17.6: ACL-ul postgres pe tabele SI vederi include MAINTAIN (m), confirmat pe clona productiei.
   -- drepturile pe tabele (relacl) și pe coloanele red_parcele citite / blocate de RPC (attacl) — exact ca baseline-ul
   IF (SELECT string_agg(f, ';' ORDER BY f COLLATE "C") FROM (
         SELECT c.relname || '|' || coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)::text, '') AS f
@@ -277,7 +277,7 @@ BEGIN
     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.red_v_stare_parcela') AND c.relkind = 'v'
       AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
       AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
-        = ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres']::text[])
+        = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[])
     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_stare_parcela') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION '31c: prerechizit #1003 / 31d - red_v_stare_parcela difera (corp/owner/ACL/security_invoker)';
   END IF;
@@ -303,7 +303,7 @@ BEGIN
     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.red_v_centralizator_uat') AND c.relkind = 'v'
       AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
       AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
-        = ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres']::text[])
+        = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[])
     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_centralizator_uat') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION '31c: prerechizit #1003 / 31d - red_v_centralizator_uat difera (corp/owner/ACL/security_invoker)';
   END IF;
