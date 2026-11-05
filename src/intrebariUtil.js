@@ -1,7 +1,7 @@
 // ❓ Întreabă echipa — utilitare pure (migrarea 20261105a). Testate în intrebariUtil.test.js.
 export const MODUL_INTREBARI = 'intrebari_tehnice'
 export const MAX_ATASAMENTE = 5
-export const MAX_MB = 25
+export const MAX_MB = 20   // pe fișier ȘI în total pe întrebare — aceeași limită ca workerul și bucket-ul (review r2 P2-5)
 export const MIME_OK = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
 const EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
 
@@ -17,6 +17,11 @@ export function caleAtasament(uid, mime, uuid) {
   const ext = EXT[mime]
   if (!ext || !uid) return null
   return `${uid}/${uuid}.${ext}`
+}
+
+/** Suma mărimilor nu poate trece de MAX_MB (workerul refuză întrebarea altfel). */
+export function totalPreaMare(fisiere) {
+  return fisiere.reduce((s, f) => s + (f?.size || 0), 0) > MAX_MB * 1024 * 1024
 }
 
 /** null dacă fișierul e acceptat, altfel motivul. */

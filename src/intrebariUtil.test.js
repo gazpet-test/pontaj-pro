@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { poateIntreba, caleAtasament, verificaFisier, blocuriMd, bucatiRand } from './intrebariUtil.js'
+import { poateIntreba, caleAtasament, verificaFisier, totalPreaMare, blocuriMd, bucatiRand } from './intrebariUtil.js'
 
 describe('intrebariUtil', () => {
   it('acces: owner sau cheia exactă', () => {
@@ -17,7 +17,9 @@ describe('intrebariUtil', () => {
   it('fișiere: tip și mărime', () => {
     expect(verificaFisier({ type: 'application/pdf', size: 1000 })).toBe(null)
     expect(verificaFisier({ type: 'application/zip', size: 1000 })).toMatch(/PDF/)
-    expect(verificaFisier({ type: 'image/png', size: 26 * 1024 * 1024 })).toMatch(/MB/)
+    expect(verificaFisier({ type: 'image/png', size: 21 * 1024 * 1024 })).toMatch(/MB/)
+    expect(totalPreaMare([{ size: 8 << 20 }, { size: 8 << 20 }])).toBe(false)
+    expect(totalPreaMare([{ size: 8 << 20 }, { size: 8 << 20 }, { size: 8 << 20 }])).toBe(true)
   })
   it('markdown: titluri, liste, paragrafe, hr', () => {
     const b = blocuriMd('**Pe scurt**\nDa.\n\n## Temei\n- NTPEE\n- I9\n1. unu\n---\ntext')

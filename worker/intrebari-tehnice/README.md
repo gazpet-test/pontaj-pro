@@ -27,6 +27,12 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    `schtasks /Create /TN "Intrebari tehnice worker (Gazpet)" /SC MINUTE /MO 2 /TR "\"C:\Program Files\Python313\pythonw.exe\" -B C:\Users\Public\intrebari_worker\intrebari_worker.py" /F`
 5. Acces: rând în `user_module_access` (`intrebari_tehnice`, editor) — doar cu acordul lui Răzvan.
 
+## Verificare după livrare (teste negative, într-o tranzacție cu ROLLBACK)
+Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utilizator FĂRĂ cheia de modul și pentru autor:
+- străinul: INSERT în `intrebari_tehnice` refuzat; SELECT pe întrebările altuia = 0 rânduri; SELECT pe `storage.objects` din bucket = 0;
+- autorul: INSERT cu `stare='raspuns'` / `raspuns_md` → câmpurile sunt resetate de trigger; a 6-a întrebare în aceeași zi refuzată;
+- `fn_intrebari_preia` / `_raspunde` / `_amana` refuzate pentru `authenticated` și `anon`.
+
 ## Funcționare și erori
 - O rulare preia max 3 întrebări; lock `C:\Users\Public\intrebari_worker\worker.lock`.
 - Jurnal: `C:\Users\Public\intrebari_worker\jurnal.jsonl` — doar id, stare, tokeni, durată (fără conținut, fără secrete).

@@ -18,7 +18,7 @@ DIR = pathlib.Path(os.environ.get('INTREBARI_DIR', 'C:/Users/Public/intrebari_wo
 MODEL = os.environ.get('INTREBARI_MODEL', 'claude-sonnet-5-5')
 MAX_TOKENS = 6000
 MAX_PE_RULARE = 3
-MAX_OCTETI_ATASAMENTE = 20 * 1024 * 1024
+MAX_OCTETI_ATASAMENTE = 20 * 1024 * 1024   # = MAX_MB din UI și limita bucket-ului
 MIME_OK = {'application/pdf', 'image/jpeg', 'image/png', 'image/webp'}
 
 SISTEM = """Ești consultantul tehnic al Gazpet Instal SRL (Ploiești) — antreprenor de rețele și branșamente de gaze naturale, conducte de transport (Transgaz), rețele de apă-canal, lucrări de construcții aferente. Răspunzi colegilor din departamentul tehnic (director tehnic, ingineri) la spețe concrete din șantier, proiectare, execuție, recepție, autorizare, avize și relația cu beneficiarii/ISC/ANRE/distribuitori.
@@ -118,16 +118,18 @@ def intreaba_claude(cheie, continut):
 
 def proceseaza(secret, cheie, q):
     t0, qid, inc = time.time(), q['id'], q['incercare']
-    def eroare(mesaj, **k):
-        st, _ = edge(secret, {'actiune': 'eroare', 'id': qid, 'incercare': inc, 'eroare': mesaj})
-        jurnal(id=qid, stare='eroare', scriere=st, **k)
+    def eroare(mesaj, tokeni=None, **k):   # tokenii (sau „necunoscut”) ajung în BD și la erori — evidența costului (review r2 P1-2)
+        corp = {'actiune': 'eroare', 'id': qid, 'incercare': inc, 'eroare': mesaj}
+        if tokeni: corp['tokeni'] = tokeni
+        st, _ = edge(secret, corp)
+        jurnal(id=qid, stare='eroare', scriere=st, tokeni=tokeni, **k)
     try:
         continut = construieste_mesaj(q)
     except AtasamentIndisponibil as e:
         return eroare(f'Atașamentul „{str(e)[:100]}” nu a putut fi citit. Pune întrebarea din nou.', motiv='atasament')
     status, r = intreaba_claude(cheie, continut)
     if status is None:   # L22: rezultat incert — nu se reia automat, rămâne evidența în jurnal
-        return eroare('Serviciul AI nu a răspuns la timp. Pune întrebarea din nou.', motiv='incert')
+        return eroare('Serviciul AI nu a răspuns la timp. Pune întrebarea din nou.', tokeni={'cost_necunoscut': True}, motiv='incert')
     if status != 200:
         tip = ((r or {}).get('error') or {}).get('type', '')
         if status in (429, 529) or tip in ('overloaded_error', 'rate_limit_error'):   # refuz CERT, fără cost → înapoi în coadă
@@ -137,7 +139,8 @@ def proceseaza(secret, cheie, q):
         mesaj = 'Limita lunară a contului API a fost atinsă' if 'credit' in brut or 'billing' in brut else f'Răspunsul AI a eșuat (HTTP {status})'
         return eroare(mesaj, http=status, motiv=tip or 'http')
     u = r.get('usage') or {}
-    tokeni = {k: u.get(k) for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens') if u.get(k) is not None}
+    tokeni = {k: u.get(k) for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens') if u.get(k) is not None} \
+        or {'cost_necunoscut': True}
     text = ''.join(b.get('text', '') for b in r.get('content') or [] if b.get('type') == 'text').strip()
     oprire = r.get('stop_reason')
     if oprire not in ('end_turn', 'stop_sequence'):   # L21: refuz / tăiat la limită = nu e un răspuns valid

@@ -25,6 +25,11 @@ BEGIN
      OR to_regclass('public.user_module_access') IS NULL OR to_regprocedure('storage.foldername(text)') IS NULL THEN
     RAISE EXCEPTION '20261105a: lipsesc precondițiile (fn_verifica_secret, notifications, user_module_access, storage.foldername)';
   END IF;
+  -- contractul notificărilor: modul 'general' trebuie acceptat de CHECK-ul pe notifications.modul (review r2 P1-1)
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.notifications'::regclass AND contype = 'c'
+               AND pg_get_constraintdef(oid) LIKE '%modul%' AND pg_get_constraintdef(oid) NOT LIKE '%''general''%') THEN
+    RAISE EXCEPTION '20261105a: notifications nu accepta modul = general';
+  END IF;
 END $pre$;
 
 -- ─── acces ─────────────────────────────────────────────────────────────────
@@ -108,7 +113,7 @@ GRANT ALL ON TABLE public.intrebari_tehnice TO service_role;
 
 -- ─── atașamente: bucket privat, fiecare utilizator în folderul lui ─────────
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES ('intrebari-tehnice', 'intrebari-tehnice', false, 26214400, ARRAY['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+VALUES ('intrebari-tehnice', 'intrebari-tehnice', false, 20971520, ARRAY['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
 CREATE POLICY intrebari_storage_ins ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (bucket_id = 'intrebari-tehnice' AND (storage.foldername(name))[1] = (SELECT auth.uid())::text AND (SELECT public.fn_are_acces_intrebari()));
 CREATE POLICY intrebari_storage_sel ON storage.objects FOR SELECT TO authenticated
@@ -128,7 +133,14 @@ BEGIN
      WHERE stare = 'in_lucru' AND preluat_la < now() - interval '30 minutes'
      RETURNING autor, titlu, id)
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
-  SELECT autor, 'info', 'Întreabă echipa', '❓ Întrebarea nu a primit răspuns', left(titlu, 200), '/intrebari?id=' || id FROM expirate;
+  SELECT autor, 'info', 'general', '❓ Întrebarea nu a primit răspuns', left(titlu, 200), '/intrebari?id=' || id FROM expirate;
+  -- plafon global de cost: max 40 de preluări pe zi (toți utilizatorii); peste el întrebările așteaptă ziua următoare (review r2 P1-2)
+  PERFORM pg_advisory_xact_lock(hashtext('intrebari_tehnice:preia'));
+  IF (SELECT count(*) FROM public.intrebari_tehnice
+       WHERE preluat_la >= (date_trunc('day', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest')
+          OR raspuns_la >= (date_trunc('day', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest')) >= 40 THEN
+    RETURN NULL;
+  END IF;
   SELECT * INTO r FROM public.intrebari_tehnice WHERE stare = 'noua' ORDER BY creat_la LIMIT 1 FOR UPDATE SKIP LOCKED;
   IF NOT FOUND THEN RETURN NULL; END IF;
   UPDATE public.intrebari_tehnice SET stare = 'in_lucru', preluat_la = now(), incercari = incercari + 1, incercare_id = v_inc WHERE id = r.id;
@@ -139,14 +151,21 @@ END $$;
 -- Amânare CERTĂ (API a refuzat fără cost: 429 / 529): înapoi în coadă; după 3 preluări → eroare.
 CREATE FUNCTION public.fn_intrebari_amana(p_id bigint, p_incercare uuid) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE v_stare text; v_autor uuid; v_titlu text;
 BEGIN
   UPDATE public.intrebari_tehnice
      SET stare = CASE WHEN incercari >= 3 THEN 'eroare' ELSE 'noua' END,
          eroare = CASE WHEN incercari >= 3 THEN 'Serviciul AI a fost ocupat de 3 ori. Pune întrebarea din nou mai târziu.' END,
          raspuns_la = CASE WHEN incercari >= 3 THEN now() END,
          preluat_la = NULL, incercare_id = NULL
-   WHERE id = p_id AND stare = 'in_lucru' AND incercare_id = p_incercare;
-  RETURN FOUND;
+   WHERE id = p_id AND stare = 'in_lucru' AND incercare_id = p_incercare
+   RETURNING stare, autor, titlu INTO v_stare, v_autor, v_titlu;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF v_stare = 'eroare' THEN   -- tranziția finală notifică autorul, atomic (review r2 P2-7)
+    INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
+    VALUES (v_autor, 'info', 'general', '❓ Întrebarea nu a primit răspuns', left(v_titlu, 200), '/intrebari?id=' || p_id);
+  END IF;
+  RETURN true;
 END $$;
 
 CREATE FUNCTION public.fn_intrebari_raspunde(p_id bigint, p_incercare uuid, p_raspuns text, p_model text, p_tokeni jsonb, p_eroare text) RETURNS boolean
@@ -161,7 +180,7 @@ BEGIN
    RETURNING autor, titlu INTO v_autor, v_titlu;
   IF NOT FOUND THEN RETURN false; END IF;
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
-  VALUES (v_autor, 'info', 'Întreabă echipa',
+  VALUES (v_autor, 'info', 'general',
           CASE WHEN p_raspuns IS NULL THEN '❓ Întrebarea nu a primit răspuns' ELSE '❓ Ai primit răspuns la întrebare' END,
           left(v_titlu, 200), '/intrebari?id=' || p_id);
   RETURN true;
@@ -196,8 +215,11 @@ BEGIN
     RAISE EXCEPTION '20261105a: verificarea finală a drepturilor a eșuat';
   END IF;
   -- politicile Storage se combină prin OR: nicio politică permisivă pe storage.objects fără filtru pe bucket (review P2-7)
+  -- fiecare politică permisivă trebuie să fixeze un bucket LITERAL (bucket_id = '...') în fiecare expresie pe care o are; politicile
+  -- pe alt bucket nu ating intrebari-tehnice. Testele negative cu alt utilizator: README, „Verificare după livrare”.
   IF EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND permissive = 'PERMISSIVE'
-               AND coalesce(qual, '') || coalesce(with_check, '') NOT LIKE '%bucket_id%') THEN
-    RAISE EXCEPTION '20261105a: exista politici storage.objects fara filtru pe bucket — atasamentele n-ar fi izolate';
+               AND ((qual IS NOT NULL AND qual !~ 'bucket_id = ''[a-z0-9_-]+''::text')
+                 OR (with_check IS NOT NULL AND with_check !~ 'bucket_id = ''[a-z0-9_-]+''::text'))) THEN
+    RAISE EXCEPTION '20261105a: exista politici storage.objects fara bucket literal — atasamentele n-ar fi izolate';
   END IF;
 END $final$;

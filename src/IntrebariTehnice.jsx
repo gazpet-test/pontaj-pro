@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
-import { poateIntreba, caleAtasament, verificaFisier, blocuriMd, bucatiRand, ETICHETA_STARE, MAX_ATASAMENTE } from './intrebariUtil.js'
+import { poateIntreba, caleAtasament, verificaFisier, totalPreaMare, blocuriMd, bucatiRand, ETICHETA_STARE, MAX_ATASAMENTE, MAX_MB } from './intrebariUtil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', border:'#30363D', blue:'#1F6FEB', green:'#2EA043', yellow:'#D29922', red:'#F85149', acc:'#56D4DD' }
 const S = {
@@ -48,23 +48,30 @@ export default function IntrebariTehnice({ profile }) {
   const fileRef = useRef(null)
   const selectat = Number(params.get('id')) || null
 
-  const [detaliu, setDetaliu] = useState(null)   // întrebarea deschisă, citită separat după id (poate fi în afara listei)
+  const [detaliu, setDetaliu] = useState(null)   // { id, rand } — întrebarea deschisă, citită separat după id (poate fi în afara listei)
+  const [errDet, setErrDet] = useState('')
+  const [limita, setLimita] = useState(100)
   const gen = useRef(0)                          // generația încărcării: un răspuns vechi sosit târziu nu suprascrie unul nou
   const COL = 'id, autor, titlu, context, intrebare, atasamente, stare, raspuns_md, model, eroare, creat_la, raspuns_la, profiles(name)'
 
   async function incarca() {
     const g = ++gen.current
     const [l, d] = await Promise.all([
-      supabase.from('intrebari_tehnice').select(COL).order('creat_la', { ascending:false }).limit(100),
+      supabase.from('intrebari_tehnice').select(COL).order('creat_la', { ascending:false }).limit(limita),
       selectat ? supabase.from('intrebari_tehnice').select(COL).eq('id', selectat).maybeSingle() : Promise.resolve({ data:null, error:null }),
     ])
     if (g !== gen.current) return
-    if (l.error || d.error) { setErr('Nu s-au putut încărca întrebările: ' + (l.error || d.error).message); return }
-    setLista(l.data || []); setDetaliu(d.data || null)
+    if (l.error) setErr('Nu s-au putut încărca întrebările: ' + l.error.message); else setLista(l.data || [])
+    if (selectat) {
+      if (d.error) setErrDet('Întrebarea nu a putut fi încărcată: ' + d.error.message)
+      else if (!d.data) setErrDet('Întrebarea nu există sau nu ai acces la ea.')
+      else { setErrDet(''); setDetaliu({ id: selectat, rand: d.data }) }
+    }
   }
-  useEffect(() => { incarca() }, [selectat])   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setErrDet(''); incarca() }, [selectat, limita])   // eslint-disable-line react-hooks/exhaustive-deps
   const inAsteptare = x => x && (x.stare === 'noua' || x.stare === 'in_lucru')
-  const asteapta = lista.some(inAsteptare) || inAsteptare(detaliu)
+  const q = selectat && detaliu?.id === selectat ? detaliu.rand : null   // niciodată detaliul altei întrebări sub URL-ul curent
+  const asteapta = lista.some(inAsteptare) || inAsteptare(q)
   useEffect(() => {
     if (!asteapta) return
     const t = setInterval(incarca, 20000)
@@ -81,13 +88,18 @@ export default function IntrebariTehnice({ profile }) {
     const probleme = noi.map(f => [f, verificaFisier(f)]).filter(([, p]) => p)
     if (probleme.length) setErr(probleme.map(([f, p]) => `${f.name}: ${p}`).join(' · '))
     else setErr('')
-    setFisiere(v => [...v, ...noi.filter(f => !verificaFisier(f))].slice(0, MAX_ATASAMENTE))
+    setFisiere(v => {
+      const toate = [...v, ...noi.filter(f => !verificaFisier(f))].slice(0, MAX_ATASAMENTE)
+      if (totalPreaMare(toate)) { setErr(`Atașamentele depășesc ${MAX_MB} MB în total.`); return v }
+      return toate
+    })
   }
 
   async function trimite() {
     if (lucru) return
     if (titlu.trim().length < 3) return setErr('Scrie un titlu scurt (minim 3 caractere).')
     if (intrebare.trim().length < 10) return setErr('Descrie speța (minim 10 caractere).')
+    if (totalPreaMare(fisiere)) return setErr(`Atașamentele depășesc ${MAX_MB} MB în total.`)
     setLucru(true); setErr(''); setInfo('')
     try {
       const uid = profile.id
@@ -109,7 +121,6 @@ export default function IntrebariTehnice({ profile }) {
     } catch (e) { setErr(e.message) } finally { setLucru(false) }
   }
 
-  const q = selectat ? detaliu : null
 
   return (
     <div style={{ minHeight:'100vh', background:G.bg, color:G.text, padding:'16px 16px 48px', fontFamily:'system-ui, sans-serif' }}>
@@ -123,8 +134,8 @@ export default function IntrebariTehnice({ profile }) {
           Verifică temeiurile marcate „[DE VERIFICAT]” înainte să te bazezi pe ele. Decizia e a ta.
         </div>
 
-        {err && q && <div style={{ color:G.red, fontSize:13, marginBottom:10 }}>{err}</div>}
-        {selectat && !q && !err && <div style={{ color:G.muted, fontSize:13, marginBottom:10 }}>Se încarcă… <button style={S.btnS} onClick={() => setParams({})}>← Toate întrebările</button></div>}
+        {selectat && !q && <div style={{ ...S.card, color: errDet ? G.red : G.muted, fontSize:13, marginBottom:10 }}>
+          {errDet || 'Se încarcă…'} <button style={{ ...S.btnS, marginLeft:8 }} onClick={() => setParams({})}>← Toate întrebările</button></div>}
         {q ? (
           <div style={S.card}>
             <button style={{ ...S.btnS, marginBottom:12 }} onClick={() => setParams({})}>← Toate întrebările</button>
@@ -173,6 +184,7 @@ export default function IntrebariTehnice({ profile }) {
               </div>
             </div>
           ))}
+          {lista.length >= limita && <button style={S.btnS} onClick={() => setLimita(n => n + 100)}>Încarcă întrebările mai vechi</button>}
         </>}
       </div>
     </div>
