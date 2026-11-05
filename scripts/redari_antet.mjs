@@ -43,6 +43,8 @@ export async function adaugaAntet(zip, { date, imagine = readFileSync(ANTET_IMAG
   asigura(sect.length === 1, `aștept o singură secțiune, am ${sect.length}`)
   const s = sect[0]
   asigura(!/<w:headerReference|<w:titlePg/.test(s), 'secțiunea are deja headerReference / titlePg')
+  // Cop #999 P2-02: o secțiune cu modificări urmărite (sectPrChange) are altă structură — refuz, nu inserez pe ghicite
+  asigura(!/<w:sectPrChange[\s>]/.test(s), 'secțiunea are sectPrChange (modificări urmărite) — acceptă-le în Word înainte')
   const pg = s.match(/<w:pgSz w:w="(\d+)"/)
   const mar = s.match(/<w:pgMar [^>]*w:right="(\d+)"[^>]*w:left="(\d+)"/)
   asigura(pg && mar, 'pgSz / pgMar în altă formă decât cea știută')

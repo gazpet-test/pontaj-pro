@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import JSZip from 'jszip'
-import { completeazaDocx, genereazaQr, CHEI_CONVOCATOR } from './docx.js'
+import { completeazaDocx, genereazaQr, adaugaVersoInformare, CHEI_CONVOCATOR } from './docx.js'
 
 // sha256 + lungimea textului concatenat din <w:t> (word/document.xml), ÎNAINTE de trecerea pe A4 (main @ ac7afa7c)
 const TEXT_INAINTE = {
@@ -226,9 +226,28 @@ describe('antetul oficial Gazpet (header, prima pagină)', () => {
     const campuri = Object.fromEntries(CHEI_CONVOCATOR.filter(k => k !== 'qr').map(k => [k, `TEST ${k}`]))
     const qr = await genereazaQr('https://example.invalid/redari/raspuns/TEST0000fictiv')
     const blob = await completeazaDocx(readFileSync('public/redari/sabloane/convocator.docx'), campuri, { imagini: { qr }, strict: true })
-    const zip = await JSZip.loadAsync(await blob.arrayBuffer())
-    await verificaAntet(zip, 'convocator completat')
+    // Cop #999 P2-02: și cu versoul informării (inserat înaintea sectPr) — antetul rămâne doar pe prima pagină
+    const cuVerso = await adaugaVersoInformare(blob, 'Informare GDPR de test (text fictiv).\n\nAl doilea paragraf fictiv.')
+    const zip = await JSZip.loadAsync(await cuVerso.arrayBuffer())
+    await verificaAntet(zip, 'convocator completat cu verso')
     const rels = await zip.file('word/_rels/document.xml.rels').async('string')
     expect(rels).toContain('Target="media/qr.png"')
+    expect(textWt(await zip.file('word/document.xml').async('string'))).toContain('Al doilea paragraf fictiv.')
+  })
+  it('generatorul refuză o secțiune cu header-e existente, mai multe secțiuni sau sectPrChange (nu produce XML pe ghicite)', async () => {
+    const { adaugaAntet } = await import('../../scripts/redari_antet.mjs')
+    const baza = await JSZip.loadAsync(readFileSync('public/redari/sabloane/convocator.docx'))
+    const curat = await baza.file('word/document.xml').async('string')
+    const faraAntet = curat.replace(/<w:headerReference [^>]*\/>/, '').replace('<w:titlePg/>', '')
+    const cu = async (doc, extra = {}) => {
+      const z = await JSZip.loadAsync(readFileSync('public/redari/sabloane/convocator.docx'))
+      z.remove('word/header1.xml')
+      z.file('word/document.xml', doc)
+      for (const [k, v] of Object.entries(extra)) z.file(k, v)
+      return adaugaAntet(z, { imagine: Buffer.from('x') })
+    }
+    await expect(cu(faraAntet.replace(/(<w:sectPr[^>]*>)/, '$1<w:sectPrChange w:id="1" w:author="t"><w:sectPr/></w:sectPrChange>'))).rejects.toThrow(/sectPrChange/)
+    await expect(cu(faraAntet.replace('<w:body>', '<w:body><w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr></w:p>'))).rejects.toThrow(/o singură secțiune/)
+    await expect(cu(faraAntet, { 'word/header2.xml': '<w:hdr/>' })).rejects.toThrow(/deja header/)
   })
 })
