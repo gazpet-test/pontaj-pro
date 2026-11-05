@@ -93,6 +93,24 @@ BEGIN
 END $insert_direct$;
 ROLLBACK TO SAVEPOINT pr1_insert;
 RELEASE SAVEPOINT pr1_insert;
+-- Stergerea draftului ramane posibila dupa stergerea detinatorului SAU a parcelei.
+SAVEPOINT pr1_soft_delete;
+DO $soft_delete$
+DECLARE r record; a public.red_procese_verbale;
+BEGIN
+  FOR r IN SELECT * FROM pr1_det WHERE caz IN ('utilizator_trimis','proprietar_nesemnat') LOOP
+    a:=public.fn_red_pv_creeaza('A',r.parcela,r.id,NULL);
+    IF r.caz='utilizator_trimis' THEN
+      UPDATE public.red_detinatori SET sters_la=now(),sters_motiv='FICTIV' WHERE id=r.id;
+    ELSE
+      UPDATE public.red_parcele SET sters_la=now(),sters_motiv='FICTIV' WHERE id=r.parcela;
+    END IF;
+    UPDATE public.red_procese_verbale SET sters_la=now(),sters_motiv='FICTIV' WHERE id=a.id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'DRY stergere draft cu sursa stearsa esuata %',r.caz; END IF;
+  END LOOP;
+END $soft_delete$;
+ROLLBACK TO SAVEPOINT pr1_soft_delete;
+RELEASE SAVEPOINT pr1_soft_delete;
 DO $sign$
 DECLARE r record; v public.red_procese_verbale;
 BEGIN
@@ -102,6 +120,7 @@ BEGIN
     IF v.calitate_semnatar IS DISTINCT FROM (r.spec->>'rol') THEN RAISE EXCEPTION 'DRY: calitate server creare'; END IF;
     UPDATE pr1_det SET pv=v.id WHERE id=r.id;
     IF r.spec->>'stare'='semnat' THEN
+      UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/'||v.id||'_v1.docx',calitate_document=r.spec->>'rol' WHERE id=v.id;
       UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/scan.pdf' WHERE id=v.id;
     ELSIF r.spec->>'stare'='anulat' THEN
       UPDATE public.red_procese_verbale SET stare='anulat',motiv_anulare='FICTIV' WHERE id=v.id;
@@ -170,13 +189,32 @@ BEGIN
   SELECT parcela,id,pv INTO p,d,a.id FROM pr1_det WHERE caz='utilizator_trimis';
   SELECT * INTO STRICT b FROM public.red_procese_verbale WHERE parcela_id=p AND tip='B' AND stare='generat';
   UPDATE public.red_detinatori SET calitate='proprietar' WHERE id=d;
-  UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/regenerat.docx' WHERE id=a.id;
+  UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/regenerat.docx',calitate_document='proprietar' WHERE id=a.id;
   IF (SELECT calitate_semnatar FROM public.red_procese_verbale WHERE id=a.id) IS DISTINCT FROM 'proprietar' THEN
     RAISE EXCEPTION 'DRY snapshot regenerare nu urmeaza detinatorul'; END IF;
   UPDATE public.red_detinatori SET calitate='arendas' WHERE id=d;
+  BEGIN
+    UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/scan-proprietar-vechi.pdf' WHERE id=a.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: calitatea s-a schimbat dupa generare - regenereaza documentul si semneaza noua versiune'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY scan proprietar vechi semnat ca arendas'; END IF;
+  IF (SELECT stare FROM public.red_procese_verbale WHERE id=a.id) IS DISTINCT FROM 'trimis_spre_semnare' THEN
+    RAISE EXCEPTION 'DRY refuz semnare nu a pastrat starea'; END IF;
+  refuz:=false;
+  BEGIN
+    UPDATE public.red_procese_verbale SET calitate_document='arendas' WHERE id=a.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: calitatea documentului se scrie numai la generare'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY calitate document modificata fara regenerare'; END IF;
+  refuz:=false;
+  BEGIN
+    UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/sursa-veche.docx',calitate_document='proprietar' WHERE id=a.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: calitatea s-a schimbat in timpul generarii - regenereaza documentul'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY rol citit vechi acceptat la legarea DOCX'; END IF;
+  UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/arendas-v2.docx',calitate_document='arendas' WHERE id=a.id;
   UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/a-late.pdf' WHERE id=a.id;
   IF (SELECT calitate_semnatar FROM public.red_procese_verbale WHERE id=a.id) IS DISTINCT FROM 'arendas' THEN
     RAISE EXCEPTION 'DRY calitate recitita la semnare'; END IF;
+  refuz:=false;
+  IF (SELECT calitate_document IS NOT DISTINCT FROM calitate_semnatar FROM public.red_procese_verbale WHERE id=a.id) IS NOT TRUE THEN RAISE EXCEPTION 'DRY concordanta document snapshot'; END IF;
   BEGIN
     UPDATE public.red_procese_verbale SET stare='semnat',motiv_pv_b='neprezentat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/b-late.pdf' WHERE id=b.id;
   EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV B refuzat: parcela acoperita prin PV A semnat; anuleaza PV B'; END;

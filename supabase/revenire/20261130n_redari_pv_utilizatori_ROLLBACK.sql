@@ -8,7 +8,7 @@ BEGIN
   LOCK TABLE public.red_jurnal IN SHARE MODE;
   IF EXISTS (SELECT 1 FROM (VALUES
     ('public.fn_red_parcela_acoperita_a(uuid)','b932aaf307761d3c504608a30c117bca'),
-    ('public.fn_red_pv_calitate_semnatar()','f522a36f34c1c6a7b2700c91a9f70ff4'),
+    ('public.fn_red_pv_calitate_semnatar()','c47235d62aedbf6b3efccba60702b95b'),
     ('public.fn_red_pv_creeaza(text,uuid,uuid,integer)','290f8f0c3ba78d8499db7ef50d0d8bcd'),
     ('public.fn_red_pv_b_semnare()','728fc279beee0b34f9adcfb425b2dd9f')
   ) b(sig,corp) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(b.sig)
@@ -16,9 +16,9 @@ BEGIN
       OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']) THEN
     RAISE EXCEPTION 'PR1: corp/metadate functie noua diferite'; END IF;
   PERFORM set_config('gazpet.pr1_revenire_view', (SELECT jsonb_build_array(relowner,relacl)::text FROM pg_class WHERE oid='public.red_v_tronson'::regclass),true);
-  IF EXISTS (SELECT 1 FROM public.red_procese_verbale WHERE calitate_semnatar IS NOT NULL)
+  IF EXISTS (SELECT 1 FROM public.red_procese_verbale WHERE calitate_semnatar IS NOT NULL OR calitate_document IS NOT NULL)
     OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela='red_procese_verbale'
-      AND (date_vechi ? 'calitate_semnatar' OR date_noi ? 'calitate_semnatar')) THEN
+      AND (date_vechi ? 'calitate_semnatar' OR date_noi ? 'calitate_semnatar' OR date_vechi ? 'calitate_document' OR date_noi ? 'calitate_document')) THEN
     RAISE EXCEPTION 'PR1 rollback: exista snapshot-uri sau istoric nou; revenire refuzata'; END IF;
 END $pre$;
 CREATE OR REPLACE VIEW public.red_v_tronson WITH (security_invoker = on) AS
@@ -106,14 +106,14 @@ FOR EACH ROW EXECUTE FUNCTION public.fn_red_pv_b_semnare();
 DROP TRIGGER red_pv_aa_calitate ON public.red_procese_verbale;
 DROP FUNCTION public.fn_red_pv_calitate_semnatar();
 DROP FUNCTION public.fn_red_parcela_acoperita_a(uuid);
-ALTER TABLE public.red_procese_verbale DROP COLUMN calitate_semnatar;
+ALTER TABLE public.red_procese_verbale DROP COLUMN calitate_document, DROP COLUMN calitate_semnatar;
 DO $post$
 BEGIN
   IF (SELECT jsonb_build_array(relowner,relacl)::text FROM pg_class WHERE oid='public.red_v_tronson'::regclass)
     IS DISTINCT FROM current_setting('gazpet.pr1_revenire_view',true) THEN RAISE EXCEPTION 'PR1 rollback: ACL vedere schimbat'; END IF;
   IF to_regprocedure('public.fn_red_parcela_acoperita_a(uuid)') IS NOT NULL
     OR to_regprocedure('public.fn_red_pv_calitate_semnatar()') IS NOT NULL
-    OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.red_procese_verbale'::regclass AND attname='calitate_semnatar' AND NOT attisdropped)
+    OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.red_procese_verbale'::regclass AND attname IN ('calitate_semnatar','calitate_document') AND NOT attisdropped)
     OR NOT coalesce((SELECT 'security_invoker=on'=ANY(reloptions) FROM pg_class WHERE oid='public.red_v_tronson'::regclass),false) THEN
     RAISE EXCEPTION 'PR1 rollback incomplet'; END IF;
 END $post$;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { parcelaAcoperitaA, detinatoriFaraPvA, numeDestinatariPvB, verificaDatePvB, genereazaPvB, genereazaPvA, referintaPvA } from './pv.js'
+import { patchGenerarePv, cheiCasPv, pvComparabil, parcelaAcoperitaA, detinatoriFaraPvA, numeDestinatariPvB, verificaDatePvB, genereazaPvB, genereazaPvA, referintaPvA } from './pv.js'
 
 // Acelasi tabel de cazuri ca DRY SQL; expected este decizia juridica, nu calculat din implementare.
 const dry = readFileSync('supabase/tests/20261130n_redari_pv_utilizatori_dryrun.sql', 'utf8')
@@ -62,4 +62,28 @@ it('PV A semnat nu deduce din rolul curent un snapshot lipsa', async () => {
   const r=await genereazaPvA({strict:false,pv:{stare:'semnat',calitate_semnatar:null},detinator:{calitate:'arendas'},
     templateArrayBuffer:readFileSync('public/redari/sabloane/pv_a.docx')})
   expect(r.campuri.calitate_cota).toBe('')
+})
+
+it('generarea transmite rolul DOCX curent ca preconditie, nu snapshot-ul draftului', async () => {
+  const date={strict:false,pv:{tip:'A',stare:'generat',calitate_semnatar:'proprietar'},detinator:{calitate:'arendas'},
+    templateArrayBuffer:readFileSync('public/redari/sabloane/pv_a.docx')}
+  expect((await genereazaPvA(date)).campuri.calitate_cota).toBe('arendaș')
+  expect(patchGenerarePv(date,'FICTIV/v2.docx')).toEqual({fisier_generat_path:'FICTIV/v2.docx',calitate_document:'arendas'})
+  expect(date.pv.calitate_semnatar).toBe('proprietar')
+  expect(patchGenerarePv({pv:{tip:'B'}},'FICTIV/b.docx')).toEqual({fisier_generat_path:'FICTIV/b.docx'})
+  expect(()=>patchGenerarePv({pv:{tip:'A'},detinator:{}},'FICTIV/v.docx')).toThrow('Calitatea detinatorului lipseste')
+})
+it('CAS draft ignora snapshot-ul derivat si pastreaza versiunea DOCX si editarile', () => {
+  const chei=['locul','calitate_semnatar','calitate_document','fisier_generat_path']
+  for (const stare of ['generat','trimis_spre_semnare']) {
+    expect(cheiCasPv({stare},chei)).toEqual(['locul','calitate_document','fisier_generat_path'])
+    const initial={tip:'A',stare,locul:'FICTIV',calitate_semnatar:'proprietar',calitate_document:'proprietar'}
+    expect(pvComparabil({...initial,calitate_semnatar:'arendas'})).toEqual(pvComparabil(initial))
+    expect(pvComparabil({...initial,locul:'ALT FICTIV'})).not.toEqual(pvComparabil(initial))
+    expect(pvComparabil({...initial,calitate_document:'arendas'})).not.toEqual(pvComparabil(initial))
+  }
+  for (const stare of ['semnat','anulat']) {
+    expect(cheiCasPv({stare},chei)).toEqual(chei)
+    expect(pvComparabil({tip:'A',stare,calitate_semnatar:'arendas'})).toHaveProperty('calitate_semnatar','arendas')
+  }
 })

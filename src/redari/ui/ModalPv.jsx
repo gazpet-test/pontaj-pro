@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
 import { COL_PLIC_AR_TGZ, atasezaMentiuniAr } from '../arMentiune.js'
-import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, parcelaAcoperitaA, valoriImplicitePv, salveazaImpliciteLaCreare, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
+import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, patchGenerarePv, cheiCasPv, pvComparabil, parcelaAcoperitaA, valoriImplicitePv, salveazaImpliciteLaCreare, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
 import { ultimulRaspuns } from '../stare.js'
 import { Modal, Camp, S, msgEroare, citestePaginat, COL_RASPUNS } from './comune.jsx'
 
@@ -28,7 +28,7 @@ const ETICHETE_MOTIV = { declaratie:'A declarat că nu participă și nu are obi
 const ETICHETE_STARE_PV = { generat:'generat', trimis_spre_semnare:'trimis spre semnare', semnat:'semnat', anulat:'anulat' }
 const implicite = s => s?.pv ? valoriImplicitePv({ tip: s.pv.tip, pv: s.pv, uat: s.uat, parcela: s.parcela, raspuns: s.raspuns }) : {}
 // Gemini f4b r1 P2: jsonb reordonează cheile -> comparăm forma canonică (chei sortate), nu JSON.stringify brut
-const canonic = v => v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o,k)=>(o[k]=canonic(v[k]),o),{}) : v
+const canonic = v => v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(pvComparabil(v)).sort().reduce((o,k)=>(o[k]=canonic(v[k]),o),{}) : v
 const egal = (a,b) => JSON.stringify(canonic(a ?? null)) === JSON.stringify(canonic(b ?? null))
 const cas = (q, vechi, chei) => chei.reduce((r,k) => vechi[k] == null ? r.is(k,null) : r.eq(k,typeof vechi[k] === 'object' ? JSON.stringify(canonic(vechi[k])) : vechi[k]),q)
 // L3: câmpurile goale primesc valorile implicite (propuneri nesalvate, editabile); PV final / PV C rămân cum sunt în BD
@@ -209,9 +209,9 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     const dupa=await citeste(curent)
     if(!curent()) return
     if(!egal(s,dupa)) throw new Error('Fisier salvat ('+path+'), dar datele s-au schimbat. Reincarca si regenereaza.')
-    const {data,error}=await cas(supabase.from('red_procese_verbale').update({fisier_generat_path:path})
+    const {data,error}=await cas(supabase.from('red_procese_verbale').update(patchGenerarePv(s,path))
       .eq('id',s.pv.id).eq('created_at',s.pv.created_at).eq('stare',s.pv.stare).is('sters_la',null),s.pv,
-      [...CAMPURI,'calitate_semnatar','fisier_generat_path']).select('*')
+      cheiCasPv(s.pv,[...CAMPURI,'calitate_semnatar','calitate_document','fisier_generat_path'])).select('*')
     if(!curent()) return
     if(error || data?.length!==1) throw new Error('Fisier salvat ('+path+'), legare neconfirmata. Reincarca. '+(error?msgEroare(error):'Conflict concurent.'))
     let verificat = false
@@ -262,7 +262,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     }
     const {data,error}=await cas(supabase.from('red_procese_verbale').update(patch).eq('id',s.pv.id)
       .eq('created_at',s.pv.created_at).eq('stare',s.pv.stare).is('sters_la',null),s.pv,
-      [...CAMPURI,'calitate_semnatar','fisier_generat_path','fisier_semnat_path']).select('*')
+      cheiCasPv(s.pv,[...CAMPURI,'calitate_semnatar','calitate_document','fisier_generat_path','fisier_semnat_path'])).select('*')
     if (!curent()) return
     if (error || data?.length!==1) throw new Error((path?'Scan pastrat la '+path+'. Legare neconfirmata; reincarca. ':'')+(error?msgEroare(error):'Conflict concurent; reincarca.'))
     aplica({...s,pv:data[0]});setScan(null);show('PV: '+stare+'.','success');onGata?.()

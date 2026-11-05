@@ -3,6 +3,23 @@ import { completeazaDocx, hashBlob, formatDataRo, formatNumarRo, ETICHETA_CALITA
 import { ultimulRaspuns } from './stare.js'
 import { mentiuneAr } from './arMentiune.js'
 
+// Rolul folosit in DOCX este preconditie; serverul il verifica sub lock.
+export function patchGenerarePv({pv, detinator}, path) {
+  if (pv.tip !== 'A') return {fisier_generat_path:path}
+  if (!['proprietar','coproprietar','mostenitor','neidentificat','utilizator','arendas'].includes(detinator?.calitate)) {
+    throw new Error('Calitatea detinatorului lipseste; reincarca inainte de generare.')
+  }
+  return {fisier_generat_path:path, calitate_document:detinator.calitate}
+}
+export function cheiCasPv(pv, chei) {
+  return ['semnat','anulat'].includes(pv.stare) ? chei : chei.filter(k => k !== 'calitate_semnatar')
+}
+export function pvComparabil(pv) {
+  if (!pv || pv.tip !== 'A' || ['semnat','anulat'].includes(pv.stare)) return pv
+  const {calitate_semnatar, ...editabile} = pv
+  return editabile
+}
+
 export const BIFA_DA = "\u2612"
 export const BIFA_NU = "\u2610"
 export const LUCRARI = ['sol_fertil', 'nivelare', 'arat', 'discuit', 'insamantare', 'gard', 'drum', 'altele']

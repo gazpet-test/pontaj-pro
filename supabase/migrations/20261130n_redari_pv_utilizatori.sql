@@ -12,7 +12,7 @@ BEGIN
   -- Apply / rollback: PV table -> parcela -> detinator -> view. Same order as PV C DDL protections.
   LOCK TABLE public.red_procese_verbale, public.red_parcele, public.red_detinatori, public.red_v_tronson IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.red_procese_verbale'::regclass
-    AND attname='calitate_semnatar' AND NOT attisdropped)
+    AND attname IN ('calitate_semnatar','calitate_document') AND NOT attisdropped)
     OR to_regprocedure('public.fn_red_parcela_acoperita_a(uuid)') IS NOT NULL
     OR to_regprocedure('public.fn_red_pv_calitate_semnatar()') IS NOT NULL THEN RAISE EXCEPTION 'PR1: obiecte deja existente'; END IF;
   -- Do not invent the historical role of a legacy signed PV from today's holder role.
@@ -183,6 +183,12 @@ ALTER TABLE public.red_procese_verbale ADD COLUMN calitate_semnatar text
   CONSTRAINT red_pv_calitate_semnatar_ck CHECK (
     (tip='A' AND (stare <> 'semnat' OR calitate_semnatar IS NOT NULL) AND (calitate_semnatar IS NULL OR calitate_semnatar IN ('proprietar','coproprietar','mostenitor','neidentificat','utilizator','arendas')))
     OR (tip<>'A' AND calitate_semnatar IS NULL));
+ALTER TABLE public.red_procese_verbale ADD COLUMN calitate_document text
+  CONSTRAINT red_pv_calitate_document_ck CHECK (
+    (tip='A' AND (calitate_document IS NULL OR calitate_document IN ('proprietar','coproprietar','mostenitor','neidentificat','utilizator','arendas'))
+      AND (stare <> 'semnat' OR (calitate_document IS NOT NULL AND calitate_document=calitate_semnatar)))
+    OR (tip<>'A' AND calitate_document IS NULL));
+COMMENT ON COLUMN public.red_procese_verbale.calitate_document IS 'Server: rol verificat sub lock la legarea fiecarei versiuni DOCX, apoi concordanta obligatorie la semnare.';
 COMMENT ON COLUMN public.red_procese_verbale.calitate_semnatar IS 'Server: calitatea curenta la fiecare scriere PV A nesemnat, inclusiv regenerare/semnare; apoi imutabila. Legacy nesemnat se completeaza la semnare.';
 CREATE FUNCTION public.fn_red_parcela_acoperita_a(p_parcela uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
@@ -205,7 +211,7 @@ REVOKE ALL ON FUNCTION public.fn_red_parcela_acoperita_a(uuid) FROM PUBLIC, anon
 GRANT EXECUTE ON FUNCTION public.fn_red_parcela_acoperita_a(uuid) TO authenticated, service_role;
 CREATE FUNCTION public.fn_red_pv_calitate_semnatar() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
-DECLARE v_calitate text;
+DECLARE v_calitate text; v_generare boolean := false;
 BEGIN
   -- Nicio cale INSERT (inclusiv PostgREST) nu poate sari cerintele tranzitiei de semnare.
   IF TG_OP='INSERT' AND NEW.stare IS DISTINCT FROM 'generat' THEN
@@ -214,6 +220,14 @@ BEGIN
   IF NEW.stare='semnat' AND (TG_OP='INSERT' OR OLD.stare IS DISTINCT FROM 'semnat')
      AND NEW.sters_la IS NOT NULL THEN
     RAISE EXCEPTION 'PV: un PV sters nu poate fi semnat' USING ERRCODE='23514';
+  END IF;
+  IF TG_OP='INSERT' THEN
+    NEW.calitate_document := NULL;
+  ELSE
+    v_generare := NEW.tip='A' AND NEW.fisier_generat_path IS DISTINCT FROM OLD.fisier_generat_path;
+    IF NEW.calitate_document IS DISTINCT FROM OLD.calitate_document AND NOT v_generare THEN
+      RAISE EXCEPTION 'PV: calitatea documentului se scrie numai la generare' USING ERRCODE='23514';
+    END IF;
   END IF;
   IF TG_OP='UPDATE' AND OLD.stare IN ('semnat','anulat') THEN
     IF NEW.calitate_semnatar IS DISTINCT FROM OLD.calitate_semnatar THEN
@@ -224,9 +238,12 @@ BEGIN
   IF TG_OP='UPDATE' AND NEW.calitate_semnatar IS DISTINCT FROM OLD.calitate_semnatar THEN
     RAISE EXCEPTION 'Calitatea semnatarului se completeaza numai de server' USING ERRCODE='23514';
   END IF;
+  IF TG_OP='UPDATE' AND v_generare AND (NEW.stare='anulat' OR NEW.sters_la IS NOT NULL) THEN
+    RAISE EXCEPTION 'PV: un PV anulat sau sters nu poate fi regenerat' USING ERRCODE='23514';
+  END IF;
   -- Draftul urmeaza calitatea curenta la fiecare scriere, inclusiv legarea DOCX regenerat.
   -- Anularea nu depinde de disponibilitatea detinatorului; snapshot-ul existent ramane.
-  IF NEW.tip='A' AND NEW.stare <> 'anulat' THEN
+  IF NEW.tip='A' AND NEW.stare <> 'anulat' AND NEW.sters_la IS NULL THEN
     -- Aceeasi ordine ca 20261129f: PV (UPDATE) -> parcela -> detinator.
     -- La creare RPC, parcela si detinatorul sunt deja blocate de apelant.
     IF current_setting('transaction_isolation') <> 'read committed' THEN
@@ -237,7 +254,26 @@ BEGIN
     SELECT d.calitate INTO v_calitate FROM public.red_detinatori d
       WHERE d.id=NEW.detinator_id AND d.parcela_id=NEW.parcela_id AND d.sters_la IS NULL FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'PV: detinator indisponibil' USING ERRCODE='42501'; END IF;
-    NEW.calitate_semnatar := v_calitate;
+    IF NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat' THEN
+      -- Semnarea nu poate servi drept regenerare; scanul trebuie sa apartina versiunii deja generate.
+      IF NEW.fisier_generat_path IS DISTINCT FROM OLD.fisier_generat_path
+         OR OLD.fisier_generat_path IS NULL OR OLD.fisier_generat_path !~ '[^[:space:]]'
+         OR OLD.calitate_document IS DISTINCT FROM v_calitate THEN
+        RAISE EXCEPTION 'PV: calitatea s-a schimbat dupa generare - regenereaza documentul si semneaza noua versiune' USING ERRCODE='23514';
+      END IF;
+      NEW.calitate_semnatar := OLD.calitate_document;
+    ELSE
+      IF v_generare THEN
+        -- Clientul transmite rolul folosit efectiv in DOCX ca preconditie, nu ca provenienta libera.
+        -- Serverul il compara cu sursa blocata si scrie propria valoare, atomic cu noua cale.
+        IF NEW.fisier_generat_path IS NULL OR NEW.fisier_generat_path !~ '[^[:space:]]'
+           OR NEW.calitate_document IS DISTINCT FROM v_calitate THEN
+          RAISE EXCEPTION 'PV: calitatea s-a schimbat in timpul generarii - regenereaza documentul' USING ERRCODE='23514';
+        END IF;
+        NEW.calitate_document := v_calitate;
+      END IF;
+      NEW.calitate_semnatar := v_calitate;
+    END IF;
   ELSIF TG_OP='INSERT' THEN
     NEW.calitate_semnatar := NULL;
   END IF;
@@ -320,7 +356,7 @@ DO $post$
 BEGIN
   IF EXISTS (SELECT 1 FROM (VALUES
     ('public.fn_red_parcela_acoperita_a(uuid)','b932aaf307761d3c504608a30c117bca'),
-    ('public.fn_red_pv_calitate_semnatar()','f522a36f34c1c6a7b2700c91a9f70ff4'),
+    ('public.fn_red_pv_calitate_semnatar()','c47235d62aedbf6b3efccba60702b95b'),
     ('public.fn_red_pv_creeaza(text,uuid,uuid,integer)','290f8f0c3ba78d8499db7ef50d0d8bcd'),
     ('public.fn_red_pv_b_semnare()','728fc279beee0b34f9adcfb425b2dd9f')
   ) b(sig,corp) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(b.sig)
@@ -337,7 +373,8 @@ BEGIN
     FROM pg_proc p WHERE p.oid IN ('public.fn_red_pv_creeaza(text,uuid,uuid,integer)'::regprocedure,'public.fn_red_pv_b_semnare()'::regprocedure))
     IS DISTINCT FROM (SELECT v FROM pr1_meta WHERE k='functions') THEN RAISE EXCEPTION 'PR1 post: RPC metadata schimbata'; END IF;
   IF NOT has_column_privilege('authenticated','public.red_procese_verbale','calitate_semnatar','SELECT')
-    OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.red_procese_verbale'::regclass AND conname='red_pv_calitate_semnatar_ck' AND convalidated) THEN
+    OR NOT has_column_privilege('authenticated','public.red_procese_verbale','calitate_document','SELECT')
+    OR (SELECT count(*) FROM pg_constraint WHERE conrelid='public.red_procese_verbale'::regclass AND conname IN ('red_pv_calitate_semnatar_ck','red_pv_calitate_document_ck') AND convalidated) <> 2 THEN
     RAISE EXCEPTION 'PR1 post: coloana/CHECK lipsa'; END IF;
   IF has_function_privilege('anon','public.fn_red_parcela_acoperita_a(uuid)','EXECUTE')
     OR NOT has_function_privilege('authenticated','public.fn_red_parcela_acoperita_a(uuid)','EXECUTE')
