@@ -1,7 +1,15 @@
--- NUMAI pe clona dispensabila cu schema/ACL PostgreSQL 16 si PR1 deja aplicat.
+-- NUMAI pe clona dispensabila a schemei de productie PG 17.6, postgres NOSUPERUSER.
+-- Ordine: #998 -> #1003 (acesta) -> #1002 -> #1004 -> #1000; #1002 adauga ulterior o coloana red_convocari.
+-- ACL-urile PG17 (inclusiv MAINTAIN) sunt verificate prin M/R incluse mai jos.
 -- Nu este pentru Supabase/producție. Totul, inclusiv identitatile, se anuleaza.
 \set ON_ERROR_STOP on
 BEGIN;
+DO $rol_dry$
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' OR session_user IS DISTINCT FROM 'postgres'
+    OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='postgres' AND NOT rolsuper) THEN
+    RAISE EXCEPTION 'DRY necesita conexiune postgres NOSUPERUSER, ca in Supabase'; END IF;
+END $rol_dry$;
 SELECT set_config('gazpet.livrare_migrare','20261131d_redari_stare_utilizatori:'||txid_current(),true);
 \ir ../migrations/20261131d_redari_stare_utilizatori.sql
 SELECT set_config('gazpet.livrare_migrare','20261131d_redari_stare_utilizatori_ROLLBACK:'||txid_current(),true);
@@ -13,14 +21,16 @@ SELECT set_config('gazpet.livrare_migrare','20261131d_redari_stare_utilizatori:'
 DO $mutanti$
 DECLARE sig text; def text; corp text; refuz boolean; mesaj text;
 BEGIN
-  FOREACH sig IN ARRAY ARRAY['public.fn_red_adresa_cunoscuta(uuid)','public.fn_red_nivel()','auth.uid()'] LOOP
+  -- postgres nu detine obiectele auth (supabase_auth_admin); CREATE OR REPLACE auth.uid ar cere superuser.
+  -- Mutam doar obiecte public detinute de postgres; auth are comparatii read-only separate mai jos.
+  FOREACH sig IN ARRAY ARRAY['public.fn_red_adresa_cunoscuta(uuid)','public.fn_red_nivel()'] LOOP
     SELECT pg_get_functiondef(p.oid),p.prosrc INTO STRICT def,corp FROM pg_proc p WHERE p.oid=to_regprocedure(sig);
     BEGIN
       EXECUTE replace(def,corp,corp||E'\n-- FICTIV MUTANT PR2\n');
       refuz:=false;
       BEGIN PERFORM pg_temp.pr2_verifica_baza();
       EXCEPTION WHEN raise_exception THEN
-        mesaj:=CASE WHEN sig='auth.uid()' THEN 'PR2: callee auth in afara baseline: ' ELSE 'PR2: functie in afara baseline revizuit: ' END||sig;
+        mesaj:='PR2: functie in afara baseline revizuit: '||sig;
         IF SQLERRM<>mesaj THEN RAISE; END IF;
         refuz:=true;
       END;
@@ -67,6 +77,26 @@ BEGIN
   END;
   PERFORM pg_temp.pr2_verifica_baza(); -- calea legitima dupa toate restaurarile
 END $mutanti$;
+-- Fara ALTER/CREATE pe auth: postgres NOSUPERUSER citeste amprentele, nu detine aceste functii.
+-- Expected fix din baseline revizuit; nu deducem valorile din catalogul curent.
+DO $auth_readonly$
+DECLARE r record; sig text;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+    ('auth.uid()','cdef18c69c4f4cbbced2eaf81e628b49'),
+    ('auth.role()','f31486fed08a7402e89d4aa71b0ad273'),
+    ('auth.jwt()','2db09c3fc855ba90e71d3ae28cfadae3')
+  ) b(sig,corp) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure(r.sig) AND md5(p.prosrc)=r.corp
+      AND pg_get_userbyid(p.proowner)='supabase_auth_admin' AND NOT p.prosecdef AND p.proconfig IS NULL) THEN
+      RAISE EXCEPTION 'DRY amprenta auth read-only diferita: %',r.sig; END IF;
+  END LOOP;
+  FOREACH sig IN ARRAY ARRAY['public.fn_red_pv_b_semnare()','public.fn_red_pv_stare_tranzitie()','public.fn_red_pv_c_garda()'] LOOP
+    IF has_function_privilege('authenticated',sig,'EXECUTE') THEN
+      RAISE EXCEPTION 'DRY EXECUTE authenticated neasteptat pe trigger: %',sig; END IF;
+  END LOOP;
+  PERFORM pg_temp.pr2_verifica_baza(); -- inclusiv metadatele/ACL auth complete si MAINTAIN PG17
+END $auth_readonly$;
 -- R2: dependente tranzitive de autorizare si vedere, fiecare mutatie anulata separat.
 DO $mutanti_tranzitivi$
 DECLARE t text; varianta text; refuz boolean; def text; mesaj text; politica text;

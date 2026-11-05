@@ -1,6 +1,8 @@
 -- PR2 juridic#040. NUMAI fisiere; nu aplica fara review si DRY pe clona izolata.
 -- Runner obligatoriu: psql --single-transaction, armare SET LOCAL in ACEEASI tranzactie:
 -- SELECT set_config('gazpet.livrare_migrare','20261131d_redari_stare_utilizatori_ROLLBACK:'||txid_current(),true);
+-- Ordine de aplicare: #998 -> #1003 (acesta) -> #1002 -> #1004 -> #1000.
+-- R4: baseline ACL confirmat pe clona schemei de productie PG 17.6, postgres NOSUPERUSER.
 -- Nu face DML business. CREATE OR REPLACE pastreaza OID, dependentele si ACL; nicio coloana noua.
 DO $start$
 BEGIN
@@ -68,16 +70,17 @@ INSERT INTO pg_temp.pr2_functii VALUES
 ('public.fn_red_plic_incearca_lock_detinator(uuid)','c7b8cff21c1999435246f84e085b7aea','uuid',false,'plpgsql',true,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261129i_redari_plicuri.sql
 ('public.fn_red_plic_uat_detinator(uuid)','f837713cf4f3373ae7f9a46dd60210f9','uuid',false,'sql',true,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
+-- R4: aceleasi ACL ca fixul #998; trigger-ele interne nu au EXECUTE pentru authenticated.
 -- 20261130n_redari_pv_utilizatori.sql
-('public.fn_red_pv_b_semnare()','728fc279beee0b34f9adcfb425b2dd9f','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']::text[]),
+('public.fn_red_pv_b_semnare()','728fc279beee0b34f9adcfb425b2dd9f','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261129d_redari_pv_c.sql
-('public.fn_red_pv_c_garda()','975e5501b2c9e4ceca85a84b3fd64f3d','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']::text[]),
+('public.fn_red_pv_c_garda()','975e5501b2c9e4ceca85a84b3fd64f3d','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261129d_redari_pv_c.sql
 ('public.fn_red_pv_c_neacoperite(uuid,integer)','ad42b1c7c1e4be49a2ea99a5eca9e3dd','bigint',false,'plpgsql',true,'v',ARRAY['search_path=public, pg_temp','lock_timeout=5s']::text[],ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261130n_redari_pv_utilizatori.sql
 ('public.fn_red_pv_calitate_semnatar()','1976124ce240eb0f04dec22cf8acd862','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres']::text[]),
 -- 20261129c_redari_pv_stari.sql
-('public.fn_red_pv_stare_tranzitie()','2d69244951387ad650e2b1ed91a19308','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']::text[]),
+('public.fn_red_pv_stare_tranzitie()','2d69244951387ad650e2b1ed91a19308','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261126a_redari_teren.sql
 ('public.fn_red_raspunsuri_valideaza()','3528222d7d8379dbbe8f3d2e64c60b94','trigger',false,'plpgsql',true,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres']::text[]),
 -- 20261126a_redari_teren.sql
@@ -245,16 +248,17 @@ INSERT INTO pg_temp.pr2_coloane VALUES
 ('red_convocari',19,'adresa_tgz_nr','text',ARRAY[]::text[]),
 ('red_convocari',20,'reluare','boolean',ARRAY[]::text[]),
 ('red_convocari',21,'plic_id','uuid',ARRAY[]::text[]),
+-- #1002 adauga ulterior o coloana red_convocari; aici inventarul exact ramane cel de dupa #998.
 ('red_convocari',22,'retur_detaliu','text',ARRAY[]::text[]);
 CREATE TEMP TABLE pg_temp.pr2_tables(t text,acl text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.pr2_tables VALUES
-('red_parcele',ARRAY['postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
-('red_uat',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
-('red_detinatori',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
-('red_detinatori_contact',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
-('red_procese_verbale',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
-('red_raspunsuri',ARRAY['authenticated=SELECT','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
-('red_convocari',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]);
+('red_parcele',ARRAY['postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
+('red_uat',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
+('red_detinatori',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
+('red_detinatori_contact',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
+('red_procese_verbale',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
+('red_raspunsuri',ARRAY['authenticated=SELECT','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
+('red_convocari',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]);
 CREATE TEMP TABLE pg_temp.pr2_triggers(t text,n text,f text,typ int,e_def boolean,e_init boolean,cols text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.pr2_triggers VALUES
 ('red_convocari','trg_red_convocari_garda_rezerva','public.fn_red_convocari_rezerva_garda()',7,false,false,ARRAY[]::text[]),
@@ -295,8 +299,8 @@ INSERT INTO pg_temp.pr2_triggers VALUES
 -- Manifest fix; o abatere necesita review, nu acceptare automata a catalogului curent.
 CREATE TEMP TABLE pg_temp.pr2_auth_tabele(t text PRIMARY KEY,acl text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.pr2_auth_tabele VALUES
-('profiles',ARRAY['anon=DELETE','anon=INSERT','anon=REFERENCES','anon=SELECT','anon=TRIGGER','anon=UPDATE','authenticated=DELETE','authenticated=INSERT','authenticated=REFERENCES','authenticated=SELECT','authenticated=TRIGGER','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=DELETE','service_role=INSERT','service_role=REFERENCES','service_role=SELECT','service_role=TRIGGER','service_role=TRUNCATE','service_role=UPDATE']::text[]),
-('user_module_access',ARRAY['anon=DELETE','anon=INSERT','anon=REFERENCES','anon=SELECT','anon=TRIGGER','anon=UPDATE','authenticated=DELETE','authenticated=INSERT','authenticated=REFERENCES','authenticated=SELECT','authenticated=TRIGGER','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=DELETE','service_role=INSERT','service_role=REFERENCES','service_role=SELECT','service_role=TRIGGER','service_role=TRUNCATE','service_role=UPDATE']::text[]);
+('profiles',ARRAY['anon=DELETE','anon=INSERT','anon=REFERENCES','anon=SELECT','anon=TRIGGER','anon=UPDATE','authenticated=DELETE','authenticated=INSERT','authenticated=REFERENCES','authenticated=SELECT','authenticated=TRIGGER','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=DELETE','service_role=INSERT','service_role=MAINTAIN','service_role=REFERENCES','service_role=SELECT','service_role=TRIGGER','service_role=TRUNCATE','service_role=UPDATE']::text[]),
+('user_module_access',ARRAY['anon=DELETE','anon=INSERT','anon=REFERENCES','anon=SELECT','anon=TRIGGER','anon=UPDATE','authenticated=DELETE','authenticated=INSERT','authenticated=REFERENCES','authenticated=SELECT','authenticated=TRIGGER','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=DELETE','service_role=INSERT','service_role=MAINTAIN','service_role=REFERENCES','service_role=SELECT','service_role=TRIGGER','service_role=TRUNCATE','service_role=UPDATE']::text[]);
 CREATE TEMP TABLE pg_temp.pr2_auth_coloane(t text,c text,typ text) ON COMMIT DROP;
 INSERT INTO pg_temp.pr2_auth_coloane VALUES
  ('profiles','id','uuid'),('profiles','is_owner','boolean'),
@@ -435,7 +439,7 @@ BEGIN
     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid='public.red_v_tronson'::regclass AND c.relkind='v'
       AND c.reloptions=ARRAY['security_invoker=on'] AND pg_get_userbyid(c.relowner)='postgres'
       AND (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(c.relacl::text[]) x)
-        =ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres'])
+        =ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres'])
     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid='public.red_v_tronson'::regclass AND a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL)
     OR (SELECT jsonb_agg(jsonb_build_array(a.attnum,a.attname,a.atttypid,a.atttypmod,a.attcollation) ORDER BY a.attnum)
       FROM pg_attribute a WHERE a.attrelid='public.red_v_tronson'::regclass AND a.attnum>0 AND NOT a.attisdropped)
@@ -587,7 +591,7 @@ BEGIN
       OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('public.'||r.v)
         AND c.reloptions=ARRAY['security_invoker=on'] AND pg_get_userbyid(c.relowner)='postgres'
         AND (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(c.relacl::text[]) x)
-          =ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres'])
+          =ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres'])
       OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('public.'||r.v) AND a.attnum>0 AND a.attacl IS NOT NULL) THEN
       RAISE EXCEPTION 'PR2: definitie/owner/ACL/security_invoker vedere: %',r.v; END IF;
   END LOOP;
@@ -719,7 +723,7 @@ BEGIN
       OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('public.'||r.v)
         AND c.reloptions=ARRAY['security_invoker=on'] AND pg_get_userbyid(c.relowner)='postgres'
         AND (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(c.relacl::text[]) x)
-          =ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres'])
+          =ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres'])
       OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('public.'||r.v) AND a.attnum>0 AND a.attacl IS NOT NULL) THEN
       RAISE EXCEPTION 'PR2: definitie/owner/ACL/security_invoker vedere: %',r.v; END IF;
   END LOOP;
