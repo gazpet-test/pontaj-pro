@@ -21,11 +21,12 @@ class Pure(unittest.TestCase):
         self.assertEqual(c.arguments(['cxw', ROOT + r'\a.txt', 'pontaj-pro', '2400']), ('cxw', ROOT + r'\a.txt', 'pontaj-pro', 2400))
         self.assertEqual(c.arguments(['cxw-continua', 'brief', URL, '60'])[2:], (URL, 60))
         self.assertEqual(c.arguments(['cxw', 'brief', 'pontaj-pro', '86400'])[-1], 86400)
+        self.assertEqual(c.arguments(['cxw', 'brief', 'pontaj-pro', '1'])[-1], 1)  # internal remaining budget
 
     def test_args_rejected(self):
         cases = [[], ['cxw', 'a', 'pontaj-pro'], ['cxw', 'a', 'pontaj-pro', '2400', 'extra'], ['CXW', 'a', 'pontaj-pro', '60']]
         cases += [['cxw', 'a', t, '60'] for t in ('', 'Pontaj-pro', 'pontaj-pro ', 'other', 'pontaj-pro\n')]
-        cases += [['cxw', 'a', 'pontaj-pro', t] for t in ('0', '59', '86401', '-1', 'nan', '1e3', '60\n', ' 60', '060')]
+        cases += [['cxw', 'a', 'pontaj-pro', t] for t in ('0', '86401', '-1', 'nan', '1e3', '60\n', ' 60', '060')]
         for args in cases:
             with self.subTest(args=args), self.assertRaises(c.Refuz):
                 c.arguments(args)
@@ -114,64 +115,142 @@ class Pure(unittest.TestCase):
             self.assertEqual(valid,row['valid'])
 
 
+def frame(**changes):
+    result = {'users':1, 'user_key':'user-new', 'user_text':'unrelated request',
+              'response_key':'reply-new', 'text':'Done.', 'status':None,
+              'busy':False, 'links':['https://github.com/example/project/pull/42']}
+    result.update(changes)
+    return result
+
+
+class Clock:
+    def __init__(self): self.t=0
+    def __call__(self): return self.t
+    def advance(self,ms): self.t += ms/1000
+
+
 class Watch(unittest.TestCase):
-    class Locator:
-        def __init__(self, count=0, text='', statuses=None):
-            self.n, self.text, self.statuses = count, text, statuses
-            self.last = self
-        def locator(self, selector):
-            assert selector == 'a[href]'
-            return Watch.Locator(statuses=['https://github.com/example/project/pull/42','https://evil.test/pull/99'])
-        def count(self): return self.n
-        def inner_text(self): return self.text
-        def evaluate_all(self, _): return self.statuses
-
     class Page:
-        def __init__(self, frames):
-            self.url = URL
-            self.frames = frames
-            self.index = 0
+        def __init__(self,frames,clock):
+            self.url=URL;self.frames=frames;self.index=0;self.clock=clock
         def is_closed(self): return False
-        def wait_for_timeout(self, _): self.index += 1
-        def locator(self, selector):
-            frame = self.frames[min(self.index,len(self.frames)-1)]
-            if selector == c.USER: return Watch.Locator(count=frame.get('users',1))
-            if selector == c.ASSISTANT: return Watch.Locator(count=1,text=frame.get('text','Done.'))
-            if selector == c.BUSY: return Watch.Locator(count=int(frame.get('busy',False)))
-            if selector == '[data-task-status]:visible': return Watch.Locator(statuses=[frame.get('status')])
-            if selector == 'a[href]': return Watch.Locator(statuses=['https://github.com/example/project/pull/42','https://evil.test/pull/99'])
-            raise AssertionError(selector)
+        def wait_for_timeout(self,ms): self.index += 1;self.clock.advance(ms)
+        def evaluate(self,script,args):
+            assert script == c.TURN_SNAPSHOT and args == {'index':0}
+            return self.frames[min(self.index,len(self.frames)-1)]
 
-    def run_watch(self, frames):
-        out=io.StringIO()
-        with contextlib.redirect_stdout(out), patch.object(c,'pending_confirmation',return_value=False):
-            c.watch(self.Page(frames), URL, 0, 0, 60, 'unrelated request')
-        return json.loads(out.getvalue())
+    def run_watch(self,frames,brief='unrelated request'):
+        clock=Clock();page=self.Page(frames,clock);out=io.StringIO()
+        with contextlib.redirect_stdout(out), patch.object(c.time,'monotonic',clock), patch.object(c,'pending_confirmation',return_value=False):
+            c.watch(page,URL,0,'user-new',12,brief)
+        return json.loads(out.getvalue()),page.index
 
     def test_running_then_complete_and_pr(self):
-        result=self.run_watch([{'status':'running','busy':True},{'status':'completed'}])
+        result,reads=self.run_watch([frame(status='running',busy=True),frame(status='completed')])
         self.assertEqual(result['state'],'gata')
         self.assertEqual(result['chat_url'],URL)
         self.assertEqual(result['pr_urls'],['https://github.com/example/project/pull/42'])
+        self.assertEqual(reads,3)  # busy + three stable completed observations
 
     def test_question_is_human_decision(self):
-        result=self.run_watch([{'status':None,'text':'Should I publish?'}])
+        result,_=self.run_watch([frame(text='Should I publish?')])
         self.assertEqual(result['state'],'asteapta_confirmare')
 
     def test_concurrent_turn_refused(self):
         with self.assertRaisesRegex(c.Refuz,'^chat_modificat_concurent$'):
-            self.run_watch([{'users':2}])
+            self.run_watch([frame(users=2)])
 
     def test_navigation_refused_before_read(self):
-        page=self.Page([{}]);page.url='https://chatgpt.com/c/other'
-        with self.assertRaisesRegex(c.Refuz,'^tab_propriu_pierdut$'):
-            c.watch(page,URL,0,0,60,'request')
+        page=self.Page([frame()],Clock());page.url='https://chatgpt.com/c/other'
+        with patch.object(c.time,'monotonic',return_value=0):
+            with self.assertRaisesRegex(c.Refuz,'^tab_propriu_pierdut$'):
+                c.watch(page,URL,0,'user-new',12,'unrelated request')
 
     def test_stale_completed_never_success_and_timeout(self):
-        page=self.Page([{'status':'completed'}])
-        with patch.object(c.time,'monotonic',side_effect=[0,0,61]), patch.object(c,'pending_confirmation',return_value=False):
+        with self.assertRaisesRegex(c.Refuz,'^timeout_stare_necunoscuta$'):
+            self.run_watch([frame(status='completed')])
+
+    def test_busy_then_partial_with_completed_old_outside_turn(self):
+        # DOM snapshot excludes the old/global completed: new reply has no status.
+        with self.assertRaisesRegex(c.Refuz,'^timeout_stare_necunoscuta$'):
+            self.run_watch([frame(status='running',busy=True),frame(text='Part',status=None)])
+
+    def test_stability_resets_on_partial_text_change(self):
+        result,reads=self.run_watch([frame(status='running',busy=True),
+            frame(text='Part',status='completed'),frame(text='Done.',status='completed')])
+        self.assertEqual(result['text'],'Done.')
+        self.assertEqual(reads,4)
+
+    def test_response_replacement_cannot_inherit_busy(self):
+        with self.assertRaisesRegex(c.Refuz,'^timeout_stare_necunoscuta$'):
+            self.run_watch([frame(status='running',busy=True),frame(response_key='replacement',status='completed')])
+
+    def test_user_identity_and_text_rechecked(self):
+        for changes,reason in [({'user_key':'other'},'identitate_turn_neconfirmata'),
+                               ({'user_text':'different'},'mesaj_user_diferit'),
+                               ({'scope_invalid':True},'raspuns_fara_scope_propriu')]:
+            with self.subTest(changes=changes), self.assertRaisesRegex(c.Refuz,'^'+reason+'$'):
+                self.run_watch([frame(**changes)])
+
+    def test_brief_only_pr_link_never_logged_in_answer_fields(self):
+        brief='https://github.com/example/project/pull/42'
+        result,_=self.run_watch([frame(user_text=brief,text=brief,status='running',busy=True),
+                                frame(user_text=brief,text=brief,status='completed')],brief)
+        self.assertEqual(result['pr_urls'],[])
+        self.assertNotIn(brief,json.dumps(result))
+
+
+class SentEvidence(unittest.TestCase):
+    def test_submit_waits_for_exact_user_in_both_modes(self):
+        from unittest.mock import MagicMock
+        for mode in ('cxw','cxw-continua'):
+            with self.subTest(mode=mode):
+                clock=Clock();out=io.StringIO();page=MagicMock()
+                page.url=c.HOME if mode == 'cxw' else URL
+                initial=0 if mode == 'cxw' else 2
+                sent={'value':False}
+                user=MagicMock()
+                user.count.side_effect=lambda: initial+int(sent['value'] and clock.t >= .4)
+                empty=MagicMock();empty.count.return_value=0;empty.evaluate_all.return_value=0
+                editor=MagicMock();editor.evaluate.return_value=True
+                editor.input_value.side_effect=['','unrelated request']
+                page.locator.side_effect=lambda selector: editor if selector == c.EDITOR else user if selector == c.USER else empty
+                send=MagicMock()
+                def send_once(**kwargs): sent['value']=True;page.url=URL
+                send.click.side_effect=send_once
+                page.get_by_role.side_effect=lambda role,**kwargs: send if isinstance(kwargs.get('name'),type(c.CHAT)) else MagicMock()
+                page.wait_for_timeout.side_effect=clock.advance
+                page.evaluate.return_value=frame(users=initial+1)
+                context=MagicMock();context.pages=[page];context.new_page.return_value=page
+                def record(**data):
+                    self.assertGreaterEqual(clock.t,.4)
+                    self.assertEqual(user.count(),initial+1)
+                    self.assertEqual(data,{'chat_url':URL,'event':'trimis'})
+                with patch.object(c.time,'monotonic',clock), patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval'), patch.object(c,'pending_confirmation',return_value=False), patch.object(c,'emit',side_effect=record):
+                    result=c.submit(context,mode,'pontaj-pro' if mode == 'cxw' else URL,'unrelated request',1)
+                send.click.assert_called_once()
+                self.assertFalse(result['waiting'])
+                self.assertEqual(result['user_index'],initial)
+                self.assertEqual(result['user_key'],'user-new')
+
+    def test_missing_message_times_out_without_trimis(self):
+        from unittest.mock import MagicMock
+        clock=Clock();page=MagicMock();page.locator.return_value.count.return_value=2
+        with patch.object(c.time,'monotonic',clock), patch.object(c,'emit') as emit:
+            page.wait_for_timeout.side_effect=clock.advance
             with self.assertRaisesRegex(c.Refuz,'^timeout_stare_necunoscuta$'):
-                c.watch(page,URL,0,0,60,'request')
+                c.wait_submitted(page,2,'unrelated request',1)
+        emit.assert_not_called()
+
+    def test_wrong_text_count_or_identity_rejected(self):
+        from unittest.mock import MagicMock
+        for data,reason in [(frame(users=4),'chat_modificat_concurent'),
+                            (frame(users=3,user_text='other'),'mesaj_user_diferit'),
+                            (frame(users=3,user_key=None),'identitate_turn_neconfirmata')]:
+            page=MagicMock();page.locator.return_value.count.return_value=data['users'];page.evaluate.return_value=data
+            with self.subTest(data=data), patch.object(c.time,'monotonic',return_value=0):
+                with self.assertRaisesRegex(c.Refuz,'^'+reason+'$'):
+                    c.wait_submitted(page,2,'unrelated request',10)
 
 
 class SubmitGuards(unittest.TestCase):
@@ -190,7 +269,7 @@ class SubmitGuards(unittest.TestCase):
         page,context,editor=self.setup_page()
         with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval',side_effect=c.Refuz('approve_for_me_pornit_sau_necunoscut')):
             with self.assertRaisesRegex(c.Refuz,'^approve_for_me_pornit_sau_necunoscut$'):
-                c.submit(context,'cxw-continua',URL,'synthetic brief')
+                c.submit(context,'cxw-continua',URL,'synthetic brief',c.time.monotonic()+60)
         editor.fill.assert_not_called()
         page.get_by_role.return_value.click.assert_not_called()
 
@@ -198,9 +277,144 @@ class SubmitGuards(unittest.TestCase):
         page,context,editor=self.setup_page()
         with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval',side_effect=[None,c.Refuz('approve_for_me_pornit_sau_necunoscut')]):
             with self.assertRaisesRegex(c.Refuz,'^approve_for_me_pornit_sau_necunoscut$'):
-                c.submit(context,'cxw-continua',URL,'synthetic brief')
+                c.submit(context,'cxw-continua',URL,'synthetic brief',c.time.monotonic()+60)
         editor.fill.assert_called_once_with('synthetic brief')
         page.get_by_role.return_value.click.assert_not_called()
+
+    def test_confirmation_before_send_is_successful_waiting_for_both_modes(self):
+        for mode in ('cxw','cxw-continua'):
+            page,context,editor=self.setup_page()
+            page.url=c.HOME if mode == 'cxw' else URL
+            context.new_page.return_value=page
+            from unittest.mock import MagicMock
+            send=MagicMock()
+            page.get_by_role.side_effect=lambda role,**kwargs: send if isinstance(kwargs.get('name'),type(c.CHAT)) else MagicMock()
+            out=io.StringIO()
+            with patch.object(c,'unique',side_effect=lambda x,_:x), patch.object(c,'check_approval'), patch.object(c,'pending_confirmation',return_value=True), contextlib.redirect_stdout(out):
+                result=c.submit(context,mode,'pontaj-pro' if mode == 'cxw' else URL,'synthetic brief',c.time.monotonic()+60)
+            send.click.assert_not_called()
+            self.assertTrue(result['waiting'])
+            payload=json.loads(out.getvalue())
+            self.assertEqual(payload['state'],'asteapta_confirmare')
+            self.assertFalse(payload['submitted'])
+            self.assertEqual(payload['chat_url'],c.HOME if mode == 'cxw' else URL)
+            self.assertNotIn('trimis',out.getvalue())
+
+
+class Deadline(unittest.TestCase):
+    def test_preparation_consumes_shared_deadline_and_limits_subprocess(self):
+        from unittest.mock import MagicMock
+        clock=Clock();clock.t=8
+        result=MagicMock();result.stdout=' TCP 127.0.0.1:9333 0.0.0.0:0 LISTENING 123';result.returncode=0
+        with patch.object(c.time,'monotonic',clock), patch.dict(c.os.environ,{'SystemRoot':r'C:\Windows'}), patch.object(c.subprocess,'run',return_value=result) as run:
+            c.check_cdp(10)
+            self.assertEqual(run.call_args.kwargs['timeout'],2)
+            result.stdout='CLEAR'
+            c.no_orphan_driver(10)
+            self.assertEqual(run.call_args.kwargs['timeout'],2)
+            clock.t=10
+            with self.assertRaisesRegex(c.Refuz,'^timeout_stare_necunoscuta$'):
+                c.check_cdp(10)
+            self.assertEqual(run.call_count,2)
+
+    def test_watch_uses_remaining_time_without_reset(self):
+        clock=Clock();clock.t=9
+        page=Watch.Page([frame(status='running',busy=True)],clock)
+        with patch.object(c.time,'monotonic',clock), patch.object(c,'pending_confirmation',return_value=False):
+            with self.assertRaisesRegex(c.Refuz,'^timeout_stare_necunoscuta$'):
+                c.watch(page,URL,0,'user-new',10,'unrelated request')
+        self.assertEqual(clock.t,10)
+
+
+class MainLifecycle(unittest.TestCase):
+    def run_main(self,waiting):
+        from unittest.mock import MagicMock
+        import types
+        events=[];held={'value':False};api=types.ModuleType('playwright.sync_api')
+        @contextlib.contextmanager
+        def lock():
+            events.append('lock');held['value']=True
+            try: yield
+            finally: events.append('unlock');held['value']=False
+        @contextlib.contextmanager
+        def driver():
+            events.append('driver_open')
+            browser=MagicMock();page=MagicMock();page.url=URL
+            browser.contexts=[MagicMock()];browser.contexts[0].pages=[page]
+            pw=MagicMock();pw.chromium.connect_over_cdp.return_value=browser
+            try: yield pw
+            finally: events.append('driver_closed')
+        api.sync_playwright=driver
+        sent={'waiting':waiting,'url':URL,'user_index':0,'user_key':'user-new','progress':c.TurnProgress()}
+        def submit(*args):
+            self.assertTrue(held['value']);events.append('evidence_or_waiting');return sent
+        def watch(*args):
+            self.assertFalse(held['value']);events.append('watch')
+        with patch.dict(sys.modules,{'playwright':types.ModuleType('playwright'),'playwright.sync_api':api}), patch.object(c,'read_brief',return_value='unrelated request'), patch.object(c,'check_cdp'), patch.object(c,'no_orphan_driver'), patch.object(c,'interaction_lock',lock), patch.object(c,'submit',side_effect=submit), patch.object(c,'watch',side_effect=watch), contextlib.redirect_stdout(io.StringIO()):
+            code=c.main(['cxw','brief','pontaj-pro','60'])
+        self.assertEqual(code,0)
+        return events
+
+    def test_waiting_is_exit_zero_and_disconnect_before_unlock(self):
+        self.assertEqual(self.run_main(True),['lock','driver_open','evidence_or_waiting','driver_closed','unlock'])
+
+    def test_watch_starts_after_evidence_disconnect_unlock(self):
+        self.assertEqual(self.run_main(False),['lock','driver_open','evidence_or_waiting','driver_closed','unlock','driver_open','watch','driver_closed'])
+
+
+class DomScope(unittest.TestCase):
+    @staticmethod
+    def node(attrs=None,text='',children=None,tag='div'):
+        return {'tag':tag,'attrs':attrs or {},'text':text,'children':children or []}
+
+    def snapshot(self,children):
+        import subprocess
+        import shutil
+        node=shutil.which('node') or r'C:\Program Files\nodejs\node.exe'
+        result=subprocess.run([node,str(HERE/'teste/dom_snapshot_harness.cjs')],
+            input=json.dumps({'script':c.TURN_SNAPSHOT,'index':1,'tree':self.node(children=children)}),
+            capture_output=True,text=True,timeout=5,check=True)
+        return json.loads(result.stdout)
+
+    def fixture(self,status=None):
+        user_old=self.node({'data-message-author-role':'user','data-message-id':'u-old'},'old request')
+        old=self.node({'data-message-author-role':'assistant','data-message-id':'a-old'},'old result',
+                      [self.node({'data-task-status':'completed'})])
+        user=self.node({'data-message-author-role':'user','data-message-id':'u-new'},'unrelated request')
+        reply=self.node({'data-message-author-role':'assistant','data-message-id':'a-new'},'Part')
+        parts=[reply]+([self.node({'data-task-status':status})] if status else [])
+        own=self.node({'data-testid':'conversation-turn-4'},children=parts,tag='article')
+        return [user_old,old,user,own]
+
+    def test_actual_snapshot_excludes_previous_completed_and_global_busy(self):
+        children=self.fixture()
+        children.append(self.node({'data-task-status':'completed'}))
+        children.append(self.node({'aria-label':'Stop'},tag='button'))
+        result=self.snapshot(children)
+        self.assertEqual(result['user_key'],'u-new')
+        self.assertEqual(result['response_key'],'a-new')
+        self.assertEqual(result['text'],'Part')
+        self.assertIsNone(result['status'])
+        self.assertFalse(result['busy'])
+
+    def test_actual_snapshot_busy_partial_old_completed_regression(self):
+        progress=c.TurnProgress()
+        busy=self.snapshot(self.fixture('running'))
+        self.assertEqual(busy['status'],'running');self.assertTrue(busy['busy'])
+        self.assertIsNone(progress.observe(busy))
+        partial=self.snapshot(self.fixture())
+        for _ in range(6):
+            self.assertIsNone(progress.observe(partial))
+        complete=self.snapshot(self.fixture('completed'));complete['text']='Done.'
+        self.assertIsNone(progress.observe(complete))
+        self.assertIsNone(progress.observe(complete))
+        self.assertEqual(progress.observe(complete),'gata')
+
+    def test_actual_snapshot_rejects_shared_container(self):
+        children=self.fixture('completed')
+        user=children.pop(2)
+        children[-1]['children'].insert(0,user)
+        self.assertTrue(self.snapshot(children)['scope_invalid'])
 
 
 class Brief(unittest.TestCase):

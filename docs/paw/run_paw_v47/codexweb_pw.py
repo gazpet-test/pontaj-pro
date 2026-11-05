@@ -21,6 +21,7 @@ CDP = 'http://127.0.0.1:9333'
 HOME = 'https://chatgpt.com/codex'
 DATA = r'C:\Users\Public\paw-data'
 MAX_CHARS = 200000
+STABLE_READS = 3
 # Only Codex task URLs. No generic ChatGPT conversation, query, fragment,
 # credentials, port, percent escaping, alternate host or trailing whitespace.
 CHAT = re.compile(r'https://chatgpt\.com/codex/tasks/task_[a-f0-9]{16,64}', re.ASCII)
@@ -51,8 +52,9 @@ def arguments(argv):
             raise Refuz('mediu_nepermis')
     else:
         chat_url(target)
-    if not re.fullmatch(r'[1-9][0-9]{0,4}', seconds) or not 60 <= int(seconds) <= 86400:
+    if not re.fullmatch(r'[1-9][0-9]{0,4}', seconds) or not 1 <= int(seconds) <= 86400:
         raise Refuz('timeout_invalid')
+    # Internal budget from launcher; public PAW_CXW_TIMEOUT_SECONDS stays 60..86400.
     return mode, brief, target, int(seconds)
 
 
@@ -83,13 +85,20 @@ def loopback_listeners(raw):
         raise Refuz('cdp_non_loopback_sau_absent')
 
 
-def check_cdp():
+def remaining(deadline, cap=None):
+    value = deadline - time.monotonic()
+    if value <= 0:
+        raise Refuz('timeout_stare_necunoscuta')
+    return min(value, cap) if cap is not None else value
+
+
+def check_cdp(deadline):
     # Also protects direct helper invocation; never accept a configurable endpoint.
-    result = subprocess.run([os.path.join(os.environ['SystemRoot'], 'System32', 'netstat.exe'), '-ano', '-p', 'tcp'], capture_output=True, text=True, timeout=10, check=True)
+    result = subprocess.run([os.path.join(os.environ['SystemRoot'], 'System32', 'netstat.exe'), '-ano', '-p', 'tcp'], capture_output=True, text=True, timeout=remaining(deadline, 10), check=True)
     loopback_listeners(result.stdout)
 
 
-def no_orphan_driver():
+def no_orphan_driver(deadline):
     # Under the interaction lock. A dead Python can release the lock before its
     # Job kills Node; do not race that orphan's pending browser command.
     script = r"""
@@ -109,7 +118,7 @@ foreach($d in $all){
     child_env = os.environ.copy()
     child_env['PAW_CXW_DRIVER'] = os.path.join(os.path.dirname(sys.executable), r'Lib\site-packages\playwright\driver\node.exe')
     exe = os.path.join(os.environ['SystemRoot'], r'System32\WindowsPowerShell\v1.0\powershell.exe')
-    result = subprocess.run([exe, '-NoProfile', '-NonInteractive', '-Command', script], env=child_env, capture_output=True, text=True, timeout=15)
+    result = subprocess.run([exe, '-NoProfile', '-NonInteractive', '-Command', script], env=child_env, capture_output=True, text=True, timeout=remaining(deadline, 15))
     if result.returncode or result.stdout.strip() != 'CLEAR':
         raise Refuz('driver_ramas_sau_stare_necunoscuta')
 
@@ -221,15 +230,137 @@ def draft_guard(page, editor, brief):
     except Exception:
         raise Refuz('ciorna_invalida') from None
     check_approval(page)
-    if pending_confirmation(page):
-        raise Refuz('confirmare_inainte_de_trimitere')
+    return pending_confirmation(page)
 
 
-def submit(context, mode, target, brief):
+# Snapshot DOM order, user identity, response, status and links in ONE read.
+# No global task-status/Stop badge can certify a response. A status must be in
+# the new assistant's own message/turn container, strictly after the sent user.
+TURN_SNAPSHOT = r"""({index}) => {
+ const userSelector = '[data-message-author-role="user"]';
+ const assistantSelector = '[data-message-author-role="assistant"]';
+ const users = [...document.querySelectorAll(userSelector)];
+ const user = users[index];
+ const key = el => el?.getAttribute('data-message-id') || el?.id ||
+   el?.closest('[data-message-id]')?.getAttribute('data-message-id') || null;
+ if (!user) return {users: users.length};
+ const after = el => !!(user.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)
+   && !user.contains(el);
+ const replies = [...document.querySelectorAll(assistantSelector)].filter(after);
+ const reply = replies.at(-1);
+ const base = {users: users.length, user_text: user.innerText, user_key: key(user)};
+ if (!reply) return {...base, response_key: null, text: '', status: null, busy: false, links: []};
+ const container = reply.closest('article[data-testid^="conversation-turn-"]') ||
+   reply.closest('[data-message-id]') || reply;
+ // A shared task root, prior user turn or ambiguous group is not a reply scope.
+ const scopedReplies = [...container.querySelectorAll(assistantSelector)];
+ if (container.matches(assistantSelector)) scopedReplies.unshift(container);
+ if (container.querySelectorAll(userSelector).length || scopedReplies.length !== 1 ||
+     !after(container)) return {...base, scope_invalid: true};
+ const visible = el => !!el.getClientRects().length;
+ const states = [...container.querySelectorAll('[data-task-status]')];
+ if (container.matches('[data-task-status]')) states.unshift(container);
+ const statuses = states.filter(visible).map(el => el.getAttribute('data-task-status'));
+ const busy = statuses.some(s => s === 'running' || s === 'queued') ||
+   [...container.querySelectorAll('button[aria-label="Stop"], button[aria-label="Stop generating"]')].some(visible);
+ return {...base, response_key: key(reply) || container.getAttribute('data-testid'),
+   text: reply.innerText, status: statuses.length === 1 ? statuses[0] : null, busy,
+   links: [...reply.querySelectorAll('a[href]')].map(el => el.href)};
+}"""
+
+
+def read_turn(page, user_index, brief, user_key=None):
+    frame = page.evaluate(TURN_SNAPSHOT, {'index': user_index})
+    count = frame.get('users')
+    if not isinstance(count, int) or count > user_index + 1:
+        raise Refuz('chat_modificat_concurent')
+    if count != user_index + 1:
+        raise Refuz('mesaj_user_neconfirmat')
+    if normalizeaza(frame.get('user_text')) != normalizeaza(brief):
+        raise Refuz('mesaj_user_diferit')
+    key = frame.get('user_key')
+    if not isinstance(key, str) or not key or (user_key is not None and key != user_key):
+        raise Refuz('identitate_turn_neconfirmata')
+    if frame.get('scope_invalid'):
+        raise Refuz('raspuns_fara_scope_propriu')
+    return frame
+
+
+def wait_submitted(page, user_index, brief, deadline):
+    """Exact +1, full normalized content and stable message identity; no retry."""
+    while remaining(deadline):
+        count = page.locator(USER).count()
+        if count > user_index + 1 or count < user_index:
+            raise Refuz('chat_modificat_concurent')
+        if count == user_index + 1:
+            # Re-read atomically, including count and content. A count alone is
+            # not evidence that *our* submitted brief is the new user message.
+            return read_turn(page, user_index, brief)
+        page.wait_for_timeout(remaining(deadline, .2) * 1000)
+
+
+class TurnProgress:
+    """Only this response's BUSY -> completed + three identical final reads."""
+    def __init__(self):
+        self.response_key = None
+        self.saw_busy = False
+        self.last_text = None
+        self.stable = 0
+
+    def observe(self, frame, confirmation=False):
+        text = frame.get('text', '')
+        status = frame.get('status')
+        busy = frame.get('busy', False)
+        if confirmation:
+            return 'asteapta_confirmare'
+        key = frame.get('response_key')
+        if key != self.response_key:
+            self.response_key = key
+            self.saw_busy = False
+            self.last_text = None
+            self.stable = 0
+        if not key:
+            return None
+        self.saw_busy = self.saw_busy or busy
+        decision = outcome(text, status, busy, False)
+        if not busy and text.strip() and re.search(r'\?|\b(?:confirmare|aprobare|permission|shall I|should I)\b', text, re.I):
+            return 'asteapta_confirmare'
+        if decision == 'asteapta_confirmare':
+            return decision
+        if decision == 'gata' and self.saw_busy:
+            self.stable = self.stable + 1 if text == self.last_text else 1
+            self.last_text = text
+            if self.stable >= STABLE_READS:
+                return 'gata'
+        else:
+            self.stable = 0
+            self.last_text = None
+        return None
+
+
+def emit_result(state, url, brief, frame=None, submitted=True):
+    frame = frame or {}
+    # Apply the SAME protection to every answer-derived field, including hrefs.
+    links = {x for x in frame.get('links', []) if isinstance(x, str) and
+             PR.fullmatch(x) and safe_text(x, brief) == x}
+    emit(state=state, chat_url=url, submitted=submitted,
+         text=safe_text(frame.get('text', ''), brief), pr_urls=sorted(links))
+
+
+def confirmation_before_send(page, brief):
+    url = page.url
+    if url != HOME:
+        chat_url(url)
+    emit_result('asteapta_confirmare', url, brief, submitted=False)
+    return {'waiting': True, 'url': url}
+
+
+def submit(context, mode, target, brief, deadline):
     # All interaction uses page-scoped locators (no clipboard/global keyboard).
     # Lock order: inherited launcher installation barrier -> short cxw lock.
     if mode == 'cxw':
         page = context.new_page()
+        page.set_default_timeout(remaining(deadline, 10) * 1000)
         page.goto(HOME, wait_until='domcontentloaded')
         if page.url != HOME or page.locator(USER + ', ' + ASSISTANT).count():
             raise Refuz('chat_nou_neconfirmat')
@@ -242,6 +373,7 @@ def submit(context, mode, target, brief):
         if len(matches) > 1:
             raise Refuz('tab_chat_ambiguu')
         page = matches[0] if matches else context.new_page()
+        page.set_default_timeout(remaining(deadline, 10) * 1000)
         if not matches:
             page.goto(target, wait_until='domcontentloaded')
         if page.url != target:
@@ -255,74 +387,74 @@ def submit(context, mode, target, brief):
     if current.strip():
         raise Refuz('ciorna_existenta')
     check_approval(page)
-    before = page.locator(ASSISTANT).count()
     users = page.locator(USER).count()
     editor.fill(brief)
-    draft_guard(page, editor, brief)
+    if draft_guard(page, editor, brief):
+        return confirmation_before_send(page, brief)
     unique(page.get_by_role('button', name='pontaj-pro', exact=True), 'mediu_neconfirmat')
     if page.locator(BUSY).count():
         raise Refuz('chat_ocupat')
+    remaining(deadline)
     # Exactly one message submission; no retry, including after ambiguous timeout.
-    unique(page.get_by_role('button', name=re.compile(r'^(Send|Send message)$')), 'send_necunoscut').click(timeout=10000)
-    # Keep the interaction lock until the task identity is known.
-    page.wait_for_url(lambda u: CHAT.fullmatch(str(u)) is not None, timeout=30000)
+    unique(page.get_by_role('button', name=re.compile(r'^(Send|Send message)$')), 'send_necunoscut').click(timeout=remaining(deadline, 10) * 1000)
+    page.wait_for_url(lambda u: CHAT.fullmatch(str(u)) is not None, timeout=remaining(deadline, 30) * 1000)
     url = chat_url(page.url)
     if mode == 'cxw-continua' and url != target:
         raise Refuz('identitate_chat_schimbata')
+    # In BOTH modes URL is insufficient; hold the lock until the new user
+    # message exists exactly once and its full normalized text equals the file.
+    frame = wait_submitted(page, users, brief, deadline)
+    if page.url != url:
+        raise Refuz('identitate_chat_schimbata')
+    progress = TurnProgress()
     emit(chat_url=url, event='trimis')
-    return page, url, before, users, page.locator(BUSY).count() > 0
+    progress.observe(frame)  # Preserve this turn's BUSY across driver reconnect.
+    return {'waiting': False, 'url': url, 'user_index': users,
+            'user_key': frame['user_key'], 'progress': progress}
 
 
-def watch(page, url, before, users, seconds, brief, saw_running=False):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
+def watch(page, url, user_index, user_key, deadline, brief, progress=None):
+    progress = progress or TurnProgress()
+    while remaining(deadline):
         if page.is_closed() or page.url != url:
             raise Refuz('tab_propriu_pierdut')
-        if page.locator(USER).count() > users + 1:
-            raise Refuz('chat_modificat_concurent')
-        messages = page.locator(ASSISTANT)
-        text = messages.last.inner_text() if messages.count() > before else ''
-        statuses = page.locator('[data-task-status]:visible').evaluate_all('(els) => els.map(e => e.getAttribute("data-task-status"))')
-        status = statuses[0] if len(statuses) == 1 else None
-        busy = page.locator(BUSY).count() > 0
-        saw_running = saw_running or busy
-        # A stale completed badge from the preceding turn cannot finish this turn.
-        state = outcome(text, status if saw_running or status != 'completed' else None, busy, pending_confirmation(page))
-        if text.strip() and not busy and re.search(r'\?|\b(?:confirmare|aprobare|permission|shall I|should I)\b', text, re.I):
-            state = 'asteapta_confirmare'
+        frame = read_turn(page, user_index, brief, user_key)
+        state = progress.observe(frame, pending_confirmation(page))
         if state:
-            links = messages.last.locator('a[href]').evaluate_all('(els) => els.map(e => e.href)') if messages.count() > before else []
-            emit(state=state, chat_url=url, text=safe_text(text, brief), pr_urls=sorted({x for x in links if PR.fullmatch(x)}))
+            emit_result(state, url, brief, frame)
             return
-        page.wait_for_timeout(2000)
-    # Cloud work may continue. Do not click Stop or resubmit.
-    raise Refuz('timeout_stare_necunoscuta')
+        page.wait_for_timeout(remaining(deadline, 2) * 1000)
+    # Cloud work may continue. Never click Stop or resubmit.
 
 
 def main(argv):
     try:
         mode, path, target, seconds = arguments(argv)
+        deadline = time.monotonic() + seconds
         brief = read_brief(path)
         emit(brief_sha256=hashlib.sha256(brief.encode('utf-8')).hexdigest(), brief_length=len(brief))
-        check_cdp()
+        check_cdp(deadline)
         from playwright.sync_api import sync_playwright
         # Disconnect the submitting driver before releasing the lock, including
         # exceptions; a timeout must never leave commands alive after unlock.
         with interaction_lock():
-            no_orphan_driver()
+            no_orphan_driver(deadline)
             with sync_playwright() as pw:
-                browser = pw.chromium.connect_over_cdp(CDP, timeout=15000)
+                browser = pw.chromium.connect_over_cdp(CDP, timeout=remaining(deadline, 15) * 1000)
                 if len(browser.contexts) != 1:
                     raise Refuz('context_browser_ambiguu')
-                _, url, before, users, saw_running = submit(browser.contexts[0], mode, target, brief)
+                sent = submit(browser.contexts[0], mode, target, brief, deadline)
+        if sent['waiting']:
+            return 0
+        url = sent['url']
         # Separate read-only connection. Select the exact task URL, never reload,
         # navigate, close, focus or write a tab while watching.
         with sync_playwright() as pw:
-            browser = pw.chromium.connect_over_cdp(CDP, timeout=15000)
+            browser = pw.chromium.connect_over_cdp(CDP, timeout=remaining(deadline, 15) * 1000)
             matches = [p for ctx in browser.contexts for p in ctx.pages if p.url == url]
             if len(matches) != 1:
                 raise Refuz('tab_propriu_pierdut_sau_ambiguu')
-            watch(matches[0], url, before, users, seconds, brief, saw_running)
+            watch(matches[0], url, sent['user_index'], sent['user_key'], deadline, brief, sent['progress'])
         return 0
     except Refuz as error:
         emit(error=str(error))

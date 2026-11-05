@@ -1,114 +1,80 @@
-# Paw v4.7 cxw — raport pentru review
+# Paw v4.7 — runda 2, PR #1001
 
-Branch: `codex/paw-v47-cxw`; destinație PR DRAFT: `main`, fără merge.
-Nicio instalare/login/schimbare ACL sau WFP efectuată de agent. Nicio schimbare în
-src, migrări, alte module sau v461/mai vechi. Fișierele de test sunt sintetice.
+Branch `codex/paw-v47-cxw`, commit nou peste runda 1, push fără merge.
+Doar fișiere Paw din repo. Fără instalare pe server; v461 și versiunile vechi,
+src, migrările și celelalte module rămân nemodificate.
 
-## Fișiere și comportament
+## Remedii și dovezi
 
-- `run_paw_v47/`: copie completă v461. Cele 9 fișiere runtime moștenite care nu
-  sunt lansatorul/wrapperul/installerul sunt identice octet cu octet.
-- `run_paw.ps1:53`, `:686`, `:733`: două moduri noi, validări argumente/căi,
-  timeout configurabil 60–86400 secunde (implicit 2400), Job Object existent,
-  interpretare protocol și jurnal. `run_paw.cmd`: sintaxa celor două moduri.
-- `codexweb_pw.py:228`: `cxw` deschide un tab nou la `/codex`, alege EXACT
-  `pontaj-pro` prin Choose environment. `cxw-continua` folosește URL-ul existent
-  strict validat și verifică același mediu, fără a inventa răspunsuri.
-- `codexweb_pw.py:39`, `:59`, `:117`, `:134`, `:205`, `:215`: allow-list URL și
-  mediu, brief numai sub `paw-data\brief`, `.txt`/`.md`, fără UNC/ADS/reparse,
-  fără draft existent/atașamente, text identic după normalizarea comună Gemini,
-  OFF explicit înainte de fill și din nou înainte de Send. Lipsă/ON/ambiguu refuzate.
-  Outputul folosește `CaleSigura`, numai sub `paw-data\out`.
-- `codexweb_pw.py:74`, `:92`, `:178`, `:302`: CDP loopback, control de driver orfan
-  sub lock, lock kernel scurt, deconectarea driverului de trimitere înainte de
-  unlock. Conexiune nouă de citire pentru watch. Taburile cop/gem nu se ating.
-- `codexweb_pw.py:276`: URL propriu și turn verificat, text nou nevid + semnal
-  explicit completed după observarea execuției, fără busy. Textul stabil singur
-  nu este succes. Întrebări/dialoguri/confirmări → `asteapta_confirmare`, fără click
-  de confirmare, approve/publicare/Create PR și fără răspuns automat.
-- Log: JSON cu hash/lungime brief, URL, text final filtrat și linkuri PR din
-  răspunsul nou. Ultima linie fizică este numai a lansatorului: `PAW_GATA <id>
-  stare=gata|asteapta_confirmare` sau `PAW_EROARE <id> ...`. `paw_runs.log` primește
-  starea, exit și timp Europe/Bucharest; argumentele cxw respinse nu se copiază
-  în jurnal. Nu se persistă erori brute Playwright/stderr, nici brief integral.
-- `install.ps1:15`: pachet verificat/copiat de 13 runtime-uri, inclusiv helperul
-  nou; `:78` îl include în inventarul de mentenanță. `SHA256.json` recalculat.
-- `RUNBOOK_RAZVAN.md`: instalare/rollback și acceptanță Windows/Edge;
-  `../LANSATOR_UNIC_PAW.md`: secțiune v4.7; `teste/`: teste și fixture-uri comune.
+| Review | Implementare | Test |
+|---|---|---|
+| P1 Copilot: „trimis” fără dovadă | `codexweb_pw.py:289`, `:398`: după Send/URL, ambele moduri cer exact +1 mesaje user, text normalizat identic și identitate stabilă. Abia apoi `trimis`; driverul se oprește înainte de unlock (`:440`). | `SentEvidence`: ambele moduri, URL imediat dar mesaj întârziat, lipsă mesaj, +2 mesaje, text/identitate greșite. `MainLifecycle`: dovadă → disconnect → unlock → watch. |
+| P1 Jakarinos / P2-01 Copilot: finalizare veche | `codexweb_pw.py:239`, `:272`, `:302`, `:416`: snapshot atomic; numai assistant DUPĂ user-ul confirmat, status/Stop din containerul propriu, aceeași identitate BUSY → completed și 3 citiri identice. Schimbarea răspunsului resetează dovada. | `DomScope` execută JavaScript-ul real de snapshot pe arbore DOM offline; BUSY → text parțial + completed vechi/global nu dă gata. `Watch`: stabilitate, înlocuire, identitate/concurență și timeout. |
+| P2 Jakarinos: confirmare în draft | `codexweb_pw.py:224`, `:350`, `:391`; `run_paw.ps1:84`: fără Send/trimis, exit 0, stare `asteapta_confirmare`, URL și `submitted=false`; lansatorul produce PAW_GATA. `/codex` permis numai pentru cxw nou netrimis în așteptare. | `SubmitGuards` ambele moduri; `MainLifecycle` exit 0; `test_contract.ps1` verifică payload JSON și refuză HOME ca succes trimis/continuare. |
+| P2 Jakarinos: brief în pr_urls | `codexweb_pw.py:341`: protecția comună `safe_text` se aplică textului și fiecărui link derivat din răspuns; linkul modificat/egal cu brief-ul este omis. | `Watch.test_brief_only_pr_link_never_logged_in_answer_fields`: brief exclusiv URL PR, text și href identice; niciun câmp al rezultatului nu îl emite. |
+| P2 Jakarinos: pregătire în afara timeout-ului | `run_paw.ps1:55`, `:79`, `:293`, `:763`: ceas comun pornit înainte de pregătire, buget rămas trimis și recalculat chiar înainte de Process.Start. Verificările listener/orfani sunt mutate sub procesul/job-ul deja limitat; `codexweb_pw.py:88`, `:95`, `:101`, `:430` folosesc un singur deadline inclusiv în watch. | `Deadline`: timeout subprocess plafonat la rest, pregătire consumată, watch fără reset. PowerShell: CxwRemaining și runner real cu clock expirat refuză înainte de orice copil. |
+| P2 Copilot: certificare Windows | `RUNBOOK_RAZVAN.md:135`: secțiune 3a OBLIGATORIE înainte de acceptare/restabilirea pornirilor, matrice PASS/FAIL în audit. | Plan concret: două cxw simultane + cop/gem active, lock kernel două procese/crash, mesaje/URL separate, timeout și moarte părinte, arbore propriu oprit și celelalte procese intacte. Nerulat pe server. |
 
-Timeout-ul oprește întreg arborele **local**, prin Job Object-ul existent.
-Edge extern și sarcina cloud nu sunt anulate. Trimiterea ambiguă nu se reia;
-operatorul inspectează URL-ul/tabul înainte de orice mesaj nou. Într-un timeout
-chiar în click/navigarea URL, identificatorul poate rămâne necunoscut: verificare
-manuală în Edge, fără presupunerea „nu s-a trimis”. Lock ocupat este refuz local,
-fără Send/retry automat. Nu se șterg fișiere de lock după cale.
+`LANSATOR_UNIC_PAW.md` descrie noul contract; runbook-ul cere și identitățile/scope-ul
+DOM real. Pipe-ul lansatorului persistă evenimentele după terminarea helperului:
+acceptanța concurenței folosește mesajul user vizibil + lock liber drept dovadă live,
+apoi verifică `trimis` în logul final. Timeout-ul oprește arborele LOCAL; sarcina
+cloud poate continua. Fără retry, anulare cloud sau confirmări automate.
 
-Hash SHA256 al manifestului revizuit (`SHA256.json`):
-`FCC3FBDDA06AD201AFB545714ABA52F5E2E95719754A832DAB85C2825E1DECFB`.
+## Teste rulate
 
-## Verificări efectuate și limite
+- `python -B docs/paw/run_paw_v47/teste/test_codexweb_pw.py`: **40 teste,
+  39 trecute, 1 omis** — lock kernel real Windows. Cazurile rundei 1 sunt păstrate
+  și adaptate noului contract (bugetul intern helper poate fi 1–86400 secunde rămase;
+  setarea publică din lansator rămâne 60–86400). Include cele 3 probe DOM fără browser,
+  folosind Node existent, fără pachete npm noi.
+- `teste/test_contract.ps1`, **PowerShell 7.5.4 pe Linux**: PASS pentru AST-ul
+  lansatorului, fixture-uri URL comune cu Python, protocol PAW_GATA/HOME și deadline,
+  inclusiv runner cu buget expirat fără Process.Start. Căile/junction reale Windows
+  sunt explicit SKIP. PowerShell folosit numai în `work/`, nu instalat pe server.
+- Regresie Gemini: clasele portabile TestTab, TestModel, TestAsteptare, TestCiorna,
+  TestMain, TestSursa din v46: **22/22 trecute**. Nu modificăm testele/codul v46.
+  Cele 7 cazuri TestBrief dependente de separatorul Windows, eșuate pe Linux în
+  runda 1, nu sunt declarate reparate sau trecute în această rundă.
+- Manifest verificat de test pe toți cei **13 runtime-uri**; 9 runtime-uri moștenite
+  nemodificate sunt comparate octet cu octet cu v461. Diff limitat la Paw.
 
-`python -B docs/paw/run_paw_v47/teste/test_codexweb_pw.py`:
-**24 teste: 23 trecute, 1 omis** (lock real Windows, două procese + crash).
-Acoperă medii/URL-uri adversariale, căi legitime/traversal/UNC/ADS/reparse simulat,
-limite brief, loopback, aprobări ON/necunoscute, schimbare OFF→ON după fill fără Send,
-ciorne diferite/atașamente, completed vechi, timeout, întrebări, navigare și turn
-concurent, extragere PR, redactare și împiedicarea falsificării markerilor, manifest
-și paritatea runtime-ului moștenit.
+**Nerulate pe server:** Edge autentificat/UI live, Windows PowerShell 5.1, CIM,
+Job Object și probele reale din runbook 3a. Testele offline nu certifică acestea.
+La lipsa identității/scope-ului/statusului așteptat, canalul refuză sau expiră;
+Răzvan validează UI-ul și recertifică cdx după instalarea revizuită. Nicio probă
+Codex cloud plătită și nicio instalare efectuată de agent.
 
-Regresie Gemini, selecția `TestTab`, `TestModel`, `TestAsteptare`, `TestCiorna`,
-`TestMain`, `TestSursa` din `run_paw_v46/teste/test_gemini_pw.py`: **22/22 trecute**.
-Rularea completă a aceleiași suite: **32 teste, 25 trecute, 5 eșecuri + 2 erori**.
-Toate cele 7 sunt cazuri TestBrief dependente de Windows: helperul vechi adaugă
-`\\` la rădăcini POSIX și refuză fixture-ul `/tmp/...` ca fiind în afara rădăcinii,
-înainte de verificarea așteptată a textului. Codul vechi rămâne identic; nu declarăm
-acele cazuri trecute și nu modificăm v46 ca să adaptăm harness-ul la Linux.
-
-`teste/test_contract.ps1` este pregătit pentru Windows: parsează AST-ul real al
-lansatorului, extrage `CaleSigura` fără a executa lansatorul, folosește aceleași
-fixture-uri URL/căi ca Python și verifică respingerea unei junction reale.
-**Nerulat aici**: nu există PowerShell/Windows. Nici Job Object, CIM, lock-ul kernel
-Windows, installerul, WFP sau Edge autentificat nu sunt certificate prin testele
-Linux. Nu s-au efectuat apeluri Codex cloud plătite pentru probe.
-
-**Înainte de utilizare**, Răzvan verifică în UI-ul real contractul de selectori
-(documentat explicit în runbook), inclusiv controlul OFF și starea task running /
-completed. Aceste atribute nu au fost observate pe server; pachetul poate refuza
-sau expira până la ajustarea lor în repo și un nou review. Nu este declarat canal
-validat end-to-end. Probe obligatorii: chat nou + continuare, ON fără Send,
-confirmare fără click, două sarcini și cop/gem în paralel, timeout/arbore local,
-PR link, hash-uri/ACL și Run/Seal cdx după instalarea v47 de către admin.
+SHA256 al `SHA256.json`: `AF33682D0CB9EF42CFD6B3699A59CDA39296C03237FD7E268E53404279546576`.
 
 ## L01–L25
 
-Referințele sunt în acest director dacă nu se indică altfel. Regulile SQL sunt
-marcate n/a când nu există modificări de BD sau date, nu reinterpretate drept
-permisiune de a crea RPC-uri/migrări.
+Referințe în acest director. Reguli fără operații corespunzătoare: n/a.
 
-| Regulă | Respectare / dovadă |
+| Regulă | Respectare / test |
 |---|---|
-| L01 | `codexweb_pw.py:311`: lock înainte de conectare/inspectare/editare/trimitere; `:92` verifică driverii orfani sub lock; test Windows `Brief.test_real_two_process_lock_and_crash_release` pregătit, omis pe Linux. |
-| L02 | n/a — fără operații BD legate, RPC, storage/mail. |
-| L03 | `watch:276`: rezultat numai pentru URL-ul propriu, mesaj nou și număr de turnuri; `Watch.test_navigation_refused_before_read`, `test_concurrent_turn_refused`, `test_stale_completed_never_success_and_timeout`. |
-| L04 | n/a — fără cantități/bani/mail, chei de claim sau retry automat. |
-| L05 | `codexweb_pw.py:265`, `:298`, `run_paw.ps1:855`: un singur Send, timeout/eroare = stare necunoscută, fără retry/fallback/anulare cloud; runbook secțiunea 3 cere reconciliere manuală. |
-| L06 | n/a pentru lock-uri SQL; ordinea locală install barrier → lock cxw este documentată la `codexweb_pw.py:230`; fără lock pe alte taburi în watch. |
-| L07 | n/a — nicio politică/tabel/API de date modificat. |
-| L08 | n/a — nu se introduce identitate BD, proveniență sau SECURITY DEFINER. |
-| L09 | n/a — fără service_role/DEFINER/ID-uri de proiect BD; mediul UI este totuși pe allow-list exactă, `arguments` și `submit`. |
-| L10 | `safe_text:163`, `emit:172`, `main:329`; stderr suprimat în lansator, hash/lungime în loc de brief integral. `Pure.test_redaction_and_framing`, `test_generic_error_does_not_echo_brief`; fixture-uri fără secrete/date personale. |
-| L11 | n/a — nu se extrag valori dovedite din documente/tabele. |
-| L12 | `outcome:150`, `watch:276`: lipsa textului/stării și starea veche nu produc succes; timeout vizibil, fără a ascunde necunoscutul. `Pure.test_completion_and_confirmation`, testele Watch. |
-| L13 | `CHAT.fullmatch`, `arguments`, `path_lexical`: parsere ancorate și refuz explicit; `Pure.test_args_rejected`, `test_url_closed`, `test_paths_escape`, `test_loopback`, plus fixture-uri comune PowerShell. |
+| L01 | `codexweb_pw.py:187`, `:440`: lock înainte de CDP și până după dovada user+disconnect; `SentEvidence`, `MainLifecycle`; lock kernel real omis aici, obligatoriu Windows. |
+| L02 | n/a — fără scrieri BD/RPC/storage/mail. |
+| L03 | `read_turn:272`, `TurnProgress:302`: user_key/response_key curente, reset la înlocuire; teste Watch și DomScope. |
+| L04 | n/a — fără cantități/bani/mail sau retry automat. |
+| L05 | `wait_submitted:289`, `watch:416`: trimitere/timeout ambigue nu declanșează retry/fallback; URL verificat manual conform runbook. `SentEvidence.test_missing_message_times_out_without_trimis`. |
+| L06 | n/a pentru lock-uri SQL; ordinea locală install barrier → cxw este păstrată în `submit:358`, fără lock de watch. |
+| L07 | n/a — fără tabele/politici/API de date. |
+| L08 | n/a — fără identitate/proveniență BD/DEFINER. |
+| L09 | n/a — fără service_role/ID-uri BD; mediul UI rămâne pe allow-list exactă. |
+| L10 | `safe_text:172`, `emit_result:341`: aceeași protecție pentru text și href-uri, fără brief integral/erori brute. Test negativ brief=URL PR și testele de redactare r1. |
+| L11 | n/a — fără extragere de valori dovedite din documente/tabele. |
+| L12 | `TurnProgress:302`: partial/gol/status vechi/instabil nu sunt succes; `Watch` și `DomScope` verifică regresia BUSY → partial + completed vechi. |
+| L13 | `arguments:46`, `read_turn:272`, `CxwProtocolState` în `run_paw.ps1:84`: validare explicită și stări pe listă închisă; teste pozitive/negative Python și PowerShell. |
 | L14 | n/a — fără migrări. |
-| L15 | n/a — fără amprente/porți de schemă SQL. |
-| L16 | n/a — fără chei BD/deduplicare documente; hash-ul brief-ului este doar audit, nu identitate/idempotență. |
-| L17 | `watch:277` și `Ruleaza` moștenit folosesc ceas monoton pentru deadline; `Jurnal:76` convertește timestamp-ul cxw prin GTB Standard Time (Europe/Bucharest, cu DST), fără offset fix. Fără parsare nouă de valori business. |
-| L18 | `approval_off:144`, `unique:198`, `outcome:150`, protocol lansator: stări necunoscute/duplicate/erori refuzate, niciodată presupuse OFF/gata. Testele aprobărilor și completed vechi. |
-| L19 | Normalizarea/draftul reutilizează `gemini_pw.normalizeaza/verifica_ciorna`; fixture-urile `contract_cases.json` comune Python/PowerShell acoperă dublarea inevitabilă URL/căi. Python trecut; paritatea PowerShell trebuie rulată pe Windows. |
-| L20 | Teste pozitive și negative în Pure/SubmitGuards/Watch/Brief; OFF→ON fără Send; refuz local lock distinct de eroarea externă. Oprirea arborelui local nu depinde de o cotă/buget nou. |
-| L21 | n/a pentru contracte de API AI și scrieri/cache BD; canal UI fără UPDATE/DELETE. Finalizarea este totuși explicită, nevidă și fără stare failed/cancelled/error, testată în Pure/Watch. |
-| L22 | n/a — fără API de facturare, rezervări usage sau fallback plătit nou; nu există retry automat al unei trimiteri cloud ambigue. |
+| L15 | n/a — fără porți de schemă. |
+| L16 | n/a — fără chei BD/deduplicare documente. |
+| L17 | `remaining:88`, `run_paw.ps1:55`, `:79`, `:293`: deadline monoton comun, fără reset; `Deadline` + contract PowerShell. Jurnal Europe/Bucharest rămâne păstrat. |
+| L18 | `read_turn`, `TurnProgress`, `CxwProtocolState`: lipsa identității/scope-ului/confirmării nu devine gata; protocol și teste adversariale. |
+| L19 | `normalizeaza/verifica_ciorna` comune Gemini; `emit_result` unic pentru toate câmpurile răspunsului; fixture-uri URL comune Python/PowerShell. |
+| L20 | `SentEvidence`, `Watch`, `SubmitGuards`, `Deadline`: căi legitime și refuzuri; confirmarea nu devine eroare, oprirea Job rămâne posibilă după deadline. |
+| L21 | n/a pentru API AI/scrieri BD; canalul UI cere totuși finalizare proprie stabilă, fără gol/partial ca succes. |
+| L22 | n/a — fără API billing/rezervări usage/fallback nou; fără retrimitere cloud automată. |
 | L23 | n/a — fără paginare React/PostgREST. |
-| L24 | `watch:279`: identitate URL și contor turnuri, ieșire la tab pierdut/concurență; fără navigare/reload/focus/close în watch; teste Watch. Nicio componentă React modificată. |
-| L25 | Expected-uri explicite, fixture-uri adversariale independente, simulări fără browser și comparație cu bytes v461/manifest; testele reale Windows marcate nerulate/omise, fără pretenție de certificare OS/UI. |
+| L24 | `read_turn:272`, `watch:416`: URL+identitate user+răspuns, contor exact și reset la înlocuire; fără interacțiune în watch; teste de concurență/navigare/înlocuire. |
+| L25 | Expected-uri explicite și fixture-uri DOM independente executate cu JS-ul real; teste Python/PowerShell rulate, probele OS/UI marcate omise/nerulate și obligatorii în runbook. |

@@ -35,6 +35,8 @@ foreach ($e in $manifest.PSObject.Properties) {
     if ((Get-FileHash -LiteralPath (Join-Path $Source $e.Name)).Hash -ine $e.Value) { throw "Hash diferit: $($e.Name)" }
 }
 if ((Get-FileHash -LiteralPath "$Bin\cgpt_pw.py").Hash -ine $LegacyHash) { throw 'Helper cop nerevizuit' }
+# Testele DOM offline folosesc si Node existent (fara browser sau pachete npm noi).
+& 'C:\Program Files\nodejs\node.exe' --version
 & 'C:\Program Files\Python313\python.exe' -B "$Source\teste\test_codexweb_pw.py"
 if ($LASTEXITCODE -ne 0) { throw 'Teste Python eșuate' }
 & powershell.exe -NoProfile -File "$Source\teste\test_contract.ps1"
@@ -64,7 +66,7 @@ mai sus. Nu folosi verificarea „doar lista cop” din v461: nu se aplică aces
 4. v46 secțiunile 4–6: login separat numai dacă lipsește, smoke jak și Gemini,
    test de canal Gemini. `gemini_pw.py` este identic cu v461; markerul existent
    legat de același hash nu trebuie inventat/refăcut artificial.
-5. Probele cxw din secțiunea 3 de mai jos; apoi v46 secțiunea 7: Run și Seal r6
+5. Probele cxw din secțiunea 3 și certificarea OBLIGATORIE din 3a de mai jos; apoi v46 secțiunea 7: Run și Seal r6
    pentru noul hash `run_paw.ps1`. Nu copia certificatul vechi peste noul bin.
 6. Restabilește numai pornirile oprite în pasul 1, după toate verificările.
 
@@ -80,10 +82,26 @@ scriptul nu deschide meniuri de aprobare și nu schimbă setarea.
 Send are numele exact `Send` sau `Send message`. URL-ul rezultat trebuie să fie
 `https://chatgpt.com/codex/tasks/task_<16..64 hex lowercase>`. Alte forme se refuză,
 inclusiv URL de chat ChatGPT obișnuit, query, fragment, port, userinfo sau redirect.
-Mesajele au `data-message-author-role=user/assistant`. Finalizarea cere o stare
-unică vizibilă `data-task-status=completed`, text nou nevid, fără Stop/running/queued,
-și observarea execuției după trimitere. Starea veche completed și textul doar stabil
-nu produc GATA. Verifică aceste atribute cu inspectorul înainte de proba plătită.
+Mesajele au `data-message-author-role=user/assistant`, identitate stabilă
+`data-message-id` (pe mesaj sau strămoș), ori `id` pe mesaj. După Send, AMBELE
+moduri cer exact +1 mesaje user și ultimul text identic cu brief-ul normalizat.
+Numai după această dovadă apare `trimis`, se oprește driverul de trimitere și se
+eliberează lock-ul. URL-ul neschimbat la continuare nu este dovadă de trimitere.
+
+Răspunsul trebuie să fie DUPĂ acel mesaj user în DOM. Containerul lui propriu este
+`article[data-testid^="conversation-turn-"]`, sau `[data-message-id]`, sau chiar
+elementul assistant; trebuie să conțină exact acel assistant și niciun user.
+Statusul `data-task-status` și Stop sunt citite numai din acest container, niciodată
+global. Finalizarea cere aceeași identitate de răspuns, BUSY/running/queued observat
+pe el → completed unic vizibil fără busy, text nevid identic la 3 citiri consecutive
+(2 secunde între citiri în watch). Lipsa identității/scope-ului refuză, iar lipsa
+tranziției/stabilității expiră. Verifică atributele pe UI-ul real înaintea probei.
+
+Confirmarea detectată în draft înainte de Send produce tot exit 0 și
+`PAW_GATA <id> stare=asteapta_confirmare`, cu `submitted=false` și URL-ul actual,
+fără `trimis` sau Send. Pentru chat nou, URL-ul poate fi `/codex`: încă nu există
+un task. Această excepție nu este acceptată pentru un task trimis/complet sau
+pentru cxw-continua. OFF rămâne obligatoriu pentru trimitere.
 
 ```cmd
 run_paw.cmd cxw C:\Users\Public\paw-data\brief\cxw-proba.txt C:\Users\Public\paw-data\out\cxw-proba.log pontaj-pro
@@ -103,22 +121,82 @@ rulare. Mesajul de continuare este explicit scris de om; canalul nu formulează 
 - Confirmare publicare/aprobare sau întrebare: fără click/răspuns; logul are URL,
   text disponibil și `PAW_GATA <id> stare=asteapta_confirmare`. Omul decide separat.
   Orice dialog/control de confirmare este tratat conservator ca o cerere umană.
-- Două sarcini noi: lansează a doua după evenimentul `trimis` al primei; trebuie să
-  urmărească separat două URL-uri. Lock-ul `lock_cxw` se ține doar pe conectarea de
-  trimitere și închiderea driverului acesteia, nu pe urmărit. O coliziune scurtă se
-  raportează `interactiune_ocupata`, fără așteptare/retry automat. Cop/gem rămân pe
-  taburile lor; cxw nu folosește clipboard/tastatură globală, focus/reload/close.
-- Timeout de probă: `set PAW_CXW_TIMEOUT_SECONDS=60` înainte de apel (apoi șterge
-  variabila cu `set PAW_CXW_TIMEOUT_SECONDS=`). Verifică `PAW_EROARE`, absența tuturor
-  copiilor locali Python/Node și menținerea celorlalte rulări. Edge extern rămâne.
-  **Sarcina cloud poate continua după oprirea arborelui local**: inspectează URL-ul;
-  nu retrimite automat și nu interpreta timeout-ul ca eșec sigur al trimiterii.
+- Concurența, lock-ul real și timeout-ul se certifică obligatoriu prin secțiunea 3a;
+  o probă secvențială sau doar simularea offline nu este suficientă.
 - PR: cu un brief autorizat separat care cere PR draft, verifică linkul github.com
   `/owner/repo/pull/număr` în `pr_urls`; canalul însuși nu apasă Create PR/Publish.
 - Log: hash SHA256 al textului UTF-8 fără BOM + lungime; brief-ul integral nu apare.
   Răspunsurile sunt JSON pe o singură linie fizică; nu pot falsifica markeri PAW.
   Erorile Playwright brute/stderr nu se persistă. Tokenurile uzuale sunt redactate;
-  probele și brief-urile nu trebuie să conțină secrete/date personale.
+  probele și brief-urile nu trebuie să conțină secrete/date personale. Test negativ:
+  brief alcătuit exclusiv dintr-un link PR sintetic; chiar dacă răspunsul îl repetă
+  într-un href, `pr_urls` trebuie să-l omită, la fel ca textul filtrat.
+
+## 3a. Certificare Windows OBLIGATORIE: concurență, lock și kill pe arbore
+
+Aceasta este poartă de acceptanță înainte de utilizarea cxw și de restabilirea
+pornirilor normale. Răzvan o execută după review, pe bin-ul cu hash-urile v47,
+în N; inventarul proceselor poate fi colectat read-only în A. Fiecare punct de mai
+jos trebuie să aibă PASS și dovadă în `$Audit`; altfel STOP, canal neacceptat.
+Agentul nu a executat aceste probe pe server și nu instalează nimic.
+
+1. Rulează `teste/test_codexweb_pw.py` pe Python Windows și
+   `teste/test_contract.ps1` pe PowerShell 5.1. Testul
+   `test_real_two_process_lock_and_crash_release` trebuie să TREACĂ, fără skip:
+   proces A ține lock-ul, proces B primește exact `interactiune_ocupata`; după
+   moartea lui A, B îl poate lua, fără ștergerea fișierului. Testul PowerShell
+   trebuie să confirme și respingerea junction, protocolul HOME/confirmare și
+   calculul bugetului rămas. Salvează rezultatele și versiunile în audit.
+2. Pregătește patru brief-uri sintetice read-only suficient de lungi ca rulările
+   să se suprapună: două cxw cu markeri diferiți, un cop pe conversație permisă
+   și un gem cu etichetă nouă permisă. Pornește cop și gem prin `run_paw.cmd` și
+   confirmă că ambele sunt active; notează URL-urile/taburile și PID-urile lor.
+   Nu există date personale/secrete, publicare sau aprobări în brief-uri.
+3. Pornește două instanțe cxw SIMULTAN (două console/procese, fără a aștepta
+   terminarea primei), fiecare cu propriul brief/output. Dacă se suprapun în
+   fereastra scurtă de interacțiune, una poate refuza `interactiune_ocupata`:
+   verifică lipsa Send/mesajului user și lipsa `trimis` pentru cea refuzată.
+   Numai după verificarea aceasta, operatorul o poate relansa manual, după
+   confirmarea mesajului user al primei în UI și eliberarea lock-ului; în logul
+   final trebuie să existe `trimis` pentru ea. Fără retry automat și fără
+   retrimiterea unui caz ambiguu.
+   Trebuie să rezulte DOUĂ sarcini cloud și două watch-uri simultan active,
+   cu URL-uri distincte, în timp ce cop și gem încă rulează.
+   Notă: pipe-ul lansatorului persistă evenimentele helperului după ieșirea lui;
+   nu aștepta un `trimis` live în fișier cât timp watch-ul rulează. Dovada live este
+   mesajul user exact în UI + lock-ul liber; logul final confirmă evenimentul.
+4. Înainte ca prima sarcină să se termine, verifică faptul că `lock_cxw` poate fi
+   luat (sau că a doua trimitere a reușit în acel interval), fără ștergere de lock.
+   Pentru fiecare log `trimis`, inspectează mesajul user corespunzător: exact +1,
+   text normalizat identic markerului/brief-ului propriu. La `cxw-continua`,
+   repetă proba cu URL neschimbat: niciun `trimis` înainte de existența mesajului.
+   Taburile/mesajele cop/gem nu trebuie schimbate de cxw; niciun focus/reload/close.
+5. Pe un turn nou, verifică BUSY propriu → completed propriu și 3 citiri stabile.
+   Cu completed rămas în turnul vechi și text parțial nou, fără completed în
+   containerul răspunsului nou, NU trebuie să apară `stare=gata`. Testele DOM
+   offline acoperă această secvență; reproduce-o observând UI-ul, fără a atribui
+   unui badge global sens de finalizare. Confirmarea din draft trebuie să dea
+   `asteapta_confirmare` + URL + `submitted=false`, fără Send sau `trimis`.
+6. Pornește o a treia probă cxw cu `PAW_CXW_TIMEOUT_SECONDS=60` (șterge variabila
+   după probă), cu celelalte watch-uri/cop/gem active. Cronometrează de la pornire,
+   nu de la Send: verificarea listenerului și a driverului orfan consumă ACELAȘI
+   buget, fără încă 10/15/30 secunde adăugate înaintea lui. Înregistrează arborele
+   procesului acestei rulări: PID, ParentProcessId, CreationDate și numele
+   executabilului (fără dump de mediu sau conținut de brief). La timeout trebuie
+   `PAW_EROARE`, iar toți descendenții săi Python/Node/PowerShell de verificare să
+   dispară. Acordă separat numai grația de curățare Job deja existentă; nu o
+   confunda cu timp acordat trimiterii/urmăririi. Verifică PID + CreationDate,
+   ca un PID reutilizat să nu mascheze rezultatul.
+7. Repetă întrerupând procesul părinte al unei probe în faza de interacțiune:
+   Job Object trebuie să oprească descendenții; o pornire nouă trebuie să refuze
+   cât timp există un driver orfan, fără contact CDP și fără Send. Niciun proces
+   din celelalte cxw/cop/gem și nici Edge-ul extern nu trebuie omorât. Arhivează
+   inventarul înainte/după, logurile și exit-urile pentru TOATE procesele lansate.
+8. Verifică finalizarea normală a celorlalte sarcini, lipsa mesajelor duplicate,
+   hash-ul/lungimea în locul brief-ului și absența linkului-brief în `pr_urls`.
+   Sarcina cloud a probei oprite poate continua: inspectează URL-ul manual înainte
+   de alt mesaj; nu apăsa automat Stop/Approve/Publish și nu interpreta timeout-ul
+   local drept anulare cloud. Atașează matricea PASS/FAIL pe punctele 1–8 la audit.
 
 ## 4. Rollback numai la pachetul anterior revizuit
 

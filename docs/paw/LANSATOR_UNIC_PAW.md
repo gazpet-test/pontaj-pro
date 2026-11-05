@@ -511,8 +511,9 @@ URL-ul validat, refuzând taburi duplicate/ocupate/draft vechi și verificând a
 mediu. Înainte de Send verifică textul normalizat identic, absența atașamentelor și
 `Approve for me` explicit OFF. ON/lipsă/stare necunoscută = refuz, fără toggle.
 
-Lock-ul Windows `lock_cxw` acoperă doar interacțiunea și oprirea driverului de
-trimitere. Urmărirea are o conexiune separată, numai citire, pe tabul cu URL exact;
+După Send, ambele moduri cer exact un mesaj user nou, cu textul normalizat
+identic cu brief-ul; numai apoi emit `trimis`. Lock-ul Windows `lock_cxw` acoperă
+această dovadă și oprirea driverului de trimitere. Urmărirea are o conexiune separată, numai citire, pe tabul cu URL exact;
 nu modifică taburile cop/gem. Un driver orfan/stare de procese necunoscută blochează
 trimiterea. Rulările cloud diferite pot continua în paralel.
 
@@ -522,7 +523,16 @@ starea; ultima linie a outputului este `PAW_GATA <id> stare=gata` sau
 `PAW_GATA <id> stare=asteapta_confirmare`. Niciun buton de confirmare/publicare/
 aprobare nu se apasă; nicio întrebare nu primește răspuns automat. Erorile și
 timeout-ul produc `PAW_EROARE`; nu există retry automat după trimitere ambiguă.
+O confirmare din draft înainte de Send produce aceeași stare de așteptare, cu
+`submitted=false` și URL actual (pentru chat nou poate fi `/codex`), fără `trimis`.
+Finalizarea cere status și text din containerul răspunsului de după mesajul user
+confirmat: BUSY → completed pe aceeași identitate, text stabil 3 citiri. Un completed
+global/vechi nu este folosit. Protecția anti-brief se aplică și linkurilor PR.
+Deadline-ul începe înainte de pregătire; helperul primește timpul rămas, iar
+verificările listener/orfani sunt în arborele local limitat de același buget.
 Timeout-ul omoară arborele local, dar nu anulează sarcina cloud: omul verifică URL-ul.
+Proba Windows cu două cxw simultane plus cop/gem active, lock real și kill pe
+arbore este OBLIGATORIE înainte de acceptare, conform runbook-ului secțiunea 3a.
 
 **Validare necesară înainte de utilizare:** selectorii accesibili, OFF și semnalul
 explicit running/completed trebuie confirmați pe UI-ul real, conform runbook-ului.

@@ -51,6 +51,8 @@ $script:ImgHandles = @()
 $script:GemCod = $null
 $script:LockFs = $null
 $CXW = $Cine -cin @('cxw','cxw-continua')
+$script:CxwClock = $null
+if ($CXW) { $script:CxwClock = [Diagnostics.Stopwatch]::StartNew() }
 $script:CxwState = $null
 $TOOLS = @{
   cxw = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @(); timeout = 2400 }
@@ -72,6 +74,21 @@ $DRIVER_ASTEPTARE = 30   # secunde de asteptat un driver ramas de la o rulare an
 $JOB_GOL_ASTEPTARE = 15  # r5: secunde de asteptat ca in job sa ramana doar lansatorul, apoi PAW_EROARE copii_ramasi (lock neeliberat explicit)
 $script:PastreazaLock = $false
 $script:JobActiv = $null
+
+# Pure guards shared by launcher and the offline AST contract tests.
+function CxwRemaining([double]$totalSeconds, [double]$elapsedSeconds) {
+  $left = [int][Math]::Floor($totalSeconds - $elapsedSeconds)
+  if ($left -lt 1) { throw 'cxw_deadline_epuizat_inainte_de_pregatire' }
+  return $left
+}
+function CxwProtocolState([string]$mode, [string]$target, $result) {
+  $taskUrl = $result.chat_url -cmatch '\Ahttps://chatgpt\.com/codex/tasks/task_[a-f0-9]{16,64}\z'
+  $newChatWaiting = $mode -ceq 'cxw' -and $result.state -ceq 'asteapta_confirmare' -and $result.submitted -ceq $false -and $result.chat_url -ceq 'https://chatgpt.com/codex'
+  if ($result.state -cnotin @('gata','asteapta_confirmare') -or (-not $taskUrl -and -not $newChatWaiting)) { throw 'cxw_protocol_invalid' }
+  if ($result.submitted -isnot [bool] -or ($result.state -ceq 'gata' -and -not $result.submitted)) { throw 'cxw_protocol_invalid' }
+  if ($mode -ceq 'cxw-continua' -and $result.chat_url -cne $target) { throw 'cxw_protocol_invalid' }
+  return $result.state
+}
 
 function Jurnal([string]$stare, [string]$exitcod) {
   $dur = [int]((Get-Date) - $T0).TotalSeconds
@@ -237,7 +254,7 @@ function MotivOprire($rez, [int]$sec) {
   if ($motiv -notmatch 'tree_kill_failed') { $motiv += ' tree_kill_failed' }
   return $motiv
 }
-function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env, [bool]$cleanEnvironment = $false, [bool]$trustedArguments = $false) {
+function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env, [bool]$cleanEnvironment = $false, [bool]$trustedArguments = $false, [Diagnostics.Stopwatch]$deadlineClock = $null, [int]$deadlineSeconds = 0) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $exe
   $psi.Arguments = (($argv | ForEach-Object { if ($trustedArguments) { ArgCdx $_ } else { Arg $_ } }) -join " ")
@@ -273,6 +290,13 @@ public static class PawStdinV45 {
   $p = $null; $si = $null; $scriere = $null; $so = $null; $se = $null
   $ceas = [Diagnostics.Stopwatch]::StartNew()
   $limita = [long]$timeout * 1000
+  if ($deadlineClock) {
+    $limita = [long]$deadlineSeconds * 1000 - $deadlineClock.ElapsedMilliseconds
+    if ($limita -le 0) { throw 'cxw_deadline_epuizat_inainte_de_pornire' }
+    # Refresh the helper budget AFTER ProcessStartInfo/Add-Type preparation too.
+    $argv[$argv.Length - 1] = [string](CxwRemaining $deadlineSeconds $deadlineClock.Elapsed.TotalSeconds)
+    $psi.Arguments = (($argv | ForEach-Object { Arg $_ }) -join ' ')
+  }
   try {
     # .NET Framework creeaza writer-ul cu Console.InputEncoding si AutoFlush=true.
     # AutoFlush poate emite preambulul chiar in Start, fara primul Write al nostru.
@@ -733,20 +757,18 @@ try {
     { $_ -cin @('cxw','cxw-continua') } {
       # Job is established BEFORE any child. No launcher-wide browser lock.
       LeagaCopiiiDeLansator
-      AsteaptaFaraDriverRamas
-      $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 9333 -ErrorAction Stop)
-      if (-not $listeners.Count -or @($listeners | Where-Object { $_.LocalAddress -notin @('127.0.0.1','::1') }).Count) { throw 'cxw_cdp_non_loopback' }
       $helper = Join-Path $PSScriptRoot 'codexweb_pw.py'
       AssertCdxSingleFile $helper
       # Deadline covers setup + response. Ruleaza kills the whole local process tree.
-      $rez = Ruleaza $T.exe @($helper,$Cine,$BriefFull,$Model,[string]$T.timeout) '' $DATA $T.timeout $null
+      $remainingSeconds = CxwRemaining $T.timeout $script:CxwClock.Elapsed.TotalSeconds
+      # CDP listener and orphan preparation run INSIDE the bounded child/job.
+      $rez = Ruleaza $T.exe @($helper,$Cine,$BriefFull,$Model,[string]$remainingSeconds) '' $DATA $remainingSeconds $null $false $false $script:CxwClock $T.timeout
       # Never persist raw stderr (Playwright can include input text in exceptions).
       $rez.err = ''
       if (-not $rez.timeout -and $rez.exit -eq 0) {
         $lines = @(([string]$rez.out).TrimEnd() -split "`n")
         $last = $lines[$lines.Count-1] | ConvertFrom-Json
-        if ($last.state -cnotin @('gata','asteapta_confirmare') -or $last.chat_url -cnotmatch '\Ahttps://chatgpt\.com/codex/tasks/task_[a-f0-9]{16,64}\z') { throw 'cxw_protocol_invalid' }
-        $script:CxwState = $last.state
+        $script:CxwState = CxwProtocolState $Cine $Model $last
       }
     }
     "cdx" { $rez = RuleazaCdx }
