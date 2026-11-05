@@ -486,3 +486,45 @@ pastreaza-le/arhiveaza-le si cere decizia operatorului. Nu folosi prune/remove
 pe directoare calculate neverificate, nu sterge lock-uri, nu curata alte rulari.
 
 Teste si limite: [TEST_RESULTS.md](run_paw_v44/TEST_RESULTS.md).
+
+## v4.7 — Codex web (`cxw`, `cxw-continua`)
+
+Pachet separat în `docs/paw/run_paw_v47/`, copiat din v461; versiunile vechi rămân
+neschimbate. Livrare pentru review și instalare manuală de Răzvan, fără merge sau
+instalare de către agent. Vezi [runbook v4.7](run_paw_v47/RUNBOOK_RAZVAN.md).
+
+```cmd
+run_paw.cmd cxw C:\Users\Public\paw-data\brief\sarcina.txt C:\Users\Public\paw-data\out\sarcina.log pontaj-pro
+run_paw.cmd cxw-continua C:\Users\Public\paw-data\brief\mesaj.txt C:\Users\Public\paw-data\out\continuare.log https://chatgpt.com/codex/tasks/task_ID_VALID
+```
+
+`task_ID_VALID` se înlocuiește cu ID-ul real (16–64 caractere hex lowercase).
+Numai mediul exact `pontaj-pro`; brief `.txt`/`.md` exclusiv sub `paw-data\brief`,
+output sub `paw-data\out`, aceleași verificări fără UNC/ADS/reparse. URL numai
+HTTPS `chatgpt.com/codex/tasks/task_…`, fără parametri/fragment/port/userinfo.
+Timeout configurabil cu `PAW_CXW_TIMEOUT_SECONDS=60..86400`, implicit 2400 secunde
+pentru întreg arborele local, inclusiv pregătire.
+
+`codexweb_pw.py` se atașează la Edge CDP 9333 exclusiv pe loopback; creează un tab
+nou pentru cxw și selectează mediul după nume exact. Continuarea folosește numai
+URL-ul validat, refuzând taburi duplicate/ocupate/draft vechi și verificând același
+mediu. Înainte de Send verifică textul normalizat identic, absența atașamentelor și
+`Approve for me` explicit OFF. ON/lipsă/stare necunoscută = refuz, fără toggle.
+
+Lock-ul Windows `lock_cxw` acoperă doar interacțiunea și oprirea driverului de
+trimitere. Urmărirea are o conexiune separată, numai citire, pe tabul cu URL exact;
+nu modifică taburile cop/gem. Un driver orfan/stare de procese necunoscută blochează
+trimiterea. Rulările cloud diferite pot continua în paralel.
+
+Logul are hash/lungime brief, URL, textul final și eventualele linkuri PR, ca
+înregistrări JSON (textul nu poate falsifica ultima linie). `paw_runs.log` păstrează
+starea; ultima linie a outputului este `PAW_GATA <id> stare=gata` sau
+`PAW_GATA <id> stare=asteapta_confirmare`. Niciun buton de confirmare/publicare/
+aprobare nu se apasă; nicio întrebare nu primește răspuns automat. Erorile și
+timeout-ul produc `PAW_EROARE`; nu există retry automat după trimitere ambiguă.
+Timeout-ul omoară arborele local, dar nu anulează sarcina cloud: omul verifică URL-ul.
+
+**Validare necesară înainte de utilizare:** selectorii accesibili, OFF și semnalul
+explicit running/completed trebuie confirmați pe UI-ul real, conform runbook-ului.
+Testele offline nu certifică interfața Codex sau Job Object pe Windows. Un selector
+nerecunoscut refuză/expiră; textul doar stabil nu este interpretat ca finalizare.
