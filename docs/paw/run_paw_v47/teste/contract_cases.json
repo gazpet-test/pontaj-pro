@@ -1,0 +1,18 @@
+{
+  "urls": [
+    {"value":"https://chatgpt.com/codex/tasks/task_0123456789abcdef","valid":true},
+    {"value":"https://chatgpt.com/codex/tasks/task_0123456789abcdef\n","valid":false},
+    {"value":"https://chatgpt.com:443/codex/tasks/task_0123456789abcdef","valid":false},
+    {"value":"https://chatgpt.com/codex/tasks/task_0123456789abcdef?token=x","valid":false},
+    {"value":"https://chatgpt.com.evil/codex/tasks/task_0123456789abcdef","valid":false},
+    {"value":"https://chatgpt.com/c/0123456789abcdef","valid":false}
+  ],
+  "paths": [
+    {"value":"C:\\Users\\Public\\paw-data\\brief\\a.txt","valid":true},
+    {"value":"C:\\Users\\Public\\paw-data\\brief\\a.md","valid":true},
+    {"value":"C:\\Users\\Public\\paw-data\\brief\\..\\out\\a.txt","valid":false},
+    {"value":"C:\\Users\\Public\\paw-data\\brief\\a.txt:ads","valid":false},
+    {"value":"C:\\Users\\Public\\paw-data\\brief-evil\\a.txt","valid":false},
+    {"value":"\\\\host\\share\\a.txt","valid":false}
+  ]
+}
