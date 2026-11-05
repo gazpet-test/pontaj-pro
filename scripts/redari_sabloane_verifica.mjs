@@ -11,7 +11,8 @@
 //  4. caută text variabil rămas în afara placeholder-elor („____”, „zz.ll.aaaa”, „[...]”, „Nume Prenume”, „(exemplu)”) și îl
 //     împarte în „intenționat” (linii de semnătură olografă, bife completate de mână de destinatar — lista INTENTIONATE)
 //     și „de corectat”;
-//  5. listează placeholder-ele de rând-șablon {{rand.camp}}, procesate de repetaRand înaintea câmpurilor simple.
+//  5. listează placeholder-ele de rând-șablon {{rand.camp}}, procesate de repetaRand înaintea câmpurilor simple;
+//  6. pagina: A4 (11906×16838 twips) pe toate șabloanele (decizia 03.11) și corpul stilului Normal ≥ 9,5 pt (SABLOANE.md §9).
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -90,7 +91,18 @@ const verificaSablon = async (cale) => {
       }
     }
   }
-  return { parti, paragrafe, aparitii, rupte, resturi, qrSingur, externe }
+  // 6. pagina și corpul de literă implicit
+  const doc = await zip.file('word/document.xml').async('string')
+  const sect = doc.match(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g) ?? []
+  const pgSz = sect.map(x => /<w:pgSz w:w="(\d+)" w:h="(\d+)"/.exec(x)).map(m => (m ? `${m[1]}×${m[2]}` : '?'))
+  const pgMar = sect.map(x => /<w:pgMar [^>]*\/>/.exec(x)?.[0] ?? '?')
+  const stiluri = await zip.file('word/styles.xml')?.async('string') ?? ''
+  // stilul Normal; fără w:sz acolo, mărimea vine din docDefaults (rPrDefault)
+  const szNormal = /<w:style w:type="paragraph" w:default="1"[^>]*>[\s\S]*?<\/w:style>/.exec(stiluri)?.[0].match(/<w:sz w:val="(\d+)"/)?.[1]
+  const szImplicit = /<w:rPrDefault>[\s\S]*?<\/w:rPrDefault>/.exec(stiluri)?.[0].match(/<w:sz w:val="(\d+)"/)?.[1]
+  const corp = Number(szNormal ?? szImplicit ?? 0) / 2
+  const pagina = { a4: pgSz.length > 0 && pgSz.every(x => x === '11906×16838'), pgSz, pgMar, corp }
+  return { parti, paragrafe, aparitii, rupte, resturi, qrSingur, externe, pagina }
 }
 
 const scurt = (t, n = 90) => (t.length > n ? `${t.slice(0, n)}…` : t)
@@ -106,14 +118,17 @@ for (const f of fisiere) {
   const eroriResturi = r.resturi.filter(x => !x.intentionat)
   // relații externe: hyperlink-urile (deschise doar la clic) se acceptă; orice altceva (imagine/OLE/etc. externă) e problemă
   const externeRele = r.externe.filter(x => x.tip !== 'hyperlink')
-  // Final_v2 (03.11.2026): Model_4 nu mai are antetul firmei → 40 de chei (fără contract_nr / contract_data / proiect_denumire)
-  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 40 && !nume.includes('link_afisare') && r.externe.length === 0)
-  const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0 && adresaCorecta
+  // Final_v2 (03.11.2026) scosese antetul din Model_4; excepția (9) (04.11, DE CONFIRMAT) îl repune din convocator → 43 de chei
+  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 43 && ['contract_nr', 'contract_data', 'proiect_denumire'].every(k => nume.includes(k)) && !nume.includes('link_afisare') && r.externe.length === 0)
+  const paginaCorecta = r.pagina.a4 && r.pagina.corp >= 9.5
+  const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0 && adresaCorecta && paginaCorecta
   if (!ok) probleme += 1
   console.log(`## ${f} — ${ok ? 'OK' : 'PROBLEME'}`)
   console.log(`- părți citite: ${r.parti.join(', ')}; paragrafe cu text: ${r.paragrafe}`)
   console.log(`- placeholder-e distincte: ${nume.length} (apariții: ${[...r.aparitii.values()].reduce((a, b) => a + b, 0)}); rupte între run-uri: ${r.rupte.length}`)
   console.log(`- ${nume.map(n => `\`{{${n}}}\`${r.aparitii.get(n) > 1 ? `×${r.aparitii.get(n)}` : ''}`).join(' ')}`)
+  const mar = r.pagina.pgMar.map(x => ['top', 'bottom', 'left', 'right'].map(k => (Number(new RegExp(`w:${k}="(\\d+)"`).exec(x)?.[1]) / 567).toFixed(2)).join('/')).join('; ')
+  console.log(`- pagină: ${r.pagina.pgSz.join(', ')} twips (${r.pagina.a4 ? 'A4' : 'NU e A4'}); margini sus/jos/stânga/dreapta (cm): ${mar}; corp Normal: ${r.pagina.corp} pt${r.pagina.corp >= 9.5 ? '' : ' — SUB 9,5 pt'}`)
   if (r.qrSingur !== null) console.log(`- {{qr}} singur în paragraf: ${r.qrSingur ? 'da' : 'NU — nu devine imagine'}`)
   console.log(`- relații externe (.rels TargetMode=External): ${r.externe.length ? r.externe.map(x => `${x.tip}→${scurt(x.target, 60)}`).join('; ') : 'niciuna'}`)
   for (const x of externeRele) console.log(`- EXTERN NEPERMIS: ${x.tip} „${x.target}” în ${x.rel}`)

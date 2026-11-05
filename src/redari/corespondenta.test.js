@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp, sesiuneEcran, stariInFormular } from './corespondenta.js'
+import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp, sesiuneEcran, stariInFormular, stareEfectiva, etichetaRandCoresp, numeAprobator } from './corespondenta.js'
 
 describe('corespondenta de trimis', () => {
   it('trimis / raspuns primit apar doar dupa aprobare; aprobat nu se alege din lista', () => {
@@ -43,5 +43,34 @@ describe('corespondenta de trimis', () => {
     expect(stariInFormular(r, { ...r })).toContain('trimis')
     expect(stariInFormular(r, { ...r, destinatar: 'alt' })).toEqual(['draft', 'la_avocat', 'anulat'])
     expect(stariInFormular(null, {})).toEqual(['draft', 'la_avocat'])
+  })
+  it('stare efectiva: aprobat cu expeditor schimbat -> draft (ce arata lista), nu aprobat (bug B1 04.11)', () => {
+    const r = { stare: 'aprobat', aprobat_la: '2026-11-03T08:00:00Z', destinatar: 'ISC', subiect: 'x', expeditor: 'de stabilit', documente: 'd' }
+    expect(stareEfectiva(r, { ...r, expeditor: 'Cristina' })).toBe('draft')
+    expect(stareEfectiva(r, { ...r, expeditor: 'Cristina', stare: 'la_avocat' })).toBe('la_avocat')
+    expect(stareEfectiva(r, { ...r })).toBe('aprobat')
+    const { erori, valori } = valideazaCorespondenta({ ...r, cod: 'B1', ordine: 30, expeditor: 'Cristina', stare: stareEfectiva(r, { ...r, expeditor: 'Cristina' }) }, { nou: false })
+    expect(erori).toEqual([]); expect(valori.stare).toBe('draft')
+  })
+})
+
+describe('audit D1: cine a aprobat', () => {
+  const nume = { 'u-claude': 'Claude', 'u-owner': 'TRUSU RAZVAN' }
+  it('eticheta generică a stării nu mai numește o persoană', () => {
+    expect(etichetaStareCoresp('aprobat')).toBe('Aprobat (owner)')
+  })
+  it('rând aprobat: „Aprobat de {nume}” din aprobat_de; fără nume rezolvat doar „Aprobat”', () => {
+    expect(etichetaRandCoresp({ stare: 'aprobat', aprobat_de: 'u-claude' }, nume)).toBe('Aprobat de Claude')
+    expect(etichetaRandCoresp({ stare: 'aprobat', aprobat_de: 'u-owner' }, nume)).toBe('Aprobat de TRUSU RAZVAN')
+    expect(etichetaRandCoresp({ stare: 'aprobat', aprobat_de: 'u-necunoscut' }, nume)).toBe('Aprobat')
+    expect(etichetaRandCoresp({ stare: 'aprobat', aprobat_de: null }, nume)).toBe('Aprobat')
+    expect(etichetaRandCoresp({ stare: 'aprobat', aprobat_de: 'u-claude' }, {})).toBe('Aprobat')
+    expect(etichetaRandCoresp({ stare: 'aprobat', aprobat_de: 'u-claude' }, { 'u-claude': '  ' })).toBe('Aprobat')
+  })
+  it('celelalte stări își păstrează eticheta; numeAprobator merge și pe rânduri trimise', () => {
+    expect(etichetaRandCoresp({ stare: 'trimis', aprobat_de: 'u-claude' }, nume)).toBe('Trimis')
+    expect(etichetaRandCoresp({ stare: 'draft' }, nume)).toBe('Draft')
+    expect(numeAprobator({ stare: 'trimis', aprobat_de: 'u-claude' }, nume)).toBe('Claude')
+    expect(numeAprobator({ stare: 'trimis' }, nume)).toBe(null)
   })
 })

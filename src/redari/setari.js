@@ -1,6 +1,7 @@
 /* setari.js — Redări faza 2, felia 1: câmpurile ecranelor UAT + Setări proiect, normalizare și validări (oglinda constrângerilor din
    20261126a / 20261127a). Fără React, fără Supabase — testabil cu vitest. Deciziile Răzvan 02.11.2026: link_afisare scos din adresa UAT,
    adresele UAT pe seria AU-0001, refuzul la PV B = motiv pe PV (felia PV). */
+import { ultimulRaspuns } from './stare.js'
 
 export const MAX_TEXT_SCURT = 200
 export const MAX_TELEFON = 40
@@ -131,35 +132,160 @@ export function contractDinExecutie(rand) {
 // afișarea la primărie ÎNCEPE „cu cel puțin 10 zile înainte de prima zi de sesiune”. Zile calendaristice: planul nu spune „lucrătoare”.
 // Constanta e singura sursă a termenului: avertisment în UAT, blocaj la adresa UAT (docx.js), data-limită la plicuri (plicuri.js).
 export const TERMEN_CONVOCARE_ZILE = 10
+// DE CONFIRMAT (Răzvan + Juridic, claude#026 întrebarea 4): lectura „10 zile LIBERE” — nu se numără nici ziua expedierii / a
+// începerii afișării, nici ziua 1 a sesiunii, deci limita = ziua 1 − (10 + 1). Varianta implicită propusă de Claude pe 04.11;
+// cu 0 se revine la lectura veche (ziua 1 − 10). Textele tipărite spun în continuare „cel puțin 10 zile”.
+export const ZILE_EXCLUSE_DIN_TERMEN = 1
 const dataRo = (s) => String(s).split('-').reverse().join('.')
 
-/** Data-limită 'AAAA-LL-ZZ' = ziua 1 minus TERMEN_CONVOCARE_ZILE zile calendaristice; null dacă ziua 1 lipsește sau e invalidă.
+/** Data-limită 'AAAA-LL-ZZ' = ziua 1 minus (TERMEN_CONVOCARE_ZILE + ZILE_EXCLUSE_DIN_TERMEN) zile calendaristice; null dacă ziua 1 lipsește sau e invalidă.
  *  Aritmetică pe data civilă (UTC la miezul nopții, fără fus orar și fără „azi”), deci aceeași în orice fus. */
 export function dataLimitaConvocare(zi1) {
   const z = normalizeazaValoare(zi1)
   if (!z || !dataValida(z)) return null
   const d = new Date(z + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() - TERMEN_CONVOCARE_ZILE)
+  d.setUTCDate(d.getUTCDate() - TERMEN_CONVOCARE_ZILE - ZILE_EXCLUSE_DIN_TERMEN)
   return d.toISOString().slice(0, 10)
 }
 
-/** Termenul afișării la primărie (plan pct. 4.3): `depasit` = afișarea începe DUPĂ data-limită. Fără ambele date nu se judecă. */
+// juridic#031 (04.11.2026, decis de Răzvan): pe lângă limita fermă (ziua 1 − 11, de mai sus), ținta RECOMANDATĂ = ziua 1 − 15,
+// pentru cele 3–5 zile cât livrează poșta. Doar avertisment NON-blocant (fără confirmare la salvare / aplicare), aceeași regulă pentru
+// expedierea convocărilor și pentru începutul afișării. Constanta e singura sursă a țintei (UAT, plicuri, import poștal).
+export const TERMEN_RECOMANDAT_ZILE = 15
+export const MESAJ_TERMEN_RECOMANDAT = `recomandat cu cel puțin ${TERMEN_RECOMANDAT_ZILE} zile înainte, pentru livrarea poștei`
+
+/** Ținta recomandată 'AAAA-LL-ZZ' = ziua 1 minus TERMEN_RECOMANDAT_ZILE zile calendaristice; null fără ziua 1 validă (ca dataLimitaConvocare). */
+export function dataTintaRecomandata(zi1) {
+  const z = normalizeazaValoare(zi1)
+  if (!z || !dataValida(z)) return null
+  const d = new Date(z + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() - TERMEN_RECOMANDAT_ZILE)
+  return d.toISOString().slice(0, 10)
+}
+
+/** `true` când data dată (validă) e după ținta recomandată, dar NU și după limita fermă (acolo vorbește avertismentul de termen). */
+export function subTintaRecomandata(zi1, data) {
+  const tinta = dataTintaRecomandata(zi1), limita = dataLimitaConvocare(zi1), d = normalizeazaValoare(data)
+  return !!(tinta && limita && d && dataValida(d) && d > tinta && !(d > limita))
+}
+
+/** Termenul afișării la primărie (plan pct. 4.3): `depasit` = afișarea începe DUPĂ data-limită; `subRecomandat` = după ținta
+ *  recomandată (ziua 1 − 15), dar înainte de limită. Fără ambele date nu se judecă. */
 export function termenAfisare(uat) {
   const zi1 = normalizeazaValoare(uat?.sesiune_zi1), start = normalizeazaValoare(uat?.afisare_data_start)
-  const limita = dataLimitaConvocare(zi1)
-  return { zi1, start, limita, depasit: !!(limita && start && dataValida(start) && start > limita) }
+  const limita = dataLimitaConvocare(zi1), tinta = dataTintaRecomandata(zi1)
+  return { zi1, start, limita, tinta, depasit: !!(limita && start && dataValida(start) && start > limita), subRecomandat: subTintaRecomandata(zi1, start) }
+}
+
+/** Mesajul NON-blocant pentru o afișare care începe după ținta recomandată (null când nu e cazul). */
+export function mesajTintaAfisare(t) {
+  if (!t?.subRecomandat) return null
+  return `Afișarea la primărie începe pe ${dataRo(t.start)}, după ținta recomandată ${dataRo(t.tinta)} (ziua 1: ${dataRo(t.zi1)}) — ` +
+    `${MESAJ_TERMEN_RECOMANDAT}; limita fermă rămâne ${dataRo(t.limita)}`
 }
 
 /** Mesajul complet pentru un termen de afișare depășit (formularul UAT, adresa UAT). */
 export function mesajTermenAfisare(t) {
-  return `Afișarea la primărie începe pe ${dataRo(t.start)}, sub ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 (${dataRo(t.zi1)}): ` +
+  return `Afișarea la primărie începe pe ${dataRo(t.start)}, sub ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1 (${dataRo(t.zi1)}): ` +
     `trebuie să înceapă cel târziu pe ${dataRo(t.limita)} (plan pct. 4.3)`
+}
+
+// Plan de verificare rev49 pct. 4.6: „constatarea pe teren în maximum 5 zile de la sesiune”. Zile calendaristice (planul nu spune
+// „lucrătoare”), numărate de la ULTIMA zi de sesiune a UAT-ului care are și program. AVERTISMENT neblocant, nu eroare: varianta
+// implicită propusă de Claude, DE CONFIRMAT de Răzvan (claude#026 întrebarea 5). Fără coloană nouă: cererea = ultimul răspuns al
+// deținătorului e `constatare_teren`; subiectul se închide DOAR printr-un PV A activ SEMNAT (stare 'semnat', ca în stare.js) cu
+// data_pv ≥ data cererii și ≥ prima zi de sesiune (review #974 r1 P2-01/P2-02). PV A generat/nesemnat sau mai vechi nu închide.
+export const TERMEN_CONSTATARE_ZILE = 5
+const dataCivila = (v) => { const s = normalizeazaValoare(v)?.slice(0, 10); return s && dataValida(s) ? s : null }
+// Data civilă Europe/Bucharest a unui timestamptz (red_raspunsuri.data), același Intl ca dataBucuresti (plicuri.js) / aziBucuresti (docx.js),
+// care însă dau doar „azi” (fără argument), iar plicuri.js importă setari.js. 'AAAA-LL-ZZ' simplu rămâne neschimbat (review #974 r2 P2).
+const FMT_BUCURESTI = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' })
+export function dataCivilaBucuresti(v) {
+  const s = normalizeazaValoare(v)
+  if (!s) return null
+  if (RX_DATA.test(s)) return dataValida(s) ? s : null
+  const t = Date.parse(s)
+  return Number.isNaN(t) ? null : FMT_BUCURESTI.format(new Date(t))
+}
+
+/** Zilele de sesiune valide ale UAT-ului care au și program completat (review #974 r1 P3-01), sortate. */
+function zileSesiuneCuProgram(uat) {
+  return [1, 2, 3].filter(i => !gol(uat?.[`program_zi${i}`])).map(i => dataCivila(uat?.[`sesiune_zi${i}`])).filter(Boolean).sort()
+}
+
+/** Ultima zi de sesiune validă cu program a UAT-ului ('AAAA-LL-ZZ') sau null. */
+export function ultimaZiSesiune(uat) {
+  const z = zileSesiuneCuProgram(uat)
+  return z.length ? z[z.length - 1] : null
+}
+
+/** Ultima zi de sesiune + TERMEN_CONSTATARE_ZILE zile calendaristice; null fără zi validă (aritmetică pe data civilă, ca dataLimitaConvocare). */
+export function dataLimitaConstatare(ultimaZi) {
+  const z = dataCivila(ultimaZi)
+  if (!z) return null
+  const d = new Date(z + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + TERMEN_CONSTATARE_ZILE)
+  return d.toISOString().slice(0, 10)
+}
+
+// Valorile reale ale red_procese_verbale.constatare_mod (CHECK red_pv_constatare_ck din 20261129a: NULL, 'sediu', 'teren').
+// Închid subiectul doar modurile cunoscute; NULL / orice altă valoare = necunoscut, nu se tratează ca „la sediu”.
+const MODURI_CONSTATARE = ['sediu', 'teren']
+const cmpId = (x, y) => (typeof x === 'number' && typeof y === 'number') ? x - y : (String(x ?? '') < String(y ?? '') ? -1 : String(x ?? '') > String(y ?? '') ? 1 : 0)
+
+/** Termenul constatării pe teren pentru UN deținător (plan pct. 4.6). Regulă literală (review #974 r3, lecția #970):
+ *  1. cererea = ultimul răspuns al deținătorului are optiune 'constatare_teren'; data ei = data civilă Europe/Bucharest a `data`;
+ *  2. subiectul se închide DOAR de un PV A al aceluiași deținător, stare 'semnat', neanulat și neșters (sters_la null),
+ *     constatare_mod ∈ {'sediu','teren'}, cu data_pv STRICT după data cererii și ≥ prima zi de sesiune (cu program);
+ *  3. cerere fără dată validă → nu se închide niciodată (`faraDataCerere`), avertismentul rămâne până la verificare;
+ *  4. dintre PV-urile valabile: data_pv minimă, la egalitate id minim (ordonare explicită, nu ordinea interogării);
+ *  5. 'sediu' → închis, fără avertisment; 'teren' → data_pv comparată cu limita (ultima zi de sesiune + 5 zile);
+ *  6. fără PV care închide → comparație cu `azi` ('AAAA-LL-ZZ', opțional, ca la termenExpediere).
+ *  → { cerut, ultimaZi, limita, dataConstatare, depasit, judecat, inchis?, faraDataCerere? }; fără cerere / zi de sesiune: judecat=false. */
+export function termenConstatare({ uat, detinatorId, raspunsuri = [], pvs = [], azi = null } = {}) {
+  const ale = (Array.isArray(raspunsuri) ? raspunsuri : []).filter(r => r && (detinatorId == null || r.detinator_id === detinatorId))
+  const ultim = ultimulRaspuns(ale)
+  const cerut = ultim?.optiune === 'constatare_teren'
+  const zile = zileSesiuneCuProgram(uat)
+  const primaZi = zile[0] || null, ultimaZi = zile.length ? zile[zile.length - 1] : null, limita = dataLimitaConstatare(ultimaZi)
+  const gol0 = { cerut, ultimaZi, limita, dataConstatare: null, depasit: false, judecat: false }
+  if (!cerut || !limita) return gol0
+  const dataCerere = dataCivilaBucuresti(ultim.data)
+  const baza = dataCerere ? gol0 : { ...gol0, faraDataCerere: true }
+  const inchide = !dataCerere ? null : (Array.isArray(pvs) ? pvs : [])
+    .filter(p => p && p.tip === 'A' && p.sters_la == null && p.stare === 'semnat' && MODURI_CONSTATARE.includes(p.constatare_mod)
+      && (detinatorId == null || p.detinator_id === detinatorId))
+    .map(p => ({ p, d: dataCivila(p.data_pv) }))
+    .filter(x => x.d && x.d > dataCerere && x.d >= primaZi)
+    .sort((x, y) => (x.d < y.d ? -1 : x.d > y.d ? 1 : cmpId(x.p.id, y.p.id)))[0] || null
+  if (inchide) {
+    if (inchide.p.constatare_mod === 'sediu') return { ...baza, inchis: true }
+    return { ...baza, dataConstatare: inchide.d, depasit: inchide.d > limita, judecat: true }
+  }
+  const a = dataCivila(azi)
+  return a ? { ...baza, depasit: a > limita, judecat: true } : baza
+}
+
+/** Textul avertismentului (null când nu e nimic de spus). */
+export function mesajTermenConstatare(t) {
+  if (!t?.cerut || !t.limita || t.inchis) return null
+  const baza = `Constatare pe teren cerută: termen ${dataRo(t.limita)} (${TERMEN_CONSTATARE_ZILE} zile de la ultima zi de sesiune, ${dataRo(t.ultimaZi)}; plan pct. 4.6)`
+  if (t.faraDataCerere) return `${baza} — cererea de constatare nu are dată; avertismentul rămâne până la verificare`
+  if (t.dataConstatare) return t.depasit ? `${baza} — constatarea din ${dataRo(t.dataConstatare)} e după termen` : null
+  return t.depasit ? `${baza} — termen depășit, constatarea nu e consemnată` : baza
 }
 
 /** Avertismentele unui UAT: NU blochează salvarea (data afișării e un fapt, consemnat în PV de afișare); se confirmă la salvare. */
 export function avertismenteUat(form) {
   const t = termenAfisare(form)
   return t.depasit ? [mesajTermenAfisare(t)] : []
+}
+
+/** Recomandările unui UAT (juridic#031, ținta ziua 1 − 15): doar informare, NU intră în confirmarea la salvare și nu schimbă
+ *  „Gata de convocare?”. Separate de avertismenteUat ca să nu ceară confirmare. */
+export function recomandariUat(uat) {
+  const m = mesajTintaAfisare(termenAfisare(uat))
+  return m ? [m] : []
 }
 
 /** Erorile unui UAT (în română), aceleași reguli ca CHECK-urile din BD: zile în ordine, termen înaintea zilei 1, afișare ordonată.
@@ -196,7 +322,18 @@ export function lipsuriUat(uat) {
   if (![1, 2, 3].some(i => !gol(uat?.[`sesiune_zi${i}`]) && !gol(uat?.[`program_zi${i}`]))) l.push('nicio zi de sesiune cu program')
   if (gol(uat?.reprezentant_uat_nume)) l.push('fără reprezentant nominalizat de primărie')
   const t = termenAfisare(uat)
-  if (t.depasit) l.push(`afișarea începe după ${dataRo(t.limita)} (sub ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1)`)
+  if (t.depasit) l.push(`afișarea începe după ${dataRo(t.limita)} (sub ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1)`)
+  return l
+}
+
+/** Audit D6: motivele „Gata de convocare?” fără dubluri — lipsurile UAT-ului + motivul de blocare al convocatorului (șir „a; b; c”),
+ *  fără „UAT fără zi de sesiune cu program” când lipsurile spun deja „nicio zi de sesiune cu program”. */
+export function motiveGataConvocare(lipsuri, motivBlocare) {
+  const l = [...(lipsuri || [])]
+  const faraZi = l.includes('nicio zi de sesiune cu program')
+  const din = String(motivBlocare || '').split('; ').map(x => x.trim()).filter(Boolean)
+    .filter(x => !(faraZi && x === 'UAT fără zi de sesiune cu program'))
+  for (const x of din) if (!l.includes(x)) l.push(x)
   return l
 }
 

@@ -6,8 +6,11 @@ import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
 import { verificaDateAdresaUat, genereazaAdresaUat, salveazaAdresaUat, descarcaBlob, versiuneMaximaInBucket, caleAdresaUat, aziBucuresti, BUCKET_REDARI } from '../docx.js'
 import { uat3 as uat3Din } from '../idParcela.js'
-import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, avertismenteUat, lipsuriUat, rezumatZile, conflicteConcurente } from '../setari.js'
+import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, avertismenteUat, recomandariUat, MESAJ_TERMEN_RECOMANDAT, dataTintaRecomandata, lipsuriUat, motiveGataConvocare, rezumatZile, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
+
+// audit D8: acordul la singular („1 parcelă”), ca în restul ERP-ului
+export const numarParcele = n => (Number(n) === 1 ? '1 parcelă' : `${n} parcele`)
 
 const CHEI_SESIUNE = [...ZILE_SESIUNE, 'program_zi1', 'program_zi2', 'program_zi3']
 
@@ -61,8 +64,8 @@ export default function UatEcran({ proiect, uats, nivel, show, onSchimbat }) {
             <tbody>
               {uats.map(u => {
                 const n = numaratori[u.id]
-                const lips = [...lipsuriUat(u)]
-                const pr = motivBlocareConvocator(proiect, u, null)
+                const motive = motiveGataConvocare(lipsuriUat(u), motivBlocareConvocator(proiect, u, null))   // audit D6: fără motivul dublat
+                const rec = recomandariUat(u)   // juridic#031: ținta ziua 1 − 15, informativ — nu schimbă „✓ da”
                 return (
                   <tr key={u.id} onClick={() => setEditat(u)} style={{ cursor: 'pointer' }}>
                     <td style={S.td}><b>{u.nume}</b><div style={{ fontSize: 11.5, color: G.dim }}>{u.judet || ''}</div></td>
@@ -74,8 +77,10 @@ export default function UatEcran({ proiect, uats, nivel, show, onSchimbat }) {
                     <td style={S.td}>{n ? n.parcele : '…'}</td>
                     <td style={S.td}>{n ? n.convocati : '…'}</td>
                     <td style={{ ...S.td, fontSize: 12 }}>
-                      {!lips.length && !pr ? <span style={{ color: G.green }}>✓ da</span>
-                        : <span style={{ color: G.yellow }}>{[...lips, ...(pr ? [pr] : [])].join('; ')}</span>}
+                      {!motive.length ? <span style={{ color: G.green }}>✓ da</span>
+                        : <span style={{ color: G.yellow }}>{motive.join('; ')}</span>}
+                      {dataTintaRecomandata(u.sesiune_zi1) && <div style={{ color: G.dim, marginTop: 2 }}>
+                        {`${rec.length > 0 ? 'ℹ afișarea începe după ținta recomandată' : 'ținta recomandată'} ${fmtDate(dataTintaRecomandata(u.sesiune_zi1))} (${MESAJ_TERMEN_RECOMANDAT})`}</div>}
                     </td>
                   </tr>
                 )
@@ -105,6 +110,7 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
   const lipsuriAdresa = verificaDateAdresaUat({ proiect, uat, nrDocument: uat.adresa_nr || 'AU-rezervat-la-generare' })
   // termenul de 10 zile al afișării (plan pct. 4.3): vizibil mereu, confirmat la salvare, fără blocaj (data afișării e un fapt)
   const avertismente = avertismenteUat(form)
+  const recomandari = recomandariUat(form)   // juridic#031: ținta ziua 1 − 15 — afișată, NU cerută la confirmarea salvării
   const nesalvat = schimbate.length > 0 || codSchimbat
   const adresa = async (doarDescarca = false) => {
     if (ocupat.current || lucru) return
@@ -255,7 +261,7 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
             : <div style={{ ...S.mono, padding: '7px 0' }}>{uat.uat3}</div>}
         </Camp>
         <div style={{ fontSize: 12, color: G.dim, paddingBottom: 8 }}>
-          {numarator ? `${numarator.parcele} parcele · ${numarator.convocati} deținători convocați` : 'se numără…'}
+          {numarator ? `${numarParcele(numarator.parcele)} · ${numarator.convocati === 1 ? '1 deținător convocat' : `${numarator.convocati} deținători convocați`}` : 'se numără…'}
           {uat.adresa_nr ? ` · adresa ${uat.adresa_nr} din ${fmtDate(uat.adresa_data)}` : ''}
         </div>
       </div>
@@ -264,6 +270,11 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       {avertismente.length > 0 && (
         <div role="alert" style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.yellowDim, color: G.yellow, fontSize: 12.5 }}>
           {avertismente.map(a => <div key={a}>⚠ {a}</div>)}
+        </div>
+      )}
+      {recomandari.length > 0 && (
+        <div role="status" style={{ marginTop: 12, padding: 10, borderRadius: 7, border: `1px solid ${G.border}`, color: G.muted, fontSize: 12.5 }}>
+          {recomandari.map(a => <div key={a}>ℹ {a}</div>)}
         </div>
       )}
       {(esteAdmin || (poateDescarca && uat.adresa_nr)) && <div style={{ marginTop: 14 }}>
@@ -330,7 +341,7 @@ export function ModalUatNou({ proiect, uats, show, onClose, onGata }) {
       </div>
       <div style={{ fontSize: 12, color: G.dim, marginTop: 8 }}>Codul intră în id-ul parcelelor (T3-{codEfectiv || 'XXX'}-0001) și nu se mai schimbă după primul import.</div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-        <button onClick={onClose} style={S.btnS}>Renunț</button>
+        <button onClick={onClose} style={S.btnS}>Renunță</button>
         <button onClick={salveaza} disabled={lucru} style={{ ...S.btnP, opacity: lucru ? 0.6 : 1 }}>{lucru ? 'Se salvează…' : 'Adaugă'}</button>
       </div>
     </Modal>

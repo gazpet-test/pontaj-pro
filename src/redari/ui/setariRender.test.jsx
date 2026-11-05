@@ -24,12 +24,12 @@ vi.mock('../../lib/supabase.js', () => ({ supabase: { from: tabel => {
   return q
 } } }))
 
-import UatEcran, { ModalUat, ModalUatNou } from './UatEcran.jsx'
+import UatEcran, { ModalUat, ModalUatNou, numarParcele } from './UatEcran.jsx'
 import SetariProiect from './SetariProiect.jsx'
 import FormularCampuri from './FormularCampuri.jsx'
 import LegaturaExecutie from './LegaturaExecutie.jsx'
 import { CAMPURI_UAT } from '../setari.js'
-import { citestePaginat } from './comune.jsx'
+import { citestePaginat, motivBlocareConvocator } from './comune.jsx'
 
 const proiect = { id: 'p1', cod: 'TEST-PR', denumire: 'Proiect test', text_gdpr: 'Text GDPR de test', text_declaratie: 'Declarație de test', contact_email: 'test@example.invalid' }
 const uats = [
@@ -171,6 +171,10 @@ describe('ecranul UAT', () => {
     expect(h).toContain('UAT nou')
     expect(h).toContain('nicio zi de sesiune cu program')        // u2 nu e gata
     expect(h).toContain('proiect fără nr./dată contract')        // proiectul de test nu are contract
+    expect(h).not.toContain('UAT fără zi de sesiune cu program')   // audit D6: motivul nu mai apare de două ori
+  })
+  it('audit D8: „1 parcelă” la singular', () => {
+    expect(numarParcele(1)).toBe('1 parcelă'); expect(numarParcele(0)).toBe('0 parcele'); expect(numarParcele(12)).toBe('12 parcele')
   })
   it('viewer: fără butonul de UAT nou', () => {
     const h = renderToString(<UatEcran proiect={proiect} uats={uats} nivel="viewer" show={show} onSchimbat={() => {}} />)
@@ -178,15 +182,22 @@ describe('ecranul UAT', () => {
     expect(h).toContain('Doar administratorul modifică UAT-urile')
   })
   it('termenul de 10 zile (plan pct. 4.3): avertisment în modal și în tabel, fără să blocheze; în termen nu apare nimic', () => {
-    const tarziu = { ...uats[0], afisare_data_start: '2026-12-01', afisare_data_end: '2026-12-12' }
+    const tarziu = { ...uats[0], afisare_data_start: '2026-11-30', afisare_data_end: '2026-12-12' }
     const modal = renderToString(<ModalUat proiect={proiect} uat={tarziu} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
-    expect(modal).toContain('Afișarea la primărie începe pe 01.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026)')
-    expect(modal).toContain('cel târziu pe 30.11.2026')
+    expect(modal).toContain('Afișarea la primărie începe pe 30.11.2026, sub 10 zile libere înainte de ziua 1 (10.12.2026)')
+    expect(modal).toContain('cel târziu pe 29.11.2026')
     expect(modal).toMatch(/<button[^>]*>Salvează/)
     const tabel = renderToString(<UatEcran proiect={proiect} uats={[tarziu]} nivel="admin" show={show} onSchimbat={() => {}} />)
-    expect(tabel).toContain('afișarea începe după 30.11.2026')
-    const inTermen = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-30' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
-    expect(inTermen).not.toContain('Afișarea la primărie începe pe')
+    expect(tabel).toContain('afișarea începe după 29.11.2026')
+    const inTermen = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-29' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
+    expect(inTermen).not.toContain('sub 10 zile libere înainte de ziua 1')
+    // juridic#031: pe limita fermă, dar după ținta recomandată (ziua 1 − 15 = 25.11) → doar informarea non-blocantă
+    expect(inTermen).toContain('după ținta recomandată 25.11.2026')
+    expect(inTermen).toContain('recomandat cu cel puțin 15 zile înainte, pentru livrarea poștei')
+    const inTinta = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-25' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
+    expect(inTinta).not.toContain('Afișarea la primărie începe pe')
+    // tabelul „Gata de convocare?” arată ținta recomandată ca informare
+    expect(renderToString(<UatEcran proiect={proiect} uats={[{ ...tarziu, afisare_data_start: '2026-11-20' }]} nivel="admin" show={show} onSchimbat={() => {}} />)).toContain('ținta recomandată 25.11.2026')
   })
   it.each([[false, 0], [true, 1]])('concurent (Jakarinos f-v2 r2 P2): termenul se judecă pe rândul recitit + patch, înainte de UPDATE (confirmă=%s)', async (raspuns, update) => {
     const confirm = vi.fn(() => raspuns)
@@ -198,16 +209,16 @@ describe('ecranul UAT', () => {
       let tree = h.render(ModalUat, props)
       elemente(tree, FormularCampuri)[0].props.onChange('afisare_data_start', '2026-12-05')
       tree = h.render(ModalUat, props)
-      // pe formular (ziua 1 = 20.12, limita 10.12) afișarea de 05.12 e în termen: fără casetă, fără confirmare înainte de recitire
+      // pe formular (ziua 1 = 20.12, limita 09.12) afișarea de 05.12 e în termen: fără casetă, fără confirmare înainte de recitire
       expect(renderToString(tree)).not.toContain('Afișarea la primărie începe pe')
       const pending = elemente(tree, 'button').find(b => String(b.props.children).startsWith('Salvează')).props.onClick()
       expect(confirm).not.toHaveBeenCalled()
-      // între timp alt admin a mutat ziua 1 la 10.12 (câmp distinct, deci fără conflict) → limita devine 30.11
+      // între timp alt admin a mutat ziua 1 la 10.12 (câmp distinct, deci fără conflict) → limita devine 29.11
       raspunsuri.liste.push({ data: [{ ...baza, sesiune_zi1: '2026-12-10', afisare_data_start: '2026-12-05', versiune: 3 }], error: null })
       raspunsuri.singure[0]({ data: { ...baza, sesiune_zi1: '2026-12-10', versiune: 2 }, error: null })
       await pending
       expect(confirm).toHaveBeenCalledTimes(1)
-      expect(confirm.mock.calls[0][0]).toContain('Afișarea la primărie începe pe 05.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026)')
+      expect(confirm.mock.calls[0][0]).toContain('Afișarea la primărie începe pe 05.12.2026, sub 10 zile libere înainte de ziua 1 (10.12.2026)')
       const updates = raspunsuri.apeluri.filter(x => x[0] === 'red_uat' && x[1] === 'update')
       expect(updates).toHaveLength(update)
       if (update) { expect(updates[0][2]).toEqual({ afisare_data_start: '2026-12-05' }); expect(gata).toHaveBeenCalledTimes(1) }
@@ -319,5 +330,18 @@ describe('ecranul Setări proiect', () => {
     expect(h).not.toContain('<textarea')
     expect(h).not.toContain('Salvează')
     expect(h).toContain('Text GDPR de test')
+  })
+})
+
+// D3 (audit 04.11): butonul 📄 Convocator e blocat dacă lipsește oricare câmp de contact tipărit de șablon
+describe('motivBlocareConvocator — contactul tipărit pe convocator', () => {
+  const uat = { sesiune_zi1: '2026-11-10', program_zi1: '09-16' }
+  const pr = { contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '1', imputernicire_data: '2026-10-01', text_gdpr: 'x',
+    reprezentant_tgz_nume: 'R', reprezentant_tgz_telefon: '0711', contact_nume: 'N', contact_telefon: '0700', contact_email: 'a@b.test' }
+  it('complet → null; fiecare câmp lipsă e numit, cu locul din Setări proiect', () => {
+    expect(motivBlocareConvocator(pr, uat, null)).toBeNull()
+    expect(motivBlocareConvocator({ ...pr, contact_telefon: ' ' }, uat, null)).toBe('proiect fără contact Gazpet: telefon (Setări proiect → Contact pe convocări)')
+    expect(motivBlocareConvocator({ ...pr, contact_nume: '', contact_email: null }, uat, null)).toBe('proiect fără contact Gazpet: persoană, e-mail (Setări proiect → Contact pe convocări)')
+    expect(motivBlocareConvocator({ ...pr, reprezentant_tgz_telefon: '' }, uat, null)).toMatch(/telefonul reprezentantului TGZ \(Setări proiect → Reprezentanți\)/)
   })
 })

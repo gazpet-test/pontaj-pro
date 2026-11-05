@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob } from '../docx.js'
 import { citesteFisierPostal, ghicesteMaparea, propune, aplica, confirmariAplicare, reevalueazaTermene, confirmareTermeneSchimbate } from '../importPostal.js'
 import { G, S, Camp, Gol, msgEroare, fmtDate, MOTIVE_RETUR, etichetaRetur, citestePaginat } from './comune.jsx'
-import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
+import { TERMEN_CONVOCARE_ZILE, TERMEN_RECOMANDAT_ZILE, MESAJ_TERMEN_RECOMANDAT } from '../setari.js'
 
 const TIPURI = { expediere: 'Expediere', ar: 'Confirmare primire (AR)', retur: 'Retur' }
 const CAMPURI = { nr_document: 'Nr. plic (PL-XXX-nnnn)', nr_tracking: 'Tracking', data: 'Data', eveniment: 'Eveniment', motiv: 'Motiv retur' }
@@ -147,7 +147,8 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     {preview && <>
       <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
         {[['De aplicat', preview.aplicabile.length], ['Deja', preview.deja.length], ['Excepții', preview.exceptii.length]].map(([k, n]) => <div key={k} style={S.card}>{k}: <b>{n}</b></div>)}
-        {preview.aplicabile.some(a => a.avertisment) && <div role="alert" style={{ ...S.card, color: G.yellow }}>După termenul de {TERMEN_CONVOCARE_ZILE} zile: <b>{preview.aplicabile.filter(a => a.avertisment).length}</b> (se înregistrează, cu confirmare)</div>}
+        {preview.aplicabile.some(a => a.avertisment) && <div role="alert" style={{ ...S.card, color: G.yellow }}>După termenul de {TERMEN_CONVOCARE_ZILE} zile libere: <b>{preview.aplicabile.filter(a => a.avertisment).length}</b> (se înregistrează, cu confirmare)</div>}
+        {preview.aplicabile.some(a => a.recomandare) && <div role="status" style={{ ...S.card, color: G.muted }}>După ținta recomandată ({TERMEN_RECOMANDAT_ZILE} zile), în limita fermă: <b>{preview.aplicabile.filter(a => a.recomandare).length}</b> — {MESAJ_TERMEN_RECOMANDAT}; doar informare, fără confirmare</div>}
       </div>
       <Tabel titlu="Propuneri" randuri={preview.aplicabile} /><Tabel titlu="Deja înregistrate" randuri={preview.deja} />
       <Tabel titlu="Excepții / conflicte / erori" randuri={exceptii} />

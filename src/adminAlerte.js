@@ -13,6 +13,8 @@ export const SURSE_ADMIN = [
   { id: 'conturi', label: 'Conturi platformă', module: 'admin_alerte', ownerOnly: true, path: '/admin?tab=managers' },
   // 13.10.2026: proiecte active fără etichetă Gmail → corespondența lor nu intră automat în ERP (scriptul Ingestie Corespondența)
   { id: 'gmail', label: 'Proiecte fără etichetă Gmail', module: 'executie', ownerOnly: true, path: '/executie' },
+  // 04.11.2026 (20261130d): soldul SMSLink sub prag / citire veche / eroare — vederea v_sms_sold (din fn_sold_sms_citeste: doar owner, și în BD)
+  { id: 'sms_sold', label: 'SMS · sold SMSLink', module: 'sms', ownerOnly: true, path: '/admin?tab=sms' },
 ]
 
 // Cheia transversală este explicită inclusiv pentru owner. Nu moștenește dreptul HR.
@@ -305,6 +307,7 @@ export const SELECT_ADMIN = {
   logistica_comenzi_transport: 'id,numar_comanda,data_transport,status',
   v_admin_conturi_alerte: 'id,cod,profile_id,email,tip_cont,is_owner,employee_id,employee_name,employee_active,termination_date,banned_until,jurnal_id,inchis_la,candidati,alocari',
   executie_proiecte: 'id,nume,cod_intern,eticheta_gmail,activ',
+  v_sms_sold: 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta,furnizor_ultim,furnizor_la,simulator,monitorizare_oprita,furnizor_neconfigurat',
 }
 
 // Proiect activ fără etichetă Gmail: corespondența lui rămâne nesortată (sau ajunge în coada „de repartizat”).
@@ -320,6 +323,67 @@ export function alerteGmail(proiecte) {
   }))
 }
 
+// Soldul SMSLink: alerta o decide BD-ul (fn_sold_sms_stare: sub_prag / citire_veche / eroare_dupa_citire / monitorizare_oprita); aici
+// doar textul. r2 (#971, Copilot P2-07): O alertă combinată, cu TOATE motivele active; un sold vechi e „ultimul sold cunoscut”.
+// P3-02: ora cronului 05:10 UTC (07:10 / 08:10 RO). r4: simulatorul suprimă alerta doar confirmat recent (BD: simulator = true doar cu
+// furnizor_la < 36 h). r5 (Copilot r4 P2-01 / P2-02 / P3-01, Jakarinos r4 P3):
+//   * titlul pune primul motivul cel mai grav / cel mai sigur: furnizor neconfigurat > monitorizare oprită > sub prag (doar cu
+//     monitorizarea activă) > eroare de citire > citire veche. Cu monitorizarea oprită, un sold sub prag e „ultimul sold cunoscut”,
+//     nu un sold SMSLink activ (nu se cere reîncărcarea pe baza lui);
+//   * momentul alertei = motivul activ cel mai recent: expirarea (max(furnizor_la, citit_la) + 36 h) pentru monitorizare oprită / citire
+//     veche; eroarea DOAR dacă e mai nouă decât expirarea.
+// r6 (Copilot r5 P2-01 = Jakarinos r5 P3): momentul alertei = momentul la care motivul activ cel mai recent a DEVENIT activ, niciodată
+// după „acum”: citire veche = citit_la + 36 h; monitorizare oprită = max(furnizor_la, citit_la) + 36 h; eroare = eroare_la. Un moment
+// calculat în viitor înseamnă că motivul nu e încă activ (nu intră); rezultatul e limitat la min(…, acum).
+export function momentAlertaSold(st, acum = Date.now()) {
+  const ms = v => { const t = v ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null }
+  const ZI_SI_JUM = 36 * 3600 * 1000
+  const citit = ms(st.citit_la), furn = ms(st.furnizor_la)
+  const candidati = [
+    st.citire_veche === true && citit != null ? citit + ZI_SI_JUM : null,
+    st.monitorizare_oprita === true && (furn != null || citit != null) ? Math.max(furn ?? -Infinity, citit ?? -Infinity) + ZI_SI_JUM : null,
+    st.eroare_dupa_citire === true ? ms(st.eroare_la) : null,
+  ].filter(t => t != null && t <= acum)
+  const t = candidati.length ? Math.max(...candidati) : (citit ?? ms(st.eroare_la))
+  return t == null ? null : new Date(Math.min(t, acum)).toISOString()
+}
+
+export function alerteSmsSold(st, acum = Date.now()) {
+  if (!st || st.alerta !== true || st.simulator === true) return []
+  const credit = Number.isInteger(st.credit) ? st.credit : null
+  const fmt = v => new Date(v).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' })
+  const sub = st.sub_prag === true, veche = st.citire_veche === true, err = st.eroare_dupa_citire === true
+  const oprita = st.monitorizare_oprita === true, neconf = st.furnizor_neconfigurat === true || (err && st.eroare === 'furnizor_neconfigurat')
+  const istoric = veche || err || oprita || neconf
+  const sold = credit == null ? null : `${istoric ? 'ultimul sold cunoscut' : 'sold'} ${credit} SMS${st.citit_la ? ` (la ${fmt(st.citit_la)})` : ''}`
+  // r6 (Copilot r5 P2-02): „sub prag” activ (prioritate + reîncărcare) DOAR pe un sold actualizat: fără citire veche, monitorizare oprită,
+  // eroare după citire sau furnizor neconfigurat; altfel e doar „ultimul sold cunoscut era sub prag”, prioritate „date lipsă”
+  const subActiv = sub && !oprita && !neconf && !veche && !err
+  const titlu = neconf ? 'SMS: furnizorul nu e configurat (SMS_FURNIZOR) — soldul SMSLink nu se citește'
+    : oprita ? `Monitorizarea soldului SMSLink e oprită (niciun apel sms-sold de peste 36 de ore)${sold ? `; ${sold}` : ''}`
+      : subActiv ? `Sold SMSLink sub prag (${st.prag}): ${sold}${veche || err ? ' — neactualizat' : ''}`
+        : err ? `Soldul SMSLink nu s-a putut citi (${st.eroare || 'eroare'})`
+          : credit == null ? 'Soldul SMSLink nu a fost citit încă' : 'Soldul SMSLink nu a mai fost citit de peste 36 de ore'
+  const impact = [
+    neconf && 'SMS_FURNIZOR lipsește sau are o valoare necunoscută în Edge Secrets (așteptat: smslink sau simulator).',
+    oprita && `Ultimul apel sms-sold: ${st.furnizor_la ? fmt(st.furnizor_la) : '—'}${st.furnizor_ultim ? ` (${st.furnizor_ultim})` : ''}. Verifică jobul sms_sold_zilnic (05:10 UTC = 07:10 iarna / 08:10 vara, ora României) și funcția edge sms-sold.`,
+    subActiv && 'Reîncarcă creditul în contul SMSLink. La credit 0 trimiterea se oprește automat (eroarea 8).',
+    sub && !subActiv && `Ultimul sold cunoscut era sub prag (${credit} < ${st.prag}): confirmă soldul după repornirea citirii.`,
+    err && !neconf && `Ultima încercare a eșuat (${st.eroare || 'eroare'}${st.eroare_la ? `, ${fmt(st.eroare_la)}` : ''}): verifică conexiunea ERP-PROD (connection_id / parolă / IP) și secretele SMSLINK_* din Edge Secrets.`,
+    veche && !oprita && 'Nicio citire reușită în ultimele 36 de ore: verifică jobul sms_sold_zilnic (05:10 UTC = 07:10 iarna / 08:10 vara, ora României) și funcția edge sms-sold.',
+  ].filter(Boolean).join(' ')
+  return [alerta('sms_sold', 'sold', {
+    title: titlu,
+    reference: sold ? sold[0].toUpperCase() + sold.slice(1) : 'Nicio citire reușită încă',
+    priority: subActiv ? (credit === 0 ? 'critical' : 'week') : 'missing',
+    timestamp: momentAlertaSold(st, acum),
+    owner: 'Owner · cont SMSLink',
+    impact,
+    reason: 'Calculat în BD (fn_sold_sms_stare) din ultima citire mode=Credit a cronului zilnic. Nu se trimite nimic automat.',
+    locator: 'sms_sold · fn_sold_sms_citeste',
+  })]
+}
+
 export async function incarcaSursaAdmin(client, source, profile, { signal, now = new Date() } = {}) {
   if (!areAccesSursa(profile, source)) return { state: 'denied', rows: [], message: 'Acces neacordat la modulul sursă.' }
   const today = ziBucuresti(now)
@@ -329,6 +393,7 @@ export async function incarcaSursaAdmin(client, source, profile, { signal, now =
     if (source.id === 'ofertare') rows = alerteOfertare(await read('ofertare_licitatii', q => q.in('status', ['identificata', 'analiza', 'go', 'in_lucru'])), now)
     if (source.id === 'hr') rows = alerteHr(await read('v_hr_autorizatii_status'), today)
     if (source.id === 'conturi') rows = alerteConturi(await read('v_admin_conturi_alerte'), today)
+    if (source.id === 'sms_sold') rows = alerteSmsSold((await read('v_sms_sold'))[0] ?? null, now.getTime())
     if (source.id === 'gmail') rows = alerteGmail(await read('executie_proiecte', q => q.eq('activ', true)))
     if (source.id === 'firma') rows = alerteFirma(await read('documente_firma', q => q.eq('activ', true)), today)
     if (source.id === 'flota') {

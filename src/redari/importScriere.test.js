@@ -45,6 +45,7 @@ describe('scrieImport - atribute detinator', () => {
       parcele: [{ cheie: 'p', cheie_sursa: 'TST|HG1|CF1|', uat3: 'TST', tronson: 3 }],
       detinatori: intrari.map((d, i) => ({ ...d, cheie: `d${i}`, cheie_parcela: 'p', nume: `TEST ${i}`, nume_normalizat: `TEST ${i}`, calitate: 'proprietar' })),
       contacte: [],
+      proiect_id_previzualizare: 'proiect-test',   // r6: previzualizarea e legată de proiect (Anexa 7: fără numitor de rânduri)
     }
     const rezultat = await scrieImport(db, preview, { proiectId: 'proiect-test', versiune: 'TEST', sursa: 'ANEXA7' })
     expect(rezultat.detinatoriNoi).toBe(4)

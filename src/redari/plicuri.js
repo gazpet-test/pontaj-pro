@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import { TERMEN_CONVOCARE_ZILE, dataLimitaConvocare, dataValida } from './setari.js'
+import { TERMEN_CONVOCARE_ZILE, dataLimitaConvocare, dataValida, dataTintaRecomandata, subTintaRecomandata, MESAJ_TERMEN_RECOMANDAT } from './setari.js'
 
 // Validat de Juridic (juridic#021, 03.11.2026; validarea finală a formulărilor rămâne la avocat). Textele AR sunt centralizate aici.
 // Pe AR apar MEREU: nr. plicului, nr. de convocări (N) și UAT-ul. Numerele convocărilor: până la 6 enumerate, sau ca interval când sunt consecutive;
@@ -32,7 +32,7 @@ export const dataBucuresti = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 
 const dataText = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d.split('-').reverse().join('.') : txt(d)
 
 /** Termenul de expediere al convocărilor unui UAT (plan pct. 4.2: recomandata se expediază „cu cel puțin 10 zile înainte de prima
- *  zi de sesiune”). `limita` = ziua 1 − TERMEN_CONVOCARE_ZILE ('AAAA-LL-ZZ', null fără ziua 1); `depasit` = data dată e după limită.
+ *  zi de sesiune”). `limita` = dataLimitaConvocare (ziua 1 − TERMEN_CONVOCARE_ZILE − ZILE_EXCLUSE_DIN_TERMEN; 'AAAA-LL-ZZ', null fără ziua 1); `depasit` = data dată e după limită.
  *  Avertisment, nu blocaj: data expedierii e un fapt (borderoul Poștei) și se înregistrează așa cum e. */
 export function termenExpediere(uat, data) {
   const limita = dataLimitaConvocare(uat?.sesiune_zi1)
@@ -50,7 +50,19 @@ export function avertismentExpediere(uat, data) {
   const { limita, depasit } = termenExpediere(uat, data)
   if (!depasit) return null
   return `Data expedierii (${dataText(txt(data))}) e după termen: pentru ${uat?.nume || 'UAT'} convocările trebuie expediate cu cel puțin ` +
-    `${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 (${dataText(txt(uat?.sesiune_zi1))}), adică până la ${dataText(limita)} (plan pct. 4.2).`
+    `${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1 (${dataText(txt(uat?.sesiune_zi1))}), adică până la ${dataText(limita)} (plan pct. 4.2).`
+}
+
+/** juridic#031: ținta RECOMANDATĂ de expediere (ziua 1 − TERMEN_RECOMANDAT_ZILE), afișată lângă limita fermă; '' fără ziua 1. */
+export function textTintaExpediere(uat) {
+  const tinta = dataTintaRecomandata(uat?.sesiune_zi1)
+  return tinta ? `recomandat până la ${dataText(tinta)} (${MESAJ_TERMEN_RECOMANDAT})` : ''
+}
+/** Avertisment NON-blocant: expediere după ținta recomandată, dar în limita fermă (fără confirmare; null altfel). */
+export function recomandareExpediere(uat, data) {
+  if (!subTintaRecomandata(uat?.sesiune_zi1, txt(data))) return null
+  return `Data expedierii (${dataText(txt(data))}) e după ținta recomandată ${dataText(dataTintaRecomandata(uat?.sesiune_zi1))} pentru ${uat?.nume || 'UAT'} ` +
+    `(${MESAJ_TERMEN_RECOMANDAT}); limita fermă ${dataText(dataLimitaConvocare(uat?.sesiune_zi1))} e respectată.`
 }
 
 /** Copilot f-v2 r4 P2: modalul de expediere recitește UAT-ul din BD imediat înainte de salvare (alt admin poate fi mutat ziua 1)

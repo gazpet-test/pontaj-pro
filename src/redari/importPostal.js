@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx-js-style'
-import { avertismentExpediere } from './plicuri.js'
+import { avertismentExpediere, recomandareExpediere } from './plicuri.js'
 import { TERMEN_CONVOCARE_ZILE } from './setari.js'
 
 const text = v => v == null ? '' : String(v).trim()
@@ -183,7 +183,9 @@ export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = fals
     const patch = { awb, data_expediere: data }
     const conditii = Object.fromEntries(CAMPURI.map(k => [k, p[k] ?? null]))
     const avertisment = avertismentExpediere(uatPe.get(p.uat_id), data)
-    valide.push({ fel: 'aplicabil', item: { ...item, patch, conditii, ...(avertisment ? { avertisment } : {}) }, baza })
+    // juridic#031: ținta recomandată (ziua 1 − 15) = doar informare, fără confirmare (nu intră în confirmariAplicare)
+    const recomandare = avertisment ? null : recomandareExpediere(uatPe.get(p.uat_id), data)
+    valide.push({ fel: 'aplicabil', item: { ...item, patch, conditii, ...(avertisment ? { avertisment } : {}), ...(recomandare ? { recomandare } : {}) }, baza })
   })
   // Două treceri: un rând invalid nu rezervă plicul; toate evenimentele valide duplicate devin excepții.
   const pe = new Map()
@@ -202,7 +204,7 @@ export function confirmariAplicare(preview, proiectCod) {
   const tardive = (preview?.aplicabile || []).filter(a => a.avertisment)
   const mesaje = [`Aplică ${preview.aplicabile.length} modificări poștale în proiectul ${proiectCod}?\nDeja: ${preview.deja.length}. Excepții: ${preview.exceptii.length}.\nConflictele rămân pentru verificare manuală în Plicuri.`]
   if (tardive.length) {
-    mesaje.push(`${tardive.length} din ${preview.aplicabile.length} expedieri sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2): ` +
+    mesaje.push(`${tardive.length} din ${preview.aplicabile.length} expedieri sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1, plan pct. 4.2): ` +
       `${tardive.map(a => a.nr_document).join(', ')}.\nSe înregistrează cu data reală, dar termenul nu e respectat. Le înregistrezi totuși?`)
   }
   return mesaje
@@ -218,9 +220,12 @@ export function reevalueazaTermene(aplicabile, uats) {
   const noi = aplicabile.map(a => {
     const avertisment = avertismentExpediere(uatPe.get(a.uat_id), a.patch?.data_expediere)
     if ((avertisment || null) !== (a.avertisment || null)) schimbat = true
+    // ținta recomandată se recalculează și ea, dar NU marchează `schimbat` (e non-blocantă, nu cere confirmare)
+    const recomandare = avertisment ? null : recomandareExpediere(uatPe.get(a.uat_id), a.patch?.data_expediere)
     const rest = { ...a }
     delete rest.avertisment
-    return avertisment ? { ...rest, avertisment } : rest
+    delete rest.recomandare
+    return { ...rest, ...(avertisment ? { avertisment } : {}), ...(recomandare ? { recomandare } : {}) }
   })
   return { aplicabile: noi, schimbat }
 }
@@ -229,7 +234,7 @@ export function reevalueazaTermene(aplicabile, uats) {
 export function confirmareTermeneSchimbate(aplicabile) {
   const tardive = aplicabile.filter(a => a.avertisment)
   return `Ziua 1 de sesiune s-a schimbat între timp pentru UAT-urile acestor plicuri. Pe valorile de acum, ${tardive.length} din ${aplicabile.length} expedieri ` +
-    `sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2)${tardive.length ? `: ${tardive.map(a => a.nr_document).join(', ')}` : ''}.` +
+    `sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile libere înainte de ziua 1, plan pct. 4.2)${tardive.length ? `: ${tardive.map(a => a.nr_document).join(', ')}` : ''}.` +
     `\n${tardive.map(a => a.avertisment).join('\n')}\n\nAplici totuși?`
 }
 

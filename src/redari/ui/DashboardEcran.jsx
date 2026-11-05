@@ -67,7 +67,7 @@ export default function DashboardEcran({ proiect }) {
       {!date.tronsoane.length && <p style={{ fontSize:12.5, color:G.muted, margin:'0 0 8px' }}>Nicio parcelă activă.</p>}
       <div style={{ overflowX: 'auto' }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead><tr><th style={S.th}>Tronson</th>{coloane.map(([k, text]) => <th key={k} style={S.th}>{text}</th>)}</tr></thead>
-        <tbody>{date.tronsoane.map(t => <tr key={t.tronson}><td style={S.td}>{t.tronson ?? '-'}</td>
+        <tbody>{date.tronsoane.map(t => <tr key={t.tronson}><td style={S.td}>{t.tronson ?? 'Fără tronson'}</td>
           {coloane.map(([k]) => <td key={k} style={S.td}>{t[k]}</td>)}
         </tr>)}</tbody>
       </table></div>

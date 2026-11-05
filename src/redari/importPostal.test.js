@@ -142,7 +142,7 @@ function fakeSupabase(responses = [], apres = () => {}, alte = []) {
   } }
 }
 
-// Copilot f-v2 r3 P2-01: importul CSV nu ocolește termenul de 10 zile (plan pct. 4.2). Ziua 1 = 10.12.2026 → limita 30.11.2026 (numărat în calendar).
+// Copilot f-v2 r3 P2-01: importul CSV nu ocolește termenul de 10 zile libere (plan pct. 4.2). Ziua 1 = 10.12.2026 → limita 29.11.2026 (ziua 1 − 11, numărat în calendar).
 describe('termenul de expediere la import', () => {
   const uats = [{ id: 'uat-fictiv-a', nume: 'Comuna Fictivă', sesiune_zi1: '2026-12-10' }, { id: 'uat-fictiv-b', nume: 'Fără zile', sesiune_zi1: null }]
   const plicuri = [
@@ -154,7 +154,7 @@ describe('termenul de expediere la import', () => {
   const fisier = [
     rand({ doc: 'PL-HUS-0001', awb: 'AA1', data: '20.11.2026', __rand: 2 }),
     rand({ doc: 'PL-HUS-0002', awb: 'AA2', data: '02.12.2026', __rand: 3 }),
-    rand({ doc: 'PL-HUS-0003', awb: 'AA3', data: '30.11.2026', __rand: 4 }),
+    rand({ doc: 'PL-HUS-0003', awb: 'AA3', data: '29.11.2026', __rand: 4 }),
     rand({ doc: 'PL-HUS-0004', awb: 'AA4', data: '05.12.2026', __rand: 5 }),
   ]
   it('import mixt: avertisment DOAR pe rândul tardiv, care rămâne aplicabil (expedierea e un fapt)', () => {
@@ -162,21 +162,21 @@ describe('termenul de expediere la import', () => {
     expect(r.exceptii).toEqual([])
     expect(r.aplicabile.map(a => a.nr_document)).toEqual(['PL-HUS-0001', 'PL-HUS-0002', 'PL-HUS-0003', 'PL-HUS-0004'])
     expect(r.aplicabile.filter(a => a.avertisment).map(a => a.nr_document)).toEqual(['PL-HUS-0002'])
-    expect(r.aplicabile[1].avertisment).toBe('Data expedierii (02.12.2026) e după termen: pentru Comuna Fictivă convocările trebuie expediate cu cel puțin 10 zile înainte de ziua 1 (10.12.2026), adică până la 30.11.2026 (plan pct. 4.2).')
+    expect(r.aplicabile[1].avertisment).toBe('Data expedierii (02.12.2026) e după termen: pentru Comuna Fictivă convocările trebuie expediate cu cel puțin 10 zile libere înainte de ziua 1 (10.12.2026), adică până la 29.11.2026 (plan pct. 4.2).')
     expect(r.aplicabile[1].patch).toEqual({ awb: 'AA2', data_expediere: '2026-12-02' })
   })
   it('confirmarea înainte de „Aplică” numără rândurile tardive; fără tardive rămâne o singură confirmare', () => {
     const r = propune(fisier, mapare, 'expediere', plicuri, { uats })
     const m = confirmariAplicare(r, 'TEST-PR')
     expect(m).toHaveLength(2)
-    expect(m[1]).toMatch(/^1 din 4 expedieri sunt DUPĂ termenul de convocare \(cu cel puțin 10 zile înainte de ziua 1, plan pct\. 4\.2\): PL-HUS-0002\./)
+    expect(m[1]).toMatch(/^1 din 4 expedieri sunt DUPĂ termenul de convocare \(cu cel puțin 10 zile libere înainte de ziua 1, plan pct\. 4\.2\): PL-HUS-0002\./)
     const inTermen = propune([fisier[0], fisier[2]], mapare, 'expediere', plicuri, { uats })
     expect(confirmariAplicare(inTermen, 'TEST-PR')).toHaveLength(1)
   })
   it('recitirea înainte de aplicare (Copilot f-v2 r4 P2): termene recalculate pe ziua 1 de acum, schimbarea semnalată, UAT lipsă = eroare', () => {
     const r = propune(fisier, mapare, 'expediere', plicuri, { uats })
     expect(reevalueazaTermene(r.aplicabile, uats).schimbat).toBe(false)
-    // ziua 1 mutată la 05.12 → limita 25.11: 30.11 și 02.12 devin tardive; patch-urile nu se schimbă
+    // ziua 1 mutată la 05.12 → limita 24.11: 29.11 și 02.12 devin tardive; patch-urile nu se schimbă
     const mutat = reevalueazaTermene(r.aplicabile, [{ ...uats[0], sesiune_zi1: '2026-12-05' }, uats[1]])
     expect(mutat.schimbat).toBe(true)
     expect(mutat.aplicabile.filter(a => a.avertisment).map(a => a.nr_document)).toEqual(['PL-HUS-0002', 'PL-HUS-0003'])

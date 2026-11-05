@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../lib/supabase.js', () => ({ supabase: {} }))
-import SmsPagina, { RevizieLot } from './SmsPagina.jsx'
+import SmsPagina, { RevizieLot, SoldSmslink } from './SmsPagina.jsx'
 import RedariSmsButon from './RedariSmsButon.jsx'
 
 describe('Revizia înainte de aprobare (Jakarinos r1 P1)', () => {
@@ -49,6 +49,27 @@ describe('📱 SMS — acces pe nivel (ruta /sms și Administrator)', () => {
     const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: true }} panouInitial={panouOwner} />)
     for (const t of ['Compune', 'Istoric loturi', '>⚙ Setări<', '>🚫 Opt-out<', 'Previzualizează', 'Creează lot (draft)', 'Azi: <b>0</b> / 200']) expect(html).toContain(t)
     expect(html).toContain('nu înlocuiește convocarea scrisă')
+  })
+  it('owner: soldul SMSLink în banda de sus (20261130d), marcat sub prag; ceilalți nu îl văd', () => {
+    const sold = { credit: 120, citit_la: '2026-11-04T05:10:00Z', prag: 150, sub_prag: true, alerta: true }
+    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: true }} panouInitial={panouOwner} soldInitial={sold} />)
+    expect(html).toContain('Sold SMSLink: 120 SMS (la 04.11 07:10) ⚠')
+    expect(html).toContain('Sub pragul de 150 SMS')
+    const u = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} soldInitial={sold} />)
+    expect(u).not.toContain('Sold SMSLink')
+  })
+  it('r5 P2-01: simulator expirat (monitorizare oprită) → „monitorizare oprită; ultimul sold cunoscut”, fără ⚠ chiar dacă sub prag', () => {
+    const html = renderToStaticMarkup(<SoldSmslink soldInitial={{ credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: true, prag: 150, alerta: true,
+      simulator: false, monitorizare_oprita: true, furnizor_ultim: 'simulator' }} />)
+    expect(html).toContain('Sold SMSLink: monitorizare oprită (ultimul furnizor: simulator); ultimul sold cunoscut: 120 SMS la 04.11 07:10')
+    expect(html).not.toContain('⚠')
+    expect(html).not.toContain('reîncarcă creditul')
+  })
+  it('r3 P2-01: modul simulator din BD (fără click) → „simulator — sold SMSLink necitit (ultimul cunoscut …)”, fără ⚠', () => {
+    const html = renderToStaticMarkup(<SoldSmslink soldInitial={{ credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: true, prag: 150, simulator: true, furnizor_ultim: 'simulator' }} />)
+    expect(html).toContain('simulator — sold SMSLink necitit (ultimul cunoscut: 120 SMS la 04.11 07:10)')
+    expect(html).not.toContain('⚠')
+    expect(html).not.toContain('Sold SMSLink: 120')
   })
   it('utilizator: compune / istoric, fără Setări și Opt-out, fără plafoane', () => {
     const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} />)

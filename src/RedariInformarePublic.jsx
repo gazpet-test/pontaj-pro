@@ -3,11 +3,12 @@
 // /redari/informare — juridic#031 „Canale”: QR-ul de pe hârtie duce la formularul de răspuns (/redari/raspuns/:token),
 // care are sus linkul „Informarea privind datele personale” către această pagină; în mailuri apare și linkul direct.
 // Pe hârtie, informarea completă e pe verso.
-// Fără date individuale, fără apeluri la BD, fără urmărire externă, fără fonturi externe (NOTĂ INTERNĂ pct. 5 din Informare v3).
-// Cât INFORMARE_LOT1_PUBLICATA = false sau textul are câmpuri [ ] necompletate, pagina arată banda „PROIECT” și noindex.
+// Fără date individuale, fără urmărire externă, fără fonturi externe (NOTĂ INTERNĂ pct. 5 din Informare v3). Un singur apel la BD:
+// fn_red_informare_publicata(cod) → da / nu (autorizarea Transgaz art. 28 încărcată, 20261130m); nu trimite și nu primește date personale.
+// Cât nu e publicată (sau răspunsul lipsește / dă eroare) ori textul are câmpuri [ ], pagina arată banda „PROIECT” și noindex.
 // ═════════════════════════════════════════════════════════════════
-import { useEffect } from 'react'
-import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, INFORMARE_LOT1_PUBLICATA, campuriNecompletate, informareGata, blocuri, segmenteInline } from './redari/informareGdpr.js'
+import { useEffect, useState } from 'react'
+import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, COD_PROIECT_INFORMARE_LOT1, campuriNecompletate, informareGata, blocuri, segmenteInline } from './redari/informareGdpr.js'
 
 // Aceeași paletă deschisă ca formularul public (se citește în soare, de pe telefon)
 const G = { bg: '#f4f6f8', card: '#fff', text: '#1a2733', muted: '#5a6b7b', blue: '#0b4f8a', red: '#b42318', amber: '#8a5a00', border: '#cdd6de', galben: '#fff4cc' }
@@ -23,7 +24,17 @@ function Inline({ text }) {
 }
 
 export default function RedariInformarePublic() {
-  const gata = informareGata(TEXT_INFORMARE_LOT1, INFORMARE_LOT1_PUBLICATA)
+  // null = încă nu știm → tratat ca nepublicat (fail-closed)
+  const [publicata, setPublicata] = useState(null)
+  useEffect(() => {
+    let viu = true
+    // clientul se încarcă la cerere: modulul paginii rămâne importabil fără configurarea Supabase (testele citesc helper-ele de aici)
+    import('./lib/supabase.js')
+      .then(({ supabase }) => supabase.rpc('fn_red_informare_publicata', { p_cod: COD_PROIECT_INFORMARE_LOT1 }))
+      .then(({ data, error }) => { if (viu) setPublicata(!error && data === true) }, () => { if (viu) setPublicata(false) })
+    return () => { viu = false }
+  }, [])
+  const gata = informareGata(TEXT_INFORMARE_LOT1, publicata === true)
   useEffect(() => {
     document.title = 'Informare date personale — Lot 1 Prunișor–Jupa'
     const meta = document.createElement('meta'); meta.name = 'robots'; meta.content = 'noindex, nofollow'

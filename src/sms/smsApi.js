@@ -6,6 +6,13 @@ const date = ({ data, error }) => { if (error) throw error; return data }
 
 export const smsApi = {
   panou: async () => date(await supabase.rpc('fn_sms_panou')),
+  // 20261130d: soldul SMSLink (doar owner, și în BD); „Citește acum” = edge-ul sms-sold (poarta owner verificată din nou acolo)
+  sold: async () => date(await supabase.rpc('fn_sold_sms_citeste')),
+  citesteSold: async () => {
+    const { data, error } = await supabase.functions.invoke('sms-sold', { body: {} })
+    if (error) throw error
+    return data
+  },
   angajati: async () => date(await supabase.rpc('fn_sms_angajati_lista')) || [],
   // r2 (P1): istoricul și mesajele vin DOAR prin RPC-uri (loturile pe care nivelul le vede, numărători, telefon mascat);
   // citirea directă a sms_mesaje / sms_v_loturi rămâne a owner-ului în BD, iar ecranul nu o mai folosește deloc
@@ -14,8 +21,16 @@ export const smsApi = {
   optout: async () => date(await supabase.from('sms_optout').select('telefon, activ, motiv, actualizat_la').order('actualizat_la', { ascending: false })) || [],
   creeazaIntern: async ({ text, p_departamente, p_angajati, preview }) =>
     date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview })),
-  creeazaRedari: async ({ text, proiectId, uatId, preview }) =>
-    date(await supabase.rpc('fn_sms_lot_redari_creeaza', { p_text: text, p_proiect_id: proiectId, p_uat_id: uatId || null, p_doar_preview: preview })),
+  // 20261130c: Redări doar din șablonul fix, pe un UAT. Textul îl face BD-ul; la creare trimitem textul afișat și set_hash-ul listei din
+  // previzualizare, iar BD-ul refuză (40001) dacă între timp s-a schimbat oricare. Previzualizarea nu trimite nimic din ele.
+  // Textul liber (fn_sms_lot_redari_creeaza) nu mai e o cale a aplicației.
+  creeazaRedariSablon: async ({ proiectId, uatId, textAfisat, setHash, preview }) => {
+    const creare = preview === false
+    return date(await supabase.rpc('fn_sms_lot_redari_sablon_creeaza', {
+      p_proiect_id: proiectId, p_uat_id: uatId || null, p_text_afisat: creare ? (textAfisat ?? null) : null,
+      p_set_hash: creare ? (setHash ?? null) : null, p_doar_preview: !creare,
+    }))
+  },
   // lista FIXATĂ în lot (nume + telefon mascat + text + segmente + cost + versiune), afișată înainte de aprobare
   destinatariLot: async lotId => date(await supabase.rpc('fn_sms_lot_destinatari', { p_lot_id: lotId })),
   aproba: async (lotId, versiune) => date(await supabase.rpc('fn_sms_lot_aproba', { p_lot_id: lotId, p_versiune: versiune })),

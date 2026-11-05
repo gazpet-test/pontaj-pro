@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { TEXT_INFORMARE_LOT1, INFORMARE_LOT1_PUBLICATA, VERSIUNE_INFORMARE_LOT1, TRIMITERE_VERSO_GDPR } from './informareGdpr.js'
+import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, TRIMITERE_VERSO_GDPR, COD_PROIECT_INFORMARE_LOT1, autorizareTgzCompleta } from './informareGdpr.js'
 import * as docx from './docx.js'
 import { blocuri, campuriNecompletate, informareGata } from '../RedariInformarePublic.jsx'
 
@@ -13,10 +13,15 @@ describe('informarea GDPR publica (Lot 1)', () => {
     expect(TEXT_INFORMARE_LOT1).not.toMatch(/NOTĂ INTERNĂ|nu se publică|TEXT SCURT/)
     expect(TEXT_INFORMARE_LOT1).not.toMatch(/art\. 11 alin\. \(4\)/)
   })
-  it('cat timp nu e marcata publicata (aprobarea TGZ), pagina NU e gata (banda PROIECT + noindex), desi v3.2 nu mai are campuri [ ]', () => {
+  it('publicarea vine DOAR din autorizarea Transgaz pe proiect (nr. + data + PDF, 20261130m); fara ea pagina NU e gata (banda PROIECT + noindex)', () => {
     expect(campuriNecompletate(TEXT_INFORMARE_LOT1)).toEqual([])
-    expect(INFORMARE_LOT1_PUBLICATA).toBe(false)
-    expect(informareGata(TEXT_INFORMARE_LOT1, INFORMARE_LOT1_PUBLICATA)).toBe(false)
+    expect(VERSIUNE_INFORMARE_LOT1).toBe('v3.3 05.11.2026')
+    expect(COD_PROIECT_INFORMARE_LOT1).toBe('LOT1-PRUNISOR-JUPA')
+    const aut = { autorizare_tgz_nr: '1', autorizare_tgz_data: '2026-11-05', autorizare_tgz_fisier: 'LOT1-PRUNISOR-JUPA/autorizare_tgz/1_a.pdf' }
+    expect(autorizareTgzCompleta(aut)).toBe(true)
+    for (const p of [null, undefined, {}, { ...aut, autorizare_tgz_nr: ' ' }, { ...aut, autorizare_tgz_data: null }, { ...aut, autorizare_tgz_fisier: '' }]) expect(autorizareTgzCompleta(p)).toBe(false)
+    expect(informareGata(TEXT_INFORMARE_LOT1, autorizareTgzCompleta({}))).toBe(false)
+    expect(informareGata(TEXT_INFORMARE_LOT1, autorizareTgzCompleta(aut))).toBe(true)
     expect(informareGata(TEXT_INFORMARE_LOT1 + ' [de confirmat]', true)).toBe(false)
     expect(informareGata('Text complet fara campuri.', false)).toBe(false)
     expect(informareGata('Text complet fara campuri.', true)).toBe(true)
@@ -48,10 +53,11 @@ describe('informarea GDPR publica (Lot 1)', () => {
     // fara textul scurt de pe fata si fara versiunea v2
     expect(t).not.toMatch(/Versiunea 3 din|\[link scurt|Pe verso găsiți/)
   })
-  it('textul v3.2 (04.11): fara campuri [ ], versiunea 3.2, sursa datelor, e-mailul redari@, transferul, Gazpet Instal', () => {
+  it('textul v3.2 (04.11), pastrat in v3.3: fara campuri [ ], sursa datelor, e-mailul redari@, transferul, Gazpet Instal', () => {
     const t = TEXT_INFORMARE_LOT1
     expect(t).not.toMatch(/\[[^\]]*\]/)
-    expect(VERSIUNE_INFORMARE_LOT1).toMatch(/^v3\.2 /)
+    // v3.3 (05.11, juridic#040) pastreaza tot ce verifica acest test si adauga utilizatorul (testul „v3.3”)
+    expect(VERSIUNE_INFORMARE_LOT1).toMatch(/^v3\.3 /)
     const cap = (n) => t.slice(t.indexOf(`### ${n}.`), n < 7 ? t.indexOf(`### ${n + 1}.`) : undefined)
     const liste3 = blocuri(cap(3)).filter(b => b.tip === 'lista').flatMap(b => b.elemente)
     expect(cap(3)).toContain('Datele provin de la Transgaz, care le-a obținut pentru acest proiect de la oficiul de cadastru, primării și alte instituții, potrivit Legii nr. 185/2016, și din ce ne spuneți dumneavoastră.')
@@ -61,6 +67,14 @@ describe('informarea GDPR publica (Lot 1)', () => {
     expect(cap(5)).toContain('Mesajele primite la redari@gazpet.ro se păstrează în evidența proiectului, pe aceeași durată.')
     expect(t).toContain('**Gazpet Instal** (GAZPET INSTAL S.R.L.')
     expect(t).not.toMatch(/Gazpet(?! Instal|\.ro)/)
+  })
+  it('v3.3 (juridic#040): utilizatorul / arendasul apare la cap. 2 si cap. 3', () => {
+    const t = TEXT_INFORMARE_LOT1
+    const cap2 = t.slice(t.indexOf('### 2.'), t.indexOf('### 3.')), cap3 = t.slice(t.indexOf('### 3.'), t.indexOf('### 4.'))
+    expect(cap2).toContain('Pe terenul dumneavoastră, pe partea de teren care vă aparține sau pe terenul pe care îl folosiți, s-a lucrat temporar la conductă.')
+    const lista3 = blocuri(cap3).filter(b => b.tip === 'lista').flatMap(b => b.elemente)
+    expect(lista3).toContain('datele persoanei care folosește terenul (de exemplu, arendașul), dacă este alta decât proprietarul.')
+    expect(lista3).toContain('datele celui care vă reprezintă (împuternicit, moștenitor), dacă e cazul;')
   })
   it('trimiterea de pe fata catre verso = exact textul v3.2; daca docx.js are constanta lui (dupa merge cu main), e aceeasi', () => {
     expect(TRIMITERE_VERSO_GDPR).toBe('Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră.')

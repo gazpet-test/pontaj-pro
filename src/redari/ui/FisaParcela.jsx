@@ -5,6 +5,11 @@ import { supabase } from '../../lib/supabase.js'
 import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
+import { dataDocumentConvocare } from '../convocatorNeexpediat.js'   // #991 r3: aceeași dată civilă București ca în Registru
+import { termenConstatare, mesajTermenConstatare } from '../setari.js'
+import { dataBucuresti } from '../plicuri.js'
+import { afiseazaCadastru, titluCadastru } from '../cadastru.js'
+import { citesteSmsStare, stareSmsPentru, rezumatSms, textBadge, intrariCronologie, STARI_SMS } from '../smsStare.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns, citestePaginat, citesteIn } from './comune.jsx'
 
@@ -16,6 +21,35 @@ const CAMPURI_PARCELA = [
 ]
 const CAMPURI_CONTACT = [['adresa_strada', 'Stradă / nr.'], ['adresa_sat', 'Sat'], ['adresa_comuna', 'Comună / oraș'], ['adresa_judet', 'Județ'], ['cod_postal', 'Cod poștal'], ['telefon', 'Telefon'], ['email', 'Email']]
 const nrSauNull = (v) => (v === '' || v === null || v === undefined) ? null : Number(v)
+
+/** Audit D2: cadastrul TGZ („52#”, „#44#”, „##”) afișat curat; valoarea brută rămâne în tooltip. Doar ecran — editarea și documentele folosesc valoarea brută. */
+export function ValoareCadastru({ v }) {
+  const t = titluCadastru(v)
+  return <span data-testid="valoare-cadastru" title={t} style={t ? { cursor:'help' } : undefined}>{afiseazaCadastru(v)}</span>
+}
+
+/** Rândul „SMS: …” la fiecare deținător (20261130i, doar agregate). sms = { harta, eroare }; eroarea se afișează, nu devine „niciun SMS” (L18).
+ *  Exportată pentru testul de randare. */
+export function RandSms({ sms, detinatorId }) {
+  if (!sms || sms.eroare) return <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4, color:G.red }}>SMS: ⚠ starea nu s-a putut citi{sms?.eroare ? ` (${sms.eroare})` : ''}</div>
+  if (!sms.harta) return <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4, color:G.dim }}>SMS: …</div>
+  const s = stareSmsPentru(sms.harta, detinatorId)
+  if (!s) return <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4, color:G.dim }}>SMS: niciun SMS</div>
+  return (
+    <div data-testid="rand-sms" style={{ fontSize:12.5, marginTop:4 }}>
+      SMS: <span data-sms={s.ultima_stare} style={{ color:STARI_SMS[s.ultima_stare].culoare, fontWeight:600 }}>{textBadge(s)}</span>
+      <span style={{ color:G.muted }}> · {rezumatSms(s)}</span>
+    </div>
+  )
+}
+
+/** Plan pct. 4.6: linia de avertisment neblocant pe rândul deținătorului (de confirmat claude#026 î.5). Exportată pentru testul de randare. */
+export function AvertismentConstatare({ uat, detinator, raspunsuri, pvs, azi }) {
+  if (!detinator || detinator.sters_la) return null
+  const t = termenConstatare({ uat, detinatorId: detinator.id, raspunsuri, pvs, azi })
+  const m = mesajTermenConstatare(t)
+  return m ? <div data-testid="avertisment-constatare" style={{ fontSize:12.5, marginTop:4, color: t.depasit ? G.red : G.yellow }}>⚠ {m}</div> : null
+}
 
 export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, show, onInapoi, onSchimbat }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
@@ -64,6 +98,19 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
   const [jurnal, setJurnal] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)        // { tip:'parcela'|'detinator'|'sterge', ... }
+  // SMS pe deținător (fn_red_sms_stare): un apel pe proiect, cu token de generație (L24) — un răspuns pentru alt proiect / parcelă se ignoră
+  const [sms, setSms] = useState({ harta: null, eroare: null })
+  const generatieSms = useRef(0)
+  const incarcaSms = useCallback(async () => {
+    const g = ++generatieSms.current
+    setSms({ harta: null, eroare: null })
+    try {
+      const harta = await citesteSmsStare(supabase, proiect.id, () => g === generatieSms.current)
+      if (g !== generatieSms.current) return
+      setSms({ harta, eroare: null })
+    } catch (e) { if (g === generatieSms.current) setSms({ harta: null, eroare: msgEroare(e) }) }
+  }, [proiect.id])
+  useEffect(() => { incarcaSms(); return () => { generatieSms.current++ } }, [incarcaSms, parcelaId])
 
   const incarca = useCallback(async () => {
     setLoading(true)
@@ -129,10 +176,12 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       ev.push({ t: p.created_at, tip:'pv', text:`PV ${p.tip} ${p.nr_pv} — ${p.stare}${p.obiectii_redare ? ' · cu obiecții' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_generat_path })
       if (p.semnat_primit_data) ev.push({ t: p.semnat_primit_data, tip:'pv', text:`PV ${p.nr_pv} semnat${p.semnat_fizic ? ' (fizic)' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_semnat_path })
     })
+    // SMS: din agregate se știu cert doar ultima trimitere și ultima livrare (fără date per mesaj — rezumatul complet e pe rândul deținătorului)
+    if (sms.harta) detinatori.forEach(d => intrariCronologie(stareSmsPentru(sms.harta, d.id)).forEach(x => ev.push({ t: x.data, tip:'sms', text: x.eticheta, cine: d.nume })))
     jurnal.forEach(j => ev.push({ t: j.created_at, tip:'jurnal', text:`${j.actiune} ${j.tabela.replace('red_', '')}`, cine: j.user_email || '', jurnal: true, jurnalId: j.id }))
     // cronologic crescător; la aceeași clipă răspunsurile se despart după seq (contract [r2])
     return ev.sort((a, b) => (new Date(a.t) - new Date(b.t)) || ((a.seq ?? 0) - (b.seq ?? 0)))
-  }, [convocari, raspunsuri, metaRaspuns, pvs, jurnal, numeDet])
+  }, [convocari, raspunsuri, metaRaspuns, pvs, jurnal, numeDet, sms.harta, detinatori])
 
   const fisiere = useMemo(() => [
     // P2-8: convocările active fără fișier (upload-ul a picat după inserarea rândului) apar „neîncărcat” + Reîncarcă
@@ -153,7 +202,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
     } catch (e) { show('Fișier: ' + msgEroare(e), 'error') }
   }
 
-  const culoareTip = { convocare: G.blue, retur: G.orange, raspuns: G.green, pv: G.purple, jurnal: G.dim }
+  const culoareTip = { convocare: G.blue, retur: G.orange, raspuns: G.green, pv: G.purple, sms: G.pink, jurnal: G.dim }
   const [arataJurnal, setArataJurnal] = useState(false)
   const [jurnalDetalii, setJurnalDetalii] = useState(null)   // { id, date_vechi, date_noi } — doar admin, la cerere
   const [reincarcId, setReincarcId] = useState(null)
@@ -181,7 +230,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
       // fișierele din bucket sunt imutabile: reincarcaConvocator scrie o cale nouă versionată ({nr_document}-v{n}.docx) și mută *_path
-      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, origin: window.location.origin, templateArrayBuffer, dataDocument: c.created_at })
+      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: dataDocumentConvocare(c) })
       const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
       show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
       incarca()
@@ -196,8 +245,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
     <div>
  
       {modal?.tip === 'pv' && <ModalPv key={parcelaId + ':' + (modal.det?.id || 'B') + ':' + proiect.id} parcelaId={parcelaId} detinatorId={modal.det?.id} tip={modal.det?'A':'B'} proiectId={proiect.id} nivel={nivel} show={show} onClose={() => setModal(null)} onGata={() => { incarca(); onSchimbat?.() }} />}
-      {(poateScrie || pvs.some(p => p.tip === 'B' && p.stare !== 'anulat' && !p.sters_la)) && <button style={S.btnP} onClick={() => setModal({tip:'pv'})}>PV B (parcela)</button>}
-     <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, flexWrap:'wrap' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, flexWrap:'wrap' }}>
         <button style={S.btnS} onClick={onInapoi}>‹ Registru</button>
         <div style={{ fontSize:17, fontWeight:700, ...S.mono }}>{parcela.id_parcela}</div>
         <span style={{ color:G.muted, fontSize:13 }}>{uat ? `${uat.nume} (${uat.uat3})` : ''} · tronson {parcela.tronson ?? '-'}</span>
@@ -206,6 +254,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         </select></label>}
         {parcela.sters_la && <span style={{ ...S.tag, background:G.redDim, color:G.red }}>ȘTEARSĂ · {parcela.sters_motiv}</span>}
         <div style={{ flex:1 }} />
+        {/* audit D14: PV B stă în bara fișei, nu deasupra ei */}
+        {(poateScrie || pvs.some(p => p.tip === 'B' && p.stare !== 'anulat' && !p.sters_la)) && <button style={S.btnP} onClick={() => setModal({tip:'pv'})}>PV B (parcelă)</button>}
         {poateScrie && !parcela.sters_la && <button style={S.btnS} onClick={() => setModal({ tip:'parcela' })}>✎ Editează parcela</button>}
         {poateScrie && !parcela.sters_la && <button style={S.btnD} onClick={() => setModal({ tip:'sterge', tabela:'red_parcele', id: parcela.id, ce:`parcela ${parcela.id_parcela}` })}>Șterge</button>}
       </div>
@@ -215,7 +265,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         <div style={S.card}>
           <div style={{ fontWeight:700, marginBottom:8 }}>Parcelă</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'6px 12px', fontSize:13 }}>
-            {CAMPURI_PARCELA.map(([k, et, tip]) => <React.Fragment key={k}><span style={{ color:G.muted }}>{et}</span><span>{tip === 'number' ? fmtNum(parcela[k]) : (parcela[k] || '-')}</span></React.Fragment>)}
+            {CAMPURI_PARCELA.map(([k, et, tip]) => <React.Fragment key={k}><span style={{ color:G.muted }}>{et}</span>{k === 'nr_cadastral' ? <ValoareCadastru v={parcela[k]} /> : <span>{tip === 'number' ? fmtNum(parcela[k]) : (parcela[k] || '-')}</span>}</React.Fragment>)}
             {esteAdmin && <><span style={{ color:G.muted }}>Valoare (lei)</span><span>{fmtNum(valoare)}</span></>}
             <span style={{ color:G.muted }}>Observații</span><span>{parcela.observatii || '-'}</span>
             <span style={{ color:G.muted }}>Creată</span><span>{fmtDateTime(parcela.created_at)}</span>
@@ -247,6 +297,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                 <div style={{ fontSize:12, color:G.muted, marginTop:3 }}>
                   {d.sursa_date && <span>sursă: {d.sursa_date} · </span>}{d.versiune_lista_tgz && <span>listă: {d.versiune_lista_tgz}</span>}
                 </div>
+                <AvertismentConstatare uat={uat} detinator={d} raspunsuri={raspunsuri} pvs={pvs} azi={dataBucuresti()} />
+                <RandSms sms={sms} detinatorId={d.id} />
                 {poateScrie && (
                   <div style={{ fontSize:12.5, marginTop:4 }}>
                     {c ? (<>
