@@ -76,10 +76,14 @@ describe('PR3a r6 — baseline dupa 30j / PR1 / PR2 si fixture productie', () =>
     }
     expect(preflight).not.toMatch(/md5\((?:p\.)?prosrc\)/)
   })
-  it('PG17: toate cele sase baseline-uri ACL de tabel includ MAINTAIN, fara a schimba granturile', () => {
+  it('PG17: cele sase tabele si ambele vederi includ MAINTAIN in baseline-ul ACL', () => {
     const acl = preflight.split('-- drepturile pe tabele (relacl)')[1].split('-- drepturile de care are nevoie')[0]
     expect(acl.match(/postgres=arwdDxtm\/postgres/g)).toHaveLength(6)
-    expect(acl).not.toContain('postgres=arwdDxt/postgres')
+    expect(preflight.match(/postgres=arwdDxtm\/postgres/g)).toHaveLength(8)
+    const rollback = citeste('supabase/revenire/20261131c_redari_poarta_utilizatori_ROLLBACK.sql')
+    for (const sql of [migrare, rollback, dry]) {
+      expect(sql).not.toContain('postgres=arwdDxt/postgres')
+    }
   })
   it('DRY foloseste profilurile on_auth_user_created cu rol valid si aceeasi tranzactie armata de runner', () => {
     expect(dry).not.toContain('INSERT INTO public.profiles')
