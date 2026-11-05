@@ -38,9 +38,10 @@ BEGIN
     RAISE EXCEPTION 'TEST0 FAIL: identitati / proiect / convocare (owner %, admin %, proiect %, convocare %)', ow IS NOT NULL, ad IS NOT NULL, pr IS NOT NULL, cv IS NOT NULL;
   END IF;
   IF EXISTS (SELECT 1 FROM public.red_proiecte WHERE public.fn_red_informare_publicata(cod)) THEN RAISE EXCEPTION 'TEST0 FAIL: ceva publicat'; END IF;
-  INSERT INTO storage.objects (bucket_id, name, owner_id) VALUES ('redari', 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf', ow::text);
-  INSERT INTO storage.objects (bucket_id, name, owner_id) VALUES ('redari', 'LOT1-PRUNISOR-JUPA/autorizare_tgz/1_dry30m.pdf', ow::text);
-  INSERT INTO storage.objects (bucket_id, name, owner_id) VALUES ('redari', 'TEST-RAZVAN/autorizare_tgz/2_editor30m.pdf', ad::text);
+  INSERT INTO storage.objects (bucket_id, name, owner_id, metadata) VALUES ('redari', 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf', ow::text, '{"eTag": "\"e1\""}');
+  INSERT INTO storage.objects (bucket_id, name, owner_id, metadata) VALUES ('redari', 'LOT1-PRUNISOR-JUPA/autorizare_tgz/1_dry30m.pdf', ow::text, '{"eTag": "\"e2\""}');
+  INSERT INTO storage.objects (bucket_id, name, owner_id, metadata) VALUES ('redari', 'TEST-RAZVAN/autorizare_tgz/2_editor30m.pdf', ad::text, '{"eTag": "\"e3\""}');
+  INSERT INTO storage.objects (bucket_id, name, owner_id, metadata) VALUES ('redari', 'TEST-RAZVAN/autorizare_tgz/3_faraetag30m.pdf', ow::text, '{}');
   PERFORM set_config('r30m.ow', ow::text, true); PERFORM set_config('r30m.ad', ad::text, true); PERFORM set_config('r30m.pr', pr::text, true);
   PERFORM set_config('r30m.cv', cv::text, true); PERFORM set_config('r30m.dt', dt::text, true);
   RAISE NOTICE 'TEST0 OK';
@@ -77,6 +78,9 @@ BEGIN
   -- r2 (Jakarinos P1-2): PDF urcat de altcineva (admin / editor ne-owner) nu se poate lega
   s := pg_temp.r30m_stare(pg_temp.r30m_upd($q$autorizare_tgz_fisier = 'TEST-RAZVAN/autorizare_tgz/2_editor30m.pdf'$q$));
   IF s IS DISTINCT FROM '22023' THEN RAISE EXCEPTION 'TEST2 FAIL: PDF urcat de altcineva acceptat (%)', s; END IF;
+  -- r4: obiect fără eTag (conținut neverificabil) nu se poate lega
+  s := pg_temp.r30m_stare(pg_temp.r30m_upd($q$autorizare_tgz_fisier = 'TEST-RAZVAN/autorizare_tgz/3_faraetag30m.pdf'$q$));
+  IF s IS DISTINCT FROM '22023' THEN RAISE EXCEPTION 'TEST2 FAIL: PDF fara eTag acceptat (%)', s; END IF;
   s := pg_temp.r30m_stare(pg_temp.r30m_upd($q$autorizare_tgz_fisier = 'TEST-RAZVAN/autorizare_tgz/../1_dry30m.pdf'$q$));
   IF s NOT IN ('23514', '22023') THEN RAISE EXCEPTION 'TEST2 FAIL: cale cu .. acceptata (%)', s; END IF;
   s := pg_temp.r30m_stare(pg_temp.r30m_upd($q$autorizare_tgz_nr = '   '$q$));
@@ -87,11 +91,11 @@ BEGIN
   s := pg_temp.r30m_stare(pg_temp.r30m_upd($q$autorizare_tgz_fisier = 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf'$q$));
   IF s IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'TEST2 FAIL: owner PDF (%)', s; END IF;
   PERFORM pg_temp.r30m_ca(NULL, 'postgres');
-  SELECT p.autorizare_tgz_de, p.autorizare_tgz_la, p.autorizare_tgz_obiect, o.id AS oid INTO r
+  SELECT p.autorizare_tgz_de, p.autorizare_tgz_la, p.autorizare_tgz_obiect, p.autorizare_tgz_etag, o.id AS oid INTO r
     FROM public.red_proiecte p LEFT JOIN storage.objects o ON o.bucket_id = 'redari' AND o.name = 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf'
    WHERE p.id = pg_temp.r30m_g('pr')::uuid;
-  IF r.autorizare_tgz_de IS DISTINCT FROM pg_temp.r30m_g('ow')::uuid OR r.autorizare_tgz_la IS NULL OR r.autorizare_tgz_obiect IS DISTINCT FROM r.oid THEN
-    RAISE EXCEPTION 'TEST2 FAIL: _de / _la / _obiect';
+  IF r.autorizare_tgz_de IS DISTINCT FROM pg_temp.r30m_g('ow')::uuid OR r.autorizare_tgz_la IS NULL OR r.autorizare_tgz_obiect IS DISTINCT FROM r.oid OR r.autorizare_tgz_etag IS DISTINCT FROM '"e1"' THEN
+    RAISE EXCEPTION 'TEST2 FAIL: _de / _la / _obiect / _etag';
   END IF;
   -- anon vede doar da / nu: TEST-RAZVAN publicat, LOT1 nu, cod necunoscut / NULL nu; anon nu citeste red_proiecte
   PERFORM pg_temp.r30m_ca(NULL, 'anon');
@@ -129,8 +133,13 @@ BEGIN
   s := pg_temp.r30m_stare(format($q$UPDATE public.red_convocari SET continut_hash = continut_hash WHERE id = %L$q$, pg_temp.r30m_g('cv')));
   IF s IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'TEST4 FAIL: update fara schimbare refuzat (%)', s; END IF;
   PERFORM pg_temp.r30m_ca(NULL, 'postgres');
+  -- r4 (Copilot r2 P1-03): conținut rescris PE LOC (același id, aceeași cale, alt eTag) → nepublicat; revenit la eTag-ul legat → publicat din nou
+  UPDATE storage.objects SET metadata = '{"eTag": "\"rescris\""}' WHERE bucket_id = 'redari' AND name = 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf';
+  IF public.fn_red_informare_publicata('TEST-RAZVAN') THEN RAISE EXCEPTION 'TEST4 FAIL: publicat cu continut rescris pe loc'; END IF;
+  UPDATE storage.objects SET metadata = '{"eTag": "\"e1\""}' WHERE bucket_id = 'redari' AND name = 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf';
+  IF NOT public.fn_red_informare_publicata('TEST-RAZVAN') THEN RAISE EXCEPTION 'TEST4 FAIL: nepublicat cu eTag-ul legat'; END IF;
   UPDATE storage.objects SET name = 'TEST-RAZVAN/alt_folder/1_dry30m.pdf' WHERE bucket_id = 'redari' AND name = 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf';
-  INSERT INTO storage.objects (bucket_id, name, owner_id) VALUES ('redari', 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf', pg_temp.r30m_g('ad'));
+  INSERT INTO storage.objects (bucket_id, name, owner_id, metadata) VALUES ('redari', 'TEST-RAZVAN/autorizare_tgz/1_dry30m.pdf', pg_temp.r30m_g('ad'), '{"eTag": "\"e1\""}');
   IF public.fn_red_informare_publicata('TEST-RAZVAN') THEN RAISE EXCEPTION 'TEST4 FAIL: publicat cu PDF inlocuit'; END IF;
   PERFORM pg_temp.r30m_ca(pg_temp.r30m_g('ad')::uuid, 'authenticated');
   s := pg_temp.r30m_stare(format($q$UPDATE public.red_convocari SET continut_hash = continut_hash || 'x' WHERE id = %L$q$, pg_temp.r30m_g('cv')));
@@ -161,8 +170,8 @@ BEGIN
   s := pg_temp.r30m_stare(pg_temp.r30m_upd('autorizare_tgz_nr = NULL, autorizare_tgz_data = NULL, autorizare_tgz_fisier = NULL'));
   IF s IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'TEST5 FAIL: owner nu poate goli (%)', s; END IF;
   PERFORM pg_temp.r30m_ca(NULL, 'postgres');
-  SELECT autorizare_tgz_obiect, autorizare_tgz_de INTO r FROM public.red_proiecte WHERE id = pg_temp.r30m_g('pr')::uuid;
-  IF r.autorizare_tgz_obiect IS NOT NULL OR r.autorizare_tgz_de IS DISTINCT FROM pg_temp.r30m_g('ow')::uuid THEN RAISE EXCEPTION 'TEST5 FAIL: _obiect / _de dupa golire'; END IF;
+  SELECT autorizare_tgz_obiect, autorizare_tgz_etag, autorizare_tgz_de INTO r FROM public.red_proiecte WHERE id = pg_temp.r30m_g('pr')::uuid;
+  IF r.autorizare_tgz_obiect IS NOT NULL OR r.autorizare_tgz_etag IS NOT NULL OR r.autorizare_tgz_de IS DISTINCT FROM pg_temp.r30m_g('ow')::uuid THEN RAISE EXCEPTION 'TEST5 FAIL: _obiect / _de dupa golire'; END IF;
   RAISE NOTICE 'TEST5 OK';
 END $t$;
 

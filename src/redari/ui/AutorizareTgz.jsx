@@ -25,7 +25,7 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
   const [data, setData] = useState(proiect.autorizare_tgz_data || '')
   const [fisier, setFisier] = useState(null)
   const [lucru, setLucru] = useState(false)
-  const [publicata, setPublicata] = useState(null)   // null = se verifică
+  const [publicata, setPublicata] = useState(undefined)   // undefined = se verifică; null = verificarea a eșuat
   const ocupat = useRef(false)
   const baza = useRef({ versiune: proiect.versiune, ...Object.fromEntries(CAMPURI.map(k => [k, proiect[k] ?? null])) })
   const areColoane = 'autorizare_tgz_fisier' in proiect
@@ -35,7 +35,7 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
     baza.current = { versiune: proiect.versiune, ...Object.fromEntries(CAMPURI.map(k => [k, proiect[k] ?? null])) }
     setNr(proiect.autorizare_tgz_nr || ''); setData(proiect.autorizare_tgz_data || ''); setFisier(null)
     let viu = true
-    setPublicata(null)
+    setPublicata(undefined)
     informarePublicataServer(supabase, proiect.cod).then(v => { if (viu) setPublicata(v) })
     return () => { viu = false }
   }, [proiect.id, proiect.cod, proiect.versiune, proiect.autorizare_tgz_nr, proiect.autorizare_tgz_data, proiect.autorizare_tgz_fisier])
@@ -79,7 +79,7 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
       if (!rez?.length) throw new Error('Proiectul a fost modificat între timp; reîncarcă pagina și reîncearcă')
       setFisier(null)
       const pub = await informarePublicataServer(supabase, proiect.cod)
-      show(pub ? 'Autorizarea Transgaz e salvată. Informarea GDPR e publicată.' : 'Autorizarea e salvată, dar serverul nu o consideră încă publicată — verifică PDF-ul.', pub ? 'success' : 'error')
+      show(pub === true ? 'Autorizarea Transgaz e salvată. Informarea GDPR e publicată.' : pub === null ? 'Autorizarea e salvată, dar nu am putut verifica publicarea — reîncarcă pagina.' : 'Autorizarea e salvată, dar serverul nu o consideră încă publicată — verifică PDF-ul.', pub === true ? 'success' : 'error')
       onSchimbat?.()
     } catch (e) { show('Autorizarea Transgaz: ' + msgEroare(e), 'error') }
     finally { ocupat.current = false; setLucru(false) }
@@ -94,7 +94,8 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
       </p>
       {!areColoane && <div style={{ color: G.yellow, fontSize: 12.5, marginBottom: 8 }}>Câmpurile autorizării nu există încă în baza de date (migrarea 20261130m neaplicată).</div>}
       <div style={{ fontSize: 13, marginBottom: 10, color: publicata ? G.green : G.yellow }}>
-        {publicata === null ? 'Verific starea informării…'
+        {publicata === undefined ? 'Verific starea informării…'
+          : publicata === null ? '⚠️ Nu am putut verifica starea informării pe server (rețea / server) — reîncarcă pagina'
           : publicata ? `✓ Informarea GDPR e publicată — autorizarea nr. ${proiect.autorizare_tgz_nr} din ${proiect.autorizare_tgz_data}`
           : '⏳ Informarea GDPR NU e publicată: lipsește autorizarea Transgaz (nr. + dată + PDF urcat de owner)'}
         {esteOwner && proiect.autorizare_tgz_fisier && <button style={{ ...S.btnS, marginLeft: 8 }} onClick={deschide}>📄 Deschide PDF</button>}

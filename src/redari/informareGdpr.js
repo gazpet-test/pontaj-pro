@@ -17,13 +17,17 @@ const plinText = v => v != null && String(v).trim() !== ''
 export const autorizareTgzCompleta = (proiect) => !!proiect && plinText(proiect.autorizare_tgz_nr) && plinText(proiect.autorizare_tgz_data) && plinText(proiect.autorizare_tgz_fisier)
 // Indicatorul calculat de server, atașat pe obiectul proiectului de cuInformarePublicata (altfel lipsă = nepublicat)
 export const informarePublicataPeProiect = (proiect) => proiect?.informare_publicata === true
-/** Întreabă serverul (RPC) dacă informarea proiectului e publicată; eroare / RPC lipsă → false (fail-closed). */
+// r4 (Copilot r2 P2-02): verificarea eșuată (rețea / RPC) e o stare separată de „nepublicată”; ambele refuză generarea, cu mesaje diferite
+export const informareVerificareEsuata = (proiect) => !!proiect && 'informare_publicata' in proiect && proiect.informare_publicata === null
+/** Întreabă serverul (RPC): true = publicată, false = nepublicată, null = verificarea a eșuat (eroare / RPC lipsă / răspuns neașteptat). */
 export async function informarePublicataServer(client, cod) {
-  if (!client || !plinText(cod)) return false
+  if (!plinText(cod)) return false
+  if (!client) return null
   try {
     const { data, error } = await client.rpc('fn_red_informare_publicata', { p_cod: cod })
-    return !error && data === true
-  } catch { return false }
+    if (error || typeof data !== 'boolean') return null
+    return data
+  } catch { return null }
 }
 /** Proiectul cu indicatorul proaspăt de la server (`informare_publicata`), pentru generarea convocatorului. */
 export async function cuInformarePublicata(client, proiect) {

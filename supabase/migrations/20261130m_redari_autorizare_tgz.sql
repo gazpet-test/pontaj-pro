@@ -4,8 +4,10 @@
 -- încarcă autorizarea Transgaz în ⚙️ Setări proiect (nr. + dată + PDF). Fără document nu există deblocare manuală.
 -- Ce face:
 --   • red_proiecte: autorizare_tgz_nr (text), autorizare_tgz_data (date), autorizare_tgz_fisier (calea PDF-ului în bucket-ul `redari`),
---     autorizare_tgz_obiect (uuid = storage.objects.id al PDF-ului legat), autorizare_tgz_de (uuid) + autorizare_tgz_la (timestamptz).
---     _obiect / _de / _la le scrie DOAR serverul.
+--     autorizare_tgz_obiect (uuid = storage.objects.id al PDF-ului legat), autorizare_tgz_etag (eTag-ul conținutului, din metadata Storage),
+--     autorizare_tgz_de (uuid) + autorizare_tgz_la (timestamptz). _obiect / _etag / _de / _la le scrie DOAR serverul.
+--     r4 (Copilot r2 P1-03): id-ul rândului nu dovedește conținutul; eTag-ul legat la salvare trebuie să fie același la fiecare verificare,
+--     deci un conținut rescris pe loc (upsert / update) nu mai publică. Politicile storage nu permit oricum UPDATE / DELETE pe bucket-ul redari.
 --   • CHECK de formă pe cale: `<cod proiect>/autorizare_tgz/<nume>.pdf` (fără „..”, fără subfoldere).
 --   • trg_red_autorizare_tgz (BEFORE INSERT OR UPDATE pe red_proiecte):
 --       - nr / dată / PDF le schimbă DOAR owner-ul (profiles.is_owner, fn_sms_e_owner);
@@ -14,12 +16,15 @@
 --         nu se poate lega, iar un fișier înlocuit la aceeași cale (alt id) NU mai publică;
 --       - codul proiectului nu se schimbă cât există o autorizare (r2 Jakarinos P1-1: altfel autorizarea s-ar „muta” pe alt cod).
 --     Mentenanța (sesiune SQL directă ca postgres, fără claims JWT) trece, ca la 20261130h.
---   • fn_red_informare_publicata(cod) → boolean: proiect activ + nr + dată + PDF sub codul proiectului + obiectul LEGAT încă există la aceeași cale.
+--   • fn_red_informare_publicata(cod) → boolean: proiect activ + nr + dată + PDF sub codul proiectului + obiectul LEGAT încă există la aceeași cale,
+--     cu același eTag.
 --     Singura informație expusă public (anon): da / nu. Pagina publică /redari/informare o folosește pentru banda „PROIECT” + noindex.
 --   • trg_red_convocari_informare (BEFORE INSERT OR UPDATE pe red_convocari) — r2 Jakarinos P1-3 / Copilot P1-03, garda în BD: o convocare POȘTALĂ
 --     nouă, orice fișier / hash nou al ei și marcarea expedierii (data_expediere NULL -> dată) cer informarea publicată pe proiect (convocatorul
 --     poștal tipărește informarea pe verso). Anularea, AR-ul, retururile, tracking-ul nu sunt atinse. Celelalte canale nu sunt atinse.
---     La 05.11.2026 existau 3 convocări poștale, toate pe TEST-RAZVAN, neexpediate.
+--     La 05.11.2026 existau 3 convocări poștale, toate pe TEST-RAZVAN, neexpediate. r4 (Copilot r2 P1-02): garda ia FOR SHARE pe rândul proiectului
+--     ÎNAINTE de verificare, deci o revocare concurentă (UPDATE pe proiect) și o expediere se serializează (ordinea lock-urilor: red_convocari, apoi
+--     red_proiecte — aceeași ordine o folosește și migrarea / revenirea).
 -- Politicile, privilegiile (authenticated are drepturi la nivel de tabel pe red_proiecte, deci și pe coloanele noi; RLS = fn_red_nivel() = 'admin'
 -- la UPDATE), politicile storage (red_storage_ins rămâne: admin / editor pot urca în bucket; legarea cere însă PDF-ul urcat de owner) și jurnalul
 -- (fn_red_jurnal) NU se ating.
@@ -83,19 +88,26 @@ BEGIN
   END IF;
 END $pre$;
 
+-- r4 (Copilot r2 P2-03): ordinea lock-urilor, aceeași ca a gărzii de convocări: întâi red_convocari, apoi red_proiecte (lock_timeout 5s din preflight)
+LOCK TABLE public.red_convocari IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
+
 ALTER TABLE public.red_proiecte
   ADD COLUMN autorizare_tgz_nr text NULL CONSTRAINT red_proiecte_autorizare_tgz_nr_forma CHECK (autorizare_tgz_nr IS NULL OR length(btrim(autorizare_tgz_nr)) BETWEEN 1 AND 100),
   ADD COLUMN autorizare_tgz_data date NULL,
   ADD COLUMN autorizare_tgz_fisier text NULL CONSTRAINT red_proiecte_autorizare_tgz_fisier_forma
     CHECK (autorizare_tgz_fisier IS NULL OR (length(autorizare_tgz_fisier) <= 300 AND autorizare_tgz_fisier ~ '^[A-Za-z0-9_-]+/autorizare_tgz/[A-Za-z0-9_.-]+[.]pdf$' AND position('..' IN autorizare_tgz_fisier) = 0)),
   ADD COLUMN autorizare_tgz_obiect uuid NULL,
+  ADD COLUMN autorizare_tgz_etag text NULL,
   ADD COLUMN autorizare_tgz_de uuid NULL,
   ADD COLUMN autorizare_tgz_la timestamptz NULL;
-ALTER TABLE public.red_proiecte ADD CONSTRAINT red_proiecte_autorizare_tgz_obiect_cu_fisier CHECK ((autorizare_tgz_fisier IS NULL) = (autorizare_tgz_obiect IS NULL));
+ALTER TABLE public.red_proiecte ADD CONSTRAINT red_proiecte_autorizare_tgz_obiect_cu_fisier
+  CHECK ((autorizare_tgz_fisier IS NULL) = (autorizare_tgz_obiect IS NULL) AND (autorizare_tgz_fisier IS NULL) = (autorizare_tgz_etag IS NULL));
 COMMENT ON COLUMN public.red_proiecte.autorizare_tgz_nr IS 'Nr. autorizării scrise Transgaz (art. 28 alin. (2) GDPR, sub-împuterniciți). Doar owner-ul (trg_red_autorizare_tgz). 20261130m.';
 COMMENT ON COLUMN public.red_proiecte.autorizare_tgz_data IS 'Data autorizării Transgaz (art. 28). Doar owner-ul. 20261130m.';
 COMMENT ON COLUMN public.red_proiecte.autorizare_tgz_fisier IS 'Calea PDF-ului autorizării în bucket-ul redari: <cod>/autorizare_tgz/<nume>.pdf; urcat de owner. Doar owner-ul. Nr + dată + PDF legat = informarea GDPR publicată (fn_red_informare_publicata). 20261130m.';
 COMMENT ON COLUMN public.red_proiecte.autorizare_tgz_obiect IS 'storage.objects.id al PDF-ului legat la salvare; un fișier înlocuit la aceeași cale are alt id și nu mai publică. Scris doar de trg_red_autorizare_tgz. 20261130m.';
+COMMENT ON COLUMN public.red_proiecte.autorizare_tgz_etag IS 'eTag-ul conținutului PDF-ului legat la salvare (storage.objects.metadata eTag); un conținut rescris pe loc are alt eTag și nu mai publică. Scris doar de trg_red_autorizare_tgz. 20261130m.';
 COMMENT ON COLUMN public.red_proiecte.autorizare_tgz_de IS 'Cine a schimbat ultima dată autorizarea Transgaz (auth.uid()); scris doar de trg_red_autorizare_tgz. 20261130m.';
 COMMENT ON COLUMN public.red_proiecte.autorizare_tgz_la IS 'Când s-a schimbat ultima dată autorizarea Transgaz; scris doar de trg_red_autorizare_tgz. 20261130m.';
 
@@ -105,6 +117,7 @@ DECLARE
   v_jwt boolean := coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}') <> '{}';
   v_schimbat boolean;
   v_obiect uuid;
+  v_etag text;
 BEGIN
   -- mentenanta (sesiune SQL directa ca postgres, fara claims): trece neschimbat, inclusiv _obiect / _de / _la.
   -- session_user, nu current_user: in SECURITY DEFINER current_user e mereu proprietarul functiei.
@@ -121,8 +134,9 @@ BEGIN
   END IF;
   IF NOT v_schimbat THEN
     -- _obiect / _de / _la nu se scriu de mana
-    IF TG_OP = 'INSERT' THEN NEW.autorizare_tgz_obiect := NULL; NEW.autorizare_tgz_de := NULL; NEW.autorizare_tgz_la := NULL;
-    ELSE NEW.autorizare_tgz_obiect := OLD.autorizare_tgz_obiect; NEW.autorizare_tgz_de := OLD.autorizare_tgz_de; NEW.autorizare_tgz_la := OLD.autorizare_tgz_la; END IF;
+    IF TG_OP = 'INSERT' THEN NEW.autorizare_tgz_obiect := NULL; NEW.autorizare_tgz_etag := NULL; NEW.autorizare_tgz_de := NULL; NEW.autorizare_tgz_la := NULL;
+    ELSE NEW.autorizare_tgz_obiect := OLD.autorizare_tgz_obiect; NEW.autorizare_tgz_etag := OLD.autorizare_tgz_etag;
+         NEW.autorizare_tgz_de := OLD.autorizare_tgz_de; NEW.autorizare_tgz_la := OLD.autorizare_tgz_la; END IF;
     RETURN NEW;
   END IF;
   -- r2 (Copilot P2-01): IS NOT TRUE, ca un NULL sa nu treaca
@@ -130,18 +144,19 @@ BEGIN
     RAISE EXCEPTION 'red_proiecte: autorizarea Transgaz (art. 28) o schimba doar owner-ul' USING ERRCODE = '42501';
   END IF;
   IF NEW.autorizare_tgz_fisier IS NULL THEN
-    NEW.autorizare_tgz_obiect := NULL;
+    NEW.autorizare_tgz_obiect := NULL; NEW.autorizare_tgz_etag := NULL;
   ELSE
     IF split_part(NEW.autorizare_tgz_fisier, '/', 1) IS DISTINCT FROM NEW.cod THEN
       RAISE EXCEPTION 'red_proiecte: PDF-ul autorizarii trebuie sa stea sub codul proiectului (%/autorizare_tgz/...)', NEW.cod USING ERRCODE = '22023';
     END IF;
     -- r2 (Jakarinos P1-2): obiectul trebuie urcat de ACEST owner; autorizarea se leaga de id-ul lui (re-legat la orice schimbare a autorizarii)
-    SELECT o.id INTO v_obiect FROM storage.objects o
+    SELECT o.id, nullif(o.metadata->>'eTag', '') INTO v_obiect, v_etag FROM storage.objects o
      WHERE o.bucket_id = 'redari' AND o.name = NEW.autorizare_tgz_fisier AND o.owner_id = auth.uid()::text;
-    IF v_obiect IS NULL THEN
+    IF v_obiect IS NULL OR v_etag IS NULL THEN
       RAISE EXCEPTION 'red_proiecte: PDF-ul autorizarii nu exista in storage (bucket redari) sau nu l-a urcat owner-ul care salveaza' USING ERRCODE = '22023';
     END IF;
     NEW.autorizare_tgz_obiect := v_obiect;
+    NEW.autorizare_tgz_etag := v_etag;
   END IF;
   NEW.autorizare_tgz_de := auth.uid();
   NEW.autorizare_tgz_la := now();
@@ -156,7 +171,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
   SELECT coalesce((
     SELECT p.activ IS TRUE AND nullif(btrim(p.autorizare_tgz_nr), '') IS NOT NULL AND p.autorizare_tgz_data IS NOT NULL
        AND p.autorizare_tgz_fisier IS NOT NULL AND split_part(p.autorizare_tgz_fisier, '/', 1) = p.cod
-       AND EXISTS (SELECT 1 FROM storage.objects o WHERE o.id = p.autorizare_tgz_obiect AND o.bucket_id = 'redari' AND o.name = p.autorizare_tgz_fisier)
+       AND EXISTS (SELECT 1 FROM storage.objects o WHERE o.id = p.autorizare_tgz_obiect AND o.bucket_id = 'redari' AND o.name = p.autorizare_tgz_fisier
+                     AND o.metadata->>'eTag' = p.autorizare_tgz_etag)
     FROM public.red_proiecte p WHERE p.cod = p_cod), false)
 $fn$;
 COMMENT ON FUNCTION public.fn_red_informare_publicata(text) IS 'Redări: informarea GDPR a proiectului e publicată = proiect activ + autorizarea Transgaz (art. 28) completă: nr + dată + PDF sub codul proiectului, iar obiectul legat la salvare încă există la aceeași cale. Public (anon): întoarce DOAR true / false. 20261130m.';
@@ -178,8 +194,9 @@ BEGIN
      AND NEW.continut_hash IS NOT DISTINCT FROM OLD.continut_hash AND NOT (OLD.data_expediere IS NULL AND NEW.data_expediere IS NOT NULL) THEN
     RETURN NEW;
   END IF;
+  -- r4 (Copilot r2 P1-02): FOR SHARE pe rândul proiectului înainte de verificare — o revocare concurentă așteaptă (sau e așteptată), apoi se recitește
   SELECT pr.cod INTO v_cod FROM public.red_detinatori d JOIN public.red_parcele x ON x.id = d.parcela_id JOIN public.red_proiecte pr ON pr.id = x.proiect_id
-   WHERE d.id = NEW.detinator_id;
+   WHERE d.id = NEW.detinator_id FOR SHARE OF pr;
   IF v_cod IS NULL OR NOT public.fn_red_informare_publicata(v_cod) THEN
     RAISE EXCEPTION 'red_convocari: convocatorul postal cere informarea GDPR publicata (autorizarea Transgaz art. 28 incarcata de owner in Setari proiect)'
       USING ERRCODE = '42501';
@@ -192,7 +209,7 @@ CREATE TRIGGER trg_red_convocari_informare BEFORE INSERT OR UPDATE ON public.red
 
 DO $post$
 BEGIN
-  IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_proiecte' AND column_name LIKE 'autorizare_tgz%') <> 6 THEN
+  IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_proiecte' AND column_name LIKE 'autorizare_tgz%') <> 7 THEN
     RAISE EXCEPTION '20261130m: coloane';
   END IF;
   IF (SELECT array_agg(t.tgname || ':' || t.tgenabled::text || ':' || t.tgtype::text ORDER BY t.tgname COLLATE "C") FROM pg_trigger t

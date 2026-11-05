@@ -22,7 +22,7 @@
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
 import { COL_UAT, termenAfisare, mesajTermenAfisare } from './setari.js'
-import { TEXT_INFORMARE_LOT1, informarePublicataPeProiect, informareGata, blocuri, segmenteInline, TRIMITERE_VERSO_GDPR } from './informareGdpr.js'
+import { TEXT_INFORMARE_LOT1, informarePublicataPeProiect, informareVerificareEsuata, informareGata, blocuri, segmenteInline, TRIMITERE_VERSO_GDPR } from './informareGdpr.js'
 import { ORIGINE_PUBLICA_REDARI } from './domeniuPublic.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
@@ -340,7 +340,8 @@ export const textGdprPentruUat = (text, numeUat, linkInformare) => {
 // Informarea implicită = textul Lot 1 din informareGdpr.js, publicată doar dacă SERVERUL a spus „publicată” pentru proiect
 // (proiect.informare_publicata, pus de cuInformarePublicata imediat înainte de generare; 20261130m: autorizarea Transgaz art. 28 + PDF legat).
 // Lipsă = nepublicat. Parametrul `informare` rămâne pentru teste. Cât informarea nu e gata, expedierea se refuză (și BD-ul refuză rezervarea).
-export const informareProiect = (proiect) => ({ text: TEXT_INFORMARE_LOT1, publicata: informarePublicataPeProiect(proiect) })
+export const informareProiect = (proiect) => ({ text: TEXT_INFORMARE_LOT1, publicata: informarePublicataPeProiect(proiect), eroare: informareVerificareEsuata(proiect) })
+export const MESAJ_INFORMARE_VERIFICARE_ESUATA = 'nu am putut verifica pe server dacă informarea GDPR e publicată (rețea / server) — reîncercați; convocatorul nu se poate expedia până nu reușește verificarea'
 export const MESAJ_INFORMARE_NEGATA = 'informarea GDPR de pe verso nu e publicată: lipsește autorizarea Transgaz (art. 28) — nr., dată și PDF în ⚙️ Setări proiect (doar owner-ul) — convocatorul nu se poate expedia'
 const FONT_VERSO = '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>'
 // mărimea în jumătăți de punct: 9 pt, ca informarea să încapă pe o pagină
@@ -572,7 +573,7 @@ export function verificaDateConvocator({ nrDocument, token, uat, contact, proiec
   const u = uat || {}, pr = proiect || {}, c = contact || {}
   const lipsuri = []
   // Prima verificare: în Redari.jsx rulează ÎNAINTE de fn_red_numar_document, deci refuzul nu consumă un număr
-  if (!informareGata(informare?.text, informare?.publicata)) lipsuri.push(MESAJ_INFORMARE_NEGATA)
+  if (!informareGata(informare?.text, informare?.publicata)) lipsuri.push(informare?.eroare ? MESAJ_INFORMARE_VERIFICARE_ESUATA : MESAJ_INFORMARE_NEGATA)
   if (!plin(nrDocument)) lipsuri.push('numărul documentului (nr_document)')
   if (!plin(token)) lipsuri.push('tokenul de răspuns al deținătorului')
   if (!plin(pr.contract_nr) || !plin(pr.contract_data)) lipsuri.push('numărul și data contractului (proiect.contract_nr + contract_data)')

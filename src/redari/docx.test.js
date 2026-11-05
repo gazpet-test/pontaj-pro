@@ -8,7 +8,7 @@ import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
   reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, linkRaspunsCu, adresaDetinator, textGdprPentruUat,
   textGdprFataConvocator, TRIMITERE_VERSO_GDPR, VERSO_INFORMARE_INCLUS, FRAZE_VERSO, EroareTrimitereGdpr, adresaProprieInDocx, adresaWebNepermisa,
-  MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE, xmlVersoInformare, MESAJ_INFORMARE_NEGATA,
+  MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE, xmlVersoInformare, MESAJ_INFORMARE_NEGATA, MESAJ_INFORMARE_VERIFICARE_ESUATA,
 } from './docx.js'
 import { TEXT_INFORMARE_LOT1, autorizareTgzCompleta, informarePublicataPeProiect } from './informareGdpr.js'
 
@@ -751,6 +751,8 @@ describe('verso convocator: informarea GDPR completă', () => {
     // câmpurile completate, dar serverul spune „nu” (PDF mutat, proiect inactiv) sau indicatorul lipsește (proiect din memorie) → refuz
     const doarCampuri = { ...baza().proiect, ...CAMPURI_AUT }
     expect(autorizareTgzCompleta(doarCampuri)).toBe(true)
+    // r4: verificarea eșuată pe server → refuz, cu mesaj propriu
+    expect(verificaDateConvocator({ ...baza(), proiect: { ...doarCampuri, informare_publicata: null } })).toEqual([MESAJ_INFORMARE_VERIFICARE_ESUATA])
     for (const proiect of [doarCampuri, { ...doarCampuri, informare_publicata: false }, { ...doarCampuri, informare_publicata: 'true' }]) {
       expect(verificaDateConvocator({ ...baza(), proiect }), JSON.stringify(proiect.informare_publicata)).toEqual([MESAJ_INFORMARE_NEGATA])
       await expect(genereazaConvocator({ ...baza(), proiect, templateArrayBuffer: citesteSablon() })).rejects.toThrow(/nu e publicată/)

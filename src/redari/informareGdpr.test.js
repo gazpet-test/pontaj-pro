@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, TRIMITERE_VERSO_GDPR, COD_PROIECT_INFORMARE_LOT1, autorizareTgzCompleta, informarePublicataServer, cuInformarePublicata, informarePublicataPeProiect } from './informareGdpr.js'
+import { TEXT_INFORMARE_LOT1, VERSIUNE_INFORMARE_LOT1, TRIMITERE_VERSO_GDPR, COD_PROIECT_INFORMARE_LOT1, autorizareTgzCompleta, informarePublicataServer, cuInformarePublicata, informarePublicataPeProiect, informareVerificareEsuata } from './informareGdpr.js'
 import * as docx from './docx.js'
 import { blocuri, campuriNecompletate, informareGata } from '../RedariInformarePublic.jsx'
 
@@ -74,11 +74,17 @@ describe('informarea GDPR publica (Lot 1)', () => {
     expect(await informarePublicataServer(client({ data: true, error: null }), 'LOT1-PRUNISOR-JUPA')).toBe(true)
     expect(apeluri.at(-1)).toEqual(['fn_red_informare_publicata', { p_cod: 'LOT1-PRUNISOR-JUPA' }])
     expect(await informarePublicataServer(client({ data: false, error: null }), 'X')).toBe(false)
-    expect(await informarePublicataServer(client({ data: true, error: { code: 'PGRST202' } }), 'X')).toBe(false)
-    expect(await informarePublicataServer(client({ data: 'true', error: null }), 'X')).toBe(false)
-    expect(await informarePublicataServer(client(new Error('retea')), 'X')).toBe(false)
+    // r4: verificarea eșuată = null (stare separată de „nepublicată”); ambele refuză generarea
+    expect(await informarePublicataServer(client({ data: true, error: { code: 'PGRST202' } }), 'X')).toBeNull()
+    expect(await informarePublicataServer(client({ data: 'true', error: null }), 'X')).toBeNull()
+    expect(await informarePublicataServer(client(new Error('retea')), 'X')).toBeNull()
     expect(await informarePublicataServer(client({ data: true, error: null }), '  ')).toBe(false)
-    expect(await informarePublicataServer(null, 'X')).toBe(false)
+    expect(await informarePublicataServer(null, 'X')).toBeNull()
+    const pe = await cuInformarePublicata(client(new Error('retea')), { cod: 'X' })
+    expect(pe.informare_publicata).toBeNull()
+    expect(informareVerificareEsuata(pe)).toBe(true)
+    expect(informareVerificareEsuata({ cod: 'X' })).toBe(false)
+    expect(informareVerificareEsuata({ informare_publicata: false })).toBe(false)
     const p = await cuInformarePublicata(client({ data: true, error: null }), { id: 1, cod: 'LOT1-PRUNISOR-JUPA' })
     expect(p).toEqual({ id: 1, cod: 'LOT1-PRUNISOR-JUPA', informare_publicata: true })
     expect(informarePublicataPeProiect(p)).toBe(true)

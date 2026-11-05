@@ -13,10 +13,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_proiecte' AND column_name = 'autorizare_tgz_fisier') THEN
     RAISE EXCEPTION '20261130m revenire: migrarea lipseste';
   END IF;
+  -- aceeași ordine a lock-urilor ca migrarea și garda de convocări: red_convocari, apoi red_proiecte
+  LOCK TABLE public.red_convocari IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
   -- r2 (Copilot P1-04): orice urma (inclusiv _obiect / _de / _la ramase dupa golire) opreste revenirea
   SELECT count(*) INTO v_n FROM public.red_proiecte WHERE autorizare_tgz_nr IS NOT NULL OR autorizare_tgz_data IS NOT NULL OR autorizare_tgz_fisier IS NOT NULL
-    OR autorizare_tgz_obiect IS NOT NULL OR autorizare_tgz_de IS NOT NULL OR autorizare_tgz_la IS NOT NULL;
+    OR autorizare_tgz_obiect IS NOT NULL OR autorizare_tgz_etag IS NOT NULL OR autorizare_tgz_de IS NOT NULL OR autorizare_tgz_la IS NOT NULL;
   IF v_n > 0 THEN
     RAISE EXCEPTION '20261130m revenire REFUZATA: % proiecte au autorizarea Transgaz completata (procedura separata, cu aprobarea lui Razvan)', v_n USING ERRCODE = '55000';
   END IF;
@@ -26,7 +28,7 @@ BEGIN
   DROP FUNCTION public.fn_red_autorizare_tgz_garda();
   DROP FUNCTION public.fn_red_informare_publicata(text);
   ALTER TABLE public.red_proiecte DROP CONSTRAINT red_proiecte_autorizare_tgz_obiect_cu_fisier;
-  ALTER TABLE public.red_proiecte DROP COLUMN autorizare_tgz_la, DROP COLUMN autorizare_tgz_de, DROP COLUMN autorizare_tgz_obiect, DROP COLUMN autorizare_tgz_fisier,
+  ALTER TABLE public.red_proiecte DROP COLUMN autorizare_tgz_la, DROP COLUMN autorizare_tgz_de, DROP COLUMN autorizare_tgz_etag, DROP COLUMN autorizare_tgz_obiect, DROP COLUMN autorizare_tgz_fisier,
     DROP COLUMN autorizare_tgz_data, DROP COLUMN autorizare_tgz_nr;
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_proiecte' AND column_name LIKE 'autorizare_tgz%')
      OR to_regprocedure('public.fn_red_informare_publicata(text)') IS NOT NULL OR to_regprocedure('public.fn_red_convocari_informare_garda()') IS NOT NULL THEN
