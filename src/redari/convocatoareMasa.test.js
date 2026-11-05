@@ -509,3 +509,57 @@ describe('construiesteZip', () => {
     expect(opis.slice(2).map(x => x[6])).toEqual(['generat', 'EROARE', 'exclus'])
   })
 })
+
+describe('PR3a — utilizatori / arendasi', () => {
+  it.each(['utilizator', 'arendas'])('%s neaprobat: exclus separat din UAT, proprietarii se rezerva normal', async calitate => {
+    const t = date(3)
+    t.red_detinatori[1].calitate = calitate
+    t.red_v_stare_parcela[1].calitate = calitate
+    const c = clientFals(t), r = await ruleaza(c)
+    expect(r.exclusi.map(x => [x.rand.detinator_id, x.motiv])).toEqual([['d0002', 'utilizator - convocare neaprobata']])
+    expect(r.raport.filter(x => x.stare === 'ok')).toHaveLength(2)
+    expect(c.jurnal.numere).toBe(2)
+    expect(c.jurnal.inserturi.map(x => x.detinator_id)).toEqual(['d0001', 'd0003'])
+  })
+  it('nu reia nici documentul arhivat al utilizatorului neaprobat', async () => {
+    const t = date(1); t.red_detinatori[0].calitate = 'utilizator'
+    t.red_convocari = [conv({ id: 'cv1', detinator_id: 'd0001', fisier_convocator_path: 'fictiv.docx' })]
+    const r = await ruleaza(clientFals(t))
+    expect(r.plan).toEqual([])
+    expect(r.exclusi[0].motiv).toBe('utilizator - convocare neaprobata')
+    expect(r.fisiere).toEqual([])
+  })
+  it('refuzul serverului RD006 dupa planificare se raporteaza fara numar, upload sau fallback', async () => {
+    const c = clientFals(date(1)), p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+    const rpcVechi = c.rpc
+    c.rpc = async (fn, args) => fn === 'fn_red_convocare_rezerva' && args.p_detinator_id
+      ? { data: null, error: { code: 'RD006', message: 'utilizator - convocare neaprobata' } }
+      : rpcVechi(fn, args)
+    const genereaza = vi.fn(), reincarca = vi.fn()
+    const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: { genereaza, reincarca } })
+    expect(r.raport[0]).toMatchObject({ stare: 'schimbat', motiv: 'schimbat între timp: utilizator - convocare neaprobata' })
+    expect(c.jurnal.numere).toBe(0)
+    expect(c.jurnal.upload).toEqual([])
+    expect(genereaza).not.toHaveBeenCalled()
+    expect(reincarca).not.toHaveBeenCalled()
+  })
+  it('plan vechi: schimbarea calitatii opreste generarea la recitire', async () => {
+    const t = date(1), c = clientFals(t), p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+    t.red_detinatori[0].calitate = 'arendas'
+    const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
+    expect(r.raport[0]).toMatchObject({ stare: 'schimbat', motiv: 'utilizator - convocare neaprobata' })
+    expect(c.jurnal.numere).toBe(0)
+  })
+})
+
+describe('PR3a — separarea portii de sablonul PR3b', () => {
+  it('aprobarea owner-ului nu permite folosirea sablonului proprietarului pentru utilizator', async () => {
+    const t = date(1); t.red_detinatori[0].calitate = 'utilizator'
+    t.red_proiecte[0].convocare_utilizatori_aprobata = true
+    const c = clientFals(t)
+    const r = await pregatesteLot(c, { proiect: { ...PROIECT, convocare_utilizatori_aprobata: true }, uat: UAT })
+    expect(r.plan).toEqual([])
+    expect(r.exclusi[0].motiv).toBe('utilizator - șablonul convocatorului lipsește (PR3b)')
+    expect(c.jurnal.numere).toBe(0)
+  })
+})

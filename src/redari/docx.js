@@ -1,3 +1,4 @@
+import { motivConvocatorUtilizator } from './convocareUtilizatori.js'
 // Redări teren — documente client-side (contract docs/redari/CONTRACT_SCHEMA.md §6 + §8, decizii 4A + 5A).
 // - DOCX: șablonul se deschide cu jszip, placeholder-ele {{camp}} se înlocuiesc în word/document.xml + antete/subsoluri.
 // - QR: generat local cu pachetul `qrcode` (toDataURL), inserat ca imagine inline în locul paragrafului {{qr}}.
@@ -618,6 +619,8 @@ export const CHEI_CONVOCATOR = ['contract_nr', 'contract_data', 'proiect_denumir
  * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string>, lipsuri: string[] }>}
  */
 export async function genereazaConvocator({ detinator, contactDetinator, contact, parcela, uat, proiect, nrDocument, token, templateArrayBuffer, dataDocument, permiteIncomplet = false, informare = informareProiect(proiect) }) {
+  const motivUtilizator = motivConvocatorUtilizator(proiect, detinator)
+  if (motivUtilizator) throw new Error(motivUtilizator)   // inclusiv previzualizare
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
   const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator, informare })
   if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
