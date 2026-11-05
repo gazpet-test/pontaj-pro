@@ -571,14 +571,14 @@ describe('PR3a — utilizatori / arendasi', () => {
   })
 })
 
-describe('PR3a — separarea portii de sablonul PR3b', () => {
-  it('aprobarea owner-ului nu permite folosirea sablonului proprietarului pentru utilizator', async () => {
+describe('PR3b — utilizatori aprobați în lot', () => {
+  it('aprobarea owner-ului permite planificarea utilizatorului fără consum de numere', async () => {
     const t = date(1); t.red_detinatori[0].calitate = 'utilizator'
     t.red_proiecte[0].convocare_utilizatori_aprobata = true
     const c = clientFals(t)
     const r = await pregatesteLot(c, { proiect: { ...PROIECT, convocare_utilizatori_aprobata: true }, uat: UAT })
-    expect(r.plan).toEqual([])
-    expect(r.exclusi[0].motiv).toBe('utilizator - șablonul convocatorului lipsește (PR3b)')
+    expect(r.plan).toHaveLength(1)
+    expect(r.exclusi).toEqual([])
     expect(c.jurnal.numere).toBe(0)
   })
 })

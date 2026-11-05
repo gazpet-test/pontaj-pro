@@ -4,9 +4,8 @@ export const MESAJ_UTILIZATOR_NEAPROBAT = 'utilizator - convocare neaprobata'
 export const motivPoartaUtilizatori = (proiect, detinator) =>
   esteUtilizator(detinator?.calitate) && proiect?.convocare_utilizatori_aprobata !== true ? MESAJ_UTILIZATOR_NEAPROBAT : null
 
-// PR3b va furniza și va selecta șablonul juridic. Aprobarea NU permite folosirea Modelului 1 pentru proprietari.
-export const motivConvocatorUtilizator = (proiect, detinator) => motivPoartaUtilizatori(proiect, detinator)
-  || (esteUtilizator(detinator?.calitate) ? 'utilizator - șablonul convocatorului lipsește (PR3b)' : null)
+// PR3b: șablonul juridic este disponibil; poarta owner rămâne obligatorie.
+export const motivConvocatorUtilizator = motivPoartaUtilizatori
 
 /** CAS pe exact starea confirmată de owner; identitatea și proveniența sunt impuse de trigger. */
 export async function salveazaPoartaUtilizatori(client, proiect, aprobata) {

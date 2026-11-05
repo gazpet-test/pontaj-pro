@@ -42,8 +42,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('PR3a r2 — modalul individual inainte de rezervare/upload', () => {
-  it.each([['utilizator', false, 'utilizator - convocare neaprobata'], ['arendas', false, 'utilizator - convocare neaprobata'],
-    ['utilizator', true, 'utilizator - șablonul convocatorului lipsește (PR3b)'], ['arendas', true, 'utilizator - șablonul convocatorului lipsește (PR3b)']])(
+  it.each([['utilizator', false, 'utilizator - convocare neaprobata'], ['arendas', false, 'utilizator - convocare neaprobata']])(
     '%s / flag %s: randul vechi nu consuma numar si nu incarca sablon/fisier', async (calitate, flag, motiv) => {
       h.rows = { red_detinatori: { id: 'd', parcela_id: 'p', calitate }, red_parcele: { id: 'p', proiect_id: 'pr', uat_id: 'u' },
         red_detinatori_contact: null, red_detinatori_token: { token_raspuns: 'fictiv' }, red_proiecte: { ...proiect, convocare_utilizatori_aprobata: flag } }
@@ -63,9 +62,9 @@ describe('PR3a r2 — modalul individual inainte de rezervare/upload', () => {
       expect(h.rpc).not.toHaveBeenCalled(); expect(h.storage).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled()
       expect(props.onGata).not.toHaveBeenCalled()
     })
-  it('motivul comun blocheaza documentul si cu flag true pana la PR3b; proprietarul ramane permis', () => {
+  it('PR3b: motivul comun permite utilizatorul aprobat; proprietarul rămâne permis', () => {
     expect(motivBlocareConvocator(proiect, uat, rand)).toBeNull()
-    expect(motivBlocareConvocator({ ...proiect, convocare_utilizatori_aprobata: true }, uat, { ...rand, calitate: 'utilizator' })).toMatch(/PR3b/)
+    expect(motivBlocareConvocator({ ...proiect, convocare_utilizatori_aprobata: true }, uat, { ...rand, calitate: 'utilizator' })).toBeNull()
     expect(motivBlocareConvocator(proiect, uat, { ...rand, calitate: 'arendas' })).toBe('utilizator - convocare neaprobata')
   })
 })

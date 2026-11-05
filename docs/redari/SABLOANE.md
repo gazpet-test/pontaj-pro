@@ -193,6 +193,31 @@ Rămân de mână (intenționat): opțiunile cu ☐ („ziua ____ / intervalul _
 destinatarul la răspunsul scris; liniile de semnătură. Dispărute față de contract §8: `{{id_parcela}}` (modelul NU afișează
 ID-ul intern — de decis dacă îl adăugăm, ex. lângă „Nr. convocare”, pentru corelare cu registrul și formularul public).
 
+### 2.1U `convocator_utilizator.docx` — Model 1U (DRAFT Juridic, 05.11.2026)
+
+Aceleași **35 de chei** și aceeași hartă sursă → placeholder ca §2.1; fără `{{link}}`, fără chei noi.
+`CHEI_CONVOCATOR` rămâne contractul comun (include suplimentar `id_parcela` pentru corelare).
+`{{calitate}}` folosește calitatea captată la generare (`calitateDocument`, salvată în `calitate_document`):
+`utilizator` → „utilizator”, `arendas` → „arendaș”. Linia este exact
+„Către: {{nume}}, în calitate de {{calitate}} al terenului”, fără paranteze adăugate etichetei.
+
+Reproducere: `node scripts/redari_sabloane_din_modele.mjs`; control octet cu octet:
+`node scripts/redari_sabloane_din_modele.mjs --verifica` → `identic`.
+Rețeta moștenește Model 1 v6 (`docs/redari/referinta/Model_1_Convocator_proprietar_v6_final.docx`),
+parametrizarea, antetul existent, QR-ul și formatarea A4 ale convocatorului. Excepția de formatare (7)
+include pentru 1U 30 pt înainte de paragraful de după opțiuni, pentru a elibera QR-ul de 3 cm
+în LibreOffice; textul este verificat neschimbat după acest pas. Rețeta aplică diferențele
+Juridic 1–4 și 6–9, fiecare cu exact o apariție verificată; 5 și 10 rămân identice.
+Textul complet 1U cere explicit și „datele parcelei” în loc de „datele parcelei dumneavoastră”.
+Punctele de confirmat (a)–(c) sunt păstrate literal, fără variante alternative; (d), formularul public,
+rămâne în afara acestui PR. Textul rămâne DRAFT până la validarea lui Răzvan; nu cere aviz avocat.
+
+`genereazaConvocator` încarcă Model 1U pentru `utilizator` / `arendas`, indiferent de bufferul
+Model 1 trimis de apelanții existenți; o eroare de încărcare sau DOCX invalid refuză generarea,
+fără fallback. Poarta owner PR3a rămâne obligatorie inclusiv la previzualizare.
+PR #999 nu este inclus: orice pas comun viitor pentru antet se aplică în constructorul comun,
+după pașii de text, pentru toate rețetele, inclusiv 1U.
+
 ### 2.2 pv_a.docx (Model 2) - per detinator, 51 chei distincte (Final_v2: fara bifa_foto_da / bifa_foto_nu / foto_nr)
 
 Generator: src/redari/pv.js, CHEI_PV_A comparat cu sablonul real in pv.test.js.

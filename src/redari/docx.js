@@ -1,4 +1,4 @@
-import { motivConvocatorUtilizator } from './convocareUtilizatori.js'
+import { esteUtilizator, motivConvocatorUtilizator } from './convocareUtilizatori.js'
 // Redări teren — documente client-side (contract docs/redari/CONTRACT_SCHEMA.md §6 + §8, decizii 4A + 5A).
 // - DOCX: șablonul se deschide cu jszip, placeholder-ele {{camp}} se înlocuiesc în word/document.xml + antete/subsoluri.
 // - QR: generat local cu pachetul `qrcode` (toDataURL), inserat ca imagine inline în locul paragrafului {{qr}}.
@@ -622,7 +622,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   const calitateDocument = detinator?.calitate // instantaneu al calitatii folosite in DOCX, niciodata recitit dupa generare
   const motivUtilizator = motivConvocatorUtilizator(proiect, detinator)
   if (motivUtilizator) throw new Error(motivUtilizator)   // inclusiv previzualizare
-  if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
+  if (!templateArrayBuffer && !esteUtilizator(calitateDocument)) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
   const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator, informare })
   if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
   if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
@@ -669,7 +669,15 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     throw new Error('Convocatorul nu poate fi generat: după scoaterea trimiterilor la informarea completă / la verso, textul GDPR de pe proiect (text_gdpr) rămâne gol. Completați în text operatorii, scopul și drepturile.')
   }
   const qr = await genereazaQr(link)
-  const fata = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
+  // Apelanții vechi trimit Model 1. Pentru utilizator alegem aici Model 1U după calitatea captată,
+  // înainte de primul await; niciun fallback la proprietar la eroare de încărcare.
+  let sablon = templateArrayBuffer
+  if (esteUtilizator(calitateDocument)) {
+    const raspuns = await fetch('/redari/sabloane/convocator_utilizator.docx')
+    if (!raspuns.ok) throw new Error('Nu se poate încărca șablonul convocatorului pentru utilizator.')
+    sablon = await raspuns.arrayBuffer()
+  }
+  const fata = await completeazaDocx(sablon, campuri, { imagini: { qr }, strict: !permiteIncomplet })
   // Versoul: informarea completă după un salt de pagină; în previzualizare, cu marcaj PROIECT cât nu e gata
   const blob = await adaugaVersoInformare(fata, informare?.text, { proiect: !informareGata(informare?.text, informare?.publicata) })
   // garda pe documentul COMPLETAT: nicio adresă web proprie sau externă neaprobată în textul tipăribil, strict și la previzualizare

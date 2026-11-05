@@ -22,9 +22,7 @@ describe('PR3a — poarta utilizatorilor', () => {
       await expect(genereazaConvocator({ detinator: { calitate }, proiect: {}, permiteIncomplet }))
         .rejects.toThrow('utilizator - convocare neaprobata')
     }
-    expect(motivConvocatorUtilizator({ convocare_utilizatori_aprobata: true }, { calitate })).toMatch(/PR3b/)
-    await expect(genereazaConvocator({ detinator: { calitate }, proiect: { convocare_utilizatori_aprobata: true } }))
-      .rejects.toThrow('șablonul convocatorului lipsește')
+    expect(motivConvocatorUtilizator({ convocare_utilizatori_aprobata: true }, { calitate })).toBeNull()
   })
   it('comutatorul este vizibil doar owner-ului si ramane inchis implicit', () => {
     const p = { id: 'fictiv', versiune: 1, convocare_utilizatori_aprobata: false }
