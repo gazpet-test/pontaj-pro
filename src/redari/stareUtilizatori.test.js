@@ -18,34 +18,34 @@ function fixture(caz) {
   if (['pv_b', 'pv_b_anulat', 'acoperire_peste_b_vechi'].includes(caz.nume)) pvs.push({ tip: 'B', parcela_id: caz.nume, stare: caz.nume === 'pv_b_anulat' ? 'anulat' : 'generat' })
   const parcela_acoperita_a = parcelaAcoperitaA({ parcela: { id: caz.nume }, detinatori, pvs })
   const randuri = detinatori.flatMap((d, i) => d.sters_la ? [] : [{ ...d, detinator_id: d.id, parcela_id: caz.nume, uat_id: 'uat',
-    ...calculeazaStare({ calitate: d.calitate, adresa_cunoscuta: false, parcela_acoperita_a,
+    ...calculeazaStare({ calitate: d.calitate, adresa_cunoscuta: Object.hasOwn(caz.date[i], 'adresa_cunoscuta') ? caz.date[i].adresa_cunoscuta : false, parcela_acoperita_a,
       pvs: pvs.filter(p => p.tip === 'B' || p.detinator_id === d.id),
       raspunsuri: caz.date[i].raspuns ? [{ optiune: caz.date[i].raspuns, data: '2026-11-05T10:00:00Z' }] : [] }) }])
   return { randuri, parcela_acoperita_a }
 }
 describe('PR2: același tabel de cazuri juridice în SQL DRY și JS (L19/L25)', () => {
-  it('17 cazuri independente', () => expect(cazuri).toHaveLength(17))
+  it('18 cazuri independente, inclusiv contact absent null', () => expect(cazuri).toHaveLength(18))
   it.each(cazuri)('$nume => $stare', caz => {
     const { randuri, parcela_acoperita_a } = fixture(caz)
     expect(parcela_acoperita_a).toBe(caz.acoperita)
     expect(randuri.find(r => r.detinator_id === 'd' + caz.observat)?.stare).toBe(caz.stare)
   })
-  it('Q5: SQL și JS așteaptă 17 parcele, 9 închise, 52.9%, cu 33 perechi în registru', () => {
+  it('Q5: SQL și JS așteaptă 18 parcele, 9 închise, 50%, cu 34 perechi în registru', () => {
     const randuri = cazuri.flatMap(c => fixture(c).randuri)
-    expect(randuri).toHaveLength(33)
+    expect(randuri).toHaveLength(34)
     const parcele = stariParcele(randuri)
-    expect(parcele).toHaveLength(17)
+    expect(parcele).toHaveLength(18)
     expect(parcele.filter(r => STARI_INCHISE.includes(r.stare))).toHaveLength(9)
     const cent = centralizatorParcele(randuri)
-    expect(agregaCentralizator(cent).at(-1)).toMatchObject({ total: 17, inchise: 9, procent: 52.9 })
-    expect(foaieCentralizator(cent, [{ id: 'uat', nume: 'FICTIV' }]).at(-1)).toEqual(['% parcele inchise (PV A sau B)', 52.9, 52.9])
-    expect(centralizeaza(agregaDetinatori({ randuri })).total).toMatchObject({ total: 33, parcele: 17, inchise: 9 })
+    expect(agregaCentralizator(cent).at(-1)).toMatchObject({ total: 18, inchise: 9, procent: 50 })
+    expect(foaieCentralizator(cent, [{ id: 'uat', nume: 'FICTIV' }]).at(-1)).toEqual(['% parcele inchise (PV A sau B)', 50, 50])
+    expect(centralizeaza(agregaDetinatori({ randuri })).total).toMatchObject({ total: 34, parcele: 18, inchise: 9 })
   })
   it('acoperirea A depășește B vechi, trimiterea și obiecțiile; semnătura proprie rămâne proprie', () => {
     const date = { parcela_acoperita_a: true, pvs: [{ tip: 'B', stare: 'generat' }, { tip: 'A', stare: 'trimis_spre_semnare' }], raspunsuri: [{ optiune: 'constatare_teren' }] }
     expect(calculeazaStare(date)).toEqual({ stare: 'PV_A_ACOPERIT_PARCELA', ordine: 1 })
     expect(calculeazaStare({ ...date, pvs: [{ tip: 'A', stare: 'semnat' }] }).stare).toBe('PV_A_SEMNAT')
-    for (const flag of [null, undefined, false, 'true']) expect(calculeazaStare({ parcela_acoperita_a: flag }).stare).toBe('DE_CONVOCAT')
+    for (const flag of [null, undefined, false, 'true']) expect(calculeazaStare({ parcela_acoperita_a: flag, adresa_cunoscuta: true }).stare).toBe('DE_CONVOCAT')
   })
   it('stări / identități necunoscute nu devin zero sau închise', () => {
     expect(() => stariParcele([{ parcela_id: 'p', uat_id: 'u', stare: 'necunoscut' }])).toThrow('necunoscută')
@@ -139,4 +139,10 @@ it('Q5: filtrul nu închide parcela dacă ascunde coproprietarul încă nesemnat
   tabele.red_detinatori = randuri.map(r => ({ id: r.detinator_id, parcela_id: 'p', calitate: r.calitate, nume: 'FICTIV' }))
   const r = await citesteDateExport(client(tabele), 'proiect', 'TGZ', () => true, 'utilizator')
   expect(r.centralizator.at(-1)).toEqual(['% parcele inchise (PV A sau B)', 0, 0])
+})
+
+it.each([[null, 'FARA_ADRESA_AFISARE'], [undefined, 'FARA_ADRESA_AFISARE'], [false, 'FARA_ADRESA_AFISARE'], [true, 'DE_CONVOCAT']])('contact %s: paritate cu coalesce SQL', (adresa_cunoscuta, stare) => {
+  expect(calculeazaStare({ calitate: 'proprietar', adresa_cunoscuta })).toEqual({ stare, ordine: stare === 'DE_CONVOCAT' ? 12 : 11 })
+  expect(calculeazaStare({ calitate: 'neidentificat', adresa_cunoscuta }).stare).toBe('NEIDENTIFICAT_AFISARE')
+  expect(calculeazaStare({ adresa_cunoscuta, pvs: [{ tip: 'A', stare: 'semnat' }] }).stare).toBe('PV_A_SEMNAT')
 })

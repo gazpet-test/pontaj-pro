@@ -14,9 +14,13 @@ BEGIN
   -- Revenirea schimba numai proiectia, fara eliminare de istoric/config/date sau obiecte PR1.
   LOCK TABLE public.red_procese_verbale,public.red_parcele,public.red_detinatori,
     public.red_uat,public.red_detinatori_contact,public.red_raspunsuri,public.red_convocari,
-    public.red_v_stare_parcela,public.red_v_centralizator_uat IN ACCESS EXCLUSIVE MODE;
+    public.red_v_stare_parcela,public.red_v_centralizator_uat,public.red_v_tronson IN ACCESS EXCLUSIVE MODE;
+  -- Ultimele: sursele de autorizare, aceeasi ordine in apply si revenire.
+  LOCK TABLE public.profiles,public.user_module_access IN SHARE MODE;
 END $start$;
 -- Prefix rezervat verificarii temporare; permite apply/revenire/re-apply in aceeasi tranzactie.
+DROP VIEW IF EXISTS pg_temp.pr2_tronson_baseline;
+DROP TABLE IF EXISTS pg_temp.pr2_auth_tabele,pg_temp.pr2_auth_coloane,pg_temp.pr2_auth_politici;
 DROP TABLE IF EXISTS pg_temp.pr2_functii,pg_temp.pr2_coloane,pg_temp.pr2_tables,pg_temp.pr2_triggers;
 CREATE TEMP TABLE pg_temp.pr2_functii(sig text,corp text,ret text,retset boolean,lang text,definer boolean,vol text,config text[],acl text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.pr2_functii VALUES
@@ -286,6 +290,28 @@ INSERT INTO pg_temp.pr2_triggers VALUES
 ('red_uat','trg_red_legaturi','public.fn_red_legaturi()',23,false,false,ARRAY[]::text[]),
 ('red_uat','trg_red_uat_sesiuni','public.fn_red_uat_sesiuni_dupa()',17,false,false,ARRAY['sesiune_zi1','sesiune_zi2','sesiune_zi3']::text[]),
 ('red_uat','trg_red_versiune','public.fn_red_versiune_creste()',19,false,false,ARRAY[]::text[]);
+-- R2 baseline extern de autorizare: 20261003d (RLS/owner, toate politicile de scriere),
+-- sec_f2_setari_schelet (SELECT din live 05.10), SEC F1 (ACL fara TRUNCATE la anon/authenticated).
+-- Manifest fix; o abatere necesita review, nu acceptare automata a catalogului curent.
+CREATE TEMP TABLE pg_temp.pr2_auth_tabele(t text PRIMARY KEY,acl text[]) ON COMMIT DROP;
+INSERT INTO pg_temp.pr2_auth_tabele VALUES
+('profiles',ARRAY['anon=DELETE','anon=INSERT','anon=REFERENCES','anon=SELECT','anon=TRIGGER','anon=UPDATE','authenticated=DELETE','authenticated=INSERT','authenticated=REFERENCES','authenticated=SELECT','authenticated=TRIGGER','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=DELETE','service_role=INSERT','service_role=REFERENCES','service_role=SELECT','service_role=TRIGGER','service_role=TRUNCATE','service_role=UPDATE']::text[]),
+('user_module_access',ARRAY['anon=DELETE','anon=INSERT','anon=REFERENCES','anon=SELECT','anon=TRIGGER','anon=UPDATE','authenticated=DELETE','authenticated=INSERT','authenticated=REFERENCES','authenticated=SELECT','authenticated=TRIGGER','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=DELETE','service_role=INSERT','service_role=REFERENCES','service_role=SELECT','service_role=TRIGGER','service_role=TRUNCATE','service_role=UPDATE']::text[]);
+CREATE TEMP TABLE pg_temp.pr2_auth_coloane(t text,c text,typ text) ON COMMIT DROP;
+INSERT INTO pg_temp.pr2_auth_coloane VALUES
+ ('profiles','id','uuid'),('profiles','is_owner','boolean'),
+ ('user_module_access','profile_id','uuid'),('user_module_access','module','text'),('user_module_access','access_level','text');
+CREATE TEMP TABLE pg_temp.pr2_auth_politici(t text,n text,cmd text,q text,w text) ON COMMIT DROP;
+INSERT INTO pg_temp.pr2_auth_politici VALUES
+ ('profiles','profiles_select_all_authenticated','r','b326b5062b2f0e69046810717534cb09','<NULL>'),
+ ('profiles','profiles_delete_owner','d','c820f31f788833db3c8d7830979c8803','<NULL>'),
+ ('profiles','profiles_insert_owner','a','<NULL>','c820f31f788833db3c8d7830979c8803'),
+ ('profiles','profiles_update_own','w','bc9c729a84690340789a4e4f01175335','bc9c729a84690340789a4e4f01175335'),
+ ('profiles','profiles_update_owner','w','c820f31f788833db3c8d7830979c8803','c820f31f788833db3c8d7830979c8803'),
+ ('user_module_access','user_module_access_select_authenticated','r','b326b5062b2f0e69046810717534cb09','<NULL>'),
+ ('user_module_access','user_module_access_delete_owner','d','8d156f05d1916a18e703d322295e7715','<NULL>'),
+ ('user_module_access','user_module_access_insert_owner','a','<NULL>','8d156f05d1916a18e703d322295e7715'),
+ ('user_module_access','user_module_access_update_owner','w','8d156f05d1916a18e703d322295e7715','8d156f05d1916a18e703d322295e7715');
 -- L15: allow-list fixe din migrarile versionate; NU invatam amprente din catalogul curent.
 CREATE OR REPLACE FUNCTION pg_temp.pr2_verifica_baza() RETURNS void
 LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $baza$
@@ -315,6 +341,46 @@ BEGIN
         AND (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(p.proacl::text[]) x)=r.acl) THEN
       RAISE EXCEPTION 'PR2: callee auth in afara baseline: %',r.sig; END IF;
   END LOOP;
+  -- R2 / L15: fn_red_nivel -> profiles / user_module_access. Proiectia citita are 5 coloane.
+  -- Restul campurilor de profil apartin altor module; orice ACL de coloana, inclusiv pe ele, este refuzat.
+  FOR r IN SELECT * FROM pg_temp.pr2_auth_tabele LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('public.'||r.t) AND c.relkind='r'
+      AND c.relrowsecurity AND NOT c.relforcerowsecurity AND pg_get_userbyid(c.relowner)='postgres'
+      AND (SELECT array_agg(pg_get_userbyid(a.grantee)||'='||a.privilege_type ORDER BY (pg_get_userbyid(a.grantee)||'='||a.privilege_type) COLLATE "C")
+        FROM aclexplode(c.relacl) a WHERE a.grantor='postgres'::regrole AND NOT a.is_grantable)=r.acl
+      AND NOT EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantor<>'postgres'::regrole OR a.is_grantable)
+      AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)) THEN
+      RAISE EXCEPTION 'PR2: sursa autorizare RLS/owner/ACL: %',r.t; END IF;
+  END LOOP;
+  FOR r IN SELECT * FROM pg_temp.pr2_auth_coloane LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('public.'||r.t)
+      AND a.attname=r.c AND a.attnum>0 AND NOT a.attisdropped AND a.atttypid=to_regtype(r.typ)
+      AND a.atttypmod=-1 AND a.attcollation=(SELECT typcollation FROM pg_type WHERE oid=a.atttypid) AND a.attacl IS NULL) THEN
+      RAISE EXCEPTION 'PR2: coloana sursa autorizare: %.%',r.t,r.c; END IF;
+  END LOOP;
+  -- Politicile SELECT sunt incluse: true nu este echivalat cu NULL, care ar fi o alta politica.
+  IF (SELECT count(*) FROM pg_policy p JOIN pg_temp.pr2_auth_tabele b ON p.polrelid=to_regclass('public.'||b.t))
+    <> (SELECT count(*) FROM pg_temp.pr2_auth_politici) THEN RAISE EXCEPTION 'PR2: inventar politici autorizare'; END IF;
+  FOR r IN SELECT * FROM pg_temp.pr2_auth_politici LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=to_regclass('public.'||r.t) AND p.polname=r.n
+      AND p.polcmd::text=r.cmd AND p.polpermissive AND p.polroles=ARRAY['authenticated'::regrole::oid]
+      AND coalesce(md5(pg_get_expr(p.polqual,p.polrelid)),'<NULL>')=r.q
+      AND coalesce(md5(pg_get_expr(p.polwithcheck,p.polrelid)),'<NULL>')=r.w) THEN
+      RAISE EXCEPTION 'PR2: politica autorizare: %.%',r.t,r.n; END IF;
+  END LOOP;
+  -- fn_red_pv_c_neacoperite -> red_v_tronson -> red_v_stare_parcela -> fn_red_nivel.
+  IF pg_get_viewdef('public.red_v_tronson'::regclass,true) IS DISTINCT FROM pg_get_viewdef('pg_temp.pr2_tronson_baseline'::regclass,true)
+    OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid='public.red_v_tronson'::regclass AND c.relkind='v'
+      AND c.reloptions=ARRAY['security_invoker=on'] AND pg_get_userbyid(c.relowner)='postgres'
+      AND (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(c.relacl::text[]) x)
+        =ARRAY['authenticated=r/postgres','postgres=arwdDxt/postgres','service_role=r/postgres'])
+    OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid='public.red_v_tronson'::regclass AND a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL)
+    OR (SELECT jsonb_agg(jsonb_build_array(a.attnum,a.attname,a.atttypid,a.atttypmod,a.attcollation) ORDER BY a.attnum)
+      FROM pg_attribute a WHERE a.attrelid='public.red_v_tronson'::regclass AND a.attnum>0 AND NOT a.attisdropped)
+      IS DISTINCT FROM (SELECT jsonb_agg(jsonb_build_array(a.attnum,a.attname,a.atttypid,a.atttypmod,a.attcollation) ORDER BY a.attnum)
+      FROM pg_attribute a WHERE a.attrelid='pg_temp.pr2_tronson_baseline'::regclass AND a.attnum>0 AND NOT a.attisdropped) THEN
+    RAISE EXCEPTION 'PR2: red_v_tronson definitie/coloane/owner/ACL/security_invoker'; END IF;
   FOR r IN SELECT * FROM pg_temp.pr2_tables LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('public.'||r.t)
         AND c.relrowsecurity AND NOT c.relforcerowsecurity AND pg_get_userbyid(c.relowner)='postgres'
@@ -374,6 +440,17 @@ BEGIN
     RAISE EXCEPTION 'PR2: secventa/ACL raspunsuri'; END IF;
 END $baza$;
 REVOKE ALL ON FUNCTION pg_temp.pr2_verifica_baza() FROM PUBLIC;
+CREATE TEMP VIEW pr2_tronson_baseline WITH (security_invoker = on) AS
+SELECT p.proiect_id, p.tronson, p.uat_id, u.uat3, p.id AS parcela_id, p.id_parcela, p.suprafata_temporara_mp, p.articol_deviz, p.cantitate,
+       CASE WHEN public.fn_red_parcela_acoperita_a(p.id) IS TRUE THEN 'A'
+            WHEN EXISTS (SELECT 1 FROM public.red_procese_verbale pb WHERE pb.parcela_id = p.id AND pb.tip = 'B' AND pb.stare <> 'anulat' AND pb.sters_la IS NULL) THEN 'B'
+       END AS tip_pv,
+       (EXISTS (SELECT 1 FROM public.red_v_stare_parcela s WHERE s.parcela_id = p.id AND s.stare = 'OBIECTII_DE_TRATAT')
+        OR EXISTS (SELECT 1 FROM public.red_procese_verbale px WHERE px.parcela_id = p.id AND px.sters_la IS NULL AND px.stare <> 'anulat'
+                      AND px.obiectii_redare AND px.remediat_la IS NULL)) AS obiectii_deschise
+  FROM public.red_parcele p
+  JOIN public.red_uat u ON u.id = p.uat_id
+ WHERE p.sters_la IS NULL;
 SELECT pg_temp.pr2_verifica_baza();
 CREATE TEMP VIEW pr2_stare_asteptata WITH (security_invoker = on) AS
 SELECT p.id AS parcela_id, d.id AS detinator_id, p.proiect_id, p.uat_id, u.uat3, u.nume AS uat_nume, p.id_parcela, p.tronson,
@@ -601,3 +678,5 @@ DROP FUNCTION pg_temp.pr2_verifica_baza();
 DROP TABLE pg_temp.pr2_functii,pg_temp.pr2_coloane,pg_temp.pr2_tables,pg_temp.pr2_triggers;
 COMMENT ON VIEW public.red_v_stare_parcela IS 'Redări: o linie per (parcelă, deținător) activ cu STAREA calculată după ierarhia din contract §3 (1 = PV_A_SEMNAT … 12 = DE_CONVOCAT). adresa_cunoscuta vine din contact (NULL pentru viewer); FARA_ADRESA_AFISARE = contact cu adresa_cunoscuta false SAU fără rând de contact.';
 COMMENT ON VIEW public.red_v_centralizator_uat IS 'Redări: numărul de (parcelă, deținător) pe (UAT, stare), totalul UAT-ului și % închise (PV_A_SEMNAT + PV_B_CONSTATARE), repetat pe fiecare rând al UAT-ului.';
+DROP VIEW pg_temp.pr2_tronson_baseline;
+DROP TABLE pg_temp.pr2_auth_tabele,pg_temp.pr2_auth_coloane,pg_temp.pr2_auth_politici;

@@ -118,7 +118,8 @@ export function calculeazaStare({ calitate, adresa_cunoscuta, convocari = [], ra
 
   // 10–11. afișare
   if (calitate === 'neidentificat') return rezultat('NEIDENTIFICAT_AFISARE')
-  if (adresa_cunoscuta === false) return rezultat('FARA_ADRESA_AFISARE')
+  // SQL: coalesce(fn_red_adresa_cunoscuta(...), false); contact absent = afișare.
+  if (adresa_cunoscuta !== true) return rezultat('FARA_ADRESA_AFISARE')
 
   // 12. restul
   return rezultat('DE_CONVOCAT')

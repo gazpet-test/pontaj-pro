@@ -31,7 +31,7 @@ describe('STARI — lista ordonată', () => {
 describe('calculeazaStare — un caz minim per stare', () => {
   it('12 DE_CONVOCAT — nimic', () => {
     expect(calculeazaStare(baza)).toEqual({ stare: 'DE_CONVOCAT', ordine: 12 })
-    expect(calculeazaStare()).toEqual({ stare: 'DE_CONVOCAT', ordine: 12 })
+    expect(calculeazaStare()).toEqual({ stare: 'FARA_ADRESA_AFISARE', ordine: 11 })
   })
   it('11 FARA_ADRESA_AFISARE — adresa_cunoscuta=false', () => {
     expect(calculeazaStare({ calitate: 'proprietar', adresa_cunoscuta: false })).toEqual({ stare: 'FARA_ADRESA_AFISARE', ordine: 11 })

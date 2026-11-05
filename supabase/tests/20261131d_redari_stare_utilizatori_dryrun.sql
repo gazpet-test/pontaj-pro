@@ -67,14 +67,87 @@ BEGIN
   END;
   PERFORM pg_temp.pr2_verifica_baza(); -- calea legitima dupa toate restaurarile
 END $mutanti$;
+-- R2: dependente tranzitive de autorizare si vedere, fiecare mutatie anulata separat.
+DO $mutanti_tranzitivi$
+DECLARE t text; varianta text; refuz boolean; def text; mesaj text; politica text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['profiles','user_module_access'] LOOP
+    FOREACH varianta IN ARRAY ARRAY['acl','rls','force','coloana','politica_noua','select_null'] LOOP
+      BEGIN
+        mesaj:='PR2: sursa autorizare RLS/owner/ACL: '||t;
+        CASE varianta
+          WHEN 'acl' THEN EXECUTE format('REVOKE SELECT ON public.%I FROM authenticated',t);
+          WHEN 'rls' THEN EXECUTE format('ALTER TABLE public.%I DISABLE ROW LEVEL SECURITY',t);
+          WHEN 'force' THEN EXECUTE format('ALTER TABLE public.%I FORCE ROW LEVEL SECURITY',t);
+          WHEN 'coloana' THEN
+            EXECUTE format('ALTER TABLE public.%I RENAME COLUMN %I TO pr2_fictiv_coloana',t,CASE t WHEN 'profiles' THEN 'is_owner' ELSE 'access_level' END);
+            mesaj:='PR2: coloana sursa autorizare: '||t||'.'||CASE t WHEN 'profiles' THEN 'is_owner' ELSE 'access_level' END;
+          WHEN 'politica_noua' THEN
+            EXECUTE format('CREATE POLICY pr2_fictiv_mutant ON public.%I FOR SELECT TO authenticated USING (true)',t);
+            mesaj:='PR2: inventar politici autorizare';
+          WHEN 'select_null' THEN
+            -- NULL qual este permisiv in PG, dar nu este baseline-ul revizuit (true explicit).
+            politica:=CASE t WHEN 'profiles' THEN 'profiles_select_all_authenticated' ELSE 'user_module_access_select_authenticated' END;
+            EXECUTE format('DROP POLICY %I ON public.%I',politica,t);
+            EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated',politica,t);
+            mesaj:='PR2: politica autorizare: '||t||'.'||politica;
+        END CASE;
+        refuz:=false;
+        BEGIN PERFORM pg_temp.pr2_verifica_baza();
+        EXCEPTION WHEN raise_exception THEN
+          IF SQLERRM<>mesaj THEN RAISE; END IF;
+          refuz:=true;
+        END;
+        IF NOT refuz THEN RAISE EXCEPTION 'DRY mutant tranzitiv acceptat %.%',t,varianta; END IF;
+        RAISE EXCEPTION 'FICTIV rollback mutant tranzitiv' USING ERRCODE='ZX002';
+      EXCEPTION WHEN SQLSTATE 'ZX002' THEN NULL;
+      END;
+    END LOOP;
+  END LOOP;
+  FOREACH varianta IN ARRAY ARRAY['definitie','security_invoker','acl'] LOOP
+    BEGIN
+      CASE varianta
+        WHEN 'definitie' THEN
+          SELECT pg_get_viewdef('public.red_v_tronson'::regclass,true) INTO def;
+          EXECUTE 'CREATE OR REPLACE VIEW public.red_v_tronson WITH (security_invoker=on) AS SELECT * FROM ('||rtrim(def,E'; \n')||') v WHERE false';
+        WHEN 'security_invoker' THEN ALTER VIEW public.red_v_tronson SET (security_invoker=off);
+        WHEN 'acl' THEN REVOKE SELECT ON public.red_v_tronson FROM authenticated;
+      END CASE;
+      refuz:=false;
+      BEGIN PERFORM pg_temp.pr2_verifica_baza();
+      EXCEPTION WHEN raise_exception THEN
+        IF SQLERRM<>'PR2: red_v_tronson definitie/coloane/owner/ACL/security_invoker' THEN RAISE; END IF;
+        refuz:=true;
+      END;
+      IF NOT refuz THEN RAISE EXCEPTION 'DRY mutant tronson acceptat %',varianta; END IF;
+      RAISE EXCEPTION 'FICTIV rollback mutant tronson' USING ERRCODE='ZX002';
+    EXCEPTION WHEN SQLSTATE 'ZX002' THEN NULL;
+    END;
+  END LOOP;
+  PERFORM pg_temp.pr2_verifica_baza(); -- restaurarea baseline-ului legitim este obligatorie
+END $mutanti_tranzitivi$;
 INSERT INTO auth.users(id,email) VALUES
  ('00000000-0000-4000-8000-00000031d001','pr2.editor@example.invalid'),
  ('00000000-0000-4000-8000-00000031d002','pr2.viewer@example.invalid'),
  ('00000000-0000-4000-8000-00000031d003','pr2.refuz@example.invalid');
-INSERT INTO public.profiles(id,email,name,role,is_owner) VALUES
- ('00000000-0000-4000-8000-00000031d001','pr2.editor@example.invalid','FICTIV PR2 EDITOR','manager_santier',false),
- ('00000000-0000-4000-8000-00000031d002','pr2.viewer@example.invalid','FICTIV PR2 VIEWER','manager_santier',false),
- ('00000000-0000-4000-8000-00000031d003','pr2.refuz@example.invalid','FICTIV PR2 REFUZ','manager_santier',false);
+-- on_auth_user_created -> handle_new_user creeaza deja profilurile (20260929c).
+-- Nicio exceptie pentru owner: actualizam numai cele trei UUID-uri fictive si cerem toate trei randurile.
+DO $profiluri$
+DECLARE n int;
+BEGIN
+  UPDATE public.profiles p SET email=x.email,name=x.nume,role='manager_santier',is_owner=false
+  FROM (VALUES
+    ('00000000-0000-4000-8000-00000031d001'::uuid,'pr2.editor@example.invalid','FICTIV PR2 EDITOR'),
+    ('00000000-0000-4000-8000-00000031d002'::uuid,'pr2.viewer@example.invalid','FICTIV PR2 VIEWER'),
+    ('00000000-0000-4000-8000-00000031d003'::uuid,'pr2.refuz@example.invalid','FICTIV PR2 REFUZ')
+  ) x(id,email,nume) WHERE p.id=x.id;
+  GET DIAGNOSTICS n=ROW_COUNT;
+  IF n<>3 OR EXISTS (SELECT 1 FROM public.profiles WHERE id IN (
+      '00000000-0000-4000-8000-00000031d001'::uuid,'00000000-0000-4000-8000-00000031d002'::uuid,'00000000-0000-4000-8000-00000031d003'::uuid)
+      AND (is_owner IS DISTINCT FROM false OR role IS DISTINCT FROM 'manager_santier')) THEN
+    RAISE EXCEPTION 'DRY: cele trei profiluri automate non-owner nu au fost pregatite';
+  END IF;
+END $profiluri$;
 INSERT INTO public.user_module_access(profile_id,module,access_level) VALUES
  ('00000000-0000-4000-8000-00000031d001','redari','editor'),
  ('00000000-0000-4000-8000-00000031d002','redari','viewer');
@@ -98,6 +171,7 @@ INSERT INTO pr2_cazuri(nume,date,observat,stare,acoperita) VALUES
  ('proprietar_unic_semnat','[{"rol":"proprietar","pv":"semnat"}]'::jsonb,0,'PV_A_SEMNAT',true),
  ('pv_b','[{"rol":"proprietar"},{"rol":"utilizator"}]'::jsonb,0,'PV_B_CONSTATARE',false),
  ('pv_b_anulat','[{"rol":"proprietar"},{"rol":"utilizator"}]'::jsonb,0,'FARA_ADRESA_AFISARE',false),
+ ('contact_absent_null','[{"rol":"proprietar","adresa_cunoscuta":null}]'::jsonb,0,'FARA_ADRESA_AFISARE',false),
  ('acoperire_peste_b_vechi','[{"rol":"proprietar"},{"rol":"utilizator","pv":"semnat"}]'::jsonb,0,'PV_A_ACOPERIT_PARCELA',true);
 CREATE TEMP TABLE pr2_det(caz text,i int,spec jsonb,id uuid,parcela uuid,pv uuid);
 DO $fixture$
@@ -164,16 +238,19 @@ DECLARE r record;v text;n int;
 BEGIN
   FOR r IN SELECT c.*,d.id FROM pr2_cazuri c JOIN pr2_det d ON d.caz=c.nume AND d.i=c.observat LOOP
     SELECT stare INTO STRICT v FROM public.red_v_stare_parcela WHERE parcela_id=r.parcela AND detinator_id=r.id;
+    IF r.nume='contact_absent_null' AND (EXISTS (SELECT 1 FROM public.red_detinatori_contact WHERE detinator_id=r.id)
+        OR (SELECT adresa_cunoscuta FROM public.red_v_stare_parcela WHERE parcela_id=r.parcela AND detinator_id=r.id) IS NOT NULL) THEN
+      RAISE EXCEPTION 'DRY: cazul null trebuie sa aiba contact absent si adresa SQL NULL'; END IF;
     IF v IS DISTINCT FROM r.stare THEN RAISE EXCEPTION 'DRY stare %: % asteptat %',r.nume,v,r.stare; END IF;
     IF public.fn_red_parcela_acoperita_a(r.parcela) IS DISTINCT FROM r.acoperita THEN RAISE EXCEPTION 'DRY acoperire %',r.nume; END IF;
     IF r.acoperita AND EXISTS (SELECT 1 FROM public.red_v_stare_parcela WHERE parcela_id=r.parcela AND stare NOT IN ('PV_A_SEMNAT','PV_A_ACOPERIT_PARCELA')) THEN
       RAISE EXCEPTION 'DRY parcela acoperita mai contine destinatari neinchisi %',r.nume; END IF;
   END LOOP;
   SELECT sum(numar) INTO n FROM public.red_v_centralizator_uat WHERE uat_id=(SELECT uat FROM pr2_cazuri LIMIT 1);
-  IF n IS DISTINCT FROM 17 THEN RAISE EXCEPTION 'DRY Q5: 17 parcele numarate o data, gasit %',n; END IF;
-  -- 8 parcele A acoperite + 1 B = 9/17 => 52.9%; coproprietar partial nu e inchis.
+  IF n IS DISTINCT FROM 18 THEN RAISE EXCEPTION 'DRY Q5: 18 parcele numarate o data, gasit %',n; END IF;
+  -- 8 parcele A acoperite + 1 B = 9/18 => 50.0%; coproprietar partial nu e inchis.
   IF EXISTS (SELECT 1 FROM public.red_v_centralizator_uat WHERE uat_id=(SELECT uat FROM pr2_cazuri LIMIT 1)
-      AND (total_uat<>17 OR procent_inchise<>52.9)) THEN RAISE EXCEPTION 'DRY Q5 procent'; END IF;
+      AND (total_uat<>18 OR procent_inchise<>50.0)) THEN RAISE EXCEPTION 'DRY Q5 procent'; END IF;
 END $paritate$;
 RESET ROLE;
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-4000-8000-00000031d002","role":"authenticated"}',true);
@@ -181,10 +258,10 @@ SET LOCAL ROLE authenticated;
 DO $viewer$
 BEGIN
   IF public.fn_red_nivel() IS DISTINCT FROM 'viewer' THEN RAISE EXCEPTION 'DRY viewer'; END IF;
-  IF (SELECT count(*) FROM public.red_v_stare_parcela WHERE parcela_id IN (SELECT parcela FROM pr2_cazuri))<>33 THEN RAISE EXCEPTION 'DRY viewer randuri'; END IF;
+  IF (SELECT count(*) FROM public.red_v_stare_parcela WHERE parcela_id IN (SELECT parcela FROM pr2_cazuri))<>34 THEN RAISE EXCEPTION 'DRY viewer randuri'; END IF;
   IF EXISTS (SELECT 1 FROM public.red_v_stare_parcela WHERE parcela_id IN (SELECT parcela FROM pr2_cazuri) AND adresa_cunoscuta IS NOT NULL) THEN
     RAISE EXCEPTION 'DRY viewer vede contact'; END IF;
-  IF (SELECT sum(numar) FROM public.red_v_centralizator_uat WHERE uat_id=(SELECT uat FROM pr2_cazuri LIMIT 1))<>17 THEN
+  IF (SELECT sum(numar) FROM public.red_v_centralizator_uat WHERE uat_id=(SELECT uat FROM pr2_cazuri LIMIT 1))<>18 THEN
     RAISE EXCEPTION 'DRY viewer Q5'; END IF;
 END $viewer$;
 RESET ROLE;
@@ -204,7 +281,7 @@ SELECT set_config('gazpet.livrare_migrare','20261131d_redari_stare_utilizatori_R
 DO $istoric$
 BEGIN
   IF (SELECT count(*) FROM public.red_jurnal)<>(SELECT n FROM pr2_istoric) THEN RAISE EXCEPTION 'DRY revenire a modificat istoricul'; END IF;
-  IF (SELECT count(*) FROM public.red_parcele WHERE id IN (SELECT parcela FROM pr2_cazuri))<>17 THEN RAISE EXCEPTION 'DRY revenire a modificat datele'; END IF;
+  IF (SELECT count(*) FROM public.red_parcele WHERE id IN (SELECT parcela FROM pr2_cazuri))<>18 THEN RAISE EXCEPTION 'DRY revenire a modificat datele'; END IF;
 END $istoric$;
 SELECT set_config('gazpet.livrare_migrare','20261131d_redari_stare_utilizatori:'||txid_current(),true);
 \ir ../migrations/20261131d_redari_stare_utilizatori.sql
