@@ -16,10 +16,13 @@
 //    (decizia Răzvan 03.11 seara; singura reformulare de text juridic, declarată în CONVOCATOR_DOAR_QR).
 //    (9) adresa UAT primește antetul firmei din convocator (primele două paragrafe din Model_1, cu contractul și proiectul
 //    parametrizate) — varianta implicită pentru claude#026 întrebarea 1, DE CONFIRMAT de Răzvan (04.11).
+//    (10) antetul oficial Gazpet (imagine, docs/redari/referinta/antet_gazpet.jpg) în header-ul PRIMEI pagini, iar rândul
+//    scris cu datele firmei se scoate din corp (rămâne „Lider al Asocierii … Contract …”) — decizia Răzvan 05.11.2026.
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
+import { adaugaAntet, faraDateFirma } from './redari_antet.mjs'
 
 const RADACINA = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const REF = resolve(RADACINA, 'docs/redari/referinta')
@@ -466,7 +469,8 @@ const textWt = xml => [...xml.matchAll(RX_WT)].map(m => m[1]).join('')
 async function construieste(sablon, { model, pasi, formatare = [], margini, stiluri }) {
   const zip = await JSZip.loadAsync(readFileSync(resolve(REF, model)), { createFolders: false })
   const doc = await zip.file('word/document.xml').async('string')
-  const cuText = pasi(doc)
+  // excepția (10), decizia Răzvan 05.11.2026: datele firmei sunt în antetul-imagine (header, prima pagină) → rândul scris se scoate
+  const cuText = faraDateFirma(pasi(doc), esc(ANTET_FIRMA))
   // textul de referință se ia ÎNAINTE de orice pas de formatare și se compară după FIECARE pas
   const referinta = textWt(cuText)
   // excepția (6): A4 pe toate (cu marginile proprii doar la convocator), ultimul pas
@@ -482,6 +486,8 @@ async function construieste(sablon, { model, pasi, formatare = [], margini, stil
   zip.file('word/document.xml', nou, { date: DATA_FIXA, createFolders: false })
   // excepția (7): stilurile convocatorului (spațiere, interlinie, corp de literă)
   if (stiluri) zip.file('word/styles.xml', stiluri(await zip.file('word/styles.xml').async('string')), { date: DATA_FIXA, createFolders: false })
+  // excepția (10): antetul oficial (imagine) în header-ul primei pagini, lățimea utilă A4
+  await adaugaAntet(zip, { date: DATA_FIXA })
   // excepția (3): fără miniatură (nu mai corespunde) și fără numele ultimului editor în docProps
   if (zip.file('docProps/thumbnail.jpeg')) zip.remove('docProps/thumbnail.jpeg')
   const core = await zip.file('docProps/core.xml')?.async('string')

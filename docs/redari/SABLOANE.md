@@ -85,6 +85,19 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   amprenta textului de dinainte (nimic altceva schimbat în șablon). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
+- **(10) Antetul oficial Gazpet ca imagine, în header-ul PRIMEI pagini (decizia Răzvan 05.11.2026)**, pe toate cele 6 șabloane
+  (inclusiv `cerere_imputernicire.docx`). Imaginea: `docs/redari/referinta/antet_gazpet.jpg` (2342×337 px, 300 dpi, JPEG 170 KB),
+  decupată din „Adresa Europan.pdf” (nr. 1008/03.11.2026): datele firmei (Banca Transilvania, J2007001650296), foto conductă,
+  siglele AQ Cert ISO 9001 / 14001. Decupajul vechi de pe NAS (`Documente Redari\ANTET\antet_gazpet_300dpi.png`) era tăiat jos
+  și nu se folosește. `scripts/redari_antet.mjs` (folosit de ambele generatoare): header de tip `first` + `<w:titlePg/>` (versoul
+  convocatorului și paginile 2+ ale PV-urilor rămân fără antet), lățimea = lățimea utilă a paginii, înălțimea proporțională,
+  distanța header-ului 0,5 cm; refuză un șablon cu header-e existente sau mai multe secțiuni. Header-ul are doar imaginea, fără
+  text (garda de adrese web din `docx.js` citește și `word/header*.xml`). **Rândul scris cu datele firmei** („GAZPET INSTAL S.R.L.
+  · Str. Fluturilor nr. 34 … · office@gazpet.ro”) **se scoate din corp** (`faraDateFirma`, exact o apariție: run-ul + `<w:br/>`);
+  rămâne „Lider al Asocierii … · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}”.
+  `sabloaneA4.test.js` declară textul scos (`SCOS_INCEPUT`) și cere, după repunere, amprenta de dinainte; testele „antetul oficial”
+  verifică header-ul pe șabloane și pe convocatorul completat cu QR. **Pagina unică a feței convocatorului trebuie verificată în
+  Word** (pe server nu există Word / LibreOffice): documente-test cu date fictive în `Documente Redari\TEST_antet` pe NAS.
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
   decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):
@@ -375,13 +388,13 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | „constatare pe teren cerută? (data)” (Model 6 col. AB) | registru | v5 spune „la data stabilită de comisie” → data vine din comisie, nu de la deținător: `red_raspunsuri.constatare_teren_data` (setată de operator) | — |
 | conținut fix de parametrizat la alt proiect | toate | A.P.M. Mehedinți, Acordul de mediu, „Lider al Asocierii …”, Prunișor–Jupa în corp | nu acum (Lot 1) |
 
-## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (04.11.2026, Final_v2 + A4 + convocator doar cu QR + antet pe adresa UAT)
+## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (05.11.2026, Final_v2 + A4 + convocator doar cu QR + antet pe adresa UAT + antetul-imagine în header)
 
 ```text
 # Verificare șabloane Redări — 6 fișiere din public/redari/sabloane (2026-11-04)
 
 ## adresa_uat.docx — OK
-- părți citite: word/document.xml; paragrafe cu text: 60
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 60
 - placeholder-e distincte: 43 (apariții: 57); rupte între run-uri: 0
 - `{{afisare_data_end}}` `{{afisare_data_start}}`×3 `{{afisare_ora}}` `{{afisare_pv_nr}}` `{{contact_email}}`×3 `{{contact_nume}}`×2 `{{contact_telefon}}`×3 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{judet}}` `{{nr_document}}` `{{numar_parcele}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{program_text}}` `{{proiect_denumire}}` `{{rand.nr}}` `{{rand.nr_cadastral}}` `{{rand.poz_hg}}` `{{rand.sat}}` `{{rand.tarla}}` `{{rand.tronson}}` `{{reprezentant_gazpet}}` `{{reprezentant_gazpet_nume}}` `{{reprezentant_tgz}}`×2 `{{reprezentant_tgz_telefon}}`×2 `{{reprezentant_uat_functie}}` `{{reprezentant_uat_nume}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_uat}}` `{{termen_confirmare}}` `{{uat}}`×5 `{{zi1}}` `{{zi2}}` `{{zi3}}` `{{zile_sesiune_text}}`×2
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
@@ -390,14 +403,14 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - resturi intenționate: 4× dezafișarea se consemnează de mână, la final (PV afișare); 2× linie de semnătură olografă
 
 ## cerere_imputernicire.docx — OK
-- părți citite: word/document.xml; paragrafe cu text: 16
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 16
 - placeholder-e distincte: 12 (apariții: 15); rupte între run-uri: 0
 - `{{antreprenor}}`×2 `{{beneficiar}}` `{{contact_email}}` `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{functie}}`×2 `{{nr_document}}` `{{proiect_denumire}}` `{{reprezentant_gazpet}}`×2 `{{reprezentant_tgz}}` `{{uat_lista}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 2.00/2.00/2.00/2.00; corp Normal: 12 pt
 - relații externe (.rels TargetMode=External): niciuna
 
 ## convocator.docx — OK
-- părți citite: word/document.xml; paragrafe cu text: 55
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 55
 - placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
 - `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
@@ -406,7 +419,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - resturi intenționate: 3× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
 
 ## pv_a.docx — OK
-- părți citite: word/document.xml; paragrafe cu text: 46
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 46
 - placeholder-e distincte: 51 (apariții: 54); rupte între run-uri: 0
 - `{{act_doveditor}}` `{{act_identitate}}` `{{alte_observatii}}` `{{bifa_altele}}` `{{bifa_arat}}` `{{bifa_constatare_sediu}}` `{{bifa_constatare_teren}}` `{{bifa_cu_obiectii}}` `{{bifa_da}}` `{{bifa_da_cu_obiectii}}` `{{bifa_discuit}}` `{{bifa_drum}}` `{{bifa_fara_obiectii}}` `{{bifa_gard}}` `{{bifa_insamantare}}` `{{bifa_nivelare}}` `{{bifa_plan_da}}` `{{bifa_plan_nu}}` `{{bifa_sol_fertil}}` `{{bifa_st_alta}}` `{{bifa_st_gard_drum}}` `{{bifa_st_insamantat}}` `{{bifa_st_nivelat}}` `{{bifa_st_strat_vegetal}}` `{{calitate_cota}}` `{{categoria_folosinta}}` `{{categoria_initiala}}` `{{contract_data}}`×2 `{{contract_nr}}`×2 `{{data_pv}}` `{{locul}}` `{{lucrari_altele}}` `{{nr_cadastral}}` `{{nr_pv}}` `{{nume}}` `{{obiectii_text}}` `{{poz_hg}}` `{{proiect_denumire}}` `{{reverificare_la}}` `{{sat}}` `{{semnatar_detinator}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{stare_teren_alta}}` `{{suprafata}}` `{{tarla}}` `{{termen_remediere}}` `{{tronson}}`×2 `{{uat}}` `{{verificare_data}}` `{{verificare_de}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
@@ -414,7 +427,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - resturi intenționate: 1× antet de coloană (PV A), nu câmp; 3× linie de semnătură olografă
 
 ## pv_b.docx — OK
-- părți citite: word/document.xml; paragrafe cu text: 63
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 63
 - placeholder-e distincte: 72 (apariții: 74); rupte între run-uri: 0
 - `{{afisare_data_end}}` `{{afisare_data_start}}`×2 `{{afisare_pv_nr}}` `{{bifa_alt_raspuns}}` `{{bifa_altele}}` `{{bifa_arat}}` `{{bifa_conv_primita}}` `{{bifa_conv_returnata}}` `{{bifa_discuit}}` `{{bifa_drum}}` `{{bifa_fara_adresa}}` `{{bifa_fara_raspuns}}` `{{bifa_gard}}` `{{bifa_insamantare}}` `{{bifa_neidentificat}}` `{{bifa_neprezentat}}` `{{bifa_nivelare}}` `{{bifa_raspuns_fara_obiectii}}` `{{bifa_reluare_fara_raspuns}}` `{{bifa_reluare_nu_e_cazul}}` `{{bifa_reluare_raspuns}}` `{{bifa_sit_declaratie}}` `{{bifa_sit_neidentificat}}` `{{bifa_sit_neprezentat}}` `{{bifa_sit_refuz}}` `{{bifa_sol_fertil}}` `{{bifa_st_alta}}` `{{bifa_st_gard_drum}}` `{{bifa_st_insamantat}}` `{{bifa_st_nivelat}}` `{{bifa_st_strat_vegetal}}` `{{categoria_folosinta}}` `{{categoria_initiala}}` `{{contract_data}}` `{{contract_nr}}` `{{conv_data_confirmare}}` `{{conv_data_expediere}}` `{{conv_nr_tracking}}` `{{conv_retur}}` `{{data_pv}}` `{{locul}}` `{{lucrari_altele}}` `{{nr_cadastral}}` `{{nr_pv}}` `{{nume}}` `{{poz_hg}}` `{{proiect_denumire}}` `{{pv_a_referinta}}` `{{raspuns_alt_text}}` `{{raspuns_canal}}` `{{raspuns_data}}` `{{reluare_adresa_tgz_nr}}` `{{reluare_data}}` `{{reluare_nr_tracking}}` `{{reluare_raspuns_text}}` `{{reprezentant_uat_nume}}` `{{sat}}` `{{semnatar_apm}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{semnatar_uat}}` `{{stare_teren_alta}}` `{{suprafata}}` `{{tarla}}` `{{tronson}}` `{{uat}}`×2 `{{verificare_data}}` `{{verificare_de_gazpet}}` `{{verificare_de_tgz}}` `{{zi1}}` `{{zi2}}` `{{zi3}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt
@@ -422,7 +435,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - resturi intenționate: 4× linie de semnătură olografă
 
 ## pv_c.docx — OK
-- părți citite: word/document.xml; paragrafe cu text: 40
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 40
 - placeholder-e distincte: 23 (apariții: 23); rupte între run-uri: 0
 - `{{contract_data}}` `{{contract_nr}}` `{{data_pv}}` `{{km_de_la}}` `{{km_pana_la}}` `{{nr_pv}}` `{{numar_parcele}}` `{{obiectii_deschise_mp}}` `{{obiectii_deschise_nr}}` `{{proiect_denumire}}` `{{pva_corespondenta_mp}}` `{{pva_corespondenta_nr}}` `{{pva_sesiune_mp}}` `{{pva_sesiune_nr}}` `{{pvb_mp}}` `{{pvb_nr}}` `{{semnatar_apm}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{total_mp}}` `{{total_nr}}` `{{tronson}}` `{{uat_uri}}`
 - pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.80/1.80/2.00/2.00; corp Normal: 10.5 pt

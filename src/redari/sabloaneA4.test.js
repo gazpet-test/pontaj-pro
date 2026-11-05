@@ -22,10 +22,14 @@ const SCHIMBARI_TEXT = {
 }
 // Text ADĂUGAT la începutul documentului (excepția (9) din SABLOANE.md §1, 04.11, DE CONFIRMAT — claude#026 întrebarea 1):
 // antetul firmei din convocator, repus pe adresa UAT. Scos de la început, textul trebuie să dea amprenta de dinainte.
+// Din 05.11 (excepția (10)) rândul cu datele firmei nu mai e în corp, deci adaosul e doar „Lider al Asocierii …”.
+const DATE_FIRMA = 'GAZPET INSTAL S.R.L. · Str. Fluturilor nr. 34, Ploiești, jud. Prahova · CUI RO 22029920 · Tel./Fax 0244 435 005 · office@gazpet.ro'
 const ADAOS_INCEPUT = {
-  adresa_uat: 'GAZPET INSTAL S.R.L. · Str. Fluturilor nr. 34, Ploiești, jud. Prahova · CUI RO 22029920 · Tel./Fax 0244 435 005 · office@gazpet.ro'
-    + 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}',
+  adresa_uat: 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}',
 }
+// Text SCOS de la începutul documentului (excepția (10), decizia Răzvan 05.11.2026): datele firmei sunt în antetul-imagine
+// din header; repus la început, textul trebuie să dea amprenta de dinainte.
+const SCOS_INCEPUT = { convocator: DATE_FIRMA, pv_a: DATE_FIRMA, pv_b: DATE_FIRMA, pv_c: DATE_FIRMA }
 // A4 în twips (210 × 297 mm; 1 mm = 56,69 twips)
 const A4 = { w: 11906, h: 16838 }
 const CM = 567
@@ -85,6 +89,13 @@ describe('șabloanele pe A4', () => {
       expect(t.split(adaos).length - 1).toBe(1)
       t = t.slice(adaos.length)
     }
+    const scos = SCOS_INCEPUT[nume]
+    if (scos) {
+      expect(t).not.toContain(scos)
+      expect(t.startsWith('Lider al Asocierii')).toBe(true)
+      t = scos + t
+    }
+    expect(t).not.toBe('')
     const [lungime, sha] = TEXT_INAINTE[nume]
     expect(t.length).toBe(lungime)
     expect(createHash('sha256').update(t).digest('hex')).toBe(sha)
@@ -114,7 +125,7 @@ describe('convocatorul: fața pe o pagină A4', () => {
       if (sz < 19) mici.push([sz, text.slice(0, 20)])
     }
     expect(mici).toEqual([
-      [16, 'GAZPET INSTAL S.R.L.'], [16, 'Lider al Asocierii G'], [18, 'Date personale'], [17, '{{text_gdpr}}'],
+      [16, 'Lider al Asocierii G'], [18, 'Date personale'], [17, '{{text_gdpr}}'],
     ])
     // titlul rămâne 13 pt
     expect(doc).toMatch(/<w:sz w:val="26"\/><w:lang w:val="it-IT"\/><\/w:rPr><w:t>CONVOCARE<\/w:t>/)
@@ -171,5 +182,53 @@ describe('convocatorul: fața pe o pagină A4', () => {
   it('fără marcajul de pagină vechi (lastRenderedPageBreak) și fără sfârșit de pagină forțat pe față', async () => {
     const { doc } = await citeste('convocator')
     expect(doc).not.toMatch(/lastRenderedPageBreak|<w:br w:type="page"\/>|pageBreakBefore/)
+  })
+})
+
+// excepția (10), decizia Răzvan 05.11.2026: antetul oficial (imagine) în header-ul PRIMEI pagini, pe toate cele 6 șabloane
+describe('antetul oficial Gazpet (header, prima pagină)', () => {
+  const ANTET = readFileSync('docs/redari/referinta/antet_gazpet.jpg')
+  const SABLOANE = [...Object.keys(TEXT_INAINTE), 'cerere_imputernicire']
+  const verificaAntet = async (zip, nume) => {
+    const doc = await zip.file('word/document.xml').async('string')
+    const sect = doc.match(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g)
+    expect(sect, nume).toHaveLength(1)
+    // un singur header, de tip „first”, + titlePg: paginile 2+ (versoul convocatorului) rămân fără antet
+    expect([...sect[0].matchAll(/<w:headerReference w:type="(\w+)" r:id="([^"]+)"\/>/g)].map(m => m[1])).toEqual(['first'])
+    expect(sect[0]).toContain('<w:titlePg/>')
+    expect(Object.keys(zip.files).filter(p => /^word\/header\d*\.xml$/.test(p))).toEqual(['word/header1.xml'])
+    const rId = /<w:headerReference w:type="first" r:id="([^"]+)"\/>/.exec(sect[0])[1]
+    const rels = await zip.file('word/_rels/document.xml.rels').async('string')
+    expect(rels).toMatch(new RegExp(`Id="${rId}" Type="[^"]+/header" Target="header1.xml"`))
+    const hdr = await zip.file('word/header1.xml').async('string')
+    // header-ul conține doar imaginea, fără text (garda de adrese web citește și header-ele)
+    expect(textWt(hdr)).toBe('')
+    expect(hdr.match(/<wp:inline /g)).toHaveLength(1)
+    const hRels = await zip.file('word/_rels/header1.xml.rels').async('string')
+    expect(hRels).toContain('Target="media/antet_gazpet.jpg"')
+    expect(Buffer.compare(Buffer.from(await zip.file('word/media/antet_gazpet.jpg').async('uint8array')), ANTET)).toBe(0)
+    // lățimea = lățimea utilă a paginii (pgSz − margini), înălțimea proporțională cu imaginea (2342 × 337 px)
+    const pgMar = /<w:pgMar [^>]*\/>/.exec(sect[0])[0]
+    const util = A4.w - atribut(pgMar, 'left') - atribut(pgMar, 'right')
+    const [, cx, cy] = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/.exec(hdr)
+    expect(Number(cx)).toBe(util * 635)
+    expect(Math.abs(Number(cy) - Number(cx) * 337 / 2342)).toBeLessThan(1)
+    const ct = await zip.file('[Content_Types].xml').async('string')
+    expect(ct).toMatch(/<Default Extension="jpg" ContentType="image\/jpeg"\/>/)
+    expect(ct).toContain('PartName="/word/header1.xml"')
+    // corpul nu mai are rândul scris cu datele firmei
+    expect(textWt(doc)).not.toContain('GAZPET INSTAL S.R.L. · Str. Fluturilor')
+  }
+  it.each(SABLOANE)('%s: imaginea în header1, doar prima pagină, lățimea utilă, fără rândul scris cu datele firmei', async nume => {
+    await verificaAntet(await JSZip.loadAsync(readFileSync(`public/redari/sabloane/${nume}.docx`)), nume)
+  })
+  it('convocatorul completat (QR + strict, date fictive): antetul rămâne intact, QR-ul are relația lui separată', async () => {
+    const campuri = Object.fromEntries(CHEI_CONVOCATOR.filter(k => k !== 'qr').map(k => [k, `TEST ${k}`]))
+    const qr = await genereazaQr('https://example.invalid/redari/raspuns/TEST0000fictiv')
+    const blob = await completeazaDocx(readFileSync('public/redari/sabloane/convocator.docx'), campuri, { imagini: { qr }, strict: true })
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer())
+    await verificaAntet(zip, 'convocator completat')
+    const rels = await zip.file('word/_rels/document.xml.rels').async('string')
+    expect(rels).toContain('Target="media/qr.png"')
   })
 })
