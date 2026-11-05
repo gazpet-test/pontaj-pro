@@ -37,7 +37,8 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
     let viu = true
     setPublicata(undefined)
     informarePublicataServer(supabase, proiect.cod).then(v => { if (viu) setPublicata(v) })
-    return () => { viu = false }
+    // r6 (Jakarinos r3 P2-03): la demontare / resincronizare baza devine alt obiect → o salvare în curs vede contextul schimbat și se oprește
+    return () => { viu = false; baza.current = { ...baza.current } }
   }, [proiect.id, proiect.cod, proiect.versiune, proiect.autorizare_tgz_nr, proiect.autorizare_tgz_data, proiect.autorizare_tgz_fisier])
 
   const deschide = async () => {
@@ -71,18 +72,21 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
         if (eu) throw eu
         if (contextSchimbat()) throw new Error('Proiectul s-a reîncărcat în timpul salvării; PDF-ul e urcat, dar autorizarea nu e salvată — verifică și salvează din nou')
       }
+      if (contextSchimbat()) throw new Error('Formularul s-a închis sau proiectul s-a reîncărcat în timpul salvării; autorizarea nu e salvată')
       // CAS pe versiunea pe care a văzut-o formularul (nu pe una recitită acum)
       const { data: rez, error } = await supabase.from('red_proiecte')
         .update({ autorizare_tgz_nr: nrT, autorizare_tgz_data: data, autorizare_tgz_fisier: cale })
         .eq('id', proiect.id).eq('versiune', b.versiune).select(COL)
       if (error) throw error
       if (!rez?.length) throw new Error('Proiectul a fost modificat între timp; reîncarcă pagina și reîncearcă')
+      if (contextSchimbat()) return   // salvat, dar formularul nu mai e al acestei acțiuni: fără mesaje / reîncărcare din el
       setFisier(null)
       const pub = await informarePublicataServer(supabase, proiect.cod)
+      if (contextSchimbat()) return
       show(pub === true ? 'Autorizarea Transgaz e salvată. Informarea GDPR e publicată.' : pub === null ? 'Autorizarea e salvată, dar nu am putut verifica publicarea — reîncarcă pagina.' : 'Autorizarea e salvată, dar serverul nu o consideră încă publicată — verifică PDF-ul.', pub === true ? 'success' : 'error')
       onSchimbat?.()
     } catch (e) { show('Autorizarea Transgaz: ' + msgEroare(e), 'error') }
-    finally { ocupat.current = false; setLucru(false) }
+    finally { ocupat.current = false; if (!contextSchimbat()) setLucru(false) }
   }
 
   return (

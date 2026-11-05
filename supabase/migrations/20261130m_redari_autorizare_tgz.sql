@@ -76,9 +76,24 @@ BEGIN
         FROM pg_trigger t WHERE t.tgrelid = 'public.red_convocari'::regclass AND NOT t.tgisinternal) IS DISTINCT FROM '2d4f1baef2ebed5532ab20a98af70b45' THEN
     RAISE EXCEPTION '20261130m: triggerele de pe red_convocari nu sunt cele revizuite';
   END IF;
-  IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text, E'\n' ORDER BY t.tgname))
-        FROM pg_trigger t WHERE t.tgrelid = 'storage.objects'::regclass AND NOT t.tgisinternal) IS DISTINCT FROM '5affd4b1d5b2be31d40fe6c81fabac52' THEN
+  -- r6 (Jakarinos r3 P2-01): triggerele storage.objects cu conditia WHEN; RLS activ pe storage.objects (o dezactivare n-ar schimba amprenta politicilor).
+  -- Corpurile functiilor Storage sunt ale platformei Supabase (supabase_storage_admin) si nu se fixeaza aici; legarea PDF-ului se bazeaza pe
+  -- owner_id + id + eTag scrise de Storage, iar politicile care permit scrieri sunt fixate mai jos.
+  IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text || '|' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), ''), E'\n' ORDER BY t.tgname))
+        FROM pg_trigger t WHERE t.tgrelid = 'storage.objects'::regclass AND NOT t.tgisinternal) IS DISTINCT FROM 'cf114a62838c44b5d9d1a20365cbaba4' THEN
     RAISE EXCEPTION '20261130m: triggerele de pe storage.objects nu sunt cele revizuite';
+  END IF;
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'storage.objects'::regclass) THEN
+    RAISE EXCEPTION '20261130m: RLS nu e activ pe storage.objects';
+  END IF;
+  -- r5 (Copilot r3 P2-02, L15): corpul, owner-ul, SECURITY DEFINER si configuratia functiilor apelate de triggerele existente pe red_proiecte /
+  -- red_convocari (6 functii, ex. fn_red_versiune_creste de care depinde CAS-ul); CREATE OR REPLACE pastreaza OID-ul, deci se compara corpul
+  IF (SELECT md5(string_agg(x, E'\n' ORDER BY x)) FROM (
+        SELECT DISTINCT p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|' || pg_get_userbyid(p.proowner) || '|' || p.prosecdef::text || '|' || coalesce(array_to_string(p.proconfig, ','), '') AS x
+          FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+         WHERE t.tgrelid IN ('public.red_proiecte'::regclass, 'public.red_convocari'::regclass) AND NOT t.tgisinternal) f)
+       IS DISTINCT FROM '9646c04a533a7856880f8cd0fd96e21b' THEN
+    RAISE EXCEPTION '20261130m: functiile triggerelor de pe red_proiecte / red_convocari nu mai au corpul revizuit';
   END IF;
   -- r3 (Jakarinos r2 P2-2): TOATE politicile de pe storage.objects (nu doar cele care pomenesc bucket-ul): o politica globala permisiva ar
   -- acoperi si obiectele autorizarii. Legarea PDF-ului se bazeaza pe owner_id pus de Storage la upload si pe id-ul obiectului.
