@@ -61,6 +61,7 @@ import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOre
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
+const IntrebariTehnice = lazy(() => import('./IntrebariTehnice.jsx'))   // ❓ Întreabă echipa — spețe tehnice → răspuns AI informativ (20261105a); modulul 'intrebari_tehnice'
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
 const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
 const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
@@ -1079,6 +1080,7 @@ function HomeDashboard() {
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'], moduleKey:'sedinte' },
     { path:'/marketing', icon:'📣', label:'Marketing',   color:'#1877F2', desc:'Postări Facebook · din rapoartele de șantier', active:true, requireModule:'marketing' },
     { path:'/cladire',   icon:'🏢', label:'Clădire',     color:'#E4261E', desc:'Sediu · centrală · termostate · meteo · alerte', active:true, requireModule:'cladire' },
+    { path:'/intrebari', icon:'❓', label:'Întreabă echipa', color:'#56D4DD', desc:'Spețe tehnice · răspuns AI informativ', active:true, requireModule:'intrebari_tehnice' },
     { path:'/mesaj-vocal', icon:'🎙', label:'Mesaj vocal', color:'#A371F7', desc:'Text → voce (Aoede) · MP3 pentru WhatsApp', active:true, requireModule:'mesaj_vocal' },
     { path:'/sms', icon:'📱', label:'SMS', color:'#24778B', desc:'Mesaje către angajați · aprobare · istoric', active:true, requireModule:'sms' },
     // TEMPORAR (17.09.2026): se șterge cu tot cu rută când organigrama propriu-zisă e gata
@@ -8910,6 +8912,11 @@ export function SalariiPage({ noExport = false } = {}) {
 
 // ════════════════════════════════════════════════════════════════════════════
 // 🎙 Mesaj vocal: profilul din AuthContext (useAuth e local în App.jsx)
+function IntrebariTehniceRoute() {
+  const { profile } = useAuth()
+  return <Suspense fallback={<LoadingScreen />}><IntrebariTehnice profile={profile} /></Suspense>
+}
+
 function MesajVocalRoute() {
   const { profile } = useAuth()
   return <Suspense fallback={<LoadingScreen />}><MesajVocal profile={profile} /></Suspense>
@@ -9017,6 +9024,7 @@ export default function App() {
         <Route path="/sedinte" element={<ProtectedRoute><SedintePage/></ProtectedRoute>}/>
         <Route path="/marketing" element={<ProtectedRoute requireModule="marketing"><Marketing/></ProtectedRoute>}/>
         <Route path="/cladire" element={<ProtectedRoute requireModule="cladire"><Cladire/></ProtectedRoute>}/>
+        <Route path="/intrebari" element={<ProtectedRoute requireModule="intrebari_tehnice"><IntrebariTehniceRoute/></ProtectedRoute>}/>
         <Route path="/mesaj-vocal" element={<ProtectedRoute requireModule="mesaj_vocal"><MesajVocalRoute/></ProtectedRoute>}/>
         <Route path="/sms" element={<ProtectedRoute requireModule="sms"><Layout><SmsRoute/></Layout></ProtectedRoute>}/>
         <Route path="/integrari/:tab" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
