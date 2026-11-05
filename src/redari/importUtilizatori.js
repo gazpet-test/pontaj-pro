@@ -96,7 +96,7 @@ export function planUtilizatori(candidati, { parcele = [], detinatori = [] } = {
     if (!p && c.poz_hg) { const l = dupaHg.get(`${c.uat3}|${c.poz_hg}`) || []; if (l.length === 1) { p = l[0]; potrivire = 'hg' } }
     if (!p) { negasite.push({ rand: c.rand, uat3: c.uat3, cheie_sursa: c.cheie_sursa, motiv: MOTIV_PARCELA_NEGASITA }); continue }
     const k = `${p.id}|${c.nume_normalizat}`
-    if (existenti.has(k)) { deja.push({ rand: c.rand, uat3: c.uat3, id_parcela: p.id_parcela, parcela_id: p.id, nume_normalizat: c.nume_normalizat, contact: c.contact, motiv: MOTIV_DEJA }); continue }
+    // r4 (Jak r3 P1-2): coliziunea se judecă ÎNAINTE de „deja deținător” — și la reluare două adrese diferite exclud persoana (nu câștigă prima)
     if (alese.has(k)) {
       const primul = alese.get(k)
       // r3 (Cop r2 P2-01): contacte diferite pentru aceeași persoană → nu se alege automat; ambele rânduri ies din import, de verificat
@@ -105,11 +105,17 @@ export function planUtilizatori(candidati, { parcele = [], detinatori = [] } = {
       if (diferit) primul.exclus = true
       continue
     }
+    if (existenti.has(k)) {
+      const d = { rand: c.rand, uat3: c.uat3, id_parcela: p.id_parcela, parcela_id: p.id, nume_normalizat: c.nume_normalizat, contact: c.contact, motiv: MOTIV_DEJA }
+      alese.set(k, d); deja.push(d); continue
+    }
     const nou = { ...c, parcela_id: p.id, id_parcela: p.id_parcela, potrivire }
     alese.set(k, nou)
     noi.push(nou)
   }
   for (let x = noi.length - 1; x >= 0; x--) if (noi[x].exclus) noi.splice(x, 1)
+  // la „deja deținători” excluderea înseamnă: fără contact reparat automat (rămâne în raport)
+  for (const d of deja) if (d.exclus) d.contact = null
   const persoane = new Set(noi.map(n => n.nume_normalizat))
   return { noi, deja_detinatori: deja, parcela_negasita: negasite, coliziuni,
     statistici: { candidati: candidati.length, noi: noi.length, persoane_noi: persoane.size, deja_detinatori: deja.length, parcela_negasita: negasite.length,
@@ -161,7 +167,11 @@ export async function scrieUtilizatori(supabase, plan, optiuni = {}) {
   // r3 (Cop r2 P2-03): API-ul productiv NU poate ocoli poarta; doar __scrieUtilizatoriTest (teste) primește `permite`
   return scrie(supabase, plan, { ...optiuni, permite: IMPORT_UTILIZATORI_ACTIV })
 }
-export const __scrieUtilizatoriTest = (supabase, plan, optiuni = {}) => scrie(supabase, plan, optiuni)
+// r4 (Jak r3 P2): calea de test merge DOAR sub Vitest (import.meta.env.MODE === 'test'); în build-ul aplicației (production / development) refuză
+export const __scrieUtilizatoriTest = (supabase, plan, optiuni = {}) => {
+  if (import.meta.env?.MODE !== 'test') throw new Error('__scrieUtilizatoriTest e disponibil doar în teste')
+  return scrie(supabase, plan, optiuni)
+}
 
 async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, permite = false, pagina = PAGINA, lotCitire = LOT_CITIRE } = {}) {
   if (!permite) throw new Error('Importul utilizatorilor e oprit până la convocatorul pentru utilizatori (PR3, docs/redari/PLAN_UTILIZATORI.md)')
@@ -198,7 +208,9 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
     const schimbate = []
     const valide = noi.filter(n => {
       const p = parcelaAcum.get(n.parcela_id)
-      const ok = p && (n.potrivire !== 'hg' || hgAcum.get(`${n.uat3}|${n.poz_hg}`) === 1) && (n.potrivire !== 'cheie' || p.cheie_sursa === n.cheie_sursa)
+      // r4 (Jak r3 P1-1): la HG, parcela aleasă trebuie să aibă ÎNCĂ acel HG, în același UAT, iar HG-ul să fie tot unic
+      const ok = p && (n.potrivire !== 'hg' || (p.uat3 === n.uat3 && p.poz_hg != null && normalizeazaNume(p.poz_hg) === n.poz_hg && hgAcum.get(`${n.uat3}|${n.poz_hg}`) === 1))
+        && (n.potrivire !== 'cheie' || p.cheie_sursa === n.cheie_sursa)
       if (!ok) schimbate.push({ rand: n.rand, uat3: n.uat3, id_parcela: n.id_parcela, motiv: 'parcela s-a schimbat între plan și scriere (ștearsă / altă cheie / HG nu mai e unic) — nescris' })
       return ok
     })

@@ -200,6 +200,19 @@ describe('scrieUtilizatori', () => {
     const c2 = clientFals({ parcele: p2 })
     expect(await __scrieUtilizatoriTest(c2.supabase, planHg, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 0, schimbate: 1 })
   })
+  it('r4 (Jak r3 P1-2): la reluare (persoana deja scrisă), două rânduri cu adrese diferite → fără contact reparat automat', () => {
+    const c = [{ rand: 30, uat3: 'HUS', cheie_sursa: 'HUS|60|1|', poz_hg: '60', nume: 'J', nume_normalizat: 'J', contact: { adresa_sat: 'S1', adresa_cunoscuta: true, telefon: null } },
+               { rand: 31, uat3: 'HUS', cheie_sursa: 'HUS|60|1|', poz_hg: '60', nume: 'J', nume_normalizat: 'J', contact: { adresa_sat: 'S2', adresa_cunoscuta: true, telefon: null } }]
+    const p = planUtilizatori(c, { parcele: [{ id: 'p11', cheie_sursa: 'HUS|60|1|', uat3: 'HUS', poz_hg: '60' }], detinatori: [{ parcela_id: 'p11', nume_normalizat: 'J' }] })
+    expect(p.noi).toEqual([]); expect(p.deja_detinatori).toHaveLength(1); expect(p.deja_detinatori[0].contact).toBeNull(); expect(p.coliziuni[0].motiv).toMatch(/adrese diferite/)
+  })
+  it('r4 (Jak r3 P1-1): potrivire HG — parcela aleasă a primit alt HG între plan și scriere (iar HG-ul a trecut pe altă parcelă) → nescris', async () => {
+    const planHg = { ...plan, noi: [{ ...plan.noi[0], potrivire: 'hg', poz_hg: '9', uat3: 'HUS' }] }
+    const parcele = [{ ...PARCELE_TEST[0], poz_hg: '10' }, { ...PARCELE_TEST[1], poz_hg: '9' }]
+    const { supabase, tabele } = clientFals({ parcele })
+    expect(await __scrieUtilizatoriTest(supabase, planHg, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 0, schimbate: 1 })
+    expect(tabele.red_detinatori).toHaveLength(0)
+  })
   it('r3 (Cop r2 P2-01): aceeași persoană pe aceeași parcelă cu adrese diferite → ambele rânduri excluse, raportate', () => {
     const c = [{ rand: 20, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S1', adresa_cunoscuta: true, telefon: null } },
                { rand: 21, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S2', adresa_cunoscuta: true, telefon: null } }]
