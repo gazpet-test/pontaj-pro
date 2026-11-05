@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# Teste CONCURENTE (două sesiuni reale) pentru 20261130j / 20261130k și revenirile lor — Jak #987 r1 P1-2 / P1-3, r2 P1 / P2. NU pe producție.
+# Rulează pe un PG17 local de unică folosință, cu scheletul 20261130j_redari_mail_f1_schelet.sql.
+# Uz: PSQL=<psql> PGPORT=<port> bash supabase/tests/20261130j_redari_mail_f1_concurenta_local.sh
+# Fără timpi ficși: BARIERE explicite pe starea celeilalte sesiuni (pg_stat_activity), nu sleep:
+#   1. sesiunea B (proces psql separat, application_name = scriitor_B) începe o tranzacție și scrie (necomis), apoi intră într-o buclă
+#      „bariera_B” care așteaptă până când sesiunea A (application_name = migrare_A) e blocată pe un lock (wait_event_type = 'Lock'), apoi comite;
+#   2. scriptul pornește A abia după ce B e în bucla „bariera_B” (deci scrierea lui B e făcută);
+#   3. ambele procese sunt capturate (pid, cod de ieșire, ieșire), iar condiția de succes include codurile, MESAJUL EXACT al refuzului
+#      și datele comise de B. Fiecare buclă are o limită (30 s) care o face să pice explicit, nu să atârne.
+# Controalele (mutație) rulează aceeași cursă cu copii fără blocări / cu ordinea veche și arată că testul ar prinde bug-ul.
+set -uo pipefail
+export PGCLIENTENCODING=UTF8
+PSQL=${PSQL:-psql}; PORT=${PGPORT:-55432}
+R=$(cd "$(dirname "$0")/../.." && (pwd -W 2>/dev/null || pwd))
+TMP=$(cd "$(mktemp -d)" && (pwd -W 2>/dev/null || pwd)); trap 'rm -rf "$TMP"' EXIT
+ESEC=0
+q() { "$PSQL" -X -q -At -h localhost -p "$PORT" -U postgres -d "$1" -c "$2"; }
+BUCLA="t0 timestamptz := clock_timestamp(); BEGIN WHILE NOT (%s) LOOP PERFORM pg_sleep(0.02); PERFORM pg_stat_clear_snapshot(); IF clock_timestamp() > t0 + interval '30 seconds' THEN RAISE EXCEPTION 'bariera %s depasita'; END IF; END LOOP; END"
+bariera() { # $1 = db, $2 = condiție SQL, $3 = eticheta (sesiunea scriptului)
+  q "$1" "DO \$w\$ DECLARE $(printf "$BUCLA" "$2" "$3") \$w\$;" > /dev/null || { echo "  FAIL  bariera $3"; ESEC=1; }
+}
+baza() { # $1 = db, $2 = - | j | jk
+  "$PSQL" -X -q -h localhost -p "$PORT" -U postgres -d postgres -c "DROP DATABASE IF EXISTS $1" -c "CREATE DATABASE $1" > /dev/null 2>&1
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$1" -f "$R/supabase/tests/20261130j_redari_mail_f1_schelet.sql" > /dev/null
+  [ "$2" = "-" ] && return
+  APP_A=pregatire aplica "$1" j "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql" > /dev/null 2>&1
+  [ "$2" = "jk" ] && APP_A=pregatire aplica "$1" k "$R/supabase/migrations/20261130k_redari_mail_f1_reguli.sql" > /dev/null 2>&1
+}
+aplica() { # $1 = db, $2 = j | k | rj | rk, $3 = fișier — o tranzacție, cu marcajul runnerului
+  local m
+  case "$2" in
+    j) m="SELECT set_config('gazpet.livrare_migrare', '20261130j_redari_mail_f1_schema:' || txid_current(), true);" ;;
+    k) m="SELECT set_config('gazpet.livrare_migrare', '20261130k_redari_mail_f1_reguli:' || txid_current(), true);" ;;
+    rj) m="SELECT set_config('gazpet.revenire_20261130j', 'REDARI_MAIL_F1_SCHEMA_SCOS:' || txid_current(), true);" ;;
+    rk) m="SELECT set_config('gazpet.revenire_20261130k', 'REDARI_MAIL_F1_REGULI_SCOS:' || txid_current(), true);" ;;
+  esac
+  printf "SET application_name = '%s';\nBEGIN;\n%s\n\\\\i %s\nCOMMIT;\n" "${APP_A:-migrare_A}" "$m" "$3" > "$TMP/tx_$1_$2.sql"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$1" -f "$TMP/tx_$1_$2.sql" 2>&1
+}
+# în baza() aplicările de pregătire nu se numesc migrare_A (nu sunt în cursă)
+# cursa: $1 = db, $2 = SQL-ul lui B (scrierea necomisă), $3 = pas A (j|k|rj|rk), $4 = fișierul lui A. Rezultate în RC_A, RC_B, OUT_A, OUT_B.
+cursa() {
+  local db=$1
+  # RESET ROLE înaintea barierei: doar un superuser vede wait_event-ul altei sesiuni în pg_stat_activity (scrierea s-a făcut cu rolul cerut)
+  printf "SET application_name = 'scriitor_B';\nBEGIN;\n%s;\nRESET ROLE;\nDO \$w\$ DECLARE %s \$w\$;\nCOMMIT;\n" "$2" \
+    "$(printf "$BUCLA" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'migrare_A' AND wait_event_type = 'Lock')" "bariera_B")" > "$TMP/b_$db.sql"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$db" -f "$TMP/b_$db.sql" > "$TMP/b_$db.out" 2>&1 &
+  local pb=$!
+  # barieră 1: B e în bucla „bariera_B” => scrierea lui necomisă e făcută
+  bariera "$db" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'scriitor_B' AND state = 'active' AND query LIKE '%bariera_B%')" "B_a_scris"
+  aplica "$db" "$3" "$4" > "$TMP/a_$db.out" 2>&1 &
+  local pa=$!
+  wait $pa; RC_A=$?; wait $pb; RC_B=$?
+  OUT_A=$(cat "$TMP/a_$db.out"); OUT_B=$(cat "$TMP/b_$db.out")
+}
+verifica() { # $1 = eticheta, $2 = rezultatul (t = OK)
+  if [ "$2" = "t" ]; then echo "  OK    $1"; else echo "  FAIL  $1"; echo "        A(rc=$RC_A): $(echo "$OUT_A" | grep -E 'ERROR|FATAL' | head -2)"; echo "        B(rc=$RC_B): $(echo "$OUT_B" | grep -E 'ERROR|FATAL' | head -2)"; ESEC=1; fi
+}
+are() { echo "$1" | grep -qF -- "$2" && echo t || echo f; }
+si() { for x in "$@"; do [ "$x" = "t" ] || { echo f; return; }; done; echo t; }
+fara_lock() { grep -v -E '^  LOCK TABLE|^             public[.]red_mail_obiecte' "$1"; }
+EMAIL="INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES ('00000000-0000-0000-0000-00000000e001', 'email', 'nu_particip_fara_obiectii')"
+MAIL_SR="SET LOCAL ROLE service_role; INSERT INTO storage.objects (bucket_id, name) VALUES ('redari', 'mail/redari/carantina/' || repeat('a', 64) || '.eml')"
+
+echo "S1 (r1 P1-2): k aplicată separat de j, cu un răspuns email inserat concurent și necomis"
+baza s1 j; cursa s1 "$EMAIL" k "$R/supabase/migrations/20261130k_redari_mail_f1_reguli.sql"
+verifica "B comis (rc=0), A refuzată cu motivul exact, rândul lui B prezent, k neaplicată" "$(si "$([ $RC_B = 0 ] && echo t)" "$([ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130k: exista raspunsuri canal = email preexistente (1)')" \
+  "$(q s1 "SELECT (SELECT count(*) FROM public.red_raspunsuri WHERE canal = 'email') = 1 AND to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NULL")")"
+echo "S1-control (mutație): k fără blocări și fără re-verificarea din postcondiție"
+fara_lock "$R/supabase/migrations/20261130k_redari_mail_f1_reguli.sql" \
+  | sed "s/RAISE EXCEPTION '20261130k post: au aparut date/RAISE NOTICE '20261130k post (MUTATIE): au aparut date/" > "$TMP/k_fara_lock.sql"
+baza s1m j; cursa s1m "$EMAIL" k "$TMP/k_fara_lock.sql"
+verifica "bug reprodus: ambele rc=0, k aplicată, răspuns email FĂRĂ sursă" "$(si "$([ $RC_B = 0 ] && [ $RC_A = 0 ] && echo t)" \
+  "$(q s1m "SELECT to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NOT NULL AND (SELECT count(*) FROM public.red_raspunsuri r WHERE canal = 'email' AND NOT EXISTS (SELECT 1 FROM public.red_mail_raspuns_sursa s WHERE s.raspuns_id = r.id)) = 1")")"
+
+echo "S2 (r1 P1-3): revenirea j cu un upload mail/ concurent ca service_role (ocolește RLS)"
+baza s2 j; cursa s2 "$MAIL_SR" rj "$R/supabase/revenire/20261130j_redari_mail_f1_schema_ROLLBACK.sql"
+verifica "B comis, A refuzată (REFUZATA), obiectul lui B prezent, schema și politicile mail/ rămân" "$(si "$([ $RC_B = 0 ] && [ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130j revenire REFUZATA: exista date red_mail_* / obiecte mail/')" \
+  "$(q s2 "SELECT EXISTS (SELECT 1 FROM storage.objects WHERE left(name, 5) = 'mail/') AND to_regclass('public.red_mail_primite') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'red_storage_sel' AND qual LIKE '%mail/%')")")"
+echo "S2-control (mutație): revenirea j fără blocări"
+fara_lock "$R/supabase/revenire/20261130j_redari_mail_f1_schema_ROLLBACK.sql" > "$TMP/rj_fara_lock.sql"
+baza s2m j; cursa s2m "$MAIL_SR" rj "$TMP/rj_fara_lock.sql"
+verifica "bug reprodus: ambele rc=0, schema scoasă, obiectul mail/ rămas sub politicile vechi" "$(si "$([ $RC_B = 0 ] && [ $RC_A = 0 ] && echo t)" \
+  "$(q s2m "SELECT to_regclass('public.red_mail_primite') IS NULL AND EXISTS (SELECT 1 FROM storage.objects WHERE left(name, 5) = 'mail/')")")"
+
+echo "S3 (r1 P1-3): revenirea k cu un eveniment red_mail_* inserat concurent"
+baza s3 jk; cursa s3 "INSERT INTO public.red_mail_evenimente (tip, casuta, numar) VALUES ('spam_numarat', 'redari@gazpet.ro', 1)" rk "$R/supabase/revenire/20261130k_redari_mail_f1_reguli_ROLLBACK.sql"
+verifica "B comis, A refuzată (REFUZATA), evenimentul lui B prezent, regulile rămân" "$(si "$([ $RC_B = 0 ] && [ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130k revenire REFUZATA: regulile protejeaza deja date')" \
+  "$(q s3 "SELECT (SELECT count(*) FROM public.red_mail_evenimente) = 1 AND to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NOT NULL")")"
+
+echo "S4 (L01 pe apply j): un obiect mail/ urcat concurent de un editor (politica veche încă permite)"
+baza s4 -; cursa s4 "SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000a3\",\"role\":\"authenticated\"}', true); SET LOCAL ROLE authenticated; INSERT INTO storage.objects (bucket_id, name) VALUES ('redari', 'mail/redari/x')" \
+  j "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql"
+verifica "B comis, A refuzată cu motivul exact, obiectul prezent, j neaplicată" "$(si "$([ $RC_B = 0 ] && [ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130j: exista deja obiecte sub redari/mail/ (asteptat 0)')" \
+  "$(q s4 "SELECT to_regclass('public.red_mail_primite') IS NULL AND EXISTS (SELECT 1 FROM storage.objects WHERE name = 'mail/redari/x')")")"
+
+# Regula r3 / r4 (Jak #987): lock_timeout 500ms (per achiziție de lock) reduce riscul ca o tranzacție a aplicației să fie anulată;
+# NU îl elimină — un scriitor care așteaptă deja poate fi ales de detectorul de deadlock (presupune deadlock_timeout implicit și în sesiunea lui).
+# Risc rezidual acceptat doar prin aplicare noaptea, cu reluare la eșec.
+# În cursele de mai jos (scriitorul începe să aștepte DUPĂ migrare) scriitorul termină și nu apare „deadlock detected”. Controalele rulează aceeași cursă cu lock_timeout 5 s (> deadlock_timeout): apare deadlock-ul.
+# cursa2: $1 = db, $2 = pasul 1 al lui B (ține deja ce ține un scriitor real), $3 = pasul 2 al lui B (după barieră), $4 = fișierul j pentru A
+cursa2() {
+  local db=$1
+  printf "SET application_name = 'scriitor_B';\nBEGIN;\n%s;\nDO \$w\$ DECLARE %s \$w\$;\n%s;\nCOMMIT;\n" "$2" \
+    "$(printf "$BUCLA" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'migrare_A' AND wait_event_type = 'Lock')" "bariera_B")" "$3" > "$TMP/b_$db.sql"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$db" -f "$TMP/b_$db.sql" > "$TMP/b_$db.out" 2>&1 &
+  local pb=$!
+  bariera "$db" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'scriitor_B' AND state = 'active' AND query LIKE '%bariera_B%')" "B_pasul_1"
+  aplica "$db" j "$4" > "$TMP/a_$db.out" 2>&1 &
+  local pa=$!
+  wait $pa; RC_A=$?; wait $pb; RC_B=$?
+  OUT_A=$(cat "$TMP/a_$db.out"); OUT_B=$(cat "$TMP/b_$db.out")
+}
+# rezultatul acceptat al migrării: fie a reușit (j aplicată), fie a renunțat cu „lock timeout” (j absentă); în ambele cazuri fără deadlock
+migrare_ok_sau_renunta() { # $1 = db
+  if [ $RC_A = 0 ]; then q "$1" "SELECT to_regclass('public.red_mail_primite') IS NOT NULL"
+  else si "$(are "$OUT_A" 'canceling statement due to lock timeout')" "$(q "$1" "SELECT to_regclass('public.red_mail_primite') IS NULL")"; fi
+}
+cu_5s() { sed -e "s/PERFORM set_config('lock_timeout', '500ms', true);/PERFORM set_config('lock_timeout', '5s', true);/" -e "s/IF current_setting('deadlock_timeout')::interval <= current_setting('lock_timeout')::interval THEN/IF false THEN/" "$1"; }
+
+# S5 (r2 P1): scriitorul telefonic manual (editor) a atins deja red_raspunsuri (ROW EXCLUSIVE) când pornește j; apoi, cu j blocată, își face
+# INSERT-ul, care are nevoie de red_jurnal (triggerul de jurnal).
+TEL="LOCK TABLE public.red_raspunsuri IN ROW EXCLUSIVE MODE; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-0000000000a3\",\"role\":\"authenticated\"}', true)"
+TEL_PAS2="SET LOCAL ROLE authenticated; INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES ('00000000-0000-0000-0000-00000000e002', 'telefon', 'nu_particip_fara_obiectii')"
+echo "S5 (r2 P1 + regula r3): scriitor telefonic manual concurent cu apply j"
+baza s5 -; cursa2 s5 "$TEL" "$TEL_PAS2" "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql"
+verifica "B comis (răspunsul telefonic prezent), fără deadlock, migrarea reușită sau renunțată cu lock timeout (A rc=$RC_A)" "$(si "$([ $RC_B = 0 ] && echo t)" \
+  "$(are "$OUT_A$OUT_B" 'deadlock' | tr tf ft)" "$(migrare_ok_sau_renunta s5)" \
+  "$(q s5 "SELECT EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE canal = 'telefon' AND detinator_id = '00000000-0000-0000-0000-00000000e002')")")"
+echo "S5-control (mutație): j cu ordinea veche (red_jurnal înaintea tabelelor Redări) și lock_timeout 5 s"
+grep -v -E '^  LOCK TABLE public[.]red_(raspunsuri|detinatori|parcele|corespondenta|corespondenta_fisiere) IN' "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql" > "$TMP/j_v1.sql"
+cu_5s "$TMP/j_v1.sql" > "$TMP/j_ordine_veche.sql"
+baza s5m -; cursa2 s5m "$TEL" "$TEL_PAS2" "$TMP/j_ordine_veche.sql"
+verifica "bug reprodus: deadlock detectat" "$(are "$OUT_A$OUT_B" 'deadlock detected')"
+
+# S6 (r3 P1): inserarea unui fișier de_trimis (triggerele LIVE din schelet). Pasul 1 al lui B = ce face triggerul BEFORE înainte de inserare:
+# citește red_proiecte și blochează rândul red_corespondenta (FOR UPDATE OF c); pasul 2 = INSERT-ul real (BEFORE + AFTER: UPDATE red_corespondenta).
+FIS1="SELECT c.stare FROM public.red_corespondenta c JOIN public.red_proiecte p ON p.id = c.proiect_id WHERE c.id = '00000000-0000-0000-0000-00000000f001' FOR UPDATE OF c"
+FIS2="INSERT INTO public.red_corespondenta_fisiere (corespondenta_id, rol, path, marime, sha256, storage_etag) VALUES ('00000000-0000-0000-0000-00000000f001', 'de_trimis', 'TEST-MAIL/corespondenta/C1/d1.pdf', 10, repeat('a', 64), 'x')"
+obiect_fis() { q "$1" "INSERT INTO storage.objects (bucket_id, name, metadata) VALUES ('redari', 'TEST-MAIL/corespondenta/C1/d1.pdf', jsonb_build_object('eTag', 'e1', 'size', 10))" > /dev/null; }
+fis_comis() { q "$1" "SELECT EXISTS (SELECT 1 FROM public.red_corespondenta_fisiere WHERE path = 'TEST-MAIL/corespondenta/C1/d1.pdf' AND storage_etag = 'e1') AND (SELECT versiune FROM public.red_corespondenta WHERE id = '00000000-0000-0000-0000-00000000f001') = 2"; }
+echo "S6 (r3 P1): inserare fișier de_trimis intercalată cu apply j"
+baza s6 -; obiect_fis s6; cursa2 s6 "$FIS1" "$FIS2" "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql"
+verifica "B comis (fișierul + UPDATE-ul corespondenței), fără deadlock, migrarea renunțată cu lock timeout sau reușită (A rc=$RC_A)" "$(si "$([ $RC_B = 0 ] && echo t)" \
+  "$(are "$OUT_A$OUT_B" 'deadlock' | tr tf ft)" "$(migrare_ok_sau_renunta s6)" "$(fis_comis s6)")"
+echo "S6-control (mutație): aceeași cursă cu lock_timeout 5 s (peste deadlock_timeout)"
+cu_5s "$R/supabase/migrations/20261130j_redari_mail_f1_schema.sql" > "$TMP/j_5s.sql"
+baza s6m -; obiect_fis s6m; cursa2 s6m "$FIS1" "$FIS2" "$TMP/j_5s.sql"
+verifica "bug reprodus: deadlock detectat (fără regula r3, detectorul decide)" "$(are "$OUT_A$OUT_B" 'deadlock detected')"
+
+# S0 (Copilot #987 P2-01, o singură sesiune): owner-ul a fixat retentie_mail_pana după j + k → revenirea k REFUZĂ (altfel gardul owner ar
+# dispărea peste o valoare existentă); la fel dacă rândul inițial red_mail_flux a fost atins (versiune 2), chiar cu comutatoarele oprite.
+echo "S0 (Copilot P2-01): revenirea k cu retentie_mail_pana fixată / cu rândul inițial de flux atins"
+baza s0 jk
+q s0 "UPDATE public.red_proiecte SET retentie_mail_pana = DATE '2031-12-31'" > /dev/null
+RC_B=0; OUT_B=""; OUT_A=$(aplica s0 rk "$R/supabase/revenire/20261130k_redari_mail_f1_reguli_ROLLBACK.sql"); RC_A=$?
+verifica "revenirea k refuzată (REFUZATA … termene retentie_mail_pana), regulile și gardul owner rămân" "$(si "$([ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130k revenire REFUZATA: regulile protejeaza deja date')" \
+  "$(q s0 "SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_red_proiecte_retentie_mail') AND (SELECT count(*) FROM public.red_proiecte WHERE retentie_mail_pana IS NOT NULL) = 1")")"
+baza s0b jk
+q s0b "UPDATE public.red_mail_flux SET ultima_eroare_cod = 'x' WHERE casuta = 'redari-test@gazpet.ro'; UPDATE public.red_mail_flux SET ultima_eroare_cod = NULL WHERE casuta = 'redari-test@gazpet.ro'" > /dev/null
+OUT_A=$(aplica s0b rk "$R/supabase/revenire/20261130k_redari_mail_f1_reguli_ROLLBACK.sql"); RC_A=$?
+verifica "revenirea k refuzată cu fluxul atins (versiune 3, valori revenite la implicit)" "$(si "$([ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" '20261130k revenire REFUZATA')" "$(q s0b "SELECT to_regprocedure('public.fn_red_mail_are_legatura_juridica(uuid)') IS NOT NULL")")"
+
+# S7 (Copilot #987 P2-02): două sesiuni marchează simultan obiecte DIFERITE ale aceluiași mesaj în ștergere. Triggerul (EXISTS) nu vede
+# rândul necomis al celeilalte sesiuni; indexul UNIQUE parțial (primit_id) WHERE stare = 'in_stergere' serializează: exact una trece.
+cursa_sql() { # $1 = db, $2 = SQL B (necomis până A e blocat pe B SAU a comis deja altă ștergere — controlul fără index), $3 = SQL A
+  local db=$1
+  printf "SET application_name = 'scriitor_B';\nBEGIN;\n%s;\nDO \$w\$ DECLARE %s \$w\$;\nCOMMIT;\n" "$2" \
+    "$(printf "$BUCLA" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'migrare_A' AND wait_event_type = 'Lock') OR (SELECT count(*) FROM public.red_mail_obiecte WHERE stare = 'in_stergere') >= 2" "bariera_B")" > "$TMP/b_$db.sql"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$db" -f "$TMP/b_$db.sql" > "$TMP/b_$db.out" 2>&1 &
+  local pb=$!
+  bariera "$db" "EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'scriitor_B' AND state = 'active' AND query LIKE '%bariera_B%')" "B_a_marcat"
+  printf "SET application_name = 'migrare_A';\nBEGIN;\n%s;\nCOMMIT;\n" "$3" > "$TMP/a_$db.sql"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres -d "$db" -f "$TMP/a_$db.sql" > "$TMP/a_$db.out" 2>&1 &
+  local pa=$!
+  wait $pa; RC_A=$?; wait $pb; RC_B=$?
+  OUT_A=$(cat "$TMP/a_$db.out"); OUT_B=$(cat "$TMP/b_$db.out")
+}
+H7=$(printf '7%.0s' $(seq 1 64))
+mesaj_in_golire() { # un mesaj cu 2 obiecte stocate, în golire (pașii valizi ai mașinii de stări, ca mentenanța)
+  q "$1" "INSERT INTO public.red_mail_primite (id, casuta, test, gmail_id, gmail_id_hmac, hmac_versiune, primit_la) VALUES ('00000000-0000-0000-0000-0000000007a1', 'redari@gazpet.ro', false, 'g7', '$H7', 1, now());
+          INSERT INTO public.red_mail_obiecte (id, primit_id, tip, nr, cale) VALUES
+            ('00000000-0000-0000-0000-0000000007b1', '00000000-0000-0000-0000-0000000007a1', 'eml', 0, 'mail/redari/carantina/$H7.eml'),
+            ('00000000-0000-0000-0000-0000000007b2', '00000000-0000-0000-0000-0000000007a1', 'atasament', 1, 'mail/redari/atasamente/$H7/1');
+          UPDATE public.red_mail_obiecte SET stare = 'stocat', sha256 = repeat('e', 64), marime = 1 WHERE primit_id = '00000000-0000-0000-0000-0000000007a1';
+          UPDATE public.red_mail_primite SET stare_ingestie = 'ok', ingestie_finalizata_la = now() WHERE id = '00000000-0000-0000-0000-0000000007a1';
+          UPDATE public.red_mail_primite SET retentie_stare = 'in_golire', golire_claim_token = gen_random_uuid(), golire_claim_pana = now() + interval '5 minutes' WHERE id = '00000000-0000-0000-0000-0000000007a1';" > /dev/null
+}
+STERGE1="UPDATE public.red_mail_obiecte SET stare = 'in_stergere', stergere_autorizata_la = now() WHERE id = '00000000-0000-0000-0000-0000000007b1'"
+STERGE2="UPDATE public.red_mail_obiecte SET stare = 'in_stergere', stergere_autorizata_la = now() WHERE id = '00000000-0000-0000-0000-0000000007b2'"
+echo "S7 (Copilot P2-02): două autorizări de ștergere concurente pe același mesaj"
+baza s7 jk; mesaj_in_golire s7; cursa_sql s7 "$STERGE1" "$STERGE2"
+verifica "exact una trece: B comis, A refuzată de indexul unic (23505), un singur obiect in_stergere" "$(si "$([ $RC_B = 0 ] && [ $RC_A != 0 ] && echo t)" \
+  "$(are "$OUT_A" 'red_mail_obiecte_un_in_stergere_uq')" \
+  "$(q s7 "SELECT (SELECT count(*) FROM public.red_mail_obiecte WHERE stare = 'in_stergere') = 1 AND EXISTS (SELECT 1 FROM public.red_mail_obiecte WHERE id = '00000000-0000-0000-0000-0000000007b1' AND stare = 'in_stergere')")")"
+echo "S7-control (mutație): aceeași cursă fără indexul unic parțial"
+baza s7m jk; mesaj_in_golire s7m; q s7m "DROP INDEX public.red_mail_obiecte_un_in_stergere_uq" > /dev/null; cursa_sql s7m "$STERGE1" "$STERGE2"
+verifica "bug reprodus: ambele trec, două obiecte in_stergere pe același mesaj" "$(si "$([ $RC_B = 0 ] && [ $RC_A = 0 ] && echo t)" \
+  "$(q s7m "SELECT (SELECT count(*) FROM public.red_mail_obiecte WHERE stare = 'in_stergere') = 2")")"
+
+for d in s0 s0b s1 s1m s2 s2m s3 s4 s5 s5m s6 s6m s7 s7m; do "$PSQL" -X -q -h localhost -p "$PORT" -U postgres -d postgres -c "DROP DATABASE IF EXISTS $d" > /dev/null 2>&1; done
+[ $ESEC = 0 ] && echo "CONCURENȚĂ: TOATE OK" || { echo "CONCURENȚĂ: EȘEC"; exit 1; }
