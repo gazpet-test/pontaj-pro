@@ -126,6 +126,59 @@ BEGIN
   END LOOP;
   PERFORM pg_temp.pr2_verifica_baza(); -- restaurarea baseline-ului legitim este obligatorie
 END $mutanti_tranzitivi$;
+-- R3: fiecare trigger anti-escaladare si callee tranzitiv este atacat separat, apoi restaurat.
+DO $mutanti_anti_escaladare$
+DECLARE r record; def text; corp text; refuz boolean; mesaj text;
+BEGIN
+  FOR r IN
+    SELECT t.n,t.f,m.mod FROM (VALUES
+      ('prevent_role_escalation_trigger','public.prevent_role_escalation()'),
+      ('trg_enforce_owner_only_salary_flags','public.enforce_owner_only_salary_flags()'),
+      ('trg_profiles_campuri_owner_only','public.fn_profiles_campuri_owner_only()'),
+      ('trg_profiles_protectie_legatura','public.fn_profiles_protectie_legatura()'),
+      ('trg_protect_can_access_pontaj_brut','public.protect_can_access_pontaj_brut()')
+    ) t(n,f) CROSS JOIN (VALUES ('dezactivat'),('corp')) m(mod)
+    UNION ALL SELECT NULL,f,'corp' FROM (VALUES
+      ('public.fn_identitate_privilegiata()'),('public.fn_identitate_eticheta()'),('public.fn_identitate_claims()')
+    ) c(f)
+  LOOP
+    BEGIN
+      IF r.mod='dezactivat' THEN
+        EXECUTE format('ALTER TABLE public.profiles DISABLE TRIGGER %I',r.n);
+        mesaj:='PR2: trigger autorizare: profiles.'||r.n;
+      ELSE
+        SELECT pg_get_functiondef(p.oid),p.prosrc INTO STRICT def,corp FROM pg_proc p WHERE p.oid=to_regprocedure(r.f);
+        EXECUTE replace(def,corp,corp||E'\n-- FICTIV MUTANT R3 anti-escaladare\n');
+        mesaj:='PR2: functie autorizare in afara baseline: '||r.f;
+      END IF;
+      refuz:=false;
+      BEGIN PERFORM pg_temp.pr2_verifica_baza();
+      EXCEPTION WHEN raise_exception THEN
+        IF SQLERRM<>mesaj THEN RAISE; END IF;
+        refuz:=true;
+      END;
+      IF NOT refuz THEN RAISE EXCEPTION 'DRY mutant anti-escaladare acceptat % %',r.f,r.mod; END IF;
+      RAISE EXCEPTION 'FICTIV rollback mutant anti-escaladare' USING ERRCODE='ZX002';
+    EXCEPTION WHEN SQLSTATE 'ZX002' THEN NULL;
+    END;
+    PERFORM pg_temp.pr2_verifica_baza(); -- verificare explicita dupa FIECARE restaurare
+  END LOOP;
+  -- Un trigger nou pe UMA ar putea rescrie drepturile: inventarul zero este verificat, nu presupus.
+  BEGIN
+    CREATE TRIGGER pr2_fictiv_uma BEFORE UPDATE ON public.user_module_access
+      FOR EACH ROW EXECUTE FUNCTION public.prevent_role_escalation();
+    refuz:=false;
+    BEGIN PERFORM pg_temp.pr2_verifica_baza();
+    EXCEPTION WHEN raise_exception THEN
+      IF SQLERRM<>'PR2: inventar triggere autorizare' THEN RAISE; END IF;
+      refuz:=true;
+    END;
+    IF NOT refuz THEN RAISE EXCEPTION 'DRY trigger UMA suplimentar acceptat'; END IF;
+    RAISE EXCEPTION 'FICTIV rollback inventar UMA' USING ERRCODE='ZX002';
+  EXCEPTION WHEN SQLSTATE 'ZX002' THEN NULL;
+  END;
+  PERFORM pg_temp.pr2_verifica_baza();
+END $mutanti_anti_escaladare$;
 INSERT INTO auth.users(id,email) VALUES
  ('00000000-0000-4000-8000-00000031d001','pr2.editor@example.invalid'),
  ('00000000-0000-4000-8000-00000031d002','pr2.viewer@example.invalid'),
@@ -194,6 +247,25 @@ BEGIN
 END $fixture$;
 GRANT SELECT,UPDATE ON pr2_cazuri,pr2_det TO authenticated;
 SET LOCAL ROLE authenticated;
+-- R3: politica update_own ramane legitima, dar NU permite autoatribuirea is_owner.
+DO $profil_editor$
+DECLARE n int; refuz boolean:=false;
+BEGIN
+  IF auth.uid() IS DISTINCT FROM '00000000-0000-4000-8000-00000031d001'::uuid
+    OR public.fn_red_nivel() IS DISTINCT FROM 'editor' THEN RAISE EXCEPTION 'DRY identitate editor non-owner'; END IF;
+  UPDATE public.profiles SET name='FICTIV PR3 EDITOR' WHERE id=auth.uid();
+  GET DIAGNOSTICS n=ROW_COUNT;
+  IF n<>1 OR (SELECT name FROM public.profiles WHERE id=auth.uid()) IS DISTINCT FROM 'FICTIV PR3 EDITOR' THEN
+    RAISE EXCEPTION 'DRY update legitim al propriului nume refuzat'; END IF;
+  BEGIN
+    UPDATE public.profiles SET is_owner=true WHERE id=auth.uid();
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM<>'Doar owners pot schimba flag-ul is_owner' THEN RAISE; END IF;
+    refuz:=true;
+  END;
+  IF NOT refuz OR (SELECT is_owner FROM public.profiles WHERE id=auth.uid()) IS DISTINCT FROM false
+    OR public.fn_red_nivel() IS DISTINCT FROM 'editor' THEN RAISE EXCEPTION 'DRY autoatribuire owner permisa'; END IF;
+END $profil_editor$;
 DO $semnaturi$
 DECLARE r record;v public.red_procese_verbale;b public.red_procese_verbale;
 BEGIN

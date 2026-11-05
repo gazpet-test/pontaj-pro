@@ -20,7 +20,7 @@ BEGIN
 END $start$;
 -- Prefix rezervat verificarii temporare; permite apply/revenire/re-apply in aceeasi tranzactie.
 DROP VIEW IF EXISTS pg_temp.pr2_tronson_baseline;
-DROP TABLE IF EXISTS pg_temp.pr2_auth_tabele,pg_temp.pr2_auth_coloane,pg_temp.pr2_auth_politici;
+DROP TABLE IF EXISTS pg_temp.pr2_auth_tabele,pg_temp.pr2_auth_coloane,pg_temp.pr2_auth_politici,pg_temp.pr2_auth_triggere,pg_temp.pr2_auth_functii;
 DROP TABLE IF EXISTS pg_temp.pr2_functii,pg_temp.pr2_coloane,pg_temp.pr2_tables,pg_temp.pr2_triggers;
 CREATE TEMP TABLE pg_temp.pr2_functii(sig text,corp text,ret text,retset boolean,lang text,definer boolean,vol text,config text[],acl text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.pr2_functii VALUES
@@ -312,6 +312,34 @@ INSERT INTO pg_temp.pr2_auth_politici VALUES
  ('user_module_access','user_module_access_delete_owner','d','8d156f05d1916a18e703d322295e7715','<NULL>'),
  ('user_module_access','user_module_access_insert_owner','a','<NULL>','8d156f05d1916a18e703d322295e7715'),
  ('user_module_access','user_module_access_update_owner','w','8d156f05d1916a18e703d322295e7715','8d156f05d1916a18e703d322295e7715');
+-- R3: inventar fix al surselor de autorizare. Cele 5 triggere profiles, 0 user_module_access.
+-- Model: 20261003d:96 + SEC F2; protectia legaturii si callees din 20260929c.
+-- Corpurile S-A / prevent_role sunt confirmate si de captura versionata E3 baseline_pre_e3.json.
+CREATE TEMP TABLE pg_temp.pr2_auth_triggere(t text,n text,f text) ON COMMIT DROP;
+INSERT INTO pg_temp.pr2_auth_triggere VALUES
+ ('profiles','prevent_role_escalation_trigger','public.prevent_role_escalation()'),
+ ('profiles','trg_enforce_owner_only_salary_flags','public.enforce_owner_only_salary_flags()'),
+ ('profiles','trg_profiles_campuri_owner_only','public.fn_profiles_campuri_owner_only()'),
+ ('profiles','trg_profiles_protectie_legatura','public.fn_profiles_protectie_legatura()'),
+ ('profiles','trg_protect_can_access_pontaj_brut','public.protect_can_access_pontaj_brut()');
+CREATE TEMP TABLE pg_temp.pr2_auth_functii(sig text,corp text,ret text,acl text[]) ON COMMIT DROP;
+INSERT INTO pg_temp.pr2_auth_functii VALUES
+-- 20260930j_sec_f2_profiles_uid_null.sql
+('public.prevent_role_escalation()','cf75b37d522e2a6b0b9c9eabd72c27b4','trigger',ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
+-- 20260930j_sec_f2_profiles_uid_null.sql
+('public.enforce_owner_only_salary_flags()','daaa561298c10c259944600e6c39467e','trigger',ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
+-- 20260930j_sec_f2_profiles_uid_null.sql
+('public.protect_can_access_pontaj_brut()','2eec050b53f37ec995da79e93a2a4686','trigger',ARRAY['postgres=X/postgres','service_role=X/postgres']::text[]),
+-- 20260930a_profiles_campuri_owner_only_extins.sql
+('public.fn_profiles_campuri_owner_only()','1114af39c13e295dd2ab666dab495567','trigger',ARRAY['postgres=X/postgres']::text[]),
+-- 20260929c_conturi_legare_automata.sql
+('public.fn_profiles_protectie_legatura()','0908c8b0c23fd1cb16b16a5764a2d1ba','trigger',ARRAY['postgres=X/postgres']::text[]),
+-- 20260929c_conturi_legare_automata.sql
+('public.fn_identitate_privilegiata()','13b245513eed1f7f3848ce4edbcec383','text',ARRAY['postgres=X/postgres']::text[]),
+-- 20260929c_conturi_legare_automata.sql
+('public.fn_identitate_eticheta()','876a28f98d4f4aee76a0580dab4ecc51','text',ARRAY['postgres=X/postgres']::text[]),
+-- 20260929c_conturi_legare_automata.sql
+('public.fn_identitate_claims()','38ae236ba115299721c020bdcfbeeb16','record',ARRAY['postgres=X/postgres']::text[]);
 -- L15: allow-list fixe din migrarile versionate; NU invatam amprente din catalogul curent.
 CREATE OR REPLACE FUNCTION pg_temp.pr2_verifica_baza() RETURNS void
 LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $baza$
@@ -369,6 +397,39 @@ BEGIN
       AND coalesce(md5(pg_get_expr(p.polwithcheck,p.polrelid)),'<NULL>')=r.w) THEN
       RAISE EXCEPTION 'PR2: politica autorizare: %.%',r.t,r.n; END IF;
   END LOOP;
+  -- R3: nu ajunge RLS profiles_update_own; is_owner este protejat de triggere.
+  -- Exact toate triggerele non-interne pe ambele surse: lipsa/extra = refuz (inclusiv UMA, asteptat 0).
+  IF EXISTS (SELECT 1 FROM pg_temp.pr2_auth_tabele b WHERE
+      (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid=to_regclass('public.'||b.t) AND NOT t.tgisinternal)
+        <> (SELECT count(*) FROM pg_temp.pr2_auth_triggere a WHERE a.t=b.t)) THEN
+    RAISE EXCEPTION 'PR2: inventar triggere autorizare'; END IF;
+  FOR r IN SELECT * FROM pg_temp.pr2_auth_triggere LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('public.'||r.t)
+      AND t.tgname=r.n AND t.tgfoid=to_regprocedure(r.f) AND t.tgenabled='O' AND t.tgtype=19
+      AND t.tgqual IS NULL AND t.tgattr::text='' AND t.tgnargs=0
+      AND NOT t.tgisinternal AND NOT t.tgdeferrable AND NOT t.tginitdeferred
+      AND t.tgconstraint=0 AND t.tgconstrrelid=0 AND t.tgconstrindid=0 AND t.tgoldtable IS NULL AND t.tgnewtable IS NULL) THEN
+      RAISE EXCEPTION 'PR2: trigger autorizare: %.%',r.t,r.n; END IF;
+  END LOOP;
+  -- Lant inchis: triggere -> fn_identitate_privilegiata/eticheta -> fn_identitate_claims.
+  -- Celelalte triggere apeleaza auth.uid(), deja amprentata mai sus. Nu urmam un callee necunoscut din live.
+  -- Corpuri exacte din surse revizuite exclud EXECUTE dinamic; niciun search_path mostenit.
+  FOR r IN SELECT * FROM pg_temp.pr2_auth_functii LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang
+      WHERE p.oid=to_regprocedure(r.sig) AND md5(p.prosrc)=r.corp AND l.lanname='plpgsql'
+      AND pg_get_userbyid(p.proowner)='postgres' AND p.prosecdef AND p.provolatile='v'
+      AND p.proconfig=ARRAY['search_path=public, pg_temp'] AND p.prorettype=to_regtype(r.ret)
+      AND NOT p.proretset AND p.pronargs=0 AND p.provariadic=0
+      AND p.proargtypes=''::oidvector AND p.proargdefaults IS NULL
+      AND p.proargnames IS NOT DISTINCT FROM CASE WHEN r.sig='public.fn_identitate_claims()' THEN ARRAY['rol','sub']::text[] END
+      AND p.proargmodes IS NOT DISTINCT FROM CASE WHEN r.sig='public.fn_identitate_claims()' THEN ARRAY['o','o']::"char"[] END
+      AND p.proallargtypes IS NOT DISTINCT FROM CASE WHEN r.sig='public.fn_identitate_claims()' THEN ARRAY['text'::regtype::oid,'text'::regtype::oid] END
+      AND (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(p.proacl::text[]) x)=r.acl) THEN
+      RAISE EXCEPTION 'PR2: functie autorizare in afara baseline: %',r.sig; END IF;
+  END LOOP;
+  -- RLS ar fi inert daca rolurile client ar deveni SUPERUSER / BYPASSRLS.
+  IF (SELECT count(*) FROM pg_roles WHERE rolname IN ('anon','authenticated') AND NOT rolsuper AND NOT rolbypassrls)<>2 THEN
+    RAISE EXCEPTION 'PR2: roluri client ocolesc RLS'; END IF;
   -- fn_red_pv_c_neacoperite -> red_v_tronson -> red_v_stare_parcela -> fn_red_nivel.
   IF pg_get_viewdef('public.red_v_tronson'::regclass,true) IS DISTINCT FROM pg_get_viewdef('pg_temp.pr2_tronson_baseline'::regclass,true)
     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid='public.red_v_tronson'::regclass AND c.relkind='v'
