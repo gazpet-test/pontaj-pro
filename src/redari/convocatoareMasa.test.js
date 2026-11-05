@@ -33,7 +33,7 @@ const conv = (o) => ({ calitate_document: 'proprietar', canal: 'posta', stare: '
 // fn_red_convocare_rezerva simulat ca migrarea 20261130l: P0002 (șters), RD002 (împuternicire lipsă, recitită din tabelă), RD001 (convocare
 // activă neexpediată, inclusiv fără număr), 55P03 (UAT ocupat), apoi număr + INSERT; o eroare NU consumă număr (tranzacția se anulează).
 // cuRpc: false = PGRST202 (migrarea neaplicată).
-function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRpc = true, capPagina = Infinity, inainteDeRezervare, uatOcupat = false, inainteDeCitire, informarePublicata = true } = {}) {
+function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRpc = true, capPagina = Infinity, inainteDeRezervare, uatOcupat = false, inainteDeCitire, informarePublicata = true, respectaProiectia = false } = {}) {
   const jurnal = { rpc: [], numere: 0, apeluriRezerva: 0, inserturi: [], updateuri: [], upload: [], download: [] }
   let contor = 100
   const builder = (tab) => {
@@ -66,6 +66,9 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
         const pr = tabele.red_proiecte.find(x => x.id === p?.proiect_id)
         return { ...c, detinator: d && { calitate: d.calitate, parcela: p && { proiect: pr } } }
       })
+      if (respectaProiectia && tab === 'red_convocari' && !proiectie.includes('detinator:red_detinatori')) {
+        l = l.map(r => Object.fromEntries(proiectie.split(',').map(c => c.trim()).map(c => [c, r[c]])))
+      }
       if (maybe) return { data: l[0] ?? null, error: null }
       if (single) return l[0] ? { data: l[0], error: null } : { data: null, error: { message: 'nu există' } }
       return { data: l, error: null }
@@ -606,4 +609,29 @@ describe('PR3a r3 — intercalare la rezervare si legacy', () => {
     expect(c.jurnal.updateuri.at(-1).calitate_document).toBe('proprietar')
     expect(c.jurnal.download).toEqual([])
   })
+})
+
+
+describe('PR3a r4 — reia pe proiectia PostgREST reala', () => {
+  it.each([['proprietar', 'reia'], [null, 'reincarca'], ['coproprietar', 'reincarca']])(
+    'document arhivat cu stampila %s -> %s, la pregatire si recitire', async (calitateDocument, actiune) => {
+      const t = date(1)
+      t.red_convocari = [conv({ id: 'c-arhivat', detinator_id: 'd0001', nr_document: 'C-0011',
+        fisier_convocator_path: 'FICTIV/C-0011-v1.docx', calitate_document: calitateDocument })]
+      const c = clientFals(t, { respectaProiectia: true })
+      const p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+      expect(p.exclusi).toEqual([])
+      expect(p.plan[0].actiune).toBe(actiune)
+      const { recitesteRand } = await import('./convocatoareMasa.js')
+      const proaspat = await recitesteRand(c, { detinatorId: 'd0001', parcelaId: 'p0001' })
+      expect(proaspat.convocari[0].calitate_document).toBe(calitateDocument)
+      if (actiune === 'reia') {
+        const genereaza = vi.fn(), reincarca = vi.fn()
+        const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL,
+          protectie: true, includeGenerate: true, deps: { genereaza, reincarca } })
+        expect(r.raport[0]).toMatchObject({ actiune: 'reia', stare: 'ok' })
+        expect(genereaza).not.toHaveBeenCalled(); expect(reincarca).not.toHaveBeenCalled()
+        expect(c.jurnal.numere).toBe(0)
+      }
+    })
 })

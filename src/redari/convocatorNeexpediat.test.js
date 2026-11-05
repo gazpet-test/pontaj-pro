@@ -20,7 +20,7 @@ const fakeConvocari = (randuri, { plafon = 1000, suprascrie = () => null } = {})
         const alt = suprascrie(n, st)
         if (alt) return Promise.resolve(alt).then(rez, rej)
         const date = randuri.filter(r => st.in.includes(r.detinator_id) && (st.gt === null || r.id > st.gt)).sort((a, b) => a.id.localeCompare(b.id))
-        return Promise.resolve({ data: date.slice(0, Math.min(plafon, st.limit)), error: null }).then(rez, rej)
+        return Promise.resolve({ data: date.slice(0, Math.min(plafon, st.limit)).map(r => Object.fromEntries(col.split(',').map(c => c.trim()).map(c => [c, r[c]]))), error: null }).then(rez, rej)
       },
     }
     return q
@@ -217,5 +217,17 @@ describe('PR3a r3 — calitatea asteptata nu se reciteste in client', () => {
     rpc.mockClear()
     await expect(rezervaNumarConvocare({ rpc }, { detinatorId: 'd-fictiv' })).rejects.toThrow('Lipsește calitatea așteptată')
     expect(rpc).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('PR3a r4 — proiectia convocarilor arhivate', () => {
+  it('PostgREST returneaza calitate_document ceruta explicit, fara campuri necitite', async () => {
+    const { supabase } = fakeConvocari([{ id: id(1), detinator_id: 'd-fictiv', calitate_document: 'proprietar',
+      fisier_convocator_path: 'FICTIV/C-0001-v1.docx', camp_necerut: 'nu ajunge in client' }])
+    const randuri = await citesteNeexpediatePeDetinatori(supabase, ['d-fictiv'])
+    expect(randuri).toHaveLength(1)
+    expect(randuri[0].calitate_document).toBe('proprietar')
+    expect(randuri[0]).not.toHaveProperty('camp_necerut')
   })
 })

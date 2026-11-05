@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { dataCivilaBucuresti } from './setari.js'
 
 // coloanele necesare (fără PII): numărul, canalul, fișierul (pentru „Descarcă din nou”) și data generării
-export const COL_CONV_NEEXPEDIAT = 'id, detinator_id, canal, nr_document, fisier_convocator_path, created_at'
+export const COL_CONV_NEEXPEDIAT = 'id, calitate_document, detinator_id, canal, nr_document, fisier_convocator_path, created_at'
 
 /** Filtrul „generat, neexpediat”: convocare activă, neștearsă, fără dată de expediere. */
 export const filtruNeexpediate = (q) => q.eq('stare', 'activ').is('data_expediere', null).is('sters_la', null)
