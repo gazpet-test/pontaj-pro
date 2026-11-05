@@ -24,6 +24,7 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
         const lista = await citesteMail(supabase, 'red_mail_loturi', { proiect_id: id, ...(uat ? { uat_id: uat } : {}) }, curent)
         if (!curent()) return
         setLoturi(lista)
+        if (lotId && !lista.some(l => l.id === lotId)) setLotId('')
         if (lotId && lista.some(l => l.id === lotId)) {
           const ms = await citesteMail(supabase, 'red_mail_mesaje', { lot_id: lotId }, curent)
           const h = await hashLot(ms)
@@ -87,6 +88,7 @@ export default function MailLoturiEcran({ proiect, uats, profile }) {
       })}>Creează ciorna pentru previzualizare</button>
     </>}
     {lot && <>
+      <p>UAT lot: {uats.find(u => u.id === lot.uat_id)?.nume || lot.uat_id}</p>
       <p>Stare lot: {lot.stare} · {mesaje.length} destinatari · {mesaje.filter(m => m.stare === 'in_apel').length} trimiteri deja autorizate în curs.</p>
       {mesaje.map(m => <div style={S.card} key={m.id}><b>{m.nr_document} · {m.catre || 'conținut golit'}</b> · {m.stare}<p>{m.subiect_final}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{m.corp_text_final}</pre>{m.atasament_path && <p>Atașament: {m.atasament_nume}</p>}</div>)}
       {lot.stare === 'ciorna' && <>

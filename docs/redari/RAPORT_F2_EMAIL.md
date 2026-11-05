@@ -1,3 +1,67 @@
+# Runda 2 — PR #1000, 05.11.2026
+
+Acest bloc descrie numai runda 2 și prevalează asupra istoricului de mai jos.
+**Toate constatările din brief au corecție locală și teste pregătite; validarea BD/React rămâne deschisă. Transportul este inert.**
+
+Patch-ul r1 a fost verificat cu SHA-256: `396323BFE747DC4E7372ADD81EFCAD9544524B8871EDC3FF543980FCE3010DC9`, apoi aplicat curat cu `git apply --whitespace=nowarn` (exit 0). Git nu era în PATH; s-a folosit executabilul instalat. Fără alte operații Git, commit sau push: interdicția explicită „No Git commit” prevalează asupra cererii contradictorii de commit local.
+
+## Constatări și dovezi R2
+
+| Constatare | Corecție locală / test pregătit |
+| --- | --- |
+| Gemini P1-03 | Politicile SELECT ale celor șase tabele cer `auth.uid() IS NOT NULL AND fn_sms_e_owner() IS TRUE`. DRY `editor_r2`, `admin_r2`, `f2_select_r2`: identitate fictivă auth.users/profiles și acces redari editor, apoi admin, în tranzacția anulată. Fiecare tabel are fixture populat; non-owner vede zero, owner vede rânduri. Fără drepturi noi în migrare. |
+| Gemini P1-01 | CHECK `red_mail_f2_atasament_ck`: toate cinci NULL sau toate prezente, PDF, 5–10000000, SHA lowercase 64 hex. DRY `atasament_r2`: lipsa fiecărei coloane, MIME greșit, ambele limite încălcate, SHA invalid; verifică SQLSTATE și numele constrângerii. Inserare PDF complet pozitivă; lot_creeaza acoperă toate NULL. |
+| Gemini P1-02 | Ștergere inventar → mesaje → antet → lot; părintele și antetul rămân disponibile triggerului mesajului. DRY `retentie_pre_r2` + `sterge_r2`: lot cu fișier fictiv inventariat, confirmat absent în fixture, retenție eligibilă explicit, dispariția tuturor copiilor și audit păstrat. Nu atinge Storage real. |
+| Copilot P2-01 | CHECK `red_mail_f2_inert_ck` impune simultan OFF și extern=false, inclusiv UPDATE privilegiat. `rezultat_r2`: owner authenticated refuzat prin ACL; probe separate ca proprietar BD cu JWT owner verifică CHECK 23514. Nu acordă temporar UPDATE. F2b necesită migrare separată. |
+| Copilot P2-02 | `proceseazaMesaj` refuză la prima instrucțiune când TRANSPORT_REAL_ACTIV=false, fără descărcare, claim, rezultat sau send. Test JS cu incepe=true și toate dependențele spion; vechile teste care presupuneau send/CAS accesibil au fost înlocuite, fără bypass testabil al OFF. |
+| Copilot P2-03 | `fn_red_mail_rezultat`: rezultatul final repetat compară stare, gmail_id, thread_id; același token cu rezultat diferit produce `22023/rezultat_conflict`. DRY `rezultat_r2`: retry identic pozitiv, thread diferit și stare diferită negative. |
+| Copilot P2-04 | `fn_red_mail_lot_creeaza` și `fn_red_mail_f2_setari` verifică FOUND imediat după lock singleton; `22023/setari_absente`. DRY `setari_absente_r2`: absență simulată în subtranzacție anulată, inclusiv restaurarea rândului și triggerului F1 verificată. |
+| Copilot P2-05 + Gemini P1-04 | Doi vectori identici în mailLoturi.test.js și DRY `hash_r2`, cu diacritice/CRLF, fără/cu PDF. Expected literal independent calculat SHA256 .NET pe JSON canonic scris manual; smoke Node confirmă ambele. Contractul ASCII fix + întregi siguri este documentat în ambele implementări canonice. |
+| Gemini P2-02 | `fn_red_mail_f2_optout` refuză motiv NULL, gol/alb sau peste limita existentă, cu `22023/motiv_invalid`, înainte de INSERT. DRY `rezultat_r2`; calea legitimă rămâne în `optout_preview`. |
+| Gemini P2-03 | UI arată numele UAT din `lot.uat_id`, cu fallback la UUID. Schimbarea filtrului resetează selecția lotului; recitirea elimină lotId absent din lista filtrată. Test SSR pentru lot selectat cu filtrul UAT gol. Interacțiunea React nu a fost rulată. |
+
+ENABLE fără FORCE RLS este intenționat: RPC-urile SECURITY DEFINER au nevoie de accesul proprietarului relației; JWT-ul și owner-ul sunt verificate în RPC. Amprenta L15 include OID-uri prin cataloagele serializate; baseline-ul trebuie citit fără DDL concurent. Nu s-a inventat/completat baseline-ul PLACEHOLDER_LIVE.
+
+## Verificări R2 și limite
+
+- Trecut: SHA-256 patch și aplicare curată; `node --check` pe modulul comun și mailLoturi.test.js.
+- Trecut: `node .tmp/f2a-r2-smoke.mjs` — cei doi vectori expliciți și OFF fără niciun apel de dependență.
+- Nerulate, rezervate lui Claude: Vitest (inclusiv SSR nou), build, Deno, PostgreSQL DRY, PostgREST, concurență și apply→rollback→reapply. Testele SQL scrise nu reprezintă rezultate BD.
+- Fără instalări, modificări package.json/lock, credențiale, acces BD, mailuri sau deploy. Numai migrarea nouă 20261131a a fost modificată; migrările aplicate și revenirea lor au rămas intacte. CHECK-ul inert se elimină automat când rollback-ul 20261131a elimină coloanele sale.
+- Skill-ul Supabase indicat în catalog nu a putut fi citit (Access denied în sandbox); nu a fost folosit pentru operații externe.
+- Rămân deschise validarea lui Claude și lipsurile F2 integral deja documentate în istoric. Nu se activează transportul.
+
+## Lecții L01–L25 în runda 2
+
+| Regulă | Cum a fost respectată / limită |
+| --- | --- |
+| L01 | Migrare: FOUND imediat după FOR UPDATE în creare/setări; lock-urile existente păstrate. DRY setari_absente_r2, nerulat. |
+| L02 | Ștergerea și auditul rămân în același RPC; OFF procesor fără efecte. Smoke Node trecut. |
+| L03 | fn_red_mail_rezultat păstrează CAS pe token înainte de idempotență; DRY cas/cas_valid existente și rezultat_r2, nerulate. |
+| L04 | Retry rezultat compară inclusiv thread_id; conflict 22023 explicit. DRY rezultat_r2, nerulat. |
+| L05 | n/a — fără schimbare protocol retry/rezultate ambigue. |
+| L06 | fn_red_mail_lot_sterge_final documentează copii înainte de părinți; mutex setări și lot păstrate. DRY pozitiv, concurență nerulată. |
+| L07 | CHECK atașament/OFF și politica owner impuse în BD, nu doar UI. DRY toate cele șase tabele populate, nerulat. |
+| L08 | RLS și RPC folosesc auth.uid + owner; claims fictive numai în harness DRY. |
+| L09 | DRY editor_r2/admin_r2 verifică rol efectiv și zero rânduri pe fiecare tabel; owner pozitiv. Nerulat. |
+| L10 | n/a — niciun secret sau flux de autentificare nou. |
+| L11 | n/a |
+| L12 | n/a — fără schimbare extragere/inventar de eligibilitate. |
+| L13 | SHA ancorat lowercase; DRY negative pe CHECK exact, motiv exclusiv spații refuzat. Nerulat. |
+| L14 | Numai migrarea nouă neaplicată editată; fără backfill/date business. Runner/revenire păstrate; ciclul complet nerulat. |
+| L15 | Doar documentare: OID-uri în baseline, fără DDL concurent. Baseline live și certificare rămân la Claude. |
+| L16 | Completitudine atașament și SHA de conținut impuse prin CHECK; fără schimbare chei unice. DRY atasament_r2. |
+| L17 | n/a — fără schimbare de logică temporală/numerică business. |
+| L18 | FOUND lipsă refuzat explicit; NULL motiv și rezultat diferit nu devin succes. DRY setari_absente_r2/rezultat_r2. |
+| L19 | Vectori identici JS/SQL cu expected independent explicit; contractul canonic documentat. Smoke JS trecut; SQL nerulat. |
+| L20 | DRY atașament negativ plus PDF complet pozitiv, retry rezultat identic, ștergere eligibilă pozitivă; OFF rămâne independent de versiune. Nerulat SQL. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | n/a — paginarea existentă neschimbată. |
+| L24 | UI resetează lotId la schimbare UAT și invalidează lotul absent sub generația existentă. Test SSR pregătit; cursa/interacțiunea React nerulate. |
+| L25 | Expected independent .NET, vectori Node trecuți, DRY cu FK auth.users/profiles/user_module_access, SET LOCAL ROLE authenticated și refuz exact. Nicio probă BD/Vitest declarată trecută. |
+
+---
 # F2a inert — continuare 05.11.2026
 
 Propunere locală pentru review, **fără aplicare și fără activare**. F2a nu este validat integral. Patch-ul anterior: SHA-256 E5034EF7ECE1A4D3DE50B7C91632D7E38DE0137EA7D363D6D78537C7B047CE8E verificat; aplicat curat cu git apply --whitespace=nowarn, prin executabilul instalat (Git absent din PATH). Fără altă operație Git/commit/push. Interdicția inițială „No Git commit” prevalează asupra cererii contradictorii din livrare.

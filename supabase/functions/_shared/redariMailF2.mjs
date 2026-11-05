@@ -12,6 +12,7 @@ export const textNormal = v => v.normalize('NFC').replace(/\r\n?/g, '\n').replac
 export function antetValid(v, limita = 500) {
   return typeof v === 'string' && v.trim().length > 0 && v.length <= limita && !/[\x00-\x1f\x7f]/.test(v)
 }
+// Contract JS/SQL: chei ASCII fixe și întregi siguri; nu JSON general cu fracții/chei Unicode.
 export function canonic(v) {
   if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return JSON.stringify(v)
   if (Array.isArray(v)) return '[' + v.map(canonic).join(',') + ']'
@@ -82,6 +83,7 @@ export async function compuneMime(m, atasament = null, delimitator = crypto.rand
 }
 /** Transport injectat numai pentru probe. Nu repetă send niciodată la rezultat ambiguu. */
 export async function proceseazaMesaj(m, deps) {
+  if (!TRANSPORT_REAL_ACTIV) return { sarit: true, cod: 'transport_real_oprit' }
   if (m.stare !== 'rezervat') return { stare: m.stare, sarit: true }
   let raw
   try { raw = await compuneMime(m, m.atasament_path ? await deps.descarca(m.atasament_path) : null) }

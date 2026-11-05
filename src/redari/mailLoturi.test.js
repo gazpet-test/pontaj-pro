@@ -8,6 +8,15 @@ const id = '00000000-0000-4000-8000-000000000001'
 const mesaj = () => ({ id, lot_id: id, catre: 'destinatar.fictiv@example.invalid', subiect_final: 'Convocare fictivă', corp_text_final: 'Text fictiv\nLinia 2', corp_html_final: null, message_id: `<${id}@gazpet.ro>`, stare: 'rezervat' })
 const lot = () => ({ id, proiect_id: id, stare: 'aprobat', aprobat_de: id, aprobat_la: new Date().toISOString(), lot_sha256: 'a'.repeat(64), aprobat_lot_sha256: 'a'.repeat(64) })
 const garda = extra => gardaTrimitere({ owner: true, informare: true, setari: { trimitere_oprita: false }, lot: lot(), ...extra })
+// Aceiași vectori ca DRY $hash_r2$. Expected din SHA256 .NET pe JSON canonic scris manual.
+it.each([
+  [false, '84926e2cb15dd2b2d219e296f441177f6a6087a672deabf0a585855e17937604'],
+  [true, 'b1993ca04f6a78edc04a443885b40c2eb03f31f9c121b9f940d97d12bd1752ce'],
+])('paritate SQL/JS: diacritice, CRLF, PDF=%s', async (pdf, expected) => {
+  const m = { ...mesaj(), corp_text_final: 'Țară\r\nLinia 2' }
+  if (pdf) Object.assign(m, { atasament_path: 'FICTIV/convocator.pdf', atasament_nume: 'convocator-fictiv.pdf', atasament_mime: 'application/pdf', atasament_marime: 7, atasament_sha256: 'a'.repeat(64) })
+  expect(await hashMesaj(m)).toBe(expected)
+})
 describe('F2: garzi', () => {
   it('transportul real este oprit în cod', () => expect(TRANSPORT_REAL_ACTIV).toBe(false))
   it('calea legitimă trece gărzile de business', () => expect(garda()).toBe(null))
@@ -62,28 +71,10 @@ describe('F2: rezultat ambiguu / CAS / retry', () => {
     expect(rezultatSend(403, {}).stare).toBe('esuat_sigur')
     expect(rezultatSend(200, { id: 'fake-id', threadId: 'fake-thread' }).stare).toBe('trimis')
   })
-  it('CAS pierdut nu trimite', async () => {
-    const m = mesaj(); m.mesaj_sha256 = await hashMesaj(m)
-    const send = vi.fn(); await proceseazaMesaj(m, { incepe: async () => false, send })
-    expect(send).not.toHaveBeenCalled()
-  })
-  it('retry rezultat BD repetă numai persistarea, send o singură dată', async () => {
-    const m = mesaj(); m.mesaj_sha256 = await hashMesaj(m)
-    const send = vi.fn(async () => { throw new Error('timeout') })
-    const rezultat = vi.fn().mockRejectedValueOnce(new Error('BD')).mockResolvedValue({ stare: 'necunoscut' })
-    await proceseazaMesaj(m, { incepe: async () => true, send, rezultat })
-    expect(send).toHaveBeenCalledTimes(1); expect(rezultat).toHaveBeenCalledTimes(2)
-    expect(rezultat.mock.calls[0][1]).toEqual(rezultat.mock.calls[1][1])
-  })
-  it('două execuții cu același mesaj: un singur câștigător CAS', async () => {
-    const m = mesaj(); m.mesaj_sha256 = await hashMesaj(m)
-    let ocupat = false
-    const send = vi.fn(async () => ({ status: 200, json: async () => ({ id: 'fake-id', threadId: 'fake-thread' }) }))
-    const deps = { incepe: async () => { if (ocupat) return false; ocupat = true; return true }, send, rezultat: async (_, r) => r }
-    await Promise.all([proceseazaMesaj(m, deps), proceseazaMesaj(m, deps)])
-    expect(send).toHaveBeenCalledTimes(1)
-    await proceseazaMesaj({ ...m, stare: 'necunoscut' }, deps)
-    expect(send).toHaveBeenCalledTimes(1)
+  it.each([null, mesaj()])('OFF refuză înainte de validare sau efecte, chiar cu incepe=true: %s', async m => {
+    const deps = { incepe: vi.fn(async () => true), send: vi.fn(), rezultat: vi.fn(), descarca: vi.fn() }
+    expect(await proceseazaMesaj(m, deps)).toEqual({ sarit: true, cod: 'transport_real_oprit' })
+    for (const f of Object.values(deps)) expect(f).not.toHaveBeenCalled()
   })
 })
 describe('F2: handler identitate și oprire', () => {

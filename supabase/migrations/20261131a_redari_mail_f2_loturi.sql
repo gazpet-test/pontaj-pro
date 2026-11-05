@@ -123,6 +123,9 @@ ALTER TABLE public.red_mail_setari
   ADD COLUMN plafon_luna integer NOT NULL DEFAULT 1000 CHECK (plafon_luna BETWEEN 1 AND 1000),
   ADD COLUMN pauza_pana timestamptz,
   ADD COLUMN ultim_apel_la timestamptz;
+-- F2a este inert inclusiv pentru UPDATE direct; F2b va necesita migrare separată.
+ALTER TABLE public.red_mail_setari ADD CONSTRAINT red_mail_f2_inert_ck
+ CHECK (trimitere_oprita IS TRUE AND extern_permis IS FALSE);
 
 CREATE TABLE public.red_mail_loturi (
   id uuid PRIMARY KEY, -- UUID per intenție, reutilizat după timeout
@@ -151,6 +154,10 @@ CREATE TABLE public.red_mail_mesaje (
   message_id text UNIQUE,
   antete_snapshot jsonb,
   atasament_path text, atasament_nume text, atasament_mime text, atasament_sha256 text, atasament_marime bigint,
+  CONSTRAINT red_mail_f2_atasament_ck CHECK (
+    (atasament_path IS NULL AND atasament_nume IS NULL AND atasament_mime IS NULL AND atasament_sha256 IS NULL AND atasament_marime IS NULL)
+    OR (atasament_path IS NOT NULL AND atasament_nume IS NOT NULL AND atasament_mime IS NOT NULL AND atasament_sha256 IS NOT NULL AND atasament_marime IS NOT NULL
+      AND atasament_mime='application/pdf' AND atasament_marime BETWEEN 5 AND 10000000 AND atasament_sha256 ~ '^[0-9a-f]{64}$')),
   mesaj_sha256 text NOT NULL CHECK (mesaj_sha256 ~ '^[0-9a-f]{64}$'),
   stare text NOT NULL DEFAULT 'in_coada' CHECK (stare IN ('in_coada','rezervat','in_apel','trimis','esuat_sigur','necunoscut','esuat_confirmat','anulat')),
   lease_token uuid, lease_pana timestamptz, rezervare_nr integer NOT NULL DEFAULT 0,
@@ -189,6 +196,8 @@ CREATE TABLE public.red_mail_jurnal_f2 (
   creat_la timestamptz NOT NULL DEFAULT now()
 );
 
+-- Contract comun JS/SQL: chei ASCII fixe și numai întregi siguri (±9007199254740991).
+-- Nu este un canonicalizator JSON general pentru chei Unicode sau numere fracționare.
 CREATE FUNCTION public.fn_red_mail_f2_canonic(v jsonb) RETURNS text
 LANGUAGE plpgsql IMMUTABLE SET search_path=public,pg_temp AS $fn$
 BEGIN
@@ -292,6 +301,7 @@ BEGIN
  IF p_subiect IS NULL OR length(btrim(p_subiect)) NOT BETWEEN 1 AND 400 OR p_subiect ~ '[[:cntrl:]]' OR p_text IS NULL OR length(btrim(p_text)) NOT BETWEEN 1 AND 19000 THEN RAISE EXCEPTION 'continut_invalid' USING ERRCODE='22023'; END IF;
  h:=public.fn_red_mail_f2_hash(jsonb_build_object('proiect',p_proiect,'uat',p_uat,'destinatari',(SELECT jsonb_agg(x ORDER BY x) FROM unnest(p_destinatari)x),'subiect',p_subiect,'text',p_text));
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;
  INSERT INTO public.red_mail_loturi(id,proiect_id,uat_id,cerere_sha256,lot_sha256,creat_de) VALUES(p_operatie,p_proiect,p_uat,h,public.fn_red_mail_f2_hash('[]'::jsonb),auth.uid()) ON CONFLICT(id) DO NOTHING RETURNING * INTO existent;
  nou:=FOUND;
  SELECT * INTO existent FROM public.red_mail_loturi WHERE id=p_operatie FOR UPDATE;
@@ -398,7 +408,10 @@ BEGIN
  SELECT * INTO m FROM public.red_mail_mesaje WHERE id=p_mesaj FOR UPDATE;
  IF NOT FOUND OR m.lease_token IS DISTINCT FROM p_token THEN RETURN false; END IF;
  IF p_stare IS NULL OR p_stare NOT IN ('trimis','esuat_sigur','necunoscut') THEN RAISE EXCEPTION 'rezultat_invalid'; END IF;
- IF m.stare=p_stare AND m.gmail_id IS NOT DISTINCT FROM p_gmail_id THEN RETURN true; END IF;
+ IF m.stare IN ('trimis','esuat_sigur','necunoscut') THEN
+  IF (m.stare,m.gmail_id,m.thread_id) IS NOT DISTINCT FROM (p_stare,p_gmail_id,p_thread_id) THEN RETURN true; END IF;
+  RAISE EXCEPTION 'rezultat_conflict' USING ERRCODE='22023';
+ END IF;
  IF m.stare NOT IN ('in_apel','rezervat') THEN RETURN false; END IF;
  IF m.stare='rezervat' AND p_stare<>'esuat_sigur' THEN RETURN false; END IF;
  IF p_stare='trimis' AND (p_gmail_id IS NULL OR p_gmail_id !~ '^[A-Za-z0-9_-]{1,64}$' OR p_thread_id IS NULL OR p_thread_id !~ '^[A-Za-z0-9_-]{1,64}$') THEN RAISE EXCEPTION 'rezultat_invalid'; END IF;
@@ -488,8 +501,9 @@ BEGIN
  IF p_confirm IS NOT TRUE OR l.versiune IS DISTINCT FROM p_versiune OR public.fn_red_mail_f2_retentie_poate(l.id) IS NOT TRUE
  OR EXISTS(SELECT 1 FROM public.red_mail_fisiere_inventar WHERE lot_id=l.id AND stare='de_sters') THEN RAISE EXCEPTION 'retentie_refuzata'; END IF;
  DELETE FROM public.red_mail_fisiere_inventar WHERE lot_id=l.id;
- DELETE FROM public.red_mail_fisiere_inventar_antet WHERE lot_id=l.id;
+ -- Copiii FK înaintea mesajelor; lotul și antetul rămân vii pentru triggerul mesajului.
  DELETE FROM public.red_mail_mesaje WHERE lot_id=l.id;
+ DELETE FROM public.red_mail_fisiere_inventar_antet WHERE lot_id=l.id;
  DELETE FROM public.red_mail_loturi WHERE id=l.id;
  PERFORM public.fn_red_mail_f2_audit(l.id,NULL,'lot_sters_final'); RETURN true;
 END $fn$;
@@ -499,6 +513,7 @@ DECLARE s public.red_mail_setari;
 BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  SELECT * INTO s FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;
  IF p_oprit IS NULL OR p_extern IS NULL THEN RAISE EXCEPTION 'setari_invalide'; END IF;
  -- OFF nu depinde de cotă sau de versiunea dintr-un ecran vechi.
  IF NOT p_oprit AND s.versiune IS DISTINCT FROM p_versiune THEN RAISE EXCEPTION 'versiune_veche'; END IF;
@@ -514,6 +529,9 @@ BEGIN
  -- Ordine: setări -> optout; același mutex ca rezervarea și apel_incepe.
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
  IF public.fn_red_mail_f2_email(p_email) IS NOT TRUE OR p_activ IS NULL THEN RAISE EXCEPTION 'cerere_invalida'; END IF;
+ IF p_motiv IS NULL OR p_motiv !~ '[^[:space:]]' OR length(btrim(p_motiv)) NOT BETWEEN 1 AND 500 THEN
+  RAISE EXCEPTION 'motiv_invalid' USING ERRCODE='22023';
+ END IF;
  INSERT INTO public.red_mail_optout(email,activ,motiv,sursa,setat_de) VALUES(lower(p_email),p_activ,p_motiv,'cerere_om',auth.uid())
  ON CONFLICT(email) DO UPDATE SET activ=excluded.activ,motiv=excluded.motiv,setat_de=auth.uid(),setat_la=now();
  PERFORM public.fn_red_mail_f2_audit(NULL,NULL,'optout'); RETURN true;
@@ -527,7 +545,7 @@ BEGIN
   EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY',t);
   EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC,anon,authenticated,service_role',t);
   EXECUTE format('GRANT SELECT ON public.%I TO authenticated',t);
-  EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL AND public.fn_red_nivel() IN (''admin'',''editor''))',t||'_sel',t);
+  EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL AND public.fn_sms_e_owner() IS TRUE)',t||'_sel',t);
   EXECUTE format('CREATE TRIGGER trg_red_mail_f2_fara_truncate BEFORE TRUNCATE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.fn_red_jurnal_imuabil()',t);
  END LOOP;
  -- Append-only: nu păstrează conținut, nu poate fi rescris prin PostgREST.

@@ -180,5 +180,126 @@ BEGIN
  IF NOT EXISTS(SELECT 1 FROM public.fn_red_mail_destinatari('f2000000-0000-4000-8000-000000000001','f2000000-0000-4000-8000-000000000002') WHERE id='f2000000-0000-4000-8000-000000000004' AND motive=ARRAY['fara_email','canal_postal']) THEN RAISE EXCEPTION 'F2 DRY: fara email/canal postal ascuns'; END IF;
 END $fara_email_preview$;
 SELECT pg_temp.f2_ca(NULL,'postgres');
+-- R2: toate probele de mai jos sunt în tranzacția anulată, exclusiv fixture fictiv.
+DO $hash_r2$
+DECLARE m public.red_mail_mesaje;
+BEGIN
+ m.id:='00000000-0000-4000-8000-000000000001';
+ m.catre:='destinatar.fictiv@example.invalid'; m.subiect_final:='Convocare fictivă';
+ m.corp_text_final:=E'Țară\r\nLinia 2'; m.message_id:='<'||m.id||'@gazpet.ro>';
+ IF public.fn_red_mail_f2_mesaj_hash(m) IS DISTINCT FROM '84926e2cb15dd2b2d219e296f441177f6a6087a672deabf0a585855e17937604' THEN RAISE EXCEPTION 'R2 hash fara PDF'; END IF;
+ m.atasament_path:='FICTIV/convocator.pdf'; m.atasament_nume:='convocator-fictiv.pdf';
+ m.atasament_mime:='application/pdf'; m.atasament_marime:=7; m.atasament_sha256:=repeat('a',64);
+ IF public.fn_red_mail_f2_mesaj_hash(m) IS DISTINCT FROM 'b1993ca04f6a78edc04a443885b40c2eb03f31f9c121b9f940d97d12bd1752ce' THEN RAISE EXCEPTION 'R2 hash PDF'; END IF;
+END $hash_r2$;
+DO $atasament_r2$
+DECLARE m public.red_mail_mesaje; varianta jsonb; cod text; constr text;
+BEGIN
+ INSERT INTO public.red_mail_loturi(id,proiect_id,uat_id,cerere_sha256,lot_sha256,creat_de)
+ SELECT 'f2000000-0000-4000-8000-000000000007',proiect_id,uat_id,cerere_sha256,lot_sha256,creat_de
+ FROM public.red_mail_loturi WHERE id='f2000000-0000-4000-8000-000000000005';
+ SELECT * INTO STRICT m FROM public.red_mail_mesaje WHERE lot_id='f2000000-0000-4000-8000-000000000005';
+ m.id:=gen_random_uuid(); m.lot_id:='f2000000-0000-4000-8000-000000000007'; m.nr_document:='F2-DRY-ATASAMENT';
+ m.message_id:='<'||m.id||'@gazpet.ro>'; m.stare:='in_coada';
+ m.atasament_path:='FICTIV/convocator.pdf'; m.atasament_nume:='convocator-fictiv.pdf';
+ m.atasament_mime:='application/pdf'; m.atasament_marime:=7; m.atasament_sha256:=repeat('a',64);
+ FOR varianta IN SELECT value FROM jsonb_array_elements('[{"atasament_path":null},{"atasament_nume":null},{"atasament_mime":null},{"atasament_sha256":null},{"atasament_marime":null},{"atasament_mime":"text/plain"},{"atasament_marime":4},{"atasament_marime":10000001},{"atasament_sha256":"ABC"}]') LOOP
+  cod:=NULL; constr:=NULL;
+  BEGIN
+   INSERT INTO public.red_mail_mesaje SELECT (jsonb_populate_record(m,varianta)).*;
+  EXCEPTION WHEN OTHERS THEN GET STACKED DIAGNOSTICS cod=RETURNED_SQLSTATE,constr=CONSTRAINT_NAME;
+  END;
+  IF cod IS DISTINCT FROM '23514' OR constr IS DISTINCT FROM 'red_mail_f2_atasament_ck' THEN RAISE EXCEPTION 'R2 atasament invalid acceptat / alt refuz: % % %',varianta,cod,constr; END IF;
+ END LOOP;
+ -- Calea legitimă: toate prezente. Cazul toate NULL e exercitat de lot_creeaza.
+ m.mesaj_sha256:=public.fn_red_mail_f2_mesaj_hash(m);
+ INSERT INTO public.red_mail_mesaje SELECT m.*;
+END $atasament_r2$;
+SELECT pg_temp.f2_ca(current_setting('f2.owner')::uuid,'authenticated');
+SELECT public.fn_red_mail_lot_inchide('f2000000-0000-4000-8000-000000000007',1);
+DO $rezultat_r2$
+DECLARE m uuid:=current_setting('f2.mesaj')::uuid;
+BEGIN
+ IF public.fn_red_mail_rezultat(m,'f2000000-0000-4000-8000-000000000088','esuat_sigur') IS NOT TRUE THEN RAISE EXCEPTION 'R2 retry identic'; END IF;
+ PERFORM pg_temp.f2_refuz(format('SELECT public.fn_red_mail_rezultat(%L,%L,%L,NULL,%L)',m,'f2000000-0000-4000-8000-000000000088','esuat_sigur','alt_thread'),'22023','rezultat_conflict');
+ PERFORM pg_temp.f2_refuz(format('SELECT public.fn_red_mail_rezultat(%L,%L,%L)',m,'f2000000-0000-4000-8000-000000000088','necunoscut'),'22023','rezultat_conflict');
+ PERFORM pg_temp.f2_refuz($q$UPDATE public.red_mail_setari SET trimitere_oprita=false WHERE id=1$q$,'42501');
+ PERFORM pg_temp.f2_refuz($q$UPDATE public.red_mail_setari SET extern_permis=true WHERE id=1$q$,'42501');
+ PERFORM pg_temp.f2_refuz($q$SELECT public.fn_red_mail_f2_optout('fictiv@example.invalid',true,NULL)$q$,'22023','motiv_invalid');
+ PERFORM pg_temp.f2_refuz($q$SELECT public.fn_red_mail_f2_optout('fictiv@example.invalid',true,'')$q$,'22023','motiv_invalid');
+ PERFORM pg_temp.f2_refuz($q$SELECT public.fn_red_mail_f2_optout('fictiv@example.invalid',true,E' \t\n')$q$,'22023','motiv_invalid');
+ PERFORM pg_temp.f2_refuz($q$SELECT public.fn_red_mail_f2_optout('fictiv@example.invalid',true,repeat('x',501))$q$,'22023','motiv_invalid');
+END $rezultat_r2$;
+SELECT pg_temp.f2_ca(NULL,'postgres');
+-- Verifică separat CHECK-ul sub privilegiul proprietarului BD, păstrând identitatea JWT owner.
+-- Nu acordăm UPDATE temporar: calea authenticated de mai sus trebuie să refuze deja prin ACL.
+SELECT set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('f2.owner'),'role','authenticated')::text,true);
+SELECT pg_temp.f2_refuz('UPDATE public.red_mail_setari SET trimitere_oprita=false WHERE id=1','23514');
+SELECT pg_temp.f2_refuz('UPDATE public.red_mail_setari SET extern_permis=true WHERE id=1','23514');
+SELECT pg_temp.f2_ca(NULL,'postgres');
+-- Identitate fictivă reală pe FK auth.users -> profiles -> user_module_access; fără parole.
+INSERT INTO auth.users(id,email) VALUES('f2000000-0000-4000-8000-000000000099','f2-editor@example.invalid');
+INSERT INTO public.profiles(id,email,name,is_owner)
+VALUES('f2000000-0000-4000-8000-000000000099','f2-editor@example.invalid','F2 DRY FICTIV',false)
+ON CONFLICT(id) DO NOTHING;
+INSERT INTO public.user_module_access(profile_id,module,access_level)
+VALUES('f2000000-0000-4000-8000-000000000099','redari','editor');
+CREATE FUNCTION pg_temp.f2_select_r2(p_vizibil boolean) RETURNS void LANGUAGE plpgsql AS $f$
+DECLARE t text; nr bigint;
+BEGIN
+ FOREACH t IN ARRAY ARRAY['red_mail_loturi','red_mail_mesaje','red_mail_optout','red_mail_fisiere_inventar','red_mail_fisiere_inventar_antet','red_mail_jurnal_f2'] LOOP
+  EXECUTE format('SELECT count(*) FROM public.%I',t) INTO nr;
+  IF (nr>0) IS DISTINCT FROM p_vizibil THEN RAISE EXCEPTION 'R2 RLS % vizibil=% nr=%',t,p_vizibil,nr; END IF;
+ END LOOP;
+END $f$;
+GRANT EXECUTE ON FUNCTION pg_temp.f2_select_r2(boolean) TO authenticated;
+SELECT pg_temp.f2_ca('f2000000-0000-4000-8000-000000000099','authenticated');
+DO $editor_r2$ BEGIN
+ IF public.fn_red_nivel() IS DISTINCT FROM 'editor' THEN RAISE EXCEPTION 'R2 fixture editor'; END IF;
+ PERFORM pg_temp.f2_select_r2(false);
+END $editor_r2$;
+SELECT pg_temp.f2_ca(NULL,'postgres');
+UPDATE public.user_module_access SET access_level='admin' WHERE profile_id='f2000000-0000-4000-8000-000000000099' AND module='redari';
+SELECT pg_temp.f2_ca('f2000000-0000-4000-8000-000000000099','authenticated');
+DO $admin_r2$ BEGIN
+ IF public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN RAISE EXCEPTION 'R2 fixture admin'; END IF;
+ PERFORM pg_temp.f2_select_r2(false);
+END $admin_r2$;
+SELECT pg_temp.f2_ca(current_setting('f2.owner')::uuid,'authenticated');
+SELECT pg_temp.f2_select_r2(true);
+SELECT pg_temp.f2_ca(NULL,'postgres');
+UPDATE public.red_proiecte SET retentie_mail_pana=(now() AT TIME ZONE 'Europe/Bucharest')::date-1 WHERE id='f2000000-0000-4000-8000-000000000001';
+-- Simulează numai confirmarea absenței fișierului fictiv; niciun Storage real atins.
+UPDATE public.red_mail_fisiere_inventar SET stare='sters' WHERE lot_id='f2000000-0000-4000-8000-000000000007';
+DO $retentie_pre_r2$ BEGIN
+ IF public.fn_red_mail_f2_retentie_poate('f2000000-0000-4000-8000-000000000007') IS NOT TRUE THEN RAISE EXCEPTION 'R2 fixture retentie neeligibil'; END IF;
+END $retentie_pre_r2$;
+SELECT pg_temp.f2_ca(current_setting('f2.owner')::uuid,'authenticated');
+DO $sterge_r2$
+DECLARE l uuid:='f2000000-0000-4000-8000-000000000007';
+BEGIN
+ IF public.fn_red_mail_lot_sterge_final(l,2,true) IS NOT TRUE THEN RAISE EXCEPTION 'R2 stergere finala refuzata'; END IF;
+ IF EXISTS(SELECT 1 FROM public.red_mail_loturi WHERE id=l) OR EXISTS(SELECT 1 FROM public.red_mail_mesaje WHERE lot_id=l)
+ OR EXISTS(SELECT 1 FROM public.red_mail_fisiere_inventar WHERE lot_id=l) OR EXISTS(SELECT 1 FROM public.red_mail_fisiere_inventar_antet WHERE lot_id=l)
+ THEN RAISE EXCEPTION 'R2 stergere finala incompleta'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM public.red_mail_jurnal_f2 WHERE lot_id=l AND cod='lot_sters_final') THEN RAISE EXCEPTION 'R2 audit stergere lipsa'; END IF;
+END $sterge_r2$;
+SELECT pg_temp.f2_ca(NULL,'postgres');-- Rând singleton absent: defect de infrastructură controlat, nu succes fals.
+-- Triggerul F1 de interzicere DELETE este suspendat NUMAI în subtranzacția de fixture,
+-- anulată prin PZ001; nu schimbăm migrarea F1 sau drepturi de producție.
+DO $setari_absente_r2$
+BEGIN
+ BEGIN
+  ALTER TABLE public.red_mail_setari DISABLE TRIGGER trg_red_mail_setari_reguli;
+  DELETE FROM public.red_mail_setari WHERE id=1;
+  PERFORM pg_temp.f2_ca(current_setting('f2.owner')::uuid,'authenticated');
+  PERFORM pg_temp.f2_refuz('SELECT public.fn_red_mail_f2_setari(true,false,1)','22023','setari_absente');
+  PERFORM pg_temp.f2_refuz($q$SELECT public.fn_red_mail_lot_creeaza('f2000000-0000-4000-8000-000000000008','f2000000-0000-4000-8000-000000000001','f2000000-0000-4000-8000-000000000002',ARRAY['f2000000-0000-4000-8000-000000000004']::uuid[],'Fictiv','Text fictiv')$q$,'22023','setari_absente');
+  PERFORM pg_temp.f2_ca(NULL,'postgres');
+  RAISE EXCEPTION 'anuleaza fixture singleton' USING ERRCODE='PZ001';
+ EXCEPTION WHEN SQLSTATE 'PZ001' THEN NULL;
+ END;
+ IF NOT EXISTS(SELECT 1 FROM public.red_mail_setari WHERE id=1) OR NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.red_mail_setari'::regclass AND tgname='trg_red_mail_setari_reguli' AND tgenabled='O') THEN RAISE EXCEPTION 'R2 fixture singleton nerestaurat'; END IF;
+END $setari_absente_r2$;
 ROLLBACK;
 

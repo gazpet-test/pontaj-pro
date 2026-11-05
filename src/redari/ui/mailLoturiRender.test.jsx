@@ -1,6 +1,10 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, it, expect, vi } from 'vitest'
+vi.mock('react', async importOriginal => {
+  const actual = await importOriginal()
+  return { ...actual, useState: vi.fn(actual.useState) }
+})
 vi.mock('../../lib/supabase.js', () => ({ supabase: {} }))
 vi.mock('./comune.jsx', () => ({ S: {} }))
 import MailLoturiEcran from './MailLoturiEcran.jsx'
@@ -13,5 +17,13 @@ describe('F2 UI owner', () => {
     expect(html).toContain('UAT Fictiv'); expect(html).toContain('Lot nou')
     expect(html).toContain('Trimiterea reală este oprită')
     expect(html).not.toContain('Aprobă acest lot')
+  })
+  it('afișează UAT-ul lotului selectat și când filtrul UAT este gol', () => {
+    const l = { id: 'lot-fictiv', uat_id: 'uat-fictiv', stare: 'incheiat' }
+    useState.mockImplementationOnce(() => React.useState(''))
+      .mockImplementationOnce(() => React.useState(l.id))
+      .mockImplementationOnce(() => React.useState([l]))
+    const html = renderToStaticMarkup(<MailLoturiEcran proiect={{ id: 'fictiv' }} uats={[{ id: 'uat-fictiv', nume: 'UAT al lotului' }]} profile={{ is_owner: true }} />)
+    expect(html).toContain('UAT lot: UAT al lotului')
   })
 })
