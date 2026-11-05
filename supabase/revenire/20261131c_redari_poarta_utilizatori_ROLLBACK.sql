@@ -6,19 +6,19 @@ BEGIN
     RAISE EXCEPTION '31c rollback: garda invalida';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
-  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure)
+  IF (SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure)
     IS DISTINCT FROM 'bd01044b09be4a2849e3a85831fc22af' THEN
     RAISE EXCEPTION '31c rollback: RPC schimbat dupa livrare; refuz suprascriere';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text,text)'::regprocedure
     AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
-    AND md5(prosrc) = 'dd56a8227b0e9bfab9c7c2ca2ca57b02'
+    AND md5(replace(prosrc, chr(13), '')) = 'dd56a8227b0e9bfab9c7c2ca2ca57b02'
     AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
     RAISE EXCEPTION '31c rollback: RPC 4 argumente schimbat';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_leaga(uuid,text,text,text)'::regprocedure
     AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
-    AND md5(prosrc) = 'e2f2c12a4ec0b23c20a0be4d5ce19075'
+    AND md5(replace(prosrc, chr(13), '')) = 'e2f2c12a4ec0b23c20a0be4d5ce19075'
     AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
     RAISE EXCEPTION '31c rollback: RPC legare schimbat';
   END IF;
@@ -32,7 +32,7 @@ BEGIN
     ('fn_red_detinatori_calitate_utilizatori_garda()', 'trg_red_detinatori_calitate_utilizatori', 'public.red_detinatori', '0cb7660327cd7b280512c5ae39dc343f')
   ) b(fn, tr, tab, hash) LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.fn)
     LEFT JOIN pg_trigger t ON t.tgrelid = b.tab::regclass AND t.tgname = b.tr
-  WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.hash OR p.prosecdef IS NOT TRUE
+  WHERE p.oid IS NULL OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM b.hash OR p.prosecdef IS NOT TRUE
     OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
     OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres' OR p.proacl::text IS DISTINCT FROM '{postgres=X/postgres}'
     OR t.tgfoid IS DISTINCT FROM p.oid OR t.tgenabled IS DISTINCT FROM 'O' OR t.tgtype IS DISTINCT FROM (CASE WHEN b.tab = 'public.red_detinatori' THEN 19 ELSE 23 END)::smallint OR t.tgqual IS NOT NULL OR t.tgnargs <> 0 OR encode(t.tgargs,'hex') <> '' OR t.tgattr::text <> '') THEN
@@ -138,7 +138,7 @@ BEGIN
     OR to_regprocedure('public.fn_red_proiect_utilizatori_garda()') IS NOT NULL
     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.red_proiecte'::regclass
       AND attname IN ('convocare_utilizatori_aprobata','convocare_utilizatori_aprobata_de','convocare_utilizatori_aprobata_la') AND NOT attisdropped)
-    OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure) IS DISTINCT FROM 'fbb7d6f96294c93a965fc97a930cd3c2' THEN
+    OR (SELECT md5(replace(prosrc, chr(13), '')) FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure) IS DISTINCT FROM 'fbb7d6f96294c93a965fc97a930cd3c2' THEN
     RAISE EXCEPTION '31c rollback: postconditii';
   END IF;
 END $post$;
