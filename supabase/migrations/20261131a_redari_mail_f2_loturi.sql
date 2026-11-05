@@ -6,11 +6,12 @@
 -- nu se completează certificarea până la eliminarea lor sau inventarierea explicită.
 CREATE OR REPLACE FUNCTION pg_temp.f2_preflight() RETURNS void LANGUAGE plpgsql AS $gate$
 DECLARE
-  -- Baseline live citit 05.11.2026 (Claude, READ ONLY REPEATABLE READ, exact interogările de mai jos). Revizie callee: funcțiile
+  -- Baseline live citit 05.11.2026 (Claude, READ ONLY REPEATABLE READ, exact interogările de mai jos; relatii/triggere recitite
+  -- după amprenta fără OID-uri, r4). Revizie callee: funcțiile
   -- din inventar + toate triggerele de pe red_convocari/red_proiecte/red_mail_setari/red_mail_evenimente/red_jurnal/red_numere/
   -- red_detinatori(_contact): fără EXECUTE dinamic, search_path fix, apeluri doar public/auth; singurul callee extern
   -- (extensions.gen_random_bytes în fn_red_detinatori_token_dupa) stă pe red_detinatori, pe care migrarea NU o scrie.
-  baseline constant jsonb := '{"functii":"521ee4e08a2f5f9daf71c54933608f46","relatii":"504a337c3058e111413d90e4f6720ec1","triggere":"464c264f4d6d6f9555c254448ec81452","revizie_callee":"revizuit_fara_dynamic_sau_callee_externe"}';
+  baseline constant jsonb := '{"functii":"521ee4e08a2f5f9daf71c54933608f46","relatii":"a1f3ea2addd74d5caf252d822020fdad","triggere":"6e791bf1e2b9275f652c3944babd15bf","revizie_callee":"revizuit_fara_dynamic_sau_callee_externe"}';
   r record; obiecte jsonb;
 BEGIN
   FOR r IN SELECT * FROM (VALUES
@@ -74,17 +75,26 @@ BEGIN
     ORDER BY n.nspname,p.proname,pg_get_function_identity_arguments(p.oid)) INTO obiecte
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname IN ('public','auth','storage');
   IF md5(obiecte::text) IS DISTINCT FROM baseline->>'functii' THEN RAISE EXCEPTION 'F2 L15: baseline functii diferit'; END IF;
-  SELECT jsonb_agg(jsonb_build_array(n.nspname,c.relname,c.relkind,pg_get_userbyid(c.relowner),c.relacl,c.relrowsecurity,c.relforcerowsecurity,
-    (SELECT jsonb_agg(to_jsonb(a) ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0),
-    (SELECT jsonb_agg(to_jsonb(d) ORDER BY d.adnum) FROM pg_attrdef d WHERE d.adrelid=c.oid),
-    (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.polname) FROM pg_policy p WHERE p.polrelid=c.oid),
-    (SELECT jsonb_agg(to_jsonb(k) ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid=c.oid),
-    (SELECT to_jsonb(q) FROM pg_sequence q WHERE q.seqrelid=c.oid)) ORDER BY n.nspname,c.relname) INTO obiecte
+  -- Fără OID-uri (r4): identitate pe nume, tipuri / expresii / constrângeri / politici prin forma lor textuală; coloanele „dropped”
+  -- nu intră (un DROP COLUMN le lasă în catalog). O revenire care recreează identic obiectele dă aceeași amprentă.
+  SELECT jsonb_agg(jsonb_build_array(n.nspname,c.relname,c.relkind,pg_get_userbyid(c.relowner),c.relacl::text,c.relrowsecurity,c.relforcerowsecurity,
+    (SELECT jsonb_agg(jsonb_build_array(a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,a.attidentity,a.attgenerated,
+       a.attacl::text,(SELECT co.collname FROM pg_collation co WHERE co.oid=a.attcollation AND a.attcollation<>0),
+       (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d WHERE d.adrelid=c.oid AND d.adnum=a.attnum)) ORDER BY a.attname)
+       FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped),
+    (SELECT jsonb_agg(jsonb_build_array(p.polname,p.polcmd,p.polpermissive,
+       (SELECT array_agg(CASE WHEN rol=0 THEN 'public' ELSE pg_get_userbyid(rol) END ORDER BY 1) FROM unnest(p.polroles) rol),
+       pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid)) ORDER BY p.polname) FROM pg_policy p WHERE p.polrelid=c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(k.conname,k.contype,pg_get_constraintdef(k.oid),k.condeferrable,k.condeferred,k.convalidated) ORDER BY k.conname)
+       FROM pg_constraint k WHERE k.conrelid=c.oid),
+    (SELECT jsonb_build_array(format_type(q.seqtypid,NULL),q.seqstart,q.seqincrement,q.seqmax,q.seqmin,q.seqcache,q.seqcycle)
+       FROM pg_sequence q WHERE q.seqrelid=c.oid)) ORDER BY n.nspname,c.relname) INTO obiecte
     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('public','auth','storage');
   IF md5(obiecte::text) IS DISTINCT FROM baseline->>'relatii' THEN RAISE EXCEPTION 'F2 L15: baseline relatii/coloane/ACL/RLS/politici/secvente diferit'; END IF;
-  SELECT jsonb_agg(jsonb_build_array(n.nspname,c.relname,to_jsonb(t)) ORDER BY n.nspname,c.relname,t.tgname) INTO obiecte
+  SELECT jsonb_agg(jsonb_build_array(n.nspname,c.relname,t.tgname,t.tgfoid::regprocedure::text,t.tgenabled,t.tgisinternal,pg_get_triggerdef(t.oid))
+    ORDER BY n.nspname,c.relname,t.tgname) INTO obiecte
     FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname IN ('public','auth','storage');
+    WHERE n.nspname IN ('public','auth','storage') AND NOT t.tgisinternal;   -- interne = FK (nume cu OID), acoperite de pg_constraint
   IF md5(obiecte::text) IS DISTINCT FROM baseline->>'triggere' THEN RAISE EXCEPTION 'F2 L15: baseline triggere (tgfoid/enabled/WHEN) diferit'; END IF;
 END $gate$;
 -- Version 20261131120000. Runner: o singură tranzacție; NU se aplică din această sesiune.

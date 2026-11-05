@@ -174,7 +174,34 @@ BEGIN
  IF NOT EXISTS(SELECT 1 FROM public.fn_red_mail_destinatari('f2000000-0000-4000-8000-000000000001','f2000000-0000-4000-8000-000000000002') WHERE id='f2000000-0000-4000-8000-000000000004' AND cardinality(motive)=0) THEN RAISE EXCEPTION 'F2 DRY: eligibil legitim ascuns'; END IF;
 END $optout_preview$;
 SELECT pg_temp.f2_ca(NULL,'postgres');
-INSERT INTO public.red_convocari(detinator_id,canal) VALUES('f2000000-0000-4000-8000-000000000004','posta');
+-- Convocare poștală prin calea permisă (RPC de rezervare, ca owner), compatibilă cu 30l și cu 31c aplicat; gărzile rămân active.
+-- Precondițiile rezervării (proiect complet, sesiune UAT) și informarea publicată (autorizare TGZ + obiect fictiv) se pun ca mentenanță
+-- postgres; informarea se retrage imediat după rezervare (obiectul fictiv rămâne până la ROLLBACK: storage interzice DELETE direct).
+DO $fixture_posta$
+BEGIN
+ INSERT INTO storage.objects(id,bucket_id,name,metadata)
+ VALUES('f2000000-0000-4000-8000-0000000000a1','redari','F2-DRY-FICTIV/autorizare_tgz/autorizare_fictiva.pdf',jsonb_build_object('eTag','"f2-dry"'));
+ UPDATE public.red_proiecte SET activ=true,contract_nr='F2-C1',contract_data=current_date,imputernicire_nr='F2-I1',imputernicire_data=current_date,
+   contact_nume='Contact Fictiv',contact_telefon='0700000000',contact_email='contact@example.invalid',text_gdpr='Text GDPR fictiv',
+   reprezentant_tgz_nume='Reprezentant Fictiv',reprezentant_tgz_telefon='0700000001',
+   autorizare_tgz_nr='F2-A1',autorizare_tgz_data=current_date,autorizare_tgz_fisier='F2-DRY-FICTIV/autorizare_tgz/autorizare_fictiva.pdf',
+   autorizare_tgz_obiect='f2000000-0000-4000-8000-0000000000a1',autorizare_tgz_etag='"f2-dry"'
+  WHERE id='f2000000-0000-4000-8000-000000000001';
+ UPDATE public.red_uat SET sesiune_zi1=current_date+7,program_zi1='09:00-15:00' WHERE id='f2000000-0000-4000-8000-000000000002';
+ IF NOT public.fn_red_informare_publicata('F2-DRY-FICTIV') THEN RAISE EXCEPTION 'F2 DRY: fixture informare'; END IF;
+END $fixture_posta$;
+SELECT pg_temp.f2_ca(current_setting('f2.owner')::uuid,'authenticated');
+DO $rezerva_posta$
+BEGIN
+ IF to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text,text)') IS NOT NULL THEN   -- 31c
+   PERFORM public.fn_red_convocare_rezerva('f2000000-0000-4000-8000-000000000004',true,'posta','proprietar');
+ ELSE                                                                                              -- 30l (prod înainte de 31c)
+   PERFORM public.fn_red_convocare_rezerva('f2000000-0000-4000-8000-000000000004',true,'posta');
+ END IF;
+END $rezerva_posta$;
+SELECT pg_temp.f2_ca(NULL,'postgres');
+UPDATE public.red_proiecte SET autorizare_tgz_nr=NULL,autorizare_tgz_data=NULL,autorizare_tgz_fisier=NULL,autorizare_tgz_obiect=NULL,autorizare_tgz_etag=NULL
+ WHERE id='f2000000-0000-4000-8000-000000000001';
 UPDATE public.red_detinatori_contact SET email=NULL WHERE detinator_id='f2000000-0000-4000-8000-000000000004';
 SELECT pg_temp.f2_ca(current_setting('f2.owner')::uuid,'authenticated');
 DO $fara_email_preview$
