@@ -53,8 +53,8 @@ export async function adaugaAntet(zip, { date, imagine = readFileSync(ANTET_IMAG
   const cy = Math.round(cx * ANTET_PX.h / ANTET_PX.w)
   let s2 = s.replace(/^(<w:sectPr(?:\s[^>]*)?>)/, `$1<w:headerReference w:type="first" r:id="${R_HEADER}"/>`)
     .replace(/(<w:pgMar [^>]*w:header=")\d+(")/, `$1${ANTET_DISTANTA}$2`)
-  // ordinea din schemă: … cols, formProt, vAlign, noEndnote, titlePg, textDirection, bidi, rtlGutter, docGrid
-  s2 = /<w:(textDirection|bidi|rtlGutter|docGrid)[\s/>]/.test(s2) ? s2.replace(/<w:(textDirection|bidi|rtlGutter|docGrid)[\s/>]/, m => `<w:titlePg/>${m}`) : s2.replace('</w:sectPr>', '<w:titlePg/></w:sectPr>')
+  // ordinea din schemă: … cols, formProt, vAlign, noEndnote, titlePg, textDirection, bidi, rtlGutter, docGrid, printerSettings (Jak #999 P2)
+  s2 = /<w:(textDirection|bidi|rtlGutter|docGrid|printerSettings)[\s/>]/.test(s2) ? s2.replace(/<w:(textDirection|bidi|rtlGutter|docGrid|printerSettings)[\s/>]/, m => `<w:titlePg/>${m}`) : s2.replace('</w:sectPr>', '<w:titlePg/></w:sectPr>')
   asigura(s2.includes(`w:header="${ANTET_DISTANTA}"`), 'pgMar fără atributul w:header')
   doc = doc.replace(s, () => s2)
   // prefixul r: trebuie declarat pe rădăcină (șablonul cererii nu îl are)

@@ -250,4 +250,16 @@ describe('antetul oficial Gazpet (header, prima pagină)', () => {
     await expect(cu(faraAntet.replace('<w:body>', '<w:body><w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr></w:p>'))).rejects.toThrow(/o singură secțiune/)
     await expect(cu(faraAntet, { 'word/header2.xml': '<w:hdr/>' })).rejects.toThrow(/deja header/)
   })
+  it('Jak #999 P2: secțiune cu printerSettings și fără docGrid → titlePg se pune ÎNAINTEA lui printerSettings (ordinea din schemă)', async () => {
+    const { adaugaAntet } = await import('../../scripts/redari_antet.mjs')
+    const z = await JSZip.loadAsync(readFileSync('public/redari/sabloane/convocator.docx'))
+    z.remove('word/header1.xml')
+    const doc = (await z.file('word/document.xml').async('string'))
+      .replace(/<w:headerReference [^>]*\/>/, '').replace('<w:titlePg/>', '')
+      .replace(/<w:docGrid [^>]*\/>/, '<w:printerSettings r:id="rIdPr"/>')
+    z.file('word/document.xml', doc)
+    await adaugaAntet(z, { imagine: Buffer.from('x') })
+    const sect = /<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/.exec(await z.file('word/document.xml').async('string'))[0]
+    expect(sect).toMatch(/<w:titlePg\/><w:printerSettings /)
+  })
 })
