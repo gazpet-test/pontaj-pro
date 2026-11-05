@@ -1,3 +1,5 @@
+import { aplicaRol } from './redari/rol.js'
+import FiltruRol from './redari/ui/FiltruRol.jsx'
 /* Redari.jsx — Modul „Redări teren" (Lot 1 Transgaz): convocări proprietari, registru pe parcelă/deținător, PV.
    Contract: docs/redari/CONTRACT_SCHEMA.md (tabele red_*, vederea red_v_stare_parcela, RPC fn_red_numar_document).
    Ecrane: Registru · Fișa parcelei · Import TGZ · UAT-uri · Setări proiect (faza 2, felia 1). Nivel utilizator: admin / editor / viewer (user_module_access.redari; owner = admin).
@@ -205,6 +207,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
   const [fUat, setFUat] = useState('')
   const [fTronson, setFTronson] = useState('')
   const [fStare, setFStare] = useState('')
+  const [fRol, setFRol] = useState('toti')
   const [cautare, setCautare] = useState('')
   const [cautareAplicata, setCautareAplicata] = useState('')
   const [selectie, setSelectie] = useState(() => new Set())
@@ -243,12 +246,13 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
       if (fTronson === 'fara') q = q.is('tronson', null)
       else if (fTronson) q = q.eq('tronson', Number(fTronson))
       if (fStare) q = q.eq('stare', fStare)
+      q = aplicaRol(q, fRol)
       return q
     }, ['parcela_id', 'detinator_id'], curent)
     const cautat = tot.filter(r => potrivesteCautare(r, cautareAplicata))
     return cautat.sort((a, b) => String(a.id_parcela ?? '').localeCompare(String(b.id_parcela ?? ''), 'ro', { numeric: true })
       || String(a.nume ?? '').localeCompare(String(b.nume ?? ''), 'ro') || String(a.detinator_id).localeCompare(String(b.detinator_id)))
-  }, [proiect.id, fUat, fTronson, fStare, cautareAplicata])
+  }, [proiect.id, fUat, fTronson, fStare, fRol, cautareAplicata])
 
   const incarca = useCallback(async () => {
     const g = ++generatie.current
@@ -269,6 +273,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
       if (fTronson === 'fara') q = q.is('tronson', null)   // parcelele încă neatribuite (după importul fără tronson)
       else if (fTronson) q = q.eq('tronson', Number(fTronson))
       if (fStare) q = q.eq('stare', fStare)
+      q = aplicaRol(q, fRol)
       const fCautare = filtruCautareSql(cautareAplicata)   // termen literal: wildcard-urile ILIKE / PostgREST scoase (src/redari/cautare.js)
       if (fCautare) q = q.or(fCautare)
       q = q.order('id_parcela').order('nume').range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1)
@@ -278,7 +283,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
       setRanduri(data || []); setTotal(count || 0)
     } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); setSelectie(new Set()); setEroareRegistru(msgEroare(e)); show('Registru: ' + msgEroare(e), 'error') } }   // r8/r9 P2-1: o încărcare eșuată nu lasă rândurile sau selecția anterioare (borderoul le-ar exporta)
     finally { if (g === generatie.current && !asteaptaSms) setLoading(false) }
-  }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
+  }, [proiect.id, fUat, fTronson, fStare, fRol, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
   useEffect(() => { incarca() }, [incarca])
   // D4: convocatoarele generate, neexpediate, ale deținătorilor din pagina afișată (citire paginată pe loturi, L23).
   // Eroarea se afișează — nu e tratată ca „niciun convocator neexpediat”.
@@ -295,9 +300,9 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
     } catch (e) { if (g === generatieNeexp.current) setNeexp({ harta: null, eroare: msgEroare(e) }) }
   }, [randuri])
   useEffect(() => { incarcaNeexp(); return () => { generatieNeexp.current++ } }, [incarcaNeexp])
-  useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata, fSms])
+  useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, fRol, cautareAplicata, fSms])
   // P1-4: selecția e a rândurilor VĂZUTE — se golește la orice schimbare de filtre / pagină
-  useEffect(() => { setSelectie(new Set()); setRanduri([]); generatieExport.current++ }, [fUat, fTronson, fStare, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
+  useEffect(() => { setSelectie(new Set()); setRanduri([]); generatieExport.current++ }, [fUat, fTronson, fStare, fRol, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
 
   const nrPagini = Math.max(1, Math.ceil(total / PAGINA))
   const toateSelectate = randuri.length > 0 && randuri.every(r => selectie.has(r.detinator_id))
@@ -380,6 +385,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
           <option value="">Toate stările</option>
           {STARI.map(s => <option key={s.cod} value={s.cod}>{s.eticheta}</option>)}
         </select>
+        <FiltruRol valoare={fRol} onChange={setFRol} />
         <FiltruSms valoare={fSms} onChange={setFSms} sms={sms} />
         <form onSubmit={e => { e.preventDefault(); setCautareAplicata(cautare.trim()) }} style={{ display:'flex', gap:6 }}>
           <input value={cautare} onChange={e => setCautare(e.target.value)} placeholder="Caută id parcelă / nume…" style={{ ...S.input, width:240 }} />

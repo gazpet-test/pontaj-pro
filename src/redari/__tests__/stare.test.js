@@ -7,14 +7,14 @@ const pv = (tip, stare, extra = {}) => ({ tip, stare, sters_la: null, ...extra }
 const baza = { calitate: 'proprietar', adresa_cunoscuta: true }
 
 describe('STARI — lista ordonată', () => {
-  it('are exact cele 12 stări din contract, în ordine', () => {
+  it('are cele 12 stări existente și acoperirea pe parcelă, cu același rang de închidere A', () => {
     expect(STARI.map(s => s.cod)).toEqual([
-      'PV_A_SEMNAT', 'PV_B_CONSTATARE', 'PV_TRIMIS_SPRE_SEMNARE', 'OBIECTII_DE_TRATAT', 'A_RASPUNS_FARA_OBIECTII',
+      'PV_A_ACOPERIT_PARCELA', 'PV_A_SEMNAT', 'PV_B_CONSTATARE', 'PV_TRIMIS_SPRE_SEMNARE', 'OBIECTII_DE_TRATAT', 'A_RASPUNS_FARA_OBIECTII',
       'A_RASPUNS_PARTICIPA', 'CONVOCARE_RETURNATA', 'CONVOCAT_FARA_RASPUNS', 'EXPEDIAT_ASTEPTAM_AR',
       'NEIDENTIFICAT_AFISARE', 'FARA_ADRESA_AFISARE', 'DE_CONVOCAT',
     ])
     STARI.forEach((s, i) => {
-      expect(s.ordine).toBe(i + 1)
+      expect(s.ordine).toBe(Math.max(1, i))
       expect(s.eticheta).toBeTruthy()
       expect(s.culoare).toMatch(/^#[0-9a-f]{6}$/i)
     })
