@@ -27,8 +27,9 @@ describe('parseazaUtilizatori', () => {
       rand({ uat: '06Bâlvănești', hg: '7', cad: '700', nume: 'IONESCU ANA (fictiv)', tel: '12' }),     // telefon invalid, fără adresă
       rand({ uat: '' }),                                                                              // rând gol / subsol
     ]), { uats: UATS })
-    expect(r.statistici).toMatchObject({ randuri: 6, cu_utilizator: 5, in_afara_proiectului: 1, fara_cheie: 1, dubluri_fisier: 1, candidati: 2 })
-    const [a, b] = r.candidati
+    // rândul 2 (aceeași persoană, fără adresă / telefon) are alt contact decât rândul 1 → ambele merg în plan (coliziunea le exclude acolo)
+    expect(r.statistici).toMatchObject({ randuri: 6, cu_utilizator: 5, in_afara_proiectului: 1, fara_cheie: 1, dubluri_fisier: 0, candidati: 3 })
+    const [a, , b] = r.candidati
     expect(a).toMatchObject({ uat3: 'HUS', cheie_sursa: 'HUS|10|100|5', poz_hg: '10', nume_normalizat: 'POPESCU ION (FICTIV)' })
     expect(a.contact).toMatchObject({ adresa_sat: 'Fictiv', adresa_comuna: 'Husnicioara', adresa_judet: 'Mehedinti', adresa_cunoscuta: true, telefon: '0711 111 111' })
     expect(b).toMatchObject({ uat3: 'BAL', cheie_sursa: 'BAL|7|700|' })

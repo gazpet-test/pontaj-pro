@@ -54,14 +54,16 @@ export function parseazaUtilizatori(arrayBuffer, { uats = [] } = {}) {
     const cs = cheieSursa(uat3, gol(r[COL.poz_hg]) ? '' : r[COL.poz_hg], gol(r[COL.nr_cadastral]) ? '' : r[COL.nr_cadastral], gol(r[COL.tarla]) ? '' : r[COL.tarla])
     if (!cs) { statistici.fara_cheie++; fara_cheie.push({ rand: randExcel, uat3, motiv: MOTIV_FARA_CHEIE }); continue }
     const nn = normalizeazaNume(nume)
-    const k = `${cs}#${nn}`
-    if (vazut.has(k)) { statistici.dubluri_fisier++; dubluri.push({ rand: randExcel, rand_original: vazut.get(k), uat3 }); continue }
-    vazut.set(k, randExcel)
     const adresa = gol(r[COL.adresa]) ? null : imparteAdresa(text(r[COL.adresa]), null)
     const contact = adresa
       ? { adresa_strada: adresa.adresa_strada, adresa_sat: adresa.adresa_sat, adresa_comuna: adresa.adresa_comuna, adresa_judet: adresa.adresa_judet, cod_postal: null, adresa_cunoscuta: true }
       : { adresa_strada: null, adresa_sat: null, adresa_comuna: null, adresa_judet: null, cod_postal: null, adresa_cunoscuta: false }
     contact.telefon = telefonValid(r[COL.telefon])
+    // r5 (Cop r3 P1-02): dublura din fișier se elimină aici DOAR dacă are același contact; cu contact diferit ambele rânduri merg în plan,
+    // unde coliziunea exclude persoana (nu câștigă primul rând)
+    const k = `${cs}#${nn}#${JSON.stringify(contact)}`
+    if (vazut.has(k)) { statistici.dubluri_fisier++; dubluri.push({ rand: randExcel, rand_original: vazut.get(k), uat3 }); continue }
+    vazut.set(k, randExcel)
     candidati.push({ rand: randExcel, uat3, cheie_sursa: cs, poz_hg: gol(r[COL.poz_hg]) ? null : normalizeazaNume(r[COL.poz_hg]), nume, nume_normalizat: nn, contact })
     const s = (statistici.pe_uat[uat3] ??= { candidati: 0 }); s.candidati++
   }
@@ -191,8 +193,8 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
   const actualizeaza = async (v, ce) => verifica(await supabase.from('red_import_loturi').update(v).eq('id', lotId), ce)
   try {
     // recitire proaspătă: cine e deja pe parcelele țintă (cu sursa, ca să recunoaștem rândurile scrise de un import anterior al acestui fișier)
-    const tinte = [...noi, ...(plan?.deja_detinatori ?? []).filter(d => d.parcela_id)]   // (contactele: și pentru rândurile scrise la o rulare anterioară)
-    const ids = [...new Set(tinte.map(n => n.parcela_id))]
+    const deja = (plan?.deja_detinatori ?? []).filter(d => d.parcela_id && d.contact)   // (contactele: și pentru rândurile scrise la o rulare anterioară; excluse = fără contact)
+    const ids = [...new Set([...noi, ...deja].map(n => n.parcela_id))]
     const existenti = new Map()
     for (const lotI of loturi(ids, lotCitire)) {
       for (const d of await citesteTot(() => supabase.from('red_detinatori').select('id, parcela_id, nume_normalizat, calitate, sursa_date').in('parcela_id', lotI).is('sters_la', null), 'recitire deținători', pagina)) {
@@ -215,6 +217,8 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
       return ok
     })
     const deScris = valide.filter(n => !existenti.has(`${n.parcela_id}|${n.nume_normalizat}`))
+    // r5 (Cop r3 P2-01): contactele se repară DOAR pentru rândurile care au trecut reverificarea parcelei (valide) și pentru „deja deținători” neexcluși
+    const tinte = [...valide, ...deja]
     const sarite = valide.length - deScris.length
     let detinatoriNoi = 0, contacteNoi = 0
     const diferente = () => ({ deja_detinatori: (plan?.deja_detinatori ?? []).map(({ contact, nume_normalizat, ...d }) => d), parcela_negasita: plan?.parcela_negasita ?? [],
