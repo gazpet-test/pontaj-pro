@@ -108,7 +108,9 @@ export function planUtilizatori(candidati, { parcele = [], detinatori = [] } = {
       continue
     }
     if (existenti.has(k)) {
-      const d = { rand: c.rand, uat3: c.uat3, id_parcela: p.id_parcela, parcela_id: p.id, nume_normalizat: c.nume_normalizat, contact: c.contact, motiv: MOTIV_DEJA }
+      // r6 (Jak r4 P1 / Cop r4 P2-01): „deja deținătorii” păstrează identitatea potrivirii — la scriere trec aceeași reverificare a parcelei ca rândurile noi
+      const d = { rand: c.rand, uat3: c.uat3, id_parcela: p.id_parcela, parcela_id: p.id, nume_normalizat: c.nume_normalizat, contact: c.contact, motiv: MOTIV_DEJA,
+        potrivire, poz_hg: c.poz_hg, cheie_sursa: c.cheie_sursa }
       alese.set(k, d); deja.push(d); continue
     }
     const nou = { ...c, parcela_id: p.id, id_parcela: p.id_parcela, potrivire }
@@ -207,18 +209,23 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
     const parcelaAcum = new Map(acum.parcele.map(p => [p.id, p]))
     const hgAcum = new Map()
     for (const p of acum.parcele) if (p.uat3 && p.poz_hg != null && String(p.poz_hg).trim() !== '') { const k = `${p.uat3}|${normalizeazaNume(p.poz_hg)}`; hgAcum.set(k, (hgAcum.get(k) || 0) + 1) }
+    // r6 (Cop r4 P2-02): și potrivirea pe cheie cere ca cheia să fie ÎNCĂ unică între parcelele active ale proiectului
+    const cheieAcum = new Map()
+    for (const p of acum.parcele) if (p.cheie_sursa) cheieAcum.set(p.cheie_sursa, (cheieAcum.get(p.cheie_sursa) || 0) + 1)
     const schimbate = []
-    const valide = noi.filter(n => {
+    const parcelaInca = n => {
       const p = parcelaAcum.get(n.parcela_id)
       // r4 (Jak r3 P1-1): la HG, parcela aleasă trebuie să aibă ÎNCĂ acel HG, în același UAT, iar HG-ul să fie tot unic
-      const ok = p && (n.potrivire !== 'hg' || (p.uat3 === n.uat3 && p.poz_hg != null && normalizeazaNume(p.poz_hg) === n.poz_hg && hgAcum.get(`${n.uat3}|${n.poz_hg}`) === 1))
-        && (n.potrivire !== 'cheie' || p.cheie_sursa === n.cheie_sursa)
-      if (!ok) schimbate.push({ rand: n.rand, uat3: n.uat3, id_parcela: n.id_parcela, motiv: 'parcela s-a schimbat între plan și scriere (ștearsă / altă cheie / HG nu mai e unic) — nescris' })
+      const ok = !!p && (n.potrivire === 'hg' || n.potrivire === 'cheie')
+        && (n.potrivire !== 'hg' || (p.uat3 === n.uat3 && p.poz_hg != null && normalizeazaNume(p.poz_hg) === n.poz_hg && hgAcum.get(`${n.uat3}|${n.poz_hg}`) === 1))
+        && (n.potrivire !== 'cheie' || (p.cheie_sursa === n.cheie_sursa && cheieAcum.get(n.cheie_sursa) === 1))
+      if (!ok) schimbate.push({ rand: n.rand, uat3: n.uat3, id_parcela: n.id_parcela, motiv: 'parcela s-a schimbat între plan și scriere (ștearsă / altă cheie / cheie sau HG nu mai e unic) — nescris' })
       return ok
-    })
+    }
+    const valide = noi.filter(parcelaInca)
     const deScris = valide.filter(n => !existenti.has(`${n.parcela_id}|${n.nume_normalizat}`))
-    // r5 (Cop r3 P2-01): contactele se repară DOAR pentru rândurile care au trecut reverificarea parcelei (valide) și pentru „deja deținători” neexcluși
-    const tinte = [...valide, ...deja]
+    // r5 (Cop r3 P2-01) + r6 (Jak r4 P1): contactele se repară DOAR pentru rândurile care au trecut reverificarea parcelei — noi ȘI „deja deținători”
+    const tinte = [...valide, ...deja.filter(parcelaInca)]
     const sarite = valide.length - deScris.length
     let detinatoriNoi = 0, contacteNoi = 0
     const diferente = () => ({ deja_detinatori: (plan?.deja_detinatori ?? []).map(({ contact, nume_normalizat, ...d }) => d), parcela_negasita: plan?.parcela_negasita ?? [],

@@ -214,6 +214,27 @@ describe('scrieUtilizatori', () => {
     expect(await __scrieUtilizatoriTest(supabase, planHg, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 0, schimbate: 1 })
     expect(tabele.red_detinatori).toHaveLength(0)
   })
+  it('r6 (Jak r4 P1 / Cop r4 P2-01): reluare — „deja deținător” al cărui parcelă a fost ștearsă între plan și scriere → contactul NU se repară, raportat', async () => {
+    const { supabase, tabele } = clientFals({ esueazaContacte: 1 })
+    await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true }).catch(() => {})
+    expect(tabele.red_detinatori).toHaveLength(2); expect(tabele.red_detinatori_contact).toHaveLength(0)
+    const din = [{ parcela_id: 'p1', nume_normalizat: 'A (FICTIV)' }, { parcela_id: 'p2', nume_normalizat: 'B (FICTIV)' }]
+    const plan2 = planUtilizatori(plan.noi.map(({ parcela_id, id_parcela, potrivire, ...c }) => c), { parcele: [{ id: 'p1', cheie_sursa: 'K1', id_parcela: 'X1' }, { id: 'p2', cheie_sursa: 'K2', id_parcela: 'X2' }], detinatori: din })
+    expect(plan2.deja_detinatori.map(d => d.potrivire)).toEqual(['cheie', 'cheie'])
+    tabele.red_parcele.find(p => p.id === 'p1').sters_la = '2026-11-05'   // p1 ștearsă după plan
+    const r = await __scrieUtilizatoriTest(supabase, plan2, { proiectId: 'pr', versiune: 'v', permite: true })
+    expect(r).toMatchObject({ detinatoriNoi: 0, contacteNoi: 1, schimbate: 1 })
+    const dP1 = tabele.red_detinatori.find(d => d.parcela_id === 'p1')
+    expect(tabele.red_detinatori_contact.map(c => c.detinator_id)).not.toContain(dP1.id)
+    expect(tabele.red_import_loturi.at(-1).diferente.schimbate_la_scriere).toMatchObject([{ rand: 4 }])
+  })
+  it('r6 (Cop r4 P2-02): potrivire pe cheie — a apărut a doua parcelă activă cu aceeași cheie între plan și scriere → nescris', async () => {
+    const parcele = [...PARCELE_TEST, { id: 'p3', cheie_sursa: 'K1', id_parcela: 'X3', poz_hg: null, sters_la: null, red_uat: { uat3: 'HUS' } }]
+    const { supabase, tabele } = clientFals({ parcele })
+    const r = await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true })
+    expect(r).toMatchObject({ detinatoriNoi: 1, schimbate: 1 })
+    expect(tabele.red_detinatori.map(d => d.parcela_id)).toEqual(['p2'])
+  })
   it('r3 (Cop r2 P2-01): aceeași persoană pe aceeași parcelă cu adrese diferite → ambele rânduri excluse, raportate', () => {
     const c = [{ rand: 20, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S1', adresa_cunoscuta: true, telefon: null } },
                { rand: 21, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S2', adresa_cunoscuta: true, telefon: null } }]
