@@ -19,7 +19,7 @@ BEGIN
  PERFORM set_config('f2.owner',ow::text,true);
  INSERT INTO public.red_proiecte(id,cod,denumire) VALUES('f2000000-0000-4000-8000-000000000001','F2-DRY-FICTIV','Proiect fictiv F2');
  INSERT INTO public.red_uat(id,proiect_id,nume,uat3) VALUES('f2000000-0000-4000-8000-000000000002','f2000000-0000-4000-8000-000000000001','UAT Fictiv','FIC');
- INSERT INTO public.red_parcele(id,proiect_id,uat_id,id_parcela,tronson) VALUES('f2000000-0000-4000-8000-000000000003','f2000000-0000-4000-8000-000000000001','f2000000-0000-4000-8000-000000000002','T1-FIC-9999',1);
+ INSERT INTO public.red_parcele(id,proiect_id,uat_id,id_parcela,tronson) VALUES('f2000000-0000-4000-8000-000000000003','f2000000-0000-4000-8000-000000000001','f2000000-0000-4000-8000-000000000002','FIC-9999',1);
  INSERT INTO public.red_detinatori(id,parcela_id,nume,nume_normalizat,calitate) VALUES('f2000000-0000-4000-8000-000000000004','f2000000-0000-4000-8000-000000000003','DETINATOR FICTIV F2','DETINATOR FICTIV F2','proprietar');
  INSERT INTO public.red_detinatori_contact(detinator_id,email) VALUES('f2000000-0000-4000-8000-000000000004','fictiv@example.invalid');
 END $fixture$;
@@ -42,7 +42,9 @@ BEGIN
  BEGIN PERFORM public.fn_red_mail_lot_aproba(a,v,h); RAISE EXCEPTION 'informare acceptata' USING ERRCODE='XX000'; EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL; END;
  IF EXISTS(SELECT 1 FROM public.fn_red_mail_rezerva(a)) THEN RAISE EXCEPTION 'F2 DRY: OFF rezerva'; END IF;
  IF pg_temp.f2_eroare($q$UPDATE public.red_mail_mesaje SET corp_text_final='Alterat' WHERE lot_id='f2000000-0000-4000-8000-000000000005'$q$)<>'42501' THEN RAISE EXCEPTION 'F2 DRY: PATCH snapshot'; END IF;
- IF pg_temp.f2_eroare($q$INSERT INTO public.red_convocari(detinator_id,canal) VALUES('f2000000-0000-4000-8000-000000000004','email')$q$)<>'23514' THEN RAISE EXCEPTION 'F2 DRY: canal email postal'; END IF;
+ -- În producție garda de rezervare 30l (trg_red_convocari_garda_rezerva, RD004) refuză orice INSERT direct înaintea triggerului F2 (23514);
+ -- ce contează e refuzul, oricare garda îl dă (DRY pe clonă 05.11.2026).
+ IF pg_temp.f2_eroare($q$INSERT INTO public.red_convocari(detinator_id,canal) VALUES('f2000000-0000-4000-8000-000000000004','email')$q$) NOT IN ('23514','RD004') THEN RAISE EXCEPTION 'F2 DRY: canal email postal'; END IF;
  PERFORM public.fn_red_mail_lot_inchide(a,v);
  IF EXISTS(SELECT 1 FROM public.red_mail_mesaje WHERE lot_id=a AND stare<>'anulat') THEN RAISE EXCEPTION 'F2 DRY: inchidere'; END IF;
  IF NOT EXISTS(SELECT 1 FROM public.red_mail_fisiere_inventar_antet WHERE lot_id=a AND nr_fisiere=0) THEN RAISE EXCEPTION 'F2 DRY: inventar zero'; END IF;
@@ -239,9 +241,10 @@ SELECT pg_temp.f2_refuz('UPDATE public.red_mail_setari SET extern_permis=true WH
 SELECT pg_temp.f2_ca(NULL,'postgres');
 -- Identitate fictivă reală pe FK auth.users -> profiles -> user_module_access; fără parole.
 INSERT INTO auth.users(id,email) VALUES('f2000000-0000-4000-8000-000000000099','f2-editor@example.invalid');
-INSERT INTO public.profiles(id,email,name,is_owner)
-VALUES('f2000000-0000-4000-8000-000000000099','f2-editor@example.invalid','F2 DRY FICTIV',false)
-ON CONFLICT(id) DO NOTHING;
+-- role explicit: default-ul coloanei ('manager') nu trece profiles_role_chk din producție; triggerul auth poate crea deja rândul.
+INSERT INTO public.profiles(id,email,name,role,is_owner)
+VALUES('f2000000-0000-4000-8000-000000000099','f2-editor@example.invalid','F2 DRY FICTIV','manager_santier',false)
+ON CONFLICT(id) DO UPDATE SET role=EXCLUDED.role,is_owner=false;
 INSERT INTO public.user_module_access(profile_id,module,access_level)
 VALUES('f2000000-0000-4000-8000-000000000099','redari','editor');
 CREATE FUNCTION pg_temp.f2_select_r2(p_vizibil boolean) RETURNS void LANGUAGE plpgsql AS $f$

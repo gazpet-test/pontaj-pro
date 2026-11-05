@@ -4,7 +4,7 @@
 -- tranzitivă în aceste scheme este acoperită fără parsare regex a SQL-ului.
 -- Callee în alte scheme / EXECUTE dinamic / search_path moștenit: refuz la review,
 -- nu se completează certificarea până la eliminarea lor sau inventarierea explicită.
-CREATE FUNCTION pg_temp.f2_preflight() RETURNS void LANGUAGE plpgsql AS $gate$
+CREATE OR REPLACE FUNCTION pg_temp.f2_preflight() RETURNS void LANGUAGE plpgsql AS $gate$
 DECLARE
   -- Baseline live citit 05.11.2026 (Claude, READ ONLY REPEATABLE READ, exact interogările de mai jos). Revizie callee: funcțiile
   -- din inventar + toate triggerele de pe red_convocari/red_proiecte/red_mail_setari/red_mail_evenimente/red_jurnal/red_numere/
@@ -300,7 +300,7 @@ CREATE TRIGGER trg_red_mail_f2_canal BEFORE INSERT OR UPDATE ON public.red_convo
 -- Ordine pentru toate RPC-urile: setări -> lot -> mesaje ORDER BY id. Nicio cale nu ia lock-uri invers.
 CREATE FUNCTION public.fn_red_mail_lot_creeaza(p_operatie uuid,p_proiect uuid,p_uat uuid,p_destinatari uuid[],p_subiect text,p_text text) RETURNS uuid
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $fn$
-DECLARE h text; existent public.red_mail_loturi; d record; m public.red_mail_mesaje; n bigint; pr public.red_proiecte; nou boolean;
+DECLARE h text; existent public.red_mail_loturi; dst record; msg public.red_mail_mesaje; n bigint; pr public.red_proiecte; nou boolean;
 BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  IF p_operatie IS NULL OR p_proiect IS NULL OR p_uat IS NULL OR cardinality(p_destinatari) IS NULL OR cardinality(p_destinatari) NOT BETWEEN 1 AND 300 OR array_position(p_destinatari,NULL) IS NOT NULL THEN RAISE EXCEPTION 'cerere_invalida' USING ERRCODE='22023'; END IF;
@@ -320,15 +320,15 @@ BEGIN
  OR EXISTS(SELECT 1 FROM public.red_mail_mesaje m JOIN public.red_mail_loturi l ON l.id=m.lot_id
  WHERE m.detinator_id=ANY(p_destinatari) AND l.proiect_id=p_proiect
  AND m.stare IN ('in_coada','rezervat','in_apel','necunoscut','trimis')) THEN RAISE EXCEPTION 'destinatari_neeligibili'; END IF;
- FOR d IN SELECT d.id,c.email FROM public.red_detinatori d JOIN public.red_detinatori_contact c ON c.detinator_id=d.id WHERE d.id=ANY(p_destinatari) ORDER BY d.id LOOP
+ FOR dst IN SELECT d.id,c.email FROM public.red_detinatori d JOIN public.red_detinatori_contact c ON c.detinator_id=d.id WHERE d.id=ANY(p_destinatari) ORDER BY d.id LOOP
   -- Numerotare M atomică, fără modificarea RPC-ului existent de numerotare.
   INSERT INTO public.red_numere(cheie,ultimul) VALUES('M',1) ON CONFLICT(cheie) DO UPDATE SET ultimul=red_numere.ultimul+1 RETURNING ultimul INTO n;
-  m.id:=gen_random_uuid(); m.lot_id:=p_operatie; m.detinator_id:=d.id; m.tip:='convocare'; m.nr_document:='M-'||lpad(n::text,6,'0');
-  m.catre:=lower(d.email); m.message_id:='<'||m.id::text||'@gazpet.ro>';
-  m.subiect_final:=public.fn_red_mail_f2_text(p_subiect); m.corp_text_final:=public.fn_red_mail_f2_text(p_text); m.corp_html_final:=NULL;
-  m.antete_snapshot:=jsonb_build_object('From','redari@gazpet.ro','To',m.catre,'Message-ID',m.message_id,'List-Unsubscribe','<mailto:redari@gazpet.ro?subject=dezabonare>');
-  m.mesaj_sha256:=public.fn_red_mail_f2_mesaj_hash(m);
-  INSERT INTO public.red_mail_mesaje(id,lot_id,detinator_id,nr_document,catre,message_id,subiect_final,corp_text_final,antete_snapshot,mesaj_sha256) VALUES(m.id,m.lot_id,m.detinator_id,m.nr_document,m.catre,m.message_id,m.subiect_final,m.corp_text_final,m.antete_snapshot,m.mesaj_sha256);
+  msg.id:=gen_random_uuid(); msg.lot_id:=p_operatie; msg.detinator_id:=dst.id; msg.tip:='convocare'; msg.nr_document:='M-'||lpad(n::text,6,'0');
+  msg.catre:=lower(dst.email); msg.message_id:='<'||msg.id::text||'@gazpet.ro>';
+  msg.subiect_final:=public.fn_red_mail_f2_text(p_subiect); msg.corp_text_final:=public.fn_red_mail_f2_text(p_text); msg.corp_html_final:=NULL;
+  msg.antete_snapshot:=jsonb_build_object('From','redari@gazpet.ro','To',msg.catre,'Message-ID',msg.message_id,'List-Unsubscribe','<mailto:redari@gazpet.ro?subject=dezabonare>');
+  msg.mesaj_sha256:=public.fn_red_mail_f2_mesaj_hash(msg);
+  INSERT INTO public.red_mail_mesaje(id,lot_id,detinator_id,nr_document,catre,message_id,subiect_final,corp_text_final,antete_snapshot,mesaj_sha256) VALUES(msg.id,msg.lot_id,msg.detinator_id,msg.nr_document,msg.catre,msg.message_id,msg.subiect_final,msg.corp_text_final,msg.antete_snapshot,msg.mesaj_sha256);
  END LOOP;
  UPDATE public.red_mail_loturi SET lot_sha256=public.fn_red_mail_f2_lot_hash(p_operatie) WHERE id=p_operatie;
  PERFORM public.fn_red_mail_f2_audit(p_operatie,NULL,'creat'); RETURN p_operatie;
