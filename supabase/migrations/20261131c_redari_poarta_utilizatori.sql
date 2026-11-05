@@ -198,7 +198,10 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.red_proiecte'::regclass AND attname = 'convocare_utilizatori_aprobata' AND NOT attisdropped)
     OR to_regprocedure('public.fn_red_proiect_utilizatori_garda()') IS NOT NULL
     OR to_regprocedure('public.fn_red_convocari_utilizatori_garda()') IS NOT NULL
-    OR to_regprocedure('public.fn_red_detinatori_calitate_utilizatori_garda()') IS NOT NULL THEN
+    OR to_regprocedure('public.fn_red_detinatori_calitate_utilizatori_garda()') IS NOT NULL
+    OR to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text,text)') IS NOT NULL
+    OR to_regprocedure('public.fn_red_convocare_leaga(uuid,text,text,text)') IS NOT NULL
+    OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.red_convocari'::regclass AND attname = 'calitate_document' AND NOT attisdropped) THEN
     RAISE EXCEPTION '31c: poarta exista deja';
   END IF;
   IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text || '|' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), ''), E'\n' ORDER BY t.tgname))
@@ -220,6 +223,9 @@ END $pre$;
 LOCK TABLE public.red_convocari IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.red_detinatori IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
+ALTER TABLE public.red_convocari ADD COLUMN calitate_document text
+  CONSTRAINT red_convocari_calitate_document_check CHECK (calitate_document IN ('proprietar','coproprietar','mostenitor','arendas','utilizator','neidentificat'));
+COMMENT ON COLUMN public.red_convocari.calitate_document IS 'PR3a r3: calitatea verificata de server la rezervare/legarea unui DOCX nou. NULL legacy = regenerare obligatorie inainte de plicuire/expediere; fara backfill presupus.';
 ALTER TABLE public.red_proiecte
   ADD COLUMN convocare_utilizatori_aprobata boolean NOT NULL DEFAULT false,
   ADD COLUMN convocare_utilizatori_aprobata_de uuid,
@@ -269,6 +275,8 @@ BEGIN
   IF TG_OP = 'UPDATE' THEN
     IF NEW.detinator_id IS NOT DISTINCT FROM OLD.detinator_id AND NEW.canal IS NOT DISTINCT FROM OLD.canal
       AND NEW.fisier_convocator_path IS NOT DISTINCT FROM OLD.fisier_convocator_path
+      AND current_setting('gazpet.convocare_legare', true) IS DISTINCT FROM 'activ'
+      AND NEW.calitate_document IS NOT DISTINCT FROM OLD.calitate_document
       AND NEW.nr_document IS NOT DISTINCT FROM OLD.nr_document
       AND NEW.continut_hash IS NOT DISTINCT FROM OLD.continut_hash
       AND (NEW.plic_id IS NULL OR NEW.plic_id IS NOT DISTINCT FROM OLD.plic_id)
@@ -298,6 +306,29 @@ BEGIN
       RAISE EXCEPTION 'utilizator - convocare neaprobata' USING ERRCODE = 'RD006';
     END IF;
   END IF;
+  -- Un PATCH vechi nu dovedeste ca a trimis calitatea (NEW poate mosteni valoarea OLD). Legarea se face numai prin RPC-ul strict.
+  -- Marcaj de protocol, nu identitate/autorizare: numai SET LOCAL static din fn_red_convocare_leaga il scrie; RPC-ul e INVOKER + auth.uid/RLS.
+  IF TG_OP = 'UPDATE' AND (NEW.fisier_convocator_path IS DISTINCT FROM OLD.fisier_convocator_path
+    OR NEW.continut_hash IS DISTINCT FROM OLD.continut_hash)
+    AND current_setting('gazpet.convocare_legare', true) IS DISTINCT FROM 'activ' THEN
+    RAISE EXCEPTION 'calitatea s-a schimbat - regenereaza' USING ERRCODE = 'RD008';
+  END IF;
+  -- R3 L03: stampila este o preconditie CAS pentru legare/expediere, NU o copie a calitatii de la ultima citire JS.
+  -- La INSERT (doar RPC-ul nou) si la DOCX nou, clientul afirma calitatea folosita; serverul o verifica si scrie valoarea curenta.
+  -- Nu permitem re-stampilarea unui fisier vechi prin PATCH doar pe calitate_document.
+  IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin','editor') THEN
+    RAISE EXCEPTION '31c: fara drept de validare a documentului' USING ERRCODE = '42501';
+  END IF;
+  IF NEW.calitate_document IS DISTINCT FROM v_calitate THEN
+    RAISE EXCEPTION 'calitatea s-a schimbat - regenereaza' USING ERRCODE = 'RD008';
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.calitate_document IS DISTINCT FROM OLD.calitate_document THEN
+    IF NEW.fisier_convocator_path IS NOT DISTINCT FROM OLD.fisier_convocator_path
+      OR NEW.fisier_convocator_path IS NULL OR nullif(btrim(NEW.continut_hash), '') IS NULL THEN
+      RAISE EXCEPTION 'calitatea s-a schimbat - regenereaza' USING ERRCODE = 'RD008';
+    END IF;
+  END IF;
+  NEW.calitate_document := v_calitate;
   RETURN NEW;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_red_convocari_utilizatori_garda() FROM PUBLIC, anon, authenticated, service_role;
@@ -349,7 +380,16 @@ REVOKE ALL ON FUNCTION public.fn_red_detinatori_calitate_utilizatori_garda() FRO
 CREATE TRIGGER trg_red_detinatori_calitate_utilizatori BEFORE UPDATE ON public.red_detinatori
   FOR EACH ROW EXECUTE FUNCTION public.fn_red_detinatori_calitate_utilizatori_garda();
 
+-- Compatibilitate numai pentru detectia fara efecte. Clientii vechi NU pot rezerva fara calitatea asteptata.
 CREATE OR REPLACE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta')
+RETURNS TABLE (convocare_id uuid, nr_document text, parcela_id uuid, uat_id uuid, proiect_id uuid)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF p_detinator_id IS NULL THEN RAISE EXCEPTION 'redari: parametri lipsa' USING ERRCODE = '22023'; END IF;
+  RAISE EXCEPTION 'calitatea s-a schimbat - regenereaza' USING ERRCODE = 'RD008';
+END $fn$;
+
+CREATE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean, p_canal text, p_calitate_asteptata text)
 RETURNS TABLE (convocare_id uuid, nr_document text, parcela_id uuid, uat_id uuid, proiect_id uuid)
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
 #variable_conflict error
@@ -375,6 +415,9 @@ BEGIN
     FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id
    WHERE d.id = p_detinator_id AND d.sters_la IS NULL AND p.sters_la IS NULL
      FOR SHARE OF d, p;
+  IF p_calitate_asteptata IS NULL OR p_calitate_asteptata IS DISTINCT FROM v_calitate THEN
+    RAISE EXCEPTION 'calitatea s-a schimbat - regenereaza' USING ERRCODE = 'RD008';
+  END IF;
   IF v_uat IS NULL THEN RAISE EXCEPTION 'redari: detinatorul sau parcela au fost sterse' USING ERRCODE = 'P0002'; END IF;
   -- r5 P2-03: cheia lock-ului trebuie să fie a proiectului recitit sub lock (altfel două tranzacții ar putea bloca chei diferite)
   IF v_proiect IS DISTINCT FROM v_proiect_cheie THEN
@@ -417,14 +460,50 @@ BEGIN
   -- funcției pe un GUC placeholder e refuzată la CREATE). SET LOCAL ține până la sfârșitul tranzacției, deci se anulează explicit imediat după INSERT.
   SET LOCAL gazpet.convocare_rezerva = 'activ';
   v_nr := public.fn_red_numar_document('C', v_uat3, v_tronson);
-  INSERT INTO public.red_convocari (detinator_id, canal, nr_document) VALUES (p_detinator_id, p_canal, v_nr) RETURNING id INTO v_id;
+  INSERT INTO public.red_convocari (detinator_id, canal, nr_document, calitate_document) VALUES (p_detinator_id, p_canal, v_nr, v_calitate) RETURNING id INTO v_id;
   SET LOCAL gazpet.convocare_rezerva = 'inactiv';
   -- r5 P1-01: identitatea folosită de server (clientul o compară cu documentul pe care îl generează)
   RETURN QUERY SELECT v_id, v_nr, v_parcela, v_uat, v_proiect;
 END $fn$;
+REVOKE ALL ON FUNCTION public.fn_red_convocare_rezerva(uuid,boolean,text,text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_convocare_rezerva(uuid,boolean,text,text) TO authenticated;
+
+
+
+-- R3: contract explicit pentru legare, inclusiv pentru clientii vechi care ar omite calitate_document din PATCH.
+CREATE FUNCTION public.fn_red_convocare_leaga(p_convocare_id uuid, p_fisier_path text, p_continut_hash text, p_calitate_asteptata text)
+RETURNS TABLE (convocare_id uuid)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
+DECLARE v_id uuid;
+BEGIN
+  IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin','editor') THEN
+    RAISE EXCEPTION '31c: fara drept de legare a convocarii' USING ERRCODE = '42501';
+  END IF;
+  IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION '31c: legarea cere READ COMMITTED' USING ERRCODE = '25001'; END IF;
+  IF p_calitate_asteptata IS NULL THEN RAISE EXCEPTION 'calitatea s-a schimbat - regenereaza' USING ERRCODE = 'RD008'; END IF;
+  IF p_convocare_id IS NULL OR nullif(btrim(p_fisier_path), '') IS NULL OR nullif(btrim(p_continut_hash), '') IS NULL THEN
+    RAISE EXCEPTION '31c: parametri legare lipsa' USING ERRCODE = '22023';
+  END IF;
+  -- L06: UPDATE ia lock pe convocare -> triggerul ia detinator/parcela NOWAIT -> TRY advisory comun -> proiect NOWAIT.
+  -- RLS/triggerul verifica tinta si egalitatea cu p_calitate_asteptata SUB aceleasi lock-uri, in aceasta tranzactie.
+  SET LOCAL gazpet.convocare_legare = 'activ';
+  UPDATE public.red_convocari c SET fisier_convocator_path = p_fisier_path, continut_hash = p_continut_hash, calitate_document = p_calitate_asteptata
+    WHERE c.id = p_convocare_id RETURNING c.id INTO v_id;
+  SET LOCAL gazpet.convocare_legare = 'inactiv';
+  IF v_id IS NULL THEN RAISE EXCEPTION '31c: convocare inaccesibila' USING ERRCODE = 'P0002'; END IF;
+  RETURN QUERY SELECT v_id;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_red_convocare_leaga(uuid,text,text,text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_red_convocare_leaga(uuid,text,text,text) TO authenticated;
 
 DO $post$
 BEGIN
+  IF EXISTS (SELECT 1 FROM public.red_convocari WHERE calitate_document IS NOT NULL)
+    OR NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.red_convocari'::regclass AND a.attname = 'calitate_document'
+      AND a.atttypid = 'text'::regtype AND NOT a.attnotnull AND NOT a.atthasdef AND NOT a.attisdropped) THEN
+    RAISE EXCEPTION '31c: stampila legacy trebuie sa ramana NULL, fara default/backfill';
+  END IF;
+
   -- Triggerele detinatorului pot modifica NEW.calitate; fixam inventarul complet, inclusiv argumente/UPDATE OF.
   IF (SELECT string_agg(t.tgname || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
       || coalesce(pg_get_expr(t.tgqual,t.tgrelid), '') || '/' || t.tgnargs::text || '/' || encode(t.tgargs,'hex') || '/' || t.tgattr::text, ';' ORDER BY t.tgname COLLATE "C")
@@ -467,8 +546,20 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure
     AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
-    AND md5(prosrc) = '6c5e0281f95e6242731e2d61301033f3'
+    AND md5(prosrc) = 'bd01044b09be4a2849e3a85831fc22af'
     AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
     RAISE EXCEPTION '31c: RPC / ACL nu sunt cele asteptate';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text,text)'::regprocedure
+    AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
+    AND md5(prosrc) = 'dd56a8227b0e9bfab9c7c2ca2ca57b02'
+    AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
+    RAISE EXCEPTION '31c: RPC calitate asteptata / ACL nu sunt cele asteptate';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_leaga(uuid,text,text,text)'::regprocedure
+    AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
+    AND md5(prosrc) = 'e2f2c12a4ec0b23c20a0be4d5ce19075'
+    AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
+    RAISE EXCEPTION '31c: RPC legare / ACL nu sunt cele asteptate';
   END IF;
 END $post$;

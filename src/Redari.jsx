@@ -583,16 +583,16 @@ export function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) 
       scris = true
       // #989 r4: protocolul atomic comun cu generarea în masă — RPC-ul fn_red_convocare_rezerva rezervă numărul ȘI inserează rândul
       // (lock pe deținător, RD001 dacă între timp a apărut o convocare pe același canal; număr nou doar cu bifa explicită). Fără RPC → refuz.
-      const rez = await rezervaNumarConvocare(supabase, { detinatorId: rand.detinator_id, confirmat: confirmNou === true && (vazute || []).length > 0, canal })
+      const rez = await rezervaNumarConvocare(supabase, { detinatorId: rand.detinator_id, calitateAsteptata: intrare.detinator.calitate, confirmat: confirmNou === true && (vazute || []).length > 0, canal })
       const { convocareId, nrDocument } = rez
       // #989 r5 (P1-01): documentul se face DOAR pe identitatea folosită de server; altfel rândul rămâne „fișier neîncărcat” (regenerare ulterioară)
       const difera = motivIdentitateDiferita(rez, { parcelaId: intrare.parcela.id, uatId: intrare.uat?.id, proiectId: intrare.proiect?.id })
       if (difera) { if (activ(tok)) show(difera + '.', 'error'); return }
       // de aici rândul există: fișierul se încarcă prin salvarea versionată existentă (v1 la primul upload) și se reconciliază
       setPas(`Generez ${nrDocument}…`)
-      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument })
+      const { blob, hash, calitateDocument } = await genereazaConvocator({ ...intrare, nrDocument })
       setPas('Salvez în arhivă…')
-      const { path } = await reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument })
+      const { path } = await reincarcaConvocator(supabase, { convocareId, blob, hash, calitateDocument, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument })
       if (!activ(tok)) return   // salvarea s-a făcut; fereastra nu mai e a acestei acțiuni → fără descărcare / toast / onGata
       descarcaBlob(blob, `${nrDocument}_${rand.id_parcela}.docx`)
       show(`Convocator ${nrDocument} generat și salvat (${path}).`, 'success')
@@ -627,9 +627,9 @@ export function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) 
       setPas(`Regenerez ${c.nr_document}…`)
       scris = true
       // r2 P2-4: aceeași dată ca documentul original (paritate cu Fișa parcelei și generarea în masă)
-      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument: c.nr_document, dataDocument })
+      const { blob, hash, calitateDocument } = await genereazaConvocator({ ...intrare, nrDocument: c.nr_document, dataDocument })
       setPas('Salvez versiunea nouă…')
-      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument: c.nr_document })
+      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, calitateDocument, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument: c.nr_document })
       if (!activ(tok)) return
       descarcaBlob(blob, `${c.nr_document}_${rand.id_parcela}.docx`)
       show(`Convocator ${c.nr_document} regenerat cu același număr (${path}).`, 'success')

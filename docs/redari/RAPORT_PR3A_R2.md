@@ -1,5 +1,7 @@
 # PR #1002 — PR3a, runda 2
 
+Raport istoric pentru `28232fb0`; starea actuală este în [RAPORT_PR3A_R3.md](RAPORT_PR3A_R3.md).
+
 Același branch `codex/redari-pr3a-poarta-utilizatori`; commit nou, fără merge. SQL numai în fișiere, neaplicat. Fără Supabase/date reale; importul și fișierele excluse din task rămân neatinse.
 
 | Review | Remediere, fișier:linie | Dovadă |

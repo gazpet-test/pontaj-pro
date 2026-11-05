@@ -27,7 +27,7 @@ function date(n = 3) {
   return { red_v_stare_parcela: view, red_detinatori: det, red_parcele: parc, red_detinatori_contact: cont, red_detinatori_token: tok, red_convocari: [],
     red_proiecte: [{ ...PROIECT }], red_uat: [{ ...UAT }] }
 }
-const conv = (o) => ({ canal: 'posta', stare: 'activ', data_expediere: null, fisier_convocator_path: null, sters_la: null, created_at: '2026-11-01', ...o })
+const conv = (o) => ({ calitate_document: 'proprietar', canal: 'posta', stare: 'activ', data_expediere: null, fisier_convocator_path: null, sters_la: null, created_at: '2026-11-01', ...o })
 
 // client fals: query builder cu keyset real (order / gt / limit), maybeSingle, insert / update, rpc, storage.
 // fn_red_convocare_rezerva simulat ca migrarea 20261130l: P0002 (șters), RD002 (împuternicire lipsă, recitită din tabelă), RD001 (convocare
@@ -79,6 +79,15 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
     rpc: async (fn, args) => {
       // #939 r2: indicatorul „informare publicată” (fn_red_informare_publicata) — citire, nu intră în jurnalul rezervărilor
       if (fn === 'fn_red_informare_publicata') { jurnal.informare = (jurnal.informare || 0) + 1; return { data: informarePublicata === true, error: null } }
+      if (fn === 'fn_red_convocare_leaga') {
+        const c = tabele.red_convocari.find(x => x.id === args.p_convocare_id)
+        const d = tabele.red_detinatori.find(x => x.id === c?.detinator_id)
+        if (!c || !d) return err('P0002', 'convocare inaccesibila')
+        if (d.calitate !== args.p_calitate_asteptata) return err('RD008', 'calitatea s-a schimbat - regenereaza')
+        const patch = { fisier_convocator_path: args.p_fisier_path, continut_hash: args.p_continut_hash, calitate_document: d.calitate }
+        Object.assign(c, patch); jurnal.updateuri.push(patch)
+        return { data: [{ convocare_id: c.id }], error: null }
+      }
       jurnal.rpc.push(fn)
       if (fn !== 'fn_red_convocare_rezerva') throw new Error(`RPC neașteptat în generarea în masă: ${fn}`)   // fără cale alternativă
       jurnal.argumente = [...(jurnal.argumente || []), args]
@@ -90,6 +99,7 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
       const p = d && tabele.red_parcele.find(x => x.id === d.parcela_id)
       if (!d || d.sters_la || !p || p.sters_la) return err('P0002', 'redari: detinatorul sau parcela au fost sterse')
       if (!tabele.red_proiecte[0]?.imputernicire_nr) return err('RD002', 'redari: convocatorul nu se poate rezerva: proiect fara nr./data imputernicire Transgaz')
+      if (args.p_calitate_asteptata !== d.calitate) return err('RD008', 'calitatea s-a schimbat - regenereaza')
       const canal = args.p_canal ?? 'posta'
       const exista = tabele.red_convocari.filter(c => c.detinator_id === d.id && c.canal === canal && c.stare === 'activ' && !c.data_expediere && !c.sters_la)
       if (exista.length && args.p_numar_nou_confirmat !== true) return err('RD001', `redari: detinatorul are deja convocare postala neexpediata (${exista.map(c => c.nr_document ?? '(fara numar)').join(', ')})`)
@@ -108,7 +118,7 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
   }
 }
 
-const genFals = vi.fn(async ({ nrDocument }) => ({ blob: new Blob([`doc:${nrDocument}`]), hash: 'h'.repeat(64) }))
+const genFals = vi.fn(async ({ nrDocument, detinator }) => ({ calitateDocument: detinator.calitate, blob: new Blob([`doc:${nrDocument}`]), hash: 'h'.repeat(64) }))
 const depsReale = { genereaza: genFals, reincarca: reincarcaConvocator }
 const TPL = new ArrayBuffer(8)
 const ruleaza = async (c, opt = {}) => {
@@ -161,7 +171,7 @@ describe('pregatesteLot — gărzi', () => {
     const spy = vi.spyOn(c, 'from')
     const rez = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
     expect(rez).toMatchObject({ blocat: MESAJ_FARA_PROTECTIE, plan: [], protectie: false })
-    expect(rez.blocat).toMatch(/aplicați migrarea 20261130l/)
+    expect(rez.blocat).toMatch(/aplicați migrarea 20261131c/)
     expect(spy).not.toHaveBeenCalled()
   })
   it('detectează RPC-ul de rezervare (22023 = există; PGRST202 = lipsă)', async () => {
@@ -262,8 +272,8 @@ describe('executaLot', () => {
     const c = clientFals(date(2))
     const p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
     const n0 = c.jurnal.rpc.length
-    await expect(executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: false, deps: depsReale })).rejects.toThrow(/20261130l/)
-    await expect(executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, deps: depsReale })).rejects.toThrow(/20261130l/)
+    await expect(executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: false, deps: depsReale })).rejects.toThrow(/20261131c/)
+    await expect(executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, deps: depsReale })).rejects.toThrow(/20261131c/)
     expect(c.jurnal.rpc.length).toBe(n0)
   })
   it('r3 (fără fallback): RPC dispărut în timpul rulării (PGRST202) → rândul cu eroare, restul oprite, niciun număr pe altă cale', async () => {
@@ -272,7 +282,7 @@ describe('executaLot', () => {
     const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
     expect(r.raport.map(x => x.stare)).toEqual(['eroare', 'oprit', 'oprit'])
     expect(r.raport[0].motiv).toBe(MESAJ_FARA_PROTECTIE)
-    expect(r.raport[2].motiv).toMatch(/20261130l/)
+    expect(r.raport[2].motiv).toMatch(/20261131c/)
     expect(c.jurnal.numere).toBe(0); expect(r.fisiere).toEqual([])
   })
 
@@ -416,24 +426,24 @@ describe('r4: protocolul comun cale individuală / lot', () => {
     const c = clientFals(date(2))
     await ruleaza(c)
     expect(c.jurnal.argumente.filter(a => a.p_detinator_id)).toEqual([
-      { p_detinator_id: 'd0001', p_numar_nou_confirmat: false, p_canal: 'posta' },
-      { p_detinator_id: 'd0002', p_numar_nou_confirmat: false, p_canal: 'posta' }])
+      { p_detinator_id: 'd0001', p_numar_nou_confirmat: false, p_canal: 'posta', p_calitate_asteptata: 'proprietar' },
+      { p_detinator_id: 'd0002', p_numar_nou_confirmat: false, p_canal: 'posta', p_calitate_asteptata: 'proprietar' }])
   })
   it('individual (ModalConvocator → rezervaNumarConvocare) după „Verifică” al lotului, pe același deținător → lotul primește RD001: o singură convocare', async () => {
     const t = date(1), c = clientFals(t)
     const p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
     // calea individuală rezervă prin ACELAȘI RPC (fără bifă) între „Verifică” și execuția lotului — rândul apare doar în RPC
-    const ind = await rezervaNumarConvocare(c, { detinatorId: 'd0001', confirmat: false, canal: 'posta' })
+    const ind = await rezervaNumarConvocare(c, { calitateAsteptata: 'proprietar', detinatorId: 'd0001', confirmat: false, canal: 'posta' })
     expect(ind.nrDocument).toBe('C-0001')
     const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
     expect(r.raport[0].stare).toBe('schimbat')
     expect(activeNeexp(t, 'd0001')).toHaveLength(1); expect(c.jurnal.numere).toBe(1)
     // invers: după lot, individualul fără bifă e refuzat; cu bifa explicită primește al doilea număr
-    await expect(rezervaNumarConvocare(c, { detinatorId: 'd0001' })).rejects.toMatchObject({ code: 'RD001' })
-    expect((await rezervaNumarConvocare(c, { detinatorId: 'd0001', confirmat: true })).nrDocument).toBe('C-0002')
+    await expect(rezervaNumarConvocare(c, { calitateAsteptata: 'proprietar', detinatorId: 'd0001' })).rejects.toMatchObject({ code: 'RD001' })
+    expect((await rezervaNumarConvocare(c, { calitateAsteptata: 'proprietar', detinatorId: 'd0001', confirmat: true })).nrDocument).toBe('C-0002')
   })
   it('fără migrare, și calea individuală refuză cu același mesaj', async () => {
-    await expect(rezervaNumarConvocare(clientFals(date(1), { cuRpc: false }), { detinatorId: 'd0001' }))
+    await expect(rezervaNumarConvocare(clientFals(date(1), { cuRpc: false }), { calitateAsteptata: 'proprietar', detinatorId: 'd0001' }))
       .rejects.toMatchObject({ code: 'FARA_RPC', message: MESAJ_FARA_PROTECTIE })
   })
   it('r4 P2: răspuns proiect/UAT întârziat + identitate schimbată între timp → zero rezervări', async () => {
@@ -567,5 +577,33 @@ describe('PR3a — separarea portii de sablonul PR3b', () => {
     expect(r.plan).toEqual([])
     expect(r.exclusi[0].motiv).toBe('utilizator - șablonul convocatorului lipsește (PR3b)')
     expect(c.jurnal.numere).toBe(0)
+  })
+})
+
+
+describe('PR3a r3 — intercalare la rezervare si legacy', () => {
+  it('(a) proprietar citit, utilizator la rezervare cu true: RD008, zero numere si zero upload', async () => {
+    const t = date(1)
+    t.red_proiecte[0].convocare_utilizatori_aprobata = true
+    const proiect = { ...PROIECT, convocare_utilizatori_aprobata: true }
+    const c = clientFals(t, { inainteDeRezervare: () => { t.red_detinatori[0].calitate = 'utilizator' } })
+    const p = await pregatesteLot(c, { proiect, uat: UAT })
+    const r = await executaLot(c, { plan: p.plan, proiect, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
+    expect(c.jurnal.argumente.at(-1).p_calitate_asteptata).toBe('proprietar')
+    expect(r.raport[0]).toMatchObject({ stare: 'schimbat', motiv: 'schimbat între timp: calitatea s-a schimbat - regenereaza' })
+    expect(c.jurnal.numere).toBe(0)
+    expect(c.jurnal.upload).toEqual([])
+  })
+  it('legacy cu fisier si stampila NULL: regenereaza acelasi numar, nu reia DOCX-ul necunoscut', async () => {
+    const t = date(1)
+    t.red_convocari = [conv({ id: 'c-legacy', detinator_id: 'd0001', nr_document: 'C-0011', fisier_convocator_path: 'legacy-v1.docx', calitate_document: null })]
+    const c = clientFals(t), p = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+    expect(p.plan[0].actiune).toBe('reincarca')
+    expect(p.exclusi).toEqual([])
+    const r = await executaLot(c, { plan: p.plan, proiect: PROIECT, uat: UAT, templateArrayBuffer: TPL, protectie: true, deps: depsReale })
+    expect(r.raport[0].stare).toBe('ok')
+    expect(c.jurnal.numere).toBe(0)
+    expect(c.jurnal.updateuri.at(-1).calitate_document).toBe('proprietar')
+    expect(c.jurnal.download).toEqual([])
   })
 })

@@ -167,21 +167,23 @@ export function aparuteDupaVerificare(confirmate, proaspete) {
 // ─── #989 r4 (Jakarinos r3 P1): protocolul atomic, COMUN căii individuale și generării în masă ──────────────────────
 
 export const RPC_REZERVA = 'fn_red_convocare_rezerva'
-export const MESAJ_FARA_PROTECTIE = 'protecția la concurență nu e activă — aplicați migrarea 20261130l (fn_red_convocare_rezerva)'
+export const MESAJ_FARA_PROTECTIE = 'protecția la concurență nu e activă — aplicați migrarea 20261131c (calitatea așteptată la rezervare)'
 /** Răspunsul PostgREST pentru o funcție inexistentă (migrarea 20261130l neaplicată). */
 export const esteFaraRpc = (res) => res?.status === 404 || res?.error?.code === 'PGRST202'
 
 /**
  * PUNCTUL DE INTEGRARE pentru un convocator NOU (ambele căi): RPC-ul atomic `fn_red_convocare_rezerva` (migrarea 20261130l) —
- * lock pe (proiect, deținător), recitire sub lock (deținător + parcelă, gărzile proiect/UAT → RD002), RD001 dacă există deja o convocare
+ * PR3a r3: p_calitate_asteptata obligatorie, comparata sub lock inainte de numar; overload-ul vechi refuza.
+ * Lock pe (proiect, deținător), recitire sub lock (deținător + parcelă, gărzile proiect/UAT → RD002), RD001 dacă există deja o convocare
  * activă neexpediată pe ACELAȘI canal (excepția: `confirmat` = bifa EXPLICITĂ din modal), apoi numărul C și INSERT-ul rândului în
  * aceeași tranzacție. Clientul NU mai inserează rândul: după rezervare încarcă doar fișierul (reincarcaConvocator pe `convocareId`).
  * Fără RPC → eroare cu `code: 'FARA_RPC'` și MESAJ_FARA_PROTECTIE (fără cale alternativă).
  * @returns {Promise<{ convocareId: string, nrDocument: string }>}
  */
-export async function rezervaNumarConvocare(supabase, { detinatorId, confirmat = false, canal = 'posta' } = {}) {
+export async function rezervaNumarConvocare(supabase, { detinatorId, calitateAsteptata, confirmat = false, canal = 'posta' } = {}) {
   if (!detinatorId) throw new Error('Lipsește deținătorul pentru rezervare.')
-  const res = await supabase.rpc(RPC_REZERVA, { p_detinator_id: detinatorId, p_numar_nou_confirmat: confirmat === true, p_canal: canal })
+  if (typeof calitateAsteptata !== 'string' || !calitateAsteptata.trim()) throw new Error('Lipsește calitatea așteptată pentru rezervare.')
+  const res = await supabase.rpc(RPC_REZERVA, { p_detinator_id: detinatorId, p_numar_nou_confirmat: confirmat === true, p_canal: canal, p_calitate_asteptata: calitateAsteptata })
   if (esteFaraRpc(res)) throw Object.assign(new Error(MESAJ_FARA_PROTECTIE), { code: 'FARA_RPC' })
   if (res.error) throw res.error
   const r0 = Array.isArray(res.data) ? res.data[0] : res.data

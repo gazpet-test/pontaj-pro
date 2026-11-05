@@ -7,8 +7,20 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure)
-    IS DISTINCT FROM '6c5e0281f95e6242731e2d61301033f3' THEN
+    IS DISTINCT FROM 'bd01044b09be4a2849e3a85831fc22af' THEN
     RAISE EXCEPTION '31c rollback: RPC schimbat dupa livrare; refuz suprascriere';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text,text)'::regprocedure
+    AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
+    AND md5(prosrc) = 'dd56a8227b0e9bfab9c7c2ca2ca57b02'
+    AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
+    RAISE EXCEPTION '31c rollback: RPC 4 argumente schimbat';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_leaga(uuid,text,text,text)'::regprocedure
+    AND NOT prosecdef AND pg_get_userbyid(proowner) = 'postgres' AND proconfig = ARRAY['search_path=public, pg_temp']::text[]
+    AND md5(prosrc) = 'e2f2c12a4ec0b23c20a0be4d5ce19075'
+    AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(proacl::text[]) a) = ARRAY['authenticated=X/postgres','postgres=X/postgres']) THEN
+    RAISE EXCEPTION '31c rollback: RPC legare schimbat';
   END IF;
   -- L14: lock INAINTE de verificarea datelor / istoricului, aceeasi ordine ca 30m.
   LOCK TABLE public.red_convocari IN SHARE ROW EXCLUSIVE MODE;
@@ -16,7 +28,7 @@ BEGIN
   LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM (VALUES
     ('fn_red_proiect_utilizatori_garda()', 'trg_red_proiect_utilizatori', 'public.red_proiecte', '713d175aeecb280350ce53dec520f45e'),
-    ('fn_red_convocari_utilizatori_garda()', 'trg_red_convocari_h_utilizatori', 'public.red_convocari', 'b8cfeb042d1418fb69db2c12eb99b719'),
+    ('fn_red_convocari_utilizatori_garda()', 'trg_red_convocari_h_utilizatori', 'public.red_convocari', '25d8bacd42dff87315904e5833175114'),
     ('fn_red_detinatori_calitate_utilizatori_garda()', 'trg_red_detinatori_calitate_utilizatori', 'public.red_detinatori', '0cb7660327cd7b280512c5ae39dc343f')
   ) b(fn, tr, tab, hash) LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.fn)
     LEFT JOIN pg_trigger t ON t.tgrelid = b.tab::regclass AND t.tgname = b.tr
@@ -26,7 +38,9 @@ BEGIN
     OR t.tgfoid IS DISTINCT FROM p.oid OR t.tgenabled IS DISTINCT FROM 'O' OR t.tgtype IS DISTINCT FROM (CASE WHEN b.tab = 'public.red_detinatori' THEN 19 ELSE 23 END)::smallint OR t.tgqual IS NOT NULL OR t.tgnargs <> 0 OR encode(t.tgargs,'hex') <> '' OR t.tgattr::text <> '') THEN
     RAISE EXCEPTION '31c rollback: triggere schimbate dupa livrare; refuz suprascriere';
   END IF;
-  IF EXISTS (SELECT 1 FROM public.red_proiecte WHERE convocare_utilizatori_aprobata IS NOT FALSE
+  IF EXISTS (SELECT 1 FROM public.red_convocari WHERE calitate_document IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_convocari' AND date_noi->>'calitate_document' IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM public.red_proiecte WHERE convocare_utilizatori_aprobata IS NOT FALSE
       OR convocare_utilizatori_aprobata_de IS NOT NULL OR convocare_utilizatori_aprobata_la IS NOT NULL)
     OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_proiecte'
       AND (date_noi->>'convocare_utilizatori_aprobata' = 'true' OR date_noi->>'convocare_utilizatori_aprobata_de' IS NOT NULL))
@@ -103,17 +117,23 @@ BEGIN
   -- r5 P1-01: identitatea folosită de server (clientul o compară cu documentul pe care îl generează)
   RETURN QUERY SELECT v_id, v_nr, v_parcela, v_uat, v_proiect;
 END $fn$;
+DROP FUNCTION public.fn_red_convocare_leaga(uuid,text,text,text);
+DROP FUNCTION public.fn_red_convocare_rezerva(uuid,boolean,text,text);
 DROP TRIGGER trg_red_detinatori_calitate_utilizatori ON public.red_detinatori;
 DROP FUNCTION public.fn_red_detinatori_calitate_utilizatori_garda();
 DROP TRIGGER trg_red_convocari_h_utilizatori ON public.red_convocari;
 DROP FUNCTION public.fn_red_convocari_utilizatori_garda();
 DROP TRIGGER trg_red_proiect_utilizatori ON public.red_proiecte;
 DROP FUNCTION public.fn_red_proiect_utilizatori_garda();
+ALTER TABLE public.red_convocari DROP COLUMN calitate_document;
 ALTER TABLE public.red_proiecte DROP COLUMN convocare_utilizatori_aprobata,
   DROP COLUMN convocare_utilizatori_aprobata_de, DROP COLUMN convocare_utilizatori_aprobata_la;
 DO $post$
 BEGIN
-  IF to_regprocedure('public.fn_red_detinatori_calitate_utilizatori_garda()') IS NOT NULL
+  IF to_regprocedure('public.fn_red_convocare_leaga(uuid,text,text,text)') IS NOT NULL
+    OR to_regprocedure('public.fn_red_convocare_rezerva(uuid,boolean,text,text)') IS NOT NULL
+    OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.red_convocari'::regclass AND attname = 'calitate_document' AND NOT attisdropped)
+    OR to_regprocedure('public.fn_red_detinatori_calitate_utilizatori_garda()') IS NOT NULL
     OR to_regprocedure('public.fn_red_convocari_utilizatori_garda()') IS NOT NULL
     OR to_regprocedure('public.fn_red_proiect_utilizatori_garda()') IS NOT NULL
     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.red_proiecte'::regclass

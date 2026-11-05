@@ -77,7 +77,7 @@ describe('ConvocatoareMasa — StrictMode și generații', () => {
     await buton(el, 'Verifică').props.onClick()
     expect(lot.apeluri).toBe(1)
     el = h.randeaza(props)
-    expect(text(el)).toContain('protecția la concurență nu e activă — aplicați migrarea 20261130l')
+    expect(text(el)).toContain('protecția la concurență nu e activă — aplicați migrarea 20261131c')
     expect(buton(el, 'Generează').props.disabled).toBe(true)
   })
   it('după demontare, un răspuns întârziat nu se aplică', async () => {

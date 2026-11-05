@@ -103,6 +103,7 @@ DECLARE cod text; mesaj text;
 BEGIN
   BEGIN EXECUTE p_sql; EXCEPTION WHEN OTHERS THEN cod := SQLSTATE; mesaj := SQLERRM; END;
   IF cod IS DISTINCT FROM p_cod THEN RAISE EXCEPTION 'DRY31C: asteptat %, primit % (%)', p_cod, coalesce(cod, 'succes'), mesaj; END IF;
+  IF p_cod = 'RD008' AND mesaj IS DISTINCT FROM 'calitatea s-a schimbat - regenereaza' THEN RAISE EXCEPTION 'DRY31C: motiv calitate gresit %', mesaj; END IF;
   IF p_cod = 'RD006' AND mesaj IS DISTINCT FROM 'utilizator - convocare neaprobata' THEN RAISE EXCEPTION 'DRY31C: motiv gresit %', mesaj; END IF;
 END $f$;
 GRANT EXECUTE ON FUNCTION pg_temp.dry31c_refuz(text,text) TO authenticated;
@@ -125,7 +126,7 @@ DECLARE d uuid; canal text;
 BEGIN
   FOREACH d IN ARRAY ARRAY['31310000-0000-0000-0000-000000000051'::uuid,'31310000-0000-0000-0000-000000000052'::uuid] LOOP
     FOREACH canal IN ARRAY ARRAY['posta','email','sms','afisare'] LOOP
-      PERFORM pg_temp.dry31c_refuz(format('SELECT * FROM public.fn_red_convocare_rezerva(%L, true, %L)', d, canal), 'RD006');
+      PERFORM pg_temp.dry31c_refuz(format('SELECT * FROM public.fn_red_convocare_rezerva(%L, true, %L, %L)', d, canal, CASE WHEN d = '31310000-0000-0000-0000-000000000051'::uuid THEN 'utilizator' ELSE 'arendas' END), 'RD006');
     END LOOP;
   END LOOP;
 END $t$;
@@ -137,7 +138,7 @@ BEGIN
   END IF;
 END $t$;
 -- Proprietar neafectat (inclusiv informarea publicata si protocolul 30l).
-SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000053');
+SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000053', false, 'posta', 'proprietar');
 
 -- Rezervare in masa UAT: clientul filtreaza; simularea server-side a unui client vechi raporteaza RD006 si continua.
 CREATE TEMP TABLE dry31c_raport (calitate text, rezultat text);
@@ -147,7 +148,7 @@ BEGIN
   FOR d IN SELECT x.id, x.calitate FROM public.red_detinatori x JOIN public.red_parcele p ON p.id = x.parcela_id
     WHERE p.uat_id = '31310000-0000-0000-0000-000000000030' ORDER BY x.id LOOP
     BEGIN
-      PERFORM * FROM public.fn_red_convocare_rezerva(d.id, true, 'email');
+      PERFORM * FROM public.fn_red_convocare_rezerva(d.id, true, 'email', d.calitate);
       INSERT INTO dry31c_raport VALUES (d.calitate, 'rezervat');
     EXCEPTION WHEN SQLSTATE 'RD006' THEN
       GET STACKED DIAGNOSTICS cod = RETURNED_SQLSTATE, motiv = MESSAGE_TEXT;
@@ -191,8 +192,8 @@ SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_proiecte SET convocare_utilizat
 RESET ROLE;
 SET LOCAL request.jwt.claims = '{"sub":"31310000-0000-0000-0000-000000000001","role":"authenticated"}';
 SET LOCAL ROLE authenticated;
-SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000051');
-SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000052');
+SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000051', false, 'posta', 'utilizator');
+SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000052', false, 'posta', 'arendas');
 -- True: ambele tranzitii cu active sunt permise, jurnalizate; revenim la calitatea reala a fixture-ului.
 UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000051';
 UPDATE public.red_detinatori SET calitate = 'utilizator' WHERE id = '31310000-0000-0000-0000-000000000051';
@@ -205,8 +206,8 @@ BEGIN
     AND user_id = '31310000-0000-0000-0000-000000000001') THEN RAISE EXCEPTION 'DRY31C: tranzitie permisa fara jurnal'; END IF;
 END $audit$;
 -- Pregatim documente fictive; niciun upload real.
-UPDATE public.red_convocari SET fisier_convocator_path = 'DRY31C/fictiv.docx', continut_hash = repeat('a',64)
-  WHERE detinator_id IN ('31310000-0000-0000-0000-000000000051','31310000-0000-0000-0000-000000000052');
+SELECT public.fn_red_convocare_leaga(id, 'DRY31C/fictiv.docx', repeat('a',64), calitate_document)
+  FROM public.red_convocari WHERE detinator_id IN ('31310000-0000-0000-0000-000000000051','31310000-0000-0000-0000-000000000052');
 -- Plic real prin RPC; pastram id-ul intr-un GUC doar de test (nu e folosit de autorizare).
 DO $t$
 DECLARE p public.red_plicuri;
@@ -258,6 +259,74 @@ END $t$;
 -- UPDATE de reparentare: proprietar -> utilizator, inclusiv pe alt canal, e refuzat.
 SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_convocari SET detinator_id = '31310000-0000-0000-0000-000000000051'
   WHERE detinator_id = '31310000-0000-0000-0000-000000000053' AND canal = 'email'$q$, 'RD006');
+
+-- R3: legacy si intercalari deterministe, cu doua intentii succesive in READ COMMITTED.
+-- Fixture legacy este introdus numai ca postgres pe clona de test, cu garda noua suspendata pentru INSERT-ul NULL;
+-- reproduce exact randurile de DINAINTEA migrarii. Restul testelor ruleaza cu toate garzile active, ca authenticated.
+UPDATE public.red_proiecte SET convocare_utilizatori_aprobata = true WHERE cod = 'DRY31C';
+INSERT INTO public.red_detinatori (id, parcela_id, nume, nume_normalizat, calitate)
+  VALUES ('31310000-0000-0000-0000-000000000054', '31310000-0000-0000-0000-000000000040', 'FICTIV R3', 'FICTIV R3', 'proprietar');
+RESET ROLE;
+SET LOCAL request.jwt.claims = '';
+ALTER TABLE public.red_convocari DISABLE TRIGGER trg_red_convocari_h_utilizatori;
+INSERT INTO public.red_convocari (id, detinator_id, canal, nr_document, fisier_convocator_path, continut_hash)
+  VALUES ('31310000-0000-0000-0000-000000000082', '31310000-0000-0000-0000-000000000054', 'email', 'C-LEGACY31C', 'DRY31C/legacy-v1.docx', repeat('a',64));
+ALTER TABLE public.red_convocari ENABLE TRIGGER trg_red_convocari_h_utilizatori;
+SET LOCAL request.jwt.claims = '{"sub":"31310000-0000-0000-0000-000000000001","role":"authenticated"}';
+SET LOCAL ROLE authenticated;
+-- NULL legacy nu se expediaza si nu se re-stampileaza fara un fisier nou.
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_convocari SET data_expediere = DATE '2026-11-05' WHERE id = '31310000-0000-0000-0000-000000000082'$q$, 'RD008');
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_convocari SET calitate_document = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000082'$q$, 'RD008');
+SELECT * FROM public.fn_red_convocare_leaga('31310000-0000-0000-0000-000000000082', 'DRY31C/legacy-v2.docx', repeat('b',64), 'proprietar');
+UPDATE public.red_convocari SET data_expediere = DATE '2026-11-05' WHERE id = '31310000-0000-0000-0000-000000000082';
+-- (a) Modalul a citit proprietar; alt editor schimba in utilizator, cu flag true.
+UPDATE public.red_detinatori SET calitate = 'utilizator' WHERE id = '31310000-0000-0000-0000-000000000054';
+SELECT set_config('dry31c.r3nr', coalesce((SELECT ultimul FROM public.red_numere WHERE cheie = 'C'),0)::text, true);
+SELECT pg_temp.dry31c_refuz($q$SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000054', true, 'email', 'proprietar')$q$, 'RD008');
+-- Clientul vechi, fara calitate asteptata, refuza si el (niciun overload de ocolire).
+SELECT pg_temp.dry31c_refuz($q$SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000054', true, 'email')$q$, 'RD008');
+DO $nr$
+BEGIN
+  IF coalesce((SELECT ultimul FROM public.red_numere WHERE cheie = 'C'),0)::text IS DISTINCT FROM current_setting('dry31c.r3nr') THEN
+    RAISE EXCEPTION 'DRY31C R3: rezervarea pe calitate veche a consumat numar';
+  END IF;
+END $nr$;
+-- Flux normal: calitate asteptata egala; stampila pusa/validata de server la rezervare si legare.
+UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000054';
+DO $rez$
+DECLARE c record;
+BEGIN
+  SELECT * INTO c FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000054', true, 'email', 'proprietar');
+  PERFORM set_config('dry31c.r3conv', c.convocare_id::text, true);
+  IF NOT EXISTS (SELECT 1 FROM public.red_convocari WHERE id = c.convocare_id AND calitate_document = 'proprietar') THEN
+    RAISE EXCEPTION 'DRY31C R3: rezervarea nu a pastrat calitatea documentului';
+  END IF;
+END $rez$;
+SELECT * FROM public.fn_red_convocare_leaga(current_setting('dry31c.r3conv')::uuid, 'DRY31C/r3-v1.docx', repeat('a',64), 'proprietar');
+-- Clientul vechi nu poate lega un DOCX prin PATCH fara preconditia explicita a RPC-ului.
+SELECT pg_temp.dry31c_refuz(format($q$UPDATE public.red_convocari SET fisier_convocator_path = 'DRY31C/raw-v2.docx', continut_hash = repeat('d',64) WHERE id = %L$q$, current_setting('dry31c.r3conv')), 'RD008');
+-- (b) Dupa SELECT/generare/upload pentru proprietar, calitatea curenta devine utilizator.
+UPDATE public.red_detinatori SET calitate = 'utilizator' WHERE id = '31310000-0000-0000-0000-000000000054';
+SELECT pg_temp.dry31c_refuz(format($q$SELECT * FROM public.fn_red_convocare_leaga(%L, 'DRY31C/r3-vechi-v2.docx', repeat('b',64), 'proprietar')$q$, current_setting('dry31c.r3conv')), 'RD008');
+SELECT pg_temp.dry31c_refuz(format($q$UPDATE public.red_convocari SET data_expediere = DATE '2026-11-05' WHERE id = %L$q$, current_setting('dry31c.r3conv')), 'RD008');
+SELECT pg_temp.dry31c_refuz(format($q$UPDATE public.red_convocari SET calitate_document = 'utilizator' WHERE id = %L$q$, current_setting('dry31c.r3conv')), 'RD008');
+SELECT pg_temp.dry31c_refuz(format($q$SELECT * FROM public.fn_red_convocare_leaga(%L, 'DRY31C/r3-v1.docx', repeat('a',64), 'proprietar')$q$, current_setting('dry31c.r3conv')), 'RD008');
+DO $ramas$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.red_convocari WHERE id = current_setting('dry31c.r3conv')::uuid
+    AND calitate_document = 'proprietar' AND fisier_convocator_path = 'DRY31C/r3-v1.docx' AND data_expediere IS NULL) THEN
+    RAISE EXCEPTION 'DRY31C R3: documentul vechi a fost legat/expediat sau stampila falsificata';
+  END IF;
+END $ramas$;
+-- Regenereaza: simulam documentul CORECT pentru utilizator (sablonul real vine in PR3b), apoi expediere permisa.
+SELECT * FROM public.fn_red_convocare_leaga(current_setting('dry31c.r3conv')::uuid, 'DRY31C/r3-utilizator-v3.docx', repeat('c',64), 'utilizator');
+UPDATE public.red_convocari SET data_expediere = DATE '2026-11-05' WHERE id = current_setting('dry31c.r3conv')::uuid;
+DO $normal$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.red_convocari WHERE id = current_setting('dry31c.r3conv')::uuid
+    AND calitate_document = 'utilizator' AND data_expediere = DATE '2026-11-05') THEN RAISE EXCEPTION 'DRY31C R3: flux normal refuzat'; END IF;
+END $normal$;
+
 RESET ROLE;
 SET LOCAL request.jwt.claims = '';
 ROLLBACK;

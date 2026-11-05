@@ -59,3 +59,5 @@ Rularea de probă pe Lot 1 (05.11): 411 rânduri, **156 de persoane distincte**,
 - Verificarea SQL pe schema completă, concurența și apply → rollback → re-apply trebuie executate separat într-o bază izolată. PR3a nu activează importul.
 
 PR3a runda 2: tranzițiile de calitate sunt protejate în BD sub advisory-ul rezervării/expedierii; cu poarta închisă, mascarea utilizator → proprietar este refuzată chiar fără convocare, iar proprietar → utilizator este refuzat cu convocări active. Modalul verifică și șablonul PR3b înainte să rezerve, iar reîncărcarea recitește poarta înainte de Storage. Vezi [raportul rundei 2](RAPORT_PR3A_R2.md).
+
+PR3a runda 3: `p_calitate_asteptata` verificată sub lock la rezervare; `red_convocari.calitate_document` păstrează calitatea documentului, verificată din nou atomic la legare și expediere. Legarea se face prin RPC explicit; PATCH-ul vechi este refuzat. Legacy NULL cere regenerare, fără backfill presupus. Vezi [raportul rundei 3](RAPORT_PR3A_R3.md).

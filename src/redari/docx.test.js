@@ -809,6 +809,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       storage: { from: (bucket) => ({
         upload: async (path, blob, o) => {
           apeluri.push({ tip: 'upload', bucket, path, size: blob.size, o })
+          await opt.inainteDeUpload?.()
           if (opt.eUp) return { error: { message: opt.eUp } }
           if (existente.has(path)) return { error: { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' } }
           existente.add(path); return { data: { path }, error: null }
@@ -827,15 +828,22 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       from: (tabel) => ({
         insert: (rand) => ({ select: (col) => ({ single: async () => { apeluri.push({ tip: 'insert', tabel, rand, col }); return opt.eIns ? { data: null, error: { message: opt.eIns } } : { data: { id: 'uuid-fictiv-1' }, error: null } } }) }),
         select: (col) => ({ eq: (c, val) => ({ single: async () => { apeluri.push({ tip: 'select', tabel, col, filtru: [c, val] }); return opt.eSel ? { data: null, error: { message: opt.eSel } } : { data: { id: val, fisier_convocator_path: opt.caleCurenta ?? null, detinator: opt.faraContext ? null : { calitate: opt.calitate || 'proprietar', parcela: { proiect: { cod: 'LOT1-PRUNISOR-JUPA', convocare_utilizatori_aprobata: opt.aprobata ?? false } } } }, error: null } } }) }),
-        update: (rand) => ({ eq: (col, val) => ({ select: (c2) => ({ single: async () => { apeluri.push({ tip: 'update', tabel, rand, filtru: [col, val], col: c2 }); return opt.eUpd ? { data: null, error: { message: opt.eUpd } } : opt.updZero ? { data: null, error: null } : { data: { id: val }, error: null } } }) }) }),
+        update: (rand) => ({ eq: (col, val) => ({ select: (c2) => ({ single: async () => { apeluri.push({ tip: 'update', tabel, rand, filtru: [col, val], col: c2 }); return opt.serverCalitate && rand.calitate_document !== opt.serverCalitate ? { data: null, error: { code: 'RD008', message: 'calitatea s-a schimbat - regenereaza' } } : opt.eUpd ? { data: null, error: { message: opt.eUpd } } : opt.updZero ? { data: null, error: null } : { data: { id: val }, error: null } } }) }) }),
       }),
+    }
+    supabase.rpc = async (fn, args) => {
+      expect(fn).toBe('fn_red_convocare_leaga')
+      const r = await supabase.from('red_convocari').update({ fisier_convocator_path: args.p_fisier_path, continut_hash: args.p_continut_hash, calitate_document: args.p_calitate_asteptata })
+        .eq('id', args.p_convocare_id).select('id').single()
+      apeluri.at(-1).rpc = { fn, args }
+      return { data: r.data ? [{ convocare_id: r.data.id }] : r.data, error: r.error }
     }
     return { supabase, apeluri }
   }
-  const arg = { blob: new Blob(['docx']), hash: 'ab'.repeat(32), proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1' }
+  const arg = { blob: new Blob(['docx']), hash: 'ab'.repeat(32), proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1', calitateDocument: 'proprietar' }
   const BAZA = 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0001'
   const PATH = `${BAZA}-v1.docx`
-  const argRe = { convocareId: 'uuid-vechi', blob: arg.blob, hash: arg.hash, proiectCod: arg.proiectCod, uat3: arg.uat3, idParcela: arg.idParcela, nrDocument: arg.nrDocument }
+  const argRe = { calitateDocument: 'proprietar', convocareId: 'uuid-vechi', blob: arg.blob, hash: arg.hash, proiectCod: arg.proiectCod, uat3: arg.uat3, idParcela: arg.idParcela, nrDocument: arg.nrDocument }
 
   // #970 r10 (Copilot P3-02): circuitul real Redari.jsx (generare → salvare) și FisaParcela.jsx (regenerare → reîncărcare),
   // cu supabase fals: fișierele încărcate respectă garda, hash-ul legat de rând e al fișierului, QR-ul e cel independent
@@ -874,11 +882,12 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     }
     // Redari.jsx: genereazaConvocator({ ...intrare, nrDocument }) → salveazaConvocator
     const g1 = await genereazaConvocator({ ...intrare, nrDocument: 'C-0001' })
-    const s = await salveazaConvocator(supabase, { blob: g1.blob, hash: g1.hash, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1' })
+    const s = await salveazaConvocator(supabase, { blob: g1.blob, hash: g1.hash, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1', calitateDocument: 'proprietar' })
     await verifica(incarcate.get(s.path), apeluri.find(a => a.tip === 'update').rand.continut_hash)
     // FisaParcela.jsx: aceeași convocare regenerată (data originală) → reincarcaConvocator, versiune nouă
     const g2 = await genereazaConvocator({ ...intrare, nrDocument: 'C-0001', dataDocument: '2026-11-03' })
-    const r = await reincarcaConvocator(supabase, { convocareId: s.convocareId, blob: g2.blob, hash: g2.hash, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001' })
+    expect(g2.calitateDocument).toBe('proprietar')
+    const r = await reincarcaConvocator(supabase, { convocareId: s.convocareId, blob: g2.blob, hash: g2.hash, calitateDocument: g2.calitateDocument, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001' })
     expect(r.path).toBe('LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0001-v2.docx')
     await verifica(incarcate.get(r.path), apeluri.filter(a => a.tip === 'update').at(-1).rand.continut_hash)
     // o adresă proprie în text_gdpr: garda oprește la generare, deci nu se ajunge la nicio scriere (insert / upload / update)
@@ -908,7 +917,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     expect(apeluri[0].rand).not.toHaveProperty('fisier_convocator_path')
     expect(apeluri[0].rand).not.toHaveProperty('continut_hash')
     expect(apeluri[1]).toMatchObject({ bucket: 'redari', path: PATH, size: 4, o: { contentType: MIME_DOCX, upsert: false } })
-    expect(apeluri[2]).toMatchObject({ tabel: 'red_convocari', filtru: ['id', 'uuid-fictiv-1'], col: 'id', rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
+    expect(apeluri[2]).toMatchObject({ tabel: 'red_convocari', filtru: ['id', 'uuid-fictiv-1'], col: 'id', rand: { fisier_convocator_path: PATH, continut_hash: arg.hash, calitate_document: 'proprietar' } })
   })
   it('canal explicit; segment invalid în cale → eroare ÎNAINTE de orice apel (numărul nu se consumă)', async () => {
     const { supabase, apeluri } = fake()
@@ -943,7 +952,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
 
   it.each([['utilizator', false], ['arendas', false], ['utilizator', true], ['arendas', true]])('r2 reincarcare %s / %s: poarta proaspata refuza inainte de Storage', async (calitate, aprobata) => {
     const { supabase, apeluri } = fake({ calitate, aprobata })
-    await expect(reincarcaConvocator(supabase, argRe)).rejects.toThrow(aprobata ? /PR3b/ : /utilizator - convocare neaprobata/)
+    await expect(reincarcaConvocator(supabase, { ...argRe, calitateDocument: calitate })).rejects.toThrow(aprobata ? /PR3b/ : /utilizator - convocare neaprobata/)
     expect(apeluri.map(a => a.tip)).toEqual(['select'])
     expect(apeluri[0].col).toContain('detinator:red_detinatori!inner')
   })
@@ -951,6 +960,27 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const { supabase, apeluri } = fake({ faraContext: true })
     await expect(reincarcaConvocator(supabase, argRe)).rejects.toThrow(/Contextul convocarii/)
     expect(apeluri.map(a => a.tip)).toEqual(['select'])
+  })
+
+
+  it('r3 (b): schimbare dupa SELECT, in timpul uploadului -> trimite calitatea documentului, serverul refuza legarea', async () => {
+    const opt = { serverCalitate: 'proprietar' }
+    opt.inainteDeUpload = () => { opt.serverCalitate = 'utilizator' }
+    const { supabase, apeluri } = fake(opt)
+    const e = await reincarcaConvocator(supabase, { ...argRe, calitateDocument: 'proprietar' }).catch(e => e)
+    expect(e).toMatchObject({ pas: 'update', code: 'RD008' })
+    expect(e.message).toContain('calitatea s-a schimbat - regenereaza')
+    expect(apeluri.map(a => a.tip)).toEqual(['select', 'list', 'upload', 'update'])
+    expect(apeluri.at(-1).rand).toEqual({ fisier_convocator_path: PATH, continut_hash: arg.hash, calitate_document: 'proprietar' })
+    expect(apeluri.at(-1).rpc.args.p_calitate_asteptata).toBe('proprietar')
+  })
+  it('r3: calitatea asteptata lipsa sau deja schimbata refuza fara Storage', async () => {
+    const a = fake()
+    await expect(reincarcaConvocator(a.supabase, { ...argRe, calitateDocument: undefined })).rejects.toThrow('Lipsește calitatea documentului')
+    expect(a.apeluri).toEqual([])
+    const b = fake({ calitate: 'coproprietar' })
+    await expect(reincarcaConvocator(b.supabase, argRe)).rejects.toThrow('calitatea s-a schimbat - regenereaza')
+    expect(b.apeluri.map(a => a.tip)).toEqual(['select'])
   })
 
   it('reincarcaConvocator pe rând FĂRĂ fișier (path NULL): citește rândul, încarcă v1 (upsert false), update pe id-ul dat', async () => {
@@ -962,7 +992,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     expect(apeluri[0].col).toMatch(/fisier_convocator_path/)
     expect(apeluri[1]).toMatchObject({ bucket: 'redari', folder: 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001' })
     expect(apeluri[2]).toMatchObject({ bucket: 'redari', path: PATH, o: { contentType: MIME_DOCX, upsert: false } })
-    expect(apeluri[3]).toMatchObject({ filtru: ['id', 'uuid-vechi'], rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
+    expect(apeluri[3]).toMatchObject({ filtru: ['id', 'uuid-vechi'], rand: { fisier_convocator_path: PATH, continut_hash: arg.hash, calitate_document: 'proprietar' } })
     await expect(reincarcaConvocator(supabase, { blob: arg.blob, hash: arg.hash })).rejects.toThrow(/id-ul convocării/)
   })
   it('reincarcaConvocator pe rând CU fișier: versiunea următoare, calea veche nu se atinge (niciun upsert:true nicăieri)', async () => {
@@ -971,7 +1001,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     expect(r).toEqual({ path: `${BAZA}-v4.docx`, convocareId: 'uuid-vechi', versiune: 4 })
     expect(apeluri.filter(a => a.tip === 'upload').map(a => a.path)).toEqual([`${BAZA}-v4.docx`])
     expect(apeluri.filter(a => a.tip === 'upload').every(a => a.o.upsert === false)).toBe(true)
-    expect(apeluri.at(-1)).toMatchObject({ tip: 'update', rand: { fisier_convocator_path: `${BAZA}-v4.docx`, continut_hash: arg.hash } })
+    expect(apeluri.at(-1)).toMatchObject({ tip: 'update', rand: { fisier_convocator_path: `${BAZA}-v4.docx`, continut_hash: arg.hash, calitate_document: 'proprietar' } })
     // cale veche fără sufix de versiune (fișier dinainte de versionare) → prima versiune e v1
     const b = fake({ caleCurenta: `${BAZA}.docx` })
     expect((await reincarcaConvocator(b.supabase, argRe)).path).toBe(`${BAZA}-v1.docx`)
