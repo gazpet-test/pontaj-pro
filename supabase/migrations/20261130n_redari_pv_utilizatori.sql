@@ -21,17 +21,21 @@ BEGIN
     RAISE EXCEPTION 'PR1: PV A semnate legacy; necesita backfill istoric revizuit, fara deducere din calitatea actuala'; END IF;
   PERFORM set_config('search_path','public, pg_temp',true);
 END $pre$;
+-- R5, clona PG 17.6 raportata de Razvan: cele trei triggere PV au numai postgres/service_role.
+-- Surse: 20261129c:46, 20261129d:109, 20261129f:96 retrag PUBLIC/anon; corpurile sunt identice.
+-- Revocarea suplimentara authenticated nu a fost identificata in repo consultat (inclusiv main).
+-- Asteptarea de mai jos urmeaza inventarul confirmat; nu acordam/retragem drepturi la apply.
 CREATE TEMP TABLE pr1_functii (sig text, corp text, definer boolean, vol text, acl text[]) ON COMMIT DROP;
 INSERT INTO pr1_functii VALUES
     ('public.fn_red_adresa_cunoscuta(uuid)','55cb31fc3f291cb27bea16a2b9291146',true,'s',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']),
     ('public.fn_red_pv_creeaza(text,uuid,uuid,integer)','28db364379220bbf55c595e511ea12e2',true,'v',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261129f_redari_pvb_coproprietari.sql */,
-    ('public.fn_red_pv_b_semnare()','816a566e8f99e5e2cf172290eee9eaa9',false,'v',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261129f_redari_pvb_coproprietari.sql */,
-    ('public.fn_red_pv_stare_tranzitie()','2d69244951387ad650e2b1ed91a19308',false,'v',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261129c_redari_pv_stari.sql */,
+    ('public.fn_red_pv_b_semnare()','816a566e8f99e5e2cf172290eee9eaa9',false,'v',ARRAY['postgres=X/postgres','service_role=X/postgres']) /* 20261129f_redari_pvb_coproprietari.sql */,
+    ('public.fn_red_pv_stare_tranzitie()','2d69244951387ad650e2b1ed91a19308',false,'v',ARRAY['postgres=X/postgres','service_role=X/postgres']) /* 20261129c_redari_pv_stari.sql */,
     ('public.fn_red_numar_document(text,text,integer)','002a8dbb14f9a69db48d0b4c0428fef0',true,'v',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261130l_redari_convocare_rezerva.sql */,
     ('public.fn_red_nivel()','21db8e5d4b69b7f19e571a7087c361ae',true,'s',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261126a_redari_teren.sql */,
     ('public.fn_red_legaturi()','d1912ec6514cba162babea3bcebdfb24',true,'v',ARRAY['postgres=X/postgres']) /* 20261129g_redari_tronson_optional.sql */,
     ('public.fn_red_jurnal()','41ab451b7fcb499a2284c9c82367069e',true,'v',ARRAY['postgres=X/postgres']) /* 20261130j_redari_mail_f1_schema.sql */,
-    ('public.fn_red_pv_c_garda()','975e5501b2c9e4ceca85a84b3fd64f3d',false,'v',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261129d_redari_pv_c.sql */,
+    ('public.fn_red_pv_c_garda()','975e5501b2c9e4ceca85a84b3fd64f3d',false,'v',ARRAY['postgres=X/postgres','service_role=X/postgres']) /* 20261129d_redari_pv_c.sql */,
     ('public.fn_red_pv_c_creeaza(uuid,integer)','a4ddfd572dc9c22e4889fd6309d9a3ba',true,'v',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261129g_redari_tronson_optional.sql */,
     ('public.fn_red_pv_c_neacoperite(uuid,integer)','ad42b1c7c1e4be49a2ea99a5eca9e3dd',true,'v',ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']) /* 20261129d_redari_pv_c.sql */;
 DO $baseline$
@@ -138,6 +142,7 @@ BEGIN
       FROM pg_class WHERE oid='public.red_v_tronson'::regclass),false) THEN RAISE EXCEPTION 'PR1: vedere baseline diferit'; END IF;
 END $view$;
 -- Capture preservation metadata only AFTER validating the allow-listed baseline.
+-- PG17: relacl/attacl se compara integral, inclusiv MAINTAIN (m); fara literal ACL pre-PG17.
 CREATE TEMP TABLE pr1_meta ON COMMIT DROP AS
 SELECT 'view' AS k, jsonb_build_array(c.relowner,c.relacl,
   (SELECT jsonb_agg(jsonb_build_array(a.attnum,a.attname,a.atttypid,a.atttypmod,a.attcollation,a.attacl) ORDER BY a.attnum)

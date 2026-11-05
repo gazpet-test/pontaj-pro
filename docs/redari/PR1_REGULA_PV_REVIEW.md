@@ -1,6 +1,6 @@
 # PR1 — regula PV utilizatori / arendași (juridic#040)
 
-Implementarea urmează deciziile Răzvan din 05.11.2026, claude_context #1920. PR #998 este publicat ca draft către `main`, fără merge sau aplicare SQL. Publicarea a fost autorizată explicit de Răzvan. Acest document păstrează rezultatele primei runde; pentru corecțiile și validările actuale vezi [raportul rundei 4](PR1_REGULA_PV_R4_REVIEW.md). În runda 2, snapshot-ul draftului urmărește rolul curent la fiecare scriere, inclusiv regenerare; după semnare rămâne înghețat.
+Implementarea urmează deciziile Răzvan din 05.11.2026, claude_context #1920. PR #998 este publicat ca draft către `main`, fără merge sau aplicare SQL. Publicarea a fost autorizată explicit de Răzvan. Acest document păstrează rezultatele primei runde; pentru corecțiile și validările actuale vezi [raportul rundei 5](PR1_REGULA_PV_R5_REVIEW.md). În runda 2, snapshot-ul draftului urmărește rolul curent la fiecare scriere, inclusiv regenerare; după semnare rămâne înghețat.
 
 Fișiere:
 

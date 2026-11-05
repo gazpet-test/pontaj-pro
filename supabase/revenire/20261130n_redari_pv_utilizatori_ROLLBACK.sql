@@ -15,6 +15,14 @@ BEGIN
     WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.corp OR pg_get_userbyid(p.proowner)<>'postgres'
       OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']) THEN
     RAISE EXCEPTION 'PR1: corp/metadate functie noua diferite'; END IF;
+  -- R5: ACL confirmat pe clona de productie PG17.6, fara EXECUTE authenticated pe triggere PV.
+  IF EXISTS (SELECT 1 FROM (VALUES
+    ('public.fn_red_pv_b_semnare()'),('public.fn_red_pv_stare_tranzitie()'),('public.fn_red_pv_c_garda()')
+  ) b(sig) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(b.sig)
+    WHERE p.oid IS NULL OR (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(p.proacl::text[]) x)
+      IS DISTINCT FROM ARRAY['postgres=X/postgres','service_role=X/postgres']) THEN
+    RAISE EXCEPTION 'PR1: ACL triggere PV diferit de baseline PG17.6'; END IF;
+  -- Captura relacl completa pastreaza inclusiv MAINTAIN (m) din PostgreSQL 17.
   PERFORM set_config('gazpet.pr1_revenire_view', (SELECT jsonb_build_array(relowner,relacl)::text FROM pg_class WHERE oid='public.red_v_tronson'::regclass),true);
   IF EXISTS (SELECT 1 FROM public.red_procese_verbale WHERE calitate_semnatar IS NOT NULL OR calitate_document IS NOT NULL)
     OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela='red_procese_verbale'

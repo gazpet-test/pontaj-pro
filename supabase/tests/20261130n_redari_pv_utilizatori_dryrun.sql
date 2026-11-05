@@ -1,4 +1,4 @@
--- psql, ONLY on a disposable clone with production schema, roles and ACL. NO live data.
+-- psql, ONLY on a disposable PG17.6 clone with production schema, roles and ACL. NO live data.
 -- This file owns ONE transaction, always rolled back, including the migration and identities.
 \set ON_ERROR_STOP on
 BEGIN;
@@ -9,13 +9,26 @@ SELECT set_config('gazpet.livrare_migrare','20261130n_redari_pv_utilizatori_ROLL
 \ir ../revenire/20261130n_redari_pv_utilizatori_ROLLBACK.sql
 SELECT set_config('gazpet.livrare_migrare','20261130n_redari_pv_utilizatori:'||txid_current(),true);
 \ir ../migrations/20261130n_redari_pv_utilizatori.sql
+DO $acl_pg17$
+BEGIN
+  -- R5: ACL confirmat pe clona de productie PG17.6, fara EXECUTE authenticated pe triggere PV.
+  IF EXISTS (SELECT 1 FROM (VALUES
+    ('public.fn_red_pv_b_semnare()'),('public.fn_red_pv_stare_tranzitie()'),('public.fn_red_pv_c_garda()')
+  ) b(sig) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(b.sig)
+    WHERE p.oid IS NULL OR (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(p.proacl::text[]) x)
+      IS DISTINCT FROM ARRAY['postgres=X/postgres','service_role=X/postgres']) THEN
+    RAISE EXCEPTION 'PR1: ACL triggere PV diferit de baseline PG17.6'; END IF;
+END $acl_pg17$;
 -- Fictive identities, no existing persons/accounts needed; refuse UUID collisions.
 INSERT INTO auth.users(id,email) VALUES
  ('00000000-0000-4000-8000-00000030a001','pr1.editor@example.invalid'),
  ('00000000-0000-4000-8000-00000030a002','pr1.fara-acces@example.invalid');
 INSERT INTO public.profiles(id,email,name,role,is_owner) VALUES
  ('00000000-0000-4000-8000-00000030a001','pr1.editor@example.invalid','FICTIV EDITOR','manager_santier',false),
- ('00000000-0000-4000-8000-00000030a002','pr1.fara-acces@example.invalid','FICTIV FARA ACCES','manager_santier',false);
+ ('00000000-0000-4000-8000-00000030a002','pr1.fara-acces@example.invalid','FICTIV FARA ACCES','manager_santier',false)
+-- on_auth_user_created / handle_new_user creeaza deja profilul (20260929c:492).
+-- UPSERT functioneaza si cu triggerul real, pastrand explicit un rol valid si non-owner.
+ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email,name=EXCLUDED.name,role=EXCLUDED.role,is_owner=false;
 INSERT INTO public.user_module_access(profile_id,module,access_level)
  VALUES('00000000-0000-4000-8000-00000030a001','redari','editor');
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-4000-8000-00000030a001","role":"authenticated"}',true);
