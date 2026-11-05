@@ -12,16 +12,18 @@ BEGIN
   END IF;
   -- L14: lock INAINTE de verificarea datelor / istoricului, aceeasi ordine ca 30m.
   LOCK TABLE public.red_convocari IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_detinatori IN SHARE ROW EXCLUSIVE MODE;
   LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM (VALUES
     ('fn_red_proiect_utilizatori_garda()', 'trg_red_proiect_utilizatori', 'public.red_proiecte', '713d175aeecb280350ce53dec520f45e'),
-    ('fn_red_convocari_utilizatori_garda()', 'trg_red_convocari_h_utilizatori', 'public.red_convocari', '6fee8ce68437ed146827d98cc30c786f')
+    ('fn_red_convocari_utilizatori_garda()', 'trg_red_convocari_h_utilizatori', 'public.red_convocari', 'b8cfeb042d1418fb69db2c12eb99b719'),
+    ('fn_red_detinatori_calitate_utilizatori_garda()', 'trg_red_detinatori_calitate_utilizatori', 'public.red_detinatori', '0cb7660327cd7b280512c5ae39dc343f')
   ) b(fn, tr, tab, hash) LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.fn)
     LEFT JOIN pg_trigger t ON t.tgrelid = b.tab::regclass AND t.tgname = b.tr
   WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.hash OR p.prosecdef IS NOT TRUE
     OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
     OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres' OR p.proacl::text IS DISTINCT FROM '{postgres=X/postgres}'
-    OR t.tgfoid IS DISTINCT FROM p.oid OR t.tgenabled IS DISTINCT FROM 'O' OR t.tgtype IS DISTINCT FROM 23::smallint OR t.tgqual IS NOT NULL) THEN
+    OR t.tgfoid IS DISTINCT FROM p.oid OR t.tgenabled IS DISTINCT FROM 'O' OR t.tgtype IS DISTINCT FROM (CASE WHEN b.tab = 'public.red_detinatori' THEN 19 ELSE 23 END)::smallint OR t.tgqual IS NOT NULL OR t.tgnargs <> 0 OR encode(t.tgargs,'hex') <> '' OR t.tgattr::text <> '') THEN
     RAISE EXCEPTION '31c rollback: triggere schimbate dupa livrare; refuz suprascriere';
   END IF;
   IF EXISTS (SELECT 1 FROM public.red_proiecte WHERE convocare_utilizatori_aprobata IS NOT FALSE
@@ -101,6 +103,8 @@ BEGIN
   -- r5 P1-01: identitatea folosită de server (clientul o compară cu documentul pe care îl generează)
   RETURN QUERY SELECT v_id, v_nr, v_parcela, v_uat, v_proiect;
 END $fn$;
+DROP TRIGGER trg_red_detinatori_calitate_utilizatori ON public.red_detinatori;
+DROP FUNCTION public.fn_red_detinatori_calitate_utilizatori_garda();
 DROP TRIGGER trg_red_convocari_h_utilizatori ON public.red_convocari;
 DROP FUNCTION public.fn_red_convocari_utilizatori_garda();
 DROP TRIGGER trg_red_proiect_utilizatori ON public.red_proiecte;
@@ -109,7 +113,8 @@ ALTER TABLE public.red_proiecte DROP COLUMN convocare_utilizatori_aprobata,
   DROP COLUMN convocare_utilizatori_aprobata_de, DROP COLUMN convocare_utilizatori_aprobata_la;
 DO $post$
 BEGIN
-  IF to_regprocedure('public.fn_red_convocari_utilizatori_garda()') IS NOT NULL
+  IF to_regprocedure('public.fn_red_detinatori_calitate_utilizatori_garda()') IS NOT NULL
+    OR to_regprocedure('public.fn_red_convocari_utilizatori_garda()') IS NOT NULL
     OR to_regprocedure('public.fn_red_proiect_utilizatori_garda()') IS NOT NULL
     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.red_proiecte'::regclass
       AND attname IN ('convocare_utilizatori_aprobata','convocare_utilizatori_aprobata_de','convocare_utilizatori_aprobata_la') AND NOT attisdropped)

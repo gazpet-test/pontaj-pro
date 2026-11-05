@@ -2,6 +2,7 @@
 // Contract: docs/redari/CONTRACT_SCHEMA.md §9. Fără date reale aici.
 import React, { useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
+import { motivConvocatorUtilizator } from '../convocareUtilizatori.js'
 import { STARI } from '../stare.js'
 
 export const SABLON_CONVOCATOR = '/redari/sabloane/convocator.docx'
@@ -68,6 +69,8 @@ export async function citesteTokenRaspuns(detinatorId) {
 // neidentificat și are adresă cunoscută — altfel convocarea e prin afișare la Primărie. Verificarea completă (cu contactul PII) o face
 // docx.verificaDateConvocator în modal. Întoarce null când totul e în regulă, altfel motivul (text) pentru butonul dezactivat.
 export function motivBlocareConvocator(proiect, uat, rand) {
+  const motivUtilizator = motivConvocatorUtilizator(proiect, rand)
+  if (motivUtilizator) return motivUtilizator
   const lipsa = []
   if (rand) {
     if (rand.calitate === 'neidentificat') lipsa.push('deținător neidentificat → convocare prin afișare la Primărie')

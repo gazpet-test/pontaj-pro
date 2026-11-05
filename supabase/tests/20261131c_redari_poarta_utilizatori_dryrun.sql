@@ -15,6 +15,59 @@ BEGIN
   IF to_regprocedure('public.fn_red_convocari_utilizatori_garda()') IS NULL THEN RAISE EXCEPTION 'DRY31C: poarta lipseste'; END IF;
 END $g$;
 
+
+-- R2 L15: executam exact blocul portii pentru plicuri (paritatea cu migrarea e verificata de Vitest).
+CREATE FUNCTION pg_temp.dry31c_preflight_plicuri() RETURNS void LANGUAGE plpgsql AS $check$
+BEGIN
+  -- BEGIN L15_PLICURI_R2 (baseline 29i/29j/29k, callees comune verificate mai sus)
+  IF EXISTS (SELECT 1 FROM (VALUES
+    ('fn_red_plic_creeaza(uuid,uuid[])', '3ecc79e23de600a3b29235abed0a5c1c', 'plpgsql', true, 'v', '{authenticated=X/postgres,postgres=X/postgres}', ARRAY['search_path=public, pg_temp','lock_timeout=5s']::text[]),
+    ('fn_red_plic_reguli()', 'cda947fbd65187a73b7929b59c74f2fb', 'plpgsql', true, 'v', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_propaga()', '888ad343fc14223ce5260e5e89305927', 'plpgsql', true, 'v', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_scan_exista(uuid,text)', '1fabc3317c0b7d655d7701ee9d500d7b', 'sql', true, 's', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_ar_calitate()', '2034d30779ea05a58c45fc6516fe7f8e', 'plpgsql', false, 'v', '{postgres=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_identitate_garda()', 'edce63d7568ccb5c51574007b42e17ad', 'plpgsql', true, 'v', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_detinatori_before()', 'dbdd7dc25c6da9322e1275e582642e66', 'plpgsql', true, 'v', '{postgres=X/postgres}', ARRAY['search_path=public, pg_temp']::text[])
+  ) b(sig, hash, limbaj, definer, volatilitate, acl, config)
+    LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.sig)
+    LEFT JOIN pg_language g ON g.oid = p.prolang
+  WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
+    OR p.prosecdef IS DISTINCT FROM b.definer OR p.provolatile::text IS DISTINCT FROM b.volatilitate
+    OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres' OR p.proconfig IS DISTINCT FROM b.config
+    OR coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(p.proacl::text[]) a)::text, '') IS DISTINCT FROM b.acl) THEN
+    RAISE EXCEPTION '31c: preflight plicuri - functii/callee/ACL/config schimbate';
+  END IF;
+  IF (SELECT string_agg(t.tgname || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
+      || coalesce(pg_get_expr(t.tgqual,t.tgrelid), '') || '/' || t.tgnargs::text || '/' || encode(t.tgargs,'hex') || '/' || t.tgattr::text, ';' ORDER BY t.tgname COLLATE "C")
+    FROM pg_trigger t WHERE t.tgrelid = 'public.red_plicuri'::regclass AND NOT t.tgisinternal)
+    IS DISTINCT FROM 'trg_red_jurnal=fn_red_jurnal()/O/29//0//;trg_red_plic_propaga=fn_red_plic_propaga()/O/17//0//;trg_red_plic_reguli=fn_red_plic_reguli()/O/23//0//;trg_red_versiune=fn_red_versiune_creste()/O/19//0//;trg_red_zz_ar_calitate=fn_red_plic_ar_calitate()/O/19//0//' THEN
+    RAISE EXCEPTION '31c: preflight plicuri - triggere/argumente/coloane schimbate';
+  END IF;
+  -- END L15_PLICURI_R2
+END $check$;
+SELECT pg_temp.dry31c_preflight_plicuri();
+DO $mutant_test$
+DECLARE refuzat boolean := false;
+BEGIN
+  BEGIN
+    -- Mutant real de 2 niveluri: plic -> trigger AFTER -> propagare golita (nu mai scrie data_expediere).
+    EXECUTE $ddl$CREATE OR REPLACE FUNCTION public.fn_red_plic_propaga() RETURNS trigger
+      LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $mutant$BEGIN RETURN NULL; END $mutant$;$ddl$;
+    BEGIN
+      PERFORM pg_temp.dry31c_preflight_plicuri();
+    EXCEPTION WHEN SQLSTATE 'P0001' THEN
+      IF SQLERRM IS DISTINCT FROM '31c: preflight plicuri - functii/callee/ACL/config schimbate' THEN RAISE; END IF;
+      refuzat := true;
+    END;
+    IF NOT refuzat THEN RAISE EXCEPTION 'DRY31C FAIL: mutantul propagarii a trecut preflight'; END IF;
+    -- Anulam subtranzactia DOAR dupa refuzul exact: restauram corpul, owner/ACL/config originale.
+    RAISE EXCEPTION 'restore mutant' USING ERRCODE = 'ZC001';
+  EXCEPTION WHEN SQLSTATE 'ZC001' THEN NULL;
+  END;
+  PERFORM pg_temp.dry31c_preflight_plicuri();
+  RAISE NOTICE 'DRY31C OK: preflight refuza mutantul propagarii; originalul restaurat trece';
+END $mutant_test$;
+
 INSERT INTO auth.users (id, email, aud, role) VALUES
   ('31310000-0000-0000-0000-000000000001', 'owner31c@example.invalid', 'authenticated', 'authenticated'),
   ('31310000-0000-0000-0000-000000000002', 'admin31c@example.invalid', 'authenticated', 'authenticated');
@@ -63,6 +116,9 @@ SET LOCAL ROLE authenticated;
 SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_proiecte SET convocare_utilizatori_aprobata = true WHERE cod = 'DRY31C'$q$, '42501');
 SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_proiecte SET convocare_utilizatori_aprobata_de = '31310000-0000-0000-0000-000000000002' WHERE cod = 'DRY31C'$q$, '42501');
 SELECT pg_temp.dry31c_refuz($q$INSERT INTO public.red_proiecte (cod, convocare_utilizatori_aprobata) VALUES ('DRY31C-REFUZ', true)$q$, '42501');
+-- R2: mascarea utilizator/arendas -> proprietar este refuzata chiar INAINTE de prima rezervare.
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000051'$q$, 'RD007');
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000052'$q$, 'RD007');
 -- False: ambele calitati, toate canalele rezervate de RPC; confirmarea de numar nou nu ocoleste poarta.
 DO $t$
 DECLARE d uuid; canal text;
@@ -104,6 +160,16 @@ BEGIN
   END IF;
 END $t$;
 TABLE dry31c_raport;
+-- R2: proprietar -> utilizator/arendas cu convocare rezervata, apoi expediata: refuz RD007.
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_detinatori SET calitate = 'utilizator' WHERE id = '31310000-0000-0000-0000-000000000053'$q$, 'RD007');
+UPDATE public.red_convocari SET data_expediere = DATE '2026-11-05'
+  WHERE detinator_id = '31310000-0000-0000-0000-000000000053' AND canal = 'email';
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_detinatori SET calitate = 'arendas' WHERE id = '31310000-0000-0000-0000-000000000053'$q$, 'RD007');
+-- Exceptia legitima: numai convocari anulate -> intrarea in utilizator e permisa cu false.
+UPDATE public.red_convocari SET stare = 'anulat', motiv_anulare = 'DRY schimbare calitate'
+  WHERE detinator_id = '31310000-0000-0000-0000-000000000053';
+UPDATE public.red_detinatori SET calitate = 'utilizator' WHERE id = '31310000-0000-0000-0000-000000000053';
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000053'$q$, 'RD007');
 RESET ROLE;
 
 -- Owner aproba; triggerul pune cine/cand. Fara avizul avocatului.
@@ -127,6 +193,17 @@ SET LOCAL request.jwt.claims = '{"sub":"31310000-0000-0000-0000-000000000001","r
 SET LOCAL ROLE authenticated;
 SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000051');
 SELECT * FROM public.fn_red_convocare_rezerva('31310000-0000-0000-0000-000000000052');
+-- True: ambele tranzitii cu active sunt permise, jurnalizate; revenim la calitatea reala a fixture-ului.
+UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000051';
+UPDATE public.red_detinatori SET calitate = 'utilizator' WHERE id = '31310000-0000-0000-0000-000000000051';
+UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000053';
+DO $audit$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_detinatori'
+    AND inregistrare_id = '31310000-0000-0000-0000-000000000051'
+    AND date_vechi->>'calitate' = 'proprietar' AND date_noi->>'calitate' = 'utilizator'
+    AND user_id = '31310000-0000-0000-0000-000000000001') THEN RAISE EXCEPTION 'DRY31C: tranzitie permisa fara jurnal'; END IF;
+END $audit$;
 -- Pregatim documente fictive; niciun upload real.
 UPDATE public.red_convocari SET fisier_convocator_path = 'DRY31C/fictiv.docx', continut_hash = repeat('a',64)
   WHERE detinator_id IN ('31310000-0000-0000-0000-000000000051','31310000-0000-0000-0000-000000000052');
@@ -152,6 +229,9 @@ SET LOCAL request.jwt.claims = '{"sub":"31310000-0000-0000-0000-000000000001","r
 SET LOCAL ROLE authenticated;
 -- OFF e permis; provenienta ultimei aprobari ramane pentru rollback / audit.
 UPDATE public.red_proiecte SET convocare_utilizatori_aprobata = false WHERE cod = 'DRY31C';
+-- R2: cu convocari active, iesirea din utilizator/arendas ramane blocata dupa revocare.
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000051'$q$, 'RD007');
+SELECT pg_temp.dry31c_refuz($q$UPDATE public.red_detinatori SET calitate = 'proprietar' WHERE id = '31310000-0000-0000-0000-000000000052'$q$, 'RD007');
 -- Calea legitima de expediere: UPDATE pe plic -> fn_red_plic_propaga DEFINER -> convocari.
 SELECT pg_temp.dry31c_refuz(format('UPDATE public.red_plicuri SET awb = ''DRY31C'', data_expediere = DATE ''2026-11-05'' WHERE id = %L', current_setting('dry31c.plic')), 'RD006');
 -- Refuzul a anulat si scrierea plicului.

@@ -826,7 +826,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       }) },
       from: (tabel) => ({
         insert: (rand) => ({ select: (col) => ({ single: async () => { apeluri.push({ tip: 'insert', tabel, rand, col }); return opt.eIns ? { data: null, error: { message: opt.eIns } } : { data: { id: 'uuid-fictiv-1' }, error: null } } }) }),
-        select: (col) => ({ eq: (c, val) => ({ single: async () => { apeluri.push({ tip: 'select', tabel, col, filtru: [c, val] }); return opt.eSel ? { data: null, error: { message: opt.eSel } } : { data: { id: val, fisier_convocator_path: opt.caleCurenta ?? null }, error: null } } }) }),
+        select: (col) => ({ eq: (c, val) => ({ single: async () => { apeluri.push({ tip: 'select', tabel, col, filtru: [c, val] }); return opt.eSel ? { data: null, error: { message: opt.eSel } } : { data: { id: val, fisier_convocator_path: opt.caleCurenta ?? null, detinator: opt.faraContext ? null : { calitate: opt.calitate || 'proprietar', parcela: { proiect: { cod: 'LOT1-PRUNISOR-JUPA', convocare_utilizatori_aprobata: opt.aprobata ?? false } } } }, error: null } } }) }),
         update: (rand) => ({ eq: (col, val) => ({ select: (c2) => ({ single: async () => { apeluri.push({ tip: 'update', tabel, rand, filtru: [col, val], col: c2 }); return opt.eUpd ? { data: null, error: { message: opt.eUpd } } : opt.updZero ? { data: null, error: null } : { data: { id: val }, error: null } } }) }) }),
       }),
     }
@@ -940,6 +940,19 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const b = fake({ updZero: true })
     await expect(salveazaConvocator(b.supabase, arg)).rejects.toThrow(/niciun rând actualizat/)
   })
+
+  it.each([['utilizator', false], ['arendas', false], ['utilizator', true], ['arendas', true]])('r2 reincarcare %s / %s: poarta proaspata refuza inainte de Storage', async (calitate, aprobata) => {
+    const { supabase, apeluri } = fake({ calitate, aprobata })
+    await expect(reincarcaConvocator(supabase, argRe)).rejects.toThrow(aprobata ? /PR3b/ : /utilizator - convocare neaprobata/)
+    expect(apeluri.map(a => a.tip)).toEqual(['select'])
+    expect(apeluri[0].col).toContain('detinator:red_detinatori!inner')
+  })
+  it('r2 relatia inaccesibila nu inseamna proprietar: niciun LIST/upload', async () => {
+    const { supabase, apeluri } = fake({ faraContext: true })
+    await expect(reincarcaConvocator(supabase, argRe)).rejects.toThrow(/Contextul convocarii/)
+    expect(apeluri.map(a => a.tip)).toEqual(['select'])
+  })
+
   it('reincarcaConvocator pe rând FĂRĂ fișier (path NULL): citește rândul, încarcă v1 (upsert false), update pe id-ul dat', async () => {
     const { supabase, apeluri } = fake({ caleCurenta: null })
     const r = await reincarcaConvocator(supabase, argRe)

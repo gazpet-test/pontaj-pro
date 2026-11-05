@@ -38,9 +38,9 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
   let contor = 100
   const builder = (tab) => {
     const filtre = []
-    let op = 'select', valori = null, single = false, maybe = false, ordine = [], lim = Infinity
+    let op = 'select', valori = null, single = false, maybe = false, ordine = [], lim = Infinity, proiectie = ''
     const b = {
-      select() { return b }, order(c) { ordine.push(c); return b }, limit(n) { lim = n; return b },
+      select(col) { proiectie = col || ''; return b }, order(c) { ordine.push(c); return b }, limit(n) { lim = n; return b },
       gt(c, v) { filtre.push(r => String(r[c]) > String(v)); return b },
       eq(c, v) { filtre.push(r => r[c] === v); return b },
       is(c, v) { filtre.push(r => (r[c] ?? null) === v); return b },
@@ -59,7 +59,13 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
     const exec = () => {
       if (op === 'insert') { const r = conv({ id: `c${++contor}`, created_at: '2026-11-04', ...valori }); (tabele[tab] ||= []).push(r); jurnal.inserturi.push(r); return { data: single ? { id: r.id } : [r], error: null } }
       if (op === 'update') { const l = (tabele[tab] || []).filter(r => filtre.every(f => f(r))); l.forEach(r => Object.assign(r, valori)); jurnal.updateuri.push(valori); return { data: single ? (l[0] ? { id: l[0].id } : null) : l, error: null } }
-      const l = rez()
+      let l = rez()
+      if (tab === 'red_convocari' && proiectie.includes('detinator:red_detinatori')) l = l.map(c => {
+        const d = tabele.red_detinatori.find(x => x.id === c.detinator_id)
+        const p = tabele.red_parcele.find(x => x.id === d?.parcela_id)
+        const pr = tabele.red_proiecte.find(x => x.id === p?.proiect_id)
+        return { ...c, detinator: d && { calitate: d.calitate, parcela: p && { proiect: pr } } }
+      })
       if (maybe) return { data: l[0] ?? null, error: null }
       if (single) return l[0] ? { data: l[0], error: null } : { data: null, error: { message: 'nu există' } }
       return { data: l, error: null }

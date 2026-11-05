@@ -787,8 +787,14 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
   if (!blob) throw new Error('Lipsește fișierul convocatorului')
   if (!plin(hash)) throw new Error('Lipsește hash-ul conținutului')
   caleConvocator({ proiectCod, uat3, idParcela, nrDocument }) // validează segmentele înainte de orice apel
-  const { data: rand, error: eSel } = await supabase.from('red_convocari').select('id, fisier_convocator_path').eq('id', convocareId).single()
+  const { data: rand, error: eSel } = await supabase.from('red_convocari').select('id, fisier_convocator_path, detinator:red_detinatori!inner(calitate, parcela:red_parcele!inner(proiect:red_proiecte!inner(cod, convocare_utilizatori_aprobata)))').eq('id', convocareId).single()
   if (eSel || !rand) throw new Error(`Convocarea ${convocareId} nu a putut fi citită: ${eSel?.message || eSel || 'rând inexistent'}`)
+  // PR3a r2: contextul vine din BD dupa id-ul convocarii, nu din props-ul unui modal vechi.
+  // O singura citire PostgREST (FK-urile existente); fara relatie / eroare / alta tinta -> refuz inainte de LIST/UPLOAD.
+  const detinator = rand.detinator, proiect = detinator?.parcela?.proiect
+  if (!detinator?.calitate || !proiect?.cod || proiect.cod !== proiectCod) throw new Error('Contextul convocarii nu mai corespunde proiectului; reincarca pagina')
+  const motivUtilizator = motivConvocatorUtilizator(proiect, detinator)
+  if (motivUtilizator) throw new Error(motivUtilizator)
   const dinBucket = await versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument })
   let versiune = Math.max(versiuneDinCale(rand.fisier_convocator_path), dinBucket ?? 0) + 1
   let path, eUp

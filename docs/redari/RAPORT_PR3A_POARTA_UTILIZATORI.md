@@ -1,5 +1,7 @@
 # PR3a — poarta convocării utilizatorilor / arendașilor (juridic#040)
 
+Raport istoric pentru runda 1 (`3cf0b31e`). Starea actuală și remedierile review-ului sunt în [RAPORT_PR3A_R2.md](RAPORT_PR3A_R2.md).
+
 Branch: `codex/redari-pr3a-poarta-utilizatori`, bază `main` cu #996. PR draft, fără merge. Fișiere SQL neaplicate; fără acces Supabase și fără date reale. `IMPORT_UTILIZATORI_ACTIV=false` rămâne neschimbat.
 
 ## Fișiere și regula implementată

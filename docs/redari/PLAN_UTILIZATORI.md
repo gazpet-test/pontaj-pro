@@ -57,3 +57,5 @@ Rularea de probă pe Lot 1 (05.11): 411 rânduri, **156 de persoane distincte**,
 - Lotul îi raportează distinct în `exclusi` / opis; refuzul serverului după verificare nu pornește fallback. Generatorul individual refuză inclusiv previzualizarea.
 - **PR3b deschis:** adăugarea și verificarea șablonului juridic, selectarea lui în generator, teste de conținut și plic cu proprietar + utilizator în același UAT. Până atunci clientul refuză documentul utilizatorului și cu poarta aprobată, ca să nu folosească textul proprietarului.
 - Verificarea SQL pe schema completă, concurența și apply → rollback → re-apply trebuie executate separat într-o bază izolată. PR3a nu activează importul.
+
+PR3a runda 2: tranzițiile de calitate sunt protejate în BD sub advisory-ul rezervării/expedierii; cu poarta închisă, mascarea utilizator → proprietar este refuzată chiar fără convocare, iar proprietar → utilizator este refuzat cu convocări active. Modalul verifică și șablonul PR3b înainte să rezerve, iar reîncărcarea recitește poarta înainte de Storage. Vezi [raportul rundei 2](RAPORT_PR3A_R2.md).

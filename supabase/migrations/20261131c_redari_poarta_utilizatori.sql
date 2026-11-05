@@ -155,14 +155,50 @@ BEGIN
     OR coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(p.proacl::text[]) a)::text, '') IS DISTINCT FROM b.acl) THEN
     RAISE EXCEPTION '31c: lantul 30l/30m / owner / versiune nu mai are amprenta revizuita';
   END IF;
-  IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text || '|' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), ''), E'\n' ORDER BY t.tgname))
-      FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND NOT t.tgisinternal)
-    IS DISTINCT FROM '40d782249c5193f752fb29778569fdcf' THEN
-    RAISE EXCEPTION '31c: triggerele red_proiecte difera de baseline 30m + autorizare';
+  -- BEGIN L15_PLICURI_R2 (baseline 29i/29j/29k, callees comune verificate mai sus)
+  IF EXISTS (SELECT 1 FROM (VALUES
+    ('fn_red_plic_creeaza(uuid,uuid[])', '3ecc79e23de600a3b29235abed0a5c1c', 'plpgsql', true, 'v', '{authenticated=X/postgres,postgres=X/postgres}', ARRAY['search_path=public, pg_temp','lock_timeout=5s']::text[]),
+    ('fn_red_plic_reguli()', 'cda947fbd65187a73b7929b59c74f2fb', 'plpgsql', true, 'v', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_propaga()', '888ad343fc14223ce5260e5e89305927', 'plpgsql', true, 'v', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_scan_exista(uuid,text)', '1fabc3317c0b7d655d7701ee9d500d7b', 'sql', true, 's', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_ar_calitate()', '2034d30779ea05a58c45fc6516fe7f8e', 'plpgsql', false, 'v', '{postgres=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_plic_identitate_garda()', 'edce63d7568ccb5c51574007b42e17ad', 'plpgsql', true, 'v', '{postgres=X/postgres,service_role=X/postgres}', ARRAY['search_path=public, pg_temp']::text[]),
+    ('fn_red_detinatori_before()', 'dbdd7dc25c6da9322e1275e582642e66', 'plpgsql', true, 'v', '{postgres=X/postgres}', ARRAY['search_path=public, pg_temp']::text[])
+  ) b(sig, hash, limbaj, definer, volatilitate, acl, config)
+    LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.sig)
+    LEFT JOIN pg_language g ON g.oid = p.prolang
+  WHERE p.oid IS NULL OR md5(p.prosrc) IS DISTINCT FROM b.hash OR g.lanname IS DISTINCT FROM b.limbaj
+    OR p.prosecdef IS DISTINCT FROM b.definer OR p.provolatile::text IS DISTINCT FROM b.volatilitate
+    OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres' OR p.proconfig IS DISTINCT FROM b.config
+    OR coalesce((SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(p.proacl::text[]) a)::text, '') IS DISTINCT FROM b.acl) THEN
+    RAISE EXCEPTION '31c: preflight plicuri - functii/callee/ACL/config schimbate';
+  END IF;
+  IF (SELECT string_agg(t.tgname || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
+      || coalesce(pg_get_expr(t.tgqual,t.tgrelid), '') || '/' || t.tgnargs::text || '/' || encode(t.tgargs,'hex') || '/' || t.tgattr::text, ';' ORDER BY t.tgname COLLATE "C")
+    FROM pg_trigger t WHERE t.tgrelid = 'public.red_plicuri'::regclass AND NOT t.tgisinternal)
+    IS DISTINCT FROM 'trg_red_jurnal=fn_red_jurnal()/O/29//0//;trg_red_plic_propaga=fn_red_plic_propaga()/O/17//0//;trg_red_plic_reguli=fn_red_plic_reguli()/O/23//0//;trg_red_versiune=fn_red_versiune_creste()/O/19//0//;trg_red_zz_ar_calitate=fn_red_plic_ar_calitate()/O/19//0//' THEN
+    RAISE EXCEPTION '31c: preflight plicuri - triggere/argumente/coloane schimbate';
+  END IF;
+  -- END L15_PLICURI_R2
+  -- Triggerele detinatorului pot modifica NEW.calitate; fixam inventarul complet, inclusiv argumente/UPDATE OF.
+  IF (SELECT string_agg(t.tgname || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
+      || coalesce(pg_get_expr(t.tgqual,t.tgrelid), '') || '/' || t.tgnargs::text || '/' || encode(t.tgargs,'hex') || '/' || t.tgattr::text, ';' ORDER BY t.tgname COLLATE "C")
+    FROM pg_trigger t WHERE t.tgrelid = 'public.red_detinatori'::regclass AND NOT t.tgisinternal)
+    IS DISTINCT FROM 'trg_red_detinatori_before=fn_red_detinatori_before()/O/23//0//;trg_red_detinatori_token=fn_red_detinatori_token_dupa()/O/5//0//;trg_red_jurnal=fn_red_jurnal()/O/29//0//;trg_red_legaturi=fn_red_legaturi()/O/23//0//;trg_red_plic_identitate=fn_red_plic_identitate_garda()/O/19//0//' THEN
+    RAISE EXCEPTION '31c: triggere red_detinatori - inventar/argumente/coloane schimbate';
+  END IF;
+  -- BEFORE UPDATE alfabetic: autorizare_tgz < proiect_utilizatori (nou) < proiecte_retentie_mail < versiune.
+  -- Jurnalul este AFTER. Ordinea, tgargs si tgattr sunt parte din baseline; nicio garda nu modifica campurile celeilalte.
+  IF (SELECT string_agg(t.tgname || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
+      || coalesce(pg_get_expr(t.tgqual,t.tgrelid), '') || '/' || t.tgnargs::text || '/' || encode(t.tgargs,'hex') || '/' || t.tgattr::text, ';' ORDER BY t.tgname COLLATE "C")
+    FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND NOT t.tgisinternal)
+    IS DISTINCT FROM 'trg_red_autorizare_tgz=fn_red_autorizare_tgz_garda()/O/23//0//;trg_red_jurnal=fn_red_jurnal()/O/29//0//;trg_red_proiecte_retentie_mail=fn_red_mail_proiect_retentie()/O/23//0//;trg_red_versiune=fn_red_versiune_creste()/O/19//0//' THEN
+    RAISE EXCEPTION '31c: triggere red_proiecte - ordine/argumente/coloane schimbate';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.red_proiecte'::regclass AND attname = 'convocare_utilizatori_aprobata' AND NOT attisdropped)
     OR to_regprocedure('public.fn_red_proiect_utilizatori_garda()') IS NOT NULL
-    OR to_regprocedure('public.fn_red_convocari_utilizatori_garda()') IS NOT NULL THEN
+    OR to_regprocedure('public.fn_red_convocari_utilizatori_garda()') IS NOT NULL
+    OR to_regprocedure('public.fn_red_detinatori_calitate_utilizatori_garda()') IS NOT NULL THEN
     RAISE EXCEPTION '31c: poarta exista deja';
   END IF;
   IF (SELECT md5(string_agg(t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || t.tgfoid::regprocedure::text || '|' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), ''), E'\n' ORDER BY t.tgname))
@@ -182,6 +218,7 @@ END $pre$;
 
 -- Aceeasi ordine DDL ca 30m; lock inaintea verificarilor de date.
 LOCK TABLE public.red_convocari IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.red_detinatori IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.red_proiecte IN ACCESS EXCLUSIVE MODE;
 ALTER TABLE public.red_proiecte
   ADD COLUMN convocare_utilizatori_aprobata boolean NOT NULL DEFAULT false,
@@ -220,6 +257,7 @@ BEGIN
   RETURN NEW;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_red_proiect_utilizatori_garda() FROM PUBLIC, anon, authenticated, service_role;
+-- Ordine BEFORE UPDATE: autorizare_tgz -> proiect_utilizatori -> proiecte_retentie_mail -> versiune.
 CREATE TRIGGER trg_red_proiect_utilizatori BEFORE INSERT OR UPDATE ON public.red_proiecte
   FOR EACH ROW EXECUTE FUNCTION public.fn_red_proiect_utilizatori_garda();
 
@@ -243,11 +281,16 @@ BEGIN
   -- Inclusiv la PATCH direct: calitatea / mutarea detinatorului nu se pot schimba in timpul deciziei.
   SELECT d.calitate, p.proiect_id INTO v_calitate, v_proiect
     FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id
-    WHERE d.id = NEW.detinator_id FOR SHARE OF d, p;
+    WHERE d.id = NEW.detinator_id FOR SHARE OF d, p NOWAIT;
   IF v_proiect IS NULL THEN RAISE EXCEPTION '31c: tinta convocarii inaccesibila' USING ERRCODE = '42501'; END IF;
+  -- Lock implicit pe convocare -> detinator/parcela NOWAIT -> TRY acelasi advisory ca RPC -> proiect NOWAIT.
+  -- TRY este obligatoriu: un UPDATE direct pe detinator poate avea deja lock-ul de rand inainte de trigger.
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('red_convocare_posta:' || v_proiect::text || ':' || NEW.detinator_id::text, 0)) THEN
+    RAISE EXCEPTION '31c: convocarea/calitatea se modifica simultan; reincercati' USING ERRCODE = '55P03';
+  END IF;
   IF v_calitate IN ('utilizator', 'arendas') THEN
     SELECT pr.convocare_utilizatori_aprobata INTO v_aprobata FROM public.red_proiecte pr
-      WHERE pr.id = v_proiect FOR SHARE;
+      WHERE pr.id = v_proiect FOR SHARE NOWAIT;
     IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor') THEN
       RAISE EXCEPTION '31c: fara drept de convocare' USING ERRCODE = '42501';
     END IF;
@@ -260,6 +303,51 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_red_convocari_utilizatori_garda() FROM PUBLIC, anon, authenticated, service_role;
 CREATE TRIGGER trg_red_convocari_h_utilizatori BEFORE INSERT OR UPDATE ON public.red_convocari
   FOR EACH ROW EXECUTE FUNCTION public.fn_red_convocari_utilizatori_garda();
+
+
+-- P1 r2: calitatea nu poate servi ca ocolire a portii intre doua scrieri pe convocari.
+CREATE FUNCTION public.fn_red_detinatori_calitate_utilizatori_garda() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_proiect uuid; v_aprobata boolean; v_utilizator_vechi boolean; v_utilizator_nou boolean;
+BEGIN
+  IF NEW.calitate IS NOT DISTINCT FROM OLD.calitate AND NEW.parcela_id IS NOT DISTINCT FROM OLD.parcela_id THEN RETURN NEW; END IF;
+  v_utilizator_vechi := OLD.calitate IN ('utilizator','arendas');
+  v_utilizator_nou := NEW.calitate IN ('utilizator','arendas');
+  IF NOT v_utilizator_vechi AND NOT v_utilizator_nou THEN RETURN NEW; END IF;
+  IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin','editor') THEN
+    RAISE EXCEPTION '31c: fara drept de modificare a calitatii' USING ERRCODE = '42501';
+  END IF;
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION '31c: schimbarea calitatii cere READ COMMITTED' USING ERRCODE = '25001';
+  END IF;
+  -- L01/L06: UPDATE are deja lock implicit pe detinator. Nu asteptam nici advisory-ul, nici proiectul:
+  -- TRY advisory (aceeasi cheie ca rezervarea / expedierea), proiect FOR SHARE NOWAIT, apoi EXISTS.
+  -- Un concurent care are advisory si asteapta detinatorul castiga; acest UPDATE cedeaza cu 55P03, fara deadlock.
+  -- Proiectele vechi/nou se parcurg ordonat; reparentarea nu poate alege o poarta mai permisiva.
+  FOR v_proiect IN SELECT DISTINCT p.proiect_id FROM public.red_parcele p
+    WHERE p.id IN (OLD.parcela_id, NEW.parcela_id) ORDER BY p.proiect_id LOOP
+    IF NOT pg_try_advisory_xact_lock(hashtextextended('red_convocare_posta:' || v_proiect::text || ':' || OLD.id::text, 0)) THEN
+      RAISE EXCEPTION '31c: convocarea/calitatea se modifica simultan; reincercati' USING ERRCODE = '55P03';
+    END IF;
+    SELECT pr.convocare_utilizatori_aprobata INTO v_aprobata FROM public.red_proiecte pr
+      WHERE pr.id = v_proiect FOR SHARE NOWAIT;
+    IF v_aprobata IS NOT TRUE THEN
+      -- Refuzam mascarea utilizator -> proprietar chiar fara convocare: altfel ar putea rezerva imediat ca proprietar.
+      IF v_utilizator_vechi AND NOT v_utilizator_nou THEN
+        RAISE EXCEPTION '31c: utilizator - schimbarea in proprietar cere aprobarea convocarii utilizatorilor' USING ERRCODE = 'RD007';
+      END IF;
+      IF v_utilizator_nou AND EXISTS (SELECT 1 FROM public.red_convocari c WHERE c.detinator_id = OLD.id
+        AND c.stare = 'activ' AND c.sters_la IS NULL) THEN
+        RAISE EXCEPTION '31c: utilizator - convocare activa, schimbarea calitatii neaprobata' USING ERRCODE = 'RD007';
+      END IF;
+    END IF;
+  END LOOP;
+  -- Schimbarile permise sunt consemnate de trg_red_jurnal (calitate veche/noua, auth.uid, moment).
+  RETURN NEW;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_red_detinatori_calitate_utilizatori_garda() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_red_detinatori_calitate_utilizatori BEFORE UPDATE ON public.red_detinatori
+  FOR EACH ROW EXECUTE FUNCTION public.fn_red_detinatori_calitate_utilizatori_garda();
 
 CREATE OR REPLACE FUNCTION public.fn_red_convocare_rezerva(p_detinator_id uuid, p_numar_nou_confirmat boolean DEFAULT false, p_canal text DEFAULT 'posta')
 RETURNS TABLE (convocare_id uuid, nr_document text, parcela_id uuid, uat_id uuid, proiect_id uuid)
@@ -337,6 +425,23 @@ END $fn$;
 
 DO $post$
 BEGIN
+  -- Triggerele detinatorului pot modifica NEW.calitate; fixam inventarul complet, inclusiv argumente/UPDATE OF.
+  IF (SELECT string_agg(t.tgname || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
+      || coalesce(pg_get_expr(t.tgqual,t.tgrelid), '') || '/' || t.tgnargs::text || '/' || encode(t.tgargs,'hex') || '/' || t.tgattr::text, ';' ORDER BY t.tgname COLLATE "C")
+    FROM pg_trigger t WHERE t.tgrelid = 'public.red_detinatori'::regclass AND NOT t.tgisinternal)
+    IS DISTINCT FROM 'trg_red_detinatori_before=fn_red_detinatori_before()/O/23//0//;trg_red_detinatori_calitate_utilizatori=fn_red_detinatori_calitate_utilizatori_garda()/O/19//0//;trg_red_detinatori_token=fn_red_detinatori_token_dupa()/O/5//0//;trg_red_jurnal=fn_red_jurnal()/O/29//0//;trg_red_legaturi=fn_red_legaturi()/O/23//0//;trg_red_plic_identitate=fn_red_plic_identitate_garda()/O/19//0//' THEN
+    RAISE EXCEPTION '31c: triggere red_detinatori - inventar/argumente/coloane schimbate';
+  END IF;
+
+  -- BEFORE UPDATE alfabetic: autorizare_tgz < proiect_utilizatori (nou) < proiecte_retentie_mail < versiune.
+  -- Jurnalul este AFTER. Ordinea, tgargs si tgattr sunt parte din baseline; nicio garda nu modifica campurile celeilalte.
+  IF (SELECT string_agg(t.tgname || '=' || t.tgfoid::regprocedure::text || '/' || t.tgenabled::text || '/' || t.tgtype::text || '/'
+      || coalesce(pg_get_expr(t.tgqual,t.tgrelid), '') || '/' || t.tgnargs::text || '/' || encode(t.tgargs,'hex') || '/' || t.tgattr::text, ';' ORDER BY t.tgname COLLATE "C")
+    FROM pg_trigger t WHERE t.tgrelid = 'public.red_proiecte'::regclass AND NOT t.tgisinternal)
+    IS DISTINCT FROM 'trg_red_autorizare_tgz=fn_red_autorizare_tgz_garda()/O/23//0//;trg_red_jurnal=fn_red_jurnal()/O/29//0//;trg_red_proiect_utilizatori=fn_red_proiect_utilizatori_garda()/O/23//0//;trg_red_proiecte_retentie_mail=fn_red_mail_proiect_retentie()/O/23//0//;trg_red_versiune=fn_red_versiune_creste()/O/19//0//' THEN
+    RAISE EXCEPTION '31c: triggere red_proiecte - ordine/argumente/coloane schimbate';
+  END IF;
+
   IF EXISTS (SELECT 1 FROM public.red_proiecte WHERE convocare_utilizatori_aprobata IS NOT FALSE
       OR convocare_utilizatori_aprobata_de IS NOT NULL OR convocare_utilizatori_aprobata_la IS NOT NULL) THEN
     RAISE EXCEPTION '31c: starea initiala nu este inchisa';
@@ -349,14 +454,15 @@ BEGIN
     RAISE EXCEPTION '31c: coloane / NOT NULL / default';
   END IF;
   IF EXISTS (SELECT 1 FROM (VALUES
-    ('fn_red_proiect_utilizatori_garda()', 'trg_red_proiect_utilizatori', 'public.red_proiecte'),
-    ('fn_red_convocari_utilizatori_garda()', 'trg_red_convocari_h_utilizatori', 'public.red_convocari')
-  ) b(fn, tr, tab) LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.fn)
+    ('fn_red_proiect_utilizatori_garda()', 'trg_red_proiect_utilizatori', 'public.red_proiecte', 23),
+    ('fn_red_convocari_utilizatori_garda()', 'trg_red_convocari_h_utilizatori', 'public.red_convocari', 23),
+    ('fn_red_detinatori_calitate_utilizatori_garda()', 'trg_red_detinatori_calitate_utilizatori', 'public.red_detinatori', 19)
+  ) b(fn, tr, tab, typ) LEFT JOIN pg_proc p ON p.oid = to_regprocedure('public.' || b.fn)
     LEFT JOIN pg_trigger t ON t.tgrelid = b.tab::regclass AND t.tgname = b.tr
   WHERE p.oid IS NULL OR NOT p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
     OR pg_get_userbyid(p.proowner) <> 'postgres'
     OR p.proacl::text IS DISTINCT FROM '{postgres=X/postgres}'
-    OR t.tgfoid IS DISTINCT FROM p.oid OR t.tgenabled IS DISTINCT FROM 'O' OR t.tgtype IS DISTINCT FROM 23::smallint OR t.tgqual IS NOT NULL) THEN
+    OR t.tgfoid IS DISTINCT FROM p.oid OR t.tgenabled IS DISTINCT FROM 'O' OR t.tgtype IS DISTINCT FROM b.typ::smallint OR t.tgqual IS NOT NULL OR t.tgnargs <> 0 OR encode(t.tgargs,'hex') <> '' OR t.tgattr::text <> '') THEN
     RAISE EXCEPTION '31c: triggere / ACL / configuratie';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_red_convocare_rezerva(uuid,boolean,text)'::regprocedure

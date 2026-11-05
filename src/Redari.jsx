@@ -9,6 +9,7 @@ import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
 import { genereazaConvocator, verificaDateConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
+import { motivConvocatorUtilizator } from './redari/convocareUtilizatori.js'
 import { cuInformarePublicata } from './redari/informareGdpr.js'
 // D4: convocatoarele generate dar neexpediate (citire separată din red_convocari, fără migrare)
 import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
@@ -493,7 +494,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
 }
 
 // ─── Convocator: rezervaNumarConvocare (RPC atomic fn_red_convocare_rezerva: număr + rând) → genereazaConvocator → reincarcaConvocator → descărcare ──
-function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
+export function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   const [canal, setCanal] = useState('posta')
   const [lucru, setLucru] = useState(false)
   const [pas, setPas] = useState('')
@@ -522,15 +523,21 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   // Întoarce null când lipsesc date (afișate în modal, FĂRĂ număr consumat).
   const pregatesteIntrare = async (tok) => {
     setPas('Citesc datele…')
-    const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token] = await Promise.all([
+    const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token, { data: proiectAcum, error: ep }] = await Promise.all([
       supabase.from('red_detinatori').select(COL_DETINATOR).eq('id', rand.detinator_id).single(),
       supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta, sters_la').eq('id', rand.parcela_id).single(),
       supabase.from('red_detinatori_contact').select('*').eq('detinator_id', rand.detinator_id).maybeSingle(),   // PII — doar admin/editor ajung aici
       citesteTokenRaspuns(rand.detinator_id),
+      supabase.from('red_proiecte').select('*').eq('id', proiect.id).single(),
     ])
-    if (e1 || e3 || e4) throw (e1 || e3 || e4)
+    if (!activ(tok)) return null
+    if (e1 || e3 || e4 || ep) throw (e1 || e3 || e4 || ep)
+    if (!proiectAcum) throw new Error('Proiectul nu mai este accesibil')
+    // PR3a r2: calitatea si flagul PROASPETE, inainte de sablon si de rezervarea numarului.
+    const motivUtilizator = motivConvocatorUtilizator(proiectAcum, det)
+    if (motivUtilizator) { setLipsuri([motivUtilizator]); show(motivUtilizator, 'error'); return null }
     // #939 r2: „informarea publicată” se cere proaspăt serverului (autorizarea Transgaz art. 28 + PDF legat), nu din proiectul din memorie
-    const proiectI = await cuInformarePublicata(supabase, proiect)
+    const proiectI = await cuInformarePublicata(supabase, proiectAcum)
     if (!activ(tok)) return null
     // #989 r5 (P1-01): relația deținător → parcelă → proiect → UAT a datelor documentului, verificată înainte de orice rezervare
     const motivRel = motivRelatieSchimbata({ detinator: det, parcela, proiect: proiectI, uat })
@@ -570,6 +577,8 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
         show(`Între timp a fost generat ${noi.map(c => c.nr_document).join(', ')} pentru acest deținător — verifică lista și confirmă din nou dacă vrei totuși un număr nou.`, 'error')
         return
       }
+      const motivUtilizator = motivConvocatorUtilizator(intrare.proiect, intrare.detinator)
+      if (motivUtilizator) { setLipsuri([motivUtilizator]); show(motivUtilizator, 'error'); return }
       setPas('Rezerv numărul de document…')
       scris = true
       // #989 r4: protocolul atomic comun cu generarea în masă — RPC-ul fn_red_convocare_rezerva rezervă numărul ȘI inserează rândul
