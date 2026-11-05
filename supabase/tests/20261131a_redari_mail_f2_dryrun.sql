@@ -253,6 +253,15 @@ BEGIN
  END LOOP;
 END $f$;
 GRANT EXECUTE ON FUNCTION pg_temp.f2_select_r2(boolean) TO authenticated;
+-- r3 (Gem r2): precondiție explicită ca proprietar BD — fiecare tabel are rânduri, altfel „non-owner vede 0” ar trece și fără RLS
+DO $fixture_r2$
+DECLARE t text; nr bigint;
+BEGIN
+ FOREACH t IN ARRAY ARRAY['red_mail_loturi','red_mail_mesaje','red_mail_optout','red_mail_fisiere_inventar','red_mail_fisiere_inventar_antet','red_mail_jurnal_f2'] LOOP
+  EXECUTE format('SELECT count(*) FROM public.%I',t) INTO nr;
+  IF nr=0 THEN RAISE EXCEPTION 'R2 fixture: % fara randuri, testul RLS n-ar dovedi nimic',t; END IF;
+ END LOOP;
+END $fixture_r2$;
 SELECT pg_temp.f2_ca('f2000000-0000-4000-8000-000000000099','authenticated');
 DO $editor_r2$ BEGIN
  IF public.fn_red_nivel() IS DISTINCT FROM 'editor' THEN RAISE EXCEPTION 'R2 fixture editor'; END IF;

@@ -157,7 +157,10 @@ CREATE TABLE public.red_mail_mesaje (
   CONSTRAINT red_mail_f2_atasament_ck CHECK (
     (atasament_path IS NULL AND atasament_nume IS NULL AND atasament_mime IS NULL AND atasament_sha256 IS NULL AND atasament_marime IS NULL)
     OR (atasament_path IS NOT NULL AND atasament_nume IS NOT NULL AND atasament_mime IS NOT NULL AND atasament_sha256 IS NOT NULL AND atasament_marime IS NOT NULL
-      AND atasament_mime='application/pdf' AND atasament_marime BETWEEN 5 AND 10000000 AND atasament_sha256 ~ '^[0-9a-f]{64}$')),
+      AND atasament_mime='application/pdf' AND atasament_marime BETWEEN 5 AND 10000000 AND atasament_sha256 ~ '^[0-9a-f]{64}$'
+      -- r3 (Cop r2 P2-01 / Gem r2 P2-01): cale și nume nevide, nume 1..150 fără caractere de control — paritate cu formaMesaj (JS)
+      AND length(btrim(atasament_path)) > 0 AND atasament_path !~ '[[:cntrl:]]'
+      AND length(btrim(atasament_nume)) BETWEEN 1 AND 150 AND atasament_nume !~ '[[:cntrl:]]')),
   mesaj_sha256 text NOT NULL CHECK (mesaj_sha256 ~ '^[0-9a-f]{64}$'),
   stare text NOT NULL DEFAULT 'in_coada' CHECK (stare IN ('in_coada','rezervat','in_apel','trimis','esuat_sigur','necunoscut','esuat_confirmat','anulat')),
   lease_token uuid, lease_pana timestamptz, rezervare_nr integer NOT NULL DEFAULT 0,
@@ -334,6 +337,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> lot -> mesaje (citire după lock pe lot).
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR SHARE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  SELECT * INTO l FROM public.red_mail_loturi WHERE id=p_lot FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'lot_inexistent'; END IF;
  IF l.aprobat_versiune=p_versiune AND l.aprobat_lot_sha256=p_lot_sha256 THEN RETURN true; END IF;
@@ -360,6 +364,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> lot -> mesaje ORDER BY id. Setările serializează și cotele globale.
  SELECT * INTO s FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  SELECT * INTO l FROM public.red_mail_loturi WHERE id=p_lot FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'lot_inexistent'; END IF;
  -- Reconcilierea locală a lease-urilor nu reia un send ambiguu.
@@ -387,6 +392,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> lot -> mesaj; primul SELECT al id-ului nu blochează.
  SELECT * INTO s FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  SELECT * INTO l FROM public.red_mail_loturi WHERE id=(SELECT lot_id FROM public.red_mail_mesaje WHERE id=p_mesaj) FOR UPDATE;
  SELECT * INTO m FROM public.red_mail_mesaje WHERE id=p_mesaj FOR UPDATE;
  IF NOT FOUND OR m.stare<>'rezervat' OR m.lease_token IS DISTINCT FROM p_token OR m.lease_pana<=now() THEN RETURN false; END IF;
@@ -404,6 +410,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> lot -> mesaj. CAS pe tokenul propriu; rezultatul nu repune în coadă.
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  SELECT * INTO l FROM public.red_mail_loturi WHERE id=(SELECT lot_id FROM public.red_mail_mesaje WHERE id=p_mesaj) FOR UPDATE;
  SELECT * INTO m FROM public.red_mail_mesaje WHERE id=p_mesaj FOR UPDATE;
  IF NOT FOUND OR m.lease_token IS DISTINCT FROM p_token THEN RETURN false; END IF;
@@ -444,6 +451,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> lot -> mesaje ORDER BY id -> inventar. Fără revenire în coadă.
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  SELECT * INTO l FROM public.red_mail_loturi WHERE id=p_lot FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'lot_inexistent'; END IF;
  IF l.stare='incheiat' THEN RETURN true; END IF;
@@ -482,6 +490,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> lot -> mesaje. Termenul și inventarul se reverifică sub lock.
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  SELECT * INTO l FROM public.red_mail_loturi WHERE id=p_lot FOR UPDATE;
  IF NOT FOUND OR p_confirm IS NOT TRUE OR l.versiune IS DISTINCT FROM p_versiune OR public.fn_red_mail_f2_retentie_poate(l.id) IS NOT TRUE THEN RAISE EXCEPTION 'retentie_refuzata'; END IF;
  UPDATE public.red_mail_mesaje SET catre=NULL,subiect_final=NULL,corp_text_final=NULL,corp_html_final=NULL,antete_snapshot=NULL,message_id=NULL,
@@ -496,6 +505,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> lot -> mesaje -> inventar. Fișierele se confirmă absente înaintea DELETE.
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  SELECT * INTO l FROM public.red_mail_loturi WHERE id=p_lot FOR UPDATE;
  IF NOT FOUND THEN RETURN true; END IF;
  IF p_confirm IS NOT TRUE OR l.versiune IS DISTINCT FROM p_versiune OR public.fn_red_mail_f2_retentie_poate(l.id) IS NOT TRUE
@@ -528,6 +538,7 @@ BEGIN
  PERFORM public.fn_red_mail_f2_owner();
  -- Ordine: setări -> optout; același mutex ca rezervarea și apel_incepe.
  PERFORM 1 FROM public.red_mail_setari WHERE id=1 FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'setari_absente' USING ERRCODE='22023'; END IF;  -- r3 (Gem r2 P2-02)
  IF public.fn_red_mail_f2_email(p_email) IS NOT TRUE OR p_activ IS NULL THEN RAISE EXCEPTION 'cerere_invalida'; END IF;
  IF p_motiv IS NULL OR p_motiv !~ '[^[:space:]]' OR length(btrim(p_motiv)) NOT BETWEEN 1 AND 500 THEN
   RAISE EXCEPTION 'motiv_invalid' USING ERRCODE='22023';

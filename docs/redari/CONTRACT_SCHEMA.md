@@ -41,7 +41,7 @@ insera direct. E o garanție de aplicație, nu una criptografică; dovada față
 ## 1. Drepturi (3A)
 **F2 în lucru, 05.11.2026:** `20261131a_redari_mail_f2_loturi.sql` este o propunere locală, neaplicată.
 Adaugă `red_mail_loturi`, `red_mail_mesaje`, `red_mail_optout`, `red_mail_fisiere_inventar` + `_antet`
-și `red_mail_jurnal_f2`; citire admin/editor, scriere exclusiv prin RPC-uri care cer owner.
+și `red_mail_jurnal_f2`; citire DOAR owner (RLS `fn_sms_e_owner()`, din r2), scriere exclusiv prin RPC-uri care cer owner. Adresele-sursă din `red_detinatori_contact` (F1) au regulile lor, neschimbate de F2.
 Nu schimbă drepturile de modul. Numerele `M` sunt rezervate în aceeași tranzacție cu mesajele.
 `red_convocari.canal='email'` este refuzat de un trigger nou; UI-ul îl scoate din selector.
 `red_mail_setari`: `trimitere_oprita=true`, `extern_permis=false`, `plafon_zi=200`, `plafon_luna=1000`,
