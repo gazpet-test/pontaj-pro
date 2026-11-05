@@ -258,6 +258,7 @@ describe('antetul oficial Gazpet (header, prima pagină)', () => {
       .replace(/<w:headerReference [^>]*\/>/, '').replace('<w:titlePg/>', '')
       .replace(/<w:docGrid [^>]*\/>/, '<w:printerSettings r:id="rIdPr"/>')
     z.file('word/document.xml', doc)
+    z.file('word/_rels/document.xml.rels', (await z.file('word/_rels/document.xml.rels').async('string')).replace(/<Relationship Id="rIdAntetGazpet"[^>]*\/>/, ''))
     await adaugaAntet(z, { imagine: Buffer.from('x') })
     const sect = /<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/.exec(await z.file('word/document.xml').async('string'))[0]
     expect(sect).toMatch(/<w:titlePg\/><w:printerSettings /)
