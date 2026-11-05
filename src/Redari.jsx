@@ -9,6 +9,7 @@ import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
 import { genereazaConvocator, verificaDateConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
+import { cuInformarePublicata } from './redari/informareGdpr.js'
 // D4: convocatoarele generate dar neexpediate (citire separată din red_convocari, fără migrare)
 import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
   poateDeschideConvocator, dataDocumentConvocare, useConvocariNeexpediate, aparuteDupaVerificare, rezervaNumarConvocare, motivRelatieSchimbata, motivIdentitateDiferita,
@@ -184,7 +185,7 @@ export default function Redari() {
           {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
           {tab === 'notificari' && <NotificariEcran key={`${proiect.id}|${nivel}|${profile?.id || ''}`} proiect={proiect} uats={uats} nivel={nivel} utilizatorId={profile?.id || null} />}
           {tab === 'uat' && <><ConvocatoareMasa proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /><UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /></>}
-          {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
+          {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} esteOwner={profile?.is_owner === true} show={show} onSchimbat={incarcaProiecte} />}
         </div>
       )}
     </div>
@@ -528,20 +529,22 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
       citesteTokenRaspuns(rand.detinator_id),
     ])
     if (e1 || e3 || e4) throw (e1 || e3 || e4)
+    // #939 r2: „informarea publicată” se cere proaspăt serverului (autorizarea Transgaz art. 28 + PDF legat), nu din proiectul din memorie
+    const proiectI = await cuInformarePublicata(supabase, proiect)
     if (!activ(tok)) return null
     // #989 r5 (P1-01): relația deținător → parcelă → proiect → UAT a datelor documentului, verificată înainte de orice rezervare
-    const motivRel = motivRelatieSchimbata({ detinator: det, parcela, proiect, uat })
+    const motivRel = motivRelatieSchimbata({ detinator: det, parcela, proiect: proiectI, uat })
     if (motivRel) { setLipsuri([motivRel]); show(`Convocatorul nu se poate genera: ${motivRel}.`, 'error'); return null }
     setPas('Verific datele…')
     // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
-    const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect, detinator: det, contactDetinator: contactDetinator || null })
+    const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect: proiectI, detinator: det, contactDetinator: contactDetinator || null })
     if (lipsa.length) { setLipsuri(lipsa); show('Convocatorul nu se poate genera — vezi lipsurile din fereastră.', 'error'); return null }
     setPas('Descarc șablonul…')
     const rs = await fetch(SABLON_CONVOCATOR)
     if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
     const templateArrayBuffer = await rs.arrayBuffer()
     if (!activ(tok)) return null
-    return { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect, token, templateArrayBuffer }
+    return { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect: proiectI, token, templateArrayBuffer }
   }
 
   // Ordinea (P2-8): date + contactul deținătorului → verificaDateConvocator (lipsuri → afișate, FĂRĂ număr consumat)

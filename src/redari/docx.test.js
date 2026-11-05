@@ -8,8 +8,9 @@ import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
   reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, linkRaspunsCu, adresaDetinator, textGdprPentruUat,
   textGdprFataConvocator, TRIMITERE_VERSO_GDPR, VERSO_INFORMARE_INCLUS, FRAZE_VERSO, EroareTrimitereGdpr, adresaProprieInDocx, adresaWebNepermisa,
-  MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
+  MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE, xmlVersoInformare, MESAJ_INFORMARE_NEGATA, MESAJ_INFORMARE_VERIFICARE_ESUATA,
 } from './docx.js'
+import { TEXT_INFORMARE_LOT1, autorizareTgzCompleta, informarePublicataPeProiect } from './informareGdpr.js'
 
 const SABLON = resolve(process.cwd(), 'public/redari/sabloane/convocator.docx') // Model_1 v6, 35 placeholder-e (SABLOANE.md §2.1)
 const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
@@ -219,6 +220,12 @@ describe('formatări + link', () => {
   })
 })
 
+// informare de test „aprobată”: textul real cu câmpurile [ ] completate fictiv și marcată publicată
+const INFORMARE_APROBATA = { text: TEXT_INFORMARE_LOT1.replace(/\[[^\]]*\]/g, 'COMPLETAT'), publicata: true }
+// #939 r2: câmpurile autorizării + indicatorul calculat de server (cuInformarePublicata → fn_red_informare_publicata), fără parametrul `informare`
+const CAMPURI_AUT = { autorizare_tgz_nr: 'A-1 (fictiv)', autorizare_tgz_data: '2026-11-05', autorizare_tgz_fisier: 'LOT1-PRUNISOR-JUPA/autorizare_tgz/1_fictiv.pdf' }
+const AUTORIZARE = { ...CAMPURI_AUT, informare_publicata: true }
+
 describe('genereazaConvocator', () => {
   const complet = () => ({
     detinator: { nume: 'POPESCU ION (fictiv)', calitate: 'mostenitor', cota: '1/2' },
@@ -233,6 +240,8 @@ describe('genereazaConvocator', () => {
       text_gdpr: 'Operatori: Gazpet și Primăria {uat}.\nDestinatari: Primăria [UAT].',
     },
     nrDocument: 'C-0001', token: 'tokenfictiv1234567890abcdefghijk', origin: 'https://exemplu.test', dataDocument: '2026-11-02',
+    // calea „aprobată”; refuzul PROIECT are testele lui în blocul „verso”
+    informare: INFORMARE_APROBATA,
   })
 
   it('linkul și QR-ul sunt pe https://redari.gazpet.ro: fără origin, cu origin străin, cu window.location.origin pe alt domeniu', async () => {
@@ -262,17 +271,17 @@ describe('genereazaConvocator', () => {
     }
   }, 10000)
 
-  // #970 r2 + r6 + r18: fața poștală nu tipărește linkul informării; pe main (VERSO_INFORMARE_INCLUS = false) nici nu trimite la un
-  // verso care nu se generează. r18: regula literală — se scot doar frazele din FRAZE_VERSO, orice altă trimitere oprește generarea
-  it('VERSO_INFORMARE_INCLUS = false pe main: frazele cunoscute se scot, fără trimitere la verso; QR-ul e același', async () => {
-    expect(VERSO_INFORMARE_INCLUS).toBe(false)
+  // #970 r2 + r6 + r18 + #939: fața poștală nu tipărește linkul informării; versoul se generează (#939), deci fața scoate frazele cunoscute
+  // și pune O SINGURĂ trimitere la verso (textul avea o frază sau proiectul are informarea configurată). r18: orice altă trimitere oprește generarea
+  it('VERSO_INFORMARE_INCLUS = true (#939): frazele cunoscute se scot, trimiterea la verso apare o singură dată pe față; QR-ul e același', async () => {
+    expect(VERSO_INFORMARE_INCLUS).toBe(true)
     const asteptat = 'https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk'
     const qrAsteptat = (await genereazaQr(asteptat)).split(',')[1]
     const baza = complet()
     const cazuri = [
-      [baza.proiect.text_gdpr, 'Operatori: Gazpet și Primăria Husnicioara.\nDestinatari: Primăria Husnicioara.'],
-      [`Operatori: Gazpet și Primăria {uat}. ${FRAZE_VERSO[0]} Drepturi: acces.`, 'Operatori: Gazpet și Primăria Husnicioara. Drepturi: acces.'],
-      ['Operatori: Gazpet. Informarea completă se află pe verso.', 'Operatori: Gazpet.'],
+      [baza.proiect.text_gdpr, `Operatori: Gazpet și Primăria Husnicioara.\nDestinatari: Primăria Husnicioara.\n${TRIMITERE_VERSO_GDPR}`],
+      [`Operatori: Gazpet și Primăria {uat}. ${FRAZE_VERSO[0]} Drepturi: acces.`, `Operatori: Gazpet și Primăria Husnicioara. Drepturi: acces.\n${TRIMITERE_VERSO_GDPR}`],
+      ['Operatori: Gazpet. Informarea completă se află pe verso.', `Operatori: Gazpet.\n${TRIMITERE_VERSO_GDPR}`],
     ]
     for (const [text_gdpr, fata] of cazuri) {
       for (const permiteIncomplet of [false, true]) {
@@ -280,12 +289,17 @@ describe('genereazaConvocator', () => {
         expect(r.link).toBe(asteptat)
         expect(r.campuri.text_gdpr, text_gdpr).toBe(fata)
         const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
-        expect(textDin(xml)).not.toMatch(/https?:\/\/|www\.|redari\.gazpet\.ro|verso/)
+        const tot = textDin(xml), iVerso = tot.indexOf('Informare privind folosirea datelor personale')
+        expect(iVerso).toBeGreaterThan(0)
+        const fataDoc = tot.slice(0, iVerso)
+        expect(tot).not.toMatch(/https?:\/\/|redari\.gazpet\.ro|example\.invalid/)
+        expect(fataDoc).not.toMatch(/www\.|Informarea completă/)
+        expect(fataDoc.split(TRIMITERE_VERSO_GDPR).length - 1).toBe(1)
         expect(await zip.file('word/media/qr.png').async('base64')).toBe(qrAsteptat)
       }
     }
-    // fără frază cunoscută: textul rămâne cel din BD (doar UAT-ul înlocuit)
-    expect(textGdprFataConvocator('Operatori: Primăria {uat}.', 'Godeanu', 'https://x.invalid')).toBe('Operatori: Primăria Godeanu.')
+    // fără frază cunoscută și fără informare configurată: textul rămâne cel din BD (doar UAT-ul înlocuit)
+    expect(textGdprFataConvocator('Operatori: Primăria {uat}.', 'Godeanu', null)).toBe('Operatori: Primăria Godeanu.')
   }, 20000)
 
   // #970 r18: frazele cunoscute se recunosc literal (majuscule, diacritice, spații albe), restul textului rămâne NEATINS
@@ -300,7 +314,8 @@ describe('genereazaConvocator', () => {
       ['Operatori: Gazpet.\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
       ['Sediul: Versoix. Drepturi: acces.', 'Sediul: Versoix. Drepturi: acces.'],
     ]
-    for (const [text, fata] of cazuri) expect(textGdprFataConvocator(text, 'G', 'https://x.invalid'), text).toBe(fata)
+    // regula literală de scoatere, cu versoul oprit (cu versoul pornit se adaugă trimiterea; vezi testul „versoInclus = true”)
+    for (const [text, fata] of cazuri) expect(textGdprFataConvocator(text, 'G', 'https://x.invalid', { versoInclus: false }), text).toBe(fata)
   })
 
   it('r18: orice altă trimitere la verso / la „Informarea completă” oprește generarea (nimic nu se taie pe ghicite)', async () => {
@@ -470,15 +485,17 @@ describe('genereazaConvocator', () => {
     expect(adresaWebNepermisa('https://redari.gazpet.ro', { doarProprii: true })).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
   })
 
-  // #970 r15 (Copilot P2-02): postcondiție — un text_gdpr nevid care ar dispărea întreg prin filtrare oprește generarea
-  it('postcondiție: text_gdpr nevid golit de filtrare → generarea e refuzată (strict și la previzualizare)', async () => {
+  // #970 r15 (Copilot P2-02) + #939: cu versoul generat, un text_gdpr format doar din trimiteri la verso lasă pe față O trimitere (nu se golește);
+  // cu versoul oprit, regula veche dă fața goală (postcondiția din genereazaConvocator rămâne plasă de siguranță)
+  it('#939: text_gdpr format doar din trimiteri la verso → pe față rămâne o singură trimitere (strict și la previzualizare)', async () => {
     const baza = complet()
     for (const text_gdpr of [FRAZE_VERSO[0], TRIMITERE_VERSO_GDPR, `${FRAZE_VERSO[0]}
 ${TRIMITERE_VERSO_GDPR}`]) {
       for (const permiteIncomplet of [false, true]) {
-        await expect(genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon(), permiteIncomplet }), text_gdpr)
-          .rejects.toThrow(/textul GDPR de pe proiect \(text_gdpr\) rămâne gol/)
+        const r = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon(), permiteIncomplet })
+        expect(r.campuri.text_gdpr, text_gdpr).toBe(TRIMITERE_VERSO_GDPR)
       }
+      expect(textGdprFataConvocator(text_gdpr, 'G', null, { versoInclus: false }), text_gdpr).toBe('')
     }
   }, 10000)
 
@@ -603,7 +620,7 @@ ${TRIMITERE_VERSO_GDPR}`]) {
 
   it('verificaDateConvocator listează toate lipsurile, inclusiv cele noi (contract, împuternicire, calitate, adresă)', () => {
     expect(verificaDateConvocator(complet())).toEqual([])
-    const l = verificaDateConvocator({ nrDocument: '', token: null, uat: { sesiune_zi1: '2026-11-10' }, contact: {}, proiect: {}, detinator: null })
+    const l = verificaDateConvocator({ nrDocument: '', token: null, uat: { sesiune_zi1: '2026-11-10' }, contact: {}, proiect: {}, detinator: null, informare: INFORMARE_APROBATA })
     expect(l).toHaveLength(12)   // D3: nume, telefon și e-mail de contact + telefonul TGZ, fiecare separat
     expect(l.join(' | ')).toMatch(/nr_document.*token.*contract.*împuternicir.*deținătorul.*zi de sesiune cu program.*persoana de contact.*telefonul de contact.*e-mailul de contact.*GDPR.*Transgaz.*telefonul reprezentantului Transgaz/)
     // zi fără program nu e suficientă; contactul poate veni din proiect
@@ -683,6 +700,105 @@ ${TRIMITERE_VERSO_GDPR}`]) {
   })
 })
 
+// XML bine format (fără parser în mediul node): fiecare tag deschis se închide în ordine, iar & apare doar ca entitate
+const xmlBineFormat = (xml) => {
+  const corp = xml.replace(/^<\?xml[^>]*\?>/, '')
+  if (/&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/.test(corp)) return false
+  const stiva = []
+  for (const m of corp.matchAll(/<(\/?)([A-Za-z_][\w:.-]*)(?:\s[^<>]*?)?(\/?)>/g)) {
+    if (m[3]) continue
+    if (!m[1]) stiva.push(m[2])
+    else if (stiva.pop() !== m[2]) return false
+  }
+  return stiva.length === 0 && !/<[^>]*</.test(corp.replace(/<[^<>]*>/g, ''))
+}
+
+describe('verso convocator: informarea GDPR completă', () => {
+  const baza = () => ({
+    detinator: { nume: 'POPESCU ION (fictiv)', calitate: 'proprietar' },
+    contactDetinator: { adresa_strada: 'Str. Fictivă nr. 1', adresa_comuna: 'Husnicioara', adresa_judet: 'Mehedinți', cod_postal: '227001', adresa_cunoscuta: true },
+    contact: { nume: 'Operator Test', telefon: '0700000000', email: 'redari@exemplu.test' },
+    parcela: { id_parcela: 'T3-HUS-0001', tronson: 3 },
+    uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-10', program_zi1: '09-12' },
+    proiect: { denumire: 'Conductă test Lot 1', contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '12', imputernicire_data: '2026-10-15',
+      reprezentant_tgz_nume: 'Reprezentant Test', reprezentant_tgz_telefon: '0711111111', text_gdpr: 'Text scurt de pe față {uat}.' },
+    nrDocument: 'C-0001', token: 'tokenfictiv1234567890abcdefghijk', origin: 'https://exemplu.test', dataDocument: '2026-11-02',
+  })
+
+  it('cât informarea e PROIECT: verificarea și generarea strictă refuză (înainte de numărul de document), previzualizarea merge cu marcaj', async () => {
+    expect(autorizareTgzCompleta(baza().proiect)).toBe(false)
+    expect(verificaDateConvocator(baza())).toEqual([MESAJ_INFORMARE_NEGATA])
+    await expect(genereazaConvocator({ ...baza(), templateArrayBuffer: citesteSablon() })).rejects.toThrow(/informarea GDPR de pe verso nu e publicată: lipsește autorizarea Transgaz/)
+    // publicată, dar cu câmpuri [ ] rămase → tot refuz (v3.2 nu mai are câmpuri: se adaugă unul de test)
+    const cuCamp = `${TEXT_INFORMARE_LOT1}\n\nSursa [de confirmat].`
+    expect(verificaDateConvocator({ ...baza(), informare: { text: cuCamp, publicata: true } })).toEqual([MESAJ_INFORMARE_NEGATA])
+    const prev = await genereazaConvocator({ ...baza(), templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
+    expect(prev.lipsuri).toEqual([MESAJ_INFORMARE_NEGATA])
+    const { xml } = await xmlDin(prev.blob, 'word/document.xml')
+    expect(textDin(xml)).toContain('PROIECT – nu se tipărește')
+    // v3.2: textul real nu mai are câmpuri [ ], deci nimic evidențiat; un câmp rămas ar fi evidențiat
+    expect(xml).not.toContain('<w:highlight')
+    const prevCamp = await genereazaConvocator({ ...baza(), informare: { text: cuCamp, publicata: false }, templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
+    expect((await xmlDin(prevCamp.blob, 'word/document.xml')).xml).toContain('<w:highlight w:val="yellow"/>')
+  })
+
+  it('#939 r2: doar indicatorul calculat de server publică informarea; câmpurile autorizării singure NU (PDF mutat / proiect inactiv)', async () => {
+    const pr = { ...baza().proiect, ...AUTORIZARE }
+    expect(informarePublicataPeProiect(pr)).toBe(true)
+    expect(verificaDateConvocator({ ...baza(), proiect: pr })).toEqual([])
+    const r = await genereazaConvocator({ ...baza(), proiect: pr, templateArrayBuffer: citesteSablon() })
+    expect(textDin((await xmlDin(r.blob, 'word/document.xml')).xml)).not.toContain('PROIECT – nu se tipărește')
+    // câmpurile completate, dar serverul spune „nu” (PDF mutat, proiect inactiv) sau indicatorul lipsește (proiect din memorie) → refuz
+    const doarCampuri = { ...baza().proiect, ...CAMPURI_AUT }
+    expect(autorizareTgzCompleta(doarCampuri)).toBe(true)
+    // r4: verificarea eșuată pe server → refuz, cu mesaj propriu
+    expect(verificaDateConvocator({ ...baza(), proiect: { ...doarCampuri, informare_publicata: null } })).toEqual([MESAJ_INFORMARE_VERIFICARE_ESUATA])
+    for (const proiect of [doarCampuri, { ...doarCampuri, informare_publicata: false }, { ...doarCampuri, informare_publicata: 'true' }]) {
+      expect(verificaDateConvocator({ ...baza(), proiect }), JSON.stringify(proiect.informare_publicata)).toEqual([MESAJ_INFORMARE_NEGATA])
+      await expect(genereazaConvocator({ ...baza(), proiect, templateArrayBuffer: citesteSablon() })).rejects.toThrow(/nu e publicată/)
+    }
+  })
+
+  it('versoul vine după un salt de pagină, înaintea sectPr-ului final, cu elementele cheie; fața rămâne neschimbată', async () => {
+    const r = await genereazaConvocator({ ...baza(), informare: INFORMARE_APROBATA, templateArrayBuffer: citesteSablon() })
+    const { xml } = await xmlDin(r.blob, 'word/document.xml')
+    expect(xmlBineFormat(xml)).toBe(true)
+    const iSalt = xml.lastIndexOf('<w:br w:type="page"/>')
+    const iVerso = xml.indexOf('Informare privind folosirea datelor personale')
+    expect(iSalt).toBeGreaterThan(0)
+    expect(iVerso).toBeGreaterThan(iSalt)
+    // sectPr-ul de corp rămâne ultimul
+    expect(xml.indexOf('<w:sectPr', iVerso)).toBeGreaterThan(iVerso)
+    expect(xml).toMatch(/<\/w:sectPr><\/w:body>/)
+    const verso = textDin(xml.slice(iSalt))
+    expect(verso).toContain('S.N.T.G.N. TRANSGAZ S.A.')
+    expect(verso).toContain('dpo@transgaz.ro')
+    expect(verso).toContain('SMSLink (ASTINVEST COM S.R.L.)')
+    expect(verso).toContain('6. Drepturile dumneavoastră')
+    expect(verso).toContain('ANSPDCP')
+    expect(verso).not.toContain('PROIECT – nu se tipărește')
+    // markdown-ul nu ajunge în document
+    expect(verso).not.toMatch(/\*\*|###/)
+    expect(xml).not.toContain('<w:highlight')
+    // fața: textul scurt din BD, neschimbat
+    expect(textDin(xml.slice(0, iSalt))).toContain('Text scurt de pe față Husnicioara.')
+    // determinism: aceleași intrări ⇒ același hash
+    const r2 = await genereazaConvocator({ ...baza(), informare: INFORMARE_APROBATA, templateArrayBuffer: citesteSablon() })
+    expect(r2.hash).toBe(r.hash)
+  })
+
+  it('xmlVersoInformare: XML bine format și cu caractere speciale escapate; liste cu tab, titluri îngroșate', () => {
+    const x = xmlVersoInformare('### 1. A & B\n\n- x <y>\n- z\n\nPar **b** [c]', { proiect: true })
+    expect(xmlBineFormat(`<w:body>${x}</w:body>`)).toBe(true)
+    expect(x).toContain('A &amp; B')
+    expect(x).toContain('x &lt;y&gt;')
+    expect(x).toContain('<w:tab/>')
+    expect(x.startsWith('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')).toBe(true)
+    // controlul verificatorului
+    expect(xmlBineFormat('<w:p><w:r></w:p></w:r>')).toBe(false)
+  })
+})
+
 describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
   // fake minimal: insert().select().single(), select().eq().single(), update().eq().select().single(), storage.from().upload()
   // opt.existente = căi deja ocupate în bucket (upload pe ele → 409 „already exists”); opt.caleCurenta = fisier_convocator_path din rând
@@ -738,7 +854,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-20', program_zi1: '09:00 – 16:00' },
       proiect: { cod: 'LOT1-PRUNISOR-JUPA', denumire: 'Lot 1 (fictiv)', contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '1', imputernicire_data: '2026-10-01', contact_nume: 'Operator', contact_email: 'redari@exemplu.test',
         contact_telefon: '0700000000', reprezentant_tgz_nume: 'Reprezentant', reprezentant_tgz_telefon: '0711111111', link_informare_gdpr: 'https://example.invalid/informare',
-        text_gdpr: 'Operatori: Transgaz și Primăria {uat}. Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră. Drepturi: plângere la ANSPDCP (www.dataprotection.ro).' },
+        text_gdpr: 'Operatori: Transgaz și Primăria {uat}. Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră. Drepturi: plângere la ANSPDCP (www.dataprotection.ro).', ...AUTORIZARE },
       token, templateArrayBuffer: citesteSablon(),
     }
     const qrAsteptat = (await genereazaQr(`https://redari.gazpet.ro/redari/raspuns/${token}`)).split(',')[1]
@@ -747,9 +863,13 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       expect(await adresaProprieInDocx(blob)).toBeNull()
       const { zip, xml } = await xmlDin(blob, 'word/document.xml')
       const text = textDin(xml)
+      const fataDoc = text.slice(0, text.indexOf('Informare privind folosirea datelor personale'))
+      expect(fataDoc.length).toBeGreaterThan(0)
       expect(text).not.toContain(token)
-      expect(text).not.toMatch(/redari\.gazpet\.ro|example\.invalid|verso|Informarea completă/)
-      expect(text).toContain('Drepturi: plângere la ANSPDCP (www.dataprotection.ro).')
+      expect(text).not.toMatch(/redari\.gazpet\.ro|example\.invalid|Informarea completă/)
+      // #939: pe față o singură trimitere la verso (fraza din text_gdpr scoasă, trimiterea standard pusă la final)
+      expect(fataDoc.split(TRIMITERE_VERSO_GDPR).length - 1).toBe(1)
+      expect(fataDoc).toContain('Drepturi: plângere la ANSPDCP (www.dataprotection.ro).')
       expect(await zip.file('word/media/qr.png').async('base64')).toBe(qrAsteptat)
     }
     // Redari.jsx: genereazaConvocator({ ...intrare, nrDocument }) → salveazaConvocator

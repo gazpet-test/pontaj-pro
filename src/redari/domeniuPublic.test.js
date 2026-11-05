@@ -20,9 +20,9 @@ describe('constante', () => {
   })
 })
 
-// Ruta /redari/informare vine cu PR #939 (nepublicat până la aprobarea Transgaz). Pe main e doar rezervată în vercel.json și în gardă;
-// nicio componentă nu are voie să o sugereze sau să trimită la ea (altfel proprietarul ar ajunge pe login-ul ERP).
-describe('/redari/informare nu e sugerată pe main', () => {
+// Ruta /redari/informare vine cu PR #939 (pagina publică, cu banda PROIECT + noindex cât informarea nu e publicată).
+// Calea poate apărea DOAR în fișierele #939; orice altă componentă care ar trimite la ea e o regresie.
+describe('/redari/informare apare doar în fișierele #939', () => {
   const fisiere = (dir) => readdirSync(dir).flatMap(n => {
     const p = join(dir, n)
     return statSync(p).isDirectory() ? fisiere(p) : [p]
@@ -30,13 +30,15 @@ describe('/redari/informare nu e sugerată pe main', () => {
   it('Setări proiect: câmpul link_informare_gdpr nu are sugestie de link', () => {
     expect(CAMPURI_PROIECT.find(c => c.cheie === 'link_informare_gdpr').exemplu).toBeUndefined()
   })
-  it('nicio sursă din src (în afara testelor) nu conține calea /redari/informare', () => {
+  it('calea /redari/informare apare doar în ruta, pagina, formularul public și sursa informării', () => {
     const src = resolve(process.cwd(), 'src')
     const cuCalea = fisiere(src)
       .filter(p => /\.(jsx?|mjs)$/.test(p) && !/\.test\.(jsx?|mjs)$/.test(p))
-      .filter(p => /redari\/informare/i.test(readFileSync(p, 'utf8')))
-      .map(p => relative(src, p))
-    expect(cuCalea).toEqual([])
+      // calea de pagină, nu și importul modulului „./redari/informareGdpr.js”
+      .filter(p => /redari\/informare(?![A-Za-z])/i.test(readFileSync(p, 'utf8')))
+      .map(p => relative(src, p).split('\\').join('/'))
+      .sort()
+    expect(cuCalea).toEqual(['App.jsx', 'RedariInformarePublic.jsx', 'RedariRaspunsPublic.jsx', 'redari/docx.js', 'redari/informareGdpr.js'])
   })
 })
 

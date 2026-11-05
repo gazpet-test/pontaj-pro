@@ -33,7 +33,7 @@ const conv = (o) => ({ canal: 'posta', stare: 'activ', data_expediere: null, fis
 // fn_red_convocare_rezerva simulat ca migrarea 20261130l: P0002 (șters), RD002 (împuternicire lipsă, recitită din tabelă), RD001 (convocare
 // activă neexpediată, inclusiv fără număr), 55P03 (UAT ocupat), apoi număr + INSERT; o eroare NU consumă număr (tranzacția se anulează).
 // cuRpc: false = PGRST202 (migrarea neaplicată).
-function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRpc = true, capPagina = Infinity, inainteDeRezervare, uatOcupat = false, inainteDeCitire } = {}) {
+function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRpc = true, capPagina = Infinity, inainteDeRezervare, uatOcupat = false, inainteDeCitire, informarePublicata = true } = {}) {
   const jurnal = { rpc: [], numere: 0, apeluriRezerva: 0, inserturi: [], updateuri: [], upload: [], download: [] }
   let contor = 100
   const builder = (tab) => {
@@ -71,6 +71,8 @@ function clientFals(tabele, { rpcEsueazaLa = [], uploadEsueaza = new Set(), cuRp
     jurnal, tabele,
     from: builder,
     rpc: async (fn, args) => {
+      // #939 r2: indicatorul „informare publicată” (fn_red_informare_publicata) — citire, nu intră în jurnalul rezervărilor
+      if (fn === 'fn_red_informare_publicata') { jurnal.informare = (jurnal.informare || 0) + 1; return { data: informarePublicata === true, error: null } }
       jurnal.rpc.push(fn)
       if (fn !== 'fn_red_convocare_rezerva') throw new Error(`RPC neașteptat în generarea în masă: ${fn}`)   // fără cale alternativă
       jurnal.argumente = [...(jurnal.argumente || []), args]
@@ -111,6 +113,15 @@ const ruleaza = async (c, opt = {}) => {
 const activeNeexp = (t, d) => t.red_convocari.filter(c => c.detinator_id === d && c.stare === 'activ' && !c.data_expediere && !c.sters_la)
 
 describe('pregatesteLot — gărzi', () => {
+  it('#939 r2: informarea nepublicată pe server (fn_red_informare_publicata = false) → niciun rând nou, nicio rezervare; indicatorul se cere serverului', async () => {
+    const c = clientFals(date(), { informarePublicata: false })
+    const rez = await pregatesteLot(c, { proiect: PROIECT, uat: UAT })
+    expect(c.jurnal.informare).toBeGreaterThan(0)
+    expect(rez.plan.filter(p => p.actiune === 'nou')).toEqual([])
+    expect(rez.exclusi.length).toBeGreaterThan(0)
+    expect(rez.exclusi.every(x => /informarea GDPR de pe verso nu e publicată/.test(x.motiv))).toBe(true)
+    expect(c.jurnal.apeluriRezerva).toBe(0)
+  })
   it('r7: proiect fără împuternicire → generarea nouă blocată (motiv), niciun nou în plan, nicio rezervare', async () => {
     const c = clientFals(date())
     const rez = await pregatesteLot(c, { proiect: { ...PROIECT, imputernicire_nr: '' }, uat: UAT })

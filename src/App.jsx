@@ -64,6 +64,7 @@ const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner 
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
 const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
 const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
+const RedariInformarePublic = lazy(() => import('./RedariInformarePublic.jsx'))   // informarea GDPR completă (țintă QR/link din convocator), fără login
 // 📱 SMS (20261130b): ruta proprie /sms pentru owner și modulul 'sms' (utilizator / test); nivelul real îl dă BD-ul (fn_sms_nivel)
 const SmsPagina = lazy(() => import('./sms/SmsPagina.jsx'))
 const AuthContext = createContext(null)
@@ -8984,6 +8985,7 @@ export default function App() {
         <Route path="/rsvp/:token/:status" element={<RsvpSedintaPage/>}/>
         {/* Route PUBLIC Redări teren: răspunsul proprietarului la convocare (token din convocator) — FĂRĂ cont */}
         <Route path="/redari/raspuns/:token" element={<Suspense fallback={<LoadingScreen/>}><RedariRaspunsPublic/></Suspense>}/>
+        <Route path="/redari/informare" element={<Suspense fallback={<LoadingScreen/>}><RedariInformarePublic/></Suspense>}/>
         <Route path="/aplica" element={<AplicaPublic/>}/>
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
         <Route path="/panou" element={<ProtectedRoute requireModule="pontajpro"><DashboardPage/></ProtectedRoute>}/>
