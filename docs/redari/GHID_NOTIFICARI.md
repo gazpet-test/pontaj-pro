@@ -33,7 +33,7 @@ deținătorului).
 | **Cererea de împuternicire** | Cererea către Transgaz (anexă la A1 / A2), DRAFT Juridic | Transgaz | Corespondență (A2) | ⚙️ Setări proiect → Generează cererea (DOCX) | admin |
 | **Corespondența** (planul, scrisorile, înștiințările A1–C2) | Planul de verificare, scrisorile către Transgaz, ISC, DAJ, Primării; evidența trimiterii | Instituții | E-mail, registratură, poștă | 📨 Corespondență. Aprobarea o dă owner-ul; „📧 Pregătește mailul” apare pe rândul aprobat | aprobă owner-ul; pregătesc admin / editor |
 | **SMS Redări pe UAT** (șablon fix) | Reamintirea zilei și orei sesiunii, cu telefonul de contact; un SMS de persoană | Deținătorii convocați din UAT, fără răspuns și fără PV semnat | SMS | 📋 Registru → 📱 SMS proprietari (lot draft), apoi 📱 SMS → Istoric (aprobare, trimitere) | creează admin / editor cu nivel SMS; aprobă owner-ul |
-| **E-mail către proprietari** (F2) | Trimiterea în loturi din redari@gazpet.ro | Deținătorii cu e-mail | E-mail | — | **neconstruit** |
+| **E-mail către proprietari** (F2) | Loturi din redari@gazpet.ro; implementare parțială, transport real oprit | Deținătorii cu e-mail confirmat în contact | E-mail suplimentar | ✉️ Lot e-mail (owner, după aplicarea/review-ul F2) | Ciornă / preview / aprobare; **trimiterea nu este disponibilă** |
 
 Ce blochează azi (verificat în tab, 04.11.2026):
 - **Împuternicirea Transgaz** (nr. + dată în ⚙️ Setări proiect) blochează convocatorul, plicul, AR-ul și adresa către Primărie.

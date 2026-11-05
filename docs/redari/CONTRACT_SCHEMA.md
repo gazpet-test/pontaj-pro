@@ -39,6 +39,15 @@ UPDATE / DELETE / TRUNCATE, trigger de imutabilitate). NU protejează față de 
 insera direct. E o garanție de aplicație, nu una criptografică; dovada față de terți rămâne exportul semnat / datat, nu tabela în sine.
 
 ## 1. Drepturi (3A)
+**F2 în lucru, 05.11.2026:** `20261131a_redari_mail_f2_loturi.sql` este o propunere locală, neaplicată.
+Adaugă `red_mail_loturi`, `red_mail_mesaje`, `red_mail_optout`, `red_mail_fisiere_inventar` + `_antet`
+și `red_mail_jurnal_f2`; citire admin/editor, scriere exclusiv prin RPC-uri care cer owner.
+Nu schimbă drepturile de modul. Numerele `M` sunt rezervate în aceeași tranzacție cu mesajele.
+`red_convocari.canal='email'` este refuzat de un trigger nou; UI-ul îl scoate din selector.
+`red_mail_setari`: `trimitere_oprita=true`, `extern_permis=false`, `plafon_zi=200`, `plafon_luna=1000`,
+`pauza_pana`, `ultim_apel_la`. Pornirea este blocată în RPC și în edge. Contractul complet F2 din plan
+nu este încă implementat; limitele sunt enumerate în `RAPORT_F2_EMAIL.md`.
+
 - Cheia de modul: `redari`. Niveluri în `user_module_access.access_level`: `admin` (= redari_admin), `editor`
   (= redari_operator), `viewer` (= redari_viewer). Owner (`profiles.is_owner`) = admin implicit.
 - `public.fn_red_nivel() RETURNS text` — `admin` | `editor` | `viewer` | NULL pentru utilizatorul curent (fără parametru,

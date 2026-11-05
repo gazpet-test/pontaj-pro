@@ -28,6 +28,7 @@ import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
 import NotificariEcran from './redari/ui/NotificariEcran.jsx'
+import MailLoturiEcran from './redari/ui/MailLoturiEcran.jsx'
 import { CANALE_RASPUNS_MANUAL, notaRaspunsManual } from './redari/notificari.js'
 // 📱 SMS proprietari (owner sau utilizator SMS cu Redari editor / admin, 20261130b; blocat in BD pana la autorizarea Transgaz)
 import RedariSmsButon from './sms/RedariSmsButon.jsx'
@@ -143,6 +144,7 @@ export default function Redari() {
     { cod:'posta', eticheta:'✉️ Poștă' },
     { cod:'corespondenta', eticheta:'📨 Corespondență' },
     { cod:'notificari', eticheta:'📬 Notificări' },
+    ...(profile?.is_owner === true ? [{ cod:'mail', eticheta:'✉️ Lot e-mail' }] : []),
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
   ]
@@ -176,6 +178,7 @@ export default function Redari() {
       {!proiect ? <Gol text="Alege sau creează un proiect." /> : (
         <div key={proiect.id}>
           {tab === 'dashboard' && <DashboardEcran proiect={proiect} />}
+          {tab === 'mail' && profile?.is_owner === true && <MailLoturiEcran proiect={proiect} uats={uats} profile={profile} />}
           {tab === 'sesiune' && <SesiuneEcran proiect={proiect} nivel={nivel} show={show} />}
           {tab === 'tronsoane' && <TronsoaneEcran proiect={proiect} nivel={nivel} show={show} />} 
           {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} onPosta={() => setTab('posta')} />}
