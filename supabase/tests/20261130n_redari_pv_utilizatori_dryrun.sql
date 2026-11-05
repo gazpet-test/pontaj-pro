@@ -51,7 +51,7 @@ BEGIN
     UPDATE pr1_cazuri SET parcela=p WHERE nume=r.nume;
     FOR spec IN SELECT * FROM jsonb_array_elements(r.date) LOOP
       INSERT INTO public.red_detinatori(parcela_id,nume,nume_normalizat,calitate,sters_la,sters_motiv)
-        VALUES(p,'FICTIV '||gen_random_uuid(),'FICTIV '||gen_random_uuid(),spec->>'rol',
+        VALUES(p,'FICTIV '||gen_random_uuid(),upper('FICTIV '||gen_random_uuid()),spec->>'rol',
           CASE WHEN (spec->>'sters')::boolean THEN now() END,CASE WHEN (spec->>'sters')::boolean THEN 'FICTIV' END) RETURNING id INTO d;
       INSERT INTO pr1_det VALUES(r.nume,spec,d,p,NULL);
     END LOOP;
@@ -59,6 +59,40 @@ BEGIN
 END $fixture$;
 GRANT SELECT,UPDATE ON pr1_cazuri,pr1_det TO authenticated;
 SET LOCAL ROLE authenticated;
+-- INSERT direct ca editor non-owner: inclusiv cu scan/data, numai generat este permis.
+SAVEPOINT pr1_insert;
+DO $insert_direct$
+DECLARE r record; st text; refuz boolean; v public.red_procese_verbale;
+BEGIN
+  SELECT d.id,d.parcela,p.uat_id INTO STRICT r FROM pr1_det d JOIN public.red_parcele p ON p.id=d.parcela WHERE d.caz='utilizator_trimis';
+  FOREACH st IN ARRAY ARRAY['semnat','trimis_spre_semnare','anulat',NULL]::text[] LOOP
+    refuz:=false;
+    BEGIN
+      INSERT INTO public.red_procese_verbale(tip,parcela_id,detinator_id,uat_id,nr_pv,data_pv,stare)
+        VALUES('A',r.parcela,r.id,r.uat_id,'PVA-ZXP-9898','2026-11-05',st);
+    EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: INSERT permis numai in starea generat'; END;
+    IF NOT refuz THEN RAISE EXCEPTION 'DRY INSERT direct stare % permis',st; END IF;
+  END LOOP;
+  refuz:=false;
+  BEGIN
+    INSERT INTO public.red_procese_verbale(tip,parcela_id,detinator_id,uat_id,nr_pv,data_pv,stare,fisier_semnat_path,semnat_primit_data)
+      VALUES('A',r.parcela,r.id,r.uat_id,'PVA-ZXP-9898','2026-11-05','semnat','FICTIV/scan.pdf','2026-11-05');
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: INSERT permis numai in starea generat'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY INSERT direct semnat cu scan/data permis'; END IF;
+  INSERT INTO public.red_procese_verbale(tip,parcela_id,detinator_id,uat_id,nr_pv,data_pv,stare)
+    VALUES('A',r.parcela,r.id,r.uat_id,'PVA-ZXP-9898','2026-11-05','generat') RETURNING * INTO v;
+  IF v.calitate_semnatar IS DISTINCT FROM 'utilizator' THEN RAISE EXCEPTION 'DRY INSERT generat legitim'; END IF;
+  UPDATE public.red_procese_verbale SET sters_la=now(),sters_motiv='FICTIV' WHERE id=v.id;
+  refuz:=false;
+  BEGIN
+    UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/scan.pdf' WHERE id=v.id;
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM='PV: un PV sters nu poate fi semnat'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'DRY semnare PV sters permisa'; END IF;
+  UPDATE public.red_procese_verbale SET stare='anulat',motiv_anulare='FICTIV' WHERE id=v.id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'DRY anulare PV sters legitima'; END IF;
+END $insert_direct$;
+ROLLBACK TO SAVEPOINT pr1_insert;
+RELEASE SAVEPOINT pr1_insert;
 DO $sign$
 DECLARE r record; v public.red_procese_verbale;
 BEGIN
@@ -68,10 +102,6 @@ BEGIN
     IF v.calitate_semnatar IS DISTINCT FROM (r.spec->>'rol') THEN RAISE EXCEPTION 'DRY: calitate server creare'; END IF;
     UPDATE pr1_det SET pv=v.id WHERE id=r.id;
     IF r.spec->>'stare'='semnat' THEN
-      -- Deleted document fixture must be marked BEFORE signing (signed row cannot be soft-deleted).
-      IF (r.spec->>'sters_pv')::boolean THEN
-        UPDATE public.red_procese_verbale SET sters_la=now(),sters_motiv='FICTIV' WHERE id=v.id;
-      END IF;
       UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/scan.pdf' WHERE id=v.id;
     ELSIF r.spec->>'stare'='anulat' THEN
       UPDATE public.red_procese_verbale SET stare='anulat',motiv_anulare='FICTIV' WHERE id=v.id;
@@ -79,8 +109,23 @@ BEGIN
       UPDATE public.red_procese_verbale SET stare='trimis_spre_semnare',trimis_spre_semnare_data='2026-11-05' WHERE id=v.id;
     END IF;
   END LOOP;
+  -- Protecția 20261129c ramane activa pentru editor: nu se sterge logic un PV semnat.
+  SELECT * INTO STRICT r FROM pr1_det WHERE (spec->>'sters_pv')::boolean;
+  BEGIN
+    UPDATE public.red_procese_verbale SET sters_la=now(),sters_motiv='FICTIV' WHERE id=r.pv;
+    RAISE EXCEPTION 'DRY stergere PV semnat de editor permisa';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM <> 'Un PV semnat sau anulat nu mai poate fi modificat (exceptie: data remedierii).' THEN RAISE; END IF;
+  END;
 END $sign$;
 RESET ROLE;
+-- Fixture istoric: construit DUPA semnare, numai ca postgres pe clona anulata.
+-- 20261129c interzice stergerea unui PV semnat inclusiv pentru postgres. Dezactivam strict acel
+-- trigger pentru acest singur fixture; il reactivam imediat, fara relaxarea regulii in migrare.
+ALTER TABLE public.red_procese_verbale DISABLE TRIGGER red_pv_stare_tranzitie;
+UPDATE public.red_procese_verbale v SET sters_la=now(),sters_motiv='FICTIV: istoric dupa semnare'
+  FROM pr1_det d WHERE d.pv=v.id AND (d.spec->>'sters_pv')::boolean AND v.stare='semnat';
+ALTER TABLE public.red_procese_verbale ENABLE TRIGGER red_pv_stare_tranzitie;
 UPDATE public.red_detinatori d SET calitate=x.spec->>'actual' FROM pr1_det x WHERE d.id=x.id AND x.spec ? 'actual';
 SET LOCAL ROLE authenticated;
 DO $paritate$
@@ -124,6 +169,10 @@ DECLARE p uuid; d uuid; a public.red_procese_verbale; b public.red_procese_verba
 BEGIN
   SELECT parcela,id,pv INTO p,d,a.id FROM pr1_det WHERE caz='utilizator_trimis';
   SELECT * INTO STRICT b FROM public.red_procese_verbale WHERE parcela_id=p AND tip='B' AND stare='generat';
+  UPDATE public.red_detinatori SET calitate='proprietar' WHERE id=d;
+  UPDATE public.red_procese_verbale SET fisier_generat_path='FICTIV/regenerat.docx' WHERE id=a.id;
+  IF (SELECT calitate_semnatar FROM public.red_procese_verbale WHERE id=a.id) IS DISTINCT FROM 'proprietar' THEN
+    RAISE EXCEPTION 'DRY snapshot regenerare nu urmeaza detinatorul'; END IF;
   UPDATE public.red_detinatori SET calitate='arendas' WHERE id=d;
   UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-05',fisier_semnat_path='FICTIV/a-late.pdf' WHERE id=a.id;
   IF (SELECT calitate_semnatar FROM public.red_procese_verbale WHERE id=a.id) IS DISTINCT FROM 'arendas' THEN

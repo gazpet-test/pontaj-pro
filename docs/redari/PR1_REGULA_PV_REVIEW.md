@@ -1,6 +1,6 @@
 # PR1 — regula PV utilizatori / arendași (juridic#040)
 
-Implementarea urmează deciziile Răzvan din 05.11.2026, claude_context #1920. Livrare locală pentru review pe `codex/redari-pr1-regula-pv`, fără merge sau aplicare SQL. PR-ul draft către `main` NU a fost creat: verificarea automată de aprobare a blocat încărcarea în repo-ul public `gazpet-test/pontaj-pro`, cerând confirmare explicită pentru această destinație. Commitul și patch-ul local sunt pregătite; nu s-a publicat cod.
+Implementarea urmează deciziile Răzvan din 05.11.2026, claude_context #1920. PR #998 este publicat ca draft către `main`, fără merge sau aplicare SQL. Publicarea a fost autorizată explicit de Răzvan. Acest document păstrează rezultatele primei runde; pentru corecțiile și validările actuale vezi [raportul rundei 2](PR1_REGULA_PV_R2_REVIEW.md). În runda 2, snapshot-ul draftului urmărește rolul curent la fiecare scriere, inclusiv regenerare; după semnare rămâne înghețat.
 
 Fișiere:
 

@@ -46,7 +46,20 @@ it('PV B separa utilizatorii/arendasii de proprietari, pastrand numele fictive',
   expect(r.campuri.bifa_neidentificat).toBe('☐')
 })
 it('PV A foloseste calitatea serverului cand rolul curent s-a schimbat', async () => {
-  const r=await genereazaPvA({strict:false,pv:{calitate_semnatar:'arendas'},detinator:{calitate:'proprietar'},
+  const r=await genereazaPvA({strict:false,pv:{stare:'semnat',calitate_semnatar:'arendas'},detinator:{calitate:'proprietar'},
     templateArrayBuffer:readFileSync('public/redari/sabloane/pv_a.docx')})
   expect(r.campuri.calitate_cota).toContain('arendaș')
+})
+
+it.each(['generat','trimis_spre_semnare'])('PV A %s: proprietar -> arendas inainte de semnare urmeaza rolul curent', async stare => {
+  const date={strict:false,pv:{stare,calitate_semnatar:'proprietar'},detinator:{calitate:'proprietar'},
+    templateArrayBuffer:readFileSync('public/redari/sabloane/pv_a.docx')}
+  expect((await genereazaPvA(date)).campuri.calitate_cota).toBe('proprietar')
+  date.detinator.calitate='arendas'
+  expect((await genereazaPvA(date)).campuri.calitate_cota).toBe('arendaș')
+})
+it('PV A semnat nu deduce din rolul curent un snapshot lipsa', async () => {
+  const r=await genereazaPvA({strict:false,pv:{stare:'semnat',calitate_semnatar:null},detinator:{calitate:'arendas'},
+    templateArrayBuffer:readFileSync('public/redari/sabloane/pv_a.docx')})
+  expect(r.campuri.calitate_cota).toBe('')
 })

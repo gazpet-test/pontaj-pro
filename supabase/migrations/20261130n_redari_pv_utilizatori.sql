@@ -181,9 +181,9 @@ BEGIN
 END $tables$;
 ALTER TABLE public.red_procese_verbale ADD COLUMN calitate_semnatar text
   CONSTRAINT red_pv_calitate_semnatar_ck CHECK (
-    (tip='A' AND (calitate_semnatar IS NULL OR calitate_semnatar IN ('proprietar','coproprietar','mostenitor','neidentificat','utilizator','arendas')))
+    (tip='A' AND (stare <> 'semnat' OR calitate_semnatar IS NOT NULL) AND (calitate_semnatar IS NULL OR calitate_semnatar IN ('proprietar','coproprietar','mostenitor','neidentificat','utilizator','arendas')))
     OR (tip<>'A' AND calitate_semnatar IS NULL));
-COMMENT ON COLUMN public.red_procese_verbale.calitate_semnatar IS 'Server: calitatea din red_detinatori la creare si semnare PV A, apoi imutabila. Legacy nesemnat se completeaza la semnare.';
+COMMENT ON COLUMN public.red_procese_verbale.calitate_semnatar IS 'Server: calitatea curenta la fiecare scriere PV A nesemnat, inclusiv regenerare/semnare; apoi imutabila. Legacy nesemnat se completeaza la semnare.';
 CREATE FUNCTION public.fn_red_parcela_acoperita_a(p_parcela uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
   SELECT EXISTS (
@@ -207,6 +207,14 @@ CREATE FUNCTION public.fn_red_pv_calitate_semnatar() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
 DECLARE v_calitate text;
 BEGIN
+  -- Nicio cale INSERT (inclusiv PostgREST) nu poate sari cerintele tranzitiei de semnare.
+  IF TG_OP='INSERT' AND NEW.stare IS DISTINCT FROM 'generat' THEN
+    RAISE EXCEPTION 'PV: INSERT permis numai in starea generat' USING ERRCODE='23514';
+  END IF;
+  IF NEW.stare='semnat' AND (TG_OP='INSERT' OR OLD.stare IS DISTINCT FROM 'semnat')
+     AND NEW.sters_la IS NOT NULL THEN
+    RAISE EXCEPTION 'PV: un PV sters nu poate fi semnat' USING ERRCODE='23514';
+  END IF;
   IF TG_OP='UPDATE' AND OLD.stare IN ('semnat','anulat') THEN
     IF NEW.calitate_semnatar IS DISTINCT FROM OLD.calitate_semnatar THEN
       RAISE EXCEPTION 'Calitatea semnatarului este inghetata' USING ERRCODE='23514';
@@ -216,7 +224,9 @@ BEGIN
   IF TG_OP='UPDATE' AND NEW.calitate_semnatar IS DISTINCT FROM OLD.calitate_semnatar THEN
     RAISE EXCEPTION 'Calitatea semnatarului se completeaza numai de server' USING ERRCODE='23514';
   END IF;
-  IF NEW.tip='A' AND (TG_OP='INSERT' OR (NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat')) THEN
+  -- Draftul urmeaza calitatea curenta la fiecare scriere, inclusiv legarea DOCX regenerat.
+  -- Anularea nu depinde de disponibilitatea detinatorului; snapshot-ul existent ramane.
+  IF NEW.tip='A' AND NEW.stare <> 'anulat' THEN
     -- Aceeasi ordine ca 20261129f: PV (UPDATE) -> parcela -> detinator.
     -- La creare RPC, parcela si detinatorul sunt deja blocate de apelant.
     IF current_setting('transaction_isolation') <> 'read committed' THEN
@@ -310,7 +320,7 @@ DO $post$
 BEGIN
   IF EXISTS (SELECT 1 FROM (VALUES
     ('public.fn_red_parcela_acoperita_a(uuid)','b932aaf307761d3c504608a30c117bca'),
-    ('public.fn_red_pv_calitate_semnatar()','07aa4e576d7d76e88abd24084c79f0d1'),
+    ('public.fn_red_pv_calitate_semnatar()','f522a36f34c1c6a7b2700c91a9f70ff4'),
     ('public.fn_red_pv_creeaza(text,uuid,uuid,integer)','290f8f0c3ba78d8499db7ef50d0d8bcd'),
     ('public.fn_red_pv_b_semnare()','728fc279beee0b34f9adcfb425b2dd9f')
   ) b(sig,corp) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(b.sig)

@@ -211,7 +211,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     if(!egal(s,dupa)) throw new Error('Fisier salvat ('+path+'), dar datele s-au schimbat. Reincarca si regenereaza.')
     const {data,error}=await cas(supabase.from('red_procese_verbale').update({fisier_generat_path:path})
       .eq('id',s.pv.id).eq('created_at',s.pv.created_at).eq('stare',s.pv.stare).is('sters_la',null),s.pv,
-      [...CAMPURI,'fisier_generat_path']).select('*')
+      [...CAMPURI,'calitate_semnatar','fisier_generat_path']).select('*')
     if(!curent()) return
     if(error || data?.length!==1) throw new Error('Fisier salvat ('+path+'), legare neconfirmata. Reincarca. '+(error?msgEroare(error):'Conflict concurent.'))
     let verificat = false
@@ -262,7 +262,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     }
     const {data,error}=await cas(supabase.from('red_procese_verbale').update(patch).eq('id',s.pv.id)
       .eq('created_at',s.pv.created_at).eq('stare',s.pv.stare).is('sters_la',null),s.pv,
-      [...CAMPURI,'fisier_generat_path','fisier_semnat_path']).select('*')
+      [...CAMPURI,'calitate_semnatar','fisier_generat_path','fisier_semnat_path']).select('*')
     if (!curent()) return
     if (error || data?.length!==1) throw new Error((path?'Scan pastrat la '+path+'. Legare neconfirmata; reincarca. ':'')+(error?msgEroare(error):'Conflict concurent; reincarca.'))
     aplica({...s,pv:data[0]});setScan(null);show('PV: '+stare+'.','success');onGata?.()

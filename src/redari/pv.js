@@ -119,7 +119,8 @@ export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinato
 }
 function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const campuri = Object.fromEntries(CHEI_PV_A.map(k => [k, '']))
-  const rol = pv.calitate_semnatar ?? detinator.calitate
+  // Draft: rol curent; semnat/anulat: exclusiv snapshot-ul inghetat de server.
+  const rol = ['semnat', 'anulat'].includes(pv.stare) ? pv.calitate_semnatar : detinator.calitate
   const calitate = ETICHETA_CALITATE[rol] ?? rol ?? ''
   Object.assign(campuri, {
     contract_nr: proiect.contract_nr ?? '', contract_data: formatDataRo(proiect.contract_data),

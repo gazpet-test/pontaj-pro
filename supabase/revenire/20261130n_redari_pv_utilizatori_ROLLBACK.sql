@@ -8,7 +8,7 @@ BEGIN
   LOCK TABLE public.red_jurnal IN SHARE MODE;
   IF EXISTS (SELECT 1 FROM (VALUES
     ('public.fn_red_parcela_acoperita_a(uuid)','b932aaf307761d3c504608a30c117bca'),
-    ('public.fn_red_pv_calitate_semnatar()','07aa4e576d7d76e88abd24084c79f0d1'),
+    ('public.fn_red_pv_calitate_semnatar()','f522a36f34c1c6a7b2700c91a9f70ff4'),
     ('public.fn_red_pv_creeaza(text,uuid,uuid,integer)','290f8f0c3ba78d8499db7ef50d0d8bcd'),
     ('public.fn_red_pv_b_semnare()','728fc279beee0b34f9adcfb425b2dd9f')
   ) b(sig,corp) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(b.sig)
