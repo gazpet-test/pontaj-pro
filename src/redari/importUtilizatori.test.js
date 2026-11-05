@@ -235,6 +235,12 @@ describe('scrieUtilizatori', () => {
     expect(r).toMatchObject({ detinatoriNoi: 1, schimbate: 1 })
     expect(tabele.red_detinatori.map(d => d.parcela_id)).toEqual(['p2'])
   })
+  it('r7 (Cop r5 P2): potrivire pe cheie — parcela mutată în alt UAT între plan și scriere → nescris', async () => {
+    const parcele = [{ ...PARCELE_TEST[0], red_uat: { uat3: 'BAL' } }, PARCELE_TEST[1]]
+    const { supabase, tabele } = clientFals({ parcele })
+    expect(await __scrieUtilizatoriTest(supabase, plan, { proiectId: 'pr', versiune: 'v', permite: true })).toMatchObject({ detinatoriNoi: 1, schimbate: 1 })
+    expect(tabele.red_detinatori.map(d => d.parcela_id)).toEqual(['p2'])
+  })
   it('r3 (Cop r2 P2-01): aceeași persoană pe aceeași parcelă cu adrese diferite → ambele rânduri excluse, raportate', () => {
     const c = [{ rand: 20, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S1', adresa_cunoscuta: true, telefon: null } },
                { rand: 21, uat3: 'HUS', cheie_sursa: 'HUS|50|1|', poz_hg: '50', nume: 'H', nume_normalizat: 'H', contact: { adresa_sat: 'S2', adresa_cunoscuta: true, telefon: null } }]

@@ -218,7 +218,8 @@ async function scrie(supabase, plan, { proiectId, versiune, fisierNume = null, p
       // r4 (Jak r3 P1-1): la HG, parcela aleasă trebuie să aibă ÎNCĂ acel HG, în același UAT, iar HG-ul să fie tot unic
       const ok = !!p && (n.potrivire === 'hg' || n.potrivire === 'cheie')
         && (n.potrivire !== 'hg' || (p.uat3 === n.uat3 && p.poz_hg != null && normalizeazaNume(p.poz_hg) === n.poz_hg && hgAcum.get(`${n.uat3}|${n.poz_hg}`) === 1))
-        && (n.potrivire !== 'cheie' || (p.cheie_sursa === n.cheie_sursa && cheieAcum.get(n.cheie_sursa) === 1))
+        // r7 (Cop r5 P2): și pe cheie, parcela trebuie să fie încă în UAT-ul din fișier
+        && (n.potrivire !== 'cheie' || (p.uat3 === n.uat3 && p.cheie_sursa === n.cheie_sursa && cheieAcum.get(n.cheie_sursa) === 1))
       if (!ok) schimbate.push({ rand: n.rand, uat3: n.uat3, id_parcela: n.id_parcela, motiv: 'parcela s-a schimbat între plan și scriere (ștearsă / altă cheie / cheie sau HG nu mai e unic) — nescris' })
       return ok
     }
