@@ -13,7 +13,11 @@ const COL_PLIC = 'id,proiect_id,uat_id,nr_plic,destinatar_nume,lot_id,awb,data_e
 const COL_LOT = 'id,proiect_id,nr_lot,data_plicuire,semnatar1_id,semnatar2_id,pv_path,observatii,versiune'
 const starea = p => p.stare === 'anulat' ? 'anulat' : p.data_ar ? 'AR' : p.retur ? 'retur' : p.data_expediere ? 'expediat' : p.lot_id ? 'in_lot' : 'fara_lot'
 // Jakarinos + Copilot f10 UI P2: 55P03 (operație concurentă, din protocolul pe UAT) are mesajul lui, separat de rezultatul neconfirmat (rețea)
-const eroareScriere = e => e?.code === '42501' ? 'Accesul de scriere a fost refuzat.' : e?.code === '55P03' ? `Operație concurentă: ${msgEroare(e)} Reîncarcă datele și reîncearcă.`
+// E2E 06.11.2026: codurile de business ale modulului (RDnnn, ex. RD008 din 20261131c) sunt refuzuri explicite ale serverului, nu rezultate
+// necunoscute — se afișează motivul (înainte cădeau pe „Rezultat neconfirmat”, iar operatorul nu afla că trebuie regenerat convocatorul).
+const SUGESTII_RD = { RD008: 'Convocatorul a fost generat pentru altă calitate a deținătorului: regenerează-l (Registru → 📄 Convocator → „Regenerează același număr”), apoi creează plicul.' }
+export const eroareScriere = e => e?.code === '42501' ? 'Accesul de scriere a fost refuzat.' : e?.code === '55P03' ? `Operație concurentă: ${msgEroare(e)} Reîncarcă datele și reîncearcă.`
+  : /^RD\d{3}$/.test(e?.code || '') ? `${msgEroare(e)}${SUGESTII_RD[e.code] ? ` — ${SUGESTII_RD[e.code]}` : ''}`
   : e?.code === 'P0001' || e?.code === '23514' || e?.code === '22023' || e?.code === '0A000' ? msgEroare(e) : 'Rezultat neconfirmat. Reîncarcă și verifică starea înainte de reluare.'
 
 export async function citesteDatePlicuri(client, proiectId, poateScrie, esteCurent) {
