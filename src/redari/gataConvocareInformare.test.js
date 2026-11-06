@@ -46,6 +46,10 @@ describe('ecranele care arătau „gata”', () => {
     expect(m.convocator.lipsuri.join(' ')).toMatch(/informarea GDPR nepublicată/)
     const ok = Object.fromEntries(ghidModele({ proiect: { ...pr, informare_publicata: true }, uats: [uat] }).map(x => [x.cod, x]))
     expect(ok.convocator.stare).toBe('gata')
+    // r2 P2: verificare eșuată → nu „gata”, cu motivul de reîncărcare
+    const nev = Object.fromEntries(ghidModele({ proiect: { ...pr, informare_publicata: null }, uats: [uat] }).map(x => [x.cod, x]))
+    expect(nev.convocator.stare).toBe('blocat')
+    expect(nev.convocator.lipsuri).toContain(AVERTISMENT_INFORMARE_NEVERIFICATA)
   })
 })
 

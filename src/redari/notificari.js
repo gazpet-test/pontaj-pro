@@ -9,6 +9,7 @@
 import { potrivesteRol, calitatiRol } from './rol.js'
 import { stariParcele, stariCuParcela, STARI_INCHISE, calculeazaStare, ultimulRaspuns } from './stare.js'
 import { motivBlocareConvocator } from './ui/comune.jsx'
+import { avertismentInformare } from './informareGdpr.js'
 import { verificaDatePvA, verificaDatePvB, verificaDatePvC, STARI_TEREN, MOTIVE_PV_B } from './pv.js'
 import { verificaDateAdresaUat, verificaDateCerereImputernicire, celulaCsv } from './docx.js'
 import { areImputernicire, TEXTE_AR } from './plicuri.js'
@@ -75,6 +76,8 @@ export function ghidModele({ proiect = {}, uats = [], smsPanou = null, smsPanouE
   const out = []
 
   const lConv = [...fara, ...lipsuriProiectSiUat(uats, u => desparte(motivBlocareConvocator(proiect, u, null)))]
+  // Jakarinos r2 P2 (L18): verificarea informării eșuată → nu „gata”; motivul spune că trebuie reîncărcat
+  if (avertismentInformare(proiect)) lConv.push(avertismentInformare(proiect))
   out.push({ cod: 'convocator', model: 'Convocator (Model 1)', ce: 'Convocarea scrisă la constatare: zilele de sesiune, cod QR / link personal spre formular, informarea GDPR pe verso.',
     cui: 'Fiecare deținător identificat, cu adresă cunoscută', canal: 'Poștă recomandată cu AR (în plicul comun)',
     unde: '📋 Registru → 📄 Convocator (pe rând); ↻ Reîncarcă din 📄 Fișa parcelei', lipsuri: lConv, stare: stare(lConv),
