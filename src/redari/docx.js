@@ -1,3 +1,4 @@
+import { motivConvocatorUtilizator } from './convocareUtilizatori.js'
 // Redări teren — documente client-side (contract docs/redari/CONTRACT_SCHEMA.md §6 + §8, decizii 4A + 5A).
 // - DOCX: șablonul se deschide cu jszip, placeholder-ele {{camp}} se înlocuiesc în word/document.xml + antete/subsoluri.
 // - QR: generat local cu pachetul `qrcode` (toDataURL), inserat ca imagine inline în locul paragrafului {{qr}}.
@@ -615,9 +616,12 @@ export const CHEI_CONVOCATOR = ['contract_nr', 'contract_data', 'proiect_denumir
  * Implicit STRICT: Error în română dacă lipsesc date obligatorii (verificaDateConvocator) sau dacă rămâne un placeholder
  * necompletat/necunoscut în șablon. `permiteIncomplet: true` DOAR pentru previzualizare (câmpurile lipsă → gol) — niciodată
  * pentru salvare.
- * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string>, lipsuri: string[] }>}
+ * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string>, lipsuri: string[], calitateDocument: string }>}
  */
 export async function genereazaConvocator({ detinator, contactDetinator, contact, parcela, uat, proiect, nrDocument, token, templateArrayBuffer, dataDocument, permiteIncomplet = false, informare = informareProiect(proiect) }) {
+  const calitateDocument = detinator?.calitate // instantaneu al calitatii folosite in DOCX, niciodata recitit dupa generare
+  const motivUtilizator = motivConvocatorUtilizator(proiect, detinator)
+  if (motivUtilizator) throw new Error(motivUtilizator)   // inclusiv previzualizare
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
   const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator, informare })
   if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
@@ -637,7 +641,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     nr_document: nrDocument ?? '',
     data: formatDataRo(dataDocument || new Date()),
     nume: d.nume ?? '',
-    calitate: ETICHETA_CALITATE[d.calitate] ?? (d.calitate ?? ''),
+    calitate: ETICHETA_CALITATE[calitateDocument] ?? (calitateDocument ?? ''),
     adresa: adresaDetinator(contactDet(detinator, contactDetinator)),
     id_parcela: p.id_parcela ?? '',
     uat: u.nume ?? '',
@@ -675,7 +679,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     throw new Error(mesajAdresaNepermisa(gasit))
   }
   const hash = await hashBlob(blob)
-  return { blob, hash, link, campuri, lipsuri }
+  return { blob, hash, link, campuri, lipsuri, calitateDocument }
 }
 
 const RX_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -709,10 +713,12 @@ const eExistaDeja = (e) => !!e && (String(e.statusCode ?? e.status ?? '') === '4
 const incarca = (supabase, path, blob) => supabase.storage.from(BUCKET_REDARI).upload(path, blob, { contentType: MIME_DOCX, upsert: false })
 
 // pasul 3: UPDATE rândul cu path + hash; eșecul lasă rândul pe calea veche (fișierul nou rămâne în bucket, reluabil)
-const leagaDeRand = async (supabase, { convocareId, path, hash }) => {
-  const { data, error: eUpd } = await supabase.from('red_convocari')
-    .update({ fisier_convocator_path: path, continut_hash: hash }).eq('id', convocareId).select('id').single()
-  if (eUpd || !data?.id) throw eroareCu(`Fișierul e în storage (${path}), dar legarea de convocarea ${convocareId} a eșuat: ${eUpd?.message || eUpd || 'niciun rând actualizat'}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'update' })
+const leagaDeRand = async (supabase, { convocareId, path, hash, calitateDocument }) => {
+  const { data, error: eUpd } = await supabase.rpc('fn_red_convocare_leaga', {
+    p_convocare_id: convocareId, p_fisier_path: path, p_continut_hash: hash, p_calitate_asteptata: calitateDocument,
+  })
+  const id = Array.isArray(data) ? data[0]?.convocare_id : data?.convocare_id
+  if (eUpd || id !== convocareId) throw eroareCu(`Fișierul e în storage (${path}), dar legarea de convocarea ${convocareId} a eșuat: ${eUpd?.message || eUpd || 'niciun rând actualizat'}. Regenerați după reîncărcarea datelor.`, { convocareId, path, pas: 'update', code: eUpd?.code })
   return { path, convocareId }
 }
 
@@ -723,21 +729,22 @@ const leagaDeRand = async (supabase, { convocareId, path, hash }) => {
  * fără path („neîncărcat” în UI) și se reia cu reincarcaConvocator; eroarea poartă `convocareId`, `path`, `pas`.
  * @returns {Promise<{ path: string, convocareId: string }>}
  */
-export async function salveazaConvocator(supabase, { blob, hash, proiectCod, uat3, idParcela, nrDocument, detinatorId, canal = 'posta' }) {
+export async function salveazaConvocator(supabase, { blob, hash, proiectCod, uat3, idParcela, nrDocument, detinatorId, calitateDocument, canal = 'posta' }) {
   if (!supabase) throw new Error('Lipsește clientul Supabase')
   if (!blob) throw new Error('Lipsește fișierul convocatorului')
   if (!plin(hash)) throw new Error('Lipsește hash-ul conținutului')
   if (!detinatorId) throw new Error('Lipsește deținătorul (detinator_id)')
+  if (!plin(calitateDocument)) throw new Error('Lipsește calitatea documentului')
   const path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument, versiune: 1 })
   const { data, error: eIns } = await supabase.from('red_convocari')
-    .insert({ detinator_id: detinatorId, canal, nr_document: nrDocument })
+    .insert({ detinator_id: detinatorId, canal, nr_document: nrDocument, calitate_document: calitateDocument })
     .select('id').single()
   if (eIns) throw new Error(`Înregistrarea convocării ${nrDocument} în red_convocari a eșuat: ${eIns.message || eIns}`)
   if (!data?.id) throw new Error('Înregistrarea convocării nu a întors un id')
   const convocareId = data.id
   const { error: eUp } = await incarca(supabase, path, blob)
   if (eUp) throw eroareCu(`Convocarea ${convocareId} e înregistrată, dar fișierul nu a putut fi încărcat în storage (${path}): ${eUp.message || eUp}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'upload' })
-  return leagaDeRand(supabase, { convocareId, path, hash })
+  return leagaDeRand(supabase, { convocareId, path, hash, calitateDocument })
 }
 
 export const MAX_INCERCARI_VERSIUNE = 20
@@ -778,14 +785,23 @@ export async function versiuneMaximaInBucket(supabase, { proiectCod, uat3, idPar
  * (imutabile); schimbarea coloanei e jurnalizată de trigger.
  * @returns {Promise<{ path: string, convocareId: string, versiune: number }>}
  */
-export async function reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod, uat3, idParcela, nrDocument }) {
+export async function reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod, uat3, idParcela, nrDocument, calitateDocument }) {
   if (!supabase) throw new Error('Lipsește clientul Supabase')
   if (!convocareId) throw new Error('Lipsește id-ul convocării de reîncărcat')
+  if (!plin(calitateDocument)) throw new Error('Lipsește calitatea documentului')
   if (!blob) throw new Error('Lipsește fișierul convocatorului')
   if (!plin(hash)) throw new Error('Lipsește hash-ul conținutului')
   caleConvocator({ proiectCod, uat3, idParcela, nrDocument }) // validează segmentele înainte de orice apel
-  const { data: rand, error: eSel } = await supabase.from('red_convocari').select('id, fisier_convocator_path').eq('id', convocareId).single()
+  const { data: rand, error: eSel } = await supabase.from('red_convocari').select('id, fisier_convocator_path, detinator:red_detinatori!inner(calitate, parcela:red_parcele!inner(proiect:red_proiecte!inner(cod, convocare_utilizatori_aprobata)))').eq('id', convocareId).single()
   if (eSel || !rand) throw new Error(`Convocarea ${convocareId} nu a putut fi citită: ${eSel?.message || eSel || 'rând inexistent'}`)
+  // PR3a r2: contextul vine din BD dupa id-ul convocarii, nu din props-ul unui modal vechi.
+  // O singura citire PostgREST (FK-urile existente); fara relatie / eroare / alta tinta -> refuz inainte de LIST/UPLOAD.
+  const detinator = rand.detinator, proiect = detinator?.parcela?.proiect
+  if (!detinator?.calitate || !proiect?.cod || proiect.cod !== proiectCod) throw new Error('Contextul convocarii nu mai corespunde proiectului; reincarca pagina')
+  if (detinator.calitate !== calitateDocument) throw new Error('calitatea s-a schimbat - regenereaza')
+  const motivUtilizator = motivConvocatorUtilizator(proiect, detinator)
+  if (motivUtilizator) throw new Error(motivUtilizator)
+  // PATCH-ul de legare transmite ACEEASI calitate captata la generare; triggerul revalideaza sub lock dupa upload.
   const dinBucket = await versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument })
   let versiune = Math.max(versiuneDinCale(rand.fisier_convocator_path), dinBucket ?? 0) + 1
   let path, eUp
@@ -797,7 +813,7 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
     if (incercare >= MAX_INCERCARI_VERSIUNE) throw eroareCu(`Fișierul convocării ${convocareId} nu a putut fi încărcat: ${MAX_INCERCARI_VERSIUNE} versiuni consecutive (până la ${path}) există deja în storage. Verificați folderul parcelei în bucket-ul redari.`, { convocareId, path, pas: 'upload' })
     versiune += 1 // coliziune (fișier orfan): următoarea versiune, tot cu upsert false
   }
-  const r = await leagaDeRand(supabase, { convocareId, path, hash })
+  const r = await leagaDeRand(supabase, { convocareId, path, hash, calitateDocument })
   return { ...r, versiune }
 }
 

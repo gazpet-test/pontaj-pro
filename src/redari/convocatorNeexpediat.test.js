@@ -1,5 +1,5 @@
 // D4 (audit 04.11.2026): starea „convocator generat, neexpediat” — Registru + gardă la număr nou în ModalConvocator.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { COL_CONV_NEEXPEDIAT, filtruNeexpediate, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou,
   citesteNeexpediatePeDetinatori, poateDescarcaExistent, poateDeschideConvocator, cititorCuGeneratie, dataDocumentConvocare,
   aparuteDupaVerificare, rezervaNumarConvocare, motivRelatieSchimbata, motivIdentitateDiferita, AVERTISMENT_CONCURENTA } from './convocatorNeexpediat.js'
@@ -20,7 +20,7 @@ const fakeConvocari = (randuri, { plafon = 1000, suprascrie = () => null } = {})
         const alt = suprascrie(n, st)
         if (alt) return Promise.resolve(alt).then(rez, rej)
         const date = randuri.filter(r => st.in.includes(r.detinator_id) && (st.gt === null || r.id > st.gt)).sort((a, b) => a.id.localeCompare(b.id))
-        return Promise.resolve({ data: date.slice(0, Math.min(plafon, st.limit)), error: null }).then(rez, rej)
+        return Promise.resolve({ data: date.slice(0, Math.min(plafon, st.limit)).map(r => Object.fromEntries(col.split(',').map(c => c.trim()).map(c => [c, r[c]]))), error: null }).then(rez, rej)
       },
     }
     return q
@@ -169,16 +169,16 @@ describe('convocatorNeexpediat', () => {
   it('#989 r4: rezervaNumarConvocare = RPC-ul atomic fn_red_convocare_rezerva (bifa → p_numar_nou_confirmat, canal), fără cale alternativă', async () => {
     const apeluri = []
     const sb = (rez) => ({ rpc: async (f, a) => { apeluri.push([f, a]); return rez } })
-    expect(await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv1', nr_document: 'C-0103', parcela_id: 'p1', uat_id: 'u1', proiect_id: 'pr1' }], error: null }), { detinatorId: 'd1', confirmat: true, canal: 'email' }))
+    expect(await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv1', nr_document: 'C-0103', parcela_id: 'p1', uat_id: 'u1', proiect_id: 'pr1' }], error: null }), { calitateAsteptata: 'proprietar', detinatorId: 'd1', confirmat: true, canal: 'email' }))
       .toEqual({ convocareId: 'cv1', nrDocument: 'C-0103', parcelaId: 'p1', uatId: 'u1', proiectId: 'pr1' })
-    expect(apeluri[0]).toEqual(['fn_red_convocare_rezerva', { p_detinator_id: 'd1', p_numar_nou_confirmat: true, p_canal: 'email' }])
-    await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv2', nr_document: 'C-0104', parcela_id: 'p1', uat_id: 'u1', proiect_id: 'pr1' }], error: null }), { detinatorId: 'd1', confirmat: 'da' })
-    expect(apeluri[1][1]).toEqual({ p_detinator_id: 'd1', p_numar_nou_confirmat: false, p_canal: 'posta' })   // doar `true` explicit confirmă
+    expect(apeluri[0]).toEqual(['fn_red_convocare_rezerva', { p_detinator_id: 'd1', p_numar_nou_confirmat: true, p_canal: 'email', p_calitate_asteptata: 'proprietar' }])
+    await rezervaNumarConvocare(sb({ data: [{ convocare_id: 'cv2', nr_document: 'C-0104', parcela_id: 'p1', uat_id: 'u1', proiect_id: 'pr1' }], error: null }), { calitateAsteptata: 'proprietar', detinatorId: 'd1', confirmat: 'da' })
+    expect(apeluri[1][1]).toEqual({ p_detinator_id: 'd1', p_numar_nou_confirmat: false, p_canal: 'posta', p_calitate_asteptata: 'proprietar' })   // doar `true` explicit confirmă
     expect(apeluri.every(([f]) => f !== 'fn_red_numar_document')).toBe(true)
-    await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'PGRST202', message: 'x' }, status: 404 }), { detinatorId: 'd1' }))
-      .rejects.toMatchObject({ code: 'FARA_RPC', message: expect.stringMatching(/aplicați migrarea 20261130l/) })
-    await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'RD001', message: 'are deja' } }), { detinatorId: 'd1' })).rejects.toMatchObject({ code: 'RD001' })
-    await expect(rezervaNumarConvocare(sb({ data: [], error: null }), { detinatorId: 'd1' })).rejects.toThrow(/nu a întors/)
+    await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'PGRST202', message: 'x' }, status: 404 }), { calitateAsteptata: 'proprietar', detinatorId: 'd1' }))
+      .rejects.toMatchObject({ code: 'FARA_RPC', message: expect.stringMatching(/aplicați migrarea 20261131c/) })
+    await expect(rezervaNumarConvocare(sb({ data: null, error: { code: 'RD001', message: 'are deja' } }), { calitateAsteptata: 'proprietar', detinatorId: 'd1' })).rejects.toMatchObject({ code: 'RD001' })
+    await expect(rezervaNumarConvocare(sb({ data: [], error: null }), { calitateAsteptata: 'proprietar', detinatorId: 'd1' })).rejects.toThrow(/nu a întors/)
     await expect(rezervaNumarConvocare(sb({ data: [], error: null }), {})).rejects.toThrow(/deținătorul/)
   })
 
@@ -205,5 +205,29 @@ describe('convocatorNeexpediat', () => {
     expect(t).toMatch(/număr C-nnnn NOU/)
     expect(t).toMatch(/2 convocatoare active neexpediate/)
     expect(t).toMatch(/există deja: C-0002/)
+  })
+})
+
+
+describe('PR3a r3 — calitatea asteptata nu se reciteste in client', () => {
+  it('transmite exact instantaneul si propaga RD008; lipsa asteptarii nu apeleaza serverul', async () => {
+    const rpc = vi.fn(async () => ({ data: null, error: { code: 'RD008', message: 'calitatea s-a schimbat - regenereaza' } }))
+    await expect(rezervaNumarConvocare({ rpc }, { detinatorId: 'd-fictiv', calitateAsteptata: 'coproprietar' })).rejects.toMatchObject({ code: 'RD008' })
+    expect(rpc).toHaveBeenCalledWith('fn_red_convocare_rezerva', { p_detinator_id: 'd-fictiv', p_numar_nou_confirmat: false, p_canal: 'posta', p_calitate_asteptata: 'coproprietar' })
+    rpc.mockClear()
+    await expect(rezervaNumarConvocare({ rpc }, { detinatorId: 'd-fictiv' })).rejects.toThrow('Lipsește calitatea așteptată')
+    expect(rpc).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('PR3a r4 — proiectia convocarilor arhivate', () => {
+  it('PostgREST returneaza calitate_document ceruta explicit, fara campuri necitite', async () => {
+    const { supabase } = fakeConvocari([{ id: id(1), detinator_id: 'd-fictiv', calitate_document: 'proprietar',
+      fisier_convocator_path: 'FICTIV/C-0001-v1.docx', camp_necerut: 'nu ajunge in client' }])
+    const randuri = await citesteNeexpediatePeDetinatori(supabase, ['d-fictiv'])
+    expect(randuri).toHaveLength(1)
+    expect(randuri[0].calitate_document).toBe('proprietar')
+    expect(randuri[0]).not.toHaveProperty('camp_necerut')
   })
 })

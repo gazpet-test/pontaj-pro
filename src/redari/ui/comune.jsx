@@ -2,13 +2,14 @@
 // Contract: docs/redari/CONTRACT_SCHEMA.md §9. Fără date reale aici.
 import React, { useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
+import { motivConvocatorUtilizator } from '../convocareUtilizatori.js'
 import { STARI } from '../stare.js'
 
 export const SABLON_CONVOCATOR = '/redari/sabloane/convocator.docx'
 // Proiecții explicite (review Jakarinos P2-5): fără token_raspuns pe red_detinatori — tokenul stă în red_detinatori_token
 // și se citește DOAR la generarea / reîncărcarea convocatorului (admin/editor), prin citesteTokenRaspuns().
 export const COL_DETINATOR = 'id, parcela_id, nume, nume_normalizat, calitate, cota, decedat, sursa_date, versiune_lista_tgz, sters_la, sters_de, sters_motiv, created_at, updated_at'
-export const COL_CONVOCARE = 'id, detinator_id, canal, nr_document, data_expediere, nr_tracking, data_confirmare_primire, retur, retur_data, continut_hash, fisier_convocator_path, stare, motiv_anulare, created_by, created_at'
+export const COL_CONVOCARE = 'id, calitate_document, detinator_id, canal, nr_document, data_expediere, nr_tracking, data_confirmare_primire, retur, retur_data, continut_hash, fisier_convocator_path, stare, motiv_anulare, created_by, created_at'
 // [r2] red_raspunsuri nu mai are ip_sau_sursa / user_agent / raw_payload (sunt în red_raspunsuri_meta, doar admin/editor); `seq` = tie-break
 // pentru „ultimul răspuns” (ORDER BY data DESC, seq DESC).
 export const COL_RASPUNS = 'id, seq, detinator_id, canal, data, optiune, zi_sesiune_aleasa, obiectii_text, declaratie_confirmata, semnatura_electronica_ref, created_by, created_at'
@@ -68,6 +69,8 @@ export async function citesteTokenRaspuns(detinatorId) {
 // neidentificat și are adresă cunoscută — altfel convocarea e prin afișare la Primărie. Verificarea completă (cu contactul PII) o face
 // docx.verificaDateConvocator în modal. Întoarce null când totul e în regulă, altfel motivul (text) pentru butonul dezactivat.
 export function motivBlocareConvocator(proiect, uat, rand) {
+  const motivUtilizator = motivConvocatorUtilizator(proiect, rand)
+  if (motivUtilizator) return motivUtilizator
   const lipsa = []
   if (rand) {
     if (rand.calitate === 'neidentificat') lipsa.push('deținător neidentificat → convocare prin afișare la Primărie')
