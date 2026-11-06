@@ -5,9 +5,9 @@
 //   { "actiune": "preia" }  → 200 { intrebare: null } sau { intrebare: {id, incercare, titlu, intrebare, context, creat_la,
 //                              atasamente: [{nume, mime, url}]} } — url = null dacă semnarea a eșuat (workerul NU răspunde atunci)
 //   { "actiune": "raspunde", "id": n, "incercare": uuid, "raspuns_md": "...", "model": "...", "tokeni": {...},
-//     "surse": [{id: "C1"|"W1", tip: "corpus"|"web", cale|url, titlu, extras}] }                             → 200 / 409
-//   (v2, 06.11.2026: cere migrarea 20261131e — fn_intrebari_raspunde cu p_surse; deploy DUPĂ migrare)
-//   { "actiune": "eroare",   "id": n, "incercare": uuid, "eroare": "..." }                                       → 200 / 409
+//     "surse": [{id: "C1"|"W1", tip: "corpus"|"web", cale|url, titlu, extras}], "interogari": ["..."] }      → 200 / 409
+//   (v2, 06.11.2026: cere migrarea 20261131e — fn_intrebari_raspunde cu p_surse + p_interogari; deploy DUPĂ migrare)
+//   { "actiune": "eroare",   "id": n, "incercare": uuid, "eroare": "...", "interogari": ["..."] }                 → 200 / 409
 //   { "actiune": "amana",    "id": n, "incercare": uuid }  — doar refuz CERT fără cost (429/529)                 → 200 / 409
 // 409 = preluarea nu mai e cea curentă (expirată / finalizată): rezultatul întârziat nu închide altă preluare.
 //
@@ -55,7 +55,17 @@ function curataSurse(x: unknown): Record<string, string>[] {
     else if (s.tip === 'corpus' && typeof s.cale === 'string' && /^docs\/[A-Za-z0-9_\-./]{1,250}$/.test(s.cale) && !s.cale.includes('..'))
       out.push({ id: s.id, tip: 'corpus', cale: s.cale, titlu, extras })
   }
+  // sub CHECK-ul din BD (100000 octeți): extrasele se scurtează, sursa rămâne (workerul face deja asta; aici e a doua plasă)
+  const octeti = () => new TextEncoder().encode(JSON.stringify(out)).length
+  for (const lim of [600, 300, 150]) { if (octeti() <= 90000) break; for (const s of out) s.extras = s.extras.slice(0, lim) }
   return out
+}
+
+// Runda 2 (P1-a): interogările EFECTIV trimise la web_search, pentru audit (coloana interogari_web, vizibilă ownerului).
+const INTEROGARI_MAX = 20
+function curataInterogari(x: unknown): string[] {
+  if (!Array.isArray(x)) return []
+  return x.filter(q => typeof q === 'string' && q.trim()).slice(0, INTEROGARI_MAX).map(q => String(q).trim().slice(0, 200))
 }
 
 Deno.serve(async (req: Request) => {
@@ -112,6 +122,7 @@ Deno.serve(async (req: Request) => {
     const { data, error } = await sb.rpc('fn_intrebari_raspunde', {
       p_id: corp.id, p_incercare: corp.incercare, p_raspuns: eRaspuns ? text : null, p_model: typeof corp.model === 'string' ? corp.model : null,
       p_tokeni: tokeni, p_eroare: eRaspuns ? null : text, p_surse: eRaspuns ? curataSurse(corp.surse) : [],
+      p_interogari: curataInterogari(corp.interogari),
     })
     if (error) return raspuns(500, { error: 'Eroare internă' })
     return raspuns(data === true ? 200 : 409, { ok: data === true })

@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { poateIntreba, caleAtasament, verificaFisier, totalPreaMare, blocuriMd, bucatiRand, ETICHETA_STARE, MAX_ATASAMENTE, MAX_MB } from './intrebariUtil.js'
-import { imparteRaspuns, surseAfisabile } from './intrebariSurse.js'
+import { imparteRaspuns, surseAfisabile, interogariAfisabile } from './intrebariSurse.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', border:'#30363D', blue:'#1F6FEB', green:'#2EA043', yellow:'#D29922', red:'#F85149', acc:'#56D4DD' }
 const S = {
@@ -37,11 +37,12 @@ function Markdown({ md }) {
 }
 
 // Răspunsul din cercetare (20261131e): verdictul evidențiat, apoi textul, apoi sursele (web doar pe domeniile oficiale).
-function Raspuns({ q }) {
-  const { verdict, rest } = imparteRaspuns(q.raspuns_md)
+function Raspuns({ q, owner }) {
+  const { verdict, rest, incert } = imparteRaspuns(q.raspuns_md)
   const surse = surseAfisabile(q.surse)
+  const interogari = owner ? interogariAfisabile(q.interogari_web) : []
   return <>
-    {verdict && <div style={{ background:G.bg, border:`2px solid ${G.acc}`, borderRadius:10, padding:'10px 14px', margin:'4px 0 10px', fontSize:16, fontWeight:700 }}>
+    {verdict && <div style={{ background:G.bg, border:`2px solid ${incert ? G.yellow : G.acc}`, borderRadius:10, padding:'10px 14px', margin:'4px 0 10px', fontSize:16, fontWeight:700 }}>
       <Rand text={verdict}/></div>}
     <Markdown md={verdict ? rest : q.raspuns_md}/>
     {surse.length > 0 && <div style={{ marginTop:14, borderTop:`1px solid ${G.border}`, paddingTop:10 }}>
@@ -57,7 +58,17 @@ function Raspuns({ q }) {
         </li>))}</ol>
     </div>}
     {!surse.length && <div style={{ fontSize:12, color:G.muted, marginTop:10 }}>Răspunsul nu are surse salvate (întrebare de dinainte de cercetare sau fără temei găsit).</div>}
+    {owner && <Interogari lista={interogari}/>}
   </>
+}
+
+// Audit (doar ownerul): exact ce s-a trimis la căutarea web — speța nu intră în acel apel, doar aceste interogări filtrate.
+function Interogari({ lista }) {
+  return <details style={{ marginTop:10, fontSize:12, color:G.muted }}>
+    <summary style={{ cursor:'pointer' }}>🔎 Interogări trimise la căutarea web ({lista.length}) · audit owner</summary>
+    {lista.length ? <ul style={{ margin:'6px 0 0', paddingLeft:18 }}>{lista.map((x, i) => <li key={i}>{x}</li>)}</ul>
+      : <div style={{ marginTop:6 }}>Nicio căutare web (fără interogări valide după filtru sau întrebare de dinainte de cercetare).</div>}
+  </details>
 }
 
 export default function IntrebariTehnice({ profile }) {
@@ -80,10 +91,12 @@ export default function IntrebariTehnice({ profile }) {
   const PAG = 50
   const gen = useRef(0)                          // generația încărcării: un răspuns vechi sosit târziu nu suprascrie unul nou
   const COL_V1 = 'id, autor, titlu, context, intrebare, atasamente, stare, raspuns_md, model, eroare, creat_la, raspuns_la, profiles(name)'
-  const colV2 = useRef(true)                     // coloana `surse` (20261131e); dacă migrarea nu e încă aplicată, ecranul merge pe v1
-  const COL = () => colV2.current ? COL_V1 + ', surse' : COL_V1
-  const lipsaV2 = e => colV2.current && e && /surse/.test(e.message || '') && (colV2.current = false, true)
-  const [lucruRand, setLucruRand] = useState(false)
+  const colV2 = useRef(true)                     // coloanele `surse` / `interogari_web` (20261131e); fără migrare, ecranul merge pe v1
+  const COL = () => colV2.current ? COL_V1 + ', surse, interogari_web' : COL_V1
+  const lipsaV2 = e => colV2.current && e && /surse|interogari_web/.test(e.message || '') && (colV2.current = false, true)
+  const [lucruRand, setLucruRand] = useState(null)   // id-ul întrebării cu acțiune în curs (una singură odată)
+  const [mesajRand, setMesajRand] = useState(null)   // { id, ok, text } — se afișează DOAR sub întrebarea cu acel id
+  const actGen = useRef(0)                           // generația acțiunii: rezultatul uneia vechi nu suprascrie mesajul uneia noi
 
   async function incarca() {
     const g = ++gen.current
@@ -120,16 +133,22 @@ export default function IntrebariTehnice({ profile }) {
   }
   // „Răspuns neclar — trimite la verificare” (autorul): doar marchează starea, fără alte efecte.
   // „Reia cu cercetare” (doar ownerul — reluarea costă): întrebarea revine în coadă; nimic nu se reia automat.
+  // Id-ul și generația se fixează la pornire: dacă între timp s-a deschis altă întrebare, mesajul rămâne legat de întrebarea
+  // pe care s-a apăsat (nu apare sub alta), iar reîncărcarea folosește URL-ul CURENT (incarcaRef), nu pe cel de la apăsare.
   async function actiuneRand(rpc, id, mesajOk) {
-    if (lucruRand) return
-    setLucruRand(true); setErrDet('')
+    if (lucruRand !== null) return
+    const g = ++actGen.current
+    setLucruRand(id); setMesajRand(null)
+    let rez
     try {
       const { data, error } = await supabase.rpc(rpc, { p_id: id })
       if (error) throw new Error(error.message)
       if (data !== true) throw new Error('Starea întrebării s-a schimbat între timp. Reîncarcă pagina.')
-      setInfo(mesajOk)
-      await incarca()
-    } catch (e) { setErrDet(e.message) } finally { setLucruRand(false) }
+      rez = { id, ok: true, text: mesajOk }
+    } catch (e) { rez = { id, ok: false, text: e.message } }
+    if (g === actGen.current) setMesajRand(rez)
+    setLucruRand(null)
+    await incarcaRef.current()
   }
 
   const inAsteptare = x => x && (x.stare === 'noua' || x.stare === 'in_lucru')
@@ -194,8 +213,8 @@ export default function IntrebariTehnice({ profile }) {
         </div>
         <div style={{ ...S.card, borderColor:G.yellow, marginBottom:14, fontSize:13, color:G.muted }}>
           Răspunsurile sunt date de AI și sunt <strong style={{ color:G.yellow }}>informative</strong>. Le vezi doar tu.
-          Fiecare temei are sursa lui ([C…] = document intern de cercetare, [W…] = site oficial) — deschide sursa înainte să te bazezi pe ea.
-          Ce n-a fost găsit apare ca „Nu am găsit sursa oficială”. Decizia e a ta.
+          Fiecare temei are un marcaj de sursă ([C…] = document intern de cercetare, [W…] = site oficial) — deschide sursa înainte să te bazezi pe ea.
+          Ce n-a fost găsit apare ca „Nu am găsit sursa oficială”; un verdict fără temei în surse apare ca „Incert — de verificat”. Decizia e a ta.
         </div>
 
         {selectat && !q && <div style={{ ...S.card, color: errDet ? G.red : G.muted, fontSize:13, marginBottom:10 }}>
@@ -214,21 +233,22 @@ export default function IntrebariTehnice({ profile }) {
                 <div style={{ fontSize:12, color:G.yellow, marginBottom:6 }}>🤖 Răspuns AI din cercetare · informativ, neverificat · {fmtData(q.raspuns_la)}</div>
                 {q.stare === 'de_verificat' && <div style={{ fontSize:12, color:ETICHETA_STARE.de_verificat.c, marginBottom:6 }}>
                   ⚑ Marcat ca neclar — așteaptă verificarea.</div>}
-                <Raspuns q={q}/>
-              </> : q.stare === 'eroare' ? <div style={{ color:G.red }}>Nu s-a putut răspunde: {q.eroare || 'eroare'}. Poți pune întrebarea din nou.</div>
-                : <div style={{ color:G.muted }}>{ETICHETA_STARE[q.stare]?.t} Pagina se actualizează singură.</div>}
+                <Raspuns q={q} owner={!!profile.is_owner}/>
+              </> : q.stare === 'eroare' ? <>
+                <div style={{ color:G.red }}>Nu s-a putut răspunde: {q.eroare || 'eroare'}. Poți pune întrebarea din nou.</div>
+                {profile.is_owner && <Interogari lista={interogariAfisabile(q.interogari_web)}/>}
+              </> : <div style={{ color:G.muted }}>{ETICHETA_STARE[q.stare]?.t} Pagina se actualizează singură.</div>}
             </div>
             <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:14 }}>
               {q.stare === 'raspuns' && (q.autor === profile.id || profile.is_owner) &&
-                <button style={{ ...S.btnS, opacity: lucruRand ? 0.6 : 1 }} disabled={lucruRand}
+                <button style={{ ...S.btnS, opacity: lucruRand !== null ? 0.6 : 1 }} disabled={lucruRand !== null}
                   onClick={() => actiuneRand('fn_intrebari_de_verificat', q.id, 'Răspunsul a fost trimis la verificare.')}>⚑ Răspuns neclar — trimite la verificare</button>}
               {profile.is_owner && ['raspuns', 'de_verificat', 'eroare'].includes(q.stare) &&
-                <button style={{ ...S.btnS, borderColor:G.acc, opacity: lucruRand ? 0.6 : 1 }} disabled={lucruRand}
-                  onClick={() => window.confirm('Reiei întrebarea cu cercetare? Răspunsul actual se înlocuiește și apelul AI costă.') &&
+                <button style={{ ...S.btnS, borderColor:G.acc, opacity: lucruRand !== null ? 0.6 : 1 }} disabled={lucruRand !== null}
+                  onClick={() => window.confirm('Reiei întrebarea cu cercetare? Răspunsul actual se înlocuiește și apelul AI costă (intră în plafonul de 40/zi).') &&
                     actiuneRand('fn_intrebari_reia', q.id, 'Întrebarea a intrat din nou în coadă.')}>🔁 Reia cu cercetare</button>}
             </div>
-            {errDet && <div style={{ color:G.red, fontSize:13, marginTop:8 }}>{errDet}</div>}
-            {info && <div style={{ color:G.green, fontSize:13, marginTop:8 }}>{info}</div>}
+            {mesajRand?.id === q.id && <div style={{ color: mesajRand.ok ? G.green : G.red, fontSize:13, marginTop:8 }}>{mesajRand.text}</div>}
           </div>
         ) : !selectat && <>
           <div style={{ ...S.card, marginBottom:16 }}>
