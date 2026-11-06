@@ -53,8 +53,9 @@ export function construiestePlicFan({ plic, contact, proiectCod, config = CONFIG
   else if (strada.length > LIMITE_FAN.street) probleme.push('strada e prea lungă')
   const zip = txt(contact?.cod_postal)
   if (zip && !/^[0-9]{6}$/.test(zip)) probleme.push('codul poștal nu are 6 cifre')
-  const centru = txt(proiectCod).slice(0, LIMITE_FAN.costCenter)
+  const centru = txt(proiectCod)   // Jakarinos r1 P2 (L12/L16): fără tăiere — două coduri lungi ar ajunge la același centru de cost
   if (!centru) probleme.push('codul proiectului lipsește')
+  else if (centru.length > LIMITE_FAN.costCenter) probleme.push(`codul proiectului are peste ${LIMITE_FAN.costCenter} caractere (centrul de cost FAN)`)
   const shipment = {
     info: {
       service: config.service,
@@ -105,8 +106,9 @@ export function interpreteazaRaspunsAwb(status, corp) {
   const awb = r.awbNumber == null ? '' : String(r.awbNumber).trim()
   if (areErori && !awb) return { stare: 'eroare', motiv: 'FAN: ' + JSON.stringify(erori).slice(0, 300) }
   if (!/^[0-9]{6,20}$/.test(awb)) return { stare: 'necunoscut', motiv: 'răspuns FAN fără număr AWB valid' }
-  const tarif = Number(r.tariff), tva = Number(r.vat)
-  return { stare: 'generat', awb, tarif: Number.isFinite(tarif) ? tarif : null, tva: Number.isFinite(tva) ? tva : null }
+  // Jakarinos r1 P2 (L18): tarif lipsă = necunoscut (null), nu 0 — Number(null) ar da 0
+  const numar = v => (v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null)
+  return { stare: 'generat', awb, tarif: numar(r.tariff), tva: numar(r.vat) }
 }
 
 // Codurile de eveniment FAN (GET /reports/awb-events) folosite pentru plicuri. Doar propuneri: AR-ul și returul le confirmă omul.

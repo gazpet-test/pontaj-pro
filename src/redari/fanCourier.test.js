@@ -40,6 +40,15 @@ describe('construiestePlicFan', () => {
     const r = construiestePlicFan({ plic: { ...plic, nr_plic: 'X' }, contact: { ...contact, adresa_judet: '', adresa_strada: '', cod_postal: '12' }, proiectCod: '' })
     expect(r.probleme).toEqual(expect.arrayContaining(['numărul plicului lipsește sau e invalid', 'județul lipsește', 'strada lipsește', 'codul poștal nu are 6 cifre', 'codul proiectului lipsește']))
   })
+  it('cod de proiect peste 40 de caractere → problemă, fără tăiere (Jakarinos r1 P2)', () => {
+    const r = construiestePlicFan({ plic, contact, proiectCod: 'X'.repeat(41) })
+    expect(r.ok).toBe(false); expect(r.shipment.info.costCenter).toHaveLength(41)
+    expect(construiestePlicFan({ plic, contact, proiectCod: 'X'.repeat(40) }).ok).toBe(true)
+  })
+  it('limitele exacte FAN: nume 50 / telefon 15 cifre trec, 51 nu', () => {
+    expect(construiestePlicFan({ plic: { ...plic, destinatar_nume: 'A'.repeat(50) }, contact, proiectCod: 'X' }).ok).toBe(true)
+    expect(construiestePlicFan({ plic, contact: { ...contact, telefon: '+' + '4'.repeat(15) }, proiectCod: 'X' }).ok).toBe(true)
+  })
   it('configurația implicită e înghețată', () => {
     expect(Object.isFrozen(CONFIG_FAN_PLIC)).toBe(true)
   })
@@ -72,6 +81,9 @@ describe('interpreteazaRaspunsAwb (exemplul din documentație)', () => {
     expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: null, errors: null }] }).stare).toBe('necunoscut')
   })
   it('4xx → eroare deterministă', () => expect(interpreteazaRaspunsAwb(422, {}).stare).toBe('eroare'))
+  it('tarif / TVA lipsă → null (cost necunoscut), nu 0 (Jakarinos r1 P2)', () => {
+    expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 123456789, tariff: null, vat: undefined }] })).toEqual({ stare: 'generat', awb: '123456789', tarif: null, tva: null })
+  })
 })
 
 describe('rezumatUrmarire', () => {
@@ -92,9 +104,12 @@ describe('raspundeFan — poarta funcției edge (transport oprit)', () => {
   const LOT = '11111111-2222-4333-8444-555555555555'
   const deps = (o = {}) => ({ getUser: async () => ({ data: { user: { id: 'u' } } }), owner: async () => ({ data: true }), lot: vi.fn(async () => ({ data: { id: LOT } })), ...o })
   it('transportul real e oprit în cod', () => expect(TRANSPORT_REAL_ACTIV).toBe(false))
-  it('fără JWT → 401; user invalid → 401', async () => {
+  it('fără JWT → 401; token respins (4xx) → 401; autentificare indisponibilă → 503 (Jakarinos r1 P2)', async () => {
     expect((await raspundeFan({ jwt: '', corp: {} }, deps())).status).toBe(401)
-    expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: {} }) }))).status).toBe(401)
+    expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: { status: 401 } }) }))).status).toBe(401)
+    expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: { status: 503 } }) }))).body.cod).toBe('autentificare_neconfirmata')
+    expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: {} }) }))).status).toBe(503)
+    expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ data: { user: null } }) }))).status).toBe(401)
   })
   it('non-owner → 403; verificarea owner eșuată → 503 (nu „non_owner”)', async () => {
     expect((await raspundeFan({ jwt: 'x', corp: { actiune: 'genereaza', lot_id: LOT } }, deps({ owner: async () => ({ data: false }) }))).status).toBe(403)

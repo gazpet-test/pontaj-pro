@@ -17,6 +17,8 @@ DO $date$ BEGIN
   END IF;
 END $date$;
 
+DROP FUNCTION public.fn_red_fan_ridicat(uuid, date);
+DROP FUNCTION public.fn_red_fan_reconciliaza(uuid, text, numeric, numeric, text);
 DROP FUNCTION public.fn_red_fan_rezultat(uuid, uuid, text, text, numeric, numeric, text);
 DROP FUNCTION public.fn_red_fan_claim(uuid, text);
 DROP FUNCTION public.fn_red_fan_aproba(uuid, uuid[], text[]);

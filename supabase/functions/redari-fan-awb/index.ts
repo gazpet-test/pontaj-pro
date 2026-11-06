@@ -15,11 +15,13 @@ Deno.serve(async (req: Request) => {
     const uc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
       global: { headers: { Authorization: `Bearer ${jwt}` } }, auth: { persistSession: false, autoRefreshToken: false },
     });
-    const r = await raspundeFan({ jwt, corp: await req.json() }, {
+    let corp: unknown
+    try { corp = await req.json() } catch { return raspuns({ cod: 'cerere_invalida' }, 400) }   // doar JSON-ul stricat = 400
+    const r = await raspundeFan({ jwt, corp }, {
       getUser: () => uc.auth.getUser(jwt),
       owner: () => uc.rpc('fn_sms_e_owner'),
       lot: (id: string) => uc.from('red_loturi_plicuire').select('id, proiect_id, nr_lot').eq('id', id).maybeSingle(),
     });
     return raspuns(r.body, r.status);
-  } catch { return raspuns({ cod: 'cerere_neconfirmata' }, 400); }
+  } catch { return raspuns({ cod: 'eroare_neconfirmata' }, 503); }   // Jakarinos r1 P2: infrastructura ≠ cerere invalidă
 });

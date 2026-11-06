@@ -41,9 +41,14 @@ CREATE TABLE public.red_fan_awb (
   ridicat_la timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT red_fan_awb_aprobare CHECK ((stare IN ('propus')) OR (aprobat_de IS NOT NULL AND aprobat_la IS NOT NULL) OR stare IN ('eroare', 'anulat')),
-  CONSTRAINT red_fan_awb_generat CHECK ((stare IN ('generat', 'ridicat')) = (awb IS NOT NULL AND generat_la IS NOT NULL) OR stare = 'anulat'),
-  CONSTRAINT red_fan_awb_in_curs CHECK (stare <> 'in_curs' OR cheie_idempotenta IS NOT NULL)
+  CONSTRAINT red_fan_awb_aprobare CHECK (stare IN ('propus', 'eroare', 'anulat') OR (aprobat_de IS NOT NULL AND aprobat_la IS NOT NULL)),
+  -- Jakarinos r1 P2 (L20): AWB doar în generat / ridicat (sau anulat după ștergerea din FAN); fără AWB în celelalte stări
+  CONSTRAINT red_fan_awb_generat CHECK (
+    (stare IN ('generat', 'ridicat') AND awb IS NOT NULL AND generat_la IS NOT NULL)
+    OR (stare IN ('propus', 'aprobat', 'in_curs', 'eroare', 'necunoscut') AND awb IS NULL)
+    OR stare = 'anulat'),
+  CONSTRAINT red_fan_awb_ridicat CHECK ((stare = 'ridicat') = (ridicat_la IS NOT NULL) OR stare = 'anulat'),
+  CONSTRAINT red_fan_awb_in_curs CHECK (stare NOT IN ('in_curs', 'necunoscut', 'generat', 'ridicat') OR cheie_idempotenta IS NOT NULL)
 );
 -- un singur AWB „viu” pe plic (L16); AWB-ul FAN e unic
 CREATE UNIQUE INDEX red_fan_awb_plic_viu_uq ON public.red_fan_awb (plic_id) WHERE stare NOT IN ('eroare', 'anulat');
@@ -99,9 +104,13 @@ BEGIN
     RAISE EXCEPTION 'redari fan: lista invalida' USING ERRCODE = '22023'; END IF;
   PERFORM 1 FROM public.red_loturi_plicuire WHERE id = p_lot_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'redari fan: lot inexistent' USING ERRCODE = 'P0002'; END IF;
+  PERFORM 1 FROM public.red_plicuri WHERE id IN (SELECT plic_id FROM public.red_fan_awb WHERE id = ANY(p_ids)) ORDER BY id FOR UPDATE;
   PERFORM 1 FROM public.red_fan_awb WHERE id = ANY(p_ids) ORDER BY id FOR UPDATE;
+  -- Jakarinos r1 P1: plicul trebuie să fie ÎNCĂ activ, neexpediat și în același lot (hash-ul datelor nu dovedește starea plicului)
   SELECT count(*) INTO v_n FROM public.red_fan_awb a JOIN unnest(p_ids, p_hashuri) AS t(id, h) ON t.id = a.id
-   WHERE a.lot_id = p_lot_id AND a.stare = 'propus' AND a.hash_date = t.h;
+    JOIN public.red_plicuri pl ON pl.id = a.plic_id
+   WHERE a.lot_id = p_lot_id AND a.stare = 'propus' AND a.hash_date = t.h
+     AND pl.stare = 'activ' AND pl.data_expediere IS NULL AND pl.lot_id = a.lot_id;
   IF v_n <> cardinality(p_ids) THEN RAISE EXCEPTION 'redari fan: % din % randuri s-au schimbat de la previzualizare; reincarca', cardinality(p_ids) - v_n, cardinality(p_ids) USING ERRCODE = 'P0001'; END IF;
   UPDATE public.red_fan_awb SET stare = 'aprobat', aprobat_de = auth.uid(), aprobat_la = now(), updated_at = now() WHERE id = ANY(p_ids);
   RETURN v_n;
@@ -111,12 +120,18 @@ END $fn$;
 -- p_hash = hash-ul recalculat din datele CURENTE; diferit de cel aprobat → refuz (datele s-au schimbat după aprobare).
 CREATE FUNCTION public.fn_red_fan_claim(p_id uuid, p_hash text) RETURNS uuid
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_cheie uuid := gen_random_uuid(); v_rand record;
+DECLARE v_cheie uuid := gen_random_uuid(); v_rand record; v_plic_id uuid; v_pl record;
 BEGIN
   IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul genereaza' USING ERRCODE = '42501'; END IF;
   IF p_id IS NULL OR p_hash IS NULL THEN RAISE EXCEPTION 'redari fan: parametri invalizi' USING ERRCODE = '22023'; END IF;
-  SELECT a.id, a.stare, a.hash_date, a.plic_id INTO v_rand FROM public.red_fan_awb a WHERE a.id = p_id FOR UPDATE;
-  IF v_rand.id IS NULL THEN RAISE EXCEPTION 'redari fan: rand inexistent' USING ERRCODE = 'P0002'; END IF;
+  -- ordinea L06: plic FOR UPDATE → rând FOR UPDATE; plic_id e imuabil după INSERT (nicio cale nu-l schimbă)
+  SELECT plic_id INTO v_plic_id FROM public.red_fan_awb WHERE id = p_id;
+  IF v_plic_id IS NULL THEN RAISE EXCEPTION 'redari fan: rand inexistent' USING ERRCODE = 'P0002'; END IF;
+  SELECT id, stare, data_expediere, lot_id INTO v_pl FROM public.red_plicuri WHERE id = v_plic_id FOR UPDATE;
+  SELECT a.id, a.stare, a.hash_date, a.plic_id, a.lot_id INTO v_rand FROM public.red_fan_awb a WHERE a.id = p_id FOR UPDATE;
+  -- Jakarinos r1 P1: plicul anulat / expediat manual / mutat din lot după aprobare → nu se mai plătește un AWB
+  IF v_pl.stare <> 'activ' OR v_pl.data_expediere IS NOT NULL OR v_pl.lot_id IS DISTINCT FROM v_rand.lot_id THEN
+    RAISE EXCEPTION 'redari fan: plicul nu mai e activ, neexpediat in lotul aprobat' USING ERRCODE = 'P0001'; END IF;
   IF v_rand.stare <> 'aprobat' THEN RAISE EXCEPTION 'redari fan: randul nu e aprobat (stare %)', v_rand.stare USING ERRCODE = 'P0001'; END IF;
   IF v_rand.hash_date <> p_hash THEN RAISE EXCEPTION 'redari fan: datele plicului s-au schimbat dupa aprobare' USING ERRCODE = 'P0001'; END IF;
   UPDATE public.red_fan_awb SET stare = 'in_curs', cheie_idempotenta = v_cheie, updated_at = now() WHERE id = p_id;
@@ -137,10 +152,55 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'redari fan: rezultat vechi sau cheie straina (CAS)' USING ERRCODE = 'P0001'; END IF;
 END $fn$;
 
+-- (5) Reconciliere (DOAR owner) — Jakarinos r1 P1 (L05): un claim al cărui rezultat nu s-a confirmat (in_curs rămas după pierderea
+-- răspunsului, sau „necunoscut”) se închide DOAR după ce omul a verificat borderoul zilei în FAN (GET /reports/awb, după nr_plic):
+-- p_awb găsit → generat; p_awb NULL + motivul verificării = „confirmat că nu există în FAN” → eroare (se poate re-propune).
+-- Fără retry automat al generării. in_curs se reconciliază doar după 10 minute (să nu concureze cu o generare în desfășurare).
+CREATE FUNCTION public.fn_red_fan_reconciliaza(p_id uuid, p_awb text, p_tarif numeric, p_tva numeric, p_motiv text) RETURNS text
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_rand record; v_stare text;
+BEGIN
+  IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul' USING ERRCODE = '42501'; END IF;
+  IF p_id IS NULL OR (p_awb IS NOT NULL AND p_awb !~ '^[0-9]{6,20}$') OR (p_awb IS NULL AND nullif(btrim(coalesce(p_motiv, '')), '') IS NULL) THEN
+    RAISE EXCEPTION 'redari fan: reconciliere invalida (AWB valid sau motivul verificarii)' USING ERRCODE = '22023'; END IF;
+  SELECT id, stare, updated_at INTO v_rand FROM public.red_fan_awb WHERE id = p_id FOR UPDATE;
+  IF v_rand.id IS NULL THEN RAISE EXCEPTION 'redari fan: rand inexistent' USING ERRCODE = 'P0002'; END IF;
+  IF NOT (v_rand.stare = 'necunoscut' OR (v_rand.stare = 'in_curs' AND v_rand.updated_at < now() - interval '10 minutes')) THEN
+    RAISE EXCEPTION 'redari fan: doar randurile necunoscute (sau in curs de peste 10 minute) se reconciliaza' USING ERRCODE = 'P0001'; END IF;
+  v_stare := CASE WHEN p_awb IS NOT NULL THEN 'generat' ELSE 'eroare' END;
+  UPDATE public.red_fan_awb SET stare = v_stare, awb = p_awb, tarif = p_tarif, tva = p_tva, motiv = left(p_motiv, 500),
+         generat_la = CASE WHEN p_awb IS NOT NULL THEN now() END, updated_at = now()
+   WHERE id = p_id;
+  RETURN v_stare;
+END $fn$;
+
+-- (6) Ridicarea de către curier (eveniment FAN C0), DOAR owner, atomic (L02): rândul FAN → ridicat ȘI plicul → awb + data_expediere
+-- (trigger-ele existente ale plicului propagă expedierea pe convocări). p_data = data C0 în București. Repetarea pe același AWB = no-op.
+-- Ordinea L06: plic FOR UPDATE → rând FOR UPDATE.
+CREATE FUNCTION public.fn_red_fan_ridicat(p_id uuid, p_data date) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_plic_id uuid; v_pl record; v_rand record;
+BEGIN
+  IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul' USING ERRCODE = '42501'; END IF;
+  IF p_id IS NULL OR p_data IS NULL OR p_data > (now() AT TIME ZONE 'Europe/Bucharest')::date THEN RAISE EXCEPTION 'redari fan: data ridicarii invalida' USING ERRCODE = '22023'; END IF;
+  SELECT plic_id INTO v_plic_id FROM public.red_fan_awb WHERE id = p_id;
+  IF v_plic_id IS NULL THEN RAISE EXCEPTION 'redari fan: rand inexistent' USING ERRCODE = 'P0002'; END IF;
+  SELECT id, stare, awb, data_expediere INTO v_pl FROM public.red_plicuri WHERE id = v_plic_id FOR UPDATE;
+  SELECT id, stare, awb, ridicat_la INTO v_rand FROM public.red_fan_awb WHERE id = p_id FOR UPDATE;
+  IF v_rand.stare = 'ridicat' AND v_pl.awb IS NOT DISTINCT FROM v_rand.awb THEN RETURN; END IF;   -- C0 repetat
+  IF v_rand.stare <> 'generat' THEN RAISE EXCEPTION 'redari fan: doar un AWB generat poate fi ridicat (stare %)', v_rand.stare USING ERRCODE = 'P0001'; END IF;
+  IF v_pl.stare <> 'activ' OR v_pl.data_expediere IS NOT NULL OR v_pl.awb IS NOT NULL THEN
+    RAISE EXCEPTION 'redari fan: plicul e anulat sau are deja o expediere inregistrata; verificare manuala' USING ERRCODE = 'P0001'; END IF;
+  UPDATE public.red_plicuri SET awb = v_rand.awb, data_expediere = p_data WHERE id = v_plic_id;
+  UPDATE public.red_fan_awb SET stare = 'ridicat', ridicat_la = (p_data::timestamp AT TIME ZONE 'Europe/Bucharest'), updated_at = now() WHERE id = p_id;
+END $fn$;
+
 REVOKE ALL ON FUNCTION public.fn_red_fan_e_owner(), public.fn_red_fan_propune(uuid, text, numeric), public.fn_red_fan_aproba(uuid, uuid[], text[]),
-  public.fn_red_fan_claim(uuid, text), public.fn_red_fan_rezultat(uuid, uuid, text, text, numeric, numeric, text) FROM PUBLIC, anon;
+  public.fn_red_fan_claim(uuid, text), public.fn_red_fan_rezultat(uuid, uuid, text, text, numeric, numeric, text),
+  public.fn_red_fan_reconciliaza(uuid, text, numeric, numeric, text), public.fn_red_fan_ridicat(uuid, date) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_red_fan_propune(uuid, text, numeric), public.fn_red_fan_aproba(uuid, uuid[], text[]),
-  public.fn_red_fan_claim(uuid, text), public.fn_red_fan_rezultat(uuid, uuid, text, text, numeric, numeric, text) TO authenticated;
+  public.fn_red_fan_claim(uuid, text), public.fn_red_fan_rezultat(uuid, uuid, text, text, numeric, numeric, text),
+  public.fn_red_fan_reconciliaza(uuid, text, numeric, numeric, text), public.fn_red_fan_ridicat(uuid, date) TO authenticated;
 REVOKE ALL ON FUNCTION public.fn_red_fan_e_owner() FROM authenticated;
 
 -- postcondiții
