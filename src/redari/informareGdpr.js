@@ -18,6 +18,9 @@ export const autorizareTgzCompleta = (proiect) => !!proiect && plinText(proiect.
 // Indicatorul calculat de server, atașat pe obiectul proiectului de cuInformarePublicata (altfel lipsă = nepublicat)
 export const informarePublicataPeProiect = (proiect) => proiect?.informare_publicata === true
 // r4 (Copilot r2 P2-02): verificarea eșuată (rețea / RPC) e o stare separată de „nepublicată”; ambele refuză generarea, cu mesaje diferite
+// Motivul afișat pe butoane / bannere când serverul a spus clar „nepublicată” (Setări, UAT-uri, Notificări, Registru — L19: aceeași gardă).
+// Verificarea eșuată (null) NU blochează aici: generatorii recitesc proaspăt starea și refuză ei, cu mesajul lor.
+export const MOTIV_INFORMARE_NEPUBLICATA = 'informarea GDPR nepublicată: lipsește autorizarea Transgaz (art. 28) — nr., dată și PDF în ⚙️ Setări proiect (doar owner-ul)'
 export const informareVerificareEsuata = (proiect) => !!proiect && 'informare_publicata' in proiect && proiect.informare_publicata === null
 /** Întreabă serverul (RPC): true = publicată, false = nepublicată, null = verificarea a eșuat (eroare / RPC lipsă / răspuns neașteptat). */
 export async function informarePublicataServer(client, cod) {
