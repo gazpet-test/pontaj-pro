@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync } from 'node:fs'
-import { CORPUS, BUCATA_MAX, taie, bucatiMd, bucatiJson, construiesteIndex, caleValida } from './corpus.mjs'
+import { existsSync, readFileSync } from 'node:fs'
+import { CORPUS, BUCATA_MAX, taie, bucatiMd, bucatiJson, construiesteIndex, caleValida, sha256Text, sha256Octeti, manifestDin } from './corpus.mjs'
 
 describe('corpusul pentru Întreabă echipa', () => {
   it('fișierele din corpus există și sunt doar cercetare normativă', () => {
@@ -48,5 +48,22 @@ describe('corpusul pentru Întreabă echipa', () => {
     expect(idx.bucati).toHaveLength(1)
     expect(idx.fisiere.map(f => f.eroare || 'ok')).toEqual(['ok', 'JSON invalid', 'cale invalidă'])
     expect(idx.bucati.every(x => x.text.length <= BUCATA_MAX)).toBe(true)
+  })
+  it('indexul e determinist și independent de CRLF/LF (manifestul din repo îi fixează sha256)', () => {
+    const lf = [{ cale: 'docs/cercetare/a.md', continut: '# A\nart. 5\n\ntext' }]
+    const crlf = [{ cale: 'docs/cercetare/a.md', continut: '# A\r\nart. 5\r\n\r\ntext' }]
+    const h = f => sha256Octeti(Buffer.from(JSON.stringify(construiesteIndex(f.map(x => ({ ...x, sha256: sha256Text(x.continut) })))), 'utf8'))
+    expect(h(lf)).toBe(h(crlf))
+    expect(h(lf)).toBe(h(lf))
+    expect(sha256Text('a\r\nb')).toBe(sha256Text('a\nb'))
+    expect(construiesteIndex(lf).generat_la).toBe(null)
+  })
+  it('manifestul din repo: formă corectă, aceleași fișiere ca CORPUS', () => {
+    const m = JSON.parse(readFileSync('worker/intrebari-tehnice/corpus_manifest.json', 'utf8'))
+    expect(m.index_sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(m.fisiere.map(f => f.cale)).toEqual(CORPUS)
+    expect(m.fisiere.every(f => /^[0-9a-f]{64}$/.test(f.sha256))).toBe(true)
+    expect(manifestDin({ bucati: [1, 2], fisiere: [{ cale: 'docs/x.md', sha256: 'a', bucati: 2 }] }, 'h'))
+      .toEqual({ versiune: 1, index_sha256: 'h', bucati: 2, fisiere: [{ cale: 'docs/x.md', sha256: 'a', bucati: 2 }] })
   })
 })

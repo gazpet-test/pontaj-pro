@@ -1,0 +1,67 @@
+{
+  "versiune": 1,
+  "index_sha256": "3c51661ff7c530043b77992316416ddcf2f0f9eaf9c4e61f5ca2780eedc92a8d",
+  "bucati": 3247,
+  "fisiere": [
+    {
+      "cale": "docs/cercetare/README.md",
+      "sha256": "6d802676a08005d21dec505285615c905420baa63fab7b31375b9680dea75d66",
+      "bucati": 7
+    },
+    {
+      "cale": "docs/cercetare/baza_normativa.md",
+      "sha256": "697467f98132bcdbca40338744d0e656a44dd75c9612b1541586161ef51a5afa",
+      "bucati": 265
+    },
+    {
+      "cale": "docs/cercetare/registre_evidenta.md",
+      "sha256": "79eec2269df3dea5ef5fda72c4638b6cd78e3503f9db601da0dddbbb0b2a9fa1",
+      "bucati": 271
+    },
+    {
+      "cale": "docs/cercetare/registru_cerinte.json",
+      "sha256": "bfd7d823a4ed3c7e58dc152d8659e4f8531f34380504c7f67a39d72a999556cb",
+      "bucati": 919
+    },
+    {
+      "cale": "docs/cercetare/registru_surse.json",
+      "sha256": "39cc5bfb0ebbd3ca31bb3ac191dbdcbc95ca90e82bd48420401a9feb40e81b33",
+      "bucati": 432
+    },
+    {
+      "cale": "docs/cercetare/surse_lipsa.md",
+      "sha256": "63384f8c1cebd428166f9ba7adee837ab7f96d80b6ac7cac23469d7e9d63d672",
+      "bucati": 27
+    },
+    {
+      "cale": "docs/cercetare/pentru_echipa.md",
+      "sha256": "2a91aec954e5c4ca92d4d3dce3cdb019baf28e2258d6ca998e5d6452f03c4aed",
+      "bucati": 8
+    },
+    {
+      "cale": "docs/cercetare/cnsc_practica.md",
+      "sha256": "a0491646335e84c1a7bc2834b5cfab5a983d4a60f3c0d59d7bea1dd83f03bc43",
+      "bucati": 780
+    },
+    {
+      "cale": "docs/cercetare/cnsc_teme.md",
+      "sha256": "7aee3b0bc37e6eecd1fc73bda55097bdd4296140cc89ea6f044ca8b306e4e287",
+      "bucati": 130
+    },
+    {
+      "cale": "docs/cercetare/clarificari_tipare.md",
+      "sha256": "101cc9a970540ed7bc1bd260f80a25f6fc5af05a20b40d8aea63b1ebd4937784",
+      "bucati": 320
+    },
+    {
+      "cale": "docs/cercetare/catalog_clarificari.md",
+      "sha256": "1014f64938c22a83b95fef4be5e36cb203f1bb94bdc228cd4fa25636b6fd88cf",
+      "bucati": 77
+    },
+    {
+      "cale": "docs/cercetare/CORPUS_CJ_PAGINI_2026-10-19.md",
+      "sha256": "98ef7b3cd370f8fb40855c3769d722cf0275c08cde5faed0414416c73446474f",
+      "bucati": 11
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 // ❓ Întreabă echipa — corpusul intern pentru cercetare (06.11.2026). Funcții pure, testate în corpus.test.mjs.
 // construieste_corpus.mjs citește fișierele de mai jos din repo și scrie indexul JSON pe care workerul îl caută pe cuvinte-cheie
 // (cercetare.py: pregateste_index / selecteaza_extrase). Fără serviciu extern, fără date de proiect: doar cercetarea normativă.
+import { createHash } from 'node:crypto'
 
 // Ce intră în corpus: cercetarea normativă din docs/cercetare (acte, cerințe atomice cu locator, surse, practica CNSC, lipsuri).
 // NU intră: brief-uri și rapoarte de lucru, audituri QA, SQL, duplicatele JSON ale fișierelor .md, docs/juridic (dosare cu date de
@@ -84,7 +85,18 @@ export function bucatiJson(cale, date, max = BUCATA_MAX) {
   return out
 }
 
-/** [{cale, continut, sha256?}] → indexul pentru worker. Fișierele cu cale invalidă sau JSON stricat se raportează, nu se ghicesc. */
+/** sha256 pe text cu capetele de rând unificate (LF): checkout-ul Windows (autocrlf) și cel Linux dau aceeași amprentă. */
+export const sha256Text = t => createHash('sha256').update(String(t ?? '').replace(/\r\n?/g, '\n'), 'utf8').digest('hex')
+export const sha256Octeti = b => createHash('sha256').update(b).digest('hex')
+
+/** Manifestul din repo (worker/intrebari-tehnice/corpus_manifest.json): amprenta indexului + a fiecărui fișier din corpus. */
+export function manifestDin(index, indexSha256) {
+  return { versiune: 1, index_sha256: indexSha256, bucati: index.bucati.length,
+           fisiere: index.fisiere.map(f => ({ cale: f.cale, sha256: f.sha256 ?? null, bucati: f.bucati ?? 0 })) }
+}
+
+/** [{cale, continut, sha256?}] → indexul pentru worker. Fișierele cu cale invalidă sau JSON stricat se raportează, nu se ghicesc.
+ *  Fără dată de generare: indexul trebuie să fie determinist (manifestul din repo îi fixează sha256). */
 export function construiesteIndex(fisiere, generatLa = null) {
   const bucati = [], raport = []
   for (const f of fisiere || []) {
