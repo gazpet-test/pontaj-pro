@@ -848,6 +848,21 @@ Porți comune: branch din `origin/main`; GO Jakarinos + Copilot pe diff; DRY ver
 - DRY + teste ca anon: injecție, adresă invalidă, prima introducere malițioasă (contact gol → rămâne gol, lotul F2 nu o vede).
 
 ### F2 — Trimiterea în loturi + reconcilierea + SENT
+**Worktree 05.11.2026 — implementare PARȚIALĂ, neaplicată, nedeployată; nu este GO de activare.**
+Decizia din brief permite construirea F2 acum, cu **trimiterea reală oprită**. Există un nucleu de loturi
+în `20261131a_redari_mail_f2_loturi.sql`, modulul comun `redariMailF2.mjs`, UI owner „✉️ Lot e-mail” și
+edge-ul `redari-mail-trimite`, care refuză orice transport real. Comutatorul BD pornește OFF și RPC-ul
+livrat nu permite pornirea lui. Preview-ul, aprobarea pe hash, rezervarea/CAS și rezultatele sunt codificate;
+acestea nu reprezintă încă fluxul complet de convocări din această secțiune.
+
+**Rămân de implementat înainte de a considera F2 livrat integral:** generarea/legarea PDF-ului convocatorului
+în fiecare snapshot, codul de subiect cu HMAC, RPC-urile de componență, OAuth de trimitere + Vault + wrapperul
+Google unic, transportul Gmail, reconcilierea durabilă și monitorizarea SENT integrate cu cititorul F1,
+deciziile pe `necunoscut`, alertele, UI de setări/opt-out și retenția completă cu fișiere exclusive/partajate.
+În acest checkout, F1 `20261130j/k` reprezintă schema și regulile; edge-urile F1 din plan nu sunt prezente.
+Baseline-ul L15 complet și probele PostgreSQL/PostgREST/concurență nu au fost efectuate aici.
+Raportul verificabil, inclusiv rezultatele testelor și L01–L25: [RAPORT_F2_EMAIL.md](RAPORT_F2_EMAIL.md).
+
 - **Migrare: da.** Coloanele de trimitere, `red_mail_loturi`, `red_mail_mesaje` (snapshot + triggere de imuabilitate, modelul lotului din §1.3 — *implicit (m)*: stările `ciorna` / `aprobat` / `in_trimitere` / `blocat_integritate` / `incheiat` cu lista literală a tranzițiilor, triggerul de componență, RPC-urile de componență doar pe `ciorna`, amprenta aprobată, `fn_red_mail_lot_inchide`, `fn_red_mail_lot_goleste`, `fn_red_mail_lot_sterge_final`, `red_mail_fisiere_inventar` + antetul `red_mail_fisiere_inventar_antet`, triggerul „fără revenire în coadă pe lot încheiat / blocat” (interzise doar tranzițiile spre `in_coada` / `rezervat`), ordinea globală a lock-urilor scrisă în comentariul fiecărui RPC; expirarea aprobării), `red_mail_optout`, cheia `M`, RPC-urile §1.3–1.5, §1.9, rândul `sent` în `red_mail_flux`, funcția canonică de hash (SQL + TS, paritate), **triggerul pe `red_convocari` care refuză `canal = 'email'`** + preflight (§1.5). Fără modificări în `red_v_stare_parcela` / `stare.js` / `exportXlsx.js` (eventual coloana separată „e-mail suplimentar” în Model_6).
 - **Edge: da.** `redari-mail-oauth` (scopul `trimitere`), `redari-mail-trimite` + `_shared/gmailTrimitere.ts`; în `redari-mail-citeste`: reconcilierea și monitorizarea SENT.
 - **UI: da.** „✉️ Lot e-mail” (filtre, șabloane validate de Juridic, preview cu adresele complete, aprobare, „Trimite” cu progres, plafon atins), lista „de decis” pentru `necunoscut`, alertele SENT, setările, opt-out.
@@ -1056,3 +1071,14 @@ Rezolvările marcate „cond. (x)” depind de o decizie implicită din §7.1 ș
 | Jak r19b (`jak_985_r2`) NO-GO: P1-01, P2-01..P2-03 | r19c: P1-01 → §1.2 pasul 2b (ținta valabilă 60 s pe ceasul monoton, timeout HTTP, grația G = durata maximă a worker-ului + 10 min, reconcilierea și deciziile noi doar după stingere, OFF = fără autorizări noi + stingerea celor emise, refuz în ultima fereastră G înainte de `T + 3 ani`, verificarea `trash_tardiv`, test cu barieră); P2-01 → §1.2 contractul tombstone-ului (`p_ref` în două forme, claim și blocaj proprii, transfer atomic, refuz cu claim / încercare vie, teste); P2-02 → §1.2 crearea tombstone-ului doar cu deduplicare deschisă + test peste 3 ani; P2-03 → §1 listele OAuth (cod, refresh, revocare, JWKS) legate de client + scop + teste; §1.12, §8 aliniate. Schema / RPC-urile rămân propuneri |
 | Jak r19c (`jak_985_r3`) GO cu condiții, 2 P2 de formulare | r19d: §1.2 pasul 2b — garanția = limită a emiterii cererilor, riscul rezidual al procesării întârziate la Google declarat și detectat prin `trash_tardiv`; pașii 2b și 8 — OFF = oprirea autorizărilor noi + stingerea celor emise, citirile permise (reconcilierea după G, `trash_tardiv`) enumerate |
 | Copilot r19d (`cop_985`) GO cu condiții, P2-01..P2-05 | r19e: P2-01 → 4 clienți / 3 conectări de producție + căsuța de test, uniform (antet, (g), §2.3, §2.4, §4, §7, §7.1); garanția de netrimitere a wrapperului, nu a scope-ului (§1); P2-02 → ceasul monoton pornit înaintea RPC-ului `trash_incepe` + test cu întârziere 30–59 s (§1.2 pasul 2b); P2-03 → limita `trash_tardiv` declarată, a doua verificare la 24 h, decizia (v) în §7.1; P2-04 → o singură coloană `limita_absoluta_la` în ambele tabele, ținta de 90 de zile derivată, `sterge_pana_la` eliminat (§1.2, §1.8, §1.12); P2-05 → §2.7 punctul 3, condiția de informare („nepotrivit”, metadatele pseudonimizate), cu Juridicul |
+# Continuare F2a inert — 05.11.2026
+
+Propunere pentru review, nu activare și nu F2 integral. Preflight nou: funcții/semnături, tabele/coloane și triggere; baseline unic PLACEHOLDER_LIVE refuză migrarea. Amprenta conservatoare public/auth/storage nu substituie review-ul inventarului tranzitiv, de finalizat de Claude înainte de DRY.
+Jurnal F2 atomic și în red_mail_evenimente, tip aditiv f2 numai în migrarea nouă; rollback refuză istoricul și restaurează lista F1.
+Preview: total/eligibili/excluși și număr pentru lipsă e-mail, opt-out, canal poștal fără e-mail, rezervat/trimis. Motivele se pot suprapune. Poșta cu AR rămâne obligatorie și nu exclude e-mailul suplimentar valid. Crearea reverifică opt-out/rezervările în server.
+DRY și vitest extinse, nerulate aici (fără BD; vitest absent). Smoke Node: 7 verificări trecute. TRANSPORT_REAL_ACTIV=false și OFF rămân în vigoare.
+
+Deschis F2a: inventar tranzitiv/baseline live L15, agregarea numerelor pe motive și în RPC (acum motive per destinatar, agregate în UI), matrice completă tabele/RPC, execuția DRY inventar, concurență PG, API, apply→rollback→reapply, Deno, vitest/build la Claude.
+F2b: OAuth/Vault, Gmail send, PDF convocator, cod HMAC [RED-M-...], reconciliere durabilă/cursor SENT, retenție cu ștergerea fișierelor și UI/operare complete.
+Detalii și L01–L25: [RAPORT_F2_EMAIL.md](RAPORT_F2_EMAIL.md). Această stare prevalează asupra raportărilor locale anterioare.
+

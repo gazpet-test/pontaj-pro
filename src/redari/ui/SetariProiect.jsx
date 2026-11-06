@@ -6,9 +6,11 @@ import { supabase } from '../../lib/supabase.js'
 import { G, S, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
 import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente, contractDinExecutie } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
+import PoartaUtilizatori from './PoartaUtilizatori.jsx'
+import AutorizareTgz from './AutorizareTgz.jsx'
 import { verificaDateCerereImputernicire, genereazaCerereImputernicire, descarcaBlob } from '../docx.js'
 
-export default function SetariProiect({ proiect, uats = [], nivel, show, onSchimbat }) {
+export default function SetariProiect({ proiect, uats = [], nivel, esteOwner = false, show, onSchimbat }) {
   const esteAdmin = nivel === 'admin'
   // Jakarinos f2 r1 P2: modificările se calculează față de BAZA formularului (rândul la deschidere / după propria salvare), nu față de
   // `proiect` reîncărcat — altfel o schimbare făcută între timp de alt admin ar apărea ca „modificare” și ar fi rescrisă cu valoarea veche.
@@ -192,6 +194,8 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
           </div>
         )}
       </div>
+      <PoartaUtilizatori key={proiect.id} proiect={proiect} esteOwner={esteOwner} show={show} onSchimbat={onSchimbat} />
+      <AutorizareTgz proiect={proiect} esteOwner={esteOwner} show={show} onSchimbat={onSchimbat} />
       {esteAdmin && <div style={{ ...S.card, marginTop: 12 }}>
         <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Cerere de împuternicire către Beneficiar (anexă la scrisoarea către TGZ)</h3>
         <p style={{ color: G.muted }}>DRAFT Juridic, de validat de avocat. Documentul se descarcă pentru verificare.</p>

@@ -1,3 +1,4 @@
+import FiltruRol from './FiltruRol.jsx'
 // Redări › 📬 Notificări — ghidul modelelor, canalele de răspuns și centralizatorul (ce am trimis, ce mai avem de trimis, lipsurile).
 // Doar citire: ecranul nu generează, nu trimite și nu scrie nimic. Logica: src/redari/notificari.js. Ghidul în text: docs/redari/GHID_NOTIFICARI.md.
 // Citiri: keyset pe chei unice (L23, paginiExport), eroare ≠ gol (L18: o sursă opțională căzută = „necunoscut”, nu 0), token de generație (L24).
@@ -148,6 +149,7 @@ export default function NotificariEcran({ proiect, uats = [], nivel, utilizatorI
   const ghidSurse = alProiectului(ghidStare), date = alProiectului(dateStare)
   const ghidEroare = alProiectului(ghidEroareStare) || '', eroare = alProiectului(eroareStare) || ''
   const [reload, setReload] = useState(0)
+  const [rol, setRol] = useState('toti')
   const [uatId, setUatId] = useState(uatInitial), [filtru, setFiltru] = useState('')
   const generatie = useRef(0)
 
@@ -172,9 +174,9 @@ export default function NotificariEcran({ proiect, uats = [], nivel, utilizatorI
   const inregistrari = useMemo(() => (date ? agregaDetinatori({ ...date, uats }) : null), [date, uats])
   const modele = useMemo(() => ghidModele({ proiect, uats, smsPanou: ghidSurse?.smsPanou || null, smsPanouEroare: ghidSurse ? ghidSurse.smsPanouEroare : null,
     corespondenta: ghidSurse?.corespondenta ?? null, tronsoane: date?.tronsoane ?? null }), [proiect, uats, ghidSurse, date])
-  useEffect(() => { setUatId(''); setFiltru('') }, [proiect.id])
+  useEffect(() => { setUatId(''); setFiltru(''); setRol('toti') }, [proiect.id])
   const uatValid = uats.some(u => u.id === uatId) ? uatId : ''   // Jak #992 P2-5: un UAT din alt proiect nu mai filtrează
-  const filtrate = useMemo(() => (inregistrari ? filtreaza(inregistrari, { uatId: uatValid, filtru }) : []), [inregistrari, uatValid, filtru])
+  const filtrate = useMemo(() => (inregistrari ? filtreaza(inregistrari, { uatId: uatValid, filtru, rol }) : []), [inregistrari, uatValid, filtru, rol])
   const cent = useMemo(() => (inregistrari ? centralizeaza(filtrate) : null), [inregistrari, filtrate])
   const statistici = useMemo(() => (date ? statisticiCanale(date.raspunsuri, inregistrari) : null), [date, inregistrari])
 
@@ -218,6 +220,7 @@ export default function NotificariEcran({ proiect, uats = [], nivel, utilizatorI
           <select aria-label="UAT" value={uatValid} onChange={e => setUatId(e.target.value)} style={S.select}>
             <option value="">Toate UAT-urile</option>{[...uats].sort((a, b) => String(a.nume).localeCompare(String(b.nume), 'ro')).map(u => <option key={u.id} value={u.id}>{u.nume}</option>)}
           </select>
+          <FiltruRol valoare={rol} onChange={setRol} />
           <select aria-label="Filtru" value={filtru} onChange={e => setFiltru(e.target.value)} style={S.select}>
             {FILTRE_NOTIF.map(f => <option key={f.cod} value={f.cod}>{f.eticheta}</option>)}
           </select>
@@ -225,7 +228,7 @@ export default function NotificariEcran({ proiect, uats = [], nivel, utilizatorI
           <button style={S.btnS} onClick={exportaXlsx}>📥 Export xlsx (fără telefoane)</button>
           <button style={S.btnS} onClick={exportaCsv}>📥 Export CSV</button>
         </div>
-        <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>Unitatea e scrisă sub fiecare coloană: „perechi” = înregistrări parcelă × deținător (o persoană cu 3 parcele = 3 perechi); „parcele” = parcele distincte (PV B e un document pe parcelă). „De trimis” = fără niciun canal reușit (AR primit, SMS livrat, răspuns pe orice canal, PV semnat, afișare la Primărie pentru neidentificați / fără adresă); „plecat, neconfirmat” = expediat fără AR sau SMS fără confirmare. „?” / „necunoscut” = sursa nu s-a putut citi (SMS) sau adresa nu se poate deduce: nu se numără nici „da”, nici „nu”.</p>
+        <p style={{ fontSize: 12, color: G.muted, margin: '0 0 8px' }}>Unitatea e scrisă sub fiecare coloană: „perechi” = înregistrări parcelă × deținător (o persoană cu 3 parcele = 3 perechi); „parcele” = parcele distincte, inclusiv la închidere prin PV A al utilizatorului / arendașului. „De trimis” = fără niciun canal reușit (AR primit, SMS livrat, răspuns pe orice canal, PV semnat, afișare la Primărie pentru neidentificați / fără adresă); „plecat, neconfirmat” = expediat fără AR sau SMS fără confirmare. „?” / „necunoscut” = sursa nu s-a putut citi (SMS) sau adresa nu se poate deduce: nu se numără nici „da”, nici „nu”.</p>
         <TabelCentralizator cent={cent} />
         <h3 style={{ fontSize: 14.5, fontWeight: 700, margin: '18px 0 6px' }}>Deținătorii pe filtrul ales ({filtrate.length})</h3>
         <ListaDetinatori lista={filtrate} />

@@ -1,3 +1,5 @@
+import { aplicaRol } from './redari/rol.js'
+import FiltruRol from './redari/ui/FiltruRol.jsx'
 /* Redari.jsx — Modul „Redări teren" (Lot 1 Transgaz): convocări proprietari, registru pe parcelă/deținător, PV.
    Contract: docs/redari/CONTRACT_SCHEMA.md (tabele red_*, vederea red_v_stare_parcela, RPC fn_red_numar_document).
    Ecrane: Registru · Fișa parcelei · Import TGZ · UAT-uri · Setări proiect (faza 2, felia 1). Nivel utilizator: admin / editor / viewer (user_module_access.redari; owner = admin).
@@ -9,6 +11,8 @@ import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
 import { genereazaConvocator, verificaDateConvocator, reincarcaConvocator, borderouCsv, descarcaBlob, BUCKET_REDARI } from './redari/docx.js'
+import { motivConvocatorUtilizator } from './redari/convocareUtilizatori.js'
+import { cuInformarePublicata } from './redari/informareGdpr.js'
 // D4: convocatoarele generate dar neexpediate (citire separată din red_convocari, fără migrare)
 import { citesteNeexpediatePeDetinatori, grupeazaNeexpediate, etichetaNeexpediat, textConfirmareNumarNou, poateGeneraNou, poateDescarcaExistent,
   poateDeschideConvocator, dataDocumentConvocare, useConvocariNeexpediate, aparuteDupaVerificare, rezervaNumarConvocare, motivRelatieSchimbata, motivIdentitateDiferita,
@@ -27,6 +31,7 @@ import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
 import NotificariEcran from './redari/ui/NotificariEcran.jsx'
+import MailLoturiEcran from './redari/ui/MailLoturiEcran.jsx'
 import { CANALE_RASPUNS_MANUAL, notaRaspunsManual } from './redari/notificari.js'
 // 📱 SMS proprietari (owner sau utilizator SMS cu Redari editor / admin, 20261130b; blocat in BD pana la autorizarea Transgaz)
 import RedariSmsButon from './sms/RedariSmsButon.jsx'
@@ -142,6 +147,7 @@ export default function Redari() {
     { cod:'posta', eticheta:'✉️ Poștă' },
     { cod:'corespondenta', eticheta:'📨 Corespondență' },
     { cod:'notificari', eticheta:'📬 Notificări' },
+    ...(profile?.is_owner === true ? [{ cod:'mail', eticheta:'✉️ Lot e-mail' }] : []),
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
   ]
@@ -175,6 +181,7 @@ export default function Redari() {
       {!proiect ? <Gol text="Alege sau creează un proiect." /> : (
         <div key={proiect.id}>
           {tab === 'dashboard' && <DashboardEcran proiect={proiect} />}
+          {tab === 'mail' && profile?.is_owner === true && <MailLoturiEcran proiect={proiect} uats={uats} profile={profile} />}
           {tab === 'sesiune' && <SesiuneEcran proiect={proiect} nivel={nivel} show={show} />}
           {tab === 'tronsoane' && <TronsoaneEcran proiect={proiect} nivel={nivel} show={show} />} 
           {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} onPosta={() => setTab('posta')} />}
@@ -184,7 +191,7 @@ export default function Redari() {
           {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
           {tab === 'notificari' && <NotificariEcran key={`${proiect.id}|${nivel}|${profile?.id || ''}`} proiect={proiect} uats={uats} nivel={nivel} utilizatorId={profile?.id || null} />}
           {tab === 'uat' && <><ConvocatoareMasa proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /><UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} /></>}
-          {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
+          {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} esteOwner={profile?.is_owner === true} show={show} onSchimbat={incarcaProiecte} />}
         </div>
       )}
     </div>
@@ -204,6 +211,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
   const [fUat, setFUat] = useState('')
   const [fTronson, setFTronson] = useState('')
   const [fStare, setFStare] = useState('')
+  const [fRol, setFRol] = useState('toti')
   const [cautare, setCautare] = useState('')
   const [cautareAplicata, setCautareAplicata] = useState('')
   const [selectie, setSelectie] = useState(() => new Set())
@@ -242,12 +250,13 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
       if (fTronson === 'fara') q = q.is('tronson', null)
       else if (fTronson) q = q.eq('tronson', Number(fTronson))
       if (fStare) q = q.eq('stare', fStare)
+      q = aplicaRol(q, fRol)
       return q
     }, ['parcela_id', 'detinator_id'], curent)
     const cautat = tot.filter(r => potrivesteCautare(r, cautareAplicata))
     return cautat.sort((a, b) => String(a.id_parcela ?? '').localeCompare(String(b.id_parcela ?? ''), 'ro', { numeric: true })
       || String(a.nume ?? '').localeCompare(String(b.nume ?? ''), 'ro') || String(a.detinator_id).localeCompare(String(b.detinator_id)))
-  }, [proiect.id, fUat, fTronson, fStare, cautareAplicata])
+  }, [proiect.id, fUat, fTronson, fStare, fRol, cautareAplicata])
 
   const incarca = useCallback(async () => {
     const g = ++generatie.current
@@ -268,6 +277,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
       if (fTronson === 'fara') q = q.is('tronson', null)   // parcelele încă neatribuite (după importul fără tronson)
       else if (fTronson) q = q.eq('tronson', Number(fTronson))
       if (fStare) q = q.eq('stare', fStare)
+      q = aplicaRol(q, fRol)
       const fCautare = filtruCautareSql(cautareAplicata)   // termen literal: wildcard-urile ILIKE / PostgREST scoase (src/redari/cautare.js)
       if (fCautare) q = q.or(fCautare)
       q = q.order('id_parcela').order('nume').range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1)
@@ -277,7 +287,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
       setRanduri(data || []); setTotal(count || 0)
     } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); setSelectie(new Set()); setEroareRegistru(msgEroare(e)); show('Registru: ' + msgEroare(e), 'error') } }   // r8/r9 P2-1: o încărcare eșuată nu lasă rândurile sau selecția anterioare (borderoul le-ar exporta)
     finally { if (g === generatie.current && !asteaptaSms) setLoading(false) }
-  }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
+  }, [proiect.id, fUat, fTronson, fStare, fRol, cautareAplicata, pagina, show, fSms, smsGata, sms.harta, sms.eroare, citesteToate])
   useEffect(() => { incarca() }, [incarca])
   // D4: convocatoarele generate, neexpediate, ale deținătorilor din pagina afișată (citire paginată pe loturi, L23).
   // Eroarea se afișează — nu e tratată ca „niciun convocator neexpediat”.
@@ -294,9 +304,9 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
     } catch (e) { if (g === generatieNeexp.current) setNeexp({ harta: null, eroare: msgEroare(e) }) }
   }, [randuri])
   useEffect(() => { incarcaNeexp(); return () => { generatieNeexp.current++ } }, [incarcaNeexp])
-  useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata, fSms])
+  useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, fRol, cautareAplicata, fSms])
   // P1-4: selecția e a rândurilor VĂZUTE — se golește la orice schimbare de filtre / pagină
-  useEffect(() => { setSelectie(new Set()); setRanduri([]); generatieExport.current++ }, [fUat, fTronson, fStare, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
+  useEffect(() => { setSelectie(new Set()); setRanduri([]); generatieExport.current++ }, [fUat, fTronson, fStare, fRol, cautareAplicata, pagina, fSms])   // r8 P2-1: și rândurile se invalidează
 
   const nrPagini = Math.max(1, Math.ceil(total / PAGINA))
   const toateSelectate = randuri.length > 0 && randuri.every(r => selectie.has(r.detinator_id))
@@ -379,6 +389,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
           <option value="">Toate stările</option>
           {STARI.map(s => <option key={s.cod} value={s.cod}>{s.eticheta}</option>)}
         </select>
+        <FiltruRol valoare={fRol} onChange={setFRol} />
         <FiltruSms valoare={fSms} onChange={setFSms} sms={sms} />
         <form onSubmit={e => { e.preventDefault(); setCautareAplicata(cautare.trim()) }} style={{ display:'flex', gap:6 }}>
           <input value={cautare} onChange={e => setCautare(e.target.value)} placeholder="Caută id parcelă / nume…" style={{ ...S.input, width:240 }} />
@@ -492,7 +503,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa, onPosta
 }
 
 // ─── Convocator: rezervaNumarConvocare (RPC atomic fn_red_convocare_rezerva: număr + rând) → genereazaConvocator → reincarcaConvocator → descărcare ──
-function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
+export function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   const [canal, setCanal] = useState('posta')
   const [lucru, setLucru] = useState(false)
   const [pas, setPas] = useState('')
@@ -521,27 +532,35 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   // Întoarce null când lipsesc date (afișate în modal, FĂRĂ număr consumat).
   const pregatesteIntrare = async (tok) => {
     setPas('Citesc datele…')
-    const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token] = await Promise.all([
+    const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token, { data: proiectAcum, error: ep }] = await Promise.all([
       supabase.from('red_detinatori').select(COL_DETINATOR).eq('id', rand.detinator_id).single(),
       supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta, sters_la').eq('id', rand.parcela_id).single(),
       supabase.from('red_detinatori_contact').select('*').eq('detinator_id', rand.detinator_id).maybeSingle(),   // PII — doar admin/editor ajung aici
       citesteTokenRaspuns(rand.detinator_id),
+      supabase.from('red_proiecte').select('*').eq('id', proiect.id).single(),
     ])
-    if (e1 || e3 || e4) throw (e1 || e3 || e4)
+    if (!activ(tok)) return null
+    if (e1 || e3 || e4 || ep) throw (e1 || e3 || e4 || ep)
+    if (!proiectAcum) throw new Error('Proiectul nu mai este accesibil')
+    // PR3a r2: calitatea si flagul PROASPETE, inainte de sablon si de rezervarea numarului.
+    const motivUtilizator = motivConvocatorUtilizator(proiectAcum, det)
+    if (motivUtilizator) { setLipsuri([motivUtilizator]); show(motivUtilizator, 'error'); return null }
+    // #939 r2: „informarea publicată” se cere proaspăt serverului (autorizarea Transgaz art. 28 + PDF legat), nu din proiectul din memorie
+    const proiectI = await cuInformarePublicata(supabase, proiectAcum)
     if (!activ(tok)) return null
     // #989 r5 (P1-01): relația deținător → parcelă → proiect → UAT a datelor documentului, verificată înainte de orice rezervare
-    const motivRel = motivRelatieSchimbata({ detinator: det, parcela, proiect, uat })
+    const motivRel = motivRelatieSchimbata({ detinator: det, parcela, proiect: proiectI, uat })
     if (motivRel) { setLipsuri([motivRel]); show(`Convocatorul nu se poate genera: ${motivRel}.`, 'error'); return null }
     setPas('Verific datele…')
     // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
-    const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect, detinator: det, contactDetinator: contactDetinator || null })
+    const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect: proiectI, detinator: det, contactDetinator: contactDetinator || null })
     if (lipsa.length) { setLipsuri(lipsa); show('Convocatorul nu se poate genera — vezi lipsurile din fereastră.', 'error'); return null }
     setPas('Descarc șablonul…')
     const rs = await fetch(SABLON_CONVOCATOR)
     if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
     const templateArrayBuffer = await rs.arrayBuffer()
     if (!activ(tok)) return null
-    return { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect, token, templateArrayBuffer }
+    return { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect: proiectI, token, templateArrayBuffer }
   }
 
   // Ordinea (P2-8): date + contactul deținătorului → verificaDateConvocator (lipsuri → afișate, FĂRĂ număr consumat)
@@ -567,20 +586,22 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
         show(`Între timp a fost generat ${noi.map(c => c.nr_document).join(', ')} pentru acest deținător — verifică lista și confirmă din nou dacă vrei totuși un număr nou.`, 'error')
         return
       }
+      const motivUtilizator = motivConvocatorUtilizator(intrare.proiect, intrare.detinator)
+      if (motivUtilizator) { setLipsuri([motivUtilizator]); show(motivUtilizator, 'error'); return }
       setPas('Rezerv numărul de document…')
       scris = true
       // #989 r4: protocolul atomic comun cu generarea în masă — RPC-ul fn_red_convocare_rezerva rezervă numărul ȘI inserează rândul
       // (lock pe deținător, RD001 dacă între timp a apărut o convocare pe același canal; număr nou doar cu bifa explicită). Fără RPC → refuz.
-      const rez = await rezervaNumarConvocare(supabase, { detinatorId: rand.detinator_id, confirmat: confirmNou === true && (vazute || []).length > 0, canal })
+      const rez = await rezervaNumarConvocare(supabase, { detinatorId: rand.detinator_id, calitateAsteptata: intrare.detinator.calitate, confirmat: confirmNou === true && (vazute || []).length > 0, canal })
       const { convocareId, nrDocument } = rez
       // #989 r5 (P1-01): documentul se face DOAR pe identitatea folosită de server; altfel rândul rămâne „fișier neîncărcat” (regenerare ulterioară)
       const difera = motivIdentitateDiferita(rez, { parcelaId: intrare.parcela.id, uatId: intrare.uat?.id, proiectId: intrare.proiect?.id })
       if (difera) { if (activ(tok)) show(difera + '.', 'error'); return }
       // de aici rândul există: fișierul se încarcă prin salvarea versionată existentă (v1 la primul upload) și se reconciliază
       setPas(`Generez ${nrDocument}…`)
-      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument })
+      const { blob, hash, calitateDocument } = await genereazaConvocator({ ...intrare, nrDocument })
       setPas('Salvez în arhivă…')
-      const { path } = await reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument })
+      const { path } = await reincarcaConvocator(supabase, { convocareId, blob, hash, calitateDocument, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument })
       if (!activ(tok)) return   // salvarea s-a făcut; fereastra nu mai e a acestei acțiuni → fără descărcare / toast / onGata
       descarcaBlob(blob, `${nrDocument}_${rand.id_parcela}.docx`)
       show(`Convocator ${nrDocument} generat și salvat (${path}).`, 'success')
@@ -615,9 +636,9 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
       setPas(`Regenerez ${c.nr_document}…`)
       scris = true
       // r2 P2-4: aceeași dată ca documentul original (paritate cu Fișa parcelei și generarea în masă)
-      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument: c.nr_document, dataDocument })
+      const { blob, hash, calitateDocument } = await genereazaConvocator({ ...intrare, nrDocument: c.nr_document, dataDocument })
       setPas('Salvez versiunea nouă…')
-      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument: c.nr_document })
+      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, calitateDocument, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument: c.nr_document })
       if (!activ(tok)) return
       descarcaBlob(blob, `${c.nr_document}_${rand.id_parcela}.docx`)
       show(`Convocator ${c.nr_document} regenerat cu același număr (${path}).`, 'success')
