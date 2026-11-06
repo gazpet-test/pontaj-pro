@@ -6,12 +6,13 @@
 -- nu se completează certificarea până la eliminarea lor sau inventarierea explicită.
 CREATE OR REPLACE FUNCTION pg_temp.f2_preflight() RETURNS void LANGUAGE plpgsql AS $gate$
 DECLARE
-  -- Baseline live citit 05.11.2026 (Claude, READ ONLY REPEATABLE READ, exact interogările de mai jos; relatii/triggere recitite
+  -- Baseline live recitit 06.11.2026 după #998/#1003/#1002 aplicate (Claude, READ ONLY REPEATABLE READ, exact interogările de mai jos;
+  -- revizie callee refăcută: triggerele noi 31c/31d pe red_convocari/red_proiecte fără EXECUTE, search_path fix). Relatii/triggere
   -- după amprenta fără OID-uri, r4). Revizie callee: funcțiile
   -- din inventar + toate triggerele de pe red_convocari/red_proiecte/red_mail_setari/red_mail_evenimente/red_jurnal/red_numere/
   -- red_detinatori(_contact): fără EXECUTE dinamic, search_path fix, apeluri doar public/auth; singurul callee extern
   -- (extensions.gen_random_bytes în fn_red_detinatori_token_dupa) stă pe red_detinatori, pe care migrarea NU o scrie.
-  baseline constant jsonb := '{"functii":"521ee4e08a2f5f9daf71c54933608f46","relatii":"a1f3ea2addd74d5caf252d822020fdad","triggere":"6e791bf1e2b9275f652c3944babd15bf","revizie_callee":"revizuit_fara_dynamic_sau_callee_externe"}';
+  baseline constant jsonb := '{"functii":"d9cc4d51e3f971c6731bf7bbe4c1992f","relatii":"34d6b65a681265788869264639d4eed7","triggere":"efcb21e9d38c806c9e43f4efc4fc081f","revizie_callee":"revizuit_fara_dynamic_sau_callee_externe"}';
   r record; obiecte jsonb;
 BEGIN
   FOR r IN SELECT * FROM (VALUES
