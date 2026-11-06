@@ -14,7 +14,7 @@
 # NU face: ștergere, oprire, modificare de task-uri, alt program, alte argumente.
 # Risc rezidual (configurarea serverului): scriptul poate fi modificat DUPĂ programare de cine are drept de scriere în director;
 # C:\Users\Public permite Modify grupurilor INTERACTIVE/SERVICE/BATCH. Pentru task-uri sensibile: C:\ProgramData\Gazpet cu ACL strict.
-# Review Jakarinos 06.11.2026 r1, r2 (NO-GO) → r3.
+# Review Jakarinos 06.11.2026 r1–r3 (NO-GO) → r4.
 # ============================================================================
 set -euo pipefail
 NUME="${1:-}"; SCRIPT="${2:-}"; MIN="${3:-}"
@@ -50,7 +50,7 @@ if not os.path.isfile(real):
 # conținutul trebuie să fie exact un blob din origin/main (cod revizuit și mergeuit)
 git -C "$REPO" fetch -q origin main 2>/dev/null || { echo "REFUZ: nu pot actualiza origin/main (sursa de încredere) — reîncearcă"; exit 4; }
 BLOB=$(git -C "$REPO" hash-object --no-filters "$SCRIPT")
-git -C "$REPO" ls-tree -r origin/main | awk '{print $3}' | grep -qx "$BLOB" \
+git -C "$REPO" ls-tree -r origin/main | awk '{print $3}' | grep -x "$BLOB" >/dev/null \
   || { echo "REFUZ: conținutul scriptului nu e identic cu niciun fișier din origin/main (blob $BLOB) — copiază-l din main"; exit 2; }
 
 export MSYS_NO_PATHCONV=1

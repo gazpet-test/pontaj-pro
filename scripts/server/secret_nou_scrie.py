@@ -1,11 +1,21 @@
 """secret_nou.sh, pasul 3: stdin = o linie „uuid|valoare” din Vault. Creează fișierul GOL exclusiv (O_EXCL), îi restrânge și verifică
 ACL-ul, abia apoi scrie valoarea. La orice eșec după creare: șterge fișierul local și afișează UUID-ul pentru reconciliere.
-Valoarea nu se afișează niciodată."""
+Valoarea nu se afișează niciodată.
+
+Identitatea pentru ACL vine din whoami.exe (cont + SID ale procesului), nu din variabile de mediu; drepturile se dau pe SID-uri,
+iar verificarea compară EXACT principalul fiecărei intrări (review Jakarinos r3 P1).
+Risc acceptat de Răzvan (06.11.2026): directorul .secrete moștenește citire pentru CodexSandboxUsers; între crearea fișierului gol
+și restrângerea ACL-ului, un proces al acelui grup ar putea deschide un handle pe care îl păstrează. Închiderea ar cere ACL restrâns
+pe director, pe care Răzvan a ales să nu-l facă acum."""
+import csv
+import io
 import os
 import re
 import subprocess
 import sys
 
+WHOAMI = r'C:\Windows\System32\whoami.exe'
+ICACLS = r'C:\Windows\System32\icacls.exe'
 f = sys.argv[1]
 linie = sys.stdin.read().strip()
 m = re.fullmatch(r'([0-9a-f-]{36})\|([0-9a-f]{64})', linie)
@@ -26,6 +36,15 @@ def esec(motiv):
 
 
 try:
+    w = subprocess.run([WHOAMI, '/user', '/fo', 'csv', '/nh'], capture_output=True, text=True, errors='replace')
+    cont, sid = next(csv.reader(io.StringIO(w.stdout.strip())))
+    if w.returncode != 0 or not re.fullmatch(r'S-1-5-21-\d+-\d+-\d+-\d+', sid):
+        raise ValueError('sid')
+except Exception:
+    print('EROARE: identitatea procesului nu a putut fi citita (nimic scris local); secretul din Vault are id', uid, '- reconciliere manuala')
+    sys.exit(4)
+
+try:
     fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o600)
     os.close(fd)
 except FileExistsError:
@@ -34,21 +53,26 @@ except FileExistsError:
 except Exception as e:
     esec('nu pot crea fisierul local (' + type(e).__name__ + ')')
 
-user = os.environ.get('USERNAME', '')
 try:
-    r = subprocess.run(['icacls', f, '/inheritance:r', '/grant:r', user + ':F', '*S-1-5-18:F', '*S-1-5-32-544:F'],
+    r = subprocess.run([ICACLS, f, '/inheritance:r', '/grant:r', '*' + sid + ':F', '*S-1-5-18:F', '*S-1-5-32-544:F'],
                        capture_output=True)
-    acl = subprocess.run(['icacls', f], capture_output=True, text=True, errors='replace').stdout
+    acl = subprocess.run([ICACLS, f], capture_output=True, text=True, errors='replace').stdout
 except Exception as e:
     esec('icacls nu a putut rula (' + type(e).__name__ + ')')
-permise = (user.lower(), 'nt authority\\system', 'builtin\\administrators')
-intrari = [l.replace(f, '').strip() for l in acl.splitlines() if ':(' in l]
-straini = [x for x in intrari if not any(p in x.lower() for p in permise)]
-if r.returncode != 0 or not intrari or straini:
-    esec('ACL-ul nu a putut fi restrans')
+permise = {cont.lower(), 'nt authority\\system', 'builtin\\administrators'}
+principali = []
+for l in acl.splitlines():
+    if ':(' not in l:
+        continue
+    s = l.strip()
+    if s.lower().startswith(f.lower()):
+        s = s[len(f):].strip()
+    principali.append(s.split(':(', 1)[0].strip().lower())
+if r.returncode != 0 or not principali or any(p not in permise for p in principali):
+    esec('ACL-ul nu a putut fi restrans exact la ' + cont + '/SYSTEM/Administrators')
 try:
     with open(f, 'w', encoding='ascii') as h:
         h.write(val + '\n')
 except Exception as e:
     esec('scrierea valorii a esuat (' + type(e).__name__ + ')')
-print('OK: secret creat in Vault (id', uid + ') si scris in', f, '- 64 hex, ACL doar', user + '/SYSTEM/Administrators; valoarea nu se afiseaza')
+print('OK: secret creat in Vault (id', uid + ') si scris in', f, '- 64 hex, ACL doar', cont + '/SYSTEM/Administrators; valoarea nu se afiseaza')

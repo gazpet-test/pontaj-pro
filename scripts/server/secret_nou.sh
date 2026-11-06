@@ -14,7 +14,9 @@
 #   4. afișează doar „OK” (sau UUID-ul pentru reconciliere, la orice eșec după creare). Niciodată valoarea.
 # NU face: ștergere, rotire, citirea altor secrete, alt SQL.
 # Risc rezidual (configurarea serverului, nu a scriptului): integritatea psql.exe / python.exe și ACL-ul directoarelor lor.
-# Review Jakarinos 06.11.2026 r1, r2 (NO-GO) → r3.
+# Risc ACCEPTAT de Răzvan (06.11.2026): .secrete moștenește citire pentru CodexSandboxUsers (Codex/cdx are nevoie); între crearea
+#   fișierului gol și restrângerea ACL-ului, un proces al acelui grup poate deschide un handle păstrat după restrângere.
+# Review Jakarinos 06.11.2026 r1–r3 (NO-GO) → r4.
 # ============================================================================
 set -euo pipefail
 NUME="${1:-}"
