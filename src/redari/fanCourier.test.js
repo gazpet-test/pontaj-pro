@@ -81,6 +81,11 @@ describe('interpreteazaRaspunsAwb (exemplul din documentație)', () => {
     expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: null, errors: null }] }).stare).toBe('necunoscut')
   })
   it('4xx → eroare deterministă', () => expect(interpreteazaRaspunsAwb(422, {}).stare).toBe('eroare'))
+  it('Jakarinos r2: AWB numeric nesigur → necunoscut; AWB text lung → ok; costuri invalide → null', () => {
+    expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 1234567890123456789 }] }).stare).toBe('necunoscut')
+    expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: '1234567890123456789', tariff: '29.70', vat: false }] })).toEqual({ stare: 'generat', awb: '1234567890123456789', tarif: 29.7, tva: null })
+    expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 123456789, tariff: ' ', vat: [] }] })).toMatchObject({ tarif: null, tva: null })
+  })
   it('tarif / TVA lipsă → null (cost necunoscut), nu 0 (Jakarinos r1 P2)', () => {
     expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 123456789, tariff: null, vat: undefined }] })).toEqual({ stare: 'generat', awb: '123456789', tarif: null, tva: null })
   })
@@ -109,6 +114,7 @@ describe('raspundeFan — poarta funcției edge (transport oprit)', () => {
     expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: { status: 401 } }) }))).status).toBe(401)
     expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: { status: 503 } }) }))).body.cod).toBe('autentificare_neconfirmata')
     expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: {} }) }))).status).toBe(503)
+    expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ error: { status: 0 } }) }))).status).toBe(503)   // r2 P2: doar 4xx = 401
     expect((await raspundeFan({ jwt: 'x', corp: {} }, deps({ getUser: async () => ({ data: { user: null } }) }))).status).toBe(401)
   })
   it('non-owner → 403; verificarea owner eșuată → 503 (nu „non_owner”)', async () => {

@@ -11,7 +11,7 @@ export async function raspundeFan({ jwt, corp }, deps) {
   if (!jwt) return out(401, 'neautentificat')
   const user = await deps.getUser()
   // Jakarinos r1 P2 (L18): autentificarea indisponibilă (5xx / rețea / fără status) ≠ token invalid
-  if (user?.error) return Number.isInteger(user.error.status) && user.error.status < 500 ? out(401, 'neautentificat') : out(503, 'autentificare_neconfirmata')
+  if (user?.error) return Number.isInteger(user.error.status) && user.error.status >= 400 && user.error.status < 500 ? out(401, 'neautentificat') : out(503, 'autentificare_neconfirmata')
   if (!user?.data?.user?.id) return out(401, 'neautentificat')
   // (d) Toate acțiunile cheltuie bani sau ating date FAN reale → doar owner-ul (fn_sms_e_owner pe auth.uid()).
   const owner = await deps.owner()

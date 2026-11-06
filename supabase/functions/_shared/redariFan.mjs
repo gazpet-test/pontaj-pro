@@ -103,11 +103,14 @@ export function interpreteazaRaspunsAwb(status, corp) {
   const r = el[0] || {}
   const erori = r.errors
   const areErori = erori && (Array.isArray(erori) ? erori.length > 0 : typeof erori === 'object' ? Object.keys(erori).length > 0 : !!String(erori).trim())
+  // Jakarinos r2 P2 (L13/L18): un AWB numeric peste Number.MAX_SAFE_INTEGER a fost deja rotunjit de JSON.parse → nu se acceptă
+  if (typeof r.awbNumber === 'number' && !Number.isSafeInteger(r.awbNumber)) return { stare: 'necunoscut', motiv: 'număr AWB numeric nesigur (precizie pierdută)' }
   const awb = r.awbNumber == null ? '' : String(r.awbNumber).trim()
   if (areErori && !awb) return { stare: 'eroare', motiv: 'FAN: ' + JSON.stringify(erori).slice(0, 300) }
   if (!/^[0-9]{6,20}$/.test(awb)) return { stare: 'necunoscut', motiv: 'răspuns FAN fără număr AWB valid' }
   // Jakarinos r1 P2 (L18): tarif lipsă = necunoscut (null), nu 0 — Number(null) ar da 0
-  const numar = v => (v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null)
+  // Jakarinos r2 P2: doar număr finit sau text zecimal; ' ', false, [] etc. = necunoscut (null), nu 0
+  const numar = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^[0-9]+(\.[0-9]+)?$/.test(v.trim()) ? Number(v.trim()) : null)
   return { stare: 'generat', awb, tarif: numar(r.tariff), tva: numar(r.vat) }
 }
 
