@@ -131,7 +131,7 @@ L18 (eroare FAN ≠ gol), L22 (pas durabil înainte de apelul plătit).
 
 ## 6. Ce conține scheletul (PR draft separat)
 
-- `supabase/migrations/20261131e_redari_fan_awb.sql` — **NEAPLICATĂ**: tabelul `red_fan_awb`, RLS (citire admin/editor Redări), RPC-uri `fn_red_fan_propune` / `fn_red_fan_aproba` / `fn_red_fan_claim` / `fn_red_fan_rezultat`. Revenire: `supabase/revenire/20261131e_redari_fan_awb_ROLLBACK.sql`.
+- `supabase/migrations/20261131e_redari_fan_awb.sql` — **NEAPLICATĂ**: tabelul `red_fan_awb`, RLS (citire admin/editor Redări), RPC-uri `fn_red_fan_propune` / `fn_red_fan_aproba` / `fn_red_fan_claim` / `fn_red_fan_rezultat` / `fn_red_fan_reconciliaza` (necunoscut → generat sau eroare, după verificarea omului în borderoul FAN) / `fn_red_fan_ridicat` (C0 → plicul primește AWB + data expedierii, atomic). Aprobarea și claim-ul re-verifică plicul (activ, neexpediat, în lot) sub lock. Revenire: `supabase/revenire/20261131e_redari_fan_awb_ROLLBACK.sql`.
 - `supabase/functions/_shared/redariFan.mjs` — construirea și validarea corpului `intern-awb` dintr-un plic (funcții pure, testate).
 - `supabase/functions/_shared/redariFanHandler.mjs` + `supabase/functions/redari-fan-awb/index.ts` — handler cu poarta owner; `TRANSPORT_REAL_ACTIV = false` în cod → răspunde 423 „transport_real_oprit”, fără niciun apel către FAN.
 - `src/redari/ui/FanAwbPrevizualizare.jsx` — în ✉️ Poștă, la fiecare lot: „📦 AWB FAN — previzualizare”: ce s-ar trimite pentru fiecare plic și ce lipsește (telefon, județ, localitate, lungimi). Doar citire, niciun buton de generare activ.
