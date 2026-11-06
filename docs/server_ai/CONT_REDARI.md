@@ -1,43 +1,22 @@
-# Contul Claude „Redări” (redari@gazpet.ro) — pornire și reguli
+# Contul Claude de dezvoltare (redari@gazpet.ro) — reguli
 
-Decizia lui Răzvan (06.11.2026): un abonament **Max separat**, pe redari@gazpet.ro, care se ocupă **doar de Redări teren**.
-Contul principal (chat-ul de coordonare) împarte munca, face review, merge și deploy cu „da”-ul lui Răzvan.
-Nu se folosește pentru alte module și nu se rotește cu contul principal ca să ocolească limitele de utilizare.
+Decizia lui Răzvan (06.11.2026): un abonament **Max separat**, pe redari@gazpet.ro, este **contul de dezvoltare pentru
+toate modulele** (Redări, Ofertare, HR, Logistica, Magazie etc.). Răzvan vorbește cu **un singur chat** (contul
+principal, sesiunea de coordonare); contul redari@ nu are chat propriu: chat-ul îi pornește rulări de cod în spate.
+Nu se rotește cu contul principal ca să ocolească limitele: are rolul lui (scrie cod), chat-ul are al lui (coordonează).
 
-## Unde rulează
-Pe serverul AI **Gazpet-Claude** (nu pe Raspberry): aici sunt psql + `scripts/livrare_migrare.sh`, lansatorul Paw
-(`run_paw.cmd`), Edge CDP 9333 (Codex web, Copilot, Gemini), NAS-ul și Git Bash.
-Cele două conturi stau în paralel pe același server, fiecare cu **folderul lui de configurare**.
+## Cum lucrează
+- Chat-ul pornește o rulare: `powershell -File C:\Users\Gazpet-Ai\claude-redari\rdr.ps1 -Brief <paw-data\brief\...md> -Slug <nume>`.
+  Rularea e Claude Code headless (`claude -p`) cu `CLAUDE_CONFIG_DIR=C:\Users\Gazpet-Ai\.claude-redari`, în clona
+  `C:\Users\Gazpet-Ai\gazpet-erp-redari`, pornind de pe `main` proaspăt; rezultatul în `paw-data\out\rdr_<slug>.json`.
+- O singură rulare odată (lock `paw-data\lock_rdr`); un modul = o sarcină în lucru.
+- Agentul face: branch cu prefixul modulului, cod, teste (`npx vitest run` + `npx vite build`), push, PR **draft**.
+- NU face: merge, aplicare de migrări, deploy, secrete, date reale, mailuri. Acestea rămân la chat (cu „treci pe manual”
+  și „da”-ul lui Răzvan unde trebuie).
+- Review-ul rămâne la Jakarinos + Copilot/Gemini; Codex web lucrează în paralel, ca până acum.
+- Starea fiecărui modul stă în `claude_docs` (handoff-uri), nu în memoria conturilor.
 
-## Pornire (o singură dată, Răzvan)
-1. Clonă proprie: `git clone https://github.com/gazpet-test/pontaj-pro C:\Users\Gazpet-Ai\gazpet-erp-redari`
-   (apoi `npm install` în ea).
-2. Folder de configurare separat și login (PowerShell):
-   ```powershell
-   $env:CLAUDE_CONFIG_DIR = 'C:\Users\Gazpet-Ai\.claude-redari'
-   cd C:\Users\Gazpet-Ai\gazpet-erp-redari
-   claude          # apoi /login cu redari@gazpet.ro
-   ```
-   Fără `CLAUDE_CONFIG_DIR`, `claude` pornește cu contul principal — variabila trebuie setată la fiecare pornire
-   (sau într-un `.cmd` de pornire „Claude Redari”).
-3. Setări: copiază `C:\Users\Gazpet-Ai\.claude\settings.json` în `C:\Users\Gazpet-Ai\.claude-redari\settings.json`
-   (aceleași permisiuni); setările din repo (`.claude/`) vin automat cu clona.
-4. Conectori claude.ai — se autorizează din nou pe contul redari@ (claude.ai → Settings → Connectors):
-   Supabase (proiectul `dxczwkbciseqniprspcu`), Google Drive, Desktop Commander, GitHub dacă e cerut.
-   `gh` (GitHub CLI), pgpass-ul pentru psql și Edge 9333 sunt ale serverului și merg la fel.
-5. Remote Control cu numele **„Redări — programare”**, ca să apară în aplicație și în `ListAgents`.
-
-## Mesajul de start (primul mesaj în sesiune)
-> Ești sesiunea „Redări — programare” pe contul redari@gazpet.ro. Faci DOAR Redări teren.
-> Ritualul de start din CLAUDE.md, apoi rândul „Redări teren” din `claude_docs` `handoff_activ` și `docs/redari/`.
-> Raportezi chat-ului principal prin `SendMessage` (numele din `ListAgents`) la predări și blocaje.
-> Aplicări de migrări, deploy, secrete, date reale: anunți întâi „treci pe manual” și aștepți „da”-ul lui Răzvan.
-
-## Reguli
-- Ce e comun automat: repo (CLAUDE.md, skills, docs), `claude_docs` / `claude_context` (handoff, registru, lecții),
-  `paw-data`. Memoria locală a contului (`.claude-redari\projects\…\memory`) NU e comună: ce trebuie să știe
-  ambele conturi se scrie în `claude_context`.
-- Rotație la ~900k context (CLAUDE.md pct. 8): handoff în `handoff_activ` (rândul Redări), apoi sesiune nouă.
-- La limita abonamentului: se oprește, face handoff și anunță chat-ul; nu se trece munca automat pe contul principal.
-- Codex web (mediul `pontaj-pro`), Jakarinos, Copilot și Gemini rămân aceiași; scripturile de lucru cu Codex web
-  sunt descrise în handoff.
+## Pornire (făcută 06.11.2026)
+- Login o singură dată: `Desktop\Claude Redari.cmd` → `/login` cu redari@gazpet.ro → `/exit`.
+- Verificat: `.claude-redari\.claude.json` → cont redari@gazpet.ro; rulare de test „TEST OK main”.
+- Pe contul redari@ NU se conectează Gmail (contul de dezvoltare nu trimite mailuri).
