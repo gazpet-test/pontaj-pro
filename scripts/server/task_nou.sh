@@ -9,11 +9,12 @@
 #   2. scriptul e un .py existent sub C:\Users\Public\ sau C:\ProgramData\Gazpet\, verificat pe calea REALĂ (fără junction / symlink
 #      pe nicio componentă, fără UNC) ȘI identic byte cu byte cu un fișier din origin/main al repo-ului (cod revizuit + mergeuit);
 #   3. refuză dacă task-ul există (nu suprascrie: fără /F, stdin din /dev/null — o confirmare de suprascriere eșuează);
-#   4. programul rulat e DOAR C:\Program Files\Python313\pythonw.exe -B "<script>".
+#   4. programul rulat e DOAR C:\Program Files\Python313\pythonw.exe -I -B "<script>" (-I izolat: fără folderul scriptului în
+#      sys.path și fără PYTHON* / site de utilizator — un modul străin pus lângă script nu se importă).
 # NU face: ștergere, oprire, modificare de task-uri, alt program, alte argumente.
 # Risc rezidual (configurarea serverului): scriptul poate fi modificat DUPĂ programare de cine are drept de scriere în director;
 # C:\Users\Public permite Modify grupurilor INTERACTIVE/SERVICE/BATCH. Pentru task-uri sensibile: C:\ProgramData\Gazpet cu ACL strict.
-# Review Jakarinos 06.11.2026 r1 (NO-GO) → r2.
+# Review Jakarinos 06.11.2026 r1, r2 (NO-GO) → r3.
 # ============================================================================
 set -euo pipefail
 NUME="${1:-}"; SCRIPT="${2:-}"; MIN="${3:-}"
@@ -47,7 +48,7 @@ if not os.path.isfile(real):
 [[ "$WIN" != *'"'* ]] || { echo "REFUZ: ghilimele în cale"; exit 2; }
 
 # conținutul trebuie să fie exact un blob din origin/main (cod revizuit și mergeuit)
-git -C "$REPO" fetch -q origin main 2>/dev/null || true
+git -C "$REPO" fetch -q origin main 2>/dev/null || { echo "REFUZ: nu pot actualiza origin/main (sursa de încredere) — reîncearcă"; exit 4; }
 BLOB=$(git -C "$REPO" hash-object --no-filters "$SCRIPT")
 git -C "$REPO" ls-tree -r origin/main | awk '{print $3}' | grep -qx "$BLOB" \
   || { echo "REFUZ: conținutul scriptului nu e identic cu niciun fișier din origin/main (blob $BLOB) — copiază-l din main"; exit 2; }
@@ -56,6 +57,6 @@ export MSYS_NO_PATHCONV=1
 SCHT=/c/Windows/System32/schtasks.exe
 Q=$("$SCHT" /Query /TN "$NUME" 2>&1 </dev/null) && { echo "REFUZ: task-ul \"$NUME\" există deja — nu suprascriu"; exit 3; }
 [[ "$Q" == *"cannot find"* || "$Q" == *"nu poate găsi"* || "$Q" == *"does not exist"* ]] || { echo "EROARE: nu pot verifica dacă task-ul există: ${Q:0:120}"; exit 4; }
-"$SCHT" /Create /TN "$NUME" /SC MINUTE /MO "$MIN" /TR "\"C:\\Program Files\\Python313\\pythonw.exe\" -B \"$WIN\"" </dev/null >/dev/null
+"$SCHT" /Create /TN "$NUME" /SC MINUTE /MO "$MIN" /TR "\"C:\\Program Files\\Python313\\pythonw.exe\" -I -B \"$WIN\"" </dev/null >/dev/null
 "$SCHT" /Query /TN "$NUME" </dev/null >/dev/null 2>&1 || { echo "EROARE: task-ul nu apare după creare"; exit 4; }
-echo "OK: task \"$NUME\" creat — pythonw.exe -B $WIN la $MIN minute (blob $BLOB din origin/main)"
+echo "OK: task \"$NUME\" creat — pythonw.exe -I -B $WIN la $MIN minute (blob $BLOB din origin/main)"
