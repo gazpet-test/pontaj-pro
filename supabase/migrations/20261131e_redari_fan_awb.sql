@@ -165,7 +165,7 @@ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS 
 DECLARE v_rand record; v_stare text;
 BEGIN
   IF NOT public.fn_red_fan_e_owner() THEN RAISE EXCEPTION 'redari fan: doar owner-ul' USING ERRCODE = '42501'; END IF;
-  IF p_id IS NULL OR (p_awb IS NOT NULL AND p_awb !~ '^[0-9]{6,20}$') OR (p_awb IS NULL AND coalesce(p_motiv, '') !~ '[^[:space:]]') THEN
+  IF p_id IS NULL OR (p_awb IS NOT NULL AND p_awb !~ '^[0-9]{6,20}$') OR (p_awb IS NULL AND coalesce(left(p_motiv, 500), '') !~ '[^[:space:]]') THEN
     RAISE EXCEPTION 'redari fan: reconciliere invalida (AWB valid sau motivul verificarii)' USING ERRCODE = '22023'; END IF;
   SELECT id, stare, updated_at INTO v_rand FROM public.red_fan_awb WHERE id = p_id FOR UPDATE;
   IF v_rand.id IS NULL THEN RAISE EXCEPTION 'redari fan: rand inexistent' USING ERRCODE = 'P0002'; END IF;

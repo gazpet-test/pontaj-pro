@@ -110,7 +110,7 @@ export function interpreteazaRaspunsAwb(status, corp) {
   if (!/^[0-9]{6,20}$/.test(awb)) return { stare: 'necunoscut', motiv: 'răspuns FAN fără număr AWB valid' }
   // Jakarinos r1 P2 (L18): tarif lipsă = necunoscut (null), nu 0 — Number(null) ar da 0
   // Jakarinos r2 P2: doar număr finit sau text zecimal; ' ', false, [] etc. = necunoscut (null), nu 0
-  const numar = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^[0-9]+(\.[0-9]+)?$/.test(v.trim()) ? Number(v.trim()) : null)
+  const numar = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^[0-9]+(\.[0-9]+)?$/.test(v.trim()) && Number.isFinite(Number(v.trim())) ? Number(v.trim()) : null)
   return { stare: 'generat', awb, tarif: numar(r.tariff), tva: numar(r.vat) }
 }
 

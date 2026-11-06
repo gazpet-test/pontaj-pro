@@ -85,6 +85,7 @@ describe('interpreteazaRaspunsAwb (exemplul din documentație)', () => {
     expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 1234567890123456789 }] }).stare).toBe('necunoscut')
     expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: '1234567890123456789', tariff: '29.70', vat: false }] })).toEqual({ stare: 'generat', awb: '1234567890123456789', tarif: 29.7, tva: null })
     expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 123456789, tariff: ' ', vat: [] }] })).toMatchObject({ tarif: null, tva: null })
+    expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 123456789, tariff: '9'.repeat(400) }] }).tarif).toBeNull()   // r3 P2: Infinity → null
   })
   it('tarif / TVA lipsă → null (cost necunoscut), nu 0 (Jakarinos r1 P2)', () => {
     expect(interpreteazaRaspunsAwb(200, { response: [{ awbNumber: 123456789, tariff: null, vat: undefined }] })).toEqual({ stare: 'generat', awb: '123456789', tarif: null, tva: null })
