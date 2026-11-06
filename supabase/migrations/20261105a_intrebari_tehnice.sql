@@ -18,7 +18,8 @@ BEGIN
     RAISE EXCEPTION '20261105a: garda start invalida';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
-  IF to_regclass('public.intrebari_tehnice') IS NOT NULL OR EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'intrebari-tehnice') THEN
+  IF to_regclass('public.intrebari_tehnice') IS NOT NULL OR EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'intrebari-tehnice')
+     OR to_regclass('public.app_modules') IS NULL THEN
     RAISE EXCEPTION '20261105a: intrebari_tehnice / bucket-ul exista deja';
   END IF;
   IF to_regprocedure('public.fn_verifica_secret(text,text)') IS NULL OR to_regclass('public.notifications') IS NULL
@@ -42,6 +43,11 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 REVOKE ALL ON FUNCTION public.fn_are_acces_intrebari() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_are_acces_intrebari() TO authenticated, service_role;
+
+-- ─── catalogul de module (FK user_module_access.module → app_modules.key) ──
+INSERT INTO public.app_modules (key, name, icon, color, description, is_active, display_order, show_on_homepage)
+VALUES ('intrebari_tehnice', 'Întreabă echipa', '❓', '#56D4DD', 'Spețe tehnice · răspuns AI informativ, vizibil doar autorului', true, 35, true)
+ON CONFLICT (key) DO NOTHING;
 
 -- ─── tabelul ───────────────────────────────────────────────────────────────
 CREATE TABLE public.intrebari_tehnice (
@@ -71,7 +77,7 @@ CREATE INDEX intrebari_tehnice_coada_idx ON public.intrebari_tehnice (creat_la) 
 CREATE FUNCTION public.fn_intrebari_inainte_insert() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
-  v_owner boolean; v_azi integer; a jsonb;
+  v_owner boolean; v_azi integer; v_limita integer; a jsonb;
 BEGIN
   IF auth.uid() IS NULL OR NOT public.fn_are_acces_intrebari() THEN RAISE EXCEPTION 'Nu ai acces la Întreabă echipa'; END IF;
   NEW.autor := auth.uid();
@@ -82,8 +88,9 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('intrebari_tehnice:' || NEW.autor::text));
   SELECT count(*) INTO v_azi FROM public.intrebari_tehnice
    WHERE autor = NEW.autor AND creat_la >= (date_trunc('day', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest');
-  IF v_azi >= CASE WHEN v_owner THEN 20 ELSE 5 END THEN
-    RAISE EXCEPTION 'Limita zilnică atinsă (% întrebări pe zi). Mâine poți pune din nou.', CASE WHEN v_owner THEN 20 ELSE 5 END;
+  v_limita := CASE WHEN v_owner THEN 20 ELSE 5 END;   -- variabilă: IF … CASE … THEN … END THEN se rupe la primul THEN în PL/pgSQL
+  IF v_azi >= v_limita THEN
+    RAISE EXCEPTION 'Limita zilnică atinsă (% întrebări pe zi). Mâine poți pune din nou.', v_limita;
   END IF;
   FOR a IN SELECT * FROM jsonb_array_elements(NEW.atasamente) LOOP
     IF jsonb_typeof(a) <> 'object'
@@ -110,6 +117,8 @@ CREATE POLICY intrebari_tehnice_ins ON public.intrebari_tehnice FOR INSERT TO au
 REVOKE ALL ON TABLE public.intrebari_tehnice FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT ON TABLE public.intrebari_tehnice TO authenticated;
 GRANT ALL ON TABLE public.intrebari_tehnice TO service_role;
+-- privilegiile implicite Supabase dau anon/authenticated drepturi pe secvențe noi; identitatea nu le cere la INSERT
+REVOKE ALL ON SEQUENCE public.intrebari_tehnice_id_seq FROM PUBLIC, anon, authenticated;
 
 -- ─── atașamente: bucket privat, fiecare utilizator în folderul lui ─────────
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
