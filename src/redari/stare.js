@@ -5,6 +5,8 @@
 // și în teste ca oglindă a logicii din BD.
 
 export const STARI = [
+  // Ambele stări A sunt închise (rang 1); semnătura proprie are prioritate la afișare.
+  { cod: 'PV_A_ACOPERIT_PARCELA', ordine: 1, eticheta: 'Acoperit prin PV A pe parcelă', culoare: '#16a34a' },
   { cod: 'PV_A_SEMNAT',             ordine: 1,  eticheta: 'PV A semnat',                 culoare: '#16a34a' },
   { cod: 'PV_B_CONSTATARE',         ordine: 2,  eticheta: 'PV B constatare',             culoare: '#0d9488' },
   { cod: 'PV_TRIMIS_SPRE_SEMNARE',  ordine: 3,  eticheta: 'PV trimis spre semnare',      culoare: '#2563eb' },
@@ -79,7 +81,7 @@ function convocareReturnataFaraConfirmareUlterioara(convocari) {
  *  - raspunsuri: rândurile red_raspunsuri ale deținătorului
  *  - pvs: PV-urile relevante — tip 'A' ale deținătorului, tip 'B' ale parcelei (active = stare ≠ 'anulat' și sters_la null)
  */
-export function calculeazaStare({ calitate, adresa_cunoscuta, convocari = [], raspunsuri = [], pvs = [] } = {}) {
+export function calculeazaStare({ calitate, adresa_cunoscuta, convocari = [], raspunsuri = [], pvs = [], parcela_acoperita_a = false } = {}) {
   const conv = Array.isArray(convocari) ? convocari : []
   const pv = (Array.isArray(pvs) ? pvs : []).filter(pvActiv)
 
@@ -87,6 +89,8 @@ export function calculeazaStare({ calitate, adresa_cunoscuta, convocari = [], ra
 
   // 1. PV A semnat
   if (pv.some(p => p.tip === 'A' && p.stare === 'semnat')) return rezultat('PV_A_SEMNAT')
+  // Flag calculat de fn_red_parcela_acoperita_a, nu din răspunsul la convocare.
+  if (parcela_acoperita_a === true) return rezultat('PV_A_ACOPERIT_PARCELA')
   // 2. PV B pe parcelă (stare ≠ anulat)
   if (pv.some(p => p.tip === 'B')) return rezultat('PV_B_CONSTATARE')
   // 3. PV A trimis spre semnare
@@ -114,8 +118,46 @@ export function calculeazaStare({ calitate, adresa_cunoscuta, convocari = [], ra
 
   // 10–11. afișare
   if (calitate === 'neidentificat') return rezultat('NEIDENTIFICAT_AFISARE')
-  if (adresa_cunoscuta === false) return rezultat('FARA_ADRESA_AFISARE')
+  // SQL: coalesce(fn_red_adresa_cunoscuta(...), false); contact absent = afișare.
+  if (adresa_cunoscuta !== true) return rezultat('FARA_ADRESA_AFISARE')
 
   // 12. restul
   return rezultat('DE_CONVOCAT')
+}
+
+// Q5: o singură stare per parcelă, indiferent de numărul de proprietari/utilizatori.
+// Fără acoperire A/B, starea cea mai puțin avansată păstrează vizibil lucrul rămas.
+export const STARI_INCHISE = ['PV_A_SEMNAT', 'PV_A_ACOPERIT_PARCELA', 'PV_B_CONSTATARE']
+export function stariParcele(randuri) {
+  const pe = new Map()
+  for (const r of randuri) {
+    if (!r.parcela_id || !r.uat_id || !PE_COD[r.stare]) throw new Error('Stare parcelă incompletă sau necunoscută.')
+    if (!pe.has(r.parcela_id)) pe.set(r.parcela_id, [])
+    pe.get(r.parcela_id).push(r)
+  }
+  return [...pe.values()].map(lista => {
+    if (lista.some(r => r.uat_id !== lista[0].uat_id)) throw new Error('Parcela are UAT-uri diferite.')
+    const mostenite = lista.filter(r => r.stare_parcela != null)
+    if (mostenite.length && (mostenite.length !== lista.length || mostenite.some(r => !PE_COD[r.stare_parcela] || r.stare_parcela !== mostenite[0].stare_parcela))) throw new Error('Starea întregii parcele este inconsistentă.')
+    const stare = mostenite.length ? mostenite[0].stare_parcela : lista.some(r => r.stare === 'PV_A_ACOPERIT_PARCELA') ? 'PV_A_ACOPERIT_PARCELA'
+      : lista.every(r => r.stare === 'PV_A_SEMNAT') ? 'PV_A_SEMNAT'
+      : lista.some(r => r.stare === 'PV_B_CONSTATARE') ? 'PV_B_CONSTATARE'
+      : lista.reduce((a, b) => PE_COD[a.stare].ordine >= PE_COD[b.stare].ordine ? a : b).stare
+    return { ...lista[0], stare }
+  })
+}
+export function centralizatorParcele(randuri) {
+  const pe = new Map()
+  for (const r of stariParcele(randuri)) {
+    const k = JSON.stringify([r.uat_id, r.stare])
+    if (!pe.has(k)) pe.set(k, { proiect_id: r.proiect_id, uat_id: r.uat_id, uat3: r.uat3, uat_nume: r.uat_nume, stare: r.stare, numar: 0 })
+    pe.get(k).numar++
+  }
+  return [...pe.values()]
+}
+
+// Filtrarea persoanelor nu poate transforma semnătura unui coproprietar în acoperirea întregii parcele.
+export function stariCuParcela(randuri) {
+  const pe = new Map(stariParcele(randuri).map(p => [p.parcela_id, p.stare]))
+  return randuri.map(r => ({ ...r, stare_parcela: pe.get(r.parcela_id) }))
 }

@@ -246,7 +246,7 @@ describe('Copilot #992 — unitățile coloanelor', () => {
   it('fiecare coloană are unitatea; foaia xlsx o scrie în antet', async () => {
     const { COLOANE_CENTRALIZATOR, UNITATI } = await import('./notificari.js')
     expect(COLOANE_CENTRALIZATOR.every(c => UNITATI[c[3]])).toBe(true)
-    expect(COLOANE_CENTRALIZATOR.filter(c => c[3] === 'parcele').map(c => c[0])).toEqual(['parcele', 'pv_b_generat', 'pv_b_semnat'])
+    expect(COLOANE_CENTRALIZATOR.filter(c => c[3] === 'parcele').map(c => c[0])).toEqual(['inchise', 'parcele', 'pv_b_generat', 'pv_b_semnat'])
     const cap = foaieCentralizatorNotif(centralizeaza(toate()))[0]
     expect(cap).toContain('Deținători (perechi)'); expect(cap).toContain('PV B semnat (parcele)')
   })

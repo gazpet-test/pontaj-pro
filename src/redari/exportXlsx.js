@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx-js-style'
+import { potrivesteRol, calitatiRol } from './rol.js'
+import { STARI_INCHISE } from './stare.js'
 import { STARI, etichetaStare, ultimulRaspuns } from './stare.js'
 import { ETICHETA_CALITATE, formatDataRo, aziBucuresti } from './docx.js'
 import { etichetaOptiune, etichetaRetur } from './ui/comune.jsx'
@@ -67,8 +69,9 @@ const randTgz = r => Object.fromEntries(COLOANE_REGISTRU.filter(c => c.col !== '
   const v = col === 'S' ? scurteazaMentiuneAr(r[col] ?? '') : (r[col] ?? '')   // juridic#021: către TGZ fără textul liber de pe AR
   return [col, LIBERE_TGZ.has(col) || (EURISTIC_TGZ.has(col) && typeof v === 'string' && /(?:\+?\d[\d ().-]{7,}\d|@|\b(?:strada|bulevard|adresa|aleea|calea|soseaua)\b|\b(?:str|bd|bdul|sos|al)\.)/i.test(v)) ? '' : v]
 }))
-export function randuriRegistru(date, { pentruTgz = false } = {}) {
-  return date.map(randRegistru).sort((a, b) => compara(a.B, b.B) || compara(a.C, b.C) || compara(a.A, b.A) || compara(a.J, b.J))
+export function randuriRegistru(date, { pentruTgz = false, rol = 'toti' } = {}) {
+  calitatiRol(rol)
+  return date.filter(d => potrivesteRol(d.detinator, rol)).map(randRegistru).sort((a, b) => compara(a.B, b.B) || compara(a.C, b.C) || compara(a.A, b.A) || compara(a.J, b.J))
     .map(r => pentruTgz ? randTgz(r) : r)
 }
 
@@ -82,20 +85,20 @@ export function foaieCentralizator(randuriCentralizator, uats) {
     m.set(r.stare, m.get(r.stare) + n)
   }
   const totaluri = lista.map(u => [...matrice.get(u.id).values()].reduce((a, b) => a + b, 0))
-  const inchise = lista.map(u => matrice.get(u.id).get('PV_A_SEMNAT') + matrice.get(u.id).get('PV_B_CONSTATARE'))
+  const inchise = lista.map(u => STARI_INCHISE.reduce((n, s) => n + matrice.get(u.id).get(s), 0))
   const suma = a => a.reduce((x, y) => x + y, 0)
   const procent = (n, total) => total ? Math.round(n * 1000 / total) / 10 : 0
   return [
     ['Stare', ...lista.map(u => u.nume), 'TOTAL'],
     ...STARI_PROCES.map(s => { const valori = lista.map(u => matrice.get(u.id).get(s.cod)); return [etichetaStare(s.cod), ...valori, suma(valori)] }),
-    ['TOTAL randuri (parcela + persoana)', ...totaluri, suma(totaluri)],
-    // Copilot f6 r1 P2-02: procentul e pe randuri (parcela + persoana), ca red_v_centralizator_uat; eticheta o spune explicit
-    ['% randuri inchise (PV A sau B; perechi parcela + persoana)', ...inchise.map((n, i) => procent(n, totaluri[i])), procent(suma(inchise), suma(totaluri))],
+    ['TOTAL parcele', ...totaluri, suma(totaluri)],
+    // Q5: procentul este pe parcele distincte, ca red_v_centralizator_uat.
+    ['% parcele inchise (PV A sau B)', ...inchise.map((n, i) => procent(n, totaluri[i])), procent(suma(inchise), suma(totaluri))],
   ]
 }
 
 function culoareModel(cod) {
-  if (cod === 'PV_A_SEMNAT') return 'C6EFCE'
+  if (['PV_A_SEMNAT', 'PV_A_ACOPERIT_PARCELA'].includes(cod)) return 'C6EFCE'
   if (['PV_B_CONSTATARE', 'CONVOCAT_FARA_RASPUNS'].includes(cod)) return 'FFEB9C'
   if (['OBIECTII_DE_TRATAT', 'CONVOCARE_RETURNATA'].includes(cod)) return 'FFC7CE'
   if (['NEIDENTIFICAT_AFISARE', 'FARA_ADRESA_AFISARE'].includes(cod)) return 'D9D9D9'
@@ -132,7 +135,7 @@ export function construiesteWorkbook({ registru, centralizator = [], pentruTgz =
   }
   XLSX.utils.book_append_sheet(wb, central, 'Centralizator')
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ['Un rand = o parcela + o persoana; coproprietarii au randuri separate cu acelasi ID parcela.'],
+    ['Registru: un rand = parcela + persoana. Centralizator: fiecare parcela se numara o singura data.'],
     ['Export de consultare. STARE este calculata in ERP, nu prin formule Excel.'],
     ['Nu se sterg randuri si nu se suprascriu date vechi; corectiile se inregistreaza in ERP, cu istoric.'],
     [registru == null ? 'Centralizator agregat, fara date personale.' : pentruTgz ? 'Exportul TGZ nu contine telefoane, emailuri sau adrese. Textele libere N/Y/AM sunt omise.' : 'Datele personale raman in fisier si ERP cu acces restrans. Exportul catre Transgaz se face fara telefoane.'],
