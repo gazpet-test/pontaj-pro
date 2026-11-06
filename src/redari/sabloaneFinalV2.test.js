@@ -104,8 +104,8 @@ describe('șabloanele Final_v2', () => {
     const { paragrafe: conv } = await citeste('convocator')
     expect(conv[0]).toContain('Lider al Asocierii')
     expect(paragrafe[0]).toBe(conv[0])
-    expect(paragrafe[0]).toBe('GAZPET INSTAL S.R.L. · Str. Fluturilor nr. 34, Ploiești, jud. Prahova · CUI RO 22029920 · Tel./Fax 0244 435 005 · office@gazpet.ro'
-      + 'Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}')
+    // excepția (10), 05.11.2026: datele firmei sunt în antetul-imagine (header), în corp rămâne doar „Lider al Asocierii …”
+    expect(paragrafe[0]).toBe('Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}')
     expect(paragrafe[1]).toMatch(/^ADRESĂ către Primăria \{\{uat\}\}/)
     expect(text.match(/Lider al Asocierii/g)).toHaveLength(1)
     expect(text).toContain('GAZPET INSTAL S.R.L. – {{reprezentant_gazpet}}')

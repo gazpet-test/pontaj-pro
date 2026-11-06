@@ -278,7 +278,10 @@ describe('genereazaConvocator', () => {
     const optiuni = x => texte(x).filter(t => t.trim().startsWith('☐'))
     expect(optiuni(xu)).toHaveLength(4)
     expect(optiuni(xu)).toEqual(optiuni(x1))
-    expect(texte(xu).slice(0, 2)).toEqual(texte(x1).slice(0, 2))
+    // Excepția (10), #999: rândul cu datele firmei este acum în imaginea din header.
+    // În corp rămâne un singur text de antet comun, înaintea destinatarului diferit în 1U.
+    expect(texte(xu)[0]).toBe(texte(x1)[0])
+    expect(texte(xu)[0]).toBe('Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}')
     expect(xu).toContain('<w:pgSz w:w="11906" w:h="16838"/>')
   })
   it.each([false, true])('Model 1U se încarcă fără bufferul proprietarului, previzualizare=%s', async permiteIncomplet => {

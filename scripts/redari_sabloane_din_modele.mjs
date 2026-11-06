@@ -10,16 +10,19 @@
 //    adresa_uat (celelalte 7 rânduri goale se șterg); (3) docProps: fără miniatură și fără „ultima modificare de”;
 //    (4) celulele goale din tabele nu mai au run în modelele resalvate de Word → primesc un run cu w:sz=19 (formatul celulelor
 //    de date din aceleași tabele); (5) paragraful nou {{pv_a_referinta}} sub „Nume:” în PV B (decizia 02.11, PR #935);
-//    (6) toate cele 5 trec de pe Letter pe A4, cu lățimile tabelelor scalate (decizia 03.11, „varianta A”);
+//    (6) toate cele 6 trec de pe Letter pe A4, cu lățimile tabelelor scalate (decizia 03.11, „varianta A”);
 //    (7) convocatorul: margini, spațiere, interlinie și corp de literă strânse, ca fața să încapă pe o pagină A4 (tot 03.11);
 //    (8) convocatorul pleacă prin poștă doar cu codul QR: adresa web de răspuns nu se mai tipărește, fraza trimite doar la QR
 //    (decizia Răzvan 03.11 seara; singura reformulare de text juridic, declarată în CONVOCATOR_DOAR_QR).
 //    (9) adresa UAT primește antetul firmei din convocator (primele două paragrafe din Model_1, cu contractul și proiectul
 //    parametrizate) — varianta implicită pentru claude#026 întrebarea 1, DE CONFIRMAT de Răzvan (04.11).
+//    (10) antetul oficial Gazpet (imagine, docs/redari/referinta/antet_gazpet.jpg) în header-ul PRIMEI pagini, iar rândul
+//    scris cu datele firmei se scoate din corp (rămâne „Lider al Asocierii … Contract …”) — decizia Răzvan 05.11.2026.
 import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
+import { adaugaAntet, faraDateFirma } from './redari_antet.mjs'
 
 const RADACINA = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const REF = resolve(RADACINA, 'docs/redari/referinta')
@@ -460,9 +463,9 @@ const RETETE = {
   },
 }
 
-// Model 1U (Juridic, 05.11.2026), DRAFT până la validarea lui Răzvan.
+// Model 1U (Juridic, 05.11.2026), validat de Razvan 06.11.2026.
 // Aceeași sursă și aceiași pași comuni ca Model 1: placeholder-e, antet, QR, A4, formatare.
-// Orice viitor pas comun de antet (PR #999, ne inclus aici) rămâne în construieste(), pentru TOATE rețetele.
+// Pașii comuni faraDateFirma + adaugaAntet (PR #999) rămân în construieste(), pentru TOATE rețetele.
 // Fiecare inlocuiesteWt / inWt de mai jos declară exact O apariție (argument scalar).
 RETETE['convocator_utilizator.docx'] = {
   ...RETETE['convocator.docx'],
@@ -509,7 +512,8 @@ const textWt = xml => [...xml.matchAll(RX_WT)].map(m => m[1]).join('')
 async function construieste(sablon, { model, pasi, formatare = [], margini, stiluri }) {
   const zip = await JSZip.loadAsync(readFileSync(resolve(REF, model)), { createFolders: false })
   const doc = await zip.file('word/document.xml').async('string')
-  const cuText = pasi(doc)
+  // excepția (10), decizia Răzvan 05.11.2026: datele firmei sunt în antetul-imagine (header, prima pagină) → rândul scris se scoate
+  const cuText = faraDateFirma(pasi(doc), esc(ANTET_FIRMA))
   // textul de referință se ia ÎNAINTE de orice pas de formatare și se compară după FIECARE pas
   const referinta = textWt(cuText)
   // excepția (6): A4 pe toate (cu marginile proprii doar la convocator), ultimul pas
@@ -525,6 +529,8 @@ async function construieste(sablon, { model, pasi, formatare = [], margini, stil
   zip.file('word/document.xml', nou, { date: DATA_FIXA, createFolders: false })
   // excepția (7): stilurile convocatorului (spațiere, interlinie, corp de literă)
   if (stiluri) zip.file('word/styles.xml', stiluri(await zip.file('word/styles.xml').async('string')), { date: DATA_FIXA, createFolders: false })
+  // excepția (10): antetul oficial (imagine) în header-ul primei pagini, lățimea utilă A4
+  await adaugaAntet(zip, { date: DATA_FIXA })
   // excepția (3): fără miniatură (nu mai corespunde) și fără numele ultimului editor în docProps
   if (zip.file('docProps/thumbnail.jpeg')) zip.remove('docProps/thumbnail.jpeg')
   const core = await zip.file('docProps/core.xml')?.async('string')
@@ -532,7 +538,7 @@ async function construieste(sablon, { model, pasi, formatare = [], margini, stil
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
-// Jakarinos f-v2 r2 P3: toate cele 5 se construiesc și se validează în memorie; pe disc se scrie doar dacă au trecut TOATE
+// Jakarinos f-v2 r2 P3: toate cele 6 se construiesc și se validează în memorie; pe disc se scrie doar dacă au trecut TOATE
 // (un eșec la un model nu mai lasă șabloanele dinainte suprascrise)
 const construite = []
 for (const [sablon, reteta] of Object.entries(RETETE)) {
@@ -551,12 +557,12 @@ if (VERIFICA) {
   }
   if (diferente) process.exit(1)
 } else {
-  // Copilot f-v2 r3 P3-02: publicare în doi pași. (1) toate 5 se scriu în fișiere temporare lângă destinație și se recitesc
+  // Copilot f-v2 r3 P3-02: publicare în doi pași. (1) toate 6 se scriu în fișiere temporare lângă destinație și se recitesc
   // octet cu octet; un eșec aici șterge temporarele și NU atinge șabloanele. (2) abia apoi rename temporar → destinație.
-  // Limita (Windows, 5 fișiere): fiecare rename e atomic, dar cele 5 nu formează o tranzacție; un eșec la pasul (2) (fișier
+  // Limita (Windows, 6 fișiere): fiecare rename e atomic, dar cele 6 nu formează o tranzacție; un eșec la pasul (2) (fișier
   // deschis în Word / blocat de antivirus) e raportat cu lista celor deja publicate, iar `--verifica` arată ce a rămas vechi.
   const temporar = sablon => resolve(OUT, `.${sablon}.tmp-${process.pid}`)
-  // curățenie pe TOATE cele 5 temporare (și unul scris parțial, înainte de eșec); o ștergere eșuată nu ascunde eroarea inițială
+  // curățenie pe TOATE cele 6 temporare (și unul scris parțial, înainte de eșec); o ștergere eșuată nu ascunde eroarea inițială
   const stergeTemporare = (pastreaza = []) => {
     const ramase = []
     for (const { sablon } of construite) {

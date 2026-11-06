@@ -2,9 +2,9 @@
 
 Implementat pe `codex/redari-pr3b-sablon-utilizator`, realiniat la baza actuală PR3a
 `codex/redari-pr3a-poarta-utilizatori` @ `69d5cf8f82db9864ae093a315a6dab6290f10621`.
-PR DRAFT către acest branch, fără merge. Textul juridic rămâne DRAFT până la validarea lui Răzvan.
+PR #1004 integrat în main; textul juridic este validat de Razvan 06.11.2026.
 Fără acces Supabase, migrări, date reale, modificări în `pv.js`, `ModalPv.jsx`, SalariiPage sau alte module.
-PR #999 nu este inclus.
+Actualizare 06.11.2026 pe branch-ul PR #999: antetul-imagine comun este aplicat și Modelului 1U.
 
 ## Fișiere
 
@@ -39,12 +39,12 @@ altfel, în LibreOffice QR-ul de 3 cm suprapunea primele rânduri ale paragraful
 Textul este comparat înainte/după fiecare pas de formatare și trebuie să rămână identic.
 Testul de structură permite exclusiv această spațiere suplimentară față de Model 1.
 
-Nu s-a preluat `scripts/redari_antet.mjs` sau antetul-imagine din #999. 1U folosește aceeași
-rețetă de bază și constructorul comun `construieste`; pasul comun viitor de antet se poate aplica
-acolo tuturor rețetelor, fără o implementare separată pentru utilizator.
+Model 1U folosește `scripts/redari_antet.mjs` din #999 prin constructorul comun `construieste`:
+`faraDateFirma` scoate rândul scris, iar `adaugaAntet` introduce imaginea doar în header-ul primei pagini.
+Aceiași pași se aplică tuturor celor șase rețete; cererea de împuternicire folosește același modul.
 
 Verificarea octet cu octet raportează `identic` pentru toate cele șase rezultate ale rețetei,
-inclusiv `convocator_utilizator.docx`. Cele cinci DOCX-uri existente nu au modificări în git.
+inclusiv `convocator_utilizator.docx`. La integrarea cu #999 toate șabloanele au fost regenerate.
 
 ## Frazele Juridic
 
@@ -69,7 +69,10 @@ Punctele de confirmat (a), (b), (c) sunt păstrate în forma furnizată, fără 
 (d), schimbarea confirmării din formularul public, este n/a în acest PR, conform delimitării din cerere.
 Nu s-au schimbat regulile PV A/PV B sau condițiile de semnare în aplicație.
 
-## Verificări executate
+Verificările actualizării #999 (inclusiv eșecul preexistent Ofertare din main) sunt în
+[RAPORT_PR999_ACTUALIZARE.md](RAPORT_PR999_ACTUALIZARE.md). Rezultatele de mai jos sunt istoricul verificării inițiale #1004.
+
+## Verificări executate inițial (#1004)
 
 - `npx vitest run`: **165 fișiere trecute, 3 sărite; 3.956 teste trecute, 22 sărite**.
 - `npx vite build`: **verde**; avertismente Vite privind importuri mixte și chunk-uri mari.
@@ -86,7 +89,7 @@ Nu s-au schimbat regulile PV A/PV B sau condițiile de semnare în aplicație.
   Aceasta este o verificare pe exemplul fictiv, nu o garanție de paginare pentru orice lungime a datelor sau orice versiune Word.
 
 Nu s-au rulat SQL, PostgREST, migrare/rollback sau probe cu date reale; sunt în afara acestei cereri.
-Validarea juridică finală a textului DRAFT rămâne la Răzvan.
+Textul Modelului 1U: validat de Razvan 06.11.2026. Textul juridic nu a fost schimbat la integrarea antetului.
 
 ## Reguli L01–L25
 

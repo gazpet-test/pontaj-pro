@@ -1,7 +1,9 @@
+// Rulare cu --verifica: compară octet cu octet fără scriere.
 // Genereaza exclusiv din textul Juridic; datele proiectului se completeaza ulterior in ERP.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
+import { adaugaAntet } from './redari_antet.mjs'
 
 const sursa = new URL('../docs/redari/TEXT_CERERE_IMPUTERNICIRE.md', import.meta.url)
 const destinatie = new URL('../public/redari/sabloane/cerere_imputernicire.docx', import.meta.url)
@@ -26,5 +28,16 @@ pune('word/_rels/document.xml.rels', `<Relationships xmlns="${rel}"><Relationshi
 pune('word/styles.xml', `<w:styles xmlns:w="${w}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="24"/><w:lang w:val="ro-RO"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`)
 const corp = paragrafe.map(p => `<w:p><w:pPr>${/^[a-d]\)/.test(p) ? '<w:ind w:left="720"/>' : ''}<w:spacing w:after="120"/></w:pPr><w:r><w:t xml:space="preserve">${xml(p)}</w:t></w:r></w:p>`).join('')
 pune('word/document.xml', `<w:document xmlns:w="${w}"><w:body>${corp}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`)
-writeFileSync(destinatie, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
-console.log(`${fileURLToPath(destinatie)}: ${chei.size} placeholder-e distincte; ${paragrafe.length} paragrafe`)
+// antetul oficial Gazpet în header-ul primei pagini (decizia Răzvan 05.11.2026, ca la celelalte șabloane Redări)
+await adaugaAntet(zip, { date: new Date('2026-01-01T00:00:00Z') })
+const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+if (process.argv.includes('--verifica')) {
+  let acum = null
+  try { acum = readFileSync(destinatie) } catch (e) { if (e.code !== 'ENOENT') throw e }
+  const egal = acum !== null && Buffer.compare(acum, buf) === 0
+  console.log(`${egal ? 'identic' : 'DIFERĂ'}  cerere_imputernicire.docx`)
+  if (!egal) process.exitCode = 1
+} else {
+  writeFileSync(destinatie, buf)
+  console.log(`${fileURLToPath(destinatie)}: ${chei.size} placeholder-e distincte; ${paragrafe.length} paragrafe`)
+}
