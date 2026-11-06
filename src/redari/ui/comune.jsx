@@ -121,7 +121,7 @@ export const azi = () => new Date().toISOString().slice(0, 10)
 export const msgEroare = (e, fallback = 'Eroare necunoscută') => (e?.message || e?.error_description || e?.details || (typeof e === 'string' ? e : null) || fallback)
 
 export const CALITATI = ['proprietar', 'coproprietar', 'mostenitor', 'arendas', 'utilizator', 'neidentificat']
-export const CANALE_CONVOCARE = ['posta', 'sms', 'email', 'afisare', 'telefon']
+export const CANALE_CONVOCARE = ['posta', 'sms', 'afisare', 'telefon']
 export const MOTIVE_RETUR = [
   { cod:'destinatar_necunoscut', eticheta:'Destinatar necunoscut' },
   { cod:'mutat', eticheta:'Mutat' },
