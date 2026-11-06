@@ -68,7 +68,7 @@ jobs:
           VERIFICA_DEBUG: ${{ vars.VERIFICA_DEBUG }}
         run: node scripts/verifica-edge-functions.mjs
 
-  # Poarta pe cheltuială: copiile poarta.ts identice + testele locale ale porții (fără rețea spre
+  # Poarta pe cheltuială: poarta unică (_shared/poartaCheltuiala.ts) + testele locale ale porții (fără rețea spre
   # Supabase/AI, deps simulate). Nu depinde de secrete — rulează pe orice PR.
   poarta:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -79,7 +79,7 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-      - name: poarta.ts identică în ambele funcții
+      - name: poarta unică pe cheltuială (fără copii, fără comparații manuale)
         run: node scripts/verifica-poarta-identica.mjs
       # Graful de module al funcțiilor (07.10.2026): logica pe care se sprijină verificarea „repo vs producție”.
       # esbuild vine prin vite, deci npm ci; testul pe repo-ul real cere graf demonstrabil pentru TOATE funcțiile.
@@ -93,9 +93,9 @@ jobs:
         with:
           deno-version: v2.x
       - name: deno check (entrypoint + handler)
-        run: deno check --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/index.ts supabase/functions/ofertare-plansa-citeste/handler.ts supabase/functions/ofertare-cantitati-extrage/index.ts supabase/functions/ofertare-cantitati-extrage/handler.ts supabase/functions/detect_plate_orphan_msgs/index.ts supabase/functions/detect_plate_orphan_msgs/handler.ts supabase/functions/extract-talon-ai/index.ts supabase/functions/extract-talon-ai/handler.ts supabase/functions/rag-normative/index.ts
+        run: deno check --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/index.ts supabase/functions/ofertare-plansa-citeste/handler.ts supabase/functions/ofertare-cantitati-extrage/index.ts supabase/functions/ofertare-cantitati-extrage/handler.ts supabase/functions/ofertare-cerinte/index.ts supabase/functions/ofertare-rfq-import/index.ts supabase/functions/ofertare-document-nou-citeste/index.ts supabase/functions/detect_plate_orphan_msgs/index.ts supabase/functions/detect_plate_orphan_msgs/handler.ts supabase/functions/extract-talon-ai/index.ts supabase/functions/extract-talon-ai/handler.ts supabase/functions/rag-normative/index.ts
       - name: deno test poarta
-        run: deno test --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts supabase/functions/detect_plate_orphan_msgs/acces_test.ts supabase/functions/detect_plate_orphan_msgs/handler_test.ts supabase/functions/extract-talon-ai/acces_test.ts supabase/functions/extract-talon-ai/handler_test.ts
+        run: deno test --node-modules-dir=none supabase/functions/_shared/poartaCheltuiala_test.ts supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts supabase/functions/ofertare-cerinte/autorizare_test.ts worker/ofertare/poarta_coada_test.ts supabase/functions/detect_plate_orphan_msgs/acces_test.ts supabase/functions/detect_plate_orphan_msgs/handler_test.ts supabase/functions/extract-talon-ai/acces_test.ts supabase/functions/extract-talon-ai/handler_test.ts
       # PR #707 (securitate etapa 2 grup A): ocolirea cu antet intern + literal nu are voie să revină, cu ORICE valoare
       # (testul de handler o prinde doar pentru valorile pe care le încearcă). index.ts rămâne doar entrypoint.
       - name: detect_plate_orphan_msgs fără ocolire

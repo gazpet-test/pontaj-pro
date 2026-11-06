@@ -43,6 +43,7 @@ on:
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
       - 'worker/ofertare/plansa*.ts'
+      - 'worker/ofertare/poarta_coada*.ts'
       - 'worker/ofertare/seap.ts'
       - 'worker/ofertare/egress.ts'
       - 'worker/ofertare/arhive_platforma_test.ts'
@@ -93,7 +94,15 @@ jobs:
           persist-credentials: false
       - name: Postgres 16 local (binare, fără serviciu)
         run: |
-          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then sudo apt-get update && sudo apt-get install --yes postgresql-16; fi
+          # 01.11.2026: imaginea ubuntu-latest (resolute) nu mai are postgresql-16 în arhivă → rezervă: repo-ul oficial PGDG
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-16 || {
+              sudo apt-get install --yes postgresql-common
+              sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+              sudo apt-get install --yes postgresql-16
+            }
+          fi
           sudo systemctl stop postgresql || true
       - name: Harness loturi MVP (20261024b)
         run: bash scripts/test_ofertare_loturi_mvp.sh --opreste
@@ -148,7 +157,9 @@ jobs:
           supabase/functions/api-consum-extern
           supabase/functions/ofertare-seap-import
           supabase/functions/ofertare-seap-veghe
+          supabase/functions/ofertare-cerinte/autorizare_test.ts
           worker/ofertare/plansa_test.ts
+          worker/ofertare/poarta_coada_test.ts
           worker/ofertare/arhive_platforma_test.ts
       # Verificarea R6 a manifestului (dovada sha 'urcat' nu se mai distruge — audit Jakarinos 07.10, #13). --no-check: tiparea
       # supabase-js din bibliotecă are erori vechi de tip „never”, fără efect la rulare (același cod rulează pe NAS).
