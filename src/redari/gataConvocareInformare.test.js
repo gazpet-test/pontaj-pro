@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from 'vitest'
 vi.mock('../lib/supabase.js', () => ({ supabase: {} }))
 import { motivBlocareConvocator } from './ui/comune.jsx'
-import { MOTIV_INFORMARE_NEPUBLICATA, cuInformarePublicata } from './informareGdpr.js'
+import { MOTIV_INFORMARE_NEPUBLICATA, cuInformarePublicata, avertismentInformare, AVERTISMENT_INFORMARE_NEVERIFICATA } from './informareGdpr.js'
 import { MESAJ_INFORMARE_NEGATA } from './docx.js'
 import { ghidModele } from './notificari.js'
 import { motiveGataConvocare } from './setari.js'
@@ -56,5 +56,16 @@ describe('cuInformarePublicata — ce primește Redari.jsx de la server', () => 
     expect((await cuInformarePublicata(client({ data: false, error: null }), pr)).informare_publicata).toBe(false)
     expect((await cuInformarePublicata(client({ data: null, error: { message: 'x' } }), pr)).informare_publicata).toBeNull()
     expect(motivBlocareConvocator(await cuInformarePublicata(client({ data: null, error: { message: 'x' } }), pr), uat, null)).toBeNull()
+  })
+})
+
+// Jakarinos r1 P2 (L18): verificarea eșuată nu blochează, dar „✓ gata” nu apare fără avertisment
+describe('avertismentInformare', () => {
+  it('null (RPC eșuat) → avertisment; true / false / lipsă → nimic (false are deja motivul de blocare)', () => {
+    expect(avertismentInformare({ ...pr, informare_publicata: null })).toBe(AVERTISMENT_INFORMARE_NEVERIFICATA)
+    expect(avertismentInformare({ ...pr, informare_publicata: true })).toBeNull()
+    expect(avertismentInformare({ ...pr, informare_publicata: false })).toBeNull()
+    expect(avertismentInformare(pr)).toBeNull()
+    expect(avertismentInformare(null)).toBeNull()
   })
 })

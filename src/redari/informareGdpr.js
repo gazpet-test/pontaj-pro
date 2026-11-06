@@ -21,6 +21,9 @@ export const informarePublicataPeProiect = (proiect) => proiect?.informare_publi
 // Motivul afișat pe butoane / bannere când serverul a spus clar „nepublicată” (Setări, UAT-uri, Notificări, Registru — L19: aceeași gardă).
 // Verificarea eșuată (null) NU blochează aici: generatorii recitesc proaspăt starea și refuză ei, cu mesajul lor.
 export const MOTIV_INFORMARE_NEPUBLICATA = 'informarea GDPR nepublicată: lipsește autorizarea Transgaz (art. 28) — nr., dată și PDF în ⚙️ Setări proiect (doar owner-ul)'
+// Jakarinos r1 P2 (L18): verificarea eșuată (null) nu blochează indicatorii, dar nici nu are voie să arate „✓ gata” fără avertisment.
+export const AVERTISMENT_INFORMARE_NEVERIFICATA = 'starea informării GDPR (autorizarea Transgaz) nu s-a putut verifica pe server — reîncarcă pagina'
+export const avertismentInformare = (proiect) => (proiect && 'informare_publicata' in proiect && proiect.informare_publicata === null ? AVERTISMENT_INFORMARE_NEVERIFICATA : null)
 export const informareVerificareEsuata = (proiect) => !!proiect && 'informare_publicata' in proiect && proiect.informare_publicata === null
 /** Întreabă serverul (RPC): true = publicată, false = nepublicată, null = verificarea a eșuat (eroare / RPC lipsă / răspuns neașteptat). */
 export async function informarePublicataServer(client, cod) {
