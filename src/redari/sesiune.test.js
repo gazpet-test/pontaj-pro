@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, agregaCentralizator, agregaTronsoane, intervalZiBucuresti } from './sesiune.js'
+import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, agregaCentralizator, agregaTronsoane, intervalZiBucuresti, poateMarcaPrezenta } from './sesiune.js'
 
 it.each([
   ['2026-11-02', '2026-11-01T22:00:00.000Z', '2026-11-02T22:00:00.000Z'],
@@ -88,4 +88,17 @@ describe('centralizatoare', () => {
     ])
     expect(agregaTronsoane([])).toEqual([])
   })
+})
+
+// Test weekend 06.11.2026: prezența doar în ziua sesiunii
+describe('poateMarcaPrezenta', () => {
+  const zile = [{ nr: 1, data: '2026-11-17', program: '09-16' }, { nr: 2, data: '2026-11-18', program: '09-16' }]
+  it.each([
+    ['2026-11-17', '2026-11-06', false],   // cazul din test: ziua 1 aleasă, azi 06.11
+    ['2026-11-17', '2026-11-17', true],
+    ['2026-11-18', '2026-11-17', false],   // altă zi de sesiune decât azi
+    ['2026-11-19', '2026-11-19', false],   // azi, dar nu e zi de sesiune
+    ['', '2026-11-17', false],
+  ])('zi %s, azi %s → %s', (zi, azi, ok) => expect(poateMarcaPrezenta(zile, zi, azi)).toBe(ok))
+  it('fără zile de sesiune → nu', () => expect(poateMarcaPrezenta([], '2026-11-17', '2026-11-17')).toBe(false))
 })

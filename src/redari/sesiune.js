@@ -29,6 +29,12 @@ export function rezumatSesiune(randuri, prezentiAzi = new Set()) {
   }
 }
 
+// Test weekend 06.11.2026: „Prezent” se putea apăsa pe 06.11 cu ziua 17.11 aleasă → prezență scrisă azi (data = acum), deținătorul trecea
+// în „A răspuns — participă” înainte de sesiune. Prezența se marchează DOAR în ziua sesiunii: ziua aleasă = azi (București) și e zi de sesiune.
+// Înregistrările întârziate merg prin 📋 Registru → 📞 Răspuns, canal „La sesiune (prezent)”.
+export const poateMarcaPrezenta = (zile, zi, azi) => !!zi && zi === azi && (zile || []).some(z => z.data === zi)
+export const MESAJ_PREZENTA_DOAR_AZI = 'Prezența se marchează doar în ziua sesiunii (ziua aleasă trebuie să fie azi). Pentru o prezență din altă zi: 📋 Registru → 📞 Răspuns, canal „La sesiune (prezent)”.'
+
 // Gemini f5 r1: data e timestamptz -> momentul real al prezentei (audit), nu miezul noptii UTC.
 // Unicitatea pe detinator + zi Bucuresti o impune indexul red_raspunsuri_prezenta_uq (20261129e).
 export const randPrezenta = ({ detinatorId, zi, acum }) => ({
