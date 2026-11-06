@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
-  NOD_H, NOD_L, cautaNoduri, cautaSecret, cheieLegatura, drumLegatura, limiteHarta, pasiFlux,
-  pozitiiNoduri, punctMargine, valideazaHarta, veciniNod, vizibile,
+  NOD_H, NOD_L, cautaNoduri, cautaSecret, cheieLegatura, comparaProbleme, drumLegatura, insigneProbleme, limiteHarta,
+  listaProbleme, numaraProbleme, pasiFlux, pozitiiNoduri, punctMargine, valideazaHarta, veciniNod, vizibile,
 } from './hartaAILogica.js'
 
 const exemplu = () => JSON.parse(readFileSync(new URL('../scripts/harta_ai/exemplu.json', import.meta.url), 'utf8'))
@@ -147,5 +147,64 @@ describe('Harta AI › fluxuri, vecini, căutare, filtre', () => {
     expect(v.ids.has('api')).toBe(false)
     expect(v.legaturi.some(x => x.cheie === 'w-api')).toBe(false)
     expect(v.legaturi.length).toBe(6)
+  })
+})
+
+describe('Harta AI › probleme', () => {
+  it('aceeași problemă (același id) pe nod și pe săgeată se numără o dată, cu ambele ținte', () => {
+    const l = listaProbleme(exemplu())
+    expect(l.length).toBe(3)
+    const p1 = l.find(r => r.problema.id === 'P1')
+    expect(p1.tinte).toEqual([{ tip: 'nod', id: 'worker' }, { tip: 'leg', id: 'w-api' }])
+  })
+  it('ordinea: gravitatea întâi (mare, medie, mică), apoi tipul, apoi titlul', () => {
+    expect(listaProbleme(exemplu()).map(r => r.problema.gravitate)).toEqual(['mare', 'medie', 'mica'])
+    const a = { gravitate: 'medie', tip: 'propunere', titlu: 'A' }
+    const b = { gravitate: 'medie', tip: 'greseala_coleg', titlu: 'Z' }
+    expect([a, b].sort(comparaProbleme)).toEqual([b, a])
+  })
+  it('numărătoarea pe tip × gravitate', () => {
+    const n = numaraProbleme(exemplu())
+    expect(n.total).toBe(3)
+    expect(n.oprire_tacuta).toEqual({ total: 1, mare: 1, medie: 0, mica: 0 })
+    expect(n.dublura_moarta.medie).toBe(1)
+    expect(n.propunere.mica).toBe(1)
+    expect(n.greseala_coleg.total).toBe(0)
+  })
+  it('insignele: o pastilă pe tip, în ordinea fixă a tipurilor, cu numărul de probleme', () => {
+    const ins = insigneProbleme([{ tip: 'propunere' }, { tip: 'oprire_tacuta' }, { tip: 'propunere' }, { tip: 'necunoscut' }])
+    expect(ins.map(i => [i.tip, i.numar])).toEqual([['oprire_tacuta', 1], ['propunere', 2]])
+    expect(insigneProbleme(undefined)).toEqual([])
+  })
+  it('validarea refuză tip / gravitate în afara listelor și titlul gol; avertizează la dovadă lipsă', () => {
+    const d = exemplu()
+    d.noduri[0].probleme = [{ tip: 'grava', gravitate: 'enorma', titlu: ' ' }]
+    d.noduri[1].probleme = [{ tip: 'propunere', gravitate: 'mica', titlu: 'Fără dovadă', propunere: 'x', sursa: 'y' }]
+    d.noduri[2].probleme = 'nu e listă'
+    const { erori, avertismente } = valideazaHarta(d)
+    expect(erori.some(e => e.includes('tip necunoscut „grava”'))).toBe(true)
+    expect(erori.some(e => e.includes('gravitate necunoscută „enorma”'))).toBe(true)
+    expect(erori.some(e => e.includes('lipsește titlul'))).toBe(true)
+    expect(erori.some(e => e.includes('„probleme” trebuie să fie listă'))).toBe(true)
+    expect(avertismente.some(a => a.includes('„Fără dovadă”: lipsește „dovada”'))).toBe(true)
+  })
+  it('„principal” mută ținta aleasă în față (click-ul din listă duce acolo)', () => {
+    const d = exemplu()
+    d.noduri.find(n => n.id === 'worker').probleme[0].principal = 'worker'
+    d.legaturi.find(l => l.id === 'w-api').probleme[0].principal = 'worker'
+    expect(listaProbleme(d).find(r => r.problema.id === 'P1').tinte[0]).toEqual({ tip: 'nod', id: 'worker' })
+    // săgeata vine prima în fișier dacă principalul e altul? aici legătura e după nod, deci testăm și inversul:
+    d.noduri.find(n => n.id === 'coada').probleme = [{ ...d.noduri.find(n => n.id === 'worker').probleme[0], principal: 'coada' }]
+    const r = listaProbleme(d).find(x => x.problema.id === 'P1')
+    expect(r.tinte[0]).toEqual({ tip: 'nod', id: 'coada' })
+    expect(r.tinte.length).toBe(3)
+  })
+  it('„principal” care nu e nod dă avertisment', () => {
+    const d = exemplu()
+    d.noduri.find(n => n.id === 'coada').probleme[0].principal = 'nu-exista'
+    expect(valideazaHarta(d).avertismente.some(a => a.includes('„principal” nu-exista nu e un nod'))).toBe(true)
+  })
+  it('căutarea găsește și după titlul unei probleme', () => {
+    expect(cautaNoduri(exemplu(), 'coada veche')).toEqual(['coada'])
   })
 })

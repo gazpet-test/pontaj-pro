@@ -35,6 +35,22 @@ describe('Harta AI › desenatorul', () => {
     const html = renderToStaticMarkup(<HartaAI date={exemplu()} />)
     expect(html).toMatch(/<text[^>]*>\?<\/text>/)
   })
+  it('problemele: butoanele „Doar cu probleme” și „Top probleme (N)”, insigne pe noduri, rezumat în prezentare', () => {
+    const html = renderToStaticMarkup(<HartaAI date={exemplu()} />)
+    expect(html).toContain('Doar cu probleme')
+    expect(html).toContain('Top probleme (3)')
+    expect(html).toContain('3 probleme găsite în review')
+    expect(html).toContain('Se oprește tăcut: 1')
+    expect(html).toContain('Propunere: 1')
+  })
+  it('fără probleme în fișier nu apar butoanele de probleme', () => {
+    const d = exemplu()
+    d.noduri.forEach(n => { delete n.probleme })
+    d.legaturi.forEach(l => { delete l.probleme })
+    const html = renderToStaticMarkup(<HartaAI date={d} />)
+    expect(html).not.toContain('Top probleme')
+    expect(html).not.toContain('Doar cu probleme')
+  })
   it('textScurt taie cu …', () => {
     expect(textScurt('abcdef', 4)).toBe('abc…')
     expect(textScurt('abc', 4)).toBe('abc')

@@ -3,40 +3,231 @@
     "titlu": "Exemplu de hartă (date fictive)",
     "stare_la": "01.01.2026",
     "nota": "Exemplu generic pentru format și teste. Harta reală NU stă în repo.",
-    "surse": ["exemplu — fără surse reale"],
-    "emailuri_permise": ["office@exemplu.ro"]
+    "surse": [
+      "exemplu — fără surse reale"
+    ],
+    "emailuri_permise": [
+      "office@exemplu.ro"
+    ]
   },
   "grupuri": [
-    { "id": "oameni", "nume": "Oameni și porți", "culoare": "#B74D55", "x": 0, "y": 0, "w": 420, "h": 200, "coloane": 2 },
-    { "id": "cloud", "nume": "Cloud", "culoare": "#24778B", "x": 460, "y": 0, "w": 420, "h": 200, "coloane": 2 },
-    { "id": "externi", "nume": "Servicii externe", "culoare": "#617282", "x": 920, "y": 0, "w": 230, "h": 200, "coloane": 1 }
+    {
+      "id": "oameni",
+      "nume": "Oameni și porți",
+      "culoare": "#B74D55",
+      "x": 0,
+      "y": 0,
+      "w": 420,
+      "h": 200,
+      "coloane": 2
+    },
+    {
+      "id": "cloud",
+      "nume": "Cloud",
+      "culoare": "#24778B",
+      "x": 460,
+      "y": 0,
+      "w": 420,
+      "h": 200,
+      "coloane": 2
+    },
+    {
+      "id": "externi",
+      "nume": "Servicii externe",
+      "culoare": "#617282",
+      "x": 920,
+      "y": 0,
+      "w": 230,
+      "h": 200,
+      "coloane": 1
+    }
   ],
   "noduri": [
-    { "id": "om", "grup": "oameni", "nume": "Ownerul", "tip": "om", "sub": "decide", "fisa": { "ce_e": "Omul care decide." } },
-    { "id": "da", "grup": "oameni", "nume": "„da” pe cheltuială", "tip": "poarta", "sub": "înainte de apelul plătit", "fisa": { "ce_e": "Poarta umană." } },
-    { "id": "ecran", "grup": "cloud", "nume": "Ecranul Documente", "tip": "ecran", "fisa": { "ce_e": "Butonul Procesează." } },
-    { "id": "coada", "grup": "cloud", "nume": "Coada de citire", "tip": "coada", "fisa": { "ce_e": "Rânduri de procesat.", "b_scrie": "stare, jurnal" } },
-    { "id": "worker", "grup": "cloud", "nume": "Worker de citire", "tip": "worker", "stare": "neverificat", "fisa": { "ce_e": "Ia rânduri din coadă.", "cont": "cheia API dedicată", "secrete": ["EXEMPLU_API_KEY"], "neverificat": ["intervalul exact — de confirmat"] } },
-    { "id": "tabel", "grup": "cloud", "nume": "Cerințe extrase", "tip": "tabel", "fisa": { "ce_e": "Rezultatul, neconfirmat." } },
-    { "id": "api", "grup": "externi", "nume": "API model plătit", "tip": "extern", "fisa": { "ce_e": "Furnizor extern." } }
+    {
+      "id": "om",
+      "grup": "oameni",
+      "nume": "Ownerul",
+      "tip": "om",
+      "sub": "decide",
+      "fisa": {
+        "ce_e": "Omul care decide."
+      }
+    },
+    {
+      "id": "da",
+      "grup": "oameni",
+      "nume": "„da” pe cheltuială",
+      "tip": "poarta",
+      "sub": "înainte de apelul plătit",
+      "fisa": {
+        "ce_e": "Poarta umană."
+      }
+    },
+    {
+      "id": "ecran",
+      "grup": "cloud",
+      "nume": "Ecranul Documente",
+      "tip": "ecran",
+      "fisa": {
+        "ce_e": "Butonul Procesează."
+      }
+    },
+    {
+      "id": "coada",
+      "grup": "cloud",
+      "nume": "Coada de citire",
+      "tip": "coada",
+      "fisa": {
+        "ce_e": "Rânduri de procesat.",
+        "b_scrie": "stare, jurnal"
+      },
+      "probleme": [
+        {
+          "tip": "dublura_moarta",
+          "gravitate": "medie",
+          "titlu": "Coadă veche nefolosită",
+          "dovada": "exemplu.sql:5",
+          "propunere": "De retras după confirmare",
+          "sursa": "exemplu"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "grup": "cloud",
+      "nume": "Worker de citire",
+      "tip": "worker",
+      "stare": "neverificat",
+      "fisa": {
+        "ce_e": "Ia rânduri din coadă.",
+        "cont": "cheia API dedicată",
+        "secrete": [
+          "EXEMPLU_API_KEY"
+        ],
+        "neverificat": [
+          "intervalul exact — de confirmat"
+        ]
+      },
+      "probleme": [
+        {
+          "id": "P1",
+          "tip": "oprire_tacuta",
+          "gravitate": "mare",
+          "titlu": "Cheia expiră fără nicio alertă",
+          "dovada": "exemplu.js:10",
+          "propunere": "Alertă cu 14 zile înainte de expirare",
+          "sursa": "exemplu"
+        },
+        {
+          "tip": "propunere",
+          "gravitate": "mica",
+          "titlu": "Interval de lucru mai scurt",
+          "dovada": "exemplu.js:20",
+          "propunere": "Rulare la 5 minute",
+          "sursa": "exemplu"
+        }
+      ]
+    },
+    {
+      "id": "tabel",
+      "grup": "cloud",
+      "nume": "Cerințe extrase",
+      "tip": "tabel",
+      "fisa": {
+        "ce_e": "Rezultatul, neconfirmat."
+      }
+    },
+    {
+      "id": "api",
+      "grup": "externi",
+      "nume": "API model plătit",
+      "tip": "extern",
+      "fisa": {
+        "ce_e": "Furnizor extern."
+      }
+    }
   ],
   "legaturi": [
-    { "de": "om", "la": "ecran", "ce": "apasă Procesează", "tip": "comanda" },
-    { "de": "ecran", "la": "da", "ce": "cere acordul", "tip": "poarta" },
-    { "de": "da", "la": "coada", "ce": "rând nou în coadă", "tip": "comanda" },
-    { "de": "coada", "la": "worker", "ce": "document de citit", "tip": "date" },
-    { "id": "w-api", "de": "worker", "la": "api", "ce": "text + prompt", "tip": "bani", "dublu": true, "detaliu": "răspunsul se întoarce pe aceeași săgeată" },
-    { "de": "worker", "la": "tabel", "ce": "cerințe (JSON)", "tip": "date" },
-    { "de": "tabel", "la": "om", "ce": "de confirmat", "tip": "poarta" }
+    {
+      "de": "om",
+      "la": "ecran",
+      "ce": "apasă Procesează",
+      "tip": "comanda"
+    },
+    {
+      "de": "ecran",
+      "la": "da",
+      "ce": "cere acordul",
+      "tip": "poarta"
+    },
+    {
+      "de": "da",
+      "la": "coada",
+      "ce": "rând nou în coadă",
+      "tip": "comanda"
+    },
+    {
+      "de": "coada",
+      "la": "worker",
+      "ce": "document de citit",
+      "tip": "date"
+    },
+    {
+      "id": "w-api",
+      "de": "worker",
+      "la": "api",
+      "ce": "text + prompt",
+      "tip": "bani",
+      "dublu": true,
+      "detaliu": "răspunsul se întoarce pe aceeași săgeată",
+      "probleme": [
+        {
+          "id": "P1",
+          "tip": "oprire_tacuta",
+          "gravitate": "mare",
+          "titlu": "Cheia expiră fără nicio alertă",
+          "dovada": "exemplu.js:10",
+          "propunere": "Alertă cu 14 zile înainte de expirare",
+          "sursa": "exemplu"
+        }
+      ]
+    },
+    {
+      "de": "worker",
+      "la": "tabel",
+      "ce": "cerințe (JSON)",
+      "tip": "date"
+    },
+    {
+      "de": "tabel",
+      "la": "om",
+      "ce": "de confirmat",
+      "tip": "poarta"
+    }
   ],
   "fluxuri": [
     {
       "id": "citire",
       "nume": "Document → cerințe",
       "descriere": "De la apăsarea butonului până la cerințele confirmate de om.",
-      "drum": ["om", "ecran", "da", "coada", "worker", "tabel", "om"],
-      "ramuri": [["worker", "api"]],
-      "note": ["Apelul plătit pornește doar după „da”."]
+      "drum": [
+        "om",
+        "ecran",
+        "da",
+        "coada",
+        "worker",
+        "tabel",
+        "om"
+      ],
+      "ramuri": [
+        [
+          "worker",
+          "api"
+        ]
+      ],
+      "note": [
+        "Apelul plătit pornește doar după „da”."
+      ]
     }
   ]
 }

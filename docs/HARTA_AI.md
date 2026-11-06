@@ -38,9 +38,11 @@ HTML-ul rezultat e un singur fișier, fără CDN și fără rețea (React e incl
       "ce_e": "…", "unde": "…", "cont": "…", "cand": "…",
       "a_extern": "…", "b_scrie": "…", "c_identitate": "…", "d_cine_porneste": "…", "e_confirmare": "…",
       "secrete": ["SUPABASE_SERVICE_ROLE_KEY"], "surse": ["worker/ofertare/main.ts"], "neverificat": ["…"]
-    }
+    },
+    "probleme": [ { "id": "P1", "tip": "oprire_tacuta", "gravitate": "mare", "titlu": "…", "dovada": "fișier:linie",
+                    "propunere": "…", "sursa": "review X", "principal": "worker_nas" } ]
   } ],
-  "legaturi": [ { "id": "opțional", "de": "worker_nas", "la": "api_anthropic", "ce": "text + prompt", "tip": "bani", "dublu": false, "cand": "…", "detaliu": "…", "surse": ["…"] } ],
+  "legaturi": [ { "id": "opțional", "de": "worker_nas", "la": "api_anthropic", "ce": "text + prompt", "tip": "bani", "dublu": false, "cand": "…", "detaliu": "…", "surse": ["…"], "probleme": [] } ],
   "fluxuri": [ { "id": "seap_cerinte", "nume": "…", "descriere": "…", "drum": ["a", "b", "c"], "ramuri": [["b", "x"]], "note": ["…"] } ]
 }
 ```
@@ -55,6 +57,11 @@ HTML-ul rezultat e un singur fișier, fără CDN și fără rețea (React e incl
   (se afișează pe galben); nu se ghicește.
 - **Legături** = săgeți pe direcția în care merge informația; `ce` = ce trece (brief, diff, PDF, text extras, rând în BD…).
   `tip`: `date`, `comanda`, `bani` (apel plătit), `poarta` (trece prin „da”), `cod`. `dublu: true` = în ambele sensuri.
+- **Probleme** (opțional, pe noduri și pe săgeți): listă de `{ id?, tip, gravitate, titlu, dovada, propunere, sursa, principal? }`.
+  `tip`: `greseala_coleg`, `oprire_tacuta`, `dublura_moarta`, `propunere`; `gravitate`: `mare`, `medie`, `mica`.
+  Aceeași problemă pusă pe mai multe noduri / săgeți poartă același `id` și se numără o dată; `principal` = nodul la care
+  duce click-ul din lista „Top probleme”. Pe hartă: insigne pe tip (culoare + număr), butonul „⚠ Doar cu probleme”,
+  secțiunea „Probleme” din fișă (cu dovada și propunerea) și lista „Top probleme” ordonată după gravitate.
 - **Fluxuri** = un drum întreg (ex. „document SEAP → OCR local → API → cerințe”). Fiecare pereche consecutivă din `drum` trebuie
   să aibă o legătură în acel sens (sau `dublu`). `ramuri` = legături în plus evidențiate odată cu fluxul.
 

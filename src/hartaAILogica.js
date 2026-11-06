@@ -44,6 +44,17 @@ export const TIPURI_LEGATURA = {
   cod: ['Cod / PR / verdict', '#6B4FA0'],
 }
 
+// Problemele puse pe noduri și pe săgeți (06.11.2026, din review-urile Fable): tip → [etichetă, culoare].
+export const TIPURI_PROBLEMA = {
+  greseala_coleg: ['Greșeală / uitare a colegului', '#C2410C'],
+  oprire_tacuta: ['Se oprește tăcut', '#B74D55'],
+  dublura_moarta: ['Dublură / automatizare moartă', '#617282'],
+  propunere: ['Propunere', '#24778B'],
+}
+// gravitate → [rang pentru sortare, etichetă]
+export const GRAVITATI = { mare: [3, 'Mare'], medie: [2, 'Medie'], mica: [1, 'Mică'] }
+const ORDINE_TIP = Object.keys(TIPURI_PROBLEMA)
+
 const lista = v => (Array.isArray(v) ? v : [])
 
 // Cheia unei legături: id-ul explicit sau de>la#index (index = poziția în listă, ca două legături între aceleași noduri să nu se confunde).
@@ -131,6 +142,23 @@ export function valideazaHarta(date) {
     perechi.add(`${l?.de}>${l?.la}`)
     if (l?.dublu) perechi.add(`${l?.la}>${l?.de}`)
   })
+  // Problemele (opționale) de pe noduri și săgeți: tip și gravitate din listele închise, titlu obligatoriu.
+  const verificaProbleme = (probleme, unde) => {
+    if (probleme == null) return
+    if (!Array.isArray(probleme)) { erori.push(`${unde}: „probleme” trebuie să fie listă`); return }
+    probleme.forEach((p, i) => {
+      const u = `${unde}.probleme[${i}]`
+      if (!p || typeof p !== 'object') { erori.push(`${u}: nu e obiect`); return }
+      if (!TIPURI_PROBLEMA[p.tip]) erori.push(`${u}: tip necunoscut „${p.tip}” (${ORDINE_TIP.join(' / ')})`)
+      if (!GRAVITATI[p.gravitate]) erori.push(`${u}: gravitate necunoscută „${p.gravitate}” (mare / medie / mica)`)
+      if (!String(p.titlu || '').trim()) erori.push(`${u}: lipsește titlul`)
+      for (const k of ['dovada', 'propunere', 'sursa']) if (!String(p[k] || '').trim()) avertismente.push(`${u} „${p.titlu || ''}”: lipsește „${k}”`)
+      if (p.principal && !idNod.has(p.principal)) avertismente.push(`${u}: „principal” ${p.principal} nu e un nod`)
+    })
+  }
+  noduri.forEach((n, i) => verificaProbleme(n?.probleme, `noduri[${i}] ${n?.id || ''}`.trim()))
+  legaturi.forEach((l, i) => verificaProbleme(l?.probleme, `legaturi[${i}] ${l?.de} → ${l?.la}`))
+
   const idFlux = new Set()
   fluxuri.forEach((f, i) => {
     if (!f?.id) erori.push(`fluxuri[${i}] fără id`)
@@ -244,13 +272,13 @@ export function veciniNod(date, id) {
 
 const norm = s => String(s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 
-// Căutare fără diacritice în nume, subtitlu și fișă (ce_e, cont, secrete). Gol = nimic.
+// Căutare fără diacritice în nume, subtitlu, fișă (ce_e, cont, secrete) și titlurile problemelor. Gol = nimic.
 export function cautaNoduri(date, text) {
   const q = norm(text).trim()
   if (!q) return []
   return lista(date?.noduri).filter(n => {
     const f = n.fisa || {}
-    return [n.id, n.nume, n.sub, f.ce_e, f.cont, f.cand, ...lista(f.secrete)].some(v => norm(v).includes(q))
+    return [n.id, n.nume, n.sub, f.ce_e, f.cont, f.cand, ...lista(f.secrete), ...lista(n.probleme).map(p => p?.titlu)].some(v => norm(v).includes(q))
   }).map(n => n.id)
 }
 
@@ -260,6 +288,57 @@ export function vizibile(date, grupuriAscunse = new Set()) {
   const ids = new Set(noduri.map(n => n.id))
   const legaturi = lista(date?.legaturi).map((l, i) => ({ l, i, cheie: cheieLegatura(l, i) })).filter(x => ids.has(x.l.de) && ids.has(x.l.la))
   return { noduri, ids, legaturi }
+}
+
+// --- Probleme -----------------------------------------------------------------------------------------------------
+// Rangul unei probleme: întâi gravitatea, apoi tipul (greșeală, oprire tăcută, dublură, propunere), apoi titlul.
+export function comparaProbleme(a, b) {
+  const g = (GRAVITATI[b.gravitate]?.[0] || 0) - (GRAVITATI[a.gravitate]?.[0] || 0)
+  if (g) return g
+  const t = ORDINE_TIP.indexOf(a.tip) - ORDINE_TIP.indexOf(b.tip)
+  if (t) return t
+  return String(a.titlu || '').localeCompare(String(b.titlu || ''), 'ro')
+}
+
+// Toate problemele hărții, o dată fiecare: aceeași problemă (același „id”) pusă pe mai multe noduri / săgeți apare
+// o singură dată, cu toate țintele ei; fără „id”, fiecare apariție e o problemă separată. Ordonate cu comparaProbleme.
+// „principal” (opțional, id de nod) = ținta la care duce click-ul din listă; altfel prima întâlnită în fișier.
+export function listaProbleme(date) {
+  const dupaId = new Map()
+  const toate = []
+  const adauga = (p, tinta) => {
+    if (!p || typeof p !== 'object') return
+    const cheie = p.id ? `id:${p.id}` : null
+    if (cheie && dupaId.has(cheie)) { dupaId.get(cheie).tinte.push(tinta); return }
+    const rec = { cheie: cheie || `${tinta.tip}:${tinta.id}#${toate.length}`, problema: p, tinte: [tinta] }
+    if (cheie) dupaId.set(cheie, rec)
+    toate.push(rec)
+  }
+  lista(date?.noduri).forEach(n => lista(n?.probleme).forEach(p => adauga(p, { tip: 'nod', id: n.id })))
+  lista(date?.legaturi).forEach((l, i) => lista(l?.probleme).forEach(p => adauga(p, { tip: 'leg', id: cheieLegatura(l, i) })))
+  for (const r of toate) {
+    const i = r.problema.principal ? r.tinte.findIndex(t => t.tip === 'nod' && t.id === r.problema.principal) : -1
+    if (i > 0) r.tinte.unshift(...r.tinte.splice(i, 1))
+  }
+  return toate.sort((a, b) => comparaProbleme(a.problema, b.problema))
+}
+
+// Numărătoarea pe tip × gravitate (fiecare problemă o dată, ca în listaProbleme).
+export function numaraProbleme(date) {
+  const r = { total: 0 }
+  for (const t of ORDINE_TIP) { r[t] = { total: 0 }; for (const g of Object.keys(GRAVITATI)) r[t][g] = 0 }
+  for (const { problema: p } of listaProbleme(date)) {
+    if (!r[p.tip] || !(p.gravitate in r[p.tip])) continue
+    r[p.tip][p.gravitate]++; r[p.tip].total++; r.total++
+  }
+  return r
+}
+
+// Insignele unui nod / unei săgeți: câte probleme pe fiecare tip, în ordinea fixă a tipurilor.
+export function insigneProbleme(probleme) {
+  const c = {}
+  for (const p of lista(probleme)) if (TIPURI_PROBLEMA[p?.tip]) c[p.tip] = (c[p.tip] || 0) + 1
+  return ORDINE_TIP.filter(t => c[t]).map(t => ({ tip: t, numar: c[t], culoare: TIPURI_PROBLEMA[t][1] }))
 }
 
 // Câmpurile fișei, în ordinea afișării (a–e din CLAUDE.md pct. 7, plus contextul nodului).

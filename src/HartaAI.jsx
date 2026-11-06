@@ -3,10 +3,12 @@
 // legarea într-o pagină owner-only și citirea JSON-ului din BD se fac după decizia lui Răzvan. Format: docs/HARTA_AI.md.
 // Fără librării noi: SVG + React. Zoom (rotiță / butoane / ciupit), mutare prin tragere, click pe nod → fișa lui,
 // filtru pe grup, evidențierea unui flux întreg, săgeți animate discret pe direcția informației.
+// Problemele (câmpul „probleme” pe noduri și săgeți, din review-uri): insigne pe tip, filtrul „doar cu probleme”,
+// secțiunea din fișă și lista „Top probleme” ordonată după gravitate (click = mergi la nod / săgeată).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CAMPURI_FISA, STARI_NOD, TIPURI_LEGATURA, TIPURI_NOD, cautaNoduri, drumLegatura, limiteHarta,
-  pasiFlux, pozitiiNoduri, valideazaHarta, veciniNod, vizibile,
+  CAMPURI_FISA, GRAVITATI, STARI_NOD, TIPURI_LEGATURA, TIPURI_NOD, TIPURI_PROBLEMA, cautaNoduri, drumLegatura,
+  insigneProbleme, limiteHarta, listaProbleme, numaraProbleme, pasiFlux, pozitiiNoduri, valideazaHarta, veciniNod, vizibile,
 } from './hartaAILogica.js'
 
 const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20', redBg: '#FBEDEE', yellowBg: '#FBF3E2' }
@@ -77,6 +79,8 @@ function HartaDesen({ date, inaltime }) {
   const [toateEtichetele, setToateEtichetele] = useState(false)
   const [animatie, setAnimatie] = useState(true)
   const [arataGrupuri, setArataGrupuri] = useState(null) // null = implicit: deschis pe ecran lat, închis pe telefon
+  const [doarProbleme, setDoarProbleme] = useState(false)
+  const [panouProbleme, setPanouProbleme] = useState(false)
   const [vedere, setVedere] = useState({ x: 0, y: 0, k: 0.4 })
   const [marime, setMarime] = useState({ w: 900, h: 600, cont: 1200, masurat: false })
 
@@ -104,6 +108,14 @@ function HartaDesen({ date, inaltime }) {
   const gasite = useMemo(() => new Set(cautaNoduri(date, cauta)), [date, cauta])
   const vecini = useMemo(() => (selectat?.tip === 'nod' ? veciniNod(date, selectat.id) : null), [date, selectat])
   const legSelectata = useMemo(() => (selectat?.tip === 'leg' ? viz.legaturi.find(x => x.cheie === selectat.id) || null : null), [viz, selectat])
+  const probleme = useMemo(() => listaProbleme(date), [date])
+  // Ce are probleme: nodurile cu „probleme” + capetele săgeților cu „probleme”; cheile săgeților cu probleme.
+  const cuProbleme = useMemo(() => {
+    const noduri = new Set(), chei = new Set()
+    lista(date.noduri).forEach(n => { if (lista(n.probleme).length) noduri.add(n.id) })
+    viz.legaturi.forEach(x => { if (lista(x.l.probleme).length) { chei.add(x.cheie); noduri.add(x.l.de); noduri.add(x.l.la) } })
+    return { noduri, chei }
+  }, [date, viz])
 
   // Mărimea zonei de desen + lățimea totală (sub ~860 px panoul trece sub hartă).
   useEffect(() => {
@@ -163,6 +175,16 @@ function HartaDesen({ date, inaltime }) {
     })
   }, [poz, marime])
 
+  // Centrare pe mijlocul unei săgeți (din lista de probleme).
+  const centreazaPeLeg = useCallback(cheie => {
+    const x = viz.legaturi.find(v => v.cheie === cheie)
+    const pa = x && poz[x.l.de], pb = x && poz[x.l.la]
+    if (!pa || !pb) return
+    atinsRef.current = true
+    const cx = (pa.x + pa.w / 2 + pb.x + pb.w / 2) / 2, cy = (pa.y + pa.h / 2 + pb.y + pb.h / 2) / 2
+    setVedere(v => { const k = Math.max(v.k, 0.6); return { k, x: marime.w / 2 - cx * k, y: marime.h / 2 - cy * k } })
+  }, [viz, poz, marime])
+
   // Tragere (mutare) și ciupit (zoom cu două degete). Captura pointerului abia după 4 px, ca un click pe nod să rămână click.
   const laApasare = e => {
     const t = tragereRef.current
@@ -211,7 +233,7 @@ function HartaDesen({ date, inaltime }) {
     return () => window.removeEventListener('keydown', k)
   }, [])
 
-  // Ce e evidențiat: fluxul activ, altfel vecinii nodului selectat, altfel legătura selectată.
+  // Ce e evidențiat: fluxul activ, altfel vecinii nodului selectat, altfel legătura selectată, altfel (filtrul) ce are probleme.
   const evid = useMemo(() => {
     if (flux) return { noduri: flux.noduri, chei: flux.chei }
     if (vecini && selectat) {
@@ -219,8 +241,13 @@ function HartaDesen({ date, inaltime }) {
       return { noduri: new Set([selectat.id, ...toate.flatMap(x => [x.legatura.de, x.legatura.la])]), chei: new Set(toate.map(x => x.cheie)) }
     }
     if (legSelectata) return { noduri: new Set([legSelectata.l.de, legSelectata.l.la]), chei: new Set([legSelectata.cheie]) }
+    if (doarProbleme) return cuProbleme
     return null
-  }, [flux, vecini, selectat, legSelectata])
+  }, [flux, vecini, selectat, legSelectata, doarProbleme, cuProbleme])
+  const alegeTinta = t => {
+    if (t.tip === 'nod') { setSelectat({ tip: 'nod', id: t.id }); centreazaPe(t.id) }
+    else { setSelectat({ tip: 'leg', id: t.id }); centreazaPeLeg(t.id) }
+  }
 
   // Decalaj pentru legăturile paralele / din sens opus între aceleași două noduri.
   const decalaje = useMemo(() => {
@@ -262,6 +289,11 @@ function HartaDesen({ date, inaltime }) {
           <button style={S.button} onClick={() => potriveste()}>⤢ Toată harta</button>
           <button style={{ ...S.button, ...(toateEtichetele ? { borderColor: G.blue, color: G.blue } : {}) }} aria-pressed={toateEtichetele} onClick={() => setToateEtichetele(v => !v)}>Etichete</button>
           <button style={{ ...S.button, ...(animatie ? { borderColor: G.blue, color: G.blue } : {}) }} aria-pressed={animatie} onClick={() => setAnimatie(v => !v)}>〰 Animație</button>
+          {probleme.length > 0 && <>
+            <button style={{ ...S.button, ...(doarProbleme ? { borderColor: G.red, color: G.red } : {}) }} aria-pressed={doarProbleme} onClick={() => setDoarProbleme(v => !v)}>⚠ Doar cu probleme</button>
+            <button style={{ ...S.button, ...(panouProbleme ? { borderColor: G.red, color: G.red } : {}) }} aria-pressed={panouProbleme}
+              onClick={() => { setPanouProbleme(v => !v); setSelectat(null) }}>Top probleme ({probleme.length})</button>
+          </>}
           <button style={S.button} aria-expanded={grupuriDeschise} onClick={() => setArataGrupuri(!grupuriDeschise)}>
             {grupuriDeschise ? '▾' : '▸'} Grupuri{grupuriAscunse.size ? ` (${grupuriAscunse.size} ascunse)` : ''}
           </button>
@@ -335,6 +367,13 @@ function HartaDesen({ date, inaltime }) {
                   </text>
                 )
               })}
+              {viz.legaturi.map(x => {
+                const ins = insigneProbleme(x.l.probleme)
+                const pa = poz[x.l.de], pb = poz[x.l.la]
+                if (!ins.length || !pa || !pb || (evid && !evid.chei.has(x.cheie))) return null
+                const { eticheta } = drumLegatura(pa, pb, decalaje[x.cheie] || 0)
+                return <Insigne key={`p-${x.cheie}`} ins={ins} x={eticheta.x} y={eticheta.y - 20} centru onClick={peClick(() => setSelectat({ tip: 'leg', id: x.cheie }))} />
+              })}
               {viz.noduri.map(n => {
                 const p = poz[n.id]
                 if (!p) return null
@@ -363,6 +402,7 @@ function HartaDesen({ date, inaltime }) {
                     {(stare === 'neverificat' || stare === 'eroare') && (
                       <g><circle cx={p.x + p.w - 4} cy={p.y + 4} r={8} fill={STARI_NOD[stare][1]} /><text x={p.x + p.w - 4} y={p.y + 8} textAnchor="middle" fontSize={11} fontWeight={700} fill="#FFFFFF">{stare === 'eroare' ? '!' : '?'}</text></g>
                     )}
+                    {lista(n.probleme).length > 0 && <Insigne ins={insigneProbleme(n.probleme)} x={p.x + p.w - 4} y={p.y + p.h - 8} />}
                     {pas && (
                       <g><circle cx={p.x + 2} cy={p.y + 2} r={10} fill={G.text} /><text x={p.x + 2} y={p.y + 6} textAnchor="middle" fontSize={11} fontWeight={700} fill="#FFFFFF">{pas}</text></g>
                     )}
@@ -380,31 +420,156 @@ function HartaDesen({ date, inaltime }) {
         <div ref={panouRef} style={{ width: ingust ? 'auto' : 360, flex: ingust ? 'none' : '0 0 360px', maxHeight: ingust ? 'none' : inaltimeHarta, overflowY: 'auto', ...S.panel }}>
           {selectat?.tip === 'nod' && nodDupaId[selectat.id]
             ? <FisaNod n={nodDupaId[selectat.id]} grup={grupDupaId[nodDupaId[selectat.id].grup]} vecini={vecini} nodDupaId={nodDupaId}
+                probleme={probleme} alegeTinta={alegeTinta} inapoi={panouProbleme} legaturi={viz.legaturi}
                 alegeNod={id => { setSelectat({ tip: 'nod', id }); centreazaPe(id) }} alegeLeg={c => setSelectat({ tip: 'leg', id: c })} inchide={() => setSelectat(null)} />
             : legSelectata
-              ? <FisaLegatura x={legSelectata} nodDupaId={nodDupaId} alegeNod={id => { setSelectat({ tip: 'nod', id }); centreazaPe(id) }} inchide={() => setSelectat(null)} />
-              : flux
-                ? <FisaFlux pf={flux} nodDupaId={nodDupaId} alegeNod={id => { setSelectat({ tip: 'nod', id }); centreazaPe(id) }} inchide={() => setFluxActiv(null)} />
-                : <Prezentare meta={meta} date={date} fluxuri={fluxuri} alegeFlux={alegeFlux} />}
+              ? <FisaLegatura x={legSelectata} nodDupaId={nodDupaId} probleme={probleme} alegeTinta={alegeTinta} inapoi={panouProbleme} legaturi={viz.legaturi}
+                  alegeNod={id => { setSelectat({ tip: 'nod', id }); centreazaPe(id) }} inchide={() => setSelectat(null)} />
+              : panouProbleme
+                ? <TopProbleme probleme={probleme} date={date} nodDupaId={nodDupaId} legaturi={viz.legaturi} alegeTinta={alegeTinta} inchide={() => setPanouProbleme(false)} />
+                : flux
+                  ? <FisaFlux pf={flux} nodDupaId={nodDupaId} alegeNod={id => { setSelectat({ tip: 'nod', id }); centreazaPe(id) }} inchide={() => setFluxActiv(null)} />
+                  : <Prezentare meta={meta} date={date} fluxuri={fluxuri} alegeFlux={alegeFlux} probleme={probleme} deschideProbleme={() => setPanouProbleme(true)} />}
         </div>
       </div>
     </div>
   )
 }
 
-function Inchide({ onClick }) {
-  return <button style={{ ...S.button, minHeight: 28, padding: '2px 9px', float: 'right' }} onClick={onClick} aria-label="Închide">✕</button>
+function Inchide({ onClick, eticheta }) {
+  return <button style={{ ...S.button, minHeight: 28, padding: '2px 9px', float: 'right' }} onClick={onClick} aria-label={eticheta || 'Închide'}>{eticheta ? `← ${eticheta}` : '✕'}</button>
 }
 
-function Prezentare({ meta, date, fluxuri, alegeFlux }) {
+// Insignele de probleme pe un nod / o săgeată: câte o pastilă pe tip (culoarea tipului, numărul de probleme).
+// x = marginea dreaptă (sau centrul, cu „centru”), y = mijlocul pastilei.
+const LAT_INSIGNA = 22, PAS_INSIGNA = 25
+function Insigne({ ins, x, y, centru, onClick }) {
+  const total = ins.length * PAS_INSIGNA - (PAS_INSIGNA - LAT_INSIGNA)
+  const x0 = centru ? x - total / 2 : x - total
+  return (
+    <g onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}>
+      {ins.map((i, k) => (
+        <g key={i.tip}>
+          <title>{`${TIPURI_PROBLEMA[i.tip][0]}: ${i.numar}`}</title>
+          <rect x={x0 + k * PAS_INSIGNA} y={y - 7.5} width={LAT_INSIGNA} height={15} rx={7.5} fill={i.culoare} stroke="#FFFFFF" strokeWidth={1.5} />
+          <text x={x0 + k * PAS_INSIGNA + LAT_INSIGNA / 2} y={y + 4} textAnchor="middle" fontSize={10.5} fontWeight={700} fill="#FFFFFF">{i.numar}</text>
+        </g>
+      ))}
+    </g>
+  )
+}
+
+function Pastila({ culoare, text, plin }) {
+  return <span style={{ display: 'inline-block', borderRadius: 9, padding: '1px 7px', fontSize: 11, fontWeight: 700, lineHeight: 1.5, color: plin ? '#FFFFFF' : culoare, background: plin ? culoare : `${culoare}1A`, border: `1px solid ${culoare}` }}>{text}</span>
+}
+const CULORI_GRAVITATE = { mare: G.red, medie: G.yellow, mica: G.muted }
+
+// O problemă în fișă: tip + gravitate, titlu, dovada, propunerea, sursa; „și la” = celelalte noduri / săgeți cu aceeași problemă.
+function ProblemaCard({ p, alte, alegeTinta, numeTinta }) {
+  const tip = TIPURI_PROBLEMA[p.tip] || ['Problemă', G.muted]
+  return (
+    <div style={{ borderLeft: `4px solid ${tip[1]}`, background: G.bg, borderRadius: 6, padding: '6px 9px', margin: '6px 0' }}>
+      <div style={{ ...S.row, gap: 5 }}><Pastila culoare={tip[1]} text={tip[0]} plin /><Pastila culoare={CULORI_GRAVITATE[p.gravitate] || G.muted} text={GRAVITATI[p.gravitate]?.[1] || p.gravitate} /></div>
+      <div style={{ fontSize: 13, fontWeight: 650, margin: '4px 0 2px' }}>{p.titlu}</div>
+      {p.propunere && <div style={{ fontSize: 12.5, lineHeight: 1.45 }}><b>Propunere:</b> {p.propunere}</div>}
+      {p.dovada && <div style={{ ...S.mono, fontSize: 11.5, color: G.muted, marginTop: 3, wordBreak: 'break-word' }}>{p.dovada}</div>}
+      {p.sursa && <div style={{ ...S.small, fontSize: 11.5 }}>Sursa: {p.sursa}</div>}
+      {alte?.length > 0 && <div style={{ ...S.small, fontSize: 11.5 }}>Și la: {alte.map((t, i) => (
+        <button key={i} style={{ border: 'none', background: 'none', padding: 0, color: G.blue, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, textDecoration: 'underline', marginRight: 6 }} onClick={() => alegeTinta(t)}>{numeTinta(t)}</button>
+      ))}</div>}
+    </div>
+  )
+}
+
+// Secțiunea „Probleme” din fișa unui nod sau a unei săgeți.
+function SectiuneProbleme({ proprii, tinta, probleme, alegeTinta, numeTinta }) {
+  const l = lista(proprii)
+  if (!l.length) return null
+  const sortate = [...l].sort((a, b) => (GRAVITATI[b.gravitate]?.[0] || 0) - (GRAVITATI[a.gravitate]?.[0] || 0))
+  const alteTinte = p => {
+    const rec = p.id ? probleme.find(r => r.problema.id === p.id) : null
+    return rec ? rec.tinte.filter(t => !(t.tip === tinta.tip && t.id === tinta.id)) : []
+  }
+  return (
+    <div>
+      <div style={{ ...S.eticheta, color: G.red }}>Probleme ({l.length})</div>
+      {sortate.map((p, i) => <ProblemaCard key={p.id || i} p={p} alte={alteTinte(p)} alegeTinta={alegeTinta} numeTinta={numeTinta} />)}
+    </div>
+  )
+}
+
+// Lista „Top probleme”: toate problemele, o dată fiecare, ordonate după gravitate; filtre pe tip și gravitate.
+function TopProbleme({ probleme, date, nodDupaId, legaturi, alegeTinta, inchide }) {
+  const [tip, setTip] = useState('toate')
+  const [grav, setGrav] = useState('toate')
+  const nr = useMemo(() => numaraProbleme(date), [date])
+  const numeTinta = useNumeTinta(nodDupaId, legaturi)
+  const vizibile = probleme.filter(r => (tip === 'toate' || r.problema.tip === tip) && (grav === 'toate' || r.problema.gravitate === grav))
+  const buton = (activ, culoare) => ({ ...S.button, minHeight: 28, padding: '3px 9px', fontSize: 12, ...(activ ? { borderColor: culoare, color: culoare, fontWeight: 700 } : {}) })
+  return (
+    <div>
+      <Inchide onClick={inchide} />
+      <h3 style={{ ...S.h, paddingRight: 36 }}>Top probleme ({nr.total})</h3>
+      <div style={S.small}>Ordonate după gravitate. Click pe o problemă = mergi la nod / săgeată.</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, margin: '8px 0' }}>
+        <thead><tr><th style={{ textAlign: 'left', fontWeight: 600, color: G.muted }}>Tip</th>{Object.entries(GRAVITATI).map(([g, [, e]]) => <th key={g} style={{ textAlign: 'right', fontWeight: 600, color: G.muted }}>{e}</th>)}<th style={{ textAlign: 'right', fontWeight: 600, color: G.muted }}>Total</th></tr></thead>
+        <tbody>{Object.entries(TIPURI_PROBLEMA).map(([t, [e, c]]) => (
+          <tr key={t}><td style={{ padding: '2px 0' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5, background: c, marginRight: 5 }} />{e}</td>
+            {Object.keys(GRAVITATI).map(g => <td key={g} style={{ textAlign: 'right' }}>{nr[t][g]}</td>)}<td style={{ textAlign: 'right', fontWeight: 700 }}>{nr[t].total}</td></tr>
+        ))}</tbody>
+      </table>
+      <div style={{ ...S.row, gap: 4, marginBottom: 4 }}>
+        <button style={buton(tip === 'toate', G.text)} onClick={() => setTip('toate')}>Toate tipurile</button>
+        {Object.entries(TIPURI_PROBLEMA).map(([t, [e, c]]) => <button key={t} style={buton(tip === t, c)} aria-pressed={tip === t} onClick={() => setTip(t)}>{e}</button>)}
+      </div>
+      <div style={{ ...S.row, gap: 4, marginBottom: 6 }}>
+        <button style={buton(grav === 'toate', G.text)} onClick={() => setGrav('toate')}>Orice gravitate</button>
+        {Object.entries(GRAVITATI).map(([g, [, e]]) => <button key={g} style={buton(grav === g, CULORI_GRAVITATE[g])} aria-pressed={grav === g} onClick={() => setGrav(g)}>{e}</button>)}
+      </div>
+      <div style={{ display: 'grid', gap: 5 }}>
+        {vizibile.map(r => {
+          const p = r.problema
+          const c = TIPURI_PROBLEMA[p.tip]?.[1] || G.muted
+          return (
+            <button key={r.cheie} onClick={() => alegeTinta(r.tinte[0])}
+              style={{ ...S.button, textAlign: 'left', minHeight: 0, padding: '6px 9px', borderLeft: `4px solid ${c}`, display: 'block', width: '100%' }}>
+              <div style={{ ...S.row, gap: 5 }}><Pastila culoare={CULORI_GRAVITATE[p.gravitate] || G.muted} text={GRAVITATI[p.gravitate]?.[1] || p.gravitate} plin /><span style={{ ...S.small, fontSize: 11.5 }}>{TIPURI_PROBLEMA[p.tip]?.[0]}</span></div>
+              <div style={{ fontSize: 13, fontWeight: 600, margin: '3px 0 1px' }}>{p.titlu}</div>
+              <div style={{ ...S.small, fontSize: 11.5 }}>{r.tinte.map(numeTinta).join(' · ')}{p.sursa ? ` — ${p.sursa}` : ''}</div>
+            </button>
+          )
+        })}
+        {!vizibile.length && <div style={S.small}>Nicio problemă pe filtrul ales.</div>}
+      </div>
+    </div>
+  )
+}
+
+// Numele unei ținte de problemă: numele nodului, sau „A → B” pentru o săgeată.
+function useNumeTinta(nodDupaId, legaturi) {
+  return useCallback(t => {
+    if (t.tip === 'nod') return nodDupaId[t.id]?.nume || t.id
+    const x = lista(legaturi).find(v => v.cheie === t.id)
+    return x ? `${textScurt(nodDupaId[x.l.de]?.nume, 22)} → ${textScurt(nodDupaId[x.l.la]?.nume, 22)}` : 'săgeată ascunsă'
+  }, [nodDupaId, legaturi])
+}
+
+function Prezentare({ meta, date, fluxuri, alegeFlux, probleme = [], deschideProbleme }) {
   const nr = lista(date.noduri).length, nl = lista(date.legaturi).length
   const neverificate = lista(date.noduri).filter(n => n.stare === 'neverificat' || lista(n.fisa?.neverificat).length).length
+  const mari = probleme.filter(r => r.problema.gravitate === 'mare').length
   return (
     <div>
       <h3 style={S.h}>{meta.titlu || 'Harta automatizărilor'}</h3>
       {meta.stare_la && <div style={S.small}>Starea din {meta.stare_la}{meta.autor ? ` · ${meta.autor}` : ''}</div>}
       {meta.nota && <p style={{ fontSize: 13, lineHeight: 1.5, margin: '8px 0' }}>{meta.nota}</p>}
       <div style={S.small}>{nr} noduri · {nl} legături · {fluxuri.length} fluxuri · {neverificate} cu puncte neverificate</div>
+      {probleme.length > 0 && (
+        <button onClick={deschideProbleme} style={{ ...S.button, display: 'block', width: '100%', textAlign: 'left', marginTop: 8, borderColor: G.red, borderLeft: `4px solid ${G.red}` }}>
+          <b style={{ color: G.red }}>⚠ {probleme.length} probleme găsite în review</b>{mari ? ` · ${mari} mari` : ''}
+          <div style={{ ...S.small, marginTop: 2 }}>Deschide „Top probleme” (ordonate după gravitate)</div>
+        </button>
+      )}
       {fluxuri.length > 0 && <>
         <div style={S.eticheta}>Fluxuri (click = evidențiază tot drumul)</div>
         <div style={{ display: 'grid', gap: 5 }}>
@@ -425,6 +590,12 @@ function Prezentare({ meta, date, fluxuri, alegeFlux }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 10px', fontSize: 12.5 }}>
         {Object.entries(TIPURI_NOD).map(([k, [ic, nume]]) => <div key={k}>{ic} {nume}</div>)}
       </div>
+      {probleme.length > 0 && <>
+        <div style={S.eticheta}>Legendă: insigne de probleme</div>
+        <div style={{ display: 'grid', gap: 3, fontSize: 12.5 }}>
+          {Object.entries(TIPURI_PROBLEMA).map(([k, [nume, c]]) => <div key={k} style={{ ...S.row, gap: 6 }}><Pastila culoare={c} text="n" plin />{nume}</div>)}
+        </div>
+      </>}
       <div style={{ ...S.small, marginTop: 6 }}>Chenar punctat = serviciu extern · chenar întrerupt = oprit · <span style={{ color: G.yellow, fontWeight: 700 }}>?</span> = neverificat · <span style={{ color: G.red, fontWeight: 700 }}>!</span> = eroare la ultima rulare · chenar roșu = poartă umană („da”).</div>
       {meta.surse && <>
         <div style={S.eticheta}>Surse</div>
@@ -445,17 +616,19 @@ function Camp({ eticheta, valoare, atentie }) {
   )
 }
 
-function FisaNod({ n, grup, vecini, nodDupaId, alegeNod, alegeLeg, inchide }) {
+function FisaNod({ n, grup, vecini, nodDupaId, alegeNod, alegeLeg, inchide, probleme = [], alegeTinta, inapoi, legaturi }) {
   const f = n.fisa || {}
   const tip = TIPURI_NOD[n.tip] || ['•', n.tip || 'Nod']
   const stare = STARI_NOD[n.stare]
   const marcat = v => /neverificat|de confirmat/i.test(String(v || ''))
+  const numeTinta = useNumeTinta(nodDupaId, legaturi)
   return (
     <div>
-      <Inchide onClick={inchide} />
-      <h3 style={{ ...S.h, paddingRight: 36 }}>{tip[0]} {n.nume}</h3>
+      <Inchide onClick={inchide} eticheta={inapoi ? 'Top probleme' : undefined} />
+      <h3 style={{ ...S.h, paddingRight: inapoi ? 110 : 36 }}>{tip[0]} {n.nume}</h3>
       <div style={S.small}>{tip[1]}{grup ? ` · ${grup.nume}` : ''}{stare ? <> · <b style={{ color: stare[1] }}>{stare[0]}</b></> : null}</div>
       {n.sub && <div style={{ fontSize: 13, marginTop: 4 }}>{n.sub}</div>}
+      <SectiuneProbleme proprii={n.probleme} tinta={{ tip: 'nod', id: n.id }} probleme={probleme} alegeTinta={alegeTinta} numeTinta={numeTinta} />
       {CAMPURI_FISA.map(([k, et]) => <Camp key={k} eticheta={et} valoare={f[k]} atentie={marcat(f[k])} />)}
       {lista(f.secrete).length > 0 && <>
         <div style={S.eticheta}>Secrete folosite (doar numele)</div>
@@ -493,13 +666,14 @@ function ListaLeg({ elemente, nodDupaId, alegeNod, alegeLeg, sageata }) {
   )
 }
 
-function FisaLegatura({ x, nodDupaId, alegeNod, inchide }) {
+function FisaLegatura({ x, nodDupaId, alegeNod, inchide, probleme = [], alegeTinta, inapoi, legaturi }) {
   const l = x.l
   const tip = TIPURI_LEGATURA[l.tip] || TIPURI_LEGATURA.date
+  const numeTinta = useNumeTinta(nodDupaId, legaturi)
   return (
     <div>
-      <Inchide onClick={inchide} />
-      <h3 style={{ ...S.h, paddingRight: 36 }}>Săgeată: {l.ce || '(fără descriere)'}</h3>
+      <Inchide onClick={inchide} eticheta={inapoi ? 'Top probleme' : undefined} />
+      <h3 style={{ ...S.h, paddingRight: inapoi ? 110 : 36 }}>Săgeată: {l.ce || '(fără descriere)'}</h3>
       <div style={{ ...S.small, color: tip[1], fontWeight: 600 }}>{tip[0]}{l.dublu ? ' · în ambele sensuri' : ''}</div>
       <div style={{ ...S.row, margin: '10px 0' }}>
         <button style={S.button} onClick={() => alegeNod(l.de)}>{textScurt(nodDupaId[l.de]?.nume, 28)}</button>
@@ -509,6 +683,7 @@ function FisaLegatura({ x, nodDupaId, alegeNod, inchide }) {
       <Camp eticheta="Ce trece" valoare={l.ce} />
       <Camp eticheta="Detalii" valoare={l.detaliu} atentie={/neverificat|de confirmat/i.test(l.detaliu || '')} />
       <Camp eticheta="Cât de des" valoare={l.cand} />
+      <SectiuneProbleme proprii={l.probleme} tinta={{ tip: 'leg', id: x.cheie }} probleme={probleme} alegeTinta={alegeTinta} numeTinta={numeTinta} />
       {lista(l.surse).length > 0 && <><div style={S.eticheta}>Surse</div><ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>{lista(l.surse).map((s, i) => <li key={i} style={S.mono}>{s}</li>)}</ul></>}
     </div>
   )
