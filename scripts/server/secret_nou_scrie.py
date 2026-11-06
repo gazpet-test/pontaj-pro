@@ -56,7 +56,8 @@ except Exception as e:
 try:
     r = subprocess.run([ICACLS, f, '/inheritance:r', '/grant:r', '*' + sid + ':F', '*S-1-5-18:F', '*S-1-5-32-544:F'],
                        capture_output=True)
-    acl = subprocess.run([ICACLS, f], capture_output=True, text=True, errors='replace').stdout
+    citire = subprocess.run([ICACLS, f], capture_output=True, text=True, errors='replace')
+    acl = citire.stdout if citire.returncode == 0 else ''   # citire eșuată = ACL neverificat = refuz (review r4 P2)
 except Exception as e:
     esec('icacls nu a putut rula (' + type(e).__name__ + ')')
 permise = {cont.lower(), 'nt authority\\system', 'builtin\\administrators'}
@@ -68,7 +69,7 @@ for l in acl.splitlines():
     if s.lower().startswith(f.lower()):
         s = s[len(f):].strip()
     principali.append(s.split(':(', 1)[0].strip().lower())
-if r.returncode != 0 or not principali or any(p not in permise for p in principali):
+if r.returncode != 0 or set(principali) != permise or len(principali) != len(permise):   # exact cei trei, fiecare o dată (r4 P2)
     esec('ACL-ul nu a putut fi restrans exact la ' + cont + '/SYSTEM/Administrators')
 try:
     with open(f, 'w', encoding='ascii') as h:
