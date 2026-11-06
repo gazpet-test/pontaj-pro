@@ -54,7 +54,9 @@ DO $poarta_inainte$ BEGIN
     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.red_v_centralizator_uat') AND c.relkind = 'v'
       AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
       AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
-        = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[]) THEN
+        = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[])
+    -- Jakarinos r2 P1 (L15): fără ACL pe coloane (ca în porțile 31c/31d)
+    OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_centralizator_uat') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION '20261131f (inainte): red_v_centralizator_uat nu are definitia / owner-ul / optiunile / ACL-ul asteptate — refuz';
   END IF;
 END $poarta_inainte$;
@@ -82,8 +84,13 @@ DO $poarta_dupa$ BEGIN
     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.red_v_centralizator_uat') AND c.relkind = 'v'
       AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
       AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
-        = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[]) THEN
+        = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[])
+    -- Jakarinos r2 P1 (L15): fără ACL pe coloane (ca în porțile 31c/31d)
+    OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_centralizator_uat') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION '20261131f (dupa): red_v_centralizator_uat nu are definitia / owner-ul / optiunile / ACL-ul asteptate — refuz';
   END IF;
 END $poarta_dupa$;
+-- Jakarinos r2 P2: vederile temporare de comparație nu rămân în sesiune după COMMIT
+DROP VIEW pg_temp.f31_cent_31f;
+DROP VIEW pg_temp.f31_cent_31d;
 COMMIT;
