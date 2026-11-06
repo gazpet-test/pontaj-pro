@@ -4,7 +4,9 @@
 // Cereri (POST, JSON):
 //   { "actiune": "preia" }  → 200 { intrebare: null } sau { intrebare: {id, incercare, titlu, intrebare, context, creat_la,
 //                              atasamente: [{nume, mime, url}]} } — url = null dacă semnarea a eșuat (workerul NU răspunde atunci)
-//   { "actiune": "raspunde", "id": n, "incercare": uuid, "raspuns_md": "...", "model": "...", "tokeni": {...} } → 200 / 409
+//   { "actiune": "raspunde", "id": n, "incercare": uuid, "raspuns_md": "...", "model": "...", "tokeni": {...},
+//     "surse": [{id: "C1"|"W1", tip: "corpus"|"web", cale|url, titlu, extras}] }                             → 200 / 409
+//   (v2, 06.11.2026: cere migrarea 20261131e — fn_intrebari_raspunde cu p_surse; deploy DUPĂ migrare)
 //   { "actiune": "eroare",   "id": n, "incercare": uuid, "eroare": "..." }                                       → 200 / 409
 //   { "actiune": "amana",    "id": n, "incercare": uuid }  — doar refuz CERT fără cost (429/529)                 → 200 / 409
 // 409 = preluarea nu mai e cea curentă (expirată / finalizată): rezultatul întârziat nu închide altă preluare.
@@ -25,6 +27,36 @@ const BUCKET = 'intrebari-tehnice'
 const VALABIL_SEC = 300
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CALE = /^[0-9a-f-]{36}\/[0-9a-f-]{36}\.(pdf|jpg|jpeg|png|webp)$/
+// v2 (06.11.2026, migrarea 20261131e): răspunsul vine cu sursele citate. Aceeași listă fixă ca worker/intrebari-tehnice/cercetare.py
+// și src/intrebariSurse.js (testul vitest „domenii identice”). O sursă web în afara listei sau o cale de corpus în afara docs/ se aruncă.
+const DOMENII_OFICIALE = [
+  'legislatie.just.ro', 'monitoruloficial.ro', 'iscir.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
+  'transgaz.ro', 'anap.gov.ro', 'e-licitatie.ro', 'eur-lex.europa.eu', 'magazin.asro.ro',
+]
+const SURSE_MAX = 30
+
+function urlOficial(x: unknown): boolean {
+  if (typeof x !== 'string' || x.length > 500) return false
+  let u: URL
+  try { u = new URL(x) } catch (_) { return false }
+  if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) return false
+  const h = u.hostname.toLowerCase().replace(/\.$/, '')
+  return DOMENII_OFICIALE.some(d => h === d || h.endsWith('.' + d))
+}
+
+function curataSurse(x: unknown): Record<string, string>[] {
+  if (!Array.isArray(x)) return []
+  const out: Record<string, string>[] = []
+  for (const s of x) {
+    if (out.length >= SURSE_MAX) break
+    if (!esteObiect(s) || typeof s.id !== 'string' || !/^[CW]\d{1,2}$/.test(s.id)) continue
+    const titlu = String(s.titlu ?? '').slice(0, 300), extras = String(s.extras ?? '').slice(0, 1500)
+    if (s.tip === 'web' && urlOficial(s.url)) out.push({ id: s.id, tip: 'web', url: String(s.url), titlu, extras })
+    else if (s.tip === 'corpus' && typeof s.cale === 'string' && /^docs\/[A-Za-z0-9_\-./]{1,250}$/.test(s.cale) && !s.cale.includes('..'))
+      out.push({ id: s.id, tip: 'corpus', cale: s.cale, titlu, extras })
+  }
+  return out
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return raspuns(405, { error: 'Doar POST' })
@@ -79,7 +111,7 @@ Deno.serve(async (req: Request) => {
     const tokeni = esteObiect(corp.tokeni) ? corp.tokeni : null
     const { data, error } = await sb.rpc('fn_intrebari_raspunde', {
       p_id: corp.id, p_incercare: corp.incercare, p_raspuns: eRaspuns ? text : null, p_model: typeof corp.model === 'string' ? corp.model : null,
-      p_tokeni: tokeni, p_eroare: eRaspuns ? null : text,
+      p_tokeni: tokeni, p_eroare: eRaspuns ? null : text, p_surse: eRaspuns ? curataSurse(corp.surse) : [],
     })
     if (error) return raspuns(500, { error: 'Eroare internă' })
     return raspuns(data === true ? 200 : 409, { ok: data === true })
