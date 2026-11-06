@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, agregaCentralizator, agregaTronsoane, intervalZiBucuresti, poateMarcaPrezenta } from './sesiune.js'
+import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, agregaCentralizator, agregaTronsoane, intervalZiBucuresti, poateMarcaPrezenta, verificaPrezentaLaClick } from './sesiune.js'
 
 it.each([
   ['2026-11-02', '2026-11-01T22:00:00.000Z', '2026-11-02T22:00:00.000Z'],
@@ -101,4 +101,14 @@ describe('poateMarcaPrezenta', () => {
     ['', '2026-11-17', false],
   ])('zi %s, azi %s → %s', (zi, azi, ok) => expect(poateMarcaPrezenta(zile, zi, azi)).toBe(ok))
   it('fără zile de sesiune → nu', () => expect(poateMarcaPrezenta([], '2026-11-17', '2026-11-17')).toBe(false))
+  // Jakarinos r1 P1: click după miezul nopții, înaintea tick-ului de 30 s
+  it('click la 18.11 00:00:05 cu ecranul încă pe 17.11 → nu scrie, cere reîmprospătare', () => {
+    expect(verificaPrezentaLaClick(zile, '2026-11-17', '2026-11-17', '2026-11-18')).toEqual({ ok: false, aziNou: '2026-11-18' })
+  })
+  it('click legitim în ziua sesiunii → ok', () => {
+    expect(verificaPrezentaLaClick(zile, '2026-11-17', '2026-11-17', '2026-11-17')).toEqual({ ok: true, aziNou: null })
+  })
+  it('ziua aleasă nu e azi → nu, fără reîmprospătare', () => {
+    expect(verificaPrezentaLaClick(zile, '2026-11-18', '2026-11-17', '2026-11-17')).toEqual({ ok: false, aziNou: null })
+  })
 })

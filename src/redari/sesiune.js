@@ -33,6 +33,12 @@ export function rezumatSesiune(randuri, prezentiAzi = new Set()) {
 // în „A răspuns — participă” înainte de sesiune. Prezența se marchează DOAR în ziua sesiunii: ziua aleasă = azi (București) și e zi de sesiune.
 // Înregistrările întârziate merg prin 📋 Registru → 📞 Răspuns, canal „La sesiune (prezent)”.
 export const poateMarcaPrezenta = (zile, zi, azi) => !!zi && zi === azi && (zile || []).some(z => z.data === zi)
+// Jakarinos r1 P1: „azi” din ecran se reîmprospătează la 30 s; un click la 00:00:05 cu ziua de ieri aleasă trecea garda cu „azi” vechi,
+// iar INSERT-ul scria prezența pe ziua nouă. La click se recitește ziua curentă: dacă s-a schimbat, nu se scrie nimic.
+export function verificaPrezentaLaClick(zile, zi, aziEcran, aziAcum) {
+  if (aziAcum !== aziEcran) return { ok: false, aziNou: aziAcum }
+  return { ok: poateMarcaPrezenta(zile, zi, aziAcum), aziNou: null }
+}
 export const MESAJ_PREZENTA_DOAR_AZI = 'Prezența se marchează doar în ziua sesiunii (ziua aleasă trebuie să fie azi). Pentru o prezență din altă zi: 📋 Registru → 📞 Răspuns, canal „La sesiune (prezent)”.'
 
 // Gemini f5 r1: data e timestamptz -> momentul real al prezentei (audit), nu miezul noptii UTC.

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { aziBucuresti, formatDataRo } from '../docx.js'
-import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, intervalZiBucuresti, poateMarcaPrezenta, MESAJ_PREZENTA_DOAR_AZI } from '../sesiune.js'
+import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, intervalZiBucuresti, poateMarcaPrezenta, verificaPrezentaLaClick, MESAJ_PREZENTA_DOAR_AZI } from '../sesiune.js'
 import { G, S, TagStare, msgEroare } from './comune.jsx'
 import ModalPv from './ModalPv.jsx'
 
@@ -90,7 +90,10 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
     return () => { generatie.current++ }
   }, [proiectId, uat.id, azi, reload])
   const prezent = async rand => {
-    if (!poateScrie || ocupat.current || !date || date.prezenti.has(rand.detinator_id) || !poateMarcaPrezenta(zile, zi, azi)) return
+    if (!poateScrie || ocupat.current || !date || date.prezenti.has(rand.detinator_id)) return
+    const v = verificaPrezentaLaClick(zile, zi, azi, aziBucuresti())
+    if (v.aziNou) { setAzi(v.aziNou); return }   // efectul pe [azi] recitește lista; mesajul „doar în ziua sesiunii” apare dacă e cazul
+    if (!v.ok) return
     ocupat.current = true; setLucru(true); setMesaj('')
     const token = generatie.current, curent = () => token === generatie.current
     let confirmat = false
