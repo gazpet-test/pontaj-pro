@@ -8,6 +8,7 @@ import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaPro
 import FormularCampuri from './FormularCampuri.jsx'
 import PoartaUtilizatori from './PoartaUtilizatori.jsx'
 import AutorizareTgz from './AutorizareTgz.jsx'
+import { avertismentInformare } from '../informareGdpr.js'
 import { verificaDateCerereImputernicire, genereazaCerereImputernicire, descarcaBlob } from '../docx.js'
 
 export default function SetariProiect({ proiect, uats = [], nivel, esteOwner = false, show, onSchimbat }) {
@@ -156,8 +157,8 @@ export default function SetariProiect({ proiect, uats = [], nivel, esteOwner = f
       <div style={{ ...S.card, marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div><span style={{ color: G.muted, fontSize: 12 }}>Cod proiect</span><div style={{ ...S.mono }}>{proiect.cod}</div></div>
         <div style={{ flex: 1 }} />
-        <div style={{ fontSize: 12.5, color: lipsaProiect ? G.yellow : G.green }}>
-          {lipsaProiect ? `Pentru convocări lipsește: ${lipsaProiect}` : '✓ Proiectul are tot ce cere convocatorul'}
+        <div style={{ fontSize: 12.5, color: lipsaProiect || avertismentInformare(proiect) ? G.yellow : G.green }}>
+          {lipsaProiect ? `Pentru convocări lipsește: ${lipsaProiect}` : avertismentInformare(proiect) ? `⚠ ${avertismentInformare(proiect)}` : '✓ Proiectul are tot ce cere convocatorul'}
         </div>
       </div>
       {!esteAdmin && <div style={{ fontSize: 12.5, color: G.muted, marginBottom: 10 }}>Doar administratorul modifică setările proiectului.</div>}
