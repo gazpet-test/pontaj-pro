@@ -186,7 +186,8 @@ ROLLBACK;
   Jurnal ('tichete citite: ' + $tichete.Count)
 
   # ── Idempotență: PR-uri (orice stare), branch-uri remote, încercări anterioare ───────────────────────────
-  $r = Gh @('pr', 'list', '--state', 'all', '--limit', '400', '--json', 'number,title,headRefName')
+  # repo-ul are > 1000 PR-uri: limita trebuie să le cuprindă pe toate (altfel un tichet cu PR vechi s-ar relua)
+  $r = Gh @('pr', 'list', '--state', 'all', '--limit', '5000', '--json', 'number,title,headRefName') 300
   if ($r.exit -ne 0) { throw 'gh pr list esuat' }
   $prToate = JsonLista $r.out
   $r = Git @('ls-remote', '--heads', 'origin')
@@ -211,6 +212,7 @@ ROLLBACK;
       etapa = 'coada'; agent = $null; pr = $null; branch = $null; sha = $null; jak = $null; fable = $null
       checks = @(); decizie = $null; merged = $false; nota = ''; reincercari = 0; dupa = $Start
       proc = $null; procJak = $null; procRvw = $null; ciPana = $null; reviewPana = $null; fisiere = @(); diff = ''; linii = 0; cross = $false
+      reincercariJak = 0; reviewDupa = $Start; regiuni = @()
     })
   }
   if ($Simulare) { Jurnal 'simulare: brief-uri scrise, nu pornesc rdr'; foreach ($x in $Rezultate) { $x.etapa = 'simulare' } }
@@ -229,20 +231,22 @@ ROLLBACK;
     foreach ($x in @($Rezultate | Where-Object { $_.etapa -eq 'rdr' -and $_.proc.HasExited })) {
       $logOut = Join-Path $OutDir ($x.slug + '_rdr_stdout.log')
       $ult = UltimaLinie $logOut
-      if ($x.proc.ExitCode -ne 0 -and $ult -imatch 'ocupat|loc liber|lock' -and $x.reincercari -lt 20) {
+      $fJson = Join-Path $OutDir ('rdr_' + $x.slug + '.json')
+      if ($x.proc.ExitCode -ne 0 -and -not (Test-Path -LiteralPath $fJson) -and $ult -imatch '\bocupat|\bloc liber|\block\b' -and $x.reincercari -lt 20) {
         # rdr are toate locurile ocupate (de chat / alte rulări): așteaptă, nu forța
         $x.reincercari++; $x.dupa = (Get-Date).AddMinutes(3); $x.etapa = 'coada'; continue
       }
-      $txt = CitesteText (Join-Path $OutDir ('rdr_' + $x.slug + '.json'))
-      $rezTxt = $txt
-      try { $j = $txt | ConvertFrom-Json; if ($j -and $j.PSObject.Properties['result']) { $rezTxt = [string]$j.result } } catch {}
-      $x.agent = Get-RezultatAgent ($rezTxt + "`n" + (CitesteText $logOut))
+      # Rezultatul se citește DOAR din câmpul „result” al rdr_<slug>.json (contractul rdr.ps1). Stdout-ul nu se parsează:
+      # poate conține ecoul brief-ului, care are chiar liniile „REZULTAT_TICHET: ...” din șablon.
+      $rezTxt = Get-CampResult (CitesteText $fJson)
+      if ($null -eq $rezTxt) { $x.agent = @{ tip = 'NECUNOSCUT'; detaliu = 'lipseste / nu se citeste rdr_' + $x.slug + '.json (exit ' + $x.proc.ExitCode + ')'; nelocal = $false } }
+      else { $x.agent = Get-RezultatAgent $rezTxt }
       if ($x.agent.tip -ne 'PR') { $x.nota = 'agent: ' + $x.agent.tip + ' ' + $x.agent.detaliu; $x.etapa = 'gata'; continue }
-      # PR-ul: întâi după URL-ul raportat, apoi după numărul tichetului în titlu (doar PR-uri deschise)
-      $r = Gh @('pr', 'list', '--state', 'open', '--limit', '200', '--json', 'number,title,headRefName,headRefOid,isCrossRepository,url')
+      # PR-ul: întâi după URL-ul raportat, apoi după numărul tichetului în titlu / branch (doar PR-uri deschise)
+      $r = Gh @('pr', 'list', '--state', 'open', '--limit', '300', '--json', 'number,title,headRefName,headRefOid,isCrossRepository,url')
       $deschise = @(); if ($r.exit -eq 0) { $deschise = JsonLista $r.out }
       $nrUrl = 0; $mu = [regex]::Match([string]$x.agent.detaliu, '/pull/(\d+)'); if ($mu.Success) { $nrUrl = [int]$mu.Groups[1].Value }
-      $cand = @($deschise | Where-Object { Test-TichetAreUrmaGit -Numar $x.numar -TitluriPr @($_.title) })
+      $cand = @($deschise | Where-Object { Test-TichetAreUrmaGit -Numar $x.numar -TitluriPr @($_.title) -Branchuri @($_.headRefName) })
       $pr = @($cand | Where-Object { $_.number -eq $nrUrl }) | Select-Object -First 1
       if (-not $pr) { $pr = $cand | Sort-Object number -Descending | Select-Object -First 1 }
       if (-not $pr) { $x.nota = 'agentul a raportat PR, dar nu gasesc un PR deschis cu ' + $x.numar + ' in titlu'; $x.etapa = 'gata'; continue }
@@ -260,49 +264,90 @@ ROLLBACK;
       $logOut = Join-Path $OutDir ($x.slug + '_rdr_stdout.log')
       # o ieșire rdr rămasă de la o rulare veche (ex. manuală din chat) nu are voie să fie citită ca rezultat al acesteia
       $fJsonVechi = Join-Path $OutDir ('rdr_' + $x.slug + '.json')
-      if ($x.reincercari -eq 0 -and (Test-Path -LiteralPath $fJsonVechi)) { Move-Item -LiteralPath $fJsonVechi -Destination ($fJsonVechi + '.' + $Start.ToString('yyyyMMddHHmm') + '.vechi') -Force }
+      if (Test-Path -LiteralPath $fJsonVechi) { Move-Item -LiteralPath $fJsonVechi -Destination ($fJsonVechi + '.' + $Start.ToString('yyyyMMddHHmm') + '.vechi') -Force }
       $x.proc = PornesteFundal 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Rdr, '-Brief', (CaleSimpla $x.brief), '-Slug', $x.slug, '-Effort', $x.effort) $logOut
       $x.etapa = 'rdr'; $ruleaza++
       Jurnal ("rdr pornit " + $x.numar + " effort=" + $x.effort)
     }
 
-    # d. review: unul odată (lansatorul Paw are barieră globală)
-    if ($null -ne $ReviewActiv -and $ReviewActiv.procJak.HasExited -and $ReviewActiv.procRvw.HasExited) {
+    # d. review: unul odată (lansatorul Paw are barieră globală).
+    #    Contracte: run_paw.cmd jak <brief> <iesire.log> → log-ul, ultima linie PAW_GATA / PAW_EROARE, verdictul pe linia „VERDICT:”;
+    #    rvw.ps1 -Brief <brief> -Slug <slug> -Ref <branch> → paw-data\out\rvw_<slug>.json, câmpul „result”.
+    #    Amândoi primesc ACELAȘI brief (sablon_review.md + diff-ul). Un proces pornit = $null până termină.
+    $NEC = @{ verdict = 'NECUNOSCUT'; p0 = -1; p1 = -1 }
+    if ($null -ne $ReviewActiv -and ($null -eq $ReviewActiv.procJak -or $ReviewActiv.procJak.HasExited) -and ($null -eq $ReviewActiv.procRvw -or $ReviewActiv.procRvw.HasExited)) {
       $x = $ReviewActiv; $ReviewActiv = $null
-      $fj = Join-Path $OutDir ($x.slug + '_jak.log'); $fr = Join-Path $OutDir ($x.slug + '_rvw.log')
-      $tj = CitesteText $fj
-      $x.jak = if ((UltimaLinie $fj) -cmatch '^PAW_GATA') { Get-VerdictReview $tj } else { @{ verdict = 'NECUNOSCUT'; p0 = -1; p1 = -1 } }
-      $x.fable = Get-VerdictReview (CitesteText $fr)
-      $x.ciPana = (Get-Date).AddMinutes($MinuteCi); $x.etapa = 'ci'
-      Jurnal ("review gata " + $x.numar + " jak=" + $x.jak.verdict + " fable=" + $x.fable.verdict)
+      if ($null -ne $x.procRvw) {
+        $rezRvw = Get-CampResult (CitesteText (Join-Path $OutDir ('rvw_' + $x.slug + '.json')))
+        $x.fable = if ($null -eq $rezRvw) { $NEC } else { Get-VerdictReview $rezRvw }
+        $x.procRvw = $null
+      }
+      if ($null -ne $x.procJak) {
+        $fj = Join-Path $OutDir ($x.slug + '_jak.log')
+        $stJak = Get-StarePaw (UltimaLinie $fj)
+        $x.procJak = $null
+        if ($stJak -eq 'OCUPAT' -and $x.reincercariJak -lt 10) {
+          # Paw ocupat de altă rulare: doar Jakarinos se reia peste 3 minute (verdictul Fable rămâne)
+          $x.reincercariJak++; $x.reviewDupa = (Get-Date).AddMinutes(3); $x.etapa = 'review_coada'
+          Jurnal ("jak ocupat " + $x.numar + ", reincerc (" + $x.reincercariJak + ")")
+        } else {
+          $x.jak = if ($stJak -eq 'GATA') { Get-VerdictReview (CitesteText $fj) } else { $NEC }
+        }
+      }
+      if ($null -ne $x.jak -and $null -ne $x.fable) {
+        $x.ciPana = (Get-Date).AddMinutes($MinuteCi); $x.etapa = 'ci'
+        Jurnal ("review gata " + $x.numar + " jak=" + $x.jak.verdict + " fable=" + $x.fable.verdict)
+      }
     } elseif ($null -ne $ReviewActiv -and $ReviewActiv.reviewPana -lt (Get-Date)) {
       OpresteArbore $ReviewActiv.procJak; OpresteArbore $ReviewActiv.procRvw
-      $ReviewActiv.jak = @{ verdict = 'NECUNOSCUT'; p0 = -1; p1 = -1 }; $ReviewActiv.fable = @{ verdict = 'NECUNOSCUT'; p0 = -1; p1 = -1 }
+      $ReviewActiv.jak = $NEC; $ReviewActiv.fable = $NEC
       $ReviewActiv.nota = 'review oprit la timeout'; $ReviewActiv.ciPana = (Get-Date); $ReviewActiv.etapa = 'ci'; $ReviewActiv = $null
     }
     if ($null -eq $ReviewActiv) {
-      $x = @($Rezultate | Where-Object { $_.etapa -eq 'review_coada' }) | Select-Object -First 1
+      $x = @($Rezultate | Where-Object { $_.etapa -eq 'review_coada' -and $_.reviewDupa -le (Get-Date) }) | Select-Object -First 1
       if ($x) {
         $b = $x.branch
         $r = Git @('fetch', 'origin', 'main', $b)
         $fd = Join-Path $OutDir ($x.slug + '.diff')
-        $r2 = Git @('diff', '--no-color', '--no-ext-diff', ('--output=' + $fd), ('origin/main...origin/' + $b))
-        $r3 = Git @('diff', '--name-only', ('origin/main...origin/' + $b))
-        $r4 = Git @('diff', '--numstat', ('origin/main...origin/' + $b))
+        $interval = 'origin/main...origin/' + $b
+        # --no-renames: o redenumire supabase/x → src/y apare cu AMBELE căi (altfel calea interzisă ar lipsi din listă)
+        $r2 = Git @('diff', '--no-color', '--no-ext-diff', '--no-renames', ('--output=' + $fd), $interval)
+        $r3 = Git @('diff', '--no-renames', '--name-only', $interval)
+        $r4 = Git @('diff', '--no-renames', '--numstat', $interval)
         $r5 = Git @('rev-parse', ('origin/' + $b))
         if ($r.exit -ne 0 -or $r2.exit -ne 0 -or $r3.exit -ne 0 -or $r4.exit -ne 0 -or $r5.exit -ne 0) {
           $x.nota = 'nu am putut lua diff-ul branch-ului'; $x.etapa = 'gata'
         } else {
           $x.diff = CitesteText $fd
           $x.fisiere = @(($r3.out -split "`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-          $x.linii = 0; foreach ($l in ($r4.out -split "`n")) { $m = [regex]::Match($l, '^(\d+)\s+(\d+)\s'); if ($m.Success) { $x.linii += [int]$m.Groups[1].Value + [int]$m.Groups[2].Value } }
+          $x.linii = 0
+          foreach ($l in ($r4.out -split "`n")) {
+            $m = [regex]::Match($l, '^(\d+|-)\s+(\d+|-)\s')
+            if (-not $m.Success) { continue }
+            if ($m.Groups[1].Value -eq '-') { $x.linii += $MaxLiniiDiff + 1 }   # fișier binar => peste plafon (doar manual)
+            else { $x.linii += [int]$m.Groups[1].Value + [int]$m.Groups[2].Value }
+          }
           if ($r5.out.Trim() -ne $x.sha) { $x.sha = '' }   # head-ul GitHub ≠ ce am descărcat => nu se face merge
+          # regiunile interzise (SalariiPage din src/App.jsx): sursa de pe origin/main; necitită => atinsă (fail-closed)
+          $surse = @{}
+          foreach ($rg in @((Get-ReguliTichete).regiuni_interzise)) {
+            $rs = Git @('show', ('origin/main:' + [string]$rg.fisier))
+            $surse[[string]$rg.fisier] = if ($rs.exit -eq 0) { $rs.out } else { $null }
+          }
+          $x.regiuni = @(Get-RegiuniInterziseAtinse -Diff $x.diff -Fisiere $x.fisiere -Surse $surse)
           $fbr = Join-Path $BriefDir ($x.slug + '_review.md')
           [IO.File]::WriteAllText($fbr, (New-BriefReview -Numar $x.numar -Pr $x.pr -Branch $b -Diff $x.diff), $UTF8)
-          $fj = Join-Path $OutDir ($x.slug + '_jak.log'); $fr = Join-Path $OutDir ($x.slug + '_rvw.log')
-          foreach ($f in @($fj, $fr)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
-          $x.procJak = PornesteFundal $env:ComSpec @('/d', '/c', (CaleSimpla $RunPaw), 'jak', (CaleSimpla $fbr), (CaleSimpla $fj)) (Join-Path $OutDir ($x.slug + '_jak_consola.log'))
-          $x.procRvw = PornesteFundal 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Rvw, '-Ref', $b) $fr
+          if ($null -eq $x.jak) {
+            $fj = Join-Path $OutDir ($x.slug + '_jak.log')
+            if (Test-Path -LiteralPath $fj) { Remove-Item -LiteralPath $fj -Force }
+            $x.procJak = PornesteFundal $env:ComSpec @('/d', '/c', (CaleSimpla $RunPaw), 'jak', (CaleSimpla $fbr), (CaleSimpla $fj)) (Join-Path $OutDir ($x.slug + '_jak_consola.log'))
+          }
+          if ($null -eq $x.fable) {
+            $fr = Join-Path $OutDir ('rvw_' + $x.slug + '.json')
+            # o ieșire rvw rămasă de la o rulare veche nu are voie să fie citită ca verdict al acesteia
+            if (Test-Path -LiteralPath $fr) { Move-Item -LiteralPath $fr -Destination ($fr + '.' + $Start.ToString('yyyyMMddHHmm') + '.vechi') -Force }
+            $x.procRvw = PornesteFundal 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Rvw, '-Brief', (CaleSimpla $fbr), '-Slug', $x.slug, '-Ref', $b) (Join-Path $OutDir ($x.slug + '_rvw_consola.log'))
+          }
           $x.reviewPana = (Get-Date).AddMinutes($MinuteReview)
           $x.etapa = 'review'; $ReviewActiv = $x
           Jurnal ("review pornit " + $x.numar + " PR #" + $x.pr)
@@ -315,12 +360,15 @@ ROLLBACK;
       $r = Gh @('pr', 'checks', [string]$x.pr, '--json', 'name,bucket')
       $ch = @(); try { $ch = JsonLista $r.out } catch {}
       $pending = @($ch | Where-Object { $_.bucket -eq 'pending' }).Count -gt 0
-      if ($pending -and $x.ciPana -gt (Get-Date)) { continue }
+      # zero check-uri imediat după push = CI-ul încă nu s-a înregistrat: se așteaptă ca la pending (până la plafon)
+      if (($pending -or @($ch).Count -eq 0) -and $x.ciPana -gt (Get-Date)) { continue }
       $x.checks = $ch
-      $r = Gh @('pr', 'view', [string]$x.pr, '--json', 'headRefOid,state')
-      $headAcum = ''; try { $headAcum = [string](ConvertFrom-Json -InputObject $r.out).headRefOid } catch {}
+      $r = Gh @('pr', 'view', [string]$x.pr, '--json', 'headRefOid,state,baseRefName')
+      $headAcum = ''; $stare = ''; $baza = ''
+      try { $pv = ConvertFrom-Json -InputObject $r.out; $headAcum = [string]$pv.headRefOid; $stare = [string]$pv.state; $baza = [string]$pv.baseRefName } catch {}
       $x.decizie = Get-DecizieMerge -Jak $x.jak -Fable $x.fable -Checks $ch -Nelocal ([bool]$x.agent.nelocal) -Fisiere $x.fisiere `
-                     -Diff $x.diff -LiniiDiff $x.linii -MaxLiniiDiff $MaxLiniiDiff -CrossRepo $x.cross -HeadSchimbat ((-not $x.sha) -or ($headAcum -ne $x.sha))
+                     -Diff $x.diff -LiniiDiff $x.linii -MaxLiniiDiff $MaxLiniiDiff -CrossRepo $x.cross -HeadSchimbat ((-not $x.sha) -or ($headAcum -ne $x.sha)) `
+                     -RegiuniAtinse $x.regiuni -BazaMain ($baza -ceq 'main') -Deschis ($stare -ceq 'OPEN')
       if ($x.decizie.merge -and -not $FaraMerge) {
         $r = Gh @('pr', 'ready', [string]$x.pr)
         $r2 = Gh @('pr', 'merge', [string]$x.pr, '--merge', '--match-head-commit', $x.sha)
@@ -390,7 +438,7 @@ try {
   if (@($Sarite).Count -eq 0) { [void]$sb.AppendLine('- (niciunul)') }
   foreach ($s in @($Sarite)) { [void]$sb.AppendLine("- $($s.numar) — $($s.motiv)") }
   [void]$sb.AppendLine('')
-  [void]$sb.AppendLine('Loguri: paw-data\out\tkt_*_rdr_stdout.log, *_jak.log, *_rvw.log, *.diff; jurnal: paw-data\tichete_dimineata\jurnal.log')
+  [void]$sb.AppendLine('Loguri: paw-data\out\tkt_*_rdr_stdout.log, rdr_tkt_*.json, tkt_*_jak.log, rvw_tkt_*.json, tkt_*_rvw_consola.log, tkt_*.diff; jurnal: paw-data\tichete_dimineata\jurnal.log')
   [IO.File]::WriteAllText($FisRaport, $sb.ToString(), $UTF8)
 } catch { Jurnal ('raport nescris: ' + $_.Exception.Message) }
 

@@ -1,5 +1,5 @@
 {
-  "_nota": "Sursa unica a regulilor pentru tichete_lib.psm1 (productie) si tichete_lib.mjs (teste vitest). Cale interzisa = prefix, comparat lowercase cu '/'.",
+  "_nota": "Sursa unica a regulilor pentru tichete_lib.psm1 (productie) si tichete_lib.mjs (teste vitest). Cale interzisa = prefix, comparat lowercase cu '/'. SalariiPage NU are fisier propriu: e functia din src/App.jsx => regiuni_interzise + cuvinte_interzise_diff.",
   "status_permise": ["deschis", "atribuit"],
   "subcategorii_permise": ["eroare_erp", "cerere_functie"],
   "max_descriere": 8000,
@@ -17,7 +17,16 @@
     "package.json",
     "package-lock.json",
     "vercel.json",
+    "vite.config",
+    "vitest.config",
+    "index.html",
+    ".env",
     "api/"
   ],
-  "extensii_interzise": [".sql"]
+  "extensii_interzise": [".sql"],
+  "regiuni_interzise": [
+    { "fisier": "src/App.jsx", "functie": "SalariiPage" }
+  ],
+  "cuvinte_interzise_diff": ["SalariiPage", "salaryAccess", "service_role", "is_owner", "user_module_access"],
+  "marcaje_rezultat": ["REZULTAT_REVIEW", "REZULTAT_TICHET", "PAW_GATA", "PAW_EROARE"]
 }

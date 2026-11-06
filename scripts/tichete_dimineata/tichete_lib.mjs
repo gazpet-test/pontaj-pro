@@ -14,8 +14,12 @@ const SABLON_BRIEF = citeste('sablon_brief.md')
 const SABLON_REVIEW = citeste('sablon_review.md')
 
 export const MAPARE_PS = {
-  'Get-ReguliTichete': 'REGULI', 'Test-NumarTichet': 'testNumarTichet', 'Get-SlugTichet': 'getSlugTichet',
-  'Test-TichetAreUrmaGit': 'testTichetAreUrmaGit', 'Select-TicheteNoi': 'selectTicheteNoi', 'Get-TextCurat': 'getTextCurat',
+  'Get-ReguliTichete': 'REGULI', 'Test-NumarTichet': 'testNumarTichet', 'Get-SerieTichet': 'getSerieTichet', 'Get-SlugTichet': 'getSlugTichet',
+  'Test-TichetAreUrmaGit': 'testTichetAreUrmaGit', 'Get-CampResult': 'getCampResult', 'Get-StarePaw': 'getStarePaw',
+  'Get-CuvinteInterziseDiff': 'getCuvinteInterziseDiff', 'Test-DiffAreMarcajeRezultat': 'testDiffAreMarcajeRezultat',
+  'Get-RegiuneFunctie': 'getRegiuneFunctie', 'Test-DiffAtingeRegiune': 'testDiffAtingeRegiune',
+  'Get-RegiuniInterziseAtinse': 'getRegiuniInterziseAtinse',
+  'Select-TicheteNoi': 'selectTicheteNoi', 'Get-TextCurat': 'getTextCurat',
   'Get-TextSigurLinie': 'getTextSigurLinie', 'Get-EffortTichet': 'getEffortTichet', 'New-MarcajDate': 'newMarcajDate',
   'New-BriefTichet': 'newBriefTichet', 'New-BriefReview': 'newBriefReview', 'Get-RezultatAgent': 'getRezultatAgent',
   'Get-VerdictReview': 'getVerdictReview', 'Test-NumeBranch': 'testNumeBranch', 'Get-CaiInterziseAtinse': 'getCaiInterziseAtinse',
@@ -27,17 +31,41 @@ const str = v => (v === null || v === undefined ? '' : String(v))
 
 export function testNumarTichet(n) {
   if (n === null || n === undefined) return false
-  return /^TKT-[0-9]{1,6}$/.test(String(n)) && !String(n).includes('\n')
+  return /^TKT-(?:20[0-9]{2}-)?[0-9]{1,6}$/.test(String(n)) && !String(n).includes('\n')
+}
+
+export function getSerieTichet(n) {
+  if (!testNumarTichet(n)) throw new Error('numar_tichet invalid')
+  return parseInt(n.slice(n.lastIndexOf('-') + 1), 10)
 }
 
 export function getSlugTichet(n) {
   if (!testNumarTichet(n)) throw new Error('numar_tichet invalid')
-  return 'tkt_' + n.slice(4)
+  return 'tkt_' + n.slice(4).replace(/-/g, '_')
 }
 
+const RE_MENTIUNE = /(?<![a-z0-9])(?:tkt|tichet(?:e|ul)?)[-_ #]?([0-9]{1,6}(?:[ ]*[-_/,&+][ ]*(?:tkt[-_]?)?[0-9]{1,6})*)(?![0-9])/g
+
 export function testTichetAreUrmaGit(numar, titluriPr = [], branchuri = []) {
-  const re = new RegExp('(?<![a-z0-9])tkt[-_]?' + numar.slice(4) + '(?![0-9])')
-  return [...titluriPr, ...branchuri].some(t => t !== null && t !== undefined && re.test(String(t).toLowerCase()))
+  const serie = getSerieTichet(numar)
+  return [...titluriPr, ...branchuri].some(t => t !== null && t !== undefined &&
+    [...String(t).toLowerCase().matchAll(RE_MENTIUNE)].some(m => (m[1].match(/[0-9]+/g) || []).some(c => parseInt(c, 10) === serie)))
+}
+
+export function getCampResult(json) {
+  if (!json || !String(json).trim()) return null
+  let o
+  try { o = JSON.parse(String(json).replace(/^﻿/, '')) } catch { return null }
+  if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.result !== 'string') return null
+  return o.result
+}
+
+export function getStarePaw(ultimaLinie) {
+  const l = str(ultimaLinie).trim()
+  if (/^PAW_GATA(\s|$)/.test(l)) return 'GATA'
+  if (/^PAW_EROARE\b.*ocupat de alta rulare/.test(l)) return 'OCUPAT'
+  if (/^PAW_EROARE(\s|$)/.test(l)) return 'EROARE'
+  return 'NECUNOSCUT'
 }
 
 export function getTextCurat(text, max = 8000) {
@@ -116,28 +144,42 @@ export function newBriefReview({ numar, pr, branch, diff, marcaj = newMarcajDate
 
 export function getRezultatAgent(iesire) {
   if (!iesire) return { tip: 'NECUNOSCUT', detaliu: 'iesire goala', nelocal: false }
-  const m = [...iesire.matchAll(/REZULTAT_TICHET:[ \t]*(PR|NELOCAL|ESUAT)\b([^\r\n"\\]*)/g)]
-  const nelocal = /REZULTAT_TICHET:[ \t]*NELOCAL/.test(iesire)
-  if (m.length === 0) return { tip: 'NECUNOSCUT', detaliu: 'fara linie REZULTAT_TICHET', nelocal }
-  const ult = m[m.length - 1]
-  return { tip: ult[1], detaliu: getTextSigurLinie(ult[2], 200), nelocal }
+  const linii = iesire.split(/\r?\n/).map(l => l.trim()).filter(l => /^`?REZULTAT_TICHET:/.test(l))
+  const nelocal = linii.some(l => /^`?REZULTAT_TICHET:[ \t]*NELOCAL\b/.test(l))
+  if (linii.length === 0) return { tip: 'NECUNOSCUT', detaliu: 'fara linie REZULTAT_TICHET', nelocal }
+  const m = linii[linii.length - 1].match(/^`?REZULTAT_TICHET:[ \t]*(PR|NELOCAL|ESUAT)(?:[ \t]+([^`]*))?`?$/)
+  if (!m) return { tip: 'NECUNOSCUT', detaliu: 'linie REZULTAT_TICHET neclara', nelocal }
+  return { tip: m[1], detaliu: getTextSigurLinie(m[2] ?? '', 200), nelocal }
 }
+
+const TOKEN_VERDICT = { GO: 'GO', GO_CU_CONDITII: 'GO_CU_CONDITII', 'GO_CU_CONDIȚII': 'GO_CU_CONDITII', NO_GO: 'NO_GO', 'NO-GO': 'NO_GO' }
 
 export function getVerdictReview(iesire) {
   const rez = { verdict: 'NECUNOSCUT', p0: -1, p1: -1 }
   if (!iesire) return rez
-  const idx = iesire.lastIndexOf('REZULTAT_REVIEW')
-  if (idx < 0) return rez
-  const bloc = iesire.slice(idx)
-  const mv = bloc.match(/^[\s*>_-]*VERDICT[\s*_]*:[\s*_]*(NO[ _-]?GO|GO[ _-]?CU[ _-]?CONDI[TȚŢ]II|GO)\b/imu)
-  const m0 = bloc.match(/^[\s*>_-]*P0[\s*_]*:[\s*_]*(\d+)/im)
-  const m1 = bloc.match(/^[\s*>_-]*P1[\s*_]*:[\s*_]*(\d+)/im)
-  if (!(mv && m0 && m1)) return rez
-  const v = mv[1].toUpperCase().replace(/[ _-]/g, '')
-  rez.verdict = v === 'NOGO' ? 'NO_GO' : v === 'GO' ? 'GO' : 'GO_CU_CONDITII'
-  rez.p0 = parseInt(m0[1], 10)
-  rez.p1 = parseInt(m1[1], 10)
-  return rez
+  const l = iesire.split(/\r?\n/).map(x => x.trim())
+  let iv = -1
+  for (let i = l.length - 1; i >= 0; i--) if (l[i].startsWith('VERDICT:')) { iv = i; break }
+  if (iv < 0) return rez
+  let ir = -1
+  for (let i = iv - 1; i >= 0; i--) if (l[i] === 'REZULTAT_REVIEW') { ir = i; break }
+  if (ir < 0) return rez
+  const bloc = l.slice(ir + 1)
+  if (bloc.filter(x => /^VERDICT\s*:/.test(x)).length !== 1) return rez
+  const v = Object.prototype.hasOwnProperty.call(TOKEN_VERDICT, l[iv].slice(8).trim().toUpperCase()) ? TOKEN_VERDICT[l[iv].slice(8).trim().toUpperCase()] : null
+  if (!v) return rez
+  const dupa = l.slice(iv + 1)
+  const p = {}
+  for (const k of ['P0', 'P1']) {
+    const re = new RegExp('^' + k + '\\s*:')
+    if (bloc.filter(x => re.test(x)).length !== 1) return rez
+    const lin = dupa.filter(x => re.test(x))
+    if (lin.length !== 1) return rez
+    const m = lin[0].match(new RegExp('^' + k + ':[ \\t]*([0-9]{1,4})$'))
+    if (!m) return rez
+    p[k] = parseInt(m[1], 10)
+  }
+  return { verdict: v, p0: p.P0, p1: p.P1 }
 }
 
 export function testNumeBranch(n) {
@@ -161,6 +203,69 @@ export function testDiffAreSecurityDefiner(diff) {
   return diff.split('\n').some(l => l.startsWith('+') && !l.startsWith('+++') && /security\s+definer/i.test(l))
 }
 
+const eLinieModificata = l => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---')
+
+export function getCuvinteInterziseDiff(diff) {
+  if (!diff) return []
+  const gasite = []
+  for (const l of diff.split('\n')) {
+    if (!eLinieModificata(l)) continue
+    const ll = l.toLowerCase()
+    for (const c of REGULI.cuvinte_interzise_diff) if (ll.includes(c.toLowerCase()) && !gasite.includes(c)) gasite.push(c)
+  }
+  return gasite
+}
+
+export function testDiffAreMarcajeRezultat(diff) {
+  if (!diff) return false
+  if (REGULI.marcaje_rezultat.some(mk => diff.includes(mk))) return true
+  return diff.split('\n').some(l => l.length > 0 && '+- '.includes(l[0]) && /^(VERDICT|P0|P1)\s*:/.test(l.slice(1).trim()))
+}
+
+export function getRegiuneFunctie(text, functie) {
+  if (!text || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(functie)) return null
+  const l = text.split(/\r?\n/)
+  const reStart = new RegExp(`^(export\\s+)?(default\\s+)?(async\\s+)?(function\\s+${functie}\\b|const\\s+${functie}\\b)`)
+  const reDecl = /^(export\s+)?(default\s+)?(async\s+)?(function|const|let|var|class)\s/
+  const s = l.findIndex(x => reStart.test(x))
+  if (s < 0) return null
+  let e = l.length - 1
+  for (let i = s + 1; i < l.length; i++) if (reDecl.test(l[i])) { e = i - 1; break }
+  return { start: s + 1, end: e + 1 }
+}
+
+export function testDiffAtingeRegiune(diff, fisier, start, end, functie = '') {
+  if (!diff) return false
+  const tinta = fisier.replace(/\\/g, '/').toLowerCase()
+  let inFisier = false
+  for (const l of diff.split('\n')) {
+    if (l.startsWith('diff --git ')) {
+      const m = l.match(/^diff --git a\/(.+?) b\/(.+?)\s*$/)
+      inFisier = !!m && (m[1].toLowerCase() === tinta || m[2].toLowerCase() === tinta)
+      continue
+    }
+    if (!inFisier) continue
+    const h = l.match(/^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@(.*)$/)
+    if (!h) continue
+    const a = parseInt(h[1], 10), b = h[2] === undefined ? 1 : parseInt(h[2], 10)
+    const lo = a, hi = b === 0 ? a + 1 : a + b - 1
+    if (lo <= end && hi >= start) return true
+    if (functie && h[3].includes(functie)) return true
+  }
+  return false
+}
+
+export function getRegiuniInterziseAtinse(diff, fisiere = [], surse = {}) {
+  const fn = fisiere.filter(Boolean).map(f => f.replace(/\\/g, '/').toLowerCase())
+  const atinse = []
+  for (const r of REGULI.regiuni_interzise) {
+    if (!fn.includes(r.fisier.toLowerCase())) continue
+    const reg = getRegiuneFunctie(surse[r.fisier] ?? null, r.functie)
+    if (!reg || testDiffAtingeRegiune(diff, r.fisier, reg.start, reg.end, r.functie)) atinse.push(`${r.fisier}:${r.functie}`)
+  }
+  return atinse
+}
+
 export function testReviewTrece(v) {
   if (!v) return false
   return (v.verdict === 'GO' || v.verdict === 'GO_CU_CONDITII') && v.p0 === 0 && v.p1 === 0
@@ -177,7 +282,7 @@ export function getRezumatVerdict(v) {
 }
 
 export function getDecizieMerge({ jak, fable, checks = [], nelocal = false, fisiere = [], diff = '', liniiDiff = 0,
-  maxLiniiDiff = REGULI.max_linii_diff, crossRepo = false, headSchimbat = false } = {}) {
+  maxLiniiDiff = REGULI.max_linii_diff, crossRepo = false, headSchimbat = false, regiuniAtinse = [], bazaMain = true, deschis = true } = {}) {
   const motive = []
   if (!testReviewTrece(jak)) motive.push(`review Jakarinos nu e GO fara P0/P1 (${getRezumatVerdict(jak)})`)
   if (!testReviewTrece(fable)) motive.push(`review Fable nu e GO fara P0/P1 (${getRezumatVerdict(fable)})`)
@@ -187,9 +292,15 @@ export function getDecizieMerge({ jak, fable, checks = [], nelocal = false, fisi
   const atinse = getCaiInterziseAtinse(fisiere)
   if (atinse.length > 0) motive.push('atinge cai interzise: ' + atinse.slice(0, 5).join(', '))
   if (testDiffAreSecurityDefiner(diff)) motive.push('diff-ul adauga SECURITY DEFINER')
-  if (diff && (diff.includes('REZULTAT_REVIEW') || diff.includes('REZULTAT_TICHET'))) motive.push('diff-ul contine marcaje de rezultat (REZULTAT_*)')
+  if (testDiffAreMarcajeRezultat(diff)) motive.push('diff-ul contine marcaje de rezultat (REZULTAT_* / PAW_* / VERDICT:)')
+  const cuv = getCuvinteInterziseDiff(diff)
+  if (cuv.length > 0) motive.push('diff-ul atinge cuvinte interzise: ' + cuv.join(', '))
+  const reg = regiuniAtinse.filter(Boolean)
+  if (reg.length > 0) motive.push('atinge regiuni interzise: ' + reg.join(', '))
   if (liniiDiff > maxLiniiDiff) motive.push(`diff prea mare pentru merge automat (${liniiDiff} > ${maxLiniiDiff} linii)`)
   if (crossRepo) motive.push('PR din fork')
   if (headSchimbat) motive.push('head-ul PR-ului s-a schimbat dupa review')
+  if (!bazaMain) motive.push('PR-ul nu tinteste main (diff-ul revizuit e fata de main)')
+  if (!deschis) motive.push('PR-ul nu mai e deschis')
   return { merge: motive.length === 0, motive }
 }

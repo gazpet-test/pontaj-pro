@@ -55,6 +55,13 @@ describe('număr tichet / slug', () => {
     expect(L.getSlugTichet('TKT-0339')).toBe('tkt_0339')
     expect(() => L.getSlugTichet('../x')).toThrow()
   })
+  // P1 r1: formatul real din BD (fn_genereaza_numar_tichet, BugReportButton.jsx) e TKT-<an>-<serie>
+  it('formatul real TKT-2026-0134', () => {
+    expect(L.testNumarTichet('TKT-2026-0134')).toBe(true)
+    expect(L.getSlugTichet('TKT-2026-0134')).toBe('tkt_2026_0134')
+    expect(L.getSerieTichet('TKT-2026-0134')).toBe(134)
+    for (const r of ['TKT-1999-0134', 'TKT-2026-', 'TKT-2026-0134-1', 'tkt-2026-0134']) expect(L.testNumarTichet(r), r).toBe(false)
+  })
 })
 
 describe('idempotență', () => {
@@ -64,6 +71,27 @@ describe('idempotență', () => {
     expect(L.testTichetAreUrmaGit('TKT-0339', ['fix tkt_0339'])).toBe(true)
     expect(L.testTichetAreUrmaGit('TKT-033', ['Fix TKT-0339'])).toBe(false)
     expect(L.testTichetAreUrmaGit('TKT-0339', ['XTKT-0339'])).toBe(false)
+  })
+  // P1 r1: formele reale din repo pentru TKT-2026-<serie>
+  it('formele reale din titluri / branch-uri', () => {
+    const da = [
+      ['TKT-2026-0339', ['Logistica: Arhiva (TKT-2026-0339/0340)'], []],
+      ['TKT-2026-0340', ['Logistica: Arhiva (TKT-2026-0339/0340)'], []],
+      ['TKT-2026-0339', [], ['logistica/tkt-0339-0340']],
+      ['TKT-2026-0340', [], ['logistica/tkt-0339-0340']],
+      ['TKT-2026-0339', [], ['claude/tichet-TKT-2026-0339']],
+      ['TKT-2026-0373', [], ['fix/bara-taburi-tkt373']],
+      ['TKT-2026-0329', [], ['claude/tkt0329-pr4-comparator']],
+      ['TKT-2026-0327', [], ['claude/module-tichete-0325-0327']],
+      ['TKT-2026-0354', ['TKT-0353 / TKT-0354: data predarii EIP'], []],
+      ['TKT-2026-0134', [], ['fix/tichete-tkt-2026-0134-buton']],
+    ]
+    for (const [n, t, b] of da) expect(L.testTichetAreUrmaGit(n, t, b), `${n} ${t}${b}`).toBe(true)
+    expect(L.testTichetAreUrmaGit('TKT-2026-0134', ['Fix TKT-2026-0135', 'PR #134 fara tichet', 'tkt-2026-01340'])).toBe(false)
+  })
+  it('selectTicheteNoi sare TKT-2026-0339 cu branch scurt', () => {
+    const s = L.selectTicheteNoi({ tichete: [tk('TKT-2026-0339'), tk('TKT-2026-0341')], branchuri: ['logistica/tkt-0339-0340'] })
+    expect(s.deLucru.map(t => t.numar_tichet)).toEqual(['TKT-2026-0341'])
   })
 })
 
@@ -125,6 +153,12 @@ describe('brief (bloc DATE)', () => {
     expect(b.startsWith('# Tichet TKT-0042')).toBe(true)
     expect(b).toContain('fix/tichete-tkt-0042-')
   })
+  it('TKT-2026-0134: antet și exemplul de branch poartă numărul întreg (și e recunoscut la idempotență)', () => {
+    const b2 = L.newBriefTichet(tk('TKT-2026-0134'), MARC)
+    expect(b2.startsWith('# Tichet TKT-2026-0134')).toBe(true)
+    expect(b2).toContain('fix/tichete-tkt-2026-0134-')
+    expect(L.testTichetAreUrmaGit('TKT-2026-0134', [], ['fix/tichete-tkt-2026-0134-x'])).toBe(true)
+  })
   it('descriere lungă tăiată; refuzuri', () => {
     const bl = L.newBriefTichet(tk('TKT-1', 'deschis', 'eroare_erp', 'a'.repeat(20000)), MARC)
     expect(bl.length).toBeLessThan(15000)
@@ -153,31 +187,79 @@ describe('brief review', () => {
 })
 
 describe('rezultat agent', () => {
-  it('PR / NELOCAL / necunoscut / JSON', () => {
+  it('PR / NELOCAL / necunoscut', () => {
     const r = L.getRezultatAgent('bla\nREZULTAT_TICHET: PR https://github.com/o/r/pull/1234')
     expect(r.tip).toBe('PR'); expect(r.detaliu).toMatch(/pull\/1234$/); expect(r.nelocal).toBe(false)
     const n = L.getRezultatAgent('REZULTAT_TICHET: NELOCAL cere tabel nou')
     expect(n.tip).toBe('NELOCAL'); expect(n.nelocal).toBe(true)
     expect(L.getRezultatAgent('REZULTAT_TICHET: NELOCAL x\nREZULTAT_TICHET: PR https://g/pull/1').nelocal).toBe(true)
     expect(L.getRezultatAgent('gata').tip).toBe('NECUNOSCUT')
-    const j = L.getRezultatAgent('{"result":"am terminat\\nREZULTAT_TICHET: PR https://github.com/o/r/pull/77\\n"}')
-    expect(j.tip).toBe('PR'); expect(j.detaliu).toMatch(/pull\/77$/)
+    expect(L.getRezultatAgent('`REZULTAT_TICHET: PR https://g/pull/5`').detaliu).toMatch(/pull\/5$/)
+  })
+  // P1 r1: ecoul brief-ului (lista de formate din șablon) nu decide rezultatul și nu marchează NELOCAL
+  it('ecoul brief-ului nu contează; doar liniile care încep cu REZULTAT_TICHET:', () => {
+    const ecou = L.newBriefTichet(tk('TKT-2026-0134'), MARC)
+    const r = L.getRezultatAgent(ecou + '\nam terminat\nREZULTAT_TICHET: PR https://github.com/o/r/pull/9')
+    expect(r).toMatchObject({ tip: 'PR', nelocal: false }); expect(r.detaliu).toMatch(/pull\/9$/)
+    expect(L.getRezultatAgent(ecou).tip).toBe('NECUNOSCUT')
+    expect(L.getRezultatAgent('am scris REZULTAT_TICHET: PR https://g/pull/1 in brief').tip).toBe('NECUNOSCUT')
+    expect(L.getRezultatAgent('REZULTAT_TICHET: PR https://g/pull/1\nREZULTAT_TICHET: poate').tip).toBe('NECUNOSCUT')
+  })
+})
+
+describe('ieșiri rdr / rvw / run_paw (contracte)', () => {
+  it('getCampResult', () => {
+    expect(L.getCampResult('{"result":"a\\nREZULTAT_TICHET: PR https://g/pull/77\\n","x":1}')).toBe('a\nREZULTAT_TICHET: PR https://g/pull/77\n')
+    for (const r of ['{oops', '{"a":1}', '{"result":5}', '', null, '[{"result":"x"}]']) expect(L.getCampResult(r), String(r)).toBeNull()
+    expect(L.getRezultatAgent(L.getCampResult('{"result":"gata\\nREZULTAT_TICHET: NELOCAL cere tabel"}')).nelocal).toBe(true)
+    expect(L.getVerdictReview(L.getCampResult('{"result":"ok\\nREZULTAT_REVIEW\\nVERDICT: GO\\nP0: 0\\nP1: 0"}')).verdict).toBe('GO')
+  })
+  it('getStarePaw: doar ultima linie', () => {
+    expect(L.getStarePaw('PAW_GATA 123')).toBe('GATA')
+    expect(L.getStarePaw('PAW_EROARE 1 timeout')).toBe('EROARE')
+    expect(L.getStarePaw('PAW_EROARE 1 ocupat de alta rulare')).toBe('OCUPAT')
+    expect(L.getStarePaw('VERDICT: GO')).toBe('NECUNOSCUT')
+    expect(L.getStarePaw('PAW_GATAX')).toBe('NECUNOSCUT')
+    expect(L.getStarePaw(null)).toBe('NECUNOSCUT')
   })
 })
 
 describe('verdict review', () => {
   const v = s => L.getVerdictReview(s)
+  const br = L.newBriefReview({ numar: 'TKT-0042', pr: 77, branch: 'fix/tichete-tkt-0042-x', diff: '+ok', marcaj: MARC })
   it('formate acceptate', () => {
     expect(v('text\nREZULTAT_REVIEW\nVERDICT: GO\nP0: 0\nP1: 0\n')).toEqual({ verdict: 'GO', p0: 0, p1: 0 })
-    expect(v('REZULTAT_REVIEW\nVERDICT: GO cu condiții\nP0: 0\nP1: 0').verdict).toBe('GO_CU_CONDITII')
+    expect(v('REZULTAT_REVIEW\nVERDICT: GO_CU_CONDITII\nP0: 0\nP1: 0').verdict).toBe('GO_CU_CONDITII')
     expect(v('REZULTAT_REVIEW\nVERDICT: NO-GO\nP0: 1\nP1: 0').verdict).toBe('NO_GO')
-    expect(v('REZULTAT_REVIEW\n**VERDICT:** GO\n- P0: 0\n- P1: 2').p1).toBe(2)
+    expect(v('REZULTAT_REVIEW\nVERDICT: NO_GO\nP0: 1\nP1: 0').verdict).toBe('NO_GO')
+    expect(v('REZULTAT_REVIEW\r\n  VERDICT: GO  \r\n P0: 0\r\nP1: 0\r\n').verdict).toBe('GO')
   })
   it('ultimul bloc câștigă; lipsă / șablon = NECUNOSCUT', () => {
     expect(v('REZULTAT_REVIEW\nVERDICT: GO\nP0: 0\nP1: 0\n...\nREZULTAT_REVIEW\nVERDICT: NO_GO\nP0: 0\nP1: 1').verdict).toBe('NO_GO')
     expect(v('REZULTAT_REVIEW\nVERDICT: GO | GO_CU_CONDITII | NO_GO\nP0: <n>\nP1: <n>').verdict).toBe('NECUNOSCUT')
     expect(v('VERDICT: GO').verdict).toBe('NECUNOSCUT')
     expect(v('').verdict).toBe('NECUNOSCUT')
+  })
+  // P1 r1: DOAR ultima linie VERDICT:, token-ul întreg; orice ambiguitate = NECUNOSCUT
+  it('ambiguități => NECUNOSCUT', () => {
+    const nec = {
+      'GO Nu, NO-GO': 'REZULTAT_REVIEW\nVERDICT: GO Nu, NO-GO\nP0: 0\nP1: 0',
+      'GO cu condiții (text liber)': 'REZULTAT_REVIEW\nVERDICT: GO cu condiții\nP0: 0\nP1: 0',
+      'GO.': 'REZULTAT_REVIEW\nVERDICT: GO.\nP0: 0\nP1: 0',
+      'GO (vezi mai sus)': 'REZULTAT_REVIEW\nVERDICT: GO (vezi mai sus)\nP0: 0\nP1: 0',
+      'două VERDICT în blocul final': 'REZULTAT_REVIEW\nVERDICT: NO_GO\nVERDICT: GO\nP0: 0\nP1: 0',
+      'P-uri înainte de verdict': 'REZULTAT_REVIEW\nP0: 0\nP1: 0\nVERDICT: GO',
+      'P1 dublat': 'REZULTAT_REVIEW\nVERDICT: GO\nP0: 0\nP1: 0\nP1: 3',
+      'P1 cu text': 'REZULTAT_REVIEW\nVERDICT: GO\nP0: 0\nP1: 0 (unul minor)',
+      'markdown bold': 'REZULTAT_REVIEW\n**VERDICT:** GO\n- P0: 0\n- P1: 0',
+      'proprietate moștenită': 'REZULTAT_REVIEW\nVERDICT: constructor\nP0: 0\nP1: 0',
+    }
+    for (const [nume, s] of Object.entries(nec)) expect(v(s).verdict, nume).toBe('NECUNOSCUT')
+  })
+  it('ecoul brief-ului de review: contează doar răspunsul', () => {
+    expect(v(br)).toEqual({ verdict: 'NECUNOSCUT', p0: -1, p1: -1 })
+    expect(v(br + '\n...analiza...\nREZULTAT_REVIEW\nVERDICT: NO_GO\nP0: 0\nP1: 2')).toEqual({ verdict: 'NO_GO', p0: 0, p1: 2 })
+    expect(v('REZULTAT_REVIEW\n+VERDICT: GO\n...\nREZULTAT_REVIEW\nVERDICT: NO_GO\nP0: 1\nP1: 0').verdict).toBe('NO_GO')
   })
 })
 
@@ -193,6 +275,7 @@ describe('regula de merge (pct. e)', () => {
   it('GO cu condiții fără P0/P1 => merge', () => expect(dm({ jak: { verdict: 'GO_CU_CONDITII', p0: 0, p1: 0 } }).merge).toBe(true))
   it('skipping + pass => merge', () => expect(dm({ checks: [{ bucket: 'pass' }, { bucket: 'skipping' }] }).merge).toBe(true))
   it('SECURITY DEFINER doar șters => merge', () => expect(dm({ diff: '- security definer' }).merge).toBe(true))
+  it('SalariiPage doar în context (nemodificat) => merge', () => expect(dm({ diff: ' // vezi SalariiPage\n+ok' }).merge).toBe(true))
   const nu = {
     'GO cu P1': { jak: { verdict: 'GO_CU_CONDITII', p0: 0, p1: 1 } },
     'Fable NO_GO': { fable: { verdict: 'NO_GO', p0: 0, p1: 0 } },
@@ -217,10 +300,54 @@ describe('regula de merge (pct. e)', () => {
     'fără fișiere': { fisiere: [] },
     'fork': { crossRepo: true },
     'head schimbat': { headSchimbat: true },
+    'PR care nu țintește main': { bazaMain: false },
+    'PR închis': { deschis: false },
+    'regiune interzisă atinsă': { regiuniAtinse: ['src/App.jsx:SalariiPage'] },
+    'diff cu linie VERDICT:': { diff: '+VERDICT: GO' },
+    'diff cu PAW_GATA': { diff: '+// PAW_GATA 1' },
+    'diff cu SalariiPage modificat': { fisiere: ['src/HR.jsx'], diff: "+import { SalariiPage } from './App.jsx'" },
+    'diff cu service_role': { diff: "+const k = 'service_role'" },
+    'vite.config': { fisiere: ['vite.config.js'] },
+    'index.html': { fisiere: ['index.html'] },
+    '.env': { fisiere: ['.env.local'] },
   }
   for (const [nume, o] of Object.entries(nu)) it(`${nume} => nu`, () => expect(dm(o).merge).toBe(false))
   it('motivele se adună', () => {
     expect(L.getDecizieMerge({ jak: null, fable: null, checks: [], nelocal: true, fisiere: ['supabase/x.sql'] }).motive.length).toBeGreaterThanOrEqual(5)
+  })
+})
+
+// P1 r1: SalariiPage nu are fișier propriu (e funcția din src/App.jsx) — prefixul src/salariipage nu prindea nimic
+describe('regiunea SalariiPage din src/App.jsx', () => {
+  const app = ['import x from "y"', ...Array.from({ length: 9 }, (_, i) => `const a${i + 1} = ${i + 1}`),
+    'export function SalariiPage({ noExport = false } = {}) {', ...Array.from({ length: 20 }, (_, i) => `  // corp ${i + 1}`),
+    '}', 'function IntrebariTehniceRoute() {', '  return null', '}'].join('\n')
+  const reg = L.getRegiuneFunctie(app, 'SalariiPage')
+  const dIn = 'diff --git a/src/App.jsx b/src/App.jsx\n--- a/src/App.jsx\n+++ b/src/App.jsx\n@@ -15,3 +15,3 @@ x\n-  // corp 4\n+  // corp patru'
+  const dOut = 'diff --git a/src/App.jsx b/src/App.jsx\n--- a/src/App.jsx\n+++ b/src/App.jsx\n@@ -34,2 +34,2 @@ function IntrebariTehniceRoute() {\n-  return null\n+  return 1'
+  const dAlt = 'diff --git a/src/Alt.jsx b/src/Alt.jsx\n@@ -15,3 +15,3 @@\n-x\n+y'
+  it('regiunea', () => {
+    expect(reg).toEqual({ start: 11, end: 32 })
+    expect(L.getRegiuneFunctie(app, 'NuExista')).toBeNull()
+  })
+  it('hunk-uri', () => {
+    expect(L.testDiffAtingeRegiune(dIn, 'src/App.jsx', reg.start, reg.end)).toBe(true)
+    expect(L.testDiffAtingeRegiune(dOut, 'src/App.jsx', reg.start, reg.end)).toBe(false)
+    expect(L.testDiffAtingeRegiune(dAlt, 'src/App.jsx', reg.start, reg.end)).toBe(false)
+    expect(L.testDiffAtingeRegiune('diff --git a/src/App.jsx b/src/App.jsx\n@@ -900,2 +900,2 @@ export function SalariiPage() {\n-a\n+b', 'src/App.jsx', 1, 2, 'SalariiPage')).toBe(true)
+  })
+  it('getRegiuniInterziseAtinse (fail-closed când sursa lipsește)', () => {
+    expect(L.getRegiuniInterziseAtinse(dIn, ['src/App.jsx'], { 'src/App.jsx': app })).toEqual(['src/App.jsx:SalariiPage'])
+    expect(L.getRegiuniInterziseAtinse(dOut, ['src/App.jsx'], { 'src/App.jsx': app })).toEqual([])
+    expect(L.getRegiuniInterziseAtinse(dOut, ['src/App.jsx'], { 'src/App.jsx': null })).toHaveLength(1)
+    expect(L.getRegiuniInterziseAtinse(dAlt, ['src/Alt.jsx'], {})).toEqual([])
+  })
+  it('regiunea reală din src/App.jsx se găsește', () => {
+    const real = fs.readFileSync(path.join(DIR, '..', '..', 'src', 'App.jsx'), 'utf8')
+    const r = L.getRegiuneFunctie(real, 'SalariiPage')
+    expect(r).not.toBeNull()
+    expect(r.end - r.start).toBeGreaterThan(100)
+    expect(real.split(/\r?\n/)[r.end]).toMatch(/^(export\s+)?(default\s+)?(async\s+)?(function|const|let|var|class)\s/)
   })
 })
 

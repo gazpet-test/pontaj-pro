@@ -18,34 +18,72 @@ $script:ExtInterzise  = @($script:Reguli.extensii_interzise)
 $script:MaxDescriere  = [int]$script:Reguli.max_descriere
 $script:MaxTitlu      = [int]$script:Reguli.max_titlu
 $script:PragMedium    = [int]$script:Reguli.prag_effort_medium
+$script:CuvinteDiff   = @($script:Reguli.cuvinte_interzise_diff)
+$script:MarcajeRezultat = @($script:Reguli.marcaje_rezultat)
+$script:RegiuniInterzise = @($script:Reguli.regiuni_interzise)
 
 function Get-ReguliTichete { return $script:Reguli }
 
 function Test-NumarTichet {
-  # Format acceptat: TKT-<1..6 cifre>. Orice altceva se respinge (nu intră în nume de fișier / argumente).
+  # Formatul real (fn_genereaza_numar_tichet, BugReportButton.jsx): TKT-<an>-<serie>, ex. TKT-2026-0134.
+  # Acceptat și formatul vechi scurt TKT-<serie>. Orice altceva se respinge (nu intră în nume de fișier / argumente).
   param([AllowNull()][object]$Numar)
   if ($null -eq $Numar) { return $false }
-  return ([string]$Numar) -cmatch '\ATKT-[0-9]{1,6}\z'
+  return ([string]$Numar) -cmatch '\ATKT-(?:20[0-9]{2}-)?[0-9]{1,6}\z'
+}
+
+function Get-SerieTichet {
+  # TKT-2026-0134 -> 134 (int, fără zerourile din față); TKT-0339 -> 339. Aruncă dacă numărul nu e valid.
+  param([AllowNull()][string]$Numar)
+  if (-not (Test-NumarTichet $Numar)) { throw 'numar_tichet invalid' }
+  return [int]($Numar.Substring($Numar.LastIndexOf('-') + 1))
 }
 
 function Get-SlugTichet {
-  # TKT-0339 -> tkt_0339 (folosit în nume de fișier / slug rdr). Aruncă dacă numărul nu e valid.
+  # TKT-2026-0134 -> tkt_2026_0134; TKT-0339 -> tkt_0339 (nume de fișier / slug rdr / rvw). Aruncă dacă numărul nu e valid.
   param([AllowNull()][string]$Numar)
   if (-not (Test-NumarTichet $Numar)) { throw 'numar_tichet invalid' }
-  return ('tkt_' + $Numar.Substring(4))
+  return ('tkt_' + $Numar.Substring(4).Replace('-', '_'))
 }
 
+# O mențiune de tichet în titlu / branch: „tkt”/„tichet(e)” + un șir de numere (TKT-2026-0339/0340, tkt373, tichete-0325-0327).
+$script:ReMentiune = '(?<![a-z0-9])(?:tkt|tichet(?:e|ul)?)[-_ #]?([0-9]{1,6}(?:[ ]*[-_/,&+][ ]*(?:tkt[-_]?)?[0-9]{1,6})*)(?![0-9])'
+
 function Test-TichetAreUrmaGit {
-  # True dacă vreun titlu de PR (orice stare) sau branch menționează tichetul (tkt-0339 / tkt_0339 / tkt0339) — idempotență.
-  # Potrivire la graniță: TKT-033 nu prinde TKT-0339, XTKT-0339 nu prinde TKT-0339.
+  # True dacă vreun titlu de PR (orice stare) sau branch menționează tichetul, în oricare formă folosită în repo:
+  # TKT-2026-0339, tkt-0339, tkt_0339, tkt339, TKT-2026-0339/0340, tichete-0325-0327. Se compară SERIA ca număr întreg.
+  # Conservator: o potrivire în plus doar sare tichetul (apare în raport), o potrivire ratată ar dubla munca.
+  # Graniță: TKT-033 nu prinde TKT-0339, XTKT-0339 nu prinde TKT-0339.
   param([string]$Numar, [string[]]$TitluriPr = @(), [string[]]$Branchuri = @())
-  $cifre = $Numar.Substring(4)
-  $re = '(?<![a-z0-9])tkt[-_]?' + $cifre + '(?![0-9])'
+  $serie = Get-SerieTichet $Numar
   foreach ($t in @($TitluriPr) + @($Branchuri)) {
     if ($null -eq $t) { continue }
-    if (([string]$t).ToLowerInvariant() -match $re) { return $true }
+    foreach ($m in [regex]::Matches(([string]$t).ToLowerInvariant(), $script:ReMentiune)) {
+      foreach ($c in [regex]::Matches($m.Groups[1].Value, '[0-9]+')) { if ([int]$c.Value -eq $serie) { return $true } }
+    }
   }
   return $false
+}
+
+function Get-CampResult {
+  # Ieșirea rdr.ps1 / rvw.ps1 (paw-data\out\rdr_<slug>.json, rvw_<slug>.json): câmpul „result” (text). Altfel $null.
+  param([AllowNull()][string]$Json)
+  if ([string]::IsNullOrEmpty($Json) -or -not $Json.Trim()) { return $null }
+  try { $o = ConvertFrom-Json -InputObject $Json } catch { return $null }
+  if ($null -eq $o -or -not ($o -is [System.Management.Automation.PSCustomObject]) -or -not $o.PSObject.Properties['result']) { return $null }
+  if ($null -eq $o.result -or -not ($o.result -is [string])) { return $null }
+  return [string]$o.result
+}
+
+function Get-StarePaw {
+  # Ultima linie a log-ului run_paw.cmd: PAW_GATA <id> / PAW_EROARE <id> <motiv>. „ocupat de alta rulare” = de reîncercat.
+  # Se uită DOAR la ultima linie (CLAUDE.md pct. 11: conținutul poate conține cuvântul „ocupat”).
+  param([AllowNull()][string]$UltimaLinie)
+  $l = if ($null -eq $UltimaLinie) { '' } else { $UltimaLinie.Trim() }
+  if ($l -cmatch '^PAW_GATA(\s|$)') { return 'GATA' }
+  if ($l -cmatch '^PAW_EROARE\b.*ocupat de alta rulare') { return 'OCUPAT' }
+  if ($l -cmatch '^PAW_EROARE(\s|$)') { return 'EROARE' }
+  return 'NECUNOSCUT'
 }
 
 function Get-TextCurat {
@@ -150,33 +188,51 @@ function New-BriefReview {
 }
 
 function Get-RezultatAgent {
-  # Din ieșirea rdr: ultima linie „REZULTAT_TICHET: ...”. NELOCAL oriunde în ieșire = nelocal (fail-closed).
+  # Din câmpul „result” al rdr_<slug>.json (NU din stdout: acolo poate fi ecoul brief-ului, care conține chiar formatul).
+  # Se iau DOAR liniile care ÎNCEP cu „REZULTAT_TICHET:” (eventual între backtick-uri); contează ULTIMA.
+  # O linie NELOCAL oriunde = nelocal (fail-closed). Ultima linie neparsabilă => NECUNOSCUT.
   param([AllowNull()][string]$Iesire)
   if ([string]::IsNullOrEmpty($Iesire)) { return @{ tip = 'NECUNOSCUT'; detaliu = 'iesire goala'; nelocal = $false } }
-  $m = [regex]::Matches($Iesire, 'REZULTAT_TICHET:[ \t]*(PR|NELOCAL|ESUAT)\b([^\r\n"\\]*)')
-  $nelocal = $Iesire -cmatch 'REZULTAT_TICHET:[ \t]*NELOCAL'
-  if ($m.Count -eq 0) { return @{ tip = 'NECUNOSCUT'; detaliu = 'fara linie REZULTAT_TICHET'; nelocal = $nelocal } }
-  $ult = $m[$m.Count - 1]
-  return @{ tip = $ult.Groups[1].Value; detaliu = (Get-TextSigurLinie $ult.Groups[2].Value 200); nelocal = $nelocal }
+  $linii = @(($Iesire -split "\r?\n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -cmatch '^`?REZULTAT_TICHET:' })
+  $nelocal = @($linii | Where-Object { $_ -cmatch '^`?REZULTAT_TICHET:[ \t]*NELOCAL\b' }).Count -gt 0
+  if ($linii.Count -eq 0) { return @{ tip = 'NECUNOSCUT'; detaliu = 'fara linie REZULTAT_TICHET'; nelocal = $nelocal } }
+  $m = [regex]::Match($linii[$linii.Count - 1], '\A`?REZULTAT_TICHET:[ \t]*(PR|NELOCAL|ESUAT)(?:[ \t]+([^`]*))?`?\z')
+  if (-not $m.Success) { return @{ tip = 'NECUNOSCUT'; detaliu = 'linie REZULTAT_TICHET neclara'; nelocal = $nelocal } }
+  return @{ tip = $m.Groups[1].Value; detaliu = (Get-TextSigurLinie $m.Groups[2].Value 200); nelocal = $nelocal }
 }
 
 function Get-VerdictReview {
-  # Contract (sablon_review.md): bloc „REZULTAT_REVIEW” cu VERDICT: GO|GO_CU_CONDITII|NO_GO, P0: <n>, P1: <n>.
-  # Se ia ULTIMUL bloc. Lipsă / neclar => NECUNOSCUT (fail-closed: nu se face merge).
+  # Contract (sablon_review.md): blocul final, fiecare pe linie proprie: REZULTAT_REVIEW / VERDICT: <tok> / P0: <n> / P1: <n>.
+  # Se ia DOAR ULTIMA linie care începe cu „VERDICT:”; token-ul = TOT restul liniei, care trebuie să fie exact unul dintre
+  # GO | GO_CU_CONDITII | NO_GO (sau NO-GO). Orice ambiguitate => NECUNOSCUT (fail-closed: fără merge):
+  # token cu text în plus („GO Nu, NO-GO”), fără linia REZULTAT_REVIEW înainte, mai multe VERDICT / P0 / P1 în blocul
+  # final, P0 / P1 lipsă, înaintea verdictului sau ne-numerice.
   param([AllowNull()][string]$Iesire)
   $rez = @{ verdict = 'NECUNOSCUT'; p0 = -1; p1 = -1 }
   if ([string]::IsNullOrEmpty($Iesire)) { return $rez }
-  $idx = $Iesire.LastIndexOf('REZULTAT_REVIEW')
-  if ($idx -lt 0) { return $rez }
-  $bloc = $Iesire.Substring($idx)
-  $mv = [regex]::Match($bloc, '(?im)^[\s*>_-]*VERDICT[\s*_]*:[\s*_]*(NO[ _-]?GO|GO[ _-]?CU[ _-]?CONDI[TȚŢ]II|GO)\b')
-  $m0 = [regex]::Match($bloc, '(?im)^[\s*>_-]*P0[\s*_]*:[\s*_]*(\d+)')
-  $m1 = [regex]::Match($bloc, '(?im)^[\s*>_-]*P1[\s*_]*:[\s*_]*(\d+)')
-  if (-not ($mv.Success -and $m0.Success -and $m1.Success)) { return $rez }
-  $v = ($mv.Groups[1].Value.ToUpperInvariant() -replace '[ _-]', '')
-  if ($v -ceq 'NOGO') { $rez.verdict = 'NO_GO' } elseif ($v -ceq 'GO') { $rez.verdict = 'GO' } else { $rez.verdict = 'GO_CU_CONDITII' }
-  $rez.p0 = [int]$m0.Groups[1].Value
-  $rez.p1 = [int]$m1.Groups[1].Value
+  $l = @(($Iesire -split "\r?\n") | ForEach-Object { $_.Trim() })
+  $iv = -1
+  for ($i = $l.Count - 1; $i -ge 0; $i--) { if ($l[$i].StartsWith('VERDICT:', [StringComparison]::Ordinal)) { $iv = $i; break } }
+  if ($iv -lt 0) { return $rez }
+  $ir = -1
+  for ($i = $iv - 1; $i -ge 0; $i--) { if ($l[$i] -ceq 'REZULTAT_REVIEW') { $ir = $i; break } }
+  if ($ir -lt 0) { return $rez }
+  $bloc = @($l[($ir + 1)..($l.Count - 1)])
+  if (@($bloc | Where-Object { $_ -cmatch '^VERDICT\s*:' }).Count -ne 1) { return $rez }
+  $tok = $l[$iv].Substring(8).Trim().ToUpperInvariant()
+  $v = switch -CaseSensitive ($tok) { 'GO' { 'GO' } 'GO_CU_CONDITII' { 'GO_CU_CONDITII' } 'GO_CU_CONDIȚII' { 'GO_CU_CONDITII' } 'NO_GO' { 'NO_GO' } 'NO-GO' { 'NO_GO' } default { $null } }
+  if ($null -eq $v) { return $rez }
+  $dupa = if ($iv -lt $l.Count - 1) { @($l[($iv + 1)..($l.Count - 1)]) } else { @() }
+  $p = @{}
+  foreach ($k in @('P0', 'P1')) {
+    if (@($bloc | Where-Object { $_ -cmatch ('^' + $k + '\s*:') }).Count -ne 1) { return $rez }
+    $lin = @($dupa | Where-Object { $_ -cmatch ('^' + $k + '\s*:') })
+    if ($lin.Count -ne 1) { return $rez }
+    $m = [regex]::Match($lin[0], ('\A' + $k + ':[ \t]*([0-9]{1,4})\z'))
+    if (-not $m.Success) { return $rez }
+    $p[$k] = [int]$m.Groups[1].Value
+  }
+  $rez.verdict = $v; $rez.p0 = $p['P0']; $rez.p1 = $p['P1']
   return $rez
 }
 
@@ -215,6 +271,89 @@ function Test-DiffAreSecurityDefiner {
   return $false
 }
 
+function Get-CuvinteInterziseDiff {
+  # Liniile MODIFICATE (+/-, fără antetele +++/---) care conțin un cuvânt din reguli.json (cuvinte_interzise_diff),
+  # comparat fără diferență de majuscule. Ex.: SalariiPage (stă în src/App.jsx, nu are fișier propriu), service_role.
+  param([AllowNull()][string]$Diff)
+  $gasite = New-Object System.Collections.ArrayList
+  if ([string]::IsNullOrEmpty($Diff)) { return @() }
+  foreach ($l in ($Diff -split "`n")) {
+    if (-not ($l.StartsWith('+') -or $l.StartsWith('-')) -or $l.StartsWith('+++') -or $l.StartsWith('---')) { continue }
+    $ll = $l.ToLowerInvariant()
+    foreach ($c in $script:CuvinteDiff) { if ($ll.Contains($c.ToLowerInvariant()) -and -not $gasite.Contains($c)) { [void]$gasite.Add($c) } }
+  }
+  return @($gasite)
+}
+
+function Test-DiffAreMarcajeRezultat {
+  # Diff-ul nu are voie să conțină marcajele contractului de rezultat (ar putea „vota” în locul reviewer-ului):
+  # REZULTAT_REVIEW / REZULTAT_TICHET / PAW_GATA / PAW_EROARE oriunde, sau o linie de cod care începe cu VERDICT: / P0: / P1:.
+  param([AllowNull()][string]$Diff)
+  if ([string]::IsNullOrEmpty($Diff)) { return $false }
+  foreach ($mk in $script:MarcajeRezultat) { if ($Diff.Contains($mk)) { return $true } }
+  foreach ($l in ($Diff -split "`n")) {
+    if ($l.Length -gt 0 -and '+- '.Contains($l.Substring(0, 1)) -and $l.Substring(1).Trim() -cmatch '^(VERDICT|P0|P1)\s*:') { return $true }
+  }
+  return $false
+}
+
+function Get-RegiuneFunctie {
+  # Liniile (1-based) ale unei funcții de nivel superior într-un fișier JS: de la „function <Nume>” / „const <Nume>” până
+  # înainte de următoarea declarație de la coloana 0. $null dacă nu o găsește (apelantul tratează asta fail-closed).
+  param([AllowNull()][string]$Text, [string]$Functie)
+  if ([string]::IsNullOrEmpty($Text) -or $Functie -cnotmatch '\A[A-Za-z_][A-Za-z0-9_]*\z') { return $null }
+  $l = $Text -split "\r?\n"
+  $reStart = '^(export\s+)?(default\s+)?(async\s+)?(function\s+' + $Functie + '\b|const\s+' + $Functie + '\b)'
+  $reDecl = '^(export\s+)?(default\s+)?(async\s+)?(function|const|let|var|class)\s'
+  $s = -1
+  for ($i = 0; $i -lt $l.Count; $i++) { if ($l[$i] -cmatch $reStart) { $s = $i; break } }
+  if ($s -lt 0) { return $null }
+  $e = $l.Count - 1
+  for ($i = $s + 1; $i -lt $l.Count; $i++) { if ($l[$i] -cmatch $reDecl) { $e = $i - 1; break } }
+  return @{ start = $s + 1; end = $e + 1 }
+}
+
+function Test-DiffAtingeRegiune {
+  # True dacă un hunk din diff-ul fișierului $Fisier intersectează liniile [Start, End] din versiunea de pe main
+  # (intervalul „-a,b” al hunk-ului) sau are funcția în antetul de context (@@ ... @@ function X).
+  param([AllowNull()][string]$Diff, [string]$Fisier, [int]$Start, [int]$End, [string]$Functie = '')
+  if ([string]::IsNullOrEmpty($Diff)) { return $false }
+  $tinta = ($Fisier -replace '\\', '/').ToLowerInvariant()
+  $inFisier = $false
+  foreach ($l in ($Diff -split "`n")) {
+    if ($l.StartsWith('diff --git ')) {
+      $m = [regex]::Match($l, '^diff --git a/(.+?) b/(.+?)\s*$')
+      $inFisier = $m.Success -and (($m.Groups[1].Value.ToLowerInvariant() -ceq $tinta) -or ($m.Groups[2].Value.ToLowerInvariant() -ceq $tinta))
+      continue
+    }
+    if (-not $inFisier) { continue }
+    $h = [regex]::Match($l, '^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@(.*)$')
+    if (-not $h.Success) { continue }
+    $a = [int]$h.Groups[1].Value
+    $b = if ($h.Groups[2].Success) { [int]$h.Groups[2].Value } else { 1 }
+    if ($b -eq 0) { $lo = $a; $hi = $a + 1 } else { $lo = $a; $hi = $a + $b - 1 }
+    if ($lo -le $End -and $hi -ge $Start) { return $true }
+    if ($Functie -and $h.Groups[3].Value.Contains($Functie)) { return $true }
+  }
+  return $false
+}
+
+function Get-RegiuniInterziseAtinse {
+  # Regiunile din reguli.json (regiuni_interzise: fișier + funcție, ex. src/App.jsx → SalariiPage) atinse de diff.
+  # $Surse = @{ '<fisier>' = <conținutul de pe origin/main sau $null> }. Fișier atins + sursă / funcție negăsită => atinsă.
+  param([AllowNull()][string]$Diff, [string[]]$Fisiere = @(), [hashtable]$Surse = @{})
+  $atinse = New-Object System.Collections.ArrayList
+  $fn = @($Fisiere | Where-Object { $_ } | ForEach-Object { ($_ -replace '\\', '/').ToLowerInvariant() })
+  foreach ($r in $script:RegiuniInterzise) {
+    $f = [string]$r.fisier; $fu = [string]$r.functie
+    if ($fn -cnotcontains $f.ToLowerInvariant()) { continue }
+    $src = if ($Surse.ContainsKey($f)) { $Surse[$f] } else { $null }
+    $reg = Get-RegiuneFunctie -Text $src -Functie $fu
+    if ($null -eq $reg -or (Test-DiffAtingeRegiune -Diff $Diff -Fisier $f -Start $reg.start -End $reg.end -Functie $fu)) { [void]$atinse.Add($f + ':' + $fu) }
+  }
+  return @($atinse)
+}
+
 function Test-ReviewTrece {
   param([AllowNull()][hashtable]$V)
   if ($null -eq $V) { return $false }
@@ -242,7 +381,10 @@ function Get-DecizieMerge {
     [int]$LiniiDiff = 0,
     [int]$MaxLiniiDiff = $script:Reguli.max_linii_diff,
     [bool]$CrossRepo = $false,
-    [bool]$HeadSchimbat = $false
+    [bool]$HeadSchimbat = $false,
+    [string[]]$RegiuniAtinse = @(),
+    [bool]$BazaMain = $true,
+    [bool]$Deschis = $true
   )
   $motive = New-Object System.Collections.ArrayList
   if (-not (Test-ReviewTrece $Jak))   { [void]$motive.Add('review Jakarinos nu e GO fara P0/P1 (' + (Get-RezumatVerdict $Jak) + ')') }
@@ -254,10 +396,16 @@ function Get-DecizieMerge {
   if ($atinse.Count -gt 0) { [void]$motive.Add('atinge cai interzise: ' + (($atinse | Select-Object -First 5) -join ', ')) }
   if (Test-DiffAreSecurityDefiner $Diff) { [void]$motive.Add('diff-ul adauga SECURITY DEFINER') }
   # diff-ul care conține marcajele de rezultat ar putea „vota” în locul reviewer-ului (injectare) => doar manual
-  if (-not [string]::IsNullOrEmpty($Diff) -and ($Diff.Contains('REZULTAT_REVIEW') -or $Diff.Contains('REZULTAT_TICHET'))) { [void]$motive.Add('diff-ul contine marcaje de rezultat (REZULTAT_*)') }
+  if (Test-DiffAreMarcajeRezultat $Diff) { [void]$motive.Add('diff-ul contine marcaje de rezultat (REZULTAT_* / PAW_* / VERDICT:)') }
+  $cuv = @(Get-CuvinteInterziseDiff $Diff)
+  if ($cuv.Count -gt 0) { [void]$motive.Add('diff-ul atinge cuvinte interzise: ' + ($cuv -join ', ')) }
+  $reg = @($RegiuniAtinse | Where-Object { $_ })
+  if ($reg.Count -gt 0) { [void]$motive.Add('atinge regiuni interzise: ' + ($reg -join ', ')) }
   if ($LiniiDiff -gt $MaxLiniiDiff) { [void]$motive.Add("diff prea mare pentru merge automat ($LiniiDiff > $MaxLiniiDiff linii)") }
   if ($CrossRepo) { [void]$motive.Add('PR din fork') }
   if ($HeadSchimbat) { [void]$motive.Add('head-ul PR-ului s-a schimbat dupa review') }
+  if (-not $BazaMain) { [void]$motive.Add('PR-ul nu tinteste main (diff-ul revizuit e fata de main)') }
+  if (-not $Deschis) { [void]$motive.Add('PR-ul nu mai e deschis') }
   return @{ merge = ($motive.Count -eq 0); motive = @($motive) }
 }
 
@@ -267,7 +415,9 @@ function Get-RezumatVerdict {
   return ('' + $V.verdict + ', P0=' + $V.p0 + ', P1=' + $V.p1)
 }
 
-Export-ModuleMember -Function Get-ReguliTichete, Test-NumarTichet, Get-SlugTichet, Test-TichetAreUrmaGit, Select-TicheteNoi,
+Export-ModuleMember -Function Get-ReguliTichete, Test-NumarTichet, Get-SerieTichet, Get-SlugTichet, Test-TichetAreUrmaGit,
+  Get-CampResult, Get-StarePaw, Select-TicheteNoi,
   Get-TextCurat, Get-TextSigurLinie, Get-EffortTichet, New-MarcajDate, New-BriefTichet, New-BriefReview, Get-RezultatAgent,
-  Get-VerdictReview, Test-NumeBranch, Get-CaiInterziseAtinse, Test-DiffAreSecurityDefiner, Test-ReviewTrece, Test-ChecksVerzi,
-  Get-DecizieMerge, Get-RezumatVerdict
+  Get-VerdictReview, Test-NumeBranch, Get-CaiInterziseAtinse, Test-DiffAreSecurityDefiner, Get-CuvinteInterziseDiff,
+  Test-DiffAreMarcajeRezultat, Get-RegiuneFunctie, Test-DiffAtingeRegiune, Get-RegiuniInterziseAtinse, Test-ReviewTrece,
+  Test-ChecksVerzi, Get-DecizieMerge, Get-RezumatVerdict
