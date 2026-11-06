@@ -55,7 +55,7 @@ export default function DashboardEcran({ proiect }) {
     {!date && !mesaj && <p style={{ fontSize:12.5, color:G.muted, margin:'0 0 8px' }}>Se încarcă...</p>}
     {date && <>
       <h3 style={{ fontSize:15, fontWeight:700, margin:'16px 0 4px' }}>Centralizator pe UAT</h3>
-      <p style={{ fontSize:12.5, color:G.muted, margin:'0 0 8px' }}>Număr de perechi parcelă / deținător. UAT-urile fără perechi nu apar încă.</p>
+      <p style={{ fontSize:12.5, color:G.muted, margin:'0 0 8px' }}>Număr de parcele distincte. Fiecare parcelă contează o singură dată, inclusiv cele cu utilizatori / arendași.</p>
       <div style={{ overflowX: 'auto' }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead><tr>{['UAT', 'Total', 'Închise', '% închise', ...STARI.map(s => s.eticheta)].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
         <tbody>{date.uats.map((u, i) => <tr key={i} style={{ fontWeight: u.uat3 === 'TOTAL' ? 700 : 400 }}>

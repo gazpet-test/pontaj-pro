@@ -244,6 +244,117 @@ describe('genereazaConvocator', () => {
     informare: INFORMARE_APROBATA,
   })
 
+  // Expected copiate din Model 1U furnizat de Juridic, nu importate din rețetă.
+  const fraze1U = [
+    'Parcela pe care o folosiți (în arendă / în folosință), afectată temporar de lucrări:',
+    'Vă invităm, în calitate de utilizator al terenului, să constatați starea terenului și să semnați procesul-verbal de constatare, la sediul Primăriei Husnicioara, în una dintre zilele de mai jos.',
+    'Proprietarul parcelei este convocat separat; procesul-verbal poate fi semnat fie de proprietar, fie de dumneavoastră, iar în el se consemnează calitatea celui care semnează.',
+    'Procesul-verbal va fi pregătit cu datele parcelei; la sesiune doar îl verificați și îl semnați.',
+    'Semnătura dumneavoastră privește numai starea terenului constatată la fața locului; ea nu modifică drepturile proprietarului asupra terenului și nici raporturile dintre dumneavoastră și proprietar.',
+    'Dacă pentru această parcelă nu semnează procesul-verbal nici proprietarul, nici utilizatorul, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului (proces-verbal de constatare în lipsă). Dacă procesul-verbal a fost deja semnat de proprietar înainte de sesiune, prezența dumneavoastră nu mai este necesară.',
+    'Această convocare privește numai starea terenului după lucrări. Despăgubirile și indemnizațiile pentru folosința terenului și pentru culturi sunt stabilite și plătite de TRANSGAZ persoanelor îndreptățite, potrivit legii; întrebările despre ele le puteți adresa reprezentantului TRANSGAZ prezent la sesiune.',
+    'Vă rugăm să aveți asupra dumneavoastră actul de identitate și, dacă îl aveți, actul din care rezultă folosința terenului (contract de arendă, de închiriere, de comodat sau altă dovadă). Calitatea dumneavoastră de utilizator este consemnată din evidențele Beneficiarului; actele nu se rețin și nu se copiază.',
+    'Dacă nu mai folosiți această parcelă, o folosiți doar în parte sau o folosește și altcineva, vă rugăm să ne comunicați (prin formular, telefon sau răspuns scris), ca să convocăm persoana potrivită. Semnați numai pentru parcela pe care o folosiți efectiv.',
+  ]
+  const sablon1U = () => readFileSync(resolve(process.cwd(), 'public/redari/sabloane/convocator_utilizator.docx'))
+  it('Model 1U are aceleași 35 de placeholder-e întregi ca §2.1, fără chei noi', async () => {
+    const z = await JSZip.loadAsync(sablon1U())
+    const xml = await z.file('word/document.xml').async('string')
+    const chei = [...new Set([...xml.matchAll(/\{\{([\w.]+)\}\}/g)].map(m => m[1]))].sort()
+    expect(chei).toHaveLength(35)
+    expect(chei).toEqual(CHEI_CONVOCATOR.filter(k => k !== 'id_parcela').sort())
+    const inWt = [...xml.matchAll(/<w:t[^>]*>(.*?)<\/w:t>/g)].flatMap(m => [...m[1].matchAll(/\{\{([\w.]+)\}\}/g)].map(k => k[1]))
+    expect([...new Set(inWt)].sort()).toEqual(chei)
+  })
+  it('Model 1U păstrează structura, formatarea A4, antetul, QR și opțiunile din Model 1', async () => {
+    const z1 = await JSZip.loadAsync(citesteSablon()), zu = await JSZip.loadAsync(sablon1U())
+    const x1 = await z1.file('word/document.xml').async('string'), xu = await zu.file('word/document.xml').async('string')
+    const faraText = x => x.replace(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g, '<w:t/>')
+    // Singura diferență structurală 1U: 30 pt după opțiuni, ca QR-ul să nu suprapună textul.
+    expect(xu.match(/<w:spacing w:before="600"\/>/g)).toHaveLength(1)
+    expect(faraText(xu.replace('<w:spacing w:before="600"/>', ''))).toBe(faraText(x1))
+    expect(await zu.file('word/styles.xml').async('string')).toBe(await z1.file('word/styles.xml').async('string'))
+    const texte = x => [...x.matchAll(/<w:t[^>]*>(.*?)<\/w:t>/g)].map(m => m[1])
+    const optiuni = x => texte(x).filter(t => t.trim().startsWith('☐'))
+    expect(optiuni(xu)).toHaveLength(4)
+    expect(optiuni(xu)).toEqual(optiuni(x1))
+    // Excepția (10), #999: rândul cu datele firmei este acum în imaginea din header.
+    // În corp rămâne un singur text de antet comun, înaintea destinatarului diferit în 1U.
+    expect(texte(xu)[0]).toBe(texte(x1)[0])
+    expect(texte(xu)[0]).toBe('Lider al Asocierii Gazpet Instal – Moldocor – Habau – Comesad RO · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}')
+    expect(xu).toContain('<w:pgSz w:w="11906" w:h="16838"/>')
+  })
+  it.each([false, true])('Model 1U se încarcă fără bufferul proprietarului, previzualizare=%s', async permiteIncomplet => {
+    const date = complet()
+    date.detinator.calitate = 'utilizator'
+    date.proiect.convocare_utilizatori_aprobata = true
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, arrayBuffer: async () => sablon1U() })))
+    try {
+      const r = await genereazaConvocator({ ...date, permiteIncomplet })
+      expect(r.calitateDocument).toBe('utilizator')
+      expect(textDin((await xmlDin(r.blob, 'word/document.xml')).xml)).toContain('în calitate de utilizator al terenului')
+    } finally { vi.unstubAllGlobals() }
+  })
+  it.each(['utilizator', 'arendas', 'proprietar', 'coproprietar', 'mostenitor'])('Modelul real ales după calitatea %s, completat strict, inclusiv QR și verso', async calitate => {
+    const f = vi.fn(async () => ({ ok: true, arrayBuffer: async () => sablon1U() }))
+    vi.stubGlobal('fetch', f)
+    try {
+      const date = complet()
+      date.detinator.calitate = calitate
+      date.proiect.convocare_utilizatori_aprobata = true
+      // Apelant real: trimite încă Model 1; generatorul trebuie să îl înlocuiască pentru 1U.
+      const r = await genereazaConvocator({ ...date, templateArrayBuffer: citesteSablon() })
+      const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
+      for (const cale of Object.keys(zip.files).filter(f => /^word\/.*\.xml$/.test(f))) {
+        expect(await zip.file(cale).async('string'), cale).not.toMatch(/\{\{|\}\}/)
+      }
+      expect(xml).toContain('<w:drawing>')
+      expect(r.calitateDocument).toBe(calitate)
+      const text = textDin(xml)
+      if (['utilizator', 'arendas'].includes(calitate)) {
+        expect(f).toHaveBeenCalledTimes(1)
+        expect(f).toHaveBeenCalledWith('/redari/sabloane/convocator_utilizator.docx')
+        expect(text).toContain(`Către: POPESCU ION (fictiv), în calitate de ${calitate === 'arendas' ? 'arendaș' : 'utilizator'} al terenului`)
+        for (const fraza of fraze1U) expect(text).toContain(fraza)
+        expect(text).not.toContain('un coproprietar poate semna pentru ceilalți')
+        expect(text).not.toContain('Parcela dumneavoastră afectată')
+      } else {
+        expect(f).not.toHaveBeenCalled()
+        expect(text).toContain('Parcela dumneavoastră afectată temporar de lucrări:')
+        expect(text).not.toContain('Proprietarul parcelei este convocat separat')
+      }
+    } finally { vi.unstubAllGlobals() }
+  })
+  it.each(['http', 'retea', 'docx'])('Model 1U: eroare %s refuză fără fallback la Model 1', async tip => {
+    const f = vi.fn(async () => {
+      if (tip === 'retea') throw new Error('rețea indisponibilă')
+      return { ok: tip !== 'http', arrayBuffer: async () => new Uint8Array([1, 2, 3]) }
+    })
+    vi.stubGlobal('fetch', f)
+    try {
+      const date = complet()
+      date.detinator.calitate = 'utilizator'
+      date.proiect.convocare_utilizatori_aprobata = true
+      await expect(genereazaConvocator({ ...date, templateArrayBuffer: citesteSablon() })).rejects.toThrow()
+      expect(f).toHaveBeenCalledTimes(1)
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('calitatea captată înainte de await determină și șablonul, și eticheta, și stampila', async () => {
+    const date = complet()
+    date.detinator.calitate = 'arendas'
+    date.proiect.convocare_utilizatori_aprobata = true
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      date.detinator.calitate = 'proprietar'
+      return { ok: true, arrayBuffer: async () => sablon1U() }
+    }))
+    try {
+      const r = await genereazaConvocator({ ...date, templateArrayBuffer: citesteSablon() })
+      expect(r.calitateDocument).toBe('arendas')
+      expect(r.campuri.calitate).toBe('arendaș')
+      expect(textDin((await xmlDin(r.blob, 'word/document.xml')).xml)).toContain('în calitate de arendaș al terenului')
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('linkul și QR-ul sunt pe https://redari.gazpet.ro: fără origin, cu origin străin, cu window.location.origin pe alt domeniu', async () => {
     const vechi = globalThis.window
     globalThis.window = { location: { origin: 'https://pontaj-pro-sooty.vercel.app', hostname: 'pontaj-pro-sooty.vercel.app' } }
@@ -809,6 +920,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       storage: { from: (bucket) => ({
         upload: async (path, blob, o) => {
           apeluri.push({ tip: 'upload', bucket, path, size: blob.size, o })
+          await opt.inainteDeUpload?.()
           if (opt.eUp) return { error: { message: opt.eUp } }
           if (existente.has(path)) return { error: { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' } }
           existente.add(path); return { data: { path }, error: null }
@@ -826,16 +938,23 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       }) },
       from: (tabel) => ({
         insert: (rand) => ({ select: (col) => ({ single: async () => { apeluri.push({ tip: 'insert', tabel, rand, col }); return opt.eIns ? { data: null, error: { message: opt.eIns } } : { data: { id: 'uuid-fictiv-1' }, error: null } } }) }),
-        select: (col) => ({ eq: (c, val) => ({ single: async () => { apeluri.push({ tip: 'select', tabel, col, filtru: [c, val] }); return opt.eSel ? { data: null, error: { message: opt.eSel } } : { data: { id: val, fisier_convocator_path: opt.caleCurenta ?? null }, error: null } } }) }),
-        update: (rand) => ({ eq: (col, val) => ({ select: (c2) => ({ single: async () => { apeluri.push({ tip: 'update', tabel, rand, filtru: [col, val], col: c2 }); return opt.eUpd ? { data: null, error: { message: opt.eUpd } } : opt.updZero ? { data: null, error: null } : { data: { id: val }, error: null } } }) }) }),
+        select: (col) => ({ eq: (c, val) => ({ single: async () => { apeluri.push({ tip: 'select', tabel, col, filtru: [c, val] }); return opt.eSel ? { data: null, error: { message: opt.eSel } } : { data: { id: val, fisier_convocator_path: opt.caleCurenta ?? null, detinator: opt.faraContext ? null : { calitate: opt.calitate || 'proprietar', parcela: { proiect: { cod: 'LOT1-PRUNISOR-JUPA', convocare_utilizatori_aprobata: opt.aprobata ?? false } } } }, error: null } } }) }),
+        update: (rand) => ({ eq: (col, val) => ({ select: (c2) => ({ single: async () => { apeluri.push({ tip: 'update', tabel, rand, filtru: [col, val], col: c2 }); return opt.serverCalitate && rand.calitate_document !== opt.serverCalitate ? { data: null, error: { code: 'RD008', message: 'calitatea s-a schimbat - regenereaza' } } : opt.eUpd ? { data: null, error: { message: opt.eUpd } } : opt.updZero ? { data: null, error: null } : { data: { id: val }, error: null } } }) }) }),
       }),
+    }
+    supabase.rpc = async (fn, args) => {
+      expect(fn).toBe('fn_red_convocare_leaga')
+      const r = await supabase.from('red_convocari').update({ fisier_convocator_path: args.p_fisier_path, continut_hash: args.p_continut_hash, calitate_document: args.p_calitate_asteptata })
+        .eq('id', args.p_convocare_id).select('id').single()
+      apeluri.at(-1).rpc = { fn, args }
+      return { data: r.data ? [{ convocare_id: r.data.id }] : r.data, error: r.error }
     }
     return { supabase, apeluri }
   }
-  const arg = { blob: new Blob(['docx']), hash: 'ab'.repeat(32), proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1' }
+  const arg = { blob: new Blob(['docx']), hash: 'ab'.repeat(32), proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1', calitateDocument: 'proprietar' }
   const BAZA = 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0001'
   const PATH = `${BAZA}-v1.docx`
-  const argRe = { convocareId: 'uuid-vechi', blob: arg.blob, hash: arg.hash, proiectCod: arg.proiectCod, uat3: arg.uat3, idParcela: arg.idParcela, nrDocument: arg.nrDocument }
+  const argRe = { calitateDocument: 'proprietar', convocareId: 'uuid-vechi', blob: arg.blob, hash: arg.hash, proiectCod: arg.proiectCod, uat3: arg.uat3, idParcela: arg.idParcela, nrDocument: arg.nrDocument }
 
   // #970 r10 (Copilot P3-02): circuitul real Redari.jsx (generare → salvare) și FisaParcela.jsx (regenerare → reîncărcare),
   // cu supabase fals: fișierele încărcate respectă garda, hash-ul legat de rând e al fișierului, QR-ul e cel independent
@@ -874,11 +993,12 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     }
     // Redari.jsx: genereazaConvocator({ ...intrare, nrDocument }) → salveazaConvocator
     const g1 = await genereazaConvocator({ ...intrare, nrDocument: 'C-0001' })
-    const s = await salveazaConvocator(supabase, { blob: g1.blob, hash: g1.hash, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1' })
+    const s = await salveazaConvocator(supabase, { blob: g1.blob, hash: g1.hash, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1', calitateDocument: 'proprietar' })
     await verifica(incarcate.get(s.path), apeluri.find(a => a.tip === 'update').rand.continut_hash)
     // FisaParcela.jsx: aceeași convocare regenerată (data originală) → reincarcaConvocator, versiune nouă
     const g2 = await genereazaConvocator({ ...intrare, nrDocument: 'C-0001', dataDocument: '2026-11-03' })
-    const r = await reincarcaConvocator(supabase, { convocareId: s.convocareId, blob: g2.blob, hash: g2.hash, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001' })
+    expect(g2.calitateDocument).toBe('proprietar')
+    const r = await reincarcaConvocator(supabase, { convocareId: s.convocareId, blob: g2.blob, hash: g2.hash, calitateDocument: g2.calitateDocument, proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001' })
     expect(r.path).toBe('LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0001-v2.docx')
     await verifica(incarcate.get(r.path), apeluri.filter(a => a.tip === 'update').at(-1).rand.continut_hash)
     // o adresă proprie în text_gdpr: garda oprește la generare, deci nu se ajunge la nicio scriere (insert / upload / update)
@@ -908,7 +1028,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     expect(apeluri[0].rand).not.toHaveProperty('fisier_convocator_path')
     expect(apeluri[0].rand).not.toHaveProperty('continut_hash')
     expect(apeluri[1]).toMatchObject({ bucket: 'redari', path: PATH, size: 4, o: { contentType: MIME_DOCX, upsert: false } })
-    expect(apeluri[2]).toMatchObject({ tabel: 'red_convocari', filtru: ['id', 'uuid-fictiv-1'], col: 'id', rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
+    expect(apeluri[2]).toMatchObject({ tabel: 'red_convocari', filtru: ['id', 'uuid-fictiv-1'], col: 'id', rand: { fisier_convocator_path: PATH, continut_hash: arg.hash, calitate_document: 'proprietar' } })
   })
   it('canal explicit; segment invalid în cale → eroare ÎNAINTE de orice apel (numărul nu se consumă)', async () => {
     const { supabase, apeluri } = fake()
@@ -940,6 +1060,46 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const b = fake({ updZero: true })
     await expect(salveazaConvocator(b.supabase, arg)).rejects.toThrow(/niciun rând actualizat/)
   })
+
+  it.each([['utilizator', false], ['arendas', false]])('r2 reincarcare %s / %s: poarta proaspata refuza inainte de Storage', async (calitate, aprobata) => {
+    const { supabase, apeluri } = fake({ calitate, aprobata })
+    await expect(reincarcaConvocator(supabase, { ...argRe, calitateDocument: calitate })).rejects.toThrow(/utilizator - convocare neaprobata/)
+    expect(apeluri.map(a => a.tip)).toEqual(['select'])
+    expect(apeluri[0].col).toContain('detinator:red_detinatori!inner')
+  })
+  it.each(['utilizator', 'arendas'])('PR3b: reîncărcarea %s aprobat trece poarta și leagă calitatea documentului', async calitate => {
+    const { supabase, apeluri } = fake({ calitate, aprobata: true })
+    await reincarcaConvocator(supabase, { ...argRe, calitateDocument: calitate })
+    expect(apeluri.map(a => a.tip)).toEqual(['select', 'list', 'upload', 'update'])
+    expect(apeluri.at(-1).rand.calitate_document).toBe(calitate)
+  })
+  it('r2 relatia inaccesibila nu inseamna proprietar: niciun LIST/upload', async () => {
+    const { supabase, apeluri } = fake({ faraContext: true })
+    await expect(reincarcaConvocator(supabase, argRe)).rejects.toThrow(/Contextul convocarii/)
+    expect(apeluri.map(a => a.tip)).toEqual(['select'])
+  })
+
+
+  it('r3 (b): schimbare dupa SELECT, in timpul uploadului -> trimite calitatea documentului, serverul refuza legarea', async () => {
+    const opt = { serverCalitate: 'proprietar' }
+    opt.inainteDeUpload = () => { opt.serverCalitate = 'utilizator' }
+    const { supabase, apeluri } = fake(opt)
+    const e = await reincarcaConvocator(supabase, { ...argRe, calitateDocument: 'proprietar' }).catch(e => e)
+    expect(e).toMatchObject({ pas: 'update', code: 'RD008' })
+    expect(e.message).toContain('calitatea s-a schimbat - regenereaza')
+    expect(apeluri.map(a => a.tip)).toEqual(['select', 'list', 'upload', 'update'])
+    expect(apeluri.at(-1).rand).toEqual({ fisier_convocator_path: PATH, continut_hash: arg.hash, calitate_document: 'proprietar' })
+    expect(apeluri.at(-1).rpc.args.p_calitate_asteptata).toBe('proprietar')
+  })
+  it('r3: calitatea asteptata lipsa sau deja schimbata refuza fara Storage', async () => {
+    const a = fake()
+    await expect(reincarcaConvocator(a.supabase, { ...argRe, calitateDocument: undefined })).rejects.toThrow('Lipsește calitatea documentului')
+    expect(a.apeluri).toEqual([])
+    const b = fake({ calitate: 'coproprietar' })
+    await expect(reincarcaConvocator(b.supabase, argRe)).rejects.toThrow('calitatea s-a schimbat - regenereaza')
+    expect(b.apeluri.map(a => a.tip)).toEqual(['select'])
+  })
+
   it('reincarcaConvocator pe rând FĂRĂ fișier (path NULL): citește rândul, încarcă v1 (upsert false), update pe id-ul dat', async () => {
     const { supabase, apeluri } = fake({ caleCurenta: null })
     const r = await reincarcaConvocator(supabase, argRe)
@@ -949,7 +1109,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     expect(apeluri[0].col).toMatch(/fisier_convocator_path/)
     expect(apeluri[1]).toMatchObject({ bucket: 'redari', folder: 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001' })
     expect(apeluri[2]).toMatchObject({ bucket: 'redari', path: PATH, o: { contentType: MIME_DOCX, upsert: false } })
-    expect(apeluri[3]).toMatchObject({ filtru: ['id', 'uuid-vechi'], rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
+    expect(apeluri[3]).toMatchObject({ filtru: ['id', 'uuid-vechi'], rand: { fisier_convocator_path: PATH, continut_hash: arg.hash, calitate_document: 'proprietar' } })
     await expect(reincarcaConvocator(supabase, { blob: arg.blob, hash: arg.hash })).rejects.toThrow(/id-ul convocării/)
   })
   it('reincarcaConvocator pe rând CU fișier: versiunea următoare, calea veche nu se atinge (niciun upsert:true nicăieri)', async () => {
@@ -958,7 +1118,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     expect(r).toEqual({ path: `${BAZA}-v4.docx`, convocareId: 'uuid-vechi', versiune: 4 })
     expect(apeluri.filter(a => a.tip === 'upload').map(a => a.path)).toEqual([`${BAZA}-v4.docx`])
     expect(apeluri.filter(a => a.tip === 'upload').every(a => a.o.upsert === false)).toBe(true)
-    expect(apeluri.at(-1)).toMatchObject({ tip: 'update', rand: { fisier_convocator_path: `${BAZA}-v4.docx`, continut_hash: arg.hash } })
+    expect(apeluri.at(-1)).toMatchObject({ tip: 'update', rand: { fisier_convocator_path: `${BAZA}-v4.docx`, continut_hash: arg.hash, calitate_document: 'proprietar' } })
     // cale veche fără sufix de versiune (fișier dinainte de versionare) → prima versiune e v1
     const b = fake({ caleCurenta: `${BAZA}.docx` })
     expect((await reincarcaConvocator(b.supabase, argRe)).path).toBe(`${BAZA}-v1.docx`)

@@ -1,3 +1,4 @@
+import { STARI_INCHISE } from './stare.js'
 // Logica pura; datele calendaristice ISO se compara fara conversie UTC.
 export function zileSesiune(uat) {
   return [1, 2, 3].map(nr => ({ nr, data: uat?.[`sesiune_zi${nr}`], program: uat?.[`program_zi${nr}`] || '' }))
@@ -61,7 +62,7 @@ export function agregaCentralizator(randuri) {
     if (r.numar == null || !Number.isFinite(n) || n < 0) throw new Error('Centralizator: numar invalid.')
     u.total += n
     if (r.stare != null) u.pe_stare[r.stare] = (u.pe_stare[r.stare] || 0) + n
-    if (['PV_A_SEMNAT', 'PV_B_CONSTATARE'].includes(r.stare)) u.inchise += n
+    if (STARI_INCHISE.includes(r.stare)) u.inchise += n
   }
   const uats = [...grupuri.values()].sort((a, b) => (a.uat_nume || '').localeCompare(b.uat_nume || '', 'ro'))
   const total = { uat3: 'TOTAL', uat_nume: 'TOTAL', total: 0, inchise: 0, procent: 0, pe_stare: {} }

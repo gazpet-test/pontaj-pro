@@ -55,7 +55,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
 ## 1. Cum au fost făcute șabloanele (și cum se refac)
 
 - **Reproductibil (Final_v2)**: `node scripts/redari_sabloane_din_modele.mjs` citește modelele din `docs/redari/referinta/` și
-  scrie cele 5 șabloane; `--verifica` doar compară (iese cu 1 dacă un șablon din repo diferă de ce ar produce scriptul). Fiecare
+  scrie cele 6 șabloane; `--verifica` doar compară (iese cu 1 dacă un șablon din repo diferă de ce ar produce scriptul). Fiecare
   operație caută textul EXACT din model și cere numărul declarat de apariții — un model schimbat oprește scriptul, nu produce
   un șablon greșit. Ieșirea e deterministă (dată fixă pe intrările modificate, fără intrări de director).
 - S-a modificat DOAR textul din `<w:t>` în `word/document.xml` (modelele nu au antete/subsoluri Word); formatarea e a
@@ -85,8 +85,8 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   amprenta textului de dinainte (nimic altceva schimbat în șablon). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
-- **(10) Antetul oficial Gazpet ca imagine, în header-ul PRIMEI pagini (decizia Răzvan 05.11.2026)**, pe toate cele 6 șabloane
-  (inclusiv `cerere_imputernicire.docx`). Imaginea: `docs/redari/referinta/antet_gazpet.jpg` (2342×337 px, 300 dpi, JPEG 170 KB),
+- **(10) Antetul oficial Gazpet ca imagine, în header-ul PRIMEI pagini (decizia Răzvan 05.11.2026)**, pe toate cele 7 șabloane
+  (inclusiv `cerere_imputernicire.docx` și `convocator_utilizator.docx`). Imaginea: `docs/redari/referinta/antet_gazpet.jpg` (2342×337 px, 300 dpi, JPEG 170 KB),
   decupată din „Adresa Europan.pdf” (nr. 1008/03.11.2026): datele firmei (Banca Transilvania, J2007001650296), foto conductă,
   siglele AQ Cert ISO 9001 / 14001. Decupajul vechi de pe NAS (`Documente Redari\ANTET\antet_gazpet_300dpi.png`) era tăiat jos
   și nu se folosește. `scripts/redari_antet.mjs` (folosit de ambele generatoare): header de tip `first` + `<w:titlePg/>` (versoul
@@ -96,8 +96,7 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   · Str. Fluturilor nr. 34 … · office@gazpet.ro”) **se scoate din corp** (`faraDateFirma`, exact o apariție: run-ul + `<w:br/>`);
   rămâne „Lider al Asocierii … · Contract Transgaz nr. {{contract_nr}}/{{contract_data}} · {{proiect_denumire}}”.
   `sabloaneA4.test.js` declară textul scos (`SCOS_INCEPUT`) și cere, după repunere, amprenta de dinainte; testele „antetul oficial”
-  verifică header-ul pe șabloane și pe convocatorul completat cu QR. **Pagina unică a feței convocatorului trebuie verificată în
-  Word** (pe server nu există Word / LibreOffice): documente-test cu date fictive în `Documente Redari\TEST_antet` pe NAS.
+  verifică header-ul pe șabloane și pe convocatorul completat cu QR. **Aspectul antetului a fost verificat în Word și aprobat de Răzvan**; documente-test cu date fictive în `Documente Redari\TEST_antet` pe NAS.
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
   decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):
@@ -205,6 +204,31 @@ există în contract (strânse în §3). „Oblig.” = obligatoriu la generarea
 Rămân de mână (intenționat): opțiunile cu ☐ („ziua ____ / intervalul ____”, obiecțiile scrise) — le completează
 destinatarul la răspunsul scris; liniile de semnătură. Dispărute față de contract §8: `{{id_parcela}}` (modelul NU afișează
 ID-ul intern — de decis dacă îl adăugăm, ex. lângă „Nr. convocare”, pentru corelare cu registrul și formularul public).
+
+### 2.1U `convocator_utilizator.docx` — Model 1U (Juridic, 05.11.2026; validat de Razvan 06.11.2026)
+
+Aceleași **35 de chei** și aceeași hartă sursă → placeholder ca §2.1; fără `{{link}}`, fără chei noi.
+`CHEI_CONVOCATOR` rămâne contractul comun (include suplimentar `id_parcela` pentru corelare).
+`{{calitate}}` folosește calitatea captată la generare (`calitateDocument`, salvată în `calitate_document`):
+`utilizator` → „utilizator”, `arendas` → „arendaș”. Linia este exact
+„Către: {{nume}}, în calitate de {{calitate}} al terenului”, fără paranteze adăugate etichetei.
+
+Reproducere: `node scripts/redari_sabloane_din_modele.mjs`; control octet cu octet:
+`node scripts/redari_sabloane_din_modele.mjs --verifica` → `identic`.
+Rețeta moștenește Model 1 v6 (`docs/redari/referinta/Model_1_Convocator_proprietar_v6_final.docx`),
+parametrizarea, antetul existent, QR-ul și formatarea A4 ale convocatorului. Excepția de formatare (7)
+include pentru 1U 30 pt înainte de paragraful de după opțiuni, pentru a elibera QR-ul de 3 cm
+în LibreOffice; textul este verificat neschimbat după acest pas. Rețeta aplică diferențele
+Juridic 1–4 și 6–9, fiecare cu exact o apariție verificată; 5 și 10 rămân identice.
+Textul complet 1U cere explicit și „datele parcelei” în loc de „datele parcelei dumneavoastră”.
+Punctele de confirmat (a)–(c) sunt păstrate literal, fără variante alternative; (d), formularul public,
+rămâne în afara acestui PR. Textul este validat de Razvan 06.11.2026; nu cere aviz avocat.
+
+`genereazaConvocator` încarcă Model 1U pentru `utilizator` / `arendas`, indiferent de bufferul
+Model 1 trimis de apelanții existenți; o eroare de încărcare sau DOCX invalid refuză generarea,
+fără fallback. Poarta owner PR3a rămâne obligatorie inclusiv la previzualizare.
+PR #999: `faraDateFirma` și `adaugaAntet` se aplică în constructorul comun `construieste`,
+după pașii de text, pentru toate rețetele, inclusiv 1U.
 
 ### 2.2 pv_a.docx (Model 2) - per detinator, 51 chei distincte (Final_v2: fara bifa_foto_da / bifa_foto_nu / foto_nr)
 
@@ -388,10 +412,10 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | „constatare pe teren cerută? (data)” (Model 6 col. AB) | registru | v5 spune „la data stabilită de comisie” → data vine din comisie, nu de la deținător: `red_raspunsuri.constatare_teren_data` (setată de operator) | — |
 | conținut fix de parametrizat la alt proiect | toate | A.P.M. Mehedinți, Acordul de mediu, „Lider al Asocierii …”, Prunișor–Jupa în corp | nu acum (Lot 1) |
 
-## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (05.11.2026, Final_v2 + A4 + convocator doar cu QR + antet pe adresa UAT + antetul-imagine în header)
+## 4. Ieșirea `node scripts/redari_sabloane_verifica.mjs` (06.11.2026, Final_v2 + A4 + QR + Model 1U + antetul-imagine în header)
 
 ```text
-# Verificare șabloane Redări — 6 fișiere din public/redari/sabloane (2026-11-04)
+# Verificare șabloane Redări — 7 fișiere din public/redari/sabloane (2026-11-06)
 
 ## adresa_uat.docx — OK
 - părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 60
@@ -410,6 +434,15 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 - relații externe (.rels TargetMode=External): niciuna
 
 ## convocator.docx — OK
+- părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 55
+- placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
+- `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
+- pagină: 11906×16838 twips (A4); margini sus/jos/stânga/dreapta (cm): 1.27/1.27/1.50/1.50; corp Normal: 9.5 pt
+- {{qr}} singur în paragraf: da
+- relații externe (.rels TargetMode=External): niciuna
+- resturi intenționate: 3× opțiune bifată de mână de destinatar (convocator); 2× linie de semnătură olografă
+
+## convocator_utilizator.docx — OK
 - părți citite: word/document.xml, word/header1.xml; paragrafe cu text: 55
 - placeholder-e distincte: 35 (apariții: 37); rupte între run-uri: 0
 - `{{adresa}}` `{{calitate}}` `{{contact_email}}` `{{contact_nume}}` `{{contact_telefon}}`×2 `{{contract_data}}` `{{contract_nr}}` `{{data}}` `{{imputernicire_data}}` `{{imputernicire_nr}}` `{{nr_cadastral}}` `{{nr_document}}` `{{nume}}` `{{poz_hg}}` `{{program1}}` `{{program2}}` `{{program3}}` `{{proiect_denumire}}` `{{qr}}` `{{reprezentant_tgz}}` `{{reprezentant_tgz_telefon}}` `{{sat}}` `{{sate_zi1}}` `{{sate_zi2}}` `{{sate_zi3}}` `{{semnatar_gazpet}}` `{{semnatar_tgz}}` `{{suprafata}}` `{{tarla}}` `{{text_gdpr}}` `{{tronson}}` `{{uat}}`×2 `{{zi1}}` `{{zi2}}` `{{zi3}}`
@@ -448,7 +481,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 |---|---|
 | `{{act_doveditor}}` | pv_a |
 | `{{act_identitate}}` | pv_a |
-| `{{adresa}}` | convocator |
+| `{{adresa}}` | convocator, convocator_utilizator |
 | `{{afisare_data_end}}` | adresa_uat, pv_b |
 | `{{afisare_data_start}}` | adresa_uat, pv_b |
 | `{{afisare_ora}}` | adresa_uat |
@@ -492,43 +525,43 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{bifa_st_insamantat}}` | pv_a, pv_b |
 | `{{bifa_st_nivelat}}` | pv_a, pv_b |
 | `{{bifa_st_strat_vegetal}}` | pv_a, pv_b |
-| `{{calitate}}` | convocator |
+| `{{calitate}}` | convocator, convocator_utilizator |
 | `{{calitate_cota}}` | pv_a |
 | `{{categoria_folosinta}}` | pv_a, pv_b |
 | `{{categoria_initiala}}` | pv_a, pv_b |
-| `{{contact_email}}` | adresa_uat, cerere_imputernicire, convocator |
-| `{{contact_nume}}` | adresa_uat, convocator |
-| `{{contact_telefon}}` | adresa_uat, convocator |
-| `{{contract_data}}` | adresa_uat, cerere_imputernicire, convocator, pv_a, pv_b, pv_c |
-| `{{contract_nr}}` | adresa_uat, cerere_imputernicire, convocator, pv_a, pv_b, pv_c |
+| `{{contact_email}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
+| `{{contact_nume}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{contact_telefon}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{contract_data}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
+| `{{contract_nr}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
 | `{{conv_data_confirmare}}` | pv_b |
 | `{{conv_data_expediere}}` | pv_b |
 | `{{conv_nr_tracking}}` | pv_b |
 | `{{conv_retur}}` | pv_b |
-| `{{data}}` | adresa_uat, cerere_imputernicire, convocator |
+| `{{data}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
 | `{{data_pv}}` | pv_a, pv_b, pv_c |
 | `{{functie}}` | cerere_imputernicire |
-| `{{imputernicire_data}}` | adresa_uat, convocator |
-| `{{imputernicire_nr}}` | adresa_uat, convocator |
+| `{{imputernicire_data}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{imputernicire_nr}}` | adresa_uat, convocator, convocator_utilizator |
 | `{{judet}}` | adresa_uat |
 | `{{km_de_la}}` | pv_c |
 | `{{km_pana_la}}` | pv_c |
 | `{{locul}}` | pv_a, pv_b |
 | `{{lucrari_altele}}` | pv_a, pv_b |
-| `{{nr_cadastral}}` | convocator, pv_a, pv_b |
-| `{{nr_document}}` | adresa_uat, cerere_imputernicire, convocator |
+| `{{nr_cadastral}}` | convocator, convocator_utilizator, pv_a, pv_b |
+| `{{nr_document}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
 | `{{nr_pv}}` | pv_a, pv_b, pv_c |
 | `{{numar_parcele}}` | adresa_uat, pv_c |
-| `{{nume}}` | convocator, pv_a, pv_b |
+| `{{nume}}` | convocator, convocator_utilizator, pv_a, pv_b |
 | `{{obiectii_deschise_mp}}` | pv_c |
 | `{{obiectii_deschise_nr}}` | pv_c |
 | `{{obiectii_text}}` | pv_a |
-| `{{poz_hg}}` | convocator, pv_a, pv_b |
+| `{{poz_hg}}` | convocator, convocator_utilizator, pv_a, pv_b |
 | `{{program_text}}` | adresa_uat |
-| `{{program1}}` | adresa_uat, convocator |
-| `{{program2}}` | adresa_uat, convocator |
-| `{{program3}}` | adresa_uat, convocator |
-| `{{proiect_denumire}}` | adresa_uat, cerere_imputernicire, convocator, pv_a, pv_b, pv_c |
+| `{{program1}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{program2}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{program3}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{proiect_denumire}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
 | `{{pv_a_referinta}}` | pv_b |
 | `{{pva_corespondenta_mp}}` | pv_c |
 | `{{pva_corespondenta_nr}}` | pv_c |
@@ -536,7 +569,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{pva_sesiune_nr}}` | pv_c |
 | `{{pvb_mp}}` | pv_c |
 | `{{pvb_nr}}` | pv_c |
-| `{{qr}}` | convocator |
+| `{{qr}}` | convocator, convocator_utilizator |
 | `{{rand.nr}}` | adresa_uat |
 | `{{rand.nr_cadastral}}` | adresa_uat |
 | `{{rand.poz_hg}}` | adresa_uat |
@@ -552,39 +585,39 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `{{reluare_raspuns_text}}` | pv_b |
 | `{{reprezentant_gazpet}}` | adresa_uat, cerere_imputernicire |
 | `{{reprezentant_gazpet_nume}}` | adresa_uat |
-| `{{reprezentant_tgz}}` | adresa_uat, cerere_imputernicire, convocator |
-| `{{reprezentant_tgz_telefon}}` | adresa_uat, convocator |
+| `{{reprezentant_tgz}}` | adresa_uat, cerere_imputernicire, convocator, convocator_utilizator |
+| `{{reprezentant_tgz_telefon}}` | adresa_uat, convocator, convocator_utilizator |
 | `{{reprezentant_uat_functie}}` | adresa_uat |
 | `{{reprezentant_uat_nume}}` | adresa_uat, pv_b |
 | `{{reverificare_la}}` | pv_a |
-| `{{sat}}` | convocator, pv_a, pv_b |
-| `{{sate_zi1}}` | adresa_uat, convocator |
-| `{{sate_zi2}}` | adresa_uat, convocator |
-| `{{sate_zi3}}` | adresa_uat, convocator |
+| `{{sat}}` | convocator, convocator_utilizator, pv_a, pv_b |
+| `{{sate_zi1}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{sate_zi2}}` | adresa_uat, convocator, convocator_utilizator |
+| `{{sate_zi3}}` | adresa_uat, convocator, convocator_utilizator |
 | `{{semnatar_apm}}` | pv_b, pv_c |
 | `{{semnatar_detinator}}` | pv_a |
-| `{{semnatar_gazpet}}` | adresa_uat, convocator, pv_a, pv_b, pv_c |
-| `{{semnatar_tgz}}` | convocator, pv_a, pv_b, pv_c |
+| `{{semnatar_gazpet}}` | adresa_uat, convocator, convocator_utilizator, pv_a, pv_b, pv_c |
+| `{{semnatar_tgz}}` | convocator, convocator_utilizator, pv_a, pv_b, pv_c |
 | `{{semnatar_uat}}` | adresa_uat, pv_b |
 | `{{stare_teren_alta}}` | pv_a, pv_b |
-| `{{suprafata}}` | convocator, pv_a, pv_b |
-| `{{tarla}}` | convocator, pv_a, pv_b |
+| `{{suprafata}}` | convocator, convocator_utilizator, pv_a, pv_b |
+| `{{tarla}}` | convocator, convocator_utilizator, pv_a, pv_b |
 | `{{termen_confirmare}}` | adresa_uat |
 | `{{termen_remediere}}` | pv_a |
-| `{{text_gdpr}}` | convocator |
+| `{{text_gdpr}}` | convocator, convocator_utilizator |
 | `{{total_mp}}` | pv_c |
 | `{{total_nr}}` | pv_c |
-| `{{tronson}}` | convocator, pv_a, pv_b, pv_c |
-| `{{uat}}` | adresa_uat, convocator, pv_a, pv_b |
+| `{{tronson}}` | convocator, convocator_utilizator, pv_a, pv_b, pv_c |
+| `{{uat}}` | adresa_uat, convocator, convocator_utilizator, pv_a, pv_b |
 | `{{uat_lista}}` | cerere_imputernicire |
 | `{{uat_uri}}` | pv_c |
 | `{{verificare_data}}` | pv_a, pv_b |
 | `{{verificare_de}}` | pv_a |
 | `{{verificare_de_gazpet}}` | pv_b |
 | `{{verificare_de_tgz}}` | pv_b |
-| `{{zi1}}` | adresa_uat, convocator, pv_b |
-| `{{zi2}}` | adresa_uat, convocator, pv_b |
-| `{{zi3}}` | adresa_uat, convocator, pv_b |
+| `{{zi1}}` | adresa_uat, convocator, convocator_utilizator, pv_b |
+| `{{zi2}}` | adresa_uat, convocator, convocator_utilizator, pv_b |
+| `{{zi3}}` | adresa_uat, convocator, convocator_utilizator, pv_b |
 | `{{zile_sesiune_text}}` | adresa_uat |
 
 Rezultat: toate șabloanele OK

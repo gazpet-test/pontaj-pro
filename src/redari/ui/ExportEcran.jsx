@@ -1,3 +1,6 @@
+import { aplicaRol, calitatiRol, potrivesteRol } from '../rol.js'
+import { centralizatorParcele, stariCuParcela } from '../stare.js'
+import FiltruRol from './FiltruRol.jsx'
 import React, { useEffect, useRef, useState } from 'react'
 import * as XLSX from 'xlsx-js-style'
 import { supabase } from '../../lib/supabase.js'
@@ -42,15 +45,22 @@ async function inLoturi(fabrica, coloana, ids, chei, curent) {
   return tot
 }
 
-export async function citesteDateExport(client, proiectId, tip, curent) {
+export async function citesteDateExport(client, proiectId, tip, curent, rol = 'toti') {
+  calitatiRol(rol)
   const uats = await paginiExport(() => client.from('red_uat').select('id,nume,afisare_pv_nr,responsabil_id').eq('proiect_id', proiectId), ['id'], curent)
   const agregate = await paginiExport(() => client.from('red_v_centralizator_uat').select('uat_id,stare,numar').eq('proiect_id', proiectId).not('stare', 'is', null), ['uat_id', 'stare'], curent)
-  const centralizator = foaieCentralizator(agregate, uats)
-  if (tip === 'centralizator') return { centralizator, numar: agregate.reduce((n, r) => n + Number(r.numar), 0) }
+  let agregateSelectate = agregate
+  if (rol !== 'toti') {
+    const stariRol = await paginiExport(() => client.from('red_v_stare_parcela')
+      .select('parcela_id,detinator_id,proiect_id,uat_id,calitate,stare').eq('proiect_id', proiectId), ['parcela_id', 'detinator_id'], curent)
+    agregateSelectate = centralizatorParcele(stariCuParcela(stariRol).filter(r => potrivesteRol(r, rol)))
+  }
+  const centralizator = foaieCentralizator(agregateSelectate, uats)
+  if (tip === 'centralizator') return { centralizator, numar: agregateSelectate.reduce((n, r) => n + Number(r.numar), 0) }
   const parcele = await paginiExport(() => client.from('red_v_parcele')
     .select('id,uat_id,id_parcela,tronson,sat,tarla,nr_cadastral,poz_hg,suprafata_temporara_mp,categoria_folosinta,observatii')
     .eq('proiect_id', proiectId).is('sters_la', null), ['id'], curent)
-  const detinatori = await inLoturi(() => client.from('red_detinatori').select('id,parcela_id,nume,calitate,cota,sursa_date,versiune_lista_tgz').is('sters_la', null), 'parcela_id', parcele.map(p => p.id), ['id'], curent)
+  const detinatori = await inLoturi(() => aplicaRol(client.from('red_detinatori').select('id,parcela_id,nume,calitate,cota,sursa_date,versiune_lista_tgz').is('sters_la', null), rol), 'parcela_id', parcele.map(p => p.id), ['id'], curent)
   const ids = detinatori.map(d => d.id)
   const contacte = await inLoturi(() => client.from('red_detinatori_contact').select(tip === 'TGZ' ? 'detinator_id,adresa_cunoscuta' : 'detinator_id,adresa_cunoscuta,telefon'), 'detinator_id', ids, ['detinator_id'], curent)
   const convocariBrute = await inLoturi(() => client.from('red_convocari').select('id,detinator_id,plic_id,nr_document,data_expediere,nr_tracking,data_confirmare_primire,retur,stare,sters_la,created_at').eq('stare','activ').is('sters_la', null), 'detinator_id', ids, ['id'], curent)
@@ -59,7 +69,7 @@ export async function citesteDateExport(client, proiectId, tip, curent) {
   const convocari = atasezaMentiuniAr(convocariBrute, plicuriAr)
   const raspunsuri = await inLoturi(() => client.from('red_raspunsuri').select('id,detinator_id,canal,data,optiune,zi_sesiune_aleasa,obiectii_text,created_at,seq'), 'detinator_id', ids, ['id'], curent)
   const pvs = await inLoturi(() => client.from('red_procese_verbale').select('id,tip,parcela_id,detinator_id,nr_pv,data_pv,obiectii_redare,termen_remediere,remediat_la,trimis_spre_semnare_data,semnat_primit_data,stare,sters_la,created_at').is('sters_la', null).neq('stare','anulat'), 'parcela_id', parcele.map(p => p.id), ['id'], curent)
-  const stari = await inLoturi(() => client.from('red_v_stare_parcela').select('parcela_id,detinator_id,stare').eq('proiect_id', proiectId), 'parcela_id', parcele.map(p => p.id), ['parcela_id', 'detinator_id'], curent)
+  const stari = await inLoturi(() => client.from('red_v_stare_parcela').select('parcela_id,detinator_id,uat_id,calitate,stare').eq('proiect_id', proiectId), 'parcela_id', parcele.map(p => p.id), ['parcela_id', 'detinator_id'], curent)
   const responsabili = await inLoturi(() => client.from('profiles').select('id,name'), 'id', uats.map(u => u.responsabil_id), ['id'], curent)
   const peId = randuri => new Map(randuri.map(r => [r.id, r]))
   const ps = peId(parcele), us = peId(uats), rs = peId(responsabili)
@@ -78,23 +88,27 @@ export async function citesteDateExport(client, proiectId, tip, curent) {
     if (uat.responsabil_id && !rs.has(uat.responsabil_id)) throw new Error('Responsabilul UAT nu poate fi citit.')
     return { parcela, uat, detinator, contact: cs.get(detinator.id), convocari: conv.get(detinator.id), raspunsuri: rasp.get(detinator.id), pvs: pv.get(parcela.id), stare, responsabil: rs.get(uat.responsabil_id) }
   })
-  const registru = randuriRegistru(date, { pentruTgz: tip === 'TGZ' })
-  // Copilot f6 r1 P2-01: distributia (UAT, stare) a randurilor exportate trebuie sa fie identica cu centralizatorul citit,
-  // altfel cele doua foi s-ar contrazice (o stare schimbata in timpul exportului) -> refuz, se reia.
-  const distributie = m => [...m].sort().join('|')
-  const dinRegistru = new Map(), dinVedere = new Map()
-  for (const d of date) { const k = d.uat.id + '/' + d.stare; dinRegistru.set(k, (dinRegistru.get(k) || 0) + 1) }
-  for (const r of agregate) { const k = r.uat_id + '/' + r.stare; dinVedere.set(k, (dinVedere.get(k) || 0) + Number(r.numar)) }
-  if (registru.length !== date.length || distributie(dinRegistru) !== distributie(dinVedere)) throw new Error('Sursele s-au schimbat in timpul exportului sau exportul este incomplet. Reincercati.')
+  const registru = randuriRegistru(date, { pentruTgz: tip === 'TGZ', rol })
+  // Q5: registrul are perechi, centralizatorul are parcele. Comparăm distribuțiile
+  // pe parcele și mulțimea exactă a perechilor, nu numărul de persoane cu numărul de parcele.
+  const distributie = lista => JSON.stringify(lista.map(r => [r.uat_id, r.stare, Number(r.numar)]).sort())
+  const stariComplete = stari.map(r => ({ ...r, uat_id: r.uat_id ?? ps.get(r.parcela_id)?.uat_id }))
+  const stariSelectate = stariCuParcela(stariComplete).filter(r => potrivesteRol(r, rol))
+  const perechi = lista => JSON.stringify(lista.map(d => [d.parcela_id, d.detinator_id, d.calitate, d.stare]).sort())
+  if (distributie(centralizatorParcele(stariComplete)) !== distributie(agregate)
+      || distributie(centralizatorParcele(stariSelectate)) !== distributie(agregateSelectate)
+      || perechi(date.map(d => ({ parcela_id: d.parcela.id, detinator_id: d.detinator.id, calitate: d.detinator.calitate, stare: d.stare }))) !== perechi(stariSelectate)
+      || registru.length !== date.length) throw new Error('Sursele s-au schimbat in timpul exportului sau exportul este incomplet. Reincercati.')
   return { registru, centralizator, numar: registru.length }
 }
 
 export default function ExportEcran({ proiect }) {
+  const [rol, setRol] = useState('toti')
   const [nivel, setNivel] = useState(null), [lucru, setLucru] = useState(false), [mesaj, setMesaj] = useState('')
   const generatie = useRef(0), ocupat = useRef(false)
   useEffect(() => {
     const token = ++generatie.current, curent = () => generatie.current === token
-    setNivel(null); setLucru(false); setMesaj(''); ocupat.current = false
+    setNivel(null); setRol('toti'); setLucru(false); setMesaj(''); ocupat.current = false
     ;(async () => {
       const { data: auth, error } = await supabase.auth.getUser()
       if (error) throw error
@@ -115,7 +129,7 @@ export default function ExportEcran({ proiect }) {
     const token = generatie.current, id = proiect.id, curent = () => token === generatie.current
     try {
       const fisier = numeFisier({ proiectCod: proiect.cod, tip })
-      const date = await citesteDateExport(supabase, id, tip, curent)
+      const date = await citesteDateExport(supabase, id, tip, curent, rol)
       if (!curent()) return
       const wb = construiesteWorkbook({ ...date, pentruTgz: tip === 'TGZ' })
       const continut = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
@@ -126,6 +140,7 @@ export default function ExportEcran({ proiect }) {
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
   return <div style={{ marginTop: 16 }}>
+    <FiltruRol valoare={rol} onChange={setRol} disabled={lucru} />{' '}
     {poateRegistru && <>
       <button style={S.btnS} disabled={lucru} onClick={() => exporta('intern')}>📥 Registru intern (xlsx)</button>{' '}
       <button style={S.btnS} disabled={lucru} onClick={() => exporta('TGZ')}>📤 Registru pentru TGZ — fără telefoane (xlsx)</button>{' '}

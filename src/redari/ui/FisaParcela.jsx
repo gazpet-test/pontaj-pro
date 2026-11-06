@@ -1,3 +1,4 @@
+import { esteUtilizator } from '../rol.js'
 // Fișa parcelei: date parcelă (valoare_lei doar admin), deținători + contact (admin/editor), cronologie unită
 // (convocări, răspunsuri, PV, jurnal), fișiere cu link semnat, editare câmpuri de bază, soft delete cu motiv.
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
@@ -50,6 +51,17 @@ export function AvertismentConstatare({ uat, detinator, raspunsuri, pvs, azi }) 
   const t = termenConstatare({ uat, detinatorId: detinator.id, raspunsuri, pvs, azi })
   const m = mesajTermenConstatare(t)
   return m ? <div data-testid="avertisment-constatare" style={{ fontSize:12.5, marginTop:4, color: t.depasit ? G.red : G.yellow }}>⚠ {m}</div> : null
+}
+
+// Aceeași randare a persoanei în ambele grupuri; butoanele și contactele își păstrează drepturile.
+export function GrupuriDetinatori({ detinatori, renderDetinator }) {
+  return <>{[['Proprietari / moștenitori', false], ['Utilizatori / arendași', true]].map(([titlu, utilizatori]) => {
+    const lista = detinatori.filter(d => esteUtilizator(d) === utilizatori)
+    return <section key={titlu} aria-label={titlu}>
+      <h4 style={{ margin: '12px 0 4px' }}>{titlu} ({lista.filter(d => !d.sters_la).length})</h4>
+      {lista.map(renderDetinator)}
+    </section>
+  })}</>
 }
 
 export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, show, onInapoi, onSchimbat }) {
@@ -232,8 +244,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
       // fișierele din bucket sunt imutabile: reincarcaConvocator scrie o cale nouă versionată ({nr_document}-v{n}.docx) și mută *_path
-      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect: proiectI, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: dataDocumentConvocare(c) })
-      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
+      const { blob, hash, calitateDocument } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect: proiectI, nrDocument: c.nr_document, token, templateArrayBuffer, dataDocument: dataDocumentConvocare(c) })
+      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, calitateDocument, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
       show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
       incarca()
     } catch (e) { show('Reîncărcare: ' + msgEroare(e), 'error') }
@@ -282,7 +294,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
             {poateScrie && !parcela.sters_la && <button style={S.btnX} onClick={() => setModal({ tip:'detinator', det: null })}>＋ Adaugă</button>}
           </div>
           {detinatori.length === 0 && <Gol text="Niciun deținător." />}
-          {detinatori.map(d => {
+          <GrupuriDetinatori detinatori={detinatori} renderDetinator={d => {
             const c = contacte[d.id]
             return (
               <div key={d.id} style={{ padding:'8px 0', borderTop:`1px solid ${G.border}`, opacity: d.sters_la ? 0.5 : 1 }}>
@@ -311,7 +323,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                 )}
               </div>
             )
-          })}
+          }} />
         </div>
 
         {/* Fișiere */}

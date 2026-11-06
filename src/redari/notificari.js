@@ -6,7 +6,8 @@
 // completeazaSablon). Aici nu se scrie nicio regulă nouă de „gata / blocat”: pentru gărzile care cer și date ale unui document anume
 // (data PV, locul, numărul AU), le dăm valori-martor ca să rămână doar lipsurile proiectului / UAT-ului.
 // Retur / ultimul răspuns: stare.js (aceeași ierarhie ca red_v_stare_parcela).
-import { calculeazaStare, ultimulRaspuns } from './stare.js'
+import { potrivesteRol, calitatiRol } from './rol.js'
+import { stariParcele, stariCuParcela, STARI_INCHISE, calculeazaStare, ultimulRaspuns } from './stare.js'
 import { motivBlocareConvocator } from './ui/comune.jsx'
 import { verificaDatePvA, verificaDatePvB, verificaDatePvC, STARI_TEREN, MOTIVE_PV_B } from './pv.js'
 import { verificaDateAdresaUat, verificaDateCerereImputernicire, celulaCsv } from './docx.js'
@@ -264,7 +265,7 @@ export function agregaDetinatori({ randuri = [], convocari = [], raspunsuri = []
   const pvA = grupeaza(active.filter(p => p.tip === 'A'), 'detinator_id')
   const pvB = grupeaza(active.filter(p => p.tip === 'B'), 'parcela_id')
   const uatPeId = new Map((uats || []).map(u => [u.id, u]))
-  return (randuri || []).map(r => {
+  return stariCuParcela(randuri || []).map(r => {
     const c = conv.get(r.detinator_id) || [], rs = rasp.get(r.detinator_id) || []
     const ultim = ultimulRaspuns(rs)
     const s = sms ? (sms.get(String(r.detinator_id).toLowerCase()) || null) : undefined
@@ -287,7 +288,7 @@ export function agregaDetinatori({ randuri = [], convocari = [], raspunsuri = []
     const inCurs = c.some(x => plin(x.data_expediere) && !plin(x.data_confirmare_primire) && !plin(x.retur)) || (s ? s.categorie === 'trimis' || s.categorie === 'in_curs' : false)
     return {
       parcela_id: r.parcela_id, detinator_id: r.detinator_id, uat_id: r.uat_id, uat3: r.uat3, uat_nume: r.uat_nume || uat?.nume || r.uat3,
-      id_parcela: r.id_parcela, tronson: r.tronson ?? null, nume: r.nume, calitate: r.calitate, stare: r.stare,
+      id_parcela: r.id_parcela, tronson: r.tronson ?? null, nume: r.nume, calitate: r.calitate, stare: r.stare, stare_parcela: r.stare_parcela,
       convocator: c.some(x => plin(x.nr_document)), convocator_fisier: c.some(x => plin(x.fisier_convocator_path)), expediat, ar,
       retur,
       sms: s === undefined ? null : s ? s.categorie : 'fara', sms_trimise: s === undefined ? null : s ? s.nr_trimise : 0,
@@ -317,10 +318,11 @@ export const FILTRE_NOTIF = [
   { cod: 'neidentificat', eticheta: 'Neidentificat', f: d => d.neidentificat },
   { cod: 'fara_telefon', eticheta: 'Fără telefon', f: d => d.fara_telefon === true },
 ]
-export function filtreaza(inregistrari, { uatId = '', filtru = '' } = {}) {
+export function filtreaza(inregistrari, { uatId = '', filtru = '', rol = 'toti' } = {}) {
+  calitatiRol(rol)
   const f = FILTRE_NOTIF.find(x => x.cod === filtru)
   if (!f) throw new Error(`Filtru necunoscut: ${filtru}`)
-  return (inregistrari || []).filter(d => (!uatId || d.uat_id === uatId) && (!f.f || f.f(d)))
+  return (inregistrari || []).filter(d => potrivesteRol(d, rol) && (!uatId || d.uat_id === uatId) && (!f.f || f.f(d)))
 }
 
 // Coloanele centralizatorului: [cheie, etichetă, numărare]. Numărarea întoarce null când sursa e necunoscută (SMS / telefon necitite).
@@ -328,10 +330,12 @@ const numara = (lista, f) => lista.reduce((n, d) => n + (f(d) ? 1 : 0), 0)
 const numaraSauNull = (lista, camp, f) => (lista.some(d => d[camp] === null) ? null : numara(lista, f))
 // Unitatea fiecărei coloane (Copilot #992): „perechi” = înregistrări parcelă × deținător (red_detinatori: un deținător aparține unei parcele,
 // deci o persoană cu 3 parcele = 3 perechi); „parcele” = parcele distincte (PV B e un document pe parcelă, nu pe deținător).
-export const UNITATI = { perechi: 'perechi', parcele: 'parcele' }
+export const UNITATI = { perechi: 'perechi', parcele: 'parcele', procente: '%' }
 const parceleDistincte = (lista, f) => new Set(lista.filter(f).map(d => d.parcela_id)).size
 export const COLOANE_CENTRALIZATOR = [
   ['total', 'Deținători', l => l.length, 'perechi'],
+  ['inchise', 'Parcele închise (PV A sau B)', l => stariParcele(l).filter(r => STARI_INCHISE.includes(r.stare)).length, 'parcele'],
+  ['procent_inchise', 'Parcele închise', l => { const p = stariParcele(l); return p.length ? Math.round(p.filter(r => STARI_INCHISE.includes(r.stare)).length * 1000 / p.length) / 10 : 0 }, 'procente'],
   ['parcele', 'Parcele', l => parceleDistincte(l, () => true), 'parcele'],
   ['convocator', 'Convocator generat', l => numara(l, d => d.convocator), 'perechi'],
   ['expediat', 'Expediat', l => numara(l, d => d.expediat), 'perechi'],

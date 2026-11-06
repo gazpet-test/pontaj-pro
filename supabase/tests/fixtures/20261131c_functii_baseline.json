@@ -1,0 +1,114 @@
+[
+  {
+    "signature": "fn_red_adresa_cunoscuta(uuid)",
+    "migration": "20261126a_redari_teren.sql"
+  },
+  {
+    "signature": "fn_red_autorizare_tgz_garda()",
+    "migration": "20261130m_redari_autorizare_tgz.sql"
+  },
+  {
+    "signature": "fn_red_cheie_calc(text,text,text,text,text,text,boolean)",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_cheie_persoana(uuid)",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_convocare_rezerva(uuid,boolean,text)",
+    "migration": "20261130l_redari_convocare_rezerva.sql"
+  },
+  {
+    "signature": "fn_red_convocari_informare_garda()",
+    "migration": "20261130m_redari_autorizare_tgz.sql"
+  },
+  {
+    "signature": "fn_red_convocari_posta_garda()",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_convocari_rezerva_garda()",
+    "migration": "20261130l_redari_convocare_rezerva.sql"
+  },
+  {
+    "signature": "fn_red_detinatori_before()",
+    "migration": "20261126a_redari_teren.sql"
+  },
+  {
+    "signature": "fn_red_informare_publicata(text)",
+    "migration": "20261130m_redari_autorizare_tgz.sql"
+  },
+  {
+    "signature": "fn_red_jurnal()",
+    "migration": "20261130j_redari_mail_f1_schema.sql"
+  },
+  {
+    "signature": "fn_red_legaturi()",
+    "migration": "20261129g_redari_tronson_optional.sql"
+  },
+  {
+    "signature": "fn_red_mail_proiect_retentie()",
+    "migration": "20261130k_redari_mail_f1_reguli.sql"
+  },
+  {
+    "signature": "fn_red_nivel()",
+    "migration": "20261126a_redari_teren.sql"
+  },
+  {
+    "signature": "fn_red_numar_document(text,text,integer)",
+    "migration": "20261130l_redari_convocare_rezerva.sql"
+  },
+  {
+    "signature": "fn_red_parcela_acoperita_a(uuid)",
+    "migration": "20261130n_redari_pv_utilizatori.sql"
+  },
+  {
+    "signature": "fn_red_plic_ar_calitate()",
+    "migration": "20261129k_redari_ar_calitate.sql"
+  },
+  {
+    "signature": "fn_red_plic_creeaza(uuid,uuid[])",
+    "migration": "20261129j_redari_plicuri_0e.sql"
+  },
+  {
+    "signature": "fn_red_plic_garda_persoana(uuid)",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_plic_identitate_garda()",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_plic_incearca_lock(uuid)",
+    "migration": "20261129j_redari_plicuri_0e.sql"
+  },
+  {
+    "signature": "fn_red_plic_incearca_lock_detinator(uuid)",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_plic_propaga()",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_plic_reguli()",
+    "migration": "20261129j_redari_plicuri_0e.sql"
+  },
+  {
+    "signature": "fn_red_plic_scan_exista(uuid,text)",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_plic_uat_detinator(uuid)",
+    "migration": "20261129i_redari_plicuri.sql"
+  },
+  {
+    "signature": "fn_red_versiune_creste()",
+    "migration": "20261127a_redari_uat_setari.sql"
+  },
+  {
+    "signature": "fn_sms_e_owner()",
+    "migration": "20261130a_sms_mvp.sql"
+  }
+]

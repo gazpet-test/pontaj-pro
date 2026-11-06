@@ -8,7 +8,9 @@ import JSZip from 'jszip'
 import { completeazaDocx, genereazaQr, adaugaVersoInformare, CHEI_CONVOCATOR } from './docx.js'
 
 // sha256 + lungimea textului concatenat din <w:t> (word/document.xml), ÎNAINTE de trecerea pe A4 (main @ ac7afa7c)
+// Pentru 1U: sursa independentă este DOCX-ul din main @ dcfc9d68 (#1004), deja A4 și doar QR.
 const TEXT_INAINTE = {
+  convocator_utilizator: [4154, 'e1c76d84d0b94f5290cb524e78c92a51cef7f6773057b6a71b4d8f5bcc0691c3'],
   convocator: [3170, '813b018428a753e6faefd6539158151861f83bfdf4f6ea0d40960364816e80c2'],
   pv_a: [3324, 'cb97470bb438245c89401531276b76ba5ab242d1e6f73afc5519cc975af71e9c'],
   pv_b: [4109, '70ab26c04521871f397892d9471a4f21b020a3b0ae40ffb25f4a8605035e2c72'],
@@ -29,7 +31,7 @@ const ADAOS_INCEPUT = {
 }
 // Text SCOS de la începutul documentului (excepția (10), decizia Răzvan 05.11.2026): datele firmei sunt în antetul-imagine
 // din header; repus la început, textul trebuie să dea amprenta de dinainte.
-const SCOS_INCEPUT = { convocator: DATE_FIRMA, pv_a: DATE_FIRMA, pv_b: DATE_FIRMA, pv_c: DATE_FIRMA }
+const SCOS_INCEPUT = { convocator_utilizator: DATE_FIRMA, convocator: DATE_FIRMA, pv_a: DATE_FIRMA, pv_b: DATE_FIRMA, pv_c: DATE_FIRMA }
 // A4 în twips (210 × 297 mm; 1 mm = 56,69 twips)
 const A4 = { w: 11906, h: 16838 }
 const CM = 567
@@ -185,7 +187,7 @@ describe('convocatorul: fața pe o pagină A4', () => {
   })
 })
 
-// excepția (10), decizia Răzvan 05.11.2026: antetul oficial (imagine) în header-ul PRIMEI pagini, pe toate cele 6 șabloane
+// excepția (10), decizia Răzvan 05.11.2026: antetul oficial (imagine) în header-ul PRIMEI pagini, pe toate cele 7 șabloane
 describe('antetul oficial Gazpet (header, prima pagină)', () => {
   const ANTET = readFileSync('docs/redari/referinta/antet_gazpet.jpg')
   const SABLOANE = [...Object.keys(TEXT_INAINTE), 'cerere_imputernicire']
@@ -222,10 +224,10 @@ describe('antetul oficial Gazpet (header, prima pagină)', () => {
   it.each(SABLOANE)('%s: imaginea în header1, doar prima pagină, lățimea utilă, fără rândul scris cu datele firmei', async nume => {
     await verificaAntet(await JSZip.loadAsync(readFileSync(`public/redari/sabloane/${nume}.docx`)), nume)
   })
-  it('convocatorul completat (QR + strict, date fictive): antetul rămâne intact, QR-ul are relația lui separată', async () => {
+  it.each(['convocator', 'convocator_utilizator'])('%s completat (QR + strict, date fictive): antetul rămâne intact, QR-ul are relația lui separată', async nume => {
     const campuri = Object.fromEntries(CHEI_CONVOCATOR.filter(k => k !== 'qr').map(k => [k, `TEST ${k}`]))
     const qr = await genereazaQr('https://example.invalid/redari/raspuns/TEST0000fictiv')
-    const blob = await completeazaDocx(readFileSync('public/redari/sabloane/convocator.docx'), campuri, { imagini: { qr }, strict: true })
+    const blob = await completeazaDocx(readFileSync(`public/redari/sabloane/${nume}.docx`), campuri, { imagini: { qr }, strict: true })
     // Cop #999 P2-02: și cu versoul informării (inserat înaintea sectPr) — antetul rămâne doar pe prima pagină
     const cuVerso = await adaugaVersoInformare(blob, 'Informare GDPR de test (text fictiv).\n\nAl doilea paragraf fictiv.')
     const zip = await JSZip.loadAsync(await cuVerso.arrayBuffer())

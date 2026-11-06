@@ -1,6 +1,6 @@
-// Redări teren — refacerea celor 5 șabloane DOCX din modelele Final_v2 ale juristului (03.11.2026), cu metoda din
+// Redări teren — refacerea șabloanelor DOCX din modelele Final_v2 ale juristului (03.11.2026), cu metoda din
 // docs/redari/SABLOANE.md §1. Originalele stau neatinse în docs/redari/referinta/, șabloanele ies în public/redari/sabloane/.
-// Rulare: node scripts/redari_sabloane_din_modele.mjs            (scrie cele 5 șabloane)
+// Rulare: node scripts/redari_sabloane_din_modele.mjs            (scrie șabloanele)
 //         node scripts/redari_sabloane_din_modele.mjs --verifica (doar compară: iese cu 1 dacă vreun șablon din repo diferă)
 //
 // Reguli (aceleași ca la v5):
@@ -10,7 +10,7 @@
 //    adresa_uat (celelalte 7 rânduri goale se șterg); (3) docProps: fără miniatură și fără „ultima modificare de”;
 //    (4) celulele goale din tabele nu mai au run în modelele resalvate de Word → primesc un run cu w:sz=19 (formatul celulelor
 //    de date din aceleași tabele); (5) paragraful nou {{pv_a_referinta}} sub „Nume:” în PV B (decizia 02.11, PR #935);
-//    (6) toate cele 5 trec de pe Letter pe A4, cu lățimile tabelelor scalate (decizia 03.11, „varianta A”);
+//    (6) toate cele 6 trec de pe Letter pe A4, cu lățimile tabelelor scalate (decizia 03.11, „varianta A”);
 //    (7) convocatorul: margini, spațiere, interlinie și corp de literă strânse, ca fața să încapă pe o pagină A4 (tot 03.11);
 //    (8) convocatorul pleacă prin poștă doar cu codul QR: adresa web de răspuns nu se mai tipărește, fraza trimite doar la QR
 //    (decizia Răzvan 03.11 seara; singura reformulare de text juridic, declarată în CONVOCATOR_DOAR_QR).
@@ -463,6 +463,49 @@ const RETETE = {
   },
 }
 
+// Model 1U (Juridic, 05.11.2026), validat de Razvan 06.11.2026.
+// Aceeași sursă și aceiași pași comuni ca Model 1: placeholder-e, antet, QR, A4, formatare.
+// Pașii comuni faraDateFirma + adaugaAntet (PR #999) rămân în construieste(), pentru TOATE rețetele.
+// Fiecare inlocuiesteWt / inWt de mai jos declară exact O apariție (argument scalar).
+RETETE['convocator_utilizator.docx'] = {
+  ...RETETE['convocator.docx'],
+  // Excepția (7), numai 1U: 30 pt înainte de paragraful următor celor patru opțiuni,
+  // pentru a elibera cadrul QR de 3 cm inclusiv în LibreOffice. Textul nu se schimbă.
+  formatare: [...RETETE['convocator.docx'].formatare, ['spațiu după opțiuni 1U', x => {
+    let n = 0
+    const nou = x.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g, p => {
+      if (!p.includes('>Dacă pentru această parcelă nu semnează procesul-verbal nici proprietarul, nici utilizatorul,')) return p
+      n += 1
+      asigura(!p.includes('<w:spacing') && p.includes('<w:pPr>'), '1U: formatarea paragrafului după opțiuni s-a schimbat')
+      return p.replace('<w:pPr>', '<w:pPr><w:spacing w:before="600"/>')
+    })
+    asigura(n === 1, `1U: paragraful după opțiuni: ${n} apariții, așteptată 1`)
+    return nou
+  }]],
+  pasi: x => {
+    x = RETETE['convocator.docx'].pasi(x)
+    // 1–2: destinatar și titlul parcelei.
+    x = inlocuiesteWt(x, 'Către: {{nume}} ({{calitate}})', 'Către: {{nume}}, în calitate de {{calitate}} al terenului')
+    x = inlocuiesteWt(x, 'Parcela dumneavoastră afectată temporar de lucrări:', 'Parcela pe care o folosiți (în arendă / în folosință), afectată temporar de lucrări:')
+    // 3–4: invitarea; textul complet 1U scoate și „dumneavoastră” după „datele parcelei”.
+    x = inWt(x, 'Lucrările de readucere a terenului la starea inițială pe parcela de mai sus au fost executate. Vă invităm să constatați starea terenului și să semnați procesul-verbal de constatare, la sediul Primăriei {{uat}}, în una dintre zilele de mai jos. Puteți veni în oricare dintre zile, în intervalul programat pentru satul sau tarlaua dumneavoastră sau în oricare alt interval liber. Procesul-verbal va fi pregătit cu datele parcelei dumneavoastră; la sesiune doar îl verificați și îl semnați.', [
+      ['Vă invităm să constatați', 'Vă invităm, în calitate de utilizator al terenului, să constatați'],
+      ['în una dintre zilele de mai jos.', 'în una dintre zilele de mai jos. Proprietarul parcelei este convocat separat; procesul-verbal poate fi semnat fie de proprietar, fie de dumneavoastră, iar în el se consemnează calitatea celui care semnează.'],
+      ['datele parcelei dumneavoastră;', 'datele parcelei;'],
+      ['la sesiune doar îl verificați și îl semnați.', 'la sesiune doar îl verificați și îl semnați. Semnătura dumneavoastră privește numai starea terenului constatată la fața locului; ea nu modifică drepturile proprietarului asupra terenului și nici raporturile dintre dumneavoastră și proprietar.'],
+    ])
+    // 5: cele patru opțiuni rămân identice.
+    // 6: constatarea în lipsă, numai dacă nimeni nu semnează.
+    x = inlocuiesteWt(x, 'În lipsa participării sau a unui răspuns, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului.', 'Dacă pentru această parcelă nu semnează procesul-verbal nici proprietarul, nici utilizatorul, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului (proces-verbal de constatare în lipsă). Dacă procesul-verbal a fost deja semnat de proprietar înainte de sesiune, prezența dumneavoastră nu mai este necesară.')
+    // 7–9: precizările (bullet-ul și formatarea din model se păstrează).
+    x = inlocuiesteWt(x, '• Această convocare privește numai starea terenului după lucrări. Despăgubirile și indemnizațiile pentru folosința terenului sunt stabilite și plătite de TRANSGAZ; întrebările despre ele le puteți adresa reprezentantului TRANSGAZ prezent la sesiune.', '• Această convocare privește numai starea terenului după lucrări. Despăgubirile și indemnizațiile pentru folosința terenului și pentru culturi sunt stabilite și plătite de TRANSGAZ persoanelor îndreptățite, potrivit legii; întrebările despre ele le puteți adresa reprezentantului TRANSGAZ prezent la sesiune.')
+    x = inlocuiesteWt(x, '• Vă rugăm să aveți asupra dumneavoastră actul de identitate și, dacă este cazul, actul care dovedește calitatea de proprietar, moștenitor sau arendaș.', '• Vă rugăm să aveți asupra dumneavoastră actul de identitate și, dacă îl aveți, actul din care rezultă folosința terenului (contract de arendă, de închiriere, de comodat sau altă dovadă). Calitatea dumneavoastră de utilizator este consemnată din evidențele Beneficiarului; actele nu se rețin și nu se copiază.')
+    x = inlocuiesteWt(x, '• Dacă parcela are mai mulți coproprietari, fiecare semnează în nume propriu; un coproprietar poate semna pentru ceilalți numai cu mandat scris.', '• Dacă nu mai folosiți această parcelă, o folosiți doar în parte sau o folosește și altcineva, vă rugăm să ne comunicați (prin formular, telefon sau răspuns scris), ca să convocăm persoana potrivită. Semnați numai pentru parcela pe care o folosiți efectiv.')
+    // 10: date personale, contacte, semnături, antet, sesiuni, QR — pașii comuni de mai sus.
+    return x
+  },
+}
+
 // textul concatenat din <w:t> (comparația „textul nu s-a schimbat” la pașii de formatare)
 const textWt = xml => [...xml.matchAll(RX_WT)].map(m => m[1]).join('')
 
@@ -482,7 +525,7 @@ async function construieste(sablon, { model, pasi, formatare = [], margini, stil
   }
   asigura(!/\{\{(?![A-Za-z0-9_.]+\}\})/.test(nou), `${sablon}: acoladă malformată`)
   // excepția (8): pe convocator nu rămâne nicio adresă web de răspuns (nici placeholder, nici text)
-  if (sablon === 'convocator.docx') asigura(!/\{\{link\}\}|redari\.gazpet\.ro|https?:\/\//.test(textWt(nou)), `${sablon}: a rămas o adresă web de răspuns`)
+  if (['convocator.docx', 'convocator_utilizator.docx'].includes(sablon)) asigura(!/\{\{link\}\}|redari\.gazpet\.ro|https?:\/\//.test(textWt(nou)), `${sablon}: a rămas o adresă web de răspuns`)
   zip.file('word/document.xml', nou, { date: DATA_FIXA, createFolders: false })
   // excepția (7): stilurile convocatorului (spațiere, interlinie, corp de literă)
   if (stiluri) zip.file('word/styles.xml', stiluri(await zip.file('word/styles.xml').async('string')), { date: DATA_FIXA, createFolders: false })
@@ -495,7 +538,7 @@ async function construieste(sablon, { model, pasi, formatare = [], margini, stil
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
-// Jakarinos f-v2 r2 P3: toate cele 5 se construiesc și se validează în memorie; pe disc se scrie doar dacă au trecut TOATE
+// Jakarinos f-v2 r2 P3: toate cele 6 se construiesc și se validează în memorie; pe disc se scrie doar dacă au trecut TOATE
 // (un eșec la un model nu mai lasă șabloanele dinainte suprascrise)
 const construite = []
 for (const [sablon, reteta] of Object.entries(RETETE)) {
@@ -514,12 +557,12 @@ if (VERIFICA) {
   }
   if (diferente) process.exit(1)
 } else {
-  // Copilot f-v2 r3 P3-02: publicare în doi pași. (1) toate 5 se scriu în fișiere temporare lângă destinație și se recitesc
+  // Copilot f-v2 r3 P3-02: publicare în doi pași. (1) toate 6 se scriu în fișiere temporare lângă destinație și se recitesc
   // octet cu octet; un eșec aici șterge temporarele și NU atinge șabloanele. (2) abia apoi rename temporar → destinație.
-  // Limita (Windows, 5 fișiere): fiecare rename e atomic, dar cele 5 nu formează o tranzacție; un eșec la pasul (2) (fișier
+  // Limita (Windows, 6 fișiere): fiecare rename e atomic, dar cele 6 nu formează o tranzacție; un eșec la pasul (2) (fișier
   // deschis în Word / blocat de antivirus) e raportat cu lista celor deja publicate, iar `--verifica` arată ce a rămas vechi.
   const temporar = sablon => resolve(OUT, `.${sablon}.tmp-${process.pid}`)
-  // curățenie pe TOATE cele 5 temporare (și unul scris parțial, înainte de eșec); o ștergere eșuată nu ascunde eroarea inițială
+  // curățenie pe TOATE cele 6 temporare (și unul scris parțial, înainte de eșec); o ștergere eșuată nu ascunde eroarea inițială
   const stergeTemporare = (pastreaza = []) => {
     const ramase = []
     for (const { sablon } of construite) {
