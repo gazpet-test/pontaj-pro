@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
-import { verificaSecretHr } from './secretHr.mjs';
+// Mutat din supabase/functions/_shared (06.11.2026): acolo îl lua `deno test` și pica la tipuri (import esbuild).
+import { verificaSecretHr } from '../supabase/functions/_shared/secretHr.mjs';
 
 // Exclusiv valori fictive. Nu citim parolele istorice pentru fixture-uri.
 const NOU = 'nou-fictiv-hr-0123456789-abcdefghij';
@@ -27,7 +28,7 @@ function incarca(slug, env) {
   const fetch = vi.fn(async () => new Response('{}', { status: 200 }));
   const console = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
   // Executam chiar entrypoint-ul TS; substituim doar runtime-ul si I/O.
-  const source = readFileSync(new URL(`../${slug}/index.ts`, import.meta.url), 'utf8');
+  const source = readFileSync(new URL(`../supabase/functions/${slug}/index.ts`, import.meta.url), 'utf8');
   const code = transformSync(source, { loader: 'ts', format: 'cjs' }).code;
   runInNewContext(code, {
     require: (name) => {
