@@ -8,6 +8,7 @@ import { grupeazaPentruPlicuri, textAR, genereazaOpis, genereazaPvPlicuire, csvE
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
+import FanAwbPrevizualizare from './FanAwbPrevizualizare.jsx'
 
 const COL_PLIC = 'id,proiect_id,uat_id,nr_plic,destinatar_nume,lot_id,awb,data_expediere,data_ar,ar_scan_path,ar_primit_de,ar_primit_calitate,ar_mentiune,opis_path,retur,retur_detaliu,retur_data,retur_scan_path,stare,motiv_anulare,versiune'
 const COL_LOT = 'id,proiect_id,nr_lot,data_plicuire,semnatar1_id,semnatar2_id,pv_path,observatii,versiune'
@@ -74,14 +75,14 @@ const stampila = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Buch
 export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0, onSchimbat }) {
   const [date, setDate] = useState(null), [reload, setReload] = useState(0), [lucru, setLucru] = useState(false)
   const [mesaj, setMesaj] = useState(''), [incarcare, setIncarcare] = useState(true), [selectate, setSelectate] = useState([]), [uatId, setUatId] = useState(''), [filtru, setFiltru] = useState('')
-  const [modal, setModal] = useState(null), [f, setF] = useState({}), [arText, setArText] = useState('')
+  const [modal, setModal] = useState(null), [f, setF] = useState({}), [arText, setArText] = useState(''), [fanLot, setFanLot] = useState(null)
   const sesiune = useRef(sesiuneEcran()), ocupat = useRef(false), identitate = useRef(`${proiect.id}/${nivel}`)
   const cheie = `${proiect.id}/${nivel}`
   if (identitate.current !== cheie) { identitate.current = cheie; sesiune.current.noua() }
   const poateScrie = ['admin', 'editor'].includes(nivel)
   const captureaza = () => { const expirat = sesiune.current.captureaza(), id = cheie; return () => !expirat() && identitate.current === id }
   useEffect(() => {
-    sesiune.current.noua(); ocupat.current = false; setLucru(false); setDate(null); setModal(null); setSelectate([]); setMesaj(''); setArText(''); setUatId(''); setFiltru('')
+    sesiune.current.noua(); ocupat.current = false; setLucru(false); setDate(null); setModal(null); setFanLot(null); setSelectate([]); setMesaj(''); setArText(''); setUatId(''); setFiltru('')
     return () => { sesiune.current.noua() }
   }, [cheie])
   useEffect(() => {
@@ -286,8 +287,10 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       {btn('PV (DOCX)', () => executa(c => document('pv', l, c)))}
       {btn('Etichete CSV', () => executa(c => document('csv', l, c)), !poateScrie || !imputernicire)}
       {poateScrie && <>{btn('Editează semnatarii / observațiile', () => deschide('semnatari', l))}{!l.pv_path && btn('Atașează PV semnat', () => deschide('pv_semnat', l))}</>}
+      {poateScrie && btn('📦 AWB FAN — previzualizare', () => setFanLot(l))}
       {l.pv_path && <p>PV semnat atașat.</p>}
     </div>) : <Gol />}
+    {fanLot && poateScrie && <FanAwbPrevizualizare proiect={proiect} lot={fanLot} plicuri={plicuri.filter(p => p.lot_id === fanLot.id && p.stare === 'activ')} onClose={() => setFanLot(null)} />}
     {modal && <Modal titlu={({ lot: 'Lot de plicuire', semnatari: 'Semnatari și observații', pv_semnat: 'PV semnat', anulare: 'Anulare plic', expediere: 'Expediere plic', ar: 'Confirmare AR', retur: 'Retur' })[modal.tip]} onClose={() => { if (!lucru) setModal(null) }}>
       <div style={{ display: 'grid', gap: 12 }}>
         {['lot', 'expediere', 'ar', 'retur'].includes(modal.tip) && <Camp eticheta="Data"><input style={S.input} disabled={lucru} type="date" min={['ar', 'retur'].includes(modal.tip) ? modal.rand.data_expediere : undefined} value={f.data} onChange={e => camp('data', e.target.value)} /></Camp>}
