@@ -7,8 +7,8 @@ describe('Afisare lumini',()=>{
     for(const consum of [{procent:.9},{stare:'economie'},{stare:'doar_off'},{stare:'blocata'}]) {
       for(const value of [true,false])for(const age of [0,3600001,86400000]) {
         const text=textStareLumina({pornit:value},new Date(now-age).toISOString(),now,consum)
-        expect(text).toContain(value?'Pornita':'Oprita')
-        expect(text).toContain('citire veche: economie/cota')
+        expect(text).toContain(value?'Pornită':'Oprită')
+        expect(text).toContain('citire veche: economie/cotă')
       }
     }
     expect(textStareLumina({pornit:true},new Date(now-3600001).toISOString(),now)).toContain('citire veche')
@@ -17,19 +17,19 @@ describe('Afisare lumini',()=>{
     const consum={azi:12,n:31500,buget:45000,stare:'ok'}
     expect(textConsumTuya(consum)).toBe('Consum Tuya: azi 12, ciclu 31500 / 45000 - ok')
     expect(textConsumTuya({...consum,stare:'economie'})).toContain('economie')
-    expect(textConsumTuya({...consum,stare:'doar_off'})).toContain('doar OFF si comenzi manuale owner')
-    expect(textConsumTuya({...consum,stare:'blocata',cota_blocata_pana:'2026-10-26T12:00:00Z'})).toContain('blocata pana la 26.10, 14:00')
+    expect(textConsumTuya({...consum,stare:'doar_off'})).toContain('doar oprire și comenzi manuale ale proprietarului')
+    expect(textConsumTuya({...consum,stare:'blocata',cota_blocata_pana:'2026-10-26T12:00:00Z'})).toContain('blocată până la 26.10, 14:00')
     expect(textConsumTuya(null)).toBe('Consum Tuya indisponibil')
   })
   it('afiseaza momentul citirii independent de cat de veche este starea',()=>{
-    expect(textCitireLumina('2026-10-26T12:00:00Z')).toBe('stare citita la 26.10, 14:00')
-    expect(textCitireLumina('invalid')).toBe('stare fara citire disponibila')
-    expect(textCitireLumina(null)).toBe('stare fara citire disponibila')
+    expect(textCitireLumina('2026-10-26T12:00:00Z')).toBe('stare citită la 26.10, 14:00')
+    expect(textCitireLumina('invalid')).toBe('stare fără citire disponibilă')
+    expect(textCitireLumina(null)).toBe('stare fără citire disponibilă')
   })
   it('arata amanarea ultimului tick doar pe lumina/programul afectat si o elimina dupa convergenta',()=>{
     const setari={runtime:{motor:{amanate:[{dispozitiv_id:3,program_id:20,motiv:'plafon_comun_2'}]}}}
-    expect(textAmanareLumini(setari,3)).toBe('amanat: plafon comun')
-    expect(textAmanareLumini(setari,null,20)).toBe('amanat: plafon comun')
+    expect(textAmanareLumini(setari,3)).toBe('amânat: plafon comun')
+    expect(textAmanareLumini(setari,null,20)).toBe('amânat: plafon comun')
     expect(textAmanareLumini(setari,2)).toBe('')
     expect(textAmanareLumini(setari,null,21)).toBe('')
     expect(textAmanareLumini(null,3)).toBe('')
@@ -49,13 +49,13 @@ describe('Afisare lumini',()=>{
   })
   it('nu prezinta citirea expirata drept stare reala',()=>{
     const now=Date.parse('2026-10-25T12:00:00Z')
-    expect(textStareLumina({pornit:true},new Date(now).toISOString(),now)).toBe('Pornita')
-    expect(textStareLumina({pornit:false},new Date(now).toISOString(),now)).toBe('Oprita')
-    expect(textStareLumina({pornit:true},'2026-10-24T12:00:00Z',now)).toContain('necunoscuta')
-    expect(textStareLumina({},null,now)).toContain('necunoscuta')
+    expect(textStareLumina({pornit:true},new Date(now).toISOString(),now)).toBe('Pornită')
+    expect(textStareLumina({pornit:false},new Date(now).toISOString(),now)).toBe('Oprită')
+    expect(textStareLumina({pornit:true},'2026-10-24T12:00:00Z',now)).toContain('necunoscută')
+    expect(textStareLumina({},null,now)).toContain('necunoscută')
   })
   it('explica aprobarea si urmatoarele evenimente in fus local',()=>{
-    expect(textUrmatoare({activ:false},Date.now(),{},lumini)).toContain('ownerului')
-    expect(textUrmatoare({id:1,tip:'solar',activ:true,aprobat_de:'owner',aprobat_la:'2026-10-24',parametri:{}},'2026-10-25T12:00:00Z',{},lumini)).toContain('ora Bucuresti')
+    expect(textUrmatoare({activ:false},Date.now(),{},lumini)).toContain('proprietarului')
+    expect(textUrmatoare({id:1,tip:'solar',activ:true,aprobat_de:'owner',aprobat_la:'2026-10-24',parametri:{}},'2026-10-25T12:00:00Z',{},lumini)).toContain('ora României')
   })
 })

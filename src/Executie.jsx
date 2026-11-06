@@ -14,6 +14,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
+import LegaturaExecutie from './redari/ui/LegaturaExecutie.jsx'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
@@ -325,6 +326,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             )}
           </div>
         )}
+        <LegaturaExecutie proiectId={proiectId} />
       </div>
 
       {/* Tab content cu proiectId prop */}
@@ -3322,7 +3324,7 @@ function DocCalitateMaterialeSection({ proiectId }) {
             style={{ background: 'none', border: 'none', color: G.green, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {EMOJI_TIP[d.tip] || '📄'} {d.fisier_nume || d.fisier_path.split('/').pop()}
           </button>
-          <a href={`/achizitii?id=${d.comanda_id}`} style={{ color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title="Deschide comanda">🛒 {d._cmd}</a>
+          <a href={`/achizitii?id=${d.comanda_id}`} style={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title={`Deschide comanda: ${d._cmd}`}>🛒 {d._cmd}</a>
           <span style={{ color: G.muted, fontSize: 11.5 }}>🏭 {d._furnizor}</span>
           <span style={{ color: G.dim, fontSize: 11 }}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
           <div style={{ display: 'flex', gap: 6 }}>

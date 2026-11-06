@@ -133,9 +133,9 @@ export function MeteoSediu({ style }) {
   return (
     <span title={`Sediu Ploiești · ${vremeRo(c.vreme)}, vânt ${Math.round(c.vant_kph)} km/h, rafale ${Math.round(c.rafale_kph)}${maine ? `\nMâine: ${vremeRo(maine.vreme)} ${Math.round(maine.min)}…${Math.round(maine.max)}°, ploaie ${maine.prob}%` : ''}${ai ? `\nAer: AQI ${r.aer.aqi} (${ai.label}${ai.pol ? ', ' + ai.pol : ''})` : ''}${al ? '\nALERTĂ: ' + r.alerte.map(a => a.titlu).join(', ') : ''}\nactualizat ${new Date(r.actualizat_la).toLocaleTimeString('ro-RO', { hour:'2-digit', minute:'2-digit' })}`}
       style={{ display:'inline-flex', alignItems:'center', gap:6, padding:'4px 10px', borderRadius:16, background:G.card, border:`1px solid ${al ? G.yellow + '88' : G.border}`, fontSize:12, color:G.text, opacity: vechi(r.actualizat_la) ? .6 : 1, cursor:'default', whiteSpace:'nowrap', ...style }}>
-      <span style={{ color:G.muted }}>Sediu</span><span>{iconMeteo(c.icon)}</span><b>{Math.round(c.temp)}°</b>
+      <span className="tb-txt" style={{ color:G.muted }}>Sediu</span><span>{iconMeteo(c.icon)}</span><b>{Math.round(c.temp)}°</b>
       {ai && <span title={ai.label} style={{ width:8, height:8, borderRadius:4, background:ai.color, display:'inline-block' }} />}
-      {maine && maine.prob >= 50 && <span style={{ color:G.blue, fontSize:11 }}>mâine 🌧{maine.prob}%</span>}
+      {maine && maine.prob >= 50 && <span className="tb-txt" style={{ color:G.blue, fontSize:11 }}>mâine 🌧{maine.prob}%</span>}
       {al > 0 && <span style={{ color:G.yellow }}>⚠</span>}
     </span>
   )

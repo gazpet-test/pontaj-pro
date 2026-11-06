@@ -13,16 +13,18 @@ const T = { text:'#E8EEF5', muted:'#8395A7', dim:'#4E5E6E', line:'#1C2836' }
 const COUNT_DEFS = {
   '/panou':        { sub:'angajați activi',   q: s => s.from('employees').select('id',{count:'exact',head:true}).eq('active',true) },
   '/financiar':    { sub:`facturi ${new Date().getFullYear()}`, q: s => s.from('facturi_emise').select('id',{count:'exact',head:true}).eq('an',new Date().getFullYear()) },
-  '/logistica':    { sub:'active în flotă',   q: s => s.from('logistica_active').select('id',{count:'exact',head:true}) },
-  '/ofertare':     { sub:'proiecte ofertare', q: s => s.from('proiecte_ofertare').select('id',{count:'exact',head:true}) },
+  // audit 02.11 #8: aceleași filtre ca antetele modulelor (Logistică exclude NEALOCAT, HR doar autorizațiile neînlocuite, CTC = documentele comenzilor, Ofertare = licitații în lucru)
+  '/logistica':    { sub:'active în flotă',   q: s => s.from('logistica_active').select('id',{count:'exact',head:true}).or('cod_intern.is.null,cod_intern.neq.NEALOCAT') },
+  '/ofertare':     { sub:'licitații în lucru', q: s => s.from('ofertare_licitatii').select('id',{count:'exact',head:true}).in('status',['go','in_lucru','analiza']) },
   '/magazie':      { sub:'poziții stoc',      q: s => s.from('stocuri').select('id',{count:'exact',head:true}) },
   '/comercial':    { sub:'contracte active',  q: s => s.from('contracte_terti').select('id',{count:'exact',head:true}).eq('status','activ') },
   '/achizitii':    { sub:'comenzi în curs',   q: s => s.from('comenzi_furnizor').select('id',{count:'exact',head:true}).not('status','in','("in_stoc","anulata","respinsa")') },
-  '/ctc':          { sub:'documente CTC',     q: s => s.from('ctc_documente').select('id',{count:'exact',head:true}) },
+  '/ctc':          { sub:'documente CTC',     q: s => s.from('comenzi_furnizor_documente').select('id',{count:'exact',head:true}) },
   '/administrativ':{ sub:'documente firmă',   q: s => s.from('documente_firma').select('id',{count:'exact',head:true}) },
-  '/hr':           { sub:'autorizații',       q: s => s.from('hr_autorizatii').select('id',{count:'exact',head:true}) },
+  '/hr':           { sub:'autorizații',       q: s => s.from('v_hr_autorizatii_status').select('id',{count:'exact',head:true}).is('inlocuita_de_id',null) },
   '/tichete':      { sub:'tichete deschise',  q: s => s.from('tichete').select('id',{count:'exact',head:true}).neq('status','inchis') },
   '/executie':     { sub:'proiecte active',   q: s => s.from('executie_proiecte').select('id',{count:'exact',head:true}).eq('activ',true) },
+  '/redari':       { sub:'parcele în registru', q: s => s.from('red_parcele').select('id',{count:'exact',head:true}).is('sters_la',null) },
 }
 
 const CSS = `
@@ -114,10 +116,14 @@ function GazpetEmblem() {
 
 export default function HomeScada({ profile, modules, onOpen }) {
   const [counts, setCounts] = useState({})
+  // Audit UI 02.11.2026: HomeDashboard se redesenează în fiecare secundă (ceasul din antet) și reconstruiește `modules`;
+  // efectul depindea de referința array-ului => 12 numărări Supabase / secundă (~43k cereri / oră / tab).
+  // Dependența e acum lista de rute (string stabil), deci numărările rulează doar când se schimbă modulele vizibile.
+  const cheieModule = modules.map(m => m.path).join('|')
   useEffect(() => {
     let dead = false
     ;(async () => {
-      const paths = modules.map(m => m.path).filter(p => COUNT_DEFS[p])
+      const paths = cheieModule.split('|').filter(p => COUNT_DEFS[p])
       const res = await Promise.allSettled(paths.map(p => COUNT_DEFS[p].q(supabase)))
       if (dead) return
       const out = {}
@@ -125,7 +131,7 @@ export default function HomeScada({ profile, modules, onOpen }) {
       setCounts(out)
     })()
     return () => { dead = true }
-  }, [modules])
+  }, [cheieModule])
 
   const prenume = profile?.name ? profile.name.split(' ')[0] : ''
   const azi = new Date().toLocaleDateString('ro-RO', { weekday:'long', day:'numeric', month:'long' })
@@ -135,7 +141,7 @@ export default function HomeScada({ profile, modules, onOpen }) {
       <style>{CSS}</style>
       {/* salut */}
       <div style={{ margin:'30px 2px 20px' }}>
-        <div style={{ fontSize:30, fontWeight:800, letterSpacing:.3, color:T.text }}>
+        <div style={{ fontFamily:"'Syne',sans-serif", fontSize:30, fontWeight:800, letterSpacing:.3, color:T.text }}>
           Bună{prenume ? <>, <span style={{ color:GAZ }}>{prenume}</span></> : ''}! 👋
         </div>
         <div style={{ color:T.muted, fontSize:13, marginTop:5 }}>{azi.charAt(0).toUpperCase() + azi.slice(1)} · alege modulul cu care vrei să lucrezi</div>

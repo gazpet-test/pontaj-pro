@@ -88,7 +88,7 @@ export default function DeAprobatButton({ profile }) {
         onMouseEnter={e => { e.currentTarget.style.background = G.green + '33'; e.currentTarget.style.color = G.green; e.currentTarget.style.transform = 'translateY(-1px)' }}
         onMouseLeave={e => { e.currentTarget.style.background = total > 0 ? G.green + '22' : G.bg; e.currentTarget.style.color = total > 0 ? G.green : G.dim; e.currentTarget.style.transform = 'translateY(0)' }}
       >
-        ✅ De aprobat
+        ✅ <span className="tb-txt">De aprobat</span>
         {total > 0 && (
           <span style={{ background:G.red, color:'#fff', borderRadius:10, padding:'1px 7px', fontSize:11, fontWeight:800 }}>{total}</span>
         )}

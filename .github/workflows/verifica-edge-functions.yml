@@ -7,18 +7,27 @@ name: Edge functions — repo vs producție
 on:
   push:
     branches: [main]
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'scripts/secretHr.test.js', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   pull_request:
+    # Consum Actions (06.11.2026, repo privat → 2000 min/lună): nu rulează pe PR-uri draft;
+    # pornește la „Ready for review” și la push-urile de după. Pe un draft: Run workflow manual.
+    types: [opened, synchronize, reopened, ready_for_review]
     # Și căile verificatorului, nu doar ale funcțiilor: altfel o modificare A VERIFICATORULUI
     # nu e rulată pe PR-ul care o aduce, ci abia după merge, direct pe main. Adică exact
     # unealta care există ca să prindă derive ajungea în producție neverificată (22.09.2026).
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'scripts/secretHr.test.js', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   schedule:
     - cron: '0 5 * * 1'   # luni 08:00 RO — intră în Pulsul ERP
   workflow_dispatch:
 
+# Rularea veche a aceluiași PR (sau ref) se anulează; pe main, verificarea noului commit o acoperă pe cea veche.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verifica:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       # Istoric complet: verificarea se sprijină pe data ultimului commit pe fiecare fișier,
@@ -62,6 +71,7 @@ jobs:
   # Poarta pe cheltuială: poarta unică (_shared/poartaCheltuiala.ts) + testele locale ale porții (fără rețea spre
   # Supabase/AI, deps simulate). Nu depinde de secrete — rulează pe orice PR.
   poarta:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +86,9 @@ jobs:
       - run: npm ci
       - name: verificatorul vede _shared (test)
         run: node --test scripts/test-edge-dependente.mjs
+      # Poarta pe parola HR (hr-autorizatii-scan, hr-digest-saptamanal): handler-ele reale, compilate cu esbuild, cu env fictiv.
+      - name: secret HR — parola din env, comparare în timp constant (vitest)
+        run: npx vitest run scripts/secretHr.test.js
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

@@ -17,12 +17,10 @@
 // De ce conteaza sa nu ghicim: pe hr_autorizatii ruleaza alertele de expirare. O autorizatie cu
 // scanul gresit arata in regula si nu mai atrage atentia nimanui.
 //
-// AUTENTIFICARE: deocamdata un antet propriu, fiindca SEAP_IMPORT_SECRET nu exista in secretele
-// Supabase (e doar in Vercel). Cand se adauga acolo, se sterge PAROLA si ramane doar verificarea
-// pe Deno.env — vezi claude_context id 955.
+// AUTENTIFICARE: secret dedicat din Supabase Edge Secrets, fara fallback.
+import { verificaSecretHr } from '../_shared/secretHr.mjs';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
-const PAROLA = 'hr-aut-2026-08-30-Rt7pNc3Xw';
 const SURSA = 'documente-personal';
 const TINTA = 'autorizatii';
 
@@ -52,14 +50,11 @@ Deno.serve(async (req: Request) => {
   const json = (b: unknown, status = 200) =>
     new Response(JSON.stringify(b), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
+  const refuz = verificaSecretHr(req, Deno.env.get('HR_AUTORIZATII_SCAN_PAROLA'));
+  if (refuz) return json({ error: refuz === 503 ? 'secret HR neconfigurat' : 'unauthorized' }, refuz);
+
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!;
   const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-  const dinEnv = Deno.env.get('SEAP_IMPORT_SECRET');
-  const antet = req.headers.get('x-hr-secret') || '';
-  const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
-  if (jwt !== SERVICE && antet !== PAROLA && !(dinEnv && antet === dinEnv)) {
-    return json({ error: 'unauthorized' }, 401);
-  }
   const supa = createClient(SUPA_URL, SERVICE);
 
   let body: any = {};
