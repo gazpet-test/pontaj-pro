@@ -86,8 +86,8 @@ describe('golesteAutorizare', () => {
   })
   it('timeout / 5xx după UPDATE → necunoscut + recitire (nu „eșuat”); 4xx → eroare + recitire', async () => {
     expect(await apel(client({ aruncaUpdate: true }))).toMatchObject({ stare: 'necunoscut', recitire: true })
-    expect(await apel(client({ update: { data: null, error: { status: 503, message: 'x' } } }))).toMatchObject({ stare: 'necunoscut', recitire: true })
-    expect(await apel(client({ update: { data: null, error: { status: 403, code: '42501', message: 'doar owner-ul' } } }))).toMatchObject({ stare: 'eroare', recitire: true })
+    expect(await apel(client({ update: { data: null, error: { message: 'x' }, status: 503 } }))).toMatchObject({ stare: 'necunoscut', recitire: true })
+    expect(await apel(client({ update: { data: null, error: { code: '42501', message: 'doar owner-ul' }, status: 403 } }))).toMatchObject({ stare: 'eroare', recitire: true })
   })
   it('contextul s-a schimbat înainte de UPDATE (proiect reîncărcat) → conflict, fără scriere', async () => {
     const c = client()

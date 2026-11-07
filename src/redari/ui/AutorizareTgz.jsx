@@ -38,7 +38,8 @@ export async function golesteAutorizare({ client, proiectId, cod, baza, confirma
     rez = await client.from('red_proiecte').update(PATCH_GOLIRE).eq('id', proiectId).eq('versiune', baza.versiune).select(COL)
   } catch (e) { return { stare: 'necunoscut', eroare: e, recitire: true } }
   if (rez?.error) {
-    const determinist = Number.isInteger(rez.error.status) && rez.error.status >= 400 && rez.error.status < 500
+    // Jakarinos r2 P2: în supabase-js statusul HTTP e pe răspuns (rez.status), nu pe PostgrestError
+    const determinist = Number.isInteger(rez.status) && rez.status >= 400 && rez.status < 500
     return { stare: determinist ? 'eroare' : 'necunoscut', eroare: rez.error, recitire: true }
   }
   if (!rez?.data?.length) return { stare: 'conflict', recitire: true }
