@@ -213,6 +213,17 @@ COMMIT;
 ```
 Precondiție = exact obiectele patch-ului (coloana bigint, indexul, cele două funcții și cele două trigger-e; niciun view pe coloană); armare persistentă = refuz; `LOCK TABLE public.hr_documente_personale IN ACCESS EXCLUSIVE MODE` (cu `lock_timeout` 5 s) ÎNAINTEA numărării `sursa_inbox_id IS NOT NULL`; DROP fără CASCADE; `NOTIFY pgrst`; postcondiție = niciun obiect al patch-ului; dezarmare la final. Testat în `scripts/test_hr_doc_sursa_inbox.sh` pasul 4 (schelet: `supabase/tests/hr_doc_sursa_inbox_schelet.sql`).
 
+## 20261131e — „❓ Întreabă echipa” din cercetare (`20261131e_intrebari_cercetare_surse_ROLLBACK.sql`, NEAPLICAT)
+Readuce starea exactă de după `20261105a`: scoate coloanele `surse` / `de_verificat_la` / `interogari_web`, starea `de_verificat`, jurnalul `intrebari_preluari`, funcțiile `fn_intrebari_de_verificat` / `fn_intrebari_reia` și semnătura cu 8 parametri a lui `fn_intrebari_raspunde`; readuce verbatim corpurile din `20261105a` (`fn_intrebari_raspunde` cu 6 parametri, `fn_intrebari_preia`, `fn_intrebari_amana`, `fn_intrebari_inainte_insert`). Nu redeschide o gaură (fără reluare în UI, plafonul revine la numărarea din `preluat_la` / `raspuns_la`). Fără GO de execuție. Ordinea: întâi edge-ul v1 + workerul vechi, apoi fișierul.
+Două niveluri de armare: `SCOATE_CERCETARE` **refuză** dacă există date noi (surse / interogări nenule, `de_verificat`, `de_verificat_la`, preluări în jurnal după livrare); `SCOATE_CERCETARE_ARHIVEAZA` (decizie Răzvan) le copiază explicit în `intrebari_cercetare_arhiva_20261131e` (RLS, fără politici, SELECT doar `service_role`), trece `de_verificat` → `raspuns`, apoi scoate.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: la REPEATABLE READ / SERIALIZABLE fișierul refuză
+SELECT set_config('gazpet.revenire_20261131e', 'SCOATE_CERCETARE:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Armare legată de txid (în afara unei tranzacții explicite = refuz); armare persistentă = refuz; `LOCK TABLE intrebari_tehnice, intrebari_preluari IN ACCESS EXCLUSIVE MODE` (cu `lock_timeout` 5 s) ÎNAINTEA numărării datelor noi; precondiție = obiectele exacte ale lui 20261131e (semnături, coloane, constrângeri, corpurile noi recunoscute după jurnal, nicio vedere pe coloanele noi); DROP fără CASCADE; `NOTIFY pgrst`; postcondiție = starea 20261105a (semnături, ACL, corpuri fără jurnal, constrângerea cu 4 stări); dezarmare la final. Netestat încă pe o clonă PG (sesiunea care l-a scris nu avea `initdb` permis) — înainte de orice folosire: DRY pe clonă izolată.
+
 ## 20261103c — storage ai-documente-inbox (`20261103c_ai_inbox_storage_politici_ROLLBACK.sql`, NEAPLICAT)
 **Redeschide gaura de confidențialitate** (și rândul falsificat exploatabil prin edge-urile service_role): recreează exact `ai_inbox_obj_all` (FOR ALL TO authenticated, doar `bucket_id`) și scoate `ai_inbox_obj_insert` / `_select` / `_delete`, trigger-ele `trg_ai_inbox_fisier_legat` / `trg_ai_inbox_fisier_imutabil`, funcțiile `ai_inbox_fisier_legat()` / `ai_inbox_fisier_imutabil()` și indexul unic `idx_ai_inbox_fisier_path`. Fără GO de execuție; o cale de upload nouă refuzată se repară cu o migrare nouă (forward-fix), nu prin revenire. Fișierele șterse între timp nu se recuperează (bucket fără versionare).
 ```sql
