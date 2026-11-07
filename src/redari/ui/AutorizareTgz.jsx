@@ -11,6 +11,9 @@ import { informarePublicataServer } from '../informareGdpr.js'
 const COL = 'id, cod, versiune, autorizare_tgz_nr, autorizare_tgz_data, autorizare_tgz_fisier, autorizare_tgz_la'
 const CAMPURI = ['autorizare_tgz_nr', 'autorizare_tgz_data', 'autorizare_tgz_fisier']
 const MAX_PDF = 15 * 1024 * 1024
+// golirea autorizării: oricare dintre cele trei câmpuri completat = există ceva de golit; patch-ul golește toate trei
+export const areAutorizare = (pr) => CAMPURI.some(k => pr?.[k] != null && String(pr[k]).trim() !== '')
+export const PATCH_GOLIRE = Object.freeze({ autorizare_tgz_nr: null, autorizare_tgz_data: null, autorizare_tgz_fisier: null })
 // numele fișierului în storage: doar [A-Za-z0-9_.-], ca CHECK-ul din 20261130m
 export const caleAutorizare = (cod, numeFisier, acum = Date.now()) => {
   const baza = String(numeFisier || 'autorizare').replace(/\.pdf$/i, '').normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -89,6 +92,30 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
     finally { ocupat.current = false; if (!contextSchimbat()) setLucru(false) }
   }
 
+  // Test 07.11.2026: autorizarea (inclusiv una de test) nu se putea scoate din ERP, deși garda din BD o permite owner-ului
+  // („owner-ul o golește întâi”, fn_red_autorizare_tgz_garda). Golirea: cele trei câmpuri → NULL (serverul golește _obiect / _etag),
+  // cu același CAS ca salvarea. PDF-ul rămâne în arhivă (storage), nelegat; informarea GDPR devine nepublicată.
+  const goleste = async () => {
+    if (!esteOwner || ocupat.current) return
+    const b = baza.current
+    const contextSchimbat = () => baza.current !== b
+    if (!areAutorizare(b)) return
+    if (!window.confirm(`Golești autorizarea Transgaz de pe proiectul ${proiect.cod}?\n\nInformarea GDPR devine NEPUBLICATĂ: convocatoarele noi și regenerările se blochează până la o autorizare nouă. PDF-ul rămâne în arhivă, nelegat.`)) return
+    ocupat.current = true; setLucru(true)
+    try {
+      const { data: acum, error: ea } = await supabase.from('red_proiecte').select(COL).eq('id', proiect.id).maybeSingle()
+      if (ea) throw ea
+      if (contextSchimbat() || autorizareSchimbata(b, acum)) throw new Error('Proiectul sau autorizarea s-au schimbat între timp; reîncarcă pagina și verifică înainte de a goli')
+      const { data: rez, error } = await supabase.from('red_proiecte').update(PATCH_GOLIRE).eq('id', proiect.id).eq('versiune', b.versiune).select(COL)
+      if (error) throw error
+      if (!rez?.length) throw new Error('Proiectul a fost modificat între timp; reîncarcă pagina și reîncearcă')
+      if (contextSchimbat()) return
+      show('Autorizarea Transgaz a fost golită. Informarea GDPR nu mai e publicată.', 'success')
+      onSchimbat?.()
+    } catch (e) { show('Golire autorizare: ' + msgEroare(e), 'error') }
+    finally { ocupat.current = false; if (!contextSchimbat()) setLucru(false) }
+  }
+
   return (
     <div style={{ ...S.card, marginTop: 12 }}>
       <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Autorizare Transgaz (art. 28 GDPR)</h3>
@@ -111,6 +138,8 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
           <label style={{ fontSize: 12.5 }}>PDF{proiect.autorizare_tgz_fisier ? ' (înlocuiește)' : ''}<br />
             <input type="file" accept="application/pdf,.pdf" disabled={lucru} onChange={e => setFisier(e.target.files?.[0] || null)} style={{ ...S.input, padding: 5 }} /></label>
           <button style={S.btnP} disabled={lucru} onClick={salveaza}>{lucru ? 'Se salvează…' : 'Salvează autorizarea'}</button>
+          {areAutorizare(proiect) && <button style={{ ...S.btnS, color: G.red, borderColor: G.red }} disabled={lucru} onClick={goleste}
+            title="Scoate autorizarea de pe proiect (de ex. una de test); informarea GDPR devine nepublicată">🗑 Golește autorizarea</button>}
         </div>
       )}
     </div>
