@@ -23,6 +23,28 @@ export const caleAutorizare = (cod, numeFisier, acum = Date.now()) => {
 // r2 (Jakarinos P2-4 / Copilot P2-03): rândul din BD trebuie să fie exact cel pe care l-a văzut formularul (versiune + cele trei câmpuri)
 export const autorizareSchimbata = (baza, acum) => !acum || acum.versiune !== baza.versiune || CAMPURI.some(k => (acum[k] ?? null) !== (baza[k] ?? null))
 
+// Test 07.11.2026: golirea autorizării, separată de UI ca să fie testabilă cu un client simulat.
+// Întoarce { stare: 'nimic' | 'anulat' | 'conflict' | 'eroare' | 'necunoscut' | 'golit', eroare?, recitire }.
+// recitire = s-a încercat UPDATE-ul (sau s-a văzut un conflict) → apelantul recitește proiectul de pe server (L05: rezultat ambiguu ≠ eșec).
+export const textConfirmareGolire = cod => `Golești autorizarea Transgaz de pe proiectul ${cod}?\n\nInformarea GDPR devine NEPUBLICATĂ: convocatoarele poștale noi, regenerările și înregistrarea expedierii se blochează până la o autorizare nouă. PDF-ul rămâne în arhivă, nelegat.`
+export async function golesteAutorizare({ client, proiectId, cod, baza, confirma, contextSchimbat = () => false }) {
+  if (!areAutorizare(baza)) return { stare: 'nimic', recitire: false }
+  if (!confirma(textConfirmareGolire(cod))) return { stare: 'anulat', recitire: false }
+  const { data: acum, error: ea } = await client.from('red_proiecte').select(COL).eq('id', proiectId).maybeSingle()
+  if (ea) return { stare: 'eroare', eroare: ea, recitire: false }   // doar citire: nimic scris
+  if (contextSchimbat() || autorizareSchimbata(baza, acum)) return { stare: 'conflict', recitire: true }
+  let rez
+  try {
+    rez = await client.from('red_proiecte').update(PATCH_GOLIRE).eq('id', proiectId).eq('versiune', baza.versiune).select(COL)
+  } catch (e) { return { stare: 'necunoscut', eroare: e, recitire: true } }
+  if (rez?.error) {
+    const determinist = Number.isInteger(rez.error.status) && rez.error.status >= 400 && rez.error.status < 500
+    return { stare: determinist ? 'eroare' : 'necunoscut', eroare: rez.error, recitire: true }
+  }
+  if (!rez?.data?.length) return { stare: 'conflict', recitire: true }
+  return { stare: 'golit', recitire: true }
+}
+
 export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) {
   const [nr, setNr] = useState(proiect.autorizare_tgz_nr || '')
   const [data, setData] = useState(proiect.autorizare_tgz_data || '')
@@ -100,20 +122,16 @@ export default function AutorizareTgz({ proiect, esteOwner, show, onSchimbat }) 
     const b = baza.current
     const contextSchimbat = () => baza.current !== b
     if (!areAutorizare(b)) return
-    if (!window.confirm(`Golești autorizarea Transgaz de pe proiectul ${proiect.cod}?\n\nInformarea GDPR devine NEPUBLICATĂ: convocatoarele noi și regenerările se blochează până la o autorizare nouă. PDF-ul rămâne în arhivă, nelegat.`)) return
     ocupat.current = true; setLucru(true)
     try {
-      const { data: acum, error: ea } = await supabase.from('red_proiecte').select(COL).eq('id', proiect.id).maybeSingle()
-      if (ea) throw ea
-      if (contextSchimbat() || autorizareSchimbata(b, acum)) throw new Error('Proiectul sau autorizarea s-au schimbat între timp; reîncarcă pagina și verifică înainte de a goli')
-      const { data: rez, error } = await supabase.from('red_proiecte').update(PATCH_GOLIRE).eq('id', proiect.id).eq('versiune', b.versiune).select(COL)
-      if (error) throw error
-      if (!rez?.length) throw new Error('Proiectul a fost modificat între timp; reîncarcă pagina și reîncearcă')
-      if (contextSchimbat()) return
-      show('Autorizarea Transgaz a fost golită. Informarea GDPR nu mai e publicată.', 'success')
-      onSchimbat?.()
-    } catch (e) { show('Golire autorizare: ' + msgEroare(e), 'error') }
-    finally { ocupat.current = false; if (!contextSchimbat()) setLucru(false) }
+      const r = await golesteAutorizare({ client: supabase, proiectId: proiect.id, cod: proiect.cod, baza: b, confirma: t => window.confirm(t), contextSchimbat })
+      if (contextSchimbat() || r.stare === 'anulat') return
+      if (r.stare === 'golit') show('Autorizarea Transgaz a fost golită. Informarea GDPR nu mai e publicată.', 'success')
+      else if (r.stare === 'conflict') show('Proiectul sau autorizarea s-au schimbat între timp; am reîncărcat — verifică și reîncearcă.', 'error')
+      else if (r.stare === 'necunoscut') show('Golire autorizare: rezultat neconfirmat (' + msgEroare(r.eroare) + '); am recitit starea de pe server — verifică înainte de a relua.', 'error')
+      else show('Golire autorizare: ' + msgEroare(r.eroare), 'error')
+      if (r.recitire) onSchimbat?.()   // Jakarinos r1 P2 (L05/L24): după orice încercare de UPDATE se recitește starea serverului
+    } finally { ocupat.current = false; if (!contextSchimbat()) setLucru(false) }
   }
 
   return (
