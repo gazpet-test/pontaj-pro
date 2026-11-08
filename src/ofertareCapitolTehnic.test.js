@@ -53,6 +53,10 @@ describe('normativeDin — lista albă de citare', () => {
     expect(normativeDin('NP 133-20221')).toEqual([])           // anul nu se taie din 5 cifre
     expect(normativeDin('Legea 10/19955')).toEqual([])
     expect(normativeDin('STAS 9570/1-89')).toEqual(['STAS 9570/1-89'])
+    // continuarea tokenului peste spații (review Jakarinos #1030 r2): nu se acceptă „NP 133” din „NP 133 - 20221”
+    expect(normativeDin('NP 133 - 20221')).toEqual([])
+    expect(normativeDin('NP 133 / 20221')).toEqual([])
+    expect(normativeDin('NP 133 - normativ privind rețelele')).toEqual(['NP 133'])
   })
 })
 
@@ -111,5 +115,11 @@ describe('esteDocTehnic + blocTehnic', () => {
     const b = blocTehnic(mare, 'metodologie', { maxCar: 1000, latime: 300, perDoc: 20 })
     expect(b.taiat).toBe(true)
     expect(b.extrase.join('').length).toBeLessThanOrEqual(1000)
+  })
+  it('limita de ferestre pe document marchează tăierea (review Jakarinos #1030 r2, L12)', () => {
+    const multe = [{ id: 8, nume_original: 'Memoriu tehnic.pdf', tip: 'alta', text_extras: Array.from({ length: 25 }, (_, i) => `Fragment ${i}: sapatura, pozare, sudura, proba de presiune. ` + 'x'.repeat(600)).join(' ') }]
+    const b = blocTehnic(multe, 'metodologie', { latime: 300, perDoc: 16, maxCar: 1e9 })
+    expect(b.extrase.length).toBe(16)
+    expect(b.taiat).toBe(true)
   })
 })

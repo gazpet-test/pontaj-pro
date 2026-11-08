@@ -59,7 +59,7 @@ const CHEI = {
 export const cuvinteCheie = (tip) => CHEI[tip] || CHEI.metodologie
 
 // Normativele citate într-un text (listă albă pentru citare): STAS, SR / SR EN (ISO), NP, I/C/GP + nr-an, NTPEE, legi, HG, ordine.
-const RE_NORM = /\b(?:SR\s+EN(?:\s+ISO)?\s*\d{2,5}(?:[-:/.]\d+)*|SR\s+ISO\s*\d{2,5}(?:[-:/.]\d+)*|SR\s*\d{3,5}(?:[-:/.]\d+)*|STAS\s*\d{2,5}(?:[-:/.]\d+)*|NP\s*[-‐]?\s*\d{2,3}(?!\d)(?:\s*[-/]\s*\d{2,4})?|GP\s*[-‐]?\s*\d{2,3}(?!\d)(?:\s*[-/]\s*\d{2,4})?|[IC]\s?\d{1,3}\s*[-/]\s*(?:(?:19|20)\d{2}|\d{2})|NTPEE(?:[-\s]?20\d{2})?|Legea\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|H\.?G\.?\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|Ordinul\s+(?:[A-Z]+\s+)?(?:nr\.\s*)?\d{1,5}\/\d{4})(?![\d/:]|[-.]\s*\d)/g
+const RE_NORM = /\b(?:SR\s+EN(?:\s+ISO)?\s*\d{2,5}(?:[-:/.]\d+)*|SR\s+ISO\s*\d{2,5}(?:[-:/.]\d+)*|SR\s*\d{3,5}(?:[-:/.]\d+)*|STAS\s*\d{2,5}(?:[-:/.]\d+)*|NP\s*[-‐]?\s*\d{2,3}(?!\d)(?:\s*[-/]\s*\d{2,4})?|GP\s*[-‐]?\s*\d{2,3}(?!\d)(?:\s*[-/]\s*\d{2,4})?|[IC]\s?\d{1,3}\s*[-/]\s*(?:(?:19|20)\d{2}|\d{2})|NTPEE(?:[-\s]?20\d{2})?|Legea\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|H\.?G\.?\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|Ordinul\s+(?:[A-Z]+\s+)?(?:nr\.\s*)?\d{1,5}\/\d{4})(?![\d/:]|\s*[-./:‐]\s*\d)/g
 const curata = (s) => s.replace(/\s+/g, ' ').replace(/\s*([-/:])\s*/g, '$1').replace(/^(NP|GP)-/, '$1 ').trim()
 export function normativeDin(text) {
   const out = new Map()
@@ -121,14 +121,17 @@ export function blocTehnic(docs, tip, { maxCar = 16000, latime = 900, perDoc = t
   const norme = normativeDin(tehnice.map(d => d.text_extras).join('\n'))
   const chei = cuvinteCheie(tip)
   const parti = []
-  let total = 0, taiat = false
+  let total = 0, taiat = false, plin = false
   for (const d of tehnice) {
-    for (const f of ferestre(d.text_extras, chei, { latime, max: perDoc })) {
+    // review Jakarinos #1030 r2 (L12): se cer perDoc + 1 ferestre; dacă există mai multe decât intră, tăierea se marchează
+    const fs = ferestre(d.text_extras, chei, { latime, max: perDoc + 1 })
+    if (fs.length > perDoc) taiat = true
+    for (const f of fs.slice(0, perDoc)) {
       const linie = `[${d.nume_original}${f.pagina ? ', p. ' + f.pagina : ''}] ${f.text}`
-      if (total + linie.length > maxCar) { taiat = true; break }
+      if (total + linie.length > maxCar) { plin = true; break }
       parti.push(linie); total += linie.length
     }
-    if (taiat) break
+    if (plin) { taiat = true; break }
   }
   return { docuri: tehnice.length, norme, extrase: parti, taiat }
 }

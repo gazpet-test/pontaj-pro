@@ -444,7 +444,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const MAX_OUT = 12000
-    const logParte = async (k: number, r: any) => {
+    const logParte = async (k: number, r: any): Promise<boolean> => {
       try {
         const u = r?.data?.usage
         const cunoscut = !!u && Number.isFinite(u.output_tokens)
@@ -458,8 +458,9 @@ Deno.serve(async (req: Request) => {
           function_name: cunoscut ? 'ofertare-genereaza-capitol' : 'ofertare-genereaza-capitol (cost estimat maxim)', model: MODEL,
           tokens_in: tin, tokens_out: tout, cost_usd: cost, ref_table: 'ofertare_pt_capitole', ref_id: capId,
         })
-        if (error) console.error('ai_usage_log', error.message)
-      } catch (e) { console.error('ai_usage_log', String(e)) }
+        if (error) { console.error('ai_usage_log', error.message); return false }
+        return true
+      } catch (e) { console.error('ai_usage_log', String(e)); return false }
     }
     const apel = async (k: number) => {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -480,13 +481,14 @@ Deno.serve(async (req: Request) => {
     }
     // fiecare parte își scrie costul imediat ce se termină; înainte de orice răspuns se așteaptă toate scrierile (L22);
     // o parte picată în rețea nu oprește înregistrarea celorlalte (allSettled), iar capitolul nu se scrie
-    const scrieriCost: Promise<void>[] = []
+    const scrieriCost: Promise<boolean>[] = []
     const stari = await Promise.allSettled(parti.map((_, k) => apel(k).then(
       r => { scrieriCost.push(logParte(k, r)); return r },
       e => { scrieriCost.push(logParte(k, null)); throw e })))
-    await Promise.allSettled(scrieriCost)
+    const costNeinregistrat = (await Promise.allSettled(scrieriCost)).filter(x => x.status !== 'fulfilled' || x.value !== true).length
+    const notaCost = costNeinregistrat ? ` ATENȚIE: costul a ${costNeinregistrat} din ${nTot} părți NU s-a putut înregistra în jurnal — anunță echipa ERP.` : ''
     const picata = stari.findIndex(x => x.status === 'rejected')
-    if (picata >= 0) return fail(`Apelul către model a eșuat la partea ${picata + 1} din ${nTot}: ${String((stari[picata] as PromiseRejectedResult).reason?.message || (stari[picata] as PromiseRejectedResult).reason)} — nu s-a scris nimic (costul părților e înregistrat).`)
+    if (picata >= 0) return fail(`Apelul către model a eșuat la partea ${picata + 1} din ${nTot}: ${String((stari[picata] as PromiseRejectedResult).reason?.message || (stari[picata] as PromiseRejectedResult).reason)} — nu s-a scris nimic.${notaCost}`, { cost_neinregistrat: costNeinregistrat })
     const rezultate = stari.map(x => (x as PromiseFulfilledResult<any>).value)
 
     // Costul se scrie acum pe fiecare parte, imediat ce se termină (logParte, mai sus).
@@ -501,15 +503,15 @@ Deno.serve(async (req: Request) => {
     for (const [k, r] of rezultate.entries()) {
       // L21: refuzul și tăierea se verifică ÎNAINTEA textului; nimic parțial nu se scrie (ar arăta ca un capitol complet)
       if (r.data.stop_reason === 'refusal') {
-        return fail(`Modelul a refuzat partea ${k + 1} din ${nTot} (${r.data.stop_details?.category || 'fără categorie'}) — nu s-a scris nimic. Costul apelului (${costTxt}) s-a consumat.`,
-          { refuz: true, parte: k + 1, parti: nTot, cost_usd: costTotal })
+        return fail(`Modelul a refuzat partea ${k + 1} din ${nTot} (${r.data.stop_details?.category || 'fără categorie'}) — nu s-a scris nimic. Costul apelului (${costTxt}) s-a consumat.${notaCost}`,
+          { refuz: true, parte: k + 1, parti: nTot, cost_usd: costTotal, cost_neinregistrat: costNeinregistrat })
       }
       if (r.data.stop_reason === 'max_tokens') {
-        return fail(`Partea ${k + 1} din ${nTot} s-a tăiat la limita de lungime — nu s-a scris nimic. Costul apelului (${costTxt}) s-a consumat. Mută o parte din cerințele capitolului în alt capitol sau anunță echipa ERP.`,
-          { trunchiat: true, parte: k + 1, parti: nTot, cost_usd: costTotal })
+        return fail(`Partea ${k + 1} din ${nTot} s-a tăiat la limita de lungime — nu s-a scris nimic. Costul apelului (${costTxt}) s-a consumat. Mută o parte din cerințele capitolului în alt capitol sau anunță echipa ERP.${notaCost}`,
+          { trunchiat: true, parte: k + 1, parti: nTot, cost_usd: costTotal, cost_neinregistrat: costNeinregistrat })
       }
       const t = (r.data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('').trim()
-      if (!t) return fail(`Modelul n-a întors text la partea ${k + 1}. Costul apelului (${costTxt}) s-a consumat.`, { stop_reason: r.data.stop_reason || null, cost_usd: costTotal })
+      if (!t) return fail(`Modelul n-a întors text la partea ${k + 1}. Costul apelului (${costTxt}) s-a consumat.${notaCost}`, { stop_reason: r.data.stop_reason || null, cost_usd: costTotal, cost_neinregistrat: costNeinregistrat })
       bucati.push(t)
     }
     const text = bucati.join('\n\n')
@@ -529,7 +531,7 @@ Deno.serve(async (req: Request) => {
       versiune_noua: (cap.versiune || 1) + 1,
       tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cache_citit: data.usage?.cache_read_input_tokens || 0,
-      pachet_caractere: pachet.length, parti: nTot, cost_usd: costTotal,
+      pachet_caractere: pachet.length, parti: nTot, cost_usd: costTotal, cost_neinregistrat: costNeinregistrat,
       tip_capitol: tip, documente_tehnice: th.docuri, normative: th.norme.length, extrase: th.extrase.length, extrase_taiate: th.taiat,
       cerinte_excluse_lot, cerinte_lot_necunoscut,
     }), { headers: CORS })
