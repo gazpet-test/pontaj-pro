@@ -242,7 +242,8 @@ export default function OfertareLicitatiiTab() {
   }, [])
 
   const FINALE = ['castigata', 'pierduta', 'abandonata']
-  const areProbleme = r => (r.eliminatorii_neacoperite > 0) || (r._st?.rosii > 0) || r._st?.verdict === 'rosu'
+  // review Jakarinos #1028 r2 (L18): acoperirea necitită = necunoscut, nu „fără probleme” — licitația rămâne în filtrul „cu probleme”
+  const areProbleme = r => (r.eliminatorii_neacoperite > 0) || !!r._st?.kpiNecitit || (r._st?.rosii > 0) || r._st?.verdict === 'rosu'
   // căutarea ignoră diacriticele și majusculele — „Domnesti" găsește „Domnești"
   const normText = v => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
   const cautaN = normText(cauta).trim()
