@@ -114,15 +114,26 @@ const formatieNoua = (nume, operator_id, tip = 'instalatii') => tip === 'instala
 
 // Rândurile de acoperire folosite la propunere: fără cele nevalabile la depunere; pe o cerință cu alegere făcută de om (ales / ales_de),
 // doar rândurile alese — alternativele propuse de AI nu mai intră ca persoane în plus.
+// Review Jakarinos #1031 P1: cerințele „cu alegere” se stabilesc ÎNAINTEA filtrului de valabilitate — o alegere nevalabilă nu
+// readuce alternativele AI; rolul rămâne „de nominalizat” (vizibil), iar alegerile nevalabile se întorc separat, pentru semnalare.
 export function filtreazaAcoperiri(acoperiri = []) {
-  const valabile = acoperiri.filter(a => a.valabil_la_depunere !== false)
-  const cuAlegere = new Set(valabile.filter(a => a.ales === true || a.ales_de != null).map(a => a.cerinta_id))
-  return valabile.filter(a => !cuAlegere.has(a.cerinta_id) || a.ales === true || a.ales_de != null)
+  const esteAles = a => a.ales === true || a.ales_de != null
+  const cuAlegere = new Set(acoperiri.filter(esteAles).map(a => a.cerinta_id))
+  const pastrate = acoperiri.filter(a => (!cuAlegere.has(a.cerinta_id) || esteAles(a)) && a.valabil_la_depunere !== false)
+  pastrate.aleseNevalabile = acoperiri.filter(a => esteAles(a) && a.valabil_la_depunere === false)
+  return pastrate
 }
 
 // Fișa / caietul interzice cumulul de funcții? (cerință de tipul „O persoană nu poate îndeplini cumulativ mai multe funcții”)
-export const RE_CUMUL_INTERZIS = /(nu (poate|pot|este permis|se accepta)[^.]{0,60}(cumul|mai multe (functii|roluri|pozitii)))|(cumul(ul|area)?\s+(de\s+)?(functii|roluri)[^.]{0,40}(nu|interzis))/
-export const interzisCumulDin = (cerinte = []) => cerinte.some(c => RE_CUMUL_INTERZIS.test(fara(c?.text_cerinta)))
+// Pe propoziție (review Jakarinos #1031 P2, L13): interzis dacă o formulă de interdicție vizează cumulul și propoziția nu o neagă
+// („nu este interzis”, „este permis”).
+const CUMUL_DA = [/se interzic[ea][^.]{0,40}cumul/, /cumul[^.]{0,120}(este |e |sunt )?interzis/, /nu (se )?(permite|accepta|admite)[^.]{0,40}cumul/,
+  /cumul[^.]{0,60}nu (este|e|se) (permis|accept|admis)/, /nu (poate|pot)[^.]{0,60}(cumul|mai multe (functii|roluri|pozitii))/]
+const CUMUL_NU = [/nu (este|e|sunt) interzis/, /(?<!nu )\b(este|e|sunt) permis[^.]{0,30}cumul/, /cumul[^.]{0,40}(?<!nu )\b(este|e|sunt) permis/]
+export function cumulInterzisInText(text) {
+  return fara(text).split(/[.;\n]/).some(p => /cumul|mai multe (functii|roluri|pozitii)/.test(p) && CUMUL_DA.some(r => r.test(p)) && !CUMUL_NU.some(r => r.test(p)))
+}
+export const interzisCumulDin = (cerinte = []) => cerinte.some(c => cumulInterzisInText(c?.text_cerinta))
 
 // Rolul de conducere declarat în Formularul 9: manager de proiect / șef de șantier (sau null)
 export function rolConducereF9(rol) {
@@ -229,8 +240,11 @@ export function totaluriOperatori(noduri) {
 }
 const totalGeneral = noduri => Object.values(totaluriOperatori(noduri)).reduce((s, t) => s + t.total, 0)
 
-export function verificaOrganigrama({ noduri, spec, docs = null, interzisCumul = false, echipaF9 = [] }) {
+export function verificaOrganigrama({ noduri, spec, docs = null, interzisCumul = false, echipaF9 = [], contextNecitit = false, aleseNevalabile = 0 }) {
   const out = []
+  // review Jakarinos #1031 P1 (L18): fără cerințele / F9 citite, cumulul și concordanța cu F9 sunt NECUNOSCUTE, nu „în regulă”
+  if (contextNecitit) out.push({ cod: 'context_necitit', nivel: 'rosu', text: 'Cerințele licitației / Formularul 9 nu sunt citite (se încarcă sau au dat eroare) — cumulul și concordanța cu F9 sunt neverificate. Reverifică înainte de salvare.' })
+  if (aleseNevalabile > 0) out.push({ cod: 'alese_nevalabile', nivel: 'rosu', text: `${aleseNevalabile} alegeri făcute de om la acoperire nu mai sunt valabile la depunere — rolul lor rămâne „de nominalizat”; alege din nou în Cerințe & acoperire.` })
   const P = noduri?.persoane || []
   const nominalizate = P.filter(eNominalizat)
   // (a) RTE pe toate domeniile
@@ -258,11 +272,13 @@ export function verificaOrganigrama({ noduri, spec, docs = null, interzisCumul =
     ? { cod: 'cumul_' + cheie(ps[0]), nivel: 'rosu', text: `Cumul INTERZIS de documentație: ${ps[0].nume} are ${ps.length} roluri (${ps.map(p => p.rol).join(', ')}) — o persoană, un singur rol` }
     : { cod: 'cumul_' + cheie(ps[0]), nivel: 'portocaliu', text: `Cumul: ${ps[0].nume} are ${ps.length} roluri (${ps.map(p => p.rol).join(', ')}) — verifică dacă fișa interzice cumulul` })
   // (c2) managerul de proiect / șeful de șantier: aceleași persoane ca în Formularul 9 (echipa declarată)
+  // identitatea = angajat / extern (review Jakarinos #1031 P2); numele doar când lipsesc amândouă; mulțimi egale, nu incluziune
+  const idPers = x => x.employee_id ? 'e' + x.employee_id : x.extern_id ? 'x' + x.extern_id : 'n' + fara(x.nume).replace(/\s+/g, ' ').trim()
   for (const rol of ['Manager de proiect', 'Șef de șantier']) {
-    const dinF9 = echipaF9.filter(e => (e.roluri || []).some(r => rolConducereF9(r) === rol)).map(e => fara(e.nume))
-    if (!dinF9.length) continue
-    const dinOrg = nominalizate.filter(p => acelasiRol(p.rol, rol)).map(p => fara(p.nume))
-    const ok = dinOrg.length > 0 && dinOrg.every(n => dinF9.includes(n))
+    const dinF9 = new Set(echipaF9.filter(e => (e.roluri || []).some(r => rolConducereF9(r) === rol)).map(idPers))
+    if (!dinF9.size) continue
+    const dinOrg = new Set(nominalizate.filter(p => acelasiRol(p.rol, rol)).map(idPers))
+    const ok = dinOrg.size === dinF9.size && [...dinOrg].every(k => dinF9.has(k))
     out.push({ cod: 'f9_' + fara(rol), nivel: ok ? 'ok' : 'rosu', text: ok ? `${rol}: același ca în Formularul 9` : `${rol}: diferit de Formularul 9 (echipa declarată) — alege aceeași persoană în ambele` })
   }
   // (d) formații per operator
@@ -747,7 +763,12 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
 
   // Contextul: cerințele licitației (toate, keyset — serverul taie la 1000) pentru interdicția de cumul + Formularul 9. La eroare:
   // mesaj și null (verificările noi nu rulează), nu „fără interdicție” (L18).
+  const genCtx = useRef(0)
+  const licCurenta = useRef(licId)
+  useEffect(() => { licCurenta.current = licId }, [licId])
   const incarcaContext = async () => {
+    const gen = ++genCtx.current, lic = licId
+    const curent = () => gen === genCtx.current && lic === licCurenta.current   // L24: doar ultimul apel, pe licitația încă deschisă
     try {
       const cerinte = await paginareKeyset((ultim, pas) => {
         let q = supabase.from('ofertare_cerinte').select('id, text_cerinta').eq('licitatie_id', licId).is('inlocuita_de', null).is('duplicat_al', null).order('id', { ascending: true }).limit(pas)
@@ -758,34 +779,52 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
       if (rE.error) throw rE.error
       const echipaF9 = (rE.data || []).map(e => ({ nume: e.emp?.name || e.ext?.nume || '', employee_id: e.employee_id, extern_id: e.extern_id, roluri: (e.roluri || []).map(r => r.rol_denumire) }))
       const c = { cerinte, interzisCumul: interzisCumulDin(cerinte), echipaF9 }
+      if (!curent()) return null
       setCtx(c)
       return c
     } catch (e) {
-      showToast?.('Cerințele / Formularul 9 nu s-au putut citi — verificările de cumul și de concordanță cu F9 lipsesc: ' + (e?.message || e), 'err')
-      setCtx(null)
+      if (!curent()) return null
+      showToast?.('Cerințele / Formularul 9 nu s-au putut citi — cumulul și concordanța cu F9 rămân neverificate: ' + (e?.message || e), 'err')
+      setCtx({ eroare: true })
       return null
     }
   }
-  useEffect(() => { setCtx(null); if (deschis && licId) incarcaContext() }, [deschis, licId])
+  useEffect(() => { genCtx.current++; setCtx(null); if (deschis && licId) incarcaContext() }, [deschis, licId])
+  const ctxArgs = (c) => ({ interzisCumul: !!c?.interzisCumul, echipaF9: c?.echipaF9 || [], contextNecitit: !c || !!c.eroare })
 
   const propune = async () => {
+    const lic = licId
     setBusy(true)
     const c = await incarcaContext()
-    if (!c) { setBusy(false); return }   // fără cerințe / F9 citite nu se propune (eroarea e deja afișată)
-    // acoperirea licitației: prin cerințe (ofertare_acoperire n-are licitatie_id)
-    const cIds = (c?.cerinte || []).map(x => x.id)
-    let acoperiri = []
-    if (cIds.length) {
-      const rA = await supabase.from('ofertare_acoperire')
-        .select('id, cerinta_id, status, partener_id, domeniu_rte, ales, ales_de, valabil_la_depunere, autorizatie:hr_autorizatii(id, employee_id, extern_id, domenii, tip:hr_autorizatii_tipuri(cod, denumire), emp:employees(name), ext:hr_personal_extern(nume, partener_id))')
-        .in('cerinta_id', cIds).in('status', ['acoperit', 'acoperit_partener']).not('autorizatie_id', 'is', null).order('id').limit(5000)
-      if (rA.error) showToast?.('Acoperirea nu s-a putut citi: ' + rA.error.message, 'err')
-      acoperiri = rA.data || []
+    if (!c || lic !== licCurenta.current) { setBusy(false); return }   // fără cerințe / F9 citite (sau altă licitație) nu se propune
+    // acoperirea licitației: prin cerințe (ofertare_acoperire n-are licitatie_id) — pe bucăți de 150 de id-uri, keyset până la
+    // pagina goală (review Jakarinos #1031 P2, L23); la eroare nu se propune nimic (nu „echipă goală” afișată ca reușită)
+    const cIds = (c.cerinte || []).map(x => x.id)
+    const acoperiri = []
+    try {
+      for (let i = 0; i < cIds.length; i += 150) {
+        const bucata = cIds.slice(i, i + 150)
+        acoperiri.push(...await paginareKeyset((ultim, pas) => {
+          let q = supabase.from('ofertare_acoperire')
+            .select('id, cerinta_id, status, partener_id, domeniu_rte, ales, ales_de, valabil_la_depunere, autorizatie:hr_autorizatii(id, employee_id, extern_id, domenii, tip:hr_autorizatii_tipuri(cod, denumire), emp:employees(name), ext:hr_personal_extern(nume, partener_id))')
+            .in('cerinta_id', bucata).not('autorizatie_id', 'is', null).order('id', { ascending: true }).limit(pas)
+          if (ultim != null) q = q.gt('id', ultim)
+          return q
+        }))
+      }
+    } catch (e) {
+      setBusy(false)
+      if (lic === licCurenta.current) showToast?.('Acoperirea nu s-a putut citi — nu s-a propus nimic: ' + (e?.message || e), 'err')
+      return
     }
-    const N = construiesteNoduri({ licitatie, participanti, acoperiri, spec, existente: noduri, echipaF9: c?.echipaF9 || [] })
+    if (lic !== licCurenta.current) { setBusy(false); return }
+    // filtrul pe status se face aici (rândurile alese trebuie văzute toate, ca o alegere nevalabilă să nu readucă alternativele)
+    const fa = filtreazaAcoperiri(acoperiri)
+    const N = construiesteNoduri({ licitatie, participanti, acoperiri: fa.filter(a => ['acoperit', 'acoperit_partener'].includes(a.status)), spec, existente: noduri, echipaF9: c.echipaF9 || [] })
     setNoduri(N)
     const d = await incarcaDocs(N)
-    setVerificari(verificaOrganigrama({ noduri: N, spec, docs: d, interzisCumul: !!c?.interzisCumul, echipaF9: c?.echipaF9 || [] }))
+    if (lic !== licCurenta.current) { setBusy(false); return }
+    setVerificari(verificaOrganigrama({ noduri: N, spec, docs: d, ...ctxArgs(c), aleseNevalabile: (fa.aleseNevalabile || []).length }))
     setBusy(false); setTab('editor')
     showToast?.(`Echipă propusă: ${N.persoane.filter(eNominalizat).length} persoane din platformă, ${N.persoane.filter(p => !eNominalizat(p)).length} de nominalizat.`, 'ok')
   }
@@ -793,7 +832,7 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
   const verifica = async () => {
     if (!noduri) return
     const d = docs || await incarcaDocs(noduri)
-    const v = verificaOrganigrama({ noduri, spec, docs: d, interzisCumul: !!ctx?.interzisCumul, echipaF9: ctx?.echipaF9 || [] })
+    const v = verificaOrganigrama({ noduri, spec, docs: d, ...ctxArgs(ctx) })
     setVerificari(v)
     return v
   }
@@ -823,7 +862,7 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
   }
 
   // recalculează verificările la fiecare schimbare din editor (fără documente noi — alea se cer la salvare)
-  const verificariLive = useMemo(() => noduri ? verificaOrganigrama({ noduri, spec, docs, interzisCumul: !!ctx?.interzisCumul, echipaF9: ctx?.echipaF9 || [] }) : verificari, [noduri, spec, docs, ctx])
+  const verificariLive = useMemo(() => noduri ? verificaOrganigrama({ noduri, spec, docs, ...ctxArgs(ctx) }) : verificari, [noduri, spec, docs, ctx])
   const rosii = verificariLive.filter(v => v.nivel === 'rosu').length, portocalii = verificariLive.filter(v => v.nivel === 'portocaliu').length
 
   if (!licId) return null
