@@ -39,12 +39,27 @@ BEGIN
              AND (NOT p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR pg_get_userbyid(p.proowner) <> 'postgres')) THEN
     RAISE EXCEPTION '20261132a: atributele lantului de autorizare (definer/search_path/owner) difera';
   END IF;
-  -- trigger-ele BEFORE existente pe ofertare_licitatii: exact setul revizuit, toate active (ordinea a00 → a01 → a02 → trg_*)
-  IF (SELECT array_agg(tgname::text ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND NOT tgisinternal)
-     IS DISTINCT FROM ARRAY['a00_ofertare_licitatii_scriere', 'a01_ofertare_licitatii_loturi_garda', 'trg_gate_depunere',
-                            'trg_ofertare_j02b_sens_unic', 'trg_ofertare_responsabil_setat_de']
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND NOT tgisinternal AND tgenabled <> 'O') THEN
-    RAISE EXCEPTION '20261132a: setul de trigger-e pe ofertare_licitatii difera de cel revizuit (lista se confirma la DRY)';
+  -- trigger-ele existente pe ofertare_licitatii (review Jakarinos #1027 r4 P1, L15): amprenta COMPLETĂ a fiecăruia — nume, funcție
+  -- (tgfoid → semnătură), eveniment/momente (tgtype), condiția WHEN (tgqual), coloanele UPDATE OF (tgattr), activare — comparată
+  -- cu baseline-ul revizuit; plus amprenta dependenței tranzitive fn_are_acces_ofertare (folosită de a00), a politicilor RLS și a
+  -- ACL-ului tabelului. Baseline-ul (valorile __MD5_LA_DRY__*) îl produce și îl revizuiește chat-ul pe clona schemei de producție,
+  -- comparând cu migrările din repo; până atunci garda refuză (fail-closed).
+  IF md5(coalesce((SELECT string_agg(concat_ws('|', t.tgname, t.tgfoid::regprocedure::text, t.tgtype, t.tgenabled,
+                                                   coalesce(pg_get_expr(t.tgqual, t.tgrelid), ''), t.tgattr::text), E'\n' ORDER BY t.tgname)
+                     FROM pg_trigger t WHERE t.tgrelid = 'public.ofertare_licitatii'::regclass AND NOT t.tgisinternal), ''))
+     IS DISTINCT FROM '__MD5_LA_DRY__triggere_licitatii' THEN
+    RAISE EXCEPTION '20261132a: trigger-ele pe ofertare_licitatii difera de baseline-ul revizuit';
+  END IF;
+  IF md5(pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure)) IS DISTINCT FROM '__MD5_LA_DRY__are_acces_ofertare' THEN
+    RAISE EXCEPTION '20261132a: fn_are_acces_ofertare nu e versiunea revizuita';
+  END IF;
+  IF md5(coalesce((SELECT string_agg(concat_ws('|', pol.polname, pol.polcmd, pol.polpermissive, pol.polroles::text,
+                                                   coalesce(pg_get_expr(pol.polqual, pol.polrelid), ''), coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '')),
+                                         E'\n' ORDER BY pol.polname)
+                     FROM pg_policy pol WHERE pol.polrelid = 'public.ofertare_licitatii'::regclass), '')
+            || '#' || coalesce((SELECT relacl::text || relrowsecurity::text || relforcerowsecurity::text FROM pg_class WHERE oid = 'public.ofertare_licitatii'::regclass), ''))
+     IS DISTINCT FROM '__MD5_LA_DRY__rls_acl_licitatii' THEN
+    RAISE EXCEPTION '20261132a: politicile RLS / ACL pe ofertare_licitatii difera de baseline-ul revizuit';
   END IF;
   IF to_regprocedure('public.fn_ofertare_inchidere_garda()') IS NOT NULL THEN
     RAISE EXCEPTION '20261132a: fn_ofertare_inchidere_garda exista deja';

@@ -5,6 +5,9 @@
 -- Identități ca în PostgREST (review Jakarinos #1027 r3 P2, L20/L25): fixture-ul se creează ca postgres cu claims de owner, dar
 -- FIECARE caz de test rulează sub SET LOCAL ROLE authenticated + request.jwt.claims (RLS și garda a00 se aplică exact ca prin API).
 -- Licitațiile de test se creează aici; nu se atinge nicio licitație reală.
+-- LIMITĂ (review Jakarinos #1027 r4 P2): SET LOCAL ROLE păstrează session_user = postgres, deci bypass-ul a00 pentru sesiunea postgres
+-- rămâne activ aici — testul verifică garda nouă (a02), nu și a00. Proba completă ca apelant API cere harness-ul non-superuser
+-- (SET SESSION AUTHORIZATION authenticator, ca la J05) pe clusterul dedicat al chat-ului.
 DO $do$
 DECLARE
   r text := ''; ok boolean := true;
@@ -56,28 +59,28 @@ BEGIN
     UPDATE ofertare_licitatii SET status = 'abandonata', updated_at = now() WHERE id = l_r2; EXECUTE 'RESET ROLE'; cod := 'ok';
   EXCEPTION WHEN OTHERS THEN cod := SQLSTATE; END;
   EXECUTE 'RESET ROLE';
-  IF cod <> 'ok' THEN ok := false; r := r || 'FAIL R1b responsabil 2 (' || cod || '); '; END IF;
+  IF cod <> 'ok' OR (SELECT status FROM ofertare_licitatii WHERE id = l_r2) <> 'abandonata' THEN ok := false; r := r || 'FAIL R1b responsabil 2 (' || cod || '); '; END IF;
 
   -- P1: responsabilul numit, ÎNAINTE de termen → 42501
   BEGIN EXECUTE 'SET LOCAL ROLE authenticated';
     UPDATE ofertare_licitatii SET status = 'abandonata' WHERE id = l_viitor; EXECUTE 'RESET ROLE'; cod := 'ok';
   EXCEPTION WHEN OTHERS THEN cod := SQLSTATE; END;
   EXECUTE 'RESET ROLE';
-  IF cod <> '42501' THEN ok := false; r := r || 'FAIL P1 inainte de termen (' || cod || '); '; END IF;
+  IF cod <> '42501' OR (SELECT status FROM ofertare_licitatii WHERE id = l_viitor) = 'abandonata' THEN ok := false; r := r || 'FAIL P1 inainte de termen (' || cod || '); '; END IF;
 
   -- P2: licitație fără GO (identificata), cu termen trecut → doar ownerul
   BEGIN EXECUTE 'SET LOCAL ROLE authenticated';
     UPDATE ofertare_licitatii SET status = 'abandonata' WHERE id = l_ident; EXECUTE 'RESET ROLE'; cod := 'ok';
   EXCEPTION WHEN OTHERS THEN cod := SQLSTATE; END;
   EXECUTE 'RESET ROLE';
-  IF cod <> '42501' THEN ok := false; r := r || 'FAIL P2 identificata (' || cod || '); '; END IF;
+  IF cod <> '42501' OR (SELECT status FROM ofertare_licitatii WHERE id = l_ident) = 'abandonata' THEN ok := false; r := r || 'FAIL P2 identificata (' || cod || '); '; END IF;
 
   -- P4: responsabil autonumit (fără dovadă de numire) → refuz
   BEGIN EXECUTE 'SET LOCAL ROLE authenticated';
     UPDATE ofertare_licitatii SET status = 'abandonata' WHERE id = l_autonumit; EXECUTE 'RESET ROLE'; cod := 'ok';
   EXCEPTION WHEN OTHERS THEN cod := SQLSTATE; END;
   EXECUTE 'RESET ROLE';
-  IF cod <> '42501' THEN ok := false; r := r || 'FAIL P4 autonumit (' || cod || '); '; END IF;
+  IF cod <> '42501' OR (SELECT status FROM ofertare_licitatii WHERE id = l_autonumit) = 'abandonata' THEN ok := false; r := r || 'FAIL P4 autonumit (' || cod || '); '; END IF;
 
   -- R3: celelalte tranziții nu sunt atinse — responsabilul trece go → in_lucru și editează observațiile
   BEGIN EXECUTE 'SET LOCAL ROLE authenticated';
@@ -94,8 +97,8 @@ BEGIN
     UPDATE ofertare_licitatii SET status = 'abandonata' WHERE id = l_autonumit; EXECUTE 'RESET ROLE'; cod := 'ok';
   EXCEPTION WHEN OTHERS THEN cod := SQLSTATE; END;
   EXECUTE 'RESET ROLE';
-  -- 42501 de la garda nouă sau de la RLS / a00 (dacă v_b n-are acces Ofertare) — oricare înseamnă refuz; 0 rânduri = refuz tăcut, verificat mai jos
-  IF cod = 'ok' AND (SELECT status FROM ofertare_licitatii WHERE id = l_autonumit) = 'abandonata' THEN ok := false; r := r || 'FAIL P3 necoleg a reusit; '; END IF;
+  -- refuzurile acceptate: 42501 (garda nouă sau a00 / RLS, dacă v_b n-are acces Ofertare) sau 0 rânduri (RLS); orice altă eroare = FAIL
+  IF cod NOT IN ('ok', '42501') OR (SELECT status FROM ofertare_licitatii WHERE id = l_autonumit) = 'abandonata' THEN ok := false; r := r || 'FAIL P3 necoleg (' || cod || '); '; END IF;
 
   -- R2: ownerul închide oricând (NO-GO înainte de termen) și o licitație fără GO
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_owner, 'role', 'authenticated')::text, true);
@@ -105,7 +108,7 @@ BEGIN
     EXECUTE 'RESET ROLE'; cod := 'ok';
   EXCEPTION WHEN OTHERS THEN cod := SQLSTATE; END;
   EXECUTE 'RESET ROLE';
-  IF cod <> 'ok' THEN ok := false; r := r || 'FAIL R2 owner (' || cod || '); '; END IF;
+  IF cod <> 'ok' OR (SELECT count(*) FROM ofertare_licitatii WHERE id IN (l_owner, l_ident) AND status = 'abandonata') <> 2 THEN ok := false; r := r || 'FAIL R2 owner (' || cod || '); '; END IF;
 
   -- ── revenire + re-aplicare ──
   PERFORM set_config('request.jwt.claims', '', true);
