@@ -46,6 +46,14 @@ describe('normativeDin — lista albă de citare', () => {
     expect(normativeDin('STAS 6054 și STAS 6054-77').length).toBe(2)   // ediția contează
   })
   it('text gol → listă goală', () => expect(normativeDin('')).toEqual([]))
+  it('identificatorii se iau întregi, cu ediția (review Jakarinos #1030 P2)', () => {
+    expect(normativeDin('conform STAS 6054:1977')).toEqual(['STAS 6054:1977'])
+    expect(normativeDin('SR EN 12201-2:2011+A1:2013')).toEqual(['SR EN 12201-2:2011'])
+    expect(normativeDin('NP 1333-2022')).toEqual([])            // NP are 2–3 cifre: nu devine „NP 133”
+    expect(normativeDin('NP 133-20221')).toEqual([])           // anul nu se taie din 5 cifre
+    expect(normativeDin('Legea 10/19955')).toEqual([])
+    expect(normativeDin('STAS 9570/1-89')).toEqual(['STAS 9570/1-89'])
+  })
 })
 
 describe('ferestre + paginaLa', () => {

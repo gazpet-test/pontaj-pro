@@ -59,7 +59,7 @@ const CHEI = {
 export const cuvinteCheie = (tip) => CHEI[tip] || CHEI.metodologie
 
 // Normativele citate într-un text (listă albă pentru citare): STAS, SR / SR EN (ISO), NP, I/C/GP + nr-an, NTPEE, legi, HG, ordine.
-const RE_NORM = /\b(?:SR\s+EN(?:\s+ISO)?\s*\d{2,5}(?:[-:]\d+)*|SR\s+ISO\s*\d{2,5}(?:[-:]\d+)*|SR\s*\d{3,5}(?:[-:/]\d+)*|STAS\s*\d{2,5}(?:[-/]\d+)*|NP\s*[-‐]?\s*\d{2,3}(?:\s*[-/]\s*\d{2,4})?|GP\s*[-‐]?\s*\d{2,3}(?:\s*[-/]\s*\d{2,4})?|[IC]\s?\d{1,3}\s*[-/]\s*(?:(?:19|20)\d{2}|\d{2})(?![\d/])|NTPEE(?:[-\s]?20\d{2})?|Legea\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|H\.?G\.?\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|Ordinul\s+(?:[A-Z]+\s+)?(?:nr\.\s*)?\d{1,5}\/\d{4})/g
+const RE_NORM = /\b(?:SR\s+EN(?:\s+ISO)?\s*\d{2,5}(?:[-:/.]\d+)*|SR\s+ISO\s*\d{2,5}(?:[-:/.]\d+)*|SR\s*\d{3,5}(?:[-:/.]\d+)*|STAS\s*\d{2,5}(?:[-:/.]\d+)*|NP\s*[-‐]?\s*\d{2,3}(?!\d)(?:\s*[-/]\s*\d{2,4})?|GP\s*[-‐]?\s*\d{2,3}(?!\d)(?:\s*[-/]\s*\d{2,4})?|[IC]\s?\d{1,3}\s*[-/]\s*(?:(?:19|20)\d{2}|\d{2})|NTPEE(?:[-\s]?20\d{2})?|Legea\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|H\.?G\.?\s+(?:nr\.\s*)?\d{1,4}\/\d{4}|Ordinul\s+(?:[A-Z]+\s+)?(?:nr\.\s*)?\d{1,5}\/\d{4})(?![\d/:]|[-.]\s*\d)/g
 const curata = (s) => s.replace(/\s+/g, ' ').replace(/\s*([-/:])\s*/g, '$1').replace(/^(NP|GP)-/, '$1 ').trim()
 export function normativeDin(text) {
   const out = new Map()
