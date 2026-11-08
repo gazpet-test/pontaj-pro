@@ -48,6 +48,7 @@ import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
 import { provPeDocument, etichetaProvenienta, PROV_INDISPONIBILA } from './ofertareProvenienta.js'
+import { stareTermen, tonTermen, notaNedepusa } from './ofertareStareTermen.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -235,7 +236,12 @@ export default function OfertareLicitatiiTab() {
   // căutarea ignoră diacriticele și majusculele — „Domnesti" găsește „Domnești"
   const normText = v => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
   const cautaN = normText(cauta).trim()
+  // audit 08.11.2026: starea termenului se calculează din termen_depunere (nu din zile_ramase al vederii, care pune 0 = „AZI”
+  // pe orice termen trecut sau lipsă); „termen_trecut” = activă, nedepusă, cu termenul depășit
+  const acumTermen = new Date()
+  const stT = r => stareTermen(r, acumTermen)
   const filtrate = rows.filter(r => (fStatus === 'active' ? !FINALE.includes(r.status)
+    : fStatus === 'termen_trecut' ? stT(r).fel === 'trecut'
     : fStatus === 'finale' ? FINALE.includes(r.status)
     : fStatus === 'in_lucru' ? ['go', 'in_lucru', 'analiza'].includes(r.status)
     : fStatus === 'depuse' ? r.status === 'depusa'
@@ -283,6 +289,7 @@ export default function OfertareLicitatiiTab() {
   const nrInLucru = rows.filter(r => ['go', 'in_lucru', 'analiza'].includes(r.status)).length
   const nrDepuse = rows.filter(r => r.status === 'depusa').length
   const nrArhiva = rows.filter(r => FINALE.includes(r.status)).length
+  const nrTermenTrecut = rows.filter(r => stT(r).fel === 'trecut').length
   const fmtMil = v => v == null ? '—' : v >= 1e6 ? `${(v / 1e6).toLocaleString('ro-RO', { maximumFractionDigits: 2 })} mil` : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 0 }).format(v)
 
   const salveaza = async (form) => {
@@ -354,6 +361,26 @@ export default function OfertareLicitatiiTab() {
     setSelected(null); await load()
   }
 
+  // Audit 08.11.2026: licitația cu termenul trecut, nemarcată depusă, se închide ca „nedepusă” (status abandonata) cu motiv
+  // obligatoriu, adăugat la observații. Un singur UPDATE, condiționat de statusul și observațiile citite (CAS, L01): dacă altcineva
+  // a schimbat între timp licitația, 0 rânduri → mesaj, fără suprascriere. Doar pentru statusurile nedepuse cu termen trecut.
+  const inchideNedepusa = async (l, motiv) => {
+    const st = stareTermen(l)
+    if (st.fel !== 'trecut') { showToast('Termenul nu a trecut — licitația nu se închide ca nedepusă.', 'err'); return false }
+    const nota = notaNedepusa(motiv)
+    if (!nota) { showToast('Scrie motivul (de ce nu s-a depus).', 'err'); return false }
+    let q = supabase.from('ofertare_licitatii')
+      .update({ status: 'abandonata', observatii: l.observatii ? `${l.observatii}\n${nota}` : nota, updated_at: new Date().toISOString() })
+      .eq('id', l.id).eq('status', l.status)
+    q = l.observatii == null ? q.is('observatii', null) : q.eq('observatii', l.observatii)
+    const { data, error } = await q.select('id')
+    if (error) { showToast('Eroare: ' + error.message, 'err'); return false }
+    if (!data?.length) { showToast('Licitația s-a schimbat între timp (status sau observații) — reîncarc, încearcă din nou.', 'err'); await load(); return false }
+    showToast(`⛔ ${l.nr_anunt} → închisă ca nedepusă (motivul e în observații).`)
+    setSelected(null); await load()
+    return true
+  }
+
   // E0: decizia GO/NO-GO — doar owner, cu motivare păstrată
   const decide = async (l, decizie, motivare) => {
     if (!profile?.is_owner) { showToast('Decizia GO/NO-GO e doar a ownerului.', 'err'); return }
@@ -423,6 +450,12 @@ export default function OfertareLicitatiiTab() {
         <span style={{ background:'#1c2a44', color:G.blue, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>{nrInLucru} în lucru</span>
         <span style={{ background:'#2a2211', color:G.yellow, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>{nrDepuse} depuse</span>
         <span style={{ background:G.surface, color:G.muted, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>arhivă {nrArhiva}</span>
+        {nrTermenTrecut > 0 && (
+          <button onClick={() => setFStatus('termen_trecut')} title="Licitații active cu termenul de depunere depășit, nemarcate depuse — de închis (depusă sau nedepusă)"
+            style={{ background:'#2b1517', color:G.red, border:`1px solid ${G.red}66`, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800, cursor:'pointer' }}>
+            ⏰ {nrTermenTrecut} cu termen trecut, nemarcate depuse
+          </button>
+        )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
           <div style={{ position:'relative' }}>
             <input style={{ ...S.input, width:230, paddingRight:cauta ? 28 : undefined }} value={cauta} onChange={e => setCauta(e.target.value)}
@@ -446,7 +479,7 @@ export default function OfertareLicitatiiTab() {
         </div>
       </div>
       <div style={{ display:'flex', gap:8, marginBottom:8, flexWrap:'wrap' }}>
-        {[['active', 'Toate active'], ['in_lucru', '🔨 în lucru'], ['depuse', '📮 depuse'], ['radar', '🛰️ din radar'], ['probleme', '⚠️ cu probleme'], ['finale', '📦 arhivă'], ['toate', 'toate']].map(([k, lbl]) => (
+        {[['active', 'Toate active'], ['in_lucru', '🔨 în lucru'], ['termen_trecut', `⏰ termen trecut${nrTermenTrecut ? ` (${nrTermenTrecut})` : ''}`], ['depuse', '📮 depuse'], ['radar', '🛰️ din radar'], ['probleme', '⚠️ cu probleme'], ['finale', '📦 arhivă'], ['toate', 'toate']].map(([k, lbl]) => (
           <button key={k} onClick={() => setFStatus(k)} style={{ borderRadius:999, padding:'7px 16px', fontSize:13, fontWeight:700, cursor:'pointer',
             background: fStatus === k ? '#3a3113' : G.surface, color: fStatus === k ? G.ofertare : G.muted, border:`1px solid ${fStatus === k ? '#5c4d1c' : G.border2}` }}>{lbl}</button>
         ))}
@@ -469,12 +502,12 @@ export default function OfertareLicitatiiTab() {
         {filtrate.map(l => {
           const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
           const sx = l._st || {}
-          const zile = l.zile_ramase
+          const sT = stT(l)
           const activa = !FINALE.includes(l.status) && l.status !== 'depusa'
-          const cZile = zile == null ? G.muted : zile <= 3 ? G.red : zile <= 7 ? G.orange : zile <= 21 ? G.yellow : G.green
+          const cZile = { rosu: G.red, portocaliu: G.orange, galben: G.yellow, verde: G.green, neutru: G.muted }[tonTermen(sT)]
           const pct = sx.cerinte ? Math.round(100 * sx.acoperite / sx.cerinte) : 0
           const probl = areProbleme(l)
-          const cBord = probl && activa ? G.red : activa && zile != null && zile <= 21 ? G.yellow : l.status === 'depusa' ? G.purple : st.color
+          const cBord = (probl || sT.fel === 'trecut') && activa ? G.red : activa && sT.fel === 'viitor' && sT.zile <= 21 ? G.yellow : activa && sT.fel === 'azi' ? G.red : l.status === 'depusa' ? G.purple : st.color
           const VC = { verde: ['VERDE', G.green], galben: ['GALBEN', G.yellow], rosu: ['ROȘU', G.red] }
           const TRIERE_V = { mergem: ['MERGEM', G.green], cu_clarificari: ['CU CLARIFICĂRI', G.yellow], nu_se_poate: ['NU SE POATE', G.red], neclar: ['NECLAR', G.muted] }
           const canalLbl = l.canal ? l.canal.replace('seap_', 'SEAP ').toUpperCase() : (l.tip_procedura || '')
@@ -501,7 +534,9 @@ export default function OfertareLicitatiiTab() {
               </div>
               <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, textAlign:'right' }}>
                 <span style={{ background: st.color + '22', color: st.color, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800, whiteSpace:'nowrap' }}>{st.icon} {st.label}{l.decizie_go === 'go' ? ' · GO' : ''}</span>
-                {activa && <span style={{ fontSize:13.5, color:G.muted, whiteSpace:'nowrap' }}>termen: <b style={{ fontSize:19, color:cZile }}>{zile == null ? '—' : zile === 0 ? 'AZI' : `${zile} ${zile === 1 ? 'zi' : 'zile'}`}</b></span>}
+                {activa && sT.fel !== 'trecut' && <span style={{ fontSize:13.5, color:G.muted, whiteSpace:'nowrap' }} title={sT.eticheta}>termen: <b style={{ fontSize:19, color:cZile }}>{sT.scurt}</b>{sT.fel === 'azi' ? <span style={{ fontSize:12, color:G.red }}> până la {sT.ora}</span> : null}</span>}
+                {activa && sT.fel === 'trecut' && <span style={{ fontSize:12.5, color:G.red, fontWeight:800, whiteSpace:'nowrap', textAlign:'right' }} title="Deschide fișa: „Închide licitația” — depusă sau nedepusă">
+                  ⏰ termen trecut{sT.zile ? ` de ${sT.zile} ${sT.zile === 1 ? 'zi' : 'zile'}` : ` azi la ${sT.ora}`}<br /><span style={{ fontWeight:600 }}>nemarcată depusă — de închis</span></span>}
                 {!activa && l.termen_depunere && <span style={{ fontSize:12.5, color:G.dim }}>depunere {fmtTermen(l.termen_depunere).slice(0, 10)}</span>}
                 <span style={{ height:7, borderRadius:5, background:G.border, overflow:'hidden', width:190, display:'block' }}>
                   <i style={{ display:'block', height:'100%', width:`${pct}%`, background: probl ? G.red : 'linear-gradient(90deg,#D29922,#3FB950)' }} />
@@ -521,7 +556,7 @@ export default function OfertareLicitatiiTab() {
           intrareDocument={intrareDocument} onIntrareConsumata={consumaIntrare} showToast={showToast}
           onClose={() => { setIntrareDocument(null); setSelected(null) }}
           onEdit={() => { setIntrareDocument(null); setEditRow(selected); setSelected(null); setShowForm(true) }}
-          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setIntrareDocument(null); setCantLicId(selected.id); setVedere('cantitati') }}
+          onStatus={schimbaStatus} onInchideNedepusa={inchideNedepusa} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setIntrareDocument(null); setCantLicId(selected.id); setVedere('cantitati') }}
           onGoClarificari={() => { setIntrareDocument(null); setClarLicId(selected.id); setVedere('clarificari') }}
           onGoPropunere={() => { setIntrareDocument(null); setPtLicId(selected.id); setVedere('propunere') }} />
       )}
@@ -3695,7 +3730,50 @@ function BannerRcNecitit({ licitatie: l, onProceseaza, reloadKey = null }) {
   )
 }
 
-function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati, onGoPropunere, onGoClarificari,
+// Audit 08.11.2026 (problema 1): termenul a trecut și licitația nu e marcată depusă → o singură acțiune, „Închide licitația”,
+// cu două ieșiri: (a) am depus-o în SEAP → înregistrarea depunerii în Propunere tehnică (pachetul + dovada SEAP; fără ea poarta
+// din BD refuză „depusă”), (b) n-am depus-o → închisă ca nedepusă, cu motiv obligatoriu păstrat în observații.
+// La licitațiile fără GO (identificată / în analiză) „am depus” nu are sens — rămâne doar închiderea.
+function BannerTermenTrecut({ licitatie: l, stare, onAmDepus, onNuAmDepus }) {
+  const [pas, setPas] = useState(null)   // null | 'alege' | 'nedepusa'
+  const [motiv, setMotiv] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { setPas(null); setMotiv('') }, [l.id])
+  const poateFiDepusa = ['go', 'in_lucru'].includes(l.status)
+  const trimite = async () => {
+    setBusy(true)
+    try { const ok = await onNuAmDepus(motiv); if (ok) setPas(null) } finally { setBusy(false) }
+  }
+  return (
+    <div role="alert" style={{ background:'#2b1517', border:`1px solid ${G.red}88`, borderRadius:12, padding:'12px 16px', marginBottom:14 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+        <div style={{ flex:1, minWidth:260, fontSize:13.5 }}>
+          <b style={{ color:G.red }}>⏰ Termenul de depunere a trecut</b> ({fmtTermen(l.termen_depunere)}, {stare.zile ? `acum ${stare.zile} ${stare.zile === 1 ? 'zi' : 'zile'}` : 'azi'}) și licitația
+          nu e marcată depusă. Până o închizi, rămâne în lista activă.
+        </div>
+        {!pas && <button style={{ ...S.btnP, background:G.red, color:'#fff' }} onClick={() => setPas(poateFiDepusa ? 'alege' : 'nedepusa')}>Închide licitația…</button>}
+      </div>
+      {pas === 'alege' && (
+        <div style={{ display:'flex', gap:10, marginTop:10, flexWrap:'wrap' }}>
+          <button style={{ ...S.btnS, color:G.purple, borderColor:G.purple + '66', fontWeight:700 }} onClick={onAmDepus}
+            title="Deschide Propunerea tehnică: „Înregistrează depunerea” (fișierele finale + dovada SEAP), apoi „Marchează Depusă”">📮 Am depus-o în SEAP — înregistrez depunerea</button>
+          <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66', fontWeight:700 }} onClick={() => setPas('nedepusa')}>⛔ N-am depus-o</button>
+          <button style={S.btnS} onClick={() => setPas(null)}>Renunț</button>
+        </div>
+      )}
+      {pas === 'nedepusa' && (
+        <div style={{ display:'flex', gap:10, marginTop:10, flexWrap:'wrap', alignItems:'center' }}>
+          <input style={{ ...S.input, flex:1, minWidth:260 }} placeholder="De ce nu s-a depus? (obligatoriu — se păstrează în observații)" value={motiv} onChange={e => setMotiv(e.target.value)} />
+          <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66', fontWeight:700, opacity: motiv.trim() && !busy ? 1 : .5 }} disabled={!motiv.trim() || busy} onClick={trimite}>
+            {busy ? '⏳ …' : '⛔ Închide ca nedepusă'}</button>
+          <button style={S.btnS} onClick={() => setPas(null)}>Renunț</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onInchideNedepusa, onDecide, onDelete, onGoCantitati, onGoPropunere, onGoClarificari,
   intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
   // Secțiunile E1–E3 și verificarea finală rămân componentele existente, doar montate pe tab-uri.
@@ -3796,8 +3874,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
   const sx = l._st || {}
-  const zile = l.zile_ramase
-  const cZile = zile == null ? G.muted : zile <= 3 ? G.red : zile <= 7 ? G.orange : zile <= 21 ? G.yellow : G.green
+  const sT = stareTermen(l)   // audit 08.11.2026: din termen_depunere, nu din zile_ramase (0 = „AZI” pe termene trecute)
+  const cZile = { rosu: G.red, portocaliu: G.orange, galben: G.yellow, verde: G.green, neutru: G.muted }[tonTermen(sT)]
   const pct = sx.cerinte ? Math.round(100 * sx.acoperite / sx.cerinte) : 0
   const VC = { verde: ['🟢 VERDE — nimic în neregulă în registrul extras (nu verifică pachetul final depus)', G.green], galben: ['🟡 GALBEN — de rezolvat înainte de depunere', G.yellow], rosu: ['🔴 ROȘU — NU se depune', G.red] }
   const [vLbl, vCol] = VC[sx.verdict] || ['— verificare nerulată', G.dim]
@@ -3859,11 +3937,16 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
         <div style={{ fontSize:15, color:G.muted, margin:'6px 0 18px', maxWidth:900 }}>{l.obiect}</div>
         <div style={{ margin:'-10px 0 12px' }}><CostAI licitatieId={l.id} /></div>
         <BannerRcNecitit licitatie={l} reloadKey={tab} onProceseaza={() => setTab('documente')} />
+        {sT.fel === 'trecut' && <BannerTermenTrecut licitatie={l} stare={sT}
+          onAmDepus={() => { onClose(); onGoPropunere?.() }} onNuAmDepus={(motiv) => onInchideNedepusa?.(l, motiv)} />}
 
         {/* KPI */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(175px, 1fr))', gap:12, marginBottom:18 }}>
           <KPI l="Valoare estimată" v={fmtMil(l.valoare_estimata)} unit={l.valoare_estimata >= 1e6 ? `mil ${l.moneda || 'lei'}` : (l.moneda || 'lei')} />
-          <KPI l="Termen depunere" v={zile == null ? (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—') : zile === 0 ? 'AZI' : zile} unit={zile != null ? (zile === 1 ? 'zi' : 'zile') : ''} color={cZile} />
+          <KPI l="Termen depunere"
+            v={sT.fel === 'viitor' ? sT.zile : sT.fel === 'azi' ? 'AZI' : sT.fel === 'trecut' ? `−${sT.zile}` : (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—')}
+            unit={sT.fel === 'viitor' ? (sT.zile === 1 ? 'zi' : 'zile') : sT.fel === 'azi' ? `până la ${sT.ora}` : sT.fel === 'trecut' ? (sT.zile ? `${sT.zile === 1 ? 'zi' : 'zile'} · trecut` : `trecut azi la ${sT.ora}`) : ''}
+            color={cZile} />
           <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
           <KPI l="Eliminatorii fără dovadă (goluri + neevaluate)" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
           <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
