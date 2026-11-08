@@ -36,6 +36,7 @@ describe('interzisCumulDin — cerința de cumul din documentație', () => {
     expect(cumulInterzisInText('Cumulul de funcții este permis pentru personalul auxiliar.')).toBe(false)
     expect(cumulInterzisInText('Se interzice cumulul de funcții între managerul de proiect și șeful de șantier.')).toBe(true)
     expect(cumulInterzisInText('Nu se permite cumulul de funcții.')).toBe(true)
+    expect(cumulInterzisInText('Nu se interzice cumulul de funcții.')).toBe(false)
     expect(cumulInterzisInText('Cumularea funcțiilor de Manager de proiect și Șef de șantier de aceeași persoană este interzisă.')).toBe(true)
   })
   it('cerințele obișnuite nu declanșează', () => {
