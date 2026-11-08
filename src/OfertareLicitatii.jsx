@@ -48,7 +48,7 @@ import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
 import { provPeDocument, etichetaProvenienta, PROV_INDISPONIBILA } from './ofertareProvenienta.js'
-import { stareTermen, tonTermen, notaNedepusa } from './ofertareStareTermen.js'
+import { stareTermen, tonTermen, notaNedepusa, poateInchideNedepusa } from './ofertareStareTermen.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -238,7 +238,10 @@ export default function OfertareLicitatiiTab() {
   const cautaN = normText(cauta).trim()
   // audit 08.11.2026: starea termenului se calculează din termen_depunere (nu din zile_ramase al vederii, care pune 0 = „AZI”
   // pe orice termen trecut sau lipsă); „termen_trecut” = activă, nedepusă, cu termenul depășit
-  const acumTermen = new Date()
+  // review Jakarinos #1027 P2: tick la minut, ca „AZI” să treacă în „trecut” și fără altă reîncărcare
+  const [tickTermen, setTickTermen] = useState(0)
+  useEffect(() => { const t = setInterval(() => setTickTermen(x => x + 1), 60000); return () => clearInterval(t) }, [])
+  const acumTermen = useMemo(() => new Date(), [tickTermen, rows])
   const stT = r => stareTermen(r, acumTermen)
   const filtrate = rows.filter(r => (fStatus === 'active' ? !FINALE.includes(r.status)
     : fStatus === 'termen_trecut' ? stT(r).fel === 'trecut'
@@ -362,9 +365,12 @@ export default function OfertareLicitatiiTab() {
   }
 
   // Audit 08.11.2026: licitația cu termenul trecut, nemarcată depusă, se închide ca „nedepusă” (status abandonata) cu motiv
-  // obligatoriu, adăugat la observații. Un singur UPDATE, condiționat de statusul și observațiile citite (CAS, L01): dacă altcineva
-  // a schimbat între timp licitația, 0 rânduri → mesaj, fără suprascriere. Doar pentru statusurile nedepuse cu termen trecut.
+  // obligatoriu, adăugat la observații. Un singur UPDATE, condiționat (CAS, L01; review Jakarinos #1027) de statusul, termenul și
+  // updated_at citite: termen prelungit sau licitație editată între timp → 0 rânduri → mesaj + reîncărcare, fără suprascriere.
+  // updated_at ține locul observațiilor în CAS (textul lor întreg ar fi intrat în URL). Cine poate: poateInchideNedepusa
+  // (owner; la go / în lucru și responsabilul numit de owner) — doar în UI; impunerea în BD cere migrare (aprobare Răzvan).
   const inchideNedepusa = async (l, motiv) => {
+    if (!poateInchideNedepusa(l, profile)) { showToast(['go', 'in_lucru'].includes(l.status) ? 'Închiderea o face ownerul sau responsabilul numit al licitației.' : 'O licitație fără GO o închide doar ownerul.', 'err'); return false }
     const st = stareTermen(l)
     if (st.fel !== 'trecut') { showToast('Termenul nu a trecut — licitația nu se închide ca nedepusă.', 'err'); return false }
     const nota = notaNedepusa(motiv)
@@ -372,10 +378,11 @@ export default function OfertareLicitatiiTab() {
     let q = supabase.from('ofertare_licitatii')
       .update({ status: 'abandonata', observatii: l.observatii ? `${l.observatii}\n${nota}` : nota, updated_at: new Date().toISOString() })
       .eq('id', l.id).eq('status', l.status)
-    q = l.observatii == null ? q.is('observatii', null) : q.eq('observatii', l.observatii)
+    q = l.termen_depunere == null ? q.is('termen_depunere', null) : q.eq('termen_depunere', l.termen_depunere)
+    q = l.updated_at == null ? q.is('updated_at', null) : q.eq('updated_at', l.updated_at)
     const { data, error } = await q.select('id')
     if (error) { showToast('Eroare: ' + error.message, 'err'); return false }
-    if (!data?.length) { showToast('Licitația s-a schimbat între timp (status sau observații) — reîncarc, încearcă din nou.', 'err'); await load(); return false }
+    if (!data?.length) { showToast('Licitația s-a schimbat între timp (status, termen sau date) — reîncarc, verifică și încearcă din nou.', 'err'); await load(); return false }
     showToast(`⛔ ${l.nr_anunt} → închisă ca nedepusă (motivul e în observații).`)
     setSelected(null); await load()
     return true
@@ -3734,15 +3741,19 @@ function BannerRcNecitit({ licitatie: l, onProceseaza, reloadKey = null }) {
 // cu două ieșiri: (a) am depus-o în SEAP → înregistrarea depunerii în Propunere tehnică (pachetul + dovada SEAP; fără ea poarta
 // din BD refuză „depusă”), (b) n-am depus-o → închisă ca nedepusă, cu motiv obligatoriu păstrat în observații.
 // La licitațiile fără GO (identificată / în analiză) „am depus” nu are sens — rămâne doar închiderea.
-function BannerTermenTrecut({ licitatie: l, stare, onAmDepus, onNuAmDepus }) {
+function BannerTermenTrecut({ licitatie: l, stare, profile, onAmDepus, onNuAmDepus }) {
   const [pas, setPas] = useState(null)   // null | 'alege' | 'nedepusa'
   const [motiv, setMotiv] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => { setPas(null); setMotiv('') }, [l.id])
+  const idCurent = useRef(l.id)
+  useEffect(() => { idCurent.current = l.id; setPas(null); setMotiv(''); setBusy(false) }, [l.id])
   const poateFiDepusa = ['go', 'in_lucru'].includes(l.status)
+  const poateInchide = poateInchideNedepusa(l, profile)
+  // L24: rezultatul se aplică doar dacă fișa e tot pe aceeași licitație
   const trimite = async () => {
+    const id = l.id
     setBusy(true)
-    try { const ok = await onNuAmDepus(motiv); if (ok) setPas(null) } finally { setBusy(false) }
+    try { const ok = await onNuAmDepus(motiv); if (ok && idCurent.current === id) setPas(null) } finally { if (idCurent.current === id) setBusy(false) }
   }
   return (
     <div role="alert" style={{ background:'#2b1517', border:`1px solid ${G.red}88`, borderRadius:12, padding:'12px 16px', marginBottom:14 }}>
@@ -3751,13 +3762,16 @@ function BannerTermenTrecut({ licitatie: l, stare, onAmDepus, onNuAmDepus }) {
           <b style={{ color:G.red }}>⏰ Termenul de depunere a trecut</b> ({fmtTermen(l.termen_depunere)}, {stare.zile ? `acum ${stare.zile} ${stare.zile === 1 ? 'zi' : 'zile'}` : 'azi'}) și licitația
           nu e marcată depusă. Până o închizi, rămâne în lista activă.
         </div>
-        {!pas && <button style={{ ...S.btnP, background:G.red, color:'#fff' }} onClick={() => setPas(poateFiDepusa ? 'alege' : 'nedepusa')}>Închide licitația…</button>}
+        {!pas && (poateFiDepusa || poateInchide) && <button style={{ ...S.btnP, background:G.red, color:'#fff' }} onClick={() => setPas(poateFiDepusa ? 'alege' : 'nedepusa')}>Închide licitația…</button>}
+        {!pas && !poateFiDepusa && !poateInchide && <span style={{ fontSize:12.5, color:G.muted }}>O licitație fără GO o închide ownerul (NO-GO).</span>}
       </div>
       {pas === 'alege' && (
         <div style={{ display:'flex', gap:10, marginTop:10, flexWrap:'wrap' }}>
           <button style={{ ...S.btnS, color:G.purple, borderColor:G.purple + '66', fontWeight:700 }} onClick={onAmDepus}
             title="Deschide Propunerea tehnică: „Înregistrează depunerea” (fișierele finale + dovada SEAP), apoi „Marchează Depusă”">📮 Am depus-o în SEAP — înregistrez depunerea</button>
-          <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66', fontWeight:700 }} onClick={() => setPas('nedepusa')}>⛔ N-am depus-o</button>
+          {poateInchide
+            ? <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66', fontWeight:700 }} onClick={() => setPas('nedepusa')}>⛔ N-am depus-o</button>
+            : <span style={{ fontSize:12.5, color:G.muted, alignSelf:'center' }}>„N-am depus-o” o închide ownerul sau responsabilul numit.</span>}
           <button style={S.btnS} onClick={() => setPas(null)}>Renunț</button>
         </div>
       )}
@@ -3874,7 +3888,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
   const sx = l._st || {}
-  const sT = stareTermen(l)   // audit 08.11.2026: din termen_depunere, nu din zile_ramase (0 = „AZI” pe termene trecute)
+  const [tickTermen, setTickTermen] = useState(0)   // review Jakarinos #1027 P2: recalcul la minut cât stă fișa deschisă
+  useEffect(() => { const t = setInterval(() => setTickTermen(x => x + 1), 60000); return () => clearInterval(t) }, [])
+  const sT = useMemo(() => stareTermen(l), [l, tickTermen])   // audit 08.11.2026: din termen_depunere, nu din zile_ramase (0 = „AZI” pe termene trecute)
   const cZile = { rosu: G.red, portocaliu: G.orange, galben: G.yellow, verde: G.green, neutru: G.muted }[tonTermen(sT)]
   const pct = sx.cerinte ? Math.round(100 * sx.acoperite / sx.cerinte) : 0
   const VC = { verde: ['🟢 VERDE — nimic în neregulă în registrul extras (nu verifică pachetul final depus)', G.green], galben: ['🟡 GALBEN — de rezolvat înainte de depunere', G.yellow], rosu: ['🔴 ROȘU — NU se depune', G.red] }
@@ -3937,7 +3953,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
         <div style={{ fontSize:15, color:G.muted, margin:'6px 0 18px', maxWidth:900 }}>{l.obiect}</div>
         <div style={{ margin:'-10px 0 12px' }}><CostAI licitatieId={l.id} /></div>
         <BannerRcNecitit licitatie={l} reloadKey={tab} onProceseaza={() => setTab('documente')} />
-        {sT.fel === 'trecut' && <BannerTermenTrecut licitatie={l} stare={sT}
+        {sT.fel === 'trecut' && <BannerTermenTrecut licitatie={l} stare={sT} profile={profile}
           onAmDepus={() => { onClose(); onGoPropunere?.() }} onNuAmDepus={(motiv) => onInchideNedepusa?.(l, motiv)} />}
 
         {/* KPI */}

@@ -5,6 +5,7 @@
 // Aici starea se calculează din `termen_depunere` (timestamp exact) și statusul licitației, în zile calendaristice pe ora României,
 // cu aceleași funcții ca registrul de termene (ofertareTermene.js), ca să nu existe două reguli de „azi” în aceeași fișă (L19).
 import { ziRo, zileIntre, FUS } from './ofertareTermene.js'
+import { poateCheltuiUI } from './ofertareResponsabili.js'
 
 // Listă albă (L18): doar statusurile cunoscute au o stare; orice alt status iese „necunoscut”, nu „activ”.
 export const NEDEPUSE = ['identificata', 'analiza', 'go', 'in_lucru']
@@ -45,6 +46,15 @@ export function tonTermen(s) {
   if (s.fel === 'trecut' || s.fel === 'azi') return 'rosu'
   if (s.fel !== 'viitor') return 'neutru'
   return s.zile <= 3 ? 'rosu' : s.zile <= 7 ? 'portocaliu' : s.zile <= 21 ? 'galben' : 'verde'
+}
+
+// Cine poate închide ca „nedepusă” (review Jakarinos #1027 P1): la licitațiile fără GO (identificată / în analiză) doar ownerul —
+// ieșirea lor normală e decizia GO/NO-GO, a ownerului; la cele cu GO (go / în lucru) ownerul sau un responsabil numit de owner
+// (aceeași regulă ca poarta pe cheltuială, poateCheltuiUI). Regula e doar în UI: impunerea în BD cere migrare (aprobare Răzvan).
+export function poateInchideNedepusa(lic, profile) {
+  if (!profile?.id || !NEDEPUSE.includes(lic?.status)) return false
+  if (profile.is_owner === true) return true
+  return ['go', 'in_lucru'].includes(lic.status) && poateCheltuiUI(lic, profile)
 }
 
 // Nota care se adaugă la observații când omul închide o licitație cu termenul trecut, fără depunere

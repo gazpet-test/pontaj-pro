@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stareTermen, tonTermen, notaNedepusa, NEDEPUSE, FINALE } from './ofertareStareTermen.js'
+import { stareTermen, tonTermen, notaNedepusa, poateInchideNedepusa, NEDEPUSE, FINALE } from './ofertareStareTermen.js'
 
 // Valorile așteptate vin din calendar (ora României = UTC+2 iarna, UTC+3 vara), nu din codul testat.
 // 08.11.2026 e iarnă (UTC+2): 08.11 15:00 RO = 13:00 UTC.
@@ -77,5 +77,32 @@ describe('tonTermen + notaNedepusa', () => {
     expect(notaNedepusa('   ', ACUM)).toBeNull()
     expect(notaNedepusa(null, ACUM)).toBeNull()
     expect(notaNedepusa('nu am avut RTE pe domeniu', new Date('2026-11-08T22:30:00Z'))).toBe('[2026-11-09] Nedepusă după termen: nu am avut RTE pe domeniu')
+  })
+})
+
+describe('poateInchideNedepusa (review Jakarinos #1027 P1)', () => {
+  const owner = { id: 'o', is_owner: true }, r1 = { id: 'r1', is_owner: false }, alt = { id: 'x', is_owner: false }
+  const lic = (status) => ({ status, responsabil_id: 'r1', responsabil_setat_de: 'o', responsabil_numitor_autorizat: true })
+  it('fără GO (identificată / în analiză): doar ownerul', () => {
+    for (const st of ['identificata', 'analiza']) {
+      expect(poateInchideNedepusa(lic(st), owner)).toBe(true)
+      expect(poateInchideNedepusa(lic(st), r1)).toBe(false)
+    }
+  })
+  it('cu GO (go / în lucru): ownerul sau responsabilul numit de owner; altcineva nu', () => {
+    for (const st of ['go', 'in_lucru']) {
+      expect(poateInchideNedepusa(lic(st), owner)).toBe(true)
+      expect(poateInchideNedepusa(lic(st), r1)).toBe(true)
+      expect(poateInchideNedepusa(lic(st), alt)).toBe(false)
+    }
+  })
+  it('responsabil care s-a numit singur / fără dovadă de numire → nu', () => {
+    expect(poateInchideNedepusa({ ...lic('in_lucru'), responsabil_setat_de: 'r1' }, r1)).toBe(false)
+    expect(poateInchideNedepusa({ ...lic('in_lucru'), responsabil_numitor_autorizat: false }, r1)).toBe(false)
+  })
+  it('depusă / finală / fără profil → nu', () => {
+    expect(poateInchideNedepusa(lic('depusa'), owner)).toBe(false)
+    expect(poateInchideNedepusa(lic('abandonata'), owner)).toBe(false)
+    expect(poateInchideNedepusa(lic('in_lucru'), null)).toBe(false)
   })
 })
