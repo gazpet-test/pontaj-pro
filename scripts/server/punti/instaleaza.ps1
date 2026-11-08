@@ -185,24 +185,32 @@ Register-ScheduledTask -TaskName $script:NumeSarcina -Action $act -Trigger @($tL
 $tv = Get-ScheduledTask -TaskName $script:NumeSarcina
 Spune ("sarcina '{0}' creata: {1} {2}; repetare {3}, durata '{4}'" -f $script:NumeSarcina, $tv.Actions[0].Execute, $tv.Actions[0].Arguments, $tv.Triggers[1].Repetition.Interval, $tv.Triggers[1].Repetition.Duration)
 
-# sarcinile vechi: dezactivate (nu sterse), notate pentru dezinstalare
+# sarcinile vechi: dezactivate (nu sterse), notate pentru dezinstalare.
+# Evidenta (instalare.json) se scrie si se verifica INAINTE de fiecare efect (Jakarinos r2 P2): o intrerupere nu poate lasa
+# o sarcina dezactivata sau scriptul v1 redenumit fara urma. O intrare notata dar neaplicata e inofensiva la dezinstalare
+# (reactivarea unei sarcini active / lipsa fisierului v1.dezactivat sunt verificate acolo).
 $ev = Read-JsonSigur $Evidenta
 $dezactivate = @()
 if ($ev -and $ev.sarciniDezactivate) { $dezactivate = @($ev.sarciniDezactivate) }
+$v1Redenumit = [bool]($ev -and $ev.v1Redenumit)
+function Save-Evidenta {
+  $ok = Write-JsonAtomic $Evidenta ([ordered]@{ instalatLa = (Get-DataIso (Get-Date)); sarciniDezactivate = @($dezactivate); v1Redenumit = $v1Redenumit; fisiere = $hashuri })
+  if (-not $ok) { throw "REFUZ: nu pot scrie $Evidenta; ma opresc inainte sa schimb pornirea veche" }
+}
+Save-Evidenta
 foreach ($n in $script:SarciniVechi) {
   $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
   if ($t -and $t.State -ne 'Disabled') {
+    if ($dezactivate -notcontains $n) { $dezactivate += $n; Save-Evidenta }
     Disable-ScheduledTask -TaskName $n | Out-Null     # nu opreste instanta deja pornita (bucla cmd ramane pana la -PreiaAcum / delogare)
-    if ($dezactivate -notcontains $n) { $dezactivate += $n }
     Spune "sarcina veche dezactivata: $n"
   }
 }
-$v1Redenumit = [bool]($ev -and $ev.v1Redenumit)
 if ((Test-Path -LiteralPath $V1) -and -not (Test-Path -LiteralPath $V1Dezactivat)) {
-  Move-Item -LiteralPath $V1 -Destination $V1Dezactivat; $v1Redenumit = $true
+  $v1Redenumit = $true; Save-Evidenta
+  Move-Item -LiteralPath $V1 -Destination $V1Dezactivat
   Spune 'scriptul v1 redenumit in punti_remote_control.v1.dezactivat.txt (nu mai poate porni dubluri)'
 }
-[void](Write-JsonAtomic $Evidenta ([ordered]@{ instalatLa = (Get-DataIso (Get-Date)); sarciniDezactivate = @($dezactivate); v1Redenumit = $v1Redenumit; fisiere = $hashuri }))
 
 # preluarea imediata (doar la cerere): oprim puntile vechi, exceptand procesele din care ruleaza instalatorul
 if ($PreiaAcum) {

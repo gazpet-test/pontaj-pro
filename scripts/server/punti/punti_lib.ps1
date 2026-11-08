@@ -217,7 +217,10 @@ function Update-StareDinLinie([hashtable]$Stare, $Clasa, [datetime]$Acum) {
       }
     }
     'reconectat' {
+      # recuperare CONFIRMATA de punte ("[HH:MM:SS] Reconnected after X"): semnalele de problema anterioare nu mai sunt valabile
+      # (Jakarinos r2 P1). Simpla redesenare "Connected" NU le sterge: ea apare si imediat dupa o eroare (vezi teste T3).
       $Stare.stare = 'conectat'; $Stare.stareDeLa = $iso; $Stare.deconectatSec = 0
+      $Stare.eroareFatalaLa = $null; $Stare.credentialLa = $null
       [void]$mes.Add('reconectata: ' + (Format-Sigur $Clasa.Text 120))
     }
     'eroare' {
@@ -241,9 +244,13 @@ function Update-StareDinLinie([hashtable]$Stare, $Clasa, [datetime]$Acum) {
 # Decizii (pure). Problemele care cer repornire la o punte VIE vin DOAR din semnale explicite ale puntii (nu din tacere):
 #   1. "Reconnecting ... disconnected Y" ca ultima stare, de >= 10 min (dupa ceasul nostru SAU dupa Y raportat de punte);
 #      CLI-ul renunta singur dupa 10 min (iese), dar NU si cat serveste o sesiune de proiect -> atunci ramane viu si picat;
-#   2. eroare fatala ("... claude remote-control ..." / "giving up") si procesul tot viu dupa 10 min;
-#   3. "Remote Control credential" respins de >= 10 min;
-#   4. login-ul contului a fost invalid/expirat cat puntea rula si acum e valid din nou (puntea veche nu se reface singura).
+#   2. eroare fatala ("... claude remote-control ..." / "giving up") si procesul tot viu dupa 10 min, fara "Reconnected" dupa ea
+#      (dupa o eroare fatala bucla puntii s-a oprit; daca procesul nu iese, nu mai serveste nimic);
+#   3. login-ul contului a fost invalid/expirat cat puntea rula si acum e valid din nou (puntea veche nu se reface singura).
+# NU e regula de repornire: "Warning: ... Remote Control credential ..." (Jakarinos r2 P1). E o pauza a CLI-ului (pana la ~1 h),
+# dupa care reincearca singur; recuperarea nu se vede in iesire (fara --verbose), deci o repornire la 10 min ar putea ucide o
+# punte deja refacuta. Daca problema persista, CLI-ul ajunge la "could not renew ... after repeated attempts" (eroare fatala) si
+# iese -> regulile de mai sus. Avertismentul ramane doar in jurnal si in stare (credentialLa), pentru diagnostic.
 function Get-ProblemaPunte([hashtable]$Stare, [datetime]$Acum, $LoginRevalidatLa) {
   if ($null -eq $Stare) { return $null }
   if ($Stare.stare -eq 'reconectare') {
@@ -259,10 +266,6 @@ function Get-ProblemaPunte([hashtable]$Stare, [datetime]$Acum, $LoginRevalidatLa
   $f = Get-MinuteDeLa $Stare.eroareFatalaLa $Acum
   if ($null -ne $f -and $f -ge $script:PragProblemaMin) {
     return [pscustomobject]@{ Motiv = ('eroare fatala de {0:N0} min, procesul a ramas viu' -f $f); CereInternetStabil = $false }
-  }
-  $c = Get-MinuteDeLa $Stare.credentialLa $Acum
-  if ($null -ne $c -and $c -ge $script:PragProblemaMin) {
-    return [pscustomobject]@{ Motiv = ('credential Remote Control respins de {0:N0} min' -f $c); CereInternetStabil = $false }
   }
   $rev = ConvertFrom-DataIso $LoginRevalidatLa
   $porn = ConvertFrom-DataIso $Stare.pornitLa

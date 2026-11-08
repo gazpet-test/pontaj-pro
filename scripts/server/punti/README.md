@@ -21,7 +21,7 @@ Lista e definită o singură dată, în `Get-ConfigPunti` din `punti_lib.ps1`.
 | `punte_releu.ps1` | **releul**: câte unul per punte, pornește `claude remote-control` și îi citește ieșirea; trăiește cât puntea. |
 | `punti_lib.ps1` | funcțiile comune (config, clasificarea ieșirii, decizii, login, alarmă, procese). |
 | `instaleaza.ps1` | instalare / dezinstalare (cere admin). |
-| `autotest_punti.ps1` | teste fără rețea (144 de verificări). |
+| `autotest_punti.ps1` | teste fără rețea (146 de verificări). |
 
 Unde scriu:
 - `C:\Users\Public\paw-data\punti\punti.log` — jurnalul (citit de chat). Mascat: fără URL-uri, id-uri de sesiune, tokenuri, emailuri.
@@ -54,15 +54,14 @@ Ieșirea punții, redirectată, este ecranul ei TUI redesenat cam o dată pe sec
 |---|---|---|
 | `Connected · repo · branch` / `Ready · …` | conectată | stare „conectat” |
 | `Reconnecting · retrying in X · disconnected Y` | picată de Y; se redesenează la fiecare reîncercare (max. 2 min), iar blocul „Connected” **nu** se mai redesenează cât e picată | stare „reconectare”, de la prima linie; reține Y |
-| `[HH:MM:SS] Reconnected after X` | și-a revenit singură | stare „conectat” |
+| `[HH:MM:SS] Reconnected after X` | și-a revenit singură (recuperare confirmată) | stare „conectat”; șterge semnalele de eroare anterioare |
 | `[HH:MM:SS] Error: … claude remote-control …` / `… giving up.` | eroare după care CLI-ul cere repornirea | marcată „fatală” |
-| `[HH:MM:SS] Warning: … Remote Control credential …` | serverul respinge credențialul punții (pauză de până la o oră) | marcată „credențial” |
+| `[HH:MM:SS] Warning: … Remote Control credential …` | serverul respinge credențialul punții; CLI-ul face o pauză (până la ~1 h) și reîncearcă singur | doar jurnal: dacă problema persistă, CLI-ul ajunge la eroare fatală și iese |
 
 O punte **vie** e repornită doar dacă:
 1. e în „reconectare” de **≥ 10 min** (după ceasul nostru sau după Y raportat de punte) **și** internetul merge de ≥ 5 min (deci propria ei reîncercare ar fi reușit deja). CLI-ul renunță singur după 10 min și iese (atunci v2 o vede „lipsă” și o pornește), dar **nu** și cât servește o sesiune de proiect — acela e cazul „proces viu, sesiuni deconectate”;
-2. are o eroare fatală de **≥ 10 min** și procesul tot n-a ieșit;
-3. credențialul e respins de **≥ 10 min**;
-4. login-ul contului a fost invalid/expirat cât rula și acum e din nou valid, sau a fost reînnoit înainte de expirare (punțile pornite cu logarea veche nu se refac singure).
+2. are o eroare fatală de **≥ 10 min**, fără `Reconnected` după ea, și procesul tot n-a ieșit;
+3. login-ul contului a fost invalid/expirat cât rula și acum e din nou valid, sau a fost reînnoit înainte de expirare (punțile pornite cu logarea veche nu se refac singure).
 
 Titlurile sesiunilor (scrise de utilizatori) apar și ele în ieșire, dar **indentate** în blocul de stare, pe când evenimentele și stările CLI-ului încep la coloana 0. De aceea o linie indentată nu e niciodată luată drept eveniment: un titlu ca `[10:00:00] Error: … giving up.` nu poate provoca o repornire (conținut extern = date).
 

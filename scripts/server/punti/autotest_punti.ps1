@@ -111,8 +111,18 @@ $d = Dec $s; Verifica 'eroare fatala de 12 min, proces viu -> reporneste' ($d.Ac
 $s.eroareFatalaLa = Get-DataIso $T0.AddMinutes(-3)
 $d = Dec $s; Verifica 'eroare fatala de 3 min -> nimic (CLI-ul iese singur)' ($d.Actiune -eq 'nimic')
 $s = New-StarePunte -Nume 'chat' -PidReleu 1 -StartReleu (Get-DataIso $T0) -Acum $T0.AddHours(-1); $s.stare = 'conectat'; $s.credentialLa = Get-DataIso $T0.AddMinutes(-15)
-$d = Dec $s; Verifica 'credential respins de 15 min -> reporneste' ($d.Actiune -eq 'reporneste') $d.Motiv
-$d = Dec $s -Valid $false; Verifica 'credential respins dar login expirat -> asteapta (repornirea nu ajuta)' ($d.Actiune -eq 'asteapta') $d.Motiv
+$d = Dec $s; Verifica 'avertisment de credential de 15 min, singur -> nimic (CLI-ul reincearca singur; r2 P1)' ($d.Actiune -eq 'nimic') $d.Motiv
+$d = Dec $s -Valid $false; Verifica 'avertisment de credential + login expirat -> nimic pe puntea vie (doar alarma)' ($d.Actiune -eq 'nimic') $d.Motiv
+# succesiunea ceruta in r2: avertizare/eroare -> recuperare confirmata ("Reconnected") -> prag depasit => fara repornire
+$s = New-StarePunte -Nume 'chat' -PidReleu 1 -StartReleu (Get-DataIso $T0) -Acum $T0.AddHours(-1)
+[void](Update-StareDinLinie $s (Get-ClasaLinie $L.connected) $T0.AddMinutes(-30))
+[void](Update-StareDinLinie $s (Get-ClasaLinie $L.warnCred) $T0.AddMinutes(-20))
+[void](Update-StareDinLinie $s (Get-ClasaLinie $L.errFatal) $T0.AddMinutes(-19))
+[void](Update-StareDinLinie $s (Get-ClasaLinie $L.connected) $T0.AddMinutes(-19))
+$d = Dec $s; Verifica 'fara recuperare: eroare fatala de 19 min -> reporneste' ($d.Actiune -eq 'reporneste') $d.Motiv
+[void](Update-StareDinLinie $s (Get-ClasaLinie $L.reconnd) $T0.AddMinutes(-15))
+[void](Update-StareDinLinie $s (Get-ClasaLinie $L.connected) $T0.AddMinutes(-15))
+$d = Dec $s; Verifica 'avertizare + eroare -> Reconnected -> 15 min mai tarziu: nimic (semnalele sterse)' ($d.Actiune -eq 'nimic' -and -not $s.eroareFatalaLa -and -not $s.credentialLa) $d.Motiv
 $s = New-StarePunte -Nume 'chat' -PidReleu 1 -StartReleu (Get-DataIso $T0) -Acum $T0.AddHours(-2); $s.stare = 'conectat'
 $d = Dec $s -Rev (Get-DataIso $T0.AddMinutes(-1)); Verifica 'login revalidat dupa pornirea puntii -> reporneste' ($d.Actiune -eq 'reporneste') $d.Motiv
 $s.pornitLa = Get-DataIso $T0
