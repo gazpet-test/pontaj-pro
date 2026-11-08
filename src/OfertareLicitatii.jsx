@@ -48,6 +48,7 @@ import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
 import { provPeDocument, etichetaProvenienta, PROV_INDISPONIBILA } from './ofertareProvenienta.js'
+import { cerinteKpi, acopeririKpi } from './ofertareKpiCitire.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -133,6 +134,7 @@ export default function OfertareLicitatiiTab() {
   const [cauta, setCauta] = useState('')          // TKT-2026-0260: căutare în listă, în loc de Ctrl+F
   const [echipa, setEchipa] = useState([])         // colegii cu acces la modulul Ofertare — candidați la „responsabil”
   const [toast, setToast] = useState(null)
+  const [eroareKpi, setEroareKpi] = useState(null)   // audit 08.11.2026: KPI-urile de acoperire necitite (eroare), nu 0
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
   const [cantLicId, setCantLicId] = useState(null)   // licitația cu care intri în Cantități din fișă (Răzvan 07.09: nu mai alegi din listă)
   const [clarLicId, setClarLicId] = useState(null)   // idem, pentru ❓ Clarificări (ecran separat din 15.09)
@@ -172,20 +174,27 @@ export default function OfertareLicitatiiTab() {
     const ids = (v || []).map(r => r.id)
     const stats = {}
     ids.forEach(id => { stats[id] = { cerinte: 0, acoperite: 0, reverif: 0, rosii: 0, verdict: null, verdict_la: null, clarificari: 0 } })
+    let eroareKpi = null   // citirea cerințelor / acoperirilor a eșuat → KPI-urile de acoperire „necitite”, nu 0
     if (ids.length) {
-      const [{ data: cs }, { data: vf }, { data: cl }, { data: tri }] = await Promise.all([
-        // .limit explicit: implicit PostgREST întoarce 1.000 de rânduri, iar cerințele active sunt peste 2.000 —
-        // Mănăstirea apărea cu 150/419 în loc de 226/655 (auditul 09.09.2026)
-        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip, cand_se_prezinta').in('licitatie_id', ids).is('inlocuita_de', null).is('duplicat_al', null).limit(20000),
+      // Auditul 08.11.2026: `.limit(20000)` nu trecea de plafonul serverului (max-rows = 1000) — cererea întorcea exact 1000 de
+      // cerințe din peste 2.000 și majoritatea cardurilor arătau „acoperire 0/0 · registru negenerat”. Acum: keyset pe id până
+      // la pagina goală (ofertareKpiCitire.js); la eroare KPI-urile de acoperire apar „necitite”, nu 0 (L18).
+      const [rCs, { data: vf }, { data: cl }, { data: tri }] = await Promise.all([
+        cerinteKpi(supabase, ids).then(data => ({ data, error: null }), error => ({ data: null, error })),
         supabase.from('ofertare_verificari').select('licitatie_id, verdict, created_at').in('licitatie_id', ids).order('id', { ascending: false }),
         supabase.from('ofertare_clarificari').select('licitatie_id').in('licitatie_id', ids),
         supabase.from('ofertare_triere').select('licitatie_id, verdict').in('licitatie_id', ids),
       ])
-      const cerLic = {}, cerCand = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; cerCand[c.id] = c.cand_se_prezinta; stats[c.licitatie_id].cerinte++ })
+      if (rCs.error) eroareKpi = rCs.error.message || String(rCs.error)
+      const cs = rCs.data
+      const cerLic = {}, cerCand = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; cerCand[c.id] = c.cand_se_prezinta; if (stats[c.licitatie_id]) stats[c.licitatie_id].cerinte++ })
       ;(tri || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].triere = x.verdict })
-      const cIds = Object.keys(cerLic)
+      const cIds = Object.keys(cerLic).map(Number)
       if (cIds.length) {
-        const { data: ac } = await supabase.from('ofertare_acoperire').select('id, cerinta_id, status, verificat_pe_scan, ales_de, scor, reverificare_ceruta, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id').limit(20000)
+        let ac = null
+        try {
+          ac = await acopeririKpi(supabase, cIds, 'id, cerinta_id, status, verificat_pe_scan, ales_de, scor, reverificare_ceruta, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)')
+        } catch (e) { eroareKpi = e?.message || String(e) }
         // O cerință poate avea mai multe rânduri de acoperire (motorul propune până la 3
         // candidați, iar cele verificate pe scan nu se șterg la re-rulare). Numărătoarea pe
         // RÂND umfla „acoperite" și putea depăși 100%; numărând ORICE rând acoperit, KPI-ul
@@ -210,6 +219,8 @@ export default function OfertareLicitatiiTab() {
       ;(cl || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].clarificari++ })
     }
     if (gen !== loadGen.current) return   // a pornit între timp o reîncărcare mai nouă — ea aplică rezultatul (și setLoading(false))
+    if (eroareKpi) ids.forEach(id => { stats[id].kpiNecitit = true })
+    setEroareKpi(eroareKpi)
     const randuri = (v || []).map(r => ({ ...fullMap[r.id], ...r, _st: stats[r.id] }))
     setRows(randuri)
     setSelected(s => s ? (randuri.find(x => x.id === s.id) || s) : s)   // fișa deschisă vede KPI-urile noi (garanție, acoperire)
@@ -458,6 +469,11 @@ export default function OfertareLicitatiiTab() {
         {respChips.map(([id, x]) => <button key={id} onClick={() => alegeResp(id)} style={respChipSt(fResp === id)}>{x.nume || '—'} ({x.in_lucru})</button>)}
       </div>
 
+      {!loading && eroareKpi && (
+        <div role="alert" style={{ ...S.card, padding:'10px 14px', marginBottom:12, borderColor:G.orange + '88', color:G.orange, fontSize:13 }}>
+          ⚠️ Cifrele de acoperire nu s-au putut citi ({eroareKpi}) — pe carduri apar „necitite”, nu 0. Reîncarcă pagina.
+        </div>
+      )}
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă licitațiile...</div>}
       {!loading && !filtrate.length && (
         <div style={{ ...S.card, padding:40, textAlign:'center', color:G.dim, fontSize:14 }}>
@@ -490,7 +506,9 @@ export default function OfertareLicitatiiTab() {
                   <span>💰 <b style={{ color:G.text }}>{fmtMil(l.valoare_estimata)}</b> {l.moneda || 'lei'}</span>
                   {sx.triere && <span title="Verdictul trierii din Fișa de date (tab ⚡ Triere)">⚡ triere: <b style={{ color: TRIERE_V[sx.triere]?.[1] || G.muted }}>{TRIERE_V[sx.triere]?.[0] || sx.triere}</b></span>}
                   {!sx.triere && !sx.cerinte && <span style={{ color:G.dim }} title="Nu s-a rulat trierea din Fișa de date">⚡ netriată</span>}
-                  <span>📋 acoperire <b style={{ color:G.text }}>{sx.acoperite || 0}/{sx.cerinte || 0}</b>{!sx.cerinte ? <span style={{ color:G.dim }}> · registru negenerat</span> : ''}</span>
+                  {sx.kpiNecitit
+                    ? <span style={{ color:G.orange }} title="Cerințele / acoperirile nu s-au putut citi — reîncarcă pagina">📋 acoperire: <b>necitită</b></span>
+                    : <span>📋 acoperire <b style={{ color:G.text }}>{sx.acoperite || 0}/{sx.cerinte || 0}</b>{!sx.cerinte ? <span style={{ color:G.dim }}> · registru negenerat</span> : ''}</span>}
                   {l.eliminatorii_neacoperite > 0 && <span style={{ color:G.red }} title={'Eliminatorii fără rând de acoperire „acoperit”: goluri + neevaluate'}>🚫 eliminatorii fără dovadă: <b>{l.eliminatorii_neacoperite}</b></span>}
                   {sx.reverif > 0 && <span style={{ color:G.orange }} title="Dovezi mutate pe textul nou al cerinței de un răspuns al autorității — nimeni nu le-a reconfirmat încă">⟳ de reverificat: <b>{sx.reverif}</b></span>}
                   {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
@@ -3864,7 +3882,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(175px, 1fr))', gap:12, marginBottom:18 }}>
           <KPI l="Valoare estimată" v={fmtMil(l.valoare_estimata)} unit={l.valoare_estimata >= 1e6 ? `mil ${l.moneda || 'lei'}` : (l.moneda || 'lei')} />
           <KPI l="Termen depunere" v={zile == null ? (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—') : zile === 0 ? 'AZI' : zile} unit={zile != null ? (zile === 1 ? 'zi' : 'zile') : ''} color={cZile} />
-          <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
+          <KPI l="Cerințe acoperite" v={sx.kpiNecitit ? '?' : sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.kpiNecitit ? 'necitit (eroare la citire)' : sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.kpiNecitit ? G.orange : sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
           <KPI l="Eliminatorii fără dovadă (goluri + neevaluate)" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
           <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
           {sx.reverif > 0 && <KPI l="Dovezi de reverificat (cerința s-a schimbat)" v={sx.reverif} color={G.orange} />}
