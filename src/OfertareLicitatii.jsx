@@ -510,8 +510,8 @@ export default function OfertareLicitatiiTab() {
                     ? <span style={{ color:G.orange }} title="Cerințele / acoperirile nu s-au putut citi — reîncarcă pagina">📋 acoperire: <b>necitită</b></span>
                     : <span>📋 acoperire <b style={{ color:G.text }}>{sx.acoperite || 0}/{sx.cerinte || 0}</b>{!sx.cerinte ? <span style={{ color:G.dim }}> · registru negenerat</span> : ''}</span>}
                   {l.eliminatorii_neacoperite > 0 && <span style={{ color:G.red }} title={'Eliminatorii fără rând de acoperire „acoperit”: goluri + neevaluate'}>🚫 eliminatorii fără dovadă: <b>{l.eliminatorii_neacoperite}</b></span>}
-                  {sx.reverif > 0 && <span style={{ color:G.orange }} title="Dovezi mutate pe textul nou al cerinței de un răspuns al autorității — nimeni nu le-a reconfirmat încă">⟳ de reverificat: <b>{sx.reverif}</b></span>}
-                  {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
+                  {!sx.kpiNecitit && sx.reverif > 0 && <span style={{ color:G.orange }} title="Dovezi mutate pe textul nou al cerinței de un răspuns al autorității — nimeni nu le-a reconfirmat încă">⟳ de reverificat: <b>{sx.reverif}</b></span>}
+                  {!sx.kpiNecitit && sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
                   {sx.verdict && <span>🔍 verificare: <b style={{ color:(VC[sx.verdict] || [])[1] || G.muted }}>{(VC[sx.verdict] || [sx.verdict])[0]}</b></span>}
                   {sx.clarificari > 0 && <span>❓ clarificări: <b style={{ color:G.text }}>{sx.clarificari}</b></span>}
                   <span title="Responsabil licitație">👤 {(l.responsabil_id || l.responsabil2_id) ? <b style={{ color:G.text }}>{numeResponsabili(l) || '—'}</b> : <span style={{ color:G.orange }}>fără responsabil</span>}</span>
@@ -521,8 +521,8 @@ export default function OfertareLicitatiiTab() {
                 <span style={{ background: st.color + '22', color: st.color, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800, whiteSpace:'nowrap' }}>{st.icon} {st.label}{l.decizie_go === 'go' ? ' · GO' : ''}</span>
                 {activa && <span style={{ fontSize:13.5, color:G.muted, whiteSpace:'nowrap' }}>termen: <b style={{ fontSize:19, color:cZile }}>{zile == null ? '—' : zile === 0 ? 'AZI' : `${zile} ${zile === 1 ? 'zi' : 'zile'}`}</b></span>}
                 {!activa && l.termen_depunere && <span style={{ fontSize:12.5, color:G.dim }}>depunere {fmtTermen(l.termen_depunere).slice(0, 10)}</span>}
-                <span style={{ height:7, borderRadius:5, background:G.border, overflow:'hidden', width:190, display:'block' }}>
-                  <i style={{ display:'block', height:'100%', width:`${pct}%`, background: probl ? G.red : 'linear-gradient(90deg,#D29922,#3FB950)' }} />
+                <span title={sx.kpiNecitit ? 'acoperirea nu s-a putut citi' : undefined} style={{ height:7, borderRadius:5, background:G.border, overflow:'hidden', width:190, display:'block', opacity: sx.kpiNecitit ? .35 : 1 }}>
+                  <i style={{ display:'block', height:'100%', width: sx.kpiNecitit ? 0 : `${pct}%`, background: probl ? G.red : 'linear-gradient(90deg,#D29922,#3FB950)' }} />
                 </span>
               </div>
             </div>
@@ -3842,7 +3842,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   )
   const TABS = [
     ['triere', '⚡ Triere'],
-    ['cerinte', `📋 Cerințe & acoperire${sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
+    ['cerinte', `📋 Cerințe & acoperire${sx.kpiNecitit ? ' (?)' : sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
     ['perechi', '🔗 Cerință ↔ dovadă'],
     ['propunere', `📑 Propunere tehnică${ptSt ? ` (${ptSt.cu_capitol}/${ptSt.de_raspuns})` : ''}`],
     ['formulare', '🗂 Formulare de depus'],
@@ -3884,8 +3884,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           <KPI l="Termen depunere" v={zile == null ? (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—') : zile === 0 ? 'AZI' : zile} unit={zile != null ? (zile === 1 ? 'zi' : 'zile') : ''} color={cZile} />
           <KPI l="Cerințe acoperite" v={sx.kpiNecitit ? '?' : sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.kpiNecitit ? 'necitit (eroare la citire)' : sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.kpiNecitit ? G.orange : sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
           <KPI l="Eliminatorii fără dovadă (goluri + neevaluate)" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
-          <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
-          {sx.reverif > 0 && <KPI l="Dovezi de reverificat (cerința s-a schimbat)" v={sx.reverif} color={G.orange} />}
+          <KPI l="Dovezi roșii" v={sx.kpiNecitit ? '?' : sx.rosii || 0} unit={sx.kpiNecitit ? 'necitit' : ''} color={sx.kpiNecitit ? G.orange : sx.rosii > 0 ? G.red : G.text} />
+          {!sx.kpiNecitit && sx.reverif > 0 && <KPI l="Dovezi de reverificat (cerința s-a schimbat)" v={sx.reverif} color={G.orange} />}
           {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
           <div onClick={() => setTab('garantie')} style={{ cursor:'pointer', display:'contents' }} title="Deschide fluxul garanției (cerere poliță → plată → original)">
             {/* R7: verde doar dacă polița e în original ȘI nu e nimic de reverificat pe termenul curent (se încarcă ⇒ neutru, nu verde);
@@ -4019,8 +4019,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <Row k="Rol Gazpet" v={l.rol_gazpet} />
               <Row k="Segment" v={l.segment && SEGMENTE[l.segment] ? SEGMENTE[l.segment].label : l.segment} last />
               <div style={{ marginTop:14, fontSize:12.5, color:G.muted }}>Acoperire cerințe</div>
-              <div style={{ height:10, borderRadius:6, background:G.border, overflow:'hidden', margin:'8px 0 4px' }}><i style={{ display:'block', height:'100%', width:`${pct}%`, background:'linear-gradient(90deg,#D29922,#3FB950)' }} /></div>
-              <div style={{ fontSize:12, color:G.dim }}>{sx.acoperite || 0} acoperite · {Math.max((sx.cerinte || 0) - (sx.acoperite || 0), 0)} rămase · {sx.rosii || 0} dovezi roșii{sx.reverif > 0 ? <span style={{ color:G.orange }}> · {sx.reverif} de reverificat</span> : ''}</div>
+              <div style={{ height:10, borderRadius:6, background:G.border, overflow:'hidden', margin:'8px 0 4px', opacity: sx.kpiNecitit ? .35 : 1 }}><i style={{ display:'block', height:'100%', width: sx.kpiNecitit ? 0 : `${pct}%`, background:'linear-gradient(90deg,#D29922,#3FB950)' }} /></div>
+              {sx.kpiNecitit ? <div style={{ fontSize:12, color:G.orange }}>acoperirea nu s-a putut citi — reîncarcă pagina</div> : <div style={{ fontSize:12, color:G.dim }}>{sx.acoperite || 0} acoperite · {Math.max((sx.cerinte || 0) - (sx.acoperite || 0), 0)} rămase · {sx.rosii || 0} dovezi roșii{sx.reverif > 0 ? <span style={{ color:G.orange }}> · {sx.reverif} de reverificat</span> : ''}</div>}
               <div style={{ display:'flex', alignItems:'center', gap:10, background:'#221c0d', border:`1px solid ${vCol}55`, borderRadius:12, padding:'12px 14px', marginTop:14, cursor:'pointer' }} onClick={() => setTab('verificari')}>
                 <div><b style={{ color:vCol, fontSize:13.5 }}>{vLbl}</b>{sx.verdict_la && <div style={{ fontSize:12, color:G.muted }}>rulată {new Date(sx.verdict_la).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</div>}</div>
               </div>

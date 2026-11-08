@@ -28,9 +28,20 @@ export async function cerinteKpi(sb, licIds) {
   return tot
 }
 
-// Rândurile de acoperire ale cerințelor date — toate, pe bucăți de id-uri; ordinea finală după id (ca înainte de paginare).
+// Cel mult `n` sarcini în paralel (review Jakarinos #1028 P2: bucățile limitau URL-ul, nu concurența — 30.000 de id-uri = 200 de
+// paginări simultane). Rezultatele rămân în ordinea sarcinilor; prima eroare se propagă.
+export async function inParalel(sarcini, n = PARALEL) {
+  const rez = new Array(sarcini.length)
+  let urm = 0
+  const lucrator = async () => { while (urm < sarcini.length) { const i = urm++; rez[i] = await sarcini[i]() } }
+  await Promise.all(Array.from({ length: Math.min(n, sarcini.length) }, lucrator))
+  return rez
+}
+export const PARALEL = 4
+
+// Rândurile de acoperire ale cerințelor date — toate, pe bucăți de id-uri, cel mult PARALEL bucăți odată; ordinea finală după id.
 export async function acopeririKpi(sb, cerIds, select) {
-  const parti = await Promise.all(bucati(cerIds).map(b => paginareKeyset((ultim, pas) => {
+  const parti = await inParalel(bucati(cerIds).map(b => () => paginareKeyset((ultim, pas) => {
     let q = sb.from('ofertare_acoperire').select(select).in('cerinta_id', b).order('id', { ascending: true }).limit(pas)
     if (ultim != null) q = q.gt('id', ultim)
     return q

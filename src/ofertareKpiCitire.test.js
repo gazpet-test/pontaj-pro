@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cerinteKpi, acopeririKpi, bucati, BUCATA_ID } from './ofertareKpiCitire.js'
+import { cerinteKpi, acopeririKpi, bucati, inParalel, BUCATA_ID, PARALEL } from './ofertareKpiCitire.js'
 
 // Server PostgREST simulat, cu plafon de server 1000 (ca în producție, max-rows): filtrează in/is/gt, ordonează după id,
 // apoi taie la min(limit, 1000). Cazul real din audit: 2.400 de cerințe → vechea cerere vedea doar 1000.
@@ -70,5 +70,30 @@ describe('acopeririKpi — bucăți de id-uri + paginare', () => {
   it('bucati', () => {
     expect(bucati([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
     expect(bucati(null)).toEqual([])
+  })
+})
+
+describe('inParalel (review Jakarinos #1028 P2)', () => {
+  it('cel mult n sarcini simultan; rezultatele în ordinea sarcinilor', async () => {
+    let active = 0, maxActive = 0
+    const sarcini = Array.from({ length: 20 }, (_, i) => async () => {
+      active++; maxActive = Math.max(maxActive, active)
+      await new Promise(r => setTimeout(r, 5 - (i % 3)))
+      active--; return i
+    })
+    const r = await inParalel(sarcini, 4)
+    expect(r).toEqual(Array.from({ length: 20 }, (_, i) => i))
+    expect(maxActive).toBe(4)
+  })
+  it('prima eroare se propagă', async () => {
+    await expect(inParalel([async () => 1, async () => { throw new Error('x') }], 2)).rejects.toThrow('x')
+  })
+  it('acopeririKpi pe 30.000 de cerințe: cel mult PARALEL paginări deodată', async () => {
+    let active = 0, maxActive = 0
+    const sb = { from: () => { const b = { select: () => b, in: () => b, order: () => b, limit: () => b, gt: () => b,
+      then: (res, rej) => { active++; maxActive = Math.max(maxActive, active)
+        return new Promise(r => setTimeout(r, 1)).then(() => { active--; return { data: [], error: null } }).then(res, rej) } }; return b } }
+    await acopeririKpi(sb, Array.from({ length: 30000 }, (_, i) => i + 1), 'id')
+    expect(maxActive).toBeLessThanOrEqual(PARALEL)
   })
 })
