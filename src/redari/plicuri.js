@@ -145,10 +145,12 @@ export function genereazaPvPlicuire(lot, plicuri, convocariPePlic, { proiect } =
       `2. Nume (verifică): ${lot.semnatar2_nume || '________________'}; funcție: ________________; semnătură: ________________`] })
 }
 
-export function csvEtichete(plicuri, convocariPePlic) {
+// Test 08.11.2026: ecranul nu pune `proiect` pe rândul plicului → textAR refuza pe ORICE proiect („nu e validat juridic”), iar
+// „Etichete CSV” nu descărca nimic nici pe LOT1. Proiectul vine acum ca parametru (rândul păstrează compatibilitatea veche).
+export function csvEtichete(plicuri, convocariPePlic, { proiect } = {}) {
   const celula = v => { const s = String(v ?? ''); return `"${(/^[\s]*[=+@-]/.test(s) ? "'" : '') + s.replace(/"/g, '""')}"` }
   return '\uFEFF' + [['Nr. plic', 'Destinatar', 'Adresă', 'UAT', 'Text AR'], ...plicuri.map(p => {
     const cs = convocariPePlic[p.id] || []
-    return [p.nr_plic, p.destinatar_nume, adresaPlic(cs[0]?.adresa), p.uat_nume || cs[0]?.uat_nume, textAR(p, cs, { proiect: p.proiect })]   // fără împuternicire -> excepție (nu se generează)
+    return [p.nr_plic, p.destinatar_nume, adresaPlic(cs[0]?.adresa), p.uat_nume || cs[0]?.uat_nume, textAR(p, cs, { proiect: proiect ?? p.proiect })]   // fără împuternicire -> excepție (nu se generează)
   })].map(r => r.map(celula).join(';')).join('\r\n')
 }
