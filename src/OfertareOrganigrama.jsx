@@ -796,7 +796,10 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
       return null
     }
   }
-  useEffect(() => { genCtx.current++; genProp.current++; setCtx(null); setAleseNevalabile(0); if (deschis && licId) incarcaContext() }, [deschis, licId])
+  // review Jakarinos #1031 r3: propunerea și semnalul ei țin de LICITAȚIE (se resetează doar la schimbarea ei, cu deblocarea lui busy);
+  // plierea / deschiderea secțiunii doar recitește contextul
+  useEffect(() => { genProp.current++; setAleseNevalabile(0); setBusy(false) }, [licId])
+  useEffect(() => { genCtx.current++; setCtx(null); if (deschis && licId) incarcaContext() }, [deschis, licId])
   const ctxArgs = (c, alese = aleseNevalabile) => ({ interzisCumul: !!c?.interzisCumul, echipaF9: c?.echipaF9 || [], contextNecitit: !c || !!c.eroare, aleseNevalabile: alese })
 
   const propune = async () => {
