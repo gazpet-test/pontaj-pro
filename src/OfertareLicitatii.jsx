@@ -384,7 +384,8 @@ export default function OfertareLicitatiiTab() {
     if (error) { showToast('Eroare: ' + error.message, 'err'); return false }
     if (!data?.length) { showToast('Licitația s-a schimbat între timp (status, termen sau date) — reîncarc, verifică și încearcă din nou.', 'err'); await load(); return false }
     showToast(`⛔ ${l.nr_anunt} → închisă ca nedepusă (motivul e în observații).`)
-    setSelected(null); await load()
+    // review Jakarinos #1027 r2 (L24): închide fișa doar dacă e tot licitația asta (omul putea deschide alta între timp)
+    setSelected(s => (s && s.id === l.id ? null : s)); await load()
     return true
   }
 
