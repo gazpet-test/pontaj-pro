@@ -494,7 +494,7 @@ Deno.serve(async (req: Request) => {
     // Costul se scrie acum pe fiecare parte, imediat ce se termină (logParte, mai sus).
 
     const stricat = rezultate.find(r => !r.ok)
-    if (stricat) return fail('Claude: ' + (stricat.data?.error?.message || stricat.status))
+    if (stricat) return fail('Claude: ' + (stricat.data?.error?.message || stricat.status) + ' — nu s-a scris nimic.' + notaCost, { cost_neinregistrat: costNeinregistrat })
 
     const costTotal = rezultate.reduce((a, r) => { const u = r.data?.usage || {}
       return a + (u.input_tokens || 0) * PRICE_IN + (u.cache_creation_input_tokens || 0) * PRICE_IN * 1.25 + (u.cache_read_input_tokens || 0) * PRICE_CACHE_READ + (u.output_tokens || 0) * PRICE_OUT }, 0)
@@ -520,7 +520,7 @@ Deno.serve(async (req: Request) => {
     // INTERDICȚIILE 3, 4, 5 la scriere (scriere.ts): întâi urma pentru cerințele neconfirmate, apoi textul condiționat de versiune;
     // textul nescris → urma închisă. Fix 17.10.2026: ordinea inversă + `obsId` citit înainte de `let` dădeau ReferenceError pe conflict.
     const sc = await scrieCapitolCuUrma(supabase, { capId, licitatieId: cap.licitatie_id, versiune: cap.versiune || 1, text, neconfirmate, actorUid })
-    if (!sc.ok) return fail(sc.mesaj, { ...(sc.motiv === 'conflict' ? { conflict: true, versiune_asteptata: cap.versiune || 1 } : sc.motiv === 'fara_urma' ? { fara_urma: true } : {}), ...(sc.urma_neinchisa ? { urma_neinchisa: sc.urma_neinchisa } : {}) })
+    if (!sc.ok) return fail(sc.mesaj + notaCost, { cost_neinregistrat: costNeinregistrat, ...(sc.motiv === 'conflict' ? { conflict: true, versiune_asteptata: cap.versiune || 1 } : sc.motiv === 'fara_urma' ? { fara_urma: true } : {}), ...(sc.urma_neinchisa ? { urma_neinchisa: sc.urma_neinchisa } : {}) })
     const obsId = sc.obsId
 
     const goluri = (text.match(/\[DE COMPLETAT:/g) || []).length
