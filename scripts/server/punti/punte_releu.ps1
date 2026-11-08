@@ -96,7 +96,7 @@ try {
       }
     }
     if ($c.Tip -ne 'gol') { $nrLinii++ }
-    $mes = Update-StareDinLinie -Stare $S -Clasa $c -Acum $acum
+    $mes = @(Update-StareDinLinie -Stare $S -Clasa $c -Acum $acum)
     foreach ($ms in $mes) {
       # acelasi mesaj repetat in mai putin de 60 s nu se mai scrie (anti-spam)
       if ($ms -eq $ultimulMesaj -and ($acum - $ultimulMesajLa).TotalSeconds -lt 60) { continue }

@@ -21,7 +21,7 @@ Lista e definită o singură dată, în `Get-ConfigPunti` din `punti_lib.ps1`.
 | `punte_releu.ps1` | **releul**: câte unul per punte, pornește `claude remote-control` și îi citește ieșirea; trăiește cât puntea. |
 | `punti_lib.ps1` | funcțiile comune (config, clasificarea ieșirii, decizii, login, alarmă, procese). |
 | `instaleaza.ps1` | instalare / dezinstalare (cere admin). |
-| `autotest_punti.ps1` | teste fără rețea (131 de verificări). |
+| `autotest_punti.ps1` | teste fără rețea (144 de verificări). |
 
 Unde scriu:
 - `C:\Users\Public\paw-data\punti\punti.log` — jurnalul (citit de chat). Mascat: fără URL-uri, id-uri de sesiune, tokenuri, emailuri.
@@ -64,9 +64,13 @@ O punte **vie** e repornită doar dacă:
 3. credențialul e respins de **≥ 10 min**;
 4. login-ul contului a fost invalid/expirat cât rula și acum e din nou valid, sau a fost reînnoit înainte de expirare (punțile pornite cu logarea veche nu se refac singure).
 
+Titlurile sesiunilor (scrise de utilizatori) apar și ele în ieșire, dar **indentate** în blocul de stare, pe când evenimentele și stările CLI-ului încep la coloana 0. De aceea o linie indentată nu e niciodată luată drept eveniment: un titlu ca `[10:00:00] Error: … giving up.` nu poate provoca o repornire (conținut extern = date).
+
+Dacă releul moare și puntea rămâne vie (orfană, nesupravegheată), supervizorul o oprește verificat și pornește un releu nou — niciodată un al doilea releu lângă ea. Dacă oprirea nu se confirmă, nu pornește nimic (evită dublura) și reîncearcă la rularea următoare.
+
 De ce e sigur:
 - repornește **doar la text explicit de eroare de la punte**, niciodată din tăcere sau euristici (o punte care nu mai scrie nimic de 30 min primește doar o observație în jurnal); dacă un CLI nou schimbă textele, v2 nu mai vede problemele (nu repornește greșit) și scrie o observație;
-- nimic fără internet stabil și login valid; maxim 3/oră;
+- nimic fără internet stabil și login valid; maxim 3/oră, iar rezervarea în istoric se salvează **înainte** de oprire/pornire (dacă starea nu se poate salva, nu acționează);
 - oprește doar procese verificate (PID + nume + ora pornirii din fișierul de stare) și tot arborele lor (`taskkill /T`), ca sesiunile copil să nu rămână orfane;
 - nu acționează dacă e rulat din interiorul unei sesiuni Claude (s-ar opri singur sau și-ar lega punțile de sesiunea curentă): pornește sarcina programată în loc;
 - după repornire, CLI-ul refolosește mediul înregistrat pentru folder, deci sesiunile existente se pot reatașa.

@@ -75,7 +75,7 @@ try {
     PlanAutentificare = (Get-PlanAutentificare -ExistaFisierToken (Test-Path -LiteralPath $SvFisierToken))
     Jurnal = { param($m) Write-Jurnal $SvJurnal $m }
     CitesteStareSup = { Read-JsonSigur (Join-Path $SvDirStare 'supervizor.json') }
-    ScrieStareSup = { param($s) [void](Write-JsonAtomic (Join-Path $SvDirStare 'supervizor.json') $s) }
+    ScrieStareSup = { param($s) [bool](Write-JsonAtomic (Join-Path $SvDirStare 'supervizor.json') $s) }   # $false = nu actionam
     CitesteStarePunte = { param($p) Read-JsonSigur (Join-Path $SvDirStare ($p.Nume + '.stare.json')) }
     Internet = { Test-Internet }
     Login = { param($cfg) Invoke-AuthStatus -Claude $SvClaude -ConfigDir $cfg -Acum ([datetime]::UtcNow) }

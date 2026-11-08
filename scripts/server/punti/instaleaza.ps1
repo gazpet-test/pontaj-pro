@@ -115,6 +115,10 @@ if ($Dezinstaleaza) {
       if ($a -or $b) { Spune "puntea v2 '$($st.nume)' oprita" }
     }
   }
+  # intai scriptul v1 la loc, apoi sarcinile vechi (Jakarinos r1 P2: ordinea starii vechi)
+  if ($ev -and $ev.v1Redenumit -and (Test-Path -LiteralPath $V1Dezactivat) -and -not (Test-Path -LiteralPath $V1)) {
+    Move-Item -LiteralPath $V1Dezactivat -Destination $V1; Spune 'scriptul v1 pus la loc'
+  }
   $reactivate = @()
   if ($ev -and $ev.sarciniDezactivate) { $reactivate = @($ev.sarciniDezactivate) }
   foreach ($n in $reactivate) {
@@ -122,9 +126,6 @@ if ($Dezinstaleaza) {
       Enable-ScheduledTask -TaskName $n | Out-Null; Spune "sarcina veche reactivata: $n"
       if ($OpresteSiPuntile) { Start-ScheduledTask -TaskName $n; Spune "sarcina veche pornita: $n" }
     }
-  }
-  if ($ev -and $ev.v1Redenumit -and (Test-Path -LiteralPath $V1Dezactivat) -and -not (Test-Path -LiteralPath $V1)) {
-    Move-Item -LiteralPath $V1Dezactivat -Destination $V1; Spune 'scriptul v1 pus la loc'
   }
   if (Test-Path -LiteralPath $Destinatie) {
     Test-FaraReparse $Destinatie
@@ -206,15 +207,21 @@ if ((Test-Path -LiteralPath $V1) -and -not (Test-Path -LiteralPath $V1Dezactivat
 # preluarea imediata (doar la cerere): oprim puntile vechi, exceptand procesele din care ruleaza instalatorul
 if ($PreiaAcum) {
   $inst = Get-InstantaneuProcese
+  # Get-Stramosi intoarce elemente simple; @() le aduna o singura data (Jakarinos r1 P1: fara dubla impachetare)
   $stramosi = @(@(Get-Stramosi -Id $PID -Instantaneu $inst) | ForEach-Object { [int]$_.ProcessId }) + @($PID)
   foreach ($p in Get-ConfigPunti) {
     foreach ($v in @(Get-PuntiVechi -Punte $p -Instantaneu $inst -DirV1 $DirJurnal -PidExclus @())) {
-      if ($stramosi -contains $v.Pid) { Spune "[$($p.Nume)] NU opresc $($v.Descriere): instalatorul ruleaza din ea; ramane pana cade singura"; continue }
-      $cim = $inst | Where-Object { [int]$_.ProcessId -eq $v.Pid } | Select-Object -First 1
+      if ($stramosi -contains [int]$v.Pid) { Spune "[$($p.Nume)] NU opresc $($v.Descriere): instalatorul ruleaza din ea; ramane pana cade singura"; continue }
+      $cim = $inst | Where-Object { [int]$_.ProcessId -eq [int]$v.Pid } | Select-Object -First 1
       if ($v.Tip -eq 'v1' -and $cim -and ([string]$cim.CommandLine) -notmatch '(?i)\sremote-control\b') { Spune "[$($p.Nume)] sar peste PID $($v.Pid): nu e o punte"; continue }
-      & "$env:SystemRoot\System32\taskkill.exe" /PID $v.Pid /T /F 2>&1 | Out-Null
-      if ($LASTEXITCODE -eq 0) { Spune "[$($p.Nume)] oprit: $($v.Descriere)" } else { Spune "[$($p.Nume)] NU am putut opri: $($v.Descriere) (cod $LASTEXITCODE)" }
-      if ($v.Tip -eq 'v1' -and $v.FisierPid) { Remove-Item -LiteralPath $v.FisierPid -Force -ErrorAction SilentlyContinue }
+      # identitatea (PID + nume + ora pornirii din instantaneu) se reverifica chiar inainte de oprire (Jakarinos r1 P1):
+      # daca procesul a disparut si PID-ul a fost refolosit, nu oprim nimic
+      if (Stop-ArboreVerificat -Id ([int]$v.Pid) -Nume $v.Nume -StartIso $v.StartIso) {
+        Spune "[$($p.Nume)] oprit: $($v.Descriere)"
+        if ($v.Tip -eq 'v1' -and $v.FisierPid) { Remove-Item -LiteralPath $v.FisierPid -Force -ErrorAction SilentlyContinue }
+      } else {
+        Spune "[$($p.Nume)] NU am oprit $($v.Descriere): identitatea nu se mai confirma sau procesul nu a iesit"
+      }
     }
   }
 }

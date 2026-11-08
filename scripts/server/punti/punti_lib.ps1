@@ -134,10 +134,16 @@ function ConvertFrom-DurataText([string]$Text) {
 #                                      / "[HH:MM:SS] Session failed: ..." / "[HH:MM:SS] Session completed (...)"
 # Erorile "fatale" sunt cele dupa care CLI-ul cere repornirea ("Restart/Re-run `claude remote-control`", "giving up",
 # "Remote Control stopped"); "Warning: ... Remote Control credential ..." = serverul respinge credentialul mediului.
+# Continut extern = date (CLAUDE.md pct. 10): titlurile sesiunilor (scrise de utilizatori / derivate din primul mesaj) si
+# activitatea lor apar in blocul de stare, INDENTATE (4 spatii). Evenimentele si starile CLI-ului incep mereu la coloana 0.
+# De aceea o linie indentata nu e niciodata eveniment/stare: un titlu ca "[10:00:00] Error: giving up." nu poate porni o repornire.
+# (Exceptie neacoperita: modul cu o singura sesiune, --capacity 1, pune titlul in linia de stare; puntile noastre au capacitatea 32.)
 function Get-ClasaLinie([string]$Linie) {
-  $t = (Remove-Ansi $Linie).Trim()
+  $brut = (Remove-Ansi $Linie).TrimEnd()
+  $t = $brut.Trim()
   $r = [ordered]@{ Tip = 'altceva'; Durata = $null; Text = $t; Fatala = $false; Credential = $false }
   if (-not $t) { $r.Tip = 'gol'; return [pscustomobject]$r }
+  if ($brut -match '^\s') { return [pscustomobject]$r }
   $m = [regex]::Match($t, '^\[\d{1,2}:\d{2}:\d{2}\]\s+(?<rest>.+)$')
   if ($m.Success) {
     $rest = $m.Groups['rest'].Value
@@ -228,7 +234,7 @@ function Update-StareDinLinie([hashtable]$Stare, $Clasa, [datetime]$Acum) {
     'info' { [void]$mes.Add('info punte: ' + (Format-Sigur $Clasa.Text 160)) }
   }
   if ($Clasa.Tip -ne 'gol') { $Stare.ultimaIesire = $iso }
-  return ,$mes.ToArray()
+  return $mes.ToArray()   # apelantii folosesc @(...) (fara virgula unara: @() ar dubla tabloul in PS 5.1)
 }
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -292,10 +298,13 @@ function Get-DecizieSupraveghere {
     $d.CereInternetStabil = $p.CereInternetStabil
     $tinta = 'reporneste'
   } else {
-    if ($ReleuViu) { $d.Motiv = 'releul e viu dar puntea nu' }
-    elseif ($Stare -and $Stare.stare -eq 'oprit') { $d.Motiv = ('puntea s-a oprit (cod {0})' -f $Stare.codIesire) }
-    else { $d.Motiv = 'puntea lipseste' }
-    if ($ReleuViu) { $tinta = 'reporneste' } else { $tinta = 'porneste' }
+    # oricare din cele doua procese inca viu -> "reporneste" (oprire verificata a ce a ramas, apoi releu nou), niciodata "porneste":
+    # un releu nou langa o punte orfana ar porni a doua punte pe acelasi folder (Jakarinos r1 P1)
+    $tinta = 'reporneste'
+    if ($ClaudeViu) { $d.Motiv = 'releul a murit; puntea ramasa fara releu nu mai e supravegheata (iesirea ei nu mai e citita)' }
+    elseif ($ReleuViu) { $d.Motiv = 'releul e viu dar puntea nu' }
+    elseif ($Stare -and $Stare.stare -eq 'oprit') { $d.Motiv = ('puntea s-a oprit (cod {0})' -f $Stare.codIesire); $tinta = 'porneste' }
+    else { $d.Motiv = 'puntea lipseste'; $tinta = 'porneste' }
   }
   if (-not $InternetOk) { $d.Actiune = 'asteapta'; $d.Motiv += '; fara internet'; return [pscustomobject]$d }
   if ($d.CereInternetStabil -and $InternetStabilMin -lt $script:InternetStabilMin) {
@@ -436,7 +445,7 @@ function ConvertTo-Hashtable($Obiect) {
   if ($Obiect -is [System.Collections.IEnumerable] -and $Obiect -isnot [string] -and $Obiect -isnot [hashtable]) {
     $l = New-Object System.Collections.ArrayList
     foreach ($e in $Obiect) { [void]$l.Add((ConvertTo-Hashtable $e)) }
-    return ,$l.ToArray()
+    return ,$l.ToArray()   # virgula intentionata: valoarea ramane tablou cand e pusa direct intr-un hashtable
   }
   return $Obiect
 }
@@ -495,6 +504,12 @@ function Stop-ArboreVerificat([int]$Id, [string]$Nume, $StartIso) {
   return $false
 }
 
+# ora pornirii dintr-un rand Win32_Process (pentru reverificarea identitatii inainte de oprire)
+function Get-StartIsoCim($Proces) {
+  if ($null -eq $Proces -or $null -eq $Proces.CreationDate) { return $null }
+  try { return Get-DataIso ([datetime]$Proces.CreationDate) } catch { return $null }
+}
+
 function Get-InstantaneuProcese {
   @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, Name, CommandLine, CreationDate -ErrorAction Stop)
 }
@@ -515,13 +530,13 @@ function Get-Stramosi([int]$Id, $Instantaneu) {
     [void]$rez.Add($parinte)
     $cur = $parinte
   }
-  return ,$rez.ToArray()
+  return $rez.ToArray()   # apelantii folosesc @(...)
 }
 
 # Rulez dintr-o sesiune Claude (stramos claude.exe)? Atunci nu pornesc/opresc punti din acest proces: copiii mei ar muri
 # la repornirea puntii-parinte, iar oprirea puntii-parinte m-ar opri si pe mine.
 function Test-InSesiuneClaude([int]$Id, $Instantaneu) {
-  foreach ($s in (Get-Stramosi -Id $Id -Instantaneu $Instantaneu)) { if ($s.Name -eq 'claude.exe') { return $true } }
+  foreach ($s in @(Get-Stramosi -Id $Id -Instantaneu $Instantaneu)) { if ($s.Name -eq 'claude.exe') { return $true } }
   return $false
 }
 
@@ -542,14 +557,14 @@ function Get-PuntiVechi($Punte, $Instantaneu, [string]$DirV1, [int[]]$PidExclus)
     $cl = [string]$p.CommandLine
     if (-not $cl) { continue }
     if ($p.Name -eq 'cmd.exe' -and $cl -match $cmdRx) {
-      [void]$rez.Add([pscustomobject]@{ Pid = [int]$p.ProcessId; Tip = 'bucla-cmd'; Descriere = ('bucla cmd veche {0}, PID {1}' -f $Punte.CmdVechi, $p.ProcessId) })
+      [void]$rez.Add([pscustomobject]@{ Pid = [int]$p.ProcessId; Nume = 'cmd'; StartIso = (Get-StartIsoCim $p); Tip = 'bucla-cmd'; Descriere = ('bucla cmd veche {0}, PID {1}' -f $Punte.CmdVechi, $p.ProcessId) })
       continue
     }
     if ($p.Name -eq 'claude.exe' -and $cl -match $numeRx -and (@($PidExclus) -notcontains [int]$p.ProcessId)) {
       $par = $harta[[int]$p.ParentProcessId]
       if ($par -and ([string]$par.CommandLine) -match '(?i)punte_releu\.ps1') { continue }
       if ($par -and $par.Name -eq 'cmd.exe' -and ([string]$par.CommandLine) -match $cmdRx) { continue }   # copilul buclei, deja numarat
-      [void]$rez.Add([pscustomobject]@{ Pid = [int]$p.ProcessId; Tip = 'claude'; Descriere = ('claude remote-control pornit in afara releului, PID {0}' -f $p.ProcessId) })
+      [void]$rez.Add([pscustomobject]@{ Pid = [int]$p.ProcessId; Nume = 'claude'; StartIso = (Get-StartIsoCim $p); Tip = 'claude'; Descriere = ('claude remote-control pornit in afara releului, PID {0}' -f $p.ProcessId) })
     }
   }
   if ($DirV1) {
@@ -562,13 +577,13 @@ function Get-PuntiVechi($Punte, $Instantaneu, [string]$DirV1, [int[]]$PidExclus)
           $pr = Get-Process -Id $id -ErrorAction Stop
           $scris = (Get-Item -LiteralPath $f).LastWriteTimeUtc
           if ($pr.ProcessName -eq 'claude' -and [math]::Abs(($pr.StartTime.ToUniversalTime() - $scris).TotalSeconds) -le 120) {
-            [void]$rez.Add([pscustomobject]@{ Pid = $id; Tip = 'v1'; Descriere = ('punte v1, PID {0}' -f $id); FisierPid = $f })
+            [void]$rez.Add([pscustomobject]@{ Pid = $id; Nume = 'claude'; StartIso = (Get-StartIso $pr); Tip = 'v1'; Descriere = ('punte v1, PID {0}' -f $id); FisierPid = $f })
           }
         } catch { }
       }
     }
   }
-  return ,$rez.ToArray()
+  return $rez.ToArray()   # apelantii folosesc @(...)
 }
 
 function Get-PunteVeche($Punte, $Instantaneu, [string]$DirV1, [int[]]$PidExclus) {
@@ -711,6 +726,13 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     }
   }
 
+  # starea login-ului (RevalidatLa, VerificatLa) se salveaza inainte de orice actiune: altfel o rulare intrerupta ar
+  # repeta repornirile "dupa reinnoirea login-ului" (Jakarinos r1 P1)
+  if (-not $DoarVerifica -and -not (& $Dep.ScrieStareSup $sup)) {
+    & $jurnal 'EROARE: nu pot salva starea supervizorului; nu actionez in aceasta rulare'
+    return $actiuni.ToArray()
+  }
+
   # 5. decizii per punte
   foreach ($i in $info) {
     $p = $i.Punte
@@ -745,20 +767,36 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
       continue
     }
     if ($DoarVerifica) { continue }
-    if ($d.Actiune -eq 'reporneste') {
-      $opr = & $Dep.Opreste $p $i.Stare
-      & $jurnal ("[{0}] repornesc: {1}{2}" -f $p.Nume, $d.Motiv, $(if ($opr) { '' } else { ' (oprirea nu a fost confirmata)' }))
-    } else {
-      & $jurnal ("[{0}] pornesc: {1}" -f $p.Nume, $d.Motiv)
+    # Rezervarea in istoric se SALVEAZA inainte de efect (Jakarinos r1 P1, L02/L04): o exceptie mai jos sau o rulare
+    # intrerupta nu pot ocoli limita de 3/ora. Daca starea nu se poate salva, nu actionam (L05: necunoscut = nu risc).
+    $sup.istoric[$p.Nume] = @(@($sup.istoric[$p.Nume]) + @(Get-DataIso $acumU) | Where-Object { $_ })
+    if (-not (& $Dep.ScrieStareSup $sup)) {
+      & $jurnal "[$($p.Nume)] EROARE: nu pot salva starea supervizorului; nu actionez in aceasta rulare"
+      continue
     }
-    $ist2 = @($sup.istoric[$p.Nume]) + @(Get-DataIso $acumU)
-    $sup.istoric[$p.Nume] = @($ist2 | Where-Object { $_ })
-    $r = & $Dep.Porneste $p
-    if ($r.Ok) { & $jurnal ("[{0}] releu pornit: {1}" -f $p.Nume, $r.Mesaj) } else { & $jurnal ("[{0}] EROARE la pornire: {1}" -f $p.Nume, $r.Mesaj) }
+    try {
+      if ($d.Actiune -eq 'reporneste') {
+        $opr = [bool](& $Dep.Opreste $p $i.Stare)
+        if (-not $opr) {
+          # ce a ramas viu nu a putut fi oprit (sau identitatea nu s-a confirmat): un releu nou ar putea dubla puntea
+          & $jurnal ("[{0}] NU repornesc: oprirea nu a fost confirmata ({1}); reincerc la rularea urmatoare" -f $p.Nume, $d.Motiv)
+          continue
+        }
+        & $jurnal ("[{0}] repornesc: {1}" -f $p.Nume, $d.Motiv)
+      } else {
+        & $jurnal ("[{0}] pornesc: {1}" -f $p.Nume, $d.Motiv)
+      }
+      $r = & $Dep.Porneste $p
+      if ($r.Ok) { & $jurnal ("[{0}] releu pornit: {1}" -f $p.Nume, $r.Mesaj) } else { & $jurnal ("[{0}] EROARE la pornire: {1}" -f $p.Nume, $r.Mesaj) }
+    } catch {
+      & $jurnal ("[{0}] EROARE la (re)pornire: {1}" -f $p.Nume, (Format-Sigur $_.Exception.Message 200))
+    }
   }
 
   $sup.versiune = $script:PuntiVersiune
   $sup.ultimaRulare = Get-DataIso $acumU
-  if (-not $DoarVerifica) { & $Dep.ScrieStareSup $sup }
-  return ,$actiuni.ToArray()
+  if (-not $DoarVerifica) {
+    if (-not (& $Dep.ScrieStareSup $sup)) { & $jurnal 'EROARE: nu pot salva starea supervizorului la final' }
+  }
+  return $actiuni.ToArray()
 }

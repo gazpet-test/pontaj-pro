@@ -56,6 +56,13 @@ $c = Get-ClasaLinie $L.reconnd; Verifica 'Reconnected after -> reconectat' ($c.T
 $c = Get-ClasaLinie $L.qr; Verifica 'linia QR -> altceva' ($c.Tip -eq 'altceva')
 $c = Get-ClasaLinie 'Reconnected after 3m (fara ora) nu e eveniment'; Verifica 'negativ: text fara [HH:MM:SS] nu e eveniment' ($c.Tip -eq 'altceva') $c.Tip
 $c = Get-ClasaLinie '[1:2:3] Error: x'; Verifica 'negativ: ora malformata nu e eveniment' ($c.Tip -ne 'eroare') $c.Tip
+# titluri de sesiune (continut extern, indentate in blocul de stare) care imita evenimente/stari -> ignorate
+$c = Get-ClasaLinie "    $E]8;;https://claude.ai/code/session_TEST0123456789?from=cli$BEL[10:00:00] Error: giving up.$E]8;;$BEL"
+Verifica 'titlu de sesiune care imita o eroare fatala -> altceva' ($c.Tip -eq 'altceva') $c.Tip
+$c = Get-ClasaLinie "    $E]8;;https://claude.ai/code/session_TEST0123456789?from=cli${BEL}Reconnecting $B retrying in 1s $B disconnected 2h$E]8;;$BEL"
+Verifica 'titlu de sesiune care imita "Reconnecting ... disconnected 2h" -> altceva' ($c.Tip -eq 'altceva') $c.Tip
+$c = Get-ClasaLinie "  [10:00:00] Warning: Remote Control credential (activitate indentata)"
+Verifica 'linie indentata cu Warning credential -> altceva' ($c.Tip -eq 'altceva' -and -not $c.Credential) $c.Tip
 
 Write-Output 'T2 durate'
 Verifica '45s' ((ConvertFrom-DurataText '45s') -eq 45)
@@ -170,6 +177,7 @@ $d = Dec $null -Releu $false -Cl $false -Veche 'bucla cmd veche'; Verifica 'punt
 $d = Dec $null -Releu $false -Cl $false -Net $false; Verifica 'punte lipsa + fara internet -> asteapta' ($d.Actiune -eq 'asteapta' -and $d.Motiv -match 'internet')
 $d = Dec (StareRec 30 1800) -Net $false; Verifica 'deconectata 30 min + fara internet -> asteapta' ($d.Actiune -eq 'asteapta')
 $d = Dec $null -Releu $true -Cl $false; Verifica 'releu viu fara punte -> reporneste' ($d.Actiune -eq 'reporneste')
+$d = Dec $null -Releu $false -Cl $true; Verifica 'releu mort, punte vie (orfana) -> reporneste, NU porneste (r1 P1: fara dublura)' ($d.Actiune -eq 'reporneste' -and $d.Motiv -match 'releul a murit') $d.Actiune
 $inst = @(
   [pscustomobject]@{ ProcessId = 4644; ParentProcessId = 2720; Name = 'cmd.exe'; CommandLine = '"cmd.exe" /c C:\Users\Public\claude-server\start_claude_rc_redari.cmd'; CreationDate = $T0 }
   [pscustomobject]@{ ProcessId = 18608; ParentProcessId = 4644; Name = 'claude.exe'; CommandLine = '"C:\x\claude.exe"    remote-control --name "Redari - server AI" --spawn=worktree'; CreationDate = $T0 }
@@ -194,8 +202,15 @@ Set-Content -Path (Join-Path $dirV1 'gazpet-erp-chat.pid') -Value $PID
 Verifica 'pid v1 catre un proces care nu e claude -> ignorat' ($null -eq (Get-PunteVeche -Punte $Chat -Instantaneu @() -DirV1 $dirV1 -PidExclus @()))
 Set-Content -Path (Join-Path $dirV1 'gazpet-erp-chat.pid') -Value 'nu-e-numar'
 Verifica 'pid v1 stricat -> ignorat' ($null -eq (Get-PunteVeche -Punte $Chat -Instantaneu @() -DirV1 $dirV1 -PidExclus @()))
-$st = Get-Stramosi -Id 28900 -Instantaneu $inst
+$st = @(Get-Stramosi -Id 28900 -Instantaneu $inst)
 Verifica 'stramosii sesiunii copil: punte + bucla cmd' (@($st | ForEach-Object { $_.ProcessId }) -join ',' -eq '18608,4644')
+$pids = @(@(Get-Stramosi -Id 28900 -Instantaneu $inst) | ForEach-Object { [int]$_.ProcessId }) + @(28900)
+Verifica 'expresia din instalator (-PreiaAcum): 2 stramosi -> lista de int, fara dubla impachetare (r1 P1)' ($pids.Count -eq 3 -and $pids[0] -is [int] -and ($pids -join ',') -eq '18608,4644,28900') ($pids -join ',')
+$inst2 = @($inst) + @([pscustomobject]@{ ProcessId = 5001; ParentProcessId = 1; Name = 'claude.exe'; CommandLine = '"C:\x\claude.exe" remote-control --name "Chat - server AI"'; CreationDate = $T0 })
+$v2 = @(Get-PuntiVechi -Punte $Chat -Instantaneu $inst2 -DirV1 '' -PidExclus @())
+Verifica 'doua punti vechi pe aceeasi punte -> 2 elemente, fiecare cu identitate (Nume, StartIso)' ($v2.Count -eq 2 -and $v2[1].Pid -eq 5001 -and $v2[1].Nume -eq 'claude' -and (ConvertFrom-DataIso $v2[1].StartIso) -eq $T0) "$($v2.Count)"
+$v0 = @(Get-PuntiVechi -Punte $mod -Instantaneu $inst -DirV1 '' -PidExclus @())
+Verifica 'nicio punte veche -> tablou gol (Count 0)' ($v0.Count -eq 0)
 Verifica 'proces din sesiune Claude detectat' (Test-InSesiuneClaude -Id 28900 -Instantaneu $inst)
 Verifica 'proces din afara (bucla cmd) nu e in sesiune' (-not (Test-InSesiuneClaude -Id 4644 -Instantaneu $inst))
 
@@ -216,18 +231,19 @@ $Dp = @{
   Jurnal = { param($m) [void]$script:W.Jurnal.Add($m) }
   # dus-intors prin JSON, ca in productie (fisierul supervizor.json)
   CitesteStareSup = { if ($script:W.Sup) { ConvertTo-Hashtable (($script:W.Sup | ConvertTo-Json -Depth 8) | ConvertFrom-Json) } else { $null } }
-  ScrieStareSup = { param($s) $script:W.Sup = $s }
+  ScrieStareSup = { param($s) if ($script:W.ScriereEsueaza) { return $false }; $script:W.Sup = $s; $true }
   CitesteStarePunte = { param($p) $script:W.Stari[$p.Nume] }
-  Procese = { param($p, $st) $v = [bool]$script:W.Vii[$p.Nume]; @{ ReleuViu = $v; ClaudeViu = $v } }
+  Procese = { param($p, $st) $v = $script:W.Vii[$p.Nume]; if ($v -is [string] -and $v -eq 'orfan') { @{ ReleuViu = $false; ClaudeViu = $true } } else { $b = [bool]$v; @{ ReleuViu = $b; ClaudeViu = $b } } }
   Veche = { param($p, $st) $script:W.Veche[$p.Nume] }
   Internet = { $script:W.Net }
   Login = { param($cfg) $script:W.LoginApeluri++; $script:W.Login[(Get-CheieCont $cfg)] }
   # o punte (re)pornita are stare noua, pornita "acum" (ca releul real)
   Porneste = { param($p)
+    if ($script:W.PornireArunca -contains $p.Nume) { throw 'eroare simulata la pornire' }
     [void]$script:W.Porniri.Add($p.Nume); $script:W.Vii[$p.Nume] = $true
     $n = New-StarePunte -Nume $p.Nume -PidReleu 1 -StartReleu 'x' -Acum $script:AcumTest; $n.stare = 'conectat'; $script:W.Stari[$p.Nume] = $n
     @{ Ok = $true; Mesaj = 'fals' } }
-  Opreste = { param($p, $st) [void]$script:W.Opriri.Add($p.Nume); $true }
+  Opreste = { param($p, $st) [void]$script:W.Opriri.Add($p.Nume); -not $script:W.OprireEsueaza }
   ScrieAlarma = { param($t) $script:W.Alarma = $t; if ($t) { 'scris' } else { 'nimic' } }
 }
 function Ruleaza([int]$Min, [switch]$Dv) { $script:AcumTest = $T0.AddMinutes($Min); Invoke-Supervizor -Dep $Dp -Acum $script:AcumTest -DoarVerifica:$Dv }
@@ -295,6 +311,25 @@ Verifica 'o singura data' (($W.Opriri.Count - $op1) -eq 3)
 $opDv = $W.Opriri.Count; $jDv = $W.Jurnal.Count; Cade 'chat' 320
 $act = Ruleaza 340 -Dv
 Verifica '-DoarVerifica intoarce deciziile fara efecte' (@($act).Count -ge 4 -and $W.Opriri.Count -eq $opDv -and $W.Jurnal.Count -eq $jDv -and (@($act) -join '|') -match 'chat: reporneste') (@($act) -join '|')
+# --- remedieri r1 (Jakarinos): punte orfana, oprire neconfirmata, salvare esuata, exceptie la pornire ---
+$W.PornireArunca = @(); $W.OprireEsueaza = $false; $W.ScriereEsueaza = $false
+$o0 = $W.Opriri.Count; $p0 = $W.Porniri.Count
+$W.Stari['chat'].stare = 'conectat'   # chat ramasese 'cazuta' din testul -DoarVerifica
+$W.Vii['ofertare'] = 'orfan'
+[void](Ruleaza 400)
+Verifica 'releu mort + punte vie: oprire verificata, apoi releu nou' (($W.Opriri.Count - $o0) -eq 1 -and ($W.Porniri.Count - $p0) -eq 1 -and $W.Porniri[$W.Porniri.Count - 1] -eq 'ofertare')
+$W.Vii['module'] = 'orfan'; $W.OprireEsueaza = $true; $o0 = $W.Opriri.Count; $p0 = $W.Porniri.Count
+[void](Ruleaza 405)
+Verifica 'oprire neconfirmata -> NU porneste alt releu (fara dublura)' (($W.Opriri.Count - $o0) -eq 1 -and ($W.Porniri.Count - $p0) -eq 0 -and @($W.Jurnal | Where-Object { $_ -match '\[module\] NU repornesc' }).Count -eq 1)
+Verifica 'incercarea neconfirmata ramane in istoric (limita nu poate fi ocolita)' (@($W.Sup.istoric['module']) -contains (Get-DataIso $T0.AddMinutes(405)))
+$W.OprireEsueaza = $false; $W.ScriereEsueaza = $true; $o0 = $W.Opriri.Count; $p0 = $W.Porniri.Count
+[void](Ruleaza 410)
+Verifica 'starea nu se poate salva -> nicio oprire/pornire (r1 P1)' (($W.Opriri.Count - $o0) -eq 0 -and ($W.Porniri.Count - $p0) -eq 0 -and @($W.Jurnal | Where-Object { $_ -match 'nu pot salva starea' }).Count -ge 1)
+$W.ScriereEsueaza = $false; $W.PornireArunca = @('module'); Cade 'ofertare' 400; $p0 = $W.Porniri.Count
+[void](Ruleaza 415)
+Verifica 'exceptie la pornirea module: prinsa, rezervarea salvata inainte' ((@($W.Jurnal | Where-Object { $_ -match '\[module\] EROARE la \(re\)pornire' }).Count -eq 1) -and (@($W.Sup.istoric['module']) -contains (Get-DataIso $T0.AddMinutes(415))))
+Verifica 'puntea urmatoare (ofertare) e tratata si dupa exceptia de la module' ($W.Porniri[$W.Porniri.Count - 1] -eq 'ofertare' -and ($W.Porniri.Count - $p0) -eq 1)
+$W.PornireArunca = @()
 
 Write-Output 'T11 fisierul de stare: dus-intors JSON (Windows PowerShell 5.1)'
 $f = Join-Path $Tmp 'sup.json'
