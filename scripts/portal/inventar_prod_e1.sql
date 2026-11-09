@@ -59,7 +59,8 @@ SELECT '5_handle_new_user' AS sectiune, encode(sha256(convert_to(p.prosrc,'UTF8'
        pg_get_userbyid(p.proowner) AS owner, p.proacl::text AS acl, p.proconfig, p.prosecdef,
        (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid='public.profiles'::regclass AND c.conname='profiles_role_chk') AS profiles_role_chk,
        (SELECT string_agg(DISTINCT coalesce(role,'NULL'),', ') FROM public.profiles) AS roluri_in_profiles,
-       (SELECT string_agg(t.tgname||':'||t.tgenabled,', ') FROM pg_trigger t WHERE t.tgrelid='auth.users'::regclass AND NOT t.tgisinternal) AS triggere_auth_users
+       -- tgenabled e de tip "char": text || "char" e ambiguu pe PG17 (rularea pe prod 10.11) -> conversie explicita
+       (SELECT string_agg(t.tgname||':'||t.tgenabled::text,', ') FROM pg_trigger t WHERE t.tgrelid='auth.users'::regclass AND NOT t.tgisinternal) AS triggere_auth_users
 FROM pg_proc p WHERE p.oid='public.handle_new_user()'::regprocedure;
 
 -- 6) Starea expunerilor din plan (doar da / nu, fara valori):

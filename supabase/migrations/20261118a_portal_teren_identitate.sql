@@ -189,9 +189,11 @@ REVOKE ALL ON FUNCTION public.fn_portal_public_md5() FROM PUBLIC,anon,authentica
 -- r3 (Copilot r2 P1-02): lista exacta + amprentele revizuite ale functiilor net (pg_net) executabile prin PUBLIC,
 -- fixate INAINTE de apply din inventarul read-only; nu se mai invata la apply. Gol = refuz atomic.
 -- Forma cheii: schema.nume(tipuri) cu oidvectortypes, ca in poarta. Valoarea: md5(pg_get_functiondef).
+-- Completat 10.11.2026 din inventarul read-only pe prod (scripts/portal/inventar_prod_e1.sql, sectiunea 2): 12 functii net
+-- executabile prin PUBLIC, niciuna SECURITY DEFINER, toate cu owner supabase_admin.
 CREATE FUNCTION public.fn_portal_net_md5() RETURNS jsonb
 LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $nethash$
- SELECT '{}'::jsonb;
+ SELECT '{"net._await_response(bigint)":"227f3aebd09f0563448941d0f9407644","net._encode_url_with_params_array(text, text[])":"ba2aab33cb660306fd36d5a58c2c8767","net._http_collect_response(bigint, boolean)":"cb06cf9e5263c94f3fa2a9b5da96627a","net._urlencode_string(character varying)":"3a141d2f5fe47b13d1b38f6972e65e2b","net.check_worker_is_up()":"561dc64d13116f35f836fca419976cd6","net.http_collect_response(bigint, boolean)":"7001b98890bd394f86e82556422c106b","net.http_delete(text, jsonb, jsonb, integer, jsonb)":"b7a41eaa074deb087c82cc61ce587c07","net.http_get(text, jsonb, jsonb, integer)":"ac3508c2c864d06e8872938042456d91","net.http_post(text, jsonb, jsonb, jsonb, integer)":"05103078b4b36c776bc0925f4fecf8e2","net.wait_until_running()":"43e41c4c0abaeddf18611f473f747914","net.wake()":"9d92f13f6f65e7011090693e4ea2da26","net.worker_restart()":"384403c12f70a9d4c75d6842e249e479"}'::jsonb;
 $nethash$;
 REVOKE ALL ON FUNCTION public.fn_portal_net_md5() FROM PUBLIC,anon,authenticated,service_role,teren;
 -- Exceptie explicita pentru catalogul SQL standard livrat de initdb (OID sub FirstNormalObjectId).
