@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import * as XLSX_mod from 'xlsx-js-style'
 import JSZip from 'jszip'
 import { calendarLuna, zileInLuna, rezumatLuna, peLuni, motiveText, vremeWmo, eticheta, ziSaptamana, pragText, toateZilele, construiesteExport,
-  numeFisierMeteo, CAP_ZILE, CULOARE_NELUCRABIL, COLOANE, parsePrag, pragurileExportului } from './meteoIstoricUtil.js'
+  numeFisierMeteo, CAP_ZILE, CULOARE_NELUCRABIL, COLOANE, parsePrag, pragurileExportului, toateVersiunile } from './meteoIstoricUtil.js'
 const XLSX = XLSX_mod.default || XLSX_mod
 
 const P = { precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, versiune: 3, actualizat_la: '2026-11-09T10:00:00Z' }
@@ -90,6 +90,22 @@ describe('Meteo — citirea pe chei (L23) și erorile (L18)', () => {
   })
   it('o eroare pe orice pagină se aruncă, nu întoarce o listă scurtă', async () => {
     await expect(toateZilele(fakeClient(R, { eroare: (q, i) => i === 1 && 'permission denied' }), [1, 2])).rejects.toThrow(/istoricul meteo nu se poate citi: permission denied/)
+  })
+  it('jurnalul pragurilor pe chei: toate versiunile, chiar dacă serverul taie la 2 rânduri; eroarea se aruncă (review r2 P2)', async () => {
+    const V = [1, 2, 3, 4, 5].map(v => ({ versiune: v, precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, actualizat_la: `2026-11-0${v}T08:00:00Z` }))
+    const c = fakeClient(V, { maxRows: 2 })
+    expect((await toateVersiunile(c)).map(v => v.versiune)).toEqual([1, 2, 3, 4, 5])
+    expect(c.jurnal.length).toBe(4)                   // 3 pagini + pagina goală
+    await expect(toateVersiunile(fakeClient(V, { maxRows: 2, eroare: (q, i) => i === 2 && 'timeout' }))).rejects.toThrow(/istoricul pragurilor nu se poate citi: timeout/)
+    // versiunea folosită pe ultima pagină apare în export; lipsa ei din jurnal = refuz, nu „—”
+    const jurnal = await toateVersiunile(fakeClient(V, { maxRows: 2 }))
+    const randuri = [zi(1, '2026-01-01', { praguri_versiune: 5 })]
+    const wb = XLSX.read(await construiesteExport({ santiere: [{ id: 1, name: 'A' }], randuri, jurnal, generatLa: 'x' }), { type: 'array' })
+    const I = XLSX.utils.sheet_to_json(wb.Sheets['Praguri si sursa'], { header: 1, defval: '' })
+    expect(I[2]).toEqual(['Versiunea pragurilor folosită', '5'])
+    expect(I.at(-1)[0]).toBe('versiunea 5 (folosită)')
+    await expect(construiesteExport({ santiere: [{ id: 1, name: 'A' }], randuri, jurnal: jurnal.slice(0, 4), generatLa: 'x' }))
+      .rejects.toThrow(/versiunea pragurilor folosită \(v5\) lipsește/)
   })
   it('anularea oprește citirea', async () => {
     const s = { anulat: true }

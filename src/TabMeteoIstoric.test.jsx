@@ -139,6 +139,24 @@ dom(numeDom('TabMeteoIstoric'), () => {
     await u.asteaptaPana(() => u.descarcari.length > 0)
     expect(u.d.body.textContent).toContain('✓ 4 zile exportate')          // 3 de pe Lot 1 + 1 de pe Lot 2 (închis)
   })
+  it('completare pe A → schimbare pe B → răspunsul lui A → înapoi pe A: butonul e utilizabil, fără mesajul vechi (review r2 P2)', async () => {
+    let elib
+    const tabele = TABELE()
+    tabele.sites[1].active = true                                        // B activ, ca să aibă și el butonul
+    const c = clientFals({ tabele, user: 'u-owner', functie: () => new Promise(r => { elib = r }) })
+    const u = await monteaza(c)
+    await u.apasa(u.d.querySelector('[data-meteo-completeaza]'))
+    expect(u.d.querySelector('[data-meteo-completeaza]').disabled).toBe(true)
+    await u.alege(u.d.querySelector('select'), '2')
+    expect(u.d.querySelector('[data-meteo-completeaza]').disabled).toBe(false)   // pe B nu e nicio completare în curs
+    expect(u.d.querySelector('[data-meteo-completare]')).toBe(null)
+    await u.act(async () => { elib({ data: { ok: true, istoric: { ok: true, rez: [{ site: 1, de: '2025-05-05', pana: '2026-11-08', zile_scrise: 5, lipsa: 0, respinse: 0, absente: 0, ok: true }], sarite: [] } }, error: null }) })
+    await u.asteapta(); await u.asteapta()
+    expect(u.d.querySelector('[data-meteo-completare]')).toBe(null)        // răspunsul lui A nu se afișează pe B
+    await u.alege(u.d.querySelector('select'), '1')
+    expect(u.d.querySelector('[data-meteo-completeaza]').disabled).toBe(false)
+    expect(u.d.querySelector('[data-meteo-completare]')).toBe(null)
+  })
   it('pragul gol nu devine 0: refuz în formular, fără apel la server (review r1 P2)', async () => {
     const c = clientFals({ user: 'u-owner' })
     const u = await monteaza(c)

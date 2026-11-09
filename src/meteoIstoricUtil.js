@@ -113,6 +113,22 @@ export async function toateZilele(client, siteIds, { de = null, pana = null, pas
   return out
 }
 
+// jurnalul versiunilor de praguri, pe chei (versiune crescător, până la pagina goală); eroarea se aruncă (L18, L23)
+export async function toateVersiunile(client, { pas = 1000 } = {}) {
+  const out = []
+  for (let ultima = null; ;) {
+    let q = client.from('meteo_praguri_jurnal').select('versiune,precipitatii_mm_min,zapada_cm_min,tmax_sub_c,tmin_max_c,actualizat_la')
+    if (ultima != null) q = q.gt('versiune', ultima)
+    const { data, error } = await q.order('versiune', { ascending: true }).limit(pas)
+    if (error) throw new Error('istoricul pragurilor nu se poate citi: ' + (error.message || 'eroare'))
+    if (!data || !data.length) return out
+    const u = data[data.length - 1].versiune
+    if (ultima != null && !(u > ultima)) throw new Error('istoricul pragurilor: paginare neordonată')
+    for (const r of data) out.push(r)
+    ultima = u
+  }
+}
+
 // ── exportul Excel: „Zile” (toate zilele), „Pe luni”, „Praguri și sursă” ──
 const LINIE = { style: 'thin', color: { rgb: '000000' } }
 const BORDURA = { top: LINIE, bottom: LINIE, left: LINIE, right: LINIE }
@@ -153,6 +169,8 @@ export async function construiesteExport({ santiere, randuri, jurnal = [], gener
   if (!randuri.length) throw new Error('nimic de exportat')
   const praguri = pragurileExportului(randuri)
   const intrare = jurnal.find(j => Number(j.versiune) === Number(praguri.versiune)) || null
+  // versiunea care a clasificat zilele trebuie să fie în jurnal (altfel istoricul exportat e incomplet, review r2 P2)
+  if (!intrare) throw new Error(`versiunea pragurilor folosită (v${praguri.versiune}) lipsește din istoricul pragurilor — reîncearcă`)
   const nume = new Map(santiere.map(s => [String(s.id), `${s.name || `șantier #${s.id}`}${s.active === false ? ' (închis)' : ''}`]))
   const sortate = [...randuri].sort((a, b) => (String(a.site_id) === String(b.site_id) ? (a.data < b.data ? -1 : 1) : (nume.get(String(a.site_id)) || '').localeCompare(nume.get(String(b.site_id)) || '', 'ro')))
   const zile = [CAP_ZILE, ...sortate.map(r => [nume.get(String(r.site_id)) || `șantier #${r.site_id}`, r.data.split('-').reverse().join('.'), ziSaptamana(r.data),

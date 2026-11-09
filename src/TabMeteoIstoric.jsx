@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { aziBucuresti } from './hrDeciziiUtil.js'
 import { calendarLuna, ZILE_SAPT, LUNI, vremeWmo, rezumatLuna, peLuni, numeLuna, eticheta, motiveText, pragText, toateZilele,
-  construiesteExport, numeFisierMeteo, parsePrag } from './meteoIstoricUtil.js'
+  construiesteExport, numeFisierMeteo, parsePrag, toateVersiunile } from './meteoIstoricUtil.js'
 
 const G = { bg: '#0D1117', surface: '#161B22', card: '#1C2128', card2: '#21262D', text: '#E6EDF3', muted: '#8B949E', dim: '#6E7681',
   border: '#30363D', blue: '#58A6FF', green: '#2EA043', yellow: '#D29922', red: '#F85149', teal: '#2DD4BF' }
@@ -109,8 +109,7 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
       const randuri = await toateZilele(client, lista.map(s => s.id))
       if (g !== gen.current) return
       if (!randuri.length) { setExp({ tip: 'info', text: 'Nu există încă istoric meteo pentru șantierele proiectului.' }); return }
-      const { data: jurnal, error: ej } = await client.from('meteo_praguri_jurnal').select('versiune,precipitatii_mm_min,zapada_cm_min,tmax_sub_c,tmin_max_c,actualizat_la').order('versiune')
-      if (ej) throw new Error('istoricul pragurilor nu se poate citi: ' + ej.message)
+      const jurnal = await toateVersiunile(client)          // pe chei, până la pagina goală (review r2 P2)
       if (g !== gen.current) return
       // pragurile declarate în fișier vin din rândurile exportate (aceeași versiune peste tot), nu din pagină (review r1 P1)
       const bytes = await construiesteExport({ santiere: lista, randuri, jurnal: jurnal || [], generatLa: new Date().toLocaleString('ro-RO') })
@@ -125,12 +124,16 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
   // completarea / refacerea istoricului de la începutul proiectului: doar owner-ul (meteo-sync reverifică rolul); se poate repeta —
   // rescrie zilele perioadei cu valorile curente din arhivă (review r1 P2: nu e „o singură dată” garantat, textele spun asta)
   const [compl, setCompl] = useState(null)
+  // la schimbarea șantierului / proiectului: cererea în curs nu mai e a selecției, mesajul se golește și butonul redevine utilizabil (review r2 P2)
+  const genCompl = useRef(0)
+  useEffect(() => { genCompl.current++; setCompl(null) }, [siteId, proiectId])
   const completeaza = async () => {
-    const g = gen.current, sid = siteId
+    const g = gen.current, sid = siteId, c = ++genCompl.current
+    const curenta = () => c === genCompl.current && g === gen.current && sid === siteCurent.current
     setCompl({ tip: 'lucru', text: 'Se completează istoricul… (poate dura un minut)' })
     try {
       const { data, error } = await client.functions.invoke('meteo-sync', { body: { istoric_backfill: true, site_id: sid } })
-      if (g !== gen.current || sid !== siteCurent.current) return
+      if (!curenta()) return
       if (error) throw new Error(error.message || 'funcția meteo nu a răspuns')
       const ist = data?.istoric
       if (!ist || (ist.ok === false && !ist.rez)) throw new Error(ist?.eroare || data?.error || 'răspuns neașteptat')
@@ -143,7 +146,7 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
       setCompl({ tip: extra ? 'info' : 'ok', text: `${extra ? '' : '✓ '}${r.zile_scrise} zile scrise (${r.de.split('-').reverse().join('.')} – ${r.pana.split('-').reverse().join('.')})${extra}` })
       setReincarca(x => x + 1)
     } catch (e) {
-      if (g === gen.current) setCompl({ tip: 'eroare', text: 'Completarea nu s-a putut face: ' + (e.message || String(e)) })
+      if (curenta()) setCompl({ tip: 'eroare', text: 'Completarea nu s-a putut face: ' + (e.message || String(e)) })
     }
   }
 
