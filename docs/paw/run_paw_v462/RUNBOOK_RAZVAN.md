@@ -6,8 +6,9 @@ A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = S
 **Ce se schimba (fata de v4.6.1 instalat):**
 - `run_paw.ps1`: canalul `mil` (TOOLS, validare, ramura de rulare, refuzurile `mil_exit_*` / `mil_raspuns_gol`) si
   un parametru optional nou in `Ruleaza` (`$argumenteGata`, folosit doar de mil); la mil, al 5-lea argument
-  (optional) = lista de material; o metoda noua `Pids()` in `PawV43.Job` (lista proceselor din job, doar citire,
-  folosita de mil la curatare); restul liniilor identice;
+  (optional) = lista de material; o metoda noua `Membri()` in `PawV43.Job` (membrii vii ai job-ului ca PID + ora de
+  pornire, doar citire, folosita de mil la curatare) si ramura `arbore_neoprit` (PAW_EROARE fara eliberarea lock-ului);
+  restul liniilor identice;
 - `mil.ps1`: fisier NOU (plan + sandbox fixe, mediu curat, fara MCP/pluginuri, semnatura Google pe agy.exe).
   r2 (dupa Jakarinos r1): agy lucreaza intr-o COPIE doar-citire de unica folosinta (`paw-data\mil\<runid>`),
   niciodata in repo; refuz daca exista fisiere de hooks / `.agents` / setari agy necunoscute; o sonda de pornire
@@ -134,16 +135,27 @@ Asteptat: `PAW_GATA`, raspunsul = titlul runbook-ului; `paw-data\mil` gol.
 Opriri (STOP, nu se ocolesc din lansator):
 - `mil_extensii_refuzate` = cineva a adaugat MCP/pluginuri in agy;
 - `mil_semnatura_invalida` / `mil_semnatar_neasteptat` = agy.exe nu mai e cel semnat de Google;
-- `mil_config_refuzata (...)` = exista un `hooks.json`, `config.json`, `plugins.json`, `agents.json` (profil) sau un
-  director `.agents` / `_agents` / `.agent` / `_agent` / `.gemini` in `paw-data\mil` sau intr-un parinte (calea e in mesaj);
+- `mil_config_refuzata (...)` = exista o sursa de instructiuni / personalizari / hooks din constanta unica `$MIL_SURSE`
+  (mil.ps1; calea exacta e in mesaj). Lista, ca in cod (10.11.2026):
+  - `nume`, cautate in `paw-data\mil\<runid>`, in TOTI parintii pana la `C:\` si in profil (`.gemini` permis doar in profil)
+    si refuzate ca nume de material: `.agents`, `_agents`, `.agent`, `_agent`, `AGENTS.md`, `GEMINI.md`, `.gemini`;
+  - `gemini`, relative la `%USERPROFILE%\.gemini`: `AGENTS.md`, `GEMINI.md`, `config.json`, `hooks.json`, `rules`, `skills`,
+    `workflows`, `config\AGENTS.md`, `config\GEMINI.md`, `config\config.json`, `config\hooks.json`, `config\hooks`,
+    `config\rules`, `config\rules.json`, `config\skills`, `config\skills.json`, `config\workflows`, `config\plugins`,
+    `config\plugins.json`, `config\agents`, `config\agents.json`, `antigravity-cli\hooks.json`, `antigravity-cli\plugins`,
+    `antigravity-cli\skills`, `antigravity-cli\rules`, `antigravity-cli\workflows`.
+  Verificarea se face INAINTE de a crea copia, apoi pe copie si inca o data chiar inaintea rularii. Daca agy e folosit si
+  interactiv pe server si cineva adauga reguli in `~/.gemini`, canalul mil se opreste (asa trebuie): se decide separat;
 - `mil_setari_refuzate (<cheie>)` = agy si-a adaugat o setare noua in `settings.json` (ex. dupa un update): se analizeaza
   cheia, apoi lista alba din mil.ps1 se schimba prin PR, nu pe server;
 - `mil_hooks_incarcate`, `mil_hooks_neverificate`, `mil_sandbox_indisponibil`, `mil_sandbox_nepornit`, `mil_mod_plan_neaplicat`,
   `mil_sonda_*` = jurnalul agy nu arata ce trebuie (de regula dupa un update agy care schimba mesajele): STOP, se compara
   blocul `--- mil ... ---` din log cu cel de mai sus;
 - `mil_copie_*` = copia nu e doar-citire (probele de scriere au reusit) sau ACL neasteptat;
-- `mil_arbore_neoprit (pid ...)` (sau `copii_ramasi`) = procesele agy enumerate nu au iesit in 15 s: copia a ramas pe loc,
-  doar-citire; se verifica PID-urile din mesaj (`Get-Process -Id`), apoi curatarea de mai jos;
+- `PAW_EROARE <id> arbore_neoprit (...)` = iesirea proceselor agy NU a fost confirmata pozitiv in 15 s (Wait-Process cu
+  timeout / eroare / exceptie, sau un proces enumerat inca viu dupa PID + ora de pornire, sau Job-ul inca are membri):
+  copia a ramas pe loc, doar-citire, iar lock-ul se elibereaza doar la iesirea lansatorului. In mesaj: `ramasi: pid@ora`.
+  Se verifica PID-urile (`Get-Process -Id`), apoi curatarea de mai jos;
 - `mil_mediu_refuzat (...)` = o variabila de mediu care redirectioneaza agy ar fi ajuns la copil (nu ar trebui sa se intample);
 - `mil_lansator_elevat` = consola e elevata: se ruleaza din N, nu din A; `mil_sandbox_os_nesuportat` = Windows sub 24H2.
 

@@ -423,8 +423,13 @@ public static bool StopChildren(int milliseconds) {
   } while (clock.ElapsedMilliseconds < milliseconds);
   return Active() == 1;
 }
-public static uint[] Pids() {
-  // v4.6.2 r4 (mil): PID-urile din job, fara lansator (tot arborele copiilor); null = fara job / interogare esuata
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+[DllImport("kernel32.dll")]
+static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+public static string[] Membri() {
+  // v4.6.2 r5 (mil): membrii VII ai job-ului, fara lansator, ca "pid:ora_pornirii" (FILETIME din GetProcessTimes; -2 = ora
+  // necunoscuta); un PID reciclat de un proces din afara job-ului nu e membru; null = fara job / interogare esuata
   if (job == IntPtr.Zero) return null;
   for (int incercare = 0; incercare < 5; incercare++) {
     int active = Active();
@@ -438,10 +443,22 @@ public static uint[] Pids() {
       }
       int count = Marshal.ReadInt32(buffer, 4);
       uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
-      var r = new System.Collections.Generic.List<uint>();
+      var r = new System.Collections.Generic.List<string>();
       for (int i = 0; i < count; i++) {
         uint pid = unchecked((uint)Marshal.ReadIntPtr(buffer, 8 + i * IntPtr.Size).ToInt64());
-        if (pid != self) r.Add(pid);
+        if (pid == self) continue;
+        long start = -2;
+        IntPtr p = OpenProcess(0x1000 | 0x00100000, false, pid); // query limited + synchronize
+        if (p != IntPtr.Zero) {
+          try {
+            bool inside;
+            if (IsProcessInJob(p, job, out inside) && !inside) continue; // PID reciclat in afara job-ului
+            if (WaitForSingleObject(p, 0) == 0) continue;                // deja iesit
+            long c, x, k, u;
+            if (GetProcessTimes(p, out c, out x, out k, out u)) start = c;
+          } finally { CloseHandle(p); }
+        }
+        r.Add(pid.ToString() + ":" + start.ToString());
       }
       return r.ToArray();
     } finally { Marshal.FreeHGlobal(buffer); }
@@ -781,7 +798,12 @@ try {
       . (Join-Path $PSScriptRoot 'mil.ps1')
       LeagaCopiiiDeLansator
       LuaLock (Join-Path $DATA 'lock_mil')
-      $rez = InvokeMil $T.exe $script:MilModelAles $BriefFull $T.timeout $script:MilMaterial (Join-Path $DATA 'mil') $RUNID (@($BRIEF_ROOTS) + @('C:\Users\Public\livrare'))
+      try { $rez = InvokeMil $T.exe $script:MilModelAles $BriefFull $T.timeout $script:MilMaterial (Join-Path $DATA 'mil') $RUNID (@($BRIEF_ROOTS) + @('C:\Users\Public\livrare')) }
+      catch {
+        # r5 (decizie chat): arbore neconfirmat iesit = PAW_EROARE <id> arbore_neoprit (PID-uri), lock tinut pana la iesire, cod nenul
+        if ($_.Exception.Message -clike 'arbore_neoprit*') { EroareFaraEliberare $_.Exception.Message }
+        throw
+      }
     }
     "ollie" {
       $m = $Model; if (-not $m) { $m = "qwen3:14b" }

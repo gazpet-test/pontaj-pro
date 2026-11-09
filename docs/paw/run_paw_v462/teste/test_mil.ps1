@@ -132,19 +132,29 @@ Caz 'P1-1 AssertMilConfig: hooks global / vechi, config.json, .agents in cwd si 
     AssertMilConfig $prof $cwd
     # r4 (Jakarinos r3 P1): redirectionarea din repo parinte (.gemini\config.json) si orice .gemini in afara profilului
     [void](New-Item -ItemType Directory -Path "$rad\.gemini"); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + "$rad\.gemini" + ')')
-    [IO.File]::WriteAllText("$rad\.gemini\config.json", '{"personal_customization_dir":"people/{user}"}'); Refuza { AssertMilConfig $prof $cwd } 'config.json'
+    [IO.File]::WriteAllText("$rad\.gemini\config.json", '{"personal_customization_dir":"people/{user}"}'); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + "$rad\.gemini" + ')')
     Remove-Item -LiteralPath "$rad\.gemini" -Recurse
     # cwd sub profil: .gemini al profilului e permis, dar nu si config.json direct in el
     $cwdP = Join-Path $prof 'lucru\copie'; [void](New-Item -ItemType Directory -Path $cwdP -Force)
     AssertMilConfig $prof $cwdP
     [IO.File]::WriteAllText("$prof\.gemini\config.json", '{}'); Refuza { AssertMilConfig $prof $cwdP } 'config.json'; Remove-Item -LiteralPath "$prof\.gemini\config.json"
-    # r4 (decizie chat): sursele globale de pluginuri / agenti / hooks
-    foreach ($r in @('config\plugins.json', 'config\agents.json', 'config.json')) {
-      [IO.File]::WriteAllText("$prof\.gemini\$r", '{}'); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + "$prof\.gemini\$r" + ')'); Remove-Item -LiteralPath "$prof\.gemini\$r"
+    # r4/r5 (decizie chat): FIECARE sursa din constanta unica $MIL_SURSE.gemini, in profil (fisier sau director, dupa nume)
+    foreach ($r in $MIL_SURSE.gemini) {
+      $p = "$prof\.gemini\$r"; [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+      if ($r -match '\.(json|md)\z') { [IO.File]::WriteAllText($p, '{}') } else { [void](New-Item -ItemType Directory -Path $p) }
+      Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + $p + ')'); Remove-Item -LiteralPath $p -Recurse
     }
-    foreach ($r in @('config\plugins', 'config\agents', 'config\hooks', 'antigravity-cli\plugins')) {
-      [void](New-Item -ItemType Directory -Path "$prof\.gemini\$r"); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + "$prof\.gemini\$r" + ')'); Remove-Item -LiteralPath "$prof\.gemini\$r"
+    # r5: FIECARE nume din $MIL_SURSE.nume in cwd, in parinte, in parintele cu .git si in profil (.gemini permis doar in profil)
+    foreach ($nume in $MIL_SURSE.nume) {
+      foreach ($loc in @($cwd, "$rad\w", $rad, $prof)) {
+        if ($nume -ceq '.gemini' -and $loc -ceq $prof) { continue }
+        $a = Join-Path $loc $nume
+        if (Test-Path -LiteralPath $a) { continue }
+        if ($nume -like '*.md') { [IO.File]::WriteAllText($a, 'reguli') } else { [void](New-Item -ItemType Directory -Path $a) }
+        Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + $a + ')'); Remove-Item -LiteralPath $a -Recurse
+      }
     }
+    if ($MIL_SURSE.nume -cnotcontains 'AGENTS.md' -or $MIL_SURSE.nume -cnotcontains 'GEMINI.md') { throw 'AGENTS.md / GEMINI.md lipsesc din constanta' }
     AssertMilConfig $prof $cwd
     $s = "$prof\.gemini\antigravity-cli\settings.json"
     [IO.File]::WriteAllText($s, '{"colorScheme":"dark","trustedWorkspaces":["C:\\x"]}'); AssertMilConfig $prof $cwd
@@ -253,6 +263,11 @@ Caz 'P1-2 material: nume cu punct (.agents), duplicat, rezervat, in afara radaci
     # refuzuri la validare: inainte de orice scriere (nicio copie creata, nicio stare)
     Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\.agents") @($liv) } 'mil_material_nume_invalid'
     Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\brief.md") @($liv) } 'mil_material_nume_invalid'
+    # r5 (decizie chat): filtrul la copiere = constanta $MIL_SURSE.nume (fara diferenta de litere)
+    foreach ($f in @('AGENTS.md', 'GEMINI.md', 'agents.md', 'Gemini.md')) {
+      [IO.File]::WriteAllText("$liv\sub\$f", 'reguli'); Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\sub\$f") @($liv) } ('mil_material_sursa_instructiuni: ' + $f)
+      Remove-Item -LiteralPath "$liv\sub\$f"
+    }
     Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\a.diff", "$liv\sub\a.diff") @($liv) } 'mil_material_nume_duplicat'
     Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$alt\x.diff") @($liv) } 'mil_material_in_afara_radacinilor'
     Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\..\alt\x.diff") @($liv) } 'cdx_reserved_path'
@@ -303,6 +318,61 @@ function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd
 Caz 'r3/r4 MilArboreGol real: fara Job verificabil = NECUNOSCUT (gol = $false, motiv), deci copia ar ramane doar-citire' {
   if ('PawV43.Job' -as [type]) { throw 'tipul Job exista in procesul de test (neasteptat)' }
   $a = MilArboreGol; Egal $a.gol $false 'fara job'; Egal $a.ramase 'fara Job' 'motiv'
+}
+# r5 (decizie chat): ramurile confirmarii, cu un PawV43.Job FALS (enumerarea controlata de test) si procese / Wait-Process REALE
+Add-Type -TypeDefinition @"
+namespace PawV43 { public static class Job {
+  public static string[] Inainte = new string[0]; public static string[] Dupa = new string[0];
+  public static bool Nul = false; public static int Act = 1; static int n = 0;
+  public static void Reset(string[] a, string[] d, int act, bool nul) { Inainte = a; Dupa = d; Act = act; Nul = nul; n = 0; }
+  public static string[] Membri() { if (Nul) return null; return (n++ == 0) ? Inainte : Dupa; }
+  public static int Active() { return Act; }
+  public static bool StopChildren(int ms) { return true; }
+} }
+"@
+Caz 'r5 MilArboreGol: confirmare DOAR pozitiva (timeout, PID reciclat, Wait-Process fara erori dar proces viu, membri ramasi, Job ilizibil / esuat, exceptie = NECONFIRMAT)' {
+  $vechi = $MIL_JOB_GOL_ASTEPTARE; $script:MIL_JOB_GOL_ASTEPTARE = 2
+  $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\ping.exe') -ArgumentList '-n', '60', '127.0.0.1' -WindowStyle Hidden -PassThru
+  try {
+    $start = [PawMilAcl]::Viu([uint32]$p.Id); if ($start -le 0) { throw ('ora de pornire necitita: ' + $start) }
+    $viu = [string]$p.Id + ':' + $start
+    # timeout simulat (Wait-Process real, procesul enumerat ramane pornit)
+    [PawV43.Job]::Reset(@($viu), @(), 1, $false); $a = MilArboreGol
+    if ($a.gol -or $a.ramase -notlike 'Wait-Process: ProcessNotTerminated*') { throw ('timeout: ' + $a.gol + ' ' + $a.ramase) }
+    # PID reciclat: procesul enumerat (alta ora de pornire) a iesit, PID-ul e acum al unui proces strain care ramane pornit
+    [PawV43.Job]::Reset(@([string]$p.Id + ':' + ($start + 12345)), @(), 1, $false); $a = MilArboreGol
+    if ($a.gol -or $a.ramase -notlike 'Wait-Process:*') { throw ('pid reciclat: ' + $a.gol + ' ' + $a.ramase) }
+    # Wait-Process "reusit" (fara erori) dar procesul enumerat traieste (acelasi PID + aceeasi ora) -> re-enumerarea il prinde
+    function Wait-Process { }
+    [PawV43.Job]::Reset(@($viu), @(), 1, $false); $a = MilArboreGol
+    if ($a.gol -or $a.ramase -notlike ('*' + $p.Id + '@' + $start + '*')) { throw ('viu dupa wait: ' + $a.gol + ' ' + $a.ramase) }
+    # exceptie din Wait-Process
+    function Wait-Process { throw 'exceptie de proba' }
+    [PawV43.Job]::Reset(@($viu), @(), 1, $false); $a = MilArboreGol
+    if ($a.gol -or $a.ramase -notlike 'Wait-Process: exceptie de proba*') { throw ('exceptie: ' + $a.gol + ' ' + $a.ramase) }
+    Remove-Item Function:\Wait-Process
+    # Active() = 1 nu ajunge: Job-ul are inca un membru dupa asteptare; si invers, membri goi dar Active() = 2
+    $q = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList '/c', 'exit' -WindowStyle Hidden -PassThru; $q.WaitForExit()
+    $iesit = [string]$q.Id + ':-2'
+    [PawV43.Job]::Reset(@($iesit), @('424242:-2'), 1, $false); $a = MilArboreGol
+    if ($a.gol -or $a.ramase -notlike '*424242:-2*') { throw ('membru ramas: ' + $a.gol + ' ' + $a.ramase) }
+    [PawV43.Job]::Reset(@($iesit), @(), 2, $false); $a = MilArboreGol; if ($a.gol) { throw 'Active() = 2 confirmat' }
+    [PawV43.Job]::Reset(@(), @(), 1, $true); $a = MilArboreGol
+    if ($a.gol -or $a.ramase -cne 'interogarea Job-ului a esuat') { throw ('job esuat: ' + $a.ramase) }
+    [PawV43.Job]::Reset(@('abc'), @(), 1, $false); $a = MilArboreGol
+    if ($a.gol -or $a.ramase -notlike 'membru Job ilizibil*') { throw ('ilizibil: ' + $a.ramase) }
+    # pozitiv: procesul enumerat a iesit (PID inexistent), Job fara membri, Active() = 1 -> confirmat
+    [PawV43.Job]::Reset(@($iesit), @(), 1, $false); $a = MilArboreGol
+    if (-not $a.gol) { throw ('cazul pozitiv nu a confirmat: ' + $a.ramase) }
+    $r = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\ping.exe') -ArgumentList '-n', '2', '127.0.0.1' -WindowStyle Hidden -PassThru
+    $sr = [PawMilAcl]::Viu([uint32]$r.Id); $r.WaitForExit()
+    [PawV43.Job]::Reset(@([string]$r.Id + ':' + $sr), @(), 1, $false); $a = MilArboreGol
+    if (-not $a.gol) { throw ('cazul pozitiv (cu ora) nu a confirmat: ' + $a.ramase) }
+  } finally {
+    Remove-Item Function:\Wait-Process -ErrorAction SilentlyContinue
+    if (-not $p.HasExited) { $p.Kill() }
+    $script:MIL_JOB_GOL_ASTEPTARE = $vechi; [PawV43.Job]::Reset(@(), @(), 1, $false)
+  }
 }
 Caz 'r4 AssertMilMediu: mediul real trece; variabile care redirectioneaza agy sau alt profil = refuz' {
   $m = MilMediu; AssertMilMediu $m
@@ -383,8 +453,15 @@ Caz 'InvokeMil refuza (si sterge copia): sonda cu hooks / sandbox indisponibil /
     $script:jurSonda = $JS; $script:jurRulare = $JR; $script:sonda = $null
     [void](New-Item -ItemType Directory -Path "$script:profilFals\.gemini\config" -Force); [IO.File]::WriteAllText("$script:profilFals\.gemini\config\hooks.json", '{}')
     $script:apeluri.Clear()
+    # r5: copia nu se creeaza deloc cand verificarea refuza (nu doar se sterge dupa)
+    $script:copieCreata = $false; $realCopie = ${function:MilPregatesteCopie}
+    function MilPregatesteCopie { $script:copieCreata = $true; & $realCopie @args }
     Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza (RunIdTest) @() } 'mil_config_refuzata'
+    Remove-Item Function:\MilPregatesteCopie
+    if ($script:copieCreata) { throw 'copia a fost creata inaintea verificarii' }
     Egal $script:apeluri.Count 0 'niciun copil pornit cu hooks.json prezent'
+    # r5 (decizie chat): verificarea e INAINTEA copiei: niciun director de copie creat
+    if (@(Get-ChildItem -LiteralPath $baza -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*-agy' }).Count -ne 0) { throw 'copia a fost creata inaintea verificarii' }
     Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 100 '' $baza (RunIdTest) @() } 'mil_config_refuzata'
     Remove-Item -LiteralPath "$script:profilFals\.gemini\config\hooks.json"
     Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 100 '' $baza (RunIdTest) @() } 'mil_timp_insuficient_dupa_preflight'
@@ -404,11 +481,11 @@ Caz 'r3 (Jakarinos r2 P1): arbore neconfirmat oprit => copia ramane DOAR-CITIRE 
     )
     foreach ($k in $cai) {
       $script:sonda = $k.s; $id = RunIdTest; $copie = Join-Path ([PawMilAcl]::Lunga($baza)) $id
-      # r4 (decizie chat): arbore neconfirmat = PAW_EROARE mil_arbore_neoprit cu PID-urile ramase, si dupa o rulare reusita
+      # r4/r5 (decizie chat): arbore neconfirmat = PAW_EROARE arbore_neoprit cu PID-urile ramase, si dupa o rulare reusita
       try { [void](InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @()); throw 'nu a refuzat' }
       catch {
         $msg = $_.Exception.Message
-        if ($msg -notlike '*mil_arbore_neoprit (pid 4242; copia ramane doar-citire: *') { throw ('alt refuz: ' + $msg) }
+        if ($msg -notlike 'arbore_neoprit (pid 4242; copia ramane doar-citire: *') { throw ('alt refuz: ' + $msg) }
         if ($k.m -and $msg -notlike ('*dupa: *' + $k.m + '*')) { throw ('motivul initial lipseste: ' + $msg) }
       }
       if (-not (Test-Path -LiteralPath $copie)) { throw ('copia a fost stearsa: ' + $k.n) }
@@ -446,9 +523,10 @@ Caz 'r3/r4: InvokeMil verifica arborele (MilArboreGol) dupa orice iesire, INAINT
   if ($f -lt 0 -or $g -lt 0 -or $s -lt 0 -or $t -lt 0 -or $g -gt $s) { throw 'ordinea dupa iesirea din try' }
   if ($def.IndexOf('treeStopped', $i) -ge 0) { throw 'curatarea depinde inca de $rez.treeStopped' }
   $rp = [IO.File]::ReadAllText((Join-Path $pachet 'run_paw.ps1'))
-  if ($rp.IndexOf('public static uint[] Pids()') -lt 0) { throw 'PawV43.Job::Pids lipseste' }
+  if ($rp.IndexOf('public static string[] Membri()') -lt 0) { throw 'PawV43.Job::Membri lipseste' }
+  if ($rp.IndexOf("if (`$_.Exception.Message -clike 'arbore_neoprit*') { EroareFaraEliberare `$_.Exception.Message }") -lt 0) { throw 'run_paw nu scrie PAW_EROARE arbore_neoprit' }
   $m = [IO.File]::ReadAllText((Join-Path $pachet 'mil.ps1'))
-  foreach ($s2 in @('[PawV43.Job]::Pids()', '[PawV43.Job]::StopChildren(', 'Wait-Process -Id $pids -Timeout')) { if ($m.IndexOf($s2) -lt 0) { throw ('MilArboreGol fara: ' + $s2) } }
+  foreach ($s2 in @('[PawV43.Job]::Membri()', '[PawV43.Job]::StopChildren(', '-ErrorAction SilentlyContinue -ErrorVariable ev', 'MilArboreRamasi $lista')) { if ($m.IndexOf($s2) -lt 0) { throw ('MilArboreGol fara: ' + $s2) } }
 }
 Remove-Item Function:\AssertMilExe, Function:\AssertMilGazda, Function:\AssertMilMediu, Function:\MilMediu, Function:\MilArboreGol -ErrorAction SilentlyContinue
 . (Join-Path $pachet 'mil.ps1')   # functiile reale din nou

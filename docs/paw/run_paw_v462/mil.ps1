@@ -40,6 +40,12 @@
 #    altfel copia ramane pe loc doar-citire si InvokeMil arunca mil_arbore_neoprit (PID-urile ramase) -> PAW_EROARE;
 #    sursele globale (plugins.json / agents.json / config.json / directoarele plugins, agents, hooks) si mediul copilului
 #    (fara variabile AGY_ / ANTIGRAVITY_ / GEMINI_ / GOOGLE_ / XDG_ / HOME, USERPROFILE = profilul real) verificate.
+# r5 (dupa Jakarinos r4 NO-GO: 2xP1; decizii chat 10.11 00:20):
+#  - confirmarea arborelui DOAR pozitiva: membrii Job-ului ca PID + ora de pornire (PawV43.Job::Membri), Wait-Process cu
+#    -ErrorVariable (orice eroare in afara de "proces negasit", timeout sau exceptie = neconfirmat), apoi re-enumerare dupa
+#    PID + ora de pornire (lista goala) si Job fara membri; neconfirmat = arbore_neoprit (PAW_EROARE cu PID-urile, cod nenul);
+#  - sursele de instructiuni (AGENTS.md, GEMINI.md, rules, skills, workflows, ...) intr-o constanta unica $MIL_SURSE, verificate
+#    in cwd, toti parintii si profil INAINTE de a crea copia; filtrul de material foloseste aceeasi constanta.
 # ASCII only. Compatibil Windows PowerShell 5.1.
 
 $MIL_PROMPT_MAX = 30000      # caractere UTF-16 ale promptului (refuz timpuriu); limita reala = linia finala, mai jos
@@ -60,7 +66,19 @@ $MIL_EXTENSII = @(
 # scriere / ocolire de sandbox, dupa documentatie); copia e oricum un director nou la fiecare rulare.
 $MIL_SETARI_PERMISE = @('colorScheme', 'trustedWorkspaces')
 # r3 (Jakarinos r2 P1): directoarele de personalizare documentate de agy (inclusiv aliasurile), cautate in cwd si in toti parintii
-$MIL_DIR_PERSONALIZARE = @('.agents', '_agents', '.agent', '_agent')
+# r5 (decizie chat): CONSTANTA UNICA a surselor de instructiuni / personalizari / hooks descoperite automat de agy (docs
+# customization-discovery, hooks, rules + changelog-ul agy), citata in RUNBOOK. Folosita de AssertMilConfig si de filtrul de material.
+#  - nume: interzise in cwd-ul copiei, in TOTI parintii pana la radacina discului, in profilul utilizatorului si ca nume de material
+#          (.gemini e permis DOAR in profil, unde i se verifica continutul cu lista "gemini");
+#  - gemini: cai relative la ~/.gemini (profilul) interzise.
+$MIL_SURSE = @{
+  nume = @('.agents', '_agents', '.agent', '_agent', 'AGENTS.md', 'GEMINI.md', '.gemini')
+  gemini = @('AGENTS.md', 'GEMINI.md', 'config.json', 'hooks.json', 'rules', 'skills', 'workflows',
+    'config\AGENTS.md', 'config\GEMINI.md', 'config\config.json', 'config\hooks.json', 'config\hooks', 'config\rules',
+    'config\rules.json', 'config\skills', 'config\skills.json', 'config\workflows', 'config\plugins', 'config\plugins.json',
+    'config\agents', 'config\agents.json', 'antigravity-cli\hooks.json', 'antigravity-cli\plugins', 'antigravity-cli\skills',
+    'antigravity-cli\rules', 'antigravity-cli\workflows')
+}
 $MIL_MATERIAL_MAX = 20; $MIL_MATERIAL_MAX_BYTES = 5MB; $MIL_MATERIAL_TOT_BYTES = 20MB; $MIL_LISTA_MAX_BYTES = 16KB
 $MIL_DIAG_MAX = 4000
 $MIL_JOB_GOL_ASTEPTARE = 15  # secunde: cat se asteapta ca in Job sa ramana doar lansatorul inainte de a reda drepturile copiei
@@ -87,6 +105,21 @@ public static class PawMilAcl {
   [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern uint GetLongPathNameW(string s, StringBuilder l, uint n);
   // forma lunga a unei cai existente (fara nume scurte 8.3), ca sa se compare cu GetFinalPathNameByHandle; altfel neschimbata
   public static string Lunga(string p) { StringBuilder sb = new StringBuilder(1024); uint n = GetLongPathNameW(p, sb, 1024); return (n == 0 || n >= 1024) ? p : sb.ToString(); }
+  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr p, out long c, out long e, out long k, out long u);
+  // r5: starea unui PID: 0 = nu exista (ERROR_INVALID_PARAMETER) sau a iesit; > 0 = ora de pornire a procesului VIU care are
+  // acum PID-ul; -2 = necunoscut (acces refuzat, alta eroare). Doar 0 sau o alta ora de pornire dovedesc iesirea celui enumerat.
+  public static long Viu(uint pid) {
+    IntPtr p = OpenProcess(0x1000u | 0x00100000u, false, pid);
+    if (p == IntPtr.Zero) return Marshal.GetLastWin32Error() == 87 ? 0 : -2;
+    try {
+      if (WaitForSingleObject(p, 0) == 0) return 0;
+      long c, e, k, u;
+      return GetProcessTimes(p, out c, out e, out k, out u) ? c : -2;
+    } finally { CloseHandle(p); }
+  }
   static IntPtr Sd(string sddl) {
     IntPtr sd; if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, out sd, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
     return sd;
@@ -260,24 +293,25 @@ function AssertMilConfig([string]$profil, [string]$cwd) {
   # P1-1 r1: sursele de hooks / configuratie documentate de agy, verificate pe profilul pe care il vede copilul (USERPROFILE).
   if (-not $profil -or -not [IO.Path]::IsPathRooted($profil)) { throw 'mil_profil_necunoscut' }
   $g = Join-Path $profil '.gemini'
-  # r4: toate sursele globale documentate care pot aduce hooks / pluginuri / agenti / redirectionari (09.11.2026: niciuna nu exista)
-  foreach ($r in @('config\hooks.json', 'antigravity-cli\hooks.json', 'config\config.json', 'config.json', 'config\plugins.json',
-                   'config\agents.json', 'config\plugins', 'config\agents', 'config\hooks', 'antigravity-cli\plugins')) {
+  # r4/r5: sursele globale din ~/.gemini (constanta $MIL_SURSE.gemini; 10.11.2026: niciuna nu exista pe server)
+  foreach ($r in $MIL_SURSE.gemini) {
     $f = Join-Path $g $r
     if (MilExista $f) { throw ('mil_config_refuzata (' + $f + ')') }
   }
   # profilul copilului (= profilul real, impus de AssertMilMediu) e singurul loc in care .gemini e asteptat
   $profiluri = @(@($profil, [Environment]::GetFolderPath('UserProfile')) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') })
-  for ($x = [IO.Path]::GetFullPath($cwd); $x; $x = Split-Path $x -Parent) {
-    foreach ($nume in $MIL_DIR_PERSONALIZARE) {
+  # r5: cwd + TOTI parintii pana la radacina discului + profilul (si profilul real), fiecare cu toata lista $MIL_SURSE.nume;
+  # .gemini (inclusiv <repo>/.gemini/config.json cu personal_customization_dir, r4) e refuzat oriunde in afara profilului
+  $locuri = @()
+  for ($x = [IO.Path]::GetFullPath($cwd); $x; $x = Split-Path $x -Parent) { $locuri += $x }
+  $locuri += $profiluri
+  foreach ($x in $locuri) {
+    $inProfil = @($profiluri | Where-Object { $_ -ieq $x.TrimEnd('\') }).Count -gt 0
+    foreach ($nume in $MIL_SURSE.nume) {
+      if ($nume -ceq '.gemini' -and $inProfil) { continue }
       $a = Join-Path $x $nume
       if (MilExista $a) { throw ('mil_config_refuzata (' + $a + ')') }
     }
-    # r4 (Jakarinos r3 P1): <repo>/.gemini/config.json poate redirectiona personalizarile (personal_customization_dir) spre alt
-    # director cu propriul .agents: refuz pe config.json in orice parinte si pe orice .gemini in afara profilului utilizatorului
-    $gd = Join-Path $x '.gemini'
-    if (MilExista (Join-Path $gd 'config.json')) { throw ('mil_config_refuzata (' + (Join-Path $gd 'config.json') + ')') }
-    if (@($profiluri | Where-Object { $_ -ieq $x.TrimEnd('\') }).Count -eq 0 -and (MilExista $gd)) { throw ('mil_config_refuzata (' + $gd + ')') }
   }
   $s = Join-Path $g 'antigravity-cli\settings.json'
   if (MilExista $s) {
@@ -379,6 +413,8 @@ function MilNumeMaterial([string]$cale) {
   # numele din copie: doar basename, fara punct la inceput (.agents, .git, .gemini) sau la sfarsit, fara nume rezervate
   $n = [IO.Path]::GetFileName($cale)
   if ($n -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._\-]{0,99}\z' -or $n.EndsWith('.') -or $n -ieq 'brief.md') { throw ('mil_material_nume_invalid: ' + $n) }
+  # r5: filtrul la copiere = aceeasi constanta (AGENTS.md / GEMINI.md etc., fara diferenta de litere: NTFS nu face diferenta)
+  if (@($MIL_SURSE.nume | Where-Object { $_ -ieq $n }).Count) { throw ('mil_material_sursa_instructiuni: ' + $n) }
   return $n
 }
 
@@ -488,27 +524,49 @@ function AssertMilCopieReadOnly() {
   }
 }
 
+function MilArboreRamasi($lista) {
+  # r5: verificare POZITIVA dupa PID + ora de pornire. Procesul enumerat e iesit DOAR daca PID-ul nu mai exista / e iesit, sau
+  # PID-ul apartine acum altui proces (alta ora de pornire = PID reciclat). Ora necunoscuta la enumerare (-2) cere PID inexistent.
+  $r = @()
+  foreach ($x in @($lista)) {
+    $v = [PawMilAcl]::Viu([uint32]$x.pid)
+    $iesit = ($v -eq 0) -or ($x.start -gt 0 -and $v -gt 0 -and $v -ne $x.start)
+    if (-not $iesit) { $r += ([string]$x.pid + '@' + [string]$x.start) }
+  }
+  return $r
+}
+
 function MilArboreGol() {
-  # P1 r2/r4: drepturile copiei se redau DOAR cand tot arborele agy a iesit, confirmat. Job-ul lansatorului (KILL_ON_JOB_CLOSE,
-  # fara breakaway) contine agy si toti descendentii lui. Pasii (decizia chat r4): (1) PID-urile ENUMERATE din Job, inainte de
-  # oprire; (2) oprirea lor prin Job; (3) Wait-Process pe TOATE PID-urile enumerate, cu plafon; (4) Active() = 1 (doar lansatorul).
-  # Fara job / interogare esuata / plafon expirat = NECUNOSCUT -> gol = $false, cu PID-urile ramase (copia ramane doar-citire).
+  # P1 r2/r4/r5: drepturile copiei se redau DOAR cand TOT arborele agy a iesit, CONFIRMAT POZITIV (decizia chat r5):
+  #  (1) membrii Job-ului (KILL_ON_JOB_CLOSE, fara breakaway: agy + toti descendentii) enumerati inainte de oprire, ca PID + ora
+  #      de pornire (PawV43.Job::Membri); (2) oprire prin Job; (3) Wait-Process pe toti, cu plafon: ORICE iesire care nu e
+  #      "toti au iesit" (timeout, exceptie, alta eroare decat "proces negasit") = NECONFIRMAT; (4) re-enumerare dupa PID + ora de
+  #      pornire: lista celor ramasi trebuie GOALA, iar Job-ul fara membri (Active() = 1 singur NU confirma).
+  # Fara job / interogare esuata / plafon expirat = gol = $false, cu PID-urile ramase (copia ramane doar-citire).
   if (-not ('PawV43.Job' -as [type])) { return @{ gol = $false; ramase = 'fara Job' } }
   $t = [Diagnostics.Stopwatch]::StartNew()
-  $pids = [PawV43.Job]::Pids()
-  if ($null -eq $pids) { return @{ gol = $false; ramase = 'interogarea Job-ului a esuat' } }
-  $pids = @($pids | ForEach-Object { [int]$_ })
-  if ($pids.Count) {
+  $m = [PawV43.Job]::Membri()
+  if ($null -eq $m) { return @{ gol = $false; ramase = 'interogarea Job-ului a esuat' } }
+  $lista = @()
+  foreach ($s in @($m)) {
+    if ([string]$s -cnotmatch '\A([0-9]{1,10}):(-2|[0-9]{1,20})\z') { return @{ gol = $false; ramase = ('membru Job ilizibil: ' + $s) } }
+    $lista += @{ pid = [int64]$Matches[1]; start = [int64]$Matches[2] }
+  }
+  if ($lista.Count) {
     [void][PawV43.Job]::StopChildren(2000)
     $rest = [Math]::Max(1, [int]($MIL_JOB_GOL_ASTEPTARE - $t.Elapsed.TotalSeconds))
-    Wait-Process -Id $pids -Timeout $rest -ErrorAction SilentlyContinue
+    $ev = $null
+    try { Wait-Process -Id @($lista | ForEach-Object { [int]$_.pid }) -Timeout $rest -ErrorAction SilentlyContinue -ErrorVariable ev }
+    catch { return @{ gol = $false; ramase = ('Wait-Process: ' + $_.Exception.Message + '; ramasi: ' + ((MilArboreRamasi $lista) -join ',')) } }
+    $rele = @(@($ev) | Where-Object { $_ -and [string]$_.FullyQualifiedErrorId -notlike 'NoProcessFoundForGivenId*' })
+    if ($rele.Count) { return @{ gol = $false; ramase = ('Wait-Process: ' + [string]$rele[0].FullyQualifiedErrorId + '; enumerati: ' + (@($lista | ForEach-Object { [string]$_.pid + '@' + [string]$_.start }) -join ',')) } }
   }
   while ($true) {
-    $a = [PawV43.Job]::Active()
-    if ($a -eq 1) { return @{ gol = $true; ramase = '' } }
-    if ($a -lt 1 -or $t.Elapsed.TotalSeconds -ge $MIL_JOB_GOL_ASTEPTARE) {
-      $r = [PawV43.Job]::Pids()
-      $txt = if ($null -eq $r) { 'interogarea Job-ului a esuat' } else { 'pid ' + (@($r) -join ',') }
+    $vii = @(MilArboreRamasi $lista)
+    $dupa = [PawV43.Job]::Membri()
+    if ($null -ne $dupa -and $vii.Count -eq 0 -and @($dupa).Count -eq 0 -and [PawV43.Job]::Active() -eq 1) { return @{ gol = $true; ramase = '' } }
+    if ($t.Elapsed.TotalSeconds -ge $MIL_JOB_GOL_ASTEPTARE) {
+      $txt = if ($null -eq $dupa) { 'interogarea Job-ului a esuat' } else { 'ramasi: ' + ((@($vii) + @($dupa)) -join ',') }
       return @{ gol = $false; ramase = $txt }
     }
     Start-Sleep -Milliseconds 200
@@ -568,6 +626,9 @@ function InvokeMil([string]$exe, [string]$model, [string]$briefFull, [int]$timeo
   AssertMilMediu $mediu
   $rez = $null; $jurnaleCreate = $false; $eroare = $null
   try {
+    # r5 (decizie chat): verificarea surselor INAINTE de a crea copia (pe locul ei: parinti pana la radacina + profil)
+    $bazaLunga = if (Test-Path -LiteralPath $baza) { [PawMilAcl]::Lunga([IO.Path]::GetFullPath($baza)) } else { [IO.Path]::GetFullPath($baza) }
+    AssertMilConfig $mediu['USERPROFILE'] (Join-Path $bazaLunga $runId)
     $cwd = MilPregatesteCopie $baza $runId $briefFull $materiale $radacini
     MilBlocheazaCopie
     AssertMilCopieReadOnly
@@ -601,7 +662,7 @@ function InvokeMil([string]$exe, [string]$model, [string]$briefFull, [int]$timeo
   if ($jurnaleCreate -and $arb.gol) { MilStergeJurnale $jurnale }   # doar folderul creat de aceasta rulare
   elseif ($jurnaleCreate) { MilDiag 'jurnale agy pastrate' $jurnale }
   if (-not $arb.gol) {
-    $m = 'mil_arbore_neoprit (' + $arb.ramase + '; copia ramane doar-citire: ' + $dir + ', curatare manuala)'
+    $m = 'arbore_neoprit (' + $arb.ramase + '; copia ramane doar-citire: ' + $dir + ', curatare manuala)'
     if ($eroare) { $m += ' dupa: ' + $eroare.Exception.Message }
     MilDiag 'arbore' $m
     throw $m

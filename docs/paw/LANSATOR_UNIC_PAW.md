@@ -588,14 +588,13 @@ agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeo
   - lansatorul păstrează handle-uri WRITE_DAC luate înainte de blocare (nemoștenite), cu care redă drepturile și șterge copia la final;
   - înainte de rulare, probele de scriere (fișier, director, scriere, ștergere, WRITE_DAC, ACL pe cale) TREBUIE să pice;
   - lansator elevat = refuz;
-  - r3 / r4 (Jakarinos r2 P1, decizia chat): după orice ieșire (rezultat, timeout, excepție în preflight / sondă / rulare):
-    - PID-urile arborelui se enumeră din Job (`PawV43.Job::Pids`) înainte de oprire;
-    - se opresc prin Job, apoi `Wait-Process` pe toate, cu plafon de 15 s;
-    - la final trebuie `ActiveProcesses = 1` (doar lansatorul). Numai atunci se redau drepturile și se șterge copia;
-    - altfel copia (și jurnalele agy) rămân pe loc, copia doar-citire, și rularea e `PAW_EROARE … mil_arbore_neoprit (pid …)`. Curățare manuală, din admin (runbook).
+  - r3 / r4 / r5 (Jakarinos r2–r4 P1, deciziile chat-ului): după orice ieșire (rezultat, timeout, excepție în preflight / sondă / rulare):
+    - membrii Job-ului se enumeră ca PID + oră de pornire (`PawV43.Job::Membri`) înainte de oprire;
+    - se opresc prin Job, apoi `Wait-Process` pe toți, cu plafon de 15 s. ORICE ieșire care nu e „toți au ieșit” (timeout, excepție, altă eroare decât „proces negăsit”) = neconfirmat;
+    - confirmarea e DOAR pozitivă: re-enumerare după PID + ora de pornire (un PID reciclat nu e confundat), lista celor rămași GOALĂ și Job-ul fără membri (`ActiveProcesses = 1` singur nu ajunge). Numai atunci se redau drepturile și se șterge copia;
+    - altfel copia (și jurnalele agy) rămân pe loc, copia doar-citire, iar rularea e `PAW_EROARE <id> arbore_neoprit (…)` cu PID-urile, cod nenul, lock ținut până la ieșire. Curățare manuală, din admin (runbook).
 - **Hooks (r2, Jakarinos r1 P1-1; r3: aliasuri, Jakarinos r2 P1):**
-  - refuz dacă există în profil `hooks.json` (`.gemini/config`, `.gemini/antigravity-cli`), `config.json` (`.gemini`, `.gemini/config`), `plugins.json`, `agents.json` sau directoarele `plugins` / `agents` / `hooks` din `.gemini/config` (și `antigravity-cli/plugins`);
-  - refuz dacă există un director de personalizare (`.agents`, `_agents`, `.agent`, `_agent`) în cwd ori în oricare părinte, până la rădăcina discului;
+  - r5: o singură constantă, `$MIL_SURSE` din `mil.ps1` (listată integral în runbook), cu sursele de hooks, reguli, skills, workflows, pluginuri, agenți și instrucțiuni (`AGENTS.md`, `GEMINI.md`). Se verifică ÎNAINTE de a crea copia: în cwd, în toți părinții până la rădăcina discului și în profil (`~/.gemini/...`). Aceeași constantă filtrează numele de material (`AGENTS.md`, `GEMINI.md` etc., fără diferență de litere);
   - r4: refuz pe `.gemini/config.json` în orice părinte (redirecționarea `personal_customization_dir` dintr-un repo părinte) și pe orice `.gemini` dintr-un părinte care nu e profilul utilizatorului;
   - r4: mediul copilului = doar lista albă, verificat explicit: nicio variabilă `AGY_*`, `ANTIGRAVITY_*` (ex. `ANTIGRAVITY_CONFIG_REL_DIR`, `ANTIGRAVITY_PERM_GRANTS`), `GEMINI_*`, `GOOGLE_*`, `XDG_*`, `HOME`; `USERPROFILE` = profilul real;
   - `settings.json` doar cu cheile existente azi (`colorScheme`, `trustedWorkspaces`; a doua e o decizie de încredere a agy, nu un drept de scriere);
@@ -619,7 +618,7 @@ agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeo
 - Procesele aceluiași utilizator Windows nu sunt frontieră (ca la v4): pot înlocui `agy.exe` cu alt binar semnat Google sau pot schimba setările agy între verificări.
 
 **Teste:**
-- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 28 de cazuri, fără Pester, fără apel de model. Copia doar-citire se face real (ACL-uri reale) într-un director temporar. 21 de mutații țintite (OWNER RIGHTS, hooks, `.agents` și aliasuri, `.gemini` din părinte, surse globale, mediu, limita, sonda, diagnostice, permisiuni, sandbox, probe, setări, arborele la curățare): toate prinse.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 29 de cazuri, fără Pester, fără apel de model. Copia doar-citire se face real (ACL-uri reale) într-un director temporar. Confirmarea arborelui e testată cu procese și `Wait-Process` reale (timeout, PID reciclat, proces viu după așteptare, membri rămași, excepție, cazul pozitiv). 21 de mutații țintite până la r4 + 7 la r5 (erorile `Wait-Process` ignorate, ora de pornire ignorată, membri rămași ignorați, `AGENTS.md` scos, filtrul de material scos, verificarea dinaintea copiei scoasă, arborele ignorat): toate prinse.
 - `teste\sonda_mil_reala.ps1`: integrare cu `agy.exe` real până la sondă inclusiv: copie → probe → configurație → preflight → sondă → curățare. Rulează în Job-ul lansatorului (aceeași definiție) și curăță doar cu Job-ul confirmat gol. Fără apel de model: jurnalul sondei trebuie să spună „0 turn(s)”, fără `streamGenerateContent`.
 - Citarea e verificată cu parserul real `CommandLineToArgvW`.
 - Refuzurile de cale sunt verificate pe UNC, ADS, ghilimele, traversal și junction real.
