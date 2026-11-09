@@ -61,6 +61,12 @@ export function aplicaPropunere(form, initial, propuseVechi = [], valoriNoi = {}
   return f
 }
 
+// r4 (Jakarinos r3 P2-4): o eroare e „sigur eșec” doar dacă vine de la server cu cod (SQLSTATE de 5 caractere sau PGRSTnnn).
+// Rețea / timeout / răspuns pierdut = necunoscut: nu se compensează (nu se șterge fișierul nou), se reîncarcă starea.
+export function esecDeterminist(error) {
+  return /^([0-9A-Z]{5}|PGRST[0-9]{3})$/.test(String(error?.code || ''))
+}
+
 // codurile din RPC / edge → mesaj pentru om (fără termeni tehnici)
 const MESAJE = {
   fara_drept: 'Nu ai drept să salvezi polițe.',

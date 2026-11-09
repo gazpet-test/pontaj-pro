@@ -24,9 +24,10 @@ Deno.serve(async (req) => {
   const apelant = await cronSauOwner(req, sb)
   if (!apelant) return json({ ok: false, error: 'neautorizat' }, 401)
   // r3 (Jakarinos r2 P2-3): reconcilierea rezervarilor ramase (> 1 h -> „necunoscut”) la FIECARE apel, inaintea filtrului de ora / comutator
+  // r4 (Jakarinos r3 P2-5): esecul reconcilierii NU e raportat ca succes (ok:false + 500), oricare ar fi ramura de mai jos
   const { data: reconciliate, error: erc } = await sb.rpc('fn_polite_alerte_reconciliaza', {})
-  if (erc) console.error('reconciliere', erc.code)
-  if (apelant === 'cron' && oraRO() !== 7) return json({ ok: true, skip: 'ora', reconciliate: erc ? null : reconciliate })
+  if (erc) { console.error('reconciliere', erc.code); return json({ ok: false, error: 'reconciliere_indisponibila' }, 500) }
+  if (apelant === 'cron' && oraRO() !== 7) return json({ ok: true, skip: 'ora', reconciliate })
   const resend = Deno.env.get('RESEND_API_KEY')
   // fara cheie nu se rezerva nimic (altfel randurile ar ramane „rezervat” fara sa plece)
   if (!resend) return json({ ok: false, error: 'resend_neconfigurat' }, 500)

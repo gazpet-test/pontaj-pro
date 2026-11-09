@@ -20,7 +20,7 @@ import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
 import { stareLegaturaDinCitire, santierInitial, salveazaContractSiLegatura } from './executieContractLegatura.js'
 // Polițe 20261205a: citirea documentului la încărcare (propunere de confirmat) + salvarea confirmată
 import PolitaCitire, { stilCampPropus } from './PolitaCitire.jsx'
-import { formDinPropunere, mesajEroare, aplicaPropunere } from './polite.js'
+import { formDinPropunere, mesajEroare, aplicaPropunere, esecDeterminist } from './polite.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -1812,8 +1812,9 @@ function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
       // Polițe r3 (L02): fișierul vechi se șterge DOAR după scrierea confirmată; la eșec se șterge cel nou urcat
       const{data:scris,error}=isEdit?await supabase.from('contracte_polite').update(payload).eq('id',item.id).select('id'):await supabase.from('contracte_polite').insert(payload).select('id')
       if(error||!scris?.length){
-        if(nou)await supabase.storage.from('contracte-terti').remove([nou])
-        throw new Error(error?mesajEroare(error):'Polița nu a fost salvată (lipsă drept sau ștearsă între timp).')
+        const sigur=!error||esecDeterminist(error)
+        if(nou&&sigur)await supabase.storage.from('contracte-terti').remove([nou])
+        throw new Error(!error?'Polița nu a fost salvată (lipsă drept sau ștearsă între timp).':sigur?mesajEroare(error):'Nu se știe dacă salvarea a reușit (conexiune întreruptă). Reîncarcă pagina înainte să încerci din nou.')
       }
       if(nou&&item?.pdf_path&&item.pdf_path!==nou&&!item.pdf_path.startsWith('polite/propuneri/'))await supabase.storage.from('contracte-terti').remove([item.pdf_path])
       onSaved()
@@ -1926,8 +1927,9 @@ function PolitaActModal({ item, onClose, onSaved, onError }) {
       // Polițe r3 (L02): fișierul vechi se șterge DOAR după scrierea confirmată; la eșec se șterge cel nou urcat
       const{data:scris,error}=isEdit?await supabase.from('contracte_polite_acte').update(payload).eq('id',item.id).select('id'):await supabase.from('contracte_polite_acte').insert(payload).select('id')
       if(error||!scris?.length){
-        if(nou)await supabase.storage.from('contracte-terti').remove([nou])
-        throw new Error(error?mesajEroare(error):'Actul nu a fost salvat (lipsă drept sau șters între timp).')
+        const sigur=!error||esecDeterminist(error)
+        if(nou&&sigur)await supabase.storage.from('contracte-terti').remove([nou])
+        throw new Error(!error?'Actul nu a fost salvat (lipsă drept sau șters între timp).':sigur?mesajEroare(error):'Nu se știe dacă salvarea a reușit (conexiune întreruptă). Reîncarcă pagina înainte să încerci din nou.')
       }
       if(nou&&item?.pdf_path&&item.pdf_path!==nou&&!item.pdf_path.startsWith('polite/propuneri/'))await supabase.storage.from('contracte-terti').remove([item.pdf_path])
       onSaved()

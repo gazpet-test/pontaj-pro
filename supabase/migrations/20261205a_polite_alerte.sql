@@ -22,7 +22,7 @@
 -- NU atinge: garantii_alerte() (owner-ul primeste in continuare alertele Registrului; datele coincid prin sincronizare), gbe_polite,
 --   politicile RLS existente pe contracte_polite / garantii / storage, user_module_access.
 -- Ordinea lock-urilor (L06), pe toate caile: polite_propuneri -> contracte_polite -> contracte_polite_acte -> garantii (randurile instructiunii)
---   -> lock-ul consultativ al politei (doar in triggerele AFTER si la legare) -> randurile deja legate din garantii (r3, vezi sectiunea 5).
+--   -> lock-ul consultativ al politei (triggere); cine il tine nu mai asteapta randuri: reimprospatarea foloseste SKIP LOCKED (r4, sectiunea 5).
 -- Revenire: supabase/revenire/20261205a_polite_alerte_ROLLBACK.sql. Test: scripts/test_polite_alerte.sh (PG17 local, chat).
 -- Amprenta structurii: calculata la final si pastrata in COMMENT ON TABLE polite_alerte_config; revenirea o recalculeaza (aceeasi
 --   interogare) si refuza la diferenta. Dupa DRY-ul pe clona, chat-ul poate fixa constanta in ambele fisiere.
@@ -323,26 +323,32 @@ CREATE TRIGGER trg_polite_provenienta BEFORE INSERT OR UPDATE ON public.contract
   FOR EACH ROW EXECUTE FUNCTION public.fn_polite_provenienta();
 
 -- randul din Registru legat: campurile documentului vin din polita (sursa unica), copiate EXACT (fara pastrarea valorilor vechi).
--- Serializarea legare <-> modificarea politei / actelor (r3, Jakarinos r1 P1-3 + r2 P1): un lock CONSULTATIV pe polita,
--- pg_advisory_xact_lock(hashtext('polite_registru'), <id polita>), luat:
---   * aici, la LEGARE (INSERT sau schimbarea contract_polita_id), inaintea citirii politei / actelor;
---   * in fn_polite_reimprospateaza_garantii (trigger AFTER pe polita / acte), inaintea UPDATE-ului pe garantii; la mutarea unui act,
---     pe ambele polite, in ordinea id-ului.
--- De ce nu lock pe randul politei (r2): un trigger pe acte ar lua FOR UPDATE pe polita DUPA lock-ul randului actului si dupa KEY SHARE-ul
--- FK-ului => cicluri (doua acte pe aceeasi polita, mutari opuse, UPDATE act vs DELETE polita cu CASCADE). Lock-ul consultativ nu e
--- cerut de FK / CASCADE / DELETE, iar triggerele AFTER ROW se executa la finalul instructiunii, dupa toate lock-urile ei de rand =>
--- ordinea pe toate caile e: randurile instructiunii (polita / act / garantii) -> lock-ul consultativ -> UPDATE garantii pe randurile
--- deja legate. Cine leaga citeste dupa lock (instructiune noua = snapshot nou); cine modifica polita reimprospateaza dupa lock.
+-- Serializarea Registru <-> polita / acte (r4, Jakarinos r1 P1-3, r2 P1, r3 P1): un lock CONSULTATIV pe polita,
+-- pg_advisory_xact_lock(hashtext('polite_registru'), <id polita>). Regula care exclude ciclurile: CINE TINE LOCK-UL CONSULTATIV NU
+-- ASTEAPTA NICIUN LOCK DE RAND DIN garantii / contracte_polite / contracte_polite_acte.
+--   * Scrierea unui rand legat (INSERT, UPDATE, re-legare): randul garantii e deja blocat de instructiune; triggerul BEFORE ia
+--     consultativul (politele veche si noua, in ordinea id-ului) si abia apoi CITESTE polita / actele (instructiune noua = snapshot nou).
+--     Dupa consultativ poate urma doar verificarea FK pe polita (KEY SHARE), in conflict numai cu stergerea politei, iar stergerea nu cere
+--     consultativul (vezi mai jos) => niciun ciclu prin el.
+--   * Reimprospatarea dupa o schimbare a politei / actelor (trigger AFTER, la finalul instructiunii): ia consultativul, apoi actualizeaza
+--     randurile legate cu FOR NO KEY UPDATE SKIP LOCKED. Un rand sarit e blocat de o scriere pe el, care va lua consultativul DUPA noi si
+--     va recopia (sau e o stergere / o deslegare, unde copia nu mai conteaza).
+--   * Stergerea actelor prin CASCADE, dupa ce polita a fost stearsa, nu cere consultativul (polita nu mai exista; un rand legat ar fi
+--     blocat stergerea prin FK RESTRICT).
+--   * Intr-o instructiune, consultativele se iau in ordinea id-ului; prin PostgREST fiecare cerere e o singura instructiune.
+-- Limita declarata: un rand blocat de un SELECT ... FOR UPDATE fara scriere ulterioara ar ramane cu copia veche pana la urmatoarea
+-- schimbare a politei (nicio cale din aplicatie nu face asta pe garantii).
 -- r2 (Jakarinos r1 P2-5): polita fara asigurator / nr. / valoare (inclusiv dupa stergerea ultimului act cu valoare) sau de tip „altul”
 -- nu poate avea rand in Registru: refuz explicit, nu valoarea veche pastrata tacit.
 CREATE FUNCTION public.fn_polite_garantii_din_polita() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_p record; v_exp date; v_val numeric;
+DECLARE v_p record; v_exp date; v_val numeric; v_id bigint;
 BEGIN
   IF NEW.contract_polita_id IS NULL THEN RETURN NEW; END IF;
-  IF TG_OP = 'INSERT' OR OLD.contract_polita_id IS DISTINCT FROM NEW.contract_polita_id THEN
-    PERFORM pg_advisory_xact_lock(hashtext('polite_registru'), NEW.contract_polita_id::integer);
-  END IF;
+  FOR v_id IN SELECT DISTINCT x FROM unnest(ARRAY[NEW.contract_polita_id, CASE WHEN TG_OP = 'UPDATE' THEN OLD.contract_polita_id END]) x
+               WHERE x IS NOT NULL ORDER BY x LOOP
+    PERFORM pg_advisory_xact_lock(hashtext('polite_registru'), v_id::integer);
+  END LOOP;
   SELECT cp.* INTO v_p FROM public.contracte_polite cp WHERE cp.id = NEW.contract_polita_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'polita_inexistenta' USING ERRCODE = '23503'; END IF;
   SELECT max(a.data_expirare_noua) INTO v_exp FROM public.contracte_polite_acte a WHERE a.polita_id = v_p.id;
@@ -365,8 +371,8 @@ END $fn$;
 CREATE TRIGGER trg_polite_garantii_din_polita BEFORE INSERT OR UPDATE ON public.garantii
   FOR EACH ROW WHEN (NEW.contract_polita_id IS NOT NULL) EXECUTE FUNCTION public.fn_polite_garantii_din_polita();
 
--- o schimbare pe polita / actele ei reimprospateaza randul legat (UPDATE => triggerul de mai sus recopiaza), sub lock-ul consultativ
--- al politei (ordinea: vezi comentariul de mai sus; la mutarea unui act, cele doua polite in ordinea id-ului).
+-- o schimbare pe polita / actele ei reimprospateaza randurile legate (UPDATE => triggerul de mai sus recopiaza), dupa regula de mai sus:
+-- consultativul (la mutarea unui act, ambele polite in ordinea id-ului), apoi doar randurile NEblocate (SKIP LOCKED).
 CREATE FUNCTION public.fn_polite_reimprospateaza_garantii() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_ids bigint[]; v_id bigint;
@@ -374,6 +380,8 @@ BEGIN
   IF TG_TABLE_NAME = 'contracte_polite' THEN
     v_ids := ARRAY[NEW.id];
   ELSIF TG_OP = 'DELETE' THEN
+    -- CASCADE din stergerea politei: polita nu mai exista => nimic de reimprospatat, fara consultativ
+    IF NOT EXISTS (SELECT 1 FROM public.contracte_polite cp WHERE cp.id = OLD.polita_id) THEN RETURN NULL; END IF;
     v_ids := ARRAY[OLD.polita_id];
   ELSIF TG_OP = 'UPDATE' AND OLD.polita_id IS DISTINCT FROM NEW.polita_id THEN
     v_ids := ARRAY[least(OLD.polita_id, NEW.polita_id), greatest(OLD.polita_id, NEW.polita_id)];
@@ -383,7 +391,8 @@ BEGIN
   FOREACH v_id IN ARRAY v_ids LOOP
     PERFORM pg_advisory_xact_lock(hashtext('polite_registru'), v_id::integer);
   END LOOP;
-  UPDATE public.garantii g SET updated_at = now() WHERE g.contract_polita_id = ANY (v_ids);
+  UPDATE public.garantii g SET updated_at = now()
+   WHERE g.id IN (SELECT x.id FROM public.garantii x WHERE x.contract_polita_id = ANY (v_ids) ORDER BY x.id FOR NO KEY UPDATE SKIP LOCKED);
   RETURN NULL;
 END $fn$;
 CREATE TRIGGER trg_polite_reimprospateaza_garantii AFTER UPDATE ON public.contracte_polite
@@ -726,7 +735,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 $fn$;
 
 -- 8g. salvarea confirmata de om (UI): polita noua / act aditional / rand de Registru, cu sau fara propunere, intr-o singura tranzactie (L02).
---     Ordinea lock-urilor: propunerea -> polita de baza -> (garantii prin INSERT). Fara propunere: provenienta 'manual'.
+--     Ordinea lock-urilor: propunerea (FOR UPDATE) -> randurile inserate -> consultativul politei in triggere (sectiunea 5). Fara propunere: provenienta 'manual'.
 CREATE FUNCTION public.fn_polita_salveaza(p_propunere_id bigint, p_date jsonb, p_registru jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_p public.polite_propuneri%ROWTYPE; v_tinta text; v_tip text; v_moneda text; v_status text; v_contract bigint; v_baza bigint;
@@ -753,8 +762,8 @@ BEGIN
   v_emit := public.fn_polite_data(p_date, 'data_emitere');
   IF v_tinta = 'act' THEN
     v_baza := (p_date->>'polita_id')::bigint;
-    PERFORM 1 FROM public.contracte_polite cp WHERE cp.id = v_baza FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION 'polita_inexistenta' USING ERRCODE = '22023'; END IF;
+    -- r4 (Jakarinos r3 P1): fara FOR UPDATE pe polita; existenta o garanteaza FK-ul actului (KEY SHARE), compatibil cu legarea concurenta
+    IF NOT EXISTS (SELECT 1 FROM public.contracte_polite cp WHERE cp.id = v_baza) THEN RAISE EXCEPTION 'polita_inexistenta' USING ERRCODE = '22023'; END IF;
     v_nr_act := (p_date->>'nr_act')::integer;
     IF v_nr_act IS NULL OR v_nr_act < 1 OR v_nr_act > 999 THEN RAISE EXCEPTION 'nr_act_invalid' USING ERRCODE = '22023'; END IF;
     v_exp := public.fn_polite_data(p_date, 'data_expirare_noua');

@@ -216,3 +216,15 @@ describe('mailul zilnic', () => {
     expect(stareDupaTrimitere({ ok: false, status: 409 }).stare).toBe('necunoscut')
   })
 })
+
+describe('esecDeterminist (r4, Jakarinos r3 P2-4)', () => {
+  it('doar eroarea cu cod de la server e esec sigur; reteaua / timeout-ul sunt necunoscute', async () => {
+    const { esecDeterminist } = await import('./polite.js')
+    expect(esecDeterminist({ code: '23514', message: 'check' })).toBe(true)
+    expect(esecDeterminist({ code: 'PGRST116' })).toBe(true)
+    expect(esecDeterminist({ code: 'P0001' })).toBe(true)
+    expect(esecDeterminist({ message: 'TypeError: Failed to fetch' })).toBe(false)
+    expect(esecDeterminist({ code: '', message: 'timeout' })).toBe(false)
+    expect(esecDeterminist(null)).toBe(false)
+  })
+})

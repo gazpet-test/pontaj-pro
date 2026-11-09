@@ -113,6 +113,65 @@ doua c6 "UPDATE public.contracte_polite_acte SET descriere = 'x' WHERE id = 7003
 grep -l "deadlock" "$L"/c*.log && fail "deadlock in testul de concurenta"
 ok "concurenta: 6/6 (polita, act, ordinea inversa, doua acte, mutari opuse, CASCADE), fiecare cu B blocat efectiv pe lock, fara deadlock"
 
+echo "== intercalari fortate (r4, Jakarinos r3 P1 + P2): A se opreste EXACT intre verificarea FK si triggerul de reimprospatare"
+# Triggere DOAR de test (baza conc, nu in migrare): numele „s_pauza_test” se ordoneaza dupa RI_ConstraintTrigger_* (FK) si inaintea
+# trg_polite_* => pauza cade dupa lock-urile FK / de rand ale instructiunii si inaintea lock-ului consultativ. Activ doar cu test.pauza = da.
+"${PS[@]}" -d conc -f - >/dev/null <<'SQL' || fail "triggerele de pauza"
+CREATE FUNCTION public.zz_test_pauza() RETURNS trigger LANGUAGE plpgsql AS $p$
+BEGIN IF current_setting('test.pauza', true) = 'da' THEN PERFORM pg_sleep(3); END IF; RETURN coalesce(NEW, OLD); END $p$;
+CREATE TRIGGER s_pauza_test AFTER INSERT OR UPDATE OR DELETE ON public.contracte_polite_acte FOR EACH ROW EXECUTE FUNCTION public.zz_test_pauza();
+CREATE TRIGGER s_pauza_test BEFORE UPDATE ON public.garantii FOR EACH ROW EXECUTE FUNCTION public.zz_test_pauza();
+INSERT INTO public.contracte_polite (id, contract_id, tip, asigurator, nr_polita, valoare_lei, data_expirare) VALUES
+  (968, 17, 'GBE', 'ASIG', 'C-968', 100, '2027-01-01'), (969, 17, 'GBE', 'ASIG', 'C-969', 100, '2027-01-01'), (970, 17, 'GBE', 'ASIG', 'C-970', 100, '2027-01-01'),
+  (971, 17, 'CAR', 'ASIG', 'C-971', 100, '2027-01-01'), (972, 17, 'GBE', 'ASIG', 'C-972', 100, '2027-01-01'), (973, 17, 'GBE', 'ASIG', 'C-973', 100, '2027-01-01'),
+  (974, 18, 'GPL', 'ASIG', 'C-974', 100, '2027-01-01');
+INSERT INTO public.garantii (id, forma, tip, beneficiar, valoare, moneda, stare) VALUES
+  (867, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'), (868, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'),
+  (869, 'polita_asigurare', 'car', 'B', 1, 'RON', 'activa'), (870, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'),
+  (871, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa');
+UPDATE public.garantii SET contract_polita_id = CASE id WHEN 868 THEN 969 WHEN 869 THEN 971 WHEN 870 THEN 972 WHEN 871 THEN 973 END WHERE id IN (868, 869, 870, 871);
+INSERT INTO public.contracte_polite_acte (id, polita_id, nr_act, data_expirare_noua) VALUES
+  (7004, 969, 1, '2031-06-30'), (7005, 972, 1, '2030-02-01'), (7006, 973, 1, '2030-03-01'), (7007, 974, 1, '2028-06-30');
+SQL
+pauza() { # $1 nume; $L/$1_a.sql (cu pauza) si $L/$1_b.sql; B porneste cand A e in pg_sleep; ambele trebuie sa se termine fara eroare
+  "${PS[@]}" -d conc -f "$(m "$L/$1_a.sql")" > "$L/c$1a.log" 2>&1 & local PA=$!
+  in_somn || fail "$1: A n-a ajuns in pauza"
+  "${PS[@]}" -d conc -f "$(m "$L/$1_b.sql")" > "$L/c$1b.log" 2>&1 & local PB=$!
+  wait $PA || { cat "$L/c$1a.log"; fail "$1: A"; }
+  wait $PB || { cat "$L/c$1b.log"; fail "$1: B"; }
+}
+# p1) ciclul RPC din r3: A = fn_polita_salveaza(act pe 968) oprit dupa FK (KEY SHARE pe polita); B leaga 867 de 968 in timpul pauzei
+cat > "$L/p1_a.sql" <<'SQL'
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', false);
+SET test.pauza = 'da';
+SELECT public.fn_polita_salveaza(NULL, '{"tinta":"act","polita_id":968,"nr_act":1,"data_expirare_noua":"2031-01-01"}'::jsonb, NULL);
+SQL
+echo "UPDATE public.garantii SET contract_polita_id = 968 WHERE id = 867;" > "$L/p1_b.sql"
+pauza p1
+[ "$("${PS[@]}" -d conc -Atc "SELECT data_expirare FROM public.garantii WHERE id = 867")" = 2031-01-01 ] || fail "p1: Registrul nu are actul salvat prin RPC"
+# p2) ciclul direct din r3: A re-leaga 868 de la 969 la 970 (oprit cu randul garantii blocat, inaintea consultativului); B muta actul 7004 969 -> 970
+printf "SET test.pauza = 'da';\nUPDATE public.garantii SET contract_polita_id = 970 WHERE id = 868;\n" > "$L/p2_a.sql"
+echo "UPDATE public.contracte_polite_acte SET polita_id = 970 WHERE id = 7004;" > "$L/p2_b.sql"
+pauza p2
+[ "$("${PS[@]}" -d conc -Atc "SELECT contract_polita_id || ':' || data_expirare FROM public.garantii WHERE id = 868")" = "970:2031-06-30" ] || fail "p2: re-legarea nu vede actul mutat"
+# p3) doua acte noi pe aceeasi polita legata: A oprit dupa FK (KEY SHARE), B insereaza complet in timpul pauzei
+printf "SET test.pauza = 'da';\nINSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (971, 1, '2032-01-01');\n" > "$L/p3_a.sql"
+echo "INSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (971, 2, '2033-01-01');" > "$L/p3_b.sql"
+pauza p3
+[ "$("${PS[@]}" -d conc -Atc "SELECT data_expirare FROM public.garantii WHERE id = 869")" = 2033-01-01 ] || fail "p3: doua acte"
+# p4) mutari opuse: A muta 7005 972 -> 973 (oprit dupa FK pe 973); B muta 7006 973 -> 972 in timpul pauzei
+printf "SET test.pauza = 'da';\nUPDATE public.contracte_polite_acte SET polita_id = 973 WHERE id = 7005;\n" > "$L/p4_a.sql"
+echo "UPDATE public.contracte_polite_acte SET polita_id = 972 WHERE id = 7006;" > "$L/p4_b.sql"
+pauza p4
+[ "$("${PS[@]}" -d conc -Atc "SELECT string_agg(id || ':' || data_expirare, ',' ORDER BY id) FROM public.garantii WHERE id IN (870, 871)")" = "870:2030-03-01,871:2030-02-01" ] || fail "p4: mutari opuse"
+# p5) UPDATE pe act (oprit, cu randul actului blocat) vs DELETE al politei cu CASCADE
+printf "SET test.pauza = 'da';\nUPDATE public.contracte_polite_acte SET descriere = 'x' WHERE id = 7007;\n" > "$L/p5_a.sql"
+echo "DELETE FROM public.contracte_polite WHERE id = 974;" > "$L/p5_b.sql"
+pauza p5
+[ "$("${PS[@]}" -d conc -Atc "SELECT count(*) FROM public.contracte_polite WHERE id = 974")" = 0 ] || fail "p5: CASCADE"
+grep -l "deadlock" "$L"/cp*.log && fail "deadlock in intercalarile fortate"
+ok "intercalari fortate: 5/5 (RPC act + legare, re-legare + mutare act, doua acte, mutari opuse, act + CASCADE), fara deadlock"
+
 echo "== a doua aplicare refuzata"
 aplica app "$MIG" && fail "a doua aplicare a trecut"
 ok "a doua aplicare refuzata: $(grep -o 'ERROR:.*' "$L/a.log" | head -1)"
@@ -135,7 +194,7 @@ MUTANTI=(
   # r2 (amprenta extinsa, Jakarinos r1 P2-11): drepturi pe tabele si dependenta fn_poate_scrie_garantii
   "REVOKE SELECT ON public.polite_propuneri FROM service_role;"
   "GRANT SELECT ON public.polite_alerte_jurnal TO anon;"
-  "CREATE OR REPLACE FUNCTION public.fn_poate_scrie_garantii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;"
+  "CREATE OR REPLACE FUNCTION public.fn_poate_scrie_garantii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$ SELECT true \$f\$;"
 )
 i=0
 for mut in "${MUTANTI[@]}"; do
