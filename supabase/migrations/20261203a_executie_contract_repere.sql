@@ -20,9 +20,11 @@
 --   * Proveniența (L08): modificat_de / modificat_la / versiune le pune trigger-ul, la orice INSERT / UPDATE (și la importul făcut ca postgres).
 -- Ce NU face: nicio dată (fișa Lot 1 o încarcă chat-ul după „da”-ul lui Răzvan, cu SQL generat în afara repo-ului), niciun drept,
 --   nicio atingere pe executie_proiecte sau pe alte tabele.
--- Ordinea lock-urilor (L06): advisory pe proiect (hashtextextended('executie_contract_repere:' || proiect_id, 0)) -> rândul FOR UPDATE ->
---   INSERT în executie_contract_repere_chei (FK spre rândul deja blocat). Importul (postgres) ia același advisory înainte de upsert și nu
---   atinge tabelul cheilor. Nimic altceva nu se blochează.
+-- Ordinea lock-urilor (L06): advisory pe proiect (hashtextextended('executie_contract_repere:' || proiect_id, 0)) -> tabelul
+--   executie_contract_repere în ROW EXCLUSIVE (ÎNAINTEA oricărei atingeri a jurnalului: altfel citirea jurnalului ar ține ACCESS SHARE pe el
+--   în timp ce revenirea ține fișa și așteaptă jurnalul = blocare circulară) -> rândul FOR UPDATE -> jurnalul cheilor (citire, apoi INSERT cu
+--   FK spre rândul deja blocat). Revenirea: fișa, apoi jurnalul (aceeași ordine). Importul (postgres) ia același advisory înainte de upsert și
+--   nu atinge jurnalul. Nimic altceva nu se blochează.
 -- Revenire: supabase/revenire/20261203a_executie_contract_repere_ROLLBACK.sql. Test pe clonă: scripts/test_executie_contract_repere.sql.
 DO $pre$
 BEGIN
@@ -200,6 +202,7 @@ BEGIN
   END LOOP;
 
   PERFORM pg_advisory_xact_lock(hashtextextended('executie_contract_repere:' || p_proiect, 0));
+  LOCK TABLE public.executie_contract_repere IN ROW EXCLUSIVE MODE;   -- fișa înaintea jurnalului, pe toate căile (L06; review r2)
   IF p_id IS NOT NULL THEN
     SELECT * INTO r FROM public.executie_contract_repere WHERE id = p_id FOR UPDATE;
     IF NOT FOUND OR r.proiect_id IS DISTINCT FROM p_proiect OR NOT public.fn_executie_contract_drept(r.proiect_id, true) THEN

@@ -10,7 +10,7 @@
 --   COMMIT;
 -- harness-armare: gazpet.revenire_20261203a SCOATE_CONTRACT_REPERE
 -- Ordinea lock-urilor: executie_contract_repere, apoi executie_contract_repere_chei, ambele ACCESS EXCLUSIVE, ÎNAINTEA verificării „gol”
--- (un RPC concurent nu poate scrie un rând numărat 0 și apoi pierdut la DROP). Aceeași ordine ca RPC-ul (rândul, apoi cheia); aici nu se
+-- (un RPC concurent nu poate scrie un rând numărat 0 și apoi pierdut la DROP). Aceeași ordine ca RPC-ul (care ia fișa în ROW EXCLUSIVE înaintea oricărei atingeri a jurnalului); aici nu se
 -- ia niciun advisory -> fără ciclu.
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează (nimic nu rulează după el), iar harness-ul îi verifică mesajul.
 DO $revenire$
