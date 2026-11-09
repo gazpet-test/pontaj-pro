@@ -11,7 +11,7 @@ fără MS Project și fără licență, și se afișează în Execuție -> proie
 - `cazuri_sql.py` — cazurile COMUNE de validare (`test-fixtures/grafic/cazuri_validare.json`) -> `scripts/fixtures/grafic/cazuri_validare.sql`:
   aceleași documente sunt refuzate / acceptate de `valideaza_document` (Python) și de `fn_executie_grafic_importa` (harness-ul SQL).
   După orice schimbare a cazurilor: `python -I -X utf8 scripts/grafic/cazuri_sql.py` (testul Python verifică că fișierul e la zi).
-- Schema: `supabase/migrations/20261202a_executie_grafic.sql` (+ revenirea din `supabase/revenire/`, harness `scripts/test_executie_grafic.sql`).
+- Schema: `supabase/migrations/20261204a_executie_grafic.sql` (+ revenirea din `supabase/revenire/`, harness `scripts/test_executie_grafic.sql`).
 
 ## Pregătire (o dată, pe calculatorul care rulează importul)
 ```

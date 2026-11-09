@@ -2,7 +2,7 @@
 
 Pasul 1 din legarea MS Project <-> ERP (Execuție -> 📅 Grafic): citire cu MPXJ, fără MS Project și fără licență.
 Scriptul NU scrie în baza de date: produce JSON-ul (și, opțional, fișierul SQL de import pentru chat, rulat după „da”-ul lui Răzvan,
-care cheamă public.fn_executie_grafic_importa din migrarea 20261202a).
+care cheamă public.fn_executie_grafic_importa din migrarea 20261204a).
 
 Utilizare (din rădăcina repo-ului; sursa se citește, nu se modifică):
   python -I -X utf8 scripts/grafic/import_mpp.py <fisier.mpp|.xer|.xml> --proiect-id 3 --eticheta "LOT 2 R5 sep 2026" \
@@ -372,7 +372,7 @@ def sql_import(doc, accepta_incerte=False):
     r = doc['revizie']
     antet = (f'-- Import grafic „{r["eticheta"]}” pe proiectul {r["proiect_id"]}: {doc["statistici"]["activitati"]} activități, '
              f'sursa sha256 {r["sursa_sha256"]}.\n'
-             '-- Generat de scripts/grafic/import_mpp.py. Se rulează DOAR după „da”-ul lui Răzvan, după aplicarea migrării 20261202a.\n'
+             '-- Generat de scripts/grafic/import_mpp.py. Se rulează DOAR după „da”-ul lui Răzvan, după aplicarea migrării 20261204a.\n'
              '-- Reaplicarea aceluiași fișier sursă pe același proiect nu dublează nimic (RPC-ul întoarce revizia existentă).\n')
     for linie in antet.splitlines():
         if '\r' in linie or not linie.startswith('-- '):

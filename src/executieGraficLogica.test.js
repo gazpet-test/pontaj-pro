@@ -1,6 +1,6 @@
 // Teste pentru executieGraficLogica.js. Valorile așteptate pe fixture-ul sintetic vin din specificația graficului fictiv
 // (scripts/grafic/fixture_sintetic.py), scrise aici de mână — nu din codul testat (L25).
-// Paritatea: forma rândurilor produse aici = coloanele din CREATE TABLE și din INSERT-urile RPC-ului din migrarea 20261202a.
+// Paritatea: forma rândurilor produse aici = coloanele din CREATE TABLE și din INSERT-urile RPC-ului din migrarea 20261204a.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
@@ -10,7 +10,7 @@ import {
 } from './executieGraficLogica.js'
 
 const DOC = JSON.parse(readFileSync(new URL('../test-fixtures/grafic/grafic_sintetic.json', import.meta.url), 'utf8'))
-const MIGRARE = readFileSync(new URL('../supabase/migrations/20261202a_executie_grafic.sql', import.meta.url), 'utf8').replace(/\r/g, '')
+const MIGRARE = readFileSync(new URL('../supabase/migrations/20261204a_executie_grafic.sql', import.meta.url), 'utf8').replace(/\r/g, '')
 
 // rânduri de mână pentru arbore: nivel 0 (proiect), 1, 2 cu copii de nivel 3
 const R = (ordine, wbs, nivel, extra = {}) => ({ ordine, uid_sursa: 100 + ordine, wbs, nivel, rezumat: false, activ: true, pct_realizat: 0,
@@ -68,7 +68,7 @@ describe('maparea JSON -> rânduri (fixture sintetic)', () => {
   })
 })
 
-describe('paritate cu migrarea 20261202a', () => {
+describe('paritate cu migrarea 20261204a', () => {
   const coloaneCreate = tabel => {
     const m = new RegExp(`CREATE TABLE public\\.${tabel} \\(\\n([\\s\\S]*?)\\n\\);`).exec(MIGRARE)
     expect(m, `CREATE TABLE ${tabel}`).toBeTruthy()

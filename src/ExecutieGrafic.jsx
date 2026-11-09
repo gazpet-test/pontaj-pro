@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // ExecutieGrafic.jsx — Execuție → proiect → „📅 Grafic” (cerere Răzvan 09.11.2026, pasul 1 al legăturii MS Project ↔ ERP)
 // Graficul de execuție importat din fișierele MS Project / Primavera (o revizie = un fișier: „LOT 2 R5 sep 2026”).
-// Doar citire: executie_grafic_revizii + executie_grafic_activitati (migrarea 20261202a, RLS pe dreptul Execuție);
+// Doar citire: executie_grafic_revizii + executie_grafic_activitati (migrarea 20261204a, RLS pe dreptul Execuție);
 // importul îl face scriptul de pe server, nu pagina.
 // Tabel ierarhic (pliabil la nivel 1–2) + Gantt minimal pe săptămâni; roșu = finish plan trecut și realizat < 100%.
 // L23: citiri pe chei (paginareKeyset), numărul activităților verificat față de revizie (L12).

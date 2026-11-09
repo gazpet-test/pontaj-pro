@@ -1,4 +1,4 @@
--- Harness 20261202a_executie_grafic — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
+-- Harness 20261204a_executie_grafic — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
 -- Rulare din rădăcina repo-ului:  psql -X -v ON_ERROR_STOP=1 -f scripts/test_executie_grafic.sql
 -- O singură tranzacție, ANULATĂ la final (ROLLBACK): migrare (marcajul de livrare) -> importuri valide / refuzate ca postgres ->
 -- teste ca non-owner (SET LOCAL ROLE + request.jwt.claims) -> revenire refuzată (nearmată / cu date) -> revenire armată pe tabele goale ->
@@ -7,8 +7,8 @@
 -- Fiecare test se termină cu NOTICE „Tn OK”; orice abatere oprește rularea (RAISE EXCEPTION).
 \set ON_ERROR_STOP 1
 BEGIN ISOLATION LEVEL READ COMMITTED;
-SELECT set_config('gazpet.livrare_migrare', '20261202a_executie_grafic:' || txid_current(), true);
-\ir ../supabase/migrations/20261202a_executie_grafic.sql
+SELECT set_config('gazpet.livrare_migrare', '20261204a_executie_grafic:' || txid_current(), true);
+\ir ../supabase/migrations/20261204a_executie_grafic.sql
 
 CREATE FUNCTION pg_temp.t_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
@@ -289,16 +289,16 @@ SELECT pg_temp.t_ca(NULL, 'postgres');
 -- T6: revenirea — nearmată = refuz; armată cu date = refuz (tranzacția abandonată până la savepoint, nimic nu se execută după eroare)
 SAVEPOINT t6a;
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261202a_executie_grafic_ROLLBACK.sql
+\ir ../supabase/revenire/20261204a_executie_grafic_ROLLBACK.sql
 \set t6a_eroare :ERROR
 \set t6a_stare :SQLSTATE
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t6a;
 SELECT pg_temp.t_eroare('T6a', :'t6a_eroare', :'t6a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'garda invalida');
 SAVEPOINT t6b;
-SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_GRAFIC:' || txid_current(), true);
+SELECT set_config('gazpet.revenire_20261204a', 'SCOATE_GRAFIC:' || txid_current(), true);
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261202a_executie_grafic_ROLLBACK.sql
+\ir ../supabase/revenire/20261204a_executie_grafic_ROLLBACK.sql
 \set t6b_eroare :ERROR
 \set t6b_stare :SQLSTATE
 \set ON_ERROR_STOP 1
@@ -314,16 +314,16 @@ END $t$;
 
 -- T7: revenirea armată pe tabele goale scoate tot; re-aplicarea merge
 DELETE FROM public.executie_grafic_revizii;   -- activitățile pleacă prin CASCADE
-SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_GRAFIC:' || txid_current(), true);
-\ir ../supabase/revenire/20261202a_executie_grafic_ROLLBACK.sql
+SELECT set_config('gazpet.revenire_20261204a', 'SCOATE_GRAFIC:' || txid_current(), true);
+\ir ../supabase/revenire/20261204a_executie_grafic_ROLLBACK.sql
 DO $t$ BEGIN
   IF to_regclass('public.executie_grafic_revizii') IS NOT NULL OR to_regclass('public.executie_grafic_activitati') IS NOT NULL
      OR to_regprocedure('public.fn_executie_grafic_drept(bigint)') IS NOT NULL OR to_regprocedure('public.fn_executie_grafic_importa(jsonb, boolean)') IS NOT NULL
-     OR current_setting('gazpet.revenire_20261202a', true) <> '' THEN
+     OR current_setting('gazpet.revenire_20261204a', true) <> '' THEN
     RAISE EXCEPTION 'T7 FAIL: revenirea';
   END IF;
 END $t$;
-\ir ../supabase/migrations/20261202a_executie_grafic.sql
+\ir ../supabase/migrations/20261204a_executie_grafic.sql
 DO $t$ BEGIN
   IF to_regclass('public.executie_grafic_revizii') IS NULL OR to_regclass('public.executie_grafic_activitati') IS NULL
      OR to_regprocedure('public.fn_executie_grafic_importa(jsonb, boolean)') IS NULL THEN

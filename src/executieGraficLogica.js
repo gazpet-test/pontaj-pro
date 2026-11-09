@@ -1,13 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // executieGraficLogica.js — logica pură a tab-ului Execuție → „📅 Grafic” (graficul de execuție importat din MS Project)
-// Date: executie_grafic_revizii + executie_grafic_activitati (migrarea 20261202a), scrise DOAR de importul
+// Date: executie_grafic_revizii + executie_grafic_activitati (migrarea 20261204a), scrise DOAR de importul
 // scripts/grafic/import_mpp.py -> fn_executie_grafic_importa. Aici: maparea JSON-ului importului în forma rândurilor din BD
 // (pentru teste și previzualizare), arborele pliabil, „depășit”, scara pe săptămâni, formatarea.
 // Datele sunt șiruri 'AAAA-LL-ZZ' (zile calendaristice, fără oră): se compară ca text și se transformă în zile prin
 // Date.UTC pe componente (L17: niciodată new Date('AAAA-LL-ZZ') local).
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── forma rândurilor din BD (aceeași ordine ca în CREATE TABLE din 20261202a; testul de paritate citește migrarea) ──
+// ── forma rândurilor din BD (aceeași ordine ca în CREATE TABLE din 20261204a; testul de paritate citește migrarea) ──
 export const COLOANE_REVIZIE = ['id', 'proiect_id', 'eticheta', 'sursa_fisier', 'sursa_sha256', 'continut_sha256', 'tip_fisier', 'data_stare', 'camp_pct_plan',
   'camp_pct_raportat', 'nr_activitati', 'metadate', 'importat_la', 'importat_de', 'activ']
 export const COLOANE_ACTIVITATE = ['id', 'revizie_id', 'ordine', 'uid_sursa', 'wbs', 'nivel', 'nume', 'start_plan', 'finish_plan', 'start_real',

@@ -1,5 +1,5 @@
 {
- "_descriere": "Cazurile COMUNE de validare (L19): aceleași documente trec / sunt refuzate de valideaza_document (scripts/grafic/import_mpp.py) și de fn_executie_grafic_importa (migrarea 20261202a). Python: scripts/grafic/test_import_mpp.py. SQL: scripts/fixtures/grafic/cazuri_validare.sql, generat de scripts/grafic/cazuri_sql.py și inclus de scripts/test_executie_grafic.sql. Operații: [\"set\", cale, valoare] sau [\"sterge\", cale]. Cazurile „ok” primesc la generare eticheta CAZ-<nr> și un sha256 propriu.",
+ "_descriere": "Cazurile COMUNE de validare (L19): aceleași documente trec / sunt refuzate de valideaza_document (scripts/grafic/import_mpp.py) și de fn_executie_grafic_importa (migrarea 20261204a). Python: scripts/grafic/test_import_mpp.py. SQL: scripts/fixtures/grafic/cazuri_validare.sql, generat de scripts/grafic/cazuri_sql.py și inclus de scripts/test_executie_grafic.sql. Operații: [\"set\", cale, valoare] sau [\"sterge\", cale]. Cazurile „ok” primesc la generare eticheta CAZ-<nr> și un sha256 propriu.",
  "baza": {
   "format": "gazpet.grafic.v1",
   "revizie": {"proiect_id": 1, "eticheta": "CAZ-BAZA", "sursa_fisier": "caz.mpp", "sursa_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

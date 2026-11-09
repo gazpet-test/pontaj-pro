@@ -1,5 +1,5 @@
--- Version 20261202120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
--- 20261202a_executie_grafic — Execuție: graficul de execuție importat din MS Project / Primavera (pasul 1, cerere Răzvan 09.11.2026).
+-- Version 20261204120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
+-- 20261204a_executie_grafic — Execuție: graficul de execuție importat din MS Project / Primavera (pasul 1, cerere Răzvan 09.11.2026).
 --
 -- Ce face:
 --   * executie_grafic_revizii: o revizie = un fișier de grafic importat pe un proiect (ex. „LOT 2 R5 sep 2026”), cu amprenta sha256
@@ -21,15 +21,15 @@
 --   din /grafic/:tip/:id, cu drum critic) — tabelele noi țin instantanee ale fișierelor primite, nu se editează.
 -- Ordinea lock-urilor (L06), în RPC: lock consultativ pe proiect (pg_advisory_xact_lock) -> rândurile de revizie ale proiectului
 --   (UPDATE activ) -> activitățile noi (INSERT; FK = KEY SHARE pe revizia nouă și pe executie_proiecte). Revenirea: revizii, apoi activitati.
--- Revenire: supabase/revenire/20261202a_executie_grafic_ROLLBACK.sql. Test pe clonă: scripts/test_executie_grafic.sql.
+-- Revenire: supabase/revenire/20261204a_executie_grafic_ROLLBACK.sql. Test pe clonă: scripts/test_executie_grafic.sql.
 DO $pre$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
-     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261202a_executie_grafic:' || txid_current() THEN
-    RAISE EXCEPTION '20261202a: garda start invalida';
+     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261204a_executie_grafic:' || txid_current() THEN
+    RAISE EXCEPTION '20261204a: garda start invalida';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.livrare_migrare=%') THEN
-    RAISE EXCEPTION '20261202a: armare persistenta refuzata';
+    RAISE EXCEPTION '20261204a: armare persistenta refuzata';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
@@ -38,7 +38,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND p.proname IN ('fn_executie_grafic_drept', 'fn_executie_grafic_importa', 'fn_executie_grafic_j_text',
                                                              'fn_executie_grafic_j_numar', 'fn_executie_grafic_j_data', 'fn_executie_grafic_j_bool')) THEN
-    RAISE EXCEPTION '20261202a: obiectele exista deja (reaplicare)';
+    RAISE EXCEPTION '20261204a: obiectele exista deja (reaplicare)';
   END IF;
   -- dependențele, cu tipurile citite din migrări (executie_proiecte.id bigint; profiles.is_owner; user_module_access)
   IF (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.executie_proiecte'::regclass AND attname = 'id' AND NOT attisdropped) IS DISTINCT FROM 'bigint'
@@ -46,7 +46,7 @@ BEGIN
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_module_access'
           AND column_name IN ('profile_id', 'module', 'access_level')) <> 3
      OR to_regprocedure('auth.uid()') IS NULL THEN
-    RAISE EXCEPTION '20261202a: dependentele (executie_proiecte.id bigint, profiles.is_owner, user_module_access, auth.uid) difera';
+    RAISE EXCEPTION '20261204a: dependentele (executie_proiecte.id bigint, profiles.is_owner, user_module_access, auth.uid) difera';
   END IF;
 END $pre$;
 
@@ -72,7 +72,7 @@ CREATE TABLE public.executie_grafic_revizii (
 );
 CREATE UNIQUE INDEX executie_grafic_revizii_activa_uq ON public.executie_grafic_revizii (proiect_id) WHERE activ;
 COMMENT ON TABLE public.executie_grafic_revizii IS
-  'Execuție: o revizie importată a graficului de execuție (fișier MS Project / Primavera) pe un proiect. Scriere DOAR prin fn_executie_grafic_importa. 20261202a.';
+  'Execuție: o revizie importată a graficului de execuție (fișier MS Project / Primavera) pe un proiect. Scriere DOAR prin fn_executie_grafic_importa. 20261204a.';
 COMMENT ON COLUMN public.executie_grafic_revizii.camp_pct_raportat IS 'Câmpul din fișier al coloanei de raport „% Complete” (ex. TEXT2), dacă există; NULL = fără.';
 COMMENT ON COLUMN public.executie_grafic_revizii.metadate IS 'Numărul de activități (= inventarul cititorului), câmpurile lipsă, valorile incerte (WBS + câmp + text, cel mult 300), aplicația, versiunea MPXJ și datele fișierului; formă și mărime fixate de RPC.';
 COMMENT ON COLUMN public.executie_grafic_revizii.continut_sha256 IS 'Amprenta conținutului normalizat scris în tabele (activitățile + câmpurile reviziei): reimportul aceluiași fișier e „deja” doar cu același conținut.';
@@ -108,7 +108,7 @@ CREATE TABLE public.executie_grafic_activitati (
   CONSTRAINT executie_grafic_activitati_plan CHECK (finish_plan >= start_plan)
 );
 COMMENT ON TABLE public.executie_grafic_activitati IS
-  'Execuție: activitățile unei revizii de grafic, în ordinea din fișier. Instantaneu (nu se editează). Scriere DOAR prin fn_executie_grafic_importa. 20261202a.';
+  'Execuție: activitățile unei revizii de grafic, în ordinea din fișier. Instantaneu (nu se editează). Scriere DOAR prin fn_executie_grafic_importa. 20261204a.';
 COMMENT ON COLUMN public.executie_grafic_activitati.uid_sursa IS 'UniqueID din fișier (stabil între revizii la MS Project): cheia pentru compararea reviziilor și legarea de devize.';
 COMMENT ON COLUMN public.executie_grafic_activitati.pct_realizat IS '% Complete din MS Project (pe durată). Procentul din raportul lunar, dacă există în fișier, e în pct_raportat.';
 COMMENT ON COLUMN public.executie_grafic_activitati.durata_zile IS 'Durata în zile lucrătoare (minutele pe zi din fișier), rotunjită la 2 zecimale de script.';
@@ -410,7 +410,7 @@ BEGIN
                      AND policyname = 'executie_grafic_revizii_citire' AND cmd = 'SELECT' AND roles = '{authenticated}' AND permissive = 'PERMISSIVE')
      OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_grafic_activitati'
                      AND policyname = 'executie_grafic_activitati_citire' AND cmd = 'SELECT' AND roles = '{authenticated}' AND permissive = 'PERMISSIVE') THEN
-    RAISE EXCEPTION '20261202a post: RLS / politicile tabelelor';
+    RAISE EXCEPTION '20261204a post: RLS / politicile tabelelor';
   END IF;
   -- privilegiile efective, fiecare drept verificat separat (has_table_privilege cu listă = ORICARE)
   IF EXISTS (SELECT 1 FROM unnest(ARRAY[v_rev, v_act]) t, unnest(ARRAY['anon', 'authenticated', 'service_role']) r,
@@ -422,7 +422,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM unnest(ARRAY['executie_grafic_revizii', 'executie_grafic_activitati']) t, unnest(ARRAY['anon', 'authenticated', 'service_role']) r,
                               unnest(ARRAY['USAGE', 'SELECT', 'UPDATE']) p
                  WHERE has_sequence_privilege(r, pg_get_serial_sequence('public.' || t, 'id'), p)) THEN
-    RAISE EXCEPTION '20261202a post: privilegii pe tabele / secvente';
+    RAISE EXCEPTION '20261204a post: privilegii pe tabele / secvente';
   END IF;
   -- funcțiile: DEFINER doar fn_executie_grafic_drept, search_path fix, EXECUTE doar unde trebuie
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -436,15 +436,15 @@ BEGIN
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = 'public' AND p.proname IN ('fn_executie_grafic_drept', 'fn_executie_grafic_importa', 'fn_executie_grafic_j_text',
                                                       'fn_executie_grafic_j_numar', 'fn_executie_grafic_j_data', 'fn_executie_grafic_j_bool')) <> 6 THEN
-    RAISE EXCEPTION '20261202a post: functii (definer / search_path / EXECUTE)';
+    RAISE EXCEPTION '20261204a post: functii (definer / search_path / EXECUTE)';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid IN (v_rev, v_act) AND NOT tgisinternal) THEN
-    RAISE EXCEPTION '20261202a post: triggere neasteptate';
+    RAISE EXCEPTION '20261204a post: triggere neasteptate';
   END IF;
   IF EXISTS (SELECT 1 FROM public.executie_grafic_revizii) OR EXISTS (SELECT 1 FROM public.executie_grafic_activitati) THEN
-    RAISE EXCEPTION '20261202a post: migrarea nu scrie date';
+    RAISE EXCEPTION '20261204a post: migrarea nu scrie date';
   END IF;
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261202a_executie_grafic:' || txid_current() THEN
-    RAISE EXCEPTION '20261202a: garda final invalida';
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261204a_executie_grafic:' || txid_current() THEN
+    RAISE EXCEPTION '20261204a: garda final invalida';
   END IF;
 END $post$;
