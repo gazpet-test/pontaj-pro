@@ -14,8 +14,8 @@ import { supabase } from './lib/supabase.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
 import { ziBucuresti } from './lib/izoTeren.js'
 import {
-  contor, filtreaza, parseManifest, puncteVedere, grupeazaPuncte, faraPunctPeVedere, cheieImagine, aplicaRand,
-  decideReincercare, payloadStare,
+  contor, filtreaza, parseManifest, puncteVedere, grupeazaPuncte, faraPunctPeVedere, cheieImagine, aplicaRand, imbinaLista,
+  decideReincercare, payloadStare, incertPune, incertSterge,
 } from './nodCuplareLogica.js'
 import { G, S, ContorNod, Legenda, SchemaVedere, FisaSudura, FiltreNod, ListaGrup } from './NodCuplareVizualizare.jsx'
 
@@ -51,10 +51,15 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   const genImg = useRef(0)           // imaginea vederii
   const fisaGen = useRef(0)          // contextul fișei: crește la deschidere / închidere / schimbarea nodului sau a proiectului
   const timerInchidere = useRef(null)
-  const incert = useRef(null)        // L05: { payload, cheie } al unei salvări cu rezultat NECUNOSCUT
+  const incerte = useRef(new Map())  // L05: id sudură -> { cheie, payload, seq } al unei salvări cu rezultat NECUNOSCUT
+  const seqIntentie = useRef(0)
+  const montat = useRef(true)        // după demontare nu se mai programează nimic (timer, stare)
 
   const contextNou = () => { fisaGen.current += 1; clearTimeout(timerInchidere.current); timerInchidere.current = null }
-  useEffect(() => () => clearTimeout(timerInchidere.current), [])
+  useEffect(() => {
+    montat.current = true
+    return () => { montat.current = false; clearTimeout(timerInchidere.current); timerInchidere.current = null }
+  }, [])
 
   // „azi” (Europe/Bucharest) se recalculează la revenirea în pagină și la schimbarea zilei
   useEffect(() => {
@@ -79,7 +84,8 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
         client.rpc('fn_executie_nod_drept', { p_proiect: proiectId, p_scriere: true }),
       ])
       if (g !== gen.current) return
-      setSuduri(toate)
+      // pe fiecare sudură rămâne versiunea maximă dintre citire și lista curentă (o salvare terminată între timp nu se pierde)
+      setSuduri(curente => imbinaLista(toate.filter(r => r.proiect_id === proiectId), curente))
       if (drept.error) { setPoateScrie(false); setEroareDrept('Nu am putut verifica dreptul de scriere: ' + drept.error.message) }
       else setPoateScrie(drept.data === true)
       setAzi(ziBucuresti())
@@ -89,8 +95,8 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
     } finally { if (g === gen.current) setIncarc(false) }
   }, [proiectId, client])
   useEffect(() => {
-    contextNou(); incert.current = null
-    setNod(''); setManifest(null); setVedere(''); setSelectat(null); setGrupDeschis(null); setMesaj(null)
+    contextNou(); incerte.current = new Map()
+    setSuduri([]); setNod(''); setManifest(null); setVedere(''); setSelectat(null); setGrupDeschis(null); setMesaj(null)
     incarca()
   }, [incarca])
 
@@ -147,17 +153,26 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   const grupSel = grupDeschis === FARA_PUNCT ? grupFara : (grupuri.find(g => g.cheie === grupDeschis) || null)
 
   // ── fișa: deschidere / închidere = context nou (mesajele și timerul vechi nu mai ajung pe ea) ──
-  const reconciliaza = async (id, g) => {
-    const { data, error } = await client.from('executie_noduri_suduri').select(COLOANE).eq('id', id).maybeSingle()
-    if (error) { if (g === fisaGen.current) setMesaj({ ok: false, text: 'Nu am putut reîncărca sudura: ' + error.message }); return false }
-    if (incert.current?.payload?.p_id === id) incert.current = null
+  // Reconcilierea unei cereri cu rezultat necunoscut (cheia ei e capturată): aduce rândul de pe server și șterge intrarea DOAR dacă
+  // e tot a acelei cereri (incertSterge compară cheia). La închiderea fișei (fortat = false) intrarea rămâne cât timp cererea ei
+  // încă se poate aplica (versiunea de pe server = cea din cerere), ca reîncercarea identică să-și păstreze cheia.
+  const reconciliaza = async (id, cheie, fortat, g) => {
+    let data = null, error = null
+    try { ({ data, error } = await client.from('executie_noduri_suduri').select(COLOANE).eq('id', id).maybeSingle()) } catch (e) { error = e }
+    if (!montat.current) return false
+    if (error) { if (g === fisaGen.current) setMesaj({ ok: false, text: 'Nu am putut reîncărca sudura: ' + (error.message || error) }); return false }
     if (data) setSuduri(list => aplicaRand(list, data))
+    const intrare = incerte.current.get(id)
+    if (intrare && intrare.cheie === cheie && (fortat || !data || Number(data.versiune) !== Number(intrare.payload.p_versiune))) {
+      incerte.current = incertSterge(incerte.current, id, cheie)
+    }
     return true
   }
   const deschide = id => { contextNou(); setGrupDeschis(null); setSelectat(id); setMesaj(null) }
   const inchide = () => {
     // o salvare cu rezultat necunoscut pe fișa care se închide: se reconciliază cu serverul în fundal
-    if (incert.current && String(incert.current.payload.p_id) === String(selectat)) reconciliaza(incert.current.payload.p_id, -1)
+    const intrare = selectat != null ? incerte.current.get(selectat) : null
+    if (intrare) reconciliaza(selectat, intrare.cheie, false, -1)
     contextNou(); setSelectat(null); setMesaj(null)
   }
   const atingePunct = cheie => {
@@ -174,33 +189,37 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
     const g = fisaGen.current
     if (!s || inCurs === g) return
     const payload = payloadStare(s, form)
-    const decizie = decideReincercare(incert.current, payload)
+    const intrare = incerte.current.get(s.id)
+    const decizie = decideReincercare(intrare, payload)
     if (decizie === 'reconciliere') {
       // formularul s-a schimbat după un rezultat necunoscut: întâi starea reală de pe server, abia apoi o cerere nouă
       setInCurs(g)
-      const ok = await reconciliaza(s.id, g)
+      const ok = await reconciliaza(s.id, intrare.cheie, true, g)
+      if (!montat.current) return
       setInCurs(x => (x === g ? null : x))
       if (ok && g === fisaGen.current) setMesaj({ ok: false, text: 'Cererea anterioară avea rezultat necunoscut; am adus starea reală a sudurii. Verifică și confirmă din nou.' })
       return
     }
-    const cheie = decizie === 'aceeasi' ? incert.current.cheie : cheieNoua()
+    // aceeași cerere = aceeași cheie și același loc în ordinea intențiilor; altfel intenție nouă
+    const cheie = decizie === 'aceeasi' ? intrare.cheie : cheieNoua()
+    const seq = decizie === 'aceeasi' ? intrare.seq : ++seqIntentie.current
     setInCurs(g); setMesaj(null)
     let r = null, error = null
     try { ({ data: r, error } = await client.rpc('fn_executie_nod_sudura_stare', { ...payload, p_cheie: cheie })) } catch (e) { error = e }
-    setInCurs(x => (x === g ? null : x))
-    const curent = g === fisaGen.current
     if (error) {
-      // L05: rezultat necunoscut — se păstrează EXACT cererea și cheia; o reîncercare identică nu dublează
-      incert.current = { payload, cheie }
-      if (curent) setMesaj({ ok: false, text: 'Nu se știe dacă s-a salvat (' + (error.message || error) + '). Apasă din nou „Confirmă” fără să schimbi nimic; dacă schimbi ceva, întâi reîncarc sudura.' })
-      return
+      // L05: rezultat necunoscut — se păstrează EXACT cererea și cheia, pe sudura ei (nu peste o intenție ulterioară)
+      incerte.current = incertPune(incerte.current, payload.p_id, { cheie, payload, seq })
+    } else {
+      incerte.current = incertSterge(incerte.current, payload.p_id, cheie)
+      if (r?.sudura) setSuduri(list => aplicaRand(list, r.sudura))
     }
-    if (incert.current?.payload?.p_id === payload.p_id) incert.current = null
-    if (r?.sudura) setSuduri(list => aplicaRand(list, r.sudura))
-    if (!curent) return
-    if (r?.ok) {
+    if (!montat.current) return
+    setInCurs(x => (x === g ? null : x))
+    if (g !== fisaGen.current) return
+    if (error) setMesaj({ ok: false, text: 'Nu se știe dacă s-a salvat (' + (error.message || error) + '). Apasă din nou „Confirmă” fără să schimbi nimic; dacă schimbi ceva, întâi reîncarc sudura.' })
+    else if (r?.ok) {
       setMesaj({ ok: true, text: r.duplicat ? 'Era deja salvată.' : 'Salvat.' })
-      timerInchidere.current = setTimeout(() => { if (g === fisaGen.current) { contextNou(); setSelectat(null); setMesaj(null) } }, 700)
+      timerInchidere.current = setTimeout(() => { if (montat.current && g === fisaGen.current) { contextNou(); setSelectat(null); setMesaj(null) } }, 700)
     } else setMesaj({ ok: false, text: 'Sudura a fost schimbată între timp (altă apăsare sau alt utilizator). Am adus starea actuală — verifică și reîncearcă.' })
   }
 

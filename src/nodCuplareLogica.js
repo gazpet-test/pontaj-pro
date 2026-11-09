@@ -342,12 +342,37 @@ export function celMaiAproape(puncteEcran, x, y, raza = RAZA_ATINGERE) {
 export const cheieImagine = ({ proiectId, nod, vedere, fisier }) => (proiectId != null && nod && vedere && fisier ? `${proiectId}/${nod}/${vedere}/${fisier}` : null)
 
 /**
- * Rândul întors de server peste lista locală: se aplică doar pe aceeași sudură și doar dacă NU e mai vechi decât ce avem
- * (o reîncărcare poate fi adus deja o versiune mai nouă decât răspunsul întârziat al unei salvări).
+ * O SINGURĂ regulă pentru două copii ale aceleiași suduri (L19): rămâne cea cu versiunea mai mare; la egalitate, cea venită acum.
+ * Folosită și la răspunsul unei salvări (aplicaRand), și la rezultatul unei reîncărcări (imbinaLista).
  */
+export const esteMaiVeche = (venit, local) => !!local && Number(venit.versiune) < Number(local.versiune)
+
+/** Rândul întors de server peste lista locală: doar pe aceeași sudură și doar dacă NU e mai vechi decât ce avem. */
 export function aplicaRand(lista, rand) {
   if (!rand || rand.id == null) return lista
-  return (lista || []).map(x => (x.id === rand.id && !(Number(rand.versiune) < Number(x.versiune)) ? { ...x, ...rand } : x))
+  return (lista || []).map(x => (x.id === rand.id && !esteMaiVeche(rand, x) ? { ...x, ...rand } : x))
+}
+
+/**
+ * Rezultatul unei reîncărcări peste lista curentă: setul de suduri vine din citire, dar pe fiecare id rămâne versiunea maximă
+ * (o citire începută înainte de o salvare și terminată după ea nu readuce starea veche). Contorul derivă din listă.
+ */
+export function imbinaLista(citite, curente) {
+  const local = new Map((curente || []).map(x => [x.id, x]))
+  return (citite || []).map(r => { const l = local.get(r.id); return esteMaiVeche(r, l) ? l : r })
+}
+
+// ── cererile cu rezultat NECUNOSCUT, separat pe sudură: Map id -> { cheie, payload, seq } (seq = ordinea intențiilor) ──
+/** Pune intrarea, dar nu peste o intenție ulterioară (seq mai mare) a aceleiași suduri. Întoarce o hartă nouă (sau aceeași). */
+export function incertPune(harta, id, intrare) {
+  const v = harta.get(id)
+  if (v && v.seq > intrare.seq) return harta
+  const n = new Map(harta); n.set(id, intrare); return n
+}
+/** Șterge intrarea sudurii DOAR dacă e a aceleiași cereri (aceeași cheie) — o confirmare / reconciliere întârziată nu șterge alta. */
+export function incertSterge(harta, id, cheie) {
+  if (harta.get(id)?.cheie !== cheie) return harta
+  const n = new Map(harta); n.delete(id); return n
 }
 
 /**

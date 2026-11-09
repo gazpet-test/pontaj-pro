@@ -8,6 +8,7 @@ import {
   contor, filtreaza, incadreaza, limiteScala, zoomLa, ecranDinPct, pctDinEcran, parseManifest, parseCsv, obiecteCsv,
   mapeazaLista, mapeazaPuncte, dnDinText, certitudineDinText, puncteVedere, grupeazaPuncte, stariGrup, fundalGrup,
   esteFurnizor, faraPunctPeVedere, celMaiAproape, RAZA_ATINGERE, cheieImagine, aplicaRand, decideReincercare, payloadStare,
+  imbinaLista, incertPune, incertSterge,
 } from './nodCuplareLogica.js'
 
 const AZI = '2026-11-09'
@@ -317,6 +318,24 @@ describe('atingerea, identitatea imaginii, salvarea (L24 / L05)', () => {
     expect(aplicaRand(lista, { id: 1, stare: 'ndt', versiune: 3 })[0].versiune).toBe(3)
     expect(aplicaRand(lista, { id: 9, stare: 'x', versiune: 1 })).toEqual(lista)
     expect(aplicaRand(lista, null)).toBe(lista)
+  })
+  it('reîncărcarea: setul vine din citire, dar pe fiecare id rămâne versiunea maximă (citire veche după o salvare nouă)', () => {
+    const curente = [{ id: 1, stare: 'sudat', versiune: 2 }, { id: 2, stare: 'de_executat', versiune: 1 }, { id: 3, stare: 'x', versiune: 9 }]
+    const citite = [{ id: 1, stare: 'de_executat', versiune: 1 }, { id: 2, stare: 'insailat', versiune: 2 }, { id: 4, stare: 'nou', versiune: 1 }]
+    expect(imbinaLista(citite, curente)).toEqual([{ id: 1, stare: 'sudat', versiune: 2 }, { id: 2, stare: 'insailat', versiune: 2 }, { id: 4, stare: 'nou', versiune: 1 }])
+    expect(imbinaLista(citite, [])).toEqual(citite)
+    expect(imbinaLista([], curente)).toEqual([])
+  })
+  it('cererile incerte, separat pe sudură: nu se suprascrie o intenție ulterioară; se șterge doar cu aceeași cheie', () => {
+    let h = new Map()
+    h = incertPune(h, 1, { cheie: 'kA', seq: 1 })
+    h = incertPune(h, 2, { cheie: 'kB', seq: 2 })
+    expect([...h.keys()]).toEqual([1, 2])
+    expect(incertPune(h, 1, { cheie: 'kA0', seq: 0 }).get(1).cheie).toBe('kA')       // intenția mai veche nu o înlocuiește
+    expect(incertPune(h, 1, { cheie: 'kA2', seq: 3 }).get(1).cheie).toBe('kA2')
+    expect(incertSterge(h, 1, 'altă-cheie')).toBe(h)                                  // reconciliere întârziată a altei cereri: nimic
+    expect([...incertSterge(h, 1, 'kA').keys()]).toEqual([2])
+    expect(h.get(1).cheie).toBe('kA')                                                 // hărțile sunt noi, cea veche neatinsă
   })
   it('reîncercarea după rezultat necunoscut: aceeași cerere = aceeași cheie; formular schimbat = întâi reconciliere', () => {
     const s = { id: 7, stare: 'de_executat', versiune: 2 }
