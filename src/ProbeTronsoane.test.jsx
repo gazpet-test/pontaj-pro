@@ -678,6 +678,24 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     expect(v.text()).not.toContain('Am renunțat la verificarea')
   })
 
+  it('L24: ștergere locală eșuată pentru o salvare a proiectului 1, terminată după trecerea pe proiectul 2: alerta NU apare pe proiectul 2', async () => {
+    const stocare = stocareFalsa()
+    const P2 = { ...P1, id: 7, proiect_id: 2, km_de_la_m: 0, km_pana_la_m: 500 }
+    const { client, st } = clientFals({ probe: [P1, P2], etape: [...ETAPE_P1(), ...ETAPE.map((x, i) => ETAPA(70 + i, 7, x, { proiect_id: 2 }))] })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    await u.randeaza(2)
+    stocare.stergereEsuata = true
+    await u.elibereaza(st.rpc[0], 'ok')
+    expect(u.text()).toContain('km 0+000 → 0+500')                         // suntem pe proiectul 2
+    expect(u.text()).not.toContain('nu s-a putut scoate din registrul local')
+    expect(stocare.m.size).toBe(1)                                         // registrul proiectului 1 o păstrează (retrimitere sigură)
+  })
+
   it('renunțarea la verificare cere confirmare și scoate cererile din registru', async () => {
     const stocare = stocareFalsa()
     const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })

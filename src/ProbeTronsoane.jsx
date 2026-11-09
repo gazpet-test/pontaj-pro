@@ -175,7 +175,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
   // Aceeași regulă pentru ORICE răspuns al unei cereri înregistrate — și pentru PRIMA ei încercare: o copie a aceleiași cereri (aceeași
   // cheie, retrimisă din alt tab) poate fi aplicată oricând, deci un refuz al acestei încercări nu dovedește că cheia nu s-a scris.
   // `prinJurnal` = aplicarea e dovedită doar de jurnal: NU există rezultat RPC (r e null), starea reală vine din reîncărcare. ──
-  const rezolva = async (reg, intrare, { r, error }) => {
+  const rezolva = async (reg, intrare, { r, error }, pg) => {
     let clasa = clasificaReluare({ r, error })
     let prinJurnal = false
     if (clasa === 'fara_drept') {
@@ -186,14 +186,15 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
     }
     // curățarea locală e separată de rezultatul serverului: o ștergere eșuată din stocare se spune, nu se ascunde (intrarea ar reapărea)
     if ((clasa === 'aplicat' || clasa === 'aplicat_acum' || clasa === 'neaplicat') && !reg.scoate(intrare.cheie)) {
-      setEroareRegistru('O salvare lămurită nu s-a putut scoate din registrul local al browserului (stocare blocată); va reapărea ca nelămurită — retrimiterea ei e sigură (aceeași cheie).')
+      // alerta doar pe contextul (proiect, componentă) în care a pornit acțiunea; curățarea de mai sus rămâne pe registrul capturat
+      if (montat.current && pg === proiectCtx.current) setEroareRegistru('O salvare lămurită nu s-a putut scoate din registrul local al browserului (stocare blocată); va reapărea ca nelămurită — retrimiterea ei e sigură (aceeași cheie).')
     }
     return { intrare, clasa, r: prinJurnal ? null : r, error, prinJurnal }
   }
-  const lamureste = async (reg, intrare) => {
+  const lamureste = async (reg, intrare, pg) => {
     let r = null, error = null
     try { ({ data: r, error } = await client.rpc(intrare.rpc, { ...intrare.payload, p_cheie: intrare.cheie })) } catch (e) { error = e }
-    return rezolva(reg, intrare, { r, error })
+    return rezolva(reg, intrare, { r, error }, pg)
   }
   const mesajLamurire = ({ clasa, error, prinJurnal }) => ({
     aplicat: prinJurnal ? 'Cererea anterioară SE salvase (confirmat din jurnal; nu mai ai drept de scriere).' : 'Cererea anterioară SE salvase (cu valorile de atunci).',
@@ -215,7 +216,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
     setInCurs(true); setMesaj(null); setRenunta(false)
     const rezultate = []
     for (const x of lista) {
-      const rez = await lamureste(reg, x)
+      const rez = await lamureste(reg, x, pg)
       if (!valid()) return
       rezultate.push(rez); aplicaRezultat(rez.r)
     }
@@ -259,7 +260,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
       setInCurs(true); setMesaj(null)
       const rezultate = []
       for (const x of vechi) {
-        const rez = await lamureste(reg, x)
+        const rez = await lamureste(reg, x, pg)
         if (!valid()) return null
         rezultate.push(rez); aplicaRezultat(rez.r)
       }
@@ -293,7 +294,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
     try { ({ data: r, error } = await client.rpc(rpc, { ...payload, p_cheie: cheie })) } catch (e) { error = e }
     // aceeași clasificare ca la retrimitere (cererea poate fi retrimisă concurent din alt tab, cu aceeași cheie): iese din registru doar
     // la un rezultat dovedit; registrul se actualizează și dacă între timp s-a schimbat proiectul
-    const rez = await rezolva(reg, intrare, { r, error })
+    const rez = await rezolva(reg, intrare, { r, error }, pg)
     if (!valid()) return null    // alt proiect / pagina închisă: niciun alt efect
     setInCurs(false); recitesteNelamurite(reg)
     const actual = g === ctx.current
