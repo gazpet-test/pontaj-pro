@@ -7,7 +7,7 @@ unde se oprește fără „da”), care să se poată actualiza și, mai târziu
 
 | În repo (public) | În afara repo-ului |
 |---|---|
-| `src/HartaAI.jsx` — componenta care desenează harta | `harta.json` — datele reale (pe serverul AI, `C:\Users\Public\paw-data\harta_ai\`) |
+| `src/HartaAI.jsx` — componenta care desenează harta | `harta.json` — datele reale (într-un folder privat, în afara repo-ului) |
 | `src/hartaAILogica.js` — validare, poziții, fluxuri, detectorul de secrete | `harta_v2.html` — varianta standalone generată |
 | `scripts/harta_ai/genereaza_v2.mjs` + `html.mjs` + `standalone.jsx` — generatorul HTML | README-ul cu sursele fiecărui nod |
 | `scripts/harta_ai/exemplu.json` — exemplu fictiv, folosit de teste | |
@@ -30,19 +30,19 @@ HTML-ul rezultat e un singur fișier, fără CDN și fără rețea (React e incl
 ```jsonc
 {
   "meta": { "titlu": "…", "stare_la": "06.11.2026", "nota": "…", "surse": ["…"], "emailuri_permise": ["office@…"] },
-  "grupuri": [ { "id": "nas", "nume": "NAS Terra", "sub": "…", "culoare": "#8a5a14", "x": 0, "y": 0, "w": 420, "h": 300, "coloane": 2, "descriere": "…" } ],
+  "grupuri": [ { "id": "grup_a", "nume": "Server exemplu", "sub": "…", "culoare": "#8a5a14", "x": 0, "y": 0, "w": 420, "h": 300, "coloane": 2, "descriere": "…" } ],
   "noduri": [ {
-    "id": "worker_nas", "grup": "nas", "nume": "gazpet-ofertare-worker", "sub": "Deno, polling 15 s",
+    "id": "worker_a", "grup": "grup_a", "nume": "worker-exemplu", "sub": "proces de fundal (exemplu)",
     "tip": "worker", "stare": "activ",
     "fisa": {
       "ce_e": "…", "unde": "…", "cont": "…", "cand": "…",
       "a_extern": "…", "b_scrie": "…", "c_identitate": "…", "d_cine_porneste": "…", "e_confirmare": "…",
-      "secrete": ["SUPABASE_SERVICE_ROLE_KEY"], "surse": ["worker/ofertare/main.ts"], "neverificat": ["…"]
+      "secrete": ["NUME_SECRET_EXEMPLU"], "surse": ["cale/exemplu/sursa.js"], "neverificat": ["…"]
     },
     "probleme": [ { "id": "P1", "tip": "oprire_tacuta", "gravitate": "mare", "titlu": "…", "dovada": "fișier:linie",
-                    "propunere": "…", "sursa": "review X", "principal": "worker_nas" } ]
+                    "propunere": "…", "sursa": "review X", "principal": "worker_a" } ]
   } ],
-  "legaturi": [ { "id": "opțional", "de": "worker_nas", "la": "api_anthropic", "ce": "text + prompt", "tip": "bani", "dublu": false, "cand": "…", "detaliu": "…", "surse": ["…"], "probleme": [] } ],
+  "legaturi": [ { "id": "opțional", "de": "worker_a", "la": "api_exemplu", "ce": "text + prompt", "tip": "bani", "dublu": false, "cand": "…", "detaliu": "…", "surse": ["…"], "probleme": [] } ],
   "fluxuri": [ { "id": "seap_cerinte", "nume": "…", "descriere": "…", "drum": ["a", "b", "c"], "ramuri": [["b", "x"]], "note": ["…"] } ]
 }
 ```

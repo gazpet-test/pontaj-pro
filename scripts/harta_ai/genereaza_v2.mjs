@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Harta AI — generează varianta standalone (un singur HTML, cu JSON-ul inclus) din harta.json.
 // Folosire:  node scripts/harta_ai/genereaza_v2.mjs <harta.json> <iesire.html>
-// Datele NU stau în repo (repo public): harta.json se ține în afara lui (pe serverul AI, în paw-data\harta_ai).
+// Datele NU stau în repo (repo public): harta.json se ține într-un folder privat, în afara repo-ului.
 // Refuză generarea dacă validarea găsește erori — inclusiv orice șir care arată a valoare de secret, telefon sau CNP.
 // Fără librării noi: esbuild vine deja cu vite (devDependency existentă).
 import { readFileSync, writeFileSync } from 'node:fs'
