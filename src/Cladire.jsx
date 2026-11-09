@@ -17,6 +17,8 @@ const fmtDT = (d) => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', mo
 const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/
 const ipAfisat = (x) => x.sursa === 'retea' && IP_RE.test(x.extern_id || '') && !(x.nume || '').includes(x.extern_id) && !(x.nume || '').includes('.' + x.extern_id.split('.')[3] + ')') ? x.extern_id : null
 const IpSub = ({ x }) => { const ip = ipAfisat(x); return ip ? <span style={{ display:'block', fontSize:10.5, color:G.dim, lineHeight:1.2 }}>{ip}</span> : null }
+const TRADUCERI = { heating:'încălzire', normalEnergySaving:'economie normală', standby:'în așteptare', dhw:'apă caldă', dhwAndHeating:'încălzire și apă caldă', forcedReduced:'temperatură redusă', forcedNormal:'temperatură normală' }
+const textRegim = v => Object.prototype.hasOwnProperty.call(TRADUCERI, v) ? TRADUCERI[v] : v
 const nr = (v, dec = 1) => v == null ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: dec })
 
 // Aceleași praguri ca iot_verifica_terra; testul de paritate citește migrarea SQL.
@@ -36,7 +38,7 @@ export const UPS_PRAGURI = { baterie: 50, oprire: 25 }
 export const nivelUps = (pct, peBaterie) => !Number.isFinite(pct) || pct < 0 || pct > 100 || typeof peBaterie !== 'boolean' ? 'lipsa'
   : peBaterie ? (pct < UPS_PRAGURI.baterie ? 'error' : 'warning') : 'ok'
 export const textUps = (r = {}, model) => !Number.isFinite(r.ups_pct) || r.ups_pct < 0 || r.ups_pct > 100 ? ''
-  : `UPS${typeof model === 'string' && model.trim() ? ' ' + model.trim() : ''}: ${nr(r.ups_pct)}% - ${r.ups_pe_baterie === true ? 'pe baterie' : r.ups_pe_baterie === false ? 'pe retea' : 'stare necunoscuta'}${Number.isFinite(r.ups_runtime_min) && r.ups_runtime_min >= 0 ? ' - autonomie estimata ' + nr(r.ups_runtime_min) + ' min' : ''}`
+  : `UPS${typeof model === 'string' && model.trim() ? ' ' + model.trim() : ''}: ${nr(r.ups_pct)}% - ${r.ups_pe_baterie === true ? 'pe baterie' : r.ups_pe_baterie === false ? 'pe rețea' : 'stare necunoscută'}${Number.isFinite(r.ups_runtime_min) && r.ups_runtime_min >= 0 ? ' - autonomie estimată ' + nr(r.ups_runtime_min) + ' min' : ''}`
 
 // QNAP are card propriu (nu mai apare în lista generică „Rețea & servere").
 export const QNAP_EXTERN_ID = '192.168.1.42'
@@ -436,7 +438,7 @@ export default function Cladire() {
                 ))}
               </div>
               <Row k="Arzător" v={v.arzator_activ == null ? null : (v.arzator_activ ? `pornit · ${nr(v.modulatie_pct, 0)}%` : 'oprit')} />
-              <Row k="Regim / program" v={v.regim ? `${v.regim}${v.program ? ' · ' + v.program : ''}` : null} />
+              <Row k="Regim / program" v={v.regim ? `${textRegim(v.regim)}${v.program ? ' · ' + textRegim(v.program) : ''}` : null} />
               <Row k="Gaz azi (încălzire / apă caldă)" v={v.gaz_incalzire ? `${nr(v.gaz_incalzire.azi)} / ${nr(v.gaz_acm?.azi)} m³` : null} />
               <Row k="Gaz luna asta" v={v.gaz_incalzire ? `${nr(v.gaz_incalzire.luna)} / ${nr(v.gaz_acm?.luna)} m³` : null} />
               <Row k="Gaz anul ăsta" v={v.gaz_incalzire ? `${nr((v.gaz_incalzire.an || 0) + (v.gaz_acm?.an || 0), 0)} m³` : null} />

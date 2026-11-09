@@ -60,6 +60,7 @@ describe('Termene, stări și excluderi', () => {
   it('date lipsă rămâne distinct de critic și valid', () => {
     expect(alerteFirma([{ id: 1, activ: true }], today)[0].priority).toBe('missing')
     expect(alerteHr([{ id: 2 }], today)[0].priority).toBe('missing')
+    expect(alerteHr([{ id: 3, data_expirare: '2026-01-01', inlocuita_de_id: 9 }], today)).toEqual([])   // înlocuită → fără alertă
   })
   it('verifică viza RSVTI și când autorizația este fără expirare', () => {
     const result = alerteHr([{ id: 1, fara_expirare: true, necesita_confirmare_rsvti: true, rsvti_urmatoarea_confirmare: '2026-09-21' }], today)
@@ -68,6 +69,11 @@ describe('Termene, stări și excluderi', () => {
   it('licitația GO fără responsabil are o singură alertă cu ambele cauze', () => {
     const [row] = alerteOfertare([{ id: 1, status: 'go', termen_depunere: '2026-09-24T12:00:00Z' }], now)
     expect(row.priority).toBe('critical'); expect(row.impact).toContain('Responsabil neatribuit')
+  })
+  it('20261121a: doar responsabilul 2 setat = atribuită (nu „neatribuit”); niciunul = neatribuit', () => {
+    const [r2] = alerteOfertare([{ id: 1, status: 'go', responsabil2_id: 'y', termen_depunere: '2026-09-24T12:00:00Z' }], now)
+    expect(r2.impact).not.toContain('Responsabil neatribuit'); expect(r2.owner).not.toBe('Neatribuit')
+    expect(alerteOfertare([{ id: 1, status: 'go', responsabil2_id: 'y', termen_depunere: '2026-12-24T12:00:00Z' }], now)).toEqual([])
   })
   it('termenul licitației se compară la ora exactă; stările închise sunt excluse', () => {
     const base = { id: 1, status: 'in_lucru', responsabil_id: 'x', termen_depunere: '2026-09-22T11:59:00Z' }

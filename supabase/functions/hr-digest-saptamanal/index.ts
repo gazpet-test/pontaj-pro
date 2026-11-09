@@ -5,15 +5,13 @@
 // se misca incet — o data pe saptamana, toate la un loc, e exact cat sa se si actioneze.
 //
 // Chemat de pg_cron (job `hr_digest_saptamanal`, luni 05:30 UTC = 08:30 vara la noi).
-// AUTENTIFICARE: antet propriu, ca la ofertare-radar — secretul sta si in cron.job,
-// care oricum e vizibil doar din baza. De mutat pe env cand se face curatenia
-// secretelor (claude_context id 955).
+// AUTENTIFICARE: x-hr-secret din secretul dedicat; cronul trebuie sa-l citeasca din Vault.
 //
 // v2 (15.09.2026, task #69 Oana Nica / Ofertare): sectiune "Calificari noi in ultimele
 // 7 zile" + Oana printre destinatari — ofertarea vede ce autorizatii/atestate au intrat in HR.
+import { verificaSecretHr } from '../_shared/secretHr.mjs';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
-const PAROLA = 'gz-hr-digest-2026-mNb4Xp';
 // #69: adresa Oanei Nica (Ofertare) nu e in repo — de completat inainte de deploy.
 const OANA_EMAIL = 'oana.nica@gazpet.ro';
 const DESTINATARI = ['natalia.udrea@gazpet.ro', 'marilena.tudorache@gazpet.ro', 'razvan.trusu@gazpet.ro',
@@ -26,9 +24,8 @@ const esc = (s: unknown) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 Deno.serve(async (req: Request) => {
-  const dinEnv = Deno.env.get('HR_DIGEST_SECRET');
-  const antet = req.headers.get('x-hr-secret') || '';
-  if (antet !== PAROLA && !(dinEnv && antet === dinEnv)) return json({ error: 'unauthorized' }, 401);
+  const refuz = verificaSecretHr(req, Deno.env.get('HR_DIGEST_SAPTAMANAL_PAROLA'));
+  if (refuz) return json({ error: refuz === 503 ? 'secret HR neconfigurat' : 'unauthorized' }, refuz);
 
   // ?test=1 — mailul pleaca doar la Razvan, cu subiect marcat. Pentru verificari, fara sa
   // primeasca Natalia un raport din senin inainte sa i se explice ce e.

@@ -1,0 +1,5 @@
+ID;Bloc;Subansamblu;Linia;Vedere / zona (sursa);DN;Diametru×grosime capăt 1 (mm);Diametru×grosime capăt 2 (mm);Poziția 1;Poziția 2;Tip îmbinare;Legătură la conducta existentă;Certitudine;Observații tehnice;Desen;Stare;Data;Sudor (poanson);Buletin NDT;Observații șantier
+CP-001;Planșa test;Z1. Linie fictivă DN300;DN300 test;zona fictivă;DN300;323,9×8;323,9×8;1 Țeavă test 2,00 m;2 Cot test 90°;cap la cap;nu;sigur;Exemplu sintetic (a doua versiune a listei).;DESEN-TEST-01;de executat;;;;
+CP-002;Planșa test;Z1. Linie fictivă DN300 (revizuită);DN300 test;zona fictivă;DN300;323,9×8;323,9×10;2 Cot test 90°;3 Teu O'Test;cap la cap;nu;sigur;Subansamblul și certitudinea s-au schimbat;DESEN-TEST-01;de executat;;;;
+CP-003;Planșa test;Z2. Ramură fictivă DN100;DN100 test;zona fictivă;DN100;114,3×6,3;flanșă DN100;4 Țeavă test;5 Flanșă test;flanșă cu gât;nu;posibilă, de confirmat;;DESEN-TEST-01;de executat;;;;
+CR-001;Rezervor test;Z4. Rezervor fictiv;DN50 test;zona fictivă;DN50;60,3×4;60,3×4;6 Țeavă test;7 Racord test;cap la cap;nu;sigur;Cod nou (înlocuiește CP-004 / CP-005);DESEN-TEST-02;de executat;;;;

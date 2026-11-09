@@ -1,0 +1,3 @@
+R4: src/redari/convocatorNeexpediat.js:11 include calitate_document; lotul o citea deja prin COL_CONVOCARE (comune.jsx:12). Regresii cu proiecție PostgREST strictă: convocatorNeexpediat.test.js:224, convocatoareMasa.test.js:615 — aceeași calitate = reia, NULL/diferită = reincarca, fără generare/număr nou la reia.
+Verificări: npx vitest run — 3.939 teste trecute, 22 sărite; npx vite build și git diff --check verzi. Fără schimbări SQL sau aplicare migrări; același branch și PR draft, fără merge.
+L12/L18/L19/L20/L23/L25: coloana este transportată explicit în ambele proiecții, clientul fals elimină câmpurile necerute, cazurile legitim/legacy/diferit sunt verificate; L01–L11, L13–L17, L21–L22 și L24 n/a pentru această rundă.

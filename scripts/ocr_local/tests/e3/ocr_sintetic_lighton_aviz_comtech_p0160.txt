@@ -1,0 +1,105 @@
+# SINTETIC — transcris manual din scanul avizului COMTECH CO P 0160 (21.10.2026), NU e ieșire reală a cititorului;
+# reproduce forma exportului LightOn (rânduri „|”) (tabel + rândul cu numerele coloanelor + caseta de totaluri de sub tabel).
+
+## TEXT (tabele ca rânduri „|”)
+
+Furnizor : COMTECH CO S.R.L
+C.I.F. : RO 9600823
+Nr.inreg. ORC.: J28/215/1997
+Sediul: Slatina ,Str. Construcotorului ,nr.3, CP 230070
+
+AVIZ
+DE INSOTIRE A MARFII
+Seria: P Numar: 0160
+Data (zi/luna/an): 21.10.2026
+
+Cumparator: TRANSGAZ S.A
+C.I.F.: RO 13068733
+Sediu: P-ta C.I Motas, Nr. 1
+Judet: Medias, Sibiu
+Adresa de livrare:Organizare de Santier Transgaz ,Jupanesti , FN , Jud. Mehedinti
+
+| Nr.crt | Cod Articol | Denumirea produselor / serviciilor | Nava | Cantitatea/ml | Nr.Sarja | Lungimea (m) | Greutatea neta (kg) | Comanda |
+| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| 1 | 247EK04204 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B2407893 | 5,95 | 0,684 | None |
+| 2 | 247EK04200 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B2407893 | 5,83 | 0,670 | None |
+| 3 | 247EK03988 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408380 | 5,93 | 0,681 | None |
+| 4 | 247EK03887 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408380 | 5,90 | 0,678 | None |
+| 5 | 247EK04227 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B2407893 | 5,95 | 0,684 | None |
+| 6 | 247EK03818 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408384 | 6,05 | 0,695 | None |
+| 7 | 247EK04070 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408383 | 5,96 | 0,685 | None |
+| 8 | 247EK04071 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408383 | 5,95 | 0,684 | None |
+| 9 | 247EK04035 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408383 | 6,08 | 0,699 | None |
+| 10 | 247EK01907 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | 2485300887 | 6,06 | 0,696 | None |
+| 11 | 247EK03870 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408384 | 6,02 | 0,692 | None |
+| 12 | 247EK03494 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B2407893 | 5,95 | 0,684 | None |
+| 13 | 247EK03073 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | 2489300883 | 6,11 | 0,702 | None |
+| 14 | 247EK03072 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | 2489300883 | 6,05 | 0,695 | None |
+| 15 | 247EK03710 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408382 | 5,90 | 0,678 | None |
+| 16 | 247EK03966 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408380 | 5,97 | 0,686 | None |
+| 17 | 247EK03897 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408380 | 5,91 | 0,679 | None |
+| 18 | 247EK04056 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408383 | 5,94 | 0,682 | None |
+| 19 | 247EK03077 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | 2489300883 | 6,08 | 0,699 | None |
+| 20 | 247EK04348 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408382 | 5,93 | 0,681 | None |
+| 21 | 247EK03913 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408380 | 6,15 | 0,707 | None |
+| 22 | 247EK04034 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408383 | 6,01 | 0,690 | None |
+| 23 | 247EK04274 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408382 | 5,89 | 0,677 | None |
+| 24 | 247EK03430 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408378 | 5,98 | 0,687 | None |
+| 25 | 247EK03774 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408382 | 5,92 | 0,680 | None |
+| 26 | 247EK04364 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408382 | 5,59 | 0,642 | None |
+| 27 | 247EK03940 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408380 | 5,90 | 0,678 | None |
+| 28 | 247EK03847 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | UGAH ACE | 1.0 | B0408384 | 6,02 | 0,692 | None |
+| 29 | 247EK03432 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | MV ECE (1) | 1.0 | B0408378 | 6,00 | 0,689 | None |
+| 30 | 247EK03425 | Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE | MV ECE (1) | 1.0 | B0408378 | 5,99 | 0,688 | None |
+
+Aviz client: -
+
+Semnatura si stampila furnizorului :
+Numele delegatului: CHIVARAN FLORIN
+C.I. SERIA None nr None eliberata (a)
+Mijloc de transport nr: VL 93 CCF / VL 97 CCF
+Expedierea s-a facut in prezenta noastra la data de
+
+Semnatura de primire cumparator:
+
+Total greutate neta:
+**20.564 kg**
+Total lungime:
+**178.97 m**
+Total cantitate: **30**
+
+Document emis de :
+
+## CSV (doar tabelele)
+
+Nr.crt,Cod Articol,Denumirea produselor / serviciilor,Nava,Cantitatea/ml,Nr.Sarja,Lungimea (m),Greutatea neta (kg),Comanda
+1,247EK04204,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B2407893,"5,95","0,684",None
+2,247EK04200,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B2407893,"5,83","0,670",None
+3,247EK03988,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408380,"5,93","0,681",None
+4,247EK03887,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408380,"5,90","0,678",None
+5,247EK04227,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B2407893,"5,95","0,684",None
+6,247EK03818,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408384,"6,05","0,695",None
+7,247EK04070,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408383,"5,96","0,685",None
+8,247EK04071,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408383,"5,95","0,684",None
+9,247EK04035,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408383,"6,08","0,699",None
+10,247EK01907,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,2485300887,"6,06","0,696",None
+11,247EK03870,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408384,"6,02","0,692",None
+12,247EK03494,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B2407893,"5,95","0,684",None
+13,247EK03073,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,2489300883,"6,11","0,702",None
+14,247EK03072,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,2489300883,"6,05","0,695",None
+15,247EK03710,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408382,"5,90","0,678",None
+16,247EK03966,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408380,"5,97","0,686",None
+17,247EK03897,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408380,"5,91","0,679",None
+18,247EK04056,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408383,"5,94","0,682",None
+19,247EK03077,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,2489300883,"6,08","0,699",None
+20,247EK04348,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408382,"5,93","0,681",None
+21,247EK03913,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408380,"6,15","0,707",None
+22,247EK04034,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408383,"6,01","0,690",None
+23,247EK04274,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408382,"5,89","0,677",None
+24,247EK03430,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408378,"5,98","0,687",None
+25,247EK03774,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408382,"5,92","0,680",None
+26,247EK04364,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408382,"5,59","0,642",None
+27,247EK03940,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408380,"5,90","0,678",None
+28,247EK03847,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",UGAH ACE,1.0,B0408384,"6,02","0,692",None
+29,247EK03432,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",MV ECE (1),1.0,B0408378,"6,00","0,689",None
+30,247EK03425,"Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE",MV ECE (1),1.0,B0408378,"5,99","0,688",None

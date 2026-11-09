@@ -1,3 +1,4 @@
+import { poateCheltuiUI } from './ofertareResponsabili.js'
 // J02b — „nu se aplică" / „exceptată" = închidere DOAR prin confirmare umană explicită.
 // Regula (aceeași ca în BD, fn_ofertare_cerinta_na_confirmata):
 //   * AI-ul (ofertare_acoperire.status='nu_se_aplica', ofertare_pt_legaturi fel='exceptat' sursa='ai')
@@ -113,7 +114,8 @@ export function stareComutatorJ02b(lic) {
 export function poatePorniJ02b(lic, profile) {
   if (stareComutatorJ02b(lic) !== 'oprita' || !profile?.id) return false
   // r6: responsabilul care s-a numit singur (responsabil_setat_de = el) NU poate porni — RPC-ul refuză oricum
-  return profile.is_owner === true || (lic.responsabil_id === profile.id && lic.responsabil_setat_de !== profile.id)
+  // 20261124a: și responsabilul 2, aceeași regulă (poarta unică; serverul verifică și că l-a numit owner / admin Ofertare)
+  return poateCheltuiUI(lic, profile)
 }
 
 // Badge-ul „nu se aplică” din registrul de acoperire. Întoarce null (nimic) sau { fel, text, confirmabil }:

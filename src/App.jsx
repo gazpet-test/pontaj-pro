@@ -1,5 +1,7 @@
+import { employeeFieldRead, EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeePersonalWrite } from './employeesPersonal.js'
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
+import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
@@ -59,7 +61,13 @@ import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOre
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
+const IntrebariTehnice = lazy(() => import('./IntrebariTehnice.jsx'))   // ❓ Întreabă echipa — spețe tehnice → răspuns AI informativ (20261105a); modulul 'intrebari_tehnice'
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
+const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
+const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
+const RedariInformarePublic = lazy(() => import('./RedariInformarePublic.jsx'))   // informarea GDPR completă (țintă QR/link din convocator), fără login
+// 📱 SMS (20261130b): ruta proprie /sms pentru owner și modulul 'sms' (utilizator / test); nivelul real îl dă BD-ul (fn_sms_nivel)
+const SmsPagina = lazy(() => import('./sms/SmsPagina.jsx'))
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
@@ -238,8 +246,27 @@ td{padding:9px 12px;font-size:13px;border-bottom:1px solid #161B22;vertical-alig
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#1C2128}
 .nl{background:none;border:none;cursor:pointer;padding:7px 13px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#8B949E;transition:all .2s;white-space:nowrap;flex-shrink:0}
-.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
-.topbar::-webkit-scrollbar{display:none}
+/* Audit UI 02.11.2026: pe desktop se derulează DOAR taburile de module; logo + zona din dreapta (Chat, 🔔, Ieșire) rămân mereu vizibile */
+.topbar{overflow:visible}
+.navwrap{display:flex;align-items:center;flex:1 1 auto;min-width:0;gap:2px}
+.navscroll{display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+/* TKT-2026-0373: estomparea arată pe ce parte mai sunt taburi ascunse (stânga și/sau dreapta) */
+.navscroll.dr{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent)}
+.navscroll.st{-webkit-mask-image:linear-gradient(90deg,transparent,#000 28px,#000 100%);mask-image:linear-gradient(90deg,transparent,#000 28px,#000 100%)}
+.navscroll.st.dr{-webkit-mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+.navsag{background:#21262D;border:1px solid #30363D;color:#E6EDF3;border-radius:6px;width:24px;height:28px;cursor:pointer;flex-shrink:0;font-size:15px;line-height:1;padding:0}
+.navsag:hover{background:#30363D}
+.navscroll::-webkit-scrollbar{display:none}
+/* sub 1800 px: în zona din dreapta rămân iconițele + contoarele, textul apare în tooltip */
+@media (max-width:1799px){.topbar .tb-txt{display:none}}
+/* tabletă / ecran îngust (<1100 px): zona din dreapta nu mai încape -> toată bara se derulează (ca înainte), fără să lățească pagina */
+@media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navwrap,.navscroll{flex:0 0 auto}.navscroll,.navscroll.st,.navscroll.dr{-webkit-mask-image:none;mask-image:none}.navsag{display:none}}
+@media (max-width:719px){.navwrap{display:none}}
+.home-account>div{min-width:0;overflow-wrap:anywhere}
+@media (max-width:1349px){.home-header{flex-wrap:wrap;gap:12px!important;padding:12px 20px!important}.home-account{flex-wrap:wrap;margin-left:auto!important}}
+/* Panou PontajPRO (audit UI 02.11): grilele se reașază pe ecrane înguste, pagina nu se mai lățește */
+@media (max-width:1099px){.panou-kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))!important}.panou-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media (max-width:759px){.panou-grid{grid-template-columns:minmax(0,1fr)!important}}
 @media (max-width:719px){.nl{display:none}}
 .nl:hover,.nl.active{background:#21262D;color:#E6EDF3}
 .nl.active{color:#58A6FF;background:#1F6FEB15}
@@ -440,7 +467,7 @@ function ChatNavButton() {
       onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)' }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
     >
-      {open ? '✕' : '💬'} Chat
+      {open ? '✕' : '💬'} <span className="tb-txt">Chat</span>
       {!open && unread > 0 && (
         <span style={{
           background: G.red,
@@ -765,6 +792,22 @@ function Layout({ children }) {
     const t = setInterval(load, 60000)
     return () => clearInterval(t)
   }, [profile?.id])
+  // TKT-2026-0373: banda de taburi nu mai ascunde taburi fără semn — tabul paginii curente e adus în vedere, săgețile ‹ › apar
+  // când mai sunt taburi ascunse pe o parte, iar rotița mouse-ului nu mai derulează banda (de acolo „dispăreau” Acasă/Panou/Pontaj)
+  const navRef = useRef(null)
+  const [navAscuns, setNavAscuns] = useState({ st: false, dr: false })
+  const masoaraNav = useCallback(() => {
+    const el = navRef.current; if (!el) return
+    const st = el.scrollLeft > 2, dr = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+    setNavAscuns(v => (v.st === st && v.dr === dr) ? v : { st, dr })
+  }, [])
+  useEffect(() => {
+    const el = navRef.current
+    if (el) { el.querySelector('.nl.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); masoaraNav() }
+    window.addEventListener('resize', masoaraNav)
+    return () => window.removeEventListener('resize', masoaraNav)
+  }, [loc.pathname, profile?.id, profile?.email, profile?.role, masoaraNav])   // email/rol schimbă lista de taburi (Gemini P3)
+  const deruleazaNav = sens => { const el = navRef.current; if (el) el.scrollBy({ left: sens * Math.max(160, el.clientWidth * 0.7), behavior: 'smooth' }) }
   // Externii (email non-@gazpet.ro, ex. partenerul Adrom Evolution) nu văd Tichete/Consumabile
   const esteExtern = !(profile?.email || '').toLowerCase().endsWith('@gazpet.ro')
   const navItems = [
@@ -782,6 +825,7 @@ function Layout({ children }) {
       { p:'/consumabile', i:'🛒', l:'Consumabile' },
     ]),
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
+    ...(hasModuleAccess(profile, 'sms') ? [{p:'/sms',i:'📱',l:'SMS'}] : []),
     ...(hasModuleAccess(profile, ADMIN_ALERTE_KEY) ? [{p:'/administrator',i:'🔔',l:'Administrator'}] : []),
     ...(isSuperAdmin || profile?.can_modify_employees === true ? [{p:'/admin',i:'⚙️',l:'Admin'}] : []),
   ]
@@ -794,7 +838,14 @@ function Layout({ children }) {
           <div style={{width:28,height:28,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>⏱</div>
           <span style={{fontWeight:800,fontSize:14,letterSpacing:'-.3px'}}>PontajPRO</span>
         </div>
-        {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+        {/* taburile de module: zonă proprie derulabilă; săgețile ‹ › apar doar când mai sunt taburi ascunse (TKT-2026-0373) */}
+        <div className="navwrap">
+          {navAscuns.st && <button type="button" className="navsag" title="Taburile din stânga" aria-label="Taburile din stânga" onClick={()=>deruleazaNav(-1)}>‹</button>}
+          <div ref={navRef} className={`navscroll${navAscuns.st?' st':''}${navAscuns.dr?' dr':''}`} onScroll={masoaraNav}>
+            {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+          </div>
+          {navAscuns.dr && <button type="button" className="navsag" title="Taburile din dreapta" aria-label="Taburile din dreapta" onClick={()=>deruleazaNav(1)}>›</button>}
+        </div>
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
           {/* ℹ️ Noutăți modul — anunțuri per modul, reminder la 12 h până la „Am citit" (08.09.2026) */}
           <ModulNoutati modul={(loc.pathname.split('/')[1] || '').toLowerCase() || null} profile={profile} />
@@ -821,7 +872,7 @@ function Layout({ children }) {
               onMouseEnter={e => { e.currentTarget.style.background = '#E3B341' + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
               onMouseLeave={e => { e.currentTarget.style.background = '#E3B341' + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
             >
-              🚚 Cere transport
+              🚚 <span className="tb-txt">Cere transport</span>
             </button>
           )}
           {!esteExtern && (<>
@@ -845,7 +896,7 @@ function Layout({ children }) {
             onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
             onMouseLeave={e => { e.currentTarget.style.background = G.purple + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
           >
-            🎫 Tichete
+            ⚡ <span className="tb-txt">Tichet rapid</span>
           </button>
           {/* Ale mele — popover split */}
           <div style={{ position:'relative' }}>
@@ -865,7 +916,7 @@ function Layout({ children }) {
               onMouseEnter={e => { e.currentTarget.style.background = (ticheteMele.deConfirmat>0?G.green:G.purple)+'33'; e.currentTarget.style.color = ticheteMele.deConfirmat>0?G.green:G.purple; e.currentTarget.style.borderColor = ticheteMele.deConfirmat>0?G.green:G.purple }}
               onMouseLeave={e => { const tot = ticheteMele.deschise+ticheteMele.asignate; const c = ticheteMele.deConfirmat>0?G.green:G.purple; e.currentTarget.style.background = ticheteMele.deConfirmat>0?c+'33':tot>0?c+'33':G.bg; e.currentTarget.style.color = (ticheteMele.deConfirmat>0||tot>0)?c:G.dim; e.currentTarget.style.borderColor = (ticheteMele.deConfirmat>0||tot>0)?c:G.border }}
             >
-              Ale mele
+              📋 <span className="tb-txt">Ale mele</span>
               {ticheteMele.deConfirmat > 0 && (
                 <span style={{ background:G.green, color:'#fff', borderRadius:10, padding:'1px 6px', fontSize:10, fontWeight:800, animation:'nb-pulse 1.5s infinite' }}>
                   🎉 {ticheteMele.deConfirmat}
@@ -974,11 +1025,11 @@ function Layout({ children }) {
           <NotificationBell excludeModul="Ofertare" />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
-            <div style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
+            <div className="tb-txt" style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
           </div>
           <div style={{width:1,height:28,background:G.border}}/>
-          <Avatar name={profile?.name} id={1} size={28}/>
-          <div>
+          <span title={profile?.name||profile?.email||''}><Avatar name={profile?.name} id={1} size={28}/></span>
+          <div className="tb-txt">
             <div style={{fontSize:12,fontWeight:600,lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
             <RoleBadge role={profile?.role} size="small"/>
           </div>
@@ -1016,6 +1067,7 @@ function HomeDashboard() {
     { path:'/financiar', icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi emise · Generator · Email · NAS', active:true, requireModule:'financiar' },
     { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'logistica' },
     { path:'/ofertare', icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:true, requireModule:'ofertare' },
+    { path:'/redari',   icon:'🌾', label:'Redări teren', color:'#7CB342', desc:'Lot 1 Transgaz · convocări · PV', active:true, requireModule:'redari' },
     { path:'/magazie',  icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:true, requireModule:'magazie' },
     { path:'/comercial', icon:'🛒', label:'Comercial',   color:'#A371F7', desc:'Vânzări · Contracte · CRM',        active:true, requireModule:'comercial' },
     { path:'/achizitii', icon:'📥', label:'Achiziții',   color:'#3FB950', desc:'Inbox comenzi · Procesare · Recepție', active:true, requireModule:'achizitii' },
@@ -1029,7 +1081,9 @@ function HomeDashboard() {
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'], moduleKey:'sedinte' },
     { path:'/marketing', icon:'📣', label:'Marketing',   color:'#1877F2', desc:'Postări Facebook · din rapoartele de șantier', active:true, requireModule:'marketing' },
     { path:'/cladire',   icon:'🏢', label:'Clădire',     color:'#E4261E', desc:'Sediu · centrală · termostate · meteo · alerte', active:true, requireModule:'cladire' },
+    { path:'/intrebari', icon:'❓', label:'Întreabă echipa', color:'#56D4DD', desc:'Spețe tehnice · răspuns AI informativ', active:true, requireModule:'intrebari_tehnice' },
     { path:'/mesaj-vocal', icon:'🎙', label:'Mesaj vocal', color:'#A371F7', desc:'Text → voce (Aoede) · MP3 pentru WhatsApp', active:true, requireModule:'mesaj_vocal' },
+    { path:'/sms', icon:'📱', label:'SMS', color:'#24778B', desc:'Mesaje către angajați · aprobare · istoric', active:true, requireModule:'sms' },
     // TEMPORAR (17.09.2026): se șterge cu tot cu rută când organigrama propriu-zisă e gata
     { path:'/organigrama-propuneri', icon:'🧩', label:'Organigramă (propuneri)', color:'#56D4DD', desc:'Departamente · funcții · rol la licitații · PROVIZORIU', active:true },
     // TEMPORAR (24.08.2026): se șterge împreună cu ruta + InventarCorectii.jsx la finalul proiectului de aliniere
@@ -1048,17 +1102,17 @@ function HomeDashboard() {
   })
 
   return (
-    <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column'}}>
+    <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column',fontFamily:"'Barlow',sans-serif"}}>
       <style>{css}</style>
       {/* Header */}
-      <div style={{background:'#161B22',borderBottom:'1px solid #30363D',padding:'0 32px',height:60,display:'flex',alignItems:'center',gap:16,position:'sticky',top:0,zIndex:100}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,flex:1}}>
+      <div className="home-header" style={{background:'#161B22',borderBottom:'1px solid #30363D',padding:'0 32px',minHeight:60,display:'flex',alignItems:'center',gap:16,position:'sticky',top:0,zIndex:100,minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
           <div style={{width:32,height:32,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>⏱</div>
           <span style={{fontWeight:800,fontSize:16,letterSpacing:'-.3px',color:'#E6EDF3'}}>Gazpet</span>
           <span style={{fontWeight:300,fontSize:16,color:'#8B949E'}}>ERP</span>
         </div>
         <MeteoSediu style={{marginRight:12}} />
-        <div style={{textAlign:'right',marginRight:16}}>
+        <div style={{textAlign:'right',marginRight:16,whiteSpace:'nowrap',flexShrink:0}}>
           <div style={{fontSize:18,fontWeight:800,color:'#58A6FF',fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
           <div style={{fontSize:11,color:'#8B949E'}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}</div>
         </div>
@@ -1081,7 +1135,7 @@ function HomeDashboard() {
           }}>
           🎫 Tichete
         </button>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginLeft:10}}>
+        <div className="home-account" style={{display:'flex',alignItems:'center',gap:10,marginLeft:10,minWidth:0}}>
           <Avatar name={profile?.name} id={1} size={32}/>
           <div>
             <div style={{fontSize:13,fontWeight:600,color:'#E6EDF3',lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
@@ -1303,7 +1357,7 @@ function DashboardPage() {
   const loadData = async () => {
     setLoad(true)
     const today=todayStr()
-    let eq=supabase.from('employees').select('*,sites(name)').eq('active',true)
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').eq('active',true)
       .or(`termination_date.is.null,termination_date.gte.${today}`)
     if (!isAdmin){
       const siteIds=profile?.site_ids||[]
@@ -1484,7 +1538,7 @@ function DashboardPage() {
         <div style={{fontSize:11,color:G.orange+'99'}}>Verificați în Pontaj dacă diurnele sunt corect bifate.</div></div>
       </div>}
 
-      <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:13,marginBottom:20}}>
+      <div className="panou-kpi" style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(0,1fr))',gap:13,marginBottom:20}}>
         {[{l:'Total Angajați',v:stats.total,i:'👥',c:G.blue,s:'activi'},{l:'Prezenți Azi',v:stats.present,i:'✅',c:G.green,s:`din ${stats.total}`},{l:'Au Plecat',v:stats.checkedOut,i:'🚪',c:G.yellow,s:'ieșire'},{l:'Medie Ore',v:minsToHM(stats.avgMins),i:'⏱',c:G.purple,s:'azi'},{l:'Cu Diurnă',v:stats.diurna,i:'💰',c:stats.diurna>stats.present?G.red:G.orange,s:'azi'}].map(x=>(
           <div key={x.l} style={{...S.card,padding:'16px 18px'}}>
             <div style={{display:'flex',justifyContent:'space-between'}}>
@@ -1497,7 +1551,7 @@ function DashboardPage() {
         ))}
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16}}>
+      <div className="panou-grid" style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:16}}>
         {/* Prezenta pe departamente - mereu vizibil */}
         <div style={{...S.card,padding:20}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:16}}>Prezență pe Departamente</div>
@@ -1867,7 +1921,7 @@ function PontajPage() {
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async()=>{
     const monthStart=date.slice(0,7)+'-01'
-    let q=supabase.from('employees').select('*,sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
+    let q=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
     if(!isAdmin){
       const siteIds=profile?.site_ids||[]
       if(siteIds.length===0){setEmps([]);setLoad(false);return}
@@ -3020,7 +3074,7 @@ function ReportsPage() {
 
     // Eligibili: activii + cei cu încetare de la începutul lunii încolo (au zile bifate înainte de plecare
     // și trebuie plătiți; cu active=true dispăreau din plată — Băiesu Darius, Tudurachi, Ioan Sorin, sept 2026)
-    let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).or(`active.eq.true,termination_date.gte.${monthStart}`)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
     // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
@@ -4392,7 +4446,7 @@ function ReportsPage() {
     const recEmpIds = [...new Set(recs.map(r=>r.employee_id))].filter(Boolean)
     
     // 3. Fetch employees: cei activi + cei cu records (chiar dacă acum inactivi)
-    let eq=supabase.from('employees').select('*,sites(name)').order('name')
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').order('name')
     if (recEmpIds.length > 0) {
       // OR logic: includ toți active=true SAU cei cu records în perioadă
       eq = eq.or(`active.eq.true,id.in.(${recEmpIds.join(',')})`)
@@ -4842,7 +4896,7 @@ function ReportsPage() {
     // Criteriul e „încetare DE LA începutul lunii exportate încolo", nu „încetare
     // ÎN luna exportată": cine a plecat pe 7 august a lucrat tot iulie, iar la
     // exportul pe iulie trebuie să apară. Un filtru pe luna exportată l-ar sări.
-    let eq=supabase.from('employees').select('*').order('name')
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).order('name')
       .or(`active.eq.true,termination_date.gte.${lunaStart}`)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
@@ -5144,9 +5198,9 @@ function ReportsPage() {
       const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)   // lunile atinse de tranșă
 
       // Eligibili: activii + cei cu încetare de la începutul lunii încolo (ca în savePayment)
-      let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
+      let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).or(`active.eq.true,termination_date.gte.${monthStart}`)
       if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
-      const {data:emps}=await eq
+      const {data:emps}=await withEmployeePersonal(eq, 'iban', showToast, true)
       // TOATE înregistrările lunii/lunilor — pentru plafon (CO) și bifele dinaintea tranșei
       let recs = []
       { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
@@ -5201,7 +5255,7 @@ function ReportsPage() {
     if (!hasPontajBrutAccess) { showToast('Acces refuzat — necesită bifa „Pontaj Brut" pe profil','error'); return }
     setExpS(true)
     try{
-    let eq=supabase.from('employees').select('*').eq('active',true).order('name')
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).eq('active',true).order('name')
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
     // Paginare manuală
@@ -6527,13 +6581,13 @@ function AdminPage() {
   // Tichete — responsabil default per departament (tichete_default_responsabili, PK departament)
   const [tichDefaults, setTichDefaults] = useState({})   // { departament: profile_id }
   const [savingTichDefaults, setSavingTichDefaults] = useState(false)
-  useEffect(()=>{ loadAll() },[tab])
+  useEffect(()=>{ loadAll().catch(() => setLoad(false)) },[tab])
   const loadAll=async()=>{
     setLoad(true)
     const [s,p,e,c,st,ps,fs,os,dep,jr,sc,tdr]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
-      supabase.from('employees').select('*,sites(name)').order('name'),
+      withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').order('name'), 'iban,observatii_hr', showToast),
       supabase.from('calendar_days').select('*').order('date').limit(60),
       supabase.from('settings').select('*'),
       supabase.from('profile_sites').select('*'),
@@ -6833,10 +6887,10 @@ function AdminPage() {
         ?`Contul ${cont.email} va fi închis automat (drepturi scoase, logare blocată). Continui?`
         :`Data încetării e în viitor (${formatDataRo(dataInc)}): contul ${cont.email} NU se închide acum și apare în alerte. Continui?`)) return
     } else {
-      if(!window.confirm(`Reactivezi ${emp.name}?${emp.termination_date?` Data încetării (${formatDataRo(emp.termination_date)}) se șterge (rămâne notată în observațiile HR).`:''}\n\nAcordul de colaborare externă (dacă exista) revine la „Necunoscut”: la o nouă plecare se reconfirmă.${cont?`\n\nAccesul contului ${cont.email} NU se redă automat — restaurarea o face owner-ul din Manageri.`:''}`)) return
+      if(!window.confirm(`Reactivezi ${emp.name}?${emp.termination_date?` Data încetării (${formatDataRo(emp.termination_date)}) se șterge ${employeeFieldRead(emp, "observatii_hr") ? "(ramane notata in observatiile HR)" : "(observatii HR indisponibile - fara drept / eroare; nu se modifica)"}.`:''}\n\nAcordul de colaborare externă (dacă exista) revine la „Necunoscut”: la o nouă plecare se reconfirmă.${cont?`\n\nAccesul contului ${cont.email} NU se redă automat — restaurarea o face owner-ul din Manageri.`:''}`)) return
       updates={active:true,termination_date:null}
       // D4: data încetării nu se pierde fără urmă (hr_employees_audit ține doar INSERT/DELETE)
-      if(emp.termination_date) updates.observatii_hr=[emp.observatii_hr,`Reactivat la ${formatDataRo(new Date().toISOString())}; încetarea anterioară: ${formatDataRo(emp.termination_date)}.`].filter(Boolean).join('\n')
+      if(emp.termination_date && Object.prototype.hasOwnProperty.call(employeePersonalWrite(emp, {observatii_hr:null}), 'observatii_hr')) updates.observatii_hr=[emp.observatii_hr,`Reactivat la ${formatDataRo(new Date().toISOString())}; încetarea anterioară: ${formatDataRo(emp.termination_date)}.`].filter(Boolean).join('\n')
     }
     const {error}=await supabase.from('employees').update(updates).eq('id',emp.id)
     if(error){showToast('Eroare: '+error.message,'error');return}
@@ -6869,7 +6923,7 @@ function AdminPage() {
       position:editEmp.position||null,
       department:editEmp.department,
       site_id:editEmp.site_id||null,
-      iban:editEmp.iban||null,
+      ...employeePersonalWrite(employees.find(e=>e.id===editEmp.id), {iban:editEmp.iban||null}),
       hire_date:editEmp.hire_date||null,
       termination_date:editEmp.termination_date||null,
       cetatenie:editEmp.cetatenie||null,
@@ -7097,7 +7151,7 @@ function AdminPage() {
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Angajat</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet *</Lbl><input style={S.input} value={editEmp.name||''} onChange={e=>setEditEmp({...editEmp,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Funcție</Lbl><input style={S.input} value={editEmp.position||''} onChange={e=>setEditEmp({...editEmp,position:e.target.value})}/></div>
-            {canEditIban&&<div style={{marginBottom:12}}><Lbl>IBAN (plăți bancă) <span style={{fontSize:10,color:G.yellow}}>· editabil Super Admin & HR</span></Lbl><input style={S.input} placeholder="RO49AAAA1B31007593840000" value={editEmp.iban||''} onChange={e=>setEditEmp({...editEmp,iban:e.target.value.toUpperCase().replace(/\s/g,'')})} maxLength={34}/></div>}
+            {canEditIban&&<div style={{marginBottom:12}}><Lbl>IBAN (plăți bancă) <span style={{fontSize:10,color:G.yellow}}>· editabil Super Admin & HR</span></Lbl><input style={S.input} disabled={!employeeFieldRead(employees.find(e=>e.id===editEmp.id), "iban")} title={employeeFieldRead(employees.find(e=>e.id===editEmp.id), "iban") ? "" : "IBAN indisponibil - fara drept / eroare"} placeholder="RO49AAAA1B31007593840000" value={editEmp.iban||''} onChange={e=>setEditEmp({...editEmp,iban:e.target.value.toUpperCase().replace(/\s/g,'')})} maxLength={34}/>{!employeeFieldRead(employees.find(e=>e.id===editEmp.id), "iban")&&<div role="status">IBAN indisponibil - fara drept / eroare</div>}</div>}
             <div style={{marginBottom:12}}><Lbl>Departament</Lbl>
               <select value={editEmp.department} onChange={e=>setEditEmp({...editEmp,department:e.target.value})} style={{width:'100%'}}>
                 {DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
@@ -8380,7 +8434,7 @@ export function SalariiPage({ noExport = false } = {}) {
     setUnlockUntil(0)
   }
 
-  useEffect(()=>{ if(unlocked) loadData() },[unlocked])
+  useEffect(()=>{ if(unlocked) loadData().catch(() => setLoad(false)) },[unlocked])
 
   useEffect(()=>{ if(unlocked&&tab==='stat'&&statImporturi===null) loadStatImporturi() },[unlocked,tab])
   useEffect(()=>{ if(unlocked&&statImportSel!=null) loadStatLinii(statImportSel) },[unlocked,statImportSel])
@@ -8402,7 +8456,7 @@ export function SalariiPage({ noExport = false } = {}) {
   const loadData=async()=>{
     setLoad(true)
     const [{data:emps},{data:sals},{data:st}]=await Promise.all([
-      supabase.from('employees').select('*,sites(name)').eq('active',true).order('name'),
+      withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').eq('active',true).order('name'), 'email', showToast),
       supabase.from('employee_salaries').select('*'),
       supabase.from('settings').select('*')
     ])
@@ -8441,8 +8495,9 @@ export function SalariiPage({ noExport = false } = {}) {
   const saveSalary=async()=>{
     setSaving(true)
     // Update email on employee
-    if(editSal.empEmail!==undefined){
-      await supabase.from('employees').update({email:editSal.empEmail}).eq('id',editSal.employee_id)
+    const employeeUpdates=employeePersonalWrite(employees.find(e=>e.id===editSal.employee_id), {email:editSal.empEmail})
+    if(editSal.empEmail!==undefined && Object.keys(employeeUpdates).length){
+      await supabase.from('employees').update(employeeUpdates).eq('id',editSal.employee_id)
     }
     const payload={
       employee_id:editSal.employee_id,
@@ -8565,7 +8620,8 @@ export function SalariiPage({ noExport = false } = {}) {
                 <div style={{fontSize:12,fontWeight:700,color:G.blue,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📧 Contact</div>
                 <div style={{marginBottom:16}}>
                   <Lbl>Email angajat</Lbl>
-                  <input style={S.input} type="email" placeholder="email@gazpet.ro" value={editSal.empEmail} onChange={e=>setEditSal({...editSal,empEmail:e.target.value})}/>
+                  <input style={S.input} type="email" disabled={!employeeFieldRead(employees.find(e=>e.id===editSal.employee_id), "email")} title={employeeFieldRead(employees.find(e=>e.id===editSal.employee_id), "email") ? "" : "Email indisponibil - fara drept / eroare"} placeholder="email@gazpet.ro" value={editSal.empEmail} onChange={e=>setEditSal({...editSal,empEmail:e.target.value})}/>
+                  {!employeeFieldRead(employees.find(e=>e.id===editSal.employee_id), "email")&&<div role="status">Email indisponibil - fara drept / eroare</div>}
                 </div>
 
                 <div style={{fontSize:12,fontWeight:700,color:G.blue,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📋 Contract</div>
@@ -8857,9 +8913,25 @@ export function SalariiPage({ noExport = false } = {}) {
 
 // ════════════════════════════════════════════════════════════════════════════
 // 🎙 Mesaj vocal: profilul din AuthContext (useAuth e local în App.jsx)
+function IntrebariTehniceRoute() {
+  const { profile } = useAuth()
+  return <Suspense fallback={<LoadingScreen />}><IntrebariTehnice profile={profile} /></Suspense>
+}
+
 function MesajVocalRoute() {
   const { profile } = useAuth()
   return <Suspense fallback={<LoadingScreen />}><MesajVocal profile={profile} /></Suspense>
+}
+
+// 📱 SMS: profilul din AuthContext; pagina cere nivelul din BD (owner / utilizator / test) și ascunde Setările pentru non-owner
+function SmsRoute() {
+  const { profile } = useAuth()
+  return <Suspense fallback={<LoadingScreen />}>
+    <main style={{ colorScheme: 'light', background: '#F1F5F9', color: '#263642', borderRadius: 10, padding: '18px clamp(12px, 3vw, 28px)', fontFamily: 'Arial, sans-serif', minHeight: '60vh', boxSizing: 'border-box', overflowWrap: 'anywhere' }}>
+      <h1 style={{ fontSize: 20, margin: '0 0 14px' }}>📱 SMS</h1>
+      <SmsPagina profile={profile} />
+    </main>
+  </Suspense>
 }
 
 // CHATBOT GATE - afișează ChatbotWidget DOAR pentru useri logați (cu profile)
@@ -8898,8 +8970,17 @@ function TichetModulGate() {
   return <TichetModulButton profile={profile} />
 }
 
+// Redări (03.11.2026): garda pe host-ul public la navigarea din aplicație (main.jsx o face la încărcare, vercel.json înaintea ambelor)
+function GardaHostPublicRedari({ children }) {
+  const loc = useLocation()
+  const tinta = tintaRedirectHostPublic({ hostname: window.location.hostname, pathname: loc.pathname, search: loc.search, hash: loc.hash })
+  useEffect(() => { if (tinta) window.location.replace(tinta) }, [tinta])
+  return tinta ? null : children
+}
+
 export default function App() {
   return (
+    <GardaHostPublicRedari>
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage/>}/>
@@ -8909,6 +8990,9 @@ export default function App() {
         <Route path="/co" element={<ConcediuMobilPage/>}/>
         {/* Route PUBLIC RSVP ședință (token din email invitație) — FĂRĂ cont */}
         <Route path="/rsvp/:token/:status" element={<RsvpSedintaPage/>}/>
+        {/* Route PUBLIC Redări teren: răspunsul proprietarului la convocare (token din convocator) — FĂRĂ cont */}
+        <Route path="/redari/raspuns/:token" element={<Suspense fallback={<LoadingScreen/>}><RedariRaspunsPublic/></Suspense>}/>
+        <Route path="/redari/informare" element={<Suspense fallback={<LoadingScreen/>}><RedariInformarePublic/></Suspense>}/>
         <Route path="/aplica" element={<AplicaPublic/>}/>
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
         <Route path="/panou" element={<ProtectedRoute requireModule="pontajpro"><DashboardPage/></ProtectedRoute>}/>
@@ -8930,6 +9014,7 @@ export default function App() {
         <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
         <Route path="/ofertare" element={<ProtectedRoute requireModule="ofertare"><Layout><OfertarePage/></Layout></ProtectedRoute>}/>
+        <Route path="/redari" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><Redari/></Suspense></Layout></ProtectedRoute>}/>
         <Route path="/ctc" element={<ProtectedRoute requireModule="ctc"><Layout><CTCPage/></Layout></ProtectedRoute>}/>
         <Route path="/magazie" element={<ProtectedRoute requireModule="magazie"><Layout><MagaziePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
@@ -8941,7 +9026,9 @@ export default function App() {
         <Route path="/sedinte" element={<ProtectedRoute><SedintePage/></ProtectedRoute>}/>
         <Route path="/marketing" element={<ProtectedRoute requireModule="marketing"><Marketing/></ProtectedRoute>}/>
         <Route path="/cladire" element={<ProtectedRoute requireModule="cladire"><Cladire/></ProtectedRoute>}/>
+        <Route path="/intrebari" element={<ProtectedRoute requireModule="intrebari_tehnice"><IntrebariTehniceRoute/></ProtectedRoute>}/>
         <Route path="/mesaj-vocal" element={<ProtectedRoute requireModule="mesaj_vocal"><MesajVocalRoute/></ProtectedRoute>}/>
+        <Route path="/sms" element={<ProtectedRoute requireModule="sms"><Layout><SmsRoute/></Layout></ProtectedRoute>}/>
         <Route path="/integrari/:tab" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="/integrari" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
@@ -8951,6 +9038,7 @@ export default function App() {
       <BugReportGate />
       <TichetModulGate />
     </AuthProvider>
+    </GardaHostPublicRedari>
   )
 }
 

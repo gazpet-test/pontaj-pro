@@ -14,9 +14,12 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
+import LegaturaExecutie from './redari/ui/LegaturaExecutie.jsx'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
+import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
+import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -171,7 +174,7 @@ export default function ExecutiePage() {
             <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
 
             {CONTEXT_TABS.map(t => {
-              const isActive = tabStr === t.key || (t.key === 'izometrie' && tabStr === 'tronsoane')
+              const isActive = tabStr === t.key || (t.key === 'izometrie' && (tabStr === 'tronsoane' || tabStr === 'nod'))
               return (
                 <button
                   key={t.key}
@@ -256,14 +259,18 @@ export default function ExecutiePage() {
 // ===========================================================================
 function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
   const [proiect, setProiect] = useState(null)
-  // Sub-tab izometrie: 'izometrie' | 'tronsoane'
-  // Dacă vine cu tab=tronsoane (link vechi), auto-selectăm sub-tab tronsoane
-  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' ? 'tronsoane' : 'izometrie')
+  // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod'
+  // Dacă vine cu tab=tronsoane (link vechi) sau tab=nod (link direct de pe telefon), auto-selectăm sub-tab-ul
+  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' ? tab : 'izometrie')
 
   useEffect(() => {
+    // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
+    let viu = true
+    setProiect(null)
     supabase.from('v_executie_dashboard')
       .select('*').eq('id', proiectId).single()
-      .then(({ data }) => setProiect(data))
+      .then(({ data }) => { if (viu) setProiect(data) })
+    return () => { viu = false }
   }, [proiectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -325,6 +332,9 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             )}
           </div>
         )}
+        {/* apare doar când proiectul CURENT s-a citit (cine vede proiectul în Execuție); garda pe id e în componentă */}
+        <OameniSantierButon supabase={supabase} proiectId={proiectId} proiect={proiect} />
+        <LegaturaExecutie proiectId={proiectId} />
       </div>
 
       {/* Tab content cu proiectId prop */}
@@ -336,7 +346,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
       {tab === 'documente'      && (<><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
-      {(tab === 'izometrie' || tab === 'tronsoane') && (
+      {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod') && (
         <div>
           {/* Sub-tab bar */}
           <div style={{
@@ -346,6 +356,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             {[
               {key:'izometrie', label:'📐 Izometrie',  desc:'Pachete · Lansare · Cumulat'},
               {key:'tronsoane', label:'📍 Tronsoane',   desc:'Program · Status · Suduri'},
+              {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · azi / cumulat / rest'},
             ].map(st => {
               const active = izSubTab === st.key
               return (
@@ -364,6 +375,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
           {/* Content */}
           {izSubTab === 'izometrie' && <IzometriePage initialProiectId={Number(proiectId)} />}
           {izSubTab === 'tronsoane' && <TabTronsoane  proiectId={proiectId} />}
+          {izSubTab === 'nod'       && <NodCuplareSchema proiectId={Number(proiectId)} />}
         </div>
       )}
     </div>
@@ -3322,7 +3334,7 @@ function DocCalitateMaterialeSection({ proiectId }) {
             style={{ background: 'none', border: 'none', color: G.green, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {EMOJI_TIP[d.tip] || '📄'} {d.fisier_nume || d.fisier_path.split('/').pop()}
           </button>
-          <a href={`/achizitii?id=${d.comanda_id}`} style={{ color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title="Deschide comanda">🛒 {d._cmd}</a>
+          <a href={`/achizitii?id=${d.comanda_id}`} style={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title={`Deschide comanda: ${d._cmd}`}>🛒 {d._cmd}</a>
           <span style={{ color: G.muted, fontSize: 11.5 }}>🏭 {d._furnizor}</span>
           <span style={{ color: G.dim, fontSize: 11 }}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
           <div style={{ display: 'flex', gap: 6 }}>

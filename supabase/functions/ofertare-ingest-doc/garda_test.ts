@@ -64,10 +64,11 @@ function pdfMinimal(n: number): Uint8Array {
 
 // elig (loturi 20261024b): răspunsul porții unice — implicit eligibil; 'eroare_rpc' = RPC căzut, 'arunca' = excepție
 type Elig = { eligibil: boolean; motiv: string; licitatie_id: number } | 'eroare_rpc' | 'arunca'
-type Opt = { elig?: Elig; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; metaSize?: number; rezultatEsueaza?: boolean; marcajRespins?: boolean; respinge?: boolean; laIncearca?: () => void; aiArunca?: boolean; jurnalEsueaza?: boolean }
+type Opt = { elig?: Elig; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; metaSize?: number; rezultatEsueaza?: boolean; marcajRespins?: boolean; respinge?: boolean; laIncearca?: () => void; aiArunca?: boolean; jurnalEsueaza?: boolean; coada?: { activ: boolean; cerut_de: string | null }; coadaEroare?: boolean; poarta?: boolean }
 function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
   const toate: string[] = []
-  const tabele: Record<string, any[]> = { ofertare_documente_atribuire: [rand], ofertare_ingest_coada: [{ licitatie_id: rand.licitatie_id, cerut_de: 'u-worker' }], ai_usage_log: [] }
+  const tabele: Record<string, any[]> = { ofertare_documente_atribuire: [rand], ofertare_ingest_coada: [{ licitatie_id: rand.licitatie_id, ...(opt.coada ?? { activ: true, cerut_de: 'u-worker' }) }], ai_usage_log: [] }
+  const poarta: any[] = []
   const g = { incercari: [] as any[], emise: new Set<string>(), rezultate: [] as any[], marcaje: [] as any[], descarcari: 0, scrieriDirecte: [] as any[], meta: 0, elig: [] as any[] }
   const from = (t: string) => {
     tabele[t] ||= []
@@ -79,7 +80,7 @@ function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
       eq: (c: string, v: unknown) => { filtre.push(r => String(r[c]) === String(v)); return b },
       update: (p: any) => { op = { tip: 'upd', patch: p }; return b },
       insert: (p: any) => { op = { tip: 'ins', patch: p }; return b },
-      maybeSingle: () => Promise.resolve({ data: structuredClone(pot()[0] ?? null), error: null }),
+      maybeSingle: () => Promise.resolve(t === 'ofertare_ingest_coada' && opt.coadaEroare ? { data: null, error: { message: 'timeout' } } : { data: structuredClone(pot()[0] ?? null), error: null }),
       single: () => Promise.resolve(pot()[0] ? { data: structuredClone(pot()[0]), error: null } : { data: null, error: { message: 'no rows' } }),
       then: (ok: any, ko: any) => new Promise((res, rej) => {
         if (op.tip === 'upd' && t === 'ofertare_documente_atribuire') g.scrieriDirecte.push(structuredClone(op.patch))
@@ -94,6 +95,7 @@ function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
   }
   const rpc = (nume: string, a: any) => {
     if (nume === 'ofertare_doc_are_bucati') return Promise.resolve({ data: false, error: null })
+    if (nume === 'fn_ofertare_poate_cheltui') { poarta.push(structuredClone(a)); return Promise.resolve({ data: opt.poarta ?? true, error: null }) }
     if (nume === 'fn_ofertare_document_eligibil') {
       g.elig.push(structuredClone(a))
       const e = opt.elig ?? { eligibil: true, motiv: 'fara_loturi', licitatie_id: rand.licitatie_id }
@@ -130,7 +132,7 @@ function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
     for (const r of g.rezultate) pe.set(r.p_token, (pe.get(r.p_token) ?? 0) + 1)
     return toate.every(t => pe.get(t) === 1) && [...pe.keys()].every(t => toate.includes(t))
   }
-  return { tabele, g, exactOnce, rand: () => tabele.ofertare_documente_atribuire[0] }
+  return { tabele, g, exactOnce, poarta, rand: () => tabele.ofertare_documente_atribuire[0] }
 }
 const doc = (o: any = {}) => ({ id: 55, licitatie_id: 9, fisier_path: '9/atribuire/55.pdf', nume_original: 'Caiet de sarcini.pdf', tip: 'cs_volum',
   status_procesare: 'neprocesat', eroare: null, size_bytes: 2000, pagini_procesate: 0, pagina_offset: 0, pagini_necitite: [], text_extras: null, revizie: null, ...o })
@@ -464,5 +466,24 @@ Deno.test({ ...Z, name: 'loturi: eligibil (comun / lot_participam / fara_loturi)
     const m = mediu(doc(), pdfMinimal(2), { elig: { eligibil: true, motiv, licitatie_id: 9 } })
     const j = await (await cere()).json()
     assertEquals([j.ok, j.status], [true, 'procesat'], motiv); assert(m.exactOnce())
+  }
+} })
+
+// #908 r4 (review r3 Jakarinos P1-02 / Copilot P1-04): calea internă (x-ingest-secret) cere la FIECARE invocare o cerere activă cu cerut_de
+// care trece ACUM poarta pe cheltuială; orice altceva = refuz înainte de gardă, descărcare și AI
+Deno.test({ ...Z, name: 'r4: apel intern — poarta pe cheltuială întrebată pe cerut_de la fiecare invocare', fn: async () => {
+  ai.mod = 'ok'
+  const m = mediu(doc(), pdfMinimal(2))
+  const j = await (await cere()).json()
+  assertEquals(j.ok, true); assertEquals(m.poarta, [{ p_licitatie_id: 9, p_uid: 'u-worker' }])
+} })
+Deno.test({ ...Z, name: 'r4: apel intern refuzat (coadă inactivă / cerut_de lipsă / poarta NU / citire căzută) → fără gardă, descărcare sau AI', fn: async () => {
+  ai.mod = 'ok'
+  for (const [opt, status] of [[{ coada: { activ: false, cerut_de: 'u-worker' } }, 403], [{ coada: { activ: true, cerut_de: null } }, 403],
+    [{ poarta: false }, 403], [{ coadaEroare: true }, 503]] as const) {
+    const m = mediu(doc(), pdfMinimal(2), opt as any)
+    const r = await cere()
+    assertEquals(r.status === 200 ? (await r.json()).error ? status : 200 : r.status, status, JSON.stringify(opt))
+    assertEquals([m.g.incercari.length, m.g.descarcari, m.rand().status_procesare], [0, 0, 'neprocesat'])
   }
 } })

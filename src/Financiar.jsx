@@ -1120,7 +1120,7 @@ function FacturiFurnizoriTab() {
               <button onClick={()=>openDoc(d.fisier_path)} style={{background:'none',border:'none',color:G.financiar,cursor:'pointer',fontFamily:'inherit',fontSize:12.5,fontWeight:600,textAlign:'left',padding:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={d.fisier_nume}>
                 🧾 {d.fisier_nume || d.fisier_path.split('/').pop()}
               </button>
-              <a href={`/achizitii?id=${d.comanda_id}`} style={{color:G.muted,fontSize:11.5,fontFamily:'monospace',textDecoration:'none'}} title="Deschide comanda în Achiziții">🛒 {d._cmd?.numar_comanda || `#${d.comanda_id}`}</a>
+              <a href={`/achizitii?id=${d.comanda_id}`} style={{display:'block',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:G.muted,fontSize:11.5,fontFamily:'monospace',textDecoration:'none'}} title={`Deschide comanda în Achiziții: ${d._cmd?.numar_comanda || '#'+d.comanda_id}`}>🛒 {d._cmd?.numar_comanda || `#${d.comanda_id}`}</a>
               <span style={{color:G.muted,fontSize:11.5}}>{d._proiect ? `📂 ${d._proiect}` : '—'}</span>
               <span style={{color:G.dim,fontSize:11}}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
               <button onClick={()=>openDoc(d.fisier_path)} style={{padding:'4px 10px',background:G.financiar+'22',border:`1px solid ${G.financiar}44`,borderRadius:6,color:G.financiar,cursor:'pointer',fontSize:11,fontWeight:700}}>👁 Vezi</button>

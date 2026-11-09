@@ -1,5 +1,5 @@
 """python -m ocr_local <comanda> ... (PYTHONPATH=scripts, interpretorul env_mineru al lui Codex).
-Comenzi: plan | foaie-orientare | citeste | compara | reconciliaza | erp <pas> (legatura cu ERP, client.py).
+Comenzi: plan | foaie-orientare | citeste | compara | reconciliaza | text-conv | erp <pas> (legatura cu ERP, client.py).
 Nicio comanda nu porneste un server sau un model."""
 import argparse, json, pathlib, sys, uuid
 
@@ -30,6 +30,8 @@ def main(argv=None):
     c.add_argument('plan_dir'); c.add_argument('--cititor', required=True, choices=['lighton', 'mineru']); c.add_argument('--rulare')
     k = sub.add_parser('compara', help='CPU: dezacorduri intre cele doua citiri'); k.add_argument('plan_dir')
     r = sub.add_parser('reconciliaza', help='CPU: aplica deciziile arbitrului (JSONL)'); r.add_argument('plan_dir'); r.add_argument('--decizii', required=True)
+    t = sub.add_parser('text-conv', help='CPU: textul pe document (doar benzi valide, tabele -> randuri | ... |), in <rulare>/text_conv')
+    t.add_argument('rulare_dir'); t.add_argument('documente', nargs='+')
     e = sub.add_parser('erp', help='legatura cu ERP prin edge-urile cu secret (client.py): o rulare ceruta din ERP, pas cu pas')
     e.add_argument('--secret-file', help='implicit OCR_LOCAL_SECRET din mediu, apoi ' + 'C:/Users/Gazpet-Ai/.secrete/ocr_local_secret.txt')
     es = e.add_subparsers(dest='pas', required=True)
@@ -74,6 +76,9 @@ def main(argv=None):
     elif x.cmd == 'compara':
         from .compare import compare
         res = {k2: v for k2, v in compare(x.plan_dir)[0].items() if k2 != 'per_band'}
+    elif x.cmd == 'text-conv':
+        from .asamblare import text_conv
+        res = text_conv(x.rulare_dir, x.documente)
     else:
         from .reconcile import reconcile
         res = reconcile(x.plan_dir, x.decizii)['summary']

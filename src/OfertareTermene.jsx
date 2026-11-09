@@ -98,7 +98,7 @@ export default function OfertareTermene({ licitatie: l }) {
           <span style={{ color:G.muted }}>{r.eticheta}</span>
           <b style={{ color: r.zi ? CUL_STARE[r.stare] : G.orange }}>{r.zi ? fmtZi(r.zi) : 'necunoscut'}{r.ora ? ` ${r.ora}` : ''}</b>
           <span style={{ color:G.dim, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-            {r.zi && (r.stare === 'trecut' ? `trecut (acum ${-r.zile} zile)` : r.stare === 'azi' ? 'AZI' : `peste ${r.zile} zile`)}
+            {r.zi && (r.stare === 'trecut' ? (r.zile === 0 ? 'trecut (azi, după oră)' : `trecut (acum ${-r.zile} zile)`) : r.stare === 'azi' ? 'AZI' : `peste ${r.zile} zile`)}
             {r.cheie === 'intrebari' && <>· fișa: {editabil('intrebari', zile.intrebari)} zile înainte</>}
             {r.cheie === 'raspuns' && <>· fișa: {editabil('raspuns', zile.raspuns)} zile înainte{nr(zile.raspuns) == null && <span>({r.sursa})</span>}</>}
           </span>

@@ -15,6 +15,7 @@
 import { useState, useEffect } from 'react'
 import * as XLSX from 'xlsx-js-style'
 import { supabase } from './lib/supabase.js'
+import { poateCheltuiUI } from './ofertareResponsabili.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681', ofertare:'#3FB6E2', green:'#3FB950', blue:'#58A6FF',
@@ -33,9 +34,9 @@ export const VERDICT = {
 }
 
 // Poarta pe cheltuială: cine are voie să pornească citirea integrală / registrul / acoperirea.
-export const poatePorniProcesarea = (profile, licitatie) =>
-  !!profile && (profile.is_owner === true || (!!licitatie?.responsabil_id && profile.id === licitatie.responsabil_id))
-export const MOTIV_POARTA = 'Citirea integrală costă (documente + registru + acoperire ≈ 5–25 USD/licitație). O pornește doar ownerul sau responsabilul licitației, după triere.'
+// 20261124a: aceeași regulă ca serverul (responsabil 1 / 2, nu autoatribuit; serverul verifică și cine l-a numit)
+export const poatePorniProcesarea = (profile, licitatie) => poateCheltuiUI(licitatie, profile)
+export const MOTIV_POARTA = 'Citirea integrală costă (documente + registru + acoperire ≈ 5–25 USD/licitație). O pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare, după triere.'
 
 // Rândurile fișei de triere, în ordinea Excel-ului colegilor
 const RANDURI = [

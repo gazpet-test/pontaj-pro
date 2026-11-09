@@ -1,0 +1,92 @@
+import { describe, it, expect } from 'vitest'
+import * as XLSX from 'xlsx-js-style'
+import { parseazaTgz, scrieImport, idParcela, tronsonOptional, tronsonDatInvalid } from './importTgz.js'
+
+function excel() {
+  const wb=XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([
+    ['Nr.Crt.','Poz. HG','UAT','Nume','Nr. cadastral'],
+    [1,'10','Husi','TEST UNU','CF100'],[2,'11','Husi','TEST DOI','CF101'],
+  ]),'TGZ')
+  return XLSX.write(wb,{type:'array',bookType:'xlsx'})
+}
+const opt={uats:[{id:'uat-test',nume:'Husi',uat3:'HUS'}]}
+
+describe('import 8b - identitate fara tronson',()=>{
+  it('TGZ fara configurare produce parcele neatribuite si ID provizoriu',()=>{
+    const p=parseazaTgz(excel(),opt)
+    expect(p.erori).toEqual([])
+    expect(p.parcele).toHaveLength(2)
+    expect(p.parcele.map(p=>[p.tronson,p.id_parcela])).toEqual([[null,'HUS-????'],[null,'HUS-????']])
+  })
+  it('tronsonul explicit valid ramane fara sa schimbe identitatea',()=>{
+    const p=parseazaTgz(excel(),{...opt,tronsonPeUat:{HUS:11}})
+    expect(p.parcele.map(p=>[p.tronson,p.id_parcela])).toEqual([[11,'HUS-????'],[11,'HUS-????']])
+    expect(idParcela('HUS',1)).toBe('HUS-0001')
+    expect(idParcela('HUS',9999)).toBe('HUS-9999')
+    for(const n of [0,10000,1.5])expect(()=>idParcela('HUS',n)).toThrow()
+    expect(()=>idParcela('HUSX',1)).toThrow()
+    for(const v of [undefined,null,'',0,12,true,'3x'])expect(tronsonOptional(v)).toBeNull()
+    expect(tronsonOptional('3')).toBe(3)
+  })
+  it('tronson dat explicit dar invalid -> eroare pe rand, nu NULL tacut (Copilot f8b r1 P3-01)',()=>{
+    for(const v of [undefined,null,''])expect(tronsonDatInvalid(v)).toBe(false)
+    for(const v of [0,12,true,'3x'])expect(tronsonDatInvalid(v)).toBe(true)
+    const p=parseazaTgz(excel(),{...opt,tronsonPeUat:{HUS:12}})
+    expect(p.parcele).toHaveLength(0)
+    expect(p.erori).toHaveLength(2)
+    expect(p.erori[0].motiv).toMatch(/Tronson invalid pentru UAT HUS/)
+    expect(p.statistici.pe_uat.HUS.erori).toBe(2)
+  })
+  it('rezerva un singur bloc per UAT, inclusiv tronsoane diferite',async()=>{
+    const apeluri=[], scrise=[]
+    const db={
+      rpc:async(nume,args)=>{apeluri.push({nume,args});return {data:1,error:null}},
+      from(tabela){
+        let op='select',payload,campuri
+        const q={
+          insert(v){op='insert';payload=v;return q},update(){op='update';return q},
+          select(v){campuri=v;return q},eq(){return q},in(){return q},is(){return q},range(){return q},single(){return q},
+          then(resolve,reject){
+            let data=[]
+            if(op==='insert'&&tabela==='red_import_loturi')data={id:'lot-test'}
+            if(op==='insert'&&tabela==='red_parcele')scrise.push(...payload)
+            // r5: și recitirea de reconciliere (id, id_parcela, cheie_sursa, nr_crt_grup) vede parcelele scrise; înainte de INSERT lista e goală
+            if(op==='select'&&tabela==='red_parcele'&&(campuri==='id, id_parcela'||campuri==='id, id_parcela, cheie_sursa, nr_crt_grup'))data=scrise.map((p,i)=>({...p,id:'p'+i}))
+            return Promise.resolve({data,error:null}).then(resolve,reject)
+          },
+        };return q
+      },
+    }
+    const parcele=[null,3,11].map((tronson,i)=>({cheie:'p'+i,cheie_sursa:'HUS|'+i,uat_id:'uat-test',uat3:'HUS',tronson,nr_crt:i+1}))   // r6: parcela TGZ fără Nr.Crt. ar fi „de tratat”
+    const r=await scrieImport(db,{parcele,detinatori:[],contacte:[],proiect_id_previzualizare:'proiect-test',statistici:{reconciliere_randuri:{randuri:3,in_parcele:3,erori:0,ok:true}}},{proiectId:'proiect-test'})
+    expect(r.parceleNoi).toBe(3)
+    expect(apeluri).toEqual([{nume:'fn_red_rezerva_numere_parcele',args:{p_uat3:'HUS',p_n:3}}])
+    expect(scrise.map(p=>[p.id_parcela,p.tronson])).toEqual([['HUS-0001',null],['HUS-0002',3],['HUS-0003',11]])
+  })
+})
+
+import { randuriDeTratat, csvRanduriDeTratat } from './importTgz.js'
+describe('randuri de tratat (export fara nume)', () => {
+  it('erori + ambigue + fara cheie, fara campul nume, sortate dupa rand, deduplicate', () => {
+    const preview = {
+      erori: [{ rand: 9, nume: 'TEST NUME', uat: 'HUS', nr_crt: '3', motiv: 'm1', detaliu: 'HG: „1” / „2”' }, { rand: 9, nume: 'TEST NUME', uat: 'HUS', nr_crt: '3', motiv: 'm1', detaliu: 'HG: „1” / „2”' }],
+      ambigue: [{ rand: 4, nume: 'ALT NUME', nr_crt: '2', cheie_sursa: 'PRU|10|CF1|', motiv: 'm2' }],
+      fara_cheie: [{ rand: 7, nume: 'X', nr_crt: '5' }],
+    }
+    const r = randuriDeTratat(preview)
+    expect(r.map(x => x.rand)).toEqual([4, 7, 9])
+    expect(r[0]).toMatchObject({ categorie: 'ambiguă', uat: 'PRU' })
+    expect(JSON.stringify(r)).not.toMatch(/NUME|"X"/)
+    const csv = csvRanduriDeTratat(r)
+    expect(csv.startsWith('﻿')).toBe(true)
+    expect(csv).not.toMatch(/TEST NUME|ALT NUME/)
+    expect(csv).toContain('HG: „1” / „2”')
+    // CSV injection: valori care incep cu = + - @ primesc apostrof
+    const inj = csvRanduriDeTratat([{ rand: 1, categorie: 'eroare', uat: '=HYPERLINK(1)', nr_crt: '+2', cheie_sursa: '-3', motiv: '@x', detaliu: 'ok' }])
+    expect(inj).toContain("'=HYPERLINK(1);'+2;'-3;'@x;ok")
+    const inj2 = csvRanduriDeTratat([{ rand: 1, categorie: 'eroare', uat: '  =A1', nr_crt: '\t=B1', cheie_sursa: '\n=C1', motiv: 'm', detaliu: '' }])
+    expect(inj2).toContain("'  =A1;'")
+    expect(inj2).toContain("\"'\n=C1\"")
+  })
+})

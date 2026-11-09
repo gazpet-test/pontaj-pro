@@ -20,20 +20,13 @@ Deno.test('PDF trunchiat, criptat și structură invalidă sunt erori, fără fa
   const encrypted = new TextEncoder().encode('%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n3 0 obj\n<< /Filter /Standard /V 1 /R 2 /P -4 >>\nendobj\ntrailer\n<< /Root 1 0 R /Encrypt 3 0 R >>\n%%EOF')
   assert.equal(await verificaPdf(encrypted), 'invalid')
 })
-Deno.test('validator blocat sau indisponibil: timeout 3s, worker oprit, neverificabil', async () => {
+Deno.test('verificarea rulează în proces: niciun Worker / modul încărcat dinamic (nu intră în bundle-ul deployat)', async () => {
+  const sursa = await Deno.readTextFile(new URL('./pdf.ts', import.meta.url))
+  assert.ok(!/new\s+Worker\s*\(/.test(sursa) && !/new\s+URL\s*\(/.test(sursa) && !/import\s*\(/.test(sursa))
   const Original = globalThis.Worker
-  let terminated = 0
-  const bytes = new TextEncoder().encode('%PDF-1.7\n%%EOF')
   try {
-    globalThis.Worker = class {
-      postMessage() { /* simulează parserul blocat */ }
-      terminate() { terminated++ }
-    } as unknown as typeof Worker
-    const start = performance.now()
-    assert.equal(await verificaPdf(bytes), 'neverificabil')
-    assert.ok(performance.now() - start >= 2900)
-    assert.equal(terminated, 1)
     globalThis.Worker = class { constructor() { throw new Error('worker indisponibil') } } as unknown as typeof Worker
-    assert.equal(await verificaPdf(bytes), 'neverificabil')
+    const pdf = await PDFDocument.create(); pdf.addPage()
+    assert.equal(await verificaPdf(await pdf.save()), 'mono')
   } finally { globalThis.Worker = Original }
 })

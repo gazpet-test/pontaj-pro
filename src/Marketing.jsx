@@ -146,7 +146,7 @@ export default function Marketing() {
       .then(({ data, error }) => setStatus(error ? { error: error.message } : (data?.error ? { error: data.error } : data)))
   }, [])
 
-  const siteNume = (id) => sites.find(s => s.id === id)?.name || `site ${id}`
+  const siteNume = (id) => id == null ? 'General / fără șantier' : sites.find(s => s.id === id)?.name || `Șantier #${id}`
   const postabile = useMemo(() => sites.filter(s => mk[s.id]?.postabil), [sites, mk])
 
   // ── Șantiere postabile ──
@@ -222,6 +222,7 @@ export default function Marketing() {
     setBusy(null)
     if (error || data?.error) { showToast('Eroare statistici: ' + (error?.message || data?.error), 'err'); return }
     setAnaliza(data); await load()
+    if (data?.erori?.length) showToast('Statistici Facebook parțiale: ' + data.erori[0], 'err')   // audit #17: motivul Graph nu mai e înghițit
   }
   useEffect(() => { if (tab === 'analiza' && !analiza) incarcaAnaliza(false) }, [tab])
   // Slot recomandat implicit (până avem destule postări proprii): marți–joi 18:30, sau duminică 10:30

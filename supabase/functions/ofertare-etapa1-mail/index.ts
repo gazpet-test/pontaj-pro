@@ -64,10 +64,14 @@ Deno.serve(async (req: Request) => {
     return (ps || []).filter((p: any) => p.email);
   };
 
+  // 20261121a (review Jakarinos P3): TO / CC normalizate (trim + lower), fără goluri, fără dubluri, CC fără nimic din TO
+  const normE = (e: unknown) => String(e ?? '').trim().toLowerCase();
+  const listaTo = (s: any, team: any[]) => [...new Set((s.resp?.emails?.length ? s.resp.emails : team.map((p: any) => p.email)).map(normE).filter(Boolean))] as string[];
+  const listaCc = (to: string[], team: any[]) => [...new Set(team.map((p: any) => normE(p.email)).filter(Boolean))].filter((e) => !to.includes(e)) as string[];
   // starea completă a unei licitații (pentru Etapa 1 și pentru raportul zilnic)
   const stare = async (lid: number) => {
     const [{ data: l }, { data: docs }, { data: cer }, { data: cl }, { data: g }] = await Promise.all([
-      db.from('ofertare_licitatii').select('id, nr_anunt, autoritate, obiect, termen_depunere, valoare_estimata, moneda, garantie_participare, responsabil_id, status, decizie_go').eq('id', lid).maybeSingle(),
+      db.from('ofertare_licitatii').select('id, nr_anunt, autoritate, obiect, termen_depunere, valoare_estimata, moneda, garantie_participare, responsabil_id, responsabil2_id, status, decizie_go').eq('id', lid).maybeSingle(),
       db.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini, eroare, created_at').eq('licitatie_id', lid),
       db.from('ofertare_cerinte').select('id, nr_ordine, tip, text_cerinta, sursa_sectiune, confirmata_de, document_probant, stare').eq('licitatie_id', lid).is('inlocuita_de', null).is('duplicat_al', null).order('tip').order('nr_ordine'),
       db.from('ofertare_clarificari').select('id, nr, status, origine, raspuns, citita_la, intrebare, updated_at').eq('licitatie_id', lid),
@@ -79,8 +83,14 @@ Deno.serve(async (req: Request) => {
     // O cerință poate avea mai multe rânduri de acoperire; aceeași regulă ca pe ecran: ordine stabilă pe id,
     // dovada verificată pe scan are întâietate. Altfel mailul și ecranul alegeau rânduri diferite.
     const acMap: Record<number, any> = {}; (ac || []).forEach((a: any) => { const ex = acMap[a.cerinta_id]; if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) acMap[a.cerinta_id] = a; });
+    // 20261121a: responsabilul 2 (opțional) — ambii în TO; resp = { name: „A + B”, emails: [...] }, null dacă nu e niciunul
     let resp: any = null;
-    if (l.responsabil_id) { const { data } = await db.from('profiles').select('id, name, email').eq('id', l.responsabil_id).maybeSingle(); resp = data; }
+    const rids = [l.responsabil_id, l.responsabil2_id].filter(Boolean);
+    if (rids.length) {
+      const { data } = await db.from('profiles').select('id, name, email').in('id', rids);
+      const ps = rids.map((id: string) => (data || []).find((p: any) => p.id === id)).filter(Boolean);
+      if (ps.length) resp = { name: ps.map((p: any) => p.name).filter(Boolean).join(' + '), emails: [...new Set(ps.map((p: any) => String(p.email ?? '').trim().toLowerCase()).filter(Boolean))] };
+    }
     const pdf = (docs || []).filter((d: any) => /\.pdf$/i.test(d.nume_original || ''));
     const nr = (arr: any[], f: (x: any) => boolean) => arr.filter(f).length;
     const termen = l.termen_depunere; const zile = zileDeLa(termen);
@@ -156,10 +166,10 @@ Deno.serve(async (req: Request) => {
       const s = await stare(lid); if (!s) return json({ error: 'licitația nu există' }, 404);
       const team = await echipa();
       const html = htmlEtapa1(s, team);
-      if (actiune === 'previzualizare') return json({ ok: true, html, rezumat: { docs: s.docs, cerinte: s.cerinte, acoperire: s.acoperire, clarificari: s.clarificari, sarcini: s.sarcini.length, neevaluate: s.neevaluate, responsabil: s.resp?.name || null }, destinatari: team.map((p: any) => p.email) });
+      if (actiune === 'previzualizare') return json({ ok: true, html, rezumat: { docs: s.docs, cerinte: s.cerinte, acoperire: s.acoperire, clarificari: s.clarificari, sarcini: s.sarcini.length, neevaluate: s.neevaluate, responsabil: s.resp?.name || null }, ...(() => { const to = listaTo(s, team), cc = listaCc(to, team); return { destinatari: [...to, ...cc], to, cc }; })() });   // review Copilot #903: aceiași helperi ca trimiterea (destinatari = TO + CC, ca înainte)
       // responsabilul în TO, restul echipei în CC
-      const to = s.resp?.email ? [s.resp.email] : team.map((p: any) => p.email);
-      const cc = team.map((p: any) => p.email).filter((e: string) => !to.includes(e));
+      const to = listaTo(s, team);
+      const cc = listaCc(to, team);
       const subject = `📑 Etapa 1 gata — ${s.l.nr_anunt} ${s.l.autoritate}: ${s.sarcini.length} sarcini, depunere ${fmtZi(s.termen)}`;
       const id = await trimite(to, cc, subject, html);
       await db.from('ofertare_mailuri').insert({ licitatie_id: lid, tip: 'etapa1', destinatari: [...to, ...cc], subiect: subject, corp_html: html, trimis_de: userId, resend_id: id,
@@ -189,8 +199,8 @@ Deno.serve(async (req: Request) => {
           const { data: deja } = await db.from('ofertare_mailuri').select('id').eq('licitatie_id', r.id).eq('tip', 'reminder_depunere').limit(1);
           if (!deja?.length && team.length) {
             const html = htmlEtapa1(s, team).replace('📑 Etapa 1 încheiată', `⏰ ${s.zile} zile până la depunere`);
-            const to = s.resp?.email ? [s.resp.email] : team.map((p: any) => p.email);
-            const cc = team.map((p: any) => p.email).filter((e: string) => !to.includes(e));
+            const to = listaTo(s, team);
+            const cc = listaCc(to, team);
             const subject = `⏰ ${s.zile} zile până la depunere — ${s.l.nr_anunt} ${s.l.autoritate}: ${s.sarcini.length} sarcini deschise`;
             try { const id = await trimite(to, cc, subject, html); await db.from('ofertare_mailuri').insert({ licitatie_id: r.id, tip: 'reminder_depunere', destinatari: [...to, ...cc], subiect: subject, corp_html: html, resend_id: id, rezumat: rez }); reminder = true; } catch (e) { rez.reminder_eroare = (e as Error).message; }
           }

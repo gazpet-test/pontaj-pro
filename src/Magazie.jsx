@@ -1,3 +1,4 @@
+import { employeeMarimiCanWrite, employeeFieldRead, withEmployeeMarimi } from './employeesPersonal.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL MAGAZIE — v1.0 (13.06.2026)
 // Tab MATERIALE (viewer stoc cantitativ, alimentat automat din Achiziții) +
@@ -8,7 +9,7 @@
 // angajare fără EIP asignat; PV Inventar PDF; consum materiale pe proiect.
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
@@ -482,6 +483,9 @@ function IstoricDrawer({ poz, onClose }) {
 // TAB ECHIPAMENTE — Faza 1: tipuri + predare/retur pe angajat
 // ════════════════════════════════════════════════════════════════
 function EchipamenteTab() {
+  const loadGeneration = useRef(0)
+  const [marimiError, setMarimiError] = useState('')
+  const [poateScrieMarimi, setPoateScrieMarimi] = useState(false)
   const [loading, setLoading] = useState(true)
   const [echipamente, setEchipamente] = useState([])
   const [asignari, setAsignari] = useState([])
@@ -497,15 +501,32 @@ function EchipamenteTab() {
   const [bulkOpen, setBulkOpen] = useState(false)     // TKT-0279: adăugare în bloc din factură
 
   const loadAll = useCallback(async () => {
+    const generation = ++loadGeneration.current
+    setMarimiError('')
+    setPoateScrieMarimi(false)
     setLoading(true)
     try {
       const [rEch, rAsig, rEmp, rUser, rFurn] = await Promise.all([
         supabase.from('v_magazie_echipamente').select('*').order('denumire'),
         supabase.from('v_magazie_inventar_activ').select('*').is('data_retur', null),
-        supabase.from('employees').select('id, name, functie, marime_incaltaminte, marime_imbracaminte').order('name'),
+        withEmployeeMarimi(supabase.from('employees').select('id, name, functie').order('name'), message => {
+          if (generation === loadGeneration.current) setMarimiError(message)
+        }),
         supabase.auth.getUser(),
         supabase.from('v_echipament_furnizor').select('*'),
       ])
+      if (generation !== loadGeneration.current) return
+      const caller = rUser.data?.user?.id
+      if (rUser.error) throw rUser.error
+      if (caller) {
+        const [rp, ra] = await Promise.all([
+          supabase.from('profiles').select('is_owner,can_access_personal_data').eq('id', caller).single(),
+          supabase.from('user_module_access').select('module,access_level').eq('profile_id', caller).eq('module', 'magazie').maybeSingle(),
+        ])
+        if (generation !== loadGeneration.current) return
+        if (rp.error || ra.error) setMarimiError('Dreptul de scriere a marimilor nu poate fi verificat. Reincarca.')
+        else setPoateScrieMarimi(employeeMarimiCanWrite(rp.data, ra.data))
+      }
       setEchipamente(rEch.data || [])
       setAsignari(rAsig.data || [])
       setEmployees(rEmp.data || [])
@@ -513,9 +534,9 @@ function EchipamenteTab() {
       const fm = {}
       for (const r of (rFurn.data || [])) fm[r.echipament_id] = r.furnizor
       setFurnMap(fm)
-    } catch (e) { console.error(e) } finally { setLoading(false) }
+    } catch (e) { console.error(e) } finally { if (generation === loadGeneration.current) setLoading(false) }
   }, [])
-  useEffect(() => { loadAll() }, [loadAll])
+  useEffect(() => { loadAll(); return () => { ++loadGeneration.current } }, [loadAll])
 
   const asignariPerEchip = useMemo(() => {
     const m = new Map()
@@ -669,6 +690,8 @@ function EchipamenteTab() {
         <button onClick={() => setEditModal({ denumire:'', categorie:'echipament', este_eip:false, um:'buc', serie:'', cantitate_total:1, stare:'functional', observatii:'' })} style={{ ...S.btnP }}>+ Echipament</button>
       </div>
 
+      {marimiError && <div role="status" style={{ ...S.card, padding:12, color:G.orange }}>{marimiError}</div>}
+
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă echipamentele...</div>}
 
       {!loading && !filtered.length && (
@@ -739,7 +762,7 @@ function EchipamenteTab() {
 
       {bulkOpen && <BulkEchipModal busy={busy} onSave={saveBulk} onClose={() => setBulkOpen(false)} />}
       {editModal && <EchipModal initial={editModal} busy={busy} onSave={saveEchip} onClose={() => setEditModal(null)} />}
-      {predaModal && <PredaModal echip={predaModal} employees={employees} busy={busy} onPreda={predaCatre} onClose={() => setPredaModal(null)}
+      {predaModal && <PredaModal poateScrieMarimi={poateScrieMarimi} echip={predaModal} employees={employees} busy={busy} onPreda={predaCatre} onClose={() => setPredaModal(null)}
         onMasuraSalvata={(id, camp, val) => setEmployees(prev => prev.map(e => e.id === id ? { ...e, [camp]: val } : e))} />}
     </>
   )
@@ -867,13 +890,14 @@ const MASURA_DIN_DENUMIRE = (denumire) => {
   return null
 }
 
-function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata }) {
+function PredaModal({ poateScrieMarimi = false, echip, employees, busy, onPreda, onClose, onMasuraSalvata }) {
   const [empSearch, setEmpSearch] = useState('')
   const [empId, setEmpId] = useState('')
   const [cant, setCant] = useState(1)
   const [obs, setObs] = useState('')
   const [dataPredare, setDataPredare] = useState(() => dataAziBucuresti(new Date()))
   const [sortMasura, setSortMasura] = useState(false)
+  const [masuriEditate, setMasuriEditate] = useState({})
   const [salvandMasura, setSalvandMasura] = useState(null)   // employee_id în curs de salvare
   const campMasura = MASURA_DIN_DENUMIRE(echip.denumire)
   const filtered = useMemo(() => {
@@ -896,6 +920,8 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
   const eroareCantitate = eroareCantitatePredare(cant, echip.cantitate_disponibila)
   const valid = empId && !eroareCantitate && !eroareData
   const salveazaMasura = async (empIdRow, valoare) => {
+    // Formularul nu modifica randul original: nu poate fabrica o citire.
+    if (!poateScrieMarimi || !employeeFieldRead(employees.find(e => e.id === empIdRow), campMasura)) return
     setSalvandMasura(empIdRow)
     const { error } = await supabase.from('employees').update({ [campMasura]: valoare || null }).eq('id', empIdRow)
     setSalvandMasura(null)
@@ -916,6 +942,7 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
                 </label>
               )}
             </div>
+            {campMasura && employees.some(e => !employeeFieldRead(e, campMasura)) && <div role="status">marimi indisponibile - fara drept / eroare</div>}
             <input style={S.input} value={empSearch} onChange={e => { setEmpSearch(e.target.value); setEmpId('') }} placeholder="Nume angajat..." />
             <div style={{ maxHeight:220, overflowY:'auto', marginTop:6, border:`1px solid ${G.border}`, borderRadius:8 }}>
               {filtered.map(e => (
@@ -923,10 +950,10 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
                   style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:8, background: empId === e.id ? G.green + '22' : 'transparent', borderBottom:`1px solid ${G.border}` }}>
                   <span style={{ flex:1 }}>{empId === e.id ? '✓ ' : ''}{e.name}{e.functie && <span style={{ color:G.dim }}> · {e.functie}</span>}</span>
                   {campMasura && (
-                    <input value={e[campMasura] || ''} onClick={ev => ev.stopPropagation()}
-                      onChange={ev => { e[campMasura] = ev.target.value }}
+                    <input disabled={!poateScrieMarimi || !employeeFieldRead(e, campMasura)} value={masuriEditate[e.id] ?? e[campMasura] ?? ''} onClick={ev => ev.stopPropagation()}
+                      onChange={ev => setMasuriEditate(prev => ({ ...prev, [e.id]: ev.target.value }))}
                       onBlur={ev => salveazaMasura(e.id, ev.target.value)}
-                      placeholder="măsură" title="Mărime — salvată automat la ieșirea din câmp"
+                      placeholder="masura" title={employeeFieldRead(e, campMasura) ? "Marime - salvata automat la iesirea din camp" : "marimi indisponibile - fara drept / eroare"}
                       style={{ width:56, padding:'3px 6px', fontSize:11.5, background:G.bg, border:`1px solid ${G.border}`, borderRadius:5, color:G.text, opacity: salvandMasura === e.id ? .5 : 1 }} />
                   )}
                 </div>

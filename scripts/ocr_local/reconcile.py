@@ -120,10 +120,11 @@ def apply_band(raw_a, raw_b, items, decisions):
         return render(original), needs  # nicio schimbare aleasa: structura LightOn ramane cum a citit-o
     return render([tuple(s) for s in segs]), needs
 
-def join_bands(texts, signals, min_tokens=8, max_lines=3):
+def join_bands(texts, signals, min_tokens=8, max_lines=3, nu_numara=frozenset()):
     """Benzile pas6 se suprapun cu 1-3 randuri intregi (doua randuri de cerneala). Se taie din banda urmatoare primele k randuri
     (k = 1..3, cel mai mare) DOAR daca sunt identice (tokeni, ș/ş unificate) cu ultimele k randuri INTREGI ale benzii precedente si au
-    impreuna >= 8 tokeni. Comparatie pe randuri complete, nu pe tokeni oarecare. Altfel cusatura e nesigura: None (pagina -> needs_human)."""
+    impreuna >= 8 tokeni. Comparatie pe randuri complete, nu pe tokeni oarecare. Altfel cusatura e nesigura: None (pagina -> needs_human).
+    nu_numara: tokeni care se compara, dar nu intra in pragul de 8 (ex. '|' pus de conversia tabelelor, Jakarinos #906 P2)."""
     from .compare import TOKEN, norm_word
     key = lambda line: [norm_word(t) for t in TOKEN.findall(line)]
     out = texts[0] if texts else ''
@@ -131,7 +132,7 @@ def join_bands(texts, signals, min_tokens=8, max_lines=3):
         la = [l for l in out.split('\n') if l.strip()]; lb = nxt.split('\n'); lbn = [i for i, l in enumerate(lb) if l.strip()]
         best = 0
         for n in range(min(max_lines, len(la), len(lbn)), 0, -1):
-            if [key(l) for l in la[-n:]] == [key(lb[i]) for i in lbn[:n]] and sum(len(key(l)) for l in la[-n:]) >= min_tokens: best = n; break
+            if [key(l) for l in la[-n:]] == [key(lb[i]) for i in lbn[:n]] and sum(len([t for t in key(l) if t not in nu_numara]) for l in la[-n:]) >= min_tokens: best = n; break
         if best:
             out = out + '\n' + '\n'.join(lb[lbn[best - 1] + 1:]).lstrip('\n'); signals.append({'type': 'cusatura_suprapunere_taiata', 'banda': k, 'randuri': best})
         else:

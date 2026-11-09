@@ -1,7 +1,6 @@
 // deno test supabase/functions/ofertare-plansa-citeste/poarta_test.ts
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { cerere, cerereH, fakeFetch, fakeSupa, getUser, JWT_FALS_SERVICE, LICITATII, OWNER, PROFILE, RESP, RESP_ALTA, STRAIN } from '../_test/fake_supa.ts'
-import { poateCheltui } from './poarta.ts'
 
 import { handler } from './handler.ts'
 
@@ -31,13 +30,33 @@ function ruleaza(uid: string, docId: number) {
 }
 const zeroCost = (n: any) => { assertEquals(n.ai, 0, 'AI'); assertEquals(n.storage, 0, 'storage'); assertEquals(n.scrieri, 0, 'scrieri') }
 
-Deno.test('poateCheltui: pur', () => {
-  assert(poateCheltui({ is_owner: true, responsabil_id: null }, OWNER))
-  assert(poateCheltui({ is_owner: false, responsabil_id: RESP }, RESP))
-  assert(!poateCheltui({ is_owner: false, responsabil_id: RESP }, STRAIN))
-  assert(!poateCheltui({ is_owner: false, responsabil_id: null }, STRAIN))
-  assert(!poateCheltui({ is_owner: true, responsabil_id: null }, null))
-  assert(!poateCheltui({}, ''))
+// poarta unică (20261124a, decizia Răzvan 1 + A, runda 2: 2A): responsabilul 1/2 trece doar cu dovada de numire (*_numitor_autorizat = true,
+// scrisă de trigger: numitorul era owner / admin Ofertare ATUNCI) sau dacă numirea e veche (numit de + dovadă NULL)
+const ADMIN_OF = 'u-admin-of'
+function ruleazaLic(uid: string, lic95: Record<string, unknown>, opt: { eroareCheltuiala?: boolean } = {}) {
+  const lic = [{ id: 95, responsabil_id: RESP, ...lic95 }, ...LICITATII.slice(1)]
+  const { supa, n } = cuLoturi(fakeSupa({ profiles: [...PROFILE, { id: ADMIN_OF, is_owner: false }], ofertare_licitatii: lic, ofertare_documente_atribuire: DOCS,
+    user_module_access: [{ profile_id: ADMIN_OF, module: 'ofertare', access_level: 'admin' }] }, opt))
+  const deps = { SERVICE: 'service-key', API_KEY: 'k', supa, getUser, fetch: fakeFetch(n) }
+  return handler(cerere(uid, { doc_id: 470 }), deps).then(async (r) => ({ status: r.status, corp: await r.text(), n }))
+}
+Deno.test('poarta 20261124a: responsabil cu dovadă de numire / numire veche trece; autoatribuit, numit de un editor sau fără dovadă -> 403', async () => {
+  for (const [numit, dovada] of [[OWNER, true], [ADMIN_OF, true], [null, null]] as const) {
+    const r = await ruleazaLic(RESP, { responsabil_setat_de: numit, responsabil_numitor_autorizat: dovada }); assert(r.status !== 403, String(numit)); assertEquals(r.n.storage, 1)
+  }
+  // 2A: rolul CURENT al numitorului nu contează — ADMIN_OF e admin acum, dar numirea lui are dovada false (nu era admin atunci)
+  for (const [numit, dovada] of [[RESP, false], [STRAIN, false], [ADMIN_OF, false], [OWNER, null], [null, false]] as const) {
+    const r = await ruleazaLic(RESP, { responsabil_setat_de: numit, responsabil_numitor_autorizat: dovada }); assertEquals(r.status, 403, String(numit) + '/' + String(dovada)); zeroCost(r.n)
+  }
+  // autoatribuit cu dovadă true falsificată (imposibil prin trigger) -> tot 403
+  const r = await ruleazaLic(RESP, { responsabil_setat_de: RESP, responsabil_numitor_autorizat: true }); assertEquals(r.status, 403); zeroCost(r.n)
+})
+Deno.test('poarta 20261124a: responsabilul 2 cu dovadă trece; responsabilul 2 autoatribuit / fără dovadă -> 403', async () => {
+  const ok = await ruleazaLic(STRAIN, { responsabil2_id: STRAIN, responsabil2_setat_de: OWNER, responsabil2_numitor_autorizat: true }); assert(ok.status !== 403); assertEquals(ok.n.storage, 1)
+  const ko = await ruleazaLic(STRAIN, { responsabil2_id: STRAIN, responsabil2_setat_de: STRAIN, responsabil2_numitor_autorizat: false }); assertEquals(ko.status, 403); zeroCost(ko.n)
+})
+Deno.test('poarta 20261124a: RPC-ul porții căzut -> 403, zero cost (fail-closed), și pentru responsabil', async () => {
+  const r = await ruleazaLic(RESP, {}, { eroareCheltuiala: true }); assertEquals(r.status, 403); zeroCost(r.n)
 })
 Deno.test('plansa: user fără drept -> 403, zero cost', async () => {
   const r = await ruleaza(STRAIN, 470); assertEquals(r.status, 403); zeroCost(r.n)
@@ -85,6 +104,20 @@ Deno.test('plansa: Authorization gol / doar "Bearer " -> 401, zero cost', async 
 })
 Deno.test('plansa: SERVICE nesetat ("") nu face din header gol o cheie valabilă -> 401', async () => {
   for (const v of ['', 'Bearer ']) { const r = await ruleazaH({ Authorization: v }, ''); assertEquals(r.status, 401); zeroCost(r.n) }
+})
+// #908 r5 (review r4 Copilot P1-03): exact configurația din index.ts (HTTP) — SERVICE = '': nicio cheie / header gol / JWT de serviciu
+// (real sau falsificat) nu trece, fără storage / AI / scrieri; un utilizator verificat cu drept trece (ajunge la storage)
+Deno.test('plansa r5: HTTP cu SERVICE "" — fără Authorization, gol, cheia de serviciu reală, JWT fals service_role -> 401, zero cost', async () => {
+  // cheia de serviciu reală e un JWT fără utilizator (Auth nu întoarce user pentru ea) — în fake: un șir cu puncte
+  for (const h of [{}, { Authorization: '' }, { Authorization: 'Bearer ' }, { Authorization: 'Bearer eyJ.cheie-serviciu.reala' }, { Authorization: `Bearer ${JWT_FALS_SERVICE}` }] as Record<string, string>[]) {
+    const r = await ruleazaH(h, ''); assertEquals(r.status, 401, JSON.stringify(h)); zeroCost(r.n)
+  }
+  // chiar dacă Auth ar întoarce un „utilizator” pentru cheie, el nu trece poarta pe cheltuială: 403, zero cost
+  const r = await ruleazaH({ Authorization: 'Bearer service-key' }, ''); assertEquals(r.status, 403); zeroCost(r.n)
+})
+Deno.test('plansa r5: HTTP cu SERVICE "" — owner / responsabil verificat trece poarta; străinul primește 403', async () => {
+  for (const uid of [OWNER, RESP]) { const r = await ruleazaH({ Authorization: `Bearer ${uid}` }, ''); assert(r.status !== 401 && r.status !== 403, uid); assertEquals(r.n.storage, 1) }
+  const r = await ruleazaH({ Authorization: `Bearer ${STRAIN}` }, ''); assertEquals(r.status, 403); zeroCost(r.n)
 })
 
 // #494 r5: proveniența jobului se verifică înainte de orice rezervare sau AI, și la lipire.

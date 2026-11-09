@@ -142,7 +142,7 @@ function ArhivaComenzi() {
             <Chip key={k} k={k} label={t.label} emoji={t.emoji} count={rows.filter(r => r.tip === k).length} color={t.color} />
           ))}
           <div style={{ flex: 1 }} />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Caută document / furnizor / comandă / proiect..."
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Caută (document, furnizor, comandă)..."
             style={{ padding: '9px 13px', background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, color: G.text, fontSize: 13, outline: 'none', minWidth: 280 }} />
         </div>
 
@@ -175,7 +175,7 @@ function ArhivaComenzi() {
                     style={{ background: 'none', border: 'none', color: t.color, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {d.fisier_nume || d.fisier_path.split('/').pop()}
                   </button>
-                  <a href={`/achizitii?id=${d._comandaId}`} style={{ color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title="Deschide comanda în Achiziții">🛒 {d._cmd}</a>
+                  <a href={`/achizitii?id=${d._comandaId}`} style={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title={`Deschide comanda în Achiziții: ${d._cmd}`}>🛒 {d._cmd}</a>
                   <span style={{ color: G.muted, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>🏭 {d._furnizor}</span>
                   <span style={{ color: G.dim, fontSize: 11 }}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
                   <div style={{ display: 'flex', gap: 6 }}>

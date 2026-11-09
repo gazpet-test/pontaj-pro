@@ -45,10 +45,12 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       const v = valideazaCerereE3({ ...b, tip: 'aviz_e3' })
       await verificaPoartaE3(deps.caller, user!, v.proiect_id, v.depozit_id)
       const bytes = Uint8Array.from(atob(v.pdf_base64), c => c.charCodeAt(0))
-      // Inclusiv PDF-urile respinse consumă încercarea; toate limitele preced Storage.
+      // Verificarea rulează în proces, ÎNAINTE de admite (Copilot #907 P1-01): dacă un PDF patologic oprește invocarea
+      // (limita de CPU), nu rămâne nicio cerere admisă și nu se consumă nicio încercare. Verdictul se aplică DUPĂ admite,
+      // ca PDF-urile respinse normal (multi / invalid) să consume în continuare încercarea; toate limitele preced Storage.
+      const verdict = await (deps.pdf ?? verificaPdf)(bytes)
       const admis = primul<{ id: string; cale: string; status: string; motiv: string }>(await rpc(l, 'admite', { p_user: user, p_proiect: v.proiect_id, p_depozit: v.depozit_id, p_sablon: v.sablon, p_bytes: bytes.length }))
       if (admis.status !== 'admisa') return response(admis.motiv.startsWith('limita_') ? 429 : admis.motiv === 'parametri_invalizi' ? 400 : 409, { success: false, eroare: admis.motiv })
-      const verdict = await (deps.pdf ?? verificaPdf)(bytes)
       if (verdict !== 'mono') return response(verdict === 'invalid' ? 422 : 409, { success: false, eroare: verdict === 'invalid' ? 'pdf_invalid' : verdict === 'multi' ? 'multipagina' : 'verificare_indisponibila' })
       verificaCale(admis.cale, admis.id)
       const { error } = await l.storage.from(BUCKET).upload(admis.cale, bytes, { contentType: 'application/pdf', upsert: false })

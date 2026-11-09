@@ -52,10 +52,10 @@ export async function citestePeFelii(invoke, docId, { pauza = ms => new Promise(
 
 // Copilot 06.10 (NO-GO P1 pe a44fa0c): refuzul porții pe cheltuială (403 la citirea pe felii) e TERMINAL pentru „Citește cu AI”.
 // Înainte UI-ul cădea pe calea veche (PDF întreg la ofertare-document-nou-citeste) — exact apelul costisitor / cu 504 pe care
-// poarta îl oprește. Acum: mesaj pe card, fără niciun apel AI. Rezumatul unui document deja citit (procesat / partial) rămâne la
-// îndemâna oricui; aceeași poartă e impusă și în edge pentru PDF-ul întreg (cod 'poarta_cheltuiala').
-export const MESAJ_POARTA = 'Documentul nu e citit încă, iar citirea lui costă: o pornește doar ownerul sau responsabilul licitației ' +
-  '(«🤖 Citește cu AI» aici sau «Procesează» în Documentație). După ce e citit, rezumatul îl poate face oricine.'
+// poarta îl oprește. Acum: mesaj pe card, fără niciun apel AI. Din 20261124a (4A) și rezumatul unui document deja citit trece prin
+// aceeași poartă în edge (cod 'poarta_cheltuiala'), pe PDF și pe text.
+export const MESAJ_POARTA = 'Citirea și rezumatul cu AI costă: le pornește doar ownerul sau responsabilul licitației numit de owner / un admin Ofertare ' +
+  '(«🤖 Citește cu AI» aici sau «Procesează» în Documentație). Textul extras se poate citi oricând din «📄 Text original».'
 
 // Tot traseul butonului, testat cap-coadă: necitit → pe felii (poarta pe server) → rezumat din text, tot pe felii. Întoarce {ok, data} sau
 // {ok:false, eroare, poarta?}. opt.onProgres(text) = eticheta butonului în timpul lucrului.
@@ -79,7 +79,7 @@ export async function rezumaPeFelii(invoke, docId, { pauza = ms => new Promise(r
     const { data, error } = await invoke('ofertare-document-nou-citeste', { body: { document_id: docId } })
     if (error || data?.error) {
       const corp = await corpEroare(error, data)
-      // poarta pe server (06.10): PDF-ul întreg fără text extras îl pornește doar owner / responsabil
+      // poarta pe server (06.10; din 20261124a și rezumatul din text): îl pornește doar owner / responsabil cu dovada de numire
       if (corp?.cod === 'poarta_cheltuiala') return { ok: false, poarta: true, eroare: MESAJ_POARTA }
       if (TERMINAL.includes(corp?.cod) || [401, 403, 404].includes(error?.context?.status)) return { ok: false, eroare: mesajEroareCitire(error, corp) }
       if (++esuate > 2) return { ok: false, eroare: mesajEroareCitire(error, corp) }
