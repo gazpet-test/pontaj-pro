@@ -1,11 +1,19 @@
--- ROLLBACK 20261131f — readuce definiția red_v_centralizator_uat din 20261131d (PARTITION BY v.uat_id). NEAPLICAT, ca migrarea.
+-- ROLLBACK 20261131f — readuce definiția red_v_centralizator_uat din 20261131d (PARTITION BY v.uat_id).
+-- Se aplică DOAR prin scripts/livrare_migrare.sh (psql --single-transaction + marcajul
+-- gazpet.livrare_migrare = '20261131f_redari_centralizator_pushdown_ROLLBACK:' || txid_current()). Fără BEGIN / COMMIT.
 -- Vederea nu ține date → nimic de pierdut. Porți: ÎNAINTE exact definiția 31f (refuz altfel), DUPĂ exact definiția 31d.
 -- Se rulează ÎNAINTEA revenirii 20261131d, dacă aceea e necesară. De testat pe clonă: apply → rollback → re-apply (cifre identice).
+DO $start$
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true)
+    IS DISTINCT FROM '20261131f_redari_centralizator_pushdown_ROLLBACK:' || txid_current() THEN RAISE EXCEPTION 'rollback 20261131f: garda start invalida'; END IF;
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE c LIKE 'gazpet.livrare_migrare=%') THEN
+    RAISE EXCEPTION 'rollback 20261131f: armare persistenta refuzata'; END IF;
+  IF to_regclass('public.red_v_centralizator_uat') IS NULL OR to_regclass('public.red_v_stare_parcela') IS NULL THEN
+    RAISE EXCEPTION 'rollback 20261131f: lipsesc vederile'; END IF;
+  PERFORM set_config('lock_timeout', '5s', true);
+END $start$;
 
-BEGIN;
-DO $pre$ BEGIN
-  IF to_regclass('public.red_v_centralizator_uat') IS NULL THEN RAISE EXCEPTION 'rollback 20261131f: vederea lipsește'; END IF;
-END $pre$;
 CREATE TEMP VIEW f31_cent_31d AS
 WITH parcele AS (
   SELECT v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.parcela_id,
@@ -46,7 +54,7 @@ DO $poarta_inainte$ BEGIN
       AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
       AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
         = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[])
-    -- Jakarinos r2 P1 (L15): fără ACL pe coloane (ca în porțile 31c/31d)
+    -- fără ACL pe coloane (ca în porțile 31c/31d)
     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_centralizator_uat') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION 'rollback 20261131f (inainte): red_v_centralizator_uat nu are definitia / owner-ul / optiunile / ACL-ul asteptate — refuz';
   END IF;
@@ -76,12 +84,11 @@ DO $poarta_dupa$ BEGIN
       AND pg_get_userbyid(c.relowner) = 'postgres' AND c.reloptions = ARRAY['security_invoker=on']::text[]
       AND (SELECT array_agg(a ORDER BY a COLLATE "C") FROM unnest(c.relacl::text[]) a)
         = ARRAY['authenticated=r/postgres','postgres=arwdDxtm/postgres','service_role=r/postgres']::text[])
-    -- Jakarinos r2 P1 (L15): fără ACL pe coloane (ca în porțile 31c/31d)
+    -- fără ACL pe coloane (ca în porțile 31c/31d)
     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass('public.red_v_centralizator_uat') AND a.attnum > 0 AND a.attacl IS NOT NULL) THEN
     RAISE EXCEPTION 'rollback 20261131f (dupa): red_v_centralizator_uat nu are definitia / owner-ul / optiunile / ACL-ul asteptate — refuz';
   END IF;
 END $poarta_dupa$;
--- Jakarinos r2 P2: vederile temporare de comparație nu rămân în sesiune după COMMIT
+-- vederile temporare de comparație nu rămân în sesiune după tranzacție
 DROP VIEW pg_temp.f31_cent_31f;
 DROP VIEW pg_temp.f31_cent_31d;
-COMMIT;
