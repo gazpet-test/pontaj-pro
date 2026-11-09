@@ -19,6 +19,7 @@ import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
+import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -263,9 +264,13 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
   const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' ? tab : 'izometrie')
 
   useEffect(() => {
+    // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
+    let viu = true
+    setProiect(null)
     supabase.from('v_executie_dashboard')
       .select('*').eq('id', proiectId).single()
-      .then(({ data }) => setProiect(data))
+      .then(({ data }) => { if (viu) setProiect(data) })
+    return () => { viu = false }
   }, [proiectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -327,6 +332,8 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             )}
           </div>
         )}
+        {/* apare doar când proiectul CURENT s-a citit (cine vede proiectul în Execuție); garda pe id e în componentă */}
+        <OameniSantierButon supabase={supabase} proiectId={proiectId} proiect={proiect} />
         <LegaturaExecutie proiectId={proiectId} />
       </div>
 
