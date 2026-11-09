@@ -49,6 +49,15 @@ describe('e2e_redari — garda de rețea', () => {
     expect(s(`/storage/v1/object/redari/${TEST.cod}/UAT/x.docx`, 'DELETE')).toBe('blocheaza')
     expect(s('/functions/v1/izo-e3-ocr-local', 'POST', {})).toBe('blocheaza')                                   // funcțiile edge non-GET
   })
+  it('sonda detecteazaRezervare (toți parametrii null) trece pe ambele moduri; orice alt corp e verificat normal', () => {
+    for (const mod of ['scriere', 'citire'])
+      expect(clasificaCerere({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva`, metoda: 'POST', corp: '{"p_detinator_id":null}' }, mod)).toBe('permite')
+    expect(clasificaCerere({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva`, metoda: 'POST', corp: `{"p_detinator_id":"${Z}"}` }, 'citire')).toBe('blocheaza')
+    expect(s('/rest/v1/rpc/fn_red_convocare_rezerva', 'POST', { p_detinator_id: Z })).toBe('blocheaza')             // ID nedovedit
+    expect(s('/rest/v1/rpc/fn_red_convocare_rezerva', 'POST', { p_detinator_id: null, p_alt: null })).toBe('blocheaza') // altă cheie
+    expect(s('/rest/v1/rpc/fn_red_convocare_rezerva', 'POST', { p_detinator_id: '' })).toBe('blocheaza')            // nu e null
+    expect(clasificaCerere({ url: `${SB}/rest/v1/rpc/fn_red_plic_creeaza`, metoda: 'POST', corp: '{"p_convocare_id":null}' }, 'citire')).toBe('blocheaza')   // doar sondele din listă
+  })
   it('învățarea ID-urilor: doar din cereri legate dovedit de TEST-RAZVAN, doar în modul scriere', () => {
     const ctx = ctxGarda()
     expect(invataIduri({ url: `${SB}/rest/v1/red_convocari?id=eq.${Z}`, metoda: 'GET' }, [{ id: Z }], 'scriere', ctx)).toBe(0)        // fără filtru pe TEST

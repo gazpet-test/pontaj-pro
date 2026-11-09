@@ -95,6 +95,17 @@ function uuiduri(v, cheie = '', out = []) {
 }
 // UUID-urile din filtrele PostgREST din URL (id=eq.X, proiect_id=in.(X,Y), or=(…)), indiferent de coloană
 const uuiduriQuery = (u) => [...u.searchParams.entries()].flatMap(([, v]) => String(v).match(RE_UUID_GLOBAL) || []).map(x => x.toLowerCase())
+// Sonde ale aplicației: apeluri care DOAR verifică existența unui RPC, cu toți parametrii nuli (serverul le refuză cu „parametri lipsa”,
+// deci nu pot scrie). Exact numele și cheile de mai jos, cu valori null; orice alt corp e tratat normal de gardă.
+const SONDE = { fn_red_convocare_rezerva: ['p_detinator_id'] }      // detecteazaRezervare (src/redari/convocatoareMasa.js)
+export function esteSondaPermisa(fn, corp) {
+  const chei = SONDE[fn]
+  if (!chei) return false
+  const c = parseCorp(corp)
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return false
+  const k = Object.keys(c)
+  return k.length > 0 && k.every(x => chei.includes(x) && c[x] === null)
+}
 const esteUpsert = (u, antete) => u.searchParams.has('on_conflict') || /merge-duplicates/i.test(String(antete?.prefer || antete?.Prefer || ''))
 
 // Garda de rețea: 'blocheaza' sau 'permite' pentru o cerere spre Supabase, în funcție de mod ('scriere' = TEST-RAZVAN, 'citire' = LOT1 /
@@ -117,6 +128,7 @@ export function clasificaCerere({ url, metoda, corp, antete }, mod, ctx = ctxGar
   if (p.startsWith('/rest/v1/rpc/')) {
     const fn = p.slice('/rest/v1/rpc/'.length)
     if (RPC_CITIRE.has(fn)) return 'permite'
+    if (esteSondaPermisa(fn, corp)) return 'permite'
     if (RE_INTERZIS.test(fn) || mod !== 'scriere' || !RPC_SCRIERE_TEST.has(fn)) return 'blocheaza'
     const c = parseCorp(corp)
     if (c === undefined) return 'blocheaza'
