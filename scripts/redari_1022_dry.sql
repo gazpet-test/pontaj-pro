@@ -57,14 +57,21 @@ BEGIN
 END $jwt$;
 SET LOCAL ROLE authenticated;
 DO $rol$
-DECLARE r record; n int; t0 timestamptz;
+DECLARE r record; n int; t0 timestamptz; vazute int := 0; l text;
 BEGIN
   FOR r IN SELECT id, cod FROM public.red_proiecte WHERE cod IN ('TEST-RAZVAN', 'LOT1-PRUNISOR-JUPA') ORDER BY cod LOOP
+    vazute := vazute + 1;
     t0 := clock_timestamp();
     SELECT count(*) INTO n FROM public.red_v_centralizator_uat WHERE proiect_id = r.id AND stare IS NOT NULL;
+    -- planul de execuție chiar cu rolul / JWT-ul apelantului real (RLS + security_invoker)
+    FOR l IN EXECUTE format('EXPLAIN (ANALYZE, BUFFERS) SELECT uat_id, stare, numar FROM public.red_v_centralizator_uat WHERE proiect_id = %L AND stare IS NOT NULL', r.id) LOOP
+      RAISE NOTICE 'ROL % | %', r.cod, l;
+    END LOOP;
     RAISE NOTICE 'ROL authenticated (owner) % : % randuri in % ms', r.cod, n, round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
     IF n IS DISTINCT FROM (current_setting('dry1022.asteptat')::json ->> r.cod)::int THEN
       RAISE EXCEPTION 'dry 1022: % — rolul authenticated vede alt numar de randuri decat postgres', r.cod; END IF;
   END LOOP;
+  -- Jakarinos r5 P2: ambele proiecte trebuie să fie vizibile rolului (altfel bucla le-ar omite fără eroare)
+  IF vazute <> 2 THEN RAISE EXCEPTION 'dry 1022: rolul authenticated vede % din 2 proiecte — verificare nedovedita', vazute; END IF;
 END $rol$;
 RESET ROLE;
