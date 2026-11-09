@@ -47,7 +47,7 @@ BEGIN
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity,
                               coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(r.relacl) x), '-'), coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
-                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.polite_propuneri_id_seq'::regclass,
+                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass, 'public.polite_propuneri_id_seq'::regclass,
                                        'public.polite_alerte_destinatari_id_seq'::regclass, 'public.polite_alerte_jurnal_id_seq'::regclass)),
     (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, p.polpermissive,
                               (SELECT string_agg(rl::regrole::text, ',' ORDER BY rl::regrole::text) FROM unnest(p.polroles) rl),
@@ -56,6 +56,7 @@ BEGIN
     (SELECT string_agg(format('%s:%s:%s', pg_get_triggerdef(t.oid), t.tgfoid::regprocedure, t.tgenabled), ';' ORDER BY t.tgrelid::regclass::text, t.tgname)
        FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal),
     md5(replace(pg_get_viewdef('public.v_polite_scadente'::regclass), chr(13), '')),
+    md5(replace(pg_get_viewdef('public.v_garantii_registru'::regclass), chr(13), '')),
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, p.proisstrict, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
@@ -94,9 +95,9 @@ BEGIN
   IF (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_zilnic') <> 1 THEN RAISE EXCEPTION '20261205a revenire: jobul polite_alerte_zilnic lipseste sau e dublat'; END IF;
   -- nicio ALTA vedere / functie nu depinde de obiectele noi
   IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite w ON w.oid = d.objid
-              WHERE d.classid = 'pg_rewrite'::regclass AND w.ev_class <> 'public.v_polite_scadente'::regclass
+              WHERE d.classid = 'pg_rewrite'::regclass AND w.ev_class NOT IN ('public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass)
                 AND (d.refobjid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
-                                    'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass)
+                                    'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass)
                      OR d.refobjid IN (SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
                                          AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite'))
                      -- r2 (Jakarinos r1 P1-2): doar perechile tabela + coloana create de 20261205a (garantii.moneda exista dinainte)
@@ -119,12 +120,11 @@ BEGIN
 END $pre$;
 
 SELECT cron.unschedule('polite_alerte_zilnic');
+DROP VIEW public.v_garantii_registru;
 DROP VIEW public.v_polite_scadente;
 DROP TRIGGER trg_polite_provenienta ON public.contracte_polite;
 DROP TRIGGER trg_polite_provenienta ON public.contracte_polite_acte;
-DROP TRIGGER trg_polite_reimprospateaza_garantii ON public.contracte_polite;
-DROP TRIGGER trg_polite_reimprospateaza_garantii ON public.contracte_polite_acte;
-DROP TRIGGER trg_polite_garantii_din_polita ON public.garantii;
+DROP TRIGGER trg_polite_garantii_legat ON public.garantii;
 DROP TRIGGER trg_polite_dest_normalizeaza ON public.polite_alerte_destinatari;
 ALTER TABLE public.garantii DROP COLUMN contract_polita_id;
 ALTER TABLE public.contracte_polite DROP COLUMN propunere_id, DROP COLUMN sursa, DROP COLUMN pdf_sha256, DROP COLUMN garantie_pana_la,
@@ -160,8 +160,7 @@ DROP FUNCTION public.fn_polite_alerte_proba(date);
 DROP FUNCTION public.fn_polite_alerte_calculeaza(date);
 DROP FUNCTION public.fn_polite_dest_normalizeaza();
 DROP FUNCTION public.fn_polite_scadente(date);
-DROP FUNCTION public.fn_polite_reimprospateaza_garantii();
-DROP FUNCTION public.fn_polite_garantii_din_polita();
+DROP FUNCTION public.fn_polite_garantii_legat();
 DROP FUNCTION public.fn_polite_provenienta();
 DROP FUNCTION public.fn_polite_e_owner();
 DROP FUNCTION public.fn_poate_scrie_polite();
@@ -175,7 +174,7 @@ DECLARE v_def text;
 BEGIN
   IF to_regclass('public.polite_propuneri') IS NOT NULL OR to_regclass('public.polite_alerte_destinatari') IS NOT NULL
      OR to_regclass('public.polite_alerte_config') IS NOT NULL OR to_regclass('public.polite_alerte_jurnal') IS NOT NULL
-     OR to_regclass('public.v_polite_scadente') IS NOT NULL
+     OR to_regclass('public.v_polite_scadente') IS NOT NULL OR to_regclass('public.v_garantii_registru') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
                   AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite'))
      -- r2 (Jakarinos r1 P1-2): pe tabela, doar coloanele create de 20261205a (garantii.moneda exista dinainte si ramane)

@@ -5,10 +5,10 @@
 --   1. contracte_polite (+ _acte): coloane noi moneda, perioada de executie, perioada de garantie, pdf_sha256, sursa, propunere_id;
 --      tipul 'avans' (D4). Provenienta (sursa, pdf_sha256, propunere_id) o pune DOAR fn_polita_salveaza, in aceeasi tranzactie
 --      (trigger BEFORE: marcajul confirmare_txid de pe propunere = txid_current()); pe orice alta cale e fortata 'manual'.
---   2. garantii.contract_polita_id (D1): randul din Registru legat de polita de pe contract. Campurile documentului (emitent, nr.,
---      valoare, moneda, emitere, expirare efectiva, tip, contract) se copiaza din polita la fiecare scriere (trigger BEFORE) si la
---      fiecare schimbare a politei / actelor ei (trigger AFTER) => nu se mai pot desparti. garantii are SELECT pe coloane (20261006b):
---      coloana noua primeste SELECT pentru authenticated.
+--   2. garantii.contract_polita_id (D1, r5): randul din Registru legat de polita de pe contract. NU se copiaza nimic: emitentul, nr.,
+--      valoarea, moneda, emiterea si expirarea efectiva se citesc prin vederea v_garantii_registru (JOIN pe polita + acte; coloanele
+--      proprii pentru randurile nelegate). Pe un rand legat coloanele proprii raman istoric si nu se mai pot modifica (trigger pe randul
+--      curent). garantii are SELECT pe coloane (20261006b): coloana noua primeste SELECT pentru authenticated.
 --   3. polite_propuneri: propunerile citite (la incarcare = edge polita-citeste; tura de noapte si coada locala in etapele urmatoare),
 --      stari in_citire / propus / confirmat / respins / eroare. Un rand NU e polita activa si nu da alerte.
 --   4. fn_polite_scadente() + v_polite_scadente: SINGURA definitie a scadentei (pagina proiectului, Administrator -> Alerte, mail).
@@ -21,8 +21,8 @@
 --      -> edge polite-alerte-mail (antet x-intern-secret din Vault, ca 20261130d).
 -- NU atinge: garantii_alerte() (owner-ul primeste in continuare alertele Registrului; datele coincid prin sincronizare), gbe_polite,
 --   politicile RLS existente pe contracte_polite / garantii / storage, user_module_access.
--- Ordinea lock-urilor (L06), pe toate caile: polite_propuneri -> contracte_polite -> contracte_polite_acte -> garantii (randurile instructiunii)
---   -> lock-ul consultativ al politei (triggere); cine il tine nu mai asteapta randuri: reimprospatarea foloseste SKIP LOCKED (r4, sectiunea 5).
+-- Ordinea lock-urilor (L06): niciun trigger nu citeste / blocheaza alte tabele decat cele ale instructiunii (protectia Registrului
+--   compara doar OLD / NEW ale randului curent); singurul RPC cu lock explicit: fn_polita_salveaza -> propunerea (FOR UPDATE) -> INSERT-uri.
 -- Revenire: supabase/revenire/20261205a_polite_alerte_ROLLBACK.sql. Test: scripts/test_polite_alerte.sh (PG17 local, chat).
 -- Amprenta structurii: calculata la final si pastrata in COMMENT ON TABLE polite_alerte_config; revenirea o recalculeaza (aceeasi
 --   interogare) si refuza la diferenta. Dupa DRY-ul pe clona, chat-ul poate fixa constanta in ambele fisiere.
@@ -67,7 +67,7 @@ BEGIN
   -- 0b. obiectele noi nu exista (reaplicare / coliziune = refuz)
   IF to_regclass('public.polite_propuneri') IS NOT NULL OR to_regclass('public.polite_alerte_destinatari') IS NOT NULL
      OR to_regclass('public.polite_alerte_config') IS NOT NULL OR to_regclass('public.polite_alerte_jurnal') IS NOT NULL
-     OR to_regclass('public.v_polite_scadente') IS NOT NULL
+     OR to_regclass('public.v_polite_scadente') IS NOT NULL OR to_regclass('public.v_garantii_registru') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!'))
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.garantii'::regclass AND a.attname = 'contract_polita_id' AND NOT a.attisdropped)
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid IN ('public.contracte_polite'::regclass, 'public.contracte_polite_acte'::regclass) AND NOT a.attisdropped
@@ -101,6 +101,15 @@ BEGIN
   IF to_regprocedure('public.fn_poate_scrie_garantii()') IS NULL
      OR NOT (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.fn_poate_scrie_garantii()')) THEN
     RAISE EXCEPTION '20261205a: public.fn_poate_scrie_garantii() lipseste sau nu e SECURITY DEFINER (20261005b)';
+  END IF;
+  -- 0d'. v_garantii_situatie (baza vederii Registrului, r5): exista, cu coloanele folosite
+  IF to_regclass('public.v_garantii_situatie') IS NULL
+     OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = 'public.v_garantii_situatie'::regclass AND NOT a.attisdropped
+           AND a.attname IN ('id', 'tip', 'emitent', 'numar_document', 'valoare', 'moneda', 'data_emitere', 'data_expirare', 'stare',
+                             'lucrare_receptionata', 'eliberare_solicitata_la', 'zile_pana_expirare', 'de_facut')) <> 13
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.v_garantii_situatie'::regclass AND NOT a.attisdropped
+                  AND a.attname IN ('contract_polita_id', 'pe_contract') OR (a.attrelid = 'public.v_garantii_situatie'::regclass AND a.attname LIKE '%!_ef' ESCAPE '!')) THEN
+    RAISE EXCEPTION '20261205a: v_garantii_situatie lipseste sau nu are coloanele asteptate (ori are deja coloane cu numele noi)';
   END IF;
   -- 0e. notificarile: modulele folosite
   SELECT pg_get_constraintdef(c.oid) INTO v_def FROM pg_constraint c WHERE c.conrelid = 'public.notifications'::regclass AND c.conname = 'notifications_modul_check';
@@ -228,7 +237,7 @@ ALTER TABLE public.garantii ADD COLUMN contract_polita_id bigint;
 ALTER TABLE public.garantii ADD CONSTRAINT garantii_contract_polita_fkey FOREIGN KEY (contract_polita_id) REFERENCES public.contracte_polite(id) ON DELETE RESTRICT;
 ALTER TABLE public.garantii ADD CONSTRAINT garantii_contract_polita_forma_check CHECK (contract_polita_id IS NULL OR forma = 'polita_asigurare');
 CREATE UNIQUE INDEX garantii_contract_polita_uidx ON public.garantii (contract_polita_id) WHERE contract_polita_id IS NOT NULL;
-COMMENT ON COLUMN public.garantii.contract_polita_id IS 'Polite 20261205a (D1): polita de pe contract (contracte_polite) a acestui rand din Registru. Cand e setata, emitentul, nr., valoarea, moneda, emiterea, expirarea efectiva, tipul si contractul se copiaza din polita (trg_polite_garantii_din_polita) si nu se pot desparti.';
+COMMENT ON COLUMN public.garantii.contract_polita_id IS 'Polite 20261205a (D1, r5): polita de pe contract (contracte_polite) a acestui rand din Registru. Datele documentului se citesc prin v_garantii_registru; coloanele proprii raman istoric si nu se modifica cat randul e legat (trg_polite_garantii_legat).';
 GRANT SELECT (contract_polita_id) ON public.garantii TO authenticated;
 
 -- ─── 4. Ajutoare (interne, fara EXECUTE pentru nimeni in afara de postgres) ───────────────────────────────────────────────────
@@ -294,7 +303,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
   SELECT auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
 $fn$;
 
--- ─── 5. Triggere: provenienta pe polite / acte, sincronizarea Registrului ───────────────────────────────────────────────────
+-- ─── 5. Triggere: provenienta pe polite / acte; Registrul legat (fara copii, r5) ───────────────────────────────────────────────────
 CREATE FUNCTION public.fn_polite_provenienta() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_p public.polite_propuneri%ROWTYPE;
@@ -322,83 +331,25 @@ CREATE TRIGGER trg_polite_provenienta BEFORE INSERT OR UPDATE ON public.contract
 CREATE TRIGGER trg_polite_provenienta BEFORE INSERT OR UPDATE ON public.contracte_polite_acte
   FOR EACH ROW EXECUTE FUNCTION public.fn_polite_provenienta();
 
--- randul din Registru legat: campurile documentului vin din polita (sursa unica), copiate EXACT (fara pastrarea valorilor vechi).
--- Serializarea Registru <-> polita / acte (r4, Jakarinos r1 P1-3, r2 P1, r3 P1): un lock CONSULTATIV pe polita,
--- pg_advisory_xact_lock(hashtext('polite_registru'), <id polita>). Regula care exclude ciclurile: CINE TINE LOCK-UL CONSULTATIV NU
--- ASTEAPTA NICIUN LOCK DE RAND DIN garantii / contracte_polite / contracte_polite_acte.
---   * Scrierea unui rand legat (INSERT, UPDATE, re-legare): randul garantii e deja blocat de instructiune; triggerul BEFORE ia
---     consultativul (politele veche si noua, in ordinea id-ului) si abia apoi CITESTE polita / actele (instructiune noua = snapshot nou).
---     Dupa consultativ poate urma doar verificarea FK pe polita (KEY SHARE), in conflict numai cu stergerea politei, iar stergerea nu cere
---     consultativul (vezi mai jos) => niciun ciclu prin el.
---   * Reimprospatarea dupa o schimbare a politei / actelor (trigger AFTER, la finalul instructiunii): ia consultativul, apoi actualizeaza
---     randurile legate cu FOR NO KEY UPDATE SKIP LOCKED. Un rand sarit e blocat de o scriere pe el, care va lua consultativul DUPA noi si
---     va recopia (sau e o stergere / o deslegare, unde copia nu mai conteaza).
---   * Stergerea actelor prin CASCADE, dupa ce polita a fost stearsa, nu cere consultativul (polita nu mai exista; un rand legat ar fi
---     blocat stergerea prin FK RESTRICT).
---   * Intr-o instructiune, consultativele se iau in ordinea id-ului; prin PostgREST fiecare cerere e o singura instructiune.
--- Limita declarata: un rand blocat de un SELECT ... FOR UPDATE fara scriere ulterioara ar ramane cu copia veche pana la urmatoarea
--- schimbare a politei (nicio cale din aplicatie nu face asta pe garantii).
--- r2 (Jakarinos r1 P2-5): polita fara asigurator / nr. / valoare (inclusiv dupa stergerea ultimului act cu valoare) sau de tip „altul”
--- nu poate avea rand in Registru: refuz explicit, nu valoarea veche pastrata tacit.
-CREATE FUNCTION public.fn_polite_garantii_din_polita() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_p record; v_exp date; v_val numeric; v_id bigint;
+-- r5 (decizia chat-ului 09.11, dupa Jakarinos r1–r4; varianta A „Registrul il citeste prin legatura”): NIMIC nu se copiaza din
+-- contracte_polite in garantii. Randul din Registru are doar legatura contract_polita_id; emitentul, nr., valoarea, moneda, emiterea si
+-- expirarea efectiva (cea mai tarzie dintre polita si acte) se citesc prin vederea v_garantii_registru (sectiunea 6b).
+-- Pe un rand legat, coloanele proprii ale documentului raman ca istoric (valorile de la legare) si NU se mai pot modifica: un singur
+-- trigger BEFORE UPDATE, care compara doar OLD / NEW ale randului curent (fara citiri in alte tabele => fara lock-uri incrucisate).
+-- Legarea (UPDATE care pune contract_polita_id) si deslegarea (il scoate) sunt permise; la deslegare coloanele proprii redevin editabile.
+CREATE FUNCTION public.fn_polite_garantii_legat() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
 BEGIN
-  IF NEW.contract_polita_id IS NULL THEN RETURN NEW; END IF;
-  FOR v_id IN SELECT DISTINCT x FROM unnest(ARRAY[NEW.contract_polita_id, CASE WHEN TG_OP = 'UPDATE' THEN OLD.contract_polita_id END]) x
-               WHERE x IS NOT NULL ORDER BY x LOOP
-    PERFORM pg_advisory_xact_lock(hashtext('polite_registru'), v_id::integer);
-  END LOOP;
-  SELECT cp.* INTO v_p FROM public.contracte_polite cp WHERE cp.id = NEW.contract_polita_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'polita_inexistenta' USING ERRCODE = '23503'; END IF;
-  SELECT max(a.data_expirare_noua) INTO v_exp FROM public.contracte_polite_acte a WHERE a.polita_id = v_p.id;
-  SELECT a.valoare_noua_lei INTO v_val FROM public.contracte_polite_acte a
-   WHERE a.polita_id = v_p.id AND a.valoare_noua_lei IS NOT NULL ORDER BY a.nr_act DESC, a.id DESC LIMIT 1;
-  IF v_p.tip = 'altul' THEN RAISE EXCEPTION 'tip_fara_registru' USING ERRCODE = '22023'; END IF;
-  IF v_p.asigurator IS NULL OR v_p.nr_polita IS NULL OR coalesce(v_val, v_p.valoare_lei) IS NULL THEN
-    RAISE EXCEPTION 'polita_incompleta_pentru_registru' USING ERRCODE = '22023';
+  IF OLD.contract_polita_id IS NOT NULL AND NEW.contract_polita_id IS NOT NULL
+     AND (NEW.emitent, NEW.numar_document, NEW.valoare, NEW.moneda, NEW.data_emitere, NEW.data_expirare)
+         IS DISTINCT FROM (OLD.emitent, OLD.numar_document, OLD.valoare, OLD.moneda, OLD.data_emitere, OLD.data_expirare) THEN
+    RAISE EXCEPTION 'registru_legat_de_polita' USING ERRCODE = '22023',
+      HINT = 'Datele politei se modifica pe contract (polita / actul aditional), nu in Registru.';
   END IF;
-  NEW.emitent := v_p.asigurator;
-  NEW.numar_document := v_p.nr_polita;
-  NEW.valoare := coalesce(v_val, v_p.valoare_lei);
-  NEW.moneda := v_p.moneda;
-  NEW.data_emitere := v_p.data_emitere;
-  NEW.data_expirare := coalesce(v_exp, v_p.data_expirare);
-  NEW.tip := CASE v_p.tip WHEN 'GBE' THEN 'buna_executie' WHEN 'CAR' THEN 'car' WHEN 'GPL' THEN 'participare' ELSE 'avans' END;
-  NEW.contract_terti_id := v_p.contract_id;
   RETURN NEW;
 END $fn$;
-CREATE TRIGGER trg_polite_garantii_din_polita BEFORE INSERT OR UPDATE ON public.garantii
-  FOR EACH ROW WHEN (NEW.contract_polita_id IS NOT NULL) EXECUTE FUNCTION public.fn_polite_garantii_din_polita();
-
--- o schimbare pe polita / actele ei reimprospateaza randurile legate (UPDATE => triggerul de mai sus recopiaza), dupa regula de mai sus:
--- consultativul (la mutarea unui act, ambele polite in ordinea id-ului), apoi doar randurile NEblocate (SKIP LOCKED).
-CREATE FUNCTION public.fn_polite_reimprospateaza_garantii() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_ids bigint[]; v_id bigint;
-BEGIN
-  IF TG_TABLE_NAME = 'contracte_polite' THEN
-    v_ids := ARRAY[NEW.id];
-  ELSIF TG_OP = 'DELETE' THEN
-    -- CASCADE din stergerea politei: polita nu mai exista => nimic de reimprospatat, fara consultativ
-    IF NOT EXISTS (SELECT 1 FROM public.contracte_polite cp WHERE cp.id = OLD.polita_id) THEN RETURN NULL; END IF;
-    v_ids := ARRAY[OLD.polita_id];
-  ELSIF TG_OP = 'UPDATE' AND OLD.polita_id IS DISTINCT FROM NEW.polita_id THEN
-    v_ids := ARRAY[least(OLD.polita_id, NEW.polita_id), greatest(OLD.polita_id, NEW.polita_id)];
-  ELSE
-    v_ids := ARRAY[NEW.polita_id];
-  END IF;
-  FOREACH v_id IN ARRAY v_ids LOOP
-    PERFORM pg_advisory_xact_lock(hashtext('polite_registru'), v_id::integer);
-  END LOOP;
-  UPDATE public.garantii g SET updated_at = now()
-   WHERE g.id IN (SELECT x.id FROM public.garantii x WHERE x.contract_polita_id = ANY (v_ids) ORDER BY x.id FOR NO KEY UPDATE SKIP LOCKED);
-  RETURN NULL;
-END $fn$;
-CREATE TRIGGER trg_polite_reimprospateaza_garantii AFTER UPDATE ON public.contracte_polite
-  FOR EACH ROW EXECUTE FUNCTION public.fn_polite_reimprospateaza_garantii();
-CREATE TRIGGER trg_polite_reimprospateaza_garantii AFTER INSERT OR UPDATE OR DELETE ON public.contracte_polite_acte
-  FOR EACH ROW EXECUTE FUNCTION public.fn_polite_reimprospateaza_garantii();
+CREATE TRIGGER trg_polite_garantii_legat BEFORE UPDATE ON public.garantii
+  FOR EACH ROW EXECUTE FUNCTION public.fn_polite_garantii_legat();
 
 -- ─── 6. Scadentele: o singura definitie ─────────────────────────────────────────────────────────────────────────────────────
 -- SECURITY INVOKER: din UI se vede doar ce poate vedea utilizatorul (RLS-ul tabelelor sursa); cron-ul o cheama prin functii DEFINER.
@@ -438,6 +389,39 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $fn$
 $fn$;
 CREATE VIEW public.v_polite_scadente WITH (security_invoker = on) AS SELECT * FROM public.fn_polite_scadente(NULL);
 COMMENT ON VIEW public.v_polite_scadente IS 'Polite 20261205a: scadentele politelor active (contract + Registru nelegat), din fn_polite_scadente (singura definitie). security_invoker. Sursa „Polite CAR / GBE” din Administrator -> Alerte si cartonasul de pe pagina proiectului.';
+
+-- ─── 6b. v_garantii_registru (r5): Registrul cu datele politei legate citite prin legatura ──────────────────────────────────
+-- Toate coloanele din v_garantii_situatie (neschimbata) + *_ef = valorile efective: din polita (si actele ei) cand randul e legat,
+-- altfel coloanele proprii (lucrari vechi). zile_pana_expirare_ef / de_facut_ef se recalculeaza DOAR pe randurile legate, cu ACEEASI
+-- expresie ca v_garantii_situatie (paritatea pe randurile nelegate e verificata in DRY). security_invoker: RLS-ul tabelelor sursa.
+CREATE VIEW public.v_garantii_registru WITH (security_invoker = on) AS
+SELECT s.*,
+       g.contract_polita_id,
+       (g.contract_polita_id IS NOT NULL) AS pe_contract,
+       CASE WHEN p.id IS NULL THEN s.tip ELSE coalesce(CASE p.tip WHEN 'GBE' THEN 'buna_executie' WHEN 'CAR' THEN 'car' WHEN 'GPL' THEN 'participare' WHEN 'avans' THEN 'avans' END, s.tip) END AS tip_ef,
+       CASE WHEN p.id IS NULL THEN s.emitent ELSE p.asigurator END AS emitent_ef,
+       CASE WHEN p.id IS NULL THEN s.numar_document ELSE p.nr_polita END AS numar_document_ef,
+       CASE WHEN p.id IS NULL THEN s.valoare ELSE coalesce(v.val, p.valoare_lei) END AS valoare_ef,
+       CASE WHEN p.id IS NULL THEN s.moneda ELSE p.moneda END AS moneda_ef,
+       CASE WHEN p.id IS NULL THEN s.data_emitere ELSE p.data_emitere END AS data_emitere_ef,
+       CASE WHEN p.id IS NULL THEN s.data_expirare ELSE coalesce(e.exp, p.data_expirare) END AS data_expirare_ef,
+       CASE WHEN p.id IS NULL THEN s.zile_pana_expirare ELSE coalesce(e.exp, p.data_expirare) - CURRENT_DATE END AS zile_pana_expirare_ef,
+       CASE WHEN p.id IS NULL THEN s.de_facut ELSE
+         CASE WHEN s.stare <> 'activa'::text THEN NULL::text
+              WHEN s.lucrare_receptionata AND s.eliberare_solicitata_la IS NULL THEN 'Lucrare receptionata - se poate cere eliberarea'::text
+              WHEN coalesce(e.exp, p.data_expirare) IS NOT NULL AND coalesce(e.exp, p.data_expirare) < CURRENT_DATE AND NOT s.lucrare_receptionata
+                THEN 'EXPIRATA dar lucrarea nu e receptionata - risc de garantie neacoperita'::text
+              WHEN coalesce(e.exp, p.data_expirare) IS NOT NULL AND (coalesce(e.exp, p.data_expirare) - CURRENT_DATE) <= 30 THEN 'Expira in sub 30 de zile'::text
+              WHEN coalesce(e.exp, p.data_expirare) IS NOT NULL AND (coalesce(e.exp, p.data_expirare) - CURRENT_DATE) <= 60 THEN 'Expira in sub 60 de zile'::text
+              WHEN s.eliberare_solicitata_la IS NOT NULL THEN 'Eliberare ceruta la '::text || s.eliberare_solicitata_la
+              ELSE NULL::text END END AS de_facut_ef
+  FROM public.v_garantii_situatie s
+  JOIN public.garantii g ON g.id = s.id
+  LEFT JOIN public.contracte_polite p ON p.id = g.contract_polita_id
+  LEFT JOIN LATERAL (SELECT a.valoare_noua_lei AS val FROM public.contracte_polite_acte a
+                      WHERE a.polita_id = p.id AND a.valoare_noua_lei IS NOT NULL ORDER BY a.nr_act DESC, a.id DESC LIMIT 1) v ON true
+  LEFT JOIN LATERAL (SELECT max(a.data_expirare_noua) AS exp FROM public.contracte_polite_acte a WHERE a.polita_id = p.id) e ON true;
+COMMENT ON VIEW public.v_garantii_registru IS 'Polite 20261205a (r5): Registrul garantiilor cu datele politei legate citite prin legatura (*_ef); fara copii in garantii. security_invoker.';
 
 -- ─── 7. Alerte: destinatari, comutator, jurnal ──────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.polite_alerte_destinatari (
@@ -793,7 +777,7 @@ BEGIN
               v_status, public.fn_polite_text(p_date, 'observatii', 2000), v_cale, p_propunere_id)
       RETURNING id INTO v_id;
     END IF;
-    -- Registrul: legat de polita noua (campurile documentului le copiaza triggerul) sau, fara contract, rand propriu (ca azi)
+    -- Registrul: legat de polita noua (coloanele proprii = valorile de acum, ca istoric; datele curente vin prin legatura) sau, fara contract, rand propriu (ca azi)
     IF p_registru IS NOT NULL OR v_tinta = 'registru' THEN
       -- aceleasi campuri obligatorii ca formularul „Polita existenta” (beneficiar, asigurator, nr., valoare); tipul „altul” nu are corespondent
       IF public.fn_polite_text(coalesce(p_registru, '{}'::jsonb), 'beneficiar', 300) IS NULL THEN RAISE EXCEPTION 'beneficiar_lipsa' USING ERRCODE = '22023'; END IF;
@@ -853,10 +837,12 @@ GRANT SELECT ON public.polite_alerte_config, public.polite_alerte_jurnal TO auth
 CREATE POLICY polite_config_sel ON public.polite_alerte_config FOR SELECT TO authenticated USING ((SELECT public.fn_polite_e_owner()));
 CREATE POLICY polite_jurnal_sel ON public.polite_alerte_jurnal FOR SELECT TO authenticated USING ((SELECT public.fn_polite_e_owner()));
 GRANT SELECT ON public.v_polite_scadente TO authenticated, service_role;
+REVOKE ALL ON public.v_garantii_registru FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.v_garantii_registru TO authenticated;
 
 REVOKE ALL ON FUNCTION public.fn_polite_norm_nr(text), public.fn_polite_text(jsonb, text, integer), public.fn_polite_data(jsonb, text),
   public.fn_polite_suma(jsonb, text), public.fn_poate_scrie_polite(), public.fn_polite_e_owner(), public.fn_polite_provenienta(),
-  public.fn_polite_garantii_din_polita(), public.fn_polite_reimprospateaza_garantii(), public.fn_polite_scadente(date),
+  public.fn_polite_garantii_legat(), public.fn_polite_scadente(date),
   public.fn_polite_dest_normalizeaza(), public.fn_polite_alerte_calculeaza(date), public.fn_polite_alerte_proba(date),
   public.fn_polite_alerte_porneste(boolean), public.fn_polite_alerte_rezerva(date), public.fn_polite_alerte_marcheaza(bigint[], text, text, text),
   public.fn_polite_alerte_reconciliaza(), public.fn_polite_propunere_rezerva(text, uuid), public.fn_polite_propunere_completeaza(bigint, jsonb, jsonb, text, numeric),
@@ -918,9 +904,9 @@ DECLARE v_o oid; v_amprenta text;
     'public.fn_polite_propunere_json(bigint)']::regprocedure[];
 BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!')) <> 22
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!')) <> 21
      OR to_regprocedure('public.fn_poate_scrie_polite()') IS NULL THEN
-    RAISE EXCEPTION '20261205a: functiile noi nu sunt exact 22 + fn_poate_scrie_polite';
+    RAISE EXCEPTION '20261205a: functiile noi nu sunt exact 21 + fn_poate_scrie_polite';
   END IF;
   FOR v_o IN SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
                AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite') LOOP
@@ -961,11 +947,13 @@ BEGIN
      -- edge-ul polita-citeste cauta propunerea existenta dupa sha256 cu service_role (citire directa, fara scriere)
      OR NOT has_table_privilege('service_role', 'public.polite_propuneri', 'SELECT')
      OR has_table_privilege('service_role', 'public.polite_propuneri', 'DELETE')
-     OR (SELECT reloptions FROM pg_class WHERE oid = 'public.v_polite_scadente'::regclass) IS DISTINCT FROM ARRAY['security_invoker=on']::text[] THEN
+     OR (SELECT reloptions FROM pg_class WHERE oid = 'public.v_polite_scadente'::regclass) IS DISTINCT FROM ARRAY['security_invoker=on']::text[]
+     OR (SELECT reloptions FROM pg_class WHERE oid = 'public.v_garantii_registru'::regclass) IS DISTINCT FROM ARRAY['security_invoker=on']::text[]
+     OR has_table_privilege('anon', 'public.v_garantii_registru', 'SELECT') OR NOT has_table_privilege('authenticated', 'public.v_garantii_registru', 'SELECT') THEN
     RAISE EXCEPTION '20261205a: drepturile pe tabelele noi / vedere nu sunt exact cele asteptate';
   END IF;
-  IF (SELECT count(*) FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal) <> 6 THEN
-    RAISE EXCEPTION '20261205a: triggerele trg_polite_* nu sunt exact 6';
+  IF (SELECT count(*) FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal) <> 4 THEN
+    RAISE EXCEPTION '20261205a: triggerele trg_polite_* nu sunt exact 4';
   END IF;
   IF (SELECT activ FROM public.polite_alerte_config WHERE id) IS NOT FALSE OR (SELECT count(*) FROM public.polite_alerte_destinatari) <> 5
      OR EXISTS (SELECT 1 FROM public.polite_alerte_jurnal) OR EXISTS (SELECT 1 FROM public.polite_propuneri) THEN
@@ -1002,7 +990,7 @@ BEGIN
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity,
                               coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(r.relacl) x), '-'), coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
-                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.polite_propuneri_id_seq'::regclass,
+                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass, 'public.polite_propuneri_id_seq'::regclass,
                                        'public.polite_alerte_destinatari_id_seq'::regclass, 'public.polite_alerte_jurnal_id_seq'::regclass)),
     (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, p.polpermissive,
                               (SELECT string_agg(rl::regrole::text, ',' ORDER BY rl::regrole::text) FROM unnest(p.polroles) rl),
@@ -1011,6 +999,7 @@ BEGIN
     (SELECT string_agg(format('%s:%s:%s', pg_get_triggerdef(t.oid), t.tgfoid::regprocedure, t.tgenabled), ';' ORDER BY t.tgrelid::regclass::text, t.tgname)
        FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal),
     md5(replace(pg_get_viewdef('public.v_polite_scadente'::regclass), chr(13), '')),
+    md5(replace(pg_get_viewdef('public.v_garantii_registru'::regclass), chr(13), '')),
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, p.proisstrict, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)

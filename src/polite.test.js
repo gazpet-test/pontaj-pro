@@ -96,11 +96,11 @@ describe('paritate cu migrarea (L19)', () => {
   })
   it('revenirea scoate fiecare functie, tabela si trigger creat de migrare', () => {
     const functii = [...MIG.matchAll(/^CREATE FUNCTION public\.([a-z_]+)\(([^)]*)\)/gm)].map(x => x[1])
-    expect(functii.length).toBe(23)
+    expect(functii.length).toBe(22)
     for (const f of functii) expect(REV).toMatch(new RegExp(`DROP FUNCTION public\\.${f}\\(`))
     for (const t of [...MIG.matchAll(/^CREATE TABLE public\.([a-z_]+)/gm)].map(x => x[1])) expect(REV).toContain(`DROP TABLE public.${t};`)
     const triggere = [...MIG.matchAll(/^CREATE TRIGGER ([a-z_]+) .* ON (public\.[a-z_]+)/gm)].map(x => `DROP TRIGGER ${x[1]} ON ${x[2]};`)
-    expect(triggere.length).toBe(6)
+    expect(triggere.length).toBe(4)
     for (const t of triggere) expect(REV).toContain(t)
   })
   it('functiile expuse lui authenticated nu contin constructii interzise de poarta 0e', () => {

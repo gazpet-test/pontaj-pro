@@ -205,33 +205,37 @@ BEGIN
 END $t$;
 RESET ROLE;
 
--- ── TEST12: Registrul legat de polita (financiar): campurile vin din polita si raman sincronizate ─────────────────────────────
+-- ── TEST12 (r5): Registrul legat de polita (financiar) — datele se CITESC prin legatura (v_garantii_registru), nu se copiaza ────
 SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000b', true), set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000b","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 DO $t$
-DECLARE v jsonb; g record; v_pid bigint;
+DECLARE v jsonb; r record; v_pid bigint; v_gid bigint;
 BEGIN
   v := public.fn_polita_salveaza(NULL, '{"tinta":"polita","contract_id":17,"tip":"GBE","asigurator":"ASIG GBE","nr_polita":"H35416-T","valoare":1000.5,"moneda":"RON","data_emitere":"2025-04-01","data_expirare":"2026-12-31"}'::jsonb,
                                  '{"beneficiar":"BENEFICIAR TEST","lucrare":"LUCRARE TEST"}'::jsonb);
-  v_pid := (v->>'polita_id')::bigint;
-  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE id = (v->>'garantie_id')::bigint;
-  IF g.contract_polita_id <> v_pid OR g.emitent <> 'ASIG GBE' OR g.valoare <> 1000.5 OR g.tip <> 'buna_executie' OR g.contract_terti_id <> 17 OR g.data_expirare <> '2026-12-31' THEN
-    RAISE EXCEPTION 'TEST12 FAIL randul legat: %', row_to_json(g);
+  v_pid := (v->>'polita_id')::bigint; v_gid := (v->>'garantie_id')::bigint;
+  SELECT contract_polita_id, pe_contract, emitent_ef, valoare_ef, tip_ef, data_expirare_ef INTO r FROM public.v_garantii_registru WHERE id = v_gid;
+  IF r.contract_polita_id <> v_pid OR NOT r.pe_contract OR r.emitent_ef <> 'ASIG GBE' OR r.valoare_ef <> 1000.5 OR r.tip_ef <> 'buna_executie' OR r.data_expirare_ef <> '2026-12-31' THEN
+    RAISE EXCEPTION 'TEST12 FAIL randul legat in v_garantii_registru: %', row_to_json(r);
   END IF;
-  -- act aditional (prelungire + majorare) => Registrul urmeaza
+  -- act aditional (prelungire + majorare) => Registrul il vede imediat, fara nicio scriere in garantii
   PERFORM public.fn_polita_salveaza(NULL, jsonb_build_object('tinta', 'act', 'polita_id', v_pid, 'nr_act', 1, 'valoare', 1500, 'data_expirare_noua', '2027-03-31'), NULL);
-  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE contract_polita_id = v_pid;
-  IF g.data_expirare <> '2027-03-31' OR g.valoare <> 1500 THEN RAISE EXCEPTION 'TEST12 FAIL sincronizarea dupa act: %', row_to_json(g); END IF;
-  -- o editare directa a campurilor documentului in Registru nu desparte datele
-  UPDATE public.garantii SET emitent = 'ALTUL', valoare = 1 WHERE id = g.id;
-  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE id = g.id;
-  IF g.emitent <> 'ASIG GBE' OR g.valoare <> 1500 THEN RAISE EXCEPTION 'TEST12 FAIL editarea directa a despartit datele: %', row_to_json(g); END IF;
+  SELECT valoare_ef, data_expirare_ef, zile_pana_expirare_ef, valoare, data_expirare INTO r FROM public.v_garantii_registru WHERE id = v_gid;
+  IF r.data_expirare_ef <> '2027-03-31' OR r.valoare_ef <> 1500 OR r.zile_pana_expirare_ef <> ('2027-03-31'::date - CURRENT_DATE)
+     OR r.valoare <> 1000.5 OR r.data_expirare <> '2026-12-31' THEN
+    RAISE EXCEPTION 'TEST12 FAIL dupa act (efectiv din polita, propriu ramas istoric): %', row_to_json(r);
+  END IF;
+  -- coloanele proprii ale documentului nu se pot modifica pe un rand legat; restul (receptie) da
+  BEGIN UPDATE public.garantii SET emitent = 'ALTUL' WHERE id = v_gid; RAISE EXCEPTION 'TEST12 FAIL emitentul unui rand legat s-a modificat';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM <> 'registru_legat_de_polita' THEN RAISE; END IF; END;
+  UPDATE public.garantii SET lucrare_receptionata = true, data_receptie = '2026-11-01' WHERE id = v_gid;
+  IF NOT (SELECT lucrare_receptionata FROM public.v_garantii_registru WHERE id = v_gid) THEN RAISE EXCEPTION 'TEST12 FAIL receptia pe rand legat'; END IF;
   -- scadentele: randul legat nu se dubleaza (vine o singura data, din contract)
   IF (SELECT count(*) FROM public.fn_polite_scadente(DATE '2026-11-10') s WHERE s.nr_polita = 'H35416-T') <> 1 THEN RAISE EXCEPTION 'TEST12 FAIL dublura in scadente'; END IF;
   BEGIN PERFORM public.fn_polita_salveaza(NULL, '{"tinta":"registru","tip":"GBE","asigurator":"A","nr_polita":"N"}'::jsonb, '{"beneficiar":"B"}'::jsonb);
     RAISE EXCEPTION 'TEST12 FAIL Registru fara valoare';
   EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
-  RAISE NOTICE 'TEST12 OK Registrul legat copiaza polita, urmeaza actul aditional, nu se poate desparti, nu se dubleaza in scadente';
+  RAISE NOTICE 'TEST12 OK Registrul legat citit prin legatura (act vazut imediat), coloanele proprii raman istoric si nu se modifica, fara dublura';
 END $t$;
 RESET ROLE;
 
@@ -252,27 +256,33 @@ BEGIN
 END $t$;
 RESET ROLE;
 
--- ── TEST14 (r2, Jakarinos r1 P2-5): polita incompleta nu are rand in Registru; lipsa nu pastreaza valoarea veche ─────────────
+-- ── TEST14 (r5): legarea / deslegarea unui rand existent (date proprii ca istoric); paritatea de_facut pe randurile nelegate ─────
 DO $t$
-DECLARE v_pid bigint; v_gid bigint; g record;
+DECLARE v_pid bigint; r record; n integer;
 BEGIN
-  -- polita fara valoare, valoarea doar pe un act: legarea merge, valoarea vine din act
-  INSERT INTO public.contracte_polite (contract_id, tip, asigurator, nr_polita, data_expirare) VALUES (18, 'CAR', 'ASIG', 'FARA-VAL', '2027-01-01') RETURNING id INTO v_pid;
-  INSERT INTO public.contracte_polite_acte (polita_id, nr_act, valoare_noua_lei, data_expirare_noua) VALUES (v_pid, 1, 2500, '2027-06-30');
-  INSERT INTO public.garantii (forma, tip, beneficiar, valoare, moneda, stare, contract_polita_id) VALUES ('polita_asigurare', 'car', 'B', 1, 'RON', 'activa', v_pid) RETURNING id INTO v_gid;
-  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE id = v_gid;
-  IF g.valoare <> 2500 OR g.data_expirare <> '2027-06-30' OR g.emitent <> 'ASIG' THEN RAISE EXCEPTION 'TEST14 FAIL legarea cu valoarea din act: %', row_to_json(g); END IF;
-  -- stergerea singurului act cu valoare: Registrul ar ramane fara valoare => refuz explicit, nu suma veche pastrata
-  BEGIN DELETE FROM public.contracte_polite_acte WHERE polita_id = v_pid; RAISE EXCEPTION 'TEST14 FAIL actul cu ultima valoare s-a sters';
-  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM <> 'polita_incompleta_pentru_registru' THEN RAISE; END IF; END;
-  -- o polita fara asigurator sau de tip „altul” nu se poate lega
-  INSERT INTO public.contracte_polite (contract_id, tip, nr_polita, valoare_lei) VALUES (18, 'GBE', 'FARA-ASIG', 10) RETURNING id INTO v_pid;
-  BEGIN UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801; RAISE EXCEPTION 'TEST14 FAIL legata o polita fara asigurator';
-  EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
-  INSERT INTO public.contracte_polite (contract_id, tip, asigurator, nr_polita, valoare_lei) VALUES (18, 'altul', 'A', 'ALTUL-1', 10) RETURNING id INTO v_pid;
-  BEGIN UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801; RAISE EXCEPTION 'TEST14 FAIL legata o polita de tip altul';
-  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM <> 'tip_fara_registru' THEN RAISE; END IF; END;
-  RAISE NOTICE 'TEST14 OK valoarea din act la legare; lipsa valorii / asiguratorului / tipul altul = refuz explicit';
+  INSERT INTO public.contracte_polite (contract_id, tip, asigurator, nr_polita, valoare_lei, data_expirare) VALUES (18, 'CAR', 'ASIG NOU', 'LEG-1', 3000, '2027-05-01') RETURNING id INTO v_pid;
+  -- legarea = UPDATE cu FK; coloanele proprii raman neschimbate (istoric), vederea arata polita
+  UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801;
+  SELECT emitent, numar_document, valoare, emitent_ef, numar_document_ef, valoare_ef, data_expirare_ef INTO r FROM public.v_garantii_registru WHERE id = 801;
+  IF r.emitent <> 'ASIG VECHI' OR r.numar_document <> 'VECHE-801' OR r.valoare <> 900 OR r.emitent_ef <> 'ASIG NOU' OR r.numar_document_ef <> 'LEG-1'
+     OR r.valoare_ef <> 3000 OR r.data_expirare_ef <> '2027-05-01' THEN
+    RAISE EXCEPTION 'TEST14 FAIL legarea unui rand existent: %', row_to_json(r);
+  END IF;
+  -- legat => nu mai intra in scadente ca rand de Registru (doar polita, o data)
+  IF EXISTS (SELECT 1 FROM public.fn_polite_scadente(DATE '2026-11-10') s WHERE s.cheie = 'registru:801') THEN RAISE EXCEPTION 'TEST14 FAIL randul legat inca in scadente'; END IF;
+  -- deslegarea: coloanele proprii redevin editabile, vederea revine la ele
+  UPDATE public.garantii SET contract_polita_id = NULL WHERE id = 801;
+  UPDATE public.garantii SET emitent = 'ASIG VECHI 2' WHERE id = 801;
+  IF (SELECT emitent_ef FROM public.v_garantii_registru WHERE id = 801) <> 'ASIG VECHI 2' THEN RAISE EXCEPTION 'TEST14 FAIL deslegarea'; END IF;
+  -- paritatea expresiei recalculate cu v_garantii_situatie: pe randurile nelegate *_ef = coloanele vederii existente
+  SELECT count(*) INTO n FROM public.v_garantii_registru WHERE NOT pe_contract
+    AND (de_facut_ef IS DISTINCT FROM de_facut OR zile_pana_expirare_ef IS DISTINCT FROM zile_pana_expirare OR data_expirare_ef IS DISTINCT FROM data_expirare);
+  IF n <> 0 THEN RAISE EXCEPTION 'TEST14 FAIL paritatea pe % randuri nelegate', n; END IF;
+  -- stergerea unei polite legate e refuzata (FK RESTRICT), nu lasa Registrul fara sursa
+  UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801;
+  BEGIN DELETE FROM public.contracte_polite WHERE id = v_pid; RAISE EXCEPTION 'TEST14 FAIL polita legata stearsa';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  RAISE NOTICE 'TEST14 OK legare / deslegare cu istoric, paritate de_facut, stergerea politei legate refuzata';
 END $t$;
 
 -- (revenirea, mutantii ei si legarea concurenta cu doua sesiuni reale ruleaza separat, in scripts/test_polite_alerte.sh)

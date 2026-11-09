@@ -89,7 +89,7 @@ const MESAJE = {
   nu_e_polita: 'Documentul nu pare a fi o poliță sau un act adițional. Completează manual.',
   pdf_invalid: 'PDF-ul nu poate fi deschis (protejat cu parolă sau deteriorat).',
   pdf_prea_mare: 'PDF-ul e prea mare pentru citire. Completează manual.',
-  polita_incompleta_pentru_registru: 'Polița e legată în Registrul garanțiilor: trebuie să aibă asigurător, nr. și valoare (și după actele adiționale).',
+  registru_legat_de_polita: 'Rândul din Registru e legat de polița de pe contract: datele poliței se modifică pe contract (poliță / act adițional).',
   citire_goala: 'Din document nu s-a putut citi niciun câmp util. Completează manual.',
   raspuns_invalid: 'Documentul nu a putut fi citit. Completează manual.',
   fara_proba: 'Rulează întâi proba (cine ce ar primi).',

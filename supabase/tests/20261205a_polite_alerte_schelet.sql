@@ -104,6 +104,50 @@ GRANT SELECT (id, forma, tip, beneficiar, contract_numar, contract_data, lucrare
   numar_document, data_emitere, data_expirare, stare, lucrare_receptionata, data_receptie, document_receptie, data_eliberare, eliberare_solicitata_la, sursa_document,
   observatii, created_at, updated_at, contract_terti_id, gbe_polita_id, blocat_litigiu, litigiu_detalii) ON public.garantii TO authenticated;
 
+-- v_garantii_situatie: definitia din fixture-ul 20261006b (baza vederii v_garantii_registru)
+CREATE VIEW public.v_garantii_situatie WITH (security_invoker = on) AS
+ SELECT id,
+    forma,
+    tip,
+    beneficiar,
+    contract_numar,
+    contract_data,
+    lucrare,
+    proiect_id,
+    licitatie_id,
+    valoare,
+    moneda,
+    procent,
+    trezorerie_cont_id,
+    NULL::text AS iban,  -- pe live: fn_garantie_iban(g.id) (20261006b), NULL fara drept
+    banca,
+    emitent,
+    numar_document,
+    data_emitere,
+    data_expirare,
+    stare,
+    lucrare_receptionata,
+    data_receptie,
+    document_receptie,
+    data_eliberare,
+    eliberare_solicitata_la,
+    sursa_document,
+    observatii,
+    created_at,
+    updated_at,
+    (data_expirare - CURRENT_DATE) AS zile_pana_expirare,
+        CASE
+            WHEN (stare <> 'activa'::text) THEN NULL::text
+            WHEN (lucrare_receptionata AND (eliberare_solicitata_la IS NULL)) THEN 'Lucrare receptionata - se poate cere eliberarea'::text
+            WHEN ((data_expirare IS NOT NULL) AND (data_expirare < CURRENT_DATE) AND (NOT lucrare_receptionata)) THEN 'EXPIRATA dar lucrarea nu e receptionata - risc de garantie neacoperita'::text
+            WHEN ((data_expirare IS NOT NULL) AND ((data_expirare - CURRENT_DATE) <= 30)) THEN 'Expira in sub 30 de zile'::text
+            WHEN ((data_expirare IS NOT NULL) AND ((data_expirare - CURRENT_DATE) <= 60)) THEN 'Expira in sub 60 de zile'::text
+            WHEN (eliberare_solicitata_la IS NOT NULL) THEN ('Eliberare ceruta la '::text || eliberare_solicitata_la)
+            ELSE NULL::text
+        END AS de_facut
+   FROM garantii g;
+GRANT SELECT ON public.v_garantii_situatie TO authenticated;
+
 -- date FICTIVE
 INSERT INTO public.employees (id, name, email, active) VALUES
   (1, 'TUDORACHE MARILENA', 'Marilena.Tudorache@gazpet.ro', true),   -- adresa gasita in employees (normalizata)

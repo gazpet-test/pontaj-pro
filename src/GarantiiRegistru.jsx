@@ -259,13 +259,17 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
   const [legate, setLegate] = useState(new Set())   // Polițe 20261205a: rândurile legate de o poliță de pe contract
   const load = useCallback(async () => {
     setLoading(true)
-    const [{ data: g }, { data: p }, { data: l }] = await Promise.all([
-      supabase.from('v_garantii_situatie').select('*').order('data_expirare', { ascending: true, nullsFirst: false }),
-      supabase.from('v_garantii_plafon_emitent').select('*'),
-      // fără migrarea 20261205a coloana lipsește: eroarea = niciun rând legat (doar semnul vizual depinde de ea)
-      supabase.from('garantii').select('id').not('contract_polita_id', 'is', null),
-    ])
-    setRanduri(g || []); setPlafon(p || []); setLegate(new Set((l || []).map(x => x.id))); setLoading(false)
+    // Polițe 20261205a (r5): Registrul citește v_garantii_registru — pe rândurile legate de o poliță de pe contract, asigurătorul, nr.,
+    // valoarea, moneda, emiterea și expirarea efectivă vin din poliță (*_ef); fără migrare, vederea veche (rânduri nelegate)
+    let { data: g, error: eg } = await supabase.from('v_garantii_registru').select('*').order('data_expirare_ef', { ascending: true, nullsFirst: false })
+    if (eg && /v_garantii_registru|schema cache|does not exist/i.test(eg.message || '')) {
+      ({ data: g } = await supabase.from('v_garantii_situatie').select('*').order('data_expirare', { ascending: true, nullsFirst: false }))
+    }
+    const { data: p } = await supabase.from('v_garantii_plafon_emitent').select('*')
+    const ef = r => 'emitent_ef' in r ? { ...r, tip: r.tip_ef, emitent: r.emitent_ef, numar_document: r.numar_document_ef, valoare: r.valoare_ef, moneda: r.moneda_ef,
+      data_emitere: r.data_emitere_ef, data_expirare: r.data_expirare_ef, zile_pana_expirare: r.zile_pana_expirare_ef, de_facut: r.de_facut_ef } : r
+    const rows = (g || []).map(ef)
+    setRanduri(rows); setPlafon(p || []); setLegate(new Set(rows.filter(r => r.pe_contract).map(r => r.id))); setLoading(false)
     incarcaBo(g)
   }, [incarcaBo])
   useEffect(() => { load() }, [load])
