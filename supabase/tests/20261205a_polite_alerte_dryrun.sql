@@ -214,17 +214,17 @@ BEGIN
   v := public.fn_polita_salveaza(NULL, '{"tinta":"polita","contract_id":17,"tip":"GBE","asigurator":"ASIG GBE","nr_polita":"H35416-T","valoare":1000.5,"moneda":"RON","data_emitere":"2025-04-01","data_expirare":"2026-12-31"}'::jsonb,
                                  '{"beneficiar":"BENEFICIAR TEST","lucrare":"LUCRARE TEST"}'::jsonb);
   v_pid := (v->>'polita_id')::bigint;
-  SELECT * INTO g FROM public.garantii WHERE id = (v->>'garantie_id')::bigint;
+  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE id = (v->>'garantie_id')::bigint;
   IF g.contract_polita_id <> v_pid OR g.emitent <> 'ASIG GBE' OR g.valoare <> 1000.5 OR g.tip <> 'buna_executie' OR g.contract_terti_id <> 17 OR g.data_expirare <> '2026-12-31' THEN
     RAISE EXCEPTION 'TEST12 FAIL randul legat: %', row_to_json(g);
   END IF;
   -- act aditional (prelungire + majorare) => Registrul urmeaza
   PERFORM public.fn_polita_salveaza(NULL, jsonb_build_object('tinta', 'act', 'polita_id', v_pid, 'nr_act', 1, 'valoare', 1500, 'data_expirare_noua', '2027-03-31'), NULL);
-  SELECT * INTO g FROM public.garantii WHERE contract_polita_id = v_pid;
+  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE contract_polita_id = v_pid;
   IF g.data_expirare <> '2027-03-31' OR g.valoare <> 1500 THEN RAISE EXCEPTION 'TEST12 FAIL sincronizarea dupa act: %', row_to_json(g); END IF;
   -- o editare directa a campurilor documentului in Registru nu desparte datele
   UPDATE public.garantii SET emitent = 'ALTUL', valoare = 1 WHERE id = g.id;
-  SELECT * INTO g FROM public.garantii WHERE id = g.id;
+  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE id = g.id;
   IF g.emitent <> 'ASIG GBE' OR g.valoare <> 1500 THEN RAISE EXCEPTION 'TEST12 FAIL editarea directa a despartit datele: %', row_to_json(g); END IF;
   -- scadentele: randul legat nu se dubleaza (vine o singura data, din contract)
   IF (SELECT count(*) FROM public.fn_polite_scadente(DATE '2026-11-10') s WHERE s.nr_polita = 'H35416-T') <> 1 THEN RAISE EXCEPTION 'TEST12 FAIL dublura in scadente'; END IF;
@@ -260,7 +260,7 @@ BEGIN
   INSERT INTO public.contracte_polite (contract_id, tip, asigurator, nr_polita, data_expirare) VALUES (18, 'CAR', 'ASIG', 'FARA-VAL', '2027-01-01') RETURNING id INTO v_pid;
   INSERT INTO public.contracte_polite_acte (polita_id, nr_act, valoare_noua_lei, data_expirare_noua) VALUES (v_pid, 1, 2500, '2027-06-30');
   INSERT INTO public.garantii (forma, tip, beneficiar, valoare, moneda, stare, contract_polita_id) VALUES ('polita_asigurare', 'car', 'B', 1, 'RON', 'activa', v_pid) RETURNING id INTO v_gid;
-  SELECT * INTO g FROM public.garantii WHERE id = v_gid;
+  SELECT id, contract_polita_id, emitent, valoare, tip, contract_terti_id, data_expirare INTO g FROM public.garantii WHERE id = v_gid;
   IF g.valoare <> 2500 OR g.data_expirare <> '2027-06-30' OR g.emitent <> 'ASIG' THEN RAISE EXCEPTION 'TEST14 FAIL legarea cu valoarea din act: %', row_to_json(g); END IF;
   -- stergerea singurului act cu valoare: Registrul ar ramane fara valoare => refuz explicit, nu suma veche pastrata
   BEGIN DELETE FROM public.contracte_polite_acte WHERE polita_id = v_pid; RAISE EXCEPTION 'TEST14 FAIL actul cu ultima valoare s-a sters';

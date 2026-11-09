@@ -211,7 +211,7 @@ CREATE TABLE public.polite_propuneri (
   motiv_respingere text CHECK (motiv_respingere IS NULL OR length(motiv_respingere) <= 500),
   CONSTRAINT polite_propuneri_cale_check CHECK (pdf_cale = 'polite/propuneri/' || pdf_sha256 || '.pdf'),
   CONSTRAINT polite_propuneri_decizie_check CHECK ((stare = ANY (ARRAY['confirmat'::text, 'respins'::text])) = (decis_la IS NOT NULL AND decis_de IS NOT NULL)),
-  CONSTRAINT polite_propuneri_eroare_check CHECK ((stare = 'eroare') = (eroare IS NOT NULL)),
+  CONSTRAINT polite_propuneri_stare_eroare_check CHECK ((stare = 'eroare') = (eroare IS NOT NULL)),
   CONSTRAINT polite_propuneri_sha_cititor_key UNIQUE (pdf_sha256, cititor)
 );
 COMMENT ON TABLE public.polite_propuneri IS 'Polite 20261205a: propuneri citite din PDF-uri de polite / acte aditionale (continut EXTERN = date). Nu sunt polite active si nu dau alerte; devin polita doar prin fn_polita_salveaza (confirmarea omului). Scriere doar prin RPC-uri (edge cu service_role) sau de tura de noapte; citire pentru cine poate scrie polite.';
