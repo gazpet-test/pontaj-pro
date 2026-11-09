@@ -54,31 +54,128 @@ export function citesteArgs(argv) {
 }
 
 const RE_INTERZIS = /sms|mail|smtp|trimite|send|notific/i
-// RPC-uri cu „sms” în nume care DOAR citesc (agregate / panou), chemate de ecrane la încărcare — singurele permise în modul citire
-const RPC_CITIRE = new Set(['fn_red_sms_stare', 'fn_sms_panou'])
+// LISTA ALBĂ a RPC-urilor care DOAR citesc: funcții declarate STABLE/IMMUTABLE în supabase/migrations (PostgreSQL refuză orice
+// INSERT/UPDATE/DELETE dintr-o funcție STABLE/IMMUTABLE), chemate de aplicație; verificată pe migrări la 09.11.2026.
+// În modul citire (LOT1) doar acestea trec; orice alt RPC e blocat. O funcție nouă de citire se adaugă aici explicit.
+export const RPC_CITIRE = new Set([
+  'fn_red_sms_stare', 'fn_sms_panou', 'fn_red_valoare_parcela', 'fn_red_informare_publicata',
+  'fn_sms_lot_destinatari', 'fn_sms_loturi_lista', 'fn_izo_citire', 'fn_izo_proiecte_protejate', 'fn_cont_stare_angajati',
+  'fn_garantii_tipuri', 'fn_hr_decizii_emitenti', 'fn_hr_decizii_poate', 'fn_are_acces_ofertare', 'fn_poate_citi_pf', 'fn_poate_scrie_pf',
+  'iot_lumini_drept', 'probe_teren_drept', 'egress_statistici', 'fn_ai_cost_lunar',
+])
+// Ce poate scrie fluxul de test pe TEST-RAZVAN (modul scriere): DOAR aceste RPC-uri și tabele, și DOAR cu ID-uri dovedite ale
+// proiectului de test (vezi idDovedit). Orice altceva (alt modul, ștergeri, proiecte, setări, drepturi) e blocat.
+export const RPC_SCRIERE_TEST = new Set([
+  'fn_red_seteaza_tronson', 'fn_red_pv_creeaza', 'fn_red_pv_c_creeaza', 'fn_red_plic_creeaza', 'fn_red_lot_plicuire_creeaza',
+  'fn_red_convocare_leaga', 'fn_red_convocare_rezerva', 'fn_red_adresa_uat_rezerva', 'fn_red_valoare_parcela_seteaza',
+])
+export const TABELE_SCRIERE_TEST = new Set([
+  'red_import_loturi', 'red_parcele', 'red_detinatori', 'red_detinatori_contact', 'red_uat', 'red_convocari', 'red_plicuri',
+  'red_procese_verbale', 'red_corespondenta', 'red_corespondenta_fisiere',
+])
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const RE_UUID_GLOBAL = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+
+// Contextul gărzii: ID-urile DOVEDITE ca aparținând proiectului de test (id-ul proiectului + ce a apărut în răspunsurile cererilor
+// filtrate pe TEST-RAZVAN sau ale scrierilor permise). Un ID care nu e aici nu poate fi atins de o scriere.
+export const ctxGarda = () => ({ idTest: new Set([TEST.id.toLowerCase()]) })
+const idDovedit = (ctx, v) => ctx.idTest.has(String(v).toLowerCase())
+const parseCorp = (corp) => {
+  if (corp == null || corp === '') return {}
+  if (typeof corp === 'object') return corp
+  try { return JSON.parse(corp) } catch { return undefined }
+}
+// toate UUID-urile dintr-o valoare JSON (adânc), cu cheia sub care stau
+function uuiduri(v, cheie = '', out = []) {
+  if (v == null) return out
+  if (typeof v === 'string') { if (RE_UUID.test(v.trim())) out.push({ cheie, v: v.trim().toLowerCase() }); return out }
+  if (Array.isArray(v)) { for (const x of v) uuiduri(x, cheie, out); return out }
+  if (typeof v === 'object') { for (const [k, x] of Object.entries(v)) uuiduri(x, k, out); return out }
+  return out
+}
+// UUID-urile din filtrele PostgREST din URL (id=eq.X, proiect_id=in.(X,Y), or=(…)), indiferent de coloană
+const uuiduriQuery = (u) => [...u.searchParams.entries()].flatMap(([, v]) => String(v).match(RE_UUID_GLOBAL) || []).map(x => x.toLowerCase())
+const esteUpsert = (u, antete) => u.searchParams.has('on_conflict') || /merge-duplicates/i.test(String(antete?.prefer || antete?.Prefer || ''))
+
+// Garda de rețea: 'blocheaza' sau 'permite' pentru o cerere spre Supabase, în funcție de mod ('scriere' = TEST-RAZVAN, 'citire' = LOT1 /
+// --doar-citire) și de conținutul REAL al cererii (corp + ID-uri), nu doar de URL.
+//  • pe orice mod: funcțiile edge și RPC-urile de trimitere (sms / mail / trimite …) sunt blocate; orice funcție edge non-GET e blocată;
+//  • citire: trec doar GET/HEAD/OPTIONS, reîmprospătarea sesiunii, linkurile semnate / listările Storage și RPC-urile din RPC_CITIRE;
+//  • scriere: trec doar RPC_SCRIERE_TEST / TABELE_SCRIERE_TEST / încărcările în redari/TEST-RAZVAN/, și numai dacă fiecare UUID din cerere
+//    (corp + filtre) e dovedit ca al proiectului de test; rândurile cu proiect_id trebuie să aibă proiect_id = TEST-RAZVAN;
+//    ștergerile, proiectele și orice tabel din alt modul sunt blocate. Ce nu se poate dovedi = blocat (testul pică vizibil, nu scrie).
+export function clasificaCerere({ url, metoda, corp, antete }, mod, ctx = ctxGarda()) {
+  let u
+  try { u = new URL(url) } catch { return 'permite' }
+  if (!/supabase\.co$/.test(u.hostname)) return 'permite'
+  const p = u.pathname, m = String(metoda || 'GET').toUpperCase()
+  const doarCitire = m === 'GET' || m === 'HEAD' || m === 'OPTIONS'
+  if (p.startsWith('/functions/v1/')) {
+    if (RE_INTERZIS.test(p.slice('/functions/v1/'.length))) return 'blocheaza'
+    return doarCitire ? 'permite' : 'blocheaza'
+  }
+  if (p.startsWith('/rest/v1/rpc/')) {
+    const fn = p.slice('/rest/v1/rpc/'.length)
+    if (RPC_CITIRE.has(fn)) return 'permite'
+    if (RE_INTERZIS.test(fn) || mod !== 'scriere' || !RPC_SCRIERE_TEST.has(fn)) return 'blocheaza'
+    const c = parseCorp(corp)
+    if (c === undefined) return 'blocheaza'
+    const ids = [...uuiduri(c), ...uuiduriQuery(u).map(v => ({ cheie: '', v }))]
+    return ids.length > 0 && ids.every(x => idDovedit(ctx, x.v)) ? 'permite' : 'blocheaza'
+  }
+  if (doarCitire) return 'permite'
+  if (p.startsWith('/auth/v1/')) return 'permite'                     // reîmprospătarea sesiunii
+  if (p.startsWith('/storage/v1/object/sign/') || p.startsWith('/storage/v1/object/list/')) return 'permite'   // linkuri semnate / listare = citire
+  if (mod !== 'scriere') return 'blocheaza'
+  if (p.startsWith('/storage/v1/object/')) {
+    const seg = p.slice('/storage/v1/object/'.length).split('/').map(decodeURIComponent)
+    return m === 'POST' && seg[0] === 'redari' && seg[1] === TEST.cod && seg.length >= 3 ? 'permite' : 'blocheaza'   // doar încărcări noi
+  }
+  if (!p.startsWith('/rest/v1/')) return 'blocheaza'
+  const tabel = p.slice('/rest/v1/'.length)
+  if (!TABELE_SCRIERE_TEST.has(tabel) || (m !== 'POST' && m !== 'PATCH')) return 'blocheaza'   // fără DELETE / PUT
+  const idsUrl = uuiduriQuery(u)
+  if (!idsUrl.every(v => idDovedit(ctx, v))) return 'blocheaza'
+  if (m === 'PATCH' && idsUrl.length === 0) return 'blocheaza'         // UPDATE fără filtru pe ID-uri dovedite = refuz
+  const c = parseCorp(corp)
+  if (c === undefined || c === null || typeof c !== 'object') return 'blocheaza'
+  const randuri = Array.isArray(c) ? c : [c]
+  if (randuri.length === 0) return 'blocheaza'
+  const upsert = esteUpsert(u, antete)
+  for (const r of randuri) {
+    if (r == null || typeof r !== 'object' || Array.isArray(r)) return 'blocheaza'
+    if ('proiect_id' in r && String(r.proiect_id).toLowerCase() !== TEST.id.toLowerCase()) return 'blocheaza'
+    const ids = uuiduri(r)
+    // la INSERT simplu, cheia `id` a rândului nou poate fi un UUID nou; la upsert / update trebuie dovedită ca orice alt ID
+    const deVerificat = ids.filter(x => !(m === 'POST' && !upsert && x.cheie === 'id'))
+    if (!deVerificat.every(x => idDovedit(ctx, x.v))) return 'blocheaza'
+    // rândul trebuie legat de proiectul de test: proiect_id = TEST, un ID dovedit în corp sau un filtru dovedit în URL
+    if (!('proiect_id' in r) && deVerificat.length === 0 && idsUrl.length === 0) return 'blocheaza'
+  }
+  return 'permite'
+}
+
+// Învățarea ID-urilor proiectului de test, din răspunsurile Supabase reușite, DOAR în modul scriere și DOAR pentru cereri legate dovedit
+// de TEST-RAZVAN: filtrul din URL pe proiect_id = TEST, corpul cu proiect_id = TEST sau o scriere permisă de gardă.
+export function invataIduri({ url, metoda, corp, permisa }, raspuns, mod, ctx) {
+  if (mod !== 'scriere' || raspuns == null) return 0
+  let u
+  try { u = new URL(url) } catch { return 0 }
+  if (!/supabase\.co$/.test(u.hostname) || !u.pathname.startsWith('/rest/v1/')) return 0
+  const filtruTest = [...u.searchParams.entries()].some(([k, v]) => /^(proiect_id|p_proiect_id)$/.test(k) && String(v).toLowerCase() === `eq.${TEST.id.toLowerCase()}`)
+  const c = parseCorp(corp)
+  const corpTest = c && typeof c === 'object' && (Array.isArray(c) ? c : [c]).some(r => r && String(r.proiect_id ?? r.p_proiect_id ?? '').toLowerCase() === TEST.id.toLowerCase())
+  const m = String(metoda || 'GET').toUpperCase()
+  if (!(filtruTest || corpTest || (permisa && m !== 'GET'))) return 0
+  let n = 0
+  for (const x of uuiduri(raspuns)) if (!ctx.idTest.has(x.v)) { ctx.idTest.add(x.v); n++ }
+  return n
+}
 // Răspunsuri de eroare AȘTEPTATE (sonde intenționate ale aplicației), scoase din „HTTP eșuate” și numărate separat
 export const ERORI_ASTEPTATE = [
   { url: /\/rest\/v1\/rpc\/fn_red_convocare_rezerva$/, detaliu: /parametri lipsa/, motiv: 'sonda detecteazaRezervare (p_detinator_id null → 22023 = RPC-ul există)' },
 ]
 export const esteAsteptata = (url, detaliu) => ERORI_ASTEPTATE.find(e => e.url.test(String(url).split('?')[0]) && e.detaliu.test(String(detaliu || ''))) || null
-// Garda de rețea: 'blocheaza' sau 'permite' pentru o cerere, în funcție de mod ('scriere' = TEST-RAZVAN, 'citire' = LOT1 / --doar-citire).
-// Pe orice mod: funcțiile edge de trimitere sunt blocate. În modul citire: nicio scriere (tabele, Storage, funcții edge); RPC-urile de citire
-// la încărcarea ecranelor (ex. fn_red_sms_stare) rămân permise — scriptul nu face pe LOT1 niciun click în afară de taburi.
-export function clasificaCerere({ url, metoda }, mod) {
-  let u
-  try { u = new URL(url) } catch { return 'permite' }
-  if (!/supabase\.co$/.test(u.hostname)) return 'permite'
-  const p = u.pathname, m = String(metoda || 'GET').toUpperCase()
-  if (p.startsWith('/functions/v1/')) {
-    if (RE_INTERZIS.test(p.slice('/functions/v1/'.length))) return 'blocheaza'
-    return mod === 'citire' && m !== 'GET' && m !== 'OPTIONS' ? 'blocheaza' : 'permite'
-  }
-  if (mod !== 'citire' || m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return 'permite'
-  if (p.startsWith('/auth/v1/')) return 'permite'                     // reîmprospătarea sesiunii
-  if (p.startsWith('/rest/v1/rpc/')) { const fn = p.slice('/rest/v1/rpc/'.length); return RE_INTERZIS.test(fn) && !RPC_CITIRE.has(fn) ? 'blocheaza' : 'permite' }
-  if (p.startsWith('/storage/v1/object/sign/') || p.startsWith('/storage/v1/object/list/')) return 'permite'   // linkuri semnate / listare = citire
-  return 'blocheaza'                                                  // POST/PATCH/PUT/DELETE pe tabele, upload Storage etc.
-}
 
 // Selectorul de proiect: valoare = id-ul proiectului, text = „COD — denumire”. Scrierile cer AMBELE potriviri (id + cod).
 export const esteProiectTest = (sel) => !!sel && sel.value === TEST.id && String(sel.text || '').trim().startsWith(TEST.cod + ' ')
@@ -167,26 +264,41 @@ export async function ruleaza(opt) {
   const page = await context.newPage()
   page.setDefaultTimeout(20_000)
 
-  const stare = { mod: 'scriere', proiect: '-', dialoguri: [], consola: [], http: [], blocate: [], asteptate: [], descarcari: [], pas: 0, inZbor: new Set() }
+  // --doar-citire: garda pornește direct în modul „citire” (nu doar pașii de scriere săriți)
+  const stare = { mod: opt.doarCitire ? 'citire' : 'scriere', proiect: '-', dialoguri: [], consola: [], http: [], blocate: [], asteptate: [], descarcari: [], pas: 0, inZbor: new Set() }
   // cererile spre Supabase în zbor — un ecran e „încărcat” abia când s-au terminat (vederile lente răspund după 8–12 s)
   const eSb = (r) => /supabase\.co\/(rest|storage|functions)\//.test(r.url())
   page.on('request', (r) => { if (eSb(r)) stare.inZbor.add(r) })
   page.on('requestfinished', (r) => stare.inZbor.delete(r))
   page.on('requestfailed', (r) => stare.inZbor.delete(r))
   const blocateUrl = new Set()
+  const ctx = ctxGarda()                 // ID-urile dovedite ale proiectului de test (vezi clasificaCerere / invataIduri)
+  const permise = new WeakSet()          // scrierile lăsate să treacă de gardă (din răspunsul lor se învață ID-uri noi)
+  const corpCerere = (r) => { try { return r.postData() } catch { return undefined } }
   await context.route('**/*', (route) => {
     const r = route.request()
-    if (clasificaCerere({ url: r.url(), metoda: r.method() }, stare.mod) === 'blocheaza') {
+    const decizie = clasificaCerere({ url: r.url(), metoda: r.method(), corp: corpCerere(r), antete: r.headers() }, stare.mod, ctx)
+    if (decizie === 'blocheaza') {
       const b = { metoda: r.method(), url: urlScurt(r.url()), pas: stare.pas }
       stare.blocate.push(b); blocateUrl.add(r.url())
       return route.abort('blockedbyclient')
     }
+    permise.add(r)
     return route.continue()
   })
   page.on('console', (m) => { if (m.type() === 'error') stare.consola.push(m.text()) })
   page.on('pageerror', (e) => stare.consola.push('pageerror: ' + (e.message || e)))
   page.on('response', async (r) => {
-    if (r.status() < 400) return
+    if (r.status() < 400) {
+      // învățarea ID-urilor proiectului de test: doar modul scriere, doar răspunsuri JSON reușite ale cererilor legate de TEST-RAZVAN
+      if (stare.mod === 'scriere' && /supabase\.co\/rest\//.test(r.url()) && /json/.test(r.headers()['content-type'] || '')) {
+        try {
+          const q = r.request()
+          invataIduri({ url: r.url(), metoda: q.method(), corp: corpCerere(q), permisa: permise.has(q) }, await r.json(), stare.mod, ctx)
+        } catch { /* fără corp JSON: nimic de învățat */ }
+      }
+      return
+    }
     let detaliu = ''
     try { if (/json/.test(r.headers()['content-type'] || '')) { const j = await r.json(); detaliu = j?.message || j?.error || j?.msg || '' } } catch { /* fără corp */ }
     const asteptata = esteAsteptata(r.url(), detaliu)
