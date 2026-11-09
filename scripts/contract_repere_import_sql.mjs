@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+// (fără shebang: la checkout cu CRLF pe Windows, un shebang face vitest să pice la import; se rulează cu „node scripts/…”)
 // Generează SQL-ul de import al fișei de contract (executie_contract_repere, migrarea 20261203a) dintr-un JSON cu secțiunile
 // { clauze[], cai[], termene[], evenimente[], surse[] } (fiecare rând: cod, titlu + câmpurile secțiunii, ca în src/executieContractRepere.js).
 // Utilizare:  node scripts/contract_repere_import_sql.mjs <date.json> --proiect-regex '<regex pe executie_proiecte.nume>' > import.sql
