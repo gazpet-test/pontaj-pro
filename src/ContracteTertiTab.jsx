@@ -18,6 +18,9 @@ import { supabase } from './lib/supabase.js'
 import { norm } from './lib/diacritice.js'
 import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
 import { stareLegaturaDinCitire, santierInitial, salveazaContractSiLegatura } from './executieContractLegatura.js'
+// Polițe 20261205a: citirea documentului la încărcare (propunere de confirmat) + salvarea confirmată
+import PolitaCitire, { stilCampPropus } from './PolitaCitire.jsx'
+import { formDinPropunere, mesajEroare } from './polite.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -72,6 +75,7 @@ const TIP_POLITA_INFO = {
   GBE: { label:'GBE',  icon:'🛡️',  color:'#2EA043', desc:'Garanție Bună Execuție'  },
   CAR: { label:'CAR',  icon:'🏗️',  color:'#58A6FF', desc:'Asigurare Lucrare (CAR)' },
   GPL: { label:'GPL',  icon:'📋',  color:'#D29922', desc:'Garanție Participare'     },
+  avans:{ label:'Avans', icon:'💶', color:'#A371F7', desc:'Returnare avans'         },   // Polițe 20261205a (D4)
   altul:{ label:'Alt', icon:'📄',  color:'#8B949E', desc:'Alt tip poliță'           },
 }
 
@@ -1655,17 +1659,24 @@ function PoliteSection({ contractId, canWrite }) {
   }
   useEffect(() => { load() }, [contractId])
 
+  // Polițe 20261205a: întâi rândul (o poliță legată în Registru nu se poate șterge), abia apoi fișierul (L02);
+  // PDF-urile citite (polite/propuneri/<sha256>.pdf) rămân: sunt ale propunerii, nu ale rândului
+  const scoatePdf = async cale => { if (cale && !cale.startsWith('polite/propuneri/')) await supabase.storage.from('contracte-terti').remove([cale]) }
   const delPolita = async p => {
     if (!confirm(`Șterge polița ${p.tip} ${p.nr_polita||''}?`)) return
-    if (p.pdf_path) await supabase.storage.from('contracte-terti').remove([p.pdf_path])
-    const { error } = await supabase.from('contracte_polite').delete().eq('id', p.id)
-    if (error) show('Eroare: '+error.message,'err'); else { show('✓ Poliță ștearsă'); load() }
+    const { data, error } = await supabase.from('contracte_polite').delete().eq('id', p.id).select('id')
+    if (error) { show('Eroare: '+mesajEroare(error),'err'); return }
+    if (!data?.length) { show('Polița nu a fost ștearsă (lipsă drept sau deja ștearsă). Reîncarcă.','err'); return }
+    await scoatePdf(p.pdf_path); for (const a of (p.contracte_polite_acte || [])) await scoatePdf(a.pdf_path)
+    show('✓ Poliță ștearsă'); load()
   }
   const delAct = async act => {
     if (!confirm(`Șterge actul adițional nr.${act.nr_act}?`)) return
-    if (act.pdf_path) await supabase.storage.from('contracte-terti').remove([act.pdf_path])
-    const { error } = await supabase.from('contracte_polite_acte').delete().eq('id', act.id)
-    if (error) show('Eroare: '+error.message,'err'); else { show('✓ Act șters'); load() }
+    const { data, error } = await supabase.from('contracte_polite_acte').delete().eq('id', act.id).select('id')
+    if (error) { show('Eroare: '+mesajEroare(error),'err'); return }
+    if (!data?.length) { show('Actul nu a fost șters (lipsă drept sau deja șters). Reîncarcă.','err'); return }
+    await scoatePdf(act.pdf_path)
+    show('✓ Act șters'); load()
   }
 
   const getExpEf = p => {
@@ -1747,14 +1758,43 @@ function PoliteSection({ contractId, canWrite }) {
 // ══════════════════════════════════════════════════════════
 function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
   const isEdit=!!item?.id
-  const [form,setForm]=useState({tip:item?.tip||'GBE',asigurator:item?.asigurator||'',nr_polita:item?.nr_polita||'',valoare_lei:item?.valoare_lei||'',data_emitere:item?.data_emitere||'',data_expirare:item?.data_expirare||'',status:item?.status||'activa',observatii:item?.observatii||''})
+  const [form,setForm]=useState({tip:item?.tip||'GBE',asigurator:item?.asigurator||'',nr_polita:item?.nr_polita||'',valoare_lei:item?.valoare_lei||'',moneda:item?.moneda||'RON',data_emitere:item?.data_emitere||'',data_expirare:item?.data_expirare||'',executie_de_la:item?.executie_de_la||'',executie_pana_la:item?.executie_pana_la||'',garantie_de_la:item?.garantie_de_la||'',garantie_pana_la:item?.garantie_pana_la||'',status:item?.status||'activa',observatii:item?.observatii||''})
   const [pdfFile,setPdfFile]=useState(null); const [saving,setSaving]=useState(false)
+  // Polițe 20261205a: propunerea citită din document (nimic nu se scrie până la „Salvează”)
+  const [citire,setCitire]=useState(null)
   const set=(k,v)=>setForm(f=>({...f,[k]:v}))
   const ti=TIP_POLITA_INFO[form.tip]||TIP_POLITA_INFO.altul
+  const stil=k=>stilCampPropus(S.input,k,form[k],citire)
+  const laPropunere=p=>{
+    if(!p){setCitire(null);return}
+    const f=formDinPropunere(p,'polita',{valoare:'valoare_lei'})
+    setCitire({propunere:p,...f})
+    setForm(x=>({...x,...Object.fromEntries(Object.entries(f.valori).map(([k,v])=>[k,String(v)]))}))
+  }
+  const pc=citire?.propunere?.contract_propus
+  const avertizari=citire?[
+    citire.propunere?.este_act&&'Documentul pare un act adițional: adaugă-l cu „+ Act” la polița de bază, nu ca poliță nouă.',
+    pc&&Number(pc.id)!==Number(contractId)&&`Documentul pomenește contractul ${pc.numar_contract||'#'+pc.id}${pc.denumire?' ('+pc.denumire+')':''}, nu pe acesta. Verifică.`,
+    citire.propunere?.polita_baza_propusa&&!citire.propunere?.este_act&&`Există deja o poliță cu același număr (#${citire.propunere.polita_baza_propusa.id}). Nu o adăuga a doua oară.`,
+  ].filter(Boolean):[]
+  const optionale=()=>({...(form.moneda&&form.moneda!=='RON'&&{moneda:form.moneda}),
+    ...Object.fromEntries(['executie_de_la','executie_pana_la','garantie_de_la','garantie_pana_la'].filter(k=>form[k]||item?.[k]).map(k=>[k,form[k]||null]))})
 
   const handleSave=async()=>{
+    if(form.data_emitere&&form.data_expirare&&form.data_expirare<form.data_emitere){onError('Data expirării e înaintea datei emiterii.');return}
+    for(const [a,b] of [['executie_de_la','executie_pana_la'],['garantie_de_la','garantie_pana_la']]) if(form[a]&&form[b]&&form[b]<form[a]){onError('O perioadă se termină înainte să înceapă.');return}
     setSaving(true)
     try {
+      if(citire?.propunere&&!citire.propunere.doar_valori){
+        // salvarea confirmată: polița + marcarea propunerii, într-o singură tranzacție (fn_polita_salveaza)
+        const p_date={tinta:'polita',contract_id:contractId,tip:form.tip,asigurator:form.asigurator.trim()||null,nr_polita:form.nr_polita.trim()||null,
+          valoare:String(form.valoare_lei??'').trim()||null,moneda:form.moneda||'RON',data_emitere:form.data_emitere||null,data_expirare:form.data_expirare||null,
+          executie_de_la:form.executie_de_la||null,executie_pana_la:form.executie_pana_la||null,garantie_de_la:form.garantie_de_la||null,garantie_pana_la:form.garantie_pana_la||null,
+          status:form.status,observatii:form.observatii.trim()||null}
+        const{error}=await supabase.rpc('fn_polita_salveaza',{p_propunere_id:citire.propunere.id,p_date,p_registru:null})
+        if(error)throw new Error(mesajEroare(error))
+        onSaved();return
+      }
       let pdf_path=item?.pdf_path||null
       if(pdfFile){
         const ext=pdfFile.name.split('.').pop()
@@ -1764,44 +1804,63 @@ function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
         if(item?.pdf_path&&item.pdf_path!==path)await supabase.storage.from('contracte-terti').remove([item.pdf_path])
         pdf_path=path
       }
-      const payload={contract_id:contractId,tip:form.tip,asigurator:form.asigurator.trim()||null,nr_polita:form.nr_polita.trim()||null,valoare_lei:form.valoare_lei?parseFloat(form.valoare_lei):null,data_emitere:form.data_emitere||null,data_expirare:form.data_expirare||null,status:form.status,observatii:form.observatii.trim()||null,...(pdf_path!==undefined&&{pdf_path})}
+      const payload={contract_id:contractId,tip:form.tip,asigurator:form.asigurator.trim()||null,nr_polita:form.nr_polita.trim()||null,valoare_lei:form.valoare_lei?parseFloat(form.valoare_lei):null,data_emitere:form.data_emitere||null,data_expirare:form.data_expirare||null,status:form.status,observatii:form.observatii.trim()||null,...optionale(),...(pdf_path!==undefined&&{pdf_path})}
       const{error}=isEdit?await supabase.from('contracte_polite').update(payload).eq('id',item.id):await supabase.from('contracte_polite').insert(payload)
       if(error)throw new Error(error.message)
       onSaved()
     }catch(e){onError(e.message)}finally{setSaving(false)}
   }
 
+  const lat=!isEdit&&!!pdfFile
+  const formular=(
+    <div>
+      <label style={S.lbl}>Tip *</label>
+      <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+        {Object.entries(TIP_POLITA_INFO).map(([k,v])=>(
+          <button key={k} onClick={()=>set('tip',k)} style={{flex:1,minWidth:70,padding:'8px 4px',fontSize:12,fontWeight:700,borderRadius:6,cursor:'pointer',background:form.tip===k?v.color+'33':G.bg,color:form.tip===k?v.color:G.muted,border:`1px solid ${form.tip===k?v.color:(citire?.propuse?.includes('tip')&&citire.valori.tip===k?'#E3B341':G.border2)}`}}>{v.icon} {v.label}</button>
+        ))}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+        <div><label style={S.lbl}>Asigurător</label><input value={form.asigurator} onChange={e=>set('asigurator',e.target.value)} style={stil('asigurator')} placeholder="ex: ABC Asigurări"/></div>
+        <div><label style={S.lbl}>Nr. poliță</label><input value={form.nr_polita} onChange={e=>set('nr_polita',e.target.value)} style={stil('nr_polita')} placeholder="ex: AV072963"/></div>
+        <div><label style={S.lbl}>Valoare</label><div style={{display:'flex',gap:6}}><input type="number" value={form.valoare_lei} onChange={e=>set('valoare_lei',e.target.value)} style={stil('valoare_lei')} placeholder="0" min="0" step="0.01"/>
+          <select value={form.moneda} onChange={e=>set('moneda',e.target.value)} style={{...stil('moneda'),width:76}}><option>RON</option><option>EUR</option></select></div></div>
+        <div><label style={S.lbl}>Status</label><select value={form.status} onChange={e=>set('status',e.target.value)} style={{...S.input}}><option value="activa">✓ Activă</option><option value="expirata">⚠ Expirată</option><option value="retrasa">↩ Retrasă</option><option value="anulata">⛔ Anulată</option></select></div>
+        <div><label style={S.lbl}>Data emitere</label><input type="date" value={form.data_emitere} onChange={e=>set('data_emitere',e.target.value)} style={stil('data_emitere')}/></div>
+        <div><label style={S.lbl}>Valabilă până la (alerte)</label><input type="date" value={form.data_expirare} onChange={e=>set('data_expirare',e.target.value)} style={stil('data_expirare')}/></div>
+        <div><label style={S.lbl}>Execuție de la</label><input type="date" value={form.executie_de_la} onChange={e=>set('executie_de_la',e.target.value)} style={stil('executie_de_la')}/></div>
+        <div><label style={S.lbl}>Execuție până la</label><input type="date" value={form.executie_pana_la} onChange={e=>set('executie_pana_la',e.target.value)} style={stil('executie_pana_la')}/></div>
+        <div><label style={S.lbl}>Garanție de la</label><input type="date" value={form.garantie_de_la} onChange={e=>set('garantie_de_la',e.target.value)} style={stil('garantie_de_la')}/></div>
+        <div><label style={S.lbl}>Garanție până la</label><input type="date" value={form.garantie_pana_la} onChange={e=>set('garantie_pana_la',e.target.value)} style={stil('garantie_pana_la')}/></div>
+      </div>
+      <div style={{fontSize:10.5,color:G.dim,marginBottom:10}}>Alertele de expirare (60 / 30 / 15 zile, la expirare, apoi săptămânal) pleacă de la „Valabilă până la” sau de la noua dată din actele adiționale.</div>
+      <label style={S.lbl}>Observații</label>
+      <textarea value={form.observatii} onChange={e=>set('observatii',e.target.value)} style={{...S.input,minHeight:60,resize:'vertical',marginBottom:10}} placeholder="Detalii..."/>
+      {isEdit&&<><label style={S.lbl}>PDF Poliță</label>
+        <input type="file" accept=".pdf" onChange={e=>setPdfFile(e.target.files[0]||null)} style={{fontSize:12,color:G.muted,marginBottom:14}}/>
+        {item?.pdf_path&&!pdfFile&&<div style={{fontSize:11,color:G.green,marginBottom:10}}>✓ PDF existent salvat</div>}</>}
+      {avertizari.map((a,i)=><div key={i} style={{fontSize:11.5,color:G.yellow,background:G.yellow+'14',border:`1px solid ${G.yellow}44`,borderRadius:6,padding:'6px 9px',marginBottom:8}}>⚠ {a}</div>)}
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={onClose} style={{...S.btnS,flex:1}}>Anulează</button>
+        <button onClick={handleSave} disabled={saving} style={{...S.btnP,flex:2,background:ti.color,opacity:saving?0.6:1}}>{saving?'⏳ Salvare...':isEdit?'✓ Salvează':citire&&!citire.propunere?.doar_valori?'✓ Confirmă și salvează':'+ Adaugă polița'}</button>
+      </div>
+    </div>
+  )
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.75)',zIndex:9995,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:G.surface,borderRadius:12,padding:24,width:520,maxWidth:'95vw',maxHeight:'90vh',overflowY:'auto',border:`1px solid ${ti.color}44`}}>
+      <div style={{background:G.surface,borderRadius:12,padding:24,width:lat?1080:520,maxWidth:'96vw',maxHeight:'92vh',overflowY:'auto',border:`1px solid ${ti.color}44`}}>
         <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
           <span style={{fontSize:20}}>{ti.icon}</span>
           <h3 style={{margin:0,fontSize:15,color:G.text}}>{isEdit?'Editează':'Adaugă'} poliță</h3>
           <button onClick={onClose} style={{...S.btnS,marginLeft:'auto',padding:'4px 10px',fontSize:12}}>✕</button>
         </div>
-        <label style={S.lbl}>Tip *</label>
-        <div style={{display:'flex',gap:6,marginBottom:14}}>
-          {Object.entries(TIP_POLITA_INFO).map(([k,v])=>(
-            <button key={k} onClick={()=>set('tip',k)} style={{flex:1,padding:'8px 4px',fontSize:12,fontWeight:700,borderRadius:6,cursor:'pointer',background:form.tip===k?v.color+'33':G.bg,color:form.tip===k?v.color:G.muted,border:`1px solid ${form.tip===k?v.color:G.border2}`}}>{v.icon} {v.label}</button>
-          ))}
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
-          <div><label style={S.lbl}>Asigurător</label><input value={form.asigurator} onChange={e=>set('asigurator',e.target.value)} style={S.input} placeholder="ex: ABC Asigurări"/></div>
-          <div><label style={S.lbl}>Nr. poliță</label><input value={form.nr_polita} onChange={e=>set('nr_polita',e.target.value)} style={S.input} placeholder="ex: AV072963"/></div>
-          <div><label style={S.lbl}>Valoare (RON)</label><input type="number" value={form.valoare_lei} onChange={e=>set('valoare_lei',e.target.value)} style={S.input} placeholder="0" min="0"/></div>
-          <div><label style={S.lbl}>Status</label><select value={form.status} onChange={e=>set('status',e.target.value)} style={{...S.input}}><option value="activa">✓ Activă</option><option value="expirata">⚠ Expirată</option><option value="retrasa">↩ Retrasă</option><option value="anulata">⛔ Anulată</option></select></div>
-          <div><label style={S.lbl}>Data emitere</label><input type="date" value={form.data_emitere} onChange={e=>set('data_emitere',e.target.value)} style={S.input}/></div>
-          <div><label style={S.lbl}>Data expirare</label><input type="date" value={form.data_expirare} onChange={e=>set('data_expirare',e.target.value)} style={S.input}/></div>
-        </div>
-        <label style={S.lbl}>Observații</label>
-        <textarea value={form.observatii} onChange={e=>set('observatii',e.target.value)} style={{...S.input,minHeight:60,resize:'vertical',marginBottom:10}} placeholder="Detalii..."/>
-        <label style={S.lbl}>PDF Poliță</label>
-        <input type="file" accept=".pdf" onChange={e=>setPdfFile(e.target.files[0]||null)} style={{fontSize:12,color:G.muted,marginBottom:14}}/>
-        {item?.pdf_path&&!pdfFile&&<div style={{fontSize:11,color:G.green,marginBottom:10}}>✓ PDF existent salvat</div>}
-        <div style={{display:'flex',gap:8}}>
-          <button onClick={onClose} style={{...S.btnS,flex:1}}>Anulează</button>
-          <button onClick={handleSave} disabled={saving} style={{...S.btnP,flex:2,background:ti.color,opacity:saving?0.6:1}}>{saving?'⏳ Salvare...':isEdit?'✓ Salvează':'+ Adaugă polița'}</button>
-        </div>
+        {isEdit?formular:(
+          <div style={{display:'grid',gridTemplateColumns:lat?'minmax(0,1fr) minmax(0,1fr)':'1fr',gap:18}}>
+            <div><PolitaCitire fisier={pdfFile} onFisier={setPdfFile} onPropunere={laPropunere} eticheta="PDF Poliță"/></div>
+            {formular}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1812,14 +1871,36 @@ function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
 // ══════════════════════════════════════════════════════════
 function PolitaActModal({ item, onClose, onSaved, onError }) {
   const isEdit=!!item?.id
-  const [form,setForm]=useState({nr_act:item?.nr_act||'',descriere:item?.descriere||'',valoare_noua_lei:item?.valoare_noua_lei||'',data_emitere:item?.data_emitere||'',data_expirare_noua:item?.data_expirare_noua||''})
+  const [form,setForm]=useState({nr_act:item?.nr_act||'',descriere:item?.descriere||'',valoare_noua_lei:item?.valoare_noua_lei||'',data_emitere:item?.data_emitere||'',data_expirare_noua:item?.data_expirare_noua||'',executie_de_la:item?.executie_de_la||'',executie_pana_la:item?.executie_pana_la||'',garantie_de_la:item?.garantie_de_la||'',garantie_pana_la:item?.garantie_pana_la||''})
   const [pdfFile,setPdfFile]=useState(null); const [saving,setSaving]=useState(false)
+  const [citire,setCitire]=useState(null)
   const set=(k,v)=>setForm(f=>({...f,[k]:v}))
+  const stil=k=>stilCampPropus(S.input,k,form[k],citire)
+  const laPropunere=p=>{
+    if(!p){setCitire(null);return}
+    const f=formDinPropunere(p,'act')
+    setCitire({propunere:p,...f})
+    setForm(x=>({...x,...Object.fromEntries(Object.entries(f.valori).map(([k,v])=>[k,String(v)]))}))
+  }
+  const pb=citire?.propunere?.polita_baza_propusa
+  const avertizari=citire?[
+    citire.propunere&&!citire.propunere.este_act&&'Documentul pare o poliță nouă, nu un act adițional. Verifică.',
+    pb&&Number(pb.id)!==Number(item.polita_id)&&`Documentul pomenește polița ${pb.nr_polita||'#'+pb.id}, nu pe aceasta. Verifică.`,
+  ].filter(Boolean):[]
 
   const handleSave=async()=>{
     if(!form.nr_act){onError('Nr. act este obligatoriu');return}
+    for(const [a,b] of [['executie_de_la','executie_pana_la'],['garantie_de_la','garantie_pana_la']]) if(form[a]&&form[b]&&form[b]<form[a]){onError('O perioadă se termină înainte să înceapă.');return}
     setSaving(true)
     try {
+      if(citire?.propunere&&!citire.propunere.doar_valori){
+        const p_date={tinta:'act',polita_id:item.polita_id,nr_act:parseInt(form.nr_act),descriere:form.descriere.trim()||null,valoare:String(form.valoare_noua_lei??'').trim()||null,
+          data_emitere:form.data_emitere||null,data_expirare_noua:form.data_expirare_noua||null,executie_de_la:form.executie_de_la||null,executie_pana_la:form.executie_pana_la||null,
+          garantie_de_la:form.garantie_de_la||null,garantie_pana_la:form.garantie_pana_la||null}
+        const{error}=await supabase.rpc('fn_polita_salveaza',{p_propunere_id:citire.propunere.id,p_date,p_registru:null})
+        if(error)throw new Error(mesajEroare(error))
+        onSaved();return
+      }
       let pdf_path=item?.pdf_path||null
       if(pdfFile){
         const path=`polite/acte/${item.polita_id}/${Date.now()}_act${form.nr_act}.pdf`
@@ -1828,36 +1909,56 @@ function PolitaActModal({ item, onClose, onSaved, onError }) {
         if(item?.pdf_path)await supabase.storage.from('contracte-terti').remove([item.pdf_path])
         pdf_path=path
       }
-      const payload={polita_id:item.polita_id,nr_act:parseInt(form.nr_act),descriere:form.descriere.trim()||null,valoare_noua_lei:form.valoare_noua_lei?parseFloat(form.valoare_noua_lei):null,data_emitere:form.data_emitere||null,data_expirare_noua:form.data_expirare_noua||null,...(pdf_path!==undefined&&{pdf_path})}
+      const perioade=Object.fromEntries(['executie_de_la','executie_pana_la','garantie_de_la','garantie_pana_la'].filter(k=>form[k]||item?.[k]).map(k=>[k,form[k]||null]))
+      const payload={polita_id:item.polita_id,nr_act:parseInt(form.nr_act),descriere:form.descriere.trim()||null,valoare_noua_lei:form.valoare_noua_lei?parseFloat(form.valoare_noua_lei):null,data_emitere:form.data_emitere||null,data_expirare_noua:form.data_expirare_noua||null,...perioade,...(pdf_path!==undefined&&{pdf_path})}
       const{error}=isEdit?await supabase.from('contracte_polite_acte').update(payload).eq('id',item.id):await supabase.from('contracte_polite_acte').insert(payload)
       if(error)throw new Error(error.message)
       onSaved()
     }catch(e){onError(e.message)}finally{setSaving(false)}
   }
 
+  const lat=!isEdit&&!!pdfFile
+  const formular=(
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'100px 1fr',gap:10,marginBottom:10}}>
+        <div><label style={S.lbl}>Nr. act *</label><input type="number" value={form.nr_act} onChange={e=>set('nr_act',e.target.value)} style={stil('nr_act')} min="1"/></div>
+        <div><label style={S.lbl}>Descriere</label><input value={form.descriere} onChange={e=>set('descriere',e.target.value)} style={S.input} placeholder="ex: Prelungire + majorare"/></div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+        <div><label style={S.lbl}>Valoare nouă (RON)</label><input type="number" value={form.valoare_noua_lei} onChange={e=>set('valoare_noua_lei',e.target.value)} style={stil('valoare_noua_lei')} placeholder="0" step="0.01"/></div>
+        <div><label style={S.lbl}>Nouă dată expirare</label><input type="date" value={form.data_expirare_noua} onChange={e=>set('data_expirare_noua',e.target.value)} style={stil('data_expirare_noua')}/></div>
+        <div><label style={S.lbl}>Data emitere act</label><input type="date" value={form.data_emitere} onChange={e=>set('data_emitere',e.target.value)} style={stil('data_emitere')}/></div>
+        <div/>
+        <div><label style={S.lbl}>Execuție de la</label><input type="date" value={form.executie_de_la} onChange={e=>set('executie_de_la',e.target.value)} style={stil('executie_de_la')}/></div>
+        <div><label style={S.lbl}>Execuție până la</label><input type="date" value={form.executie_pana_la} onChange={e=>set('executie_pana_la',e.target.value)} style={stil('executie_pana_la')}/></div>
+        <div><label style={S.lbl}>Garanție de la</label><input type="date" value={form.garantie_de_la} onChange={e=>set('garantie_de_la',e.target.value)} style={stil('garantie_de_la')}/></div>
+        <div><label style={S.lbl}>Garanție până la</label><input type="date" value={form.garantie_pana_la} onChange={e=>set('garantie_pana_la',e.target.value)} style={stil('garantie_pana_la')}/></div>
+      </div>
+      {isEdit&&<><label style={S.lbl}>PDF Act adițional</label>
+        <input type="file" accept=".pdf" onChange={e=>setPdfFile(e.target.files[0]||null)} style={{fontSize:12,color:G.muted,marginBottom:14}}/>
+        {item?.pdf_path&&!pdfFile&&<div style={{fontSize:11,color:G.green,marginBottom:10}}>✓ PDF existent</div>}</>}
+      {avertizari.map((a,i)=><div key={i} style={{fontSize:11.5,color:G.yellow,background:G.yellow+'14',border:`1px solid ${G.yellow}44`,borderRadius:6,padding:'6px 9px',marginBottom:8}}>⚠ {a}</div>)}
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={onClose} style={{...S.btnS,flex:1}}>Anulează</button>
+        <button onClick={handleSave} disabled={saving} style={{...S.btnP,flex:2,opacity:saving?0.6:1}}>{saving?'⏳...':isEdit?'✓ Salvează':citire&&!citire.propunere?.doar_valori?'✓ Confirmă și salvează':'+ Adaugă act'}</button>
+      </div>
+    </div>
+  )
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.8)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:G.surface,borderRadius:12,padding:24,width:440,maxWidth:'95vw',border:`1px solid ${G.border2}`}}>
+      <div style={{background:G.surface,borderRadius:12,padding:24,width:lat?1040:460,maxWidth:'96vw',maxHeight:'92vh',overflowY:'auto',border:`1px solid ${G.border2}`}}>
         <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
           <span style={{fontSize:18}}>📎</span>
           <h3 style={{margin:0,fontSize:14,color:G.text}}>{isEdit?'Editează':'Adaugă'} act adițional poliță</h3>
           <button onClick={onClose} style={{...S.btnS,marginLeft:'auto',padding:'4px 10px',fontSize:12}}>✕</button>
         </div>
-        <div style={{display:'grid',gridTemplateColumns:'100px 1fr',gap:10,marginBottom:10}}>
-          <div><label style={S.lbl}>Nr. act *</label><input type="number" value={form.nr_act} onChange={e=>set('nr_act',e.target.value)} style={S.input} min="1"/></div>
-          <div><label style={S.lbl}>Descriere</label><input value={form.descriere} onChange={e=>set('descriere',e.target.value)} style={S.input} placeholder="ex: Prelungire + majorare"/></div>
-          <div><label style={S.lbl}>Valoare nouă (RON)</label><input type="number" value={form.valoare_noua_lei} onChange={e=>set('valoare_noua_lei',e.target.value)} style={S.input} placeholder="0"/></div>
-          <div><label style={S.lbl}>Nouă dată expirare</label><input type="date" value={form.data_expirare_noua} onChange={e=>set('data_expirare_noua',e.target.value)} style={S.input}/></div>
-        </div>
-        <label style={S.lbl}>Data emitere act</label>
-        <input type="date" value={form.data_emitere} onChange={e=>set('data_emitere',e.target.value)} style={{...S.input,marginBottom:10}}/>
-        <label style={S.lbl}>PDF Act adițional</label>
-        <input type="file" accept=".pdf" onChange={e=>setPdfFile(e.target.files[0]||null)} style={{fontSize:12,color:G.muted,marginBottom:14}}/>
-        {item?.pdf_path&&!pdfFile&&<div style={{fontSize:11,color:G.green,marginBottom:10}}>✓ PDF existent</div>}
-        <div style={{display:'flex',gap:8}}>
-          <button onClick={onClose} style={{...S.btnS,flex:1}}>Anulează</button>
-          <button onClick={handleSave} disabled={saving} style={{...S.btnP,flex:2,opacity:saving?0.6:1}}>{saving?'⏳...':isEdit?'✓ Salvează':'+ Adaugă act'}</button>
-        </div>
+        {isEdit?formular:(
+          <div style={{display:'grid',gridTemplateColumns:lat?'minmax(0,1fr) minmax(0,1fr)':'1fr',gap:18}}>
+            <div><PolitaCitire fisier={pdfFile} onFisier={setPdfFile} onPropunere={laPropunere} eticheta="PDF Act adițional"/></div>
+            {formular}
+          </div>
+        )}
       </div>
     </div>
   )

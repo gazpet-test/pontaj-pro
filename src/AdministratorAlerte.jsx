@@ -13,12 +13,14 @@ const S = {
 const PRIORITATI = { critical: ['Critică', G.red], week: ['În 7 zile', G.yellow], attention: ['De urmărit', G.blue], missing: ['Date lipsă', G.muted] }
 const STARI = { idle: 'Neevaluată', loading: 'Se evaluează', ok: 'Evaluată', denied: 'Acces insuficient', error: 'Eroare de citire' }
 const initial = () => Object.fromEntries(SURSE_ADMIN.map(s => [s.id, { state: 'idle', rows: [] }]))
-const SOURCE_LINK_LABELS = { ofertare: 'licitația', hr: 'autorizația', flota: 'vehiculul', firma: 'documentul', gbe: 'garanția', conturi: 'contul' }
+const SOURCE_LINK_LABELS = { ofertare: 'licitația', hr: 'autorizația', flota: 'vehiculul', firma: 'documentul', gbe: 'garanția', conturi: 'contul', polite: 'polița' }
 const sourceById = Object.fromEntries(SURSE_ADMIN.map(s => [s.id, s]))
 const AdministratorAutomatizari = lazy(() => import('./AdministratorAutomatizari.jsx'))
 const AdministratorCostAI = lazy(() => import('./AdministratorCostAI.jsx'))
 // 📱 SMS (03.11.2026): tab-ul de aici rămâne al owner-ului; utilizatorii / contul de test SMS folosesc ruta /sms (20261130b), docs/sms/
 const SmsPagina = lazy(() => import('./sms/SmsPagina.jsx'))
+// 🛡️ Alerte polițe (Polițe 20261205a): lista de destinatari, comutatorul, proba și jurnalul — owner
+const PoliteAlerteAdmin = lazy(() => import('./PoliteAlerteAdmin.jsx'))
 const fmtDate = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('ro-RO') : 'Necunoscut'
 const fmtTime = value => value ? new Date(value).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Bucharest' }) : '—'
 const money = row => Number.isFinite(row.amount) ? `${row.amount.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${row.currency || 'monedă neprecizată'}` : 'Valoare necunoscută'
@@ -60,7 +62,7 @@ export default function AdministratorAlerte({ profile }) {
   const nav = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   // ⚙️ Automatizări (03.10.2026): tab owner-only; restul modulului rămâne neschimbat.
-  const tab = ['automatizari', 'cost-ai', 'sms'].includes(searchParams.get('tab')) && profile?.is_owner === true ? searchParams.get('tab') : 'alerte'
+  const tab = ['automatizari', 'cost-ai', 'sms', 'polite'].includes(searchParams.get('tab')) && profile?.is_owner === true ? searchParams.get('tab') : 'alerte'
   const alegeTab = t => setSearchParams(t === 'alerte' ? {} : { tab: t }, { replace: true })
   const [sources, setSources] = useState(initial)
   const [busy, setBusy] = useState(false)
@@ -146,9 +148,9 @@ export default function AdministratorAlerte({ profile }) {
 
     </header>
     {profile?.is_owner === true && <nav aria-label="Secțiuni" style={{ ...S.row, marginBottom: 18 }}>
-      {[['alerte', '🔔 Alerte și aprobări'], ['automatizari', '⚙️ Automatizări'], ['cost-ai', 'Cost AI'], ['sms', '📱 SMS']].map(([key, label]) => <button key={key} type="button" aria-pressed={tab === key} onClick={() => alegeTab(key)} style={{ ...S.button, fontWeight: 600, color: tab === key ? G.blue : G.muted, borderColor: tab === key ? G.blue : G.border }}>{label}</button>)}
+      {[['alerte', '🔔 Alerte și aprobări'], ['automatizari', '⚙️ Automatizări'], ['cost-ai', 'Cost AI'], ['sms', '📱 SMS'], ['polite', '🛡️ Alerte polițe']].map(([key, label]) => <button key={key} type="button" aria-pressed={tab === key} onClick={() => alegeTab(key)} style={{ ...S.button, fontWeight: 600, color: tab === key ? G.blue : G.muted, borderColor: tab === key ? G.blue : G.border }}>{label}</button>)}
     </nav>}
-    {tab === 'sms' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><SmsPagina profile={profile} /></Suspense> : tab === 'cost-ai' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><AdministratorCostAI profile={profile} /></Suspense> : tab === 'automatizari' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><AdministratorAutomatizari profile={profile} /></Suspense> : <>
+    {tab === 'polite' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><PoliteAlerteAdmin profile={profile} /></Suspense> : tab === 'sms' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><SmsPagina profile={profile} /></Suspense> : tab === 'cost-ai' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><AdministratorCostAI profile={profile} /></Suspense> : tab === 'automatizari' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><AdministratorAutomatizari profile={profile} /></Suspense> : <>
     {accessMessage && <div role="alert" style={{ ...S.panel, color: G.yellow, marginBottom: 18 }}>{accessMessage}</div>}
     <section aria-label="Situații din sursele evaluate" className="admin-metrics" style={{ marginBottom: 14 }}>
       {[
