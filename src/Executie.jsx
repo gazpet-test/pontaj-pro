@@ -20,6 +20,7 @@ import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
+import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261202a)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -85,6 +86,7 @@ const CONTEXT_TABS = [
   { key: 'consumuri',      label: 'Consumuri',      icon: '🧾', color: G.orange, desc: 'Bonuri consum materiale · SL' },
   { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Tronsoane · Cumulat' },
   { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Calitate materiale · Arhivă NAS' },
+  { key: 'meteo',          label: 'Meteo',          icon: '🌧️', color: G.teal,   desc: 'Istoric zilnic · Zile nelucrabile · Excel' },
 ]
 
 // ===========================================================================
@@ -344,6 +346,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
       {tab === 'consumuri'      && <ConsumuriBonuriTab proiectId={proiectId} mode="executie" />}
       {tab === 'documente'      && (<><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
+      {tab === 'meteo'          && <TabMeteoIstoric proiectId={Number(proiectId)} codProiect={proiect?.cod_intern} client={supabase} />}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
       {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod') && (
