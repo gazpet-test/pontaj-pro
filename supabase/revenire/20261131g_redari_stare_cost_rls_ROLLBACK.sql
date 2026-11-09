@@ -45,6 +45,9 @@ END $dependente$;
 DROP VIEW IF EXISTS pg_temp.g31r_stare_31g, pg_temp.g31r_tronson_31g, pg_temp.g31r_stare_31d, pg_temp.g31r_tronson_31d;
 DROP TABLE IF EXISTS pg_temp.g31r_meta;
 
+-- r11 (DRY 2 pe prod: refuz „coloane tabela: red_convocari”): baza = 31d + 31c + 31a, adică migrările Redări aplicate pe prod
+-- după 31d și înainte de 31g (ordinea pe prod: 30n, 31d, 31c, 31a, 20261105a, 20261201a; ultimele două nu ating obiectele din listă).
+-- Completate din fișierele 31c / 31a de pe main, nu din catalog: coloana 23 + 3 triggere + funcțiile lor (marcate „r11”).
 -- Baza RLS / autorizare (L15, review Jakarinos r8 P1): allow-list-ul fix din 20261131d, copiat (prefix g31b_), FĂRĂ verificarea
 -- red_v_tronson față de 31d (31g o schimbă; definițiile vederilor au porțile lor). Acoperă: funcțiile lanțului, auth.uid / role / jwt,
 -- sursele autorizării (profiles, user_module_access: RLS, ACL, coloane, politici, triggere și funcțiile lor), rolurile client fără
@@ -54,6 +57,10 @@ DROP TABLE IF EXISTS pg_temp.g31b_auth_tabele, pg_temp.g31b_auth_coloane, pg_tem
 DROP TABLE IF EXISTS pg_temp.g31b_functii, pg_temp.g31b_coloane, pg_temp.g31b_tables, pg_temp.g31b_triggers;
 CREATE TEMP TABLE pg_temp.g31b_functii(sig text,corp text,ret text,retset boolean,lang text,definer boolean,vol text,config text[],acl text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.g31b_functii VALUES
+-- r11: funcțiile triggerelor adăugate de 20261131c / 20261131a pe tabelele din listă (corp = md5 din migrarea de pe main).
+('public.fn_red_convocari_utilizatori_garda()','25d8bacd42dff87315904e5833175114','trigger',false,'plpgsql',true,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres']::text[]),
+('public.fn_red_detinatori_calitate_utilizatori_garda()','0cb7660327cd7b280512c5ae39dc343f','trigger',false,'plpgsql',true,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres']::text[]),
+('public.fn_red_mail_f2_fara_convocare_email()','d9e275326b94576ead3861200a715ffb','trigger',false,'plpgsql',false,'v',ARRAY['search_path=public, pg_temp']::text[],ARRAY['postgres=X/postgres']::text[]),
 -- 20261126a_redari_teren.sql
 ('public.fn_red_adresa_cunoscuta(uuid)','55cb31fc3f291cb27bea16a2b9291146','boolean',false,'sql',true,'s',ARRAY['search_path=public, pg_temp']::text[],ARRAY['authenticated=X/postgres','postgres=X/postgres','service_role=X/postgres']::text[]),
 -- 20261129i_redari_plicuri.sql
@@ -277,7 +284,9 @@ INSERT INTO pg_temp.g31b_coloane VALUES
 ('red_convocari',20,'reluare','boolean',ARRAY[]::text[]),
 ('red_convocari',21,'plic_id','uuid',ARRAY[]::text[]),
 -- #1002 adauga ulterior o coloana red_convocari; aici inventarul exact ramane cel de dupa #998.
-('red_convocari',22,'retur_detaliu','text',ARRAY[]::text[]);
+('red_convocari',22,'retur_detaliu','text',ARRAY[]::text[]),
+-- r11: 20261131c (aplicată după 31d) a adăugat coloana 23; fără ACL de coloană.
+('red_convocari',23,'calitate_document','text',ARRAY[]::text[]);
 CREATE TEMP TABLE pg_temp.g31b_tables(t text,acl text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.g31b_tables VALUES
 ('red_parcele',ARRAY['postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]),
@@ -289,6 +298,10 @@ INSERT INTO pg_temp.g31b_tables VALUES
 ('red_convocari',ARRAY['authenticated=INSERT','authenticated=SELECT','authenticated=UPDATE','postgres=DELETE','postgres=INSERT','postgres=MAINTAIN','postgres=REFERENCES','postgres=SELECT','postgres=TRIGGER','postgres=TRUNCATE','postgres=UPDATE','service_role=INSERT','service_role=SELECT','service_role=UPDATE']::text[]);
 CREATE TEMP TABLE pg_temp.g31b_triggers(t text,n text,f text,typ int,e_def boolean,e_init boolean,cols text[]) ON COMMIT DROP;
 INSERT INTO pg_temp.g31b_triggers VALUES
+-- r11: 20261131c (BEFORE INSERT OR UPDATE = 23; BEFORE UPDATE = 19) și 20261131a (BEFORE INSERT OR UPDATE = 23), fără WHEN / OF / argumente.
+('red_convocari','trg_red_convocari_h_utilizatori','public.fn_red_convocari_utilizatori_garda()',23,false,false,ARRAY[]::text[]),
+('red_convocari','trg_red_mail_f2_canal','public.fn_red_mail_f2_fara_convocare_email()',23,false,false,ARRAY[]::text[]),
+('red_detinatori','trg_red_detinatori_calitate_utilizatori','public.fn_red_detinatori_calitate_utilizatori_garda()',19,false,false,ARRAY[]::text[]),
 ('red_convocari','trg_red_convocari_garda_rezerva','public.fn_red_convocari_rezerva_garda()',7,false,false,ARRAY[]::text[]),
 ('red_convocari','trg_red_convocari_informare','public.fn_red_convocari_informare_garda()',23,false,false,ARRAY[]::text[]),
 ('red_convocari','trg_red_convocari_posta_garda','public.fn_red_convocari_posta_garda()',23,false,false,ARRAY[]::text[]),
