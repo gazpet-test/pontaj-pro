@@ -545,6 +545,9 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $f
     a.atttypmod,a.attnotnull,a.attidentity,a.attgenerated,a.attacl,pg_get_expr(d.adbin,d.adrelid))
     FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
     WHERE a.attrelid IN (SELECT oid FROM rel) AND a.attnum>0 AND NOT a.attisdropped
+   -- Jakarinos r4 P2: configuratia secventelor din lista alba (fara contorul curent, care nu e DDL).
+   UNION ALL SELECT 'q:'||s.seqrelid,jsonb_build_array('sequence',s.seqrelid,s.seqtypid,s.seqstart,s.seqincrement,
+    s.seqmax,s.seqmin,s.seqcache,s.seqcycle) FROM pg_sequence s WHERE s.seqrelid IN (SELECT oid FROM rel)
    UNION ALL SELECT 'c:'||c.oid,jsonb_build_array('constraint',c.conrelid,c.conname,pg_get_constraintdef(c.oid))
     FROM pg_constraint c WHERE c.conrelid IN (SELECT oid FROM rel) OR c.conrelid='public.profiles'::regclass
    UNION ALL SELECT 'p:'||p.oid,jsonb_build_array('policy',p.polrelid,p.polname,p.polcmd,p.polpermissive,p.polroles,

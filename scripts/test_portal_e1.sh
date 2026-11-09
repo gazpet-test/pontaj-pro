@@ -162,6 +162,12 @@ if "${PSQL[@]}" --single-transaction \
  -c "CREATE OR REPLACE FUNCTION public.fn_identitate_privilegiata() RETURNS boolean LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS 'SELECT NULL::boolean'" \
  -f "$REV_1B" >"$TMP/rollback_1b_helper_refused.log" 2>&1; then fail 'E1-1b rollback accepted level-2 helper drift'; fi
 grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_helper_refused.log" || { cat "$TMP/rollback_1b_helper_refused.log"; fail 'wrong E1-1b rollback helper refusal'; }
+# Jakarinos r4 P2: parametrii secventei jurnalului de provisioning schimbati dupa 19a = revenire refuzata.
+if "${PSQL[@]}" --single-transaction \
+ -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
+ -c 'ALTER TABLE public.portal_provisioning_jurnal ALTER COLUMN id SET INCREMENT BY 2' \
+ -f "$REV_1B" >"$TMP/rollback_1b_sequence_refused.log" 2>&1; then fail 'E1-1b rollback accepted sequence drift'; fi
+grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_sequence_refused.log" || { cat "$TMP/rollback_1b_sequence_refused.log"; fail 'wrong E1-1b rollback sequence refusal'; }
 # Apply -> rollback -> re-apply direct, tranzactional, pentru DDL. Runnerul refuza intentionat relivrarea aceluiasi nume.
 "${PSQL[@]}" --single-transaction \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \

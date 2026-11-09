@@ -93,6 +93,9 @@ class StaticProvisioning(unittest.TestCase):
         self.assertIn("(n.nspname='auth' AND c.relname='users')", body)
         self.assertIn("t.tgname='portal_revoca_la_plecare'", body)
         self.assertIn("c.conrelid='public.profiles'::regclass", body)
+        # Jakarinos r4 P2: configuratia secventelor din lista alba, fara contor (last_value nu e in pg_sequence)
+        self.assertIn("FROM pg_sequence s WHERE s.seqrelid IN (SELECT oid FROM rel)", body)
+        self.assertNotIn("last_value", body)
         # fiecare functie din migrare care ruleaza ca DEFINER sau e trigger al portalului e in lista alba
         for name in re.findall(r'CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(', sql):
             self.assertIn("'public." + name + '(', body, name)

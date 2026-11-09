@@ -44,6 +44,15 @@ CREATE OR REPLACE FUNCTION public.fn_identitate_privilegiata() RETURNS boolean
 LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $$ SELECT NULL::boolean $$;
 DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Level-2 helper drift missed'; END IF; END $$;
 ROLLBACK TO nivel2_drift;
+-- Jakarinos r4 P2: parametrii secventei unui jurnal al portalului schimbati = deriva; contorul (nextval) nu e deriva.
+SAVEPOINT sequence_drift;
+ALTER TABLE public.portal_provisioning_jurnal ALTER COLUMN id SET INCREMENT BY 2;
+DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Sequence drift missed'; END IF; END $$;
+ROLLBACK TO sequence_drift;
+SAVEPOINT sequence_counter;
+SELECT nextval('public.conturi_tip_jurnal_id_seq');
+DO $$ BEGIN IF public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN RAISE EXCEPTION 'Sequence counter reddened gate'; END IF; END $$;
+ROLLBACK TO sequence_counter;
 -- Triggerul Auth dezactivat (handle_new_user nu mai ruleaza la crearea contului) = deriva.
 SAVEPOINT auth_trigger_off;
 SET LOCAL ROLE supabase_auth_admin;
