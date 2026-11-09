@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url'
 import {
   ETAPE, STARI, TRANZITII, tranzitiePermisa, stariUrmatoare, cereMotiv, ZILE_INAPOI, parseKm, fmtKm, fmtLungime, tronsoaneCuKm,
   uneste, goluri, compozitie, acoperire, stareProba, presiuneCurenta, valoriDinFormular, formularDinEtapa, valideazaEtapa, payloadEtapa,
-  valideazaProba, suprapuneri, payloadProba, codUrmator, decideReincercare, esteRefuzDeterminist, aplicaRand, imbinaLista,
+  valideazaProba, suprapuneri, payloadProba, codUrmator, aceeasiIntentie, esteRefuzDeterminist, aplicaRand, imbinaLista,
   ordoneazaProbe, textJurnal, scadeZile, RE_COD, culoareStare, CULOARE_NECUNOSCUTA, etichetaActiune,
-  clasificaReluare, cheieRegistru, citesteRegistru, scrieRegistru, registruNou,
+  clasificaReluare, prefixRegistru, registruNou,
 } from './probeTronsoaneLogica.js'
 
 const AZI = '2026-11-09'
@@ -247,12 +247,12 @@ describe('formularul tronsonului de probă', () => {
 })
 
 describe('reluări și liste (L05)', () => {
-  it('decideReincercare', () => {
-    const payload = { p_id: 1, a: 1 }
-    expect(decideReincercare(null, 'etapa:1', payload)).toBe('noua')
-    expect(decideReincercare({ tinta: 'etapa:2', payload }, 'etapa:1', payload)).toBe('noua')
-    expect(decideReincercare({ tinta: 'etapa:1', payload: { p_id: 1, a: 1 } }, 'etapa:1', payload)).toBe('aceeasi')
-    expect(decideReincercare({ tinta: 'etapa:1', payload: { p_id: 1, a: 2 } }, 'etapa:1', payload)).toBe('reconciliere')
+  it('aceeasiIntentie: același RPC și același payload (și după trecerea prin stocare)', () => {
+    const x = { rpc: 'fn_executie_proba_etapa', payload: { p_etapa_id: 1, p_presiune_curenta_bar: 48.3 } }
+    expect(aceeasiIntentie(JSON.parse(JSON.stringify(x)), 'fn_executie_proba_etapa', { p_etapa_id: 1, p_presiune_curenta_bar: 48.3 })).toBe(true)
+    expect(aceeasiIntentie(x, 'fn_executie_proba_etapa', { p_etapa_id: 1, p_presiune_curenta_bar: 48.1 })).toBe(false)
+    expect(aceeasiIntentie(x, 'fn_executie_proba_anuleaza', x.payload)).toBe(false)
+    expect(aceeasiIntentie(null, 'fn_executie_proba_etapa', x.payload)).toBe(false)
   })
   it('esteRefuzDeterminist: codurile serverului da, rețeaua / timeout-ul nu', () => {
     expect(esteRefuzDeterminist({ code: '22023' })).toBe(true)
@@ -283,35 +283,51 @@ describe('retrimiterea și registrul cererilor nelămurite (L05)', () => {
     expect(clasificaReluare({ error: { message: 'Failed to fetch' } })).toBe('necunoscut')
     expect(clasificaReluare({ r: null })).toBe('necunoscut')
   })
-  const stocare = () => { const m = new Map(); return { m, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) } }
-  const X = (tinta, cheie = '11111111-2222-4333-8444-555555555555') => ({ tinta, rpc: 'fn_executie_proba_etapa', cheie, payload: { p_etapa_id: 1 } })
-  it('registrul persistent: pune / scoate (doar aceeași cheie) / supraviețuiește unei instanțe noi; separat pe utilizator și proiect', () => {
-    const s = stocare(), k = cheieRegistru('u1', 7)
-    const r1 = registruNou(s, k)
-    r1.pune('etapa:1', X('etapa:1'))
-    expect(registruNou(s, k).toate()).toEqual([X('etapa:1')])                    // „pagina reîncărcată”
-    expect(registruNou(s, cheieRegistru('u2', 7)).toate()).toEqual([])
-    expect(registruNou(s, cheieRegistru('u1', 8)).toate()).toEqual([])
-    r1.scoate('etapa:1', '99999999-2222-4333-8444-555555555555')               // altă cheie: rămâne
-    expect(r1.toate()).toHaveLength(1)
-    r1.scoate('etapa:1', X('etapa:1').cheie)
-    expect(r1.toate()).toEqual([])
-    expect(s.m.has(k)).toBe(false)
+  // stocare de tip localStorage (length / key / getItem / setItem / removeItem), comună între „tab-uri”
+  const stocare = () => {
+    const m = new Map()
+    return { m, get length() { return m.size }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }
+  }
+  const X = (tinta, cheie = '11111111-2222-4333-8444-555555555555', pusLa = '2026-11-09T10:00:00Z') =>
+    ({ tinta, rpc: 'fn_executie_proba_etapa', cheie, payload: { p_etapa_id: 1 }, pusLa })
+  const K2 = '22222222-2222-4333-8444-555555555555'
+  it('o intrare pe cheie: pune / scoate / supraviețuiește unei instanțe noi; separat pe utilizator și proiect', () => {
+    const s = stocare(), p = prefixRegistru('u1', 7)
+    const r1 = registruNou(s, p)
+    expect(r1.pune(X('etapa:1'))).toBe(true)
+    expect(registruNou(s, p).toate()).toEqual([X('etapa:1')])                    // „pagina reîncărcată”
+    expect(registruNou(s, prefixRegistru('u2', 7)).toate()).toEqual([])
+    expect(registruNou(s, prefixRegistru('u1', 8)).toate()).toEqual([])
+    expect(r1.scoate(X('etapa:1').cheie)).toBe(true)
+    expect(r1.toate()).toEqual([]) ; expect(s.m.size).toBe(0)
   })
-  it('conținut stricat / străin în stocare = ignorat; stocare blocată = registru doar în memorie', () => {
-    const s = stocare(), k = cheieRegistru('u1', 7)
-    s.setItem(k, '{nu e json')
-    expect(citesteRegistru(s, k)).toEqual(new Map())
-    s.setItem(k, JSON.stringify([X('etapa:1'), { ...X('etapa:2'), rpc: 'fn_altceva' }, { ...X('etapa:3'), cheie: 'x' }, null]))
-    expect([...citesteRegistru(s, k).keys()]).toEqual(['etapa:1'])
-    const blocata = { getItem: () => { throw new Error('SecurityError') }, setItem: () => { throw new Error('x') }, removeItem: () => {} }
-    expect(citesteRegistru(blocata, k)).toBe(null)
-    expect(scrieRegistru(blocata, k, new Map([['a', X('a')]]))).toBe(false)
-    const r = registruNou(blocata, k)
-    r.pune('etapa:1', X('etapa:1'))
-    expect(r.toate()).toEqual([X('etapa:1')])
-    expect(r.persistent).toBe(false)
-    expect(registruNou(null, null).persistent).toBe(false)
+  it('două „tab-uri” pe aceeași țintă și pe ținte diferite: nicio intrare nu se pierde (fiecare sub cheia ei)', () => {
+    const s = stocare(), p = prefixRegistru('u1', 7)
+    const tab1 = registruNou(s, p), tab2 = registruNou(s, p)
+    const l1 = tab1.toate(), l2 = tab2.toate()                                   // ambele citesc registrul gol
+    expect([l1, l2]).toEqual([[], []])
+    tab1.pune(X('nou')); tab2.pune(X('nou', K2, '2026-11-09T10:00:01Z')); tab2.pune(X('etapa:3', '33333333-2222-4333-8444-555555555555'))
+    expect(tab1.pentruTinta('nou').map(x => x.cheie)).toEqual([X('nou').cheie, K2])
+    expect(tab1.toate()).toHaveLength(3)
+    tab2.scoate(K2)
+    expect(tab1.pentruTinta('nou').map(x => x.cheie)).toEqual([X('nou').cheie])
+  })
+  it('conținut stricat / străin ignorat; stocare blocată sau plină: pune = false (nu se trimite), toate = null', () => {
+    const s = stocare(), p = prefixRegistru('u1', 7)
+    s.setItem(p + X('a').cheie, '{nu e json')
+    s.setItem(p + K2, JSON.stringify({ ...X('b', K2), rpc: 'fn_altceva' }))
+    s.setItem(p + 'x', JSON.stringify(X('c')))                                     // cheia de stocare nu e a intrării
+    s.setItem('alt.prefix', JSON.stringify(X('d')))
+    expect(registruNou(s, p).toate()).toEqual([])
+    const plina = { ...stocare(), setItem: () => { throw new Error('QuotaExceededError') } }
+    expect(registruNou(plina, p).pune(X('e'))).toBe(false)
+    const blocata = { get length() { throw new Error('SecurityError') }, key: () => null, getItem: () => { throw new Error('x') }, setItem: () => { throw new Error('x') }, removeItem: () => {} }
+    expect(registruNou(blocata, p).toate()).toBe(null)
+    expect(registruNou(blocata, p).pentruTinta('a')).toBe(null)
+    expect(registruNou(null, null).pune(X('f'))).toBe(false)
+    expect(registruNou(null, null).toate()).toBe(null)
+    expect(registruNou(stocare(), p).pune({ ...X('g'), cheie: 'nu-e-uuid' })).toBe(false)
   })
 })
 

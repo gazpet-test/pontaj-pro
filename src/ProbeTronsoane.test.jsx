@@ -29,8 +29,15 @@ const ETAPA = (id, proba_id, etapa, extra = {}) => ({
 
 // „serverul”: tabele în memorie; o citire face instantaneul LA CERERE și îl livrează când testul deschide poarta (dacă e setată);
 // un RPC se aplică abia când testul îl eliberează ('ok' / 'eroare' de rețea / 'refuz' 22023), sau imediat când st.auto = true
-const stocareFalsa = () => { const m = new Map(); return { m, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) } }
-function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, eroareTronsoane = false, uid = null } = {}) {
+// stocare de tip localStorage (length / key / getItem / setItem / removeItem); `plina` = setItem aruncă (QuotaExceededError)
+const stocareFalsa = () => {
+  const m = new Map(), s = { m, plina: false }
+  Object.assign(s, { key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), removeItem: k => m.delete(k),
+    setItem: (k, v) => { if (s.plina) throw new Error('QuotaExceededError'); m.set(k, String(v)) } })
+  Object.defineProperty(s, 'length', { get: () => m.size })
+  return s
+}
+function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, eroareTronsoane = false, uid = 'u1', sesiune = null } = {}) {
   const T = {
     executie_probe_tronsoane: new Map(probe.map(r => [r.id, { ...r }])),
     executie_probe_etape: new Map(etape.map(r => [r.id, { ...r }])),
@@ -93,7 +100,8 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
     throw new Error('rpc necunoscut ' + fn)
   }
   const client = {
-    ...(uid ? { auth: { getSession: async () => ({ data: { session: { user: { id: uid } } }, error: null }) } } : {}),
+    // identitatea din sesiune; `sesiune` (amana) = getSession întârziat până îl eliberează testul
+    ...(uid ? { auth: { getSession: async () => { if (sesiune) await sesiune.p; return { data: { session: { user: { id: uid } } }, error: null } } } } : {}),
     from: tabel => interogare(tabel),
     rpc: (fn, a) => {
       if (fn === 'fn_executie_nod_drept') return Promise.resolve({ data: drept, error: null })
@@ -103,6 +111,8 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
         if (mod === 'eroare') return { data: null, error: { message: 'timeout simulat' } }
         if (mod === 'pierdut') { aplica(fn, a); return { data: null, error: { message: 'răspuns pierdut' } } }   // scris pe server, răspunsul nu ajunge
         if (mod === 'interzis') return { data: null, error: { code: '42501', message: 'probe: etapa nu există sau nu ai drept de scriere pe Execuție' } }
+        if (mod === 'lipsa') return { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }
+        if (mod === 'gol') return { data: null, error: null }
         if (mod === 'refuz') return { data: null, error: { code: '22023', message: 'probe: intervalul se suprapune cu P1 (de la 0 m la 10400 m)' } }
         return { data: aplica(fn, a), error: null }
       })
@@ -115,7 +125,7 @@ let curata = []
 // în ordine inversă: o montare a doua în același test se demontează înainte ca prima să readucă `window` / `document` vechi
 afterEach(() => { [...curata].reverse().forEach(f => f()); curata = []; vi.restoreAllMocks() })
 
-async function monteaza(client, proiectId = 1, stocare = null) {
+async function monteaza(client, proiectId = 1, stocare = stocareFalsa()) {
   const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -436,7 +446,146 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     await u.scrie('Presiunea curentă', '48,0')
     await u.apasa(u.buton('Salvează'))
     await u.elibereaza(st.rpc[3], 'interzis')
-    expect(u.text()).toContain('nu se mai poate lămuri: nu mai ai drept de scriere')
+    expect(u.text()).toContain('nu se poate lămuri acum: nu mai ai drept de scriere')
+  })
+
+  it('L05: reapăsarea aceleiași cereri trece prin aceeași lămurire: 42501 / PGRST202 / răspuns gol NU scot cererea din registru', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'gol')                                   // răspuns gol = nelămurit (nu „definitiv”)
+    expect(stocare.m.size).toBe(1)
+    expect(u.text()).toContain('Nu se știe dacă s-a salvat')
+    for (const [i, mod] of [[1, 'interzis'], [2, 'lipsa'], [3, 'gol']]) {
+      await u.apasa(u.buton('Salvează'))                                   // aceeași cerere
+      expect(st.rpc[i].a).toEqual(st.rpc[0].a)
+      await u.elibereaza(st.rpc[i], mod)
+      expect(stocare.m.size).toBe(1)                                       // tot în registru
+    }
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[4], 'ok')                                    // abia acum definitiv: salvată
+    expect(stocare.m.size).toBe(0)
+    expect(u.text()).toContain('48,3 bar')
+  })
+
+  it('L05: refuz de drept la retrimitere + jurnal necitit = tot nelămurit (rămâne în registru)', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'eroare')
+    await u.apasa(u.buton('Salvează'))
+    st.esueazaCitiri = true                                                // citirea jurnalului va eșua
+    await u.elibereaza(st.rpc[1], 'interzis')
+    st.esueazaCitiri = false
+    expect(u.text()).toContain('tot fără rezultat sigur')
+    expect(stocare.m.size).toBe(1)
+  })
+
+  it('stocare plină: cererea NU se trimite (un rezultat nelămurit s-ar pierde), cu mesaj explicit', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    const u = await monteaza(client, 1, stocare)
+    stocare.plina = true
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc).toHaveLength(0)
+    expect(u.text()).toContain('Nu pot păstra local cererea')
+  })
+
+  it('fără stocare locală: salvarea e oprită, cu mesaj; identitatea întârziată: salvarea așteaptă registrul', async () => {
+    const { client } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    const u = await monteaza(client, 1, null)
+    expect(u.text()).toContain('Stocarea locală a browserului nu e disponibilă')
+    u.demonteaza()
+    const ses = amana()
+    const c2 = clientFals({ probe: [P1], etape: ETAPE_P1(), sesiune: ses })
+    const v = await monteaza(c2.client, 1, stocareFalsa())
+    await v.apasa(v.buton('P1'))
+    await v.apasa(v.buton('Citire / actualizare'))
+    await v.scrie('Presiunea curentă', '48,3')
+    expect(v.buton('Salvează').disabled).toBe(true)                        // registrul încă nu e gata
+    await v.apasa(v.buton('Salvează'))
+    expect(c2.st.rpc).toHaveLength(0)
+    await v.elibereaza(ses, undefined)
+    expect(v.buton('Salvează').disabled).toBe(false)
+    await v.apasa(v.buton('Salvează'))
+    expect(c2.st.rpc).toHaveLength(1)
+  })
+
+  const creeaza = async (u, cod, de, pana) => {
+    await u.apasa(u.buton('＋ Tronson de probă nou'))
+    await u.scrie('Cod', cod); await u.scrie('De la km', de); await u.scrie('Până la km', pana)
+    await u.apasa(u.buton('Salvează'))
+  }
+  it('două tab-uri, ținte diferite, ambele nelămurite: nicio cerere suprascrisă; la redeschidere se lămuresc amândouă', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const t1 = await monteaza(client, 1, stocare)
+    await creeaza(t1, 'P2', '10+400', '14+000')                            // ținta „nou”
+    const t2 = await monteaza(client, 1, stocare)                          // al doilea tab, același browser
+    await t2.apasa(t2.buton('P1'))
+    await t2.apasa(t2.buton('Citire / actualizare'))
+    await t2.scrie('Presiunea curentă', '48,3')
+    await t2.apasa(t2.buton('Salvează'))                                   // ținta „etapa:14”
+    await t1.elibereaza(st.rpc[0], 'eroare'); await t2.elibereaza(st.rpc[1], 'eroare')
+    expect(stocare.m.size).toBe(2)
+    t2.demonteaza(); t1.demonteaza()
+    const t3 = await monteaza(client, 1, stocare)
+    expect(t3.text()).toContain('2 salvări au rezultat nelămurit')
+    await t3.apasa(t3.buton('Lămurește acum'))
+    await t3.elibereaza(st.rpc[2], 'ok'); await t3.elibereaza(st.rpc[3], 'ok')
+    expect([st.rpc[2].a, st.rpc[3].a]).toEqual(expect.arrayContaining([st.rpc[0].a, st.rpc[1].a]))
+    expect(stocare.m.size).toBe(0)
+  })
+
+  it('două tab-uri, aceeași țintă: al doilea tab lămurește ÎNTÂI crearea nelămurită a primului (cu cheia ei), abia apoi o trimite pe a lui', async () => {
+    const stocare = stocareFalsa()
+    const { client, st, T } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const t1 = await monteaza(client, 1, stocare)
+    await creeaza(t1, 'P2', '10+400', '14+000')
+    await t1.elibereaza(st.rpc[0], 'eroare')                              // nelămurită în tab-ul 1
+    const t2 = await monteaza(client, 1, stocare)
+    await creeaza(t2, 'P3', '19+000', '24+000')
+    expect(st.rpc[1].a).toEqual(st.rpc[0].a)                               // retrimiterea crearii din tab-ul 1
+    await t2.elibereaza(st.rpc[1], 'ok')
+    expect(t2.text()).toContain('Cererea anterioară nu ajunsese; am trimis-o acum')
+    await t2.apasa(t2.buton('Salvează'))                                   // abia acum P3, cu cheie nouă
+    expect(st.rpc[2].a).toMatchObject({ p_cod: 'P3' })
+    await t2.elibereaza(st.rpc[2], 'ok')
+    expect([...T.executie_probe_tronsoane.values()].map(p => p.cod).sort()).toEqual(['P1', 'P2', 'P3'])
+    expect(stocare.m.size).toBe(0)
+  })
+
+  it('renunțarea la verificare cere confirmare și scoate cererile din registru', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('＋ Tronson de probă nou'))
+    await u.scrie('De la km', '10+400'); await u.scrie('Până la km', '14+000')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'eroare')
+    u.demonteaza()
+    const v = await monteaza(client, 1, stocare)
+    await v.apasa(v.buton('Renunță la verificare'))
+    expect(stocare.m.size).toBe(1)                                         // primul pas nu scoate nimic
+    await v.apasa(v.buton('da, renunț'))
+    expect(stocare.m.size).toBe(0)
+    expect(v.text()).not.toContain('rezultat nelămurit')
   })
 
   it('demontare în timpul salvării: răspunsul întârziat nu aruncă și nu pornește încărcări', async () => {

@@ -335,62 +335,58 @@ export function clasificaReluare({ r, error }) {
   return 'necunoscut'
 }
 
-// ── L05 persistent: registrul cererilor nelămurite, scris ÎNAINTE de trimitere și păstrat în browser (supraviețuiește navigării,
-// schimbării proiectului și reîncărcării paginii), separat pe utilizator + proiect. O intrare iese doar la un rezultat definitiv. ──
+// ── L05 persistent: registrul cererilor nelămurite, scris DURABIL înainte de trimitere și păstrat în browser (supraviețuiește
+// navigării, schimbării proiectului și reîncărcării paginii), separat pe utilizator + proiect. Fiecare cerere stă sub cheia EI
+// (prefix + UUID-ul cererii): două tab-uri nu se suprascriu (nu există citire–modificare–scriere pe o valoare comună), două cereri pe
+// aceeași țintă rămân amândouă. O intrare iese doar la un rezultat definitiv sau la renunțarea explicită a omului. ──
 export const RPC_PROBE = ['fn_executie_proba_salveaza', 'fn_executie_proba_anuleaza', 'fn_executie_proba_etapa']
-export const cheieRegistru = (utilizator, proiect) => `gazpet.probe_tronsoane.incerte.v1:${utilizator}:${proiect}`
+export const prefixRegistru = (utilizator, proiect) => `gazpet.probe_tronsoane.incert.v2:${utilizator}:${proiect}:`
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const intrareValida = x => !!x && typeof x.tinta === 'string' && RPC_PROBE.includes(x.rpc) && RE_UUID.test(x.cheie || '')
-  && !!x.payload && typeof x.payload === 'object' && !Array.isArray(x.payload)
-/** stocare (getItem / setItem / removeItem) -> Map(tinta -> intrare); conținut stricat / străin = ignorat. Eroare de citire = null. */
-export function citesteRegistru(stocare, cheie) {
-  let s
-  try { s = stocare.getItem(cheie) } catch { return null }
-  if (!s) return new Map()
-  try {
-    const l = JSON.parse(s)
-    return new Map((Array.isArray(l) ? l : []).filter(intrareValida).map(x => [x.tinta, x]))
-  } catch { return new Map() }
-}
-export function scrieRegistru(stocare, cheie, harta) {
-  try {
-    if (!harta.size) stocare.removeItem(cheie)
-    else stocare.setItem(cheie, JSON.stringify([...harta.values()]))
-    return true
-  } catch { return false }
-}
+const intrareValida = (x, cheieStocare, prefix) => !!x && typeof x.tinta === 'string' && RPC_PROBE.includes(x.rpc) && RE_UUID.test(x.cheie || '')
+  && cheieStocare === prefix + x.cheie && !!x.payload && typeof x.payload === 'object' && !Array.isArray(x.payload)
 /**
- * Registrul pentru (utilizator, proiect): în stocare dacă există (sursa adevărului, citită la fiecare acces), altfel / la o eroare de
- * stocare doar în memorie (și `persistent` devine false). get / pune / scoate (doar dacă e aceeași cheie) / toate.
+ * Registrul pentru (utilizator, proiect), peste o stocare de tip localStorage (length / key / getItem / setItem / removeItem).
+ *  toate()            -> lista intrărilor valide (conținut stricat / străin = ignorat), sau null dacă stocarea nu se poate citi
+ *  pentruTinta(tinta) -> intrările unei ținte, sau null
+ *  pune(intrare)      -> true doar dacă scrierea DURABILĂ a reușit (altfel cererea NU trebuie trimisă)
+ *  scoate(cheie)      -> true dacă intrarea nu mai e în stocare
+ * Fără stocare sau fără identitate: registrul nu e utilizabil (pune -> false, toate -> null), deci nu se trimite nimic.
  */
-export function registruNou(stocare, cheieReg) {
-  const memorie = new Map()
-  let persistent = !!(stocare && cheieReg)
-  const citeste = () => {
-    if (!persistent) return new Map(memorie)
-    const h = citesteRegistru(stocare, cheieReg)
-    if (h) return h
-    persistent = false
-    return new Map(memorie)
-  }
-  const scrie = h => {
-    memorie.clear(); h.forEach((v, k) => memorie.set(k, v))
-    if (persistent && !scrieRegistru(stocare, cheieReg, h)) persistent = false
+export function registruNou(stocare, prefix) {
+  const ok = !!(stocare && prefix)
+  const toate = () => {
+    if (!ok) return null
+    try {
+      const l = []
+      for (let i = 0; i < stocare.length; i++) {
+        const k = stocare.key(i)
+        if (typeof k !== 'string' || !k.startsWith(prefix)) continue
+        let x = null
+        try { x = JSON.parse(stocare.getItem(k)) } catch { x = null }
+        if (intrareValida(x, k, prefix)) l.push(x)
+      }
+      return l.sort((a, b) => String(a.pusLa || '').localeCompare(String(b.pusLa || '')) || a.cheie.localeCompare(b.cheie))
+    } catch { return null }
   }
   return {
-    get: tinta => citeste().get(tinta),
-    pune: (tinta, intrare) => { const h = citeste(); h.set(tinta, intrare); scrie(h) },
-    scoate: (tinta, cheie) => { const h = citeste(); if (h.get(tinta)?.cheie === cheie) { h.delete(tinta); scrie(h) } },
-    toate: () => [...citeste().values()],
-    get persistent() { return persistent },
+    utilizabil: ok,
+    toate,
+    pentruTinta: tinta => { const l = toate(); return l && l.filter(x => x.tinta === tinta) },
+    pune: intrare => {
+      if (!ok || !intrareValida(intrare, prefix + intrare?.cheie, prefix)) return false
+      try {
+        stocare.setItem(prefix + intrare.cheie, JSON.stringify(intrare))
+        return stocare.getItem(prefix + intrare.cheie) !== null
+      } catch { return false }
+    },
+    scoate: cheie => {
+      if (!ok) return false
+      try { stocare.removeItem(prefix + cheie); return stocare.getItem(prefix + cheie) === null } catch { return false }
+    },
   }
 }
-
-/** 'noua' (fără cerere incertă pe aceeași țintă) | 'aceeasi' (aceeași cerere: aceeași cheie) | 'reconciliere' (alt conținut) */
-export function decideReincercare(incert, tinta, payload) {
-  if (!incert || incert.tinta !== tinta) return 'noua'
-  return JSON.stringify(incert.payload) === JSON.stringify(payload) ? 'aceeasi' : 'reconciliere'
-}
+/** Aceeași intenție = același RPC și același payload (comparat ca JSON, ca după ce a trecut prin stocare). */
+export const aceeasiIntentie = (intrare, rpc, payload) => !!intrare && intrare.rpc === rpc && JSON.stringify(intrare.payload) === JSON.stringify(payload)
 
 // ── listele: o versiune mai veche nu înlocuiește una mai nouă (salvare terminată între timp) ──
 const maiVeche = (venit, local) => !!local && Number(venit.versiune) < Number(local.versiune)
