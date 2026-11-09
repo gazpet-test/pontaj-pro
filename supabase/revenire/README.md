@@ -222,3 +222,13 @@ SELECT set_config('gazpet.revenire_20261103c', 'REDESCHIDE_INBOX_STORAGE:' || tx
 COMMIT;
 ```
 Armare verificată înaintea lock-urilor; `LOCK` `ai_documente_inbox` (SHARE ROW EXCLUSIVE) apoi `storage.objects` (ACCESS EXCLUSIVE) înaintea verificării stării (ordinea unui INSERT în coadă, al cărui trigger citește storage — fără ciclu de deadlock); nu atinge E3 (`izo_doc_*`); precondiție = exact patch-ul (expresiile comparate cu aceleași constante ca postcondiția migrării; definiția indexului unic; atributele, ACL-ul și corpul — md5 cu spațiile albe comprimate — ale celor două funcții; tipul / funcția / starea celor două trigger-e); armare persistentă = refuz; DROP fără CASCADE; postcondiție = exact politica veche, niciun obiect al patch-ului; dezarmare. Testat în `scripts/test_ai_inbox_storage_politici.sh` pasul 4 (inclusiv refuz la corp de funcție / index fără UNIQUE / trigger dezactivat / ACL schimbate). Plan: `docs/HR/INBOX_STORAGE_RLS.md`.
+
+## 20261201a — Execuție: sudurile nodului de cuplare (`20261201a_executie_noduri_suduri_ROLLBACK.sql`, NEAPLICAT)
+Scoate tabelul `executie_noduri_suduri` (cu trigger-ul de proveniență și politica de citire), cele 6 funcții `fn_executie_nod_*`, politica `noduri_scheme_citire` de pe `storage.objects` și bucket-ul `noduri-scheme`. Nu redeschide o gaură de securitate, dar **refuză dacă tabelul are rânduri sau bucket-ul are fișiere** (lista sudurilor, stările bifate și imaginile schemei nu se șterg de aici — decizie separată, cu export înainte). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261201a', 'SCOATE_NODURI_SUDURI:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO` (un refuz nu lasă nimic să ruleze după el). Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` `storage.objects` apoi tabelul (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificării „gol”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_executie_noduri_suduri.sql` (T12 nearmat / cu date = refuz, cu SQLSTATE și mesaj verificate explicit; T13 armat pe gol = scos, apoi re-aplicare).
