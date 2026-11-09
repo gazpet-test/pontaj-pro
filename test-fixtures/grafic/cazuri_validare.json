@@ -55,9 +55,20 @@
   {"nume": "sha256 cu majuscule", "op": [["set", ["revizie", "sursa_sha256"], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]], "asteptat": "refuz", "sqlstate": "22023"},
   {"nume": "format necunoscut", "op": [["set", ["format"], "gazpet.grafic.v0"]], "asteptat": "refuz", "sqlstate": "22023"},
   {"nume": "eticheta cu spațiu la capăt", "op": [["set", ["revizie", "eticheta"], "CAZ-SPATIU "]], "asteptat": "refuz", "sqlstate": "23514"},
+  {"nume": "valoare incertă fără câmpul camp", "op": [["set", ["incerte"], [{"wbs": "1.1", "valoare": "#DIV/0!"}]], ["set", ["complet"], false], ["set", ["revizie", "incerte_acceptate"], true]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "valoare incertă cu o cheie în plus", "op": [["set", ["incerte"], [{"wbs": "1.1", "camp": "TEXT2", "valoare": "#DIV/0!", "nota": "x"}]], ["set", ["complet"], false], ["set", ["revizie", "incerte_acceptate"], true]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "valoare incertă cu text prea lung", "op": [["set", ["incerte"], [{"wbs": "1.1", "camp": "TEXT2", "valoare": "#DIV/0!#DIV/0!#DIV/0!#DIV/0!#DIV/0!#DIV/0!"}]], ["set", ["complet"], false], ["set", ["revizie", "incerte_acceptate"], true]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "301 valori incerte", "op": [["set_n", ["incerte"], {"wbs": "1.1", "camp": "TEXT2", "valoare": "#DIV/0!"}, 301], ["set", ["complet"], false], ["set", ["revizie", "incerte_acceptate"], true]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "campuri_lipsa lipsă", "op": [["sterge", ["campuri_lipsa"]]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "campuri_lipsa cu un număr", "op": [["set", ["campuri_lipsa"], [5]]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "aplicația prea lungă", "op": [["set", ["revizie", "aplicatie"], "Microsoft Project Professional 2024 versiunea de test foarte lungă"]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "minute pe zi ca text", "op": [["set", ["revizie", "minute_pe_zi"], "480"]], "asteptat": "refuz", "sqlstate": "22023"},
+  {"nume": "data de început a proiectului invalidă", "op": [["set", ["revizie", "proiect_start"], "2026-13-01"]], "asteptat": "refuz", "sqlstate": "22023"},
   {"nume": "baza", "op": [], "asteptat": "ok"},
   {"nume": "incerte acceptate de om", "op": [["set", ["incerte"], [{"wbs": "1.1", "camp": "TEXT2", "valoare": "#DIV/0!"}]], ["set", ["complet"], false], ["set", ["revizie", "incerte_acceptate"], true], ["set", ["activitati", 1, "pct_raportat"], null]], "asteptat": "ok"},
   {"nume": "două rădăcini pe același nivel", "op": [["set", ["activitati", 3, "parinte_uid"], null], ["set", ["activitati", 3, "nivel"], 1], ["set", ["activitati", 3, "wbs"], "2"]], "asteptat": "ok"},
-  {"nume": "nume gol și durată lipsă", "op": [["set", ["activitati", 2, "nume"], ""], ["set", ["activitati", 2, "durata_zile"], null]], "asteptat": "ok"}
+  {"nume": "nume gol și durată lipsă", "op": [["set", ["activitati", 2, "nume"], ""], ["set", ["activitati", 2, "durata_zile"], null]], "asteptat": "ok"},
+  {"nume": "300 de valori incerte (limita)", "op": [["set_n", ["incerte"], {"wbs": "1.1", "camp": "TEXT2", "valoare": "#DIV/0!"}, 300], ["set", ["complet"], false], ["set", ["revizie", "incerte_acceptate"], true]], "asteptat": "ok"},
+  {"nume": "meta-date complete și statistici libere (nestocate)", "op": [["set", ["revizie", "aplicatie"], "Microsoft"], ["set", ["revizie", "mpxj_versiune"], "16.10.0"], ["set", ["revizie", "minute_pe_zi"], 480], ["set", ["revizie", "proiect_start"], "2026-03-02"], ["set", ["revizie", "proiect_finish"], "2026-06-26"], ["set", ["revizie", "randuri_goale"], 0], ["set", ["revizie", "sursa_octeti"], 123456], ["set", ["revizie", "extras_la"], "2026-11-09T21:00:00Z"], ["set", ["statistici", "umplutura"], "orice text: statisticile libere nu se stochează"], ["set", ["campuri_lipsa"], ["start_baseline", "finish_baseline"]]], "asteptat": "ok"}
  ]
 }

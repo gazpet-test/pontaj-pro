@@ -63,7 +63,7 @@ CREATE TABLE public.executie_grafic_revizii (
   camp_pct_plan text CHECK (camp_pct_plan IS NULL OR length(camp_pct_plan) BETWEEN 1 AND 120),
   camp_pct_raportat text CHECK (camp_pct_raportat IS NULL OR length(camp_pct_raportat) BETWEEN 1 AND 120),
   nr_activitati integer NOT NULL CHECK (nr_activitati BETWEEN 1 AND 5000),
-  metadate jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(metadate) = 'object' AND octet_length(metadate::text) <= 65536),
+  metadate jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(metadate) = 'object' AND octet_length(metadate::text) <= 262144),
   importat_la timestamptz NOT NULL DEFAULT now(),
   importat_de uuid,
   activ boolean NOT NULL DEFAULT false,
@@ -74,7 +74,7 @@ CREATE UNIQUE INDEX executie_grafic_revizii_activa_uq ON public.executie_grafic_
 COMMENT ON TABLE public.executie_grafic_revizii IS
   'Execuție: o revizie importată a graficului de execuție (fișier MS Project / Primavera) pe un proiect. Scriere DOAR prin fn_executie_grafic_importa. 20261202a.';
 COMMENT ON COLUMN public.executie_grafic_revizii.camp_pct_raportat IS 'Câmpul din fișier al coloanei de raport „% Complete” (ex. TEXT2), dacă există; NULL = fără.';
-COMMENT ON COLUMN public.executie_grafic_revizii.metadate IS 'Statisticile importului, câmpurile lipsă, valorile incerte (WBS + câmp + text), aplicația și versiunea MPXJ.';
+COMMENT ON COLUMN public.executie_grafic_revizii.metadate IS 'Numărul de activități (= inventarul cititorului), câmpurile lipsă, valorile incerte (WBS + câmp + text, cel mult 300), aplicația, versiunea MPXJ și datele fișierului; formă și mărime fixate de RPC.';
 COMMENT ON COLUMN public.executie_grafic_revizii.continut_sha256 IS 'Amprenta conținutului normalizat scris în tabele (activitățile + câmpurile reviziei): reimportul aceluiași fișier e „deja” doar cu același conținut.';
 COMMENT ON COLUMN public.executie_grafic_revizii.importat_de IS 'auth.uid() la import; NULL = importat de scriptul de pe server (scripts/grafic/import_mpp.py).';
 
@@ -198,7 +198,7 @@ DECLARE
   v_tip text; v_data_stare date; v_camp_plan text; v_camp_rap text;
   v_id bigint; v_exista public.executie_grafic_revizii%ROWTYPE; v_ins integer;
   v_stiva_uid integer[] := ARRAY[]::integer[]; v_stiva_niv integer[] := ARRAY[]::integer[];
-  v_nivel integer; v_parinte integer; v_nivel_radacina integer;
+  v_nivel integer; v_parinte integer; v_nivel_radacina integer; v_meta jsonb;
 BEGIN
   -- (1) structura documentului
   IF p_activeaza IS NULL OR p IS NULL OR jsonb_typeof(p) <> 'object' OR p->>'format' IS DISTINCT FROM 'gazpet.grafic.v1' THEN
@@ -220,6 +220,31 @@ BEGIN
   IF (p->>'complet')::boolean IS DISTINCT FROM (jsonb_array_length(p->'incerte') = 0) THEN
     RAISE EXCEPTION 'grafic: „complet” nu corespunde listelor' USING ERRCODE = '22023';
   END IF;
+  -- metadatele stocate: fiecare componentă are formă și mărime fixe (aceleași reguli în valideaza_document), deci totalul nu poate
+  -- trece de CHECK-ul tabelului: incerte <= 300 x (60 + 20 + 40 caractere, <= 4 octeți fiecare, + ~40 de structură) ~= 156 KB,
+  -- campuri_lipsa <= 20 x 60, statisticile = 2 numere, restul câmpurilor mărginite mai jos -> sub 170 KB < 262.144.
+  IF jsonb_array_length(p->'incerte') > 300 THEN
+    RAISE EXCEPTION 'grafic: peste 300 de valori incerte (fișierul trebuie reparat la sursă)' USING ERRCODE = '22023';
+  END IF;
+  FOR a IN SELECT x FROM jsonb_array_elements(p->'incerte') x LOOP
+    IF jsonb_typeof(a) <> 'object' THEN RAISE EXCEPTION 'grafic: o valoare incertă nu e obiect' USING ERRCODE = '22023'; END IF;
+    IF (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(a) k) IS DISTINCT FROM ARRAY['camp', 'valoare', 'wbs']::text[] THEN
+      RAISE EXCEPTION 'grafic: o valoare incertă trebuie să aibă exact wbs, camp, valoare' USING ERRCODE = '22023';
+    END IF;
+    IF length(public.fn_executie_grafic_j_text(a->'wbs', 'incerte.wbs', 60, false)) < 1
+       OR length(public.fn_executie_grafic_j_text(a->'camp', 'incerte.camp', 20, false)) < 1 THEN
+      RAISE EXCEPTION 'grafic: wbs / camp gol într-o valoare incertă' USING ERRCODE = '22023';
+    END IF;
+    PERFORM public.fn_executie_grafic_j_text(a->'valoare', 'incerte.valoare', 40, false);
+  END LOOP;
+  IF jsonb_typeof(p->'campuri_lipsa') IS DISTINCT FROM 'array' OR jsonb_array_length(p->'campuri_lipsa') > 20 THEN
+    RAISE EXCEPTION 'grafic: campuri_lipsa trebuie să fie o listă de cel mult 20' USING ERRCODE = '22023';
+  END IF;
+  FOR a IN SELECT x FROM jsonb_array_elements(p->'campuri_lipsa') x LOOP
+    IF length(public.fn_executie_grafic_j_text(a, 'campuri_lipsa', 60, false)) < 1 THEN
+      RAISE EXCEPTION 'grafic: un câmp lipsă gol' USING ERRCODE = '22023';
+    END IF;
+  END LOOP;
   v_proiect := public.fn_executie_grafic_j_numar(r->'proiect_id', 'proiect_id', 1, 9223372036854775807, 0, false)::bigint;
   v_eticheta := public.fn_executie_grafic_j_text(r->'eticheta', 'eticheta', 200, false);
   v_sursa := public.fn_executie_grafic_j_text(r->'sursa_fisier', 'sursa_fisier', 1000, false);
@@ -229,6 +254,15 @@ BEGIN
   v_data_stare := public.fn_executie_grafic_j_data(r->'data_stare', 'data_stare');
   v_camp_plan := public.fn_executie_grafic_j_text(r->'camp_pct_plan', 'camp_pct_plan', 120, true);
   v_camp_rap := public.fn_executie_grafic_j_text(r->'camp_pct_raportat', 'camp_pct_raportat', 120, true);
+  v_meta := jsonb_strip_nulls(jsonb_build_object(
+              'aplicatie', public.fn_executie_grafic_j_text(r->'aplicatie', 'aplicatie', 60, true),
+              'mpxj_versiune', public.fn_executie_grafic_j_text(r->'mpxj_versiune', 'mpxj_versiune', 20, true),
+              'minute_pe_zi', public.fn_executie_grafic_j_numar(r->'minute_pe_zi', 'minute_pe_zi', 0, 1440, 0, true),
+              'proiect_start', public.fn_executie_grafic_j_data(r->'proiect_start', 'proiect_start'),
+              'proiect_finish', public.fn_executie_grafic_j_data(r->'proiect_finish', 'proiect_finish'),
+              'randuri_goale', public.fn_executie_grafic_j_numar(r->'randuri_goale', 'randuri_goale', 0, 100000, 0, true),
+              'sursa_octeti', public.fn_executie_grafic_j_numar(r->'sursa_octeti', 'sursa_octeti', 0, 2147483647, 0, true),
+              'extras_la', public.fn_executie_grafic_j_text(r->'extras_la', 'extras_la', 40, true)));
   -- numitorul (L12): lungimea listei = numărul declarat = inventarul independent al cititorului (getTasks, fără rândurile goale)
   v_nr := jsonb_array_length(v_acts);
   IF v_nr NOT BETWEEN 1 AND 5000
@@ -305,8 +339,10 @@ BEGIN
   END LOOP;
 
   -- (4) amprenta conținutului care ajunge în tabele (aceleași valori normalizate) — „deja importat” doar cu același conținut
-  v_continut := encode(sha256(convert_to(jsonb_build_object('activitati', v_norm, 'tip_fisier', v_tip, 'data_stare', v_data_stare,
-                                                            'camp_pct_plan', v_camp_plan, 'camp_pct_raportat', v_camp_rap)::text, 'UTF8')), 'hex');
+  -- (incertele intră în amprentă: aceeași valoare goală declarată o dată „lipsă” și o dată „necitibilă” nu e același import)
+  v_continut := encode(sha256(convert_to(jsonb_build_object('activitati', v_norm, 'incerte', p->'incerte', 'tip_fisier', v_tip,
+                                                            'data_stare', v_data_stare, 'camp_pct_plan', v_camp_plan,
+                                                            'camp_pct_raportat', v_camp_rap)::text, 'UTF8')), 'hex');
 
   -- (5) lock + idempotență (L04): același fișier, aceeași etichetă și același conținut = aceeași revizie; orice altă combinație = refuz
   PERFORM pg_advisory_xact_lock(hashtextextended('executie_grafic:' || v_proiect, 0));
@@ -325,10 +361,8 @@ BEGIN
   -- (6) scrierea, din valorile normalizate
   INSERT INTO public.executie_grafic_revizii (proiect_id, eticheta, sursa_fisier, sursa_sha256, continut_sha256, tip_fisier, data_stare, camp_pct_plan, camp_pct_raportat, nr_activitati, metadate, importat_de, activ)
   VALUES (v_proiect, v_eticheta, v_sursa, v_sha, v_continut, v_tip, v_data_stare, v_camp_plan, v_camp_rap, v_nr,
-          jsonb_build_object('statistici', p->'statistici', 'campuri_lipsa', coalesce(p->'campuri_lipsa', '[]'::jsonb), 'incerte', p->'incerte')
-            || jsonb_strip_nulls(jsonb_build_object('aplicatie', r->'aplicatie', 'mpxj_versiune', r->'mpxj_versiune', 'minute_pe_zi', r->'minute_pe_zi',
-                                                    'proiect_start', r->'proiect_start', 'proiect_finish', r->'proiect_finish',
-                                                    'randuri_goale', r->'randuri_goale', 'sursa_octeti', r->'sursa_octeti', 'extras_la', r->'extras_la')),
+          jsonb_build_object('statistici', jsonb_build_object('activitati', v_nr, 'inventar_cititor', v_nr),
+                             'campuri_lipsa', p->'campuri_lipsa', 'incerte', p->'incerte') || v_meta,
           auth.uid(), false)
   RETURNING id INTO v_id;
   INSERT INTO public.executie_grafic_activitati (revizie_id, ordine, uid_sursa, wbs, nivel, nume, start_plan, finish_plan, start_real, finish_real, start_baseline, finish_baseline, durata_zile, pct_realizat, pct_plan, pct_raportat, milestone, rezumat, activ, predecesori, resurse)

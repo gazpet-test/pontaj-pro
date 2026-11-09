@@ -32,7 +32,9 @@ export function revizieDinJson(doc, { id = 1, importat_la = '2026-01-01T00:00:00
     continut_sha256: null,   // amprenta conținutului normalizat o calculează RPC-ul (aici nu e folosită)
     tip_fisier: sauNull(r.tip_fisier), data_stare: sauNull(r.data_stare), camp_pct_plan: sauNull(r.camp_pct_plan),
     camp_pct_raportat: sauNull(r.camp_pct_raportat), nr_activitati: (doc.activitati || []).length,
-    metadate: { statistici: doc.statistici, campuri_lipsa: doc.campuri_lipsa || [], incerte: doc.incerte, ...extra },
+    // ca în RPC: din statistici se păstrează doar numărul de activități (= inventarul cititorului verificat de RPC)
+    metadate: { statistici: { activitati: (doc.activitati || []).length, inventar_cititor: (doc.activitati || []).length },
+      campuri_lipsa: doc.campuri_lipsa || [], incerte: doc.incerte, ...extra },
     importat_la, importat_de: null, activ,
   }
 }

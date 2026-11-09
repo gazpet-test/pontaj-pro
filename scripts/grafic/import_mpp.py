@@ -18,6 +18,7 @@ import argparse, collections, datetime, hashlib, json, os, re, secrets, shutil, 
 
 FORMAT = 'gazpet.grafic.v1'
 MAX_ACTIVITATI = 5000
+MAX_INCERTE = 300   # aceeași limită în fn_executie_grafic_importa
 RE_ETICHETA = re.compile(r'^(?=.*\S).{1,200}$', re.S)
 TIPURI_LEGATURA = ('FS', 'SS', 'FF', 'SF')
 
@@ -228,6 +229,23 @@ def valideaza_document(doc):
         raise EroareImport('valori incerte neacceptate')
     if doc['complet'] != (len(doc['incerte']) == 0):
         raise EroareImport('„complet” nu corespunde listelor')
+    # metadatele stocate: aceleași margini ca în RPC (totalul rămâne sub CHECK-ul tabelului, vezi comentariul din migrare)
+    if len(doc['incerte']) > MAX_INCERTE:
+        raise EroareImport(f'peste {MAX_INCERTE} de valori incerte (fișierul trebuie reparat la sursă)')
+    for x in doc['incerte']:
+        if not isinstance(x, dict):
+            raise EroareImport('o valoare incertă nu e obiect')
+        if sorted(x.keys()) != ['camp', 'valoare', 'wbs']:
+            raise EroareImport('o valoare incertă trebuie să aibă exact wbs, camp, valoare')
+        if len(_text(x['wbs'], 'incerte.wbs', 60, False)) < 1 or len(_text(x['camp'], 'incerte.camp', 20, False)) < 1:
+            raise EroareImport('wbs / camp gol într-o valoare incertă')
+        _text(x['valoare'], 'incerte.valoare', 40, False)
+    cl = doc.get('campuri_lipsa')
+    if not isinstance(cl, list) or len(cl) > 20:
+        raise EroareImport('campuri_lipsa trebuie să fie o listă de cel mult 20')
+    for x in cl:
+        if len(_text(x, 'campuri_lipsa', 60, False)) < 1:
+            raise EroareImport('un câmp lipsă gol')
     _numar(r.get('proiect_id'), 'proiect_id', 1, 9223372036854775807, 0, False)
     et = _text(r.get('eticheta'), 'eticheta', 200, False)
     if not et or et != et.strip(' ') or not et.strip() or '\n' in et:   # CHECK-ul tabelului (btrim = doar spații, fără rând nou)
@@ -241,6 +259,14 @@ def valideaza_document(doc):
         if _text(r.get(c), c, mx, True) == '':
             raise EroareImport(f'{c} gol')
     _data(r.get('data_stare'), 'data_stare')
+    _text(r.get('aplicatie'), 'aplicatie', 60, True)
+    _text(r.get('mpxj_versiune'), 'mpxj_versiune', 20, True)
+    _numar(r.get('minute_pe_zi'), 'minute_pe_zi', 0, 1440, 0, True)
+    _data(r.get('proiect_start'), 'proiect_start')
+    _data(r.get('proiect_finish'), 'proiect_finish')
+    _numar(r.get('randuri_goale'), 'randuri_goale', 0, 100000, 0, True)
+    _numar(r.get('sursa_octeti'), 'sursa_octeti', 0, 2147483647, 0, True)
+    _text(r.get('extras_la'), 'extras_la', 40, True)
     n = len(acts)
     st = doc['statistici']
     if not 1 <= n <= 5000 or _numar(st.get('activitati'), 'statistici.activitati', 1, 5000, 0, False) != n \
@@ -319,6 +345,8 @@ def construieste(revizie, acts, avertismente_citire, incerte, inventar):
         raise EroareImport(f'peste {MAX_ACTIVITATI} activități ({len(acts)})')
     av = list(avertismente_citire) + verifica_activitati(acts)
     inc = list(incerte or [])
+    if len(inc) > MAX_INCERTE:
+        av.append(f'{len(inc)} valori necitibile (peste {MAX_INCERTE}): fișierul trebuie reparat la sursă')
     st, lipsa = statistici(acts)
     st['inventar_cititor'] = inventar
     return {'format': FORMAT, 'revizie': revizie, 'statistici': st, 'campuri_lipsa': lipsa,

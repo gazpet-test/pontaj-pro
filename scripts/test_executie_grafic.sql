@@ -137,6 +137,16 @@ BEGIN
      OR (SELECT pct_raportat FROM public.executie_grafic_activitati WHERE revizie_id = pg_temp.t_g('r1')::bigint AND ordine = 2) <> 55.25 THEN
     RAISE EXCEPTION 'T2 FAIL: același fișier cu alt conținut / alte opțiuni nu a fost refuzat';
   END IF;
+  -- același fișier: întâi cu o valoare goală fără incerte, apoi aceeași valoare declarată necitibilă (acceptată) = alt import (refuz), nu „deja”
+  res := pg_temp.t_imp(jsonb_set(pg_temp.t_doc(p, 'TEST-HARNESS R7', '7'), '{activitati,2,pct_raportat}', 'null'), false);
+  IF NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, false)',
+           jsonb_set(jsonb_set(jsonb_set(jsonb_set(pg_temp.t_doc(p, 'TEST-HARNESS R7', '7'), '{activitati,2,pct_raportat}', 'null'),
+                     '{incerte}', '[{"wbs":"1.2","camp":"TEXT2","valoare":"#DIV/0!"}]'), '{complet}', 'false'), '{revizie,incerte_acceptate}', 'true')::text), '23505')
+     OR (SELECT jsonb_array_length(metadate->'incerte') FROM public.executie_grafic_revizii WHERE id = (res->>'revizie_id')::bigint) <> 0
+     OR (pg_temp.t_imp(jsonb_set(pg_temp.t_doc(p, 'TEST-HARNESS R7', '7'), '{activitati,2,pct_raportat}', 'null'), false)->>'deja')::boolean IS NOT TRUE THEN
+    RAISE EXCEPTION 'T2 FAIL: aceeași valoare declarată o dată goală și o dată necitibilă a fost tratată ca „deja”';
+  END IF;
+  DELETE FROM public.executie_grafic_revizii WHERE id = (res->>'revizie_id')::bigint;
   RAISE NOTICE 'T2 OK';
 END $t$;
 

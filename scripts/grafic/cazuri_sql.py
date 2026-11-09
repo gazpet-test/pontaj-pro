@@ -18,7 +18,7 @@ def incarca():
 
 
 def aplica(doc, op):
-    """[\"set\", cale, valoare] (creează cheia lipsă) sau [\"sterge\", cale]."""
+    """[\"set\", cale, valoare] (creează cheia lipsă), [\"sterge\", cale] sau [\"set_n\", cale, valoare, n] (lista cu valoarea de n ori)."""
     tip, cale = op[0], op[1]
     t = doc
     for k in cale[:-1]:
@@ -27,6 +27,8 @@ def aplica(doc, op):
         t[cale[-1]] = copy.deepcopy(op[2])
     elif tip == 'sterge':
         del t[cale[-1]]
+    elif tip == 'set_n':
+        t[cale[-1]] = [copy.deepcopy(op[2]) for _ in range(op[3])]
     else:
         raise ValueError(f'operație necunoscută: {tip}')
 
