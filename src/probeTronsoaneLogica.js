@@ -312,10 +312,10 @@ export function codUrmator(probe) {
 // ── L05: o salvare cu rezultat necunoscut se reia cu ACEEAȘI cheie doar dacă cererea e identică; altfel întâi se reîncarcă ──
 /**
  * Refuz DETERMINIST al serverului = nimic nu s-a scris: excepțiile RPC-urilor (codurile SQLSTATE ridicate de ele: parametri / reguli
- * 22023, drept 42501, plasa de siguranță 23P01 / 23505 / 23514) și funcția inexistentă (PGRST202, migrarea neaplicată).
- * Orice altceva (rețea, timeout, 5xx, eroare fără cod) = rezultat NECUNOSCUT: cererea se păstrează cu cheia ei.
+ * 22023, drept 42501, calcul Probe ocupat 55P03, plasa de siguranță 23P01 / 23505 / 23514) și funcția inexistentă (PGRST202,
+ * migrarea neaplicată). Orice altceva (rețea, timeout, 5xx, eroare fără cod) = rezultat NECUNOSCUT: cererea se păstrează cu cheia ei.
  */
-export const CODURI_REFUZ = ['22023', '42501', '23P01', '23505', '23514', 'PGRST202']
+export const CODURI_REFUZ = ['22023', '42501', '55P03', '23P01', '23505', '23514', 'PGRST202']
 export const esteRefuzDeterminist = err => !!err && typeof err.code === 'string' && CODURI_REFUZ.includes(err.code)
 /** 'noua' (fără cerere incertă pe aceeași țintă) | 'aceeasi' (aceeași cerere: aceeași cheie) | 'reconciliere' (alt conținut) */
 export function decideReincercare(incert, tinta, payload) {

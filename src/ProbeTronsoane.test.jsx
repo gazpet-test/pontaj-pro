@@ -57,10 +57,14 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
     }
     return q
   }
-  const jurnal = (proba_id, a) => { const j = { id: ++idNou, proba_id, cheie: a.p_cheie }; T.executie_probe_jurnal.set(j.id, j) }
+  const jurnal = (proba_id, a, tinta) => { const j = { id: ++idNou, proba_id, cheie: a.p_cheie, tinta }; T.executie_probe_jurnal.set(j.id, j) }
+  // ca serverul: aceeași cheie deja scrisă = duplicat (rândul curent), fără o nouă scriere
   const aplica = (fn, a) => {
+    const j = [...T.executie_probe_jurnal.values()].find(x => x.cheie === a.p_cheie)
+    if (j) return j.tinta.etapa ? { ok: true, duplicat: true, etapa: { ...T.executie_probe_etape.get(j.tinta.etapa) } }
+                                 : { ok: true, duplicat: true, proba: { ...T.executie_probe_tronsoane.get(j.tinta.proba) } }
     const r = aplicaFara(fn, a)
-    if (r.ok) jurnal(r.proba?.id ?? r.etapa?.proba_id, a)
+    if (r.ok) jurnal(r.proba?.id ?? r.etapa?.proba_id, a, r.etapa ? { etapa: r.etapa.id } : { proba: r.proba.id })
     return r
   }
   const aplicaFara = (fn, a) => {
@@ -195,7 +199,7 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     expect(st.rpc).toHaveLength(0)
   })
 
-  it('L05: rezultat necunoscut -> reluarea identică are aceeași cheie; formular schimbat -> întâi reîncărcare, apoi cheie nouă', async () => {
+  it('L05: rezultat necunoscut -> reluarea cu formularul neschimbat are aceeași cerere și aceeași cheie', async () => {
     const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
     st.auto = false
     const u = await monteaza(client)
@@ -208,19 +212,8 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     await u.apasa(u.buton('Salvează'))                                     // aceeași cerere
     expect(st.rpc[1].a).toEqual(st.rpc[0].a)
     expect(st.rpc[1].a.p_cheie).toBe(st.rpc[0].a.p_cheie)
-    await u.elibereaza(st.rpc[1], 'eroare')
-    const citiri = st.citiri
-    await u.scrie('Presiunea curentă', '48,2')                             // formular schimbat
-    await u.apasa(u.buton('Salvează'))
-    expect(st.rpc).toHaveLength(2)                                         // nicio cerere nouă: întâi reconciliere
-    expect(st.citiri).toBeGreaterThan(citiri)
-    expect(u.text()).toContain('am adus starea reală')
-    await u.apasa(u.buton('Salvează'))
-    expect(st.rpc).toHaveLength(3)
-    expect(st.rpc[2].a.p_cheie).not.toBe(st.rpc[0].a.p_cheie)
-    expect(st.rpc[2].a.p_presiune_curenta_bar).toBe(48.2)
-    await u.elibereaza(st.rpc[2], 'ok')
-    expect(u.text()).toContain('48,2 bar')
+    await u.elibereaza(st.rpc[1], 'ok')
+    expect(u.text()).toContain('48,3 bar')
   })
 
   it('refuzul serverului (22023) se afișează curat și nu păstrează cheia', async () => {
@@ -271,7 +264,7 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     expect(u.d.querySelector('[role="dialog"]')).toBeNull()
   })
 
-  it('L05: reconcilierea cu citire eșuată păstrează cererea și cheia; după revenirea formularului, reluarea are aceeași cheie', async () => {
+  it('L05: formular schimbat după un rezultat necunoscut -> întâi retrimiterea IDENTICĂ a cererii vechi (aceeași cheie); o nouă eroare o lasă în așteptare', async () => {
     const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
     st.auto = false
     const u = await monteaza(client)
@@ -280,20 +273,24 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     await u.scrie('Presiunea curentă', '48,3')
     await u.apasa(u.buton('Salvează'))
     await u.elibereaza(st.rpc[0], 'eroare')
-    await u.scrie('Presiunea curentă', '48,1')                             // formular schimbat -> reconciliere
-    st.esueazaCitiri = true
-    await u.apasa(u.buton('Salvează'))
-    expect(u.text()).toContain('Nu am putut verifica ce s-a întâmplat cu cererea anterioară')
-    expect(st.rpc).toHaveLength(1)
-    st.esueazaCitiri = false
-    await u.scrie('Presiunea curentă', '48,3')                             // aceeași cerere ca prima
+    await u.scrie('Presiunea curentă', '48,1')                             // formular schimbat -> reconciliere = retrimiterea cererii vechi
     await u.apasa(u.buton('Salvează'))
     expect(st.rpc).toHaveLength(2)
-    expect(st.rpc[1].a.p_cheie).toBe(st.rpc[0].a.p_cheie)
+    expect(st.rpc[1].a).toEqual(st.rpc[0].a)                               // același payload (48,3) și aceeași cheie
+    await u.elibereaza(st.rpc[1], 'eroare')                               // tot necunoscut
+    expect(u.text()).toContain('tot fără rezultat sigur')
+    await u.apasa(u.buton('Salvează'))                                     // noua intenție NU pleacă: din nou cererea veche
+    expect(st.rpc[2].a).toEqual(st.rpc[0].a)
+    await u.elibereaza(st.rpc[2], 'ok')                                    // abia acum definitiv (nu ajunsese: aplicată acum)
+    expect(u.text()).toContain('Cererea anterioară nu ajunsese; am trimis-o acum')
+    await u.scrie('Presiunea curentă', '48,1')
+    await u.apasa(u.buton('Salvează'))                                     // noua intenție, cu cheie nouă, pe versiunea nouă
+    expect(st.rpc[3].a.p_cheie).not.toBe(st.rpc[0].a.p_cheie)
+    expect(st.rpc[3].a).toMatchObject({ p_versiune: 4, p_presiune_curenta_bar: 48.1 })
   })
 
-  it('L05: răspuns pierdut după scriere -> reconcilierea găsește cheia în jurnal și spune că se salvase', async () => {
-    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+  it('L05: răspuns pierdut după scriere -> retrimiterea primește „duplicat”, deci se salvase; fără a doua scriere', async () => {
+    const { client, st, T } = clientFals({ probe: [P1], etape: ETAPE_P1() })
     st.auto = false
     const u = await monteaza(client)
     await u.apasa(u.buton('P1'))
@@ -304,9 +301,54 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     expect(u.text()).toContain('Nu se știe dacă s-a salvat')
     await u.scrie('Presiunea curentă', '48,0')
     await u.apasa(u.buton('Salvează'))
-    expect(st.rpc).toHaveLength(1)
+    expect(st.rpc[1].a).toEqual(st.rpc[0].a)
+    await u.elibereaza(st.rpc[1], 'ok')
     expect(u.text()).toContain('Cererea anterioară SE salvase')
-    expect(u.text()).toContain('48,3 bar')                                 // starea reală adusă de pe server
+    expect(T.executie_probe_etape.get(14).versiune).toBe(4)                // o singură scriere
+    expect(u.text()).toContain('48,3 bar')
+  })
+
+  it('L05: creare cu rezultat necunoscut, apoi alt cod / interval -> întâi crearea veche se lămurește (cu cheia ei), abia apoi cea nouă', async () => {
+    const { client, st, T } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client)
+    await u.apasa(u.buton('＋ Tronson de probă nou'))
+    await u.scrie('De la km', '10+400')
+    await u.scrie('Până la km', '14+000')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'eroare')                               // nu se știe dacă P2 s-a creat
+    await u.scrie('Cod', 'P3')
+    await u.scrie('De la km', '19+000')
+    await u.scrie('Până la km', '24+000')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc[1].a).toEqual(st.rpc[0].a)                               // crearea veche, cu cheia ei
+    await u.elibereaza(st.rpc[1], 'ok')
+    expect(u.text()).toContain('Cererea anterioară nu ajunsese; am trimis-o acum')
+    await u.apasa(u.buton('Salvează'))                                     // abia acum P3, cu cheie nouă
+    expect(st.rpc[2].a).toMatchObject({ p_cod: 'P3', p_km_de_la_m: 19000 })
+    expect(st.rpc[2].a.p_cheie).not.toBe(st.rpc[0].a.p_cheie)
+    await u.elibereaza(st.rpc[2], 'ok')
+    expect([...T.executie_probe_tronsoane.values()].map(p => p.cod).sort()).toEqual(['P1', 'P2', 'P3'])   // fiecare intenție o singură dată
+  })
+
+  it('conflict pe formularul etapei: avertisment cu valorile de pe server; „Ia valorile de pe server” reface formularul', async () => {
+    const { client, st, T } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    Object.assign(T.executie_probe_etape.get(14), { presiune_curenta_bar: 47.5, versiune: 4 })   // altcineva a citit între timp
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc[0].a.p_versiune).toBe(3)
+    expect(u.text()).toContain('Între timp etapa s-a schimbat pe server')
+    expect(u.text()).toContain('acum 47,5 bar')
+    expect(u.camp('Presiunea curentă').value).toBe('48,3')                 // valoarea scrisă de om a rămas
+    await u.apasa(u.buton('Ia valorile de pe server'))
+    expect(u.camp('Presiunea curentă').value).toBe('47,5')
+    expect(u.text()).not.toContain('Între timp etapa s-a schimbat pe server')
+    await u.scrie('Presiunea curentă', '47,4')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc[1].a).toMatchObject({ p_versiune: 4, p_presiune_curenta_bar: 47.4 })
   })
 
   it('conflict pe formularul de interval: baza devine versiunea nouă, câmpurile scrise rămân, a doua apăsare trimite versiunea nouă', async () => {

@@ -10,7 +10,8 @@
 --   <conținutul exact al fișierului>
 --   COMMIT;
 -- harness-armare: gazpet.revenire_20261202a SCOATE_PROBE_TRONSOANE
--- Ordinea lock-urilor, ÎNAINTEA verificării „gol” (un INSERT concurent nu poate fi numărat 0 și apoi pierdut la DROP):
+-- Lock-urile se iau TOATE cu NOWAIT (contenție = refuz „folosite chiar acum”, nu așteptare -> fără cicluri cu RPC-urile), ÎNAINTEA
+-- verificării „gol” (un INSERT concurent nu poate fi numărat 0 și apoi pierdut la DROP), în ordinea:
 --   1. părinții referiți prin FK: executie_proiecte SHARE ROW EXCLUSIVE (DROP-ul îl cere oricum pentru trigger-ele FK), apoi
 --      probe_calcule ACCESS EXCLUSIVE (DROP CONSTRAINT pe ea); luați primii, un DELETE / UPDATE concurent din modulul Probe (care ar
 --      atinge apoi etapele prin FK) așteaptă după noi în loc să formeze un ciclu — aceeași ordine părinte -> copil ca RPC-ul etapelor;
@@ -65,11 +66,17 @@ BEGIN
                  AND coalesce(qual, '') || coalesce(with_check, '') LIKE '%fn\_executie\_proba\_%') THEN
     RAISE EXCEPTION '20261202a revenire: alte obiecte depind de tabele / functii';
   END IF;
-  LOCK TABLE public.executie_proiecte IN SHARE ROW EXCLUSIVE MODE;
-  LOCK TABLE public.probe_calcule IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE public.executie_probe_tronsoane IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE public.executie_probe_etape IN ACCESS EXCLUSIVE MODE;
-  LOCK TABLE public.executie_probe_jurnal IN ACCESS EXCLUSIVE MODE;
+  -- NOWAIT pe toate: revenirea nu așteaptă niciodată (o tranzacție a RPC-urilor ține deja un lock de citire pe etape și ar cere apoi
+  -- tronsoanele / calculul -> ciclu dacă am aștepta). Contenție = refuz controlat, nimic scos; se reia când nimeni nu scrie.
+  BEGIN
+    LOCK TABLE public.executie_proiecte IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+    LOCK TABLE public.probe_calcule IN ACCESS EXCLUSIVE MODE NOWAIT;
+    LOCK TABLE public.executie_probe_tronsoane IN ACCESS EXCLUSIVE MODE NOWAIT;
+    LOCK TABLE public.executie_probe_etape IN ACCESS EXCLUSIVE MODE NOWAIT;
+    LOCK TABLE public.executie_probe_jurnal IN ACCESS EXCLUSIVE MODE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION '20261202a revenire: tabelele sunt folosite chiar acum (lock indisponibil) — nimic scos, reincearca' USING ERRCODE = '55P03';
+  END;
   IF EXISTS (SELECT 1 FROM public.executie_probe_tronsoane) OR EXISTS (SELECT 1 FROM public.executie_probe_etape)
      OR EXISTS (SELECT 1 FROM public.executie_probe_jurnal) THEN
     RAISE EXCEPTION '20261202a revenire: tabelele au randuri (tronsoane de proba / etape / jurnal) — decizie separata inainte';

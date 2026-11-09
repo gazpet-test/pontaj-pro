@@ -45,7 +45,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
   const [azi, setAzi] = useState(ziBucuresti())
   const [selectat, setSelectat] = useState(null)          // id-ul tronsonului de probă deschis în fișă
   const [formProba, setFormProba] = useState(null)        // { proba } (null în proba = tronson nou)
-  const [formEtapa, setFormEtapa] = useState(null)        // id-ul etapei
+  const [formEtapa, setFormEtapa] = useState(null)        // { id, laDeschidere } — etapa și rândul ei la deschiderea formularului
   const [formAnulare, setFormAnulare] = useState(null)    // id-ul tronsonului de probă
   const [arataAnulate, setArataAnulate] = useState(false)
   const [mesaj, setMesaj] = useState(null)
@@ -121,19 +121,20 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
   const anulate = ordonate.filter(p => p.stare !== 'activ')
   const ac = useMemo(() => acoperire(probe, eroareTronsoane ? [] : tronsoane), [probe, tronsoane, eroareTronsoane])
   const probaSel = probe.find(p => p.id === selectat) || null
-  const etapaForm = etape.find(e => e.id === formEtapa) || null
+  const etapaForm = (formEtapa && etape.find(e => e.id === formEtapa.id)) || null
 
   const deschide = fn => { ctx.current += 1; setMesaj(null); fn() }
   const inchideForm = () => { ctx.current += 1; setMesaj(null); setFormProba(null); setFormEtapa(null); setFormAnulare(null) }
 
-  // ── L05: rezolvarea unei cereri cu rezultat necunoscut: întâi starea reală (reîncărcare reușită), apoi jurnalul spune dacă cheia
-  // ei s-a scris. Orice citire eșuată = nerezolvat (cererea și cheia rămân). O cerere încă în zbor pe server e oprită de CAS. ──
-  const reconciliaza = async intrare => {
-    if (!(await incarca({ silentios: true }))) return { ok: false }
-    let data = null, error = null
-    try { ({ data, error } = await client.from('executie_probe_jurnal').select('id').eq('cheie', intrare.cheie).limit(1)) } catch (e) { error = e }
-    if (error || !Array.isArray(data)) return { ok: false }
-    return { ok: true, aplicat: data.length > 0 }
+  // ── L05: rezolvarea DEFINITIVĂ a unei cereri cu rezultat necunoscut: o retrimitem IDENTIC (același payload, aceeași cheie).
+  // Serverul e idempotent: dacă se scrisese (sau se scrie chiar acum, în altă conexiune) răspunde „duplicat”; dacă nu ajunsese, o
+  // aplică acum, cu valorile de atunci; dacă nu se mai poate aplica (CAS / reguli) răspunde conflict / refuz. Doar un rezultat
+  // definitiv șterge cererea; o nouă eroare de rețea o lasă neatinsă (un jurnal gol NU dovedește că nu se va mai scrie). ──
+  const reconciliaza = async (rpc, intrare) => {
+    let r = null, error = null
+    try { ({ data: r, error } = await client.rpc(rpc, { ...intrare.payload, p_cheie: intrare.cheie })) } catch (e) { error = e }
+    if (error && !esteRefuzDeterminist(error)) return { definitiv: false, error }
+    return { definitiv: true, r, error }
   }
 
   // ── execuția unui RPC cu cheie de idempotență (L04 / L05 / L24) ──
@@ -145,18 +146,31 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
     const intrare = incerte.current.get(tinta)
     const decizie = decideReincercare(intrare, tinta, payload)
     if (decizie === 'reconciliere') {
+      // formularul s-a schimbat după un rezultat necunoscut: întâi se lămurește DEFINITIV cererea veche, abia apoi se poate trimite cea nouă
       setInCurs(true)
-      const rez = await reconciliaza(intrare)
+      const rez = await reconciliaza(rpc, intrare)
       if (!valid()) return null
       setInCurs(false)
+      const actual = g === ctx.current
+      if (!rez.definitiv) {
+        if (actual) setMesaj({ ok: false, text: 'Cererea anterioară e tot fără rezultat sigur (' + (rez.error?.message || rez.error) + '). Noua schimbare se poate trimite abia după ce o lămurim: reîncearcă „Salvează” peste câteva secunde.' })
+        return null
+      }
       // se șterge doar intrarea rezolvată (aceeași cheie), nu una pusă între timp
-      if (rez.ok && incerte.current.get(tinta)?.cheie === intrare.cheie) incerte.current.delete(tinta)
-      if (g === ctx.current) {
-        setMesaj({ ok: false, text: !rez.ok
-          ? 'Nu am putut verifica ce s-a întâmplat cu cererea anterioară (citirea a eșuat). Ea rămâne în așteptare: apasă din nou „Salvează” fără să schimbi nimic, sau reîncearcă mai târziu.'
-          : rez.aplicat
-            ? 'Cererea anterioară SE salvase; am adus starea reală. Verifică înainte de o nouă schimbare.'
-            : 'Cererea anterioară nu s-a salvat; am adus starea reală. Verifică și confirmă din nou.' })
+      if (incerte.current.get(tinta)?.cheie === intrare.cheie) incerte.current.delete(tinta)
+      const r = rez.r
+      if (r?.proba?.proiect_id === proiectId) setProbe(l => aplicaRand(l, r.proba))
+      if (r?.etapa?.proiect_id === proiectId) setEtape(l => aplicaRand(l, r.etapa))
+      if (r?.ok) setJurnalKey(k => k + 1)
+      incarca({ silentios: true })
+      if (actual) {
+        setMesaj({ ok: false, text: rez.error
+          ? 'Cererea anterioară a fost refuzată de server (' + String(rez.error.message || rez.error).replace(/^probe: /, '') + '). Verifică și confirmă din nou.'
+          : r?.ok && r.duplicat
+            ? 'Cererea anterioară SE salvase (cu valorile de atunci). Verifică, apoi confirmă din nou noua schimbare.'
+            : r?.ok
+              ? 'Cererea anterioară nu ajunsese; am trimis-o acum, cu valorile de atunci. Verifică, apoi confirmă din nou noua schimbare.'
+              : 'Cererea anterioară nu s-a salvat (între timp s-a schimbat starea). Am adus starea actuală — verifică și confirmă din nou.' })
       }
       return null
     }
@@ -252,7 +266,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
         <FisaProba p={probaSel} etape={etapePeProba.get(probaSel.id) || []} tronsoane={tronsoane} faraTronsoane={!!eroareTronsoane}
           poateScrie={poateScrie} client={client} jurnalKey={jurnalKey} mesaj={mesaj}
           onInchide={() => { ctx.current += 1; setSelectat(null); setMesaj(null) }}
-          onEtapa={id => deschide(() => setFormEtapa(id))}
+          onEtapa={id => deschide(() => setFormEtapa({ id, laDeschidere: etape.find(e => e.id === id) || null }))}
           onModifica={() => deschide(() => setFormProba({ proba: probaSel }))}
           onAnuleaza={() => deschide(() => setFormAnulare(probaSel.id))} />
       )}
@@ -263,7 +277,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
           onSalveaza={salveazaProba} onInchide={inchideForm} />
       )}
       {etapaForm && (
-        <FormEtapa et={etapaForm} proba={probe.find(p => p.id === etapaForm.proba_id)} azi={azi} busy={inCurs} mesaj={mesaj}
+        <FormEtapa et={etapaForm} laDeschidere={formEtapa.laDeschidere} proba={probe.find(p => p.id === etapaForm.proba_id)} azi={azi} busy={inCurs} mesaj={mesaj}
           client={client} proiectId={proiectId} onSalveaza={f => salveazaEtapa(etapaForm, f)} onInchide={inchideForm} />
       )}
       {formAnulare != null && probe.find(p => p.id === formAnulare) && (
@@ -434,8 +448,8 @@ function FisaProba({ p, etape, tronsoane, faraTronsoane, poateScrie, client, jur
   )
 }
 
-function RandEtapa({ e, poateScrie, onEtapa }) {
-  const c = culoareStare(e.stare)
+/** Valorile unei etape, pe scurt (fișa și avertismentul de conflict din formular). */
+function detaliiEtapa(e) {
   const detalii = []
   if (e.data_start) detalii.push(`început ${fmtZi(e.data_start)}`)
   if (e.data_final) detalii.push(`gata ${fmtZi(e.data_final)}`)
@@ -449,6 +463,11 @@ function RandEtapa({ e, poateScrie, onEtapa }) {
   if (e.probe_calc_id != null) detalii.push(`legată de proba #${e.probe_calc_id} din Probe`)
   if (e.rezultat) detalii.push(`rezultat: ${e.rezultat}`)
   if (e.motiv) detalii.push(`motiv: ${e.motiv}`)
+  return detalii
+}
+function RandEtapa({ e, poateScrie, onEtapa }) {
+  const c = culoareStare(e.stare)
+  const detalii = detaliiEtapa(e)
   return (
     <div style={{ background: G.surface, border: `1px solid ${G.border2}`, borderLeft: `4px solid ${c}`, borderRadius: 10, padding: '10px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -467,13 +486,23 @@ function RandEtapa({ e, poateScrie, onEtapa }) {
 }
 
 // ── formularul unei etape (pasul, data, valorile etapei, motivul când e cerut) ──
-function FormEtapa({ et, proba, azi, busy, mesaj, client, proiectId, onSalveaza, onInchide }) {
+// pasul propus: citirea pe o probă de presiune în curs, corectura pe o etapă făcută (nu „de refăcut”), altfel primul pas înainte
+function pasImplicit(et) {
   const urm = stariUrmatoare(et.stare)
-  // pasul propus: citirea pe o probă de presiune în curs, corectura pe o etapă făcută (nu „de refăcut”), altfel primul pas înainte
-  const implicit = (et.stare === 'in_curs' && et.etapa === 'presiune') || et.stare === 'facut' ? et.stare : (urm.find(s => s !== et.stare) || urm[0])
-  const [stareNoua, setStareNoua] = useState(implicit)
-  const [data, setData] = useState(et.stare === 'facut' && implicit === 'facut' && et.data_final ? et.data_final : azi)
+  return (et.stare === 'in_curs' && et.etapa === 'presiune') || et.stare === 'facut' ? et.stare : (urm.find(s => s !== et.stare) || urm[0])
+}
+const dataImplicita = (et, pas, azi) => (et.stare === 'facut' && pas === 'facut' && et.data_final ? et.data_final : azi)
+
+function FormEtapa({ et, laDeschidere, proba, azi, busy, mesaj, client, proiectId, onSalveaza, onInchide }) {
+  const urm = stariUrmatoare(et.stare)
+  const [stareNoua, setStareNoua] = useState(() => pasImplicit(et))
+  const [data, setData] = useState(() => dataImplicita(et, pasImplicit(et), azi))
   const [f, setF] = useState(() => formularDinEtapa(et))
+  // versiunea pe care se bazează formularul: după un conflict, `et` (rândul curent) are altă versiune -> avertisment cu valorile de pe
+  // server; „Salvează” ar scrie valorile din formular peste ele, iar „Ia valorile de pe server” reface formularul din rândul curent
+  const [baza, setBaza] = useState(() => (laDeschidere || et).versiune)
+  const schimbatPeServer = et.versiune !== baza
+  const iaDePeServer = () => { const p = pasImplicit(et); setStareNoua(p); setData(dataImplicita(et, p, azi)); setF(formularDinEtapa(et)); setBaza(et.versiune) }
   const [calcule, setCalcule] = useState(null)
   const [eroareCalcule, setEroareCalcule] = useState(null)
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
@@ -511,6 +540,15 @@ function FormEtapa({ et, proba, azi, busy, mesaj, client, proiectId, onSalveaza,
   return (
     <Foaie titlu={`${proba?.cod || ''} · ${ETICHETE_ETAPA[et.etapa]}`} onInchide={onInchide}>
       <div style={{ fontSize: 13, color: G.muted, marginBottom: 8 }}>Acum: <b style={{ color: culoareStare(et.stare) }}>{ETICHETE_STARE[et.stare]}</b></div>
+      {schimbatPeServer && (
+        <div style={{ margin: '8px 0', padding: '9px 12px', borderRadius: 10, background: G.yellow + '1F', color: G.yellow, fontSize: 13, fontWeight: 600 }}>
+          Între timp etapa s-a schimbat pe server: acum e „{ETICHETE_STARE[et.stare] || et.stare}”{detaliiEtapa(et).length ? ` · ${detaliiEtapa(et).join(' · ')}` : ''}.
+          {' '}Valorile tale de mai jos au rămas; „Salvează” le scrie peste cele de pe server.
+          <div style={{ marginTop: 8 }}>
+            <button type="button" onClick={iaDePeServer} style={{ ...S.btn, minHeight: 44 }}>Ia valorile de pe server</button>
+          </div>
+        </div>
+      )}
       <span style={S.label}>Pasul</span>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         {urm.map(s => (

@@ -501,7 +501,7 @@ END $t$;
 -- T11d: plasa structurală (FK compus) și ștergerea din Probe, ca proprietar (mentenanță); orice eroare neașteptată oprește rularea
 SELECT pg_temp.t_ca(NULL, 'postgres');
 DO $t$
-DECLARE cf1 bigint := pg_temp.t_g('cf1')::bigint; cf3 bigint := pg_temp.t_g('cf3')::bigint; e bigint := pg_temp.t_g('e905s')::bigint; p bigint := pg_temp.t_g('p')::bigint;
+DECLARE cf1 bigint := pg_temp.t_g('cf1')::bigint; cf3 bigint := pg_temp.t_g('cf3')::bigint; e bigint := pg_temp.t_g('e905s')::bigint; p bigint := pg_temp.t_g('p')::bigint; v integer;
 BEGIN
   IF cf1 IS NULL THEN RETURN; END IF;
   UPDATE public.executie_probe_etape SET probe_calc_id = cf1 WHERE id = e;   -- legătură pe același proiect: trece
@@ -514,10 +514,15 @@ BEGIN
     PERFORM set_config('tpr.neexecutate', concat_ws('; ', pg_temp.t_g('neexecutate'), 'T11d alt proiect (clona are un singur proiect de Execuție)'), true);
     RAISE NOTICE 'T11d NEEXECUTAT: clona are un singur proiect de Execuție (refuzul „alt proiect” nu s-a putut proba)';
   END IF;
+  v := (SELECT versiune FROM public.executie_probe_etape WHERE id = e);
   DELETE FROM public.probe_calcule WHERE id = cf1;
-  IF (SELECT probe_calc_id IS NOT NULL OR proiect_id IS DISTINCT FROM p FROM public.executie_probe_etape WHERE id = e) THEN
-    RAISE EXCEPTION 'T11d FAIL: ștergerea calculului nu a golit doar legătura';
+  -- golirea legăturii de către Probe: doar legătura, iar versiunea crește (trigger), ca CAS-ul clienților să vadă schimbarea
+  IF (SELECT probe_calc_id IS NOT NULL OR proiect_id IS DISTINCT FROM p OR versiune <> v + 1 FROM public.executie_probe_etape WHERE id = e) THEN
+    RAISE EXCEPTION 'T11d FAIL: ștergerea calculului nu a golit doar legătura / nu a crescut versiunea';
   END IF;
+  -- o schimbare de legătură scrisă de RPC nu crește versiunea de două ori (o crește RPC-ul, trigger-ul o lasă)
+  UPDATE public.executie_probe_etape SET probe_calc_id = pg_temp.t_g('cf2')::bigint, versiune = versiune + 1 WHERE id = e;
+  IF (SELECT versiune FROM public.executie_probe_etape WHERE id = e) <> v + 2 THEN RAISE EXCEPTION 'T11d FAIL: versiunea crescută de două ori'; END IF;
   RAISE NOTICE 'T11 OK (fără drept Probe = refuz; alt proiect = refuz; păstrare / dezlegare fără drept Probe; FK compus; ON DELETE SET NULL)';
 END $t$;
 
@@ -667,30 +672,13 @@ DO $t$ BEGIN
   RAISE NOTICE 'T17 OK';
 END $t$;
 
--- T18: garda de dependențe (L15): o funcție de drept modificată (aceeași semnătură, DEFINER, search_path și ACL, dar corpul „mereu true”)
--- e refuzată de preflight. Totul într-un savepoint anulat.
-SAVEPOINT t18;
-SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_PROBE_TRONSOANE:' || txid_current(), true);
-\ir ../supabase/revenire/20261202a_executie_probe_tronsoane_ROLLBACK.sql
-CREATE OR REPLACE FUNCTION public.fn_executie_nod_drept(p_proiect bigint, p_scriere boolean) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;
-SELECT set_config('gazpet.livrare_migrare', '20261202a_executie_probe_tronsoane:' || txid_current(), true);
-\set ON_ERROR_STOP 0
-\ir ../supabase/migrations/20261202a_executie_probe_tronsoane.sql
-\set t18_eroare :ERROR
-\set t18_stare :SQLSTATE
-\set ON_ERROR_STOP 1
-ROLLBACK TO SAVEPOINT t18;
-SELECT pg_temp.t_eroare('T18', :'t18_eroare', :'t18_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'amprenta revizuita');
+-- Sumar. Garda de dependențe (o funcție de drept modificată = preflight refuzat) se testează SEPARAT, cu oprire la prima eroare:
+-- scripts/test_executie_probe_garda.sh (aici, cu ON_ERROR_STOP 0, erorile instrucțiunilor de după preflight ar acoperi refuzul).
 DO $t$ BEGIN
-  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_executie_nod_drept(bigint, boolean)'::regprocedure), chr(13), '')) <> '144649bae9a218b41b7e6df90cba5d9e'
-     OR to_regclass('public.executie_probe_tronsoane') IS NULL THEN
-    RAISE EXCEPTION 'T18 FAIL: savepoint-ul nu a refăcut starea';
-  END IF;
   IF pg_temp.t_g('neexecutate') IS NOT NULL THEN
-    RAISE NOTICE 'T18 OK — testele EXECUTATE au trecut, dar unele NU s-au putut executa: %. Urmează ROLLBACK.', pg_temp.t_g('neexecutate');
+    RAISE NOTICE 'SUMAR — testele EXECUTATE au trecut, dar unele NU s-au putut executa: %. Urmează ROLLBACK.', pg_temp.t_g('neexecutate');
   ELSE
-    RAISE NOTICE 'T18 OK — toate testele au trecut; urmează ROLLBACK (nimic nu rămâne pe clonă)';
+    RAISE NOTICE 'SUMAR — toate testele au trecut (T0–T17); urmează ROLLBACK (nimic nu rămâne pe clonă)';
   END IF;
 END $t$;
 

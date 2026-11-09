@@ -30,11 +30,16 @@
 -- Depinde de 20261201a (fn_executie_nod_drept) și de 20261114a (probe_teren_drept): amprentele lor (corpul normalizat, limbajul,
 --   DEFINER, search_path, proprietarul, EXECUTE) sunt verificate la start. Cere PostgreSQL >= 15 (ON DELETE SET NULL (coloană)).
 --   Revenirea lui 20261201a refuză cât timp politicile de aici o folosesc.
--- Ordinea lock-urilor (L06), aceeași pe toate căile, de la părinte la copil:
---   advisory pe proiect (doar salveaza / anuleaza) -> probe_calcule FOR KEY SHARE (doar etapa, doar calculul legăturii noi, ÎNAINTEA
---   etapei și fără alt lock ținut — aceeași ordine ca o ștergere din modulul Probe, care blochează calculul apoi golește legătura din etapă)
---   -> executie_probe_tronsoane FOR UPDATE -> executie_probe_etape FOR UPDATE -> INSERT în jurnal (FOR KEY SHARE implicit pe părinți,
---   deja blocați mai tare). Legătura citită fără lock se revalidează după lock (s-a schimbat = conflict, clientul reîncarcă).
+-- Ordinea lock-urilor (L06), aceeași pe toate căile:
+--   advisory pe proiect (doar salveaza / anuleaza) -> executie_probe_tronsoane FOR UPDATE -> executie_probe_etape FOR UPDATE
+--   -> (doar etapa, doar la o legătură NOUĂ) probe_calcule FOR KEY SHARE NOWAIT -> INSERT în jurnal (FOR KEY SHARE implicit pe părinți,
+--   deja blocați mai tare).
+--   De ce NOWAIT pe calcul: o ștergere / mutare din modulul Probe blochează întâi calculele (în ordinea ei, posibil mai multe), apoi
+--   golește / verifică legătura din etapă. Noi nu așteptăm NICIODATĂ un calcul ținând etapa: dacă e ocupat, refuz imediat (55P03,
+--   nimic scris, „reîncearcă”). Astfel nu există ciclu, oricare ar fi ordinea ștergerilor din Probe. Legătura veche nu se blochează
+--   (FK-ul nu o verifică la schimbare). O golire a legăturii de către Probe (ON DELETE SET NULL) crește versiunea etapei (trigger),
+--   deci un client care o vedea încă legată primește conflict (CAS), nu o re-legare tacită.
+--   Revenirea ia toate lock-urile cu NOWAIT (refuz la contenție), deci nu intră nici ea în cicluri cu RPC-urile.
 -- Revenire: supabase/revenire/20261202a_executie_probe_tronsoane_ROLLBACK.sql. Test pe clonă: scripts/test_executie_probe_tronsoane.sql.
 DO $pre$
 BEGIN
@@ -261,6 +266,11 @@ BEGIN
   IF TG_OP = 'UPDATE' AND (NEW.proba_id, NEW.proiect_id, NEW.etapa) IS DISTINCT FROM (OLD.proba_id, OLD.proiect_id, OLD.etapa) THEN
     RAISE EXCEPTION 'probe: tronsonul, proiectul și etapa nu se schimbă' USING ERRCODE = '23514';
   END IF;
+  -- legătura schimbată fără creșterea versiunii (ON DELETE SET NULL din modulul Probe, mentenanță) = rând schimbat: versiunea crește,
+  -- ca CAS-ul clienților care o vedeau legată să întoarcă conflict. RPC-ul crește singur versiunea, deci nu se dublează.
+  IF TG_OP = 'UPDATE' AND NEW.probe_calc_id IS DISTINCT FROM OLD.probe_calc_id AND NEW.versiune = OLD.versiune THEN
+    NEW.versiune := OLD.versiune + 1;
+  END IF;
   NEW.modificat_de := auth.uid();
   NEW.modificat_la := now();
   RETURN NEW;
@@ -427,9 +437,9 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_proba_anuleaza(bigint, integer, tex
 
 -- ── RPC 3: schimbarea / actualizarea unei etape (L01, L02, L04, L07, L08, L09, L11, L17, L20) ──
 -- Formularul trimite TOATE valorile etapei (cele de pe ecran); ce e NULL se golește. Câmpurile altor etape = refuz.
--- Ordinea: identitate -> tronsonul și legătura etapei (citite fără lock; tronsonul e imuabil) -> calculul legăturii NOI FOR KEY SHARE
---   -> tronsonul FOR UPDATE -> etapa FOR UPDATE -> drept -> idempotență -> legătura veche revalidată + CAS
---   (stare + versiune) -> tronson activ -> tranziție -> reguli -> legătura nouă: drept Probe + același proiect -> UPDATE + jurnal.
+-- Ordinea: identitate -> tronsonul etapei (citit fără lock; e imuabil) -> tronsonul FOR UPDATE -> etapa FOR UPDATE -> drept -> idempotență
+--   -> CAS (stare + versiune) -> tronson activ -> tranziție -> reguli -> legătura nouă: drept Probe -> calculul FOR KEY SHARE NOWAIT
+--   (ultimul lock; ocupat = 55P03) -> același proiect -> UPDATE + jurnal.
 CREATE FUNCTION public.fn_executie_proba_etapa(p_etapa_id bigint, p_stare_veche text, p_versiune integer, p_stare_noua text, p_data date,
   p_nr_treceri integer, p_punct_roua_c numeric, p_placa text, p_fluid text, p_presiune_proba_bar numeric, p_presiune_curenta_bar numeric,
   p_durata_ore numeric, p_probe_calc_id bigint, p_rezultat text, p_observatii text, p_motiv text, p_cheie uuid) RETURNS jsonb
@@ -439,7 +449,6 @@ DECLARE
   t public.executie_probe_tronsoane;
   e public.executie_probe_etape;
   v_proba bigint;
-  v_calc_vechi bigint;
   v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;
   v_placa text := nullif(lower(btrim(coalesce(p_placa, ''))), '');
   v_fluid text := nullif(lower(btrim(coalesce(p_fluid, ''))), '');
@@ -454,15 +463,9 @@ BEGIN
   IF p_etapa_id IS NULL OR p_versiune IS NULL OR p_stare_noua IS NULL OR p_data IS NULL OR p_cheie IS NULL THEN
     RAISE EXCEPTION 'probe: parametri lipsă' USING ERRCODE = '22023';
   END IF;
-  SELECT proba_id, probe_calc_id INTO v_proba, v_calc_vechi FROM public.executie_probe_etape WHERE id = p_etapa_id;
+  SELECT proba_id INTO v_proba FROM public.executie_probe_etape WHERE id = p_etapa_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'probe: etapa nu există sau nu ai drept de scriere pe Execuție' USING ERRCODE = '42501';
-  END IF;
-  -- părintele din modulul Probe ÎNAINTEA etapei (L06): o ștergere din Probe blochează calculul, apoi golește legătura din etapă.
-  -- Doar calculul legăturii NOI (singurul pe care FK-ul îl va bloca): așteptarea lui se face fără să ținem nimic. Legătura veche NU se
-  -- blochează (o ștergere din Probe a mai multor calcule, în ordinea ei, ar forma altfel un ciclu cu noi); se revalidează după lock.
-  IF p_probe_calc_id IS NOT NULL THEN
-    PERFORM 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id FOR KEY SHARE;
   END IF;
   SELECT * INTO t FROM public.executie_probe_tronsoane WHERE id = v_proba FOR UPDATE;
   SELECT * INTO e FROM public.executie_probe_etape WHERE id = p_etapa_id FOR UPDATE;
@@ -479,8 +482,8 @@ BEGIN
     IF j.amprenta = v_amprenta THEN RETURN jsonb_build_object('ok', true, 'duplicat', true, 'etapa', to_jsonb(e)); END IF;
     RAISE EXCEPTION 'probe: cheia apăsării a fost folosită pentru altă operație' USING ERRCODE = '22023';
   END IF;
-  -- CAS: starea și versiunea văzute de client; plus legătura citită fără lock (o ștergere din Probe a golit-o între timp = conflict)
-  IF e.stare IS DISTINCT FROM p_stare_veche OR e.versiune IS DISTINCT FROM p_versiune OR e.probe_calc_id IS DISTINCT FROM v_calc_vechi THEN
+  -- CAS: starea și versiunea văzute de client (o golire a legăturii din Probe crește și ea versiunea, prin trigger)
+  IF e.stare IS DISTINCT FROM p_stare_veche OR e.versiune IS DISTINCT FROM p_versiune THEN
     RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'etapa', to_jsonb(e));
   END IF;
   IF t.stare <> 'activ' THEN RAISE EXCEPTION 'probe: tronsonul de probă e anulat' USING ERRCODE = '22023'; END IF;
@@ -535,10 +538,19 @@ BEGIN
   END IF;
   -- legătura NOUĂ cu modulul Probe (L09): dreptul de citire al modulului Probe (predicatul lui) + o probă a ACELUIAȘI proiect; refuz generic.
   -- Păstrarea legăturii existente sau dezlegarea nu cer dreptul Probe. FK-ul compus impune oricum același proiect, și la mutări ulterioare.
-  IF p_probe_calc_id IS NOT NULL AND p_probe_calc_id IS DISTINCT FROM e.probe_calc_id
-     AND (NOT public.probe_teren_drept(false)
-          OR NOT EXISTS (SELECT 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id AND c.proiect_id = e.proiect_id)) THEN
-    RAISE EXCEPTION 'probe: proba din modulul Probe nu există pe acest proiect sau nu ai drept de citire pe Probe' USING ERRCODE = '42501';
+  IF p_probe_calc_id IS NOT NULL AND p_probe_calc_id IS DISTINCT FROM e.probe_calc_id THEN
+    IF NOT public.probe_teren_drept(false) THEN
+      RAISE EXCEPTION 'probe: proba din modulul Probe nu (mai) există pe acest proiect sau nu ai drept de citire pe Probe' USING ERRCODE = '42501';
+    END IF;
+    -- calculul se blochează ULTIMUL și FĂRĂ așteptare (vezi antetul): ocupat de o ștergere / mutare din Probe = refuz imediat, nimic scris
+    BEGIN
+      PERFORM 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id FOR KEY SHARE NOWAIT;
+    EXCEPTION WHEN lock_not_available THEN
+      RAISE EXCEPTION 'probe: proba din modulul Probe se modifică chiar acum; reîncearcă peste câteva secunde' USING ERRCODE = '55P03';
+    END;
+    IF NOT EXISTS (SELECT 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id AND c.proiect_id = e.proiect_id) THEN
+      RAISE EXCEPTION 'probe: proba din modulul Probe nu (mai) există pe acest proiect sau nu ai drept de citire pe Probe' USING ERRCODE = '42501';
+    END IF;
   END IF;
 
   UPDATE public.executie_probe_etape SET
