@@ -29,6 +29,12 @@ BEGIN
   END LOOP;
   INSERT INTO dry1022_timp VALUES ('dupa', 'TEST-RAZVAN', round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1));
 END $plan$;
+-- Jakarinos r6 P2: coerența UAT ↔ proiect (premisa echivalenței cifrelor) — RAISE, nu doar afișare
+DO $coer$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.red_v_stare_parcela v JOIN public.red_uat u ON u.id = v.uat_id WHERE u.proiect_id IS DISTINCT FROM v.proiect_id) THEN
+    RAISE EXCEPTION 'dry 1022: exista randuri cu UAT din alt proiect — echivalenta PARTITION BY nedovedita'; END IF;
+  RAISE NOTICE 'dry 1022: coerenta UAT / proiect OK';
+END $coer$;
 DO $compara$
 DECLARE n_ia int; n_ai int; n_in int; n_du int; r record;
 BEGIN

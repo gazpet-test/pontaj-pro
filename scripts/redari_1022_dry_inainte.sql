@@ -29,3 +29,25 @@ BEGIN
   INSERT INTO dry1022_timp VALUES ('inainte', 'TEST-RAZVAN', round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1));
 END $plan$;
 DO $nr$ BEGIN RAISE NOTICE 'dry 1022: inainte salvat — % randuri', (SELECT count(*) FROM dry1022_inainte); END $nr$;
+-- Jakarinos r6 P2: planul „înainte” și cu apelantul real (rolul authenticated, JWT de owner)
+DO $jwt$
+DECLARE o uuid;
+BEGIN
+  SELECT id INTO o FROM public.profiles WHERE is_owner IS TRUE ORDER BY id LIMIT 1;
+  IF o IS NULL THEN RAISE EXCEPTION 'dry 1022: niciun owner pentru proba cu JWT'; END IF;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', o, 'role', 'authenticated')::text, true);
+END $jwt$;
+SET LOCAL ROLE authenticated;
+DO $rol$
+DECLARE r record; l text; vazute int := 0;
+BEGIN
+  FOR r IN SELECT id, cod FROM public.red_proiecte WHERE cod IN ('TEST-RAZVAN', 'LOT1-PRUNISOR-JUPA') ORDER BY cod LOOP
+    vazute := vazute + 1;
+    FOR l IN EXECUTE format('EXPLAIN (ANALYZE, BUFFERS) SELECT uat_id, stare, numar FROM public.red_v_centralizator_uat WHERE proiect_id = %L AND stare IS NOT NULL', r.id) LOOP
+      RAISE NOTICE 'ROL INAINTE % | %', r.cod, l;
+    END LOOP;
+  END LOOP;
+  IF vazute <> 2 THEN RAISE EXCEPTION 'dry 1022: rolul authenticated vede % din 2 proiecte', vazute; END IF;
+END $rol$;
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '', true);   -- migrarea care urmează rulează ca postgres, fără context de utilizator
