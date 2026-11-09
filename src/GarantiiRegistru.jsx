@@ -257,14 +257,18 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
     setBoRezumat(rezumatBOPeGarantie(data || []))
   }, [])
   const [legate, setLegate] = useState(new Set())   // Polițe 20261205a: rândurile legate de o poliță de pe contract
+  const [eroareCitire, setEroareCitire] = useState(null)
   const load = useCallback(async () => {
     setLoading(true)
     // Polițe 20261205a (r5): Registrul citește v_garantii_registru — pe rândurile legate de o poliță de pe contract, asigurătorul, nr.,
     // valoarea, moneda, emiterea și expirarea efectivă vin din poliță (*_ef); fără migrare, vederea veche (rânduri nelegate)
+    // r6 (Jakarinos r5 P2-1): vederea veche DOAR cand vederea nouă lipsește (migrarea neaplicată: 42P01 / PGRST205); orice altă eroare
+    // (drept, rețea) se afișează — altfel s-ar vedea valorile istorice ca fiind curente
     let { data: g, error: eg } = await supabase.from('v_garantii_registru').select('*').order('data_expirare_ef', { ascending: true, nullsFirst: false })
-    if (eg && /v_garantii_registru|schema cache|does not exist/i.test(eg.message || '')) {
-      ({ data: g } = await supabase.from('v_garantii_situatie').select('*').order('data_expirare', { ascending: true, nullsFirst: false }))
+    if (eg && ['42P01', 'PGRST205'].includes(eg.code)) {
+      ({ data: g, error: eg } = await supabase.from('v_garantii_situatie').select('*').order('data_expirare', { ascending: true, nullsFirst: false }))
     }
+    setEroareCitire(eg ? 'Registrul nu s-a putut citi: ' + (eg.message || 'eroare necunoscută') + '. Reîncarcă pagina.' : null)
     const { data: p } = await supabase.from('v_garantii_plafon_emitent').select('*')
     const ef = r => 'emitent_ef' in r ? { ...r, tip: r.tip_ef, emitent: r.emitent_ef, numar_document: r.numar_document_ef, valoare: r.valoare_ef, moneda: r.moneda_ef,
       data_emitere: r.data_emitere_ef, data_expirare: r.data_expirare_ef, zile_pana_expirare: r.zile_pana_expirare_ef, de_facut: r.de_facut_ef } : r
@@ -298,6 +302,7 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
   const inLitigiu   = vizibile.filter(r => r.blocat_litigiu).reduce((s, r) => s + Number(r.valoare || 0), 0)
 
   if (loading) return <div style={{color:G.muted,fontSize:13,padding:20}}>Se încarcă registrul…</div>
+  if (eroareCitire) return <div role="alert" style={{color:G.red,fontSize:13,padding:20}}>{eroareCitire}</div>
 
   return (
     <div>

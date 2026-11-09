@@ -64,7 +64,12 @@ export function aplicaPropunere(form, initial, propuseVechi = [], valoriNoi = {}
 // r4 (Jakarinos r3 P2-4): o eroare e „sigur eșec” doar dacă vine de la server cu cod (SQLSTATE de 5 caractere sau PGRSTnnn).
 // Rețea / timeout / răspuns pierdut = necunoscut: nu se compensează (nu se șterge fișierul nou), se reîncarcă starea.
 export function esecDeterminist(error) {
-  return /^([0-9A-Z]{5}|PGRST[0-9]{3})$/.test(String(error?.code || ''))
+  // r6 (Jakarinos r4–r5): LISTĂ ALBĂ pe semantică. Sigur NEsalvat: date / integritate / sintaxă-drept / refuz din cod (22, 23, 42, P0),
+  // tranzacție anulată (40: serializare / deadlock), instrucțiune anulată (57014), autentificare (28); cererea respinsă de PostgREST
+  // înainte de BD (PGRST1xx cerere, PGRST2xx schemă, PGRST3xx JWT). Necunoscut: conexiune (08, inclusiv 08007), PGRST0xx (503),
+  // oprire server (57P0x), resurse / intern (53, 58, XX) și orice eroare fără cod.
+  const c = String(error?.code || '')
+  return /^(22|23|42|40|P0|28)[0-9A-Z]{3}$/.test(c) || c === '57014' || /^PGRST[123][0-9]{2}$/.test(c)
 }
 
 // codurile din RPC / edge → mesaj pentru om (fără termeni tehnici)

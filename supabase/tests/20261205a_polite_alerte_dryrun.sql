@@ -278,6 +278,16 @@ BEGIN
   SELECT count(*) INTO n FROM public.v_garantii_registru WHERE NOT pe_contract
     AND (de_facut_ef IS DISTINCT FROM de_facut OR zile_pana_expirare_ef IS DISTINCT FROM zile_pana_expirare OR data_expirare_ef IS DISTINCT FROM data_expirare);
   IF n <> 0 THEN RAISE EXCEPTION 'TEST14 FAIL paritatea pe % randuri nelegate', n; END IF;
+  -- ramura LEGATA, verificata independent (date relative la CURRENT_DATE, ca vederea): expira in 10 zile, apoi act cu data trecuta
+  INSERT INTO public.contracte_polite (contract_id, tip, asigurator, nr_polita, valoare_lei, data_expirare) VALUES (18, 'GBE', 'A', 'LEG-2', 10, CURRENT_DATE + 10) RETURNING id INTO v_pid;
+  UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801;
+  SELECT zile_pana_expirare_ef, de_facut_ef INTO r FROM public.v_garantii_registru WHERE id = 801;
+  IF r.zile_pana_expirare_ef <> 10 OR r.de_facut_ef IS DISTINCT FROM 'Expira in sub 30 de zile' THEN RAISE EXCEPTION 'TEST14 FAIL ramura legata (10 zile): %', row_to_json(r); END IF;
+  INSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (v_pid, 1, CURRENT_DATE - 3);
+  SELECT zile_pana_expirare_ef, de_facut_ef INTO r FROM public.v_garantii_registru WHERE id = 801;
+  IF r.zile_pana_expirare_ef <> -3 OR r.de_facut_ef IS DISTINCT FROM 'EXPIRATA dar lucrarea nu e receptionata - risc de garantie neacoperita' THEN
+    RAISE EXCEPTION 'TEST14 FAIL ramura legata (expirata): %', row_to_json(r);
+  END IF;
   -- stergerea unei polite legate e refuzata (FK RESTRICT), nu lasa Registrul fara sursa
   UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801;
   BEGIN DELETE FROM public.contracte_polite WHERE id = v_pid; RAISE EXCEPTION 'TEST14 FAIL polita legata stearsa';

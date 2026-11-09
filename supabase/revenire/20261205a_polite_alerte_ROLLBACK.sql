@@ -47,7 +47,7 @@ BEGIN
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity,
                               coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(r.relacl) x), '-'), coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
-                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass, 'public.polite_propuneri_id_seq'::regclass,
+                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass, 'public.v_garantii_situatie'::regclass, 'public.polite_propuneri_id_seq'::regclass,
                                        'public.polite_alerte_destinatari_id_seq'::regclass, 'public.polite_alerte_jurnal_id_seq'::regclass)),
     (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, p.polpermissive,
                               (SELECT string_agg(rl::regrole::text, ',' ORDER BY rl::regrole::text) FROM unnest(p.polroles) rl),
@@ -57,6 +57,7 @@ BEGIN
        FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal),
     md5(replace(pg_get_viewdef('public.v_polite_scadente'::regclass), chr(13), '')),
     md5(replace(pg_get_viewdef('public.v_garantii_registru'::regclass), chr(13), '')),
+    md5(replace(pg_get_viewdef('public.v_garantii_situatie'::regclass), chr(13), '')),
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, p.proisstrict, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
@@ -114,7 +115,7 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
                AND NOT (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite')
-               AND p.prosrc ~ '(fn_polite_|fn_polita_|fn_poate_scrie_polite|polite_propuneri|polite_alerte_|v_polite_scadente|contract_polita_id)') THEN
+               AND p.prosrc ~ '(fn_polite_|fn_polita_|fn_poate_scrie_polite|polite_propuneri|polite_alerte_|v_polite_scadente|v_garantii_registru|contract_polita_id)') THEN
     RAISE EXCEPTION '20261205a revenire: alta functie foloseste obiectele 20261205a';
   END IF;
 END $pre$;

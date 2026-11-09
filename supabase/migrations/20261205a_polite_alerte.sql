@@ -111,6 +111,10 @@ BEGIN
                   AND a.attname IN ('contract_polita_id', 'pe_contract') OR (a.attrelid = 'public.v_garantii_situatie'::regclass AND a.attname LIKE '%!_ef' ESCAPE '!')) THEN
     RAISE EXCEPTION '20261205a: v_garantii_situatie lipseste sau nu are coloanele asteptate (ori are deja coloane cu numele noi)';
   END IF;
+  IF NOT coalesce((SELECT reloptions FROM pg_class WHERE oid = 'public.v_garantii_situatie'::regclass) @> ARRAY['security_invoker=on']::text[], false)
+     AND NOT coalesce((SELECT reloptions FROM pg_class WHERE oid = 'public.v_garantii_situatie'::regclass) @> ARRAY['security_invoker=true']::text[], false) THEN
+    RAISE EXCEPTION '20261205a: v_garantii_situatie nu e security_invoker (vederea noua s-ar sprijini pe una care ocoleste RLS)';
+  END IF;
   -- 0e. notificarile: modulele folosite
   SELECT pg_get_constraintdef(c.oid) INTO v_def FROM pg_constraint c WHERE c.conrelid = 'public.notifications'::regclass AND c.conname = 'notifications_modul_check';
   IF v_def IS NULL OR v_def NOT LIKE '%''Financiar''::text%' OR v_def NOT LIKE '%''Execuție''::text%' OR v_def NOT LIKE '%''Ofertare''::text%' THEN
@@ -990,7 +994,7 @@ BEGIN
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity,
                               coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(r.relacl) x), '-'), coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
-                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass, 'public.polite_propuneri_id_seq'::regclass,
+                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass, 'public.v_garantii_situatie'::regclass, 'public.polite_propuneri_id_seq'::regclass,
                                        'public.polite_alerte_destinatari_id_seq'::regclass, 'public.polite_alerte_jurnal_id_seq'::regclass)),
     (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, p.polpermissive,
                               (SELECT string_agg(rl::regrole::text, ',' ORDER BY rl::regrole::text) FROM unnest(p.polroles) rl),
@@ -1000,6 +1004,7 @@ BEGIN
        FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal),
     md5(replace(pg_get_viewdef('public.v_polite_scadente'::regclass), chr(13), '')),
     md5(replace(pg_get_viewdef('public.v_garantii_registru'::regclass), chr(13), '')),
+    md5(replace(pg_get_viewdef('public.v_garantii_situatie'::regclass), chr(13), '')),
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, p.proisstrict, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
