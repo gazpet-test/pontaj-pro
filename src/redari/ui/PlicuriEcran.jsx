@@ -150,7 +150,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       return 'Opis descărcat (exemplarul arhivat la dosar).'
     }
     const blob = tip === 'opis' ? await genereazaOpis(rand, pePlic[rand.id] || [], { proiect, uat: uats.find(u => u.id === rand.uat_id) })
-      : tip === 'pv' ? await genereazaPvPlicuire(rand, lista, pePlic, { proiect }) : new Blob([csvEtichete(lista.filter(p => p.stare === 'activ'), pePlic)], { type: 'text/csv;charset=utf-8' })
+      : tip === 'pv' ? await genereazaPvPlicuire(rand, lista, pePlic, { proiect }) : new Blob([csvEtichete(lista.filter(p => p.stare === 'activ'), pePlic, { proiect })], { type: 'text/csv;charset=utf-8' })
     // juridic#021 pct. 3: opisul în 2 exemplare — ACELAȘI fișier: întâi se atașează la dosar, apoi se descarcă pentru plic (o singură generare)
     if (tip === 'opis' && poateScrie && rand.stare === 'activ' && !rand.data_expediere) {
       if (!curent()) return

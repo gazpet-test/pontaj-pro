@@ -127,6 +127,14 @@ describe('csvEtichete', () => {
     expect(csvEtichete([{ ...plic, destinatar_nume: 'Fictiv "Test"', proiect: { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'T', imputernicire_data: '2026-11-01' } }], { [plic.id]: [conv()] })).toContain('Fictiv ""Test""')
     expect(() => csvEtichete([plic], { [plic.id]: [conv()] })).toThrow()   // fără împuternicire nu se generează AR
   })
+  // Test 08.11.2026: forma reală a apelului din PlicuriEcran — rândurile plicurilor NU au `proiect`, proiectul vine ca parametru
+  it('apelul din ecran (proiect ca parametru, rânduri fără proiect) → CSV cu textul AR; fără proiect → refuz', () => {
+    const pr = { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'T', imputernicire_data: '2026-11-01' }
+    const csv = csvEtichete([plic], { [plic.id]: [conv()] }, { proiect: pr })
+    expect(csv).toContain(plic.nr_plic); expect(csv).toMatch(/Conține: 1 convocare/)
+    expect(() => csvEtichete([plic], { [plic.id]: [conv()] })).toThrow(/împuternicirea/)
+    expect(() => csvEtichete([plic], { [plic.id]: [conv()] }, { proiect: { ...pr, cod: 'TEST-RAZVAN' } })).toThrow(/nu e validat juridic/)
+  })
 })
 
 // Plan A1 rev49 pct. 4.2: recomandata se expediază „cu cel puțin 10 zile înainte de prima zi de sesiune” (zile calendaristice).
