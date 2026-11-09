@@ -317,6 +317,75 @@ export function codUrmator(probe) {
  */
 export const CODURI_REFUZ = ['22023', '42501', '55P03', '23P01', '23505', '23514', 'PGRST202']
 export const esteRefuzDeterminist = err => !!err && typeof err.code === 'string' && CODURI_REFUZ.includes(err.code)
+/**
+ * Rezultatul retrimiterii identice a unei cereri nelămurite (aceeași cheie, același payload):
+ *  'aplicat'      — duplicat: se scrisese (definitiv)
+ *  'aplicat_acum' — nu ajunsese; s-a aplicat acum, cu valorile de atunci (definitiv)
+ *  'neaplicat'    — conflict (CAS) sau refuz al regulilor: verificat DUPĂ cheie pe server, deci cheia nu era scrisă (definitiv)
+ *  'fara_drept'   — 42501: dreptul se verifică ÎNAINTE de cheie, deci refuzul nu dovedește nimic; se mai caută cheia în jurnal
+ *  'necunoscut'   — rețea / timeout / calcul ocupat (55P03) / funcție lipsă: cererea rămâne nelămurită
+ */
+export function clasificaReluare({ r, error }) {
+  if (error) {
+    if (!esteRefuzDeterminist(error) || error.code === '55P03' || error.code === 'PGRST202') return 'necunoscut'
+    return error.code === '42501' ? 'fara_drept' : 'neaplicat'
+  }
+  if (r?.ok === true) return r.duplicat ? 'aplicat' : 'aplicat_acum'
+  if (r?.ok === false) return 'neaplicat'
+  return 'necunoscut'
+}
+
+// ── L05 persistent: registrul cererilor nelămurite, scris ÎNAINTE de trimitere și păstrat în browser (supraviețuiește navigării,
+// schimbării proiectului și reîncărcării paginii), separat pe utilizator + proiect. O intrare iese doar la un rezultat definitiv. ──
+export const RPC_PROBE = ['fn_executie_proba_salveaza', 'fn_executie_proba_anuleaza', 'fn_executie_proba_etapa']
+export const cheieRegistru = (utilizator, proiect) => `gazpet.probe_tronsoane.incerte.v1:${utilizator}:${proiect}`
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const intrareValida = x => !!x && typeof x.tinta === 'string' && RPC_PROBE.includes(x.rpc) && RE_UUID.test(x.cheie || '')
+  && !!x.payload && typeof x.payload === 'object' && !Array.isArray(x.payload)
+/** stocare (getItem / setItem / removeItem) -> Map(tinta -> intrare); conținut stricat / străin = ignorat. Eroare de citire = null. */
+export function citesteRegistru(stocare, cheie) {
+  let s
+  try { s = stocare.getItem(cheie) } catch { return null }
+  if (!s) return new Map()
+  try {
+    const l = JSON.parse(s)
+    return new Map((Array.isArray(l) ? l : []).filter(intrareValida).map(x => [x.tinta, x]))
+  } catch { return new Map() }
+}
+export function scrieRegistru(stocare, cheie, harta) {
+  try {
+    if (!harta.size) stocare.removeItem(cheie)
+    else stocare.setItem(cheie, JSON.stringify([...harta.values()]))
+    return true
+  } catch { return false }
+}
+/**
+ * Registrul pentru (utilizator, proiect): în stocare dacă există (sursa adevărului, citită la fiecare acces), altfel / la o eroare de
+ * stocare doar în memorie (și `persistent` devine false). get / pune / scoate (doar dacă e aceeași cheie) / toate.
+ */
+export function registruNou(stocare, cheieReg) {
+  const memorie = new Map()
+  let persistent = !!(stocare && cheieReg)
+  const citeste = () => {
+    if (!persistent) return new Map(memorie)
+    const h = citesteRegistru(stocare, cheieReg)
+    if (h) return h
+    persistent = false
+    return new Map(memorie)
+  }
+  const scrie = h => {
+    memorie.clear(); h.forEach((v, k) => memorie.set(k, v))
+    if (persistent && !scrieRegistru(stocare, cheieReg, h)) persistent = false
+  }
+  return {
+    get: tinta => citeste().get(tinta),
+    pune: (tinta, intrare) => { const h = citeste(); h.set(tinta, intrare); scrie(h) },
+    scoate: (tinta, cheie) => { const h = citeste(); if (h.get(tinta)?.cheie === cheie) { h.delete(tinta); scrie(h) } },
+    toate: () => [...citeste().values()],
+    get persistent() { return persistent },
+  }
+}
+
 /** 'noua' (fără cerere incertă pe aceeași țintă) | 'aceeasi' (aceeași cerere: aceeași cheie) | 'reconciliere' (alt conținut) */
 export function decideReincercare(incert, tinta, payload) {
   if (!incert || incert.tinta !== tinta) return 'noua'

@@ -74,7 +74,7 @@ GRANT EXECUTE ON FUNCTION pg_temp.t_ca(uuid, text), pg_temp.t_refuza(text, text)
 -- (cf1, cf2 pe proiectul de lucru, cf3 pe al doilea proiect, dacă există). Un test care nu se poate executa e marcat NEEXECUTAT (tpr.neexecutate),
 -- iar mesajul final îl spune — nu trece drept „OK”.
 DO $t$
-DECLARE own uuid; ed uuid; vw uuid; fara uuid; p bigint; p2 bigint; ids uuid[]; cf1 bigint; cf2 bigint; cf3 bigint;
+DECLARE own uuid; ed uuid; vw uuid; fara uuid; p bigint; p2 bigint; ids uuid[]; cf1 bigint; cf2 bigint; cf3 bigint; ins text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'T0 FAIL: rulează ca postgres'; END IF;
   SELECT id INTO own FROM public.profiles WHERE is_owner IS TRUE ORDER BY id LIMIT 1;
@@ -86,11 +86,15 @@ BEGIN
   DELETE FROM public.user_module_access WHERE profile_id = ANY (ids) AND module IN ('executie', 'probe_teren');
   INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES (ed, 'executie', 'editor'), (vw, 'executie', 'viewer');
   PERFORM set_config('tpr.neexecutate', '', true);
-  -- calculele fictive: coloanele minime din fn_probe_creeaza_teren (20261115a); garda modulului Probe lasă proprietarul să scrie direct
+  -- calculele fictive: coloanele minime din fn_probe_creeaza_teren (20261115a), cu creat_din_teren = true când coloana există (altfel
+  -- CHECK-ul probe_planificare_nn cere câmpurile comerciale); garda modulului Probe lasă proprietarul să scrie direct
+  ins := CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'probe_calcule' AND column_name = 'creat_din_teren')
+              THEN 'INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status, creat_din_teren) VALUES ($1, ''aer'', ''planificata'', true) RETURNING id'
+              ELSE 'INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status) VALUES ($1, ''aer'', ''planificata'') RETURNING id' END;
   BEGIN
-    INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status) VALUES (p, 'aer', 'planificata') RETURNING id INTO cf1;
-    INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status) VALUES (p, 'aer', 'planificata') RETURNING id INTO cf2;
-    IF p2 IS NOT NULL THEN INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status) VALUES (p2, 'aer', 'planificata') RETURNING id INTO cf3; END IF;
+    EXECUTE ins INTO cf1 USING p;
+    EXECUTE ins INTO cf2 USING p;
+    IF p2 IS NOT NULL THEN EXECUTE ins INTO cf3 USING p2; END IF;
   EXCEPTION WHEN OTHERS THEN
     cf1 := NULL; cf2 := NULL; cf3 := NULL;
     PERFORM set_config('tpr.neexecutate', 'T11 (calculele Probe fictive nu s-au putut crea: ' || SQLSTATE || ' ' || left(SQLERRM, 120) || ')', true);
@@ -491,11 +495,14 @@ BEGIN
   IF r->>'ok' <> 'true' OR (r->'etapa'->>'probe_calc_id')::bigint IS DISTINCT FROM cf1 OR (r->'etapa'->>'presiune_curenta_bar')::numeric <> 9.5 THEN
     RAISE EXCEPTION 'T11c FAIL: păstrarea legăturii %', r;
   END IF;
-  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'in_curs', 3, 'in_curs', %L, %L, gen_random_uuid())$q$,
+  -- a doua păstrare în ACEEAȘI tranzacție (rândul etapei e deja scris de ea: FK-ul reverifică legătura) merge fără să aștepte
+  r := pg_temp.t_et('P905', 'presiune', 'in_curs', 3, 'in_curs', z, jsonb_build_object('pproba', 10, 'pcur', 9.4, 'calc', cf1), gen_random_uuid());
+  IF r->>'ok' <> 'true' OR (r->'etapa'->>'probe_calc_id')::bigint IS DISTINCT FROM cf1 THEN RAISE EXCEPTION 'T11c FAIL: a doua păstrare %', r; END IF;
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'in_curs', 4, 'in_curs', %L, %L, gen_random_uuid())$q$,
                                  z, jsonb_build_object('pproba', 10, 'calc', cf2)), '42501') THEN
     RAISE EXCEPTION 'T11c FAIL: schimbarea legăturii fără drept pe Probe';
   END IF;
-  r := pg_temp.t_et('P905', 'presiune', 'in_curs', 3, 'in_curs', z, '{"pproba":10}', gen_random_uuid());
+  r := pg_temp.t_et('P905', 'presiune', 'in_curs', 4, 'in_curs', z, '{"pproba":10}', gen_random_uuid());
   IF r->'etapa'->>'probe_calc_id' IS NOT NULL THEN RAISE EXCEPTION 'T11c FAIL: dezlegarea %', r; END IF;
 END $t$;
 -- T11d: plasa structurală (FK compus) și ștergerea din Probe, ca proprietar (mentenanță); orice eroare neașteptată oprește rularea

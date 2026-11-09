@@ -32,12 +32,13 @@
 --   Revenirea lui 20261201a refuză cât timp politicile de aici o folosesc.
 -- Ordinea lock-urilor (L06), aceeași pe toate căile:
 --   advisory pe proiect (doar salveaza / anuleaza) -> executie_probe_tronsoane FOR UPDATE -> executie_probe_etape FOR UPDATE
---   -> (doar etapa, doar la o legătură NOUĂ) probe_calcule FOR KEY SHARE NOWAIT -> INSERT în jurnal (FOR KEY SHARE implicit pe părinți,
---   deja blocați mai tare).
+--   -> (doar etapa, la orice legătură rezultată nenulă, nouă sau păstrată) probe_calcule FOR KEY SHARE NOWAIT -> INSERT în jurnal
+--   (FOR KEY SHARE implicit pe părinți, deja blocați mai tare).
 --   De ce NOWAIT pe calcul: o ștergere / mutare din modulul Probe blochează întâi calculele (în ordinea ei, posibil mai multe), apoi
 --   golește / verifică legătura din etapă. Noi nu așteptăm NICIODATĂ un calcul ținând etapa: dacă e ocupat, refuz imediat (55P03,
---   nimic scris, „reîncearcă”). Astfel nu există ciclu, oricare ar fi ordinea ștergerilor din Probe. Legătura veche nu se blochează
---   (FK-ul nu o verifică la schimbare). O golire a legăturii de către Probe (ON DELETE SET NULL) crește versiunea etapei (trigger),
+--   nimic scris, „reîncearcă”). Astfel nu există ciclu, oricare ar fi ordinea ștergerilor din Probe. Legătura veche, înlocuită, nu se
+--   blochează (FK-ul verifică doar valoarea nouă); legătura PĂSTRATĂ se blochează tot NOWAIT, pentru că FK-ul o reverifică atunci când
+--   rândul etapei a fost scris deja în aceeași tranzacție. O golire a legăturii de către Probe (ON DELETE SET NULL) crește versiunea etapei (trigger),
 --   deci un client care o vedea încă legată primește conflict (CAS), nu o re-legare tacită.
 --   Revenirea ia toate lock-urile cu NOWAIT (refuz la contenție), deci nu intră nici ea în cicluri cu RPC-urile.
 -- Revenire: supabase/revenire/20261202a_executie_probe_tronsoane_ROLLBACK.sql. Test pe clonă: scripts/test_executie_probe_tronsoane.sql.
@@ -438,8 +439,8 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_proba_anuleaza(bigint, integer, tex
 -- ── RPC 3: schimbarea / actualizarea unei etape (L01, L02, L04, L07, L08, L09, L11, L17, L20) ──
 -- Formularul trimite TOATE valorile etapei (cele de pe ecran); ce e NULL se golește. Câmpurile altor etape = refuz.
 -- Ordinea: identitate -> tronsonul etapei (citit fără lock; e imuabil) -> tronsonul FOR UPDATE -> etapa FOR UPDATE -> drept -> idempotență
---   -> CAS (stare + versiune) -> tronson activ -> tranziție -> reguli -> legătura nouă: drept Probe -> calculul FOR KEY SHARE NOWAIT
---   (ultimul lock; ocupat = 55P03) -> același proiect -> UPDATE + jurnal.
+--   -> CAS (stare + versiune) -> tronson activ -> tranziție -> reguli -> legătura rezultată (dacă e nenulă): drept Probe (doar dacă e
+--   nouă) -> calculul FOR KEY SHARE NOWAIT (ultimul lock; ocupat = 55P03) -> același proiect (doar dacă e nouă) -> UPDATE + jurnal.
 CREATE FUNCTION public.fn_executie_proba_etapa(p_etapa_id bigint, p_stare_veche text, p_versiune integer, p_stare_noua text, p_data date,
   p_nr_treceri integer, p_punct_roua_c numeric, p_placa text, p_fluid text, p_presiune_proba_bar numeric, p_presiune_curenta_bar numeric,
   p_durata_ore numeric, p_probe_calc_id bigint, p_rezultat text, p_observatii text, p_motiv text, p_cheie uuid) RETURNS jsonb
@@ -538,17 +539,20 @@ BEGIN
   END IF;
   -- legătura NOUĂ cu modulul Probe (L09): dreptul de citire al modulului Probe (predicatul lui) + o probă a ACELUIAȘI proiect; refuz generic.
   -- Păstrarea legăturii existente sau dezlegarea nu cer dreptul Probe. FK-ul compus impune oricum același proiect, și la mutări ulterioare.
-  IF p_probe_calc_id IS NOT NULL AND p_probe_calc_id IS DISTINCT FROM e.probe_calc_id THEN
-    IF NOT public.probe_teren_drept(false) THEN
+  IF p_probe_calc_id IS NOT NULL THEN
+    IF p_probe_calc_id IS DISTINCT FROM e.probe_calc_id AND NOT public.probe_teren_drept(false) THEN
       RAISE EXCEPTION 'probe: proba din modulul Probe nu (mai) există pe acest proiect sau nu ai drept de citire pe Probe' USING ERRCODE = '42501';
     END IF;
-    -- calculul se blochează ULTIMUL și FĂRĂ așteptare (vezi antetul): ocupat de o ștergere / mutare din Probe = refuz imediat, nimic scris
+    -- calculul legăturii REZULTATE (nouă SAU păstrată) se blochează ULTIMUL și FĂRĂ așteptare (vezi antetul). Și legătura păstrată:
+    -- FK-ul o reverifică (deci o blochează implicit, cu așteptare) dacă rândul etapei a fost deja scris în aceeași tranzacție.
+    -- Ocupat de o ștergere / mutare din Probe = refuz imediat, nimic scris.
     BEGIN
       PERFORM 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id FOR KEY SHARE NOWAIT;
     EXCEPTION WHEN lock_not_available THEN
       RAISE EXCEPTION 'probe: proba din modulul Probe se modifică chiar acum; reîncearcă peste câteva secunde' USING ERRCODE = '55P03';
     END;
-    IF NOT EXISTS (SELECT 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id AND c.proiect_id = e.proiect_id) THEN
+    IF p_probe_calc_id IS DISTINCT FROM e.probe_calc_id
+       AND NOT EXISTS (SELECT 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id AND c.proiect_id = e.proiect_id) THEN
       RAISE EXCEPTION 'probe: proba din modulul Probe nu (mai) există pe acest proiect sau nu ai drept de citire pe Probe' USING ERRCODE = '42501';
     END IF;
   END IF;

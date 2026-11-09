@@ -9,6 +9,7 @@ import {
   uneste, goluri, compozitie, acoperire, stareProba, presiuneCurenta, valoriDinFormular, formularDinEtapa, valideazaEtapa, payloadEtapa,
   valideazaProba, suprapuneri, payloadProba, codUrmator, decideReincercare, esteRefuzDeterminist, aplicaRand, imbinaLista,
   ordoneazaProbe, textJurnal, scadeZile, RE_COD, culoareStare, CULOARE_NECUNOSCUTA, etichetaActiune,
+  clasificaReluare, cheieRegistru, citesteRegistru, scrieRegistru, registruNou,
 } from './probeTronsoaneLogica.js'
 
 const AZI = '2026-11-09'
@@ -267,6 +268,50 @@ describe('reluări și liste (L05)', () => {
     expect(aplicaRand(l, { id: 1, versiune: 4, x: 'nou' })[0].x).toBe('nou')
     expect(aplicaRand(l, { id: 2, versiune: 1 }).map(r => r.id)).toEqual([1, 2])
     expect(imbinaLista([{ id: 1, versiune: 2, x: 'citit' }], l)[0].x).toBe('a')
+  })
+})
+
+describe('retrimiterea și registrul cererilor nelămurite (L05)', () => {
+  it('clasificaReluare: doar ce e dovedit e definitiv', () => {
+    expect(clasificaReluare({ r: { ok: true, duplicat: true } })).toBe('aplicat')
+    expect(clasificaReluare({ r: { ok: true, duplicat: false } })).toBe('aplicat_acum')
+    expect(clasificaReluare({ r: { ok: false, motiv: 'conflict' } })).toBe('neaplicat')
+    expect(clasificaReluare({ error: { code: '22023' } })).toBe('neaplicat')            // regulile se verifică după cheie
+    expect(clasificaReluare({ error: { code: '42501' } })).toBe('fara_drept')           // dreptul se verifică înaintea cheii
+    expect(clasificaReluare({ error: { code: '55P03' } })).toBe('necunoscut')           // calcul ocupat: tranzitoriu
+    expect(clasificaReluare({ error: { code: 'PGRST202' } })).toBe('necunoscut')
+    expect(clasificaReluare({ error: { message: 'Failed to fetch' } })).toBe('necunoscut')
+    expect(clasificaReluare({ r: null })).toBe('necunoscut')
+  })
+  const stocare = () => { const m = new Map(); return { m, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) } }
+  const X = (tinta, cheie = '11111111-2222-4333-8444-555555555555') => ({ tinta, rpc: 'fn_executie_proba_etapa', cheie, payload: { p_etapa_id: 1 } })
+  it('registrul persistent: pune / scoate (doar aceeași cheie) / supraviețuiește unei instanțe noi; separat pe utilizator și proiect', () => {
+    const s = stocare(), k = cheieRegistru('u1', 7)
+    const r1 = registruNou(s, k)
+    r1.pune('etapa:1', X('etapa:1'))
+    expect(registruNou(s, k).toate()).toEqual([X('etapa:1')])                    // „pagina reîncărcată”
+    expect(registruNou(s, cheieRegistru('u2', 7)).toate()).toEqual([])
+    expect(registruNou(s, cheieRegistru('u1', 8)).toate()).toEqual([])
+    r1.scoate('etapa:1', '99999999-2222-4333-8444-555555555555')               // altă cheie: rămâne
+    expect(r1.toate()).toHaveLength(1)
+    r1.scoate('etapa:1', X('etapa:1').cheie)
+    expect(r1.toate()).toEqual([])
+    expect(s.m.has(k)).toBe(false)
+  })
+  it('conținut stricat / străin în stocare = ignorat; stocare blocată = registru doar în memorie', () => {
+    const s = stocare(), k = cheieRegistru('u1', 7)
+    s.setItem(k, '{nu e json')
+    expect(citesteRegistru(s, k)).toEqual(new Map())
+    s.setItem(k, JSON.stringify([X('etapa:1'), { ...X('etapa:2'), rpc: 'fn_altceva' }, { ...X('etapa:3'), cheie: 'x' }, null]))
+    expect([...citesteRegistru(s, k).keys()]).toEqual(['etapa:1'])
+    const blocata = { getItem: () => { throw new Error('SecurityError') }, setItem: () => { throw new Error('x') }, removeItem: () => {} }
+    expect(citesteRegistru(blocata, k)).toBe(null)
+    expect(scrieRegistru(blocata, k, new Map([['a', X('a')]]))).toBe(false)
+    const r = registruNou(blocata, k)
+    r.pune('etapa:1', X('etapa:1'))
+    expect(r.toate()).toEqual([X('etapa:1')])
+    expect(r.persistent).toBe(false)
+    expect(registruNou(null, null).persistent).toBe(false)
   })
 })
 
