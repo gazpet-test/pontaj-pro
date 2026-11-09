@@ -138,16 +138,22 @@ export function compozitie(deLa, panaLa, tronsoane) {
 }
 
 /**
- * Acoperirea traseului de probele active (pentru bandă și sumar). Domeniul = întinderea tronsoanelor de execuție cu km
- * (dacă nu există, a probelor). acoperit / total în metri; neacoperit = golurile din domeniu; inAfara = probe în afara tronsoanelor.
+ * Acoperirea traseului de probele active (pentru bandă și sumar). Traseul cunoscut = tronsoanele de execuție cu km.
+ * acoperit / total în metri; neacoperit = golurile din traseu; inAfara = probe în afara tronsoanelor.
+ * Fără traseu cunoscut (L18): total = null (necunoscut, NU suma probelor), neacoperit = [] (nu se știe), banda se desenează doar pe probe.
  */
 export function acoperire(probe, tronsoane) {
   const { valide } = tronsoaneCuKm(tronsoane)
   const active = (probe || []).filter(p => p.stare === 'activ' && Number.isFinite(p.km_de_la_m) && Number.isFinite(p.km_pana_la_m) && p.km_pana_la_m > p.km_de_la_m)
     .map(p => ({ de_la: p.km_de_la_m, pana_la: p.km_pana_la_m }))
   const traseu = uneste(valide)
-  const baza = traseu.length ? traseu : uneste(active)
-  if (!baza.length) return { de_la: 0, pana_la: 0, total: 0, acoperit: 0, neacoperit: [], inAfara: [] }
+  if (!traseu.length) {
+    const u = uneste(active)
+    if (!u.length) return { de_la: 0, pana_la: 0, total: null, acoperit: 0, neacoperit: [], inAfara: [], traseuCunoscut: false }
+    return { de_la: u[0].de_la, pana_la: u[u.length - 1].pana_la, total: null, acoperit: u.reduce((s, x) => s + (x.pana_la - x.de_la), 0),
+      neacoperit: [], inAfara: [], traseuCunoscut: false }
+  }
+  const baza = traseu
   const de_la = baza[0].de_la, pana_la = baza[baza.length - 1].pana_la
   const total = baza.reduce((s, x) => s + (x.pana_la - x.de_la), 0)
   // acoperit = intersecția probelor cu traseul cunoscut
@@ -160,7 +166,7 @@ export function acoperire(probe, tronsoane) {
   }
   const inAfara = []
   for (const p of uneste(active)) inAfara.push(...goluri(p.de_la, p.pana_la, baza))
-  return { de_la: Math.min(de_la, ...active.map(x => x.de_la)), pana_la: Math.max(pana_la, ...active.map(x => x.pana_la)), total, acoperit, neacoperit, inAfara }
+  return { de_la: Math.min(de_la, ...active.map(x => x.de_la)), pana_la: Math.max(pana_la, ...active.map(x => x.pana_la)), total, acoperit, neacoperit, inAfara, traseuCunoscut: true }
 }
 
 // ── starea unui tronson de probă, din etapele lui ──

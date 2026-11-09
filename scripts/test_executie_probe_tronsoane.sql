@@ -70,26 +70,38 @@ GRANT EXECUTE ON FUNCTION pg_temp.t_ca(uuid, text), pg_temp.t_refuza(text, text)
   pg_temp.t_sal(bigint, bigint, integer, text, integer, integer, uuid), pg_temp.t_id(text), pg_temp.t_eid(text, text),
   pg_temp.t_et(text, text, text, integer, text, date, jsonb, uuid) TO authenticated, anon, service_role;
 
--- T0: identități, drepturi rescrise în tranzacție, un calcul din modulul Probe (dacă există) pentru legătură
+-- T0: identități, drepturi rescrise în tranzacție (executie + probe_teren), calcule Probe FICTIVE create în tranzacție pentru legătură
+-- (cf1, cf2 pe proiectul de lucru, cf3 pe al doilea proiect, dacă există). Un test care nu se poate executa e marcat NEEXECUTAT (tpr.neexecutate),
+-- iar mesajul final îl spune — nu trece drept „OK”.
 DO $t$
-DECLARE own uuid; ed uuid; vw uuid; fara uuid; p bigint; ids uuid[]; c1 bigint; pc bigint; c2 bigint;
+DECLARE own uuid; ed uuid; vw uuid; fara uuid; p bigint; p2 bigint; ids uuid[]; cf1 bigint; cf2 bigint; cf3 bigint;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'T0 FAIL: rulează ca postgres'; END IF;
   SELECT id INTO own FROM public.profiles WHERE is_owner IS TRUE ORDER BY id LIMIT 1;
   SELECT array_agg(id ORDER BY id) INTO ids FROM (SELECT id FROM public.profiles WHERE is_owner IS NOT TRUE ORDER BY id LIMIT 3) x;
   SELECT id INTO p FROM public.executie_proiecte ORDER BY id LIMIT 1;
+  SELECT id INTO p2 FROM public.executie_proiecte WHERE id <> p ORDER BY id LIMIT 1;
   IF own IS NULL OR coalesce(array_length(ids, 1), 0) < 3 OR p IS NULL THEN RAISE EXCEPTION 'T0 FAIL: identități / proiect'; END IF;
   ed := ids[1]; vw := ids[2]; fara := ids[3];
-  DELETE FROM public.user_module_access WHERE profile_id = ANY (ids) AND module = 'executie';
+  DELETE FROM public.user_module_access WHERE profile_id = ANY (ids) AND module IN ('executie', 'probe_teren');
   INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES (ed, 'executie', 'editor'), (vw, 'executie', 'viewer');
-  SELECT c.id, c.proiect_id INTO c1, pc FROM public.probe_calcule c JOIN public.executie_proiecte e ON e.id = c.proiect_id ORDER BY c.id LIMIT 1;
-  IF c1 IS NOT NULL THEN SELECT c.id INTO c2 FROM public.probe_calcule c WHERE c.proiect_id IS DISTINCT FROM pc ORDER BY c.id LIMIT 1; END IF;
+  PERFORM set_config('tpr.neexecutate', '', true);
+  -- calculele fictive: coloanele minime din fn_probe_creeaza_teren (20261115a); garda modulului Probe lasă proprietarul să scrie direct
+  BEGIN
+    INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status) VALUES (p, 'aer', 'planificata') RETURNING id INTO cf1;
+    INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status) VALUES (p, 'aer', 'planificata') RETURNING id INTO cf2;
+    IF p2 IS NOT NULL THEN INSERT INTO public.probe_calcule (proiect_id, tip_fluid, status) VALUES (p2, 'aer', 'planificata') RETURNING id INTO cf3; END IF;
+  EXCEPTION WHEN OTHERS THEN
+    cf1 := NULL; cf2 := NULL; cf3 := NULL;
+    PERFORM set_config('tpr.neexecutate', 'T11 (calculele Probe fictive nu s-au putut crea: ' || SQLSTATE || ' ' || left(SQLERRM, 120) || ')', true);
+  END;
   PERFORM set_config('tpr.owner', own::text, true); PERFORM set_config('tpr.ed', ed::text, true);
   PERFORM set_config('tpr.vw', vw::text, true); PERFORM set_config('tpr.fara', fara::text, true); PERFORM set_config('tpr.p', p::text, true);
-  PERFORM set_config('tpr.c1', coalesce(c1::text, ''), true); PERFORM set_config('tpr.pc', coalesce(pc::text, ''), true);
-  PERFORM set_config('tpr.c2', coalesce(c2::text, ''), true); PERFORM set_config('tpr.pet', '', true);
+  PERFORM set_config('tpr.p2', coalesce(p2::text, ''), true);
+  PERFORM set_config('tpr.cf1', coalesce(cf1::text, ''), true); PERFORM set_config('tpr.cf2', coalesce(cf2::text, ''), true);
+  PERFORM set_config('tpr.cf3', coalesce(cf3::text, ''), true); PERFORM set_config('tpr.pet', '', true);
   PERFORM set_config('tpr.azi', ((now() AT TIME ZONE 'Europe/Bucharest')::date)::text, true);
-  RAISE NOTICE 'T0 OK (proiect %, calcul Probe pentru legătură: %)', p, coalesce(c1::text, 'niciunul — T11 se sare');
+  RAISE NOTICE 'T0 OK (proiect %, al doilea proiect %, calcule fictive % / % / %)', p, coalesce(p2::text, '—'), cf1, cf2, coalesce(cf3::text, '—');
 END $t$;
 
 -- T1: creare ca editor: tronsonul + cele 4 etape + rândul de jurnal, proveniența din JWT; reluarea aceleiași apăsări = duplicat fără scriere
@@ -166,6 +178,7 @@ BEGIN
   PERFORM set_config('tpr.id904', pg_temp.t_id('P904')::text, true);
   PERFORM set_config('tpr.e904p', pg_temp.t_eid('P904', 'pistonare')::text, true);
   PERFORM set_config('tpr.e903s', pg_temp.t_eid('P903', 'presiune')::text, true);
+  PERFORM set_config('tpr.e903c', pg_temp.t_eid('P903', 'calibrare')::text, true);
   RAISE NOTICE 'T2 OK';
 END $t$;
 
@@ -430,41 +443,82 @@ BEGIN
   RAISE NOTICE 'T10 OK';
 END $t$;
 
--- T11: legătura cu modulul Probe — doar o probă a aceluiași proiect; ștergerea calculului golește legătura (ON DELETE SET NULL)
+-- T11: legătura cu modulul Probe, pe calculele FICTIVE din T0 (niciun calcul real nu e atins)
+-- T11a: editorul Execuție FĂRĂ drept pe Probe nu poate lega (42501, mesaj generic)
 DO $t$
-DECLARE r jsonb; z date := pg_temp.t_g('azi')::date; c1 bigint := pg_temp.t_g('c1')::bigint; c2 bigint := pg_temp.t_g('c2')::bigint;
+DECLARE r jsonb; z date := pg_temp.t_g('azi')::date; cf1 bigint := pg_temp.t_g('cf1')::bigint;
 BEGIN
-  IF c1 IS NULL THEN RAISE NOTICE 'T11 SĂRIT: nu există niciun calcul în probe_calcule legat de un proiect de Execuție'; RETURN; END IF;
-  PERFORM set_config('tpr.pet', pg_temp.t_g('pc'), true);
-  r := pg_temp.t_sal(pg_temp.t_g('pc')::bigint, NULL, NULL, 'P905', 930000, 931000, gen_random_uuid());
+  IF cf1 IS NULL THEN RAISE NOTICE 'T11 NEEXECUTAT: %', pg_temp.t_g('neexecutate'); RETURN; END IF;
+  r := pg_temp.t_sal(pg_temp.t_g('p')::bigint, NULL, NULL, 'P905', 930000, 931000, gen_random_uuid());
   IF r->>'ok' <> 'true' THEN RAISE EXCEPTION 'T11 FAIL: P905 %', r; END IF;
-  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'urmeaza', 1, 'in_curs', %L, '{"pproba":10,"calc":-1}', gen_random_uuid())$q$, z), '22023')
-     OR (c2 IS NOT NULL AND NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'urmeaza', 1, 'in_curs', %L, %L, gen_random_uuid())$q$,
-                                                         z, jsonb_build_object('pproba', 10, 'calc', c2)), '22023')) THEN
-    RAISE EXCEPTION 'T11 FAIL: calcul inexistent / de pe alt proiect';
+  PERFORM set_config('tpr.e905s', pg_temp.t_eid('P905', 'presiune')::text, true);
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'urmeaza', 1, 'in_curs', %L, %L, gen_random_uuid())$q$,
+                                 z, jsonb_build_object('pproba', 10, 'calc', cf1)), '42501') THEN
+    RAISE EXCEPTION 'T11a FAIL: legare fără drept pe Probe';
   END IF;
-  r := pg_temp.t_et('P905', 'presiune', 'urmeaza', 1, 'in_curs', z, jsonb_build_object('pproba', 10, 'calc', c1), gen_random_uuid());
-  IF (r->'etapa'->>'probe_calc_id')::bigint IS DISTINCT FROM c1 THEN RAISE EXCEPTION 'T11 FAIL: legătura %', r; END IF;
-  PERFORM set_config('tpr.e905s', (r->'etapa'->>'id'), true);
-  PERFORM set_config('tpr.pet', '', true);
-  RAISE NOTICE 'T11 legătura OK%', CASE WHEN c2 IS NULL THEN ' (fără un al doilea proiect cu calcul: refuzul „alt proiect” nu s-a putut proba)' ELSE '' END;
 END $t$;
 SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  IF pg_temp.t_g('cf1') IS NULL THEN RETURN; END IF;
+  INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES (pg_temp.t_g('ed')::uuid, 'probe_teren', 'viewer');
+END $t$;
+-- T11b: cu drept de citire pe Probe: calcul inexistent / de pe alt proiect = refuz; calcul al aceluiași proiect = legat
+SELECT pg_temp.t_ca(pg_temp.t_g('ed')::uuid, 'authenticated');
 DO $t$
+DECLARE r jsonb; z date := pg_temp.t_g('azi')::date; cf1 bigint := pg_temp.t_g('cf1')::bigint; cf3 bigint := pg_temp.t_g('cf3')::bigint;
 BEGIN
-  IF pg_temp.t_g('e905s') IS NULL THEN RETURN; END IF;
-  BEGIN
-    DELETE FROM public.probe_calcule WHERE id = pg_temp.t_g('c1')::bigint;
-    IF (SELECT probe_calc_id FROM public.executie_probe_etape WHERE id = pg_temp.t_g('e905s')::bigint) IS NOT NULL THEN
-      RAISE EXCEPTION USING ERRCODE = 'P0998', MESSAGE = 'T11 FAIL: ștergerea calculului nu a golit legătura';
+  IF cf1 IS NULL THEN RETURN; END IF;
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'urmeaza', 1, 'in_curs', %L, '{"pproba":10,"calc":-1}', gen_random_uuid())$q$, z), '42501')
+     OR (cf3 IS NOT NULL AND NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'urmeaza', 1, 'in_curs', %L, %L, gen_random_uuid())$q$,
+                                                         z, jsonb_build_object('pproba', 10, 'calc', cf3)), '42501')) THEN
+    RAISE EXCEPTION 'T11b FAIL: calcul inexistent / de pe alt proiect';
+  END IF;
+  r := pg_temp.t_et('P905', 'presiune', 'urmeaza', 1, 'in_curs', z, jsonb_build_object('pproba', 10, 'calc', cf1), gen_random_uuid());
+  IF (r->'etapa'->>'probe_calc_id')::bigint IS DISTINCT FROM cf1 THEN RAISE EXCEPTION 'T11b FAIL: legătura %', r; END IF;
+END $t$;
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  IF pg_temp.t_g('cf1') IS NULL THEN RETURN; END IF;
+  DELETE FROM public.user_module_access WHERE profile_id = pg_temp.t_g('ed')::uuid AND module = 'probe_teren';
+END $t$;
+-- T11c: din nou fără drept pe Probe: păstrarea legăturii existente merge (citire nouă de presiune), schimbarea ei e refuzată, dezlegarea merge
+SELECT pg_temp.t_ca(pg_temp.t_g('ed')::uuid, 'authenticated');
+DO $t$
+DECLARE r jsonb; z date := pg_temp.t_g('azi')::date; cf1 bigint := pg_temp.t_g('cf1')::bigint; cf2 bigint := pg_temp.t_g('cf2')::bigint;
+BEGIN
+  IF cf1 IS NULL THEN RETURN; END IF;
+  r := pg_temp.t_et('P905', 'presiune', 'in_curs', 2, 'in_curs', z, jsonb_build_object('pproba', 10, 'pcur', 9.5, 'calc', cf1), gen_random_uuid());
+  IF r->>'ok' <> 'true' OR (r->'etapa'->>'probe_calc_id')::bigint IS DISTINCT FROM cf1 OR (r->'etapa'->>'presiune_curenta_bar')::numeric <> 9.5 THEN
+    RAISE EXCEPTION 'T11c FAIL: păstrarea legăturii %', r;
+  END IF;
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_et('P905', 'presiune', 'in_curs', 3, 'in_curs', %L, %L, gen_random_uuid())$q$,
+                                 z, jsonb_build_object('pproba', 10, 'calc', cf2)), '42501') THEN
+    RAISE EXCEPTION 'T11c FAIL: schimbarea legăturii fără drept pe Probe';
+  END IF;
+  r := pg_temp.t_et('P905', 'presiune', 'in_curs', 3, 'in_curs', z, '{"pproba":10}', gen_random_uuid());
+  IF r->'etapa'->>'probe_calc_id' IS NOT NULL THEN RAISE EXCEPTION 'T11c FAIL: dezlegarea %', r; END IF;
+END $t$;
+-- T11d: plasa structurală (FK compus) și ștergerea din Probe, ca proprietar (mentenanță); orice eroare neașteptată oprește rularea
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$
+DECLARE cf1 bigint := pg_temp.t_g('cf1')::bigint; cf3 bigint := pg_temp.t_g('cf3')::bigint; e bigint := pg_temp.t_g('e905s')::bigint; p bigint := pg_temp.t_g('p')::bigint;
+BEGIN
+  IF cf1 IS NULL THEN RETURN; END IF;
+  UPDATE public.executie_probe_etape SET probe_calc_id = cf1 WHERE id = e;   -- legătură pe același proiect: trece
+  IF cf3 IS NOT NULL THEN
+    IF NOT pg_temp.t_refuza(format($q$UPDATE public.executie_probe_etape SET probe_calc_id = %s WHERE id = %s$q$, cf3, e), '23503')
+       OR NOT pg_temp.t_refuza(format($q$UPDATE public.probe_calcule SET proiect_id = %s WHERE id = %s$q$, pg_temp.t_g('p2'), cf1), '23503') THEN
+      RAISE EXCEPTION 'T11d FAIL: legătura spre alt proiect / mutarea calculului legat pe alt proiect';
     END IF;
-    RAISE EXCEPTION USING ERRCODE = 'P0999', MESSAGE = 't11: anulez ștergerea de probă';
-  EXCEPTION
-    WHEN SQLSTATE 'P0999' THEN RAISE NOTICE 'T11 OK (ON DELETE SET NULL verificat, ștergerea anulată)';
-    WHEN OTHERS THEN
-      IF SQLSTATE = 'P0998' THEN RAISE; END IF;   -- eșecul nostru; orice altă eroare vine din garda modulului Probe pe ștergere
-      RAISE NOTICE 'T11 OK (ON DELETE SET NULL nu s-a putut proba: calculul are alte legături — %)', SQLERRM;
-  END;
+  ELSE
+    PERFORM set_config('tpr.neexecutate', concat_ws('; ', pg_temp.t_g('neexecutate'), 'T11d alt proiect (clona are un singur proiect de Execuție)'), true);
+    RAISE NOTICE 'T11d NEEXECUTAT: clona are un singur proiect de Execuție (refuzul „alt proiect” nu s-a putut proba)';
+  END IF;
+  DELETE FROM public.probe_calcule WHERE id = cf1;
+  IF (SELECT probe_calc_id IS NOT NULL OR proiect_id IS DISTINCT FROM p FROM public.executie_probe_etape WHERE id = e) THEN
+    RAISE EXCEPTION 'T11d FAIL: ștergerea calculului nu a golit doar legătura';
+  END IF;
+  RAISE NOTICE 'T11 OK (fără drept Probe = refuz; alt proiect = refuz; păstrare / dezlegare fără drept Probe; FK compus; ON DELETE SET NULL)';
 END $t$;
 
 -- T12: anularea — motiv obligatoriu, CAS, idempotentă; tronsonul anulat nu mai primește schimbări; intervalul și codul se eliberează
@@ -537,6 +591,8 @@ BEGIN
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.executie_probe_etape SET stare = 'facut', data_stare = current_date, data_start = current_date, data_final = current_date WHERE id = %s$q$, pg_temp.t_g('e903s')), '23514')
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.executie_probe_etape SET stare = 'in_curs', data_stare = current_date, data_start = current_date, presiune_proba_bar = 10, presiune_curenta_bar = 9 WHERE id = %s$q$, pg_temp.t_g('e903s')), '23514')
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.executie_probe_etape SET stare = 'refacere', data_stare = current_date, data_start = current_date WHERE id = %s$q$, pg_temp.t_g('e903s')), '23514')
+     -- calibrare „făcută” fără placă (NULL): CHECK-ul nu trebuie să treacă pe NULL
+     OR NOT pg_temp.t_refuza(format($q$UPDATE public.executie_probe_etape SET stare = 'facut', data_stare = current_date, data_start = current_date, data_final = current_date WHERE id = %s$q$, pg_temp.t_g('e903c')), '23514')
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.executie_probe_tronsoane SET stare = 'anulat' WHERE id = %s$q$, id901), '23514') THEN
     RAISE EXCEPTION 'T14 FAIL: CHECK-urile etapelor';
   END IF;
@@ -594,6 +650,7 @@ DO $t$ BEGIN
   IF to_regclass('public.executie_probe_tronsoane') IS NOT NULL OR to_regclass('public.executie_probe_etape') IS NOT NULL
      OR to_regclass('public.executie_probe_jurnal') IS NOT NULL OR to_regprocedure('public.fn_executie_proba_tranzitie(text, text)') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid = 'public.probe_calcule'::regclass AND conname LIKE 'executie\_probe\_%')
+     OR EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.probe_calcule'::regclass AND conname = 'probe_calcule_id_proiect_uq')
      OR current_setting('gazpet.revenire_20261202a', true) <> '' THEN
     RAISE EXCEPTION 'T17 FAIL: revenirea';
   END IF;
@@ -603,10 +660,38 @@ END $t$;
 SELECT set_config('gazpet.livrare_migrare', '20261202a_executie_probe_tronsoane:' || txid_current(), true);
 \ir ../supabase/migrations/20261202a_executie_probe_tronsoane.sql
 DO $t$ BEGIN
-  IF to_regclass('public.executie_probe_tronsoane') IS NULL OR to_regclass('public.executie_probe_jurnal') IS NULL THEN
+  IF to_regclass('public.executie_probe_tronsoane') IS NULL OR to_regclass('public.executie_probe_jurnal') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.probe_calcule'::regclass AND conname = 'probe_calcule_id_proiect_uq') THEN
     RAISE EXCEPTION 'T17 FAIL: re-aplicarea';
   END IF;
-  RAISE NOTICE 'T17 OK — toate testele au trecut; urmează ROLLBACK (nimic nu rămâne pe clonă)';
+  RAISE NOTICE 'T17 OK';
+END $t$;
+
+-- T18: garda de dependențe (L15): o funcție de drept modificată (aceeași semnătură, DEFINER, search_path și ACL, dar corpul „mereu true”)
+-- e refuzată de preflight. Totul într-un savepoint anulat.
+SAVEPOINT t18;
+SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_PROBE_TRONSOANE:' || txid_current(), true);
+\ir ../supabase/revenire/20261202a_executie_probe_tronsoane_ROLLBACK.sql
+CREATE OR REPLACE FUNCTION public.fn_executie_nod_drept(p_proiect bigint, p_scriere boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;
+SELECT set_config('gazpet.livrare_migrare', '20261202a_executie_probe_tronsoane:' || txid_current(), true);
+\set ON_ERROR_STOP 0
+\ir ../supabase/migrations/20261202a_executie_probe_tronsoane.sql
+\set t18_eroare :ERROR
+\set t18_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t18;
+SELECT pg_temp.t_eroare('T18', :'t18_eroare', :'t18_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'amprenta revizuita');
+DO $t$ BEGIN
+  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_executie_nod_drept(bigint, boolean)'::regprocedure), chr(13), '')) <> '144649bae9a218b41b7e6df90cba5d9e'
+     OR to_regclass('public.executie_probe_tronsoane') IS NULL THEN
+    RAISE EXCEPTION 'T18 FAIL: savepoint-ul nu a refăcut starea';
+  END IF;
+  IF pg_temp.t_g('neexecutate') IS NOT NULL THEN
+    RAISE NOTICE 'T18 OK — testele EXECUTATE au trecut, dar unele NU s-au putut executa: %. Urmează ROLLBACK.', pg_temp.t_g('neexecutate');
+  ELSE
+    RAISE NOTICE 'T18 OK — toate testele au trecut; urmează ROLLBACK (nimic nu rămâne pe clonă)';
+  END IF;
 END $t$;
 
 ROLLBACK;

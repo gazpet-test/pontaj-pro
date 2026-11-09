@@ -37,7 +37,7 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
     executie_probe_jurnal: new Map(),
     probe_calcule: new Map(),
   }
-  const st = { poarta: null, rpc: [], auto: true, citiri: 0 }
+  const st = { poarta: null, rpc: [], auto: true, citiri: 0, esueazaCitiri: false }
   let idNou = 1000
   const interogare = tabel => {
     const f = { eq: [], gt: null, lim: 1000 }
@@ -47,6 +47,7 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
       limit: n => { f.lim = n; return q }, gt: (_c, v) => { f.gt = v; return q },
       then: (res, rej) => {
         st.citiri += 1
+        if (st.esueazaCitiri) return Promise.resolve({ data: null, error: { message: 'rețea căzută' } }).then(res, rej)
         if (tabel === 'executie_tronsoane' && eroareTronsoane) return Promise.resolve({ data: null, error: { message: 'permission denied' } }).then(res, rej)
         const instant = [...T[tabel].values()].filter(r => f.eq.every(([c, v]) => r[c] === v) && (f.gt == null || r.id > f.gt))
           .sort((a, b) => a.id - b.id).slice(0, f.lim).map(r => ({ ...r }))
@@ -56,7 +57,13 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
     }
     return q
   }
+  const jurnal = (proba_id, a) => { const j = { id: ++idNou, proba_id, cheie: a.p_cheie }; T.executie_probe_jurnal.set(j.id, j) }
   const aplica = (fn, a) => {
+    const r = aplicaFara(fn, a)
+    if (r.ok) jurnal(r.proba?.id ?? r.etapa?.proba_id, a)
+    return r
+  }
+  const aplicaFara = (fn, a) => {
     if (fn === 'fn_executie_proba_salveaza') {
       if (a.p_id == null) {
         const p = { id: ++idNou, proiect_id: a.p_proiect, cod: a.p_cod, denumire: a.p_denumire, km_de_la_m: a.p_km_de_la_m, km_pana_la_m: a.p_km_pana_la_m,
@@ -88,6 +95,7 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
       if (st.auto) d.res('ok')
       return d.p.then(mod => {
         if (mod === 'eroare') return { data: null, error: { message: 'timeout simulat' } }
+        if (mod === 'pierdut') { aplica(fn, a); return { data: null, error: { message: 'răspuns pierdut' } } }   // scris pe server, răspunsul nu ajunge
         if (mod === 'refuz') return { data: null, error: { code: '22023', message: 'probe: intervalul se suprapune cu P1 (de la 0 m la 10400 m)' } }
         return { data: aplica(fn, a), error: null }
       })
@@ -99,7 +107,7 @@ function clientFals({ probe = [], etape = [], tronsoane = LOT1, drept = true, er
 let curata = []
 afterEach(() => { curata.forEach(f => f()); curata = []; vi.restoreAllMocks() })
 
-async function monteaza(client) {
+async function monteaza(client, proiectId = 1) {
   const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -109,8 +117,8 @@ async function monteaza(client) {
   const root = createRoot(j.window.document.getElementById('r'))
   const d = j.window.document
   const asteapta = async () => { await act(async () => { for (let i = 0; i < 40; i++) await Promise.resolve() }) }
-  await act(async () => { root.render(<ProbeTronsoane proiectId={1} client={client} />) })
-  await asteapta()
+  const randeaza = async pid => { await act(async () => { root.render(<ProbeTronsoane proiectId={pid} client={client} />) }); await asteapta() }
+  await randeaza(proiectId)
   let montat = true
   const demonteaza = () => { if (montat) { montat = false; act(() => root.unmount()) } }
   curata.push(() => { demonteaza(); Object.assign(globalThis, vechi) })
@@ -130,7 +138,7 @@ async function monteaza(client) {
   }
   const elibereaza = async (cerere, val) => { await act(async () => { cerere.res(val) }); await asteapta() }
   const text = () => d.body.textContent
-  return { d, act, asteapta, apasa, buton, camp, scrie, elibereaza, text, demonteaza }
+  return { d, act, asteapta, apasa, buton, camp, scrie, elibereaza, text, demonteaza, randeaza }
 }
 
 const P1 = { id: 1, proiect_id: 1, cod: 'P1', denumire: null, km_de_la_m: 0, km_pana_la_m: 10400, observatii: null, stare: 'activ', motiv_anulare: null, versiune: 1 }
@@ -242,6 +250,94 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     await u.elibereaza(st.poarta, undefined)                               // abia acum ajunge citirea veche (v3)
     st.poarta = null
     expect(u.text()).toContain('47,9 bar')
+  })
+
+  it('L24: salvare pornită pe proiectul 1, răspunsul vine după trecerea pe proiectul 2 -> niciun efect pe proiectul 2', async () => {
+    const P2 = { ...P1, id: 7, proiect_id: 2, cod: 'P1', km_de_la_m: 0, km_pana_la_m: 500 }
+    const { client, st } = clientFals({ probe: [P1, P2], etape: [...ETAPE_P1(), ...ETAPE.map((x, i) => ETAPA(70 + i, 7, x, { proiect_id: 2 }))] })
+    st.auto = false
+    const u = await monteaza(client, 1)
+    await u.apasa(u.buton('＋ Tronson de probă nou'))
+    await u.scrie('De la km', '10+400')
+    await u.scrie('Până la km', '14+000')
+    await u.apasa(u.buton('Salvează'))                                     // în zbor
+    await u.randeaza(2)                                                    // alt proiect
+    const citiri = st.citiri
+    await u.elibereaza(st.rpc[0], 'ok')                                    // răspunsul pentru proiectul 1
+    expect(u.text()).toContain('km 0+000 → 0+500')                         // P1 al proiectului 2
+    expect(u.text()).not.toContain('10+400 → 14+000')
+    expect(u.text()).not.toContain('Salvat.')
+    expect(st.citiri).toBe(citiri)                                         // nicio reîncărcare pornită de răspunsul vechi
+    expect(u.d.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('L05: reconcilierea cu citire eșuată păstrează cererea și cheia; după revenirea formularului, reluarea are aceeași cheie', async () => {
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'eroare')
+    await u.scrie('Presiunea curentă', '48,1')                             // formular schimbat -> reconciliere
+    st.esueazaCitiri = true
+    await u.apasa(u.buton('Salvează'))
+    expect(u.text()).toContain('Nu am putut verifica ce s-a întâmplat cu cererea anterioară')
+    expect(st.rpc).toHaveLength(1)
+    st.esueazaCitiri = false
+    await u.scrie('Presiunea curentă', '48,3')                             // aceeași cerere ca prima
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc).toHaveLength(2)
+    expect(st.rpc[1].a.p_cheie).toBe(st.rpc[0].a.p_cheie)
+  })
+
+  it('L05: răspuns pierdut după scriere -> reconcilierea găsește cheia în jurnal și spune că se salvase', async () => {
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'pierdut')                              // scris pe server, răspunsul nu a ajuns
+    expect(u.text()).toContain('Nu se știe dacă s-a salvat')
+    await u.scrie('Presiunea curentă', '48,0')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc).toHaveLength(1)
+    expect(u.text()).toContain('Cererea anterioară SE salvase')
+    expect(u.text()).toContain('48,3 bar')                                 // starea reală adusă de pe server
+  })
+
+  it('conflict pe formularul de interval: baza devine versiunea nouă, câmpurile scrise rămân, a doua apăsare trimite versiunea nouă', async () => {
+    const { client, st, T } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Modifică intervalul'))
+    await u.scrie('Până la km', '10+500')
+    Object.assign(T.executie_probe_tronsoane.get(1), { km_pana_la_m: 10450, versiune: 2 })   // altcineva a modificat între timp
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc[0].a.p_versiune).toBe(1)
+    expect(u.text()).toContain('S-a schimbat între timp')
+    expect(u.text()).toContain('Între timp tronsonul s-a schimbat: acum e P1, km 0+000 → 10+450')
+    expect(u.camp('Până la km').value).toBe('10+500')
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc[1].a).toMatchObject({ p_versiune: 2, p_km_pana_la_m: 10500 })
+    expect(u.text()).toContain('Salvat.')
+  })
+
+  it('demontare în timpul salvării: răspunsul întârziat nu aruncă și nu pornește încărcări', async () => {
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    u.demonteaza()
+    const citiri = st.citiri
+    await u.elibereaza(st.rpc[0], 'ok')
+    expect(st.citiri).toBe(citiri)
   })
 
   it('doar citire: fără butoane de scriere; tronsoanele necitite = avertisment, nu „neacoperit”', async () => {

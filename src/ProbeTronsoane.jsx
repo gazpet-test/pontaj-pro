@@ -37,9 +37,11 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
   const [tronsoane, setTronsoane] = useState([])
   const [eroareTronsoane, setEroareTronsoane] = useState(null)
   const [incarc, setIncarc] = useState(true)
+  const [incarcat, setIncarcat] = useState(false)      // prima încărcare a proiectului a reușit (apoi lista nu mai dispare la reîncărcări)
   const [eroare, setEroare] = useState(null)
   const [poateScrie, setPoateScrie] = useState(false)
   const [eroareDrept, setEroareDrept] = useState(null)
+  const [eroareReimprospatare, setEroareReimprospatare] = useState(null)
   const [azi, setAzi] = useState(ziBucuresti())
   const [selectat, setSelectat] = useState(null)          // id-ul tronsonului de probă deschis în fișă
   const [formProba, setFormProba] = useState(null)        // { proba } (null în proba = tronson nou)
@@ -51,9 +53,10 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
   const [jurnalKey, setJurnalKey] = useState(0)
   const gen = useRef(0)
   const ctx = useRef(0)                 // contextul formularului deschis: crește la deschidere / închidere / schimbarea proiectului
+  const proiectCtx = useRef(0)          // contextul proiectului: crește la schimbarea proiectului și la demontare (L24)
   const incerte = useRef(new Map())     // L05: țintă -> { tinta, cheie, payload } al unei salvări cu rezultat NECUNOSCUT
   const montat = useRef(true)
-  useEffect(() => { montat.current = true; return () => { montat.current = false } }, [])
+  useEffect(() => { montat.current = true; return () => { montat.current = false; proiectCtx.current += 1 } }, [])
 
   // „azi” (Europe/Bucharest) se recalculează la revenirea în pagină și la schimbarea zilei
   useEffect(() => {
@@ -65,9 +68,12 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
   }, [])
 
   // ── probele, etapele, tronsoanele de execuție și dreptul de scriere; keyset pe id (L23) ──
-  const incarca = useCallback(async () => {
+  // Întoarce true DOAR dacă citirea a reușit și s-a aplicat (nu a fost depășită de o încărcare mai nouă); altfel false (L18).
+  // `silentios` (reîmprospătarea după o salvare / reconcilierea): la eșec lista rămâne pe ecran, cu un avertisment, nu pagina de eroare.
+  const incarca = useCallback(async ({ silentios = false } = {}) => {
     const g = ++gen.current
-    setIncarc(true); setEroare(null); setEroareDrept(null)
+    setIncarc(true); setEroareDrept(null)
+    if (!silentios) setEroare(null)
     try {
       const [p, e, t, drept] = await Promise.all([
         pagini(client, 'executie_probe_tronsoane', COL_PROBA, q => q.eq('proiect_id', proiectId)),
@@ -76,7 +82,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
           .then(r => ({ r }), err => ({ err })),
         client.rpc('fn_executie_nod_drept', { p_proiect: proiectId, p_scriere: true }),
       ])
-      if (g !== gen.current) return
+      if (g !== gen.current) return false
       setProbe(cur => imbinaLista(p.filter(x => x.proiect_id === proiectId), cur))
       setEtape(cur => imbinaLista(e.filter(x => x.proiect_id === proiectId), cur))
       // L18: tronsoanele necitite ≠ „niciun tronson”: compoziția nu se calculează, se spune de ce
@@ -85,15 +91,22 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
       if (drept.error) { setPoateScrie(false); setEroareDrept('Nu am putut verifica dreptul de scriere: ' + drept.error.message) }
       else setPoateScrie(drept.data === true)
       setAzi(ziBucuresti())
+      setEroareReimprospatare(null)
+      setIncarcat(true)
+      return true
     } catch (err) {
-      if (g !== gen.current) return
+      if (g !== gen.current) return false
+      if (silentios) { setEroareReimprospatare('Lista nu s-a putut reîmprospăta (' + (err?.message || err) + '). Ce vezi poate fi vechi: apasă ↻ Reîncarcă.'); return false }
       setProbe([]); setEtape([])
       setEroare('Nu am putut încărca probele: ' + (err?.message || err))
+      return false
     } finally { if (g === gen.current) setIncarc(false) }
   }, [proiectId, client])
   useEffect(() => {
-    ctx.current += 1; incerte.current = new Map()
-    setProbe([]); setEtape([]); setTronsoane([]); setSelectat(null); setFormProba(null); setFormEtapa(null); setFormAnulare(null); setMesaj(null)
+    // proiect nou (sau alt client): orice răspuns al unei acțiuni pornite înainte nu mai are niciun efect aici
+    proiectCtx.current += 1; ctx.current += 1; incerte.current = new Map()
+    setProbe([]); setEtape([]); setTronsoane([]); setSelectat(null); setFormProba(null); setFormEtapa(null); setFormAnulare(null); setMesaj(null); setInCurs(false)
+    setIncarcat(false); setEroareReimprospatare(null)
     incarca()
   }, [incarca])
 
@@ -113,74 +126,96 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
   const deschide = fn => { ctx.current += 1; setMesaj(null); fn() }
   const inchideForm = () => { ctx.current += 1; setMesaj(null); setFormProba(null); setFormEtapa(null); setFormAnulare(null) }
 
-  // ── execuția unui RPC cu cheie de idempotență (L04 / L05) ──
+  // ── L05: rezolvarea unei cereri cu rezultat necunoscut: întâi starea reală (reîncărcare reușită), apoi jurnalul spune dacă cheia
+  // ei s-a scris. Orice citire eșuată = nerezolvat (cererea și cheia rămân). O cerere încă în zbor pe server e oprită de CAS. ──
+  const reconciliaza = async intrare => {
+    if (!(await incarca({ silentios: true }))) return { ok: false }
+    let data = null, error = null
+    try { ({ data, error } = await client.from('executie_probe_jurnal').select('id').eq('cheie', intrare.cheie).limit(1)) } catch (e) { error = e }
+    if (error || !Array.isArray(data)) return { ok: false }
+    return { ok: true, aplicat: data.length > 0 }
+  }
+
+  // ── execuția unui RPC cu cheie de idempotență (L04 / L05 / L24) ──
+  // Efectele asupra datelor se aplică doar dacă proiectul (și componenta) sunt aceleași ca la pornire; efectele asupra formularului
+  // (mesaj, închidere) doar dacă și formularul e același (`actual`). Întoarce { r, actual } sau null.
   const executa = async (tinta, rpc, payload) => {
-    const g = ctx.current
+    const g = ctx.current, pg = proiectCtx.current
+    const valid = () => montat.current && pg === proiectCtx.current
     const intrare = incerte.current.get(tinta)
     const decizie = decideReincercare(intrare, tinta, payload)
     if (decizie === 'reconciliere') {
       setInCurs(true)
-      await incarca()
-      if (!montat.current) return null
-      incerte.current.delete(tinta)
+      const rez = await reconciliaza(intrare)
+      if (!valid()) return null
       setInCurs(false)
-      if (g === ctx.current) setMesaj({ ok: false, text: 'Cererea anterioară avea rezultat necunoscut; am adus starea reală. Verifică și confirmă din nou.' })
+      // se șterge doar intrarea rezolvată (aceeași cheie), nu una pusă între timp
+      if (rez.ok && incerte.current.get(tinta)?.cheie === intrare.cheie) incerte.current.delete(tinta)
+      if (g === ctx.current) {
+        setMesaj({ ok: false, text: !rez.ok
+          ? 'Nu am putut verifica ce s-a întâmplat cu cererea anterioară (citirea a eșuat). Ea rămâne în așteptare: apasă din nou „Salvează” fără să schimbi nimic, sau reîncearcă mai târziu.'
+          : rez.aplicat
+            ? 'Cererea anterioară SE salvase; am adus starea reală. Verifică înainte de o nouă schimbare.'
+            : 'Cererea anterioară nu s-a salvat; am adus starea reală. Verifică și confirmă din nou.' })
+      }
       return null
     }
     const cheie = decizie === 'aceeasi' ? intrare.cheie : cheieNoua()
     setInCurs(true); setMesaj(null)
     let r = null, error = null
     try { ({ data: r, error } = await client.rpc(rpc, { ...payload, p_cheie: cheie })) } catch (e) { error = e }
-    if (!montat.current) return null
+    if (!valid()) return null    // alt proiect / pagina închisă: niciun efect (cererea e pe proiectul vechi; CAS + cheia o apără)
     setInCurs(false)
+    const actual = g === ctx.current
     if (error) {
       if (esteRefuzDeterminist(error)) {
         // refuz al serverului (regulă, drept, suprapunere): nimic nu s-a scris, cererea nu se mai reia cu aceeași cheie
         incerte.current.delete(tinta)
-        if (g === ctx.current) setMesaj({ ok: false, text: String(error.message || error).replace(/^probe: /, '') })
+        if (actual) setMesaj({ ok: false, text: String(error.message || error).replace(/^probe: /, '') })
       } else {
         incerte.current.set(tinta, { tinta, cheie, payload })
-        if (g === ctx.current) setMesaj({ ok: false, text: 'Nu se știe dacă s-a salvat (' + (error.message || error) + '). Apasă din nou „Salvează” fără să schimbi nimic; dacă schimbi ceva, întâi reîncarc datele.' })
+        if (actual) setMesaj({ ok: false, text: 'Nu se știe dacă s-a salvat (' + (error.message || error) + '). Apasă din nou „Salvează” fără să schimbi nimic; dacă schimbi ceva, întâi verific ce s-a întâmplat.' })
       }
       return null
     }
     incerte.current.delete(tinta)
-    if (r?.proba) setProbe(l => aplicaRand(l, r.proba))
-    if (r?.etapa) setEtape(l => aplicaRand(l, r.etapa))
+    if (r?.proba?.proiect_id === proiectId) setProbe(l => aplicaRand(l, r.proba))
+    if (r?.etapa?.proiect_id === proiectId) setEtape(l => aplicaRand(l, r.etapa))
     if (!r?.ok) {
-      if (g === ctx.current) setMesaj({ ok: false, text: 'S-a schimbat între timp (alt utilizator sau altă apăsare). Am adus starea actuală — verifică și reîncearcă.' })
+      if (actual) setMesaj({ ok: false, text: 'S-a schimbat între timp (alt utilizator sau altă apăsare). Am adus starea actuală — verifică și reîncearcă.' })
       return null
     }
     setJurnalKey(k => k + 1)
-    incarca()   // etapele unui tronson nou, compoziția, starea celorlalți
-    return r
+    incarca({ silentios: true })   // etapele unui tronson nou, compoziția, starea celorlalți
+    return { r, actual }
   }
 
   const salveazaProba = async ({ proba, cod, deLa, panaLa, denumire, observatii }) => {
     const payload = payloadProba({ proiectId, proba, cod, deLa, panaLa, denumire, observatii })
-    const r = await executa(proba ? `proba:${proba.id}` : 'nou', 'fn_executie_proba_salveaza', payload)
-    if (r?.ok && montat.current) { inchideForm(); setSelectat(r.proba.id); setMesaj({ ok: true, text: r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
+    const x = await executa(proba ? `proba:${proba.id}` : 'nou', 'fn_executie_proba_salveaza', payload)
+    if (x?.actual) { inchideForm(); setSelectat(x.r.proba.id); setMesaj({ ok: true, text: x.r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
   }
   const anuleaza = async (proba, motiv) => {
     const payload = Object.freeze({ p_id: proba.id, p_versiune: proba.versiune, p_motiv: motiv.trim() || null })
-    const r = await executa(`anulare:${proba.id}`, 'fn_executie_proba_anuleaza', payload)
-    if (r?.ok && montat.current) { inchideForm(); setSelectat(null); setMesaj({ ok: true, text: `${proba.cod} anulat.` }) }
+    const x = await executa(`anulare:${proba.id}`, 'fn_executie_proba_anuleaza', payload)
+    if (x?.actual) { inchideForm(); setSelectat(null); setMesaj({ ok: true, text: `${proba.cod} anulat.` }) }
   }
   const salveazaEtapa = async (et, form) => {
-    const r = await executa(`etapa:${et.id}`, 'fn_executie_proba_etapa', payloadEtapa(et, form))
-    if (r?.ok && montat.current) { inchideForm(); setMesaj({ ok: true, text: r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
+    const x = await executa(`etapa:${et.id}`, 'fn_executie_proba_etapa', payloadEtapa(et, form))
+    if (x?.actual) { inchideForm(); setMesaj({ ok: true, text: x.r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
   }
 
-  if (incarc && !probe.length && !eroare) return <Cadru><div style={{ color: G.dim, padding: 30, textAlign: 'center' }}>Se încarcă…</div></Cadru>
-  if (eroare) return <Cadru><Alerta text={eroare} /><button onClick={incarca} style={{ ...S.btn, marginTop: 10, minHeight: 44 }}>Reîncearcă</button></Cadru>
+  if (!incarcat && !eroare) return <Cadru><div style={{ color: G.dim, padding: 30, textAlign: 'center' }}>Se încarcă…</div></Cadru>
+  if (eroare) return <Cadru><Alerta text={eroare} /><button onClick={() => incarca()} style={{ ...S.btn, marginTop: 10, minHeight: 44 }}>Reîncearcă</button></Cadru>
 
   return (
     <Cadru>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ fontSize: 18, fontWeight: 800, color: G.text }}>🧪 Probe pe tronsoane</div>
-        <button onClick={incarca} style={{ ...S.btn, marginLeft: 'auto', padding: '6px 12px', fontSize: 13, minHeight: 40 }}>↻ Reîncarcă</button>
+        <button onClick={() => incarca()} style={{ ...S.btn, marginLeft: 'auto', padding: '6px 12px', fontSize: 13, minHeight: 40 }}>↻ Reîncarcă</button>
       </div>
       {eroareDrept && <Alerta text={eroareDrept} />}
+      {eroareReimprospatare && <Alerta text={eroareReimprospatare} galben />}
       {eroareTronsoane && <Alerta text={eroareTronsoane} galben />}
       {!poateScrie && !eroareDrept && <div style={{ fontSize: 12, color: G.muted, marginBottom: 8 }}>Doar citire: completările le fac cei cu drept de scriere pe Execuție.</div>}
       {mesaj && !probaSel && !formProba && !formEtapa && !formAnulare && <Mesaj m={mesaj} />}
@@ -222,7 +257,9 @@ export default function ProbeTronsoane({ proiectId, client = supabase }) {
           onAnuleaza={() => deschide(() => setFormAnulare(probaSel.id))} />
       )}
       {formProba && (
-        <FormProba proba={formProba.proba} probe={probe} tronsoane={tronsoane} faraTronsoane={!!eroareTronsoane} busy={inCurs} mesaj={mesaj}
+        // baza formularului = rândul CURENT din listă (după un conflict are versiunea nouă); câmpurile scrise de om rămân în formular
+        <FormProba proba={formProba.proba ? (probe.find(p => p.id === formProba.proba.id) || formProba.proba) : null} probaLaDeschidere={formProba.proba}
+          probe={probe} tronsoane={tronsoane} faraTronsoane={!!eroareTronsoane} busy={inCurs} mesaj={mesaj}
           onSalveaza={salveazaProba} onInchide={inchideForm} />
       )}
       {etapaForm && (
@@ -287,13 +324,14 @@ function Banda({ probe, tronsoane, ac, etapePeProba, selectat, onAlege }) {
 function Sumar({ ac, tronsoane, eroareTronsoane }) {
   if (eroareTronsoane) return null
   const { faraKm } = tronsoaneCuKm(tronsoane)
-  const pct = ac.total > 0 ? Math.round((ac.acoperit / ac.total) * 1000) / 10 : 0
   const arata = ac.neacoperit.slice(0, 6)
+  // procentul doar pe un traseu cunoscut (total > 0); altfel necunoscut, nu „100%” (L18)
+  const pct = Number.isFinite(ac.total) && ac.total > 0 ? Math.round((ac.acoperit / ac.total) * 1000) / 10 : null
   return (
     <div style={{ fontSize: 13, color: G.muted, lineHeight: 1.5 }}>
-      {ac.total > 0
+      {pct != null
         ? <div>Acoperit de probe: <b style={{ color: G.text }}>{fmtLungime(ac.acoperit)}</b> din {fmtLungime(ac.total)} ({String(pct).replace('.', ',')}%)</div>
-        : <div>Tronsoanele de execuție nu au km: banda arată doar probele.</div>}
+        : <div>Tronsoanele de execuție nu au km: lungimea traseului e necunoscută, deci procentul acoperit nu se poate calcula{ac.acoperit > 0 ? ` (probele însumează ${fmtLungime(ac.acoperit)})` : ''}.</div>}
       {arata.length > 0 && <div>Fără probă: {arata.map(g => `${fmtKm(g.de_la)}–${fmtKm(g.pana_la)}`).join(', ')}{ac.neacoperit.length > arata.length ? ` și încă ${ac.neacoperit.length - arata.length}` : ''}</div>}
       {ac.inAfara.length > 0 && <div style={{ color: G.yellow }}>⚠ Probe în afara tronsoanelor cunoscute: {ac.inAfara.map(g => `${fmtKm(g.de_la)}–${fmtKm(g.pana_la)}`).join(', ')}</div>}
       {faraKm.length > 0 && <div style={{ color: G.yellow }}>⚠ Tronsoane fără km (nu intră în calcul): {faraKm.join(', ')}</div>}
@@ -431,7 +469,8 @@ function RandEtapa({ e, poateScrie, onEtapa }) {
 // ── formularul unei etape (pasul, data, valorile etapei, motivul când e cerut) ──
 function FormEtapa({ et, proba, azi, busy, mesaj, client, proiectId, onSalveaza, onInchide }) {
   const urm = stariUrmatoare(et.stare)
-  const implicit = et.stare === 'in_curs' && urm.includes('in_curs') && et.etapa === 'presiune' ? 'in_curs' : (urm.find(s => s !== et.stare) || urm[0])
+  // pasul propus: citirea pe o probă de presiune în curs, corectura pe o etapă făcută (nu „de refăcut”), altfel primul pas înainte
+  const implicit = (et.stare === 'in_curs' && et.etapa === 'presiune') || et.stare === 'facut' ? et.stare : (urm.find(s => s !== et.stare) || urm[0])
   const [stareNoua, setStareNoua] = useState(implicit)
   const [data, setData] = useState(et.stare === 'facut' && implicit === 'facut' && et.data_final ? et.data_final : azi)
   const [f, setF] = useState(() => formularDinEtapa(et))
@@ -441,9 +480,9 @@ function FormEtapa({ et, proba, azi, busy, mesaj, client, proiectId, onSalveaza,
   useEffect(() => {
     if (et.etapa !== 'presiune') return undefined
     let viu = true
-    client.from('probe_calcule').select('id, tronson_id, tip_fluid, presiune_bar, lungime_m, status, data_executie').eq('proiect_id', proiectId)
-      .order('id', { ascending: false }).limit(200)
-      .then(({ data: d, error }) => { if (!viu) return; if (error) setEroareCalcule('Probele din modulul Probe nu se pot citi (' + error.message + ').'); else setCalcule(d || []) },
+    // keyset pe id (L23); cele mai noi primele în listă
+    pagini(client, 'probe_calcule', 'id, tronson_id, tip_fluid, presiune_bar, lungime_m, status, data_executie', q => q.eq('proiect_id', proiectId))
+      .then(d => { if (viu) setCalcule([...d].reverse()) },
         e => { if (viu) setEroareCalcule('Probele din modulul Probe nu se pot citi (' + (e?.message || e) + ').') })
     return () => { viu = false }
   }, [et.etapa, proiectId, client])
@@ -535,7 +574,8 @@ function FormEtapa({ et, proba, azi, busy, mesaj, client, proiectId, onSalveaza,
 }
 
 // ── formularul unui tronson de probă: cod, km (10+400 sau metri), previzualizarea compoziției, suprapunerile ──
-function FormProba({ proba, probe, tronsoane, faraTronsoane, busy, mesaj, onSalveaza, onInchide }) {
+function FormProba({ proba, probaLaDeschidere, probe, tronsoane, faraTronsoane, busy, mesaj, onSalveaza, onInchide }) {
+  const schimbatPeServer = !!proba && !!probaLaDeschidere && proba.versiune !== probaLaDeschidere.versiune
   const [cod, setCod] = useState(proba?.cod || codUrmator(probe))
   const [deLaTxt, setDeLaTxt] = useState(proba ? fmtKm(proba.km_de_la_m) : '')
   const [panaLaTxt, setPanaLaTxt] = useState(proba ? fmtKm(proba.km_pana_la_m) : '')
@@ -556,6 +596,9 @@ function FormProba({ proba, probe, tronsoane, faraTronsoane, busy, mesaj, onSalv
   )
   return (
     <Foaie titlu={proba ? `Modifică ${proba.cod}` : 'Tronson de probă nou'} onInchide={onInchide}>
+      {schimbatPeServer && (
+        <Alerta galben text={`Între timp tronsonul s-a schimbat: acum e ${proba.cod}${proba.stare !== 'activ' ? ' (anulat)' : ''}, ${fmtInterval(proba.km_de_la_m, proba.km_pana_la_m)}. Valorile tale de mai jos au rămas; „Salvează” le scrie peste versiunea nouă.`} />
+      )}
       {camp('Cod', cod, setCod, { autoCapitalize: 'characters', maxLength: 6 })}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         {camp('De la km', deLaTxt, setDeLaTxt, { placeholder: '10+000', inputMode: 'text' })}

@@ -11,8 +11,13 @@
 --     probă de presiune), fiecare cu starea ei (urmează / în curs / făcut / de refăcut / nu se aplică) și valorile ei:
 --     nr. de treceri, punct de rouă, placa de calibrare OK / deformată, presiunea de probă, presiunea curentă (cu ora citirii,
 --     pusă de server), durata, rezultat, observații. Coloanele unei etape sunt goale pe celelalte (CHECK).
---   * Proba de presiune se poate lega OPȚIONAL de modulul Probe existent (probe_calcule.id, același proiect): PV-ul rămâne acolo,
---     aici e doar legătura. ON DELETE SET NULL: ștergerea unui calcul din modulul Probe nu e blocată de Execuție.
+--   * Proba de presiune se poate lega OPȚIONAL de modulul Probe existent (probe_calcule.id): PV-ul rămâne acolo, aici e doar legătura.
+--     - „același proiect” e impus structural: FK compus (probe_calc_id, proiect_id) -> probe_calcule(id, proiect_id), cu un UNIQUE nou
+--       (id, proiect_id) pe probe_calcule (trivial unic: id e PK). Un calcul legat nu mai poate fi mutat pe alt proiect (FK refuză), iar
+--       FOR KEY SHARE din FK blochează și mutarea concurentă (proiect_id intră în cheia unică).
+--     - ON DELETE SET NULL (probe_calc_id): ștergerea unui calcul din modulul Probe nu e blocată de Execuție (doar legătura se golește).
+--     - Legarea (sau schimbarea legăturii) cere și dreptul de citire pe modulul Probe (probe_teren_drept(false), predicatul modulului);
+--       păstrarea legăturii existente sau dezlegarea nu îl cer. Decizie explicită: fără excepție de acces între module.
 --   * executie_probe_jurnal: jurnalul operațiilor, în ordine (creare, modificare de interval, anulare, fiecare schimbare de etapă),
 --     scris DOAR de RPC-uri, niciodată modificat (trigger). Ține și cheia de idempotență a fiecărei apăsări (UNIQUE + amprentă).
 --   * Scrierea din aplicație: DOAR prin cele 3 RPC-uri SECURITY DEFINER (fn_executie_proba_salveaza / _anuleaza / _etapa):
@@ -20,12 +25,16 @@
 --     din 20261201a — O SINGURĂ definiție a dreptului pe Execuție), lock, CAS pe versiune (+ stare la etape), tranziții din lista
 --     albă, cheie de idempotență per apăsare. Nicio scriere directă (fără INSERT / UPDATE / DELETE pentru anon / authenticated /
 --     service_role). Citirea: același drept, orice nivel (viewer citește), prin RLS.
--- Ce NU face: nicio dată (tronsoanele de probă le definesc oamenii din aplicație), niciun drept, nicio atingere pe executie_tronsoane,
---   probe_calcule (doar FK-ul) sau izo_*.
--- Depinde de 20261201a (fn_executie_nod_drept): se aplică DUPĂ ea. Revenirea lui 20261201a refuză cât timp politicile de aici o folosesc.
--- Ordinea lock-urilor (L06), aceeași pe toate căile: advisory pe proiect (doar salveaza / anuleaza) -> executie_probe_tronsoane FOR UPDATE
---   -> executie_probe_etape FOR UPDATE -> INSERT în jurnal (FOR KEY SHARE implicit pe părinți, deja blocați mai tare) -> FOR KEY SHARE
---   implicit pe probe_calcule (FK, doar la etapa de presiune).
+-- Ce NU face: nicio dată (tronsoanele de probă le definesc oamenii din aplicație), niciun drept, nicio atingere pe executie_tronsoane
+--   sau izo_*. Pe probe_calcule adaugă DOAR constrângerea UNIQUE (id, proiect_id) pentru FK-ul compus (scoasă de revenire).
+-- Depinde de 20261201a (fn_executie_nod_drept) și de 20261114a (probe_teren_drept): amprentele lor (corpul normalizat, limbajul,
+--   DEFINER, search_path, proprietarul, EXECUTE) sunt verificate la start. Cere PostgreSQL >= 15 (ON DELETE SET NULL (coloană)).
+--   Revenirea lui 20261201a refuză cât timp politicile de aici o folosesc.
+-- Ordinea lock-urilor (L06), aceeași pe toate căile, de la părinte la copil:
+--   advisory pe proiect (doar salveaza / anuleaza) -> probe_calcule FOR KEY SHARE (doar etapa, doar calculul legăturii noi, ÎNAINTEA
+--   etapei și fără alt lock ținut — aceeași ordine ca o ștergere din modulul Probe, care blochează calculul apoi golește legătura din etapă)
+--   -> executie_probe_tronsoane FOR UPDATE -> executie_probe_etape FOR UPDATE -> INSERT în jurnal (FOR KEY SHARE implicit pe părinți,
+--   deja blocați mai tare). Legătura citită fără lock se revalidează după lock (s-a schimbat = conflict, clientul reîncarcă).
 -- Revenire: supabase/revenire/20261202a_executie_probe_tronsoane_ROLLBACK.sql. Test pe clonă: scripts/test_executie_probe_tronsoane.sql.
 DO $pre$
 BEGIN
@@ -55,16 +64,42 @@ BEGIN
      OR to_regprocedure('auth.uid()') IS NULL THEN
     RAISE EXCEPTION '20261202a: dependentele (executie_proiecte.id bigint, probe_calcule.id PK / proiect_id, auth.uid) difera';
   END IF;
-  -- dreptul pe Execuție vine din 20261201a: aceeași funcție, DEFINER, search_path fix, fără EXECUTE pentru anon
-  IF to_regprocedure('public.fn_executie_nod_drept(bigint, boolean)') IS NULL
-     OR (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.fn_executie_nod_drept(bigint, boolean)')) IS NOT TRUE
-     OR (SELECT proconfig FROM pg_proc WHERE oid = to_regprocedure('public.fn_executie_nod_drept(bigint, boolean)')) IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
-     OR (SELECT prorettype FROM pg_proc WHERE oid = to_regprocedure('public.fn_executie_nod_drept(bigint, boolean)')) IS DISTINCT FROM 'boolean'::regtype::oid
-     OR has_function_privilege('anon', 'public.fn_executie_nod_drept(bigint, boolean)', 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', 'public.fn_executie_nod_drept(bigint, boolean)', 'EXECUTE') THEN
-    RAISE EXCEPTION '20261202a: lipseste 20261201a (fn_executie_nod_drept) sau difera: aplica intai 20261201a';
+  IF current_setting('server_version_num')::int < 150000 THEN
+    RAISE EXCEPTION '20261202a: necesita PostgreSQL >= 15 (ON DELETE SET NULL pe o coloana)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('public.probe_calcule') AND conname = 'probe_calcule_id_proiect_uq')
+     OR to_regclass('public.probe_calcule_id_proiect_uq') IS NOT NULL THEN
+    RAISE EXCEPTION '20261202a: probe_calcule_id_proiect_uq exista deja (reaplicare)';
+  END IF;
+  -- L15: funcțiile de drept folosite de politici / RPC-uri, cu amprenta revizuită în PR (fiecare apelează doar auth.uid() și citește
+  -- profiles / user_module_access; executie_proiecte în plus la prima). Corpul se compară după scoaterea CR (checkout Windows).
+  --   fn_executie_nod_drept (20261201a): md5 144649bae9a218b41b7e6df90cba5d9e
+  --   probe_teren_drept (20261114a):     md5 9873647ecb1a8aedad274e24e6d32da9
+  IF EXISTS (SELECT 1 FROM (VALUES
+               ('public.fn_executie_nod_drept(bigint, boolean)', '144649bae9a218b41b7e6df90cba5d9e'),
+               ('public.probe_teren_drept(boolean)', '9873647ecb1a8aedad274e24e6d32da9')) a(semnatura, amprenta)
+              LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
+              WHERE p.oid IS NULL
+                 OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM a.amprenta
+                 OR p.prolang IS DISTINCT FROM (SELECT oid FROM pg_language WHERE lanname = 'sql')
+                 OR p.prosecdef IS NOT TRUE
+                 OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+                 OR p.prorettype IS DISTINCT FROM 'boolean'::regtype::oid
+                 OR p.provolatile IS DISTINCT FROM 's'
+                 OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
+                 OR has_function_privilege('anon', p.oid, 'EXECUTE')
+                 OR NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')) THEN
+    RAISE EXCEPTION '20261202a: fn_executie_nod_drept (20261201a) sau probe_teren_drept (20261114a) lipsesc sau difera de amprenta revizuita: aplica intai 20261201a / verifica';
+  END IF;
+  IF to_regprocedure('auth.uid()') IS NULL OR (SELECT prorettype FROM pg_proc WHERE oid = to_regprocedure('auth.uid()')) IS DISTINCT FROM 'uuid'::regtype::oid THEN
+    RAISE EXCEPTION '20261202a: auth.uid() lipseste sau difera';
   END IF;
 END $pre$;
+
+-- ── probe_calcule: cheia (id, proiect_id) pentru FK-ul compus al legăturii (trivial unică: id e PK; preflight-ul a verificat PK-ul) ──
+ALTER TABLE public.probe_calcule ADD CONSTRAINT probe_calcule_id_proiect_uq UNIQUE (id, proiect_id);
+COMMENT ON CONSTRAINT probe_calcule_id_proiect_uq ON public.probe_calcule IS
+  'Pentru FK-ul compus executie_probe_etape (probe_calc_id, proiect_id): legătura Execuție -> Probe rămâne pe același proiect. 20261202a.';
 
 -- ── tronsoanele de probă ─────────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.executie_probe_tronsoane (
@@ -114,7 +149,7 @@ CREATE TABLE public.executie_probe_etape (
   presiune_curenta_bar numeric(6,2) CHECK (presiune_curenta_bar >= 0 AND presiune_curenta_bar <= 300),
   presiune_curenta_la timestamptz,
   durata_ore numeric(6,1) CHECK (durata_ore > 0 AND durata_ore <= 2000),
-  probe_calc_id bigint REFERENCES public.probe_calcule(id) ON DELETE SET NULL,
+  probe_calc_id bigint,
   rezultat text CHECK (rezultat IS NULL OR (length(rezultat) BETWEEN 1 AND 300 AND rezultat ~ '[^[:space:]]')),
   observatii text CHECK (observatii IS NULL OR (length(observatii) BETWEEN 1 AND 2000 AND observatii ~ '[^[:space:]]')),
   motiv text CHECK (motiv IS NULL OR (length(motiv) BETWEEN 1 AND 500 AND motiv ~ '[^[:space:]]')),
@@ -122,6 +157,10 @@ CREATE TABLE public.executie_probe_etape (
   modificat_de uuid,
   modificat_la timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT executie_probe_etape_proba_fk FOREIGN KEY (proba_id, proiect_id) REFERENCES public.executie_probe_tronsoane (id, proiect_id),
+  -- legătura cu modulul Probe: același proiect, impus structural (MATCH SIMPLE: fără legătură = fără verificare); ștergerea calculului
+  -- golește doar probe_calc_id (proiect_id rămâne); mutarea unui calcul legat pe alt proiect = refuz (NO ACTION pe UPDATE)
+  CONSTRAINT executie_probe_etape_calc_fk FOREIGN KEY (probe_calc_id, proiect_id) REFERENCES public.probe_calcule (id, proiect_id)
+    ON UPDATE NO ACTION ON DELETE SET NULL (probe_calc_id),
   CONSTRAINT executie_probe_etape_uq UNIQUE (proba_id, etapa),
   CONSTRAINT executie_probe_etape_id_proba_uq UNIQUE (id, proba_id),
   -- coloanele unei etape sunt goale pe celelalte
@@ -142,7 +181,7 @@ CREATE TABLE public.executie_probe_etape (
   CONSTRAINT executie_probe_etape_reguli CHECK (
     (stare NOT IN ('refacere', 'nu_se_aplica') OR motiv IS NOT NULL)
     AND (stare <> 'facut' OR etapa <> 'pistonare' OR nr_treceri IS NOT NULL)
-    AND (stare <> 'facut' OR etapa <> 'calibrare' OR placa = 'ok')
+    AND (stare <> 'facut' OR etapa <> 'calibrare' OR placa IS NOT DISTINCT FROM 'ok')   -- NULL nu trece (un CHECK cu NULL ar trece)
     AND (stare <> 'facut' OR etapa <> 'presiune' OR (presiune_proba_bar IS NOT NULL AND durata_ore IS NOT NULL))
     AND (stare NOT IN ('urmeaza', 'nu_se_aplica') OR (nr_treceri IS NULL AND punct_roua_c IS NULL AND placa IS NULL AND fluid IS NULL
          AND presiune_proba_bar IS NULL AND presiune_curenta_bar IS NULL AND durata_ore IS NULL AND probe_calc_id IS NULL AND rezultat IS NULL)))
@@ -388,8 +427,9 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_proba_anuleaza(bigint, integer, tex
 
 -- ── RPC 3: schimbarea / actualizarea unei etape (L01, L02, L04, L07, L08, L09, L11, L17, L20) ──
 -- Formularul trimite TOATE valorile etapei (cele de pe ecran); ce e NULL se golește. Câmpurile altor etape = refuz.
--- Ordinea: identitate -> tronsonul etapei (imuabil, citit fără lock) -> tronsonul FOR UPDATE -> etapa FOR UPDATE -> drept -> idempotență
---   -> CAS (stare + versiune) -> tronson activ -> tranziție -> reguli -> legătura cu probe_calcule (același proiect) -> UPDATE + jurnal.
+-- Ordinea: identitate -> tronsonul și legătura etapei (citite fără lock; tronsonul e imuabil) -> calculul legăturii NOI FOR KEY SHARE
+--   -> tronsonul FOR UPDATE -> etapa FOR UPDATE -> drept -> idempotență -> legătura veche revalidată + CAS
+--   (stare + versiune) -> tronson activ -> tranziție -> reguli -> legătura nouă: drept Probe + același proiect -> UPDATE + jurnal.
 CREATE FUNCTION public.fn_executie_proba_etapa(p_etapa_id bigint, p_stare_veche text, p_versiune integer, p_stare_noua text, p_data date,
   p_nr_treceri integer, p_punct_roua_c numeric, p_placa text, p_fluid text, p_presiune_proba_bar numeric, p_presiune_curenta_bar numeric,
   p_durata_ore numeric, p_probe_calc_id bigint, p_rezultat text, p_observatii text, p_motiv text, p_cheie uuid) RETURNS jsonb
@@ -399,6 +439,7 @@ DECLARE
   t public.executie_probe_tronsoane;
   e public.executie_probe_etape;
   v_proba bigint;
+  v_calc_vechi bigint;
   v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;
   v_placa text := nullif(lower(btrim(coalesce(p_placa, ''))), '');
   v_fluid text := nullif(lower(btrim(coalesce(p_fluid, ''))), '');
@@ -413,9 +454,15 @@ BEGIN
   IF p_etapa_id IS NULL OR p_versiune IS NULL OR p_stare_noua IS NULL OR p_data IS NULL OR p_cheie IS NULL THEN
     RAISE EXCEPTION 'probe: parametri lipsă' USING ERRCODE = '22023';
   END IF;
-  SELECT proba_id INTO v_proba FROM public.executie_probe_etape WHERE id = p_etapa_id;
+  SELECT proba_id, probe_calc_id INTO v_proba, v_calc_vechi FROM public.executie_probe_etape WHERE id = p_etapa_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'probe: etapa nu există sau nu ai drept de scriere pe Execuție' USING ERRCODE = '42501';
+  END IF;
+  -- părintele din modulul Probe ÎNAINTEA etapei (L06): o ștergere din Probe blochează calculul, apoi golește legătura din etapă.
+  -- Doar calculul legăturii NOI (singurul pe care FK-ul îl va bloca): așteptarea lui se face fără să ținem nimic. Legătura veche NU se
+  -- blochează (o ștergere din Probe a mai multor calcule, în ordinea ei, ar forma altfel un ciclu cu noi); se revalidează după lock.
+  IF p_probe_calc_id IS NOT NULL THEN
+    PERFORM 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id FOR KEY SHARE;
   END IF;
   SELECT * INTO t FROM public.executie_probe_tronsoane WHERE id = v_proba FOR UPDATE;
   SELECT * INTO e FROM public.executie_probe_etape WHERE id = p_etapa_id FOR UPDATE;
@@ -432,8 +479,8 @@ BEGIN
     IF j.amprenta = v_amprenta THEN RETURN jsonb_build_object('ok', true, 'duplicat', true, 'etapa', to_jsonb(e)); END IF;
     RAISE EXCEPTION 'probe: cheia apăsării a fost folosită pentru altă operație' USING ERRCODE = '22023';
   END IF;
-  -- CAS: starea și versiunea văzute de client
-  IF e.stare IS DISTINCT FROM p_stare_veche OR e.versiune IS DISTINCT FROM p_versiune THEN
+  -- CAS: starea și versiunea văzute de client; plus legătura citită fără lock (o ștergere din Probe a golit-o între timp = conflict)
+  IF e.stare IS DISTINCT FROM p_stare_veche OR e.versiune IS DISTINCT FROM p_versiune OR e.probe_calc_id IS DISTINCT FROM v_calc_vechi THEN
     RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'etapa', to_jsonb(e));
   END IF;
   IF t.stare <> 'activ' THEN RAISE EXCEPTION 'probe: tronsonul de probă e anulat' USING ERRCODE = '22023'; END IF;
@@ -486,9 +533,12 @@ BEGIN
   IF p_stare_noua = 'facut' AND e.etapa = 'presiune' AND p_durata_ore IS NULL THEN
     RAISE EXCEPTION 'probe: durata probei e obligatorie' USING ERRCODE = '22023';
   END IF;
-  -- legătura cu modulul Probe: doar o probă a ACELUIAȘI proiect (L09); PV-ul rămâne acolo
-  IF p_probe_calc_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id AND c.proiect_id = e.proiect_id) THEN
-    RAISE EXCEPTION 'probe: proba din modulul Probe nu există pe acest proiect' USING ERRCODE = '22023';
+  -- legătura NOUĂ cu modulul Probe (L09): dreptul de citire al modulului Probe (predicatul lui) + o probă a ACELUIAȘI proiect; refuz generic.
+  -- Păstrarea legăturii existente sau dezlegarea nu cer dreptul Probe. FK-ul compus impune oricum același proiect, și la mutări ulterioare.
+  IF p_probe_calc_id IS NOT NULL AND p_probe_calc_id IS DISTINCT FROM e.probe_calc_id
+     AND (NOT public.probe_teren_drept(false)
+          OR NOT EXISTS (SELECT 1 FROM public.probe_calcule c WHERE c.id = p_probe_calc_id AND c.proiect_id = e.proiect_id)) THEN
+    RAISE EXCEPTION 'probe: proba din modulul Probe nu există pe acest proiect sau nu ai drept de citire pe Probe' USING ERRCODE = '42501';
   END IF;
 
   UPDATE public.executie_probe_etape SET
@@ -542,11 +592,16 @@ DECLARE v_rel oid; v_tab text;
 BEGIN
   FOREACH v_tab IN ARRAY ARRAY['executie_probe_tronsoane', 'executie_probe_etape', 'executie_probe_jurnal'] LOOP
     v_rel := to_regclass('public.' || v_tab);
+    -- RLS + exact o politică: SELECT, permisivă, doar authenticated, fără WITH CHECK, expresia EXACTĂ (comparată ca text deparsat,
+    -- cu search_path-ul fixat la start) și dependentă de funcția de drept revizuită
     IF v_rel IS NULL OR (SELECT relrowsecurity FROM pg_class WHERE oid = v_rel) IS NOT TRUE
-       OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = v_tab) <> 1
-       OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = v_tab AND policyname = v_tab || '_citire'
-                       AND cmd = 'SELECT' AND roles = '{authenticated}' AND permissive = 'PERMISSIVE'
-                       AND qual LIKE '%fn\_executie\_nod\_drept(proiect\_id, false)%' AND with_check IS NULL) THEN
+       OR (SELECT count(*) FROM pg_policy WHERE polrelid = v_rel) <> 1
+       OR NOT EXISTS (SELECT 1 FROM pg_policy pol WHERE pol.polrelid = v_rel AND pol.polname = v_tab || '_citire'
+                       AND pol.polcmd = 'r' AND pol.polpermissive AND pol.polroles = ARRAY['authenticated'::regrole::oid]
+                       AND pol.polwithcheck IS NULL
+                       AND pg_get_expr(pol.polqual, pol.polrelid) IN ('fn_executie_nod_drept(proiect_id, false)', 'public.fn_executie_nod_drept(proiect_id, false)')
+                       AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
+                                    AND d.refclassid = 'pg_proc'::regclass AND d.refobjid = 'public.fn_executie_nod_drept(bigint, boolean)'::regprocedure)) THEN
       RAISE EXCEPTION '20261202a post: RLS / politica %', v_tab;
     END IF;
     -- privilegiile efective: doar SELECT pentru authenticated / service_role, nimic pentru anon; nimic pe coloane / secvențe
@@ -571,10 +626,15 @@ BEGIN
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_proba\_%') <> 7 THEN
     RAISE EXCEPTION '20261202a post: functii (definer / search_path / EXECUTE)';
   END IF;
-  IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled = 'O' AND (tgrelid, tgname) IN (
-        ('public.executie_probe_tronsoane'::regclass, 'trg_executie_proba_prov_tronson'),
-        ('public.executie_probe_etape'::regclass, 'trg_executie_proba_prov_etapa'),
-        ('public.executie_probe_jurnal'::regclass, 'trg_executie_proba_prov_jurnal'))) <> 3
+  -- trigger-ele: exact cele 3, fiecare pe funcția lui, BEFORE INSERT OR UPDATE FOR EACH ROW (tgtype 1+2+4+16 = 23), active, fără WHEN,
+  -- fără listă de coloane; niciun alt trigger ne-intern pe cele 3 tabele
+  IF (SELECT count(*) FROM pg_trigger tg JOIN (VALUES
+        ('public.executie_probe_tronsoane'::regclass, 'trg_executie_proba_prov_tronson', 'public.fn_executie_proba_prov_tronson()'::regprocedure),
+        ('public.executie_probe_etape'::regclass, 'trg_executie_proba_prov_etapa', 'public.fn_executie_proba_prov_etapa()'::regprocedure),
+        ('public.executie_probe_jurnal'::regclass, 'trg_executie_proba_prov_jurnal', 'public.fn_executie_proba_prov_jurnal()'::regprocedure)) a(rel, nume, fn)
+        ON tg.tgrelid = a.rel AND tg.tgname = a.nume
+       WHERE NOT tg.tgisinternal AND tg.tgfoid = a.fn AND tg.tgtype = 23 AND tg.tgenabled = 'O' AND tg.tgqual IS NULL
+         AND coalesce(array_length(tg.tgattr::int2[], 1), 0) = 0) <> 3
      OR (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal
           AND tgrelid IN ('public.executie_probe_tronsoane'::regclass, 'public.executie_probe_etape'::regclass, 'public.executie_probe_jurnal'::regclass)) <> 3 THEN
     RAISE EXCEPTION '20261202a post: trigger-ele de provenienta';
@@ -582,6 +642,17 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.executie_probe_tronsoane'::regclass
                   AND conname = 'executie_probe_tronsoane_fara_suprapunere' AND contype = 'x') THEN
     RAISE EXCEPTION '20261202a post: constrangerea de nesuprapunere';
+  END IF;
+  -- legătura cu Probe: UNIQUE (id, proiect_id) pe probe_calcule și FK-ul compus cu ON DELETE SET NULL doar pe probe_calc_id, NO ACTION la UPDATE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.probe_calcule'::regclass AND conname = 'probe_calcule_id_proiect_uq' AND contype = 'u'
+                  AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.probe_calcule'::regclass AND attname = 'id'),
+                                     (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.probe_calcule'::regclass AND attname = 'proiect_id')]::int2[])
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.executie_probe_etape'::regclass AND conname = 'executie_probe_etape_calc_fk'
+                     AND contype = 'f' AND confrelid = 'public.probe_calcule'::regclass AND confupdtype = 'a' AND confdeltype = 'n'
+                     AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.executie_probe_etape'::regclass AND attname = 'probe_calc_id'),
+                                        (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.executie_probe_etape'::regclass AND attname = 'proiect_id')]::int2[]
+                     AND confdelsetcols = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.executie_probe_etape'::regclass AND attname = 'probe_calc_id')]::int2[]) THEN
+    RAISE EXCEPTION '20261202a post: legatura cu probe_calcule (UNIQUE / FK compus)';
   END IF;
   IF EXISTS (SELECT 1 FROM public.executie_probe_tronsoane) OR EXISTS (SELECT 1 FROM public.executie_probe_etape)
      OR EXISTS (SELECT 1 FROM public.executie_probe_jurnal) THEN

@@ -142,10 +142,12 @@ describe('acoperirea traseului (banda)', () => {
     expect(ac.neacoperit).toEqual([{ de_la: 10400, pana_la: 48000 }])
     expect(ac.inAfara).toEqual([{ de_la: 49000, pana_la: 49500 }])
   })
-  it('fără tronsoane cu km: banda = probele', () => {
+  it('fără tronsoane cu km: banda = probele, dar totalul e NECUNOSCUT (nu 100%)', () => {
     const ac = acoperire([P(1, 100, 300), P(2, 500, 600)], [])
-    expect([ac.de_la, ac.pana_la, ac.total, ac.acoperit]).toEqual([100, 600, 300, 300])
-    expect(acoperire([], []).total).toBe(0)
+    expect([ac.de_la, ac.pana_la, ac.total, ac.acoperit, ac.traseuCunoscut]).toEqual([100, 600, null, 300, false])
+    expect(ac.neacoperit).toEqual([])
+    expect(acoperire([], []).total).toBe(null)
+    expect(acoperire([P(1, 0, 10400)], LOT1).traseuCunoscut).toBe(true)
   })
 })
 
