@@ -74,27 +74,59 @@ export const TABELE_SCRIERE_TEST = new Set([
   'red_procese_verbale', 'red_corespondenta', 'red_corespondenta_fisiere',
 ])
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const RE_UUID_GLOBAL = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+const esteUuid = (v) => typeof v === 'string' && RE_UUID.test(v)
+const low = (v) => String(v).toLowerCase()
 
-// Contextul gărzii: ID-urile DOVEDITE ca aparținând proiectului de test (id-ul proiectului + ce a apărut în răspunsurile cererilor
-// filtrate pe TEST-RAZVAN sau ale scrierilor permise). Un ID care nu e aici nu poate fi atins de o scriere.
-export const ctxGarda = () => ({ idTest: new Set([TEST.id.toLowerCase()]) })
-const idDovedit = (ctx, v) => ctx.idTest.has(String(v).toLowerCase())
+// Lanțul de proprietate al tabelelor Redări (din supabase/migrations): un rând e al proiectului de test dacă proiect_id = TEST-RAZVAN
+// sau dacă părintele lui (cheia de mai jos) e deja dovedit ca al proiectului de test. Tipul unui ID = tabelul din care a fost dovedit.
+export const PROPRIETATE = {
+  red_uat: ['proiect_id', 'proiect'], red_parcele: ['proiect_id', 'proiect'], red_import_loturi: ['proiect_id', 'proiect'],
+  red_corespondenta: ['proiect_id', 'proiect'], red_plicuri: ['proiect_id', 'proiect'], red_loturi_plicuire: ['proiect_id', 'proiect'],
+  red_detinatori: ['parcela_id', 'red_parcele'], red_convocari: ['detinator_id', 'red_detinatori'],
+  red_detinatori_contact: ['detinator_id', 'red_detinatori'], red_procese_verbale: ['parcela_id', 'red_parcele'],
+  red_corespondenta_fisiere: ['corespondenta_id', 'red_corespondenta'],
+}
+// Tipul entității spre care arată o cheie (în corpurile de scriere, argumentele RPC și rândurile vederilor v_red_*)
+export const TIP_CHEIE = {
+  proiect_id: 'proiect', p_proiect_id: 'proiect', uat_id: 'red_uat', p_uat_id: 'red_uat', parcela_id: 'red_parcele', p_parcela_id: 'red_parcele',
+  detinator_id: 'red_detinatori', p_detinator_id: 'red_detinatori', convocare_id: 'red_convocari', p_convocare_id: 'red_convocari',
+  lot_id: 'red_loturi_plicuire', p_lot_id: 'red_loturi_plicuire', corespondenta_id: 'red_corespondenta', p_corespondenta_id: 'red_corespondenta',
+  plic_id: 'red_plicuri', p_plic_id: 'red_plicuri', lot_import_id: 'red_import_loturi', pv_id: 'red_procese_verbale', p_pv_id: 'red_procese_verbale',
+}
+// ID-ul nou întors de un RPC de scriere permis (de tipul dat), ca pașii următori să-l poată atinge
+const RPC_INTOARCE = {
+  fn_red_plic_creeaza: 'red_plicuri', fn_red_lot_plicuire_creeaza: 'red_loturi_plicuire', fn_red_pv_creeaza: 'red_procese_verbale',
+  fn_red_pv_c_creeaza: 'red_procese_verbale', fn_red_convocare_rezerva: 'red_convocari',
+}
+const PARAM_FORMA = ['select', 'columns', 'on_conflict']
+
+// Contextul gărzii: ID-urile DOVEDITE ca ale proiectului de test, cu tipul lor: id → Set(tip). Învățate DOAR din câmpuri de identitate
+// (`id` al unui rând dovedit, chei străine cu tip cunoscut ale unui rând dovedit), niciodată din text liber.
+export const ctxGarda = () => ({ idTest: new Map([[low(TEST.id), new Set(['proiect'])]]) })
+const areTip = (ctx, v, tip) => { const t = ctx.idTest.get(low(v)); return !!t && (tip == null || t.has(tip)) }
+const adauga = (ctx, v, tip) => {
+  const k = low(v)
+  if (!ctx.idTest.has(k)) ctx.idTest.set(k, new Set())
+  const s = ctx.idTest.get(k)
+  if (s.has(tip)) return 0
+  s.add(tip); return 1
+}
+// un UUID dintr-un corp / argument: dacă cheia are tip cunoscut, trebuie dovedit de acel tip; altfel, dovedit de orice tip
+const uuidDovedit = (ctx, cheie, v) => areTip(ctx, v, TIP_CHEIE[cheie] ?? null)
 const parseCorp = (corp) => {
   if (corp == null || corp === '') return {}
   if (typeof corp === 'object') return corp
   try { return JSON.parse(corp) } catch { return undefined }
 }
-// toate UUID-urile dintr-o valoare JSON (adânc), cu cheia sub care stau
-function uuiduri(v, cheie = '', out = []) {
+// toate UUID-urile dintr-o valoare JSON (adânc), cu cheia sub care stau și dacă stau direct pe rândul de sus
+function uuiduri(v, cheie = '', out = [], adanc = 0) {
   if (v == null) return out
-  if (typeof v === 'string') { if (RE_UUID.test(v.trim())) out.push({ cheie, v: v.trim().toLowerCase() }); return out }
-  if (Array.isArray(v)) { for (const x of v) uuiduri(x, cheie, out); return out }
-  if (typeof v === 'object') { for (const [k, x] of Object.entries(v)) uuiduri(x, k, out); return out }
+  if (typeof v === 'string') { if (esteUuid(v.trim())) out.push({ cheie, v: low(v.trim()), sus: adanc <= 1 }); return out }
+  if (Array.isArray(v)) { for (const x of v) uuiduri(x, cheie, out, adanc); return out }
+  if (typeof v === 'object') { for (const [k, x] of Object.entries(v)) uuiduri(x, k, out, adanc + 1); return out }
   return out
 }
-// UUID-urile din filtrele PostgREST din URL (id=eq.X, proiect_id=in.(X,Y), or=(…)), indiferent de coloană
-const uuiduriQuery = (u) => [...u.searchParams.entries()].flatMap(([, v]) => String(v).match(RE_UUID_GLOBAL) || []).map(x => x.toLowerCase())
+const esteUpsert = (u, antete) => u.searchParams.has('on_conflict') || /merge-duplicates/i.test(String(antete?.prefer || antete?.Prefer || ''))
 // Sonde ale aplicației: apeluri care DOAR verifică existența unui RPC, cu toți parametrii nuli (serverul le refuză cu „parametri lipsa”,
 // deci nu pot scrie). Exact numele și cheile de mai jos, cu valori null; orice alt corp e tratat normal de gardă.
 const SONDE = { fn_red_convocare_rezerva: ['p_detinator_id'] }      // detecteazaRezervare (src/redari/convocatoareMasa.js)
@@ -106,15 +138,35 @@ export function esteSondaPermisa(fn, corp) {
   const k = Object.keys(c)
   return k.length > 0 && k.every(x => chei.includes(x) && c[x] === null)
 }
-const esteUpsert = (u, antete) => u.searchParams.has('on_conflict') || /merge-duplicates/i.test(String(antete?.prefer || antete?.Prefer || ''))
+// Ținta unui UPDATE, din filtrele PostgREST interpretate STRICT: obligatoriu id=eq.<uuid> sau id=in.(uuid,…), cu ID-uri dovedite de
+// tipul tabelului; parametrii de formă (select, columns) sunt permiși; orice alt filtru trebuie să fie col=eq.<valoare> (doar îngustează:
+// filtrele de sus se leagă prin ȘI); or / and / not / neq / gt / like / is / … = refuz. Întoarce lista ID-urilor sau null.
+export function tintaDovedita(u, tabel, ctx) {
+  let ids = null
+  for (const [k, v] of u.searchParams.entries()) {
+    if (PARAM_FORMA.includes(k)) continue
+    if (/^(or|and|not)$/i.test(k) || /^not\./i.test(v)) return null
+    if (k === 'id') {
+      const m1 = /^eq\.([0-9a-f-]{36})$/i.exec(v), m2 = /^in\.\(([0-9a-f,-]+)\)$/i.exec(v)
+      const lista = m1 ? [m1[1]] : m2 ? m2[1].split(',') : null
+      if (!lista || ids || !lista.every(x => esteUuid(x) && areTip(ctx, x, tabel))) return null
+      ids = lista
+      continue
+    }
+    if (!/^eq\./i.test(v)) return null
+    const val = v.slice(3)
+    if (esteUuid(val) && !uuidDovedit(ctx, k, val)) return null
+  }
+  return ids
+}
 
 // Garda de rețea: 'blocheaza' sau 'permite' pentru o cerere spre Supabase, în funcție de mod ('scriere' = TEST-RAZVAN, 'citire' = LOT1 /
-// --doar-citire) și de conținutul REAL al cererii (corp + ID-uri), nu doar de URL.
+// --doar-citire) și de conținutul REAL al cererii (corp, filtre, ID-uri și tipul lor), nu doar de URL.
 //  • pe orice mod: funcțiile edge și RPC-urile de trimitere (sms / mail / trimite …) sunt blocate; orice funcție edge non-GET e blocată;
-//  • citire: trec doar GET/HEAD/OPTIONS, reîmprospătarea sesiunii, linkurile semnate / listările Storage și RPC-urile din RPC_CITIRE;
-//  • scriere: trec doar RPC_SCRIERE_TEST / TABELE_SCRIERE_TEST / încărcările în redari/TEST-RAZVAN/, și numai dacă fiecare UUID din cerere
-//    (corp + filtre) e dovedit ca al proiectului de test; rândurile cu proiect_id trebuie să aibă proiect_id = TEST-RAZVAN;
-//    ștergerile, proiectele și orice tabel din alt modul sunt blocate. Ce nu se poate dovedi = blocat (testul pică vizibil, nu scrie).
+//  • citire: trec doar GET/HEAD/OPTIONS, reîmprospătarea sesiunii, linkurile semnate / listările Storage, RPC-urile din RPC_CITIRE și sondele;
+//  • scriere: trec doar RPC_SCRIERE_TEST / TABELE_SCRIERE_TEST / încărcările noi în redari/TEST-RAZVAN/, și numai cu ID-uri dovedite de tipul
+//    potrivit; INSERT-ul cere apartenența rândului (proiect_id = TEST sau părinte dovedit), UPDATE-ul cere țintă id=eq/in dovedită de tipul
+//    tabelului; fără ștergeri, fără alte tabele. Ce nu se poate dovedi = blocat (testul pică vizibil, nu scrie).
 export function clasificaCerere({ url, metoda, corp, antete }, mod, ctx = ctxGarda()) {
   let u
   try { u = new URL(url) } catch { return 'permite' }
@@ -130,10 +182,11 @@ export function clasificaCerere({ url, metoda, corp, antete }, mod, ctx = ctxGar
     if (RPC_CITIRE.has(fn)) return 'permite'
     if (esteSondaPermisa(fn, corp)) return 'permite'
     if (RE_INTERZIS.test(fn) || mod !== 'scriere' || !RPC_SCRIERE_TEST.has(fn)) return 'blocheaza'
+    if ([...u.searchParams.keys()].length) return 'blocheaza'
     const c = parseCorp(corp)
-    if (c === undefined) return 'blocheaza'
-    const ids = [...uuiduri(c), ...uuiduriQuery(u).map(v => ({ cheie: '', v }))]
-    return ids.length > 0 && ids.every(x => idDovedit(ctx, x.v)) ? 'permite' : 'blocheaza'
+    if (c === undefined || c === null || typeof c !== 'object' || Array.isArray(c)) return 'blocheaza'
+    const ids = uuiduri(c)
+    return ids.length > 0 && ids.every(x => uuidDovedit(ctx, x.cheie, x.v)) ? 'permite' : 'blocheaza'
   }
   if (doarCitire) return 'permite'
   if (p.startsWith('/auth/v1/')) return 'permite'                     // reîmprospătarea sesiunii
@@ -141,47 +194,80 @@ export function clasificaCerere({ url, metoda, corp, antete }, mod, ctx = ctxGar
   if (mod !== 'scriere') return 'blocheaza'
   if (p.startsWith('/storage/v1/object/')) {
     const seg = p.slice('/storage/v1/object/'.length).split('/').map(decodeURIComponent)
-    return m === 'POST' && seg[0] === 'redari' && seg[1] === TEST.cod && seg.length >= 3 ? 'permite' : 'blocheaza'   // doar încărcări noi
+    return m === 'POST' && seg[0] === 'redari' && seg[1] === TEST.cod && seg.length >= 3 && !seg.includes('..') ? 'permite' : 'blocheaza'
   }
   if (!p.startsWith('/rest/v1/')) return 'blocheaza'
   const tabel = p.slice('/rest/v1/'.length)
   if (!TABELE_SCRIERE_TEST.has(tabel) || (m !== 'POST' && m !== 'PATCH')) return 'blocheaza'   // fără DELETE / PUT
-  const idsUrl = uuiduriQuery(u)
-  if (!idsUrl.every(v => idDovedit(ctx, v))) return 'blocheaza'
-  if (m === 'PATCH' && idsUrl.length === 0) return 'blocheaza'         // UPDATE fără filtru pe ID-uri dovedite = refuz
+  const upsert = esteUpsert(u, antete)
+  if (m === 'PATCH') { if (!tintaDovedita(u, tabel, ctx)) return 'blocheaza' }
+  else if ([...u.searchParams.keys()].some(k => !PARAM_FORMA.includes(k))) return 'blocheaza'   // INSERT fără filtre
   const c = parseCorp(corp)
   if (c === undefined || c === null || typeof c !== 'object') return 'blocheaza'
   const randuri = Array.isArray(c) ? c : [c]
   if (randuri.length === 0) return 'blocheaza'
-  const upsert = esteUpsert(u, antete)
+  const [cheiePar, tipPar] = PROPRIETATE[tabel] || []
   for (const r of randuri) {
     if (r == null || typeof r !== 'object' || Array.isArray(r)) return 'blocheaza'
-    if ('proiect_id' in r && String(r.proiect_id).toLowerCase() !== TEST.id.toLowerCase()) return 'blocheaza'
-    const ids = uuiduri(r)
-    // la INSERT simplu, cheia `id` a rândului nou poate fi un UUID nou; la upsert / update trebuie dovedită ca orice alt ID
-    const deVerificat = ids.filter(x => !(m === 'POST' && !upsert && x.cheie === 'id'))
-    if (!deVerificat.every(x => idDovedit(ctx, x.v))) return 'blocheaza'
-    // rândul trebuie legat de proiectul de test: proiect_id = TEST, un ID dovedit în corp sau un filtru dovedit în URL
-    if (!('proiect_id' in r) && deVerificat.length === 0 && idsUrl.length === 0) return 'blocheaza'
+    if ('proiect_id' in r && low(r.proiect_id) !== low(TEST.id)) return 'blocheaza'
+    if (m === 'POST') {
+      // apartenența rândului nou: proiect_id = TEST sau părintele dovedit de tipul lui
+      const val = r[cheiePar]
+      const alTest = tipPar === 'proiect' ? (val != null && low(val) === low(TEST.id)) : (esteUuid(val) && areTip(ctx, val, tipPar))
+      if (!cheiePar || !alTest) return 'blocheaza'
+      if (upsert && 'id' in r && !areTip(ctx, r.id, tabel)) return 'blocheaza'
+    }
+    for (const x of uuiduri(r)) {
+      if (m === 'POST' && !upsert && x.cheie === 'id' && x.sus) continue   // id-ul rândului nou la INSERT simplu
+      if (!uuidDovedit(ctx, x.cheie, x.v)) return 'blocheaza'
+    }
   }
   return 'permite'
 }
 
-// Învățarea ID-urilor proiectului de test, din răspunsurile Supabase reușite, DOAR în modul scriere și DOAR pentru cereri legate dovedit
-// de TEST-RAZVAN: filtrul din URL pe proiect_id = TEST, corpul cu proiect_id = TEST sau o scriere permisă de gardă.
-export function invataIduri({ url, metoda, corp, permisa }, raspuns, mod, ctx) {
+// Învățarea ID-urilor proiectului de test, din răspunsurile Supabase reușite, DOAR în modul scriere și DOAR din câmpuri de identitate:
+//  • rândurile tabelelor din PROPRIETATE: `id` se învață (cu tipul = tabelul) doar dacă rândul e dovedit al lui TEST (proiect_id = TEST sau
+//    părintele dovedit); relațiile încorporate (cheia = numele tabelului) se tratează la fel;
+//  • rândurile vederilor v_red_* cu proiect_id = TEST: cheile străine cu tip cunoscut (TIP_CHEIE);
+//  • răspunsul unui RPC de scriere PERMIS de gardă: ID-ul nou, cu tipul din RPC_INTOARCE.
+// Textul liber (observații, mesaje, nume) nu se citește niciodată.
+export function invataIduri({ url, permisa }, raspuns, mod, ctx) {
   if (mod !== 'scriere' || raspuns == null) return 0
   let u
   try { u = new URL(url) } catch { return 0 }
   if (!/supabase\.co$/.test(u.hostname) || !u.pathname.startsWith('/rest/v1/')) return 0
-  const filtruTest = [...u.searchParams.entries()].some(([k, v]) => /^(proiect_id|p_proiect_id)$/.test(k) && String(v).toLowerCase() === `eq.${TEST.id.toLowerCase()}`)
-  const c = parseCorp(corp)
-  const corpTest = c && typeof c === 'object' && (Array.isArray(c) ? c : [c]).some(r => r && String(r.proiect_id ?? r.p_proiect_id ?? '').toLowerCase() === TEST.id.toLowerCase())
-  const m = String(metoda || 'GET').toUpperCase()
-  if (!(filtruTest || corpTest || (permisa && m !== 'GET'))) return 0
+  const resursa = u.pathname.slice('/rest/v1/'.length)
   let n = 0
-  for (const x of uuiduri(raspuns)) if (!ctx.idTest.has(x.v)) { ctx.idTest.add(x.v); n++ }
+  if (resursa.startsWith('rpc/')) {
+    const tip = RPC_INTOARCE[resursa.slice(4)]
+    if (!permisa || !tip) return 0
+    const vals = (Array.isArray(raspuns) ? raspuns : [raspuns]).map(x => (x && typeof x === 'object') ? x.id : x)
+    for (const v of vals) if (esteUuid(v)) n += adauga(ctx, v, tip)
+    return n
+  }
+  const randuri = Array.isArray(raspuns) ? raspuns : [raspuns]
+  if (/^v_red_/.test(resursa)) {
+    for (const r of randuri) {
+      if (!r || typeof r !== 'object' || r.proiect_id == null || low(r.proiect_id) !== low(TEST.id)) continue
+      for (const [k, tip] of Object.entries(TIP_CHEIE)) if (tip !== 'proiect' && esteUuid(r[k])) n += adauga(ctx, r[k], tip)
+    }
+    return n
+  }
+  for (const r of randuri) n += invataRand(resursa, r, ctx)
   return n
+}
+function invataRand(tabel, r, ctx) {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return 0
+  const randPropriu = () => {
+    const prop = PROPRIETATE[tabel]
+    if (!prop || !esteUuid(r.id)) return 0
+    const [cheie, tip] = prop, val = r[cheie]
+    const alTest = tip === 'proiect' ? (val != null && low(val) === low(TEST.id)) : (esteUuid(val) && areTip(ctx, val, tip))
+    return alTest ? adauga(ctx, r.id, tabel) : 0
+  }
+  let n = randPropriu()                                     // părintele întâi (dacă se poate), ca relațiile copil să-l găsească
+  for (const [k, v] of Object.entries(r)) if (PROPRIETATE[k]) for (const x of (Array.isArray(v) ? v : [v])) n += invataRand(k, x, ctx)
+  return n + randPropriu()                                  // a doua încercare: părinte dovedit printr-o relație încorporată
 }
 // Răspunsuri de eroare AȘTEPTATE (sonde intenționate ale aplicației), scoase din „HTTP eșuate” și numărate separat
 export const ERORI_ASTEPTATE = [
@@ -599,9 +685,12 @@ export async function ruleaza(opt) {
       if (await g.isDisabled()) return `verificare ${ales.t}: ${txt.slice(0, 260)} · generarea nu e disponibilă`
       await asiguraTest()
       await g.click()
-      await page.locator('text=/✅ \\d+ noi/').first().waitFor({ timeout: 180_000 }).catch(() => {})
+      // rezultatul generării trebuie să apară explicit; timeout / lipsă = pas EȘUAT, nu OK (review Jakarinos P2)
+      let aparut = true
+      await page.locator('text=/✅ \\d+ noi/').first().waitFor({ timeout: 180_000 }).catch(() => { aparut = false })
       await linisteste(1500)
-      const rez = (await page.locator('body').innerText()).match(/✅[^\n]*/)?.[0] || '(fără rezultat)'
+      const rez = (await page.locator('body').innerText()).match(/✅[^\n]*/)?.[0]
+      if (!aparut || !rez) throw new Error(`generarea nu a confirmat rezultatul în 180 s (${ales.t}): ${txt.slice(0, 160)}`)
       return `verificare ${ales.t}: ${txt.slice(0, 160)} · generare: ${rez.slice(0, 200)}`
     }, { dialoguri: [/^Generez \d+ convocatoare pentru UAT /] })
     await pas('Poștă — plicuri propuse / creare plicuri (fără expediere)', async () => {

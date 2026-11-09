@@ -9,23 +9,32 @@ describe('e2e_redari — garda de rețea', () => {
     for (const fn of ['sms-trimite', 'redari-mail-trimite', 'send-email', 'notificari-push', 'smtp-relay'])
       for (const mod of ['scriere', 'citire']) expect(clasificaCerere({ url: `${SB}/functions/v1/${fn}`, metoda: 'POST' }, mod)).toBe('blocheaza')
   })
-  // ID-uri de test (inventate): X și Y apar într-un răspuns filtrat pe TEST-RAZVAN, ALT e un proiect străin, Z nu e dovedit
+  // ID-uri de test (inventate). Lanțul real: proiect TEST → parcela PAR (proiect_id) → deținătorul DET (parcela_id) → convocarea CONV
+  // (detinator_id); UAT (proiect_id). ALT = proiect străin; Z = nedovedit.
   const ALT = '11111111-2222-3333-4444-555555555555'
-  const X = 'aaaaaaaa-0000-4000-8000-000000000001', Y = 'aaaaaaaa-0000-4000-8000-000000000002', Z = 'bbbbbbbb-0000-4000-8000-000000000009'
-  const ctxCuX = () => {
+  const PAR = 'aaaaaaaa-0000-4000-8000-000000000001', DET = 'aaaaaaaa-0000-4000-8000-000000000002'
+  const CONV = 'aaaaaaaa-0000-4000-8000-000000000003', UAT = 'aaaaaaaa-0000-4000-8000-000000000004'
+  const Z = 'bbbbbbbb-0000-4000-8000-000000000009'
+  const get = (url, raspuns, ctx, mod = 'scriere') => invataIduri({ url: SB + url, metoda: 'GET' }, raspuns, mod, ctx)
+  const ctxLant = () => {
     const ctx = ctxGarda()
-    invataIduri({ url: `${SB}/rest/v1/red_convocari?select=*&proiect_id=eq.${TEST.id}`, metoda: 'GET' }, [{ id: X, detinator_id: Y }], 'scriere', ctx)
+    get(`/rest/v1/red_uat?proiect_id=eq.${TEST.id}`, [{ id: UAT, proiect_id: TEST.id }], ctx)
+    get(`/rest/v1/red_parcele?proiect_id=eq.${TEST.id}`, [{ id: PAR, proiect_id: TEST.id, uat_id: UAT }], ctx)
+    get(`/rest/v1/red_detinatori?parcela_id=eq.${PAR}`, [{ id: DET, parcela_id: PAR }], ctx)
+    get(`/rest/v1/red_convocari?detinator_id=eq.${DET}`, [{ id: CONV, detinator_id: DET }], ctx)
     return ctx
   }
-  const s = (url, metoda, corp, ctx = ctxCuX(), antete = {}) => clasificaCerere({ url: SB + url, metoda, corp: corp === undefined ? undefined : (typeof corp === 'string' ? corp : JSON.stringify(corp)), antete }, 'scriere', ctx)
+  const s = (url, metoda, corp, ctx = ctxLant(), antete = {}) => clasificaCerere({ url: SB + url, metoda, corp: corp === undefined ? undefined : (typeof corp === 'string' ? corp : JSON.stringify(corp)), antete }, 'scriere', ctx)
 
   it('pe TEST (scriere) trec doar scrierile legate dovedit de TEST-RAZVAN', () => {
-    expect(s('/rest/v1/red_parcele', 'POST', [{ proiect_id: TEST.id, uat_id: X, nr: 1 }])).toBe('permite')
+    expect(s('/rest/v1/red_parcele', 'POST', [{ proiect_id: TEST.id, uat_id: UAT, nr: 1 }])).toBe('permite')
     expect(s('/rest/v1/red_parcele', 'POST', [{ id: Z, proiect_id: TEST.id, nr: 1 }])).toBe('permite')          // id nou la INSERT simplu
-    expect(s(`/rest/v1/red_detinatori_contact?on_conflict=detinator_id`, 'POST', { detinator_id: Y, telefon_ok: true })).toBe('permite')
-    expect(s(`/rest/v1/red_convocari?id=eq.${X}`, 'PATCH', { stare: 'generat' })).toBe('permite')
-    expect(s('/rest/v1/rpc/fn_red_plic_creeaza', 'POST', { p_convocare_id: X })).toBe('permite')
-    expect(s(`/storage/v1/object/redari/${TEST.cod}/UAT/${X}/C-1-v1.docx`, 'POST')).toBe('permite')
+    expect(s('/rest/v1/red_detinatori', 'POST', [{ parcela_id: PAR, nume: 'TESTE2E X' }])).toBe('permite')       // părinte dovedit
+    expect(s('/rest/v1/red_detinatori_contact?on_conflict=detinator_id', 'POST', { detinator_id: DET, telefon_ok: true })).toBe('permite')
+    expect(s(`/rest/v1/red_convocari?id=eq.${CONV}`, 'PATCH', { stare: 'generat' })).toBe('permite')
+    expect(s(`/rest/v1/red_convocari?id=in.(${CONV})&select=id`, 'PATCH', { stare: 'generat' })).toBe('permite')
+    expect(s('/rest/v1/rpc/fn_red_plic_creeaza', 'POST', { p_convocare_id: CONV })).toBe('permite')
+    expect(s(`/storage/v1/object/redari/${TEST.cod}/UAT/${PAR}/C-1-v1.docx`, 'POST')).toBe('permite')
   })
   it('P1 r1: pe TEST (scriere) trimiterile și țintele nedovedite sunt blocate', () => {
     expect(s('/rest/v1/rpc/fn_red_sms_trimite', 'POST', { p_proiect_id: TEST.id })).toBe('blocheaza')          // trimitere, pe orice mod
@@ -33,21 +42,57 @@ describe('e2e_redari — garda de rețea', () => {
     expect(s('/rest/v1/red_parcele', 'POST', [{ proiect_id: ALT, nr: 1 }])).toBe('blocheaza')                    // alt proiect
     expect(s('/rest/v1/red_parcele', 'POST', [{ proiect_id: TEST.id }, { proiect_id: ALT }])).toBe('blocheaza')  // un rând străin în lot
     expect(s('/rest/v1/red_parcele', 'POST', [{ proiect_id: TEST.id, uat_id: Z }])).toBe('blocheaza')            // FK nedovedit
+    expect(s('/rest/v1/red_detinatori', 'POST', [{ parcela_id: Z }])).toBe('blocheaza')                          // părinte nedovedit
     expect(s(`/rest/v1/red_convocari?id=eq.${Z}`, 'PATCH', { stare: 'x' })).toBe('blocheaza')                   // rând nedovedit
     expect(s('/rest/v1/red_convocari', 'PATCH', { stare: 'x' })).toBe('blocheaza')                               // UPDATE fără filtru
-    expect(s(`/rest/v1/red_convocari?id=eq.${X}`, 'PATCH', { detinator_id: Z })).toBe('blocheaza')               // mută pe ID nedovedit
-    expect(s(`/rest/v1/red_parcele?id=eq.${X}`, 'DELETE')).toBe('blocheaza')                                     // fără ștergeri
-    expect(s(`/rest/v1/red_detinatori?on_conflict=id`, 'POST', [{ id: Z, proiect_id: TEST.id }])).toBe('blocheaza')   // upsert pe id nedovedit
+    expect(s(`/rest/v1/red_convocari?id=eq.${CONV}`, 'PATCH', { detinator_id: Z })).toBe('blocheaza')           // mută pe ID nedovedit
+    expect(s(`/rest/v1/red_parcele?id=eq.${PAR}`, 'DELETE')).toBe('blocheaza')                                   // fără ștergeri
+    expect(s('/rest/v1/red_detinatori?on_conflict=id', 'POST', [{ id: Z, parcela_id: PAR }])).toBe('blocheaza')  // upsert pe id nedovedit
     expect(s('/rest/v1/red_detinatori_contact', 'POST', { telefon_ok: true })).toBe('blocheaza')                // rând fără legătură cu TEST
     expect(s('/rest/v1/red_proiecte', 'POST', { cod: 'X' })).toBe('blocheaza')                                   // tabel în afara listei
-    expect(s('/rest/v1/user_module_access', 'POST', { user_id: X })).toBe('blocheaza')
+    expect(s('/rest/v1/user_module_access', 'POST', { user_id: DET })).toBe('blocheaza')
     expect(s('/rest/v1/red_parcele', 'POST', 'nu e json')).toBe('blocheaza')
     expect(s('/rest/v1/rpc/fn_red_plic_creeaza', 'POST', { p_convocare_id: Z })).toBe('blocheaza')
     expect(s('/rest/v1/rpc/fn_red_plic_creeaza', 'POST', {})).toBe('blocheaza')                                 // fără niciun ID de verificat
-    expect(s('/rest/v1/rpc/fn_red_necunoscuta', 'POST', { p_id: X })).toBe('blocheaza')                         // RPC în afara listei
-    expect(s(`/storage/v1/object/redari/LOT1-PRUNISOR-JUPA/UAT/x.docx`, 'POST')).toBe('blocheaza')
+    expect(s('/rest/v1/rpc/fn_red_necunoscuta', 'POST', { p_id: CONV })).toBe('blocheaza')                      // RPC în afara listei
+    expect(s('/storage/v1/object/redari/LOT1-PRUNISOR-JUPA/UAT/x.docx', 'POST')).toBe('blocheaza')
     expect(s(`/storage/v1/object/redari/${TEST.cod}/UAT/x.docx`, 'DELETE')).toBe('blocheaza')
     expect(s('/functions/v1/izo-e3-ocr-local', 'POST', {})).toBe('blocheaza')                                   // funcțiile edge non-GET
+  })
+  it('P1 r2: filtrele UPDATE trebuie să restrângă ținta la ID-uri dovedite de tipul tabelului', () => {
+    expect(s(`/rest/v1/red_convocari?proiect_id=neq.${TEST.id}`, 'PATCH', { stare: 'x' })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_convocari?id=neq.${CONV}`, 'PATCH', { stare: 'x' })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_convocari?or=(id.eq.${CONV},id.eq.${Z})`, 'PATCH', { stare: 'x' })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_convocari?id=eq.${CONV}&or=(stare.eq.a,stare.eq.b)`, 'PATCH', { stare: 'x' })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_convocari?id=not.eq.${CONV}`, 'PATCH', { stare: 'x' })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_convocari?id=in.(${CONV},${Z})`, 'PATCH', { stare: 'x' })).toBe('blocheaza')         // un ID nedovedit în listă
+    expect(s(`/rest/v1/red_convocari?id=eq.${PAR}`, 'PATCH', { stare: 'x' })).toBe('blocheaza')                  // ID dovedit, dar al altui tabel
+    expect(s(`/rest/v1/red_convocari?id=eq.${CONV}&stare=gt.a`, 'PATCH', { stare: 'x' })).toBe('blocheaza')      // operator în afara lui eq
+    expect(s(`/rest/v1/red_convocari?id=eq.${CONV}&stare=eq.generat`, 'PATCH', { stare: 'x' })).toBe('permite')  // eq în plus doar îngustează
+    expect(s('/rest/v1/red_parcele?proiect_id=eq.x', 'POST', [{ proiect_id: TEST.id }])).toBe('blocheaza')       // INSERT fără filtre
+    expect(s('/rest/v1/rpc/fn_red_plic_creeaza', 'POST', { p_convocare_id: PAR })).toBe('blocheaza')            // argument de alt tip
+  })
+  it('P1 r2: învățarea ia doar câmpuri de identitate ale rândurilor dovedite, niciodată text liber', () => {
+    const ctx = ctxLant()
+    expect(get(`/rest/v1/red_parcele?proiect_id=eq.${TEST.id}`, [{ id: PAR, proiect_id: TEST.id, observatii: `vezi ${Z}`, nota: Z }], ctx)).toBe(0)
+    expect(s(`/rest/v1/red_convocari?id=eq.${Z}`, 'PATCH', { stare: 'x' }, ctx)).toBe('blocheaza')
+    const c2 = ctxGarda()
+    expect(get(`/rest/v1/red_convocari?proiect_id=eq.${TEST.id}`, [{ id: CONV, detinator_id: DET }], c2)).toBe(0)        // părinte nedovedit
+    expect(get(`/rest/v1/red_parcele?proiect_id=eq.${ALT}`, [{ id: Z, proiect_id: ALT }], c2)).toBe(0)                  // alt proiect
+    expect(get(`/rest/v1/red_parcele?proiect_id=eq.${TEST.id}`, [{ id: Z, proiect_id: TEST.id }], c2, 'citire')).toBe(0)   // modul citire
+  })
+  it('învățarea: relații încorporate, vederi v_red_* și ID-ul nou al unui RPC permis', () => {
+    const ctx = ctxGarda()
+    const P3 = 'cccccccc-0000-4000-8000-000000000001', D3 = 'cccccccc-0000-4000-8000-000000000002', D4 = 'cccccccc-0000-4000-8000-000000000003'
+    const NOU = 'cccccccc-0000-4000-8000-000000000004'
+    expect(get('/rest/v1/red_parcele?select=*,red_detinatori(*)', [{ id: P3, proiect_id: TEST.id, red_detinatori: [{ id: D3, parcela_id: P3 }] }], ctx)).toBe(2)
+    expect(get('/rest/v1/v_red_registru?select=*', [{ proiect_id: TEST.id, detinator_id: D4, observatii: Z }, { proiect_id: ALT, detinator_id: Z }], ctx)).toBe(1)
+    expect(s('/rest/v1/red_detinatori_contact?on_conflict=detinator_id', 'POST', { detinator_id: D4 }, ctx)).toBe('permite')
+    expect(s('/rest/v1/red_detinatori_contact?on_conflict=detinator_id', 'POST', { detinator_id: Z }, ctx)).toBe('blocheaza')
+    expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_plic_creeaza`, permisa: false }, { id: NOU }, 'scriere', ctx)).toBe(0)
+    expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_plic_creeaza`, permisa: true }, { id: NOU }, 'scriere', ctx)).toBe(1)
+    expect(s(`/rest/v1/red_plicuri?id=eq.${NOU}`, 'PATCH', { stare: 'x' }, ctx)).toBe('permite')
+    expect(s(`/rest/v1/red_convocari?id=eq.${NOU}`, 'PATCH', { stare: 'x' }, ctx)).toBe('blocheaza')            // tipul plicului ≠ convocare
   })
   it('sonda detecteazaRezervare (toți parametrii null) trece pe ambele moduri; orice alt corp e verificat normal', () => {
     for (const mod of ['scriere', 'citire'])
@@ -57,15 +102,6 @@ describe('e2e_redari — garda de rețea', () => {
     expect(s('/rest/v1/rpc/fn_red_convocare_rezerva', 'POST', { p_detinator_id: null, p_alt: null })).toBe('blocheaza') // altă cheie
     expect(s('/rest/v1/rpc/fn_red_convocare_rezerva', 'POST', { p_detinator_id: '' })).toBe('blocheaza')            // nu e null
     expect(clasificaCerere({ url: `${SB}/rest/v1/rpc/fn_red_plic_creeaza`, metoda: 'POST', corp: '{"p_convocare_id":null}' }, 'citire')).toBe('blocheaza')   // doar sondele din listă
-  })
-  it('învățarea ID-urilor: doar din cereri legate dovedit de TEST-RAZVAN, doar în modul scriere', () => {
-    const ctx = ctxGarda()
-    expect(invataIduri({ url: `${SB}/rest/v1/red_convocari?id=eq.${Z}`, metoda: 'GET' }, [{ id: Z }], 'scriere', ctx)).toBe(0)        // fără filtru pe TEST
-    expect(invataIduri({ url: `${SB}/rest/v1/red_parcele?proiect_id=eq.${ALT}`, metoda: 'GET' }, [{ id: Z }], 'scriere', ctx)).toBe(0) // alt proiect
-    expect(invataIduri({ url: `${SB}/rest/v1/red_parcele?proiect_id=eq.${TEST.id}`, metoda: 'GET' }, [{ id: Z }], 'citire', ctx)).toBe(0) // modul citire
-    expect(invataIduri({ url: `${SB}/rest/v1/red_parcele?proiect_id=eq.${TEST.id}`, metoda: 'GET' }, [{ id: X, parcela: { uat_id: Y } }], 'scriere', ctx)).toBe(2)
-    expect(invataIduri({ url: `${SB}/rest/v1/red_plicuri`, metoda: 'POST', permisa: true }, [{ id: Z }], 'scriere', ctx)).toBe(1)    // scriere permisă
-    expect(clasificaCerere({ url: `${SB}/rest/v1/red_plicuri?id=eq.${Z}`, metoda: 'PATCH', corp: '{"stare":"x"}' }, 'scriere', ctx)).toBe('permite')
   })
   it('pe LOT1 (citire) orice scriere e blocată, citirile trec', () => {
     const c = (url, metoda) => clasificaCerere({ url: SB + url, metoda }, 'citire')
