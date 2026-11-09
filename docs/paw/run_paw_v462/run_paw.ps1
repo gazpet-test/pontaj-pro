@@ -423,6 +423,31 @@ public static bool StopChildren(int milliseconds) {
   } while (clock.ElapsedMilliseconds < milliseconds);
   return Active() == 1;
 }
+public static uint[] Pids() {
+  // v4.6.2 r4 (mil): PID-urile din job, fara lansator (tot arborele copiilor); null = fara job / interogare esuata
+  if (job == IntPtr.Zero) return null;
+  for (int incercare = 0; incercare < 5; incercare++) {
+    int active = Active();
+    if (active < 1) return null;
+    int size = 8 + (active + 64) * IntPtr.Size;
+    IntPtr buffer = Marshal.AllocHGlobal(size);
+    try {
+      if (!QueryInformationJobObject(job, 3, buffer, size, IntPtr.Zero)) {
+        if (Marshal.GetLastWin32Error() != 234) return null;
+        continue; // lista a crescut; recitim
+      }
+      int count = Marshal.ReadInt32(buffer, 4);
+      uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+      var r = new System.Collections.Generic.List<uint>();
+      for (int i = 0; i < count; i++) {
+        uint pid = unchecked((uint)Marshal.ReadIntPtr(buffer, 8 + i * IntPtr.Size).ToInt64());
+        if (pid != self) r.Add(pid);
+      }
+      return r.ToArray();
+    } finally { Marshal.FreeHGlobal(buffer); }
+  }
+  return null;
+}
 public static IntPtr LeagaDeLansator() {
   if (job != IntPtr.Zero) return job;
   IntPtr j = CreateJobObjectW(IntPtr.Zero, null);   // SA null = handle nemostenibil

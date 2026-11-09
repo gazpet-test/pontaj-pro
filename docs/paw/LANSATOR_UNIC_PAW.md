@@ -588,9 +588,16 @@ agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeo
   - lansatorul păstrează handle-uri WRITE_DAC luate înainte de blocare (nemoștenite), cu care redă drepturile și șterge copia la final;
   - înainte de rulare, probele de scriere (fișier, director, scriere, ștergere, WRITE_DAC, ACL pe cale) TREBUIE să pice;
   - lansator elevat = refuz;
-  - r3 (Jakarinos r2 P1): drepturile se redau DOAR când Job-ul lansatorului conține numai lansatorul (`ActiveProcesses = 1`), pe orice cale de ieșire (rezultat, timeout, excepție în preflight / sondă / rulare). Fără job, interogare eșuată sau după 15 s = necunoscut: copia (și jurnalele agy) rămân, copia doar-citire (curățare din admin, runbook).
+  - r3 / r4 (Jakarinos r2 P1, decizia chat): după orice ieșire (rezultat, timeout, excepție în preflight / sondă / rulare):
+    - PID-urile arborelui se enumeră din Job (`PawV43.Job::Pids`) înainte de oprire;
+    - se opresc prin Job, apoi `Wait-Process` pe toate, cu plafon de 15 s;
+    - la final trebuie `ActiveProcesses = 1` (doar lansatorul). Numai atunci se redau drepturile și se șterge copia;
+    - altfel copia (și jurnalele agy) rămân pe loc, copia doar-citire, și rularea e `PAW_EROARE … mil_arbore_neoprit (pid …)`. Curățare manuală, din admin (runbook).
 - **Hooks (r2, Jakarinos r1 P1-1; r3: aliasuri, Jakarinos r2 P1):**
-  - refuz dacă există `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/hooks.json`, `~/.gemini/config/config.json` sau un director de personalizare (`.agents`, `_agents`, `.agent`, `_agent`) în cwd ori în oricare părinte;
+  - refuz dacă există în profil `hooks.json` (`.gemini/config`, `.gemini/antigravity-cli`), `config.json` (`.gemini`, `.gemini/config`), `plugins.json`, `agents.json` sau directoarele `plugins` / `agents` / `hooks` din `.gemini/config` (și `antigravity-cli/plugins`);
+  - refuz dacă există un director de personalizare (`.agents`, `_agents`, `.agent`, `_agent`) în cwd ori în oricare părinte, până la rădăcina discului;
+  - r4: refuz pe `.gemini/config.json` în orice părinte (redirecționarea `personal_customization_dir` dintr-un repo părinte) și pe orice `.gemini` dintr-un părinte care nu e profilul utilizatorului;
+  - r4: mediul copilului = doar lista albă, verificat explicit: nicio variabilă `AGY_*`, `ANTIGRAVITY_*` (ex. `ANTIGRAVITY_CONFIG_REL_DIR`, `ANTIGRAVITY_PERM_GRANTS`), `GEMINI_*`, `GOOGLE_*`, `XDG_*`, `HOME`; `USERPROFILE` = profilul real;
   - `settings.json` doar cu cheile existente azi (`colorScheme`, `trustedWorkspaces`; a doua e o decizie de încredere a agy, nu un drept de scriere);
   - verificarea se face de două ori, a doua imediat înaintea rulării;
   - apoi agy însuși trebuie să raporteze „loaded 0 named hooks from 0 hooks.json file(s)”, în sondă și în rulare.
@@ -612,8 +619,8 @@ agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeo
 - Procesele aceluiași utilizator Windows nu sunt frontieră (ca la v4): pot înlocui `agy.exe` cu alt binar semnat Google sau pot schimba setările agy între verificări.
 
 **Teste:**
-- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 27 de cazuri, fără Pester, fără apel de model. Copia doar-citire se face real (ACL-uri reale) într-un director temporar. 16 mutații țintite (OWNER RIGHTS, hooks, `.agents` și aliasuri, limita, sonda, diagnostice, permisiuni, sandbox, probe, setări, arborele la curățare): toate prinse.
-- `teste\sonda_mil_reala.ps1`: integrare cu `agy.exe` real până la sondă inclusiv: copie → probe → configurație → preflight → sondă → curățare. Fără apel de model: jurnalul sondei trebuie să spună „0 turn(s)”, fără `streamGenerateContent`.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 28 de cazuri, fără Pester, fără apel de model. Copia doar-citire se face real (ACL-uri reale) într-un director temporar. 21 de mutații țintite (OWNER RIGHTS, hooks, `.agents` și aliasuri, `.gemini` din părinte, surse globale, mediu, limita, sonda, diagnostice, permisiuni, sandbox, probe, setări, arborele la curățare): toate prinse.
+- `teste\sonda_mil_reala.ps1`: integrare cu `agy.exe` real până la sondă inclusiv: copie → probe → configurație → preflight → sondă → curățare. Rulează în Job-ul lansatorului (aceeași definiție) și curăță doar cu Job-ul confirmat gol. Fără apel de model: jurnalul sondei trebuie să spună „0 turn(s)”, fără `streamGenerateContent`.
 - Citarea e verificată cu parserul real `CommandLineToArgvW`.
 - Refuzurile de cale sunt verificate pe UNC, ADS, ghilimele, traversal și junction real.
 - Se verifică și ordinea Job → lock → apel (cu copia, nu repo-ul), plus manifestul `SHA256.json`.

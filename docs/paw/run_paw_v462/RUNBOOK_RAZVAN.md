@@ -6,7 +6,8 @@ A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat. Orice eroare = S
 **Ce se schimba (fata de v4.6.1 instalat):**
 - `run_paw.ps1`: canalul `mil` (TOOLS, validare, ramura de rulare, refuzurile `mil_exit_*` / `mil_raspuns_gol`) si
   un parametru optional nou in `Ruleaza` (`$argumenteGata`, folosit doar de mil); la mil, al 5-lea argument
-  (optional) = lista de material; restul liniilor identice;
+  (optional) = lista de material; o metoda noua `Pids()` in `PawV43.Job` (lista proceselor din job, doar citire,
+  folosita de mil la curatare); restul liniilor identice;
 - `mil.ps1`: fisier NOU (plan + sandbox fixe, mediu curat, fara MCP/pluginuri, semnatura Google pe agy.exe).
   r2 (dupa Jakarinos r1): agy lucreaza intr-o COPIE doar-citire de unica folosinta (`paw-data\mil\<runid>`),
   niciodata in repo; refuz daca exista fisiere de hooks / `.agents` / setari agy necunoscute; o sonda de pornire
@@ -133,14 +134,17 @@ Asteptat: `PAW_GATA`, raspunsul = titlul runbook-ului; `paw-data\mil` gol.
 Opriri (STOP, nu se ocolesc din lansator):
 - `mil_extensii_refuzate` = cineva a adaugat MCP/pluginuri in agy;
 - `mil_semnatura_invalida` / `mil_semnatar_neasteptat` = agy.exe nu mai e cel semnat de Google;
-- `mil_config_refuzata (...)` = exista un `hooks.json`, `config.json` sau un director `.agents` / `_agents` / `.agent` /
-  `_agent` in `paw-data\mil` sau intr-un parinte (calea e in mesaj);
+- `mil_config_refuzata (...)` = exista un `hooks.json`, `config.json`, `plugins.json`, `agents.json` (profil) sau un
+  director `.agents` / `_agents` / `.agent` / `_agent` / `.gemini` in `paw-data\mil` sau intr-un parinte (calea e in mesaj);
 - `mil_setari_refuzate (<cheie>)` = agy si-a adaugat o setare noua in `settings.json` (ex. dupa un update): se analizeaza
   cheia, apoi lista alba din mil.ps1 se schimba prin PR, nu pe server;
 - `mil_hooks_incarcate`, `mil_hooks_neverificate`, `mil_sandbox_indisponibil`, `mil_sandbox_nepornit`, `mil_mod_plan_neaplicat`,
   `mil_sonda_*` = jurnalul agy nu arata ce trebuie (de regula dupa un update agy care schimba mesajele): STOP, se compara
   blocul `--- mil ... ---` din log cu cel de mai sus;
 - `mil_copie_*` = copia nu e doar-citire (probele de scriere au reusit) sau ACL neasteptat;
+- `mil_arbore_neoprit (pid ...)` (sau `copii_ramasi`) = procesele agy enumerate nu au iesit in 15 s: copia a ramas pe loc,
+  doar-citire; se verifica PID-urile din mesaj (`Get-Process -Id`), apoi curatarea de mai jos;
+- `mil_mediu_refuzat (...)` = o variabila de mediu care redirectioneaza agy ar fi ajuns la copil (nu ar trebui sa se intample);
 - `mil_lansator_elevat` = consola e elevata: se ruleaza din N, nu din A; `mil_sandbox_os_nesuportat` = Windows sub 24H2.
 
 **Copie ramasa** (lansator oprit fortat, sau Job-ul nu a fost confirmat gol in 15 s dupa agy; `paw_runs.log` are

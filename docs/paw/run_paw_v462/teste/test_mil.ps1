@@ -130,6 +130,22 @@ Caz 'P1-1 AssertMilConfig: hooks global / vechi, config.json, .agents in cwd si 
     }
     [IO.File]::WriteAllText("$rad\_agent", 'fisier, nu director'); Refuza { AssertMilConfig $prof $cwd } 'mil_config_refuzata'; Remove-Item -LiteralPath "$rad\_agent"
     AssertMilConfig $prof $cwd
+    # r4 (Jakarinos r3 P1): redirectionarea din repo parinte (.gemini\config.json) si orice .gemini in afara profilului
+    [void](New-Item -ItemType Directory -Path "$rad\.gemini"); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + "$rad\.gemini" + ')')
+    [IO.File]::WriteAllText("$rad\.gemini\config.json", '{"personal_customization_dir":"people/{user}"}'); Refuza { AssertMilConfig $prof $cwd } 'config.json'
+    Remove-Item -LiteralPath "$rad\.gemini" -Recurse
+    # cwd sub profil: .gemini al profilului e permis, dar nu si config.json direct in el
+    $cwdP = Join-Path $prof 'lucru\copie'; [void](New-Item -ItemType Directory -Path $cwdP -Force)
+    AssertMilConfig $prof $cwdP
+    [IO.File]::WriteAllText("$prof\.gemini\config.json", '{}'); Refuza { AssertMilConfig $prof $cwdP } 'config.json'; Remove-Item -LiteralPath "$prof\.gemini\config.json"
+    # r4 (decizie chat): sursele globale de pluginuri / agenti / hooks
+    foreach ($r in @('config\plugins.json', 'config\agents.json', 'config.json')) {
+      [IO.File]::WriteAllText("$prof\.gemini\$r", '{}'); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + "$prof\.gemini\$r" + ')'); Remove-Item -LiteralPath "$prof\.gemini\$r"
+    }
+    foreach ($r in @('config\plugins', 'config\agents', 'config\hooks', 'antigravity-cli\plugins')) {
+      [void](New-Item -ItemType Directory -Path "$prof\.gemini\$r"); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + "$prof\.gemini\$r" + ')'); Remove-Item -LiteralPath "$prof\.gemini\$r"
+    }
+    AssertMilConfig $prof $cwd
     $s = "$prof\.gemini\antigravity-cli\settings.json"
     [IO.File]::WriteAllText($s, '{"colorScheme":"dark","trustedWorkspaces":["C:\\x"]}'); AssertMilConfig $prof $cwd
     [IO.File]::WriteAllText($s, '{"colorScheme":"dark","permissions":{"allow":["command(*)"]}}'); Refuza { AssertMilConfig $prof $cwd } 'mil_setari_refuzate (permissions)'
@@ -282,18 +298,37 @@ function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd
   }
   [IO.File]::WriteAllText($log, $script:jurRulare)
   $script:scriereInCopie = MilIncearca { [IO.File]::WriteAllText((Join-Path $cwd 'scris-de-agy.txt'), 'x') }
-  return @{ timeout = $false; exit = 0; out = 'RASPUNS'; err = '' }
+  return @{ timeout = $false; exit = 0; out = 'RASPUNS'; err = $script:errRulare }
 }
-Caz 'r3 MilArboreGol real: fara Job verificabil = NECUNOSCUT ($false), deci copia ar ramane doar-citire' {
+Caz 'r3/r4 MilArboreGol real: fara Job verificabil = NECUNOSCUT (gol = $false, motiv), deci copia ar ramane doar-citire' {
   if ('PawV43.Job' -as [type]) { throw 'tipul Job exista in procesul de test (neasteptat)' }
-  Egal (MilArboreGol) $false 'fara job'
+  $a = MilArboreGol; Egal $a.gol $false 'fara job'; Egal $a.ramase 'fara Job' 'motiv'
+}
+Caz 'r4 AssertMilMediu: mediul real trece; variabile care redirectioneaza agy sau alt profil = refuz' {
+  $m = MilMediu; AssertMilMediu $m
+  foreach ($k in @('ANTIGRAVITY_CONFIG_REL_DIR', 'ANTIGRAVITY_PERM_GRANTS', 'AGY_ADC_AUTH', 'GEMINI_API_KEY', 'XDG_CONFIG_HOME', 'HOME')) {
+    $x = @{}; foreach ($c in $m.Keys) { $x[$c] = $m[$c] }; $x[$k] = 'C:\alt'; Refuza { AssertMilMediu $x } ('mil_mediu_refuzat (' + $k + ')')
+  }
+  $x = @{}; foreach ($c in $m.Keys) { $x[$c] = $m[$c] }; $x['USERPROFILE'] = 'C:\Users\Public'; Refuza { AssertMilMediu $x } 'USERPROFILE diferit'
+  # a doua bariera: chiar daca cineva ar pune o astfel de variabila in lista alba, prefixele raman refuzate
+  $vechi = $MIL_ENV_PERMISE
+  try {
+    $script:MIL_ENV_PERMISE = @($vechi) + @('ANTIGRAVITY_CONFIG_REL_DIR', 'HOME')
+    foreach ($k in @('ANTIGRAVITY_CONFIG_REL_DIR', 'HOME')) {
+      $x = @{}; foreach ($c in $m.Keys) { $x[$c] = $m[$c] }; $x[$k] = 'C:\alt'; Refuza { AssertMilMediu $x } ('mil_mediu_refuzat (' + $k + ')')
+    }
+  } finally { $script:MIL_ENV_PERMISE = $vechi }
+  $src = [IO.File]::ReadAllText((Join-Path $pachet 'mil.ps1'))
+  if ($src.IndexOf('AssertMilMediu $mediu') -lt 0) { throw 'InvokeMil nu verifica mediul' }
 }
 function AssertMilExe([string]$exe) { }   # semnatura se testeaza separat, pe fisiere reale
 function AssertMilGazda() { }
+function AssertMilMediu([hashtable]$m) { }   # testat mai sus pe mediul real; aici profilul e fals
 $script:profilFals = $null
 function MilMediu() { return @{ USERPROFILE = $script:profilFals; SystemRoot = $env:SystemRoot; PATH = $env:SystemRoot + '\system32' } }
 $script:arboreGol = $true
-function MilArboreGol() { return $script:arboreGol }   # in lansator: PawV43.Job::Active() = 1 (testat separat mai sus)
+function MilArboreGol() { return @{ gol = $script:arboreGol; ramase = $(if ($script:arboreGol) { '' } else { 'pid 4242' }) } }   # in lansator: Pids + Wait-Process + Active() = 1
+$script:errRulare = ''
 function CuratPastrate() {
   # doar pentru teste: copiile pastrate doar-citire se curata prin handle-urile pastrate (cum ar face un admin, vezi runbook)
   foreach ($c in @($script:MilCopiiPastrate)) {
@@ -369,8 +404,13 @@ Caz 'r3 (Jakarinos r2 P1): arbore neconfirmat oprit => copia ramane DOAR-CITIRE 
     )
     foreach ($k in $cai) {
       $script:sonda = $k.s; $id = RunIdTest; $copie = Join-Path ([PawMilAcl]::Lunga($baza)) $id
-      if ($k.m) { Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @() } $k.m }
-      else { [void](InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @()) }
+      # r4 (decizie chat): arbore neconfirmat = PAW_EROARE mil_arbore_neoprit cu PID-urile ramase, si dupa o rulare reusita
+      try { [void](InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @()); throw 'nu a refuzat' }
+      catch {
+        $msg = $_.Exception.Message
+        if ($msg -notlike '*mil_arbore_neoprit (pid 4242; copia ramane doar-citire: *') { throw ('alt refuz: ' + $msg) }
+        if ($k.m -and $msg -notlike ('*dupa: *' + $k.m + '*')) { throw ('motivul initial lipseste: ' + $msg) }
+      }
       if (-not (Test-Path -LiteralPath $copie)) { throw ('copia a fost stearsa: ' + $k.n) }
       if (MilIncearca { [IO.File]::WriteAllText((Join-Path $copie 'dupa.txt'), 'x') }) { throw ('copia a redevenit scriibila: ' + $k.n) }
       if (-not (@($script:MilCopiiPastrate) | Where-Object { $_.dir -ceq $copie })) { throw ('copia nu e in MilCopiiPastrate: ' + $k.n) }
@@ -385,22 +425,32 @@ Caz 'r3 (Jakarinos r2 P2): rularea respinsa lasa in log motivul, coada jurnalulu
   try {
     $script:profilFals = Join-Path $rad 'profil'; [void](New-Item -ItemType Directory -Path $script:profilFals)
     $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, 'B'); $baza = Join-Path $rad 'mil'
-    $script:jurSonda = $JS; $script:jurRulare = ($JR -replace 'enabling terminal sandbox', 'x') + "`nI1109 ultima.go:1] LINIE-DIN-COADA"; $script:sonda = $null
-    $id = RunIdTest
+    # r4 (Jakarinos r3 P2): jurnal LUNG (30 de linii de 200 de caractere, ca in scenariul lui) + stdout + stderr
+    $lungi = (1..40 | ForEach-Object { 'I1109 x.go:1] ' + ('linie lunga ' * 16) }) -join "`n"
+    $script:jurSonda = $JS; $script:jurRulare = ($JR -replace 'enabling terminal sandbox', 'x') + "`n" + $lungi + "`nI1109 ultima.go:1] LINIE-DIN-COADA"; $script:sonda = $null
+    $script:errRulare = 'EROARE-STD-DIN-RULARE'
+    $n0 = $script:MilDiagLinii.Count; $id = RunIdTest
     Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @() } 'mil_sandbox_nepornit'
-    $d = @($script:MilDiagLinii | Where-Object { $_ -like '*rulare RESPINSA*' }) | Select-Object -Last 1
-    foreach ($s in @('mil_sandbox_nepornit', 'LINIE-DIN-COADA', 'stdout: RASPUNS')) { if (-not $d -or $d.IndexOf($s) -lt 0) { throw ('lipseste din diagnostic: ' + $s) } }
+    $noi = @($script:MilDiagLinii | Select-Object -Skip $n0)
+    foreach ($p in @(@('rulare RESPINSA / motiv ---', 'mil_sandbox_nepornit'), @('rulare RESPINSA / jurnal (coada) ---', 'LINIE-DIN-COADA'),
+                     @('rulare RESPINSA / stdout ---', 'RASPUNS'), @('rulare RESPINSA / stderr ---', 'EROARE-STD-DIN-RULARE'))) {
+      if (-not ($noi | Where-Object { $_.Contains($p[0]) -and $_.Contains($p[1]) })) { throw ('lipseste din diagnostic: ' + $p[0] + ' ' + $p[1]) }
+    }
     if (Test-Path -LiteralPath (Join-Path ([PawMilAcl]::Lunga($baza)) $id)) { throw 'copia a ramas (arbore gol)' }
-  } finally { $script:jurRulare = $JR; MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
+  } finally { $script:jurRulare = $JR; $script:errRulare = ''; MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
 }
-Caz 'r3: InvokeMil verifica arborele (MilArboreGol) in finally, INAINTE de MilStergeCopie, fara ramura pe $rez' {
+Caz 'r3/r4: InvokeMil verifica arborele (MilArboreGol) dupa orice iesire, INAINTE de MilStergeCopie; neconfirmat = throw cu PID-uri' {
   $def = [IO.File]::ReadAllText((Join-Path $pachet 'mil.ps1'))
-  $i = $def.IndexOf('function InvokeMil'); $f = $def.IndexOf('} finally {', $i)
-  $g = $def.IndexOf('$gol = MilArboreGol', $f); $s = $def.IndexOf('MilStergeCopie (-not $gol)', $f)
-  if ($f -lt 0 -or $g -lt 0 -or $s -lt 0 -or $g -gt $s) { throw 'ordinea din finally' }
+  $i = $def.IndexOf('function InvokeMil'); $f = $def.IndexOf('} catch { $eroare = $_ }', $i)
+  $g = $def.IndexOf('$arb = MilArboreGol', $f); $s = $def.IndexOf('MilStergeCopie (-not $arb.gol)', $f); $t = $def.IndexOf("throw `$m", $s)
+  if ($f -lt 0 -or $g -lt 0 -or $s -lt 0 -or $t -lt 0 -or $g -gt $s) { throw 'ordinea dupa iesirea din try' }
   if ($def.IndexOf('treeStopped', $i) -ge 0) { throw 'curatarea depinde inca de $rez.treeStopped' }
+  $rp = [IO.File]::ReadAllText((Join-Path $pachet 'run_paw.ps1'))
+  if ($rp.IndexOf('public static uint[] Pids()') -lt 0) { throw 'PawV43.Job::Pids lipseste' }
+  $m = [IO.File]::ReadAllText((Join-Path $pachet 'mil.ps1'))
+  foreach ($s2 in @('[PawV43.Job]::Pids()', '[PawV43.Job]::StopChildren(', 'Wait-Process -Id $pids -Timeout')) { if ($m.IndexOf($s2) -lt 0) { throw ('MilArboreGol fara: ' + $s2) } }
 }
-Remove-Item Function:\AssertMilExe, Function:\AssertMilGazda, Function:\MilMediu, Function:\MilArboreGol -ErrorAction SilentlyContinue
+Remove-Item Function:\AssertMilExe, Function:\AssertMilGazda, Function:\AssertMilMediu, Function:\MilMediu, Function:\MilArboreGol -ErrorAction SilentlyContinue
 . (Join-Path $pachet 'mil.ps1')   # functiile reale din nou
 
 Caz 'AssertMilExe: fisier nesemnat si semnatar strain refuzate; agy.exe real (daca exista) acceptat' {
