@@ -43,7 +43,7 @@ async function sincronizeazaIstoric(db: any, { mod, deLa, siteId }: { mod: 'ziln
   const cheie = Deno.env.get('OPEN_METEO_API_KEY') || null;
   const rez: any[] = [];
   for (const p of plan) {
-    const r = { site: p.site_id, de: p.de, pana: p.pana, zile_scrise: 0, lipsa: 0, respinse: 0, ok: true, eroare: null as string | null };
+    const r = { site: p.site_id, de: p.de, pana: p.pana, zile_scrise: 0, lipsa: 0, respinse: 0, absente: 0, complet: true, ok: true, eroare: null as string | null };
     try {
       for (const [de, pana] of intervale(p.de, p.pana)) {
         const ctl = new AbortController();
@@ -54,8 +54,8 @@ async function sincronizeazaIstoric(db: any, { mod, deLa, siteId }: { mod: 'ziln
           if (!resp.ok) throw new Error(`arhiva Open-Meteo ${resp.status}`);
           j = await resp.json();
         } finally { clearTimeout(t); }
-        const { randuri, lipsa, respinse } = randuriDinRaspuns(j, { site_id: p.site_id, lat: p.lat, lng: p.lng, de, pana, preluatLa: new Date().toISOString() });
-        r.lipsa += lipsa; r.respinse += respinse;
+        const { randuri, lipsa, respinse, absente } = randuriDinRaspuns(j, { site_id: p.site_id, lat: p.lat, lng: p.lng, de, pana, preluatLa: new Date().toISOString() });
+        r.lipsa += lipsa; r.respinse += respinse; r.absente += absente;
         for (let i = 0; i < randuri.length; i += LOT_UPSERT) {
           const lot = randuri.slice(i, i + LOT_UPSERT);
           const { error: eu } = await db.from('meteo_istoric_zilnic').upsert(lot, { onConflict: 'site_id,data' });
@@ -66,9 +66,11 @@ async function sincronizeazaIstoric(db: any, { mod, deLa, siteId }: { mod: 'ziln
     } catch (e) {
       r.ok = false; r.eroare = (e as Error).message;
     }
+    // complet = fiecare zi cerută a ajuns în tabel (scrisă); lipsa / respinse / absente se raportează, nu se ascund
+    r.complet = r.ok && r.lipsa === 0 && r.respinse === 0 && r.absente === 0;
     rez.push(r);
   }
-  return { ok: rez.every(x => x.ok), mod, ieri, rez, sarite };
+  return { ok: rez.every(x => x.ok), complet: rez.every(x => x.complet) && !sarite.length, mod, ieri, rez, sarite };
 }
 
 

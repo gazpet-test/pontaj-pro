@@ -6,7 +6,7 @@ import JSZip from 'jszip'
 import { completeazaFoaieXml } from './executieOameniXlsx.js'
 const XLSX = XLSX_mod.default || XLSX_mod
 
-export const COLOANE = 'site_id,data,precipitatii_mm,ploaie_mm,zapada_cm,tmin_c,tmax_c,vant_max_kmh,rafale_max_kmh,cod_vreme,lat,lng,sursa,preluat_la,zi_nelucrabila,motive,precipitatii_mm_min,zapada_cm_min,tmax_sub_c,tmin_max_c,praguri_versiune'
+export const COLOANE = 'site_id,data,precipitatii_mm,ploaie_mm,zapada_cm,tmin_c,tmax_c,vant_max_kmh,rafale_max_kmh,cod_vreme,lat,lng,grila_lat,grila_lng,altitudine_m,sursa,preluat_la,zi_nelucrabila,motive,precipitatii_mm_min,zapada_cm_min,tmax_sub_c,tmin_max_c,praguri_versiune'
 export const ZILE_SAPT = ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ', 'Du']
 const NUME_ZI = ['duminică', 'luni', 'marți', 'miercuri', 'joi', 'vineri', 'sâmbătă']
 export const LUNI = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
@@ -82,6 +82,13 @@ export function motiveText(r) {
   }
   return out.join('; ')
 }
+// un prag din formular: obligatoriu, număr cu cel mult o zecimală (coloana are o zecimală), virgula acceptată; altfel null
+export function parsePrag(v) {
+  const s = String(v ?? '').trim().replace(',', '.')
+  if (!/^-?\d{1,3}(\.\d)?$/.test(s)) return null
+  const n = Number(s)
+  return Number.isFinite(n) ? n : null
+}
 export const pragText = (p) => (p ? `precipitații ≥ ${fmt(p.precipitatii_mm_min)} mm sau zăpadă ≥ ${fmt(p.zapada_cm_min)} cm sau Tmax < ${fmt(p.tmax_sub_c)} °C sau Tmin ≤ ${fmt(p.tmin_max_c)} °C` : '—')
 
 // toate zilele șantierelor, pe chei (data, pe fiecare șantier) până la pagina goală; opțional [de, pana]
@@ -131,29 +138,46 @@ function foaie(rows, latimi, { filtru = true, stil = null } = {}) {
 }
 
 export const CAP_ZILE = ['Șantier', 'Data', 'Ziua', 'Precipitații (mm)', 'Ploaie (mm)', 'Zăpadă (cm)', 'Tmin (°C)', 'Tmax (°C)', 'Vânt max (km/h)',
-  'Rafale max (km/h)', 'Vremea', 'Zi nelucrabilă', 'Motive', 'Coordonate', 'Sursa', 'Preluat la']
+  'Rafale max (km/h)', 'Vremea', 'Zi nelucrabilă', 'Motive', 'Coordonate șantier', 'Punct de grilă arhivă', 'Sursa', 'Preluat la (UTC)']
 
-export async function construiesteExport({ santiere, randuri, praguri, generatLa }) {
-  const nume = new Map(santiere.map(s => [String(s.id), s.name || `șantier #${s.id}`]))
+// Pragurile declarate în fișier = cele care au clasificat rândurile exportate (din vedere), NU cele din pagină (review r1 P1):
+// toate rândurile trebuie să aibă aceeași versiune și aceleași valori; altfel pragurile s-au schimbat între pagini → refuz (se reia exportul).
+export function pragurileExportului(randuri) {
+  const chei = new Set(randuri.map(r => [r.praguri_versiune, r.precipitatii_mm_min, r.zapada_cm_min, r.tmax_sub_c, r.tmin_max_c].join('|')))
+  if (chei.size !== 1) throw new Error('pragurile s-au schimbat în timpul exportului — reîncearcă')
+  const r = randuri[0]
+  return { versiune: r.praguri_versiune, precipitatii_mm_min: r.precipitatii_mm_min, zapada_cm_min: r.zapada_cm_min, tmax_sub_c: r.tmax_sub_c, tmin_max_c: r.tmin_max_c }
+}
+
+export async function construiesteExport({ santiere, randuri, jurnal = [], generatLa }) {
+  if (!randuri.length) throw new Error('nimic de exportat')
+  const praguri = pragurileExportului(randuri)
+  const intrare = jurnal.find(j => Number(j.versiune) === Number(praguri.versiune)) || null
+  const nume = new Map(santiere.map(s => [String(s.id), `${s.name || `șantier #${s.id}`}${s.active === false ? ' (închis)' : ''}`]))
   const sortate = [...randuri].sort((a, b) => (String(a.site_id) === String(b.site_id) ? (a.data < b.data ? -1 : 1) : (nume.get(String(a.site_id)) || '').localeCompare(nume.get(String(b.site_id)) || '', 'ro')))
   const zile = [CAP_ZILE, ...sortate.map(r => [nume.get(String(r.site_id)) || `șantier #${r.site_id}`, r.data.split('-').reverse().join('.'), ziSaptamana(r.data),
     nr(r.precipitatii_mm), nr(r.ploaie_mm), nr(r.zapada_cm), nr(r.tmin_c), nr(r.tmax_c), nr(r.vant_max_kmh), nr(r.rafale_max_kmh),
     r.cod_vreme == null ? '' : `${vremeWmo(r.cod_vreme).text} (${r.cod_vreme})`, eticheta(r.zi_nelucrabila), motiveText(r),
-    `${r.lat}, ${r.lng}`, 'Open-Meteo — arhivă', r.preluat_la ? String(r.preluat_la).slice(0, 16).replace('T', ' ') : ''])]
-  const wsZile = foaie(zile, [26, 11, 10, 10, 9, 9, 8, 8, 9, 9, 20, 10, 40, 20, 18, 16], {
+    `${r.lat}, ${r.lng}`, r.grila_lat == null ? '' : `${r.grila_lat}, ${r.grila_lng}${r.altitudine_m == null ? '' : ` · ${r.altitudine_m} m`}`,
+    'Open-Meteo — arhivă', r.preluat_la ? `${String(r.preluat_la).slice(0, 16).replace('T', ' ')} UTC` : ''])]
+  const wsZile = foaie(zile, [26, 11, 10, 10, 9, 9, 8, 8, 9, 9, 20, 10, 40, 20, 24, 18, 16], {
     stil: (r, c) => (sortate[r - 1]?.zi_nelucrabila === true && (c === 1 || c === 11) ? { ...CELULA, fill: { patternType: 'solid', fgColor: { rgb: CULOARE_NELUCRABIL } } } : CELULA),
   })
   const luni = [['Șantier', 'Luna', 'Zile cu date', 'Zile nelucrabile', 'Necunoscute (date incomplete)']]
   for (const s of santiere) for (const l of peLuni(sortate.filter(r => String(r.site_id) === String(s.id)))) luni.push([nume.get(String(s.id)), numeLuna(l.luna), l.cuDate, l.nelucrabile, l.necunoscute])
   const wsLuni = foaie(luni, [26, 18, 12, 14, 18])
+  const la = (t) => (t ? `${String(t).slice(0, 16).replace('T', ' ')} UTC` : '—')
   const info = [['Ce', 'Valoare'],
     ['Zi nelucrabilă dacă', pragText(praguri)],
-    ['Versiunea pragurilor', praguri ? String(praguri.versiune) : '—'],
-    ['Pragurile schimbate la', praguri?.actualizat_la ? String(praguri.actualizat_la).slice(0, 16).replace('T', ' ') : '—'],
-    ['Sursa datelor', 'Open-Meteo, arhiva istorică (date de reanaliză), valori zilnice pe ziua locală Europe/Bucharest, la coordonatele șantierului din ERP'],
+    ['Versiunea pragurilor folosită', String(praguri.versiune)],
+    ['Versiunea stabilită la', la(intrare?.actualizat_la)],
+    ['Sursa datelor', 'Open-Meteo, arhiva istorică (date de reanaliză), valori zilnice pe ziua locală Europe/Bucharest; cererea se face la coordonatele șantierului din ERP, valorile sunt ale punctului de grilă al arhivei (coloana „Punct de grilă arhivă”)'],
     ['„necunoscut”', 'niciun prag atins, dar lipsește cel puțin o valoare a zilei (nu se consideră lucrabilă)'],
-    ['Exportat la', generatLa]]
-  const wsInfo = foaie(info, [26, 90], { filtru: false })
+    ['Exportat la', generatLa],
+    ['', ''],
+    ['Istoricul pragurilor', ''],
+    ...jurnal.map(j => [`versiunea ${j.versiune}${Number(j.versiune) === Number(praguri.versiune) ? ' (folosită)' : ''}`, `${pragText(j)} — de la ${la(j.actualizat_la)}`])]
+  const wsInfo = foaie(info, [30, 110], { filtru: false })
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, wsZile, 'Zile')
   XLSX.utils.book_append_sheet(wb, wsLuni, 'Pe luni')

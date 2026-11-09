@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { aziBucuresti } from './hrDeciziiUtil.js'
 import { calendarLuna, ZILE_SAPT, LUNI, vremeWmo, rezumatLuna, peLuni, numeLuna, eticheta, motiveText, pragText, toateZilele,
-  construiesteExport, numeFisierMeteo } from './meteoIstoricUtil.js'
+  construiesteExport, numeFisierMeteo, parsePrag } from './meteoIstoricUtil.js'
 
 const G = { bg: '#0D1117', surface: '#161B22', card: '#1C2128', card2: '#21262D', text: '#E6EDF3', muted: '#8B949E', dim: '#6E7681',
   border: '#30363D', blue: '#58A6FF', green: '#2EA043', yellow: '#D29922', red: '#F85149', teal: '#2DD4BF' }
@@ -40,31 +40,38 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
   const siteCurent = useRef(null)
   siteCurent.current = siteId
 
-  // proiectul: șantierele, pragurile, dacă utilizatorul e owner
+  // reîncărcarea explicită a zilelor șantierului CURENT (după praguri / completare); efectul zilelor o urmărește (review r1 P1)
+  const [reincarca, setReincarca] = useState(0)
+  const citestePraguri = useCallback(async () => {
+    const { data, error } = await client.from('meteo_praguri_nelucrabil').select('precipitatii_mm_min,zapada_cm_min,tmax_sub_c,tmin_max_c,versiune,actualizat_la').eq('id', 1).maybeSingle()
+    if (error) throw new Error('pragurile nu se pot citi: ' + error.message)
+    return data || null
+  }, [client])
+
+  // proiectul: TOATE șantierele lui (și cele închise: istoricul lor rămâne dovadă, review r1 P1), pragurile, dacă utilizatorul e owner
   const incarcaProiect = useCallback(async () => {
     const g = ++gen.current
     setSantiere(null); setEroare(null); setAles(null); setExp(null)   // zilele se reîncarcă la schimbarea șantierului (efectul de mai jos)
     try {
-      const [{ data: st, error: es }, { data: pr, error: ep }, { data: u }] = await Promise.all([
+      const [{ data: st, error: es }, pr, { data: u }] = await Promise.all([
         client.from('sites').select('id,name,lat,lng,meteo_activ,active').eq('proiect_id', proiectId).order('name'),
-        client.from('meteo_praguri_nelucrabil').select('precipitatii_mm_min,zapada_cm_min,tmax_sub_c,tmin_max_c,versiune,actualizat_la').eq('id', 1).maybeSingle(),
+        citestePraguri(),
         client.auth.getUser(),
       ])
       if (es) throw new Error('șantierele proiectului nu se pot citi: ' + es.message)
-      if (ep) throw new Error('pragurile nu se pot citi: ' + ep.message)
       let esteOwner = false
       if (u?.user?.id) {
         const { data: p } = await client.from('profiles').select('is_owner').eq('id', u.user.id).maybeSingle()
         esteOwner = p?.is_owner === true
       }
       if (g !== gen.current) return
-      const lista = (st || []).filter(s => s.active !== false)
-      setSantiere(lista); setPraguri(pr || null); setOwner(esteOwner)
-      setSiteId(prev => (lista.some(s => s.id === prev) ? prev : lista[0]?.id ?? null))
+      const lista = st || []
+      setSantiere(lista); setPraguri(pr); setOwner(esteOwner)
+      setSiteId(prev => (lista.some(s => s.id === prev) ? prev : (lista.find(s => s.active !== false) || lista[0])?.id ?? null))
     } catch (e) {
       if (g === gen.current) { setEroare(e.message || String(e)); setSantiere([]) }
     }
-  }, [proiectId, client])
+  }, [proiectId, client, citestePraguri])
   useEffect(() => { incarcaProiect(); return () => { gen.current++ } }, [incarcaProiect])
 
   // istoricul șantierului ales
@@ -86,7 +93,7 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
       if (g === genZile.current) { setEroare(e.message || String(e)); setZile([]) }
     }
   }, [client, azi])
-  useEffect(() => { incarcaZile(siteId); return () => { genZile.current++ } }, [siteId, incarcaZile])
+  useEffect(() => { incarcaZile(siteId); return () => { genZile.current++ } }, [siteId, reincarca, incarcaZile])
 
   const site = santiere?.find(s => s.id === siteId) || null
   const peZi = useMemo(() => new Map((zile || []).map(r => [r.data, r])), [zile])
@@ -102,7 +109,11 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
       const randuri = await toateZilele(client, lista.map(s => s.id))
       if (g !== gen.current) return
       if (!randuri.length) { setExp({ tip: 'info', text: 'Nu există încă istoric meteo pentru șantierele proiectului.' }); return }
-      const bytes = await construiesteExport({ santiere: lista, randuri, praguri, generatLa: new Date().toLocaleString('ro-RO') })
+      const { data: jurnal, error: ej } = await client.from('meteo_praguri_jurnal').select('versiune,precipitatii_mm_min,zapada_cm_min,tmax_sub_c,tmin_max_c,actualizat_la').order('versiune')
+      if (ej) throw new Error('istoricul pragurilor nu se poate citi: ' + ej.message)
+      if (g !== gen.current) return
+      // pragurile declarate în fișier vin din rândurile exportate (aceeași versiune peste tot), nu din pagină (review r1 P1)
+      const bytes = await construiesteExport({ santiere: lista, randuri, jurnal: jurnal || [], generatLa: new Date().toLocaleString('ro-RO') })
       if (g !== gen.current) return
       descarca(bytes, numeFisierMeteo(codProiect || `proiect_${proiectId}`, azi))
       setExp({ tip: 'ok', text: `✓ ${randuri.length} zile exportate` })
@@ -111,7 +122,8 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
     }
   }
 
-  // completarea istoricului de la începutul proiectului (o singură dată pe șantier): doar owner-ul; meteo-sync reverifică rolul
+  // completarea / refacerea istoricului de la începutul proiectului: doar owner-ul (meteo-sync reverifică rolul); se poate repeta —
+  // rescrie zilele perioadei cu valorile curente din arhivă (review r1 P2: nu e „o singură dată” garantat, textele spun asta)
   const [compl, setCompl] = useState(null)
   const completeaza = async () => {
     const g = gen.current, sid = siteId
@@ -126,23 +138,29 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
       const s = (ist.sarite || []).find(x => x.site_id === sid)
       if (s) { setCompl({ tip: 'info', text: `Nu s-a completat: ${s.motiv}.` }); return }
       if (!r) throw new Error('șantierul nu apare în răspuns')
-      if (!r.ok) { setCompl({ tip: 'eroare', text: `Completarea s-a oprit: ${r.eroare} (${r.zile_scrise} zile scrise până atunci).` }); await incarcaZile(sid); return }
-      setCompl({ tip: 'ok', text: `✓ ${r.zile_scrise} zile scrise (${r.de.split('-').reverse().join('.')} – ${r.pana.split('-').reverse().join('.')})${r.lipsa ? ` · ${r.lipsa} încă fără date` : ''}${r.respinse ? ` · ${r.respinse} respinse la validare` : ''}` })
-      await incarcaZile(sid)
+      if (!r.ok) { setCompl({ tip: 'eroare', text: `Completarea s-a oprit: ${r.eroare} (${r.zile_scrise} zile scrise până atunci).` }); setReincarca(x => x + 1); return }
+      const extra = `${r.lipsa ? ` · ${r.lipsa} încă fără date` : ''}${r.respinse ? ` · ${r.respinse} respinse la validare` : ''}${r.absente ? ` · ${r.absente} zile lipsă din arhivă` : ''}`
+      setCompl({ tip: extra ? 'info' : 'ok', text: `${extra ? '' : '✓ '}${r.zile_scrise} zile scrise (${r.de.split('-').reverse().join('.')} – ${r.pana.split('-').reverse().join('.')})${extra}` })
+      setReincarca(x => x + 1)
     } catch (e) {
       if (g === gen.current) setCompl({ tip: 'eroare', text: 'Completarea nu s-a putut face: ' + (e.message || String(e)) })
     }
   }
 
+  // pragurile: fiecare câmp completat, număr cu cel mult o zecimală (virgula acceptată); câmpul gol NU devine 0 (review r1 P2)
   const salveazaPraguri = async () => {
-    const v = Object.fromEntries(['precipitatii_mm_min', 'zapada_cm_min', 'tmax_sub_c', 'tmin_max_c'].map(k => [k, Number(String(edit[k]).replace(',', '.'))]))
-    if (Object.values(v).some(x => !Number.isFinite(x))) { setEdit(e => ({ ...e, eroare: 'Completează toate pragurile cu numere.' })); return }
+    const g = gen.current
+    const v = Object.fromEntries(['precipitatii_mm_min', 'zapada_cm_min', 'tmax_sub_c', 'tmin_max_c'].map(k => [k, parsePrag(edit[k])]))
+    if (Object.values(v).some(x => x === null)) { setEdit(e => ({ ...e, eroare: 'Completează fiecare prag cu un număr cu cel mult o zecimală (ex. 10 sau -5,5).' })); return }
     const { error } = await client.rpc('fn_meteo_praguri_seteaza', { p_versiune: praguri.versiune, p_precipitatii_mm: v.precipitatii_mm_min,
       p_zapada_cm: v.zapada_cm_min, p_tmax_sub_c: v.tmax_sub_c, p_tmin_max_c: v.tmin_max_c })
-    if (error) { setEdit(e => ({ ...e, eroare: error.message || 'pragurile nu s-au salvat' })); return }
-    setEdit(null)
-    await incarcaProiect()
-    await incarcaZile(siteId)          // clasificarea vine din vedere, cu pragurile noi
+    if (g !== gen.current) return                                   // alt proiect / tab închis între timp
+    if (error) { setEdit(e => (e ? { ...e, eroare: error.message || 'pragurile nu s-au salvat' } : e)); return }
+    let pr
+    try { pr = await citestePraguri() } catch (e) { if (g === gen.current) setEroare(e.message || String(e)); return }
+    if (g !== gen.current) return
+    setPraguri(pr); setEdit(null)
+    setReincarca(x => x + 1)          // clasificarea vine din vedere, cu pragurile noi — pentru șantierul selectat ACUM
   }
 
   const cadru = (copii) => <div style={{ padding: '16px 16px 40px', maxWidth: 980, margin: '0 auto', color: G.text }}>{copii}</div>
@@ -151,19 +169,21 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
   if (!santiere.length) return cadru(<div style={{ color: G.muted, padding: 16 }}>Proiectul nu are șantiere legate în ERP (Șantiere → proiect).</div>)
 
   const fara = site && (!site.meteo_activ || site.lat == null || site.lng == null)
+  const inchis = site && site.active === false
+  const eticSantier = (s) => `${s.name}${s.active === false ? ' (închis)' : ''}`
   return cadru(<>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 12 }}>
       <div style={{ fontSize: 16, fontWeight: 700 }}>🌧️ Meteo — istoric zilnic</div>
       {santiere.length > 1 && (
         <select value={siteId ?? ''} onChange={e => setSiteId(Number(e.target.value))} style={{ ...S.inp, width: 'auto', maxWidth: 260 }}>
-          {santiere.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {santiere.map(s => <option key={s.id} value={s.id}>{eticSantier(s)}</option>)}
         </select>
       )}
-      {santiere.length === 1 && <span style={{ color: G.muted, fontSize: 13 }}>{site?.name}</span>}
+      {santiere.length === 1 && site && <span style={{ color: G.muted, fontSize: 13 }}>{eticSantier(site)}</span>}
       <button onClick={exporta} disabled={exp?.tip === 'lucru'} style={{ ...S.btn, marginLeft: 'auto' }} data-meteo-export>📥 Export Excel</button>
-      {owner && site && !(!site.meteo_activ || site.lat == null || site.lng == null) && (
+      {owner && site && !fara && !inchis && (
         <button onClick={completeaza} disabled={compl?.tip === 'lucru'} style={S.btn} data-meteo-completeaza
-          title="O singură dată pe șantier: aduce istoricul de la data de început a proiectului până ieri (apoi se completează zilnic, automat).">⏬ Completează istoricul</button>
+          title="Aduce istoricul de la data de început a proiectului până ieri. Se poate repeta oricând: rescrie zilele cu valorile curente din arhivă. După aceea istoricul se completează zilnic, automat.">⏬ Completează / reface istoricul</button>
       )}
     </div>
     {exp && <div role={exp.tip === 'eroare' ? 'alert' : 'status'} style={{ fontSize: 12, marginBottom: 8, color: { lucru: G.muted, ok: G.green, info: G.yellow, eroare: G.red }[exp.tip] }}>{exp.text}</div>}
@@ -187,7 +207,8 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
       )}
     </div>
 
-    {fara && <div style={{ color: G.yellow, fontSize: 13, marginBottom: 12 }}>Șantierul nu are coordonate sau meteo activ în ERP: istoricul nu se poate prelua pentru el.</div>}
+    {inchis && <div style={{ color: G.muted, fontSize: 13, marginBottom: 12 }}>Șantier închis: istoricul existent rămâne consultabil și exportabil, dar nu se mai completează automat.</div>}
+    {fara && !inchis && <div style={{ color: G.yellow, fontSize: 13, marginBottom: 12 }}>Șantierul nu are coordonate sau meteo activ în ERP: istoricul nu se poate prelua pentru el.</div>}
 
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
       <button onClick={() => muta(-1)} style={S.btn} aria-label="luna anterioară">‹</button>
@@ -250,6 +271,6 @@ export default function TabMeteoIstoric({ proiectId, codProiect = null, client =
         </div>
       </div>
     )}
-    {zile && !zile.length && !fara && <div style={{ color: G.muted, fontSize: 13, marginTop: 12 }}>Încă nu există istoric meteo pentru acest șantier (se completează zilnic; perioada de la începutul proiectului se încarcă o singură dată).</div>}
+    {zile && !zile.length && !fara && <div style={{ color: G.muted, fontSize: 13, marginTop: 12 }}>Încă nu există istoric meteo pentru acest șantier (se completează zilnic; perioada de la începutul proiectului o aduce owner-ul cu „Completează / reface istoricul”).</div>}
   </>)
 }

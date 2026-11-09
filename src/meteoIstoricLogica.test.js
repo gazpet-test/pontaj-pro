@@ -103,9 +103,26 @@ describe('istoric meteo — răspunsul arhivei (conținut extern)', () => {
     expect(lipsa).toBe(1)
     expect(respinse).toBe(6)
     expect(randuri.map(r => r.data)).toEqual(['2026-01-01', '2026-01-02', '2026-01-08'])
-    expect(randuri[0]).toEqual({ site_id: 7, data: '2026-01-01', lat: 44.6, lng: 22.6, sursa: SURSA, preluat_la: OPT.preluatLa,
+    expect(randuri[0]).toEqual({ site_id: 7, data: '2026-01-01', lat: 44.6, lng: 22.6, grila_lat: 44.6, grila_lng: 22.6, altitudine_m: null,
+      sursa: SURSA, preluat_la: OPT.preluatLa,
       precipitatii_mm: 12.4, ploaie_mm: 10.1, zapada_cm: 1.4, tmin_c: -3.2, tmax_c: 2.5, vant_max_kmh: 25.2, rafale_max_kmh: 48.6, cod_vreme: 73 })
     expect(randuri[2]).toMatchObject({ precipitatii_mm: null, ploaie_mm: null, zapada_cm: 2, rafale_max_kmh: null })
+  })
+  it('zilele cerute care lipsesc din răspuns se numără ca absente (răspuns gol / goluri) (review r1 P2)', () => {
+    const OPT7 = { ...OPT, de: '2026-01-01', pana: '2026-01-07' }
+    expect(randuriDinRaspuns(raspuns([]), OPT7)).toEqual({ randuri: [], lipsa: 0, respinse: 0, absente: 7 })
+    const g = randuriDinRaspuns(raspuns([['2026-01-01', 1, 1, 0, 0, 2, 5, 9, 3], ['2026-01-04', 1, 1, 0, 0, 2, 5, 9, 3], ['2026-01-07', 1, 1, 0, 0, 2, 5, 9, 3]]), OPT7)
+    expect(g.randuri.map(r => r.data)).toEqual(['2026-01-01', '2026-01-04', '2026-01-07'])
+    expect(g.absente).toBe(4)
+    // o zi respinsă la validare nu e și „absentă” (e numărată o singură dată)
+    const r = randuriDinRaspuns(raspuns([['2026-01-01', -1, 1, 0, 0, 2, 5, 9, 3]]), { ...OPT, de: '2026-01-01', pana: '2026-01-01' })
+    expect([r.respinse, r.absente]).toEqual([1, 0])
+  })
+  it('punctul de grilă și altitudinea din răspuns; valori invalide → null, nu refuz', () => {
+    const a = randuriDinRaspuns({ ...raspuns([['2026-01-01', 1, 1, 0, 0, 2, 5, 9, 3]]), latitude: 44.674866, longitude: 22.465332, elevation: 65 }, { ...OPT, pana: '2026-01-01' })
+    expect(a.randuri[0]).toMatchObject({ lat: 44.6, lng: 22.6, grila_lat: 44.674866, grila_lng: 22.465332, altitudine_m: 65 })
+    const b = randuriDinRaspuns({ ...raspuns([['2026-01-01', 1, 1, 0, 0, 2, 5, 9, 3]]), latitude: 'x', longitude: 200, elevation: NaN }, { ...OPT, pana: '2026-01-01' })
+    expect(b.randuri[0]).toMatchObject({ grila_lat: null, grila_lng: null, altitudine_m: null })
   })
   it('forma sau unitățile neașteptate = refuz total (nimic scris)', () => {
     expect(() => randuriDinRaspuns(null, OPT)).toThrow()

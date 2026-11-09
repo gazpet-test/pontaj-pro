@@ -90,7 +90,9 @@ BEGIN
      OR NOT pg_temp.t_refuza(format($q$INSERT INTO public.meteo_istoric_zilnic (site_id, data, tmin_c, lat, lng, sursa) VALUES (%s, '2015-01-20', 1, 91, 22.6, 'open-meteo-archive')$q$, s), '23514')
      OR NOT pg_temp.t_refuza(format($q$INSERT INTO public.meteo_istoric_zilnic (site_id, data, tmin_c, lat, lng, sursa) VALUES (%s, '2015-01-20', 1, 44.6, 22.6, 'open-meteo-archive'), (%s, '2015-01-20', 2, 44.6, 22.6, 'open-meteo-archive')$q$, s, s), '23505')
      OR NOT pg_temp.t_refuza($q$INSERT INTO public.meteo_istoric_zilnic (site_id, data, tmin_c, lat, lng, sursa) VALUES (-987654, '2015-01-20', 1, 44.6, 22.6, 'open-meteo-archive')$q$, '23503')
-     OR NOT pg_temp.t_refuza($q$INSERT INTO public.meteo_praguri_nelucrabil (id) VALUES (2)$q$, '23514') THEN
+     OR NOT pg_temp.t_refuza(format($q$INSERT INTO public.meteo_istoric_zilnic (site_id, data, tmin_c, lat, lng, grila_lat, sursa) VALUES (%s, '2015-01-20', 1, 44.6, 22.6, 95, 'open-meteo-archive')$q$, s), '23514')
+     OR NOT pg_temp.t_refuza($q$INSERT INTO public.meteo_praguri_nelucrabil (id) VALUES (2)$q$, '23514')
+     OR NOT pg_temp.t_refuza($q$INSERT INTO public.meteo_praguri_jurnal (versiune, precipitatii_mm_min, zapada_cm_min, tmax_sub_c, tmin_max_c, actualizat_la) VALUES (1, 1, 1, 0, -5, now())$q$, '23505') THEN
     RAISE EXCEPTION 'T2 FAIL: constrângerile';
   END IF;
   RAISE NOTICE 'T2 OK';
@@ -111,8 +113,12 @@ DO $t$
 DECLARE s bigint := pg_temp.t_g('site')::bigint;
 BEGIN
   IF (SELECT count(*) FROM public.meteo_istoric_zilnic WHERE site_id = s) <> 11 OR (SELECT count(*) FROM public.v_meteo_zile WHERE site_id = s AND zi_nelucrabila) <> 6
-     OR (SELECT count(*) FROM public.meteo_praguri_nelucrabil) <> 1 THEN
+     OR (SELECT count(*) FROM public.meteo_praguri_nelucrabil) <> 1 OR (SELECT count(*) FROM public.meteo_praguri_jurnal) <> 1 THEN
     RAISE EXCEPTION 'T3 FAIL: citirea ca non-owner';
+  END IF;
+  IF NOT pg_temp.t_refuza($q$INSERT INTO public.meteo_praguri_jurnal (versiune, precipitatii_mm_min, zapada_cm_min, tmax_sub_c, tmin_max_c, actualizat_la) VALUES (9, 1, 1, 0, -5, now())$q$, '42501')
+     OR NOT pg_temp.t_refuza('DELETE FROM public.meteo_praguri_jurnal', '42501') THEN
+    RAISE EXCEPTION 'T3 FAIL: jurnalul scris ca non-owner';
   END IF;
   IF NOT pg_temp.t_refuza(format($q$INSERT INTO public.meteo_istoric_zilnic (site_id, data, tmin_c, lat, lng, sursa) VALUES (%s, '2015-01-21', 1, 44.6, 22.6, 'open-meteo-archive')$q$, s), '42501')
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.meteo_istoric_zilnic SET precipitatii_mm = 0 WHERE site_id = %s$q$, s), '42501')
@@ -131,21 +137,30 @@ DO $t$
 DECLARE s bigint := pg_temp.t_g('site')::bigint; v integer;
 BEGIN
   IF NOT pg_temp.t_refuza('UPDATE public.meteo_praguri_nelucrabil SET precipitatii_mm_min = 99', '42501') THEN RAISE EXCEPTION 'T4 FAIL: UPDATE direct ca owner'; END IF;
-  v := public.fn_meteo_praguri_seteaza(1, 9.99, 1, 0, -5);
+  -- 9,99 nu se poate stoca într-o coloană cu o zecimală: refuz explicit, nu rotunjire în tăcere (review r1 P1)
+  IF NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(1, 9.99, 1, 0, -5)', '22023') THEN RAISE EXCEPTION 'T4 FAIL: 9,99 acceptat'; END IF;
+  v := public.fn_meteo_praguri_seteaza(1, 9.9, 1, 0, -5);
   IF v <> 2 THEN RAISE EXCEPTION 'T4 FAIL: versiunea nouă %', v; END IF;
-  IF NOT (SELECT zi_nelucrabila FROM public.v_meteo_zile WHERE site_id = s AND data = '2015-01-02')
+  IF (SELECT precipitatii_mm_min FROM public.meteo_praguri_nelucrabil) <> 9.9 THEN RAISE EXCEPTION 'T4 FAIL: valoarea stocată'; END IF;
+  IF NOT (SELECT zi_nelucrabila FROM public.v_meteo_zile WHERE site_id = s AND data = '2015-01-02')    -- 9,99 mm ≥ 9,9
      OR (SELECT praguri_versiune FROM public.v_meteo_zile WHERE site_id = s AND data = '2015-01-02') <> 2 THEN
     RAISE EXCEPTION 'T4 FAIL: reclasificarea după pragul nou';
   END IF;
   IF NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(1, 10, 1, 0, -5)', '40001')
      OR NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(2, NULL, 1, 0, -5)', '22023')
      OR NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(2, 0, 1, 0, -5)', '23514')
-     OR NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(2, 10, 1, 0, -60)', '23514') THEN
+     OR NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(2, 10, 1, 0, -60)', '23514')
+     OR NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(2, 10, 1, -0.05, -5)', '22023') THEN
     RAISE EXCEPTION 'T4 FAIL: refuzurile RPC';
   END IF;
   IF (SELECT versiune FROM public.meteo_praguri_nelucrabil) <> 2
      OR (SELECT actualizat_de FROM public.meteo_praguri_nelucrabil) IS DISTINCT FROM pg_temp.t_g('own')::uuid THEN
     RAISE EXCEPTION 'T4 FAIL: refuzurile au schimbat ceva / autorul';
+  END IF;
+  -- jurnalul: versiunea 1 (pornirea) + versiunea 2 (owner-ul), nimic din refuzuri
+  IF (SELECT string_agg(versiune || ':' || precipitatii_mm_min || ':' || coalesce(actualizat_de::text, '-'), ',' ORDER BY versiune) FROM public.meteo_praguri_jurnal)
+       IS DISTINCT FROM '1:10.0:-,2:9.9:' || pg_temp.t_g('own') THEN
+    RAISE EXCEPTION 'T4 FAIL: jurnalul versiunilor';
   END IF;
   RAISE NOTICE 'T4 OK';
 END $t$;
@@ -162,8 +177,9 @@ BEGIN
   IF (SELECT precipitatii_mm FROM public.meteo_istoric_zilnic WHERE site_id = s AND data = '2015-01-02') <> 12 THEN RAISE EXCEPTION 'T5 FAIL: upsert'; END IF;
   IF NOT pg_temp.t_refuza(format($q$DELETE FROM public.meteo_istoric_zilnic WHERE site_id = %s$q$, s), '42501')
      OR NOT pg_temp.t_refuza('UPDATE public.meteo_praguri_nelucrabil SET precipitatii_mm_min = 99', '42501')
+     OR NOT pg_temp.t_refuza('SELECT count(*) FROM public.meteo_praguri_jurnal', '42501')
      OR NOT pg_temp.t_refuza('SELECT public.fn_meteo_praguri_seteaza(2, 10, 1, 0, -5)', '42501') THEN
-    RAISE EXCEPTION 'T5 FAIL: service_role a putut șterge / schimba pragurile';
+    RAISE EXCEPTION 'T5 FAIL: service_role a putut șterge / schimba pragurile / citi jurnalul';
   END IF;
   RAISE NOTICE 'T5 OK';
 END $t$;
@@ -207,10 +223,22 @@ END $t$;
 
 -- T7: revenirea armată pe stare goală scoate tot; re-aplicarea merge
 UPDATE public.meteo_praguri_nelucrabil SET precipitatii_mm_min = 10, zapada_cm_min = 1, tmax_sub_c = 0, tmin_max_c = -5, versiune = 1, actualizat_de = NULL;
+-- jurnalul încă are versiunea 2: revenirea trebuie să refuze și pentru el
+SAVEPOINT t7a;
+SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
+\set ON_ERROR_STOP 0
+\ir ../supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql
+\set t7a_eroare :ERROR
+\set t7a_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t7a;
+SELECT pg_temp.t_eroare('T7a', :'t7a_eroare', :'t7a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'pragurile au fost schimbate');
+DELETE FROM public.meteo_praguri_jurnal WHERE versiune > 1;
 SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
 \ir ../supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql
 DO $t$ BEGIN
   IF to_regclass('public.meteo_istoric_zilnic') IS NOT NULL OR to_regclass('public.meteo_praguri_nelucrabil') IS NOT NULL OR to_regclass('public.v_meteo_zile') IS NOT NULL
+     OR to_regclass('public.meteo_praguri_jurnal') IS NOT NULL
      OR to_regprocedure('public.fn_meteo_praguri_seteaza(integer, numeric, numeric, numeric, numeric)') IS NOT NULL
      OR current_setting('gazpet.revenire_20261202a', true) <> '' THEN
     RAISE EXCEPTION 'T7 FAIL: revenirea';

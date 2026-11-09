@@ -19,10 +19,14 @@ const zi = (site_id, data, o = {}) => ({ site_id, data, precipitatii_mm: 0, ploa
   cod_vreme: 3, lat: 44.6, lng: 22.6, sursa: 'open-meteo-archive', preluat_la: '2026-11-10T04:05:00Z', zi_nelucrabila: false, motive: [],
   precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, praguri_versiune: 1, ...o })
 const TABELE = () => ({
-  sites: [{ id: 1, name: 'Lot 1', lat: 44.6, lng: 22.6, meteo_activ: true, active: true, proiect_id: 5 }, { id: 9, name: 'Alt proiect', lat: 45, lng: 23, meteo_activ: true, active: true, proiect_id: 6 }],
+  sites: [{ id: 1, name: 'Lot 1', lat: 44.6, lng: 22.6, meteo_activ: true, active: true, proiect_id: 5 },
+    { id: 2, name: 'Lot 2', lat: 44.7, lng: 22.4, meteo_activ: true, active: false, proiect_id: 5 },          // închis, cu istoric
+    { id: 9, name: 'Alt proiect', lat: 45, lng: 23, meteo_activ: true, active: true, proiect_id: 6 }],
   meteo_praguri_nelucrabil: [{ id: 1, precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, versiune: 1, actualizat_la: '2026-11-09T10:00:00Z' }],
+  meteo_praguri_jurnal: [{ versiune: 1, precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, actualizat_la: '2026-11-09T10:00:00Z' }],
   profiles: [{ id: 'u-owner', is_owner: true }, { id: 'u-alt', is_owner: false }],
-  v_meteo_zile: [zi(1, '2026-01-02', { zi_nelucrabila: true, motive: ['precipitatii'], precipitatii_mm: 12.4 }), zi(1, '2026-01-03'), zi(1, '2026-01-04', { zi_nelucrabila: null, precipitatii_mm: null })],
+  v_meteo_zile: [zi(1, '2026-01-02', { zi_nelucrabila: true, motive: ['precipitatii'], precipitatii_mm: 12.4 }), zi(1, '2026-01-03'), zi(1, '2026-01-04', { zi_nelucrabila: null, precipitatii_mm: null }),
+    zi(2, '2026-01-10', { zi_nelucrabila: true, motive: ['zapada'], zapada_cm: 3 })],
 })
 function clientFals({ tabele = TABELE(), user = 'u-alt', eroare = null, rpc = null, functie = null } = {}) {
   const apeluri = []
@@ -75,7 +79,13 @@ async function monteaza(client, proiectId = 5) {
   const apasa = async (el) => { await act(async () => { el.dispatchEvent(new j.window.MouseEvent('click', { bubbles: true })) }); await asteapta(); await asteapta() }
   // JSZip lucrează cu temporizatoare: se așteaptă în timp real (cel mult ~5 s) până la condiție
   const asteaptaPana = async (cond) => { for (let i = 0; i < 250 && !cond(); i++) await act(async () => { await new Promise(r => setTimeout(r, 20)) }) }
-  return { d, buton, apasa, descarcari, asteapta, asteaptaPana }
+  const alege = async (el, val) => {
+    const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set
+    await act(async () => { set.call(el, val); el.dispatchEvent(new j.window.Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })) })
+    await asteapta(); await asteapta()
+  }
+  const stare = (z) => d.querySelector(`[data-zi="${z}"]`)?.getAttribute('data-stare')
+  return { d, buton, apasa, descarcari, asteapta, asteaptaPana, alege, stare, act }
 }
 
 dom(numeDom('TabMeteoIstoric'), () => {
@@ -109,12 +119,52 @@ dom(numeDom('TabMeteoIstoric'), () => {
     const u = await monteaza(c)
     await u.apasa(u.d.querySelector('[data-meteo-completeaza]'))
     expect(c.apeluri).toContainEqual(['meteo-sync', { istoric_backfill: true, site_id: 1 }])
-    expect(u.d.querySelector('[data-meteo-completare]').textContent).toBe('✓ 553 zile scrise (05.05.2025 – 08.11.2026) · 1 respinse la validare')
+    expect(u.d.querySelector('[data-meteo-completare]').textContent).toBe('553 zile scrise (05.05.2025 – 08.11.2026) · 1 respinse la validare')
     curata.forEach(f => f()); curata = []
     const c2 = clientFals({ user: 'u-owner', functie: () => ({ data: { ok: true, istoric: { ok: true, rez: [], sarite: [{ site_id: 1, motiv: 'fără dată de început (proiect fără data_start; se poate da de_la)' }] } }, error: null }) })
     const u2 = await monteaza(c2)
     await u2.apasa(u2.d.querySelector('[data-meteo-completeaza]'))
     expect(u2.d.querySelector('[data-meteo-completare]').textContent).toContain('Nu s-a completat: fără dată de început')
+  })
+  it('șantierul închis rămâne în selector, cu istoric consultabil și exportabil; fără completare (review r1 P1)', async () => {
+    const u = await monteaza(clientFals({ user: 'u-owner' }))
+    const sel = u.d.querySelector('select')
+    expect([...sel.options].map(o => o.textContent)).toEqual(['Lot 1', 'Lot 2 (închis)'])
+    expect(sel.value).toBe('1')                                            // implicit: primul șantier activ
+    await u.alege(sel, '2')
+    expect(u.stare('2026-01-10')).toBe('DA')
+    expect(u.d.body.textContent).toContain('Șantier închis')
+    expect(u.d.querySelector('[data-meteo-completeaza]')).toBe(null)
+    await u.apasa(u.d.querySelector('[data-meteo-export]'))
+    await u.asteaptaPana(() => u.descarcari.length > 0)
+    expect(u.d.body.textContent).toContain('✓ 4 zile exportate')          // 3 de pe Lot 1 + 1 de pe Lot 2 (închis)
+  })
+  it('pragul gol nu devine 0: refuz în formular, fără apel la server (review r1 P2)', async () => {
+    const c = clientFals({ user: 'u-owner' })
+    const u = await monteaza(c)
+    await u.apasa(u.buton('Schimbă pragurile'))
+    const inp = [...u.d.querySelectorAll('input')]
+    await u.alege(inp[3], '   ')                                          // Tmin golit
+    await u.apasa(u.buton('Salvează'))
+    expect(c.apeluri.filter(a => a[0] === 'fn_meteo_praguri_seteaza')).toEqual([])
+    expect(u.d.querySelector('[role="alert"]').textContent).toContain('cel mult o zecimală')
+    await u.alege(inp[3], '-5,55')
+    await u.apasa(u.buton('Salvează'))
+    expect(c.apeluri.filter(a => a[0] === 'fn_meteo_praguri_seteaza')).toEqual([])
+  })
+  it('salvarea pragurilor întârziată + schimbarea șantierului: calendarul arată șantierul ales ACUM (review r1 P1, L24)', async () => {
+    let elib
+    const c = clientFals({ user: 'u-owner', rpc: () => new Promise(r => { elib = r }) })
+    const u = await monteaza(c)
+    await u.apasa(u.buton('Schimbă pragurile'))
+    await u.apasa(u.buton('Salvează'))                                    // RPC-ul rămâne în așteptare
+    await u.alege(u.d.querySelector('select'), '2')
+    expect(u.stare('2026-01-10')).toBe('DA')
+    await u.act(async () => { elib({ data: 2, error: null }) })
+    await u.asteapta(); await u.asteapta(); await u.asteapta()
+    expect(u.d.querySelector('select').value).toBe('2')
+    expect(u.stare('2026-01-10')).toBe('DA')                              // tot Lot 2 …
+    expect(u.stare('2026-01-02')).toBe('fara')                            // … nu zilele lui Lot 1
   })
   it('eroarea la citirea istoricului se afișează (L18), nu un calendar gol', async () => {
     const u = await monteaza(clientFals({ eroare: t => t === 'v_meteo_zile' && 'permission denied' }))
@@ -126,7 +176,7 @@ dom(numeDom('TabMeteoIstoric'), () => {
     await u.asteaptaPana(() => u.descarcari.length > 0)
     expect(u.descarcari.length).toBe(1)
     expect(u.descarcari[0]).toMatch(/^Meteo_zile_nelucrabile_LOT1_\d{2}\.\d{2}\.\d{4}\.xlsx$/)
-    expect(u.d.body.textContent).toContain('✓ 3 zile exportate')
+    expect(u.d.body.textContent).toContain('✓ 4 zile exportate')          // și ziua șantierului închis
   })
   it('proiect fără șantiere legate: mesaj, fără calendar', async () => {
     const u = await monteaza(clientFals(), 77)

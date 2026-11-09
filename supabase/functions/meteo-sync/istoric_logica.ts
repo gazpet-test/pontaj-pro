@@ -109,13 +109,16 @@ export function randuriDinRaspuns(j: any, { site_id, lat, lng, de, pana, preluat
     if (u[v] !== unit) throw new Error(`unitate neașteptată pentru ${v}: ${String(u[v]).slice(0, 20)}`)
     if (!Array.isArray(j.daily[v]) || j.daily[v].length !== j.daily.time.length) throw new Error(`răspuns arhivă: ${v} lipsește sau are altă lungime`)
   }
+  // punctul de grilă și altitudinea întoarse de arhivă (dovadă: valorile sunt ale celulei de grilă); invalide → null, nu refuz
+  const num = (x: unknown, a: number, b: number) => (typeof x === 'number' && Number.isFinite(x) && x >= a && x <= b ? x : null)
+  const grila = { grila_lat: num(j.latitude, -90, 90), grila_lng: num(j.longitude, -180, 180), altitudine_m: num(j.elevation, -500, 9000) }
   const randuri: Record<string, unknown>[] = []
   let lipsa = 0, respinse = 0
   const vazute = new Set<string>()
   j.daily.time.forEach((zi: unknown, i: number) => {
     if (!esteZi(zi) || zi < de || zi > pana || vazute.has(zi)) { respinse++; return }
     vazute.add(zi)
-    const r: Record<string, unknown> = { site_id, data: zi, lat, lng, sursa: SURSA, preluat_la: preluatLa }
+    const r: Record<string, unknown> = { site_id, data: zi, lat, lng, ...grila, sursa: SURSA, preluat_la: preluatLa }
     let ok = true
     for (const [v, [col, , min, max, intreg]] of Object.entries(VARIABILE)) {
       const x = j.daily[v][i]
@@ -128,5 +131,9 @@ export function randuriDinRaspuns(j: any, { site_id, lat, lng, de, pana, preluat
     if (r.tmin_c != null && r.tmax_c != null && (r.tmin_c as number) > (r.tmax_c as number)) { respinse++; return }
     randuri.push(r)
   })
-  return { randuri, lipsa, respinse }
+  // reconcilierea cu intervalul cerut (review r1 P2): zilele cerute care NU apar deloc în răspuns se numără separat — un răspuns scurt
+  // sau cu goluri nu trece drept complet (la backfill, zilele vechi omise nu le mai recuperează fereastra zilnică)
+  let absente = 0
+  for (let z = de; z <= pana; z = adunaZile(z, 1)) if (!vazute.has(z)) absente++
+  return { randuri, lipsa, respinse, absente }
 }

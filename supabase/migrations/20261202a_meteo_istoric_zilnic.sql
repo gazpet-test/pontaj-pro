@@ -8,13 +8,15 @@
 --     pentru anon / authenticated). Citirea: orice utilizator logat (ca meteo_cache: date meteo, nu personale).
 --   * Pragurile „zi nelucrabilă” într-un tabel cu UN rând (meteo_praguri_nelucrabil, id = 1), cu ipoteza de pornire: precipitații ≥ 10 mm
 --     SAU zăpadă ≥ 1 cm SAU Tmax < 0 °C SAU Tmin ≤ −5 °C. Le schimbă DOAR owner-ul, prin fn_meteo_praguri_seteaza (SECURITY DEFINER,
---     auth.uid() + profiles.is_owner, CAS pe versiune).
+--     auth.uid() + profiles.is_owner, CAS pe versiune, cel mult o zecimală). Fiecare versiune intră în meteo_praguri_jurnal (aceeași
+--     tranzacție), ca un export să poată arăta exact pragurile care l-au clasificat.
+--   * Istoricul păstrează și punctul de grilă + altitudinea întoarse de arhivă (dovadă: valorile sunt ale celulei de grilă).
 --   * „Zi nelucrabilă” se calculează într-un singur loc (L19): vederea v_meteo_zile (security_invoker), din istoric + pragurile curente.
 --     true = cel puțin un prag atins (motive = lista lor); false = toate valorile cunoscute și niciun prag atins; NULL = niciun prag atins,
 --     dar lipsește o valoare (necunoscut ≠ lucrabil, L18).
 -- Ce NU face: nicio dată meteo (o aduce meteo-sync după deploy; backfill-ul îl pornește owner-ul), nicio automatizare nouă (pasul zilnic stă
 --   în cron-ul existent meteo_sync_2h → meteo-sync), niciun drept nou pe alte tabele.
--- Ordinea lock-urilor (L06): RPC-ul actualizează UN rând (meteo_praguri_nelucrabil, id = 1) și nimic altceva.
+-- Ordinea lock-urilor (L06): RPC-ul actualizează UN rând (meteo_praguri_nelucrabil, id = 1), apoi inserează în meteo_praguri_jurnal.
 -- Revenire: supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql. Test pe clonă: scripts/test_meteo_istoric.sql.
 DO $pre$
 BEGIN
@@ -29,7 +31,7 @@ BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- obiectele noi nu există (reaplicare = refuz)
   IF to_regclass('public.meteo_istoric_zilnic') IS NOT NULL OR to_regclass('public.meteo_praguri_nelucrabil') IS NOT NULL
-     OR to_regclass('public.v_meteo_zile') IS NOT NULL
+     OR to_regclass('public.meteo_praguri_jurnal') IS NOT NULL OR to_regclass('public.v_meteo_zile') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_meteo_praguri_seteaza') THEN
     RAISE EXCEPTION '20261202a: obiectele exista deja (reaplicare)';
   END IF;
@@ -59,6 +61,15 @@ CREATE TABLE public.meteo_praguri_nelucrabil (
 );
 COMMENT ON TABLE public.meteo_praguri_nelucrabil IS 'Pragurile „zi nelucrabilă” (un rând, id = 1): precipitații ≥ precipitatii_mm_min SAU zăpadă ≥ zapada_cm_min SAU Tmax < tmax_sub_c SAU Tmin ≤ tmin_max_c. Se schimbă doar prin fn_meteo_praguri_seteaza (owner).';
 INSERT INTO public.meteo_praguri_nelucrabil (id) VALUES (1);
+-- jurnalul versiunilor (dovadă reproductibilă: ce praguri au clasificat un export, cine și când le-a schimbat); îl scrie doar RPC-ul
+CREATE TABLE public.meteo_praguri_jurnal (
+  versiune integer PRIMARY KEY CHECK (versiune >= 1),
+  precipitatii_mm_min numeric(6,1) NOT NULL, zapada_cm_min numeric(6,1) NOT NULL, tmax_sub_c numeric(5,1) NOT NULL, tmin_max_c numeric(5,1) NOT NULL,
+  actualizat_la timestamptz NOT NULL, actualizat_de uuid
+);
+COMMENT ON TABLE public.meteo_praguri_jurnal IS 'Toate versiunile pragurilor „zi nelucrabilă” (versiunea 1 = pornirea). Scris doar de fn_meteo_praguri_seteaza, în aceeași tranzacție cu schimbarea.';
+INSERT INTO public.meteo_praguri_jurnal (versiune, precipitatii_mm_min, zapada_cm_min, tmax_sub_c, tmin_max_c, actualizat_la, actualizat_de)
+  SELECT versiune, precipitatii_mm_min, zapada_cm_min, tmax_sub_c, tmin_max_c, actualizat_la, actualizat_de FROM public.meteo_praguri_nelucrabil WHERE id = 1;
 
 -- ── istoricul zilnic ──
 CREATE TABLE public.meteo_istoric_zilnic (
@@ -74,6 +85,10 @@ CREATE TABLE public.meteo_istoric_zilnic (
   cod_vreme smallint CHECK (cod_vreme BETWEEN 0 AND 99),
   lat numeric(9,6) NOT NULL CHECK (lat BETWEEN -90 AND 90),
   lng numeric(9,6) NOT NULL CHECK (lng BETWEEN -180 AND 180),
+  -- punctul de grilă și altitudinea întoarse de arhivă (datele sunt ale celulei de grilă, nu ale punctului exact)
+  grila_lat numeric(9,6) CHECK (grila_lat BETWEEN -90 AND 90),
+  grila_lng numeric(9,6) CHECK (grila_lng BETWEEN -180 AND 180),
+  altitudine_m numeric(7,1) CHECK (altitudine_m BETWEEN -500 AND 9000),
   sursa text NOT NULL CHECK (sursa IN ('open-meteo-archive')),
   preluat_la timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (site_id, data),
@@ -83,18 +98,20 @@ CREATE TABLE public.meteo_istoric_zilnic (
 COMMENT ON TABLE public.meteo_istoric_zilnic IS 'Vremea zilnică pe șantier (site_id, data), din arhiva Open-Meteo, ziua în Europe/Bucharest. Scrisă doar de edge fn meteo-sync (service_role). lat/lng = coordonatele folosite la preluare (dovadă). „Zi nelucrabilă”: v_meteo_zile.';
 
 ALTER TABLE public.meteo_praguri_nelucrabil ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.meteo_praguri_jurnal ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.meteo_istoric_zilnic ENABLE ROW LEVEL SECURITY;
 CREATE POLICY meteo_praguri_select ON public.meteo_praguri_nelucrabil FOR SELECT TO authenticated USING ((SELECT auth.uid()) IS NOT NULL);
+CREATE POLICY meteo_praguri_jurnal_select ON public.meteo_praguri_jurnal FOR SELECT TO authenticated USING ((SELECT auth.uid()) IS NOT NULL);
 CREATE POLICY meteo_istoric_select ON public.meteo_istoric_zilnic FOR SELECT TO authenticated USING ((SELECT auth.uid()) IS NOT NULL);
-REVOKE ALL ON public.meteo_praguri_nelucrabil, public.meteo_istoric_zilnic FROM PUBLIC, anon, authenticated, service_role;
-GRANT SELECT ON public.meteo_praguri_nelucrabil, public.meteo_istoric_zilnic TO authenticated;
+REVOKE ALL ON public.meteo_praguri_nelucrabil, public.meteo_praguri_jurnal, public.meteo_istoric_zilnic FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.meteo_praguri_nelucrabil, public.meteo_praguri_jurnal, public.meteo_istoric_zilnic TO authenticated;
 GRANT SELECT ON public.meteo_praguri_nelucrabil TO service_role;
 GRANT SELECT, INSERT, UPDATE ON public.meteo_istoric_zilnic TO service_role;
 
 -- ── „zi nelucrabilă”, într-un singur loc (L19) ──
 CREATE VIEW public.v_meteo_zile WITH (security_invoker = on) AS
 SELECT i.site_id, i.data, i.precipitatii_mm, i.ploaie_mm, i.zapada_cm, i.tmin_c, i.tmax_c, i.vant_max_kmh, i.rafale_max_kmh, i.cod_vreme,
-       i.lat, i.lng, i.sursa, i.preluat_la,
+       i.lat, i.lng, i.grila_lat, i.grila_lng, i.altitudine_m, i.sursa, i.preluat_la,
        CASE WHEN cardinality(m.motive) > 0 THEN true
             WHEN i.precipitatii_mm IS NULL OR i.zapada_cm IS NULL OR i.tmax_c IS NULL OR i.tmin_c IS NULL THEN NULL
             ELSE false END AS zi_nelucrabila,
@@ -122,12 +139,20 @@ BEGIN
   IF p_versiune IS NULL OR p_precipitatii_mm IS NULL OR p_zapada_cm IS NULL OR p_tmax_sub_c IS NULL OR p_tmin_max_c IS NULL THEN
     RAISE EXCEPTION 'pragurile sunt incomplete' USING ERRCODE = '22023';
   END IF;
+  -- coloanele au o zecimală: o valoare cu mai multe nu se rotunjește în tăcere (9,99 ar deveni 10,0), se refuză
+  IF p_precipitatii_mm <> round(p_precipitatii_mm, 1) OR p_zapada_cm <> round(p_zapada_cm, 1)
+     OR p_tmax_sub_c <> round(p_tmax_sub_c, 1) OR p_tmin_max_c <> round(p_tmin_max_c, 1) THEN
+    RAISE EXCEPTION 'pragurile au cel mult o zecimală' USING ERRCODE = '22023';
+  END IF;
   UPDATE public.meteo_praguri_nelucrabil
      SET precipitatii_mm_min = p_precipitatii_mm, zapada_cm_min = p_zapada_cm, tmax_sub_c = p_tmax_sub_c, tmin_max_c = p_tmin_max_c,
          versiune = versiune + 1, actualizat_la = now(), actualizat_de = v_uid
    WHERE id = 1 AND versiune = p_versiune
    RETURNING versiune INTO v_ver;
   IF v_ver IS NULL THEN RAISE EXCEPTION 'pragurile au fost schimbate între timp — reîncarcă pagina' USING ERRCODE = '40001'; END IF;
+  -- aceeași tranzacție: versiunea nouă intră în jurnal (PK pe versiune: nicio versiune nu se rescrie)
+  INSERT INTO public.meteo_praguri_jurnal (versiune, precipitatii_mm_min, zapada_cm_min, tmax_sub_c, tmin_max_c, actualizat_la, actualizat_de)
+    SELECT versiune, precipitatii_mm_min, zapada_cm_min, tmax_sub_c, tmin_max_c, actualizat_la, actualizat_de FROM public.meteo_praguri_nelucrabil WHERE id = 1;
   RETURN v_ver;
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_meteo_praguri_seteaza(integer, numeric, numeric, numeric, numeric) FROM PUBLIC, anon, authenticated, service_role;
@@ -137,13 +162,15 @@ GRANT EXECUTE ON FUNCTION public.fn_meteo_praguri_seteaza(integer, numeric, nume
 DO $post$
 BEGIN
   IF (SELECT count(*) FROM public.meteo_praguri_nelucrabil WHERE id = 1 AND precipitatii_mm_min = 10 AND zapada_cm_min = 1 AND tmax_sub_c = 0 AND tmin_max_c = -5 AND versiune = 1) <> 1
-     OR (SELECT count(*) FROM public.meteo_praguri_nelucrabil) <> 1 THEN
-    RAISE EXCEPTION '20261202a post: pragurile de pornire';
+     OR (SELECT count(*) FROM public.meteo_praguri_nelucrabil) <> 1
+     OR (SELECT count(*) FROM public.meteo_praguri_jurnal) <> 1
+     OR (SELECT count(*) FROM public.meteo_praguri_jurnal WHERE versiune = 1 AND precipitatii_mm_min = 10 AND zapada_cm_min = 1 AND tmax_sub_c = 0 AND tmin_max_c = -5) <> 1 THEN
+    RAISE EXCEPTION '20261202a post: pragurile de pornire / jurnalul';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_class c WHERE c.oid IN ('public.meteo_praguri_nelucrabil'::regclass, 'public.meteo_istoric_zilnic'::regclass)
+  IF EXISTS (SELECT 1 FROM pg_class c WHERE c.oid IN ('public.meteo_praguri_nelucrabil'::regclass, 'public.meteo_praguri_jurnal'::regclass, 'public.meteo_istoric_zilnic'::regclass)
                AND (NOT c.relrowsecurity OR c.relforcerowsecurity OR pg_get_userbyid(c.relowner) <> 'postgres'))
-     OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('meteo_praguri_nelucrabil', 'meteo_istoric_zilnic')) <> 2
-     OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('meteo_praguri_nelucrabil', 'meteo_istoric_zilnic')
+     OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('meteo_praguri_nelucrabil', 'meteo_praguri_jurnal', 'meteo_istoric_zilnic')) <> 3
+     OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('meteo_praguri_nelucrabil', 'meteo_praguri_jurnal', 'meteo_istoric_zilnic')
                   AND (cmd <> 'SELECT' OR roles <> ARRAY['authenticated']::name[] OR permissive <> 'PERMISSIVE')) THEN
     RAISE EXCEPTION '20261202a post: RLS / politici';
   END IF;
@@ -151,6 +178,10 @@ BEGIN
   IF has_table_privilege('anon', 'public.meteo_istoric_zilnic', 'SELECT') OR has_table_privilege('anon', 'public.v_meteo_zile', 'SELECT')
      OR has_table_privilege('authenticated', 'public.meteo_istoric_zilnic', 'INSERT,UPDATE,DELETE,TRUNCATE')
      OR has_table_privilege('authenticated', 'public.meteo_praguri_nelucrabil', 'INSERT,UPDATE,DELETE,TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.meteo_praguri_jurnal', 'INSERT,UPDATE,DELETE,TRUNCATE')
+     OR has_table_privilege('anon', 'public.meteo_praguri_jurnal', 'SELECT')
+     OR has_table_privilege('service_role', 'public.meteo_praguri_jurnal', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+     OR NOT has_table_privilege('authenticated', 'public.meteo_praguri_jurnal', 'SELECT')
      OR has_table_privilege('service_role', 'public.meteo_istoric_zilnic', 'DELETE,TRUNCATE')
      OR has_table_privilege('service_role', 'public.meteo_praguri_nelucrabil', 'INSERT,UPDATE,DELETE,TRUNCATE')
      -- cu o listă, has_table_privilege e adevărat dacă ORICARE drept există: drepturile obligatorii se verifică pe rând

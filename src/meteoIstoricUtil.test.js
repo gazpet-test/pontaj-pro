@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import * as XLSX_mod from 'xlsx-js-style'
 import JSZip from 'jszip'
 import { calendarLuna, zileInLuna, rezumatLuna, peLuni, motiveText, vremeWmo, eticheta, ziSaptamana, pragText, toateZilele, construiesteExport,
-  numeFisierMeteo, CAP_ZILE, CULOARE_NELUCRABIL, COLOANE } from './meteoIstoricUtil.js'
+  numeFisierMeteo, CAP_ZILE, CULOARE_NELUCRABIL, COLOANE, parsePrag, pragurileExportului } from './meteoIstoricUtil.js'
 const XLSX = XLSX_mod.default || XLSX_mod
 
 const P = { precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, versiune: 3, actualizat_la: '2026-11-09T10:00:00Z' }
@@ -40,6 +40,10 @@ describe('Meteo — calendar și rezumate', () => {
     expect([eticheta(true), eticheta(false), eticheta(null)]).toEqual(['DA', 'NU', 'necunoscut'])
     expect(pragText(P)).toBe('precipitații ≥ 10 mm sau zăpadă ≥ 1 cm sau Tmax < 0 °C sau Tmin ≤ -5 °C')
     expect(numeFisierMeteo('PRUNISOR_JUPA', '2026-11-09')).toBe('Meteo_zile_nelucrabile_PRUNISOR_JUPA_09.11.2026.xlsx')
+  })
+  it('pragurile din formular: obligatorii, cel mult o zecimală, virgula acceptată; golul NU devine 0 (review r1 P2)', () => {
+    expect(['10', ' 9,9 ', '-5', '-5.5', '0'].map(parsePrag)).toEqual([10, 9.9, -5, -5.5, 0])
+    expect(['', '   ', null, undefined, '9.99', '1e3', 'abc', '10,', '-', '1234'].map(parsePrag)).toEqual([null, null, null, null, null, null, null, null, null, null])
   })
 })
 
@@ -106,30 +110,42 @@ async function fillCelula(zip, foaie, ref) {
 }
 
 describe('Meteo — exportul Excel', () => {
+  it('pragurile declarate = cele din rânduri; versiuni / valori amestecate = refuz (review r1 P1)', async () => {
+    expect(pragurileExportului([zi(1, '2026-01-01'), zi(2, '2026-01-02')])).toEqual({ versiune: 3, precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5 })
+    expect(() => pragurileExportului([zi(1, '2026-01-01'), zi(1, '2026-01-02', { praguri_versiune: 4, precipitatii_mm_min: 20 })])).toThrow(/pragurile s-au schimbat în timpul exportului/)
+    expect(() => pragurileExportului([zi(1, '2026-01-01'), zi(1, '2026-01-02', { precipitatii_mm_min: 20 })])).toThrow(/s-au schimbat/)
+    await expect(construiesteExport({ santiere: [{ id: 1, name: 'A' }], randuri: [zi(1, '2026-01-01'), zi(1, '2026-01-02', { praguri_versiune: 4 })], jurnal: [], generatLa: 'x' }))
+      .rejects.toThrow(/s-au schimbat/)
+  })
   it('foile, antetul, zilele cu DA / NU / necunoscut, pe luni, pragurile și sursa; înghețare + filtru + landscape', async () => {
-    const santiere = [{ id: 2, name: 'B Lot 2' }, { id: 1, name: 'A Lot 1' }]
-    const randuri = [zi(2, '2026-01-01'), zi(1, '2026-01-02', { zi_nelucrabila: true, motive: ['precipitatii'], precipitatii_mm: 12.4, cod_vreme: 63 }),
+    const santiere = [{ id: 2, name: 'B Lot 2', active: false }, { id: 1, name: 'A Lot 1' }]
+    const randuri = [zi(2, '2026-01-01'), zi(1, '2026-01-02', { zi_nelucrabila: true, motive: ['precipitatii'], precipitatii_mm: 12.4, cod_vreme: 63, grila_lat: 44.674866, grila_lng: 22.465332, altitudine_m: 65 }),
       zi(1, '2026-01-01', { zi_nelucrabila: null, precipitatii_mm: null })]
-    const bytes = await construiesteExport({ santiere, randuri, praguri: P, generatLa: '09.11.2026, 18:00' })
+    const jurnal = [{ versiune: 1, precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, actualizat_la: '2026-11-01T08:00:00Z' },
+      { versiune: 3, precipitatii_mm_min: 10, zapada_cm_min: 1, tmax_sub_c: 0, tmin_max_c: -5, actualizat_la: '2026-11-09T10:00:00Z' }]
+    // pagina are alte praguri (P = versiunea 3 aici); fișierul trebuie să le ia din rânduri, nu din pagină
+    const bytes = await construiesteExport({ santiere, randuri, jurnal, generatLa: '09.11.2026, 18:00' })
     const wb = XLSX.read(bytes, { type: 'array' })
     expect(wb.SheetNames).toEqual(['Zile', 'Pe luni', 'Praguri si sursa'])
     const Z = XLSX.utils.sheet_to_json(wb.Sheets.Zile, { header: 1, defval: '' })
     expect(Z[0]).toEqual(CAP_ZILE)
-    expect(Z.slice(1).map(r => [r[0], r[1], r[2], r[3], r[10], r[11], r[12]])).toEqual([
-      ['A Lot 1', '01.01.2026', 'joi', '', 'Înnorat (3)', 'necunoscut', ''],
-      ['A Lot 1', '02.01.2026', 'vineri', 12.4, 'Ploaie (63)', 'DA', 'precipitații 12,4 mm ≥ 10'],
-      ['B Lot 2', '01.01.2026', 'joi', 0, 'Înnorat (3)', 'NU', ''],
+    expect(Z.slice(1).map(r => [r[0], r[1], r[2], r[3], r[10], r[11], r[12], r[14]])).toEqual([
+      ['A Lot 1', '01.01.2026', 'joi', '', 'Înnorat (3)', 'necunoscut', '', ''],
+      ['A Lot 1', '02.01.2026', 'vineri', 12.4, 'Ploaie (63)', 'DA', 'precipitații 12,4 mm ≥ 10', '44.674866, 22.465332 · 65 m'],
+      ['B Lot 2 (închis)', '01.01.2026', 'joi', 0, 'Înnorat (3)', 'NU', '', ''],
     ])
     const L = XLSX.utils.sheet_to_json(wb.Sheets['Pe luni'], { header: 1, defval: '' })
-    expect(L.slice(1)).toEqual([['B Lot 2', 'ianuarie 2026', 1, 0, 0], ['A Lot 1', 'ianuarie 2026', 2, 1, 1]])
+    expect(L.slice(1)).toEqual([['B Lot 2 (închis)', 'ianuarie 2026', 1, 0, 0], ['A Lot 1', 'ianuarie 2026', 2, 1, 1]])
     const I = XLSX.utils.sheet_to_json(wb.Sheets['Praguri si sursa'], { header: 1, defval: '' })
     expect(I[1]).toEqual(['Zi nelucrabilă dacă', 'precipitații ≥ 10 mm sau zăpadă ≥ 1 cm sau Tmax < 0 °C sau Tmin ≤ -5 °C'])
-    expect(I[2]).toEqual(['Versiunea pragurilor', '3'])
+    expect(I[2]).toEqual(['Versiunea pragurilor folosită', '3'])
+    expect(I[3]).toEqual(['Versiunea stabilită la', '2026-11-09 10:00 UTC'])
     expect(JSON.stringify(I)).toContain('Open-Meteo')
+    expect(I.slice(-2).map(r => r[0])).toEqual(['versiunea 1', 'versiunea 3 (folosită)'])
     const zip = await JSZip.loadAsync(bytes)
     const s1 = await zip.file('xl/worksheets/sheet1.xml').async('string')
     expect(s1).toContain('<pane xSplit="2" ySplit="1" topLeftCell="C2" activePane="bottomRight" state="frozen"/>')
-    expect(s1).toMatch(/<autoFilter ref="A1:P4"\s*\/>/)
+    expect(s1).toMatch(/<autoFilter ref="A1:Q4"\s*\/>/)
     expect(s1).toContain('orientation="landscape"')
     expect(await fillCelula(zip, 'sheet1.xml', 'L3')).toBe(CULOARE_NELUCRABIL)   // ziua nelucrabilă
     expect(await fillCelula(zip, 'sheet1.xml', 'B3')).toBe(CULOARE_NELUCRABIL)
