@@ -109,6 +109,29 @@ describe('e2e_redari — garda de rețea', () => {
     expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva`, permisa: false }, raspunsRezerva, 'scriere', c2)).toBe(0)   // nepermis
     expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva`, permisa: true }, [{ id: NOUA }], 'scriere', c2)).toBe(0)    // câmpul greșit
   })
+  it('P1 r4: select cu alias / cast / cale JSON / spread nu învață nimic; citire cu alias → PATCH străin rămâne blocat', () => {
+    const ctx = ctxLant()
+    // scenariul din review: `id` din răspuns e de fapt textul din `observatii` (UUID străin scris acolo)
+    expect(get(`/rest/v1/red_parcele?select=id:observatii,proiect_id&proiect_id=eq.${TEST.id}`, [{ id: Z, proiect_id: TEST.id }], ctx)).toBe(0)
+    expect(s(`/rest/v1/red_parcele?id=eq.${Z}`, 'PATCH', { sat: 'x' }, ctx)).toBe('blocheaza')
+    // aceleași trucuri în relații încorporate, vederi și RPC-uri
+    expect(get('/rest/v1/red_parcele?select=*,red_detinatori(id:observatii,parcela_id)', [{ id: PAR, proiect_id: TEST.id, red_detinatori: [{ id: Z, parcela_id: PAR }] }], ctx)).toBe(0)
+    expect(get('/rest/v1/red_parcele?select=*,red_detinatori:red_convocari(*)', [{ id: PAR, proiect_id: TEST.id, red_detinatori: [{ id: Z, parcela_id: PAR }] }], ctx)).toBe(0)
+    expect(get('/rest/v1/red_parcele?select=id,proiect_id,uat_id:observatii', [{ id: PAR, proiect_id: TEST.id, uat_id: Z }], ctx)).toBe(0)
+    expect(get('/rest/v1/v_red_registru?select=proiect_id,detinator_id:observatii', [{ proiect_id: TEST.id, detinator_id: Z }], ctx)).toBe(0)
+    expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva?select=convocare_id:nr_document`, permisa: true }, [{ convocare_id: Z }], 'scriere', ctx)).toBe(0)
+    for (const sel of ['id::text,proiect_id', 'date->>id,proiect_id', 'date->id,proiect_id', '...red_uat(id),proiect_id', 'id,proiect_id,observatii.max()',
+      'id,%22proiect_id%22', 'id,%20proiect_id', 'id,proiect_id,', 'red_detinatori!fk', 'red_detinatori()', 'id&select=id:observatii'])
+      expect(get(`/rest/v1/red_parcele?select=${sel}`, [{ id: Z, proiect_id: TEST.id }], ctx)).toBe(0)
+    for (const tab of ['red_parcele', 'red_detinatori', 'red_convocari']) expect(s(`/rest/v1/${tab}?id=eq.${Z}`, 'PATCH', { stare: 'x' }, ctx)).toBe('blocheaza')
+    // select-urile curate continuă să învețe: coloane simple, `*`, relații încorporate cu sau fără indiciu `!`
+    const c2 = ctxGarda()
+    const P5 = 'eeeeeeee-0000-4000-8000-000000000001', D5 = 'eeeeeeee-0000-4000-8000-000000000002'
+    expect(get(`/rest/v1/red_parcele?select=id,proiect_id&proiect_id=eq.${TEST.id}`, [{ id: P5, proiect_id: TEST.id }], c2)).toBe(1)
+    const c3 = ctxGarda()
+    expect(get('/rest/v1/red_parcele?select=id,proiect_id,red_detinatori!inner(id,parcela_id)', [{ id: P5, proiect_id: TEST.id, red_detinatori: [{ id: D5, parcela_id: P5 }] }], c3)).toBe(2)
+    expect(s(`/rest/v1/red_detinatori?id=eq.${D5}`, 'PATCH', { nume: 'TESTE2E Y' }, c3)).toBe('permite')
+  })
   it('învățarea: relații încorporate, vederi v_red_* și ID-ul nou al unui RPC permis', () => {
     const ctx = ctxGarda()
     const P3 = 'cccccccc-0000-4000-8000-000000000001', D3 = 'cccccccc-0000-4000-8000-000000000002', D4 = 'cccccccc-0000-4000-8000-000000000003'

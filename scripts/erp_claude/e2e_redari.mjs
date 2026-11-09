@@ -254,11 +254,39 @@ export function clasificaCerere({ url, metoda, corp, antete }, mod, ctx = ctxGar
 //  • rândurile vederilor v_red_* cu proiect_id = TEST: cheile străine cu tip cunoscut (TIP_CHEIE);
 //  • răspunsul unui RPC de scriere PERMIS de gardă: ID-ul nou, cu tipul din RPC_INTOARCE.
 // Textul liber (observații, mesaje, nume) nu se citește niciodată.
+// Proveniența câmpurilor (review Jakarinos r4 P1): se învață DOAR dacă `select`-ul cererii are coloane simple, `*` și relații încorporate
+// `tabel(…)` / `tabel!indiciu(…)`, fără alias (`id:observatii`), cast (`::`), căi JSON (`->`, `->>`), spread (`...`) sau agregate —
+// altfel o cheie `id` / `proiect_id` din răspuns poate fi orice coloană redenumită. Regula ține și pentru vederi, RPC-uri și relațiile încorporate.
+export function selectSigur(u) {
+  const sel = u.searchParams.getAll('select')
+  if (sel.length === 0) return true                         // fără select = `*`, cheile sunt numele reale ale coloanelor
+  if (sel.length > 1) return false
+  const s = sel[0]
+  if (!/^[A-Za-z0-9_*,()!]+$/.test(s)) return false         // orice `:` `.` `-` `>` `"` sau spațiu = refuz
+  let i = 0
+  const ident = () => { const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(s.slice(i)); if (!m) return false; i += m[0].length; return true }
+  const lista = () => {
+    for (;;) {
+      if (s[i] === '*') i++
+      else {
+        if (!ident()) return false
+        const indiciu = s[i] === '!'
+        if (indiciu) { i++; if (!ident()) return false }
+        if (s[i] === '(') { i++; if (!lista() || s[i] !== ')') return false; i++ }
+        else if (indiciu) return false                      // `!indiciu` doar pe o relație încorporată
+      }
+      if (s[i] !== ',') return true
+      i++
+    }
+  }
+  return lista() && i === s.length
+}
 export function invataIduri({ url, permisa }, raspuns, mod, ctx) {
   if (mod !== 'scriere' || raspuns == null) return 0
   let u
   try { u = new URL(url) } catch { return 0 }
   if (!/supabase\.co$/.test(u.hostname) || !u.pathname.startsWith('/rest/v1/')) return 0
+  if (!selectSigur(u)) return 0
   const resursa = u.pathname.slice('/rest/v1/'.length)
   let n = 0
   if (resursa.startsWith('rpc/')) {
