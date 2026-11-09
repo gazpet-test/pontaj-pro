@@ -1,5 +1,8 @@
 -- E1-1a: numai identitate. NU activeaza hook-ul si NU modifica handle_new_user.
 -- Tranzactia apartine runnerului. Inventarul este DML autorizat numai la apply.
+-- r3 (09.11.2026, Copilot r2 P1-01/P1-02): 'erp' numai din lista aprobata explicit de owner (hash pe id);
+-- amprentele functiilor net fixate inainte de apply. Ambele liste se completeaza din inventarul read-only
+-- (scripts/portal/inventar_prod_e1.sql) inainte de DRY; necompletate = refuz atomic.
 DO $pre$
 BEGIN
   IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare', true)
@@ -17,7 +20,7 @@ BEGIN
     OR to_regclass('public.conturi_tip_jurnal') IS NOT NULL
     OR EXISTS (SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil',
-        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')) THEN
+        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')) THEN
     RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';
   END IF;
 END $pre$;
@@ -183,6 +186,14 @@ LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $hash$
  SELECT '{"public.auto_cost_from_tichet()":"31132cfdbc627358a1e848cf8672606a","public.auto_flag_agabaritic()":"2768f944886579d664b477f617b8b350","public.check_alerta_consum()":"5f993634b5d73d2c819fd00f710a5487","public.fn_claude_context_cleanup()":"bddab2d4bec1914f9ba52383b80a59fc","public.fn_contracte_linii_updated_at()":"554e8749a7b13374a57833f2d27d9ea2","public.fn_executie_touch_updated_at()":"4c906448b83147209f60b2f43138eb70","public.fn_notif_lipsa_fisa_service(bigint)":"04e96ff7871768dab1fbd6ee5111853f","public.fn_trg_categorie_cantitate()":"55e73645ca631dd12428d651b3e0b08f","public.gen_numar_transport()":"c7516ef4ade0e73d7ae0e6858c127d36","public.get_istoric_importuri_evogps()":"63c9562772432344f3363ec9a80b5d68","public.hr_recrutare_touch_updated_at()":"95e1005ac999206e023f52866c68547e","public.notify_tichet_opener_on_resolve()":"79b205d113f9bf87ab49df9c67e8cb22","public.set_updated_at()":"7f72f26535f14d5d91a2cedf23265f32","public.tg_active_lipsa_fisa()":"c356c1e1e9f37fa0a12818e7ecb5b412","public.tg_hr_employees_private_touch()":"e68a08b51a46461971979211b6bf974c","public.tg_lsf_touch_updated()":"5ac90d6b16d4a6ce589897122f2fdb26","public.update_hr_semnaturi_modificat_la()":"3c013c1387867ac00e606f874508d984","public.update_modificat_la_hr_docp()":"c8a2931b006daa93bafd3576bc9e1dc4","public.update_modificat_la_ord_setari()":"4a10ec11414f85ad1e984b16fe423456","public.update_stoc_achizitie()":"d2b7ad81c50620f265e0c8de63c15164","public.update_stoc_rezervor()":"e0f68e63fd8a7222258546754531c732"}'::jsonb;
 $hash$;
 REVOKE ALL ON FUNCTION public.fn_portal_public_md5() FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r3 (Copilot r2 P1-02): lista exacta + amprentele revizuite ale functiilor net (pg_net) executabile prin PUBLIC,
+-- fixate INAINTE de apply din inventarul read-only; nu se mai invata la apply. Gol = refuz atomic.
+-- Forma cheii: schema.nume(tipuri) cu oidvectortypes, ca in poarta. Valoarea: md5(pg_get_functiondef).
+CREATE FUNCTION public.fn_portal_net_md5() RETURNS jsonb
+LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $nethash$
+ SELECT '{}'::jsonb;
+$nethash$;
+REVOKE ALL ON FUNCTION public.fn_portal_net_md5() FROM PUBLIC,anon,authenticated,service_role,teren;
 -- Exceptie explicita pentru catalogul SQL standard livrat de initdb (OID sub FirstNormalObjectId).
 -- Nu accepta obiecte noi de aplicatie in information_schema; baseline-ul nu modifica privilegii.
 CREATE FUNCTION public.fn_portal_catalog_amprenta(p_oid oid) RETURNS jsonb
@@ -289,11 +300,22 @@ BEGIN
       WHERE p.oid=to_regprocedure(r.key) AND p.proowner='postgres'::regrole) THEN
       RAISE EXCEPTION 'PORTAL_PUBLIC_BASELINE_UNREVIEWED_OR_CHANGED'; END IF;
   END LOOP;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-    WHERE n.nspname='net' AND has_function_privilege('teren',p.oid,'EXECUTE')) <> 12
+  -- net: setul live executabil de teren = exact cheile revizuite (ambele directii), fara DEFINER, corp identic.
+  -- Corp schimbat inainte de apply (aceeasi semnatura, acelasi numar) = refuz.
+  IF public.fn_portal_net_md5() = '{}'::jsonb
+    OR (SELECT coalesce(array_agg(k ORDER BY k COLLATE "C"),'{}') FROM jsonb_object_keys(public.fn_portal_net_md5()) k)
+      IS DISTINCT FROM (SELECT coalesce(array_agg(x.s ORDER BY x.s COLLATE "C"),'{}') FROM (
+        SELECT quote_ident(n.nspname)||'.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')' AS s
+        FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname='net' AND has_function_privilege('teren',p.oid,'EXECUTE')) x)
     OR EXISTS (SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='net' AND p.prosecdef AND has_function_privilege('teren',p.oid,'EXECUTE')) THEN
     RAISE EXCEPTION 'PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED'; END IF;
+  FOR r IN SELECT key,value FROM jsonb_each_text(public.fn_portal_net_md5()) LOOP
+    IF r.value IS DISTINCT FROM (SELECT md5(pg_get_functiondef(p.oid)) FROM pg_proc p
+      WHERE p.oid=to_regprocedure(r.key)) THEN
+      RAISE EXCEPTION 'PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED'; END IF;
+  END LOOP;
 END $public_pre$;
 ALTER TABLE public.portal_public_baseline DISABLE TRIGGER portal_public_baseline_imuabil;
 INSERT INTO public.portal_public_baseline
@@ -312,16 +334,46 @@ WHERE n.nspname='information_schema' AND c.oid<16384 AND c.relkind IN ('r','v')
  AND NOT has_any_column_privilege('teren',c.oid,'INSERT,UPDATE,REFERENCES');
 ALTER TABLE public.portal_public_baseline ENABLE TRIGGER portal_public_baseline_imuabil;
 
+-- r3 (Copilot r2 P1-01): 'erp' DOAR pentru conturile aprobate explicit de owner. Legarea de fisa, is_owner sau un
+-- drept pe modul NU sunt dovada de aprobare. Lista = sha256 (hex) pe auth.users.id::text, revizuita de Razvan din
+-- raportul INTERN al inventarului read-only si fixata aici inainte de DRY (fara UUID-uri / emailuri in repo).
+-- Refuz atomic: lista goala, element invalid / duplicat / fara cont, cont teren in lista, owner care lipseste din lista.
+-- Restul conturilor (nelistate) devin 'neaprobat': hook-ul le refuza tokenul pana la fn_cont_aproba_erp (E1-1b).
+CREATE TEMP TABLE portal_erp_aprobat ON COMMIT DROP AS
+SELECT ARRAY[
+ -- PORTAL_ERP_APROBAT: hash-urile revizuite, cate unul pe rand, intre ghilimele simple, separate prin virgula
+]::text[] AS lista;
+DO $erp_pre$
+DECLARE v text[];
+BEGIN
+  SELECT lista INTO STRICT v FROM pg_temp.portal_erp_aprobat;
+  IF v IS NULL OR cardinality(v) = 0 THEN RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_MISSING'; END IF;
+  IF EXISTS (SELECT FROM unnest(v) h WHERE h IS NULL OR h !~ '^[0-9a-f]{64}$')
+    OR cardinality(v) <> (SELECT count(DISTINCT h) FROM unnest(v) h) THEN
+    RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_INVALID'; END IF;
+  IF EXISTS (SELECT FROM unnest(v) h WHERE NOT EXISTS (SELECT FROM auth.users u
+      WHERE encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=h)) THEN
+    RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_CHANGED'; END IF;
+  IF EXISTS (SELECT FROM auth.users u WHERE encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=ANY(v)
+      AND (lower(split_part(u.email,'@',2))='teren.gazpet.ro' OR u.raw_app_meta_data->>'tip_cont'='teren')) THEN
+    RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_INVALID'; END IF;
+  IF NOT EXISTS (SELECT FROM public.profiles p WHERE p.is_owner IS TRUE)
+    OR EXISTS (SELECT FROM public.profiles p WHERE p.is_owner IS TRUE
+      AND encode(sha256(convert_to(p.id::text,'UTF8')),'hex') <> ALL(v)) THEN
+    RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_OWNER_MISSING'; END IF;
+END $erp_pre$;
 -- Setul complet se recalculeaza sub lock: fara numar/UUID-uri ERP hardcodate.
 INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)
 SELECT id,CASE WHEN email IN ('florinel.ilie@teren.gazpet.ro','petronel.mititelu@teren.gazpet.ro',
   'test.razvan@teren.gazpet.ro') THEN 'teren'
- WHEN EXISTS (SELECT FROM public.profiles p WHERE p.id=u.id AND (p.is_owner IS TRUE OR p.employee_id IS NOT NULL))
-   OR EXISTS (SELECT FROM public.user_module_access a WHERE a.profile_id=u.id) THEN 'erp'
- ELSE 'neaprobat' END,'inventar_e1_1a_27_10' FROM auth.users u;
-DO $pending$ DECLARE v_count bigint; BEGIN
- SELECT count(*) INTO v_count FROM public.conturi_tip WHERE tip='neaprobat';
- RAISE NOTICE 'PORTAL_NEAPROBATE: %',v_count;
+ WHEN encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=ANY((SELECT lista FROM pg_temp.portal_erp_aprobat)) THEN 'erp'
+ ELSE 'neaprobat' END,'inventar_e1_1a_r3' FROM auth.users u;
+DO $pending$ DECLARE v_count bigint; v_erp bigint; BEGIN
+ SELECT count(*) FILTER (WHERE tip='neaprobat'),count(*) FILTER (WHERE tip='erp') INTO v_count,v_erp FROM public.conturi_tip;
+ -- Fiecare hash aprobat a clasificat exact un cont.
+ IF v_erp <> (SELECT cardinality(lista) FROM pg_temp.portal_erp_aprobat) THEN
+   RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_CHANGED'; END IF;
+ RAISE NOTICE 'PORTAL_ERP: %, PORTAL_NEAPROBATE: %',v_erp,v_count;
 END $pending$;
 INSERT INTO public.conturi_teren(auth_user_id,employee_id,stare)
 SELECT t.auth_user_id,p.employee_id,'activ' FROM public.conturi_tip t
@@ -339,7 +391,7 @@ BEGIN
       SELECT 'f:'||p.oid AS cheie,jsonb_build_array('functie',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig) AS obj
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil','fn_portal_porti_lipsa',
-        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')
+        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')
       UNION ALL
       SELECT 'r:'||c.oid,jsonb_build_array('relatie',c.relname,c.relkind,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
       FROM pg_class c WHERE c.oid IN ('public.conturi_tip'::regclass,'public.conturi_teren'::regclass,

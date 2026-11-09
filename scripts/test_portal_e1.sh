@@ -75,16 +75,52 @@ roles() {
 baseline "$TMP/before.sql" omit-stub
 roles "$TMP/roles_before.json"
 ORIGINAL="$ROOT/supabase/migrations/20261118a_portal_teren_identitate.sql"
-MIG="$TMP/20261118a_portal_teren_identitate.sql"
 REV="$ROOT/supabase/revenire/20261118a_portal_teren_identitate_ROLLBACK.sql"
+# r3: amprentele fixture-ului (21 public + 12 net) se citesc din clusterul efemer INAINTE de apply si intra in copie
+# ca literali, exact ca lista revizuita din productie (nu se invata la apply).
+AMPRENTE="$TMP/amprente.json"
+q "SELECT jsonb_build_object(
+  'public',(SELECT jsonb_object_agg('public.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')',md5(pg_get_functiondef(p.oid)))
+    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+    WHERE n.nspname='public' AND p.proname ~ '^portal_fixture_public_[0-9]{2}\$'),
+  'net',(SELECT jsonb_object_agg('net.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')',md5(pg_get_functiondef(p.oid)))
+    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='net'))" >"$AMPRENTE"
+fixture() { # $1 = varianta (director nou in TMP), restul = argumentele --erp
+  mkdir "$TMP/$1"
+  python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/$1/20261118a_portal_teren_identitate.sql" \
+    --amprente "$AMPRENTE" "${@:2}" >/dev/null
+}
+hold_18a() { # $1 = artefactul, $2 = motivul exact, $3 = eticheta; refuz ATOMIC, fara obiecte ramase
+  local rc=0 log="$TMP/hold_$3.log"
+  runner 20261118120000 "$1" >"$log" 2>&1 || rc=$?
+  [[ "$rc" == 10 ]] && grep -q "$2" "$log" || { cat "$log"; fail "expected HOLD $2 ($3)"; }
+  [[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 ]] || fail "partial role after HOLD $3"
+  [[ "$(q "SELECT to_regclass('public.conturi_tip') IS NULL")" == t ]] || fail "partial table after HOLD $3"
+}
 # Mai intai dovada ca artefactul nerevizuit refuza ATOMIC, fara obiecte ramase.
-rc=0
-runner 20261118120000 "$ORIGINAL" >"$TMP/hold.log" 2>&1 || rc=$?
-[[ "$rc" == 10 ]] && grep -q PORTAL_PUBLIC_BASELINE_UNREVIEWED_OR_CHANGED "$TMP/hold.log" || { cat "$TMP/hold.log"; fail 'expected baseline HOLD'; }
-[[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 ]] || fail 'partial role after HOLD'
-[[ "$(q "SELECT to_regclass('public.conturi_tip') IS NULL")" == t ]] || fail 'partial table after HOLD'
-python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$MIG"
+hold_18a "$ORIGINAL" PORTAL_PUBLIC_BASELINE_UNREVIEWED_OR_CHANGED original
+# Copilot r2 P1-01: 'erp' numai din lista aprobata explicit; orice abatere refuza atomic.
+fixture v_fara_erp
+hold_18a "$TMP/v_fara_erp/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APPROVAL_LIST_MISSING fara_erp
+fixture v_erp_vechi --erp 00000000-0000-0000-0000-000000000001 00000000-0000-0000-0000-0000000000aa
+hold_18a "$TMP/v_erp_vechi/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APPROVAL_LIST_CHANGED erp_vechi
+fixture v_fara_owner --erp 00000000-0000-0000-0000-000000000002
+hold_18a "$TMP/v_fara_owner/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APPROVAL_OWNER_MISSING fara_owner
+fixture v_erp_teren --erp 00000000-0000-0000-0000-000000000001 44387376-e48c-44d5-a88b-752c653c5639
+hold_18a "$TMP/v_erp_teren/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APPROVAL_LIST_INVALID erp_teren
+fixture v_ok --erp 00000000-0000-0000-0000-000000000001
+MIG="$TMP/v_ok/20261118a_portal_teren_identitate.sql"
+# Copilot r2 P1-02: corp schimbat inainte de apply (aceeasi semnatura, acelasi numar) = refuz, pe net si pe public.
+q "CREATE OR REPLACE FUNCTION net.portal_fixture_net_01() RETURNS integer LANGUAGE sql AS 'SELECT 2'" >/dev/null
+hold_18a "$MIG" PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED net_corp
+q "CREATE OR REPLACE FUNCTION net.portal_fixture_net_01() RETURNS integer LANGUAGE sql AS 'SELECT 1'" >/dev/null
+q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 2'" >/dev/null
+hold_18a "$MIG" PORTAL_PUBLIC_BASELINE_UNREVIEWED_OR_CHANGED public_corp
+q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 1'" >/dev/null
 runner 20261118120000 "$MIG" >"$TMP/apply.log" 2>&1 || { cat "$TMP/apply.log"; fail apply; }
+# Inventar: owner-ul aprobat = erp; pending + contul legat de fisa cu drept pe modul (neaprobat) = neaprobat.
+[[ "$(q "SELECT string_agg(tip||':'||n,',' ORDER BY tip) FROM (SELECT tip,count(*) n FROM public.conturi_tip GROUP BY tip) x")" == 'erp:1,neaprobat:2,teren:3' ]] \
+  || fail 'ERP inventory counts'
 # PG17 creator has ADMIN but not necessarily SET on a newly created role.
 # Harness-only role switch; never inherited by DEFINER functions.
 q 'GRANT teren TO postgres WITH INHERIT FALSE, SET TRUE' >/dev/null
@@ -112,13 +148,30 @@ if "${PSQL[@]}" --single-transaction \
  -c 'ALTER TABLE public.portal_provisioning DISABLE ROW LEVEL SECURITY' \
  -f "$REV_1B" >"$TMP/rollback_1b_config_refused.log" 2>&1; then fail 'E1-1b rollback accepted RLS drift'; fi
 grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_config_refused.log" || fail 'wrong E1-1b rollback config refusal'
+# r3: un cont ERP nou (in_asteptare) creat dupa 19a face imposibila restaurarea CHECK-ului vechi = refuz explicit.
+if "${PSQL[@]}" --single-transaction \
+ -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
+ -c 'SET LOCAL ROLE supabase_auth_admin' \
+ -c "INSERT INTO auth.users(id,email) VALUES ('30000000-0000-0000-0000-000000000001','nou.erp@example.invalid')" \
+ -c 'RESET ROLE' \
+ -f "$REV_1B" >"$TMP/rollback_1b_pending_refused.log" 2>&1; then fail 'E1-1b rollback accepted new pending account'; fi
+grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_pending_refused.log" || { cat "$TMP/rollback_1b_pending_refused.log"; fail 'wrong E1-1b rollback pending refusal'; }
 # Apply -> rollback -> re-apply direct, tranzactional, pentru DDL. Runnerul refuza intentionat relivrarea aceluiasi nume.
 "${PSQL[@]}" --single-transaction \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
  -f "$REV_1B" \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning:'||txid_current(),true)" \
  -f "$MIG_1B" >"$TMP/roundtrip_1b.log" 2>&1 || { cat "$TMP/roundtrip_1b.log"; fail 'E1-1b DDL roundtrip'; }
+# r3: o schimbare fara legatura cu portalul (alt modul: functie fara PUBLIC, tabel nou, date in alt tabel)
+# nu inroseste poarta 1b si nu blocheaza revenirea. Se curata dupa revenire, inaintea comparatiei finale.
+q "CREATE FUNCTION public.alt_modul_fixture() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+ REVOKE ALL ON FUNCTION public.alt_modul_fixture() FROM PUBLIC;
+ CREATE TABLE public.alt_modul_fixture_tabel(id integer);
+ UPDATE public.facturi SET suma=suma+1 WHERE id=1" >/dev/null
+[[ "$(q 'SELECT public.fn_portal_porti_lipsa_1b()')" == '{}' ]] || fail 'unrelated change reddened gate E1-1b'
 runner 20261119120001 "$REV_1B" >"$TMP/rollback_1b.log" 2>&1 || { cat "$TMP/rollback_1b.log"; fail 'rollback E1-1b'; }
+q "DROP FUNCTION public.alt_modul_fixture(); DROP TABLE public.alt_modul_fixture_tabel;
+ UPDATE public.facturi SET suma=suma-1 WHERE id=1" >/dev/null
 # Regresie pentru ordinea fizica: UPDATE fara schimbare semantica, snapshot identic.
 baseline "$TMP/order_before.sql"
 q "UPDATE public.profiles SET email=email WHERE id='00000000-0000-0000-0000-000000000002'" >/dev/null
@@ -155,7 +208,7 @@ PY
 runner 20261118120001 "$ATTESTED_REV" >"$TMP/rollback.log" 2>&1 || { cat "$TMP/rollback.log"; fail rollback; }
 [[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 ]] || fail 'role left'
 [[ "$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('conturi_tip','conturi_teren','conturi_tip_jurnal','conturi_tip_jurnal_id_seq')")" == 0 ]] || fail 'tables left'
-[[ "$(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('fn_portal_public_md5','fn_portal_catalog_amprenta','fn_teren_eligibil','fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil')")" == 0 ]] || fail 'functions left'
+[[ "$(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_teren_eligibil','fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil')")" == 0 ]] || fail 'functions left'
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_stub.test.sql" >"$TMP/stub.log" 2>&1 || { cat "$TMP/stub.log"; fail stub; }
 baseline "$TMP/after.sql" omit-stub
 roles "$TMP/roles_after.json"
@@ -165,4 +218,4 @@ rc=0
 runner 20261118120000 "$MIG" >"$TMP/reapply_after_rollback.log" 2>&1 || rc=$?
 [[ "$rc" == 11 ]] || fail 'history allows reapply after rollback'
 [[ -z "$("${PSQL[@]}" -At -f "$ROOT/scripts/control_0e.sql")" ]] || fail 'rollback control 0e'
-echo "PASS PORTAL_E1_1A+1B PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER); lista PUBLIC sintetica in harness, lista revizuita (21) in migrare"
+echo "PASS PORTAL_E1_1A+1B r3 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER); public/net/ERP sintetice in harness, listele revizuite in migrare"

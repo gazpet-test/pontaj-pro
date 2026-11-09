@@ -10,6 +10,40 @@ LANGUAGE sql SET search_path TO 'public','pg_temp' AS $$
 $$;
 DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Callee drift missed'; END IF; END $$;
 ROLLBACK TO callee_drift;
+-- r3: lista alba. O schimbare fara legatura cu portalul (alt modul) nu inroseste poarta si nu schimba amprenta
+-- folosita de revenire: functie noua fara PUBLIC, tabel nou, coloana noua pe employees, editare HR pe employees.
+SAVEPOINT unrelated_ddl;
+CREATE FUNCTION public.alt_modul_test() RETURNS integer LANGUAGE sql AS $$SELECT 1$$;
+REVOKE ALL ON FUNCTION public.alt_modul_test() FROM PUBLIC;
+CREATE TABLE public.alt_modul_test_tabel(id integer);
+ALTER TABLE public.employees ADD COLUMN alt_modul_coloana text;
+UPDATE public.employees SET name=name||' ' WHERE id=70;
+DO $$ BEGIN
+ IF public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN
+  RAISE EXCEPTION 'Unrelated change reddened 1b gate: %',public.fn_portal_porti_lipsa_1b(); END IF;
+ IF public.fn_portal_1b_snapshot() IS DISTINCT FROM (SELECT valoare FROM public.portal_e1_1b_manifest WHERE cheie='post_snapshot')
+ THEN RAISE EXCEPTION 'Unrelated change would block rollback'; END IF;
+END $$;
+ROLLBACK TO unrelated_ddl;
+-- Un trigger nou pe profiles (tabel scris de handle_new_user in context DEFINER) = deriva.
+SAVEPOINT profiles_trigger_drift;
+CREATE FUNCTION public.alt_trigger_test() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$;
+REVOKE ALL ON FUNCTION public.alt_trigger_test() FROM PUBLIC;
+CREATE TRIGGER alt_trigger_test BEFORE INSERT ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.alt_trigger_test();
+DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Profiles trigger drift missed'; END IF; END $$;
+ROLLBACK TO profiles_trigger_drift;
+-- Triggerul Auth dezactivat (handle_new_user nu mai ruleaza la crearea contului) = deriva.
+SAVEPOINT auth_trigger_off;
+SET LOCAL ROLE supabase_auth_admin;
+ALTER TABLE auth.users DISABLE TRIGGER on_auth_user_created;
+RESET ROLE;
+DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Auth trigger drift missed'; END IF; END $$;
+ROLLBACK TO auth_trigger_off;
+-- Triggerul de revocare la plecare dezactivat = deriva.
+SAVEPOINT revoke_trigger_off;
+ALTER TABLE public.employees DISABLE TRIGGER portal_revoca_la_plecare;
+DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Revoke trigger drift missed'; END IF; END $$;
+ROLLBACK TO revoke_trigger_off;
 CREATE TEMP TABLE portal_test_saved_sequence AS SELECT last_value,is_called FROM public.user_module_access_id_seq;
 CREATE SCHEMA portal_test;
 GRANT USAGE ON SCHEMA portal_test TO authenticated,service_role,supabase_auth_admin,teren;
@@ -140,9 +174,17 @@ SELECT public.fn_cont_aproba_erp('20000000-0000-0000-0000-000000000010','hr');
 SELECT public.fn_cont_aproba_erp('00000000-0000-0000-0000-000000000002','hr');
 SELECT portal_test.expect_error($$SELECT public.fn_cont_aproba_erp('20000000-0000-0000-0000-000000000010','hr')$$,'PORTAL_TARGET_CLASSIFIED');
 RESET ROLE;
+-- r3 (Copilot r2 P2-01): contul neaprobat legat de fisa si cu drept pe modul primeste token numai dupa aprobarea owner-ului.
+SET LOCAL ROLE supabase_auth_admin;
+SELECT portal_test.hook('00000000-0000-0000-0000-000000000003','error');
+RESET ROLE;
+SET LOCAL ROLE authenticated;
+SELECT public.fn_cont_aproba_erp('00000000-0000-0000-0000-000000000003','manager_santier');
+RESET ROLE;
 SET LOCAL ROLE supabase_auth_admin;
 SELECT portal_test.hook('20000000-0000-0000-0000-000000000010','authenticated');
 SELECT portal_test.hook('00000000-0000-0000-0000-000000000002','authenticated');
+SELECT portal_test.hook('00000000-0000-0000-0000-000000000003','authenticated');
 RESET ROLE;
 DO $$ BEGIN
  IF NOT EXISTS (SELECT FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000002'

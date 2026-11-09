@@ -52,18 +52,22 @@ GRANT SELECT ON public.employees,public.profiles,public.user_module_access TO au
 GRANT ALL ON public.facturi,public.contracte TO authenticated;
 INSERT INTO public.employees VALUES
  (55,'ILIE CORADO FLORINEL',true,NULL,'FIXTURE_CNP_55','FIXTURE_IBAN_55'),
- (70,'MITITELU PETRONEL',true,NULL,'FIXTURE_CNP_70','FIXTURE_IBAN_70');
+ (70,'MITITELU PETRONEL',true,NULL,'FIXTURE_CNP_70','FIXTURE_IBAN_70'),
+ (80,'FIXTURE LEGAT',true,NULL,'FIXTURE_CNP_80','FIXTURE_IBAN_80');
 RESET ROLE;
+-- r3: ...0003 = cont legat de fisa si cu drept pe modul, dar NEAPROBAT de owner (Copilot r2 P1-01): ramane neaprobat.
 INSERT INTO auth.users(id,email) VALUES
  ('44387376-e48c-44d5-a88b-752c653c5639','florinel.ilie@teren.gazpet.ro'),
  ('393709f9-bcb6-4ce5-ba22-2eca5c353f23','petronel.mititelu@teren.gazpet.ro'),
  ('a2a3a7c3-b285-4306-8d5b-39749c2abb0c','test.razvan@teren.gazpet.ro'),
  ('00000000-0000-0000-0000-000000000001','erp@example.invalid'),
- ('00000000-0000-0000-0000-000000000002','pending@example.invalid');
+ ('00000000-0000-0000-0000-000000000002','pending@example.invalid'),
+ ('00000000-0000-0000-0000-000000000003','legat@example.invalid');
 SET ROLE postgres;
 INSERT INTO public.profiles(id,email,employee_id,role)
  SELECT id,email,CASE WHEN email='florinel.ilie@teren.gazpet.ro' THEN 55
-   WHEN email='petronel.mititelu@teren.gazpet.ro' THEN 70 END,'manager_santier' FROM auth.users;
+   WHEN email='petronel.mititelu@teren.gazpet.ro' THEN 70
+   WHEN email='legat@example.invalid' THEN 80 END,'manager_santier' FROM auth.users;
 INSERT INTO public.user_module_access(profile_id,module,access_level)
  SELECT id,'probe_teren','editor' FROM public.profiles WHERE employee_id IS NOT NULL;
 INSERT INTO public.facturi VALUES(1,123);

@@ -1,5 +1,6 @@
 -- E1-1b. O singura tranzactie: exclusiv scripts/livrare_migrare.sh.
 -- Nu activeaza hook-ul Auth, nu modifica inventarul legacy.
+-- r3 (09.11.2026): amprenta si poarta 1b pe lista alba (fn_portal_1b_snapshot); vezi comentariul de acolo.
 DO $pre$
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
@@ -475,35 +476,74 @@ REVOKE ALL ON FUNCTION public.fn_portal_revoca_la_plecare() FROM PUBLIC,anon,aut
 CREATE TRIGGER portal_revoca_la_plecare AFTER UPDATE OF active,termination_date ON public.employees
  FOR EACH ROW EXECUTE FUNCTION public.fn_portal_revoca_la_plecare();
 
+-- r3 (09.11.2026): amprenta pe LISTA ALBA (L15), nu pe toata schema public. Varianta r2 amprenta orice functie /
+-- tabel / politica din public si orice rand din employees / profiles / auth.users: orice migrare a altui modul sau
+-- orice editare HR inrosea poarta si bloca revenirea. Acoperirea r3:
+--  * functiile portalului, handle_new_user si callee-urile lui tranzitive revizuite din migrari
+--    (fn_cont_candidati_angajat -> fn_nume_cuvinte / fn_nume_familie -> extensions.unaccent;
+--    fn_cont_notifica_owneri), helperii Auth; o semnatura absenta se inregistreaza ca absenta;
+--  * triggerele (si functiile lor) de pe tabelele in care scriu handle_new_user si RPC-urile portalului:
+--    auth.users, profiles, notifications si tabelele portalului; pe employees numai triggerul portalului;
+--  * tabelele portalului complet (ACL, RLS, coloane, constrangeri, politici); pe profiles constrangerile (rolurile);
+--  * datele portalului + profilurile cu rolurile noi (teren / in_asteptare) + conturile Auth teren si drepturile lor.
+-- Enumerarea e din catalog (semnatura canonica cu oidvectortypes), fara regex pe text SQL.
 CREATE FUNCTION public.fn_portal_1b_snapshot() RETURNS jsonb
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
+ WITH sig AS (SELECT unnest(ARRAY[
+   'public.handle_new_user()','public.fn_cont_candidati_angajat(text)','public.fn_nume_cuvinte(text)',
+   'public.fn_nume_familie(text)','extensions.unaccent(text)','public.fn_cont_notifica_owneri(text, text, text, text)',
+   'public.fn_teren_eligibil(uuid)','public.fn_portal_angajat_eligibil(integer)','public.fn_portal_uid()',
+   'public.fn_auth_token_hook(jsonb)','public.fn_portal_porti_lipsa()','public.fn_portal_public_aprobat()',
+   'public.fn_portal_public_md5()','public.fn_portal_net_md5()','public.fn_portal_catalog_amprenta(oid)','public.fn_conturi_tip_audit()',
+   'public.fn_conturi_jurnal_imuabil()','public.fn_portal_cont_pregateste(integer, uuid)',
+   'public.fn_portal_cont_finalizeaza(uuid)','public.fn_cont_aproba_erp(uuid, text)',
+   'public.fn_portal_revoca_la_plecare()','public.fn_portal_provisioning_audit()',
+   'public.fn_portal_1b_snapshot()','public.fn_portal_porti_lipsa_1b()','auth.uid()','auth.jwt()']::text[]) AS s),
+ rel AS (SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname='public' AND c.relname IN ('conturi_tip','conturi_teren','conturi_tip_jurnal','conturi_tip_jurnal_id_seq',
+    'portal_public_baseline','portal_provisioning','portal_provisioning_jurnal','portal_provisioning_jurnal_id_seq',
+    'portal_e1_1b_manifest')),
+ trg AS (SELECT t.oid,t.tgrelid,t.tgfoid,t.tgenabled FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+   JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND (t.tgrelid IN (SELECT oid FROM rel)
+    OR (n.nspname='auth' AND c.relname='users') OR (n.nspname='public' AND c.relname IN ('profiles','notifications'))
+    OR (n.nspname='public' AND c.relname='employees' AND t.tgname='portal_revoca_la_plecare'))),
+ teren_uid AS (SELECT auth_user_id AS id FROM public.conturi_teren
+   UNION SELECT auth_user_id FROM public.portal_provisioning WHERE auth_user_id IS NOT NULL
+   UNION SELECT u.id FROM auth.users u WHERE u.raw_app_meta_data->>'tip_cont'='teren'
+    OR lower(split_part(u.email,'@',2))='teren.gazpet.ro')
  SELECT jsonb_build_object(
-  'auth',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]')::text,'UTF8')),'hex') FROM (SELECT id,email,raw_app_meta_data,banned_until FROM auth.users) t),
-  'profiles',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]')::text,'UTF8')),'hex') FROM public.profiles t),
-  'employees',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]')::text,'UTF8')),'hex') FROM public.employees t),
-  'access',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]')::text,'UTF8')),'hex') FROM public.user_module_access t),
+  'auth_teren',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id),'[]')::text,'UTF8')),'hex')
+   FROM (SELECT u.id,u.email,u.raw_app_meta_data,u.banned_until FROM auth.users u WHERE u.id IN (SELECT id FROM teren_uid)) t),
+  'profiles_noi',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id),'[]')::text,'UTF8')),'hex')
+   FROM (SELECT p.id,p.role,p.employee_id,p.is_owner FROM public.profiles p
+    WHERE p.role IN ('teren','in_asteptare') OR p.id IN (SELECT id FROM teren_uid)) t),
+  'access_teren',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id),'[]')::text,'UTF8')),'hex')
+   FROM (SELECT a.id,a.profile_id,a.module,a.access_level FROM public.user_module_access a
+    WHERE a.profile_id IN (SELECT id FROM teren_uid)) t),
   'tip',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]')::text,'UTF8')),'hex') FROM public.conturi_tip t),
   'teren',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]')::text,'UTF8')),'hex') FROM public.conturi_teren t),
   'tip_jurnal',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]')::text,'UTF8')),'hex') FROM public.conturi_tip_jurnal t),
   'provisioning',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY provisioning_id),'[]')::text,'UTF8')),'hex') FROM public.portal_provisioning t),
   'jurnal',(SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]')::text,'UTF8')),'hex') FROM public.portal_provisioning_jurnal t),
   'ddl',(SELECT coalesce(jsonb_agg(x.obj ORDER BY x.cheie COLLATE "C"),'[]') FROM (
-   SELECT 'f:'||p.oid AS cheie,jsonb_build_array('function',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig) AS obj
-    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' OR p.oid IN ('auth.uid()'::regprocedure,'auth.jwt()'::regprocedure)) AND p.prokind IN ('f','p')
-   UNION ALL SELECT 'r:'||c.oid,jsonb_build_array('relation',c.oid,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
-    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+   SELECT 's:'||sig.s AS cheie,jsonb_build_array('function',sig.s,pg_get_functiondef(f.oid),f.proowner,f.proacl,f.proconfig,f.prosecdef) AS obj
+    FROM sig LEFT JOIN (SELECT p.oid,p.proowner,p.proacl,p.proconfig,p.prosecdef,
+      n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' AS s
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.prokind IN ('f','p')) f ON f.s=sig.s
+   UNION ALL SELECT 'g:'||p.oid,jsonb_build_array('trigger_function',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig,p.prosecdef)
+    FROM pg_proc p WHERE p.oid IN (SELECT tgfoid FROM trg)
+   UNION ALL SELECT 't:'||t.oid,jsonb_build_array('trigger',t.tgrelid,t.tgfoid,t.tgenabled,pg_get_triggerdef(t.oid)) FROM trg t
+   UNION ALL SELECT 'r:'||c.oid,jsonb_build_array('relation',c.oid,c.relname,c.relkind,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
+    FROM pg_class c WHERE c.oid IN (SELECT oid FROM rel)
    UNION ALL SELECT 'a:'||a.attrelid||':'||a.attnum,jsonb_build_array('column',a.attrelid,a.attnum,a.attname,a.atttypid,
     a.atttypmod,a.attnotnull,a.attidentity,a.attgenerated,a.attacl,pg_get_expr(d.adbin,d.adrelid))
-    FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-    LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-    WHERE n.nspname='public' AND a.attnum>0 AND NOT a.attisdropped
+    FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+    WHERE a.attrelid IN (SELECT oid FROM rel) AND a.attnum>0 AND NOT a.attisdropped
    UNION ALL SELECT 'c:'||c.oid,jsonb_build_array('constraint',c.conrelid,c.conname,pg_get_constraintdef(c.oid))
-    FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname='public'
+    FROM pg_constraint c WHERE c.conrelid IN (SELECT oid FROM rel) OR c.conrelid='public.profiles'::regclass
    UNION ALL SELECT 'p:'||p.oid,jsonb_build_array('policy',p.polrelid,p.polname,p.polcmd,p.polpermissive,p.polroles,
     pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid)) FROM pg_policy p
-    JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
-   UNION ALL SELECT 't:'||t.oid,jsonb_build_array('trigger',t.tgrelid,t.tgfoid,t.tgenabled,pg_get_triggerdef(t.oid))
-    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+    WHERE p.polrelid IN (SELECT oid FROM rel)
   ) x));
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_1b_snapshot() FROM PUBLIC,anon,authenticated,service_role,teren,supabase_auth_admin;

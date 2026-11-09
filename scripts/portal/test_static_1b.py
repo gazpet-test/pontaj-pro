@@ -5,6 +5,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,6 +76,26 @@ class StaticProvisioning(unittest.TestCase):
         self.assertIn("EXECUTE m->>'definition'", sql)
         self.assertIn("v_actual IS DISTINCT FROM m-'sha256'", sql)
         self.assertNotIn(' CASCADE', sql)
+
+    def test_snapshot_is_allow_list_not_whole_schema(self):
+        # r3: o migrare a altui modul sau o editare HR nu inroseste poarta 1b si nu blocheaza revenirea.
+        sql = MIG.read_text(encoding='utf-8')
+        body = sql.split('CREATE FUNCTION public.fn_portal_1b_snapshot()', 1)[1].split('$fn$;', 1)[0]
+        for whole in ("FROM public.employees t", "FROM public.profiles t", "FROM public.user_module_access t",
+                      "WHERE n.nspname='public' AND a.attnum", "WHERE n.nspname='public'\n   UNION ALL",
+                      "(n.nspname='public' OR p.oid IN"):
+            self.assertNotIn(whole, body)
+        # callee-urile tranzitive ale lui handle_new_user (din migrarea 20260929c) si triggerul Auth sunt amprentate
+        for signature in ("'public.handle_new_user()'", "'public.fn_cont_candidati_angajat(text)'",
+                          "'public.fn_nume_cuvinte(text)'", "'public.fn_nume_familie(text)'", "'extensions.unaccent(text)'",
+                          "'public.fn_cont_notifica_owneri(text, text, text, text)'", "'auth.uid()'", "'auth.jwt()'"):
+            self.assertIn(signature, body)
+        self.assertIn("(n.nspname='auth' AND c.relname='users')", body)
+        self.assertIn("t.tgname='portal_revoca_la_plecare'", body)
+        self.assertIn("c.conrelid='public.profiles'::regclass", body)
+        # fiecare functie din migrare care ruleaza ca DEFINER sau e trigger al portalului e in lista alba
+        for name in re.findall(r'CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(', sql):
+            self.assertIn("'public." + name + '(', body, name)
 
     def test_hook_and_provisioning_share_employee_predicate(self):
         sql = MIG.read_text(encoding='utf-8')

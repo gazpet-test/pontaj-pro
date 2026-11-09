@@ -145,3 +145,46 @@ Referințe: M = `supabase/migrations/20261119a_portal_teren_provisioning.sql`; R
 | L23 | n/a |
 | L24 | n/a |
 | L25 | 11 teste statice executate; fixture owner demonstrat si pending neaprobat; harness NOSUPERUSER/regresii/concurenta pastrate, PG16 si Auth real raman nerulate. |
+
+## E1-1a/1b r3 — 09.11.2026 (reluare, Copilot r2: NO-GO, P1 2)
+Branch-ul a fost adus la zi cu main prin merge (fara rebase). Migrarile din main de dupa 27.10 nu redefinesc
+handle_new_user, profiles_role_chk, hook-ul sau rolurile; niciuna nu da EXECUTE prin PUBLIC pe o functie noua
+(scanare statica). Verificarea reala ramane inventarul read-only pe prod (`scripts/portal/inventar_prod_e1.sql`).
+
+1. **P1-01 (inventar ERP):** `erp` numai pentru conturile din lista aprobata explicit de owner, fixata in migrare ca
+   sha256 pe `auth.users.id::text` (fara UUID-uri sau emailuri in repo). Fisa, `is_owner` sau un drept pe modul nu
+   mai clasifica nimic. Refuz atomic: lista goala, element invalid / duplicat / fara cont, cont teren in lista, owner
+   lipsa din lista; postconditie: numarul `erp` = numarul de hash-uri. Restul = `neaprobat` (hook 403 pana la
+   `fn_cont_aproba_erp`). Fixture nou: cont legat de fisa + drept pe modul, neaprobat -> 403; aprobat de owner -> token.
+2. **P1-02 (net):** `fn_portal_net_md5()` = lista exacta + md5 revizuite, fixate inainte de apply; seturile se compara
+   in ambele directii, corpurile se compara cu md5-ul revizuit. Harness: corp schimbat inainte de apply (aceeasi
+   semnatura, acelasi numar) = refuz, pe net si pe public; amprentele fixture-ului intra in copie ca literali.
+3. **Poarta / amprenta 1b pe lista alba (L15):** r2 amprenta toata schema public si toate randurile din employees /
+   profiles / auth.users, deci orice migrare a altui modul sau orice editare HR o inrosea si bloca revenirea.
+   r3: functiile portalului + handle_new_user cu callee-urile tranzitive revizuite (fn_cont_candidati_angajat ->
+   fn_nume_cuvinte / fn_nume_familie -> extensions.unaccent; fn_cont_notifica_owneri), triggerele de pe auth.users,
+   profiles, notifications si tabelele portalului, triggerul portalului pe employees, constrangerile profiles; datele
+   portalului + profilurile cu rolurile noi + conturile teren. Teste: schimbare fara legatura = poarta verde si
+   revenire posibila; trigger nou pe profiles, trigger Auth sau trigger de revocare dezactivat = rosu; cont ERP nou
+   dupa 19a = revenire refuzata.
+4. **Nerulate de mine:** PostgreSQL (harness PG16/17), concurenta, Auth real. Rulate: `test_static.py` 5/5,
+   `test_static_1b.py` 7/7, `test_static_r2.py` 2/2, validatorul de livrare pe 18a / 19a / revenirea 18a, `bash -n`.
+5. **Inainte de DRY:** chat-ul ruleaza `inventar_prod_e1.sql`; listele public / net / ERP se completeaza din rezultat
+   (lista ERP cu „da”-ul lui Razvan); harness-ul PG16 trebuie sa dea PASS pe artefactul completat.
+
+| Regula | Dovada r3 |
+|---|---|
+| L01 | n/a pentru delta (fara RPC nou); ordinea lock-urilor 18a/19a neschimbata. |
+| L02 | Inventarul si postconditia ERP in aceeasi tranzactie a runnerului; tabelul temporar ON COMMIT DROP. |
+| L05 | Neschimbat: HOLD-urile harness-ului cer cod 10 (NEAPLICAT confirmat) si zero obiecte ramase. |
+| L07 | Clasificarea `erp` numai server-side, la apply sau prin `fn_cont_aproba_erp`; teste 1a `linked account approved`. |
+| L08 | Identitatea aprobata = hash pe id din lista revizuita, nu din metadate client; aprobarea ulterioara ramane auth.uid() owner. |
+| L12 | Toate conturile primesc un tip (erp / teren / neaprobat); hash-urile fara cont = refuz, nu se ignora tacit. |
+| L13 | `^[0-9a-f]{64}$` ancorat; generatorul de fixture refuza marcaje lipsa / duble, UUID invalid, amprente incomplete. |
+| L14 | Refuz atomic dovedit in harness pentru fiecare abatere; revenirea 1b refuza datele portalului / rolurile noi, nu editarile HR. |
+| L15 | Lista alba explicita cu callee-uri tranzitive; enumerare din catalog (semnatura canonica), fara regex pe SQL. |
+| L16 | Lista ERP fara duplicate (cardinality = count DISTINCT). |
+| L18 | Lista goala / `'{}'` = refuz; comparatii IS DISTINCT FROM; semnatura absenta inregistrata ca absenta. |
+| L20 | Cai legitime testate: owner aprobat, aprobarea contului legat, schimbare fara legatura acceptata. |
+| L25 | Fixture cu FK / CHECK reale si apeluri ca supabase_auth_admin / authenticated; testele SQL sunt scrise, nerulate de mine. |
+| L03, L04, L06, L09–L11, L17, L19, L21–L24 | n/a pentru delta r3. |

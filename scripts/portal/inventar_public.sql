@@ -1,4 +1,5 @@
 -- READ ONLY, de executat separat de operatorul autorizat, nu de acest livrabil.
+-- r3: inlocuit de scripts/portal/inventar_prod_e1.sql (sectiunea 1 = aceeasi interogare); pastrat pentru istoric.
 -- Rezultatul se revizuieste; NU se importa automat ca lista alba.
 -- Aceeasi forma canonica folosita de preflight si de poarta.
 BEGIN READ ONLY;

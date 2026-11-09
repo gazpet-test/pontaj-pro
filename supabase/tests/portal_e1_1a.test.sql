@@ -24,16 +24,23 @@ DO $checks$
 BEGIN
  IF (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) THEN RAISE EXCEPTION 'superuser masks grants'; END IF;
  IF public.fn_portal_porti_lipsa() <> '{}' THEN RAISE EXCEPTION 'initial gate'; END IF;
- IF (SELECT count(*) FROM public.conturi_tip) <> 5 OR (SELECT count(*) FROM public.conturi_teren) <> 3
+ IF (SELECT count(*) FROM public.conturi_tip) <> 6 OR (SELECT count(*) FROM public.conturi_teren) <> 3
   OR EXISTS (SELECT id FROM auth.users EXCEPT SELECT auth_user_id FROM public.conturi_tip)
   OR EXISTS (SELECT auth_user_id FROM public.conturi_tip EXCEPT SELECT id FROM auth.users) THEN RAISE EXCEPTION 'inventory'; END IF;
  IF (SELECT tip FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000002') IS DISTINCT FROM 'neaprobat' THEN RAISE EXCEPTION 'pending approved'; END IF;
+ -- r3 (Copilot r2 P1-01): fisa + drept pe modul fara aprobare explicita nu inseamna 'erp'.
+ IF NOT EXISTS (SELECT FROM public.profiles p JOIN public.user_module_access a ON a.profile_id=p.id
+     WHERE p.id='00000000-0000-0000-0000-000000000003' AND p.employee_id IS NOT NULL)
+   OR (SELECT tip FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000003') IS DISTINCT FROM 'neaprobat'
+   OR (SELECT tip FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000001') IS DISTINCT FROM 'erp'
+ THEN RAISE EXCEPTION 'linked account approved without owner approval'; END IF;
  IF (SELECT employee_id FROM public.conturi_teren WHERE auth_user_id='a2a3a7c3-b285-4306-8d5b-39749c2abb0c') IS NOT NULL
   THEN RAISE EXCEPTION 'invented employee'; END IF;
 END $checks$;
 SET LOCAL ROLE supabase_auth_admin;
 SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000001','erp');
 SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000002','error');
+SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000003','error');
 SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','teren');
 SELECT portal_test.expect_hook('393709f9-bcb6-4ce5-ba22-2eca5c353f23','teren');
 SELECT portal_test.expect_hook('a2a3a7c3-b285-4306-8d5b-39749c2abb0c','error');
@@ -175,7 +182,7 @@ END $client$;
 RESET ROLE;
 -- Demonstreaza ca fixture-urile sunt chiar deschise pentru authenticated.
 SET LOCAL ROLE authenticated;
-DO $$ BEGIN IF (SELECT count(*) FROM public.employees) <> 2 THEN RAISE EXCEPTION 'fixture RLS not broad'; END IF; END $$;
+DO $$ BEGIN IF (SELECT count(*) FROM public.employees) <> 3 THEN RAISE EXCEPTION 'fixture RLS not broad'; END IF; END $$;
 RESET ROLE;
 REVOKE USAGE ON SCHEMA auth FROM teren;
 REVOKE USAGE ON SCHEMA portal_test FROM teren;
