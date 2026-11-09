@@ -212,11 +212,15 @@ const LIMITE = { subansamblu: 300, diametru: 120, poz1: 200, poz2: 200 }
  * → rânduri pentru tabel. Peste limită = eroare (nu se taie); cod duplicat = eroare; nimic nu dispare tacit.
  */
 export function mapeazaLista(obiecte) {
-  const suduri = [], erori = [], avertismente = [], coduri = new Set()
+  const suduri = [], erori = [], avertismente = [], coduri = new Set(), furnizor = []
   const col = (o, ...chei) => { for (const k of chei) { const g = Object.keys(o).find(x => x === k || x.startsWith(k)); if (g != null) return txt(o[g]) } return '' }
   for (const o of obiecte || []) {
     const r = o._rand
     const cod = col(o, 'id').toUpperCase()
+    // sudurile făcute de furnizorul rezervorului, la atelier: informative, NU intră în „rest de executat” (se sar, raportate)
+    const f = esteFurnizor({ bloc: col(o, 'bloc'), certitudine: col(o, 'certitudine') })
+    if (f === null) { erori.push(`Rândul ${r} (${cod}): „furnizor” doar într-una din coloanele Bloc / Certitudine — de lămurit`); continue }
+    if (f) { if (coduri.has(cod) || furnizor.includes(cod)) erori.push(`Rândul ${r}: cod duplicat ${cod}`); else furnizor.push(cod); continue }
     const dn = dnDinText(col(o, 'dn'))
     const c1 = col(o, 'diametru×grosime capat 1', 'diametru x grosime capat 1'), c2 = col(o, 'diametru×grosime capat 2', 'diametru x grosime capat 2')
     const rand = {
@@ -228,7 +232,7 @@ export function mapeazaLista(obiecte) {
     rand.certitudine = cert.valoare
     const pb = []
     if (!RE_COD.test(cod)) pb.push(`cod invalid „${cod}”`)
-    else if (coduri.has(cod)) pb.push(`cod duplicat ${cod}`)
+    else if (coduri.has(cod) || furnizor.includes(cod)) pb.push(`cod duplicat ${cod}`)
     if (Number.isNaN(dn) || (dn != null && (dn < 10 || dn > 2000))) pb.push('DN invalid')
     for (const [k, max] of Object.entries(LIMITE)) if ((rand[k] || '').length > max) pb.push(`${k} peste ${max} caractere`)
     if (pb.length) { erori.push(`Rândul ${r}: ${pb.join(', ')}`); continue }
@@ -237,7 +241,16 @@ export function mapeazaLista(obiecte) {
     coduri.add(cod)
     suduri.push(rand)
   }
-  return { suduri, erori, avertismente }
+  return { suduri, erori, avertismente, furnizor }
+}
+
+// Regula „făcută de furnizor” (ancorată, pe textul fără diacritice): Certitudinea ÎNCEPE cu „făcută de furnizor” și Bloc ÎNCEPE cu
+// „Rezervoare – furnizorul rezervorului”. Ambele = sudură a furnizorului (true); niciuna = a noastră (false); doar una = null (de lămurit).
+const RE_CERT_FURNIZOR = /^facuta de furnizor(?![a-z0-9])/
+const RE_BLOC_FURNIZOR = /^rezervoare[ \t]*[-–][ \t]*furnizorul rezervorului(?![a-z0-9])/
+export function esteFurnizor({ bloc, certitudine }) {
+  const c = RE_CERT_FURNIZOR.test(norm(certitudine).trim()), b = RE_BLOC_FURNIZOR.test(norm(bloc).trim())
+  return c === b ? c : null
 }
 
 /**
@@ -246,11 +259,13 @@ export function mapeazaLista(obiecte) {
  * două ori pe o sudură: a doua apare în `ignorate` (raportată, nu pierdută tacit). Cod necunoscut / vedere necunoscută / coordonată
  * în afara 0–100 = eroare. Observațiile nu se importă.
  */
-export function mapeazaPuncte(obiecte, { coduri, vederi }) {
+export function mapeazaPuncte(obiecte, { coduri, vederi, coduriFurnizor = new Set() }) {
   const erori = [], ignorate = [], pe = new Map()
   for (const o of obiecte || []) {
     const r = o._rand
     const cod = txt(o.cod_sudura).toUpperCase(), vedere = txt(o.vedere).toUpperCase()
+    // punctul unei suduri a furnizorului (sărită din listă): raportat ca ignorat, nu eroare și nu pierdut tacit
+    if (coduriFurnizor.has(cod)) { ignorate.push(`Rândul ${r}: ${cod} e a furnizorului (sărită din listă), punct ignorat`); continue }
     const x = parseNumar(o.x_pct), y = parseNumar(o.y_pct)
     const cert = txt(o.certitudine_pozitie)
     const pb = []
@@ -303,4 +318,53 @@ export function fundalGrup(grup) {
   if (st.length === 1) return culoareStare(st[0].stare)
   let a = 0
   return `conic-gradient(${st.map(({ stare, n }) => { const b = a + (n / tot) * 360, seg = `${culoareStare(stare)} ${a}deg ${b}deg`; a = b; return seg }).join(', ')})`
+}
+
+/** Sudurile care NU au punct pe vederea dată (inclusiv cele fără niciun punct), ca să poată fi deschise dintr-o listă. */
+export function faraPunctPeVedere(suduri, vedere) {
+  const pe = new Set(puncteVedere(suduri, vedere).map(p => p.sudura.id))
+  return (suduri || []).filter(s => !pe.has(s.id))
+}
+
+// ── atingerea: ținta e mai mare decât cercul (~46 px) și, la suprapunere, câștigă punctul cel mai apropiat de deget ──
+export const RAZA_ATINGERE = 23
+/** Grupul cel mai apropiat de (x, y) pe ecran, în raza dată; egalitate = primul din listă. puncteEcran: [{ cheie, x, y }]. */
+export function celMaiAproape(puncteEcran, x, y, raza = RAZA_ATINGERE) {
+  let best = null, dBest = Infinity
+  for (const p of puncteEcran || []) {
+    const d = Math.hypot(p.x - x, p.y - y)
+    if (d <= raza && d < dBest) { best = p; dBest = d }
+  }
+  return best
+}
+
+/** Identitatea completă a imaginii unei vederi: un rezultat (signed URL) se aplică doar pentru exact aceeași identitate. */
+export const cheieImagine = ({ proiectId, nod, vedere, fisier }) => (proiectId != null && nod && vedere && fisier ? `${proiectId}/${nod}/${vedere}/${fisier}` : null)
+
+/**
+ * Rândul întors de server peste lista locală: se aplică doar pe aceeași sudură și doar dacă NU e mai vechi decât ce avem
+ * (o reîncărcare poate fi adus deja o versiune mai nouă decât răspunsul întârziat al unei salvări).
+ */
+export function aplicaRand(lista, rand) {
+  if (!rand || rand.id == null) return lista
+  return (lista || []).map(x => (x.id === rand.id && !(Number(rand.versiune) < Number(x.versiune)) ? { ...x, ...rand } : x))
+}
+
+/**
+ * Reîncercarea după un rezultat NECUNOSCUT (eroare de rețea / server): aceeași cerere (payload identic) = aceeași cheie;
+ * altă cerere pe aceeași sudură = întâi reconciliere cu serverul (reîncarcă sudura), abia apoi o intenție nouă, cu cheie nouă.
+ * incert: { payload, cheie } | null. Întoarce 'noua' | 'aceeasi' | 'reconciliere'.
+ */
+export function decideReincercare(incert, payload) {
+  if (!incert || incert.payload?.p_id !== payload?.p_id) return 'noua'   // altă sudură: CAS-ul pe versiune o apără oricum
+  return JSON.stringify(incert.payload) === JSON.stringify(payload) ? 'aceeasi' : 'reconciliere'
+}
+
+/** Payload-ul RPC-ului de stare, înghețat (aceleași chei, în aceeași ordine — comparabil la reîncercare). */
+export function payloadStare(s, { stareNoua, data, sudor, buletin, motiv }) {
+  const t = v => (v == null || String(v).trim() === '' ? null : String(v).trim())
+  return Object.freeze({
+    p_id: s.id, p_stare_veche: s.stare, p_versiune: s.versiune, p_stare_noua: stareNoua, p_data: data,
+    p_sudor: t(sudor), p_buletin_ndt: t(buletin), p_motiv: t(motiv),
+  })
 }

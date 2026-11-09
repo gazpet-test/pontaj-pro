@@ -2,20 +2,26 @@
 // NodCuplareSchema.jsx — Execuție → proiect → Izometrie → „🔩 Nod cuplare” (decizia lui Răzvan, 09.11.2026)
 // Schema de montaj a nodului (ex. NOD-CUPLARE-PRUNISOR pe Lot 1), cu sudurile ca puncte colorate după stare; atingerea unui
 // punct deschide fișa sudurii, de unde se schimbă starea (doar cu drept de scriere pe Execuție, prin RPC-ul
-// fn_executie_nod_sudura_stare). Sus: contorul azi / cumulat / rest pe diametre.
+// fn_executie_nod_sudura_stare). Sus: contorul azi / cumulat / rest pe diametre. Sudurile fără punct pe vederea curentă
+// se deschid dintr-o listă, cu aceeași fișă.
 // Date: executie_noduri_suduri (migrarea 20261201a, RLS pe dreptul Execuție) + bucket-ul privat noduri-scheme
 // (<proiect>/<nod>/vederi.json + imaginile, urcate de chat; citite prin signed URL scurt). Pagina nu scrie nimic altundeva.
+// L24: încărcarea, imaginea și salvarea au fiecare generația lor; un rezultat întârziat nu se aplică pe alt context.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
 import { ziBucuresti } from './lib/izoTeren.js'
-import { contor, filtreaza, parseManifest, puncteVedere, grupeazaPuncte } from './nodCuplareLogica.js'
+import {
+  contor, filtreaza, parseManifest, puncteVedere, grupeazaPuncte, faraPunctPeVedere, cheieImagine, aplicaRand,
+  decideReincercare, payloadStare,
+} from './nodCuplareLogica.js'
 import { G, S, ContorNod, Legenda, SchemaVedere, FisaSudura, FiltreNod, ListaGrup } from './NodCuplareVizualizare.jsx'
 
 const BUCKET = 'noduri-scheme'
 const COLOANE = 'id, proiect_id, nod_cod, cod, subansamblu, dn, diametru, poz1, poz2, certitudine, stare, data_stare, data_sudare, sudor, buletin_ndt, motiv, vedere, x_pct, y_pct, pozitie_certitudine, pozitii_secundare, versiune, modificat_la'
+const FARA_PUNCT = '__fara_punct'
 const cheieNoua = () => globalThis.crypto.randomUUID()
 const citesteSesiune = k => { try { return sessionStorage.getItem(k) || '' } catch { return '' } }
 const scrieSesiune = (k, v) => { try { sessionStorage.setItem(k, v) } catch { /* fără sessionStorage: doar în memorie */ } }
@@ -31,19 +37,33 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   const [manifest, setManifest] = useState(null)        // { vederi, erori } | null
   const [eroareManifest, setEroareManifest] = useState(null)
   const [vedere, setVedere] = useState('')
-  const [imagine, setImagine] = useState(null)          // { url, vedere }
+  const [imagine, setImagine] = useState(null)          // { url, cheie } — cheie = proiect/nod/vedere/fișier
   const [eroareImagine, setEroareImagine] = useState(null)
   const [stari, setStari] = useState([])
   const [dn, setDn] = useState('')
   const [selectat, setSelectat] = useState(null)
-  const [grupDeschis, setGrupDeschis] = useState(null)   // cheia unui punct de grup (mai multe suduri cu aceleași coordonate)
-  const [busy, setBusy] = useState(false)
+  const [grupDeschis, setGrupDeschis] = useState(null)   // cheia unui punct de grup sau FARA_PUNCT (lista sudurilor fără punct)
+  const [inCurs, setInCurs] = useState(null)             // generația fișei pentru care rulează o salvare
   const [mesaj, setMesaj] = useState(null)
   const [sudor, setSudor] = useState(() => citesteSesiune('nod_cuplare_sudor'))
   const [azi, setAzi] = useState(ziBucuresti())
-  const gen = useRef(0)              // L24: rezultatul unei încărcări se aplică doar dacă e cea curentă
-  const genImg = useRef(0)
-  const intentie = useRef(null)      // L04: aceeași cheie la reîncercarea ACELEIAȘI apăsări
+  const gen = useRef(0)              // încărcarea listei
+  const genImg = useRef(0)           // imaginea vederii
+  const fisaGen = useRef(0)          // contextul fișei: crește la deschidere / închidere / schimbarea nodului sau a proiectului
+  const timerInchidere = useRef(null)
+  const incert = useRef(null)        // L05: { payload, cheie } al unei salvări cu rezultat NECUNOSCUT
+
+  const contextNou = () => { fisaGen.current += 1; clearTimeout(timerInchidere.current); timerInchidere.current = null }
+  useEffect(() => () => clearTimeout(timerInchidere.current), [])
+
+  // „azi” (Europe/Bucharest) se recalculează la revenirea în pagină și la schimbarea zilei
+  useEffect(() => {
+    const actualizeaza = () => setAzi(z => { const n = ziBucuresti(); return n === z ? z : n })
+    const t = setInterval(actualizeaza, 60000)
+    const vizibil = () => { if (document.visibilityState === 'visible') actualizeaza() }
+    document.addEventListener('visibilitychange', vizibil)
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', vizibil) }
+  }, [])
 
   // ── sudurile proiectului (toate nodurile), keyset pe id (pot depăși 1000) + dreptul de scriere ──
   const incarca = useCallback(async () => {
@@ -68,7 +88,11 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
       setSuduri([]); setEroare('Nu am putut încărca sudurile: ' + (e?.message || e))
     } finally { if (g === gen.current) setIncarc(false) }
   }, [proiectId, client])
-  useEffect(() => { setNod(''); setManifest(null); setVedere(''); setSelectat(null); incarca() }, [incarca])
+  useEffect(() => {
+    contextNou(); incert.current = null
+    setNod(''); setManifest(null); setVedere(''); setSelectat(null); setGrupDeschis(null); setMesaj(null)
+    incarca()
+  }, [incarca])
 
   const noduri = useMemo(() => [...new Set(suduri.map(s => s.nod_cod))].sort(), [suduri])
   useEffect(() => { if (!nod && noduri.length) setNod(noduri[0]) }, [nod, noduri])
@@ -83,7 +107,7 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
       try {
         const { data, error } = await client.storage.from(BUCKET).download(`${proiectId}/${nod}/vederi.json`)
         if (!viu) return
-        if (error) { setEroareManifest('Schema nodului nu se poate citi (vederi.json): ' + (error.message || 'eroare') + '. Imaginile le urcă chat-ul.'); return }
+        if (error) { setEroareManifest('Schema nodului nu se poate citi (vederi.json): ' + (error.message || 'eroare') + '. Imaginile le urcă chat-ul; sudurile se deschid din lista de mai jos.'); return }
         const m = parseManifest(JSON.parse(await data.text()))
         if (!viu) return
         setManifest(m)
@@ -94,60 +118,90 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   }, [proiectId, nod, client])
 
   const vedereCurenta = manifest?.vederi.find(x => x.vedere === vedere) || null
-  // ── imaginea vederii: signed URL scurt (10 min), refăcut la schimbarea vederii ──
+  const cheieImg = cheieImagine({ proiectId, nod, vedere: vedereCurenta?.vedere, fisier: vedereCurenta?.fisier })
+  // ── imaginea vederii: signed URL scurt (10 min). Orice schimbare de identitate golește imaginea și invalidează cererea veche ──
   useEffect(() => {
-    if (!vedereCurenta) { setImagine(null); return }
     const g = ++genImg.current
-    setEroareImagine(null)
-    client.storage.from(BUCKET).createSignedUrl(`${proiectId}/${nod}/${vedereCurenta.fisier}`, 600).then(({ data, error }) => {
+    setImagine(null); setEroareImagine(null)
+    if (!cheieImg) return () => { genImg.current += 1 }
+    const cale = `${proiectId}/${nod}/${vedereCurenta.fisier}`
+    client.storage.from(BUCKET).createSignedUrl(cale, 600).then(({ data, error }) => {
       if (g !== genImg.current) return
-      if (error || !data?.signedUrl) { setImagine(null); setEroareImagine('Imaginea vederii nu se poate citi: ' + (error?.message || 'fără URL')); return }
-      setImagine({ url: data.signedUrl, vedere: vedereCurenta.vedere })
-    }).catch(e => { if (g === genImg.current) { setImagine(null); setEroareImagine('Imaginea vederii nu se poate citi: ' + (e?.message || e)) } })
-  }, [proiectId, nod, vedereCurenta, client])
+      if (error || !data?.signedUrl) { setEroareImagine('Imaginea vederii nu se poate citi: ' + (error?.message || 'fără URL')); return }
+      setImagine({ url: data.signedUrl, cheie: cheieImg })
+    }).catch(e => { if (g === genImg.current) setEroareImagine('Imaginea vederii nu se poate citi: ' + (e?.message || e)) })
+    return () => { genImg.current += 1 }
+  }, [cheieImg, client]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const c = useMemo(() => contor(aleNodului, azi), [aleNodului, azi])
   const dnuri = useMemo(() => [...new Set(aleNodului.map(s => s.dn).filter(Number.isInteger))].sort((a, b) => b - a), [aleNodului])
   const filtrate = useMemo(() => filtreaza(aleNodului, { stari, dn }), [aleNodului, stari, dn])
   // punctele vederii (principale + secundare), grupate pe coordonate identice (ex. rezervoarele „fără poziție pe planșă”)
-  const peVedere = useMemo(() => puncteVedere(filtrate, vedere), [filtrate, vedere])
+  const peVedere = useMemo(() => puncteVedere(vedereCurenta ? filtrate : [], vedere), [filtrate, vedere, vedereCurenta])
   const grupuri = useMemo(() => grupeazaPuncte(peVedere), [peVedere])
-  const faraPunct = aleNodului.filter(s => s.vedere == null).length
-  const pePeAlteVederi = filtrate.length - new Set(peVedere.map(p => p.sudura.id)).size
+  // sudurile fără punct pe vederea afișată (sau fără schemă deloc): se deschid din listă, cu aceeași fișă
+  const faraPunct = useMemo(() => (vedereCurenta ? faraPunctPeVedere(filtrate, vedere) : filtrate), [filtrate, vedere, vedereCurenta])
+  const faraNiciunPunct = aleNodului.filter(s => s.vedere == null).length
+  const grupFara = useMemo(() => ({ cheie: FARA_PUNCT, puncte: faraPunct.map(s => ({ sudura: s, certitudine: null })) }), [faraPunct])
   const sudSel = aleNodului.find(s => String(s.id) === String(selectat)) || null
-  const grupSel = grupuri.find(g => g.cheie === grupDeschis) || null
+  const grupSel = grupDeschis === FARA_PUNCT ? grupFara : (grupuri.find(g => g.cheie === grupDeschis) || null)
 
-  const deschide = id => { setGrupDeschis(null); setSelectat(id); setMesaj(null); intentie.current = null }
+  // ── fișa: deschidere / închidere = context nou (mesajele și timerul vechi nu mai ajung pe ea) ──
+  const reconciliaza = async (id, g) => {
+    const { data, error } = await client.from('executie_noduri_suduri').select(COLOANE).eq('id', id).maybeSingle()
+    if (error) { if (g === fisaGen.current) setMesaj({ ok: false, text: 'Nu am putut reîncărca sudura: ' + error.message }); return false }
+    if (incert.current?.payload?.p_id === id) incert.current = null
+    if (data) setSuduri(list => aplicaRand(list, data))
+    return true
+  }
+  const deschide = id => { contextNou(); setGrupDeschis(null); setSelectat(id); setMesaj(null) }
+  const inchide = () => {
+    // o salvare cu rezultat necunoscut pe fișa care se închide: se reconciliază cu serverul în fundal
+    if (incert.current && String(incert.current.payload.p_id) === String(selectat)) reconciliaza(incert.current.payload.p_id, -1)
+    contextNou(); setSelectat(null); setMesaj(null)
+  }
   const atingePunct = cheie => {
     const g = grupuri.find(x => x.cheie === cheie)
     if (!g) return
     if (g.puncte.length === 1) deschide(g.puncte[0].sudura.id)
     else setGrupDeschis(cheie)
   }
-  const inchide = () => { setSelectat(null); setMesaj(null); intentie.current = null }
+  const schimbaNod = n => { contextNou(); setNod(n); setSelectat(null); setGrupDeschis(null); setMesaj(null) }
   const schimbaSudor = v => { setSudor(v); scrieSesiune('nod_cuplare_sudor', v) }
 
-  const salveaza = async ({ stareNoua, data, sudor: sud, buletin, motiv }) => {
+  const salveaza = async form => {
     const s = sudSel
-    if (!s) return
-    // cheia apăsării: aceeași la reîncercarea aceleiași intenții (sudură + versiune + țintă); alta pentru o intenție nouă
-    const k = `${s.id}|${s.versiune}|${stareNoua}`
-    if (intentie.current?.k !== k) intentie.current = { k, cheie: cheieNoua() }
-    setBusy(true); setMesaj(null)
-    const { data: r, error } = await client.rpc('fn_executie_nod_sudura_stare', {
-      p_id: s.id, p_stare_veche: s.stare, p_versiune: s.versiune, p_stare_noua: stareNoua, p_data: data,
-      p_sudor: sud || null, p_buletin_ndt: buletin || null, p_motiv: motiv || null, p_cheie: intentie.current.cheie,
-    })
-    setBusy(false)
-    if (error) {
-      // L05: eroare de rețea / server = rezultat necunoscut — cheia rămâne, reîncercarea nu dublează
-      setMesaj({ ok: false, text: 'Nu s-a salvat (sau nu se știe dacă s-a salvat): ' + error.message + '. Reîncearcă; dacă persistă, reîncarcă pagina.' })
+    const g = fisaGen.current
+    if (!s || inCurs === g) return
+    const payload = payloadStare(s, form)
+    const decizie = decideReincercare(incert.current, payload)
+    if (decizie === 'reconciliere') {
+      // formularul s-a schimbat după un rezultat necunoscut: întâi starea reală de pe server, abia apoi o cerere nouă
+      setInCurs(g)
+      const ok = await reconciliaza(s.id, g)
+      setInCurs(x => (x === g ? null : x))
+      if (ok && g === fisaGen.current) setMesaj({ ok: false, text: 'Cererea anterioară avea rezultat necunoscut; am adus starea reală a sudurii. Verifică și confirmă din nou.' })
       return
     }
-    if (r?.sudura) setSuduri(list => list.map(x => (x.id === r.sudura.id ? { ...x, ...r.sudura } : x)))
-    intentie.current = null
-    if (r?.ok) { setMesaj({ ok: true, text: r.duplicat ? 'Era deja salvată.' : 'Salvat.' }); setTimeout(() => setSelectat(x => (String(x) === String(s.id) ? null : x)), 700) }
-    else setMesaj({ ok: false, text: 'Sudura a fost schimbată între timp (altă apăsare sau alt utilizator). Am adus starea actuală — verifică și reîncearcă.' })
+    const cheie = decizie === 'aceeasi' ? incert.current.cheie : cheieNoua()
+    setInCurs(g); setMesaj(null)
+    let r = null, error = null
+    try { ({ data: r, error } = await client.rpc('fn_executie_nod_sudura_stare', { ...payload, p_cheie: cheie })) } catch (e) { error = e }
+    setInCurs(x => (x === g ? null : x))
+    const curent = g === fisaGen.current
+    if (error) {
+      // L05: rezultat necunoscut — se păstrează EXACT cererea și cheia; o reîncercare identică nu dublează
+      incert.current = { payload, cheie }
+      if (curent) setMesaj({ ok: false, text: 'Nu se știe dacă s-a salvat (' + (error.message || error) + '). Apasă din nou „Confirmă” fără să schimbi nimic; dacă schimbi ceva, întâi reîncarc sudura.' })
+      return
+    }
+    if (incert.current?.payload?.p_id === payload.p_id) incert.current = null
+    if (r?.sudura) setSuduri(list => aplicaRand(list, r.sudura))
+    if (!curent) return
+    if (r?.ok) {
+      setMesaj({ ok: true, text: r.duplicat ? 'Era deja salvată.' : 'Salvat.' })
+      timerInchidere.current = setTimeout(() => { if (g === fisaGen.current) { contextNou(); setSelectat(null); setMesaj(null) } }, 700)
+    } else setMesaj({ ok: false, text: 'Sudura a fost schimbată între timp (altă apăsare sau alt utilizator). Am adus starea actuală — verifică și reîncearcă.' })
   }
 
   if (incarc && !suduri.length) return <Cadru><div style={{ color: G.dim, padding: 30, textAlign: 'center' }}>Se încarcă…</div></Cadru>
@@ -159,7 +213,7 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ fontSize: 18, fontWeight: 800, color: G.text }}>🔩 Schema nod cuplare</div>
         {noduri.length > 1
-          ? <select value={nod} onChange={e => { setNod(e.target.value); setSelectat(null); setGrupDeschis(null) }} style={{ ...S.input, width: 'auto', padding: '6px 10px', fontSize: 14 }}>{noduri.map(n => <option key={n} value={n}>{n}</option>)}</select>
+          ? <select value={nod} onChange={e => schimbaNod(e.target.value)} style={{ ...S.input, width: 'auto', padding: '6px 10px', fontSize: 14 }}>{noduri.map(n => <option key={n} value={n}>{n}</option>)}</select>
           : <span style={{ fontSize: 13, color: G.muted, fontWeight: 700 }}>{nod}</span>}
         <button onClick={incarca} style={{ ...S.btn, marginLeft: 'auto', padding: '6px 12px', fontSize: 13 }}>↻ Reîncarcă</button>
       </div>
@@ -180,19 +234,26 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
       <FiltreNod stari={stari} setStari={setStari} dn={dn} setDn={setDn} dnuri={dnuri} />
       <div style={{ height: 8 }} />
       {vedereCurenta && (
-        <SchemaVedere imagineUrl={imagine?.vedere === vedereCurenta.vedere ? imagine.url : null} w={vedereCurenta.w} h={vedereCurenta.h}
+        <SchemaVedere imagineUrl={imagine?.cheie === cheieImg ? imagine.url : null} cheieImagine={cheieImg} w={vedereCurenta.w} h={vedereCurenta.h}
           grupuri={grupuri} selectatId={selectat} onSelect={atingePunct}
           onEroareImagine={() => setEroareImagine('Imaginea vederii nu s-a putut încărca (link expirat sau fișier lipsă). Reîncarcă pagina.')} />
       )}
       {eroareImagine && <Alerta text={eroareImagine} />}
-      <div style={{ marginTop: 8, fontSize: 12, color: G.muted }}>
-        Pe această vedere: {peVedere.length} · pe alte vederi (după filtre): {pePeAlteVederi} · fără punct pe schemă: {faraPunct}
+      <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: G.muted }}>Pe această vedere: {new Set(peVedere.map(p => p.sudura.id)).size} suduri</span>
+        {faraPunct.length > 0 && (
+          <button onClick={() => setGrupDeschis(FARA_PUNCT)} style={{ ...S.btn, padding: '8px 12px', fontSize: 13, minHeight: 44 }}>
+            📋 Suduri fără punct {vedereCurenta ? 'pe această vedere' : 'pe schemă'}: {faraPunct.length}
+          </button>
+        )}
+        {faraNiciunPunct > 0 && <span style={{ fontSize: 12, color: G.dim }}>(fără niciun punct pe schemă: {faraNiciunPunct})</span>}
       </div>
       <div style={{ marginTop: 8 }}><Legenda /></div>
 
-      <ListaGrup grup={grupSel} onAlege={deschide} onInchide={() => setGrupDeschis(null)} />
+      <ListaGrup grup={grupSel} onAlege={deschide} onInchide={() => setGrupDeschis(null)}
+        titlu={grupDeschis === FARA_PUNCT ? `Suduri fără punct ${vedereCurenta ? `pe vederea ${vedereCurenta.vedere === 'PLAN' ? 'Plan' : vedereCurenta.vedere}` : 'pe schemă'}${stari.length || dn !== '' ? ' (după filtre)' : ''}: ${faraPunct.length}` : null} />
       <FisaSudura sudura={sudSel} poateScrie={poateScrie} azi={azi} sudorSesiune={sudor} onSudorSesiune={schimbaSudor}
-        onSalveaza={salveaza} onInchide={inchide} busy={busy} mesaj={mesaj} />
+        onSalveaza={salveaza} onInchide={inchide} busy={inCurs != null && inCurs === fisaGen.current} mesaj={mesaj} />
     </Cadru>
   )
 }

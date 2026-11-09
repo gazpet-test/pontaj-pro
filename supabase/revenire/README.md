@@ -231,4 +231,4 @@ SELECT set_config('gazpet.revenire_20261201a', 'SCOATE_NODURI_SUDURI:' || txid_c
 -- <conținutul exact al fișierului>
 COMMIT;
 ```
-Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` `storage.objects` apoi tabelul (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificării „gol”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_executie_noduri_suduri.sql` (T12 nearmat / cu date = refuz, T13 armat pe gol = scos, apoi re-aplicare).
+Un singur bloc `DO` (un refuz nu lasă nimic să ruleze după el). Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` `storage.objects` apoi tabelul (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificării „gol”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_executie_noduri_suduri.sql` (T12 nearmat / cu date = refuz, cu SQLSTATE și mesaj verificate explicit; T13 armat pe gol = scos, apoi re-aplicare).

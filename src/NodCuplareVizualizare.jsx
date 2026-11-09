@@ -9,7 +9,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ETICHETE, culoareStare, esteStare, stariUrmatoare, cereSudor, cereBuletin, cereMotiv, valideazaMarcare, scadeZile, ZILE_INAPOI,
-  incadreaza, limiteScala, zoomLa, ecranDinPct, distanta, mijloc, STARI, fundalGrup,
+  incadreaza, limiteScala, zoomLa, ecranDinPct, distanta, mijloc, STARI, fundalGrup, celMaiAproape, RAZA_ATINGERE,
 } from './nodCuplareLogica.js'
 
 export const G = {
@@ -69,8 +69,9 @@ export function Legenda() {
 }
 
 // ── vederea cu zoom + pan ──
-const R = 15   // raza punctului pe ecran (30 px), aceeași la orice zoom
-export function SchemaVedere({ imagineUrl, w, h, grupuri, selectatId, onSelect, inaltime = null, onEroareImagine }) {
+const R = 15   // raza CERCULUI pe ecran (30 px), aceeași la orice zoom; ținta de atingere e mai mare (RAZA_ATINGERE, ~46 px)
+// cheieImagine = identitatea completă a imaginii (proiect / nod / vedere / fișier): la schimbarea ei se reîncadrează și se uită gesturile
+export function SchemaVedere({ imagineUrl, cheieImagine, w, h, grupuri, selectatId, onSelect, inaltime = null, onEroareImagine }) {
   const ref = useRef(null)
   const [dim, setDim] = useState({ cw: 0, ch: 0 })
   const [v, setV] = useState({ scale: 1, tx: 0, ty: 0 })
@@ -95,7 +96,11 @@ export function SchemaVedere({ imagineUrl, w, h, grupuri, selectatId, onSelect, 
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  useEffect(() => { atins.current = false }, [imagineUrl, w, h])
+  // altă imagine (chiar cu aceleași dimensiuni): transformarea și gesturile vechi nu se păstrează
+  useEffect(() => {
+    atins.current = false; pointeri.current.clear(); gest.current = null; ultimTap.current = null
+    if (dim.cw > 0 && dim.ch > 0) setV(incadreaza({ w, h }, dim))
+  }, [cheieImagine, w, h]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!atins.current && dim.cw > 0 && dim.ch > 0) setV(fit) }, [fit, dim])
 
   // rotița (desktop): ascultător nativ, ne-pasiv, ca pagina să nu deruleze
@@ -123,10 +128,9 @@ export function SchemaVedere({ imagineUrl, w, h, grupuri, selectatId, onSelect, 
     if (e.pointerType === 'mouse' && e.button !== 0) return
     ref.current.setPointerCapture?.(e.pointerId)
     pointeri.current.set(e.pointerId, local(e))
-    const punct = e.target.closest?.('[data-grup]')?.getAttribute('data-grup') || null
     const unul = pointeri.current.size === 1
     pornesteGest()
-    if (unul) gest.current = { ...gest.current, punct, mutat: false, t: Date.now() }
+    if (unul) gest.current = { ...gest.current, mutat: false, t: Date.now() }
   }
   const onPointerMove = e => {
     if (!pointeri.current.has(e.pointerId)) return
@@ -152,7 +156,9 @@ export function SchemaVedere({ imagineUrl, w, h, grupuri, selectatId, onSelect, 
     if (pointeri.current.size > 0) { pornesteGest(); return }
     gest.current = null
     if (!g || g.tip !== 'pan' || g.mutat || e.type === 'pointercancel') return
-    if (g.punct) { onSelect?.(g.punct); return }
+    // atingerea: punctul cel mai apropiat de deget, în raza țintei (~46 px); la suprapunere câștigă cel mai apropiat
+    const tinta = celMaiAproape(puncteEcran, poz.x, poz.y)
+    if (tinta) { onSelect?.(tinta.cheie); return }
     // dublu-tap / dublu-click pe fundal = zoom ×2 în punctul atins
     const acum = Date.now(), u = ultimTap.current
     if (u && acum - u.t < 320 && Math.hypot(u.x - poz.x, u.y - poz.y) < 30) {
@@ -164,6 +170,9 @@ export function SchemaVedere({ imagineUrl, w, h, grupuri, selectatId, onSelect, 
   // înălțimea: după proporția imaginii (o vedere lată nu lasă gol mare pe telefon), între 320 px și 72% din ecran
   const inaltimeAuto = dim.cw > 0 && w > 0 ? Math.round(Math.max(320, Math.min((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.72, (dim.cw * h) / w + 16))) : 320
   const etichete = v.scale >= fit.scale * 2.2
+  // pozițiile de ecran ale grupurilor vizibile (aceleași pentru desen și pentru atingere)
+  const puncteEcran = (grupuri || []).map(gr => ({ cheie: gr.cheie, gr, ...ecranDinPct(gr.x_pct, gr.y_pct, { w, h }, v) }))
+    .filter(p => p.x >= -RAZA_ATINGERE && p.y >= -RAZA_ATINGERE && p.x <= dim.cw + RAZA_ATINGERE && p.y <= dim.ch + RAZA_ATINGERE)
 
   return (
     <div ref={ref} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
@@ -172,10 +181,9 @@ export function SchemaVedere({ imagineUrl, w, h, grupuri, selectatId, onSelect, 
       {imagineUrl && fit.scale > 0 && <img src={imagineUrl} alt="" draggable={false} decoding="async" onError={onEroareImagine}
         style={{ position: 'absolute', left: 0, top: 0, width: w * fit.scale, height: h * fit.scale, maxWidth: 'none', transformOrigin: '0 0',
           transform: `translate(${v.tx}px, ${v.ty}px) scale(${v.scale / fit.scale})`, pointerEvents: 'none' }} />}
-      {(grupuri || []).map(gr => {
-        const p = ecranDinPct(gr.x_pct, gr.y_pct, { w, h }, v)
+      {puncteEcran.map(p => {
+        const gr = p.gr
         const n = gr.puncte.length, r = n > 1 ? R + 3 : R
-        if (p.x < -r || p.y < -r || p.x > dim.cw + r || p.y > dim.ch + r) return null
         const s = gr.puncte[0].sudura
         const sel = gr.puncte.some(x => String(x.sudura.id) === String(selectatId))
         const textNegru = n === 1 && (s.stare === 'insailat' || !esteStare(s.stare))
@@ -184,7 +192,8 @@ export function SchemaVedere({ imagineUrl, w, h, grupuri, selectatId, onSelect, 
             style={{ position: 'absolute', left: p.x - r, top: p.y - r, width: 2 * r, height: 2 * r, borderRadius: '50%', background: n > 1 ? fundalGrup(gr) : culoareStare(s.stare),
               border: `${n > 1 ? 3 : 2}px ${n > 1 ? 'double' : 'solid'} ${sel ? '#000' : '#FFFFFF'}`, boxShadow: sel ? '0 0 0 3px #000' : '0 1px 3px rgba(0,0,0,.55)', boxSizing: 'border-box',
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: n > 1 ? 12 : 10, fontWeight: 800, color: textNegru ? '#000' : '#FFF',
-              textShadow: n > 1 ? '0 0 3px #000' : 'none', textDecoration: n === 1 && s.stare === 'anulat' ? 'line-through' : 'none', cursor: 'pointer', zIndex: sel ? 3 : 2 }}>
+              textShadow: n > 1 ? '0 0 3px #000' : 'none', textDecoration: n === 1 && s.stare === 'anulat' ? 'line-through' : 'none', cursor: 'pointer', zIndex: sel ? 3 : 2,
+              pointerEvents: 'none' }}>
             {n > 1 ? `×${n}` : nrCod(s.cod)}
             {etichete && <span style={{ position: 'absolute', left: 2 * r + 2, top: r - 8, fontSize: 11, fontWeight: 700, color: '#111', background: '#FFFFFFCC', padding: '0 3px', borderRadius: 4, whiteSpace: 'nowrap', textDecoration: 'none', textShadow: 'none' }}>
               {n > 1 ? `${s.cod} … (${n})` : s.cod}</span>}
@@ -304,17 +313,18 @@ export function FiltreNod({ stari, setStari, dn, setDn, dnuri }) {
 }
 
 // ── lista unui punct de grup (mai multe suduri cu aceleași coordonate, ex. „fără poziție pe planșă”) ──
-export function ListaGrup({ grup, onAlege, onInchide }) {
+// Aceeași listă servește și pentru „Suduri fără punct pe schemă” (titlu dat de pagină).
+export function ListaGrup({ grup, onAlege, onInchide, titlu = null }) {
   const paza = useGardaAtingere(grup?.cheie)
   if (!grup) return null
   return (
     <div onClick={onInchide} onClickCapture={paza} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{ background: G.surface, borderTop: `1px solid ${G.border}`, borderRadius: '16px 16px 0 0', width: '100%', maxWidth: 560, maxHeight: '80vh', overflowY: 'auto', padding: '14px 14px 22px', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 17, fontWeight: 800, color: G.text }}>{grup.puncte.length} suduri în același punct</span>
+          <span style={{ fontSize: 17, fontWeight: 800, color: G.text }}>{titlu || `${grup.puncte.length} suduri în același punct`}</span>
           <button onClick={onInchide} style={{ ...S.btn, marginLeft: 'auto', padding: '4px 12px' }} aria-label="Închide">✕</button>
         </div>
-        {grup.puncte.some(p => p.certitudine === 'fara_pozitie_pe_plansa') && <div style={{ fontSize: 12, color: G.muted, marginBottom: 8 }}>Planșa nu le dă o poziție proprie: punctul arată doar zona.</div>}
+        {!titlu && grup.puncte.some(p => p.certitudine === 'fara_pozitie_pe_plansa') && <div style={{ fontSize: 12, color: G.muted, marginBottom: 8 }}>Planșa nu le dă o poziție proprie: punctul arată doar zona.</div>}
         {grup.puncte.map(({ sudura: s }) => (
           <button key={s.id} onClick={() => onAlege(s.id)} style={{ ...S.btn, width: '100%', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, minHeight: 46, textAlign: 'left' }}>
             <span style={{ width: 16, height: 16, borderRadius: '50%', background: culoareStare(s.stare), border: '2px solid #FFF', flexShrink: 0 }} />

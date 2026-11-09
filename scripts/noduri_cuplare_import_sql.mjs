@@ -48,7 +48,7 @@ export function genereazaSql({ proiect, nod, listaCsv, puncteCsv = null, manifes
     probleme.push(...m.erori.map(e => 'vederi.json: ' + e))
     const p = obiecteCsv(puncteCsv)
     probleme.push(...p.erori.map(e => 'puncte: ' + e))
-    puncte = mapeazaPuncte(p.obiecte, { coduri: new Set(lista.suduri.map(s => s.cod)), vederi: new Set(m.vederi.map(v => v.vedere)) })
+    puncte = mapeazaPuncte(p.obiecte, { coduri: new Set(lista.suduri.map(s => s.cod)), vederi: new Set(m.vederi.map(v => v.vedere)), coduriFurnizor: new Set(lista.furnizor) })
     probleme.push(...puncte.erori.map(e => 'puncte: ' + e))
   }
   if (!lista.suduri.length) probleme.push('Lista nu are nicio sudură validă')
@@ -60,7 +60,7 @@ export function genereazaSql({ proiect, nod, listaCsv, puncteCsv = null, manifes
   const valoriPuncte = puncte.puncte.map(p => `  (${[p.cod, p.vedere, p.x, p.y, p.certitudine].map(lit).join(', ')}, ${lit(JSON.stringify(p.secundare))}::jsonb)`).join(',\n')
   const COL = 's.subansamblu, s.dn, s.diametru, s.poz1, s.poz2, s.certitudine'
   const sql = `-- Generat de scripts/noduri_cuplare_import_sql.mjs la ${new Date().toISOString()}. NU intră în repo (date ale beneficiarului).
--- Proiect ${proiect}, nod ${nod}: ${lista.suduri.length} suduri, ${puncte.puncte.length} suduri cu puncte.
+-- Proiect ${proiect}, nod ${nod}: ${lista.suduri.length} suduri, ${puncte.puncte.length} suduri cu puncte; ignorate: ${lista.furnizor.length} (furnizor), nu intră în listă.
 -- Surse: ${Object.entries(surse).map(([k, v]) => `${k} sha256 ${v}`).join('; ') || '—'}
 -- Rulare: psql -X -v ON_ERROR_STOP=1 --single-transaction -f <acest fișier>
 -- Upsert pe (proiect, nod, cod): descrierea se actualizează (versiune + 1), starea / sudorul / NDT nu se ating. Codurile care lipsesc
@@ -131,7 +131,7 @@ BEGIN
     ${N}, v_noi, v_modif, v_react, v_anul, v_pct;
 END $import$;
 `
-  return { sql, raport: { suduri: lista.suduri.length, avertismente: lista.avertismente, puncte: puncte.puncte.length, puncteIgnorate: puncte.ignorate } }
+  return { sql, raport: { suduri: lista.suduri.length, avertismente: lista.avertismente, puncte: puncte.puncte.length, puncteIgnorate: puncte.ignorate, furnizor: lista.furnizor } }
 }
 
 // ── linia de comandă ──
@@ -164,7 +164,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       puncteCsv: puncte ? puncte.toString('utf8') : null, manifest: vederi ? JSON.parse(vederi.toString('utf8').replace(/^\s+/, '').replace(new RegExp('^' + String.fromCharCode(0xFEFF)), '')) : null, surse,
     })
     writeFileSync(iesire, sql, 'utf8')
-    console.log(`Scris ${iesire}: ${raport.suduri} suduri, ${raport.puncte} puncte.`)
+    console.log(`Scris ${iesire}: ${raport.suduri} suduri, ${raport.puncte} suduri cu puncte; ignorate: ${raport.furnizor.length} (furnizor)${raport.furnizor.length ? ': ' + raport.furnizor.join(', ') : ''}.`)
     for (const x of raport.avertismente) console.log('  avertisment: ' + x)
     for (const x of raport.puncteIgnorate) console.log('  punct ignorat: ' + x)
   } catch (e) {

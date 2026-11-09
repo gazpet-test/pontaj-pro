@@ -12,7 +12,8 @@
 -- Ordinea lock-urilor: storage.objects, apoi executie_noduri_suduri, ambele ACCESS EXCLUSIVE, ÎNAINTEA verificării „gol” (un INSERT /
 -- upload concurent nu poate fi numărat 0 și apoi pierdut la DROP). Aceeași ordine ca o citire din Storage (objects, apoi tabelul, prin
 -- politica noduri_scheme_citire); RPC-ul blochează doar tabelul -> fără ciclu.
-DO $pre$
+-- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează (nimic nu rulează după el), iar harness-ul îi verifică mesajul.
+DO $revenire$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.revenire_20261201a', true) IS DISTINCT FROM 'SCOATE_NODURI_SUDURI:' || txid_current() THEN
@@ -56,21 +57,18 @@ BEGIN
   IF EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'noduri-scheme') THEN
     RAISE EXCEPTION '20261201a revenire: bucket-ul noduri-scheme are fisiere — decizie separata inainte';
   END IF;
-END $pre$;
-
-DROP POLICY noduri_scheme_citire ON storage.objects;
-SELECT set_config('storage.allow_delete_query', 'true', true);   -- doar dacă versiunea Storage are garda protect_delete (bucket-ul e gol, verificat sus)
-DELETE FROM storage.buckets WHERE id = 'noduri-scheme';
-DROP TABLE public.executie_noduri_suduri;   -- cu trigger-ul, politica și indexurile lui; fără CASCADE
-DROP FUNCTION public.fn_executie_nod_sudura_stare(bigint, text, integer, text, date, text, text, text, uuid);
-DROP FUNCTION public.fn_executie_nod_obiect_citire(text, text);
-DROP FUNCTION public.fn_executie_nod_sudura_provenienta();
-DROP FUNCTION public.fn_executie_nod_tranzitie(text, text);
-DROP FUNCTION public.fn_executie_nod_drept(bigint, boolean);
-DROP FUNCTION public.fn_executie_nod_pozitii_valide(jsonb, text);
-
-DO $post$
-BEGIN
+  -- scoaterea (fără CASCADE)
+  DROP POLICY noduri_scheme_citire ON storage.objects;
+  PERFORM set_config('storage.allow_delete_query', 'true', true);   -- doar dacă versiunea Storage are garda protect_delete (bucket-ul e gol, verificat sus)
+  DELETE FROM storage.buckets WHERE id = 'noduri-scheme';
+  DROP TABLE public.executie_noduri_suduri;   -- cu trigger-ul, politica și indexurile lui
+  DROP FUNCTION public.fn_executie_nod_sudura_stare(bigint, text, integer, text, date, text, text, text, uuid);
+  DROP FUNCTION public.fn_executie_nod_obiect_citire(text, text);
+  DROP FUNCTION public.fn_executie_nod_sudura_provenienta();
+  DROP FUNCTION public.fn_executie_nod_tranzitie(text, text);
+  DROP FUNCTION public.fn_executie_nod_drept(bigint, boolean);
+  DROP FUNCTION public.fn_executie_nod_pozitii_valide(jsonb, text);
+  -- postcondiție
   IF to_regclass('public.executie_noduri_suduri') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_nod\_%')
      OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'noduri_scheme_citire')
@@ -78,4 +76,4 @@ BEGIN
     RAISE EXCEPTION '20261201a revenire post: au ramas obiecte';
   END IF;
   PERFORM set_config('gazpet.revenire_20261201a', '', true);   -- dezarmare
-END $post$;
+END $revenire$;

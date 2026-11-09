@@ -27,7 +27,17 @@ describe('genereazaSql pe fixture-ul sintetic', () => {
     expect(sql).toContain(`('CP-002', 'PLAN', 30.25, 40, 'aproximativ', '[]'::jsonb)`)
     expect(sql).toContain(`('CP-003', 'A', 55, 60, 'sigur', '[{"vedere":"PLAN","x_pct":70,"y_pct":20,"certitudine":"sigur"}]'::jsonb)`)
     expect(sql).toContain(`('CP-004', 'A', 80, 75, 'aproximativ', '[]'::jsonb)`)
-    expect(raport.puncteIgnorate).toEqual([])
+    expect(raport.puncteIgnorate).toEqual(['Rândul 7: CR-090 e a furnizorului (sărită din listă), punct ignorat'])
+  })
+  it('sudurile furnizorului rezervorului se sar (nu intră în „rest”) și se raportează: ignorate 1 (furnizor)', () => {
+    const { sql, raport } = genereazaSql(baza())
+    expect(raport.furnizor).toEqual(['CR-090'])
+    expect(sql).not.toContain("'CR-090'")
+    expect(sql).toContain('ignorate: 1 (furnizor)')
+  })
+  it('un punct al unui cod care nu e în listă (ex. coduri vechi înlocuite) oprește generarea, cu codul numit', () => {
+    const p = f('puncte_exemplu.csv') + 'CP-201;PLAN;5;5;fara_pozitie_pe_plansa;\n'
+    expect(() => genereazaSql({ ...baza(), puncteCsv: p })).toThrow(/sudură necunoscută „CP-201”/)
   })
   it('SQL-ul: proiectul și nodul ca literali, upsert pe (proiect, nod, cod), lipsa = anulat, sudatele lipsă opresc importul', () => {
     const { sql } = genereazaSql({ ...baza(), surse: { lista: 'ab'.repeat(32) } })

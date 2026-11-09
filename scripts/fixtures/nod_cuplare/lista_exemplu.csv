@@ -4,3 +4,4 @@ CP-002;Planșa test;Z1. Linie fictivă DN300;DN300 test;zona fictivă;DN300;323,
 CP-003;Planșa test;Z2. Ramură fictivă DN100;DN100 test;zona fictivă;DN100;114,3×6,3;flanșă DN100;4 Țeavă test;5 Flanșă test;flanșă cu gât;nu;posibilă, de confirmat;;DESEN-TEST-01;de executat;;;;
 CP-004;Ansamblu test;Z3. Ansamblu fictiv (estimare);DN50 test;zona fictivă;DN50;60,3×4;60,3×4;(de completat);(de completat);cap la cap / flanșă (de stabilit);nu;estimare din tabel;;DESEN-TEST-02;de executat;;;;
 CP-005;Ansamblu test;Z3. Ansamblu fictiv (estimare);DN50 test;zona fictivă;DN50;60,3×4;60,3×4;(de completat);(de completat);cap la cap;nu;altă formulare necunoscută;;DESEN-TEST-02;de executat;;;;
+CR-090;Rezervoare – furnizorul rezervorului, la atelier (informativ);Z5. Rezervor furnizor fictiv;DN50 test;zona fictivă;DN50;60,3×4;60,3×4;8 Racord test;9 Ștuț test;cap la cap;nu;făcută de furnizor (test);Sudura furnizorului: informativă, nu se urmărește;DESEN-TEST-02;de executat;;;;

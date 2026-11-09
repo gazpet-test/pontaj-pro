@@ -1,5 +1,5 @@
 -- FIXTURE SINTETIC pentru harness (date inventate), generat de genereaza_import_exemplu.mjs.
--- Proiect 1, nod NOD-TEST-IMPORT: 5 suduri, 4 suduri cu puncte.
+-- Proiect 1, nod NOD-TEST-IMPORT: 5 suduri, 4 suduri cu puncte; ignorate: 1 (furnizor), nu intră în listă.
 -- Surse: lista sha256 exemplu1exemplu1exemplu1exemplu1exemplu1exemplu1exemplu1exemplu1
 -- Rulare: psql -X -v ON_ERROR_STOP=1 --single-transaction -f <acest fișier>
 -- Upsert pe (proiect, nod, cod): descrierea se actualizează (versiune + 1), starea / sudorul / NDT nu se ating. Codurile care lipsesc

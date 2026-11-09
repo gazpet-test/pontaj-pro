@@ -30,6 +30,15 @@ RETURNS jsonb LANGUAGE sql AS $h$
   SELECT public.fn_executie_nod_sudura_stare((SELECT id FROM public.executie_noduri_suduri WHERE nod_cod = 'NOD-TEST-HARNESS' AND cod = p_cod),
     p_veche, p_ver, p_noua, p_data, p_sudor, p_buletin, p_motiv, p_cheie);
 $h$;
+-- refuzul AȘTEPTAT al unui fișier rulat cu ON_ERROR_STOP 0: psql :ERROR = true, :SQLSTATE și mesajul exact (L25: testul pică dacă trece)
+CREATE FUNCTION pg_temp.t_eroare(p_test text, p_eroare text, p_stare text, p_mesaj text, p_stare_ast text, p_fragment text) RETURNS void LANGUAGE plpgsql AS $h$
+BEGIN
+  IF p_eroare IS DISTINCT FROM 'true' THEN RAISE EXCEPTION '% FAIL: operația trebuia refuzată, dar a trecut', p_test; END IF;
+  IF p_stare IS DISTINCT FROM p_stare_ast OR position(p_fragment IN coalesce(p_mesaj, '')) = 0 THEN
+    RAISE EXCEPTION '% FAIL: refuz cu alt motiv (% / %)', p_test, p_stare, p_mesaj;
+  END IF;
+  RAISE NOTICE '% refuz confirmat: %', p_test, p_mesaj;
+END $h$;
 GRANT EXECUTE ON FUNCTION pg_temp.t_ca(uuid, text), pg_temp.t_refuza(text, text), pg_temp.t_g(text),
   pg_temp.t_m(text, text, integer, text, date, text, text, text, uuid) TO authenticated, anon, service_role;
 
@@ -318,15 +327,18 @@ END $t$;
 SAVEPOINT t14;
 \set ON_ERROR_STOP 0
 \ir fixtures/nod_cuplare/import_exemplu_2.sql
+\set t14_eroare :ERROR
+\set t14_stare :SQLSTATE
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t14;
+SELECT pg_temp.t_eroare('T14', :'t14_eroare', :'t14_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'lipsesc din listă suduri deja sudate: CP-004 (sudat)');
 DO $t$ BEGIN
   IF (SELECT string_agg(cod || ':' || stare, ',' ORDER BY cod) FROM public.executie_noduri_suduri WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT')
        IS DISTINCT FROM 'CP-001:de_executat,CP-002:de_executat,CP-003:de_executat,CP-004:sudat,CP-005:de_executat,CR-001:anulat' THEN
     RAISE EXCEPTION 'T14 FAIL: importul cu o sudură sudată lipsă a scris ceva';
   END IF;
   DELETE FROM public.executie_noduri_suduri WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT';
-  RAISE NOTICE 'T14 OK (eroarea „lipsesc din listă suduri deja sudate: CP-004 (sudat)” de mai sus e așteptată)';
+  RAISE NOTICE 'T14 OK (refuzul „lipsesc din listă suduri deja sudate: CP-004 (sudat)” a fost verificat explicit)';
 END $t$;
 \else
 \echo 'T14 SĂRIT: proiectul 1 nu există pe clonă (importul nu s-a putut proba)'
@@ -337,21 +349,27 @@ SELECT pg_temp.t_ca(NULL, 'postgres');
 SAVEPOINT t12a;
 \set ON_ERROR_STOP 0
 \ir ../supabase/revenire/20261201a_executie_noduri_suduri_ROLLBACK.sql
+\set t12a_eroare :ERROR
+\set t12a_stare :SQLSTATE
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t12a;
+SELECT pg_temp.t_eroare('T12a', :'t12a_eroare', :'t12a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'garda invalida');
 SAVEPOINT t12b;
 SELECT set_config('gazpet.revenire_20261201a', 'SCOATE_NODURI_SUDURI:' || txid_current(), true);
 \set ON_ERROR_STOP 0
 \ir ../supabase/revenire/20261201a_executie_noduri_suduri_ROLLBACK.sql
+\set t12b_eroare :ERROR
+\set t12b_stare :SQLSTATE
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t12b;
+SELECT pg_temp.t_eroare('T12b', :'t12b_eroare', :'t12b_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'tabelul are randuri');
 DO $t$ BEGIN
   IF to_regclass('public.executie_noduri_suduri') IS NULL OR (SELECT count(*) FROM public.executie_noduri_suduri WHERE nod_cod = 'NOD-TEST-HARNESS') <> 5
      OR NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'noduri-scheme')
      OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'noduri_scheme_citire') THEN
     RAISE EXCEPTION 'T12 FAIL: revenirea refuzată a atins ceva';
   END IF;
-  RAISE NOTICE 'T12 OK (refuzurile de mai sus sunt așteptate: „garda invalida” și „tabelul are randuri”)';
+  RAISE NOTICE 'T12 OK (refuzurile „garda invalida” și „tabelul are randuri” au fost verificate explicit)';
 END $t$;
 
 -- T13: revenirea armată pe tabel și bucket goale scoate tot; re-aplicarea merge

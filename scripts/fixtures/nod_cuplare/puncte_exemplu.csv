@@ -4,3 +4,4 @@ CP-002;PLAN;30.25;40;aproximativ;punct inventat
 CP-003;A;55;60;sigur;
 CP-003;PLAN;70;20;sigur;al doilea punct al aceleiași suduri (ignorat în v1)
 CP-004;A;80;75;aproximativ;
+CR-090;A;10;10;fara_pozitie_pe_plansa;punctul unei suduri a furnizorului (ignorat)

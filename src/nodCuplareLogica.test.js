@@ -7,6 +7,7 @@ import {
   STARI, CULORI, culoareStare, CULOARE_NECUNOSCUTA, TRANZITII, tranzitiePermisa, stariUrmatoare, valideazaMarcare, scadeZile,
   contor, filtreaza, incadreaza, limiteScala, zoomLa, ecranDinPct, pctDinEcran, parseManifest, parseCsv, obiecteCsv,
   mapeazaLista, mapeazaPuncte, dnDinText, certitudineDinText, puncteVedere, grupeazaPuncte, stariGrup, fundalGrup,
+  esteFurnizor, faraPunctPeVedere, celMaiAproape, RAZA_ATINGERE, cheieImagine, aplicaRand, decideReincercare, payloadStare,
 } from './nodCuplareLogica.js'
 
 const AZI = '2026-11-09'
@@ -252,5 +253,81 @@ describe('punctele unei vederi și grupurile', () => {
     expect(fundalGrup(unu)).toBe(culoareStare('sudat'))
     expect(stariGrup(trei)).toEqual([{ stare: 'de_executat', n: 2 }, { stare: 'acceptat', n: 1 }])
     expect(fundalGrup(trei)).toBe(`conic-gradient(${culoareStare('de_executat')} 0deg 240deg, ${culoareStare('acceptat')} 240deg 360deg)`)
+  })
+  it('sudurile fără punct pe vedere (inclusiv fără niciun punct) se pot lista', () => {
+    expect(faraPunctPeVedere([s1, s2, s3, s5], 'PLAN').map(s => s.id)).toEqual([5])
+    expect(faraPunctPeVedere([s1, s2, s3, s5], 'A').map(s => s.id)).toEqual([3, 5])
+    expect(faraPunctPeVedere([s1, s5], 'D').map(s => s.id)).toEqual([1, 5])
+  })
+})
+
+describe('sudurile furnizorului rezervorului (se sar la import, raportate)', () => {
+  const BLOC = 'Rezervoare – furnizorul rezervorului, la atelier (informativ)'
+  it('regula ancorată: ambele coloane = furnizor; niciuna = a noastră; doar una = de lămurit (null)', () => {
+    expect(esteFurnizor({ bloc: BLOC, certitudine: 'făcută de furnizor (rezervor livrat cu racorduri)' })).toBe(true)
+    expect(esteFurnizor({ bloc: BLOC, certitudine: 'Făcută de furnizor' })).toBe(true)
+    expect(esteFurnizor({ bloc: 'Rezervoare - furnizorul rezervorului', certitudine: 'facuta de furnizor' })).toBe(true)
+    expect(esteFurnizor({ bloc: 'Rezervoare – noi, montaj pe șantier', certitudine: 'sigur' })).toBe(false)
+    expect(esteFurnizor({ bloc: '', certitudine: '' })).toBe(false)
+    expect(esteFurnizor({ bloc: BLOC, certitudine: 'sigur' })).toBeNull()
+    expect(esteFurnizor({ bloc: 'Planșa principală', certitudine: 'făcută de furnizor' })).toBeNull()
+  })
+  it('negative: textul nu începe cu regula sau continuă alt cuvânt', () => {
+    expect(esteFurnizor({ bloc: 'Planșa', certitudine: 'nu e făcută de furnizor' })).toBe(false)
+    expect(esteFurnizor({ bloc: 'Planșa', certitudine: 'făcută de furnizorul X' })).toBe(false)
+    expect(esteFurnizor({ bloc: 'Alte rezervoare – furnizorul rezervorului', certitudine: 'sigur' })).toBe(false)
+  })
+  it('lista: rândurile furnizorului se sar și se raportează; un rând pe jumătate = eroare; codul nu se poate repeta', () => {
+    const o = obiecteCsv(['ID;Bloc;DN;Certitudine', `CR-001;${BLOC};DN50;făcută de furnizor`, 'CR-002;Rezervoare – noi;DN50;sigur',
+      `CR-003;${BLOC};DN50;sigur`, 'CR-001;Rezervoare – noi;DN50;sigur'].join('\n')).obiecte
+    const r = mapeazaLista(o)
+    expect(r.furnizor).toEqual(['CR-001'])
+    expect(r.suduri.map(s => s.cod)).toEqual(['CR-002'])
+    expect(r.erori).toEqual(['Rândul 4 (CR-003): „furnizor” doar într-una din coloanele Bloc / Certitudine — de lămurit', 'Rândul 5: cod duplicat CR-001'])
+  })
+  it('punctele sudurilor furnizorului: ignorate și raportate (nu eroare, nu tăcere)', () => {
+    const o = obiecteCsv(['cod_sudura;vedere;x_pct;y_pct;certitudine_pozitie;observatii', 'CR-001;PLAN;1;1;;', 'CR-002;PLAN;2;2;;'].join('\n')).obiecte
+    const r = mapeazaPuncte(o, { coduri: new Set(['CR-002']), vederi: new Set(['PLAN']), coduriFurnizor: new Set(['CR-001']) })
+    expect(r.puncte.map(p => p.cod)).toEqual(['CR-002'])
+    expect(r.ignorate).toEqual(['Rândul 2: CR-001 e a furnizorului (sărită din listă), punct ignorat'])
+    expect(r.erori).toEqual([])
+  })
+})
+
+describe('atingerea, identitatea imaginii, salvarea (L24 / L05)', () => {
+  it('ținta de atingere ~46 px; la suprapunere câștigă punctul cel mai apropiat', () => {
+    expect(RAZA_ATINGERE * 2).toBeGreaterThanOrEqual(44)
+    expect(RAZA_ATINGERE * 2).toBeLessThanOrEqual(48)
+    const pe = [{ cheie: 'a', x: 100, y: 100 }, { cheie: 'b', x: 120, y: 100 }]
+    expect(celMaiAproape(pe, 112, 101).cheie).toBe('b')
+    expect(celMaiAproape(pe, 108, 99).cheie).toBe('a')
+    expect(celMaiAproape(pe, 100, 122).cheie).toBe('a')        // 22 px: în țintă, deși în afara cercului de 15 px
+    expect(celMaiAproape(pe, 100, 124)).toBeNull()             // 24 px: în afara țintei
+    expect(celMaiAproape([], 0, 0)).toBeNull()
+  })
+  it('identitatea imaginii include proiect / nod / vedere / fișier', () => {
+    expect(cheieImagine({ proiectId: 1, nod: 'NOD-A', vedere: 'PLAN', fisier: 'PLAN.png' })).toBe('1/NOD-A/PLAN/PLAN.png')
+    expect(cheieImagine({ proiectId: 1, nod: 'NOD-A', vedere: 'PLAN', fisier: 'PLAN.png' })).not.toBe(cheieImagine({ proiectId: 1, nod: 'NOD-B', vedere: 'PLAN', fisier: 'PLAN.png' }))
+    expect(cheieImagine({ proiectId: 1, nod: 'NOD-A', vedere: null, fisier: 'PLAN.png' })).toBeNull()
+  })
+  it('rândul întors de server nu înlocuiește o versiune locală mai nouă', () => {
+    const lista = [{ id: 1, stare: 'ndt', versiune: 3 }, { id: 2, stare: 'sudat', versiune: 1 }]
+    expect(aplicaRand(lista, { id: 1, stare: 'sudat', versiune: 2 })).toEqual(lista)
+    expect(aplicaRand(lista, { id: 1, stare: 'acceptat', versiune: 4 })[0]).toEqual({ id: 1, stare: 'acceptat', versiune: 4 })
+    expect(aplicaRand(lista, { id: 1, stare: 'ndt', versiune: 3 })[0].versiune).toBe(3)
+    expect(aplicaRand(lista, { id: 9, stare: 'x', versiune: 1 })).toEqual(lista)
+    expect(aplicaRand(lista, null)).toBe(lista)
+  })
+  it('reîncercarea după rezultat necunoscut: aceeași cerere = aceeași cheie; formular schimbat = întâi reconciliere', () => {
+    const s = { id: 7, stare: 'de_executat', versiune: 2 }
+    const p1 = payloadStare(s, { stareNoua: 'sudat', data: AZI, sudor: ' P-1 ', buletin: '', motiv: '' })
+    expect(p1).toEqual({ p_id: 7, p_stare_veche: 'de_executat', p_versiune: 2, p_stare_noua: 'sudat', p_data: AZI, p_sudor: 'P-1', p_buletin_ndt: null, p_motiv: null })
+    expect(Object.isFrozen(p1)).toBe(true)
+    expect(decideReincercare(null, p1)).toBe('noua')
+    const incert = { payload: p1, cheie: 'k1' }
+    expect(decideReincercare(incert, payloadStare(s, { stareNoua: 'sudat', data: AZI, sudor: 'P-1' }))).toBe('aceeasi')
+    expect(decideReincercare(incert, payloadStare(s, { stareNoua: 'sudat', data: AZI, sudor: 'P-2' }))).toBe('reconciliere')
+    expect(decideReincercare(incert, payloadStare(s, { stareNoua: 'insailat', data: AZI, sudor: 'P-1' }))).toBe('reconciliere')
+    expect(decideReincercare(incert, payloadStare({ ...s, id: 8 }, { stareNoua: 'sudat', data: AZI, sudor: 'P-1' }))).toBe('noua')
   })
 })
