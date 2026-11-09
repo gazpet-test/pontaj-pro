@@ -366,7 +366,9 @@ END $erp_pre$;
 INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)
 SELECT id,CASE WHEN email IN ('florinel.ilie@teren.gazpet.ro','petronel.mititelu@teren.gazpet.ro',
   'test.razvan@teren.gazpet.ro') THEN 'teren'
- WHEN encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=ANY((SELECT lista FROM pg_temp.portal_erp_aprobat)) THEN 'erp'
+ -- EXISTS + ANY(coloana array): `= ANY((SELECT lista ...))` ar fi forma ANY(subinterogare) = text = text[] (Jakarinos r3).
+ WHEN EXISTS (SELECT FROM pg_temp.portal_erp_aprobat a
+   WHERE encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=ANY(a.lista)) THEN 'erp'
  ELSE 'neaprobat' END,'inventar_e1_1a_r3' FROM auth.users u;
 DO $pending$ DECLARE v_count bigint; v_erp bigint; BEGIN
  SELECT count(*) FILTER (WHERE tip='neaprobat'),count(*) FILTER (WHERE tip='erp') INTO v_count,v_erp FROM public.conturi_tip;

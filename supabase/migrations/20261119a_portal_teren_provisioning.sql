@@ -498,7 +498,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $f
    'public.fn_conturi_jurnal_imuabil()','public.fn_portal_cont_pregateste(integer, uuid)',
    'public.fn_portal_cont_finalizeaza(uuid)','public.fn_cont_aproba_erp(uuid, text)',
    'public.fn_portal_revoca_la_plecare()','public.fn_portal_provisioning_audit()',
-   'public.fn_portal_1b_snapshot()','public.fn_portal_porti_lipsa_1b()','auth.uid()','auth.jwt()']::text[]) AS s),
+   'public.fn_portal_1b_snapshot()','public.fn_portal_porti_lipsa_1b()','auth.uid()','auth.jwt()',
+   -- Jakarinos r3 P1: callee-urile tranzitive ale triggerelor de pe profiles (UPDATE din fn_cont_aproba_erp, INSERT din
+   -- handle_new_user), revizuite din migrarile 20260929c / 20260929g / 20260930a / 20260930j; de confirmat pe prod cu
+   -- sectiunea 8 a inventarului inainte de DRY (orice callee nou = lista se completeaza, nu se ocoleste).
+   'public.fn_profiles_protectie_legatura()','public.fn_identitate_privilegiata()','public.fn_identitate_claims()',
+   'public.fn_identitate_eticheta()','public.fn_profiles_campuri_owner_only()','public.prevent_role_escalation()',
+   'public.enforce_owner_only_salary_flags()','public.protect_can_access_pontaj_brut()']::text[]) AS s),
  rel AS (SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
    WHERE n.nspname='public' AND c.relname IN ('conturi_tip','conturi_teren','conturi_tip_jurnal','conturi_tip_jurnal_id_seq',
     'portal_public_baseline','portal_provisioning','portal_provisioning_jurnal','portal_provisioning_jurnal_id_seq',

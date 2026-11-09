@@ -96,6 +96,36 @@ class StaticProvisioning(unittest.TestCase):
         # fiecare functie din migrare care ruleaza ca DEFINER sau e trigger al portalului e in lista alba
         for name in re.findall(r'CREATE (?:OR REPLACE )?FUNCTION public\.(\w+)\(', sql):
             self.assertIn("'public." + name + '(', body, name)
+        # Jakarinos r3 P1: callee-urile tranzitive ale triggerelor de pe profiles (paritate cu migrarile din repo)
+        for name in ('fn_profiles_protectie_legatura', 'fn_identitate_privilegiata', 'fn_identitate_claims',
+                     'fn_identitate_eticheta', 'fn_profiles_campuri_owner_only', 'prevent_role_escalation',
+                     'enforce_owner_only_salary_flags', 'protect_can_access_pontaj_brut'):
+            self.assertIn("'public." + name + "()'", body, name)
+
+    def test_profiles_trigger_closure_matches_repo_migrations(self):
+        # Paritate (L19): fiecare trigger creat pe profiles in migrarile din repo are functia si callee-urile ei
+        # (functii public definite in repo) in lista alba 1b. Nu inlocuieste confirmarea pe prod (inventar, sectiunea 8).
+        body = MIG.read_text(encoding='utf-8').split('CREATE FUNCTION public.fn_portal_1b_snapshot()', 1)[1].split('$fn$;', 1)[0]
+        files = sorted(f for f in (ROOT / 'supabase/migrations').glob('*.sql') if 'ROLLBACK' not in f.name.upper())
+        defs, trig = {}, {}
+        fn_re = re.compile(r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+public\.([a-z0-9_]+)\s*\(.*?\bAS\s+(\$[a-z0-9_]*\$)(.*?)\2', re.I | re.S)
+        tg_re = re.compile(r'CREATE\s+TRIGGER\s+([a-z0-9_]+)\s+.*?\s+ON\s+public\.profiles\s+.*?EXECUTE\s+(?:FUNCTION|PROCEDURE)\s+(?:public\.)?([a-z0-9_]+)\s*\(', re.I | re.S)
+        for f in files:
+            text = re.sub(r'--[^\n]*', '', f.read_text(encoding='utf-8', errors='replace'))
+            for m in fn_re.finditer(text):
+                defs[m.group(1).lower()] = m.group(3).lower()
+            for m in tg_re.finditer(text):
+                trig[m.group(1).lower()] = m.group(2).lower()
+        todo, seen = [fn for fn in trig.values() if not fn.startswith('portal_test')], set()
+        while todo:
+            fn = todo.pop()
+            if fn in seen or fn not in defs:
+                continue
+            seen.add(fn)
+            todo += [c for c in re.findall(r'\b(?:public\.)?([a-z_][a-z0-9_]*)\s*\(', defs[fn]) if c in defs and c != fn]
+        self.assertTrue(seen)
+        for fn in sorted(seen):
+            self.assertIn("'public." + fn + "(", body, fn)
 
     def test_hook_and_provisioning_share_employee_predicate(self):
         sql = MIG.read_text(encoding='utf-8')

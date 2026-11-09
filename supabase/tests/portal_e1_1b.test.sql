@@ -32,6 +32,18 @@ REVOKE ALL ON FUNCTION public.alt_trigger_test() FROM PUBLIC;
 CREATE TRIGGER alt_trigger_test BEFORE INSERT ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.alt_trigger_test();
 DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Profiles trigger drift missed'; END IF; END $$;
 ROLLBACK TO profiles_trigger_drift;
+-- Jakarinos r3 P1: deriva unui helper de nivel 3 (fn_identitate_claims, chemat prin fn_identitate_privilegiata din
+-- triggerul de pe profiles), aceeasi semnatura si acelasi ACL = rosu; la fel pentru nivelul 2.
+SAVEPOINT nivel3_drift;
+CREATE OR REPLACE FUNCTION public.fn_identitate_claims(OUT rol text, OUT sub text)
+LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $$ SELECT 'forged'::text, NULL::text $$;
+DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Level-3 helper drift missed'; END IF; END $$;
+ROLLBACK TO nivel3_drift;
+SAVEPOINT nivel2_drift;
+CREATE OR REPLACE FUNCTION public.fn_identitate_privilegiata() RETURNS boolean
+LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $$ SELECT NULL::boolean $$;
+DO $$ BEGIN IF NOT ('1b amprenta DDL'=ANY(public.fn_portal_porti_lipsa_1b())) THEN RAISE EXCEPTION 'Level-2 helper drift missed'; END IF; END $$;
+ROLLBACK TO nivel2_drift;
 -- Triggerul Auth dezactivat (handle_new_user nu mai ruleaza la crearea contului) = deriva.
 SAVEPOINT auth_trigger_off;
 SET LOCAL ROLE supabase_auth_admin;

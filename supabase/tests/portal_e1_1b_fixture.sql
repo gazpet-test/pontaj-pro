@@ -84,6 +84,18 @@ BEGIN
 END;
 $function$;
 REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC,anon,authenticated,service_role;
+-- r3 (Jakarinos r3 P1): lant sintetic pe 3 niveluri, cu numele reale de pe prod (trigger pe profiles -> nivel 2 -> nivel 3),
+-- ca deriva unui helper de nivel 2 / 3 sa fie testata. Nu blocheaza nimic: intoarce NEW.
+CREATE FUNCTION public.fn_identitate_claims(OUT rol text, OUT sub text)
+LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $$ SELECT NULL::text, NULL::text $$;
+CREATE FUNCTION public.fn_identitate_privilegiata() RETURNS boolean
+LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $$ SELECT (public.fn_identitate_claims()).rol IS NOT NULL $$;
+CREATE FUNCTION public.fn_profiles_protectie_legatura() RETURNS trigger
+LANGUAGE plpgsql SET search_path TO 'public','pg_temp' AS $$ BEGIN PERFORM public.fn_identitate_privilegiata(); RETURN NEW; END $$;
+REVOKE ALL ON FUNCTION public.fn_identitate_claims(),public.fn_identitate_privilegiata(),
+ public.fn_profiles_protectie_legatura() FROM PUBLIC;
+CREATE TRIGGER trg_profiles_protectie_legatura BEFORE UPDATE ON public.profiles
+ FOR EACH ROW EXECUTE FUNCTION public.fn_profiles_protectie_legatura();
 RESET ROLE;
 CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 -- GoTrue executa INSERT ca supabase_auth_admin, nu ca proprietarul functiei.

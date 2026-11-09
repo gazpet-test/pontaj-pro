@@ -20,7 +20,7 @@ FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
 WHERE n.nspname='public' AND EXISTS (
   SELECT FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
   WHERE a.grantee=0 AND a.privilege_type='EXECUTE')
-ORDER BY 2 COLLATE "C";
+ORDER BY 'public.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')' COLLATE "C";
 
 -- 2) Functiile din net executabile prin PUBLIC (le-ar putea apela rolul teren) -> fn_portal_net_md5().
 --    Asteptat: niciuna SECURITY DEFINER.
@@ -30,7 +30,7 @@ SELECT '2_net' AS sectiune,
 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
 WHERE n.nspname='net' AND has_schema_privilege('public', n.oid, 'USAGE')
   AND has_function_privilege('public', p.oid, 'EXECUTE')
-ORDER BY 2 COLLATE "C";
+ORDER BY quote_ident(n.nspname)||'.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')' COLLATE "C";
 
 -- 3) Conturile (INTERN, cu date personale): Razvan alege care sunt ERP aprobate. Pentru cele alese, in migrare intra
 --    DOAR coloana sha256_id. Conturile @teren.gazpet.ro NU intra in lista ERP. Owner-ul TREBUIE sa fie in lista.
@@ -68,5 +68,56 @@ SELECT '6_expuneri' AS sectiune,
   (SELECT pg_get_expr(polqual,polrelid) FROM pg_policy WHERE polrelid='public.magazie_inventar_angajat'::regclass AND polname='mia_select') AS inventar_politica_citire,
   (SELECT count(*) FROM public.hr_concediu_tokens WHERE activ IS TRUE) AS tokenuri_co_active,
   (SELECT count(*) FROM public.hr_concediu_tokens WHERE token IS NOT NULL) AS tokenuri_co_in_clar;
+
+-- 7) Pentru E1-3 (concediu + inventar): DOAR structura tabelelor atinse (coloane, constrangeri, triggere, politici,
+--    granturi), fara date. Tabelele concediului nu sunt create prin migrari din repo.
+SELECT '7_coloane' AS sectiune, c.relname AS tabel, a.attnum, a.attname, format_type(a.atttypid,a.atttypmod) AS tip,
+       a.attnotnull, pg_get_expr(d.adbin,d.adrelid) AS implicit
+FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid
+LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+WHERE n.nspname='public' AND a.attnum>0 AND NOT a.attisdropped
+  AND c.relname IN ('hr_cereri_concediu','hr_concediu_rute','hr_aprobatori','hr_concediu_tokens',
+    'magazie_inventar_angajat','magazie_echipamente','v_hr_sold_co')
+ORDER BY c.relname, a.attnum;
+SELECT '7_constrangeri' AS sectiune, conrelid::regclass AS tabel, conname, pg_get_constraintdef(oid) AS definitie
+FROM pg_constraint WHERE conrelid IN ('public.hr_cereri_concediu'::regclass,'public.hr_concediu_rute'::regclass,
+  'public.hr_aprobatori'::regclass,'public.magazie_inventar_angajat'::regclass)
+ORDER BY conrelid::regclass::text, conname;
+SELECT '7_triggere' AS sectiune, tgrelid::regclass AS tabel, tgname, tgenabled, pg_get_triggerdef(oid) AS definitie,
+       md5(pg_get_functiondef(tgfoid)) AS md5_functie
+FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('public.hr_cereri_concediu'::regclass,
+  'public.hr_concediu_rute'::regclass,'public.magazie_inventar_angajat'::regclass)
+ORDER BY tgrelid::regclass::text, tgname;
+SELECT '7_politici' AS sectiune, polrelid::regclass AS tabel, polname, polcmd, polpermissive, polroles::regrole[]::text AS roluri,
+       pg_get_expr(polqual,polrelid) AS using_expr, pg_get_expr(polwithcheck,polrelid) AS check_expr
+FROM pg_policy WHERE polrelid IN ('public.hr_cereri_concediu'::regclass,'public.hr_concediu_rute'::regclass,
+  'public.hr_aprobatori'::regclass,'public.magazie_inventar_angajat'::regclass)
+ORDER BY polrelid::regclass::text, polname;
+SELECT '7_granturi' AS sectiune, table_name, grantee, string_agg(privilege_type,',' ORDER BY privilege_type) AS drepturi
+FROM information_schema.role_table_grants WHERE table_schema='public'
+  AND table_name IN ('hr_cereri_concediu','hr_concediu_rute','hr_aprobatori','magazie_inventar_angajat','v_hr_sold_co')
+GROUP BY table_name, grantee ORDER BY table_name, grantee;
+SELECT '7_volume' AS sectiune, status, sursa, count(*) AS cereri
+FROM public.hr_cereri_concediu GROUP BY status, sursa ORDER BY status, sursa;
+-- 8) Pentru lista alba 1b (L15): triggerele de pe tabelele in care scriu caile DEFINER ale portalului si DEFINITIA
+--    completa a functiilor lor + a helperilor revizuiti, ca lantul tranzitiv sa fie confirmat pe prod (nu doar din repo).
+SELECT '8_triggere_cale_portal' AS sectiune, t.tgrelid::regclass::text AS tabel, t.tgname, t.tgenabled,
+       t.tgfoid::regprocedure::text AS functie, p.prosecdef, md5(pg_get_functiondef(p.oid)) AS md5_definitie
+FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+WHERE NOT t.tgisinternal AND t.tgrelid IN ('auth.users'::regclass,'public.profiles'::regclass)
+   OR (NOT t.tgisinternal AND t.tgrelid = to_regclass('public.notifications'))
+ORDER BY t.tgrelid::regclass::text, t.tgname;
+SELECT '8_definitii' AS sectiune, p.oid::regprocedure::text AS functie, pg_get_functiondef(p.oid) AS definitie
+FROM pg_proc p
+WHERE p.oid IN (SELECT tgfoid FROM pg_trigger WHERE NOT tgisinternal
+    AND tgrelid IN ('auth.users'::regclass,'public.profiles'::regclass))
+   OR p.oid IN (SELECT tgfoid FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = to_regclass('public.notifications'))
+   OR (p.pronamespace='public'::regnamespace AND p.proname IN ('fn_identitate_privilegiata','fn_identitate_claims',
+     'fn_identitate_eticheta','fn_cont_candidati_angajat','fn_cont_notifica_owneri','fn_nume_cuvinte','fn_nume_familie'))
+ORDER BY p.oid::regprocedure::text;
+SELECT '7_functii' AS sectiune, 'public.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' AS semnatura, p.prosecdef,
+       md5(pg_get_functiondef(p.oid)) AS md5_definitie
+FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname IN ('fn_zile_lucratoare')
+ORDER BY 2;
 
 ROLLBACK;
