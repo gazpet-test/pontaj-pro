@@ -133,7 +133,8 @@ Asteptat: `PAW_GATA`, raspunsul = titlul runbook-ului; `paw-data\mil` gol.
 Opriri (STOP, nu se ocolesc din lansator):
 - `mil_extensii_refuzate` = cineva a adaugat MCP/pluginuri in agy;
 - `mil_semnatura_invalida` / `mil_semnatar_neasteptat` = agy.exe nu mai e cel semnat de Google;
-- `mil_config_refuzata (...)` = exista un `hooks.json`, `config.json` sau un director `.agents` (calea e in mesaj);
+- `mil_config_refuzata (...)` = exista un `hooks.json`, `config.json` sau un director `.agents` / `_agents` / `.agent` /
+  `_agent` in `paw-data\mil` sau intr-un parinte (calea e in mesaj);
 - `mil_setari_refuzate (<cheie>)` = agy si-a adaugat o setare noua in `settings.json` (ex. dupa un update): se analizeaza
   cheia, apoi lista alba din mil.ps1 se schimba prin PR, nu pe server;
 - `mil_hooks_incarcate`, `mil_hooks_neverificate`, `mil_sandbox_indisponibil`, `mil_sandbox_nepornit`, `mil_mod_plan_neaplicat`,
@@ -142,14 +143,16 @@ Opriri (STOP, nu se ocolesc din lansator):
 - `mil_copie_*` = copia nu e doar-citire (probele de scriere au reusit) sau ACL neasteptat;
 - `mil_lansator_elevat` = consola e elevata: se ruleaza din N, nu din A; `mil_sandbox_os_nesuportat` = Windows sub 24H2.
 
-**Copie ramasa** (doar daca lansatorul a fost oprit fortat sau arborele nu a putut fi oprit; `paw_runs.log` are
-`mil copie NESTEARSA`): directorul din `paw-data\mil` e doar-citire si pentru Gazpet-Ai. Se sterge din A:
+**Copie ramasa** (lansator oprit fortat, sau Job-ul nu a fost confirmat gol in 15 s dupa agy; `paw_runs.log` are
+`mil copie NESTEARSA`, iar langa ea poate ramane `<runid>-agy` cu jurnalele agy): directorul din `paw-data\mil` e
+doar-citire si pentru Gazpet-Ai. Se sterge din A, numai dupa ce nu mai ruleaza niciun `agy.exe`:
 
 ```powershell
 $D = 'C:\Users\Public\paw-data\mil\<runid>'   # exact calea din paw_runs.log
 takeown /F $D /R /D Y | Out-Null   # pe Windows in alta limba, raspunsul /D poate fi alta litera
 icacls $D /grant '*S-1-5-32-544:(OI)(CI)F' /T | Out-Null
 Remove-Item -LiteralPath $D -Recurse -Force
+if (Test-Path -LiteralPath ($D + '-agy')) { Remove-Item -LiteralPath ($D + '-agy') -Recurse -Force }   # jurnalele agy (dupa citire)
 ```
 
 **Limite cunoscute (r2):**
@@ -157,7 +160,10 @@ Remove-Item -LiteralPath $D -Recurse -Force
   refuzul pe fisiere (verificat de doua ori, ultima oara imediat inaintea rularii) + numaratoarea facuta de agy in
   sonda si in rulare.
 - agy nu are o intrebare "sandbox disponibil?" inainte de rulare: se folosesc build-ul Windows, sonda (aceleasi flaguri,
-  zero ture) si jurnalul rularii. Bariera de scriere ramane copia doar-citire (sandbox-ul agy permite scrieri in workspace).
+  zero ture) si jurnalul rularii. E o verificare de jurnal (configurarea raportata de agy), nu dovada unui terminal izolat
+  pornit; documentatia agy cere si actualizarea Windows din august 2026. Bariera de scriere ramane copia doar-citire.
+- Materialul din `livrare` / `paw-data` (scriibile de orice utilizator local): integritatea unui export aprobat se verifica
+  cu hash-uri comunicate separat.
 - In print mode, agy refuza automat orice actiune care cere aprobare (vazut in jurnal: `soft-denying tool confirmation`),
   deci si citirile din afara copiei si `read_url_content`; nu e o garantie scrisa de Google. Brief-urile raman fara secrete.
 

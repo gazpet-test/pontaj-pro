@@ -553,7 +553,7 @@ Pachet separat în `docs/paw/run_paw_v462/`, copiat din **v461 (cel instalat)**.
 run_paw.cmd mil C:\Users\Public\paw-data\brief\sarcina.md C:\Users\Public\paw-data\out\sarcina.log [model] [material.txt]
 ```
 
-`material.txt` (opțional, r2): fișier `.txt` sub rădăcinile brief-ului, o cale pe linie (cel mult 20), fiecare sub `paw-data\brief`, `erp_review` sau `C:\Users\Public\livrare`. Fișierele se copiază în directorul doar-citire al rulării, cu numele lor (fără nume care încep cu punct, fără duplicate, fără hardlink, ≤ 5 MB fiecare, ≤ 20 MB în total). Codul din repo ajunge la Miloi doar așa (export în `livrare`), nu prin repo-ul de lucru.
+`material.txt` (opțional, r2): fișier `.txt` sub rădăcinile brief-ului, o cale pe linie (cel mult 20), fiecare sub `paw-data\brief`, `erp_review` sau `C:\Users\Public\livrare`. Fișierele se copiază în directorul doar-citire al rulării, cu numele lor (fără nume care încep cu punct, fără duplicate, fără hardlink, ≤ 5 MB fiecare, ≤ 20 MB în total). Codul din repo ajunge la Miloi doar așa (export în `livrare`), nu prin repo-ul de lucru. Copierea nu dovedește proveniența: `livrare` / `paw-data` sunt scriibile de orice utilizator local, deci integritatea unui export aprobat se verifică cu hash-uri comunicate separat (ca la diff-urile pentru review).
 
 **Modele.** Lista albă e în `TOOLS.mil.modele`, cu numele reale din `agy models` (09.11.2026):
 - `claude-opus-4-6-thinking` (implicit);
@@ -588,17 +588,18 @@ agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeo
   - lansatorul păstrează handle-uri WRITE_DAC luate înainte de blocare (nemoștenite), cu care redă drepturile și șterge copia la final;
   - înainte de rulare, probele de scriere (fișier, director, scriere, ștergere, WRITE_DAC, ACL pe cale) TREBUIE să pice;
   - lansator elevat = refuz;
-  - dacă arborele nu poate fi oprit, copia rămâne doar-citire (curățare din admin, runbook).
-- **Hooks (r2, Jakarinos r1 P1-1):**
-  - refuz dacă există `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/hooks.json`, `~/.gemini/config/config.json` sau un `.agents` în cwd ori în oricare părinte;
-  - `settings.json` doar cu chei de pe lista albă (`colorScheme`, `trustedWorkspaces`);
+  - r3 (Jakarinos r2 P1): drepturile se redau DOAR când Job-ul lansatorului conține numai lansatorul (`ActiveProcesses = 1`), pe orice cale de ieșire (rezultat, timeout, excepție în preflight / sondă / rulare). Fără job, interogare eșuată sau după 15 s = necunoscut: copia (și jurnalele agy) rămân, copia doar-citire (curățare din admin, runbook).
+- **Hooks (r2, Jakarinos r1 P1-1; r3: aliasuri, Jakarinos r2 P1):**
+  - refuz dacă există `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/hooks.json`, `~/.gemini/config/config.json` sau un director de personalizare (`.agents`, `_agents`, `.agent`, `_agent`) în cwd ori în oricare părinte;
+  - `settings.json` doar cu cheile existente azi (`colorScheme`, `trustedWorkspaces`; a doua e o decizie de încredere a agy, nu un drept de scriere);
   - verificarea se face de două ori, a doua imediat înaintea rulării;
   - apoi agy însuși trebuie să raporteze „loaded 0 named hooks from 0 hooks.json file(s)”, în sondă și în rulare.
 - **Sandbox și mod (r2):**
   - Windows sub build 26100 (24H2) = refuz;
   - jurnalul agy (sonda și rularea) trebuie să conțină „Print mode: enabling terminal sandbox for this session” și „applying agent mode plan”, și să NU conțină „sandbox unavailable”;
   - sonda mai verifică `permission_mode = request-review`, modelul cerut și cwd-ul = copia;
-  - orice abatere = `PAW_EROARE` (răspunsul nu se acceptă). Rezumatul liniilor verificate intră în log (`--- mil ... ---`).
+  - orice abatere = `PAW_EROARE` (răspunsul nu se acceptă). Rezumatul liniilor verificate intră în log (`--- mil ... ---`); la o respingere, și motivul, coada jurnalului agy și ieșirea procesului (r3, Jakarinos r2 P2), înainte de ștergere;
+  - e o verificare de JURNAL: confirmă configurarea raportată de agy, nu pornirea efectivă a unui terminal izolat (sonda nu rulează comenzi). Documentația agy cere și actualizarea Windows din august 2026, pe lângă build-ul 24H2.
 - **Mediu curat:** copilul pornește cu mediul golit și primește doar lista albă din `mil.ps1` (fără `*_API_KEY`, tokenuri, proxy), cu PATH doar de sistem.
 - **Fără extensii:** înainte de fiecare rulare, `agy mcp list` trebuie să dea exact „No MCP servers configured.”, iar `agy plugin list` exact „No plugins installed.”. Orice alt răspuns (inclusiv un format nou după un update) = `mil_extensii_refuzate`, fără apel de model.
 - **Executabilul:** `C:\Users\Gazpet-Ai\AppData\Local\agy\bin\agy.exe`, cale fără reparse / ADS, un singur hardlink, semnătură Authenticode VALIDĂ a Google LLC. Nu se fixează un hash, pentru că agy se actualizează singur.
@@ -611,7 +612,7 @@ agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeo
 - Procesele aceluiași utilizator Windows nu sunt frontieră (ca la v4): pot înlocui `agy.exe` cu alt binar semnat Google sau pot schimba setările agy între verificări.
 
 **Teste:**
-- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 23 de cazuri, fără Pester, fără apel de model. Copia doar-citire se face real (ACL-uri reale) într-un director temporar. 12 mutații țintite (OWNER RIGHTS, hooks, `.agents`, limita, sonda, diagnostice, permisiuni, sandbox, probe, setări): toate prinse.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 27 de cazuri, fără Pester, fără apel de model. Copia doar-citire se face real (ACL-uri reale) într-un director temporar. 16 mutații țintite (OWNER RIGHTS, hooks, `.agents` și aliasuri, limita, sonda, diagnostice, permisiuni, sandbox, probe, setări, arborele la curățare): toate prinse.
 - `teste\sonda_mil_reala.ps1`: integrare cu `agy.exe` real până la sondă inclusiv: copie → probe → configurație → preflight → sondă → curățare. Fără apel de model: jurnalul sondei trebuie să spună „0 turn(s)”, fără `streamGenerateContent`.
 - Citarea e verificată cu parserul real `CommandLineToArgvW`.
 - Refuzurile de cale sunt verificate pe UNC, ADS, ghilimele, traversal și junction real.

@@ -121,9 +121,15 @@ Caz 'P1-1 AssertMilConfig: hooks global / vechi, config.json, .agents in cwd si 
     }
     $h = "$prof\.gemini\config\hooks.json"; [IO.File]::WriteAllText($h, '{}'); (Get-Item -LiteralPath $h).Attributes = 'Hidden'
     Refuza { AssertMilConfig $prof $cwd } 'mil_config_refuzata'; (Get-Item -LiteralPath $h -Force).Attributes = 'Normal'; Remove-Item -LiteralPath $h
-    foreach ($a in @("$cwd\.agents", "$rad\w\.agents", "$rad\.agents")) {
-      [void](New-Item -ItemType Directory -Path $a); Refuza { AssertMilConfig $prof $cwd } 'mil_config_refuzata'; Remove-Item -LiteralPath $a
+    # r3 (Jakarinos r2 P1): toate cele patru nume documentate, in cwd, in parinte si intr-un parinte cu radacina Git
+    [void](New-Item -ItemType Directory -Path "$rad\.git")
+    foreach ($nume in @('.agents', '_agents', '.agent', '_agent')) {
+      foreach ($a in @("$cwd\$nume", "$rad\w\$nume", "$rad\$nume")) {
+        [void](New-Item -ItemType Directory -Path $a); Refuza { AssertMilConfig $prof $cwd } ('mil_config_refuzata (' + $a + ')'); Remove-Item -LiteralPath $a
+      }
     }
+    [IO.File]::WriteAllText("$rad\_agent", 'fisier, nu director'); Refuza { AssertMilConfig $prof $cwd } 'mil_config_refuzata'; Remove-Item -LiteralPath "$rad\_agent"
+    AssertMilConfig $prof $cwd
     $s = "$prof\.gemini\antigravity-cli\settings.json"
     [IO.File]::WriteAllText($s, '{"colorScheme":"dark","trustedWorkspaces":["C:\\x"]}'); AssertMilConfig $prof $cwd
     [IO.File]::WriteAllText($s, '{"colorScheme":"dark","permissions":{"allow":["command(*)"]}}'); Refuza { AssertMilConfig $prof $cwd } 'mil_setari_refuzate (permissions)'
@@ -278,10 +284,24 @@ function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd
   $script:scriereInCopie = MilIncearca { [IO.File]::WriteAllText((Join-Path $cwd 'scris-de-agy.txt'), 'x') }
   return @{ timeout = $false; exit = 0; out = 'RASPUNS'; err = '' }
 }
+Caz 'r3 MilArboreGol real: fara Job verificabil = NECUNOSCUT ($false), deci copia ar ramane doar-citire' {
+  if ('PawV43.Job' -as [type]) { throw 'tipul Job exista in procesul de test (neasteptat)' }
+  Egal (MilArboreGol) $false 'fara job'
+}
 function AssertMilExe([string]$exe) { }   # semnatura se testeaza separat, pe fisiere reale
 function AssertMilGazda() { }
 $script:profilFals = $null
 function MilMediu() { return @{ USERPROFILE = $script:profilFals; SystemRoot = $env:SystemRoot; PATH = $env:SystemRoot + '\system32' } }
+$script:arboreGol = $true
+function MilArboreGol() { return $script:arboreGol }   # in lansator: PawV43.Job::Active() = 1 (testat separat mai sus)
+function CuratPastrate() {
+  # doar pentru teste: copiile pastrate doar-citire se curata prin handle-urile pastrate (cum ar face un admin, vezi runbook)
+  foreach ($c in @($script:MilCopiiPastrate)) {
+    foreach ($h in $c.handles) { [PawMilAcl]::SeteazaDacl($h, ('D:P(A;OICI;FA;;;' + $c.sid + ')(A;OICI;FA;;;SY)')) }
+    foreach ($h in $c.handles) { $h.Close() }
+  }
+  $script:MilCopiiPastrate = @()
+}
 
 Caz 'InvokeMil: preflight + sonda + rulare in COPIA doar-citire (nu in repo); agy nu poate scrie; copia si jurnalele sterse' {
   $rad = DirTemp 'paw-mil-inv-'
@@ -336,7 +356,51 @@ Caz 'InvokeMil refuza (si sterge copia): sonda cu hooks / sandbox indisponibil /
     Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' (Join-Path $rad 'nu-exista.md') 300 '' $baza (RunIdTest) @() } 'nu-exista.md'
   } finally { MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
 }
-Remove-Item Function:\AssertMilExe, Function:\AssertMilGazda, Function:\MilMediu -ErrorAction SilentlyContinue
+Caz 'r3 (Jakarinos r2 P1): arbore neconfirmat oprit => copia ramane DOAR-CITIRE pe orice cale (succes, timeout la sonda, exceptie de oprire)' {
+  $rad = DirTemp 'paw-mil-arb-'
+  try {
+    $script:profilFals = Join-Path $rad 'profil'; [void](New-Item -ItemType Directory -Path $script:profilFals)
+    $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, 'B'); $baza = Join-Path $rad 'mil'
+    $script:jurSonda = $JS; $script:jurRulare = $JR; $script:arboreGol = $false
+    $cai = @(
+      @{ n = 'iesire normala cu urmasi'; s = $null; m = $null },
+      @{ n = 'sonda: timeout, arbore neoprit'; s = { param($c) @{ timeout = $true; exit = -1; out = 'IESIRE-SONDA-PARTIALA'; err = ''; treeStopped = $false } }; m = 'mil_sonda_timeout' },
+      @{ n = 'sonda: exceptie de oprire'; s = { param($c) throw 'tree_kill_failed: proba' }; m = 'tree_kill_failed' }
+    )
+    foreach ($k in $cai) {
+      $script:sonda = $k.s; $id = RunIdTest; $copie = Join-Path ([PawMilAcl]::Lunga($baza)) $id
+      if ($k.m) { Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @() } $k.m }
+      else { [void](InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @()) }
+      if (-not (Test-Path -LiteralPath $copie)) { throw ('copia a fost stearsa: ' + $k.n) }
+      if (MilIncearca { [IO.File]::WriteAllText((Join-Path $copie 'dupa.txt'), 'x') }) { throw ('copia a redevenit scriibila: ' + $k.n) }
+      if (-not (@($script:MilCopiiPastrate) | Where-Object { $_.dir -ceq $copie })) { throw ('copia nu e in MilCopiiPastrate: ' + $k.n) }
+      if (-not (Test-Path -LiteralPath ($copie + '-agy'))) { throw ('jurnalele au fost sterse: ' + $k.n) }
+    }
+    if (-not ($script:MilDiagLinii | Where-Object { $_ -like '*sonda de pornire*IESIRE-SONDA-PARTIALA*' })) { throw 'stdout-ul sondei lipseste din diagnostic' }
+    if (-not ($script:MilDiagLinii | Where-Object { $_ -like '*sonda RESPINSA*mil_sonda_timeout*' })) { throw 'motivul respingerii sondei lipseste din diagnostic' }
+  } finally { $script:arboreGol = $true; $script:sonda = $null; CuratPastrate; MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+Caz 'r3 (Jakarinos r2 P2): rularea respinsa lasa in log motivul, coada jurnalului agy si iesirea procesului, inainte de stergere' {
+  $rad = DirTemp 'paw-mil-diag-'
+  try {
+    $script:profilFals = Join-Path $rad 'profil'; [void](New-Item -ItemType Directory -Path $script:profilFals)
+    $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, 'B'); $baza = Join-Path $rad 'mil'
+    $script:jurSonda = $JS; $script:jurRulare = ($JR -replace 'enabling terminal sandbox', 'x') + "`nI1109 ultima.go:1] LINIE-DIN-COADA"; $script:sonda = $null
+    $id = RunIdTest
+    Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @() } 'mil_sandbox_nepornit'
+    $d = @($script:MilDiagLinii | Where-Object { $_ -like '*rulare RESPINSA*' }) | Select-Object -Last 1
+    foreach ($s in @('mil_sandbox_nepornit', 'LINIE-DIN-COADA', 'stdout: RASPUNS')) { if (-not $d -or $d.IndexOf($s) -lt 0) { throw ('lipseste din diagnostic: ' + $s) } }
+    if (Test-Path -LiteralPath (Join-Path ([PawMilAcl]::Lunga($baza)) $id)) { throw 'copia a ramas (arbore gol)' }
+  } finally { $script:jurRulare = $JR; MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+Caz 'r3: InvokeMil verifica arborele (MilArboreGol) in finally, INAINTE de MilStergeCopie, fara ramura pe $rez' {
+  $def = [IO.File]::ReadAllText((Join-Path $pachet 'mil.ps1'))
+  $i = $def.IndexOf('function InvokeMil'); $f = $def.IndexOf('} finally {', $i)
+  $g = $def.IndexOf('$gol = MilArboreGol', $f); $s = $def.IndexOf('MilStergeCopie (-not $gol)', $f)
+  if ($f -lt 0 -or $g -lt 0 -or $s -lt 0 -or $g -gt $s) { throw 'ordinea din finally' }
+  if ($def.IndexOf('treeStopped', $i) -ge 0) { throw 'curatarea depinde inca de $rez.treeStopped' }
+}
+Remove-Item Function:\AssertMilExe, Function:\AssertMilGazda, Function:\MilMediu, Function:\MilArboreGol -ErrorAction SilentlyContinue
 . (Join-Path $pachet 'mil.ps1')   # functiile reale din nou
 
 Caz 'AssertMilExe: fisier nesemnat si semnatar strain refuzate; agy.exe real (daca exista) acceptat' {

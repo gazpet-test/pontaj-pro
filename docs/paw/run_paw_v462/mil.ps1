@@ -25,6 +25,11 @@
 #    "Print mode: enabling terminal sandbox for this session" si "applying agent mode plan" si sa NU spuna "sandbox unavailable".
 #  - P2: limita se verifica pe linia finala (exe citat + spatiu + argumente citate + NUL <= 32767); stdout/stderr-ul
 #    preflight-ului si al sondei ajung in log (curatate de valori care arata a secrete, plafonate).
+# r3 (dupa Jakarinos r2 NO-GO: 2xP1, 1xP2):
+#  - drepturile copiei se redau DOAR cu Job-ul confirmat gol (doar lansatorul), pe ORICE cale de iesire din InvokeMil;
+#    altfel copia ramane doar-citire, cu handle-urile tinute pana la iesirea lansatorului (MilArboreGol / MilStergeCopie);
+#  - refuz si pentru aliasurile documentate _agents, .agent, _agent (cwd si toti parintii);
+#  - stdout-ul sondei, motivul si coada jurnalului agy intra in log inainte de orice respingere / stergere.
 # ASCII only. Compatibil Windows PowerShell 5.1.
 
 $MIL_PROMPT_MAX = 30000      # caractere UTF-16 ale promptului (refuz timpuriu); limita reala = linia finala, mai jos
@@ -41,10 +46,16 @@ $MIL_EXTENSII = @(
   @{ argv = @('mcp', 'list'); gol = 'No MCP servers configured.' },
   @{ argv = @('plugin', 'list'); gol = 'No plugins installed.' }
 )
-$MIL_SETARI_PERMISE = @('colorScheme', 'trustedWorkspaces')   # settings.json global: doar interfata (09.11.2026)
+# settings.json global: exact cheile existente azi (09.11.2026). trustedWorkspaces = decizie de incredere a agy (nu drept de
+# scriere / ocolire de sandbox, dupa documentatie); copia e oricum un director nou la fiecare rulare.
+$MIL_SETARI_PERMISE = @('colorScheme', 'trustedWorkspaces')
+# r3 (Jakarinos r2 P1): directoarele de personalizare documentate de agy (inclusiv aliasurile), cautate in cwd si in toti parintii
+$MIL_DIR_PERSONALIZARE = @('.agents', '_agents', '.agent', '_agent')
 $MIL_MATERIAL_MAX = 20; $MIL_MATERIAL_MAX_BYTES = 5MB; $MIL_MATERIAL_TOT_BYTES = 20MB; $MIL_LISTA_MAX_BYTES = 16KB
 $MIL_DIAG_MAX = 4000
+$MIL_JOB_GOL_ASTEPTARE = 15  # secunde: cat se asteapta ca in Job sa ramana doar lansatorul inainte de a reda drepturile copiei
 if (-not $script:MilDiagLinii) { $script:MilDiagLinii = New-Object System.Collections.ArrayList }
+if ($null -eq $script:MilCopiiPastrate) { $script:MilCopiiPastrate = @() }
 
 if (-not ('PawMilAcl' -as [type])) {
   Add-Type -TypeDefinition @"
@@ -225,8 +236,10 @@ function AssertMilConfig([string]$profil, [string]$cwd) {
     if (MilExista $f) { throw ('mil_config_refuzata (' + $f + ')') }
   }
   for ($x = [IO.Path]::GetFullPath($cwd); $x; $x = Split-Path $x -Parent) {
-    $a = Join-Path $x '.agents'
-    if (MilExista $a) { throw ('mil_config_refuzata (' + $a + ')') }
+    foreach ($nume in $MIL_DIR_PERSONALIZARE) {
+      $a = Join-Path $x $nume
+      if (MilExista $a) { throw ('mil_config_refuzata (' + $a + ')') }
+    }
   }
   $s = Join-Path $g 'antigravity-cli\settings.json'
   if (MilExista $s) {
@@ -251,6 +264,12 @@ function MilVerificaJurnal([string]$jurnal, [string]$err, [bool]$faraTure) {
   if ($faraTure -and ($jurnal -match 'streamGenerateContent' -or $jurnal -cnotmatch 'stream input closed after 0 turn\(s\)')) { throw 'mil_sonda_cu_tura_de_model' }
 }
 
+function MilCoadaJurnal([string]$jurnal) {
+  # ultimele linii ale jurnalului agy (curatate si plafonate de MilDiag), pentru motivul unei respingeri inainte de stergere
+  $l = @($jurnal -split "`r?`n" | Where-Object { $_.Trim() })
+  return (($l | Select-Object -Last 30) -join "`n")
+}
+
 function MilRezumatJurnal([string]$jurnal) {
   # doar liniile verificate (fara URL-uri / trace-uri), pentru log
   $l = @($jurnal -split "`r?`n" | Where-Object { $_ -cmatch 'enabling terminal sandbox|applying agent mode|named hooks from|sandbox[^\r\n]{0,40}(unavailable|not available)|stream input closed after' })
@@ -271,18 +290,24 @@ function MilSonda([string]$exe, [string]$model, [string]$cwd, [hashtable]$mediu,
   # P1-1 / P1-2 r1: pornire reala fara tura de model; agy insusi numara hooks-urile si raporteaza sandbox-ul / modul.
   $r = Ruleaza $exe @() '' $cwd $MIL_SONDA_TIMEOUT $mediu $true $true (MilArgumenteSonda $exe $model $jurnalAgy)
   $j = ''; if (Test-Path -LiteralPath $jurnalAgy -PathType Leaf) { $j = [IO.File]::ReadAllText($jurnalAgy) }
-  MilDiag 'sonda de pornire' ('exit=' + $r.exit + ' timeout=' + $r.timeout + "`njurnal: " + (MilRezumatJurnal $j) + "`nstderr: " + [string]$r.err)
-  if ($r.timeout) { throw 'mil_sonda_timeout' }
-  if ($r.exit -ne 0) { throw ('mil_sonda_exit_' + $r.exit) }
-  $linii = @(([string]$r.out) -split "`r?`n" | Where-Object { $_.Trim() })
-  if ($linii.Count -ne 1) { throw ('mil_sonda_iesire_neasteptata (' + $linii.Count + ' linii)') }
-  try { $o = $linii[0] | ConvertFrom-Json } catch { throw 'mil_sonda_iesire_neasteptata (json)' }
-  if ([string]$o.event -cne 'init' -or -not $o.init) { throw 'mil_sonda_iesire_neasteptata (init)' }
-  if ([string]$o.init.permission_mode -cne 'request-review') { throw ('mil_sonda_permisiuni (' + [string]$o.init.permission_mode + ')') }
-  if ([string]$o.init.model -cne $model) { throw 'mil_sonda_model' }
-  $c = [string]$o.init.cwd
-  if (-not $c -or [PawMilAcl]::Lunga([IO.Path]::GetFullPath($c)).TrimEnd('\') -ine [PawMilAcl]::Lunga([IO.Path]::GetFullPath($cwd)).TrimEnd('\')) { throw 'mil_sonda_cwd' }
-  MilVerificaJurnal $j ([string]$r.err) $true
+  # P2 r2: diagnosticul (stdout inclus) se scrie INAINTE de orice validare care poate arunca
+  MilDiag 'sonda de pornire' ('exit=' + $r.exit + ' timeout=' + $r.timeout + "`njurnal: " + (MilRezumatJurnal $j) + "`nstdout: " + [string]$r.out + "`nstderr: " + [string]$r.err)
+  try {
+    if ($r.timeout) { throw 'mil_sonda_timeout' }
+    if ($r.exit -ne 0) { throw ('mil_sonda_exit_' + $r.exit) }
+    $linii = @(([string]$r.out) -split "`r?`n" | Where-Object { $_.Trim() })
+    if ($linii.Count -ne 1) { throw ('mil_sonda_iesire_neasteptata (' + $linii.Count + ' linii)') }
+    try { $o = $linii[0] | ConvertFrom-Json } catch { throw 'mil_sonda_iesire_neasteptata (json)' }
+    if ([string]$o.event -cne 'init' -or -not $o.init) { throw 'mil_sonda_iesire_neasteptata (init)' }
+    if ([string]$o.init.permission_mode -cne 'request-review') { throw ('mil_sonda_permisiuni (' + [string]$o.init.permission_mode + ')') }
+    if ([string]$o.init.model -cne $model) { throw 'mil_sonda_model' }
+    $c = [string]$o.init.cwd
+    if (-not $c -or [PawMilAcl]::Lunga([IO.Path]::GetFullPath($c)).TrimEnd('\') -ine [PawMilAcl]::Lunga([IO.Path]::GetFullPath($cwd)).TrimEnd('\')) { throw 'mil_sonda_cwd' }
+    MilVerificaJurnal $j ([string]$r.err) $true
+  } catch {
+    MilDiag 'sonda RESPINSA' ('motiv: ' + $_.Exception.Message + "`njurnal (coada): " + (MilCoadaJurnal $j))
+    throw
+  }
 }
 
 function MilSub([string]$cale, [string[]]$radacini) {
@@ -421,18 +446,37 @@ function AssertMilCopieReadOnly() {
   }
 }
 
+function MilArboreGol() {
+  # P1 r2: drepturile copiei se redau DOAR cand Job-ul lansatorului (KILL_ON_JOB_CLOSE; agy si toti descendentii lui sunt in el)
+  # contine numai lansatorul, oricum s-a terminat apelul (iesire normala cu urmasi, timeout, exceptie de oprire). Fara job (-1),
+  # interogare esuata (-2) sau timp depasit = NECUNOSCUT -> $false (copia ramane doar-citire).
+  if (-not ('PawV43.Job' -as [type])) { return $false }
+  $t = [Diagnostics.Stopwatch]::StartNew()
+  while ($true) {
+    $a = [PawV43.Job]::Active()
+    if ($a -eq 1) { return $true }
+    if ($a -lt 1) { return $false }
+    if ($t.Elapsed.TotalSeconds -ge $MIL_JOB_GOL_ASTEPTARE) { return $false }
+    Start-Sleep -Milliseconds 200
+  }
+}
+
 function MilStergeCopie([bool]$pastreaza) {
   # Reda drepturile prin handle-urile luate inainte de blocare, inchide handle-urile, sterge copia. Cu $pastreaza (arbore
-  # neoprit) copia ramane DOAR-CITIRE: un proces ramas nu primeste inapoi dreptul de scriere. Orice abandon intra in log.
+  # neconfirmat oprit) copia ramane DOAR-CITIRE si handle-urile raman deschise in $script:MilCopiiPastrate (se inchid la iesirea
+  # lansatorului): un proces ramas nu primeste inapoi dreptul de scriere. Orice abandon intra in log.
   $c = $script:MilCopie; if (-not $c) { return }
   $script:MilCopie = $null
   $motiv = $null
-  if ($pastreaza) { $motiv = 'pastrata doar-citire (arbore neoprit)' }
+  if ($pastreaza) {
+    $script:MilCopiiPastrate += , $c
+    $motiv = 'pastrata doar-citire (arbore neconfirmat oprit)'
+  }
   elseif ($c.blocata) {
     try { foreach ($h in $c.handles) { [PawMilAcl]::SeteazaDacl($h, ('D:P(A;OICI;FA;;;' + $c.sid + ')(A;OICI;FA;;;SY)')) } }
     catch { $motiv = 'acl: ' + $_.Exception.Message }
   }
-  foreach ($h in $c.handles) { try { $h.Close() } catch {} }
+  if (-not $pastreaza) { foreach ($h in $c.handles) { try { $h.Close() } catch {} } }
   if (-not $motiv) {
     try {
       $it = Get-Item -LiteralPath $c.dir -Force -ErrorAction Stop
@@ -485,11 +529,20 @@ function InvokeMil([string]$exe, [string]$model, [string]$briefFull, [int]$timeo
     if (-not $rez.timeout) {
       $j = ''; $jr = Join-Path $jurnale 'rulare.log'; if (Test-Path -LiteralPath $jr -PathType Leaf) { $j = [IO.File]::ReadAllText($jr) }
       MilDiag 'rulare (jurnal agy)' (MilRezumatJurnal $j)
-      MilVerificaJurnal $j ([string]$rez.err) $false   # abatere = raspuns respins (PAW_EROARE)
+      try { MilVerificaJurnal $j ([string]$rez.err) $false }   # abatere = raspuns respins (PAW_EROARE)
+      catch {
+        # P2 r2: motivul, coada jurnalului si iesirea procesului respins ajung in log INAINTE de stergerea jurnalelor
+        MilDiag 'rulare RESPINSA' ('motiv: ' + $_.Exception.Message + "`nexit=" + $rez.exit + "`njurnal (coada): " + (MilCoadaJurnal $j) + "`nstdout: " + [string]$rez.out + "`nstderr: " + [string]$rez.err)
+        throw
+      }
     }
     return $rez
   } finally {
-    MilStergeCopie ([bool]($rez -and $rez.timeout -and -not $rez.treeStopped))
-    if ($jurnaleCreate) { MilStergeJurnale $jurnale }   # doar folderul creat de aceasta rulare
+    # P1 r2: oricum s-a iesit (rezultat, timeout, exceptie in preflight / sonda / rulare), drepturile se redau doar cu arborele
+    # confirmat oprit; altfel copia (si jurnalele) raman, copia doar-citire
+    $gol = MilArboreGol
+    MilStergeCopie (-not $gol)
+    if ($jurnaleCreate -and $gol) { MilStergeJurnale $jurnale }   # doar folderul creat de aceasta rulare
+    elseif ($jurnaleCreate) { MilDiag 'jurnale agy pastrate' $jurnale }
   }
 }
