@@ -1800,18 +1800,22 @@ function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
         if(error)throw new Error(mesajEroare(error))
         onSaved();return
       }
-      let pdf_path=item?.pdf_path||null
+      let pdf_path=item?.pdf_path||null, nou=null
       if(pdfFile){
         const ext=pdfFile.name.split('.').pop()
         const path=`polite/${contractId}/${Date.now()}_${form.tip}.${ext}`
         const{error:upErr}=await supabase.storage.from('contracte-terti').upload(path,pdfFile)
         if(upErr)throw new Error(upErr.message)
-        if(item?.pdf_path&&item.pdf_path!==path)await supabase.storage.from('contracte-terti').remove([item.pdf_path])
-        pdf_path=path
+        pdf_path=nou=path
       }
       const payload={contract_id:contractId,tip:form.tip,asigurator:form.asigurator.trim()||null,nr_polita:form.nr_polita.trim()||null,valoare_lei:form.valoare_lei?parseFloat(form.valoare_lei):null,data_emitere:form.data_emitere||null,data_expirare:form.data_expirare||null,status:form.status,observatii:form.observatii.trim()||null,...optionale(),...(pdf_path!==undefined&&{pdf_path})}
-      const{error}=isEdit?await supabase.from('contracte_polite').update(payload).eq('id',item.id):await supabase.from('contracte_polite').insert(payload)
-      if(error)throw new Error(error.message)
+      // Polițe r3 (L02): fișierul vechi se șterge DOAR după scrierea confirmată; la eșec se șterge cel nou urcat
+      const{data:scris,error}=isEdit?await supabase.from('contracte_polite').update(payload).eq('id',item.id).select('id'):await supabase.from('contracte_polite').insert(payload).select('id')
+      if(error||!scris?.length){
+        if(nou)await supabase.storage.from('contracte-terti').remove([nou])
+        throw new Error(error?mesajEroare(error):'Polița nu a fost salvată (lipsă drept sau ștearsă între timp).')
+      }
+      if(nou&&item?.pdf_path&&item.pdf_path!==nou&&!item.pdf_path.startsWith('polite/propuneri/'))await supabase.storage.from('contracte-terti').remove([item.pdf_path])
       onSaved()
     }catch(e){onError(e.message)}finally{setSaving(false)}
   }
@@ -1910,18 +1914,22 @@ function PolitaActModal({ item, onClose, onSaved, onError }) {
         if(error)throw new Error(mesajEroare(error))
         onSaved();return
       }
-      let pdf_path=item?.pdf_path||null
+      let pdf_path=item?.pdf_path||null, nou=null
       if(pdfFile){
         const path=`polite/acte/${item.polita_id}/${Date.now()}_act${form.nr_act}.pdf`
         const{error:upErr}=await supabase.storage.from('contracte-terti').upload(path,pdfFile)
         if(upErr)throw new Error(upErr.message)
-        if(item?.pdf_path)await supabase.storage.from('contracte-terti').remove([item.pdf_path])
-        pdf_path=path
+        pdf_path=nou=path
       }
       const perioade=Object.fromEntries(['executie_de_la','executie_pana_la','garantie_de_la','garantie_pana_la'].filter(k=>form[k]||item?.[k]).map(k=>[k,form[k]||null]))
       const payload={polita_id:item.polita_id,nr_act:parseInt(form.nr_act),descriere:form.descriere.trim()||null,valoare_noua_lei:form.valoare_noua_lei?parseFloat(form.valoare_noua_lei):null,data_emitere:form.data_emitere||null,data_expirare_noua:form.data_expirare_noua||null,...perioade,...(pdf_path!==undefined&&{pdf_path})}
-      const{error}=isEdit?await supabase.from('contracte_polite_acte').update(payload).eq('id',item.id):await supabase.from('contracte_polite_acte').insert(payload)
-      if(error)throw new Error(error.message)
+      // Polițe r3 (L02): fișierul vechi se șterge DOAR după scrierea confirmată; la eșec se șterge cel nou urcat
+      const{data:scris,error}=isEdit?await supabase.from('contracte_polite_acte').update(payload).eq('id',item.id).select('id'):await supabase.from('contracte_polite_acte').insert(payload).select('id')
+      if(error||!scris?.length){
+        if(nou)await supabase.storage.from('contracte-terti').remove([nou])
+        throw new Error(error?mesajEroare(error):'Actul nu a fost salvat (lipsă drept sau șters între timp).')
+      }
+      if(nou&&item?.pdf_path&&item.pdf_path!==nou&&!item.pdf_path.startsWith('polite/propuneri/'))await supabase.storage.from('contracte-terti').remove([item.pdf_path])
       onSaved()
     }catch(e){onError(e.message)}finally{setSaving(false)}
   }

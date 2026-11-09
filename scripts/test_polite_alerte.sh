@@ -66,34 +66,52 @@ echo "== concurenta (r2, Jakarinos r1 P1-3): legarea Registrului vs. modificarea
 "${PS[@]}" -d postgres -c "CREATE DATABASE conc TEMPLATE baza" -c "ALTER DATABASE conc SET cron.timezone = 'GMT'" >/dev/null || { echo MEDIU db conc; exit 2; }
 aplica conc "$MIG" || { grep -o "ERROR:.*" "$L/a.log"; fail "aplicarea pe baza de concurenta"; }
 "${PS[@]}" -d conc -c "INSERT INTO public.contracte_polite (id, contract_id, tip, asigurator, nr_polita, valoare_lei, data_expirare) VALUES
-  (961, 17, 'GBE', 'VECHI', 'C-961', 100, '2027-01-01'), (962, 17, 'CAR', 'ASIG', 'C-962', 100, '2027-01-01'), (963, 17, 'GBE', 'VECHI', 'C-963', 100, '2027-01-01');
+  (961, 17, 'GBE', 'VECHI', 'C-961', 100, '2027-01-01'), (962, 17, 'CAR', 'ASIG', 'C-962', 100, '2027-01-01'), (963, 17, 'GBE', 'VECHI', 'C-963', 100, '2027-01-01'),
+  (964, 17, 'CAR', 'ASIG', 'C-964', 100, '2027-01-01'), (965, 17, 'GBE', 'ASIG', 'C-965', 100, '2027-01-01'), (966, 17, 'GBE', 'ASIG', 'C-966', 100, '2027-01-01'),
+  (967, 18, 'GPL', 'ASIG', 'C-967', 100, '2027-01-01');
   INSERT INTO public.garantii (id, forma, tip, beneficiar, valoare, moneda, stare) VALUES
-  (861, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'), (862, 'polita_asigurare', 'car', 'B', 1, 'RON', 'activa'), (863, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa');" >/dev/null || fail "fixture concurenta"
-bariera() { # asteapta pana cand sesiunea din fundal e in pg_sleep (tine lock-urile), max 10 s
+  (861, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'), (862, 'polita_asigurare', 'car', 'B', 1, 'RON', 'activa'), (863, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'),
+  (864, 'polita_asigurare', 'car', 'B', 1, 'RON', 'activa'), (865, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'), (866, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa');
+  UPDATE public.garantii SET contract_polita_id = id + 100 WHERE id IN (864, 865, 866);
+  INSERT INTO public.contracte_polite_acte (id, polita_id, nr_act, data_expirare_noua) VALUES (7001, 965, 1, '2028-01-01'), (7002, 966, 1, '2029-01-01'), (7003, 967, 1, '2028-06-30');" >/dev/null || fail "fixture concurenta"
+# r3 (Jakarinos r2): bariera verifica starea REALA a sesiunilor, nu textul interogarii: A e in pg_sleep (wait_event PgSleep) si tine
+# lock-urile; B asteapta efectiv un lock (wait_event_type Lock). Fara pauze fixe pentru sincronizare.
+asteapta() { # $1 = conditia SQL pe pg_stat_activity (alta sesiune decat cea de control), max 10 s
   for _ in $(seq 1 100); do
-    [ "$("${PS[@]}" -d conc -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'conc' AND query LIKE '%pg_sleep(4)%' AND state = 'active' AND pid <> pg_backend_pid()")" = 1 ] && return 0
+    [ "$("${PS[@]}" -d conc -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'conc' AND pid <> pg_backend_pid() AND $1")" -ge 1 ] && return 0
     "${PS[@]}" -d conc -Atc "SELECT pg_sleep(0.1)" >/dev/null
   done; return 1; }
-# 1) A schimba polita (tranzactie deschisa); B leaga in timpul ei => B asteapta, apoi copiaza versiunea NOUA
-"${PS[@]}" -d conc -c "BEGIN; UPDATE public.contracte_polite SET asigurator = 'NOU' WHERE id = 961; SELECT pg_sleep(4); COMMIT;" > "$L/c1a.log" 2>&1 & PA=$!
-bariera || fail "bariera 1"
-"${PS[@]}" -d conc -c "UPDATE public.garantii SET contract_polita_id = 961 WHERE id = 861;" > "$L/c1b.log" 2>&1 || { cat "$L/c1b.log"; fail "concurenta 1: legarea"; }
-wait $PA || { cat "$L/c1a.log"; fail "concurenta 1: polita"; }
+in_somn() { asteapta "wait_event = 'PgSleep'"; }
+blocat() { asteapta "wait_event_type = 'Lock' AND query NOT LIKE '%pg_sleep%'"; }
+# scenariu: A (tranzactie deschisa, apoi pg_sleep) in fundal; B in fundal trebuie sa ajunga BLOCAT pe lock; apoi ambele se termina fara eroare
+doua() { # $1 nume, $2 SQL A (fara BEGIN/COMMIT), $3 SQL B
+  "${PS[@]}" -d conc -c "BEGIN; $2 SELECT pg_sleep(4); COMMIT;" > "$L/$1a.log" 2>&1 & local PA=$!
+  in_somn || fail "$1: A n-a ajuns in pg_sleep"
+  "${PS[@]}" -d conc -c "$3" > "$L/$1b.log" 2>&1 & local PB=$!
+  blocat || fail "$1: B nu a asteptat lock-ul (serializarea lipseste)"
+  wait $PA || { cat "$L/$1a.log"; fail "$1: A"; }
+  wait $PB || { cat "$L/$1b.log"; fail "$1: B"; }
+}
+# 1) A schimba polita; B leaga in timpul ei => B asteapta, apoi copiaza versiunea NOUA
+doua c1 "UPDATE public.contracte_polite SET asigurator = 'NOU' WHERE id = 961;" "UPDATE public.garantii SET contract_polita_id = 961 WHERE id = 861;"
 [ "$("${PS[@]}" -d conc -Atc "SELECT emitent FROM public.garantii WHERE id = 861")" = NOU ] || fail "concurenta 1: legarea a pastrat polita veche"
-# 2) A adauga un act (prelungire) deschis; B leaga in timpul lui => expirarea efectiva = cea din act
-"${PS[@]}" -d conc -c "BEGIN; INSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (962, 1, '2028-12-31'); SELECT pg_sleep(4); COMMIT;" > "$L/c2a.log" 2>&1 & PA=$!
-bariera || fail "bariera 2"
-"${PS[@]}" -d conc -c "UPDATE public.garantii SET contract_polita_id = 962 WHERE id = 862;" > "$L/c2b.log" 2>&1 || { cat "$L/c2b.log"; fail "concurenta 2: legarea"; }
-wait $PA || { cat "$L/c2a.log"; fail "concurenta 2: actul"; }
+# 2) A adauga un act (prelungire); B leaga in timpul lui => expirarea efectiva = cea din act
+doua c2 "INSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (962, 1, '2028-12-31');" "UPDATE public.garantii SET contract_polita_id = 962 WHERE id = 862;"
 [ "$("${PS[@]}" -d conc -Atc "SELECT data_expirare FROM public.garantii WHERE id = 862")" = 2028-12-31 ] || fail "concurenta 2: legarea a pierdut actul aditional"
-# 3) ordinea inversa: B leaga (tranzactie deschisa); A schimba polita in timpul ei => A asteapta, apoi reimprospateaza randul legat
-"${PS[@]}" -d conc -c "BEGIN; UPDATE public.garantii SET contract_polita_id = 963 WHERE id = 863; SELECT pg_sleep(4); COMMIT;" > "$L/c3b.log" 2>&1 & PB=$!
-bariera || fail "bariera 3"
-"${PS[@]}" -d conc -c "UPDATE public.contracte_polite SET asigurator = 'NOU3' WHERE id = 963;" > "$L/c3a.log" 2>&1 || { cat "$L/c3a.log"; fail "concurenta 3: polita"; }
-wait $PB || { cat "$L/c3b.log"; fail "concurenta 3: legarea"; }
+# 3) ordinea inversa: B leaga primul (tranzactie deschisa); A schimba polita in timpul ei => A asteapta, apoi reimprospateaza randul legat
+doua c3 "UPDATE public.garantii SET contract_polita_id = 963 WHERE id = 863;" "UPDATE public.contracte_polite SET asigurator = 'NOU3' WHERE id = 963;"
 [ "$("${PS[@]}" -d conc -Atc "SELECT emitent FROM public.garantii WHERE id = 863")" = NOU3 ] || fail "concurenta 3: randul legat nu s-a reimprospatat"
+# 4) (r2 P1) doua acte noi pe aceeasi polita legata, in paralel => fara deadlock, Registrul are expirarea celui mai tarziu act
+doua c4 "INSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (964, 1, '2029-01-01');" "INSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (964, 2, '2030-01-01');"
+[ "$("${PS[@]}" -d conc -Atc "SELECT data_expirare FROM public.garantii WHERE id = 864")" = 2030-01-01 ] || fail "concurenta 4: doua acte in paralel"
+# 5) (r2 P1) mutari opuse de acte intre doua polite legate => fara deadlock, fiecare rand din Registru are expirarea actelor ramase
+doua c5 "UPDATE public.contracte_polite_acte SET polita_id = 966 WHERE id = 7001;" "UPDATE public.contracte_polite_acte SET polita_id = 965 WHERE id = 7002;"
+[ "$("${PS[@]}" -d conc -Atc "SELECT string_agg(id || ':' || data_expirare, ',' ORDER BY id) FROM public.garantii WHERE id IN (865, 866)")" = "865:2029-01-01,866:2028-01-01" ] || fail "concurenta 5: mutari opuse"
+# 6) (r2 P1) UPDATE pe act vs DELETE al politei cu CASCADE => fara deadlock, polita si actul sterse
+doua c6 "UPDATE public.contracte_polite_acte SET descriere = 'x' WHERE id = 7003;" "DELETE FROM public.contracte_polite WHERE id = 967;"
+[ "$("${PS[@]}" -d conc -Atc "SELECT count(*) FROM public.contracte_polite_acte WHERE id = 7003")" = 0 ] || fail "concurenta 6: CASCADE"
 grep -l "deadlock" "$L"/c*.log && fail "deadlock in testul de concurenta"
-ok "concurenta: 3/3 (polita, act, ordinea inversa), fara deadlock"
+ok "concurenta: 6/6 (polita, act, ordinea inversa, doua acte, mutari opuse, CASCADE), fiecare cu B blocat efectiv pe lock, fara deadlock"
 
 echo "== a doua aplicare refuzata"
 aplica app "$MIG" && fail "a doua aplicare a trecut"
@@ -114,6 +132,10 @@ MUTANTI=(
   "INSERT INTO public.contracte_polite (contract_id, tip, nr_polita) VALUES (17, 'avans', 'AVANS-1');"
   "INSERT INTO public.garantii (forma, tip, beneficiar, valoare, moneda, stare) VALUES ('polita_asigurare', 'car', 'B', 1, 'RON', 'activa'); INSERT INTO public.contracte_polite (id, contract_id, tip, nr_polita) VALUES (950, 17, 'CAR', 'L-1'); UPDATE public.garantii SET contract_polita_id = 950 WHERE beneficiar = 'B';"
   "CREATE VIEW public.v_alta AS SELECT * FROM public.v_polite_scadente;"
+  # r2 (amprenta extinsa, Jakarinos r1 P2-11): drepturi pe tabele si dependenta fn_poate_scrie_garantii
+  "REVOKE SELECT ON public.polite_propuneri FROM service_role;"
+  "GRANT SELECT ON public.polite_alerte_jurnal TO anon;"
+  "CREATE OR REPLACE FUNCTION public.fn_poate_scrie_garantii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;"
 )
 i=0
 for mut in "${MUTANTI[@]}"; do

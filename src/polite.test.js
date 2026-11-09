@@ -96,7 +96,7 @@ describe('paritate cu migrarea (L19)', () => {
   })
   it('revenirea scoate fiecare functie, tabela si trigger creat de migrare', () => {
     const functii = [...MIG.matchAll(/^CREATE FUNCTION public\.([a-z_]+)\(([^)]*)\)/gm)].map(x => x[1])
-    expect(functii.length).toBe(22)
+    expect(functii.length).toBe(23)
     for (const f of functii) expect(REV).toMatch(new RegExp(`DROP FUNCTION public\\.${f}\\(`))
     for (const t of [...MIG.matchAll(/^CREATE TABLE public\.([a-z_]+)/gm)].map(x => x[1])) expect(REV).toContain(`DROP TABLE public.${t};`)
     const triggere = [...MIG.matchAll(/^CREATE TRIGGER ([a-z_]+) .* ON (public\.[a-z_]+)/gm)].map(x => `DROP TRIGGER ${x[1]} ON ${x[2]};`)

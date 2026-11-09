@@ -23,7 +23,10 @@ Deno.serve(async (req) => {
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const apelant = await cronSauOwner(req, sb)
   if (!apelant) return json({ ok: false, error: 'neautorizat' }, 401)
-  if (apelant === 'cron' && oraRO() !== 7) return json({ ok: true, skip: 'ora' })
+  // r3 (Jakarinos r2 P2-3): reconcilierea rezervarilor ramase (> 1 h -> „necunoscut”) la FIECARE apel, inaintea filtrului de ora / comutator
+  const { data: reconciliate, error: erc } = await sb.rpc('fn_polite_alerte_reconciliaza', {})
+  if (erc) console.error('reconciliere', erc.code)
+  if (apelant === 'cron' && oraRO() !== 7) return json({ ok: true, skip: 'ora', reconciliate: erc ? null : reconciliate })
   const resend = Deno.env.get('RESEND_API_KEY')
   // fara cheie nu se rezerva nimic (altfel randurile ar ramane „rezervat” fara sa plece)
   if (!resend) return json({ ok: false, error: 'resend_neconfigurat' }, 500)
@@ -56,9 +59,16 @@ Deno.serve(async (req) => {
     } catch (_) {
       rezultat = stareDupaTrimitere({ eroareRetea: true })
     }
-    const { data: n, error: em } = await sb.rpc('fn_polite_alerte_marcheaza', { p_ids: ids, p_stare: rezultat.stare, p_resend_id: resendId, p_eroare: rezultat.eroare })
-    if (em || n !== ids.length) { contor.nemarcat++; console.error('marcare', em?.code ?? n) }
+    // r3 (Jakarinos r2 P2-4): marcarea in loturi de cel mult 500 de id-uri (limita RPC-ului), toate cu acelasi rezultat
+    let marcate = 0, eroareMarcare = false
+    for (let i = 0; i < ids.length; i += 500) {
+      const lot = ids.slice(i, i + 500)
+      const { data: n, error: em } = await sb.rpc('fn_polite_alerte_marcheaza', { p_ids: lot, p_stare: rezultat.stare, p_resend_id: resendId, p_eroare: rezultat.eroare })
+      if (em) { eroareMarcare = true; console.error('marcare', em.code) } else marcate += Number(n) || 0
+    }
+    if (eroareMarcare || marcate !== ids.length) { contor.nemarcat++; console.error('marcare incompleta', marcate, ids.length) }
     contor[rezultat.stare as 'trimis' | 'eroare' | 'necunoscut']++
   }
-  return json({ ok: true, destinatari: grupe.length, ...contor, fara_adresa: randuri.filter((r: { stare: string }) => r.stare === 'fara_adresa').length })
+  // „ok” doar daca toate rezultatele au fost marcate (altfel jurnalul nu reflecta trimiterea: se vede ca eroare in raspunsul cronului)
+  return json({ ok: contor.nemarcat === 0, destinatari: grupe.length, ...contor, fara_adresa: randuri.filter((r: { stare: string }) => r.stare === 'fara_adresa').length }, contor.nemarcat ? 500 : 200)
 })

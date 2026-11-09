@@ -152,6 +152,7 @@ DROP FUNCTION public.fn_polite_propunere_json(bigint);
 DROP FUNCTION public.fn_polite_propunere_esec(bigint, text, numeric);
 DROP FUNCTION public.fn_polite_propunere_completeaza(bigint, jsonb, jsonb, text, numeric);
 DROP FUNCTION public.fn_polite_propunere_rezerva(text, uuid);
+DROP FUNCTION public.fn_polite_alerte_reconciliaza();
 DROP FUNCTION public.fn_polite_alerte_marcheaza(bigint[], text, text, text);
 DROP FUNCTION public.fn_polite_alerte_rezerva(date);
 DROP FUNCTION public.fn_polite_alerte_porneste(boolean);

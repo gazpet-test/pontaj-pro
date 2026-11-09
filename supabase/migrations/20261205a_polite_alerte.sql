@@ -21,7 +21,8 @@
 --      -> edge polite-alerte-mail (antet x-intern-secret din Vault, ca 20261130d).
 -- NU atinge: garantii_alerte() (owner-ul primeste in continuare alertele Registrului; datele coincid prin sincronizare), gbe_polite,
 --   politicile RLS existente pe contracte_polite / garantii / storage, user_module_access.
--- Ordinea lock-urilor (L06), pe toate caile: polite_propuneri -> contracte_polite -> contracte_polite_acte -> garantii.
+-- Ordinea lock-urilor (L06), pe toate caile: polite_propuneri -> contracte_polite -> contracte_polite_acte -> garantii (randurile instructiunii)
+--   -> lock-ul consultativ al politei (doar in triggerele AFTER si la legare) -> randurile deja legate din garantii (r3, vezi sectiunea 5).
 -- Revenire: supabase/revenire/20261205a_polite_alerte_ROLLBACK.sql. Test: scripts/test_polite_alerte.sh (PG17 local, chat).
 -- Amprenta structurii: calculata la final si pastrata in COMMENT ON TABLE polite_alerte_config; revenirea o recalculeaza (aceeasi
 --   interogare) si refuza la diferenta. Dupa DRY-ul pe clona, chat-ul poate fixa constanta in ambele fisiere.
@@ -322,11 +323,16 @@ CREATE TRIGGER trg_polite_provenienta BEFORE INSERT OR UPDATE ON public.contract
   FOR EACH ROW EXECUTE FUNCTION public.fn_polite_provenienta();
 
 -- randul din Registru legat: campurile documentului vin din polita (sursa unica), copiate EXACT (fara pastrarea valorilor vechi).
--- r2 (Jakarinos r1 P1-3): la LEGARE (INSERT sau schimbarea contract_polita_id) polita se blocheaza FOR SHARE inaintea citirii: o
--- modificare concurenta a politei (UPDATE = lock NO KEY UPDATE) sau a actelor ei (triggerul AFTER ia FOR UPDATE pe polita) se termina
--- intai, iar citirea de dupa lock vede versiunea confirmata; invers, modificarea asteapta legarea si apoi o reimprospateaza.
--- Pe randurile deja legate nu se blocheaza (actualizarea concurenta a politei le recopiaza dupa COMMIT-ul nostru) => fara deadlock
--- garantii -> polita fata de calea polita -> garantii.
+-- Serializarea legare <-> modificarea politei / actelor (r3, Jakarinos r1 P1-3 + r2 P1): un lock CONSULTATIV pe polita,
+-- pg_advisory_xact_lock(hashtext('polite_registru'), <id polita>), luat:
+--   * aici, la LEGARE (INSERT sau schimbarea contract_polita_id), inaintea citirii politei / actelor;
+--   * in fn_polite_reimprospateaza_garantii (trigger AFTER pe polita / acte), inaintea UPDATE-ului pe garantii; la mutarea unui act,
+--     pe ambele polite, in ordinea id-ului.
+-- De ce nu lock pe randul politei (r2): un trigger pe acte ar lua FOR UPDATE pe polita DUPA lock-ul randului actului si dupa KEY SHARE-ul
+-- FK-ului => cicluri (doua acte pe aceeasi polita, mutari opuse, UPDATE act vs DELETE polita cu CASCADE). Lock-ul consultativ nu e
+-- cerut de FK / CASCADE / DELETE, iar triggerele AFTER ROW se executa la finalul instructiunii, dupa toate lock-urile ei de rand =>
+-- ordinea pe toate caile e: randurile instructiunii (polita / act / garantii) -> lock-ul consultativ -> UPDATE garantii pe randurile
+-- deja legate. Cine leaga citeste dupa lock (instructiune noua = snapshot nou); cine modifica polita reimprospateaza dupa lock.
 -- r2 (Jakarinos r1 P2-5): polita fara asigurator / nr. / valoare (inclusiv dupa stergerea ultimului act cu valoare) sau de tip „altul”
 -- nu poate avea rand in Registru: refuz explicit, nu valoarea veche pastrata tacit.
 CREATE FUNCTION public.fn_polite_garantii_din_polita() RETURNS trigger
@@ -335,7 +341,7 @@ DECLARE v_p record; v_exp date; v_val numeric;
 BEGIN
   IF NEW.contract_polita_id IS NULL THEN RETURN NEW; END IF;
   IF TG_OP = 'INSERT' OR OLD.contract_polita_id IS DISTINCT FROM NEW.contract_polita_id THEN
-    PERFORM 1 FROM public.contracte_polite cp WHERE cp.id = NEW.contract_polita_id FOR SHARE;
+    PERFORM pg_advisory_xact_lock(hashtext('polite_registru'), NEW.contract_polita_id::integer);
   END IF;
   SELECT cp.* INTO v_p FROM public.contracte_polite cp WHERE cp.id = NEW.contract_polita_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'polita_inexistenta' USING ERRCODE = '23503'; END IF;
@@ -359,28 +365,25 @@ END $fn$;
 CREATE TRIGGER trg_polite_garantii_din_polita BEFORE INSERT OR UPDATE ON public.garantii
   FOR EACH ROW WHEN (NEW.contract_polita_id IS NOT NULL) EXECUTE FUNCTION public.fn_polite_garantii_din_polita();
 
--- o schimbare pe polita / actele ei reimprospateaza randul legat (UPDATE => triggerul de mai sus recopiaza).
--- Ordinea lock-urilor pe calea actelor (L06): actul -> polita FOR UPDATE (serializeaza cu legarea, care ia FOR SHARE) -> garantii.
--- Pe calea politei, UPDATE-ul a luat deja lock-ul pe randul politei.
+-- o schimbare pe polita / actele ei reimprospateaza randul legat (UPDATE => triggerul de mai sus recopiaza), sub lock-ul consultativ
+-- al politei (ordinea: vezi comentariul de mai sus; la mutarea unui act, cele doua polite in ordinea id-ului).
 CREATE FUNCTION public.fn_polite_reimprospateaza_garantii() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_id bigint;
+DECLARE v_ids bigint[]; v_id bigint;
 BEGIN
   IF TG_TABLE_NAME = 'contracte_polite' THEN
-    v_id := NEW.id;
+    v_ids := ARRAY[NEW.id];
   ELSIF TG_OP = 'DELETE' THEN
-    v_id := OLD.polita_id;
+    v_ids := ARRAY[OLD.polita_id];
+  ELSIF TG_OP = 'UPDATE' AND OLD.polita_id IS DISTINCT FROM NEW.polita_id THEN
+    v_ids := ARRAY[least(OLD.polita_id, NEW.polita_id), greatest(OLD.polita_id, NEW.polita_id)];
   ELSE
-    v_id := NEW.polita_id;
-    IF TG_OP = 'UPDATE' AND OLD.polita_id IS DISTINCT FROM NEW.polita_id THEN
-      PERFORM 1 FROM public.contracte_polite cp WHERE cp.id = OLD.polita_id FOR UPDATE;
-      UPDATE public.garantii g SET updated_at = now() WHERE g.contract_polita_id = OLD.polita_id;
-    END IF;
+    v_ids := ARRAY[NEW.polita_id];
   END IF;
-  IF TG_TABLE_NAME = 'contracte_polite_acte' THEN
-    PERFORM 1 FROM public.contracte_polite cp WHERE cp.id = v_id FOR UPDATE;
-  END IF;
-  UPDATE public.garantii g SET updated_at = now() WHERE g.contract_polita_id = v_id;
+  FOREACH v_id IN ARRAY v_ids LOOP
+    PERFORM pg_advisory_xact_lock(hashtext('polite_registru'), v_id::integer);
+  END LOOP;
+  UPDATE public.garantii g SET updated_at = now() WHERE g.contract_polita_id = ANY (v_ids);
   RETURN NULL;
 END $fn$;
 CREATE TRIGGER trg_polite_reimprospateaza_garantii AFTER UPDATE ON public.contracte_polite
@@ -632,6 +635,19 @@ BEGIN
   RETURN v_n;
 END $fn$;
 
+-- 8e'. reconcilierea, separata de trimitere (r3, Jakarinos r2 P2-3): rezervarile ramase peste 1 h devin „necunoscut” la FIECARE apel al
+--      edge-ului (si cand nu e ora de trimis sau comutatorul e oprit). Nu retrimite nimic (L05).
+CREATE FUNCTION public.fn_polite_alerte_reconciliaza() RETURNS integer
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_n integer;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('polite_alerte_jurnal'));
+  UPDATE public.polite_alerte_jurnal j SET stare = 'necunoscut', eroare = 'rezervare_veche', actualizat_la = now()
+   WHERE j.stare = 'rezervat' AND j.creat_la < now() - interval '1 hour';
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END $fn$;
+
 -- 8f. propunerile: rezervarea citirii platite (o singura citire pe document, L04 / L22), completarea, esecul
 CREATE FUNCTION public.fn_polite_propunere_rezerva(p_sha text, p_user uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -834,7 +850,7 @@ REVOKE ALL ON FUNCTION public.fn_polite_norm_nr(text), public.fn_polite_text(jso
   public.fn_polite_garantii_din_polita(), public.fn_polite_reimprospateaza_garantii(), public.fn_polite_scadente(date),
   public.fn_polite_dest_normalizeaza(), public.fn_polite_alerte_calculeaza(date), public.fn_polite_alerte_proba(date),
   public.fn_polite_alerte_porneste(boolean), public.fn_polite_alerte_rezerva(date), public.fn_polite_alerte_marcheaza(bigint[], text, text, text),
-  public.fn_polite_propunere_rezerva(text, uuid), public.fn_polite_propunere_completeaza(bigint, jsonb, jsonb, text, numeric),
+  public.fn_polite_alerte_reconciliaza(), public.fn_polite_propunere_rezerva(text, uuid), public.fn_polite_propunere_completeaza(bigint, jsonb, jsonb, text, numeric),
   public.fn_polite_propunere_esec(bigint, text, numeric), public.fn_polite_propunere_json(bigint), public.fn_polita_salveaza(bigint, jsonb, jsonb),
   public.fn_polita_propunere_respinge(bigint, text)
   FROM PUBLIC, anon, authenticated, service_role;
@@ -842,7 +858,7 @@ GRANT EXECUTE ON FUNCTION public.fn_poate_scrie_polite(), public.fn_polite_e_own
   public.fn_polite_alerte_porneste(boolean), public.fn_polita_salveaza(bigint, jsonb, jsonb), public.fn_polita_propunere_respinge(bigint, text)
   TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_poate_scrie_polite(), public.fn_polite_scadente(date), public.fn_polite_alerte_rezerva(date),
-  public.fn_polite_alerte_marcheaza(bigint[], text, text, text), public.fn_polite_propunere_rezerva(text, uuid),
+  public.fn_polite_alerte_marcheaza(bigint[], text, text, text), public.fn_polite_alerte_reconciliaza(), public.fn_polite_propunere_rezerva(text, uuid),
   public.fn_polite_propunere_completeaza(bigint, jsonb, jsonb, text, numeric), public.fn_polite_propunere_esec(bigint, text, numeric),
   public.fn_polite_propunere_json(bigint)
   TO service_role;
@@ -888,14 +904,14 @@ DECLARE v_o oid; v_amprenta text;
     'public.fn_polite_alerte_proba(date)', 'public.fn_polite_alerte_porneste(boolean)', 'public.fn_polita_salveaza(bigint,jsonb,jsonb)',
     'public.fn_polita_propunere_respinge(bigint,text)']::regprocedure[];
   v_srv regprocedure[] := ARRAY['public.fn_poate_scrie_polite()', 'public.fn_polite_scadente(date)', 'public.fn_polite_alerte_rezerva(date)',
-    'public.fn_polite_alerte_marcheaza(bigint[],text,text,text)', 'public.fn_polite_propunere_rezerva(text,uuid)',
+    'public.fn_polite_alerte_marcheaza(bigint[],text,text,text)', 'public.fn_polite_alerte_reconciliaza()', 'public.fn_polite_propunere_rezerva(text,uuid)',
     'public.fn_polite_propunere_completeaza(bigint,jsonb,jsonb,text,numeric)', 'public.fn_polite_propunere_esec(bigint,text,numeric)',
     'public.fn_polite_propunere_json(bigint)']::regprocedure[];
 BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!')) <> 21
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!')) <> 22
      OR to_regprocedure('public.fn_poate_scrie_polite()') IS NULL THEN
-    RAISE EXCEPTION '20261205a: functiile noi nu sunt exact 21 + fn_poate_scrie_polite';
+    RAISE EXCEPTION '20261205a: functiile noi nu sunt exact 22 + fn_poate_scrie_polite';
   END IF;
   FOR v_o IN SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
                AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite') LOOP
