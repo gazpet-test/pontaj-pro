@@ -201,3 +201,7 @@ handle_new_user, profiles_role_chk, hook-ul sau rolurile; niciuna nu da EXECUTE 
    fara date) si sectiunea 8 (triggerele / definitiile de pe calea portalului).
 4. Verificari: statice 15/15, validatorul de livrare, `bash -n`, parserul PostgreSQL 17 + PL/pgSQL pe toate fisierele
    E1 si pe fragmentele SQL din harness. Harness-ul PG ramane la operator.
+
+## E1-1b r5 — 09.11.2026 (Jakarinos r4: P0 0, P1 0, P2 1)
+- Amprenta 1b include configuratia `pg_sequence` a secventelor din lista alba (fara contor). Teste: incrementul schimbat
+  = poarta rosie si revenire refuzata; `nextval` = poarta verde.
