@@ -1,4 +1,4 @@
-﻿-- Stub ramas dupa revenire: numai rolul Auth real, fara tabelele portalului.
+-- Stub ramas dupa revenire: numai rolul Auth real, fara tabelele portalului.
 BEGIN;
 SET LOCAL ROLE supabase_auth_admin;
 DO $test$
