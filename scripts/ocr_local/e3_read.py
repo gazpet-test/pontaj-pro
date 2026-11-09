@@ -9,12 +9,27 @@ from .e3_contract import E3Error
 from .e3_mapare import mapare
 
 
+# Erorile de TRANSPORT spre modelul local, după numele excepției pe care read.py îl pune în result['error']
+# (read_lighton: „Tip”; read_mineru: „Tip:mesaj”). Orice alt tip (KeyError în gardă, JSON stricat, ValueError) = defect.
+ERORI_TRANSPORT = frozenset({
+    'OSError', 'ConnectionError', 'ConnectionRefusedError', 'ConnectionResetError', 'ConnectionAbortedError', 'BrokenPipeError',
+    'TimeoutError', 'timeout', 'gaierror', 'HTTPException', 'RemoteDisconnected', 'IncompleteRead', 'BadStatusLine', 'LineTooLong',
+    'ResponseNotReady', 'CannotSendRequest', 'CannotSendHeader', 'ImproperConnectionState',
+    # httpx, transportul clientului MinerU
+    'TransportError', 'NetworkError', 'ConnectError', 'ReadError', 'WriteError', 'CloseError', 'ProxyError', 'ProtocolError',
+    'RemoteProtocolError', 'TimeoutException', 'ConnectTimeout', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout', 'HTTPStatusError'})
+
+
 def cod_citire(result):
     """E9: cititor oprit fără gardă → termenul = timeout; eroare de transport spre modelul local
-    (conexiune, HTTP, flux rupt) = model_indisponibil; răspuns gol / trunchiat fără eroare = intern."""
+    (conexiune, HTTP, flux rupt) = model_indisponibil; orice alt defect sau răspuns gol / trunchiat = intern."""
     if result.get('signal') == 'deadline':
         return 'timeout'
-    if result.get('error'):
+    error = result.get('error')
+    if not isinstance(error, str) or not error:
+        return 'intern'
+    # read_lighton pune doar numele tipului; singurul RuntimeError din blocul lui e statusul HTTP ≠ 200 al serverului local.
+    if error == 'RuntimeError' or error.partition(':')[0] in ERORI_TRANSPORT:
         return 'model_indisponibil'
     return 'intern'
 

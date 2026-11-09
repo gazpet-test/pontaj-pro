@@ -148,6 +148,9 @@ class Worker:
                 raise E3Error(cod_pdf(kind))
             image = self.render(data)
             image, source['perspectiva'] = self.perspective(image)
+            # Descărcarea / randarea pot consuma termenul: verificăm ÎNAINTE de citire, ca un termen deja trecut
+            # să nu fie socotit „în citire” (și să nu repornească modelele) — Jakarinos r1 P2.
+            self.verifica_continuare(end)
             remaining = (end - self.now()).total_seconds()
             in_citire = True
             l, m = citeste_orientat(image, request['sablon'], work, self.reader, time.monotonic() + remaining)

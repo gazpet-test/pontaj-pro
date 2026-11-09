@@ -471,6 +471,14 @@ class E9CoduriTests(unittest.TestCase):
         cod, invalidari, ops = self.lucreaza(reader=lenta, ceas=lambda: ACUM + dt.timedelta(seconds=100 if trecut[0] else 0))
         self.assertEqual((cod, invalidari), ('timeout', 0))  # citirea s-a încheiat; doar termenul local a trecut
         self.assertNotIn('arbitreaza', ops)
+        # Jakarinos r1 P2: termenul consumat de descărcare / randare = timeout fără cititor și fără repornirea modelelor.
+        randat = [False]
+        def randare_lenta(data):
+            randat[0] = True
+            return FakeImage()
+        cod, invalidari, _ = self.lucreaza(render=randare_lenta, reader=lambda *a: self.fail('cititor apelat'),
+                                           ceas=lambda: ACUM + dt.timedelta(seconds=100 if randat[0] else 0))
+        self.assertEqual((cod, invalidari), ('timeout', 0))
 
     def test_pdf_corupt_la_randare_fara_cititor_si_fara_repornire(self):
         cod, invalidari, _ = self.lucreaza(render=ridica(E3Error('pdf_corupt')), reader=lambda *a: self.fail('cititor'))
@@ -652,11 +660,62 @@ class E9CititorTests(unittest.TestCase):
         for result, cod in [({'ok': False, 'signal': 'deadline', 'error': None}, 'timeout'),
                             ({'ok': False, 'signal': 'deadline', 'error': 'OSError'}, 'timeout'),
                             ({'ok': False, 'signal': None, 'error': 'ConnectionRefusedError'}, 'model_indisponibil'),
-                            ({'ok': False, 'signal': None, 'error': 'RuntimeError'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'RemoteDisconnected'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'OSError'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'RuntimeError'}, 'model_indisponibil'),  # lighton: HTTP ≠ 200
                             ({'ok': False, 'signal': None, 'error': 'ConnectError:All connection attempts failed'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'ReadTimeout:timed out'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'HTTPStatusError:Server error 503'}, 'model_indisponibil'),
+                            # Jakarinos r1 P2: defectele locale prinse de cititor nu sunt „model indisponibil”.
+                            ({'ok': False, 'signal': None, 'error': 'KeyError'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'JSONDecodeError'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'AttributeError'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'RuntimeError:mesaj din biblioteca MinerU'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'ValueError:x'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': ['ConnectError']}, 'intern'),
                             ({'ok': False, 'signal': None, 'error': None, 'finish_reason': 'length'}, 'intern'),
                             ({'ok': False}, 'intern')]:
             self.assertEqual(cod_citire(result), cod, result)
+
+    def test_formatul_real_read_lighton_pe_server_fals_loopback(self):
+        """read_lighton real contra unui server HTTP fals pe 127.0.0.1 (port efemer, niciun model): eroarea pe care o scrie
+        cititorul se clasifică corect — HTTP 503 / conexiune închisă = model_indisponibil, defect în gardă = intern."""
+        import http.server
+        import threading
+        from ocr_local import read
+        mod = {}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                if mod['caz'] == '503':
+                    self.send_response(503); self.send_header('Content-Length', '0'); self.end_headers()
+                elif mod['caz'] == 'flux':
+                    corp = b'data: {"choices":[{"delta":{"content":"x"}}]}\n\ndata: [DONE]\n\n'
+                    self.send_response(200); self.send_header('Content-Type', 'text/event-stream')
+                    self.send_header('Content-Length', str(len(corp))); self.end_headers(); self.wfile.write(corp)
+                else:
+                    self.close_connection = True  # închide fără răspuns
+        class GardaStricata:
+            event = None
+            def __call__(self, raw): raise KeyError('defect local')
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        fir = threading.Thread(target=server.serve_forever, daemon=True)
+        fir.start()
+        try:
+            cfg = {'endpoint': 'http://127.0.0.1:%d' % server.server_address[1], 'served_model_name': 'fals', 'request_settings': {}}
+            for caz, garda, cod in [('503', None, 'model_indisponibil'), ('inchis', None, 'model_indisponibil'),
+                                    ('flux', GardaStricata, 'intern')]:
+                mod['caz'] = caz
+                with temporary() as root, contextlib.ExitStack() as stack:
+                    if garda:
+                        stack.enter_context(patch.object(read, 'Guard', garda))
+                    raw, result = read.read_lighton(b'png', root, cfg, 5)
+                self.assertFalse(result['ok'], caz)
+                self.assertEqual(cod_citire(result), cod, (caz, result.get('error')))
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_exceptie_cititor(self):
         httpx_eroare = type('ConnectError', (Exception,), {'__module__': 'httpx'})
