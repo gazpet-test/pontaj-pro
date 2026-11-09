@@ -76,6 +76,13 @@ export async function confirmaExpediereRecitita(client, { uatId, data, confirm }
   return { ok: !!confirm(`${avertisment}\n\nÎnregistrezi totuși expedierea cu această dată?`), avertisment }
 }
 
+// Test weekend 06.11.2026: „Creează plicuri” pica de 3 ori cu RD008 („calitatea s-a schimbat - regenereaza”) pe convocări vechi
+// (calitate_document NULL, de dinainte de migrarea 20261131c) sau cu calitatea deținătorului schimbată după generare. Garda serverului
+// (fn_red_convocari_utilizatori_garda) cere calitate_document = calitatea curentă la punerea în plic; propunem doar ce va trece.
+// Câmpul lipsă (apelanți vechi / teste fără calitate) = necunoscut aici → nu se exclude; citesteDatePlicuri îl aduce mereu.
+export const convocareDeRegenerat = r => !!r && 'calitate_document' in r && (r.calitate_document == null || r.calitate_document !== r.calitate_detinator)
+export const MESAJ_DE_REGENERAT = 'convocatorul trebuie regenerat (același număr) înainte de plic: calitatea din document lipsește sau diferă de cea a deținătorului'
+
 export function grupeazaPentruPlicuri(randuri) {
   const pe = new Map(), fara_adresa = []
   for (const r of randuri) {
@@ -84,15 +91,17 @@ export function grupeazaPentruPlicuri(randuri) {
     if (!pe.has(cheie)) pe.set(cheie, { cheie, uat_id: r.uat_id, uat3: r.uat3, destinatar: r.detinator_nume, convocari: [] })
     pe.get(cheie).convocari.push(r)
   }
-  const prea_mari = []
+  const prea_mari = [], de_regenerat = []
   const grupuri = [...pe.values()].sort((a, b) => txt(a.uat3).localeCompare(txt(b.uat3), 'ro') || txt(a.destinatar).localeCompare(txt(b.destinatar), 'ro'))
     .flatMap(g => {
       const conv = [...g.convocari].sort((a, b) => txt(a.nr_document).localeCompare(txt(b.nr_document)) || txt(a.conv_id).localeCompare(txt(b.conv_id)))
       // Copilot f10 UI P2-01: NU se împarte (serverul refuză plicurile parțiale) — peste limită = blocaj explicit, decizie separată
       if (conv.length > MAX_CONVOCARI_PLIC) { prea_mari.push({ ...g, convocari: conv }); return [] }
+      // serverul cere TOATE convocările persoanei din UAT în același plic → o singură convocare de regenerat oprește tot plicul persoanei
+      if (conv.some(convocareDeRegenerat)) { de_regenerat.push({ ...g, convocari: conv }); return [] }
       return [{ ...g, convocari: conv }]
     })
-  return { grupuri, fara_adresa, prea_mari }
+  return { grupuri, fara_adresa, prea_mari, de_regenerat }
 }
 
 export function textAR(plic, convocari, { proiect } = {}) {
