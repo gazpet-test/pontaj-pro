@@ -11,7 +11,13 @@
 --   ROLLBACK;
 -- Închiderea tranzacției la eroare (review Jakarinos r8 P2): cu ON_ERROR_STOP psql iese la prima eroare, conexiunea se închide și
 --   tranzacția se anulează (lock-urile migrării se eliberează); în plus idle_in_transaction_session_timeout = 60 s închide pe server
---   o sesiune lăsată deschisă. Fereastra cu lock-uri (de la migrare la final) are buget de 120 s, verificat după fiecare citire.
+--   o sesiune lăsată deschisă.
+-- Plafonul ferestrei cu lock-uri (review Jakarinos r9 P2): 120 s de la începutul migrării până la final, impus, nu doar constatat:
+--   • migrarea (31f: 8 instrucțiuni, 31g: 44, doar catalog) rulează cu statement_timeout = 1 s, setat la sfârșitul acestui script,
+--     deci durează cel mult ~1 min chiar în cel mai rău caz (o așteptare de lock peste 1 s = eroare → ROLLBACK; se reia într-un moment liniștit);
+--   • în scriptul „după”, ÎNAINTEA fiecărei instrucțiuni care citește date, dry1022b_buget refuză dacă bugetul s-a terminat și setează
+--     statement_timeout = min(30 s, timpul rămas), deci nicio instrucțiune nu poate trece de plafon; în plus bugetul se verifică după
+--     fiecare citire din interiorul funcțiilor (refuz cât mai devreme).
 -- Ce măsoară, pe TEST-RAZVAN și LOT1-PRUNISOR-JUPA, cu aceleași citiri ca ecranele (Dashboard: red_v_centralizator_uat cu stare nenulă
 -- și red_v_tronson; Registru: red_v_stare_parcela pe proiect), în ipostazele:
 --   postgres (fără utilizator) · authenticated cu JWT de owner · authenticated cu JWT de non-owner pe fiecare nivel Redări
@@ -113,15 +119,17 @@ BEGIN
     RAISE EXCEPTION 'dry 1022b: ipostaza % — fn_red_nivel() = %, asteptat %', p_rol, public.fn_red_nivel(), u.nivel; END IF;
   RETURN true;
 END $f$;
--- bugetul ferestrei cu lock-uri (de la începutul migrării): verificat în faza „după”, după fiecare citire
+-- bugetul ferestrei cu lock-uri (120 s de la începutul migrării): refuz dacă s-a terminat; altfel statement_timeout = min(30 s, rămas),
+-- care se aplică instrucțiunii următoare. Fără clauză SET pe funcție (set_config local trebuie să rămână după ieșire).
 CREATE FUNCTION pg_temp.dry1022b_buget(p_pas text) RETURNS void
-LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
-DECLARE t0 timestamptz;
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER AS $f$
+DECLARE t0 timestamptz; rest_ms bigint;
 BEGIN
-  SELECT t INTO t0 FROM pg_temp.dry1022b_ceas WHERE eticheta = 'start_migrare';
+  SELECT c.t INTO t0 FROM pg_temp.dry1022b_ceas c WHERE c.eticheta = 'start_migrare';
   IF t0 IS NULL THEN RAISE EXCEPTION 'dry 1022b: lipseste ceasul ferestrei (scriptul „inainte” incomplet)'; END IF;
-  IF clock_timestamp() - t0 > interval '120 seconds' THEN
-    RAISE EXCEPTION 'dry 1022b: NU se aplica — fereastra cu lock-uri depaseste 120 s (la %)', p_pas; END IF;
+  rest_ms := floor(120000 - extract(epoch FROM clock_timestamp() - t0) * 1000);
+  IF rest_ms <= 0 THEN RAISE EXCEPTION 'dry 1022b: NU se aplica — fereastra cu lock-uri depaseste 120 s (la %)', p_pas; END IF;
+  PERFORM set_config('statement_timeout', least(30000, rest_ms)::text, true);
 END $f$;
 -- apelurile cumulate în tranzacție ale funcțiilor din lanț (gol dacă track_functions = none)
 CREATE FUNCTION pg_temp.dry1022b_apeluri_acum() RETURNS jsonb LANGUAGE sql VOLATILE AS $f$
@@ -169,6 +177,8 @@ BEGIN
     FOR l IN EXECUTE format('EXPLAIN (ANALYZE, BUFFERS) SELECT uat_id, uat3, uat_nume, stare, numar, total_uat, procent_inchise FROM public.red_v_centralizator_uat WHERE proiect_id = %L AND stare IS NOT NULL', r.id) LOOP
       RAISE NOTICE '% % | %', p_eticheta, r.cod, l;
     END LOOP;
+    -- în faza „după” (ceasul există): bugetul după fiecare proiect
+    IF EXISTS (SELECT 1 FROM pg_temp.dry1022b_ceas) THEN PERFORM pg_temp.dry1022b_buget(format('explain %s', r.cod)); END IF;
   END LOOP;
 END $f$;
 -- rezultatul funcției vechi fn_red_adresa_cunoscuta pe TOȚI deținătorii activi, în ipostaza curentă (poarta depinde de utilizator)
@@ -225,3 +235,5 @@ DO $gata$ BEGIN
   RAISE NOTICE 'dry 1022b: inainte salvat — % amprente, % masuratori, % randuri de adresa', (SELECT count(*) FROM pg_temp.dry1022b_rez),
     (SELECT count(*) FROM pg_temp.dry1022b_timp), (SELECT count(*) FROM pg_temp.dry1022b_adresa);
 END $gata$;
+-- ULTIMA instrucțiune: migrarea / migrările care urmează (doar catalog) rulează cu 1 s pe instrucțiune (plafonul ferestrei, vezi antetul)
+SET LOCAL statement_timeout = '1s';

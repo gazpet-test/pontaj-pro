@@ -1,13 +1,15 @@
 -- scripts/redari_1022b_dry.sql — PR #1022, DRY 2: rulat în ACEEAȘI tranzacție, DUPĂ migrarea 20261131g (și după
 -- scripts/redari_1022b_dry_inainte.sql; secvența completă și modul de rulare sunt în antetul aceluia). Se termină cu ROLLBACK.
--- Fereastra cu lock-uri (review Jakarinos r8 P2): migrarea ține lock-uri până la ROLLBACK, deci aici:
---   statement_timeout 30 s pe fiecare instrucțiune; bugetul total de 120 s de la începutul migrării, verificat după fiecare citire;
+-- Fereastra cu lock-uri (review Jakarinos r8 / r9 P2): migrarea ține lock-uri până la ROLLBACK; plafonul de 120 s e IMPUS:
+--   ÎNAINTEA fiecărei instrucțiuni care citește date: SELECT pg_temp.dry1022b_buget(…) — refuz dacă bugetul s-a terminat, altfel
+--   statement_timeout = min(30 s, timpul rămas) pentru instrucțiunea următoare; celelalte instrucțiuni (identitate, SET ROLE,
+--   CREATE FUNCTION temporară) nu citesc date. În plus, bugetul se verifică după fiecare citire din interiorul funcțiilor;
 --   pragul de 5 s pe LOT1 ca utilizator logat verificat IMEDIAT după fiecare citire (refuz pe loc, nu la final);
 --   ordinea: întâi ipostazele cu utilizator (cele care pot depăși pragul), apoi postgres, parități, EXPLAIN.
 -- REFUZĂ (RAISE) și dacă: rândurile diferă înainte / după în oricare ipostază · o combinație nu are rânduri · paritatea copiei
 --   acoperirii pică · paritatea adresei are diferențe SAU nu are cazuri pe fiecare categorie (adresă da / adresă nu / fără contact)
 --   SAU poarta închisă nu se comportă ca înainte · identitatea efectivă nu e cea anunțată.
-SET LOCAL statement_timeout = '30s';
+SELECT pg_temp.dry1022b_buget('dupa migrare');
 DO $pre$ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'dry 1022b: rulati ca postgres'; END IF;
   IF to_regclass('pg_temp.dry1022b_rez') IS NULL OR to_regprocedure('pg_temp.dry1022b_masoara(text,text)') IS NULL
@@ -21,7 +23,6 @@ DO $pre$ BEGIN
      OR position('fn_red_parcela_acoperita_a' IN pg_get_viewdef('public.red_v_tronson'::regclass, true)) > 0 THEN
     RAISE EXCEPTION 'dry 1022b: migrarea 20261131g nu e aplicata in aceasta tranzactie'; END IF;
 END $pre$;
-SELECT pg_temp.dry1022b_buget('dupa migrare');
 -- paritatea ramurii FARA_ADRESA_AFISARE: predicatul nou din vedere (NOT IN pe fn_red_detinatori_cu_adresa) față de rezultatul
 -- funcției vechi salvat ÎNAINTE în aceeași ipostază, pe TOȚI deținătorii activi (nu doar pe cei ajunși la ramurile 11 / 12)
 CREATE FUNCTION pg_temp.dry1022b_paritate_adresa(p_rol text) RETURNS void
@@ -38,6 +39,7 @@ BEGIN
               ELSE count(*) FILTER (WHERE a.veche IS DISTINCT FROM CASE a.categ WHEN 'adresa_da' THEN true WHEN 'adresa_nu' THEN false END) END
     INTO m, n, c_da, c_nu, c_fara, n_veche
     FROM pg_temp.dry1022b_adresa a WHERE a.rol = p_rol;
+  PERFORM pg_temp.dry1022b_buget(format('paritate adresa %s', p_rol));
   RAISE NOTICE 'dry 1022b: paritate adresa %: % detinatori (adresa da %, adresa nu %, fara contact %), % diferente', p_rol, m, c_da, c_nu, c_fara, n;
   IF n <> 0 THEN RAISE EXCEPTION 'dry 1022b: % — ramura FARA_ADRESA_AFISARE difera de fn_red_adresa_cunoscuta pe % detinatori', p_rol, n; END IF;
   IF c_da = 0 OR c_nu = 0 OR c_fara = 0 THEN
@@ -46,6 +48,7 @@ BEGIN
     -- poarta închisă: funcția veche dă NULL peste tot, lista nouă e goală, vederea nu arată nimic
     SELECT count(*) INTO n_lista FROM public.fn_red_detinatori_cu_adresa();
     SELECT count(*) INTO n_vedere FROM public.red_v_stare_parcela;
+    PERFORM pg_temp.dry1022b_buget('poarta inchisa');
     RAISE NOTICE 'dry 1022b: poarta inchisa: % valori vechi nenule, % id-uri in lista noua, % randuri in vedere', n_veche, n_lista, n_vedere;
     IF n_veche <> 0 OR n_lista <> 0 OR n_vedere <> 0 THEN RAISE EXCEPTION 'dry 1022b: poarta inchisa nu se comporta ca inainte'; END IF;
   ELSIF n_veche <> 0 THEN
@@ -55,60 +58,80 @@ END $f$;
 REVOKE ALL ON FUNCTION pg_temp.dry1022b_paritate_adresa(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION pg_temp.dry1022b_paritate_adresa(text) TO authenticated;
 
--- 1. ipostazele cu utilizator: întâi măsurarea (pragul și bugetul se verifică după fiecare citire), apoi paritatea adresei
+-- 1. ipostazele cu utilizator: întâi măsurarea (pragul și bugetul se verifică după fiecare citire), apoi paritatea adresei;
+--    fiecare instrucțiune care citește date e precedată de bugetul care îi fixează statement_timeout = min(30 s, rămas)
 SELECT pg_temp.dry1022b_identitate('owner');
 SET LOCAL ROLE authenticated;
+SELECT pg_temp.dry1022b_buget('owner masurare');
 SELECT pg_temp.dry1022b_masoara('dupa', 'owner');
+SELECT pg_temp.dry1022b_buget('owner paritate adresa');
 SELECT pg_temp.dry1022b_paritate_adresa('owner');
 RESET ROLE;
 SELECT pg_temp.dry1022b_identitate('admin');
 SET LOCAL ROLE authenticated;
+SELECT pg_temp.dry1022b_buget('admin masurare');
 SELECT pg_temp.dry1022b_masoara('dupa', 'admin');
+SELECT pg_temp.dry1022b_buget('admin paritate adresa');
 SELECT pg_temp.dry1022b_paritate_adresa('admin');
 RESET ROLE;
 SELECT pg_temp.dry1022b_identitate('editor');
 SET LOCAL ROLE authenticated;
+SELECT pg_temp.dry1022b_buget('editor masurare');
 SELECT pg_temp.dry1022b_masoara('dupa', 'editor');
+SELECT pg_temp.dry1022b_buget('editor paritate adresa');
 SELECT pg_temp.dry1022b_paritate_adresa('editor');
 RESET ROLE;
 SELECT pg_temp.dry1022b_identitate('viewer');
 SET LOCAL ROLE authenticated;
+SELECT pg_temp.dry1022b_buget('viewer masurare');
 SELECT pg_temp.dry1022b_masoara('dupa', 'viewer');
+SELECT pg_temp.dry1022b_buget('viewer paritate adresa');
 SELECT pg_temp.dry1022b_paritate_adresa('viewer');
 RESET ROLE;
 SELECT pg_temp.dry1022b_identitate('fara_drept');
 SET LOCAL ROLE authenticated;
+SELECT pg_temp.dry1022b_buget('poarta inchisa');
 SELECT pg_temp.dry1022b_paritate_adresa('fara_drept');
 RESET ROLE;
-SELECT pg_temp.dry1022b_buget('ipostaze cu utilizator');
 -- 2. postgres, fără utilizator
 SELECT pg_temp.dry1022b_identitate('postgres');
+SELECT pg_temp.dry1022b_buget('postgres masurare');
 SELECT pg_temp.dry1022b_masoara('dupa', 'postgres');
--- L19: copia corpului fn_red_parcela_acoperita_a din vederi = funcția, pe TOATE parcelele / perechile active (ca postgres)
-DO $paritate$
+-- L19: copia corpului fn_red_parcela_acoperita_a din vederi = funcția, pe TOATE parcelele / perechile active (ca postgres);
+-- o citire pe instrucțiune, fiecare cu bugetul înainte și după
+SELECT pg_temp.dry1022b_buget('paritate acoperire tronson');
+DO $paritate_tronson$
 DECLARE m bigint; n bigint;
 BEGIN
   PERFORM pg_temp.dry1022b_verifica('postgres');
   SELECT count(*), count(*) FILTER (WHERE (t.tip_pv IS NOT DISTINCT FROM 'A') IS DISTINCT FROM public.fn_red_parcela_acoperita_a(t.parcela_id))
     INTO m, n FROM public.red_v_tronson t;
+  PERFORM pg_temp.dry1022b_buget('paritate acoperire tronson (dupa citire)');
   RAISE NOTICE 'dry 1022b: paritate acoperire A in red_v_tronson: % parcele, % diferente', m, n;
   IF m = 0 OR n <> 0 THEN RAISE EXCEPTION 'dry 1022b: red_v_tronson — acoperirea A difera de fn_red_parcela_acoperita_a (% din %)', n, m; END IF;
+END $paritate_tronson$;
+SELECT pg_temp.dry1022b_buget('paritate acoperire stare');
+DO $paritate_stare$
+DECLARE m bigint; n bigint;
+BEGIN
+  PERFORM pg_temp.dry1022b_verifica('postgres');
   SELECT count(*), count(*) FILTER (WHERE (s.stare = 'PV_A_ACOPERIT_PARCELA') IS DISTINCT FROM (s.pv_stare IS DISTINCT FROM 'semnat' AND public.fn_red_parcela_acoperita_a(s.parcela_id))
                                       OR (s.stare_ordine = 1) IS DISTINCT FROM coalesce(s.pv_stare = 'semnat' OR public.fn_red_parcela_acoperita_a(s.parcela_id), false))
     INTO m, n FROM public.red_v_stare_parcela s;
+  PERFORM pg_temp.dry1022b_buget('paritate acoperire stare (dupa citire)');
   RAISE NOTICE 'dry 1022b: paritate acoperire A in red_v_stare_parcela: % perechi, % diferente', m, n;
   IF m = 0 OR n <> 0 THEN RAISE EXCEPTION 'dry 1022b: red_v_stare_parcela — acoperirea A difera de fn_red_parcela_acoperita_a (% din %)', n, m; END IF;
-  PERFORM pg_temp.dry1022b_buget('paritate acoperire');
-END $paritate$;
--- 3. planul ca owner după fix (după ce pragul a trecut, deci rapid)
+END $paritate_stare$;
+-- 3. planul ca owner după fix (după ce pragul a trecut, deci rapid); bugetul și după fiecare proiect, în funcție
 SELECT pg_temp.dry1022b_identitate('owner');
 SET LOCAL ROLE authenticated;
+SELECT pg_temp.dry1022b_buget('explain');
 SELECT pg_temp.dry1022b_explain('ROL owner DUPA', 'owner');
 RESET ROLE;
 SELECT pg_temp.dry1022b_identitate('postgres');
-SELECT pg_temp.dry1022b_buget('explain');
 
--- 4. comparația și refuzul
+-- 4. comparația și refuzul (doar tabelele temporare ale probei)
+SELECT pg_temp.dry1022b_buget('comparatie');
 DO $compara$
 DECLARE r record; n_ia bigint; n_ai bigint; n_in bigint; erori text[] := ARRAY[]::text[];
 BEGIN
