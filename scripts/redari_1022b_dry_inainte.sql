@@ -27,7 +27,8 @@
 --   așteptat, current_user exact, iar rolul authenticated fără SUPERUSER / BYPASSRLS (altfel RLS nu s-ar evalua).
 -- Pentru paritatea ramurii FARA_ADRESA_AFISARE se salvează aici (fără lock-uri) rezultatul funcției vechi fn_red_adresa_cunoscuta pe
 --   TOȚI deținătorii activi, în fiecare ipostază cu utilizator, plus un cont FĂRĂ drept Redări (poarta închisă); scriptul „după”
---   compară funcția nouă pe aceleași rânduri și cere cazuri pe fiecare categorie (adresă da / adresă nu / fără contact).
+--   compară funcția nouă pe aceleași rânduri (0 diferențe = condiția tare) și raportează categoriile fără cazuri în date (adresă da /
+--   adresă nu / fără contact); ramura „fără contact” o verifică în plus pe o sondă fără scriere (r12, vezi scriptul „după”).
 -- Pentru fiecare rând de ecran se păstrează doar amprenta md5 (fără date în clar), pentru comparația EXCEPT ALL din scriptul „după”.
 -- Plus: EXPLAIN (ANALYZE, BUFFERS) ca owner pe centralizator; numărul de apeluri ale funcțiilor (dacă track_functions se poate porni).
 -- Durată estimată ÎNAINTE de fix: câteva minute (o citire ca utilizator logat ~30–40 s pe LOT1, pe fiecare ipostază). Fără lock-uri.

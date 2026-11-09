@@ -7,8 +7,11 @@
 --   pragul de 5 s pe LOT1 ca utilizator logat verificat IMEDIAT după fiecare citire (refuz pe loc, nu la final);
 --   ordinea: întâi ipostazele cu utilizator (cele care pot depăși pragul), apoi postgres, parități, EXPLAIN.
 -- REFUZĂ (RAISE) și dacă: rândurile diferă înainte / după în oricare ipostază · o combinație nu are rânduri · paritatea copiei
---   acoperirii pică · paritatea adresei are diferențe SAU nu are cazuri pe fiecare categorie (adresă da / adresă nu / fără contact)
---   SAU poarta închisă nu se comportă ca înainte · identitatea efectivă nu e cea anunțată.
+--   acoperirii pică · paritatea adresei are diferențe SAU nu are niciun deținător SAU sonda „fără contact” pică · poarta închisă nu
+--   se comportă ca înainte · identitatea efectivă nu e cea anunțată.
+-- r12 (DRY 2 pe prod, 09.11): pe prod nu există niciun deținător activ fără rând de contact, deci categoria „fără contact” nu se
+--   poate acoperi din date. 0 diferențe rămâne condiția tare; o categorie fără cazuri în date = NOTICE „categorie neacoperita de
+--   date”, raportată și în mesajul final, NU refuz. Ramura „fără contact” se verifică în schimb pe o SONDĂ fără scriere (mai jos).
 SELECT pg_temp.dry1022b_buget('dupa migrare');
 DO $pre$ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'dry 1022b: rulati ca postgres'; END IF;
@@ -23,11 +26,36 @@ DO $pre$ BEGIN
      OR position('fn_red_parcela_acoperita_a' IN pg_get_viewdef('public.red_v_tronson'::regclass, true)) > 0 THEN
     RAISE EXCEPTION 'dry 1022b: migrarea 20261131g nu e aplicata in aceasta tranzactie'; END IF;
 END $pre$;
+-- r12: SONDA „fără contact”, fără nicio scriere în tabelele reale. Ambele funcții citesc DOAR red_detinatori_contact după id
+--   (corpurile sunt fixate prin md5 în porțile 31g: fn_red_adresa_cunoscuta neschimbată înainte / după, fn_red_detinatori_cu_adresa
+--   verificată după), deci un id fără rând de contact este exact intrarea unui deținător fără contact. Id-ul e aleator și se verifică
+--   ca postgres (fără RLS) că nu există nici în red_detinatori_contact, nici în red_detinatori.
+--   Varianta „deținător temporar pe TEST-RAZVAN, anulat la ROLLBACK” a fost respinsă: INSERT-ul în red_detinatori pornește trg_red_jurnal
+--   (red_jurnal.id e bigserial: secvența rămâne avansată și după ROLLBACK, adică o gaură permanentă în jurnalul append-only), generează
+--   un token și ține lock pe red_detinatori + pe o parcelă cât durează proba; plus instantaneul „înainte” ar trebui refăcut peste el.
+-- dry1022b_categ_rez: cazurile pe categorie ale fiecărei ipostaze (0 = neacoperită de date, raportată la final) și rândul sondei;
+--   rândurile se scriu la SFÂRȘITUL paritații, deci existența lor = paritatea s-a încheiat fără refuz în acea ipostază.
+CREATE TEMP TABLE dry1022b_sonda (id uuid PRIMARY KEY) ON COMMIT DROP;
+CREATE TEMP TABLE dry1022b_categ_rez (rol text, categ text, cazuri bigint NOT NULL, PRIMARY KEY (rol, categ)) ON COMMIT DROP;
+GRANT SELECT ON pg_temp.dry1022b_sonda TO authenticated;
+GRANT SELECT, INSERT ON pg_temp.dry1022b_categ_rez TO authenticated;
+SELECT pg_temp.dry1022b_buget('sonda fara contact');
+DO $sonda$
+DECLARE v uuid := gen_random_uuid();
+BEGIN
+  PERFORM pg_temp.dry1022b_verifica('postgres');
+  IF EXISTS (SELECT 1 FROM public.red_detinatori_contact c WHERE c.detinator_id = v) OR EXISTS (SELECT 1 FROM public.red_detinatori d WHERE d.id = v) THEN
+    RAISE EXCEPTION 'dry 1022b: sonda fara contact — id-ul aleator exista deja (se reia proba)'; END IF;
+  PERFORM pg_temp.dry1022b_buget('sonda fara contact (dupa citire)');
+  INSERT INTO pg_temp.dry1022b_sonda VALUES (v);
+END $sonda$;
 -- paritatea ramurii FARA_ADRESA_AFISARE: predicatul nou din vedere (NOT IN pe fn_red_detinatori_cu_adresa) față de rezultatul
--- funcției vechi salvat ÎNAINTE în aceeași ipostază, pe TOȚI deținătorii activi (nu doar pe cei ajunși la ramurile 11 / 12)
+-- funcției vechi salvat ÎNAINTE în aceeași ipostază, pe TOȚI deținătorii activi (nu doar pe cei ajunși la ramurile 11 / 12);
+-- plus sonda fără contact, în aceeași ipostază (funcția veche e aceeași înainte / după, deci se evaluează acum)
 CREATE FUNCTION pg_temp.dry1022b_paritate_adresa(p_rol text) RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 DECLARE m bigint; n bigint; c_da bigint; c_nu bigint; c_fara bigint; n_veche bigint; n_lista bigint; n_vedere bigint;
+        s_id uuid; s_veche boolean; s_in_lista boolean; v_lipsa text;
 BEGIN
   IF NOT pg_temp.dry1022b_verifica(p_rol) THEN RAISE NOTICE 'dry 1022b: paritate adresa % sarita (niciun cont cu acest nivel)', p_rol; RETURN; END IF;
   SELECT count(*),
@@ -40,10 +68,24 @@ BEGIN
     INTO m, n, c_da, c_nu, c_fara, n_veche
     FROM pg_temp.dry1022b_adresa a WHERE a.rol = p_rol;
   PERFORM pg_temp.dry1022b_buget(format('paritate adresa %s', p_rol));
-  RAISE NOTICE 'dry 1022b: paritate adresa %: % detinatori (adresa da %, adresa nu %, fara contact %), % diferente', p_rol, m, c_da, c_nu, c_fara, n;
+  -- sonda: funcția veche și lista nouă pe id-ul fără contact, ca utilizatorul acestei ipostaze
+  SELECT s.id INTO s_id FROM pg_temp.dry1022b_sonda s;
+  IF s_id IS NULL THEN RAISE EXCEPTION 'dry 1022b: lipseste sonda fara contact'; END IF;
+  s_veche := public.fn_red_adresa_cunoscuta(s_id);
+  s_in_lista := s_id IN (SELECT x.d FROM public.fn_red_detinatori_cu_adresa() x(d));
+  PERFORM pg_temp.dry1022b_buget(format('sonda fara contact %s', p_rol));
+  RAISE NOTICE 'dry 1022b: paritate adresa %: % detinatori (adresa da %, adresa nu %, fara contact %), % diferente; sonda fara contact: veche %, in lista noua %',
+    p_rol, m, c_da, c_nu, c_fara, n, coalesce(s_veche::text, 'NULL'), coalesce(s_in_lista::text, 'NULL');
   IF n <> 0 THEN RAISE EXCEPTION 'dry 1022b: % — ramura FARA_ADRESA_AFISARE difera de fn_red_adresa_cunoscuta pe % detinatori', p_rol, n; END IF;
-  IF c_da = 0 OR c_nu = 0 OR c_fara = 0 THEN
-    RAISE EXCEPTION 'dry 1022b: % — paritate adresa NEACOPERITA (adresa da %, adresa nu %, fara contact %): proba nu dovedeste echivalenta', p_rol, c_da, c_nu, c_fara; END IF;
+  -- fără niciun deținător comparația nu dovedește nimic
+  IF m = 0 THEN RAISE EXCEPTION 'dry 1022b: % — paritate adresa fara niciun detinator: proba nu dovedeste nimic', p_rol; END IF;
+  -- sonda: fără rând de contact funcția veche dă NULL în ambele porți (deci ramura 11), iar id-ul NU e în lista nouă (NOT IN = adevărat,
+  -- deci tot ramura 11); NULL la „in lista” ar însemna o listă cu NULL, adică NOT IN nedeterminat — refuz
+  IF s_veche IS NOT NULL OR s_in_lista IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'dry 1022b: % — sonda fara contact: functia veche = %, in lista noua = % (asteptat NULL / false)', p_rol, coalesce(s_veche::text, 'NULL'), coalesce(s_in_lista::text, 'NULL'); END IF;
+  -- r12: categorie fără cazuri în date = NOTICE (și în mesajul final), nu refuz; 0 diferențe (mai sus) rămâne condiția tare
+  v_lipsa := concat_ws(', ', CASE WHEN c_da = 0 THEN 'adresa da' END, CASE WHEN c_nu = 0 THEN 'adresa nu' END, CASE WHEN c_fara = 0 THEN 'fara contact' END);
+  IF v_lipsa <> '' THEN RAISE NOTICE 'dry 1022b: % — categorie neacoperita de date: % (0 detinatori activi)', p_rol, v_lipsa; END IF;
   IF p_rol = 'fara_drept' THEN
     -- poarta închisă: funcția veche dă NULL peste tot, lista nouă e goală, vederea nu arată nimic
     SELECT count(*) INTO n_lista FROM public.fn_red_detinatori_cu_adresa();
@@ -54,6 +96,9 @@ BEGIN
   ELSIF n_veche <> 0 THEN
     RAISE EXCEPTION 'dry 1022b: % — functia veche nu corespunde categoriei pe % detinatori (poarta deschisa)', p_rol, n_veche;
   END IF;
+  -- ultimul pas: paritatea acestei ipostaze s-a încheiat fără refuz (comparația finală cere rândul sondei pe fiecare ipostază cu cont)
+  INSERT INTO pg_temp.dry1022b_categ_rez VALUES (p_rol, 'adresa_da', c_da), (p_rol, 'adresa_nu', c_nu), (p_rol, 'fara_contact', c_fara),
+    (p_rol, 'sonda_fara_contact', 1);
 END $f$;
 REVOKE ALL ON FUNCTION pg_temp.dry1022b_paritate_adresa(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION pg_temp.dry1022b_paritate_adresa(text) TO authenticated;
@@ -133,7 +178,7 @@ SELECT pg_temp.dry1022b_identitate('postgres');
 -- 4. comparația și refuzul (doar tabelele temporare ale probei)
 SELECT pg_temp.dry1022b_buget('comparatie');
 DO $compara$
-DECLARE r record; n_ia bigint; n_ai bigint; n_in bigint; erori text[] := ARRAY[]::text[];
+DECLARE r record; n_ia bigint; n_ai bigint; n_in bigint; erori text[] := ARRAY[]::text[]; v_neacoperit text;
 BEGIN
   FOR r IN SELECT rol, vedere, cod, max(randuri) FILTER (WHERE faza = 'inainte') AS rand_i, max(ms) FILTER (WHERE faza = 'inainte') AS ms_i,
                   max(randuri) FILTER (WHERE faza = 'dupa') AS rand_d, max(ms) FILTER (WHERE faza = 'dupa') AS ms_d
@@ -155,6 +200,12 @@ BEGIN
   -- paritatea adresei a rulat în fiecare ipostază cu cont (inclusiv poarta închisă)
   IF EXISTS (SELECT 1 FROM pg_temp.dry1022b_util u WHERE NOT EXISTS (SELECT 1 FROM pg_temp.dry1022b_adresa a WHERE a.rol = u.rol)) THEN
     erori := erori || 'paritatea adresei lipseste pentru o ipostaza cu cont'::text; END IF;
+  -- r12: paritatea (cu sonda fără contact) s-a încheiat în fiecare ipostază cu cont; categoriile fără cazuri în date se raportează
+  IF EXISTS (SELECT 1 FROM pg_temp.dry1022b_util u WHERE NOT EXISTS (SELECT 1 FROM pg_temp.dry1022b_categ_rez k WHERE k.rol = u.rol AND k.categ = 'sonda_fara_contact')) THEN
+    erori := erori || 'paritatea adresei / sonda fara contact neincheiata pentru o ipostaza cu cont'::text; END IF;
+  v_neacoperit := (SELECT string_agg(DISTINCT replace(k.categ, '_', ' '), ', ') FROM pg_temp.dry1022b_categ_rez k WHERE k.cazuri = 0);
+  RAISE NOTICE 'ACOPERIRE adresa: categorii neacoperite de date = %; ramura fara contact verificata pe sonda in % ipostaze',
+    coalesce(v_neacoperit, 'niciuna'), (SELECT count(*) FROM pg_temp.dry1022b_categ_rez WHERE categ = 'sonda_fara_contact');
   -- EXCEPT ALL bilateral pe amprente, pe fiecare (ipostază, vedere, proiect)
   FOR r IN SELECT DISTINCT rol, vedere, cod FROM pg_temp.dry1022b_timp ORDER BY 1, 2, 3 LOOP
     SELECT count(*) INTO n_ia FROM (SELECT amprenta FROM pg_temp.dry1022b_rez WHERE faza = 'inainte' AND rol = r.rol AND vedere = r.vedere AND cod = r.cod
@@ -192,5 +243,6 @@ BEGIN
     erori := erori || 'lipseste masuratoarea owner / centralizator / LOT1'::text; END IF;
   IF cardinality(erori) > 0 THEN RAISE EXCEPTION 'dry 1022b: NU se aplica — %', array_to_string(erori, ' | '); END IF;
   PERFORM pg_temp.dry1022b_buget('comparatie');
-  RAISE NOTICE 'dry 1022b: OK — aceleasi randuri in fiecare ipostaza, paritati OK (adresa pe toate categoriile, poarta inchisa), LOT1 sub 5 s ca utilizator logat, fereastra sub 120 s';
+  RAISE NOTICE 'dry 1022b: OK — aceleasi randuri in fiecare ipostaza, paritati OK (adresa: 0 diferente, sonda fara contact, poarta inchisa; categorii neacoperite de date: %), LOT1 sub 5 s ca utilizator logat, fereastra sub 120 s',
+    coalesce(v_neacoperit, 'niciuna');
 END $compara$;
