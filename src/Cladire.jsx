@@ -80,23 +80,70 @@ function ServerGpu({ dispozitiv }) {
   </div>
 }
 
-// Limite cont Antigravity (task orar pe serverul AI → metrics.json → sonda Terra → iot-retea). Procent rămas + reset (epoch s).
-const AI_PROCENTE = ['ai_gemini_ramas_pct', 'ai_claude_ramas_pct', 'ai_codex_ramas_pct', 'ai_anthropic_saptamana_ramas_pct',
-  'ai_anthropic_saptamana_fable_ramas_pct', 'ai_anthropic_sesiune_ramas_pct']
+// Limite cont (monitorul orar de pe serverul AI → metrics.json → sonda Terra → iot-retea). Procent rămas + reset.
+// Reset: epoch în secunde (…_reset_s, uniform pentru toate conturile); fără el, textul vechi (…_reset: ISO sau text liber).
+// Un rând pe cont, cu sub-rânduri (Fable / sesiune). Cheie lipsă = „—”, niciodată 0 (L18).
+export const COTE_AI = [
+  { et:'Claude (cont principal)', pct:'ai_anthropic_saptamana_ramas_pct', rs:'ai_anthropic_saptamana_reset_s', rt:'ai_anthropic_saptamana_reset', sub:[
+    { et:'Fable', pct:'ai_anthropic_saptamana_fable_ramas_pct', rs:'ai_anthropic_saptamana_fable_reset_s', rt:'ai_anthropic_saptamana_fable_reset' },
+    { et:'sesiune', pct:'ai_anthropic_sesiune_ramas_pct', rs:null, rt:'ai_anthropic_sesiune_reset' }] },
+  { et:'Rocky (redari@)', pct:'ai_redari_saptamana_ramas_pct', rs:'ai_redari_saptamana_reset_s', rt:'ai_redari_saptamana_reset', sub:[
+    { et:'Fable', pct:'ai_redari_saptamana_fable_ramas_pct', rs:'ai_redari_saptamana_fable_reset_s', rt:'ai_redari_saptamana_fable_reset' }] },
+  { et:'Codex', pct:'ai_codex_ramas_pct', rs:'ai_codex_reset_s', rt:'ai_codex_reset' },
+  { et:'Gemini', pct:'ai_gemini_ramas_pct', rs:'ai_gemini_reset_s', rt:null },
+  { et:'Claude/GPT (Antigravity)', pct:'ai_claude_ramas_pct', rs:'ai_claude_reset_s', rt:null },
+]
+const AI_PROCENTE = COTE_AI.flatMap(c => [c.pct, ...(c.sub || []).map(s => s.pct)])
 export const areLimiteAi = (x) => x?.meta?.tip === 'server' && AI_PROCENTE.some(k => Number.isFinite(x?.ultima_citire?.[k]))
+// Păstrată pentru compatibilitate (are test): doar distanța până la reset.
 export const textReset = (sec, acum = Date.now()) => {
   if (!Number.isFinite(sec)) return ''
   const ore = (sec * 1000 - acum) / 3600e3
   return ore <= 0 ? 'reset trecut' : ore < 24 ? `reset în ${Math.ceil(ore)} h` : `reset în ${Math.round(ore / 24)} z`
 }
-function LimiteAi({ r }) {
-  const cul = (p) => !Number.isFinite(p) ? G.dim : p < 15 ? G.red : p < 30 ? G.yellow : G.green
-  // reset: epoch secunde (Antigravity), ISO (Codex) sau text liber ora București (Anthropic) — textul se afișează ca atare
-  const rst = (v) => typeof v === 'number' ? textReset(v) : typeof v === 'string' && /^\d{4}-/.test(v) ? textReset(Date.parse(v) / 1000) : typeof v === 'string' ? `reset ${v}` : ''
-  const una = (k, rk, et) => Number.isFinite(r[k]) && <span key={k} style={{ marginLeft:8 }}>{et} <b style={{ color:cul(r[k]) }}>{nr(r[k], 0)}%</b>{rst(r[rk]) && <span style={{ color:G.dim }}> ({rst(r[rk])})</span>}</span>
-  return <div style={{ fontSize:11, color:G.dim, padding:'0 0 4px 12px' }}>🤖 Limite AI{una('ai_gemini_ramas_pct', 'ai_gemini_reset_s', 'Gemini')}{una('ai_claude_ramas_pct', 'ai_claude_reset_s', '· Claude/GPT')}
-    {una('ai_codex_ramas_pct', 'ai_codex_reset', '· Codex')}{una('ai_anthropic_saptamana_ramas_pct', 'ai_anthropic_saptamana_reset', '· Anthropic săpt.')}
-    {una('ai_anthropic_saptamana_fable_ramas_pct', 'ai_anthropic_saptamana_fable_reset', '· Fable săpt.')}{una('ai_anthropic_sesiune_ramas_pct', 'ai_anthropic_sesiune_reset', '· sesiune')}</div>
+const FMT_RESET = new Intl.DateTimeFormat('ro-RO', { timeZone:'Europe/Bucharest', weekday:'long', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' })
+// Ziua și ora resetării, ora României: „vineri 13.11, 10:00 (în 4 z)”; trecut: „… (trecut)”; lipsă / invalid: ''.
+export const textDataReset = (sec, acum = Date.now()) => {
+  if (!Number.isFinite(sec) || sec <= 0) return ''
+  const d = new Date(sec * 1000)
+  if (!Number.isFinite(d.getTime())) return ''
+  const p = Object.fromEntries(FMT_RESET.formatToParts(d).map(x => [x.type, x.value]))
+  const ore = (sec * 1000 - acum) / 3600e3
+  const rel = ore <= 0 ? 'trecut' : ore < 24 ? `în ${Math.ceil(ore)} h` : `în ${Math.round(ore / 24)} z`
+  return `${p.weekday} ${p.day}.${p.month}, ${p.hour}:${p.minute} (${rel})`
+}
+// Resetul unui cont: epoch-ul (…_reset_s) are prioritate; altfel textul vechi (epoch numeric, ISO sau text liber afișat ca atare); altfel „—”.
+export const textResetCont = (r = {}, rs, rt, acum = Date.now()) => {
+  const din = rs ? textDataReset(r[rs], acum) : ''
+  if (din) return din
+  const v = rt ? r[rt] : undefined
+  if (typeof v === 'number') return textDataReset(v, acum) || '—'
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return textDataReset(Date.parse(v) / 1000, acum) || '—'
+  if (typeof v === 'string' && v.trim()) return v.trim()
+  return '—'
+}
+// Culoarea cotei: verde > 40 %, galben 15–40 %, roșu < 15 %; valoare lipsă sau în afara 0–100 = „lipsa”.
+export const nivelCota = (p) => !Number.isFinite(p) || p < 0 || p > 100 ? 'lipsa' : p < 15 ? 'rosu' : p <= 40 ? 'galben' : 'verde'
+const CULORI_COTA = { lipsa: G.dim, rosu: G.red, galben: G.yellow, verde: G.green }
+function RandCota({ et, p, reset, sub = false }) {
+  const n = nivelCota(p), col = CULORI_COTA[n]
+  return <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', padding: sub ? '1px 0 1px 14px' : '4px 0 1px' }}>
+    <span style={{ minWidth: sub ? 126 : 140, color: sub ? G.dim : G.muted, fontWeight: sub ? 400 : 600 }}>{et}</span>
+    <span role="meter" aria-label={et} aria-valuemin={0} aria-valuemax={100} aria-valuenow={n === 'lipsa' ? undefined : p}
+      style={{ display:'inline-block', width:100, height:6, background:G.border, borderRadius:3, overflow:'hidden' }}>
+      <span style={{ display:'block', width: n === 'lipsa' ? 0 : `${p}%`, height:'100%', background:col }} />
+    </span>
+    <b style={{ color:col, minWidth:34 }}>{n === 'lipsa' ? '—' : `${nr(p, 0)}%`}</b>
+    <span style={{ color:G.dim }}>{reset === '—' ? '—' : `reset ${reset}`}</span>
+  </div>
+}
+export function LimiteAi({ r = {}, acum = Date.now() }) {
+  return <div style={{ fontSize:11, color:G.dim, padding:'0 0 4px 12px' }}>🤖 Limite AI
+    {COTE_AI.map(c => <div key={c.pct}>
+      <RandCota et={c.et} p={r[c.pct]} reset={textResetCont(r, c.rs, c.rt, acum)} />
+      {(c.sub || []).map(s => <RandCota key={s.pct} sub et={s.et} p={r[s.pct]} reset={textResetCont(r, s.rs, s.rt, acum)} />)}
+    </div>)}
+  </div>
 }
 
 // Mini-grafic comun pentru centrală și Terra; fiecare serie ignoră valorile lipsă.
