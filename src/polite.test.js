@@ -3,8 +3,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   normalizeazaPropunere, EroarePolita, CAMPURI_PROPUNERE, dataExpirarePropusa, situatiePolita, grupeazaPeDestinatar, mailPolite,
-  cheieIdempotenta, stareDupaTrimitere, dataValida, sumaValida, promptPolita, formDinPropunere, mesajEroare, linkDestinatar,
+  cheieIdempotenta, stareDupaTrimitere, dataValida, sumaValida, promptPolita, formDinPropunere, mesajEroare, linkDestinatar, aplicaPropunere,
 } from './polite.js'
+
+describe('aplicaPropunere (r2, Jakarinos r1 P2-4)', () => {
+  it('PDF A propune suma 100, PDF B o respinge: suma lui A nu ramane langa B', () => {
+    const initial = { nr_polita: '', valoare_lei: '', asigurator: '' }
+    const a = formDinPropunere({ campuri: { nr_polita: 'A-1', suma: 100 }, dezacorduri: [] }, 'polita', { valoare: 'valoare_lei' })
+    let form = aplicaPropunere({ ...initial, asigurator: 'scris de mana' }, initial, [], a.valori)
+    expect(form).toEqual({ nr_polita: 'A-1', valoare_lei: '100', asigurator: 'scris de mana' })
+    const b = formDinPropunere({ campuri: { nr_polita: 'B-2' }, dezacorduri: [{ camp: 'suma', motiv: 'format_invalid' }] }, 'polita', { valoare: 'valoare_lei' })
+    form = aplicaPropunere(form, initial, a.propuse, b.valori)
+    expect(form).toEqual({ nr_polita: 'B-2', valoare_lei: '', asigurator: 'scris de mana' })
+    expect(b.nesigure).toEqual(['valoare_lei'])
+    // schimbarea PDF-ului fara citire noua (propunere null): campurile lui A revin la initial
+    expect(aplicaPropunere(form, initial, b.propuse, null)).toEqual({ nr_polita: '', valoare_lei: '', asigurator: 'scris de mana' })
+  })
+})
 
 const radacina = path.resolve(__dirname, '..')
 const citeste = f => fs.readFileSync(path.join(radacina, f), 'utf8').replace(/\r/g, '')
@@ -29,19 +44,19 @@ describe('normalizeazaPropunere', () => {
   it('golește campurile fara citat, cu format gresit sau peste limita (nu taie)', () => {
     const r = normalizeazaPropunere({ este_polita: true, campuri: {
       nr_polita: { valoare: 'X1' }, data_emitere: c('2026-02-30'), suma: c('1.000,50'), asigurator: c('A'.repeat(201)),
-      tip: c('bună execuție'), moneda: c('USD'), nr_act: c(0), suma2: c(1),
+      tip: c('bună execuție'), moneda: c('USD'), nr_act: c(0), suma2: c(1), garantie_pana_la: c('2028-01-01'),
     } })
-    expect(r.campuri).toEqual({ este_act_aditional: false, dovezi: {} })
+    expect(r.campuri).toEqual({ garantie_pana_la: '2028-01-01', este_act_aditional: false, dovezi: { garantie_pana_la: { pagina: 1, citat: 'text' } } })
     expect(r.dezacorduri.map(d => `${d.camp}:${d.motiv}`).sort()).toEqual(
       ['asigurator:prea_lung', 'data_emitere:format_invalid', 'moneda:format_invalid', 'nr_act:format_invalid', 'nr_polita:fara_dovada', 'suma:format_invalid', 'tip:format_invalid'])
   })
   it('perioada inversata = ambele capete nesigure', () => {
-    const r = normalizeazaPropunere({ este_polita: true, campuri: { garantie_de_la: c('2027-01-01'), garantie_pana_la: c('2026-01-01') } })
+    const r = normalizeazaPropunere({ este_polita: true, campuri: { garantie_de_la: c('2027-01-01'), garantie_pana_la: c('2026-01-01'), asigurator: c('A') } })
     expect(r.campuri.garantie_de_la).toBeUndefined()
     expect(r.dezacorduri).toEqual([{ camp: 'garantie', motiv: 'perioada_inversata' }])
   })
   it('pagina in afara celor citite sau citat prea lung = fara dovada', () => {
-    const r = normalizeazaPropunere({ este_polita: true, campuri: { nr_polita: c('A', 'x', 3), asigurator: c('B', 'y'.repeat(301)) } })
+    const r = normalizeazaPropunere({ este_polita: true, campuri: { nr_polita: c('A', 'x', 3), asigurator: c('B', 'y'.repeat(301)), data_emitere: c('2025-01-01') } })
     expect(r.dezacorduri.map(d => d.motiv)).toEqual(['fara_dovada', 'fara_dovada'])
   })
   it('refuza raspunsurile care nu sunt polita sau nu sunt obiecte', () => {
@@ -49,6 +64,11 @@ describe('normalizeazaPropunere', () => {
     expect(() => normalizeazaPropunere([])).toThrow('raspuns_invalid')
     expect(() => normalizeazaPropunere(null)).toThrow('raspuns_invalid')
     expect(() => normalizeazaPropunere({ campuri: {} })).toThrow('nu_e_polita')
+    // r2 (Jakarinos r1 P2-10): fara niciun camp util = citire goala; indicator de act invalid / campuri lipsa = raspuns invalid
+    expect(() => normalizeazaPropunere({ este_polita: true, campuri: {} })).toThrow('citire_goala')
+    expect(() => normalizeazaPropunere({ este_polita: true, campuri: { tip: c('CAR'), moneda: c('RON') } })).toThrow('citire_goala')
+    expect(() => normalizeazaPropunere({ este_polita: true, este_act_aditional: 'da', campuri: { nr_polita: c('A') } })).toThrow('raspuns_invalid')
+    expect(() => normalizeazaPropunere({ este_polita: true })).toThrow('raspuns_invalid')
   })
   it('act aditional: numarul actului si polita de baza', () => {
     const r = normalizeazaPropunere({ este_polita: true, este_act_aditional: true, campuri: { nr_act: c('5'), polita_baza_nr: c('H35416'), valabila_pana_la: c('2027-06-30') } })

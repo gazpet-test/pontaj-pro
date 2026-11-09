@@ -24,7 +24,8 @@ BEGIN
              public.polite_alerte_destinatari, public.polite_alerte_config, public.polite_alerte_jurnal IN ACCESS EXCLUSIVE MODE NOWAIT;
   --AMPRENTA_INCEPUT
   SELECT md5(concat_ws(E'\n',
-    (SELECT string_agg(format('%s.%s:%s:%s:%s', a.attrelid::regclass, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-')), ';' ORDER BY a.attrelid::regclass::text, a.attnum)
+    (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', a.attrelid::regclass, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-'),
+                              coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(a.attacl) x), '-')), ';' ORDER BY a.attrelid::regclass::text, a.attnum)
        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
       WHERE a.attnum > 0 AND NOT a.attisdropped
         AND (a.attrelid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass, 'public.polite_alerte_jurnal'::regclass)
@@ -43,19 +44,23 @@ BEGIN
        FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
       WHERE ic.relname IN ('polite_propuneri_stare_idx', 'contracte_polite_propunere_uidx', 'contracte_polite_acte_propunere_uidx', 'garantii_contract_polita_uidx',
                            'polite_dest_unic_uidx', 'polite_jurnal_cheie_uidx', 'polite_jurnal_creat_idx')),
-    (SELECT string_agg(format('%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity), ';' ORDER BY r.relname)
+    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity,
+                              coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(r.relacl) x), '-'), coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
-                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass)),
-    (SELECT string_agg(format('%s.%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || '|' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')), ';' ORDER BY p.polrelid::regclass::text, p.polname)
+                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.polite_propuneri_id_seq'::regclass,
+                                       'public.polite_alerte_destinatari_id_seq'::regclass, 'public.polite_alerte_jurnal_id_seq'::regclass)),
+    (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, p.polpermissive,
+                              (SELECT string_agg(rl::regrole::text, ',' ORDER BY rl::regrole::text) FROM unnest(p.polroles) rl),
+                              coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || '|' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')), ';' ORDER BY p.polrelid::regclass::text, p.polname)
        FROM pg_policy p WHERE p.polrelid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass, 'public.polite_alerte_jurnal'::regclass)),
-    (SELECT string_agg(format('%s.%s:%s:%s:%s', t.tgrelid::regclass, t.tgname, t.tgtype, t.tgfoid::regprocedure, t.tgenabled), ';' ORDER BY t.tgrelid::regclass::text, t.tgname)
+    (SELECT string_agg(format('%s:%s:%s', pg_get_triggerdef(t.oid), t.tgfoid::regprocedure, t.tgenabled), ';' ORDER BY t.tgrelid::regclass::text, t.tgname)
        FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal),
     md5(replace(pg_get_viewdef('public.v_polite_scadente'::regclass), chr(13), '')),
-    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, coalesce(array_to_string(p.proconfig, ','), '-'),
+    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, p.proisstrict, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-        AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite')),
+        AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
        FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic'))) INTO v_amprenta;
   --AMPRENTA_SFARSIT
@@ -94,10 +99,16 @@ BEGIN
                                     'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass)
                      OR d.refobjid IN (SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
                                          AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite'))
-                     OR (d.refobjid IN ('public.contracte_polite'::regclass, 'public.contracte_polite_acte'::regclass, 'public.garantii'::regclass)
-                         AND d.refobjsubid IN (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = d.refobjid
-                                                 AND a.attname IN ('moneda', 'executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la',
-                                                                   'pdf_sha256', 'sursa', 'propunere_id', 'contract_polita_id'))))) THEN
+                     -- r2 (Jakarinos r1 P1-2): doar perechile tabela + coloana create de 20261205a (garantii.moneda exista dinainte)
+                     OR (d.refobjid, d.refobjsubid) IN (SELECT a.attrelid, a.attnum FROM pg_attribute a JOIN (VALUES
+                            ('public.contracte_polite'::regclass, 'moneda'), ('public.contracte_polite'::regclass, 'executie_de_la'), ('public.contracte_polite'::regclass, 'executie_pana_la'),
+                            ('public.contracte_polite'::regclass, 'garantie_de_la'), ('public.contracte_polite'::regclass, 'garantie_pana_la'), ('public.contracte_polite'::regclass, 'pdf_sha256'),
+                            ('public.contracte_polite'::regclass, 'sursa'), ('public.contracte_polite'::regclass, 'propunere_id'),
+                            ('public.contracte_polite_acte'::regclass, 'executie_de_la'), ('public.contracte_polite_acte'::regclass, 'executie_pana_la'),
+                            ('public.contracte_polite_acte'::regclass, 'garantie_de_la'), ('public.contracte_polite_acte'::regclass, 'garantie_pana_la'),
+                            ('public.contracte_polite_acte'::regclass, 'pdf_sha256'), ('public.contracte_polite_acte'::regclass, 'sursa'),
+                            ('public.contracte_polite_acte'::regclass, 'propunere_id'), ('public.garantii'::regclass, 'contract_polita_id')) v(t, c)
+                          ON a.attrelid = v.t AND a.attname = v.c AND NOT a.attisdropped))) THEN
     RAISE EXCEPTION '20261205a revenire: alta vedere depinde de obiectele 20261205a';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
@@ -166,9 +177,12 @@ BEGIN
      OR to_regclass('public.v_polite_scadente') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
                   AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite'))
-     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid IN ('public.contracte_polite'::regclass, 'public.contracte_polite_acte'::regclass, 'public.garantii'::regclass)
-                  AND NOT a.attisdropped AND a.attname IN ('moneda', 'executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la', 'pdf_sha256', 'sursa',
-                                                           'propunere_id', 'contract_polita_id'))
+     -- r2 (Jakarinos r1 P1-2): pe tabela, doar coloanele create de 20261205a (garantii.moneda exista dinainte si ramane)
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.contracte_polite'::regclass AND NOT a.attisdropped
+                  AND a.attname IN ('moneda', 'executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la', 'pdf_sha256', 'sursa', 'propunere_id'))
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.contracte_polite_acte'::regclass AND NOT a.attisdropped
+                  AND a.attname IN ('executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la', 'pdf_sha256', 'sursa', 'propunere_id'))
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.garantii'::regclass AND NOT a.attisdropped AND a.attname = 'contract_polita_id')
      OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal)
      OR EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_zilnic') THEN
     RAISE EXCEPTION '20261205a revenire: au ramas obiecte 20261205a';

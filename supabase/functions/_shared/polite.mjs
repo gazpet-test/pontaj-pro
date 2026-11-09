@@ -64,7 +64,10 @@ export function sumaValida(v) {
 export function normalizeazaPropunere(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new EroarePolita('raspuns_invalid')
   if (raw.este_polita !== true) throw new EroarePolita('nu_e_polita')
-  const intrare = raw.campuri && typeof raw.campuri === 'object' && !Array.isArray(raw.campuri) ? raw.campuri : {}
+  // r2 (Jakarinos r1 P2-10): indicatorul de act, daca e dat, trebuie sa fie boolean; „campuri” lipsa / nu-obiect = raspuns invalid
+  if (raw.este_act_aditional !== undefined && typeof raw.este_act_aditional !== 'boolean') throw new EroarePolita('raspuns_invalid')
+  if (!raw.campuri || typeof raw.campuri !== 'object' || Array.isArray(raw.campuri)) throw new EroarePolita('raspuns_invalid')
+  const intrare = raw.campuri
   const campuri = {}, dovezi = {}, dezacorduri = []
   const respinge = (camp, motiv) => dezacorduri.push({ camp, motiv })
   for (const camp of CAMPURI_PROPUNERE) {
@@ -97,6 +100,9 @@ export function normalizeazaPropunere(raw) {
       respinge(a.replace('_de_la', ''), 'perioada_inversata')
     }
   }
+  // nicio valoare utila citita (nici numar, nici asigurator, nici suma, nici o data) = citire goala, nu propunere (L21)
+  const utile = ['nr_polita', 'asigurator', 'suma', 'nr_act', 'polita_baza_nr', ...CAMPURI_DATA].filter(k => campuri[k] != null)
+  if (!utile.length) throw new EroarePolita('citire_goala')
   const este_act = raw.este_act_aditional === true
   return { este_act, campuri: { ...campuri, este_act_aditional: este_act, dovezi }, dezacorduri }
 }

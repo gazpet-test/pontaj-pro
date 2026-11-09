@@ -52,6 +52,15 @@ function formCanonic(propunere, tinta) {
   return { valori: f, propuse: Object.keys(f), nesigure: (propunere?.dezacorduri || []).flatMap(d => harta[d.camp] || [d.camp]) }
 }
 
+// r2 (Jakarinos r1 P2-4): aplicarea unei propuneri NOI pe formular. Câmpurile completate de propunerea ANTERIOARĂ (alt PDF) revin întâi
+// la valoarea inițială, apoi se pun valorile noii propuneri — nicio valoare din documentul vechi nu rămâne lângă documentul nou.
+export function aplicaPropunere(form, initial, propuseVechi = [], valoriNoi = {}) {
+  const f = { ...form }
+  for (const k of propuseVechi) if (Object.prototype.hasOwnProperty.call(initial, k)) f[k] = initial[k]
+  for (const [k, v] of Object.entries(valoriNoi || {})) f[k] = v == null ? '' : String(v)
+  return f
+}
+
 // codurile din RPC / edge → mesaj pentru om (fără termeni tehnici)
 const MESAJE = {
   fara_drept: 'Nu ai drept să salvezi polițe.',
@@ -74,6 +83,9 @@ const MESAJE = {
   nu_e_polita: 'Documentul nu pare a fi o poliță sau un act adițional. Completează manual.',
   pdf_invalid: 'PDF-ul nu poate fi deschis (protejat cu parolă sau deteriorat).',
   pdf_prea_mare: 'PDF-ul e prea mare pentru citire. Completează manual.',
+  polita_incompleta_pentru_registru: 'Polița e legată în Registrul garanțiilor: trebuie să aibă asigurător, nr. și valoare (și după actele adiționale).',
+  citire_goala: 'Din document nu s-a putut citi niciun câmp util. Completează manual.',
+  raspuns_invalid: 'Documentul nu a putut fi citit. Completează manual.',
   fara_proba: 'Rulează întâi proba (cine ce ar primi).',
   proba_veche: 'Proba are mai mult de 24 de ore. Rulează-o din nou.',
   doar_owner: 'Doar owner-ul poate face asta.',

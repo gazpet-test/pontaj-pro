@@ -16,18 +16,27 @@ const FROM = 'PontajPRO <rapoarte@gazpet.ro>'
 const APP = 'https://pontaj-pro-sooty.vercel.app'
 const ziRO = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date())
 
+// ora din Romania (0–23): cronul ruleaza la 04:15 si 05:15 UTC, iar trimiterea pleaca doar la ora 7 locala (iarna si vara)
+const oraRO = () => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', hourCycle: 'h23' }).format(new Date()))
+
 Deno.serve(async (req) => {
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  if (!(await cronSauOwner(req, sb))) return json({ ok: false, error: 'neautorizat' }, 401)
+  const apelant = await cronSauOwner(req, sb)
+  if (!apelant) return json({ ok: false, error: 'neautorizat' }, 401)
+  if (apelant === 'cron' && oraRO() !== 7) return json({ ok: true, skip: 'ora' })
   const resend = Deno.env.get('RESEND_API_KEY')
   // fara cheie nu se rezerva nimic (altfel randurile ar ramane „rezervat” fara sa plece)
   if (!resend) return json({ ok: false, error: 'resend_neconfigurat' }, 500)
 
-  const { data: randuri, error } = await sb.rpc('fn_polite_alerte_rezerva', {})
+  // un singur jsonb {activ, zi, n, randuri}: nu e taiat de plafonul de randuri; n trebuie sa fie exact lungimea listei
+  const { data: rez, error } = await sb.rpc('fn_polite_alerte_rezerva', {})
   if (error) { console.error('rezervare', error.code); return json({ ok: false, error: 'rezervare_indisponibila' }, 500) }
-  if (!Array.isArray(randuri) || randuri.length === 0) return json({ ok: true, destinatari: 0, trimise: 0 })
+  const randuri = rez?.randuri
+  if (!rez || !Array.isArray(randuri) || rez.n !== randuri.length) { console.error('rezervare incompleta'); return json({ ok: false, error: 'rezervare_incompleta' }, 500) }
+  if (rez.activ !== true) return json({ ok: true, skip: 'oprit' })
+  if (randuri.length === 0) return json({ ok: true, destinatari: 0, trimise: 0 })
 
-  const zi = ziRO()
+  const zi = typeof rez.zi === 'string' ? rez.zi : ziRO()
   const grupe = grupeazaPeDestinatar(randuri)
   const contor = { trimis: 0, eroare: 0, necunoscut: 0, nemarcat: 0 }
   for (const g of grupe) {

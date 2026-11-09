@@ -321,31 +321,47 @@ CREATE TRIGGER trg_polite_provenienta BEFORE INSERT OR UPDATE ON public.contract
 CREATE TRIGGER trg_polite_provenienta BEFORE INSERT OR UPDATE ON public.contracte_polite_acte
   FOR EACH ROW EXECUTE FUNCTION public.fn_polite_provenienta();
 
--- randul din Registru legat: campurile documentului vin din polita (sursa unica)
+-- randul din Registru legat: campurile documentului vin din polita (sursa unica), copiate EXACT (fara pastrarea valorilor vechi).
+-- r2 (Jakarinos r1 P1-3): la LEGARE (INSERT sau schimbarea contract_polita_id) polita se blocheaza FOR SHARE inaintea citirii: o
+-- modificare concurenta a politei (UPDATE = lock NO KEY UPDATE) sau a actelor ei (triggerul AFTER ia FOR UPDATE pe polita) se termina
+-- intai, iar citirea de dupa lock vede versiunea confirmata; invers, modificarea asteapta legarea si apoi o reimprospateaza.
+-- Pe randurile deja legate nu se blocheaza (actualizarea concurenta a politei le recopiaza dupa COMMIT-ul nostru) => fara deadlock
+-- garantii -> polita fata de calea polita -> garantii.
+-- r2 (Jakarinos r1 P2-5): polita fara asigurator / nr. / valoare (inclusiv dupa stergerea ultimului act cu valoare) sau de tip „altul”
+-- nu poate avea rand in Registru: refuz explicit, nu valoarea veche pastrata tacit.
 CREATE FUNCTION public.fn_polite_garantii_din_polita() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_p record; v_exp date; v_val numeric;
 BEGIN
   IF NEW.contract_polita_id IS NULL THEN RETURN NEW; END IF;
+  IF TG_OP = 'INSERT' OR OLD.contract_polita_id IS DISTINCT FROM NEW.contract_polita_id THEN
+    PERFORM 1 FROM public.contracte_polite cp WHERE cp.id = NEW.contract_polita_id FOR SHARE;
+  END IF;
   SELECT cp.* INTO v_p FROM public.contracte_polite cp WHERE cp.id = NEW.contract_polita_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'polita_inexistenta' USING ERRCODE = '23503'; END IF;
   SELECT max(a.data_expirare_noua) INTO v_exp FROM public.contracte_polite_acte a WHERE a.polita_id = v_p.id;
   SELECT a.valoare_noua_lei INTO v_val FROM public.contracte_polite_acte a
    WHERE a.polita_id = v_p.id AND a.valoare_noua_lei IS NOT NULL ORDER BY a.nr_act DESC, a.id DESC LIMIT 1;
-  NEW.emitent := coalesce(v_p.asigurator, NEW.emitent);
-  NEW.numar_document := coalesce(v_p.nr_polita, NEW.numar_document);
-  NEW.valoare := coalesce(v_val, v_p.valoare_lei, NEW.valoare);
+  IF v_p.tip = 'altul' THEN RAISE EXCEPTION 'tip_fara_registru' USING ERRCODE = '22023'; END IF;
+  IF v_p.asigurator IS NULL OR v_p.nr_polita IS NULL OR coalesce(v_val, v_p.valoare_lei) IS NULL THEN
+    RAISE EXCEPTION 'polita_incompleta_pentru_registru' USING ERRCODE = '22023';
+  END IF;
+  NEW.emitent := v_p.asigurator;
+  NEW.numar_document := v_p.nr_polita;
+  NEW.valoare := coalesce(v_val, v_p.valoare_lei);
   NEW.moneda := v_p.moneda;
-  NEW.data_emitere := coalesce(v_p.data_emitere, NEW.data_emitere);
-  NEW.data_expirare := coalesce(v_exp, v_p.data_expirare, NEW.data_expirare);
-  NEW.tip := CASE v_p.tip WHEN 'GBE' THEN 'buna_executie' WHEN 'CAR' THEN 'car' WHEN 'GPL' THEN 'participare' WHEN 'avans' THEN 'avans' ELSE NEW.tip END;
+  NEW.data_emitere := v_p.data_emitere;
+  NEW.data_expirare := coalesce(v_exp, v_p.data_expirare);
+  NEW.tip := CASE v_p.tip WHEN 'GBE' THEN 'buna_executie' WHEN 'CAR' THEN 'car' WHEN 'GPL' THEN 'participare' ELSE 'avans' END;
   NEW.contract_terti_id := v_p.contract_id;
   RETURN NEW;
 END $fn$;
 CREATE TRIGGER trg_polite_garantii_din_polita BEFORE INSERT OR UPDATE ON public.garantii
   FOR EACH ROW WHEN (NEW.contract_polita_id IS NOT NULL) EXECUTE FUNCTION public.fn_polite_garantii_din_polita();
 
--- o schimbare pe polita / actele ei reimprospateaza randul legat (UPDATE => triggerul de mai sus recopiaza)
+-- o schimbare pe polita / actele ei reimprospateaza randul legat (UPDATE => triggerul de mai sus recopiaza).
+-- Ordinea lock-urilor pe calea actelor (L06): actul -> polita FOR UPDATE (serializeaza cu legarea, care ia FOR SHARE) -> garantii.
+-- Pe calea politei, UPDATE-ul a luat deja lock-ul pe randul politei.
 CREATE FUNCTION public.fn_polite_reimprospateaza_garantii() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_id bigint;
@@ -357,8 +373,12 @@ BEGIN
   ELSE
     v_id := NEW.polita_id;
     IF TG_OP = 'UPDATE' AND OLD.polita_id IS DISTINCT FROM NEW.polita_id THEN
+      PERFORM 1 FROM public.contracte_polite cp WHERE cp.id = OLD.polita_id FOR UPDATE;
       UPDATE public.garantii g SET updated_at = now() WHERE g.contract_polita_id = OLD.polita_id;
     END IF;
+  END IF;
+  IF TG_TABLE_NAME = 'contracte_polite_acte' THEN
+    PERFORM 1 FROM public.contracte_polite cp WHERE cp.id = v_id FOR UPDATE;
   END IF;
   UPDATE public.garantii g SET updated_at = now() WHERE g.contract_polita_id = v_id;
   RETURN NULL;
@@ -550,21 +570,23 @@ BEGIN
 END $fn$;
 
 -- 8d. cronul (edge polite-alerte-mail, service_role): rezerva alertele de azi (L04: INSERT .. ON CONFLICT DO NOTHING RETURNING),
---     pune notificarile in aplicatie pentru randurile rezervate si le intoarce edge-ului; comutatorul oprit => nimic
-CREATE FUNCTION public.fn_polite_alerte_rezerva(p_azi date DEFAULT NULL)
-RETURNS TABLE(id bigint, cheie text, prag text, departamente text[], destinatar_email text, stare text, rand jsonb)
+--     pune notificarile in aplicatie pentru randurile rezervate si le intoarce edge-ului; comutatorul oprit => nimic.
+--     r2 (Jakarinos r1 P2-9): rezultatul e UN jsonb {activ, n, randuri} (nu set de randuri), deci plafonul max-rows al PostgREST nu-l
+--     poate taia; edge-ul verifica n = lungimea listei.
+CREATE FUNCTION public.fn_polite_alerte_rezerva(p_azi date DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 #variable_conflict use_column
-DECLARE v_lot uuid := gen_random_uuid(); v_zi date := coalesce(p_azi, (now() AT TIME ZONE 'Europe/Bucharest')::date);
+DECLARE v_lot uuid := gen_random_uuid(); v_zi date := coalesce(p_azi, (now() AT TIME ZONE 'Europe/Bucharest')::date); v_rez jsonb;
 BEGIN
-  IF (SELECT c.activ FROM public.polite_alerte_config c WHERE c.id) IS NOT TRUE THEN RETURN; END IF;
+  IF (SELECT c.activ FROM public.polite_alerte_config c WHERE c.id) IS NOT TRUE THEN
+    RETURN jsonb_build_object('activ', false, 'zi', v_zi, 'n', 0, 'randuri', '[]'::jsonb);
+  END IF;
   PERFORM pg_advisory_xact_lock(hashtext('polite_alerte_jurnal'));
   -- o rezervare ramasa (edge oprit intre rezervare si trimitere) devine „necunoscut”: NU se retrimite automat (L05)
   UPDATE public.polite_alerte_jurnal j SET stare = 'necunoscut', eroare = 'rezervare_veche', actualizat_la = now()
    WHERE j.stare = 'rezervat' AND j.creat_la < now() - interval '1 hour';
   -- o singura instructiune: rezervarea, notificarile in aplicatie (o notificare pe rand rezervat cu cont ERP, aceeasi cheie de dedup
   -- ca mailul) si randurile intoarse edge-ului
-  RETURN QUERY
   WITH ins AS (
     INSERT INTO public.polite_alerte_jurnal AS j (cheie, lot, zi, sursa, ref_id, prag, data_expirare, departamente, destinatar_email, profile_id, rand, stare, notificat)
     SELECT c.cheie, v_lot, v_zi, c.sursa, c.ref_id, c.prag, c.data_expirare, c.departamente, c.destinatar_email, c.profile_id, c.rand,
@@ -589,7 +611,10 @@ BEGIN
               ELSE '/administrativ' END
     FROM ins r WHERE r.notificat
   RETURNING 1)
-  SELECT r.id, r.cheie, r.prag, r.departamente, r.destinatar_email, r.stare, r.rand FROM ins r ORDER BY r.id;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', r.id, 'cheie', r.cheie, 'prag', r.prag, 'departamente', to_jsonb(r.departamente),
+                                               'destinatar_email', r.destinatar_email, 'stare', r.stare, 'rand', r.rand) ORDER BY r.id), '[]'::jsonb)
+    INTO v_rez FROM ins r;
+  RETURN jsonb_build_object('activ', true, 'zi', v_zi, 'n', jsonb_array_length(v_rez), 'randuri', v_rez);
 END $fn$;
 
 -- 8e. edge-ul marcheaza rezultatul trimiterii (doar din 'rezervat'; CAS)
@@ -853,8 +878,8 @@ BEGIN
     ('executie', 'manager_proiect', 'Managerul de proiect');
 END $seed$;
 
--- ─── 11. Cronul zilnic (05:15 UTC = 07:15 ora Romaniei iarna / 08:15 vara); comanda pe un rand ────────────────────────────────
-SELECT cron.schedule('polite_alerte_zilnic', '15 5 * * *', $cmd$SELECT net.http_post(url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/polite-alerte-mail', body := '{}'::jsonb, headers := jsonb_build_object('Content-Type', 'application/json', 'x-intern-secret', (SELECT s.decrypted_secret FROM vault.decrypted_secrets s WHERE s.name = 'INTERN_EDGE_SECRET')), timeout_milliseconds := 60000)$cmd$);
+-- ─── 11. Cronul zilnic: 04:15 si 05:15 UTC; edge-ul trimite doar cand e ora 7 in Romania (07:15 si iarna, si vara; r2 Jakarinos P3) ────────────────────────────────
+SELECT cron.schedule('polite_alerte_zilnic', '15 4,5 * * *', $cmd$SELECT net.http_post(url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/polite-alerte-mail', body := '{}'::jsonb, headers := jsonb_build_object('Content-Type', 'application/json', 'x-intern-secret', (SELECT s.decrypted_secret FROM vault.decrypted_secrets s WHERE s.name = 'INTERN_EDGE_SECRET')), timeout_milliseconds := 60000)$cmd$);
 
 -- ─── 12. Postconditii + amprenta ────────────────────────────────────────────────────────────────────────────────────────────
 DO $post$
@@ -908,6 +933,9 @@ BEGIN
      OR has_table_privilege('service_role', 'public.polite_alerte_jurnal', 'SELECT') OR has_table_privilege('service_role', 'public.polite_propuneri', 'INSERT')
      OR has_table_privilege('service_role', 'public.polite_propuneri', 'UPDATE') OR has_table_privilege('service_role', 'public.polite_alerte_destinatari', 'SELECT')
      OR NOT has_column_privilege('authenticated', 'public.garantii', 'contract_polita_id', 'SELECT')
+     -- edge-ul polita-citeste cauta propunerea existenta dupa sha256 cu service_role (citire directa, fara scriere)
+     OR NOT has_table_privilege('service_role', 'public.polite_propuneri', 'SELECT')
+     OR has_table_privilege('service_role', 'public.polite_propuneri', 'DELETE')
      OR (SELECT reloptions FROM pg_class WHERE oid = 'public.v_polite_scadente'::regclass) IS DISTINCT FROM ARRAY['security_invoker=on']::text[] THEN
     RAISE EXCEPTION '20261205a: drepturile pe tabelele noi / vedere nu sunt exact cele asteptate';
   END IF;
@@ -919,12 +947,15 @@ BEGIN
     RAISE EXCEPTION '20261205a: starea initiala nu e cea asteptata (comutator oprit, 5 destinatari, jurnal si propuneri goale)';
   END IF;
   IF current_setting('cron.timezone', true) IS DISTINCT FROM 'GMT' OR (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_zilnic') <> 1
-     OR NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_zilnic' AND schedule = '15 5 * * *' AND active AND username = 'postgres') THEN
+     OR NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_zilnic' AND schedule = '15 4,5 * * *' AND active AND username = 'postgres') THEN
     RAISE EXCEPTION '20261205a: jobul polite_alerte_zilnic nu e exact (GMT, program, activ, postgres)';
   END IF;
-  -- AMPRENTA 20261205a (aceeasi interogare in revenire): structura obiectelor noi, fara date
+  -- AMPRENTA 20261205a (aceeasi interogare in revenire): structura obiectelor noi, fara date. r2 (Jakarinos r1 P2-11): + ACL pe tabele /
+  -- vedere / secvente si pe coloanele noi, roluri + PERMISSIVE pe politici, definitia completa a triggerelor (cu WHEN), dependenta
+  -- fn_poate_scrie_garantii (corp, SECDEF, owner, config, ACL)
   SELECT md5(concat_ws(E'\n',
-    (SELECT string_agg(format('%s.%s:%s:%s:%s', a.attrelid::regclass, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-')), ';' ORDER BY a.attrelid::regclass::text, a.attnum)
+    (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', a.attrelid::regclass, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '-'),
+                              coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(a.attacl) x), '-')), ';' ORDER BY a.attrelid::regclass::text, a.attnum)
        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
       WHERE a.attnum > 0 AND NOT a.attisdropped
         AND (a.attrelid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass, 'public.polite_alerte_jurnal'::regclass)
@@ -943,19 +974,23 @@ BEGIN
        FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
       WHERE ic.relname IN ('polite_propuneri_stare_idx', 'contracte_polite_propunere_uidx', 'contracte_polite_acte_propunere_uidx', 'garantii_contract_polita_uidx',
                            'polite_dest_unic_uidx', 'polite_jurnal_cheie_uidx', 'polite_jurnal_creat_idx')),
-    (SELECT string_agg(format('%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity), ';' ORDER BY r.relname)
+    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', r.relname, r.relkind, pg_get_userbyid(r.relowner), r.relrowsecurity, r.relforcerowsecurity,
+                              coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(r.relacl) x), '-'), coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
-                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass)),
-    (SELECT string_agg(format('%s.%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || '|' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')), ';' ORDER BY p.polrelid::regclass::text, p.polname)
+                                       'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.polite_propuneri_id_seq'::regclass,
+                                       'public.polite_alerte_destinatari_id_seq'::regclass, 'public.polite_alerte_jurnal_id_seq'::regclass)),
+    (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, p.polpermissive,
+                              (SELECT string_agg(rl::regrole::text, ',' ORDER BY rl::regrole::text) FROM unnest(p.polroles) rl),
+                              coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || '|' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')), ';' ORDER BY p.polrelid::regclass::text, p.polname)
        FROM pg_policy p WHERE p.polrelid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass, 'public.polite_alerte_jurnal'::regclass)),
-    (SELECT string_agg(format('%s.%s:%s:%s:%s', t.tgrelid::regclass, t.tgname, t.tgtype, t.tgfoid::regprocedure, t.tgenabled), ';' ORDER BY t.tgrelid::regclass::text, t.tgname)
+    (SELECT string_agg(format('%s:%s:%s', pg_get_triggerdef(t.oid), t.tgfoid::regprocedure, t.tgenabled), ';' ORDER BY t.tgrelid::regclass::text, t.tgname)
        FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal),
     md5(replace(pg_get_viewdef('public.v_polite_scadente'::regclass), chr(13), '')),
-    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, coalesce(array_to_string(p.proconfig, ','), '-'),
+    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.prosecdef, p.provolatile, p.proisstrict, coalesce(array_to_string(p.proconfig, ','), '-'),
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-        AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite')),
+        AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
        FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic'))) INTO v_amprenta;
   EXECUTE format('COMMENT ON TABLE public.polite_alerte_config IS %L', 'Polite 20261205a: comutatorul alertelor (activ = mail + notificari; OPRIT la livrare, il porneste doar owner-ul prin fn_polite_alerte_porneste, dupa o proba). amprenta=' || v_amprenta);

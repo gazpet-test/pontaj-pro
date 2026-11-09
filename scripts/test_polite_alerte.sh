@@ -11,7 +11,7 @@ B="${PG_BIN:-/c/Users/Public/pgsql/bin}"
 L=$(mktemp -d)
 D="$L/pg"; P=5984
 export PGCLIENTENCODING=UTF8
-TESTE_DRY=13
+TESTE_DRY=14
 R="$L/repo"
 for f in supabase/migrations/20261205a_polite_alerte.sql supabase/revenire/20261205a_polite_alerte_ROLLBACK.sql \
          supabase/tests/20261205a_polite_alerte_schelet.sql supabase/tests/20261205a_polite_alerte_dryrun.sql scripts/control_0e.sql; do
@@ -61,6 +61,39 @@ ok "MIGRARE aplicata"
 [ "$(grep -c . "$L/0e.log")" -eq 0 ] || { cat "$L/0e.log"; fail "0e are randuri"; }
 ok "0e: 0 randuri"
 "${PS[@]}" -d app -Atc "SELECT p.proname || '=' || md5(replace(p.prosrc, chr(13), '')) FROM pg_proc p WHERE p.proname LIKE 'fn_polit%' OR p.proname = 'fn_poate_scrie_polite' ORDER BY 1"
+
+echo "== concurenta (r2, Jakarinos r1 P1-3): legarea Registrului vs. modificarea politei / a actului, doua sesiuni reale"
+"${PS[@]}" -d postgres -c "CREATE DATABASE conc TEMPLATE baza" -c "ALTER DATABASE conc SET cron.timezone = 'GMT'" >/dev/null || { echo MEDIU db conc; exit 2; }
+aplica conc "$MIG" || { grep -o "ERROR:.*" "$L/a.log"; fail "aplicarea pe baza de concurenta"; }
+"${PS[@]}" -d conc -c "INSERT INTO public.contracte_polite (id, contract_id, tip, asigurator, nr_polita, valoare_lei, data_expirare) VALUES
+  (961, 17, 'GBE', 'VECHI', 'C-961', 100, '2027-01-01'), (962, 17, 'CAR', 'ASIG', 'C-962', 100, '2027-01-01'), (963, 17, 'GBE', 'VECHI', 'C-963', 100, '2027-01-01');
+  INSERT INTO public.garantii (id, forma, tip, beneficiar, valoare, moneda, stare) VALUES
+  (861, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa'), (862, 'polita_asigurare', 'car', 'B', 1, 'RON', 'activa'), (863, 'polita_asigurare', 'buna_executie', 'B', 1, 'RON', 'activa');" >/dev/null || fail "fixture concurenta"
+bariera() { # asteapta pana cand sesiunea din fundal e in pg_sleep (tine lock-urile), max 10 s
+  for _ in $(seq 1 100); do
+    [ "$("${PS[@]}" -d conc -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'conc' AND query LIKE '%pg_sleep(4)%' AND state = 'active' AND pid <> pg_backend_pid()")" = 1 ] && return 0
+    "${PS[@]}" -d conc -Atc "SELECT pg_sleep(0.1)" >/dev/null
+  done; return 1; }
+# 1) A schimba polita (tranzactie deschisa); B leaga in timpul ei => B asteapta, apoi copiaza versiunea NOUA
+"${PS[@]}" -d conc -c "BEGIN; UPDATE public.contracte_polite SET asigurator = 'NOU' WHERE id = 961; SELECT pg_sleep(4); COMMIT;" > "$L/c1a.log" 2>&1 & PA=$!
+bariera || fail "bariera 1"
+"${PS[@]}" -d conc -c "UPDATE public.garantii SET contract_polita_id = 961 WHERE id = 861;" > "$L/c1b.log" 2>&1 || { cat "$L/c1b.log"; fail "concurenta 1: legarea"; }
+wait $PA || { cat "$L/c1a.log"; fail "concurenta 1: polita"; }
+[ "$("${PS[@]}" -d conc -Atc "SELECT emitent FROM public.garantii WHERE id = 861")" = NOU ] || fail "concurenta 1: legarea a pastrat polita veche"
+# 2) A adauga un act (prelungire) deschis; B leaga in timpul lui => expirarea efectiva = cea din act
+"${PS[@]}" -d conc -c "BEGIN; INSERT INTO public.contracte_polite_acte (polita_id, nr_act, data_expirare_noua) VALUES (962, 1, '2028-12-31'); SELECT pg_sleep(4); COMMIT;" > "$L/c2a.log" 2>&1 & PA=$!
+bariera || fail "bariera 2"
+"${PS[@]}" -d conc -c "UPDATE public.garantii SET contract_polita_id = 962 WHERE id = 862;" > "$L/c2b.log" 2>&1 || { cat "$L/c2b.log"; fail "concurenta 2: legarea"; }
+wait $PA || { cat "$L/c2a.log"; fail "concurenta 2: actul"; }
+[ "$("${PS[@]}" -d conc -Atc "SELECT data_expirare FROM public.garantii WHERE id = 862")" = 2028-12-31 ] || fail "concurenta 2: legarea a pierdut actul aditional"
+# 3) ordinea inversa: B leaga (tranzactie deschisa); A schimba polita in timpul ei => A asteapta, apoi reimprospateaza randul legat
+"${PS[@]}" -d conc -c "BEGIN; UPDATE public.garantii SET contract_polita_id = 963 WHERE id = 863; SELECT pg_sleep(4); COMMIT;" > "$L/c3b.log" 2>&1 & PB=$!
+bariera || fail "bariera 3"
+"${PS[@]}" -d conc -c "UPDATE public.contracte_polite SET asigurator = 'NOU3' WHERE id = 963;" > "$L/c3a.log" 2>&1 || { cat "$L/c3a.log"; fail "concurenta 3: polita"; }
+wait $PB || { cat "$L/c3b.log"; fail "concurenta 3: legarea"; }
+[ "$("${PS[@]}" -d conc -Atc "SELECT emitent FROM public.garantii WHERE id = 863")" = NOU3 ] || fail "concurenta 3: randul legat nu s-a reimprospatat"
+grep -l "deadlock" "$L"/c*.log && fail "deadlock in testul de concurenta"
+ok "concurenta: 3/3 (polita, act, ordinea inversa), fara deadlock"
 
 echo "== a doua aplicare refuzata"
 aplica app "$MIG" && fail "a doua aplicare a trecut"

@@ -84,9 +84,19 @@ export async function citestePolita(req: Request, body: unknown, caller: Supabas
     if (utilizabila) return await dinCache(utilizabila)
     const platita = vechi.find(p => p.cititor === 'platit')
     if (platita) return await dinCache(platita)
-    // 4. PDF-ul in spatiul propunerilor (cale = sha256: acelasi continut, aceeasi cale; „exista deja” e bine)
+    // 4. PDF-ul in spatiul propunerilor (cale = sha256). r2 (Jakarinos r1 P2-6): un obiect deja existent la cale se VERIFICA dupa
+    //    continut (poate fi fost inlocuit printr-o cale de scriere pe bucket); diferit = se reface din documentul primit acum.
     const { error: eu } = await ledger.storage.from(BUCKET).upload(cale, pdf, { contentType: 'application/pdf', upsert: false })
-    if (eu && !/exist|duplicate/i.test(eu.message || '')) return raspuns(503, { success: false, eroare: 'stocare_indisponibila' })
+    if (eu) {
+      if (!/exist|duplicate/i.test(eu.message || '')) return raspuns(503, { success: false, eroare: 'stocare_indisponibila' })
+      const { data: blob, error: ed } = await ledger.storage.from(BUCKET).download(cale)
+      if (ed || !blob) return raspuns(503, { success: false, eroare: 'stocare_indisponibila' })
+      if (hex(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())) !== sha) {
+        console.error('obiect propunere diferit de sha, refacut')
+        const { error: er2 } = await ledger.storage.from(BUCKET).upload(cale, pdf, { contentType: 'application/pdf', upsert: true })
+        if (er2) return raspuns(503, { success: false, eroare: 'stocare_indisponibila' })
+      }
+    }
     // 5. rezervarea citirii (o singura citire pe document, si intre ferestre / utilizatori)
     const { data: rz, error: er } = await ledger.rpc('fn_polite_propunere_rezerva', { p_sha: sha, p_user: u.user.id })
     if (er || !rz) return raspuns(503, { success: false, eroare: 'propunere_indisponibila' })

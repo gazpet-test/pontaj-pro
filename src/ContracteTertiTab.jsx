@@ -13,14 +13,14 @@
 //   • Ordin de începere (data_start, editabil, sync executie_proiecte)
 //     + Ordine de sistare (read-only din Execuție)
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { norm } from './lib/diacritice.js'
 import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
 import { stareLegaturaDinCitire, santierInitial, salveazaContractSiLegatura } from './executieContractLegatura.js'
 // Polițe 20261205a: citirea documentului la încărcare (propunere de confirmat) + salvarea confirmată
 import PolitaCitire, { stilCampPropus } from './PolitaCitire.jsx'
-import { formDinPropunere, mesajEroare } from './polite.js'
+import { formDinPropunere, mesajEroare, aplicaPropunere } from './polite.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -1758,18 +1758,23 @@ function PoliteSection({ contractId, canWrite }) {
 // ══════════════════════════════════════════════════════════
 function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
   const isEdit=!!item?.id
-  const [form,setForm]=useState({tip:item?.tip||'GBE',asigurator:item?.asigurator||'',nr_polita:item?.nr_polita||'',valoare_lei:item?.valoare_lei||'',moneda:item?.moneda||'RON',data_emitere:item?.data_emitere||'',data_expirare:item?.data_expirare||'',executie_de_la:item?.executie_de_la||'',executie_pana_la:item?.executie_pana_la||'',garantie_de_la:item?.garantie_de_la||'',garantie_pana_la:item?.garantie_pana_la||'',status:item?.status||'activa',observatii:item?.observatii||''})
+  const init=useRef(null)
+  if(!init.current)init.current={tip:item?.tip||'GBE',asigurator:item?.asigurator||'',nr_polita:item?.nr_polita||'',valoare_lei:item?.valoare_lei||'',moneda:item?.moneda||'RON',data_emitere:item?.data_emitere||'',data_expirare:item?.data_expirare||'',executie_de_la:item?.executie_de_la||'',executie_pana_la:item?.executie_pana_la||'',garantie_de_la:item?.garantie_de_la||'',garantie_pana_la:item?.garantie_pana_la||'',status:item?.status||'activa',observatii:item?.observatii||''}
+  const [form,setForm]=useState(init.current)
   const [pdfFile,setPdfFile]=useState(null); const [saving,setSaving]=useState(false)
   // Polițe 20261205a: propunerea citită din document (nimic nu se scrie până la „Salvează”)
   const [citire,setCitire]=useState(null)
   const set=(k,v)=>setForm(f=>({...f,[k]:v}))
   const ti=TIP_POLITA_INFO[form.tip]||TIP_POLITA_INFO.altul
   const stil=k=>stilCampPropus(S.input,k,form[k],citire)
+  // r2 (P2-4): câmpurile propuse de documentul anterior revin la valoarea inițială înainte de noua propunere (sau la schimbarea PDF-ului)
+  const citireRef=useRef(null)
   const laPropunere=p=>{
-    if(!p){setCitire(null);return}
-    const f=formDinPropunere(p,'polita',{valoare:'valoare_lei'})
-    setCitire({propunere:p,...f})
-    setForm(x=>({...x,...Object.fromEntries(Object.entries(f.valori).map(([k,v])=>[k,String(v)]))}))
+    const f=p?formDinPropunere(p,'polita',{valoare:'valoare_lei'}):null
+    const vechi=citireRef.current?.propuse||[]
+    citireRef.current=p?{propunere:p,...f}:null
+    setCitire(citireRef.current)
+    setForm(x=>aplicaPropunere(x,init.current,vechi,f?.valori))
   }
   const pc=citire?.propunere?.contract_propus
   const avertizari=citire?[
@@ -1777,7 +1782,7 @@ function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
     pc&&Number(pc.id)!==Number(contractId)&&`Documentul pomenește contractul ${pc.numar_contract||'#'+pc.id}${pc.denumire?' ('+pc.denumire+')':''}, nu pe acesta. Verifică.`,
     citire.propunere?.polita_baza_propusa&&!citire.propunere?.este_act&&`Există deja o poliță cu același număr (#${citire.propunere.polita_baza_propusa.id}). Nu o adăuga a doua oară.`,
   ].filter(Boolean):[]
-  const optionale=()=>({...(form.moneda&&form.moneda!=='RON'&&{moneda:form.moneda}),
+  const optionale=()=>({...(form.moneda&&(form.moneda!=='RON'||(item?.moneda&&item.moneda!==form.moneda))&&{moneda:form.moneda}),
     ...Object.fromEntries(['executie_de_la','executie_pana_la','garantie_de_la','garantie_pana_la'].filter(k=>form[k]||item?.[k]).map(k=>[k,form[k]||null]))})
 
   const handleSave=async()=>{
@@ -1871,16 +1876,20 @@ function PolitaModal({ item, contractId, onClose, onSaved, onError }) {
 // ══════════════════════════════════════════════════════════
 function PolitaActModal({ item, onClose, onSaved, onError }) {
   const isEdit=!!item?.id
-  const [form,setForm]=useState({nr_act:item?.nr_act||'',descriere:item?.descriere||'',valoare_noua_lei:item?.valoare_noua_lei||'',data_emitere:item?.data_emitere||'',data_expirare_noua:item?.data_expirare_noua||'',executie_de_la:item?.executie_de_la||'',executie_pana_la:item?.executie_pana_la||'',garantie_de_la:item?.garantie_de_la||'',garantie_pana_la:item?.garantie_pana_la||''})
+  const init=useRef(null)
+  if(!init.current)init.current={nr_act:item?.nr_act||'',descriere:item?.descriere||'',valoare_noua_lei:item?.valoare_noua_lei||'',data_emitere:item?.data_emitere||'',data_expirare_noua:item?.data_expirare_noua||'',executie_de_la:item?.executie_de_la||'',executie_pana_la:item?.executie_pana_la||'',garantie_de_la:item?.garantie_de_la||'',garantie_pana_la:item?.garantie_pana_la||''}
+  const [form,setForm]=useState(init.current)
   const [pdfFile,setPdfFile]=useState(null); const [saving,setSaving]=useState(false)
   const [citire,setCitire]=useState(null)
   const set=(k,v)=>setForm(f=>({...f,[k]:v}))
   const stil=k=>stilCampPropus(S.input,k,form[k],citire)
+  const citireRef=useRef(null)
   const laPropunere=p=>{
-    if(!p){setCitire(null);return}
-    const f=formDinPropunere(p,'act')
-    setCitire({propunere:p,...f})
-    setForm(x=>({...x,...Object.fromEntries(Object.entries(f.valori).map(([k,v])=>[k,String(v)]))}))
+    const f=p?formDinPropunere(p,'act'):null
+    const vechi=citireRef.current?.propuse||[]
+    citireRef.current=p?{propunere:p,...f}:null
+    setCitire(citireRef.current)
+    setForm(x=>aplicaPropunere(x,init.current,vechi,f?.valori))
   }
   const pb=citire?.propunere?.polita_baza_propusa
   const avertizari=citire?[

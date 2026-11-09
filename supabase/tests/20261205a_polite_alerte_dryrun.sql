@@ -86,12 +86,16 @@ RESET ROLE;
 -- ── TEST05: cronul (service_role): rezervare unica pe cheie, notificari, a doua rulare = nimic ─────────────────────────────────
 SET LOCAL ROLE service_role;
 DO $t$
-DECLARE n integer; m integer; ids bigint[];
+DECLARE n integer; m integer; v jsonb;
 BEGIN
-  SELECT count(*), count(*) FILTER (WHERE stare = 'rezervat') INTO n, m FROM public.fn_polite_alerte_rezerva(DATE '2026-11-10');
-  IF n <> 15 OR m <> 7 THEN RAISE EXCEPTION 'TEST05 FAIL prima rezervare: % randuri, % rezervate (astept 15 / 7)', n, m; END IF;
-  SELECT count(*) INTO n FROM public.fn_polite_alerte_rezerva(DATE '2026-11-10');
-  IF n <> 0 THEN RAISE EXCEPTION 'TEST05 FAIL a doua rulare a rezervat % randuri', n; END IF;
+  -- r2: rezultatul e un singur jsonb {activ, zi, n, randuri}
+  v := public.fn_polite_alerte_rezerva(DATE '2026-11-10');
+  SELECT count(*), count(*) FILTER (WHERE e->>'stare' = 'rezervat') INTO n, m FROM jsonb_array_elements(v->'randuri') e;
+  IF (v->>'activ')::boolean IS NOT TRUE OR (v->>'n')::integer <> n OR n <> 15 OR m <> 7 THEN
+    RAISE EXCEPTION 'TEST05 FAIL prima rezervare: n=% randuri=% rezervate=% (astept 15 / 7)', v->>'n', n, m;
+  END IF;
+  v := public.fn_polite_alerte_rezerva(DATE '2026-11-10');
+  IF (v->>'n')::integer <> 0 OR jsonb_array_length(v->'randuri') <> 0 THEN RAISE EXCEPTION 'TEST05 FAIL a doua rulare a rezervat %', v->>'n'; END IF;
   RAISE NOTICE 'TEST05 OK rezervare 15 randuri (7 de trimis), a doua rulare 0';
 END $t$;
 RESET ROLE;
@@ -248,6 +252,28 @@ BEGIN
 END $t$;
 RESET ROLE;
 
--- ── TEST14: revenirea refuza cand exista date noi ───────────────────────────────────────────────────────────────────────────
--- (rulata separat de harness, pe mutanti si pe baza curata; aici doar marcajul de sfarsit)
+-- ── TEST14 (r2, Jakarinos r1 P2-5): polita incompleta nu are rand in Registru; lipsa nu pastreaza valoarea veche ─────────────
+DO $t$
+DECLARE v_pid bigint; v_gid bigint; g record;
+BEGIN
+  -- polita fara valoare, valoarea doar pe un act: legarea merge, valoarea vine din act
+  INSERT INTO public.contracte_polite (contract_id, tip, asigurator, nr_polita, data_expirare) VALUES (18, 'CAR', 'ASIG', 'FARA-VAL', '2027-01-01') RETURNING id INTO v_pid;
+  INSERT INTO public.contracte_polite_acte (polita_id, nr_act, valoare_noua_lei, data_expirare_noua) VALUES (v_pid, 1, 2500, '2027-06-30');
+  INSERT INTO public.garantii (forma, tip, beneficiar, valoare, moneda, stare, contract_polita_id) VALUES ('polita_asigurare', 'car', 'B', 1, 'RON', 'activa', v_pid) RETURNING id INTO v_gid;
+  SELECT * INTO g FROM public.garantii WHERE id = v_gid;
+  IF g.valoare <> 2500 OR g.data_expirare <> '2027-06-30' OR g.emitent <> 'ASIG' THEN RAISE EXCEPTION 'TEST14 FAIL legarea cu valoarea din act: %', row_to_json(g); END IF;
+  -- stergerea singurului act cu valoare: Registrul ar ramane fara valoare => refuz explicit, nu suma veche pastrata
+  BEGIN DELETE FROM public.contracte_polite_acte WHERE polita_id = v_pid; RAISE EXCEPTION 'TEST14 FAIL actul cu ultima valoare s-a sters';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM <> 'polita_incompleta_pentru_registru' THEN RAISE; END IF; END;
+  -- o polita fara asigurator sau de tip „altul” nu se poate lega
+  INSERT INTO public.contracte_polite (contract_id, tip, nr_polita, valoare_lei) VALUES (18, 'GBE', 'FARA-ASIG', 10) RETURNING id INTO v_pid;
+  BEGIN UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801; RAISE EXCEPTION 'TEST14 FAIL legata o polita fara asigurator';
+  EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
+  INSERT INTO public.contracte_polite (contract_id, tip, asigurator, nr_polita, valoare_lei) VALUES (18, 'altul', 'A', 'ALTUL-1', 10) RETURNING id INTO v_pid;
+  BEGIN UPDATE public.garantii SET contract_polita_id = v_pid WHERE id = 801; RAISE EXCEPTION 'TEST14 FAIL legata o polita de tip altul';
+  EXCEPTION WHEN invalid_parameter_value THEN IF SQLERRM <> 'tip_fara_registru' THEN RAISE; END IF; END;
+  RAISE NOTICE 'TEST14 OK valoarea din act la legare; lipsa valorii / asiguratorului / tipul altul = refuz explicit';
+END $t$;
+
+-- (revenirea, mutantii ei si legarea concurenta cu doua sesiuni reale ruleaza separat, in scripts/test_polite_alerte.sh)
 SELECT 'DRY_COMPLET';

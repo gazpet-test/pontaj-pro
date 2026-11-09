@@ -11,7 +11,7 @@
 //   07.10.2026 (TKT-2026-0331, varianta A): „＋ Poliță existentă” — o poliță deja emisă intră direct în registru
 //   (forma polita_asigurare, același drum de scriere: RLS fn_poate_scrie_garantii, canEdit), ca să i se poată trece BO-urile.
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import CerereOfertaPanel, { useTipuriGarantii } from './GarantiiCerereOferta.jsx'
 import { TIPURI_CERERE } from './garantiiCerereOferta.js'
@@ -19,7 +19,7 @@ import BiletePanel from './GarantiiBileteOrdin.jsx'
 import { rezumatBOPeGarantie } from './garantiiBileteOrdin.js'
 // Polițe 20261205a: citirea documentului + salvarea confirmată (polița pe contract + rândul legat din Registru)
 import PolitaCitire, { stilCampPropus } from './PolitaCitire.jsx'
-import { formDinPropunere, mesajEroare } from './polite.js'
+import { formDinPropunere, mesajEroare, aplicaPropunere } from './polite.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -52,8 +52,10 @@ const TIP_POLITA = { buna_executie:'Bună execuție (GBE)', avans:'Returnare ava
 const TIP_CONTRACT = { buna_executie:'GBE', car:'CAR', participare:'GPL', avans:'avans' }
 const TIP_DIN_CONTRACT = { GBE:'buna_executie', CAR:'car', GPL:'participare', avans:'avans' }
 function PolitaExistentaPanel({ tipuriPermise, onClose, onDone, showToast }) {
-  const [f, setF] = useState({ tip:'buna_executie', beneficiar:'', lucrare:'', contract_numar:'', contract_data:'', emitent:'', numar_document:'',
+  const init = useRef({ tip:'buna_executie', beneficiar:'', lucrare:'', contract_numar:'', contract_data:'', emitent:'', numar_document:'',
     valoare:'', moneda:'RON', data_emitere:'', data_expirare:'', observatii:'', contract_id:'', executie_de_la:'', executie_pana_la:'', garantie_de_la:'', garantie_pana_la:'' })
+  const [f, setF] = useState(init.current)
+  const citireRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const [fisier, setFisier] = useState(null)
@@ -73,14 +75,20 @@ function PolitaExistentaPanel({ tipuriPermise, onClose, onDone, showToast }) {
     }).catch(() => { if (viu) setErr('Lista contractelor nu s-a putut citi: polița se poate salva doar în Registru.') })
     return () => { viu = false }
   }, [])
+  // r2 (P2-4): câmpurile propuse de documentul anterior revin întâi la valoarea inițială
   const laPropunere = p => {
-    if (!p) { setCitire(null); return }
-    const r = formDinPropunere(p, 'registru', { asigurator:'emitent', nr_polita:'numar_document' })
-    const v = { ...r.valori }
-    if (v.tip) { if (TIP_DIN_CONTRACT[v.tip]) v.tip = TIP_DIN_CONTRACT[v.tip]; else delete v.tip }
-    if (p.contract_propus?.id) v.contract_id = String(p.contract_propus.id)
-    setCitire({ propunere:p, ...r, valori:v, propuse:Object.keys(v) })
-    setF(x => ({ ...x, ...Object.fromEntries(Object.entries(v).map(([k, val]) => [k, String(val)])) }))
+    const vechi = citireRef.current?.propuse || []
+    let nou = null
+    if (p) {
+      const r = formDinPropunere(p, 'registru', { asigurator:'emitent', nr_polita:'numar_document' })
+      const v = { ...r.valori }
+      if (v.tip) { if (TIP_DIN_CONTRACT[v.tip]) v.tip = TIP_DIN_CONTRACT[v.tip]; else delete v.tip }
+      if (p.contract_propus?.id) v.contract_id = String(p.contract_propus.id)
+      nou = { propunere:p, ...r, valori:v, propuse:Object.keys(v) }
+    }
+    citireRef.current = nou
+    setCitire(nou)
+    setF(x => aplicaPropunere(x, init.current, vechi, nou?.valori))
   }
   const alegeContract = id => {
     set('contract_id', id)

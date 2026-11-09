@@ -30,8 +30,8 @@ export default function PoliteAlerteAdmin({ profile }) {
   const [nou, setNou] = useState({ departament:'financiar', fel:'adresa', nume:'', email:'' })
   const [preview, setPreview] = useState(null)
 
+  // r2 (Jakarinos r1 P2-8): încărcarea NU șterge eroarea unei acțiuni; întoarce eroarea ei de citire (sau null), iar apelantul decide
   const incarca = useCallback(async () => {
-    setEroare(null)
     const COL = 'id, cheie, zi, prag, departamente, destinatar_email, stare, eroare, rand, creat_la'
     const [c, d, p, j] = await Promise.all([
       supabase.from('polite_alerte_config').select('activ, schimbat_la, proba_la').maybeSingle(),
@@ -42,20 +42,20 @@ export default function PoliteAlerteAdmin({ profile }) {
       supabase.from('polite_alerte_jurnal').select(COL).neq('stare', 'proba').order('creat_la', { ascending:false }).order('id', { ascending:false }).limit(200),
     ])
     const e = c.error || d.error || p.error || j.error
-    if (e) { setEroare(/polite_alerte|schema cache|does not exist/i.test(e.message || '') ? 'Alertele polițelor nu sunt încă instalate în baza de date (migrarea 20261205a).' : mesajEroare(e)); return }
-    if ((p.count ?? 0) > (p.data || []).length) { setEroare('Proba are peste 1000 de rânduri: lista de mai jos e incompletă.') }
+    if (e) return /polite_alerte|schema cache|does not exist/i.test(e.message || '') ? 'Alertele polițelor nu sunt încă instalate în baza de date (migrarea 20261205a).' : mesajEroare(e)
     setCfg(c.data); setDest(d.data || []); setJurnal([...(p.data || []), ...(j.data || [])])
+    return (p.count ?? 0) > (p.data || []).length ? 'Proba are peste 1000 de rânduri: lista de mai jos e incompletă.' : null
   }, [])
-  useEffect(() => { incarca() }, [incarca])
+  useEffect(() => { incarca().then(setEroare) }, [incarca])
 
-  const ruleaza = async (fn, args, mesajOk) => {
+  // acțiune → reîncărcare → eroarea acțiunii are prioritate față de cea a citirii (nu se pierde)
+  const ruleaza = async (fn, args) => {
     setBusy(true); setEroare(null)
     const { data, error } = await supabase.rpc(fn, args)
+    const eCitire = await incarca()
     setBusy(false)
-    if (error) { setEroare(mesajEroare(error)); return null }
-    await incarca()
-    if (mesajOk) setEroare(null)
-    return data
+    setEroare(error ? mesajEroare(error) : eCitire)
+    return error ? null : data
   }
   const proba = () => ruleaza('fn_polite_alerte_proba', {})
   const comuta = async activ => {
@@ -63,17 +63,21 @@ export default function PoliteAlerteAdmin({ profile }) {
     if (!activ && !confirm('Oprești alertele polițelor (mail + notificări)?')) return
     await ruleaza('fn_polite_alerte_porneste', { p_activ:activ })
   }
+  // scrierea întoarce true doar dacă a atins efectiv un rând (RLS poate filtra în tăcere: 0 rânduri = eroare vizibilă)
   const scrie = async (op, mesaj) => {
     setBusy(true); setEroare(null)
-    const { error } = await op
+    const { data, error } = await op.select('id')
+    const eCitire = await incarca()
     setBusy(false)
-    if (error) setEroare((mesaj ? mesaj + ': ' : '') + (/polite_dest_email_check/.test(error.message || '') ? 'adresa trebuie să fie @gazpet.ro' : /polite_dest_unic/.test(error.message || '') ? 'destinatarul există deja' : mesajEroare(error)))
-    await incarca()
+    const eScriere = error ? (/polite_dest_email_check/.test(error.message || '') ? 'adresa trebuie să fie @gazpet.ro' : /polite_dest_unic/.test(error.message || '') ? 'destinatarul există deja' : mesajEroare(error))
+      : !data?.length ? 'nicio înregistrare modificată (reîncarcă pagina)' : null
+    setEroare(eScriere ? `${mesaj}: ${eScriere}` : eCitire)
+    return !eScriere
   }
-  const adauga = () => {
+  const adauga = async () => {
     const rand = { departament:nou.departament, fel:nou.fel, nume:nou.nume.trim() || null, email:nou.fel === 'adresa' ? (nou.email.trim() || null) : null }
     if (rand.fel === 'adresa' && !rand.email) { setEroare('Completează adresa (@gazpet.ro).'); return }
-    scrie(supabase.from('polite_alerte_destinatari').insert(rand), 'Nu s-a adăugat').then(() => setNou(x => ({ ...x, nume:'', email:'' })))
+    if (await scrie(supabase.from('polite_alerte_destinatari').insert(rand), 'Nu s-a adăugat')) setNou(x => ({ ...x, nume:'', email:'' }))
   }
   const actualizeaza = (r, campuri) => scrie(supabase.from('polite_alerte_destinatari').update(campuri).eq('id', r.id), 'Nu s-a salvat')
   const sterge = r => { if (confirm(`Scoți destinatarul ${r.email || FEL[r.fel]} din lista ${DEP[r.departament]}?`)) scrie(supabase.from('polite_alerte_destinatari').delete().eq('id', r.id), 'Nu s-a șters') }
