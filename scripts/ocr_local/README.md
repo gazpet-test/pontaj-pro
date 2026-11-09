@@ -375,7 +375,9 @@ paritate). Pe lângă cele de conținut (`structura_incerta`, `tabel_negasit`,
 `garda`, `prea_multe_dezacorduri`, `limita_randuri`), PDF (`pdf_invalid`,
 `multipagina`), cele de mai sus și:
 - `retea`: transport căzut sau 5xx spre edge / Storage; descărcarea separă rețeaua de `pdf_invalid` (sha, mărime, 4xx);
-- `model_indisponibil`: cititorul raportează eroare de transport spre modelul local (conexiune refuzată, HTTP, flux rupt);
+- `model_indisponibil`: cititorul raportează eroare de transport spre modelul local (conexiune refuzată, HTTP, flux rupt,
+  inclusiv `ServerError` / `HttpResponseError` din clientul MinerU, ridicate și la construcția lui); un defect local
+  prins de cititor (ex. `KeyError` în gardă, `RequestError`) rămâne `intern`;
 - `timeout`: termenul local (înainte / după citire) sau al cititorului;
 - `oprit`: fereastra de noapte sau oprirea cerută;
 - `intern`: numai defecte reale (inclusiv refuzuri 4xx neașteptate ale edge-ului).

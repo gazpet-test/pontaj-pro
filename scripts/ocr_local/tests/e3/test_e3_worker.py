@@ -666,6 +666,10 @@ class E9CititorTests(unittest.TestCase):
                             ({'ok': False, 'signal': None, 'error': 'ConnectError:All connection attempts failed'}, 'model_indisponibil'),
                             ({'ok': False, 'signal': None, 'error': 'ReadTimeout:timed out'}, 'model_indisponibil'),
                             ({'ok': False, 'signal': None, 'error': 'HTTPStatusError:Server error 503'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'ServerError:Failed to connect to server http://127.0.0.1:1. Please check if the server is running.'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'HttpResponseError:(503, \'\')'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'RequestError:The response was truncated due to length limit.'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'ClientClosedError:HTTP VLM client is closed'}, 'intern'),
                             # Jakarinos r1 P2: defectele locale prinse de cititor nu sunt „model indisponibil”.
                             ({'ok': False, 'signal': None, 'error': 'KeyError'}, 'intern'),
                             ({'ok': False, 'signal': None, 'error': 'JSONDecodeError'}, 'intern'),
@@ -717,10 +721,66 @@ class E9CititorTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_formatul_real_read_mineru_pe_server_fals_loopback(self):
+        """read_mineru real (clientul mineru_vl_utils) pe 127.0.0.1, port efemer, niciun model. Serverul căzut / 503 la
+        pornire = ServerError ridicat la construcția clientului (calea cod_exceptie_cititor); 503 la citire =
+        HttpResponseError în result['error'] (calea cod_citire). Toate = model_indisponibil, nu intern."""
+        try:
+            import mineru_vl_utils  # noqa: F401
+            from PIL import Image
+        except ImportError:
+            self.skipTest('mineru_vl_utils / PIL absente: se rulează cu interpretorul MinerU')
+        import http.server
+        import threading
+        from ocr_local import read
+        mod = {}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def raspunde(self, status, corp=b''):
+                self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                self.send_response(status); self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(corp))); self.end_headers(); self.wfile.write(corp)
+            def do_GET(self):
+                self.raspunde(200, b'{"data":[{"id":"fals"}]}') if mod['caz'] == 'citire503' else self.raspunde(503)
+            def do_POST(self): self.raspunde(503)
+        buf = io.BytesIO()
+        Image.new('RGB', (64, 64), 'white').save(buf, format='PNG')
+        def ruleaza(port):
+            cfg = {'endpoint': 'http://127.0.0.1:%d' % port, 'served_model_name': 'fals'}
+            with temporary() as root, patch.dict(read._MINERU, clear=True), patch.dict(os.environ):
+                try:
+                    raw, result = read.read_mineru(buf.getvalue(), root, cfg, 10)
+                except Exception as exc:
+                    return 'exceptie', cod_exceptie_cititor(exc), type(exc).__name__
+            self.assertFalse(result['ok'])
+            return 'rezultat', cod_citire(result), result.get('error')
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            for caz, cale in [('pornire503', 'exceptie'), ('citire503', 'rezultat')]:
+                mod['caz'] = caz
+                r = ruleaza(server.server_address[1])
+                self.assertEqual(r[:2], (cale, 'model_indisponibil'), (caz, r))
+        finally:
+            server.shutdown()
+            server.server_close()
+        liber = socket.socket()
+        liber.bind(('127.0.0.1', 0))
+        port_mort = liber.getsockname()[1]
+        liber.close()  # nimeni nu mai ascultă: conexiune refuzată
+        r = ruleaza(port_mort)
+        self.assertEqual(r[:2], ('exceptie', 'model_indisponibil'), r)
+
     def test_exceptie_cititor(self):
         httpx_eroare = type('ConnectError', (Exception,), {'__module__': 'httpx'})
+        httpx_url = type('InvalidURL', (Exception,), {'__module__': 'httpx'})
+        mineru_server = type('ServerError', (RuntimeError,), {'__module__': 'mineru_vl_utils.vlm_client.base_client'})
+        mineru_cerere = type('RequestError', (ValueError,), {'__module__': 'mineru_vl_utils.vlm_client.base_client'})
+        strain_server = type('ServerError', (RuntimeError,), {'__module__': 'alt_pachet'})
         for exc, cod in [(ConnectionRefusedError(), 'model_indisponibil'), (TimeoutError(), 'model_indisponibil'),
                          (http.client.RemoteDisconnected('x'), 'model_indisponibil'), (httpx_eroare('x'), 'model_indisponibil'),
+                         (mineru_server('Failed to connect'), 'model_indisponibil'), (httpx_url('x'), 'intern'),
+                         (mineru_cerere('Model not found'), 'intern'), (strain_server('x'), 'intern'),
                          (FileNotFoundError(), 'intern'), (KeyError('x'), 'intern'), (ValueError('x'), 'intern')]:
             self.assertEqual(cod_exceptie_cititor(exc), cod, exc)
 

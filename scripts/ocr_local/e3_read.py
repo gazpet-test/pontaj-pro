@@ -17,7 +17,10 @@ ERORI_TRANSPORT = frozenset({
     'ResponseNotReady', 'CannotSendRequest', 'CannotSendHeader', 'ImproperConnectionState',
     # httpx, transportul clientului MinerU
     'TransportError', 'NetworkError', 'ConnectError', 'ReadError', 'WriteError', 'CloseError', 'ProxyError', 'ProtocolError',
-    'RemoteProtocolError', 'TimeoutException', 'ConnectTimeout', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout', 'HTTPStatusError'})
+    'RemoteProtocolError', 'TimeoutException', 'ConnectTimeout', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout', 'HTTPStatusError',
+    # mineru_vl_utils 2.0.7 învelește eșecurile serverului: ServerError (conexiune eșuată, răspuns stricat de la server),
+    # HttpResponseError (status ≠ 200). RequestError (răspuns trunchiat, cerere invalidă) rămâne defect.
+    'ServerError', 'HttpResponseError'})
 
 
 def cod_citire(result):
@@ -38,7 +41,9 @@ def cod_exceptie_cititor(exc):
     """Excepție în procesul cititorului: transportul spre modelul local = model_indisponibil; restul = defect."""
     if isinstance(exc, (ConnectionError, TimeoutError, http.client.HTTPException)):
         return 'model_indisponibil'
-    if type(exc).__module__.split('.')[0] == 'httpx':  # clientul MinerU
+    # Clientul MinerU (httpx / mineru_vl_utils) pică deja la construcție, în afara firului de citire, când serverul
+    # e căzut („Failed to connect / get model name” = ServerError): aceeași listă albă ca în result['error'].
+    if type(exc).__module__.split('.')[0] in ('httpx', 'mineru_vl_utils') and type(exc).__name__ in ERORI_TRANSPORT:
         return 'model_indisponibil'
     return 'intern'
 
