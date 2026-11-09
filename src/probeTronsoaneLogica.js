@@ -361,8 +361,9 @@ export function registruNou(stocare, prefix) {
       for (let i = 0; i < stocare.length; i++) {
         const k = stocare.key(i)
         if (typeof k !== 'string' || !k.startsWith(prefix)) continue
+        const brut = stocare.getItem(k)            // o citire eșuată NU e „intrare inexistentă”: aruncă -> tot registrul = null
         let x = null
-        try { x = JSON.parse(stocare.getItem(k)) } catch { x = null }
+        try { x = JSON.parse(brut) } catch { x = null }   // doar conținutul stricat se ignoră
         if (intrareValida(x, k, prefix)) l.push(x)
       }
       return l.sort((a, b) => String(a.pusLa || '').localeCompare(String(b.pusLa || '')) || a.cheie.localeCompare(b.cheie))

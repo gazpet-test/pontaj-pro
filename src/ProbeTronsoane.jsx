@@ -171,22 +171,29 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
   // „duplicat” = se scrisese (sau s-a scris între timp, în altă conexiune); ok = nu ajunsese, s-a aplicat acum, cu valorile de atunci;
   // conflict / refuz al regulilor = nu se aplicase (serverul verifică cheia înaintea lor). Refuzul de DREPT (verificat înaintea cheii) nu
   // dovedește nimic: atunci doar cheia GĂSITĂ în jurnal dovedește că se scrisese; altfel (negăsită sau jurnal necitit) rămâne nelămurită.
-  // Iese din registru DOAR la aplicat / aplicat acum / neaplicat. ──
-  const lamureste = async (reg, intrare) => {
-    let r = null, error = null
-    try { ({ data: r, error } = await client.rpc(intrare.rpc, { ...intrare.payload, p_cheie: intrare.cheie })) } catch (e) { error = e }
+  // Iese din registru DOAR la aplicat / aplicat acum / neaplicat.
+  // Aceeași regulă pentru ORICE răspuns al unei cereri înregistrate — și pentru PRIMA ei încercare: o copie a aceleiași cereri (aceeași
+  // cheie, retrimisă din alt tab) poate fi aplicată oricând, deci un refuz al acestei încercări nu dovedește că cheia nu s-a scris.
+  // `prinJurnal` = aplicarea e dovedită doar de jurnal: NU există rezultat RPC (r e null), starea reală vine din reîncărcare. ──
+  const rezolva = async (reg, intrare, { r, error }) => {
     let clasa = clasificaReluare({ r, error })
+    let prinJurnal = false
     if (clasa === 'fara_drept') {
       let data = null, err2 = null
       try { ({ data, error: err2 } = await client.from('executie_probe_jurnal').select('id').eq('cheie', intrare.cheie).limit(1)) } catch (e) { err2 = e }
       if (err2 || !Array.isArray(data)) clasa = 'necunoscut'
-      else if (data.length) clasa = 'aplicat'
+      else if (data.length) { clasa = 'aplicat'; prinJurnal = true }
     }
     if (clasa === 'aplicat' || clasa === 'aplicat_acum' || clasa === 'neaplicat') reg.scoate(intrare.cheie)
-    return { intrare, clasa, r, error }
+    return { intrare, clasa, r: prinJurnal ? null : r, error, prinJurnal }
   }
-  const mesajLamurire = ({ clasa, error }) => ({
-    aplicat: 'Cererea anterioară SE salvase (cu valorile de atunci).',
+  const lamureste = async (reg, intrare) => {
+    let r = null, error = null
+    try { ({ data: r, error } = await client.rpc(intrare.rpc, { ...intrare.payload, p_cheie: intrare.cheie })) } catch (e) { error = e }
+    return rezolva(reg, intrare, { r, error })
+  }
+  const mesajLamurire = ({ clasa, error, prinJurnal }) => ({
+    aplicat: prinJurnal ? 'Cererea anterioară SE salvase (confirmat din jurnal; nu mai ai drept de scriere).' : 'Cererea anterioară SE salvase (cu valorile de atunci).',
     aplicat_acum: 'Cererea anterioară nu ajunsese; am trimis-o acum, cu valorile de atunci.',
     neaplicat: error ? `Cererea anterioară nu s-a aplicat (serverul a refuzat-o: ${String(error.message || error).replace(/^probe: /, '')}).`
       : 'Cererea anterioară nu s-a salvat (între timp s-a schimbat starea).',
@@ -251,7 +258,10 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
       const aceeasi = rezultate.length === 1 && aceeasiIntentie(rezultate[0].intrare, rpc, payload) ? rezultate[0] : null
       if (aceeasi && (aceeasi.clasa === 'aplicat' || aceeasi.clasa === 'aplicat_acum')) {
         incarca({ silentios: true })
-        return { r: aceeasi.r, actual }                 // reapăsarea aceleiași cereri: acum e lămurită și salvată
+        if (aceeasi.r?.ok) return { r: aceeasi.r, actual }   // reapăsarea aceleiași cereri: acum e lămurită și salvată
+        // dovedită doar de jurnal (fără rezultat RPC): nu se presupune niciun rând; starea reală vine din reîncărcare
+        if (actual) setMesaj({ ok: true, text: mesajLamurire(aceeasi) + ' Am adus starea actuală.' })
+        return null
       }
       if (!rezultate.some(ramaneNelamurita)) incarca({ silentios: true })
       if (actual) {
@@ -262,52 +272,58 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
       return null
     }
     const cheie = cheieNoua()
-    if (!reg.pune({ tinta, rpc, cheie, payload, pusLa: new Date().toISOString() })) {
+    const intrare = { tinta, rpc, cheie, payload, pusLa: new Date().toISOString() }
+    if (!reg.pune(intrare)) {
       setMesaj({ ok: false, text: 'Nu pot păstra local cererea (stocarea browserului e plină sau blocată), deci nu o trimit: un rezultat nelămurit s-ar pierde. Eliberează spațiu în browser și reîncearcă.' })
       return null
     }
     setInCurs(true); setMesaj(null)
     let r = null, error = null
     try { ({ data: r, error } = await client.rpc(rpc, { ...payload, p_cheie: cheie })) } catch (e) { error = e }
-    // rezultat DEFINITIV = răspuns valid (ok true / false) sau refuz determinist al acestei PRIME încercări (nimic scris); orice
-    // altceva (rețea, răspuns gol) lasă cererea în registru — și dacă între timp s-a schimbat proiectul
-    const definitiv = (!error && (r?.ok === true || r?.ok === false)) || (!!error && esteRefuzDeterminist(error))
-    if (definitiv) reg.scoate(cheie)
+    // aceeași clasificare ca la retrimitere (cererea poate fi retrimisă concurent din alt tab, cu aceeași cheie): iese din registru doar
+    // la un rezultat dovedit; registrul se actualizează și dacă între timp s-a schimbat proiectul
+    const rez = await rezolva(reg, intrare, { r, error })
     if (!valid()) return null    // alt proiect / pagina închisă: niciun alt efect
     setInCurs(false); recitesteNelamurite(reg)
     const actual = g === ctx.current
-    if (error || !definitiv) {
-      if (definitiv) {
-        // refuz al serverului (regulă, drept, suprapunere, calcul ocupat): nimic nu s-a scris
-        if (actual) setMesaj({ ok: false, text: String(error.message || error).replace(/^probe: /, '') })
-      } else if (actual) {
-        setMesaj({ ok: false, text: 'Nu se știe dacă s-a salvat (' + (error?.message || error || 'răspuns gol') + '). Apasă din nou „Salvează” fără să schimbi nimic; dacă schimbi ceva, întâi verific ce s-a întâmplat.' })
-      }
+    if (rez.clasa === 'aplicat' || rez.clasa === 'aplicat_acum') {
+      setJurnalKey(k => k + 1)
+      incarca({ silentios: true })   // etapele unui tronson nou, compoziția, starea celorlalți
+      if (rez.r?.ok) { aplicaRezultat(rez.r); return { r: rez.r, actual } }
+      // dovedită doar de jurnal (o copie din alt tab a fost aplicată; aici a venit un refuz de drept): fără rând presupus
+      if (actual) setMesaj({ ok: true, text: 'Salvarea s-a făcut (confirmată din jurnal; între timp ți s-a schimbat dreptul de scriere). Am adus starea actuală.' })
       return null
     }
-    aplicaRezultat(r)
-    if (!r.ok) {
-      if (actual) setMesaj({ ok: false, text: 'S-a schimbat între timp (alt utilizator sau altă apăsare). Am adus starea actuală — verifică și reîncearcă.' })
+    if (rez.clasa === 'neaplicat') {
+      aplicaRezultat(r)
+      if (actual) setMesaj({ ok: false, text: error ? String(error.message || error).replace(/^probe: /, '')
+        : 'S-a schimbat între timp (alt utilizator sau altă apăsare). Am adus starea actuală — verifică și reîncearcă.' })
       return null
     }
-    setJurnalKey(k => k + 1)
-    incarca({ silentios: true })   // etapele unui tronson nou, compoziția, starea celorlalți
-    return { r, actual }
+    // necunoscut / fără drept nedovedit: cererea rămâne în registru, de lămurit
+    if (actual) {
+      setMesaj({ ok: false, text: rez.clasa === 'fara_drept'
+        ? String(error?.message || error).replace(/^probe: /, '') + ' Cererea rămâne de verificat (o copie a ei ar fi putut fi trimisă din alt tab).'
+        : error && esteRefuzDeterminist(error)
+          ? String(error.message || error).replace(/^probe: /, '') + ' Apasă din nou „Salvează” peste câteva secunde (aceeași cerere).'
+          : 'Nu se știe dacă s-a salvat (' + (error?.message || error || 'răspuns gol') + '). Apasă din nou „Salvează” fără să schimbi nimic; dacă schimbi ceva, întâi verific ce s-a întâmplat.' })
+    }
+    return null
   }
 
   const salveazaProba = async ({ proba, cod, deLa, panaLa, denumire, observatii }) => {
     const payload = payloadProba({ proiectId, proba, cod, deLa, panaLa, denumire, observatii })
     const x = await executa(proba ? `proba:${proba.id}` : 'nou', 'fn_executie_proba_salveaza', payload)
-    if (x?.actual) { inchideForm(); setSelectat(x.r.proba.id); setMesaj({ ok: true, text: x.r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
+    if (x?.actual && x.r?.proba) { inchideForm(); setSelectat(x.r.proba.id); setMesaj({ ok: true, text: x.r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
   }
   const anuleaza = async (proba, motiv) => {
     const payload = Object.freeze({ p_id: proba.id, p_versiune: proba.versiune, p_motiv: motiv.trim() || null })
     const x = await executa(`anulare:${proba.id}`, 'fn_executie_proba_anuleaza', payload)
-    if (x?.actual) { inchideForm(); setSelectat(null); setMesaj({ ok: true, text: `${proba.cod} anulat.` }) }
+    if (x?.actual && x.r?.ok) { inchideForm(); setSelectat(null); setMesaj({ ok: true, text: `${proba.cod} anulat.` }) }
   }
   const salveazaEtapa = async (et, form) => {
     const x = await executa(`etapa:${et.id}`, 'fn_executie_proba_etapa', payloadEtapa(et, form))
-    if (x?.actual) { inchideForm(); setMesaj({ ok: true, text: x.r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
+    if (x?.actual && x.r?.ok) { inchideForm(); setMesaj({ ok: true, text: x.r.duplicat ? 'Era deja salvat.' : 'Salvat.' }) }
   }
 
   if (!incarcat && !eroare) return <Cadru><div style={{ color: G.dim, padding: 30, textAlign: 'center' }}>Se încarcă…</div></Cadru>

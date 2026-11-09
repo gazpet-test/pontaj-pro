@@ -473,6 +473,70 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     expect(u.text()).toContain('48,3 bar')
   })
 
+  it('L05: reapăsare -> 42501 -> cheia găsită în jurnal: „se salvase”, fără rând presupus (etapă și creare, fără excepții)', async () => {
+    const stocare = stocareFalsa()
+    const { client, st, T } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'pierdut')                              // scrisă, răspuns pierdut
+    await u.apasa(u.buton('Salvează'))                                     // aceeași cerere
+    await u.elibereaza(st.rpc[1], 'interzis')                             // între timp i s-a luat dreptul
+    expect(u.text()).toContain('SE salvase (confirmat din jurnal')
+    expect(stocare.m.size).toBe(0)
+    await u.apasa(u.d.querySelector('button[aria-label="Închide"]'))
+    await u.apasa(u.d.querySelector('button[aria-label="Închide"]'))
+    // creare: aceeași poveste, fără „x.r.proba” pe un rezultat nul
+    await u.apasa(u.buton('＋ Tronson de probă nou'))
+    await u.scrie('De la km', '10+400'); await u.scrie('Până la km', '14+000')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[2], 'pierdut')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[3], 'interzis')
+    expect(u.text()).toContain('SE salvase (confirmat din jurnal')
+    expect([...T.executie_probe_tronsoane.values()].filter(p => p.cod === 'P2')).toHaveLength(1)
+    expect(stocare.m.size).toBe(0)
+  })
+
+  it('L05: două tab-uri, aceeași cheie în zbor: retrimiterea din B aplică și pierde răspunsul, apoi prima încercare din A primește 42501 -> confirmat din jurnal, nu șters orbește', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const a = await monteaza(client, 1, stocare)
+    await a.apasa(a.buton('P1'))
+    await a.apasa(a.buton('Citire / actualizare'))
+    await a.scrie('Presiunea curentă', '48,3')
+    await a.apasa(a.buton('Salvează'))                                     // rpc[0], în zbor
+    const b = await monteaza(client, 1, stocare)
+    await b.apasa(b.buton('P1'))
+    await b.apasa(b.buton('Citire / actualizare'))
+    await b.scrie('Presiunea curentă', '47,0')
+    await b.apasa(b.buton('Salvează'))                                     // B lămurește întâi cererea lui A: aceeași cheie
+    expect(st.rpc[1].a).toEqual(st.rpc[0].a)
+    await b.elibereaza(st.rpc[1], 'pierdut')                              // aplicată, răspunsul nu ajunge la B
+    expect(stocare.m.size).toBe(1)                                         // B nu știe: rămâne
+    await a.elibereaza(st.rpc[0], 'interzis')                             // prima încercare din A: refuz de drept
+    expect(a.text()).toContain('Salvarea s-a făcut (confirmată din jurnal')
+    expect(stocare.m.size).toBe(0)                                         // scoasă DOAR pentru că jurnalul o dovedește
+  })
+
+  it('L05: prima încercare refuzată de drept, cheie negăsită în jurnal: cererea rămâne de verificat', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'interzis')
+    expect(u.text()).toContain('Cererea rămâne de verificat')
+    expect(stocare.m.size).toBe(1)
+  })
+
   it('L05: refuz de drept la retrimitere + jurnal necitit = tot nelămurit (rămâne în registru)', async () => {
     const stocare = stocareFalsa()
     const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })

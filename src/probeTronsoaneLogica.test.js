@@ -329,6 +329,13 @@ describe('retrimiterea și registrul cererilor nelămurite (L05)', () => {
     expect(registruNou(null, null).toate()).toBe(null)
     expect(registruNou(stocare(), p).pune({ ...X('g'), cheie: 'nu-e-uuid' })).toBe(false)
   })
+  it('o citire eșuată a unei intrări existente = registru necitibil (null), nu „nicio intrare”', () => {
+    const s = stocare(), p = prefixRegistru('u1', 7)
+    registruNou(s, p).pune(X('etapa:1'))
+    const cuEroare = { ...s, get length() { return s.m.size }, key: i => [...s.m.keys()][i] ?? null, getItem: () => { throw new Error('citire eșuată') } }
+    expect(registruNou(cuEroare, p).toate()).toBe(null)
+    expect(registruNou(cuEroare, p).pentruTinta('etapa:1')).toBe(null)
+  })
 })
 
 describe('jurnalul', () => {
