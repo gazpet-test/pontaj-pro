@@ -73,9 +73,22 @@ export const TABELE_SCRIERE_TEST = new Set([
   'red_import_loturi', 'red_parcele', 'red_detinatori', 'red_detinatori_contact', 'red_uat', 'red_convocari', 'red_plicuri',
   'red_procese_verbale', 'red_corespondenta', 'red_corespondenta_fisiere',
 ])
-const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const esteUuid = (v) => typeof v === 'string' && RE_UUID.test(v)
+// Formele de UUID acceptate de PostgreSQL: canonică, fără cratime, cu cratimă după oricare grup de 4 cifre, între acolade, cu majuscule.
+// Toate se aduc la forma canonică ÎNAINTE de orice verificare (review Jakarinos r3 P1); ce nu e UUID valid → null.
+export function normUuid(v) {
+  if (typeof v !== 'string') return null
+  let s = v.trim()
+  if (s.startsWith('{') && s.endsWith('}')) s = s.slice(1, -1)
+  if (!/^[0-9a-f]{4}(-?[0-9a-f]{4}){7}$/i.test(s)) return null
+  const h = s.replace(/-/g, '').toLowerCase()
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+const esteUuid = (v) => normUuid(v) !== null
 const low = (v) => String(v).toLowerCase()
+const TEST_ID = low(TEST.id)
+const eTest = (v) => normUuid(v) === TEST_ID
+// cheile care, în tabelele Redări, sunt de tip uuid (identitatea rândului sau chei străine): o valoare nerecunoscută aici = refuz
+const esteCheieUuid = (k) => k === 'id' || /_id$/.test(k)
 
 // Lanțul de proprietate al tabelelor Redări (din supabase/migrations): un rând e al proiectului de test dacă proiect_id = TEST-RAZVAN
 // sau dacă părintele lui (cheia de mai jos) e deja dovedit ca al proiectului de test. Tipul unui ID = tabelul din care a fost dovedit.
@@ -93,19 +106,22 @@ export const TIP_CHEIE = {
   lot_id: 'red_loturi_plicuire', p_lot_id: 'red_loturi_plicuire', corespondenta_id: 'red_corespondenta', p_corespondenta_id: 'red_corespondenta',
   plic_id: 'red_plicuri', p_plic_id: 'red_plicuri', lot_import_id: 'red_import_loturi', pv_id: 'red_procese_verbale', p_pv_id: 'red_procese_verbale',
 }
-// ID-ul nou întors de un RPC de scriere permis (de tipul dat), ca pașii următori să-l poată atinge
+// ID-ul nou întors de un RPC de scriere permis: [tipul, câmpul din răspuns] — din RETURNS-ul funcției în supabase/migrations
+// (rândul tabelului → `id`; fn_red_convocare_rezerva întoarce TABLE(convocare_id, …)), ca pașii următori să-l poată atinge
 const RPC_INTOARCE = {
-  fn_red_plic_creeaza: 'red_plicuri', fn_red_lot_plicuire_creeaza: 'red_loturi_plicuire', fn_red_pv_creeaza: 'red_procese_verbale',
-  fn_red_pv_c_creeaza: 'red_procese_verbale', fn_red_convocare_rezerva: 'red_convocari',
+  fn_red_plic_creeaza: ['red_plicuri', 'id'], fn_red_lot_plicuire_creeaza: ['red_loturi_plicuire', 'id'],
+  fn_red_pv_creeaza: ['red_procese_verbale', 'id'], fn_red_pv_c_creeaza: ['red_procese_verbale', 'id'],
+  fn_red_convocare_rezerva: ['red_convocari', 'convocare_id'], fn_red_adresa_uat_rezerva: ['red_uat', 'id'],
 }
 const PARAM_FORMA = ['select', 'columns', 'on_conflict']
 
 // Contextul gărzii: ID-urile DOVEDITE ca ale proiectului de test, cu tipul lor: id → Set(tip). Învățate DOAR din câmpuri de identitate
 // (`id` al unui rând dovedit, chei străine cu tip cunoscut ale unui rând dovedit), niciodată din text liber.
-export const ctxGarda = () => ({ idTest: new Map([[low(TEST.id), new Set(['proiect'])]]) })
-const areTip = (ctx, v, tip) => { const t = ctx.idTest.get(low(v)); return !!t && (tip == null || t.has(tip)) }
+export const ctxGarda = () => ({ idTest: new Map([[TEST_ID, new Set(['proiect'])]]) })
+const areTip = (ctx, v, tip) => { const n = normUuid(v); const t = n && ctx.idTest.get(n); return !!t && (tip == null || t.has(tip)) }
 const adauga = (ctx, v, tip) => {
-  const k = low(v)
+  const k = normUuid(v)
+  if (!k) return 0
   if (!ctx.idTest.has(k)) ctx.idTest.set(k, new Set())
   const s = ctx.idTest.get(k)
   if (s.has(tip)) return 0
@@ -121,9 +137,15 @@ const parseCorp = (corp) => {
 // toate UUID-urile dintr-o valoare JSON (adânc), cu cheia sub care stau și dacă stau direct pe rândul de sus
 function uuiduri(v, cheie = '', out = [], adanc = 0) {
   if (v == null) return out
-  if (typeof v === 'string') { if (esteUuid(v.trim())) out.push({ cheie, v: low(v.trim()), sus: adanc <= 1 }); return out }
+  if (typeof v === 'string') {
+    const n = normUuid(v)
+    if (n) out.push({ cheie, v: n, sus: adanc <= 1 })
+    else if (esteCheieUuid(cheie) && v.trim() !== '') out.push({ cheie, v: null, sus: adanc <= 1 })   // nerecunoscut pe o cheie uuid → refuz
+    return out
+  }
   if (Array.isArray(v)) { for (const x of v) uuiduri(x, cheie, out, adanc); return out }
   if (typeof v === 'object') { for (const [k, x] of Object.entries(v)) uuiduri(x, k, out, adanc + 1); return out }
+  if (esteCheieUuid(cheie)) out.push({ cheie, v: null, sus: adanc <= 1 })                         // număr / boolean pe o cheie uuid → refuz
   return out
 }
 const esteUpsert = (u, antete) => u.searchParams.has('on_conflict') || /merge-duplicates/i.test(String(antete?.prefer || antete?.Prefer || ''))
@@ -155,6 +177,7 @@ export function tintaDovedita(u, tabel, ctx) {
     }
     if (!/^eq\./i.test(v)) return null
     const val = v.slice(3)
+    if (esteCheieUuid(k) && !esteUuid(val)) return null
     if (esteUuid(val) && !uuidDovedit(ctx, k, val)) return null
   }
   return ids
@@ -209,16 +232,16 @@ export function clasificaCerere({ url, metoda, corp, antete }, mod, ctx = ctxGar
   const [cheiePar, tipPar] = PROPRIETATE[tabel] || []
   for (const r of randuri) {
     if (r == null || typeof r !== 'object' || Array.isArray(r)) return 'blocheaza'
-    if ('proiect_id' in r && low(r.proiect_id) !== low(TEST.id)) return 'blocheaza'
+    if ('proiect_id' in r && !eTest(r.proiect_id)) return 'blocheaza'
     if (m === 'POST') {
       // apartenența rândului nou: proiect_id = TEST sau părintele dovedit de tipul lui
       const val = r[cheiePar]
-      const alTest = tipPar === 'proiect' ? (val != null && low(val) === low(TEST.id)) : (esteUuid(val) && areTip(ctx, val, tipPar))
+      const alTest = tipPar === 'proiect' ? eTest(val) : areTip(ctx, val, tipPar)
       if (!cheiePar || !alTest) return 'blocheaza'
       if (upsert && 'id' in r && !areTip(ctx, r.id, tabel)) return 'blocheaza'
     }
     for (const x of uuiduri(r)) {
-      if (m === 'POST' && !upsert && x.cheie === 'id' && x.sus) continue   // id-ul rândului nou la INSERT simplu
+      if (m === 'POST' && !upsert && x.cheie === 'id' && x.sus && x.v) continue   // id-ul rândului nou (UUID valid) la INSERT simplu
       if (!uuidDovedit(ctx, x.cheie, x.v)) return 'blocheaza'
     }
   }
@@ -239,17 +262,17 @@ export function invataIduri({ url, permisa }, raspuns, mod, ctx) {
   const resursa = u.pathname.slice('/rest/v1/'.length)
   let n = 0
   if (resursa.startsWith('rpc/')) {
-    const tip = RPC_INTOARCE[resursa.slice(4)]
+    const [tip, camp] = RPC_INTOARCE[resursa.slice(4)] || []
     if (!permisa || !tip) return 0
-    const vals = (Array.isArray(raspuns) ? raspuns : [raspuns]).map(x => (x && typeof x === 'object') ? x.id : x)
-    for (const v of vals) if (esteUuid(v)) n += adauga(ctx, v, tip)
+    const vals = (Array.isArray(raspuns) ? raspuns : [raspuns]).map(x => (x && typeof x === 'object') ? x[camp] : x)
+    for (const v of vals) n += adauga(ctx, v, tip)
     return n
   }
   const randuri = Array.isArray(raspuns) ? raspuns : [raspuns]
   if (/^v_red_/.test(resursa)) {
     for (const r of randuri) {
-      if (!r || typeof r !== 'object' || r.proiect_id == null || low(r.proiect_id) !== low(TEST.id)) continue
-      for (const [k, tip] of Object.entries(TIP_CHEIE)) if (tip !== 'proiect' && esteUuid(r[k])) n += adauga(ctx, r[k], tip)
+      if (!r || typeof r !== 'object' || !eTest(r.proiect_id)) continue
+      for (const [k, tip] of Object.entries(TIP_CHEIE)) if (tip !== 'proiect') n += adauga(ctx, r[k], tip)
     }
     return n
   }
@@ -262,7 +285,7 @@ function invataRand(tabel, r, ctx) {
     const prop = PROPRIETATE[tabel]
     if (!prop || !esteUuid(r.id)) return 0
     const [cheie, tip] = prop, val = r[cheie]
-    const alTest = tip === 'proiect' ? (val != null && low(val) === low(TEST.id)) : (esteUuid(val) && areTip(ctx, val, tip))
+    const alTest = tip === 'proiect' ? eTest(val) : areTip(ctx, val, tip)
     return alTest ? adauga(ctx, r.id, tabel) : 0
   }
   let n = randPropriu()                                     // părintele întâi (dacă se poate), ca relațiile copil să-l găsească

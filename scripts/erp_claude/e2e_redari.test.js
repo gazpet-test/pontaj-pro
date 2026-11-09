@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { citesteArgs, clasificaCerere, ctxGarda, invataIduri, RPC_CITIRE, esteProiectTest, esteProiectLot1, fisierProba, urlScurt, raportMd, esteAsteptata, TEST, PREFIX_PROBA, EroareUtilizare } from './e2e_redari.mjs'
+import { citesteArgs, clasificaCerere, ctxGarda, invataIduri, normUuid, RPC_CITIRE, esteProiectTest, esteProiectLot1, fisierProba, urlScurt, raportMd, esteAsteptata, TEST, PREFIX_PROBA, EroareUtilizare } from './e2e_redari.mjs'
 import { parseazaTgz } from '../../src/redari/importTgz.js'
 
 const SB = 'https://dxczwkbciseqniprspcu.supabase.co'
@@ -80,6 +80,34 @@ describe('e2e_redari — garda de rețea', () => {
     expect(get(`/rest/v1/red_convocari?proiect_id=eq.${TEST.id}`, [{ id: CONV, detinator_id: DET }], c2)).toBe(0)        // părinte nedovedit
     expect(get(`/rest/v1/red_parcele?proiect_id=eq.${ALT}`, [{ id: Z, proiect_id: ALT }], c2)).toBe(0)                  // alt proiect
     expect(get(`/rest/v1/red_parcele?proiect_id=eq.${TEST.id}`, [{ id: Z, proiect_id: TEST.id }], c2, 'citire')).toBe(0)   // modul citire
+  })
+  it('P1 r3: UUID-urile necanonice se normalizează înainte de verificare; valorile nerecunoscute pe chei uuid = refuz', () => {
+    const fara = (u) => u.replace(/-/g, '')
+    expect(normUuid(`{${Z}}`)).toBe(Z)
+    expect(normUuid(fara(Z).toUpperCase())).toBe(Z)
+    expect(normUuid('a0eebc99-9c0b4ef8-bb6d6bb9-bd380a11')).toBe('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')   // cratimă după grupuri de 4
+    expect(normUuid('nu-e-uuid')).toBeNull()
+    expect(s(`/rest/v1/red_detinatori?id=eq.${DET}`, 'PATCH', { parcela_id: fara(Z) })).toBe('blocheaza')       // scenariul din review
+    expect(s(`/rest/v1/red_detinatori?id=eq.${DET}`, 'PATCH', { parcela_id: `{${Z}}` })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_detinatori?id=eq.${DET}`, 'PATCH', { parcela_id: Z.toUpperCase() })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_detinatori?id=eq.${DET}`, 'PATCH', { parcela_id: 'ceva' })).toBe('blocheaza')          // nerecunoscut pe cheie uuid
+    expect(s(`/rest/v1/red_detinatori?id=eq.${DET}`, 'PATCH', { parcela_id: 12 })).toBe('blocheaza')
+    expect(s(`/rest/v1/red_detinatori?id=eq.${DET}`, 'PATCH', { parcela_id: fara(PAR) })).toBe('permite')       // aceeași parcelă dovedită, altă scriere
+    expect(s('/rest/v1/rpc/fn_red_plic_creeaza', 'POST', { p_convocare_id: `{${Z}}` })).toBe('blocheaza')
+    expect(s('/rest/v1/rpc/fn_red_plic_creeaza', 'POST', { p_convocare_id: fara(CONV).toUpperCase() })).toBe('permite')
+    expect(s('/rest/v1/red_parcele', 'POST', [{ proiect_id: `{${TEST.id}}`, uat_id: `{${Z}}` }])).toBe('blocheaza')
+    expect(s(`/rest/v1/red_convocari?id=eq.${CONV}&detinator_id=eq.${fara(Z)}`, 'PATCH', { stare: 'x' })).toBe('blocheaza')
+  })
+  it('P2 r3: rezervarea întoarce convocare_id; convocarea nouă poate fi apoi legată', () => {
+    const ctx = ctxLant()
+    const NOUA = 'dddddddd-0000-4000-8000-000000000001'
+    const raspunsRezerva = [{ convocare_id: NOUA, nr_document: 'C-1', parcela_id: PAR, uat_id: UAT, proiect_id: TEST.id }]
+    expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva`, permisa: true }, raspunsRezerva, 'scriere', ctx)).toBe(1)
+    expect(s('/rest/v1/rpc/fn_red_convocare_leaga', 'POST', { p_convocare_id: NOUA, p_detinator_id: DET }, ctx)).toBe('permite')
+    expect(s(`/rest/v1/red_convocari?id=eq.${NOUA}`, 'PATCH', { stare: 'generat' }, ctx)).toBe('permite')
+    const c2 = ctxLant()
+    expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva`, permisa: false }, raspunsRezerva, 'scriere', c2)).toBe(0)   // nepermis
+    expect(invataIduri({ url: `${SB}/rest/v1/rpc/fn_red_convocare_rezerva`, permisa: true }, [{ id: NOUA }], 'scriere', c2)).toBe(0)    // câmpul greșit
   })
   it('învățarea: relații încorporate, vederi v_red_* și ID-ul nou al unui RPC permis', () => {
     const ctx = ctxGarda()
