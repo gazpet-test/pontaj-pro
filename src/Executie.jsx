@@ -20,7 +20,7 @@ import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
-import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261202a)
+import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261206a)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'

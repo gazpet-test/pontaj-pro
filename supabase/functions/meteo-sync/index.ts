@@ -6,7 +6,7 @@
 // Pentru fiecare site activ cu lat/lng (sau localitate_meteo): conditions + forecasts (4 zile) + alerts.
 // Erorile per site nu opresc bucla — se scriu în răspuns; cache-ul vechi rămâne.
 //
-// Istoricul meteo zilnic (migrarea 20261202a → public.meteo_istoric_zilnic), în ACEEAȘI funcție și în ACELAȘI cron (fără automatizare nouă):
+// Istoricul meteo zilnic (migrarea 20261206a → public.meteo_istoric_zilnic), în ACEEAȘI funcție și în ACELAȘI cron (fără automatizare nouă):
 //  - pasul zilnic: la rularea cron de la 04:05 UTC (o dată pe zi), pentru site-urile active cu meteo_activ și coordonate, se reiau ultimele
 //    ZILE_REFACERE zile până ieri din arhiva Open-Meteo (fără cheie; cu OPEN_METEO_API_KEY dacă e setat) și se scriu cu upsert pe (site_id, data);
 //    merge și dacă lipsesc credențialele Xweather (pasul e înaintea lor);
@@ -104,7 +104,7 @@ Deno.serve(async (req: Request) => {
     esteOwner = pr?.is_owner === true;
   }
 
-  // ── istoricul meteo zilnic (20261202a) ──
+  // ── istoricul meteo zilnic (20261206a) ──
   if (body.istoric_backfill) {
     if (!esteOwner) return json({ error: 'doar owner-ul pornește completarea istoricului meteo' }, 403);
     const deLa = body.de_la == null ? null : String(body.de_la);

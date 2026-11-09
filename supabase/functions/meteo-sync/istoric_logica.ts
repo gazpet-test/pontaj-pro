@@ -1,4 +1,4 @@
-// Istoricul meteo zilnic pe șantiere (migrarea 20261202a, tabelul meteo_istoric_zilnic) — logica pură, fără rețea și fără BD,
+// Istoricul meteo zilnic pe șantiere (migrarea 20261206a, tabelul meteo_istoric_zilnic) — logica pură, fără rețea și fără BD,
 // folosită de meteo-sync/index.ts și testată cu vitest (src/meteoIstoricLogica.test.js).
 // Sursa: arhiva Open-Meteo (archive-api.open-meteo.com), valori zilnice în ziua Europe/Bucharest, pe lat/lng din sites.
 // Răspunsul e conținut EXTERN: se folosesc doar numere validate (unități exacte, intervale ca în CHECK-urile tabelului); textul nu se citește.

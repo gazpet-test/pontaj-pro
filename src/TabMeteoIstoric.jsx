@@ -1,5 +1,5 @@
 // Execuție → proiect → 🌧️ Meteo (cererea lui Răzvan, 09.11.2026): istoricul meteo zilnic pe șantierele proiectului, calendarul zilelor
-// nelucrabile pe lună și exportul Excel (dovezi pentru notificări / revendicări). Datele: v_meteo_zile (migrarea 20261202a), umplute de
+// nelucrabile pe lună și exportul Excel (dovezi pentru notificări / revendicări). Datele: v_meteo_zile (migrarea 20261206a), umplute de
 // meteo-sync din arhiva Open-Meteo. „Zi nelucrabilă” vine calculată din vedere (o singură definiție, L19).
 // Șantierele proiectului = sites.proiect_id. Pragurile le schimbă doar owner-ul (RPC fn_meteo_praguri_seteaza, CAS pe versiune).
 // L18: erorile se afișează; „fără date” ≠ „lucrabilă”. L24: rezultatul unei încărcări se aplică doar dacă proiectul / șantierul e cel curent.

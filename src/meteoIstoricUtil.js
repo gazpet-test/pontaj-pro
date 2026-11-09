@@ -1,4 +1,4 @@
-// Execuție → proiect → 🌧️ Meteo: istoricul zilnic pe șantier (v_meteo_zile, migrarea 20261202a) — calendar, rezumate, export Excel.
+// Execuție → proiect → 🌧️ Meteo: istoricul zilnic pe șantier (v_meteo_zile, migrarea 20261206a) — calendar, rezumate, export Excel.
 // „Zi nelucrabilă” NU se recalculează aici: vine calculată din vedere (o singură definiție, L19); aici doar se afișează / se exportă.
 // Citirea: pe chei (data crescător, pe fiecare șantier, până la pagina goală, L23); orice eroare se aruncă cu mesaj (L18).
 import * as XLSX_mod from 'xlsx-js-style'

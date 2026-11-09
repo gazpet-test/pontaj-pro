@@ -1,4 +1,4 @@
--- Harness 20261202a_meteo_istoric_zilnic — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
+-- Harness 20261206a_meteo_istoric_zilnic — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
 -- Rulare din rădăcina repo-ului:  psql -X -v ON_ERROR_STOP=1 -f scripts/test_meteo_istoric.sql
 -- O singură tranzacție, ANULATĂ la final (ROLLBACK): migrare (marcajul de livrare) -> clasificarea „zi nelucrabilă” pe cazuri la limită ->
 -- constrângeri -> drepturi ca anon / non-owner / owner / service_role (SET LOCAL ROLE + request.jwt.claims) -> pragurile prin RPC (CAS) ->
@@ -7,8 +7,8 @@
 -- Fiecare test se termină cu NOTICE „Tn OK”; orice abatere oprește rularea (RAISE EXCEPTION).
 \set ON_ERROR_STOP 1
 BEGIN ISOLATION LEVEL READ COMMITTED;
-SELECT set_config('gazpet.livrare_migrare', '20261202a_meteo_istoric_zilnic:' || txid_current(), true);
-\ir ../supabase/migrations/20261202a_meteo_istoric_zilnic.sql
+SELECT set_config('gazpet.livrare_migrare', '20261206a_meteo_istoric_zilnic:' || txid_current(), true);
+\ir ../supabase/migrations/20261206a_meteo_istoric_zilnic.sql
 
 CREATE FUNCTION pg_temp.t_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
@@ -188,16 +188,16 @@ SELECT pg_temp.t_ca(NULL, 'postgres');
 -- T6: revenirea — nearmată = refuz; armată cu rânduri = refuz; armată cu praguri schimbate = refuz (nimic nu se execută după eroare)
 SAVEPOINT t6a;
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql
+\ir ../supabase/revenire/20261206a_meteo_istoric_zilnic_ROLLBACK.sql
 \set t6a_eroare :ERROR
 \set t6a_stare :SQLSTATE
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t6a;
 SELECT pg_temp.t_eroare('T6a', :'t6a_eroare', :'t6a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'garda invalida');
 SAVEPOINT t6b;
-SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
+SELECT set_config('gazpet.revenire_20261206a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql
+\ir ../supabase/revenire/20261206a_meteo_istoric_zilnic_ROLLBACK.sql
 \set t6b_eroare :ERROR
 \set t6b_stare :SQLSTATE
 \set ON_ERROR_STOP 1
@@ -205,9 +205,9 @@ ROLLBACK TO SAVEPOINT t6b;
 SELECT pg_temp.t_eroare('T6b', :'t6b_eroare', :'t6b_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'tabelul are randuri');
 DELETE FROM public.meteo_istoric_zilnic;
 SAVEPOINT t6c;
-SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
+SELECT set_config('gazpet.revenire_20261206a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql
+\ir ../supabase/revenire/20261206a_meteo_istoric_zilnic_ROLLBACK.sql
 \set t6c_eroare :ERROR
 \set t6c_stare :SQLSTATE
 \set ON_ERROR_STOP 1
@@ -225,26 +225,26 @@ END $t$;
 UPDATE public.meteo_praguri_nelucrabil SET precipitatii_mm_min = 10, zapada_cm_min = 1, tmax_sub_c = 0, tmin_max_c = -5, versiune = 1, actualizat_de = NULL;
 -- jurnalul încă are versiunea 2: revenirea trebuie să refuze și pentru el
 SAVEPOINT t7a;
-SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
+SELECT set_config('gazpet.revenire_20261206a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql
+\ir ../supabase/revenire/20261206a_meteo_istoric_zilnic_ROLLBACK.sql
 \set t7a_eroare :ERROR
 \set t7a_stare :SQLSTATE
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t7a;
 SELECT pg_temp.t_eroare('T7a', :'t7a_eroare', :'t7a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'pragurile au fost schimbate');
 DELETE FROM public.meteo_praguri_jurnal WHERE versiune > 1;
-SELECT set_config('gazpet.revenire_20261202a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
-\ir ../supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql
+SELECT set_config('gazpet.revenire_20261206a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
+\ir ../supabase/revenire/20261206a_meteo_istoric_zilnic_ROLLBACK.sql
 DO $t$ BEGIN
   IF to_regclass('public.meteo_istoric_zilnic') IS NOT NULL OR to_regclass('public.meteo_praguri_nelucrabil') IS NOT NULL OR to_regclass('public.v_meteo_zile') IS NOT NULL
      OR to_regclass('public.meteo_praguri_jurnal') IS NOT NULL
      OR to_regprocedure('public.fn_meteo_praguri_seteaza(integer, numeric, numeric, numeric, numeric)') IS NOT NULL
-     OR current_setting('gazpet.revenire_20261202a', true) <> '' THEN
+     OR current_setting('gazpet.revenire_20261206a', true) <> '' THEN
     RAISE EXCEPTION 'T7 FAIL: revenirea';
   END IF;
 END $t$;
-\ir ../supabase/migrations/20261202a_meteo_istoric_zilnic.sql
+\ir ../supabase/migrations/20261206a_meteo_istoric_zilnic.sql
 DO $t$ BEGIN
   IF to_regclass('public.meteo_istoric_zilnic') IS NULL OR (SELECT versiune FROM public.meteo_praguri_nelucrabil) <> 1 THEN
     RAISE EXCEPTION 'T7 FAIL: re-aplicarea';

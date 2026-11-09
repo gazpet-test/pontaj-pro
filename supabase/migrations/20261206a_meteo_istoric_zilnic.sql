@@ -1,5 +1,5 @@
--- Version 20261202120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
--- 20261202a_meteo_istoric_zilnic — istoricul meteo zilnic pe șantiere (cererea lui Răzvan, 09.11.2026): dovezile pentru zilele nelucrabile.
+-- Version 20261206120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
+-- 20261206a_meteo_istoric_zilnic — istoricul meteo zilnic pe șantiere (cererea lui Răzvan, 09.11.2026): dovezile pentru zilele nelucrabile.
 --
 -- Ce face:
 --   * UN tabel nou, meteo_istoric_zilnic: o înregistrare pe (site_id, data) — precipitații, ploaie, zăpadă, Tmin, Tmax, vânt maxim, rafale,
@@ -17,15 +17,15 @@
 -- Ce NU face: nicio dată meteo (o aduce meteo-sync după deploy; backfill-ul îl pornește owner-ul), nicio automatizare nouă (pasul zilnic stă
 --   în cron-ul existent meteo_sync_2h → meteo-sync), niciun drept nou pe alte tabele.
 -- Ordinea lock-urilor (L06): RPC-ul actualizează UN rând (meteo_praguri_nelucrabil, id = 1), apoi inserează în meteo_praguri_jurnal.
--- Revenire: supabase/revenire/20261202a_meteo_istoric_zilnic_ROLLBACK.sql. Test pe clonă: scripts/test_meteo_istoric.sql.
+-- Revenire: supabase/revenire/20261206a_meteo_istoric_zilnic_ROLLBACK.sql. Test pe clonă: scripts/test_meteo_istoric.sql.
 DO $pre$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
-     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261202a_meteo_istoric_zilnic:' || txid_current() THEN
-    RAISE EXCEPTION '20261202a: garda start invalida';
+     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261206a_meteo_istoric_zilnic:' || txid_current() THEN
+    RAISE EXCEPTION '20261206a: garda start invalida';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.livrare_migrare=%') THEN
-    RAISE EXCEPTION '20261202a: armare persistenta refuzata';
+    RAISE EXCEPTION '20261206a: armare persistenta refuzata';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
@@ -33,7 +33,7 @@ BEGIN
   IF to_regclass('public.meteo_istoric_zilnic') IS NOT NULL OR to_regclass('public.meteo_praguri_nelucrabil') IS NOT NULL
      OR to_regclass('public.meteo_praguri_jurnal') IS NOT NULL OR to_regclass('public.v_meteo_zile') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_meteo_praguri_seteaza') THEN
-    RAISE EXCEPTION '20261202a: obiectele exista deja (reaplicare)';
+    RAISE EXCEPTION '20261206a: obiectele exista deja (reaplicare)';
   END IF;
   -- dependențele: sites (id întreg + coloanele citite de meteo-sync), executie_proiecte.data_start (backfill), profiles.is_owner, auth.uid()
   IF (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.sites'::regclass AND attname = 'id' AND NOT attisdropped) NOT IN ('integer', 'bigint')
@@ -44,7 +44,7 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_proiecte' AND column_name = 'data_start' AND data_type = 'date')
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'is_owner' AND data_type = 'boolean')
      OR to_regprocedure('auth.uid()') IS NULL THEN
-    RAISE EXCEPTION '20261202a: dependentele (sites.id intreg cu cheie, coloanele sites, executie_proiecte.data_start date, profiles.is_owner, auth.uid) difera';
+    RAISE EXCEPTION '20261206a: dependentele (sites.id intreg cu cheie, coloanele sites, executie_proiecte.data_start date, profiles.is_owner, auth.uid) difera';
   END IF;
 END $pre$;
 
@@ -165,14 +165,14 @@ BEGIN
      OR (SELECT count(*) FROM public.meteo_praguri_nelucrabil) <> 1
      OR (SELECT count(*) FROM public.meteo_praguri_jurnal) <> 1
      OR (SELECT count(*) FROM public.meteo_praguri_jurnal WHERE versiune = 1 AND precipitatii_mm_min = 10 AND zapada_cm_min = 1 AND tmax_sub_c = 0 AND tmin_max_c = -5) <> 1 THEN
-    RAISE EXCEPTION '20261202a post: pragurile de pornire / jurnalul';
+    RAISE EXCEPTION '20261206a post: pragurile de pornire / jurnalul';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_class c WHERE c.oid IN ('public.meteo_praguri_nelucrabil'::regclass, 'public.meteo_praguri_jurnal'::regclass, 'public.meteo_istoric_zilnic'::regclass)
                AND (NOT c.relrowsecurity OR c.relforcerowsecurity OR pg_get_userbyid(c.relowner) <> 'postgres'))
      OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('meteo_praguri_nelucrabil', 'meteo_praguri_jurnal', 'meteo_istoric_zilnic')) <> 3
      OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('meteo_praguri_nelucrabil', 'meteo_praguri_jurnal', 'meteo_istoric_zilnic')
                   AND (cmd <> 'SELECT' OR roles <> ARRAY['authenticated']::name[] OR permissive <> 'PERMISSIVE')) THEN
-    RAISE EXCEPTION '20261202a post: RLS / politici';
+    RAISE EXCEPTION '20261206a post: RLS / politici';
   END IF;
   -- drepturi exacte: authenticated doar SELECT; service_role SELECT (+ INSERT / UPDATE pe istoric); anon nimic
   IF has_table_privilege('anon', 'public.meteo_istoric_zilnic', 'SELECT') OR has_table_privilege('anon', 'public.v_meteo_zile', 'SELECT')
@@ -193,15 +193,15 @@ BEGIN
      OR NOT has_table_privilege('authenticated', 'public.meteo_praguri_nelucrabil', 'SELECT')
      OR NOT has_table_privilege('authenticated', 'public.v_meteo_zile', 'SELECT')
      OR has_table_privilege('authenticated', 'public.v_meteo_zile', 'INSERT,UPDATE,DELETE,TRUNCATE') THEN
-    RAISE EXCEPTION '20261202a post: drepturi pe tabele';
+    RAISE EXCEPTION '20261206a post: drepturi pe tabele';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.v_meteo_zile'::regclass AND reloptions = ARRAY['security_invoker=on']) THEN
-    RAISE EXCEPTION '20261202a post: vederea nu e security_invoker';
+    RAISE EXCEPTION '20261206a post: vederea nu e security_invoker';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_meteo_praguri_seteaza(integer, numeric, numeric, numeric, numeric)'::regprocedure
                    AND prosecdef AND proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(proowner) = 'postgres')
      OR has_function_privilege('anon', 'public.fn_meteo_praguri_seteaza(integer, numeric, numeric, numeric, numeric)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.fn_meteo_praguri_seteaza(integer, numeric, numeric, numeric, numeric)', 'EXECUTE') THEN
-    RAISE EXCEPTION '20261202a post: funcția pragurilor';
+    RAISE EXCEPTION '20261206a post: funcția pragurilor';
   END IF;
 END $post$;
