@@ -26,7 +26,14 @@ export const interzis = v => INTERZIS_EXACT.test(v) || INTERZIS_ORICUM.test(v)
 
 const lit = v => (v == null ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`)
 
+export const GRUPE_PERMISE = new Set(['meta', ...GRUPE.map(([g]) => g)])
+const CONTROL = new RegExp('[' + String.fromCharCode(0) + '-' + String.fromCharCode(31) + String.fromCharCode(127) + ']')
+const CONTROL_G = new RegExp(CONTROL.source, 'g')
+
 export function randuri(date) {
+  if (!date || typeof date !== 'object' || Array.isArray(date)) throw new Error('JSON-ul trebuie să fie un obiect cu grupele clauze / cai / termene / evenimente / surse')
+  // L12: o grupă necunoscută (ex. o greșeală de scriere) nu se ignoră tacit
+  for (const k of Object.keys(date)) if (!GRUPE_PERMISE.has(k)) throw new Error(`grupa „${k}” nu e cunoscută (permise: ${[...GRUPE_PERMISE].join(', ')})`)
   const out = []
   const vazute = new Set()
   for (const [grup, sectiune] of GRUPE) {
@@ -66,18 +73,16 @@ export function randuri(date) {
 }
 
 export function genereaza(date, { regex, numeSursa = 'date.json', sha = '' }) {
-  if (typeof regex !== 'string' || !regex.length || regex.length > 200 || /'/.test(regex)) throw new Error('--proiect-regex lipsă sau invalid')
+  // regex-ul ajunge într-un comentariu și într-un literal SQL: fără caractere de control (un rând nou ar ieși din comentariu) și fără apostrof
+  if (typeof regex !== 'string' || !regex.length || regex.length > 200 || CONTROL.test(regex) || /'/.test(regex)) throw new Error('--proiect-regex lipsă sau invalid')
+  if (typeof sha !== 'string' || !/^[0-9a-f]*$/.test(sha)) throw new Error('sha invalid')
+  const sursa = basename(String(numeSursa)).replace(CONTROL_G, '_').slice(0, 120)
   const rs = randuri(date)
   const cols = COLOANE_IMPORT
   const valori = rs.map(r => '    (' + cols.map(c => (r[c] == null ? `NULL::${TIP[c] || 'text'}` : TIP[c] === 'integer' ? String(r[c]) : TIP[c] === 'date' ? `${lit(r[c])}::date` : lit(r[c]))).join(', ') + ')').join(',\n')
   const fara = cols.filter(c => !['sectiune', 'cod'].includes(c))
   const tup = p => '(' + fara.map(c => `${p}.${c}`).join(', ') + ')'
-  return `-- Import fișa contractului (executie_contract_repere) — generat de scripts/contract_repere_import_sql.mjs din ${basename(numeSursa)}${sha ? ' (sha256 ' + sha + ')' : ''}.
--- ${rs.length} rânduri. Rulează DOAR ca postgres, în tranzacția operatorului, DUPĂ: SELECT set_config('gazpet.import_contract_proiect', '<id>', true);
--- Garda: proiectul există și executie_proiecte.nume ~* '${regex}'. Upsert pe (proiect_id, sectiune, cod); rândurile modificate din aplicație
--- (modificat_de nenul) NU se suprascriu; nimic nu se șterge; reluarea e idempotentă. Ordinea lock-urilor: advisory pe proiect, apoi rândurile
--- (aceeași ca fn_executie_contract_salveaza).
-DO $imp$
+  const corp = `
 DECLARE
   v_txt text := current_setting('gazpet.import_contract_proiect', true);
   v_p bigint;
@@ -89,7 +94,7 @@ BEGIN
   IF v_txt IS NULL OR v_txt !~ '^[0-9]{1,18}$' THEN RAISE EXCEPTION 'import contract: setează întâi gazpet.import_contract_proiect'; END IF;
   v_p := v_txt::bigint;
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  IF NOT EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = v_p AND nume ~* '${regex}') THEN
+  IF NOT EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = v_p AND nume ~* ${lit(regex)}) THEN
     RAISE EXCEPTION 'import contract: proiectul % nu există sau nu e cel așteptat', v_p;
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('executie_contract_repere:' || v_p, 0));
@@ -112,7 +117,17 @@ ${valori};
    WHERE t.proiect_id = v_p AND NOT EXISTS (SELECT 1 FROM _imp_contract s WHERE s.sectiune = t.sectiune AND s.cod = t.cod);
   RAISE NOTICE 'import contract: proiect %, % rânduri în fișier, % scrise (noi sau schimbate); sărite (modificate din aplicație): %; în BD, dar nu în fișier: %',
     v_p, ${rs.length}, v_scrise, coalesce(v_sarite, '—'), coalesce(v_extra, '—');
-END $imp$;
+END
+`
+  // delimitatorul blocului DO: unul care NU apare nicăieri în corp (un text cu „$imp$” ar închide blocul prea devreme)
+  let tag = '$imp$'
+  for (let n = 1; corp.includes(tag); n++) tag = `$imp${n}$`
+  return `-- Import fișa contractului (executie_contract_repere) — generat de scripts/contract_repere_import_sql.mjs din ${sursa}${sha ? ' (sha256 ' + sha + ')' : ''}.
+-- ${rs.length} rânduri. Rulează DOAR ca postgres, în tranzacția operatorului, DUPĂ: SELECT set_config('gazpet.import_contract_proiect', '<id>', true);
+-- Garda: proiectul există și executie_proiecte.nume ~* ${lit(regex)}. Upsert pe (proiect_id, sectiune, cod); rândurile modificate din aplicație
+-- (modificat_de nenul) NU se suprascriu; nimic nu se șterge; reluarea e idempotentă. Ordinea lock-urilor: advisory pe proiect, apoi rândurile
+-- (aceeași ca fn_executie_contract_salveaza).
+DO ${tag}${corp}${tag};
 `
 }
 

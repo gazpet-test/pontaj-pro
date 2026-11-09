@@ -159,12 +159,16 @@ export default function ContractProiectTab({ proiectId, client = supabase }) {
   const [inCurs, setInCurs] = useState(false)
   const [mesaj, setMesaj] = useState(null)
   const [azi, setAzi] = useState(ziBucuresti())
-  const gen = useRef(0)
-  const fisaGen = useRef(0)
+  const gen = useRef(0)                         // încărcarea listei
+  const proiectGen = useRef(0)                  // identitatea proiectului afișat (crește la schimbarea proiectului și la demontare)
+  const fisaGen = useRef(0)                     // fișa deschisă
+  const opGen = useRef(0)                       // salvarea în curs (doar ea își poate stinge „Se salvează…”)
+  const salvate = useRef(new Map())             // rândurile salvate după pornirea citirii curente (rămân în listă la îmbinare)
   const intentie = useRef(null)                 // { amprenta, cheie } — aceeași intenție = aceeași cheie la reîncercare (L04/L05)
 
   const incarca = useCallback(async () => {
     const g = ++gen.current
+    salvate.current = new Map()                 // ce s-a salvat înainte de acest moment e deja în BD, deci și în citire
     setIncarc(true); setEroare(null); setEroareDrept(null)
     try {
       const [toate, drept] = await Promise.all([
@@ -176,7 +180,7 @@ export default function ContractProiectTab({ proiectId, client = supabase }) {
         client.rpc('fn_executie_contract_drept', { p_proiect: pid, p_scriere: true }),
       ])
       if (g !== gen.current) return
-      setRanduri(curente => imbinaLista(toate.filter(r => r.proiect_id === pid), curente))
+      setRanduri(curente => imbinaLista(toate.filter(r => r.proiect_id === pid), curente, [...salvate.current.values()]))
       if (drept.error) { setPoateScrie(false); setEroareDrept('Nu am putut verifica dreptul de scriere: ' + drept.error.message) }
       else setPoateScrie(drept.data === true)
       setAzi(ziBucuresti())
@@ -187,9 +191,10 @@ export default function ContractProiectTab({ proiectId, client = supabase }) {
   }, [pid, client])
 
   useEffect(() => {
-    fisaGen.current += 1; intentie.current = null
-    setRanduri([]); setFisa(null); setDeschis(null); setMesaj(null)
+    proiectGen.current += 1; fisaGen.current += 1; opGen.current += 1; intentie.current = null; salvate.current = new Map()
+    setRanduri([]); setFisa(null); setDeschis(null); setMesaj(null); setInCurs(false)
     incarca()
+    return () => { gen.current += 1; proiectGen.current += 1; fisaGen.current += 1; opGen.current += 1 }   // la schimbare / demontare nimic vechi nu se mai aplică
   }, [incarca])
 
   const vizibile = useMemo(() => sorteaza(filtreaza(randuri, { sectiune, text: cauta, arhivate }), sectiune), [randuri, sectiune, cauta, arhivate])
@@ -213,12 +218,15 @@ export default function ContractProiectTab({ proiectId, client = supabase }) {
     const a = amprenta(pid, fisa.id, fisa.versiune, p)
     if (!intentie.current || intentie.current.amprenta !== a) intentie.current = { amprenta: a, cheie: cheieNoua() }
     const { cheie } = intentie.current
-    const fg = fisaGen.current, g = gen.current
+    const fg = fisaGen.current, pg = proiectGen.current, op = ++opGen.current
     setInCurs(true); setMesaj(null)
     try {
       const { data, error } = await client.rpc('fn_executie_contract_salveaza', { p_proiect: pid, p_id: fisa.id, p_versiune: fisa.versiune, p_date: p, p_cheie: cheie })
-      if (g !== gen.current) return                               // alt proiect / altă încărcare: nimic nu se aplică
-      if (data?.rand) setRanduri(l => aplicaRand(l, data.rand))   // rândul serverului intră în listă doar dacă e mai nou
+      if (pg !== proiectGen.current) return                       // alt proiect / componenta demontată: nimic nu se aplică
+      if (data?.rand && data.rand.proiect_id === pid) {           // rândul serverului intră în listă doar dacă e mai nou și rămâne
+        salvate.current.set(data.rand.id, data.rand)              // și după o citire pornită înaintea salvării
+        setRanduri(l => aplicaRand(l, data.rand))
+      }
       if (fg !== fisaGen.current) return                          // fișa s-a închis / schimbat între timp
       if (error) {
         if (eAmbigua(error)) { setMesaj({ ton: 'eroare', text: 'Rezultat necunoscut (rețea). Apasă din nou „Salvează”: se reia aceeași salvare, fără dublură.' }); return }
@@ -238,9 +246,9 @@ export default function ContractProiectTab({ proiectId, client = supabase }) {
       fisaGen.current += 1
       setFisa(null)
     } catch (e) {
-      if (fg !== fisaGen.current || g !== gen.current) return
+      if (fg !== fisaGen.current || pg !== proiectGen.current) return
       setMesaj({ ton: 'eroare', text: 'Rezultat necunoscut (' + (e?.message || 'rețea') + '). Apasă din nou „Salvează”: se reia aceeași salvare.' })
-    } finally { setInCurs(false) }
+    } finally { if (op === opGen.current) setInCurs(false) }
   }
 
   return (

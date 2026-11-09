@@ -11,6 +11,7 @@ import {
 } from './executieContractRepere.js'
 import { randuri, genereaza, interzis } from '../scripts/contract_repere_import_sql.mjs'
 
+const NL = String.fromCharCode(10), CR = String.fromCharCode(13)
 const SQL = readFileSync(fileURLToPath(new URL('../supabase/migrations/20261203a_executie_contract_repere.sql', import.meta.url)), 'utf8')
 const bloc = (nume) => {
   const a = SQL.indexOf(`-- ${nume}-START`), b = SQL.indexOf(`-- ${nume}-END`)
@@ -30,7 +31,9 @@ describe('paritate cu migrarea 20261203a', () => {
     expect(dinSql).toEqual(LIMITE)
   })
   it('câmpurile „doar la evenimente” = CHECK-ul executie_contract_repere_eveniment', () => {
-    const c = SQL.slice(SQL.indexOf('CONSTRAINT executie_contract_repere_eveniment'), SQL.indexOf('CONSTRAINT executie_contract_repere_cheie'))
+    const a = SQL.indexOf('CONSTRAINT executie_contract_repere_eveniment')
+    expect(a).toBeGreaterThan(0)
+    const c = SQL.slice(a, SQL.indexOf(NL + ');', a))
     const nule = [...c.matchAll(/([a-z_]+) IS NULL/g)].map(m => m[1]).sort()
     expect(nule).toEqual([...DOAR_EVENIMENT].sort())
   })
@@ -152,6 +155,11 @@ describe('aplicarea rezultatelor și erorile', () => {
     expect(aplicaRand(l, R(1, 'clauza', 'A01', { versiune: 4, titlu: 'mai nou' }))[0].titlu).toBe('mai nou')
     expect(aplicaRand(l, R(2, 'clauza', 'A02'))).toHaveLength(2)
     expect(imbinaLista([R(1, 'clauza', 'A01', { versiune: 2, titlu: 'citit' })], l)[0].titlu).toBe('nou')
+    // review r1 P2: un rând salvat după pornirea citirii nu dispare când citirea veche se termină
+    expect(imbinaLista([], [R(1, 'clauza', 'A01')])).toEqual([])
+    expect(imbinaLista([], [R(1, 'clauza', 'A01')], [R(1, 'clauza', 'A01')]).map(x => x.id)).toEqual([1])
+    expect(imbinaLista([R(2, 'clauza', 'A02')], [], [R(3, 'clauza', 'A03', { versiune: 1 })]).map(x => x.id)).toEqual([2, 3])
+    expect(imbinaLista([R(3, 'clauza', 'A03', { versiune: 4, titlu: 'citit' })], [], [R(3, 'clauza', 'A03', { versiune: 2, titlu: 'salvat' })])[0].titlu).toBe('citit')
   })
   it('mesajEroare / eAmbigua', () => {
     expect(mesajEroare({ code: '42501', message: 'x' })).toMatch(/drept de scriere/)
@@ -173,6 +181,10 @@ describe('generatorul de import', () => {
     expect(() => randuri({ evenimente: [{ cod: 'E01', titlu: 'X', stare: 'viitor' }, { cod: 'E01', titlu: 'Y', stare: 'viitor' }] })).toThrow(/duplicat/)
     expect(() => randuri({ surse: [{ cod: 'S01', titlu: 'X', continut: 'a\u0007b' }] })).toThrow(/control/)
     expect(() => randuri({})).toThrow(/niciun rând/)
+    // review r1 P2: o grupă necunoscută (greșeală de scriere) oprește generarea; „meta” e permis
+    expect(() => randuri({ clauze: [{ cod: 'A01', titlu: 'X' }], evenimnete: [] })).toThrow(/grupa „evenimnete”/)
+    expect(() => randuri([])).toThrow(/obiect/)
+    expect(randuri({ meta: { x: 1 }, clauze: [{ cod: 'A01', titlu: 'X' }] })).toHaveLength(1)
   })
   it('refuză mențiunile interne în textele pentru ERP („ai” românesc trece)', () => {
     expect(interzis('Nu ai drept de scriere')).toBe(false)
@@ -189,7 +201,25 @@ describe('generatorul de import', () => {
     expect(sql).toContain("current_setting('gazpet.import_contract_proiect', true)")
     expect(sql).toContain('WHERE t.modificat_de IS NULL AND')
     expect(() => genereaza(baza(), { regex: "a'b" })).toThrow(/regex/)
+    // review r1 P1: un rând nou în regex ar ieși din comentariu și ar rula SQL înaintea gărzilor
+    expect(() => genereaza(baza(), { regex: '.' + NL + 'SELECT 9173;' + NL + '--|.*' })).toThrow(/regex/)
+    expect(() => genereaza(baza(), { regex: 'a' + CR + 'b' })).toThrow(/regex/)
+    expect(() => genereaza(baza(), { regex: 'x', sha: 'nu-e-hex' })).toThrow(/sha/)
+    const numeRau = genereaza(baza(), { regex: 'x', numeSursa: 'a' + NL + 'SELECT 1;.json' })
+    expect(numeRau.split(NL).filter(l => l.startsWith('SELECT'))).toEqual([])
     expect(genereaza(baza(), { regex: 'x' })).toBe(genereaza(baza(), { regex: 'x' }))
+    // fiecare rând SQL din afara blocului DO e comentariu (nimic executabil înaintea gărzilor)
+    const linii = sql.split(NL)
+    const iDo = linii.findIndex(l => l.startsWith('DO '))
+    expect(linii.slice(0, iDo).every(l => l.startsWith('--'))).toBe(true)
+  })
+  it('review r1 P2: un text cu „$imp$” nu închide blocul DO (delimitatorul se alege să nu apară în corp)', () => {
+    const sql = genereaza({ clauze: [{ cod: 'A01', titlu: 'Text $imp$ admis', continut: 'și $imp1$' }] }, { regex: 'x' })
+    const tag = sql.match(/^DO (\$[a-z0-9]*\$)$/m)[1]
+    expect(tag).toBe('$imp2$')
+    expect(sql.split(tag)).toHaveLength(3)              // deschidere + închidere, nimic în corp
+    expect(sql).toContain("'Text $imp$ admis'")
+    expect(sql.trimEnd().endsWith(tag + ';')).toBe(true)
   })
   it('fixture-urile din repo sunt exact ieșirea generatorului (fără linia de antet cu sha)', () => {
     for (const n of [1, 2]) {

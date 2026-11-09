@@ -178,6 +178,44 @@ BEGIN
   RAISE NOTICE 'T3 OK';
 END $t$;
 
+-- T3b: idempotența durabilă (review r1 P1): reluarea unei chei VECHI după ce rândul a fost modificat între timp cu altă cheie
+DO $t$
+DECLARE p bigint := pg_temp.t_g('p')::bigint; k1 uuid := gen_random_uuid(); k2 uuid := gen_random_uuid(); k3 uuid := gen_random_uuid();
+  k4 uuid := gen_random_uuid(); r jsonb; x bigint; d1 jsonb := '{"sectiune":"clauza","cod":"X03","titlu":"Clauză K1"}';
+BEGIN
+  PERFORM pg_temp.t_ca(pg_temp.t_g('adm')::uuid, 'authenticated');
+  r := pg_temp.t_s(p, NULL, NULL, d1, k1);                                       -- insert K1 (răspunsul „se pierde”)
+  x := (r->'rand'->>'id')::bigint;
+  r := pg_temp.t_s(p, x, 1, '{"titlu":"modificat cu K2"}', k2);                 -- altcineva modifică rândul cu K2
+  IF (r->'rand'->>'versiune')::int <> 2 THEN RAISE EXCEPTION 'T3b FAIL: update K2 %', r; END IF;
+  r := pg_temp.t_s(p, NULL, NULL, d1, k1);                                       -- reluarea insertului cu K1
+  IF (r->>'ok')::boolean IS NOT TRUE OR (r->>'duplicat')::boolean IS NOT TRUE OR (r->'rand'->>'id')::bigint <> x
+     OR r->'rand'->>'titlu' <> 'modificat cu K2' THEN
+    RAISE EXCEPTION 'T3b FAIL: reluarea insertului după altă modificare %', r;
+  END IF;
+  r := pg_temp.t_s(p, x, 2, '{"titlu":"modificat cu K3"}', k3);                 -- update K3 (v3)
+  r := pg_temp.t_s(p, x, 3, '{"titlu":"modificat cu K4"}', k4);                 -- update K4 (v4)
+  r := pg_temp.t_s(p, x, 2, '{"titlu":"modificat cu K3"}', k3);                 -- reluarea lui K3 după K4: succesul de atunci, nu conflict
+  IF (r->>'duplicat')::boolean IS NOT TRUE OR (r->'rand'->>'versiune')::int <> 4 THEN RAISE EXCEPTION 'T3b FAIL: reluarea update-ului %', r; END IF;
+  -- cheia istorică cu alt conținut / pe alt rând = refuz
+  IF pg_temp.t_stare(format('SELECT pg_temp.t_s(%s, %s, 2, %L, %L)', p, x, '{"titlu":"altceva"}', k3)) <> '22023'
+     OR pg_temp.t_stare(format('SELECT pg_temp.t_s(%s, %s, 4, %L, %L)', p, pg_temp.t_g('x02'), '{"titlu":"modificat cu K3"}', k3)) <> '22023' THEN
+    RAISE EXCEPTION 'T3b FAIL: cheia istorică refolosită';
+  END IF;
+  -- jurnalul cheilor nu se citește din aplicație
+  IF pg_temp.t_stare('SELECT count(*) FROM public.executie_contract_repere_chei') <> '42501'
+     OR pg_temp.t_stare(format('INSERT INTO public.executie_contract_repere_chei (cheie, proiect_id, rand_id, amprenta, versiune_dupa, creat_de) VALUES (gen_random_uuid(), %s, %s, %L, 1, %L)',
+          p, x, repeat('a', 32), pg_temp.t_g('adm'))) <> '42501' THEN
+    RAISE EXCEPTION 'T3b FAIL: jurnalul cheilor e accesibil din aplicație';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  IF (SELECT count(*) FROM public.executie_contract_repere_chei WHERE rand_id = x) <> 4
+     OR (SELECT creat_de FROM public.executie_contract_repere_chei WHERE cheie = k1) IS DISTINCT FROM pg_temp.t_g('adm')::uuid THEN
+    RAISE EXCEPTION 'T3b FAIL: jurnalul cheilor';
+  END IF;
+  RAISE NOTICE 'T3b OK';
+END $t$;
+
 -- T4: concurență pe aceeași versiune (2 apăsări cu chei diferite): a doua primește conflict, nu suprascrie
 DO $t$
 DECLARE p bigint := pg_temp.t_g('p')::bigint; x bigint := pg_temp.t_g('x02')::bigint; v int; r1 jsonb; r2 jsonb;
@@ -241,6 +279,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = q AND nume ~* '^nu-exista-un-proiect-cu-numele-asta$') THEN
     RAISE EXCEPTION 'T5 FAIL: garda de nume';
   END IF;
+  DELETE FROM public.executie_contract_repere_chei WHERE proiect_id = q;   -- întâi jurnalul cheilor (FK spre fișă)
   DELETE FROM public.executie_contract_repere WHERE proiect_id = q;
   RAISE NOTICE 'T5 OK';
 END $t$;
@@ -272,11 +311,13 @@ DO $t$ BEGIN
 END $t$;
 
 -- T7: revenirea armată pe tabel gol scoate tot; re-aplicarea merge
+DELETE FROM public.executie_contract_repere_chei;
 DELETE FROM public.executie_contract_repere;
 SELECT set_config('gazpet.revenire_20261203a', 'SCOATE_CONTRACT_REPERE:' || txid_current(), true);
 \ir ../supabase/revenire/20261203a_executie_contract_repere_ROLLBACK.sql
 DO $t$ BEGIN
-  IF to_regclass('public.executie_contract_repere') IS NOT NULL OR to_regprocedure('public.fn_executie_contract_drept(bigint, boolean)') IS NOT NULL
+  IF to_regclass('public.executie_contract_repere') IS NOT NULL OR to_regclass('public.executie_contract_repere_chei') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_contract_drept(bigint, boolean)') IS NOT NULL
      OR current_setting('gazpet.revenire_20261203a', true) <> '' THEN
     RAISE EXCEPTION 'T7 FAIL: revenirea';
   END IF;

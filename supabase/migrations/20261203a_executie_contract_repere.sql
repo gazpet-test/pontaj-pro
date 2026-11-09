@@ -2,7 +2,7 @@
 -- 20261203a_executie_contract_repere — Execuție → proiect → „📜 Contract”: fișa contractului, reutilizabilă pe orice proiect (cererea lui Răzvan, 09.11.2026).
 --
 -- Ce face:
---   * UN tabel nou, executie_contract_repere: rândurile fișei de contract a unui proiect, pe 5 secțiuni:
+--   * Un tabel nou, executie_contract_repere: rândurile fișei de contract a unui proiect, pe 5 secțiuni:
 --       clauza    — clauzele principale (rezumat + text esențial + sursa)
 --       cale      — căile de prelungire a duratei de execuție (condiția, dovezile cerute, termenul de notificare, ce dă)
 --       termen    — termenele de notificare și de răspuns (procedura de revendicare)
@@ -11,15 +11,18 @@
 --     Cheia rândului: (proiect_id, sectiune, cod), imuabilă. Arhivarea = activ false (nimic nu se șterge din aplicație).
 --   * Scrierea din aplicație: DOAR prin fn_executie_contract_salveaza (SECURITY DEFINER): auth.uid() obligatoriu, drept de SCRIERE =
 --     owner sau user_module_access 'executie' cu access_level 'admin'; lock consultativ pe proiect, apoi FOR UPDATE pe rând; CAS pe versiune;
---     cheie de idempotență per apăsare (aceeași cheie + același conținut = succesul de data trecută; alt conținut = eroare).
+--     cheie de idempotență per apăsare, ținută DURABIL în tabelul tehnic executie_contract_repere_chei (aceeași cheie + același conținut =
+--     succesul de data trecută, chiar dacă rândul s-a modificat între timp; alt conținut / alt rând = eroare). Tabelul cheilor nu are niciun
+--     drept din aplicație.
 --     Nicio scriere directă (fără INSERT / UPDATE / DELETE pentru anon / authenticated / service_role).
 --   * Citirea: owner sau user_module_access 'executie' (orice nivel), prin RLS. Dreptul e o singură funcție (fn_executie_contract_drept),
 --     folosită de RLS, de RPC și de interfață.
 --   * Proveniența (L08): modificat_de / modificat_la / versiune le pune trigger-ul, la orice INSERT / UPDATE (și la importul făcut ca postgres).
 -- Ce NU face: nicio dată (fișa Lot 1 o încarcă chat-ul după „da”-ul lui Răzvan, cu SQL generat în afara repo-ului), niciun drept,
 --   nicio atingere pe executie_proiecte sau pe alte tabele.
--- Ordinea lock-urilor (L06): advisory pe proiect (hashtextextended('executie_contract_repere:' || proiect_id, 0)) -> rândul FOR UPDATE.
---   Importul (postgres) ia același advisory înainte de upsert. Nimic altceva nu se blochează.
+-- Ordinea lock-urilor (L06): advisory pe proiect (hashtextextended('executie_contract_repere:' || proiect_id, 0)) -> rândul FOR UPDATE ->
+--   INSERT în executie_contract_repere_chei (FK spre rândul deja blocat). Importul (postgres) ia același advisory înainte de upsert și nu
+--   atinge tabelul cheilor. Nimic altceva nu se blochează.
 -- Revenire: supabase/revenire/20261203a_executie_contract_repere_ROLLBACK.sql. Test pe clonă: scripts/test_executie_contract_repere.sql.
 DO $pre$
 BEGIN
@@ -33,7 +36,7 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- obiectele noi nu există (reaplicare = refuz)
-  IF to_regclass('public.executie_contract_repere') IS NOT NULL
+  IF to_regclass('public.executie_contract_repere') IS NOT NULL OR to_regclass('public.executie_contract_repere_chei') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_executie\_contract\_%') THEN
     RAISE EXCEPTION '20261203a: obiectele exista deja (reaplicare)';
@@ -87,8 +90,6 @@ CREATE TABLE public.executie_contract_repere (
   sursa text CHECK (sursa IS NULL OR (length(sursa) <= 4000 AND sursa ~ '[^[:space:]]')),
   activ boolean NOT NULL DEFAULT true,
   versiune integer NOT NULL DEFAULT 1 CHECK (versiune > 0),
-  ultima_cheie uuid,
-  ultima_amprenta text CHECK (ultima_amprenta IS NULL OR ultima_amprenta ~ '^[0-9a-f]{32}$'),
   modificat_de uuid,
   modificat_la timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT executie_contract_repere_cod_uq UNIQUE (proiect_id, sectiune, cod),
@@ -96,11 +97,25 @@ CREATE TABLE public.executie_contract_repere (
   CONSTRAINT executie_contract_repere_eveniment CHECK (
     (sectiune = 'eveniment' AND stare IS NOT NULL)
     OR (sectiune <> 'eveniment' AND stare IS NULL AND putere IS NULL AND termen_urmator IS NULL AND data_eveniment IS NULL
-        AND notificare IS NULL AND raspuns IS NULL AND termen_ce IS NULL AND dovezi_lipsa IS NULL)),
-  CONSTRAINT executie_contract_repere_cheie CHECK ((ultima_cheie IS NULL) = (ultima_amprenta IS NULL))
+        AND notificare IS NULL AND raspuns IS NULL AND termen_ce IS NULL AND dovezi_lipsa IS NULL))
 );
 CREATE INDEX executie_contract_repere_proiect_idx ON public.executie_contract_repere (proiect_id, id);
-CREATE UNIQUE INDEX executie_contract_repere_cheie_uq ON public.executie_contract_repere (ultima_cheie) WHERE ultima_cheie IS NOT NULL;
+
+-- ── jurnalul cheilor de salvare (idempotență DURABILĂ, L04/L05): fiecare salvare reușită lasă cheia ei, cu amprenta conținutului și rândul;
+--    o reluare cu aceeași cheie întoarce succesul de data trecută chiar dacă rândul s-a modificat între timp cu altă cheie. Tabel tehnic intern:
+--    fără niciun drept din aplicație (doar RPC-ul DEFINER îl citește / scrie); nu se șterge nimic din el.
+CREATE TABLE public.executie_contract_repere_chei (
+  cheie uuid PRIMARY KEY,
+  proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
+  rand_id bigint NOT NULL REFERENCES public.executie_contract_repere(id),
+  amprenta text NOT NULL CHECK (amprenta ~ '^[0-9a-f]{32}$'),
+  versiune_dupa integer NOT NULL CHECK (versiune_dupa > 0),
+  creat_de uuid NOT NULL,
+  creat_la timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX executie_contract_repere_chei_rand_idx ON public.executie_contract_repere_chei (rand_id);
+COMMENT ON TABLE public.executie_contract_repere_chei IS
+  'Execuție: cheile de idempotență ale salvărilor din fișa contractului (o cheie = o apăsare). Intern, scris doar de fn_executie_contract_salveaza. 20261203a.';
 COMMENT ON TABLE public.executie_contract_repere IS
   'Execuție: fișa contractului unui proiect (clauze, căi de prelungire, termene, registrul evenimentelor, surse). Scriere DOAR prin fn_executie_contract_salveaza. 20261203a.';
 COMMENT ON COLUMN public.executie_contract_repere.stare IS
@@ -145,13 +160,14 @@ CREATE TRIGGER trg_executie_contract_provenienta BEFORE INSERT OR UPDATE ON publ
 -- p_date = TOATE câmpurile editabile (lista albă de mai jos; o cheie lipsă = NULL, o cheie necunoscută = refuz). sectiune și cod se iau
 --   din p_date doar la rândul nou; la modificare trebuie să fie egale cu ale rândului.
 -- Ordinea: identitate -> parametri -> lock consultativ pe proiect -> (modificare: FOR UPDATE pe rând) -> drept pe proiectul rândului ->
---   idempotență -> CAS -> validare -> INSERT / UPDATE.
+--   idempotență (jurnalul cheilor) -> CAS -> validare -> INSERT / UPDATE -> cheia în jurnal (aceeași tranzacție).
 -- Rezultat: {ok, duplicat, rand} sau {ok:false, motiv:'conflict', rand} (rândul s-a schimbat între timp: clientul reîncarcă).
 CREATE FUNCTION public.fn_executie_contract_salveaza(p_proiect bigint, p_id bigint, p_versiune integer, p_date jsonb, p_cheie uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
   v_uid uuid := auth.uid();
   r public.executie_contract_repere;
+  c public.executie_contract_repere_chei;
   v_amprenta text;
   k text;
   v_texte constant text[] := ARRAY['titlu', 'clauze', 'continut', 'citat', 'conditie', 'dovezi', 'dovezi_lipsa', 'termen_text', 'efect',
@@ -194,10 +210,12 @@ BEGIN
   END IF;
 
   v_amprenta := md5(jsonb_build_object('proiect', p_proiect, 'id', p_id, 'versiune', p_versiune, 'date', p_date)::text);
-  -- reluarea aceleiași apăsări: același conținut = succesul de data trecută; alt conținut / alt rând = eroare
-  IF EXISTS (SELECT 1 FROM public.executie_contract_repere WHERE ultima_cheie = p_cheie) THEN
-    SELECT * INTO r FROM public.executie_contract_repere WHERE ultima_cheie = p_cheie;
-    IF r.ultima_amprenta = v_amprenta AND r.proiect_id = p_proiect AND (p_id IS NULL OR r.id = p_id) THEN
+  -- reluarea aceleiași apăsări (jurnalul cheilor, durabil): același conținut = succesul de data trecută, cu rândul așa cum e ACUM
+  -- (și dacă între timp altcineva l-a modificat); alt conținut / alt proiect / alt rând = eroare
+  SELECT * INTO c FROM public.executie_contract_repere_chei WHERE cheie = p_cheie;
+  IF FOUND THEN
+    IF c.amprenta = v_amprenta AND c.proiect_id = p_proiect AND (p_id IS NULL OR c.rand_id = p_id) THEN
+      SELECT * INTO r FROM public.executie_contract_repere WHERE id = c.rand_id;
       RETURN jsonb_build_object('ok', true, 'duplicat', true, 'rand', to_jsonb(r));
     END IF;
     RAISE EXCEPTION 'contract: cheia apăsării a fost folosită pentru altă salvare' USING ERRCODE = '22023';
@@ -209,7 +227,7 @@ BEGIN
       RAISE EXCEPTION 'contract: codul % există deja în această secțiune', left(coalesce(p_date->>'cod', ''), 10) USING ERRCODE = '23505';
     END IF;
     INSERT INTO public.executie_contract_repere (proiect_id, sectiune, cod, ordine, titlu, clauze, continut, citat, conditie, dovezi, dovezi_lipsa,
-      termen_text, efect, data_eveniment, notificare, raspuns, stare, termen_urmator, termen_ce, putere, sursa, activ, ultima_cheie, ultima_amprenta)
+      termen_text, efect, data_eveniment, notificare, raspuns, stare, termen_urmator, termen_ce, putere, sursa, activ)
     VALUES (p_proiect, p_date->>'sectiune', p_date->>'cod', coalesce((p_date->>'ordine')::integer, 0),
       nullif(btrim(coalesce(p_date->>'titlu', '')), ''), nullif(btrim(coalesce(p_date->>'clauze', '')), ''),
       nullif(btrim(coalesce(p_date->>'continut', '')), ''), nullif(btrim(coalesce(p_date->>'citat', '')), ''),
@@ -218,8 +236,10 @@ BEGIN
       nullif(btrim(coalesce(p_date->>'efect', '')), ''), (p_date->>'data_eveniment')::date,
       nullif(btrim(coalesce(p_date->>'notificare', '')), ''), nullif(btrim(coalesce(p_date->>'raspuns', '')), ''),
       p_date->>'stare', (p_date->>'termen_urmator')::date, nullif(btrim(coalesce(p_date->>'termen_ce', '')), ''),
-      p_date->>'putere', nullif(btrim(coalesce(p_date->>'sursa', '')), ''), coalesce((p_date->>'activ')::boolean, true), p_cheie, v_amprenta)
+      p_date->>'putere', nullif(btrim(coalesce(p_date->>'sursa', '')), ''), coalesce((p_date->>'activ')::boolean, true))
     RETURNING * INTO r;
+    INSERT INTO public.executie_contract_repere_chei (cheie, proiect_id, rand_id, amprenta, versiune_dupa, creat_de)
+    VALUES (p_cheie, p_proiect, r.id, v_amprenta, r.versiune, v_uid);
     RETURN jsonb_build_object('ok', true, 'duplicat', false, 'rand', to_jsonb(r));
   END IF;
 
@@ -249,11 +269,11 @@ BEGIN
     termen_ce = nullif(btrim(coalesce(p_date->>'termen_ce', '')), ''),
     putere = p_date->>'putere',
     sursa = nullif(btrim(coalesce(p_date->>'sursa', '')), ''),
-    activ = coalesce((p_date->>'activ')::boolean, true),
-    ultima_cheie = p_cheie,
-    ultima_amprenta = v_amprenta
+    activ = coalesce((p_date->>'activ')::boolean, true)
   WHERE id = p_id
   RETURNING * INTO r;
+  INSERT INTO public.executie_contract_repere_chei (cheie, proiect_id, rand_id, amprenta, versiune_dupa, creat_de)
+  VALUES (p_cheie, p_proiect, r.id, v_amprenta, r.versiune, v_uid);
   RETURN jsonb_build_object('ok', true, 'duplicat', false, 'rand', to_jsonb(r));
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_contract_salveaza(bigint, bigint, integer, jsonb, uuid) FROM PUBLIC, anon, service_role;
@@ -266,6 +286,9 @@ GRANT SELECT ON public.executie_contract_repere TO authenticated, service_role;
 REVOKE ALL ON SEQUENCE public.executie_contract_repere_id_seq FROM PUBLIC, anon, authenticated, service_role;
 CREATE POLICY executie_contract_repere_citire ON public.executie_contract_repere FOR SELECT TO authenticated
   USING (public.fn_executie_contract_drept(proiect_id, false));
+-- tabelul cheilor: RLS fără nicio politică și fără niciun drept (doar RPC-ul DEFINER, ca proprietar, îl folosește)
+ALTER TABLE public.executie_contract_repere_chei ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.executie_contract_repere_chei FROM PUBLIC, anon, authenticated, service_role;
 
 -- ── postcondiții ──
 DO $post$
@@ -302,7 +325,17 @@ BEGIN
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = v_rel AND NOT tgisinternal) <> 1 THEN
     RAISE EXCEPTION '20261203a post: trigger-ul de proveniență';
   END IF;
-  IF EXISTS (SELECT 1 FROM public.executie_contract_repere) THEN
+  -- tabelul cheilor: RLS, zero politici, zero privilegii pentru rolurile aplicației (și pe coloane)
+  IF (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.executie_contract_repere_chei'::regclass) IS NOT TRUE
+     OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_contract_repere_chei')
+     OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r,
+                       unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) p
+                 WHERE has_table_privilege(r, 'public.executie_contract_repere_chei'::regclass, p))
+     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.executie_contract_repere_chei'::regclass AND attnum > 0 AND attacl IS NOT NULL)
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_contract_repere_chei'::regclass AND NOT tgisinternal) THEN
+    RAISE EXCEPTION '20261203a post: tabelul cheilor (RLS / politici / privilegii)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.executie_contract_repere) OR EXISTS (SELECT 1 FROM public.executie_contract_repere_chei) THEN
     RAISE EXCEPTION '20261203a post: migrarea nu scrie date';
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261203a_executie_contract_repere:' || txid_current() THEN

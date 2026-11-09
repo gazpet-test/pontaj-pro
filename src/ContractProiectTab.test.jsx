@@ -47,7 +47,7 @@ function clientFals({ randuri, drept = true }) {
       return q
     },
     rpc: (fn, a) => {
-      if (fn === 'fn_executie_contract_drept') return Promise.resolve({ data: drept, error: null })
+      if (fn === 'fn_executie_contract_drept') return (st.poartaDrept ? st.poartaDrept.p : Promise.resolve()).then(() => ({ data: drept, error: null }))
       const d = amana(); st.rpc.push({ a, ...d })
       return d.p.then(mod => {
         if (mod === 'retea') return { data: null, error: { message: 'Failed to fetch' } }
@@ -139,6 +139,37 @@ dom(numeDom('ContractProiectTab (jsdom + react-dom)'), () => {
     expect(u.d.body.textContent).toContain('modificat între timp')
     expect(u.campTitlu().value).toBe('schimbat de altcineva')
     expect(server.get(1).titlu).toBe('schimbat de altcineva')
+  })
+
+  it('review r1 P2: un rând salvat cât rulează o citire pornită înainte rămâne în listă după ce citirea se termină', async () => {
+    const { client, st } = clientFals({ randuri: [EV(1, 'E01')] })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('＋ Adaugă'))
+    await u.scrie(u.campTitlu(), 'Salvat în timpul citirii')
+    st.poartaDrept = amana()
+    await u.apasa(u.buton('↻ Reîncarcă'))          // lista se citește complet ACUM (fără rândul nou), dar aplicarea așteaptă verificarea dreptului
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'ok')
+    expect(u.d.body.textContent).toContain('Salvat în timpul citirii')
+    await u.elibereaza(st.poartaDrept, undefined)    // citirea veche (fără rândul nou) se aplică după salvare
+    expect(u.d.body.textContent).toContain('Salvat în timpul citirii')
+    expect(u.d.body.textContent).toContain('Eveniment E01')
+  })
+
+  it('review r1 P2: o salvare blocată pe proiectul vechi nu blochează formularul pe proiectul nou', async () => {
+    const { client, st } = clientFals({ randuri: [EV(1, 'E01'), EV(2, 'E77', { proiect_id: 2, titlu: 'Doar pe proiectul 2' })] })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('＋ Adaugă'))
+    await u.scrie(u.campTitlu(), 'Pe proiectul 1')
+    await u.apasa(u.buton('Salvează'))
+    expect(u.d.body.textContent).toContain('Se salvează…')
+    await u.randeaza(2)                              // salvarea pe P1 e încă în așteptare
+    await u.apasa(u.buton('＋ Adaugă'))
+    expect(u.buton('Salvează').disabled).toBe(false)
+    expect(u.buton('Renunță').disabled).toBe(false)
+    await u.elibereaza(st.rpc[0], 'ok')              // abia acum se termină salvarea veche
+    expect(u.d.body.textContent).not.toContain('Pe proiectul 1')
+    expect(u.buton('Salvează').disabled).toBe(false)
   })
 
   it('L24: o citire întârziată a proiectului vechi nu ajunge pe proiectul nou', async () => {

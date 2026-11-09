@@ -187,12 +187,16 @@ export function aplicaRand(lista, rand) {
   if ((lista[i].versiune ?? 0) > (rand.versiune ?? 0)) return lista
   const n = [...lista]; n[i] = rand; return n
 }
-export function imbinaLista(citite, curente) {
+// lista citită + ce era local: pe fiecare rând rămâne versiunea mai nouă; rândurile salvate DUPĂ pornirea citirii (`salvate`) rămân în
+// listă chiar dacă citirea (începută înainte) nu le are încă — altfel un rând nou ar dispărea din ecran
+export function imbinaLista(citite, curente, salvate = []) {
   const dupaId = new Map(curente.map(x => [x.id, x]))
-  return citite.map(x => {
+  let l = citite.map(x => {
     const c = dupaId.get(x.id)
     return c && (c.versiune ?? 0) > (x.versiune ?? 0) ? c : x
   })
+  for (const s of salvate) l = aplicaRand(l, s)
+  return l
 }
 
 // mesajul pentru o eroare de la RPC (L18: eroarea nu e „gol”)

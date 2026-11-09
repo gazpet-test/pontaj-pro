@@ -1,4 +1,4 @@
--- Import fișa contractului (executie_contract_repere) — generat de scripts/contract_repere_import_sql.mjs din exemplu_2.json (sha256 fb86677ec4a4f4fcf0b98873fd2a7e4ba876433f2e8fc824fa938b89df484528).
+-- Import fișa contractului (executie_contract_repere) — generat de scripts/contract_repere_import_sql.mjs din exemplu_2.json (sha256 f003b6bcd22fc72c63150d61560032cd2a462e05887bb87b4297545646de270b).
 -- 6 rânduri. Rulează DOAR ca postgres, în tranzacția operatorului, DUPĂ: SELECT set_config('gazpet.import_contract_proiect', '<id>', true);
 -- Garda: proiectul există și executie_proiecte.nume ~* '.'. Upsert pe (proiect_id, sectiune, cod); rândurile modificate din aplicație
 -- (modificat_de nenul) NU se suprascriu; nimic nu se șterge; reluarea e idempotentă. Ordinea lock-urilor: advisory pe proiect, apoi rândurile
@@ -60,4 +60,5 @@ BEGIN
    WHERE t.proiect_id = v_p AND NOT EXISTS (SELECT 1 FROM _imp_contract s WHERE s.sectiune = t.sectiune AND s.cod = t.cod);
   RAISE NOTICE 'import contract: proiect %, % rânduri în fișier, % scrise (noi sau schimbate); sărite (modificate din aplicație): %; în BD, dar nu în fișier: %',
     v_p, 6, v_scrise, coalesce(v_sarite, '—'), coalesce(v_extra, '—');
-END $imp$;
+END
+$imp$;
