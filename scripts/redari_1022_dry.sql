@@ -4,9 +4,32 @@
 SET LOCAL statement_timeout = '1200s';
 DO $pre$ BEGIN
   IF to_regclass('pg_temp.dry1022_inainte') IS NULL THEN RAISE EXCEPTION 'dry 1022: rulati intai scripts/redari_1022_dry_inainte.sql in aceeasi tranzactie'; END IF;
-  IF position('PARTITION BY v.proiect_id, v.uat_id' IN pg_get_viewdef('public.red_v_centralizator_uat'::regclass, true)) = 0 THEN
-    RAISE EXCEPTION 'dry 1022: migrarea 20261131f nu e aplicata in aceasta tranzactie'; END IF;
 END $pre$;
+-- 31f aplicată? Definiția așteptată trece prin același deparser ca vederea live, deci comparația nu depinde de formatare
+-- (pg_get_viewdef(…, true) scrie „PARTITION BY proiect_id, uat_id”, fără aliasul „v.”: căutarea textului cu alias dădea mereu 0).
+DROP VIEW IF EXISTS pg_temp.dry1022_cent_31f;
+CREATE TEMP VIEW dry1022_cent_31f AS
+WITH parcele AS (
+  SELECT v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.parcela_id,
+    CASE WHEN bool_or(v.stare='PV_A_ACOPERIT_PARCELA') THEN 'PV_A_ACOPERIT_PARCELA'
+         WHEN bool_and(v.stare='PV_A_SEMNAT') THEN 'PV_A_SEMNAT'
+         WHEN bool_or(v.stare='PV_B_CONSTATARE') THEN 'PV_B_CONSTATARE'
+         ELSE (array_agg(v.stare ORDER BY v.stare_ordine DESC, v.stare COLLATE "C"))[1] END AS stare
+  FROM public.red_v_stare_parcela v
+  GROUP BY v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.parcela_id
+)
+SELECT v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.stare,
+       count(*)::int AS numar,
+       (sum(count(*)) OVER (PARTITION BY v.proiect_id, v.uat_id))::int AS total_uat,
+       round(100.0 * coalesce(sum(count(*)) FILTER (WHERE v.stare IN ('PV_A_SEMNAT', 'PV_A_ACOPERIT_PARCELA', 'PV_B_CONSTATARE')) OVER (PARTITION BY v.proiect_id, v.uat_id), 0)
+             / sum(count(*)) OVER (PARTITION BY v.proiect_id, v.uat_id), 1) AS procent_inchise
+  FROM parcele v
+ GROUP BY v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.stare;
+DO $aplicata$ BEGIN
+  IF pg_get_viewdef('public.red_v_centralizator_uat'::regclass, true) IS DISTINCT FROM pg_get_viewdef('pg_temp.dry1022_cent_31f'::regclass, true) THEN
+    RAISE EXCEPTION 'dry 1022: migrarea 20261131f nu e aplicata in aceasta tranzactie'; END IF;
+END $aplicata$;
+DROP VIEW pg_temp.dry1022_cent_31f;
 CREATE TEMP TABLE dry1022_dupa ON COMMIT DROP AS
   SELECT v.proiect_id, v.uat_id, v.uat3, v.uat_nume, v.stare, v.numar, v.total_uat, v.procent_inchise FROM public.red_v_centralizator_uat v JOIN public.red_proiecte p ON p.id = v.proiect_id WHERE p.cod IN ('TEST-RAZVAN', 'LOT1-PRUNISOR-JUPA');
 DO $plan$
