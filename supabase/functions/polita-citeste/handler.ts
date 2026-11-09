@@ -71,15 +71,19 @@ export async function citestePolita(req: Request, body: unknown, caller: Supabas
     if (new TextDecoder('latin1').decode(pdf.subarray(0, 5)) !== '%PDF-') return raspuns(422, { success: false, eroare: 'pdf_invalid' })
     const sha = hex(await crypto.subtle.digest('SHA-256', pdf))
     const cale = `polite/propuneri/${sha}.pdf`
-    // 3. documentul deja citit: aceeasi propunere, fara cost
-    const { data: veche, error: ev } = await ledger.from('polite_propuneri').select('id, stare').eq('pdf_sha256', sha).eq('cititor', 'platit').maybeSingle()
-    if (ev) return raspuns(503, { success: false, eroare: 'propunere_indisponibila' })
+    // 3. documentul deja citit (de oricare cititor: la incarcare sau local, noaptea): aceeasi propunere, fara cost.
+    //    Preferinta: confirmat > propus > respins; o citire platita in curs / esuata blocheaza o noua citire platita (L05).
+    const { data: vechi, error: ev } = await ledger.from('polite_propuneri').select('id, stare, cititor').eq('pdf_sha256', sha)
+    if (ev || !Array.isArray(vechi)) return raspuns(503, { success: false, eroare: 'propunere_indisponibila' })
     const dinCache = async (p: { id: number; stare: string }) => {
       if (p.stare === 'in_citire') return raspuns(409, { success: false, eroare: 'citire_in_curs' })
       if (p.stare === 'eroare') return raspuns(409, { success: false, eroare: 'citire_esuata' })
       return raspuns(200, { success: true, din_cache: true, propunere: await dinTabel(p.id) })
     }
-    if (veche) return await dinCache(veche)
+    const utilizabila = ['confirmat', 'propus', 'respins'].map(s => vechi.find(p => p.stare === s)).find(Boolean)
+    if (utilizabila) return await dinCache(utilizabila)
+    const platita = vechi.find(p => p.cititor === 'platit')
+    if (platita) return await dinCache(platita)
     // 4. PDF-ul in spatiul propunerilor (cale = sha256: acelasi continut, aceeasi cale; „exista deja” e bine)
     const { error: eu } = await ledger.storage.from(BUCKET).upload(cale, pdf, { contentType: 'application/pdf', upsert: false })
     if (eu && !/exist|duplicate/i.test(eu.message || '')) return raspuns(503, { success: false, eroare: 'stocare_indisponibila' })

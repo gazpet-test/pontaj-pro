@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   normalizeazaPropunere, EroarePolita, CAMPURI_PROPUNERE, dataExpirarePropusa, situatiePolita, grupeazaPeDestinatar, mailPolite,
-  cheieIdempotenta, stareDupaTrimitere, dataValida, sumaValida, promptPolita, formDinPropunere, mesajEroare,
+  cheieIdempotenta, stareDupaTrimitere, dataValida, sumaValida, promptPolita, formDinPropunere, mesajEroare, linkDestinatar,
 } from './polite.js'
 
 const radacina = path.resolve(__dirname, '..')
@@ -174,6 +174,13 @@ describe('mailul zilnic', () => {
     expect(html).not.toContain('<b>X</b>')
     expect(html).toContain('Mesaj generat din platforma Gazpet ERP')
     expect(`${subiect} ${html}`).not.toMatch(/\bAI\b|Claude|Rocky|inteligen|automat generat|generat automat/i)
+  })
+  it('linkul din mail urmeaza departamentul destinatarului', () => {
+    expect(linkDestinatar([{ departamente: ['executie'], rand: { proiect_id: 5 } }]).cale).toBe('/executie?proiect=5')
+    expect(linkDestinatar([{ departamente: ['executie'], rand: { proiect_id: 5 } }, { departamente: ['executie'], rand: { proiect_id: 6 } }]).cale).toBe('/executie')
+    expect(linkDestinatar([{ departamente: ['executie', 'financiar'], rand: {} }]).cale).toBe('/financiar?tab=garantii')
+    expect(linkDestinatar([{ departamente: ['ofertare'], rand: {} }]).cale).toBe('/administrativ')
+    expect(linkDestinatar([{ departamente: ['executie'], rand: { proiect_id: '5;x' } }]).cale).toBe('/executie')
   })
   it('cheia de idempotenta: determinista, independenta de ordine', async () => {
     const a = await cheieIdempotenta('2026-11-10', [3, 1, 2]), b = await cheieIdempotenta('2026-11-10', [1, 2, 3])

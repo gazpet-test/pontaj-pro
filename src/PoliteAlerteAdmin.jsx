@@ -32,14 +32,19 @@ export default function PoliteAlerteAdmin({ profile }) {
 
   const incarca = useCallback(async () => {
     setEroare(null)
-    const [c, d, j] = await Promise.all([
+    const COL = 'id, cheie, zi, prag, departamente, destinatar_email, stare, eroare, rand, creat_la'
+    const [c, d, p, j] = await Promise.all([
       supabase.from('polite_alerte_config').select('activ, schimbat_la, proba_la').maybeSingle(),
       supabase.from('polite_alerte_destinatari').select('*').order('departament').order('fel').order('id'),
-      supabase.from('polite_alerte_jurnal').select('id, cheie, zi, prag, departamente, destinatar_email, stare, eroare, rand, creat_la').order('creat_la', { ascending:false }).order('id', { ascending:false }).limit(500),
+      // proba (ultima, toată): cerere separată, ca trimiterile noi să nu o împingă afară din listă
+      supabase.from('polite_alerte_jurnal').select(COL, { count:'exact' }).eq('stare', 'proba').order('id').limit(1000),
+      // jurnalul: explicit doar ultimele 200 de trimiteri reale
+      supabase.from('polite_alerte_jurnal').select(COL).neq('stare', 'proba').order('creat_la', { ascending:false }).order('id', { ascending:false }).limit(200),
     ])
-    const e = c.error || d.error || j.error
+    const e = c.error || d.error || p.error || j.error
     if (e) { setEroare(/polite_alerte|schema cache|does not exist/i.test(e.message || '') ? 'Alertele polițelor nu sunt încă instalate în baza de date (migrarea 20261205a).' : mesajEroare(e)); return }
-    setCfg(c.data); setDest(d.data || []); setJurnal(j.data || [])
+    if ((p.count ?? 0) > (p.data || []).length) { setEroare('Proba are peste 1000 de rânduri: lista de mai jos e incompletă.') }
+    setCfg(c.data); setDest(d.data || []); setJurnal([...(p.data || []), ...(j.data || [])])
   }, [])
   useEffect(() => { incarca() }, [incarca])
 

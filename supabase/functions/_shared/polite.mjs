@@ -135,12 +135,23 @@ export function grupeazaPeDestinatar(randuri) {
 }
 
 const ORDINE_PRAG = p => p === '0' ? 0 : p?.startsWith('r') ? -Number(p.slice(1)) : Number(p)
+// linkul din mail, după departamentul destinatarului: Financiar → Registrul garanțiilor; Execuție → proiectul (sau lista);
+// Ofertare → contractele (Administrativ). Căile sunt fixe; doar id-ul de proiect vine din BD (număr).
+export function linkDestinatar(randuri) {
+  const dep = new Set((randuri || []).flatMap(r => r.departamente || []))
+  if (dep.has('financiar')) return { cale: '/financiar?tab=garantii', eticheta: 'Deschide registrul de garanții' }
+  if (dep.has('executie')) {
+    const p = [...new Set((randuri || []).map(r => r.rand?.proiect_id).filter(x => Number.isSafeInteger(Number(x)) && Number(x) > 0).map(Number))]
+    return p.length === 1 ? { cale: `/executie?proiect=${p[0]}`, eticheta: 'Deschide proiectul' } : { cale: '/executie', eticheta: 'Deschide Execuția' }
+  }
+  return { cale: '/administrativ', eticheta: 'Deschide contractele' }
+}
 export function mailPolite({ randuri = [], faraAdresa = [], app = 'https://pontaj-pro-sooty.vercel.app' }) {
   const rs = [...randuri].sort((a, b) => ORDINE_PRAG(a.prag) - ORDINE_PRAG(b.prag) || String(a.rand?.data_expirare).localeCompare(String(b.rand?.data_expirare)))
   const expirate = rs.filter(r => r.prag === '0' ? Number(r.rand?.zile) < 0 : r.prag?.startsWith('r')).length
   const curand = rs.length - expirate
   const proiecte = [...new Set(rs.map(r => r.rand?.proiect_nume).filter(Boolean))]
-  const parti = [curand && `${curand} ${curand === 1 ? 'expiră curând' : 'expiră curând'}`, expirate && `${expirate} ${expirate === 1 ? 'expirată' : 'expirate'}`].filter(Boolean)
+  const parti = [curand && `${curand} expiră curând`, expirate && `${expirate} ${expirate === 1 ? 'expirată' : 'expirate'}`].filter(Boolean)
   const subiect = `Polițe de asigurare: ${parti.join(', ')}${proiecte.length === 1 ? ` — ${proiecte[0]}` : ''}`.replace(/[\r\n]+/g, ' ').slice(0, 200)
   const td = 'padding:7px 9px;border-bottom:1px solid #e3e8ee;vertical-align:top'
   const linie = r => {
@@ -164,7 +175,7 @@ export function mailPolite({ randuri = [], faraAdresa = [], app = 'https://ponta
     `<li>Încărcați actul adițional în platformă (contract → Polițe). Alerta se oprește singură după ce noua dată e înregistrată.</li>` +
     `<li>Dacă polița nu se mai prelungește (lucrare recepționată, garanție eliberată), marcați-o închisă pe contract.</li></ul>` +
     fara +
-    `<p style="margin-top:16px"><a href="${esc(app)}/financiar?tab=garantii" style="color:#1f6f8b">Deschide registrul de garanții</a></p>` +
+    `<p style="margin-top:16px"><a href="${esc(app)}${linkDestinatar(rs).cale}" style="color:#1f6f8b">${linkDestinatar(rs).eticheta}</a></p>` +
     `<p style="color:#8a99a8;font-size:12px;margin-top:18px">Mesaj generat din platforma Gazpet ERP · nu răspundeți la acest mesaj.</p></div>`
   return { subiect, html }
 }

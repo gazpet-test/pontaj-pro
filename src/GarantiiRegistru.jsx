@@ -20,6 +20,7 @@ import { rezumatBOPeGarantie } from './garantiiBileteOrdin.js'
 // Polițe 20261205a: citirea documentului + salvarea confirmată (polița pe contract + rândul legat din Registru)
 import PolitaCitire, { stilCampPropus } from './PolitaCitire.jsx'
 import { formDinPropunere, mesajEroare } from './polite.js'
+import { paginareKeyset } from './hrDeciziiUtil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -62,8 +63,14 @@ function PolitaExistentaPanel({ tipuriPermise, onClose, onDone, showToast }) {
   const tipuri = Object.keys(TIP_POLITA).filter(t => t !== 'car' || tipuriPermise.includes('car'))
   useEffect(() => {
     let viu = true
-    supabase.from('contracte_terti').select('id, numar_contract, denumire, data_semnare').order('data_semnare', { ascending:false, nullsFirst:false }).order('id', { ascending:false }).limit(1000)
-      .then(({ data }) => { if (viu) setContracte(data || []) })
+    // toate contractele (keyset pe id, L23: plafonul de 1000 rânduri al serverului), apoi ordinea de afișare (cele mai noi întâi)
+    paginareKeyset((ultim, pas) => {
+      let q = supabase.from('contracte_terti').select('id, numar_contract, denumire, data_semnare').order('id').limit(pas)
+      return ultim == null ? q : q.gt('id', ultim)
+    }).then(rows => {
+      if (!viu) return
+      setContracte(rows.sort((a, b) => String(b.data_semnare || '').localeCompare(String(a.data_semnare || '')) || b.id - a.id))
+    }).catch(() => { if (viu) setErr('Lista contractelor nu s-a putut citi: polița se poate salva doar în Registru.') })
     return () => { viu = false }
   }, [])
   const laPropunere = p => {
