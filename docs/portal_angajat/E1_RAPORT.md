@@ -188,3 +188,16 @@ handle_new_user, profiles_role_chk, hook-ul sau rolurile; niciuna nu da EXECUTE 
 | L20 | Cai legitime testate: owner aprobat, aprobarea contului legat, schimbare fara legatura acceptata. |
 | L25 | Fixture cu FK / CHECK reale si apeluri ca supabase_auth_admin / authenticated; testele SQL sunt scrise, nerulate de mine. |
 | L03, L04, L06, L09–L11, L17, L19, L21–L24 | n/a pentru delta r3. |
+
+## E1-1a/1b r4 — 09.11.2026 (Jakarinos r3: NO-GO, P1 2, P2 1)
+1. **Inventarul ERP:** `= ANY((SELECT lista ...))` era forma ANY(subinterogare) (text = text[]), deci calea pozitiva
+   ar fi picat la apply. Acum `EXISTS (... WHERE hash = ANY(a.lista))`; harness-ul verifica `erp:1,neaprobat:2,teren:3`.
+2. **Lista alba 1b:** se adauga callee-urile tranzitive ale triggerelor de pe profiles (fn_profiles_protectie_legatura
+   -> fn_identitate_privilegiata -> fn_identitate_claims, fn_identitate_eticheta, fn_profiles_campuri_owner_only,
+   prevent_role_escalation, enforce_owner_only_salary_flags, protect_can_access_pontaj_brut). Fixture: lant sintetic pe
+   3 niveluri; teste: helper de nivel 2 / 3 schimbat = poarta rosie si revenire refuzata. Test static de paritate
+   triggere-profiles-din-migrari -> lista alba. Triggerele create doar pe prod se confirma cu sectiunea 8 a inventarului.
+3. **Inventarul read-only:** ORDER BY pe expresie, nu pe pozitie cu COLLATE; sectiunea 7 (structura concediului,
+   fara date) si sectiunea 8 (triggerele / definitiile de pe calea portalului).
+4. Verificari: statice 15/15, validatorul de livrare, `bash -n`, parserul PostgreSQL 17 + PL/pgSQL pe toate fisierele
+   E1 si pe fragmentele SQL din harness. Harness-ul PG ramane la operator.
