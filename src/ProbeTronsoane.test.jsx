@@ -31,8 +31,10 @@ const ETAPA = (id, proba_id, etapa, extra = {}) => ({
 // un RPC se aplică abia când testul îl eliberează ('ok' / 'eroare' de rețea / 'refuz' 22023), sau imediat când st.auto = true
 // stocare de tip localStorage (length / key / getItem / setItem / removeItem); `plina` = setItem aruncă (QuotaExceededError)
 const stocareFalsa = () => {
-  const m = new Map(), s = { m, plina: false }
-  Object.assign(s, { key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), removeItem: k => m.delete(k),
+  const m = new Map(), s = { m, plina: false, citireEsuata: false, stergereEsuata: false }
+  Object.assign(s, { key: i => [...m.keys()][i] ?? null,
+    getItem: k => { if (s.citireEsuata) throw new Error('citire eșuată'); return m.has(k) ? m.get(k) : null },
+    removeItem: k => { if (s.stergereEsuata) throw new Error('ștergere eșuată'); m.delete(k) },
     setItem: (k, v) => { if (s.plina) throw new Error('QuotaExceededError'); m.set(k, String(v)) } })
   Object.defineProperty(s, 'length', { get: () => m.size })
   return s
@@ -632,6 +634,48 @@ dom(numeDom('ProbeTronsoane (jsdom + react-dom)'), () => {
     await t2.elibereaza(st.rpc[2], 'ok')
     expect([...T.executie_probe_tronsoane.values()].map(p => p.cod).sort()).toEqual(['P1', 'P2', 'P3'])
     expect(stocare.m.size).toBe(0)
+  })
+
+  it('registrul devine necitibil după montare: mesaj explicit și ZERO cereri trimise (cu și fără intrări existente)', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    stocare.citireEsuata = true                                            // fără intrări: scrierea nu se poate verifica -> nu trimite
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc).toHaveLength(0)
+    expect(u.text()).toContain('Nu pot păstra local cererea')
+    stocare.citireEsuata = false
+    await u.apasa(u.buton('Salvează'))
+    await u.elibereaza(st.rpc[0], 'eroare')                               // o intrare nelămurită în registru
+    stocare.citireEsuata = true                                            // intrarea existentă nu se poate citi
+    await u.apasa(u.buton('Salvează'))
+    expect(st.rpc).toHaveLength(1)                                         // nimic nou trimis
+    expect(u.text()).toContain('Registrul local nu se poate citi acum; nu trimit nimic')
+  })
+
+  it('ștergerea locală eșuată se spune: după o salvare reușită (alertă) și la renunțare (mesaj, nimic pretins)', async () => {
+    const stocare = stocareFalsa()
+    const { client, st } = clientFals({ probe: [P1], etape: ETAPE_P1() })
+    st.auto = false
+    const u = await monteaza(client, 1, stocare)
+    await u.apasa(u.buton('P1'))
+    await u.apasa(u.buton('Citire / actualizare'))
+    await u.scrie('Presiunea curentă', '48,3')
+    await u.apasa(u.buton('Salvează'))
+    stocare.stergereEsuata = true
+    await u.elibereaza(st.rpc[0], 'ok')                                    // salvată pe server, dar intrarea locală nu se poate scoate
+    expect(u.text()).toContain('nu s-a putut scoate din registrul local')
+    expect(stocare.m.size).toBe(1)
+    u.demonteaza()
+    const v = await monteaza(client, 1, stocare)
+    await v.apasa(v.buton('Renunță la verificare'))
+    await v.apasa(v.buton('da, renunț'))
+    expect(v.text()).toContain('Nu am putut scoate toate salvările din registrul local (rămase: 1)')
+    expect(v.text()).not.toContain('Am renunțat la verificarea')
   })
 
   it('renunțarea la verificare cere confirmare și scoate cererile din registru', async () => {

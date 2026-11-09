@@ -184,7 +184,10 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
       if (err2 || !Array.isArray(data)) clasa = 'necunoscut'
       else if (data.length) { clasa = 'aplicat'; prinJurnal = true }
     }
-    if (clasa === 'aplicat' || clasa === 'aplicat_acum' || clasa === 'neaplicat') reg.scoate(intrare.cheie)
+    // curățarea locală e separată de rezultatul serverului: o ștergere eșuată din stocare se spune, nu se ascunde (intrarea ar reapărea)
+    if ((clasa === 'aplicat' || clasa === 'aplicat_acum' || clasa === 'neaplicat') && !reg.scoate(intrare.cheie)) {
+      setEroareRegistru('O salvare lămurită nu s-a putut scoate din registrul local al browserului (stocare blocată); va reapărea ca nelămurită — retrimiterea ei e sigură (aceeași cheie).')
+    }
     return { intrare, clasa, r: prinJurnal ? null : r, error, prinJurnal }
   }
   const lamureste = async (reg, intrare) => {
@@ -225,8 +228,16 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
   const renuntaLaVerificare = () => {
     const reg = registru.current
     if (!reg) return
-    for (const x of reg.toate() || []) reg.scoate(x.cheie)
-    setRenunta(false); recitesteNelamurite(reg)
+    const lista = reg.toate()
+    setRenunta(false)
+    if (lista === null) { setMesaj({ ok: false, text: 'Registrul local nu se poate citi acum; nu am scos nimic. Reîncearcă.' }); return }
+    for (const x of lista) reg.scoate(x.cheie)
+    const ramase = reg.toate()
+    recitesteNelamurite(reg)
+    if (ramase === null || ramase.length) {
+      setMesaj({ ok: false, text: `Nu am putut scoate toate salvările din registrul local (${ramase === null ? 'registru necitibil' : `rămase: ${ramase.length}`}); vor reapărea. Reîncearcă.` })
+      return
+    }
     setMesaj({ ok: true, text: 'Am renunțat la verificarea salvărilor nelămurite. Verifică starea în listă și în jurnal.' })
   }
 
@@ -260,7 +271,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
         incarca({ silentios: true })
         if (aceeasi.r?.ok) return { r: aceeasi.r, actual }   // reapăsarea aceleiași cereri: acum e lămurită și salvată
         // dovedită doar de jurnal (fără rezultat RPC): nu se presupune niciun rând; starea reală vine din reîncărcare
-        if (actual) setMesaj({ ok: true, text: mesajLamurire(aceeasi) + ' Am adus starea actuală.' })
+        if (actual) setMesaj({ ok: true, text: mesajLamurire(aceeasi) + ' Reîncarc starea din listă.' })
         return null
       }
       if (!rezultate.some(ramaneNelamurita)) incarca({ silentios: true })
@@ -291,7 +302,7 @@ export default function ProbeTronsoane({ proiectId, client = supabase, stocare =
       incarca({ silentios: true })   // etapele unui tronson nou, compoziția, starea celorlalți
       if (rez.r?.ok) { aplicaRezultat(rez.r); return { r: rez.r, actual } }
       // dovedită doar de jurnal (o copie din alt tab a fost aplicată; aici a venit un refuz de drept): fără rând presupus
-      if (actual) setMesaj({ ok: true, text: 'Salvarea s-a făcut (confirmată din jurnal; între timp ți s-a schimbat dreptul de scriere). Am adus starea actuală.' })
+      if (actual) setMesaj({ ok: true, text: 'Salvarea s-a făcut (confirmată din jurnal; între timp ți s-a schimbat dreptul de scriere). Reîncarc starea din listă.' })
       return null
     }
     if (rez.clasa === 'neaplicat') {
