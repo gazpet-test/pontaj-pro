@@ -56,6 +56,8 @@ export const GRAVITATI = { mare: [3, 'Mare'], medie: [2, 'Medie'], mica: [1, 'Mi
 const ORDINE_TIP = Object.keys(TIPURI_PROBLEMA)
 
 const lista = v => (Array.isArray(v) ? v : [])
+// O ramură a unui flux e [de, la], ambele id-uri nevide; orice altă formă (null, șir, alt număr de capete) e eroare de validare, nu excepție
+const ramuraValida = r => Array.isArray(r) && r.length === 2 && r.every(x => typeof x === 'string' && x.trim() !== '')
 
 // Cheia unei legături: id-ul explicit sau de>la#index (index = poziția în listă, ca două legături între aceleași noduri să nu se confunde).
 export function cheieLegatura(l, i) {
@@ -170,7 +172,11 @@ export function valideazaHarta(date) {
     for (let j = 1; j < drum.length; j++) {
       if (!perechi.has(`${drum[j - 1]}>${drum[j]}`)) erori.push(`fluxul ${f?.id || i}: lipsește legătura ${drum[j - 1]} → ${drum[j]}`)
     }
-    lista(f?.ramuri).forEach(([a, b]) => { if (!perechi.has(`${a}>${b}`)) erori.push(`fluxul ${f?.id || i}: lipsește legătura de ramură ${a} → ${b}`) })
+    lista(f?.ramuri).forEach((r, k) => {
+      if (!ramuraValida(r)) { erori.push(`fluxul ${f?.id || i}: ramura ${k} nu e [de, la] cu două id-uri`); return }
+      const [a, b] = r
+      if (!perechi.has(`${a}>${b}`)) erori.push(`fluxul ${f?.id || i}: lipsește legătura de ramură ${a} → ${b}`)
+    })
   })
 
   const emailuriPermise = new Set(lista(date.meta?.emailuri_permise).map(e => String(e).toLowerCase()))
@@ -250,7 +256,7 @@ export function pasiFlux(date, idFlux) {
   const drum = lista(f.drum)
   const pasi = []
   for (let j = 1; j < drum.length; j++) pasi.push({ de: drum[j - 1], la: drum[j], ...(gaseste(drum[j - 1], drum[j]) || { cheie: null, legatura: null }) })
-  const ramuri = lista(f.ramuri).map(([a, b]) => ({ de: a, la: b, ...(gaseste(a, b) || { cheie: null, legatura: null }) }))
+  const ramuri = lista(f.ramuri).filter(ramuraValida).map(([a, b]) => ({ de: a, la: b, ...(gaseste(a, b) || { cheie: null, legatura: null }) }))
   const noduri = new Set([...drum, ...ramuri.flatMap(r => [r.de, r.la])])
   const chei = new Set([...pasi, ...ramuri].map(p => p.cheie).filter(Boolean))
   const ordine = {}

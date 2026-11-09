@@ -124,6 +124,18 @@ describe('Harta AI › fluxuri, vecini, căutare, filtre', () => {
     expect(pf.ordine.tabel).toBe(6)
     expect(pasiFlux(d, 'nu-exista')).toBeNull()
   })
+  it('ramurile invalide (null, șir, un singur capăt) dau erori de validare, fără TypeError, și sunt ignorate la desen', () => {
+    const d = exemplu()
+    d.fluxuri[0].ramuri = [null, 'x', ['worker'], ['worker', ''], ...d.fluxuri[0].ramuri]
+    let rez
+    expect(() => { rez = valideazaHarta(d) }).not.toThrow()
+    const greseli = rez.erori.filter(e => /ramura \d+ nu e \[de, la\]/.test(e))
+    expect(greseli).toHaveLength(4)
+    let pf
+    expect(() => { pf = pasiFlux(d, d.fluxuri[0].id) }).not.toThrow()
+    expect(pf.ramuri.map(r => `${r.de}>${r.la}`)).not.toContain('null>undefined')
+    expect(pf.ramuri.every(r => typeof r.de === 'string' && typeof r.la === 'string')).toBe(true)
+  })
   it('cheia unei legături fără id include indexul', () => {
     expect(cheieLegatura({ de: 'a', la: 'b' }, 3)).toBe('a>b#3')
     expect(cheieLegatura({ id: 'x', de: 'a', la: 'b' }, 3)).toBe('x')
