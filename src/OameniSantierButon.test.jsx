@@ -8,8 +8,13 @@ import path from 'node:path'
 
 const cereri = []
 vi.mock('./executieOameniXlsx.js', () => ({
-  FEREASTRA_ZILE: 60,
-  exportaOameniProiect: vi.fn((sb, proiectId) => { let res, rej; const p = new Promise((a, b) => { res = a; rej = b }); cereri.push({ proiectId, res, rej }); return p }),
+  ExportAnulat: class ExportAnulat extends Error {},
+  exportaOameniProiect: vi.fn((sb, proiectId, azi, semnal) => {
+    let res, rej
+    const p = new Promise((a, b) => { res = a; rej = b })
+    cereri.push({ proiectId, semnal, res, rej })
+    return p
+  }),
 }))
 import OameniSantierButon from './OameniSantierButon.jsx'
 
@@ -24,7 +29,7 @@ const numeDom = t => (JSDOM ? t : `${t} — ${MOTIV_SARIT}`)
 let curata = []
 afterEach(() => { curata.forEach(f => f()); curata = []; cereri.length = 0; vi.restoreAllMocks() })
 
-async function monteaza(proiectId = 1) {
+async function monteaza(proiectId = 1, proiect = { id: proiectId }) {
   const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -38,14 +43,16 @@ async function monteaza(proiectId = 1) {
   const root = createRoot(j.window.document.getElementById('r'))
   const d = j.window.document
   const asteapta = async () => { await act(async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }) }
-  const randeaza = async pid => { await act(async () => { root.render(<OameniSantierButon supabase={{}} proiectId={pid} />) }); await asteapta() }
-  await randeaza(proiectId)
-  curata.push(() => { act(() => root.unmount()); Object.assign(globalThis, vechi) })
+  const randeaza = async (pid, pr = { id: pid }) => { await act(async () => { root.render(<OameniSantierButon supabase={{}} proiectId={pid} proiect={pr} />) }); await asteapta() }
+  let montat = true
+  const demonteaza = async () => { if (montat) { montat = false; await act(async () => { root.unmount() }) } }
+  await randeaza(proiectId, proiect)
+  curata.push(() => { if (montat) act(() => root.unmount()); Object.assign(globalThis, vechi) })
   const buton = () => d.querySelector('[data-oameni-santier-excel]')
   const apasa = async () => { await act(async () => { buton().dispatchEvent(new j.window.MouseEvent('click', { bubbles: true })) }); await asteapta() }
   const elibereaza = async (i, val, eroare = false) => { await act(async () => { eroare ? cereri[i].rej(val) : cereri[i].res(val) }); await asteapta() }
   const mesaj = () => d.querySelector('[role="status"], [role="alert"]')
-  return { d, buton, apasa, elibereaza, mesaj, randeaza, descarcari }
+  return { d, buton, apasa, elibereaza, mesaj, randeaza, demonteaza, descarcari }
 }
 
 dom(numeDom('OameniSantierButon'), () => {
@@ -56,7 +63,7 @@ dom(numeDom('OameniSantierButon'), () => {
     expect(u.buton().disabled).toBe(true)
     await u.apasa()                                   // a doua apăsare cât lucrează: nicio cerere nouă
     expect(cereri.length).toBe(1)
-    await u.elibereaza(0, { nrOameni: 74, nrFoi: 2, bytes: new Uint8Array([1]), numeFisier: 'Oameni_santier_X_09.11.2026.xlsx', fereastra: 60 })
+    await u.elibereaza(0, { nrOameni: 74, nrFoi: 2, bytes: new Uint8Array([1]), numeFisier: 'Oameni_santier_X_09.11.2026.xlsx' })
     expect(u.descarcari).toEqual(['Oameni_santier_X_09.11.2026.xlsx'])
     expect(u.mesaj().textContent).toBe('✓ 74 oameni, 2 șantiere')
     expect(u.buton().disabled).toBe(false)
@@ -72,19 +79,20 @@ dom(numeDom('OameniSantierButon'), () => {
   it('fără șantiere / fără oameni: informare distinctă, fără fișier', async () => {
     const u = await monteaza(1)
     await u.apasa()
-    await u.elibereaza(0, { faraSantiere: true, nrOameni: 0, nrFoi: 0, fereastra: 60 })
+    await u.elibereaza(0, { faraSantiere: true, nrOameni: 0, nrFoi: 0 })
     expect(u.mesaj().textContent).toBe('Proiectul nu are șantiere legate în ERP.')
     await u.apasa()
-    await u.elibereaza(1, { faraSantiere: false, nrOameni: 0, nrFoi: 0, fereastra: 60 })
+    await u.elibereaza(1, { faraSantiere: false, nrOameni: 0, nrFoi: 0 })
     expect(u.mesaj().textContent).toContain('Niciun om activ')
     expect(u.descarcari).toEqual([])
   })
-  it('rezultatul unei apăsări vechi nu se aplică după schimbarea proiectului (L24)', async () => {
+  it('rezultatul unei apăsări vechi nu se aplică după schimbarea proiectului; citirea veche e anulată (L24)', async () => {
     const u = await monteaza(1)
     await u.apasa()
     await u.randeaza(2)                               // utilizatorul a trecut pe alt proiect cât se pregătea lista
+    expect(cereri[0].semnal.anulat).toBe(true)
     expect(u.mesaj()).toBe(null)
-    await u.elibereaza(0, { nrOameni: 5, nrFoi: 1, bytes: new Uint8Array([1]), numeFisier: 'vechi.xlsx', fereastra: 60 })
+    await u.elibereaza(0, { nrOameni: 5, nrFoi: 1, bytes: new Uint8Array([1]), numeFisier: 'vechi.xlsx' })
     expect(u.descarcari).toEqual([])
     expect(u.mesaj()).toBe(null)
     await u.apasa()
@@ -92,5 +100,23 @@ dom(numeDom('OameniSantierButon'), () => {
     await u.elibereaza(1, new Error('x'), true)
     await u.elibereaza(0, new Error('tarziu'), true)  // o eroare întârziată a cererii vechi nu suprascrie mesajul curent
     expect(u.mesaj().textContent).toBe('Exportul nu s-a putut face: x')
+  })
+  it('ieșirea din pagină în timpul exportului: citirea e anulată, nicio descărcare (review r1 P2)', async () => {
+    const u = await monteaza(1)
+    await u.apasa()
+    await u.demonteaza()
+    expect(cereri[0].semnal.anulat).toBe(true)
+    await u.elibereaza(0, { nrOameni: 5, nrFoi: 1, bytes: new Uint8Array([1]), numeFisier: 'dupa_iesire.xlsx' })
+    expect(u.descarcari).toEqual([])
+  })
+  it('butonul apare doar când proiectul încărcat în pagină e proiectul curent (review r1 P2)', async () => {
+    const u = await monteaza(2, { id: 1 })          // bannerul încă are proiectul vechi (1), URL-ul e deja pe 2
+    expect(u.buton()).toBe(null)
+    await u.randeaza(2, null)                         // se încarcă proiectul 2
+    expect(u.buton()).toBe(null)
+    await u.randeaza(2, { id: 2 })
+    expect(u.buton()).not.toBe(null)
+    await u.randeaza('2', { id: 2 })                  // id din URL (text) = id din BD (număr)
+    expect(u.buton()).not.toBe(null)
   })
 })

@@ -3,9 +3,9 @@
 // ---------------------------------------------------------------------------
 // Cine intră: angajații ACTIVI (employees.active) care
 //   (a) au șantierul alocat în ERP (employees.site_id) pe un șantier al proiectului, SAU
-//   (b) au ultima zi pontată ca prezență (check_in completat, fără cod de absență în `norma`, ca în Pontaj), cu ziua ≤ azi și în
-//       ultimele FEREASTRA_ZILE zile, pe un șantier al proiectului.
-// Șantierele proiectului: sites.proiect_id = proiectul, plus șantierul principal (executie_proiecte.site_id) dacă nu e legat de alt proiect.
+//   (b) au ultima zi pontată ca prezență (check_in completat, fără cod de absență în `norma`, ca în Pontaj), cea mai recentă zi
+//       ≤ azi, fără limită în trecut, pe un șantier al proiectului (review Jakarinos r1 P1: fără fereastră de zile).
+// Șantierele proiectului: STRICT sites.proiect_id = proiectul (review Jakarinos r1 P1).
 // Foaia omului: șantierul alocat, dacă e al proiectului; altfel șantierul ultimului pontaj. Galben: ultimul pontaj e pe alt șantier
 // decât cel alocat.
 // Fără date personale: doar coloanele din COLOANE_ANGAJAT, toate din EMPLOYEES_PUBLIC_COLUMNS (verificat în test).
@@ -18,7 +18,6 @@ import JSZip from 'jszip'
 import { paginareKeyset, aziBucuresti } from './hrDeciziiUtil.js'
 const XLSX = XLSX_mod.default || XLSX_mod
 
-export const FEREASTRA_ZILE = 60
 // coloane PUBLICE din employees (fără CNP, telefon, adresă, IBAN etc.)
 export const COLOANE_ANGAJAT = 'id,name,functie,position,department,departament_hr,site_id,active'
 const COLOANE_PONTAJ = 'id,employee_id,date,site_id,check_in,norma'
@@ -38,15 +37,15 @@ const cmpRo = (a, b) => String(a || '').localeCompare(String(b || ''), 'ro', { s
 // Prezență = pontat cu oră de intrare, fără cod de absență și cu șantier (regula din Pontaj: check_in && !norma)
 export const estePrezenta = (r) => !!r && r.check_in != null && r.check_in !== '' && !r.norma && r.site_id != null
 
-// Șantierele proiectului (o singură definiție, L19): chei text
-export function santiereProiect(proiectId, siteIdPrincipal, sites) {
+// Șantierele proiectului (o singură definiție, L19): sites.proiect_id = proiectul; chei text
+export function santiereProiect(proiectId, sites) {
   const pid = cheie(proiectId)
-  const ids = new Set((sites || []).filter(s => s.proiect_id != null && cheie(s.proiect_id) === pid).map(s => cheie(s.id)))
-  if (siteIdPrincipal != null) {
-    const s = (sites || []).find(x => cheie(x.id) === cheie(siteIdPrincipal))
-    if (s && (s.proiect_id == null || cheie(s.proiect_id) === pid)) ids.add(cheie(s.id))
-  }
-  return ids
+  return new Set((sites || []).filter(s => s.proiect_id != null && cheie(s.proiect_id) === pid).map(s => cheie(s.id)))
+}
+
+// Exportul oprit de utilizator (a ieșit din pagină / a schimbat proiectul): nu e eroare de afișat
+export class ExportAnulat extends Error {
+  constructor() { super('export anulat'); this.name = 'ExportAnulat' }
 }
 
 // Ultima zi de PREZENȚĂ a fiecărui angajat (cheie text employee_id → rândul de pontaj)
@@ -176,6 +175,8 @@ function foaieSinteza(foi, sin) {
   }))
   ws['!cols'] = [{ wch: 38 }, ...foi.map(() => ({ wch: 16 })), { wch: 10 }]
   ws['!rows'] = [{ hpt: 32 }]
+  // filtrul: antetul + rândurile funcțiilor, FĂRĂ rândul TOTAL (review Jakarinos r1 P2)
+  ws['!autofilter'] = { ref: `A1:${XLSX.utils.encode_col(cap.length - 1)}${sin.linii.length + 1}` }
   ws['!margins'] = MARGINI
   return ws
 }
@@ -224,47 +225,57 @@ function bucati(lista, n) {
   return out
 }
 
-// Citirea din BD: toate pe chei (id crescător, până la pagina goală); orice eroare = excepție cu mesaj (L18, L23)
-export async function incarcaOameniProiect(sb, proiectId, azi = aziBucuresti()) {
+// Citirea din BD: toate pe chei (id crescător, până la pagina goală); orice eroare = excepție cu mesaj (L18, L23).
+// Ultima prezență fără limită în trecut, citind doar ce poate schimba rezultatul:
+//   1. prezențele pe șantierele proiectului (≤ azi) → candidații și ultima lor zi pe proiect (dP);
+//   2. pentru cei cu dP: doar zilele de DUPĂ cel mai mic dP din bucată (o zi pe angajat — cheie unică employee_id + date —, deci o
+//      prezență mai nouă oriunde e strict după dP); pentru alocații fără nicio prezență pe proiect: tot istoricul lor (≤ azi).
+// semnal.anulat (setat de buton la demontare / schimbarea proiectului) oprește citirea între pagini cu ExportAnulat.
+export async function incarcaOameniProiect(sb, proiectId, azi = aziBucuresti(), semnal = null) {
   const pid = Number(proiectId)
   if (!Number.isInteger(pid) || pid <= 0) throw new Error('proiect invalid')
-  const de = adunaZile(azi, -FEREASTRA_ZILE)
   const eroare = (ce, e) => new Error(`${ce}: ${e?.message || e || 'eroare'}`)
+  const verifica = () => { if (semnal?.anulat) throw new ExportAnulat() }
   const toate = (fabrica, ce) => paginareKeyset((ultim, n) => {
+    if (semnal?.anulat) return Promise.resolve({ error: new ExportAnulat() })
     let q = fabrica()
     if (ultim != null) q = q.gt('id', ultim)
     return q.order('id', { ascending: true }).limit(n).then(r => (r.error ? { error: eroare(ce, r.error) } : r))
   })
-  const { data: p, error: ep } = await sb.from('executie_proiecte').select('id,cod_intern,site_id').eq('id', pid).maybeSingle()
+  const prezente = (filtre, ce) => toate(() => filtre(sb.from('pontaj_records').select(COLOANE_PONTAJ)).lte('date', azi).not('check_in', 'is', null), ce)
+  verifica()
+  const { data: p, error: ep } = await sb.from('executie_proiecte').select('id,cod_intern').eq('id', pid).maybeSingle()
   if (ep) throw eroare('proiectul', ep)
   if (!p) throw new Error('proiectul nu se poate citi (nu există sau nu ai drept pe el)')
   const sites = await toate(() => sb.from('sites').select('id,name,proiect_id'), 'șantierele')
-  const santiere = santiereProiect(pid, p.site_id, sites)
+  const santiere = santiereProiect(pid, sites)
   const numeSantier = new Map(sites.map(s => [cheie(s.id), String(s.name || '').trim()]))
-  if (!santiere.size) return { proiect: p, santiere, numeSantier, angajati: [], ultime: new Map(), de, azi }
+  if (!santiere.size) return { proiect: p, santiere, numeSantier, angajati: [], ultime: new Map(), azi }
   const sIds = [...santiere]
   const alocati = await toate(() => sb.from('employees').select(COLOANE_ANGAJAT).eq('active', true).in('site_id', sIds), 'angajații alocați')
-  const peSantier = await toate(() => sb.from('pontaj_records').select(COLOANE_PONTAJ).in('site_id', sIds)
-    .gte('date', de).lte('date', azi).not('check_in', 'is', null), 'pontajul pe șantierele proiectului')
-  const candidati = new Set(peSantier.filter(estePrezenta).map(r => cheie(r.employee_id)))
-  const deCitit = [...new Set([...alocati.map(e => cheie(e.id)), ...candidati])]
-  const pontaje = []
-  for (const b of bucati(deCitit, BUCATA_IN)) {
-    pontaje.push(...await toate(() => sb.from('pontaj_records').select(COLOANE_PONTAJ).in('employee_id', b)
-      .gte('date', de).lte('date', azi).not('check_in', 'is', null), 'ultimul pontaj'))
-  }
+  const peProiect = await prezente(q => q.in('site_id', sIds), 'pontajul pe șantierele proiectului')
+  const dP = ultimaPrezenta(peProiect)                       // ultima zi de prezență PE PROIECT, pe angajat
   const alocatiIds = new Set(alocati.map(e => cheie(e.id)))
+  const cuDp = [...dP.keys()]                                 // candidații (alocați sau nu) cu prezență pe proiect
+  const faraDp = [...alocatiIds].filter(k => !dP.has(k))
+  const pontaje = [...peProiect]
+  for (const b of bucati(cuDp, BUCATA_IN)) {
+    const minDp = b.map(k => dP.get(k).date).sort()[0]
+    pontaje.push(...await prezente(q => q.in('employee_id', b).gt('date', minDp), 'ultimul pontaj'))
+  }
+  for (const b of bucati(faraDp, BUCATA_IN)) pontaje.push(...await prezente(q => q.in('employee_id', b), 'ultimul pontaj'))
   const altii = []
-  for (const b of bucati([...candidati].filter(k => !alocatiIds.has(k)), BUCATA_IN)) {
+  for (const b of bucati([...dP.keys()].filter(k => !alocatiIds.has(k)), BUCATA_IN)) {
     altii.push(...await toate(() => sb.from('employees').select(COLOANE_ANGAJAT).eq('active', true).in('id', b), 'angajații pontați'))
   }
-  return { proiect: p, santiere, numeSantier, angajati: [...alocati, ...altii], ultime: ultimaPrezenta(pontaje), de, azi }
+  verifica()
+  return { proiect: p, santiere, numeSantier, angajati: [...alocati, ...altii], ultime: ultimaPrezenta(pontaje), azi }
 }
 
 // Totul: citire → rânduri → foi → fișier. faraSantiere / nrOameni = 0 se raportează distinct (nu e eroare, nici succes tăcut)
-export async function exportaOameniProiect(sb, proiectId, azi = aziBucuresti()) {
-  const d = await incarcaOameniProiect(sb, proiectId, azi)
-  const baza = { fereastra: FEREASTRA_ZILE, cod: d.proiect.cod_intern }
+export async function exportaOameniProiect(sb, proiectId, azi = aziBucuresti(), semnal = null) {
+  const d = await incarcaOameniProiect(sb, proiectId, azi, semnal)
+  const baza = { cod: d.proiect.cod_intern }
   if (!d.santiere.size) return { ...baza, faraSantiere: true, nrOameni: 0, nrFoi: 0 }
   const foi = grupeazaPeFoi(alcatuiesteOameni(d), d.numeSantier)
   const nrOameni = foi.reduce((a, f) => a + f.randuri.length, 0)

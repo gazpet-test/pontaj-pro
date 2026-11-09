@@ -264,9 +264,13 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
   const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' ? tab : 'izometrie')
 
   useEffect(() => {
+    // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
+    let viu = true
+    setProiect(null)
     supabase.from('v_executie_dashboard')
       .select('*').eq('id', proiectId).single()
-      .then(({ data }) => setProiect(data))
+      .then(({ data }) => { if (viu) setProiect(data) })
+    return () => { viu = false }
   }, [proiectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -328,8 +332,8 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             )}
           </div>
         )}
-        {/* doar după ce proiectul s-a citit (cine vede proiectul în Execuție) */}
-        {proiect && <OameniSantierButon supabase={supabase} proiectId={proiectId} />}
+        {/* apare doar când proiectul CURENT s-a citit (cine vede proiectul în Execuție); garda pe id e în componentă */}
+        <OameniSantierButon supabase={supabase} proiectId={proiectId} proiect={proiect} />
         <LegaturaExecutie proiectId={proiectId} />
       </div>
 
