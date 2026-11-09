@@ -12,8 +12,8 @@
 // (c) Identitate: service_role pentru descărcarea din bucket-ul „ofertare” și scrierea analizei
 //     (bucket privat, scriere peste RLS) — cu POARTĂ DE ROL în cod: JWT-ul userului trebuie să
 //     treacă fn_are_acces_ofertare() (owner sau acces explicit la modul 'ofertare').
-// (d) Cine pornește: user cu acces Ofertare (din UI) sau secretul intern x-radar-secret
-//     (fn_verifica_radar_secret, Vault) pentru rutine. verify_jwt singur NU ajunge.
+// (d) Cine pornește: user cu acces Ofertare (din UI) care trece poarta pe cheltuială (20261124a). Calea x-radar-secret pentru
+//     rutine e scoasă în r3 (#908; fără apelanți). verify_jwt singur NU ajunge.
 // (e) Nu cere confirmare umană: operația e idempotentă (recitirea suprascrie citire_noi) și
 //     costă doar apelul AI, pornit explicit de om cu butonul. 06.10: PDF-ul întreg (scump) — doar owner /
 //     responsabilul licitației / secretul intern (poarta pe cheltuială, ca ofertare-ingest-doc); rezumatul din
@@ -24,9 +24,10 @@ import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { scrieCitireNoi } from './scriere.ts'
 import { combinaFelii, imparteCuGranite, parteDinAi, type Parte, rezultatFelii, type Sinteza } from './felii.ts'
 import { type Lucru, lucruPentru, scrieLucru, urmatoareaFelie } from './lucru.ts'
-import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_POARTA_TEXT, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poatePorniAi, provenanta, timpRamas } from './sursa.ts'
 import { aceeasiIdentitate, identitateObiect, shaOcteti, type IdentitateObiect } from './obiect.ts'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
@@ -38,12 +39,6 @@ const b64 = (bytes: Uint8Array) => { let bin = ''; for (let i = 0; i < bytes.len
 const arePdf = (b: Uint8Array) => b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 && b[4] === 0x2D
 const TIPURI_AI = ['raspuns_clarificare', 'erata', 'document_nou', 'altul']
 
-async function secretOk(req: Request, db: any): Promise<boolean> {
-  const s = req.headers.get('x-radar-secret')
-  if (!s) return false
-  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
-  return !error && data === true
-}
 
 // Copilot conv. 3 (runda 2, P1): lista TUTUROR mențiunilor de termen, nu un singur termen ales de AI — conflictul îl decide codul / omul.
 const REGULA_TERMENE = 'termene = FIECARE mențiune a unui termen-limită de depunere a ofertelor STABILIT sau MODIFICAT de autoritate în text (prelungire, devansare, corectare), în ordinea din text, chiar dacă documentul îl schimbă de mai multe ori — data în format AAAA-LL-ZZ și propoziția întreagă care o conține, copiată EXACT din text (se verifică automat caracter cu caracter). NU include termenul vechi pe care îl înlocuiește, data documentului sau alte termene (clarificări, execuție, garanții). Listă goală dacă nu există. NU alege tu un singur termen.'
@@ -116,11 +111,10 @@ Deno.serve(async (req: Request) => {
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!
   const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
-  // Poarta de rol: secret intern SAU user cu acces la modulul Ofertare (owner bypass e în RPC)
+  // Poarta de rol: user cu acces la modulul Ofertare (owner bypass e în RPC). r3 (#908, review r2 Jakarinos P1-02): calea internă
+  // x-radar-secret e SCOASĂ — niciun apelant (cron / edge / worker) n-o folosea, iar un secret de serviciu nu ține loc de drept de cheltuială.
   let cititDe: string | null = null
-  if (await secretOk(req, db)) {
-    cititDe = 'intern'
-  } else {
+  {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
     const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
@@ -147,14 +141,9 @@ Deno.serve(async (req: Request) => {
 
   // Răcari 06.10.2026: documentul citit deja pe felii („Procesează”) se citește din TEXT; altfel PDF, cu termen-limită (sursa.ts).
   const sursa = alegeSursa(row)
-  if (sursa.mod === 'pdf' && cititDe !== 'intern') {
-    const [{ data: prof }, { data: lic }] = await Promise.all([
-      db.from('profiles').select('is_owner').eq('id', cititDe).maybeSingle(),
-      db.from('ofertare_licitatii').select('responsabil_id').eq('id', row.licitatie_id).maybeSingle(),
-    ])
-    if (!poateCitiPdf({ intern: false, isOwner: prof?.is_owner, responsabilId: lic?.responsabil_id, uid: cititDe }))
-      return json({ error: MESAJ_POARTA_PDF, cod: 'poarta_cheltuiala' }, 403)
-  }
+  // 4A (20261124a): poarta pe cheltuială pe AMBELE ramuri (PDF și text), înainte de orice descărcare / apel AI; RPC căzut = refuz
+  if (!poatePorniAi({ intern: false, poateCheltui: await poateCheltui(db, row.licitatie_id, cititDe) }))
+    return json({ error: sursa.mod === 'pdf' ? MESAJ_POARTA_PDF : MESAJ_POARTA_TEXT, cod: 'poarta_cheltuiala' }, 403)
   // amprenta sursei de dinainte de AI: scrierea refuză dacă documentul a fost recitit între timp (scriere.ts).
   // Text: SHA-256 al text_extras. PDF: SHA-256 pe bytes-ii descărcați + identitatea obiectului din Storage (obiect.ts).
   let sha: string | null = sursa.mod === 'text' ? await amprentaText(row.text_extras) : null

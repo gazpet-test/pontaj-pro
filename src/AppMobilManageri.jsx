@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import ProbeTerenMobil from './ProbeTerenMobil.jsx'
 import { MeteoBadge } from './Meteo.jsx'
 import { combinaUtilaje } from './raportUtilaje.js'
 import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, antetImplicit } from './raportDistributie.js'
@@ -57,6 +58,7 @@ export default function AppMobilManageri() {
   const [profile, setProfile] = useState(null)
   const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
+  const [probeWrite, setProbeWrite] = useState(false)
 
   useEffect(() => {
     (async () => {
@@ -64,6 +66,8 @@ export default function AppMobilManageri() {
       if (!user) { setLoading(false); return }
       const { data: prof } = await supabase.from('profiles').select('id, name, role, is_owner').eq('id', user.id).maybeSingle()
       setProfile(prof || null)
+      const { data: probeDrept, error: probeErr } = await supabase.rpc('probe_teren_drept', { p_scriere: true })
+      setProbeWrite(!probeErr && probeDrept === true)
       let siteList = []
       if (prof?.is_owner) {
         const { data } = await supabase.from('sites').select('id, name').eq('active', true).order('name')
@@ -80,6 +84,7 @@ export default function AppMobilManageri() {
   if (loading) return <Shell><div style={{ color: G.dim, textAlign: 'center', padding: 60 }}>Se încarcă…</div></Shell>
 
   if (view === 'raport') return <RaportZilnic profile={profile} sites={sites} onBack={() => setView('launcher')} />
+  if (view === 'probe' && probeWrite) return <ProbeTerenMobil profile={profile} onBack={() => setView('launcher')} />
 
   // ── Launcher ──
   const butoane = [
@@ -108,6 +113,7 @@ export default function AppMobilManageri() {
             <span style={{ fontSize: 15, fontWeight: 700, textAlign: 'center', whiteSpace: 'pre-line', lineHeight: 1.25 }}>{b.label}</span>
           </button>
         ))}
+        {probeWrite && <button onClick={() => setView('probe')} style={{ background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${G.blue}`, borderRadius: 16, padding: '26px 14px', minHeight: 110, gridColumn: '1 / -1', color: G.text, fontSize: 19, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer' }}>Probe presiune</button>}
       </div>
       <div style={{ textAlign: 'center', marginTop: 30 }}>
         <button onClick={() => nav('/')} style={{ background: 'transparent', border: 'none', color: G.dim, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }}>

@@ -12,9 +12,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { imageToPdf } from './CitesteOricePanel.jsx'
-import { aplicaPropunereOCR, avertismenteOCR, cantitateMultiplaOCR } from './izoDocumentePrefill.js'
+import { aplicaPropunereOCR, avertismenteOCR, cantitateMultiplaOCR, seriiRepetateOCR, textSeriiRepetate, MESAJ_SERIE_REPETATA } from './izoDocumentePrefill.js'
 import IzoDocumentIstoric from './IzoDocumentIstoric.jsx'
-import { citesteLocal, raspunsInvokeOCR, descrieSursaOCR } from './izoOcrLocalFlux.js'
+import { citesteLocal, raspunsInvokeOCR, descrieSursaOCR, costEticheta } from './izoOcrLocalFlux.js'
 import {
   SABLOANE, DECIZII, COLOANE, IZOLATII, esteCurba, parseNumar, fmtNr, fmtM, randGol, validareDocument, eroriSalvare, eroriPv, eroareMotiv,
   randuriDinLipire, randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, normalizeazaSalvare,
@@ -504,17 +504,18 @@ export default function IzoDocumenteIntrare() {
       }
       const sablon = esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava'
       const invoke = (nume, opt) => supabase.functions.invoke(nume, opt)
-      // Un singur aiLock pe întreaga operație. Haiku direct nu reintră în citesteAI (R3-7).
-      const executaHaikuE3 = () => raspunsInvokeOCR(invoke, 'ocr-packing-list', { tip:'aviz_e3', proiect_id:proiectId,
-        depozit_id:depozitId, sablon, pdf_base64, nume_fisier:pdfAI.name, model:model === 'local' ? 'haiku' : model })
+      // Un singur aiLock pe întreaga operație. Citirea directă nu reintră în citesteAI (R3-7).
+      // Calea directă aviz_e3 rulează pe Sonnet 5.5 (decizia Răzvan 27.10.2026); serverul ignoră `model`, îl trimitem doar explicit.
+      const executaCloudE3 = () => raspunsInvokeOCR(invoke, 'ocr-packing-list', { tip:'aviz_e3', proiect_id:proiectId,
+        depozit_id:depozitId, sablon, pdf_base64, nume_fisier:pdfAI.name, model:'sonnet' })
       let rez = model === 'local'
         ? await citesteLocal({ pdf_base64, proiect_id:proiectId, depozit_id:depozitId, sablon, actual, invoke, progres:setAiProgres })
-        : { haiku:true }
+        : { haiku:true }   // „haiku:true” = citire directă în cloud (numele indicatorului a rămas din B4)
       if (rez.abandonat || !actual()) return
       if (rez.haiku) {
-        if (model !== 'local') setAiProgres('Citesc cu Haiku…')
-        rez = await executaHaikuE3()
-        if (model === 'local' && rez.raspuns) rez = { ...rez, raspuns:{ ...rez.raspuns, sursa:{ ...rez.raspuns.sursa, ramura:'haiku' } } }
+        if (model !== 'local') setAiProgres('Citesc cu Sonnet…')
+        rez = await executaCloudE3()
+        if (model === 'local' && rez.raspuns) rez = { ...rez, raspuns:{ ...rez.raspuns, sursa:{ ...rez.raspuns.sursa, ramura:'sonnet' } } }
       }
       const { raspuns, error, status } = rez
       if (!actual()) { flash('err', 'Răspuns AI ignorat: documentul, proiectul, depozitul, șablonul sau formularul s-a schimbat.'); return }
@@ -522,6 +523,7 @@ export default function IzoDocumenteIntrare() {
       if (error || !raspuns?.success) {
         const cod = raspuns?.eroare
         throw new Error(cod === 'fara_drept' || status === 403 ? 'Nu ai dreptul să citești cu AI pentru acest proiect și depozit.'
+          : cod === 'serie_repetata' ? `${MESAJ_SERIE_REPETATA} (AI-ul a pus probabil șarja în locul numărului țevii). Propunerea nu a fost aplicată: citește din nou sau completează manual.`
           : cod === 'plafon_depasit' || status === 429 ? 'Plafonul AI a fost depășit. Citirea nu a fost efectuată.'
           : status === 400 ? 'Cerere incompletă: verifică proiectul, depozitul și tipul documentului.'
           : status === 413 ? 'PDF prea mare. Limita AI este 8 MB.'
@@ -554,7 +556,7 @@ export default function IzoDocumenteIntrare() {
         : e.status === 400 ? 'Cerere incompletă: verifică proiectul, depozitul și tipul documentului.'
         : e.status === 413 ? 'PDF prea mare. Limita AI este 8 MB.'
         : cod === 'pdf_invalid' ? 'PDF invalid sau criptat. Alege alt scan ori completează manual.'
-        : e.raspuns ? 'Citirea a eșuat. Completează manual sau încearcă din nou cu Haiku.' : e.message || 'Citirea AI a eșuat.')
+        : e.raspuns ? 'Citirea a eșuat. Completează manual sau citește din nou.' : e.message || 'Citirea AI a eșuat.')
     }
     finally { aiLock.current = false; if (aiMontat.current) { setAiBusy(false); setAiProgres('') } }
   }
@@ -563,6 +565,12 @@ export default function IzoDocumenteIntrare() {
   const aplicaAI = mod => {
     if (!propunere || busy || aiLock.current || !edScrie || opritScriere(ed)) return
     if (propunere.context !== contextAI()) { setPropunere(null); flash('err', 'Propunerea a expirat: formularul s-a schimbat. Citește din nou documentul.'); return }
+    // garda serie repetată (aviz COMTECH P 0160, 27.10.2026): aplicarea cere confirmare explicită; rândurile dublate rămân
+    // oricum blocante la salvare (validareDocument + serie_dublura pe server), deci confirmarea nu poate duce date greșite în registru
+    const repetate = seriiRepetateOCR(propunere.raspuns)
+    if (repetate.length && !window.confirm(`${textSeriiRepetate(repetate)}\n\nVerifică pe original coloana cu numărul țevii (ex. „Cod articol” / „Nr. țeavă”), nu „Nr. șarjă”. `
+      + 'Recomandat: Renunță și recitește. Dacă aplici, rândurile cu număr repetat rămân blocate la salvare până le corectezi.\n\n'
+      + 'Atenție: verificarea prinde doar numerele repetate, nu dovedește din ce coloană au fost citite — confirmarea pe original rămâne a ta.\n\nAplici totuși propunerea?')) return
     modifica(e => aplicaPropunereOCR(e, propunere.raspuns, { mod }))
     setPropunere(null); setAiAplicat(true); pdfAplicat.current = pdfAI
     flash('ok', 'Propunere aplicată. Verifică datele și alege decizia pentru fiecare bucată înainte de salvare.')
@@ -702,10 +710,9 @@ export default function IzoDocumenteIntrare() {
             onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; pregatesteAI(f) }} />
         </label>
         <button style={{ ...S.btnP, minHeight:44 }} onClick={() => citesteAI()} disabled={!pdfAI || busy || aiBusy || !edRol}>{aiBusy ? 'Se procesează…' : 'Citește cu AI'}</button>
-        <button style={{ ...S.btnS, minHeight:44 }} onClick={() => citesteAI('haiku')} disabled={!pdfAI || busy || aiBusy || !edRol}>Citește cu Haiku</button>
       </div>
       <p style={{ fontSize:12, color:G.muted }}>O fotografie per document; pentru mai multe pagini alege un PDF. Maxim 8 MB. AI propune; tu verifici și salvezi.</p>
-      <div style={{ fontSize:12, color:G.muted }}>Citire locală implicită; Haiku automat dacă serviciul local nu poate citi. Cost variabil, în plafonul AI.</div>
+      <div style={{ fontSize:12, color:G.muted }}>Citire locală implicită; Sonnet automat dacă serviciul local nu poate citi. Cost variabil, în plafonul AI.</div>
       {aiProgres && <div role="status" style={{ marginTop:8, color:G.yellow }}>{aiProgres}</div>}
       {/* confirmare vizibilă (Razvan 22.10: „să știu sigur că s-a încărcat”) */}
       {aiBusy && !pdfAI && <div style={{ margin:'8px 0', padding:'10px 12px', borderRadius:8, background:G.yellow + '22', border:`1px solid ${G.yellow}`, color:G.yellow, fontWeight:700 }}>⏳ Se pregătește poza…</div>}
@@ -721,12 +728,12 @@ export default function IzoDocumenteIntrare() {
       {aiMeta && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>
         {aiMeta.success && <b>{descrieSursaOCR(aiMeta)}. </b>}
         {aiMeta.model && <>Model: {aiMeta.model}. </>}
-        {aiMeta.cost_usd != null && <>Cost: {fmtNr(aiMeta.cost_usd, 4)} USD. </>}
+        {aiMeta.cost_usd != null && <>Cost ({costEticheta(aiMeta)}): {fmtNr(aiMeta.cost_usd, 4)} USD. </>}
         {aiMeta.success && aiMeta.cost_usd == null && <>Cost necunoscut. </>}
         {aiMeta.sursa && <div>Durată: {aiMeta.sursa.secunde ?? '—'} s · Dezacorduri: {aiMeta.sursa.dezacorduri ?? '—'} · Perspectivă: {({ aplicata:'aplicată', nesigura:'nesigură', inutila:'inutilă' })[aiMeta.sursa.perspectiva] || '—'}</div>}
         {aiMeta.plafon && <>Plafon rămas: {fmtNr(Number(aiMeta.plafon.plafon_usd) - Number(aiMeta.plafon.consumat_usd) - Number(aiMeta.plafon.rezervat_usd), 4)} USD (după rezervări).</>}
       </div>}
-      {aiMeta?.success && pdfAI && <><button style={S.btnS} disabled={busy || aiBusy} onClick={() => citesteAI('sonnet')}>Reciteste cu model superior (~5 centi)</button><span style={{ color:G.muted, fontSize:12 }}> Cost variabil; rezervă maximă 0,20 USD.</span></>}
+      {aiMeta?.success && pdfAI && <><button style={S.btnS} disabled={busy || aiBusy} onClick={() => citesteAI('sonnet')}>Recitește direct cu Sonnet</button><span style={{ color:G.muted, fontSize:12 }}> Fără citirea locală. Cost variabil; rezervă maximă 0,20 USD.</span></>}
       {propunere && <>
         <PropunereOCR raspuns={propunere.raspuns} ed={ed} mobil={mobil} />
         <label style={S.lbl}>Aplicare în formular</label>
@@ -739,7 +746,7 @@ export default function IzoDocumenteIntrare() {
           <button style={{ ...S.btnS, minHeight:44 }} disabled={busy || aiBusy} onClick={() => setPropunere(null)}>Renunță</button>
         </div>
       </>}
-      {!propunere && ed.ocrAvertismente?.map((x, i) => <div key={i} style={{ color:G.yellow, marginTop:8 }}>{x}</div>)}
+      {!propunere && ed.ocrAvertismente?.map((x, i) => <div key={i} style={{ color:String(x).startsWith(MESAJ_SERIE_REPETATA) ? G.red : G.yellow, marginTop:8 }}>{x}</div>)}
       {pdfAI && pdfAI === pdfAplicat.current && ed.id && !mobil && <button style={{ ...S.btnS, minHeight:44, marginTop:10 }} disabled={busy || aiBusy} onClick={ataseazaCitit}>Atașează scanul citit</button>}
     </div>
   )
@@ -1065,26 +1072,31 @@ function PropunereOCR({ raspuns, ed, mobil }) {
   const doc = aplicaPropunereOCR({ ...ed, antet:{}, randuri:[] }, raspuns, { mod:'inlocuieste' })
   const comparatii = validareDocument(doc).totaluri.comparatii
   const coloane = COLOANE[ed.sablon].filter(([k]) => !['lungime_masurata', 'unghi_masurat'].includes(k))
+  const dublate = new Set(seriiRepetateOCR(raspuns).flatMap(x => x.randuri.map(n => n - 1)))   // index 0.. al rândurilor cu serie repetată
   const etichete = Object.fromEntries([['furnizor', 'Furnizor'], ['furnizor_cif', 'CIF'], ['nr_document', 'Nr. document'],
     ['data_document', 'Data'], ['observatii', 'Observații'], ...SABLOANE[ed.sablon].antet, ...SABLOANE[ed.sablon].totaluri])
   return <div style={{ margin:'12px 0', fontSize:13, overflowWrap:'anywhere' }}>
     <b>Propunere AI — verifică după original</b>
+    <div style={{ fontSize:12, color:G.muted }}>Verificarea automată prinde doar numerele de țeavă repetate; nu confirmă că au fost citite din coloana corectă (Nr. țeavă / Cod articol) — compară cu documentul.</div>
     {Object.entries(doc.antet).map(([k, v]) => <div key={k}>{etichete[k] || k}: <b>{v || '—'}</b></div>)}
     <div>Totaluri tipărite OCR: {raspuns.totaluri_tiparite?.total_metri ?? '—'} m · {raspuns.totaluri_tiparite?.total_kg ?? '—'} kg</div>
     {comparatii.map(c => <div key={c.cheie} style={{ color:c.bate === false ? G.red : G.muted, marginTop:4 }}>
       {c.label || c.cheie}: tipărit {doc.antet[c.cheie] ?? '—'} · suma rândurilor aplicabile {c.calculat ?? '—'}
       {c.bate === false ? ' — diferență, verifică documentul' : ''}
     </div>)}
-    {avertismenteOCR(raspuns).map((x, i) => <div key={i} style={{ color:G.yellow, marginTop:8 }}>⚠ {x}</div>)}
+    {avertismenteOCR(raspuns).map((x, i) => x.startsWith(MESAJ_SERIE_REPETATA)
+      ? <div key={i} style={{ color:G.red, fontWeight:700, marginTop:8, padding:'8px 10px', border:`1px solid ${G.red}`, borderRadius:8 }}>⛔ {x}</div>
+      : <div key={i} style={{ color:G.yellow, marginTop:8 }}>⚠ {x}</div>)}
     {/* pe ecran îngust tabelul derulat tăia începutul coloanelor (seria / șarja) → carduri (test Razvan 22.10) */}
     {(mobil || (typeof window !== 'undefined' && window.innerWidth < 900)) ? raspuns.randuri.map((r, i) => <div key={i} style={{ ...S.card, padding:12, marginTop:10, borderColor:cantitateMultiplaOCR(r) ? G.yellow : G.border2 }}>
       <b>Rândul {i + 1}{cantitateMultiplaOCR(r) ? ' — nu se aplică' : ''}</b>
-      {coloane.filter(([k]) => r[k] != null && r[k] !== '').map(([k, et]) => <div key={k}>{et}: {String(r[k])}</div>)}
+      {coloane.filter(([k]) => r[k] != null && r[k] !== '').map(([k, et]) => <div key={k} style={k === 'serie' && dublate.has(i) ? { color:G.red, fontWeight:700 } : undefined}>{et}: {String(r[k])}</div>)}
       {cantitateMultiplaOCR(r) && <div style={{ color:G.yellow }}>Rând cu cantitate {String(r.cantitate)} fără serii individuale — introdu manual bucățile.</div>}
     </div>) : <div style={{ overflowX:'auto', marginTop:10 }}><table style={{ borderCollapse:'collapse', width:'100%' }}>
       <thead><tr>{coloane.map(([k, et]) => <th style={S.th} key={k}>{et}</th>)}<th style={S.th}>Cantitate / avertisment</th></tr></thead>
       <tbody>{raspuns.randuri.map((r, i) => <tr key={i} style={{ background:cantitateMultiplaOCR(r) ? G.yellow + '22' : undefined }}>
-        {coloane.map(([k]) => <td style={{ ...S.td, whiteSpace:k === 'cod' || k === 'serie' || k === 'sarja' ? 'nowrap' : undefined }} key={k}>{r[k] == null ? '—' : String(r[k])}</td>)}
+        {coloane.map(([k]) => <td style={{ ...S.td, whiteSpace:k === 'cod' || k === 'serie' || k === 'sarja' ? 'nowrap' : undefined,
+          ...(k === 'serie' && dublate.has(i) ? { color:G.red, fontWeight:700 } : {}) }} key={k}>{r[k] == null ? '—' : String(r[k])}</td>)}
         <td style={{ ...S.td, color:G.yellow }}>{cantitateMultiplaOCR(r) ? `Rând cu cantitate ${String(r.cantitate)} fără serii individuale — introdu manual bucățile.` : String(r.cantitate ?? '1')}</td>
       </tr>)}</tbody>
     </table></div>}

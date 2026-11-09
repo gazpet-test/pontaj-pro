@@ -1,7 +1,26 @@
-import { CHEI_ANTET, COLOANE, randGol, parseNumar, izolatieDinText } from './izoDocumenteLogica.js'
+import { CHEI_ANTET, COLOANE, randGol, parseNumar, izolatieDinText, serieCanon } from './izoDocumenteLogica.js'
 
 const text = v => typeof v === 'string' || typeof v === 'number' ? String(v) : ''
 const gol = v => v == null || String(v).trim() === ''
+
+// ── garda „serie repetată” (aviz COMTECH P 0160, 27.10.2026: Nr.Sarja citit ca număr de țeavă) ──
+export const MESAJ_SERIE_REPETATA = 'Numărul țevii se repetă (posibil șarjă citită ca număr de țeavă) – verificați coloana'
+/**
+ * Seriile care apar de mai multe ori pe rândurile-piesă (cantitate goală sau 1) ale unui aviz de țeavă, după seria canonică.
+ * Întoarce [{ serie, randuri:[poziția 1..N în propunere] }]. Listele de curbe nu intră: acolo aceeași serie + șarjă cu alt unghi e legitimă.
+ */
+export function seriiRepetateOCR(raspuns) {
+  if (['lista_curbe', 'lista_ambalare_curbe'].includes(raspuns?.sablon)) return []
+  const pe = new Map()
+  ;(raspuns?.randuri || []).forEach((r, i) => {
+    const q = parseNumar(r?.cantitate), c = serieCanon(r?.serie)
+    if (!c || (q != null && q !== 1)) return
+    pe.set(c, [...(pe.get(c) || []), i + 1])
+  })
+  return [...pe].filter(([, randuri]) => randuri.length > 1).map(([serie, randuri]) => ({ serie, randuri }))
+}
+export const textSeriiRepetate = rep => `${MESAJ_SERIE_REPETATA}: ${rep.map(x => `${x.serie} (rândurile ${x.randuri.join(', ')})`).join('; ')}.`
+
 // Câmpurile de kg se citesc cu „mii: true” (123.456 = 123456), deci numărul AI nu se scrie cu punct: întreg → cifre,
 // 1–2 zecimale → virgulă; 3+ zecimale = ambiguu → câmp gol + avertisment, fără rotunjire tacită (Jak E9 r1 P1).
 // orice câmp *_kg (rânduri + totaluri: total_kg, total_net_kg, total_brut_kg …) — Jak E9 r2 P1
@@ -15,9 +34,12 @@ export function textKg(v) {
 }
 export const cantitateMultiplaOCR = r => parseNumar(r?.cantitate) > 1
 export function avertismenteOCR(raspuns) {
-  return [...(Array.isArray(raspuns?.avertismente) ? raspuns.avertismente.filter(x => typeof x === 'string') : []),
+  const rep = seriiRepetateOCR(raspuns)
+  // garda serie repetată prima: e singura care cere confirmare la aplicare
+  return [...new Set([...(rep.length ? [textSeriiRepetate(rep)] : []),
+    ...(Array.isArray(raspuns?.avertismente) ? raspuns.avertismente.filter(x => typeof x === 'string') : []),
     ...(raspuns?.randuri || []).flatMap((r, i) => cantitateMultiplaOCR(r)
-      ? [`Rândul ${i + 1}: rand cu cantitate ${text(r.cantitate)} fara serii individuale - introdu manual bucatile.`] : [])]
+      ? [`Rândul ${i + 1}: rand cu cantitate ${text(r.cantitate)} fara serii individuale - introdu manual bucatile.`] : [])])]
 }
 
 // OCR furnizează numai date: identitatea, măsurătorile și deciziile rămân ale gestionarului.

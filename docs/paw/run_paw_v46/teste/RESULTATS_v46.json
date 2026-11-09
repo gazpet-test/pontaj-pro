@@ -1,0 +1,33 @@
+{
+  "scope": "offline fixtures; no OS or live-service certification",
+  "selection": [
+    "teste.test_v46",
+    "teste.test_gemini_pw",
+    "teste.test_cdx_installer",
+    "teste.test_cdx_policy",
+    "teste.test_cdx_r4.R4.test_links_and_legacy_trust",
+    "teste.test_cdx_r4.R4.test_file_symlink_cleanup",
+    "teste.test_cdx_r5",
+    "teste.test_cdx_r6",
+    "teste.test_cdx_security",
+    "teste.test_run_paw.RuleazaPipe"
+  ],
+  "run": 58,
+  "passed": 57,
+  "skipped": [
+    {
+      "test": "test_file_symlink_cleanup (teste.test_cdx_r4.R4.test_file_symlink_cleanup)",
+      "reason": "Unprivileged file-symlink creation unavailable; no privilege or policy changes"
+    }
+  ],
+  "failures": [],
+  "errors": [],
+  "excluded": {
+    "test_cdx": "uses Git",
+    "test_instalare": "uses Git",
+    "test_cdx_cert_probes": "uses Git credential fill with synthetic helper",
+    "test_cdx_patch_runtime": "opt-in installed CLI; not a unittest module",
+    "test_cdx_r4.R4.test_native_http_positive_control": "loopback HTTP fails identically on copied v45 baseline",
+    "test_run_paw.Lansator": "separate run: 41 tests, 17 failures due to CIM denied, 24 passed"
+  }
+}

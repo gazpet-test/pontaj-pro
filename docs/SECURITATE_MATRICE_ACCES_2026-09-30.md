@@ -388,7 +388,7 @@ Sursa 30a: `supabase/migrations/20260930a_profiles_campuri_owner_only_extins.sql
 **Concluzie (propunere, fără a modifica 30a):**
 1. #1 **nu e acoperit integral de 30a**: rămân auto-editabile `phone_whatsapp` și `whatsapp_enabled`. Propun adăugarea lor la lista 30a (sau într-o 30b) — cost mic: singurul editor legitim e ownerul prin Admin (`App.jsx:6668-6672`), deci nicio regresie.
 2. Alternativă dacă Răzvan vrea ca angajatul să-și seteze singur numărul: păstrat auto-editabil, dar orice viitor consumator (`notify-whatsapp`, bot) trebuie să-l trateze ca **neverificat** (confirmare prin cod OTP înainte de rutare).
-3. Separat de 30a: `notify-whatsapp` trebuie porțit pe rol (owner/service_role) — azi e apelabil cu cheia anon (§5.3).
+3. Separat de 30a: `notify-whatsapp` trebuie porțit pe rol (owner/service_role) — azi e apelabil cu cheia anon (§5.3). **Rezolvat 03.11.2026: funcția a fost retrasă (v30 = stub 410, verificat cu cheia anon; codul v29 în `supabase/functions/notify-whatsapp/_v29_retras.ts.txt`). O versiune nouă cere review + poartă de rol.**
 4. 30a nu repară datele existente (21 de non-owneri cu flaguri active) — preview → confirmare → apply, decizia lui Răzvan.
 
 ---

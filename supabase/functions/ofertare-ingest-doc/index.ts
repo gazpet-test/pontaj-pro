@@ -35,6 +35,7 @@ import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poar
 import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'   // v16: aceeași regulă + plafon ca ofertare-citire-test
 import { scrieProvenienta } from '../_shared/provenientaText.ts'   // TKT-0329 B: proveniența textului (transcriere)
 import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools; Haiku 5.5 rămâne pe 'disabled'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -136,15 +137,17 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<{ 
   })
   if (id.tip === 'refuz') return { eroare: id.motiv, status: id.status, uid: null }
   if (id.tip === 'serviciu') {
-    const { data } = await supabase.from('ofertare_ingest_coada').select('cerut_de').eq('licitatie_id', licId).maybeSingle()
-    return { eroare: null, status: 200, uid: data?.cerut_de || null }
+    // r4 (#908, review r3 Jakarinos P1-02 / Copilot P1-04): secretul workerului dovedește doar CINE cheamă, nu cine plătește — fiecare
+    // invocare internă (= o felie AI) cere o cerere ACTIVĂ în coada de citire, cu cerut_de (scris doar de ofertare_coada_porneste după
+    // 20261124a) care trece ACUM poarta pe cheltuială. Citire căzută / coadă inactivă / cerut_de lipsă / poarta NU = refuz, fără AI.
+    const { data, error } = await supabase.from('ofertare_ingest_coada').select('activ, cerut_de').eq('licitatie_id', licId).maybeSingle()
+    if (error) return { eroare: 'coada de citire nu s-a putut verifica — nu pornesc nimic (fail-closed)', status: 503, uid: null }
+    if (data?.activ !== true || !data?.cerut_de) return { eroare: 'apel intern fără o cerere activă în coada de citire', status: 403, uid: null }
+    if (!(await poateCheltui(supabase, licId, data.cerut_de))) return { eroare: 'Cine a cerut citirea nu mai trece poarta pe cheltuială (owner / responsabil numit de owner sau de un admin Ofertare).', status: 403, uid: null }
+    return { eroare: null, status: 200, uid: data.cerut_de }
   }
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', id.uid).maybeSingle(),
-    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-  ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === id.uid)) return { eroare: null, status: 200, uid: id.uid }
-  return { eroare: 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).', status: 403, uid: null }
+  if (await poateCheltui(supabase, licId, id.uid)) return { eroare: null, status: 200, uid: id.uid }
+  return { eroare: 'Citirea integrală o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).', status: 403, uid: null }
 }
 
 const JUNK_RE = /(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)Thumbs\.db$|(^|\/)desktop\.ini$/i

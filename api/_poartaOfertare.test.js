@@ -167,9 +167,15 @@ describe('seap-import: excepția internă este limitată la secretul corect și 
 })
 
 it('workflow: helper-ele și rutele declanșează regresia; ambele suite sunt executate', () => {
-  const src = readFileSync(new URL('../.github/workflows/ofertare-regresie.yml', import.meta.url), 'utf8')
+  const src = readFileSync(new URL('../.github/workflows/ofertare-regresie.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  // Din #1005 căile stau doar pe pull_request; după merge, main e acoperit de rularea săptămânală (push scos).
+  const on = src.slice(src.indexOf('\non:\n'), src.indexOf('\npermissions:'))
+  const pr = on.slice(on.indexOf('  pull_request:'), on.indexOf('  schedule:'))
+  expect(on).toMatch(/\n {2}schedule:\n {4}- cron: '[^']+'/)
+  expect(on).toMatch(/\n {2}workflow_dispatch:/)
   for (const path of ['api/_poartaOfertare*', 'supabase/functions/_shared/**', 'api/cad-parse.js', 'api/pdf-sparge.js', 'api/plansa-felii.js', 'api/seap-import.js']) {
-    expect(src.split(`- '${path}'`).length - 1).toBe(2)
+    expect(pr.split(`- '${path}'`).length - 1).toBe(1)
+    expect(src).not.toContain(`- '!${path}'`)
   }
   expect(src).toMatch(/run: npx vitest run .*api\/_poartaOfertare.test.js/)
   expect(src).toMatch(/deno test -A --node-modules-dir=none\s+supabase\/functions\/_shared/)

@@ -1,7 +1,27 @@
-import { HAIKU_55, PRETURI_HAIKU, jsonDinText } from '../_shared/haiku55.ts'
+import { HAIKU_55, PRETURI_HAIKU, costApel, jsonDinText } from '../_shared/haiku55.ts'
 
+// MODEL_E3 (Haiku) rămâne pentru izo-e3-ocr-local (arbitraj + fallback B4): rezerva lui e fixată la 0,05 USD în BD
+// (ocr_local_config.rezerva_usd CHECK = 0.05, migrarea 20261108a) — Sonnet acolo cere întâi schimbarea rezervei în BD.
 export const MODEL_E3 = HAIKU_55
 export const MODELE_E3 = { haiku:HAIKU_55, sonnet:'claude-sonnet-5-5' }
+// Decizia Răzvan 27.10.2026: citirea directă aviz_e3 (ocr-packing-list) rulează pe Sonnet 5.5, gândirea oprită (faraGandire →
+// between_tools), rezerva 0,20 USD (rezervaE3). Restul ocr-packing-list rămâne pe modelParsare (Haiku).
+export const MODEL_AVIZ_E3 = MODELE_E3.sonnet
+
+// P1-01 r2 (Copilot): costul MAXIM al apelului plătit, cu tariful efectiv (costApel), la plafoanele IMPUSE înainte de apel:
+// intrarea = numărarea gratuită count_tokens pe tot corpul (PDF/imagini + system + schema), refuz peste limită → 422
+// pdf_prea_multi_tokeni fără generare; ieșirea ≤ max_tokens (MAX_TOKENS_E3, include și gândirea). Fără cache_control → fără
+// tokeni de cache. Pe Sonnet limita de intrare e 46.000 (nu 48.000): costul maxim 0,196 ≤ rezerva 0,20 și rămân ~2.000 de tokeni
+// de intrare rezervă pentru o eventuală diferență numărare ↔ usage. Haiku (izo-e3-ocr-local) păstrează 48.000 → 0,01 ≤ 0,05.
+export const MAX_INPUT_SONNET_E3 = 46000
+export const limitaInputE3 = (model: string) => model === MODELE_E3.sonnet ? MAX_INPUT_SONNET_E3 : MAX_INPUT_E3
+export const costMaximE3 = (model: string) => costApel(model, { input_tokens: limitaInputE3(model), output_tokens: MAX_TOKENS_E3 })
+
+// P1-02 r2 (Copilot): termen GLOBAL pe cerere, măsurat de la intrarea în handler (limita funcției e 150 s). Apelul plătit primește
+// doar timpul rămas minus marja pentru decontare + normalizare + 2 citiri de plafon (3 apeluri BD scurte, ≪ 15 s). Sub
+// MIN_APEL nu se mai pornește apelul plătit (cost 0, rezerva eliberată); timeout în timpul apelului = rezultat necunoscut →
+// decontare cu NULL (rezerva rămâne consumată, logica existentă), fără reîncercare plătită.
+export const TERMENE_E3 = Object.freeze({ total: 135000, marja: 15000, minApel: 20000, numarare: 30000 })
 export const MAX_TOKENS_E3 = 10400
 export const MAX_INPUT_E3 = 48000
 export const MAX_PDF_E3 = 8 * 1024 * 1024
@@ -113,8 +133,12 @@ Un rând per piesă fizică cu serie proprie. Dacă o linie are cantitate > 1 f�
 Extrage totalurile TIPĂRITE total_metri și total_kg independent de rânduri, fără însumare; necunoscute=null.
 Antetul total_m/total_kg și totalurile listelor se completează tot numai din valorile tipărite, fără deducții.
 Pe rânduri, lot = lotul TIPĂRIT pe rândul piesei (coloana „Nr Lot” / „Lot” din tabel), nu lotul contractului din antet; dacă tabelul nu are coloană de lot, null.
+serie = numărul individual al țevii, diferit pe fiecare rând: coloana „Nr. țeavă”; dacă tabelul nu o are, coloana „Cod articol” (ex. 247EK04204). Dacă există ambele, serie = „Nr. țeavă”.
+Șarja („Nr. șarjă” / „Șarja” / „Heat No”, ex. B2407893) se repetă pe mai multe țevi: merge DOAR în sarja, niciodată în serie.
 Seriile țevilor și șarjele se citesc caracter cu caracter (0/8/6/9, 1/7, 2/0 se confundă ușor în poze); orice caracter nesigur → avertisment cu rândul.
 izolatie: „PEHD” dacă țeava e izolată (izolate / izolată / PE / 3LPE), „neizolata” dacă e neizolată, „GRP” doar dacă scrie GRP; altfel null.
+grad_otel = gradul oțelului tipărit în coloana de grad sau, dacă tabelul nu o are, în denumirea rândului, scris fără spații:
+„L 360 NE” → „L360NE” (la fel L415ME, L245, L290MB, X52N); dacă nu e tipărit, null.
 Greutățile (greutate_kg, net_kg, brut_kg, total_kg, total_net_kg, total_brut_kg) le întorci ca NUMĂR JSON de kilograme, nu ca text:
 interpretează separatorul de mii al documentului (ex. „1,343” sau „9.920” la greutatea unei țevi / a unui pachet = 1343 / 9920;
 o țeavă sau un pachet nu cântărește 1,3 kg). Dacă separatorul nu poate fi deosebit de zecimale, întorci null și avertisment.
@@ -127,7 +151,20 @@ NET KG → net_kg · GROSS KG → brut_kg. Curbele NU au lungime: lungime_doc ș
 PACKING NO, DIMENSIONS, NET KG și GROSS KG sunt celule UNITE pe mai multe rânduri (un pachet = mai multe curbe):
 pachet_nr și dimensiuni_cm le pui pe TOATE rândurile pachetului; net_kg și brut_kg DOAR pe primul rând al pachetului, null pe celelalte
 (altfel greutatea pachetului se numără de mai multe ori). Fiecare valoare rămâne pe rândul ei: nu muta grosimea sau unghiul de pe un rând pe altul.
-` : ''}Răspunde exclusiv JSON conform schemei următoare (câmp absent/ilizibil=null): ${JSON.stringify(schemaE3(sablon))}`
+` : `AVIZ DE ȚEAVĂ — maparea coloanelor tabelului (strict, coloană cu coloană):
+„Nr. țeavă” / „Nr. tub” / „Pipe No” → serie (dacă lipsesc: „Cod articol”) · „Nr. șarjă” / „Șarja” / „Heat No” → sarja ·
+„Lungimea (m)” / „Cantitate livrată (m)” → lungime_doc · „Greutatea netă (kg)” / „Greutate (kg)” → greutate_kg ·
+„Denumirea produselor” / „Specificația” → specificatie (copiată întreagă) · „Nr. lot” → lot.
+Seria unei țevi apare o singură dată pe aviz. Dacă valorile pe care le-ai pus în serie se repetă pe mai multe rânduri, ai luat coloana greșită
+(de regulă șarja): recitește capul de tabel; dacă tot nu e clar, scrie avertisment.
+O coloană „Cantitatea” / „Cantitatea/ml” / „Buc” cu 1 pe fiecare rând înseamnă o țeavă pe rând: NU e lungimea, iar cantitate rămâne null.
+Coloanele „Nava”, „Comanda” și rândul cu numerele coloanelor (0, 1, 2 …) de sub capul de tabel se ignoră.
+Exemplu descris în cuvinte (doar ilustrație; nu presupune că documentul tău arată la fel): un aviz COMTECH are coloanele
+Nr.crt | Cod Articol | Denumirea produselor | Nava | Cantitatea/ml | Nr.Sarja | Lungimea (m) | Greutatea netă (kg) | Comanda.
+Cod Articol e diferit pe fiecare rând (247EK04204, 247EK04200 …), Nr.Sarja se repetă (B2407893 pe rândurile 1, 2, 5, 12 …),
+Cantitatea/ml e 1.0 peste tot, denumirea e „Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE”, greutatea „0,684” = 684 kg.
+Acolo: serie = Cod Articol, sarja = Nr.Sarja, lungime_doc = Lungimea (m), greutate_kg = 684, cantitate = null, grad_otel = „L360NE”.
+`}Răspunde exclusiv JSON conform schemei următoare (câmp absent/ilizibil=null): ${JSON.stringify(schemaE3(sablon))}`
 }
 
 export class EroareE3 extends Error {
@@ -152,6 +189,17 @@ export function numarKgE3(v: unknown): number | null {
   return numarE3(v)
 }
 const numarCheie = (k: string, v: unknown) => /_kg$/.test(k) ? numarKgE3(v) : numarE3(v)
+// Gradul oțelului de țeavă (EN ISO 3183 L…, API 5L X…) din text, fără spații: „L 360 NE” → „L360NE”. Listă închisă de clase,
+// ca „610x7.10” / „L = 12 m” să nu devină grad; X doar dacă nu urmează după „cifră + spațiu” (610 X 52 = dimensiune).
+// Mai multe grade diferite (dublă certificare „L360NE/X52N”) → toate, cu „/”, în ordinea tipăririi. Aceeași regulă în
+// scripts/ocr_local/e3_mapare.py (grad_otel_din_text) — paritatea e testată în tests/e3.
+const GRAD_OTEL = /(?<![A-Z0-9])(?:L[\s-]?(175|210|245|290|320|360|390|415|450|485|555)|(?<![0-9]\s)X[\s-]?(42|46|52|56|60|65|70|80))(?:[\s-]?([NQM])(?:[\s-]?([EB]))?)?(?![A-Z0-9])/g
+export function gradOtelE3(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const s = v.normalize('NFKD').replace(/[̀-ͯ]/g, '').toUpperCase()
+  const grade = [...s.matchAll(GRAD_OTEL)].map(m => (m[1] ? 'L' + m[1] : 'X' + m[2]) + (m[3] || '') + (m[4] || ''))
+  return grade.length ? [...new Set(grade)].join('/') : null
+}
 export function normalizeazaE3(raw: string, sablon: SablonE3) {
   const p: unknown = jsonDinText(raw)
   if (!obiect(p) || !obiect(p.antet) || !Array.isArray(p.randuri) || !p.randuri.length || !p.randuri.every(obiect)) throw new EroareE3('raspuns_ai_invalid')
@@ -165,6 +213,9 @@ export function normalizeazaE3(raw: string, sablon: SablonE3) {
     for (const k of ['cantitate', 'pagina']) if (n[k] !== null && (!Number.isInteger(n[k]) || Number(n[k]) < 1)) {
       n[k] = null; avertismente.push(`Rând ${i + 1}: ${k} invalidă.`)
     }
+    // grad_otel fără spații („L 360 NE” → „L360NE”); pe aviz, dacă lipsește, din denumirea rândului (27.10.2026, aviz COMTECH P 0160).
+    // Un text care nu e grad recunoscut rămâne cum l-a citit AI-ul.
+    n.grad_otel = n.grad_otel ? gradOtelE3(n.grad_otel) ?? n.grad_otel : sablon === 'aviz_teava' ? gradOtelE3(n.specificatie) : null
     if (Number(n.cantitate) > 1) avertismente.push(`Rând ${i + 1}: cantitate ${n.cantitate}; verificați individual piesele și seriile, rândul nu a fost multiplicat.`)
     if (n.pagina === null) avertismente.push(`Rând ${i + 1}: pagina lipsește.`)
     return n
@@ -182,7 +233,25 @@ export function valideazaCerereE3(b: Record<string, unknown>) {
   try { pdf = atob(b.pdf_base64) } catch { throw new EroareE3('pdf_invalid') }
   if (pdf.length > MAX_PDF_E3) throw new EroareE3('pdf_prea_mare', 413)
   if (!pdf.startsWith('%PDF')) throw new EroareE3('pdf_invalid')
-  return { model:MODELE_E3[(b.model ?? 'haiku') as keyof typeof MODELE_E3], proiect_id: Number(b.proiect_id), depozit_id: Number(b.depozit_id), sablon: b.sablon as SablonE3, pdf_base64: b.pdf_base64 }
+  // `model` se mai acceptă ('haiku' / 'sonnet') doar pentru UI-ul vechi din cache; calea aviz_e3 citește mereu cu MODEL_AVIZ_E3.
+  return { model:MODEL_AVIZ_E3, proiect_id: Number(b.proiect_id), depozit_id: Number(b.depozit_id), sablon: b.sablon as SablonE3, pdf_base64: b.pdf_base64 }
+}
+
+// P1-01 (review Copilot pe #894, 27.10.2026): garda pe SERVER după răspunsul AI la aviz_e3. Pe un aviz de țeavă seria e unică pe piesă:
+// aceeași serie pe mai multe rânduri-piesă (cantitate goală / 1) sau seria egală cu șarja pe același rând = șarja citită ca număr de
+// țeavă (aviz COMTECH P 0160) → răspunsul NU se întoarce ca propunere aplicabilă (cost decontat, ca la orice răspuns AI invalid).
+export const MESAJ_SERIE_REPETATA_E3 = 'Numărul țevii se repetă - posibil șarjă citită ca număr de țeavă; verificați coloana'
+const serieCanonE3 = (v: unknown) => typeof v === 'string' ? v.toUpperCase().replace(/[\s._/-]/g, '') : ''
+export function verificaSeriiE3(p: ReturnType<typeof normalizeazaE3>, sablon: SablonE3) {
+  if (sablon !== 'aviz_teava') return
+  const vazute = new Set<string>()
+  for (const r of p.randuri) {
+    if (r.cantitate !== null && r.cantitate !== 1) continue
+    const s = serieCanonE3(r.serie)
+    if (!s) continue
+    if (vazute.has(s) || s === serieCanonE3(r.sarja)) throw new EroareE3('serie_repetata')
+    vazute.add(s)
+  }
 }
 
 export function atribuireValidaE3(a: Record<string, unknown>, proiect: number, depozit: number, azi: string): boolean {

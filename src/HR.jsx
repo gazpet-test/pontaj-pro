@@ -1,3 +1,4 @@
+import { EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeeFieldRead } from './employeesPersonal.js'
 // ===========================================================================
 // MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături · Coș
 // ===========================================================================
@@ -162,7 +163,7 @@ export default function HRPage() {
           if (!areHr) { showToast('Acces refuzat la modul HR', 'error'); setTimeout(() => nav('/'), 2000); return }
         }
       }
-      loadAll()
+      await loadAll().catch(() => setLoad(false))
     })()
   }, [])
   
@@ -180,9 +181,9 @@ export default function HRPage() {
   const loadAll = async () => {
     setLoad(true)
     const [empRes, autRes, tipRes, cosRes, chuckRes, arhRes] = await Promise.all([
-      supabase.from('employees').select('*, sites(name)').eq('active', true)
+      withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').eq('active', true)
         .or('termination_date.is.null,termination_date.gte.' + new Date().toISOString().split('T')[0])
-        .order('name'),
+        .order('name'), 'cnp,iban,adresa,data_nasterii,telefon,email,observatii_hr', showToast),
       supabase.from('v_hr_autorizatii_status').select('*').order('data_expirare', { ascending: true, nullsFirst: false }),
       supabase.from('hr_autorizatii_tipuri').select('*').eq('activ', true).order('ordine'),
       // Etapa 13: count itemi în Coș pentru badge tab
@@ -322,7 +323,7 @@ export default function HRPage() {
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} poateLega={profile?.is_owner === true || profile?.can_modify_employees === true} esteOwner={profile?.is_owner === true} />}
       {!load && tab === 'fosti' && <HrFostiAngajati profile={profile} showToast={showToast} onDeschideFisa={async (id) => {
         // fișa unui fost angajat nu e în lista HR (doar activi) → o citim după id și deschidem același modal
-        const { data, error } = await supabase.from('employees').select('*').eq('id', id).maybeSingle()
+        const { data, error } = await withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).eq('id', id).maybeSingle(), 'cnp,iban,adresa,data_nasterii,telefon,email,observatii_hr', showToast)
         if (error || !data) { showToast('Nu pot deschide fișa: ' + (error?.message || 'nu există'), 'error'); return }
         setEditEmp(data)
       }} />}
@@ -1529,6 +1530,11 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   // task #70: cod COR din CIM, editabil din HR (pt. raportul Calificare > CIM)
   const [editingCor, setEditingCor] = useState(false)
   const [corVal, setCorVal] = useState(employee.cod_cor || '')
+  // TKT-2026-0385: telefonul angajatului, editabil din HR (doar dacă a fost citit = drept de date personale)
+  const telCitit = employeeFieldRead(employee, 'telefon')
+  const [editingTel, setEditingTel] = useState(false)
+  const [telSalvat, setTelSalvat] = useState(employee.telefon || '')
+  const [telVal, setTelVal] = useState(employee.telefon || '')
   const [uploadingId, setUploadingId] = useState(null)
   const uploadRef = useRef(null)
   const uploadTarget = useRef(null)
@@ -1622,6 +1628,19 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
     showToast('✓ Cod COR actualizat')
     onReload()
   }
+
+  // TKT-2026-0385: salvează telefonul (coloana personală; dreptul e verificat și în BD)
+  const saveTel = async () => {
+    if (!telCitit) { showToast('Telefonul nu poate fi modificat fără drept de date personale', 'warn'); return }
+    const val = telVal.trim().replace(/\s+/g, ' ')
+    if (val && !/^\+?[0-9][0-9 ./-]{5,19}$/.test(val)) { showToast('Telefon invalid (doar cifre, spații, „+”, „-”, „.”, „/”)', 'warn'); return }
+    const { error } = await supabase.from('employees').update({ telefon: val || null }).eq('id', employee.id)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    setTelSalvat(val)
+    setEditingTel(false)
+    showToast('✓ Telefon salvat')
+    onReload()
+  }
   
   return (
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
@@ -1713,7 +1732,29 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
               </div>
               <Field label="Departament HR" value={employee.departament_hr} />
               <Field label="Rol în firmă" value={employee.rol_in_firma} />
-              <Field label="Telefon" value={employee.telefon} />
+              {/* Telefon — TKT-2026-0385: editabil de HR cu drept de date personale */}
+              <div>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>Telefon</div>
+                {editingTel && isAdmin && telCitit ? (
+                  <div style={{display:'flex', gap:6}}>
+                    <input autoFocus type="tel" value={telVal} onChange={e => setTelVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveTel(); if (e.key === 'Escape') { setEditingTel(false); setTelVal(telSalvat) } }}
+                      placeholder="ex: 0722 123 456" maxLength={20} style={{...S.input, flex:1}} />
+                    <button onClick={saveTel} style={{padding:'8px 10px', background:G.green, color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, fontWeight:600}}>✓</button>
+                    <button onClick={() => { setEditingTel(false); setTelVal(telSalvat) }} style={{...S.btnS, padding:'8px 10px'}}>×</button>
+                  </div>
+                ) : (
+                  <div onClick={() => isAdmin && telCitit && setEditingTel(true)} style={{
+                    fontSize:13, color: telSalvat ? G.text : G.muted, padding:'8px 10px', background:G.bg,
+                    border:`1px solid ${G.border}`, borderRadius:6, minHeight:32,
+                    cursor: isAdmin && telCitit ? 'pointer' : 'default', fontWeight:600,
+                    display:'flex', justifyContent:'space-between', alignItems:'center'
+                  }}>
+                    <span>{telCitit ? (telSalvat || 'Necompletat') : '—'}</span>
+                    {isAdmin && telCitit && <span style={{fontSize:10, color:G.muted, fontWeight:400}}>✏️ click pentru editare</span>}
+                  </div>
+                )}
+              </div>
               <Field label="Activ" value={employee.active ? 'Da' : 'Nu'} />
               <Field label="Data angajare" value={employee.hire_date} />
               {/* Are autorizatii editabil */}

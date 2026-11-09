@@ -1,0 +1,51 @@
+// Apelurile ecranului 📱 SMS: RPC-urile din 20261130a_sms_mvp + 20261130b_sms_acces_modul (nivelul owner / utilizator / test îl verifică BD-ul) + edge-ul sms-trimite.
+// UI-ul nu vorbește niciodată cu furnizorul și nu scrie direct în tabele (n-are drept): schimbarea furnizorului nu atinge ecranele.
+import { supabase } from '../lib/supabase.js'
+
+const date = ({ data, error }) => { if (error) throw error; return data }
+
+export const smsApi = {
+  panou: async () => date(await supabase.rpc('fn_sms_panou')),
+  // 20261130d: soldul SMSLink (doar owner, și în BD); „Citește acum” = edge-ul sms-sold (poarta owner verificată din nou acolo)
+  sold: async () => date(await supabase.rpc('fn_sold_sms_citeste')),
+  citesteSold: async () => {
+    const { data, error } = await supabase.functions.invoke('sms-sold', { body: {} })
+    if (error) throw error
+    return data
+  },
+  angajati: async () => date(await supabase.rpc('fn_sms_angajati_lista')) || [],
+  // r2 (P1): istoricul și mesajele vin DOAR prin RPC-uri (loturile pe care nivelul le vede, numărători, telefon mascat);
+  // citirea directă a sms_mesaje / sms_v_loturi rămâne a owner-ului în BD, iar ecranul nu o mai folosește deloc
+  loturi: async () => date(await supabase.rpc('fn_sms_loturi_lista', { p_limit: 50 })) || [],
+  mesaje: async lotId => (date(await supabase.rpc('fn_sms_lot_destinatari', { p_lot_id: lotId })) || {}).destinatari || [],
+  optout: async () => date(await supabase.from('sms_optout').select('telefon, activ, motiv, actualizat_la').order('actualizat_la', { ascending: false })) || [],
+  creeazaIntern: async ({ text, p_departamente, p_angajati, preview }) =>
+    date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview })),
+  // 20261130c: Redări doar din șablonul fix, pe un UAT. Textul îl face BD-ul; la creare trimitem textul afișat și set_hash-ul listei din
+  // previzualizare, iar BD-ul refuză (40001) dacă între timp s-a schimbat oricare. Previzualizarea nu trimite nimic din ele.
+  // Textul liber (fn_sms_lot_redari_creeaza) nu mai e o cale a aplicației.
+  creeazaRedariSablon: async ({ proiectId, uatId, textAfisat, setHash, preview }) => {
+    const creare = preview === false
+    return date(await supabase.rpc('fn_sms_lot_redari_sablon_creeaza', {
+      p_proiect_id: proiectId, p_uat_id: uatId || null, p_text_afisat: creare ? (textAfisat ?? null) : null,
+      p_set_hash: creare ? (setHash ?? null) : null, p_doar_preview: !creare,
+    }))
+  },
+  // lista FIXATĂ în lot (nume + telefon mascat + text + segmente + cost + versiune), afișată înainte de aprobare
+  destinatariLot: async lotId => date(await supabase.rpc('fn_sms_lot_destinatari', { p_lot_id: lotId })),
+  aproba: async (lotId, versiune) => date(await supabase.rpc('fn_sms_lot_aproba', { p_lot_id: lotId, p_versiune: versiune })),
+  anuleaza: async (lotId, motiv) => date(await supabase.rpc('fn_sms_lot_anuleaza', { p_lot_id: lotId, p_motiv: motiv || null })),
+  salveazaSetari: async ({ killSwitch, plafonZi, plafonLuna, versiune }) =>
+    date(await supabase.rpc('fn_sms_setari_salveaza', { p_kill_switch: killSwitch, p_plafon_zi: plafonZi, p_plafon_luna: plafonLuna, p_versiune: versiune })),
+  autorizareRedari: async ({ autorizat, nr, data, versiune }) =>
+    date(await supabase.rpc('fn_sms_redari_autorizare_seteaza', { p_autorizat: autorizat, p_nr: nr || null, p_data: data || null, p_versiune: versiune })),
+  seteazaOptout: async (telefon, activ, motiv) => date(await supabase.rpc('fn_sms_optout_seteaza', { p_telefon: telefon, p_activ: activ, p_motiv: motiv || null })),
+  // edge-ul verifică din nou nivelul (JWT + fn_sms_nivel cu JWT-ul contului); plafonul / kill-switch-ul / aprobarea / limita contului de test le verifică BD-ul
+  trimite: async lotId => {
+    const { data, error } = await supabase.functions.invoke('sms-trimite', { body: { lot_id: lotId } })
+    if (error) throw error
+    return data
+  },
+}
+
+export const mesajEroare = e => e?.message || e?.details || e?.error_description || (typeof e === 'string' ? e : 'Eroare necunoscută')

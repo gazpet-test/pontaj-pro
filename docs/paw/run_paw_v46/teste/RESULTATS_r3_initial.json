@@ -1,0 +1,21 @@
+{
+  "selection": [
+    "teste.test_v46",
+    "teste.test_gemini_pw",
+    "teste.test_run_paw",
+    "teste.test_v46_r2",
+    "teste.test_jak_runtime",
+    "teste.test_v46_r3"
+  ],
+  "run": 114,
+  "passed": 113,
+  "skipped": [],
+  "failures": [],
+  "errors": [
+    {
+      "test": "test_v46_r3 (unittest.loader._FailedTest.test_v46_r3)",
+      "detail": "ImportError: Failed to import test module: test_v46_r3\nTraceback (most recent call last):\n  File \"C:\\Program Files\\Python313\\Lib\\unittest\\loader.py\", line 137, in loadTestsFromName\n    module = __import__(module_name)\nModuleNotFoundError: No module named 'teste.test_v46_r3'\n\n"
+    }
+  ],
+  "scope": "Synthetic processes; real Win32 snapshots/jobs/pipes; no live Codex, ACL certification or CDP"
+}

@@ -1616,7 +1616,8 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
       `Capitol generat din ${data?.cerinte} cerințe (v${data?.versiune_noua}).` +
       (g ? ` ${g} locuri marcate [DE COMPLETAT] — alea sunt faptele pe care nu le-a inventat.` : '') +
       (nc ? ` ${nc} cerințe NECONFIRMATE folosite — observație deschisă #${data?.urma_observatie_id} pe capitol; nu trece drept verificat.` : '') +
-      ' Citește-l și salvează-l: până atunci poarta stă roșie.',
+      ' Citește-l și salvează-l: până atunci poarta stă roșie.' +
+      (data?.cost_neinregistrat ? ` ATENȚIE: costul a ${data.cost_neinregistrat} părți nu s-a putut înregistra — anunță echipa ERP.` : ''),
       (g || nc) ? 'err' : 'ok')
     await load(licId)
   }

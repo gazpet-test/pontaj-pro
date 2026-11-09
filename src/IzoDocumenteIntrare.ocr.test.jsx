@@ -73,12 +73,12 @@ describe.skipIf(!rtl)(`E9 B4 — componentă montată${rtl ? '' : ` (infrastruct
   })
   afterEach(() => { rtl.cleanup(); vi.clearAllTimers(); vi.useRealTimers() })
 
-  it.each([409, 429])('cere %i → exact un Haiku direct sub același lock', async status => {
+  it.each([409, 429])('cere %i → exact o citire directă (Sonnet) sub același lock', async status => {
     mock.invoke.mockResolvedValueOnce(refuz(status, status === 409 ? 'local_indisponibil' : 'limita_orara')).mockResolvedValueOnce(ok(propunere))
     const buton = await monteaza()
     rtl.fireEvent.click(buton); await flush()
     expect(ops()).toEqual(['cere', 'ocr-packing-list'])
-    expect(rtl.screen.getByText(/Haiku fallback/)).toBeTruthy()
+    expect(rtl.screen.getByText(/Sonnet \(citire directă, automat\)/)).toBeTruthy()
     expect(rtl.screen.getByRole('button', { name:'Aplică în formular' })).toBeTruthy()
     expect(mock.rpc.mock.calls.every(([nume]) => nume === 'fn_izo_proiecte_protejate')).toBe(true)
     expect(document.querySelector('input[value="AI-001"]')).toBeNull()
@@ -90,7 +90,7 @@ describe.skipIf(!rtl)(`E9 B4 — componentă montată${rtl ? '' : ` (infrastruct
       .mockResolvedValueOnce(ok({ ...propunere, sursa:{ ramura:'haiku' }, cost_usd:0.0123 }))
     rtl.fireEvent.click(await monteaza()); await avanseaza(1500)
     expect(ops()).toEqual(['cere', 'stare', 'fallback'])
-    expect(rtl.screen.getByText(/Haiku fallback/)).toBeTruthy()
+    expect(rtl.screen.getByText(/Haiku \(fallback local\)/)).toBeTruthy()
     expect(rtl.screen.getByText(/0,0123 USD/)).toBeTruthy()
     expect(mock.rpc.mock.calls.every(([nume]) => nume === 'fn_izo_proiecte_protejate')).toBe(true)
   })
@@ -108,12 +108,13 @@ describe.skipIf(!rtl)(`E9 B4 — componentă montată${rtl ? '' : ` (infrastruct
     expect(rtl.screen.queryByRole('button', { name:'Aplică în formular' })).toBeNull()
   })
 
-  it('dublu-clic → o singură operație; Haiku rămâne sub lock până la răspuns', async () => {
+  it('dublu-clic → o singură operație; citirea directă rămâne sub lock până la răspuns (un singur buton de citire)', async () => {
     let rezolva
     mock.invoke.mockResolvedValueOnce(refuz(409, 'noapte')).mockImplementationOnce(() => new Promise(resolve => { rezolva = resolve }))
     const buton = await monteaza()
     rtl.act(() => { rtl.fireEvent.click(buton); rtl.fireEvent.click(buton) }); await flush()
-    rtl.fireEvent.click(rtl.screen.getByRole('button', { name:'Citește cu Haiku' })); await flush()
+    rtl.fireEvent.click(buton); await flush()
+    expect(rtl.screen.queryByRole('button', { name:'Citește cu Haiku' })).toBeNull()
     expect(ops()).toEqual(['cere', 'ocr-packing-list'])
     rezolva(ok(propunere)); await flush()
     expect(rtl.screen.getByRole('button', { name:'Aplică în formular' })).toBeTruthy()

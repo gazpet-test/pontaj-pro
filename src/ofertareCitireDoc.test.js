@@ -107,7 +107,7 @@ describe('citesteCuAi — traseul butonului (Copilot P1 06.10: 403 = stop, făr�
     expect(r.ok).toBe(true); expect(r.data.citire_noi.rezumat).toBe('x')
     expect(apeluri).toEqual(['ofertare-ingest-doc', 'ofertare-document-nou-citeste'])
   })
-  it('deja citit (procesat) → doar rezumatul, fără felii (oricine cu acces Ofertare)', async () => {
+  it('deja citit (procesat) → doar rezumatul, fără felii (poarta pe cheltuială o pune edge-ul, 4A)', async () => {
     const { apeluri, invoke } = inregistreaza({
       'ofertare-ingest-doc': () => { throw new Error('nu trebuia apelat') },
       'ofertare-document-nou-citeste': () => ({ data: { ok: true }, error: null }),
@@ -136,6 +136,12 @@ describe('citesteCuAi — poarta pe server și corpul erorilor non-2xx (review u
     const invoke = async () => raspunsNon2xx(403, { error: 'x', cod: 'poarta_cheltuiala' })
     const r = await citesteCuAi(invoke, 1, 'ignorat', { pauza: fara })
     expect(r).toEqual({ ok: false, poarta: true, eroare: MESAJ_POARTA })
+  })
+  it('4A (20261124a): rezumatul din TEXT refuzat de poartă (403, cod poarta_cheltuiala) → mesajul porții, fără reîncercări', async () => {
+    let n = 0
+    const invoke = async () => { n++; return raspunsNon2xx(403, { error: 'x', cod: 'poarta_cheltuiala' }) }
+    const r = await citesteCuAi(invoke, 1, 'procesat', { pauza: fara })
+    expect(r).toEqual({ ok: false, poarta: true, eroare: MESAJ_POARTA }); expect(n).toBe(1)
   })
   it('altă eroare non-2xx cu corp → mesajul de business din corp, nu „non-2xx status code”', async () => {
     const invoke = async () => raspunsNon2xx(409, { error: 'documentul e scris simultan din altă parte' })
