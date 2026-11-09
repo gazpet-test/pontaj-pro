@@ -4,7 +4,7 @@ const TZ_INITIAL = vi.hoisted(() => { const v = process.env.TZ; process.env.TZ =
 afterAll(() => { if (TZ_INITIAL === undefined) delete process.env.TZ; else process.env.TZ = TZ_INITIAL })
 vi.mock('./lib/supabase.js', () => ({ supabase: {} }))
 vi.mock('./Meteo.jsx', () => ({ MeteoSantier: () => null }))
-import { nivelRetea, areGpu, areLimiteAi, textReset, nivelUps, textUps, UPS_PRAGURI, textDataReset, textResetCont, nivelCota, LimiteAi, COTE_AI } from './Cladire.jsx'
+import { nivelRetea, areGpu, areLimiteAi, textReset, nivelUps, textUps, UPS_PRAGURI, textDataReset, textResetCont, nivelCota, LimiteAi, COTE_AI, CHEI_COTE_AI } from './Cladire.jsx'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
@@ -68,9 +68,10 @@ describe('Clădire — praguri rețea (aliniate cu iot_verifica_retea, 20261023c
     expect(areGpu({ meta: { tip: 'nas' }, ultima_citire: { gpu_temp: 45 } })).toBe(false)
     expect(areGpu({ meta: { tip: 'server' }, ultima_citire: { gpu_temp: '45' } })).toBe(false)
   })
-  it('areLimiteAi: doar server cu procent numeric', () => {
+  it('areLimiteAi: doar server cu procent numeric, reset sau metrici de colector', () => {
     expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_gemini_ramas_pct: 68 } })).toBe(true)
-    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_gemini_reset_s: 1 } })).toBe(false)
+    // 09.11.2026 (Jakarinos P2): doar resetul, fără procente, arată blocul cu „—” (înainte: ascuns)
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_gemini_reset_s: 1 } })).toBe(true)
     expect(areLimiteAi({ meta: { tip: 'nas' }, ultima_citire: { ai_claude_ramas_pct: 100 } })).toBe(false)
     expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_anthropic_saptamana_ramas_pct: 0 } })).toBe(true)
     expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_codex_plan: 'plus' } })).toBe(false)
@@ -119,38 +120,80 @@ describe('Limite cont: ziua și ora resetării, culori, „—” la lipsă', ()
     for (const p of [40.1, 62, 100]) expect(nivelCota(p)).toBe('verde')
     for (const p of [null, undefined, NaN, '50', -1, 100.5]) expect(nivelCota(p)).toBe('lipsa')
   })
-  it('areLimiteAi: și cu doar cota redari@', () => {
+  it('areLimiteAi: cota redari@, doar reseturi, toate procentele lipsă (cu colector), alt tip de dispozitiv', () => {
     expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_redari_saptamana_ramas_pct: 55 } })).toBe(true)
-    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_redari_saptamana_reset_s: vineri } })).toBe(false)
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_redari_saptamana_reset_s: vineri } })).toBe(true)
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_redari_saptamana_reset: 'Nov 13, 10:00am' } })).toBe(true)
+    // iot-retea scrie toate cheile AI ca null când lipsesc: cu metricile colectorului (GPU) blocul rămâne, cu „—”
+    const nule = Object.fromEntries(CHEI_COTE_AI.map(k => [k, null]))
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ...nule, gpu_temp: 41 } })).toBe(true)
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ...nule } })).toBe(false)
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ...nule, ai_codex_reset: '   ' } })).toBe(false)
+    expect(areLimiteAi({ meta: { tip: 'nas' }, ultima_citire: { ai_redari_saptamana_reset_s: vineri, gpu_temp: 41 } })).toBe(false)
   })
+  const segment = (html, cota) => html.split(`data-cota="${cota}"`)[1].split('data-cota=')[0]
   it('LimiteAi: un rând pe cont, cu etichetele cerute; cheie lipsă = „—”, nu 0; 0 rămâne 0%', () => {
     const r = { ai_anthropic_saptamana_ramas_pct: 62, ai_anthropic_saptamana_reset_s: vineri, ai_anthropic_saptamana_fable_ramas_pct: 0,
       ai_codex_ramas_pct: 12, ai_codex_reset: '2026-11-13T08:00:00Z', ai_gemini_ramas_pct: 30, ai_claude_ramas_pct: 80 }
     const html = renderToStaticMarkup(createElement(LimiteAi, { r, acum }))
-    const randuri = [...html.matchAll(/role="meter" aria-label="([^"]+)"/g)].map(m => m[1])
-    expect(randuri).toEqual(['Claude (cont principal)', 'Fable', 'sesiune', 'Rocky (redari@)', 'Fable', 'Codex', 'Gemini', 'Claude/GPT (Antigravity)'])
+    const randuri = [...html.matchAll(/data-cota="([^"]+)"/g)].map(m => m[1])
+    expect(randuri).toEqual(['Claude (cont principal)', 'Claude (cont principal) / Fable', 'Claude (cont principal) / sesiune', 'Rocky (redari@)',
+      'Rocky (redari@) / Fable', 'Codex', 'Gemini', 'Claude/GPT (Antigravity)'])
     expect(COTE_AI.map(c => c.et)).toEqual(['Claude (cont principal)', 'Rocky (redari@)', 'Codex', 'Gemini', 'Claude/GPT (Antigravity)'])
-    // rândul Rocky fără date: procent „—” și reset „—”, bara goală, fără „0%”
-    const rocky = html.split('aria-label="Rocky (redari@)"')[1].split('role="meter"')[0]
+    // rândul Rocky fără date: procent „—” și reset „—”, bara goală și decorativă (fără role="meter" fără valoare), fără „0%”
+    const rocky = segment(html, 'Rocky (redari@)')
     expect(rocky).toContain('>—</b>')
     expect(rocky).not.toMatch(/>\d+%<\/b>/)
     expect(rocky).toContain('width:0;')
-    // Fable cont principal = 0 → „0%”
-    const fable = html.split('aria-label="Fable"')[1].split('role="meter"')[0]
+    expect(rocky).toContain('aria-hidden="true"')
+    expect(rocky).not.toContain('role="meter"')
+    // Fable cont principal = 0 → „0%”, bară accesibilă cu nume unic și valoare 0
+    const fable = segment(html, 'Claude (cont principal) / Fable')
     expect(fable).toContain('>0%</b>')
+    expect(fable).toContain('role="meter" aria-label="Fable · Claude (cont principal)"')
+    expect(fable).toContain('aria-valuenow="0"')
     expect(html).toContain('62%')
     expect(html).toContain('reset vineri 13.11, 10:00 (în 4 z)')
   })
   it('LimiteAi: cota redari@ cu date, culorile pragurilor pe bară', () => {
     const r = { ai_redari_saptamana_ramas_pct: 23, ai_redari_saptamana_reset_s: vineri, ai_redari_saptamana_fable_ramas_pct: 9, ai_redari_saptamana_fable_reset: 'duminică 15.11, 18:00' }
     const html = renderToStaticMarkup(createElement(LimiteAi, { r, acum }))
-    const rocky = html.split('aria-label="Rocky (redari@)"')[1].split('role="meter"')[0]
+    const rocky = segment(html, 'Rocky (redari@)')
+    expect(rocky).toContain('role="meter" aria-label="Rocky (redari@)"')
+    expect(rocky).toContain('aria-valuenow="23"')
     expect(rocky).toContain('width:23%')
     expect(rocky).toContain('#E3B341') // galben
-    expect(rocky).toContain('23%')
     expect(rocky).toContain('reset vineri 13.11, 10:00 (în 4 z)')
-    const fableRocky = html.split('aria-label="Rocky (redari@)"')[1].split('aria-label="Fable"')[1].split('role="meter"')[0]
+    const fableRocky = segment(html, 'Rocky (redari@) / Fable')
+    expect(fableRocky).toContain('aria-label="Fable · Rocky (redari@)"')
     expect(fableRocky).toContain('#F85149') // roșu
     expect(fableRocky).toContain('reset duminică 15.11, 18:00')
+  })
+  it('LimiteAi: toate cheile null (cum le scrie iot-retea când lipsesc) sau r null: numai „—”, nicio bară cu valoare', () => {
+    for (const r of [Object.fromEntries(CHEI_COTE_AI.map(k => [k, null])), null]) {
+      const html = renderToStaticMarkup(createElement(LimiteAi, { r, acum }))
+      expect([...html.matchAll(/>—<\/b>/g)].length).toBe(8)
+      expect(html).not.toContain('role="meter"')
+      expect(html).not.toMatch(/>\d+%<\/b>/)
+    }
+  })
+})
+
+describe('Paritate chei: Clădire ← iot-retea ← sonda Terra', () => {
+  const read = p => readFileSync(new URL(p, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  const sonda = read('../worker/retea-mon/sonda.sh')
+  const blocAi = sonda.slice(sonda.indexOf('ai=$(printf'), sonda.indexOf('ai=${ai#'))
+  const cheiSonda = new Set([...blocAi.matchAll(/"(ai_[a-z_]+)"/g)].map(m => m[1]))
+  const validator = read('../supabase/functions/iot-retea/valideaza.ts')
+  const cheiValidator = new Set([...validator.matchAll(/'(ai_[a-z_]+)'/g)].map(m => m[1]))
+  it('fiecare cheie trimisă de sondă e acceptată de iot-retea (altfel 400 pe tot lotul)', () => {
+    expect(cheiSonda.size).toBeGreaterThan(10)
+    expect([...cheiSonda].filter(k => !cheiValidator.has(k))).toEqual([])
+  })
+  it('fiecare cheie citită de blocul de limite ajunge prin sondă și iot-retea', () => {
+    expect([...CHEI_COTE_AI].filter(k => !cheiSonda.has(k))).toEqual([])
+    expect([...CHEI_COTE_AI].filter(k => !cheiValidator.has(k))).toEqual([])
+    for (const k of ['ai_redari_saptamana_ramas_pct', 'ai_redari_saptamana_reset_s', 'ai_redari_saptamana_fable_ramas_pct', 'ai_redari_saptamana_fable_reset_s'])
+      expect(CHEI_COTE_AI).toContain(k)
   })
 })
