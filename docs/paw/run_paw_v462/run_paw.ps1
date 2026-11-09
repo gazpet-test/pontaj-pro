@@ -2,8 +2,10 @@
 # Apel: run_paw.cmd <cine> <brief.md> <iesire.log> [model] [imagini.txt]
 #   cine  : jak (Codex CLI, read-only) | cop (Copilot prin Edge CDP 9333; model = id conversatie) | ollie (Ollama local)
 #           | gem (Gemini 4 Argon prin acelasi Edge CDP 9333; model optional: "argon" sau "argon:<eticheta>"; lock global - un apel odata)
-#           | mil (v4.6.2, 09.11.2026: Miloi = Antigravity CLI agy, read-only --mode plan --sandbox; model din lista alba; lock global
+#           | mil (v4.6.2, 09.11.2026: Miloi = Antigravity CLI agy, --mode plan --sandbox; model din lista alba; lock global
 #             lock_mil; sarcini DOAR de la chat, nu din automatizarile ERP; detalii si garantii in mil.ps1)
+#             r2: cwd = COPIE doar-citire de unica folosinta (paw-data\mil\<runid>), niciodata repo-ul; al 5-lea argument, optional,
+#             la mil = lista de material (.txt sub radacinile brief-ului, o cale pe linie, fisiere sub brief / erp_review / livrare)
 #   brief : fisier .md sub C:\Users\Public\paw-data\brief sau C:\Users\Public\erp_review (citit ca DATE)
 #   out   : fisier sub C:\Users\Public\paw-data\out (scris de lansator; ultima linie = PAW_GATA / PAW_EROARE)
 # Reguli (verdict Copilot conv.2 + Jakarinos 07.10): liste inchise, cai canonicalizate (fara UNC/ADS/reparse),
@@ -59,7 +61,7 @@ $TOOLS = @{
   "gem-inchide" = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @(); timeout = 60 }
   gem   = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @("", "argon"); timeout = 1800 }
   # v4.6.2: Miloi (Antigravity CLI). Modelele = numele reale din `agy models` (09.11.2026); "" = primul (implicit).
-  mil   = @{ exe = "C:\Users\Gazpet-Ai\AppData\Local\agy\bin\agy.exe"; modele = @("", "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gemini-3.8-flash-high", "gpt-oss-120b-medium"); timeout = 240 }
+  mil   = @{ exe = "C:\Users\Gazpet-Ai\AppData\Local\agy\bin\agy.exe"; modele = @("", "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gemini-3.8-flash-high", "gpt-oss-120b-medium"); timeout = 300 }
 }
 $CODEX_JS = $null   # jak: rezolvat exclusiv din instalarea protejata, in validare
 $CGPT = Join-Path $PSScriptRoot "cgpt_pw.py"
@@ -710,11 +712,17 @@ try {
     . (Join-Path $PSScriptRoot 'mil.ps1')
     $script:MilModelAles = MilModel $Model $T.modele
     AssertMilExe $T.exe
+    AssertMilGazda   # r2: lansator neelevat, Windows cu sandbox de terminal
   }
   $script:Img = $null
   if ($Cine -eq "gem" -and -not (Test-Path -LiteralPath $GEMPW -PathType Leaf)) { throw "lipseste gemini_pw.py langa lansator" }
   if ($Cine -eq "gem") { VerificaCanalGem }
-  if ($Imagini) {
+  $script:MilMaterial = ''
+  if ($Imagini -and $Cine -eq 'mil') {
+    # r2: la mil, al 5-lea argument = lista de material copiat in directorul doar-citire al rularii (mil.ps1)
+    $script:MilMaterial = CaleSigura $Imagini $BRIEF_ROOTS $true
+    if ([IO.Path]::GetExtension($script:MilMaterial).ToLower() -ne '.txt') { throw 'lista de material mil trebuie sa fie .txt' }
+  } elseif ($Imagini) {
     if ($Cine -ne "jak") { throw "imaginile sunt permise doar pentru jak" }
     $script:Img = PregatesteImagini $Imagini
   }
@@ -743,11 +751,12 @@ try {
       $rez = InvokeJak $T.exe $argv $prompt $REPO $T.timeout
     }
     "mil" {
-      # v4.6.2: Miloi (agy) read-only: --mode plan --sandbox fixe (mil.ps1). Job inainte de lock si de orice copil; lock global.
+      # v4.6.2: Miloi (agy): --mode plan --sandbox fixe (mil.ps1). Job inainte de lock si de orice copil; lock global.
+      # r2: cwd = copia doar-citire din paw-data\mil (niciodata $REPO); material doar din brief / erp_review / livrare
       . (Join-Path $PSScriptRoot 'mil.ps1')
       LeagaCopiiiDeLansator
       LuaLock (Join-Path $DATA 'lock_mil')
-      $rez = InvokeMil $T.exe $script:MilModelAles $BriefFull $REPO $T.timeout
+      $rez = InvokeMil $T.exe $script:MilModelAles $BriefFull $T.timeout $script:MilMaterial (Join-Path $DATA 'mil') $RUNID (@($BRIEF_ROOTS) + @('C:\Users\Public\livrare'))
     }
     "ollie" {
       $m = $Model; if (-not $m) { $m = "qwen3:14b" }

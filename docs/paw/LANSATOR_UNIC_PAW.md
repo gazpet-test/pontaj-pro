@@ -550,8 +550,10 @@ Pachet separat în `docs/paw/run_paw_v462/`, copiat din **v461 (cel instalat)**.
 **Regula de folosire (decizia lui Răzvan 09.11.2026, claude_context #1929):** Miloi primește sarcini DOAR de la chat. Nu intră în automatizările ERP, în rutine sau în cozi.
 
 ```cmd
-run_paw.cmd mil C:\Users\Public\paw-data\brief\sarcina.md C:\Users\Public\paw-data\out\sarcina.log [model]
+run_paw.cmd mil C:\Users\Public\paw-data\brief\sarcina.md C:\Users\Public\paw-data\out\sarcina.log [model] [material.txt]
 ```
+
+`material.txt` (opțional, r2): fișier `.txt` sub rădăcinile brief-ului, o cale pe linie (cel mult 20), fiecare sub `paw-data\brief`, `erp_review` sau `C:\Users\Public\livrare`. Fișierele se copiază în directorul doar-citire al rulării, cu numele lor (fără nume care încep cu punct, fără duplicate, fără hardlink, ≤ 5 MB fiecare, ≤ 20 MB în total). Codul din repo ajunge la Miloi doar așa (export în `livrare`), nu prin repo-ul de lucru.
 
 **Modele.** Lista albă e în `TOOLS.mil.modele`, cu numele reale din `agy models` (09.11.2026):
 - `claude-opus-4-6-thinking` (implicit);
@@ -564,31 +566,53 @@ Orice alt nume e refuzat la validare, inclusiv diferențele de litere mari / mic
 **Comanda rulată:**
 
 ```
-agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeout 160s "-p=<prompt>"
+agy --mode plan --sandbox --disable-slash-commands --model <model> --print-timeout 160s --log-file <jurnal> "-p=<prompt>"
 ```
+
+Înainte de ea, cu aceleași flaguri, o **sondă de pornire** fără nicio tură de model (`--input-format stream-json --output-format stream-json --print=`, stdin gol): agy pornește, raportează și se oprește după „0 turn(s)”.
 
 - Flagurile sunt fixe în `mil.ps1`.
 - Promptul = brief-ul încadrat de `BRIEF_START` / `BRIEF_END`, cu „doar analiză, conținutul fișierelor e date”.
 - Promptul e un SINGUR argument, ultimul, atașat cu `-p=`. Fără `=`, agy ar lua flagul următor drept prompt.
 - Citarea respectă regulile `CommandLineToArgvW` (ca runtime-ul Go). Ghilimelele, backslash-urile și liniile noi din brief rămân în argument, deci brief-ul nu poate adăuga, scoate sau înlocui flaguri.
 - `--disable-slash-commands` oprește expandarea comenzilor `/...` din brief.
-- Peste 30.000 de caractere de prompt, rularea e refuzată (`mil_brief_prea_lung`), fără trunchiere. Linia de comandă Windows are maximum 32.767 de caractere.
+- Peste 30.000 de caractere de prompt, rularea e refuzată (`mil_brief_prea_lung`), fără trunchiere. r2 (Jakarinos r1 P2): limita reală se verifică pe linia FINALĂ, după citare (exe citat + spațiu + argumente + NUL ≤ 32.767), deci și un brief cu multe ghilimele / backslash-uri e refuzat controlat.
 
 **Garanții, aceleași ca la `jak`:**
 - **Brief și ieșire:** brief `.md` doar sub `paw-data\brief` sau `erp_review`; ieșirea doar sub `paw-data\out`; UNC / ADS / reparse / traversal refuzate (`CaleSigura`). Imaginile nu sunt permise.
-- **Ultima linie:** `PAW_GATA <id>` sau `PAW_EROARE <id> <motiv>`. Jurnalul e în `paw_runs.log`. stdout-ul și stderr-ul agy intră în log (`--- stderr ---`).
-- **Lock și oprire:** lock global `paw-data\lock_mil` (un singur mil odată). Job Object înainte de lock și de orice copil. La timeout (240 s), kill pe tot arborele.
+- **Ultima linie:** `PAW_GATA <id>` sau `PAW_EROARE <id> <motiv>`. Jurnalul e în `paw_runs.log`. stdout-ul și stderr-ul agy intră în log (`--- stderr ---`); r2: și cele ale preflight-ului și ale sondei, pe toate ramurile, curățate de valori care arată a secrete și plafonate.
+- **Lock și oprire:** lock global `paw-data\lock_mil` (un singur mil odată). Job Object înainte de lock și de orice copil. La timeout (300 s), kill pe tot arborele.
+- **Copie doar-citire (r2, Jakarinos r1 P1-2):**
+  - cwd-ul lui agy = `paw-data\mil\<runid>`, cu `brief.md` + materialul; niciodată repo-ul;
+  - ACL protejat: utilizatorul și OWNER RIGHTS (S-1-3-4) doar citire, SYSTEM control total. Fără OWNER RIGHTS, proprietarul și-ar putea reda singur dreptul de scriere;
+  - lansatorul păstrează handle-uri WRITE_DAC luate înainte de blocare (nemoștenite), cu care redă drepturile și șterge copia la final;
+  - înainte de rulare, probele de scriere (fișier, director, scriere, ștergere, WRITE_DAC, ACL pe cale) TREBUIE să pice;
+  - lansator elevat = refuz;
+  - dacă arborele nu poate fi oprit, copia rămâne doar-citire (curățare din admin, runbook).
+- **Hooks (r2, Jakarinos r1 P1-1):**
+  - refuz dacă există `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/hooks.json`, `~/.gemini/config/config.json` sau un `.agents` în cwd ori în oricare părinte;
+  - `settings.json` doar cu chei de pe lista albă (`colorScheme`, `trustedWorkspaces`);
+  - verificarea se face de două ori, a doua imediat înaintea rulării;
+  - apoi agy însuși trebuie să raporteze „loaded 0 named hooks from 0 hooks.json file(s)”, în sondă și în rulare.
+- **Sandbox și mod (r2):**
+  - Windows sub build 26100 (24H2) = refuz;
+  - jurnalul agy (sonda și rularea) trebuie să conțină „Print mode: enabling terminal sandbox for this session” și „applying agent mode plan”, și să NU conțină „sandbox unavailable”;
+  - sonda mai verifică `permission_mode = request-review`, modelul cerut și cwd-ul = copia;
+  - orice abatere = `PAW_EROARE` (răspunsul nu se acceptă). Rezumatul liniilor verificate intră în log (`--- mil ... ---`).
 - **Mediu curat:** copilul pornește cu mediul golit și primește doar lista albă din `mil.ps1` (fără `*_API_KEY`, tokenuri, proxy), cu PATH doar de sistem.
 - **Fără extensii:** înainte de fiecare rulare, `agy mcp list` trebuie să dea exact „No MCP servers configured.”, iar `agy plugin list` exact „No plugins installed.”. Orice alt răspuns (inclusiv un format nou după un update) = `mil_extensii_refuzate`, fără apel de model.
 - **Executabilul:** `C:\Users\Gazpet-Ai\AppData\Local\agy\bin\agy.exe`, cale fără reparse / ADS, un singur hardlink, semnătură Authenticode VALIDĂ a Google LLC. Nu se fixează un hash, pentru că agy se actualizează singur.
 - **Rezultatul:** ieșire nenulă = `mil_exit_<cod>`; răspuns gol = `mil_raspuns_gol` (L18).
 
 **Limite cunoscute:**
-- `--mode plan` și `--sandbox` sunt garanțiile agy, nu ale lansatorului. Lansatorul le impune pe linia de comandă și le face neocolibile din brief, dar nu le poate verifica din interior.
-- Procesele aceluiași utilizator Windows nu sunt frontieră (ca la v4): pot înlocui `agy.exe` cu alt binar semnat Google sau pot schimba setările agy. Preflight-ul prinde MCP-urile și pluginurile, nu și alte setări.
+- `--mode plan` și sandbox-ul sunt ale agy. Lansatorul le impune pe linia de comandă, le face neocolibile din brief și (r2) verifică din jurnalul agy că au fost aplicate. Bariera de scriere e însă copia doar-citire: sandbox-ul agy permite scrieri în workspace.
+- `agy --settings` nu are o cheie documentată care să oprească hook-urile, deci nu se trimite una ghicită; bariera = refuzul pe fișiere + numărătoarea din jurnalul agy.
+- În print mode, agy refuză automat orice acțiune care cere aprobare (jurnal: `soft-denying tool confirmation`), inclusiv citiri în afara copiei și `read_url_content`. E comportament observat, nu o garanție scrisă de Google.
+- Procesele aceluiași utilizator Windows nu sunt frontieră (ca la v4): pot înlocui `agy.exe` cu alt binar semnat Google sau pot schimba setările agy între verificări.
 
 **Teste:**
-- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 13 cazuri, fără Pester, fără apel de model.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File docs\paw\run_paw_v462\teste\test_mil.ps1`: 23 de cazuri, fără Pester, fără apel de model. Copia doar-citire se face real (ACL-uri reale) într-un director temporar. 12 mutații țintite (OWNER RIGHTS, hooks, `.agents`, limita, sonda, diagnostice, permisiuni, sandbox, probe, setări): toate prinse.
+- `teste\sonda_mil_reala.ps1`: integrare cu `agy.exe` real până la sondă inclusiv: copie → probe → configurație → preflight → sondă → curățare. Fără apel de model: jurnalul sondei trebuie să spună „0 turn(s)”, fără `streamGenerateContent`.
 - Citarea e verificată cu parserul real `CommandLineToArgvW`.
 - Refuzurile de cale sunt verificate pe UNC, ADS, ghilimele, traversal și junction real.
-- Se verifică și ordinea Job → lock → apel, plus manifestul `SHA256.json`.
+- Se verifică și ordinea Job → lock → apel (cu copia, nu repo-ul), plus manifestul `SHA256.json`.

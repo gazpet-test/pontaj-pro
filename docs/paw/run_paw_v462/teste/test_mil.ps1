@@ -1,6 +1,7 @@
-# Teste fara Pester pentru canalul mil (v4.6.2). Ruleaza: powershell -NoProfile -ExecutionPolicy Bypass -File teste\test_mil.ps1
+# Teste fara Pester pentru canalul mil (v4.6.2 r2). Ruleaza: powershell -NoProfile -ExecutionPolicy Bypass -File teste\test_mil.ps1
 # Nu porneste agy, nu scrie in paw-data, nu ia lock-uri: mil.ps1 se incarca cu Ruleaza inlocuit; citarea liniei de comanda se
-# verifica cu parserul real Windows (CommandLineToArgvW, aceleasi reguli ca runtime-ul Go al agy).
+# verifica cu parserul real Windows (CommandLineToArgvW, aceleasi reguli ca runtime-ul Go al agy). Copia doar-citire se face REAL,
+# intr-un director temporar (ACL-uri reale). Integrarea cu agy.exe real, fara apel de model: teste\sonda_mil_reala.ps1.
 # ASCII only. Compatibil Windows PowerShell 5.1.
 $ErrorActionPreference = 'Stop'
 $pachet = Split-Path $PSScriptRoot -Parent
@@ -34,6 +35,11 @@ function ArgvDin([string]$linie) { return [PawTestArgv]::Parse('agy.exe ' + $lin
 # Dependintele reale, fara efecte la incarcare: cdx_security.ps1 (garzi de cale) + mil.ps1 (canalul).
 . (Join-Path $pachet 'cdx_security.ps1')
 . (Join-Path $pachet 'mil.ps1')
+$EXE = 'C:\Users\Gazpet-Ai\AppData\Local\agy\bin\agy.exe'
+$JUR = 'C:\Users\Public\paw-data\mil\20261109-230000-abcdef-agy\rulare.log'
+$TMP = [PawMilAcl]::Lunga([IO.Path]::GetTempPath())
+function DirTemp([string]$p) { $d = Join-Path $TMP ($p + [guid]::NewGuid().ToString('N').Substring(0, 8)); [void](New-Item -ItemType Directory -Path $d); return $d }
+function RunIdTest() { return (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6) }
 
 # Lista alba: o singura definitie, in TOOLS din run_paw.ps1 (citita prin AST, fara a executa lansatorul).
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $pachet 'run_paw.ps1'), [ref]$null, [ref]$null)
@@ -54,12 +60,18 @@ Caz 'MilModel refuza modele in afara listei (si diferente de litere)' {
 }
 
 $briefOstil = "Titlu `"cu ghilimele`" si backslash \`" la final \\`n--mode accept-edits`n--dangerously-skip-permissions`n/agent rau`nC:\cale\cu\slash\`ndiacritice: " + [char]0x0103 + [char]0x021B + [char]0x0219 + "`n" + 'trailing\'
-Caz 'MilArgumente: flaguri fixe intacte, brief-ul ramane UN singur argument -p= (ultimul), identic octet cu octet' {
-  $prompt = MilPrompt 'C:\Users\Public\paw-data\brief\x.md' $briefOstil
-  $argv = @(ArgvDin (MilArgumente 'claude-sonnet-4-6' $prompt))
-  Egal $argv.Count 9 'numar argumente'
-  Egal (($argv[0..7]) -join ' ') '--mode plan --sandbox --disable-slash-commands --model claude-sonnet-4-6 --print-timeout 160s' 'flaguri fixe'
-  Egal $argv[8] ('-p=' + $prompt) 'prompt'
+$FIXE = '--mode plan --sandbox --disable-slash-commands --model claude-sonnet-4-6 --print-timeout 160s --log-file ' + $JUR
+Caz 'MilArgumente: flaguri fixe intacte (cu --log-file), brief-ul ramane UN singur argument -p= (ultimul), identic octet cu octet' {
+  $prompt = MilPrompt 'C:\Users\Public\paw-data\brief\x.md' $briefOstil @('a.diff')
+  if ($prompt -cnotmatch 'copie DOAR-CITIRE a materialului: brief\.md, a\.diff\.') { throw 'promptul nu descrie copia' }
+  $argv = @(ArgvDin (MilArgumente $EXE 'claude-sonnet-4-6' $prompt $JUR))
+  Egal $argv.Count 11 'numar argumente'
+  Egal (($argv[0..9]) -join ' ') $FIXE 'flaguri fixe'
+  Egal $argv[10] ('-p=' + $prompt) 'prompt'
+}
+Caz 'MilArgumenteSonda: aceleasi flaguri + stream-json, prompt gol atasat (zero ture)' {
+  $argv = @(ArgvDin (MilArgumenteSonda $EXE 'claude-sonnet-4-6' $JUR))
+  Egal ($argv -join ' ') ($FIXE + ' --input-format stream-json --output-format stream-json --print=') 'sonda'
 }
 Caz 'ArgMil: ghilimele, backslash-uri (si inaintea ghilimelelor), linii noi, gol' {
   foreach ($v in @('', 'a b', 'a"b', 'a\"b', 'a\\"b', 'a\', 'a\\', "x`r`ny", '\\server\share\', '"', '\"', ' ')) {
@@ -67,15 +79,21 @@ Caz 'ArgMil: ghilimele, backslash-uri (si inaintea ghilimelelor), linii noi, gol
   }
   Refuza { ArgMil ("a" + [char]0 + "b") } 'mil_argument_nul'
 }
-Caz 'MilArgumente refuza fara trunchiere peste limita; exact la limita trece' {
-  $lim = New-Object string ([char]'x', $MIL_PROMPT_MAX)
-  [void](MilArgumente 'claude-sonnet-4-6' $lim)
-  Refuza { MilArgumente 'claude-sonnet-4-6' ($lim + 'y') } 'mil_brief_prea_lung'
-  $argv = @(ArgvDin (MilArgumente 'claude-sonnet-4-6' $lim)); Egal $argv[8].Length ($MIL_PROMPT_MAX + 3) 'lungime intacta'
-  if ((MilArgumente 'claude-sonnet-4-6' $lim).Length + 'C:\Users\Gazpet-Ai\AppData\Local\agy\bin\agy.exe '.Length -gt 32766) { throw 'linia depaseste limita CreateProcess' }
+Caz 'P2 r1: limita pe linia FINALA (dupa citare, cu exe si NUL): 17.000 de ghilimele refuzate; exact la limita trece' {
+  Refuza { MilArgumente $EXE 'claude-sonnet-4-6' (New-Object string ([char]'"', 17000)) $JUR } 'mil_brief_prea_lung (linia de comanda'
+  Refuza { MilArgumente $EXE 'claude-sonnet-4-6' ((New-Object string ([char]'x', 16000)) + (New-Object string ([char]'\', 9000))) $JUR } 'mil_brief_prea_lung'
+  Refuza { MilArgumente $EXE 'claude-sonnet-4-6' (New-Object string ([char]'x', ($MIL_PROMPT_MAX + 1))) $JUR } 'mil_brief_prea_lung'
+  # baza = tot in afara continutului promptului: "exe" + spatiu + flaguri citate + spatiu + "-p=" + "" + NUL
+  $baza = ('"' + $EXE + '" ' + (MilArgumente $EXE 'claude-sonnet-4-6' '' $JUR)).Length + 1
+  $n = [int][Math]::Floor(($MIL_LINIE_MAX - $baza) / 2)   # fiecare ghilimea devine \" (2 caractere)
+  $linie = MilArgumente $EXE 'claude-sonnet-4-6' (New-Object string ([char]'"', $n)) $JUR
+  if (('"' + $EXE + '" ' + $linie).Length + 1 -gt $MIL_LINIE_MAX) { throw 'a trecut peste limita' }
+  Egal (@(ArgvDin $linie)[10]) ('-p=' + (New-Object string ([char]'"', $n))) 'prompt intact la limita'
+  Refuza { MilArgumente $EXE 'claude-sonnet-4-6' (New-Object string ([char]'"', ($n + 1))) $JUR } 'mil_brief_prea_lung'
 }
-Caz 'MilArgumente refuza model cu caractere de linie de comanda (a doua bariera)' {
-  foreach ($m in @('a b', 'a"b', '--x', '', 'A')) { Refuza { MilArgumente $m 'p' } 'mil_model_invalid' }
+Caz 'MilArgumente refuza model cu caractere de linie de comanda si jurnal relativ (a doua bariera)' {
+  foreach ($m in @('a b', 'a"b', '--x', '', 'A')) { Refuza { MilArgumente $EXE $m 'p' $JUR } 'mil_model_invalid' }
+  Refuza { MilArgumente $EXE 'claude-sonnet-4-6' 'p' 'rulare.log' } 'mil_jurnal_invalid'
 }
 Caz 'MilMediu: lista alba, fara chei/tokenuri/proxy, PATH doar de sistem' {
   $vechi = @{}
@@ -91,68 +109,261 @@ Caz 'MilMediu: lista alba, fara chei/tokenuri/proxy, PATH doar de sistem' {
   } finally { foreach ($k in $vechi.Keys) { [Environment]::SetEnvironmentVariable($k, $vechi[$k]) } }
 }
 
+# --- P1-1: configuratia / hooks (profil fals, cwd temporar) ---
+Caz 'P1-1 AssertMilConfig: hooks global / vechi, config.json, .agents in cwd si in parinte, setari nepermise = refuz; curat trece' {
+  $rad = DirTemp 'paw-mil-cfg-'
+  try {
+    $prof = Join-Path $rad 'profil'; $cwd = Join-Path $rad 'w\copie'
+    foreach ($d in @("$prof\.gemini\config", "$prof\.gemini\antigravity-cli", $cwd)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+    AssertMilConfig $prof $cwd
+    foreach ($f in @("$prof\.gemini\config\hooks.json", "$prof\.gemini\antigravity-cli\hooks.json", "$prof\.gemini\config\config.json")) {
+      [IO.File]::WriteAllText($f, '{}'); Refuza { AssertMilConfig $prof $cwd } 'mil_config_refuzata'; Remove-Item -LiteralPath $f
+    }
+    $h = "$prof\.gemini\config\hooks.json"; [IO.File]::WriteAllText($h, '{}'); (Get-Item -LiteralPath $h).Attributes = 'Hidden'
+    Refuza { AssertMilConfig $prof $cwd } 'mil_config_refuzata'; (Get-Item -LiteralPath $h -Force).Attributes = 'Normal'; Remove-Item -LiteralPath $h
+    foreach ($a in @("$cwd\.agents", "$rad\w\.agents", "$rad\.agents")) {
+      [void](New-Item -ItemType Directory -Path $a); Refuza { AssertMilConfig $prof $cwd } 'mil_config_refuzata'; Remove-Item -LiteralPath $a
+    }
+    $s = "$prof\.gemini\antigravity-cli\settings.json"
+    [IO.File]::WriteAllText($s, '{"colorScheme":"dark","trustedWorkspaces":["C:\\x"]}'); AssertMilConfig $prof $cwd
+    [IO.File]::WriteAllText($s, '{"colorScheme":"dark","permissions":{"allow":["command(*)"]}}'); Refuza { AssertMilConfig $prof $cwd } 'mil_setari_refuzate (permissions)'
+    [IO.File]::WriteAllText($s, '{"hooks":{}}'); Refuza { AssertMilConfig $prof $cwd } 'mil_setari_refuzate (hooks)'
+    [IO.File]::WriteAllText($s, '{"perm\u0069ssions":{}}'); Refuza { AssertMilConfig $prof $cwd } 'mil_setari_refuzate (permissions)'
+    [IO.File]::WriteAllText($s, '{nu e json'); Refuza { AssertMilConfig $prof $cwd } 'mil_setari_ilizibile'
+    [IO.File]::WriteAllText($s, '[1,2]'); Refuza { AssertMilConfig $prof $cwd } 'mil_setari_ilizibile'
+    Refuza { AssertMilConfig '' $cwd } 'mil_profil_necunoscut'
+  } finally { Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+
+$JS = @'
+I1109 22:54:58.965113       1 hooks_manager.go:53] loaded 0 named hooks from 0 hooks.json file(s)
+I1109 22:54:58.965635       1 session.go:87] Print mode: enabling terminal sandbox for this session
+I1109 22:54:58.968468       1 hooks_manager.go:53] loaded 0 named hooks from 0 hooks.json file(s)
+I1109 22:54:58.968468       1 printmode.go:889] Print mode: applying agent mode plan
+I1109 22:55:01.455798       1 streaminput.go:161] Print mode: stream input closed after 0 turn(s)
+'@
+$JR = @'
+I1109 22:54:58.965113       1 hooks_manager.go:53] loaded 0 named hooks from 0 hooks.json file(s)
+I1109 22:54:58.965635       1 session.go:87] Print mode: enabling terminal sandbox for this session
+I1109 22:54:58.968468       1 printmode.go:889] Print mode: applying agent mode plan
+I1109 22:50:07.941068     919 http_helpers.go:653] URL: https://example.invalid/v1internal:streamGenerateContent?alt=sse
+'@
+Caz 'P1-1/P1-2 MilVerificaJurnal: jurnalele reale trec; hooks incarcate, sandbox indisponibil / nepornit, mod lipsa, tura la sonda = refuz' {
+  MilVerificaJurnal $JS '' $true
+  MilVerificaJurnal $JR '' $false
+  Refuza { MilVerificaJurnal $JR '' $true } 'mil_sonda_cu_tura_de_model'
+  Refuza { MilVerificaJurnal ($JS -replace 'loaded 0 named hooks from 0', 'loaded 1 named hooks from 1') '' $true } 'mil_hooks_incarcate'
+  Refuza { MilVerificaJurnal ($JS -replace 'loaded 0 named hooks from 0 hooks', 'loaded 0 named hooks from 2 hooks') '' $true } 'mil_hooks_incarcate'
+  Refuza { MilVerificaJurnal ($JS -replace '(?m)^.*named hooks.*$', '') '' $true } 'mil_hooks_neverificate'
+  Refuza { MilVerificaJurnal ($JS -replace 'enabling terminal sandbox', 'x') '' $true } 'mil_sandbox_nepornit'
+  Refuza { MilVerificaJurnal ($JS + "`nW1109 x.go:1] Terminal sandbox unavailable: no AppContainer") '' $true } 'mil_sandbox_indisponibil'
+  Refuza { MilVerificaJurnal $JS 'warning: --mode plan is not available because the terminal sandbox is not available on this host' $true } 'mil_sandbox_indisponibil'
+  Refuza { MilVerificaJurnal ($JS + "`nI1109 p.go:1] Print mode: --mode plan is unavailable (terminal sandbox unavailable), continuing in the default mode") '' $true } 'mil_sandbox_indisponibil'
+  Refuza { MilVerificaJurnal ($JS -replace 'applying agent mode plan', 'applying agent mode auto') '' $true } 'mil_mod_plan_neaplicat'
+  Refuza { MilVerificaJurnal '' '' $false } 'mil_jurnal_agy_lipsa'
+}
+Caz 'P2 r1: MilDiagCurat ascunde valori care arata a secrete si plafoneaza; MilDiag pastreaza diagnosticul' {
+  $t = MilDiagCurat ("Authorization: Bearer ya29.abcDEF123-_x token=s3cr3t key: k1 " + (New-Object string ([char]'a', 50)) + "`n" + [char]27 + '[31mrosu')
+  foreach ($s in @('ya29.abc', 's3cr3t', 'k1 ', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', [string][char]27)) { if ($t.Contains($s)) { throw ('a ramas: ' + $s) } }
+  if ((MilDiagCurat (New-Object string ([char]'z', 5000)).Replace('zzzz', 'z z ')).Length -gt ($MIL_DIAG_MAX + 20)) { throw 'neplafonat' }
+  $n = $script:MilDiagLinii.Count; MilDiag 'proba' 'stderr: x'; Egal $script:MilDiagLinii.Count ($n + 1) 'diag pastrat'
+}
+
 # Ruleaza inlocuit: inregistreaza apelurile si intoarce raspunsuri programate.
 $script:apeluri = New-Object System.Collections.ArrayList
 $script:raspunsuri = @{}
 function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env, [bool]$cleanEnvironment = $false, [bool]$trustedArguments = $false, [string]$argumenteGata = '') {
-  [void]$script:apeluri.Add(@{ argv = @($argv); timeout = $timeout; curat = $cleanEnvironment; gata = $argumenteGata; env = $env })
+  [void]$script:apeluri.Add(@{ argv = @($argv); timeout = $timeout; curat = $cleanEnvironment; gata = $argumenteGata; env = $env; cwd = $cwd; stdin = $stdinText })
   $cheie = if ($argumenteGata) { 'model' } else { ($argv -join ' ') }
   if ($script:raspunsuri.ContainsKey($cheie)) { return $script:raspunsuri[$cheie] }
   return @{ timeout = $false; exit = 0; out = 'RASPUNS'; err = '' }
 }
 function OkGol([string]$txt) { return @{ timeout = $false; exit = 0; out = $txt + "`r`n"; err = '' } }
 
-Caz 'AssertMilFaraExtensii: doar raspunsul exact "gol" trece; MCP/plugin prezent, exit nenul sau timeout = refuz' {
+Caz 'AssertMilFaraExtensii: doar raspunsul exact "gol" trece; MCP/plugin prezent, exit nenul sau timeout = refuz; stderr in diagnostic' {
   $script:raspunsuri = @{ 'mcp list' = (OkGol 'No MCP servers configured.'); 'plugin list' = (OkGol 'No plugins installed.') }
   AssertMilFaraExtensii 'x.exe' @{} 'C:\'
   $script:raspunsuri['mcp list'] = (OkGol "Configured MCP servers:`n  fs  enabled"); Refuza { AssertMilFaraExtensii 'x.exe' @{} 'C:\' } 'mil_extensii_refuzate (mcp list)'
-  $script:raspunsuri['mcp list'] = @{ timeout = $false; exit = 1; out = 'No MCP servers configured.'; err = '' }; Refuza { AssertMilFaraExtensii 'x.exe' @{} 'C:\' } 'mil_extensii_refuzate'
-  $script:raspunsuri['mcp list'] = @{ timeout = $true; exit = -1; out = ''; err = '' }; Refuza { AssertMilFaraExtensii 'x.exe' @{} 'C:\' } 'mil_preflight_timeout'
+  $script:raspunsuri['mcp list'] = @{ timeout = $false; exit = 1; out = 'No MCP servers configured.'; err = 'eroare-preflight-vizibila' }; Refuza { AssertMilFaraExtensii 'x.exe' @{} 'C:\' } 'mil_extensii_refuzate'
+  if (-not ($script:MilDiagLinii | Where-Object { $_ -like '*preflight mcp list*eroare-preflight-vizibila*' })) { throw 'stderr-ul preflight-ului nu a ajuns in diagnostic' }
+  $script:raspunsuri['mcp list'] = @{ timeout = $true; exit = -1; out = ''; err = 'diag-timeout' }; Refuza { AssertMilFaraExtensii 'x.exe' @{} 'C:\' } 'mil_preflight_timeout'
+  if (-not ($script:MilDiagLinii | Where-Object { $_ -like '*diag-timeout*' })) { throw 'stderr-ul la timeout nu a ajuns in diagnostic' }
   $script:raspunsuri = @{ 'mcp list' = (OkGol 'No MCP servers configured.'); 'plugin list' = (OkGol 'Installed plugins: x') }; Refuza { AssertMilFaraExtensii 'x.exe' @{} 'C:\' } 'mil_extensii_refuzate (plugin list)'
 }
 
-Caz 'InvokeMil: preflight cu mediu curat, apoi UN apel cu linia gata citata; timeout = timpul ramas' {
-  $script:apeluri.Clear()
-  $script:raspunsuri = @{ 'mcp list' = (OkGol 'No MCP servers configured.'); 'plugin list' = (OkGol 'No plugins installed.') }
-  function AssertMilExe([string]$exe) { }   # semnatura se testeaza separat, pe fisiere reale
-  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('paw-mil-test-' + [guid]::NewGuid().ToString('N') + '.md')
-  [IO.File]::WriteAllText($tmp, $briefOstil, (New-Object Text.UTF8Encoding($false)))
-  try { $r = InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $tmp 'C:\' 240 } finally { Remove-Item -LiteralPath $tmp -Force }
-  Egal $r.out 'RASPUNS' 'rezultat'
-  Egal $script:apeluri.Count 3 'apeluri'
-  Egal ($script:apeluri[0].argv -join ' ') 'mcp list' 'primul'; Egal ($script:apeluri[1].argv -join ' ') 'plugin list' 'al doilea'
-  foreach ($a in $script:apeluri) { if (-not $a.curat) { throw 'mediu necuratat' }; if ($a.env.Keys -contains 'GEMINI_API_KEY') { throw 'cheie in mediu' } }
-  $m = $script:apeluri[2]; Egal $m.argv.Count 0 'argv gol la apelul principal'
-  $argv = @(ArgvDin $m.gata); Egal $argv[8] ('-p=' + (MilPrompt $tmp $briefOstil)) 'prompt citat'
-  if ($m.timeout -gt 240 -or $m.timeout -lt ($MIL_PRINT_TIMEOUT + 10)) { throw ('timeout neasteptat ' + $m.timeout) }
-  Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' 'C:\nu\exista.md' 'C:\' 240 } 'exista.md'
-  Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' (Join-Path $pachet 'mil.ps1') 'C:\' 100 } 'mil_timp_insuficient_dupa_preflight'
+# --- P1-2: copia doar-citire (ACL-uri reale, director temporar) ---
+Caz 'P1-2 copie: brief + material copiate; dupa blocare TOATE probele de scriere pica (si ACL-ul pe cale); curatarea o sterge' {
+  $rad = DirTemp 'paw-mil-copie-'
+  try {
+    $liv = Join-Path $rad 'livrare'; $baza = Join-Path $rad 'mil'; [void](New-Item -ItemType Directory -Path $liv)
+    $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, 'BRIEF'); [IO.File]::WriteAllText("$liv\a.diff", 'DIFF')
+    $dir = MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\a.diff") @($liv)
+    Egal ((@([IO.Directory]::GetFiles($dir) | ForEach-Object { [IO.Path]::GetFileName($_) }) | Sort-Object) -join ',') 'a.diff,brief.md' 'continut'
+    MilBlocheazaCopie
+    AssertMilCopieReadOnly
+    Egal ([IO.File]::ReadAllText("$dir\a.diff")) 'DIFF' 'citire dupa blocare'
+    Refuza { [IO.File]::WriteAllText("$dir\nou.txt", 'x') } ''
+    Refuza { $a = [IO.Directory]::GetAccessControl($dir); $a.SetOwner([Security.Principal.SecurityIdentifier]$script:MilCopie.sid); [IO.Directory]::SetAccessControl($dir, $a) } ''
+    MilStergeCopie $false
+    if (Test-Path -LiteralPath $dir) { throw 'copia a ramas' }
+    if ($script:MilCopie) { throw 'starea copiei a ramas' }
+  } finally { MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
 }
-Remove-Item Function:\AssertMilExe -ErrorAction SilentlyContinue
-. (Join-Path $pachet 'mil.ps1')   # AssertMilExe real din nou
+Caz 'P1-2 mutatie: o copie NEBLOCATA declarata blocata e prinsa de probele de scriere; o copie neblocata nu trece verificarea' {
+  $rad = DirTemp 'paw-mil-mut-'
+  try {
+    $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, 'BRIEF')
+    [void](MilPregatesteCopie (Join-Path $rad 'mil') (RunIdTest) $brief @() @())
+    Refuza { AssertMilCopieReadOnly } 'mil_copie_stare_invalida'
+    $script:MilCopie.blocata = $true   # mutatie: fara DACL doar-citire
+    Refuza { AssertMilCopieReadOnly } 'mil_copie_nu_e_read_only (fisier nou)'
+    $script:MilCopie.blocata = $false
+  } finally { MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+Caz 'P1-2 material: nume cu punct (.agents), duplicat, rezervat, in afara radacinilor, hardlink, prea mare = refuz; copia partiala se sterge' {
+  $rad = DirTemp 'paw-mil-mat-'
+  try {
+    $liv = Join-Path $rad 'livrare'; $alt = Join-Path $rad 'alt'; $baza = Join-Path $rad 'mil'
+    foreach ($d in @($liv, $alt, "$liv\sub")) { [void](New-Item -ItemType Directory -Path $d) }
+    $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, 'B')
+    foreach ($f in @('.agents', 'a.diff', 'brief.md')) { [IO.File]::WriteAllText("$liv\$f", 'x') }
+    [IO.File]::WriteAllText("$liv\sub\a.diff", 'x'); [IO.File]::WriteAllText("$alt\x.diff", 'x')
+    # refuzuri la validare: inainte de orice scriere (nicio copie creata, nicio stare)
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\.agents") @($liv) } 'mil_material_nume_invalid'
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\brief.md") @($liv) } 'mil_material_nume_invalid'
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\a.diff", "$liv\sub\a.diff") @($liv) } 'mil_material_nume_duplicat'
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$alt\x.diff") @($liv) } 'mil_material_in_afara_radacinilor'
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\..\alt\x.diff") @($liv) } 'cdx_reserved_path'
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\lipsa.diff") @($liv) } 'mil_material_lipsa'
+    Refuza { MilPregatesteCopie $baza 'x' $brief @() @() } 'mil_runid_invalid'
+    if ($script:MilCopie -or @(Get-ChildItem -LiteralPath $baza -Force).Count) { throw 'refuzul la validare a lasat stare / copii' }
+    # refuzuri la copiere (pe handle): copia partiala exista pana la curatare (InvokeMil o sterge in finally)
+    [void](New-Item -ItemType HardLink -Path "$liv\leg.diff" -Target "$liv\a.diff")
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @("$liv\leg.diff") @($liv) } 'mil_material_hardlink'
+    MilStergeCopie $false
+    $mare = "$liv\mare.bin"; $fs = [IO.File]::Create($mare); $fs.SetLength($MIL_MATERIAL_MAX_BYTES + 1); $fs.Close()
+    Refuza { MilPregatesteCopie $baza (RunIdTest) $brief @($mare) @($liv) } 'mil_material_prea_mare'
+    MilStergeCopie $false
+    if (@(Get-ChildItem -LiteralPath $baza -Force).Count) { throw 'curatarea nu a sters copiile partiale' }
+  } finally { MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+Caz 'MilCitesteLista: UTF-8 strict, fara NUL / UTF-16, plafon de intrari' {
+  $rad = DirTemp 'paw-mil-lista-'
+  try {
+    $l = Join-Path $rad 'm.txt'
+    [IO.File]::WriteAllText($l, "C:\a.diff`r`n`r`n  C:\b.diff  `n"); Egal ((@(MilCitesteLista $l)) -join '|') 'C:\a.diff|C:\b.diff' 'linii'
+    [IO.File]::WriteAllText($l, 'C:\a.diff', [Text.Encoding]::Unicode); Refuza { MilCitesteLista $l } 'mil_material_lista_invalida'
+    [IO.File]::WriteAllBytes($l, [byte[]](0x43, 0x3A, 0xC3, 0x28)); Refuza { MilCitesteLista $l } 'mil_material_lista_invalida (UTF-8)'
+    [IO.File]::WriteAllText($l, ((1..($MIL_MATERIAL_MAX + 1) | ForEach-Object { "C:\f$_.txt" }) -join "`n")); Refuza { MilCitesteLista $l } 'mil_material_prea_multe'
+  } finally { Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+
+# --- InvokeMil cap-coada, cu Ruleaza inlocuit si copie reala ---
+function SondaOk([string]$cwd, [string]$model) { return @{ timeout = $false; exit = 0; err = ''; out = ((@{ event = 'init'; init = @{ model = $model; cwd = $cwd; permission_mode = 'request-review' } } | ConvertTo-Json -Compress) + "`n") } }
+$script:jurSonda = $JS; $script:jurRulare = $JR; $script:sonda = $null; $script:scriereInCopie = $null
+function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env, [bool]$cleanEnvironment = $false, [bool]$trustedArguments = $false, [string]$argumenteGata = '') {
+  [void]$script:apeluri.Add(@{ argv = @($argv); timeout = $timeout; curat = $cleanEnvironment; gata = $argumenteGata; env = $env; cwd = $cwd; stdin = $stdinText })
+  if (-not $argumenteGata) {
+    if (($argv -join ' ') -ceq 'mcp list') { return (OkGol 'No MCP servers configured.') }
+    if (($argv -join ' ') -ceq 'plugin list') { return (OkGol 'No plugins installed.') }
+    throw 'apel neasteptat'
+  }
+  $a = @(ArgvDin $argumenteGata); $log = $a[[array]::IndexOf($a, '--log-file') + 1]
+  if ($a -ccontains '--input-format') {
+    [IO.File]::WriteAllText($log, $script:jurSonda)
+    if ($script:sonda) { return (& $script:sonda $cwd) }
+    return (SondaOk $cwd $a[[array]::IndexOf($a, '--model') + 1])
+  }
+  [IO.File]::WriteAllText($log, $script:jurRulare)
+  $script:scriereInCopie = MilIncearca { [IO.File]::WriteAllText((Join-Path $cwd 'scris-de-agy.txt'), 'x') }
+  return @{ timeout = $false; exit = 0; out = 'RASPUNS'; err = '' }
+}
+function AssertMilExe([string]$exe) { }   # semnatura se testeaza separat, pe fisiere reale
+function AssertMilGazda() { }
+$script:profilFals = $null
+function MilMediu() { return @{ USERPROFILE = $script:profilFals; SystemRoot = $env:SystemRoot; PATH = $env:SystemRoot + '\system32' } }
+
+Caz 'InvokeMil: preflight + sonda + rulare in COPIA doar-citire (nu in repo); agy nu poate scrie; copia si jurnalele sterse' {
+  $rad = DirTemp 'paw-mil-inv-'
+  try {
+    $script:profilFals = Join-Path $rad 'profil'; [void](New-Item -ItemType Directory -Path $script:profilFals)
+    $liv = Join-Path $rad 'livrare'; [void](New-Item -ItemType Directory -Path $liv); [IO.File]::WriteAllText("$liv\a.diff", 'DIFF')
+    $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, $briefOstil, (New-Object Text.UTF8Encoding($false)))
+    $lista = Join-Path $rad 'm.txt'; [IO.File]::WriteAllText($lista, "$liv\a.diff")
+    $baza = Join-Path $rad 'mil'; $id = RunIdTest
+    $script:apeluri.Clear(); $script:scriereInCopie = $null
+    $r = InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 $lista $baza $id @($liv)
+    Egal $r.out 'RASPUNS' 'rezultat'
+    Egal $script:apeluri.Count 4 'apeluri (mcp, plugin, sonda, rulare)'
+    $copie = Join-Path ([PawMilAcl]::Lunga($baza)) $id
+    foreach ($x in $script:apeluri) { Egal $x.cwd $copie 'cwd = copia'; if (-not $x.curat) { throw 'mediu necuratat' }; Egal $x.stdin '' 'stdin gol' }
+    Egal $script:scriereInCopie $false 'agy a putut scrie in copie'
+    $m = $script:apeluri[3]; Egal $m.argv.Count 0 'argv gol la apelul principal'
+    $argv = @(ArgvDin $m.gata); Egal $argv[10] ('-p=' + (MilPrompt $brief $briefOstil @('a.diff'))) 'prompt citat'
+    if ($m.timeout -gt 300 -or $m.timeout -lt ($MIL_PRINT_TIMEOUT + 10)) { throw ('timeout neasteptat ' + $m.timeout) }
+    if (Test-Path -LiteralPath $copie) { throw 'copia a ramas' }
+    if (Test-Path -LiteralPath ($copie + '-agy')) { throw 'jurnalele au ramas' }
+  } finally { MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+Caz 'InvokeMil refuza (si sterge copia): sonda cu hooks / sandbox indisponibil / alt cwd / alte permisiuni / iesire in plus; rulare fara sandbox' {
+  $rad = DirTemp 'paw-mil-neg-'
+  try {
+    $script:profilFals = Join-Path $rad 'profil'; [void](New-Item -ItemType Directory -Path $script:profilFals)
+    $brief = Join-Path $rad 'brief.md'; [IO.File]::WriteAllText($brief, 'B'); $baza = Join-Path $rad 'mil'
+    $cazuri = @(
+      @{ js = ($JS -replace 'loaded 0 named hooks from 0', 'loaded 1 named hooks from 1'); jr = $JR; s = $null; m = 'mil_hooks_incarcate' },
+      @{ js = ($JS + "`nW x.go:1] Terminal sandbox unavailable: x"); jr = $JR; s = $null; m = 'mil_sandbox_indisponibil' },
+      @{ js = $JS; jr = $JR; s = { param($c) SondaOk 'C:\Users\Gazpet-Ai\gazpet-erp' 'claude-opus-4-6-thinking' }; m = 'mil_sonda_cwd' },
+      @{ js = $JS; jr = $JR; s = { param($c) $o = SondaOk $c 'claude-opus-4-6-thinking'; $o.out = $o.out.Replace('request-review', 'bypass'); $o }; m = 'mil_sonda_permisiuni' },
+      @{ js = $JS; jr = $JR; s = { param($c) $o = SondaOk $c 'claude-opus-4-6-thinking'; $o.out += '{"event":"result"}'; $o }; m = 'mil_sonda_iesire_neasteptata' },
+      @{ js = $JS; jr = $JR; s = { param($c) @{ timeout = $false; exit = 1; out = ''; err = 'x' } }; m = 'mil_sonda_exit_1' },
+      @{ js = $JS; jr = ($JR -replace 'enabling terminal sandbox', 'x'); s = $null; m = 'mil_sandbox_nepornit' }
+    )
+    foreach ($k in $cazuri) {
+      $script:jurSonda = $k.js; $script:jurRulare = $k.jr; $script:sonda = $k.s; $id = RunIdTest
+      Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza $id @() } $k.m
+      if (Test-Path -LiteralPath (Join-Path ([PawMilAcl]::Lunga($baza)) $id)) { throw ('copia a ramas dupa ' + $k.m) }
+      if ($script:MilCopie) { throw ('stare ramasa dupa ' + $k.m) }
+    }
+    $script:jurSonda = $JS; $script:jurRulare = $JR; $script:sonda = $null
+    [void](New-Item -ItemType Directory -Path "$script:profilFals\.gemini\config" -Force); [IO.File]::WriteAllText("$script:profilFals\.gemini\config\hooks.json", '{}')
+    $script:apeluri.Clear()
+    Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 300 '' $baza (RunIdTest) @() } 'mil_config_refuzata'
+    Egal $script:apeluri.Count 0 'niciun copil pornit cu hooks.json prezent'
+    Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 100 '' $baza (RunIdTest) @() } 'mil_config_refuzata'
+    Remove-Item -LiteralPath "$script:profilFals\.gemini\config\hooks.json"
+    Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' $brief 100 '' $baza (RunIdTest) @() } 'mil_timp_insuficient_dupa_preflight'
+    Refuza { InvokeMil 'C:\x\agy.exe' 'claude-opus-4-6-thinking' (Join-Path $rad 'nu-exista.md') 300 '' $baza (RunIdTest) @() } 'nu-exista.md'
+  } finally { MilStergeCopie $false; Remove-Item -LiteralPath $rad -Recurse -Force }
+}
+Remove-Item Function:\AssertMilExe, Function:\AssertMilGazda, Function:\MilMediu -ErrorAction SilentlyContinue
+. (Join-Path $pachet 'mil.ps1')   # functiile reale din nou
 
 Caz 'AssertMilExe: fisier nesemnat si semnatar strain refuzate; agy.exe real (daca exista) acceptat' {
-  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('paw-mil-nesemnat-' + [guid]::NewGuid().ToString('N') + '.exe')
-  [IO.File]::WriteAllBytes($tmp, [byte[]](0x4D, 0x5A, 0, 0))
-  try { Refuza { AssertMilExe $tmp } 'mil_semnatura_invalida' } finally { Remove-Item -LiteralPath $tmp -Force }
+  $nesemnat = Join-Path $TMP ('paw-mil-nesemnat-' + [guid]::NewGuid().ToString('N') + '.exe')
+  [IO.File]::WriteAllBytes($nesemnat, [byte[]](0x4D, 0x5A, 0, 0))
+  try { Refuza { AssertMilExe $nesemnat } 'mil_semnatura_invalida' } finally { Remove-Item -LiteralPath $nesemnat -Force }
   # fisierele din System32 au de obicei mai multe hardlink-uri (WinSxS): refuz inainte de semnatura
   Refuza { AssertMilExe (Join-Path $env:SystemRoot 'System32\notepad.exe') } 'cdx_hardlink_refused'
   # semnatura valida, dar alt semnatar: copia unui exe cu semnatura incorporata (node.exe, OpenJS Foundation)
   $strain = 'C:\Program Files\nodejs\node.exe'
   if (Test-Path -LiteralPath $strain) {
-    $copie = Join-Path ([IO.Path]::GetTempPath()) ('paw-mil-strain-' + [guid]::NewGuid().ToString('N') + '.exe')
+    $copie = Join-Path $TMP ('paw-mil-strain-' + [guid]::NewGuid().ToString('N') + '.exe')
     Copy-Item -LiteralPath $strain -Destination $copie
     try { Refuza { AssertMilExe $copie } 'mil_semnatar_neasteptat' } finally { Remove-Item -LiteralPath $copie -Force }
   } else { Write-Host '  (node.exe lipsa: cazul semnatar strain omis)' }
-  $agy = 'C:\Users\Gazpet-Ai\AppData\Local\agy\bin\agy.exe'
-  if (Test-Path -LiteralPath $agy) { AssertMilExe $agy } else { Write-Host '  (agy.exe lipsa pe aceasta masina: ramura pozitiva omisa)' }
+  if (Test-Path -LiteralPath $EXE) { AssertMilExe $EXE } else { Write-Host '  (agy.exe lipsa pe aceasta masina: ramura pozitiva omisa)' }
+}
+Caz 'AssertMilGazda: pe aceasta masina (neelevat, build >= 26100) trece; build-ul minim e 24H2' {
+  Egal $MIL_BUILD_MIN 26100 'build minim'
+  AssertMilGazda
 }
 
 # Refuzurile de cale ale lansatorului (CaleSigura, comuna cu jak/gem/cop), extrasa prin AST din run_paw.ps1.
 $def = $ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'CaleSigura' }, $true) | Select-Object -First 1
 . ([scriptblock]::Create($def.Extent.Text))
 Caz 'CaleSigura: UNC, ADS, ghilimele, in afara radacinii si junction refuzate; cale buna acceptata' {
-  $rad = Join-Path ([IO.Path]::GetTempPath()) ('paw-mil-rad-' + [guid]::NewGuid().ToString('N'))
+  $rad = DirTemp 'paw-mil-rad-'
   $brief = Join-Path $rad 'brief'; $alt = Join-Path $rad 'alt'
   [void](New-Item -ItemType Directory -Path $brief); [void](New-Item -ItemType Directory -Path $alt)
   [IO.File]::WriteAllText((Join-Path $brief 'ok.md'), 'x'); [IO.File]::WriteAllText((Join-Path $alt 'x.md'), 'x')
@@ -173,14 +384,19 @@ Caz 'CaleSigura: UNC, ADS, ghilimele, in afara radacinii si junction refuzate; c
   }
 }
 
-Caz 'run_paw.ps1: ordinea pe canalul mil (validare -> Job -> lock_mil -> InvokeMil) si refuzurile la final' {
+Caz 'run_paw.ps1: ordinea pe canalul mil (validare -> Job -> lock_mil -> InvokeMil cu copia, nu repo-ul) si refuzurile la final' {
   $txt = [IO.File]::ReadAllText((Join-Path $pachet 'run_paw.ps1'))
   $iVal = $txt.IndexOf("if (`$Cine -eq 'mil') {"); $iStart = $txt.IndexOf('Set-Content -LiteralPath $script:OutFull -Value ("PAW_START')
-  if ($iVal -lt 0 -or $iVal -gt $iStart -or $txt.IndexOf('AssertMilExe $T.exe', $iVal) -gt $iStart) { throw 'validarea mil nu e inainte de PAW_START' }
+  if ($iVal -lt 0 -or $iVal -gt $iStart -or $txt.IndexOf('AssertMilExe $T.exe', $iVal) -gt $iStart -or $txt.IndexOf('AssertMilGazda', $iVal) -gt $iStart) { throw 'validarea mil nu e inainte de PAW_START' }
   $iCaz = $txt.IndexOf('"mil" {'); $iJob = $txt.IndexOf('LeagaCopiiiDeLansator', $iCaz); $iLock = $txt.IndexOf("LuaLock (Join-Path `$DATA 'lock_mil')", $iCaz); $iInv = $txt.IndexOf('InvokeMil ', $iCaz)
   if (-not ($iCaz -gt 0 -and $iCaz -lt $iJob -and $iJob -lt $iLock -and $iLock -lt $iInv)) { throw 'ordinea Job/lock/InvokeMil' }
-  foreach ($s in @("Eroare ('mil_exit_' + `$rez.exit)", "Eroare 'mil_raspuns_gol'", 'permis: jak, cop, ollie, gem, cdx, mil')) { if ($txt.IndexOf($s) -lt 0) { throw ('lipseste: ' + $s) } }
+  $apel = $txt.Substring($iInv, $txt.IndexOf("`n", $iInv) - $iInv)
+  if ($apel -match '\$REPO' -or $apel -notmatch [regex]::Escape("(Join-Path `$DATA 'mil') `$RUNID")) { throw ('InvokeMil nu foloseste copia: ' + $apel) }
+  foreach ($s in @("Eroare ('mil_exit_' + `$rez.exit)", "Eroare 'mil_raspuns_gol'", 'permis: jak, cop, ollie, gem, cdx, mil', "if (`$Imagini -and `$Cine -eq 'mil')")) { if ($txt.IndexOf($s) -lt 0) { throw ('lipseste: ' + $s) } }
   if ($txt -match '--mode\s+accept|dangerously-skip|--mode\s+auto') { throw 'mod de scriere in lansator' }
+  # codul din mil.ps1 (fara liniile de comentariu): niciun flag de scriere / auto-aprobare / setari ghicite
+  $cod = (@([IO.File]::ReadAllLines((Join-Path $pachet 'mil.ps1')) | Where-Object { $_.TrimStart() -notlike '#*' })) -join "`n"
+  if ($cod -match 'dangerously-skip-permissions|accept-edits|--mode\s*.?auto|--settings|remote-control|remote-agent') { throw 'flag nepermis in mil.ps1' }
 }
 Caz 'pachet: install.ps1 copiaza mil.ps1; SHA256.json acopera toate fisierele, hash-urile se potrivesc' {
   $inst = [IO.File]::ReadAllText((Join-Path $pachet 'install.ps1'))
