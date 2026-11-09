@@ -1,11 +1,31 @@
 """Două cititoare pe același cadru; reutilizează read.py / garda v5, fără lock per cerere."""
 import concurrent.futures
+import http.client
 import io
 import multiprocessing
 import pathlib
 import time
 from .e3_contract import E3Error
 from .e3_mapare import mapare
+
+
+def cod_citire(result):
+    """E9: cititor oprit fără gardă → termenul = timeout; eroare de transport spre modelul local
+    (conexiune, HTTP, flux rupt) = model_indisponibil; răspuns gol / trunchiat fără eroare = intern."""
+    if result.get('signal') == 'deadline':
+        return 'timeout'
+    if result.get('error'):
+        return 'model_indisponibil'
+    return 'intern'
+
+
+def cod_exceptie_cititor(exc):
+    """Excepție în procesul cititorului: transportul spre modelul local = model_indisponibil; restul = defect."""
+    if isinstance(exc, (ConnectionError, TimeoutError, http.client.HTTPException)):
+        return 'model_indisponibil'
+    if type(exc).__module__.split('.')[0] == 'httpx':  # clientul MinerU
+        return 'model_indisponibil'
+    return 'intern'
 
 
 def _reader_process(out, name, timeout, conn):
@@ -20,12 +40,12 @@ def _reader_process(out, name, timeout, conn):
         if state.get('benzi_garda') or read.garda_oprita(result):
             conn.send((None, 'garda'))
         elif state['status'] != 'complete' or not result.get('ok'):
-            conn.send((None, 'intern'))
+            conn.send((None, cod_citire(result)))
         else:
             raw = (pathlib.Path(out) / 'page0001/p0001_b0' / name / 'raw.txt').read_text(encoding='utf-8')
             conn.send((raw, None))
-    except Exception:
-        conn.send((None, 'intern'))
+    except Exception as exc:
+        conn.send((None, cod_exceptie_cititor(exc)))
     finally:
         conn.close()
 
@@ -62,7 +82,8 @@ class Reader:
                     guard = garda_oprita(result)
                 except (OSError, ValueError):
                     pass
-                raise E3Error('garda' if guard else 'intern')
+                # E9: termenul cititorului a trecut (model lent / blocat); refuzul conexiunii vine ca model_indisponibil.
+                raise E3Error('garda' if guard else 'timeout')
             raw, error = parent.recv()
             if error:
                 raise E3Error(error)
@@ -81,7 +102,7 @@ def citeste_orientat(image, sablon, root, reader, deadline, clock=time.monotonic
     def call(name, im, angle):
         remaining = deadline - clock()
         if remaining <= 0:
-            raise E3Error('intern')
+            raise E3Error('timeout')
         return reader(name, im, root / ('r%s_%s' % (angle, name)), remaining)
     def pair(im, angle):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:

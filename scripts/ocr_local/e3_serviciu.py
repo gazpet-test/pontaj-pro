@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import pathlib
+import random
 import shutil
 import threading
 import time
@@ -13,13 +14,46 @@ from zoneinfo import ZoneInfo
 from .client import save
 from .e3_contract import E3Error
 from .e3_aliniere import compara, aplica_arbitraj
-from .e3_pdf import valideaza_pdf, randeaza
+from .e3_pdf import valideaza_pdf, randeaza, cod_pdf
 from .e3_perspectiva import perspectiva
 from .e3_read import Reader, citeste_orientat
 from .e3_gpu import mutex, GpuLock, Coordinator, WslModels
 
 ROOT = pathlib.Path('C:/ProgramData/Gazpet/e3_ocr')
-ERRORS = {'structura_incerta', 'tabel_negasit', 'garda', 'prea_multe_dezacorduri', 'limita_randuri', 'pdf_invalid', 'multipagina', 'intern'}
+# Aceeași listă ca ERORI_LOCALE din supabase/functions/izo-e3-ocr-local/contract.ts (test de paritate).
+# E9: retea, model_indisponibil, timeout, pdf_corupt, oprit spun cauza reală; intern = numai defecte.
+# Se instalează DUPĂ deploy-ul edge-ului care le acceptă (edge-ul vechi refuză 400 un cod necunoscut).
+ERRORS = {'structura_incerta', 'tabel_negasit', 'garda', 'prea_multe_dezacorduri', 'limita_randuri', 'pdf_invalid', 'multipagina', 'intern',
+          'retea', 'model_indisponibil', 'timeout', 'pdf_corupt', 'oprit'}
+PAUZA_PLAFON = 300  # secunde între două încercări preia, la eșecuri consecutive
+
+
+def cod_eroare(exc):
+    """Excepție → cod de rezultat. Transportul spre edge sau edge-ul indisponibil (5xx) = retea (L05);
+    un refuz 4xx sau orice altceva neprevăzut = intern."""
+    if isinstance(exc, E3Error):
+        if exc.cod in ERRORS:
+            return exc.cod
+        if exc.cod == 'edge_transport' or (exc.cod == 'edge_refuz' and (getattr(exc, 'status', 0) or 0) >= 500):
+            return 'retea'
+    return 'intern'
+
+
+class Pauza:
+    """Backoff pentru preia: treapta = min(2^k, plafon) s, plus jitter de cel mult 10%, tot sub plafon.
+    Se resetează la primul preia reușit. Fără oprire definitivă: serviciul revine singur după cădere."""
+    def __init__(self, plafon=PAUZA_PLAFON, rnd=random.random):
+        self.plafon, self.rnd, self.k, self.esecuri = plafon, rnd, 0, 0
+
+    def esec(self):
+        treapta = min(2 ** self.k, self.plafon)
+        if treapta < self.plafon:
+            self.k += 1
+        self.esecuri += 1
+        return treapta, min(self.plafon, treapta * (1 + 0.1 * self.rnd()))
+
+    def reset(self):
+        self.k = self.esecuri = 0
 
 
 def noapte(now):
@@ -52,9 +86,10 @@ def curata(work, *, now=None, toate=False, active=None, resturi=None):
 
 class Worker:
     def __init__(self, edge, coordinator, *, root=ROOT, reader=None, clock=None, pdf_validator=valideaza_pdf,
-                 render=randeaza, perspective=perspectiva):
+                 render=randeaza, perspective=perspectiva, rnd=random.random):
         self.edge, self.coordinator, self.root = edge, coordinator, pathlib.Path(root)
         self.reader, self.now = reader or Reader(), clock or (lambda: dt.datetime.now(dt.timezone.utc))
+        self.rnd = rnd
         self.validate_pdf, self.render, self.perspective = pdf_validator, render, perspective
         self.worker_id = 'e3-' + os.environ.get('COMPUTERNAME', 'server')
         self.state, self.active, self.gpu_state = 'pornire', None, 'pornire'
@@ -75,8 +110,15 @@ class Worker:
         modele = {k: {'nume': v['served_model_name'], 'sha': v['weights_sha256'],
                       'gata': self.gpu_state == 'disponibil'} for k, v in protocol()['readers'].items()}
         self.edge.call('heartbeat', worker_id=self.worker_id, stare=state, ora_server=self.now().isoformat(),
-                       modele=modele, versiune='e9-b3-r3')
+                       modele=modele, versiune='e9-b3-r4')  # r4: coduri reale de eroare + backoff (E9)
         save(self.root / 'stare.json', {'stare': state, 'la': self.now().isoformat(), 'pid': os.getpid()})
+
+    def verifica_continuare(self, end):
+        """Noaptea sau oprirea cerută = oprit; termenul local trecut = timeout (E9: nu mai apar ca intern)."""
+        if noapte(self.now()) or self.stop_event.is_set():
+            raise E3Error('oprit')
+        if self.now() >= end:
+            raise E3Error('timeout')
 
     def process(self, request):
         # Nicio recuperare automată a unui token de pe disc. preia este unica autoritate.
@@ -92,22 +134,24 @@ class Worker:
         source = {'perspectiva': 'nesigura', 'dezacorduri': 0}
         with self.mu:
             self.active, self.state = id, 'ocupat'
+        in_citire = False
         try:
             work.mkdir(parents=True, exist_ok=False)
-            if self.now() >= end or noapte(self.now()) or self.stop_event.is_set():
-                raise E3Error('intern')
+            self.verifica_continuare(end)
             link = self.edge.call('link', cerere_id=id, token=token)
             data = self.edge.download(link['url'])
             if hashlib.sha256(data).hexdigest() != request['sha']:
                 raise E3Error('pdf_invalid')
             kind = self.validate_pdf(data)
             if kind != 'mono':
-                # B2 nu include verificare_indisponibila în lista erorilor rezultat.
-                raise E3Error({'multi': 'multipagina', 'invalid': 'pdf_invalid'}.get(kind, 'intern'))
+                # B2 nu include verificare_indisponibila în lista erorilor rezultat; E9: termen / corupt / mediu separate.
+                raise E3Error(cod_pdf(kind))
             image = self.render(data)
             image, source['perspectiva'] = self.perspective(image)
             remaining = (end - self.now()).total_seconds()
+            in_citire = True
             l, m = citeste_orientat(image, request['sablon'], work, self.reader, time.monotonic() + remaining)
+            in_citire = False
             obj, cells = compara(l, m, request['sablon'])
             source['dezacorduri'] = len(cells)
             response = {'arbitraj': 'invalid'}
@@ -119,20 +163,29 @@ class Worker:
                 except Exception:
                     pass
             obj = aplica_arbitraj(obj, cells, response, request['sablon'])
-            if self.now() >= end or noapte(self.now()) or self.stop_event.is_set():
-                raise E3Error('intern')
+            self.verifica_continuare(end)
         except Exception as exc:
-            error = exc.cod if isinstance(exc, E3Error) and exc.cod in ERRORS else 'intern'
+            error = cod_eroare(exc)
             obj = None
-            if error in ('garda', 'intern') and self.coordinator is not None:
+            # Modelele se repornesc numai când citirea le-ar fi putut lăsa blocate (ca până acum la garda / intern),
+            # nu la rețea, PDF, noapte sau termenul depășit înainte / după citire.
+            repornire = error in ('garda', 'intern', 'model_indisponibil') or (error == 'timeout' and in_citire)
+            if repornire and self.coordinator is not None:
                 self.coordinator.invalidate()
                 with self.mu:
                     self.gpu_state = 'eroare'
         try:
             source['secunde'] = round(time.monotonic() - started, 3)
-            # Exact o ramură; refuzul tokenului expirat nu produce altă preluare sau arbitraj.
-            self.edge.call('rezultat', cerere_id=id, token=token, obiect=obj, eroare=error, sursa=source)
-            self.journal(id, 'esuata' if error else 'gata', error, source['secunde'])
+            # Exact o ramură și O SINGURĂ livrare: după o livrare reușită edge-ul răspunde 409 token_invalid
+            # (nu „deja primit”), deci o reîncercare n-ar deosebi livrarea reușită de tokenul expirat (L05).
+            try:
+                self.edge.call('rezultat', cerere_id=id, token=token, obiect=obj, eroare=error, sursa=source)
+            except Exception as exc:
+                cod = cod_eroare(exc)
+                refuzat = cod != 'retea' and isinstance(exc, E3Error) and exc.cod == 'edge_refuz'
+                self.journal(id, 'nelivrat', 'refuzat' if refuzat else cod, source['secunde'])
+            else:
+                self.journal(id, 'esuata' if error else 'gata', error, source['secunde'])
         finally:
             with self.mu:
                 self.active = None
@@ -182,6 +235,36 @@ class Worker:
                     self.state = self.gpu_state = 'eroare'
             self.stop_event.wait(15)
 
+    def bucla_preia(self):
+        """Câte o cerere odată, la 1 s când serviciul e disponibil. preia eșuat (rețea, edge indisponibil,
+        refuz) = pauză crescătoare min(2^k, 300) s + jitter, resetată la primul succes. În jurnal intră
+        doar schimbarea treptei / a cauzei și revenirea, nu câte o linie pe încercare."""
+        pauza, jurnalizat = Pauza(rnd=self.rnd), None
+        while not self.stop_event.is_set():
+            with self.mu:
+                available = self.state == 'disponibil'
+            asteapta = 1
+            if available and not noapte(self.now()):
+                try:
+                    request = self.edge.call('preia', worker_id=self.worker_id).get('cerere')
+                except Exception as exc:
+                    cod = cod_eroare(exc)
+                    treapta, asteapta = pauza.esec()
+                    if (treapta, cod) != jurnalizat:
+                        self.journal(None, 'pauza', cod, treapta)
+                        jurnalizat = (treapta, cod)
+                else:
+                    if pauza.esecuri:
+                        self.journal(None, 'reluat', None, None)
+                    pauza.reset()
+                    jurnalizat = None
+                    if request:
+                        try:
+                            self.process(request)
+                        except Exception as exc:
+                            self.journal(None, 'eroare', cod_eroare(exc))
+            self.stop_event.wait(asteapta)
+
     def serve(self):
         self.root.mkdir(parents=True, exist_ok=True)
         with mutex(self.root / 'instanta.lock'):
@@ -192,17 +275,7 @@ class Worker:
             heartbeat_thread.start()
             thread.start()
             try:
-                while not self.stop_event.is_set():
-                    with self.mu:
-                        available = self.state == 'disponibil'
-                    if available and not noapte(self.now()):
-                        try:
-                            request = self.edge.call('preia', worker_id=self.worker_id).get('cerere')
-                            if request:
-                                self.process(request)
-                        except Exception:
-                            self.journal(None, 'eroare', 'intern')
-                    self.stop_event.wait(1)
+                self.bucla_preia()
             finally:
                 self.stop_event.set()
                 thread.join(timeout=45)
