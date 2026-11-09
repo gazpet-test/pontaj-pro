@@ -106,8 +106,28 @@ def text_resurse(nume):
     return ', '.join(rez)
 
 
+def abatere_arbore(acts):
+    """Regula arborelui, IDENTICĂ cu pasul (3) din fn_executie_grafic_importa: în ordinea fișierului, părintele declarat
+    (parinte_uid) e rândul precedent cu nivelul imediat superior (stivă); rădăcinile (fără părinte) au nivelul primei activități.
+    Întoarce textul primei abateri sau None."""
+    stiva, radacina = [], None
+    for a in acts:
+        while stiva and stiva[-1][0] >= a['nivel']:
+            stiva.pop()
+        p = a.get('parinte_uid')
+        if p is None:
+            radacina = a['nivel'] if radacina is None else radacina
+            if stiva or a['nivel'] != radacina:
+                return f'rădăcină pe alt nivel decât prima activitate la {a["wbs"]}'
+        elif not stiva or stiva[-1][1] != p or stiva[-1][0] != a['nivel'] - 1:
+            return f'nivelul / părintele nu corespund ordinii la {a["wbs"]}'
+        stiva.append((a['nivel'], a['uid']))
+    return None
+
+
 def verifica_activitati(acts):
-    """Invarianții pe care se bazează UI-ul și BD-ul: uid unic, ordine 0..n-1, nivelul copilului = părinte + 1 (altfel avertisment)."""
+    """Invarianții pe care se bazează UI-ul și BD-ul: uid unic, ordine 0..n-1 (altfel oprire); WBS unic, arborele coerent,
+    start / finish plan prezente (altfel avertisment: fără SQL de import, ca în RPC)."""
     av = []
     uids = collections.Counter(a['uid'] for a in acts)
     dubluri = sorted(u for u, k in uids.items() if k > 1)
@@ -119,17 +139,149 @@ def verifica_activitati(acts):
         av.append(f'WBS (outline) duplicat: {wd[:10]}')
     if [a['ordine'] for a in acts] != list(range(len(acts))):
         raise EroareImport('ordinea activităților nu e 0..n-1')
-    dupa_uid = {a['uid']: a for a in acts}
+    arb = abatere_arbore(acts)
+    if arb:
+        av.append(arb)
     for a in acts:
-        p = a.get('parinte_uid')
-        if p is not None and p in dupa_uid and a['nivel'] != dupa_uid[p]['nivel'] + 1:
-            av.append(f'nivel sărit la {a["wbs"]} (nivel {a["nivel"]}, părinte {dupa_uid[p]["nivel"]})')
         for c in ('start_plan', 'finish_plan'):
             if a[c] is None:
                 av.append(f'{c} lipsă la {a["wbs"]}')
         if a['start_plan'] and a['finish_plan'] and a['finish_plan'] < a['start_plan']:
             raise EroareImport(f'finish înaintea start-ului la {a["wbs"]}')
     return av
+
+
+def reconciliaza_inventar(uids_inventar, uids_parcurse, goale_inventar, goale_parcurse):
+    """Numitorul independent (L12): activitățile parcurse în arbore = inventarul plat al cititorului (getTasks), ca mulțime de
+    UniqueID, iar rândurile goale se numără separat în ambele. Orice diferență = oprire (o activitate pierdută la parcurgere)."""
+    if goale_inventar != goale_parcurse:
+        raise EroareImport(f'rânduri goale: {goale_inventar} în inventar, {goale_parcurse} la parcurgere')
+    ci, cp = collections.Counter(uids_inventar), collections.Counter(uids_parcurse)
+    if ci != cp:
+        lipsa = sorted((ci - cp).elements())[:10]
+        plus = sorted((cp - ci).elements())[:10]
+        raise EroareImport(f'parcurgerea nu corespunde inventarului cititorului (lipsă {lipsa}, în plus {plus})')
+    return len(uids_inventar)
+
+
+# ── validarea documentului înainte de SQL: ACELEAȘI reguli ca fn_executie_grafic_importa (L19; cazurile comune în
+#    test-fixtures/grafic/cazuri_validare.json, rulate și de harness-ul SQL) ─────────────────────────────────────────────
+RE_SHA = re.compile(r'^[0-9a-f]{64}$')
+RE_DATA = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+
+
+def _numar(v, cale, mn, mx, zec, null_ok):
+    if v is None:
+        if null_ok:
+            return None
+        raise EroareImport(f'{cale} lipsă')
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise EroareImport(f'{cale} trebuie să fie număr')
+    import decimal
+    d = decimal.Decimal(repr(v)) if isinstance(v, float) else decimal.Decimal(v)
+    if not d.is_finite() or d < decimal.Decimal(str(mn)) or d > decimal.Decimal(str(mx)) or d != round(d, zec):
+        raise EroareImport(f'{cale} în afara intervalului [{mn}, {mx}] sau cu peste {zec} zecimale')
+    return d
+
+
+def _text(v, cale, mx, null_ok):
+    if v is None:
+        if null_ok:
+            return None
+        raise EroareImport(f'{cale} lipsă')
+    if not isinstance(v, str) or len(v) > mx:
+        raise EroareImport(f'{cale} trebuie să fie text de cel mult {mx} caractere')
+    return v
+
+
+def _data(v, cale):
+    if v is None:
+        return None
+    if not isinstance(v, str) or not RE_DATA.match(v):
+        raise EroareImport(f'{cale} trebuie să fie dată AAAA-LL-ZZ validă')
+    try:
+        d = datetime.date.fromisoformat(v)
+    except ValueError:
+        raise EroareImport(f'{cale} trebuie să fie dată AAAA-LL-ZZ validă') from None
+    if d.isoformat() != v:
+        raise EroareImport(f'{cale} trebuie să fie dată AAAA-LL-ZZ validă')
+    return d
+
+
+def _bool(v, cale):
+    if not isinstance(v, bool):
+        raise EroareImport(f'{cale} trebuie să fie true / false')
+    return v
+
+
+def valideaza_document(doc):
+    """Ridică EroareImport la orice document pe care RPC-ul l-ar refuza (inclusiv CHECK-urile tabelelor)."""
+    if not isinstance(doc, dict) or doc.get('format') != FORMAT:
+        raise EroareImport('format necunoscut')
+    r, acts = doc.get('revizie'), doc.get('activitati')
+    if not (isinstance(r, dict) and isinstance(acts, list) and isinstance(doc.get('avertismente'), list)
+            and isinstance(doc.get('incerte'), list) and isinstance(doc.get('statistici'), dict) and isinstance(doc.get('complet'), bool)):
+        raise EroareImport('structura JSON incompletă')
+    if doc['avertismente']:
+        raise EroareImport('importul are avertismente de structură')
+    if doc['incerte'] and r.get('incerte_acceptate') is not True:
+        raise EroareImport('valori incerte neacceptate')
+    if doc['complet'] != (len(doc['incerte']) == 0):
+        raise EroareImport('„complet” nu corespunde listelor')
+    _numar(r.get('proiect_id'), 'proiect_id', 1, 9223372036854775807, 0, False)
+    et = _text(r.get('eticheta'), 'eticheta', 200, False)
+    if not et or et != et.strip(' ') or not et.strip() or '\n' in et:   # CHECK-ul tabelului (btrim = doar spații, fără rând nou)
+        raise EroareImport('eticheta: 1..200 caractere, pe un rând, fără spații la capete')
+    sursa = _text(r.get('sursa_fisier'), 'sursa_fisier', 1000, False)
+    if not sursa:
+        raise EroareImport('sursa_fisier goală')
+    if not RE_SHA.match(_text(r.get('sursa_sha256'), 'sursa_sha256', 64, False)):
+        raise EroareImport('sursa_sha256 invalid')
+    for c, mx in (('tip_fisier', 20), ('camp_pct_plan', 120), ('camp_pct_raportat', 120)):
+        if _text(r.get(c), c, mx, True) == '':
+            raise EroareImport(f'{c} gol')
+    _data(r.get('data_stare'), 'data_stare')
+    n = len(acts)
+    st = doc['statistici']
+    if not 1 <= n <= 5000 or _numar(st.get('activitati'), 'statistici.activitati', 1, 5000, 0, False) != n \
+            or _numar(st.get('inventar_cititor'), 'statistici.inventar_cititor', 1, 5000, 0, False) != n:
+        raise EroareImport(f'numărul activităților ({n}) nu corespunde celui declarat / inventarului cititorului')
+    norm = []
+    for a in acts:
+        if not isinstance(a, dict):
+            raise EroareImport('o activitate nu e obiect')
+        norm.append({
+            'ordine': _numar(a.get('ordine'), 'ordine', 0, 4999, 0, False),
+            'uid': _numar(a.get('uid'), 'uid', -2147483648, 2147483647, 0, False),
+            'parinte_uid': _numar(a.get('parinte_uid'), 'parinte_uid', -2147483648, 2147483647, 0, True),
+            'wbs': _text(a.get('wbs'), 'wbs', 60, False), 'nivel': _numar(a.get('nivel'), 'nivel', 0, 30, 0, False),
+            'nume': _text(a.get('nume'), 'nume', 1000, False),
+            'start_plan': _data(a.get('start_plan'), 'start_plan'), 'finish_plan': _data(a.get('finish_plan'), 'finish_plan'),
+            **{c: _data(a.get(c), c) for c in ('start_real', 'finish_real', 'start_baseline', 'finish_baseline')},
+            'durata_zile': _numar(a.get('durata_zile'), 'durata_zile', 0, 9999999.99, 2, True),
+            'pct_realizat': _numar(a.get('pct_realizat'), 'pct_realizat', 0, 100, 2, False),
+            'pct_plan': _numar(a.get('pct_plan'), 'pct_plan', 0, 100, 2, True),
+            'pct_raportat': _numar(a.get('pct_raportat'), 'pct_raportat', 0, 100, 2, True),
+            **{c: _bool(a.get(c), c) for c in ('milestone', 'rezumat', 'activ')},
+            'predecesori': _text(a.get('predecesori'), 'predecesori', 20000, False),
+            'resurse': _text(a.get('resurse'), 'resurse', 4000, False),
+        })
+        if norm[-1]['wbs'] == '':
+            raise EroareImport('wbs gol')
+    if len({x['uid'] for x in norm}) != n:
+        raise EroareImport('UniqueID duplicat')
+    if len({x['wbs'] for x in norm}) != n:
+        raise EroareImport('WBS duplicat')
+    for i, x in enumerate(norm):
+        if x['ordine'] != i:
+            raise EroareImport(f'ordinea activităților nu e 0..n-1 (poziția {i})')
+        if x['start_plan'] is None or x['finish_plan'] is None:
+            raise EroareImport(f'start / finish plan lipsă la {x["wbs"]}')
+        if x['finish_plan'] < x['start_plan']:
+            raise EroareImport(f'finish înaintea start-ului la {x["wbs"]}')
+    arb = abatere_arbore(norm)
+    if arb:
+        raise EroareImport(arb)
 
 
 def statistici(acts):
@@ -157,9 +309,10 @@ def statistici(acts):
     return s, lipsa
 
 
-def construieste(revizie, acts, avertismente_citire, incerte=None):
+def construieste(revizie, acts, avertismente_citire, incerte, inventar):
     """JSON-ul final. `avertismente` = abateri de structură; `incerte` = valori din sursă care nu s-au putut citi (ex. „#DIV/0!”
-    într-o coloană de raport), fiecare cu WBS-ul ei. complet = fără niciuna (L12)."""
+    într-o coloană de raport), fiecare cu WBS-ul ei. complet = fără niciuna (L12). `inventar` = numărul de activități din
+    inventarul independent al cititorului (reconciliaza_inventar), verificat și de RPC."""
     if not acts:
         raise EroareImport('fișierul nu are nicio activitate')
     if len(acts) > MAX_ACTIVITATI:
@@ -167,6 +320,7 @@ def construieste(revizie, acts, avertismente_citire, incerte=None):
     av = list(avertismente_citire) + verifica_activitati(acts)
     inc = list(incerte or [])
     st, lipsa = statistici(acts)
+    st['inventar_cititor'] = inventar
     return {'format': FORMAT, 'revizie': revizie, 'statistici': st, 'campuri_lipsa': lipsa,
             'avertismente': av, 'incerte': inc, 'complet': not av and not inc, 'activitati': acts}
 
@@ -181,6 +335,7 @@ def sql_import(doc, accepta_incerte=False):
     doc = {**doc, 'revizie': {**doc['revizie'], 'incerte_acceptate': bool(doc['incerte'])}}
     if doc['revizie'].get('proiect_id') is None:
         raise EroareImport('fără proiect_id (test de parsare): nu se generează SQL de import')
+    valideaza_document(doc)   # aceleași reguli ca RPC-ul: un SQL generat nu e refuzat de BD pentru structură
     corp = json.dumps(doc, ensure_ascii=False, separators=(',', ':'))
     while True:
         tag = 'g' + secrets.token_hex(8)
@@ -222,7 +377,7 @@ def porneste_jvm(java_home):
     return jpype
 
 
-def _data(x):
+def _data_java(x):
     return None if x is None else str(x.toLocalDate())
 
 
@@ -358,9 +513,9 @@ def citeste(date, proiect_sursa, java_home, camp_plan=None, camp_raportat=None):
                 'ordine': len(acts), 'uid': int(uid), 'id_sursa': None if t.getID() is None else int(t.getID()),
                 'wbs': str(wbs), 'wbs_cod': None if t.getWBS() is None else str(t.getWBS()), 'nivel': int(nivel),
                 'nume': str(t.getName() or '').strip(),
-                'start_plan': _data(t.getStart()), 'finish_plan': _data(t.getFinish()),
-                'start_real': _data(t.getActualStart()), 'finish_real': _data(t.getActualFinish()),
-                'start_baseline': _data(t.getBaselineStart()), 'finish_baseline': _data(t.getBaselineFinish()),
+                'start_plan': _data_java(t.getStart()), 'finish_plan': _data_java(t.getFinish()),
+                'start_real': _data_java(t.getActualStart()), 'finish_real': _data_java(t.getActualFinish()),
+                'start_baseline': _data_java(t.getBaselineStart()), 'finish_baseline': _data_java(t.getBaselineFinish()),
                 'durata_zile': _zile(t.getDuration(), props, TimeUnit),
                 'pct_realizat': procent(t.getPercentageComplete(), f'% realizat la {wbs}'),
                 'pct_fizic': procent(t.getPhysicalPercentComplete(), f'% fizic la {wbs}'),
@@ -373,6 +528,15 @@ def citeste(date, proiect_sursa, java_home, camp_plan=None, camp_raportat=None):
             parcurge(t.getChildTasks(), int(uid))
 
     parcurge(p.getChildTasks(), None)
+    inventar_uid, goale_inventar = [], 0
+    for t in p.getTasks():
+        if t.getNull():
+            goale_inventar += 1
+        elif t.getUniqueID() is None:
+            raise EroareImport(f'activitate fără UniqueID în inventar (rândul {t.getID()})')
+        else:
+            inventar_uid.append(int(t.getUniqueID()))
+    inventar = reconciliaza_inventar(inventar_uid, [a['uid'] for a in acts], goale_inventar, goale)
     if externe:
         av.append(f'{externe} activități externe (sub-proiecte legate): datele lor pot fi incomplete')
     if len(proiecte) > 1:
@@ -382,13 +546,13 @@ def citeste(date, proiect_sursa, java_home, camp_plan=None, camp_raportat=None):
         'tip_fisier': str(props.getFileType() or '')[:20] or None,
         'aplicatie': None if props.getFileApplication() is None else str(props.getFileApplication())[:60],
         'mpxj_versiune': md.version('mpxj'),
-        'data_stare': _data(props.getStatusDate()),
-        'proiect_start': _data(props.getStartDate()), 'proiect_finish': _data(props.getFinishDate()),
+        'data_stare': _data_java(props.getStatusDate()),
+        'proiect_start': _data_java(props.getStartDate()), 'proiect_finish': _data_java(props.getFinishDate()),
         'minute_pe_zi': None if props.getMinutesPerDay() is None else int(props.getMinutesPerDay()),
         'randuri_goale': goale,
         'camp_pct_plan': d_plan, 'camp_pct_raportat': d_rap,
     }
-    return meta, acts, av, incerte
+    return meta, acts, av, incerte, inventar
 
 
 MAX_OCTETI = 200 * 1024 * 1024
@@ -403,6 +567,17 @@ def citeste_octeti(cale):
     if len(date) > MAX_OCTETI:
         raise EroareImport('fișierul a crescut în timpul citirii')
     return date
+
+
+def aceeasi_cale(x, y):
+    """Același fișier pe disc? Dacă ambele există: os.path.samefile (prinde majusculele pe Windows, legăturile tari / simbolice și
+    numele scurte 8.3); altfel calea canonică normalizată. O verificare care eșuează = „același” (fail-closed)."""
+    try:
+        if os.path.exists(x) and os.path.exists(y):
+            return os.path.samefile(x, y)
+        return os.path.normcase(os.path.realpath(x)) == os.path.normcase(os.path.realpath(y))
+    except OSError:
+        return True
 
 
 def main(argv=None):
@@ -433,19 +608,22 @@ def main(argv=None):
         ap.error('--eticheta: 1..200 caractere, pe un rând, fără spații la capete')
     if not os.path.isfile(a.fisier):
         ap.error(f'fișierul nu există: {a.fisier}')
-    for c in (a.iesire, a.sql):
-        if c and os.path.abspath(c) == os.path.abspath(a.fisier):
-            ap.error('ieșirea nu poate suprascrie fișierul sursă')
+    if not a.iesire.lower().endswith('.json') or (a.sql is not None and not a.sql.lower().endswith('.sql')):
+        ap.error('--iesire trebuie să se termine în .json, iar --sql în .sql')
+    tinte = [c for c in (a.iesire, a.sql) if c is not None]
+    for i, c in enumerate(tinte):
+        if aceeasi_cale(c, a.fisier) or any(aceeasi_cale(c, d) for d in tinte[i + 1:]):
+            ap.error('o ieșire ar fi chiar fișierul sursă sau cealaltă ieșire')
     sursa = a.sursa_afisata or a.fisier
     if not 1 <= len(sursa) <= 1000:
         ap.error('calea sursei: 1..1000 caractere')
     try:
         date = citeste_octeti(a.fisier)
-        meta, acts, av, incerte = citeste(date, a.proiect_sursa, a.java_home, a.camp_pct_plan, a.camp_pct_raportat)
+        meta, acts, av, incerte, inventar = citeste(date, a.proiect_sursa, a.java_home, a.camp_pct_plan, a.camp_pct_raportat)
         revizie = {'proiect_id': a.proiect_id, 'eticheta': a.eticheta, 'sursa_fisier': sursa, 'sursa_sha256': hashlib.sha256(date).hexdigest(),
                    'sursa_octeti': len(date),
                    'extras_la': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), **meta}
-        doc = construieste(revizie, acts, av, incerte)
+        doc = construieste(revizie, acts, av, incerte, inventar)
         sql = sql_import(doc, a.accepta_incerte) if a.sql else None
     except EroareImport as e:
         print(f'EROARE: {e}', file=sys.stderr)

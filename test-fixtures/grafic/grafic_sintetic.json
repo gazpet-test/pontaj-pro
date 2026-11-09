@@ -6,7 +6,7 @@
   "sursa_fisier": "grafic_sintetic.xml",
   "sursa_sha256": "bbd6d949bb05a7fa9b58e3cb384b580e7167f68c6dfc60c276bd86180f718a05",
   "sursa_octeti": 32089,
-  "extras_la": "2026-11-09T20:24:08Z",
+  "extras_la": "2026-11-09T20:56:15Z",
   "tip_fisier": "MSPDI",
   "aplicatie": "Microsoft",
   "mpxj_versiune": "16.10.0",
@@ -36,7 +36,8 @@
   "cu_predecesori": 4,
   "cu_resurse": 3,
   "cu_pct_peste_0": 6,
-  "cu_pct_100": 2
+  "cu_pct_100": 2,
+  "inventar_cititor": 11
  },
  "campuri_lipsa": [],
  "avertismente": [],

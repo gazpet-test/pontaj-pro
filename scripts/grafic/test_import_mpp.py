@@ -9,6 +9,13 @@ spec = importlib.util.spec_from_file_location('import_mpp', os.path.join(RADACIN
 M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
 XML = os.path.join(RADACINA, 'test-fixtures', 'grafic', 'grafic_sintetic.xml')
+
+
+def _cazuri():
+    sp = importlib.util.spec_from_file_location('cazuri_sql', os.path.join(RADACINA, 'scripts', 'grafic', 'cazuri_sql.py'))
+    mod = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(mod)
+    return mod
 FIXTURE = os.path.join(RADACINA, 'test-fixtures', 'grafic', 'grafic_sintetic.json')
 
 
@@ -61,14 +68,42 @@ class Pur(unittest.TestCase):
         with self.assertRaises(M.EroareImport):   # finish înaintea start-ului
             M.verifica_activitati([act(finish_plan='2026-01-01')])
         av = M.verifica_activitati([act(), act(ordine=1, uid=2, wbs='1.1.1', nivel=3, parinte_uid=1)])
-        self.assertTrue(any('nivel sărit' in x for x in av), av)
+        self.assertTrue(any('nivelul / părintele' in x for x in av), av)
         av = M.verifica_activitati([act(start_plan=None)])
         self.assertTrue(any('start_plan lipsă' in x for x in av), av)
+        av = M.verifica_activitati([act(), act(ordine=1, uid=2, wbs='1', nivel=2, parinte_uid=1)])
+        self.assertTrue(any('WBS (outline) duplicat' in x for x in av), av)
+
+    def test_abatere_arbore(self):
+        # arbore corect: 1 > 1.1 > 1.1.1, 1.2; apoi a doua rădăcină 2
+        bun = [act(uid=1, nivel=1), act(ordine=1, uid=2, nivel=2, parinte_uid=1), act(ordine=2, uid=3, nivel=3, parinte_uid=2),
+               act(ordine=3, uid=4, nivel=2, parinte_uid=1), act(ordine=4, uid=5, nivel=1)]
+        self.assertIsNone(M.abatere_arbore(bun))
+        rau = {
+            'părinte greșit': [act(uid=1, nivel=1), act(ordine=1, uid=2, nivel=2, parinte_uid=1), act(ordine=2, uid=3, nivel=2, parinte_uid=2)],
+            'nivel sărit': [act(uid=1, nivel=1), act(ordine=1, uid=2, nivel=3, parinte_uid=1)],
+            'rădăcină sub alta': [act(uid=1, nivel=1), act(ordine=1, uid=2, nivel=2)],
+            'rădăcină pe alt nivel': [act(uid=1, nivel=1), act(ordine=1, uid=2, nivel=0)],
+            'părinte inexistent': [act(uid=1, nivel=1), act(ordine=1, uid=2, nivel=2, parinte_uid=9)],
+        }
+        for nume, acts in rau.items():
+            self.assertIsNotNone(M.abatere_arbore(acts), nume)
+
+    def test_reconciliaza_inventar(self):
+        self.assertEqual(M.reconciliaza_inventar([3, 1, 2], [1, 2, 3], 2, 2), 3)
+        for args in (([1, 2, 3], [1, 2], 0, 0),          # o activitate pierdută la parcurgere
+                     ([1, 2], [1, 2, 2], 0, 0),          # una parcursă de două ori
+                     ([1, 2], [1, 3], 0, 0),             # alt UID
+                     ([1, 2], [1, 2], 1, 0)):            # rândurile goale nu se potrivesc
+            with self.assertRaises(M.EroareImport, msg=str(args)):
+                M.reconciliaza_inventar(*args)
 
     def test_construieste_si_sql(self):
-        rev = {'proiect_id': 3, 'eticheta': 'T R1', 'sursa_sha256': 'a' * 64}
-        doc = M.construieste(rev, [act()], [])
+        rev = {'proiect_id': 3, 'eticheta': 'T R1', 'sursa_fisier': 't.mpp', 'sursa_sha256': 'a' * 64, 'tip_fisier': 'MPP',
+               'data_stare': None, 'camp_pct_plan': None, 'camp_pct_raportat': None}
+        doc = M.construieste(rev, [act()], [], [], 1)
         self.assertTrue(doc['complet'])
+        self.assertEqual(doc['statistici']['inventar_cititor'], 1)
         sql = M.sql_import(doc)
         m = re.search(r"SELECT public\.fn_executie_grafic_importa\(\$(g[0-9a-f]{16})\$(.*)\$\1\$::jsonb, true\);", sql, re.S)
         self.assertIsNotNone(m)
@@ -76,22 +111,40 @@ class Pur(unittest.TestCase):
         self.assertTrue(sql.startswith('-- ') and 'BEGIN ISOLATION LEVEL READ COMMITTED;' in sql and sql.endswith('COMMIT;\n'))
         self.assertNotIn('\r', sql)
         # un nume care conține „$tag$” nu închide literalul
-        doc2 = M.construieste(rev, [act(nume='a $g0$ b $$ c')], [])
+        doc2 = M.construieste(rev, [act(nume='a $g0$ b $$ c')], [], [], 1)
         m2 = re.search(r"\$(g[0-9a-f]{16})\$(.*)\$\1\$::jsonb", M.sql_import(doc2), re.S)
         self.assertEqual(json.loads(m2.group(2))['activitati'][0]['nume'], 'a $g0$ b $$ c')
-        # fără proiect / cu avertismente / cu incerte nu se generează
+        # fără proiect / cu avertismente / cu incerte / cu inventar diferit / cu document invalid nu se generează
         with self.assertRaises(M.EroareImport):
-            M.sql_import(M.construieste({**rev, 'proiect_id': None}, [act()], []))
+            M.sql_import(M.construieste({**rev, 'proiect_id': None}, [act()], [], [], 1))
         with self.assertRaises(M.EroareImport):
-            M.sql_import(M.construieste(rev, [act()], ['ceva']))
-        inc = M.construieste(rev, [act()], [], [{'wbs': '1', 'camp': 'TEXT2', 'valoare': '#DIV/0!'}])
+            M.sql_import(M.construieste(rev, [act()], ['ceva'], [], 1))
+        with self.assertRaises(M.EroareImport):
+            M.sql_import(M.construieste(rev, [act()], [], [], 2))
+        with self.assertRaises(M.EroareImport):
+            M.sql_import(M.construieste(rev, [act(pct_realizat=10.555)], [], [], 1))
+        inc = M.construieste(rev, [act()], [], [{'wbs': '1', 'camp': 'TEXT2', 'valoare': '#DIV/0!'}], 1)
         self.assertFalse(inc['complet'])
         with self.assertRaises(M.EroareImport):
             M.sql_import(inc)
         m3 = re.search(r"\$(g[0-9a-f]{16})\$(.*)\$\1\$::jsonb", M.sql_import(inc, accepta_incerte=True), re.S)
         self.assertIs(json.loads(m3.group(2))['revizie']['incerte_acceptate'], True)
         with self.assertRaises(M.EroareImport):
-            M.construieste(rev, [], [])
+            M.construieste(rev, [], [], [], 0)
+
+    def test_cazuri_comune_python_sql(self):
+        """Aceleași documente ca harness-ul SQL (TV): refuz <=> valideaza_document ridică; ok <=> trece; fragmentul SQL e la zi."""
+        C = _cazuri()
+        cazuri = C.documente()
+        self.assertGreaterEqual(len(cazuri), 30)
+        for nr, nume, asteptat, stare, doc in cazuri:
+            if asteptat == 'refuz':
+                with self.assertRaises(M.EroareImport, msg=f'caz {nr}: {nume}'):
+                    M.valideaza_document(doc)
+            else:
+                M.valideaza_document(doc)
+        with open(C.TINTA, encoding='utf-8', newline='') as f:
+            self.assertEqual(f.read().replace('\r\n', '\n'), C.genereaza(), 'rulează scripts/grafic/cazuri_sql.py')
 
     def test_alege_camp(self):
         av = []
@@ -123,10 +176,35 @@ class Pur(unittest.TestCase):
                          [f, '--test-parsare', '--eticheta', 'R1', '--iesire', 'o.json', '--sql', 's.sql'],
                          [f, '--proiect-id', '3', '--eticheta', ' R1', '--iesire', 'o.json'],
                          [f, '--proiect-id', '3', '--eticheta', 'R1', '--iesire', f],
+                         [f, '--proiect-id', '3', '--eticheta', 'R1', '--iesire', os.path.join(d, 'o.txt')],
+                         [f, '--proiect-id', '3', '--eticheta', 'R1', '--iesire', os.path.join(d, 'o.json'), '--sql', os.path.join(d, 'o.json')],
                          [f, '--proiect-id', '3', '--eticheta', 'R1', '--iesire', 'o.json', '--camp-pct-plan', 'PERCENT_COMPLETE']):
                 with self.assertRaises(SystemExit) as e:
                     M.main(argv)
                 self.assertEqual(e.exception.code, 2, argv)
+
+    def test_iesirea_nu_suprascrie_sursa(self):
+        """P1 r1: aceeași cale scrisă altfel (majuscule pe Windows), legătură tare, aceeași ieșire de două ori -> refuz înainte de citire."""
+        with tempfile.TemporaryDirectory() as d:
+            sursa = os.path.join(d, 'grafic.json')          # o sursă .json (MPXJ citește și JSON) ca să treacă de garda de extensie
+            with open(sursa, 'wb') as h:
+                h.write(b'{"sursa": "neatinsa"}')
+            alias = [sursa.upper() if os.path.normcase('A') == 'a' else sursa]
+            leg = os.path.join(d, 'legatura.json')
+            try:
+                os.link(sursa, leg)
+                alias.append(leg)
+            except OSError:
+                pass
+            for a in alias:
+                with self.assertRaises(SystemExit) as e:
+                    M.main([sursa, '--proiect-id', '3', '--eticheta', 'R1', '--iesire', a])
+                self.assertEqual(e.exception.code, 2, a)
+            with open(sursa, 'rb') as h:
+                self.assertEqual(h.read(), b'{"sursa": "neatinsa"}')
+            self.assertTrue(M.aceeasi_cale(sursa, os.path.join(d, '.', 'grafic.json')))
+            self.assertFalse(M.aceeasi_cale(sursa, os.path.join(d, 'alt.json')))
+            self.assertTrue(M.aceeasi_cale(os.path.join(d, 'nou.json'), os.path.join(d, 'sub', '..', 'nou.json')))
 
 
 def java_disponibil():
@@ -190,6 +268,7 @@ class Mpxj(unittest.TestCase):
         self.assertRegex(r['sursa_sha256'], r'^[0-9a-f]{64}$')
         s = self.doc['statistici']
         self.assertEqual((s['activitati'], s['milestone'], s['rezumat'], s['inactive'], s['cu_predecesori']), (11, 2, 4, 1, 4))
+        self.assertEqual(s['inventar_cititor'], 11)   # inventarul plat (getTasks), reconciliat cu parcurgerea
 
     def test_fixture_ui_e_la_zi(self):
         """test-fixtures/grafic/grafic_sintetic.json (folosit de testele UI) = ieșirea de acum, în afară de câmpurile de rulare."""

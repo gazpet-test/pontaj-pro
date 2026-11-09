@@ -4,13 +4,15 @@
 -- Ce face:
 --   * executie_grafic_revizii: o revizie = un fișier de grafic importat pe un proiect (ex. „LOT 2 R5 sep 2026”), cu amprenta sha256
 --     a fișierului (UNIQUE pe proiect: același fișier nu se importă de două ori), data de stare din fișier, câmpurile de raport găsite
---     („% PLAN” / „% Complete”, scrise de om în coloane text), statisticile importului și CEL MULT o revizie activă pe proiect.
+--     („% PLAN” / „% Complete”, scrise de om în coloane text), statisticile importului, amprenta conținutului importat
+--     (continut_sha256) și CEL MULT o revizie activă pe proiect.
 --   * executie_grafic_activitati: activitățile reviziei, în ordinea din fișier (ordine 0..n-1), cu WBS, nivel, nume, datele plan /
 --     real / baseline, durata în zile lucrătoare, % realizat (MS Project), % plan și % raportat (coloanele de raport, dacă există),
 --     jalon, rezumat, activ, predecesori și resurse (text) și deviz_cod (gol; pentru legarea de devize, mai târziu).
 --   * Scrierea: DOAR prin fn_executie_grafic_importa (SECURITY INVOKER), executabilă numai de proprietar (postgres): chat-ul rulează
 --     SQL-ul generat de scripts/grafic/import_mpp.py --sql, după „da”-ul lui Răzvan. Toată revizia într-o singură tranzacție (L02),
---     validată în BD (tipuri, intervale, zecimale, ordinea, numărul de activități = cel declarat), idempotentă pe sha256 (L04/L16).
+--     validată în BD ÎNAINTE de orice scriere (tipuri, intervale, zecimale, ordinea, start / finish obligatorii, UID / WBS unice,
+--     arborele, numărul de activități = cel declarat = inventarul cititorului), idempotentă pe sha256 + conținut (L04/L16).
 --     Nicio scriere pentru anon / authenticated / service_role (fără INSERT / UPDATE / DELETE, fără EXECUTE pe RPC).
 --   * Citirea: owner sau user_module_access 'executie' (viewer / editor / admin), prin RLS, cu O SINGURĂ funcție de drept
 --     (fn_executie_grafic_drept), folosită de ambele politici. Graficul arată întârzieri față de beneficiar: nu e deschis tuturor.
@@ -55,6 +57,7 @@ CREATE TABLE public.executie_grafic_revizii (
   eticheta text NOT NULL CHECK (length(eticheta) BETWEEN 1 AND 200 AND eticheta = btrim(eticheta) AND eticheta ~ '[^[:space:]]' AND strpos(eticheta, chr(10)) = 0),
   sursa_fisier text NOT NULL CHECK (length(sursa_fisier) BETWEEN 1 AND 1000),
   sursa_sha256 text NOT NULL CHECK (sursa_sha256 ~ '^[0-9a-f]{64}$'),
+  continut_sha256 text NOT NULL CHECK (continut_sha256 ~ '^[0-9a-f]{64}$'),
   tip_fisier text CHECK (tip_fisier IS NULL OR length(tip_fisier) BETWEEN 1 AND 20),
   data_stare date,
   camp_pct_plan text CHECK (camp_pct_plan IS NULL OR length(camp_pct_plan) BETWEEN 1 AND 120),
@@ -72,6 +75,7 @@ COMMENT ON TABLE public.executie_grafic_revizii IS
   'Execuție: o revizie importată a graficului de execuție (fișier MS Project / Primavera) pe un proiect. Scriere DOAR prin fn_executie_grafic_importa. 20261202a.';
 COMMENT ON COLUMN public.executie_grafic_revizii.camp_pct_raportat IS 'Câmpul din fișier al coloanei de raport „% Complete” (ex. TEXT2), dacă există; NULL = fără.';
 COMMENT ON COLUMN public.executie_grafic_revizii.metadate IS 'Statisticile importului, câmpurile lipsă, valorile incerte (WBS + câmp + text), aplicația și versiunea MPXJ.';
+COMMENT ON COLUMN public.executie_grafic_revizii.continut_sha256 IS 'Amprenta conținutului normalizat scris în tabele (activitățile + câmpurile reviziei): reimportul aceluiași fișier e „deja” doar cu același conținut.';
 COMMENT ON COLUMN public.executie_grafic_revizii.importat_de IS 'auth.uid() la import; NULL = importat de scriptul de pe server (scripts/grafic/import_mpp.py).';
 
 CREATE TABLE public.executie_grafic_activitati (
@@ -82,8 +86,8 @@ CREATE TABLE public.executie_grafic_activitati (
   wbs text NOT NULL CHECK (length(wbs) BETWEEN 1 AND 60),
   nivel smallint NOT NULL CHECK (nivel BETWEEN 0 AND 30),
   nume text NOT NULL DEFAULT '' CHECK (length(nume) <= 1000),
-  start_plan date,
-  finish_plan date,
+  start_plan date NOT NULL,
+  finish_plan date NOT NULL,
   start_real date,
   finish_real date,
   start_baseline date,
@@ -100,7 +104,8 @@ CREATE TABLE public.executie_grafic_activitati (
   deviz_cod text CHECK (deviz_cod IS NULL OR (length(deviz_cod) BETWEEN 1 AND 60 AND deviz_cod ~ '[^[:space:]]')),
   CONSTRAINT executie_grafic_activitati_ordine_uq UNIQUE (revizie_id, ordine),
   CONSTRAINT executie_grafic_activitati_uid_uq UNIQUE (revizie_id, uid_sursa),
-  CONSTRAINT executie_grafic_activitati_plan CHECK (start_plan IS NULL OR finish_plan IS NULL OR finish_plan >= start_plan)
+  CONSTRAINT executie_grafic_activitati_wbs_uq UNIQUE (revizie_id, wbs),
+  CONSTRAINT executie_grafic_activitati_plan CHECK (finish_plan >= start_plan)
 );
 COMMENT ON TABLE public.executie_grafic_activitati IS
   'Execuție: activitățile unei revizii de grafic, în ordinea din fișier. Instantaneu (nu se editează). Scriere DOAR prin fn_executie_grafic_importa. 20261202a.';
@@ -179,15 +184,23 @@ BEGIN
 END $f$;
 
 -- ── importul: o revizie întreagă, într-o tranzacție; p = JSON-ul „gazpet.grafic.v1” din scripts/grafic/import_mpp.py ──
+-- Pașii: (1) structura documentului; (2) TOATE activitățile citite cu tipul exact și normalizate (v_norm), ÎNAINTE de orice
+-- scriere; (3) regulile de structură pe v_norm: ordine 0..n-1, start / finish plan obligatorii, UID și WBS unice, arborele
+-- (părintele declarat = rândul precedent cu nivelul imediat superior; rădăcinile au nivelul primei activități); (4) amprenta
+-- conținutului normalizat (continut_sha256); (5) lock + idempotență; (6) scrierea din v_norm. Aceleași reguli în Python:
+-- valideaza_document din import_mpp.py; cazurile comune: test-fixtures/grafic/cazuri_validare.json (L19).
 -- Ordinea lock-urilor (L06): advisory pe proiect -> revizii (UPDATE activ) -> activitati (INSERT). Nimic din alt modul nu se blochează.
 CREATE FUNCTION public.fn_executie_grafic_importa(p jsonb, p_activeaza boolean) RETURNS jsonb
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 DECLARE
-  r jsonb; v_acts jsonb; e jsonb; n integer;
-  v_proiect bigint; v_eticheta text; v_sursa text; v_sha text; v_nr integer;
+  r jsonb; v_acts jsonb; v_norm jsonb; a jsonb; n integer;
+  v_proiect bigint; v_eticheta text; v_sursa text; v_sha text; v_nr integer; v_continut text;
+  v_tip text; v_data_stare date; v_camp_plan text; v_camp_rap text;
   v_id bigint; v_exista public.executie_grafic_revizii%ROWTYPE; v_ins integer;
-  v_start date; v_finish date;
+  v_stiva_uid integer[] := ARRAY[]::integer[]; v_stiva_niv integer[] := ARRAY[]::integer[];
+  v_nivel integer; v_parinte integer; v_nivel_radacina integer;
 BEGIN
+  -- (1) structura documentului
   IF p_activeaza IS NULL OR p IS NULL OR jsonb_typeof(p) <> 'object' OR p->>'format' IS DISTINCT FROM 'gazpet.grafic.v1' THEN
     RAISE EXCEPTION 'grafic: format necunoscut (aștept gazpet.grafic.v1)' USING ERRCODE = '22023';
   END IF;
@@ -212,75 +225,120 @@ BEGIN
   v_sursa := public.fn_executie_grafic_j_text(r->'sursa_fisier', 'sursa_fisier', 1000, false);
   v_sha := public.fn_executie_grafic_j_text(r->'sursa_sha256', 'sursa_sha256', 64, false);
   IF v_sha !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'grafic: sursa_sha256 invalid' USING ERRCODE = '22023'; END IF;
+  v_tip := public.fn_executie_grafic_j_text(r->'tip_fisier', 'tip_fisier', 20, true);
+  v_data_stare := public.fn_executie_grafic_j_data(r->'data_stare', 'data_stare');
+  v_camp_plan := public.fn_executie_grafic_j_text(r->'camp_pct_plan', 'camp_pct_plan', 120, true);
+  v_camp_rap := public.fn_executie_grafic_j_text(r->'camp_pct_raportat', 'camp_pct_raportat', 120, true);
+  -- numitorul (L12): lungimea listei = numărul declarat = inventarul independent al cititorului (getTasks, fără rândurile goale)
   v_nr := jsonb_array_length(v_acts);
   IF v_nr NOT BETWEEN 1 AND 5000
-     OR public.fn_executie_grafic_j_numar(p->'statistici'->'activitati', 'statistici.activitati', 1, 5000, 0, false) <> v_nr THEN
-    RAISE EXCEPTION 'grafic: numărul activităților (%) nu corespunde celui declarat', v_nr USING ERRCODE = '22023';
+     OR public.fn_executie_grafic_j_numar(p->'statistici'->'activitati', 'statistici.activitati', 1, 5000, 0, false) <> v_nr
+     OR public.fn_executie_grafic_j_numar(p->'statistici'->'inventar_cititor', 'statistici.inventar_cititor', 1, 5000, 0, false) <> v_nr THEN
+    RAISE EXCEPTION 'grafic: numărul activităților (%) nu corespunde celui declarat / inventarului cititorului', v_nr USING ERRCODE = '22023';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = v_proiect) THEN
     RAISE EXCEPTION 'grafic: proiectul % nu există', v_proiect USING ERRCODE = '22023';
   END IF;
 
+  -- (2) activitățile, citite o singură dată cu tipul exact (orice abatere = refuz) și normalizate
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_acts) x WHERE jsonb_typeof(x) <> 'object') THEN
+    RAISE EXCEPTION 'grafic: o activitate nu e obiect' USING ERRCODE = '22023';
+  END IF;
+  SELECT jsonb_agg(jsonb_build_object(
+           'ordine', public.fn_executie_grafic_j_numar(e->'ordine', 'ordine', 0, 4999, 0, false)::integer,
+           'uid', public.fn_executie_grafic_j_numar(e->'uid', 'uid', -2147483648, 2147483647, 0, false)::integer,
+           'parinte', public.fn_executie_grafic_j_numar(e->'parinte_uid', 'parinte_uid', -2147483648, 2147483647, 0, true)::integer,
+           'wbs', public.fn_executie_grafic_j_text(e->'wbs', 'wbs', 60, false),
+           'nivel', public.fn_executie_grafic_j_numar(e->'nivel', 'nivel', 0, 30, 0, false)::integer,
+           'nume', public.fn_executie_grafic_j_text(e->'nume', 'nume', 1000, false),
+           'start_plan', public.fn_executie_grafic_j_data(e->'start_plan', 'start_plan'),
+           'finish_plan', public.fn_executie_grafic_j_data(e->'finish_plan', 'finish_plan'),
+           'start_real', public.fn_executie_grafic_j_data(e->'start_real', 'start_real'),
+           'finish_real', public.fn_executie_grafic_j_data(e->'finish_real', 'finish_real'),
+           'start_baseline', public.fn_executie_grafic_j_data(e->'start_baseline', 'start_baseline'),
+           'finish_baseline', public.fn_executie_grafic_j_data(e->'finish_baseline', 'finish_baseline'),
+           'durata_zile', round(public.fn_executie_grafic_j_numar(e->'durata_zile', 'durata_zile', 0, 9999999.99, 2, true), 2),
+           'pct_realizat', round(public.fn_executie_grafic_j_numar(e->'pct_realizat', 'pct_realizat', 0, 100, 2, false), 2),
+           'pct_plan', round(public.fn_executie_grafic_j_numar(e->'pct_plan', 'pct_plan', 0, 100, 2, true), 2),
+           'pct_raportat', round(public.fn_executie_grafic_j_numar(e->'pct_raportat', 'pct_raportat', 0, 100, 2, true), 2),
+           'milestone', public.fn_executie_grafic_j_bool(e->'milestone', 'milestone'),
+           'rezumat', public.fn_executie_grafic_j_bool(e->'rezumat', 'rezumat'),
+           'activ', public.fn_executie_grafic_j_bool(e->'activ', 'activ'),
+           'predecesori', public.fn_executie_grafic_j_text(e->'predecesori', 'predecesori', 20000, false),
+           'resurse', public.fn_executie_grafic_j_text(e->'resurse', 'resurse', 4000, false)) ORDER BY o)
+    INTO v_norm FROM jsonb_array_elements(v_acts) WITH ORDINALITY t(e, o);
+
+  -- (3) regulile de structură (aceleași ca în valideaza_document din import_mpp.py)
+  IF (SELECT count(DISTINCT x->>'uid') FROM jsonb_array_elements(v_norm) x) <> v_nr THEN
+    RAISE EXCEPTION 'grafic: UniqueID duplicat' USING ERRCODE = '22023';
+  END IF;
+  IF (SELECT count(DISTINCT x->>'wbs') FROM jsonb_array_elements(v_norm) x) <> v_nr THEN
+    RAISE EXCEPTION 'grafic: WBS duplicat' USING ERRCODE = '22023';
+  END IF;
+  FOR a, n IN SELECT x, (o - 1)::integer FROM jsonb_array_elements(v_norm) WITH ORDINALITY t(x, o) LOOP
+    IF (a->>'ordine')::integer <> n THEN
+      RAISE EXCEPTION 'grafic: ordinea activităților nu e 0..n-1 (poziția %)', n USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_typeof(a->'start_plan') <> 'string' OR jsonb_typeof(a->'finish_plan') <> 'string' THEN
+      RAISE EXCEPTION 'grafic: start / finish plan lipsă la %', a->>'wbs' USING ERRCODE = '22023';
+    END IF;
+    IF (a->>'finish_plan')::date < (a->>'start_plan')::date THEN
+      RAISE EXCEPTION 'grafic: finish înaintea start-ului la %', a->>'wbs' USING ERRCODE = '22023';
+    END IF;
+    v_nivel := (a->>'nivel')::integer;
+    v_parinte := (a->>'parinte')::integer;
+    WHILE coalesce(array_length(v_stiva_niv, 1), 0) > 0 AND v_stiva_niv[array_length(v_stiva_niv, 1)] >= v_nivel LOOP
+      v_stiva_niv := v_stiva_niv[1:array_length(v_stiva_niv, 1) - 1];
+      v_stiva_uid := v_stiva_uid[1:array_length(v_stiva_uid, 1) - 1];
+    END LOOP;
+    IF v_parinte IS NULL THEN
+      v_nivel_radacina := coalesce(v_nivel_radacina, v_nivel);
+      IF coalesce(array_length(v_stiva_niv, 1), 0) > 0 OR v_nivel <> v_nivel_radacina THEN
+        RAISE EXCEPTION 'grafic: rădăcină pe alt nivel decât prima activitate la %', a->>'wbs' USING ERRCODE = '22023';
+      END IF;
+    ELSIF coalesce(array_length(v_stiva_niv, 1), 0) = 0 OR v_stiva_uid[array_length(v_stiva_uid, 1)] <> v_parinte
+          OR v_stiva_niv[array_length(v_stiva_niv, 1)] <> v_nivel - 1 THEN
+      RAISE EXCEPTION 'grafic: nivelul / părintele nu corespund ordinii la %', a->>'wbs' USING ERRCODE = '22023';
+    END IF;
+    v_stiva_niv := v_stiva_niv || v_nivel;
+    v_stiva_uid := v_stiva_uid || (a->>'uid')::integer;
+  END LOOP;
+
+  -- (4) amprenta conținutului care ajunge în tabele (aceleași valori normalizate) — „deja importat” doar cu același conținut
+  v_continut := encode(sha256(convert_to(jsonb_build_object('activitati', v_norm, 'tip_fisier', v_tip, 'data_stare', v_data_stare,
+                                                            'camp_pct_plan', v_camp_plan, 'camp_pct_raportat', v_camp_rap)::text, 'UTF8')), 'hex');
+
+  -- (5) lock + idempotență (L04): același fișier, aceeași etichetă și același conținut = aceeași revizie; orice altă combinație = refuz
   PERFORM pg_advisory_xact_lock(hashtextextended('executie_grafic:' || v_proiect, 0));
-  -- idempotență (L04): același fișier pe același proiect = aceeași revizie; altă etichetă / alt fișier sub aceeași etichetă = refuz
   SELECT * INTO v_exista FROM public.executie_grafic_revizii WHERE proiect_id = v_proiect AND sursa_sha256 = v_sha;
   IF FOUND THEN
-    IF v_exista.eticheta = v_eticheta AND v_exista.nr_activitati = v_nr THEN
+    IF v_exista.eticheta = v_eticheta AND v_exista.continut_sha256 = v_continut THEN
       RETURN jsonb_build_object('ok', true, 'deja', true, 'revizie_id', v_exista.id, 'activitati', v_exista.nr_activitati, 'activ', v_exista.activ);
     END IF;
-    RAISE EXCEPTION 'grafic: fișierul e deja importat pe proiect ca „%”', v_exista.eticheta USING ERRCODE = '23505';
+    RAISE EXCEPTION 'grafic: fișierul e deja importat pe proiect ca „%” (altă etichetă sau alt conținut / alte opțiuni de import)', v_exista.eticheta
+      USING ERRCODE = '23505';
   END IF;
   IF EXISTS (SELECT 1 FROM public.executie_grafic_revizii WHERE proiect_id = v_proiect AND eticheta = v_eticheta) THEN
     RAISE EXCEPTION 'grafic: eticheta „%” e deja folosită pe proiect pentru alt fișier', v_eticheta USING ERRCODE = '23505';
   END IF;
 
-  INSERT INTO public.executie_grafic_revizii (proiect_id, eticheta, sursa_fisier, sursa_sha256, tip_fisier, data_stare,
-                                              camp_pct_plan, camp_pct_raportat, nr_activitati, metadate, importat_de, activ)
-  VALUES (v_proiect, v_eticheta, v_sursa, v_sha,
-          public.fn_executie_grafic_j_text(r->'tip_fisier', 'tip_fisier', 20, true),
-          public.fn_executie_grafic_j_data(r->'data_stare', 'data_stare'),
-          public.fn_executie_grafic_j_text(r->'camp_pct_plan', 'camp_pct_plan', 120, true),
-          public.fn_executie_grafic_j_text(r->'camp_pct_raportat', 'camp_pct_raportat', 120, true),
-          v_nr,
+  -- (6) scrierea, din valorile normalizate
+  INSERT INTO public.executie_grafic_revizii (proiect_id, eticheta, sursa_fisier, sursa_sha256, continut_sha256, tip_fisier, data_stare, camp_pct_plan, camp_pct_raportat, nr_activitati, metadate, importat_de, activ)
+  VALUES (v_proiect, v_eticheta, v_sursa, v_sha, v_continut, v_tip, v_data_stare, v_camp_plan, v_camp_rap, v_nr,
           jsonb_build_object('statistici', p->'statistici', 'campuri_lipsa', coalesce(p->'campuri_lipsa', '[]'::jsonb), 'incerte', p->'incerte')
             || jsonb_strip_nulls(jsonb_build_object('aplicatie', r->'aplicatie', 'mpxj_versiune', r->'mpxj_versiune', 'minute_pe_zi', r->'minute_pe_zi',
                                                     'proiect_start', r->'proiect_start', 'proiect_finish', r->'proiect_finish',
                                                     'randuri_goale', r->'randuri_goale', 'sursa_octeti', r->'sursa_octeti', 'extras_la', r->'extras_la')),
           auth.uid(), false)
   RETURNING id INTO v_id;
-
-  FOR e, n IN SELECT x, (o - 1)::integer FROM jsonb_array_elements(v_acts) WITH ORDINALITY t(x, o) LOOP
-    IF jsonb_typeof(e) <> 'object' THEN RAISE EXCEPTION 'grafic: activitatea % nu e obiect', n USING ERRCODE = '22023'; END IF;
-    -- ordinea din fișier se păstrează exact (UI-ul construiește arborele pe ordine + nivel)
-    IF public.fn_executie_grafic_j_numar(e->'ordine', 'ordine', 0, 4999, 0, false) <> n THEN
-      RAISE EXCEPTION 'grafic: ordinea activităților nu e 0..n-1 (poziția %)', n USING ERRCODE = '22023';
-    END IF;
-    v_start := public.fn_executie_grafic_j_data(e->'start_plan', 'start_plan');
-    v_finish := public.fn_executie_grafic_j_data(e->'finish_plan', 'finish_plan');
-    INSERT INTO public.executie_grafic_activitati (revizie_id, ordine, uid_sursa, wbs, nivel, nume, start_plan, finish_plan,
-                                                   start_real, finish_real, start_baseline, finish_baseline, durata_zile,
-                                                   pct_realizat, pct_plan, pct_raportat, milestone, rezumat, activ, predecesori, resurse)
-    VALUES (v_id, n,
-            public.fn_executie_grafic_j_numar(e->'uid', 'uid', -2147483648, 2147483647, 0, false)::integer,
-            public.fn_executie_grafic_j_text(e->'wbs', 'wbs', 60, false),
-            public.fn_executie_grafic_j_numar(e->'nivel', 'nivel', 0, 30, 0, false)::smallint,
-            public.fn_executie_grafic_j_text(e->'nume', 'nume', 1000, false),
-            v_start, v_finish,
-            public.fn_executie_grafic_j_data(e->'start_real', 'start_real'),
-            public.fn_executie_grafic_j_data(e->'finish_real', 'finish_real'),
-            public.fn_executie_grafic_j_data(e->'start_baseline', 'start_baseline'),
-            public.fn_executie_grafic_j_data(e->'finish_baseline', 'finish_baseline'),
-            public.fn_executie_grafic_j_numar(e->'durata_zile', 'durata_zile', 0, 9999999.99, 2, true),
-            public.fn_executie_grafic_j_numar(e->'pct_realizat', 'pct_realizat', 0, 100, 2, false),
-            public.fn_executie_grafic_j_numar(e->'pct_plan', 'pct_plan', 0, 100, 2, true),
-            public.fn_executie_grafic_j_numar(e->'pct_raportat', 'pct_raportat', 0, 100, 2, true),
-            public.fn_executie_grafic_j_bool(e->'milestone', 'milestone'),
-            public.fn_executie_grafic_j_bool(e->'rezumat', 'rezumat'),
-            public.fn_executie_grafic_j_bool(e->'activ', 'activ'),
-            public.fn_executie_grafic_j_text(e->'predecesori', 'predecesori', 20000, false),
-            public.fn_executie_grafic_j_text(e->'resurse', 'resurse', 4000, false));
-  END LOOP;
-  SELECT count(*) INTO v_ins FROM public.executie_grafic_activitati WHERE revizie_id = v_id;
+  INSERT INTO public.executie_grafic_activitati (revizie_id, ordine, uid_sursa, wbs, nivel, nume, start_plan, finish_plan, start_real, finish_real, start_baseline, finish_baseline, durata_zile, pct_realizat, pct_plan, pct_raportat, milestone, rezumat, activ, predecesori, resurse)
+  SELECT v_id, (x->>'ordine')::integer, (x->>'uid')::integer, x->>'wbs', (x->>'nivel')::smallint, x->>'nume',
+         (x->>'start_plan')::date, (x->>'finish_plan')::date, (x->>'start_real')::date, (x->>'finish_real')::date,
+         (x->>'start_baseline')::date, (x->>'finish_baseline')::date, (x->>'durata_zile')::numeric,
+         (x->>'pct_realizat')::numeric, (x->>'pct_plan')::numeric, (x->>'pct_raportat')::numeric,
+         (x->>'milestone')::boolean, (x->>'rezumat')::boolean, (x->>'activ')::boolean, x->>'predecesori', x->>'resurse'
+    FROM jsonb_array_elements(v_norm) x;
+  GET DIAGNOSTICS v_ins = ROW_COUNT;
   IF v_ins <> v_nr THEN RAISE EXCEPTION 'grafic: s-au scris % din % activități', v_ins, v_nr; END IF;
 
   IF p_activeaza THEN

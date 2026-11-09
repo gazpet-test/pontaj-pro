@@ -8,13 +8,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── forma rândurilor din BD (aceeași ordine ca în CREATE TABLE din 20261202a; testul de paritate citește migrarea) ──
-export const COLOANE_REVIZIE = ['id', 'proiect_id', 'eticheta', 'sursa_fisier', 'sursa_sha256', 'tip_fisier', 'data_stare', 'camp_pct_plan',
+export const COLOANE_REVIZIE = ['id', 'proiect_id', 'eticheta', 'sursa_fisier', 'sursa_sha256', 'continut_sha256', 'tip_fisier', 'data_stare', 'camp_pct_plan',
   'camp_pct_raportat', 'nr_activitati', 'metadate', 'importat_la', 'importat_de', 'activ']
 export const COLOANE_ACTIVITATE = ['id', 'revizie_id', 'ordine', 'uid_sursa', 'wbs', 'nivel', 'nume', 'start_plan', 'finish_plan', 'start_real',
   'finish_real', 'start_baseline', 'finish_baseline', 'durata_zile', 'pct_realizat', 'pct_plan', 'pct_raportat', 'milestone', 'rezumat', 'activ',
   'predecesori', 'resurse', 'deviz_cod']
-// cheile unei activități din JSON-ul importului pe care le citește RPC-ul (e->'…'); uid -> uid_sursa
-export const CHEI_JSON_ACTIVITATE = ['ordine', 'uid', 'wbs', 'nivel', 'nume', 'start_plan', 'finish_plan', 'start_real', 'finish_real',
+// cheile unei activități din JSON-ul importului pe care le citește RPC-ul (e->'…'); uid -> uid_sursa; parinte_uid se validează
+// (arborele), nu se scrie
+export const CHEI_JSON_ACTIVITATE = ['ordine', 'uid', 'parinte_uid', 'wbs', 'nivel', 'nume', 'start_plan', 'finish_plan', 'start_real', 'finish_real',
   'start_baseline', 'finish_baseline', 'durata_zile', 'pct_realizat', 'pct_plan', 'pct_raportat', 'milestone', 'rezumat', 'activ',
   'predecesori', 'resurse']
 const META_REVIZIE = ['aplicatie', 'mpxj_versiune', 'minute_pe_zi', 'proiect_start', 'proiect_finish', 'randuri_goale', 'sursa_octeti', 'extras_la']
@@ -28,6 +29,7 @@ export function revizieDinJson(doc, { id = 1, importat_la = '2026-01-01T00:00:00
   for (const k of META_REVIZIE) if (r[k] != null) extra[k] = r[k]   // jsonb_strip_nulls din RPC
   return {
     id, proiect_id: sauNull(r.proiect_id), eticheta: r.eticheta, sursa_fisier: r.sursa_fisier, sursa_sha256: r.sursa_sha256,
+    continut_sha256: null,   // amprenta conținutului normalizat o calculează RPC-ul (aici nu e folosită)
     tip_fisier: sauNull(r.tip_fisier), data_stare: sauNull(r.data_stare), camp_pct_plan: sauNull(r.camp_pct_plan),
     camp_pct_raportat: sauNull(r.camp_pct_raportat), nr_activitati: (doc.activitati || []).length,
     metadate: { statistici: doc.statistici, campuri_lipsa: doc.campuri_lipsa || [], incerte: doc.incerte, ...extra },

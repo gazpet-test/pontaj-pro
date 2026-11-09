@@ -8,6 +8,9 @@ fără MS Project și fără licență, și se afișează în Execuție -> proie
 - `requirements.txt` — `mpxj`, `JPype1`, `packaging`, cu hash-uri. Cere Java 17+.
 - `fixture_sintetic.py` — graficul SINTETIC din `test-fixtures/grafic/` (datele reale nu intră în repo).
 - `test_import_mpp.py` — testele scriptului (partea MPXJ e sărită vizibil fără Java).
+- `cazuri_sql.py` — cazurile COMUNE de validare (`test-fixtures/grafic/cazuri_validare.json`) -> `scripts/fixtures/grafic/cazuri_validare.sql`:
+  aceleași documente sunt refuzate / acceptate de `valideaza_document` (Python) și de `fn_executie_grafic_importa` (harness-ul SQL).
+  După orice schimbare a cazurilor: `python -I -X utf8 scripts/grafic/cazuri_sql.py` (testul Python verifică că fișierul e la zi).
 - Schema: `supabase/migrations/20261202a_executie_grafic.sql` (+ revenirea din `supabase/revenire/`, harness `scripts/test_executie_grafic.sql`).
 
 ## Pregătire (o dată, pe calculatorul care rulează importul)
@@ -36,3 +39,11 @@ Java: `JAVA_HOME`, `--java-home <dir JDK>` sau `java` în PATH.
 - **Abateri de structură** (proiecte multiple în același fișier, niveluri sărite, sub-proiecte legate): `avertismente`, fără SQL.
 - **Valori invalide** (procent în afara 0–100, UniqueID dublat, finish înaintea start-ului): importul se oprește, fără JSON.
 - Rândurile goale din MS Project se numără (`randuri_goale`), nu se importă.
+- **Numitorul**: activitățile parcurse în arbore se reconciliază cu inventarul plat al cititorului (aceleași UniqueID, rândurile goale
+  numărate separat); `statistici.inventar_cititor` e verificat și de RPC.
+- **Structura** (în Python ÎNAINTE de SQL și în RPC ÎNAINTE de scriere, aceleași reguli): start / finish plan obligatorii, finish >= start,
+  UniqueID și WBS unice, ordinea 0..n-1, arborele (părintele = rândul precedent cu nivelul imediat superior; rădăcinile pe nivelul primei activități).
+- **Reimport**: același fișier + aceeași etichetă + același conținut importat = „deja” (nimic nou); același fișier cu altă etichetă
+  sau alt conținut (ex. alte `--camp-pct-*`) = refuz. Ca același fișier să fie reimportat cu alte opțiuni, revizia veche se șterge
+  întâi (preview -> „da” Răzvan -> ștergere, activitățile pleacă odată cu ea), apoi se importă din nou.
+- Ieșirile trebuie să fie `.json` / `.sql` și nu pot fi fișierul sursă (verificat cu `samefile`: majuscule, legături, nume scurte).

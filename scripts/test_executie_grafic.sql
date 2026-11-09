@@ -44,18 +44,18 @@ CREATE FUNCTION pg_temp.t_doc(p_proiect bigint, p_eticheta text, p_sha text) RET
                                   'sursa_sha256', repeat(p_sha, 64), 'tip_fisier', 'MPP', 'data_stare', '2026-09-30',
                                   'camp_pct_plan', 'TEXT5 (% PLAN)', 'camp_pct_raportat', 'TEXT2 (% Complete)',
                                   'aplicatie', 'Microsoft', 'mpxj_versiune', '16.10.0', 'minute_pe_zi', 480, 'randuri_goale', 0),
-    'statistici', jsonb_build_object('activitati', 3), 'campuri_lipsa', '[]'::jsonb, 'avertismente', '[]'::jsonb, 'incerte', '[]'::jsonb,
+    'statistici', jsonb_build_object('activitati', 3, 'inventar_cititor', 3), 'campuri_lipsa', '[]'::jsonb, 'avertismente', '[]'::jsonb, 'incerte', '[]'::jsonb,
     'complet', true,
     'activitati', jsonb_build_array(
-      jsonb_build_object('ordine', 0, 'uid', 10, 'wbs', '1', 'nivel', 1, 'nume', 'Lucrare test', 'start_plan', '2026-03-02', 'finish_plan', '2026-06-26',
+      jsonb_build_object('ordine', 0, 'uid', 10, 'parinte_uid', NULL, 'wbs', '1', 'nivel', 1, 'nume', 'Lucrare test', 'start_plan', '2026-03-02', 'finish_plan', '2026-06-26',
                          'start_real', NULL, 'finish_real', NULL, 'start_baseline', NULL, 'finish_baseline', NULL, 'durata_zile', 85,
                          'pct_realizat', 35, 'pct_plan', 48, 'pct_raportat', 41.5, 'milestone', false, 'rezumat', true, 'activ', true,
                          'predecesori', '', 'resurse', ''),
-      jsonb_build_object('ordine', 1, 'uid', 11, 'wbs', '1.1', 'nivel', 2, 'nume', 'Ordin de începere', 'start_plan', '2026-03-02', 'finish_plan', '2026-03-02',
+      jsonb_build_object('ordine', 1, 'uid', 11, 'parinte_uid', 10, 'wbs', '1.1', 'nivel', 2, 'nume', 'Ordin de începere', 'start_plan', '2026-03-02', 'finish_plan', '2026-03-02',
                          'start_real', '2026-03-02', 'finish_real', '2026-03-02', 'start_baseline', '2026-03-02', 'finish_baseline', '2026-03-02',
                          'durata_zile', 0, 'pct_realizat', 100, 'pct_plan', 100, 'pct_raportat', 100, 'milestone', true, 'rezumat', false, 'activ', true,
                          'predecesori', '', 'resurse', 'Transgaz'),
-      jsonb_build_object('ordine', 2, 'uid', 12, 'wbs', '1.2', 'nivel', 2, 'nume', 'Montaj conductă', 'start_plan', '2026-03-16', 'finish_plan', '2026-05-08',
+      jsonb_build_object('ordine', 2, 'uid', 12, 'parinte_uid', 10, 'wbs', '1.2', 'nivel', 2, 'nume', 'Montaj conductă', 'start_plan', '2026-03-16', 'finish_plan', '2026-05-08',
                          'start_real', '2026-03-16', 'finish_real', NULL, 'start_baseline', '2026-03-09', 'finish_baseline', '2026-04-30',
                          'durata_zile', 40.25, 'pct_realizat', 60, 'pct_plan', 80, 'pct_raportat', 55.25, 'milestone', false, 'rezumat', false,
                          'activ', true, 'predecesori', '1.1 FS+5z', 'resurse', 'Echipa A, Echipa B')));
@@ -130,6 +130,13 @@ BEGIN
      OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_imp(pg_temp.t_doc(%s, 'TEST-HARNESS R1', 'b'), true)$q$, p), '23505') THEN
     RAISE EXCEPTION 'T2 FAIL: dublura de fișier / etichetă';
   END IF;
+  -- același fișier și aceeași etichetă, dar alt conținut (alt procent) sau alte opțiuni de import (alt câmp de raport) = refuz, nu „deja”
+  IF NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, true)', jsonb_set(pg_temp.t_doc(p, 'TEST-HARNESS R1', 'a'), '{activitati,2,pct_raportat}', '60')::text), '23505')
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, true)', jsonb_set(pg_temp.t_doc(p, 'TEST-HARNESS R1', 'a'), '{revizie,camp_pct_raportat}', 'null')::text), '23505')
+     OR (SELECT count(*) FROM public.executie_grafic_revizii WHERE proiect_id = p) <> 1
+     OR (SELECT pct_raportat FROM public.executie_grafic_activitati WHERE revizie_id = pg_temp.t_g('r1')::bigint AND ordine = 2) <> 55.25 THEN
+    RAISE EXCEPTION 'T2 FAIL: același fișier cu alt conținut / alte opțiuni nu a fost refuzat';
+  END IF;
   RAISE NOTICE 'T2 OK';
 END $t$;
 
@@ -167,10 +174,10 @@ BEGIN
       RAISE EXCEPTION 'T3 FAIL: documentul invalid nr. % a trecut sau a dat altă eroare', i;
     END IF;
   END LOOP;
-  -- CHECK-urile tabelelor rămân poarta finală: eticheta cu spații la capăt, finish înaintea start-ului, UniqueID dublat
+  -- eticheta cu spații la capăt = CHECK-ul tabelului; finish înaintea start-ului și UniqueID dublat = regulile RPC-ului (înaintea scrierii)
   IF NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, true)', jsonb_set(d, '{revizie,eticheta}', '"TEST-HARNESS R9 "')::text), '23514')
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, true)', jsonb_set(d, '{activitati,2,start_plan}', '"2026-06-01"')::text), '23514')
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, true)', jsonb_set(d, '{activitati,2,uid}', '11')::text), '23505')
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, true)', jsonb_set(d, '{activitati,2,start_plan}', '"2026-06-01"')::text), '22023')
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_imp(%L::jsonb, true)', jsonb_set(d, '{activitati,2,uid}', '11')::text), '22023')
      OR NOT pg_temp.t_refuza(format('SELECT public.fn_executie_grafic_importa(%L::jsonb, NULL)', d::text), '22023') THEN
     RAISE EXCEPTION 'T3 FAIL: CHECK / UNIQUE pe tabele';
   END IF;
@@ -265,8 +272,11 @@ DO $t$ BEGIN
   RAISE NOTICE 'T5 OK (owner / editor / viewer văd 3 revizii + 9 activități; fără drept / fără JWT nimic; anon și service_role nu scriu)';
 END $t$;
 
--- T6: revenirea — nearmată = refuz; armată cu date = refuz (tranzacția abandonată până la savepoint, nimic nu se execută după eroare)
+-- TV: cazurile COMUNE de validare Python / SQL (test-fixtures/grafic/cazuri_validare.json; fragmentul e generat, L19), ca postgres
 SELECT pg_temp.t_ca(NULL, 'postgres');
+\ir fixtures/grafic/cazuri_validare.sql
+
+-- T6: revenirea — nearmată = refuz; armată cu date = refuz (tranzacția abandonată până la savepoint, nimic nu se execută după eroare)
 SAVEPOINT t6a;
 \set ON_ERROR_STOP 0
 \ir ../supabase/revenire/20261202a_executie_grafic_ROLLBACK.sql
