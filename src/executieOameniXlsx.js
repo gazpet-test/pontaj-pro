@@ -48,9 +48,9 @@ export class ExportAnulat extends Error {
   constructor() { super('export anulat'); this.name = 'ExportAnulat' }
 }
 
-// Ultima zi de PREZENȚĂ a fiecărui angajat (cheie text employee_id → rândul de pontaj)
-export function ultimaPrezenta(pontaje) {
-  const m = new Map()
+// Ultima zi de PREZENȚĂ a fiecărui angajat (cheie text employee_id → rândul de pontaj). Cu `m` dat, ACUMULEAZĂ în harta existentă:
+// istoricul se prelucrează lot cu lot, fără o listă cu tot istoricul și fără push(...rânduri) (limita de argumente, review r2 P2).
+export function ultimaPrezenta(pontaje, m = new Map()) {
   const maiMare = (a, b) => (typeof a === 'number' && typeof b === 'number' ? a > b : String(a) > String(b))
   for (const r of pontaje || []) {
     if (!estePrezenta(r)) continue
@@ -258,18 +258,18 @@ export async function incarcaOameniProiect(sb, proiectId, azi = aziBucuresti(), 
   const alocatiIds = new Set(alocati.map(e => cheie(e.id)))
   const cuDp = [...dP.keys()]                                 // candidații (alocați sau nu) cu prezență pe proiect
   const faraDp = [...alocatiIds].filter(k => !dP.has(k))
-  const pontaje = [...peProiect]
+  const ultime = ultimaPrezenta(peProiect)                    // se completează lot cu lot (fără listă cu tot istoricul)
   for (const b of bucati(cuDp, BUCATA_IN)) {
     const minDp = b.map(k => dP.get(k).date).sort()[0]
-    pontaje.push(...await prezente(q => q.in('employee_id', b).gt('date', minDp), 'ultimul pontaj'))
+    ultimaPrezenta(await prezente(q => q.in('employee_id', b).gt('date', minDp), 'ultimul pontaj'), ultime)
   }
-  for (const b of bucati(faraDp, BUCATA_IN)) pontaje.push(...await prezente(q => q.in('employee_id', b), 'ultimul pontaj'))
+  for (const b of bucati(faraDp, BUCATA_IN)) ultimaPrezenta(await prezente(q => q.in('employee_id', b), 'ultimul pontaj'), ultime)
   const altii = []
   for (const b of bucati([...dP.keys()].filter(k => !alocatiIds.has(k)), BUCATA_IN)) {
-    altii.push(...await toate(() => sb.from('employees').select(COLOANE_ANGAJAT).eq('active', true).in('id', b), 'angajații pontați'))
+    for (const e of await toate(() => sb.from('employees').select(COLOANE_ANGAJAT).eq('active', true).in('id', b), 'angajații pontați')) altii.push(e)
   }
   verifica()
-  return { proiect: p, santiere, numeSantier, angajati: [...alocati, ...altii], ultime: ultimaPrezenta(pontaje), azi }
+  return { proiect: p, santiere, numeSantier, angajati: alocati.concat(altii), ultime, azi }
 }
 
 // Totul: citire → rânduri → foi → fișier. faraSantiere / nrOameni = 0 se raportează distinct (nu e eroare, nici succes tăcut)

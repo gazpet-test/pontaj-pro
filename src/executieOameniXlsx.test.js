@@ -58,9 +58,21 @@ function fakeSb(tabele, { maxRows = 2, eroare = null } = {}) {
       jurnal.push(q)
       const e = eroare && eroare(q, jurnal.filter(x => x.t === t).length - 1)
       if (e) return { data: null, error: { message: e } }
-      let rows = (tabele[t] || []).filter(r => q.f.every(f => f(r)))
-      if (q.ord) rows = [...rows].sort((a, b) => (a[q.ord[0]] > b[q.ord[0]] ? 1 : -1) * (q.ord[1] ? 1 : -1))
-      rows = rows.slice(0, Math.min(q.lim ?? Infinity, maxRows))
+      const tab = tabele[t] || []
+      const lim = Math.min(q.lim ?? Infinity, maxRows)
+      let rows
+      if (q.ord && q.ord[0] === 'id' && q.ord[1] && tab.every((r, i) => i === 0 || tab[i - 1].id < r.id)) {
+        // ca un index pe id: pornește după `gt id` (căutare binară) și se oprește la limită (tabelele mari din test rămân rapide)
+        const gtId = q.ops.find(o => o[0] === 'gt' && o[1] === 'id')
+        let i = 0
+        if (gtId) { let lo = 0, hi = tab.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (tab[mid].id > gtId[2]) hi = mid; else lo = mid + 1 } i = lo }
+        rows = []
+        for (; i < tab.length && rows.length < lim; i++) if (q.f.every(f => f(tab[i]))) rows.push(tab[i])
+      } else {
+        rows = tab.filter(r => q.f.every(f => f(r)))
+        if (q.ord) rows = [...rows].sort((a, b) => (a[q.ord[0]] > b[q.ord[0]] ? 1 : -1) * (q.ord[1] ? 1 : -1))
+        rows = rows.slice(0, lim)
+      }
       const cols = q.cols === '*' ? null : q.cols.split(',').map(s => s.trim())
       rows = rows.map(r => (cols ? Object.fromEntries(cols.map(c => [c, r[c]])) : { ...r }))
       return q.single ? { data: rows[0] || null, error: null } : { data: rows, error: null }
@@ -280,6 +292,23 @@ describe('Oameni pe șantier — citirea din BD', () => {
     await expect(incarcaOameniProiect(fakeSb(TABELE), 77, AZI)).rejects.toThrow(/nu se poate citi/)
     await expect(incarcaOameniProiect(fakeSb(TABELE), 'x', AZI)).rejects.toThrow(/proiect invalid/)
   })
+  it('istoric mare (100 de alocați × 1.500 de zile pe alt șantier): fără RangeError, rezultatul complet (review r2 P2)', async () => {
+    const sites = [{ id: 1, name: 'Santier P', proiect_id: 1 }, { id: 3, name: 'Altundeva', proiect_id: null }]
+    const emp = Array.from({ length: 100 }, (_, i) => ang(1000 + i, { site_id: 1, functie: 'MUNCITOR' }))
+    const zile = Array.from({ length: 1500 }, (_, k) => adunaZile('2022-01-01', k))
+    const pont = []
+    let id = 1
+    for (const e of emp) for (const z of zile) pont.push({ id: id++, employee_id: e.id, date: z, site_id: 3, check_in: 'x', norma: null })
+    const sb = fakeSb({ executie_proiecte: [{ id: 1, cod_intern: 'MARE' }], sites, employees: emp, pontaj_records: pont }, { maxRows: 1000 })
+    const d = await incarcaOameniProiect(sb, 1, AZI)
+    expect(d.ultime.size).toBe(100)
+    for (const e of emp) expect(d.ultime.get(String(e.id))).toMatchObject({ date: '2026-02-08', site_id: 3 })
+    const r = await exportaOameniProiect(sb, 1, AZI)
+    expect(r).toMatchObject({ nrOameni: 100, nrFoi: 1 })
+    const L = XLSX.utils.sheet_to_json(XLSX.read(r.bytes, { type: 'array' }).Sheets['Santier P'], { header: 1, defval: '' })
+    expect(L.length).toBe(101)
+    expect(L.slice(1).every(x => x[5] === 'Altundeva' && x[6] === '08.02')).toBe(true)
+  }, 60000)
   it('anularea oprește citirea între pagini (ExportAnulat, fără cereri noi)', async () => {
     const semnal = { anulat: false }
     const sb = fakeSb(TABELE, { eroare: q => { if (q.t === 'sites') semnal.anulat = true; return null } })
