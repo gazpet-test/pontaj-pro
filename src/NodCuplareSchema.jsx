@@ -113,7 +113,7 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
       try {
         const { data, error } = await client.storage.from(BUCKET).download(`${proiectId}/${nod}/vederi.json`)
         if (!viu) return
-        if (error) { setEroareManifest('Schema nodului nu se poate citi (vederi.json): ' + (error.message || 'eroare') + '. Imaginile le urcă chat-ul; sudurile se deschid din lista de mai jos.'); return }
+        if (error) { setEroareManifest('Schema nodului nu se poate citi (vederi.json): ' + (error.message || 'eroare') + '. Imaginile schemei nu sunt încă încărcate sau nu se pot citi; sudurile se deschid din lista de mai jos.'); return }
         const m = parseManifest(JSON.parse(await data.text()))
         if (!viu) return
         setManifest(m)
@@ -225,7 +225,7 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
 
   if (incarc && !suduri.length) return <Cadru><div style={{ color: G.dim, padding: 30, textAlign: 'center' }}>Se încarcă…</div></Cadru>
   if (eroare) return <Cadru><Alerta text={eroare} /><button onClick={incarca} style={{ ...S.btn, marginTop: 10 }}>Reîncearcă</button></Cadru>
-  if (!noduri.length) return <Cadru><div style={{ color: G.muted, padding: 20, fontSize: 14 }}>Niciun nod de cuplare pe acest proiect (sau nu ai drept de citire pe Execuție). Lista sudurilor o încarcă chat-ul.</div></Cadru>
+  if (!noduri.length) return <Cadru><div style={{ color: G.muted, padding: 20, fontSize: 14 }}>Niciun nod de cuplare pe acest proiect (sau nu ai drept de citire pe Execuție). Lista sudurilor nu este încă încărcată.</div></Cadru>
 
   return (
     <Cadru>

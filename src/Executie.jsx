@@ -19,6 +19,7 @@ import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
+import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -327,6 +328,8 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             )}
           </div>
         )}
+        {/* doar după ce proiectul s-a citit (cine vede proiectul în Execuție) */}
+        {proiect && <OameniSantierButon supabase={supabase} proiectId={proiectId} />}
         <LegaturaExecutie proiectId={proiectId} />
       </div>
 
