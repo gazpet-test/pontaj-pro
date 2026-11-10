@@ -4,7 +4,8 @@
 # Fiecare sectiune ruleaza izolat: o exceptie neprevazuta = un ESEC numit, celelalte sectiuni continua.
 # Scenariile din verdictele Jakarinos: r1 [P1-ERP] [P1-DIALOG] [P1-ESEC]; r2 [P1-DATE] (contract JSON, sondele
 # "Ion Popescu" / "AB 123456" / "Strada Florilor 12"), [P1-NUMAR] (coliziune -> mutare), [P2-OPRIRE] (Job Object),
-# [P2-PUB] (publicare vs. cursor: reconciliere idempotenta).
+# [P2-PUB] (publicare vs. cursor: reconciliere idempotenta). r3: campul nota scos ("0722/123/456", "Strada Noua 12"
+# nu pot ajunge in claude#NNN.md), recuperarea coliziunii si pentru OPRIT deja publicat.
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\DialogTgz.psm1') -Force
@@ -33,9 +34,9 @@ $bun = 'sk-ant-oat01-' + ('Ab9_-' * 10)
 $dirScripturi = Join-Path $PSScriptRoot '..'
 $sqlDir = Join-Path $dirScripturi 'sql'
 $caleSchema = Join-Path $dirScripturi 'raspuns_schema.json'
-$caleVocabular = Join-Path $dirScripturi 'vocabular_nota.txt'
 $telefon = '0722 123 456'; $cnp = '1850101123456'
 $sonde = @('Ion Popescu', 'AB 123456', 'Strada Florilor 12')   # sondele din verdictul Jakarinos r2
+$sondeR3 = @('0722/123/456', 'Strada Noua 12')                   # sondele din verdictul Jakarinos r3 (acceptate de nota r3)
 
 # Exportul psql (format nealiniat), cu aceleasi sectiuni / coloane ca sql\context_agregat.sql.
 function Export-Linii {
@@ -64,7 +65,7 @@ function Mesaj-J([int]$Nr) {
   return @{ juridic = $Nr; cerere = 'verificare_cifre'
             verificari = @(@{ sectiune = 'parcele'; filtru = @{ proiect = 'LOT1'; uat3 = 'PH1' }; indicator = 'parcele'; valoare_juridic = 17 })
             neverificabile = 0; atasamente = @{ citite = 0; negasite_local = 1; in_afara_radacinilor = 0 }
-            de_decis = @('atasament_negasit'); nota = 'verificare registru: 17 parcele in PH1' }
+            de_decis = @('atasament_negasit') }
 }
 function Raspuns-J([int[]]$Nr, [string]$Stare = 'GATA') {
   $r = @{ stare = $Stare; mesaje = @($Nr | ForEach-Object { Mesaj-J $_ }) }
@@ -75,7 +76,6 @@ function J($Obiect) { return ($Obiect | ConvertTo-Json -Depth 12 -Compress) }
 
 try {
   $schema = Read-SchemaRaspuns $caleSchema
-  $vocabular = Read-Vocabular $caleVocabular
   $export = ConvertFrom-ExportContext (Export-Linii)
 
   # ------------------------------------------------------------------ 1. NNN
@@ -130,8 +130,8 @@ try {
     Verifica (Arunca { Write-Cursor -Cale $c -Vechi 44 -NrJuridic 45 -NrClaude 51 -Cand "2026-11-06'; x" }) 'Cand invalid -> eroare'
   }
 
-  # ------------------------------------------------------------------ 4. exportul ca tabele, schema, vocabular
-  Sectiune '4. exportul ERP citit ca tabele; paritate schema <-> SQL; vocabularul' {
+  # ------------------------------------------------------------------ 4. exportul ca tabele, schema fara text liber
+  Sectiune '4. exportul ERP citit ca tabele; paritate schema <-> SQL; schema fara nota' {
     Verifica (@($export.Keys).Count -eq 7 -and @($export[2].Randuri).Count -eq 3 -and $export[2].Randuri[0]['uat3'] -ceq 'PH1') 'export: 7 sectiuni, randurile sectiunii 2'
     [void](Test-ExportFataDeSchema $export $schema); Verifica $true 'export complet fata de schema'
     $l = Export-Linii; $l[3] = 'LOT1|v3|aplicat|2026-11-05 10:22|120|17|25|1|0|in plus'
@@ -152,24 +152,33 @@ try {
       $lipsa = @(@($s.chei) + @($s.indicatori) | Where-Object { $bucata -notmatch ('\b' + $_ + '\b') })
       Verifica ($i -ge 0 -and $lipsa.Count -eq 0) ("paritate SQL <-> schema: sectiunea {0} ({1}) are coloanele {2}" -f $s.export, $cod, ($lipsa -join ','))
     }
-    $linii = @([System.IO.File]::ReadAllLines($caleVocabular) | Where-Object { $_ -and -not $_.StartsWith('#') })
-    Verifica (@($linii | Where-Object { $_ -cnotmatch '^[a-z]+$' }).Count -eq 0 -and @($linii | Sort-Object -Unique).Count -eq $linii.Count) 'vocabular: cuvinte ASCII mici, fara dubluri'
-    $nume = @('popa', 'popescu', 'ion', 'ionescu', 'lupu', 'ursu', 'mare', 'mic', 'marin', 'preda', 'groza', 'stan', 'radu', 'dan', 'ana', 'maria',
-              'vasile', 'toma', 'pavel', 'matei', 'florea', 'dobre', 'neagu', 'barbu', 'rusu', 'lungu', 'munteanu', 'ciobanu', 'sandu', 'tudor',
-              'mihai', 'ilie', 'ene', 'dinu', 'voicu', 'badea', 'nistor', 'oprea', 'sava', 'albu', 'negru', 'florilor', 'gheorghe', 'elena')
-    Verifica (@($nume | Where-Object { $vocabular.ContainsKey($_) }).Count -eq 0) ("vocabular: niciun nume/prenume uzual ({0})" -f (@($nume | Where-Object { $vocabular.ContainsKey($_) }) -join ','))
-    Verifica ((ConvertTo-CuvantNormal ('Parcel' + $a_ + ' ' + [char]0x0218 + 'i ' + [char]0x015F + 'i')) -ceq 'parcela si si') 'normalizare: fara diacritice (virgula si sedila), litere mici'
+
+    # [P1-DATE r4] campul nota e scos complet: schema reala nu il are, iar nicio configurare nu il poate reactiva
+    $txtSchema = [System.IO.File]::ReadAllText($caleSchema, $utf8)
+    Verifica ($schema.versiune -eq 2 -and $txtSchema -notmatch '(?i)nota|vocabular' -and -not (Test-Path (Join-Path $dirScripturi 'vocabular_nota.txt'))) 'schema reala: versiunea 2, niciun camp / limita / text "nota", fara vocabular_nota.txt'
+    Verifica (@(Get-Command -Module DialogTgz | Where-Object { $_.Name -match '(?i)nota|vocabular|CuvantNormal|CuvinteExport' }).Count -eq 0) 'modulul nu mai are nicio functie pentru nota / vocabular'
+    $fs = Folder-Nou 'schema_nota'
+    $variante = @(
+      @('versiunea 1 (r3)', ($txtSchema -replace '"versiune": 2', '"versiune": 1')),
+      @('max_nota_caractere', ($txtSchema -replace '"max_de_decis_pe_mesaj": 10,', '"max_de_decis_pe_mesaj": 10, "max_nota_caractere": 600,')),
+      @('texte.nota', ($txtSchema -replace '"nimic": "nimic"', '"nimic": "nimic", "nota": "Nota"')),
+      @('max_nota_caractere = 0', ($txtSchema -replace '"max_de_decis_pe_mesaj": 10,', '"max_de_decis_pe_mesaj": 10, "max_nota_caractere": 0,')),
+      @('NOTA majuscule', ($txtSchema -replace '"nimic": "nimic"', '"nimic": "nimic", "NOTA": "x"')))
+    foreach ($x in $variante) {
+      $c = Join-Path $fs (($x[0] -replace '[^A-Za-z0-9]', '_') + '.json'); [System.IO.File]::WriteAllText($c, $x[1], $utf8)
+      Verifica ((Arunca { Read-SchemaRaspuns $c }) -and $x[1] -ne $txtSchema) ("schema cu {0} -> refuzata la incarcare (nota nu se poate reactiva)" -f $x[0])
+    }
   }
 
   # ------------------------------------------------------------------ 5. contractul raspuns.json [P1-DATE]
-  Sectiune '5. [P1-DATE] contractul raspuns.json: campuri fixe, liste permise, vocabular' {
+  Sectiune '5. [P1-DATE] contractul raspuns.json: campuri fixe, liste permise, fara text liber' {
     $f = Folder-Nou 'contract'
     $script:nrCaz = 0
     function Valideaza($Obiect, [int[]]$Nr = @(42, 44)) {
       $script:nrCaz++
       $c = Join-Path $f ("r{0}.json" -f $script:nrCaz)
       if ($Obiect -is [string]) { [System.IO.File]::WriteAllText($c, $Obiect, $utf8) } else { [System.IO.File]::WriteAllText($c, (J $Obiect), $utf8) }
-      return (Test-RaspunsAgent -Cale $c -Schema $schema -Export $export -Vocabular $vocabular -Juridic $Nr)
+      return (Test-RaspunsAgent -Cale $c -Schema $schema -Export $export -Juridic $Nr)
     }
     $v = Valideaza (Raspuns-J @(44, 42))
     Verifica ($v.Ok -and $v.Date.Stare -eq 'GATA' -and (@($v.Date.Mesaje | ForEach-Object { $_.Juridic }) -join ',') -eq '42,44') "raspuns valid, mesaje sortate ($($v.Motiv))"
@@ -181,13 +190,16 @@ try {
     Verifica ($p -match [regex]::Escape('| Parcele active pe UAT | proiect=LOT1, uat3=PH1 | parcele | 17 | 17 | potrivire |') -and $p.TrimEnd().EndsWith("`nGATA")) 'publicat: tabelul compus de program, ultima linie GATA (fara numar: se poate muta)'
     Verifica ($p -notmatch '"sectiune"' -and $p -notmatch 'valoare_juridic') 'publicat: niciun fragment brut din JSON-ul agentului'
 
-    # sondele Jakarinos r2, in fiecare loc posibil: toate respinse, iar motivul nu repeta valoarea
-    foreach ($s in $sonde + @('ion popescu', "telefon $telefon", "cnp $cnp", 'mail ion.pop@exemplu.ro', 'seria PH nr 123456', 'detinator Ion din PH1')) {
+    # [r4] campul nota nu mai exista: orice valoare (sondele r2 + r3, text benign, gol, null) = camp in afara contractului
+    $toateSondele = @($sonde + $sondeR3 + @('ion popescu', "telefon $telefon", "cnp $cnp", 'mail ion.pop@exemplu.ro', 'seria PH nr 123456', 'detinator Ion din PH1'))
+    foreach ($s in $toateSondele + @('juridic#042: 17 parcele in PH1 (Jupa), LOT1, TEST-RAZVAN, 2026-11-06; ERP; 12.5 mp', '')) {
       $r = Raspuns-J @(42, 44); $r.mesaje[0].nota = $s
       $v = Valideaza $r
-      Verifica ((-not $v.Ok) -and $v.Motiv -notmatch [regex]::Escape(($s -split ' ')[-1])) ("nota '{0}' -> respins ({1})" -f $s, $v.Motiv)
+      Verifica ((-not $v.Ok) -and $v.Motiv -match 'campuri in afara contractului' -and ($s -eq '' -or -not $v.Motiv.Contains($s))) ("nota '{0}' -> respins, campul nu exista ({1})" -f $s, $v.Motiv)
     }
-    foreach ($s in $sonde) {
+    $r = Raspuns-J @(42, 44); $r.mesaje[0].nota = $null
+    Verifica (-not (Valideaza $r).Ok) 'nota null -> respins (campul nu exista deloc)'
+    foreach ($s in $sonde + $sondeR3) {
       $cazuri = @(
         @('filtru.uat3', { param($r) $r.mesaje[0].verificari[0].filtru.uat3 = $s }),
         @('cerere', { param($r) $r.mesaje[0].cerere = $s }),
@@ -210,8 +222,18 @@ try {
       $r = Raspuns-J @(42, 44); $r.mesaje[0].verificari[0].valoare_juridic = $n
       Verifica (-not (Valideaza $r).Ok) "valoare_juridic $n (telefon / CNP / peste plafon) -> respins"
     }
-    $r = Raspuns-J @(42, 44); $r.mesaje[0].nota = 'juridic#042: 17 parcele in PH1 (Jupa), LOT1, TEST-RAZVAN, 2026-11-06; ERP; 12.5 mp'
-    $v = Valideaza $r; Verifica $v.Ok "nota cu referinta, coduri / UAT din export, data, acronim -> acceptata ($($v.Motiv))"
+    # [r4] nicio cale: textul publicat se compune doar din coduri, cifre si texte fixe; pentru fiecare sonda, raspunsul
+    # valid maxim (toate sectiunile, toate codurile de_decis, OPRIT si GATA) nu contine sonda
+    $rMax = Raspuns-J @(42, 44)
+    $rMax.mesaje[0].de_decis = @($schema.de_decis.PSObject.Properties | Select-Object -First 10 | ForEach-Object { $_.Name })
+    $rMax.mesaje[0].neverificabile = 3
+    foreach ($st in 'GATA', 'OPRIT') {
+      $rMax.stare = $st; if ($st -eq 'OPRIT') { $rMax.motiv_oprire = 'suspect' }
+      $v = Valideaza $rMax
+      $p = if ($v.Ok) { Format-RaspunsPublicat -Date $v.Date -Schema $schema -Cheie ('d' * 32) -Data '2026-11-06T10:41:00+02:00' } else { '' }
+      $gasite = @($toateSondele | Where-Object { $_ -and $p.Contains($_) })
+      Verifica ($v.Ok -and $p -ne '' -and $gasite.Count -eq 0 -and $p -notmatch '(?m)^Not') ("{0}: textul publicat nu contine nicio sonda r2 / r3 si nicio linie de nota ({1})" -f $st, ($gasite -join ','))
+    }
 
     # forme si tipuri
     $rele = @(
@@ -239,7 +261,7 @@ try {
       Verifica (-not (Valideaza $t).Ok) ("text '{0}' -> respins" -f $(if ($t.Length -gt 30) { $t.Substring(0, 30) + '...' } else { $t }))
     }
     $c = Join-Path $f 'utf8rau.json'; [System.IO.File]::WriteAllBytes($c, [byte[]](0x7B, 0xC3, 0x28, 0x7D))
-    Verifica (-not (Test-RaspunsAgent -Cale $c -Schema $schema -Export $export -Vocabular $vocabular -Juridic @(42)).Ok) 'UTF-8 invalid -> respins'
+    Verifica (-not (Test-RaspunsAgent -Cale $c -Schema $schema -Export $export -Juridic @(42)).Ok) 'UTF-8 invalid -> respins'
     $v = Valideaza ([string][char]0xFEFF + (J (Raspuns-J @(42)))) @(42); Verifica $v.Ok 'BOM la inceput tolerat'
 
     # rezultate calculate de program
@@ -307,10 +329,11 @@ try {
     }
     Verifica (Arunca { Format-Prompt 'a {{X}} {{Y}}' @{ X = 1 } }) 'marcaj necompletat -> eroare'
     $sablon = [System.IO.File]::ReadAllText((Join-Path $dirScripturi 'dialog_tgz_prompt.md'), $utf8)
-    $val = Get-ValoriPromptSchema $schema $vocabular
+    $val = Get-ValoriPromptSchema $schema
     foreach ($k in 'FISIERE_JURIDIC', 'JURIDIC_NUMERE', 'CALE_RASPUNS', 'CALE_CONTEXT', 'FOLDER_DIALOG', 'RADACINI_ATASAMENTE', 'DATA', 'ULTIMUL_PROCESAT') { $val[$k] = 'v_' + $k }
     $pf = Format-Prompt $sablon $val
-    Verifica ($pf -match 'v_CALE_RASPUNS' -and $pf -match '`doar_actiuni`' -and $pf -match '`parcele`' -and $pf -match 'parcela, parcele' -and $pf -match 'ERP, TGZ') 'promptul real: toate marcajele, codurile / sectiunile / vocabularul din aceeasi schema'
+    Verifica ($pf -match 'v_CALE_RASPUNS' -and $pf -match '`doar_actiuni`' -and $pf -match '`parcele`') 'promptul real: toate marcajele, codurile / sectiunile din aceeasi schema'
+    Verifica ($pf -notmatch '"nota"' -and $pf -notmatch '(?i)vocabular' -and $pf -match 'text liber') '[r4] promptul nu mai ofera campul nota (il numeste doar ca interzis)'
   }
 
   # ------------------------------------------------------------------ 9. SQL fix [P1-ERP]
@@ -347,7 +370,7 @@ try {
     Scrie $d 'juridic#040.md' (Mesaj "Registru $programata")
     Scrie $d 'claude#041.md' 'x'
     return @{ DialogDir = $d; TokenFile = $tk; WorkDir = $w; SqlDir = $sqlDir; PromptFile = (Join-Path $dirScripturi 'dialog_tgz_prompt.md')
-              SchemaFile = $caleSchema; VocabularFile = $caleVocabular; AsteptareColiziuneSec = 0
+              SchemaFile = $caleSchema; AsteptareColiziuneSec = 0
               CaleCursor = $cur; CaleMarcaj = (Join-Path $o 'dialog_tgz_procese_ramase.txt')
               RadaciniAtasamente = @((Join-Path $w 'nu_exista')); Model = 'claude-sonnet-5-5'; Effort = 'medium'; MaxTurns = 40; TimeoutMin = 5 }
   }
@@ -506,7 +529,7 @@ try {
   }
 
   Sectiune '10h. [P1-DATE] sondele Jakarinos in fluxul complet: nepublicat, nimic in stare / jurnal' {
-    foreach ($s in $sonde) {
+    foreach ($s in $sonde + $sondeR3) {
       foreach ($loc in 'nota', 'uat3', 'camp') {
         $cfg = Config-Test ('e2e_h_' + $loc + '_' + ($s -replace '[^A-Za-z0-9]', ''))
         Scrie $cfg.DialogDir 'juridic#042.md' (Mesaj "Verificare $programata")
@@ -590,6 +613,20 @@ try {
     Verifica ($r.Stare -eq 'EROARE' -and $r.Linie -match 'se ciocneste' -and (CursorNemutat $cfg)) "mutarea imposibila (fisier deschis de cititor) -> EROARE, cursor nemutat ($($r.Linie))"
     $r = Ruleaza $cfg (Claude-Fals (JBun @(42)))
     Verifica ($r.Stare -eq 'GATA' -and $r.Linie -match 'claude#044' -and $global:dtApeluri.Count -eq 0 -and (Read-Cursor $cfg.CaleCursor) -eq 42 -and -not (Test-Path (Join-Path $cfg.DialogDir 'claude#043.md'))) "rularea urmatoare: coliziunea rezolvata la reconciliere, fara Claude ($($r.Linie))"
+
+    # [P2 r3 -> r4] acelasi caz pentru OPRIT: inainte, rularea urmatoare iesea "deja publicat" si coliziunea ramanea
+    $cfg = Config-Test 'e2e_k3'
+    Scrie $cfg.DialogDir 'juridic#042.md' (Mesaj "Verificare $programata")
+    $global:dtTine = $null
+    try { $r = Ruleaza $cfg (Claude-Fals (JBun @(42) 'OPRIT')) -Asteapta $blocheaza } finally { if ($global:dtTine) { $global:dtTine.Dispose() } }
+    Verifica ($r.Stare -eq 'EROARE' -and $r.Linie -match 'se ciocneste' -and (Test-Path (Join-Path $cfg.DialogDir 'claude#043.md')) -and (Test-Path (Join-Path $cfg.DialogDir 'juridic#043.md'))) "OPRIT publicat, mutarea imposibila -> EROARE, coliziune claude#043 / juridic#043 ($($r.Linie))"
+    $cfg.MutariColiziune = 0
+    $r = Ruleaza $cfg (Claude-Fals (JBun @(42) 'OPRIT'))
+    Verifica ($r.Stare -eq 'EROARE' -and $r.Linie -match 'OPRIT publicat anterior \(claude#043\.md\)' -and $r.Linie -match 'reparat manual' -and $global:dtApeluri.Count -eq 0) "OPRIT deja publicat + coliziune nerezolvabila -> EROARE (nu 'deja publicat'), de reparat manual ($($r.Linie))"
+    $cfg.Remove('MutariColiziune')
+    $r = Ruleaza $cfg (Claude-Fals (JBun @(42) 'OPRIT'))
+    Verifica ($r.Stare -eq 'OPRIT' -and $r.Linie -match 'deja publicat \(claude#044\.md\)' -and $global:dtApeluri.Count -eq 0 -and -not (Test-Path (Join-Path $cfg.DialogDir 'claude#043.md')) -and (Test-Path (Join-Path $cfg.DialogDir 'claude#044.md')) -and (CursorNemutat $cfg)) "OPRIT deja publicat: coliziunea rezolvata inainte de iesire (claude#043 -> claude#044), fara Claude, cursor neschimbat ($($r.Linie))"
+    Verifica (@($global:dtJurnal | Where-Object { $_ -match 'coliziune de numar rezolvata \(OPRIT\): claude#043 -> claude#044' }).Count -eq 1 -and (Citeste (Join-Path $cfg.DialogDir 'claude#044.md')) -match '(?m)^Raspuns la: juridic#042$') 'mutarea OPRIT in jurnal; antetul pastreaza asocierea'
   }
 
   # ------------------------------------------------------------------ 11. publicare exclusiva + mutare

@@ -15,15 +15,24 @@ EROARE.
 
 **r3 (după Jakarinos r2 NO-GO, ultima rundă):**
 - **Date personale:** agentul nu mai scrie text publicabil. Scrie `raspuns.json` cu câmpuri fixe (`raspuns_schema.json`):
-  enumerări închise, coduri care trebuie să existe în exportul ERP, numere mărginite, o notă opțională limitată la
-  `vocabular_nota.txt`. `claude#NNN.md` îl **compune orchestratorul** din JSON-ul validat, iar valorile ERP le ia direct din
-  export. Orice câmp în plus, tip greșit sau valoare în afara listelor = nepublicat. stderr-ul agentului: în log doar lungimea.
+  enumerări închise, coduri care trebuie să existe în exportul ERP, numere mărginite. `claude#NNN.md` îl **compune
+  orchestratorul** din JSON-ul validat, iar valorile ERP le ia direct din export. Orice câmp în plus, tip greșit sau valoare în afara listelor = nepublicat. stderr-ul agentului: în log doar lungimea.
 - **Numerotare:** creare exclusivă, apoi re-verificare (imediat și după o fereastră de 90 s): dacă a apărut `juridic#NNN` cu
   același NNN, răspunsul se **mută** atomic pe următorul număr liber. Coliziune nerezolvată = EROARE.
 - **Procese:** psql și claude rulează într-un **Job Object** (pornite suspendate, puse în job, apoi reluate); la final tot
   jobul se oprește și se confirmă `ActiveProcesses = 0`. Neconfirmat = EROARE + marcaj care blochează rulările următoare.
 - **Publicare vs. cursor:** fiecare răspuns poartă `Cheie:` (amprenta mesajelor la care răspunde). La pornire, un GATA deja
   publicat pentru mesaje încă necursate = doar avans de cursor; un OPRIT deja publicat pentru exact aceleași mesaje = nu se reia.
+
+**r4 (după Jakarinos r3 NO-GO, rundă mică):**
+- **Fără text liber:** câmpul `nota` și `vocabular_nota.txt` sunt scoase complet. Răspunsul publicat conține doar coduri din
+  liste, cifre (din mesaj, mărginite, și din export) și textele fixe ale orchestratorului. Un `nota` în `raspuns.json` (orice
+  valoare, inclusiv gol / null) = câmp în afara contractului = nepublicat. Schema are acum `versiune: 2`, iar o schemă care
+  conține „nota” (limită, etichetă, versiunea 1) e refuzată la încărcare: nu există cale de activare din configurare.
+  `instaleaza_task.ps1 -Aplica` șterge un `vocabular_nota.txt` vechi din destinație și verifică schema **instalată** cu
+  modulul instalat.
+- **Coliziune și la OPRIT:** un OPRIT deja publicat trece prin aceeași recuperare a coliziunii de număr ca GATA, înainte
+  de ieșirea „deja publicat”; nerezolvabilă → EROARE „de reparat manual”, nu „deja publicat”.
 
 ## Fișiere
 
@@ -32,11 +41,10 @@ EROARE.
 | `dialog_tgz.ps1` | Orchestratorul (sarcina programată îl pornește). Lock, stare, log, cod de ieșire. |
 | `DialogTgz.psm1` | Logica: fișiere noi, cursor, contractul JSON, compunerea, cheia, reconcilierea, publicarea, Job Object, fluxul `Invoke-DialogTgz`. |
 | `raspuns_schema.json` | Contractul răspunsului (UTF-8): stări, motive, cereri, „de decis”, secțiunile exportului (chei + indicatori), limite, etichetele în română. Sursă unică pentru validare, compunere și prompt. |
-| `vocabular_nota.txt` | Cuvintele permise în câmpul `nota` (ASCII, litere mici, fără nume de persoane). Se completează doar prin PR. |
-| `dialog_tgz_prompt.md` | Promptul pentru `claude -p` (șablon; codurile, secțiunile și vocabularul se completează din schemă). |
+| `dialog_tgz_prompt.md` | Promptul pentru `claude -p` (șablon; codurile și secțiunile se completează din schemă). |
 | `sql/context_agregat.sql` | Singurul SQL: gardă de rol doar-citire, apoi cifre agregate din `red_*`, `BEGIN READ ONLY`, ieșire nealiniată (`|`). |
 | `instaleaza_task.ps1` | Înlocuiește acțiunea sarcinii existente. Implicit **doar previzualizare**; scrie numai cu `-Aplica`. |
-| `teste/test_dialog_tgz.ps1` | Autotest offline (274 de verificări): psql și claude simulate, procese reale în Job Object, orchestratorul real cu psql / claude simulate prin `.cmd`. |
+| `teste/test_dialog_tgz.ps1` | Autotest offline (315 verificări): psql și claude simulate, procese reale în Job Object, orchestratorul real cu psql / claude simulate prin `.cmd`. |
 | `teste/dialog_tgz.test.js` | Rulează autotestul PowerShell sub `npx vitest run` (doar pe Windows, cu powershell.exe; pe CI Linux se sare). |
 
 Toate `.ps1` / `.psm1` sunt ASCII (PowerShell 5.1 citește fișierele fără BOM ca ANSI). Autotestul verifică acest lucru.
@@ -56,8 +64,8 @@ Toate `.ps1` / `.psm1` sunt ASCII (PowerShell 5.1 citește fișierele fără BOM
 1. **Lock global** (`dialog_tgz.lock`, deschis exclusiv). Ocupat → notează în log și iese cu 0, fără să atingă starea.
 2. **Procese rămase**: marcajul există și un proces din el e încă viu (același PID și moment de pornire) sau scrie
    `necunoscut` → EROARE, nu pornește nimic. Toate dispărute → marcajul se șterge.
-3. **Token** (`C:\Users\Gazpet-Ai\.secrete\claude_oauth_token.txt`, prefix `sk-ant-oat01-`), folderul de dialog, schema și
-   vocabularul. Orice lipsă → EROARE clară, înainte de BD și de Claude.
+3. **Token** (`C:\Users\Gazpet-Ai\.secrete\claude_oauth_token.txt`, prefix `sk-ant-oat01-`), folderul de dialog și schema
+   (versiunea 2, fără „nota”). Orice lipsă → EROARE clară, înainte de BD și de Claude.
 4. **Cursor** (`dialog_tgz_cursor.txt`; lipsă / alt format → EROARE). Temporarele proprii rămase în dialog
    (`_dialog_tgz_<cheie>.tmp`, după o rulare oprită brusc) se șterg.
 5. **Fișiere noi**: `juridic#NNN.md` cu NNN > cursor și „(verificare programată)” în antet; pentru fiecare, amprenta sha256.
@@ -66,7 +74,8 @@ Toate `.ps1` / `.psm1` sunt ASCII (PowerShell 5.1 citește fișierele fără BOM
      actuală a acelor mesaje → răspunsul există deja (rulare oprită între publicare și cursor): se rezolvă eventuala
      coliziune de număr, se mută cursorul, **fără inferență nouă**; dacă între timp a apărut un mesaj programat cu număr
      mai mic, neacoperit → EROARE (decide chat-ul);
-   - un `claude#` OPRIT cu cheia exactă a mesajelor noi → `OPRIT deja publicat`, nu se reia (până se schimbă mesajele);
+   - un `claude#` OPRIT cu cheia exactă a mesajelor noi → întâi se rezolvă eventuala coliziune de număr (ca la GATA;
+     nerezolvabilă → EROARE, de reparat manual), apoi `OPRIT deja publicat`, nu se reia (până se schimbă mesajele);
    - niciun mesaj nou → `NIMIC NOU`, fără BD și fără Claude.
 7. **Folderul rulării**: `%TEMP%\dialog_tgz\rulari\<id>\intrare\` (context) și `...\iesire\` (singurul loc unde agentul
    poate scrie). Configurația Claude Code stă în `%TEMP%\dialog_tgz\cfg\`.
@@ -80,7 +89,7 @@ Toate `.ps1` / `.psm1` sunt ASCII (PowerShell 5.1 citește fișierele fără BOM
 12. **Compunerea** (`Format-RaspunsPublicat`): antetul (`De la`, `Data`, `Subiect`, `Raspuns la: juridic#…`, `Cheie:`),
     pe fiecare mesaj tabelul de verificare (secțiune, rând, indicator, valoarea din mesaj, **valoarea din export**, rezultatul
     calculat de program), afirmațiile neverificabile, atașamentele (doar numere), „De decis de Răzvan” (etichete din
-    schemă), nota validată; ultima linie `GATA` sau `OPRIT <eticheta motivului>`. Textul compus mai trece o dată prin
+    schemă); fără text liber; ultima linie `GATA` sau `OPRIT <eticheta motivului>`. Textul compus mai trece o dată prin
     filtrul de tipare (telefon, CNP, e-mail, adresă, act) și prin limita de 200 KB.
 13. **Publicare**: temporar `_dialog_tgz_<cheie>.tmp` în dialog, apoi `File.Move` pe următorul număr liber (atomic, eșuează
     dacă destinația există: nu suprascrie niciodată; ocupat → alt număr). Apoi **re-verificare**: imediat și după
@@ -106,7 +115,7 @@ găsește și doar avansează cursorul).
                 "verificari": [ { "sectiune": <cod>, "filtru": { <cheie a secțiunii>: <valoare din export>, … },
                                   "indicator": <coloană a secțiunii>, "valoare_juridic": <număr | valoare din coloană | null> } ],
                 "neverificabile": <întreg>, "atasamente": { "citite", "negasite_local", "in_afara_radacinilor": <întregi> },
-                "de_decis": [ <coduri> ], "nota": <text în vocabular, opțional> } ] }
+                "de_decis": [ <coduri> ] } ] }
 ```
 
 Reguli (fiecare încălcare = nepublicat; motivul din stare / log conține doar calea câmpului și codul, niciodată valoarea):
@@ -115,12 +124,10 @@ Reguli (fiecare încălcare = nepublicat; motivul din stare / log conține doar 
   și trebuie să aleagă **exact un rând**; valoarea ERP o ia programul din acel rând;
 - `valoare_juridic`: număr 0 … 9.999.999,99 cu cel mult 2 zecimale (un telefon sau un CNP nu încap), sau un text care
   există deja în acea coloană a exportului;
-- `nota`: cel mult 600 de caractere, fără rânduri noi, doar litere / cifre / `. , ; : ( ) % / ? -`, referințe
-  `juridic#NNN` / `claude#NNN`, date `AAAA-LL-ZZ` / `ZZ.LL.AAAA`; numere de cel mult 6 cifre (un lanț legat prin spațiu,
-  punct sau cratimă se numără împreună: `0722 123 456` = 10 cifre); **fiecare cuvânt** din `vocabular_nota.txt`, din
-  acronimele schemei sau din valorile exportului (cod proiect, uat3, nume UAT, calitate, stare, cod corespondență).
-  Sondele din review (`Ion Popescu`, `AB 123456`, `Strada Florilor 12`) sunt respinse în notă, în filtre, în coduri,
-  în valori și în câmpuri în plus (testat, cu verificarea că valoarea nu apare în stare / jurnal).
+- **niciun câmp de text liber** (r4): `nota` nu mai există; orice câmp în plus, inclusiv `nota`, e respins.
+  Sondele din review (r2: `Ion Popescu`, `AB 123456`, `Strada Florilor 12`; r3: `0722/123/456`, `Strada Noua 12`) sunt
+  respinse ca `nota`, în filtre, în coduri, în valori și în câmpuri în plus (testat, cu verificarea că valoarea nu apare în
+  stare / jurnal), iar textul publicat pentru răspunsul valid maxim (GATA și OPRIT) nu conține niciuna.
 
 ### Comanda Claude
 
@@ -203,22 +210,22 @@ ca Gazpet-Ai / administrator pe serverul AI. Fără endpoint de rețea sau webho
 cerere dintr-un `juridic#` ajunge doar la „De decis de Răzvan”. Cer „da”: rolul `dialog_tgz_ro` + politicile, instalarea
 (`instaleaza_task.ps1 -Aplica`) și primul cursor.
 
-## Riscuri reziduale (r3, pentru decizia lui Răzvan)
+## Riscuri reziduale (r4, pentru decizia lui Răzvan)
 
-Ce nu se poate închide tehnic din partea noastră, după a treia rundă:
+Ce nu se poate închide tehnic din partea noastră:
 
-1. **Coliziunea de număr după fereastra de 90 s.** Juridicul (rutină în cloud, nu se poate schimba) alege NNN = max + 1 și
-   nu rezervă numărul. Dacă scrie `juridic#NNN` cu același număr ca răspunsul nostru **după** fereastra de re-verificare,
-   ambele rămân cu același NNN. Asocierea rămâne corectă prin antetul `Raspuns la:` (regula din convenție), dar perechea
-   numerică e ambiguă. Închiderea completă cere o rezervare comună (de schimbat la Juridic).
-2. **Mutarea unui răspuns deja citit.** La coliziune, răspunsul se redenumește (`claude#043` → `claude#044`). Dacă Juridicul
-   l-a citit deja sub vechiul număr, referința lui spre `claude#043` nu mai găsește fișierul (conținutul e același).
-3. **Nume de persoane care sunt și cuvinte din vocabular / export.** Vocabularul e închis și fără nume uzuale (testat pe o
-   listă), iar valorile din export sunt coduri și localități; un nume care coincide cu un cuvânt permis (sau cu un nume de
-   UAT) poate trece în notă. Restul câmpurilor nu au text liber.
-4. **Procese create în afara jobului de alt serviciu** (de ex. prin WMI / Task Scheduler la cererea unui copil) nu sunt în
+1. **Coliziunea târzie de număr (numită de Jakarinos r3 „acceptabilă ca risc rezidual scris”).** Juridicul (rutină în
+   cloud, nu se poate schimba) alege NNN = max + 1 și nu rezervă numărul. Dacă scrie `juridic#NNN` cu același număr ca
+   răspunsul nostru **după** ultima re-verificare (fereastra de 90 s; la OPRIT și la rularea următoare), ambele rămân cu
+   același NNN. Condițiile pentru acceptare, de decis de Răzvan:
+   - asocierea se face **obligatoriu** după antetul `Raspuns la: juridic#…` (regula din convenție), nu după număr;
+   - exploatarea acceptă că un răspuns deja citit poate fi redenumit (`claude#043` → `claude#044`, același conținut);
+   - o coliziune care rămâne (inclusiv pentru OPRIT, când mutarea e imposibilă) se **repară manual** de chat: starea arată
+     EROARE cu numele fișierului.
+   Închiderea completă cere o rezervare comună a numerelor (de schimbat la Juridic).
+2. **Procese create în afara jobului de alt serviciu** (de ex. prin WMI / Task Scheduler la cererea unui copil) nu sunt în
    job. Agentul nu are linie de comandă (Bash / PowerShell interzise), deci calea cere o unealtă pe care nu o are.
-5. **Comportamentul real al CLI-ului și al Task Scheduler** (opțiunile `claude -p`, regula `Edit(//c/...)`, jobul imbricat
+3. **Comportamentul real al CLI-ului și al Task Scheduler** (opțiunile `claude -p`, regula `Edit(//c/...)`, jobul imbricat
    sub Task Scheduler) se verifică doar la testul de fum.
 
 ## Instalare (NU se face în PR-ul acesta)
@@ -229,7 +236,7 @@ Ce nu se poate închide tehnic din partea noastră, după a treia rundă:
 3. Tokenul există în `C:\Users\Gazpet-Ai\.secrete\claude_oauth_token.txt` (doar Gazpet-Ai are drept de citire).
 4. Cursorul: `C:\Users\Public\paw-data\out\dialog_tgz_cursor.txt` cu un rând `juridic#NNN` = ultimul juridic# deja procesat.
 5. `powershell -File scripts\dialog_tgz\instaleaza_task.ps1` → previzualizare; apoi, cu „da”, `-Aplica` (copiază și
-   `raspuns_schema.json`, `vocabular_nota.txt`). Backup XML al definiției vechi în `C:\Users\Gazpet-Ai\claude-tasks\dialog_tgz_b\`;
+   `raspuns_schema.json`; șterge un `vocabular_nota.txt` vechi și verifică schema instalată). Backup XML al definiției vechi în `C:\Users\Gazpet-Ai\claude-tasks\dialog_tgz_b\`;
    revenire: `Register-ScheduledTask -TaskName 'Gazpet Dialog TGZ' -Xml (Get-Content <backup.xml> -Raw) -Force`.
 6. Test de fum: `Start-ScheduledTask 'Gazpet Dialog TGZ'` cu un `juridic#` de probă „(verificare programată)” → `dialog_tgz_ultima.txt`, log-ul, `claude#NNN.md`.
 7. `public.automatizari` + `registru_automatizari` actualizate în aceeași sesiune (pct. 7).
@@ -244,24 +251,24 @@ Ce nu se poate închide tehnic din partea noastră, după a treia rundă:
 - Job Object sub Task Scheduler (job imbricat): dacă `AssignProcessToJobObject` e refuzat, rularea dă EROARE la lansare
   (procesul suspendat se oprește, nu rulează nimic). `claude` instalat ca `.cmd` (npm) pornește prin `cmd.exe`, tot în job.
 - Rolul `dialog_tgz_ro` prin pooler, `default_transaction_read_only` din setarea rolului și garda pe schemele Supabase.
-- Cât de des agentul respectă contractul JSON (primele rulări: de urmărit `raspuns.json respins: …` în log; vocabularul se
-  lărgește doar prin PR).
+- Cât de des agentul respectă contractul JSON (primele rulări: de urmărit `raspuns.json respins: …` în log; contractul se
+  schimbă doar prin PR).
 - Dacă sarcina e „Run whether user is logged on or not”, `Set-ScheduledTask` poate cere `-User`/`-Password`.
 
 ## Teste
 
 ```
-npx vitest run scripts/dialog_tgz        # rulează teste/test_dialog_tgz.ps1 (274 de verificări, offline)
+npx vitest run scripts/dialog_tgz        # rulează teste/test_dialog_tgz.ps1 (315 verificări, offline)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dialog_tgz\teste\test_dialog_tgz.ps1
 ```
 
 Acoperă: NNN, fișierele noi, cursorul; exportul citit ca tabele (rând cu `|` în plus, secțiune dublă / lipsă / neînchisă) și
-paritatea schemă ↔ SQL; vocabularul (fără nume uzuale); contractul JSON: sondele din review în fiecare loc posibil, telefon
+paritatea schemă ↔ SQL; schema fără „nota” (versiunea 1 / limită / etichetă refuzate la încărcare); contractul JSON: sondele din review în fiecare loc posibil, telefon
 / CNP ca număr, chei în plus la orice nivel, tipuri, mesaje lipsă / în plus / repetate, filtre pe 0 / 2 rânduri, zecimale,
 rezultatele calculate (diferență, potrivire zecimală, doar ERP, text din export); compunerea; fluxul complet cu psql / claude
 simulate (OPRIT idempotent, conținut schimbat = rulare nouă, reconcilierea după publicare fără cursor, inclusiv cu mesaj nou
 și cu mesaj mai mic apărut, coliziunea după publicare → mutare, mutare imposibilă → EROARE → rezolvată la rularea
-următoare fără Claude, oprire neconfirmată la claude și la psql, marcaj `necunoscut`); publicarea exclusivă și mutarea;
+următoare fără Claude, la GATA și la OPRIT, oprire neconfirmată la claude și la psql, marcaj `necunoscut`); publicarea exclusivă și mutarea;
 Job Object cu procese reale (nepot la timeout, orfan după ieșire normală, proces pornit după start, stdin / mediu / cod,
 copil care nu citește stdin); orchestratorul real (psql lipsă, `postgres` refuzat, flux GATA complet prin `.cmd`, lock ocupat).
 

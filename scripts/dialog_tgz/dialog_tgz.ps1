@@ -2,7 +2,7 @@
 # Ruleaza DOAR cu tokenul de un an din `claude setup-token` (fara conectori claude.ai). BD: doar citire, prin psql,
 # cu interogarea FIXA din sql\context_agregat.sql si un rol care nu poate scrie (verificat chiar in SQL).
 # Agentul primeste doar fisiere locale, unelte Read/Glob/Grep si scriere DOAR in folderul privat al rularii, unde
-# lasa raspuns.json (contract fix: raspuns_schema.json + vocabular_nota.txt). claude#NNN.md il compune si il publica
+# lasa raspuns.json (contract fix: raspuns_schema.json, fara text liber). claude#NNN.md il compune si il publica
 # acest orchestrator (creare exclusiva + re-verificarea numarului). psql si claude ruleaza in Job Object.
 # Fisa de securitate: README.md.
 # Iesire: 0 = GATA / NIMIC NOU / OPRIT / rulare deja in curs; 1 = EROARE.
@@ -66,7 +66,7 @@ try {
     RadaciniAtasamente = $RadaciniAtasamente; WorkDir = $WorkDir; IdRulare = ($idRulare -replace '[^A-Za-z0-9_\-]', '_')
     CaleCursor = (Join-Path $OutDir 'dialog_tgz_cursor.txt'); CaleMarcaj = (Join-Path $OutDir 'dialog_tgz_procese_ramase.txt')
     SqlDir = (Join-Path $PSScriptRoot 'sql'); PromptFile = (Join-Path $PSScriptRoot 'dialog_tgz_prompt.md')
-    SchemaFile = (Join-Path $PSScriptRoot 'raspuns_schema.json'); VocabularFile = (Join-Path $PSScriptRoot 'vocabular_nota.txt')
+    SchemaFile = (Join-Path $PSScriptRoot 'raspuns_schema.json')
     AsteptareColiziuneSec = $AsteptareColiziuneSec
   }
   if (-not (Test-Path -LiteralPath $PsqlExe -PathType Leaf)) {

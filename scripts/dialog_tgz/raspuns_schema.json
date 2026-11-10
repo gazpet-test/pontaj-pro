@@ -1,12 +1,10 @@
 {
-  "versiune": 1,
-  "descriere": "Contractul raspunsului agentului Dialog TGZ (r3). Agentul scrie DOAR raspuns.json cu aceste campuri; orchestratorul valideaza si compune claude#NNN.md. Orice camp in plus, tip gresit sau valoare in afara listelor = nepublicat. Sursa unica: o citesc validatorul, compunerea si promptul.",
+  "versiune": 2,
+  "descriere": "Contractul raspunsului agentului Dialog TGZ (r4, fara text liber). Agentul scrie DOAR raspuns.json cu aceste campuri; orchestratorul valideaza si compune claude#NNN.md. Orice camp in plus, tip gresit sau valoare in afara listelor = nepublicat. Sursa unica: o citesc validatorul, compunerea si promptul.",
   "limite": {
     "max_octeti": 65536,
     "max_verificari_pe_mesaj": 60,
     "max_de_decis_pe_mesaj": 10,
-    "max_nota_caractere": 600,
-    "max_cifre_in_numar_nota": 6,
     "max_valoare": 9999999.99,
     "max_zecimale": 2,
     "max_atasamente": 100,
@@ -54,7 +52,6 @@
     "corespondenta_stare": { "export": 6, "titlu": "Corespondența pe stare", "chei": ["proiect", "stare"], "indicatori": ["bucati"] },
     "corespondenta": { "export": 7, "titlu": "Corespondența (listă)", "chei": ["proiect", "cod"], "indicatori": ["ordine", "stare", "versiune", "aprobat_la", "trimis_la", "are_nr_inregistrare", "modificat"] }
   },
-  "acronime": ["ERP", "TGZ", "UAT", "PV", "AWB", "NAS", "OCR", "PDF", "SEAP", "ANCPI", "OCPI", "CF", "HG", "GATA", "OPRIT"],
   "texte": {
     "verificare": "Verificare față de ERP (cifre agregate din exportul de acum)",
     "fara_verificari": "Nicio cifră de comparat cu ERP-ul.",
@@ -65,7 +62,6 @@
     "neverificabile": "Afirmații care nu se pot verifica din cifrele agregate",
     "atasamente": "Atașamente: citite {0}, negăsite local {1}, în afara rădăcinilor permise {2}",
     "de_decis": "De decis de Răzvan",
-    "nimic": "nimic",
-    "nota": "Notă"
+    "nimic": "nimic"
   }
 }

@@ -7,8 +7,8 @@
 #   orchestratorului, timeout / cod nenul / JSON fara succes = EROARE.
 # r3 (Jakarinos r2, ultima runda):
 # - Date personale: agentul NU mai scrie text publicabil. Scrie raspuns.json cu campuri fixe (raspuns_schema.json):
-#   enumerari inchise, coduri care trebuie sa existe in exportul ERP, numere marginite, o nota optionala limitata la
-#   vocabular_nota.txt. claude#NNN.md il COMPUNE orchestratorul din JSON-ul validat; valorile ERP le ia din export.
+#   enumerari inchise, coduri care trebuie sa existe in exportul ERP, numere marginite, FARA text liber (r4: campul
+#   "nota" scos complet). claude#NNN.md il COMPUNE orchestratorul din JSON-ul validat; valorile ERP le ia din export.
 #   Orice camp in plus / tip gresit / valoare in afara listelor = nepublicat. stderr-ul agentului: doar lungimea in log.
 # - Numerotare: creare exclusiva (temporar + File.Move, care esueaza daca destinatia exista), apoi re-verificare (si dupa
 #   o fereastra de asteptare): daca exista juridic#NNN cu acelasi NNN, raspunsul se MUTA atomic (redenumire exclusiva)
@@ -21,6 +21,8 @@
 #   ale mesajelor). La pornire, un GATA publicat pentru mesaje inca necursate = doar avans de cursor (fara inferenta
 #   noua); un OPRIT publicat pentru exact aceleasi mesaje = nu se reia. Reconcilierea se face cu dialogul, nu cu un
 #   marcaj local care poate diverge.
+# r4 (Jakarinos r3): fara camp de text liber (nota + vocabular retrase; schema versiunea 2 refuza orice "nota");
+#   recuperarea coliziunii de numar ruleaza si pentru un OPRIT deja publicat, inainte de iesirea "deja publicat".
 
 Set-StrictMode -Version 2.0
 
@@ -58,13 +60,6 @@ function Read-TextUtf8 {
   $t = [System.IO.File]::ReadAllText($Cale, $script:Utf8FaraBom)
   if ($t.Length -gt 0 -and $t[0] -eq [char]0xFEFF) { $t = $t.Substring(1) }
   return $t
-}
-
-# Forma de comparatie a unui cuvant: litere mici, fara diacritice (s/t cu virgula sau sedila -> s/t).
-function ConvertTo-CuvantNormal {
-  param([AllowEmptyString()][string]$Cuvant)
-  $d = $Cuvant.ToLowerInvariant().Normalize([System.Text.NormalizationForm]::FormD)
-  return ([regex]::Replace($d, '\p{Mn}', '')).Normalize([System.Text.NormalizationForm]::FormC)
 }
 
 # Date personale: ULTIMA bariera (pe textul compus, pe log si pe stare). Bariera principala e contractul JSON.
@@ -286,27 +281,17 @@ function Write-Cursor {
   return $text
 }
 
-# ---------------------------------------------------------------- contractul raspunsului (schema, export, vocabular)
+# ---------------------------------------------------------------- contractul raspunsului (schema, export)
 
+# r4: raspunsul NU mai are niciun camp de text liber (campul "nota" a fost scos). O schema care il readuce (limite,
+# texte sau orice cheie cu "nota") e refuzata aici, inainte de BD si de Claude: nu exista cale de activare din configurare.
 function Read-SchemaRaspuns {
   param([Parameter(Mandatory)][string]$Cale)
-  $s = (Read-TextUtf8 $Cale) | ConvertFrom-Json
-  if ($s.versiune -ne 1) { throw 'raspuns_schema.json: versiune necunoscuta' }
+  $text = Read-TextUtf8 $Cale
+  $s = $text | ConvertFrom-Json
+  if ($s.versiune -ne 2) { throw 'raspuns_schema.json: versiune necunoscuta (astept 2, fara text liber)' }
+  if ($text -match '(?i)nota|vocabular') { throw 'raspuns_schema.json: campul de text liber (nota) e retras si nu se poate reactiva' }
   return $s
-}
-
-# Vocabularul notei: hashtable cuvant -> $true (cuvinte ASCII mici; un rand invalid = exceptie, nu se ignora).
-function Read-Vocabular {
-  param([Parameter(Mandatory)][string]$Cale)
-  $h = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
-  foreach ($l in ((Read-TextUtf8 $Cale) -split "\r?\n")) {
-    $w = $l.Trim()
-    if ($w -eq '' -or $w.StartsWith('#')) { continue }
-    if ($w -cnotmatch '^[a-z]+$') { throw 'vocabular_nota.txt: rand care nu e un cuvant ASCII mic' }
-    $h[$w] = $true
-  }
-  if ($h.Count -eq 0) { throw 'vocabular_nota.txt: gol' }
-  return $h
 }
 
 function Get-NumeProprietati {
@@ -357,23 +342,6 @@ function Test-ExportFataDeSchema {
   }
 }
 
-# Cuvintele permise in nota care vin din export (forma normala): bucatile alfanumerice din toate celulele text.
-function Get-CuvinteExport {
-  param([Parameter(Mandatory)][hashtable]$Export)
-  $h = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
-  foreach ($nr in $Export.Keys) {
-    foreach ($r in $Export[$nr].Randuri) {
-      foreach ($v in $r.Values) {
-        foreach ($m in [regex]::Matches([string]$v, '[\p{L}\p{M}0-9]+')) {
-          if ($m.Value -match '^[0-9]+$') { continue }
-          $h[(ConvertTo-CuvantNormal $m.Value)] = $true
-        }
-      }
-    }
-  }
-  return $h
-}
-
 function Get-TipJson {
   param([AllowNull()]$Valoare)
   if ($null -eq $Valoare) { return 'null' }
@@ -418,28 +386,6 @@ function Test-CodJson {
   param($Valoare, [string]$Unde, [string[]]$Permise)
   if ((Get-TipJson $Valoare) -ne 'str' -or $Permise -cnotcontains $Valoare) { Stop-Raspuns ($Unde + ' nu este un cod din lista permisa') }
   return [string]$Valoare
-}
-
-# Nota: caractere permise, referinte juridic#/claude#, date, numere de cel mult N cifre (un lant legat prin spatiu /
-# punct / cratima se numara impreuna: "0722 123 456" = 10 cifre), fiecare cuvant din vocabular / acronime / export.
-function Test-NotaJson {
-  param([string]$Nota, [string]$Unde, $Schema, [hashtable]$Permise)
-  $L = $Schema.limite
-  if ($Nota.Length -gt [int]$L.max_nota_caractere) { Stop-Raspuns ($Unde + ' peste limita de caractere') }
-  if ($Nota -notmatch '^[\p{L}\p{M}0-9 .,;:()%/?#\-]*$') { Stop-Raspuns ($Unde + ' contine caractere nepermise') }
-  $t = [regex]::Replace($Nota, '(?<![\p{L}\p{M}0-9])(?:juridic|claude)#[0-9]{3}(?![0-9])', ' ')
-  $t = [regex]::Replace($t, '(?<![0-9])(?:20[0-9]{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\.(?:0[1-9]|1[0-2])\.20[0-9]{2})(?![0-9])', ' ')
-  if ($t.Contains('#')) { Stop-Raspuns ($Unde + ' are # in afara unei referinte juridic#NNN / claude#NNN') }
-  foreach ($m in [regex]::Matches($t, '(?<![\p{L}\p{M}0-9])[0-9]+(?:[ .\-]+[0-9]+)*')) {
-    $cifre = ([regex]::Replace($m.Value, '[^0-9]', '')).Length
-    if ($cifre -gt [int]$L.max_cifre_in_numar_nota) { Stop-Raspuns ('{0} are un numar de {1} cifre (peste {2})' -f $Unde, $cifre, $L.max_cifre_in_numar_nota) }
-  }
-  $poz = 0
-  foreach ($m in [regex]::Matches($t, '[\p{L}\p{M}0-9]+')) {
-    $poz++
-    if ($m.Value -match '^[0-9]+$') { continue }
-    if (-not $Permise.ContainsKey((ConvertTo-CuvantNormal $m.Value))) { Stop-Raspuns ('{0}: cuvantul {1} nu e in vocabular, in acronime sau in export' -f $Unde, $poz) }
-  }
 }
 
 function Format-NumarInvariant {
@@ -507,7 +453,7 @@ function Test-VerificareJson {
 # Intoarce @{Ok; Motiv; Date}. Date = forma normalizata (singura folosita la compunere). Motivul nu contine text al agentului.
 function Test-RaspunsAgent {
   param([Parameter(Mandatory)][string]$Cale, [Parameter(Mandatory)]$Schema, [Parameter(Mandatory)][hashtable]$Export,
-        [Parameter(Mandatory)][hashtable]$Vocabular, [Parameter(Mandatory)][int[]]$Juridic)
+        [Parameter(Mandatory)][int[]]$Juridic)
   try {
     $L = $Schema.limite
     $octeti = [System.IO.File]::ReadAllBytes($Cale)
@@ -530,18 +476,14 @@ function Test-RaspunsAgent {
     if ($stare -eq 'OPRIT') { $mo = Test-CodJson $mo 'motiv_oprire' (Get-NumeProprietati $Schema.motive_oprire) }
     elseif ($null -ne $mo) { Stop-Raspuns 'motiv_oprire la GATA' }
 
-    $permise = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
-    foreach ($k in $Vocabular.Keys) { $permise[$k] = $true }
-    foreach ($k in (Get-CuvinteExport $Export).Keys) { $permise[$k] = $true }
-    foreach ($a in @($Schema.acronime)) { $permise[(ConvertTo-CuvantNormal $a)] = $true }
-
     $mesaje = Get-CampJson $j 'mesaje'
     if ($mesaje.Count -ne $Juridic.Count) { Stop-Raspuns ('mesaje are {0} elemente, astept {1} (cate unul pe fiecare juridic# procesat)' -f $mesaje.Count, $Juridic.Count) }
     $vazute = @{}; $iesire = @()
     for ($i = 0; $i -lt $mesaje.Count; $i++) {
       $u = 'mesaje[' + $i + ']'
       $m = $mesaje[$i]
-      Test-CampuriJson $m $u @('juridic', 'cerere', 'verificari', 'neverificabile', 'atasamente', 'de_decis') @('nota')
+      # fara campuri optionale: un "nota" (sau orice text liber) = camp in afara contractului = nepublicat
+      Test-CampuriJson $m $u @('juridic', 'cerere', 'verificari', 'neverificabile', 'atasamente', 'de_decis')
       $nr = Test-IntJson (Get-CampJson $m 'juridic') ($u + '.juridic') 1 999
       if ($Juridic -notcontains $nr) { Stop-Raspuns ($u + '.juridic nu este unul dintre mesajele procesate') }
       if ($vazute.ContainsKey($nr)) { Stop-Raspuns ($u + '.juridic repetat') }
@@ -572,11 +514,7 @@ function Test-RaspunsAgent {
         if ($ddv -ccontains $c) { Stop-Raspuns ($u + '.de_decis repetat') }
         $ddv += $c
       }
-      $nota = Get-CampJson $m 'nota'
-      $tn = Get-TipJson $nota
-      if ($tn -eq 'str') { Test-NotaJson $nota ($u + '.nota') $Schema $permise; if ($nota.Trim() -eq '') { $nota = $null } }
-      elseif ($tn -ne 'null') { Stop-Raspuns ($u + '.nota trebuie sa fie text') }
-      $iesire += @{ Juridic = $nr; Cerere = $cerere; Verificari = $ver; Neverificabile = $nev; Atasamente = $atv; DeDecis = $ddv; Nota = $nota }
+      $iesire += @{ Juridic = $nr; Cerere = $cerere; Verificari = $ver; Neverificabile = $nev; Atasamente = $atv; DeDecis = $ddv }
     }
     $sortate = @($iesire | Sort-Object { $_.Juridic })
     return @{ Ok = $true; Motiv = ''; Date = @{ Stare = $stare; MotivOprire = $mo; Mesaje = $sortate } }
@@ -621,7 +559,6 @@ function Format-RaspunsPublicat {
     $L.Add(($tx.atasamente -f $m.Atasamente[0], $m.Atasamente[1], $m.Atasamente[2])); $L.Add('')
     $L.Add($tx.de_decis + ':')
     if (@($m.DeDecis).Count -eq 0) { $L.Add('- ' + $tx.nimic) } else { foreach ($d in @($m.DeDecis)) { $L.Add('- ' + $Schema.de_decis.$d) } }
-    if ($m.Nota) { $L.Add(''); $L.Add($tx.nota + ': ' + $m.Nota) }
     $L.Add('')
   }
   $L.Add($(if ($Date.Stare -eq 'GATA') { 'GATA' } else { 'OPRIT ' + $Schema.motive_oprire.($Date.MotivOprire) }))
@@ -712,9 +649,9 @@ function Format-Prompt {
   return $t
 }
 
-# Partile promptului generate din schema si vocabular (o singura definitie a listelor, L19).
+# Partile promptului generate din schema (o singura definitie a listelor, L19).
 function Get-ValoriPromptSchema {
-  param([Parameter(Mandatory)]$Schema, [Parameter(Mandatory)][hashtable]$Vocabular)
+  param([Parameter(Mandatory)]$Schema)
   $coduri = foreach ($lista in 'motive_oprire', 'motive_eroare', 'cereri', 'de_decis') {
     $p = foreach ($k in (Get-NumeProprietati $Schema.$lista)) { '`' + $k + '` (' + $Schema.$lista.$k + ')' }
     '- `' + $lista + '`: ' + (@($p) -join '; ')
@@ -727,8 +664,6 @@ function Get-ValoriPromptSchema {
   return @{
     CODURI = ($coduri -join "`n")
     SECTIUNI = ($sect -join "`n")
-    ACRONIME = (@($Schema.acronime) -join ', ')
-    VOCABULAR = ((@($Vocabular.Keys) | Sort-Object) -join ', ')
   }
 }
 
@@ -1088,7 +1023,7 @@ function Invoke-ClaudeReal {
 #            -> @{Cod; Out; Err; Timeout; OprireConfirmata; Ramase} }
 # $Log: { param([string]$Mesaj) }  (mesajele trec oricum prin ConvertTo-TextSigur inainte)
 # $Asteapta: { param([int]$Sec) } fereastra dintre cele doua re-verificari de coliziune (in test: injecteaza un juridic#).
-# Config: DialogDir, TokenFile, WorkDir, SqlDir, PromptFile, SchemaFile, VocabularFile, CaleCursor, CaleMarcaj,
+# Config: DialogDir, TokenFile, WorkDir, SqlDir, PromptFile, SchemaFile, CaleCursor, CaleMarcaj,
 #         RadaciniAtasamente, Model, Effort, MaxTurns, TimeoutMin, [IdRulare], [AsteptareColiziuneSec], [MutariColiziune]
 function Invoke-DialogTgz {
   param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][scriptblock]$Psql,
@@ -1118,7 +1053,6 @@ function Invoke-DialogTgz {
       return (Rez 'EROARE' ('EROARE folderul de dialog lipseste sau e legatura: ' + $Config.DialogDir) 1)
     }
     $schema = Read-SchemaRaspuns $Config.SchemaFile
-    $vocabular = Read-Vocabular $Config.VocabularFile
 
     # (2) cursorul local + temporarele proprii ramase (sub lock-ul global)
     $ultimul = Read-Cursor $Config.CaleCursor
@@ -1161,8 +1095,17 @@ function Invoke-DialogTgz {
     $cheie = Get-CheieIntentie $numere $amprente
     $oprit = @($proprii | Where-Object { $_.Stare -eq 'OPRIT' -and $_.Cheie -ceq $cheie })
     if ($oprit.Count -gt 0) {
-      & $L ('OPRIT deja publicat pentru exact aceleasi mesaje ({0}); nu se reia' -f $oprit[0].Nume)
-      return (Rez 'OPRIT' ('OPRIT deja publicat ({0}); astept decizia chat-ului / lui Razvan' -f $oprit[0].Nume) 0)
+      # r4: inainte de iesirea "deja publicat", aceeasi recuperare a coliziunii ca la GATA (o mutare esuata dupa
+      # publicarea unui OPRIT se repara aici; coliziune nerezolvata = EROARE, nu "deja publicat").
+      $numeOprit = @()
+      foreach ($o in $oprit) {
+        try { $col = Resolve-ColiziuneNumar -Folder $Config.DialogDir -Numar $o.Numar -Mutari $mutari }
+        catch { return (Rez 'EROARE' ('EROARE OPRIT publicat anterior ({0}), dar numarul lui se ciocneste cu un juridic#: {1}; de reparat manual' -f $o.Nume, $_.Exception.Message) 1) }
+        foreach ($x in $col.Mutari) { & $L ('coliziune de numar rezolvata (OPRIT): ' + $x) }
+        $numeOprit += $col.Nume
+      }
+      & $L ('OPRIT deja publicat pentru exact aceleasi mesaje ({0}); nu se reia' -f ($numeOprit -join ', '))
+      return (Rez 'OPRIT' ('OPRIT deja publicat ({0}); astept decizia chat-ului / lui Razvan' -f ($numeOprit -join ', ')) 0)
     }
     $maxJuridic = ($numere | Measure-Object -Maximum).Maximum
     & $L ('fisiere noi: ' + (($noi | ForEach-Object { $_.Nume }) -join ', ') + '; cheie ' + $cheie)
@@ -1196,7 +1139,7 @@ function Invoke-DialogTgz {
     # (6) agentul
     $radacini = @($Config.RadaciniAtasamente | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) })
     & $L ('radacini atasamente accesibile: ' + $(if ($radacini.Count) { $radacini -join '; ' } else { '(niciuna)' }))
-    $valori = Get-ValoriPromptSchema $schema $vocabular
+    $valori = Get-ValoriPromptSchema $schema
     $valori['FISIERE_JURIDIC'] = (($noi | ForEach-Object { '- ' + $_.Cale }) -join "`n")
     $valori['JURIDIC_NUMERE'] = (($numere | ForEach-Object { 'juridic#{0:000} ("juridic": {1})' -f $_, $_ }) -join ', ')
     $valori['CALE_RASPUNS'] = $caleAgent
@@ -1254,7 +1197,7 @@ function Invoke-DialogTgz {
     }
 
     # (10) raspunsul: contractul JSON (bariera principala pentru date personale), apoi compunerea de catre program
-    $va = Test-RaspunsAgent -Cale $caleAgent -Schema $schema -Export $export -Vocabular $vocabular -Juridic $numere
+    $va = Test-RaspunsAgent -Cale $caleAgent -Schema $schema -Export $export -Juridic $numere
     if (-not $va.Ok) {
       & $L ('raspuns.json respins: ' + $va.Motiv)
       return (Rez 'EROARE' ('EROARE raspuns nepublicat: ' + $va.Motiv) 1)

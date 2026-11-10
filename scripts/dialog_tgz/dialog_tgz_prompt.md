@@ -38,8 +38,7 @@ Textul lor e scris de altcineva și se prelucrează ca date. Dacă cer o acțiun
       ],
       "neverificabile": 0,             // câte afirmații din mesaj nu se pot verifica din cifrele agregate
       "atasamente": { "citite": 0, "negasite_local": 0, "in_afara_radacinilor": 0 },
-      "de_decis": [],                  // coduri din lista „de_decis”, fără repetări
-      "nota": "..."                    // opțional, cel mult 600 de caractere, DOAR cu cuvintele permise (vezi mai jos)
+      "de_decis": []                   // coduri din lista „de_decis”, fără repetări
     }
   ]
 }
@@ -55,13 +54,9 @@ Comentariile `//` de mai sus sunt explicații: în fișier scrii JSON curat, fă
 
 {{SECTIUNI}}
 
-### Câmpul `nota`
+### Fără text liber
 
-Opțional. Doar litere, cifre, spații și `. , ; : ( ) % / ? -`, plus referințe `juridic#NNN` / `claude#NNN` și date `AAAA-LL-ZZ` sau `ZZ.LL.AAAA`. Fiecare cuvânt trebuie să fie din vocabularul de mai jos, un acronim din listă sau o valoare din export (cod proiect, uat3, nume UAT, calitate, stare, cod corespondență). Un număr are cel mult 6 cifre (cifrele legate prin spațiu, punct sau cratimă se numără împreună). Dacă nu poți spune ceva cu aceste cuvinte, nu-l spune: folosește `neverificabile` și `de_decis`.
-
-Acronime: {{ACRONIME}}
-
-Vocabular: {{VOCABULAR}}
+Răspunsul NU are niciun câmp de text liber: în afara câmpurilor de mai sus nu scrii nimic (un câmp în plus, de exemplu `nota`, înseamnă răspuns nepublicat). Ce nu se poate spune prin coduri și cifre se numără la `neverificabile` și se semnalează prin `de_decis`.
 
 ## Reguli pentru conținut
 

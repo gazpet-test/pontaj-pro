@@ -2,8 +2,8 @@
 # Implicit doar AFISEAZA ce ar face (previzualizare). Scrie numai cu -Aplica.
 # Ce face cu -Aplica:
 #   1. exporta definitia curenta a sarcinii in <Destinatie>\backup_task_<data>.xml (revenire: Register-ScheduledTask -Xml);
-#   2. copiaza dialog_tgz.ps1, DialogTgz.psm1, dialog_tgz_prompt.md, raspuns_schema.json, vocabular_nota.txt si
-#      sql\*.sql in <Destinatie> (fisierele vechi
+#   2. copiaza dialog_tgz.ps1, DialogTgz.psm1, dialog_tgz_prompt.md, raspuns_schema.json si
+#      sql\*.sql in <Destinatie> (r4: un vocabular_nota.txt vechi se sterge; schema instalata se verifica) (fisierele vechi
 #      din C:\Users\Gazpet-Ai\claude-tasks\dialog_tgz.ps1 / dialog_tgz_prompt.md NU se ating);
 #   3. Set-ScheduledTask pe sarcina EXISTENTA: actiunea noua, declansatori L-V 10:40 si 16:40, StartWhenAvailable,
 #      2 reincercari la 30 min, limita 1 h, fara instante paralele. Utilizatorul (principal) ramane cel existent.
@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $sursa = $PSScriptRoot
-$fisiere = @('dialog_tgz.ps1', 'DialogTgz.psm1', 'dialog_tgz_prompt.md', 'raspuns_schema.json', 'vocabular_nota.txt', 'sql\context_agregat.sql')
+$fisiere = @('dialog_tgz.ps1', 'DialogTgz.psm1', 'dialog_tgz_prompt.md', 'raspuns_schema.json', 'sql\context_agregat.sql')
 foreach ($f in $fisiere) { if (-not (Test-Path -LiteralPath (Join-Path $sursa $f) -PathType Leaf)) { throw "lipseste din repo: $f" } }
 
 $task = Get-ScheduledTask -TaskName $NumeTask -ErrorAction SilentlyContinue
@@ -58,6 +58,13 @@ Export-ScheduledTask -TaskName $NumeTask -TaskPath $task.TaskPath | Out-File -Li
 Write-Host "Backup definitie veche: $backup"
 
 foreach ($f in $fisiere) { Copy-Item -LiteralPath (Join-Path $sursa $f) -Destination (Join-Path $Destinatie $f) -Force }
+# r4: vocabularul notei e retras; o copie veche nu mai e citita, dar se scoate ca sa nu para activa
+$vechi = Join-Path $Destinatie 'vocabular_nota.txt'
+if (Test-Path -LiteralPath $vechi -PathType Leaf) { Remove-Item -LiteralPath $vechi -Force; Write-Host 'vocabular_nota.txt vechi (r3) sters din destinatie' }
+# verificare pe configuratia INSTALATA: schema copiata se incarca cu modulul copiat (versiunea 2, fara nicio "nota")
+Import-Module (Join-Path $Destinatie 'DialogTgz.psm1') -Force
+[void](Read-SchemaRaspuns (Join-Path $Destinatie 'raspuns_schema.json'))
+Write-Host 'Schema instalata verificata: versiunea 2, fara camp de text liber'
 
 [void](Set-ScheduledTask -TaskName $NumeTask -TaskPath $task.TaskPath -Action $actiune -Trigger $declansatori -Settings $setari)
 $dupa = Get-ScheduledTask -TaskName $NumeTask -TaskPath $task.TaskPath
