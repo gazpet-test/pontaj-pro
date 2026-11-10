@@ -113,13 +113,15 @@ export const tintaPe = (tinte, unitateId, activitateId) =>
 /**
  * Activitățile arătate într-un bloc. Proiect cu activități principale: principalele care au țintă pe obiect (din deviz > 0),
  * plus cele care au deja o valoare (raport reîncărcat), plus toate dacă s-a cerut „toate activitățile”.
- * Proiect fără activități principale: toate activitățile active (ca înainte de legarea de devize).
+ * Proiect fără activități principale: toate activitățile active (ca înainte de legarea de devize). O activitate inactivă apare
+ * doar dacă blocul are deja o valoare pe ea (raport vechi), ca să poată fi corectată sau golită.
  */
 export function activitatiBloc({ activitati = [], tinte = [], unitateId = null, toate = false, valori = {} }) {
   const arePrincipale = activitati.some(a => a.principala)
   return activitati.filter(a => {
-    if (!arePrincipale || toate) return true
-    if (valori[a.id] != null && valori[a.id] !== '') return true
+    const areValoare = valori[a.id] != null && valori[a.id] !== ''
+    if (a.activ === false) return areValoare   // inactivă: doar ca să se poată corecta o linie veche
+    if (areValoare || !arePrincipale || toate) return true
     if (!a.principala || unitateId == null) return false
     const t = tintaPe(tinte, unitateId, a.id)
     return !!t && Number(t.din_deviz) > 0

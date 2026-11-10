@@ -30,6 +30,15 @@ describe('paritate cu migrarea 20261208a', () => {
     expect(t).toContain('HM:100:M')
     expect(t).toContain('100MC:100:MC')
   })
+  it('antetul: câmpurile permise de RPC = cele trimise de telefon (/m)', () => {
+    const bloc = MIG.match(/-- ANTET-START([\s\S]*?)-- ANTET-END/)
+    expect(bloc).not.toBeNull()
+    const sql = [...bloc[1].matchAll(/'([a-z_]+)'/g)].map(m => m[1]).sort()
+    const mob = fs.readFileSync(new URL('./AppMobilManageri.jsx', import.meta.url), 'utf8')
+    const antet = mob.slice(mob.indexOf('antet: {'), mob.indexOf('linii: proiectId'))
+    const chei = [...antet.matchAll(/^\s+(?:\.\.\.\(distributie \? \{ )?([a-z_]+):/gm)].map(m => m[1]).sort()
+    expect(chei).toEqual(sql)
+  })
   it('limitele cantității sunt aceleași ca în RPC (> 0, ≤ 10.000.000, 3 zecimale)', () => {
     expect(MIG).toContain('v_cant <= 0 OR v_cant > 10000000 OR v_cant <> round(v_cant, 3)')
     expect(MIG).toContain('jsonb_array_length(p_linii) > 500')
@@ -100,6 +109,12 @@ describe('activitățile arătate într-un bloc', () => {
     expect(activitatiBloc({ activitati: ACT, tinte, unitateId: 20 }).map(a => a.id)).toEqual([2])
     expect(activitatiBloc({ activitati: ACT, tinte, unitateId: 10, valori: { 4: 2 } }).map(a => a.id)).toEqual([1, 3, 4])
     expect(activitatiBloc({ activitati: ACT, tinte, unitateId: null }).map(a => a.id)).toEqual([])
+  })
+  it('o activitate inactivă apare doar cu o valoare veche (ca să poată fi golită)', () => {
+    const cuInactiva = [...ACT, { id: 5, nume: 'Veche', principala: true, activ: false, tip_raportare: 'cantitate', sursa_executat: 'raport' }]
+    expect(activitatiBloc({ activitati: cuInactiva, tinte, unitateId: 10, toate: true }).map(a => a.id)).toEqual([1, 2, 3, 4])
+    expect(activitatiBloc({ activitati: cuInactiva, tinte, unitateId: 10, valori: { 5: 3 } }).map(a => a.id)).toEqual([1, 3, 5])
+    expect(liniiDinBlocuri([{ ...blocNou(10), valori: { 5: '3' } }], { activitati: cuInactiva, unitati: UN }).erori).toEqual([])
   })
   it('„toate activitățile” sau proiect fără principale = toate', () => {
     expect(activitatiBloc({ activitati: ACT, tinte, unitateId: 10, toate: true })).toHaveLength(4)

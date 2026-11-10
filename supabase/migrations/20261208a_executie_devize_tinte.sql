@@ -12,9 +12,10 @@
 --   * v_executie_tinte (security_invoker): pe fiecare (obiect, activitate) din deviz / executat / rest / % / % plan și alertele.
 --     Calculul stă într-un singur loc (fn_executie_tinte_calcul, L19); ecranul, telefonul și exportul citesc vederea.
 --   * fn_executie_tinte_nod: sudurile din schema nodului pe (unitate, activitate): total + în ziua cerută (contorul din telefon).
---   * fn_raport_lucrari_citeste / fn_raport_lucrari_salveaza: liniile raportului zilnic (mai multe obiecte pe raport), citite cu amprenta
---     lor și înlocuite ATOMIC (L02), cu CAS pe amprentă (L01/L05): reluarea aceluiași set = „duplicat”, un set mai vechi = „conflict”.
---     Scrierea directă în raport_lucrari se retrage pentru authenticated (L07); RPC-ul verifică dreptul pe șantier.
+--   * fn_raport_zilnic_citeste / fn_raport_zilnic_salveaza: raportul zilnic (antetul + liniile pe mai multe obiecte) citit dintr-un singur
+--     instantaneu și salvat ÎNTR-O SINGURĂ tranzacție (L02), cu versiune monotonă (CAS, L01) și cheie per intenție în jurnalul
+--     raport_zilnic_salvari (L04 / L05: reluarea aceleiași intenții nu se reaplică nici după ce altcineva a salvat între timp).
+--     RPC-ul verifică dreptul pe șantier. Retragerea scrierii directe în raport_lucrari e pasul 2, separat: 20261208b (după deploy).
 --   * Garda pe configurarea țintelor (5A): coloanele noi (și codurile / UM / activ ale unei activități principale) le schimbă doar
 --     owner-ul sau executie editor / admin (trigger BEFORE pe OLD/NEW, ca PATCH-ul direct să n-o ocolească).
 -- Drepturile (O SINGURĂ definiție, fn_executie_tinte_drept):
@@ -24,8 +25,9 @@
 -- Ce NU face: nicio dată (setul standard de activități și legarea obiectelor Lot 1 sunt SQL separat, NERULAT), niciun drept acordat,
 --   nicio atingere pe executie_grafic_* (legarea plan_start / plan_final de grafic e un pas ulterior), pe izo_* sau pe rapoarte_zilnice.
 -- Dependențe: 20261201a (executie_noduri_suduri) aplicată.
--- Ordinea lock-urilor (L06), scrisă și în fiecare RPC: rapoarte_zilnice (FOR UPDATE, rândul raportului) -> proiect_activitati
---   (FOR SHARE, ORDER BY id) -> proiect_unitati (FOR SHARE, ORDER BY id) -> raport_lucrari (DELETE + INSERT; FK = KEY SHARE pe aceleași rânduri).
+-- Ordinea lock-urilor (L06), scrisă și în RPC: advisory (șantier, zi) -> rapoarte_zilnice (FOR UPDATE, rândul raportului) -> proiect_activitati
+--   (FOR SHARE, ORDER BY id) -> proiect_unitati (FOR SHARE, ORDER BY id) -> raport_lucrari (DELETE + INSERT; FK = KEY SHARE pe aceleași rânduri)
+--   -> raport_zilnic_salvari (INSERT).
 --   Trigger-ele de gardă nu blochează nimic; calculul doar citește.
 -- Revenire: supabase/revenire/20261208a_executie_devize_tinte_ROLLBACK.sql. Test pe clonă: scripts/test_executie_devize_tinte.sql.
 DO $pre$
@@ -42,8 +44,9 @@ BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- obiectele noi nu există (reaplicare = refuz)
   IF to_regclass('public.executie_tinte_setari') IS NOT NULL OR to_regclass('public.v_executie_tinte') IS NOT NULL
+     OR to_regclass('public.raport_zilnic_salvari') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                 WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[]))
+                 WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[]))
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
                  AND ((table_name = 'proiect_unitati' AND column_name IN ('obiect_cod', 'nod_cod', 'plan_start', 'plan_final'))
                       OR (table_name = 'proiect_activitati' AND column_name IN ('principala', 'factor_um', 'sursa_executat', 'baza_deviz', 'dn_min', 'dn_max')))) THEN
@@ -90,16 +93,22 @@ BEGIN
                                     AND a.attname IN ('id', 'unitate_id')))) THEN
     RAISE EXCEPTION '20261208a: raport_lucrari are un UNIQUE fara unitate (mai multe obiecte pe raport ar fi refuzate)';
   END IF;
-  -- drepturile de azi pe raport_lucrari: authenticated scrie direct (retras mai jos, redat de revenire), postgres da.
-  -- anon: oricum blocat de politici (auth.uid()); scrierea i se retrage și lui, iar revenirea NU i-o redă (doar authenticated).
-  IF NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'INSERT')
-     OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'UPDATE')
-     OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'DELETE')
-     OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'SELECT')
-     OR NOT has_table_privilege('postgres', 'public.raport_lucrari', 'INSERT')
-     OR NOT has_table_privilege('postgres', 'public.raport_lucrari', 'DELETE')
-     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.raport_lucrari'::regclass AND attnum > 0 AND attacl IS NOT NULL) THEN
-    RAISE EXCEPTION '20261208a: drepturile pe raport_lucrari difera de cele asteptate (authenticated I/U/D/S, postgres I/D, fara ACL pe coloane)';
+  -- RPC-ul (owner postgres) scrie liniile; antetul rămâne scris cu aceleași câmpuri ca din telefon (lista albă ANTET din RPC)
+  IF NOT has_table_privilege('postgres', 'public.raport_lucrari', 'INSERT') OR NOT has_table_privilege('postgres', 'public.raport_lucrari', 'DELETE')
+     OR NOT has_table_privilege('postgres', 'public.rapoarte_zilnice', 'INSERT') OR NOT has_table_privilege('postgres', 'public.rapoarte_zilnice', 'UPDATE') THEN
+    RAISE EXCEPTION '20261208a: postgres nu poate scrie raport_lucrari / rapoarte_zilnice';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice'
+        AND column_name IN ('sef_santier', 'lucrari_efectuate', 'utilaje_snapshot', 'personal_snapshot', 'masini', 'probleme', 'subcontractori',
+                            'aprovizionare', 'plan_maine', 'poze', 'meteo', 'distributie_antet', 'created_by', 'updated_at')) <> 14 THEN
+    RAISE EXCEPTION '20261208a: rapoarte_zilnice nu are toate coloanele antetului scris din telefon';
+  END IF;
+  -- ținta lui ON CONFLICT: un UNIQUE exact pe (site_id, data), ca upsert-ul de azi din telefon
+  IF NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = 'public.rapoarte_zilnice'::regclass AND i.indisunique AND i.indpred IS NULL
+                   AND i.indexprs IS NULL AND i.indnkeyatts = 2
+                   AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
+                         WHERE a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey::smallint[])) = ARRAY['data', 'site_id']) THEN
+    RAISE EXCEPTION '20261208a: rapoarte_zilnice nu are UNIQUE (site_id, data)';
   END IF;
   -- cheia compusă a vederii (unitate * 1e8 + activitate) rămâne exactă în JavaScript (< 2^53)
   IF (SELECT coalesce(max(id), 0) FROM public.proiect_activitati) >= 100000000 OR (SELECT coalesce(max(id), 0) FROM public.proiect_unitati) >= 90000000 THEN
@@ -187,7 +196,8 @@ LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
 DECLARE v bigint;
 BEGIN
   IF auth.uid() IS NULL THEN
-    IF current_user = 'postgres' THEN RETURN; END IF;
+    -- doar o sesiune directă a lui postgres (psql / runner); o funcție DEFINER apelată prin API fără JWT are session_user = authenticator
+    IF session_user = 'postgres' AND current_user = 'postgres' THEN RETURN; END IF;
     RAISE EXCEPTION 'tinte: configurarea țintelor cere autentificare' USING ERRCODE = '42501';
   END IF;
   FOREACH v IN ARRAY p_proiecte LOOP
@@ -473,7 +483,7 @@ BEGIN
              (st.zile IS NOT NULL AND d.uid IS NOT NULL AND d.aid IS NOT NULL AND d.u_activ AND d.a_activ
               AND (d.din_deviz > 0 OR d.bifa) AND (d.pct_exec IS NULL OR d.pct_exec < 100)
               AND ((d.plan_start IS NOT NULL AND v_azi BETWEEN d.plan_start AND d.plan_final) OR (d.plan_start IS NULL AND d.ultima IS NOT NULL))
-              AND (d.ultima IS NULL OR d.ultima < v_azi - st.zile)) IS TRUE AS al_fara_raport,
+              AND greatest(d.ultima, d.plan_start - 1) <= v_azi - st.zile) IS TRUE AS al_fara_raport,
              (d.uid IS NOT NULL AND d.aid IS NOT NULL AND d.executat > 0 AND (d.din_deviz IS NULL OR d.din_deviz = 0)) IS TRUE AS al_fara_tinta,
              (d.uid IS NULL AND d.executat > 0) IS TRUE AS al_fara_obiect,
              (d.aid IS NULL AND d.executat > 0) IS TRUE AS al_nealocat,
@@ -526,169 +536,233 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
 $f$;
 REVOKE ALL ON FUNCTION public.fn_raport_lucrari_json(bigint) FROM PUBLIC, anon, authenticated, service_role;
 
--- citirea liniilor + amprenta, într-un singur instantaneu (clientul trimite amprenta înapoi la salvare)
-CREATE FUNCTION public.fn_raport_lucrari_citeste(p_raport_id bigint) RETURNS jsonb
+-- ── jurnalul salvărilor raportului zilnic: versiune monotonă pe raport + cheie durabilă per intenție (L01 / L04 / L05) ──
+-- Un rând = o salvare reușită (antet + linii, în aceeași tranzacție). Doar RPC-ul scrie; clienții nu au niciun drept pe tabel.
+CREATE TABLE public.raport_zilnic_salvari (
+  cheie uuid PRIMARY KEY,
+  raport_id bigint NOT NULL REFERENCES public.rapoarte_zilnice(id) ON DELETE CASCADE,
+  versiune integer NOT NULL,
+  amprenta text NOT NULL,
+  profile_id uuid NOT NULL,
+  creat_la timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT raport_zilnic_salvari_versiune_ck CHECK (versiune > 0),
+  CONSTRAINT raport_zilnic_salvari_amprenta_ck CHECK (amprenta ~ '^[0-9a-f]{32}$'),
+  CONSTRAINT raport_zilnic_salvari_versiune_uq UNIQUE (raport_id, versiune)
+);
+COMMENT ON TABLE public.raport_zilnic_salvari IS
+  'Raportul zilnic: o salvare reușită prin fn_raport_zilnic_salveaza (versiunea raportului + cheia intenției + amprenta conținutului). 20261208a.';
+ALTER TABLE public.raport_zilnic_salvari ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.raport_zilnic_salvari FROM PUBLIC, anon, authenticated, service_role;
+
+-- citirea raportului unei zile: antetul, liniile și versiunea, din același instantaneu (funcție STABLE = instantaneul apelului)
+CREATE FUNCTION public.fn_raport_zilnic_citeste(p_site bigint, p_data date) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_site bigint; v_linii jsonb;
+DECLARE r public.rapoarte_zilnice;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'raport: autentificare necesară' USING ERRCODE = '42501'; END IF;
-  SELECT r.site_id INTO v_site FROM public.rapoarte_zilnice r WHERE r.id = p_raport_id;
-  IF NOT FOUND OR NOT public.fn_raport_santier_drept(v_site) THEN
-    RAISE EXCEPTION 'raport: raportul nu există sau nu ai drept pe șantier' USING ERRCODE = '42501';
+  IF p_site IS NULL OR p_data IS NULL THEN RAISE EXCEPTION 'raport: parametri lipsă' USING ERRCODE = '22023'; END IF;
+  IF NOT public.fn_raport_santier_drept(p_site) THEN
+    RAISE EXCEPTION 'raport: nu ai drept pe șantier' USING ERRCODE = '42501';
   END IF;
-  v_linii := public.fn_raport_lucrari_json(p_raport_id);
-  RETURN jsonb_build_object('amprenta', public.fn_raport_lucrari_amprenta_linii(v_linii), 'linii', v_linii);
+  SELECT * INTO r FROM public.rapoarte_zilnice z WHERE z.site_id = p_site AND z.data = p_data;
+  IF NOT FOUND THEN RETURN jsonb_build_object('raport', NULL, 'versiune', 0, 'linii', '[]'::jsonb); END IF;
+  RETURN jsonb_build_object('raport', to_jsonb(r),
+    'versiune', (SELECT coalesce(max(s.versiune), 0) FROM public.raport_zilnic_salvari s WHERE s.raport_id = r.id),
+    'linii', public.fn_raport_lucrari_json(r.id));
 END $f$;
-REVOKE ALL ON FUNCTION public.fn_raport_lucrari_citeste(bigint) FROM PUBLIC, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_raport_lucrari_citeste(bigint) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_raport_zilnic_citeste(bigint, date) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_raport_zilnic_citeste(bigint, date) TO authenticated;
 
--- ── salvarea liniilor: înlocuire atomică (L02), CAS pe amprentă (L01), reluare idempotentă (L04/L05), drept pe șantier (L09) ──
--- Ordinea lock-urilor (L06): rapoarte_zilnice FOR UPDATE -> proiect_activitati FOR SHARE (ORDER BY id) -> proiect_unitati FOR SHARE
--- (ORDER BY id) -> raport_lucrari (DELETE + INSERT; FK = KEY SHARE pe rândurile deja blocate).
--- p_amprenta_veche = amprenta liniilor citite de client (raport nou = amprenta setului gol). Rezultat:
---   {ok:true, duplicat:false|true, amprenta, linii:n} sau {ok:false, motiv:'conflict', amprenta} (altcineva a salvat între timp: reîncarcă).
-CREATE FUNCTION public.fn_raport_lucrari_salveaza(p_raport_id bigint, p_amprenta_veche text, p_linii jsonb) RETURNS jsonb
+-- ── salvarea raportului zilnic: ANTETUL și LINIILE într-o singură tranzacție (L02), CAS pe versiune (L01), cheie per intenție (L04 / L05) ──
+-- Ordinea lock-urilor (L06): advisory (șantier, zi) -> rapoarte_zilnice FOR UPDATE -> proiect_activitati FOR SHARE (ORDER BY id) ->
+--   proiect_unitati FOR SHARE (ORDER BY id) -> rapoarte_zilnice (upsert pe același rând) -> raport_lucrari (DELETE + INSERT) -> raport_zilnic_salvari.
+-- p_antet: doar câmpurile din lista albă (cele scrise de telefon); un câmp lipsă rămâne neschimbat la editare. p_linii NULL = liniile nu se ating.
+-- p_versiune: versiunea citită (raport nou = 0). p_cheie: o cheie per intenție, refolosită la reîncercare cu ACELAȘI conținut.
+-- Rezultat: {ok, duplicat, raport_id, versiune} sau {ok:false, motiv:'conflict', raport_id, versiune} (altcineva a salvat între timp: reîncarcă).
+CREATE FUNCTION public.fn_raport_zilnic_salveaza(p_site bigint, p_data date, p_antet jsonb, p_linii jsonb, p_versiune integer, p_cheie uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
   v_uid uuid := auth.uid();
-  v_site bigint; v_proiect bigint;
+  v_proiect bigint; v_raport bigint; v_ver integer; v_amp text; v_s public.raport_zilnic_salvari;
   e jsonb; v_aid bigint; v_unit bigint; v_cant numeric;
-  v_canon jsonb := '[]'::jsonb; v_chei text[] := ARRAY[]::text[];
+  v_canon jsonb; v_chei text[] := ARRAY[]::text[];
   v_act_ids bigint[] := ARRAY[]::bigint[]; v_unit_ids bigint[] := ARRAY[]::bigint[];
-  v_tip text; v_sursa text; v_nod text;
-  v_curent text; v_nou text; v_n integer;
+  v_tip text; v_sursa text; v_nod text; v_n integer;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'raport: autentificare necesară' USING ERRCODE = '42501'; END IF;
-  IF p_raport_id IS NULL OR p_linii IS NULL OR jsonb_typeof(p_linii) IS DISTINCT FROM 'array' OR jsonb_array_length(p_linii) > 500
-     OR p_amprenta_veche IS NULL OR p_amprenta_veche !~ '^[0-9a-f]{32}$' THEN
+  IF p_site IS NULL OR p_data IS NULL OR p_cheie IS NULL OR p_versiune IS NULL OR p_versiune < 0
+     OR p_antet IS NULL OR jsonb_typeof(p_antet) IS DISTINCT FROM 'object'
+     OR (p_linii IS NOT NULL AND (jsonb_typeof(p_linii) IS DISTINCT FROM 'array' OR jsonb_array_length(p_linii) > 500)) THEN
     RAISE EXCEPTION 'raport: parametri invalizi' USING ERRCODE = '22023';
   END IF;
-  -- 1. raportul (lock), apoi dreptul pe șantierul lui
-  SELECT r.site_id INTO v_site FROM public.rapoarte_zilnice r WHERE r.id = p_raport_id FOR UPDATE;
-  IF NOT FOUND OR NOT public.fn_raport_santier_drept(v_site) THEN
-    RAISE EXCEPTION 'raport: raportul nu există sau nu ai drept pe șantier' USING ERRCODE = '42501';
+  IF EXISTS (SELECT 1 FROM jsonb_object_keys(p_antet) k WHERE k NOT IN (
+       -- ANTET-START
+       'sef_santier', 'lucrari_efectuate', 'utilaje_snapshot', 'personal_snapshot', 'masini', 'probleme', 'subcontractori',
+       'aprovizionare', 'plan_maine', 'poze', 'meteo', 'distributie_antet'
+       -- ANTET-END
+     )) THEN
+    RAISE EXCEPTION 'raport: antetul are un câmp nepermis' USING ERRCODE = '22023';
   END IF;
-  SELECT s.proiect_id::bigint INTO v_proiect FROM public.sites s WHERE s.id = v_site;
-  IF jsonb_array_length(p_linii) > 0 AND v_proiect IS NULL THEN
-    RAISE EXCEPTION 'raport: șantierul nu e legat de un proiect' USING ERRCODE = '22023';
+  IF NOT public.fn_raport_santier_drept(p_site) THEN RAISE EXCEPTION 'raport: nu ai drept pe șantier' USING ERRCODE = '42501'; END IF;
+  -- 1. serializarea pe (șantier, zi), și pentru raportul care încă nu există; apoi rândul raportului
+  PERFORM pg_advisory_xact_lock(hashtextextended('gazpet.raport_zilnic:' || p_site::text || ':' || p_data::text, 0));
+  SELECT r.id INTO v_raport FROM public.rapoarte_zilnice r WHERE r.site_id = p_site AND r.data = p_data FOR UPDATE;
+  SELECT s.proiect_id::bigint INTO v_proiect FROM public.sites s WHERE s.id = p_site;
+  -- 2. forma liniilor: exact cheile cunoscute, numere JSON (L17), cantitate > 0 cu cel mult 3 zecimale; forma canonică
+  IF p_linii IS NOT NULL THEN
+    IF jsonb_array_length(p_linii) > 0 AND v_proiect IS NULL THEN
+      RAISE EXCEPTION 'raport: șantierul nu e legat de un proiect' USING ERRCODE = '22023';
+    END IF;
+    v_canon := '[]'::jsonb;
+    FOR e IN SELECT x FROM jsonb_array_elements(p_linii) x LOOP
+      IF jsonb_typeof(e) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'raport: linie invalidă' USING ERRCODE = '22023'; END IF;
+      IF NOT (e ?& ARRAY['activitate_id', 'unitate_id', 'cantitate'])
+         OR EXISTS (SELECT 1 FROM jsonb_object_keys(e) k WHERE k NOT IN ('activitate_id', 'unitate_id', 'cantitate')) THEN
+        RAISE EXCEPTION 'raport: linie cu alte câmpuri decât activitate_id / unitate_id / cantitate' USING ERRCODE = '22023';
+      END IF;
+      IF jsonb_typeof(e->'activitate_id') IS DISTINCT FROM 'number' OR jsonb_typeof(e->'cantitate') IS DISTINCT FROM 'number'
+         OR jsonb_typeof(e->'unitate_id') NOT IN ('number', 'null') THEN
+        RAISE EXCEPTION 'raport: activitate_id / unitate_id / cantitate trebuie să fie numere' USING ERRCODE = '22023';
+      END IF;
+      IF (e->>'activitate_id')::numeric <> trunc((e->>'activitate_id')::numeric) OR (e->>'activitate_id')::numeric NOT BETWEEN 1 AND 9223372036854775807
+         OR (jsonb_typeof(e->'unitate_id') = 'number' AND ((e->>'unitate_id')::numeric <> trunc((e->>'unitate_id')::numeric)
+                                                           OR (e->>'unitate_id')::numeric NOT BETWEEN 1 AND 9223372036854775807)) THEN
+        RAISE EXCEPTION 'raport: id invalid' USING ERRCODE = '22023';
+      END IF;
+      v_aid := (e->>'activitate_id')::bigint;
+      v_unit := CASE WHEN jsonb_typeof(e->'unitate_id') = 'number' THEN (e->>'unitate_id')::bigint END;
+      v_cant := (e->>'cantitate')::numeric;
+      IF v_cant <= 0 OR v_cant > 10000000 OR v_cant <> round(v_cant, 3) THEN
+        RAISE EXCEPTION 'raport: cantitatea trebuie să fie > 0, cel mult 10.000.000, cu cel mult 3 zecimale' USING ERRCODE = '22023';
+      END IF;
+      IF (v_aid::text || ':' || coalesce(v_unit::text, '-')) = ANY (v_chei) THEN
+        RAISE EXCEPTION 'raport: aceeași activitate apare de două ori pe același obiect' USING ERRCODE = '22023';
+      END IF;
+      v_chei := v_chei || (v_aid::text || ':' || coalesce(v_unit::text, '-'));
+      v_act_ids := v_act_ids || v_aid;
+      IF v_unit IS NOT NULL THEN v_unit_ids := v_unit_ids || v_unit; END IF;
+      v_canon := v_canon || jsonb_build_array(jsonb_build_object('activitate_id', v_aid, 'unitate_id', v_unit, 'cantitate', v_cant));
+    END LOOP;
   END IF;
-  -- 2. forma fiecărei linii: exact cheile cunoscute, numere JSON (fără texte de reinterpretat, L17), cantitate > 0 cu cel mult 3 zecimale
-  FOR e IN SELECT x FROM jsonb_array_elements(p_linii) x LOOP
-    IF jsonb_typeof(e) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'raport: linie invalidă' USING ERRCODE = '22023'; END IF;
-    IF NOT (e ?& ARRAY['activitate_id', 'unitate_id', 'cantitate'])
-       OR EXISTS (SELECT 1 FROM jsonb_object_keys(e) k WHERE k NOT IN ('activitate_id', 'unitate_id', 'cantitate')) THEN
-      RAISE EXCEPTION 'raport: linie cu alte câmpuri decât activitate_id / unitate_id / cantitate' USING ERRCODE = '22023';
+  v_amp := md5(jsonb_build_object('site', p_site, 'data', p_data, 'antet', p_antet,
+                                  'linii', CASE WHEN v_canon IS NULL THEN NULL ELSE public.fn_raport_lucrari_amprenta_linii(v_canon) END)::text);
+  -- 3. reluarea aceleiași intenții: aceeași cheie + același conținut = rezultatul de atunci, FĂRĂ a reaplica (și dacă între timp
+  --    altcineva a salvat altceva); aceeași cheie cu alt conținut = eroare
+  SELECT * INTO v_s FROM public.raport_zilnic_salvari s WHERE s.cheie = p_cheie;
+  IF FOUND THEN
+    IF v_s.amprenta = v_amp AND v_s.raport_id IS NOT DISTINCT FROM v_raport THEN
+      RETURN jsonb_build_object('ok', true, 'duplicat', true, 'raport_id', v_s.raport_id, 'versiune', v_s.versiune);
     END IF;
-    IF jsonb_typeof(e->'activitate_id') IS DISTINCT FROM 'number' OR jsonb_typeof(e->'cantitate') IS DISTINCT FROM 'number'
-       OR jsonb_typeof(e->'unitate_id') NOT IN ('number', 'null') THEN
-      RAISE EXCEPTION 'raport: activitate_id / unitate_id / cantitate trebuie să fie numere' USING ERRCODE = '22023';
-    END IF;
-    IF (e->>'activitate_id')::numeric <> trunc((e->>'activitate_id')::numeric) OR (e->>'activitate_id')::numeric NOT BETWEEN 1 AND 9223372036854775807
-       OR (jsonb_typeof(e->'unitate_id') = 'number' AND ((e->>'unitate_id')::numeric <> trunc((e->>'unitate_id')::numeric)
-                                                         OR (e->>'unitate_id')::numeric NOT BETWEEN 1 AND 9223372036854775807)) THEN
-      RAISE EXCEPTION 'raport: id invalid' USING ERRCODE = '22023';
-    END IF;
-    v_aid := (e->>'activitate_id')::bigint;
-    v_unit := CASE WHEN jsonb_typeof(e->'unitate_id') = 'number' THEN (e->>'unitate_id')::bigint END;
-    v_cant := (e->>'cantitate')::numeric;
-    IF v_cant <= 0 OR v_cant > 10000000 OR v_cant <> round(v_cant, 3) THEN
-      RAISE EXCEPTION 'raport: cantitatea trebuie să fie > 0, cel mult 10.000.000, cu cel mult 3 zecimale' USING ERRCODE = '22023';
-    END IF;
-    IF (v_aid::text || ':' || coalesce(v_unit::text, '-')) = ANY (v_chei) THEN
-      RAISE EXCEPTION 'raport: aceeași activitate apare de două ori pe același obiect' USING ERRCODE = '22023';
-    END IF;
-    v_chei := v_chei || (v_aid::text || ':' || coalesce(v_unit::text, '-'));
-    v_act_ids := v_act_ids || v_aid;
-    IF v_unit IS NOT NULL THEN v_unit_ids := v_unit_ids || v_unit; END IF;
-    v_canon := v_canon || jsonb_build_array(jsonb_build_object('activitate_id', v_aid, 'unitate_id', v_unit, 'cantitate', v_cant));
-  END LOOP;
-  -- 3. activitățile și unitățile atinse: ale proiectului raportului (L09), blocate în ordinea id-ului (L06)
-  PERFORM 1 FROM public.proiect_activitati pa WHERE pa.id::bigint = ANY (v_act_ids) ORDER BY pa.id FOR SHARE;
-  PERFORM 1 FROM public.proiect_unitati pu WHERE pu.id::bigint = ANY (v_unit_ids) ORDER BY pu.id FOR SHARE;
-  FOR e IN SELECT x FROM jsonb_array_elements(v_canon) x LOOP
-    v_aid := (e->>'activitate_id')::bigint;
-    v_unit := CASE WHEN jsonb_typeof(e->'unitate_id') = 'number' THEN (e->>'unitate_id')::bigint END;
-    SELECT coalesce(pa.tip_raportare, 'cantitate'), pa.sursa_executat INTO v_tip, v_sursa
-      FROM public.proiect_activitati pa WHERE pa.id::bigint = v_aid AND pa.proiect_id::bigint = v_proiect;
-    IF NOT FOUND THEN RAISE EXCEPTION 'raport: activitatea % nu e a proiectului raportului', v_aid USING ERRCODE = '22023'; END IF;
-    v_nod := NULL;
-    IF v_unit IS NOT NULL THEN
-      SELECT pu.nod_cod INTO v_nod FROM public.proiect_unitati pu WHERE pu.id = v_unit AND pu.proiect_id::bigint = v_proiect;
-      IF NOT FOUND THEN RAISE EXCEPTION 'raport: obiectul % nu e al proiectului raportului', v_unit USING ERRCODE = '22023'; END IF;
-    END IF;
-    IF v_tip = 'bifa' AND (e->>'cantitate')::numeric <> 1 THEN
-      RAISE EXCEPTION 'raport: o activitate cu bifă se raportează cu 1' USING ERRCODE = '22023';
-    END IF;
-    IF v_sursa = 'schema_nod' AND v_nod IS NOT NULL THEN
-      RAISE EXCEPTION 'raport: sudurile nodului se iau din schema nodului, nu din raport' USING ERRCODE = '22023';
-    END IF;
-  END LOOP;
-  -- 4. CAS + idempotență: starea dorită există deja = reluare; altă stare decât cea citită de client = conflict
-  v_curent := public.fn_raport_lucrari_amprenta_linii(public.fn_raport_lucrari_json(p_raport_id));
-  v_nou := public.fn_raport_lucrari_amprenta_linii(v_canon);
-  IF v_curent = v_nou THEN
-    RETURN jsonb_build_object('ok', true, 'duplicat', true, 'amprenta', v_nou, 'linii', jsonb_array_length(v_canon));
+    RAISE EXCEPTION 'raport: cheia salvării a fost folosită pentru alt conținut' USING ERRCODE = '22023';
   END IF;
-  IF v_curent IS DISTINCT FROM p_amprenta_veche THEN
-    RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'amprenta', v_curent);
+  -- 4. CAS: versiunea văzută de client (raport inexistent = 0)
+  v_ver := CASE WHEN v_raport IS NULL THEN 0
+                ELSE (SELECT coalesce(max(s.versiune), 0) FROM public.raport_zilnic_salvari s WHERE s.raport_id = v_raport) END;
+  IF v_ver <> p_versiune THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'raport_id', v_raport, 'versiune', v_ver);
   END IF;
-  -- 5. înlocuirea (proiectul liniei = proiectul șantierului, pus de server, L08)
-  DELETE FROM public.raport_lucrari WHERE raport_id = p_raport_id;
-  INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, unitate_id, cantitate)
-  SELECT p_raport_id, v_proiect, x.activitate_id, x.unitate_id, x.cantitate
-    FROM jsonb_to_recordset(v_canon) AS x(activitate_id bigint, unitate_id bigint, cantitate numeric);
-  GET DIAGNOSTICS v_n = ROW_COUNT;
-  IF v_n <> jsonb_array_length(v_canon)
-     OR public.fn_raport_lucrari_amprenta_linii(public.fn_raport_lucrari_json(p_raport_id)) IS DISTINCT FROM v_nou THEN
-    RAISE EXCEPTION 'raport: liniile scrise nu corespund setului trimis' USING ERRCODE = 'P0001';
+  -- 5. activitățile și unitățile atinse: ale proiectului șantierului (L09), blocate în ordinea id-ului (L06)
+  IF v_canon IS NOT NULL THEN
+    PERFORM 1 FROM public.proiect_activitati pa WHERE pa.id::bigint = ANY (v_act_ids) ORDER BY pa.id FOR SHARE;
+    PERFORM 1 FROM public.proiect_unitati pu WHERE pu.id::bigint = ANY (v_unit_ids) ORDER BY pu.id FOR SHARE;
+    FOR e IN SELECT x FROM jsonb_array_elements(v_canon) x LOOP
+      v_aid := (e->>'activitate_id')::bigint;
+      v_unit := CASE WHEN jsonb_typeof(e->'unitate_id') = 'number' THEN (e->>'unitate_id')::bigint END;
+      SELECT coalesce(pa.tip_raportare, 'cantitate'), pa.sursa_executat INTO v_tip, v_sursa
+        FROM public.proiect_activitati pa WHERE pa.id::bigint = v_aid AND pa.proiect_id::bigint = v_proiect;
+      IF NOT FOUND THEN RAISE EXCEPTION 'raport: activitatea % nu e a proiectului raportului', v_aid USING ERRCODE = '22023'; END IF;
+      v_nod := NULL;
+      IF v_unit IS NOT NULL THEN
+        SELECT pu.nod_cod INTO v_nod FROM public.proiect_unitati pu WHERE pu.id = v_unit AND pu.proiect_id::bigint = v_proiect;
+        IF NOT FOUND THEN RAISE EXCEPTION 'raport: obiectul % nu e al proiectului raportului', v_unit USING ERRCODE = '22023'; END IF;
+      END IF;
+      IF v_tip = 'bifa' AND (e->>'cantitate')::numeric <> 1 THEN
+        RAISE EXCEPTION 'raport: o activitate cu bifă se raportează cu 1' USING ERRCODE = '22023';
+      END IF;
+      IF v_sursa = 'schema_nod' AND v_nod IS NOT NULL THEN
+        RAISE EXCEPTION 'raport: sudurile nodului se iau din schema nodului, nu din raport' USING ERRCODE = '22023';
+      END IF;
+    END LOOP;
   END IF;
-  RETURN jsonb_build_object('ok', true, 'duplicat', false, 'amprenta', v_nou, 'linii', v_n);
+  -- 6. antetul (aceleași câmpuri ca până acum din telefon; autorul și ora le pune serverul, L08)
+  INSERT INTO public.rapoarte_zilnice AS t (site_id, data, sef_santier, lucrari_efectuate, utilaje_snapshot, personal_snapshot, masini, probleme,
+                                           subcontractori, aprovizionare, plan_maine, poze, meteo, distributie_antet, created_by, updated_at)
+  SELECT p_site, p_data, x.sef_santier, x.lucrari_efectuate, x.utilaje_snapshot, x.personal_snapshot, x.masini, x.probleme,
+         x.subcontractori, x.aprovizionare, x.plan_maine, x.poze, x.meteo, x.distributie_antet, v_uid, now()
+    FROM jsonb_populate_record(NULL::public.rapoarte_zilnice, p_antet) x
+  ON CONFLICT (site_id, data) DO UPDATE SET
+    sef_santier = CASE WHEN p_antet ? 'sef_santier' THEN EXCLUDED.sef_santier ELSE t.sef_santier END,
+    lucrari_efectuate = CASE WHEN p_antet ? 'lucrari_efectuate' THEN EXCLUDED.lucrari_efectuate ELSE t.lucrari_efectuate END,
+    utilaje_snapshot = CASE WHEN p_antet ? 'utilaje_snapshot' THEN EXCLUDED.utilaje_snapshot ELSE t.utilaje_snapshot END,
+    personal_snapshot = CASE WHEN p_antet ? 'personal_snapshot' THEN EXCLUDED.personal_snapshot ELSE t.personal_snapshot END,
+    masini = CASE WHEN p_antet ? 'masini' THEN EXCLUDED.masini ELSE t.masini END,
+    probleme = CASE WHEN p_antet ? 'probleme' THEN EXCLUDED.probleme ELSE t.probleme END,
+    subcontractori = CASE WHEN p_antet ? 'subcontractori' THEN EXCLUDED.subcontractori ELSE t.subcontractori END,
+    aprovizionare = CASE WHEN p_antet ? 'aprovizionare' THEN EXCLUDED.aprovizionare ELSE t.aprovizionare END,
+    plan_maine = CASE WHEN p_antet ? 'plan_maine' THEN EXCLUDED.plan_maine ELSE t.plan_maine END,
+    poze = CASE WHEN p_antet ? 'poze' THEN EXCLUDED.poze ELSE t.poze END,
+    meteo = CASE WHEN p_antet ? 'meteo' THEN EXCLUDED.meteo ELSE t.meteo END,
+    distributie_antet = CASE WHEN p_antet ? 'distributie_antet' THEN EXCLUDED.distributie_antet ELSE t.distributie_antet END,
+    created_by = EXCLUDED.created_by, updated_at = EXCLUDED.updated_at
+  RETURNING t.id INTO v_raport;
+  -- 7. liniile: înlocuire (proiectul liniei = proiectul șantierului, pus de server, L08)
+  IF v_canon IS NOT NULL THEN
+    DELETE FROM public.raport_lucrari WHERE raport_id = v_raport;
+    INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, unitate_id, cantitate)
+    SELECT v_raport, v_proiect, x.activitate_id, x.unitate_id, x.cantitate
+      FROM jsonb_to_recordset(v_canon) AS x(activitate_id bigint, unitate_id bigint, cantitate numeric);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> jsonb_array_length(v_canon)
+       OR public.fn_raport_lucrari_amprenta_linii(public.fn_raport_lucrari_json(v_raport)) IS DISTINCT FROM public.fn_raport_lucrari_amprenta_linii(v_canon) THEN
+      RAISE EXCEPTION 'raport: liniile scrise nu corespund setului trimis' USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  -- 8. jurnalul: versiunea nouă + cheia intenției (UNIQUE pe versiune = a doua scriere concurentă ar fi refuzată, nu pierdută)
+  INSERT INTO public.raport_zilnic_salvari (cheie, raport_id, versiune, amprenta, profile_id) VALUES (p_cheie, v_raport, v_ver + 1, v_amp, v_uid);
+  RETURN jsonb_build_object('ok', true, 'duplicat', false, 'raport_id', v_raport, 'versiune', v_ver + 1);
 END $f$;
-REVOKE ALL ON FUNCTION public.fn_raport_lucrari_salveaza(bigint, text, jsonb) FROM PUBLIC, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_raport_lucrari_salveaza(bigint, text, jsonb) TO authenticated;
-
--- ── scrierea directă în raport_lucrari se retrage (L07): liniile trec doar prin RPC; citirea rămâne ──
-REVOKE INSERT, UPDATE, DELETE ON public.raport_lucrari FROM anon, authenticated;
+REVOKE ALL ON FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid) TO authenticated;
 
 -- ── postcondiții ──
 DO $post$
-DECLARE v_set oid := 'public.executie_tinte_setari'::regclass;
+DECLARE v_set oid := 'public.executie_tinte_setari'::regclass; v_jur oid := 'public.raport_zilnic_salvari'::regclass;
+  v_fn name[] := ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati',
+    'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie',
+    'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[];
 BEGIN
   IF (SELECT relrowsecurity FROM pg_class WHERE oid = v_set) IS NOT TRUE
      OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_tinte_setari') <> 4
      OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_tinte_setari' AND roles = '{authenticated}'
            AND permissive = 'PERMISSIVE' AND policyname IN ('executie_tinte_setari_citire', 'executie_tinte_setari_adauga',
-                                                            'executie_tinte_setari_modifica', 'executie_tinte_setari_sterge')) <> 4 THEN
-    RAISE EXCEPTION '20261208a post: RLS / politicile setarilor';
+                                                            'executie_tinte_setari_modifica', 'executie_tinte_setari_sterge')) <> 4
+     OR (SELECT relrowsecurity FROM pg_class WHERE oid = v_jur) IS NOT TRUE
+     OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'raport_zilnic_salvari') THEN
+    RAISE EXCEPTION '20261208a post: RLS / politicile setarilor si ale jurnalului';
   END IF;
   IF has_table_privilege('anon', v_set, 'SELECT') OR has_table_privilege('anon', v_set, 'INSERT')
      OR NOT has_table_privilege('authenticated', v_set, 'SELECT') OR NOT has_table_privilege('authenticated', v_set, 'INSERT')
      OR NOT has_table_privilege('authenticated', v_set, 'UPDATE') OR NOT has_table_privilege('authenticated', v_set, 'DELETE')
      OR has_table_privilege('authenticated', v_set, 'TRUNCATE') OR has_table_privilege('service_role', v_set, 'INSERT')
+     OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r,
+                       unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) p
+                 WHERE has_table_privilege(r, v_jur, p))
      OR has_table_privilege('anon', 'public.v_executie_tinte', 'SELECT') OR NOT has_table_privilege('authenticated', 'public.v_executie_tinte', 'SELECT')
      OR has_table_privilege('service_role', 'public.v_executie_tinte', 'SELECT')
      OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.v_executie_tinte'::regclass AND 'security_invoker=on' = ANY (reloptions)) THEN
-    RAISE EXCEPTION '20261208a post: privilegii pe setari / vedere';
-  END IF;
-  -- raport_lucrari: authenticated doar citește; anon nu scrie
-  IF has_table_privilege('authenticated', 'public.raport_lucrari', 'INSERT') OR has_table_privilege('authenticated', 'public.raport_lucrari', 'UPDATE')
-     OR has_table_privilege('authenticated', 'public.raport_lucrari', 'DELETE') OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'SELECT')
-     OR has_table_privilege('anon', 'public.raport_lucrari', 'INSERT') OR has_table_privilege('anon', 'public.raport_lucrari', 'UPDATE')
-     OR has_table_privilege('anon', 'public.raport_lucrari', 'DELETE') THEN
-    RAISE EXCEPTION '20261208a post: privilegii raport_lucrari';
+    RAISE EXCEPTION '20261208a post: privilegii pe setari / jurnal / vedere';
   END IF;
   -- funcțiile: search_path fix; DEFINER doar unde trebuie; EXECUTE doar pentru authenticated la cele apelabile din aplicație
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-              WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[])
+              WHERE n.nspname = 'public' AND p.proname = ANY (v_fn)
                 AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
                      OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_nod',
-                                                                    'fn_executie_tinte_calcul', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza'))
+                                                                    'fn_executie_tinte_calcul', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza'))
                      OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('service_role', p.oid, 'EXECUTE')
                      OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
                         IS DISTINCT FROM (p.proname IN ('fn_executie_tinte_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_nod',
-                                                        'fn_executie_tinte_calcul', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza'))))
-     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[])) <> 14 THEN
+                                                        'fn_executie_tinte_calcul', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza'))))
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (v_fn)) <> 14 THEN
     RAISE EXCEPTION '20261208a post: functii (definer / search_path / EXECUTE)';
   END IF;
   IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled = 'O' AND (tgrelid, tgname) IN (
@@ -697,7 +771,7 @@ BEGIN
         ('public.executie_tinte_setari'::regclass, 'trg_executie_tinte_setari_prov'))) <> 3 THEN
     RAISE EXCEPTION '20261208a post: trigger-ele';
   END IF;
-  IF EXISTS (SELECT 1 FROM public.executie_tinte_setari)
+  IF EXISTS (SELECT 1 FROM public.executie_tinte_setari) OR EXISTS (SELECT 1 FROM public.raport_zilnic_salvari)
      OR EXISTS (SELECT 1 FROM public.proiect_unitati WHERE obiect_cod IS NOT NULL OR nod_cod IS NOT NULL OR plan_start IS NOT NULL)
      OR EXISTS (SELECT 1 FROM public.proiect_activitati WHERE principala OR factor_um <> 1 OR sursa_executat <> 'raport' OR baza_deviz <> 'revizuita'
                                                            OR dn_min IS NOT NULL OR dn_max IS NOT NULL) THEN

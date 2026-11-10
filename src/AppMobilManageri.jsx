@@ -18,7 +18,7 @@ import { combinaUtilaje } from './raportUtilaje.js'
 import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, antetImplicit } from './raportDistributie.js'
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 // Raportul legat de devize (20261208a): obiecte pe raport, ținte din v_executie_tinte, linii salvate atomic prin RPC
-import { AMPRENTA_GOL, blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
+import { blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -143,7 +143,9 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [tinte, setTinte] = useState([])                    // v_executie_tinte (din deviz / executat / rest) pe proiect
   const [tinteErr, setTinteErr] = useState(null)
   const [nodZi, setNodZi] = useState({})                    // {"unitate:activitate": {zi, total}} din schema nodului, pe ziua raportului
-  const [amprenta, setAmprenta] = useState(AMPRENTA_GOL)    // amprenta liniilor citite (CAS la salvare); null = necitite
+  const [versiune, setVersiune] = useState(0)              // versiunea raportului citită (CAS la salvare); null = necitită (salvarea e blocată)
+  const [incarcat, setIncarcat] = useState(null)            // „șantier|zi” pentru care s-au încărcat datele (salvarea e legată de ele, L24)
+  const intentieRef = useRef(null)                          // salvarea în curs: {semn, cheie, antet, linii, ...} — reluată identic după o eroare de rețea (L05)
   const [liniiErr, setLiniiErr] = useState(null)
   const [actErr, setActErr] = useState(null)
   const genRef = useRef(0)                                  // L24: răspunsul unei încărcări vechi (alt șantier / altă zi) nu se aplică
@@ -168,73 +170,79 @@ function RaportZilnic({ profile, sites, onBack }) {
   const loadSiteData = useCallback(async (sid, dataSel) => {
     if (!sid) return
     const zi = dataSel || azi()
+    const gen = ++genRef.current
+    const viu = () => gen === genRef.current
+    setIncarcat(null)
     setLoadingData(true)
     setMsg(null)
     // ── Activitățile proiectului legat de lucrare (Faza 5 pas 3) ──
     const { data: siteRow } = await supabase.from('sites').select('proiect_id, name, adresa').eq('id', sid).maybeSingle()
+    if (!viu()) return
     const pid = siteRow?.proiect_id || null
     setProiectId(pid)
     // Distribuție gaze: dacă proiectul nu e marcat (sau coloana nu există încă) → secțiunea nu apare.
     let esteDistr = false
     if (pid) {
       const { data: pr, error: prErr } = await supabase.from('executie_proiecte').select('raport_distributie').eq('id', pid).maybeSingle()
+      if (!viu()) return
       esteDistr = !prErr && !!pr?.raport_distributie
     }
     setDistributie(esteDistr)
     setDAntet(antetImplicit({ adresa: siteRow?.adresa, numeLucrare: siteRow?.name }))
     setDRanduri(esteDistr ? [randNou('conducta'), randNou('bransament')] : [])
-    const gen = ++genRef.current
     let acts = [], unis = []
     setActErr(null); setTinteErr(null); setLiniiErr(null); setTinte([]); setNodZi({})
     if (pid) {
       const [ra, ru] = await Promise.all([
-        supabase.from('proiect_activitati').select('id, nume, um, ordine, tip_raportare, principala, sursa_executat')
-          .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
-        supabase.from('proiect_unitati').select('id, tip, cod, nume, ordine, nod_cod')
-          .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
+        // TOATE (și cele inactive): un raport vechi poate avea linii pe ele — se arată și se pot corecta (review r1 P2-6)
+        supabase.from('proiect_activitati').select('id, nume, um, ordine, tip_raportare, principala, sursa_executat, activ')
+          .eq('proiect_id', pid).order('ordine').order('id'),
+        supabase.from('proiect_unitati').select('id, tip, cod, nume, ordine, nod_cod, activ')
+          .eq('proiect_id', pid).order('ordine').order('id'),
       ])
-      if (gen !== genRef.current) return
+      if (!viu()) return
       if (ra.error || ru.error) setActErr((ra.error || ru.error).message)
       acts = ra.data || []
       unis = ru.data || []
     }
     setUnitati(unis)
     setActivitati(acts)
-    setBlocuri([blocNou(unis.length === 1 ? unis[0].id : null)])
-    setAmprenta(AMPRENTA_GOL)
+    const unisActive = unis.filter(u => u.activ !== false)
+    setBlocuri([blocNou(unisActive.length === 1 ? unisActive[0].id : null)])
+    setVersiune(0)
     // ── Țintele (din deviz / executat / rest) și contorul nodului pe ziua raportului; o eroare se arată, nu devine „rest 0” (L18) ──
     if (pid && acts.length) {
       try {
         const t = await citesteTinte(supabase, pid, 'unitate_id,activitate_id,din_deviz,executat,rest,peste_deviz,executat_sursa')
-        if (gen !== genRef.current) return
+        if (!viu()) return
         setTinte(t)
-      } catch (e) { if (gen === genRef.current) setTinteErr(e?.message || String(e)) }
+      } catch (e) { if (viu()) setTinteErr(e?.message || String(e)) }
       if (unis.some(u => u.nod_cod) && acts.some(a => a.sursa_executat === 'schema_nod')) {
         const { data: nz, error: nzErr } = await supabase.rpc('fn_executie_tinte_nod', { p_proiect: pid, p_data: zi })
-        if (gen !== genRef.current) return
+        if (!viu()) return
         if (nzErr) setTinteErr(v => v || nzErr.message)
         else setNodZi(Object.fromEntries((nz || []).filter(r => r.activitate_id != null)
           .map(r => [`${r.unitate_id}:${r.activitate_id}`, { zi: r.sudate_zi, total: r.sudate_total }])))
       }
     }
     // ── Există deja raport azi pe lucrare? → încarcă pentru editare (anti-dublură) ──
-    const { data: existing } = await supabase.from('rapoarte_zilnice').select('*').eq('site_id', sid).eq('data', zi).maybeSingle()
-    if (gen !== genRef.current) return
+    // antetul, liniile și versiunea, dintr-un singur instantaneu: versiunea se trimite înapoi la salvare (CAS: alt telefon a salvat între timp = conflict)
+    const { data: cit, error: citErr } = await supabase.rpc('fn_raport_zilnic_citeste', { p_site: sid, p_data: zi })
+    if (!viu()) return
+    if (citErr || !cit || !Number.isInteger(cit.versiune) || !Array.isArray(cit.linii)) {
+      // fără citire nu știm ce e salvat: nu se pre-completează nimic și salvarea rămâne blocată (L18)
+      setLiniiErr(citErr?.message || 'răspuns neașteptat'); setVersiune(null); setLoadingData(false); return
+    }
+    const existing = cit.raport
+    setVersiune(cit.versiune)
     if (existing) {
       if (acts.length) {
-        // liniile + amprenta lor, dintr-un singur instantaneu: amprenta se trimite înapoi la salvare (CAS: alt telefon a salvat între timp = conflict)
-        const { data: cit, error: citErr } = await supabase.rpc('fn_raport_lucrari_citeste', { p_raport_id: existing.id })
-        if (gen !== genRef.current) return
-        if (citErr || !cit || !/^[0-9a-f]{32}$/.test(cit.amprenta || '') || !Array.isArray(cit.linii)) {
-          setLiniiErr(citErr?.message || 'răspuns neașteptat'); setAmprenta(null)
-        } else {
-          const b = blocuriDinLinii(cit.linii)
-          setBlocuri(b.length ? b : [blocNou(unis.length === 1 ? unis[0].id : null)])
-          setAmprenta(cit.amprenta)
-        }
+        const b = blocuriDinLinii(cit.linii)
+        setBlocuri(b.length ? b : [blocNou(unisActive.length === 1 ? unisActive[0].id : null)])
       }
       if (esteDistr) {
         const { data: dl } = await supabase.from('raport_distributie_linii').select('*').eq('raport_id', existing.id).order('tabel').order('nr_crt')
+        if (!viu()) return
         const r = dinBd(dl)
         if (!r.some(x => x.tabel === 'conducta')) r.unshift(randNou('conducta'))
         if (!r.some(x => x.tabel === 'bransament')) r.push(randNou('bransament'))
@@ -254,10 +262,12 @@ function RaportZilnic({ profile, sites, onBack }) {
       const urls = []
       for (const p of (existing.poze || [])) {
         const { data: s } = await supabase.storage.from(BUCKET).createSignedUrl(p, 3600)
+        if (!viu()) return
         if (s?.signedUrl) urls.push({ path: p, url: s.signedUrl })
       }
       setPozeExistente(urls)
       setPoze([])
+      setIncarcat(`${sid}|${zi}`)
       setLoadingData(false)
       return
     }
@@ -265,9 +275,11 @@ function RaportZilnic({ profile, sites, onBack }) {
     setExistingId(null); setPozeExistente([])
     // Personal azi; fallback ieri dacă azi gol
     let { data: per } = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', zi).maybeSingle()
+    if (!viu()) return
     if (!per) {
       const ieri = new Date(new Date(zi + 'T12:00:00').getTime() - 86400000).toISOString().slice(0, 10)
       const r = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', ieri).maybeSingle()
+      if (!viu()) return
       per = r.data
     }
     setPersonal(per ? { sudori: per.sudori, lacatusi: per.lacatusi, operatori: per.operatori, soferi: per.soferi, necalificati: per.necalificati, tesa: per.tesa || 0, altii: per.altii } : { sudori: 0, lacatusi: 0, operatori: 0, soferi: 0, necalificati: 0, tesa: 0, altii: 0 })
@@ -280,7 +292,9 @@ function RaportZilnic({ profile, sites, onBack }) {
     const azo = zi
     const { data: prev } = await supabase.from('rapoarte_zilnice').select('data, utilaje_snapshot')
       .eq('site_id', sid).lt('data', azo).order('data', { ascending: false }).limit(1).maybeSingle()
+    if (!viu()) return
     const { data: ut } = await supabase.from('v_active_santier_recent').select('*').eq('site_id', sid)
+    if (!viu()) return
     const { map, dinAlimentariRecente } = combinaUtilaje({
       prevSnapshot: prev?.utilaje_snapshot, dataPrev: prev?.data || null, alimentari: ut, azi: azo,
     })
@@ -295,6 +309,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         .select('active_id, data_alimentare').eq('site_id', sid)
         .in('active_id', deVerificat.map(u => u.active_id))
         .order('data_alimentare', { ascending: false })
+      if (!viu()) return
       const ultima = {}
       for (const r of (vechi || [])) if (!ultima[r.active_id]) ultima[r.active_id] = r.data_alimentare
       for (const u of deVerificat) {
@@ -311,6 +326,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     const idsStare = lista.filter(u => u.active_id).map(u => u.active_id)
     if (idsStare.length) {
       const { data: st } = await supabase.from('logistica_active').select('id, stare').in('id', idsStare)
+      if (!viu()) return
       const sMap = Object.fromEntries((st || []).map(x => [x.id, x.stare]))
       for (const u of lista) {
         if (!u.active_id || !sMap[u.active_id]) continue
@@ -324,6 +340,7 @@ function RaportZilnic({ profile, sites, onBack }) {
       }
     }
     setUtilaje(lista)
+    setIncarcat(`${sid}|${zi}`)
     setLoadingData(false)
   }, [])
 
@@ -376,54 +393,66 @@ function RaportZilnic({ profile, sites, onBack }) {
     // cantitățile pe obiecte: aceleași reguli ca serverul, verificate ÎNAINTE de orice scriere (nimic nu se salvează pe jumătate)
     const deSalvat = activitati.length ? liniiDinBlocuri(blocuri, { activitati, unitati }) : null
     if (deSalvat?.erori.length) { setMsg({ ok: false, text: 'Cantități: ' + deSalvat.erori.slice(0, 3).join(' · ') + (deSalvat.erori.length > 3 ? ` (+${deSalvat.erori.length - 3})` : '') }); return }
-    if (deSalvat && amprenta == null) { setMsg({ ok: false, text: 'Cantitățile salvate deja pe acest raport nu s-au putut citi — alege din nou data ca să le reîncarci, apoi salvează.' }); return }
+    if (incarcat !== `${siteId}|${dataRaport}`) { setMsg({ ok: false, text: 'Raportul pentru lucrarea și ziua alese încă se încarcă — așteaptă o clipă și trimite din nou.' }); return }
+    if (versiune == null) { setMsg({ ok: false, text: 'Raportul salvat deja pe această zi nu s-a putut citi — alege din nou data ca să-l reîncarci, apoi salvează.' }); return }
     if (!pozeOk) { setMsg({ ok: false, text: `Raportul se trimite cu minim ${MIN_POZE} poze de pe șantier (ai ${nrPoze}). Pozele ajung pe pagina firmei — fă-le cu lucrarea executată corect.` }); return }
     setSaving(true); setMsg(null)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      // păstrează pozele deja urcate (la editare) + urcă cele noi
-      const pozePaths = pozeExistente.map(p => p.path)
-      for (const f of poze) {
-        const ext = (f.name.split('.').pop() || 'jpg').toLowerCase()
-        const path = `${siteId}/${dataRaport}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
-        const { error } = await supabase.storage.from(BUCKET).upload(path, f, { contentType: f.type || 'image/jpeg', upsert: false })
-        if (!error) pozePaths.push(path)
+      // aceeași intenție (nimic schimbat în formular după o eroare de rețea) = aceeași cheie și același conținut, fără a reurca pozele (L04 / L05)
+      const semn = JSON.stringify({ siteId, dataRaport, versiune, lucrari, utilaje, personal, masini, probleme, subcontractori, aprovizionare, planMaine,
+        distributie, dAntet, blocuri: blocuri.map(b => [b.unitateId, b.valori]), pozeEx: pozeExistente.map(x => x.path), poze: poze.map(f => [f.name, f.size, f.lastModified]) })
+      let intentie = intentieRef.current?.semn === semn ? intentieRef.current : null
+      if (!intentie) {
+        // păstrează pozele deja urcate (la editare) + urcă cele noi
+        const pozePaths = pozeExistente.map(p => p.path)
+        for (const f of poze) {
+          const ext = (f.name.split('.').pop() || 'jpg').toLowerCase()
+          const path = `${siteId}/${dataRaport}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
+          const { error } = await supabase.storage.from(BUCKET).upload(path, f, { contentType: f.type || 'image/jpeg', upsert: false })
+          if (!error) pozePaths.push(path)
+        }
+        const totalPers = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
+        // vremea la momentul raportului (din meteo_cache, Xweather) — dovadă pentru zilele nelucrate pe motive meteo
+        let meteoSnap = null
+        // TKT-0135: meteo_cache tine DOAR vremea curenta — pe un raport backdatat ar fi o dovada falsa, deci il sarim.
+        if (dataRaport === azi())
+        try { const { data: mc } = await supabase.from('meteo_cache').select('curent, alerte, actualizat_la').eq('site_id', siteId).maybeSingle(); if (mc?.curent) meteoSnap = { ...mc.curent, alerte: (mc.alerte || []).map(a => a.titlu), sursa_la: mc.actualizat_la } } catch { /* fără meteo */ }
+        intentie = {
+          semn, cheie: crypto.randomUUID(), site: siteId, data: dataRaport, versiune,
+          antet: {
+            sef_santier: profile?.name || null,
+            lucrari_efectuate: lucrari.trim() || null,
+            utilaje_snapshot: utilaje.map(u => ({ active_id: u.active_id ?? null, cod: u.cod, inmatriculare: u.inmatriculare || null, nume: u.nume, tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, stare: u.stare, motiv: u.motiv || null, alimentat: !!u.alimentat })),
+            personal_snapshot: { ...personal, total: totalPers },
+            masini: masini.trim() || null,
+            probleme: probleme.trim() || null,
+            subcontractori: subcontractori.trim() || null,
+            aprovizionare: aprovizionare.trim() || null,
+            plan_maine: planMaine.trim() || null,
+            poze: pozePaths,
+            meteo: meteoSnap,
+            ...(distributie ? { distributie_antet: dAntet.trim() || null } : {}),
+          },
+          // proiect cu activități: liniile se înlocuiesc; altfel nu se ating (null)
+          linii: proiectId && deSalvat ? deSalvat.linii : null,
+        }
+        intentieRef.current = intentie
       }
-      const totalPers = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
-      // vremea la momentul raportului (din meteo_cache, Xweather) — dovadă pentru zilele nelucrate pe motive meteo
-      let meteoSnap = null
-      // TKT-0135: meteo_cache tine DOAR vremea curenta — pe un raport backdatat ar fi o dovada falsa, deci il sarim.
-      if (dataRaport === azi())
-      try { const { data: mc } = await supabase.from('meteo_cache').select('curent, alerte, actualizat_la').eq('site_id', siteId).maybeSingle(); if (mc?.curent) meteoSnap = { ...mc.curent, alerte: (mc.alerte || []).map(a => a.titlu), sursa_la: mc.actualizat_la } } catch { /* fără meteo */ }
-      // upsert pe (site_id, data) → 1 raport/lucrare/zi, reintrarea editează
-      const { data: rz, error: insErr } = await supabase.from('rapoarte_zilnice').upsert({
-        site_id: siteId, data: dataRaport,
-        sef_santier: profile?.name || null,
-        lucrari_efectuate: lucrari.trim() || null,
-        utilaje_snapshot: utilaje.map(u => ({ active_id: u.active_id ?? null, cod: u.cod, inmatriculare: u.inmatriculare || null, nume: u.nume, tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, stare: u.stare, motiv: u.motiv || null, alimentat: !!u.alimentat })),
-        personal_snapshot: { ...personal, total: totalPers },
-        masini: masini.trim() || null,
-        probleme: probleme.trim() || null,
-        subcontractori: subcontractori.trim() || null,
-        aprovizionare: aprovizionare.trim() || null,
-        plan_maine: planMaine.trim() || null,
-        poze: pozePaths,
-        meteo: meteoSnap,
-        ...(distributie ? { distributie_antet: dAntet.trim() || null } : {}),
-        created_by: user?.id || null,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'site_id,data' }).select('id').single()
-      if (insErr) throw insErr
-      // ── Cantitățile pe obiecte (20261208a): înlocuite ATOMIC de server, cu CAS pe amprenta citită (L01/L02) ──
-      // Răspuns pierdut (rețea): amprenta rămâne cea veche, deci reluarea aceluiași set întoarce „duplicat” (nu dublează nimic, L05).
-      if (rz?.id && proiectId && deSalvat) {
-        const { data: rs, error: rlErr } = await supabase.rpc('fn_raport_lucrari_salveaza', { p_raport_id: rz.id, p_amprenta_veche: amprenta, p_linii: deSalvat.linii })
-        if (rlErr) throw rlErr
-        if (rs?.ok !== true) throw new Error(rs?.motiv === 'conflict'
-          ? 'Între timp s-au salvat alte cantități pe acest raport (alt telefon). Alege din nou data ca să le vezi, apoi completează.'
-          : 'Cantitățile nu s-au salvat (răspuns neașteptat).')
-        setAmprenta(rs.amprenta)
+      // ── antetul + cantitățile pe obiecte (20261208a): o singură tranzacție pe server, CAS pe versiune, cheie per intenție ──
+      const { data: rs, error: rsErr } = await supabase.rpc('fn_raport_zilnic_salveaza', {
+        p_site: intentie.site, p_data: intentie.data, p_antet: intentie.antet, p_linii: intentie.linii, p_versiune: intentie.versiune, p_cheie: intentie.cheie })
+      if (rsErr) {
+        // refuz cu cod SQL = tranzacția s-a anulat (determinat): o încercare nouă face o intenție nouă; altfel (rețea) rămâne pentru reluare
+        if (/^[0-9A-Z]{5}$/.test(rsErr.code || '')) intentieRef.current = null
+        throw rsErr
       }
+      intentieRef.current = null
+      if (rs?.ok !== true) throw new Error(rs?.motiv === 'conflict'
+        ? 'Între timp altcineva a salvat acest raport (alt telefon). Alege din nou data ca să vezi ce e salvat, apoi completează.'
+        : 'Raportul nu s-a salvat (răspuns neașteptat).')
+      setVersiune(rs.versiune)
+      setExistingId(rs.raport_id)
+      const rz = { id: rs.raport_id }
       // ── Raport lucrări executate (distribuție gaze): înlocuim rândurile raportului ATOMIC (RPC, o tranzacție) ──
       if (rz?.id && distributie) {
         const { error: dErr } = await supabase.rpc('fn_raport_distributie_salveaza', { p_raport_id: rz.id, p_linii: pentruSalvare(dRanduri, rz.id) })
@@ -680,8 +709,8 @@ function RaportZilnic({ profile, sites, onBack }) {
                   onChange={patch => setBlocuri(list => list.map(x => (x.cheie === b.cheie ? { ...x, ...patch } : x)))}
                   onSterge={() => setBlocuri(list => list.filter(x => x.cheie !== b.cheie))} />
               ))}
-              {unitati.length > 0 && blocuri.length <= unitati.length && (
-                <button onClick={() => setBlocuri(list => [...list, blocNou(unitati.find(u => !list.some(x => x.unitateId === Number(u.id)))?.id ?? null)])}
+              {unitati.some(u => u.activ !== false && !blocuri.some(x => x.unitateId === Number(u.id))) && (
+                <button onClick={() => setBlocuri(list => [...list, blocNou(unitati.find(u => u.activ !== false && !list.some(x => x.unitateId === Number(u.id)))?.id ?? null)])}
                   style={{ background: 'transparent', border: `1px dashed ${G.border2}`, color: G.blue, borderRadius: 10, padding: '10px', width: '100%', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
                   + alt obiect
                 </button>
@@ -786,7 +815,7 @@ function BlocObiect({ bloc, activitati, unitati, tinte, nodZi, ocupate, poateSte
           <select value={bloc.unitateId ?? ''} onChange={e => onChange({ unitateId: e.target.value === '' ? null : Number(e.target.value) })}
             style={{ ...inputStyle, appearance: 'none', flex: 1, fontWeight: 700 }}>
             <option value="" disabled={ocupate.includes(null)}>— toată lucrarea / nespecificat —</option>
-            {unitati.map(x => <option key={x.id} value={x.id} disabled={ocupate.includes(Number(x.id))}>{x.cod ? `${x.cod} · ` : ''}{x.nume}</option>)}
+            {unitati.filter(x => x.activ !== false || Number(x.id) === bloc.unitateId).map(x => <option key={x.id} value={x.id} disabled={ocupate.includes(Number(x.id))}>{x.cod ? `${x.cod} · ` : ''}{x.nume}{x.activ === false ? ' (inactiv)' : ''}</option>)}
           </select>
           {poateSterge && <button onClick={onSterge} title="Scoate obiectul din raport" style={{ background: 'transparent', border: 'none', color: G.dim, fontSize: 22, cursor: 'pointer', padding: '0 6px' }}>×</button>}
         </div>
@@ -799,7 +828,8 @@ function BlocObiect({ bloc, activitati, unitati, tinte, nodZi, ocupate, poateSte
         const c = bifa ? null : cantitateLinie(v)
         const sub = [t && t.rest != null ? `rest: ${fmtNr(t.rest)} ${a.um || ''}` : null,
           t && Number(t.peste_deviz) > 0 ? `peste deviz: +${fmtNr(t.peste_deviz)} ${a.um || ''}` : null].filter(Boolean).join(' · ')
-        if (a.sursa_executat === 'schema_nod' && u?.nod_cod) {
+        // la nod, sudurile vin din schemă; o cantitate veche (scrisă înainte) se arată mai jos, cu eroare, ca să poată fi golită
+        if (a.sursa_executat === 'schema_nod' && u?.nod_cod && (v == null || v === '')) {
           const nz = nodZi[`${bloc.unitateId}:${a.id}`]
           return (
             <div key={a.id} style={{ background: G.bg, border: `1px dashed ${G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6 }}>
@@ -814,7 +844,10 @@ function BlocObiect({ bloc, activitati, unitati, tinte, nodZi, ocupate, poateSte
             style={{ display: 'flex', alignItems: 'center', gap: 10, background: bifa && bifat ? G.green + '18' : G.bg, border: `1px solid ${c?.eroare ? G.red : bifa && bifat ? G.green + '66' : G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6, cursor: bifa ? 'pointer' : 'default', userSelect: 'none' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14, color: G.text }}>{a.nume}</div>
-              {(sub || c?.eroare) && <div style={{ fontSize: 11.5, color: c?.eroare ? G.red : G.dim, marginTop: 2 }}>{c?.eroare || sub}</div>}
+              {a.sursa_executat === 'schema_nod' && u?.nod_cod
+                ? <div style={{ fontSize: 11.5, color: G.red, marginTop: 2 }}>sudurile nodului se iau din schema nodului — golește valoarea</div>
+                : (sub || c?.eroare) && <div style={{ fontSize: 11.5, color: c?.eroare ? G.red : G.dim, marginTop: 2 }}>{c?.eroare || sub}</div>}
+              {a.activ === false && <div style={{ fontSize: 11, color: G.yellow, marginTop: 2 }}>activitate inactivă — corectează sau golește</div>}
             </div>
             {bifa ? (
               <span style={{ width: 38, height: 38, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, flexShrink: 0,

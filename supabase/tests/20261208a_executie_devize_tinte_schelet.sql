@@ -34,7 +34,9 @@ CREATE TABLE public.sites (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, 
 CREATE TABLE public.profile_sites (profile_id uuid NOT NULL REFERENCES public.profiles(id), site_id integer NOT NULL REFERENCES public.sites(id),
   valid_until date, granted_by uuid, note text, PRIMARY KEY (profile_id, site_id));
 CREATE TABLE public.rapoarte_zilnice (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, site_id integer NOT NULL REFERENCES public.sites(id),
-  data date NOT NULL, sef_santier text, lucrari_efectuate text, created_by uuid, updated_at timestamptz DEFAULT now(), UNIQUE (site_id, data));
+  data date NOT NULL, sef_santier text, lucrari_efectuate text, utilaje_snapshot jsonb, personal_snapshot jsonb, masini text, probleme text,
+  subcontractori text, aprovizionare text, plan_maine text, poze text[] DEFAULT '{}', meteo jsonb, distributie_antet text,
+  created_by uuid, updated_at timestamptz DEFAULT now(), CONSTRAINT rapoarte_zilnice_site_id_data_key UNIQUE (site_id, data));
 CREATE TABLE public.proiect_unitati (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
   tip text NOT NULL DEFAULT 'tronson', cod text, nume text NOT NULL, ordine integer DEFAULT 0, activ boolean DEFAULT true, created_at timestamptz DEFAULT now());
 CREATE TABLE public.proiect_activitati (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
