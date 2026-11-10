@@ -46,7 +46,7 @@ function clientFals({ intervale = [], camerete = [], drept = true, uid = 'u1', o
       limit: n => { f.lim = n; return q }, gt: (_c, v) => { f.gt = v; return q },
       maybeSingle: () => Promise.resolve({ data: tabel === 'profiles' ? { is_owner: owner } : null, error: null }),
       then: (res, rej) => {
-        if (tabel === 'executie_fibra_intervale' && esueazaIntervale) return Promise.resolve({ data: null, error: { message: 'permission denied' } }).then(res, rej)
+        if (tabel === 'executie_fibra_intervale' && (esueazaIntervale || st.esueazaIntervale)) return Promise.resolve({ data: null, error: { message: 'permission denied' } }).then(res, rej)
         const date = [...(T[tabel] || new Map()).values()].filter(r => f.eq.every(([c, v]) => r[c] === v) && (f.gt == null || r.id > f.gt))
           .sort((a, b) => a.id - b.id).slice(0, f.lim).map(r => ({ ...r }))
         return Promise.resolve({ data: date, error: null }).then(res, rej)
@@ -77,11 +77,13 @@ function clientFals({ intervale = [], camerete = [], drept = true, uid = 'u1', o
     rpc: (fn, a) => {
       if (fn === 'fn_executie_fibra_drept') return Promise.resolve({ data: drept, error: null })
       const d = amana(); st.rpc.push({ fn, a, ...d })
+      // st.devreme: serverul scrie și răspunde LA APEL (instantaneul de atunci), dar răspunsul ajunge abia la eliberare (rețea lentă)
+      const devreme = st.devreme ? aplica(fn, a) : null
       if (st.auto) d.res('ok')
       return d.p.then(mod => {
         if (mod === 'eroare') return { data: null, error: { message: 'timeout simulat' } }
         if (mod === 'refuz') return { data: null, error: { code: '23514', message: 'fibra: porțiunea km 10+400–10+500 e deja raportată pe 10.11 (monotub montat)' } }
-        return { data: aplica(fn, a), error: null }
+        return { data: devreme || aplica(fn, a), error: null }
       })
     },
   }
@@ -192,6 +194,38 @@ dom(numeDom('FibraOptica (jsdom + react-dom)'), () => {
     expect(st.rpc[1].a.p_cheie).toBe(st.rpc[0].a.p_cheie)
     expect(stocare.m.size).toBe(0)
     expect(u.text()).toContain('nu ajunsese; am trimis-o acum')
+  })
+
+  it('L24 (Jakarinos r1): răspunsul întârziat al unei relămuriri („activ”) nu readuce raportarea pe care reîncărcarea a arătat-o anulată', async () => {
+    const { client, st, T } = clientFals()
+    st.auto = false
+    const stocare = stocareFalsa()
+    const u = await monteaza(client, stocare)
+    // 1. raportarea 10+000 → 12+000 (tot T1 = 2000 m) iese cu rezultat necunoscut (nimic scris)
+    await u.apasa(u.buton('📏 Raportează'))
+    await u.scrie('De la km', '10+000')
+    await u.scrie('Până la km', '12+000')
+    await u.apasa(u.buton('Raportează').closest('button'))
+    await u.elibereaza(st.rpc[0], 'eroare')
+    await u.apasa(u.buton('✕'))
+    // 2. relămurirea: serverul scrie acum (instantaneu „activ”), dar răspunsul întârzie
+    st.devreme = true
+    await u.apasa(u.buton('Lămurește acum'))
+    expect(st.rpc).toHaveLength(2)
+    const scris = [...T.executie_fibra_intervale.values()].find(i => i.km_de_la_m === 10000 && i.km_pana_la_m === 12000)
+    expect(scris?.stare).toBe('activ')
+    // 3. între timp owner-ul o anulează, iar ↻ Reîncarcă arată anularea (monotub 0 m, rest 2.000 m)
+    Object.assign(scris, { stare: 'anulat', motiv_anulare: 'raportat greșit', anulat_la: '2026-11-10T11:00:00Z', anulat_de: 'u9', anulat_nume: 'PATRON' })
+    await u.apasa(u.buton('↻ Reîncarcă'))
+    expect(u.text()).toContain('Anulat de PATRON: raportat greșit')
+    expect(u.text()).not.toContain('100%')
+    // 4. reîncărcarea de după lămurire pică (rețea), iar răspunsul vechi „activ” ajunge acum: ecranul rămâne pe anulare
+    st.esueazaIntervale = true
+    await u.elibereaza(st.rpc[1], 'ok')
+    expect(stocare.m.size).toBe(0)
+    expect(u.text()).toContain('Anulat de PATRON: raportat greșit')
+    expect(u.text()).not.toContain('100%')
+    expect(u.butoane().filter(b => b.textContent === 'Anulează')).toHaveLength(0)
   })
 
   it('anularea: doar pe raportarea proprie; blocată cât există etapa următoare peste ea', async () => {

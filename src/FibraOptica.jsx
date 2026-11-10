@@ -6,7 +6,7 @@
 // Scrierea: doar cu drept de scriere pe Execuție, prin RPC-urile fn_executie_fibra_* (migrarea 20261211a); citirea prin RLS. Regulile
 // (limite, suprapunere, acoperire, dependențe) sunt în BAZĂ; aici sunt repetate doar ca să vadă omul greșeala înainte de trimitere.
 // L05: o salvare cu rezultat necunoscut se reia cu aceeași cheie doar dacă cererea e identică; altfel întâi se lămurește (registru local).
-// L24: încărcarea are generația ei; un rezultat întârziat nu se aplică pe alt proiect.
+// L24: încărcarea are generația ei; un rezultat întârziat nu se aplică pe alt proiect și nu readuce „activ” peste o anulare deja văzută.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -20,6 +20,7 @@ import {
   areKm, ordoneazaTronsoane, valideazaRaport, blocajAnulare, poateAnula, poateAnulaMontarea, poateScoateCamereta, rezumatTronson,
   rezumatProiect, csvRezumat, bandaTronson, deFacut, payloadRaport, payloadAnulare, payloadCameretaNoua, payloadCameretaStare,
   valideazaCameretaNoua, RPC_FIBRA, prefixRegistruFibra, textJurnal, normCodCamereta, ZILE_INAPOI, ZILE_INAPOI_OWNER, scadeZile,
+  aplicaInterval, imbinaIntervale,
 } from './fibraOpticaLogica.js'
 
 const stocareImplicita = () => { try { return globalThis.localStorage || null } catch { return null } }
@@ -87,7 +88,7 @@ export default function FibraOptica({ proiectId, client = supabase, stocare = st
       ])
       if (g !== gen.current) return false
       setTronsoane(t.filter(x => x.proiect_id === proiectId))
-      setIntervale(cur => imbinaLista(i.filter(x => x.proiect_id === proiectId), cur))
+      setIntervale(cur => imbinaIntervale(i.filter(x => x.proiect_id === proiectId), cur))
       setCamerete(cur => imbinaLista(c.filter(x => x.proiect_id === proiectId), cur))
       if (drept.error) { setPoateScrie(false); setEroareDrept('Nu am putut verifica dreptul de scriere: ' + drept.error.message) }
       else setPoateScrie(drept.data === true)
@@ -151,7 +152,7 @@ export default function FibraOptica({ proiectId, client = supabase, stocare = st
   const deschide = f => { ctx.current += 1; setMesaj(null); setForm(f) }
   const inchideForm = () => { ctx.current += 1; setMesaj(null); setForm(null) }
   const aplicaRezultat = r => {
-    if (r?.interval?.proiect_id === proiectId) setIntervale(l => aplicaRand(l, r.interval))
+    if (r?.interval?.proiect_id === proiectId) setIntervale(l => aplicaInterval(l, r.interval))
     if (r?.camereta?.proiect_id === proiectId) setCamerete(l => aplicaRand(l, r.camereta))
   }
 

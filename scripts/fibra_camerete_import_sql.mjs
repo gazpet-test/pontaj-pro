@@ -67,9 +67,13 @@ export function genereazaSql({ proiect, listaCsv, sursa = null }) {
 -- Rulare: psql -X -v ON_ERROR_STOP=1 --single-transaction -f <acest fișier>
 -- Cameretele noi intră „de montat” (sursa = proiect); cele existente identice nu se ating; un cod existent cu alt tronson / km oprește
 -- importul; cameretele din proiect lipsă din fișier doar se raportează. Nimic nu se șterge.
+-- literalii de mai jos sunt scriși pentru standard_conforming_strings = on (backslash = caracter obișnuit): setarea se fixează ÎNAINTEA
+-- primului literal, iar preflight-ul oprește importul dacă SET LOCAL n-a prins (rulare în afara unei tranzacții)
+SET LOCAL standard_conforming_strings = on;
 SET LOCAL lock_timeout = '5s';
 DO $pre$
 BEGIN
+  IF current_setting('standard_conforming_strings') IS DISTINCT FROM 'on' THEN RAISE EXCEPTION 'import camerete: standard_conforming_strings trebuie să fie on (rulează cu --single-transaction)'; END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'import camerete: rulează ca postgres'; END IF;
   IF to_regclass('public.executie_fibra_camerete') IS NULL THEN RAISE EXCEPTION 'import camerete: migrarea 20261211a nu e aplicată'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = ${P}) THEN RAISE EXCEPTION 'import camerete: proiectul ${proiect} nu există'; END IF;

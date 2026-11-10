@@ -234,6 +234,20 @@ export function valideazaCameretaNoua({ tronson, cod, km, montata, data, azi, ow
 export const RPC_FIBRA = ['fn_executie_fibra_raporteaza', 'fn_executie_fibra_anuleaza', 'fn_executie_fibra_camereta_adauga', 'fn_executie_fibra_camereta_stare']
 export const prefixRegistruFibra = (utilizator, proiect) => `gazpet.fibra_optica.incert.v1:${utilizator}:${proiect}:`
 
+// ── L24: intervalele NU au `versiune` (aplicaRand / imbinaLista de la probe compară versiunea, deci la ele nu apără nimic). În bază
+// singura tranziție permisă e activ -> anulat (trigger-ul refuză orice altă schimbare), deci „anulat” e FINAL: un răspuns întârziat sau
+// o citire mai veche cu „activ” nu înlocuiește un „anulat” deja afișat. Cameretele au `versiune` și rămân pe helperii comuni. ──
+const intervalMaiVechi = (venit, local) => !!local && local.stare === 'anulat' && venit.stare !== 'anulat'
+export function aplicaInterval(lista, rand) {
+  if (!rand || rand.id == null) return lista
+  if (!(lista || []).some(x => x.id === rand.id)) return [...(lista || []), rand]
+  return lista.map(x => (x.id === rand.id && !intervalMaiVechi(rand, x) ? { ...x, ...rand } : x))
+}
+export function imbinaIntervale(citite, curente) {
+  const local = new Map((curente || []).map(x => [x.id, x]))
+  return (citite || []).map(r => { const l = local.get(r.id); return intervalMaiVechi(r, l) ? l : r })
+}
+
 /** Textul unui rând de jurnal (istoric). */
 export function textJurnal(j) {
   const v = j.valori || {}

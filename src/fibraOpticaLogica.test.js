@@ -7,7 +7,7 @@ import {
   ETAPE, ETAPA_ANTERIOARA, ETAPA_URMATOARE, TRANZITII_CAMERETA, tranzitieCameretaPermisa, RE_COD_CAMERETA, parseKm, fmtKm, areKm,
   ordoneazaTronsoane, valideazaRaport, blocajAnulare, poateAnula, poateAnulaMontarea, poateScoateCamereta, rezumatTronson, rezumatProiect,
   csvRezumat, bandaTronson, deFacut, payloadRaport, payloadAnulare, payloadCameretaNoua, payloadCameretaStare, valideazaCameretaNoua,
-  RPC_FIBRA, prefixRegistruFibra, textJurnal,
+  RPC_FIBRA, prefixRegistruFibra, textJurnal, aplicaInterval, imbinaIntervale,
 } from './fibraOpticaLogica.js'
 import { registruNou, RPC_PROBE } from './probeTronsoaneLogica.js'
 
@@ -249,5 +249,29 @@ describe('jurnalul', () => {
     expect(textJurnal({ actiune: 'raportare', valori: { etapa: 'validat', km_de_la_m: 10200, km_pana_la_m: 10800, data: AZI } })).toBe('Validat: km 10+200 → 10+800 (600 m), lucrat 10.11.2026')
     expect(textJurnal({ actiune: 'anulare', valori: { etapa: 'monotub', km_de_la_m: 1, km_pana_la_m: 2, motiv: 'km greșiți' } })).toBe('Anulat Monotub km 0+001 → 0+002: km greșiți')
     expect(textJurnal({ actiune: 'camereta_scoasa', valori: { cod: 'C1', motiv: 'nu există' } })).toBe('Cameretă C1 scoasă din listă (nu există)')
+  })
+})
+
+describe('L24: listele de intervale (fără versiune)', () => {
+  const ACT = { id: 5, proiect_id: 9, tronson_id: 1, etapa: 'monotub', km_de_la_m: 10000, km_pana_la_m: 10100, data_lucru: AZI, stare: 'activ', motiv_anulare: null }
+  const ANU = { ...ACT, stare: 'anulat', motiv_anulare: 'greșit', anulat_la: '2026-11-10T11:00:00Z' }
+  it('paritate cu baza: singura tranziție a unui interval e activ -> anulat (anulat = final)', () => {
+    expect(SQL).toContain("IF OLD.stare <> 'activ' OR NEW.stare <> 'anulat' THEN")
+    expect(SQL).toContain("stare text NOT NULL DEFAULT 'activ' CHECK (stare IN ('activ', 'anulat'))")
+  })
+  it('un răspuns întârziat „activ” nu înlocuiește un „anulat” afișat; invers da', () => {
+    // tronson de 100 m: cu anularea, rezumatul rămâne 0 m făcut / rest 100 m (nu 100 m / rest 0)
+    const T = { id: 1, proiect_id: 9, cod: 'T1', km_start_m: 10000, km_end_m: 10100 }
+    const dupa = aplicaInterval([ANU], ACT)
+    expect(dupa).toEqual([ANU])
+    expect(rezumatTronson(T, dupa, [], AZI).etape.monotub).toMatchObject({ cumulat: 0, rest: 100 })
+    expect(aplicaInterval([ACT], ANU)).toEqual([{ ...ACT, ...ANU }])
+    expect(aplicaInterval([], ACT)).toEqual([ACT])
+    expect(aplicaInterval([ACT], null)).toEqual([ACT])
+  })
+  it('o citire mai veche („activ”) nu înlocuiește anularea deja afișată; rândurile lipsă din citire ies', () => {
+    expect(imbinaIntervale([ACT], [ANU])).toEqual([ANU])
+    expect(imbinaIntervale([ANU], [ACT])).toEqual([ANU])
+    expect(imbinaIntervale([{ ...ACT, id: 6 }], [ANU])).toEqual([{ ...ACT, id: 6 }])
   })
 })

@@ -45,6 +45,19 @@ describe('genereazaSql', () => {
     // ordinea: lock pe tronsoane înaintea oricărei scrieri în camerete
     expect(sql.indexOf('FOR NO KEY UPDATE')).toBeLessThan(sql.indexOf('INSERT INTO public.executie_fibra_camerete'))
   })
+  it('Jakarinos r1: standard_conforming_strings = on fixat ÎNAINTEA primului literal din fișier, plus gardă dacă SET LOCAL n-a prins', () => {
+    // un cod de tronson cu backslash literal (T1\n): cu setarea off, PostgreSQL l-ar citi ca linie nouă și importul ar refuza tronsonul
+    const { sql } = genereazaSql({ proiect: 7, listaCsv: 'tronson;cod;km_m\nT1\\n;C1;5\n' })
+    expect(sql).toContain("(2, 'T1\\n', 'C1', 5)")
+    const set = sql.indexOf('SET LOCAL standard_conforming_strings = on;')
+    expect(set).toBeGreaterThan(-1)
+    // primul literal șir din SQL (în afara comentariilor) vine DUPĂ setare
+    const faraComentarii = sql.split('\n').map(l => (l.startsWith('--') ? ' '.repeat(l.length) : l)).join('\n')
+    expect(set).toBeLessThan(faraComentarii.indexOf("'"))
+    // SET LOCAL în afara unei tranzacții nu are efect: garda din preflight oprește importul înaintea oricărei scrieri
+    expect(sql).toContain("IF current_setting('standard_conforming_strings') IS DISTINCT FROM 'on' THEN RAISE EXCEPTION")
+    expect(sql.indexOf("current_setting('standard_conforming_strings')")).toBeLessThan(sql.indexOf('INSERT INTO _fo_camerete'))
+  })
   it('ghilimelele simple se dublează; proiectul invalid și erorile de parsare opresc generarea', () => {
     const { sql } = genereazaSql({ proiect: 7, listaCsv: "tronson;cod;km_m\nT'1;C1;5\n" })
     expect(sql).toContain("(2, 'T''1', 'C1', 5)")
