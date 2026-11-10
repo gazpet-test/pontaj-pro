@@ -65,7 +65,12 @@ def clasifica(data):
 
 def _pdf_child(data, render, conn):
     try:
-        job = limite_memorie()
+        try:
+            job = limite_memorie()
+            import fitz  # noqa: F401 — lipsa bibliotecii / a limitei e o problemă a serverului, nu a PDF-ului
+        except Exception:
+            conn.send(('mediu', None))
+            return
         kind = clasifica(data)
         if not render or kind != 'mono':
             conn.send((kind, None))
@@ -91,19 +96,28 @@ def _pdf_child(data, render, conn):
 
 
 def _izolat(data, render, timeout):
+    """Verdictul copilului: mono / multi / invalid / neverificabil (documentul l-a oprit) /
+    termen (n-a terminat la timp) / mediu (copilul sau biblioteca nu pornesc: problemă a serverului)."""
     ctx = multiprocessing.get_context('spawn')
     parent, child = ctx.Pipe(duplex=False)
     process = ctx.Process(target=_pdf_child, args=(data, render, child), daemon=True)
-    timer = None
+    timer, expirat = None, threading.Event()
+    def opreste():
+        expirat.set()
+        process.terminate()
     try:
-        process.start()
+        try:
+            process.start()
+        except OSError:
+            return 'mediu', None
         child.close()
         # Termenul acoperă și transferul imaginii, nu doar primul octet din pipe.
-        timer = threading.Timer(max(0, timeout), process.terminate)
+        timer = threading.Timer(max(0, timeout), opreste)
         timer.start()
-        return parent.recv() if parent.poll(max(0, timeout)) else ('neverificabil', None)
+        return parent.recv() if parent.poll(max(0, timeout)) else ('termen', None)
     except (OSError, EOFError):
-        return 'neverificabil', None
+        # Copilul s-a oprit fără verdict: termenul l-a oprit sau documentul l-a doborât (memorie, crash).
+        return ('termen' if expirat.is_set() else 'neverificabil'), None
     finally:
         if timer is not None:
             timer.cancel()
@@ -120,10 +134,19 @@ def valideaza_pdf(data, timeout=3):
     return _izolat(data, False, timeout)[0]
 
 
+# E9: verdictul copilului → codul rezultatului. Un verdict necunoscut e un defect (intern).
+COD_PDF = {'multi': 'multipagina', 'invalid': 'pdf_invalid', 'neverificabil': 'pdf_corupt', 'termen': 'timeout', 'mediu': 'intern'}
+
+
+def cod_pdf(kind):
+    return COD_PDF.get(kind, 'intern')
+
+
 def randeaza(data, timeout=3):
-    from PIL import Image
     kind, result = _izolat(data, True, timeout)
     if kind != 'mono' or result is None:
-        raise E3Error('pdf_invalid')
+        # PDF-ul a trecut de valideaza_pdf: o randare oprită de document = pdf_corupt; peste limite = pdf_invalid.
+        raise E3Error(cod_pdf(kind) if kind != 'mono' else 'intern')
+    from PIL import Image
     width, height, samples = result
     return Image.frombytes('RGB', (width, height), samples)

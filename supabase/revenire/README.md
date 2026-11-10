@@ -242,3 +242,13 @@ SELECT set_config('gazpet.revenire_20261207a', 'SCOATE_NODURI_CONSTRUCTII:' || t
 COMMIT;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = starea EXACTĂ a migrării (corpul celor 4 funcții — md5 fără CR —, limbaj, DEFINER, volatilitate, search_path, proprietar, EXECUTE; trigger-ul; politica cu expresia ei; privilegiile pe tabel / coloane / secvență); nimic altceva nu depinde de tabel / funcții; `LOCK … ACCESS EXCLUSIVE NOWAIT` înaintea verificării „gol”; DROP fără CASCADE; postcondiție (inclusiv că dreptul din 20261201a a rămas); dezarmare. Testat în `scripts/test_executie_noduri_constructii.sql` (T12 nearmat / cu date = refuz; T15 revenirea 20261201a refuză cât timp tabelul există; T16 corp de funcție / politică schimbate = refuz; T13 armat pe gol = scos, apoi re-aplicare).
+
+## 20261206a — Meteo: istoricul zilnic pe șantiere (`20261206a_meteo_istoric_zilnic_ROLLBACK.sql`, NEAPLICAT)
+Scoate vederea `v_meteo_zile`, funcția `fn_meteo_praguri_seteaza`, tabelele `meteo_istoric_zilnic` și `meteo_praguri_nelucrabil` (cu politicile lor). Nu redeschide o gaură de securitate, dar **refuză dacă istoricul are rânduri sau dacă pragurile nu mai sunt cele de pornire** (datele meteo preluate și pragurile alese de owner nu se șterg de aici — decizie separată, cu export înainte). Înainte de revenire se scoate din `meteo-sync` pasul de istoric (altfel scrierea zilnică eșuează și apare în răspunsul funcției). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261206a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` istoricul apoi pragurile (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificărilor „gol / neschimbat”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_meteo_istoric.sql` (T6 nearmat / cu rânduri / praguri schimbate = refuz, cu SQLSTATE și mesaj verificate explicit; T7 armat pe stare goală = scos, apoi re-aplicare).
