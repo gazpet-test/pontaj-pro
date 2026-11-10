@@ -14,6 +14,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
+import PoliteProiectCard from './PoliteProiectCard.jsx'   // Polițe 20261205a
 import LegaturaExecutie from './redari/ui/LegaturaExecutie.jsx'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
@@ -3139,6 +3140,9 @@ function TabProiectDashboard({ proiectId, canEdit }) {
         <ContractNelegatPanel proiect={{ ...p, valoare_initiala_lei: extra.valoare_initiala_lei }} canEdit={canEdit}
           onSchimbat={() => setReloadKey(k => k + 1)} />
       </div>
+
+      {/* Polițe 20261205a: polițele contractului (doar citire, aceeași regulă ca alertele) */}
+      <PoliteProiectCard proiectId={proiectId} />
 
       {/* Echipă proiect */}
       <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 14 }}>
