@@ -1,0 +1,17 @@
+{
+  "clauze": [
+    {"cod": "A01", "titlu": "Clauză fictivă de test", "clauze": "1.1", "continut": "Text fictiv cu apostrof: l'eau și „ghilimele”.", "citat": "Citat fictiv", "sursa": "Document fictiv p.1"}
+  ],
+  "cai": [
+    {"cod": "B01", "titlu": "Cale fictivă (revizuită)", "clauze": "35.1 (i)", "conditie": "Condiție fictivă", "dovezi": "Dovezi fictive", "termen_text": "30 de zile", "efect": "Doar timp.", "continut": "Aplicare fictivă", "sursa": "Document fictiv p.2"}
+  ],
+  "termene": [
+    {"cod": "T01", "titlu": "Termen fictiv", "clauze": "69a.1", "termen_text": "30 de zile", "continut": "Explicație fictivă", "sursa": "Document fictiv p.3"}
+  ],
+  "evenimente": [
+    {"cod": "E01", "titlu": "Eveniment fictiv deschis (din fișier)", "data_eveniment": "2026-01-15", "clauze": "38.5", "continut": "Fapt fictiv", "notificare": "Nr. fictiv", "raspuns": "—", "stare": "notificat", "termen_urmator": "2026-02-14", "termen_ce": "Notificare fictivă", "dovezi": "Dovadă fictivă", "dovezi_lipsa": "Lipsă fictivă", "putere": "medie", "efect": "0–7 zile", "sursa": "Mail fictiv"},
+    {"cod": "E02", "titlu": "Eveniment fictiv închis", "stare": "inchis"},
+    {"cod": "E03", "titlu": "Eveniment fictiv nou", "stare": "viitor"}
+  ],
+  "surse": []
+}

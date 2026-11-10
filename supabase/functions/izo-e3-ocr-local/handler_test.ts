@@ -189,6 +189,32 @@ Deno.test('rezultat: validare strictă brută, structură finală, ramură eroar
   assert.equal((await h.call(rezultat(), true)).status, 409)
   assert.equal(h.events.includes('fn_ocr_local_rezultat'), false)
 })
+
+// E9: lista așteptată e scrisă aici, independent de contract.ts (L25). Regex-ul e CHECK-ul coloanei eroare din 20261108a.
+const CODURI_WORKER = ['structura_incerta', 'tabel_negasit', 'garda', 'prea_multe_dezacorduri', 'limita_randuri', 'pdf_invalid', 'multipagina', 'intern',
+  'retea', 'model_indisponibil', 'timeout', 'pdf_corupt', 'oprit']
+Deno.test('rezultat E9: codurile vechi și cele noi ajung neschimbate în RPC; codurile inventate sunt refuzate fără scriere', async () => {
+  for (const cod of CODURI_WORKER) {
+    assert.match(cod, /^[a-z_]{1,40}$/)
+    const f = fixture(), r = await f.call(rezultat(null, cod), true)
+    assert.equal(r.status, 200, cod)
+    assert.deepEqual(await r.json(), { success: true })
+    const scrise = f.calls.filter(c => c.fn === 'fn_ocr_local_rezultat')
+    assert.equal(scrise.length, 1, cod)
+    assert.deepEqual(scrise[0].args, { p_id: ID, p_token: TOKEN, p_rezultat: null, p_eroare: cod, p_cost: 0 })
+  }
+  // Codurile interne ale transportului (edge_transport / edge_refuz), cele ale edge-ului și variantele apropiate nu trec.
+  for (const cod of ['edge_transport', 'edge_refuz', 'raspuns_local_invalid', 'retele', 'Retea', 'timeout ', '', 'serviciu_indisponibil']) {
+    const f = fixture(), r = await f.call(rezultat(null, cod), true)
+    assert.equal(r.status, 400, JSON.stringify(cod))
+    assert.deepEqual(await r.json(), { success: false, eroare: 'cerere_invalida' })
+    assert.equal(f.events.includes('fn_ocr_local_rezultat'), false)
+  }
+  // Exact o ramură rămâne obligatorie și pentru codurile noi.
+  const g = fixture(), r = await g.call(rezultat(brut(), 'retea'), true)
+  assert.equal(r.status, 400)
+  assert.equal(g.events.includes('fn_ocr_local_rezultat'), false)
+})
 Deno.test('arbitraj: numai câmpuri nestructurale, exact setul și tipurile, fără dubluri', () => {
   for (const cs of [[{ ...celule[0], camp: 'serie' }], [...celule, ...celule], [{ ...celule[0], lighton: 1 }], [{ ...celule[0], rand: 201 }], [{ ...celule[0], extra: 1 }]]) assert.throws(() => valideazaCelule(cs, 'aviz_teava'))
   assert.equal(valideazaCelule(celule, 'aviz_teava').length, 1)
