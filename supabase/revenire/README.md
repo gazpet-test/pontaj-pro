@@ -252,3 +252,13 @@ SELECT set_config('gazpet.revenire_20261206a', 'SCOATE_METEO_ISTORIC:' || txid_c
 COMMIT;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` istoricul apoi pragurile (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificărilor „gol / neschimbat”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_meteo_istoric.sql` (T6 nearmat / cu rânduri / praguri schimbate = refuz, cu SQLSTATE și mesaj verificate explicit; T7 armat pe stare goală = scos, apoi re-aplicare).
+
+## 20261211a — Execuție: fibra optică pe tronsoane (`20261211a_executie_fibra_optica_ROLLBACK.sql`, NEAPLICAT)
+Scoate tabelele `executie_fibra_jurnal`, `executie_fibra_intervale`, `executie_fibra_camerete` (cu trigger-ele, politicile și constrângerile lor), trigger-ul de gardă `trg_executie_fibra_garda_tronson` de pe `executie_tronsoane` și cele 13 funcții `fn_executie_fibra_*`. Nu redeschide o gaură de securitate, dar **refuză dacă oricare tabel are rânduri** (cameretele, raportările și jurnalul nu se șterg de aici — decizie separată, cu export înainte). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261211a', 'SCOATE_FIBRA_OPTICA:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării (cele 13 funcții, cele 3 trigger-e proprii, garda de pe tronsoane cu funcția și tipul ei); nimic altceva nu depinde de tabele / funcții; lock-uri `NOWAIT` în ordinea RPC-urilor (`executie_proiecte`, `executie_tronsoane`, apoi tabelele de aici) înaintea verificării „gol”; DROP fără CASCADE; postcondiție; dezarmare. Testat în `scripts/test_executie_fibra_optica.sql` (T10 nearmat / cu date = refuz, cu SQLSTATE și mesaj verificate explicit; T11 armat pe gol = scos, apoi re-aplicare) și în `scripts/test_executie_fibra_concurenta.sh` (S0: cu o raportare deschisă = refuz imediat 55P03).
