@@ -210,8 +210,8 @@ export function SchemaVedere({ imagineUrl, cheieImagine, w, h, grupuri, selectat
 }
 
 // Atingerea care deschide o fișă / o listă generează după ea un „click” în același loc, care ar cădea pe butonul de dedesubt
-// (ex. o stare nouă sau prima sudură din listă). Click-urile din primele 450 ms după deschidere se ignoră.
-function useGardaAtingere(cheie) {
+// (ex. o stare nouă sau prima sudură din listă). Click-urile din primele 450 ms după deschidere se ignoră. Folosită și de NodConstructii.jsx.
+export function useGardaAtingere(cheie) {
   const deschisLa = useRef(0)
   useLayoutEffect(() => { deschisLa.current = Date.now() }, [cheie])
   return e => { if (Date.now() - deschisLa.current < 450) { e.stopPropagation(); e.preventDefault() } }

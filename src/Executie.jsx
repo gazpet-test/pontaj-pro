@@ -18,7 +18,7 @@ import LegaturaExecutie from './redari/ui/LegaturaExecutie.jsx'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
-import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
+import NodCuplareSectiuni from './NodCuplareSectiuni.jsx'   // nodul de cuplare: sudurile pe schemă (20261201a) + construcțiile (20261207a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
@@ -356,7 +356,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             {[
               {key:'izometrie', label:'📐 Izometrie',  desc:'Pachete · Lansare · Cumulat'},
               {key:'tronsoane', label:'📍 Tronsoane',   desc:'Program · Status · Suduri'},
-              {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · azi / cumulat / rest'},
+              {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · construcții (fundații) pe etape'},
             ].map(st => {
               const active = izSubTab === st.key
               return (
@@ -375,7 +375,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
           {/* Content */}
           {izSubTab === 'izometrie' && <IzometriePage initialProiectId={Number(proiectId)} />}
           {izSubTab === 'tronsoane' && <TabTronsoane  proiectId={proiectId} />}
-          {izSubTab === 'nod'       && <NodCuplareSchema proiectId={Number(proiectId)} />}
+          {izSubTab === 'nod'       && <NodCuplareSectiuni proiectId={Number(proiectId)} />}
         </div>
       )}
     </div>
