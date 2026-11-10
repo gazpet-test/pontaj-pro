@@ -21,6 +21,7 @@ import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
 import ProbeTronsoane from './ProbeTronsoane.jsx'       // probele pe tronsoane: intervale de km + etape (20261202a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
+import ContractProiectTab from './ContractProiectTab.jsx'   // fișa contractului: clauze, căi de prelungire, termene, registrul evenimentelor (20261203a)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
@@ -86,6 +87,7 @@ const CONTEXT_TABS = [
   { key: 'consumuri',      label: 'Consumuri',      icon: '🧾', color: G.orange, desc: 'Bonuri consum materiale · SL' },
   { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Tronsoane · Cumulat' },
   { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Calitate materiale · Arhivă NAS' },
+  { key: 'contract',       label: 'Contract',       icon: '📜', color: G.yellow, desc: 'Clauze · Căi de prelungire · Termene · Registrul evenimentelor' },
 ]
 
 // ===========================================================================
@@ -345,6 +347,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
       {tab === 'consumuri'      && <ConsumuriBonuriTab proiectId={proiectId} mode="executie" />}
       {tab === 'documente'      && (<><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
+      {tab === 'contract'       && <ContractProiectTab proiectId={proiectId} />}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
       {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod' || tab === 'probe') && (
