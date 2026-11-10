@@ -22,6 +22,12 @@
 --     aceleiași etape nu se suprapun, orice suprapunere a etapei următoare e acoperită DOAR de intervalul anulat;
 --   * un tronson cu fibră raportată nu-și schimbă proiectul și nu-și strânge km-ii peste raportări / camerete (trigger pe
 --     executie_tronsoane); ștergerea lui e oprită de cheile străine.
+--   * rândurile de aici (camerete, raportări, jurnal) NU se șterg: trigger BEFORE DELETE (pe rând) și BEFORE TRUNCATE (pe instrucțiune,
+--     deci și la TRUNCATE … CASCADE pornit de pe alt tabel) refuză cu 42501 pentru ORICE rol, inclusiv postgres. Singura cale care
+--     trece: postgres, în tranzacția armată a revenirii (gazpet.revenire_20261211a = 'SCOATE_FIBRA_OPTICA:' || txid_current(), fără
+--     armare persistentă) — golirea aprobată separat, înaintea fișierului de revenire. Garanția exactă: o raportare / cameretă greșită
+--     se ANULEAZĂ, nu se șterge, pe orice cale de DML; în afara ei rămâne doar DDL-ul deliberat al proprietarului tabelelor
+--     (ALTER TABLE … DISABLE TRIGGER, session_replication_role = replica, DROP), vizibil și neaccidental.
 -- Doar în RPC (depind de cine apasă și de azi): dreptul de scriere, fereastra datei (azi … 7 zile în urmă; owner-ul până la 365 de
 --   zile, pentru ce s-a lucrat înainte de modul), anularea doar de cel care a raportat sau de owner, idempotența.
 -- Scrierea din aplicație: DOAR prin cele 4 RPC-uri SECURITY DEFINER (fn_executie_fibra_raporteaza / _anuleaza / _camereta_adauga /
@@ -437,6 +443,34 @@ REVOKE ALL ON FUNCTION public.fn_executie_fibra_prov_jurnal() FROM PUBLIC, anon,
 CREATE TRIGGER trg_executie_fibra_prov_jurnal BEFORE INSERT OR UPDATE ON public.executie_fibra_jurnal
   FOR EACH ROW EXECUTE FUNCTION public.fn_executie_fibra_prov_jurnal();
 
+-- ── fără ștergere: DELETE (pe rând) și TRUNCATE (pe instrucțiune) refuzate pe cele 3 tabele, pentru orice rol (Copilot P2, r3) ──
+-- Excepția unică: postgres în tranzacția armată a revenirii (același marcaj ca în fișierul de revenire, legat de txid, fără armare
+-- persistentă), ca golirea aprobată separat + revenirea să rămână posibile. Fără DEFINER: current_user = cine șterge.
+CREATE FUNCTION public.fn_executie_fibra_fara_stergere() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF current_user = 'postgres'
+     AND current_setting('gazpet.revenire_20261211a', true) IS NOT DISTINCT FROM 'SCOATE_FIBRA_OPTICA:' || txid_current()
+     AND NOT EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261211a=%') THEN
+    RETURN OLD;   -- DELETE: rândul pleacă; TRUNCATE (pe instrucțiune): valoarea întoarsă e ignorată
+  END IF;
+  RAISE EXCEPTION 'fibra: rândurile din % nu se șterg (% refuzat; o raportare / cameretă greșită se anulează)', TG_TABLE_NAME, TG_OP
+    USING ERRCODE = '42501';
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_executie_fibra_fara_stergere() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_executie_fibra_fara_stergere_rand BEFORE DELETE ON public.executie_fibra_camerete
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_fibra_fara_stergere();
+CREATE TRIGGER trg_executie_fibra_fara_stergere_trunc BEFORE TRUNCATE ON public.executie_fibra_camerete
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_executie_fibra_fara_stergere();
+CREATE TRIGGER trg_executie_fibra_fara_stergere_rand BEFORE DELETE ON public.executie_fibra_intervale
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_fibra_fara_stergere();
+CREATE TRIGGER trg_executie_fibra_fara_stergere_trunc BEFORE TRUNCATE ON public.executie_fibra_intervale
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_executie_fibra_fara_stergere();
+CREATE TRIGGER trg_executie_fibra_fara_stergere_rand BEFORE DELETE ON public.executie_fibra_jurnal
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_fibra_fara_stergere();
+CREATE TRIGGER trg_executie_fibra_fara_stergere_trunc BEFORE TRUNCATE ON public.executie_fibra_jurnal
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_executie_fibra_fara_stergere();
+
 -- ── garda pe executie_tronsoane: un tronson cu fibră nu-și schimbă proiectul și nu-și strânge km-ii peste raportări / camerete ──
 -- SECURITY DEFINER: cine modifică tronsonul (TabTronsoane, orice cont logat) trebuie să fie oprit și de rândurile pe care RLS nu i le
 -- arată. Doar CITEȘTE tabelele de aici; rândul tronsonului e deja blocat de UPDATE (aceeași ordine ca RPC-urile).
@@ -763,8 +797,8 @@ BEGIN
       RAISE EXCEPTION '20261211a post: privilegii pe % / secventa', v_tab;
     END IF;
   END LOOP;
-  -- funcțiile: exact cele 13; DEFINER doar cele 6; search_path fix; EXECUTE pe lista exactă (L15: lista exactă, nu prefixul)
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND starts_with(p.proname, 'fn_executie_fibra_')) <> 13
+  -- funcțiile: exact cele 14; DEFINER doar cele 6; search_path fix; EXECUTE pe lista exactă (L15: lista exactă, nu prefixul)
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND starts_with(p.proname, 'fn_executie_fibra_')) <> 14
      OR EXISTS (SELECT 1 FROM (VALUES
           -- semnătura, DEFINER, EXECUTE authenticated, EXECUTE service_role
           ('public.fn_executie_fibra_drept(bigint, boolean)', true, true, true),
@@ -775,6 +809,7 @@ BEGIN
           ('public.fn_executie_fibra_reguli_interval()', false, false, false),
           ('public.fn_executie_fibra_reguli_camereta()', false, false, false),
           ('public.fn_executie_fibra_prov_jurnal()', false, false, false),
+          ('public.fn_executie_fibra_fara_stergere()', false, false, false),
           ('public.fn_executie_fibra_garda_tronson()', true, false, false),
           ('public.fn_executie_fibra_raporteaza(bigint, bigint, text, integer, integer, date, text, uuid)', true, true, false),
           ('public.fn_executie_fibra_anuleaza(bigint, text, uuid)', true, true, false),
@@ -790,18 +825,25 @@ BEGIN
            OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM a.ex_srv) THEN
     RAISE EXCEPTION '20261211a post: functii (lista / definer / search_path / EXECUTE)';
   END IF;
-  -- trigger-ele: exact cele 4, pe funcția lor, active (origin), fără WHEN, fără listă de coloane; tgtype: BEFORE ROW INSERT OR UPDATE = 23,
-  -- BEFORE ROW UPDATE = 19; niciun alt trigger ne-intern pe cele 3 tabele de aici
+  -- trigger-ele: exact cele 10, pe funcția lor, active (origin), fără WHEN, fără listă de coloane; tgtype: BEFORE ROW INSERT OR UPDATE = 23,
+  -- BEFORE ROW UPDATE = 19, BEFORE ROW DELETE = 11, BEFORE STATEMENT TRUNCATE = 34; niciun alt trigger ne-intern pe cele 3 tabele de aici
   IF (SELECT count(*) FROM pg_trigger tg JOIN (VALUES
         ('public.executie_fibra_intervale'::regclass, 'trg_executie_fibra_reguli_interval', 'public.fn_executie_fibra_reguli_interval()'::regprocedure, 23),
         ('public.executie_fibra_camerete'::regclass, 'trg_executie_fibra_reguli_camereta', 'public.fn_executie_fibra_reguli_camereta()'::regprocedure, 23),
         ('public.executie_fibra_jurnal'::regclass, 'trg_executie_fibra_prov_jurnal', 'public.fn_executie_fibra_prov_jurnal()'::regprocedure, 23),
+        ('public.executie_fibra_camerete'::regclass, 'trg_executie_fibra_fara_stergere_rand', 'public.fn_executie_fibra_fara_stergere()'::regprocedure, 11),
+        ('public.executie_fibra_camerete'::regclass, 'trg_executie_fibra_fara_stergere_trunc', 'public.fn_executie_fibra_fara_stergere()'::regprocedure, 34),
+        ('public.executie_fibra_intervale'::regclass, 'trg_executie_fibra_fara_stergere_rand', 'public.fn_executie_fibra_fara_stergere()'::regprocedure, 11),
+        ('public.executie_fibra_intervale'::regclass, 'trg_executie_fibra_fara_stergere_trunc', 'public.fn_executie_fibra_fara_stergere()'::regprocedure, 34),
+        ('public.executie_fibra_jurnal'::regclass, 'trg_executie_fibra_fara_stergere_rand', 'public.fn_executie_fibra_fara_stergere()'::regprocedure, 11),
+        ('public.executie_fibra_jurnal'::regclass, 'trg_executie_fibra_fara_stergere_trunc', 'public.fn_executie_fibra_fara_stergere()'::regprocedure, 34),
         ('public.executie_tronsoane'::regclass, 'trg_executie_fibra_garda_tronson', 'public.fn_executie_fibra_garda_tronson()'::regprocedure, 19)) a(rel, nume, fn, tip)
         ON tg.tgrelid = a.rel AND tg.tgname = a.nume
        WHERE NOT tg.tgisinternal AND tg.tgfoid = a.fn AND tg.tgtype = a.tip AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0
-         AND coalesce(array_length(tg.tgattr::int2[], 1), 0) = 0) <> 4
+         AND coalesce(array_length(tg.tgattr::int2[], 1), 0) = 0) <> 10
      OR (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal
-          AND tgrelid IN ('public.executie_fibra_intervale'::regclass, 'public.executie_fibra_camerete'::regclass, 'public.executie_fibra_jurnal'::regclass)) <> 3 THEN
+          AND tgrelid IN ('public.executie_fibra_intervale'::regclass, 'public.executie_fibra_camerete'::regclass, 'public.executie_fibra_jurnal'::regclass)) <> 9
+     OR (SELECT count(*) FROM pg_trigger WHERE tgfoid = 'public.fn_executie_fibra_fara_stergere()'::regprocedure) <> 6 THEN
     RAISE EXCEPTION '20261211a post: trigger-ele';
   END IF;
   IF (SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.executie_fibra_intervale'::regclass AND contype = 'x'

@@ -61,13 +61,18 @@ opreste_sesiunile() {
   q "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE starts_with(application_name, 'fibra_test_') AND pid <> pg_backend_pid()" >/dev/null 2>&1
   asteapta "NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE starts_with(application_name, 'fibra_test_'))" 100
 }
-# curățarea: ștergeri explicite (ca postgres, mentenanță de test), apoi VERIFICAREA că nu a rămas nimic (L18)
+# curățarea: ștergeri explicite (ca postgres, mentenanță de test), apoi VERIFICAREA că nu a rămas nimic (L18). Garda de ștergere
+# (trg_executie_fibra_fara_stergere_*) refuză DELETE și pentru postgres, deci curățarea se face în tranzacția armată (marcajul
+# revenirii, legat de txid), doar pe rândurile tronsonului de test FO-CONC.
 curata() {
   opreste_sesiunile || { echo "FAIL curățarea: sesiunile fibra_test_* nu s-au închis"; return 1; }
-  q "DELETE FROM public.executie_fibra_jurnal WHERE tronson_id = $TR;
+  q "BEGIN;
+     SELECT set_config('gazpet.revenire_20261211a', 'SCOATE_FIBRA_OPTICA:' || txid_current(), true);
+     DELETE FROM public.executie_fibra_jurnal WHERE tronson_id = $TR;
      DELETE FROM public.executie_fibra_intervale WHERE tronson_id = $TR;
      DELETE FROM public.executie_fibra_camerete WHERE tronson_id = $TR;
-     DELETE FROM public.executie_tronsoane WHERE id = $TR;" > "$DIR/curata.out" 2>&1
+     DELETE FROM public.executie_tronsoane WHERE id = $TR;
+     COMMIT;" > "$DIR/curata.out" 2>&1
   local cod=$?
   local ramase; ramase=$(q "SELECT (SELECT count(*) FROM public.executie_tronsoane WHERE id = $TR) + (SELECT count(*) FROM public.executie_fibra_intervale WHERE tronson_id = $TR)
                                   + (SELECT count(*) FROM public.executie_fibra_jurnal WHERE tronson_id = $TR)" 2>&1)

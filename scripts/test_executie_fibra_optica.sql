@@ -1,8 +1,8 @@
 -- Harness 20261211a_executie_fibra_optica — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
 -- Rulare din rădăcina repo-ului:  psql -X -v ON_ERROR_STOP=1 -f scripts/test_executie_fibra_optica.sql
 -- Cere 20261201a aplicată pe clonă (fn_executie_nod_drept). O singură tranzacție, ANULATĂ la final (ROLLBACK): migrare (marcajul de
--- livrare) -> teste ca non-owner (SET LOCAL ROLE + request.jwt.claims) -> revenire refuzată (nearmată / cu date) -> revenire armată pe
--- tabele goale -> re-aplicare. Identități reale din catalog (owner + 4 profiluri non-owner, cu drepturile 'executie' rescrise DOAR în
+-- livrare) -> teste ca non-owner (SET LOCAL ROLE + request.jwt.claims) -> DELETE / TRUNCATE refuzate și pentru postgres (T9b) ->
+-- revenire refuzată (nearmată / cu date) -> golire DOAR în tranzacția armată + revenire armată pe tabele goale -> re-aplicare. Identități reale din catalog (owner + 4 profiluri non-owner, cu drepturile 'executie' rescrise DOAR în
 -- tranzacție), date FICTIVE: tronsoanele FO-TEST-1 (km 900+000–902+000), FO-TEST-2 (902+000–905+000) și FO-TEST-3 (fără km), create
 -- aici, pe proiectul cu id-ul cel mai mic; camerete CT-901…; nimic din datele reale nu se citește sau scrie.
 -- Fiecare test se termină cu NOTICE „Tn OK”; orice abatere oprește rularea (RAISE EXCEPTION). Refuzurile se verifică după SQLSTATE
@@ -416,6 +416,41 @@ BEGIN
   RAISE NOTICE 'T9 OK';
 END $t$;
 
+-- T9b: fără ștergere, nici pentru postgres (Copilot P2, r3): DELETE și TRUNCATE (și TRUNCATE … CASCADE) pe cele 3 tabele = 42501 cu
+-- mesajul gărzii; un marcaj de revenire din ALTĂ tranzacție (txid greșit) nu deschide calea; rândurile rămân
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$
+DECLARE n0 bigint; n1 bigint;
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'T9b FAIL: rulează ca postgres'; END IF;
+  SELECT (SELECT count(*) FROM public.executie_fibra_camerete) + (SELECT count(*) FROM public.executie_fibra_intervale)
+       + (SELECT count(*) FROM public.executie_fibra_jurnal) INTO n0;
+  IF (SELECT count(*) FROM public.executie_fibra_camerete) = 0 OR (SELECT count(*) FROM public.executie_fibra_intervale) = 0
+     OR (SELECT count(*) FROM public.executie_fibra_jurnal) = 0 THEN
+    RAISE EXCEPTION 'T9b FAIL: pregătire (fiecare tabel trebuie să aibă rânduri, altfel DELETE nu pornește trigger-ul pe rând)';
+  END IF;
+  IF NOT pg_temp.t_refuza($q$DELETE FROM public.executie_fibra_jurnal$q$, '42501', 'rândurile din executie_fibra_jurnal nu se șterg (DELETE refuzat')
+     OR NOT pg_temp.t_refuza($q$DELETE FROM public.executie_fibra_intervale$q$, '42501', 'rândurile din executie_fibra_intervale nu se șterg (DELETE refuzat')
+     OR NOT pg_temp.t_refuza($q$DELETE FROM public.executie_fibra_camerete$q$, '42501', 'rândurile din executie_fibra_camerete nu se șterg (DELETE refuzat')
+     OR NOT pg_temp.t_refuza($q$TRUNCATE public.executie_fibra_jurnal$q$, '42501', 'rândurile din executie_fibra_jurnal nu se șterg (TRUNCATE refuzat')
+     OR NOT pg_temp.t_refuza($q$TRUNCATE public.executie_fibra_intervale, public.executie_fibra_jurnal$q$, '42501', 'nu se șterg (TRUNCATE refuzat')
+     OR NOT pg_temp.t_refuza($q$TRUNCATE public.executie_fibra_camerete CASCADE$q$, '42501', 'nu se șterg (TRUNCATE refuzat')
+     OR NOT pg_temp.t_refuza($q$TRUNCATE public.executie_fibra_intervale CASCADE$q$, '42501', 'nu se șterg (TRUNCATE refuzat') THEN
+    RAISE EXCEPTION 'T9b FAIL: ștergerea ca postgres';
+  END IF;
+  -- marcajul de revenire cu alt txid (armare din altă tranzacție) nu deschide calea
+  PERFORM set_config('gazpet.revenire_20261211a', 'SCOATE_FIBRA_OPTICA:' || (txid_current() - 1), true);
+  IF NOT pg_temp.t_refuza($q$DELETE FROM public.executie_fibra_jurnal$q$, '42501', 'nu se șterg (DELETE refuzat')
+     OR NOT pg_temp.t_refuza($q$TRUNCATE public.executie_fibra_camerete CASCADE$q$, '42501', 'nu se șterg (TRUNCATE refuzat') THEN
+    RAISE EXCEPTION 'T9b FAIL: marcaj din altă tranzacție acceptat';
+  END IF;
+  PERFORM set_config('gazpet.revenire_20261211a', '', true);
+  SELECT (SELECT count(*) FROM public.executie_fibra_camerete) + (SELECT count(*) FROM public.executie_fibra_intervale)
+       + (SELECT count(*) FROM public.executie_fibra_jurnal) INTO n1;
+  IF n1 IS DISTINCT FROM n0 THEN RAISE EXCEPTION 'T9b FAIL: au dispărut rânduri (% -> %)', n0, n1; END IF;
+  RAISE NOTICE 'T9b OK';
+END $t$;
+
 -- T10: revenirea — nearmată = refuz; armată cu date = refuz (tranzacția abandonată până la savepoint, nimic nu se execută după eroare)
 SELECT pg_temp.t_ca(NULL, 'postgres');
 SAVEPOINT t10a;
@@ -443,11 +478,18 @@ DO $t$ BEGIN
   RAISE NOTICE 'T10 OK (refuzurile „garda invalida” și „tabelele au randuri” au fost verificate explicit)';
 END $t$;
 
--- T11: revenirea armată pe tabele goale scoate tot (și garda de pe tronsoane); re-aplicarea merge
+-- T11: golirea (pasul separat, aprobat) trece DOAR în tranzacția armată, înaintea fișierului de revenire; revenirea armată pe tabele
+-- goale scoate tot (și garda de pe tronsoane); re-aplicarea merge și garda de ștergere e din nou activă (revenirea s-a dezarmat)
+SELECT set_config('gazpet.revenire_20261211a', 'SCOATE_FIBRA_OPTICA:' || txid_current(), true);
 DELETE FROM public.executie_fibra_jurnal;
 DELETE FROM public.executie_fibra_intervale;
 DELETE FROM public.executie_fibra_camerete;
-SELECT set_config('gazpet.revenire_20261211a', 'SCOATE_FIBRA_OPTICA:' || txid_current(), true);
+DO $t$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.executie_fibra_camerete) OR EXISTS (SELECT 1 FROM public.executie_fibra_intervale)
+     OR EXISTS (SELECT 1 FROM public.executie_fibra_jurnal) THEN
+    RAISE EXCEPTION 'T11 FAIL: golirea armată nu a golit';
+  END IF;
+END $t$;
 \ir ../supabase/revenire/20261211a_executie_fibra_optica_ROLLBACK.sql
 DO $t$ BEGIN
   IF to_regclass('public.executie_fibra_intervale') IS NOT NULL OR to_regprocedure('public.fn_executie_fibra_drept(bigint, boolean)') IS NOT NULL
@@ -461,6 +503,10 @@ END $t$;
 DO $t$ BEGIN
   IF to_regclass('public.executie_fibra_intervale') IS NULL OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_executie_fibra_garda_tronson') THEN
     RAISE EXCEPTION 'T11 FAIL: re-aplicarea';
+  END IF;
+  -- după re-aplicare (marcajul golit de revenire): TRUNCATE refuzat din nou, pe tabele goale (trigger-ul pe instrucțiune pornește oricum)
+  IF NOT pg_temp.t_refuza($q$TRUNCATE public.executie_fibra_intervale CASCADE$q$, '42501', 'nu se șterg (TRUNCATE refuzat') THEN
+    RAISE EXCEPTION 'T11 FAIL: garda de ștergere după re-aplicare';
   END IF;
   RAISE NOTICE 'T11 OK — toate testele au trecut; urmează ROLLBACK (nimic nu rămâne pe clonă)';
 END $t$;

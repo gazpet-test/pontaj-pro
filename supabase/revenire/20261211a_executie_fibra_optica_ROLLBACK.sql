@@ -1,9 +1,10 @@
 -- Revenire 20261211a_executie_fibra_optica. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: tabelele executie_fibra_jurnal, executie_fibra_intervale, executie_fibra_camerete (cu trigger-ele,
--- politicile, indexurile și constrângerile lor), trigger-ul trg_executie_fibra_garda_tronson de pe executie_tronsoane și cele 13
+-- politicile, indexurile și constrângerile lor), trigger-ul trg_executie_fibra_garda_tronson de pe executie_tronsoane și cele 14
 -- funcții fn_executie_fibra_*.
 -- REFUZĂ dacă oricare tabel are rânduri: cameretele, raportările și jurnalul nu se șterg de aici. Golirea lor e o decizie separată
--- (preview -> „da” Răzvan -> apply, cu export înainte).
+-- (preview -> „da” Răzvan -> apply, cu export înainte) și trece DOAR în tranzacția deja armată de mai jos, înaintea acestui fișier
+-- (trg_executie_fibra_fara_stergere_* refuză DELETE / TRUNCATE altfel, inclusiv pentru postgres). DROP TABLE nu pornește acele trigger-e.
 -- Gestionarul tranzacției e operatorul (fișierul nu are BEGIN / COMMIT). Un singur string:
 --   BEGIN ISOLATION LEVEL READ COMMITTED;
 --   SELECT set_config('gazpet.revenire_20261211a', 'SCOATE_FIBRA_OPTICA:' || txid_current(), true);
@@ -29,7 +30,8 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  -- starea exactă a migrării: cele 3 tabele, cele 13 funcții, cele 3 trigger-e proprii + garda de pe executie_tronsoane (funcția și tipul exact)
+  -- starea exactă a migrării: cele 3 tabele, cele 14 funcții, cele 9 trigger-e proprii (3 de reguli + 6 fără ștergere, funcția și tipul
+  -- exact) + garda de pe executie_tronsoane (funcția și tipul exact)
   IF to_regclass('public.executie_fibra_camerete') IS NULL OR to_regclass('public.executie_fibra_intervale') IS NULL
      OR to_regclass('public.executie_fibra_jurnal') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_drept(bigint, boolean)') IS NULL
@@ -40,14 +42,20 @@ BEGIN
      OR to_regprocedure('public.fn_executie_fibra_reguli_interval()') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_reguli_camereta()') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_prov_jurnal()') IS NULL
+     OR to_regprocedure('public.fn_executie_fibra_fara_stergere()') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_garda_tronson()') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_raporteaza(bigint, bigint, text, integer, integer, date, text, uuid)') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_anuleaza(bigint, text, uuid)') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_camereta_adauga(bigint, bigint, text, integer, boolean, date, text, uuid)') IS NULL
      OR to_regprocedure('public.fn_executie_fibra_camereta_stare(bigint, integer, text, date, text, uuid)') IS NULL
-     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND starts_with(p.proname, 'fn_executie_fibra_')) <> 13
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND starts_with(p.proname, 'fn_executie_fibra_')) <> 14
      OR (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal
-          AND tgrelid IN ('public.executie_fibra_camerete'::regclass, 'public.executie_fibra_intervale'::regclass, 'public.executie_fibra_jurnal'::regclass)) <> 3
+          AND tgrelid IN ('public.executie_fibra_camerete'::regclass, 'public.executie_fibra_intervale'::regclass, 'public.executie_fibra_jurnal'::regclass)) <> 9
+     OR (SELECT count(*) FROM pg_trigger tg JOIN (VALUES ('trg_executie_fibra_fara_stergere_rand', 11), ('trg_executie_fibra_fara_stergere_trunc', 34)) a(nume, tip)
+           ON tg.tgname = a.nume AND tg.tgtype = a.tip
+          WHERE NOT tg.tgisinternal AND tg.tgfoid = 'public.fn_executie_fibra_fara_stergere()'::regprocedure AND tg.tgqual IS NULL AND tg.tgnargs = 0
+            AND tg.tgrelid IN ('public.executie_fibra_camerete'::regclass, 'public.executie_fibra_intervale'::regclass, 'public.executie_fibra_jurnal'::regclass)) <> 6
+     OR (SELECT count(*) FROM pg_trigger WHERE tgfoid = 'public.fn_executie_fibra_fara_stergere()'::regprocedure) <> 6
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_tronsoane'::regclass AND tgname = 'trg_executie_fibra_garda_tronson'
                      AND NOT tgisinternal AND tgfoid = 'public.fn_executie_fibra_garda_tronson()'::regprocedure AND tgtype = 19 AND tgqual IS NULL AND tgnargs = 0)
      OR (SELECT count(*) FROM pg_trigger WHERE tgfoid = 'public.fn_executie_fibra_garda_tronson()'::regprocedure) <> 1 THEN
@@ -91,6 +99,7 @@ BEGIN
   DROP FUNCTION public.fn_executie_fibra_anuleaza(bigint, text, uuid);
   DROP FUNCTION public.fn_executie_fibra_raporteaza(bigint, bigint, text, integer, integer, date, text, uuid);
   DROP FUNCTION public.fn_executie_fibra_garda_tronson();
+  DROP FUNCTION public.fn_executie_fibra_fara_stergere();   -- trigger-ele ei au plecat cu tabelele
   DROP FUNCTION public.fn_executie_fibra_prov_jurnal();
   DROP FUNCTION public.fn_executie_fibra_reguli_camereta();
   DROP FUNCTION public.fn_executie_fibra_reguli_interval();
