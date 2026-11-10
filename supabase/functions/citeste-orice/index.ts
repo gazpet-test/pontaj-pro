@@ -1,6 +1,7 @@
 // citeste-orice v19 (r6 PR #1050, migrarea 20261209a) — AI Document Router
 // v19: potrivirea pe proiect (Execuție) caută DOAR în proiectele permise contului care a urcat documentul (lista din BD,
-//   fn_executie_acces_candidati; potrivire.ts). Fără funcția din BD = ca în v18. Răspunsul spune ce listă s-a folosit (candidati_proiect).
+//   fn_executie_acces_candidati; potrivire.ts). Fără funcția din BD = ca în v18 DOAR dacă BD dovedește că tabelul restricțiilor nu
+//   există (r7); altfel rândul intră în eroare. Răspunsul spune ce listă s-a folosit (candidati_proiect).
 // v17: campuri structurate HR (CNP, IBAN...) pentru wizard „Angajat nou".
 // v18: destinația UPA (unități protejate, plafonul lunar deductibil):
 //   - respectă modul_tinta PRE-SETAT la upload (panoul UPA / context execuție)
@@ -190,7 +191,8 @@ Deno.serve(async (req: Request) => {
     if (!entitateId && parsed.entitate_hint) {
       if (modulFinal === 'executie') {
         // v19 (r6, 20261209a): candidații = DOAR proiectele permise celui care a urcat documentul (lista o dă BD); fără funcția din BD
-        // (migrare neaplicată) = proiectele active, ca azi. Lista necitibilă = eroare pe rând, nu „toate proiectele”.
+        // + dovada din BD că tabelul restricțiilor nu există (r7) = proiectele active, ca azi. Lista necitibilă / dovadă lipsă = eroare pe
+        // rând, nu „toate proiectele”.
         const p = await potrivesteProiect(supabase, row.uploadat_de ?? null, parsed.entitate_hint)
         if (!p.ok) return await eroare(p.err)
         candidatiProiect = p.sursa

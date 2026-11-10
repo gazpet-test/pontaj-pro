@@ -9,6 +9,7 @@
 // drept delegată, exact ca în migrarea ei (amprenta se verifică), și un tabel 'drept' cu politica ei.
 // r6: mutanții M26–M31 pe candidații clasificatorului (fn_executie_acces_candidati): lista contului ignorată, lista de scriere în loc de
 // citire, proiectele inactive incluse, EXECUTE pentru authenticated, rândul fără cont fără candidați, revenirea care uită funcția.
+// r7: M32 (UUID fără profil primește iar „toate”), M33 (refuzul prinde și rândul fără cont, NULL).
 import { PGlite } from '@electric-sql/pglite'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -308,9 +309,9 @@ raport('M25 antetul raportului: UPDATE direct pe p2 nefiltrat pe REST (altă ero
 }), false, /T3 FAIL[^\n]*rapoarte_zilnice|T3r FAIL[^\n]*REST/)
 
 // r6: review r5 P1 — clasificatorul caută doar în proiectele permise celui care a urcat (fn_executie_acces_candidati)
-const CAND_FILTRU = `     AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids))\n$f$;`
+const CAND_FILTRU = `     AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids)));\nEND $f$;`
 raport('M26 candidații ignoră lista contului (clasificatorul ar căuta iar în toate proiectele)', await scenariu('m26', {
-  mutMig: t => inlocuieste(t, CAND_FILTRU, `\n$f$;`),
+  mutMig: t => inlocuieste(t, CAND_FILTRU, `);\nEND $f$;`),
 }), false, /T3c FAIL: candidații lui B/)
 raport('M27 candidații pe lista de SCRIERE (proiectul „viewer” n-ar mai fi candidat)', await scenariu('m27', {
   mutMig: t => inlocuieste(t, `public.fn_executie_acces_lista_cont(p_profile, false) AS ids)`, `public.fn_executie_acces_lista_cont(p_profile, true) AS ids)`),
@@ -323,8 +324,18 @@ raport('M29 candidații apelabili de un client logat (contul e parametru)', awai
     `GRANT EXECUTE ON FUNCTION public.fn_executie_acces_candidati(uuid) TO service_role, authenticated;`),
 }), false, /functii noi \(definer/)
 raport('M30 candidații: contul fără rând ia „nimic” în loc de „toate” (rândurile fără cont n-ar mai fi potrivite)', await scenariu('m30', {
-  mutMig: t => inlocuieste(t, CAND_FILTRU, `     AND (c.tot OR e.id = ANY (c.ids))\n$f$;`),
+  mutMig: t => inlocuieste(t, CAND_FILTRU, `     AND (c.tot OR e.id = ANY (c.ids)));\nEND $f$;`),
 }), false, /T3c FAIL: candidații contului nul/)
+// r7: review r6 P2 — un UUID fără profil primea „toate proiectele active”
+raport('M32 candidații: contul inexistent (UUID fără profil) ia iar „toate” în loc de refuz', await scenariu('m32', {
+  mutMig: t => inlocuieste(t, `  IF p_profile IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile) THEN`,
+    `  IF false AND NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile) THEN`),
+}), false, /T3c FAIL: cont inexistent/)
+// r7: refuzul se aplică și pe NULL (rândul fără cont n-ar mai fi potrivit) — NULL trebuie să rămână „toate”
+raport('M33 candidații: refuzul prinde și rândul fără cont (NULL)', await scenariu('m33', {
+  mutMig: t => inlocuieste(t, `  IF p_profile IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile) THEN`,
+    `  IF NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile) THEN`),
+}), false, /22023 acces proiect: candidații cer un cont existent/)
 raport('M31 revenirea uită funcția candidaților', await scenariu('m31', {
   mutRev: t => inlocuieste(t, `  DROP FUNCTION public.fn_executie_acces_candidati(uuid);`, ''),
 }), false, /revenire post: au ramas obiecte|starea nu e cea/)

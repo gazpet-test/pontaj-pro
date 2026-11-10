@@ -691,15 +691,22 @@ $f$;
 -- rând fără uploadat_de — 20261103c, trg_ai_inbox_fisier_legat) = toate cele active, ca azi: nu e documentul nimănui, deci nu
 -- e semnal pentru nimeni. Un singur tablou jsonb [{id, nume, cod_intern}] ordonat după id (un singur rând: fără plafonul max-rows, L23).
 -- Doar service_role (clasificatorul n-are JWT, deci contul vine ca parametru; L08: calea server cu rolul verificat de GRANT).
+-- r7 (review r6 P2): un cont DAT care nu există (fără profil) = refuz explicit (22023), NU „nerestrâns = toate”: un UUID fără profil nu
+-- are cum fi restrâns (FK pe profiles), deci „toate” ar fi o presupunere, nu o dovadă (L08, L18). NULL rămâne „toate” (rândul fără cont).
 CREATE FUNCTION public.fn_executie_acces_candidati(p_profile uuid) RETURNS jsonb
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF p_profile IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile) THEN
+    RAISE EXCEPTION 'acces proiect: candidații cer un cont existent' USING ERRCODE = '22023';
+  END IF;
+  RETURN (
   WITH c AS (SELECT public.fn_executie_acces_nerestrans_cont(p_profile) AS tot,
                     public.fn_executie_acces_lista_cont(p_profile, false) AS ids)
   SELECT coalesce(jsonb_agg(jsonb_build_object('id', e.id, 'nume', e.nume, 'cod_intern', e.cod_intern) ORDER BY e.id), '[]'::jsonb)
     FROM public.executie_proiecte e CROSS JOIN c
    WHERE e.activ IS TRUE
-     AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids))
-$f$;
+     AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids)));
+END $f$;
 -- Storage: proiectele unui obiect, din cale (formele din inventar, ancorate) sau din tabelul care îl referă; formă necunoscută = {} (L13, L18)
 CREATE FUNCTION public.fn_executie_acces_obiect_proiecte(p_bucket text, p_name text) RETURNS bigint[]
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$

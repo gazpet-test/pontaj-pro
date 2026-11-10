@@ -1043,7 +1043,8 @@ END $t$;
 --   (a) candidații = SPECIFICAȚIA, nu funcția: A (nerestrâns) / owner / rând fără cont = toate proiectele active; B = {p1, p2} (p2 e
 --       'viewer': rândul potrivit pe el îi rămâne vizibil); C = {p1}; paritate cu regula pe apelant (ca B, fn_executie_proiect_permis pe
 --       fiecare proiect activ; L19); forma exactă [{id, nume, cod_intern}]; un client logat (B) sau anon NU cheamă funcția (42501, doar
---       service_role); apoi p2 dezactivat → iese din candidații lui B și ai lui A (filtrul „activ” de azi al edge-ului);
+--       service_role); apoi p2 dezactivat → iese din candidații lui B și ai lui A (filtrul „activ” de azi al edge-ului); r7: un UUID fără
+--       profil = refuz explicit 22023 (nu „toate”);
 --   (b) documentul lui B fără proiect, cu un indiciu care potrivește DOAR p3: p3 nu e candidat → rândul rămâne fără proiect, iar B îl vede
 --       exact ca înainte (rândul și fișierul) — nu mai dispare, deci nu mai e semnal;
 --   (c) indiciu care potrivește p3 și p1 (p3 mai bine): potrivit pe p1 (candidat) → B îl vede, cu p1;
@@ -1058,6 +1059,8 @@ SELECT pg_temp.t_pune('cand', jsonb_build_object(
          'a', public.fn_executie_acces_candidati(pg_temp.t_g('a')::uuid), 'b', public.fn_executie_acces_candidati(pg_temp.t_g('b')::uuid),
          'c', public.fn_executie_acces_candidati(pg_temp.t_g('c')::uuid), 'own', public.fn_executie_acces_candidati(pg_temp.t_g('own')::uuid),
          'nul', public.fn_executie_acces_candidati(NULL)));
+-- r7 (review r6 P2): un cont dat care NU există (UUID fără profil) = refuz explicit, nu „toate proiectele”
+SELECT pg_temp.t_pune('inexistent', to_jsonb(pg_temp.t_proba(format('SELECT public.fn_executie_acces_candidati(%L::uuid)', gen_random_uuid()))));
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
 SELECT pg_temp.t_pune('permis_b', (SELECT coalesce(jsonb_agg(t.x ORDER BY t.x), '[]'::jsonb)
                                      FROM (SELECT v::bigint AS x FROM jsonb_array_elements_text(pg_temp.t_g('t3c')::jsonb->'tot') v) t
@@ -1136,6 +1139,9 @@ BEGIN
   IF coalesce(r->>'acl_b', '') NOT LIKE '42501 permission denied for function fn_executie_acces_candidati%'
      OR coalesce(r->>'acl_anon', '') NOT LIKE '42501 permission denied for function fn_executie_acces_candidati%' THEN
     RAISE EXCEPTION 'T3c FAIL: un client (B / anon) cheamă candidații: % / %', r->>'acl_b', r->>'acl_anon';
+  END IF;
+  IF coalesce(r->>'inexistent', '') NOT LIKE '22023 acces proiect: candidații cer un cont existent%' THEN
+    RAISE EXCEPTION 'T3c FAIL: cont inexistent (UUID fără profil) nu e refuzat: %', left(coalesce(r->>'inexistent', '(lipsă)'), 200);
   END IF;
   -- (b)(c)(d) pe documentul lui B fără proiect
   IF (SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b') IS NULL OR coalesce((v0->>'vede')::integer, 0) = 0 THEN
