@@ -100,14 +100,10 @@ function Mesaj({ text, children }) {
 export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
   let renderer
   try { renderer = new THREE.WebGLRenderer({ antialias: true }) } catch (e) { const x = new Error('WebGL indisponibil'); x.webgl = true; throw x }
-  if (!renderer.getContext()) { renderer.dispose(); const x = new Error('WebGL indisponibil'); x.webgl = true; throw x }
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  renderer.setClearColor(G.bg)
   const canvas = renderer.domElement
-  canvas.style.display = 'block'; canvas.style.width = '100%'; canvas.style.height = '100%'; canvas.style.touchAction = 'none'
-  gazda.appendChild(canvas)
-  // Registrul eliberărilor (review r2): fiecare resursă își pune eliberarea aici IMEDIAT după ce e creată; la ieșire sau dacă
-  // construcția pică la jumătate, se eliberează tot ce s-a apucat, în ordine inversă (o eliberare care pică nu le oprește pe celelalte).
+  // Registrul eliberărilor (review r2 / r3): fiecare resursă își pune eliberarea aici IMEDIAT după ce e creată — rendererul primul,
+  // înaintea oricărei configurări (setPixelRatio apelează intern setSize și poate arunca). La ieșire sau dacă construcția pică la
+  // jumătate, se eliberează tot ce s-a apucat, în ordine inversă (o eliberare care pică nu le oprește pe celelalte).
   const eliberari = [() => { renderer.dispose(); renderer.forceContextLoss?.(); canvas.remove() }]
   const elibereaza = () => {
     while (eliberari.length) {
@@ -116,6 +112,11 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     }
   }
   try {
+    if (!renderer.getContext()) { const x = new Error('WebGL indisponibil'); x.webgl = true; throw x }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    renderer.setClearColor(G.bg)
+    canvas.style.display = 'block'; canvas.style.width = '100%'; canvas.style.height = '100%'; canvas.style.touchAction = 'none'
+    gazda.appendChild(canvas)
     const scene = new THREE.Scene()
     eliberari.push(() => scene.traverse(o => {
       o.geometry?.dispose?.()

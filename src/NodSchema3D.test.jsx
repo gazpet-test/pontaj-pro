@@ -30,7 +30,7 @@ const GRUP = {
 let vechi = null
 afterEach(() => { if (vechi) Object.assign(globalThis, vechi); vechi = null; vi.restoreAllMocks() })
 
-function mediu({ picaLaSetSize = false } = {}) {
+function mediu({ picaLaSetSize = 0 } = {}) {   // picaLaSetSize = al câtelea apel al lui setSize aruncă (0 = niciunul)
   const j = new JSDOM('<!doctype html><div id="g"></div>', { pretendToBeVisual: true })
   vechi = { window: globalThis.window, document: globalThis.document, ResizeObserver: globalThis.ResizeObserver,
     requestAnimationFrame: globalThis.requestAnimationFrame, cancelAnimationFrame: globalThis.cancelAnimationFrame }
@@ -47,9 +47,9 @@ function mediu({ picaLaSetSize = false } = {}) {
       randere.push(this)
     }
     getContext() { return {} }
-    setPixelRatio() {}
+    setPixelRatio() { this.setSize(1, 1, false) }   // ca în Three.js: setPixelRatio apelează intern setSize (review r3)
     setClearColor() {}
-    setSize() { if (picaLaSetSize) throw new Error('setSize a picat (test)') }
+    setSize() { this.apeluri = (this.apeluri || 0) + 1; if (this.apeluri === picaLaSetSize) throw new Error('setSize a picat (test)') }
   }
   const controale = []
   class ControaleFalse {
@@ -90,8 +90,19 @@ dom(JSDOM ? 'NodSchema3D — eliberarea resurselor (jsdom + Three.js real)' : `N
     expect(m.contor.rem).toBe(4)
   })
 
-  it('review r2: construcția pică la renderer.setSize (după controale / ascultători / observator) = tot ce s-a creat se eliberează', () => {
-    const m = mediu({ picaLaSetSize: true })
+  it('review r3: primul setSize (din setPixelRatio, înaintea oricărei alte resurse) pică = rendererul tot se eliberează', () => {
+    const m = mediu({ picaLaSetSize: 1 })
+    expect(() => construiesteScena(m.THREE, m.ControaleFalse, m.gazda, GRUP, () => {})).toThrow('setSize a picat (test)')
+    expect(m.randere[0].dispose).toHaveBeenCalledTimes(1)
+    expect(m.randere[0].forceContextLoss).toHaveBeenCalledTimes(1)
+    expect(m.gazda.querySelectorAll('canvas')).toHaveLength(0)
+    expect(m.controale).toHaveLength(0)                         // nimic altceva n-a apucat să fie creat
+    expect(m.observatoare).toHaveLength(0)
+    expect(m.contor.add).toBe(0)
+  })
+
+  it('review r2: setSize din redimensionare pică (după controale / ascultători / observator) = tot ce s-a creat se eliberează', () => {
+    const m = mediu({ picaLaSetSize: 2 })
     expect(() => construiesteScena(m.THREE, m.ControaleFalse, m.gazda, GRUP, () => {})).toThrow('setSize a picat (test)')
     expect(m.observatoare).toHaveLength(1)
     expect(m.observatoare[0].deconectat).toBe(1)                // observatorul nu mai ține scena căzută
