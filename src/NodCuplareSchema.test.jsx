@@ -303,4 +303,54 @@ dom(numeDom('NodCuplareSchema — schema 3D (probă)'), () => {
     expect(u.d.body.textContent).toContain('alt format')
     expect(u.d.body.textContent).not.toContain('3D (probă)')
   })
+
+  // varianta B: două grupuri amplasate (rez, gara) + unul cu amplasare invalidă (gaz) — model sintetic
+  const MODEL_B = () => ({
+    ...MODEL3D,
+    grupuri: [
+      { ...MODEL3D.grupuri[0], amplasare: { origine: [0, 0, -1500], rot_z: 0 } },
+      { id: 'gara', titlu: 'Gara', prefixe: ['CP'], teren_z: 0, amplasare: { origine: [10000, 0, 0], rot_z: 90 },
+        elemente: [{ tip: 'teava', a: [0, 0, 0], b: [1000, 0, 0], dn: 300 }],
+        suduri: [{ cod: 'CP-005', p: [1000, 0, 0], cert: 'desen' }], fara_pozitie: [] },
+      { id: 'gaz', titlu: 'Alimentare', prefixe: ['CI'], teren_z: 0, amplasare: { origine: [0, 0, 0], rot_z: 720 },
+        elemente: [{ tip: 'teava', a: [0, 0, 0], b: [0, 0, 500], dn: 25 }], suduri: [], fara_pozitie: [] },
+    ],
+  })
+
+  it('varianta B: „Toată instalația” e vederea implicită; reuniunea grupurilor amplasate; grupul neamplasat e enumerat; înapoi pe grup', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { client } = clientFals({ randuri: [...randuri(), RAND(4, 'CP-099'), RAND(5, 'CI-001')], model3d: MODEL_B() })
+    const u = await monteaza(client)
+    // amplasarea invalidă: eroare vizibilă, grupul rămâne (în vederea lui)
+    expect(u.d.body.textContent).toContain('Grupul 3 (gaz): rot_z lipsește sau nu e un număr între -360 și 360')
+    await u.apasa(u.buton('3D (probă)'))
+    expect(u.buton('Toată instalația').style.fontWeight).toBe('800')
+    expect(u.d.body.textContent).toContain('Nu sunt amplasate (se văd doar în vederea lor): Alimentare')
+    // sfere: CR-001 + CP-005; fără loc: CR-114 (fără poziție) + CP-099 (lipsă din model); CI-001 e al grupului neamplasat
+    expect(u.d.body.textContent).toContain('În schema 3D: 2 suduri')
+    expect(u.buton('Suduri fără loc în 3D').textContent).toContain(': 2')
+    expect(u.d.body.textContent).toContain('În schemă, dar nu în lista sudurilor: CR-050')
+    await u.apasa(u.buton('Suduri fără loc în 3D'))
+    expect(u.d.body.textContent).toContain('Suduri fără loc în 3D (Toată instalația): 2')
+    expect(u.buton('CR-114')).toBeTruthy()
+    expect(u.buton('CP-099')).toBeTruthy()
+    await u.apasa(u.d.querySelector('button[aria-label="Închide"]'))
+    // pe un grup: ca înainte (doar domeniul lui)
+    await u.apasa(u.buton('Gara'))
+    expect(u.d.body.textContent).toContain('În schema 3D: 1 suduri')
+    expect(u.buton('Suduri fără loc în 3D').textContent).toContain(': 1')
+    expect(u.d.body.textContent).not.toContain('Nu sunt amplasate')
+    await u.apasa(u.buton('Alimentare'))
+    expect(u.buton('Suduri fără loc în 3D').textContent).toContain(': 1')   // CI-001
+  })
+
+  it('compatibil înapoi: fără amplasări nu apare „Toată instalația” și primul grup e cel afișat', async () => {
+    const { client } = clientFals({ randuri: randuri(), model3d: MODEL3D })
+    const u = await monteaza(client)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await u.apasa(u.buton('3D (probă)'))
+    expect(u.d.body.textContent).not.toContain('Toată instalația')
+    expect(u.d.body.textContent).toContain('Rezervoare')
+    expect(u.d.body.textContent).toContain('În schema 3D: 1 suduri')
+  })
 })

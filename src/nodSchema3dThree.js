@@ -3,6 +3,7 @@
 export {
   WebGLRenderer, Scene, AmbientLight, HemisphereLight, DirectionalLight, MeshStandardMaterial, MeshBasicMaterial, SpriteMaterial,
   Group, Vector3, Mesh, CylinderGeometry, SphereGeometry, TubeGeometry, PlaneGeometry, QuadraticBezierCurve3, CanvasTexture, Sprite,
-  GridHelper, PerspectiveCamera, SRGBColorSpace, DoubleSide, BackSide,
+  GridHelper, PerspectiveCamera, SRGBColorSpace, DoubleSide, BackSide, Box3, Sphere,
 } from 'three'
 export { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+export { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
