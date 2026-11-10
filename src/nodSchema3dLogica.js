@@ -12,7 +12,7 @@ export const FORMAT = 'gazpet-nod-3d'
 export const VERSIUNE = 1
 export const TIPURI = ['teava', 'cot', 'teu', 'reductie', 'flansa', 'robinet', 'stut', 'rezervor', 'eticheta']
 export const CERTITUDINI = ['desen', 'estimat']
-const LIM = { grupuri: 20, elemente: 5000, suduri: 2000, faraPozitie: 2000, text: 160, note: 20, coord: 1e6 }
+const LIM = { grupuri: 20, elemente: 5000, suduri: 2000, faraPozitie: 2000, text: 160, note: 20, nota: 400, coord: 1e6 }
 const RE_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/
 const RE_PREFIX = /^[A-Z]{1,6}$/
 
@@ -82,7 +82,9 @@ export function parseModel3d(json) {
         : !prefixe.includes(cod.split('-')[0]) ? 'codul nu e în prefixele grupului' : null
       if (pb) { erori.push(`${eticG}, fără poziție ${i + 1} (${cod || '?'}): ${pb}`); return }
       coduri.add(cod)
-      faraPozitie.push({ cod, motiv: txt(f?.motiv).slice(0, LIM.text) })
+      const motiv = txt(f?.motiv)
+      if (motiv.length > LIM.text) erori.push(`${eticG}, fără poziție ${i + 1} (${cod}): motivul are peste ${LIM.text} caractere (tăiat)`)
+      faraPozitie.push({ cod, motiv: motiv.slice(0, LIM.text) })
     })
     const titlu = txt(g.titlu)
     if (titlu.length > LIM.text) erori.push(`${eticG}: titlul are peste ${LIM.text} caractere (tăiat)`)
@@ -90,7 +92,11 @@ export function parseModel3d(json) {
   })
   const note = Array.isArray(json.note) ? json.note : []
   if (note.length > LIM.note) erori.push(`Modelul are ${note.length} note; peste ${LIM.note} nu se afișează`)
-  return { grupuri, note: note.slice(0, LIM.note).map(n => txt(n).slice(0, 400)).filter(Boolean), titlu: txt(json.titlu).slice(0, LIM.text), erori }
+  const noteCitite = note.slice(0, LIM.note).map(txt)
+  noteCitite.forEach((n, i) => { if (n.length > LIM.nota) erori.push(`Nota ${i + 1} are peste ${LIM.nota} caractere (tăiată)`) })
+  const titlu = txt(json.titlu)
+  if (titlu.length > LIM.text) erori.push(`Titlul modelului are peste ${LIM.text} caractere (tăiat)`)
+  return { grupuri, note: noteCitite.map(n => n.slice(0, LIM.nota)).filter(Boolean), titlu: titlu.slice(0, LIM.text), erori }
 }
 
 function validElement(e) {

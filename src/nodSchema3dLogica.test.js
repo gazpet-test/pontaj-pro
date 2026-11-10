@@ -138,6 +138,24 @@ describe('parseModel3d', () => {
     expect(m.grupuri[1].suduri.map(s => s.cod)).toEqual(['CI-001'])      // poziția validă din grupul CI rămâne
   })
 
+  it('review r2: orice text tăiat se raportează (nota > 400, motivul > 160, titlul modelului > 160)', () => {
+    const j = MODEL()
+    j.note = ['scurtă', 'x'.repeat(400) + ' NU CONFIRMAT']
+    j.titlu = 't'.repeat(161)
+    j.grupuri[0].fara_pozitie[0].motiv = 'm'.repeat(160) + ' de confirmat'
+    const m = parseModel3d(j)
+    expect(m.erori).toEqual([
+      'Grupul 1 (rez), fără poziție 1 (CR-114): motivul are peste 160 caractere (tăiat)',
+      'Nota 2 are peste 400 caractere (tăiată)',
+      'Titlul modelului are peste 160 caractere (tăiat)',
+    ])
+    expect(m.note[1]).toHaveLength(400)
+    expect(m.grupuri[0].faraPozitie[0].motiv).toHaveLength(160)
+    // la limită exactă: fără mesaj
+    const k = MODEL(); k.note = ['y'.repeat(400)]; k.titlu = 'z'.repeat(160)
+    expect(parseModel3d(k).erori).toEqual([])
+  })
+
   it('peste 20 de note = raportat, nu tăiat în tăcere', () => {
     const j = MODEL()
     j.note = Array.from({ length: 21 }, (_, i) => `n${i}`)

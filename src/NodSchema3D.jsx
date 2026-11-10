@@ -96,8 +96,8 @@ function Mesaj({ text, children }) {
   )
 }
 
-// ═══════════ scena (Three.js) — fără React ═══════════
-function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
+// ═══════════ scena (Three.js) — fără React; exportată doar pentru testul eliberării resurselor ═══════════
+export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
   let renderer
   try { renderer = new THREE.WebGLRenderer({ antialias: true }) } catch (e) { const x = new Error('WebGL indisponibil'); x.webgl = true; throw x }
   if (!renderer.getContext()) { renderer.dispose(); const x = new Error('WebGL indisponibil'); x.webgl = true; throw x }
@@ -106,8 +106,22 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
   const canvas = renderer.domElement
   canvas.style.display = 'block'; canvas.style.width = '100%'; canvas.style.height = '100%'; canvas.style.touchAction = 'none'
   gazda.appendChild(canvas)
+  // Registrul eliberărilor (review r2): fiecare resursă își pune eliberarea aici IMEDIAT după ce e creată; la ieșire sau dacă
+  // construcția pică la jumătate, se eliberează tot ce s-a apucat, în ordine inversă (o eliberare care pică nu le oprește pe celelalte).
+  const eliberari = [() => { renderer.dispose(); renderer.forceContextLoss?.(); canvas.remove() }]
+  const elibereaza = () => {
+    while (eliberari.length) {
+      const f = eliberari.pop()
+      try { f() } catch { /* restul se eliberează oricum */ }
+    }
+  }
   try {
     const scene = new THREE.Scene()
+    eliberari.push(() => scene.traverse(o => {
+      o.geometry?.dispose?.()
+      const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []
+      for (const m of ms) { m.map?.dispose?.(); m.dispose?.() }
+    }))
     scene.add(new THREE.AmbientLight(0xffffff, 0.55))
     scene.add(new THREE.HemisphereLight(0xdde6f0, 0x2a2118, 0.5))
     const soare = new THREE.DirectionalLight(0xffffff, 1.1)
@@ -117,6 +131,7 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     const V = p => new THREE.Vector3(...spreScena(p))
     const mm = x => x / 1000
     const materiale = new Map()
+    eliberari.push(() => { for (const m of materiale.values()) m.dispose() })
     const mat = (culoare, estimat, extra = {}) => {
       const k = `${culoare}|${estimat ? 1 : 0}|${JSON.stringify(extra)}`
       if (!materiale.has(k)) {
@@ -236,6 +251,7 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     // ── camera + rotirea / zoom-ul ──
     const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 1000)
     const controale = new OrbitControls(camera, canvas)
+    eliberari.push(() => controale.dispose())
     controale.enableDamping = false
     controale.screenSpacePanning = true
     const centru = new THREE.Vector3(...spreScena(cutie.centru))
@@ -277,6 +293,7 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     const golesteSfere = () => {
       for (const o of [...sfere.children]) { sfere.remove(o); o.material?.dispose?.() }
     }
+    eliberari.push(() => { golesteSfere(); for (const g of geomSfera.values()) g.dispose() })
     const aplicaPuncte = (lista, selectatId) => {
       golesteSfere()
       tinte = []
@@ -329,6 +346,12 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     canvas.addEventListener('pointerup', laSus)
     canvas.addEventListener('pointercancel', laAnulare)
     canvas.addEventListener('pointermove', laMiscare)
+    eliberari.push(() => {
+      canvas.removeEventListener('pointerdown', laJos)
+      canvas.removeEventListener('pointerup', laSus)
+      canvas.removeEventListener('pointercancel', laAnulare)
+      canvas.removeEventListener('pointermove', laMiscare)
+    })
 
     // ── randare la cerere ──
     let cadru = 0
@@ -337,6 +360,7 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
       cadru = requestAnimationFrame(() => { cadru = 0; renderer.render(scene, camera) })
     }
     controale.addEventListener('change', randeaza)
+    eliberari.push(() => { cancelAnimationFrame(cadru); cadru = 0; controale.removeEventListener('change', randeaza) })
     const redimensioneaza = () => {
       const w = gazda.clientWidth || 1, h = gazda.clientHeight || 1
       renderer.setSize(w, h, false)
@@ -346,6 +370,7 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
       else randeaza()
     }
     const obs = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(redimensioneaza) : null
+    eliberari.push(() => obs?.disconnect())
     obs?.observe(gazda)
     redimensioneaza()
     incadreaza()
@@ -354,33 +379,10 @@ function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
       aplicaPuncte,
       incadreaza,
       teren: vizibil => { terenGrup.visible = vizibil; randeaza() },
-      dispose: () => {
-        cancelAnimationFrame(cadru)
-        obs?.disconnect()
-        canvas.removeEventListener('pointerdown', laJos)
-        canvas.removeEventListener('pointerup', laSus)
-        canvas.removeEventListener('pointercancel', laAnulare)
-        canvas.removeEventListener('pointermove', laMiscare)
-        controale.removeEventListener('change', randeaza)
-        controale.dispose()
-        golesteSfere()
-        scene.traverse(o => {
-          o.geometry?.dispose?.()
-          const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []
-          for (const m of ms) { m.map?.dispose?.(); m.dispose?.() }
-        })
-        for (const g of geomSfera.values()) g.dispose()
-        for (const m of materiale.values()) m.dispose()
-        renderer.dispose()
-        renderer.forceContextLoss?.()
-        canvas.remove()
-      },
+      dispose: elibereaza,
     }
   } catch (e) {
-    // scena nu s-a putut construi complet: se eliberează ce s-a apucat (contextul WebGL, canvas-ul)
-    renderer.dispose()
-    renderer.forceContextLoss?.()
-    canvas.remove()
+    elibereaza()                        // scena nu s-a putut construi complet: tot ce s-a apucat se eliberează
     throw e
   }
 }
