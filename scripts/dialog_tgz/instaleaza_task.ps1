@@ -6,7 +6,8 @@
 #      din C:\Users\Gazpet-Ai\claude-tasks\dialog_tgz.ps1 / dialog_tgz_prompt.md NU se ating);
 #   3. Set-ScheduledTask pe sarcina EXISTENTA: actiunea noua, declansatori L-V 10:40 si 16:40, StartWhenAvailable,
 #      2 reincercari la 30 min, limita 1 h, fara instante paralele. Utilizatorul (principal) ramane cel existent.
-# Nu creeaza sarcina daca lipseste, nu o porneste, nu scrie tokenul, nu atinge BD.
+# Nu creeaza sarcina daca lipseste, nu o porneste, nu scrie tokenul, nu atinge BD, nu creeaza cursorul
+# (paw-data\out\dialog_tgz_cursor.txt il scrie chat-ul la instalare, vezi README).
 # Fisier ASCII (PowerShell 5.1).
 
 [CmdletBinding()]
@@ -18,7 +19,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $sursa = $PSScriptRoot
-$fisiere = @('dialog_tgz.ps1', 'DialogTgz.psm1', 'dialog_tgz_prompt.md', 'sql\citeste_handoff.sql', 'sql\context_agregat.sql', 'sql\actualizeaza_handoff.sql')
+$fisiere = @('dialog_tgz.ps1', 'DialogTgz.psm1', 'dialog_tgz_prompt.md', 'sql\context_agregat.sql')
 foreach ($f in $fisiere) { if (-not (Test-Path -LiteralPath (Join-Path $sursa $f) -PathType Leaf)) { throw "lipseste din repo: $f" } }
 
 $task = Get-ScheduledTask -TaskName $NumeTask -ErrorAction SilentlyContinue

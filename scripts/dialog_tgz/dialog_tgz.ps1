@@ -1,7 +1,8 @@
 # dialog_tgz.ps1 - sarcina Windows "Gazpet Dialog TGZ", varianta B (decizia Razvan 06.11.2026).
-# Ruleaza DOAR cu tokenul de un an din `claude setup-token` (fara conectori claude.ai). Toata partea de BD o face
-# acest script, prin psql, cu interogari FIXE din sql\*.sql. Claude primeste doar fisiere locale si unelte
-# Read/Glob/Grep + Edit in folderul de dialog. Fisa de securitate: README.md.
+# Ruleaza DOAR cu tokenul de un an din `claude setup-token` (fara conectori claude.ai). BD: doar citire, prin psql,
+# cu interogarea FIXA din sql\context_agregat.sql si un rol care nu poate scrie (verificat chiar in SQL).
+# Agentul primeste doar fisiere locale, unelte Read/Glob/Grep si scriere DOAR in folderul privat al rularii;
+# raspunsul il publica acest orchestrator in dialog (creare exclusiva). Fisa de securitate: README.md.
 # Iesire: 0 = GATA / NIMIC NOU / OPRIT / rulare deja in curs; 1 = EROARE.
 # Fisier ASCII (PowerShell 5.1).
 
@@ -13,7 +14,7 @@ param(
   [string]$PsqlExe = 'C:\Users\Public\pgsql\bin\psql.exe',
   [string]$PgHost = 'aws-1-eu-central-1.pooler.supabase.com',
   [int]$PgPort = 5432,
-  [string]$PgUser = 'postgres.dxczwkbciseqniprspcu',
+  [string]$PgUser = 'dialog_tgz_ro.dxczwkbciseqniprspcu',
   [string]$PgDb = 'postgres',
   [string]$ClaudeExe = '',
   [string]$Model = 'claude-sonnet-5-5',
@@ -31,15 +32,16 @@ $acum = Get-Date
 if (-not (Test-Path -LiteralPath $OutDir)) { [void](New-Item -ItemType Directory -Path $OutDir) }
 $caleLog = Join-Path $OutDir ('dialog_tgz_{0}.log' -f $acum.ToString('yyyy-MM-dd'))
 $caleStare = Join-Path $OutDir 'dialog_tgz_ultima.txt'
-$idRulare = '{0}-{1}' -f $acum.ToString('HHmmss'), $PID
+$idRulare = '{0}-{1}' -f $acum.ToString('yyyyMMdd_HHmmss'), $PID
 
+# Orice linie de log trece prin ConvertTo-TextSigur: token mascat, iar textul cu date personale e inlocuit cu codurile.
 $log = {
   param([string]$Mesaj)
   $linie = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $idRulare, (ConvertTo-TextSigur $Mesaj 25000 -PastreazaLiniiNoi)
   Write-TextUtf8 -Cale $caleLog -Text ($linie + "`r`n") -Adauga
 }.GetNewClosure()
 
-# (g) lock global: fisier deschis exclusiv (merge intre sesiuni Windows; se elibereaza si la moartea procesului)
+# lock global: fisier deschis exclusiv (merge intre sesiuni Windows; se elibereaza si la moartea procesului)
 $caleLock = Join-Path $OutDir 'dialog_tgz.lock'
 try {
   $lock = [System.IO.File]::Open($caleLock, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
@@ -58,26 +60,32 @@ try {
   $config = @{
     DialogDir = $DialogDir; TokenFile = $TokenFile; PsqlExe = $PsqlExe; PgHost = $PgHost; PgPort = $PgPort; PgUser = $PgUser; PgDb = $PgDb
     ClaudeExe = $ClaudeExe; Model = $Model; Effort = $Effort; MaxTurns = $MaxTurns; TimeoutMin = $TimeoutMin
-    RadaciniAtasamente = $RadaciniAtasamente; WorkDir = $WorkDir
+    RadaciniAtasamente = $RadaciniAtasamente; WorkDir = $WorkDir; IdRulare = ($idRulare -replace '[^A-Za-z0-9_\-]', '_')
+    CaleCursor = (Join-Path $OutDir 'dialog_tgz_cursor.txt'); CaleMarcaj = (Join-Path $OutDir 'dialog_tgz_procese_ramase.txt')
     SqlDir = (Join-Path $PSScriptRoot 'sql'); PromptFile = (Join-Path $PSScriptRoot 'dialog_tgz_prompt.md')
   }
   if (-not (Test-Path -LiteralPath $PsqlExe -PathType Leaf)) {
     $rez = @{ Stare = 'EROARE'; Linie = 'EROARE psql lipseste: ' + $PsqlExe; Cod = 1 }
+  } elseif (-not (Test-PgUserPermis $PgUser)) {
+    $rez = @{ Stare = 'EROARE'; Linie = 'EROARE utilizatorul Postgres ' + $PgUser + ' poate scrie; sarcina cere rolul doar-citire'; Cod = 1 }
   } elseif (-not $ClaudeExe -or -not (Test-Path -LiteralPath $ClaudeExe -PathType Leaf)) {
     $rez = @{ Stare = 'EROARE'; Linie = 'EROARE executabilul claude nu a fost gasit'; Cod = 1 }
   } else {
-    $psql = { param($FisierSql, $Variabile, $Tuple) Invoke-PsqlFisier -Config $config -FisierSql $FisierSql -Variabile $Variabile -Tuple:$Tuple }.GetNewClosure()
-    $claude = { param($Prompt, $Token, $Radacini) Invoke-ClaudeReal -Config $config -Prompt $Prompt -Token $Token -Radacini $Radacini }.GetNewClosure()
+    if (-not (Test-Path -LiteralPath $WorkDir)) { [void](New-Item -ItemType Directory -Path $WorkDir) }
+    $psql = { param($FisierSql) Invoke-PsqlFisier -Config $config -FisierSql $FisierSql }.GetNewClosure()
+    $claude = { param($Prompt, $Token, $Radacini, $DirIntrare, $DirIesire)
+      Invoke-ClaudeReal -Config $config -Prompt $Prompt -Token $Token -Radacini $Radacini -DirIntrare $DirIntrare -DirIesire $DirIesire }.GetNewClosure()
     $rez = Invoke-DialogTgz -Config $config -Psql $psql -Claude $claude -Log $log -Acum $acum
   }
 } catch {
-  $rez = @{ Stare = 'EROARE'; Linie = 'EROARE ' + (ConvertTo-TextSigur $_.Exception.Message 300); Cod = 1 }
+  $rez = @{ Stare = 'EROARE'; Linie = 'EROARE ' + $_.Exception.Message; Cod = 1 }
 } finally {
   try {
     if ($null -eq $rez) { $rez = @{ Stare = 'EROARE'; Linie = 'EROARE rulare intrerupta'; Cod = 1 } }
-    # (f) starea: data + ultima linie
-    Write-TextUtf8 -Cale $caleStare -Text (('{0} {1}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $rez.Linie) + "`r`n")
-    & $log ('final: ' + $rez.Linie + ' (cod iesire ' + $rez.Cod + ')')
+    # starea: data + ultima linie (tot prin filtrul de token / date personale)
+    $linieStare = ConvertTo-TextSigur ([string]$rez.Linie) 400
+    Write-TextUtf8 -Cale $caleStare -Text (('{0} {1}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $linieStare) + "`r`n")
+    & $log ('final: ' + $linieStare + ' (cod iesire ' + $rez.Cod + ')')
   } finally {
     $lock.Dispose()
   }

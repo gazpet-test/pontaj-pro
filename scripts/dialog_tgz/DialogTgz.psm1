@@ -2,24 +2,36 @@
 # Fisier ASCII (PowerShell 5.1 citeste .psm1 fara BOM ca ANSI). Diacriticele necesare se construiesc cu [char].
 # Functiile pure sunt testate offline in teste\test_dialog_tgz.ps1; Invoke-DialogTgz primeste psql / claude / log
 # ca scriptblock-uri, ca fluxul complet sa poata fi rulat in test fara retea.
+#
+# r2 (Jakarinos r1 NO-GO):
+# - ERP strict doar-citire: nicio scriere in BD; cursorul "ultimul procesat" sta intr-un fisier local
+#   (paw-data\out\dialog_tgz_cursor.txt); exportul verifica in BD ca rolul nu poate scrie nimic (sql\context_agregat.sql).
+# - Agentul NU are drept de scriere in dialog: scrie doar raspuns.md in folderul privat al rularii. Orchestratorul
+#   verifica raspunsul (stare, marime, date personale) si il publica el, prin creare exclusiva claude#NNN.md
+#   (NNN ales la publicare, mutare atomica fara suprascriere), cu antetul "Raspuns la:" scris de program.
+# - Date personale (telefon, CNP, e-mail, adresa, act de identitate) cautate in raspuns, log si stare inainte de scriere.
+# - Timeout / cod de iesire nenul / rezultat JSON fara succes = EROARE; cursorul nu avanseaza.
+# - Oprirea arborelui de procese se confirma; daca nu se poate confirma, un marcaj blocheaza rularile urmatoare.
 
 Set-StrictMode -Version 2.0
 
 $script:Utf8FaraBom = New-Object System.Text.UTF8Encoding($false)
+$script:Utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
 $script:A_breve = [string][char]0x0103   # a cu caciula (din "programata")
 $script:TiparNume = '^(juridic|claude)#([0-9]{3})\.md$'
-$script:TiparMarcaj = 'Dialog TGZ: ultimul procesat: juridic#([0-9]{3})'
-$script:TiparRand = 'Dialog TGZ: ultimul procesat: juridic#[0-9]{3}[^\r\n]*'
+$script:TiparCursor = '^juridic#([0-9]{3})(?: \(raspuns claude#[0-9]{3}, [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}\))?$'
+$script:MaxRaspunsOcteti = 200 * 1024   # serverul juridic citeste cel mult 200 KB dintr-un claude#NNN.md
+$script:NumeRaspunsAgent = 'raspuns.md'
 
 # ---------------------------------------------------------------- utilitare
 
-function Get-Md5Hex {
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
-  $md5 = [System.Security.Cryptography.MD5]::Create()
+function Get-Sha256Fisier {
+  param([Parameter(Mandatory)][string]$Cale)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
   try {
-    $h = $md5.ComputeHash($script:Utf8FaraBom.GetBytes($Text))
+    $h = $sha.ComputeHash([System.IO.File]::ReadAllBytes($Cale))
     return (($h | ForEach-Object { $_.ToString('x2') }) -join '')
-  } finally { $md5.Dispose() }
+  } finally { $sha.Dispose() }
 }
 
 function Write-TextUtf8 {
@@ -35,13 +47,41 @@ function Read-TextUtf8 {
   return $t
 }
 
-# Scoate caracterele de control, mascheaza orice token Anthropic si taie la Max caractere.
+# Date personale cautate in tot ce iese din sarcina (raspuns publicat, log, stare). Intoarce codurile gasite
+# (sortate, unice; apelantul pune @()); nimic = nimic gasit. Numele de persoane NU se pot recunoaste sigur cu tipare: pentru ele
+# raman regula din prompt si faptul ca exportul din BD nu contine nume.
+# Granitele (?<![0-9A-Za-z]) / (?![0-9A-Za-z]) evita potrivirile in interiorul hash-urilor si al codurilor.
+$script:TipareDatePersonale = @(
+  @{ Cod = 'EMAIL';   Tipar = '[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}' },
+  @{ Cod = 'TELEFON'; Tipar = '(?<![0-9A-Za-z+])(?:\+40|0040|0)[ .\-]?[237](?:[ .\-]?[0-9]){8}(?![0-9A-Za-z])' },
+  @{ Cod = 'TELEFON'; Tipar = '\(0[23][0-9]{2}\)[ .\-]?[0-9]{3}[ .\-]?[0-9]{3}(?![0-9])' },
+  @{ Cod = 'CNP';     Tipar = '(?<![0-9A-Za-z])[1-9][0-9]{12}(?![0-9A-Za-z])' },
+  @{ Cod = 'ACT_IDENTITATE'; Tipar = '(?i)(?<![\p{L}])seri[ae][ :]*[A-Z]{2}[ ,]*(?:nr\.?|num\p{L}r)?[ :]*[0-9]{6}(?![0-9])' },
+  @{ Cod = 'ADRESA';  Tipar = '(?i)(?<![\p{L}])(?:str\.|strada|bd\.|bdul\.?|bulevardul|calea|aleea|\p{L}os\.|\p{L}oseaua|sat(?:ul)?)[ ]+[^\r\n]{1,60}?(?<![\p{L}])nr\.?[ ]*[0-9]{1,4}' },
+  @{ Cod = 'ADRESA';  Tipar = '(?i)(?<![\p{L}])(?:bl\.|bloc)[ ]*[A-Z0-9]{1,4}[ ,]+(?:sc\.|scara)[ ]*[A-Z0-9]{1,3}' },
+  @{ Cod = 'ADRESA';  Tipar = '(?i)(?<![\p{L}])ap\.[ ]*[0-9]{1,4}(?![0-9])' }
+)
+
+function Find-DatePersonale {
+  param([AllowNull()][AllowEmptyString()][string]$Text)
+  if ([string]::IsNullOrEmpty($Text)) { return }
+  $coduri = @()
+  foreach ($x in $script:TipareDatePersonale) {
+    if ([regex]::IsMatch($Text, $x.Tipar)) { $coduri += $x.Cod }
+  }
+  return ($coduri | Sort-Object -Unique)
+}
+
+# Pentru log si stare: mascheaza tokenurile Anthropic, scoate caracterele de control, iar daca textul
+# (INTREG, inainte de taiere) contine date personale il inlocuieste complet cu codurile gasite. Apoi taie la Max.
 function ConvertTo-TextSigur {
   param([AllowNull()][AllowEmptyString()][string]$Text, [int]$Max = 300, [switch]$PastreazaLiniiNoi)
   if ($null -eq $Text) { return '' }
   $t = [regex]::Replace($Text, 'sk-ant-[A-Za-z0-9_\-]+', 'sk-ant-***')
   if ($PastreazaLiniiNoi) { $t = [regex]::Replace($t, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '') }
   else { $t = [regex]::Replace($t, '[\x00-\x1F\x7F]+', ' ').Trim() }
+  $dp = @(Find-DatePersonale $t)
+  if ($dp.Count -gt 0) { return ('[text ascuns: date personale detectate ({0}), {1} caractere]' -f ($dp -join ', '), $t.Length) }
   if ($t.Length -gt $Max) { $t = $t.Substring(0, $Max) + '...' }
   return $t
 }
@@ -144,7 +184,7 @@ function Find-JuridicNoi {
   return ,@($rez | Sort-Object Numar)
 }
 
-# Instantaneu recursiv: cale relativa -> lungime|ultima scriere. Pentru a vedea ce a atins Claude in folder.
+# Instantaneu recursiv: cale relativa -> lungime|ultima scriere. Pentru a vedea daca s-a atins ceva in dialog.
 function Get-InstantaneuDialog {
   param([Parameter(Mandatory)][string]$Folder)
   $h = @{}
@@ -157,10 +197,10 @@ function Get-InstantaneuDialog {
   return $h
 }
 
-# Intoarce lista problemelor: orice fisier modificat / sters / nou, cu exceptia raspunsului asteptat si a
-# fisierelor juridic#NNN.md noi (le poate scrie serverul Proiectului Juridic in timpul rularii).
+# Lista problemelor: orice fisier modificat / sters / nou, cu exceptia fisierelor juridic#NNN.md noi (le poate scrie
+# Proiectul Juridic in timpul rularii). Agentul nu are drept de scriere aici; verificarea e a doua bariera.
 function Compare-InstantaneuDialog {
-  param([Parameter(Mandatory)][hashtable]$Inainte, [Parameter(Mandatory)][hashtable]$Dupa, [Parameter(Mandatory)][string]$NumeRaspuns)
+  param([Parameter(Mandatory)][hashtable]$Inainte, [Parameter(Mandatory)][hashtable]$Dupa)
   $probleme = @()
   foreach ($k in $Inainte.Keys) {
     if (-not $Dupa.ContainsKey($k)) { $probleme += 'sters: ' + $k }
@@ -168,76 +208,130 @@ function Compare-InstantaneuDialog {
   }
   foreach ($k in $Dupa.Keys) {
     if ($Inainte.ContainsKey($k)) { continue }
-    if ($k -ceq $NumeRaspuns) { continue }
     if ($k -cmatch '^juridic#[0-9]{3}\.md$') { continue }
     $probleme += 'nou: ' + $k
   }
   return ,@($probleme | Sort-Object)
 }
 
-# ---------------------------------------------------------------- handoff_activ
+# ---------------------------------------------------------------- cursorul local (ultimul juridic# procesat)
 
-# Numarul din randul "Dialog TGZ: ultimul procesat: juridic#NNN". Exact o aparitie, altfel exceptie.
-function Get-UltimulProcesat {
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
-  $m = [regex]::Matches($Text, $script:TiparMarcaj)
-  if ($m.Count -eq 0) { throw 'randul "Dialog TGZ: ultimul procesat: juridic#NNN" lipseste din handoff_activ' }
-  if ($m.Count -gt 1) { throw 'randul "Dialog TGZ: ultimul procesat: juridic#NNN" apare de ' + $m.Count + ' ori in handoff_activ' }
-  return [int]$m[0].Groups[1].Value
+# Fisierul are exact un rand nevid: "juridic#NNN" sau "juridic#NNN (raspuns claude#NNN, AAAA-LL-ZZ HH:MM)".
+# Lipsa / alt format = exceptie (nu se ghiceste: primul cursor il scrie chat-ul la instalare).
+function Read-Cursor {
+  param([Parameter(Mandatory)][string]$Cale)
+  if (-not (Test-Path -LiteralPath $Cale -PathType Leaf)) { throw ('cursorul lipseste: ' + $Cale + ' (se creeaza la instalare cu "juridic#NNN")') }
+  $linii = @((Read-TextUtf8 $Cale) -split "\r?\n" | Where-Object { $_.Trim() -ne '' })
+  if ($linii.Count -ne 1) { throw ('cursorul are ' + $linii.Count + ' randuri nevide (astept 1): ' + $Cale) }
+  $m = [regex]::Match($linii[0].Trim(), $script:TiparCursor)
+  if (-not $m.Success) { throw ('cursor in format necunoscut: ' + $Cale) }
+  return [int]$m.Groups[1].Value
 }
 
-function Format-RandDialog {
+function Format-Cursor {
   param([Parameter(Mandatory)][int]$NrJuridic, [Parameter(Mandatory)][int]$NrClaude, [Parameter(Mandatory)][string]$Cand)
-  return ('Dialog TGZ: ultimul procesat: juridic#{0:000} (raspuns claude#{1:000}, {2})' -f $NrJuridic, $NrClaude, $Cand)
-}
-
-# Inlocuieste DOAR randul-marcaj (de la "Dialog TGZ:" pana la capatul liniei). Aceeasi regula ca
-# sql\actualizeaza_handoff.sql; md5-ul rezultatului se verifica si in BD.
-function Update-RandDialog {
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Text, [Parameter(Mandatory)][int]$NrJuridic,
-        [Parameter(Mandatory)][int]$NrClaude, [Parameter(Mandatory)][string]$Cand)
   if ($Cand -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$') { throw 'Cand invalid' }
   if ($NrJuridic -lt 1 -or $NrJuridic -gt 999 -or $NrClaude -lt 1 -or $NrClaude -gt 999) { throw 'numar invalid' }
-  [void](Get-UltimulProcesat $Text)   # exact o aparitie
-  $nou = Format-RandDialog -NrJuridic $NrJuridic -NrClaude $NrClaude -Cand $Cand
-  $re = New-Object System.Text.RegularExpressions.Regex($script:TiparRand)
-  return $re.Replace($Text, [System.Text.RegularExpressions.MatchEvaluator] { param($x) $nou }, 1)
+  return ('juridic#{0:000} (raspuns claude#{1:000}, {2})' -f $NrJuridic, $NrClaude, $Cand)
 }
 
-# Linia "md5|base64" din sql\citeste_handoff.sql -> @{Md5; Text}. Verifica md5-ul local.
-function ConvertFrom-IesireHandoff {
-  param([string[]]$Linii)
-  $bune = @($Linii | Where-Object { $_ -and $_.Trim() -ne '' })
-  if ($bune.Count -ne 1) { throw ('citirea handoff_activ a intors ' + $bune.Count + ' linii (astept 1)') }
-  $p = $bune[0].Trim().Split('|', 2)
-  if ($p.Count -ne 2 -or $p[0] -notmatch '^[0-9a-f]{32}$') { throw 'iesire handoff in format neasteptat' }
-  $text = $script:Utf8FaraBom.GetString([Convert]::FromBase64String($p[1]))
-  if ((Get-Md5Hex $text) -ne $p[0]) { throw 'md5 local diferit de md5 din BD la citirea handoff_activ' }
-  return @{ Md5 = $p[0]; Text = $text }
+# Avans cu CAS: cursorul de pe disc trebuie sa fie inca $Vechi (altfel cineva l-a mutat de mana -> exceptie,
+# nu suprascrie), iar noul numar trebuie sa fie mai mare. Scriere atomica: fisier temporar + File.Replace.
+function Write-Cursor {
+  param([Parameter(Mandatory)][string]$Cale, [Parameter(Mandatory)][int]$Vechi, [Parameter(Mandatory)][int]$NrJuridic,
+        [Parameter(Mandatory)][int]$NrClaude, [Parameter(Mandatory)][string]$Cand)
+  $text = Format-Cursor -NrJuridic $NrJuridic -NrClaude $NrClaude -Cand $Cand
+  if ($NrJuridic -le $Vechi) { throw ('cursorul nu poate da inapoi: {0} -> {1}' -f $Vechi, $NrJuridic) }
+  $acum = Read-Cursor $Cale
+  if ($acum -ne $Vechi) { throw ('cursorul s-a schimbat intre timp (citit juridic#{0:000}, acum juridic#{1:000}); nu se suprascrie' -f $Vechi, $acum) }
+  $tmp = $Cale + '.tmp-' + [guid]::NewGuid().ToString('N')
+  try {
+    Write-TextUtf8 $tmp ($text + "`r`n")
+    [System.IO.File]::Replace($tmp, $Cale, [NullString]::Value)
+  } finally { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force } }
+  if ((Read-Cursor $Cale) -ne $NrJuridic) { throw 'cursorul nu s-a putut verifica dupa scriere' }
+  return $text
 }
 
-# ---------------------------------------------------------------- raspunsul lui Claude
+# ---------------------------------------------------------------- raspunsul agentului
 
-function Get-UltimaLinie {
-  param([Parameter(Mandatory)][string]$Cale)
-  $linii = (Read-TextUtf8 $Cale) -split "\r?\n"
-  for ($i = $linii.Count - 1; $i -ge 0; $i--) {
-    if ($linii[$i].Trim() -ne '') { return $linii[$i].Trim() }
-  }
-  return ''
-}
-
-# GATA claude#NNN (cu NNN asteptat) / OPRIT [motiv] / EROARE [motiv]; orice altceva = EROARE.
+# Ultima linie a raspunsului agentului: GATA / OPRIT [motiv] / EROARE [motiv]; orice altceva = EROARE.
+# Numarul claude#NNN nu il mai scrie agentul: il pune orchestratorul la publicare.
 function ConvertFrom-UltimaLinie {
-  param([AllowEmptyString()][string]$Linie, [Parameter(Mandatory)][int]$NumarAsteptat)
+  param([AllowEmptyString()][string]$Linie)
   $l = ConvertTo-TextSigur $Linie 300
-  if ($l -cmatch '^GATA claude#([0-9]{3})$') {
-    if ([int]$Matches[1] -eq $NumarAsteptat) { return @{ Stare = 'GATA'; Linie = $l } }
-    return @{ Stare = 'EROARE'; Linie = ('EROARE ultima linie "{0}" nu corespunde cu claude#{1:000}' -f $l, $NumarAsteptat) }
-  }
+  if ($l -ceq 'GATA') { return @{ Stare = 'GATA'; Linie = $l } }
   if ($l -cmatch '^OPRIT(\s.*)?$') { return @{ Stare = 'OPRIT'; Linie = $l } }
   if ($l -cmatch '^EROARE(\s.*)?$') { return @{ Stare = 'EROARE'; Linie = $l } }
   return @{ Stare = 'EROARE'; Linie = ('EROARE ultima linie nerecunoscuta: "{0}"' -f (ConvertTo-TextSigur $l 120)) }
+}
+
+# Citeste raspuns.md al agentului: UTF-8 valid, cel mult 200 KB (peste = refuz, nu taiere), ultima linie nevida =
+# starea, restul = corpul (obligatoriu nevid pentru GATA / OPRIT). Intoarce @{Stare; Linie; Corp}.
+function Read-RaspunsAgent {
+  param([Parameter(Mandatory)][string]$Cale)
+  $octeti = [System.IO.File]::ReadAllBytes($Cale)
+  if ($octeti.Length -gt $script:MaxRaspunsOcteti) {
+    return @{ Stare = 'EROARE'; Linie = ('EROARE raspunsul are {0} octeti, peste limita de {1}' -f $octeti.Length, $script:MaxRaspunsOcteti); Corp = '' }
+  }
+  try { $t = $script:Utf8Strict.GetString($octeti) }
+  catch { return @{ Stare = 'EROARE'; Linie = 'EROARE raspunsul nu este UTF-8 valid'; Corp = '' } }
+  if ($t.Length -gt 0 -and $t[0] -eq [char]0xFEFF) { $t = $t.Substring(1) }
+  $t = [regex]::Replace($t, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '')
+  $linii = @($t -split "\r?\n")
+  $i = $linii.Count - 1
+  while ($i -ge 0 -and $linii[$i].Trim() -eq '') { $i-- }
+  if ($i -lt 0) { return @{ Stare = 'EROARE'; Linie = 'EROARE raspunsul este gol'; Corp = '' } }
+  $u = ConvertFrom-UltimaLinie $linii[$i].Trim()
+  $corp = if ($i -gt 0) { (($linii[0..($i - 1)]) -join "`n").Trim() } else { '' }
+  if ($u.Stare -ne 'EROARE' -and $corp -eq '') { return @{ Stare = 'EROARE'; Linie = 'EROARE raspunsul nu are corp inaintea ultimei linii'; Corp = '' } }
+  return @{ Stare = $u.Stare; Linie = $u.Linie; Corp = $corp }
+}
+
+# Fisierul publicat: antetul il scrie programul (asocierea cu intrebarile prin "Raspuns la:", ca in conventia
+# canalului), apoi corpul agentului, apoi linia de stare cu numarul ales la publicare.
+function Format-RaspunsPublicat {
+  param([Parameter(Mandatory)][string]$Corp, [Parameter(Mandatory)][int[]]$Juridic, [Parameter(Mandatory)][int]$Nnn,
+        [Parameter(Mandatory)][string]$Data, [Parameter(Mandatory)][string]$Stare, [AllowEmptyString()][string]$Motiv = '')
+  $lista = ($Juridic | Sort-Object | ForEach-Object { 'juridic#{0:000}' -f $_ }) -join ', '
+  $final = if ($Stare -eq 'GATA') { 'GATA claude#{0:000}' -f $Nnn } elseif ($Stare -eq 'OPRIT') { ('OPRIT ' + $Motiv).TrimEnd() } else { throw 'stare nepublicabila' }
+  $antet = 'De la: Claude Code (verificare programat' + $script:A_breve + ' Dialog TGZ)' + "`n" +
+           'Data: ' + $Data + "`n" +
+           'Subiect: R' + $script:A_breve + 'spuns la ' + $lista + "`n" +
+           'Raspuns la: ' + $lista + "`n"
+  return ($antet + "`n" + $Corp.Trim() + "`n`n" + $final + "`n")
+}
+
+# Publicare exclusiva: NNN = urmatorul liber CHIAR la publicare; textul complet se scrie intr-un fisier temporar
+# din acelasi folder, apoi File.Move (atomic pe acelasi volum, ESUEAZA daca destinatia exista: nu suprascrie
+# niciodata). Daca alt scriitor a luat intre timp claude#NNN sau juridic#NNN, se reia cu urmatorul numar.
+# $Text: { param([int]$Nnn) -> textul final }. Intoarce @{Numar; Nume; Cale; JuridicAcelasiNumar}.
+function Publish-RaspunsExclusiv {
+  param([Parameter(Mandatory)][string]$Folder, [Parameter(Mandatory)][scriptblock]$Text, [int]$Incercari = 5)
+  for ($i = 0; $i -lt $Incercari; $i++) {
+    $n = Get-UrmatorulNumar $Folder
+    $nume = 'claude#{0:000}.md' -f $n
+    $final = Join-Path $Folder $nume
+    $juridicN = Join-Path $Folder ('juridic#{0:000}.md' -f $n)
+    $tmp = Join-Path $Folder ('_dialog_tgz_' + [guid]::NewGuid().ToString('N') + '.tmp')
+    $reia = $false
+    try {
+      $continut = [string](& $Text $n)
+      $fs = [System.IO.File]::Open($tmp, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+      try { $b = $script:Utf8FaraBom.GetBytes($continut); $fs.Write($b, 0, $b.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+      if (Test-Path -LiteralPath $juridicN) { $reia = $true }
+      else {
+        try { [System.IO.File]::Move($tmp, $final) }
+        catch { if (Test-Path -LiteralPath $final) { $reia = $true } else { throw } }
+      }
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+    }
+    if (-not $reia) {
+      return @{ Numar = $n; Nume = $nume; Cale = $final; JuridicAcelasiNumar = [bool](Test-Path -LiteralPath $juridicN) }
+    }
+  }
+  throw ('nu am gasit un numar claude#NNN liber dupa {0} incercari' -f $Incercari)
 }
 
 # ---------------------------------------------------------------- prompt
@@ -261,6 +355,87 @@ function ConvertTo-CaleRegula {
 
 # ---------------------------------------------------------------- procese reale (psql / claude)
 
+# Procesul radacina + toti descendentii (dupa ParentProcessId), cu momentul pornirii (anti refolosire de PID:
+# un "copil" pornit inaintea parintelui nu e copilul lui).
+function Get-ArboreProcese {
+  param([Parameter(Mandatory)][int]$RadacinaPid)
+  $toate = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)
+  $rez = @(); $vazute = @{}
+  $coada = New-Object System.Collections.Queue
+  $coada.Enqueue($RadacinaPid)
+  while ($coada.Count -gt 0) {
+    $id = [int]$coada.Dequeue()
+    if ($vazute.ContainsKey($id)) { continue }
+    $vazute[$id] = $true
+    $x = @($toate | Where-Object { $_.ProcessId -eq $id }) | Select-Object -First 1
+    if ($null -eq $x) { continue }
+    $rez += [pscustomobject]@{ Pid = [int]$x.ProcessId; Start = [datetime]$x.CreationDate }
+    foreach ($c in @($toate | Where-Object { $_.ParentProcessId -eq $id -and $_.ProcessId -ne $id -and $_.CreationDate -ge $x.CreationDate })) {
+      $coada.Enqueue([int]$c.ProcessId)
+    }
+  }
+  return ,@($rez)
+}
+
+# Viu = exista un proces cu acest PID pornit la acelasi moment (toleranta 1 s). Daca momentul nu se poate citi,
+# se considera viu (fail-closed).
+function Test-ProcesViu {
+  param([Parameter(Mandatory)][int]$Id, [Parameter(Mandatory)][datetime]$Start)
+  $p = Get-Process -Id $Id -ErrorAction SilentlyContinue
+  if ($null -eq $p) { return $false }
+  try { $s = $p.StartTime } catch { return $true }
+  return ([math]::Abs(($s.ToUniversalTime() - $Start.ToUniversalTime()).TotalSeconds) -lt 1)
+}
+
+# Opreste tot arborele si CONFIRMA: taskkill /T /F, apoi Stop-Process pe fiecare proces ramas din instantaneu,
+# apoi asteapta pana la $AsteptareSec sa dispara toate. Intoarce @{Confirmat; Ramase (pid|ticks UTC); CodTaskkill}.
+function Stop-ArboreProcese {
+  param([Parameter(Mandatory)][int]$RadacinaPid, [datetime]$RadacinaStart, [int]$AsteptareSec = 30)
+  try { $arbore = Get-ArboreProcese $RadacinaPid } catch { $arbore = @() }
+  if ($arbore.Count -eq 0) {
+    # instantaneul a esuat: macar radacina; fara moment de pornire = "viu daca exista PID-ul" (fail-closed)
+    $arbore = @([pscustomobject]@{ Pid = $RadacinaPid; Start = $(if ($RadacinaStart) { $RadacinaStart } else { $null }) })
+  }
+  & taskkill.exe /T /F /PID $RadacinaPid 2>&1 | Out-Null
+  $codKill = $LASTEXITCODE
+  $limita = (Get-Date).AddSeconds($AsteptareSec)
+  do {
+    $vii = @($arbore | Where-Object { Test-ProcesInArbore $_ })
+    if ($vii.Count -eq 0) { break }
+    foreach ($v in $vii) { Stop-Process -Id $v.Pid -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $limita)
+  $vii = @($arbore | Where-Object { Test-ProcesInArbore $_ })
+  $ramase = @($vii | ForEach-Object { '{0}|{1}' -f $_.Pid, $(if ($_.Start) { $_.Start.ToUniversalTime().Ticks } else { 0 }) })
+  return @{ Confirmat = ($vii.Count -eq 0); Ramase = $ramase; CodTaskkill = $codKill }
+}
+
+function Test-ProcesInArbore {
+  param([Parameter(Mandatory)]$Proces)
+  if ($null -eq $Proces.Start) { return ($null -ne (Get-Process -Id $Proces.Pid -ErrorAction SilentlyContinue)) }
+  return (Test-ProcesViu -Id $Proces.Pid -Start $Proces.Start)
+}
+
+# Marcajul "oprire neconfirmata": randuri "pid|ticks UTC" (0 = moment necunoscut: viu daca PID-ul exista). Cat timp un
+# proces listat e inca viu, nicio rulare noua nu porneste (EROARE). Cand toate au disparut, marcajul se sterge si
+# rularea continua. Format stricat = EROARE.
+function Write-MarcajProcese {
+  param([Parameter(Mandatory)][string]$Cale, [Parameter(Mandatory)][string[]]$Ramase)
+  Write-TextUtf8 $Cale ((($Ramase) -join "`r`n") + "`r`n")
+}
+
+function Test-MarcajProcese {
+  param([Parameter(Mandatory)][string]$Cale)
+  if (-not (Test-Path -LiteralPath $Cale)) { return @{ Exista = $false; Vii = @() } }
+  $vii = @()
+  foreach ($l in @((Read-TextUtf8 $Cale) -split "\r?\n" | Where-Object { $_.Trim() -ne '' })) {
+    if ($l.Trim() -notmatch '^([0-9]{1,10})\|([0-9]{1,19})$') { throw ('marcaj de procese in format necunoscut: ' + $Cale) }
+    $start = if ([long]$Matches[2] -eq 0) { $null } else { New-Object DateTime ([long]$Matches[2]), ([DateTimeKind]::Utc) }
+    if (Test-ProcesInArbore ([pscustomobject]@{ Pid = [int]$Matches[1]; Start = $start })) { $vii += [int]$Matches[1] }
+  }
+  return @{ Exista = $true; Vii = $vii }
+}
+
 function Invoke-ProcesCapturat {
   param([Parameter(Mandatory)][string]$Exe, [string[]]$Argumente, [hashtable]$Env = @{}, [string[]]$EnvSterse = @(),
         [string]$Cwd, [string]$Stdin, [int]$TimeoutSec = 600)
@@ -278,6 +453,8 @@ function Invoke-ProcesCapturat {
   foreach ($k in $EnvSterse) { if ($psi.EnvironmentVariables.ContainsKey($k)) { $psi.EnvironmentVariables.Remove($k) } }
   foreach ($k in $Env.Keys) { $psi.EnvironmentVariables[$k] = [string]$Env[$k] }
   $p = [System.Diagnostics.Process]::Start($psi)
+  $start = $null
+  try { $start = $p.StartTime } catch { }
   $tOut = $p.StandardOutput.ReadToEndAsync()
   $tErr = $p.StandardError.ReadToEndAsync()
   if ($Stdin) {
@@ -287,36 +464,38 @@ function Invoke-ProcesCapturat {
   }
   $p.StandardInput.Close()
   $timeout = -not $p.WaitForExit($TimeoutSec * 1000)
-  if ($timeout) {
-    & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
-    [void]$p.WaitForExit(30000)
-  } else { $p.WaitForExit() }
+  $oprire = @{ Confirmat = $true; Ramase = @(); CodTaskkill = $null }
+  if ($timeout) { $oprire = Stop-ArboreProcese -RadacinaPid $p.Id -RadacinaStart $start }
+  else { $p.WaitForExit() }
   [void]$tOut.Wait(30000); [void]$tErr.Wait(30000)
   $cod = if ($timeout) { -1 } else { $p.ExitCode }
   $out = if ($tOut.IsCompleted) { $tOut.Result } else { '' }
   $err = if ($tErr.IsCompleted) { $tErr.Result } else { '' }
-  return @{ Cod = $cod; Out = $out; Err = $err; Timeout = $timeout }
+  return @{ Cod = $cod; Out = $out; Err = $err; Timeout = $timeout; OprireConfirmata = [bool]$oprire.Confirmat; Ramase = @($oprire.Ramase) }
 }
 
-# psql cu fisier .sql FIX din repo; variabilele trec doar daca sunt valori simple (cifre, hex, data).
+# Utilizatori Postgres care pot scrie: refuzati inainte de conectare (garda principala e verificarea din BD,
+# la inceputul sql\context_agregat.sql).
+function Test-PgUserPermis {
+  param([Parameter(Mandatory)][string]$PgUser)
+  return -not ($PgUser -match '^(postgres|service_role|supabase_admin|supabase_auth_admin|supabase_storage_admin|authenticator|authenticated|anon)(\.|$)')
+}
+
+# psql cu fisier .sql FIX din repo, fara variabile.
 function Invoke-PsqlFisier {
-  param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][string]$FisierSql, [hashtable]$Variabile = @{}, [switch]$Tuple)
-  $a = @('-X', '-w', '-q', '-v', 'ON_ERROR_STOP=1', '-h', $Config.PgHost, '-p', [string]$Config.PgPort, '-U', $Config.PgUser, '-d', $Config.PgDb)
-  if ($Tuple) { $a += @('-A', '-t') }
-  foreach ($k in $Variabile.Keys) {
-    $v = [string]$Variabile[$k]
-    if ($k -notmatch '^[a-z_]{1,32}$' -or $v -notmatch '^[0-9A-Za-z:_ \-]{1,64}$') { throw ('variabila psql refuzata: ' + $k) }
-    $a += @('-v', ($k + '=' + $v))
-  }
-  $a += @('-f', $FisierSql)
+  param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][string]$FisierSql)
+  if (-not (Test-PgUserPermis $Config.PgUser)) { throw ('utilizatorul Postgres ' + $Config.PgUser + ' poate scrie; sarcina cere rolul doar-citire') }
+  $a = @('-X', '-w', '-q', '-v', 'ON_ERROR_STOP=1', '-h', $Config.PgHost, '-p', [string]$Config.PgPort, '-U', $Config.PgUser, '-d', $Config.PgDb, '-f', $FisierSql)
   $r = Invoke-ProcesCapturat -Exe $Config.PsqlExe -Argumente $a -TimeoutSec 180 `
        -Env @{ PGCLIENTENCODING = 'UTF8'; PGCONNECT_TIMEOUT = '20'; PGAPPNAME = 'dialog_tgz' } -EnvSterse @('PGPASSWORD')
   return @{ Cod = $r.Cod; Linii = @($r.Out -split "\r?\n"); Err = $r.Err }
 }
 
+# Agentul: citeste dialogul, contextul si radacinile NAS (--add-dir); SCRIE doar in folderul de iesire al rularii
+# (directorul de lucru). Nicio regula de scriere pe dialog.
 function Get-ArgumenteClaude {
-  param([Parameter(Mandatory)][hashtable]$Config, [string[]]$Radacini)
-  $regula = 'Edit(' + (ConvertTo-CaleRegula $Config.DialogDir) + '/**)'
+  param([Parameter(Mandatory)][hashtable]$Config, [string[]]$Radacini, [Parameter(Mandatory)][string]$DirIntrare, [Parameter(Mandatory)][string]$DirIesire)
+  $regula = 'Edit(' + (ConvertTo-CaleRegula $DirIesire) + '/**)'
   $a = @('-p',
          '--model', $Config.Model,
          '--effort', $Config.Effort,
@@ -329,123 +508,203 @@ function Get-ArgumenteClaude {
          '--strict-mcp-config',
          '--no-session-persistence',
          '--disable-slash-commands',
-         '--output-format', 'text',
-         '--add-dir', $Config.WorkDir)
+         '--output-format', 'json',
+         '--add-dir', $Config.DialogDir,
+         '--add-dir', $DirIntrare)
   foreach ($r in $Radacini) { $a += @('--add-dir', $r) }
   return ,$a
 }
 
+# stdout-ul `claude -p --output-format json`: un obiect cu type=result. Succes DOAR pentru subtype=success si
+# is_error=false (max-turns, erori de API etc. = esec). Textul raspunsului din JSON nu se foloseste si nu se logheaza.
+function ConvertFrom-IesireClaude {
+  param([AllowNull()][AllowEmptyString()][string]$Out)
+  if ($null -eq $Out -or $Out.Trim() -eq '') { return @{ Ok = $false; Motiv = 'stdout gol' } }
+  try { $j = $Out.Trim() | ConvertFrom-Json } catch { return @{ Ok = $false; Motiv = 'stdout nu este JSON' } }
+  if ($j -is [array]) { return @{ Ok = $false; Motiv = 'stdout JSON neasteptat (lista)' } }
+  $v = @{}
+  foreach ($k in 'type', 'subtype', 'is_error', 'num_turns') {
+    $pr = $j.PSObject.Properties[$k]
+    $v[$k] = if ($pr) { $pr.Value } else { $null }
+  }
+  $desc = 'type={0}, subtype={1}, is_error={2}, num_turns={3}' -f $v.type, $v.subtype, $v.is_error, $v.num_turns
+  if ($v.type -cne 'result') { return @{ Ok = $false; Motiv = 'rezultat JSON fara type=result (' + $desc + ')' } }
+  if ($v.subtype -cne 'success') { return @{ Ok = $false; Motiv = 'rezultat fara succes (' + $desc + ')' } }
+  if (-not ($v.is_error -is [bool]) -or $v.is_error) { return @{ Ok = $false; Motiv = 'rezultat cu is_error (' + $desc + ')' } }
+  return @{ Ok = $true; Motiv = $desc }
+}
+
 function Invoke-ClaudeReal {
-  param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][string]$Prompt, [Parameter(Mandatory)][string]$Token, [string[]]$Radacini)
-  $cfgDir = Join-Path $Config.WorkDir 'claude_cfg'
+  param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][string]$Prompt, [Parameter(Mandatory)][string]$Token,
+        [string[]]$Radacini, [Parameter(Mandatory)][string]$DirIntrare, [Parameter(Mandatory)][string]$DirIesire)
+  # configuratia Claude Code a sarcinii: in WorkDir\cfg, in afara directoarelor date agentului
+  $cfgDir = Join-Path $Config.WorkDir 'cfg'
   if (-not (Test-Path -LiteralPath $cfgDir)) { [void](New-Item -ItemType Directory -Path $cfgDir) }
   $envNou = @{ CLAUDE_CODE_OAUTH_TOKEN = $Token; CLAUDE_CONFIG_DIR = $cfgDir; DISABLE_AUTOUPDATER = '1' }
-  $r = Invoke-ProcesCapturat -Exe $Config.ClaudeExe -Argumente (Get-ArgumenteClaude $Config $Radacini) -Env $envNou `
+  $r = Invoke-ProcesCapturat -Exe $Config.ClaudeExe -Argumente (Get-ArgumenteClaude $Config $Radacini $DirIntrare $DirIesire) -Env $envNou `
        -EnvSterse @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX') `
-       -Cwd $Config.DialogDir -Stdin $Prompt -TimeoutSec ([int]$Config.TimeoutMin * 60)
+       -Cwd $DirIesire -Stdin $Prompt -TimeoutSec ([int]$Config.TimeoutMin * 60)
   return $r
 }
 
 # ---------------------------------------------------------------- fluxul complet
 
 # Intoarce @{Stare = GATA|OPRIT|EROARE|NIMIC NOU; Linie; Cod}. Nu arunca: orice exceptie devine EROARE.
-# $Psql: { param($FisierSql, [hashtable]$Variabile, [bool]$Tuple) -> @{Cod; Linii; Err} }
-# $Claude: { param([string]$Prompt, [string]$Token, [string[]]$Radacini) -> @{Cod; Out; Err; Timeout} }
-# $Log: { param([string]$Mesaj) }
+# $Psql: { param($FisierSql) -> @{Cod; Linii; Err} }
+# $Claude: { param([string]$Prompt, [string]$Token, [string[]]$Radacini, [string]$DirIntrare, [string]$DirIesire)
+#            -> @{Cod; Out; Err; Timeout; OprireConfirmata; Ramase} }
+# $Log: { param([string]$Mesaj) }  (mesajele trec oricum prin ConvertTo-TextSigur inainte)
+# Config: DialogDir, TokenFile, WorkDir, SqlDir, PromptFile, CaleCursor, CaleMarcaj, RadaciniAtasamente, Model, Effort,
+#         MaxTurns, TimeoutMin, [IdRulare]
 function Invoke-DialogTgz {
   param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][scriptblock]$Psql,
         [Parameter(Mandatory)][scriptblock]$Claude, [Parameter(Mandatory)][scriptblock]$Log, [datetime]$Acum = (Get-Date))
   function Rez([string]$Stare, [string]$Linie, [int]$Cod) { return @{ Stare = $Stare; Linie = (ConvertTo-TextSigur $Linie 400); Cod = $Cod } }
+  $L = { param([string]$m) & $Log (ConvertTo-TextSigur $m 25000 -PastreazaLiniiNoi) }
   try {
-    # (g) token
+    # (0) o rulare anterioara cu oprire neconfirmata blocheaza pana dispar procesele ei
+    $mc = Test-MarcajProcese $Config.CaleMarcaj
+    if ($mc.Exista) {
+      if ($mc.Vii.Count -gt 0) { return (Rez 'EROARE' ('EROARE procese din rularea anterioara inca active (pid ' + ($mc.Vii -join ', ') + '); nu pornesc') 1) }
+      Remove-Item -LiteralPath $Config.CaleMarcaj -Force
+      & $L 'marcaj de oprire neconfirmata gasit; procesele au disparut, marcajul s-a sters'
+    }
+
+    # (1) token
     $tok = Read-TokenFisier $Config.TokenFile
     if (-not $tok.Ok) { return (Rez 'EROARE' ('EROARE ' + $tok.Motiv) 1) }
-    & $Log 'token: prezent, format sk-ant-oat01- corect (valoarea nu se scrie in log)'
+    & $L 'token: prezent, format sk-ant-oat01- corect (valoarea nu se scrie in log)'
 
     $folder = Get-Item -LiteralPath $Config.DialogDir -ErrorAction SilentlyContinue
     if ($null -eq $folder -or -not $folder.PSIsContainer -or (Test-EsteReparse $folder)) {
       return (Rez 'EROARE' ('EROARE folderul de dialog lipseste sau e legatura: ' + $Config.DialogDir) 1)
     }
 
-    # (a) handoff_activ
-    $r = & $Psql (Join-Path $Config.SqlDir 'citeste_handoff.sql') @{} $true
-    if ($r.Cod -ne 0) { return (Rez 'EROARE' ('EROARE psql citire handoff_activ (cod ' + $r.Cod + '): ' + $r.Err) 1) }
-    $h = ConvertFrom-IesireHandoff $r.Linii
-    $ultimul = Get-UltimulProcesat $h.Text
-    & $Log ('handoff_activ: md5 {0}, ultimul procesat juridic#{1:000}' -f $h.Md5, $ultimul)
+    # (2) cursorul local
+    $ultimul = Read-Cursor $Config.CaleCursor
+    & $L ('cursor: ultimul procesat juridic#{0:000}' -f $ultimul)
 
-    # (b) fisiere noi
+    # (3) fisiere noi (+ amprenta lor, ca raspunsul sa corespunda exact continutului citit)
     $noi = Find-JuridicNoi -Folder $Config.DialogDir -UltimulProcesat $ultimul
     if ($noi.Count -eq 0) {
-      & $Log 'niciun juridic#NNN nou cu antet (verificare programata); Claude nu porneste'
+      & $L 'niciun juridic#NNN nou cu antet (verificare programata); Claude nu porneste'
       return (Rez 'NIMIC NOU' ('NIMIC NOU (ultimul procesat juridic#{0:000})' -f $ultimul) 0)
     }
-    $maxJuridic = ($noi | Measure-Object -Property Numar -Maximum).Maximum
-    & $Log ('fisiere noi: ' + (($noi | ForEach-Object { $_.Nume }) -join ', '))
+    $amprente = @{}
+    foreach ($f in $noi) { $amprente[$f.Nume] = Get-Sha256Fisier $f.Cale }
+    $numere = @($noi | ForEach-Object { [int]$_.Numar })
+    $maxJuridic = ($numere | Measure-Object -Maximum).Maximum
+    & $L ('fisiere noi: ' + (($noi | ForEach-Object { $_.Nume }) -join ', '))
 
-    # (c) context agregat
-    if (-not (Test-Path -LiteralPath $Config.WorkDir)) { [void](New-Item -ItemType Directory -Path $Config.WorkDir) }
-    $cale_context = Join-Path $Config.WorkDir 'context.md'
-    $r = & $Psql (Join-Path $Config.SqlDir 'context_agregat.sql') @{} $false
+    # (4) folderul privat al rularii: intrare (context) + iesire (singurul loc unde agentul poate scrie)
+    $id = if ($Config.ContainsKey('IdRulare') -and $Config.IdRulare) { [string]$Config.IdRulare } else { [guid]::NewGuid().ToString('N') }
+    if ($id -notmatch '^[A-Za-z0-9_\-]{1,64}$') { throw 'IdRulare invalid' }
+    $dirRulare = Join-Path (Join-Path $Config.WorkDir 'rulari') $id
+    if (Test-Path -LiteralPath $dirRulare) { return (Rez 'EROARE' ('EROARE folderul rularii exista deja: ' + $dirRulare) 1) }
+    $dirIntrare = Join-Path $dirRulare 'intrare'
+    $dirIesire = Join-Path $dirRulare 'iesire'
+    [void](New-Item -ItemType Directory -Path $dirIntrare -Force)
+    [void](New-Item -ItemType Directory -Path $dirIesire)
+    $caleAgent = Join-Path $dirIesire $script:NumeRaspunsAgent
+
+    # (5) context agregat (psql, doar citire; SQL-ul refuza un rol care poate scrie)
+    $caleContext = Join-Path $dirIntrare 'context.md'
+    $r = & $Psql (Join-Path $Config.SqlDir 'context_agregat.sql')
     if ($r.Cod -ne 0) { return (Rez 'EROARE' ('EROARE psql export context (cod ' + $r.Cod + '): ' + $r.Err) 1) }
     $antet = "# Context Redari TGZ - cifre agregate`n`nGenerat: " + $Acum.ToString('yyyy-MM-dd HH:mm') +
              " (doar SELECT, fara nume / telefoane / adrese / CNP).`n`n"
-    Write-TextUtf8 $cale_context ($antet + (($r.Linii) -join "`n") + "`n")
-    & $Log ('context agregat scris: ' + $cale_context)
+    Write-TextUtf8 $caleContext ($antet + (($r.Linii) -join "`n") + "`n")
+    & $L ('context agregat scris: ' + $caleContext)
 
-    # (d) Claude
-    $nnn = Get-UrmatorulNumar $Config.DialogDir
-    $numeRaspuns = 'claude#{0:000}.md' -f $nnn
-    $caleRaspuns = Join-Path $Config.DialogDir $numeRaspuns
-    if (Test-Path -LiteralPath $caleRaspuns) { return (Rez 'EROARE' ('EROARE ' + $numeRaspuns + ' exista deja') 1) }
+    # (6) agentul
     $radacini = @($Config.RadaciniAtasamente | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) })
-    & $Log ('radacini atasamente accesibile: ' + $(if ($radacini.Count) { $radacini -join '; ' } else { '(niciuna)' }))
+    & $L ('radacini atasamente accesibile: ' + $(if ($radacini.Count) { $radacini -join '; ' } else { '(niciuna)' }))
     $sablon = Read-TextUtf8 $Config.PromptFile
     $prompt = Format-Prompt $sablon @{
       FISIERE_JURIDIC = (($noi | ForEach-Object { '- ' + $_.Cale }) -join "`n")
-      NNN = ('{0:000}' -f $nnn)
-      CALE_RASPUNS = $caleRaspuns
-      CALE_CONTEXT = $cale_context
+      CALE_RASPUNS = $caleAgent
+      CALE_CONTEXT = $caleContext
       FOLDER_DIALOG = $Config.DialogDir
       RADACINI_ATASAMENTE = $(if ($radacini.Count) { ($radacini | ForEach-Object { '- ' + $_ }) -join "`n" } else { '- (niciuna accesibila pe acest calculator)' })
       DATA = $Acum.ToString('yyyy-MM-ddTHH:mm:sszzz')
       ULTIMUL_PROCESAT = ('{0:000}' -f $ultimul)
     }
     $inainte = Get-InstantaneuDialog $Config.DialogDir
-    & $Log ('pornesc claude -p: model {0}, effort {1}, max-turns {2}, raspuns asteptat {3}' -f $Config.Model, $Config.Effort, $Config.MaxTurns, $numeRaspuns)
-    $rc = & $Claude $prompt $tok.Token $radacini
+    & $L ('pornesc claude -p: model {0}, effort {1}, max-turns {2}, iesire {3}' -f $Config.Model, $Config.Effort, $Config.MaxTurns, $dirIesire)
+    $rc = & $Claude $prompt $tok.Token $radacini $dirIntrare $dirIesire
     $tok = $null
-    & $Log ('claude: cod iesire {0}{1}' -f $rc.Cod, $(if ($rc.Timeout) { ' (TIMEOUT, oprit cu taskkill /T)' } else { '' }))
-    if ($rc.Out) { & $Log ('claude stdout:' + "`n" + (ConvertTo-TextSigur $rc.Out 20000 -PastreazaLiniiNoi)) }
-    if ($rc.Err) { & $Log ('claude stderr:' + "`n" + (ConvertTo-TextSigur $rc.Err 5000 -PastreazaLiniiNoi)) }
+    $oprireOk = ($rc.ContainsKey('OprireConfirmata') -and $rc.OprireConfirmata -is [bool] -and $rc.OprireConfirmata)
+    & $L ('claude: cod iesire {0}{1}' -f $rc.Cod, $(if ($rc.Timeout) { ' (TIMEOUT, arbore oprit; confirmat: ' + $oprireOk + ')' } else { '' }))
+    if ($rc.Err) { & $L ('claude stderr:' + "`n" + (ConvertTo-TextSigur $rc.Err 5000 -PastreazaLiniiNoi)) }
 
-    $probleme = Compare-InstantaneuDialog -Inainte $inainte -Dupa (Get-InstantaneuDialog $Config.DialogDir) -NumeRaspuns $numeRaspuns
-    if (-not (Test-Path -LiteralPath $caleRaspuns -PathType Leaf)) {
-      return (Rez 'EROARE' ('EROARE {0} nu a fost scris (claude cod {1})' -f $numeRaspuns, $rc.Cod) 1)
+    # (7) esecurile procesului: nimic nu se publica, cursorul nu avanseaza
+    if (-not $oprireOk) {
+      $ramase = @($rc.Ramase | Where-Object { $_ })
+      if ($ramase.Count -eq 0) { throw 'oprire neconfirmata fara lista de procese' }
+      Write-MarcajProcese $Config.CaleMarcaj $ramase
+      return (Rez 'EROARE' ('EROARE oprirea procesului claude nu s-a putut confirma ({0} procese ramase); marcaj scris, rularile urmatoare asteapta' -f $ramase.Count) 1)
     }
+    if ($rc.Timeout) { return (Rez 'EROARE' ('EROARE claude a depasit {0} min (oprit); nimic publicat' -f $Config.TimeoutMin) 1) }
+    if ($rc.Cod -ne 0) { return (Rez 'EROARE' ('EROARE claude a iesit cu codul {0}; nimic publicat' -f $rc.Cod) 1) }
+    $ij = ConvertFrom-IesireClaude $rc.Out
+    & $L ('claude rezultat: ' + $ij.Motiv)
+    if (-not $ij.Ok) { return (Rez 'EROARE' ('EROARE claude: ' + $ij.Motiv + '; nimic publicat') 1) }
+
+    # (8) iesirea agentului: exact raspuns.md, fisier obisnuit, nimic altceva
+    $elemente = @(Get-ChildItem -LiteralPath $dirIesire -Force -Recurse -ErrorAction Stop)
+    $straine = @($elemente | Where-Object { $_.FullName -ne $caleAgent -or $_.PSIsContainer -or (Test-EsteReparse $_) })
+    if ($straine.Count -gt 0) {
+      return (Rez 'EROARE' ('EROARE in folderul de iesire sunt si alte elemente: ' + (($straine | ForEach-Object { $_.Name }) -join ', ')) 1)
+    }
+    if (-not (Test-Path -LiteralPath $caleAgent -PathType Leaf)) { return (Rez 'EROARE' 'EROARE agentul nu a scris raspuns.md' 1) }
+
+    # (9) dialogul: nimic atins, intrarile neschimbate, nicio intrebare noua sarita
+    $probleme = Compare-InstantaneuDialog -Inainte $inainte -Dupa (Get-InstantaneuDialog $Config.DialogDir)
     if ($probleme.Count -gt 0) {
-      & $Log ('fisiere atinse in afara raspunsului: ' + ($probleme -join '; '))
-      return (Rez 'EROARE' ('EROARE {0} scris, dar Claude a atins si alte fisiere din dialog: {1}' -f $numeRaspuns, ($probleme -join '; ')) 1)
+      & $L ('dialog atins in timpul rularii: ' + ($probleme -join '; '))
+      return (Rez 'EROARE' ('EROARE folderul de dialog s-a schimbat in timpul rularii: {0}; nimic publicat' -f ($probleme -join '; ')) 1)
     }
-    $ultima = ConvertFrom-UltimaLinie (Get-UltimaLinie $caleRaspuns) $nnn
-    & $Log ('ultima linie: ' + $ultima.Linie)
-    if ($ultima.Stare -eq 'OPRIT') { return (Rez 'OPRIT' $ultima.Linie 0) }
-    if ($ultima.Stare -ne 'GATA') { return (Rez 'EROARE' $ultima.Linie 1) }
+    foreach ($f in $noi) {
+      if (-not (Test-Path -LiteralPath $f.Cale -PathType Leaf) -or (Get-Sha256Fisier $f.Cale) -ne $amprente[$f.Nume]) {
+        return (Rez 'EROARE' ('EROARE {0} s-a schimbat in timpul rularii; nimic publicat' -f $f.Nume) 1)
+      }
+    }
+    $dupa = Find-JuridicNoi -Folder $Config.DialogDir -UltimulProcesat $ultimul   # in variabila: ,@() nu se enumera in pipe
+    $tarzii = @($dupa | Where-Object { $numere -notcontains [int]$_.Numar -and $_.Numar -lt $maxJuridic })
+    if ($tarzii.Count -gt 0) {
+      return (Rez 'EROARE' ('EROARE au aparut in timpul rularii mesaje cu numar mai mic decat cel procesat ({0}); reiau la rularea urmatoare' -f (($tarzii | ForEach-Object { $_.Nume }) -join ', ')) 1)
+    }
 
-    # (e) handoff_activ: doar randul Dialog TGZ, cu garda md5
-    $cand = $Acum.ToString('yyyy-MM-dd HH:mm')
-    $textNou = Update-RandDialog -Text $h.Text -NrJuridic $maxJuridic -NrClaude $nnn -Cand $cand
-    $md5Nou = Get-Md5Hex $textNou
-    $r = & $Psql (Join-Path $Config.SqlDir 'actualizeaza_handoff.sql') @{
-      md5_vechi = $h.Md5; md5_nou = $md5Nou; nr_juridic = ('{0:000}' -f $maxJuridic); nr_claude = ('{0:000}' -f $nnn); cand = $cand
-    } $true
-    if ($r.Cod -ne 0) { return (Rez 'EROARE' ('EROARE {0} scris, dar UPDATE handoff_activ a esuat (psql cod {1}): {2}' -f $numeRaspuns, $r.Cod, $r.Err) 1) }
-    $ok = @($r.Linii | Where-Object { $_.Trim() -ceq ('ACTUALIZAT|' + $md5Nou) })
-    if ($ok.Count -ne 1) {
-      return (Rez 'EROARE' ('EROARE {0} scris, dar handoff_activ s-a schimbat intre timp (0 randuri actualizate); nu s-a fortat' -f $numeRaspuns) 1)
+    # (10) raspunsul: stare, corp, date personale
+    $ra = Read-RaspunsAgent $caleAgent
+    & $L ('ultima linie a agentului: ' + $ra.Linie)
+    if ($ra.Stare -eq 'EROARE') { return (Rez 'EROARE' ($ra.Linie + ' (nepublicat)') 1) }
+    $motiv = if ($ra.Stare -eq 'OPRIT') { $ra.Linie.Substring(5).Trim() } else { '' }
+    $dataRaspuns = $Acum.ToString('yyyy-MM-ddTHH:mm:sszzz')
+    # fara GetNewClosure: blocul ramane legat de modul (vede functiile lui) si e apelat doar in timpul acestei functii
+    $construieste = { param([int]$Nnn) Format-RaspunsPublicat -Corp $ra.Corp -Juridic $numere -Nnn $Nnn -Data $dataRaspuns -Stare $ra.Stare -Motiv $motiv }
+    $dp = @(Find-DatePersonale (& $construieste 999))
+    if ($dp.Count -gt 0) {
+      return (Rez 'EROARE' ('EROARE raspuns nepublicat: date personale detectate (' + ($dp -join ', ') + '); de verificat de chat') 1)
     }
-    & $Log ('handoff_activ actualizat: juridic#{0:000} -> claude#{1:000}, md5 nou {2}' -f $maxJuridic, $nnn, $md5Nou)
-    return (Rez 'GATA' $ultima.Linie 0)
+
+    # (11) publicare exclusiva, numarul ales acum
+    $pub = Publish-RaspunsExclusiv -Folder $Config.DialogDir -Text $construieste
+    & $L ('publicat ' + $pub.Nume + ' (raspuns la ' + (($numere | ForEach-Object { 'juridic#{0:000}' -f $_ }) -join ', ') + ')')
+    if ($pub.JuridicAcelasiNumar) { & $L ('atentie: juridic#{0:000} a aparut simultan cu acelasi numar; asocierea e data de antetul "Raspuns la:"' -f $pub.Numar) }
+    Remove-Item -LiteralPath $dirRulare -Recurse -Force -ErrorAction SilentlyContinue
+
+    if ($ra.Stare -eq 'OPRIT') {
+      & $L 'OPRIT: cursorul nu se muta (aceleasi mesaje se reiau pana decide chat-ul / Razvan)'
+      return (Rez 'OPRIT' ((('OPRIT ' + $motiv).TrimEnd()) + ' (' + $pub.Nume + ')') 0)
+    }
+
+    # (12) cursorul local, cu CAS pe valoarea citita la (2)
+    $cand = $Acum.ToString('yyyy-MM-dd HH:mm')
+    try { $rand = Write-Cursor -Cale $Config.CaleCursor -Vechi $ultimul -NrJuridic $maxJuridic -NrClaude $pub.Numar -Cand $cand }
+    catch { return (Rez 'EROARE' ('EROARE {0} publicat, dar cursorul nu s-a mutat: {1}' -f $pub.Nume, $_.Exception.Message) 1) }
+    & $L ('cursor: ' + $rand)
+    return (Rez 'GATA' ('GATA claude#{0:000}' -f $pub.Numar) 0)
   } catch {
     return (Rez 'EROARE' ('EROARE ' + $_.Exception.Message) 1)
   }
