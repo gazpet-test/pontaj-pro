@@ -2,7 +2,7 @@
 -- Scoate tot ce a creat migrarea: tabelul executie_acces_proiect, cele 13 funcții (lista exactă), politicile RESTRICTIVE executie_acces_*
 -- și trigger-ele trg_executie_acces_garda de pe tabelele 'proiect' / 'copil' din inventar, cele 4 politici de pe storage.objects, și redă
 -- EXACT corpurile vechi ale celor 5 funcții de drept (fn_executie_nod_drept / contract / grafic / tinte, fn_raport_santier_drept), cu
--- amprenta verificată după.
+-- amprenta verificată după; mută înapoi în public originalul fn_executie_swap_tevi_pozitie (neschimbat) și șterge schema internă (r3).
 -- REFUZĂ dacă vreun cont e restrâns (are rânduri): după revenire acel cont ar vedea DIN NOU toate proiectele, pe tăcute. Scoaterea
 -- restricțiilor e o decizie separată (din ecranul owner-ului, „scoate restricția”, sau preview -> „da” Răzvan -> apply).
 -- Gestionarul tranzacției e operatorul (fișierul nu are BEGIN / COMMIT). Un singur string:
@@ -17,7 +17,7 @@
 -- Trebuie rulată ÎNAINTEA revenirii oricăreia dintre 20261201a / 20261203a / 20261204a / 20261208a (acelea verifică amprenta veche).
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează (nimic nu rulează după el), iar harness-ul îi verifică mesajul.
 DO $revenire$
-DECLARE r record; v_n integer;
+DECLARE r record; v_n integer; v_swap text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.revenire_20261209a', true) IS DISTINCT FROM 'SCOATE_ACCES_PROIECT:' || txid_current() THEN
@@ -51,6 +51,17 @@ BEGIN
      OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'executie\_acces\_%') <> 4 THEN
     RAISE EXCEPTION '20261209a revenire: starea nu e cea din 20261209a';
   END IF;
+  -- poarta (6b): poarta revizuită în public, originalul (amprenta din inventar) în schema internă, nimic altceva acolo
+  SELECT i.cheie INTO v_swap FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'functie' AND i.obiect = 'fn_executie_swap_tevi_pozitie' AND i.clasa = 'poarta';
+  IF v_swap IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                     AND md5(replace(p.prosrc, chr(13), '')) = '747c0be4a0fe0b29d16d470233d072e5')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                     AND md5(replace(p.prosrc, chr(13), '')) = v_swap)
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'executie_acces_intern')) <> 1
+     OR EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'executie_acces_intern')) THEN
+    RAISE EXCEPTION '20261209a revenire: poarta / originalul fn_executie_swap_tevi_pozitie difera de cele din 20261209a';
+  END IF;
   -- lock ÎNAINTE de numărare
   LOCK TABLE public.executie_acces_proiect IN ACCESS EXCLUSIVE MODE NOWAIT;
   IF EXISTS (SELECT 1 FROM public.executie_acces_proiect) THEN
@@ -78,6 +89,10 @@ BEGIN
   DROP POLICY executie_acces_obiect_adauga ON storage.objects;
   DROP POLICY executie_acces_obiect_modifica ON storage.objects;
   DROP POLICY executie_acces_obiect_sterge ON storage.objects;
+  -- poarta jos, originalul înapoi în public NESCHIMBAT (corp, owner, drepturi, OID), schema internă ștearsă (RESTRICT: goală)
+  DROP FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint);
+  ALTER FUNCTION executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint) SET SCHEMA public;
+  DROP SCHEMA executie_acces_intern;
 
   -- corpurile vechi, EXACT ca în 20261201a / 20261203a / 20261204a / 20261208a (CREATE OR REPLACE păstrează owner / ACL)
   EXECUTE $sql$CREATE OR REPLACE FUNCTION public.fn_executie_nod_drept(p_proiect bigint, p_scriere boolean) RETURNS boolean
@@ -156,6 +171,12 @@ $f$$sql$;
                  OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_auth
                  OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_service) THEN
     RAISE EXCEPTION '20261209a revenire post: functiile de drept nu au revenit la amprenta veche';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                  AND md5(replace(p.prosrc, chr(13), '')) = v_swap AND p.prosecdef AND has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_executie_swap_tevi_pozitie') <> 1
+     OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'executie_acces_intern') THEN
+    RAISE EXCEPTION '20261209a revenire post: fn_executie_swap_tevi_pozitie nu a revenit (originalul in public, schema interna stearsa)';
   END IF;
   IF to_regclass('public.executie_acces_proiect') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

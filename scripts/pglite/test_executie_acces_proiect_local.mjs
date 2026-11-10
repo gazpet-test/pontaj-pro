@@ -4,8 +4,12 @@
 // + 20261201a și 20261028a întregi + funcțiile din 20261203a / 20261204a / 20261208a, extrase EXACT din migrările lor (amprentele se verifică).
 // Apoi mutanți (migrare / revenire / schemă stricate intenționat): fiecare TREBUIE să pice exact unde trebuie, altfel testul nu dovedește nimic.
 // Rulare (din rădăcina repo-ului): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_executie_acces_proiect_local.mjs
+// r3: fn_executie_swap_tevi_pozitie e creată direct în BD și nu se copiază în repo: schema falsă are un ÎNLOCUITOR cu același contract, iar
+// amprenta lui ia locul amprentei reale în textul migrării (doar aici, în test). Fibra optică (20261211a) intră în forma minimă: funcția ei de
+// drept delegată, exact ca în migrarea ei (amprenta se verifică), și un tabel 'drept' cu politica ei.
 import { PGlite } from '@electric-sql/pglite'
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -13,7 +17,27 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const MIG = join(ROOT, 'supabase/migrations/20261209a_executie_acces_proiect.sql')
 const REV = join(ROOT, 'supabase/revenire/20261209a_executie_acces_proiect_ROLLBACK.sql')
 const HARNESS = join(ROOT, 'scripts/test_executie_acces_proiect.sql')
+const SCHELET = join(ROOT, 'supabase/tests/20261209a_executie_acces_proiect_schelet.sql')
 const citeste = p => readFileSync(p, 'utf8')
+const md5 = s => createHash('md5').update(s, 'utf8').digest('hex')
+
+// corpul (între delimitatorii $…$) al primei funcții care începe cu `cap`, fără CR — ca md5(replace(prosrc, chr(13), '')) din BD
+function corp(text, cap) {
+  const t = text.replace(/\r/g, '')
+  const i = t.indexOf(cap)
+  if (i < 0) throw new Error('nu găsesc ' + cap)
+  const a = /\bAS\s+(\$[A-Za-z_]*\$)/.exec(t.slice(i))
+  const st = i + a.index + a[0].length
+  return t.slice(st, t.indexOf(a[1], st))
+}
+const SWAP_REAL = '551affa41371b0ff3367b0ddebe9b603'
+const SWAP_INLOCUITOR = md5(corp(citeste(SCHELET), 'CREATE FUNCTION public.fn_executie_swap_tevi_pozitie('))
+const POARTA_CAP = 'CREATE FUNCTION public.fn_executie_swap_tevi_pozitie('
+const POARTA_MD5 = md5(corp(citeste(MIG), POARTA_CAP))
+const cuInlocuitor = t => {
+  if (!t.includes(SWAP_REAL)) throw new Error('migrarea nu mai are amprenta reală a lui fn_executie_swap_tevi_pozitie')
+  return t.split(SWAP_REAL).join(SWAP_INLOCUITOR)
+}
 
 // o funcție EXACT ca în migrarea ei (de la CREATE FUNCTION la sfârșitul corpului) + toate REVOKE / GRANT-urile ei
 function extrageFunctie(fisier, nume) {
@@ -83,10 +107,10 @@ async function scenariu(nume, { mutMig, mutRev, mutSchelet, mutDrept, mutDoc, in
   const db = new PGlite()
   const st = { vars: { ON_ERROR_STOP: '1' }, notite: [] }
   const mut = {}
-  if (mutMig) mut[MIG] = t => mutMig(t)
+  mut[MIG] = t => cuInlocuitor(mutMig ? mutMig(t) : t)
   if (mutRev) mut[REV] = t => mutRev(t)
   try {
-    let schelet = citeste(join(ROOT, 'supabase/tests/20261209a_executie_acces_proiect_schelet.sql'))
+    let schelet = citeste(SCHELET)
     if (mutSchelet) schelet = mutSchelet(schelet)
     await db.exec(schelet)
     // 20261201a întreagă (sudurile pe nod + fn_executie_nod_drept + Storage), cu marcajul ei de livrare
@@ -107,13 +131,28 @@ async function scenariu(nume, { mutMig, mutRev, mutSchelet, mutDrept, mutDoc, in
       + 'CREATE TRIGGER trg_raport_zilnic_versiune BEFORE INSERT OR UPDATE ON public.rapoarte_zilnice FOR EACH ROW EXECUTE FUNCTION public.fn_raport_zilnic_versiune();\n'
       + extrageFunctie('20261208a_executie_devize_tinte.sql', 'fn_raport_zilnic_citeste')
       + extrageFunctie('20261208a_executie_devize_tinte.sql', 'fn_raport_zilnic_salveaza')
+      // fibra optică (20261211a), forma minimă: funcția de drept delegată (corpul EXACT ca în 20261211a) + un tabel 'drept' cu politica ei
+      + `CREATE FUNCTION public.fn_executie_fibra_drept(p_proiect bigint, p_scriere boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(public.fn_executie_nod_drept(p_proiect, p_scriere), false)
+$f$;
+REVOKE ALL ON FUNCTION public.fn_executie_fibra_drept(bigint, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.fn_executie_fibra_drept(bigint, boolean) TO authenticated, service_role;
+CREATE TABLE public.executie_fibra_intervale (id bigserial PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id), etapa text NOT NULL);
+ALTER TABLE public.executie_fibra_intervale ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.executie_fibra_intervale FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.executie_fibra_intervale TO authenticated, service_role;
+CREATE POLICY executie_fibra_intervale_citire ON public.executie_fibra_intervale FOR SELECT TO authenticated
+  USING (public.fn_executie_fibra_drept(proiect_id, false));
+INSERT INTO public.executie_fibra_intervale (proiect_id, etapa) VALUES (1, 'monotub'), (3, 'monotub');
+`
     if (mutDrept) drept = mutDrept(drept)
     await db.exec(drept)
     if (inainte) await db.exec(inainte)
     if (doarMigrarea) {
       // preflight-ul singur (fără harness: T0 ar număra înainte pe schema stricată)
       await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);`
-        + (mutMig ? mutMig(citeste(MIG)) : citeste(MIG)) + '\nROLLBACK;', { onNotice: n => st.notite.push(n.message) })
+        + mut[MIG](citeste(MIG)) + '\nROLLBACK;', { onNotice: n => st.notite.push(n.message) })
       return { ok: true, notite: st.notite }
     }
     await ruleazaFisier(db, HARNESS, st, mut)
@@ -202,6 +241,16 @@ raport('M13 scrierea legitimă oprită de politică (regula neatinsă)', await s
   mutMig: t => inlocuieste(t, POL_P_SCR, POL_P_SCR.replace(`OR %I = ANY ((SELECT public.fn_executie_acces_lista(true))::bigint[])'`, `OR (%I = ANY ((SELECT public.fn_executie_acces_lista(true))::bigint[]) AND false)'`)),
 }), false, /T3 FAIL: (scrierea legitimă|INSERT-ul legitim|UPDATE \/ DELETE)/)
 
+// r3: poarta swap dezactivată (amprenta porții recalculată, ca postcondiția / revenirea să nu fie ele cele care pică)
+const POARTA_COND = `  IF auth.uid() IS NOT NULL AND NOT public.fn_executie_acces_nerestrans()\n     AND EXISTS`
+raport('M14 poarta swap nu mai verifică proiectul', await scenariu('m14', {
+  mutMig: t => {
+    const m = inlocuieste(t, POARTA_COND, `  IF false\n     AND EXISTS`)
+    return inlocuieste(m, POARTA_MD5, md5(corp(m, POARTA_CAP)))
+  },
+  mutRev: t => inlocuieste(t, POARTA_MD5, md5(corp(inlocuieste(citeste(MIG), POARTA_COND, `  IF false\n     AND EXISTS`), POARTA_CAP))),
+}), false, /T3 FAIL: poarta swap/)
+
 // 3) preflight-ul refuză o schemă care ar face restricția falsă sau un inventar incomplet
 raport('P1 vedere cunoscută „definer” peste proiecte', await scenariu('p1', { doarMigrarea: true,
   mutSchelet: t => inlocuieste(t, 'CREATE VIEW public.v_executie_dashboard WITH (security_invoker = on) AS', 'CREATE VIEW public.v_executie_dashboard AS'),
@@ -243,6 +292,27 @@ raport('P12 inventar fără documente_proiect (omisiunea din r1 e prinsă din ca
   mutMig: t => inlocuieste(t, `  ('tabel', 'documente_proiect', 'proiect', 'proiect_id', NULL, 'corespondența proiectului (tab Documente)'),\n`, ''),
 }), false, /neclasificate in inventar.*documente_proiect/)
 raport('P13 o vedere „definer” peste un tabel EXCLUS nu oprește migrarea', await scenariu('p13', { doarMigrarea: true }), true)
+// r3
+raport('P14 tabel „comun” care ajunge totuși la un tabel acoperit', await scenariu('p14', { doarMigrarea: true,
+  inainte: 'ALTER TABLE public.employees ADD COLUMN tura_id bigint REFERENCES public.executie_ture(id);',
+}), false, /clasificate „comun” care ajung.*employees/)
+raport('P15 fn_executie_swap_tevi_pozitie cu alt corp decât cel revizuit', await scenariu('p15', { doarMigrarea: true,
+  mutSchelet: t => inlocuieste(t, `RAISE EXCEPTION 'Tevile nu sunt in acelasi pachet'`, `RAISE EXCEPTION 'Tevile nu sunt in acelasi pachet (alt corp)'`),
+}), false, /fn_executie_swap_tevi_pozitie lipseste, are alt corp/)
+raport('P16 funcția de drept delegată (fibra) cu alt corp', await scenariu('p16', { doarMigrarea: true,
+  mutDrept: t => inlocuieste(t, `SELECT coalesce(public.fn_executie_nod_drept(p_proiect, p_scriere), false)`, `SELECT coalesce(public.fn_executie_nod_drept(p_proiect, false), false)`),
+}), false, /functii de drept delegate.*fn_executie_fibra_drept/)
+raport('P17 tabel „drept” fără funcția lui', await scenariu('p17', { doarMigrarea: true,
+  inainte: 'DROP POLICY executie_fibra_intervale_citire ON public.executie_fibra_intervale; DROP FUNCTION public.fn_executie_fibra_drept(bigint, boolean);',
+}), false, /functie de drept lipsa sau necunoscuta.*executie_fibra_intervale/)
+raport('P18 tabel nou al cumulatului (copil al unui tabel acoperit r3), neclasificat', await scenariu('p18', { doarMigrarea: true,
+  inainte: 'CREATE TABLE public.cumulat_note (id bigserial PRIMARY KEY, cumulat_id bigint REFERENCES public.executie_pachete_cumulat_final(id), nota text);',
+}), false, /neclasificate in inventar.*cumulat_note/)
+raport('P19 funcție SECURITY DEFINER nouă cu nume „de alt modul” care citește un tabel acoperit (fără excluderi pe prefix)', await scenariu('p19', { doarMigrarea: true,
+  inainte: `CREATE FUNCTION public.fn_izo_scurgere(p bigint) RETURNS SETOF public.executie_tevi LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+              AS $f$ SELECT * FROM public.executie_tevi WHERE pachet_id = p $f$;
+            GRANT EXECUTE ON FUNCTION public.fn_izo_scurgere(bigint) TO authenticated;`,
+}), false, /functii SECURITY DEFINER.*fn_izo_scurgere/)
 
 console.log(esecuri ? `\n${esecuri} scenarii NU s-au comportat cum trebuie` : '\nToate scenariile s-au comportat cum trebuie')
 process.exit(esecuri ? 1 : 0)

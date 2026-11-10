@@ -6,6 +6,7 @@
 -- vechi ale Execuției cu coloanele citite din cod și din migrări (plus câte o coloană NOT NULL) și RLS-ul lor „autentificat” (auth.uid() IS NOT
 -- NULL, ca în matricea de securitate din 30.09.2026), câteva tabele ale modulelor excluse (Izometrie, HR, Achiziții, Magazie, Redări) legate de
 -- proiecte. Date: profiluri sintetice (1 owner + 3), trei proiecte CLONA-A/B/C, rânduri pe fiecare tabel acoperit.
+-- r3: tabelele Execuției găsite în catalogul clonei, o dimensiune comună (employees) și un înlocuitor de test pentru fn_executie_swap_tevi_pozitie.
 CREATE ROLE anon NOLOGIN NOINHERIT;
 CREATE ROLE authenticated NOLOGIN NOINHERIT;
 CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
@@ -68,7 +69,35 @@ CREATE TABLE public.executie_pachete_lansare (id bigserial PRIMARY KEY, proiect_
   tronson_id bigint REFERENCES public.executie_tronsoane(id), cod_document_full text NOT NULL);
 CREATE TABLE public.executie_pachete_documente (id bigserial PRIMARY KEY, pachet_id bigint NOT NULL REFERENCES public.executie_pachete_lansare(id),
   tip_document text NOT NULL, fisier_path text);
-CREATE TABLE public.executie_tevi (id bigserial PRIMARY KEY, pachet_id bigint REFERENCES public.executie_pachete_lansare(id), serie_unica text NOT NULL);
+CREATE TABLE public.executie_tevi (id bigserial PRIMARY KEY, pachet_id bigint REFERENCES public.executie_pachete_lansare(id), serie_unica text NOT NULL,
+  poz_in_pachet integer);
+-- r3: tabelele Execuției create direct în BD (găsite în catalogul clonei), cu coloana de legătură și o coloană NOT NULL
+CREATE TABLE public.executie_alerte_ai (id bigserial PRIMARY KEY, proiect_id bigint REFERENCES public.executie_proiecte(id), mesaj text NOT NULL);
+CREATE TABLE public.executie_documente_referinta (id bigserial PRIMARY KEY, proiect_id bigint REFERENCES public.executie_proiecte(id), titlu text NOT NULL);
+CREATE TABLE public.executie_pachete_cumulat_final (id bigserial PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id), cod text NOT NULL);
+CREATE TABLE public.executie_pachete_cumulat_tevi (id bigserial PRIMARY KEY, cumulat_id bigint NOT NULL REFERENCES public.executie_pachete_cumulat_final(id) ON DELETE CASCADE,
+  serie text NOT NULL);
+CREATE TABLE public.executie_pachete_exports (id bigserial PRIMARY KEY, pachet_cumulat_id bigint REFERENCES public.executie_pachete_cumulat_final(id), fisier text NOT NULL);
+CREATE TABLE public.executie_pachete_sudura_sant (id bigserial PRIMARY KEY, proiect_id bigint REFERENCES public.executie_proiecte(id), cod text NOT NULL);
+CREATE TABLE public.proiect_activitate_coduri (id bigserial PRIMARY KEY, activitate_id integer NOT NULL REFERENCES public.proiect_activitati(id) ON DELETE CASCADE,
+  cod text NOT NULL);
+-- dimensiune comună (clasa 'comun'): angajații, legați de șantier
+CREATE TABLE public.employees (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL, site_id integer REFERENCES public.sites(id));
+-- ÎNLOCUITOR DE TEST pentru fn_executie_swap_tevi_pozitie (originalul e creat direct în BD și nu se copiază în repo; amprenta reală e în
+-- inventarul migrării, iar runner-ul o înlocuiește în textul migrării cu amprenta acestui corp). Același contract: schimbă pozițiile a două
+-- țevi din același pachet, cu mesajele „Teava ID … nu exista”.
+CREATE FUNCTION public.fn_executie_swap_tevi_pozitie(p_id_a bigint, p_id_b bigint) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE a integer; b integer; pa bigint; pb bigint;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Neautorizat: trebuie autentificare'; END IF;
+  SELECT poz_in_pachet, pachet_id INTO a, pa FROM public.executie_tevi WHERE id = p_id_a FOR UPDATE;
+  SELECT poz_in_pachet, pachet_id INTO b, pb FROM public.executie_tevi WHERE id = p_id_b FOR UPDATE;
+  IF a IS NULL THEN RAISE EXCEPTION 'Teava ID % nu exista', p_id_a; END IF;
+  IF b IS NULL THEN RAISE EXCEPTION 'Teava ID % nu exista', p_id_b; END IF;
+  IF pa IS DISTINCT FROM pb THEN RAISE EXCEPTION 'Tevile nu sunt in acelasi pachet'; END IF;
+  UPDATE public.executie_tevi SET poz_in_pachet = CASE WHEN id = p_id_a THEN b ELSE a END WHERE id IN (p_id_a, p_id_b);
+END $f$;
 -- corespondența proiectului (documente_proiect; coada documente_de_repartizat o creează 20261028a, aplicată de runner)
 CREATE TABLE public.documente_proiect (id bigserial PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
   sursa text, gmail_message_id text, nume_fisier text NOT NULL, mime_type text, marime_bytes bigint, expeditor text, subiect text, data_mail timestamptz,
@@ -105,6 +134,8 @@ BEGIN
                            'executie_tura_activitati', 'executie_tura_naveta', 'proiect_unitati', 'proiect_activitati', 'proiect_articole',
                            'executie_pachete_lansare', 'executie_pachete_documente', 'executie_tevi', 'documente_proiect',
                            'rapoarte_zilnice', 'raport_lucrari', 'raport_distributie_linii',
+                           'executie_alerte_ai', 'executie_documente_referinta', 'executie_pachete_cumulat_final', 'executie_pachete_cumulat_tevi',
+                           'executie_pachete_exports', 'executie_pachete_sudura_sant', 'proiect_activitate_coduri',
                            'izo_tronson_config', 'hr_decizii', 'comenzi_furnizor', 'magazie_bucati', 'red_proiecte'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR ALL TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL)', t || '_autentificat', t);
@@ -151,7 +182,15 @@ INSERT INTO public.proiect_unitati (proiect_id, cod, nume) VALUES (1, 'U-A', 'Ob
 INSERT INTO public.executie_pachete_lansare (proiect_id, tronson_id, cod_document_full) VALUES (1, 1, 'IZO-A'), (3, 4, 'IZO-C');
 INSERT INTO public.executie_pachete_documente (pachet_id, tip_document, fisier_path) VALUES
   (1, 'centralizator', '1/2026-11-01_ab_centralizator.xlsx'), (2, 'aprobare', '3/2/aprobare/x.pdf');
-INSERT INTO public.executie_tevi (pachet_id, serie_unica) VALUES (1, 'T-A1'), (2, 'T-C1');
+INSERT INTO public.executie_tevi (pachet_id, serie_unica, poz_in_pachet) VALUES (1, 'T-A1', 1), (2, 'T-C1', 1), (1, 'T-A2', 2), (2, 'T-C2', 2);
+INSERT INTO public.executie_alerte_ai (proiect_id, mesaj) VALUES (1, 'alerta A'), (3, 'alerta C');
+INSERT INTO public.executie_documente_referinta (proiect_id, titlu) VALUES (1, 'ref A'), (3, 'ref C');
+INSERT INTO public.executie_pachete_cumulat_final (proiect_id, cod) VALUES (1, 'CF-A'), (3, 'CF-C');
+INSERT INTO public.executie_pachete_cumulat_tevi (cumulat_id, serie) VALUES (1, 'S-A'), (2, 'S-C');
+INSERT INTO public.executie_pachete_exports (pachet_cumulat_id, fisier) VALUES (1, 'a.xlsx'), (2, 'c.xlsx');
+INSERT INTO public.executie_pachete_sudura_sant (proiect_id, cod) VALUES (1, 'SS-A'), (3, 'SS-C');
+INSERT INTO public.proiect_activitate_coduri (activitate_id, cod) VALUES (1, 'GA04-A'), (2, 'GA04-C');
+INSERT INTO public.employees (name, site_id) VALUES ('ANGAJAT UNU', 1), ('ANGAJAT DOI', 2);
 INSERT INTO public.documente_proiect (proiect_id, sursa, gmail_message_id, nume_fisier, storage_path) VALUES
   (1, 'gmail', 'm-a', 'a.pdf', 'clona-a/2026/11/a.pdf'), (3, 'gmail', 'm-c', 'c.pdf', 'clona-c/2026/11/c.pdf');
 INSERT INTO public.executie_ordine_detectate (proiect_id, tip, documente_proiect_id) VALUES (NULL, 'sistare', NULL), (3, 'sistare', 2), (1, 'sistare', 1);

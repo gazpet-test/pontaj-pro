@@ -1,6 +1,6 @@
--- Harness 20261209a_executie_acces_proiect (r2) — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
+-- Harness 20261209a_executie_acces_proiect (r3) — DOAR pe clona schemei de producție (PG ca în producție, postgres NOSUPERUSER), NICIODATĂ pe producție.
 -- Rulare din rădăcina repo-ului:  psql -X -v ON_ERROR_STOP=1 -f scripts/test_executie_acces_proiect.sql
--- Precondiție: 20261201a, 20261203a, 20261204a, 20261208a aplicate pe clonă (migrarea le cere).
+-- Precondiție: 20261201a, 20261203a, 20261204a, 20261208a aplicate pe clonă (migrarea le cere); 20261207a și 20261211a (fibra) opționale.
 -- O singură tranzacție, ANULATĂ la final (ROLLBACK).
 -- Oracolul independent (L25):
 --   * LISTA testată vine din CATALOG (scripts/executie_acces_catalog.sql: FK tranzitiv din executie_proiecte + coloane proiect_id), nu din
@@ -103,10 +103,11 @@ END $t$;
 CREATE TEMP TABLE t_tab AS
   SELECT DISTINCT ON (c.rel) c.rel, c.nume, c.e_public,
          coalesce((SELECT i.clasa FROM t_inv i WHERE i.tip = 'tabel' AND i.obiect = c.nume AND c.e_public),
-                  (SELECT 'exclus' FROM t_inv i WHERE i.tip = 'prefix_tabel' AND starts_with(c.nume, i.obiect) AND c.e_public LIMIT 1)) AS clasa,
+                  (SELECT i.clasa FROM t_inv i WHERE i.tip = 'prefix_tabel' AND starts_with(c.nume, i.obiect) AND c.e_public
+                    ORDER BY length(i.obiect) DESC LIMIT 1)) AS clasa,
          pg_temp.t_cat_proiect_expr(c.rel) AS expr, NULL::text AS col_upd, NULL::text AS col_ins
     FROM (SELECT t.rel, t.nume, t.e_public FROM pg_temp.t_cat_tabele(
-                   ARRAY(SELECT obiect FROM t_inv WHERE tip = 'tabel' AND clasa = 'exclus'),
+                   ARRAY(SELECT obiect FROM t_inv WHERE tip = 'tabel' AND clasa IN ('exclus', 'comun')),
                    ARRAY(SELECT obiect FROM t_inv WHERE tip = 'prefix_tabel')) t
           UNION SELECT to_regclass('public.' || i.obiect)::oid, i.obiect, true FROM t_inv i
                  WHERE i.tip = 'tabel' AND i.clasa IN ('proiect', 'copil', 'drept') AND to_regclass('public.' || i.obiect) IS NOT NULL) c
@@ -123,8 +124,9 @@ BEGIN
                                 AND a.attidentity = '' AND a.attgenerated = '' ORDER BY a.attnum LIMIT 1),
                    col_ins = coalesce(substring(expr FROM '^t\.([a-z_][a-z_0-9]*)$'), substring(expr FROM 'WHERE x1\.[a-z_0-9]+ = t\.([a-z_][a-z_0-9]*)\)$'))
    WHERE clasa IN ('proiect', 'copil', 'drept');
-  RAISE NOTICE 'T0b OK (% tabele din catalog: % acoperite, % cu funcție de drept, % excluse)', (SELECT count(*) FROM t_tab),
-    (SELECT count(*) FROM t_tab WHERE clasa IN ('proiect', 'copil')), (SELECT count(*) FROM t_tab WHERE clasa = 'drept'), (SELECT count(*) FROM t_tab WHERE clasa = 'exclus');
+  RAISE NOTICE 'T0b OK (% tabele din catalog: % acoperite, % cu funcție de drept, % excluse, % comune)', (SELECT count(*) FROM t_tab),
+    (SELECT count(*) FROM t_tab WHERE clasa IN ('proiect', 'copil')), (SELECT count(*) FROM t_tab WHERE clasa = 'drept'),
+    (SELECT count(*) FROM t_tab WHERE clasa = 'exclus'), (SELECT count(*) FROM t_tab WHERE clasa = 'comun');
 END $t$;
 GRANT SELECT ON t_inv, t_tab TO authenticated, anon, service_role;
 
@@ -237,6 +239,17 @@ BEGIN
     SELECT 'executie-borderouri', k, s.name FROM unnest(ARRAY[1, 3]) k
       JOIN storage.objects s ON s.bucket_id = 'executie-borderouri' AND split_part(s.name, '/', 1) = 'sl_' || pr[k]
   ) q ORDER BY b, k, o;
+  -- poarta fn_executie_swap_tevi_pozitie (6b): două țevi din același pachet (cu poziție), pe p1 și pe p3, dacă există
+  FOREACH n IN ARRAY ARRAY[1, 3] LOOP
+    SELECT string_agg(q.id::text, ',' ORDER BY q.id) INTO v_val FROM (
+      SELECT t.id FROM public.executie_tevi t
+       WHERE t.poz_in_pachet IS NOT NULL
+         AND t.pachet_id = (SELECT t2.pachet_id FROM public.executie_tevi t2 JOIN public.executie_pachete_lansare k2 ON k2.id = t2.pachet_id
+                             WHERE k2.proiect_id = pr[n] AND t2.poz_in_pachet IS NOT NULL
+                             GROUP BY t2.pachet_id HAVING count(*) >= 2 ORDER BY t2.pachet_id LIMIT 1)
+       ORDER BY t.id LIMIT 2) q;
+    PERFORM set_config('tacc.tevi' || n, coalesce(v_val, ''), true);
+  END LOOP;
   RAISE NOTICE 'T0 OK (proiecte %, rânduri mapate %, mostre %, obiecte %, șantiere % / %)', pr, (SELECT count(*) FROM t_rand),
     (SELECT count(*) FROM t_most), (SELECT count(*) FROM t_obj), pg_temp.t_g('site1'), pg_temp.t_g('site3');
 END $t$;
@@ -462,6 +475,32 @@ BEGIN
                                pg_temp.t_g('s1'), 'de_executat', 'insailat', 'Europe/Bucharest', 'Sudor Test')) <> 'OK 1' THEN
     RAISE EXCEPTION 'T3 FAIL: RPC-ul sudurii';
   END IF;
+  -- fibra optică (20261211a), dacă e aplicată: funcția ei de drept primește condiția de proiect prin fn_executie_nod_drept
+  IF to_regprocedure('public.fn_executie_fibra_drept(bigint, boolean)') IS NOT NULL THEN
+    IF NOT public.fn_executie_fibra_drept(p1, true) OR public.fn_executie_fibra_drept(p2, true) OR NOT public.fn_executie_fibra_drept(p2, false)
+       OR public.fn_executie_fibra_drept(p3, false) THEN
+      RAISE EXCEPTION 'T3 FAIL: fn_executie_fibra_drept nu urmează lista contului';
+    END IF;
+  ELSE PERFORM pg_temp.t_neprobat('fibra optică (20261211a) neaplicată pe această bază'); END IF;
+  -- poarta fn_executie_swap_tevi_pozitie (6b): țevile lui p3 și o țeavă inexistentă = refuzul porții (înainte de orice citire / mesaj
+  -- despre ele); originalul nu se poate apela direct; pe p1 schimbul reușește (scris efectiv, apoi anulat)
+  x := pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)');
+  IF NOT pg_temp.t_e_garda(x) THEN RAISE EXCEPTION 'T3 FAIL: poarta swap, țevi inexistente: %', x; END IF;
+  x := pg_temp.t_proba('SELECT executie_acces_intern.fn_executie_swap_tevi_pozitie(-1, -2)');
+  IF x NOT LIKE '42501 %' THEN RAISE EXCEPTION 'T3 FAIL: originalul swap se poate apela direct: %', x; END IF;
+  IF pg_temp.t_g('tevi3') IS NOT NULL THEN
+    x := pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)', split_part(pg_temp.t_g('tevi3'), ',', 1), split_part(pg_temp.t_g('tevi3'), ',', 2)));
+    IF NOT pg_temp.t_e_garda(x) THEN RAISE EXCEPTION 'T3 FAIL: poarta swap pe p3: %', x; END IF;
+  ELSE PERFORM pg_temp.t_neprobat('swap pe p3 (nu există un pachet cu 2 țevi)'); END IF;
+  IF pg_temp.t_g('tevi1') IS NOT NULL THEN
+    x := pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)', split_part(pg_temp.t_g('tevi1'), ',', 1), split_part(pg_temp.t_g('tevi1'), ',', 2)));
+    IF x <> 'OK 1' THEN RAISE EXCEPTION 'T3 FAIL: schimbul legitim pe p1 nu mai reușește: %', x; END IF;
+    -- amestec p1 + p3: refuz
+    IF pg_temp.t_g('tevi3') IS NOT NULL AND NOT pg_temp.t_e_garda(pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)',
+         split_part(pg_temp.t_g('tevi1'), ',', 1), split_part(pg_temp.t_g('tevi3'), ',', 1)))) THEN
+      RAISE EXCEPTION 'T3 FAIL: poarta swap, o țeavă p1 + una p3';
+    END IF;
+  ELSE PERFORM pg_temp.t_neprobat('swap legitim pe p1 (nu există un pachet cu 2 țevi)'); END IF;
   -- tabelul de acces: B vede doar rândurile lui; nu poate seta nimic
   IF (SELECT count(*) FROM public.executie_acces_proiect) <> 2 OR EXISTS (SELECT 1 FROM public.executie_acces_proiect WHERE profile_id <> auth.uid())
      OR pg_temp.t_proba(format('SELECT pg_temp.t_seteaza(%L, true, pg_temp.t_lista(%L), pg_temp.t_lista(%L))', 'b', 'p1:editor,p2:editor,p3:editor', 'p1:editor,p2:viewer')) NOT LIKE '42501 %'
@@ -608,6 +647,14 @@ DO $t$ BEGIN
   IF pg_temp.t_vede() IS DISTINCT FROM pg_temp.t_g('va0')::jsonb OR EXISTS (SELECT 1 FROM public.executie_acces_proiect) THEN
     RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) afectat / vede rândurile altora';
   END IF;
+  -- poarta swap: pentru un cont nerestrâns = originalul (schimbul pe p3 reușește, țeava inexistentă primește mesajul de azi)
+  IF pg_temp.t_g('tevi3') IS NOT NULL
+     AND pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)', split_part(pg_temp.t_g('tevi3'), ',', 1), split_part(pg_temp.t_g('tevi3'), ',', 2))) <> 'OK 1' THEN
+    RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) nu mai schimbă țevile pe p3';
+  END IF;
+  IF pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)') NOT LIKE '% -1 %' THEN
+    RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) primește alt mesaj decât cel de azi pentru o țeavă inexistentă';
+  END IF;
   RAISE NOTICE 'T4 OK';
 END $t$;
 
@@ -695,7 +742,8 @@ SELECT pg_temp.t_eroare('T7b', :'t7b_eroare', :'t7b_stare', :'LAST_ERROR_MESSAGE
 DO $t$ BEGIN
   IF (SELECT count(*) FROM public.executie_acces_proiect) <> 1 OR to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)') IS NULL
      OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda') <> pg_temp.t_g('ngarzi')::integer
-     OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'executie\_acces\_%') <> 4 THEN
+     OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'executie\_acces\_%') <> 4
+     OR to_regprocedure('executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)') IS NULL THEN
     RAISE EXCEPTION 'T7 FAIL: revenirea refuzată a atins ceva';
   END IF;
   RAISE NOTICE 'T7 OK';
@@ -713,6 +761,10 @@ DO $t$ BEGIN
      OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda')
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_executie_nod_drept(bigint, boolean)'::regprocedure), chr(13), '')) <> '144649bae9a218b41b7e6df90cba5d9e'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_raport_santier_drept(bigint)'::regprocedure), chr(13), '')) <> '2c8833d76db7145ab0bd2fc5103e55e9'
+     -- originalul swap înapoi în public, cu amprenta din inventar; schema internă ștearsă
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)')), chr(13), ''))
+        IS DISTINCT FROM (SELECT cheie FROM t_inv WHERE tip = 'functie' AND obiect = 'fn_executie_swap_tevi_pozitie')
+     OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'executie_acces_intern')
      OR (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s', polrelid::regclass, polname, polpermissive, polroles,
                                                coalesce(pg_get_expr(polqual, polrelid), ''), coalesce(pg_get_expr(polwithcheck, polrelid), '')), ';'
                                         ORDER BY polrelid::regclass::text, polname), ''))
@@ -731,7 +783,8 @@ SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' 
 \ir ../supabase/migrations/20261209a_executie_acces_proiect.sql
 DO $t$ BEGIN
   IF to_regclass('public.executie_acces_proiect') IS NULL
-     OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda') <> pg_temp.t_g('ngarzi')::integer THEN
+     OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda') <> pg_temp.t_g('ngarzi')::integer
+     OR to_regprocedure('executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)') IS NULL THEN
     RAISE EXCEPTION 'T8 FAIL: re-aplicarea';
   END IF;
   RAISE NOTICE 'NEPROBAT pe datele acestei baze: %', coalesce(pg_temp.t_g('neprobat'), 'nimic');

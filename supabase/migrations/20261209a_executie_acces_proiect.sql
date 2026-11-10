@@ -1,6 +1,7 @@
 -- Version 20261209120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
 -- 20261209a_executie_acces_proiect — Execuție: acces pe PROIECT (decizia lui Răzvan, 10.11.2026). Un șef de șantier vede și scrie în Execuție
--- doar proiectele lui (ex. Lot 1 + Lot 2), lista se extinde ulterior. r2: inventarul complet (review r1 NO-GO).
+-- doar proiectele lui (ex. Lot 1 + Lot 2), lista se extinde ulterior. r2: inventarul complet (review r1 NO-GO). r3: clasificarea întregului
+-- catalog al clonei schemei de producție (tabele, vederi, funcții SECURITY DEFINER) + poarta pe proiect în fn_executie_swap_tevi_pozitie.
 --
 -- Regula (o singură definiție, L19):
 --   * cont FĂRĂ niciun rând în executie_acces_proiect = ca azi (vede / scrie ce îi dă modulul);
@@ -14,19 +15,28 @@
 -- INVENTARUL (r2): o SINGURĂ listă, fn_executie_acces_inventar(), din care se trag preflight-ul, politicile, postcondițiile și revenirea.
 --   Fiecare obiect care ajunge la un proiect de Execuție are o clasă:
 --     tabel  'proiect' — coloana `cheie` e proiectul: 4 politici RESTRICTIVE + trigger BEFORE INSERT/UPDATE/DELETE pe OLD și NEW;
---     tabel  'copil'   — proiectul vine din părinte (`parinte`: sl | bon | pachet | raport): la fel, politicile cu setul părinților permiși
---                        (o evaluare pe interogare, nu pe rând — review r1 P2 N+1);
---     tabel  'drept'   — are deja funcția lui de drept (20261201a–20261208a), căreia i se adaugă condiția de proiect;
+--     tabel  'copil'   — proiectul vine din părinte (`parinte`: sl | bon | pachet | raport | cumulat | activitate): la fel, politicile cu
+--                        setul părinților permiși (o evaluare pe interogare, nu pe rând — review r1 P2 N+1);
+--     tabel  'drept'   — are deja funcția lui de drept (20261201a–20261211a), căreia i se adaugă condiția de proiect (direct sau prin
+--                        funcția la care delegă); poate lipsi (migrarea lui încă neaplicată), dar dacă există, funcția lui trebuie să existe;
 --     tabel  'exclus' / 'prefix_tabel' — alt modul, cu dreptul lui; motivul și riscul sunt scrise (decizie pentru Răzvan, nu omisiune);
---     functie 'drept' | 'verifica' | 'garda' — SECURITY DEFINER apelabile din API care ating tabelele de mai sus, cu amprenta corpului:
---                        drept = funcția de drept (înlocuită aici); verifica = cheamă o funcție de drept pe proiectul fiecărui id;
---                        garda = doar scrie în tabele acoperite (trigger-ul de gardă o oprește) și nu întoarce date ale altor proiecte;
---     functie 'prefix_functie' — alt modul (exclus, cu motiv); bucket 'cale' | 'tabel' | 'drept' | 'exclus' — Storage.
+--     tabel  'comun'   — dimensiune comună (cont, angajat, alocare pe șantier…): NU ajunge la date de proiect; afirmația se VERIFICĂ
+--                        (refuz dacă tabelul are o coloană întreagă proiect_id sau o cheie străină spre executie_proiecte / un tabel acoperit);
+--     functie 'drept' | 'verifica' | 'garda' | 'delega' | 'poarta' | 'exclus' — SECURITY DEFINER apelabile din API care ating tabelele de
+--                        mai sus, fiecare cu amprenta corpului revizuit (L15): drept = funcția de drept (înlocuită aici); verifica = cheamă
+--                        o funcție de drept pe proiectul fiecărui id; garda = doar scrie în tabele acoperite (trigger-ul de gardă o oprește)
+--                        și nu întoarce date ale altor proiecte; delega = funcție de drept care doar cheamă una înlocuită aici (poate
+--                        lipsi); poarta = funcție creată direct în BD, fără condiția de proiect: migrarea îi pune poarta (vezi 6b);
+--                        exclus = alt modul (motivul: ce citește / întoarce, cu ce drept); bucket 'cale' | 'tabel' | 'drept' | 'exclus'.
+--   Nu mai există excluderi de funcții pe prefix (r3): fiecare funcție găsită are numele și amprenta ei în listă.
 --   Preflight-ul derivă din CATALOG (nu din listă) ce ajunge la un proiect și REFUZĂ orice obiect neclasificat, cu numele lui:
 --     tabelele legate prin FK (tranzitiv) de executie_proiecte sau cu o coloană întreagă proiect_id; vederile (și vederile peste vederi)
 --     peste tabelele acoperite care nu sunt security_invoker (sau sunt materializate) și pe care le poate citi API-ul; funcțiile SECURITY
 --     DEFINER din public, apelabile de anon / authenticated, al căror corp numește un tabel / o vedere acoperită (sau au alt corp decât
 --     cel revizuit). Ce nu e în listă oprește migrarea; lista din catalog se poate scoate și fără migrare: scripts/executie_acces_catalog.sql.
+--   Detectorul e îngust intenționat (r3): din tabelele 'exclus' / 'comun' nu se coboară (altfel prin sites → employees → profiles se ajunge
+--   la toată baza: 378 de tabele și 220 de funcții pe clonă), iar la funcții caută doar numele tabelelor ACOPERITE și ale vederilor peste ele
+--   (nu profiles sau alte tabele comune). Cazurile din r1 (documente_proiect, pachetele, raportul zilnic, vederile) rămân prinse (P5–P12).
 --
 -- Ce face, pe scurt:
 --   1. Tabel nou executie_acces_proiect (profile_id, proiect_id, nivel, acordat_de, acordat_la), PK (profile_id, proiect_id). Scrierea DOAR
@@ -40,15 +50,21 @@
 --      și pe căile directe. Șantier fără proiect = ca înainte.
 --   4. Storage: politici RESTRICTIVE pe storage.objects, doar pentru bucket-urile 'cale' / 'tabel' din inventar (proiectul obiectului din
 --      cale sau din tabelul care îl referă); alt bucket nu e atins.
+--   5. fn_executie_swap_tevi_pozitie (creată direct în BD, fără condiția de proiect): originalul, cu amprenta verificată, se mută NESCHIMBAT
+--      (corp, owner, drepturi) în schema internă executie_acces_intern (fără USAGE pentru clienți), iar în public rămâne, cu același nume și
+--      aceiași parametri, o poartă care verifică proiectul pachetului FIECĂREI țevi pentru contul restrâns și apoi cheamă originalul.
+--      Contul nerestrâns: exact ca azi (aceleași mesaje). Revenirea mută originalul înapoi.
 -- Ce NU face: nicio dată (niciun cont nu e restrâns după migrare: comportamentul rămâne exact cel de azi până când owner-ul bifează),
---   niciun drept pe modul, nicio schimbare a corpurilor RPC-urilor vechi (în afara funcțiilor de drept de la 3).
+--   niciun drept pe modul, nicio schimbare a corpurilor RPC-urilor vechi (în afara funcțiilor de drept de la 3 și a porții de la 5).
 -- Calea server fără JWT (cron, chat-ul prin psql, edge cu service_role): restricția e pe CONT; fără auth.uid() trigger-ul nu se amestecă
 --   (comportamentul de azi), iar service_role are BYPASSRLS ca și până acum.
 -- Ordinea lock-urilor (L06): RPC-ul de setare ia (1) lock consultativ pe cont, (2) FOR KEY SHARE NOWAIT pe rândul profilului, (3) rândurile
 --   contului din executie_acces_proiect (DELETE apoi INSERT … ON CONFLICT, ORDER BY proiect_id). Trigger-ele de gardă și funcțiile de regulă
 --   doar citesc (fără lock-uri de rând).
 -- DEPENDENȚĂ: se aplică DUPĂ 20261201a, 20261203a, 20261204a, 20261208a (verificat mai jos). Revenirile acelor migrări (sau preflight-urile
---   20261202a / 20261207a, dacă nu sunt încă aplicate) verifică amprenta veche a lui fn_executie_nod_drept: întâi revenirea ACESTEIA.
+--   20261202a / 20261207a / 20261211a, dacă nu sunt încă aplicate) verifică amprenta veche a lui fn_executie_nod_drept: întâi revenirea
+--   ACESTEIA. Fibra optică (20261211a) poate fi aplicată sau nu: dacă e, tabelele ei sunt 'drept' (fn_executie_fibra_drept delegă la
+--   fn_executie_nod_drept, deci primește condiția de proiect de aici), iar RPC-urile ei sunt verificate pe amprentă.
 -- Revenire: supabase/revenire/20261209a_executie_acces_proiect_ROLLBACK.sql. Test pe clonă: scripts/test_executie_acces_proiect.sql.
 DO $pre$
 BEGIN
@@ -66,7 +82,8 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis'))
      OR EXISTS (SELECT 1 FROM pg_policy WHERE polname LIKE 'executie\_acces\_%')
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda') THEN
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda')
+     OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'executie_acces_intern') THEN
     RAISE EXCEPTION '20261209a: obiectele exista deja (reaplicare)';
   END IF;
   -- dependențele de bază
@@ -86,10 +103,15 @@ BEGIN
 END $pre$;
 
 -- ── 0. inventarul: O SINGURĂ listă (L19). Owner-ul migrării îl citește; clienții nu au EXECUTE. ──────────────────────────────────────────
--- tip:    tabel | prefix_tabel | functie | prefix_functie | bucket
--- clasa:  tabel: proiect | copil | drept | exclus; functie: drept | verifica | garda; bucket: cale | tabel | drept | exclus
+-- tip:    tabel | prefix_tabel | functie | bucket
+-- clasa:  tabel: proiect | copil | drept | exclus | comun; prefix_tabel: exclus | comun;
+--         functie: drept | verifica | garda | delega | poarta | exclus; bucket: cale | tabel | drept | exclus
 -- cheie:  tabel proiect/copil = coloana; tabel drept = funcția de drept; functie = md5(corp fără CR) revizuit
--- parinte: copil = sl | bon | pachet | raport
+-- parinte: copil = sl | bon | pachet | raport | cumulat | activitate
+-- r3: lista acoperă TOT catalogul clonei schemei de producție (10.11.2026): 378 de tabele (ce nu e aici pe nume intră pe un prefix),
+--   147 de vederi (toate security_invoker: niciuna nu oprește migrarea) și cele 34 de funcții care numesc un tabel acoperit sau o vedere
+--   (orice vedere, nu doar cele peste tabele acoperite: dependențele vederilor nu sunt în ieșirea clonei, deci lista e mai largă decât
+--   detectorul), plus fn_executie_fibra_drept (delegată; nu numește niciun tabel, deci detectorul n-o vede, dar o verificăm pe amprentă).
 CREATE FUNCTION public.fn_executie_acces_inventar()
 RETURNS TABLE (tip text, obiect text, clasa text, cheie text, parinte text, motiv text)
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
@@ -119,6 +141,11 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ('tabel', 'documente_de_repartizat', 'proiect', 'repartizat_in_proiect_id', NULL,
      'coada comună de repartizat: rândurile încă nerepartizate n-au proiect, deci un cont restrâns NU vede coada și NU repartizează / ignoră (decizie de confirmat de Răzvan; varianta: rândurile cu candidat pe proiectele lui)'),
   ('tabel', 'raport_lucrari', 'proiect', 'proiect_id', NULL, 'liniile raportului zilnic (cantități pe activitate / obiect)'),
+  -- r3: tabelele Execuției create direct în BD (găsite în catalogul clonei)
+  ('tabel', 'executie_alerte_ai', 'proiect', 'proiect_id', NULL, 'alertele AI ale proiectului'),
+  ('tabel', 'executie_documente_referinta', 'proiect', 'proiect_id', NULL, 'documentele de referință ale proiectului'),
+  ('tabel', 'executie_pachete_cumulat_final', 'proiect', 'proiect_id', NULL, 'cumulatul final al pachetelor de izometrii'),
+  ('tabel', 'executie_pachete_sudura_sant', 'proiect', 'proiect_id', NULL, 'sudurile de șanț ale pachetelor'),
   -- copiii fără proiect pe rând
   ('tabel', 'executie_situatii_plata_linii', 'copil', 'sl_id', 'sl', 'liniile situațiilor de plată'),
   ('tabel', 'executie_sl_ajustari', 'copil', 'sl_id', 'sl', 'ajustările situațiilor de plată'),
@@ -126,6 +153,9 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ('tabel', 'executie_pachete_documente', 'copil', 'pachet_id', 'pachet', 'documentele pachetelor (centralizator, PDF aprobat)'),
   ('tabel', 'executie_tevi', 'copil', 'pachet_id', 'pachet', 'țevile pachetelor de izometrii'),
   ('tabel', 'raport_distributie_linii', 'copil', 'raport_id', 'raport', 'liniile „Raport lucrări executate” (distribuție gaze)'),
+  ('tabel', 'executie_pachete_cumulat_tevi', 'copil', 'cumulat_id', 'cumulat', 'țevile cumulatului final (r3)'),
+  ('tabel', 'executie_pachete_exports', 'copil', 'pachet_cumulat_id', 'cumulat', 'exporturile cumulatului final (r3)'),
+  ('tabel', 'proiect_activitate_coduri', 'copil', 'activitate_id', 'activitate', 'codurile de deviz ale activităților proiectului (r3)'),
   -- tabelele noi cu funcția lor de drept (condiția de proiect intră în funcție)
   ('tabel', 'executie_noduri_suduri', 'drept', 'fn_executie_nod_drept', NULL, '20261201a'),
   ('tabel', 'executie_noduri_constructii', 'drept', 'fn_executie_nod_drept', NULL, '20261207a'),
@@ -138,6 +168,9 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ('tabel', 'executie_grafic_activitati', 'drept', 'fn_executie_grafic_drept', NULL, '20261204a'),
   ('tabel', 'executie_tinte_setari', 'drept', 'fn_executie_tinte_drept', NULL, '20261208a'),
   ('tabel', 'executie_acces_proiect', 'drept', 'fn_executie_acces_e_owner', NULL, 'tabelul acestei migrări'),
+  ('tabel', 'executie_fibra_camerete', 'drept', 'fn_executie_fibra_drept', NULL, '20261211a (fibra optică; politicile ei cer fn_executie_fibra_drept)'),
+  ('tabel', 'executie_fibra_intervale', 'drept', 'fn_executie_fibra_drept', NULL, '20261211a (fibra optică)'),
+  ('tabel', 'executie_fibra_jurnal', 'drept', 'fn_executie_fibra_drept', NULL, '20261211a (fibra optică; jurnalul, doar citire)'),
   -- excluse, cu motiv și risc (decizie pentru Răzvan)
   ('tabel', 'sites', 'exclus', NULL, NULL,
      'șantierele (pontaj): cheia rapoartelor zilnice; restricția pe proiect se aplică raportului prin fn_raport_santier_drept și liniilor, nu listei de șantiere (lista de șantiere rămâne cea de azi)'),
@@ -152,7 +185,7 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ('prefix_tabel', 'comenzi', 'exclus', NULL, NULL, 'Achiziții (comenzi / comenzi furnizor): modul separat, cu dreptul lui pe modul'),
   ('prefix_tabel', 'comanda_', 'exclus', NULL, NULL, 'Achiziții: liniile comenzilor'),
   ('prefix_tabel', 'upa_', 'exclus', NULL, NULL, 'Achiziții UPA'),
-  ('prefix_tabel', 'contracte_terti', 'exclus', NULL, NULL, 'Contracte cu terți: modul separat (Financiar)'),
+  ('prefix_tabel', 'contracte_', 'exclus', NULL, NULL, 'Contracte cu terți (linii, acte adiționale, polițe, facturi de subcontract): modul separat (Financiar)'),
   ('prefix_tabel', 'facturi_', 'exclus', NULL, NULL, 'Facturi: modul Financiar'),
   ('prefix_tabel', 'garantii', 'exclus', NULL, NULL, 'Garanții / GBE: modul Financiar'),
   ('prefix_tabel', 'gbe_', 'exclus', NULL, NULL, 'GBE: modul Financiar'),
@@ -168,6 +201,47 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ('prefix_tabel', 'meteo_', 'exclus', NULL, NULL, 'Meteo: pe șantier, fără date de proiect'),
   ('prefix_tabel', 'sedinte', 'exclus', NULL, NULL, 'Ședințe: modul separat'),
   ('prefix_tabel', 'ai_', 'exclus', NULL, NULL, 'AI (inbox, costuri): cale server / owner'),
+  -- r3: restul catalogului clonei, alte module (cu dreptul lor pe modul; un cont restrâns în Execuție care are SEPARAT modulul vede acolo
+  -- toate proiectele — decizie pentru Răzvan, scrisă)
+  ('tabel', 'magazii', 'exclus', NULL, NULL, 'Magazie: gestiunile (magaziile) proiectelor, cu dreptul modulului Magazie'),
+  ('prefix_tabel', 'transferuri_', 'exclus', NULL, NULL, 'Magazie: transferurile între gestiuni'),
+  ('prefix_tabel', 'eip_', 'exclus', NULL, NULL, 'Magazie: echipamentele individuale de protecție'),
+  ('prefix_tabel', 'necesar_', 'exclus', NULL, NULL, 'Necesar de materiale / Achiziții'),
+  ('prefix_tabel', 'productie_', 'exclus', NULL, NULL, 'Producție'),
+  ('prefix_tabel', 'contab_', 'exclus', NULL, NULL, 'Contabilitate (importul expertului contabil, maparea șantierelor): Financiar'),
+  ('prefix_tabel', 'trezorerie_', 'exclus', NULL, NULL, 'Trezorerie (conturi, extrase): Financiar'),
+  ('prefix_tabel', 'grafic_', 'exclus', NULL, NULL,
+     'graficul intern editabil (Gantt) al licitațiilor și lucrărilor: scriere cu dreptul Ofertare; citirea rămâne cea de azi (orice cont autentificat) — decizie pentru Răzvan'),
+  ('tabel', 'proiecte_ofertare', 'exclus', NULL, NULL, 'Ofertare'),
+  ('tabel', 'oferta_materiale', 'exclus', NULL, NULL, 'Ofertare'),
+  ('prefix_tabel', 'pontaj_', 'exclus', NULL, NULL, 'Pontaj (pe angajat și șantier)'),
+  ('prefix_tabel', 'salarii_', 'exclus', NULL, NULL, 'Salarii'),
+  ('tabel', 'employee_salaries', 'exclus', NULL, NULL, 'Salarii (pe angajat)'),
+  ('tabel', 'diurna_payment_details', 'exclus', NULL, NULL, 'HR / diurne (pe angajat)'),
+  ('tabel', 'ordine_deplasare_arhiva', 'exclus', NULL, NULL, 'HR / ordine de deplasare (pe angajat)'),
+  ('tabel', 'organigrama_propuneri', 'exclus', NULL, NULL, 'HR / organigramă'),
+  ('tabel', 'supliment_hrana_istoric', 'exclus', NULL, NULL, 'HR / supliment de hrană (pe angajat)'),
+  ('tabel', 'olx_mesaje_procesate', 'exclus', NULL, NULL, 'HR / recrutare'),
+  ('tabel', 'evogps_alias', 'exclus', NULL, NULL, 'Logistica / GPS (pe utilaj)'),
+  ('tabel', 'registru_imobilizari', 'exclus', NULL, NULL, 'Logistica / imobilizări (pe utilaj)'),
+  ('prefix_tabel', 'service_import_', 'exclus', NULL, NULL, 'Logistica / service (pe utilaj)'),
+  ('tabel', 'talon_extract_staging', 'exclus', NULL, NULL, 'Logistica / talon (pe utilaj)'),
+  ('tabel', 'whatsapp_messages_processed', 'exclus', NULL, NULL, 'Logistica / alimentări (pe utilaj)'),
+  ('tabel', 'avize_cjp', 'exclus', NULL, NULL, 'Logistica / depozite (avize)'),
+  ('prefix_tabel', 'iot_', 'exclus', NULL, NULL, 'IoT pe șantier (dispozitive, lumini)'),
+  ('prefix_tabel', 'locatii_', 'exclus', NULL, NULL, 'Cazări închiriate (Administrativ)'),
+  ('prefix_tabel', 'marketing_', 'exclus', NULL, NULL, 'Marketing'),
+  ('prefix_tabel', 'tichete', 'exclus', NULL, NULL, 'Tichete (raportări interne)'),
+  ('tabel', 'intrebari_tehnice', 'exclus', NULL, NULL, 'Întrebări tehnice'),
+  -- r3: dimensiuni comune — NU ajung la date de proiect (verificat în preflight: fără proiect_id, fără FK spre proiecte / tabele acoperite)
+  ('tabel', 'employees', 'comun', NULL, NULL, 'angajații: legați de un șantier, nu de datele unui proiect'),
+  ('tabel', 'profiles', 'comun', NULL, NULL, 'conturile'),
+  ('tabel', 'profile_sites', 'comun', NULL, NULL, 'alocarea conturilor pe șantiere (raportul zilnic o folosește ca drept, nu e dată de proiect)'),
+  ('tabel', 'user_module_access', 'comun', NULL, NULL, 'drepturile pe module'),
+  ('tabel', 'notifications', 'comun', NULL, NULL, 'notificările unui cont'),
+  ('tabel', 'setari_recycle_bin', 'comun', NULL, NULL, 'setări'),
+  ('tabel', 'rag_ingest_queue', 'comun', NULL, NULL, 'coada de indexare a documentelor'),
+  ('prefix_tabel', 'claude_', 'comun', NULL, NULL, 'infrastructura asistentului (context, silențieri)'),
   -- funcțiile SECURITY DEFINER care ating tabelele de mai sus (amprenta corpului revizuit)
   ('functie', 'fn_executie_nod_drept', 'drept', '144649bae9a218b41b7e6df90cba5d9e', NULL, '20261201a; înlocuită aici'),
   ('functie', 'fn_executie_contract_drept', 'drept', '85a131c3aa59813b1a8cb8535c53e703', NULL, '20261203a; înlocuită aici'),
@@ -193,17 +267,31 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ('functie', 'fn_completare_aplica', 'garda', 'dc82ba4fea0071de3417f60a5c26e6cb', NULL, 'scrie completarea + proiectul (gardă)'),
   ('functie', '_completare_scrie_camp', 'garda', 'cc54cb28a6ee513323e22df607c51724', NULL, 'scrie proiectul (gardă)'),
   ('functie', '_completare_goleste_camp', 'garda', '62a817c812d0c932aa1d629aba13b541', NULL, 'scrie proiectul (gardă)'),
-  ('prefix_functie', 'fn_izo_', 'exclus', NULL, NULL, 'Izometrie: fn_izo_acces / izo_atribuiri pe proiect; scrierile în tabelele Execuției trec prin gardă'),
-  ('prefix_functie', 'fn_hr_', 'exclus', NULL, NULL, 'HR'),
-  ('prefix_functie', '_hr_', 'exclus', NULL, NULL, 'HR (funcții interne)'),
-  ('prefix_functie', 'fn_red_', 'exclus', NULL, NULL, 'Redări'),
-  ('prefix_functie', 'fn_sms_', 'exclus', NULL, NULL, 'SMS Redări'),
-  ('prefix_functie', 'fn_probe_', 'exclus', NULL, NULL, 'modulul Probe; scrierile în tabelele Execuției trec prin gardă'),
-  ('prefix_functie', 'probe_', 'exclus', NULL, NULL, 'modulul Probe (dreptul lui)'),
-  ('prefix_functie', 'fn_ocr_local_', 'exclus', NULL, NULL, 'OCR local: cale server (service_role)'),
-  ('prefix_functie', 'fn_polite_', 'exclus', NULL, NULL, 'Polițe (cron)'),
-  ('prefix_functie', 'fn_ofertare_', 'exclus', NULL, NULL, 'Ofertare'),
-  ('prefix_functie', 'fn_ctc_', 'exclus', NULL, NULL, 'CTC'),
+  -- r3: fibra optică (20261211a, creată pe clonă; identică cu branch-ul ei): RPC-urile cheamă fn_executie_fibra_drept pe proiectul
+  -- tronsonului / rândului înaintea oricărei citiri întoarse; fn_executie_fibra_drept doar delegă la fn_executie_nod_drept (înlocuită aici)
+  ('functie', 'fn_executie_fibra_drept', 'delega', '0fa635d3638845faa6b1f940328fb138', NULL, '20261211a: = fn_executie_nod_drept(proiect, scriere)'),
+  ('functie', 'fn_executie_fibra_raporteaza', 'verifica', '580771adb9b680ede692684c9d6dcc32', NULL, 'fn_executie_fibra_drept pe proiectul tronsonului'),
+  ('functie', 'fn_executie_fibra_anuleaza', 'verifica', '7393cca2ea848d5a5ff8ccdc1b7d2b9c', NULL, 'fn_executie_fibra_drept pe proiectul rândului (blocat)'),
+  ('functie', 'fn_executie_fibra_camereta_adauga', 'verifica', '80ad984b472e96ab8c9b914640615dbf', NULL, 'fn_executie_fibra_drept pe proiectul tronsonului'),
+  ('functie', 'fn_executie_fibra_camereta_stare', 'verifica', '2eed50fc739c8a6fd09efd8a94db134a', NULL, 'fn_executie_fibra_drept pe proiectul cameretei (blocată), înaintea răspunsului „conflict”'),
+  -- r3: creată direct în BD, fără condiția de proiect: poarta se pune aici (pasul 6b)
+  ('functie', 'fn_executie_swap_tevi_pozitie', 'poarta', '551affa41371b0ff3367b0ddebe9b603', NULL,
+     'schimbă pozițiile a două țevi din același pachet; scrierea trecea deja prin gardă, poarta oprește și citirile / mesajele despre țevile altor proiecte'),
+  -- r3: alte module, cu corpul revizuit (ce citesc / întorc și cu ce drept)
+  ('functie', 'fn_ai_inbox_poate_confirma', 'exclus', '1fcdef410eebff3c7ccdbb87acf8e08b', NULL,
+     'Inbox AI: predicat (adevărat / fals); la Execuție decide după alocarea pe șantierul proiectului (profile_sites), nu după lista nouă — decizie pentru Răzvan'),
+  ('functie', 'fn_next_numar_comanda_furnizor', 'exclus', 'b3161bc54a9f57c42b2b75b1c6896b44', NULL, 'Achiziții: numărul comenzii (citește doar codul proiectului)'),
+  ('functie', 'fn_hr_decizie_ataseaza_scan', 'exclus', 'ce4a148541e12f97bc800cff7e9c7077', NULL,
+     'HR (fn_hr_decizii_poate): completările propuse pe proiect le scrie prin gardă; întoarce starea deciziei'),
+  ('functie', 'fn_hr_decizie_inlocuieste_scan', 'exclus', '30b3655428515632a16e8cebe759bbb4', NULL, 'HR, doar owner'),
+  ('functie', 'fn_izo_flux_pdf_blocat', 'exclus', '222e14159a498d399bc0757b06743425', NULL, 'Izometrie: predicat pentru Storage (adevărat / fals)'),
+  ('functie', 'fn_izo_iesire_cu_aviz', 'exclus', '559542328c6b41803cb7b6499ac50ce2', NULL, 'Izometrie: fn_izo_citire pe proiectul tronsonului'),
+  ('functie', 'fn_izo_proiecte_protejate', 'exclus', 'ac8c3df60135585879bc3e8d5ded67a8', NULL, 'Izometrie: lista proiectelor cu Izometrie pornită (id, șantier, nivel), fără alte date'),
+  ('functie', 'fn_probe_creeaza_teren', 'exclus', 'a1989193d5136e7751106d63dead7aa1', NULL, 'Probe: probe_teren_drept; citește doar tronsoanele proiectului ales'),
+  ('functie', 'fn_red_pv_c_creeaza', 'exclus', 'a4ddfd572dc9c22e4889fd6309d9a3ba', NULL, 'Redări (red_v_tronson)'),
+  ('functie', 'fn_red_pv_c_neacoperite', 'exclus', 'ad42b1c7c1e4be49a2ea99a5eca9e3dd', NULL, 'Redări (red_v_tronson)'),
+  ('functie', 'fn_ofertare_source_pack_import', 'exclus', 'be897d73e8fb826b4e7a85a518b9b908', NULL, 'Ofertare (v_ofertare_source_pack_decizie_curenta)'),
+  ('functie', 'fn_ai_cost_lunar', 'exclus', '762830388fc554a9a81c679555a02572', NULL, 'raportul Cost AI (v_ai_cost_lunar): doar owner'),
   -- Storage
   ('bucket', 'executie-contracte', 'cale', NULL, NULL, '<proiect>/…, ordin-incepere|pccvi|probe-presiune/<proiect>/…; altă formă (ex. _nou/) = refuz pentru contul restrâns'),
   ('bucket', 'executie-borderouri', 'cale', NULL, NULL, 'sl_<proiect>/…'),
@@ -229,15 +317,23 @@ BEGIN
   -- inventarul însuși: fără dubluri, clase și părinți din lista albă
   IF EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() GROUP BY tip, obiect HAVING count(*) > 1)
      OR EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i
-                 WHERE NOT ((i.tip = 'tabel' AND i.clasa IN ('proiect', 'copil', 'drept', 'exclus'))
-                         OR (i.tip IN ('prefix_tabel', 'prefix_functie') AND i.clasa = 'exclus')
-                         OR (i.tip = 'functie' AND i.clasa IN ('drept', 'verifica', 'garda') AND i.cheie ~ '^[0-9a-f]{32}$')
+                 WHERE NOT ((i.tip = 'tabel' AND i.clasa IN ('proiect', 'copil', 'drept', 'exclus', 'comun'))
+                         OR (i.tip = 'prefix_tabel' AND i.clasa IN ('exclus', 'comun'))
+                         OR (i.tip = 'functie' AND i.clasa IN ('drept', 'verifica', 'garda', 'delega', 'poarta', 'exclus') AND i.cheie ~ '^[0-9a-f]{32}$')
                          OR (i.tip = 'bucket' AND i.clasa IN ('cale', 'tabel', 'drept', 'exclus')))
                     OR (i.clasa = 'copil') IS DISTINCT FROM (i.parinte IS NOT NULL)
-                    OR (i.clasa = 'copil' AND i.parinte NOT IN ('sl', 'bon', 'pachet', 'raport'))
+                    OR (i.clasa = 'copil' AND i.parinte NOT IN ('sl', 'bon', 'pachet', 'raport', 'cumulat', 'activitate'))
                     OR (i.clasa IN ('proiect', 'copil') AND i.cheie IS NULL)
+                    OR (i.tip = 'tabel' AND i.clasa = 'drept' AND i.cheie !~ '^fn_[a-z_]+$')
+                    -- poarta e cod scris pentru fiecare funcție în parte (pasul 6b): doar cele de acolo
+                    OR (i.clasa = 'poarta' AND i.obiect NOT IN ('fn_executie_swap_tevi_pozitie'))
                     OR i.motiv IS NULL OR i.motiv !~ '[^[:space:]]') THEN
     RAISE EXCEPTION '20261209a: inventarul are dubluri sau clase invalide';
+  END IF;
+  -- prefixele nu se suprapun (clasa unui tabel nu depinde de ordinea lor)
+  IF EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() a JOIN public.fn_executie_acces_inventar() b
+              ON a.tip = 'prefix_tabel' AND b.tip = 'prefix_tabel' AND a.obiect <> b.obiect AND starts_with(b.obiect, a.obiect)) THEN
+    RAISE EXCEPTION '20261209a: prefixe de tabel suprapuse in inventar';
   END IF;
   -- tabelele acoperite: există, tabel obișnuit, cheia întreagă, RLS PORNIT (o politică RESTRICTIVE pe un tabel fără RLS nu face nimic, L07)
   FOR r IN SELECT * FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'copil') ORDER BY obiect LOOP
@@ -259,6 +355,9 @@ BEGIN
                                  ('executie_bonuri_consum', 'id'), ('executie_bonuri_consum', 'proiect_id'),
                                  ('executie_pachete_lansare', 'id'), ('executie_pachete_lansare', 'proiect_id'),
                                  ('rapoarte_zilnice', 'id'), ('rapoarte_zilnice', 'site_id'), ('sites', 'id'), ('sites', 'proiect_id'),
+                                 ('executie_pachete_cumulat_final', 'id'), ('executie_pachete_cumulat_final', 'proiect_id'),
+                                 ('proiect_activitati', 'id'), ('proiect_activitati', 'proiect_id'),
+                                 ('executie_tevi', 'id'), ('executie_tevi', 'pachet_id'),
                                  ('documente_proiect', 'storage_path')) x(t, c) LOOP
     SELECT format_type(atttypid, atttypmod) INTO v_tip FROM pg_attribute
      WHERE attrelid = to_regclass('public.' || r.t) AND attname = r.c AND attnum > 0 AND NOT attisdropped;
@@ -289,9 +388,42 @@ BEGIN
      OR (SELECT count(*) FROM public.fn_executie_acces_inventar() WHERE tip = 'functie' AND clasa = 'drept') <> 5 THEN
     RAISE EXCEPTION '20261209a: functiile de drept (20261201a / 20261203a / 20261204a / 20261208a) lipsesc sau difera de amprenta revizuita: aplica-le intai / verifica';
   END IF;
+  -- funcțiile de drept DELEGATE (migrarea lor poate să nu fie aplicată): dacă există, exact corpul revizuit, DEFINER, search_path fix,
+  -- owner-ul migrării (altfel condiția de proiect n-ar ajunge la tabelele lor)
+  SELECT string_agg(p.oid::regprocedure::text, ', ') INTO v_lista
+    FROM public.fn_executie_acces_inventar() i JOIN pg_proc p ON p.proname = i.obiect AND p.pronamespace = 'public'::regnamespace
+   WHERE i.tip = 'functie' AND i.clasa = 'delega'
+     AND (md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM i.cheie OR p.prosecdef IS NOT TRUE
+          OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
+          OR p.prorettype IS DISTINCT FROM 'boolean'::regtype::oid);
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: functii de drept delegate cu alt corp / alte proprietati decat cele revizuite: %', v_lista;
+  END IF;
+  -- un tabel 'drept' care există cere funcția lui de drept (înlocuită aici sau delegată, din inventar); executie_acces_proiect (al acestei
+  -- migrări) nu există încă aici
+  SELECT string_agg(i.obiect, ', ' ORDER BY i.obiect) INTO v_lista
+    FROM public.fn_executie_acces_inventar() i
+   WHERE i.tip = 'tabel' AND i.clasa = 'drept' AND to_regclass('public.' || i.obiect) IS NOT NULL
+     AND (NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.proname = i.cheie AND p.pronamespace = 'public'::regnamespace)
+          OR NOT EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() f
+                          WHERE f.tip = 'functie' AND f.obiect = i.cheie AND f.clasa IN ('drept', 'delega')));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: tabele cu functie de drept lipsa sau necunoscuta: %', v_lista;
+  END IF;
+  -- poarta (pasul 6b): originalul, exact cel revizuit (L15), apelabil azi de authenticated
+  IF NOT EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i JOIN pg_proc p ON p.oid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                  WHERE i.tip = 'functie' AND i.obiect = 'fn_executie_swap_tevi_pozitie' AND i.clasa = 'poarta'
+                    AND md5(replace(p.prosrc, chr(13), '')) = i.cheie
+                    AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql')
+                    AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
+                    AND p.prorettype = 'void'::regtype::oid AND pg_get_userbyid(p.proowner) = current_user
+                    AND has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_executie_swap_tevi_pozitie') <> 1 THEN
+    RAISE EXCEPTION '20261209a: fn_executie_swap_tevi_pozitie lipseste, are alt corp decat cel revizuit sau alte proprietati (nu se inlocuieste)';
+  END IF;
 
-  -- CATALOG 1: tabelele care ajung la un proiect (FK tranzitiv din executie_proiecte + coloane întregi proiect_id). Din cele excluse nu se
-  -- mai coboară (modulul lor își are dreptul). Orice tabel găsit și neclasificat = refuz, cu lista.
+  -- CATALOG 1: tabelele care ajung la un proiect (FK tranzitiv din executie_proiecte + coloane întregi proiect_id). Din cele 'exclus' /
+  -- 'comun' nu se mai coboară (modulul lor își are dreptul / nu sunt date de proiect). Orice tabel găsit și neclasificat = refuz, cu lista.
   CREATE TEMP TABLE executie_acces_pre_tabele ON COMMIT DROP AS
   WITH RECURSIVE inv AS (SELECT * FROM public.fn_executie_acces_inventar()),
   noduri(rel) AS (
@@ -301,21 +433,38 @@ BEGIN
      WHERE a.attname = 'proiect_id' AND a.attnum > 0 AND NOT a.attisdropped AND a.atttypid IN ('int4'::regtype, 'int8'::regtype)
        AND c.relkind IN ('r', 'p') AND c.relnamespace = 'public'::regnamespace
     UNION
-    -- copiii unui nod NEexclus (din excluse nu se coboară)
+    -- copiii unui nod care nu e 'exclus' / 'comun' (pe nume sau pe prefix; numele are întâietate)
     SELECT k.conrelid FROM noduri n JOIN pg_constraint k ON k.confrelid = n.rel AND k.contype = 'f' AND k.conrelid <> n.rel
-     WHERE NOT EXISTS (SELECT 1 FROM pg_class c2 JOIN inv i ON (i.tip = 'tabel' AND i.clasa = 'exclus' AND i.obiect = c2.relname)
-                                                    OR (i.tip = 'prefix_tabel' AND starts_with(c2.relname, i.obiect))
-                        WHERE c2.oid = n.rel AND c2.relnamespace = 'public'::regnamespace))
+      JOIN pg_class c2 ON c2.oid = n.rel
+     WHERE coalesce((SELECT i.clasa FROM inv i WHERE i.tip = 'tabel' AND i.obiect = c2.relname AND c2.relnamespace = 'public'::regnamespace),
+                    (SELECT i.clasa FROM inv i WHERE i.tip = 'prefix_tabel' AND starts_with(c2.relname, i.obiect)
+                       AND c2.relnamespace = 'public'::regnamespace), '-') NOT IN ('exclus', 'comun'))
   SELECT n.rel, c.relname::text AS nume, c.relnamespace = 'public'::regnamespace AS e_public,
          coalesce((SELECT i.clasa FROM inv i WHERE i.tip = 'tabel' AND i.obiect = c.relname AND c.relnamespace = 'public'::regnamespace),
-                  (SELECT 'exclus' FROM inv i WHERE i.tip = 'prefix_tabel' AND starts_with(c.relname, i.obiect)
-                     AND c.relnamespace = 'public'::regnamespace LIMIT 1)) AS clasa
+                  (SELECT i.clasa FROM inv i WHERE i.tip = 'prefix_tabel' AND starts_with(c.relname, i.obiect)
+                     AND c.relnamespace = 'public'::regnamespace)) AS clasa
     FROM noduri n JOIN pg_class c ON c.oid = n.rel;
   SELECT string_agg(n.nspname || '.' || c.relname, ', ' ORDER BY n.nspname, c.relname) INTO v_lista
     FROM executie_acces_pre_tabele t JOIN pg_class c ON c.oid = t.rel JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE t.clasa IS NULL;
   IF v_lista IS NOT NULL THEN
     RAISE EXCEPTION '20261209a: tabele legate de proiecte si neclasificate in inventar (adauga-le cu clasa si motivul): %', v_lista;
+  END IF;
+  -- 'comun' = NU ajunge la date de proiect: afirmația se verifică pe TOATE tabelele clasei (pe nume sau pe prefix), nu doar pe cele găsite:
+  -- fără coloană întreagă proiect_id și fără cheie străină spre executie_proiecte sau spre un tabel acoperit (proiect / copil / drept)
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO v_lista
+    FROM pg_class c
+   WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p')
+     AND coalesce((SELECT i.clasa FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'tabel' AND i.obiect = c.relname),
+                  (SELECT i.clasa FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'prefix_tabel' AND starts_with(c.relname, i.obiect))) = 'comun'
+     AND (EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'proiect_id' AND a.attnum > 0 AND NOT a.attisdropped
+                   AND a.atttypid IN ('int4'::regtype, 'int8'::regtype))
+          OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = c.oid AND k.contype = 'f'
+                      AND (k.confrelid = 'public.executie_proiecte'::regclass
+                           OR k.confrelid IN (SELECT to_regclass('public.' || i.obiect) FROM public.fn_executie_acces_inventar() i
+                                               WHERE i.tip = 'tabel' AND i.clasa IN ('proiect', 'copil', 'drept')))));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: tabele clasificate „comun” care ajung totusi la date de proiect (proiect_id sau cheie straina spre un tabel acoperit): %', v_lista;
   END IF;
   -- CATALOG 2: vederile (și vederile peste vederi, tranzitiv) peste tabelele acoperite; refuz la cele citibile din API care NU citesc
   -- drept utilizatorul (fără security_invoker) sau sunt materializate
@@ -342,7 +491,7 @@ BEGIN
   END IF;
   -- CATALOG 3: funcțiile SECURITY DEFINER din public, apelabile de anon / authenticated, care numesc un tabel / o vedere acoperită.
   -- Căutarea pe nume e doar DETECȚIE (refuz la neclasificat sau la alt corp decât cel revizuit); o funcție care construiește numele
-  -- dinamic nu e găsită: limită scrisă în PR.
+  -- dinamic nu e găsită: limită scrisă în PR. r3: fără excluderi pe prefix — fiecare funcție găsită are numele și amprenta ei în listă.
   SELECT '\m(' || string_agg(DISTINCT x.nume, '|') || ')\M' INTO v_regex
     FROM (SELECT nume FROM executie_acces_pre_tabele WHERE clasa IN ('proiect', 'copil', 'drept') AND e_public
           UNION SELECT obiect FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'copil', 'drept')
@@ -353,8 +502,7 @@ BEGIN
      AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
      AND p.prosrc ~* v_regex
      AND NOT EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i
-                      WHERE (i.tip = 'functie' AND i.obiect = p.proname AND i.cheie = md5(replace(p.prosrc, chr(13), '')))
-                         OR (i.tip = 'prefix_functie' AND starts_with(p.proname::text, i.obiect)));
+                      WHERE i.tip = 'functie' AND i.obiect = p.proname AND i.cheie = md5(replace(p.prosrc, chr(13), '')));
   IF v_lista IS NOT NULL THEN
     RAISE EXCEPTION '20261209a: functii SECURITY DEFINER care ating tabele acoperite, neclasificate sau cu alt corp decat cel revizuit: %', v_lista;
   END IF;
@@ -429,6 +577,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     WHEN 'sl' THEN public.fn_executie_proiect_permis((SELECT s.proiect_id::bigint FROM public.executie_situatii_plata s WHERE s.id = p_id), p_scriere)
     WHEN 'bon' THEN public.fn_executie_proiect_permis((SELECT b.proiect_id::bigint FROM public.executie_bonuri_consum b WHERE b.id = p_id), p_scriere)
     WHEN 'pachet' THEN public.fn_executie_proiect_permis((SELECT k.proiect_id::bigint FROM public.executie_pachete_lansare k WHERE k.id = p_id), p_scriere)
+    WHEN 'cumulat' THEN public.fn_executie_proiect_permis((SELECT k.proiect_id::bigint FROM public.executie_pachete_cumulat_final k WHERE k.id = p_id), p_scriere)
+    WHEN 'activitate' THEN public.fn_executie_proiect_permis((SELECT a.proiect_id::bigint FROM public.proiect_activitati a WHERE a.id = p_id), p_scriere)
     WHEN 'raport' THEN public.fn_executie_acces_nerestrans()
       OR EXISTS (SELECT 1 FROM public.rapoarte_zilnice r JOIN public.sites si ON si.id = r.site_id
                   WHERE r.id = p_id AND (si.proiect_id IS NULL OR public.fn_executie_proiect_permis(si.proiect_id::bigint, p_scriere)))
@@ -444,6 +594,10 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   SELECT b.id::bigint FROM public.executie_bonuri_consum b, l WHERE p_tip = 'bon' AND b.proiect_id::bigint = ANY (l.ids)
   UNION ALL
   SELECT k.id::bigint FROM public.executie_pachete_lansare k, l WHERE p_tip = 'pachet' AND k.proiect_id::bigint = ANY (l.ids)
+  UNION ALL
+  SELECT k.id::bigint FROM public.executie_pachete_cumulat_final k, l WHERE p_tip = 'cumulat' AND k.proiect_id::bigint = ANY (l.ids)
+  UNION ALL
+  SELECT a.id::bigint FROM public.proiect_activitati a, l WHERE p_tip = 'activitate' AND a.proiect_id::bigint = ANY (l.ids)
   UNION ALL
   SELECT r.id::bigint FROM public.rapoarte_zilnice r JOIN public.sites si ON si.id = r.site_id CROSS JOIN l
    WHERE p_tip = 'raport' AND (si.proiect_id IS NULL OR si.proiect_id::bigint = ANY (l.ids))
@@ -625,7 +779,7 @@ BEGIN
     IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
     RETURN NEW;
   END IF;
-  IF TG_NARGS <> 2 OR TG_ARGV[0] NOT IN ('sl', 'bon', 'pachet', 'raport') THEN
+  IF TG_NARGS <> 2 OR TG_ARGV[0] NOT IN ('sl', 'bon', 'pachet', 'raport', 'cumulat', 'activitate') THEN
     RAISE EXCEPTION 'acces proiect: trigger configurat greșit pe %', TG_TABLE_NAME;
   END IF;
   IF TG_OP IN ('UPDATE', 'DELETE')
@@ -736,6 +890,41 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
                      AND (s.proiect_id IS NULL OR public.fn_executie_proiect_permis(s.proiect_id::bigint, false))))
 $f$;
 
+-- ── 6b. poarta pe proiect pentru fn_executie_swap_tevi_pozitie (creată direct în BD; amprenta verificată în preflight) ──
+-- Originalul NU se rescrie și nu se copiază: se mută neschimbat (corp, owner, drepturi, OID) în schema internă executie_acces_intern, la
+-- care clienții n-au USAGE (deci nu-l mai pot apela direct), iar în public rămâne poarta, cu același nume, aceiași parametri și același
+-- tip întors (apelurile din UI nu se schimbă). Revenirea îl mută înapoi.
+-- Ordinea (L06): poarta doar CITEȘTE țevile și pachetele (fără lock-uri), apoi originalul blochează cele două țevi FOR UPDATE și le scrie;
+-- scrierea trece prin trigger-ul de gardă al lui executie_tevi ('copil' pe pachet), care reverifică proiectul pe rândul curent (garanția
+-- finală, și la o mutare concurentă a țevii pe alt pachet).
+CREATE SCHEMA executie_acces_intern;
+COMMENT ON SCHEMA executie_acces_intern IS 'Execuție / acces pe proiect (20261209a): originalele funcțiilor cu poartă în public; fără USAGE pentru clienți.';
+REVOKE ALL ON SCHEMA executie_acces_intern FROM PUBLIC, anon, authenticated, service_role;
+ALTER FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) SET SCHEMA executie_acces_intern;
+CREATE FUNCTION public.fn_executie_swap_tevi_pozitie(p_id_a bigint, p_id_b bigint) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  -- cont restrâns: proiectul pachetului FIECĂREI țevi trebuie să fie pe lista lui, cu scriere; țeavă sau pachet inexistent = același
+  -- refuz (nu spune ce există la alt proiect, L09). Fără JWT sau cont nerestrâns: exact originalul (aceleași mesaje ca azi).
+  IF auth.uid() IS NOT NULL AND NOT public.fn_executie_acces_nerestrans()
+     AND EXISTS (SELECT 1 FROM unnest(ARRAY[p_id_a, p_id_b]) x(id)
+                  WHERE public.fn_executie_proiect_permis(
+                          (SELECT k.proiect_id::bigint FROM public.executie_tevi t JOIN public.executie_pachete_lansare k ON k.id = t.pachet_id
+                            WHERE t.id = x.id), true) IS NOT TRUE) THEN
+    RAISE EXCEPTION 'Execuție: nu ai drept de scriere pe acest proiect' USING ERRCODE = '42501';
+  END IF;
+  PERFORM executie_acces_intern.fn_executie_swap_tevi_pozitie(p_id_a, p_id_b);
+END $f$;
+-- drepturile porții: authenticated (ca originalul, cerut în preflight) + service_role dacă originalul îl avea; niciodată anon / PUBLIC
+REVOKE ALL ON FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) TO authenticated;
+DO $poarta$
+BEGIN
+  IF has_function_privilege('service_role', 'executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)', 'EXECUTE') THEN
+    GRANT EXECUTE ON FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) TO service_role;
+  END IF;
+END $poarta$;
+
 -- ── postcondiții ──
 DO $post$
 DECLARE v_rel oid := 'public.executie_acces_proiect'::regclass; r record; v_n integer;
@@ -835,6 +1024,25 @@ BEGIN
                  OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_auth
                  OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_service) THEN
     RAISE EXCEPTION '20261209a post: functiile de drept (corp / proprietati / EXECUTE)';
+  END IF;
+  -- poarta (6b): originalul neschimbat în schema internă, poarta revizuită în public, schema fără USAGE pentru clienți
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN public.fn_executie_acces_inventar() i ON i.tip = 'functie' AND i.obiect = 'fn_executie_swap_tevi_pozitie'
+                  WHERE p.oid = to_regprocedure('executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                    AND md5(replace(p.prosrc, chr(13), '')) = i.cheie AND p.prosecdef AND pg_get_userbyid(p.proowner) = current_user)
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                     AND md5(replace(p.prosrc, chr(13), '')) = '747c0be4a0fe0b29d16d470233d072e5'
+                     AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = current_user
+                     AND p.prorettype = 'void'::regtype::oid
+                     AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                     AND has_function_privilege('service_role', p.oid, 'EXECUTE')
+                         = has_function_privilege('service_role', 'executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)', 'EXECUTE'))
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_executie_swap_tevi_pozitie') <> 2
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'executie_acces_intern')) <> 1
+     OR EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'executie_acces_intern'))
+     OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) rl
+                 WHERE has_schema_privilege(rl, 'executie_acces_intern', 'USAGE') OR has_schema_privilege(rl, 'executie_acces_intern', 'CREATE'))
+     OR pg_get_userbyid((SELECT nspowner FROM pg_namespace WHERE nspname = 'executie_acces_intern')) IS DISTINCT FROM current_user THEN
+    RAISE EXCEPTION '20261209a post: poarta fn_executie_swap_tevi_pozitie (original / poarta / schema interna)';
   END IF;
   -- nicio dată: niciun cont nu e restrâns după migrare
   IF EXISTS (SELECT 1 FROM public.executie_acces_proiect) THEN
