@@ -19,6 +19,9 @@
 -- r5 (review r4): Inboxul AI — documentul lui B potrivit de clasificator pe p3 nu i se mai arată (nici rândul, nici fișierul), documentul lui
 --   B încă fără proiect se vede ca înainte; clasificarea e simulată ca edge-ul (service_role, fără JWT). Orice refuz verificat are
 --   SQLSTATE-ul ȘI fragmentul de mesaj așteptat (sau, la UPDATE prin REST, exact „OK 0” după ce aceeași probă scria înainte).
+-- r6 (review r5 P1): clasificatorul (edge citeste-orice r6) caută DOAR în candidații dați de BD pentru contul care a urcat
+--   (fn_executie_acces_candidati): T3c verifică lista față de specificație pentru fiecare cont + paritatea cu regula pe apelant, apoi că
+--   documentul lui B cu un indiciu doar pe p3 rămâne vizibil, fără proiect (fără semnal); plasa din r5 rămâne probată pe o scriere directă.
 -- NU presupune date reale: ia primul owner, primele 3 profiluri non-owner și cele 3 proiecte cu cele mai multe tabele acoperite cu date
 -- (dacă clona are doar 2, al treilea se creează în tranzacție), le leagă DOAR în tranzacție și scrie date FICTIVE (T-ACC*, TA-*, test-acces/…,
 -- NOD-TEST-ACCES, rapoarte pe 2001-01-01 / 1990–1998, mesajul TEST-ACCES-1).
@@ -101,6 +104,37 @@ $h$;
 CREATE FUNCTION pg_temp.t_nul_permis(p text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $h$
   SELECT p = ANY (ARRAY['grafic_activitati', 'rapoarte_zilnice', 'raport_distributie_linii'])
 $h$;
+-- r6 (T3c): rezultatele pașilor dintr-un savepoint, adunate într-un singur jsonb (trec prin \gset peste ROLLBACK TO)
+CREATE FUNCTION pg_temp.t_pune(p_k text, p_v jsonb) RETURNS void LANGUAGE plpgsql AS $h$
+BEGIN
+  PERFORM set_config('tacc.t3c', (coalesce(pg_temp.t_g('t3c'), '{}')::jsonb || jsonb_build_object(p_k, p_v))::text, true);
+END $h$;
+-- id-urile (sortate) dintr-un tablou de candidați [{id, nume, cod_intern}]
+CREATE FUNCTION pg_temp.t_ids(p jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
+  SELECT coalesce(jsonb_agg((e->>'id')::bigint ORDER BY (e->>'id')::bigint), '[]'::jsonb) FROM jsonb_array_elements(p) e
+$h$;
+-- edge-ul citeste-orice r6, simulat (service_role, fără JWT): candidații = fn_executie_acces_candidati(contul care a urcat RÂNDUL), apoi
+-- prima potrivire a indiciului (p_potriviri, în ordinea scorului) care e printre candidați; niciuna = rândul neatins (bestMatch → null).
+-- plpgsql: funcția din BD apare abia după migrare, corpul nu se validează la creare
+CREATE FUNCTION pg_temp.t_clasifica_r6(p_inbox bigint, p_potriviri bigint[]) RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE v_id bigint;
+BEGIN
+  SELECT x.id INTO v_id
+    FROM public.ai_documente_inbox j
+   CROSS JOIN LATERAL (SELECT (e->>'id')::bigint AS id FROM jsonb_array_elements(public.fn_executie_acces_candidati(j.uploadat_de)) e) x
+   WHERE j.id = p_inbox AND x.id = ANY (p_potriviri)
+   ORDER BY array_position(p_potriviri, x.id) LIMIT 1;
+  IF v_id IS NULL THEN RETURN 'fara potrivire'; END IF;
+  RETURN pg_temp.t_stare(format('UPDATE public.ai_documente_inbox SET entitate_tip = %L, entitate_id = %s, entitate_match_confidence = 88 WHERE id = %s',
+                                'proiect', v_id, p_inbox)) || ' ' || v_id;
+END $h$;
+-- ce vede contul curent din rândul de probă k al Inboxului: '<rânduri>:<fișiere>:<proiectul văzut sau ->'
+CREATE FUNCTION pg_temp.t_vede_ib(p_k text) RETURNS text LANGUAGE plpgsql AS $h$
+BEGIN
+  RETURN (SELECT count(*) FROM public.ai_documente_inbox i JOIN t_ib ON t_ib.id = i.id AND t_ib.k = p_k)::text
+      || ':' || (SELECT count(*) FROM storage.objects s JOIN t_ib ON t_ib.cale = s.name AND t_ib.k = p_k WHERE s.bucket_id = 'ai-documente-inbox')::text
+      || ':' || coalesce((SELECT i.entitate_id::text FROM public.ai_documente_inbox i JOIN t_ib ON t_ib.id = i.id AND t_ib.k = p_k), '-');
+END $h$;
 -- prima diferență între două amprente (mesajele de FAIL)
 CREATE FUNCTION pg_temp.t_dif(p_a jsonb, p_b jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT left(string_agg(format('%s.%s: %s / %s', s.k, x.k2, x.va, x.vb), '; ' ORDER BY s.k, x.k2), 900)
@@ -1003,42 +1037,121 @@ BEGIN
   RAISE NOTICE 'T3i OK (citiri refuzate %, scrieri refuzate %, documente proprii fără proiect vizibile %)', n_cit, n_scr, n_al;
 END $t$;
 
--- ── T3c: clasificarea (r5, review r4 P1), simulată ca edge-ul citeste-orice: service_role, fără JWT, scrie entitate_id + scorul pe
---   documentul lui B încă fără proiect. Potrivit pe p1 (în listă) = B îl vede; potrivit pe p3 (în afara listei) = B nu mai vede nici
---   rândul, nici fișierul (deci nici proiectul, nici scorul). Totul într-un savepoint anulat. ──
+-- ── T3c: clasificarea (r6, review r5 P1 — dispariția documentului propriu era ea însăși un semnal de existență), simulată ca edge-ul
+--   citeste-orice r6: service_role, fără JWT; candidații vin din BD, fn_executie_acces_candidati(contul care a urcat), iar potrivirea se
+--   face DOAR printre ei (pg_temp.t_clasifica_r6). Într-un savepoint anulat, cu p1, p2, p3 active:
+--   (a) candidații = SPECIFICAȚIA, nu funcția: A (nerestrâns) / owner / rând fără cont = toate proiectele active; B = {p1, p2} (p2 e
+--       'viewer': rândul potrivit pe el îi rămâne vizibil); C = {p1}; paritate cu regula pe apelant (ca B, fn_executie_proiect_permis pe
+--       fiecare proiect activ; L19); forma exactă [{id, nume, cod_intern}]; un client logat (B) sau anon NU cheamă funcția (42501, doar
+--       service_role); apoi p2 dezactivat → iese din candidații lui B și ai lui A (filtrul „activ” de azi al edge-ului);
+--   (b) documentul lui B fără proiect, cu un indiciu care potrivește DOAR p3: p3 nu e candidat → rândul rămâne fără proiect, iar B îl vede
+--       exact ca înainte (rândul și fișierul) — nu mai dispare, deci nu mai e semnal;
+--   (c) indiciu care potrivește p3 și p1 (p3 mai bine): potrivit pe p1 (candidat) → B îl vede, cu p1;
+--   (d) plasa din r5: o scriere care OCOLEȘTE lista (service_role direct pe p3, ca edge-ul vechi) tot ascunde rândul și fișierul. ──
 SAVEPOINT t3c;
+SELECT pg_temp.t_ca(NULL, 'postgres');
+SELECT pg_temp.t_pune('activ', to_jsonb(pg_temp.t_stare(format('UPDATE public.executie_proiecte SET activ = true WHERE id IN (%s, %s, %s) AND activ IS NOT TRUE',
+                                                               pg_temp.t_g('p1'), pg_temp.t_g('p2'), pg_temp.t_g('p3')))));
 SELECT pg_temp.t_ca(NULL, 'service_role');
-SELECT set_config('tacc.c1', pg_temp.t_stare(format('UPDATE public.ai_documente_inbox SET entitate_tip = %L, entitate_id = %s, entitate_match_confidence = 77 WHERE id = %s',
-                                                      'proiect', pg_temp.t_g('p1'), coalesce((SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b'), -1))), true);
+SELECT pg_temp.t_pune('tot', (SELECT coalesce(jsonb_agg(e.id::bigint ORDER BY e.id), '[]'::jsonb) FROM public.executie_proiecte e WHERE e.activ IS TRUE));
+SELECT pg_temp.t_pune('cand', jsonb_build_object(
+         'a', public.fn_executie_acces_candidati(pg_temp.t_g('a')::uuid), 'b', public.fn_executie_acces_candidati(pg_temp.t_g('b')::uuid),
+         'c', public.fn_executie_acces_candidati(pg_temp.t_g('c')::uuid), 'own', public.fn_executie_acces_candidati(pg_temp.t_g('own')::uuid),
+         'nul', public.fn_executie_acces_candidati(NULL)));
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
-SELECT set_config('tacc.c1v', (SELECT count(*) FROM public.ai_documente_inbox i JOIN t_ib ON t_ib.id = i.id AND t_ib.k = 'nul_al_lui_b')::text, true);
+SELECT pg_temp.t_pune('permis_b', (SELECT coalesce(jsonb_agg(t.x ORDER BY t.x), '[]'::jsonb)
+                                     FROM (SELECT v::bigint AS x FROM jsonb_array_elements_text(pg_temp.t_g('t3c')::jsonb->'tot') v) t
+                                    WHERE public.fn_executie_proiect_permis(t.x, false)));
+SELECT pg_temp.t_pune('acl_b', to_jsonb(pg_temp.t_proba(format('SELECT public.fn_executie_acces_candidati(%L::uuid)', pg_temp.t_g('a')))));
+SELECT pg_temp.t_ca(NULL, 'anon');
+SELECT pg_temp.t_pune('acl_anon', to_jsonb(pg_temp.t_proba(format('SELECT public.fn_executie_acces_candidati(%L::uuid)', pg_temp.t_g('b')))));
+-- filtrul „activ”: p2 dezactivat → iese din candidații lui B și ai lui A
+SELECT pg_temp.t_ca(NULL, 'postgres');
+SELECT pg_temp.t_pune('inactiv', to_jsonb(pg_temp.t_stare(format('UPDATE public.executie_proiecte SET activ = false WHERE id = %s', pg_temp.t_g('p2')))));
 SELECT pg_temp.t_ca(NULL, 'service_role');
-SELECT set_config('tacc.c3', pg_temp.t_stare(format('UPDATE public.ai_documente_inbox SET entitate_id = %s, entitate_match_confidence = 88 WHERE id = %s',
-                                                      pg_temp.t_g('p3'), coalesce((SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b'), -1))), true);
+SELECT pg_temp.t_pune('tot2', (SELECT coalesce(jsonb_agg(e.id::bigint ORDER BY e.id), '[]'::jsonb) FROM public.executie_proiecte e WHERE e.activ IS TRUE));
+SELECT pg_temp.t_pune('cand2', jsonb_build_object('a', public.fn_executie_acces_candidati(pg_temp.t_g('a')::uuid),
+                                                  'b', public.fn_executie_acces_candidati(pg_temp.t_g('b')::uuid)));
+-- (b) indiciu doar pe p3
+SELECT pg_temp.t_ca(NULL, 'service_role');
+SELECT pg_temp.t_pune('b_clas', to_jsonb(pg_temp.t_clasifica_r6(coalesce((SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b'), -1),
+                                                                ARRAY[pg_temp.t_g('p3')::bigint])));
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
-SELECT set_config('tacc.c3v', (SELECT count(*) FROM public.ai_documente_inbox i JOIN t_ib ON t_ib.id = i.id AND t_ib.k = 'nul_al_lui_b')::text
-                              || ':' || (SELECT count(*) FROM storage.objects s JOIN t_ib ON t_ib.cale = s.name AND t_ib.k = 'nul_al_lui_b'
-                                          WHERE s.bucket_id = 'ai-documente-inbox')::text, true);
--- set_config din savepoint se anulează odată cu el: rezultatele trec prin variabile psql (\gset), apoi înapoi în tacc.* după ROLLBACK TO
+SELECT pg_temp.t_pune('b_vede', to_jsonb(pg_temp.t_vede_ib('nul_al_lui_b')));
+-- (c) indiciu pe p3 și p1
+SELECT pg_temp.t_ca(NULL, 'service_role');
+SELECT pg_temp.t_pune('c_clas', to_jsonb(pg_temp.t_clasifica_r6(coalesce((SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b'), -1),
+                                                                ARRAY[pg_temp.t_g('p3')::bigint, pg_temp.t_g('p1')::bigint])));
+SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
+SELECT pg_temp.t_pune('c_vede', to_jsonb(pg_temp.t_vede_ib('nul_al_lui_b')));
+-- (d) plasa: scriere directă pe p3, ocolind lista
+SELECT pg_temp.t_ca(NULL, 'service_role');
+SELECT pg_temp.t_pune('d_clas', to_jsonb(pg_temp.t_stare(format('UPDATE public.ai_documente_inbox SET entitate_id = %s, entitate_match_confidence = 88 WHERE id = %s',
+                                                                 pg_temp.t_g('p3'), coalesce((SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b'), -1)))));
+SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
+SELECT pg_temp.t_pune('d_vede', to_jsonb(pg_temp.t_vede_ib('nul_al_lui_b')));
+-- set_config din savepoint se anulează odată cu el: rezultatele trec printr-o variabilă psql (\gset), apoi înapoi în tacc.t3c după ROLLBACK TO
 -- (\set de mai jos nu schimbă nimic: doar golește bufferul, ca \gset să primească o singură interogare și în proba locală PGlite)
 \set ON_ERROR_STOP 1
-SELECT coalesce(pg_temp.t_g('c1'), '') AS t3c_c1, coalesce(pg_temp.t_g('c1v'), '') AS t3c_c1v,
-       coalesce(pg_temp.t_g('c3'), '') AS t3c_c3, coalesce(pg_temp.t_g('c3v'), '') AS t3c_c3v
+SELECT coalesce(pg_temp.t_g('t3c'), '{}') AS t3c_json
 \gset
 ROLLBACK TO SAVEPOINT t3c;
-SELECT set_config('tacc.c1', :'t3c_c1', true), set_config('tacc.c1v', :'t3c_c1v', true), set_config('tacc.c3', :'t3c_c3', true), set_config('tacc.c3v', :'t3c_c3v', true);
-SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
+SELECT set_config('tacc.t3c', :'t3c_json', true);
+SELECT pg_temp.t_ca(NULL, 'postgres');
 DO $t$
-DECLARE c1 text := pg_temp.t_g('c1'); c1v text := pg_temp.t_g('c1v'); c3 text := pg_temp.t_g('c3'); c3v text := pg_temp.t_g('c3v');
-  v0 text := pg_temp.t_g('mb0')::jsonb->'inbox'->'nul_al_lui_b'->>'vede';
+DECLARE r jsonb := pg_temp.t_g('t3c')::jsonb; p1 bigint := pg_temp.t_g('p1')::bigint; p2 bigint := pg_temp.t_g('p2')::bigint; p3 bigint := pg_temp.t_g('p3')::bigint;
+  tot jsonb := r->'tot'; spec_b jsonb; k text; inainte text;
+  v0 jsonb := pg_temp.t_g('mb0')::jsonb->'inbox'->'nul_al_lui_b';
 BEGIN
-  IF (SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b') IS NULL OR coalesce(v0, '0') = '0' THEN
+  IF coalesce(r->>'activ', '') NOT LIKE 'OK %' OR coalesce(r->>'inactiv', '') IS DISTINCT FROM 'OK 1' THEN
+    RAISE EXCEPTION 'T3c FAIL: proiectele de probă nu s-au putut (de)activa în savepoint: % / %', r->>'activ', r->>'inactiv';
+  END IF;
+  IF tot IS NULL OR NOT (tot @> to_jsonb(p1) AND tot @> to_jsonb(p2) AND tot @> to_jsonb(p3))
+     OR r->'tot2' IS DISTINCT FROM (SELECT coalesce(jsonb_agg(v::bigint ORDER BY v::bigint), '[]'::jsonb) FROM jsonb_array_elements_text(tot) v WHERE v::bigint <> p2) THEN
+    RAISE EXCEPTION 'T3c FAIL: starea „activ” din savepoint (p1, p2, p3 active, apoi p2 inactiv): % / %', tot, r->'tot2';
+  END IF;
+  -- (a) specificația: B are pe listă p1 (editor) + p2 (viewer) → {p1, p2}; după dezactivarea lui p2 → {p1}; C are p1
+  spec_b := (SELECT coalesce(jsonb_agg(t.x ORDER BY t.x), '[]'::jsonb) FROM (SELECT v::bigint AS x FROM jsonb_array_elements_text(tot) v) t WHERE t.x IN (p1, p2));
+  IF spec_b IS DISTINCT FROM (SELECT jsonb_agg(x ORDER BY x) FROM unnest(ARRAY[p1, p2]) x) THEN RAISE EXCEPTION 'T3c FAIL: oracolul lui B (%)', spec_b; END IF;
+  FOREACH k IN ARRAY ARRAY['a', 'own', 'nul'] LOOP
+    IF pg_temp.t_ids(r->'cand'->k) IS DISTINCT FROM tot THEN
+      RAISE EXCEPTION 'T3c FAIL: candidații contului % (nerestrâns / owner / fără cont) nu sunt toate proiectele active: % / %', k, pg_temp.t_ids(r->'cand'->k), tot;
+    END IF;
+  END LOOP;
+  IF pg_temp.t_ids(r->'cand'->'b') IS DISTINCT FROM spec_b THEN RAISE EXCEPTION 'T3c FAIL: candidații lui B: % (așteptat %)', pg_temp.t_ids(r->'cand'->'b'), spec_b; END IF;
+  IF pg_temp.t_ids(r->'cand'->'c') IS DISTINCT FROM jsonb_build_array(p1) THEN RAISE EXCEPTION 'T3c FAIL: candidații lui C: %', pg_temp.t_ids(r->'cand'->'c'); END IF;
+  IF pg_temp.t_ids(r->'cand2'->'b') IS DISTINCT FROM jsonb_build_array(p1) OR pg_temp.t_ids(r->'cand2'->'a') IS DISTINCT FROM r->'tot2' THEN
+    RAISE EXCEPTION 'T3c FAIL: candidații contului după dezactivarea lui p2 (filtrul activ): B % / A % (active %)',
+      pg_temp.t_ids(r->'cand2'->'b'), pg_temp.t_ids(r->'cand2'->'a'), r->'tot2';
+  END IF;
+  IF r->'permis_b' IS DISTINCT FROM pg_temp.t_ids(r->'cand'->'b') THEN
+    RAISE EXCEPTION 'T3c FAIL: paritate cont / apelant (L19): candidați % / permise ca B %', pg_temp.t_ids(r->'cand'->'b'), r->'permis_b';
+  END IF;
+  IF jsonb_typeof(r->'cand'->'a') IS DISTINCT FROM 'array'
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(r->'cand'->'a') e
+                 WHERE jsonb_typeof(e) <> 'object' OR (SELECT array_agg(x ORDER BY x) FROM jsonb_object_keys(e) x) IS DISTINCT FROM ARRAY['cod_intern', 'id', 'nume']
+                    OR jsonb_typeof(e->'id') <> 'number') THEN
+    RAISE EXCEPTION 'T3c FAIL: forma candidaților (așteptat [{id, nume, cod_intern}]): %', left((r->'cand'->'a')::text, 300);
+  END IF;
+  IF coalesce(r->>'acl_b', '') NOT LIKE '42501 permission denied for function fn_executie_acces_candidati%'
+     OR coalesce(r->>'acl_anon', '') NOT LIKE '42501 permission denied for function fn_executie_acces_candidati%' THEN
+    RAISE EXCEPTION 'T3c FAIL: un client (B / anon) cheamă candidații: % / %', r->>'acl_b', r->>'acl_anon';
+  END IF;
+  -- (b)(c)(d) pe documentul lui B fără proiect
+  IF (SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b') IS NULL OR coalesce((v0->>'vede')::integer, 0) = 0 THEN
     PERFORM pg_temp.t_neprobat('T3c clasificarea: rândul de probă al lui B fără proiect lipsește sau nu era vizibil nici înainte');
+    RAISE NOTICE 'T3c OK (doar candidații; clasificarea NEPROBATĂ)';
   ELSE
-    IF c1 IS DISTINCT FROM 'OK 1' OR c3 IS DISTINCT FROM 'OK 1' THEN RAISE EXCEPTION 'T3c FAIL: clasificarea simulată (service_role) nu a scris: % / %', c1, c3; END IF;
-    IF c1v IS DISTINCT FROM '1' THEN RAISE EXCEPTION 'T3c FAIL: documentul lui B potrivit pe p1 (în listă) nu mai e vizibil: %', c1v; END IF;
-    IF c3v IS DISTINCT FROM '0:0' THEN RAISE EXCEPTION 'T3c FAIL: documentul lui B potrivit pe p3 se vede (rând : fișier) = %', c3v; END IF;
-    RAISE NOTICE 'T3c OK (potrivit pe p1 vizibil; potrivit pe p3 ascuns: rândul, deci proiectul și scorul, și fișierul)';
+    inainte := (v0->>'vede') || ':' || coalesce(v0->>'obiect', '?');
+    IF r->>'b_clas' IS DISTINCT FROM 'fara potrivire' THEN RAISE EXCEPTION 'T3c FAIL: indiciul doar pe p3 a fost potrivit pe un candidat: %', r->>'b_clas'; END IF;
+    IF r->>'b_vede' IS DISTINCT FROM inainte || ':-' THEN
+      RAISE EXCEPTION 'T3c FAIL: documentul lui B (indiciu doar pe p3) nu se vede ca înainte: % (înainte %)', r->>'b_vede', inainte;
+    END IF;
+    IF r->>'c_clas' IS DISTINCT FROM 'OK 1 ' || p1 THEN RAISE EXCEPTION 'T3c FAIL: indiciul pe p3 + p1 nu a fost potrivit pe p1: %', r->>'c_clas'; END IF;
+    IF r->>'c_vede' IS DISTINCT FROM inainte || ':' || p1 THEN RAISE EXCEPTION 'T3c FAIL: documentul lui B potrivit pe p1 nu se vede: %', r->>'c_vede'; END IF;
+    IF r->>'d_clas' IS DISTINCT FROM 'OK 1' THEN RAISE EXCEPTION 'T3c FAIL: scrierea directă (plasa) nu a scris: %', r->>'d_clas'; END IF;
+    IF r->>'d_vede' IS DISTINCT FROM '0:0:-' THEN RAISE EXCEPTION 'T3c FAIL: plasa r5: documentul lui B scris direct pe p3 se vede: %', r->>'d_vede'; END IF;
+    RAISE NOTICE 'T3c OK (candidații = specificația pentru A, B, C, owner, fără cont; indiciu doar pe p3 = documentul rămâne vizibil, fără proiect; p3 + p1 = potrivit pe p1; plasa r5 ascunde scrierea directă pe p3)';
   END IF;
 END $t$;
 
@@ -1225,6 +1338,10 @@ SELECT set_config('gazpet.revenire_20261209a', 'SCOATE_ACCES_PROIECT:' || txid_c
 \ir ../supabase/revenire/20261209a_executie_acces_proiect_ROLLBACK.sql
 DO $t$ BEGIN
   IF to_regclass('public.executie_acces_proiect') IS NOT NULL
+     -- r6: și funcțiile noi (candidații clasificatorului + regula pe cont): fără ele edge-ul citeste-orice revine la calea de azi
+     OR to_regprocedure('public.fn_executie_acces_candidati(uuid)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_nerestrans_cont(uuid)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_lista_cont(uuid, boolean)') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_policy WHERE polname LIKE 'executie\_acces\_%')
      OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda')
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_executie_nod_drept(bigint, boolean)'::regprocedure), chr(13), '')) <> '144649bae9a218b41b7e6df90cba5d9e'
@@ -1257,6 +1374,8 @@ SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' 
 \ir ../supabase/migrations/20261209a_executie_acces_proiect.sql
 DO $t$ BEGIN
   IF to_regclass('public.executie_acces_proiect') IS NULL
+     OR to_regprocedure('public.fn_executie_acces_candidati(uuid)') IS NULL
+     OR NOT has_function_privilege('service_role', 'public.fn_executie_acces_candidati(uuid)', 'EXECUTE')
      OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda') <> pg_temp.t_g('ngarzi')::integer
      OR to_regprocedure('executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)') IS NULL THEN
     RAISE EXCEPTION 'T8 FAIL: re-aplicarea';

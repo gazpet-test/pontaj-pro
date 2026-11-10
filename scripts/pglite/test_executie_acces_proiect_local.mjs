@@ -7,6 +7,8 @@
 // r3: fn_executie_swap_tevi_pozitie e creată direct în BD și nu se copiază în repo: schema falsă are un ÎNLOCUITOR cu același contract, iar
 // amprenta lui ia locul amprentei reale în textul migrării (doar aici, în test). Fibra optică (20261211a) intră în forma minimă: funcția ei de
 // drept delegată, exact ca în migrarea ei (amprenta se verifică), și un tabel 'drept' cu politica ei.
+// r6: mutanții M26–M31 pe candidații clasificatorului (fn_executie_acces_candidati): lista contului ignorată, lista de scriere în loc de
+// citire, proiectele inactive incluse, EXECUTE pentru authenticated, rândul fără cont fără candidați, revenirea care uită funcția.
 import { PGlite } from '@electric-sql/pglite'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -195,9 +197,10 @@ raport('M1 garda de scriere dezactivată pe rândul nou', await scenariu('m1', {
   mutMig: t => inlocuieste(t, 'IF NOT (v_nul AND v_nou IS NULL) AND NOT public.fn_executie_proiect_permis(v_nou, true) THEN', 'IF false THEN'),
 }), false, /T3 FAIL/)
 raport('M2 toată lumea „nerestrânsă”', await scenariu('m2', {
-  mutMig: t => inlocuieste(t, `  SELECT auth.uid() IS NOT NULL
-    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
-         OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a`, `  SELECT auth.uid() IS NOT NULL
+  // r6: regula stă în fn_executie_acces_nerestrans_cont (cont dat); varianta pe apelant o cheamă
+  mutMig: t => inlocuieste(t, `  SELECT p_profile IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile AND p.is_owner IS TRUE)
+         OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a`, `  SELECT p_profile IS NOT NULL
     AND (true
          OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a`),
 }), false, /T3 FAIL/)
@@ -303,6 +306,28 @@ raport('M25 antetul raportului: UPDATE direct pe p2 nefiltrat pe REST (altă ero
     `    EXECUTE format('CREATE POLICY executie_acces_modifica ON public.%I AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', r.obiect,
                    CASE WHEN r.obiect = 'rapoarte_zilnice' THEN v_scr || ' OR true' ELSE v_scr END, v_scr);`),
 }), false, /T3 FAIL[^\n]*rapoarte_zilnice|T3r FAIL[^\n]*REST/)
+
+// r6: review r5 P1 — clasificatorul caută doar în proiectele permise celui care a urcat (fn_executie_acces_candidati)
+const CAND_FILTRU = `     AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids))\n$f$;`
+raport('M26 candidații ignoră lista contului (clasificatorul ar căuta iar în toate proiectele)', await scenariu('m26', {
+  mutMig: t => inlocuieste(t, CAND_FILTRU, `\n$f$;`),
+}), false, /T3c FAIL: candidații lui B/)
+raport('M27 candidații pe lista de SCRIERE (proiectul „viewer” n-ar mai fi candidat)', await scenariu('m27', {
+  mutMig: t => inlocuieste(t, `public.fn_executie_acces_lista_cont(p_profile, false) AS ids)`, `public.fn_executie_acces_lista_cont(p_profile, true) AS ids)`),
+}), false, /T3c FAIL: candidații lui B/)
+raport('M28 candidații și pentru proiectele inactive', await scenariu('m28', {
+  mutMig: t => inlocuieste(t, `   WHERE e.activ IS TRUE\n     AND (p_profile IS NULL`, `   WHERE true\n     AND (p_profile IS NULL`),
+}), false, /T3c FAIL: candidații contului/)
+raport('M29 candidații apelabili de un client logat (contul e parametru)', await scenariu('m29', {
+  mutMig: t => inlocuieste(t, `GRANT EXECUTE ON FUNCTION public.fn_executie_acces_candidati(uuid) TO service_role;`,
+    `GRANT EXECUTE ON FUNCTION public.fn_executie_acces_candidati(uuid) TO service_role, authenticated;`),
+}), false, /functii noi \(definer/)
+raport('M30 candidații: contul fără rând ia „nimic” în loc de „toate” (rândurile fără cont n-ar mai fi potrivite)', await scenariu('m30', {
+  mutMig: t => inlocuieste(t, CAND_FILTRU, `     AND (c.tot OR e.id = ANY (c.ids))\n$f$;`),
+}), false, /T3c FAIL: candidații contului nul/)
+raport('M31 revenirea uită funcția candidaților', await scenariu('m31', {
+  mutRev: t => inlocuieste(t, `  DROP FUNCTION public.fn_executie_acces_candidati(uuid);`, ''),
+}), false, /revenire post: au ramas obiecte|starea nu e cea/)
 
 // 3) preflight-ul refuză o schemă care ar face restricția falsă sau un inventar incomplet
 raport('P1 vedere cunoscută „definer” peste proiecte', await scenariu('p1', { doarMigrarea: true,

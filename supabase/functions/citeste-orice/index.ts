@@ -1,4 +1,6 @@
-// citeste-orice v18 (20.08.2026) — AI Document Router
+// citeste-orice v19 (r6 PR #1050, migrarea 20261209a) — AI Document Router
+// v19: potrivirea pe proiect (Execuție) caută DOAR în proiectele permise contului care a urcat documentul (lista din BD,
+//   fn_executie_acces_candidati; potrivire.ts). Fără funcția din BD = ca în v18. Răspunsul spune ce listă s-a folosit (candidati_proiect).
 // v17: campuri structurate HR (CNP, IBAN...) pentru wizard „Angajat nou".
 // v18: destinația UPA (unități protejate, plafonul lunar deductibil):
 //   - respectă modul_tinta PRE-SETAT la upload (panoul UPA / context execuție)
@@ -16,6 +18,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { esteApelIntern } from '../_shared/poartaIntern.ts'
 import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { clasificareUtila } from '../_shared/structuraExtrageri.ts'
+import { bestMatch, plateNorm, potrivesteProiect } from './potrivire.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ai-documente-inbox'
@@ -32,8 +35,6 @@ const DEST_TABEL: Record<string, string> = {
   financiar: 'contracte_subcontract_facturi',
   upa: 'upa_achizitii',
 }
-
-const STOP = new Set(['punere','siguranta','conducte','conducta','transport','gaze','naturale','natural','zona','judetul','jud','judet','subtraversare','subtrav','traversare','aeriana','raul','rau','cuplare','distributie','transgaz','lucrari','lucrare','santier','din','sau','catre','godevilabila','transformare','localitatii','localitate','racord','srm','cfi','pis','parau','paru'])
 
 const PROMPT = `Esti un asistent care sorteaza documente pentru o firma romaneasca de constructii conducte de gaze (Gazpet Instal).
 Analizeaza documentul si stabileste UNDE trebuie sa mearga in sistemul intern.
@@ -100,28 +101,6 @@ function guessMime(nume: string, mime: string | null): string {
   if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg'
   return 'application/pdf'
 }
-
-function norm(s: string): string { return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() }
-function words(s: string, useStop = true): string[] { return norm(s).split(' ').filter(w => w.length >= 3 && (!useStop || !STOP.has(w))) }
-function scorMatch(hint: string, target: string, useStop = true): { score: number, hits: number, maxLen: number } {
-  const hw = new Set(words(hint, useStop)); const tw = words(target, useStop)
-  if (!hw.size || !tw.length) return { score: 0, hits: 0, maxLen: 0 }
-  let hit = 0, maxLen = 0
-  for (const w of tw) if (hw.has(w)) { hit++; if (w.length > maxLen) maxLen = w.length }
-  const denom = Math.min(tw.length, Math.max(hw.size, 1))
-  return { score: hit / Math.max(denom, 1), hits: hit, maxLen }
-}
-function bestMatch(hint: string, lista: any[], campuri: string[], useStop = true): { id: any, conf: number } | null {
-  let best: any = null, bestScore = 0, bestHits = 0, bestMaxLen = 0
-  for (const item of (lista || [])) {
-    let s = 0, h = 0, ml = 0
-    for (const c of campuri) { const r = scorMatch(hint, item[c] || '', useStop); if (r.score > s) { s = r.score; h = r.hits; ml = r.maxLen } }
-    if (s > bestScore) { bestScore = s; bestHits = h; bestMaxLen = ml; best = item }
-  }
-  if (best && bestScore >= 0.5 && (bestHits >= 2 || bestMaxLen >= 6)) return { id: best.id, conf: Math.round(bestScore * 100) }
-  return null
-}
-function plateNorm(s: string): string { return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '') }
 
 async function callClaude(base64: string, mime: string, fisierNume: string): Promise<{ ok: boolean, data?: any, err?: string }> {
   const isImg = mime.startsWith('image/')
@@ -207,10 +186,15 @@ Deno.serve(async (req: Request) => {
     const tipDoc: string = parsed.tip_document || 'altul'
 
     let entitateTip = row.entitate_tip, entitateId = row.entitate_id, matchConf = row.entitate_match_confidence
+    let candidatiProiect: 'bd' | 'compat' | null = null
     if (!entitateId && parsed.entitate_hint) {
       if (modulFinal === 'executie') {
-        const { data: proiecte } = await supabase.from('executie_proiecte').select('id,nume,cod_intern').eq('activ', true)
-        const m = bestMatch(parsed.entitate_hint, proiecte || [], ['nume', 'cod_intern'], true)
+        // v19 (r6, 20261209a): candidații = DOAR proiectele permise celui care a urcat documentul (lista o dă BD); fără funcția din BD
+        // (migrare neaplicată) = proiectele active, ca azi. Lista necitibilă = eroare pe rând, nu „toate proiectele”.
+        const p = await potrivesteProiect(supabase, row.uploadat_de ?? null, parsed.entitate_hint)
+        if (!p.ok) return await eroare(p.err)
+        candidatiProiect = p.sursa
+        const m = p.potrivire
         if (m) { entitateTip = 'proiect'; entitateId = m.id; matchConf = m.conf }
       } else if (modulFinal === 'hr') {
         const { data: angajati } = await supabase.from('employees').select('id,name').or('termination_date.is.null,termination_date.gt.' + new Date().toISOString().split('T')[0])
@@ -277,7 +261,7 @@ Deno.serve(async (req: Request) => {
     }).eq('id', inboxId)
     if (upErr) return await eroare('Update inbox: ' + upErr.message)
 
-    return new Response(JSON.stringify({ ok: true, inbox_id: inboxId, modul: modulFinal, tip_document: tipDoc, entitate_tip: entitateTip, entitate_id: entitateId, match_confidence: matchConf, confidence: parsed.confidence, titlu: parsed.titlu_scurt }), { headers: CORS })
+    return new Response(JSON.stringify({ ok: true, inbox_id: inboxId, modul: modulFinal, tip_document: tipDoc, entitate_tip: entitateTip, entitate_id: entitateId, match_confidence: matchConf, confidence: parsed.confidence, titlu: parsed.titlu_scurt, candidati_proiect: candidatiProiect }), { headers: CORS })
   } catch (e: any) {
     return await eroare('Eroare neasteptata: ' + String(e?.message || e))
   }

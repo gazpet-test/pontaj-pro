@@ -8,13 +8,17 @@
 -- pentru Execuție) urmează lista lui; conturile nerestrânse: neschimbat.
 -- r5 (review r4 P1): excepția „documentul urcat chiar de cont” ține doar cât rândul NU are proiect (entitate_id NULL); după ce
 -- clasificatorul AI îl potrivește pe un proiect din afara listei, rândul și fișierul nu i se mai arată (fără proiect, scor, id).
+-- r6 (review r5 P1: dispariția era ea însăși un semnal de existență): clasificatorul (edge citeste-orice, service_role) caută potrivirea
+-- DOAR în proiectele permise celui care a urcat documentul, listă dată de BD: fn_executie_acces_candidati(cont) (doar service_role).
+-- Regula pe cont e una singură: fn_executie_acces_nerestrans_cont / fn_executie_acces_lista_cont, pe care și variantele pe apelant
+-- (auth.uid()) le cheamă (L19). Plasa din r5 rămâne, dar pentru un cont restrâns nu mai are ce ascunde (nu mai e observabilă).
 --
 -- Regula (o singură definiție, L19):
 --   * cont FĂRĂ niciun rând în executie_acces_proiect = ca azi (vede / scrie ce îi dă modulul);
 --   * cont CU cel puțin un rând = doar proiectele listate; nivel 'viewer' = doar citire pe acel proiect, 'editor' = citire + scriere
 --     (în limita dreptului pe modul: un 'editor' pe proiect cu modulul 'viewer' tot nu scrie);
 --   * owner (profiles.is_owner) = tot, indiferent de rânduri.
---   „Restrâns” e decis într-un singur loc, fn_executie_acces_nerestrans() (varianta B — bifă explicită „restrâns” pe cont — schimbă doar
+--   „Restrâns” e decis într-un singur loc, fn_executie_acces_nerestrans_cont(cont) (r6; fn_executie_acces_nerestrans() = același, pe apelant) (varianta B — bifă explicită „restrâns” pe cont — schimbă doar
 --   această funcție și RPC-ul de setare). fn_executie_acces_lista(scriere) = proiectele permise; fn_executie_proiect_permis(proiect, scriere)
 --   = nerestrans OR proiect în listă. Politicile le folosesc în forma „(SELECT …)” (o evaluare pe interogare, nu pe rând).
 --
@@ -577,21 +581,34 @@ CREATE FUNCTION public.fn_executie_acces_e_owner() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   SELECT auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
 $f$;
--- adevărat = apelantul NU e restrâns pe proiect (owner sau cont fără niciun rând). Fără auth.uid() = fals (L08).
+-- r6: regula pe un CONT DAT (o singură definiție, L19). Variantele pe apelant de mai jos (auth.uid()) o cheamă cu auth.uid(); clasificatorul
+-- Inboxului AI (edge, service_role, fără JWT) o folosește prin fn_executie_acces_candidati(cont) pentru contul care a urcat documentul.
+-- Fără SECURITY DEFINER și fără EXECUTE pentru clienți: se cheamă doar din funcțiile DEFINER ale migrării (rulează ca proprietarul lor).
+-- adevărat = contul NU e restrâns pe proiect (owner sau cont fără niciun rând). Cont NULL = fals (L08).
 -- Varianta B (bifă explicită „restrâns”) se schimbă DOAR aici: „cont fără bifă” în loc de „cont fără rânduri”.
-CREATE FUNCTION public.fn_executie_acces_nerestrans() RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  SELECT auth.uid() IS NOT NULL
-    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
-         OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a WHERE a.profile_id = auth.uid()))
+CREATE FUNCTION public.fn_executie_acces_nerestrans_cont(p_profile uuid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT p_profile IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile AND p.is_owner IS TRUE)
+         OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a WHERE a.profile_id = p_profile))
 $f$;
--- proiectele listate pentru apelant (scriere = doar cele 'editor'); gol = niciunul (NU „toate”: „toate” e doar nerestrans())
-CREATE FUNCTION public.fn_executie_acces_lista(p_scriere boolean) RETURNS bigint[]
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+-- proiectele listate pentru cont (scriere = doar cele 'editor'); gol = niciunul (NU „toate”: „toate” e doar nerestrans)
+CREATE FUNCTION public.fn_executie_acces_lista_cont(p_profile uuid, p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   SELECT coalesce(array_agg(a.proiect_id ORDER BY a.proiect_id), '{}'::bigint[])
     FROM public.executie_acces_proiect a
-   WHERE auth.uid() IS NOT NULL AND p_scriere IS NOT NULL AND a.profile_id = auth.uid()
+   WHERE p_profile IS NOT NULL AND p_scriere IS NOT NULL AND a.profile_id = p_profile
      AND (p_scriere IS FALSE OR a.nivel = 'editor')
+$f$;
+-- adevărat = apelantul NU e restrâns pe proiect. Fără auth.uid() = fals (L08).
+CREATE FUNCTION public.fn_executie_acces_nerestrans() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(public.fn_executie_acces_nerestrans_cont(auth.uid()), false)
+$f$;
+-- proiectele listate pentru apelant; fără auth.uid() = gol
+CREATE FUNCTION public.fn_executie_acces_lista(p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT public.fn_executie_acces_lista_cont(auth.uid(), p_scriere)
 $f$;
 -- regula pe un proiect: pentru RPC-uri, trigger-e, funcțiile de drept și UI
 CREATE FUNCTION public.fn_executie_proiect_permis(p_proiect bigint, p_scriere boolean DEFAULT false) RETURNS boolean
@@ -648,6 +665,9 @@ $f$;
 -- existența / id-ul / scorul unui proiect din afara listei. De aceea excepția ține DOAR cât entitate_id e NULL; după o potrivire pe un
 -- proiect nepermis rândul (și fișierul lui, prin fn_executie_acces_inbox_obiect) nu i se mai arată. Fără mascare de coloane: politica e
 -- pe rând, iar orice cale de citire (REST, Realtime, Storage) trece prin aceeași regulă.
+-- r6 (review r5 P1: dispariția însăși era un semnal de existență): clasificatorul caută DOAR în proiectele permise celui care a urcat
+-- (fn_executie_acces_candidati, mai jos), deci documentul unui cont restrâns nu mai poate fi potrivit pe un proiect nebifat și nu mai
+-- dispare. Regula de aici rămâne plasă de siguranță (o cale care ar ocoli lista, ex. edge-ul vechi), nu mai e observabilă ca semnal.
 CREATE FUNCTION public.fn_executie_acces_inbox_rand(p_modul text, p_entitate bigint, p_uploadat_de uuid, p_scriere boolean) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   SELECT p_scriere IS NOT NULL
@@ -663,6 +683,22 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     AND NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i
                      WHERE i.fisier_path = p_name
                        AND public.fn_executie_acces_inbox_rand(i.modul_tinta, i.entitate_id::bigint, i.uploadat_de, p_scriere) IS NOT TRUE)
+$f$;
+-- r6: candidații clasificatorului (edge citeste-orice) pentru documentul urcat de p_profile = proiectele ACTIVE (ca filtrul de azi al
+-- edge-ului, activ = true) pe care contul le poate CITI după aceeași regulă (nerestrans_cont / lista_cont, L19): cont nerestrâns / owner =
+-- toate cele active, ca azi; cont restrâns = doar cele active din lista lui (și cele 'viewer': rândul potrivit pe ele îi rămâne vizibil,
+-- dar scrierea / confirmarea cere tot lista de scriere). p_profile NULL = rând fără cont (cale server; un cont logat nu poate crea un
+-- rând fără uploadat_de — 20261103c, trg_ai_inbox_fisier_legat) = toate cele active, ca azi: nu e documentul nimănui, deci nu
+-- e semnal pentru nimeni. Un singur tablou jsonb [{id, nume, cod_intern}] ordonat după id (un singur rând: fără plafonul max-rows, L23).
+-- Doar service_role (clasificatorul n-are JWT, deci contul vine ca parametru; L08: calea server cu rolul verificat de GRANT).
+CREATE FUNCTION public.fn_executie_acces_candidati(p_profile uuid) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  WITH c AS (SELECT public.fn_executie_acces_nerestrans_cont(p_profile) AS tot,
+                    public.fn_executie_acces_lista_cont(p_profile, false) AS ids)
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', e.id, 'nume', e.nume, 'cod_intern', e.cod_intern) ORDER BY e.id), '[]'::jsonb)
+    FROM public.executie_proiecte e CROSS JOIN c
+   WHERE e.activ IS TRUE
+     AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids))
 $f$;
 -- Storage: proiectele unui obiect, din cale (formele din inventar, ancorate) sau din tabelul care îl referă; formă necunoscută = {} (L13, L18)
 CREATE FUNCTION public.fn_executie_acces_obiect_proiecte(p_bucket text, p_name text) RETURNS bigint[]
@@ -695,6 +731,11 @@ REVOKE ALL ON FUNCTION public.fn_executie_acces_parinti(text, boolean) FROM PUBL
 REVOKE ALL ON FUNCTION public.fn_executie_acces_obiect_proiecte(text, text) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_inbox_obiect(text, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans_cont(uuid) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_lista_cont(uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_candidati(uuid) FROM PUBLIC, anon, authenticated, service_role;
+-- r6: candidații clasificatorului doar pentru service_role (contul e parametru: un client logat ar putea întreba despre ALT cont)
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_candidati(uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_inbox_obiect(text, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_e_owner() TO authenticated;
@@ -1056,23 +1097,32 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = v_rel AND tgname = 'trg_executie_acces_proiect_prov' AND tgenabled = 'O') THEN
     RAISE EXCEPTION '20261209a post: trigger-ul de proveniență';
   END IF;
-  -- funcțiile noi: exact 16, DEFINER doar unde trebuie, search_path fix, EXECUTE doar unde trebuie
+  -- funcțiile noi: exact 19 (r6: + nerestrans_cont, lista_cont, candidati), DEFINER doar unde trebuie, search_path fix, EXECUTE doar unde
+  -- trebuie: authenticated pe regula apelantului; service_role DOAR pe candidati; nimeni pe cele interne
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-       WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')) <> 16
+       WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')) <> 19
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')
                    AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
                         OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_executie_acces_e_owner', 'fn_executie_acces_nerestrans', 'fn_executie_acces_lista',
                                                                        'fn_executie_proiect_permis', 'fn_executie_acces_parinte_permis', 'fn_executie_acces_parinti',
                                                                        'fn_executie_acces_obiect_proiecte', 'fn_executie_acces_proiect_seteaza',
-                                                                       'fn_executie_acces_inbox_rand', 'fn_executie_acces_inbox_obiect'))
+                                                                       'fn_executie_acces_inbox_rand', 'fn_executie_acces_inbox_obiect',
+                                                                       'fn_executie_acces_candidati'))
                         OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
                         OR has_function_privilege('anon', p.oid, 'EXECUTE')
-                        OR has_function_privilege('service_role', p.oid, 'EXECUTE')
+                        OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM (p.proname = 'fn_executie_acces_candidati')
                         OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM
                            (p.proname NOT IN ('fn_executie_acces_proiect_prov', 'fn_executie_acces_canon', 'fn_executie_acces_garda',
-                                              'fn_executie_acces_garda_copil', 'fn_executie_acces_garda_inbox', 'fn_executie_acces_inventar')))) THEN
+                                              'fn_executie_acces_garda_copil', 'fn_executie_acces_garda_inbox', 'fn_executie_acces_inventar',
+                                              'fn_executie_acces_nerestrans_cont', 'fn_executie_acces_lista_cont', 'fn_executie_acces_candidati')))) THEN
     RAISE EXCEPTION '20261209a post: functii noi (definer / search_path / EXECUTE)';
+  END IF;
+  -- r6: semnătura exactă pe care o cheamă edge-ul citeste-orice (nume + parametru + tip întors; testul edge citește aceeași semnătură)
+  IF to_regprocedure('public.fn_executie_acces_candidati(uuid)') IS NULL
+     OR (SELECT p.proargnames FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_acces_candidati(uuid)')) IS DISTINCT FROM ARRAY['p_profile']::text[]
+     OR (SELECT p.prorettype FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_acces_candidati(uuid)')) IS DISTINCT FROM 'jsonb'::regtype::oid THEN
+    RAISE EXCEPTION '20261209a post: semnatura fn_executie_acces_candidati(p_profile uuid) -> jsonb';
   END IF;
   -- tabelele acoperite: 4 politici RESTRICTIVE pentru authenticated, fiecare legată (pg_depend, nu text) de funcțiile regulii;
   -- trigger-ul activ, cu argumentele lui
