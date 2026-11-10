@@ -8,7 +8,7 @@ DO $t$
 DECLARE v text;
 BEGIN
   SELECT string_agg(departament || ':' || fel || ':' || coalesce(email, '-'), ' ' ORDER BY departament, fel, coalesce(email, '-')) INTO v FROM public.polite_alerte_destinatari;
-  IF v IS DISTINCT FROM 'executie:manager_proiect:- executie:sef_santier:- financiar:adresa:marilena.tudorache@gazpet.ro financiar:adresa:mirela.popescu@gazpet.ro ofertare:adresa:-' THEN
+  IF v IS DISTINCT FROM 'executie:manager_proiect:- executie:sef_santier:- financiar:adresa:marilena.tudorache@gazpet.ro financiar:adresa:mirela.popescu@gazpet.ro ofertare:adresa:- owner:owneri:-' THEN
     RAISE EXCEPTION 'TEST01 FAIL lista initiala: %', v;
   END IF;
   IF (SELECT observatii FROM public.polite_alerte_destinatari WHERE departament = 'ofertare') IS NULL THEN RAISE EXCEPTION 'TEST01 FAIL lipseste observatia pe adresa negasita'; END IF;
@@ -69,7 +69,8 @@ BEGIN
   v := public.fn_polite_alerte_proba(DATE '2026-11-10');
   -- 902 (ctr 17, proiect 5): Marilena, Mirela, sef santier = 3 adrese + Cristina / MP extern = 2 fara adresa
   -- 903 (ctr 18, fara proiect): Marilena, Mirela + Cristina / sef / MP = 3 fara adresa;  801 (Registru): la fel ca 903
-  IF (v->>'randuri')::integer <> 15 OR (v->>'destinatari')::integer <> 3 OR (v->>'fara_adresa')::integer <> 8 THEN RAISE EXCEPTION 'TEST04 FAIL proba: %', v; END IF;
+  -- r8: + owner-ul (owner@gazpet.ro) pe fiecare dintre cele 3 polite => 18 randuri, 4 adrese
+  IF (v->>'randuri')::integer <> 18 OR (v->>'destinatari')::integer <> 4 OR (v->>'fara_adresa')::integer <> 8 THEN RAISE EXCEPTION 'TEST04 FAIL proba: %', v; END IF;
   SELECT count(*) INTO n FROM public.polite_alerte_jurnal WHERE stare = 'proba' AND destinatar_email = 'mp.extern@exemplu.test';
   IF n <> 0 THEN RAISE EXCEPTION 'TEST04 FAIL adresa din afara domeniului a intrat'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.polite_alerte_jurnal WHERE stare = 'proba' AND cheie = 'contract:902|15|2026-11-25|sef.santier@gazpet.ro'
@@ -79,7 +80,7 @@ BEGIN
   IF (SELECT count(*) FROM public.notifications) <> 0 THEN RAISE EXCEPTION 'TEST04 FAIL proba a scris notificari'; END IF;
   v := public.fn_polite_alerte_porneste(true);
   IF (v->>'activ')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TEST04 FAIL comutatorul nu a pornit: %', v; END IF;
-  RAISE NOTICE 'TEST04 OK pornirea cere proba; proba = 15 randuri (3 adrese, 8 fara adresa), fara notificari, fara adrese externe';
+  RAISE NOTICE 'TEST04 OK pornirea cere proba; proba = 18 randuri (4 adrese, 8 fara adresa), fara notificari, fara adrese externe';
 END $t$;
 RESET ROLE;
 
@@ -91,26 +92,27 @@ BEGIN
   -- r2: rezultatul e un singur jsonb {activ, zi, n, randuri}
   v := public.fn_polite_alerte_rezerva(DATE '2026-11-10');
   SELECT count(*), count(*) FILTER (WHERE e->>'stare' = 'rezervat') INTO n, m FROM jsonb_array_elements(v->'randuri') e;
-  IF (v->>'activ')::boolean IS NOT TRUE OR (v->>'n')::integer <> n OR n <> 15 OR m <> 7 THEN
-    RAISE EXCEPTION 'TEST05 FAIL prima rezervare: n=% randuri=% rezervate=% (astept 15 / 7)', v->>'n', n, m;
+  IF (v->>'activ')::boolean IS NOT TRUE OR (v->>'n')::integer <> n OR n <> 18 OR m <> 10 THEN
+    RAISE EXCEPTION 'TEST05 FAIL prima rezervare: n=% randuri=% rezervate=% (astept 18 / 10)', v->>'n', n, m;
   END IF;
   v := public.fn_polite_alerte_rezerva(DATE '2026-11-10');
   IF (v->>'n')::integer <> 0 OR jsonb_array_length(v->'randuri') <> 0 THEN RAISE EXCEPTION 'TEST05 FAIL a doua rulare a rezervat %', v->>'n'; END IF;
-  RAISE NOTICE 'TEST05 OK rezervare 15 randuri (7 de trimis), a doua rulare 0';
+  RAISE NOTICE 'TEST05 OK rezervare 18 randuri (10 de trimis), a doua rulare 0';
 END $t$;
 RESET ROLE;
 DO $t$
 DECLARE n integer;
 BEGIN
-  -- conturi ERP printre destinatari: Mirela (e) pe 3 polite + seful de santier (f) pe 902 = 4 notificari; Marilena nu are cont
+  -- conturi ERP printre destinatari: Mirela (e) pe 3 polite + seful de santier (f) pe 902 + owner-ul (a) pe 3 polite = 7; Marilena nu are cont
   SELECT count(*) INTO n FROM public.notifications;
-  IF n <> 4 OR EXISTS (SELECT 1 FROM public.notifications WHERE profile_id NOT IN ('00000000-0000-0000-0000-00000000000e', '00000000-0000-0000-0000-00000000000f')) THEN
+  IF n <> 7 OR EXISTS (SELECT 1 FROM public.notifications WHERE profile_id NOT IN ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000e', '00000000-0000-0000-0000-00000000000f'))
+     OR (SELECT count(*) FROM public.notifications WHERE profile_id = '00000000-0000-0000-0000-00000000000a' AND modul = 'Administrativ' AND link_to = '/administrativ?tab=contracte') <> 3 THEN
     RAISE EXCEPTION 'TEST06 FAIL notificari: %', n;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = '00000000-0000-0000-0000-00000000000f' AND modul = 'Execuție' AND link_to = '/executie?proiect=5') THEN
     RAISE EXCEPTION 'TEST06 FAIL notificarea sefului de santier (modul / link)';
   END IF;
-  RAISE NOTICE 'TEST06 OK 4 notificari in aplicatie, pe modulul si linkul departamentului';
+  RAISE NOTICE 'TEST06 OK 7 notificari in aplicatie (inclusiv owner-ul), pe modulul si linkul departamentului';
 END $t$;
 SET LOCAL ROLE service_role;
 DO $t$
@@ -295,5 +297,39 @@ BEGIN
   RAISE NOTICE 'TEST14 OK legare / deslegare cu istoric, paritate de_facut, stergerea politei legate refuzata';
 END $t$;
 
--- (revenirea, mutantii ei si legarea concurenta cu doua sesiuni reale ruleaza separat, in scripts/test_polite_alerte.sh)
+-- ── TEST15 (r8): preluarea alertelor vechi catre owneri — doar owner, doar cu alertele noi pornite si randul owner activ ─────
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', true), set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000d","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  BEGIN PERFORM public.fn_polite_alerte_opreste_vechi(); RAISE EXCEPTION 'TEST15 FAIL non-owner a oprit cronul vechi';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $t$;
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE v jsonb;
+BEGIN
+  -- fara randul owner activ: refuz (owner-ii ar ramane fara alerte)
+  UPDATE public.polite_alerte_destinatari SET activ = false WHERE departament = 'owner';
+  BEGIN PERFORM public.fn_polite_alerte_opreste_vechi(); RAISE EXCEPTION 'TEST15 FAIL oprit fara randul owner activ';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'owneri_fara_alerte_noi' THEN RAISE; END IF; END;
+  UPDATE public.polite_alerte_destinatari SET activ = true WHERE departament = 'owner';
+  v := public.fn_polite_alerte_opreste_vechi();
+  IF (v->>'oprit')::boolean IS NOT TRUE OR (v->>'deja')::boolean IS NOT FALSE THEN RAISE EXCEPTION 'TEST15 FAIL oprirea: %', v; END IF;
+  v := public.fn_polite_alerte_opreste_vechi();
+  IF (v->>'deja')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TEST15 FAIL a doua oprire: %', v; END IF;
+END $t$;
+RESET ROLE;
+DO $t$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_zilnic') THEN RAISE EXCEPTION 'TEST15 FAIL cronul vechi inca programat'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_departamente') THEN RAISE EXCEPTION 'TEST15 FAIL cronul nou a disparut'; END IF;
+  IF to_regprocedure('public.fn_polite_send_alerte()') IS NULL THEN RAISE EXCEPTION 'TEST15 FAIL functia veche stearsa'; END IF;
+  IF (SELECT vechi_oprit_de FROM public.polite_alerte_config) IS DISTINCT FROM '00000000-0000-0000-0000-00000000000a'::uuid THEN RAISE EXCEPTION 'TEST15 FAIL autorul opririi'; END IF;
+  RAISE NOTICE 'TEST15 OK preluarea: non-owner refuzat, refuz fara randul owner, oprit o data (idempotent), cronul nou si functia veche raman';
+END $t$;
+
+-- (revenirea si mutantii ei ruleaza separat, in scripts/test_polite_alerte.sh)
 SELECT 'DRY_COMPLET';

@@ -128,6 +128,7 @@ export const fmtSuma = (v, m) => Number.isFinite(Number(v)) && v != null
   ? `${Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${m || 'RON'}` : '—'
 
 // randurile rezervate de fn_polite_alerte_rezerva -> un mail pe destinatar; randurile fara adresa se arata destinatarilor de la Financiar
+// si owner-ilor (r8: ei completeaza lista din Administrator)
 export function grupeazaPeDestinatar(randuri) {
   const pe = new Map(), faraAdresa = [], financiar = new Set()
   for (const r of randuri || []) {
@@ -135,14 +136,14 @@ export function grupeazaPeDestinatar(randuri) {
     if (r.stare !== 'rezervat' || !r.destinatar_email) continue
     if (!pe.has(r.destinatar_email)) pe.set(r.destinatar_email, { email: r.destinatar_email, randuri: [] })
     pe.get(r.destinatar_email).randuri.push(r)
-    if ((r.departamente || []).includes('financiar')) financiar.add(r.destinatar_email)
+    if ((r.departamente || []).some(d => d === 'financiar' || d === 'owner')) financiar.add(r.destinatar_email)
   }
   return [...pe.values()].map(g => ({ ...g, faraAdresa: financiar.has(g.email) ? faraAdresa : [] }))
 }
 
 const ORDINE_PRAG = p => p === '0' ? 0 : p?.startsWith('r') ? -Number(p.slice(1)) : Number(p)
 // linkul din mail, după departamentul destinatarului: Financiar → Registrul garanțiilor; Execuție → proiectul (sau lista);
-// Ofertare → contractele (Administrativ). Căile sunt fixe; doar id-ul de proiect vine din BD (număr).
+// Ofertare → contractele (Administrativ); owner-ii (r8) → tabul Contracte din Administrativ. Căile sunt fixe; doar id-ul de proiect vine din BD (număr).
 export function linkDestinatar(randuri) {
   const dep = new Set((randuri || []).flatMap(r => r.departamente || []))
   if (dep.has('financiar')) return { cale: '/financiar?tab=garantii', eticheta: 'Deschide registrul de garanții' }
@@ -150,6 +151,7 @@ export function linkDestinatar(randuri) {
     const p = [...new Set((randuri || []).map(r => r.rand?.proiect_id).filter(x => Number.isSafeInteger(Number(x)) && Number(x) > 0).map(Number))]
     return p.length === 1 ? { cale: `/executie?proiect=${p[0]}`, eticheta: 'Deschide proiectul' } : { cale: '/executie', eticheta: 'Deschide Execuția' }
   }
+  if (dep.has('owner')) return { cale: '/administrativ?tab=contracte', eticheta: 'Deschide contractele' }
   return { cale: '/administrativ', eticheta: 'Deschide contractele' }
 }
 export function mailPolite({ randuri = [], faraAdresa = [], app = 'https://pontaj-pro-sooty.vercel.app' }) {
@@ -169,10 +171,10 @@ export function mailPolite({ randuri = [], faraAdresa = [], app = 'https://ponta
       `<td style="${td};color:${urgent ? '#b3261e' : '#8a5a00'};font-weight:700">${esc(situatiePolita(r.prag, Number(x.zile)))}</td></tr>`
   }
   const th = h => `<th style="text-align:left;padding:7px 9px;background:#f1f4f7;font-size:12px;color:#44515c">${h}</th>`
-  const fara = faraAdresa.length ? `<p style="margin:16px 0 6px;font-weight:700">Polițe fără destinatar în Execuție / Ofertare</p>` +
+  const fara = faraAdresa.length ? `<p style="margin:16px 0 6px;font-weight:700">Polițe fără destinatar</p>` +
     `<p style="margin:0 0 6px;color:#5d6b78">Pentru acestea nu există adresă (contract nelegat de proiect, sau om fără cont în platformă). Lista se completează din Administrator → Alerte polițe.</p>` +
     `<ul style="margin:0;padding-left:18px">${[...new Map(faraAdresa.map(f => [f.rand?.cheie + '|' + f.departamente?.join(','), f])).values()]
-      .map(f => `<li>${esc(f.rand?.tip)} ${esc(f.rand?.nr_polita || '—')} (${esc(f.rand?.numar_contract || 'fără contract')}): ${esc((f.departamente || []).map(d => d === 'executie' ? 'Execuție' : d === 'ofertare' ? 'Ofertare' : 'Financiar').join(', '))} fără destinatar</li>`).join('')}</ul>` : ''
+      .map(f => `<li>${esc(f.rand?.tip)} ${esc(f.rand?.nr_polita || '—')} (${esc(f.rand?.numar_contract || 'fără contract')}): ${esc((f.departamente || []).map(d => d === 'executie' ? 'Execuție' : d === 'ofertare' ? 'Ofertare' : d === 'owner' ? 'Owneri' : 'Financiar').join(', '))} fără destinatar</li>`).join('')}</ul>` : ''
   const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:820px">` +
     `<p>Bună ziua,</p><p>Polițele de mai jos ating un termen de urmărit (60 / 30 / 15 zile înainte de expirare, ziua expirării, apoi o dată pe săptămână până se încarcă prelungirea):</p>` +
     `<table style="border-collapse:collapse;width:100%;font-size:13px"><thead><tr>${['Tip', 'Nr. poliță', 'Asigurător', 'Contract', 'Proiect', 'Valabilă până la', 'Situație'].map(th).join('')}</tr></thead><tbody>${rs.map(linie).join('')}</tbody></table>` +

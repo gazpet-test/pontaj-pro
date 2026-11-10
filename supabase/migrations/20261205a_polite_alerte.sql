@@ -17,8 +17,15 @@
 --      (act cu expirare mai tarzie => cheie noua) sau pana la inchidere (status <> 'activa').
 --   5. Alertele: polite_alerte_destinatari (lista din Administrator, doar owner; D3: doar @gazpet.ro, si in BD), polite_alerte_config
 --      (comutatorul, OPRIT la livrare; pornirea cere o rulare de proba in ultimele 24 h), polite_alerte_jurnal (dedup pe
---      polita + prag + expirare + destinatar; randurile 'proba' nu participa la dedup), RPC-urile, cronul zilnic polite_alerte_zilnic
+--      polita + prag + expirare + destinatar; randurile 'proba' nu participa la dedup), RPC-urile, cronul zilnic polite_alerte_departamente
 --      -> edge polite-alerte-mail (antet x-intern-secret din Vault, ca 20261130d).
+--   6. r8 (chat 10.11): pe prod exista deja alertele VECHI catre owneri: public.fn_polite_send_alerte (din BD, nu din repo; citeste
+--      v_polite_alerte, scrie notifications catre toti owner-ii) programata de cron.job „polite_alerte_zilnic” (0 7 * * *). Migrarea NU le
+--      atinge: cronul nou are numele propriu polite_alerte_departamente. Preluarea: dupa pornirea alertelor noi, owner-ul poate opri cronul
+--      vechi din Administrator, cu confirmare (RPC fn_polite_alerte_opreste_vechi: doar owner, doar cu alertele noi pornite si randul
+--      „owner” activ in lista, doar jobul vechi exact; momentul + autorul raman pe polite_alerte_config). Owner-ii primesc alertele noi prin
+--      randul de lista departament „owner” / fel „owneri” (toti owner-ii cu cont @gazpet.ro).
+--      Revenirea migrarii NU reprogrameaza cronul vechi (si refuza daca a fost oprit: comutatorul a fost folosit).
 -- NU atinge: garantii_alerte() (owner-ul primeste in continuare alertele Registrului; datele coincid prin sincronizare), gbe_polite,
 --   politicile RLS existente pe contracte_polite / garantii / storage, user_module_access.
 -- Ordinea lock-urilor (L06): niciun trigger nu citeste / blocheaza alte tabele decat cele ale instructiunii (protectia Registrului
@@ -69,7 +76,7 @@ BEGIN
   IF to_regclass('public.polite_propuneri') IS NOT NULL OR to_regclass('public.polite_alerte_destinatari') IS NOT NULL
      OR to_regclass('public.polite_alerte_config') IS NOT NULL OR to_regclass('public.polite_alerte_jurnal') IS NOT NULL
      OR to_regclass('public.v_polite_scadente') IS NOT NULL OR to_regclass('public.v_garantii_registru') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[] || 'fn_poate_scrie_polite'::name))
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[] || 'fn_poate_scrie_polite'::name))
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.garantii'::regclass AND a.attname = 'contract_polita_id' AND NOT a.attisdropped)
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid IN ('public.contracte_polite'::regclass, 'public.contracte_polite_acte'::regclass) AND NOT a.attisdropped
                   AND a.attname IN ('moneda', 'executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la', 'pdf_sha256', 'sursa', 'propunere_id'))
@@ -118,8 +125,8 @@ BEGIN
   END IF;
   -- 0e. notificarile: modulele folosite
   SELECT pg_get_constraintdef(c.oid) INTO v_def FROM pg_constraint c WHERE c.conrelid = 'public.notifications'::regclass AND c.conname = 'notifications_modul_check';
-  IF v_def IS NULL OR v_def NOT LIKE '%''Financiar''::text%' OR v_def NOT LIKE '%''Execuție''::text%' OR v_def NOT LIKE '%''Ofertare''::text%' THEN
-    RAISE EXCEPTION '20261205a: notifications_modul_check nu permite Financiar / Execuție / Ofertare';
+  IF v_def IS NULL OR v_def NOT LIKE '%''Financiar''::text%' OR v_def NOT LIKE '%''Execuție''::text%' OR v_def NOT LIKE '%''Ofertare''::text%' OR v_def NOT LIKE '%''Administrativ''::text%' THEN
+    RAISE EXCEPTION '20261205a: notifications_modul_check nu permite Financiar / Execuție / Ofertare / Administrativ';
   END IF;
   -- 0f. storage: bucket-ul contractelor (PDF-ul propunerii il urca edge-ul polita-citeste, cu service_role)
   IF to_regclass('storage.objects') IS NULL OR to_regclass('storage.buckets') IS NULL
@@ -131,7 +138,7 @@ BEGIN
      OR to_regprocedure('net.http_post(text,jsonb,jsonb,jsonb,integer)') IS NULL OR to_regclass('vault.decrypted_secrets') IS NULL THEN
     RAISE EXCEPTION '20261205a: lipsesc pg_cron / pg_net / vault';
   END IF;
-  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_zilnic') THEN RAISE EXCEPTION '20261205a: jobul polite_alerte_zilnic exista deja'; END IF;
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_departamente') THEN RAISE EXCEPTION '20261205a: jobul polite_alerte_departamente exista deja'; END IF;
   IF current_setting('cron.timezone', true) IS DISTINCT FROM 'GMT' THEN
     RAISE EXCEPTION '20261205a: cron.timezone = % (astept GMT)', coalesce(current_setting('cron.timezone', true), '<nesetat>');
   END IF;
@@ -431,8 +438,8 @@ COMMENT ON VIEW public.v_garantii_registru IS 'Polite 20261205a (r5): Registrul 
 -- ─── 7. Alerte: destinatari, comutator, jurnal ──────────────────────────────────────────────────────────────────────────────
 CREATE TABLE public.polite_alerte_destinatari (
   id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-  departament text NOT NULL CHECK (departament = ANY (ARRAY['financiar'::text, 'executie'::text, 'ofertare'::text])),
-  fel text NOT NULL CHECK (fel = ANY (ARRAY['adresa'::text, 'sef_santier'::text, 'manager_proiect'::text])),
+  departament text NOT NULL CHECK (departament = ANY (ARRAY['financiar'::text, 'executie'::text, 'ofertare'::text, 'owner'::text])),
+  fel text NOT NULL CHECK (fel = ANY (ARRAY['adresa'::text, 'sef_santier'::text, 'manager_proiect'::text, 'owneri'::text])),
   nume text CHECK (nume IS NULL OR length(btrim(nume)) BETWEEN 1 AND 120),
   email text,
   tipuri text[] NOT NULL DEFAULT ARRAY['GBE'::text, 'CAR'::text, 'GPL'::text, 'avans'::text, 'altul'::text],
@@ -442,7 +449,8 @@ CREATE TABLE public.polite_alerte_destinatari (
   creat_la timestamptz NOT NULL DEFAULT now(),
   actualizat_la timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT polite_dest_email_check CHECK (email IS NULL OR email ~ '^[a-z0-9._%+-]+@gazpet[.]ro$'),
-  CONSTRAINT polite_dest_fel_check CHECK (fel = 'adresa' OR (departament = 'executie' AND email IS NULL)),
+  CONSTRAINT polite_dest_fel_check CHECK ((fel = 'adresa' AND departament <> 'owner') OR (departament = 'executie' AND fel IN ('sef_santier', 'manager_proiect') AND email IS NULL)
+                                         OR (departament = 'owner' AND fel = 'owneri' AND email IS NULL)),
   CONSTRAINT polite_dest_tipuri_check CHECK (cardinality(tipuri) >= 1 AND tipuri <@ ARRAY['GBE'::text, 'CAR'::text, 'GPL'::text, 'avans'::text, 'altul'::text])
 );
 CREATE UNIQUE INDEX polite_dest_unic_uidx ON public.polite_alerte_destinatari (departament, fel, coalesce(email, 'nume:' || coalesce(nume, '')));
@@ -470,7 +478,10 @@ CREATE TABLE public.polite_alerte_config (
   schimbat_de uuid,
   schimbat_la timestamptz,
   proba_la timestamptz,
-  proba_lot uuid
+  proba_lot uuid,
+  vechi_oprit_la timestamptz,
+  vechi_oprit_de uuid,
+  CONSTRAINT polite_config_vechi_check CHECK ((vechi_oprit_la IS NULL) = (vechi_oprit_de IS NULL))
 );
 INSERT INTO public.polite_alerte_config (id, activ) VALUES (true, false);
 
@@ -483,7 +494,7 @@ CREATE TABLE public.polite_alerte_jurnal (
   ref_id bigint NOT NULL,
   prag text NOT NULL CHECK (prag ~ '^(60|30|15|0|r[1-9][0-9]{0,3})$'),
   data_expirare date,
-  departamente text[] NOT NULL CHECK (cardinality(departamente) >= 1 AND departamente <@ ARRAY['financiar'::text, 'executie'::text, 'ofertare'::text]),
+  departamente text[] NOT NULL CHECK (cardinality(departamente) >= 1 AND departamente <@ ARRAY['financiar'::text, 'executie'::text, 'ofertare'::text, 'owner'::text]),
   destinatar_email text CHECK (destinatar_email IS NULL OR destinatar_email ~ '^[a-z0-9._%+-]+@gazpet[.]ro$'),
   profile_id uuid,
   rand jsonb NOT NULL CHECK (jsonb_typeof(rand) = 'object'),
@@ -509,14 +520,24 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
   WITH s AS (SELECT * FROM public.fn_polite_scadente(p_azi) WHERE prag IS NOT NULL),
   d AS (SELECT * FROM public.polite_alerte_destinatari WHERE activ),
   t AS (
-    SELECT s.*, d.departament,
-           CASE WHEN d.fel = 'adresa' THEN d.email
-                ELSE (SELECT lower(pr.email) FROM public.profiles pr JOIN public.executie_proiecte ep ON ep.id = s.proiect_id
-                       WHERE pr.employee_id = CASE d.fel WHEN 'sef_santier' THEN ep.sef_santier_employee_id ELSE ep.mp_employee_id END
-                         AND lower(pr.email) ~ '^[a-z0-9._%+-]+@gazpet[.]ro$'
-                       ORDER BY pr.id LIMIT 1) END AS em,
-           d.fel
+    SELECT s.*, d.departament, x.em, d.fel
       FROM s JOIN d ON s.tip = ANY (d.tipuri)
+      CROSS JOIN LATERAL (
+        SELECT d.email AS em WHERE d.fel = 'adresa'
+        UNION ALL
+        SELECT (SELECT lower(pr.email) FROM public.profiles pr JOIN public.executie_proiecte ep ON ep.id = s.proiect_id
+                 WHERE pr.employee_id = CASE d.fel WHEN 'sef_santier' THEN ep.sef_santier_employee_id ELSE ep.mp_employee_id END
+                   AND lower(pr.email) ~ '^[a-z0-9._%+-]+@gazpet[.]ro$'
+                 ORDER BY pr.id LIMIT 1)
+         WHERE d.fel IN ('sef_santier', 'manager_proiect')
+        UNION ALL
+        -- r8: toti owner-ii cu cont @gazpet.ro (un rand pe owner); niciunul = un rand fara adresa (vizibil in proba / jurnal)
+        SELECT o.em FROM (SELECT DISTINCT lower(pr.email) AS em FROM public.profiles pr
+                           WHERE pr.is_owner IS TRUE AND lower(pr.email) ~ '^[a-z0-9._%+-]+@gazpet[.]ro$') o
+         WHERE d.fel = 'owneri'
+        UNION ALL
+        SELECT NULL WHERE d.fel = 'owneri' AND NOT EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.is_owner IS TRUE AND lower(pr.email) ~ '^[a-z0-9._%+-]+@gazpet[.]ro$')
+      ) x
   )
   SELECT CASE WHEN t.em IS NULL THEN t.cheie || '|' || t.prag || '|' || coalesce(t.data_expirare::text, '-') || '|fara:' || min(t.departament) || ':' || min(t.fel)
               ELSE t.cheie || '|' || t.prag || '|' || coalesce(t.data_expirare::text, '-') || '|' || t.em END,
@@ -570,6 +591,32 @@ BEGIN
   RETURN jsonb_build_object('activ', v.activ, 'schimbat_la', v.schimbat_la);
 END $fn$;
 
+-- 8c'. r8: preluarea alertelor VECHI catre owneri (fn_polite_send_alerte + cron.job „polite_alerte_zilnic”, din BD, de dinainte).
+--      Doar owner-ul, doar cu confirmare in UI (butonul cheama acest RPC; nimic automat), doar cand alertele noi sunt PORNITE si randul
+--      „owner / owneri” e activ in lista (owner-ii nu raman fara alerte), doar jobul vechi EXACT (nume + comanda). Scrie momentul + autorul
+--      pe polite_alerte_config. Nu sterge functia veche. Revenirea migrarii nu il reprogrameaza.
+CREATE FUNCTION public.fn_polite_alerte_opreste_vechi() RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v public.polite_alerte_config%ROWTYPE; v_n integer;
+BEGIN
+  IF NOT public.fn_polite_e_owner() THEN RAISE EXCEPTION 'doar_owner' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO v FROM public.polite_alerte_config c WHERE c.id FOR UPDATE;
+  IF v.vechi_oprit_la IS NOT NULL THEN RETURN jsonb_build_object('oprit', true, 'deja', true, 'oprit_la', v.vechi_oprit_la); END IF;
+  IF v.activ IS NOT TRUE THEN RAISE EXCEPTION 'porneste_intai_alertele_noi' USING ERRCODE = 'P0001'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.polite_alerte_destinatari d WHERE d.departament = 'owner' AND d.fel = 'owneri' AND d.activ) THEN
+    RAISE EXCEPTION 'owneri_fara_alerte_noi' USING ERRCODE = 'P0001';
+  END IF;
+  SELECT count(*) INTO v_n FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic';
+  IF v_n = 0 THEN RAISE EXCEPTION 'cron_vechi_negasit' USING ERRCODE = 'P0001'; END IF;
+  IF v_n <> 1 OR NOT EXISTS (SELECT 1 FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic'
+                               AND btrim(j.command) IN ('SELECT fn_polite_send_alerte();', 'SELECT public.fn_polite_send_alerte();')) THEN
+    RAISE EXCEPTION 'cron_vechi_diferit' USING ERRCODE = 'P0001';
+  END IF;
+  PERFORM cron.unschedule('polite_alerte_zilnic');
+  UPDATE public.polite_alerte_config c SET vechi_oprit_la = now(), vechi_oprit_de = auth.uid() WHERE c.id RETURNING * INTO v;
+  RETURN jsonb_build_object('oprit', true, 'deja', false, 'oprit_la', v.vechi_oprit_la);
+END $fn$;
+
 -- 8d. cronul (edge polite-alerte-mail, service_role): rezerva alertele de azi (L04: INSERT .. ON CONFLICT DO NOTHING RETURNING),
 --     pune notificarile in aplicatie pentru randurile rezervate si le intoarce edge-ului; comutatorul oprit => nimic.
 --     r2 (Jakarinos r1 P2-9): rezultatul e UN jsonb {activ, n, randuri} (nu set de randuri), deci plafonul max-rows al PostgREST nu-l
@@ -599,7 +646,8 @@ BEGIN
   notif AS (
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
   SELECT r.profile_id, 'warning',
-         CASE WHEN 'financiar' = ANY (r.departamente) THEN 'Financiar' WHEN 'executie' = ANY (r.departamente) THEN 'Execuție' ELSE 'Ofertare' END,
+         CASE WHEN 'financiar' = ANY (r.departamente) THEN 'Financiar' WHEN 'executie' = ANY (r.departamente) THEN 'Execuție'
+              WHEN 'ofertare' = ANY (r.departamente) THEN 'Ofertare' ELSE 'Administrativ' END,
          left('Poliță ' || coalesce(r.rand->>'tip', '') || ' ' || coalesce(r.rand->>'nr_polita', 'fără număr') || ': ' ||
               CASE WHEN r.prag IN ('60', '30', '15') THEN 'expiră în ' || (r.rand->>'zile') || ' zile'
                    WHEN r.prag = '0' THEN CASE WHEN (r.rand->>'zile')::integer = 0 THEN 'expiră azi' ELSE 'a expirat' END
@@ -609,6 +657,7 @@ BEGIN
               || '. Încarcă actul adițional de prelungire (contract → Polițe) sau marchează polița închisă.', 1000),
          CASE WHEN 'financiar' = ANY (r.departamente) THEN '/financiar?tab=garantii'
               WHEN 'executie' = ANY (r.departamente) AND r.rand->>'proiect_id' IS NOT NULL THEN '/executie?proiect=' || (r.rand->>'proiect_id')
+              WHEN 'owner' = ANY (r.departamente) THEN '/administrativ?tab=contracte'
               ELSE '/administrativ' END
     FROM ins r WHERE r.notificat
   RETURNING 1)
@@ -852,10 +901,10 @@ REVOKE ALL ON FUNCTION public.fn_polite_norm_nr(text), public.fn_polite_text(jso
   public.fn_polite_alerte_porneste(boolean), public.fn_polite_alerte_rezerva(date), public.fn_polite_alerte_marcheaza(bigint[], text, text, text),
   public.fn_polite_alerte_reconciliaza(), public.fn_polite_propunere_rezerva(text, uuid), public.fn_polite_propunere_completeaza(bigint, jsonb, jsonb, text, numeric),
   public.fn_polite_propunere_esec(bigint, text, numeric), public.fn_polite_propunere_json(bigint), public.fn_polita_salveaza(bigint, jsonb, jsonb),
-  public.fn_polita_propunere_respinge(bigint, text)
+  public.fn_polita_propunere_respinge(bigint, text), public.fn_polite_alerte_opreste_vechi()
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_poate_scrie_polite(), public.fn_polite_e_owner(), public.fn_polite_scadente(date), public.fn_polite_alerte_proba(date),
-  public.fn_polite_alerte_porneste(boolean), public.fn_polita_salveaza(bigint, jsonb, jsonb), public.fn_polita_propunere_respinge(bigint, text)
+  public.fn_polite_alerte_porneste(boolean), public.fn_polita_salveaza(bigint, jsonb, jsonb), public.fn_polita_propunere_respinge(bigint, text), public.fn_polite_alerte_opreste_vechi()
   TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_poate_scrie_polite(), public.fn_polite_scadente(date), public.fn_polite_alerte_rezerva(date),
   public.fn_polite_alerte_marcheaza(bigint[], text, text, text), public.fn_polite_alerte_reconciliaza(), public.fn_polite_propunere_rezerva(text, uuid),
@@ -891,30 +940,31 @@ BEGIN
   END LOOP;
   INSERT INTO public.polite_alerte_destinatari (departament, fel, nume) VALUES
     ('executie', 'sef_santier', 'Șeful de șantier al proiectului'),
-    ('executie', 'manager_proiect', 'Managerul de proiect');
+    ('executie', 'manager_proiect', 'Managerul de proiect'),
+    ('owner', 'owneri', 'Toți owner-ii platformei (contul ERP)');
 END $seed$;
 
 -- ─── 11. Cronul zilnic: 04:15 si 05:15 UTC; edge-ul trimite doar cand e ora 7 in Romania (07:15 si iarna, si vara; r2 Jakarinos P3) ────────────────────────────────
-SELECT cron.schedule('polite_alerte_zilnic', '15 4,5 * * *', $cmd$SELECT net.http_post(url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/polite-alerte-mail', body := '{}'::jsonb, headers := jsonb_build_object('Content-Type', 'application/json', 'x-intern-secret', (SELECT s.decrypted_secret FROM vault.decrypted_secrets s WHERE s.name = 'INTERN_EDGE_SECRET')), timeout_milliseconds := 60000)$cmd$);
+SELECT cron.schedule('polite_alerte_departamente', '15 4,5 * * *', $cmd$SELECT net.http_post(url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/polite-alerte-mail', body := '{}'::jsonb, headers := jsonb_build_object('Content-Type', 'application/json', 'x-intern-secret', (SELECT s.decrypted_secret FROM vault.decrypted_secrets s WHERE s.name = 'INTERN_EDGE_SECRET')), timeout_milliseconds := 60000)$cmd$);
 
 -- ─── 12. Postconditii + amprenta ────────────────────────────────────────────────────────────────────────────────────────────
 DO $post$
 DECLARE v_o oid; v_amprenta text;
   v_auth regprocedure[] := ARRAY['public.fn_poate_scrie_polite()', 'public.fn_polite_e_owner()', 'public.fn_polite_scadente(date)',
     'public.fn_polite_alerte_proba(date)', 'public.fn_polite_alerte_porneste(boolean)', 'public.fn_polita_salveaza(bigint,jsonb,jsonb)',
-    'public.fn_polita_propunere_respinge(bigint,text)']::regprocedure[];
+    'public.fn_polita_propunere_respinge(bigint,text)', 'public.fn_polite_alerte_opreste_vechi()']::regprocedure[];
   v_srv regprocedure[] := ARRAY['public.fn_poate_scrie_polite()', 'public.fn_polite_scadente(date)', 'public.fn_polite_alerte_rezerva(date)',
     'public.fn_polite_alerte_marcheaza(bigint[],text,text,text)', 'public.fn_polite_alerte_reconciliaza()', 'public.fn_polite_propunere_rezerva(text,uuid)',
     'public.fn_polite_propunere_completeaza(bigint,jsonb,jsonb,text,numeric)', 'public.fn_polite_propunere_esec(bigint,text,numeric)',
     'public.fn_polite_propunere_json(bigint)']::regprocedure[];
 BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]))) <> 21
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[]))) <> 22
      OR to_regprocedure('public.fn_poate_scrie_polite()') IS NULL THEN
-    RAISE EXCEPTION '20261205a: functiile noi nu sunt exact 21 + fn_poate_scrie_polite';
+    RAISE EXCEPTION '20261205a: functiile noi nu sunt exact 22 + fn_poate_scrie_polite';
   END IF;
   FOR v_o IN SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-               AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname = 'fn_poate_scrie_polite') LOOP
+               AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[]) OR p.proname = 'fn_poate_scrie_polite') LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_o AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
        OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = v_o AND a.grantee = 0)
        OR (SELECT p.proacl IS NULL FROM pg_proc p WHERE p.oid = v_o)
@@ -960,13 +1010,13 @@ BEGIN
   IF (SELECT count(*) FROM pg_trigger t WHERE t.tgname IN ('trg_polite_provenienta', 'trg_polite_dest_normalizeaza', 'trg_polite_garantii_legat') AND NOT t.tgisinternal) <> 4 THEN
     RAISE EXCEPTION '20261205a: triggerele trg_polite_* nu sunt exact 4';
   END IF;
-  IF (SELECT activ FROM public.polite_alerte_config WHERE id) IS NOT FALSE OR (SELECT count(*) FROM public.polite_alerte_destinatari) <> 5
+  IF (SELECT activ FROM public.polite_alerte_config WHERE id) IS NOT FALSE OR (SELECT count(*) FROM public.polite_alerte_destinatari) <> 6
      OR EXISTS (SELECT 1 FROM public.polite_alerte_jurnal) OR EXISTS (SELECT 1 FROM public.polite_propuneri) THEN
-    RAISE EXCEPTION '20261205a: starea initiala nu e cea asteptata (comutator oprit, 5 destinatari, jurnal si propuneri goale)';
+    RAISE EXCEPTION '20261205a: starea initiala nu e cea asteptata (comutator oprit, 6 destinatari, jurnal si propuneri goale)';
   END IF;
-  IF current_setting('cron.timezone', true) IS DISTINCT FROM 'GMT' OR (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_zilnic') <> 1
-     OR NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_zilnic' AND schedule = '15 4,5 * * *' AND active AND username = 'postgres') THEN
-    RAISE EXCEPTION '20261205a: jobul polite_alerte_zilnic nu e exact (GMT, program, activ, postgres)';
+  IF current_setting('cron.timezone', true) IS DISTINCT FROM 'GMT' OR (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_departamente') <> 1
+     OR NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_departamente' AND schedule = '15 4,5 * * *' AND active AND username = 'postgres') THEN
+    RAISE EXCEPTION '20261205a: jobul polite_alerte_departamente nu e exact (GMT, program, activ, postgres)';
   END IF;
   -- AMPRENTA 20261205a (aceeasi interogare in revenire): structura obiectelor noi, fara date. r2 (Jakarinos r1 P2-11): + ACL pe tabele /
   -- vedere / secvente si pe coloanele noi, roluri + PERMISSIVE pe politici, definitia completa a triggerelor (cu WHEN), dependenta
@@ -1010,9 +1060,9 @@ BEGIN
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-        AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
+        AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[]) OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
-       FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic'))) INTO v_amprenta;
+       FROM cron.job j WHERE j.jobname = 'polite_alerte_departamente'))) INTO v_amprenta;
   EXECUTE format('COMMENT ON TABLE public.polite_alerte_config IS %L', 'Polite 20261205a: comutatorul alertelor (activ = mail + notificari; OPRIT la livrare, il porneste doar owner-ul prin fn_polite_alerte_porneste, dupa o proba). amprenta=' || v_amprenta);
   RAISE NOTICE '20261205a amprenta %', v_amprenta;
 END $post$;

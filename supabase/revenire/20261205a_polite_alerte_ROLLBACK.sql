@@ -8,6 +8,10 @@
 --   * alta vedere / functie depinde de obiectele noi.
 -- Ce face: scoate cronul (cron.unschedule), vederea, triggerele, coloanele noi, tabelele noi, functiile noi; reface CHECK-ul vechi pe
 --   contracte_polite.tip (numele lui vechi e pastrat de migrare in comentariul constrangerii). Lock-uri NOWAIT, in ordinea migrarii (L06).
+-- r8: cronul vechi „polite_alerte_zilnic” (fn_polite_send_alerte, din BD) NU e al acestei migrari: revenirea NU il atinge si NU il
+--   reprogrameaza. Daca a fost oprit din Administrator (fn_polite_alerte_opreste_vechi), revenirea refuza (comutatorul a fost folosit);
+--   inainte de o revenire in acel caz, owner-ul il reprogrameaza manual:
+--   SELECT cron.schedule('polite_alerte_zilnic', '0 7 * * *', 'SELECT fn_polite_send_alerte();');
 -- Ordinea de retragere: intai edge-urile polite-alerte-mail si polita-citeste (sau UI-ul inapoi), apoi aceasta revenire.
 DO $pre$
 DECLARE v_amprenta text; v_pastrata text; v_n integer;
@@ -62,9 +66,9 @@ BEGIN
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-        AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
+        AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[]) OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
-       FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic'))) INTO v_amprenta;
+       FROM cron.job j WHERE j.jobname = 'polite_alerte_departamente'))) INTO v_amprenta;
   --AMPRENTA_SFARSIT
   v_pastrata := substring(obj_description('public.polite_alerte_config'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})$');
   IF v_pastrata IS NULL OR v_amprenta IS DISTINCT FROM v_pastrata THEN
@@ -73,15 +77,19 @@ BEGIN
   -- date / istoric noi = refuz
   IF EXISTS (SELECT 1 FROM public.polite_propuneri) THEN RAISE EXCEPTION '20261205a revenire: exista propuneri citite (date noi)'; END IF;
   IF EXISTS (SELECT 1 FROM public.polite_alerte_jurnal WHERE stare <> 'proba') THEN RAISE EXCEPTION '20261205a revenire: exista alerte reale in jurnal (istoric)'; END IF;
+  IF (SELECT vechi_oprit_la IS NOT NULL FROM public.polite_alerte_config WHERE id) THEN
+    RAISE EXCEPTION '20261205a revenire: cronul vechi al alertelor catre owneri a fost oprit; reprogrameaza-l intai (vezi antetul), apoi revino';
+  END IF;
   IF (SELECT activ OR schimbat_la IS NOT NULL FROM public.polite_alerte_config WHERE id) IS NOT FALSE THEN
     RAISE EXCEPTION '20261205a revenire: comutatorul alertelor a fost folosit';
   END IF;
   SELECT count(*) INTO v_n FROM public.polite_alerte_destinatari d
    WHERE d.creat_de IS NULL AND d.actualizat_la = d.creat_la AND d.activ
      AND ((d.fel = 'adresa' AND d.departament IN ('financiar', 'ofertare'))
-          OR (d.departament = 'executie' AND d.fel IN ('sef_santier', 'manager_proiect')))
+          OR (d.departament = 'executie' AND d.fel IN ('sef_santier', 'manager_proiect'))
+          OR (d.departament = 'owner' AND d.fel = 'owneri'))
      AND d.tipuri = ARRAY['GBE', 'CAR', 'GPL', 'avans', 'altul']::text[];
-  IF v_n <> 5 OR (SELECT count(*) FROM public.polite_alerte_destinatari) <> 5 THEN
+  IF v_n <> 6 OR (SELECT count(*) FROM public.polite_alerte_destinatari) <> 6 THEN
     RAISE EXCEPTION '20261205a revenire: lista de destinatari s-a schimbat fata de valorile initiale';
   END IF;
   IF EXISTS (SELECT 1 FROM public.contracte_polite WHERE tip = 'avans' OR moneda <> 'RON' OR sursa <> 'manual' OR pdf_sha256 IS NOT NULL OR propunere_id IS NOT NULL
@@ -93,14 +101,14 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.garantii WHERE contract_polita_id IS NOT NULL) THEN
     RAISE EXCEPTION '20261205a revenire: randuri din Registru legate de polite de pe contract';
   END IF;
-  IF (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_zilnic') <> 1 THEN RAISE EXCEPTION '20261205a revenire: jobul polite_alerte_zilnic lipseste sau e dublat'; END IF;
+  IF (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_departamente') <> 1 THEN RAISE EXCEPTION '20261205a revenire: jobul polite_alerte_departamente lipseste sau e dublat'; END IF;
   -- nicio ALTA vedere / functie nu depinde de obiectele noi
   IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite w ON w.oid = d.objid
               WHERE d.classid = 'pg_rewrite'::regclass AND w.ev_class NOT IN ('public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass)
                 AND (d.refobjid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass,
                                     'public.polite_alerte_jurnal'::regclass, 'public.v_polite_scadente'::regclass, 'public.v_garantii_registru'::regclass)
                      OR d.refobjid IN (SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-                                         AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname = 'fn_poate_scrie_polite'))
+                                         AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[]) OR p.proname = 'fn_poate_scrie_polite'))
                      -- r2 (Jakarinos r1 P1-2): doar perechile tabela + coloana create de 20261205a (garantii.moneda exista dinainte)
                      OR (d.refobjid, d.refobjsubid) IN (SELECT a.attrelid, a.attnum FROM pg_attribute a JOIN (VALUES
                             ('public.contracte_polite'::regclass, 'moneda'), ('public.contracte_polite'::regclass, 'executie_de_la'), ('public.contracte_polite'::regclass, 'executie_pana_la'),
@@ -114,13 +122,13 @@ BEGIN
     RAISE EXCEPTION '20261205a revenire: alta vedere depinde de obiectele 20261205a';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
-               AND NOT (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname = 'fn_poate_scrie_polite')
-               AND p.prosrc ~ '\m(fn_polite_norm_nr|fn_polite_text|fn_polite_data|fn_polite_suma|fn_polite_e_owner|fn_polite_provenienta|fn_polite_garantii_legat|fn_polite_scadente|fn_polite_dest_normalizeaza|fn_polite_alerte_calculeaza|fn_polite_alerte_proba|fn_polite_alerte_porneste|fn_polite_alerte_rezerva|fn_polite_alerte_marcheaza|fn_polite_alerte_reconciliaza|fn_polite_propunere_rezerva|fn_polite_propunere_completeaza|fn_polite_propunere_esec|fn_polite_propunere_json|fn_polita_salveaza|fn_polita_propunere_respinge|fn_poate_scrie_polite|polite_propuneri|polite_alerte_destinatari|polite_alerte_config|polite_alerte_jurnal|v_polite_scadente|v_garantii_registru|contract_polita_id)\M') THEN
+               AND NOT (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[]) OR p.proname = 'fn_poate_scrie_polite')
+               AND p.prosrc ~* '\m(fn_polite_norm_nr|fn_polite_text|fn_polite_data|fn_polite_suma|fn_polite_e_owner|fn_polite_provenienta|fn_polite_garantii_legat|fn_polite_scadente|fn_polite_dest_normalizeaza|fn_polite_alerte_calculeaza|fn_polite_alerte_proba|fn_polite_alerte_porneste|fn_polite_alerte_rezerva|fn_polite_alerte_marcheaza|fn_polite_alerte_reconciliaza|fn_polite_propunere_rezerva|fn_polite_propunere_completeaza|fn_polite_propunere_esec|fn_polite_propunere_json|fn_polita_salveaza|fn_polita_propunere_respinge|fn_polite_alerte_opreste_vechi|fn_poate_scrie_polite|polite_propuneri|polite_alerte_destinatari|polite_alerte_config|polite_alerte_jurnal|v_polite_scadente|v_garantii_registru|contract_polita_id)\M') THEN
     RAISE EXCEPTION '20261205a revenire: alta functie foloseste obiectele 20261205a';
   END IF;
 END $pre$;
 
-SELECT cron.unschedule('polite_alerte_zilnic');
+SELECT cron.unschedule('polite_alerte_departamente');
 DROP VIEW public.v_garantii_registru;
 DROP VIEW public.v_polite_scadente;
 DROP TRIGGER trg_polite_provenienta ON public.contracte_polite;
@@ -153,6 +161,7 @@ DROP FUNCTION public.fn_polite_propunere_json(bigint);
 DROP FUNCTION public.fn_polite_propunere_esec(bigint, text, numeric);
 DROP FUNCTION public.fn_polite_propunere_completeaza(bigint, jsonb, jsonb, text, numeric);
 DROP FUNCTION public.fn_polite_propunere_rezerva(text, uuid);
+DROP FUNCTION public.fn_polite_alerte_opreste_vechi();
 DROP FUNCTION public.fn_polite_alerte_reconciliaza();
 DROP FUNCTION public.fn_polite_alerte_marcheaza(bigint[], text, text, text);
 DROP FUNCTION public.fn_polite_alerte_rezerva(date);
@@ -177,7 +186,7 @@ BEGIN
      OR to_regclass('public.polite_alerte_config') IS NOT NULL OR to_regclass('public.polite_alerte_jurnal') IS NOT NULL
      OR to_regclass('public.v_polite_scadente') IS NOT NULL OR to_regclass('public.v_garantii_registru') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-                  AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname = 'fn_poate_scrie_polite'))
+                  AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']::name[]) OR p.proname = 'fn_poate_scrie_polite'))
      -- r2 (Jakarinos r1 P1-2): pe tabela, doar coloanele create de 20261205a (garantii.moneda exista dinainte si ramane)
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.contracte_polite'::regclass AND NOT a.attisdropped
                   AND a.attname IN ('moneda', 'executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la', 'pdf_sha256', 'sursa', 'propunere_id'))
@@ -185,7 +194,7 @@ BEGIN
                   AND a.attname IN ('executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la', 'pdf_sha256', 'sursa', 'propunere_id'))
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.garantii'::regclass AND NOT a.attisdropped AND a.attname = 'contract_polita_id')
      OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname IN ('trg_polite_provenienta', 'trg_polite_dest_normalizeaza', 'trg_polite_garantii_legat') AND NOT t.tgisinternal)
-     OR EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_zilnic') THEN
+     OR EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_departamente') THEN
     RAISE EXCEPTION '20261205a revenire: au ramas obiecte 20261205a';
   END IF;
   SELECT min(pg_get_constraintdef(c.oid)) INTO v_def FROM pg_constraint c

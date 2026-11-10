@@ -16,8 +16,10 @@ const S = {
   th: { textAlign:'left', padding:'7px 8px', fontSize:12, color:G.muted, borderBottom:`1px solid ${G.border}` },
   td: { padding:'7px 8px', fontSize:13, borderBottom:`1px solid ${G.border}`, verticalAlign:'top' },
 }
-const DEP = { financiar:'Financiar', executie:'Execuție', ofertare:'Ofertare' }
-const FEL = { adresa:'Adresă fixă', sef_santier:'Șeful de șantier al proiectului', manager_proiect:'Managerul de proiect' }
+const DEP = { financiar:'Financiar', executie:'Execuție', ofertare:'Ofertare', owner:'Owneri' }
+const FEL = { adresa:'Adresă fixă', sef_santier:'Șeful de șantier al proiectului', manager_proiect:'Managerul de proiect', owneri:'Toți owner-ii platformei' }
+// ce „Cine” se poate alege pe fiecare departament (la fel ca polite_dest_fel_check din BD)
+const felPermis = (dep, fel) => dep === 'owner' ? fel === 'owneri' : fel === 'adresa' || (dep === 'executie' && (fel === 'sef_santier' || fel === 'manager_proiect'))
 const STARE = { trimis:['trimis', G.green], rezervat:['în trimitere', G.blue], necunoscut:['necunoscut — de verificat', G.yellow], eroare:['eroare', G.red], fara_adresa:['fără destinatar', G.red], proba:['probă', G.muted] }
 const fmtLa = v => v ? new Date(v).toLocaleString('ro-RO', { timeZone:'Europe/Bucharest', dateStyle:'short', timeStyle:'short' }) : '—'
 
@@ -34,7 +36,7 @@ export default function PoliteAlerteAdmin({ profile }) {
   const incarca = useCallback(async () => {
     const COL = 'id, cheie, zi, prag, departamente, destinatar_email, stare, eroare, rand, creat_la'
     const [c, d, p, j] = await Promise.all([
-      supabase.from('polite_alerte_config').select('activ, schimbat_la, proba_la').maybeSingle(),
+      supabase.from('polite_alerte_config').select('activ, schimbat_la, proba_la, vechi_oprit_la').maybeSingle(),
       supabase.from('polite_alerte_destinatari').select('*').order('departament').order('fel').order('id'),
       // proba (ultima, toată): cerere separată, ca trimiterile noi să nu o împingă afară din listă
       supabase.from('polite_alerte_jurnal').select(COL, { count:'exact' }).eq('stare', 'proba').order('id').limit(1000),
@@ -60,8 +62,13 @@ export default function PoliteAlerteAdmin({ profile }) {
   const proba = () => ruleaza('fn_polite_alerte_proba', {})
   const comuta = async activ => {
     if (activ && !confirm('Pornești alertele polițelor? De mâine dimineață (07:15) pleacă mailuri reale către lista de mai jos și notificări în aplicație.')) return
-    if (!activ && !confirm('Oprești alertele polițelor (mail + notificări)?')) return
+    if (!activ && !confirm(cfg?.vechi_oprit_la ? 'Oprești alertele polițelor (mail + notificări)? Alertele vechi către owneri sunt deja oprite: după asta nimeni nu mai primește alerte de expirare.' : 'Oprești alertele polițelor (mail + notificări)?')) return
     await ruleaza('fn_polite_alerte_porneste', { p_activ:activ })
+  }
+  // r8: alertele VECHI către owneri (notificările zilnice de dinainte) se opresc DOAR de aici, cu confirmare; nimic automat
+  const opresteVechi = async () => {
+    if (!confirm('Oprești alertele vechi către owneri (notificările zilnice de dinainte, din aplicație)? De acum owner-ii primesc doar alertele noi (mail + aplicație), ca rândul „Owneri” din lista de mai jos.')) return
+    await ruleaza('fn_polite_alerte_opreste_vechi', {})
   }
   // scrierea întoarce true doar dacă a atins efectiv un rând (RLS poate filtra în tăcere: 0 rânduri = eroare vizibilă)
   const scrie = async (op, mesaj) => {
@@ -104,6 +111,11 @@ export default function PoliteAlerteAdmin({ profile }) {
               : <button type="button" disabled={busy || !probaProaspata} title={probaProaspata ? '' : 'Rulează întâi proba (valabilă 24 de ore)'} onClick={() => comuta(true)} style={{ ...S.button, color:G.green, borderColor:G.green + '66' }}>Pornește alertele</button>}
           </div>
         </div>
+        {cfg?.activ && !cfg?.vechi_oprit_la && <div style={{ marginTop:10, padding:'8px 10px', border:`1px solid ${G.yellow}66`, borderRadius:8, display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+          <span style={{ fontSize:13 }}>Alertele vechi către owneri (notificările zilnice de dinainte) încă rulează: owner-ii primesc acum și alertele noi, deci le-ar primi de două ori.</span>
+          <button type="button" disabled={busy} onClick={opresteVechi} style={{ ...S.button, marginLeft:'auto' }}>Oprește alertele vechi către owneri</button>
+        </div>}
+        {cfg?.vechi_oprit_la && <p style={{ ...S.small, margin:'8px 0 0' }}>Alertele vechi către owneri: oprite {fmtLa(cfg.vechi_oprit_la)}.</p>}
         <p style={{ ...S.small, margin:'8px 0 0' }}>Zilnic la 07:15: mail la 60 / 30 / 15 zile înainte de expirare și în ziua expirării, apoi o dată pe săptămână până se încarcă prelungirea (actul adițional) sau până se închide polița. Aceleași alerte apar în aplicație, la cei care au cont. Proba nu trimite nimic.</p>
       </section>
 
@@ -120,7 +132,7 @@ export default function PoliteAlerteAdmin({ profile }) {
                   <td style={S.td}>{r.fel === 'adresa'
                     ? <input defaultValue={r.email || ''} placeholder="nume@gazpet.ro" style={{ ...S.input, width:230, borderColor:r.email ? G.border : G.red }}
                         onBlur={e => { const v = e.target.value.trim().toLowerCase(); if (v !== (r.email || '')) actualizeaza(r, { email:v || null, observatii:v ? null : r.observatii }) }} />
-                    : <span style={S.small}>contul ERP al omului (doar @gazpet.ro)</span>}</td>
+                    : <span style={S.small}>{r.fel === 'owneri' ? 'conturile ERP ale owner-ilor (doar @gazpet.ro)' : 'contul ERP al omului (doar @gazpet.ro)'}</span>}</td>
                   <td style={S.td}>{TIPURI_POLITA.map(t => (
                     <label key={t} style={{ marginRight:8, fontSize:12, whiteSpace:'nowrap' }} title={ETICHETE_TIP[t]}>
                       <input type="checkbox" checked={(r.tipuri || []).includes(t)} disabled={busy}
@@ -134,10 +146,10 @@ export default function PoliteAlerteAdmin({ profile }) {
           </table>
         </div>
         <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10, alignItems:'center' }}>
-          <select value={nou.departament} onChange={e => setNou(x => ({ ...x, departament:e.target.value, fel:e.target.value === 'executie' ? x.fel : 'adresa' }))} style={S.input}>
+          <select value={nou.departament} onChange={e => { const d = e.target.value; setNou(x => ({ ...x, departament:d, fel:felPermis(d, x.fel) ? x.fel : d === 'owner' ? 'owneri' : 'adresa' })) }} style={S.input}>
             {Object.entries(DEP).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
           <select value={nou.fel} onChange={e => setNou(x => ({ ...x, fel:e.target.value }))} style={S.input}>
-            {Object.entries(FEL).filter(([k]) => k === 'adresa' || nou.departament === 'executie').map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+            {Object.entries(FEL).filter(([k]) => felPermis(nou.departament, k)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
           {nou.fel === 'adresa' && <>
             <input value={nou.nume} onChange={e => setNou(x => ({ ...x, nume:e.target.value }))} placeholder="Nume" style={{ ...S.input, width:170 }} />
             <input value={nou.email} onChange={e => setNou(x => ({ ...x, email:e.target.value }))} placeholder="nume@gazpet.ro" style={{ ...S.input, width:230 }} /></>}

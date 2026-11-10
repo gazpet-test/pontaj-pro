@@ -100,6 +100,10 @@ const MESAJE = {
   fara_proba: 'Rulează întâi proba (cine ce ar primi).',
   proba_veche: 'Proba are mai mult de 24 de ore. Rulează-o din nou.',
   doar_owner: 'Doar owner-ul poate face asta.',
+  porneste_intai_alertele_noi: 'Pornește întâi alertele noi; abia apoi se opresc cele vechi.',
+  owneri_fara_alerte_noi: 'Owner-ii nu sunt în lista alertelor noi (rândul „Owneri” lipsește sau e inactiv). Adaugă-l / activează-l întâi.',
+  cron_vechi_negasit: 'Alertele vechi către owneri nu mai sunt programate (au fost deja oprite).',
+  cron_vechi_diferit: 'Programarea alertelor vechi nu mai arată ca la instalare. Nu am oprit nimic; verifică cu administratorul bazei de date.',
 }
 export function mesajEroare(e) {
   const t = String(e?.message || e?.eroare || e || '')

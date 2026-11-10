@@ -1,7 +1,7 @@
 // polite-alerte-mail — alertele de expirare a politelor CAR / GBE / GPL / avans, pe mail (Polite 20261205a, etapa 1).
-// Pornit de cronul polite_alerte_zilnic (05:15 UTC) cu x-intern-secret din Vault, sau de owner-ul logat (cronSauOwner): verify_jwt NU
+// Pornit de cronul polite_alerte_departamente (04:15 + 05:15 UTC, trimite doar la 07 ora RO) cu x-intern-secret din Vault, sau de owner-ul logat (cronSauOwner): verify_jwt NU
 // ajunge (cheia anon e un JWT valid). NU citeste continut extern; destinatarii vin DOAR din BD (polite_alerte_destinatari + conturile ERP
-// ale sefului de santier / MP-ului proiectului), doar @gazpet.ro (CHECK in BD), niciodata din documente.
+// ale sefului de santier / MP-ului proiectului + owner-ii), doar @gazpet.ro (CHECK in BD), niciodata din documente.
 // Pasii: fn_polite_alerte_rezerva (comutatorul OPRIT => nimic; rezerva unica pe polita + prag + expirare + destinatar, pune notificarile in
 // aplicatie) -> un mail pe destinatar (Resend, Idempotency-Key) -> fn_polite_alerte_marcheaza: trimis / eroare (4xx) / necunoscut
 // (timeout, 5xx, retea: fara retrimitere automata, L05 — se vede in Administrator -> Alerte polite).

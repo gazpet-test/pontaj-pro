@@ -96,7 +96,7 @@ describe('paritate cu migrarea (L19)', () => {
   })
   it('revenirea scoate fiecare functie, tabela si trigger creat de migrare', () => {
     const functii = [...MIG.matchAll(/^CREATE FUNCTION public\.([a-z_]+)\(([^)]*)\)/gm)].map(x => x[1])
-    expect(functii.length).toBe(22)
+    expect(functii.length).toBe(23)
     for (const f of functii) expect(REV).toMatch(new RegExp(`DROP FUNCTION public\\.${f}\\(`))
     for (const t of [...MIG.matchAll(/^CREATE TABLE public\.([a-z_]+)/gm)].map(x => x[1])) expect(REV).toContain(`DROP TABLE public.${t};`)
     const triggere = [...MIG.matchAll(/^CREATE TRIGGER ([a-z_]+) .* ON (public\.[a-z_]+)/gm)].map(x => `DROP TRIGGER ${x[1]} ON ${x[2]};`)
@@ -112,9 +112,28 @@ describe('paritate cu migrarea (L19)', () => {
       expect(sursa).not.toMatch(/fn!_polite!_%|fn!_polita!_%|trg!_polite!_%/)
     }
   })
+  it('r8: cronul propriu; cronul vechi (polite_alerte_zilnic) e atins DOAR de fn_polite_alerte_opreste_vechi, niciodata de revenire', () => {
+    const cod = s => s.split('\n').filter(l => !/^\s*--/.test(l)).join('\n')
+    expect(MIG).toMatch(/SELECT cron\.schedule\('polite_alerte_departamente', '15 4,5 \* \* \*'/)
+    const a = MIG.indexOf('CREATE FUNCTION public.fn_polite_alerte_opreste_vechi('), b = MIG.indexOf('$fn$;', a)
+    const corp = MIG.slice(a, b), restul = cod(MIG.slice(0, a) + MIG.slice(b))
+    expect(corp).toContain("PERFORM cron.unschedule('polite_alerte_zilnic');")
+    expect(restul).not.toMatch(/polite_alerte_zilnic/)
+    expect(cod(REV)).not.toMatch(/polite_alerte_zilnic/)
+    expect(cod(REV)).toContain("SELECT cron.unschedule('polite_alerte_departamente');")
+    expect(REV).toMatch(/AND p\.prosrc ~\* '/)
+  })
+  it('r8: departamentele si felurile din Administrator sunt cele din CHECK-urile migrarii', () => {
+    const ui = fs.readFileSync(path.join(__dirname, 'PoliteAlerteAdmin.jsx'), 'utf8')
+    const chei = nume => Object.keys(Function(`return (${ui.match(new RegExp(`const ${nume} = (\\{[^\\n]*\\})`))[1]})`)()).sort()
+    const lista = col => [...MIG.match(new RegExp(`  ${col} text NOT NULL CHECK \\(${col} = ANY \\(ARRAY\\[([^\\]]+)\\]`))[1].matchAll(/'([a-z_]+)'/g)].map(x => x[1]).sort()
+    expect(chei('DEP')).toEqual(lista('departament'))
+    expect(chei('FEL')).toEqual(lista('fel'))
+    expect(MIG).toContain("('owner', 'owneri', 'Toți owner-ii platformei (contul ERP)')")
+  })
   it('functiile expuse lui authenticated nu contin constructii interzise de poarta 0e', () => {
     const corp = nume => { const a = MIG.indexOf(`CREATE FUNCTION public.${nume}(`); const b = MIG.indexOf('$fn$;', a); return MIG.slice(a, b).toLowerCase() }
-    for (const f of ['fn_poate_scrie_polite', 'fn_polite_e_owner', 'fn_polite_scadente', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']) {
+    for (const f of ['fn_poate_scrie_polite', 'fn_polite_e_owner', 'fn_polite_scadente', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polita_salveaza', 'fn_polita_propunere_respinge', 'fn_polite_alerte_opreste_vechi']) {
       expect(corp(f)).not.toMatch(/set_config|request\s*\.\s*jwt|\bexecute\b|session[_\s]+authorization|\brole\b|\bu&/)
     }
   })
@@ -209,6 +228,12 @@ describe('mailul zilnic', () => {
     expect(linkDestinatar([{ departamente: ['executie'], rand: { proiect_id: 5 } }, { departamente: ['executie'], rand: { proiect_id: 6 } }]).cale).toBe('/executie')
     expect(linkDestinatar([{ departamente: ['executie', 'financiar'], rand: {} }]).cale).toBe('/financiar?tab=garantii')
     expect(linkDestinatar([{ departamente: ['ofertare'], rand: {} }]).cale).toBe('/administrativ')
+    expect(linkDestinatar([{ departamente: ['owner'], rand: {} }]).cale).toBe('/administrativ?tab=contracte')
+    // r8: owner-ii vad si politele fara destinatar (ei completeaza lista)
+    const g = grupeazaPeDestinatar([{ ...rand(5, 'o@gazpet.ro', '15', 15), departamente: ['owner'] },
+      { id: 6, stare: 'fara_adresa', destinatar_email: null, departamente: ['owner'], rand: { cheie: 'contract:6', tip: 'GBE', nr_polita: 'H6' } }])
+    expect(g.map(x => [x.email, x.faraAdresa.length])).toEqual([['o@gazpet.ro', 1]])
+    expect(mailPolite({ randuri: g[0].randuri, faraAdresa: g[0].faraAdresa }).html).toContain('Owneri fără destinatar')
     expect(linkDestinatar([{ departamente: ['executie'], rand: { proiect_id: '5;x' } }]).cale).toBe('/executie')
   })
   it('cheia de idempotenta: determinista, independenta de ordine', async () => {
