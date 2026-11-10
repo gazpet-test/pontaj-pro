@@ -7,6 +7,8 @@
 // Date: executie_noduri_suduri (migrarea 20261201a, RLS pe dreptul Execuție) + bucket-ul privat noduri-scheme
 // (<proiect>/<nod>/vederi.json + imaginile, urcate de chat; citite prin signed URL scurt). Pagina nu scrie nimic altundeva.
 // L24: încărcarea, imaginea și salvarea au fiecare generația lor; un rezultat întârziat nu se aplică pe alt context.
+// Schema 3D (probă, 10.11.2026): dacă lângă vederi.json există model_3d.json, apare butonul „3D (probă)”; sferele din 3D deschid
+// aceeași fișă / listă ca punctele din 2D (NodSchema3D.jsx încarcă Three.js doar atunci).
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -18,6 +20,8 @@ import {
   decideReincercare, payloadStare, incertPune, incertSterge,
 } from './nodCuplareLogica.js'
 import { G, S, ContorNod, Legenda, SchemaVedere, FisaSudura, FiltreNod, ListaGrup } from './NodCuplareVizualizare.jsx'
+import NodSchema3D from './NodSchema3D.jsx'
+import { parseModel3d, mapeazaSuduri3d, esteObiectLipsa } from './nodSchema3dLogica.js'
 
 const BUCKET = 'noduri-scheme'
 const COLOANE = 'id, proiect_id, nod_cod, cod, subansamblu, dn, diametru, poz1, poz2, certitudine, stare, data_stare, data_sudare, sudor, buletin_ndt, motiv, vedere, x_pct, y_pct, pozitie_certitudine, pozitii_secundare, versiune, modificat_la'
@@ -45,6 +49,10 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   const [grupDeschis, setGrupDeschis] = useState(null)   // cheia unui punct de grup sau FARA_PUNCT (lista sudurilor fără punct)
   const [inCurs, setInCurs] = useState(null)             // generația fișei pentru care rulează o salvare
   const [mesaj, setMesaj] = useState(null)
+  const [model3d, setModel3d] = useState(null)          // { grupuri, note, erori } | null (fără model = fără buton)
+  const [eroareModel3d, setEroareModel3d] = useState(null)
+  const [mod3d, setMod3d] = useState(false)
+  const [grup3dId, setGrup3dId] = useState('')
   const [sudor, setSudor] = useState(() => citesteSesiune('nod_cuplare_sudor'))
   const [azi, setAzi] = useState(ziBucuresti())
   const gen = useRef(0)              // încărcarea listei
@@ -97,6 +105,7 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   useEffect(() => {
     contextNou(); incerte.current = new Map()
     setSuduri([]); setNod(''); setManifest(null); setVedere(''); setSelectat(null); setGrupDeschis(null); setMesaj(null)
+    setModel3d(null); setMod3d(false)
     incarca()
   }, [incarca])
 
@@ -119,6 +128,25 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
         setManifest(m)
         setVedere(v => (m.vederi.some(x => x.vedere === v) ? v : (m.vederi[0]?.vedere || '')))
       } catch (e) { if (viu) setEroareManifest('Schema nodului nu se poate citi (vederi.json): ' + (e?.message || e)) }
+    })()
+    return () => { viu = false }
+  }, [proiectId, nod, client])
+
+  // ── modelul 3D al nodului (opțional): lipsa fișierului = fără buton, fără mesaj; orice altă eroare se arată ──
+  useEffect(() => {
+    if (!nod) return undefined
+    let viu = true
+    setModel3d(null); setEroareModel3d(null); setMod3d(false)
+    ;(async () => {
+      try {
+        const { data, error } = await client.storage.from(BUCKET).download(`${proiectId}/${nod}/model_3d.json`)
+        if (!viu) return
+        if (error) { if (!esteObiectLipsa(error)) setEroareModel3d('Schema 3D nu se poate citi (model_3d.json): ' + (error.message || 'eroare')); return }
+        const m = parseModel3d(JSON.parse(await data.text()))
+        if (!viu) return
+        setModel3d(m)
+        setGrup3dId(g => (m.grupuri.some(x => x.id === g) ? g : (m.grupuri[0]?.id || '')))
+      } catch (e) { if (viu) setEroareModel3d('Schema 3D nu se poate citi (model_3d.json): ' + (e?.message || e)) }
     })()
     return () => { viu = false }
   }, [proiectId, nod, client])
@@ -148,9 +176,15 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   // sudurile fără punct pe vederea afișată (sau fără schemă deloc): se deschid din listă, cu aceeași fișă
   const faraPunct = useMemo(() => (vedereCurenta ? faraPunctPeVedere(filtrate, vedere) : filtrate), [filtrate, vedere, vedereCurenta])
   const faraNiciunPunct = aleNodului.filter(s => s.vedere == null).length
-  const grupFara = useMemo(() => ({ cheie: FARA_PUNCT, puncte: faraPunct.map(s => ({ sudura: s, certitudine: null })) }), [faraPunct])
+  // 3D: grupul ales din model; sferele = sudurile filtrate cu poziție în model; lista = sudurile grupului fără loc în 3D
+  const grup3d = model3d?.grupuri.find(g => g.id === grup3dId) || model3d?.grupuri[0] || null
+  const map3d = useMemo(() => mapeazaSuduri3d(grup3d, filtrate, aleNodului), [grup3d, filtrate, aleNodului])
+  const arata3d = mod3d && !!grup3d
+  const grupuriActive = arata3d ? map3d.grupuri : grupuri
+  const faraActive = arata3d ? map3d.faraLoc : faraPunct
+  const grupFara = useMemo(() => ({ cheie: FARA_PUNCT, puncte: faraActive.map(s => ({ sudura: s, certitudine: null })) }), [faraActive])
   const sudSel = aleNodului.find(s => String(s.id) === String(selectat)) || null
-  const grupSel = grupDeschis === FARA_PUNCT ? grupFara : (grupuri.find(g => g.cheie === grupDeschis) || null)
+  const grupSel = grupDeschis === FARA_PUNCT ? grupFara : (grupuriActive.find(g => g.cheie === grupDeschis) || null)
 
   // ── fișa: deschidere / închidere = context nou (mesajele și timerul vechi nu mai ajung pe ea) ──
   // Reconcilierea unei cereri cu rezultat necunoscut (cheia ei e capturată): aduce rândul de pe server și șterge intrarea DOAR dacă
@@ -176,12 +210,14 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
     contextNou(); setSelectat(null); setMesaj(null)
   }
   const atingePunct = cheie => {
-    const g = grupuri.find(x => x.cheie === cheie)
+    const g = grupuriActive.find(x => x.cheie === cheie)
     if (!g) return
     if (g.puncte.length === 1) deschide(g.puncte[0].sudura.id)
     else setGrupDeschis(cheie)
   }
-  const schimbaNod = n => { contextNou(); setNod(n); setSelectat(null); setGrupDeschis(null); setMesaj(null) }
+  const schimbaNod = n => { contextNou(); setNod(n); setSelectat(null); setGrupDeschis(null); setMesaj(null); setMod3d(false) }
+  const alegeVedere = v => { setMod3d(false); setGrupDeschis(null); setVedere(v) }
+  const alege3d = () => { setGrupDeschis(null); setMod3d(true) }
   const schimbaSudor = v => { setSudor(v); scrieSesiune('nod_cuplare_sudor', v) }
 
   const salveaza = async form => {
@@ -240,37 +276,71 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
       {eroareDrept && <Alerta text={eroareDrept} />}
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '12px 0 8px' }}>
-        {(manifest?.vederi || []).map(x => (
-          <button key={x.vedere} onClick={() => setVedere(x.vedere)} title={x.titlu}
-            style={{ ...S.btn, padding: '7px 12px', background: x.vedere === vedere ? G.blue : G.surface2, color: x.vedere === vedere ? '#0D1117' : G.text }}>
-            {x.vedere === 'PLAN' ? 'Plan' : `Vedere ${x.vedere}`}
+        {(manifest?.vederi || []).map(x => {
+          const activ = !arata3d && x.vedere === vedere
+          return (
+            <button key={x.vedere} onClick={() => alegeVedere(x.vedere)} title={x.titlu}
+              style={{ ...S.btn, padding: '7px 12px', background: activ ? G.blue : G.surface2, color: activ ? '#0D1117' : G.text }}>
+              {x.vedere === 'PLAN' ? 'Plan' : `Vedere ${x.vedere}`}
+            </button>
+          )
+        })}
+        {model3d?.grupuri.length > 0 && (
+          <button onClick={alege3d} title="Schema 3D generată din planșe (probă)"
+            style={{ ...S.btn, padding: '7px 12px', background: arata3d ? G.purple : G.surface2, color: arata3d ? '#0D1117' : G.text }}>
+            🧊 3D (probă)
           </button>
-        ))}
+        )}
       </div>
       {eroareManifest && <Alerta text={eroareManifest} />}
       {manifest?.erori?.length > 0 && <Alerta text={'Vederi ignorate din manifest: ' + manifest.erori.join(' · ')} />}
-      {vedereCurenta && <div style={{ fontSize: 12, color: G.muted, marginBottom: 6 }}>{vedereCurenta.titlu}</div>}
+      {eroareModel3d && <Alerta text={eroareModel3d} />}
+      {model3d?.erori?.length > 0 && <Alerta text={'Schema 3D, părți ignorate: ' + model3d.erori.slice(0, 5).join(' · ') + (model3d.erori.length > 5 ? ` (+ încă ${model3d.erori.length - 5})` : '')} />}
+      {arata3d && (model3d.grupuri.length > 1
+        ? (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {model3d.grupuri.map(g => (
+              <button key={g.id} onClick={() => { setGrupDeschis(null); setGrup3dId(g.id) }} style={S.chip(g.id === grup3d.id, G.purple)}>{g.titlu}</button>
+            ))}
+          </div>
+        )
+        : <div style={{ fontSize: 12, color: G.muted, marginBottom: 6 }}>{grup3d.titlu}</div>)}
+      {!arata3d && vedereCurenta && <div style={{ fontSize: 12, color: G.muted, marginBottom: 6 }}>{vedereCurenta.titlu}</div>}
       <FiltreNod stari={stari} setStari={setStari} dn={dn} setDn={setDn} dnuri={dnuri} />
       <div style={{ height: 8 }} />
-      {vedereCurenta && (
+      {arata3d && <NodSchema3D grup={grup3d} puncte={map3d.grupuri} selectatId={selectat} onSelect={atingePunct} />}
+      {!arata3d && vedereCurenta && (
         <SchemaVedere imagineUrl={imagine?.cheie === cheieImg ? imagine.url : null} cheieImagine={cheieImg} w={vedereCurenta.w} h={vedereCurenta.h}
           grupuri={grupuri} selectatId={selectat} onSelect={atingePunct}
           onEroareImagine={() => setEroareImagine('Imaginea vederii nu s-a putut încărca (link expirat sau fișier lipsă). Reîncarcă pagina.')} />
       )}
-      {eroareImagine && <Alerta text={eroareImagine} />}
+      {!arata3d && eroareImagine && <Alerta text={eroareImagine} />}
       <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ fontSize: 12, color: G.muted }}>Pe această vedere: {new Set(peVedere.map(p => p.sudura.id)).size} suduri</span>
-        {faraPunct.length > 0 && (
+        <span style={{ fontSize: 12, color: G.muted }}>
+          {arata3d ? `În schema 3D: ${map3d.grupuri.reduce((n, g) => n + g.puncte.length, 0)} suduri` : `Pe această vedere: ${new Set(peVedere.map(p => p.sudura.id)).size} suduri`}
+        </span>
+        {faraActive.length > 0 && (
           <button onClick={() => setGrupDeschis(FARA_PUNCT)} style={{ ...S.btn, padding: '8px 12px', fontSize: 13, minHeight: 44 }}>
-            📋 Suduri fără punct {vedereCurenta ? 'pe această vedere' : 'pe schemă'}: {faraPunct.length}
+            📋 {arata3d ? 'Suduri fără loc în 3D' : `Suduri fără punct ${vedereCurenta ? 'pe această vedere' : 'pe schemă'}`}: {faraActive.length}
           </button>
         )}
-        {faraNiciunPunct > 0 && <span style={{ fontSize: 12, color: G.dim }}>(fără niciun punct pe schemă: {faraNiciunPunct})</span>}
+        {!arata3d && faraNiciunPunct > 0 && <span style={{ fontSize: 12, color: G.dim }}>(fără niciun punct pe schemă: {faraNiciunPunct})</span>}
+        {arata3d && map3d.inModelFaraLista.length > 0 && (
+          <span style={{ fontSize: 12, color: G.yellow }}>În schemă, dar nu în lista sudurilor: {map3d.inModelFaraLista.slice(0, 8).join(', ')}{map3d.inModelFaraLista.length > 8 ? ` (+ încă ${map3d.inModelFaraLista.length - 8})` : ''}</span>
+        )}
       </div>
+      {arata3d && model3d.note.length > 0 && (
+        <details style={{ marginTop: 8, fontSize: 12, color: G.muted }}>
+          <summary style={{ cursor: 'pointer' }}>Despre schema 3D</summary>
+          <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>{model3d.note.map((n, i) => <li key={i}>{n}</li>)}</ul>
+        </details>
+      )}
       <div style={{ marginTop: 8 }}><Legenda /></div>
 
       <ListaGrup grup={grupSel} onAlege={deschide} onInchide={() => setGrupDeschis(null)}
-        titlu={grupDeschis === FARA_PUNCT ? `Suduri fără punct ${vedereCurenta ? `pe vederea ${vedereCurenta.vedere === 'PLAN' ? 'Plan' : vedereCurenta.vedere}` : 'pe schemă'}${stari.length || dn !== '' ? ' (după filtre)' : ''}: ${faraPunct.length}` : null} />
+        titlu={grupDeschis !== FARA_PUNCT ? null
+          : arata3d ? `Suduri fără loc în 3D (${grup3d.titlu})${stari.length || dn !== '' ? ' (după filtre)' : ''}: ${faraActive.length}`
+            : `Suduri fără punct ${vedereCurenta ? `pe vederea ${vedereCurenta.vedere === 'PLAN' ? 'Plan' : vedereCurenta.vedere}` : 'pe schemă'}${stari.length || dn !== '' ? ' (după filtre)' : ''}: ${faraActive.length}`} />
       <FisaSudura sudura={sudSel} poateScrie={poateScrie} azi={azi} sudorSesiune={sudor} onSudorSesiune={schimbaSudor}
         onSalveaza={salveaza} onInchide={inchide} busy={inCurs != null && inCurs === fisaGen.current} mesaj={mesaj} />
     </Cadru>
