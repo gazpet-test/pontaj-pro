@@ -134,9 +134,13 @@ BEGIN
     RAISE EXCEPTION '20261205a: lipseste bucket-ul contracte-terti';
   END IF;
   -- 0g. pg_cron / pg_net / vault, ca 20261130d
-  IF to_regclass('cron.job') IS NULL OR to_regprocedure('cron.schedule(text,text,text)') IS NULL
+  IF to_regclass('cron.job') IS NULL OR to_regprocedure('cron.schedule(text,text,text)') IS NULL OR to_regprocedure('cron.unschedule(bigint)') IS NULL
      OR to_regprocedure('net.http_post(text,jsonb,jsonb,jsonb,integer)') IS NULL OR to_regclass('vault.decrypted_secrets') IS NULL THEN
     RAISE EXCEPTION '20261205a: lipsesc pg_cron / pg_net / vault';
+  END IF;
+  -- r8b: preluarea alertelor vechi blocheaza randul jobului (FOR UPDATE): proprietarul functiilor trebuie sa aiba SELECT si UPDATE pe cron.job
+  IF NOT has_table_privilege(current_user, 'cron.job', 'SELECT') OR NOT has_table_privilege(current_user, 'cron.job', 'UPDATE') THEN
+    RAISE EXCEPTION '20261205a: rolul migrarii nu are SELECT + UPDATE pe cron.job (necesar preluarii alertelor vechi)';
   END IF;
   IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_departamente') THEN RAISE EXCEPTION '20261205a: jobul polite_alerte_departamente exista deja'; END IF;
   IF current_setting('cron.timezone', true) IS DISTINCT FROM 'GMT' THEN
@@ -595,9 +599,12 @@ END $fn$;
 --      Doar owner-ul, doar cu confirmare in UI (butonul cheama acest RPC; nimic automat), doar cand alertele noi sunt PORNITE si randul
 --      „owner / owneri” e activ in lista (owner-ii nu raman fara alerte), doar jobul vechi EXACT (nume + comanda). Scrie momentul + autorul
 --      pe polite_alerte_config. Nu sterge functia veche. Revenirea migrarii nu il reprogrameaza.
+--      r8b (Jakarinos r8 P1): ordinea lock-urilor = randul config (FOR UPDATE), apoi ULTIMUL randul jobului vechi (FOR UPDATE NOWAIT:
+--      ocupat de alta sesiune = 55P03, nimic scris). Numele, comanda si proprietarul se verifica pe randul BLOCAT, apoi se scoate exact
+--      acel jobid, cu verificarea rezultatului. O modificare a jobului fie e vazuta (refuz), fie asteapta / e refuzata de lock.
 CREATE FUNCTION public.fn_polite_alerte_opreste_vechi() RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v public.polite_alerte_config%ROWTYPE; v_n integer;
+DECLARE v public.polite_alerte_config%ROWTYPE; v_n integer; v_job bigint; v_cmd text; v_user text; v_ok boolean;
 BEGIN
   IF NOT public.fn_polite_e_owner() THEN RAISE EXCEPTION 'doar_owner' USING ERRCODE = '42501'; END IF;
   SELECT * INTO v FROM public.polite_alerte_config c WHERE c.id FOR UPDATE;
@@ -606,13 +613,19 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.polite_alerte_destinatari d WHERE d.departament = 'owner' AND d.fel = 'owneri' AND d.activ) THEN
     RAISE EXCEPTION 'owneri_fara_alerte_noi' USING ERRCODE = 'P0001';
   END IF;
-  SELECT count(*) INTO v_n FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic';
+  PERFORM 1 FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic' FOR UPDATE NOWAIT;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
   IF v_n = 0 THEN RAISE EXCEPTION 'cron_vechi_negasit' USING ERRCODE = 'P0001'; END IF;
-  IF v_n <> 1 OR NOT EXISTS (SELECT 1 FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic'
-                               AND btrim(j.command) IN ('SELECT fn_polite_send_alerte();', 'SELECT public.fn_polite_send_alerte();')) THEN
+  IF v_n <> 1 THEN RAISE EXCEPTION 'cron_vechi_diferit' USING ERRCODE = 'P0001'; END IF;
+  SELECT j.jobid, j.command, j.username INTO STRICT v_job, v_cmd, v_user FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic';
+  IF btrim(v_cmd) NOT IN ('SELECT fn_polite_send_alerte();', 'SELECT public.fn_polite_send_alerte();') OR v_user IS DISTINCT FROM current_user THEN
     RAISE EXCEPTION 'cron_vechi_diferit' USING ERRCODE = 'P0001';
   END IF;
-  PERFORM cron.unschedule('polite_alerte_zilnic');
+  -- doua instructiuni: o verificare in aceeasi instructiune cu unschedule ar vedea randul de dinainte de stergere
+  v_ok := cron.unschedule(v_job);
+  IF v_ok IS NOT TRUE OR EXISTS (SELECT 1 FROM cron.job j WHERE j.jobid = v_job) THEN
+    RAISE EXCEPTION 'cron_vechi_neoprit' USING ERRCODE = 'P0001';
+  END IF;
   UPDATE public.polite_alerte_config c SET vechi_oprit_la = now(), vechi_oprit_de = auth.uid() WHERE c.id RETURNING * INTO v;
   RETURN jsonb_build_object('oprit', true, 'deja', false, 'oprit_la', v.vechi_oprit_la);
 END $fn$;

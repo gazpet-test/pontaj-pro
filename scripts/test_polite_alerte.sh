@@ -66,6 +66,25 @@ echo "== a doua aplicare refuzata"
 aplica app "$MIG" && fail "a doua aplicare a trecut"
 ok "a doua aplicare refuzata: $(grep -o 'ERROR:.*' "$L/a.log" | head -1)"
 
+echo "== r8b: preluarea alertelor vechi cu jobul blocat de alta sesiune (doua sesiuni reale)"
+# A: tine randul jobului vechi cu un UPDATE necomis cat doarme, apoi ROLLBACK. B: owner-ul apasa butonul => 55P03 imediat (NOWAIT), nimic scris.
+printf "BEGIN;\nUPDATE cron.job SET command = command WHERE jobname = 'polite_alerte_zilnic';\nSELECT pg_sleep(8);\nROLLBACK;\n" > "$L/ja.sql"
+printf "\\\\set VERBOSITY verbose\nBEGIN;\nUPDATE public.polite_alerte_config SET activ = true;\nSELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true), set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-00000000000a\",\"role\":\"authenticated\"}', true);\nSET LOCAL ROLE authenticated;\nSELECT public.fn_polite_alerte_opreste_vechi();\nROLLBACK;\n" > "$L/jb.sql"
+"${PS[@]}" -d app -f "$L/ja.sql" > "$L/ja.log" 2>&1 &
+PA=$!
+for k in $(seq 1 50); do
+  [ "$("${PS[@]}" -d app -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'app' AND state = 'active' AND query LIKE 'SELECT pg_sleep(8)%'")" = 1 ] && break
+  sleep 0.2
+done
+[ "$k" -lt 50 ] || fail "sesiunea A nu a pornit"
+"${PS[@]}" -d app -f "$L/jb.sql" > "$L/jb.log" 2>&1 && fail "preluarea a trecut cu jobul blocat de alta sesiune"
+grep -q "55P03" "$L/jb.log" || { cat "$L/jb.log"; fail "preluarea a picat din alt motiv decat lock-ul pe job"; }
+[ "$("${PS[@]}" -d app -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'app' AND state = 'active' AND query LIKE 'SELECT pg_sleep(8)%'")" = 1 ] || fail "B a asteptat lock-ul (trebuia NOWAIT)"
+wait $PA; EA=$?
+[ $EA -eq 0 ] || { cat "$L/ja.log"; fail "sesiunea A exit $EA"; }
+[ "$("${PS[@]}" -d app -Atc "SELECT (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_zilnic' AND command = 'SELECT fn_polite_send_alerte();') || ':' || (SELECT (vechi_oprit_la IS NULL AND NOT activ)::text FROM public.polite_alerte_config)")" = "1:true" ] || fail "dupa cursa: jobul vechi sau config schimbate"
+ok "jobul blocat de alta sesiune: 55P03 imediat, jobul vechi si config neschimbate"
+
 echo "== revenire fail-closed pe mutanti (fiecare trebuie REFUZAT)"
 MUTANTI=(
   "CREATE OR REPLACE FUNCTION public.fn_polite_e_owner() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS \$x\$ SELECT true \$x\$;"

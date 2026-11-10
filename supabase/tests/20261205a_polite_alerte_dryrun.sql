@@ -306,6 +306,23 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $t$;
 RESET ROLE;
+-- r8b: jobul vechi schimbat (alta comanda) => refuz, jobul ramane, nimic notat
+UPDATE cron.job SET command = 'SELECT 1;' WHERE jobname = 'polite_alerte_zilnic';
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+DO $t$
+BEGIN
+  BEGIN PERFORM public.fn_polite_alerte_opreste_vechi(); RAISE EXCEPTION 'TEST15 FAIL jobul schimbat a fost scos';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'cron_vechi_diferit' THEN RAISE; END IF; END;
+END $t$;
+RESET ROLE;
+DO $t$
+BEGIN
+  IF (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_zilnic' AND command = 'SELECT 1;') <> 1 OR (SELECT vechi_oprit_la FROM public.polite_alerte_config) IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST15 FAIL refuzul pe jobul schimbat a scris ceva';
+  END IF;
+END $t$;
+UPDATE cron.job SET command = 'SELECT fn_polite_send_alerte();' WHERE jobname = 'polite_alerte_zilnic';
 SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true), set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 DO $t$
@@ -328,7 +345,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'polite_alerte_departamente') THEN RAISE EXCEPTION 'TEST15 FAIL cronul nou a disparut'; END IF;
   IF to_regprocedure('public.fn_polite_send_alerte()') IS NULL THEN RAISE EXCEPTION 'TEST15 FAIL functia veche stearsa'; END IF;
   IF (SELECT vechi_oprit_de FROM public.polite_alerte_config) IS DISTINCT FROM '00000000-0000-0000-0000-00000000000a'::uuid THEN RAISE EXCEPTION 'TEST15 FAIL autorul opririi'; END IF;
-  RAISE NOTICE 'TEST15 OK preluarea: non-owner refuzat, refuz fara randul owner, oprit o data (idempotent), cronul nou si functia veche raman';
+  RAISE NOTICE 'TEST15 OK preluarea: non-owner refuzat, job schimbat refuzat, refuz fara randul owner, oprit o data (idempotent), cronul nou si functia veche raman';
 END $t$;
 
 -- (revenirea si mutantii ei ruleaza separat, in scripts/test_polite_alerte.sh)
