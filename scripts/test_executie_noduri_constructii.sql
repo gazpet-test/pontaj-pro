@@ -450,7 +450,8 @@ DO $t$ BEGIN
   RAISE NOTICE 'T12 OK (refuzurile „garda invalida” și „tabelul are randuri” au fost verificate explicit)';
 END $t$;
 
--- T16: revenirea armată pe tabel GOL refuză o stare care nu e exact cea din migrare (L15): corpul unei funcții schimbat; politica schimbată
+-- T16: revenirea armată pe tabel GOL refuză o stare care nu e exact cea din migrare (L15): corpul unei funcții schimbat; politica schimbată;
+-- trigger-ul recreat cu aceeași funcție dar cu WHEN (false)
 SAVEPOINT t16a;
 CREATE OR REPLACE FUNCTION public.fn_executie_constr_etape_valide(p text[]) RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$ BEGIN RETURN true; END $f$;
 DELETE FROM public.executie_noduri_constructii;
@@ -473,12 +474,26 @@ SELECT set_config('gazpet.revenire_20261207a', 'SCOATE_NODURI_CONSTRUCTII:' || t
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t16b;
 SELECT pg_temp.t_eroare('T16b', :'t16b_eroare', :'t16b_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'starea nu e cea din 20261207a');
+SAVEPOINT t16c;
+DROP TRIGGER trg_executie_constr_provenienta ON public.executie_noduri_constructii;
+CREATE TRIGGER trg_executie_constr_provenienta BEFORE INSERT OR UPDATE ON public.executie_noduri_constructii
+  FOR EACH ROW WHEN (false) EXECUTE FUNCTION public.fn_executie_constr_provenienta();
+DELETE FROM public.executie_noduri_constructii;
+SELECT set_config('gazpet.revenire_20261207a', 'SCOATE_NODURI_CONSTRUCTII:' || txid_current(), true);
+\set ON_ERROR_STOP 0
+\ir ../supabase/revenire/20261207a_executie_noduri_constructii_ROLLBACK.sql
+\set t16c_eroare :ERROR
+\set t16c_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t16c;
+SELECT pg_temp.t_eroare('T16c', :'t16c_eroare', :'t16c_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'starea nu e cea din 20261207a');
 DO $t$ BEGIN
   IF public.fn_executie_constr_etape_valide(ARRAY['xyz']) OR (SELECT count(*) FROM public.executie_noduri_constructii WHERE nod_cod = 'NOD-TEST-HARNESS') <> 5
-     OR to_regclass('public.executie_noduri_constructii') IS NULL THEN
+     OR to_regclass('public.executie_noduri_constructii') IS NULL
+     OR (SELECT tgqual IS NOT NULL FROM pg_trigger WHERE tgrelid = 'public.executie_noduri_constructii'::regclass AND tgname = 'trg_executie_constr_provenienta') THEN
     RAISE EXCEPTION 'T16 FAIL: starea nu a revenit după refuz';
   END IF;
-  RAISE NOTICE 'T16 OK (revenirea refuză corpul de funcție schimbat și politica schimbată)';
+  RAISE NOTICE 'T16 OK (revenirea refuză corpul de funcție schimbat, politica schimbată și trigger-ul cu WHEN)';
 END $t$;
 
 -- T13: revenirea armată pe tabel gol scoate tot (și NU atinge 20261201a); re-aplicarea merge

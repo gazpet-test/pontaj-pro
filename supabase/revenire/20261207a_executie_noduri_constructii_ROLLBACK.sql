@@ -29,7 +29,8 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- starea EXACTĂ a migrării (L15), altfel refuz: tabelul cu RLS; cele 4 funcții cu corpul (md5 fără CR), limbajul, DEFINER, volatilitatea,
-  -- search_path, proprietarul și EXECUTE; un singur trigger (funcția, tipul BEFORE INSERT OR UPDATE FOR EACH ROW, activ); o singură politică
+  -- search_path, proprietarul și EXECUTE; un singur trigger (funcția, tipul BEFORE INSERT OR UPDATE FOR EACH ROW, activ, fără WHEN / argumente /
+  -- coloane / constrângere); o singură politică
   -- (comandă, roluri, expresie); privilegiile pe tabel / coloane / secvență ca la final de migrare
   IF to_regclass('public.executie_noduri_constructii') IS NULL THEN RAISE EXCEPTION '20261207a revenire: starea nu e cea din 20261207a (tabelul lipseste)'; END IF;
   IF (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.executie_noduri_constructii'::regclass) IS NOT TRUE
@@ -47,7 +48,8 @@ BEGIN
             AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x WHERE x.grantee = 0)) <> 4
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.executie_noduri_constructii'::regclass AND NOT tgisinternal) <> 1
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_noduri_constructii'::regclass AND tgname = 'trg_executie_constr_provenienta'
-                     AND tgenabled = 'O' AND tgtype = 23 AND tgfoid = to_regprocedure('public.fn_executie_constr_provenienta()'))
+                     AND tgenabled = 'O' AND tgtype = 23 AND tgfoid = to_regprocedure('public.fn_executie_constr_provenienta()')
+                     AND tgqual IS NULL AND tgnargs = 0 AND tgattr::text = '' AND tgconstraint = 0 AND NOT tgdeferrable)
      OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_noduri_constructii') <> 1
      OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_noduri_constructii' AND policyname = 'executie_noduri_constructii_citire'
                      AND cmd = 'SELECT' AND roles = '{authenticated}' AND permissive = 'PERMISSIVE' AND qual = 'fn_executie_nod_drept(proiect_id, false)' AND with_check IS NULL)

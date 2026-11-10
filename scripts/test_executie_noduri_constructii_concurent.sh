@@ -64,12 +64,17 @@ AZI="(now() AT TIME ZONE 'Europe/Bucharest')::date"
 id_de() { q "SELECT id FROM executie_noduri_constructii WHERE nod_cod = 'NOD-TEST-IMPORT' AND cod = '$1'"; }
 ver_de() { q "SELECT versiune FROM executie_noduri_constructii WHERE nod_cod = 'NOD-TEST-IMPORT' AND cod = '$1'"; }
 urm_de() { q "SELECT etapa_curenta FROM executie_noduri_constructii WHERE nod_cod = 'NOD-TEST-IMPORT' AND cod = '$1'"; }
+# Fiecare sesiune scrie ieșirea în $4 și codul REAL de ieșire al psql în $4.rc (verificat explicit după wait; textul nu-l înlocuiește).
 # sesiunea de import: $1 aplicație, $2 fixture, $3 secunde ținute după import, $4 ieșire
-imp() { PGAPPNAME="$1" "${PSQL[@]}" -d "$BAZA" -At -c "BEGIN" -f "$2" -c "SELECT pg_sleep($3)" -c "COMMIT" >"$4" 2>&1 || true; }
+imp() { local rc=0; PGAPPNAME="$1" "${PSQL[@]}" -d "$BAZA" -At -c "BEGIN" -f "$2" -c "SELECT pg_sleep($3)" -c "COMMIT" >"$4" 2>&1 || rc=$?; echo "$rc" >"$4.rc"; }
 # sesiunea RPC (owner, rol authenticated): $1 aplicație, $2 cod, $3 secunde ținute după RPC, $4 ieșire
-rpc() { local id v e; id="$(id_de "$2")"; v="$(ver_de "$2")"; e="$(urm_de "$2")"
+rpc() { local id v e rc=0; id="$(id_de "$2")"; v="$(ver_de "$2")"; e="$(urm_de "$2")"
   PGAPPNAME="$1" "${PSQL[@]}" -d "$BAZA" -At -c "BEGIN" -c "SELECT set_config('request.jwt.claim.sub', '$OWNER', true)" -c "SET LOCAL ROLE authenticated" \
-    -c "SELECT public.fn_executie_constr_etapa($id, $v, 'bifeaza', '$e', $AZI, NULL, gen_random_uuid())" -c "SELECT pg_sleep($3)" -c "COMMIT" >"$4" 2>&1 || true; }
+    -c "SELECT public.fn_executie_constr_etapa($id, $v, 'bifeaza', '$e', $AZI, NULL, gen_random_uuid())" -c "SELECT pg_sleep($3)" -c "COMMIT" >"$4" 2>&1 || rc=$?
+  echo "$rc" >"$4.rc"; }
+# codul de ieșire 0 (psql a terminat tot, inclusiv COMMIT-ul) și niciun ERROR / FATAL / deadlock în ieșire
+sesiune_ok() { [ -f "$1.rc" ] && [ "$(cat "$1.rc")" = 0 ] || esec "$2: sesiunea $(basename "$1") a ieșit cu codul $(cat "$1.rc" 2>/dev/null || echo '?'): $(cat "$1")"
+  ! grep -Eqi 'ERROR|FATAL|deadlock|40P01' "$1" || esec "$2: $(basename "$1"): $(cat "$1")"; }
 asteapta() { local i; for i in $(seq 150); do [ "$(q "$2")" = 1 ] && return 0; sleep 0.1; done; esec "barieră $1"; }
 in_sleep() { echo "SELECT (count(*) = 1)::int FROM pg_stat_activity WHERE application_name = '$1' AND state = 'active' AND query LIKE 'SELECT pg_sleep%'"; }
 blocat() { echo "SELECT (count(*) = 1)::int FROM pg_stat_activity WHERE application_name = '$1' AND cardinality(pg_blocking_pids(pid)) > 0"; }
@@ -78,7 +83,7 @@ asteapta_lock() { q "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON 
   AND l.locktype = 'relation' AND l.relation = 'public.executie_noduri_constructii'::regclass AND l.mode = '$2'"; }
 randuri_luate() { q "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = '$1' AND l.granted
   AND (l.locktype = 'tuple' OR (l.locktype = 'relation' AND l.relation = 'public.executie_noduri_constructii'::regclass AND l.mode = 'RowShareLock'))"; }
-fara_deadlock() { ! grep -Eqi 'deadlock|40P01' "$1" || esec "$2: deadlock în $(basename "$1"): $(cat "$1")"; }
+rm -f /tmp/constr_c1_imp.out* /tmp/constr_c1_rpc.out* /tmp/constr_c2_imp.out* /tmp/constr_c2_rpc.out*
 
 # C1: importul întâi, RPC-ul după
 V2="$(ver_de F6-2)"
@@ -89,8 +94,7 @@ asteapta "C1: RPC-ul nu a fost blocat de import" "$(blocat cA)"
 [ "$(asteapta_lock cA RowExclusiveLock)" = 1 ] || esec "C1: RPC-ul nu așteaptă lock-ul de TABEL (RowExclusiveLock): $(q "SELECT string_agg(locktype || ':' || mode || ':' || granted, ' ') FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'cA'")"
 [ "$(randuri_luate cA)" = 0 ] || esec "C1: RPC-ul ține deja lock-uri de rând înaintea tabelului"
 wait $PI; wait $PA
-fara_deadlock /tmp/constr_c1_imp.out C1; fara_deadlock /tmp/constr_c1_rpc.out C1
-grep -q ERROR /tmp/constr_c1_imp.out && esec "C1: importul a eșuat: $(cat /tmp/constr_c1_imp.out)"
+sesiune_ok /tmp/constr_c1_imp.out C1; sesiune_ok /tmp/constr_c1_rpc.out C1
 grep -q '"motiv": "conflict"' /tmp/constr_c1_rpc.out || esec "C1: RPC-ul trebuia să întoarcă conflict (versiunea schimbată de import): $(cat /tmp/constr_c1_rpc.out)"
 [ "$(ver_de F6-2)" -gt "$V2" ] && [ "$(q "SELECT cardinality(etape_data) FROM executie_noduri_constructii WHERE nod_cod = 'NOD-TEST-IMPORT' AND cod = 'F6-2'")" = 0 ] \
   || esec "C1: starea finală a lui F6-2"
@@ -103,9 +107,9 @@ imp cI2 "$FIX/import_exemplu_1.sql" 0 /tmp/constr_c2_imp.out & PI=$!
 asteapta "C2: importul nu a fost blocat de RPC" "$(blocat cI2)"
 [ "$(asteapta_lock cI2 ShareRowExclusiveLock)" = 1 ] || esec "C2: importul nu așteaptă lock-ul de TABEL (ShareRowExclusiveLock)"
 wait $PA; wait $PI
-fara_deadlock /tmp/constr_c2_imp.out C2; fara_deadlock /tmp/constr_c2_rpc.out C2
+sesiune_ok /tmp/constr_c2_rpc.out C2; sesiune_ok /tmp/constr_c2_imp.out C2
 grep -q '"ok": true' /tmp/constr_c2_rpc.out || esec "C2: RPC-ul: $(cat /tmp/constr_c2_rpc.out)"
-grep -q ERROR /tmp/constr_c2_imp.out && esec "C2: importul a eșuat după RPC: $(cat /tmp/constr_c2_imp.out)"
+grep -q 'import constructii NOD-TEST-IMPORT' /tmp/constr_c2_imp.out || esec "C2: importul nu și-a raportat rezultatul: $(cat /tmp/constr_c2_imp.out)"
 [ "$(q "SELECT cardinality(etape_data) || '|' || etapa_curenta FROM executie_noduri_constructii WHERE nod_cod = 'NOD-TEST-IMPORT' AND cod = 'F6-1'")" = '3|turnare' ] \
   || esec "C2: bifarea RPC-ului nu s-a păstrat după import"
 ok "C2 RPC -> import: importul a așteptat la lock-ul de tabel, apoi a trecut; bifarea păstrată; fără deadlock"

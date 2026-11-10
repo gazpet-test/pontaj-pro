@@ -295,7 +295,7 @@ BEGIN
     RAISE EXCEPTION '20261207a post: functii (numar / definer / search_path / EXECUTE)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = v_rel AND tgname = 'trg_executie_constr_provenienta' AND tgenabled = 'O'
-                  AND tgfoid = 'public.fn_executie_constr_provenienta()'::regprocedure)
+                  AND tgfoid = 'public.fn_executie_constr_provenienta()'::regprocedure AND tgtype = 23 AND tgqual IS NULL AND tgnargs = 0)
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = v_rel AND NOT tgisinternal) <> 1 THEN
     RAISE EXCEPTION '20261207a post: trigger-ul de proveniență';
   END IF;
