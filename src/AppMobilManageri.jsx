@@ -241,9 +241,8 @@ function RaportZilnic({ profile, sites, onBack }) {
         setBlocuri(b.length ? b : [blocNou(unisActive.length === 1 ? unisActive[0].id : null)])
       }
       if (esteDistr) {
-        const { data: dl } = await supabase.from('raport_distributie_linii').select('*').eq('raport_id', existing.id).order('tabel').order('nr_crt')
-        if (!viu()) return
-        const r = dinBd(dl)
+        // din același instantaneu ca antetul și versiunea (distribuția se salvează acum în aceeași tranzacție)
+        const r = dinBd(Array.isArray(cit.distributie) ? cit.distributie : [])
         if (!r.some(x => x.tabel === 'conducta')) r.unshift(randNou('conducta'))
         if (!r.some(x => x.tabel === 'bransament')) r.push(randNou('bransament'))
         setDRanduri(r)
@@ -402,7 +401,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     try {
       // aceeași intenție (nimic schimbat în formular după o eroare de rețea) = aceeași cheie și același conținut, fără a reurca pozele (L04 / L05)
       const semn = JSON.stringify({ siteId, dataRaport, versiune, lucrari, utilaje, personal, masini, probleme, subcontractori, aprovizionare, planMaine,
-        distributie, dAntet, blocuri: blocuri.map(b => [b.unitateId, b.valori]), pozeEx: pozeExistente.map(x => x.path), poze: poze.map(f => [f.name, f.size, f.lastModified]) })
+        distributie, dAntet, dRanduri, blocuri: blocuri.map(b => [b.unitateId, b.valori]), pozeEx: pozeExistente.map(x => x.path), poze: poze.map(f => [f.name, f.size, f.lastModified]) })
       let intentie = intentieRef.current?.semn === semn ? intentieRef.current : null
       if (!intentie) {
         // păstrează pozele deja urcate (la editare) + urcă cele noi
@@ -437,12 +436,15 @@ function RaportZilnic({ profile, sites, onBack }) {
           },
           // proiect cu activități: liniile se înlocuiesc; altfel nu se ating (null)
           linii: proiectId && deSalvat ? deSalvat.linii : null,
+          // distribuția gaze: în ACEEAȘI salvare atomică, sub același CAS (review r3 P1-2); altfel nu se atinge (null)
+          distributie: distributie ? pentruSalvare(dRanduri, null).map(({ raport_id, ...x }) => x) : null,
         }
         intentieRef.current = intentie
       }
       // ── antetul + cantitățile pe obiecte (20261208a): o singură tranzacție pe server, CAS pe versiune, cheie per intenție ──
       const { data: rs, error: rsErr } = await supabase.rpc('fn_raport_zilnic_salveaza', {
-        p_site: intentie.site, p_data: intentie.data, p_antet: intentie.antet, p_linii: intentie.linii, p_versiune: intentie.versiune, p_cheie: intentie.cheie })
+        p_site: intentie.site, p_data: intentie.data, p_antet: intentie.antet, p_linii: intentie.linii, p_distributie: intentie.distributie,
+        p_versiune: intentie.versiune, p_cheie: intentie.cheie })
       if (rsErr) {
         // refuz cu cod SQL = tranzacția s-a anulat (determinat): o încercare nouă face o intenție nouă; altfel (rețea) rămâne pentru reluare
         if (/^[0-9A-Z]{5}$/.test(rsErr.code || '')) intentieRef.current = null
@@ -460,11 +462,7 @@ function RaportZilnic({ profile, sites, onBack }) {
       }
       if (genSalvare === genRef.current) { setVersiune(rs.versiune); setExistingId(rs.raport_id) }
       const rz = { id: rs.raport_id }
-      // ── Raport lucrări executate (distribuție gaze): înlocuim rândurile raportului ATOMIC (RPC, o tranzacție) ──
-      if (rz?.id && distributie) {
-        const { error: dErr } = await supabase.rpc('fn_raport_distributie_salveaza', { p_raport_id: rz.id, p_linii: pentruSalvare(dRanduri, rz.id) })
-        if (dErr) throw dErr
-      }
+      // (distribuția gaze s-a salvat deja, în aceeași tranzacție cu antetul și cantitățile)
       // ── Utilaje defecte → Logistica + tichet la Mitrache (decizie Razvan 04.08.2026) ──
       // Eroarea aici NU blochează raportul (deja salvat) — doar anunță.
       let tichetInfo = ''

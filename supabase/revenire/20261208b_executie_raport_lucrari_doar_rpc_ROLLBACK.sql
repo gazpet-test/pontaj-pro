@@ -1,5 +1,6 @@
 -- Revenire 20261208b_executie_raport_lucrari_doar_rpc. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
--- Redă lui authenticated scrierea directă în raport_lucrari (INSERT / UPDATE / DELETE, ca înainte de 20261208b). anon NU o primește înapoi
+-- Redă lui authenticated scrierea directă în raport_lucrari și raport_distributie_linii (INSERT / UPDATE / DELETE) și EXECUTE pe
+-- fn_raport_distributie_salveaza, ca înainte de 20261208b. anon NU le primește înapoi
 -- (n-o putea folosi: politicile tabelului cer auth.uid()); e singura asimetrie, voită. Se rulează ÎNAINTEA revenirii 20261208a, dacă e nevoie de ambele.
 -- Gestionarul tranzacției e operatorul. Un singur string:
 --   BEGIN ISOLATION LEVEL READ COMMITTED;
@@ -21,9 +22,17 @@ BEGIN
      OR has_table_privilege('authenticated', 'public.raport_lucrari', 'DELETE') THEN
     RAISE EXCEPTION '20261208b revenire: starea nu e cea din 20261208b (authenticated scrie deja direct)';
   END IF;
+  IF has_table_privilege('authenticated', 'public.raport_distributie_linii', 'INSERT')
+     OR has_function_privilege('authenticated', 'public.fn_raport_distributie_salveaza(bigint, jsonb)', 'EXECUTE') THEN
+    RAISE EXCEPTION '20261208b revenire: starea nu e cea din 20261208b (distributia se scrie deja direct)';
+  END IF;
   GRANT INSERT, UPDATE, DELETE ON public.raport_lucrari TO authenticated;
+  GRANT INSERT, UPDATE, DELETE ON public.raport_distributie_linii TO authenticated;
+  GRANT EXECUTE ON FUNCTION public.fn_raport_distributie_salveaza(bigint, jsonb) TO authenticated;
   IF NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'INSERT') OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'UPDATE')
-     OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'DELETE') THEN
+     OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'DELETE')
+     OR NOT has_table_privilege('authenticated', 'public.raport_distributie_linii', 'INSERT')
+     OR NOT has_function_privilege('authenticated', 'public.fn_raport_distributie_salveaza(bigint, jsonb)', 'EXECUTE') THEN
     RAISE EXCEPTION '20261208b revenire post: drepturile nu s-au redat';
   END IF;
   PERFORM set_config('gazpet.revenire_20261208b', '', true);   -- dezarmare

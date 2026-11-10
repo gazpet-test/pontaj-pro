@@ -55,6 +55,9 @@ BEGIN
                       OR (table_name = 'proiect_activitati' AND column_name IN ('principala', 'factor_um', 'sursa_executat', 'baza_deviz', 'dn_min', 'dn_max')))) THEN
     RAISE EXCEPTION '20261208a: obiectele exista deja (reaplicare)';
   END IF;
+  IF to_regprocedure('public.fn_raport_distributie_salveaza(bigint, jsonb)') IS NULL OR to_regclass('public.raport_distributie_linii') IS NULL THEN
+    RAISE EXCEPTION '20261208a: distributia (20261027a: raport_distributie_linii, fn_raport_distributie_salveaza) lipseste';
+  END IF;
   IF to_regprocedure('auth.uid()') IS NULL OR to_regclass('public.executie_noduri_suduri') IS NULL
      OR to_regprocedure('public.fn_executie_nod_drept(bigint, boolean)') IS NULL THEN
     RAISE EXCEPTION '20261208a: dependentele auth.uid / 20261201a (executie_noduri_suduri) lipsesc';
@@ -585,21 +588,27 @@ BEGIN
     RAISE EXCEPTION 'raport: nu ai drept pe șantier' USING ERRCODE = '42501';
   END IF;
   SELECT * INTO r FROM public.rapoarte_zilnice z WHERE z.site_id = p_site AND z.data = p_data;
-  IF NOT FOUND THEN RETURN jsonb_build_object('raport', NULL, 'versiune', 0, 'linii', '[]'::jsonb); END IF;
+  IF NOT FOUND THEN RETURN jsonb_build_object('raport', NULL, 'versiune', 0, 'linii', '[]'::jsonb, 'distributie', '[]'::jsonb); END IF;
   RETURN jsonb_build_object('raport', to_jsonb(r),
     'versiune', r.versiune_salvare,
-    'linii', public.fn_raport_lucrari_json(r.id));
+    'linii', public.fn_raport_lucrari_json(r.id),
+    'distributie', (SELECT coalesce(jsonb_agg(to_jsonb(d) ORDER BY d.tabel, d.nr_crt), '[]'::jsonb)
+                      FROM public.raport_distributie_linii d WHERE d.raport_id = r.id));
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_raport_zilnic_citeste(bigint, date) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_raport_zilnic_citeste(bigint, date) TO authenticated;
 
 -- ── salvarea raportului zilnic: ANTETUL și LINIILE într-o singură tranzacție (L02), CAS pe versiune (L01), cheie per intenție (L04 / L05) ──
 -- Ordinea lock-urilor (L06): advisory (șantier, zi) -> rapoarte_zilnice FOR UPDATE -> proiect_activitati FOR SHARE (ORDER BY id) ->
---   proiect_unitati FOR SHARE (ORDER BY id) -> rapoarte_zilnice (upsert pe același rând) -> raport_lucrari (DELETE + INSERT) -> raport_zilnic_salvari.
+--   proiect_unitati FOR SHARE (ORDER BY id) -> rapoarte_zilnice (upsert pe același rând) -> raport_lucrari (DELETE + INSERT)
+--   -> raport_distributie_linii (DELETE + INSERT, prin fn_raport_distributie_salveaza: rândul raportului e deja al nostru) -> raport_zilnic_salvari.
 -- p_antet: doar câmpurile din lista albă (cele scrise de telefon); un câmp lipsă rămâne neschimbat la editare. p_linii NULL = liniile nu se ating.
+-- p_distributie: rândurile „Raport lucrări executate” (distribuție gaze), scrise în ACEEAȘI tranzacție prin fn_raport_distributie_salveaza (20261027a),
+--   sub același CAS și în amprentă; NULL = distribuția nu se atinge.
 -- p_versiune: versiunea citită (raport nou = 0). p_cheie: o cheie per intenție, refolosită la reîncercare cu ACELAȘI conținut.
 -- Rezultat: {ok, duplicat, raport_id, versiune} sau {ok:false, motiv:'conflict', raport_id, versiune} (altcineva a salvat între timp: reîncarcă).
-CREATE FUNCTION public.fn_raport_zilnic_salveaza(p_site bigint, p_data date, p_antet jsonb, p_linii jsonb, p_versiune integer, p_cheie uuid) RETURNS jsonb
+CREATE FUNCTION public.fn_raport_zilnic_salveaza(p_site bigint, p_data date, p_antet jsonb, p_linii jsonb, p_distributie jsonb, p_versiune integer, p_cheie uuid)
+RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
   v_uid uuid := auth.uid();
@@ -612,7 +621,9 @@ BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'raport: autentificare necesară' USING ERRCODE = '42501'; END IF;
   IF p_site IS NULL OR p_data IS NULL OR p_cheie IS NULL OR p_versiune IS NULL OR p_versiune < 0
      OR p_antet IS NULL OR jsonb_typeof(p_antet) IS DISTINCT FROM 'object'
-     OR (p_linii IS NOT NULL AND (jsonb_typeof(p_linii) IS DISTINCT FROM 'array' OR jsonb_array_length(p_linii) > 500)) THEN
+     OR (p_linii IS NOT NULL AND (jsonb_typeof(p_linii) IS DISTINCT FROM 'array' OR jsonb_array_length(p_linii) > 500))
+     OR (p_distributie IS NOT NULL AND (jsonb_typeof(p_distributie) IS DISTINCT FROM 'array' OR jsonb_array_length(p_distributie) > 500
+                                         OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_distributie) x WHERE jsonb_typeof(x) IS DISTINCT FROM 'object'))) THEN
     RAISE EXCEPTION 'raport: parametri invalizi' USING ERRCODE = '22023';
   END IF;
   IF EXISTS (SELECT 1 FROM jsonb_object_keys(p_antet) k WHERE k NOT IN (
@@ -664,7 +675,7 @@ BEGIN
       v_canon := v_canon || jsonb_build_array(jsonb_build_object('activitate_id', v_aid, 'unitate_id', v_unit, 'cantitate', v_cant));
     END LOOP;
   END IF;
-  v_amp := md5(jsonb_build_object('site', p_site, 'data', p_data, 'antet', p_antet,
+  v_amp := md5(jsonb_build_object('site', p_site, 'data', p_data, 'antet', p_antet, 'distributie', p_distributie,
                                   'linii', CASE WHEN v_canon IS NULL THEN NULL ELSE public.fn_raport_lucrari_amprenta_linii(v_canon) END)::text);
   -- 3. reluarea aceleiași intenții: aceeași cheie + același conținut = rezultatul de atunci, FĂRĂ a reaplica (și dacă între timp
   --    altcineva a salvat altceva); aceeași cheie cu alt conținut = eroare
@@ -725,7 +736,14 @@ BEGIN
     meteo = CASE WHEN p_antet ? 'meteo' THEN EXCLUDED.meteo ELSE t.meteo END,
     distributie_antet = CASE WHEN p_antet ? 'distributie_antet' THEN EXCLUDED.distributie_antet ELSE t.distributie_antet END,
     created_by = EXCLUDED.created_by, updated_at = EXCLUDED.updated_at
+  WHERE t.versiune_salvare = v_ver
   RETURNING t.id, t.versiune_salvare INTO v_raport, v_nou;
+  IF v_nou IS NULL THEN
+    -- rândul a apărut între timp printr-o scriere directă concurentă (necomisă când l-am citit, deci nevăzut la CAS):
+    -- nu-l suprascriem; conflict, nimic scris (review r3 P1-1)
+    SELECT r.id, r.versiune_salvare INTO v_raport, v_ver FROM public.rapoarte_zilnice r WHERE r.site_id = p_site AND r.data = p_data;
+    RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'raport_id', v_raport, 'versiune', v_ver);
+  END IF;
   -- 7. liniile: înlocuire (proiectul liniei = proiectul șantierului, pus de server, L08)
   IF v_canon IS NOT NULL THEN
     DELETE FROM public.raport_lucrari WHERE raport_id = v_raport;
@@ -738,12 +756,16 @@ BEGIN
       RAISE EXCEPTION 'raport: liniile scrise nu corespund setului trimis' USING ERRCODE = 'P0001';
     END IF;
   END IF;
+  -- 7b. distribuția (rândurile tabelelor conducte / branșamente), în aceeași tranzacție; validarea ei e cea din 20261027a (CHECK-uri + trigger)
+  IF p_distributie IS NOT NULL THEN
+    PERFORM public.fn_raport_distributie_salveaza(v_raport, p_distributie);
+  END IF;
   -- 8. jurnalul: versiunea nouă (din trigger) + cheia intenției (UNIQUE pe versiune = o a doua scriere cu aceeași versiune e refuzată, nu pierdută)
   INSERT INTO public.raport_zilnic_salvari (cheie, raport_id, versiune, amprenta, profile_id) VALUES (p_cheie, v_raport, v_nou, v_amp, v_uid);
   RETURN jsonb_build_object('ok', true, 'duplicat', false, 'raport_id', v_raport, 'versiune', v_nou);
 END $f$;
-REVOKE ALL ON FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid) FROM PUBLIC, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid) TO authenticated;
 
 -- ── postcondiții ──
 DO $post$

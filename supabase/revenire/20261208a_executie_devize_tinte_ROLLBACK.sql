@@ -43,7 +43,7 @@ BEGIN
      OR to_regprocedure('public.fn_raport_lucrari_amprenta_linii(jsonb)') IS NULL
      OR to_regprocedure('public.fn_raport_lucrari_json(bigint)') IS NULL
      OR to_regprocedure('public.fn_raport_zilnic_citeste(bigint, date)') IS NULL
-     OR to_regprocedure('public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid)') IS NULL
+     OR to_regprocedure('public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid)') IS NULL
      OR to_regclass('public.raport_zilnic_salvari') IS NULL
      OR to_regprocedure('public.fn_raport_zilnic_versiune()') IS NULL
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.rapoarte_zilnice'::regclass AND tgname = 'trg_raport_zilnic_versiune')
@@ -124,7 +124,7 @@ BEGIN
   DROP FUNCTION public.fn_executie_tinte_nod(bigint, date);
   DROP FUNCTION public.fn_executie_tinte_cheie(bigint, bigint);
   DROP FUNCTION public.fn_executie_tinte_conversie(text, text);
-  DROP FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid);
+  DROP FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid);
   DROP FUNCTION public.fn_raport_zilnic_citeste(bigint, date);
   DROP TABLE public.raport_zilnic_salvari;
   DROP TRIGGER trg_raport_zilnic_versiune ON public.rapoarte_zilnice;

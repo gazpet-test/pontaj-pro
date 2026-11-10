@@ -1,4 +1,4 @@
--- Schelet minim „tip Supabase” pentru proba LOCALĂ (PGlite, în memorie) a migrării 20261208a și a harness-ului scripts/test_executie_devize_tinte.sql.
+-- Schelet minim „tip Supabase” pentru proba LOCALĂ (PGlite, în memorie) a migrării 20261208a (peste el se aplică 20261027a, apoi 20261201a) și a harness-ului scripts/test_executie_devize_tinte.sql.
 -- NU e migrare și nu se rulează pe nicio bază reală. Reproduce doar ce folosesc 20261201a + 20261208a: rolurile (service_role cu BYPASSRLS),
 -- privilegiile implicite din schema public (ALL pentru anon / authenticated / service_role, ca la Supabase), auth.uid() din cele două surse JWT,
 -- storage.buckets / storage.objects, tabelele existente cu coloanele citite din cod și RLS-ul lor „autentificat” (auth.uid() IS NOT NULL).
@@ -35,7 +35,7 @@ CREATE TABLE public.profile_sites (profile_id uuid NOT NULL REFERENCES public.pr
   valid_until date, granted_by uuid, note text, PRIMARY KEY (profile_id, site_id));
 CREATE TABLE public.rapoarte_zilnice (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, site_id integer NOT NULL REFERENCES public.sites(id),
   data date NOT NULL, sef_santier text, lucrari_efectuate text, utilaje_snapshot jsonb, personal_snapshot jsonb, masini text, probleme text,
-  subcontractori text, aprovizionare text, plan_maine text, poze text[] DEFAULT '{}', meteo jsonb, distributie_antet text,
+  subcontractori text, aprovizionare text, plan_maine text, poze text[] DEFAULT '{}', meteo jsonb,
   created_by uuid, updated_at timestamptz DEFAULT now(), CONSTRAINT rapoarte_zilnice_site_id_data_key UNIQUE (site_id, data));
 CREATE TABLE public.proiect_unitati (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
   tip text NOT NULL DEFAULT 'tronson', cod text, nume text NOT NULL, ordine integer DEFAULT 0, activ boolean DEFAULT true, created_at timestamptz DEFAULT now());
