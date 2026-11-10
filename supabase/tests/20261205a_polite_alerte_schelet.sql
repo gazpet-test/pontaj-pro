@@ -158,7 +158,7 @@ GRANT SELECT ON public.v_garantii_situatie TO authenticated;
 -- si revenirea sa fie testate pe aceeasi situatie
 CREATE FUNCTION public.fn_polite_send_alerte() RETURNS void LANGUAGE sql AS $f$ SELECT $f$;
 -- si cronul ei, ca pe prod (cron.job #14): migrarea nu-l atinge, revenirea nu-l atinge, doar fn_polite_alerte_opreste_vechi il scoate
-SELECT cron.schedule('polite_alerte_zilnic', '0 7 * * *', 'SELECT fn_polite_send_alerte();');
+INSERT INTO cron.job (jobid, jobname, schedule, command) VALUES (14, 'polite_alerte_zilnic', '0 7 * * *', 'SELECT fn_polite_send_alerte();');
 
 -- date FICTIVE
 INSERT INTO public.employees (id, name, email, active) VALUES

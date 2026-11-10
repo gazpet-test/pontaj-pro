@@ -117,11 +117,13 @@ describe('paritate cu migrarea (L19)', () => {
     expect(MIG).toMatch(/SELECT cron\.schedule\('polite_alerte_departamente', '15 4,5 \* \* \*'/)
     const a = MIG.indexOf('CREATE FUNCTION public.fn_polite_alerte_opreste_vechi('), b = MIG.indexOf('$fn$;', a)
     const corp = MIG.slice(a, b), restul = cod(MIG.slice(0, a) + MIG.slice(b))
-    // r8b (Jakarinos r8 P1): randul jobului se blocheaza INAINTE de verificare si se scoate exact jobid-ul blocat
-    expect(corp).toContain("PERFORM 1 FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic' FOR UPDATE NOWAIT;")
-    expect(corp.indexOf('FOR UPDATE NOWAIT')).toBeLessThan(corp.indexOf('btrim(v_cmd)'))
-    expect(corp).toContain('v_ok := cron.unschedule(v_job);')
-    expect(corp).not.toMatch(/cron\.unschedule\('/)
+    // r9: fara drepturi de scriere pe cron.job — lacatul consultativ, apoi recitirea jobului 14 sub lacat, apoi unschedule pe jobid
+    const lacat = corp.indexOf("PERFORM pg_advisory_xact_lock(hashtext('polite_preluare_cron'));")
+    expect(lacat).toBeGreaterThan(0)
+    expect(lacat).toBeLessThan(corp.indexOf('FROM cron.job j WHERE j.jobid = 14'))
+    expect(corp.indexOf('btrim(v_cmd)')).toBeLessThan(corp.indexOf('v_ok := cron.unschedule(v_job);'))
+    expect(corp).not.toMatch(/FROM cron\.job[^;]*FOR (UPDATE|SHARE)|cron\.unschedule\('/)
+    expect(MIG).not.toMatch(/has_table_privilege\(current_user, 'cron\.job', 'UPDATE'\)/)
     expect(restul).not.toMatch(/polite_alerte_zilnic/)
     expect(cod(REV)).not.toMatch(/polite_alerte_zilnic/)
     expect(cod(REV)).toContain("SELECT cron.unschedule('polite_alerte_departamente');")

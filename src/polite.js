@@ -104,6 +104,7 @@ const MESAJE = {
   owneri_fara_alerte_noi: 'Owner-ii nu sunt în lista alertelor noi (rândul „Owneri” lipsește sau e inactiv). Adaugă-l / activează-l întâi.',
   cron_vechi_negasit: 'Alertele vechi către owneri nu mai sunt programate (au fost deja oprite).',
   cron_vechi_diferit: 'Programarea alertelor vechi nu mai arată ca la instalare. Nu am oprit nimic; verifică cu administratorul bazei de date.',
+  cron_vechi_neoprit: 'Oprirea alertelor vechi nu s-a confirmat. Nu s-a notat nimic; reîncarcă pagina și verifică.',
 }
 export function mesajEroare(e) {
   const t = String(e?.message || e?.eroare || e || '')
