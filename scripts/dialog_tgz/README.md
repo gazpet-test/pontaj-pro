@@ -34,6 +34,56 @@ EROARE.
 - **Coliziune și la OPRIT:** un OPRIT deja publicat trece prin aceeași recuperare a coliziunii de număr ca GATA, înainte
   de ieșirea „deja publicat”; nerezolvabilă → EROARE „de reparat manual”, nu „deja publicat”.
 
+**r5 (după Jakarinos r4 NO-GO): ieșirea unică, aplicată peste tot, nu caz cu caz.**
+- Tot ce ajunge în `claude#NNN.md`, în jurnal, în fișierele de stare (ultima linie, cursor, marcaj de procese), în
+  `context.md` al agentului sau pe stdout trece printr-un singur constructor, `Format-Mesaj`: un șablon FIX din catalogul
+  modulului + valori tipizate. Tipurile acceptate: număr, dată, da/nu, cod dintr-o listă închisă definită în modul, celulă
+  de export validată pe formatul coloanei, text deja compus de `Format-Mesaj`. Un text oarecare (din export, nume de fișier,
+  mesaj de eroare al unei unelte, cale, stdout / stderr, variabilă de mediu) nu are tip acceptat: în locul lui se scrie un
+  contor, un cod sau o lungime.
+- Scrierile pe disc (`Write-FisierSigur`, `Publish-RaspunsExclusiv`, și prin ele `Write-JurnalSigur` / `Write-StareSigura`)
+  primesc DOAR obiecte produse de `Format-Mesaj`. Testul verifică **static** (pe arborele sintactic al modulului și al
+  orchestratorului) că nu există alte apeluri de scriere și că obiectul „text sigur” se creează într-un singur loc.
+- **Exportul ERP:** fiecare coloană are un format fix în modul (`$script:FormatColoane`): listă închisă (coduri de proiect,
+  stări, calitate) sau tipar strict, ancorat (`uat3` = 3 litere mari, cod corespondență, întregi, zecimale, date). Antetul
+  trebuie să fie exact lista din modul. O valoare care nu respectă formatul devine `nevalidat-N` la citire, înainte de orice
+  folosire (context, filtre, tabel publicat); jurnalul notează doar câte valori s-au înlocuit, pe coloană.
+  `versiune_lista_tgz` (text liber în BD): 1–4 cuvinte din lista `TGZ / TEST / LOT / utilizatori / necunoscuta`, `vNN`, an
+  sau dată `ZZ.LL.AAAA` din 2020–2039, cel mult 40 de caractere (exemple reale: „TGZ 13.07.2026”, „v2”). Numele UAT-ului
+  (text liber editabil) nu se mai exportă.
+- **Erorile:** cele proprii poartă doar un cod și numere (`Stop-Dtgz`); orice altă excepție devine „eroare neprevăzută”
+  (categorie, HRESULT, lungimea mesajului), mesajul nu se scrie. psql rulează cu `VERBOSITY=sqlstate`, iar gărzile din SQL
+  au coduri proprii (`DTG01` rolul poate scrie, `DTG02` nu vede proiecte, `DTG03` fără READ ONLY): din stderr se păstrează
+  doar clasa (listă închisă) și SQLSTATE-ul. Lansarea eșuată a unui proces = etapă (cod fix) + cod Win32.
+- **Folderul rulării** (context, `raspuns.json` al agentului, configurația CLI) se șterge la orice ieșire (și la EROARE);
+  resturile unei rulări oprite brusc se șterg la pornirea următoarei.
+- **Schema** e fixată prin amprentă (sha256, fără CR) în modul: orice schimbare de text din schemă (și una benignă) = refuz
+  la încărcare; contractul se schimbă doar prin PR care schimbă și amprenta.
+- **Testul canar** (`Strada Noua 12 / 0722/123/456 / Ion Popescu`), injectat pe rând în fiecare sursă din inventarul de mai
+  jos, nu apare în niciun fișier produs de rulare (căutare în tot folderul testului, UTF-8 și UTF-16), nici în stare,
+  jurnal sau stdout / stderr ale orchestratorului real; un mutant fără validarea coloanelor e prins de același test.
+
+### Inventarul surselor de text extern (r5) și unde e oprită fiecare
+
+| Sursa | Ce ajunge în ieșire | Unde e oprită | Test |
+|---|---|---|---|
+| Export ERP, fiecare coloană din cele 7 secțiuni | valoarea doar dacă respectă formatul coloanei, altfel `nevalidat-N`; numărul de înlocuiri | `ConvertFrom-ExportContext` + `Test-ValoareFormat`; la scriere încă o dată tipul „celulă” | 15a (51 de coloane), 4b |
+| Export: antet, titluri de secțiune, linii străine (NOTICE) | nimic (antetul = listă exactă; titlurile vin din schemă; liniile străine se ignoră) | `ConvertFrom-ExportContext`, `ConvertTo-ContextSigur` | 15a |
+| stdout / stderr / cod psql | clasa (listă închisă), SQLSTATE (5 caractere), lungimea, codul numeric | `Get-ClasaEroarePsql`, `e.psql` | 9, 10i, 15b |
+| stdout claude (JSON) | `type` / `subtype` / `is_error` ca coduri din listă (`alt` / `lipsa`), `num_turns` număr | `ConvertFrom-IesireClaude` | 8, 15c |
+| stderr claude, cod, timeout, procese rămase | lungimea; cod / bool doar dacă au tipul corect; PID-uri doar ca `pid|ticks` numeric (altfel `necunoscut`) | `Invoke-DialogTgz` (indexare + tip), `Write-MarcajProcese` | 10g, 15c |
+| `raspuns.json` (agent): valori și nume de câmpuri | coduri din schemă, numere, celule din export; motivul respingerii = cod + calea câmpului (nume din contract) | `Test-RaspunsAgent`, `Stop-Raspuns`, tipul `cale` | 5, 15d |
+| Nume de fișiere / foldere din dialog (noi, șterse, modificate) | doar contoare | `Compare-InstantaneuDialog` | 7, 10d, 15e |
+| Conținutul `juridic#`, `_CONVENTIE_JURIDIC.md`, `claude#` străine | nimic (numere, cheia hex, starea) | `Find-JuridicNoi`, `Get-RaspunsuriProprii` | 15e |
+| Excepții PowerShell / .NET (căi, mesaje) | categorie, HRESULT, lungime | `ConvertTo-MesajEroare` | 15b, 15c |
+| Cursor, marcaj, token (conținut și cale) | cod de eroare fix | `Read-Cursor`, `Test-MarcajProcese`, `Read-TokenFisier` | 15f |
+| Configurare: căi, model, effort, id, MaxTurns, schemă, prompt, rădăcini NAS | coduri fixe; modelul / effortul doar dacă sunt în lista din modul; rădăcini = număr | `Invoke-DialogTgz` (pasul 0), `dialog_tgz.ps1` | 14, 15f |
+| Variabile de mediu (inclusiv `PGPASSWORD`, `ANTHROPIC_API_KEY`) | nimic (doar mediul proceselor copil) | `Invoke-ProcesCapturat` | 15g |
+| stdout / stderr ale orchestratorului | nimic (scriptul nu scrie pe consolă; modul neîncărcat = ieșire 1 fără text) | `dialog_tgz.ps1` | 13, 15g |
+
+În afara rulării: `instaleaza_task.ps1` (pornit de mână de chat) afișează pe consolă propria configurare (acțiunea sarcinii,
+căile de instalare); nu citește conținut extern.
+
 ## Fișiere
 
 | Fișier | Rol |
@@ -44,7 +94,7 @@ EROARE.
 | `dialog_tgz_prompt.md` | Promptul pentru `claude -p` (șablon; codurile și secțiunile se completează din schemă). |
 | `sql/context_agregat.sql` | Singurul SQL: gardă de rol doar-citire, apoi cifre agregate din `red_*`, `BEGIN READ ONLY`, ieșire nealiniată (`|`). |
 | `instaleaza_task.ps1` | Înlocuiește acțiunea sarcinii existente. Implicit **doar previzualizare**; scrie numai cu `-Aplica`. |
-| `teste/test_dialog_tgz.ps1` | Autotest offline (315 verificări): psql și claude simulate, procese reale în Job Object, orchestratorul real cu psql / claude simulate prin `.cmd`. |
+| `teste/test_dialog_tgz.ps1` | Autotest offline (611 verificări): psql și claude simulate, procese reale în Job Object, orchestratorul real cu psql / claude simulate prin `.cmd`, testul canar pe fiecare sursă, verificarea statică a scrierilor, mutantul. |
 | `teste/dialog_tgz.test.js` | Rulează autotestul PowerShell sub `npx vitest run` (doar pe Windows, cu powershell.exe; pe CI Linux se sare). |
 
 Toate `.ps1` / `.psm1` sunt ASCII (PowerShell 5.1 citește fișierele fără BOM ca ANSI). Autotestul verifică acest lucru.
@@ -77,10 +127,11 @@ Toate `.ps1` / `.psm1` sunt ASCII (PowerShell 5.1 citește fișierele fără BOM
    - un `claude#` OPRIT cu cheia exactă a mesajelor noi → întâi se rezolvă eventuala coliziune de număr (ca la GATA;
      nerezolvabilă → EROARE, de reparat manual), apoi `OPRIT deja publicat`, nu se reia (până se schimbă mesajele);
    - niciun mesaj nou → `NIMIC NOU`, fără BD și fără Claude.
-7. **Folderul rulării**: `%TEMP%\dialog_tgz\rulari\<id>\intrare\` (context) și `...\iesire\` (singurul loc unde agentul
-   poate scrie). Configurația Claude Code stă în `%TEMP%\dialog_tgz\cfg\`.
-8. **Export**: psql `context_agregat.sql` (în Job Object) → citit ca tabele; trebuie să aibă toate secțiunile, cheile și
-   indicatorii din schemă (altfel EROARE) → `intrare\context.md`.
+7. **Folderul rulării**: `%TEMP%\dialog_tgz\rulari\<id>\intrare\` (context), `...\iesire\` (singurul loc unde agentul
+   poate scrie) și `...\cfg\` (configurația Claude Code a rulării). Se șterge la orice ieșire (r5).
+8. **Export**: psql `context_agregat.sql` (în Job Object, `VERBOSITY=sqlstate`) → citit ca tabele cu antetul exact din modul,
+   fiecare valoare validată pe formatul coloanei (altfel `nevalidat-N`); trebuie să aibă toate secțiunile, cheile și
+   indicatorii din schemă (altfel EROARE) → `intrare\context.md` recompus din valorile validate.
 9. **Agentul**: `claude -p` în Job Object (detalii mai jos), cu directorul de lucru = `iesire\`. Scrie `iesire\raspuns.json`.
 10. **Verificări după agent** (orice abatere = EROARE, nimic publicat, cursor neschimbat): oprirea confirmată, fără
     timeout, cod 0, JSON-ul CLI cu `subtype=success` și `is_error=false`; în `iesire\` exact `raspuns.json`; dialogul
@@ -98,7 +149,8 @@ Toate `.ps1` / `.psm1` sunt ASCII (PowerShell 5.1 citește fișierele fără BOM
     EROARE, cursorul nu se mută, rularea următoare reconciliază (pasul 6) și reîncearcă mutarea.
 14. **Cursor** (doar GATA): `juridic#<cel mai mare procesat> (raspuns claude#<numărul final>, …)`, CAS pe valoarea citită la
     pasul 4, scriere atomică. Eșec → EROARE; rularea următoare reconciliază.
-15. **Stare + log**: tot ce intră trece prin filtrul de token și de tipare de date personale.
+15. **Stare + log**: doar texte din `Format-Mesaj` (șablon fix + valori tipizate), prin `Write-StareSigura` /
+    `Write-JurnalSigur`; ultima barieră de tipare (telefon, CNP, e-mail, adresă, act) rămâne pe fiecare text produs.
 
 Coduri de ieșire: **0** = GATA / NIMIC NOU / OPRIT / lock ocupat; **1** = EROARE.
 
@@ -171,7 +223,7 @@ ALTER ROLE dialog_tgz_ro SET statement_timeout = '60s';
 GRANT USAGE ON SCHEMA public TO dialog_tgz_ro;
 GRANT SELECT (id, cod) ON public.red_proiecte TO dialog_tgz_ro;
 GRANT SELECT (proiect_id, versiune_lista_tgz, stare, created_at, randuri_total, parcele_noi, detinatori_noi, dubluri, neidentificati) ON public.red_import_loturi TO dialog_tgz_ro;
-GRANT SELECT (id, uat3, nume) ON public.red_uat TO dialog_tgz_ro;
+GRANT SELECT (id, uat3) ON public.red_uat TO dialog_tgz_ro;
 GRANT SELECT (id, proiect_id, uat_id, nr_cadastral, tarla, tronson, verificare_data, suprafata_temporara_mp, sters_la) ON public.red_parcele TO dialog_tgz_ro;
 GRANT SELECT (id, parcela_id, calitate, decedat, act_doveditor_cunoscut, sters_la) ON public.red_detinatori TO dialog_tgz_ro;
 GRANT SELECT (detinator_id, adresa_cunoscuta, adresa_strada, adresa_comuna, cod_postal, telefon, email) ON public.red_detinatori_contact TO dialog_tgz_ro;
@@ -210,7 +262,11 @@ ca Gazpet-Ai / administrator pe serverul AI. Fără endpoint de rețea sau webho
 cerere dintr-un `juridic#` ajunge doar la „De decis de Răzvan”. Cer „da”: rolul `dialog_tgz_ro` + politicile, instalarea
 (`instaleaza_task.ps1 -Aplica`) și primul cursor.
 
-## Riscuri reziduale (r4, pentru decizia lui Răzvan)
+## Riscuri reziduale (r4 + r5, pentru decizia lui Răzvan)
+
+r5: un proiect nou în dialog (alt cod decât `LOT1-PRUNISOR-JUPA` / `TEST-RAZVAN`) sau o versiune de listă într-o formă
+nouă apar ca `nevalidat-N` până la un PR care le adaugă în modul (sigur, dar mai puțin util). Codurile reale de proiect și
+valorile `versiune_lista_tgz` din BD le confirmă chat-ul înainte de instalare.
 
 Ce nu se poate închide tehnic din partea noastră:
 
@@ -251,6 +307,11 @@ Ce nu se poate închide tehnic din partea noastră:
 - Job Object sub Task Scheduler (job imbricat): dacă `AssignProcessToJobObject` e refuzat, rularea dă EROARE la lansare
   (procesul suspendat se oprește, nu rulează nimic). `claude` instalat ca `.cmd` (npm) pornește prin `cmd.exe`, tot în job.
 - Rolul `dialog_tgz_ro` prin pooler, `default_transaction_read_only` din setarea rolului și garda pe schemele Supabase.
+- r5: psql-ul instalat acceptă `-v VERBOSITY=sqlstate` (PG ≥ 12) și gărzile ies cu `DTG01` / `DTG02` / `DTG03`; o versiune
+  veche de psql ar scrie mesajul întreg pe stderr, dar orchestratorul tot nu îl scrie (doar clasa, din text).
+- r5: `claude -p` cu `CLAUDE_CONFIG_DIR` nou la fiecare rulare (în folderul rulării) pornește fără pas interactiv.
+- r5: `SELECT DISTINCT cod FROM red_proiecte` și `SELECT DISTINCT versiune_lista_tgz FROM red_import_loturi` se potrivesc
+  listei / gramaticii din modul (altfel apar ca `nevalidat-N`).
 - Cât de des agentul respectă contractul JSON (primele rulări: de urmărit `raspuns.json respins: …` în log; contractul se
   schimbă doar prin PR).
 - Dacă sarcina e „Run whether user is logged on or not”, `Set-ScheduledTask` poate cere `-User`/`-Password`.
@@ -258,7 +319,7 @@ Ce nu se poate închide tehnic din partea noastră:
 ## Teste
 
 ```
-npx vitest run scripts/dialog_tgz        # rulează teste/test_dialog_tgz.ps1 (315 verificări, offline)
+npx vitest run scripts/dialog_tgz        # rulează teste/test_dialog_tgz.ps1 (611 verificări, offline, ~1 min)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dialog_tgz\teste\test_dialog_tgz.ps1
 ```
 

@@ -19,11 +19,11 @@ const shell = gasesteShell()
 describe('dialog_tgz (autotest PowerShell)', () => {
   it.skipIf(!shell)('toate verificările trec', () => {
     const r = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
-      encoding: 'utf8', timeout: 290000,
+      encoding: 'utf8', timeout: 590000, maxBuffer: 64 * 1024 * 1024,
     })
     const iesire = `${r.stdout || ''}\n${r.stderr || ''}`
     console.log(r.status !== 0 ? iesire : (iesire.match(/Rezultat: .*/) || ['fara rezultat'])[0])
     expect(iesire).toMatch(/Rezultat: \d+ OK, 0 ESEC/)
     expect(r.status).toBe(0)
-  }, 300000)
+  }, 600000)
 })

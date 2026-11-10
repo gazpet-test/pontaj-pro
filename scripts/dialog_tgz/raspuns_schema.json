@@ -1,6 +1,6 @@
 {
-  "versiune": 2,
-  "descriere": "Contractul raspunsului agentului Dialog TGZ (r4, fara text liber). Agentul scrie DOAR raspuns.json cu aceste campuri; orchestratorul valideaza si compune claude#NNN.md. Orice camp in plus, tip gresit sau valoare in afara listelor = nepublicat. Sursa unica: o citesc validatorul, compunerea si promptul.",
+  "versiune": 3,
+  "descriere": "Contractul raspunsului agentului Dialog TGZ (r5, fara text liber, fixat prin amprenta in DialogTgz.psm1). Agentul scrie DOAR raspuns.json cu aceste campuri; orchestratorul valideaza si compune claude#NNN.md din sabloane fixe. Orice camp in plus, tip gresit sau valoare in afara listelor = nepublicat. Sursa unica: o citesc validatorul, compunerea si promptul; orice schimbare cere si amprenta noua in modul (PR).",
   "limite": {
     "max_octeti": 65536,
     "max_verificari_pe_mesaj": 60,
@@ -45,7 +45,7 @@
   },
   "sectiuni": {
     "loturi": { "export": 1, "titlu": "Loturi de import", "chei": ["proiect", "versiune_lista_tgz", "stare", "creat"], "indicatori": ["randuri_total", "parcele_noi", "detinatori_noi", "dubluri", "neidentificati", "stare"] },
-    "parcele": { "export": 2, "titlu": "Parcele active pe UAT", "chei": ["proiect", "uat3", "uat"], "indicatori": ["parcele", "fara_nr_cadastral", "fara_tarla", "fara_tronson", "verificate", "suprafata_temporara_mp", "parcele_sterse"] },
+    "parcele": { "export": 2, "titlu": "Parcele active pe UAT", "chei": ["proiect", "uat3"], "indicatori": ["parcele", "fara_nr_cadastral", "fara_tarla", "fara_tronson", "verificate", "suprafata_temporara_mp", "parcele_sterse"] },
     "detinatori": { "export": 3, "titlu": "Deținători activi pe UAT și calitate", "chei": ["proiect", "uat3", "calitate"], "indicatori": ["detinatori", "decedati", "act_doveditor_da", "act_doveditor_nu", "parcele_acoperite"] },
     "parcele_fara_detinator": { "export": 4, "titlu": "Parcele fără deținător", "chei": ["proiect", "uat3"], "indicatori": ["parcele_fara_detinator"] },
     "contacte": { "export": 5, "titlu": "Completitudinea contactelor", "chei": ["proiect", "uat3"], "indicatori": ["detinatori_activi", "cu_fisa_contact", "adresa_necunoscuta", "cu_strada", "cu_comuna", "cu_cod_postal", "cu_telefon", "cu_email"] },

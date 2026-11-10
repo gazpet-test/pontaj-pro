@@ -61,10 +61,11 @@ foreach ($f in $fisiere) { Copy-Item -LiteralPath (Join-Path $sursa $f) -Destina
 # r4: vocabularul notei e retras; o copie veche nu mai e citita, dar se scoate ca sa nu para activa
 $vechi = Join-Path $Destinatie 'vocabular_nota.txt'
 if (Test-Path -LiteralPath $vechi -PathType Leaf) { Remove-Item -LiteralPath $vechi -Force; Write-Host 'vocabular_nota.txt vechi (r3) sters din destinatie' }
-# verificare pe configuratia INSTALATA: schema copiata se incarca cu modulul copiat (versiunea 2, fara nicio "nota")
+# verificare pe configuratia INSTALATA: schema copiata se incarca cu modulul copiat (r5: amprenta fixata in modul,
+# versiunea 3, fara nicio "nota")
 Import-Module (Join-Path $Destinatie 'DialogTgz.psm1') -Force
 [void](Read-SchemaRaspuns (Join-Path $Destinatie 'raspuns_schema.json'))
-Write-Host 'Schema instalata verificata: versiunea 2, fara camp de text liber'
+Write-Host 'Schema instalata verificata: amprenta din modul, versiunea 3, fara camp de text liber'
 
 [void](Set-ScheduledTask -TaskName $NumeTask -TaskPath $task.TaskPath -Action $actiune -Trigger $declansatori -Settings $setari)
 $dupa = Get-ScheduledTask -TaskName $NumeTask -TaskPath $task.TaskPath

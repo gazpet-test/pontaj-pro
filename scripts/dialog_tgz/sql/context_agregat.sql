@@ -2,14 +2,18 @@
 -- FARA date personale: nu se selecteaza nume / nume_normalizat / cota (red_detinatori), nicio coloana de adresa,
 -- telefon sau email ca valoare (red_detinatori_contact - doar numaratori), nici destinatar / subiect / expeditor /
 -- documente / observatii (red_corespondenta), nici valoare_lei (doar admin), nici fisier_nume / eroare / diferente.
--- Identificatori pastrati: codul proiectului, codul UAT (uat3) si numele UAT-ului (localitate publica), codul
--- corespondentei (ex. A1), starile si datele.
+-- Identificatori pastrati: codul proiectului, codul UAT (uat3), codul corespondentei (ex. A1), starile si datele
+-- (r5: fara numele UAT-ului, text liber editabil).
 -- Coloane verificate in supabase/migrations: 20261126a_redari_teren.sql, 20261129a_redari_pv_schema.sql,
 -- 20261129g_redari_tronson_optional.sql, 20261129h_redari_corespondenta.sql.
 -- r2: singurul SQL al sarcinii (nicio scriere in BD; cursorul e un fisier local). Garda de mai jos opreste exportul
 -- (ON_ERROR_STOP) inainte de orice citire din red_* daca rolul conectat POATE scrie ceva.
 -- r3: iesire NEALINIATA (antet + randuri, separator |): orchestratorul o citeste ca tabel (ConvertFrom-ExportContext),
--- de acolo vin listele permise (coduri proiect / uat3 / UAT / calitate / stare / cod) si valorile ERP din claude#NNN.md.
+-- de acolo vin listele permise (coduri proiect / uat3 / calitate / stare / cod) si valorile ERP din claude#NNN.md.
+-- r5: fiecare coloana are un format fix in DialogTgz.psm1 ($script:FormatColoane, aceeasi ordine ca mai jos); o valoare
+-- care nu il respecta devine "nevalidat-N" inainte de orice folosire. Numele UAT (text liber) nu se mai exporta; datele
+-- se formateaza aici (to_char), nu dupa DateStyle. Garzile au SQLSTATE proprii (psql ruleaza cu VERBOSITY=sqlstate, deci
+-- stderr-ul nu poarta text): DTG01 = rolul poate scrie, DTG02 = rolul nu vede proiecte, DTG03 = tranzactie fara READ ONLY.
 \pset format unaligned
 \pset fieldsep '|'
 \pset footer off
@@ -26,7 +30,7 @@ DECLARE
   v_rol record;
 BEGIN
   IF current_setting('transaction_read_only') IS DISTINCT FROM 'on' THEN
-    RAISE EXCEPTION 'dialog_tgz: tranzactia nu este READ ONLY';
+    RAISE EXCEPTION 'dialog_tgz: tranzactia nu este READ ONLY' USING ERRCODE = 'DTG03';
   END IF;
   SELECT r.oid, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication
     INTO v_rol FROM pg_catalog.pg_roles r WHERE r.rolname = current_user;
@@ -84,7 +88,7 @@ BEGIN
   END IF;
   IF cardinality(v_probleme) > 0 THEN
     RAISE EXCEPTION 'dialog_tgz: rolul % poate scrie (% drepturi in plus): %', current_user, cardinality(v_probleme),
-      array_to_string(v_probleme[1:20], '; ');
+      array_to_string(v_probleme[1:20], '; ') USING ERRCODE = 'DTG01';
   END IF;
 END
 $garda$;
@@ -94,7 +98,8 @@ $garda$;
 DO $vizibil$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.red_proiecte) THEN
-    RAISE EXCEPTION 'dialog_tgz: rolul % nu vede niciun rand in red_proiecte (lipseste politica RLS de citire?)', current_user;
+    RAISE EXCEPTION 'dialog_tgz: rolul % nu vede niciun rand in red_proiecte (lipseste politica RLS de citire?)', current_user
+      USING ERRCODE = 'DTG02';
   END IF;
 END
 $vizibil$;
@@ -109,7 +114,7 @@ ORDER BY p.cod, l.created_at DESC;
 
 \echo '## 2. Parcele active pe UAT (red_parcele, sters_la IS NULL)'
 \echo '```'
-SELECT p.cod AS proiect, u.uat3, u.nume AS uat,
+SELECT p.cod AS proiect, u.uat3,
        count(*) AS parcele,
        count(*) FILTER (WHERE x.nr_cadastral IS NULL OR btrim(x.nr_cadastral) = '') AS fara_nr_cadastral,
        count(*) FILTER (WHERE x.tarla IS NULL OR btrim(x.tarla) = '') AS fara_tarla,
@@ -121,7 +126,7 @@ FROM public.red_parcele x
 JOIN public.red_uat u ON u.id = x.uat_id
 JOIN public.red_proiecte p ON p.id = x.proiect_id
 WHERE x.sters_la IS NULL
-GROUP BY p.cod, u.id, u.uat3, u.nume
+GROUP BY p.cod, u.id, u.uat3
 ORDER BY p.cod, u.uat3;
 \echo '```'
 
@@ -187,7 +192,7 @@ ORDER BY p.cod, c.stare;
 \echo '```'
 SELECT p.cod AS proiect, c.cod, c.ordine, c.stare, c.versiune,
        to_char(c.aprobat_la AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD') AS aprobat_la,
-       c.trimis_la,
+       to_char(c.trimis_la, 'YYYY-MM-DD') AS trimis_la,
        (c.nr_inregistrare IS NOT NULL AND btrim(c.nr_inregistrare) <> '') AS are_nr_inregistrare,
        to_char(c.updated_at AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI') AS modificat
 FROM public.red_corespondenta c JOIN public.red_proiecte p ON p.id = c.proiect_id
