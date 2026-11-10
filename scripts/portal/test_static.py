@@ -58,6 +58,12 @@ class StaticDelivery(unittest.TestCase):
         listed = re.findall(r"'([0-9a-f]{64})'", erp[0])
         if not listed:
             self.assertIn("PORTAL_ERP_APPROVAL_LIST_MISSING", sql)
+        else:
+            # lista completata (10.11.2026): doar hash-uri sha256 distincte, nimic altceva intre paranteze
+            self.assertEqual(len(listed), len(set(listed)))
+            self.assertEqual(len(listed), 27)
+            rest = re.sub(r"'[0-9a-f]{64}'|,|\s|--[^\n]*", "", erp[0])
+            self.assertEqual(rest, "")
         net = re.findall(r"AS \$nethash\$(.*?)\$nethash\$;", sql, re.S)
         self.assertEqual(len(net), 1)
         if "'{}'::jsonb" in net[0]:

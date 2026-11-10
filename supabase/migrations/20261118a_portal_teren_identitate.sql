@@ -3,6 +3,7 @@
 -- r3 (09.11.2026, Copilot r2 P1-01/P1-02): 'erp' numai din lista aprobata explicit de owner (hash pe id);
 -- amprentele functiilor net fixate inainte de apply. Ambele liste se completeaza din inventarul read-only
 -- (scripts/portal/inventar_prod_e1.sql) inainte de DRY; necompletate = refuz atomic.
+-- Completate 10.11.2026 din inventarul read-only pe prod: net (12) si lista ERP (27, confirmata de Razvan).
 DO $pre$
 BEGIN
   IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare', true)
@@ -343,7 +344,34 @@ ALTER TABLE public.portal_public_baseline ENABLE TRIGGER portal_public_baseline_
 -- Restul conturilor (nelistate) devin 'neaprobat': hook-ul le refuza tokenul pana la fn_cont_aproba_erp (E1-1b).
 CREATE TEMP TABLE portal_erp_aprobat ON COMMIT DROP AS
 SELECT ARRAY[
- -- PORTAL_ERP_APROBAT: hash-urile revizuite, cate unul pe rand, intre ghilimele simple, separate prin virgula
+ -- PORTAL_ERP_APROBAT: 27 de conturi aprobate de Razvan (10.11.2026), sha256 pe auth.users.id::text
+ '0ce4144f7ee4572cd7cb38d32f87b9e4a575738b73bf9466353670ed2d4a65be',
+ '138efd36fedb66f5040b5a54f1d7b492b27fe2b8f3818ae183c0c3b6080af227',
+ '13d08d44a58788d1a406d0135f907e17efdc801cac015fbc33aca6a581a8154b',
+ '2acf802f3755b947926ac6d75b8ae451a16a226f3369edf3255c2c912ea455c5',
+ '3ad1a281d356ec32628ff80291dfe0d3465417d4fb52a8e4271a842a35853fac',
+ '3dcf115fa42c1a35870ed487704582be0c9094000fbdd9b85419199127eeed2e',
+ '478f9e58eb2ce2558657ca535d47b47b9df5daceb6650c7d636c2fc1cb0cf96b',
+ '526bc58552e13673a222631cdc54c9359815311a5c4fef25f07c4957b9aa707e',
+ '5a95306ec8a882b8ce3fedbbe154511968a4dd124ea54592704966b844a66323',
+ '5f0c44deafd2f47a4f48543b868288e14b51aa0e04dff3b9ad3941b2af4aba8b',
+ '60fe5828bbe4c229d94e2e5885b42cf2ae814a3d6d0b2461fc4261ce839f786c',
+ '65344e1032f8ce2f1db85a1c7884e0154da3a4fa79a351706eb5dc6ffd709725',
+ '6c0dd400c3072fd601515bf3f7082397357f8dc59a8e7e302b4f162b27a4bb3d',
+ '74dddf433baf99853f64e39d02d3d40fbb5b1edffd54d06dc9faece28c50d048',
+ '86aecaa98b67c927afc8a58588c8eed5ce96ae1bc963b288fe4459fae5cb2a3a',
+ '8b1d6d039c7b5b27d46c4abea0055418ba50bb691fe958c8c4c969db2dfe0b53',
+ 'a5282f3232c393dbf07154a61332e438f69abacfd8064e3ba86e56ca18369f1d',
+ 'afba179bfb883cd24a9524037d831b4328d3daf1d543ce396ba4a0bdec925f92',
+ 'b7aa077f653114adc0da9e5e985eadac7f7eea1a267d1b3239e99f9d56949218',
+ 'c9a855879016763e4b24e5085bc1ce1287aafd92faf661916b7a3693017fe874',
+ 'ca4cdbb02ad22d00ecf943046b63691f99ed371726c9ee602b8c40de49d32c0a',
+ 'de6b81c11146ba6df3aed5c9ddca0296e6b6e9dafb637a09a5d833fbdac79cfa',
+ 'dfc4e7f03b195d3680184c38357ff5b8dcd9f17140819378a0b48df723907332',
+ 'e3dad4ab8ec503e7c6954b29244feab696f887a31b4373006f13095814ec27a8',
+ 'e8d08137ed8bf7a4f117fb155b041bd46525299e56175c28aa9e7156910f6f2a',
+ 'ebafb7d510795a0d106b7214590447174208aa4d5ccff3fc431f4b8d8d737b36',
+ 'fbf7611fcaf1ec82e8abc9750ea3a8db7e4d779d8d5ad1662ddca5534351081d'
 ]::text[] AS lista;
 DO $erp_pre$
 DECLARE v text[];
