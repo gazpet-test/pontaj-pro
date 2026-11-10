@@ -54,7 +54,8 @@ export default function NodConstructii({ proiectId, client = supabase }) {
   const contextNou = () => { fisaGen.current += 1; clearTimeout(timerInchidere.current); timerInchidere.current = null }
   useEffect(() => {
     montat.current = true
-    return () => { montat.current = false; clearTimeout(timerInchidere.current); timerInchidere.current = null }
+    // la demontare: orice încărcare / citire de nume în zbor e invalidată (generațiile cresc), iar paginarea se oprește la pagina următoare
+    return () => { montat.current = false; gen.current += 1; genNume.current += 1; clearTimeout(timerInchidere.current); timerInchidere.current = null }
   }, [])
   useEffect(() => {
     const actualizeaza = () => setAzi(z => { const n = ziBucuresti(); return n === z ? z : n })
@@ -71,6 +72,8 @@ export default function NodConstructii({ proiectId, client = supabase }) {
     try {
       const [toate, drept] = await Promise.all([
         paginareKeyset((ultim, pas) => {
+          // o încărcare depășită (alt proiect, reîncărcare, demontare) nu mai cere pagini: bucla keyset se oprește aici
+          if (g !== gen.current || !montat.current) throw new Error('încărcare anulată')
           let q = client.from('executie_noduri_constructii').select(COLOANE).eq('proiect_id', proiectId).order('id').limit(pas)
           if (ultim != null) q = q.gt('id', ultim)
           return q
@@ -99,10 +102,13 @@ export default function NodConstructii({ proiectId, client = supabase }) {
   useEffect(() => {
     const g = ++genNume.current
     if (!idsBifatori.length) return undefined
-    client.from('profiles').select('id, name').in('id', idsBifatori).then(({ data, error }) => {
+    // pe bucăți de câte 100 de id-uri (sub plafonul de rânduri al API-ului, L23); orice bucată eșuată = eroare afișată
+    const bucati = []
+    for (let i = 0; i < idsBifatori.length; i += 100) bucati.push(idsBifatori.slice(i, i + 100))
+    Promise.all(bucati.map(b => client.from('profiles').select('id, name').in('id', b))).then(rez => {
       if (g !== genNume.current) return
-      if (error) { setNume(n => ({ ...n, eroare: true })); return }
-      setNume({ harta: new Map((data || []).map(p => [p.id, p.name])), eroare: false })
+      if (rez.some(r => r.error)) { setNume(n => ({ ...n, eroare: true })); return }
+      setNume({ harta: new Map(rez.flatMap(r => r.data || []).map(p => [p.id, p.name])), eroare: false })
     }, () => { if (g === genNume.current) setNume(n => ({ ...n, eroare: true })) })
     return () => { genNume.current += 1 }
   }, [cheieIds, client]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -178,7 +184,8 @@ export default function NodConstructii({ proiectId, client = supabase }) {
 
   if (incarc && !elemente.length) return <Cadru><div style={{ color: G.dim, padding: 30, textAlign: 'center' }}>Se încarcă…</div></Cadru>
   if (eroare) return <Cadru><Alerta text={eroare} /><button onClick={incarca} style={{ ...S.btn, marginTop: 10 }}>Reîncearcă</button></Cadru>
-  if (!noduri.length) return <Cadru><div style={{ color: G.muted, padding: 20, fontSize: 14 }}>Niciun element de construcții pe acest proiect (sau nu ai drept de citire pe Execuție). Lista nu este încă încărcată.</div></Cadru>
+  // lista goală: eroarea verificării dreptului (dacă a fost) se arată ÎNAINTEA mesajului, nu se pierde (L18)
+  if (!noduri.length) return <Cadru>{eroareDrept && <Alerta text={eroareDrept} />}<div style={{ color: G.muted, padding: 20, fontSize: 14 }}>Niciun element de construcții pe acest proiect (sau nu ai drept de citire pe Execuție). Lista nu este încă încărcată.</div></Cadru>
 
   const prioritar = c.peGrup.find(x => x.cheie === GRUP_PRIORITAR)
   const altele = c.peGrup.filter(x => x.cheie !== GRUP_PRIORITAR)

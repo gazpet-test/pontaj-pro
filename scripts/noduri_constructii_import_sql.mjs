@@ -56,7 +56,7 @@ export function genereazaSql({ proiect, nod, listaCsv, surse = {} }) {
 -- Rulare: psql -X -v ON_ERROR_STOP=1 --single-transaction -f <acest fișier>
 -- Upsert pe (proiect, nod, cod): descrierea și lista etapelor se actualizează (versiune + 1) doar dacă diferă; etapele bifate nu se ating.
 -- IMPORTUL SE OPREȘTE (nimic scris) dacă: un element cu etape bifate lipsește din listă; lista nouă de etape a unui element bifat nu păstrează
--- etapele deja bifate (aceleași, în aceeași ordine); un stadiu inițial e cerut pe un element care are deja alt număr de etape bifate.
+-- etapele deja bifate (aceleași, în aceeași ordine); stadiul inițial cerut nu se regăsește în primele etape bifate (număr sau dată).
 -- Elementele fără bifări care lipsesc din listă -> anulat (motiv „import: …”); un element anulat de un import și reapărut -> activ. Nimic nu se șterge.
 SET LOCAL standard_conforming_strings = on;
 SET LOCAL lock_timeout = '5s';
@@ -66,6 +66,7 @@ BEGIN
   IF to_regclass('public.executie_noduri_constructii') IS NULL THEN RAISE EXCEPTION 'import constructii: migrarea 20261207a nu e aplicată'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = ${P}) THEN RAISE EXCEPTION 'import constructii: proiectul ${proiect} nu există'; END IF;
 END $pre$;
+-- Ordinea lock-urilor (L06), ca în RPC: ÎNTÂI tabelul (SHARE ROW EXCLUSIVE: exclude RPC-ul, care ia ROW EXCLUSIVE înaintea rândului), APOI rândurile.
 LOCK TABLE public.executie_noduri_constructii IN SHARE ROW EXCLUSIVE MODE;
 DROP TABLE IF EXISTS pg_temp._constr_lista;   -- a doua rulare în aceeași tranzacție (harness)
 CREATE TEMP TABLE _constr_lista (cod text PRIMARY KEY, cod_detaliu text NOT NULL, plansa_sursa text NOT NULL, denumire text NOT NULL, tip text NOT NULL,
@@ -93,10 +94,11 @@ BEGIN
   IF v_pb IS NOT NULL THEN
     RAISE EXCEPTION 'import constructii: lista nouă de etape nu păstrează etapele deja bifate la: %', v_pb;
   END IF;
-  -- 3. stadiul inițial se scrie doar pe elementele fără bifări; pe un element bifat, el trebuie să fie exact ce e deja (reluare)
+  -- 3. stadiul inițial se scrie doar pe elementele fără bifări; pe un element bifat, primele k etape bifate trebuie să fie exact stadiul cerut
+  --    (aceleași k etape, toate cu data stadiului): reluarea aceluiași fișier trece și după bifări noi în aplicație; altă dată / alt k = oprire
   SELECT string_agg(s.cod, ', ' ORDER BY s.cod) INTO v_pb FROM public.executie_noduri_constructii s JOIN _constr_lista l ON l.cod = s.cod
    WHERE s.proiect_id = ${P} AND s.nod_cod = ${N} AND l.stadiu_k IS NOT NULL AND cardinality(s.etape_data) > 0
-     AND cardinality(s.etape_data) <> l.stadiu_k;
+     AND (cardinality(s.etape_data) < l.stadiu_k OR s.etape_data[1:l.stadiu_k] IS DISTINCT FROM array_fill(l.stadiu_data, ARRAY[l.stadiu_k]));
   IF v_pb IS NOT NULL THEN
     RAISE EXCEPTION 'import constructii: stadiul inițial diferă de etapele deja bifate la: % (se lămurește în aplicație, nu prin import)', v_pb;
   END IF;
@@ -132,7 +134,8 @@ BEGIN
   IF EXISTS (SELECT 1 FROM _constr_lista l LEFT JOIN public.executie_noduri_constructii s ON s.proiect_id = ${P} AND s.nod_cod = ${N} AND s.cod = l.cod
               WHERE s.id IS NULL OR s.stare <> 'activ'
                  OR (${COL}) IS DISTINCT FROM (${COL_L})
-                 OR (l.stadiu_k IS NOT NULL AND cardinality(s.etape_data) <> l.stadiu_k)) THEN
+                 OR (l.stadiu_k IS NOT NULL AND (cardinality(s.etape_data) < l.stadiu_k
+                     OR s.etape_data[1:l.stadiu_k] IS DISTINCT FROM array_fill(l.stadiu_data, ARRAY[l.stadiu_k])))) THEN
     RAISE EXCEPTION 'import constructii: nu toate elementele din fișier sunt pe nod, active și la zi (un element anulat manual se lămurește întâi)';
   END IF;
   RAISE NOTICE 'import constructii %: % noi, % actualizate, % reactivate, % anulate (lipsă din listă), % cu stadiu inițial scris',

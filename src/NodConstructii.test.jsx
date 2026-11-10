@@ -29,7 +29,7 @@ const EL = (id, cod, extra = {}) => ({
 // clientul fals: „serverul” e o hartă de rânduri; RPC-ul se aplică pe server abia când testul îl eliberează ('ok') sau întoarce eroare de rețea
 function clientFals({ randuri, drept = true, nume = { data: [{ id: U1, name: 'POPESCU ION' }], error: null } }) {
   const server = new Map(randuri.map(r => [r.id, { ...r }]))
-  const st = { rpc: [], rand: [], profiles: [] }
+  const st = { rpc: [], rand: [], profiles: [], lista: 0, poartaLista: null }
   const interogare = () => {
     const f = { gt: null, lim: 1000, id: null }
     const q = {
@@ -41,7 +41,12 @@ function clientFals({ randuri, drept = true, nume = { data: [{ id: U1, name: 'PO
         const d = amana(); st.rand.push({ id: f.id, ...d })
         return d.p.then(() => ({ data: instant, error: null }))
       },
-      then: (res, rej) => Promise.resolve({ data: [...server.values()].filter(r => f.gt == null || r.id > f.gt).sort((a, b) => a.id - b.id).slice(0, f.lim).map(r => ({ ...r })), error: null }).then(res, rej),
+      then: (res, rej) => {
+        st.lista += 1
+        const instant = [...server.values()].filter(r => f.gt == null || r.id > f.gt).sort((a, b) => a.id - b.id).slice(0, f.lim).map(r => ({ ...r }))
+        const poarta = f.gt == null ? st.poartaLista : null
+        return (poarta ? poarta.p : Promise.resolve()).then(() => ({ data: instant, error: null })).then(res, rej)
+      },
     }
     return q
   }
@@ -50,7 +55,7 @@ function clientFals({ randuri, drept = true, nume = { data: [{ id: U1, name: 'PO
       ? { select: () => ({ in: (_c, ids) => { st.profiles.push(ids); return Promise.resolve(nume) } }) }
       : interogare()),
     rpc: (fn, a) => {
-      if (fn === 'fn_executie_nod_drept') return Promise.resolve({ data: drept, error: null })
+      if (fn === 'fn_executie_nod_drept') return Promise.resolve(drept === 'eroare' ? { data: null, error: { message: 'rpc căzut simulat' } } : { data: drept, error: null })
       const d = amana(); st.rpc.push({ fn, a, ...d })
       return d.p.then(mod => {
         if (mod === 'eroare') return { data: null, error: { message: 'timeout simulat' } }
@@ -69,7 +74,7 @@ function clientFals({ randuri, drept = true, nume = { data: [{ id: U1, name: 'PO
 let curata = []
 afterEach(() => { curata.forEach(f => f()); curata = []; vi.restoreAllMocks() })
 
-async function monteaza(client) {
+async function monteaza(client, { inainte = null } = {}) {
   const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true, url: 'https://erp.test/executie?proiect=1&tab=nod' })
   const vechi = { window: globalThis.window, document: globalThis.document, sessionStorage: globalThis.sessionStorage }
   Object.assign(globalThis, { window: j.window, document: j.window.document, sessionStorage: j.window.sessionStorage })
@@ -81,6 +86,7 @@ async function monteaza(client) {
   const root = createRoot(j.window.document.getElementById('r'))
   const d = j.window.document
   const asteapta = async () => { await act(async () => { for (let i = 0; i < 30; i++) await Promise.resolve() }) }
+  inainte?.()
   await act(async () => { root.render(<NodConstructii proiectId={1} client={client} />) })
   await asteapta()
   let montat = true
@@ -201,6 +207,26 @@ dom(numeDom('NodConstructii — listă, filtre, fișă (jsdom + react-dom)'), ()
     expect(t).toContain('Doar citire')
     expect(t).not.toContain('Bifează')
     expect(t).toContain('01.11.2026 · nume indisponibil')
+  })
+
+  it('L18: lista goală + verificarea dreptului eșuată -> eroarea se vede, nu doar „niciun element”', async () => {
+    const { client } = clientFals({ randuri: [], drept: 'eroare' })
+    const u = await monteaza(client)
+    const t = u.d.body.textContent
+    expect(t).toContain('Nu am putut verifica dreptul de scriere: rpc căzut simulat')
+    expect(t).toContain('Niciun element de construcții')
+  })
+
+  it('L24: demontarea în timpul încărcării: nicio pagină nouă cerută, nimic aplicat după', async () => {
+    const { client, st } = clientFals({ randuri: [EL(1, 'F6-1'), EL(2, 'F6-2')] })
+    const u = await monteaza(client, { inainte: () => { st.poartaLista = amana() } })
+    expect(st.lista).toBe(1)                               // prima pagină, în zbor
+    u.demonteaza()
+    const erori = vi.spyOn(console, 'error')
+    await u.act(async () => { st.poartaLista.res(); for (let i = 0; i < 30; i++) await Promise.resolve() })
+    expect(st.lista).toBe(1)                               // bucla keyset s-a oprit: pagina a doua nu s-a mai cerut
+    expect(st.profiles).toEqual([])                        // nici numele
+    expect(erori).not.toHaveBeenCalled()
   })
 
   it('demontarea în timpul salvării: răspunsul ulterior nu mai programează nimic', async () => {

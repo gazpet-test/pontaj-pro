@@ -303,7 +303,8 @@ END $t$;
 
 -- T14: SQL-ul generat de scripts/noduri_constructii_import_sql.mjs, pe fixture-ul SINTETIC (proiectul 1, nodul fictiv NOD-TEST-IMPORT):
 -- import (cu stadiu inițial), reluare idempotentă, listă nouă (upsert + anulare + etape schimbate cu prefixul bifat păstrat), revenire la lista veche
--- (reactivare), apoi trei opriri: element bifat lipsă, etape care nu păstrează bifarea, alt stadiu pe un element bifat. Rulează doar dacă proiectul 1
+-- (reactivare), reluare după o bifare nouă, apoi patru opriri: element bifat lipsă, etape care nu păstrează bifarea, stadiu mai lung decât bifările,
+-- același număr de etape cu altă dată. Rulează doar dacă proiectul 1
 -- există pe clonă (altfel e sărit, cu mesaj).
 SELECT pg_temp.t_ca(NULL, 'postgres');
 SELECT EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = 1) AS are_proiect_1 \gset
@@ -349,6 +350,16 @@ DO $t$ BEGIN
      OR (SELECT cardinality(etape) FROM public.executie_noduri_constructii WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT' AND cod = 'F6-2') <> 8 THEN
     RAISE EXCEPTION 'T14 FAIL: reactivarea / anularea codului nou';
   END IF;
+  -- F6-1 (stadiu 2 etape din import) primește a treia etapă (mentenanță): reluarea aceluiași fișier trebuie să treacă (prefixul = stadiul)
+  UPDATE public.executie_noduri_constructii SET etape_data = etape_data || '2026-10-25'::date, etape_de = etape_de || NULL::uuid, etape_la = etape_la || now()
+   WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT' AND cod = 'F6-1';
+END $t$;
+\ir fixtures/nod_constructii/import_exemplu_1.sql
+DO $t$ BEGIN
+  IF (SELECT cardinality(etape_data) || '|' || etapa_curenta FROM public.executie_noduri_constructii WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT' AND cod = 'F6-1')
+       IS DISTINCT FROM '3|turnare' THEN
+    RAISE EXCEPTION 'T14 FAIL: reluarea după o bifare nouă';
+  END IF;
 END $t$;
 CREATE TEMP TABLE t14_v2 ON COMMIT DROP AS SELECT cod, versiune, stare FROM public.executie_noduri_constructii WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT';
 SAVEPOINT t14a;
@@ -375,13 +386,21 @@ SAVEPOINT t14c;
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t14c;
 SELECT pg_temp.t_eroare('T14c', :'t14c_eroare', :'t14c_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'stadiul inițial diferă de etapele deja bifate la: F6-1');
+SAVEPOINT t14d;
+\set ON_ERROR_STOP 0
+\ir fixtures/nod_constructii/import_exemplu_6.sql
+\set t14d_eroare :ERROR
+\set t14d_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t14d;
+SELECT pg_temp.t_eroare('T14d', :'t14d_eroare', :'t14d_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'stadiul inițial diferă de etapele deja bifate la: F6-1');
 DO $t$ BEGIN
   IF EXISTS (SELECT 1 FROM t14_v2 v FULL JOIN (SELECT * FROM public.executie_noduri_constructii WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT') s ON s.cod = v.cod
               WHERE (s.versiune, s.stare) IS DISTINCT FROM (v.versiune, v.stare)) THEN
     RAISE EXCEPTION 'T14 FAIL: un import oprit a scris ceva';
   END IF;
   DELETE FROM public.executie_noduri_constructii WHERE proiect_id = 1 AND nod_cod = 'NOD-TEST-IMPORT';
-  RAISE NOTICE 'T14 OK (cele trei opriri au fost verificate explicit, fără nicio scriere)';
+  RAISE NOTICE 'T14 OK (cele patru opriri au fost verificate explicit, fără nicio scriere)';
 END $t$;
 \else
 \echo 'T14 SĂRIT: proiectul 1 nu există pe clonă (importul nu s-a putut proba)'
@@ -429,6 +448,37 @@ DO $t$ BEGIN
     RAISE EXCEPTION 'T12 FAIL: revenirea refuzată a atins ceva';
   END IF;
   RAISE NOTICE 'T12 OK (refuzurile „garda invalida” și „tabelul are randuri” au fost verificate explicit)';
+END $t$;
+
+-- T16: revenirea armată pe tabel GOL refuză o stare care nu e exact cea din migrare (L15): corpul unei funcții schimbat; politica schimbată
+SAVEPOINT t16a;
+CREATE OR REPLACE FUNCTION public.fn_executie_constr_etape_valide(p text[]) RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$ BEGIN RETURN true; END $f$;
+DELETE FROM public.executie_noduri_constructii;
+SELECT set_config('gazpet.revenire_20261207a', 'SCOATE_NODURI_CONSTRUCTII:' || txid_current(), true);
+\set ON_ERROR_STOP 0
+\ir ../supabase/revenire/20261207a_executie_noduri_constructii_ROLLBACK.sql
+\set t16a_eroare :ERROR
+\set t16a_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t16a;
+SELECT pg_temp.t_eroare('T16a', :'t16a_eroare', :'t16a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'starea nu e cea din 20261207a');
+SAVEPOINT t16b;
+ALTER POLICY executie_noduri_constructii_citire ON public.executie_noduri_constructii USING (true);
+DELETE FROM public.executie_noduri_constructii;
+SELECT set_config('gazpet.revenire_20261207a', 'SCOATE_NODURI_CONSTRUCTII:' || txid_current(), true);
+\set ON_ERROR_STOP 0
+\ir ../supabase/revenire/20261207a_executie_noduri_constructii_ROLLBACK.sql
+\set t16b_eroare :ERROR
+\set t16b_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t16b;
+SELECT pg_temp.t_eroare('T16b', :'t16b_eroare', :'t16b_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'starea nu e cea din 20261207a');
+DO $t$ BEGIN
+  IF public.fn_executie_constr_etape_valide(ARRAY['xyz']) OR (SELECT count(*) FROM public.executie_noduri_constructii WHERE nod_cod = 'NOD-TEST-HARNESS') <> 5
+     OR to_regclass('public.executie_noduri_constructii') IS NULL THEN
+    RAISE EXCEPTION 'T16 FAIL: starea nu a revenit după refuz';
+  END IF;
+  RAISE NOTICE 'T16 OK (revenirea refuză corpul de funcție schimbat și politica schimbată)';
 END $t$;
 
 -- T13: revenirea armată pe tabel gol scoate tot (și NU atinge 20261201a); re-aplicarea merge

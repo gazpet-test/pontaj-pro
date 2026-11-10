@@ -16,7 +16,9 @@
 --   * Citirea: același drept ca la suduri (owner sau 'executie' de orice nivel), prin RLS, cu aceeași funcție (o singură definiție, L19).
 -- Ce NU face: nicio dată (lista o încarcă chat-ul după „da”-ul lui Răzvan, cu SQL generat local de scripts/noduri_constructii_import_sql.mjs),
 --   niciun drept, nicio atingere pe executie_noduri_suduri / storage / fn_executie_nod_* (doar FOLOSEȘTE fn_executie_nod_drept, cu amprenta verificată).
--- Ordinea lock-urilor (L06): RPC-ul blochează UN rând (executie_noduri_constructii FOR UPDATE) și nimic altceva.
+-- Ordinea lock-urilor (L06), aceeași pe toate căile: ÎNTÂI tabelul, APOI rândurile. RPC-ul: tabelul ROW EXCLUSIVE (explicit), apoi UN rând
+--   FOR UPDATE. Importul (scripts/noduri_constructii_import_sql.mjs): tabelul SHARE ROW EXCLUSIVE, apoi rândurile. Cele două moduri de tabel se
+--   exclud, deci un RPC și un import nu pot ține fiecare câte o parte (fără ciclu); două RPC-uri blochează câte un singur rând.
 -- Revenire: supabase/revenire/20261207a_executie_noduri_constructii_ROLLBACK.sql. Test pe clonă: scripts/test_executie_noduri_constructii.sql.
 DO $pre$
 DECLARE v_drept regprocedure;
@@ -165,7 +167,9 @@ CREATE TRIGGER trg_executie_constr_provenienta BEFORE INSERT OR UPDATE ON public
   FOR EACH ROW EXECUTE FUNCTION public.fn_executie_constr_provenienta();
 
 -- ── RPC-ul de bifare / retragere a unei etape (L01, L02, L04, L07, L08, L09, L17, L20) ──
--- Ordinea: identitate -> parametri -> lock pe rând (FOR UPDATE) -> drept pe proiectul rândului -> idempotență -> CAS -> stare -> regulile acțiunii -> UPDATE.
+-- Ordinea: identitate -> parametri -> lock pe tabel (ROW EXCLUSIVE) -> lock pe rând (FOR UPDATE) -> drept pe proiectul rândului -> idempotență ->
+-- CAS -> stare -> regulile acțiunii -> UPDATE. Lock-ul pe tabel e ÎNAINTEA rândului (L06): un import care ține SHARE ROW EXCLUSIVE face RPC-ul să
+-- aștepte aici, fără niciun rând blocat; invers, importul așteaptă RPC-ul la LOCK-ul lui de tabel, înaintea oricărui rând.
 -- Rezultat: {ok, duplicat, element} sau {ok:false, motiv:'conflict', element} (rândul s-a schimbat între timp: clientul reîncarcă).
 CREATE FUNCTION public.fn_executie_constr_etapa(p_id bigint, p_versiune integer, p_actiune text, p_etapa text, p_data date, p_motiv text, p_cheie uuid)
 RETURNS jsonb
@@ -183,6 +187,7 @@ BEGIN
     RAISE EXCEPTION 'constructii: parametri lipsă' USING ERRCODE = '22023';
   END IF;
   IF p_actiune NOT IN ('bifeaza', 'retrage') THEN RAISE EXCEPTION 'constructii: acțiune necunoscută' USING ERRCODE = '22023'; END IF;
+  LOCK TABLE public.executie_noduri_constructii IN ROW EXCLUSIVE MODE;
   SELECT * INTO r FROM public.executie_noduri_constructii WHERE id = p_id FOR UPDATE;
   IF NOT FOUND OR NOT public.fn_executie_nod_drept(r.proiect_id, true) THEN
     RAISE EXCEPTION 'constructii: elementul nu există sau nu ai drept de scriere pe Execuție' USING ERRCODE = '42501';
