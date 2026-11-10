@@ -288,6 +288,22 @@ raport('M22 garda „proiect” lasă rândurile fără proiect și pe tabelele 
   mutMig: t => inlocuieste(t, `  v_nul := TG_NARGS = 2;`, `  v_nul := true;`),
 }), false, /T3 FAIL|T3d FAIL/)
 
+// r5: review r4 P1 — documentul propriu potrivit de clasificator pe un proiect din afara listei
+const INBOX_EXCEPTIE = `OR (p_scriere IS FALSE AND p_entitate IS NULL AND auth.uid() IS NOT NULL AND p_uploadat_de = auth.uid()))`
+raport('M23 Inbox AI: excepția celui care a urcat și după potrivire (regula din r4)', await scenariu('m23', {
+  mutMig: t => inlocuieste(t, INBOX_EXCEPTIE, `OR (p_scriere IS FALSE AND auth.uid() IS NOT NULL AND p_uploadat_de = auth.uid()))`),
+}), false, /T3i FAIL[^\n]*p3_al_lui_b|T3c FAIL/)
+raport('M24 Inbox AI: excepția scoasă de tot (documentul propriu fără proiect ascuns)', await scenariu('m24', {
+  mutMig: t => inlocuieste(t, INBOX_EXCEPTIE, `OR (false AND p_entitate IS NULL AND auth.uid() IS NOT NULL AND p_uploadat_de = auth.uid()))`),
+}), false, /T3i FAIL[^\n]*nul_al_lui_b|T3c FAIL/)
+// politica de modificare nu mai filtrează rândurile (USING lasă tot, dependențele rămân): UPDATE-ul direct al lui B pe p2 nu mai dă
+// „OK 0”, ci refuzul WITH CHECK — exact „altă eroare” pe care r4 o accepta în T3r
+raport('M25 antetul raportului: UPDATE direct pe p2 nefiltrat pe REST (altă eroare în loc de 0 rânduri)', await scenariu('m25', {
+  mutMig: t => inlocuieste(t, `    EXECUTE format('CREATE POLICY executie_acces_modifica ON public.%I AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', r.obiect, v_scr, v_scr);`,
+    `    EXECUTE format('CREATE POLICY executie_acces_modifica ON public.%I AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', r.obiect,
+                   CASE WHEN r.obiect = 'rapoarte_zilnice' THEN v_scr || ' OR true' ELSE v_scr END, v_scr);`),
+}), false, /T3 FAIL[^\n]*rapoarte_zilnice|T3r FAIL[^\n]*REST/)
+
 // 3) preflight-ul refuză o schemă care ar face restricția falsă sau un inventar incomplet
 raport('P1 vedere cunoscută „definer” peste proiecte', await scenariu('p1', { doarMigrarea: true,
   mutSchelet: t => inlocuieste(t, 'CREATE VIEW public.v_executie_dashboard WITH (security_invoker = on) AS', 'CREATE VIEW public.v_executie_dashboard AS'),

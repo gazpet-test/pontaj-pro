@@ -16,6 +16,9 @@
 -- r4 (L25): harness-ul își creează singur, în tranzacție, câte un rând de PROBĂ pe fiecare tabel acoperit (p1 / p2 / p3 și, unde contează,
 --   fără proiect), copiat dintr-un rând existent sau construit din constrângeri, plus obiecte Storage și rânduri în Inboxul AI; ce nu se
 --   poate crea apare la final în lista „NEPROBAT”, cu motivul.
+-- r5 (review r4): Inboxul AI — documentul lui B potrivit de clasificator pe p3 nu i se mai arată (nici rândul, nici fișierul), documentul lui
+--   B încă fără proiect se vede ca înainte; clasificarea e simulată ca edge-ul (service_role, fără JWT). Orice refuz verificat are
+--   SQLSTATE-ul ȘI fragmentul de mesaj așteptat (sau, la UPDATE prin REST, exact „OK 0” după ce aceeași probă scria înainte).
 -- NU presupune date reale: ia primul owner, primele 3 profiluri non-owner și cele 3 proiecte cu cele mai multe tabele acoperite cu date
 -- (dacă clona are doar 2, al treilea se creează în tranzacție), le leagă DOAR în tranzacție și scrie date FICTIVE (T-ACC*, TA-*, test-acces/…,
 -- NOD-TEST-ACCES, rapoarte pe 2001-01-01 / 1990–1998, mesajul TEST-ACCES-1).
@@ -447,8 +450,9 @@ BEGIN
 
   -- Inboxul AI: rânduri de probă (copiate dintr-un rând deja clasificat — niciodată „in_asteptare”, care ar porni clasificarea) + fișierele lor
   SELECT ctid::text INTO v_src FROM public.ai_documente_inbox WHERE status IS DISTINCT FROM 'in_asteptare' ORDER BY ctid LIMIT 1;
+  -- r5: 'nul_al_lui_b' = documentul lui B clasificat pentru Execuție, încă fără proiect (excepția celui care a urcat)
   FOR r IN SELECT * FROM (VALUES ('p1', 'executie', 1, 'a'), ('p2', 'executie', 2, 'a'), ('p3', 'executie', 3, 'a'), ('p3_al_lui_b', 'executie', 3, 'b'),
-                                 ('hr', 'hr', 0, 'a'), ('nedecis', NULL, 0, 'a')) x(k, modul, n, cine) LOOP
+                                 ('nul_al_lui_b', 'executie', 0, 'b'), ('hr', 'hr', 0, 'a'), ('nedecis', NULL, 0, 'a')) x(k, modul, n, cine) LOOP
     v_val := pg_temp.t_g(r.cine) || '/test-acces-' || r.k || '-' || gen_random_uuid() || '.pdf';
     v_sql := pg_temp.t_sql_proba('public.ai_documente_inbox'::regclass, 'entitate_id', CASE WHEN r.n > 0 THEN pr[r.n]::text ELSE '' END, v_src,
                jsonb_build_object('modul_tinta', CASE WHEN r.modul IS NULL THEN 'NULL' ELSE quote_literal(r.modul) END || '::text',
@@ -576,6 +580,8 @@ GRANT EXECUTE ON FUNCTION pg_temp.t_ca(uuid, text), pg_temp.t_g(text), pg_temp.t
 -- ── TB: ÎNAINTE de migrare, ca fiecare cont (RLS-ul de azi): amprenta completă; raportul zilnic ──
 SELECT pg_temp.t_ca(pg_temp.t_g('a')::uuid, 'authenticated');
 SELECT length(set_config('tacc.ma0', pg_temp.t_amprenta()::text, true)) AS amprenta_a;
+-- r5: mesajul de azi al schimbului de țevi pentru o țeavă inexistentă (referința lui T4, nu un tipar ghicit)
+SELECT set_config('tacc.swap0', pg_temp.t_norm(pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)')), true);
 SELECT pg_temp.t_ca(pg_temp.t_g('c')::uuid, 'authenticated');
 SELECT length(set_config('tacc.mc0', pg_temp.t_amprenta()::text, true)) AS amprenta_c;
 SELECT pg_temp.t_ca(pg_temp.t_g('own')::uuid, 'authenticated');
@@ -586,6 +592,9 @@ SELECT set_config('tacc.rb0', pg_temp.t_proba(format('SELECT public.fn_raport_zi
 SELECT set_config('tacc.rh2', pg_temp.t_raport_salveaza(pg_temp.t_g('site2'), false), true);
 SELECT set_config('tacc.rh1', pg_temp.t_raport_salveaza(pg_temp.t_g('site1'), false), true);
 SELECT set_config('tacc.rh0', pg_temp.t_raport_salveaza(pg_temp.t_g('site0'), false), true);
+-- r5: UPDATE-ul direct al antetelor pe șantierul lui p2, pe REST și pe calea DEFINER (referința lui T3r)
+SELECT set_config('tacc.ru2', pg_temp.t_proba(format('UPDATE public.rapoarte_zilnice SET probleme = probleme WHERE site_id = %s', pg_temp.t_g('site2'))), true);
+SELECT set_config('tacc.ru2d', pg_temp.t_proba_definer(format('UPDATE public.rapoarte_zilnice SET probleme = probleme WHERE site_id = %s', pg_temp.t_g('site2'))), true);
 SELECT pg_temp.t_ca(NULL, 'postgres');
 SELECT set_config('tacc.pol0', (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s', polrelid::regclass, polname, polpermissive, polroles,
                                                                        coalesce(pg_get_expr(polqual, polrelid), ''), coalesce(pg_get_expr(polwithcheck, polrelid), '')), ';'
@@ -762,7 +771,7 @@ BEGIN
   END IF;
   -- RPC-ul de stare al sudurii (20261201a): p3 refuz, p1 trece (scris efectiv, apoi anulat)
   IF pg_temp.t_proba(format('SELECT public.fn_executie_nod_sudura_stare(%s, %L, 1, %L, (now() AT TIME ZONE %L)::date, %L, NULL, NULL, gen_random_uuid())',
-                            pg_temp.t_g('s3'), 'de_executat', 'insailat', 'Europe/Bucharest', 'Sudor Test')) NOT LIKE '42501 %'
+                            pg_temp.t_g('s3'), 'de_executat', 'insailat', 'Europe/Bucharest', 'Sudor Test')) NOT LIKE '42501 %nu ai drept de scriere pe Execuție%'
      OR pg_temp.t_proba(format('SELECT public.fn_executie_nod_sudura_stare(%s, %L, 1, %L, (now() AT TIME ZONE %L)::date, %L, NULL, NULL, gen_random_uuid())',
                                pg_temp.t_g('s1'), 'de_executat', 'insailat', 'Europe/Bucharest', 'Sudor Test')) <> 'OK 1' THEN
     RAISE EXCEPTION 'T3 FAIL: RPC-ul sudurii';
@@ -779,7 +788,7 @@ BEGIN
   x := pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)');
   IF NOT pg_temp.t_e_garda(x) THEN RAISE EXCEPTION 'T3 FAIL: poarta swap, țevi inexistente: %', x; END IF;
   x := pg_temp.t_proba('SELECT executie_acces_intern.fn_executie_swap_tevi_pozitie(-1, -2)');
-  IF x NOT LIKE '42501 %' THEN RAISE EXCEPTION 'T3 FAIL: originalul swap se poate apela direct: %', x; END IF;
+  IF x NOT LIKE '42501 permission denied for schema executie_acces_intern%' THEN RAISE EXCEPTION 'T3 FAIL: originalul swap se poate apela direct: %', x; END IF;
   IF pg_temp.t_g('tevi3') IS NOT NULL THEN
     x := pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)', split_part(pg_temp.t_g('tevi3'), ',', 1), split_part(pg_temp.t_g('tevi3'), ',', 2)));
     IF NOT pg_temp.t_e_garda(x) THEN RAISE EXCEPTION 'T3 FAIL: poarta swap pe p3: %', x; END IF;
@@ -795,8 +804,8 @@ BEGIN
   ELSE PERFORM pg_temp.t_neprobat('swap legitim pe p1 (nu există un pachet cu 2 țevi)'); END IF;
   -- tabelul de acces: B vede doar rândurile lui; nu poate seta nimic
   IF (SELECT count(*) FROM public.executie_acces_proiect) <> 2 OR EXISTS (SELECT 1 FROM public.executie_acces_proiect WHERE profile_id <> auth.uid())
-     OR pg_temp.t_proba(format('SELECT pg_temp.t_seteaza(%L, true, pg_temp.t_lista(%L), pg_temp.t_lista(%L))', 'b', 'p1:editor,p2:editor,p3:editor', 'p1:editor,p2:viewer')) NOT LIKE '42501 %'
-     OR pg_temp.t_proba(format('INSERT INTO public.executie_acces_proiect (profile_id, proiect_id) VALUES (auth.uid(), %s)', p3)) NOT LIKE '42501 %' THEN
+     OR pg_temp.t_proba(format('SELECT pg_temp.t_seteaza(%L, true, pg_temp.t_lista(%L), pg_temp.t_lista(%L))', 'b', 'p1:editor,p2:editor,p3:editor', 'p1:editor,p2:viewer')) NOT LIKE '42501 %doar owner-ul stabilește%'
+     OR pg_temp.t_proba(format('INSERT INTO public.executie_acces_proiect (profile_id, proiect_id) VALUES (auth.uid(), %s)', p3)) NOT LIKE '42501 permission denied for table executie_acces_proiect%' THEN
     RAISE EXCEPTION 'T3 FAIL: tabelul de acces (citire / setare de către non-owner)';
   END IF;
   RAISE NOTICE 'T3 OK (citire probată pe % tabele, rânduri fără proiect pe %; UPDATE legitim REST % / DEFINER %; UPDATE refuzat REST % / DEFINER (gardă) %; INSERT legitim %, INSERT refuzat cu motivul așteptat %)',
@@ -820,9 +829,20 @@ BEGIN
   IF x <> 'OK 1' THEN RAISE EXCEPTION 'T3r FAIL: B (viewer pe p2) nu mai citește raportul șantierului p2: %', x; END IF;
   x := pg_temp.t_raport_salveaza(pg_temp.t_g('site2'), false);
   IF NOT pg_temp.t_e_garda(x) THEN RAISE EXCEPTION 'T3r FAIL: B (viewer pe p2) salvează antetul raportului: % (înainte: %)', x, pg_temp.t_g('rh2'); END IF;
-  -- scrierea directă a antetului pe p2 (REST): UPDATE = 0 rânduri, INSERT = refuz (garda / RLS)
+  -- scrierea directă a antetului pe p2 (r5, L20 / L25: referința = ACEEAȘI probă înainte, TB): REST = exact 0 rânduri (politica de
+  -- modificare filtrează), DEFINER = refuzul gărzii (SQLSTATE + mesaj); orice alt rezultat (altă eroare, rânduri scrise) = FAIL.
+  -- Dacă înainte proba nu scria nimic, refuzul de după n-ar dovedi nimic: NEPROBAT, nu „trecut”.
   x := pg_temp.t_proba(format('UPDATE public.rapoarte_zilnice SET probleme = probleme WHERE site_id = %s', pg_temp.t_g('site2')));
-  IF x LIKE 'OK %' AND x <> 'OK 0' THEN RAISE EXCEPTION 'T3r FAIL: B modifică direct antetul unui raport pe p2: %', x; END IF;
+  IF pg_temp.t_g('ru2') LIKE 'OK %' AND pg_temp.t_g('ru2') <> 'OK 0' THEN
+    IF x IS DISTINCT FROM 'OK 0' THEN RAISE EXCEPTION 'T3r FAIL: UPDATE direct al antetului pe p2 (REST): % (înainte: %)', x, pg_temp.t_g('ru2'); END IF;
+  ELSIF pg_temp.t_norm(x) IS DISTINCT FROM pg_temp.t_norm(pg_temp.t_g('ru2')) THEN
+    RAISE EXCEPTION 'T3r FAIL: UPDATE direct al antetului pe p2 (REST), alt rezultat decât înainte: % (înainte: %)', x, pg_temp.t_g('ru2');
+  ELSE PERFORM pg_temp.t_neprobat('UPDATE direct al antetului pe p2, REST (înainte: ' || left(coalesce(pg_temp.t_g('ru2'), 'nimic'), 100) || ')'); END IF;
+  x := pg_temp.t_proba_definer(format('UPDATE public.rapoarte_zilnice SET probleme = probleme WHERE site_id = %s', pg_temp.t_g('site2')));
+  IF pg_temp.t_g('ru2d') LIKE 'OK %' AND pg_temp.t_g('ru2d') <> 'OK 0' THEN
+    IF NOT pg_temp.t_e_garda(x) THEN RAISE EXCEPTION 'T3r FAIL: UPDATE direct al antetului pe p2 (DEFINER): % (înainte: %)', x, pg_temp.t_g('ru2d'); END IF;
+  ELSIF x LIKE 'OK %' AND x <> 'OK 0' THEN RAISE EXCEPTION 'T3r FAIL: UPDATE direct al antetului pe p2 (DEFINER): % (înainte: %)', x, pg_temp.t_g('ru2d');
+  ELSE PERFORM pg_temp.t_neprobat('UPDATE direct al antetului pe p2, DEFINER (înainte: ' || left(coalesce(pg_temp.t_g('ru2d'), 'nimic'), 100) || ')'); END IF;
   x := pg_temp.t_proba(format('INSERT INTO public.rapoarte_zilnice (site_id, data, probleme) VALUES (%s, DATE %L, %L)', pg_temp.t_g('site2'), '2001-01-02', 'test'));
   IF NOT (pg_temp.t_e_garda(x) OR pg_temp.t_e_rls(x)) THEN RAISE EXCEPTION 'T3r FAIL: B creează direct un antet de raport pe p2: %', x; END IF;
   -- p1 (editor): doar antetul, apoi antet + o linie — reușesc și scriu
@@ -926,23 +946,27 @@ BEGIN
 END $t$;
 
 -- ── T3i: Inboxul AI (review r3 P1): pentru B (restrâns), rândurile / fișierele clasificate pentru Execuție urmează lista: p1 (editor) ca
---   înainte; p2 (viewer) citire ca înainte, scriere NU; p3 nimic (nici citire, nici scriere), cu excepția citirii documentului urcat chiar de B;
+--   înainte; p2 (viewer) citire ca înainte, scriere NU; p3 nimic (nici citire, nici scriere) — r5: nici documentul urcat chiar de B, odată
+--   potrivit pe p3 (altfel B ar afla proiectul / scorul găsit de clasificator); documentul lui B fără proiect: citire ca înainte, scriere NU;
 --   rândurile altor module / nedecise: ca înainte ──
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
 DO $t$
-DECLARE v jsonb := pg_temp.t_g('mb1')::jsonb->'inbox'; v0 jsonb := pg_temp.t_g('mb0')::jsonb->'inbox'; k text; n_cit integer := 0; n_scr integer := 0; x text;
+DECLARE v jsonb := pg_temp.t_g('mb1')::jsonb->'inbox'; v0 jsonb := pg_temp.t_g('mb0')::jsonb->'inbox'; k text; n_cit integer := 0; n_scr integer := 0; n_al integer := 0; x text;
 BEGIN
   IF v0 = '{}'::jsonb THEN PERFORM pg_temp.t_neprobat('Inbox AI: niciun rând de probă'); END IF;
   FOR k IN SELECT jsonb_object_keys(v0) LOOP
-    IF k = 'p3' THEN
-      IF (v->k->>'vede')::integer <> 0 OR (v->k->>'obiect')::integer <> 0 THEN RAISE EXCEPTION 'T3i FAIL: B vede rândul / fișierul Inboxului pe p3: %', v->k; END IF;
-      IF (v0->k->>'vede')::integer > 0 THEN n_cit := n_cit + 1; ELSE PERFORM pg_temp.t_neprobat('Inbox p3: B nu vedea rândul nici înainte'); END IF;
-      IF (v0->k->>'obiect')::integer > 0 THEN n_cit := n_cit + 1; ELSE PERFORM pg_temp.t_neprobat('Inbox p3: B nu vedea fișierul nici înainte'); END IF;
+    IF k IN ('p3', 'p3_al_lui_b') THEN
+      IF (v->k->>'vede')::integer <> 0 OR (v->k->>'obiect')::integer <> 0 THEN RAISE EXCEPTION 'T3i FAIL: B vede rândul / fișierul Inboxului (%) pe p3: %', k, v->k; END IF;
+      IF (v0->k->>'vede')::integer > 0 THEN n_cit := n_cit + 1; ELSE PERFORM pg_temp.t_neprobat('Inbox ' || k || ': B nu vedea rândul nici înainte'); END IF;
+      IF (v0->k->>'obiect')::integer > 0 THEN n_cit := n_cit + 1; ELSE PERFORM pg_temp.t_neprobat('Inbox ' || k || ': B nu vedea fișierul nici înainte'); END IF;
     ELSIF v->k->'vede' IS DISTINCT FROM v0->k->'vede' OR v->k->'obiect' IS DISTINCT FROM v0->k->'obiect' THEN
       RAISE EXCEPTION 'T3i FAIL: citirea Inboxului (%): după % / înainte %', k, v->k, v0->k;
+    ELSIF k = 'nul_al_lui_b' THEN
+      -- calea legitimă a excepției (L20): documentul propriu, încă fără proiect, rămâne vizibil
+      IF (v0->k->>'vede')::integer > 0 THEN n_al := n_al + 1; ELSE PERFORM pg_temp.t_neprobat('Inbox nul_al_lui_b: B nu vedea rândul nici înainte'); END IF;
     END IF;
-    -- scrierea: p1 și rândurile altor module = ca înainte; p2 (viewer), p3, chiar și documentul lui B pe p3 = refuz
-    IF k IN ('p2', 'p3', 'p3_al_lui_b') THEN
+    -- scrierea: p1 și rândurile altor module = ca înainte; p2 (viewer), p3, documentele lui B (pe p3 sau fără proiect) = refuz
+    IF k IN ('p2', 'p3', 'p3_al_lui_b', 'nul_al_lui_b') THEN
       IF v0->k->>'scrie' = 'OK 1' THEN
         IF v->k->>'scrie' IS DISTINCT FROM 'OK 0' THEN RAISE EXCEPTION 'T3i FAIL: B modifică rândul Inboxului % (REST): %', k, v->k->>'scrie'; END IF;
         n_scr := n_scr + 1;
@@ -967,7 +991,55 @@ BEGIN
     IF NOT (pg_temp.t_e_garda(x) OR pg_temp.t_e_rls(x)) THEN RAISE EXCEPTION 'T3i FAIL: B mută rândul Inboxului de pe p1 pe p3: %', x; END IF;
     n_scr := n_scr + 1;
   ELSE PERFORM pg_temp.t_neprobat('Inbox: mutarea p1 -> p3 (B nu putea modifica rândul lui p1 nici înainte)'); END IF;
-  RAISE NOTICE 'T3i OK (citiri refuzate %, scrieri refuzate %)', n_cit, n_scr;
+  -- regula, direct (oracolul = specificația r5, nu politica): excepția celui care a urcat ține doar fără proiect, doar la citire, doar pentru el
+  IF public.fn_executie_acces_inbox_rand('executie', pg_temp.t_g('p3')::bigint, auth.uid(), false) IS NOT FALSE
+     OR public.fn_executie_acces_inbox_rand('executie', NULL, auth.uid(), false) IS NOT TRUE
+     OR public.fn_executie_acces_inbox_rand('executie', NULL, auth.uid(), true) IS NOT FALSE
+     OR public.fn_executie_acces_inbox_rand('executie', NULL, pg_temp.t_g('a')::uuid, false) IS NOT FALSE
+     OR public.fn_executie_acces_inbox_rand('executie', pg_temp.t_g('p2')::bigint, pg_temp.t_g('a')::uuid, false) IS NOT TRUE
+     OR public.fn_executie_acces_inbox_rand('hr', pg_temp.t_g('p3')::bigint, pg_temp.t_g('a')::uuid, false) IS NOT TRUE THEN
+    RAISE EXCEPTION 'T3i FAIL: regula rândului (excepția celui care a urcat)';
+  END IF;
+  RAISE NOTICE 'T3i OK (citiri refuzate %, scrieri refuzate %, documente proprii fără proiect vizibile %)', n_cit, n_scr, n_al;
+END $t$;
+
+-- ── T3c: clasificarea (r5, review r4 P1), simulată ca edge-ul citeste-orice: service_role, fără JWT, scrie entitate_id + scorul pe
+--   documentul lui B încă fără proiect. Potrivit pe p1 (în listă) = B îl vede; potrivit pe p3 (în afara listei) = B nu mai vede nici
+--   rândul, nici fișierul (deci nici proiectul, nici scorul). Totul într-un savepoint anulat. ──
+SAVEPOINT t3c;
+SELECT pg_temp.t_ca(NULL, 'service_role');
+SELECT set_config('tacc.c1', pg_temp.t_stare(format('UPDATE public.ai_documente_inbox SET entitate_tip = %L, entitate_id = %s, entitate_match_confidence = 77 WHERE id = %s',
+                                                      'proiect', pg_temp.t_g('p1'), coalesce((SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b'), -1))), true);
+SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
+SELECT set_config('tacc.c1v', (SELECT count(*) FROM public.ai_documente_inbox i JOIN t_ib ON t_ib.id = i.id AND t_ib.k = 'nul_al_lui_b')::text, true);
+SELECT pg_temp.t_ca(NULL, 'service_role');
+SELECT set_config('tacc.c3', pg_temp.t_stare(format('UPDATE public.ai_documente_inbox SET entitate_id = %s, entitate_match_confidence = 88 WHERE id = %s',
+                                                      pg_temp.t_g('p3'), coalesce((SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b'), -1))), true);
+SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
+SELECT set_config('tacc.c3v', (SELECT count(*) FROM public.ai_documente_inbox i JOIN t_ib ON t_ib.id = i.id AND t_ib.k = 'nul_al_lui_b')::text
+                              || ':' || (SELECT count(*) FROM storage.objects s JOIN t_ib ON t_ib.cale = s.name AND t_ib.k = 'nul_al_lui_b'
+                                          WHERE s.bucket_id = 'ai-documente-inbox')::text, true);
+-- set_config din savepoint se anulează odată cu el: rezultatele trec prin variabile psql (\gset), apoi înapoi în tacc.* după ROLLBACK TO
+-- (\set de mai jos nu schimbă nimic: doar golește bufferul, ca \gset să primească o singură interogare și în proba locală PGlite)
+\set ON_ERROR_STOP 1
+SELECT coalesce(pg_temp.t_g('c1'), '') AS t3c_c1, coalesce(pg_temp.t_g('c1v'), '') AS t3c_c1v,
+       coalesce(pg_temp.t_g('c3'), '') AS t3c_c3, coalesce(pg_temp.t_g('c3v'), '') AS t3c_c3v
+\gset
+ROLLBACK TO SAVEPOINT t3c;
+SELECT set_config('tacc.c1', :'t3c_c1', true), set_config('tacc.c1v', :'t3c_c1v', true), set_config('tacc.c3', :'t3c_c3', true), set_config('tacc.c3v', :'t3c_c3v', true);
+SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
+DO $t$
+DECLARE c1 text := pg_temp.t_g('c1'); c1v text := pg_temp.t_g('c1v'); c3 text := pg_temp.t_g('c3'); c3v text := pg_temp.t_g('c3v');
+  v0 text := pg_temp.t_g('mb0')::jsonb->'inbox'->'nul_al_lui_b'->>'vede';
+BEGIN
+  IF (SELECT t_ib.id FROM t_ib WHERE t_ib.k = 'nul_al_lui_b') IS NULL OR coalesce(v0, '0') = '0' THEN
+    PERFORM pg_temp.t_neprobat('T3c clasificarea: rândul de probă al lui B fără proiect lipsește sau nu era vizibil nici înainte');
+  ELSE
+    IF c1 IS DISTINCT FROM 'OK 1' OR c3 IS DISTINCT FROM 'OK 1' THEN RAISE EXCEPTION 'T3c FAIL: clasificarea simulată (service_role) nu a scris: % / %', c1, c3; END IF;
+    IF c1v IS DISTINCT FROM '1' THEN RAISE EXCEPTION 'T3c FAIL: documentul lui B potrivit pe p1 (în listă) nu mai e vizibil: %', c1v; END IF;
+    IF c3v IS DISTINCT FROM '0:0' THEN RAISE EXCEPTION 'T3c FAIL: documentul lui B potrivit pe p3 se vede (rând : fișier) = %', c3v; END IF;
+    RAISE NOTICE 'T3c OK (potrivit pe p1 vizibil; potrivit pe p3 ascuns: rândul, deci proiectul și scorul, și fișierul)';
+  END IF;
 END $t$;
 
 -- ── T3x: ce rămâne EXCLUS (decizie scrisă): câte rânduri ale lui p3 vede B pe fiecare tabel exclus din catalog (informativ) ──
@@ -1019,8 +1091,12 @@ DO $t$ DECLARE m jsonb := pg_temp.t_amprenta(); BEGIN
      AND pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)', split_part(pg_temp.t_g('tevi3'), ',', 1), split_part(pg_temp.t_g('tevi3'), ',', 2))) <> 'OK 1' THEN
     RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) nu mai schimbă țevile pe p3';
   END IF;
-  IF pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)') NOT LIKE '% -1 %' THEN
-    RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) primește alt mesaj decât cel de azi pentru o țeavă inexistentă';
+  -- r5: referința = rezultatul de dinainte de migrare (TB, același cont), SQLSTATE + mesaj; înainte trebuia să fie un refuz
+  IF pg_temp.t_g('swap0') IS NULL OR pg_temp.t_g('swap0') LIKE 'OK %' THEN
+    RAISE EXCEPTION 'T4 FAIL: înainte de migrare, țeava inexistentă nu era refuzată (%): comparația n-ar dovedi nimic', pg_temp.t_g('swap0');
+  END IF;
+  IF pg_temp.t_norm(pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)')) IS DISTINCT FROM pg_temp.t_g('swap0') THEN
+    RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) primește alt rezultat decât cel de azi pentru o țeavă inexistentă (azi: %)', pg_temp.t_g('swap0');
   END IF;
   RAISE NOTICE 'T4 OK (owner și A: amprenta identică cu cea de dinainte)';
 END $t$;
@@ -1028,19 +1104,21 @@ END $t$;
 -- ── T5: RPC-ul de setare: refuzuri, CAS, idempotență, scoaterea restricției ──
 SELECT pg_temp.t_ca(pg_temp.t_g('own')::uuid, 'authenticated');
 DO $t$
-DECLARE r jsonb; acum jsonb := pg_temp.t_lista('p1:editor,p2:viewer'); s text;
+DECLARE r jsonb; acum jsonb := pg_temp.t_lista('p1:editor,p2:viewer'); s text; c text; v_rez text;
 BEGIN
   IF pg_temp.t_stare(format('SELECT pg_temp.t_seteaza(%L, true, %L::jsonb, %L::jsonb)', 'b', '[]', acum)) NOT LIKE '22023 %lista goală%' THEN RAISE EXCEPTION 'T5 FAIL: lista goală'; END IF;
-  IF pg_temp.t_stare(format('SELECT pg_temp.t_seteaza(%L, false, %L::jsonb, %L::jsonb)', 'b', pg_temp.t_lista('p1:editor'), acum)) NOT LIKE '22023 %' THEN RAISE EXCEPTION 'T5 FAIL: scoate restricția cu proiecte'; END IF;
-  FOR s IN SELECT unnest(ARRAY[
-      format('[{"proiect_id":"%s","nivel":"editor"}]', pg_temp.t_g('p1')),
-      format('[{"proiect_id":%s,"nivel":"editor","x":1}]', pg_temp.t_g('p1')),
-      format('[{"proiect_id":%s,"nivel":"admin"}]', pg_temp.t_g('p1')),
-      format('[{"proiect_id":%s,"nivel":"editor"},{"proiect_id":%s,"nivel":"viewer"}]', pg_temp.t_g('p1'), pg_temp.t_g('p1')),
-      format('[{"proiect_id":%s,"nivel":"editor"}]', (SELECT max(id) + 1000 FROM public.executie_proiecte)),
-      format('[{"proiect_id":%s.5,"nivel":"editor"}]', pg_temp.t_g('p1')),
-      '[{"proiect_id":0,"nivel":"editor"}]', '{"proiect_id":1}', '[null]']) LOOP
-    IF pg_temp.t_stare(format('SELECT pg_temp.t_seteaza(%L, true, %L::jsonb, %L::jsonb)', 'b', s, acum)) NOT LIKE '22023 %' THEN RAISE EXCEPTION 'T5 FAIL: element invalid acceptat: %', s; END IF;
+  IF pg_temp.t_stare(format('SELECT pg_temp.t_seteaza(%L, false, %L::jsonb, %L::jsonb)', 'b', pg_temp.t_lista('p1:editor'), acum)) NOT LIKE '22023 %nu primește proiecte%' THEN RAISE EXCEPTION 'T5 FAIL: scoate restricția cu proiecte'; END IF;
+  -- r5: fiecare element invalid cu motivul LUI (SQLSTATE + fragment), nu orice 22023
+  FOR s, c IN SELECT * FROM (VALUES
+      (format('[{"proiect_id":"%s","nivel":"editor"}]', pg_temp.t_g('p1')), 'întreg pozitiv'),
+      (format('[{"proiect_id":%s,"nivel":"editor","x":1}]', pg_temp.t_g('p1')), 'exact proiect_id și nivel'),
+      (format('[{"proiect_id":%s,"nivel":"admin"}]', pg_temp.t_g('p1')), 'întreg pozitiv'),
+      (format('[{"proiect_id":%s,"nivel":"editor"},{"proiect_id":%s,"nivel":"viewer"}]', pg_temp.t_g('p1'), pg_temp.t_g('p1')), 'apare de două ori'),
+      (format('[{"proiect_id":%s,"nivel":"editor"}]', (SELECT max(id) + 1000 FROM public.executie_proiecte)), 'nu există'),
+      (format('[{"proiect_id":%s.5,"nivel":"editor"}]', pg_temp.t_g('p1')), 'întreg pozitiv'),
+      ('[{"proiect_id":0,"nivel":"editor"}]', 'întreg pozitiv'), ('{"proiect_id":1}', 'trebuie să fie un tablou'), ('[null]', 'element invalid')) q(lista, motiv) LOOP
+    v_rez := pg_temp.t_stare(format('SELECT pg_temp.t_seteaza(%L, true, %L::jsonb, %L::jsonb)', 'b', s, acum));
+    IF v_rez NOT LIKE '22023 acces proiect: %' OR position(c IN v_rez) = 0 THEN RAISE EXCEPTION 'T5 FAIL: element invalid % — rezultat % (așteptat: 22023 … %)', s, v_rez, c; END IF;
   END LOOP;
   IF pg_temp.t_stare(format('SELECT public.fn_executie_acces_proiect_seteaza(%L::uuid, true, %L::jsonb, %L::jsonb)', pg_temp.t_g('own'), pg_temp.t_lista('p1:editor'), '[]')) NOT LIKE '22023 %owner%'
      OR pg_temp.t_stare(format('SELECT public.fn_executie_acces_proiect_seteaza(gen_random_uuid(), true, %L::jsonb, %L::jsonb)', pg_temp.t_lista('p1:editor'), '[]')) NOT LIKE '22023 %nu există%' THEN
@@ -1058,8 +1136,8 @@ BEGIN
         IS DISTINCT FROM (SELECT array_agg(x ORDER BY split_part(x, ':', 1)::bigint) FROM unnest(ARRAY[pg_temp.t_g('p1') || ':viewer', pg_temp.t_g('p3') || ':editor']) x) THEN
     RAISE EXCEPTION 'T5 FAIL: schimbarea %', r;
   END IF;
-  IF pg_temp.t_stare(format('INSERT INTO public.executie_acces_proiect (profile_id, proiect_id) VALUES (%L, %s)', pg_temp.t_g('a'), pg_temp.t_g('p1'))) NOT LIKE '42501 %'
-     OR pg_temp.t_stare(format('DELETE FROM public.executie_acces_proiect WHERE profile_id = %L', pg_temp.t_g('b'))) NOT LIKE '42501 %' THEN
+  IF pg_temp.t_stare(format('INSERT INTO public.executie_acces_proiect (profile_id, proiect_id) VALUES (%L, %s)', pg_temp.t_g('a'), pg_temp.t_g('p1'))) NOT LIKE '42501 permission denied for table executie_acces_proiect%'
+     OR pg_temp.t_stare(format('DELETE FROM public.executie_acces_proiect WHERE profile_id = %L', pg_temp.t_g('b'))) NOT LIKE '42501 permission denied for table executie_acces_proiect%' THEN
     RAISE EXCEPTION 'T5 FAIL: scriere directă în tabelul de acces';
   END IF;
   r := pg_temp.t_seteaza('b', false, '[]'::jsonb, pg_temp.t_lista('p1:viewer,p3:editor'));
@@ -1079,12 +1157,34 @@ END $t$;
 
 -- ── T6: FK RESTRICT — un proiect cu conturi restrânse pe el nu se șterge (lista nu se golește pe tăcute) ──
 SELECT pg_temp.t_ca(NULL, 'postgres');
-DO $t$ BEGIN
+DO $t$ DECLARE x text; v_cols text; v_np bigint; BEGIN
   IF (SELECT array_agg(confdeltype::text) FROM pg_constraint WHERE conrelid = 'public.executie_acces_proiect'::regclass AND contype = 'f'
-        AND confrelid = 'public.executie_proiecte'::regclass) IS DISTINCT FROM ARRAY['r']
-     OR pg_temp.t_proba(format('DELETE FROM public.executie_proiecte WHERE id = %s', pg_temp.t_g('p1'))) NOT LIKE '23503 %' THEN
-    RAISE EXCEPTION 'T6 FAIL: ștergerea proiectului cu restricții';
+        AND confrelid = 'public.executie_proiecte'::regclass) IS DISTINCT FROM ARRAY['r'] THEN
+    RAISE EXCEPTION 'T6 FAIL: cheia străină a tabelului de acces nu e RESTRICT';
   END IF;
+  -- r5: refuzul trebuie să fie al cheii străine a tabelului de acces (SQLSTATE + mesaj + tabel). Un proiect real are și alți copii (pică
+  -- întâi altă cheie), deci proba se face pe o COPIE fără copii a lui p1, cu un singur rând de acces, într-un bloc anulat la final.
+  BEGIN
+    SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) INTO v_cols
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'executie_proiecte' AND column_name <> 'id' AND is_identity = 'NO' AND is_generated = 'NEVER';
+    EXECUTE format('INSERT INTO public.executie_proiecte (%s) SELECT %s FROM public.executie_proiecte WHERE id = $1 RETURNING id', v_cols, v_cols)
+      INTO v_np USING pg_temp.t_g('p1')::bigint;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_proiecte' AND column_name = 'cod_intern') THEN
+      EXECUTE 'UPDATE public.executie_proiecte SET cod_intern = ''TEST-ACCES-T6'' WHERE id = $1' USING v_np;
+    END IF;
+    INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES (pg_temp.t_g('c')::uuid, v_np, 'viewer');
+    x := pg_temp.t_proba(format('DELETE FROM public.executie_proiecte WHERE id = %s', v_np));
+    RAISE EXCEPTION USING ERRCODE = 'TACC1', MESSAGE = 'anulare T6';
+  EXCEPTION WHEN SQLSTATE 'TACC1' THEN NULL;
+            WHEN OTHERS THEN x := 'pregătire: ' || SQLSTATE || ' ' || left(SQLERRM, 140);
+  END;
+  -- RESTRICT = 23001 „violates RESTRICT setting…” (PG 16+; PGlite și producția); 23503 doar pe versiunile vechi, tot cu tabelul de acces
+  IF x LIKE '23001 %violates RESTRICT setting of foreign key constraint%on table "executie_acces_proiect"%'
+     OR x LIKE '23503 %violates foreign key constraint%on table "executie_acces_proiect"%' THEN NULL;
+  ELSIF x LIKE '23001 %' OR x LIKE '23503 %' OR x LIKE 'pregătire: %' THEN
+    PERFORM pg_temp.t_neprobat('T6: ștergerea copiei de proiect neizolată (' || left(x, 160) || ')');
+  ELSE RAISE EXCEPTION 'T6 FAIL: ștergerea unui proiect cu un cont restrâns pe el: %', x; END IF;
   RAISE NOTICE 'T6 OK';
 END $t$;
 

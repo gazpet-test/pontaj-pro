@@ -6,6 +6,8 @@
 -- șantierului (orice cale de scriere, inclusiv salvarea doar a antetului prin RPC, cere nivel 'editor' pe proiectul șantierului);
 -- (b) pentru contul RESTRÂNS, graficul intern (grafic_activitati, rândurile cu proiect) și Inboxul AI (rândurile și fișierele clasificate
 -- pentru Execuție) urmează lista lui; conturile nerestrânse: neschimbat.
+-- r5 (review r4 P1): excepția „documentul urcat chiar de cont” ține doar cât rândul NU are proiect (entitate_id NULL); după ce
+-- clasificatorul AI îl potrivește pe un proiect din afara listei, rândul și fișierul nu i se mai arată (fără proiect, scor, id).
 --
 -- Regula (o singură definiție, L19):
 --   * cont FĂRĂ niciun rând în executie_acces_proiect = ca azi (vede / scrie ce îi dă modulul);
@@ -25,7 +27,8 @@
 --                        cu setul părinților permiși (o evaluare pe interogare, nu pe rând — review r1 P2 N+1); 'site' / 'raport': șantierul
 --                        fără proiect = permis (nu sunt date de proiect);
 --     tabel  'inbox'   — Inboxul AI (r4): doar rândurile cu modul_tinta = 'executie' sunt ale unui proiect (entitate_id); citire pe lista
---                        de citire (plus fișierul urcat chiar de cont), scriere pe lista de scriere; restul rândurilor neatinse;
+--                        de citire (plus documentul urcat chiar de cont, cât nu are proiect — r5), scriere pe lista de scriere;
+--                        restul rândurilor neatinse;
 --     tabel  'drept'   — are deja funcția lui de drept (20261201a–20261211a), căreia i se adaugă condiția de proiect (direct sau prin
 --                        funcția la care delegă); poate lipsi (migrarea lui încă neaplicată), dar dacă există, funcția lui trebuie să existe;
 --     tabel  'exclus' / 'prefix_tabel' — alt modul, cu dreptul lui; motivul și riscul sunt scrise (decizie pentru Răzvan, nu omisiune);
@@ -178,7 +181,7 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
      'graficul intern (Gantt): rândurile unui proiect urmează lista contului restrâns; rândurile fără proiect (licitații, Ofertare) rămân ca azi'),
   -- r4: Inboxul AI: rândurile clasificate pentru Execuție (modul_tinta = executie) urmează lista, după entitate_id = proiectul
   ('tabel', 'ai_documente_inbox', 'inbox', 'entitate_id', NULL,
-     'Inboxul AI: rândurile clasificate pentru Execuție se văd pe lista de citire (și fișierul urcat chiar de cont), se modifică pe lista de scriere; celelalte module neatinse'),
+     'Inboxul AI: rândurile clasificate pentru Execuție se văd pe lista de citire (și documentul urcat chiar de cont, cât nu are proiect), se modifică pe lista de scriere; celelalte module neatinse'),
   -- tabelele noi cu funcția lor de drept (condiția de proiect intră în funcție)
   ('tabel', 'executie_noduri_suduri', 'drept', 'fn_executie_nod_drept', NULL, '20261201a'),
   ('tabel', 'executie_noduri_constructii', 'drept', 'fn_executie_nod_drept', NULL, '20261207a'),
@@ -319,7 +322,7 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   ('bucket', 'executie-pachete-pdf', 'cale', NULL, NULL, '<pachet>/… (proiectul pachetului) sau <proiect>/<pachet>/aprobare/… (pachetul trebuie să fie al proiectului)'),
   ('bucket', 'documente-proiect', 'tabel', NULL, NULL, 'proiectele rândurilor din documente_proiect cu acest storage_path; fără rând (ex. coada _de_repartizat/) = refuz pentru contul restrâns'),
   ('bucket', 'ai-documente-inbox', 'inbox', NULL, NULL,
-     'fișierele Inboxului AI: un fișier legat de un rând clasificat pentru Execuție urmează proiectul rândului (citire și pentru cine l-a urcat); fișierele fără rând de Execuție neatinse'),
+     'fișierele Inboxului AI: un fișier legat de un rând clasificat pentru Execuție urmează proiectul rândului (citire și pentru cine l-a urcat, cât rândul nu are proiect); fișierele fără rând de Execuție neatinse'),
   ('bucket', 'noduri-scheme', 'drept', NULL, NULL, 'fn_executie_nod_obiect_citire (20261201a)'),
   ('bucket', 'comenzi-furnizor', 'exclus', NULL, NULL, 'Achiziții'),
   ('bucket', 'probe-citiri', 'exclus', NULL, NULL, 'modulul Probe'),
@@ -638,14 +641,19 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 $f$;
 -- Inboxul AI (r4), o singură definiție (L19) pentru politicile cozii, garda ei și fișierele: un rând clasificat pentru Execuție
 -- (modul_tinta = 'executie', aceeași valoare ca în fn_ai_inbox_poate_confirma) e al proiectului entitate_id; citirea cere lista de citire
--- SAU ca rândul să fie urcat chiar de apelant (documentul lui, nu o dată a altui proiect); scrierea cere lista de SCRIERE (fără excepția
--- celui care a urcat: nu-și poate muta / confirma documentul pe un proiect din afara listei). Rândurile altor module / nedecise = adevărat.
+-- SAU ca rândul să fie urcat chiar de apelant ȘI să nu aibă încă proiect (documentul lui, nedecis); scrierea cere lista de SCRIERE (fără
+-- excepția celui care a urcat: nu-și poate muta / confirma documentul pe un proiect din afara listei). Rândurile altor module / nedecise = adevărat.
+-- r5 (review r4 P1): clasificatorul AI (edge, service_role) caută potrivirea în TOATE proiectele active și scrie în rând proiectul găsit
+-- (entitate_id) și scorul. Dacă excepția celui care a urcat ar rămâne și după potrivire, un cont restrâns ar afla, prin propriul document,
+-- existența / id-ul / scorul unui proiect din afara listei. De aceea excepția ține DOAR cât entitate_id e NULL; după o potrivire pe un
+-- proiect nepermis rândul (și fișierul lui, prin fn_executie_acces_inbox_obiect) nu i se mai arată. Fără mascare de coloane: politica e
+-- pe rând, iar orice cale de citire (REST, Realtime, Storage) trece prin aceeași regulă.
 CREATE FUNCTION public.fn_executie_acces_inbox_rand(p_modul text, p_entitate bigint, p_uploadat_de uuid, p_scriere boolean) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   SELECT p_scriere IS NOT NULL
     AND (p_modul IS DISTINCT FROM 'executie'
          OR public.fn_executie_proiect_permis(p_entitate, p_scriere)
-         OR (p_scriere IS FALSE AND auth.uid() IS NOT NULL AND p_uploadat_de = auth.uid()))
+         OR (p_scriere IS FALSE AND p_entitate IS NULL AND auth.uid() IS NOT NULL AND p_uploadat_de = auth.uid()))
 $f$;
 -- fișierul unui obiect din bucket-ul Inboxului: permis dacă niciun rând legat de el (fisier_path) nu e refuzat de regula rândului
 -- (citit ca proprietar: altfel politicile cozii ar ascunde chiar rândul care îl restrânge). Fără rând = neatins.
