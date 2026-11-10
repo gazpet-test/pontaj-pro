@@ -19,6 +19,7 @@ import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
+import ProbeTronsoane from './ProbeTronsoane.jsx'       // probele pe tronsoane: intervale de km + etape (20261202a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
@@ -174,7 +175,7 @@ export default function ExecutiePage() {
             <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
 
             {CONTEXT_TABS.map(t => {
-              const isActive = tabStr === t.key || (t.key === 'izometrie' && (tabStr === 'tronsoane' || tabStr === 'nod'))
+              const isActive = tabStr === t.key || (t.key === 'izometrie' && (tabStr === 'tronsoane' || tabStr === 'nod' || tabStr === 'probe'))
               return (
                 <button
                   key={t.key}
@@ -259,9 +260,9 @@ export default function ExecutiePage() {
 // ===========================================================================
 function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
   const [proiect, setProiect] = useState(null)
-  // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod'
-  // Dacă vine cu tab=tronsoane (link vechi) sau tab=nod (link direct de pe telefon), auto-selectăm sub-tab-ul
-  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' ? tab : 'izometrie')
+  // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod' | 'probe'
+  // Dacă vine cu tab=tronsoane (link vechi), tab=nod sau tab=probe (link direct de pe telefon), auto-selectăm sub-tab-ul
+  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' || tab === 'probe' ? tab : 'izometrie')
 
   useEffect(() => {
     // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
@@ -346,7 +347,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
       {tab === 'documente'      && (<><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
-      {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod') && (
+      {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod' || tab === 'probe') && (
         <div>
           {/* Sub-tab bar */}
           <div style={{
@@ -357,6 +358,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
               {key:'izometrie', label:'📐 Izometrie',  desc:'Pachete · Lansare · Cumulat'},
               {key:'tronsoane', label:'📍 Tronsoane',   desc:'Program · Status · Suduri'},
               {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · azi / cumulat / rest'},
+              {key:'probe',     label:'🧪 Probe pe tronsoane', desc:'Tronsoane de probă pe km · pistonare, uscare, calibrare, presiune'},
             ].map(st => {
               const active = izSubTab === st.key
               return (
@@ -376,6 +378,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
           {izSubTab === 'izometrie' && <IzometriePage initialProiectId={Number(proiectId)} />}
           {izSubTab === 'tronsoane' && <TabTronsoane  proiectId={proiectId} />}
           {izSubTab === 'nod'       && <NodCuplareSchema proiectId={Number(proiectId)} />}
+          {izSubTab === 'probe'     && <ProbeTronsoane proiectId={Number(proiectId)} />}
         </div>
       )}
     </div>
