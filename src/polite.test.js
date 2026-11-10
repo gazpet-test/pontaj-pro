@@ -103,6 +103,15 @@ describe('paritate cu migrarea (L19)', () => {
     expect(triggere.length).toBe(4)
     for (const t of triggere) expect(REV).toContain(t)
   })
+  it('r7: garzile folosesc NUMELE EXACTE ale functiilor create (nu prefixe), identic in migrare si revenire', () => {
+    const create = [...MIG.matchAll(/^CREATE FUNCTION public\.([a-z_]+)\(/gm)].map(x => x[1]).filter(n => n !== 'fn_poate_scrie_polite').sort()
+    for (const sursa of [MIG, REV]) {
+      const liste = [...sursa.matchAll(/p\.proname = ANY \(ARRAY\[([^\]]+)\]::name\[\]/g)].map(x => [...x[1].matchAll(/'([a-z_]+)'/g)].map(y => y[1]).sort())
+      expect(liste.length).toBeGreaterThan(0)
+      for (const l of liste) expect(l).toEqual(create)
+      expect(sursa).not.toMatch(/fn!_polite!_%|fn!_polita!_%|trg!_polite!_%/)
+    }
+  })
   it('functiile expuse lui authenticated nu contin constructii interzise de poarta 0e', () => {
     const corp = nume => { const a = MIG.indexOf(`CREATE FUNCTION public.${nume}(`); const b = MIG.indexOf('$fn$;', a); return MIG.slice(a, b).toLowerCase() }
     for (const f of ['fn_poate_scrie_polite', 'fn_polite_e_owner', 'fn_polite_scadente', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']) {

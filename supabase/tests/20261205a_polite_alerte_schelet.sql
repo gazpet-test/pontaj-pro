@@ -148,6 +148,10 @@ CREATE VIEW public.v_garantii_situatie WITH (security_invoker = on) AS
    FROM garantii g;
 GRANT SELECT ON public.v_garantii_situatie TO authenticated;
 
+-- pe prod exista deja public.fn_polite_send_alerte (de dinainte de 20261205a, nu e in repo): stub neutru, ca garda pe nume exacte
+-- si revenirea sa fie testate pe aceeasi situatie
+CREATE FUNCTION public.fn_polite_send_alerte() RETURNS void LANGUAGE sql AS $f$ SELECT $f$;
+
 -- date FICTIVE
 INSERT INTO public.employees (id, name, email, active) VALUES
   (1, 'TUDORACHE MARILENA', 'Marilena.Tudorache@gazpet.ro', true),   -- adresa gasita in employees (normalizata)

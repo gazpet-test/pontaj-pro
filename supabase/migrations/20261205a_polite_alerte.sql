@@ -64,16 +64,17 @@ BEGIN
       RAISE EXCEPTION '20261205a: %.% lipseste sau are tipul % (astept %)', r.t, r.c, coalesce(v_tip, '<lipsa>'), r.tipuri;
     END IF;
   END LOOP;
-  -- 0b. obiectele noi nu exista (reaplicare / coliziune = refuz)
+  -- 0b. obiectele noi nu exista (reaplicare / coliziune = refuz). r7: pe NUMELE EXACTE ale obiectelor acestei migrari, nu pe prefixe
+  --     (pe prod exista public.fn_polite_send_alerte, care nu e a noastra si nu se atinge)
   IF to_regclass('public.polite_propuneri') IS NOT NULL OR to_regclass('public.polite_alerte_destinatari') IS NOT NULL
      OR to_regclass('public.polite_alerte_config') IS NOT NULL OR to_regclass('public.polite_alerte_jurnal') IS NOT NULL
      OR to_regclass('public.v_polite_scadente') IS NOT NULL OR to_regclass('public.v_garantii_registru') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!'))
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[] || 'fn_poate_scrie_polite'::name))
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.garantii'::regclass AND a.attname = 'contract_polita_id' AND NOT a.attisdropped)
      OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid IN ('public.contracte_polite'::regclass, 'public.contracte_polite_acte'::regclass) AND NOT a.attisdropped
                   AND a.attname IN ('moneda', 'executie_de_la', 'executie_pana_la', 'garantie_de_la', 'garantie_pana_la', 'pdf_sha256', 'sursa', 'propunere_id'))
-     OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal) THEN
-    RAISE EXCEPTION '20261205a: obiectele noi (tabele polite_*, functii fn_polite_* / fn_polita_*, coloane, triggere trg_polite_*) exista deja';
+     OR EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname IN ('trg_polite_provenienta', 'trg_polite_dest_normalizeaza', 'trg_polite_garantii_legat') AND NOT t.tgisinternal) THEN
+    RAISE EXCEPTION '20261205a: obiectele noi exista deja (tabelele, functiile, coloanele sau triggerele acestei migrari, pe numele lor exacte)';
   END IF;
   -- 0c. CHECK-ul pe contracte_polite.tip: exact unul, exact valorile de azi (se inlocuieste cu + 'avans')
   SELECT count(*), min(c.conname::text), min(pg_get_constraintdef(c.oid)) INTO v_n, v_tip, v_def FROM pg_constraint c
@@ -908,12 +909,12 @@ DECLARE v_o oid; v_amprenta text;
     'public.fn_polite_propunere_json(bigint)']::regprocedure[];
 BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!')) <> 21
+  IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]))) <> 21
      OR to_regprocedure('public.fn_poate_scrie_polite()') IS NULL THEN
     RAISE EXCEPTION '20261205a: functiile noi nu sunt exact 21 + fn_poate_scrie_polite';
   END IF;
   FOR v_o IN SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-               AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname = 'fn_poate_scrie_polite') LOOP
+               AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname = 'fn_poate_scrie_polite') LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_o AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
        OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = v_o AND a.grantee = 0)
        OR (SELECT p.proacl IS NULL FROM pg_proc p WHERE p.oid = v_o)
@@ -956,7 +957,7 @@ BEGIN
      OR has_table_privilege('anon', 'public.v_garantii_registru', 'SELECT') OR NOT has_table_privilege('authenticated', 'public.v_garantii_registru', 'SELECT') THEN
     RAISE EXCEPTION '20261205a: drepturile pe tabelele noi / vedere nu sunt exact cele asteptate';
   END IF;
-  IF (SELECT count(*) FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal) <> 4 THEN
+  IF (SELECT count(*) FROM pg_trigger t WHERE t.tgname IN ('trg_polite_provenienta', 'trg_polite_dest_normalizeaza', 'trg_polite_garantii_legat') AND NOT t.tgisinternal) <> 4 THEN
     RAISE EXCEPTION '20261205a: triggerele trg_polite_* nu sunt exact 4';
   END IF;
   IF (SELECT activ FROM public.polite_alerte_config WHERE id) IS NOT FALSE OR (SELECT count(*) FROM public.polite_alerte_destinatari) <> 5
@@ -1001,7 +1002,7 @@ BEGIN
                               coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || '|' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')), ';' ORDER BY p.polrelid::regclass::text, p.polname)
        FROM pg_policy p WHERE p.polrelid IN ('public.polite_propuneri'::regclass, 'public.polite_alerte_destinatari'::regclass, 'public.polite_alerte_config'::regclass, 'public.polite_alerte_jurnal'::regclass)),
     (SELECT string_agg(format('%s:%s:%s', pg_get_triggerdef(t.oid), t.tgfoid::regprocedure, t.tgenabled), ';' ORDER BY t.tgrelid::regclass::text, t.tgname)
-       FROM pg_trigger t WHERE t.tgname LIKE 'trg!_polite!_%' ESCAPE '!' AND NOT t.tgisinternal),
+       FROM pg_trigger t WHERE t.tgname IN ('trg_polite_provenienta', 'trg_polite_dest_normalizeaza', 'trg_polite_garantii_legat') AND NOT t.tgisinternal),
     md5(replace(pg_get_viewdef('public.v_polite_scadente'::regclass), chr(13), '')),
     md5(replace(pg_get_viewdef('public.v_garantii_registru'::regclass), chr(13), '')),
     md5(replace(pg_get_viewdef('public.v_garantii_situatie'::regclass), chr(13), '')),
@@ -1009,7 +1010,7 @@ BEGIN
                               pg_get_userbyid(p.proowner), coalesce((SELECT string_agg(x::text, ' ' ORDER BY x::text) FROM unnest(p.proacl) x), '-'),
                               md5(replace(p.prosrc, chr(13), ''))), ';' ORDER BY p.oid::regprocedure::text)
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-        AND (p.proname LIKE 'fn!_polite!_%' ESCAPE '!' OR p.proname LIKE 'fn!_polita!_%' ESCAPE '!' OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
+        AND (p.proname = ANY (ARRAY['fn_polite_norm_nr', 'fn_polite_text', 'fn_polite_data', 'fn_polite_suma', 'fn_polite_e_owner', 'fn_polite_provenienta', 'fn_polite_garantii_legat', 'fn_polite_scadente', 'fn_polite_dest_normalizeaza', 'fn_polite_alerte_calculeaza', 'fn_polite_alerte_proba', 'fn_polite_alerte_porneste', 'fn_polite_alerte_rezerva', 'fn_polite_alerte_marcheaza', 'fn_polite_alerte_reconciliaza', 'fn_polite_propunere_rezerva', 'fn_polite_propunere_completeaza', 'fn_polite_propunere_esec', 'fn_polite_propunere_json', 'fn_polita_salveaza', 'fn_polita_propunere_respinge']::name[]) OR p.proname IN ('fn_poate_scrie_polite', 'fn_poate_scrie_garantii'))),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
        FROM cron.job j WHERE j.jobname = 'polite_alerte_zilnic'))) INTO v_amprenta;
   EXECUTE format('COMMENT ON TABLE public.polite_alerte_config IS %L', 'Polite 20261205a: comutatorul alertelor (activ = mail + notificari; OPRIT la livrare, il porneste doar owner-ul prin fn_polite_alerte_porneste, dupa o proba). amprenta=' || v_amprenta);

@@ -50,7 +50,7 @@ grep -oE "NOTICE:  (TEST[0-9]+ OK.*|20261205a.*)|ERROR:.*|DRY_COMPLET" "$L/d.log
 [ $E -eq 0 ] || fail "DRY exit $E"
 grep -q "DRY_COMPLET" "$L/d.log" || fail "DRY incomplet"
 N=$(grep -oE "NOTICE:  TEST[0-9]+ OK" "$L/d.log" | sort -u | wc -l); [ "$N" -eq $TESTE_DRY ] || fail "DRY: $N/$TESTE_DRY teste OK"
-[ "$("${PS[@]}" -d dry -Atc "SELECT count(*) FROM pg_proc WHERE proname LIKE 'fn_polite%' OR proname LIKE 'fn_polita%'")" = 0 ] || fail "DRY a lasat functii dupa ROLLBACK"
+[ "$("${PS[@]}" -d dry -Atc "SELECT count(*) FROM pg_proc WHERE proname IN ('fn_polite_norm_nr','fn_polite_text','fn_polite_data','fn_polite_suma','fn_polite_e_owner','fn_polite_provenienta','fn_polite_garantii_legat','fn_polite_scadente','fn_polite_dest_normalizeaza','fn_polite_alerte_calculeaza','fn_polite_alerte_proba','fn_polite_alerte_porneste','fn_polite_alerte_rezerva','fn_polite_alerte_marcheaza','fn_polite_alerte_reconciliaza','fn_polite_propunere_rezerva','fn_polite_propunere_completeaza','fn_polite_propunere_esec','fn_polite_propunere_json','fn_polita_salveaza','fn_polita_propunere_respinge','fn_poate_scrie_polite')")" = 0 ] || fail "DRY a lasat functii dupa ROLLBACK"
 ok "DRY $N/$TESTE_DRY, nimic ramas dupa ROLLBACK"
 
 echo "== aplicare reala (COMMIT) + poarta 0e"
@@ -60,7 +60,7 @@ ok "MIGRARE aplicata"
 "${PS[@]}" -d app -At -f "$(m "$R/scripts/control_0e.sql")" > "$L/0e.log" 2>&1 || fail "0e nu a rulat"
 [ "$(grep -c . "$L/0e.log")" -eq 0 ] || { cat "$L/0e.log"; fail "0e are randuri"; }
 ok "0e: 0 randuri"
-"${PS[@]}" -d app -Atc "SELECT p.proname || '=' || md5(replace(p.prosrc, chr(13), '')) FROM pg_proc p WHERE p.proname LIKE 'fn_polit%' OR p.proname = 'fn_poate_scrie_polite' ORDER BY 1"
+"${PS[@]}" -d app -Atc "SELECT p.proname || '=' || md5(replace(p.prosrc, chr(13), '')) FROM pg_proc p WHERE p.proname IN ('fn_polite_norm_nr','fn_polite_text','fn_polite_data','fn_polite_suma','fn_polite_e_owner','fn_polite_provenienta','fn_polite_garantii_legat','fn_polite_scadente','fn_polite_dest_normalizeaza','fn_polite_alerte_calculeaza','fn_polite_alerte_proba','fn_polite_alerte_porneste','fn_polite_alerte_rezerva','fn_polite_alerte_marcheaza','fn_polite_alerte_reconciliaza','fn_polite_propunere_rezerva','fn_polite_propunere_completeaza','fn_polite_propunere_esec','fn_polite_propunere_json','fn_polita_salveaza','fn_polita_propunere_respinge','fn_poate_scrie_polite') ORDER BY 1"
 
 echo "== a doua aplicare refuzata"
 aplica app "$MIG" && fail "a doua aplicare a trecut"
@@ -84,6 +84,8 @@ MUTANTI=(
   # r2 (amprenta extinsa, Jakarinos r1 P2-11): drepturi pe tabele si dependenta fn_poate_scrie_garantii
   "REVOKE SELECT ON public.polite_propuneri FROM service_role;"
   "GRANT SELECT ON public.polite_alerte_jurnal TO anon;"
+  # r7: o functie straina care foloseste o functie a migrarii (nume exact) => refuz
+  "CREATE FUNCTION public.zz_straina() RETURNS jsonb LANGUAGE sql AS \$x\$ SELECT public.fn_polita_salveaza(NULL, NULL, NULL) \$x\$;"
   "CREATE OR REPLACE FUNCTION public.fn_poate_scrie_garantii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$ SELECT true \$f\$;"
 )
 i=0
@@ -96,8 +98,10 @@ done
 ok "${#MUTANTI[@]}/${#MUTANTI[@]} mutanti refuzati"
 
 echo "== revenire reala (COMMIT) + re-aplicare"
+# r7: o functie care cheama DOAR functia veche fn_polite_send_alerte (prefix comun, alt nume) NU blocheaza revenirea
+"${PS[@]}" -d app -c "CREATE FUNCTION public.zz_cheama_vechi() RETURNS void LANGUAGE sql AS \$x\$ SELECT public.fn_polite_send_alerte() \$x\$;" >/dev/null || fail "functia de proba pentru garda pe nume"
 rev app "" COMMIT || { grep -o "ERROR:.*" "$L/r.log"; fail "revenirea reala"; }
-[ "$("${PS[@]}" -d app -Atc "SELECT to_regclass('public.polite_propuneri') IS NULL AND NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname='polite_alerte_zilnic') AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname LIKE 'fn_polit%') AND NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.garantii'::regclass AND attname='contract_polita_id' AND NOT attisdropped) AND (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.contracte_polite'::regclass AND conname='contracte_polite_tip_check') LIKE '%altul%' AND (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.contracte_polite'::regclass AND conname='contracte_polite_tip_check') NOT LIKE '%avans%'")" = t ] || fail "revenirea a lasat obiecte / CHECK-ul vechi nerefacut"
+[ "$("${PS[@]}" -d app -Atc "SELECT to_regclass('public.polite_propuneri') IS NULL AND NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname='polite_alerte_zilnic') AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('fn_polite_norm_nr','fn_polite_text','fn_polite_data','fn_polite_suma','fn_polite_e_owner','fn_polite_provenienta','fn_polite_garantii_legat','fn_polite_scadente','fn_polite_dest_normalizeaza','fn_polite_alerte_calculeaza','fn_polite_alerte_proba','fn_polite_alerte_porneste','fn_polite_alerte_rezerva','fn_polite_alerte_marcheaza','fn_polite_alerte_reconciliaza','fn_polite_propunere_rezerva','fn_polite_propunere_completeaza','fn_polite_propunere_esec','fn_polite_propunere_json','fn_polita_salveaza','fn_polita_propunere_respinge','fn_poate_scrie_polite')) AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_polite_send_alerte') AND NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.garantii'::regclass AND attname='contract_polita_id' AND NOT attisdropped) AND (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.contracte_polite'::regclass AND conname='contracte_polite_tip_check') LIKE '%altul%' AND (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.contracte_polite'::regclass AND conname='contracte_polite_tip_check') NOT LIKE '%avans%'")" = t ] || fail "revenirea a lasat obiecte / CHECK-ul vechi nerefacut"
 ok "revenire reala, baza curata, CHECK-ul vechi refacut"
 aplica app "$MIG" || { grep -o "ERROR:.*" "$L/a.log"; fail "re-aplicarea"; }
 ok "re-aplicare"
