@@ -27,7 +27,7 @@ const RAND = (id, cod, nod = 'NOD-A', extra = {}) => ({
 
 // clientul fals: „serverul” e o hartă de rânduri; o citire face instantaneul LA CERERE și îl livrează când testul deschide poarta;
 // o salvare se aplică pe server abia când testul o eliberează ('ok') sau întoarce eroare de rețea ('eroare', fără aplicare)
-function clientFals({ randuri, manifest = null }) {
+function clientFals({ randuri, manifest = null, model3d = null }) {
   const server = new Map(randuri.map(r => [r.id, { ...r }]))
   const st = { poartaLista: null, rpc: [], rand: [], img: [], imgManual: false }
   const interogare = () => {
@@ -66,7 +66,15 @@ function clientFals({ randuri, manifest = null }) {
     },
     storage: {
       from: () => ({
-        download: async () => (manifest ? { data: new Blob([JSON.stringify(manifest)]), error: null } : { data: null, error: { message: 'Object not found' } }),
+        download: async cale => {
+          // model_3d.json (schema 3D, opțională): obiect = conținutul; { eroare } = altă eroare decât lipsa; null = fișier lipsă (404)
+          if (String(cale).endsWith('/model_3d.json')) {
+            if (!model3d) return { data: null, error: { message: 'Object not found', status: 400, statusCode: '404' } }
+            if (model3d.eroare) return { data: null, error: model3d.eroare }
+            return { data: new Blob([JSON.stringify(model3d)]), error: null }
+          }
+          return manifest ? { data: new Blob([JSON.stringify(manifest)]), error: null } : { data: null, error: { message: 'Object not found' } }
+        },
         createSignedUrl: cale => {
           if (!st.imgManual) return Promise.resolve({ data: { signedUrl: 'url:' + cale }, error: null })
           const d = amana(); st.img.push({ cale, ...d })
@@ -224,5 +232,75 @@ dom(numeDom('NodCuplareSchema — răspunsuri întârziate (jsdom + react-dom)')
     await u.act(async () => { st.rpc[0].res('ok'); for (let i = 0; i < 30; i++) await Promise.resolve() })
     expect(timere.mock.calls.filter(([, ms]) => ms === 700)).toEqual([])
     expect(erori).not.toHaveBeenCalled()
+  })
+})
+
+// ── schema 3D (probă): butonul apare doar cu model_3d.json; jsdom nu are WebGL, deci verificăm butonul, mesajul de rezervă,
+// lista „fără loc în 3D” și că fișa se deschide din ea cu ACEEAȘI logică de bifare ──
+const MODEL3D = {
+  format: 'gazpet-nod-3d', versiune: 1, unitate: 'mm', titlu: 'Probă', note: ['Model schematic.'],
+  grupuri: [{
+    id: 'rez', titlu: 'Rezervoare', prefixe: ['CR'], teren_z: 0,
+    elemente: [{ tip: 'teava', a: [0, 0, 0], b: [1000, 0, 0], dn: 250 }],
+    suduri: [{ cod: 'CR-001', p: [0, 0, 0], cert: 'desen' }, { cod: 'CR-050', p: [1000, 0, 0], cert: 'desen' }],
+    fara_pozitie: [{ cod: 'CR-114', motiv: 'de confirmat' }],
+  }],
+}
+const pana = async (u, cond, ms = 4000) => {
+  const t0 = performance.now()
+  while (!cond()) {
+    if (performance.now() - t0 > ms) throw new Error('condiția nu s-a îndeplinit în timp')
+    await u.act(async () => { await new Promise(r => setTimeout(r, 25)) })
+  }
+}
+
+dom(numeDom('NodCuplareSchema — schema 3D (probă)'), () => {
+  const randuri = () => [RAND(1, 'CR-001'), RAND(2, 'CR-114'), RAND(3, 'CP-005')]
+
+  it('fără model_3d.json: niciun buton 3D și niciun mesaj de eroare', async () => {
+    const { client } = clientFals({ randuri: randuri() })
+    const u = await monteaza(client)
+    expect(u.d.body.textContent).not.toContain('3D (probă)')
+    expect(u.d.body.textContent).not.toContain('Schema 3D')
+  })
+
+  it('cu model: butonul apare; în 3D lista „fără loc” are doar sudurile grupului; fișa se deschide din ea; înapoi la 2D', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})   // jsdom fără WebGL: three raportează că nu poate crea contextul
+    const manifest = [{ vedere: 'PLAN', fisier: 'PLAN.png', latime_px: 100, inaltime_px: 50, titlu: 'Plan' }]
+    const { client, st } = clientFals({ randuri: randuri(), manifest, model3d: MODEL3D })
+    const u = await monteaza(client)
+    await u.apasa(u.buton('3D (probă)'))
+    // CR-001 are sferă, CR-114 e „fără loc”, CP-005 nu e în domeniul grupului (alt prefix); CR-050 e în model, dar nu în listă
+    expect(u.d.body.textContent).toContain('În schema 3D: 1 suduri')
+    expect(u.buton('Suduri fără loc în 3D').textContent).toContain(': 1')
+    expect(u.d.body.textContent).toContain('În schemă, dar nu în lista sudurilor: CR-050')
+    await pana(u, () => /WebGL indisponibil|nu s-a putut încărca/.test(u.d.body.textContent))
+    expect(u.d.body.textContent).toContain('WebGL indisponibil')
+    expect(u.d.querySelector('img')).toBeNull()              // imaginea 2D nu e afișată în modul 3D
+    await u.apasa(u.buton('Suduri fără loc în 3D'))
+    expect(u.d.body.textContent).toContain('Suduri fără loc în 3D (Rezervoare): 1')
+    await u.apasa(u.buton('CR-114'))
+    await u.marcheaza('Sudat', { sudor: 'P-1' })              // aceeași fișă / același RPC ca în 2D
+    expect(st.rpc).toHaveLength(1)
+    expect(st.rpc[0].a).toMatchObject({ p_id: 2, p_stare_veche: 'de_executat', p_stare_noua: 'sudat', p_sudor: 'P-1' })
+    await u.elibereaza(st.rpc[0], 'ok')
+    expect(u.d.body.textContent).toContain('Salvat.')
+    await u.inchide()
+    await u.apasa(u.buton('Plan'))
+    expect(u.d.body.textContent).toContain('Pe această vedere')
+  })
+
+  it('eroare la citirea modelului (alta decât lipsa fișierului) = mesaj vizibil, fără buton', async () => {
+    const { client } = clientFals({ randuri: randuri(), model3d: { eroare: { message: 'Failed to fetch' } } })
+    const u = await monteaza(client)
+    expect(u.d.body.textContent).toContain('Schema 3D nu se poate citi (model_3d.json): Failed to fetch')
+    expect(u.d.body.textContent).not.toContain('3D (probă)')
+  })
+
+  it('model cu alt format: respins cu motiv, fără buton', async () => {
+    const { client } = clientFals({ randuri: randuri(), model3d: { ...MODEL3D, format: 'altul' } })
+    const u = await monteaza(client)
+    expect(u.d.body.textContent).toContain('alt format')
+    expect(u.d.body.textContent).not.toContain('3D (probă)')
   })
 })
