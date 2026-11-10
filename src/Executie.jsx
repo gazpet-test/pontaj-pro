@@ -23,6 +23,7 @@ import ProbeTronsoane from './ProbeTronsoane.jsx'       // probele pe tronsoane:
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261206a)
 import ExecutieGrafic from './ExecutieGrafic.jsx'   // „📅 Grafic”: graficul de execuție importat din MS Project (20261204a)
+import DevizVsExecutatTab from './DevizVsExecutatTab.jsx'   // „📋 Deviz vs executat”: ținte din deviz, executat, rest, alerte, Excel (20261208a)
 import ContractProiectTab from './ContractProiectTab.jsx'   // fișa contractului: clauze, căi de prelungire, termene, registrul evenimentelor (20261203a)
 import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
@@ -84,6 +85,7 @@ const fmtDate = v => {
 const CONTEXT_TABS = [
   { key: 'proiect',        label: 'Proiect',        icon: '📊', color: G.green,  desc: 'Dashboard · Echipă · ISC · Stadiu' },
   { key: 'grafic',         label: 'Grafic',         icon: '📅', color: G.teal,   desc: 'Graficul de execuție importat (MS Project)' },
+  { key: 'deviz',          label: 'Deviz vs executat', icon: '📋', color: G.yellow, desc: 'Ținte din deviz · executat · rest · alerte · Excel' },
   { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,   desc: 'Personal tură · Utilaje' },
   { key: 'situatii_plata', label: 'Situații plată', icon: '💰', color: G.orange, desc: 'SL1–SL6 · NCS · Facturare' },
   { key: 'cereri',         label: 'Cereri interne', icon: '📋', color: G.pink,   desc: 'Materiale · Achiziții · PDF' },
@@ -347,6 +349,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
       {/* Tab content cu proiectId prop */}
       {tab === 'proiect'        && <TabProiectDashboard proiectId={proiectId} canEdit={canEdit} />}
       {tab === 'grafic'         && <ExecutieGrafic proiectId={Number(proiectId)} client={supabase} />}
+      {tab === 'deviz'          && <DevizVsExecutatTab proiectId={Number(proiectId)} codProiect={proiect?.cod_intern} client={supabase} />}
       {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}

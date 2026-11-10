@@ -9,7 +9,7 @@
 // Acces: fiecare manager vede DOAR șantierele lui (profile_sites); owner vede tot.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ProbeTerenMobil from './ProbeTerenMobil.jsx'
@@ -17,6 +17,8 @@ import { MeteoBadge } from './Meteo.jsx'
 import { combinaUtilaje } from './raportUtilaje.js'
 import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, antetImplicit } from './raportDistributie.js'
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
+// Raportul legat de devize (20261208a): obiecte pe raport, ținte din v_executie_tinte, linii salvate atomic prin RPC
+import { AMPRENTA_GOL, blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -135,9 +137,16 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [lucrari, setLucrari] = useState('')
   const [proiectId, setProiectId] = useState(null)          // proiectul legat de lucrare (sites.proiect_id)
   const [activitati, setActivitati] = useState([])          // proiect_activitati ale proiectului
-  const [lucrariAct, setLucrariAct] = useState({})          // {activitate_id: cantitate azi}
   const [unitati, setUnitati] = useState([])                // proiect_unitati active (tronson/obiect/zonă)
-  const [unitateId, setUnitateId] = useState(null)          // unde s-a lucrat azi
+  // 20261208a: cantitățile pe OBIECTE (un bloc = un obiect + cantitățile de azi), „+ alt obiect” dacă s-a lucrat în mai multe locuri
+  const [blocuri, setBlocuri] = useState([])
+  const [tinte, setTinte] = useState([])                    // v_executie_tinte (din deviz / executat / rest) pe proiect
+  const [tinteErr, setTinteErr] = useState(null)
+  const [nodZi, setNodZi] = useState({})                    // {"unitate:activitate": {zi, total}} din schema nodului, pe ziua raportului
+  const [amprenta, setAmprenta] = useState(AMPRENTA_GOL)    // amprenta liniilor citite (CAS la salvare); null = necitite
+  const [liniiErr, setLiniiErr] = useState(null)
+  const [actErr, setActErr] = useState(null)
+  const genRef = useRef(0)                                  // L24: răspunsul unei încărcări vechi (alt șantier / altă zi) nu se aplică
   // Raport lucrări executate — distribuție gaze (13.10.2026): doar pe proiectele marcate raport_distributie
   const [distributie, setDistributie] = useState(false)
   const [dAntet, setDAntet] = useState('')                   // localitate / stradă (linia de sub titlu)
@@ -174,30 +183,55 @@ function RaportZilnic({ profile, sites, onBack }) {
     setDistributie(esteDistr)
     setDAntet(antetImplicit({ adresa: siteRow?.adresa, numeLucrare: siteRow?.name }))
     setDRanduri(esteDistr ? [randNou('conducta'), randNou('bransament')] : [])
-    let acts = []
+    const gen = ++genRef.current
+    let acts = [], unis = []
+    setActErr(null); setTinteErr(null); setLiniiErr(null); setTinte([]); setNodZi({})
     if (pid) {
-      const [{ data: a }, { data: u }] = await Promise.all([
-        supabase.from('proiect_activitati').select('id, nume, um, ordine, tip_raportare')
+      const [ra, ru] = await Promise.all([
+        supabase.from('proiect_activitati').select('id, nume, um, ordine, tip_raportare, principala, sursa_executat')
           .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
-        supabase.from('proiect_unitati').select('id, tip, cod, nume, ordine')
+        supabase.from('proiect_unitati').select('id, tip, cod, nume, ordine, nod_cod')
           .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
       ])
-      acts = a || []
-      setUnitati(u || [])
-    } else setUnitati([])
+      if (gen !== genRef.current) return
+      if (ra.error || ru.error) setActErr((ra.error || ru.error).message)
+      acts = ra.data || []
+      unis = ru.data || []
+    }
+    setUnitati(unis)
     setActivitati(acts)
-    setLucrariAct({})
-    setUnitateId(null)
+    setBlocuri([blocNou(unis.length === 1 ? unis[0].id : null)])
+    setAmprenta(AMPRENTA_GOL)
+    // ── Țintele (din deviz / executat / rest) și contorul nodului pe ziua raportului; o eroare se arată, nu devine „rest 0” (L18) ──
+    if (pid && acts.length) {
+      try {
+        const t = await citesteTinte(supabase, pid, 'unitate_id,activitate_id,din_deviz,executat,rest,peste_deviz,executat_sursa')
+        if (gen !== genRef.current) return
+        setTinte(t)
+      } catch (e) { if (gen === genRef.current) setTinteErr(e?.message || String(e)) }
+      if (unis.some(u => u.nod_cod) && acts.some(a => a.sursa_executat === 'schema_nod')) {
+        const { data: nz, error: nzErr } = await supabase.rpc('fn_executie_tinte_nod', { p_proiect: pid, p_data: zi })
+        if (gen !== genRef.current) return
+        if (nzErr) setTinteErr(v => v || nzErr.message)
+        else setNodZi(Object.fromEntries((nz || []).filter(r => r.activitate_id != null)
+          .map(r => [`${r.unitate_id}:${r.activitate_id}`, { zi: r.sudate_zi, total: r.sudate_total }])))
+      }
+    }
     // ── Există deja raport azi pe lucrare? → încarcă pentru editare (anti-dublură) ──
     const { data: existing } = await supabase.from('rapoarte_zilnice').select('*').eq('site_id', sid).eq('data', zi).maybeSingle()
+    if (gen !== genRef.current) return
     if (existing) {
       if (acts.length) {
-        const { data: rl } = await supabase.from('raport_lucrari').select('activitate_id, cantitate, unitate_id').eq('raport_id', existing.id)
-        const m = {}
-        for (const r of (rl || [])) if (r.activitate_id) m[r.activitate_id] = Number(r.cantitate) || 0
-        setLucrariAct(m)
-        const uid = (rl || []).find(r => r.unitate_id)?.unitate_id
-        if (uid) setUnitateId(uid)
+        // liniile + amprenta lor, dintr-un singur instantaneu: amprenta se trimite înapoi la salvare (CAS: alt telefon a salvat între timp = conflict)
+        const { data: cit, error: citErr } = await supabase.rpc('fn_raport_lucrari_citeste', { p_raport_id: existing.id })
+        if (gen !== genRef.current) return
+        if (citErr || !cit || !/^[0-9a-f]{32}$/.test(cit.amprenta || '') || !Array.isArray(cit.linii)) {
+          setLiniiErr(citErr?.message || 'răspuns neașteptat'); setAmprenta(null)
+        } else {
+          const b = blocuriDinLinii(cit.linii)
+          setBlocuri(b.length ? b : [blocNou(unis.length === 1 ? unis[0].id : null)])
+          setAmprenta(cit.amprenta)
+        }
       }
       if (esteDistr) {
         const { data: dl } = await supabase.from('raport_distributie_linii').select('*').eq('raport_id', existing.id).order('tabel').order('nr_crt')
@@ -339,6 +373,10 @@ function RaportZilnic({ profile, sites, onBack }) {
       const erori = valideaza(dRanduri)
       if (erori.length) { setMsg({ ok: false, text: 'Raport lucrări: ' + erori.slice(0, 3).join(' · ') + (erori.length > 3 ? ` (+${erori.length - 3})` : '') }); return }
     }
+    // cantitățile pe obiecte: aceleași reguli ca serverul, verificate ÎNAINTE de orice scriere (nimic nu se salvează pe jumătate)
+    const deSalvat = activitati.length ? liniiDinBlocuri(blocuri, { activitati, unitati }) : null
+    if (deSalvat?.erori.length) { setMsg({ ok: false, text: 'Cantități: ' + deSalvat.erori.slice(0, 3).join(' · ') + (deSalvat.erori.length > 3 ? ` (+${deSalvat.erori.length - 3})` : '') }); return }
+    if (deSalvat && amprenta == null) { setMsg({ ok: false, text: 'Cantitățile salvate deja pe acest raport nu s-au putut citi — alege din nou data ca să le reîncarci, apoi salvează.' }); return }
     if (!pozeOk) { setMsg({ ok: false, text: `Raportul se trimite cu minim ${MIN_POZE} poze de pe șantier (ai ${nrPoze}). Pozele ajung pe pagina firmei — fă-le cu lucrarea executată corect.` }); return }
     setSaving(true); setMsg(null)
     try {
@@ -376,16 +414,15 @@ function RaportZilnic({ profile, sites, onBack }) {
         updated_at: new Date().toISOString(),
       }, { onConflict: 'site_id,data' }).select('id').single()
       if (insErr) throw insErr
-      // ── Lucrări pe activități (Faza 5 pas 3): rescriem setul raportului ──
-      if (rz?.id && proiectId) {
-        await supabase.from('raport_lucrari').delete().eq('raport_id', rz.id)
-        const rows = activitati
-          .filter(a => Number(lucrariAct[a.id]) > 0)
-          .map(a => ({ raport_id: rz.id, proiect_id: proiectId, activitate_id: a.id, cantitate: Number(lucrariAct[a.id]), unitate_id: unitateId || null }))
-        if (rows.length) {
-          const { error: rlErr } = await supabase.from('raport_lucrari').insert(rows)
-          if (rlErr) throw rlErr
-        }
+      // ── Cantitățile pe obiecte (20261208a): înlocuite ATOMIC de server, cu CAS pe amprenta citită (L01/L02) ──
+      // Răspuns pierdut (rețea): amprenta rămâne cea veche, deci reluarea aceluiași set întoarce „duplicat” (nu dublează nimic, L05).
+      if (rz?.id && proiectId && deSalvat) {
+        const { data: rs, error: rlErr } = await supabase.rpc('fn_raport_lucrari_salveaza', { p_raport_id: rz.id, p_amprenta_veche: amprenta, p_linii: deSalvat.linii })
+        if (rlErr) throw rlErr
+        if (rs?.ok !== true) throw new Error(rs?.motiv === 'conflict'
+          ? 'Între timp s-au salvat alte cantități pe acest raport (alt telefon). Alege din nou data ca să le vezi, apoi completează.'
+          : 'Cantitățile nu s-au salvat (răspuns neașteptat).')
+        setAmprenta(rs.amprenta)
       }
       // ── Raport lucrări executate (distribuție gaze): înlocuim rândurile raportului ATOMIC (RPC, o tranzacție) ──
       if (rz?.id && distributie) {
@@ -631,44 +668,24 @@ function RaportZilnic({ profile, sites, onBack }) {
             </button>
           </Section>
 
-          {/* Lucrări pe activitățile proiectului (Faza 5 pas 3) */}
+          {actErr && <div style={notaErr}>Activitățile proiectului nu s-au putut citi: {actErr}</div>}
+          {/* Cantități pe obiecte (Faza 5 pas 3; 20261208a: legate de deviz, mai multe obiecte pe raport) */}
           {activitati.length > 0 && (
-            <Section title="📏 Cantități pe activități" hint="doar ce s-a lucrat azi — restul lasă gol">
-              {unitati.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <label style={{ ...labelStyle, marginBottom: 4 }}>Unde s-a lucrat azi</label>
-                  <select value={unitateId || ''} onChange={e => setUnitateId(Number(e.target.value) || null)} style={{ ...inputStyle, appearance: 'none' }}>
-                    <option value="">— toată lucrarea / nespecificat —</option>
-                    {unitati.map(u => (
-                      <option key={u.id} value={u.id}>{u.cod ? `${u.cod} · ` : ''}{u.nume}</option>
-                    ))}
-                  </select>
-                  <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>Se aplică tuturor cantităților de mai jos.</div>
-                </div>
+            <Section title="📏 Cantități pe obiecte" hint="doar ce s-a lucrat azi — restul lasă gol">
+              {tinteErr && <div style={notaWarn}>Țintele din deviz nu s-au putut citi ({tinteErr}) — poți scrie cantitățile, dar fără „rest”.</div>}
+              {liniiErr && <div style={notaErr}>Cantitățile salvate pe acest raport nu s-au putut citi ({liniiErr}). Alege din nou data ca să le reîncarci.</div>}
+              {blocuri.map(b => (
+                <BlocObiect key={b.cheie} bloc={b} activitati={activitati} unitati={unitati} tinte={tinte} nodZi={nodZi}
+                  ocupate={blocuri.filter(x => x.cheie !== b.cheie).map(x => x.unitateId)} poateSterge={blocuri.length > 1}
+                  onChange={patch => setBlocuri(list => list.map(x => (x.cheie === b.cheie ? { ...x, ...patch } : x)))}
+                  onSterge={() => setBlocuri(list => list.filter(x => x.cheie !== b.cheie))} />
+              ))}
+              {unitati.length > 0 && blocuri.length <= unitati.length && (
+                <button onClick={() => setBlocuri(list => [...list, blocNou(unitati.find(u => !list.some(x => x.unitateId === Number(u.id)))?.id ?? null)])}
+                  style={{ background: 'transparent', border: `1px dashed ${G.border2}`, color: G.blue, borderRadius: 10, padding: '10px', width: '100%', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  + alt obiect
+                </button>
               )}
-              {activitati.map(a => {
-                const bifa = (a.tip_raportare || 'cantitate') === 'bifa'
-                const bifat = Number(lucrariAct[a.id]) > 0
-                return (
-                <div key={a.id} onClick={bifa ? () => setLucrariAct(m => ({ ...m, [a.id]: bifat ? '' : 1 })) : undefined}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, background: bifa && bifat ? G.green + '18' : G.bg, border: `1px solid ${bifa && bifat ? G.green + '66' : G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6, cursor: bifa ? 'pointer' : 'default', userSelect: 'none' }}>
-                  <span style={{ fontSize: 14, color: G.text, flex: 1, minWidth: 0 }}>{a.nume}</span>
-                  {bifa ? (
-                    <span style={{ width: 38, height: 38, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, flexShrink: 0,
-                      background: bifat ? G.green : 'transparent', color: bifat ? '#0D1117' : G.dim, border: `1px solid ${bifat ? G.green : G.border2}` }}>
-                      {bifat ? '✓' : ''}
-                    </span>
-                  ) : (
-                    <>
-                      <input type="number" min="0" step="any" inputMode="decimal" placeholder="0"
-                        value={lucrariAct[a.id] ?? ''}
-                        onChange={e => setLucrariAct(m => ({ ...m, [a.id]: e.target.value === '' ? '' : Math.max(0, Number(e.target.value)) }))}
-                        style={{ width: 76, textAlign: 'center', background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '8px 6px', fontSize: 16, fontWeight: 700 }} />
-                      <span style={{ fontSize: 12, color: G.muted, width: 32 }}>{a.um || ''}</span>
-                    </>
-                  )}
-                </div>
-              )})}
             </Section>
           )}
 
@@ -754,6 +771,76 @@ function RaportZilnic({ profile, sites, onBack }) {
 
 // ── Raport lucrări executate — distribuție gaze (13.10.2026) ──
 // Două tabele ca pe formularul de hârtie: conducte și branșamente; rândurile se adaugă după nevoie.
+// ── Un obiect al raportului (20261208a): activitățile principale cu țintă pe obiect, „rest: X”, la nod contorul din schemă ──
+const notaErr = { fontSize: 12.5, color: G.red, background: G.red + '14', border: `1px solid ${G.red}44`, borderRadius: 8, padding: '8px 10px', marginBottom: 10 }
+const notaWarn = { ...notaErr, color: G.yellow, background: G.yellow + '14', border: `1px solid ${G.yellow}44` }
+function BlocObiect({ bloc, activitati, unitati, tinte, nodZi, ocupate, poateSterge, onChange, onSterge }) {
+  const u = unitati.find(x => Number(x.id) === bloc.unitateId) || null
+  const lista = activitatiBloc({ activitati, tinte, unitateId: bloc.unitateId, toate: bloc.toate, valori: bloc.valori })
+  const arePrincipale = activitati.some(a => a.principala)
+  const setVal = (aid, v) => onChange({ valori: { ...bloc.valori, [aid]: v } })
+  return (
+    <div style={{ border: `1px solid ${G.border2}`, borderRadius: 12, padding: 10, marginBottom: 10, background: G.surface }}>
+      {unitati.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <select value={bloc.unitateId ?? ''} onChange={e => onChange({ unitateId: e.target.value === '' ? null : Number(e.target.value) })}
+            style={{ ...inputStyle, appearance: 'none', flex: 1, fontWeight: 700 }}>
+            <option value="" disabled={ocupate.includes(null)}>— toată lucrarea / nespecificat —</option>
+            {unitati.map(x => <option key={x.id} value={x.id} disabled={ocupate.includes(Number(x.id))}>{x.cod ? `${x.cod} · ` : ''}{x.nume}</option>)}
+          </select>
+          {poateSterge && <button onClick={onSterge} title="Scoate obiectul din raport" style={{ background: 'transparent', border: 'none', color: G.dim, fontSize: 22, cursor: 'pointer', padding: '0 6px' }}>×</button>}
+        </div>
+      )}
+      {lista.map(a => {
+        const t = tintaPe(tinte, bloc.unitateId, a.id)
+        const bifa = (a.tip_raportare || 'cantitate') === 'bifa'
+        const v = bloc.valori[a.id]
+        const bifat = Number(v) > 0
+        const c = bifa ? null : cantitateLinie(v)
+        const sub = [t && t.rest != null ? `rest: ${fmtNr(t.rest)} ${a.um || ''}` : null,
+          t && Number(t.peste_deviz) > 0 ? `peste deviz: +${fmtNr(t.peste_deviz)} ${a.um || ''}` : null].filter(Boolean).join(' · ')
+        if (a.sursa_executat === 'schema_nod' && u?.nod_cod) {
+          const nz = nodZi[`${bloc.unitateId}:${a.id}`]
+          return (
+            <div key={a.id} style={{ background: G.bg, border: `1px dashed ${G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6 }}>
+              <div style={{ fontSize: 14, color: G.text }}>{a.nume}</div>
+              <div style={{ fontSize: 12.5, color: G.blue, marginTop: 2 }}>din schema nodului: {nz ? `${nz.zi ?? '?'} sudate azi / ${nz.total} total` : '—'}</div>
+              {sub && <div style={{ fontSize: 11.5, color: G.dim, marginTop: 2 }}>{sub}</div>}
+            </div>
+          )
+        }
+        return (
+          <div key={a.id} onClick={bifa ? () => setVal(a.id, bifat ? '' : 1) : undefined}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, background: bifa && bifat ? G.green + '18' : G.bg, border: `1px solid ${c?.eroare ? G.red : bifa && bifat ? G.green + '66' : G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6, cursor: bifa ? 'pointer' : 'default', userSelect: 'none' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, color: G.text }}>{a.nume}</div>
+              {(sub || c?.eroare) && <div style={{ fontSize: 11.5, color: c?.eroare ? G.red : G.dim, marginTop: 2 }}>{c?.eroare || sub}</div>}
+            </div>
+            {bifa ? (
+              <span style={{ width: 38, height: 38, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, flexShrink: 0,
+                background: bifat ? G.green : 'transparent', color: bifat ? '#0D1117' : G.dim, border: `1px solid ${bifat ? G.green : G.border2}` }}>
+                {bifat ? '✓' : ''}
+              </span>
+            ) : (
+              <>
+                <input type="text" inputMode="decimal" placeholder="0" value={v ?? ''} onChange={e => setVal(a.id, e.target.value)}
+                  style={{ width: 76, textAlign: 'center', background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '8px 6px', fontSize: 16, fontWeight: 700 }} />
+                <span style={{ fontSize: 12, color: G.muted, width: 32 }}>{a.um || ''}</span>
+              </>
+            )}
+          </div>
+        )
+      })}
+      {arePrincipale && (
+        <button onClick={() => onChange({ toate: !bloc.toate })}
+          style={{ background: 'transparent', border: 'none', color: G.muted, fontSize: 12.5, cursor: 'pointer', padding: '4px 2px', fontFamily: 'inherit', textDecoration: 'underline' }}>
+          {bloc.toate ? 'doar activitățile principale' : lista.length ? 'arată toate activitățile' : 'nicio activitate principală cu țintă aici — arată toate activitățile'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function SectiuneDistributie({ antet, setAntet, randuri, setRanduri, unitati, data, lucrare }) {
   const [pdfBusy, setPdfBusy] = useState(false)
   const set = (idx, patch) => setRanduri(list => list.map((r, i) => i === idx ? { ...r, ...patch } : r))
