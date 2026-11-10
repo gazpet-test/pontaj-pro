@@ -74,16 +74,23 @@ export function parseModel3d(json) {
       suduri.push({ cod, p: s.p.slice(), cert: s.cert })
     })
     const faraPozitie = []
-    ;(Array.isArray(g.fara_pozitie) ? g.fara_pozitie : []).slice(0, LIM.faraPozitie).forEach((f, i) => {
+    const fp = Array.isArray(g.fara_pozitie) ? g.fara_pozitie : []
+    if (fp.length > LIM.faraPozitie) erori.push(`${eticG}: „fără poziție” are ${fp.length} intrări; peste ${LIM.faraPozitie} nu se citesc`)
+    fp.slice(0, LIM.faraPozitie).forEach((f, i) => {
       const cod = txt(f?.cod).toUpperCase()
-      if (!RE_COD.test(cod) || coduri.has(cod)) { erori.push(`${eticG}, fără poziție ${i + 1} (${cod || '?'}): cod invalid sau deja cu poziție`); return }
+      const pb = !RE_COD.test(cod) ? 'cod invalid' : coduri.has(cod) ? 'cod deja folosit (cu poziție sau „fără poziție”)'
+        : !prefixe.includes(cod.split('-')[0]) ? 'codul nu e în prefixele grupului' : null
+      if (pb) { erori.push(`${eticG}, fără poziție ${i + 1} (${cod || '?'}): ${pb}`); return }
       coduri.add(cod)
       faraPozitie.push({ cod, motiv: txt(f?.motiv).slice(0, LIM.text) })
     })
-    grupuri.push({ id, titlu: txt(g.titlu).slice(0, LIM.text) || id, prefixe, terenZ: teren, elemente, suduri, faraPozitie })
+    const titlu = txt(g.titlu)
+    if (titlu.length > LIM.text) erori.push(`${eticG}: titlul are peste ${LIM.text} caractere (tăiat)`)
+    grupuri.push({ id, titlu: titlu.slice(0, LIM.text) || id, prefixe, terenZ: teren, elemente, suduri, faraPozitie })
   })
-  const note = (Array.isArray(json.note) ? json.note : []).slice(0, LIM.note).map(n => txt(n).slice(0, 400)).filter(Boolean)
-  return { grupuri, note, titlu: txt(json.titlu).slice(0, LIM.text), erori }
+  const note = Array.isArray(json.note) ? json.note : []
+  if (note.length > LIM.note) erori.push(`Modelul are ${note.length} note; peste ${LIM.note} nu se afișează`)
+  return { grupuri, note: note.slice(0, LIM.note).map(n => txt(n).slice(0, 400)).filter(Boolean), titlu: txt(json.titlu).slice(0, LIM.text), erori }
 }
 
 function validElement(e) {
@@ -94,6 +101,7 @@ function validElement(e) {
   if (tip === 'eticheta') return txt(e.text) && txt(e.text).length <= LIM.text ? null : 'text lipsă sau prea lung'
   if (tip === 'rezervor') return Number.isFinite(e.d) && e.d > 0 && e.d <= 20000 ? null : 'diametru invalid'
   if (!esteDn(e.dn)) return 'DN invalid'
+  if (tip === 'reductie' && e.dn2 == null) return 'reducția nu are DN2'
   if (e.dn2 != null && !esteDn(e.dn2)) return 'DN2 invalid'
   if ((tip === 'teava' || tip === 'stut' || tip === 'flansa' || tip === 'robinet' || tip === 'reductie') && lungime(e.a, e.b) < 1) return 'lungime zero'
   if (e.cert != null && !CERTITUDINI.includes(e.cert)) return 'certitudine invalidă'
@@ -101,19 +109,46 @@ function validElement(e) {
   return null
 }
 function curataElement(e) {
-  const o = { tip: e.tip, cert: e.cert === 'estimat' ? 'estimat' : 'desen' }
-  for (const k of PUNCTE[e.tip]) o[k] = e[k].slice()
+  const tip = txt(e.tip)                // același tip normalizat ca la validare
+  const o = { tip, cert: e.cert === 'estimat' ? 'estimat' : 'desen' }
+  for (const k of PUNCTE[tip]) o[k] = e[k].slice()
   if (e.dn != null) o.dn = e.dn
   if (e.dn2 != null) o.dn2 = e.dn2
   if (e.d != null) o.d = e.d
   if (txt(e.et)) o.et = txt(e.et)
-  if (e.tip === 'eticheta') o.text = txt(e.text)
+  if (tip === 'eticheta') o.text = txt(e.text)
   return o
 }
 export const lungime = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2])
 
 // ── sudurile din BD pe pozițiile din model ──
-const CHEIE_MM = 1   // sudurile la sub 1 mm una de alta = același punct (o singură sferă, cu lista lor)
+export const PRAG_MM = 1   // două suduri la cel mult 1 mm una de alta = același loc (o singură sferă, cu lista lor)
+
+/**
+ * Locurile sudurilor din model (TOATE, nefiltrate): două suduri la ≤ PRAG_MM (distanța reală 3D, nu rotunjire) sunt în același loc,
+ * iar legătura e tranzitivă (lanț de vecini). Cheia locului = cel mai mic cod din el, poziția = a primei suduri din model:
+ * nu depind de filtre sau de ordinea din listă. Întoarce Map cod -> { cheie, p }.
+ */
+export function punctePeCod(suduri) {
+  const l = suduri || [], par = l.map((_, i) => i)
+  const rad = i => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i] } return i }
+  for (let i = 0; i < l.length; i++) {
+    for (let j = i + 1; j < l.length; j++) {
+      const a = l[i].p, b = l[j].p
+      if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= PRAG_MM) { const x = rad(i), y = rad(j); if (x !== y) par[Math.max(x, y)] = Math.min(x, y) }
+    }
+  }
+  const loc = new Map()
+  l.forEach((s, i) => {
+    const r = rad(i)
+    if (!loc.has(r)) loc.set(r, { cheie: null, p: l[r].p, coduri: [] })
+    loc.get(r).coduri.push(s.cod)
+  })
+  for (const v of loc.values()) v.cheie = `3d:${[...v.coduri].sort()[0]}`
+  const pe = new Map()
+  l.forEach((s, i) => { const v = loc.get(rad(i)); pe.set(s.cod, { cheie: v.cheie, p: v.p }) })
+  return pe
+}
 
 /**
  * Leagă sudurile (rânduri din executie_noduri_suduri, deja filtrate) de pozițiile grupului, după cod.
@@ -127,13 +162,14 @@ export function mapeazaSuduri3d(grup, filtrate, toate = filtrate) {
   const peCod = new Map((filtrate || []).map(s => [String(s.cod || '').toUpperCase(), s]))
   const existente = new Set((toate || []).map(s => String(s.cod || '').toUpperCase()))
   const m = new Map(), puse = new Set(), inModelFaraLista = []
+  const ancore = punctePeCod(grup.suduri)
   for (const sm of grup.suduri) {
     if (!existente.has(sm.cod)) { inModelFaraLista.push(sm.cod); continue }
     const s = peCod.get(sm.cod)
     if (!s) continue                                     // există, dar e scoasă de filtre
-    const k = sm.p.map(c => Math.round(c / CHEIE_MM)).join('|')
-    if (!m.has(k)) m.set(k, { cheie: `3d:${k}`, p: sm.p, cert: sm.cert, puncte: [] })
-    const g = m.get(k)
+    const a = ancore.get(sm.cod)
+    if (!m.has(a.cheie)) m.set(a.cheie, { cheie: a.cheie, p: a.p, cert: sm.cert, puncte: [] })
+    const g = m.get(a.cheie)
     if (sm.cert === 'estimat') g.cert = 'estimat'
     g.puncte.push({ sudura: s, certitudine: sm.cert })
     puse.add(sm.cod)
@@ -195,4 +231,8 @@ export function esteObiectLipsa(err) {
  * (altfel a fost rotire / zoom și nu deschidem nicio fișă).
  */
 export const esteAtingere = (jos, sus, { px = 8, ms = 600 } = {}) =>
-  !!jos && !!sus && Math.hypot(sus.x - jos.x, sus.y - jos.y) <= px && sus.t - jos.t <= ms
+  !!jos && !!sus && Math.max(jos.max || 0, Math.hypot(sus.x - jos.x, sus.y - jos.y)) <= px && sus.t - jos.t <= ms
+/** Începutul unui gest (un deget / cursorul apăsat). `max` = cea mai mare depărtare de punctul de start pe parcurs. */
+export const gestNou = (x, y, t) => ({ x, y, t, max: 0 })
+/** Mișcarea din timpul gestului: o rotire care se întoarce lângă start NU mai e atingere (depărtarea maximă rămâne). */
+export const gestMisca = (g, x, y) => (g ? { ...g, max: Math.max(g.max || 0, Math.hypot(x - g.x, y - g.y)) } : g)

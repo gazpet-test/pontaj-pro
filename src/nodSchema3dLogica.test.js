@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseModel3d, mapeazaSuduri3d, culoarePunct3d, culoareDn, CULORI_DN, CULOARE_DN_ALTA, esteObiectLipsa, esteAtingere, razaSfera,
-  cutieGrup, spreScena, dnuriGrup, estePunct,
+  cutieGrup, spreScena, dnuriGrup, estePunct, gestNou, gestMisca, punctePeCod,
 } from './nodSchema3dLogica.js'
 
 const MODEL = () => ({
@@ -109,6 +109,43 @@ describe('parseModel3d', () => {
     expect(m.erori[4]).toMatch(/cod invalid/)
   })
 
+  it('review r1: reducția fără DN2 e respinsă (altfel geometria ar ieși NaN)', () => {
+    const j = MODEL()
+    j.grupuri[0].elemente.push({ tip: 'reductie', a: [0, 0, 0], b: [1000, 0, 0], dn: 250 })
+    j.grupuri[0].elemente.push({ tip: 'reductie', a: [0, 0, 0], b: [203, 0, 0], dn: 300, dn2: 250 })
+    const m = parseModel3d(j)
+    expect(m.erori).toEqual(['Grupul 1 (rez), elementul 6 (reductie): reducția nu are DN2'])
+    expect(m.grupuri[0].elemente.filter(e => e.tip === 'reductie')).toEqual([{ tip: 'reductie', cert: 'desen', a: [0, 0, 0], b: [203, 0, 0], dn: 300, dn2: 250 }])
+  })
+
+  it('review r1: tipul cu spații se normalizează la fel la validare și la curățare (fără excepție care să piardă tot modelul)', () => {
+    const j = MODEL()
+    j.grupuri[0].elemente.push({ tip: ' teava ', a: [0, 0, 0], b: [0, 0, 500], dn: 50 })
+    const m = parseModel3d(j)
+    expect(m.erori).toEqual([])
+    expect(m.grupuri[0].elemente.at(-1)).toMatchObject({ tip: 'teava', a: [0, 0, 0], b: [0, 0, 500], dn: 50 })
+  })
+
+  it('review r1: „fără poziție” peste limită se raportează; un cod din alt prefix e refuzat și nu blochează poziția din grupul lui', () => {
+    const j = MODEL()
+    j.grupuri[0].fara_pozitie = Array.from({ length: 2001 }, (_, i) => ({ cod: `CR-${2000 + i}`, motiv: 'x' }))
+    j.grupuri[0].fara_pozitie.unshift({ cod: 'CI-001', motiv: 'din alt grup' })
+    const m = parseModel3d(j)
+    expect(m.erori[0]).toBe('Grupul 1 (rez): „fără poziție” are 2002 intrări; peste 2000 nu se citesc')
+    expect(m.erori[1]).toBe('Grupul 1 (rez), fără poziție 1 (CI-001): codul nu e în prefixele grupului')
+    expect(m.erori).toHaveLength(2)
+    expect(m.grupuri[0].faraPozitie).toHaveLength(1999)                 // 2000 citite, minus cea refuzată
+    expect(m.grupuri[1].suduri.map(s => s.cod)).toEqual(['CI-001'])      // poziția validă din grupul CI rămâne
+  })
+
+  it('peste 20 de note = raportat, nu tăiat în tăcere', () => {
+    const j = MODEL()
+    j.note = Array.from({ length: 21 }, (_, i) => `n${i}`)
+    const m = parseModel3d(j)
+    expect(m.note).toHaveLength(20)
+    expect(m.erori).toEqual(['Modelul are 21 note; peste 20 nu se afișează'])
+  })
+
   it('„fără poziție” cu un cod care are deja poziție = eroare; grup cu id duplicat sau fără prefixe = eroare', () => {
     const j = MODEL()
     j.grupuri[0].fara_pozitie.push({ cod: 'CR-001', motiv: 'x' })
@@ -117,7 +154,7 @@ describe('parseModel3d', () => {
     const m = parseModel3d(j)
     expect(m.grupuri.map(g => g.id)).toEqual(['rez', 'gaz'])
     expect(m.erori).toHaveLength(3)
-    expect(m.erori[0]).toMatch(/CR-001.*deja cu poziție/)
+    expect(m.erori[0]).toMatch(/CR-001.*cod deja folosit/)
     expect(m.erori[1]).toMatch(/id invalid sau duplicat/)
     expect(m.erori[2]).toMatch(/prefixele/)
   })
@@ -148,6 +185,24 @@ describe('mapeazaSuduri3d', () => {
     expect(r.grupuri[0].puncte.map(p => p.sudura.cod)).toEqual(['CR-002'])
     expect(r.faraLoc).toEqual([])
     expect(r.inModelFaraLista).toEqual(['CR-009'])
+  })
+
+  it('review r1: gruparea după distanța reală 3D (≤ 1 mm, în lanț), nu după rotunjire; cheia = cel mai mic cod', () => {
+    const pe = punctePeCod([
+      { cod: 'CR-002', p: [0.49, 0, 0] }, { cod: 'CR-001', p: [0.51, 0, 0] },                 // 0,02 mm: același loc
+      { cod: 'CR-010', p: [-0.49, -0.49, -400.49] }, { cod: 'CR-011', p: [0.49, 0.49, -399.51] }, // 1,697 mm: locuri diferite
+      { cod: 'CR-020', p: [0, 0, 900] }, { cod: 'CR-021', p: [0.9, 0, 900] }, { cod: 'CR-022', p: [1.8, 0, 900] }, // lanț de vecini
+    ])
+    expect(pe.get('CR-002').cheie).toBe('3d:CR-001')
+    expect(pe.get('CR-001').cheie).toBe('3d:CR-001')
+    expect(pe.get('CR-001').p).toEqual([0.49, 0, 0])      // poziția primei suduri din model
+    expect(pe.get('CR-010').cheie).toBe('3d:CR-010')
+    expect(pe.get('CR-011').cheie).toBe('3d:CR-011')
+    expect(new Set(['CR-020', 'CR-021', 'CR-022'].map(c => pe.get(c).cheie))).toEqual(new Set(['3d:CR-020']))
+    // cheia nu depinde de filtre: CR-002 singură (CR-001 filtrată) rămâne pe locul „3d:CR-001”
+    const grup = { prefixe: ['CR'], suduri: [{ cod: 'CR-002', p: [0, 0, 0], cert: 'desen' }, { cod: 'CR-001', p: [0.5, 0, 0], cert: 'desen' }] }
+    const toate = [SUD(1, 'CR-001', 'sudat'), SUD(2, 'CR-002')]
+    expect(mapeazaSuduri3d(grup, [toate[1]], toate).grupuri.map(g => g.cheie)).toEqual(['3d:CR-001'])
   })
 
   it('codurile din BD se compară fără să conteze literele mici; fără grup = rezultat gol', () => {
@@ -203,6 +258,16 @@ describe('mărunte', () => {
     expect(esteAtingere(jos, { x: 109, y: 100, t: 200 })).toBe(false)
     expect(esteAtingere(jos, { x: 100, y: 100, t: 700 })).toBe(false)
     expect(esteAtingere(null, { x: 100, y: 100, t: 1 })).toBe(false)
+  })
+
+  it('review r1: o rotire de 80 px care se întoarce lângă start NU e atingere; tremuratul mic rămâne atingere', () => {
+    let g = gestNou(100, 100, 0)
+    g = gestMisca(g, 140, 100); g = gestMisca(g, 180, 100); g = gestMisca(g, 103, 101)
+    expect(esteAtingere(g, { x: 102, y: 100, t: 300 })).toBe(false)
+    let h = gestNou(100, 100, 0)
+    h = gestMisca(h, 104, 103); h = gestMisca(h, 101, 100)
+    expect(esteAtingere(h, { x: 101, y: 100, t: 200 })).toBe(true)
+    expect(gestMisca(null, 1, 1)).toBe(null)
   })
 
   it('raza sferei: minim 55 mm; altfel 1,45 × raza exterioară (DN300: Ø323,9)', () => {
