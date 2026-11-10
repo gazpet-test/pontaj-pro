@@ -1,6 +1,7 @@
 -- E1-1b. O singura tranzactie: exclusiv scripts/livrare_migrare.sh.
 -- Nu activeaza hook-ul Auth, nu modifica inventarul legacy.
 -- r3 (09.11.2026): amprenta si poarta 1b pe lista alba (fn_portal_1b_snapshot); vezi comentariul de acolo.
+-- r7 (10.11.2026): ancorele revizuite ale obiectelor externe (scripts/portal/ancore_1b.sql) inainte de apply.
 DO $pre$
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
@@ -15,6 +16,43 @@ SET LOCAL search_path = public, pg_temp;
 LOCK TABLE auth.users IN SHARE MODE;
 LOCK TABLE public.employees,public.profiles,public.user_module_access,
  public.conturi_tip,public.conturi_teren,public.conturi_tip_jurnal IN ACCESS EXCLUSIVE MODE;
+-- Jakarinos r6 P1: callee-urile EXTERNE din lista alba 1b si triggerele de pe auth.users / profiles / notifications
+-- (definitie, owner, DEFINER, config, ACL; triggere: activare, definitie, functie) se compara cu valorile revizuite
+-- din inventarul read-only pe prod (sectiunea 9 = scripts/portal/ancore_1b.sql), INAINTE de apply si inca o data la
+-- final, inaintea fixarii amprentei: nimic din afara portalului nu intra nerevizuit in baseline. Gol / diferit = refuz.
+CREATE TEMP TABLE portal_1b_ancore_revizuit ON COMMIT DROP AS
+SELECT '{}'::jsonb AS v; -- PORTAL_1B_ANCORE
+CREATE FUNCTION pg_temp.portal_1b_ancore() RETURNS jsonb LANGUAGE sql STABLE AS $anc$
+-- ANCORE_1B_START
+SELECT jsonb_build_object(
+ 'functii',(SELECT coalesce(jsonb_object_agg(x.s,x.a),'{}'::jsonb) FROM (
+   SELECT n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' AS s,
+    jsonb_build_array(md5(pg_get_functiondef(p.oid)),pg_get_userbyid(p.proowner),p.prosecdef,p.proconfig,p.proacl) AS a
+   FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+   WHERE NOT (n.nspname='public' AND p.proname='handle_new_user')
+    AND (n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' IN ('public.fn_cont_candidati_angajat(text)',
+      'public.fn_nume_cuvinte(text)','public.fn_nume_familie(text)','extensions.unaccent(text)',
+      'public.fn_cont_notifica_owneri(text, text, text, text)','auth.uid()','auth.jwt()',
+      'public.fn_identitate_privilegiata()','public.fn_identitate_claims()','public.fn_identitate_eticheta()')
+     OR p.oid IN (SELECT t.tgfoid FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+      JOIN pg_namespace m ON m.oid=c.relnamespace WHERE NOT t.tgisinternal
+       AND ((m.nspname='auth' AND c.relname='users') OR (m.nspname='public' AND c.relname IN ('profiles','notifications')))))) x),
+ 'triggere',(SELECT coalesce(jsonb_object_agg(x.k,x.a),'{}'::jsonb) FROM (
+   SELECT m.nspname||'.'||c.relname||':'||t.tgname AS k,
+    jsonb_build_array(t.tgenabled::text,md5(pg_get_triggerdef(t.oid)),
+     (SELECT n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' FROM pg_proc p
+       JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.oid=t.tgfoid)) AS a
+   FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace m ON m.oid=c.relnamespace
+   WHERE NOT t.tgisinternal
+    AND ((m.nspname='auth' AND c.relname='users') OR (m.nspname='public' AND c.relname IN ('profiles','notifications')))) x))
+-- ANCORE_1B_END
+$anc$;
+DO $ancore_pre$
+BEGIN
+ IF (SELECT v FROM pg_temp.portal_1b_ancore_revizuit) = '{}'::jsonb
+  OR pg_temp.portal_1b_ancore() IS DISTINCT FROM (SELECT v FROM pg_temp.portal_1b_ancore_revizuit) THEN
+  RAISE EXCEPTION 'PORTAL_1B_ANCHOR_CHANGED'; END IF;
+END $ancore_pre$;
 CREATE TABLE public.portal_e1_1b_manifest (
  cheie text PRIMARY KEY CHECK (cheie IN ('handle_live','eligibil_live','role_live','post_snapshot')),valoare jsonb NOT NULL);
 ALTER TABLE public.portal_e1_1b_manifest ENABLE ROW LEVEL SECURITY;
@@ -584,6 +622,9 @@ CREATE TRIGGER portal_1b_manifest_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON
  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
 DO $post$
 BEGIN
+ -- Ancorele, reverificate imediat inaintea fixarii amprentei (nicio schimbare externa in timpul apply-ului).
+ IF pg_temp.portal_1b_ancore() IS DISTINCT FROM (SELECT v FROM pg_temp.portal_1b_ancore_revizuit) THEN
+  RAISE EXCEPTION 'PORTAL_1B_ANCHOR_CHANGED'; END IF;
  IF public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_1B_POSTCONDITION'; END IF;
  INSERT INTO public.portal_e1_1b_manifest VALUES ('post_snapshot',public.fn_portal_1b_snapshot());
 END $post$;

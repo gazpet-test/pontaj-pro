@@ -288,6 +288,8 @@ GRANT EXECUTE ON FUNCTION public.fn_portal_porti_lipsa() TO postgres;
 
 DO $public_pre$
 DECLARE v_live text[]; r record;
+  -- Jakarinos r6 P2: owner-ul functiilor net din inventarul prod (sectiunea 2), verificat inainte de baseline.
+  c_net_owner CONSTANT text := 'supabase_admin';
 BEGIN
   SELECT coalesce(array_agg('public.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')'
     ORDER BY ('public.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')') COLLATE "C"),'{}')
@@ -316,7 +318,7 @@ BEGIN
     RAISE EXCEPTION 'PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED'; END IF;
   FOR r IN SELECT key,value FROM jsonb_each_text(public.fn_portal_net_md5()) LOOP
     IF r.value IS DISTINCT FROM (SELECT md5(pg_get_functiondef(p.oid)) FROM pg_proc p
-      WHERE p.oid=to_regprocedure(r.key)) THEN
+      WHERE p.oid=to_regprocedure(r.key) AND pg_get_userbyid(p.proowner)=c_net_owner) THEN
       RAISE EXCEPTION 'PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED'; END IF;
   END LOOP;
 END $public_pre$;

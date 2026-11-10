@@ -117,6 +117,10 @@ q "CREATE OR REPLACE FUNCTION net.portal_fixture_net_01() RETURNS integer LANGUA
 q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 2'" >/dev/null
 hold_18a "$MIG" PORTAL_PUBLIC_BASELINE_UNREVIEWED_OR_CHANGED public_corp
 q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 1'" >/dev/null
+# Jakarinos r6 P2: owner-ul unei functii net schimbat inainte de apply (definitie si set neschimbate) = refuz.
+"${ADMIN[@]}" -d "$DB" -c 'ALTER FUNCTION net.portal_fixture_net_02() OWNER TO supabase_auth_admin' >/dev/null
+hold_18a "$MIG" PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED net_owner
+"${ADMIN[@]}" -d "$DB" -c 'ALTER FUNCTION net.portal_fixture_net_02() OWNER TO postgres' >/dev/null
 runner 20261118120000 "$MIG" >"$TMP/apply.log" 2>&1 || { cat "$TMP/apply.log"; fail apply; }
 # Inventar: owner-ul aprobat = erp; pending + contul legat de fisa cu drept pe modul (neaprobat) = neaprobat.
 [[ "$(q "SELECT string_agg(tip||':'||n,',' ORDER BY tip) FROM (SELECT tip,count(*) n FROM public.conturi_tip GROUP BY tip) x")" == 'erp:1,neaprobat:2,teren:3' ]] \
@@ -127,9 +131,36 @@ q 'GRANT teren TO postgres WITH INHERIT FALSE, SET TRUE' >/dev/null
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1a.test.sql" >"$TMP/tests.log" 2>&1 || { cat "$TMP/tests.log"; fail tests; }
 grep -q PORTAL_E1_1A_TEST_END "$TMP/tests.log" || fail 'test end marker'
 [[ "$(q 'SELECT public.fn_portal_porti_lipsa()')" == '{}' ]] || fail gate
-MIG_1B="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
+MIG_1B_SRC="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
 REV_1B="$ROOT/supabase/revenire/20261119a_portal_teren_provisioning_ROLLBACK.sql"
 baseline "$TMP/before_1b.sql"
+# r7 (Jakarinos r6 P1): ancorele obiectelor externe se citesc din clusterul efemer INAINTE de apply (aceeasi interogare
+# ca inventarul de pe prod) si intra in copia 19a ca literal; artefactul de productie are ancorele revizuite din prod.
+ANCORE="$TMP/ancore_1b.json"
+"${PSQL[@]}" -At -f "$ROOT/scripts/portal/ancore_1b.sql" >"$ANCORE" || fail 'ancore 1b'
+mkdir "$TMP/v1b"
+MIG_1B="$TMP/v1b/20261119a_portal_teren_provisioning.sql"
+python3 "$ROOT/scripts/portal/prepare_fixture_1b.py" "$MIG_1B_SRC" "$MIG_1B" --ancore "$ANCORE" >/dev/null || fail 'fixture 1b'
+hold_1b() { # $1 = artefactul, $2 = motivul exact, $3 = eticheta; refuz ATOMIC, fara obiecte 1b ramase
+  local rc=0 log="$TMP/hold1b_$3.log"
+  runner 20261119120000 "$1" >"$log" 2>&1 || rc=$?
+  [[ "$rc" == 10 ]] && grep -q "$2" "$log" || { cat "$log"; fail "expected HOLD 1b $2 ($3)"; }
+  [[ "$(q "SELECT to_regclass('public.portal_provisioning') IS NULL AND to_regclass('public.portal_e1_1b_manifest') IS NULL")" == t ]] \
+    || fail "partial E1-1b after HOLD $3"
+}
+# Artefactul cu ancorele productiei nu se potriveste cu clusterul efemer = refuz.
+hold_1b "$MIG_1B_SRC" PORTAL_1B_ANCHOR_CHANGED original
+# Functia triggerului de pe notifications schimbata inainte de apply (semnatura si ACL pastrate) = refuz atomic.
+"${PSQL[@]}" -At -c "SELECT pg_get_functiondef('public.fn_notificari_ruteaza_ofertare()'::regprocedure)" >"$TMP/notif_def.sql"
+printf ';\n' >>"$TMP/notif_def.sql"
+q "CREATE OR REPLACE FUNCTION public.fn_notificari_ruteaza_ofertare() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS \$f\$ BEGIN PERFORM public.fn_identitate_claims(); RETURN NEW; END \$f\$" >/dev/null
+hold_1b "$MIG_1B" PORTAL_1B_ANCHOR_CHANGED notif_corp
+"${PSQL[@]}" -f "$TMP/notif_def.sql" >/dev/null
+# Un trigger de pe profiles dezactivat inainte de apply = refuz atomic.
+q 'ALTER TABLE public.profiles DISABLE TRIGGER trg_profiles_protectie_legatura' >/dev/null
+hold_1b "$MIG_1B" PORTAL_1B_ANCHOR_CHANGED profiles_trigger_off
+q 'ALTER TABLE public.profiles ENABLE TRIGGER trg_profiles_protectie_legatura' >/dev/null
+[[ "$("${PSQL[@]}" -At -f "$ROOT/scripts/portal/ancore_1b.sql")" == "$(cat "$ANCORE")" ]] || fail 'fixture anchors not restored'
 runner 20261119120000 "$MIG_1B" >"$TMP/apply_1b.log" 2>&1 || { cat "$TMP/apply_1b.log"; fail 'apply E1-1b'; }
 [[ "$(q 'SELECT public.fn_portal_porti_lipsa_1b()')" == '{}' ]] || fail 'gate E1-1b'
 [[ -z "$("${PSQL[@]}" -At -f "$ROOT/scripts/control_0e.sql")" ]] || fail 'E1-1b control 0e'

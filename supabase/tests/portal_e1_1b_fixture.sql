@@ -96,6 +96,18 @@ REVOKE ALL ON FUNCTION public.fn_identitate_claims(),public.fn_identitate_privil
  public.fn_profiles_protectie_legatura() FROM PUBLIC;
 CREATE TRIGGER trg_profiles_protectie_legatura BEFORE UPDATE ON public.profiles
  FOR EACH ROW EXECUTE FUNCTION public.fn_profiles_protectie_legatura();
+-- r7 (Jakarinos r6 P1): notifications cu triggerul de rutare de pe prod (DEFINER, fara apeluri), ca ancorele
+-- triggerelor de pe notifications sa fie testate (schimbat inainte de apply = refuz atomic).
+CREATE TABLE public.notifications (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, modul text, link_to text);
+CREATE FUNCTION public.fn_notificari_ruteaza_ofertare() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $$
+BEGIN
+  IF coalesce(NEW.link_to,'') LIKE '/ofertare%' AND NEW.modul <> 'Ofertare' THEN NEW.modul := 'Ofertare'; END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.fn_notificari_ruteaza_ofertare() FROM PUBLIC;
+CREATE TRIGGER trg_notificari_ruteaza_ofertare BEFORE INSERT ON public.notifications
+ FOR EACH ROW EXECUTE FUNCTION public.fn_notificari_ruteaza_ofertare();
 RESET ROLE;
 CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 -- GoTrue executa INSERT ca supabase_auth_admin, nu ca proprietarul functiei.

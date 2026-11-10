@@ -91,6 +91,10 @@ class StaticDelivery(unittest.TestCase):
             self.assertIn('"net.portal_fixture_net_12()"', sql)
             self.assertNotIn("'{}'::jsonb;\n$nethash$", sql)
             self.assertIn("'" + hashlib.sha256(OWNER.encode()).hexdigest() + "'", sql)
+            # r7 (Jakarinos r6 P2): owner-ul net = supabase_admin in productie, postgres numai in copia de harness
+            self.assertIn("c_net_owner CONSTANT text := 'postgres';", sql)
+            self.assertIn(b"c_net_owner CONSTANT text := 'supabase_admin';", before)
+            self.assertIn(b"pg_get_userbyid(p.proowner)=c_net_owner", before)
             result = run(VALIDATOR, a)
             self.assertEqual(result.returncode, 0, result.stderr)
             # Fara --erp, lista ramane goala (testul negativ din harness).

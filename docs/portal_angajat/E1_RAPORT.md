@@ -205,3 +205,13 @@ handle_new_user, profiles_role_chk, hook-ul sau rolurile; niciuna nu da EXECUTE 
 ## E1-1b r5 — 09.11.2026 (Jakarinos r4: P0 0, P1 0, P2 1)
 - Amprenta 1b include configuratia `pg_sequence` a secventelor din lista alba (fara contor). Teste: incrementul schimbat
   = poarta rosie si revenire refuzata; `nextval` = poarta verde.
+
+## E1-1a/1b r6–r7 — 10.11.2026
+- r6: listele din inventarul read-only pe prod (10.11): net (12, sesiunea de chat), ERP (27 de hash-uri, confirmate de
+  owner); lista public verificata identica. Jakarinos r6: NO-GO (P1 1, P2 1), ambele despre ce se invata la apply.
+- r7, P1: callee-urile EXTERNE din lista alba 1b si triggerele de pe auth.users / profiles / notifications (cu functiile
+  lor) se compara cu ancorele revizuite din prod (`scripts/portal/ancore_1b.sql` = sectiunea 9 a inventarului) inainte de
+  apply si inca o data la final; ancore goale sau diferite = refuz atomic. Fixture: notifications + triggerul de rutare.
+  Harness: functia triggerului de pe notifications schimbata / trigger de pe profiles dezactivat inainte de apply = refuz.
+- r7, P2: owner-ul functiilor net (supabase_admin) verificat inainte de baseline; harness: owner schimbat = refuz.
+- Ancorele de productie se completeaza din sectiunea 9 (o rulare read-only); pana atunci 19a refuza atomic.

@@ -69,6 +69,12 @@ text = replace_once(hash_pattern, text, lambda m: m.group(1) + "\n SELECT " + sq
 net_pattern = re.compile(r"(CREATE FUNCTION public\.fn_portal_net_md5\(\) RETURNS jsonb.*?AS \$nethash\$).*?(\$nethash\$;)", re.S)
 text = replace_once(net_pattern, text, lambda m: m.group(1) + "\n SELECT " + sql_literal(net) + ";\n" + m.group(2), "net md5")
 
+# owner-ul functiilor net: pe prod supabase_admin; in clusterul efemer functiile sintetice net sunt ale lui postgres
+owner_line = "c_net_owner CONSTANT text := 'supabase_admin';"
+if text.count(owner_line) != 1:
+    hold("marcaj owner net: trebuie exact o aparitie")
+text = text.replace(owner_line, "c_net_owner CONSTANT text := 'postgres';")
+
 erp_pattern = re.compile(r"(CREATE TEMP TABLE portal_erp_aprobat ON COMMIT DROP AS\nSELECT ARRAY\[).*?(\]::text\[\] AS lista;)", re.S)
 hashes = ",".join("'" + hashlib.sha256(u.encode("utf-8")).hexdigest() + "'" for u in args.erp)
 text = replace_once(erp_pattern, text, lambda m: m.group(1) + hashes + m.group(2), "lista ERP")

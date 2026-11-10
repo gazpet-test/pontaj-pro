@@ -121,4 +121,32 @@ SELECT '7_functii' AS sectiune, 'public.'||p.proname||'('||oidvectortypes(p.proa
 FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname IN ('fn_zile_lucratoare')
 ORDER BY 2;
 
+-- 9) Ancorele E1-1b (Jakarinos r6 P1): o singura valoare jsonb; intra ca literal in 20261119a (PORTAL_1B_ANCORE).
+--    Aceeasi interogare ca scripts/portal/ancore_1b.sql si ca migrarea (paritate verificata static). Fara date.
+SELECT '9_ancore_1b' AS sectiune, (
+-- ANCORE_1B_START
+SELECT jsonb_build_object(
+ 'functii',(SELECT coalesce(jsonb_object_agg(x.s,x.a),'{}'::jsonb) FROM (
+   SELECT n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' AS s,
+    jsonb_build_array(md5(pg_get_functiondef(p.oid)),pg_get_userbyid(p.proowner),p.prosecdef,p.proconfig,p.proacl) AS a
+   FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+   WHERE NOT (n.nspname='public' AND p.proname='handle_new_user')
+    AND (n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' IN ('public.fn_cont_candidati_angajat(text)',
+      'public.fn_nume_cuvinte(text)','public.fn_nume_familie(text)','extensions.unaccent(text)',
+      'public.fn_cont_notifica_owneri(text, text, text, text)','auth.uid()','auth.jwt()',
+      'public.fn_identitate_privilegiata()','public.fn_identitate_claims()','public.fn_identitate_eticheta()')
+     OR p.oid IN (SELECT t.tgfoid FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+      JOIN pg_namespace m ON m.oid=c.relnamespace WHERE NOT t.tgisinternal
+       AND ((m.nspname='auth' AND c.relname='users') OR (m.nspname='public' AND c.relname IN ('profiles','notifications')))))) x),
+ 'triggere',(SELECT coalesce(jsonb_object_agg(x.k,x.a),'{}'::jsonb) FROM (
+   SELECT m.nspname||'.'||c.relname||':'||t.tgname AS k,
+    jsonb_build_array(t.tgenabled::text,md5(pg_get_triggerdef(t.oid)),
+     (SELECT n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' FROM pg_proc p
+       JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.oid=t.tgfoid)) AS a
+   FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace m ON m.oid=c.relnamespace
+   WHERE NOT t.tgisinternal
+    AND ((m.nspname='auth' AND c.relname='users') OR (m.nspname='public' AND c.relname IN ('profiles','notifications')))) x))
+-- ANCORE_1B_END
+) AS ancore;
+
 ROLLBACK;

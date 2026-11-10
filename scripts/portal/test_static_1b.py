@@ -2,6 +2,7 @@
 """Verificari statice E1-1b; nu inlocuiesc PostgreSQL sau GoTrue real."""
 from pathlib import Path
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -129,6 +130,62 @@ class StaticProvisioning(unittest.TestCase):
         self.assertTrue(seen)
         for fn in sorted(seen):
             self.assertIn("'public." + fn + "(", body, fn)
+
+    def test_anchor_query_parity_and_fail_closed(self):
+        # r7 (Jakarinos r6 P1): aceeasi interogare de ancore in fisierul comun, in migrare si in inventar (L19).
+        def bloc(path):
+            text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
+            self.assertEqual(text.count('-- ANCORE_1B_START'), 1, path.name)
+            return text[text.index('-- ANCORE_1B_START'):text.index('-- ANCORE_1B_END')]
+        comun = bloc(ROOT / 'scripts/portal/ancore_1b.sql')
+        self.assertEqual(bloc(MIG), comun)
+        self.assertEqual(bloc(ROOT / 'scripts/portal/inventar_prod_e1.sql'), comun)
+        sql = MIG.read_text(encoding='utf-8').replace('\r\n', '\n')
+        m = re.findall(r"CREATE TEMP TABLE portal_1b_ancore_revizuit ON COMMIT DROP AS\nSELECT '(.*?)'::jsonb AS v; -- PORTAL_1B_ANCORE\n", sql, re.S)
+        self.assertEqual(len(m), 1)
+        if m[0] == '{}':
+            self.assertIn("IF (SELECT v FROM pg_temp.portal_1b_ancore_revizuit) = '{}'::jsonb", sql)
+        else:
+            ancore = json.loads(m[0].replace("''", "'"))
+            self.assertEqual(set(ancore), {'functii', 'triggere'})
+        # verificarea ancorelor e prima dupa lock-uri si se repeta inaintea fixarii amprentei
+        self.assertLess(sql.index('LOCK TABLE public.employees'), sql.index('DO $ancore_pre$'))
+        self.assertLess(sql.index('DO $ancore_pre$'), sql.index('CREATE TABLE public.portal_e1_1b_manifest'))
+        post = sql.split('DO $post$', 1)[1]
+        self.assertLess(post.index('pg_temp.portal_1b_ancore()'), post.index("'post_snapshot'"))
+
+    def test_fixture_1b_replaces_only_anchor_literal(self):
+        gen = ROOT / 'scripts/portal/prepare_fixture_1b.py'
+        folder = ROOT / '.tmp'
+        folder.mkdir(exist_ok=True)
+        good = folder / 'ancore_ok.json'
+        good.write_text(json.dumps({'functii': {"public.f()": ["x", "postgres", False, None, None]},
+                                    'triggere': {"public.profiles:t": ["O", "y", "public.f()"]}}), encoding='utf-8')
+        bad = folder / 'ancore_bad.json'
+        bad.write_text(json.dumps({'functii': {}, 'triggere': {}}), encoding='utf-8')
+        out = folder / 'mig_1b_fixture.sql'
+        try:
+            r = subprocess.run([sys.executable, '-X', 'utf8', str(gen), str(MIG), str(out), '--ancore', str(good)],
+                               capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            a = MIG.read_text(encoding='utf-8').replace('\r\n', '\n')
+            b = out.read_text(encoding='utf-8')
+            self.assertNotEqual(a, b)
+            self.assertEqual(re.sub(r"SELECT '.*?'::jsonb AS v; -- PORTAL_1B_ANCORE", '', a, flags=re.S),
+                             re.sub(r"SELECT '.*?'::jsonb AS v; -- PORTAL_1B_ANCORE", '', b, flags=re.S))
+            v = subprocess.run([sys.executable, '-X', 'utf8', str(ROOT / 'scripts/livrare_validator.py'), str(out)],
+                               capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(v.returncode, 0, v.stderr)
+            out.unlink()
+            r = subprocess.run([sys.executable, '-X', 'utf8', str(gen), str(MIG), str(out), '--ancore', str(bad)],
+                               capture_output=True, text=True, encoding='utf-8')
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('HOLD', r.stderr)
+            self.assertFalse(out.exists())
+        finally:
+            for f in (good, bad, out):
+                if f.exists():
+                    f.unlink()
 
     def test_hook_and_provisioning_share_employee_predicate(self):
         sql = MIG.read_text(encoding='utf-8')
