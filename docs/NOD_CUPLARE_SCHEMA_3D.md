@@ -67,6 +67,10 @@ Câmp **opțional** pe grup (formatul rămâne `versiune: 1`; modelele fără el
   grupurile amplasate în aceeași scenă; grupurile neamplasate sunt enumerate deasupra („Nu sunt amplasate: …”).
 - În vederea comună: aceleași sfere, aceeași fișă, aceleași filtre. „Fără loc în 3D” și „în schemă, dar nu în listă” se calculează
   pe reuniunea grupurilor amplasate, fără dubluri; două suduri din grupuri diferite care ajung în același loc (≤ 1 mm) sunt o sferă.
+  „Același loc” se caută pe o grilă cu latura de 2 mm (vecinii din celulele alăturate), cu rezultat identic cu compararea
+  fiecare-cu-fiecare și la limita de rotunjire a pragului (test de paritate).
+- Grupurile pot fi depărtate (până la ±1 km): planul îndepărtat al camerei se potrivește la fiecare randare după sfera care
+  cuprinde toată scena, deci piesele și sudurile nu dispar la încadrare sau la zoom înapoi (nodurile obișnuite rămân la 1000 m).
 - Sub scenă: câte un buton pe grup (👁 arată / 🚫 ascunde) și „⤢ Du-mă la” (camera pe grup); butonul „🏷 Etichete” ascunde
   etichetele de tip `eticheta`. Piesele fiecărui grup sunt lipite pe material (câteva apeluri de desenare în loc de sute).
 

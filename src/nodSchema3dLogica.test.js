@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseModel3d, mapeazaSuduri3d, culoarePunct3d, culoareDn, CULORI_DN, CULOARE_DN_ALTA, esteObiectLipsa, esteAtingere, razaSfera,
   cutieGrup, spreScena, dnuriGrup, estePunct, gestNou, gestMisca, punctePeCod,
-  citesteAmplasare, transformaPunct, aplicaAmplasare, instalatia, puncteVizibile, ID_INSTALATIE,
+  citesteAmplasare, transformaPunct, aplicaAmplasare, instalatia, puncteVizibile, ID_INSTALATIE, departareCamera,
 } from './nodSchema3dLogica.js'
 
 const MODEL = () => ({
@@ -494,5 +494,66 @@ describe('vederea „Toată instalația”', () => {
     expect(new Set([...punctePeCod(lant).values()].map(v => v.cheie))).toEqual(new Set(['3d:CR-100']))
     const multe = Array.from({ length: 1000 }, (_, i) => ({ cod: `CR-${1000 + i}`, p: [(i % 40) * 1000, Math.floor(i / 40) * 1000, 0] }))
     expect(new Set([...punctePeCod(multe).values()].map(v => v.cheie)).size).toBe(1000)
+  })
+
+  // ── review r1 (P2): grila trebuie să dea EXACT rezultatul variantei fiecare-cu-fiecare, și la limita numerică a pragului ──
+  // Referința e scrisă aici, independent: componente conexe prin parcurgere (BFS) pe toate perechile, aceeași regulă din
+  // specificație (distanța 3D ≤ 1 mm, Math.hypot), cheia = cel mai mic cod, poziția = a primei suduri din listă.
+  const referinta = l => {
+    const comp = new Array(l.length).fill(-1)
+    for (let s = 0; s < l.length; s++) {
+      if (comp[s] !== -1) continue
+      comp[s] = s
+      const coada = [s]
+      while (coada.length) {
+        const i = coada.shift()
+        for (let j = 0; j < l.length; j++) {
+          if (comp[j] !== -1) continue
+          const a = l[i].p, b = l[j].p
+          if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= 1) { comp[j] = s; coada.push(j) }
+        }
+      }
+    }
+    const coduri = new Map()
+    l.forEach((x, i) => { if (!coduri.has(comp[i])) coduri.set(comp[i], []); coduri.get(comp[i]).push(x.cod) })
+    return new Map(l.map((x, i) => [x.cod, { cheie: `3d:${[...coduri.get(comp[i])].sort()[0]}`, p: l[comp[i]].p }]))
+  }
+  const caSiReferinta = l => expect(Object.fromEntries(punctePeCod(l))).toEqual(Object.fromEntries(referinta(l)))
+
+  it('review r1: contraexemplul [0.9999999999999999,0,0] / [2,0,0] (hypot rotunjit = 1) = același loc, ca fiecare-cu-fiecare', () => {
+    const l = [{ cod: 'CP-001', p: [2, 0, 0] }, { cod: 'CP-002', p: [0.9999999999999999, 0, 0] }]
+    expect(Math.hypot(2 - 0.9999999999999999, 0, 0)).toBe(1)             // premisa contraexemplului
+    const pe = punctePeCod(l)
+    expect(pe.get('CP-002')).toEqual({ cheie: '3d:CP-001', p: [2, 0, 0] })   // cheia ȘI poziția celei dintâi
+    caSiReferinta(l)
+    // aceeași limită pe celelalte axe, cu semn negativ și departe de origine (după amplasare, la ±1 km)
+    caSiReferinta([{ cod: 'CR-001', p: [0, -0.9999999999999999, 0] }, { cod: 'CR-002', p: [0, -2, 0] }])
+    caSiReferinta([{ cod: 'CR-003', p: [0, 0, 0.9999999999999999] }, { cod: 'CR-004', p: [0, 0, 2] }])
+    caSiReferinta([{ cod: 'CR-005', p: [999998, 0, 0] }, { cod: 'CR-006', p: [999999, 0, 0] }, { cod: 'CR-007', p: [-999999.0000000001, 5, 5] }, { cod: 'CR-008', p: [-1000000, 5, 5] }])
+  })
+
+  it('review r1: paritate cu fiecare-cu-fiecare pe 400 de seturi aleatoare (grilă de 1/8 mm, limite de prag, coordonate mari)', () => {
+    let st = 12345
+    const rnd = () => { st = (st * 1103515245 + 12345) % 2147483648; return st / 2147483648 }
+    // puține valori distincte pe axă: perechile care diferă pe o singură axă (exact cazul de limită) apar des
+    const limite = [0, 0.5, 1, 0.9999999999999999, 1.0000000000000002, 2, 1.9999999999999998, 3, -0.9999999999999999, -1, -2]
+    const baze = [0, 0, -0.0000001, 999997.5, -999998.25, 123.456]
+    let unite = 0
+    for (let t = 0; t < 400; t++) {
+      const baza = baze[t % baze.length], n = 2 + Math.floor(rnd() * 40)
+      const coord = () => baza + (rnd() < 0.8 ? limite[Math.floor(rnd() * limite.length)] : Math.floor(rnd() * 32) / 8)
+      const l = Array.from({ length: n }, (_, i) => ({ cod: `CP-${String(i).padStart(3, '0')}`, p: [coord(), coord(), coord()] }))
+      unite += new Set([...referinta(l).values()].map(v => v.cheie)).size < n ? 1 : 0
+      caSiReferinta(l)
+    }
+    expect(unite).toBeGreaterThan(100)                                 // seturile chiar conțin locuri cu mai multe suduri
+  })
+
+  it('review r1: planul îndepărtat = distanța până la centru + raza scenei (+5%), cel puțin 1000 m, niciodată NaN', () => {
+    expect(departareCamera(30, 12)).toBe(1000)                         // nod obișnuit: proiecția de dinainte
+    expect(departareCamera(1500, 905)).toBeCloseTo(2525.25, 9)         // (1500 + 905) × 1,05 — dincolo de 1000 m
+    expect(departareCamera(1500, 905)).toBeGreaterThan(1500 + 905)     // tot ce e în sferă rămâne înaintea planului
+    expect(departareCamera(NaN, 5)).toBe(1000)
+    expect(departareCamera(Infinity, 5)).toBe(1000)
   })
 })

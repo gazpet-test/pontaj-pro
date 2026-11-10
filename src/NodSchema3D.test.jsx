@@ -5,8 +5,10 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import * as THREE_REAL from './nodSchema3dThree.js'
+import * as THREE_REAL from 'three'
+import * as THREE_SCENA from './nodSchema3dThree.js'
 import { construiesteScena } from './NodSchema3D.jsx'
+import { parseModel3d, instalatia } from './nodSchema3dLogica.js'
 
 let JSDOM = null
 const surse = [import.meta.url, process.env.REDARI_JSDOM_DIR && path.join(process.env.REDARI_JSDOM_DIR, 'package.json')].filter(Boolean)
@@ -61,7 +63,7 @@ function mediu({ picaLaSetSize = 0 } = {}) {   // picaLaSetSize = al câtelea ap
     removeEventListener(t) { this.asc.set(t, (this.asc.get(t) || 0) - 1) }
     update() {}
   }
-  const THREE = { ...THREE_REAL, WebGLRenderer: RendererFals }
+  const THREE = { ...THREE_SCENA, WebGLRenderer: RendererFals }   // exact ce primește scena în aplicație (exporturile pe nume)
   const gazda = d.getElementById('g')
   // ascultătorii de pe canvas: se numără adăugările și scoaterile (controalele false nu pun ascultători, deci sunt doar ai scenei)
   const contor = { add: 0, rem: 0 }
@@ -209,5 +211,63 @@ dom(JSDOM ? 'NodSchema3D — eliberarea resurselor (jsdom + Three.js real)' : `N
     expect([...materiale].filter(x => !eliberate.has(x))).toEqual([])
     expect(m.randere[0].dispose).toHaveBeenCalledTimes(1)
     expect(m.gazda.querySelectorAll('canvas')).toHaveLength(0)
+  })
+
+  // ── review r1 (P2): amplasări depărtate — planul îndepărtat al camerei trebuie să cuprindă toată scena încadrată ──
+  // Model real trecut prin parseModel3d + instalatia (două grupuri valide la x = ±900 000 mm), ecran 4:3, controale care
+  // îndreaptă camera spre țintă (ca OrbitControls.update). Verificarea e independentă de cod: fiecare punct al pieselor și
+  // sudurilor, dus în scenă (x, z, -y) / 1000, trebuie să fie în piramida de vedere a camerei (frustum) după încadrare.
+  const departat = () => {
+    const grupDe = (id, prefix, x) => ({ id, prefixe: [prefix], teren_z: 0, amplasare: { origine: [x, 0, 0], rot_z: 0 },
+      elemente: [{ tip: 'teava', a: [0, 0, 0], b: [3000, 0, 0], dn: 250 }, { tip: 'teava', a: [3000, 0, 0], b: [3000, 2000, 0], dn: 250 }],
+      suduri: [{ cod: `${prefix}-001`, p: [3000, 0, 0], cert: 'desen' }] })
+    const model = parseModel3d({ format: 'gazpet-nod-3d', versiune: 1, unitate: 'mm',
+      grupuri: [grupDe('vest', 'CR', -900000), grupDe('est', 'CP', 900000)] })
+    expect(model.erori).toEqual([])
+    return instalatia(model)
+  }
+  const inVedere = (camera, grup) => {
+    camera.updateMatrixWorld()
+    const fr = new THREE_REAL.Frustum().setFromProjectionMatrix(new THREE_REAL.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse))
+    const pts = [...grup.elemente.flatMap(e => [e.a, e.b, e.c, e.r, e.p].filter(Boolean)), ...grup.suduri.map(s => s.p)]
+    return pts.filter(p => !fr.containsPoint(new THREE_REAL.Vector3(p[0] / 1000, p[2] / 1000, -p[1] / 1000))).length
+  }
+  const scenaCuCamera = grup => {
+    const m = mediu()
+    Object.defineProperty(m.gazda, 'clientWidth', { value: 800 }); Object.defineProperty(m.gazda, 'clientHeight', { value: 600 })
+    const camere = []
+    const THREE = { ...m.THREE, PerspectiveCamera: class extends THREE_REAL.PerspectiveCamera { constructor(...a) { super(...a); camere.push(this) } } }
+    class Controale extends m.ControaleFalse {
+      constructor(camera, el) { super(camera, el); this.camera = camera; this.fn = new Map() }
+      addEventListener(t, f) { super.addEventListener(t, f); this.fn.set(t, f) }
+      update() { this.camera.lookAt(this.target) }
+      schimba() { this.update(); this.fn.get('change')?.() }       // ca OrbitControls după rotire / zoom: evenimentul „change”
+    }
+    const s = construiesteScena(THREE, Controale, m.gazda, grup, () => {})
+    return { s, camera: camere[0], c: m.controale[0] }
+  }
+
+  it('review r1: două grupuri la x = ±900 m (ecran 4:3) = toate piesele și sudurile în vedere, nu tăiate de planul îndepărtat', () => {
+    const grup = departat()
+    const { s, camera, c } = scenaCuCamera(grup)
+    expect(camera.aspect).toBeCloseTo(4 / 3, 9)
+    expect(camera.position.distanceTo(c.target)).toBeGreaterThan(1000)   // premisa: încadrarea e dincolo de vechiul prag de 1000 m
+    expect(inVedere(camera, grup)).toBe(0)
+    // „du-mă la” pe un grup, apoi zoom-ul înapoi până la maxDistance (ca omul cu rotița): scena rămâne întreagă
+    s.mergiLa('est')
+    expect(inVedere(camera, { elemente: grup.parti[1].elemente, suduri: grup.parti[1].suduri })).toBe(0)
+    s.incadreaza()
+    const dir = camera.position.clone().sub(c.target).normalize()
+    camera.position.copy(c.target).addScaledVector(dir, c.maxDistance)
+    c.schimba()
+    expect(inVedere(camera, grup)).toBe(0)
+    s.dispose()
+  })
+
+  it('review r1: nodul mic obișnuit păstrează proiecția de dinainte (near 0,05 m, far 1000 m)', () => {
+    const { s, camera } = scenaCuCamera(COMUN())
+    expect([camera.near, camera.far]).toEqual([0.05, 1000])
+    expect(inVedere(camera, COMUN())).toBe(0)
+    s.dispose()
   })
 })

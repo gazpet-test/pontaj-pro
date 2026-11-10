@@ -215,19 +215,24 @@ export const PRAG_MM = 1   // două suduri la cel mult 1 mm una de alta = acela�
  * Locurile sudurilor din model (TOATE, nefiltrate): două suduri la ≤ PRAG_MM (distanța reală 3D, nu rotunjire) sunt în același loc,
  * iar legătura e tranzitivă (lanț de vecini). Cheia locului = cel mai mic cod din el, poziția = a primei suduri din model:
  * nu depind de filtre sau de ordinea din listă. Întoarce Map cod -> { cheie, p }.
- * Vecinii se caută pe o grilă cu latura PRAG_MM (doar celulele alăturate), nu fiecare cu fiecare: în vederea comună sunt
- * sudurile tuturor grupurilor. Rădăcina unui loc rămâne cel mai mic indice (unirea leagă mereu indicele mare de cel mic).
+ * Vecinii se caută pe o grilă (doar celulele alăturate), nu fiecare cu fiecare: în vederea comună sunt sudurile tuturor
+ * grupurilor. Rădăcina unui loc rămâne cel mai mic indice (unirea leagă mereu indicele mare de cel mic).
+ * Paritate EXACTĂ cu varianta fiecare-cu-fiecare (review r1): aceeași comparație (`aproape`, cu Math.hypot și rotunjirile lui),
+ * iar latura celulei e 2 × PRAG_MM, nu PRAG_MM. Cu latura PRAG_MM, [0.9999999999999999, 0, 0] și [2, 0, 0] (hypot rotunjit = 1)
+ * cădeau în celulele 0 și 2, deci nu se mai comparau. Orice pereche cu hypot ≤ PRAG_MM are diferența REALĂ pe fiecare axă cu mult
+ * sub 2 × PRAG_MM (eroarea scăderii la ±2 km e ~1e-10 mm), deci celulele ei diferă cu cel mult 1 pe fiecare axă (v / 2 e exact).
  */
+const LATURA_GRILA = 2 * PRAG_MM
+const aproape = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= PRAG_MM
 export function punctePeCod(suduri) {
   const l = suduri || [], par = l.map((_, i) => i)
   const rad = i => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i] } return i }
   const grila = new Map()
   l.forEach((s, j) => {
-    const c = s.p.map(v => Math.floor(v / PRAG_MM))
+    const c = s.p.map(v => Math.floor(v / LATURA_GRILA))
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
       for (const i of grila.get(`${c[0] + dx},${c[1] + dy},${c[2] + dz}`) || []) {
-        const a = l[i].p, b = s.p
-        if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= PRAG_MM) { const x = rad(i), y = rad(j); if (x !== y) par[Math.max(x, y)] = Math.min(x, y) }
+        if (aproape(l[i].p, s.p)) { const x = rad(i), y = rad(j); if (x !== y) par[Math.max(x, y)] = Math.min(x, y) }
       }
     }
     const k = c.join(',')
@@ -322,6 +327,17 @@ export function cutieGrup(grup) {
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity]
   for (const p of pts) for (let i = 0; i < 3; i++) { if (p[i] < min[i]) min[i] = p[i]; if (p[i] > max[i]) max[i] = p[i] }
   return { min, max, centru: [0, 1, 2].map(i => (min[i] + max[i]) / 2), marime: Math.max(...[0, 1, 2].map(i => max[i] - min[i])) }
+}
+
+/**
+ * Planul îndepărtat al camerei (m), din distanța camerei la centrul scenei și raza sferei care cuprinde scena: tot ce e în scenă
+ * rămâne înaintea lui, oricât de depărtate sunt grupurile și oricât s-a dat zoom înapoi (review r1: la ±900 m dispăreau piesele).
+ * Cel puțin 1000 m = proiecția de dinainte, neschimbată pentru nodurile obișnuite. Intrări nefinite = tot 1000 (nu NaN în cameră).
+ */
+export const DEPARTARE_MIN = 1000
+export function departareCamera(dist, raza) {
+  const d = (dist + raza) * 1.05
+  return Number.isFinite(d) && d > DEPARTARE_MIN ? d : DEPARTARE_MIN
 }
 
 /** Planul modelului (x est-ish, y, z în sus) -> sistemul Three.js (y în sus), în metri. */

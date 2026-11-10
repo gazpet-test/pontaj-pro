@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { G, S } from './NodCuplareVizualizare.jsx'
 import { celMaiAproape, RAZA_ATINGERE } from './nodCuplareLogica.js'
-import { culoarePunct3d, culoareDn, dnuriGrup, diametruExterior, razaSfera, cutieGrup, spreScena, esteAtingere, gestNou, gestMisca, puncteVizibile } from './nodSchema3dLogica.js'
+import { culoarePunct3d, culoareDn, dnuriGrup, diametruExterior, razaSfera, cutieGrup, spreScena, esteAtingere, gestNou, gestMisca, puncteVizibile, departareCamera } from './nodSchema3dLogica.js'
 
 export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   const gazda = useRef(null)
@@ -325,6 +325,16 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
 
     // ── camera + rotirea / zoom-ul ──
     const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 1000)
+    // sfera care cuprinde TOT ce e în scenă (piese, rezervoare, etichete, teren; sferele sudurilor stau pe piese, +1 m rezervă):
+    // planul îndepărtat se potrivește după ea la fiecare randare (review r1: amplasările depărtate depășeau 1000 m și dispăreau)
+    scene.updateMatrixWorld(true)
+    const cutieScena = new THREE.Box3().setFromObject(scene)
+    for (const p of [...parti.values()].flatMap(x => x.puncte)) cutieScena.expandByPoint(p)
+    const sferaScena = cutieScena.isEmpty() ? null : cutieScena.getBoundingSphere(new THREE.Sphere())
+    const potrivestePlanuri = () => {
+      const far = sferaScena ? departareCamera(camera.position.distanceTo(sferaScena.center), sferaScena.radius + 1) : camera.far
+      if (far !== camera.far) { camera.far = far; camera.updateProjectionMatrix() }
+    }
     const controale = new OrbitControls(camera, canvas)
     eliberari.push(() => controale.dispose())
     controale.enableDamping = false
@@ -445,6 +455,7 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     // ── randare la cerere ──
     let cadru = 0
     function randeaza() {
+      potrivestePlanuri()               // imediat (nu în cadru): camera mutată de încadrare / zoom / pan își vede toată scena
       if (cadru) return
       cadru = requestAnimationFrame(() => { cadru = 0; renderer.render(scene, camera) })
     }
