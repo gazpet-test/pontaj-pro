@@ -67,21 +67,25 @@ aplica app "$MIG" && fail "a doua aplicare a trecut"
 ok "a doua aplicare refuzata: $(grep -o 'ERROR:.*' "$L/a.log" | head -1)"
 
 echo "== r8b: preluarea alertelor vechi cu jobul blocat de alta sesiune (doua sesiuni reale)"
-# A: tine randul jobului vechi cu un UPDATE necomis cat doarme, apoi ROLLBACK. B: owner-ul apasa butonul => 55P03 imediat (NOWAIT), nimic scris.
-printf "BEGIN;\nUPDATE cron.job SET command = command WHERE jobname = 'polite_alerte_zilnic';\nSELECT pg_sleep(8);\nROLLBACK;\n" > "$L/ja.sql"
+# A: tine randul jobului vechi cu un UPDATE necomis pana primeste semnalul (rand in zz_semnal, pus DUPA verificarea lui B; plafon 60 s),
+# apoi ROLLBACK. B: owner-ul apasa butonul => 55P03 imediat (NOWAIT), nimic scris. Fara ferestre de timp fixe (Jakarinos r8b P3).
+"${PS[@]}" -d app -c "CREATE TABLE public.zz_semnal (x integer)" >/dev/null || fail "tabela de semnal"
+printf "BEGIN;\nUPDATE cron.job SET command = command WHERE jobname = 'polite_alerte_zilnic';\nDO \$a\$ BEGIN FOR i IN 1..600 LOOP EXIT WHEN EXISTS (SELECT 1 FROM public.zz_semnal); PERFORM pg_sleep(0.1); END LOOP; IF NOT EXISTS (SELECT 1 FROM public.zz_semnal) THEN RAISE EXCEPTION 'A: semnal lipsa'; END IF; END \$a\$;\nROLLBACK;\n" > "$L/ja.sql"
 printf "\\\\set VERBOSITY verbose\nBEGIN;\nUPDATE public.polite_alerte_config SET activ = true;\nSELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true), set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-00000000000a\",\"role\":\"authenticated\"}', true);\nSET LOCAL ROLE authenticated;\nSELECT public.fn_polite_alerte_opreste_vechi();\nROLLBACK;\n" > "$L/jb.sql"
 "${PS[@]}" -d app -f "$L/ja.sql" > "$L/ja.log" 2>&1 &
 PA=$!
 for k in $(seq 1 50); do
-  [ "$("${PS[@]}" -d app -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'app' AND state = 'active' AND query LIKE 'SELECT pg_sleep(8)%'")" = 1 ] && break
+  [ "$("${PS[@]}" -d app -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'app' AND state = 'active' AND query LIKE 'DO \$a\$%'")" = 1 ] && break
   sleep 0.2
 done
 [ "$k" -lt 50 ] || fail "sesiunea A nu a pornit"
 "${PS[@]}" -d app -f "$L/jb.sql" > "$L/jb.log" 2>&1 && fail "preluarea a trecut cu jobul blocat de alta sesiune"
 grep -q "55P03" "$L/jb.log" || { cat "$L/jb.log"; fail "preluarea a picat din alt motiv decat lock-ul pe job"; }
-[ "$("${PS[@]}" -d app -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'app' AND state = 'active' AND query LIKE 'SELECT pg_sleep(8)%'")" = 1 ] || fail "B a asteptat lock-ul (trebuia NOWAIT)"
+[ "$("${PS[@]}" -d app -Atc "SELECT count(*) FROM pg_stat_activity WHERE datname = 'app' AND state = 'active' AND query LIKE 'DO \$a\$%'")" = 1 ] || fail "B a asteptat lock-ul (trebuia NOWAIT)"
+"${PS[@]}" -d app -c "INSERT INTO public.zz_semnal VALUES (1)" >/dev/null || fail "semnalul catre A"
 wait $PA; EA=$?
 [ $EA -eq 0 ] || { cat "$L/ja.log"; fail "sesiunea A exit $EA"; }
+"${PS[@]}" -d app -c "DROP TABLE public.zz_semnal" >/dev/null || fail "stergerea tabelei de semnal"
 [ "$("${PS[@]}" -d app -Atc "SELECT (SELECT count(*) FROM cron.job WHERE jobname = 'polite_alerte_zilnic' AND command = 'SELECT fn_polite_send_alerte();') || ':' || (SELECT (vechi_oprit_la IS NULL AND NOT activ)::text FROM public.polite_alerte_config)")" = "1:true" ] || fail "dupa cursa: jobul vechi sau config schimbate"
 ok "jobul blocat de alta sesiune: 55P03 imediat, jobul vechi si config neschimbate"
 
