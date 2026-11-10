@@ -1,6 +1,7 @@
 -- Revenire 20261209a_executie_acces_proiect. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
--- Scoate tot ce a creat migrarea: tabelul executie_acces_proiect, cele 13 funcții (lista exactă), politicile RESTRICTIVE executie_acces_*
--- și trigger-ele trg_executie_acces_garda de pe tabelele 'proiect' / 'copil' din inventar, cele 4 politici de pe storage.objects, și redă
+-- Scoate tot ce a creat migrarea: tabelul executie_acces_proiect, cele 16 funcții (lista exactă), politicile RESTRICTIVE executie_acces_*
+-- și trigger-ele trg_executie_acces_garda de pe tabelele 'proiect' / 'proiect_optional' / 'copil' / 'inbox' din inventar (r4: și antetul
+-- raportului zilnic, graficul intern, coada Inboxului AI), cele 4 politici de pe storage.objects, și redă
 -- EXACT corpurile vechi ale celor 5 funcții de drept (fn_executie_nod_drept / contract / grafic / tinte, fn_raport_santier_drept), cu
 -- amprenta verificată după; mută înapoi în public originalul fn_executie_swap_tevi_pozitie (neschimbat) și șterge schema internă (r3).
 -- REFUZĂ dacă vreun cont e restrâns (are rânduri): după revenire acel cont ar vedea DIN NOU toate proiectele, pe tăcute. Scoaterea
@@ -31,15 +32,16 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
-  -- starea exactă a migrării: tabelul, cele 13 funcții, corpurile noi ale funcțiilor de drept
+  -- starea exactă a migrării: tabelul, cele 16 funcții, corpurile noi ale funcțiilor de drept
   IF to_regclass('public.executie_acces_proiect') IS NULL
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_acces_inventar', 'fn_executie_acces_e_owner', 'fn_executie_acces_nerestrans',
             'fn_executie_acces_lista', 'fn_executie_proiect_permis', 'fn_executie_acces_parinte_permis', 'fn_executie_acces_parinti',
             'fn_executie_acces_obiect_proiecte', 'fn_executie_acces_canon', 'fn_executie_acces_proiect_seteaza', 'fn_executie_acces_proiect_prov',
-            'fn_executie_acces_garda', 'fn_executie_acces_garda_copil']::name[])) <> 13
+            'fn_executie_acces_garda', 'fn_executie_acces_garda_copil', 'fn_executie_acces_garda_inbox',
+            'fn_executie_acces_inbox_rand', 'fn_executie_acces_inbox_obiect']::name[])) <> 16
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')) <> 13
+          WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')) <> 16
      OR EXISTS (SELECT 1 FROM (VALUES
                ('public.fn_executie_nod_drept(bigint, boolean)', '1f0faa030d0459412aafb6e1a024beff'),
                ('public.fn_executie_contract_drept(bigint, boolean)', 'f3c3dc6add32d563682494e804864e99'),
@@ -69,7 +71,7 @@ BEGIN
   END IF;
   -- tabelele acoperite: din inventarul migrării (aceeași listă), în ordinea numelui
   v_n := 0;
-  FOR r IN SELECT obiect FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'copil') ORDER BY obiect LOOP
+  FOR r IN SELECT obiect FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox') ORDER BY obiect LOOP
     EXECUTE format('LOCK TABLE public.%I IN ACCESS EXCLUSIVE MODE NOWAIT', r.obiect);
     IF (SELECT count(*) FROM pg_policy WHERE polrelid = to_regclass('public.' || r.obiect) AND polname LIKE 'executie\_acces\_%') <> 4
        OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('public.' || r.obiect) AND tgname = 'trg_executie_acces_garda') THEN
@@ -146,6 +148,9 @@ $f$$sql$;
   DROP FUNCTION public.fn_executie_acces_canon(jsonb);
   DROP FUNCTION public.fn_executie_acces_garda();
   DROP FUNCTION public.fn_executie_acces_garda_copil();
+  DROP FUNCTION public.fn_executie_acces_garda_inbox();
+  DROP FUNCTION public.fn_executie_acces_inbox_obiect(text, boolean);
+  DROP FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean);
   DROP FUNCTION public.fn_executie_acces_obiect_proiecte(text, text);
   DROP FUNCTION public.fn_executie_acces_parinti(text, boolean);
   DROP FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean);

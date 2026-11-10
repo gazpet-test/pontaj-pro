@@ -103,7 +103,10 @@ async function ruleazaFisier(db, fisier, st, mut) {
   await executa()
 }
 
+// opțional: node scripts/pglite/test_executie_acces_proiect_local.mjs '<regex pe numele scenariului>' (ex. '^(baza|m15)$')
+const DOAR = process.argv[2] ? new RegExp(process.argv[2]) : null
 async function scenariu(nume, { mutMig, mutRev, mutSchelet, mutDrept, mutDoc, inainte, doarMigrarea } = {}) {
+  if (DOAR && !DOAR.test(nume)) return { sarit: true }
   const db = new PGlite()
   const st = { vars: { ON_ERROR_STOP: '1' }, notite: [] }
   const mut = {}
@@ -167,11 +170,12 @@ INSERT INTO public.executie_fibra_intervale (proiect_id, etapa) VALUES (1, 'mono
 
 let esecuri = 0
 const raport = (eticheta, r, asteptat, motiv) => {
+  if (r.sarit) return
   // un mutant trebuie să pice EXACT unde trebuie (motiv = fragmentul erorii), nu oriunde
   const bine = r.ok === asteptat && (!motiv || motiv.test(r.eroare || ''))
   if (!bine) esecuri++
   console.log(`${bine ? 'OK  ' : 'FAIL'} ${eticheta}: ${r.ok ? 'harness trecut' : 'oprit: ' + (r.eroare || 'fără mesaj final').slice(0, 300)}`)
-  if (!bine || process.env.DETALII) for (const n of r.notite.filter(n => /^T|FAIL|NEPROBAT|20261209a/.test(n))) console.log('      · ' + n.slice(0, 400))
+  if (!bine || process.env.DETALII || DOAR) for (const n of r.notite.filter(n => /^T|FAIL|NEPROBAT|20261209a/.test(n))) console.log('      · ' + n.slice(0, 1200))
 }
 
 // 1) harness-ul real: trei proiecte pe „clonă”, apoi doar două (al treilea se creează în tranzacție)
@@ -188,7 +192,7 @@ const POL_P_CIT = `v_cit := format('(SELECT public.fn_executie_acces_nerestrans(
 const POL_P_SCR = `v_scr := format('(SELECT public.fn_executie_acces_nerestrans()) OR %I = ANY ((SELECT public.fn_executie_acces_lista(true))::bigint[])', r.cheie);`
 const POL_C_CIT = `v_cit := format('(SELECT public.fn_executie_acces_nerestrans()) OR %I IN (SELECT public.fn_executie_acces_parinti(%L, false))', r.cheie, r.parinte);`
 raport('M1 garda de scriere dezactivată pe rândul nou', await scenariu('m1', {
-  mutMig: t => inlocuieste(t, 'IF NOT public.fn_executie_proiect_permis(v_nou, true) THEN', 'IF false THEN'),
+  mutMig: t => inlocuieste(t, 'IF NOT (v_nul AND v_nou IS NULL) AND NOT public.fn_executie_proiect_permis(v_nou, true) THEN', 'IF false THEN'),
 }), false, /T3 FAIL/)
 raport('M2 toată lumea „nerestrânsă”', await scenariu('m2', {
   mutMig: t => inlocuieste(t, `  SELECT auth.uid() IS NOT NULL
@@ -230,12 +234,12 @@ raport('M10 raportul zilnic fără condiția de proiect', await scenariu('m10', 
     `) a(semnatura, amprenta, cu_service, cu_auth)`),
 }), false, /T3r FAIL/)
 raport('M11 Storage: citirea obiectelor lasă tot', await scenariu('m11', {
-  mutMig: t => inlocuieste(t, `'OR public.fn_executie_acces_obiect_proiecte(bucket_id, name) && (SELECT public.fn_executie_acces_lista(false))'`,
-    `'OR true OR public.fn_executie_acces_obiect_proiecte(bucket_id, name) && (SELECT public.fn_executie_acces_lista(false))'`),
-}), false, /T3s FAIL/)
+  mutMig: t => inlocuieste(t, `'OR public.fn_executie_acces_obiect_proiecte(bucket_id, name) && (SELECT public.fn_executie_acces_lista(false)) '`,
+    `'OR true OR public.fn_executie_acces_obiect_proiecte(bucket_id, name) && (SELECT public.fn_executie_acces_lista(false)) '`),
+}), false, /T3 FAIL|T3s FAIL/)
 raport('M12 garda sare peste documente_proiect', await scenariu('m12', {
-  mutMig: t => inlocuieste(t, `  IF TG_NARGS <> 1 THEN RAISE EXCEPTION 'acces proiect: trigger configurat greșit pe %', TG_TABLE_NAME; END IF;`,
-    `  IF TG_TABLE_NAME = 'documente_proiect' THEN RETURN CASE TG_OP WHEN 'DELETE' THEN OLD ELSE NEW END; END IF;\n  IF TG_NARGS <> 1 THEN RAISE EXCEPTION 'acces proiect: trigger configurat greșit pe %', TG_TABLE_NAME; END IF;`),
+  mutMig: t => inlocuieste(t, `  v_nul := TG_NARGS = 2;`,
+    `  IF TG_TABLE_NAME = 'documente_proiect' THEN RETURN CASE TG_OP WHEN 'DELETE' THEN OLD ELSE NEW END; END IF;\n  v_nul := TG_NARGS = 2;`),
 }), false, /T3 FAIL: (INSERT|calea DEFINER)[^\n]*documente_proiect/)
 raport('M13 scrierea legitimă oprită de politică (regula neatinsă)', await scenariu('m13', {
   mutMig: t => inlocuieste(t, POL_P_SCR, POL_P_SCR.replace(`OR %I = ANY ((SELECT public.fn_executie_acces_lista(true))::bigint[])'`, `OR (%I = ANY ((SELECT public.fn_executie_acces_lista(true))::bigint[]) AND false)'`)),
@@ -250,6 +254,39 @@ raport('M14 poarta swap nu mai verifică proiectul', await scenariu('m14', {
   },
   mutRev: t => inlocuieste(t, POARTA_MD5, md5(corp(inlocuieste(citeste(MIG), POARTA_COND, `  IF false\n     AND EXISTS`), POARTA_CAP))),
 }), false, /T3 FAIL: poarta swap/)
+
+// r4: review r3 — „doar citire” scrie antetul raportului; graficul intern și Inboxul AI fără listă
+raport('M15 antetul raportului: scrierea cere doar nivelul de citire (părintele „site”)', await scenariu('m15', {
+  mutMig: t => inlocuieste(t, `WHERE si.id = p_id AND (si.proiect_id IS NULL OR public.fn_executie_proiect_permis(si.proiect_id::bigint, p_scriere)))`,
+    `WHERE si.id = p_id AND (si.proiect_id IS NULL OR public.fn_executie_proiect_permis(si.proiect_id::bigint, false)))`),
+}), false, /T3 FAIL[^\n]*rapoarte_zilnice|T3r FAIL[^\n]*viewer/)
+raport('M16 antetul raportului rămâne exclus (ca în r3)', await scenariu('m16', {
+  mutMig: t => inlocuieste(t, `  ('tabel', 'rapoarte_zilnice', 'copil', 'site_id', 'site',`, `  ('tabel', 'rapoarte_zilnice', 'exclus', NULL, NULL,`),
+}), false, /T3r FAIL[^\n]*viewer/)
+raport('M17 graficul intern: citirea lasă toate proiectele', await scenariu('m17', {
+  mutMig: t => inlocuieste(t, `%I IS NULL OR %I = ANY ((SELECT public.fn_executie_acces_lista(false))::bigint[])'`,
+    `true OR %I IS NULL OR %I = ANY ((SELECT public.fn_executie_acces_lista(false))::bigint[])'`),
+}), false, /T3 FAIL: citire pe grafic_activitati/)
+raport('M18 graficul intern: rândurile fără proiect ascunse (regula prea strictă)', await scenariu('m18', {
+  mutMig: t => inlocuieste(t, `%I IS NULL OR %I = ANY ((SELECT public.fn_executie_acces_lista(false))::bigint[])'`,
+    `(%I IS NULL AND false) OR %I = ANY ((SELECT public.fn_executie_acces_lista(false))::bigint[])'`),
+}), false, /T3 FAIL: citire pe grafic_activitati/)
+raport('M19 Inbox AI: citirea rândului ignoră lista', await scenariu('m19', {
+  mutMig: t => inlocuieste(t, `         OR public.fn_executie_proiect_permis(p_entitate, p_scriere)\n`,
+    `         OR p_scriere IS FALSE OR public.fn_executie_proiect_permis(p_entitate, p_scriere)\n`),
+}), false, /T3i FAIL/)
+raport('M20 Inbox AI: garda pe rând dezactivată (calea DEFINER scrie pe p3)', await scenariu('m20', {
+  mutMig: t => inlocuieste(t, `  IF TG_NARGS <> 0 THEN RAISE EXCEPTION 'acces proiect: trigger configurat greșit pe %', TG_TABLE_NAME; END IF;`,
+    `  IF TG_NARGS = 0 THEN RETURN CASE TG_OP WHEN 'DELETE' THEN OLD ELSE NEW END; END IF;`),
+}), false, /T3i FAIL[^\n]*DEFINER/)
+// (citirea fișierelor Inboxului e oprită deja de politica de azi, prin rândul ascuns de politica cozii: ramura de citire din Storage e o
+// a doua barieră și nu se poate pica izolat; ramura care schimbă ceva e scrierea / ștergerea)
+raport('M21 Storage Inbox: ștergerea fișierelor lasă tot (dependența păstrată)', await scenariu('m21', {
+  mutMig: t => inlocuieste(t, `AND public.fn_executie_acces_inbox_obiect(name, true))'`, `AND (true OR public.fn_executie_acces_inbox_obiect(name, true)))'`),
+}), false, /T3i FAIL[^\n]*șterge fișierul/)
+raport('M22 garda „proiect” lasă rândurile fără proiect și pe tabelele stricte', await scenariu('m22', {
+  mutMig: t => inlocuieste(t, `  v_nul := TG_NARGS = 2;`, `  v_nul := true;`),
+}), false, /T3 FAIL|T3d FAIL/)
 
 // 3) preflight-ul refuză o schemă care ar face restricția falsă sau un inventar incomplet
 raport('P1 vedere cunoscută „definer” peste proiecte', await scenariu('p1', { doarMigrarea: true,
@@ -313,6 +350,19 @@ raport('P19 funcție SECURITY DEFINER nouă cu nume „de alt modul” care cite
               AS $f$ SELECT * FROM public.executie_tevi WHERE pachet_id = p $f$;
             GRANT EXECUTE ON FUNCTION public.fn_izo_scurgere(bigint) TO authenticated;`,
 }), false, /functii SECURITY DEFINER.*fn_izo_scurgere/)
+
+// r4
+raport('P20 coada Inboxului AI fără RLS', await scenariu('p20', { doarMigrarea: true,
+  inainte: 'ALTER TABLE public.ai_documente_inbox DISABLE ROW LEVEL SECURITY;',
+}), false, /ai_documente_inbox nu are RLS pornit/)
+raport('P21 predicatul Inboxului AI cu alt corp decât cel revizuit', await scenariu('p21', { doarMigrarea: true,
+  mutSchelet: t => inlocuieste(t, `IF p_modul = 'logistica'  THEN RETURN v_rec.role = 'admin_logistica'; END IF;`, `IF p_modul = 'logistica'  THEN RETURN true; END IF;`),
+}), false, /functii SECURITY DEFINER.*fn_ai_inbox_poate_confirma/)
+raport('P22 funcție SECURITY DEFINER nouă care citește antetul raportului zilnic', await scenariu('p22', { doarMigrarea: true,
+  inainte: `CREATE FUNCTION public.fn_rapoarte_toate() RETURNS SETOF public.rapoarte_zilnice LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+              AS $f$ SELECT * FROM public.rapoarte_zilnice $f$;
+            GRANT EXECUTE ON FUNCTION public.fn_rapoarte_toate() TO authenticated;`,
+}), false, /functii SECURITY DEFINER.*fn_rapoarte_toate/)
 
 console.log(esecuri ? `\n${esecuri} scenarii NU s-au comportat cum trebuie` : '\nToate scenariile s-au comportat cum trebuie')
 process.exit(esecuri ? 1 : 0)

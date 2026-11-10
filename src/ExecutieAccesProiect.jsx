@@ -186,7 +186,7 @@ export function AccesProiecteOwnerModal({ client, onClose }) {
       dif.schimbate.length ? `nivel schimbat: ${dif.schimbate.map(eticheta).join(', ')}` : null,
     ].filter(Boolean)
     const intro = restrans ? '' : 'ATENȚIE: contul vede azi TOATE proiectele; după salvare va vedea DOAR cele bifate '
-      + '(și raportul zilnic doar pe șantierele lor).\n\n'
+      + '(și raportul zilnic doar pe șantierele lor; pe cele „doar citire” îl vede, dar nu-l salvează).\n\n'
     if (!window.confirm(`${intro}${contInfo?.name || 'Contul'} — ${nou.length} proiecte în Execuție:\n${linii.join('\n')}\n\nSalvez?`)) return
     trimite(true, nou)
   }
@@ -207,8 +207,9 @@ export function AccesProiecteOwnerModal({ client, onClose }) {
           <div style={{ fontSize: 12, color: G.muted, lineHeight: 1.5, marginBottom: 14 }}>
             Un cont fără nicio bifă vede toate proiectele pe care i le dă modulul Execuție (ca până acum). Cu cel puțin o bifă, vede și scrie
             DOAR în proiectele bifate („doar citire” = vede, nu modifică). Dreptul pe modul (viewer / editor) nu se schimbă de aici.
-            Atenție: raportul zilnic din telefon nu se mai deschide pe șantierele proiectelor nebifate, iar coada „de repartizat” a
-            corespondenței nu se mai vede (e comună tuturor proiectelor).
+            Atenție: raportul zilnic din telefon nu se mai deschide pe șantierele proiectelor nebifate, iar pe cele „doar citire” se
+            vede, dar nu se salvează. Graficul lucrărilor și documentele din „Citește orice” trimise la Execuție urmează aceeași listă.
+            Coada „de repartizat” a corespondenței nu se mai vede (e comună tuturor proiectelor).
           </div>
           {eroare && <div style={{ color: G.red, fontSize: 13, marginBottom: 12 }}>Eroare la încărcare: {eroare}</div>}
           {incarcare ? <div style={{ color: G.muted, fontSize: 13 }}>Se încarcă…</div> : (

@@ -25,4 +25,11 @@ SELECT k.conrelid::regclass AS copil, a.attname AS coloana, k.confrelid::regclas
   FROM pg_constraint k JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
  WHERE k.contype = 'f' AND k.conrelid IN (SELECT rel FROM t_lista_tab) AND k.confrelid IN (SELECT rel FROM t_lista_tab)
  ORDER BY k.conrelid::regclass::text, a.attname;
+-- 5) r4: coada Inboxului AI (legată de proiect fără cheie străină: modul_tinta + entitate_id) — RLS-ul, vederile peste ea și funcțiile
+--    SECURITY DEFINER care o numesc (preflight-ul le cere pe toate în inventar, cu amprenta)
+SELECT c.relname AS tabel, c.relrowsecurity AS rls, (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid) AS politici
+  FROM pg_class c WHERE c.oid IN (to_regclass('public.ai_documente_inbox'), to_regclass('public.grafic_activitati'), to_regclass('public.rapoarte_zilnice'));
+SELECT v.nume AS vedere_inbox, v.invoker, v.materializata, v.citibila
+  FROM pg_temp.t_cat_vederi(ARRAY[to_regclass('public.ai_documente_inbox')::oid]) v ORDER BY v.nume;
+SELECT f.fn AS functie_inbox, f.amprenta FROM pg_temp.t_cat_functii(ARRAY['ai_documente_inbox']) f ORDER BY f.nume;
 ROLLBACK;

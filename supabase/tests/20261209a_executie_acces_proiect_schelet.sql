@@ -7,6 +7,8 @@
 -- NULL, ca în matricea de securitate din 30.09.2026), câteva tabele ale modulelor excluse (Izometrie, HR, Achiziții, Magazie, Redări) legate de
 -- proiecte. Date: profiluri sintetice (1 owner + 3), trei proiecte CLONA-A/B/C, rânduri pe fiecare tabel acoperit.
 -- r3: tabelele Execuției găsite în catalogul clonei, o dimensiune comună (employees) și un înlocuitor de test pentru fn_executie_swap_tevi_pozitie.
+-- r4: graficul intern (grafic_activitati, rânduri pe proiecte + unul doar cu licitație) și coada Inboxului AI cu politicile ei de azi
+-- (20261103c, text exact) + predicatul fn_ai_inbox_poate_confirma (corpul de pe clonă, amprenta se verifică) + bucket-ul ei.
 CREATE ROLE anon NOLOGIN NOINHERIT;
 CREATE ROLE authenticated NOLOGIN NOINHERIT;
 CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
@@ -20,22 +22,28 @@ GRANT EXECUTE ON FUNCTION auth.uid() TO anon, authenticated, service_role;
 CREATE SCHEMA storage;
 GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
 CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
-CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text REFERENCES storage.buckets(id), name text);
+CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text REFERENCES storage.buckets(id), name text, owner_id text);
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 GRANT ALL ON storage.buckets, storage.objects TO anon, authenticated, service_role;
+CREATE FUNCTION storage.foldername(name text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $f$
+  SELECT (string_to_array(name, '/'))[1:greatest(cardinality(string_to_array(name, '/')) - 1, 0)]
+$f$;
+GRANT EXECUTE ON FUNCTION storage.foldername(text) TO anon, authenticated, service_role;
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
 
-CREATE TABLE public.profiles (id uuid PRIMARY KEY, name text, email text, is_owner boolean DEFAULT false);
+CREATE TABLE public.profiles (id uuid PRIMARY KEY, name text, email text, is_owner boolean DEFAULT false, role text,
+  can_access_personal_data boolean DEFAULT false, can_access_financiar boolean DEFAULT false);
 CREATE TABLE public.user_module_access (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, profile_id uuid NOT NULL REFERENCES public.profiles(id),
   module text NOT NULL, access_level text NOT NULL, UNIQUE (profile_id, module));
 CREATE FUNCTION public.fn_is_app_owner(p uuid) RETURNS boolean LANGUAGE sql STABLE AS $f$
   SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = p AND is_owner IS TRUE)
 $f$;
-CREATE TABLE public.executie_proiecte (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, cod_intern text, nume text, activ boolean DEFAULT true, eticheta_gmail text);
+CREATE TABLE public.executie_proiecte (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, cod_intern text, nume text, activ boolean DEFAULT true, eticheta_gmail text,
+  site_id integer);
 CREATE TABLE public.sites (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text, proiect_id bigint REFERENCES public.executie_proiecte(id));
 CREATE TABLE public.profile_sites (profile_id uuid NOT NULL REFERENCES public.profiles(id), site_id integer NOT NULL REFERENCES public.sites(id),
   valid_until date, PRIMARY KEY (profile_id, site_id));
@@ -117,6 +125,64 @@ CREATE TABLE public.raport_distributie_linii (id bigint GENERATED ALWAYS AS IDEN
   tabel text NOT NULL, nr_crt integer NOT NULL, unitate_id bigint REFERENCES public.proiect_unitati(id) ON DELETE SET NULL);
 CREATE TABLE public.raport_zilnic_salvari (cheie uuid PRIMARY KEY, raport_id bigint NOT NULL REFERENCES public.rapoarte_zilnice(id) ON DELETE CASCADE,
   versiune integer NOT NULL, amprenta text NOT NULL, profile_id uuid NOT NULL, creat_la timestamptz NOT NULL DEFAULT now(), UNIQUE (raport_id, versiune));
+-- r4: graficul intern (Gantt): rânduri pe proiect (proiect_id) sau doar pe licitație (Ofertare)
+CREATE TABLE public.grafic_activitati (id bigserial PRIMARY KEY, licitatie_id bigint, proiect_id bigint REFERENCES public.executie_proiecte(id),
+  nume text NOT NULL, CHECK (licitatie_id IS NOT NULL OR proiect_id IS NOT NULL));
+-- r4: Inboxul AI — predicatul de azi (corpul de pe clonă, text exact) + coada cu coloanele și politicile de azi (20261103c)
+CREATE OR REPLACE FUNCTION public.fn_ai_inbox_poate_confirma(p_modul text, p_entitate_id bigint)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_uid UUID := auth.uid(); v_owner BOOLEAN; v_rec RECORD;
+BEGIN
+  IF v_uid IS NULL THEN RETURN true; END IF;  -- service_role / migrări
+  SELECT is_owner, role, can_access_personal_data, can_access_financiar
+    INTO v_rec FROM public.profiles WHERE id = v_uid;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF v_rec.is_owner THEN RETURN true; END IF;              -- owner vede tot
+  IF p_modul IS NULL THEN RETURN true; END IF;             -- coada „nedecis": oricine logat
+  IF p_modul = 'hr'         THEN RETURN COALESCE(v_rec.can_access_personal_data,false); END IF;
+  IF p_modul = 'logistica'  THEN RETURN v_rec.role = 'admin_logistica'; END IF;
+  IF p_modul = 'financiar'  THEN RETURN COALESCE(v_rec.can_access_financiar,false); END IF;
+  IF p_modul = 'executie'   THEN
+    -- MP: are profile_sites pe site_id-ul proiectului documentului
+    IF p_entitate_id IS NULL THEN RETURN false; END IF;    -- fără proiect determinat → owner-only
+    RETURN EXISTS (
+      SELECT 1 FROM public.executie_proiecte ep
+      JOIN public.profile_sites ps ON ps.site_id = ep.site_id AND ps.profile_id = v_uid
+      WHERE ep.id = p_entitate_id
+        AND (ps.valid_until IS NULL OR ps.valid_until >= CURRENT_DATE)
+    );
+  END IF;
+  RETURN false;
+END $function$;
+REVOKE EXECUTE ON FUNCTION public.fn_ai_inbox_poate_confirma(text, bigint) FROM PUBLIC, anon;
+CREATE TABLE public.ai_documente_inbox (
+  id bigserial PRIMARY KEY, fisier_path text NOT NULL, fisier_nume text NOT NULL, fisier_size_bytes bigint, fisier_mime text,
+  status text NOT NULL DEFAULT 'in_asteptare', modul_tinta text, tip_document text, payload_ai jsonb, entitate_tip text,
+  entitate_id bigint, entitate_match_confidence smallint, clasificare_confidence smallint, destinatie_tabel text, ai_eroare text,
+  redirectionat_din_modul text, confirmat_de uuid, confirmat_la timestamptz, confirmat_ref_id bigint, respins_motiv text,
+  uploadat_de uuid NOT NULL, uploadat_la timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  fisier_sters_la timestamptz);
+CREATE UNIQUE INDEX idx_ai_inbox_fisier_path ON public.ai_documente_inbox (fisier_path);
+ALTER TABLE public.ai_documente_inbox ENABLE ROW LEVEL SECURITY;
+CREATE POLICY ai_inbox_delete ON public.ai_documente_inbox FOR DELETE TO authenticated
+  USING (EXISTS ( SELECT 1 FROM profiles WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true))));
+CREATE POLICY ai_inbox_insert ON public.ai_documente_inbox FOR INSERT TO authenticated
+  WITH CHECK (((auth.uid() IS NOT NULL) AND (uploadat_de = auth.uid())));
+CREATE POLICY ai_inbox_select ON public.ai_documente_inbox AS PERMISSIVE FOR SELECT TO authenticated
+  USING ((uploadat_de = auth.uid())
+    OR (modul_tinta IS NULL
+        AND EXISTS (SELECT 1 FROM public.profiles h WHERE h.id = auth.uid() AND (h.is_owner = true OR h.can_access_personal_data = true)))
+    OR (modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)));
+CREATE POLICY ai_inbox_update ON public.ai_documente_inbox AS PERMISSIVE FOR UPDATE TO authenticated
+  USING ((uploadat_de = auth.uid())
+    OR (modul_tinta IS NULL
+        AND EXISTS (SELECT 1 FROM public.profiles h WHERE h.id = auth.uid() AND (h.is_owner = true OR h.can_access_personal_data = true)))
+    OR (modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)))
+  WITH CHECK (auth.uid() IS NOT NULL);
 -- module excluse (accesul lor e al lor): legate de proiecte, ca derivarea din catalog să le găsească și să se oprească la ele
 CREATE TABLE public.izo_tronson_config (tronson_id bigint PRIMARY KEY REFERENCES public.executie_tronsoane(id), activ boolean DEFAULT false);
 CREATE TABLE public.hr_decizii (id bigserial PRIMARY KEY, proiect_id bigint REFERENCES public.executie_proiecte(id), nr text NOT NULL);
@@ -136,6 +202,7 @@ BEGIN
                            'rapoarte_zilnice', 'raport_lucrari', 'raport_distributie_linii',
                            'executie_alerte_ai', 'executie_documente_referinta', 'executie_pachete_cumulat_final', 'executie_pachete_cumulat_tevi',
                            'executie_pachete_exports', 'executie_pachete_sudura_sant', 'proiect_activitate_coduri',
+                           'grafic_activitati',
                            'izo_tronson_config', 'hr_decizii', 'comenzi_furnizor', 'magazie_bucati', 'red_proiecte'] LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR ALL TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL)', t || '_autentificat', t);
@@ -158,6 +225,37 @@ INSERT INTO storage.buckets (id, name) VALUES ('executie-contracte', 'executie-c
 CREATE POLICY test_obiecte_autentificat ON storage.objects FOR ALL TO authenticated
   USING (bucket_id IN ('executie-contracte', 'executie-borderouri', 'executie-pachete-pdf', 'documente-proiect'))
   WITH CHECK (bucket_id IN ('executie-contracte', 'executie-borderouri', 'executie-pachete-pdf', 'documente-proiect'));
+-- r4: bucket-ul Inboxului AI cu politicile de azi (20261103c, text exact)
+INSERT INTO storage.buckets (id, name) VALUES ('ai-documente-inbox', 'ai-documente-inbox');
+CREATE POLICY ai_inbox_obj_insert ON storage.objects AS PERMISSIVE FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'ai-documente-inbox'
+    AND (SELECT auth.uid()) IS NOT NULL
+    AND ((storage.foldername(name))[1] = (SELECT auth.uid())::text
+         OR ((storage.foldername(name))[1] = 'wizard-angajare'
+             AND EXISTS (SELECT 1 FROM public.profiles p
+                          WHERE p.id = (SELECT auth.uid()) AND (p.is_owner = true OR p.can_access_personal_data = true))))
+    AND NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i WHERE i.fisier_path = objects.name));
+CREATE POLICY ai_inbox_obj_select ON storage.objects AS PERMISSIVE FOR SELECT TO authenticated
+  USING (
+    bucket_id = 'ai-documente-inbox'
+    AND (SELECT auth.uid()) IS NOT NULL
+    AND (owner_id = (SELECT auth.uid())::text
+         OR EXISTS (SELECT 1 FROM public.ai_documente_inbox i
+                     WHERE i.fisier_path = objects.name AND i.uploadat_de::text = objects.owner_id
+                       AND ((i.modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
+                            OR (i.modul_tinta IS NULL
+                                AND EXISTS (SELECT 1 FROM public.profiles h WHERE h.id = (SELECT auth.uid()) AND h.can_access_personal_data = true))))
+         OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner = true)));
+CREATE POLICY ai_inbox_obj_delete ON storage.objects AS PERMISSIVE FOR DELETE TO authenticated
+  USING (
+    bucket_id = 'ai-documente-inbox'
+    AND (SELECT auth.uid()) IS NOT NULL
+    AND (owner_id = (SELECT auth.uid())::text
+         OR EXISTS (SELECT 1 FROM public.ai_documente_inbox i
+                     WHERE i.fisier_path = objects.name AND i.uploadat_de::text = objects.owner_id
+                       AND i.modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
+         OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner = true)));
 
 -- date sintetice
 INSERT INTO public.profiles (id, name, email, is_owner) VALUES
@@ -202,6 +300,10 @@ INSERT INTO public.hr_decizii (proiect_id, nr) VALUES (1, 'D1'), (3, 'D3');
 INSERT INTO public.comenzi_furnizor (proiect_id, numar) VALUES (1, 'C1'), (3, 'C3');
 INSERT INTO public.magazie_bucati (executie_teava_id, cod) VALUES (1, 'B1'), (2, 'B3');
 INSERT INTO public.red_proiecte (executie_proiect_id, nume) VALUES (3, 'Redari C');
+INSERT INTO public.grafic_activitati (licitatie_id, proiect_id, nume) VALUES (NULL, 1, 'Lansare A'), (NULL, 3, 'Lansare C'), (77, NULL, 'Licitatie fara proiect');
+-- un rând deja clasificat (sursa rândurilor de probă ale harness-ului; „in_asteptare” ar porni clasificarea)
+INSERT INTO public.ai_documente_inbox (fisier_path, fisier_nume, status, modul_tinta, entitate_id, uploadat_de) VALUES
+  ('00000000-0000-4000-8000-000000000001/vechi.pdf', 'vechi.pdf', 'clasificat', 'executie', 1, '00000000-0000-4000-8000-000000000001');
 INSERT INTO storage.objects (bucket_id, name) VALUES
   ('executie-contracte', '1/docs_tehnice/a.pdf'), ('executie-contracte', '3/docs_tehnice/c.pdf'), ('executie-contracte', 'pccvi/3/c.pdf'),
   ('executie-borderouri', 'sl_1/1_borderou.xls'), ('executie-borderouri', 'sl_3/1_borderou.xls'),
