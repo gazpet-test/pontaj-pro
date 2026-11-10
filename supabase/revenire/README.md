@@ -233,6 +233,16 @@ COMMIT;
 ```
 Un singur bloc `DO` (un refuz nu lasă nimic să ruleze după el). Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` `storage.objects` apoi tabelul (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificării „gol”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_executie_noduri_suduri.sql` (T12 nearmat / cu date = refuz, cu SQLSTATE și mesaj verificate explicit; T13 armat pe gol = scos, apoi re-aplicare).
 
+## 20261207a — Execuție: elementele de construcții ale nodului de cuplare (`20261207a_executie_noduri_constructii_ROLLBACK.sql`, NEAPLICAT)
+Scoate tabelul `executie_noduri_constructii` (cu trigger-ul de proveniență, politica de citire, indexurile și CHECK-urile lui) și cele 4 funcții `fn_executie_constr_*`. Nu atinge 20261201a (sudurile, `fn_executie_nod_*`, storage). Nu redeschide o gaură de securitate, dar **refuză dacă tabelul are rânduri** (lista elementelor și etapele bifate nu se șterg de aici — decizie separată, cu export înainte). Fără GO de execuție. **Ordinea:** 20261207a se scoate ÎNAINTEA lui 20261201a (revenirea 20261201a refuză cât timp politica de aici folosește `fn_executie_nod_drept`).
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261207a', 'SCOATE_NODURI_CONSTRUCTII:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = starea EXACTĂ a migrării (corpul celor 4 funcții — md5 fără CR —, limbaj, DEFINER, volatilitate, search_path, proprietar, EXECUTE; trigger-ul; politica cu expresia ei; privilegiile pe tabel / coloane / secvență); nimic altceva nu depinde de tabel / funcții; `LOCK … ACCESS EXCLUSIVE NOWAIT` înaintea verificării „gol”; DROP fără CASCADE; postcondiție (inclusiv că dreptul din 20261201a a rămas); dezarmare. Testat în `scripts/test_executie_noduri_constructii.sql` (T12 nearmat / cu date = refuz; T15 revenirea 20261201a refuză cât timp tabelul există; T16 corp de funcție / politică schimbate = refuz; T13 armat pe gol = scos, apoi re-aplicare).
+
 ## 20261206a — Meteo: istoricul zilnic pe șantiere (`20261206a_meteo_istoric_zilnic_ROLLBACK.sql`, NEAPLICAT)
 Scoate vederea `v_meteo_zile`, funcția `fn_meteo_praguri_seteaza`, tabelele `meteo_istoric_zilnic` și `meteo_praguri_nelucrabil` (cu politicile lor). Nu redeschide o gaură de securitate, dar **refuză dacă istoricul are rânduri sau dacă pragurile nu mai sunt cele de pornire** (datele meteo preluate și pragurile alese de owner nu se șterg de aici — decizie separată, cu export înainte). Înainte de revenire se scoate din `meteo-sync` pasul de istoric (altfel scrierea zilnică eșuează și apare în răspunsul funcției). Fără GO de execuție.
 ```sql

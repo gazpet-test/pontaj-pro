@@ -18,7 +18,7 @@ import LegaturaExecutie from './redari/ui/LegaturaExecutie.jsx'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
-import NodCuplareSchema from './NodCuplareSchema.jsx'   // nodul de cuplare: schema + sudurile pe stări (20261201a)
+import NodCuplareSectiuni from './NodCuplareSectiuni.jsx'   // nodul de cuplare: sudurile pe schemă (20261201a) + construcțiile (20261207a)
 import ProbeTronsoane from './ProbeTronsoane.jsx'       // probele pe tronsoane: intervale de km + etape (20261202a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261206a)
@@ -366,7 +366,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             {[
               {key:'izometrie', label:'📐 Izometrie',  desc:'Pachete · Lansare · Cumulat'},
               {key:'tronsoane', label:'📍 Tronsoane',   desc:'Program · Status · Suduri'},
-              {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · azi / cumulat / rest'},
+              {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · construcții (fundații) pe etape'},
               {key:'probe',     label:'🧪 Probe pe tronsoane', desc:'Tronsoane de probă pe km · pistonare, uscare, calibrare, presiune'},
             ].map(st => {
               const active = izSubTab === st.key
@@ -386,7 +386,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
           {/* Content */}
           {izSubTab === 'izometrie' && <IzometriePage initialProiectId={Number(proiectId)} />}
           {izSubTab === 'tronsoane' && <TabTronsoane  proiectId={proiectId} />}
-          {izSubTab === 'nod'       && <NodCuplareSchema proiectId={Number(proiectId)} />}
+          {izSubTab === 'nod'       && <NodCuplareSectiuni proiectId={Number(proiectId)} />}
           {izSubTab === 'probe'     && <ProbeTronsoane proiectId={Number(proiectId)} />}
         </div>
       )}
