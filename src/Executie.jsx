@@ -47,6 +47,9 @@ import { eContractNelegat, ETICHETA_CONTRACT_NELEGAT, TOOLTIP_CONTRACT_NELEGAT }
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+// acces pe proiect (20261209a): contul restrâns vede doar proiectele lui; poarta reală e în BD
+import { useAccesProiectExecutie, AccesProiecteOwnerModal, MesajAccesProiect } from './ExecutieAccesProiect.jsx'
+import { filtreazaProiecte, verdictLinkProiect } from './executieAccesProiect.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -120,6 +123,8 @@ export default function ExecutiePage() {
 
   // aceeași regulă ca în dashboard: owner sau can_manage_contracts
   const canEdit = profile?.is_owner === true || profile?.can_manage_contracts === true
+  // proiectele permise contului (owner / nerestrâns = toate; restrâns = lista lui)
+  const { acces } = useAccesProiectExecutie(supabase)
 
   // Navighează la contextul unui proiect
   const goToProiect = (id, tab = 'proiect') => {
@@ -243,7 +248,7 @@ export default function ExecutiePage() {
       {!proiectIdStr ? (
         <>
           {profile && <DocumenteDeRepartizat profile={profile} />}
-          <DashboardProiectePage onSelectProiect={goToProiect} />
+          <DashboardProiectePage onSelectProiect={goToProiect} acces={acces} />
         </>
       ) : (
         <ProiectContextView
@@ -251,6 +256,7 @@ export default function ExecutiePage() {
           tab={tabStr}
           onBack={goBack}
           canEdit={canEdit}
+          acces={acces}
         />
       )}
 
@@ -267,8 +273,11 @@ export default function ExecutiePage() {
 // ===========================================================================
 // CONTEXT VIEW — banner proiect + renderează tab-ul cu proiectId prop
 // ===========================================================================
-function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
-  const [proiect, setProiect] = useState(null)
+function ProiectContextView({ proiectId, tab, onBack, canEdit, acces }) {
+  // undefined = se încarcă; null = serverul n-a întors proiectul (nu există sau nu e permis contului); obiect = găsit
+  const [proiectRand, setProiectRand] = useState(undefined)
+  const [eroareProiect, setEroareProiect] = useState(null)
+  const proiect = proiectRand || null
   // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod' | 'probe'
   // Dacă vine cu tab=tronsoane (link vechi), tab=nod sau tab=probe (link direct de pe telefon), auto-selectăm sub-tab-ul
   const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' || tab === 'probe' ? tab : 'izometrie')
@@ -276,12 +285,25 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
   useEffect(() => {
     // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
     let viu = true
-    setProiect(null)
+    setProiectRand(undefined); setEroareProiect(null)
     supabase.from('v_executie_dashboard')
-      .select('*').eq('id', proiectId).single()
-      .then(({ data }) => { if (viu) setProiect(data) })
+      .select('*').eq('id', proiectId).maybeSingle()
+      .then(({ data, error }) => {
+        if (!viu) return
+        if (error) { setEroareProiect(error.message || String(error)); setProiectRand(null) }
+        else setProiectRand(data || null)
+      })
     return () => { viu = false }
   }, [proiectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // link direct către un proiect nepermis / inexistent: mesaj clar, nu ecran gol (taburile nu se încarcă deloc)
+  const verdict = verdictLinkProiect(proiectId, acces, proiectRand, eroareProiect)
+  if (verdict === 'incarcare') {
+    return <div style={{ padding: '24px 28px', fontSize: 13, color: G.muted }}>Se încarcă proiectul…</div>
+  }
+  if (verdict !== 'ok') {
+    return <MesajAccesProiect verdict={verdict} eroare={eroareProiect || acces?.eroare} onBack={onBack} />
+  }
 
   return (
     <div>
@@ -401,8 +423,11 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
 // ===========================================================================
 // DASHBOARD PROIECTE — Tab principal (carduri cu click-to-open)
 // ===========================================================================
-function DashboardProiectePage({ onSelectProiect }) {
-  const [proiecte, setProiecte] = useState([])
+function DashboardProiectePage({ onSelectProiect, acces }) {
+  const [proiecteBrute, setProiecte] = useState([])
+  // contul restrâns vede doar proiectele lui (BD-ul le filtrează deja prin RLS; aici e a doua plasă, aceeași regulă)
+  const proiecte = useMemo(() => filtreazaProiecte(proiecteBrute, acces), [proiecteBrute, acces])
+  const [accesOwnerDeschis, setAccesOwnerDeschis] = useState(false)
   const [loading, setLoading] = useState(true)
   const [profile, setProfile] = useState(null)
   const [selectedProiect, setSelectedProiect] = useState(null)
@@ -778,6 +803,14 @@ function DashboardProiectePage({ onSelectProiect }) {
           <div style={{ color: G.muted, fontSize: 13, marginTop: 4 }}>
             Monitorizare termene · Click pe proiect pentru a intra în context
           </div>
+          {acces?.stare === 'restrans' && (
+            <div style={{ color: G.yellow, fontSize: 12, marginTop: 4 }}>
+              🔒 Vezi doar proiectele tale ({acces.permise.size}). Pentru altele, cere-i lui Răzvan.
+            </div>
+          )}
+          {acces?.stare === 'eroare' && (
+            <div style={{ color: G.red, fontSize: 12, marginTop: 4 }}>⚠️ Nu am putut citi accesul pe proiecte: {acces.eroare}</div>
+          )}
         </div>
         <input placeholder="🔍 Caută proiect / beneficiar / contract..." value={cautaProiect}
           onChange={e => setCautaProiect(e.target.value)}
@@ -790,7 +823,14 @@ function DashboardProiectePage({ onSelectProiect }) {
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
           }}>＋ Proiect nou</button>
         )}
+        {isOwner && (
+          <button onClick={() => setAccesOwnerDeschis(true)} title="Ce proiecte vede fiecare cont în Execuție (doar owner)" style={{
+            padding: '9px 14px', background: 'transparent', border: `1px solid ${G.border}`,
+            borderRadius: 8, color: G.text, fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+          }}>🔐 Acces pe proiecte</button>
+        )}
       </div>
+      {accesOwnerDeschis && isOwner && <AccesProiecteOwnerModal client={supabase} onClose={() => setAccesOwnerDeschis(false)} />}
 
       {/* KPI alerte — clickabile */}
       {(() => {
