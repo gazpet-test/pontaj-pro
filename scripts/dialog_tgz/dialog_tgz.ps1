@@ -1,8 +1,10 @@
 # dialog_tgz.ps1 - sarcina Windows "Gazpet Dialog TGZ", varianta B (decizia Razvan 06.11.2026).
 # Ruleaza DOAR cu tokenul de un an din `claude setup-token` (fara conectori claude.ai). BD: doar citire, prin psql,
 # cu interogarea FIXA din sql\context_agregat.sql si un rol care nu poate scrie (verificat chiar in SQL).
-# Agentul primeste doar fisiere locale, unelte Read/Glob/Grep si scriere DOAR in folderul privat al rularii;
-# raspunsul il publica acest orchestrator in dialog (creare exclusiva). Fisa de securitate: README.md.
+# Agentul primeste doar fisiere locale, unelte Read/Glob/Grep si scriere DOAR in folderul privat al rularii, unde
+# lasa raspuns.json (contract fix: raspuns_schema.json + vocabular_nota.txt). claude#NNN.md il compune si il publica
+# acest orchestrator (creare exclusiva + re-verificarea numarului). psql si claude ruleaza in Job Object.
+# Fisa de securitate: README.md.
 # Iesire: 0 = GATA / NIMIC NOU / OPRIT / rulare deja in curs; 1 = EROARE.
 # Fisier ASCII (PowerShell 5.1).
 
@@ -21,6 +23,7 @@ param(
   [ValidateSet('low', 'medium', 'high')][string]$Effort = 'medium',
   [ValidateRange(1, 80)][int]$MaxTurns = 40,
   [ValidateRange(5, 55)][int]$TimeoutMin = 50,
+  [ValidateRange(0, 300)][int]$AsteptareColiziuneSec = 90,
   [string[]]$RadaciniAtasamente = @('\\gazpet-tnas\Licitatii_Executate'),
   [string]$WorkDir = (Join-Path $env:TEMP 'dialog_tgz')
 )
@@ -63,6 +66,8 @@ try {
     RadaciniAtasamente = $RadaciniAtasamente; WorkDir = $WorkDir; IdRulare = ($idRulare -replace '[^A-Za-z0-9_\-]', '_')
     CaleCursor = (Join-Path $OutDir 'dialog_tgz_cursor.txt'); CaleMarcaj = (Join-Path $OutDir 'dialog_tgz_procese_ramase.txt')
     SqlDir = (Join-Path $PSScriptRoot 'sql'); PromptFile = (Join-Path $PSScriptRoot 'dialog_tgz_prompt.md')
+    SchemaFile = (Join-Path $PSScriptRoot 'raspuns_schema.json'); VocabularFile = (Join-Path $PSScriptRoot 'vocabular_nota.txt')
+    AsteptareColiziuneSec = $AsteptareColiziuneSec
   }
   if (-not (Test-Path -LiteralPath $PsqlExe -PathType Leaf)) {
     $rez = @{ Stare = 'EROARE'; Linie = 'EROARE psql lipseste: ' + $PsqlExe; Cod = 1 }

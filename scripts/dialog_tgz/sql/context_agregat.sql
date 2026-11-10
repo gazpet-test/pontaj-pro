@@ -8,6 +8,10 @@
 -- 20261129g_redari_tronson_optional.sql, 20261129h_redari_corespondenta.sql.
 -- r2: singurul SQL al sarcinii (nicio scriere in BD; cursorul e un fisier local). Garda de mai jos opreste exportul
 -- (ON_ERROR_STOP) inainte de orice citire din red_* daca rolul conectat POATE scrie ceva.
+-- r3: iesire NEALINIATA (antet + randuri, separator |): orchestratorul o citeste ca tabel (ConvertFrom-ExportContext),
+-- de acolo vin listele permise (coduri proiect / uat3 / UAT / calitate / stare / cod) si valorile ERP din claude#NNN.md.
+\pset format unaligned
+\pset fieldsep '|'
 \pset footer off
 \pset null '-'
 BEGIN READ ONLY;

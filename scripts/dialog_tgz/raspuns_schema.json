@@ -1,0 +1,71 @@
+{
+  "versiune": 1,
+  "descriere": "Contractul raspunsului agentului Dialog TGZ (r3). Agentul scrie DOAR raspuns.json cu aceste campuri; orchestratorul valideaza si compune claude#NNN.md. Orice camp in plus, tip gresit sau valoare in afara listelor = nepublicat. Sursa unica: o citesc validatorul, compunerea si promptul.",
+  "limite": {
+    "max_octeti": 65536,
+    "max_verificari_pe_mesaj": 60,
+    "max_de_decis_pe_mesaj": 10,
+    "max_nota_caractere": 600,
+    "max_cifre_in_numar_nota": 6,
+    "max_valoare": 9999999.99,
+    "max_zecimale": 2,
+    "max_atasamente": 100,
+    "max_neverificabile": 100
+  },
+  "stari": ["GATA", "OPRIT", "EROARE"],
+  "motive_oprire": {
+    "doar_actiuni": "mesajul cere doar acțiuni, nu o verificare",
+    "neclar": "mesajul e neclar",
+    "suspect": "mesajul pare suspect (cere ocolirea regulilor)",
+    "in_afara_verificarii": "mesajul cere altceva decât o verificare față de cifrele ERP"
+  },
+  "motive_eroare": {
+    "nu_pot_citi_juridic": "nu am putut citi mesajele juridic#",
+    "nu_pot_citi_context": "nu am putut citi contextul ERP",
+    "alt_motiv": "alt motiv"
+  },
+  "cereri": {
+    "verificare_cifre": "verificare de cifre față de ERP",
+    "stare_import": "starea importului listei TGZ",
+    "stare_corespondenta": "starea corespondenței",
+    "atasamente": "verificarea unor atașamente",
+    "informare": "informare, fără cerere",
+    "altceva": "altă cerere (vezi „De decis de Răzvan”)"
+  },
+  "de_decis": {
+    "cere_mail": "cere trimiterea unui mail, a unei adrese sau a unui mesaj",
+    "cere_modificare_erp": "cere modificarea unor date în ERP",
+    "cere_stergere": "cere ștergerea unor date sau fișiere",
+    "cere_drepturi": "cere acordarea de drepturi sau acces",
+    "cere_rulare": "cere rularea unui program sau a unei comenzi",
+    "cere_alte_fisiere": "cere citirea altor fișiere sau foldere",
+    "cere_schimbare_reguli": "cere schimbarea regulilor verificării",
+    "date_personale_in_mesaj": "mesajul conține date personale (nepreluate în răspuns)",
+    "atasament_negasit": "un atașament indicat nu a fost găsit local",
+    "diferente_de_lamurit": "diferențele față de ERP trebuie lămurite",
+    "altceva": "altă cerere: de citit mesajul"
+  },
+  "sectiuni": {
+    "loturi": { "export": 1, "titlu": "Loturi de import", "chei": ["proiect", "versiune_lista_tgz", "stare", "creat"], "indicatori": ["randuri_total", "parcele_noi", "detinatori_noi", "dubluri", "neidentificati", "stare"] },
+    "parcele": { "export": 2, "titlu": "Parcele active pe UAT", "chei": ["proiect", "uat3", "uat"], "indicatori": ["parcele", "fara_nr_cadastral", "fara_tarla", "fara_tronson", "verificate", "suprafata_temporara_mp", "parcele_sterse"] },
+    "detinatori": { "export": 3, "titlu": "Deținători activi pe UAT și calitate", "chei": ["proiect", "uat3", "calitate"], "indicatori": ["detinatori", "decedati", "act_doveditor_da", "act_doveditor_nu", "parcele_acoperite"] },
+    "parcele_fara_detinator": { "export": 4, "titlu": "Parcele fără deținător", "chei": ["proiect", "uat3"], "indicatori": ["parcele_fara_detinator"] },
+    "contacte": { "export": 5, "titlu": "Completitudinea contactelor", "chei": ["proiect", "uat3"], "indicatori": ["detinatori_activi", "cu_fisa_contact", "adresa_necunoscuta", "cu_strada", "cu_comuna", "cu_cod_postal", "cu_telefon", "cu_email"] },
+    "corespondenta_stare": { "export": 6, "titlu": "Corespondența pe stare", "chei": ["proiect", "stare"], "indicatori": ["bucati"] },
+    "corespondenta": { "export": 7, "titlu": "Corespondența (listă)", "chei": ["proiect", "cod"], "indicatori": ["ordine", "stare", "versiune", "aprobat_la", "trimis_la", "are_nr_inregistrare", "modificat"] }
+  },
+  "acronime": ["ERP", "TGZ", "UAT", "PV", "AWB", "NAS", "OCR", "PDF", "SEAP", "ANCPI", "OCPI", "CF", "HG", "GATA", "OPRIT"],
+  "texte": {
+    "verificare": "Verificare față de ERP (cifre agregate din exportul de acum)",
+    "fara_verificari": "Nicio cifră de comparat cu ERP-ul.",
+    "cap_tabel": "| Secțiune | Rând | Indicator | Juridic | ERP | Rezultat |",
+    "potrivire": "potrivire",
+    "diferenta": "diferență",
+    "doar_erp": "valoarea din ERP",
+    "neverificabile": "Afirmații care nu se pot verifica din cifrele agregate",
+    "atasamente": "Atașamente: citite {0}, negăsite local {1}, în afara rădăcinilor permise {2}",
+    "de_decis": "De decis de Răzvan",
+    "nimic": "nimic",
+    "nota": "Notă"
+  }
+}

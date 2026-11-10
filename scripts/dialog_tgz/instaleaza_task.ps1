@@ -2,7 +2,8 @@
 # Implicit doar AFISEAZA ce ar face (previzualizare). Scrie numai cu -Aplica.
 # Ce face cu -Aplica:
 #   1. exporta definitia curenta a sarcinii in <Destinatie>\backup_task_<data>.xml (revenire: Register-ScheduledTask -Xml);
-#   2. copiaza dialog_tgz.ps1, DialogTgz.psm1, dialog_tgz_prompt.md si sql\*.sql in <Destinatie> (fisierele vechi
+#   2. copiaza dialog_tgz.ps1, DialogTgz.psm1, dialog_tgz_prompt.md, raspuns_schema.json, vocabular_nota.txt si
+#      sql\*.sql in <Destinatie> (fisierele vechi
 #      din C:\Users\Gazpet-Ai\claude-tasks\dialog_tgz.ps1 / dialog_tgz_prompt.md NU se ating);
 #   3. Set-ScheduledTask pe sarcina EXISTENTA: actiunea noua, declansatori L-V 10:40 si 16:40, StartWhenAvailable,
 #      2 reincercari la 30 min, limita 1 h, fara instante paralele. Utilizatorul (principal) ramane cel existent.
@@ -19,7 +20,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $sursa = $PSScriptRoot
-$fisiere = @('dialog_tgz.ps1', 'DialogTgz.psm1', 'dialog_tgz_prompt.md', 'sql\context_agregat.sql')
+$fisiere = @('dialog_tgz.ps1', 'DialogTgz.psm1', 'dialog_tgz_prompt.md', 'raspuns_schema.json', 'vocabular_nota.txt', 'sql\context_agregat.sql')
 foreach ($f in $fisiere) { if (-not (Test-Path -LiteralPath (Join-Path $sursa $f) -PathType Leaf)) { throw "lipseste din repo: $f" } }
 
 $task = Get-ScheduledTask -TaskName $NumeTask -ErrorAction SilentlyContinue
