@@ -397,6 +397,8 @@ function RaportZilnic({ profile, sites, onBack }) {
     if (versiune == null) { setMsg({ ok: false, text: 'Raportul salvat deja pe această zi nu s-a putut citi — alege din nou data ca să-l reîncarci, apoi salvează.' }); return }
     if (!pozeOk) { setMsg({ ok: false, text: `Raportul se trimite cu minim ${MIN_POZE} poze de pe șantier (ai ${nrPoze}). Pozele ajung pe pagina firmei — fă-le cu lucrarea executată corect.` }); return }
     setSaving(true); setMsg(null)
+    // formularul pentru care se salvează (L24): un rezultat întârziat nu se aplică peste altă lucrare / altă zi încărcată între timp
+    const genSalvare = genRef.current
     try {
       // aceeași intenție (nimic schimbat în formular după o eroare de rețea) = aceeași cheie și același conținut, fără a reurca pozele (L04 / L05)
       const semn = JSON.stringify({ siteId, dataRaport, versiune, lucrari, utilaje, personal, masini, probleme, subcontractori, aprovizionare, planMaine,
@@ -450,8 +452,13 @@ function RaportZilnic({ profile, sites, onBack }) {
       if (rs?.ok !== true) throw new Error(rs?.motiv === 'conflict'
         ? 'Între timp altcineva a salvat acest raport (alt telefon). Alege din nou data ca să vezi ce e salvat, apoi completează.'
         : 'Raportul nu s-a salvat (răspuns neașteptat).')
-      setVersiune(rs.versiune)
-      setExistingId(rs.raport_id)
+      // reluarea unei salvări deja înregistrate, după care altcineva a salvat raportul: NU se mai scrie nimic peste (distribuția, tichetele);
+      // se reîncarcă starea de pe server (L05; review r2 P1-3). Dacă nimeni n-a salvat între timp, se continuă restul aceleiași intenții.
+      if (rs.duplicat === true && rs.versiune_curenta !== rs.versiune) {
+        if (genSalvare === genRef.current) loadSiteData(intentie.site, intentie.data)
+        throw new Error('Salvarea fusese deja înregistrată, dar între timp altcineva a modificat raportul. L-am reîncărcat: verifică și completează.')
+      }
+      if (genSalvare === genRef.current) { setVersiune(rs.versiune); setExistingId(rs.raport_id) }
       const rz = { id: rs.raport_id }
       // ── Raport lucrări executate (distribuție gaze): înlocuim rândurile raportului ATOMIC (RPC, o tranzacție) ──
       if (rz?.id && distributie) {
@@ -601,7 +608,7 @@ function RaportZilnic({ profile, sites, onBack }) {
       {/* TKT-0135: ziua raportului (implicit azi, max ZILE_INAPOI zile în urmă, fără viitor) */}
       <div style={{ marginBottom: 18 }}>
         <label style={labelStyle}>Ziua raportului</label>
-        <input type="date" value={dataRaport} min={minData()} max={azi()}
+        <input type="date" value={dataRaport} min={minData()} max={azi()} disabled={saving}
           onChange={e => setDataRaport(e.target.value || azi())}
           style={{ ...inputStyle }} />
         {dataRaport !== azi() && (
@@ -614,7 +621,7 @@ function RaportZilnic({ profile, sites, onBack }) {
       {/* Alege lucrarea */}
       <div style={{ marginBottom: 18 }}>
         <label style={labelStyle}>Lucrarea</label>
-        <select value={siteId || ''} onChange={e => setSiteId(Number(e.target.value) || null)} style={{ ...inputStyle, appearance: 'none' }}>
+        <select value={siteId || ''} disabled={saving} onChange={e => setSiteId(Number(e.target.value) || null)} style={{ ...inputStyle, appearance: 'none' }}>
           <option value="">— alege lucrarea —</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>

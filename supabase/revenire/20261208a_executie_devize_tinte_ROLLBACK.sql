@@ -1,6 +1,6 @@
 -- Revenire 20261208a_executie_devize_tinte. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: vederea v_executie_tinte, tabelele executie_tinte_setari și raport_zilnic_salvari, cele 14 funcții
--- (lista exactă), trigger-ele de gardă, coloanele noi de pe proiect_unitati / proiect_activitati (cu constrângerile și indexurile lor).
+-- (lista exactă), trigger-ele de gardă și de versiune, coloanele noi de pe proiect_unitati / proiect_activitati / rapoarte_zilnice.versiune_salvare.
 -- Dacă 20261208b e aplicată (authenticated nu mai scrie direct în raport_lucrari), REFUZĂ: întâi revenirea 20261208b.
 -- REFUZĂ dacă există configurare sau istoric scrise după migrare (setări, obiecte / noduri / perioade legate, activități principale sau cu
 -- factor, sursă, bază, DN, salvări în jurnalul raportului): ar dispărea în tăcere. Golirea ei e o decizie separată (preview -> „da” Răzvan -> apply, cu export înainte).
@@ -11,7 +11,7 @@
 --   <conținutul exact al fișierului>
 --   COMMIT;
 -- harness-armare: gazpet.revenire_20261208a SCOATE_DEVIZE_TINTE
--- Ordinea lock-urilor: proiect_activitati, proiect_unitati, executie_tinte_setari, raport_zilnic_salvari, raport_lucrari — ACCESS EXCLUSIVE NOWAIT, ÎNAINTEA
+-- Ordinea lock-urilor: proiect_activitati, proiect_unitati, executie_tinte_setari, raport_zilnic_salvari, raport_lucrari, rapoarte_zilnice — ACCESS EXCLUSIVE NOWAIT, ÎNAINTEA
 -- verificării „fără configurare” (o scriere concurentă nu poate fi numărată 0 și apoi pierdută la DROP COLUMN). Ocupat = 55P03, nimic scris.
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează (nimic nu rulează după el), iar harness-ul îi verifică mesajul.
 DO $revenire$
@@ -45,8 +45,11 @@ BEGIN
      OR to_regprocedure('public.fn_raport_zilnic_citeste(bigint, date)') IS NULL
      OR to_regprocedure('public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid)') IS NULL
      OR to_regclass('public.raport_zilnic_salvari') IS NULL
+     OR to_regprocedure('public.fn_raport_zilnic_versiune()') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.rapoarte_zilnice'::regclass AND tgname = 'trg_raport_zilnic_versiune')
+     OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice' AND column_name = 'versiune_salvare')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[])) <> 14
+          WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza', 'fn_raport_zilnic_versiune']::name[])) <> 15
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.proiect_activitati'::regclass AND tgname = 'trg_executie_tinte_garda_activitati')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.proiect_unitati'::regclass AND tgname = 'trg_executie_tinte_garda_unitati')
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'proiect_unitati'
@@ -62,6 +65,8 @@ BEGIN
                      OR (d.refobjid = 'public.proiect_unitati'::regclass AND d.refobjsubid IN (
                            SELECT attnum FROM pg_attribute WHERE attrelid = 'public.proiect_unitati'::regclass
                               AND attname IN ('obiect_cod', 'nod_cod', 'plan_start', 'plan_final')))
+                     OR (d.refobjid = 'public.rapoarte_zilnice'::regclass AND d.refobjsubid IN (
+                           SELECT attnum FROM pg_attribute WHERE attrelid = 'public.rapoarte_zilnice'::regclass AND attname = 'versiune_salvare'))
                      OR (d.refobjid = 'public.proiect_activitati'::regclass AND d.refobjsubid IN (
                            SELECT attnum FROM pg_attribute WHERE attrelid = 'public.proiect_activitati'::regclass
                               AND attname IN ('principala', 'factor_um', 'sursa_executat', 'baza_deviz', 'dn_min', 'dn_max')))))
@@ -70,8 +75,8 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_depend d JOIN pg_proc p ON p.oid = d.objid
                  WHERE d.classid = 'pg_proc'::regclass AND d.refclassid = 'pg_proc'::regclass
                    AND d.refobjid IN (SELECT p2.oid FROM pg_proc p2 JOIN pg_namespace n2 ON n2.oid = p2.pronamespace WHERE n2.nspname = 'public'
-                                        AND p2.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[]))
-                   AND NOT p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[])) THEN
+                                        AND p2.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza', 'fn_raport_zilnic_versiune']::name[]))
+                   AND NOT p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza', 'fn_raport_zilnic_versiune']::name[])) THEN
     RAISE EXCEPTION '20261208a revenire: alte obiecte depind de vedere / tabel / coloane / functii';
   END IF;
   -- corpurile altor funcții: un apel textual al obiectelor scoase ar rămâne și ar pica la rulare (review r1 P2-8)
@@ -81,9 +86,9 @@ BEGIN
                 AND NOT (n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere',
                     'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie',
                     'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii',
-                    'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[]))
+                    'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza', 'fn_raport_zilnic_versiune']::name[]))
                 AND p.prosrc ~ ('\m(fn_executie_tinte_(drept|garda_cere|garda_activitati|garda_unitati|setari_prov|cheie|nod|conversie|calcul)'
-                                || '|fn_raport_santier_drept|fn_raport_lucrari_(amprenta_linii|json)|fn_raport_zilnic_(citeste|salveaza)'
+                                || '|fn_raport_santier_drept|fn_raport_lucrari_(amprenta_linii|json)|fn_raport_zilnic_(citeste|salveaza|versiune)'
                                 || '|v_executie_tinte|executie_tinte_setari|raport_zilnic_salvari)\M')) THEN
     RAISE EXCEPTION '20261208a revenire: alte functii folosesc obiectele migrarii (in corpul lor)';
   END IF;
@@ -96,6 +101,7 @@ BEGIN
   LOCK TABLE public.executie_tinte_setari IN ACCESS EXCLUSIVE MODE NOWAIT;
   LOCK TABLE public.raport_zilnic_salvari IN ACCESS EXCLUSIVE MODE NOWAIT;
   LOCK TABLE public.raport_lucrari IN ACCESS EXCLUSIVE MODE NOWAIT;
+  LOCK TABLE public.rapoarte_zilnice IN ACCESS EXCLUSIVE MODE NOWAIT;
   IF EXISTS (SELECT 1 FROM public.raport_zilnic_salvari) THEN
     RAISE EXCEPTION '20261208a revenire: jurnalul raportului zilnic are salvari (raport_zilnic_salvari) — decizie separata inainte';
   END IF;
@@ -121,6 +127,9 @@ BEGIN
   DROP FUNCTION public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, integer, uuid);
   DROP FUNCTION public.fn_raport_zilnic_citeste(bigint, date);
   DROP TABLE public.raport_zilnic_salvari;
+  DROP TRIGGER trg_raport_zilnic_versiune ON public.rapoarte_zilnice;
+  DROP FUNCTION public.fn_raport_zilnic_versiune();
+  ALTER TABLE public.rapoarte_zilnice DROP COLUMN versiune_salvare;   -- doar un contor; istoricul salvărilor e în jurnal (refuzat mai sus dacă are rânduri)
   DROP FUNCTION public.fn_raport_lucrari_json(bigint);
   DROP FUNCTION public.fn_raport_lucrari_amprenta_linii(jsonb);
   DROP FUNCTION public.fn_executie_tinte_garda_activitati();
@@ -139,8 +148,10 @@ BEGIN
   -- postcondiție
   IF to_regclass('public.v_executie_tinte') IS NOT NULL OR to_regclass('public.executie_tinte_setari') IS NOT NULL
      OR to_regclass('public.raport_zilnic_salvari') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice' AND column_name = 'versiune_salvare')
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_raport_zilnic_versiune')
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                 WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[]))
+                 WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza', 'fn_raport_zilnic_versiune']::name[]))
      OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_executie_tinte_garda_activitati', 'trg_executie_tinte_garda_unitati'))
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
                  AND ((table_name = 'proiect_unitati' AND column_name IN ('obiect_cod', 'nod_cod', 'plan_start', 'plan_final'))

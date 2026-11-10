@@ -348,71 +348,82 @@ DECLARE r jsonb; z date := pg_temp.t_g('azi')::date; d1 date := pg_temp.t_g('azi
   s1 bigint := pg_temp.t_g('s1')::bigint; sef uuid := pg_temp.t_g('sef')::uuid;
 BEGIN
   r := public.fn_raport_zilnic_citeste(s1, d1);
-  IF (r->>'versiune')::int <> 0 OR r->'linii' <> '[]'::jsonb OR (r->'raport'->>'id')::bigint <> pg_temp.t_g('r1')::bigint THEN
+  IF (r->>'versiune')::int <> 1 OR r->'linii' <> '[]'::jsonb OR (r->'raport'->>'id')::bigint <> pg_temp.t_g('r1')::bigint THEN
     RAISE EXCEPTION 'T4 FAIL: citirea raportului %', r;
   END IF;
   l1 := jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 120.5), pg_temp.t_l('a_lans', 'u2', 10), pg_temp.t_l('a_sap', 'u1', 300),
                           pg_temp.t_l('a_prob', 'u1', 1), pg_temp.t_l('a_lans', NULL, 7), pg_temp.t_l('a_sud', 'u1', 4), pg_temp.t_l('a_fara', 'u1', 2));
-  r := pg_temp.t_salv('s1', d1, ant, l1, 0, k1);
-  IF r->>'ok' <> 'true' OR r->>'duplicat' <> 'false' OR (r->>'versiune')::int <> 1 OR (r->>'raport_id')::bigint <> pg_temp.t_g('r1')::bigint THEN
+  r := pg_temp.t_salv('s1', d1, ant, l1, 1, k1);
+  IF r->>'ok' <> 'true' OR r->>'duplicat' <> 'false' OR (r->>'versiune')::int <> 2 OR (r->>'raport_id')::bigint <> pg_temp.t_g('r1')::bigint THEN
     RAISE EXCEPTION 'T4 FAIL: prima salvare %', r;
   END IF;
   -- reluarea aceleiași intenții (răspuns pierdut): duplicat, nimic rescris; aceeași cheie cu alt conținut = eroare
-  r := pg_temp.t_salv('s1', d1, ant, l1, 0, k1);
-  IF r->>'duplicat' <> 'true' OR (r->>'versiune')::int <> 1 THEN RAISE EXCEPTION 'T4 FAIL: reluarea %', r; END IF;
-  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{"lucrari_efectuate": "alt"}', NULL, 0, %L)$q$, d1, k1), '22023') THEN
+  r := pg_temp.t_salv('s1', d1, ant, l1, 1, k1);
+  IF r->>'duplicat' <> 'true' OR (r->>'versiune')::int <> 2 OR (r->>'versiune_curenta')::int <> 2 THEN RAISE EXCEPTION 'T4 FAIL: reluarea %', r; END IF;
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{"lucrari_efectuate": "alt"}', NULL, 1, %L)$q$, d1, k1), '22023') THEN
     RAISE EXCEPTION 'T4 FAIL: aceeași cheie, alt conținut';
   END IF;
   -- versiunea veche cu altă cheie = conflict, nimic scris
-  r := pg_temp.t_salv('s1', d1, ant, jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1)), 0, gen_random_uuid());
-  IF r->>'ok' <> 'false' OR r->>'motiv' <> 'conflict' OR (r->>'versiune')::int <> 1 THEN RAISE EXCEPTION 'T4 FAIL: conflictul %', r; END IF;
+  r := pg_temp.t_salv('s1', d1, ant, jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1)), 1, gen_random_uuid());
+  IF r->>'ok' <> 'false' OR r->>'motiv' <> 'conflict' OR (r->>'versiune')::int <> 2 THEN RAISE EXCEPTION 'T4 FAIL: conflictul %', r; END IF;
   -- ABA (review r1 P1-2): telefonul 1 salvează B și pierde răspunsul; telefonul 2 revine la A; telefonul 1 reia B cu ACEEAȘI cheie => nu se reaplică
   lb := jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 50));
-  r := pg_temp.t_salv('s1', d1, ant, lb, 1, k3);
-  IF (r->>'versiune')::int <> 2 THEN RAISE EXCEPTION 'T4 FAIL: B %', r; END IF;
-  r := pg_temp.t_salv('s1', d1, ant, l1, 2, gen_random_uuid());
-  IF (r->>'versiune')::int <> 3 THEN RAISE EXCEPTION 'T4 FAIL: înapoi la A %', r; END IF;
-  r := pg_temp.t_salv('s1', d1, ant, lb, 1, k3);
-  IF r->>'duplicat' <> 'true' OR (r->>'versiune')::int <> 2 THEN RAISE EXCEPTION 'T4 FAIL: reluarea târzie a lui B %', r; END IF;
+  r := pg_temp.t_salv('s1', d1, ant, lb, 2, k3);
+  IF (r->>'versiune')::int <> 3 THEN RAISE EXCEPTION 'T4 FAIL: B %', r; END IF;
+  r := pg_temp.t_salv('s1', d1, ant, l1, 3, gen_random_uuid());
+  IF (r->>'versiune')::int <> 4 THEN RAISE EXCEPTION 'T4 FAIL: înapoi la A %', r; END IF;
+  r := pg_temp.t_salv('s1', d1, ant, lb, 2, k3);
+  -- duplicatul spune și versiunea curentă: diferită = altcineva a salvat după (clientul nu mai continuă scrierile intenției)
+  IF r->>'duplicat' <> 'true' OR (r->>'versiune')::int <> 3 OR (r->>'versiune_curenta')::int <> 4 THEN RAISE EXCEPTION 'T4 FAIL: reluarea târzie a lui B %', r; END IF;
   r := public.fn_raport_zilnic_citeste(s1, d1);
-  IF (r->>'versiune')::int <> 3 OR jsonb_array_length(r->'linii') <> 7 THEN RAISE EXCEPTION 'T4 FAIL: după ABA %', r; END IF;
+  IF (r->>'versiune')::int <> 4 OR jsonb_array_length(r->'linii') <> 7 THEN RAISE EXCEPTION 'T4 FAIL: după ABA %', r; END IF;
   -- antetul: un câmp lipsă rămâne neschimbat; autorul îl pune serverul; p_linii NULL = liniile neatinse
-  r := pg_temp.t_salv('s1', d1, '{"lucrari_efectuate": "test H 2"}', NULL, 3, gen_random_uuid());
-  IF (r->>'versiune')::int <> 4
+  r := pg_temp.t_salv('s1', d1, '{"lucrari_efectuate": "test H 2"}', NULL, 4, gen_random_uuid());
+  IF (r->>'versiune')::int <> 5
      OR (SELECT probleme || '|' || lucrari_efectuate || '|' || created_by::text FROM public.rapoarte_zilnice WHERE id = pg_temp.t_g('r1')::bigint)
         IS DISTINCT FROM 'nimic|test H 2|' || sef::text
      OR jsonb_array_length(public.fn_raport_zilnic_citeste(s1, d1)->'linii') <> 7 THEN
     RAISE EXCEPTION 'T4 FAIL: antetul / liniile neatinse %', r;
   END IF;
-  -- validarea: fiecare refuz e 22023 și nu scrie nimic (versiunea rămâne 4)
-  IF NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, NULL, 1)), 4, gen_random_uuid())', 's1', d1, '{}', 'a9'), '22023')   -- activitate din alt proiect
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u9'), '22023')   -- obiect din alt proiect
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_sud', 'u2'), '22023')   -- suduri la nod: din schemă
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 2)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_prob', 'u1'), '22023')   -- bifă = 1
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 0)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, -1)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1.2345)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 10000001)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
-     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1), pg_temp.t_l(%L, %L, 2)), 4, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1', 'a_lans', 'u1'), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1) || '{"x": 1}'), 4, gen_random_uuid())$q$, d1), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1) - 'unitate_id'), 4, gen_random_uuid())$q$, d1), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(jsonb_set(pg_temp.t_l('a_lans', 'u1', 1), '{cantitate}', '"5"')), 4, gen_random_uuid())$q$, d1), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(jsonb_set(pg_temp.t_l('a_lans', 'u1', 1), '{activitate_id}', '1.5')), 4, gen_random_uuid())$q$, d1), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', (SELECT jsonb_agg(pg_temp.t_l('a_lans', NULL, g)) FROM generate_series(1, 501) g), 4, gen_random_uuid())$q$, d1), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{"id": 1}', NULL, 4, gen_random_uuid())$q$, d1), '22023')            -- câmp de antet nepermis
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{"created_by": null}', NULL, 4, gen_random_uuid())$q$, d1), '22023') -- autorul îl pune serverul
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '[]', NULL, 4, gen_random_uuid())$q$, d1), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', '{}', 4, gen_random_uuid())$q$, d1), '22023')
+  -- validarea: fiecare refuz e 22023 și nu scrie nimic (versiunea rămâne 5)
+  IF NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, NULL, 1)), 5, gen_random_uuid())', 's1', d1, '{}', 'a9'), '22023')   -- activitate din alt proiect
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u9'), '22023')   -- obiect din alt proiect
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_sud', 'u2'), '22023')   -- suduri la nod: din schemă
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 2)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_prob', 'u1'), '22023')   -- bifă = 1
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 0)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, -1)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1.2345)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 10000001)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1'), '22023')
+     OR NOT pg_temp.t_refuza(format('SELECT pg_temp.t_salv(%L, %L, %L, jsonb_build_array(pg_temp.t_l(%L, %L, 1), pg_temp.t_l(%L, %L, 2)), 5, gen_random_uuid())', 's1', d1, '{}', 'a_lans', 'u1', 'a_lans', 'u1'), '22023')
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1) || '{"x": 1}'), 5, gen_random_uuid())$q$, d1), '22023')
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1) - 'unitate_id'), 5, gen_random_uuid())$q$, d1), '22023')
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(jsonb_set(pg_temp.t_l('a_lans', 'u1', 1), '{cantitate}', '"5"')), 5, gen_random_uuid())$q$, d1), '22023')
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', jsonb_build_array(jsonb_set(pg_temp.t_l('a_lans', 'u1', 1), '{activitate_id}', '1.5')), 5, gen_random_uuid())$q$, d1), '22023')
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', (SELECT jsonb_agg(pg_temp.t_l('a_lans', NULL, g)) FROM generate_series(1, 501) g), 5, gen_random_uuid())$q$, d1), '22023')
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{"id": 1}', NULL, 5, gen_random_uuid())$q$, d1), '22023')            -- câmp de antet nepermis
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{"created_by": null}', NULL, 5, gen_random_uuid())$q$, d1), '22023') -- autorul îl pune serverul
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '[]', NULL, 5, gen_random_uuid())$q$, d1), '22023')
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', '{}', 5, gen_random_uuid())$q$, d1), '22023')
      OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', NULL, -1, gen_random_uuid())$q$, d1), '22023')
-     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', NULL, 4, NULL)$q$, d1), '22023') THEN
+     OR NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', NULL, 5, NULL)$q$, d1), '22023') THEN
     RAISE EXCEPTION 'T4 FAIL: validarea';
   END IF;
-  IF (public.fn_raport_zilnic_citeste(s1, d1)->>'versiune')::int <> 4 THEN RAISE EXCEPTION 'T4 FAIL: un refuz a scris'; END IF;
+  IF (public.fn_raport_zilnic_citeste(s1, d1)->>'versiune')::int <> 5 THEN RAISE EXCEPTION 'T4 FAIL: un refuz a scris'; END IF;
   -- raport nou, pe o zi fără raport: versiunea 0 -> 1, autorul = șeful
   r := pg_temp.t_salv('s1', z - 3, '{"lucrari_efectuate": "zi nouă"}', '[]', 0, gen_random_uuid());
   IF r->>'ok' <> 'true' OR (r->>'versiune')::int <> 1
      OR (SELECT created_by FROM public.rapoarte_zilnice WHERE site_id = s1 AND data = z - 3) IS DISTINCT FROM sef THEN
     RAISE EXCEPTION 'T4 FAIL: raport nou %', r;
+  END IF;
+  -- reluarea aceleiași chei după ce prima încercare a CREAT raportul: duplicat (raportul există acum, cheia e a lui)
+  k1 := gen_random_uuid();
+  r := pg_temp.t_salv('s1', z - 4, '{"lucrari_efectuate": "zi nouă 2"}', NULL, 0, k1);
+  IF (r->>'versiune')::int <> 1 THEN RAISE EXCEPTION 'T4 FAIL: raport nou 2 %', r; END IF;
+  r := pg_temp.t_salv('s1', z - 4, '{"lucrari_efectuate": "zi nouă 2"}', NULL, 0, k1);
+  IF r->>'duplicat' <> 'true' OR (r->>'versiune')::int <> 1 OR (r->>'versiune_curenta')::int <> 1 THEN RAISE EXCEPTION 'T4 FAIL: reluarea după creare %', r; END IF;
+  -- aceeași cheie pe ALT raport (altă zi) = eroare, nu duplicat
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{"lucrari_efectuate": "zi nouă 2"}', NULL, 0, %L)$q$, z - 5, k1), '22023') THEN
+    RAISE EXCEPTION 'T4 FAIL: cheia altui raport';
   END IF;
   -- alt șantier (s2) = fără drept; scrierea directă în raport_lucrari e retrasă (20261208b); citirea rămâne; jurnalul nu se citește direct
   IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s2', %L, '{}', '[]', 0, gen_random_uuid())$q$, d1), '42501')
@@ -426,18 +437,31 @@ BEGIN
     RAISE EXCEPTION 'T4 FAIL: dreptul pe șantier / scrierea directă / jurnalul';
   END IF;
   -- al doilea raport (zi veche) al aceluiași șantier
-  r := pg_temp.t_salv('s1', DATE '2001-01-01', '{}', jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1000)), 0, gen_random_uuid());
+  r := pg_temp.t_salv('s1', DATE '2001-01-01', '{}', jsonb_build_array(pg_temp.t_l('a_lans', 'u1', 1000)), 1, gen_random_uuid());
   IF r->>'ok' <> 'true' THEN RAISE EXCEPTION 'T4 FAIL: al doilea raport %', r; END IF;
+END $t$;
+SELECT pg_temp.t_ca(NULL, 'postgres');
+UPDATE public.rapoarte_zilnice SET probleme = 'scris direct', versiune_salvare = 99 WHERE id = pg_temp.t_g('r1')::bigint;
+SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+DO $t$ DECLARE r jsonb; BEGIN
+  IF (SELECT versiune_salvare FROM public.rapoarte_zilnice WHERE id = pg_temp.t_g('r1')::bigint) <> 6 THEN
+    RAISE EXCEPTION 'T4 FAIL: versiunea forțată de o scriere directă';
+  END IF;
+  r := pg_temp.t_salv('s1', pg_temp.t_g('azi')::date - 2, '{"probleme": "telefon nou"}', NULL, 5, gen_random_uuid());
+  IF r->>'ok' <> 'false' OR r->>'motiv' <> 'conflict' OR (r->>'versiune')::int <> 6
+     OR (SELECT probleme FROM public.rapoarte_zilnice WHERE id = pg_temp.t_g('r1')::bigint) <> 'scris direct' THEN
+    RAISE EXCEPTION 'T4 FAIL: scrierea directă a antetului ocolește versiunea %', r;
+  END IF;
 END $t$;
 SELECT pg_temp.t_ca(pg_temp.t_g('ed')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', '[]', 4, gen_random_uuid())$q$, pg_temp.t_g('azi')::date - 2), '42501') THEN
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', '[]', 6, gen_random_uuid())$q$, pg_temp.t_g('azi')::date - 2), '42501') THEN
     RAISE EXCEPTION 'T4 FAIL: editorul Execuție scrie raportul unui șantier care nu e al lui';
   END IF;
 END $t$;
 SELECT pg_temp.t_ca(pg_temp.t_g('fara')::uuid, 'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', '[]', 4, gen_random_uuid())$q$, pg_temp.t_g('azi')::date - 2), '42501')
+  IF NOT pg_temp.t_refuza(format($q$SELECT pg_temp.t_salv('s1', %L, '{}', '[]', 6, gen_random_uuid())$q$, pg_temp.t_g('azi')::date - 2), '42501')
      OR NOT pg_temp.t_refuza(format('SELECT public.fn_raport_zilnic_citeste(%s, %L)', pg_temp.t_g('s1'), pg_temp.t_g('azi')::date - 2), '42501') THEN
     RAISE EXCEPTION 'T4 FAIL: fără drept';
   END IF;
@@ -459,7 +483,7 @@ END $t$;
 -- owner-ul scrie pe orice șantier; un șantier fără proiect nu primește linii
 SELECT pg_temp.t_ca(pg_temp.t_g('own')::uuid, 'authenticated');
 DO $t$ DECLARE r jsonb; BEGIN
-  r := pg_temp.t_salv('s2', pg_temp.t_g('azi')::date - 2, '{}', jsonb_build_array(pg_temp.t_l('a9', 'u9', 25)), 0, gen_random_uuid());
+  r := pg_temp.t_salv('s2', pg_temp.t_g('azi')::date - 2, '{}', jsonb_build_array(pg_temp.t_l('a9', 'u9', 25)), 1, gen_random_uuid());
   IF r->>'ok' <> 'true' THEN RAISE EXCEPTION 'T4 FAIL: owner %', r; END IF;
 END $t$;
 SELECT pg_temp.t_ca(NULL, 'postgres');
@@ -697,7 +721,9 @@ SELECT set_config('gazpet.revenire_20261208a', 'SCOATE_DEVIZE_TINTE:' || txid_cu
 DO $t$ BEGIN
   IF to_regclass('public.v_executie_tinte') IS NOT NULL OR to_regclass('public.executie_tinte_setari') IS NOT NULL
      OR to_regclass('public.raport_zilnic_salvari') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza']::name[]))
+     OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice' AND column_name = 'versiune_salvare')
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_raport_zilnic_versiune')
+     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_zilnic_citeste', 'fn_raport_zilnic_salveaza', 'fn_raport_zilnic_versiune']::name[]))
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('proiect_unitati', 'proiect_activitati')
                  AND column_name IN ('obiect_cod', 'nod_cod', 'plan_start', 'plan_final', 'principala', 'factor_um', 'sursa_executat', 'baza_deviz', 'dn_min', 'dn_max'))
      OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'INSERT') OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'DELETE')
