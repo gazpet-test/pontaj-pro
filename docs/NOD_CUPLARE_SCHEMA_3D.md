@@ -9,7 +9,7 @@ Execuție → proiect → tab „nod”: lângă vederile 2D (Plan, A…F, REZ-*
 - Sudurile grupului fără loc în model apar în lista „📋 Suduri fără loc în 3D”; codurile din model care lipsesc din listă se afișează.
 - Piesele și sudurile `estimat` sunt mai deschise la culoare (transparente).
 - Three.js (0.186.1, fixat) se încarcă **doar** la apăsarea butonului, într-un fișier separat la build
-  (`nodSchema3dThree-*.js`, ~567 KB / ~141 KB gzip); pagina principală nu crește.
+  (`nodSchema3dThree-*.js`, ~571 KB / ~142 KB gzip); pagina principală nu crește.
 - Fără tabele noi, fără migrări: modelul e un fișier static, urcat în bucket de chat.
 
 ## Formatul `model_3d.json` (versiunea 1)
@@ -48,7 +48,27 @@ un element sau o sudură invalidă apare în mesajul „Schema 3D, părți ignor
 - `cert`: `desen` (din cotele planșei / tabel) sau `estimat`. Lipsă = `desen`.
 - `prefixe`: codurile sudurilor care țin de grup (ex. `CR`); sudurile cu aceste prefixe fără poziție intră în lista „fără loc în 3D”.
 - `teren_z: null` = fără teren (ex. o schemă fără cote de amplasare).
-- Grupurile se văd pe rând (selector deasupra filtrelor); un grup nu are poziție față de altul.
+- Fiecare grup se vede și singur (selector deasupra filtrelor), în sistemul lui de coordonate.
+
+## Amplasarea grupurilor și vederea „🏗 Toată instalația” (varianta B, 10.11.2026)
+
+Câmp **opțional** pe grup (formatul rămâne `versiune: 1`; modelele fără el se comportă exact ca înainte):
+
+```json
+{ "id": "gara", "prefixe": ["CP"], "amplasare": { "origine": [12000, -3500, 0], "rot_z": 90 }, "elemente": [], "suduri": [] }
+```
+
+- `origine` = unde ajunge originea grupului în **sistemul comun al nodului** (mm); `rot_z` = rotirea grupului în jurul axei z,
+  în grade, sens trigonometric (întâi rotirea în originea grupului, apoi mutarea). Terenul comun e la `z = 0` al sistemului comun.
+- Validare strictă: exact câmpurile `origine` (3 numere finite, în ±1 km) și `rot_z` (număr între -360 și 360); niciun alt câmp.
+  Și punctele grupului, după amplasare, trebuie să rămână în ±1 km. Amplasarea invalidă = mesaj în „Schema 3D, părți ignorate”,
+  iar grupul **rămâne** (fără amplasare): se vede în vederea lui, nu în cea comună.
+- Vederea „Toată instalația” apare doar dacă **cel puțin două** grupuri au amplasare validă și e cea implicită atunci. Arată toate
+  grupurile amplasate în aceeași scenă; grupurile neamplasate sunt enumerate deasupra („Nu sunt amplasate: …”).
+- În vederea comună: aceleași sfere, aceeași fișă, aceleași filtre. „Fără loc în 3D” și „în schemă, dar nu în listă” se calculează
+  pe reuniunea grupurilor amplasate, fără dubluri; două suduri din grupuri diferite care ajung în același loc (≤ 1 mm) sunt o sferă.
+- Sub scenă: câte un buton pe grup (👁 arată / 🚫 ascunde) și „⤢ Du-mă la” (camera pe grup); butonul „🏷 Etichete” ascunde
+  etichetele de tip `eticheta`. Piesele fiecărui grup sunt lipite pe material (câteva apeluri de desenare în loc de sute).
 
 ## Cum se face modelul
 

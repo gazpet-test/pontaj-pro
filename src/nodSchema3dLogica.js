@@ -3,6 +3,7 @@
 // Decizia lui Răzvan, 10.11.2026: varianta A — schema 3D generată din izometrii, în browser (Three.js încărcat doar la cerere).
 // Modelul vine din bucket-ul noduri-scheme (<proiect>/<nod>/model_3d.json, urcat de chat, lângă vederi.json); aici: validarea lui,
 // legarea sudurilor din executie_noduri_suduri de pozițiile din model (după cod), culorile pe DN și pe stare.
+// Varianta B (10.11.2026): grupurile pot avea `amplasare` (opțională) și apare vederea „Toată instalația” (instalatia()).
 // Fără React, fără Three.js, fără Supabase: totul se testează în vitest.
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -88,7 +89,13 @@ export function parseModel3d(json) {
     })
     const titlu = txt(g.titlu)
     if (titlu.length > LIM.text) erori.push(`${eticG}: titlul are peste ${LIM.text} caractere (tăiat)`)
-    grupuri.push({ id, titlu: titlu.slice(0, LIM.text) || id, prefixe, terenZ: teren, elemente, suduri, faraPozitie })
+    const grup = { id, titlu: titlu.slice(0, LIM.text) || id, prefixe, terenZ: teren, amplasare: null, elemente, suduri, faraPozitie }
+    // amplasarea în sistemul comun al nodului (opțională): invalidă = eroare vizibilă, grupul rămâne doar în vederea lui (L12)
+    const am = citesteAmplasare(g.amplasare)
+    const pbAm = am.eroare || (am.amplasare && !punctePastrate(grup, am.amplasare) ? 'amplasarea scoate grupul în afara ±1 km' : null)
+    if (pbAm) erori.push(`${eticG}: ${pbAm}; grupul nu apare în „Toată instalația”, doar în vederea lui`)
+    else grup.amplasare = am.amplasare
+    grupuri.push(grup)
   })
   const note = Array.isArray(json.note) ? json.note : []
   if (note.length > LIM.note) erori.push(`Modelul are ${note.length} note; peste ${LIM.note} nu se afișează`)
@@ -127,6 +134,80 @@ function curataElement(e) {
 }
 export const lungime = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2])
 
+// ── amplasarea grupurilor în sistemul comun al nodului (varianta B, 10.11.2026) ──
+// `amplasare: { origine: [x, y, z], rot_z: grade }` pe grup = unde ajunge originea grupului în sistemul comun și rotirea lui în
+// jurul axei z (sens trigonometric). Câmp opțional: modelele fără el se comportă exact ca înainte (versiune: 1 rămâne).
+const CHEI_AMPLASARE = ['origine', 'rot_z']
+
+/** Validarea strictă a amplasării. Lipsă / null = fără amplasare (fără eroare). Întoarce { amplasare: { origine, rotZ } | null, eroare }. */
+export function citesteAmplasare(a) {
+  const nu = eroare => ({ amplasare: null, eroare })
+  if (a == null) return nu(null)
+  if (typeof a !== 'object' || Array.isArray(a)) return nu('amplasarea nu e un obiect')
+  const necunoscute = Object.keys(a).filter(k => !CHEI_AMPLASARE.includes(k))
+  if (necunoscute.length) return nu(`amplasarea are câmpuri necunoscute (${necunoscute.join(', ').slice(0, 60)})`)
+  if (!estePunct(a.origine)) return nu('originea amplasării lipsește sau e invalidă (3 numere, în ±1 km)')
+  if (!(typeof a.rot_z === 'number' && Number.isFinite(a.rot_z) && Math.abs(a.rot_z) <= 360)) return nu('rot_z lipsește sau nu e un număr între -360 și 360')
+  return { amplasare: { origine: a.origine.slice(), rotZ: a.rot_z }, eroare: null }
+}
+
+/** cos / sin pentru rotirea în grade; multiplii de 90° sunt exacți (fără 6e-17 care ar decala sudurile „în același loc”). */
+function cosSin(grade) {
+  const n = ((grade % 360) + 360) % 360
+  const exact = { 0: [1, 0], 90: [0, 1], 180: [-1, 0], 270: [0, -1] }[n]
+  if (exact) return exact
+  const t = (n * Math.PI) / 180
+  return [Math.cos(t), Math.sin(t)]
+}
+
+/** Punctul din sistemul grupului -> sistemul comun: întâi rotirea în jurul lui z (în originea grupului), apoi translația. */
+export function transformaPunct(p, amplasare) {
+  if (!amplasare) return p.slice()
+  const [c, s] = cosSin(amplasare.rotZ), o = amplasare.origine
+  return [p[0] * c - p[1] * s + o[0], p[0] * s + p[1] * c + o[1], p[2] + o[2]]
+}
+
+/** Toate punctele grupului rămân, după amplasare, în limitele modelului (±1 km)? */
+function punctePastrate(grup, amplasare) {
+  for (const e of grup.elemente) for (const k of PUNCTE[e.tip]) if (!estePunct(transformaPunct(e[k], amplasare))) return false
+  for (const s of grup.suduri) if (!estePunct(transformaPunct(s.p, amplasare))) return false
+  return true
+}
+
+/** Grupul cu toate punctele (piese și suduri) mutate în sistemul comun. Grupul fără amplasare iese neschimbat (copie). */
+export function aplicaAmplasare(grup) {
+  const T = p => transformaPunct(p, grup.amplasare)
+  const elemente = grup.elemente.map(e => {
+    const o = { ...e }
+    for (const k of PUNCTE[e.tip]) o[k] = T(e[k])
+    return o
+  })
+  return { ...grup, elemente, suduri: grup.suduri.map(s => ({ ...s, p: T(s.p) })) }
+}
+
+export const ID_INSTALATIE = '_instalatie'      // nu poate fi id de grup (RE_ID cere literă / cifră la început)
+
+/**
+ * Vederea „Toată instalația”: toate grupurile cu amplasare validă, mutate în sistemul comun, cu terenul comun la z = 0.
+ * Există doar dacă cel puțin DOUĂ grupuri sunt amplasate (altfel null). Are aceeași formă ca un grup (prefixe, elemente, suduri =
+ * reuniunea), ca maparea și scena să meargă la fel, plus `parti` (grupurile, pentru ascundere / „du-mă la”) și `neamplasate`.
+ */
+export function instalatia(model) {
+  const toate = model?.grupuri || []
+  const amplasate = toate.filter(g => g.amplasare)
+  if (amplasate.length < 2) return null
+  const parti = amplasate.map(aplicaAmplasare)
+  return {
+    id: ID_INSTALATIE, titlu: 'Toată instalația', terenZ: 0, amplasare: null,
+    prefixe: [...new Set(parti.flatMap(p => p.prefixe))],
+    elemente: parti.flatMap(p => p.elemente),
+    suduri: parti.flatMap(p => p.suduri),
+    faraPozitie: parti.flatMap(p => p.faraPozitie),
+    parti: parti.map(p => ({ id: p.id, titlu: p.titlu, prefixe: p.prefixe, elemente: p.elemente, suduri: p.suduri })),
+    neamplasate: toate.filter(g => !g.amplasare).map(g => ({ id: g.id, titlu: g.titlu })),
+  }
+}
+
 // ── sudurile din BD pe pozițiile din model ──
 export const PRAG_MM = 1   // două suduri la cel mult 1 mm una de alta = același loc (o singură sferă, cu lista lor)
 
@@ -134,16 +215,25 @@ export const PRAG_MM = 1   // două suduri la cel mult 1 mm una de alta = acela�
  * Locurile sudurilor din model (TOATE, nefiltrate): două suduri la ≤ PRAG_MM (distanța reală 3D, nu rotunjire) sunt în același loc,
  * iar legătura e tranzitivă (lanț de vecini). Cheia locului = cel mai mic cod din el, poziția = a primei suduri din model:
  * nu depind de filtre sau de ordinea din listă. Întoarce Map cod -> { cheie, p }.
+ * Vecinii se caută pe o grilă cu latura PRAG_MM (doar celulele alăturate), nu fiecare cu fiecare: în vederea comună sunt
+ * sudurile tuturor grupurilor. Rădăcina unui loc rămâne cel mai mic indice (unirea leagă mereu indicele mare de cel mic).
  */
 export function punctePeCod(suduri) {
   const l = suduri || [], par = l.map((_, i) => i)
   const rad = i => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i] } return i }
-  for (let i = 0; i < l.length; i++) {
-    for (let j = i + 1; j < l.length; j++) {
-      const a = l[i].p, b = l[j].p
-      if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= PRAG_MM) { const x = rad(i), y = rad(j); if (x !== y) par[Math.max(x, y)] = Math.min(x, y) }
+  const grila = new Map()
+  l.forEach((s, j) => {
+    const c = s.p.map(v => Math.floor(v / PRAG_MM))
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      for (const i of grila.get(`${c[0] + dx},${c[1] + dy},${c[2] + dz}`) || []) {
+        const a = l[i].p, b = s.p
+        if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= PRAG_MM) { const x = rad(i), y = rad(j); if (x !== y) par[Math.max(x, y)] = Math.min(x, y) }
+      }
     }
-  }
+    const k = c.join(',')
+    if (!grila.has(k)) grila.set(k, [])
+    grila.get(k).push(j)
+  })
   const loc = new Map()
   l.forEach((s, i) => {
     const r = rad(i)
@@ -162,11 +252,14 @@ export function punctePeCod(suduri) {
  *  - faraLoc: sudurile din domeniul grupului (prefixele lui) fără poziție în model (din fara_pozitie sau lipsă cu totul);
  *  - inModelFaraLista: codurile din model care nu sunt în listă (raportate, nu ascunse; ex. sudură anulată filtrată sau cod greșit).
  * `toate` = toate sudurile nodului (nefiltrate), ca un cod filtrat să nu apară ca „lipsă din listă”.
+ * În vederea comună (`grup.parti`, din instalatia()) aceeași mapare rulează pe reuniune: un cod apare o singură dată (codurile sunt
+ * unice în tot modelul), iar fiecare loc primește `parti` = grupurile din care vin sudurile lui (pentru ascunderea pe grup).
  */
 export function mapeazaSuduri3d(grup, filtrate, toate = filtrate) {
   if (!grup) return { grupuri: [], faraLoc: [], inModelFaraLista: [] }
   const peCod = new Map((filtrate || []).map(s => [String(s.cod || '').toUpperCase(), s]))
   const existente = new Set((toate || []).map(s => String(s.cod || '').toUpperCase()))
+  const parteDe = grup.parti ? new Map(grup.parti.flatMap(p => p.suduri.map(s => [s.cod, p.id]))) : null
   const m = new Map(), puse = new Set(), inModelFaraLista = []
   const ancore = punctePeCod(grup.suduri)
   for (const sm of grup.suduri) {
@@ -174,10 +267,11 @@ export function mapeazaSuduri3d(grup, filtrate, toate = filtrate) {
     const s = peCod.get(sm.cod)
     if (!s) continue                                     // există, dar e scoasă de filtre
     const a = ancore.get(sm.cod)
-    if (!m.has(a.cheie)) m.set(a.cheie, { cheie: a.cheie, p: a.p, cert: sm.cert, puncte: [] })
+    if (!m.has(a.cheie)) m.set(a.cheie, { cheie: a.cheie, p: a.p, cert: sm.cert, puncte: [], ...(parteDe ? { parti: [] } : {}) })
     const g = m.get(a.cheie)
     if (sm.cert === 'estimat') g.cert = 'estimat'
     g.puncte.push({ sudura: s, certitudine: sm.cert })
+    if (parteDe && !g.parti.includes(parteDe.get(sm.cod))) g.parti.push(parteDe.get(sm.cod))
     puse.add(sm.cod)
   }
   const faraLoc = (filtrate || []).filter(s => {
@@ -185,6 +279,12 @@ export function mapeazaSuduri3d(grup, filtrate, toate = filtrate) {
     return grup.prefixe.includes(cod.split('-')[0]) && !puse.has(cod)
   })
   return { grupuri: [...m.values()], faraLoc, inModelFaraLista }
+}
+
+/** Locurile care se văd când unele grupuri sunt ascunse (vederea comună): un loc se vede dacă vine din cel puțin un grup vizibil. */
+export function puncteVizibile(locuri, ascunse) {
+  if (!ascunse || !ascunse.size) return locuri || []
+  return (locuri || []).filter(l => !l.parti || l.parti.some(id => !ascunse.has(id)))
 }
 
 /** Culoarea sferei unui punct: o singură stare = culoarea ei; mai multe = starea cea mai puțin avansată (ordinea STARI). */
@@ -218,7 +318,9 @@ export function cutieGrup(grup) {
   for (const e of grup?.elemente || []) for (const k of ['a', 'b', 'c', 'r', 'p']) if (e[k]) pts.push(e[k])
   for (const s of grup?.suduri || []) pts.push(s.p)
   if (!pts.length) return null
-  const min = [0, 1, 2].map(i => Math.min(...pts.map(p => p[i]))), max = [0, 1, 2].map(i => Math.max(...pts.map(p => p[i])))
+  // buclă, nu Math.min(...pts): în vederea comună pot fi zeci de mii de puncte (spread-ul mare dă RangeError)
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity]
+  for (const p of pts) for (let i = 0; i < 3; i++) { if (p[i] < min[i]) min[i] = p[i]; if (p[i] > max[i]) max[i] = p[i] }
   return { min, max, centru: [0, 1, 2].map(i => (min[i] + max[i]) / 2), marime: Math.max(...[0, 1, 2].map(i => max[i] - min[i])) }
 }
 

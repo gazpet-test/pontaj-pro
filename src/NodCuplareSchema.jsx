@@ -9,6 +9,7 @@
 // L24: încărcarea, imaginea și salvarea au fiecare generația lor; un rezultat întârziat nu se aplică pe alt context.
 // Schema 3D (probă, 10.11.2026): dacă lângă vederi.json există model_3d.json, apare butonul „3D (probă)”; sferele din 3D deschid
 // aceeași fișă / listă ca punctele din 2D (NodSchema3D.jsx încarcă Three.js doar atunci).
+// Varianta B (10.11.2026): cu cel puțin două grupuri amplasate apare și „Toată instalația” (toate grupurile într-o scenă).
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -21,7 +22,7 @@ import {
 } from './nodCuplareLogica.js'
 import { G, S, ContorNod, Legenda, SchemaVedere, FisaSudura, FiltreNod, ListaGrup } from './NodCuplareVizualizare.jsx'
 import NodSchema3D from './NodSchema3D.jsx'
-import { parseModel3d, mapeazaSuduri3d, esteObiectLipsa } from './nodSchema3dLogica.js'
+import { parseModel3d, mapeazaSuduri3d, esteObiectLipsa, instalatia, ID_INSTALATIE } from './nodSchema3dLogica.js'
 
 const BUCKET = 'noduri-scheme'
 const COLOANE = 'id, proiect_id, nod_cod, cod, subansamblu, dn, diametru, poz1, poz2, certitudine, stare, data_stare, data_sudare, sudor, buletin_ndt, motiv, vedere, x_pct, y_pct, pozitie_certitudine, pozitii_secundare, versiune, modificat_la'
@@ -145,7 +146,9 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
         const m = parseModel3d(JSON.parse(await data.text()))
         if (!viu) return
         setModel3d(m)
-        setGrup3dId(g => (m.grupuri.some(x => x.id === g) ? g : (m.grupuri[0]?.id || '')))
+        // implicit „Toată instalația” când există (cel puțin două grupuri amplasate); altfel primul grup
+        const comuna = !!instalatia(m)
+        setGrup3dId(g => ((g === ID_INSTALATIE ? comuna : m.grupuri.some(x => x.id === g)) ? g : (comuna ? ID_INSTALATIE : (m.grupuri[0]?.id || ''))))
       } catch (e) { if (viu) setEroareModel3d('Schema 3D nu se poate citi (model_3d.json): ' + (e?.message || e)) }
     })()
     return () => { viu = false }
@@ -176,8 +179,10 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
   // sudurile fără punct pe vederea afișată (sau fără schemă deloc): se deschid din listă, cu aceeași fișă
   const faraPunct = useMemo(() => (vedereCurenta ? faraPunctPeVedere(filtrate, vedere) : filtrate), [filtrate, vedere, vedereCurenta])
   const faraNiciunPunct = aleNodului.filter(s => s.vedere == null).length
-  // 3D: grupul ales din model; sferele = sudurile filtrate cu poziție în model; lista = sudurile grupului fără loc în 3D
-  const grup3d = model3d?.grupuri.find(g => g.id === grup3dId) || model3d?.grupuri[0] || null
+  // 3D: grupul ales din model; sferele = sudurile filtrate cu poziție în model; lista = sudurile grupului fără loc în 3D.
+  // „Toată instalația” (varianta B) = grupurile amplasate, mutate în sistemul comun; maparea rulează pe reuniunea lor.
+  const instalatie3d = useMemo(() => instalatia(model3d), [model3d])
+  const grup3d = (grup3dId === ID_INSTALATIE && instalatie3d) || model3d?.grupuri.find(g => g.id === grup3dId) || instalatie3d || model3d?.grupuri[0] || null
   const map3d = useMemo(() => mapeazaSuduri3d(grup3d, filtrate, aleNodului), [grup3d, filtrate, aleNodului])
   const arata3d = mod3d && !!grup3d
   const grupuriActive = arata3d ? map3d.grupuri : grupuri
@@ -296,19 +301,27 @@ export default function NodCuplareSchema({ proiectId, client = supabase }) {
       {manifest?.erori?.length > 0 && <Alerta text={'Vederi ignorate din manifest: ' + manifest.erori.join(' · ')} />}
       {eroareModel3d && <Alerta text={eroareModel3d} />}
       {model3d?.erori?.length > 0 && <Alerta text={'Schema 3D, părți ignorate: ' + model3d.erori.slice(0, 5).join(' · ') + (model3d.erori.length > 5 ? ` (+ încă ${model3d.erori.length - 5})` : '')} />}
-      {arata3d && (model3d.grupuri.length > 1
+      {arata3d && (model3d.grupuri.length > 1 || instalatie3d
         ? (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-            {model3d.grupuri.map(g => (
-              <button key={g.id} onClick={() => { setGrupDeschis(null); setGrup3dId(g.id) }} style={S.chip(g.id === grup3d.id, G.purple)}>{g.titlu}</button>
+            {[...(instalatie3d ? [instalatie3d] : []), ...model3d.grupuri].map(g => (
+              <button key={g.id} onClick={() => { setGrupDeschis(null); setGrup3dId(g.id) }}
+                style={{ ...S.chip(g.id === grup3d.id, G.purple), minHeight: 36, fontWeight: g.id === ID_INSTALATIE ? 800 : 600 }}>
+                {g.id === ID_INSTALATIE ? '🏗 ' : ''}{g.titlu}
+              </button>
             ))}
           </div>
         )
         : <div style={{ fontSize: 12, color: G.muted, marginBottom: 6 }}>{grup3d.titlu}</div>)}
+      {arata3d && grup3d.id === ID_INSTALATIE && grup3d.neamplasate.length > 0 && (
+        <div style={{ fontSize: 12, color: G.yellow, marginBottom: 6 }}>
+          Nu sunt amplasate (se văd doar în vederea lor): {grup3d.neamplasate.map(g => g.titlu).join(', ')}
+        </div>
+      )}
       {!arata3d && vedereCurenta && <div style={{ fontSize: 12, color: G.muted, marginBottom: 6 }}>{vedereCurenta.titlu}</div>}
       <FiltreNod stari={stari} setStari={setStari} dn={dn} setDn={setDn} dnuri={dnuri} />
       <div style={{ height: 8 }} />
-      {arata3d && <NodSchema3D grup={grup3d} puncte={map3d.grupuri} selectatId={selectat} onSelect={atingePunct} />}
+      {arata3d && <NodSchema3D key={grup3d.id} grup={grup3d} puncte={map3d.grupuri} selectatId={selectat} onSelect={atingePunct} />}
       {!arata3d && vedereCurenta && (
         <SchemaVedere imagineUrl={imagine?.cheie === cheieImg ? imagine.url : null} cheieImagine={cheieImg} w={vedereCurenta.w} h={vedereCurenta.h}
           grupuri={grupuri} selectatId={selectat} onSelect={atingePunct}

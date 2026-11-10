@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseModel3d, mapeazaSuduri3d, culoarePunct3d, culoareDn, CULORI_DN, CULOARE_DN_ALTA, esteObiectLipsa, esteAtingere, razaSfera,
   cutieGrup, spreScena, dnuriGrup, estePunct, gestNou, gestMisca, punctePeCod,
+  citesteAmplasare, transformaPunct, aplicaAmplasare, instalatia, puncteVizibile, ID_INSTALATIE,
 } from './nodSchema3dLogica.js'
 
 const MODEL = () => ({
@@ -304,5 +305,194 @@ describe('mărunte', () => {
     expect(spreScena([1000, 2000, 3000])).toEqual([1, 3, -2])
     expect(estePunct([1, 2, 3])).toBe(true)
     expect(estePunct([1, 2, '3'])).toBe(false)
+  })
+
+  it('cutia unui grup foarte mare nu pică (buclă, nu spread pe zeci de mii de puncte)', () => {
+    const elemente = Array.from({ length: 100000 }, (_, i) => ({ a: [i, 0, 0], b: [i, 1, 0] }))
+    const c = cutieGrup({ elemente, suduri: [] })
+    expect(c.min).toEqual([0, 0, 0])
+    expect(c.max).toEqual([99999, 1, 0])
+  })
+})
+
+// ═══════════ varianta B: amplasarea grupurilor și vederea „Toată instalația” ═══════════
+// Model sintetic (nu e nodul real): trei grupuri, două amplasate, unul nu. Valorile transformate sunt calculate de mână.
+const MODEL_B = () => {
+  const j = MODEL()
+  j.grupuri[0].amplasare = { origine: [0, 0, -1500], rot_z: 0 }           // rezervoarele: doar coborâte 1,5 m
+  j.grupuri[0].suduri.push({ cod: 'CR-020', p: [8000, 0, 2000], cert: 'desen' }) // ajunge în (8000, 0, 500)
+  j.grupuri.push({
+    id: 'gara', titlu: 'Gara', prefixe: ['CP'], teren_z: 0,
+    amplasare: { origine: [10000, 0, 0], rot_z: 90 },
+    elemente: [
+      { tip: 'teava', a: [0, 0, 0], b: [1000, 0, 0], dn: 300 },
+      { tip: 'eticheta', p: [0, 2000, 800], text: 'spre stație' },
+    ],
+    suduri: [
+      { cod: 'CP-001', p: [1000, 0, 0], cert: 'desen' },      // rot 90: (0, 1000, 0) + (10000, 0, 0) = (10000, 1000, 0)
+      { cod: 'CP-002', p: [0, 2000, 500], cert: 'desen' },    // rot 90: (-2000, 0, 500) + … = (8000, 0, 500) = locul lui CR-020
+      { cod: 'CP-077', p: [0, 0, 0], cert: 'desen' },         // în model, nu în listă
+    ],
+    fara_pozitie: [{ cod: 'CP-003', motiv: 'de confirmat' }],
+  })
+  return j                                                    // grupul „gaz” (CI) rămâne fără amplasare
+}
+
+describe('amplasare — validare', () => {
+  it('lipsă sau null = fără amplasare și fără eroare; validă = păstrată (origine copiată, rotZ)', () => {
+    expect(citesteAmplasare(undefined)).toEqual({ amplasare: null, eroare: null })
+    expect(citesteAmplasare(null)).toEqual({ amplasare: null, eroare: null })
+    const o = [1, 2, 3]
+    const r = citesteAmplasare({ origine: o, rot_z: -45.5 })
+    expect(r).toEqual({ amplasare: { origine: [1, 2, 3], rotZ: -45.5 }, eroare: null })
+    expect(r.amplasare.origine).not.toBe(o)
+    expect(citesteAmplasare({ origine: [0, 0, 0], rot_z: 360 }).eroare).toBe(null)
+    expect(citesteAmplasare({ origine: [0, 0, 0], rot_z: -360 }).eroare).toBe(null)
+  })
+
+  it('invalidă = eroare cu motiv (formă, origine, rot_z, câmpuri necunoscute)', () => {
+    for (const [a, motiv] of [
+      [[0, 0, 0], /nu e un obiect/],
+      ['sus', /nu e un obiect/],
+      [{ origine: [0, 0], rot_z: 0 }, /originea/],
+      [{ origine: [0, Number.NaN, 0], rot_z: 0 }, /originea/],
+      [{ origine: [0, 0, 1e6 + 1], rot_z: 0 }, /originea/],
+      [{ origine: [0, 0, '0'], rot_z: 0 }, /originea/],
+      [{ rot_z: 0 }, /originea/],
+      [{ origine: [0, 0, 0] }, /rot_z/],
+      [{ origine: [0, 0, 0], rot_z: '90' }, /rot_z/],
+      [{ origine: [0, 0, 0], rot_z: 360.5 }, /rot_z/],
+      [{ origine: [0, 0, 0], rot_z: Number.POSITIVE_INFINITY }, /rot_z/],
+      [{ origine: [0, 0, 0], rot_z: 0, rotz: 90 }, /câmpuri necunoscute \(rotz\)/],
+    ]) {
+      const r = citesteAmplasare(a)
+      expect(r.amplasare).toBe(null)
+      expect(r.eroare).toMatch(motiv)
+    }
+  })
+
+  it('în parseModel3d: amplasarea invalidă e eroare vizibilă pe grup, iar grupul RĂMÂNE (fără amplasare, L12)', () => {
+    const j = MODEL_B()
+    j.grupuri[1].amplasare = { origine: [0, 0, 0], rot_z: 400 }
+    const m = parseModel3d(j)
+    expect(m.grupuri.map(g => g.id)).toEqual(['rez', 'gaz', 'gara'])
+    expect(m.grupuri[1].amplasare).toBe(null)
+    expect(m.grupuri[1].suduri.map(s => s.cod)).toEqual(['CI-001'])
+    expect(m.erori).toEqual(['Grupul 2 (gaz): rot_z lipsește sau nu e un număr între -360 și 360; grupul nu apare în „Toată instalația”, doar în vederea lui'])
+    expect(m.grupuri[0].amplasare).toEqual({ origine: [0, 0, -1500], rotZ: 0 })
+    expect(m.grupuri[2].amplasare).toEqual({ origine: [10000, 0, 0], rotZ: 90 })
+  })
+
+  it('o amplasare care scoate punctele grupului în afara ±1 km e refuzată (grupul rămâne în vederea lui)', () => {
+    const j = MODEL_B()
+    j.grupuri[2].amplasare = { origine: [999500, 0, 0], rot_z: 0 }   // țeava ajunge la x = 1 000 500 mm
+    const m = parseModel3d(j)
+    expect(m.grupuri[2].amplasare).toBe(null)
+    expect(m.grupuri[2].elemente).toHaveLength(2)
+    expect(m.erori).toEqual(['Grupul 3 (gara): amplasarea scoate grupul în afara ±1 km; grupul nu apare în „Toată instalația”, doar în vederea lui'])
+  })
+})
+
+describe('amplasare — transformarea punctelor', () => {
+  const T = (p, origine, rotZ) => transformaPunct(p, { origine, rotZ })
+  it('rotirea în jurul lui z (sens trigonometric), apoi translația; z doar se translatează', () => {
+    expect(T([1000, 0, 0], [0, 0, 0], 90)).toEqual([0, 1000, 0])            // exact, fără 6e-17
+    expect(T([1000, 0, 0], [0, 0, 0], -90)).toEqual([0, -1000, 0])
+    expect(T([1000, 0, 0], [0, 0, 0], 180)).toEqual([-1000, 0, 0])
+    expect(T([1000, 0, 0], [0, 0, 0], 270)).toEqual([0, -1000, 0])
+    expect(T([1000, 2000, 300], [0, 0, 0], 360)).toEqual([1000, 2000, 300])
+    expect(T([0, 2000, 500], [10000, 0, 0], 90)).toEqual([8000, 0, 500])
+    expect(T([5, 6, 7], [100, 200, -300], 0)).toEqual([105, 206, -293])
+    const r30 = T([1000, 0, 0], [0, 0, 0], 30)                             // cos 30° = 0,8660254; sin 30° = 0,5
+    expect(r30[0]).toBeCloseTo(866.0254, 3); expect(r30[1]).toBeCloseTo(500, 6); expect(r30[2]).toBe(0)
+    const r45 = T([1000, 1000, 0], [10, 20, 30], 45)                         // (0, √2·1000) + translația
+    expect(r45[0]).toBeCloseTo(10, 6); expect(r45[1]).toBeCloseTo(1434.2136, 3); expect(r45[2]).toBe(30)
+    expect(transformaPunct([1, 2, 3], null)).toEqual([1, 2, 3])
+  })
+
+  it('aplicaAmplasare mută toate punctele pieselor (a, b, c, r, p) și ale sudurilor; grupul sursă nu se schimbă', () => {
+    const g = parseModel3d(MODEL_B()).grupuri[2]
+    const a = aplicaAmplasare(g)
+    expect(a.elemente[0]).toMatchObject({ tip: 'teava', a: [10000, 0, 0], b: [10000, 1000, 0], dn: 300 })
+    expect(a.elemente[1]).toMatchObject({ tip: 'eticheta', p: [8000, 0, 800], text: 'spre stație' })
+    expect(a.suduri.map(s => s.p)).toEqual([[10000, 1000, 0], [8000, 0, 500], [10000, 0, 0]])
+    expect(g.suduri[0].p).toEqual([1000, 0, 0])
+    expect(g.elemente[0].b).toEqual([1000, 0, 0])
+    const cot = aplicaAmplasare({ amplasare: { origine: [0, 0, 0], rotZ: 180 }, elemente: [{ tip: 'cot', a: [1, 0, 0], c: [2, 0, 0], b: [2, 3, 0] }], suduri: [] })
+    expect(cot.elemente[0]).toMatchObject({ a: [-1, 0, 0], c: [-2, 0, 0], b: [-2, -3, 0] })
+  })
+})
+
+describe('vederea „Toată instalația”', () => {
+  it('compatibil înapoi: modelul fără amplasare se citește ca înainte și nu are vedere comună', () => {
+    const m = parseModel3d(MODEL())
+    expect(m.erori).toEqual([])
+    expect(m.grupuri.map(g => g.amplasare)).toEqual([null, null])
+    expect(instalatia(m)).toBe(null)
+    const toate = [SUD(1, 'CR-001'), SUD(4, 'CR-114')]
+    const r = mapeazaSuduri3d(m.grupuri[0], toate, toate)
+    expect(r.grupuri[0]).not.toHaveProperty('parti')                       // forma veche, fără câmpuri noi
+    expect(Object.keys(r.grupuri[0]).sort()).toEqual(['cert', 'cheie', 'p', 'puncte'])
+  })
+
+  it('un singur grup amplasat = fără vedere comună', () => {
+    const j = MODEL_B(); delete j.grupuri[2].amplasare
+    expect(instalatia(parseModel3d(j))).toBe(null)
+  })
+
+  it('cu două grupuri amplasate: reuniunea lor transformată, teren la z = 0, grupul neamplasat enumerat', () => {
+    const inst = instalatia(parseModel3d(MODEL_B()))
+    expect(inst.id).toBe(ID_INSTALATIE)
+    expect(inst.terenZ).toBe(0)
+    expect(inst.parti.map(p => p.id)).toEqual(['rez', 'gara'])
+    expect(inst.neamplasate).toEqual([{ id: 'gaz', titlu: 'Alimentare' }])
+    expect(inst.prefixe).toEqual(['CR', 'CP'])
+    expect(inst.suduri.map(s => s.cod)).toEqual(['CR-001', 'CR-002', 'CR-003', 'CR-009', 'CR-020', 'CP-001', 'CP-002', 'CP-077'])
+    expect(inst.suduri.find(s => s.cod === 'CR-001').p).toEqual([1000, 0, -1500])
+    expect(inst.suduri.find(s => s.cod === 'CP-001').p).toEqual([10000, 1000, 0])
+    expect(inst.elemente).toHaveLength(5 + 2)
+  })
+
+  it('maparea pe reuniune: „fără loc” și „în model, lipsă din listă” fără dubluri; sudurile la același loc din două grupuri = o sferă', () => {
+    const inst = instalatia(parseModel3d(MODEL_B()))
+    const toate = [
+      SUD(1, 'CR-001'), SUD(2, 'CR-020'), SUD(3, 'CP-001', 'sudat'), SUD(4, 'CP-002'),
+      SUD(5, 'CR-114'), SUD(6, 'CP-003'), SUD(7, 'CP-050'),              // fără loc: din fara_pozitie (2) + lipsă cu totul (1)
+      SUD(8, 'CI-001'),                                                  // grupul neamplasat: nu e „fără loc” aici
+    ]
+    const r = mapeazaSuduri3d(inst, toate, toate)
+    expect(r.faraLoc.map(s => s.cod)).toEqual(['CR-114', 'CP-003', 'CP-050'])
+    expect(r.inModelFaraLista).toEqual(['CR-002', 'CR-003', 'CR-009', 'CP-077'])
+    const loc = r.grupuri.find(g => g.puncte.length === 2)
+    expect(loc.puncte.map(p => p.sudura.cod)).toEqual(['CR-020', 'CP-002'])
+    expect(loc.cheie).toBe('3d:CP-002')
+    expect(loc.parti).toEqual(['rez', 'gara'])
+    expect(r.grupuri.find(g => g.cheie === '3d:CR-001').parti).toEqual(['rez'])
+    expect(r.grupuri.find(g => g.cheie === '3d:CP-001').parti).toEqual(['gara'])
+    expect(r.grupuri.reduce((n, g) => n + g.puncte.length, 0)).toBe(4)  // fiecare sudură o singură dată
+  })
+
+  it('puncteVizibile: un loc se ascunde doar dacă toate grupurile lui sunt ascunse', () => {
+    const l = [{ cheie: 'a', parti: ['rez'] }, { cheie: 'b', parti: ['rez', 'gara'] }, { cheie: 'c', parti: ['gara'] }, { cheie: 'd' }]
+    expect(puncteVizibile(l, new Set())).toBe(l)
+    expect(puncteVizibile(l, new Set(['rez'])).map(x => x.cheie)).toEqual(['b', 'c', 'd'])
+    expect(puncteVizibile(l, new Set(['rez', 'gara'])).map(x => x.cheie)).toEqual(['d'])
+    expect(puncteVizibile(null, new Set(['rez']))).toEqual([])
+  })
+
+  it('locurile pe grilă: vecinii din celule alăturate (și pe negative) se unesc, peste 1 mm nu', () => {
+    const pe = punctePeCod([
+      { cod: 'CP-001', p: [-0.5, 0, 0] }, { cod: 'CP-002', p: [0.4, 0, 0] },        // 0,9 mm, celule -1 și 0
+      { cod: 'CP-010', p: [5000, 0, 0] }, { cod: 'CP-011', p: [5001.01, 0, 0] },    // 1,01 mm: separate
+      { cod: 'CP-020', p: [0, 0, 7000.2] }, { cod: 'CP-021', p: [0, 0.6, 7000.9] }, // 0,922 mm pe diagonală
+    ])
+    expect(pe.get('CP-002').cheie).toBe('3d:CP-001')
+    expect(pe.get('CP-011').cheie).toBe('3d:CP-011')
+    expect(pe.get('CP-021').cheie).toBe('3d:CP-020')
+    // mulți vecini pe o linie (lanț de 0,9 mm) = un singur loc, iar o mie de suduri distincte nu se unesc
+    const lant = Array.from({ length: 50 }, (_, i) => ({ cod: `CR-${100 + i}`, p: [i * 0.9, 0, 0] }))
+    expect(new Set([...punctePeCod(lant).values()].map(v => v.cheie))).toEqual(new Set(['3d:CR-100']))
+    const multe = Array.from({ length: 1000 }, (_, i) => ({ cod: `CR-${1000 + i}`, p: [(i % 40) * 1000, Math.floor(i / 40) * 1000, 0] }))
+    expect(new Set([...punctePeCod(multe).values()].map(v => v.cheie)).size).toBe(1000)
   })
 })

@@ -6,3 +6,4 @@ export {
   GridHelper, PerspectiveCamera, SRGBColorSpace, DoubleSide, BackSide,
 } from 'three'
 export { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+export { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
