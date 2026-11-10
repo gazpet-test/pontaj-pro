@@ -120,14 +120,16 @@ while IFS=' ' read -r extern_id ip tip _rest; do
     ups=${ups#\{}; ups=${ups%\}}
     [ -n "${ups:-}" ] && extra="${extra},${ups}"
     # 10.10.2026: limite AI (whitelist iot-retea v9). Valorile lipsa/invalide se OMIT (null respinge tot lotul).
+    # 09.11.2026: cota redari@ + reseturile ca epoch (…_reset_s). ATENTIE: se instaleaza pe Terra DOAR DUPA deploy-ul iot-retea
+    # care le accepta; altfel validatorul respinge tot lotul (cheie necunoscuta → 400) si toata reteaua ramane fara date.
     ai=$(printf '%s' "$m" | jq -c '. as $m
-      | ([ "ai_gemini_ramas_pct","ai_claude_ramas_pct","ai_codex_ramas_pct","ai_anthropic_saptamana_ramas_pct","ai_anthropic_saptamana_fable_ramas_pct","ai_anthropic_sesiune_ramas_pct" ][]
+      | ([ "ai_gemini_ramas_pct","ai_claude_ramas_pct","ai_codex_ramas_pct","ai_anthropic_saptamana_ramas_pct","ai_anthropic_saptamana_fable_ramas_pct","ai_anthropic_sesiune_ramas_pct","ai_redari_saptamana_ramas_pct","ai_redari_saptamana_fable_ramas_pct" ][]
           | select(($m[.]|type)=="number" and $m[.]>=0 and $m[.]<=100) | {(.): $m[.]})
-      , ([ "ai_gemini_reset_s","ai_claude_reset_s" ][]
+      , ([ "ai_gemini_reset_s","ai_claude_reset_s","ai_codex_reset_s","ai_anthropic_saptamana_reset_s","ai_anthropic_saptamana_fable_reset_s","ai_redari_saptamana_reset_s","ai_redari_saptamana_fable_reset_s" ][]
           | select(($m[.]|type)=="number" and $m[.]>=0 and $m[.]<=4000000000) | {(.): $m[.]})
       , ([ "ai_codex_reset","ai_codex_masurat_la" ][]
           | select(($m[.]|type)=="string" and ($m[.]|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|\\+00:00)$"))) | {(.): $m[.]})
-      , ([ "ai_codex_plan","ai_anthropic_saptamana_reset","ai_anthropic_saptamana_fable_reset","ai_anthropic_sesiune_reset" ][]
+      , ([ "ai_codex_plan","ai_anthropic_saptamana_reset","ai_anthropic_saptamana_fable_reset","ai_anthropic_sesiune_reset","ai_redari_saptamana_reset","ai_redari_saptamana_fable_reset" ][]
           | select(($m[.]|type)=="string" and ($m[.]|test("^[A-Za-z0-9 .,:+()/-]{1,40}$"))) | {(.): $m[.]})
       ' 2>/dev/null | jq -s -c 'add // {}' 2>/dev/null)
     ai=${ai#\{}; ai=${ai%\}}
