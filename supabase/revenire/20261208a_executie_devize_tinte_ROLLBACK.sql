@@ -46,7 +46,7 @@ BEGIN
      OR to_regprocedure('public.fn_raport_lucrari_citeste(bigint)') IS NULL
      OR to_regprocedure('public.fn_raport_lucrari_salveaza(bigint, text, jsonb)') IS NULL
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_tinte\_%' OR p.proname LIKE 'fn\_raport\_lucrari\_%' OR p.proname = 'fn_raport_santier_drept')) <> 14
+          WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[])) <> 14
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.proiect_activitati'::regclass AND tgname = 'trg_executie_tinte_garda_activitati')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.proiect_unitati'::regclass AND tgname = 'trg_executie_tinte_garda_unitati')
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'proiect_unitati'
@@ -70,8 +70,8 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_depend d JOIN pg_proc p ON p.oid = d.objid
                  WHERE d.classid = 'pg_proc'::regclass AND d.refclassid = 'pg_proc'::regclass
                    AND d.refobjid IN (SELECT p2.oid FROM pg_proc p2 JOIN pg_namespace n2 ON n2.oid = p2.pronamespace WHERE n2.nspname = 'public'
-                                        AND (p2.proname LIKE 'fn\_executie\_tinte\_%' OR p2.proname LIKE 'fn\_raport\_lucrari\_%' OR p2.proname = 'fn_raport_santier_drept'))
-                   AND NOT (p.proname LIKE 'fn\_executie\_tinte\_%' OR p.proname LIKE 'fn\_raport\_lucrari\_%' OR p.proname = 'fn_raport_santier_drept')) THEN
+                                        AND p2.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[]))
+                   AND NOT p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[])) THEN
     RAISE EXCEPTION '20261208a revenire: alte obiecte depind de vedere / tabel / coloane / functii';
   END IF;
   LOCK TABLE public.proiect_activitati IN ACCESS EXCLUSIVE MODE NOWAIT;
@@ -119,7 +119,7 @@ BEGIN
   -- postcondiție
   IF to_regclass('public.v_executie_tinte') IS NOT NULL OR to_regclass('public.executie_tinte_setari') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                 WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_tinte\_%' OR p.proname LIKE 'fn\_raport\_lucrari\_%' OR p.proname = 'fn_raport_santier_drept'))
+                 WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[]))
      OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_executie_tinte_garda_activitati', 'trg_executie_tinte_garda_unitati'))
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
                  AND ((table_name = 'proiect_unitati' AND column_name IN ('obiect_cod', 'nod_cod', 'plan_start', 'plan_final'))

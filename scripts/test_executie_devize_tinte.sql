@@ -595,7 +595,7 @@ SELECT set_config('gazpet.revenire_20261208a', 'SCOATE_DEVIZE_TINTE:' || txid_cu
 \ir ../supabase/revenire/20261208a_executie_devize_tinte_ROLLBACK.sql
 DO $t$ BEGIN
   IF to_regclass('public.v_executie_tinte') IS NOT NULL OR to_regclass('public.executie_tinte_setari') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname LIKE 'fn\_executie\_tinte\_%' OR proname LIKE 'fn\_raport\_lucrari\_%' OR proname = 'fn_raport_santier_drept')
+     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[]))
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('proiect_unitati', 'proiect_activitati')
                  AND column_name IN ('obiect_cod', 'nod_cod', 'plan_start', 'plan_final', 'principala', 'factor_um', 'sursa_executat', 'baza_deviz', 'dn_min', 'dn_max'))
      OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'INSERT') OR NOT has_table_privilege('authenticated', 'public.raport_lucrari', 'DELETE')

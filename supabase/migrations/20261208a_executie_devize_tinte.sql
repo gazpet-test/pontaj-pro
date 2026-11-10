@@ -43,8 +43,7 @@ BEGIN
   -- obiectele noi nu există (reaplicare = refuz)
   IF to_regclass('public.executie_tinte_setari') IS NOT NULL OR to_regclass('public.v_executie_tinte') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                 WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_tinte\_%' OR p.proname LIKE 'fn\_raport\_lucrari\_%'
-                                                 OR p.proname = 'fn_raport_santier_drept'))
+                 WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[]))
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
                  AND ((table_name = 'proiect_unitati' AND column_name IN ('obiect_cod', 'nod_cod', 'plan_start', 'plan_final'))
                       OR (table_name = 'proiect_activitati' AND column_name IN ('principala', 'factor_um', 'sursa_executat', 'baza_deviz', 'dn_min', 'dn_max')))) THEN
@@ -680,7 +679,7 @@ BEGIN
   END IF;
   -- funcțiile: search_path fix; DEFINER doar unde trebuie; EXECUTE doar pentru authenticated la cele apelabile din aplicație
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-              WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_tinte\_%' OR p.proname LIKE 'fn\_raport\_lucrari\_%' OR p.proname = 'fn_raport_santier_drept')
+              WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[])
                 AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
                      OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_nod',
                                                                     'fn_executie_tinte_calcul', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza'))
@@ -689,7 +688,7 @@ BEGIN
                         IS DISTINCT FROM (p.proname IN ('fn_executie_tinte_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_nod',
                                                         'fn_executie_tinte_calcul', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza'))))
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_tinte\_%' OR p.proname LIKE 'fn\_raport\_lucrari\_%' OR p.proname = 'fn_raport_santier_drept')) <> 14 THEN
+          WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_tinte_garda_cere', 'fn_executie_tinte_garda_activitati', 'fn_executie_tinte_garda_unitati', 'fn_executie_tinte_setari_prov', 'fn_executie_tinte_cheie', 'fn_executie_tinte_nod', 'fn_executie_tinte_conversie', 'fn_executie_tinte_calcul', 'fn_raport_lucrari_amprenta_linii', 'fn_raport_lucrari_json', 'fn_raport_lucrari_citeste', 'fn_raport_lucrari_salveaza']::name[])) <> 14 THEN
     RAISE EXCEPTION '20261208a post: functii (definer / search_path / EXECUTE)';
   END IF;
   IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled = 'O' AND (tgrelid, tgname) IN (
