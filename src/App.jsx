@@ -7,6 +7,7 @@ import { logoutProtejat } from './lib/izoLogoutBrowser.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
+import { imparteExportBanca } from './bicBanca.js'
 import { zileOrdinDeplasare, poateGeneraOrdin, motivBlocareOrdin } from './diurneOrdin.js'
 import { stareLuna, normalizeazaTichet, tichetValabil, fmtZi as fmtZiPontaj } from './pontajLunaInchisa.js'
 import ModulNoutati from './ModulNoutati.jsx'
@@ -5214,29 +5215,43 @@ function ReportsPage() {
       // Alocare comună pe plafonul lunar (diurneAlocare.js) — identică cu savePayment și exportDiurne
       const alocare=alocaDiurneTransa({recsLuna:recs,df,dt,legalSet,diurnaAmt})
 
-      // BIC lookup
-      const BIC_MAP={BTRL:'BTRLRO22XXX',INGB:'INGBROBUXX',RNCB:'RNCBROBUXX',BRDE:'BRDEROBUXX',BACX:'BACXROBUXX',RZBR:'RZBRROBUXX',CECE:'CECEROBUXX',BRMA:'BRMAROBUXX',UGBI:'UGBIROBUXX',OTPV:'OTPVROBUXX',TCCL:'TCCLGB3L'}
-      const getBIC=(iban)=>{if(!iban)return '';const code=(iban||'').replace(/\s/g,'').substring(4,8).toUpperCase();return BIC_MAP[code]||code+'ROBUXX'}
+      // BIC din IBAN (bicBanca.js) — TKT-2026-0355: tabel corectat (WBAN = WBANRO22XXX, BIC-uri de 11 caractere).
+      // r3: angajații „de verificat” (IBAN lipsă / invalid, bancă dispărută, OTP, cod necunoscut) se află ÎNAINTE de salvare;
+      // în fișier intră doar rândurile cu IBAN valid și BIC cunoscut (niciun rând fără BIC)
       const today=new Date()
       const excelDateStr=`${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`
 
       const _td=new Date(); const excelDateStr2=`${String(_td.getDate()).padStart(2,'0')}/${String(_td.getMonth()+1).padStart(2,'0')}/${_td.getFullYear()}`
       const HDR=['OrderNumber','SourceAccountNumber','TargetAccountNumber','BeneficiaryName','BeneficiaryBankBIC','BeneficiaryFiscalCode','Amount','PaymentRef1','PaymentRef2','ValueDate','Urgent']
-      const rows=[];let nr=1
-      const faraIBAN=[]
-
+      const plati=[]
       ;(emps||[]).forEach(emp=>{
         const a=alocare.get(emp.id)
         if(!a||a.N===0) return
         // Suma confirmata = doar zilele din plafonul lunar (zile_diurnă × lei/zi)
         const sumaConfirmata=a.sumaDiurna
         if(sumaConfirmata<=0) return  // tot surplusul — nu apare in BT diurne
-
-        if(!emp.iban) faraIBAN.push(emp.name)
-        rows.push([nr++,ibanFirma,emp.iban||'',emp.name,getBIC(emp.iban),'',sumaConfirmata,'diurna','diurna',excelDateStr2,'F'])
+        plati.push({name:emp.name,iban:emp.iban,suma:sumaConfirmata})
       })
 
-      if(!rows.length){showToast('Nu există diurne confirmate de plătit în această perioadă','warn');setExpBT(false);return}
+      if(!plati.length){showToast('Nu există diurne confirmate de plătit în această perioadă','warn');setExpBT(false);return}
+
+      const {deExportat,deVerificat,totalExportat,totalLasat}=imparteExportBanca(plati)
+      const lei=x=>x.toLocaleString('ro-RO')
+      const listaVerif=deVerificat.map(r=>`• ${r.name} — ${lei(r.suma)} RON — ${r.motiv}`).join('\n')
+      if(!deExportat.length){
+        // Toți sunt de verificat: nu se salvează niciun fișier
+        window.alert(`Nu s-a salvat niciun fișier: toți cei ${deVerificat.length} angajați (${lei(totalLasat)} RON) au contul de verificat.\n\n${listaVerif}`)
+        showToast(`⚠ Export BT Diurne oprit — ${deVerificat.length} angajați de verificat, niciun fișier salvat`,'warn')
+        return
+      }
+      if(deVerificat.length && !window.confirm(
+        `⚠ ${deVerificat.length} angajați au contul de verificat și NU pot intra în fișierul de plăți (${lei(totalLasat)} RON):\n\n${listaVerif}\n\n`+
+        `OK = Exportă fără ei (${deExportat.length} angajați, ${lei(totalExportat)} RON; cei de mai sus se plătesc separat)\n`+
+        `Anulează = nu se salvează nimic`
+      )) { showToast('Export BT Diurne anulat — niciun fișier salvat','warn'); return }
+
+      // Numerotarea, numărul de plăți și totalul — DOAR pe rândurile exportate
+      const rows=deExportat.map((r,i)=>[i+1,ibanFirma,r.iban,r.name,r.bic,'',r.suma,'diurna','diurna',excelDateStr2,'F'])
 
       const data=[HDR,...rows]
       const ws=XLSX.utils.aoa_to_sheet(data)
@@ -5244,9 +5259,10 @@ function ReportsPage() {
       const wb=XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb,ws,'DIURNE')
       XLSX.writeFile(wb,`BT_Diurne_${df}_${dt}.xlsx`)
-      const totalConfirmat=rows.reduce((s,r)=>s+r[6],0)
-      const msg=faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:' ✓'
-      playBeep(1040,0.18); showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
+      const msg=deVerificat.length
+        ?` · ⚠ ${deVerificat.length} lăsați pe dinafară (${lei(totalLasat)} RON, de plătit separat): ${deVerificat.map(r=>`${r.name} ${lei(r.suma)} RON`).join('; ')}`
+        :' ✓'
+      playBeep(1040,0.18); showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${lei(totalExportat)} RON${msg}`,deVerificat.length?'warn':undefined)
     }catch(e){showToast('Eroare export BT','error')}finally{setExpBT(false)}
   }
 
