@@ -629,3 +629,72 @@ Harness-ul r12 (`bdf30bf0`) pe PostgreSQL 17.11 in WSL: `SEMANTICA_TT` confirma 
 | L18 | Masuratoare cu ceasul sarit = NEVALIDA (nu „trecut”), in ambele sensuri; esecurile listate toate, nu doar primul. |
 | L25 | Cauza aratata din artefactele rularii (syslog WSL, jurnalul serverului, fisierul pauzei, observatorul), nu presupusa; timpii validati fata de un ceas independent (monoton). |
 | restul | n/a pentru delta r13 (doar harness). |
+
+## E1-1a/1b r14 — 11.11.2026 (plafonul trebuie sa ajunga la server PRIN POOLER)
+
+Harness-ul r13 pe PostgreSQL 17.11: toate cele 16 `LOCK_CAP` trec (2000–2003 ms), `SEMANTICA_TT` confirma designul, volumul
+trece; singurul esec = proba optionala de COMMIT intarziat. Dar faptele de pe productie (citite de chat, doar citire):
+PostgreSQL 17.6, `synchronous_commit = on`, `synchronous_standby_names` gol; conexiunea noastra trece prin pooler-ul
+Supabase (session mode), care **nu transmite optiunile de conectare** (`PGOPTIONS` / `options=` => serverul vede
+`0/default`). Designul r12–r13 (`2000/client`) ar fi refuzat mereu pe productie. Ce trece prin pooler (probat de chat):
+`SET transaction_timeout = 2000` ca instructiune de sesiune INAINTE de `BEGIN` => in tranzactie `2000/session`.
+
+### Ce s-a schimbat
+- **Runnerul (#1054, runda 11):** cu `--plafon-tranzactie-ms N`, pe O conexiune, psql fara `--single-transaction`:
+  `SET transaction_timeout = N` (sesiune) → `BEGIN` → prologul (primul dupa BEGIN: cere `N/session` din
+  `pg_catalog.pg_settings`, pune marcajul `gazpet.plafon_tranzactie = 'N:<txid>'`) → lock, tinta, istoric, marcaj → copia →
+  inregistrarea → **garda finala** (valoarea tot `N/session` + marcajul, iar `clock_timestamp() − transaction_timestamp()`
+  ≤ N ms) → `COMMIT` → `RESET transaction_timeout`. Cu `ON_ERROR_STOP`, la orice eroare psql se opreste si inchide
+  conexiunea, serverul anuleaza tranzactia. Pre-verificarea, reconcilierea si gate-ul 0e incep cu
+  `SET transaction_timeout = 0` (un backend refolosit de pooler nu le poate impune plafonul ramas). Fara optiune:
+  NESCHIMBAT (psql `--single-transaction`, aceleasi fisiere, fara SET).
+- **Validatorul runnerului (P2 Jakarinos r13):** cu plafon (`--plafon-tranzactie`), refuz (cod 3, fara conexiune) pentru
+  orice artefact in care `transaction_timeout` sau `pg_settings` apar altfel decat in citirea exacta
+  `FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'` — oriunde: SET / SET LOCAL / set_config / RESET /
+  ALTER ROLE|FUNCTION … SET / CREATE FUNCTION … SET, in DO, in corpuri, prin concatenare (`'transaction' || '_timeout'`),
+  in comentarii (fail-closed) — si pentru orice `RESET ALL`. Mutantul din verdict (`SET LOCAL transaction_timeout = 0;
+  SELECT pg_sleep(3)`) = refuz 3. SQL-ul dinamic construit din bucati (ex. `chr(95)`) nu se vede static: il prinde garda
+  finala (valoare schimbata = `PLAFON_SCHIMBAT`; ceas oprit apoi repornit = `PLAFON_DEPASIT`), ROLLBACK, nimic comis.
+  Limita declarata: o asemenea ocolire DELIBERATA intr-un artefact aprobat poate intarzia inchiderea, dar nu poate comite.
+- **Cele 4 fisiere:** `$pre$` cere exact `2000/session` din `pg_catalog.pg_settings` (calificat: al doilea recenzent r13
+  P1, umbrirea prin `pg_temp.pg_settings`) **si** marcajul plafonului `'2000:' || txid_current()`. Refuza `0/default`,
+  `2000/client` (optiunea r13), `2000/user` (rolul), `2000/database`, alta valoare de sesiune, si `2000/session` fara marcaj
+  (SET LOCAL in tranzactie). Comentariile nu mai numesc ceasul / vederea (regula validatorului cu plafon).
+- **De ce `2000/session` vazut de prolog dovedeste ceasul pornit la BEGIN cu 2000:** valoarea unui GUC se schimba intr-un
+  backend doar prin instructiuni rulate in el (reload-ul de configuratie si `ALTER ROLE` nu ating o valoare de sesiune);
+  intre BEGIN si prolog nu ruleaza nimic (prologul e primul fisier al runnerului dupa BEGIN), deci valoarea de la BEGIN =
+  cea din prolog, iar PG17 armeaza ceasul la inceputul tranzactiei cu valoarea curenta. SQL-ul SINGUR nu poate deosebi
+  „SET inainte de BEGIN” de „SET LOCAL dupa BEGIN” (ambele au sursa `session`) => ordinea o garanteaza runnerul (fisierele
+  lui), iar migrarea cere in plus marcajul pus de prolog numai dupa verificare; validatorul si garda finala acopera
+  artefactul. Dovezi in harness: `semantica sesiune_inainte_de_begin` (SET 1500, 1 s pauza, BEGIN => inchis la ~1,5 s de
+  la BEGIN, nu de la SET) si refuzul `set_local_in_tranzactie`.
+- **Harness:** livrarile simulate direct incep EXACT ca runnerul (`liv` / `obs`: SET de sesiune, BEGIN, prolog, …,
+  COMMIT); toate cele 16 `LOCK_CAP` pe forma noua; `plafon_refuz` = 6 cazuri (fara plafon, optiunea de conectare r13, rol,
+  alta valoare, SET LOCAL fara marcaj, **umbrire**: `CREATE TEMP TABLE pg_settings` fals + marcaj falsificat, cu dovada in
+  aceeasi tranzactie ca o citire necalificata vede falsul => fisierul vede `0/default` => refuz). Proba de COMMIT
+  intarziat: cauza esecului r13 = tranzactia de activare (`SELECT txid_current()`) nu scria WAL, iar PostgreSQL asteapta
+  standby-ul doar dupa o tranzactie care a scris WAL => acum `CREATE TEMP TABLE`; daca mediul tot nu activeaza replicarea
+  sincrona, `LOCK_COMMIT_LENT … NEEXECUTAT` fara sa pice rularea (`LOCK_COMMIT_LENT_STARE` la final).
+  `harness_wsl.sh` ruleaza in plus testul validatorului si proba runnerului (`test_livrare_plafon.sh`: ok, rol, lent,
+  client care pierde optiunile = pooler simulat, umbrire, validator, garda finala, fara optiune).
+
+### Garantia (formulare exacta, in cele 4 fisiere, in runner si in PR)
+**Aproximativ 2 s de la BEGIN pana la intrarea in COMMIT** — timeout PostgreSQL pe ceasul serverului, nu timp real strict
+(masurat 2000–2003 ms). **COMMIT-ul propriu-zis nu e plafonat**: pe productie, fara replicare sincrona
+(`synchronous_standby_names` gol), inseamna scrierea WAL a commit-ului (de regula milisecunde).
+
+### Nota P2 (al doilea recenzent r13): secventele
+Atomicitatea e completa pentru schema si datele comise, nu si pentru secvente: daca reconcilierea din 19a insereaza in
+`conturi_tip`, triggerul de audit consuma valori din `conturi_tip_jurnal_id_seq` (existenta din 18a); un refuz ulterior
+anuleaza randurile si schema, dar poate lasa goluri in secventa. Nu e pierdere de date (scris si in antetul 19a).
+
+| Regula | Dovada r14 |
+|---|---|
+| L08 | Identitatea livrarii neschimbata (`current_user = 'postgres'` + marcajul runnerului); marcajul plafonului e o garda de protocol, nu o autorizatie (ca marcajul livrarii). |
+| L13 | Validatorul: numaratoare pe text brut + text comprimat, fail-closed; test pozitiv (citirea exacta, de doua ori) si negativ (18 cazuri, `scripts/test_livrare_validator_plafon.py`). |
+| L14 | O tranzactie: SET de sesiune inainte, BEGIN / COMMIT in fisierele runnerului; orice eroare = conexiune inchisa = ROLLBACK la tot; reconcilierea decide codul (10 / 0 / 20). |
+| L15 | Umbrirea `pg_temp.pg_settings` inchisa prin calificare (`pg_catalog`), verificata static (mutant) si in harness (`plafon_refuz umbrire`, `test_livrare_plafon.sh umbrire`). |
+| L18 | Refuzurile pe mesajul exact (`<valoare>/<sursa> marcaj <marcaj>`); proba de COMMIT neexecutabila = `NEEXECUTAT`, nu „trecut”. |
+| L20 | Caile legitime: aplicarea / revenirea reala prin runner (`masurat`, volum) si fara optiune (regresie `PLAFON_FARA`, mutantul acceptat fara plafon). |
+| L25 | Comportamentul PG17 aratat cu prag (`sesiune_inainte_de_begin`); pooler simulat (client fara optiuni); doua sesiuni reale in probele de plafon. |
+| restul | n/a pentru delta r14 (runner + validator + preflight + harness). |

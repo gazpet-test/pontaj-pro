@@ -15,8 +15,8 @@
 -- asteptare. (1) timeout-urile sunt PRIMELE instructiuni (inaintea oricarui lock, inclusiv cel consultativ, luat acum cu
 -- pg_try_advisory_xact_lock + refuz); (2) inainte de $locks$ nu se atinge niciun tabel existent: tabelele portalului se
 -- creeaza fara FK, listele se verifica ca format; (3) dupa $locks$ ramane O SINGURA instructiune ($critic$: FK-urile pe
--- tabelele noi goale, inventarul, clasificarea, poarta, amprenta); (4) [INLOCUIT in r12] transaction_timeout pornit in
--- $locks$ + statement_timeout pe $critic$.
+-- tabelele noi goale, inventarul, clasificarea, poarta, amprenta); (4) [INLOCUIT in r12] ceasul de tranzactie
+-- (transaction timeout) pornit in $locks$ + statement_timeout pe $critic$.
 -- r11 (Jakarinos r10 P2 + al doilea recenzent r10 P1-01): GARANTIA, formulata exact:
 --  * [INFIRMATA de harness-ul PG17 real, inlocuita in r12 - vezi mai jos] plafon de 2 s socotit de la obtinerea
 --    lock-urilor ($locks$);
@@ -24,15 +24,29 @@
 --    dupa scrierea commit-ului: COMMIT-ul adauga durata scrierii WAL (de regula milisecunde) si, numai pe un server cu
 --    replicare sincrona, asteptarea standby-ului. Limita = decizie scrisa pentru Razvan (E1_RAPORT.md, r11).
 -- Masurat si dovedit in harness pe PG17 real (scripts/portal/concurrency_lock.sh: lock_cap_refusal, lock_commit_lent).
--- r12 (harness-ul PG17 real, proba "mostenit" r11): un transaction_timeout DEJA pornit nu se reporneste cu set_config in
+-- r12 (harness-ul PG17 real, proba "mostenit" r11): un ceas de tranzactie DEJA pornit nu se reporneste cu set_config in
 -- mijlocul tranzactiei (0 apoi 2 s nu au dat 2 s de la lock-uri: 3,7 s si tranzactia a ajuns la COMMIT). Deci fisierul NU
--- mai schimba transaction_timeout deloc. PLAFONUL = ceasul pornit de PostgreSQL la BEGIN (inceputul tranzactiei) cu valoarea
--- venita din CONEXIUNEA runnerului: livrare_migrare.sh --plafon-tranzactie-ms 2000 (PR #1054) => parametru de pornire,
--- sursa 'client', prioritar fata de setarile rolului / bazei. $pre$ cere exact 2000/client (altfel refuz, nimic schimbat).
--- GARANTIA r12: de la BEGIN-ul runnerului (deci si de la primul lock) PANA LA INTRAREA IN COMMIT trec cel mult 2 s -
--- pregatirea, lock-urile, $critic$, inregistrarea runnerului, orice pauza a clientului / retelei; altfel serverul inchide
--- sesiunea => ROLLBACK la TOT (pregatirea e in aceeasi tranzactie: nimic nu ramane). COMMIT-ul propriu-zis ramane
--- neplafonat (limita r11, neschimbata). Asteptarea lock-urilor: NOWAIT + reincercare pana la 1 s de la BEGIN.
+-- mai schimba ceasul deloc. PLAFONUL = ceasul pornit de PostgreSQL la BEGIN (inceputul tranzactiei), cu valoarea pusa de
+-- runner (livrare_migrare.sh --plafon-tranzactie-ms 2000, PR #1054). [r12-r13: ca parametru de pornire, sursa 'client';
+-- INLOCUIT in r14, vezi mai jos.]
+-- r14 (11.11.2026, faptele de pe productie + Jakarinos r13 P2 + al doilea recenzent r13 P1/P2): conexiunea de productie
+-- trece prin pooler-ul Supabase (session mode), care NU transmite optiunile de conectare (serverul vedea 0/default) => cu
+-- r13 livrarea ar fi refuzat mereu. Runnerul pune acum plafonul ca instructiune de SESIUNE pe aceeasi conexiune, INAINTE
+-- de BEGIN ("SET ... = 2000", apoi BEGIN): trece prin pooler, ceasul porneste la BEGIN cu 2000 (sursa 'session', prioritara
+-- fata de rol / baza). $pre$ cere exact 2000/session, citit din vederea de setari CALIFICATA cu schema pg_catalog (un
+-- tabel temporar omonim din pg_temp nu mai poate umbri vederea reala), si marcajul plafonului gazpet.plafon_tranzactie = '2000:<txid>',
+-- pus de prologul runnerului numai dupa ce a verificat el insusi 2000/session ca PRIMA instructiune dupa BEGIN.
+-- DE CE e dovada ca ceasul a pornit la BEGIN cu 2000: valoarea se schimba intr-un backend doar prin instructiuni rulate in
+-- el; intre BEGIN si prolog nu ruleaza nimic, deci valoarea de la BEGIN = cea vazuta de prolog. SQL-ul singur nu poate
+-- deosebi "SET inainte de BEGIN" de "SET LOCAL dupa BEGIN" (aceeasi sursa) => ordinea o garanteaza runnerul (fisierele lui),
+-- iar fisierul cere marcajul. In plus, cu plafon, validatorul runnerului refuza orice artefact care atinge ceasul, iar
+-- garda finala a runnerului reverifica valoarea si timpul de la BEGIN inainte de COMMIT.
+-- GARANTIA (formulare exacta, r14): aproximativ 2 s de la BEGIN-ul runnerului (deci si de la primul lock) PANA LA
+-- INTRAREA IN COMMIT - pregatirea, lock-urile, $critic$, inregistrarea runnerului, orice pauza a clientului / retelei;
+-- altfel serverul inchide sesiunea => ROLLBACK la TOT (pregatirea e in aceeasi tranzactie: nimic nu ramane). E un timeout
+-- PostgreSQL pe ceasul serverului, nu timp real strict (masurat: 2000-2003 ms). COMMIT-ul propriu-zis NU e plafonat (limita
+-- r11): pe productie, fara replicare sincrona (synchronous_standby_names gol), inseamna scrierea WAL a commit-ului.
+-- Asteptarea lock-urilor: NOWAIT + reincercare pana la 1 s de la BEGIN.
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -45,14 +59,15 @@ BEGIN
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED';
   END IF;
-  -- r10: plafonul cere transaction_timeout (PostgreSQL 17, ca productia).
+  -- r10: plafonul cere ceasul de tranzactie al PostgreSQL 17 (ca productia).
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
-  -- r12: PLAFONUL = ceasul pornit la BEGIN din conexiunea runnerului (--plafon-tranzactie-ms 2000). Sursa 'client' =
-  -- parametrul de pornire; orice SET / SET LOCAL de la BEGIN pana aici ar fi schimbat sursa => refuz.
-  SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '2000/client' THEN
-    RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % (cerut 2000/client: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
-      coalesce(v_plafon, 'lipsa');
+  -- r14: PLAFONUL = ceasul pornit la BEGIN cu 2000, pus de runner ca SET de sesiune inainte de BEGIN (sursa 'session'),
+  -- citit CALIFICAT (pg_catalog) + marcajul prologului runnerului (verificat de el primul dupa BEGIN). Vezi antetul.
+  SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
+  IF v_plafon IS DISTINCT FROM '2000/session'
+    OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN
+    RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % marcaj % (cerut 2000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+      coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   -- Ordine comuna (L06): advisory livrare -> obiectele noi (rol, functii, baseline, tabelele portalului fara FK)
   -- -> auth.users -> employees -> profiles ($locks$) -> FK-urile tabelelor noi ($critic$).
@@ -484,14 +499,15 @@ END $liste_pre$;
 --  * employees   SHARE ROW EXCLUSIVE: cerut de FK-ul conturi_teren -> employees. Blocheaza: editarile HR. Nu citirile.
 --  * profiles    SHARE: legatura fisa / is_owner nu se schimba intre verificare si clasificare. Blocheaza: scrierile in
 --    profiles (editari Admin, conturi noi). Nu blocheaza citirile ERP.
--- PLAFONUL (r12): ceasul pornit la BEGIN din conexiunea runnerului (verificat in $pre$: 2000/client); aici NU se schimba
--- niciun timeout (proba r11 "mostenit": un ceas pornit nu se reporneste in mijlocul tranzactiei). CE PLAFONEAZA: de la
--- BEGIN PANA LA INTRAREA IN COMMIT trec cel mult 2 s - pregatirea de mai sus, asteptarea lock-urilor, $critic$,
--- inregistrarea runnerului, cat asteapta clientul / reteaua intre instructiuni (si intre $locks$ si $critic$); altfel
+-- PLAFONUL (r12, forma r14): ceasul pornit la BEGIN cu 2000, pus de runner ca SET de sesiune inainte de BEGIN (verificat
+-- in $pre$: 2000/session + marcaj); aici NU se schimba niciun timeout (proba r11 "mostenit": un ceas pornit nu se
+-- reporneste in mijlocul tranzactiei). CE PLAFONEAZA: de la BEGIN PANA LA INTRAREA IN COMMIT trec aproximativ 2 s
+-- (timeout PostgreSQL, nu timp real strict) - pregatirea de mai sus, asteptarea lock-urilor, $critic$, inregistrarea si
+-- garda finala a runnerului, cat asteapta clientul / reteaua intre instructiuni (si intre $locks$ si $critic$); altfel
 -- serverul termina sesiunea (FATAL, idle sau activa) => ROLLBACK la tot, lock-urile eliberate. Lock-urile, luate dupa
--- BEGIN, sunt deci tinute cel mult 2 s pana la intrarea in COMMIT.
+-- BEGIN, sunt deci tinute aproximativ 2 s cel mult pana la intrarea in COMMIT.
 -- Reincercarea NOWAIT: pana la 1 s de la BEGIN (now() = inceputul tranzactiei), ca sa ramana timp pentru $critic$.
--- CE NU PLAFONEAZA (r11, neschimbat): COMMIT-ul propriu-zis. PG17 dezactiveaza transaction_timeout la intrarea in COMMIT,
+-- CE NU PLAFONEAZA (r11, neschimbat): COMMIT-ul propriu-zis. PG17 dezactiveaza ceasul de tranzactie la intrarea in COMMIT,
 -- iar lock-urile se elibereaza dupa scrierea commit-ului. COMMIT-ul adauga: constrangerile amanate (niciuna aici: fara
 -- DEFERRABLE), flush-ul WAL (de regula milisecunde) si, numai daca serverul are replicare sincrona, asteptarea standby-ului
 -- (nelimitata de orice timeout; proba lock_commit_lent). Dupa $locks$ ramane exact o instructiune: $critic$.

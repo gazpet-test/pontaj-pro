@@ -22,10 +22,13 @@
 --  valabil: COMMIT-ul propriu-zis NU e plafonat (PG17 opreste ceasul la intrarea in COMMIT; ACCESS EXCLUSIVE se
 --  elibereaza dupa scrierea commit-ului: flush WAL, de regula milisecunde; standby-ul numai cu replicare sincrona).
 -- r12 (aceeasi solutie ca 18a / 19a): fisierul NU schimba niciun timeout dupa $pre$. PLAFONUL = ceasul pornit de
---  PostgreSQL la BEGIN cu valoarea din CONEXIUNEA runnerului (livrare_migrare.sh --plafon-tranzactie-ms 2000, PR #1054;
---  sursa 'client'); $pre$ cere exact 2000/client. GARANTIA: de la BEGIN (deci si de la primul lock) PANA LA INTRAREA IN
---  COMMIT cel mult 2 s, altfel ROLLBACK la tot. Reincercarea lock-urilor: pana la 1 s de la BEGIN. Dovedit in harness
---  (lock_cap_refusal rev19a).
+--  PostgreSQL la BEGIN cu valoarea pusa de runner (livrare_migrare.sh --plafon-tranzactie-ms 2000, PR #1054).
+-- r14 (aceeasi solutie ca 18a, vezi antetul de acolo): pooler-ul de productie nu transmite optiunile de conectare =>
+--  runnerul pune plafonul ca SET de SESIUNE inainte de BEGIN; $pre$ cere exact 2000/session din vederea de setari
+--  calificata cu pg_catalog (fara umbrire prin pg_temp) + marcajul plafonului pus de prologul runnerului. GARANTIA: aproximativ 2 s de
+--  la BEGIN (deci si de la primul lock) PANA LA INTRAREA IN COMMIT, altfel ROLLBACK la tot; timeout PostgreSQL, nu timp
+--  real strict; COMMIT-ul propriu-zis neplafonat (fara replicare sincrona = scrierea WAL). Reincercarea lock-urilor: pana
+--  la 1 s de la BEGIN. Dovedit in harness (lock_cap_refusal rev19a).
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -36,11 +39,12 @@ BEGIN
   RAISE EXCEPTION 'PORTAL_ROLLBACK_RUNNER_REQUIRED'; END IF;
  IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED'; END IF;
  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
- -- r12: plafonul din conexiunea runnerului, neschimbat de la BEGIN (sursa 'client').
- SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';
- IF v_plafon IS DISTINCT FROM '2000/client' THEN
-  RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % (cerut 2000/client: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
-    coalesce(v_plafon, 'lipsa'); END IF;
+ -- r14: plafonul pus de runner ca SET de sesiune inainte de BEGIN (2000/session, citit calificat) + marcajul prologului.
+ SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
+ IF v_plafon IS DISTINCT FROM '2000/session'
+  OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN
+  RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % marcaj % (cerut 2000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+    coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa'); END IF;
  IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
   RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03'; END IF;
 END $pre$;

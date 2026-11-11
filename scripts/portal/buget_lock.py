@@ -15,6 +15,10 @@ r12 (harness-ul PG17 real: un ceas transaction_timeout deja pornit nu se reporne
     numele apare EXACT o data, in verificarea din $pre$ (pg_settings ... '2000/client' => PORTAL_PLAFON_TRANZACTIE_REQUIRED),
     inaintea lock-ului consultativ si a primei schimbari; niciun RESET in codul executat;
   * reincercarea din $locks$ se socoteste de la BEGIN: clock_timestamp() >= now() + interval '1 second'.
+r14 (pooler-ul de productie nu transmite optiunile de conectare; al doilea recenzent r13 P1): verificarea din $pre$ cere
+  2000/session (SET-ul de sesiune al runnerului inainte de BEGIN) + marcajul plafonului (gazpet.plafon_tranzactie), citit
+  din pg_catalog.pg_settings CALIFICAT; „pg_settings” apare in codul executat EXACT o data (in verificare), iar in tot
+  fisierul (cu comentarii) numele ceasului si „pg_settings” apar doar in citirea exacta (regula validatorului cu plafon).
   * inainte de $locks$ nicio instructiune care ia (fie si ACCESS SHARE) un lock pe un tabel EXISTENT: referinte in
     codul executat (nivel superior, corpuri DO, corpuri de functii non-plpgsql, care se analizeaza la creare), apeluri
     ale functiilor portalului care citesc astfel de tabele, EXECUTE dinamic intr-un DO. Literalii, comentariile si
@@ -142,8 +146,10 @@ def _fara_comentarii(text, adanc=0):
     return ' '.join(rez)
 
 
-VERIFICARE_PLAFON = ("SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';",
-                     "IF v_plafon IS DISTINCT FROM '2000/client' THEN",
+PLAFON_CITIRE = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
+VERIFICARE_PLAFON = ("SELECT setting || '/' || source INTO v_plafon " + PLAFON_CITIRE + ";",
+                     "IF v_plafon IS DISTINCT FROM '2000/session'",
+                     "OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN",
                      "PORTAL_PLAFON_TRANZACTIE_REQUIRED")
 
 
@@ -291,6 +297,14 @@ def probleme(sql, moduri, existente=TABELE_UTILIZATORI, functii=()):
     executat = _fara_comentarii(sql)
     if len(re.findall(r'transaction_timeout', executat, re.I)) != 1:
         p.append('transaction_timeout apare in codul executat in afara verificarii din $pre$ (fisierul nu are voie sa-l schimbe)')
+    # r14: citirea CALIFICATA (fara umbrire prin pg_temp.pg_settings), o singura data; in tot fisierul (si comentarii) doar
+    # in forma exacta (altfel validatorul runnerului cu plafon refuza fisierul inainte de conexiune).
+    if len(re.findall(r'pg_settings', executat, re.I)) != 1 or \
+            len(re.findall(r'(?<![\w.$"])pg_catalog\s*\.\s*pg_settings(?![\w$])', executat)) != 1:
+        p.append('pg_settings citit altfel decat o data, calificat (pg_catalog.pg_settings), in verificarea din $pre$')
+    mic, permise = sql.lower(), sql.count(PLAFON_CITIRE)
+    if any(mic.count(x) != permise for x in ('transaction_timeout', 'pg_settings')) or re.search(r'\breset\s+all\b', mic):
+        p.append('transaction_timeout / pg_settings mentionate in afara citirii exacte (sau RESET ALL): validatorul cu plafon refuza')
     if re.search(r'\bRESET\b', _cod_livrare(sql), re.I):
         p.append('RESET in codul executat (poate readuce sau schimba setarile tranzactiei)')
     i_pre, f_pre = sql.find('DO $pre$'), sql.find('END $pre$;')
@@ -299,8 +313,8 @@ def probleme(sql, moduri, existente=TABELE_UTILIZATORI, functii=()):
     i_cons = pre.find('pg_try_advisory_xact_lock(')
     m0 = PRIMA_SCHIMBARE.search(sql)
     if min(poz_v) < 0 or poz_v != sorted(poz_v) or i_cons < 0 or poz_v[-1] > i_cons \
-            or sum(sql.count(x) for x in VERIFICARE_PLAFON[:2]) != 2 or (m0 and m0.start() < f_pre):
-        p.append('verificarea plafonului (2000/client) lipsa din $pre$ sau dupa lock-ul consultativ / prima schimbare')
+            or sum(sql.count(x) for x in VERIFICARE_PLAFON[:3]) != 3 or (m0 and m0.start() < f_pre):
+        p.append('verificarea plafonului (2000/session + marcaj) lipsa din $pre$ sau dupa lock-ul consultativ / prima schimbare')
     # r10: dupa $locks$ exact o instructiune: DO $critic$.
     coada = sql[b + len('END $locks$;'):]
     rest = _instructiuni(coada)

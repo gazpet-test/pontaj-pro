@@ -4,8 +4,10 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_MAJOR="${PORTAL_PG_MAJOR:-17}"
 # r10: migrarile cer PostgreSQL 17 (transaction_timeout = plafonul); PG16 nu mai e acceptat.
-# r12: plafonul = transaction_timeout pornit la BEGIN din CONEXIUNEA runnerului (--plafon-tranzactie-ms 2000, PR #1054);
-# fisierele il verifica (2000/client) si nu-l schimba. Livrarile simulate direct se conecteaza la fel (PSQL_LIV).
+# r12: plafonul = transaction_timeout pornit la BEGIN, pus de runner (--plafon-tranzactie-ms 2000, PR #1054); fisierele il
+# verifica si nu-l schimba. r14: pooler-ul de productie nu transmite optiunile de conectare => runnerul il pune ca SET de
+# SESIUNE inainte de BEGIN; fisierele cer 2000/session (pg_catalog) + marcajul prologului. Livrarile simulate direct incep
+# EXACT ca runnerul (liv / obs din scripts/portal/concurrency_lock.sh: SET, BEGIN, prolog, ..., COMMIT).
 [[ "$PG_MAJOR" == 17 ]] || { echo 'MEDIU: migrarile cer PG17 (transaction_timeout)'; exit 2; }
 SLOT="${PORTAL_E1_SLOT:-0}"
 [[ "$SLOT" =~ ^[0-9]$ ]] || exit 2
@@ -263,7 +265,7 @@ STARE_19A_NEAPLICAT="SELECT to_regclass('public.portal_provisioning') IS NULL AN
 lock_pre_observe 19a "$MIG_1B" "$TAB_UTIL $TAB_18A" -c "$MARCAJ_19A"
 # r10 (al doilea recenzent r9 P2-01): fereastra 18a -> 19a. Un cont creat dupa COMMIT-ul 18a (handle_new_user vechi, fara
 # rand in conturi_tip) e clasificat 'neaprobat' de 19a, sub lock-ul pe auth.users; tranzactie de test anulata integral.
-if "${PSQL_LIV[@]}" --single-transaction -c 'SET LOCAL ROLE supabase_auth_admin' \
+if liv -c 'SET LOCAL ROLE supabase_auth_admin' \
   -c "INSERT INTO auth.users(id,email) VALUES ('32000000-0000-0000-0000-000000000001','intre.livrari@example.invalid')" \
   -c 'RESET ROLE' \
   -c "DO \$v\$ BEGIN IF EXISTS (SELECT FROM public.conturi_tip WHERE auth_user_id='32000000-0000-0000-0000-000000000001') OR public.fn_portal_porti_lipsa() = '{}' THEN RAISE EXCEPTION 'premisa: contul trebuia sa fie neclasificat'; END IF; END \$v\$" \
@@ -273,7 +275,7 @@ if "${PSQL_LIV[@]}" --single-transaction -c 'SET LOCAL ROLE supabase_auth_admin'
 grep -q PORTAL_RECONCILIERE_OK "$TMP/reconciliere.log" && grep -q 'PORTAL_1B_RECONCILIATE: 1 ' "$TMP/reconciliere.log" \
   || { cat "$TMP/reconciliere.log"; fail 'reconcilierea 18a -> 19a'; }
 # Un cont teren (domeniu sau tip_cont) aparut intre livrari nu are o cale legitima => 19a refuza, nimic schimbat.
-if "${PSQL_LIV[@]}" --single-transaction -c 'SET LOCAL ROLE supabase_auth_admin' \
+if liv -c 'SET LOCAL ROLE supabase_auth_admin' \
   -c "INSERT INTO auth.users(id,email) VALUES ('32000000-0000-0000-0000-000000000002','strecurat@teren.gazpet.ro')" \
   -c 'RESET ROLE' -c "$MARCAJ_19A" -f "$MIG_1B" >"$TMP/reconciliere_teren.log" 2>&1; then fail 'reconcilierea a acceptat un cont teren neclasificat'; fi
 grep -q PORTAL_1B_TERRAIN_UNCLASSIFIED "$TMP/reconciliere_teren.log" || { cat "$TMP/reconciliere_teren.log"; fail 'refuz cont teren intre livrari'; }
@@ -299,18 +301,18 @@ grep -q PORTAL_E1_1B_TEST_END "$TMP/tests_1b.log" || fail 'test end E1-1b'
 # Regresiile E1-1a raman active si dupa schimbarea provisioning-ului.
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1a.test.sql" >"$TMP/regression_1a.log" 2>&1 || { cat "$TMP/regression_1a.log"; fail 'regression E1-1a'; }
 source "$ROOT/scripts/portal/concurrency_1b.sh"
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
  -c "INSERT INTO public.portal_provisioning(provisioning_id,employee_id,email_calculat,stare,cerut_de,payload_sha256) VALUES ('10000000-0000-0000-0000-000000000077',55,'new.fixture@teren.gazpet.ro','rezervat','00000000-0000-0000-0000-000000000001',sha256('fixture'::bytea))" \
  -f "$REV_1B" >"$TMP/rollback_1b_data_refused.log" 2>&1; then fail 'E1-1b rollback accepted new history'; fi
 grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_data_refused.log" || fail 'wrong E1-1b rollback data refusal'
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
  -c 'ALTER TABLE public.portal_provisioning DISABLE ROW LEVEL SECURITY' \
  -f "$REV_1B" >"$TMP/rollback_1b_config_refused.log" 2>&1; then fail 'E1-1b rollback accepted RLS drift'; fi
 grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_config_refused.log" || fail 'wrong E1-1b rollback config refusal'
 # r3: un cont ERP nou (in_asteptare) creat dupa 19a face imposibila restaurarea CHECK-ului vechi = refuz explicit.
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
  -c 'SET LOCAL ROLE supabase_auth_admin' \
  -c "INSERT INTO auth.users(id,email) VALUES ('30000000-0000-0000-0000-000000000001','nou.erp@example.invalid')" \
@@ -318,19 +320,19 @@ if "${PSQL_LIV[@]}" --single-transaction \
  -f "$REV_1B" >"$TMP/rollback_1b_pending_refused.log" 2>&1; then fail 'E1-1b rollback accepted new pending account'; fi
 grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_pending_refused.log" || { cat "$TMP/rollback_1b_pending_refused.log"; fail 'wrong E1-1b rollback pending refusal'; }
 # Jakarinos r3 P1: un helper de nivel 2 din lantul triggerului de pe profiles schimbat dupa 19a = revenire refuzata.
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
  -c "CREATE OR REPLACE FUNCTION public.fn_identitate_privilegiata() RETURNS boolean LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS 'SELECT NULL::boolean'" \
  -f "$REV_1B" >"$TMP/rollback_1b_helper_refused.log" 2>&1; then fail 'E1-1b rollback accepted level-2 helper drift'; fi
 grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_helper_refused.log" || { cat "$TMP/rollback_1b_helper_refused.log"; fail 'wrong E1-1b rollback helper refusal'; }
 # Jakarinos r4 P2: parametrii secventei jurnalului de provisioning schimbati dupa 19a = revenire refuzata.
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
  -c 'ALTER TABLE public.portal_provisioning_jurnal ALTER COLUMN id SET INCREMENT BY 2' \
  -f "$REV_1B" >"$TMP/rollback_1b_sequence_refused.log" 2>&1; then fail 'E1-1b rollback accepted sequence drift'; fi
 grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_sequence_refused.log" || { cat "$TMP/rollback_1b_sequence_refused.log"; fail 'wrong E1-1b rollback sequence refusal'; }
 # Apply -> rollback -> re-apply direct, tranzactional, pentru DDL. Runnerul refuza intentionat relivrarea aceluiasi nume.
-"${PSQL_LIV[@]}" --single-transaction \
+liv \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
  -f "$REV_1B" \
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning:'||txid_current(),true)" \
@@ -368,14 +370,14 @@ runner 20261118120000 "$MIG" >"$TMP/reapply.log" 2>&1 || rc=$?
 [[ "$rc" == 11 ]] || fail "reapply expected 11, got $rc"
 # Refuzul revenirii cu istoric nou; test in tranzactie anulata integral.
 # r9: atestarea se verifica acum INAINTEA lock-urilor => refuzurile pe date / configuratie se testeaza cu atestare.
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
   -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)" \
   -c "SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true)" \
   -c "UPDATE public.conturi_tip SET sursa='fixture_new' WHERE auth_user_id='e1000000-0000-0000-0000-000000000055'" \
   -f "$REV" >"$TMP/rollback_refused.log" 2>&1; then fail 'rollback accepted changed inventory'; fi
 grep -q PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_refused.log" || { cat "$TMP/rollback_refused.log"; fail 'wrong rollback refusal'; }
 # r9 (P2-02): un cont nou aparut dupa apply = revenirea 18a refuza (documentat in fisierul de revenire), nimic schimbat.
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
   -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)" \
   -c "SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true)" \
   -c 'SET LOCAL ROLE supabase_auth_admin' \
@@ -383,7 +385,7 @@ if "${PSQL_LIV[@]}" --single-transaction \
   -c 'RESET ROLE' \
   -f "$REV" >"$TMP/rollback_new_account_refused.log" 2>&1; then fail 'rollback 18a accepted new account'; fi
 grep -q PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_new_account_refused.log" || { cat "$TMP/rollback_new_account_refused.log"; fail 'wrong rollback 18a new account refusal'; }
-if "${PSQL_LIV[@]}" --single-transaction \
+if liv \
   -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)" \
   -c "SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true)" \
   -c 'ALTER TABLE public.conturi_tip DISABLE ROW LEVEL SECURITY' \
@@ -457,4 +459,5 @@ if (( ${#CAP_ESECURI[@]} > 0 )); then
 fi
 (( CAP_PROBE == 16 )) || fail "plafon: $CAP_PROBE probe LOCK_CAP rulate, asteptat 16"
 echo "PLAFON_TOATE: 16/16 probe LOCK_CAP trecute cu ceasul de perete stabil (abatere < ${PORTAL_SALT_MS} ms fata de ceasul monoton); probe repetate dupa un salt de ceas: $CAP_REPETARI"
-echo "PASS PORTAL_E1_1A+1B r13 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER$([[ "$NATIV" == 1 ]] && echo ', binare native PORTAL_PG_BIN')); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum; plafon ${PORTAL_PLAFON_MS} ms de la BEGIN pana la intrarea in COMMIT (ceasul din conexiunea runnerului) dovedit pe 18a / 19a / rev19a / rev18a (4 moduri: fara timeout prealabil x2, rol 10 s, rol 500 ms) + refuzurile fara plafon / ceas schimbat; COMMIT-ul intarziat NU e plafonat (LOCK_COMMIT_LENT)"
+echo "LOCK_COMMIT_LENT_STARE: ${COMMIT_LENT_STARE:-NEEXECUTAT: proba nu a rulat}"
+echo "PASS PORTAL_E1_1A+1B r14 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER$([[ "$NATIV" == 1 ]] && echo ', binare native PORTAL_PG_BIN')); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum; plafon ~${PORTAL_PLAFON_MS} ms de la BEGIN pana la intrarea in COMMIT (SET de sesiune pus de runner inainte de BEGIN, ca prin pooler; timeout PostgreSQL, nu timp real strict) dovedit pe 18a / 19a / rev19a / rev18a (4 moduri: fara timeout prealabil x2, rol 10 s, rol 500 ms) + 6 refuzuri (fara plafon, optiunea de conectare r13, rol, alta valoare, SET LOCAL fara marcaj, umbrire pg_temp.pg_settings); COMMIT-ul intarziat NU e plafonat (LOCK_COMMIT_LENT: ${COMMIT_LENT_STARE:-NEEXECUTAT})"

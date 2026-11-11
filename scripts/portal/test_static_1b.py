@@ -378,8 +378,13 @@ class StaticProvisioning(unittest.TestCase):
             'plafon repornit in $locks$ (r11)': mig.replace("  RAISE NOTICE 'PORTAL_LOCKS 19a",
                 "  PERFORM set_config('transaction_timeout', '0', true);\n  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 19a", 1),
             'plafon schimbat inainte de $locks$': mig.replace(L, "DO $q$ BEGIN PERFORM set_config('transaction_timeout', '10s', true); END $q$;\n" + L, 1),
-            'fara verificarea plafonului': mig.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", 'IF false THEN', 1),
-            'plafon cu alta valoare': mig.replace("'2000/client'", "'20000/client'", 1),
+            'fara verificarea plafonului': mig.replace("IF v_plafon IS DISTINCT FROM '2000/session'", 'IF false', 1),
+            'plafon cu alta valoare': mig.replace("'2000/session'", "'20000/session'", 1),
+            # r14: optiunea de conectare (sursa 'client') nu ajunge prin pooler; citirea necalificata poate fi umbrita.
+            'plafon acceptat din conexiune (r13)': mig.replace("'2000/session'", "'2000/client'", 1),
+            'fara marcajul plafonului': mig.replace(
+                "   OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN", '   THEN', 1),
+            'pg_settings necalificat (umbrire)': mig.replace('FROM pg_catalog.pg_settings WHERE', 'FROM pg_settings WHERE', 1),
             'reincercare 3 s de la $locks$': mig.replace("IF clock_timestamp() >= now() + interval '1 second' THEN",
                 "IF clock_timestamp() >= now() + interval '3 seconds' THEN", 1),
             'a doua instructiune dupa $locks$': mig.replace('END $locks$;\n', 'END $locks$;\nSELECT 1;\n', 1),
@@ -404,7 +409,8 @@ class StaticProvisioning(unittest.TestCase):
             'rev: SELECT pe portal_provisioning inainte': rev.replace(L, 'SELECT count(*) FROM public.portal_provisioning;\n' + L, 1),
             'rev: plafon repornit in $locks$ (r11)': rev.replace("  RAISE NOTICE 'PORTAL_LOCKS 19a revenire",
                 "  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 19a revenire", 1),
-            'rev: fara verificarea plafonului': rev.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", 'IF false THEN', 1),
+            'rev: fara verificarea plafonului': rev.replace("IF v_plafon IS DISTINCT FROM '2000/session'", 'IF false', 1),
+            'rev: pg_settings necalificat (umbrire)': rev.replace('FROM pg_catalog.pg_settings WHERE', 'FROM pg_settings WHERE', 1),
             'rev: a doua instructiune dupa $locks$': rev.replace('END $locks$;\n', 'END $locks$;\nDROP TABLE public.portal_e1_1b_manifest;\n', 1),
         }.items():
             with self.subTest(mutant=nume):

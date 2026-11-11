@@ -20,12 +20,19 @@
 --    [plafonul r10 / r11 "2 s de la obtinerea lock-urilor" e INFIRMAT de harness-ul PG17 real si inlocuit in r12]
 --  * fereastra 18a -> 19a (P2-01): conturile aparute intre cele doua livrari (handle_new_user vechi nu le clasifica) se
 --    clasifica explicit 'neaprobat' in $critic$, sub lock-ul pe auth.users; un cont teren neclasificat = refuz.
--- r12 (harness-ul PG17 real, proba "mostenit" r11; aceeasi solutie ca 18a): un transaction_timeout deja pornit nu se
+-- r12 (harness-ul PG17 real, proba "mostenit" r11; aceeasi solutie ca 18a): un ceas de tranzactie deja pornit nu se
 -- reporneste in mijlocul tranzactiei, deci fisierul NU schimba niciun timeout dupa $pre$. PLAFONUL = ceasul pornit de
--- PostgreSQL la BEGIN cu valoarea din CONEXIUNEA runnerului (livrare_migrare.sh --plafon-tranzactie-ms 2000, PR #1054;
--- sursa 'client'); $pre$ cere exact 2000/client. GARANTIA: de la BEGIN (deci si de la primul lock) PANA LA INTRAREA IN
--- COMMIT cel mult 2 s, altfel ROLLBACK la tot (pregatirea e in aceeasi tranzactie). COMMIT-ul propriu-zis ramane
--- neplafonat (limita r11). Reincercarea lock-urilor: pana la 1 s de la BEGIN.
+-- PostgreSQL la BEGIN cu valoarea pusa de runner (livrare_migrare.sh --plafon-tranzactie-ms 2000, PR #1054).
+-- r14 (aceeasi solutie ca 18a, vezi antetul de acolo): pooler-ul de productie nu transmite optiunile de conectare =>
+-- runnerul pune plafonul ca SET de SESIUNE inainte de BEGIN; $pre$ cere exact 2000/session din vederea de setari
+-- calificata cu pg_catalog (fara umbrire prin pg_temp) + marcajul plafonului pus de prologul runnerului. GARANTIA: aproximativ 2 s de la
+-- BEGIN (deci si de la primul lock) PANA LA INTRAREA IN COMMIT, altfel ROLLBACK la tot (pregatirea e in aceeasi
+-- tranzactie); timeout PostgreSQL, nu timp real strict. COMMIT-ul propriu-zis ramane neplafonat (limita r11; pe productie,
+-- fara replicare sincrona, = scrierea WAL a commit-ului). Reincercarea lock-urilor: pana la 1 s de la BEGIN.
+-- Nota (P2, al doilea recenzent r13): atomicitatea e completa pentru schema si datele comise, nu si pentru secvente: daca
+-- reconcilierea din $critic$ insereaza in conturi_tip, triggerul de audit consuma valori din secventa EXISTENTA
+-- conturi_tip_jurnal_id_seq (din 18a); un refuz ulterior anuleaza randurile si schema, dar poate lasa GOLURI in secventa.
+-- Nu e pierdere de date (id-urile jurnalului nu au voie sa fie consecutive; nimic nu se bazeaza pe asta).
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -37,11 +44,12 @@ BEGIN
  IF current_setting('transaction_isolation') <> 'read committed' THEN
    RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED'; END IF;
  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
- -- r12: plafonul din conexiunea runnerului, neschimbat de la BEGIN (sursa 'client').
- SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';
- IF v_plafon IS DISTINCT FROM '2000/client' THEN
-   RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % (cerut 2000/client: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
-     coalesce(v_plafon, 'lipsa'); END IF;
+ -- r14: plafonul pus de runner ca SET de sesiune inainte de BEGIN (2000/session, citit calificat) + marcajul prologului.
+ SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
+ IF v_plafon IS DISTINCT FROM '2000/session'
+   OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN
+   RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % marcaj % (cerut 2000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+     coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa'); END IF;
  IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
    RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03'; END IF;
 END $pre$;

@@ -185,17 +185,24 @@ class StaticDelivery(unittest.TestCase):
             "DO cu poarta inainte": mig.replace(L, "DO $q$ BEGIN PERFORM public.fn_portal_porti_lipsa(); END $q$;\n" + L, 1),
             "lock consultativ blocant": mig.replace("IF NOT pg_try_advisory_xact_lock(", "PERFORM pg_advisory_xact_lock(", 1),
             "a doua instructiune dupa $locks$": mig.replace("END $locks$;\n", "END $locks$;\nSELECT 1;\n", 1),
-            # r12: fisierul nu are voie sa schimbe transaction_timeout; plafonul se verifica (2000/client) in $pre$.
+            # r12: fisierul nu are voie sa schimbe transaction_timeout; plafonul se verifica in $pre$
+            # (r14: 2000/session + marcajul plafonului, citit din pg_catalog.pg_settings calificat).
             "plafon repornit in $locks$ (r11)": mig.replace("  RAISE NOTICE 'PORTAL_LOCKS 18a",
                 "  PERFORM set_config('transaction_timeout', '0', true);\n  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 18a", 1),
             "SET LOCAL transaction_timeout la inceput": mig.replace("SET LOCAL statement_timeout = '15s';\n",
                 "SET LOCAL statement_timeout = '15s';\nSET LOCAL transaction_timeout = '2s';\n", 1),
-            "fara verificarea plafonului": mig.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", "IF false THEN", 1),
-            "plafon acceptat din sesiune": mig.replace("'2000/client'", "'2000/session'", 1),
+            "fara verificarea plafonului": mig.replace("IF v_plafon IS DISTINCT FROM '2000/session'", "IF false", 1),
+            # r14: optiunea de conectare (r12-r13, sursa 'client') nu ajunge prin pooler => nu mai e acceptata.
+            "plafon acceptat din conexiune (r13)": mig.replace("'2000/session'", "'2000/client'", 1),
+            "fara marcajul plafonului": mig.replace(
+                "    OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current() THEN", "    THEN", 1),
+            # r14 (al doilea recenzent r13 P1): pg_settings necalificat poate fi umbrit de pg_temp.pg_settings.
+            "pg_settings necalificat (umbrire)": mig.replace("FROM pg_catalog.pg_settings WHERE", "FROM pg_settings WHERE", 1),
+            "mentiune a ceasului in comentariu": mig.replace(L, "-- aici nu schimbam transaction_timeout\n" + L, 1),
             "verificarea plafonului dupa lock-ul consultativ": mig.replace(
-                "  SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';\n", "", 1).replace(
+                "  SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';\n", "", 1).replace(
                 "    RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';\n",
-                "    RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';\n  SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';\n", 1),
+                "    RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';\n  SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';\n", 1),
             "reincercare socotita de la $locks$": mig.replace("IF clock_timestamp() >= now() + interval '1 second' THEN",
                 "IF clock_timestamp() >= statement_timestamp() + interval '1 second' THEN", 1),
             "RESET in DO": mig.replace("DO $liste_pre$\nDECLARE v text[];\nBEGIN\n", "DO $liste_pre$\nDECLARE v text[];\nBEGIN\n  RESET ALL;\n", 1),
@@ -208,7 +215,8 @@ class StaticDelivery(unittest.TestCase):
             "rev: SELECT pe conturi_tip inainte": rev.replace(L, "SELECT count(*) FROM public.conturi_tip;\n" + L, 1),
             "rev: plafon repornit in $locks$ (r11)": rev.replace("  RAISE NOTICE 'PORTAL_LOCKS 18a revenire",
                 "  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 18a revenire", 1),
-            "rev: fara verificarea plafonului": rev.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", "IF false THEN", 1),
+            "rev: fara verificarea plafonului": rev.replace("IF v_plafon IS DISTINCT FROM '2000/session'", "IF false", 1),
+            "rev: pg_settings necalificat (umbrire)": rev.replace("FROM pg_catalog.pg_settings WHERE", "FROM pg_settings WHERE", 1),
         }.items():
             with self.subTest(mutant=nume):
                 self.assertNotEqual(text, rev, nume)
