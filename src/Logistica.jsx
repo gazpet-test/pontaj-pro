@@ -24,6 +24,8 @@ import CarteTehnicaSearch from './CarteTehnicaSearch.jsx'
 import FisaActivExport from './FisaActivExport.jsx'
 import BmwCardataCard from './BmwCardataCard.jsx'
 import { construiesteF23, numeFisier, descarcaDocx } from './OfertareExport.js'
+import { randuriF23Categorie, foaieF23Categorie } from './logisticaF23Dovezi.js'
+import { ziBucuresti } from './lib/izoTeren.js'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
@@ -11464,6 +11466,46 @@ export default function LogisticaPage() {
     } finally { setBusyF23(false) }
   }
 
+  // ─── TKT-2026-0362: F23 pe o categorie (ex. aparatele de sudură automată), cu dovada deținerii / chiriei ──
+  // Doar date existente pe activ (categoria, forma de deținere, contractul atașat, nr. de inventar); vezi logisticaF23Dovezi.js.
+  const [f23Cat, setF23Cat] = useState(null)   // null = panou închis; '' = deschis, nimic ales; altfel id-ul categoriei
+  const categoriiCuActive = useMemo(() => {
+    const n = new Map()
+    for (const a of active) if (a.categorie_id != null && !a.vandut && !a.deep_sleep) n.set(String(a.categorie_id), (n.get(String(a.categorie_id)) || 0) + 1)
+    return categorii.filter(c => n.has(String(c.id))).map(c => ({ ...c, nr: n.get(String(c.id)) }))
+  }, [active, categorii])
+  const exportF23Categorie = async () => {
+    const cat = categorii.find(c => String(c.id) === String(f23Cat))
+    if (!cat) { showToast('Alege categoria.', 'err'); return }
+    setBusyF23(true)
+    try {
+      const azi = ziBucuresti()
+      // proprietarii utilajelor în comodat: doar numele celor din categoria aleasă
+      const ids = [...new Set(active.filter(a => String(a.categorie_id) === String(cat.id) && a.tip_proprietate === 'comodat' && a.comodat_employee_id != null)
+        .map(a => a.comodat_employee_id))]
+      let nume = new Map()
+      if (ids.length) {
+        const r = await incarcaNumeAngajati(() => supabase.from('employees').select('id, name', { count: 'exact' }).in('id', ids))
+        nume = r.nume
+        if (r.avertisment) showToast(r.avertisment, 'warn')
+      }
+      const randuri = randuriF23Categorie(active, cat.id, azi, id => (id == null ? null : numeAngajat(nume, id)))
+      if (!randuri.length) { showToast('Nu există utilaje active în categoria aleasă.', 'err'); return }
+      const eticheta = [cat.tip, cat.subcategorie].filter(Boolean).join(' · ')
+      const ws = XLSX.utils.aoa_to_sheet(foaieF23Categorie(randuri, eticheta, azi))
+      ws['!cols'] = [{ wch: 7 }, { wch: 34 }, { wch: 12 }, { wch: 18 }, { wch: 6 }, { wch: 12 }, { wch: 12 }, { wch: 70 }, { wch: 14 }]
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'F23 categorie')
+      const slug = eticheta.normalize('NFD').replace(/\p{M}/gu, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'categorie'
+      XLSX.writeFile(wb, `F23_${slug}_${azi}.xlsx`)
+      const lipsa = randuri.filter(r => r.stare !== 'ok').length
+      showToast(`Lista „${eticheta}”: ${randuri.length} bucăți${lipsa ? `, ${lipsa} fără dovadă completă (marcate în fișier)` : ', toate cu dovadă'}.`, lipsa ? 'warn' : 'ok')
+      setF23Cat(null)
+    } catch (e) {
+      showToast('Exportul listei pe categorie a eșuat: ' + (e?.message || e), 'err')
+    } finally { setBusyF23(false) }
+  }
+
   // ─── Export Excel ──────────────────────────────────────────────────────────
   const exportExcel = () => {
     const header = ['Nr crt', 'Cod intern', 'Nr inventar', 'Plăcuță', 'Marcă', 'Model', 'Tip', 'Subcategorie', 'An', 'Stare', 'Carburant', 'Normă consum', 'Unitate', 'Firmă', 'Mentenanță următoare', 'Zile până la scadență', 'Observații']
@@ -12765,6 +12807,22 @@ export default function LogisticaPage() {
           <button onClick={exportF23} disabled={busyF23} style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '55', opacity: busyF23 ? .5 : 1}} title="Declarația privind utilajele (Formular 23) — pentru orice client care cere dovada dotării">
             {busyF23 ? '⏳ Se generează…' : '🚜 Formular 23'}
           </button>
+          {/* TKT-2026-0362: listă separată pe o categorie, cu dovada deținerii / chiriei */}
+          <button onClick={() => setF23Cat(v => v === null ? '' : null)} disabled={busyF23} style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '55', opacity: busyF23 ? .5 : 1}}
+            title="Listă separată din Formularul 23 pentru o singură categorie de utilaje (ex. aparate de sudură automată), cu dovada deținerii sau a chiriei">
+            🔩 F23 pe categorie
+          </button>
+          {f23Cat !== null && (
+            <span style={{display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap'}}>
+              <select value={f23Cat} onChange={e => setF23Cat(e.target.value)} style={{...S.input, width: 'auto', minWidth: 220, fontSize: 12, padding: '6px 8px'}}>
+                <option value="">— alege categoria —</option>
+                {categoriiCuActive.map(c => <option key={c.id} value={c.id}>{[c.tip, c.subcategorie].filter(Boolean).join(' · ')} ({c.nr})</option>)}
+              </select>
+              <button onClick={exportF23Categorie} disabled={busyF23 || !f23Cat} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55', opacity: (busyF23 || !f23Cat) ? .5 : 1}}>
+                📥 Excel cu dovezi
+              </button>
+            </span>
+          )}
           {canEdit && (
             <button onClick={() => setModal({ mode: 'create', activ: null })} style={{...S.btnP, background: G.logistica, color: '#000'}}>
               + Activ nou
