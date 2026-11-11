@@ -4,7 +4,7 @@
 3. Rol `teren` izolat; clasificare completă, jurnal append-only, eligibilitate comună, hook STABLE fail-closed și poartă ACL.
 4. Hook-ul NU este configurat/activat. `handle_new_user`, profiles și drepturile ERP existente nu sunt modificate.
 5. Inventarul recalculează toate UUID-urile la apply, sub lock; verifică separat cele trei emailuri și fișele 55/70/NULL.
-6. **`test.razvan@teren.gazpet.ro`: employee_id NULL, neeligibil; hook-ul refuză tokenul. Nu s-a inventat fișă.**
+6. **Contul de test teren (fără fișă): employee_id NULL, neeligibil; hook-ul refuză tokenul. Nu s-a inventat fișă.**
 7. **HOLD:** lipsește inventarul revizuit al celor 21 de funcții PUBLIC; migrarea originală refuză atomic aplicarea.
 8. `scripts/portal/inventar_public.sql` oferă interogarea read-only pentru operator; nu a fost executată. Lista nu se învață automat din țintă.
 9. Harness PG17: `scripts/test_portal_e1.sh`, wrapper manual `scripts/portal/harness_wsl.sh`; livrare/revenire prin runner ca postgres NOSUPERUSER.
@@ -237,3 +237,77 @@ handle_new_user, profiles_role_chk, hook-ul sau rolurile; niciuna nu da EXECUTE 
 | L19 | O singura interogare in `ancore_1b.sql`, 19a si inventar (paritate testata). |
 | L25 | Harness-ul PG17 si testele SQL raman la operator; Auth real = testul B1 pe proiect separat. |
 | L01–L11, L13, L16, L17, L20–L24 | n/a pentru delta r8 (fara cod nou in afara literalului si a testului). |
+
+## E1-1a/1b r9 — 11.11.2026 (bugetul de lock la aplicare; al doilea recenzent r8: NO-GO, P1 1, P2 3)
+- **P1-01 disponibilitate.** Toate patru fisierele (18a, 19a, revenirile) au `SET LOCAL lock_timeout = '3s'` si
+  `statement_timeout = '15s'`. Lock-urile pe tabelele folosite de utilizatori se iau O SINGURA DATA, in blocul `$locks$`:
+  `LOCK ... NOWAIT` intr-o subtranzactie, reincercat la 50 ms, cel mult 3 s. Cat timp incearca, aplicarea nu sta in
+  coada lock-ului, deci citirile ERP si login-urile nu se aseaza in spatele ei (cauza principala a blocajelor DDL);
+  o incercare ratata elibereaza tot ce luase. Peste buget: `55P03 PORTAL_LOCK_BUDGET`, tranzactia se anuleaza, runnerul
+  da 10 (NEAPLICAT confirmat). La aplicare, tot ce citeste doar catalogul (ancore, lista alba, functii, tabele noi)
+  ruleaza INAINTE de `$locks$`; dupa el raman doar pasii care chiar cer lock-ul.
+- **P2-01.** Dupa 19a, `handle_new_user` scrie pentru orice cont nou si randul `conturi_tip` = `neaprobat`
+  (`sursa = cont_nou_e1_1b`), in aceeasi tranzactie cu profilul `in_asteptare`: inventarul Auth ramane complet, poarta
+  nu mai raporteaza `inventar identitati`, hook-ul il refuza pana la `fn_cont_aproba_erp` (care accepta deja randul
+  `neaprobat`). Test: `portal_e1_1b.test.sql` (un rand, fara autor, auditat; poarta verde).
+- **P2-02.** Fiecare fisier de revenire spune in antet cand refuza si care e procedura de urgenta; detaliile in
+  `E1_REVENIRE_AUTH.md` (sectiunea r9). Stub-ul `fn_auth_token_hook` ramas dupa revenirea 18a e pastrat intentionat
+  (motivul in antetul revenirii 18a); se sterge doar printr-o migrare separata, dupa confirmarea dezactivarii hook-ului.
+- **P2-03.** `$priv$` inaintea oricarei schimbari, cu mesaj `PORTAL_PRIVILEGES_MISSING: <lista>`: CREATEROLE si o proba
+  EFECTIVA (CREATE ROLE + GRANT catre authenticator + REVOKE + DROP pe un rol de proba, intr-o subtranzactie anulata
+  intentionat); REFERENCES pe auth.users / employees, TRIGGER pe employees, proprietar pe profiles si pe functiile
+  inlocuite, dreptul de LOCK (UPDATE / DELETE / TRUNCATE / MAINTAIN), cate unul pe rand. Revenirea 18a cere si ADMIN pe
+  `teren` (REVOKE din authenticator + DROP ROLE).
+- **Adresele conturilor teren** (decizia lui Razvan, 11.11): 18a identifica cele 3 conturi teren existente prin
+  sha256 pe `auth.users.id::text` (ca lista ERP), cu fisa 55 / 70 / fara fisa. Fixture-ul de test foloseste ID-uri si
+  adrese sintetice (`e1000000-...`, `teren.fixture.*@teren.gazpet.ro`), iar `prepare_fixture.py --teren` pune
+  hash-urile lor in copia de harness. Adresele raman in commit-urile vechi ale branch-ului si in `PLAN_ETAPA1.md` de pe
+  main pana la merge (aici scoase); istoricul nu se rescrie (fara force-push).
+
+### Lock-urile, pe fiecare fisier (masurate in harness: `scripts/portal/concurrency_lock.sh`)
+Durata = de la `$locks$` pana la commit. Estimarile sunt pentru prod (~150 de conturi, ~150 de profiluri); harness-ul
+masoara asteptarea maxima a unui trafic concurent real si o compara cu plafonul de 3 s.
+
+| Fisier | Tabel | Nivel | De ce | Cat tine | Ce blocheaza pentru utilizatori |
+|---|---|---|---|---|---|
+| 18a | auth.users | SHARE ROW EXCLUSIVE | cerut de FK-urile conturi_* -> auth.users; setul de conturi fix pana la clasificare | coada 18a, estimat < 1 s | scrierile Auth: actualizarea la login, conturi noi, ban. Citirile NU. |
+| 18a | employees | SHARE ROW EXCLUSIVE | cerut de FK-ul conturi_teren -> employees | idem | editarile HR. Citirile NU. |
+| 18a | profiles | SHARE | legatura fisa / is_owner neschimbata intre verificare si clasificare | idem | scrierile in profiles (Admin, conturi noi). Citirile NU. |
+| 18a | user_module_access | — (r8: SHARE) | 18a nu-l citeste | — | nimic |
+| 19a | conturi_teren / conturi_tip, jurnal | ACCESS EXCLUSIVE / SHARE | coloane noi / fara scrieri concurente | tot 19a | nimic (le foloseste doar hook-ul, care nu e pornit) |
+| 19a | auth.users | SHARE ROW EXCLUSIVE | FK portal_provisioning -> auth.users; handle_new_user inlocuit fara conturi noi in zbor | coada 19a, estimat < 1 s | scrierile Auth. Citirile NU. |
+| 19a | employees | SHARE ROW EXCLUSIVE (r8: ACCESS EXCLUSIVE) | FK + triggerul de revocare | idem | editarile HR. Citirile NU. |
+| 19a | profiles | ACCESS EXCLUSIVE | cerut de ALTER ... CHECK (rolurile teren / in_asteptare) | idem (r8: tot 19a) | TOT pe profiles, inclusiv citirile ERP, doar pe coada |
+| 19a | user_module_access | SHARE (r8: ACCESS EXCLUSIVE) | drepturile conturilor teren fixe intre poarta si amprenta | idem | scrierile. Citirile NU. |
+| revenire 19a | auth.users, employees, profiles | ACCESS EXCLUSIVE | cerut de DROP FK / DROP TRIGGER / ALTER CHECK; luat INAINTEA verificarii (L14) | toata revenirea, estimat < 1 s | tot pe cele trei tabele (login, citiri ERP) |
+| revenire 19a | user_module_access | SHARE | stabilitate pentru verificare | idem | scrierile |
+| revenire 18a | auth.users, employees | ACCESS EXCLUSIVE | cerut de DROP-ul FK-urilor conturi_*; inaintea verificarii (L14) | toata revenirea, estimat < 1 s | tot pe cele doua tabele (login, citiri HR) |
+
+Probele din harness (PG17, sesiuni reale):
+- `lock_observe` (18a, 19a, revenire 19a, revenire 18a): tranzactia completa, oprita intr-o pauza inainte de commit;
+  modurile din `pg_locks` si 8 probe de utilizator (citire / scriere pe cele 4 tabele, `lock_timeout` 200 ms) trebuie sa
+  fie exact cele din tabel; pauza se anuleaza, nu ramane nimic.
+- `lock_budget_refusal` (18a cu o scriere lunga pe auth.users, 19a cu o citire lunga pe profiles): runnerul refuza cu
+  `PORTAL_LOCK_BUDGET` si cod 10 in ~3 s, fara obiecte ramase; CAT TIMP incearca, citirile si scrierile pe auth.users /
+  employees / profiles trec (aplicarea nu blocheaza pe nimeni cat asteapta).
+- `traffic_start/stop` (aplicarea reala 18a si 19a): trafic continuu (citiri / scrieri profiles si employees, login
+  simulat = UPDATE pe auth.users); nicio eroare, asteptarea maxima <= 3000 ms (`PORTAL_BUDGET_MS`), afisata in log.
+- Negativ: CREATEROLE lipsa si REFERENCES pe auth.users lipsa = `PORTAL_PRIVILEGES_MISSING`, nimic creat; hash-urile
+  teren de productie pe fixture = `PORTAL_TERRAIN_INVENTORY_CHANGED`; revenirea 18a cu un cont nou = refuz.
+
+Verificat de Rocky (fara harness, care ramane la chat): build, vitest, parserul PostgreSQL (libpg-query 17) si un test de
+fum semantic pe PGlite (PostgreSQL 18, o singura sesiune, rol NOSUPERUSER): 18a -> teste 1a -> 19a -> teste 1b ->
+cont nou -> revenire 19a refuzata cu cont nou -> revenire + re-aplicare 19a in aceeasi tranzactie -> revenire 19a ->
+revenire 18a (fara atestare / cu cont nou = refuz) -> revenire 18a; plus refuzurile de drepturi. Concurenta reala
+(NOWAIT, 55P03, trafic) nu se poate proba intr-o singura sesiune: o dovedeste doar harness-ul PG17.
+
+| Regula | Dovada r9 |
+|---|---|
+| L01 / L06 | Ordinea lock-urilor scrisa in fiecare fisier (auth.users -> employees -> profiles -> user_module_access); NOWAIT = aplicarea nu asteapta niciodata tinand un lock pe tabelele utilizatorilor, deci nu poate intra in deadlock cu traficul. |
+| L08 | Neschimbat (handle_new_user: autorul clasificarii noi e NULL, nu un parametru). |
+| L12 / L18 | `$priv$` aduna toate lipsurile, nu se opreste tacit; lista teren: exact 3 hash-uri distincte, altfel refuz. |
+| L14 | O tranzactie; revenirile iau lock-urile INAINTEA verificarii „fara date noi”; apply -> revenire -> re-apply testat (harness + PGlite). |
+| L15 | Amprentele / ancorele neschimbate; FK-urile 19a adaugate la final cu numele generate in r8 (aceeasi definitie). |
+| L20 | Cai legitime testate: trafic concurent fara erori, aplicarea trece cu lock-urile libere. |
+| L25 | Doua sesiuni reale + bariere (fisier / pg_stat_activity), motivul exact (`PORTAL_LOCK_BUDGET`, cod 10), PG17 NOSUPERUSER. |
+| L02–L05, L07, L09–L11, L13, L16, L17, L19, L21–L24 | n/a pentru delta r9. |

@@ -119,6 +119,14 @@ class StaticProvisioning(unittest.TestCase):
         self.assertNotIn('fn_cont_notifica_owneri', branch)
         self.assertNotIn('manager_santier', branch)
         restored = restored[:start] + restored[end:]
+        # r9 (P2-01): singura adaugare pe calea conturilor obisnuite = clasificarea 'neaprobat', inaintea profilului.
+        clasificare = ("  -- r9 (P2-01): contul nou primeste clasificarea 'neaprobat' odata cu profilul (inventarul Auth ramane complet;\n"
+                       "  -- hook-ul il refuza pana la fn_cont_aproba_erp). Ordinea ca pe ramura teren: conturi_tip -> profiles.\n"
+                       "  INSERT INTO public.conturi_tip(auth_user_id,tip,sursa) VALUES (NEW.id,'neaprobat','cont_nou_e1_1b')\n"
+                       "  ON CONFLICT (auth_user_id) DO NOTHING;\n")
+        self.assertEqual(restored.count(clasificare), 1)
+        self.assertLess(restored.index(clasificare), restored.index('  INSERT INTO public.profiles (id, email, name, role)'))
+        restored = restored.replace(clasificare, '', 1)
         restored = restored.replace("    'in_asteptare'", "    'manager_santier'", 1)
         self.assertEqual(restored, live_source())
 
@@ -250,9 +258,11 @@ class StaticProvisioning(unittest.TestCase):
         for nume, f in cazuri.items():
             with self.subTest(caz=nume):
                 self.assertNotEqual(mutant(f), [], nume)
-        # verificarea ancorelor e prima dupa lock-uri si se repeta inaintea fixarii amprentei
-        self.assertLess(sql.index('LOCK TABLE public.employees'), sql.index('DO $ancore_pre$'))
+        # r9: verificarea ancorelor (doar catalog) ruleaza INAINTEA lock-urilor pe tabelele utilizatorilor si inaintea
+        # oricarui obiect nou; se repeta, sub lock-uri, inaintea fixarii amprentei.
+        self.assertLess(sql.index('DO $ancore_pre$'), sql.index('DO $locks$'))
         self.assertLess(sql.index('DO $ancore_pre$'), sql.index('CREATE TABLE public.portal_e1_1b_manifest'))
+        self.assertLess(sql.index('DO $locks$'), sql.index('DO $post$'))
         post = sql.split('DO $post$', 1)[1]
         self.assertLess(post.index('pg_temp.portal_1b_ancore()'), post.index("'post_snapshot'"))
 
@@ -288,6 +298,43 @@ class StaticProvisioning(unittest.TestCase):
             for f in (good, bad, out):
                 if f.exists():
                     f.unlink()
+
+    def test_lock_budget_contract_r9(self):
+        # r9 (al doilea recenzent r8, P1-01): punct unic de lock, NOWAIT + buget 3 s, nivelurile declarate in PR.
+        spec_b = importlib.util.spec_from_file_location('buget_lock', ROOT / 'scripts/portal/buget_lock.py')
+        buget = importlib.util.module_from_spec(spec_b)
+        spec_b.loader.exec_module(buget)
+        mig_moduri = {'auth.users': 'SHARE ROW EXCLUSIVE', 'public.employees': 'SHARE ROW EXCLUSIVE',
+                      'public.profiles': 'ACCESS EXCLUSIVE', 'public.user_module_access': 'SHARE'}
+        rev_moduri = {'auth.users': 'ACCESS EXCLUSIVE', 'public.employees': 'ACCESS EXCLUSIVE',
+                      'public.profiles': 'ACCESS EXCLUSIVE', 'public.user_module_access': 'SHARE'}
+        mig = MIG.read_text(encoding='utf-8')
+        rev = REV.read_text(encoding='utf-8')
+        self.assertEqual(buget.probleme(mig, mig_moduri), [])
+        self.assertEqual(buget.probleme(rev, rev_moduri), [])
+        # Pe coada lui 19a (dupa $locks$): CHECK-ul, FK-urile, triggerul pe employees si handle_new_user.
+        i = mig.index('DO $locks$')
+        for after in ('ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk',
+                      'ADD CONSTRAINT portal_provisioning_employee_id_fkey', 'CREATE TRIGGER portal_revoca_la_plecare',
+                      'CREATE OR REPLACE FUNCTION public.handle_new_user()', "IF EXISTS (SELECT FROM public.profiles WHERE role IS NULL"):
+            self.assertGreater(mig.index(after), i, after)
+        create_prov = mig.split('CREATE TABLE public.portal_provisioning (', 1)[1].split(');', 1)[0]
+        self.assertNotIn('REFERENCES', create_prov)
+        # Revenirea: lock-urile inaintea verificarii „fara date noi” (L14).
+        self.assertLess(rev.index('DO $locks$'), rev.index('DO $check$'))
+        # Mutanti: contractul trebuie sa-i respinga.
+        mutanti = {
+            'fara NOWAIT': mig.replace('public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;', 'public.profiles IN ACCESS EXCLUSIVE MODE;', 1),
+            'LOCK pe profiles in afara': mig.replace('DO $priv$', 'LOCK TABLE public.profiles IN SHARE MODE;\nDO $priv$', 1),
+            'fara lock_timeout': mig.replace("SET LOCAL lock_timeout = '3s';", '', 1),
+            'mod mai slab declarat': mig.replace('public.user_module_access IN SHARE MODE NOWAIT', 'public.user_module_access IN ROW SHARE MODE NOWAIT', 1),
+            'fara 55P03': mig.replace("USING ERRCODE = '55P03'", '', 1),
+            'priv dupa prima schimbare': mig.replace('DO $priv$', 'CREATE TABLE public.x(id int);\nDO $priv$', 1),
+        }
+        for nume, text in mutanti.items():
+            with self.subTest(mutant=nume):
+                self.assertNotEqual(text, mig, nume)
+                self.assertNotEqual(buget.probleme(text, mig_moduri), [], nume)
 
     def test_hook_and_provisioning_share_employee_predicate(self):
         sql = MIG.read_text(encoding='utf-8')

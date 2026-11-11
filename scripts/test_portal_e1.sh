@@ -85,11 +85,14 @@ q "SELECT jsonb_build_object(
     WHERE n.nspname='public' AND p.proname ~ '^portal_fixture_public_[0-9]{2}\$'),
   'net',(SELECT jsonb_object_agg('net.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')',md5(pg_get_functiondef(p.oid)))
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='net'))" >"$AMPRENTE"
+# r9: conturile teren ale fixture-ului (sintetice) -> hash-uri in copie; artefactul de productie are hash-urile reale.
+TEREN_FIXTURE=(e1000000-0000-0000-0000-000000000055=55 e1000000-0000-0000-0000-000000000070=70 e1000000-0000-0000-0000-0000000000ff=)
 fixture() { # $1 = varianta (director nou in TMP), restul = argumentele --erp
   mkdir "$TMP/$1"
   python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/$1/20261118a_portal_teren_identitate.sql" \
-    --amprente "$AMPRENTE" "${@:2}" >/dev/null
+    --amprente "$AMPRENTE" --teren "${TEREN_FIXTURE[@]}" "${@:2}" >/dev/null
 }
+source "$ROOT/scripts/portal/concurrency_lock.sh"
 hold_18a() { # $1 = artefactul, $2 = motivul exact, $3 = eticheta; refuz ATOMIC, fara obiecte ramase
   local rc=0 log="$TMP/hold_$3.log"
   runner 20261118120000 "$1" >"$log" 2>&1 || rc=$?
@@ -106,10 +109,22 @@ fixture v_erp_vechi --erp 00000000-0000-0000-0000-000000000001 00000000-0000-000
 hold_18a "$TMP/v_erp_vechi/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APPROVAL_LIST_CHANGED erp_vechi
 fixture v_fara_owner --erp 00000000-0000-0000-0000-000000000002
 hold_18a "$TMP/v_fara_owner/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APPROVAL_OWNER_MISSING fara_owner
-fixture v_erp_teren --erp 00000000-0000-0000-0000-000000000001 44387376-e48c-44d5-a88b-752c653c5639
+fixture v_erp_teren --erp 00000000-0000-0000-0000-000000000001 e1000000-0000-0000-0000-000000000055
 hold_18a "$TMP/v_erp_teren/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APPROVAL_LIST_INVALID erp_teren
+# r9: hash-urile conturilor teren de productie nu se potrivesc cu fixture-ul = refuz atomic (inventarul teren e verificat).
+mkdir "$TMP/v_teren_prod"
+python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/v_teren_prod/20261118a_portal_teren_identitate.sql" \
+  --amprente "$AMPRENTE" --erp 00000000-0000-0000-0000-000000000001 >/dev/null
+hold_18a "$TMP/v_teren_prod/20261118a_portal_teren_identitate.sql" PORTAL_TERRAIN_INVENTORY_CHANGED teren_prod
 fixture v_ok --erp 00000000-0000-0000-0000-000000000001
 MIG="$TMP/v_ok/20261118a_portal_teren_identitate.sql"
+# r9 (P2-03): drepturile lipsa = refuz cu mesaj clar inainte de orice schimbare (CREATEROLE, REFERENCES pe auth.users).
+"${ADMIN[@]}" -d "$DB" -c 'ALTER ROLE postgres NOCREATEROLE' >/dev/null
+hold_18a "$MIG" 'PORTAL_PRIVILEGES_MISSING: CREATEROLE' priv_createrole
+"${ADMIN[@]}" -d "$DB" -c 'ALTER ROLE postgres CREATEROLE' >/dev/null
+"${ADMIN[@]}" -d "$DB" -c 'REVOKE REFERENCES ON auth.users FROM postgres' >/dev/null
+hold_18a "$MIG" 'PORTAL_PRIVILEGES_MISSING: REFERENCES pe auth.users' priv_references
+"${ADMIN[@]}" -d "$DB" -c 'GRANT REFERENCES ON auth.users TO postgres' >/dev/null
 # Copilot r2 P1-02: corp schimbat inainte de apply (aceeasi semnatura, acelasi numar) = refuz, pe net si pe public.
 q "CREATE OR REPLACE FUNCTION net.portal_fixture_net_01() RETURNS integer LANGUAGE sql AS 'SELECT 2'" >/dev/null
 hold_18a "$MIG" PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED net_corp
@@ -121,7 +136,21 @@ q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer 
 "${ADMIN[@]}" -d "$DB" -c 'ALTER FUNCTION net.portal_fixture_net_02() OWNER TO supabase_auth_admin' >/dev/null
 hold_18a "$MIG" PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED net_owner
 "${ADMIN[@]}" -d "$DB" -c 'ALTER FUNCTION net.portal_fixture_net_02() OWNER TO postgres' >/dev/null
-runner 20261118120000 "$MIG" >"$TMP/apply.log" 2>&1 || { cat "$TMP/apply.log"; fail apply; }
+# r9 (P1-01): nivelul lock-urilor tinute de 18a la final (pg_locks) si ce simte un utilizator (probe cu lock_timeout scurt),
+# intr-o tranzactie oprita intentionat inainte de commit; apoi refuzul 55P03 cand auth.users e tinut de o tranzactie lunga.
+lock_observe 18a 'auth.users=ShareRowExclusiveLock,public.employees=ShareRowExclusiveLock,public.profiles=ShareLock,public.user_module_access=-' \
+  'citire auth.users=ok,scriere auth.users=blocat,citire employees=ok,scriere employees=blocat,citire profiles=ok,scriere profiles=blocat,citire user_module_access=ok,scriere user_module_access=ok' \
+  -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate:'||txid_current(),true)" -f "$MIG"
+lock_budget_refusal 18a 20261118120000 "$MIG" \
+  "UPDATE auth.users SET email=email WHERE id='00000000-0000-0000-0000-000000000002'" \
+  'citire auth.users=ok,scriere auth.users=ok,scriere employees=ok,citire profiles=ok,scriere profiles=ok'
+[[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 && "$(q "SELECT to_regclass('public.conturi_tip') IS NULL")" == t ]] \
+  || fail 'partial 18a after lock budget refusal'
+# Trafic concurent (citiri / scrieri profiles si employees, login simulat pe auth.users) pe toata durata aplicarii reale.
+traffic_start 18a
+runner 20261118120000 "$MIG" >"$TMP/apply.log" 2>&1 || { traffic_stop 18a 0 || true; cat "$TMP/apply.log"; fail apply; }
+traffic_stop 18a "$PORTAL_BUDGET_MS"
+grep -q 'PORTAL_LOCKS 18a' "$TMP/apply.log" || { cat "$TMP/apply.log"; fail 'apply 18a fara PORTAL_LOCKS'; }
 # Inventar: owner-ul aprobat = erp; pending + contul legat de fisa cu drept pe modul (neaprobat) = neaprobat.
 [[ "$(q "SELECT string_agg(tip||':'||n,',' ORDER BY tip) FROM (SELECT tip,count(*) n FROM public.conturi_tip GROUP BY tip) x")" == 'erp:1,neaprobat:2,teren:3' ]] \
   || fail 'ERP inventory counts'
@@ -161,7 +190,19 @@ q 'ALTER TABLE public.profiles DISABLE TRIGGER trg_profiles_protectie_legatura' 
 hold_1b "$MIG_1B" PORTAL_1B_ANCHOR_CHANGED profiles_trigger_off
 q 'ALTER TABLE public.profiles ENABLE TRIGGER trg_profiles_protectie_legatura' >/dev/null
 [[ "$("${PSQL[@]}" -At -f "$ROOT/scripts/portal/ancore_1b.sql")" == "$(cat "$ANCORE")" ]] || fail 'fixture anchors not restored'
-runner 20261119120000 "$MIG_1B" >"$TMP/apply_1b.log" 2>&1 || { cat "$TMP/apply_1b.log"; fail 'apply E1-1b'; }
+# r9 (P1-01): 19a — profiles ACCESS EXCLUSIVE doar pe coada, employees fara ACCESS EXCLUSIVE (citirile HR libere).
+lock_observe 19a 'auth.users=ShareRowExclusiveLock,public.employees=ShareRowExclusiveLock,public.profiles=AccessExclusiveLock,public.user_module_access=ShareLock' \
+  'citire auth.users=ok,scriere auth.users=blocat,citire employees=ok,scriere employees=blocat,citire profiles=blocat,scriere profiles=blocat,citire user_module_access=ok,scriere user_module_access=blocat' \
+  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning:'||txid_current(),true)" -f "$MIG_1B"
+# O citire lunga pe profiles: 19a refuza in ~3 s cu 55P03, iar citirile / scrierile ERP NU se aseaza in spatele ei.
+lock_budget_refusal 19a 20261119120000 "$MIG_1B" 'SELECT count(*) FROM public.profiles' \
+  'citire auth.users=ok,scriere auth.users=ok,scriere employees=ok,citire profiles=ok,scriere profiles=ok'
+[[ "$(q "SELECT to_regclass('public.portal_provisioning') IS NULL AND to_regclass('public.portal_e1_1b_manifest') IS NULL")" == t ]] \
+  || fail 'partial E1-1b after lock budget refusal'
+traffic_start 19a
+runner 20261119120000 "$MIG_1B" >"$TMP/apply_1b.log" 2>&1 || { traffic_stop 19a 0 || true; cat "$TMP/apply_1b.log"; fail 'apply E1-1b'; }
+traffic_stop 19a "$PORTAL_BUDGET_MS"
+grep -q 'PORTAL_LOCKS 19a' "$TMP/apply_1b.log" || { cat "$TMP/apply_1b.log"; fail 'apply 19a fara PORTAL_LOCKS'; }
 [[ "$(q 'SELECT public.fn_portal_porti_lipsa_1b()')" == '{}' ]] || fail 'gate E1-1b'
 [[ -z "$("${PSQL[@]}" -At -f "$ROOT/scripts/control_0e.sql")" ]] || fail 'E1-1b control 0e'
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1b.test.sql" >"$TMP/tests_1b.log" 2>&1 || { cat "$TMP/tests_1b.log"; fail 'tests E1-1b'; }
@@ -212,6 +253,10 @@ q "CREATE FUNCTION public.alt_modul_fixture() RETURNS integer LANGUAGE sql AS 'S
  CREATE TABLE public.alt_modul_fixture_tabel(id integer);
  UPDATE public.facturi SET suma=suma+1 WHERE id=1" >/dev/null
 [[ "$(q 'SELECT public.fn_portal_porti_lipsa_1b()')" == '{}' ]] || fail 'unrelated change reddened gate E1-1b'
+# r9 (P1-01): revenirea 19a tine ACCESS EXCLUSIVE pe auth.users / employees / profiles (DROP FK / TRIGGER, CHECK).
+lock_observe rev19a 'auth.users=AccessExclusiveLock,public.employees=AccessExclusiveLock,public.profiles=AccessExclusiveLock,public.user_module_access=ShareLock' \
+  'citire auth.users=blocat,scriere auth.users=blocat,citire employees=blocat,scriere employees=blocat,citire profiles=blocat,scriere profiles=blocat,citire user_module_access=ok,scriere user_module_access=blocat' \
+  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" -f "$REV_1B"
 runner 20261119120001 "$REV_1B" >"$TMP/rollback_1b.log" 2>&1 || { cat "$TMP/rollback_1b.log"; fail 'rollback E1-1b'; }
 q "DROP FUNCTION public.alt_modul_fixture(); DROP TABLE public.alt_modul_fixture_tabel;
  UPDATE public.facturi SET suma=suma-1 WHERE id=1" >/dev/null
@@ -228,13 +273,25 @@ rc=0
 runner 20261118120000 "$MIG" >"$TMP/reapply.log" 2>&1 || rc=$?
 [[ "$rc" == 11 ]] || fail "reapply expected 11, got $rc"
 # Refuzul revenirii cu istoric nou; test in tranzactie anulata integral.
+# r9: atestarea se verifica acum INAINTEA lock-urilor => refuzurile pe date / configuratie se testeaza cu atestare.
 if "${PSQL[@]}" --single-transaction \
   -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)" \
-  -c "UPDATE public.conturi_tip SET sursa='fixture_new' WHERE auth_user_id='44387376-e48c-44d5-a88b-752c653c5639'" \
+  -c "SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true)" \
+  -c "UPDATE public.conturi_tip SET sursa='fixture_new' WHERE auth_user_id='e1000000-0000-0000-0000-000000000055'" \
   -f "$REV" >"$TMP/rollback_refused.log" 2>&1; then fail 'rollback accepted changed inventory'; fi
 grep -q PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_refused.log" || { cat "$TMP/rollback_refused.log"; fail 'wrong rollback refusal'; }
+# r9 (P2-02): un cont nou aparut dupa apply = revenirea 18a refuza (documentat in fisierul de revenire), nimic schimbat.
 if "${PSQL[@]}" --single-transaction \
   -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)" \
+  -c "SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true)" \
+  -c 'SET LOCAL ROLE supabase_auth_admin' \
+  -c "INSERT INTO auth.users(id,email) VALUES ('30000000-0000-0000-0000-000000000002','nou2.erp@example.invalid')" \
+  -c 'RESET ROLE' \
+  -f "$REV" >"$TMP/rollback_new_account_refused.log" 2>&1; then fail 'rollback 18a accepted new account'; fi
+grep -q PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_new_account_refused.log" || { cat "$TMP/rollback_new_account_refused.log"; fail 'wrong rollback 18a new account refusal'; }
+if "${PSQL[@]}" --single-transaction \
+  -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)" \
+  -c "SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true)" \
   -c 'ALTER TABLE public.conturi_tip DISABLE ROW LEVEL SECURITY' \
   -f "$REV" >"$TMP/rollback_config_refused.log" 2>&1; then fail 'rollback accepted changed RLS'; fi
 grep -q PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_config_refused.log" || { cat "$TMP/rollback_config_refused.log"; fail 'wrong config refusal'; }
@@ -248,6 +305,10 @@ import sys
 source, target = map(Path, sys.argv[1:])
 target.write_text("SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true);\n" + source.read_text(encoding='utf-8'), encoding='utf-8')
 PY
+# r9 (P1-01): revenirea 18a tine ACCESS EXCLUSIVE pe auth.users / employees (DROP FK); profiles neatins.
+lock_observe rev18a 'auth.users=AccessExclusiveLock,public.employees=AccessExclusiveLock,public.profiles=-,public.user_module_access=-' \
+  'citire auth.users=blocat,scriere auth.users=blocat,citire employees=blocat,scriere employees=blocat,citire profiles=ok,scriere profiles=ok,citire user_module_access=ok,scriere user_module_access=ok' \
+  -c "SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)" -f "$ATTESTED_REV"
 runner 20261118120001 "$ATTESTED_REV" >"$TMP/rollback.log" 2>&1 || { cat "$TMP/rollback.log"; fail rollback; }
 [[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 ]] || fail 'role left'
 [[ "$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('conturi_tip','conturi_teren','conturi_tip_jurnal','conturi_tip_jurnal_id_seq')")" == 0 ]] || fail 'tables left'

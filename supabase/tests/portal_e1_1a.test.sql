@@ -34,22 +34,22 @@ BEGIN
    OR (SELECT tip FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000003') IS DISTINCT FROM 'neaprobat'
    OR (SELECT tip FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000001') IS DISTINCT FROM 'erp'
  THEN RAISE EXCEPTION 'linked account approved without owner approval'; END IF;
- IF (SELECT employee_id FROM public.conturi_teren WHERE auth_user_id='a2a3a7c3-b285-4306-8d5b-39749c2abb0c') IS NOT NULL
+ IF (SELECT employee_id FROM public.conturi_teren WHERE auth_user_id='e1000000-0000-0000-0000-0000000000ff') IS NOT NULL
   THEN RAISE EXCEPTION 'invented employee'; END IF;
 END $checks$;
 SET LOCAL ROLE supabase_auth_admin;
 SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000001','erp');
 SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000002','error');
 SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000003','error');
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','teren');
-SELECT portal_test.expect_hook('393709f9-bcb6-4ce5-ba22-2eca5c353f23','teren');
-SELECT portal_test.expect_hook('a2a3a7c3-b285-4306-8d5b-39749c2abb0c','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','teren');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000070','teren');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-0000000000ff','error');
 SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000099','error');
 DO $bad$
 BEGIN
  IF public.fn_auth_token_hook('{"user_id":"bad","claims":{}}')->'error' IS NULL
   OR public.fn_auth_token_hook('{}')->'error' IS NULL
-  OR public.fn_auth_token_hook('{"user_id":"44387376-e48c-44d5-a88b-752c653c5639","claims":null}')->'error' IS NULL THEN
+  OR public.fn_auth_token_hook('{"user_id":"e1000000-0000-0000-0000-000000000055","claims":null}')->'error' IS NULL THEN
   RAISE EXCEPTION 'malformed input accepted'; END IF;
  IF public.fn_auth_token_hook('{"user_id":"00000000-0000-0000-0000-000000000001","claims":{"role":"service_role"}}')->'error' IS NULL
  OR public.fn_auth_token_hook('{"user_id":"00000000-0000-0000-0000-000000000001","claims":{}}')->'error' IS NULL THEN
@@ -57,9 +57,9 @@ BEGIN
 END $bad$;
 RESET ROLE;
 SAVEPOINT missing;
-DELETE FROM public.conturi_tip WHERE auth_user_id='44387376-e48c-44d5-a88b-752c653c5639';
+DELETE FROM public.conturi_tip WHERE auth_user_id='e1000000-0000-0000-0000-000000000055';
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 DO $$ BEGIN IF NOT ('inventar identitati'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'missing set undetected'; END IF; END $$;
 ROLLBACK TO missing;
@@ -75,58 +75,58 @@ END $$;
 ROLLBACK TO same_count_wrong_set;
 SAVEPOINT bad_type;
 ALTER TABLE public.conturi_tip DROP CONSTRAINT conturi_tip_tip_check;
-UPDATE public.conturi_tip SET tip='necunoscut' WHERE auth_user_id='44387376-e48c-44d5-a88b-752c653c5639';
+UPDATE public.conturi_tip SET tip='necunoscut' WHERE auth_user_id='e1000000-0000-0000-0000-000000000055';
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 ROLLBACK TO bad_type;
 SAVEPOINT no_teren;
-DELETE FROM public.conturi_teren WHERE auth_user_id='44387376-e48c-44d5-a88b-752c653c5639';
+DELETE FROM public.conturi_teren WHERE auth_user_id='e1000000-0000-0000-0000-000000000055';
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 ROLLBACK TO no_teren;
 SAVEPOINT revoked;
 UPDATE public.conturi_teren SET stare='revocat' WHERE employee_id=55;
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 ROLLBACK TO revoked;
 SAVEPOINT creating;
 UPDATE public.conturi_teren SET stare='in_creare' WHERE employee_id=55;
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 ROLLBACK TO creating;
 SAVEPOINT inactive;
 UPDATE public.employees SET active=false WHERE id=55;
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 ROLLBACK TO inactive;
 SAVEPOINT unknown_active;
 UPDATE public.employees SET active=NULL WHERE id=55;
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 ROLLBACK TO unknown_active;
 SAVEPOINT ended;
 UPDATE public.employees SET termination_date=(now() AT TIME ZONE 'Europe/Bucharest')::date-1 WHERE id=55;
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 UPDATE public.employees SET termination_date=(now() AT TIME ZONE 'Europe/Bucharest')::date WHERE id=55;
 SET LOCAL ROLE supabase_auth_admin;
 -- E1-1a: ultima zi inclusiva. E1-1b: brief-ul cere revocare imediata; reactivarea nu anuleaza revocarea de ieri.
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639',
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055',
  CASE WHEN to_regclass('public.portal_provisioning') IS NULL THEN 'teren' ELSE 'error' END);
 RESET ROLE;
 ROLLBACK TO ended;
 -- Ban: numai rolul Auth poate modifica auth.users, ca in productie.
 SAVEPOINT banned;
 SET LOCAL ROLE supabase_auth_admin;
-UPDATE auth.users SET banned_until=now()+interval '1 day' WHERE id='44387376-e48c-44d5-a88b-752c653c5639';
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
+UPDATE auth.users SET banned_until=now()+interval '1 day' WHERE id='e1000000-0000-0000-0000-000000000055';
+SELECT portal_test.expect_hook('e1000000-0000-0000-0000-000000000055','error');
 RESET ROLE;
 ROLLBACK TO banned;
 SAVEPOINT inaccessible;
@@ -139,12 +139,12 @@ ROLLBACK TO inaccessible;
 -- (pe prod postgres nu poate da USAGE pe auth; identitatea teren vine din public.fn_portal_uid())
 -- GUC simuleaza JWT numai in harness; dovada reala necesita Auth/PostgREST semnat pe proiectul de test.
 GRANT USAGE ON SCHEMA portal_test TO teren;
-SELECT set_config('request.jwt.claims','{"sub":"44387376-e48c-44d5-a88b-752c653c5639","role":"teren"}',true);
+SELECT set_config('request.jwt.claims','{"sub":"e1000000-0000-0000-0000-000000000055","role":"teren"}',true);
 SET LOCAL ROLE teren;
 DO $client$
 DECLARE t text; p record;
 BEGIN
- IF public.fn_portal_uid() IS DISTINCT FROM '44387376-e48c-44d5-a88b-752c653c5639'::uuid THEN RAISE EXCEPTION 'bad client fixture'; END IF;
+ IF public.fn_portal_uid() IS DISTINCT FROM 'e1000000-0000-0000-0000-000000000055'::uuid THEN RAISE EXCEPTION 'bad client fixture'; END IF;
  BEGIN PERFORM auth.uid(); RAISE EXCEPTION 'teren reaches auth schema';
  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  FOREACH t IN ARRAY ARRAY['employees','profiles','user_module_access','facturi','contracte','conturi_tip','conturi_teren','conturi_tip_jurnal'] LOOP
@@ -161,8 +161,8 @@ BEGIN
    VALUES('00000000-0000-0000-0000-000000000099','erp','forged');
    RAISE EXCEPTION 'client classification insert';
  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
- IF public.fn_teren_eligibil('44387376-e48c-44d5-a88b-752c653c5639') IS NOT TRUE
-   OR public.fn_teren_eligibil('393709f9-bcb6-4ce5-ba22-2eca5c353f23') IS NOT FALSE
+ IF public.fn_teren_eligibil('e1000000-0000-0000-0000-000000000055') IS NOT TRUE
+   OR public.fn_teren_eligibil('e1000000-0000-0000-0000-000000000070') IS NOT FALSE
    OR public.fn_teren_eligibil(NULL) IS NOT FALSE THEN RAISE EXCEPTION 'self check boundary'; END IF;
  FOR p IN SELECT pr.oid,pr.proname FROM pg_proc pr JOIN pg_namespace n ON n.oid=pr.pronamespace
     WHERE n.nspname='public' AND has_function_privilege(current_user,pr.oid,'EXECUTE') LOOP

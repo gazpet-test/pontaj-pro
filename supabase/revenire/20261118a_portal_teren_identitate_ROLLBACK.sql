@@ -1,4 +1,20 @@
 -- Livrabil de revenire prin acelasi runner, sub numele de mai jos.
+-- r9 (11.11.2026, al doilea recenzent r8 P2-02) — CAND REFUZA revenirea (PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG, nimic schimbat):
+--  * orice rand nou / schimbat in conturi_tip, conturi_teren sau jurnalul lor dupa apply. Dupa 19a, ORICE cont nou
+--    (inclusiv un cont ERP obisnuit) primeste un rand 'neaprobat' in conturi_tip => dupa primul cont nou revenirea 18a
+--    refuza; la fel aprobarea unui cont, ban-ul / stergerea unui cont teren, orice deriva de configuratie sau de lista alba;
+--  * revenirea 19a nu a rulat inainte (obiectele 1b depind de cele 18a).
+--  Refuzul e sigur pentru date, dar revenirea NU e un buton de urgenta dupa utilizare normala. Procedura de urgenta
+--  (docs/portal_angajat/E1_REVENIRE_AUTH.md, sectiunea r9): nu se forteaza revenirea; hook-ul de login nu e pornit de
+--  aceste migrari (problema de login = hook-ul, se opreste din configuratia Auth, fara SQL); conturile noi si
+--  aprobarile raman valide si fara revenire; o revenire completa dupa utilizare = migrare de curatenie noua, revizuita.
+-- r9: fn_auth_token_hook RAMANE dupa revenire, ca stub (nu exista inainte de 18a), intentionat: daca hook-ul Auth ar fi
+--  ramas configurat pe aceasta functie, stergerea ei ar opri TOATE login-urile; stub-ul lasa conturile ERP sa intre si
+--  refuza conturile teren. INVOKER, fara acces la tabele, EXECUTE numai supabase_auth_admin. Se sterge doar printr-o
+--  migrare separata de curatenie, dupa confirmarea dezactivarii hook-ului (E1_REVENIRE_AUTH.md).
+-- r9 (P1-01): buget de lock ca la apply; lock-urile pe auth.users / employees se iau o singura data ($locks$, NOWAIT,
+--  3 s), INAINTEA verificarii „fara date noi” (L14). DROP-ul FK-urilor conturi_* -> auth.users / employees cere
+--  ACCESS EXCLUSIVE pe acestea: revenirea blocheaza si citirile (login, citiri HR) pe durata ei (estimat sub 1 s).
 DO $pre$
 BEGIN
   IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
@@ -8,9 +24,54 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
--- Lock inainte de citirea baseline-ului: blocheaza inclusiv cascadele concurente.
-LOCK TABLE auth.users IN SHARE MODE;
-LOCK TABLE public.portal_public_baseline,public.conturi_tip,public.conturi_teren,public.conturi_tip_jurnal IN ACCESS EXCLUSIVE MODE;
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
+-- Auth extern nu poate fi interogat din SQL; atestarea operatorului este obligatorie (verificata inaintea lock-urilor).
+DO $auth$ BEGIN
+ IF current_setting('gazpet.hook_auth_dezactivat',true) IS DISTINCT FROM 'ATEST:'||txid_current() THEN
+   RAISE EXCEPTION 'PORTAL_AUTH_HOOK_ATTESTATION_REQUIRED'; END IF;
+END $auth$;
+-- r9 (P2-03): drepturile revenirii, inaintea oricarei schimbari: ADMIN pe teren (REVOKE din authenticator + DROP ROLE),
+-- CREATEROLE, LOCK pe auth.users / employees (cate un drept pe rand).
+DO $priv$
+DECLARE v text[] := '{}'; t text;
+BEGIN
+  IF (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user) IS NOT TRUE THEN
+    v:=array_append(v,'CREATEROLE'); END IF;
+  IF to_regrole('teren') IS NULL OR NOT pg_has_role(current_user,'teren','MEMBER WITH ADMIN OPTION') THEN
+    v:=array_append(v,'ADMIN OPTION pe rolul teren'); END IF;
+  FOREACH t IN ARRAY ARRAY['auth.users','public.employees'] LOOP
+    IF NOT (has_table_privilege(t,'UPDATE') OR has_table_privilege(t,'DELETE') OR has_table_privilege(t,'TRUNCATE')
+      OR has_table_privilege(t,CASE WHEN current_setting('server_version_num')::int >= 170000 THEN 'MAINTAIN' ELSE 'UPDATE' END)) THEN
+      v:=array_append(v,'LOCK (UPDATE/DELETE/TRUNCATE/MAINTAIN) pe '||t); END IF;
+  END LOOP;
+  IF cardinality(v) > 0 THEN
+    RAISE EXCEPTION 'PORTAL_PRIVILEGES_MISSING: %', array_to_string(v,'; '); END IF;
+END $priv$;
+-- Lock inainte de citirea baseline-ului (L14): blocheaza inclusiv cascadele concurente. Punct unic, NOWAIT + reincercare
+-- 3 s (nu intra in coada); peste buget = 55P03 PORTAL_LOCK_BUDGET, nimic schimbat. Ordinea: auth.users -> employees ->
+-- tabelele portalului. auth.users / employees ACCESS EXCLUSIVE = nivelul cerut oricum de DROP-ul FK-urilor.
+DO $locks$
+DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
+BEGIN
+  LOOP
+    v_n := v_n + 1;
+    BEGIN
+      LOCK TABLE auth.users IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.employees IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.portal_public_baseline,public.conturi_tip,public.conturi_teren,public.conturi_tip_jurnal
+        IN ACCESS EXCLUSIVE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
+        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: auth.users / employees / portal ocupate % ms (% incercari); nimic schimbat',
+          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
+      END IF;
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  RAISE NOTICE 'PORTAL_LOCKS 18a revenire: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $locks$;
 DO $check$
 DECLARE v_snapshot jsonb;
 BEGIN
@@ -55,11 +116,6 @@ BEGIN
     OR public.fn_portal_porti_lipsa() <> '{}'::text[] THEN
     RAISE EXCEPTION 'PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG'; END IF;
 END $check$;
--- Auth extern nu poate fi interogat din SQL; atestarea operatorului este obligatorie.
-DO $auth$ BEGIN
- IF current_setting('gazpet.hook_auth_dezactivat',true) IS DISTINCT FROM 'ATEST:'||txid_current() THEN
-   RAISE EXCEPTION 'PORTAL_AUTH_HOOK_ATTESTATION_REQUIRED'; END IF;
-END $auth$;
 DROP TABLE public.conturi_tip;
 DROP TABLE public.conturi_teren;
 DROP TABLE public.conturi_tip_jurnal;

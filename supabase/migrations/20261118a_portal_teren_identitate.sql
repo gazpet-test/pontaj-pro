@@ -4,6 +4,13 @@
 -- amprentele functiilor net fixate inainte de apply. Ambele liste se completeaza din inventarul read-only
 -- (scripts/portal/inventar_prod_e1.sql) inainte de DRY; necompletate = refuz atomic.
 -- Completate 10.11.2026 din inventarul read-only pe prod: net (12) si lista ERP (27, confirmata de Razvan).
+-- r9 (11.11.2026, al doilea recenzent r8 P1-01 / P2-03; decizia lui Razvan pe adrese):
+--  * buget de lock: nicio asteptare nelimitata; lock-urile pe tabelele folosite de utilizatori se iau O SINGURA DATA,
+--    cat mai tarziu ($locks$, dupa toate verificarile care doar citesc catalogul), cu NOWAIT + reincercare 3 s;
+--    peste buget = refuz 55P03, nimic schimbat. Nivelurile: auth.users si employees SHARE ROW EXCLUSIVE (cerut oricum
+--    de FK-urile noi), profiles SHARE; citirile nu sunt blocate. user_module_access nu mai e blocat (18a nu-l citeste).
+--  * preflight de drepturi ($priv$) inaintea oricarei schimbari;
+--  * conturile teren existente: sha256 pe auth.users.id::text (fara adrese in repo), ca lista ERP.
 DO $pre$
 BEGIN
   IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare', true)
@@ -13,7 +20,8 @@ BEGIN
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED';
   END IF;
-  -- Ordine comuna: advisory livrare -> auth.users -> profiles -> obiectele noi.
+  -- Ordine comuna (L06): advisory livrare -> obiectele noi (rol, functii, baseline) -> auth.users -> employees
+  -- -> profiles ($locks$) -> tabelele noi cu FK. Calea de login/creare cont: auth.users -> profiles (aceeasi ordine).
   PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'teren')
     OR to_regclass('public.conturi_tip') IS NOT NULL
@@ -26,59 +34,55 @@ BEGIN
   END IF;
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
-LOCK TABLE auth.users IN SHARE MODE;
-LOCK TABLE public.profiles,public.user_module_access IN SHARE MODE;
-DO $inventory_pre$
+-- r9 (P1-01): plasa pentru orice lock implicit (catalog, tabelele noi, inregistrarea runnerului) si plafon pe instructiune.
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
+-- r9 (P2-03): drepturile de care are nevoie postgres NOSUPERUSER, verificate INAINTEA oricarei schimbari.
+-- Rolul: proba EFECTIVA (CREATE ROLE + GRANT catre authenticator + REVOKE + DROP pe un rol de proba, intr-o
+-- subtranzactie anulata intentionat). Tabelele: cate un drept pe rand (has_table_privilege cu lista = ORICARE drept).
+-- LOCK in alt mod decat ACCESS SHARE cere UPDATE, DELETE, TRUNCATE sau MAINTAIN (PG17) pe tabel.
+DO $priv$
+DECLARE v text[] := '{}'; t text;
 BEGIN
-  IF (SELECT count(*) FROM auth.users WHERE email IN
-    ('florinel.ilie@teren.gazpet.ro','petronel.mititelu@teren.gazpet.ro','test.razvan@teren.gazpet.ro')) <> 3
-    OR (SELECT count(DISTINCT email) FROM auth.users WHERE email IN
-      ('florinel.ilie@teren.gazpet.ro','petronel.mititelu@teren.gazpet.ro','test.razvan@teren.gazpet.ro')) <> 3
-    OR EXISTS (SELECT FROM auth.users WHERE lower(split_part(email,'@',2))='teren.gazpet.ro'
-      AND email NOT IN ('florinel.ilie@teren.gazpet.ro','petronel.mititelu@teren.gazpet.ro','test.razvan@teren.gazpet.ro'))
-    OR EXISTS (SELECT FROM (VALUES
-      ('florinel.ilie@teren.gazpet.ro',55),('petronel.mititelu@teren.gazpet.ro',70),
-      ('test.razvan@teren.gazpet.ro',NULL::integer)) v(email,emp)
-      JOIN auth.users u ON u.email=v.email LEFT JOIN public.profiles p ON p.id=u.id
-      WHERE p.id IS NULL OR p.employee_id IS DISTINCT FROM v.emp) THEN
-    RAISE EXCEPTION 'PORTAL_TERRAIN_INVENTORY_CHANGED';
+  IF (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user) IS NOT TRUE THEN
+    v:=array_append(v,'CREATEROLE'); END IF;
+  IF to_regrole('authenticator') IS NULL OR to_regrole('supabase_auth_admin') IS NULL THEN
+    v:=array_append(v,'rolurile authenticator / supabase_auth_admin'); END IF;
+  IF NOT has_schema_privilege('public','CREATE') THEN v:=array_append(v,'CREATE pe schema public'); END IF;
+  IF NOT has_schema_privilege('auth','USAGE') THEN v:=array_append(v,'USAGE pe schema auth'); END IF;
+  FOREACH t IN ARRAY ARRAY['auth.users','public.employees'] LOOP
+    IF NOT has_table_privilege(t,'REFERENCES') THEN v:=array_append(v,'REFERENCES pe '||t); END IF;
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['auth.users','public.employees','public.profiles'] LOOP
+    IF NOT has_table_privilege(t,'SELECT') THEN v:=array_append(v,'SELECT pe '||t); END IF;
+    IF NOT (has_table_privilege(t,'UPDATE') OR has_table_privilege(t,'DELETE') OR has_table_privilege(t,'TRUNCATE')
+      OR has_table_privilege(t,CASE WHEN current_setting('server_version_num')::int >= 170000 THEN 'MAINTAIN' ELSE 'UPDATE' END)) THEN
+      v:=array_append(v,'LOCK (UPDATE/DELETE/TRUNCATE/MAINTAIN) pe '||t); END IF;
+  END LOOP;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname='portal_e1_proba_drepturi') THEN
+    v:=array_append(v,'rolul de proba exista deja');
+  ELSIF to_regrole('authenticator') IS NOT NULL THEN
+    BEGIN
+      CREATE ROLE portal_e1_proba_drepturi NOLOGIN NOINHERIT;
+      GRANT portal_e1_proba_drepturi TO authenticator;
+      REVOKE portal_e1_proba_drepturi FROM authenticator;
+      DROP ROLE portal_e1_proba_drepturi;
+      RAISE EXCEPTION 'PORTAL_PROBA_DREPTURI_OK';
+    EXCEPTION
+      WHEN raise_exception THEN IF SQLERRM <> 'PORTAL_PROBA_DREPTURI_OK' THEN RAISE; END IF;
+      WHEN insufficient_privilege THEN v:=array_append(v,'CREATE ROLE / GRANT rol TO authenticator: '||SQLERRM);
+    END;
   END IF;
-END $inventory_pre$;
+  IF cardinality(v) > 0 THEN
+    RAISE EXCEPTION 'PORTAL_PRIVILEGES_MISSING: %', array_to_string(v,'; '); END IF;
+END $priv$;
 
 CREATE ROLE teren NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 GRANT teren TO authenticator;
 GRANT USAGE ON SCHEMA public TO teren;
 
-CREATE TABLE public.conturi_tip (
-  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  tip text NOT NULL CHECK (tip IN ('erp','teren','neaprobat')),
-  sursa text NOT NULL CHECK (sursa ~ '[^[:space:]]'),
-  clasificat_de uuid,
-  clasificat_la timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE public.conturi_teren (
-  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  employee_id integer UNIQUE REFERENCES public.employees(id),
-  stare text NOT NULL CHECK (stare IN ('in_creare','activ','revocat'))
-);
-CREATE TABLE public.conturi_tip_jurnal (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  auth_user_id uuid NOT NULL,
-  operatie text NOT NULL CHECK (operatie IN ('INSERT','UPDATE','DELETE')),
-  vechi jsonb, nou jsonb,
-  autor uuid, rol_sesiune text NOT NULL,
-  la timestamptz NOT NULL DEFAULT clock_timestamp()
-);
-ALTER TABLE public.conturi_tip ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.conturi_teren ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.conturi_tip_jurnal ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.conturi_tip, public.conturi_teren, public.conturi_tip_jurnal
-  FROM PUBLIC, anon, authenticated, service_role, teren;
-REVOKE ALL ON SEQUENCE public.conturi_tip_jurnal_id_seq FROM PUBLIC, anon, authenticated, service_role, teren;
-GRANT SELECT ON public.conturi_tip TO supabase_auth_admin;
-CREATE POLICY conturi_tip_hook ON public.conturi_tip FOR SELECT TO supabase_auth_admin
-  USING (auth_user_id IS NOT NULL);
-
+-- r9: tabelele conturi_* (FK spre auth.users / employees = lock SHARE ROW EXCLUSIVE pe acestea) se creeaza dupa $locks$.
+-- Functiile de mai jos le folosesc doar la executie (plpgsql), nu la creare.
 CREATE FUNCTION public.fn_conturi_tip_audit() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
 BEGIN
@@ -89,16 +93,10 @@ BEGIN
   RETURN NULL;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_conturi_tip_audit() FROM PUBLIC,anon,authenticated,service_role,teren;
-CREATE TRIGGER conturi_tip_audit AFTER INSERT OR UPDATE OR DELETE ON public.conturi_tip
-  FOR EACH ROW EXECUTE FUNCTION public.fn_conturi_tip_audit();
 CREATE FUNCTION public.fn_conturi_jurnal_imuabil() RETURNS trigger
 LANGUAGE plpgsql SET search_path TO 'public','pg_temp' AS $fn$
 BEGIN RAISE EXCEPTION 'PORTAL_AUDIT_APPEND_ONLY'; END $fn$;
 REVOKE ALL ON FUNCTION public.fn_conturi_jurnal_imuabil() FROM PUBLIC,anon,authenticated,service_role,teren;
-CREATE TRIGGER conturi_jurnal_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.conturi_tip_jurnal
-  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
-CREATE TRIGGER conturi_tip_no_truncate BEFORE TRUNCATE ON public.conturi_tip
-  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
 
 CREATE FUNCTION public.fn_teren_eligibil(p_uid uuid) RETURNS boolean
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
@@ -375,6 +373,69 @@ SELECT ARRAY[
  'ebafb7d510795a0d106b7214590447174208aa4d5ccff3fc431f4b8d8d737b36',
  'fbf7611fcaf1ec82e8abc9750ea3a8db7e4d779d8d5ad1662ddca5534351081d'
 ]::text[] AS lista;
+-- r9 (decizia lui Razvan, 11.11.2026): conturile teren existente (create pe 27.10) se identifica prin sha256 pe
+-- auth.users.id::text, ca lista ERP: fara adrese in repo. Valorile vin din inventarul read-only de pe prod (27.10):
+-- doua conturi legate de fisele 55 si 70 + contul de test fara fisa. Orice alt cont pe domeniul teren = refuz.
+CREATE TEMP TABLE portal_teren_aprobat ON COMMIT DROP AS
+SELECT h,employee_id FROM (VALUES
+ -- PORTAL_TEREN_APROBAT: sha256 pe auth.users.id::text -> employee_id (NULL = contul de test, fara fisa)
+ ('d079d33f9dc730e243177bdfd52c6d1ee1d63a3ed5a2609538b5d9cb33b76a64',55),
+ ('c36b1bcea80191ee714eea65d1556044d308bf56a85bfe03b52b8b0832c191f5',70),
+ ('ef995b5c2b4f4de077db9103bdf5443a40247ac21ff9b519ba61faebf22d736a',NULL::integer)
+) v(h,employee_id);
+
+-- r9 (P1-01): PUNCTUL UNIC de lock pe tabelele folosite de utilizatori, dupa toate verificarile de catalog de mai sus.
+-- NOWAIT + reincercare la 50 ms, cel mult 3 s: cat timp incearca, aplicarea NU sta in coada lock-ului (login-urile si
+-- citirile ERP nu se aseaza in spatele ei); o incercare ratata elibereaza tot ce luase (subtranzactie). Peste buget:
+-- 55P03 PORTAL_LOCK_BUDGET, tranzactia se anuleaza, nimic schimbat. Ordinea: auth.users -> employees -> profiles.
+--  * auth.users  SHARE ROW EXCLUSIVE: cerut oricum de FK-urile conturi_* -> auth.users; tine setul de conturi fix pana la
+--    commit. Blocheaza: scrierile Auth (actualizarea la login, conturi noi, ban). Nu blocheaza citirile.
+--  * employees   SHARE ROW EXCLUSIVE: cerut de FK-ul conturi_teren -> employees. Blocheaza: editarile HR. Nu citirile.
+--  * profiles    SHARE: legatura fisa / is_owner nu se schimba intre verificare si clasificare. Blocheaza: scrierile in
+--    profiles (editari Admin, conturi noi). Nu blocheaza citirile ERP.
+-- Durata: de aici pana la commit = verificarile de inventar, 3 tabele noi, clasificarea (~150 de conturi), poarta finala
+-- si inregistrarea runnerului; estimat sub 1 s (masurat in harness, scripts/portal/concurrency_lock.sh).
+DO $locks$
+DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
+BEGIN
+  LOOP
+    v_n := v_n + 1;
+    BEGIN
+      LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.employees IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.profiles IN SHARE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
+        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: auth.users / employees / profiles ocupate % ms (% incercari); nimic schimbat',
+          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
+      END IF;
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  RAISE NOTICE 'PORTAL_LOCKS 18a: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $locks$;
+DO $inventory_pre$
+BEGIN
+  IF (SELECT count(*) FROM pg_temp.portal_teren_aprobat) <> 3
+    OR (SELECT count(DISTINCT h) FROM pg_temp.portal_teren_aprobat) <> 3
+    OR EXISTS (SELECT FROM pg_temp.portal_teren_aprobat WHERE h IS NULL OR h !~ '^[0-9a-f]{64}$')
+    -- fiecare hash = exact un cont Auth, pe domeniul teren
+    OR (SELECT count(*) FROM auth.users u JOIN pg_temp.portal_teren_aprobat t
+      ON t.h=encode(sha256(convert_to(u.id::text,'UTF8')),'hex')
+      WHERE lower(split_part(u.email,'@',2))='teren.gazpet.ro') <> 3
+    -- niciun alt cont pe domeniul teren
+    OR EXISTS (SELECT FROM auth.users u WHERE lower(split_part(u.email,'@',2))='teren.gazpet.ro'
+      AND NOT EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
+        WHERE t.h=encode(sha256(convert_to(u.id::text,'UTF8')),'hex')))
+    -- profilul fiecaruia exista si e legat exact de fisa revizuita
+    OR EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
+      LEFT JOIN auth.users u ON t.h=encode(sha256(convert_to(u.id::text,'UTF8')),'hex')
+      LEFT JOIN public.profiles p ON p.id=u.id
+      WHERE p.id IS NULL OR p.employee_id IS DISTINCT FROM t.employee_id) THEN
+    RAISE EXCEPTION 'PORTAL_TERRAIN_INVENTORY_CHANGED';
+  END IF;
+END $inventory_pre$;
 DO $erp_pre$
 DECLARE v text[];
 BEGIN
@@ -394,10 +455,48 @@ BEGIN
       AND encode(sha256(convert_to(p.id::text,'UTF8')),'hex') <> ALL(v)) THEN
     RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_OWNER_MISSING'; END IF;
 END $erp_pre$;
+
+-- Tabelele portalului (dupa $locks$: FK-urile iau SHARE ROW EXCLUSIVE pe auth.users / employees, deja detinut).
+CREATE TABLE public.conturi_tip (
+  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  tip text NOT NULL CHECK (tip IN ('erp','teren','neaprobat')),
+  sursa text NOT NULL CHECK (sursa ~ '[^[:space:]]'),
+  clasificat_de uuid,
+  clasificat_la timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.conturi_teren (
+  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  employee_id integer UNIQUE REFERENCES public.employees(id),
+  stare text NOT NULL CHECK (stare IN ('in_creare','activ','revocat'))
+);
+CREATE TABLE public.conturi_tip_jurnal (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  auth_user_id uuid NOT NULL,
+  operatie text NOT NULL CHECK (operatie IN ('INSERT','UPDATE','DELETE')),
+  vechi jsonb, nou jsonb,
+  autor uuid, rol_sesiune text NOT NULL,
+  la timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+ALTER TABLE public.conturi_tip ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conturi_teren ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conturi_tip_jurnal ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.conturi_tip, public.conturi_teren, public.conturi_tip_jurnal
+  FROM PUBLIC, anon, authenticated, service_role, teren;
+REVOKE ALL ON SEQUENCE public.conturi_tip_jurnal_id_seq FROM PUBLIC, anon, authenticated, service_role, teren;
+GRANT SELECT ON public.conturi_tip TO supabase_auth_admin;
+CREATE POLICY conturi_tip_hook ON public.conturi_tip FOR SELECT TO supabase_auth_admin
+  USING (auth_user_id IS NOT NULL);
+CREATE TRIGGER conturi_tip_audit AFTER INSERT OR UPDATE OR DELETE ON public.conturi_tip
+  FOR EACH ROW EXECUTE FUNCTION public.fn_conturi_tip_audit();
+CREATE TRIGGER conturi_jurnal_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.conturi_tip_jurnal
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
+CREATE TRIGGER conturi_tip_no_truncate BEFORE TRUNCATE ON public.conturi_tip
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
+
 -- Setul complet se recalculeaza sub lock: fara numar/UUID-uri ERP hardcodate.
 INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)
-SELECT id,CASE WHEN email IN ('florinel.ilie@teren.gazpet.ro','petronel.mititelu@teren.gazpet.ro',
-  'test.razvan@teren.gazpet.ro') THEN 'teren'
+SELECT id,CASE WHEN EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
+   WHERE t.h=encode(sha256(convert_to(u.id::text,'UTF8')),'hex')) THEN 'teren'
  -- EXISTS + ANY(coloana array): `= ANY((SELECT lista ...))` ar fi forma ANY(subinterogare) = text = text[] (Jakarinos r3).
  WHEN EXISTS (SELECT FROM pg_temp.portal_erp_aprobat a
    WHERE encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=ANY(a.lista)) THEN 'erp'

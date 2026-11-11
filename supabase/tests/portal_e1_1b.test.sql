@@ -179,8 +179,16 @@ DO $$ BEGIN
  IF EXISTS (SELECT FROM auth.users WHERE id IN ('20000000-0000-0000-0000-000000000099','20000000-0000-0000-0000-000000000098'))
   OR NOT EXISTS (SELECT FROM public.profiles WHERE id='20000000-0000-0000-0000-000000000001' AND role='teren' AND employee_id=1001)
   OR NOT EXISTS (SELECT FROM public.profiles WHERE id='20000000-0000-0000-0000-000000000010' AND role='in_asteptare')
-  OR EXISTS (SELECT FROM public.conturi_tip WHERE auth_user_id='20000000-0000-0000-0000-000000000010')
  THEN RAISE EXCEPTION 'Auth trigger not atomic or wrong profile'; END IF;
+ -- r9 (P2-01): contul nou are clasificarea 'neaprobat' creata odata cu profilul (exact un rand, fara autor, auditat),
+ -- iar inventarul Auth ramane complet (poarta nu raporteaza 'inventar identitati').
+ IF (SELECT count(*) FROM public.conturi_tip WHERE auth_user_id='20000000-0000-0000-0000-000000000010') <> 1
+  OR NOT EXISTS (SELECT FROM public.conturi_tip WHERE auth_user_id='20000000-0000-0000-0000-000000000010'
+    AND tip='neaprobat' AND sursa='cont_nou_e1_1b' AND clasificat_de IS NULL)
+  OR (SELECT count(*) FROM public.conturi_tip_jurnal WHERE auth_user_id='20000000-0000-0000-0000-000000000010'
+    AND operatie='INSERT' AND nou->>'tip'='neaprobat') <> 1
+  OR 'inventar identitati' = ANY(public.fn_portal_porti_lipsa())
+ THEN RAISE EXCEPTION 'new account not classified neaprobat'; END IF;
 END $$;
 SELECT set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000002',true);
 SET LOCAL ROLE authenticated;

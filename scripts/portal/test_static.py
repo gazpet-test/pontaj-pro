@@ -107,6 +107,66 @@ class StaticDelivery(unittest.TestCase):
         self.assertIn(b"'public.update_stoc_rezervor()'", before)
         self.assertIn(b"'public.fn_trg_categorie_cantitate()'", before)
 
+    def test_r9_no_account_addresses_and_teren_hashes(self):
+        # r9 (decizia lui Razvan 11.11): fara adresele conturilor teren in migrare / revenire; lista = 3 hash-uri sha256.
+        sql = MIGRATION.read_text(encoding="utf-8")
+        for path in (MIGRATION, ROLLBACK):
+            self.assertEqual(re.findall(r"[A-Za-z0-9._%+-]+@teren\.gazpet\.ro", path.read_text(encoding="utf-8")), [], path.name)
+        block = re.findall(r"CREATE TEMP TABLE portal_teren_aprobat ON COMMIT DROP AS\nSELECT h,employee_id FROM \(VALUES\n"
+                           r" -- PORTAL_TEREN_APROBAT:[^\n]*\n(.*?)\n\) v\(h,employee_id\);", sql, re.S)
+        self.assertEqual(len(block), 1)
+        rows = re.findall(r"^ \('([0-9a-f]{64})',(55|70|NULL::integer)\),?$", block[0], re.M)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len({h for h, _ in rows}), 3)
+        self.assertEqual(sorted(e for _, e in rows), ["55", "70", "NULL::integer"])
+        self.assertIn("pg_temp.portal_teren_aprobat", sql.split("INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)", 1)[1].split(";", 1)[0])
+
+    def test_r9_fixture_replaces_teren_hashes(self):
+        fixture_ids = ["e1000000-0000-0000-0000-000000000055=55", "e1000000-0000-0000-0000-000000000070=70",
+                       "e1000000-0000-0000-0000-0000000000ff="]
+        with tempfile.TemporaryDirectory(prefix="portal_teren_", dir=scratch()) as folder:
+            fp = amprente(folder)
+            out = Path(folder) / "t.sql"
+            result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--erp", OWNER, "--teren", *fixture_ids)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            sql = out.read_text(encoding="utf-8")
+            for value in fixture_ids:
+                uid, emp = value.split("=")
+                self.assertIn(" ('" + hashlib.sha256(uid.encode()).hexdigest() + "'," + (emp or "NULL::integer") + ")", sql)
+            self.assertNotIn("d079d33f9dc730e243177bdfd52c6d1ee1d63a3ed5a2609538b5d9cb33b76a64", sql)
+            self.assertEqual(run(VALIDATOR, out).returncode, 0)
+            for bad in (fixture_ids[:2], fixture_ids + ["e1000000-0000-0000-0000-0000000000aa=1"], ["nu-e-uuid=1"] + fixture_ids[1:]):
+                out.unlink(missing_ok=True)
+                result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--teren", *bad)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("HOLD", result.stderr)
+                self.assertFalse(out.exists())
+
+    def test_r9_lock_budget_contract(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("buget_lock", ROOT / "scripts/portal/buget_lock.py")
+        buget = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(buget)
+        mig = MIGRATION.read_text(encoding="utf-8")
+        self.assertEqual(buget.probleme(mig, {"auth.users": "SHARE ROW EXCLUSIVE", "public.employees": "SHARE ROW EXCLUSIVE",
+                                              "public.profiles": "SHARE"}), [])
+        rev = ROLLBACK.read_text(encoding="utf-8")
+        self.assertEqual(buget.probleme(rev, {"auth.users": "ACCESS EXCLUSIVE", "public.employees": "ACCESS EXCLUSIVE"}), [])
+        # Tabelele cu FK spre auth.users / employees se creeaza dupa $locks$; inventarul teren si ERP se verifica sub lock.
+        i = mig.index("DO $locks$")
+        for after in ("CREATE TABLE public.conturi_tip (", "CREATE TABLE public.conturi_teren (", "DO $inventory_pre$", "DO $erp_pre$"):
+            self.assertGreater(mig.index(after), i, after)
+        # 18a nu citeste si nu blocheaza user_module_access (in afara comentariilor).
+        self.assertNotIn("user_module_access", "\n".join(l for l in mig.splitlines() if not l.lstrip().startswith("--")))
+        # Revenirea: atestarea si drepturile inaintea lock-urilor; lock-urile inaintea verificarii (L14).
+        self.assertLess(rev.index("DO $auth$"), rev.index("DO $locks$"))
+        self.assertLess(rev.index("DO $locks$"), rev.index("DO $check$"))
+        # Proba efectiva de drepturi pe rol (subtranzactie anulata intentionat).
+        priv = mig.split("DO $priv$", 1)[1].split("END $priv$;", 1)[0]
+        for needle in ("CREATE ROLE portal_e1_proba_drepturi", "GRANT portal_e1_proba_drepturi TO authenticator",
+                       "RAISE EXCEPTION 'PORTAL_PROBA_DREPTURI_OK'", "has_table_privilege(t,'REFERENCES')"):
+            self.assertIn(needle, priv)
+
     def test_fixture_refuses_missing_or_duplicate_marker(self):
         with tempfile.TemporaryDirectory(prefix="portal_bad_fixture_", dir=scratch()) as folder:
             fp = amprente(folder)

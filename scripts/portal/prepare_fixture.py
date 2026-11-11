@@ -4,9 +4,11 @@
 - lista alba PUBLIC de productie (21 de semnaturi revizuite) -> cele 21 de functii sintetice ale scheletului local;
 - amprentele public si net -> literalii din --amprente (JSON {"public": {...}, "net": {...}}), citite de harness din
   clusterul efemer INAINTE de apply, ca un corp schimbat inainte de apply sa fie refuzat (Copilot r2 P1-02);
-- lista ERP aprobata -> sha256 pe UUID-urile din --erp (fara --erp lista ramane goala: testul negativ).
+- lista ERP aprobata -> sha256 pe UUID-urile din --erp (fara --erp lista ramane goala: testul negativ);
+- r9: lista conturilor teren existente (PORTAL_TEREN_APROBAT) -> sha256 pe UUID-urile sintetice din --teren UUID=EMP
+  (EMP gol = fara fisa); fara --teren raman hash-urile productiei (testul negativ: inventar teren schimbat).
 
-Utilizare: prepare_fixture.py <sursa.sql> <destinatie.sql> --amprente <fisier.json> [--erp UUID ...]
+Utilizare: prepare_fixture.py <sursa.sql> <destinatie.sql> --amprente <fisier.json> [--erp UUID ...] [--teren UUID=EMP ...]
 """
 from pathlib import Path
 import argparse
@@ -43,7 +45,17 @@ parser.add_argument("source", type=Path)
 parser.add_argument("destination", type=Path)
 parser.add_argument("--amprente", type=Path, required=True)
 parser.add_argument("--erp", nargs="*", default=[])
+parser.add_argument("--teren", nargs="*", default=None)
 args = parser.parse_args()
+TEREN = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})=([0-9]{1,9})?$")
+teren = []
+for value in args.teren or []:
+    m = TEREN.match(value)
+    if not m:
+        hold("intrare --teren invalida (UUID=EMP): " + value)
+    teren.append((hashlib.sha256(m.group(1).encode("utf-8")).hexdigest(), m.group(2)))
+if args.teren is not None and (len(teren) != 3 or len({h for h, _ in teren}) != 3):
+    hold("--teren cere exact 3 conturi distincte")
 
 text = args.source.read_text(encoding="utf-8").replace("\r\n", "\n")
 amprente = json.loads(args.amprente.read_text(encoding="utf-8"))
@@ -79,5 +91,14 @@ erp_pattern = re.compile(r"(CREATE TEMP TABLE portal_erp_aprobat ON COMMIT DROP 
 hashes = ",".join("'" + hashlib.sha256(u.encode("utf-8")).hexdigest() + "'" for u in args.erp)
 text = replace_once(erp_pattern, text, lambda m: m.group(1) + hashes + m.group(2), "lista ERP")
 
+teren_pattern = re.compile(r"(CREATE TEMP TABLE portal_teren_aprobat ON COMMIT DROP AS\nSELECT h,employee_id FROM \(VALUES\n"
+                           r" -- PORTAL_TEREN_APROBAT:[^\n]*\n).*?(\n\) v\(h,employee_id\);)", re.S)
+if len(teren_pattern.findall(text)) != 1:
+    hold("marcaj PORTAL_TEREN_APROBAT: trebuie exact o aparitie")
+if teren:
+    rows = ",\n".join(" ('" + h + "'," + (emp if emp else "NULL::integer") + ")" for h, emp in teren)
+    text = teren_pattern.sub(lambda m: m.group(1) + rows + m.group(2), text, count=1)
+
 args.destination.write_text(text, encoding="utf-8", newline="\n")
-print(f"FIXTURE ONLY: 21 public + 12 net sintetice cu amprente literale; ERP aprobate: {len(args.erp)}")
+print(f"FIXTURE ONLY: 21 public + 12 net sintetice cu amprente literale; ERP aprobate: {len(args.erp)}; "
+      f"teren: {'sintetice' if teren else 'productie'}")

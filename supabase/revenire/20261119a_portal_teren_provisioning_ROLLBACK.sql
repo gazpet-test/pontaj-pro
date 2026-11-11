@@ -1,4 +1,18 @@
 -- Revenire E1-1b: numai prin runner, refuz cu orice date/istoric/DDL noi.
+-- r9 (11.11.2026, al doilea recenzent r8 P2-02) — CAND REFUZA revenirea (PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG, nimic
+-- schimbat): orice cont nou aparut dupa apply (profil 'in_asteptare' + rand 'neaprobat' in conturi_tip; CHECK-ul vechi pe
+-- profiles nu l-ar mai accepta), orice aprobare (fn_cont_aproba_erp), rezervare / cont teren / revocare, orice rand nou
+-- in jurnale, orice deriva pe lista alba (functii, triggere, RLS, ACL, secvente). Refuzul e sigur pentru date, dar dupa
+-- utilizare normala revenirea NU e un buton de urgenta. Procedura de urgenta (E1_REVENIRE_AUTH.md, sectiunea r9):
+--  1. hook-ul de login nu e pornit de 18a / 19a: o problema de login nu se rezolva cu revenirea (hook-ul se opreste din
+--     configuratia Auth, fara SQL);
+--  2. daca problema e la crearea conturilor (handle_new_user nou), livrare separata, revizuita si testata, care pune la loc
+--     DOAR definitia 'handle_live' din portal_e1_1b_manifest (CHECK-ul nou accepta si rolul vechi 'manager_santier');
+--  3. revenirea completa dupa utilizare = migrare de curatenie noua, cu decizia owner-ului pe fiecare cont nou (rol
+--     valid pentru CHECK-ul vechi sau stergere); nu se forteaza aceasta revenire si nu se editeaza amprenta.
+-- r9 (P1-01): buget de lock ca la apply; lock-urile se iau o singura data ($locks$, NOWAIT, 3 s) INAINTEA verificarii
+--  „fara date noi” (L14). DROP-ul FK-urilor / triggerului si ALTER ... CHECK cer ACCESS EXCLUSIVE pe auth.users, employees
+--  si profiles: revenirea blocheaza si citirile (login, ERP) pe durata ei (estimat sub 1 s).
 DO $pre$
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
@@ -8,10 +22,54 @@ BEGIN
  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
-LOCK TABLE auth.users IN SHARE MODE;
-LOCK TABLE public.employees,public.profiles,public.user_module_access,public.portal_provisioning,
- public.conturi_tip,public.conturi_teren,public.conturi_tip_jurnal,public.portal_provisioning_jurnal,
- public.portal_e1_1b_manifest IN ACCESS EXCLUSIVE MODE;
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
+-- r9 (P2-03): drepturile revenirii, inaintea oricarei schimbari (cate unul pe rand): proprietar pe profiles (CHECK) si
+-- pe employees (DROP TRIGGER), proprietar pe functiile restaurate, LOCK pe tabelele de mai jos.
+DO $priv$
+DECLARE v text[] := '{}'; t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['public.profiles','public.employees'] LOOP
+    IF NOT pg_has_role(current_user,(SELECT relowner FROM pg_class WHERE oid=t::regclass),'USAGE') THEN
+      v:=array_append(v,'proprietar pe '||t); END IF;
+  END LOOP;
+  IF EXISTS (SELECT FROM pg_proc p WHERE p.oid IN ('public.handle_new_user()'::regprocedure,
+      'public.fn_teren_eligibil(uuid)'::regprocedure) AND NOT pg_has_role(current_user,p.proowner,'USAGE')) THEN
+    v:=array_append(v,'proprietar pe handle_new_user / fn_teren_eligibil'); END IF;
+  FOREACH t IN ARRAY ARRAY['auth.users','public.employees','public.profiles','public.user_module_access'] LOOP
+    IF NOT (has_table_privilege(t,'UPDATE') OR has_table_privilege(t,'DELETE') OR has_table_privilege(t,'TRUNCATE')
+      OR has_table_privilege(t,CASE WHEN current_setting('server_version_num')::int >= 170000 THEN 'MAINTAIN' ELSE 'UPDATE' END)) THEN
+      v:=array_append(v,'LOCK (UPDATE/DELETE/TRUNCATE/MAINTAIN) pe '||t); END IF;
+  END LOOP;
+  IF cardinality(v) > 0 THEN
+    RAISE EXCEPTION 'PORTAL_PRIVILEGES_MISSING: %', array_to_string(v,'; '); END IF;
+END $priv$;
+-- Punct unic de lock, NOWAIT + reincercare 3 s (nu intra in coada); peste buget = 55P03 PORTAL_LOCK_BUDGET, nimic
+-- schimbat. Ordinea: auth.users -> employees -> profiles -> user_module_access -> tabelele portalului.
+-- auth.users / employees / profiles ACCESS EXCLUSIVE = nivelul cerut oricum de DROP FK / DROP TRIGGER / ALTER CHECK.
+DO $locks$
+DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
+BEGIN
+  LOOP
+    v_n := v_n + 1;
+    BEGIN
+      LOCK TABLE auth.users IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.employees IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.user_module_access IN SHARE MODE NOWAIT;
+      LOCK TABLE public.portal_provisioning,public.conturi_tip,public.conturi_teren,public.conturi_tip_jurnal,
+        public.portal_provisioning_jurnal,public.portal_e1_1b_manifest IN ACCESS EXCLUSIVE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
+        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: tabelele revenirii 1b ocupate % ms (% incercari); nimic schimbat',
+          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
+      END IF;
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  RAISE NOTICE 'PORTAL_LOCKS 19a revenire: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $locks$;
 DO $check$
 BEGIN
  IF public.fn_portal_1b_snapshot() IS DISTINCT FROM

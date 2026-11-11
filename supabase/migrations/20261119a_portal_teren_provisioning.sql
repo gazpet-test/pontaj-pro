@@ -2,6 +2,14 @@
 -- Nu activeaza hook-ul Auth, nu modifica inventarul legacy.
 -- r3 (09.11.2026): amprenta si poarta 1b pe lista alba (fn_portal_1b_snapshot); vezi comentariul de acolo.
 -- r7 (10.11.2026): ancorele revizuite ale obiectelor externe (scripts/portal/ancore_1b.sql) inainte de apply.
+-- r9 (11.11.2026, al doilea recenzent r8 P1-01 / P2-01 / P2-03):
+--  * buget de lock: lock_timeout / statement_timeout; tot ce nu cere lock pe tabelele utilizatorilor (ancore, tabele si
+--    functii noi) ruleaza INAINTE; lock-urile pe auth.users / employees / profiles / user_module_access se iau o singura
+--    data, la final ($locks$, NOWAIT + reincercare 3 s, peste buget = 55P03, nimic schimbat). Dupa ele: doar CHECK-ul pe
+--    profiles, FK-urile, triggerul pe employees, handle_new_user si poarta finala. employees nu mai e ACCESS EXCLUSIVE
+--    (citirile HR nu se blocheaza); profiles ACCESS EXCLUSIVE doar pe coada (cerut de ALTER ... CHECK);
+--  * cont nou dupa 19a: handle_new_user scrie si clasificarea 'neaprobat' in conturi_tip (inventar Auth complet);
+--  * preflight de drepturi ($priv$) inaintea oricarei schimbari.
 DO $pre$
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
@@ -12,10 +20,38 @@ BEGIN
  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
--- Livrare offline: auth.users -> employees -> profiles -> copii. RPC-urile nu ruleaza in timpul DDL.
-LOCK TABLE auth.users IN SHARE MODE;
-LOCK TABLE public.employees,public.profiles,public.user_module_access,
- public.conturi_tip,public.conturi_teren,public.conturi_tip_jurnal IN ACCESS EXCLUSIVE MODE;
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
+-- r9 (P2-03): drepturile de care are nevoie postgres NOSUPERUSER, inaintea oricarei schimbari, cate unul pe rand.
+-- REFERENCES pentru FK-urile noi, TRIGGER pe employees, proprietar pe profiles (ALTER ... CHECK) si pe functiile
+-- inlocuite, LOCK in alt mod decat ACCESS SHARE = UPDATE / DELETE / TRUNCATE / MAINTAIN (PG17).
+DO $priv$
+DECLARE v text[] := '{}'; t text;
+BEGIN
+  IF NOT has_schema_privilege('public','CREATE') THEN v:=array_append(v,'CREATE pe schema public'); END IF;
+  IF NOT has_schema_privilege('auth','USAGE') THEN v:=array_append(v,'USAGE pe schema auth'); END IF;
+  FOREACH t IN ARRAY ARRAY['auth.users','public.employees'] LOOP
+    IF NOT has_table_privilege(t,'REFERENCES') THEN v:=array_append(v,'REFERENCES pe '||t); END IF;
+  END LOOP;
+  IF NOT has_table_privilege('public.employees','TRIGGER') THEN v:=array_append(v,'TRIGGER pe public.employees'); END IF;
+  IF NOT pg_has_role(current_user,(SELECT relowner FROM pg_class WHERE oid='public.profiles'::regclass),'USAGE') THEN
+    v:=array_append(v,'proprietar pe public.profiles'); END IF;
+  IF EXISTS (SELECT FROM pg_proc p WHERE p.oid IN ('public.handle_new_user()'::regprocedure,
+      'public.fn_teren_eligibil(uuid)'::regprocedure) AND NOT pg_has_role(current_user,p.proowner,'USAGE')) THEN
+    v:=array_append(v,'proprietar pe handle_new_user / fn_teren_eligibil'); END IF;
+  FOREACH t IN ARRAY ARRAY['auth.users','public.employees','public.profiles','public.user_module_access'] LOOP
+    IF NOT has_table_privilege(t,'SELECT') THEN v:=array_append(v,'SELECT pe '||t); END IF;
+    IF NOT (has_table_privilege(t,'UPDATE') OR has_table_privilege(t,'DELETE') OR has_table_privilege(t,'TRUNCATE')
+      OR has_table_privilege(t,CASE WHEN current_setting('server_version_num')::int >= 170000 THEN 'MAINTAIN' ELSE 'UPDATE' END)) THEN
+      v:=array_append(v,'LOCK (UPDATE/DELETE/TRUNCATE/MAINTAIN) pe '||t); END IF;
+  END LOOP;
+  IF cardinality(v) > 0 THEN
+    RAISE EXCEPTION 'PORTAL_PRIVILEGES_MISSING: %', array_to_string(v,'; '); END IF;
+END $priv$;
+-- Tabelele portalului (create de 18a; folosite doar de hook, care nu e pornit): conturi_teren primeste coloane noi
+-- (ACCESS EXCLUSIVE oricum), conturi_tip / jurnalul SHARE = fara scrieri concurente, citirea hook-ului ramane libera.
+LOCK TABLE public.conturi_teren IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.conturi_tip,public.conturi_tip_jurnal IN SHARE MODE;
 -- Jakarinos r6 P1: callee-urile EXTERNE din lista alba 1b si triggerele de pe auth.users / profiles / notifications
 -- (definitie, owner, DEFINER, config, ACL; triggere: activare, definitie, functie) se compara cu valorile revizuite
 -- din inventarul read-only pe prod (sectiunea 9 = scripts/portal/ancore_1b.sql), INAINTE de apply si inca o data la
@@ -152,22 +188,19 @@ BEGIN
  IF c.def IS DISTINCT FROM 'CHECK ((role = ANY (ARRAY[''superadmin''::text, ''admin_logistica''::text, ''manager_santier''::text, ''sef_echipa''::text, ''contabilitate''::text, ''hr''::text, ''gestionar''::text, ''magazioner''::text])))'
  THEN RAISE EXCEPTION 'PORTAL_PROFILE_ROLES_CHANGED'; END IF;
  INSERT INTO public.portal_e1_1b_manifest VALUES ('role_live',jsonb_build_object('name',c.conname,'definition',c.def));
- IF EXISTS (SELECT FROM public.profiles WHERE role IS NULL OR role NOT IN
-  ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner'))
- THEN RAISE EXCEPTION 'PORTAL_ROLE_PREFLIGHT'; END IF;
+ -- r9: verificarea randurilor din profiles (roluri) se face sub lock, in $roles$, imediat inaintea ALTER-ului.
 END $manifest$;
-ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk;
-ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_chk CHECK (role IN
- ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner','teren','in_asteptare'));
 
+-- r9: FK-urile spre employees / auth.users se adauga la final, sub $locks$ (SHARE ROW EXCLUSIVE pe acestea doar pe coada).
+-- Numele explicite = numele generate automat in r8 (aceeasi definitie in catalog).
 CREATE TABLE public.portal_provisioning (
  provisioning_id uuid PRIMARY KEY,
- employee_id integer NOT NULL REFERENCES public.employees(id),
+ employee_id integer NOT NULL,
  email_calculat text NOT NULL UNIQUE CHECK (email_calculat ~ '^[a-z0-9]+([.][a-z0-9]+)*@teren[.]gazpet[.]ro$'),
  stare text NOT NULL CHECK (stare IN ('rezervat','creat','finalizat','anulat')),
  cerut_de uuid NOT NULL, cerut_la timestamptz NOT NULL DEFAULT clock_timestamp(),
  payload_sha256 bytea NOT NULL CHECK (octet_length(payload_sha256)=32),
- auth_user_id uuid UNIQUE REFERENCES auth.users(id),
+ auth_user_id uuid UNIQUE,
  CHECK ((stare='rezervat' AND auth_user_id IS NULL) OR stare='anulat'
    OR (stare IN ('creat','finalizat') AND auth_user_id IS NOT NULL))
 );
@@ -317,106 +350,6 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_cont_pregateste(integer,uuid) FROM PUBLIC,anon,authenticated,service_role,teren;
 GRANT EXECUTE ON FUNCTION public.fn_portal_cont_pregateste(integer,uuid) TO authenticated;
-CREATE OR REPLACE FUNCTION public.handle_new_user()
- RETURNS trigger
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public', 'pg_temp'
-AS $function$
-DECLARE
-  v_portal_emp integer; v_portal_id uuid; v_portal public.portal_provisioning%ROWTYPE;
-  v_n         integer := 0;
-  v_emp       integer;
-  v_nume      text;
-  v_metoda    text;
-  v_ocupat    boolean := false;
-  v_incredere boolean := false;
-  v_are_fisa  boolean := false;
-  v_eroare    text;
-  v_motiv     text;
-BEGIN
-
-  IF NEW.raw_app_meta_data->>'tip_cont' = 'teren' THEN
-    -- Ordine: employees -> portal_provisioning -> conturi_tip -> conturi_teren -> profiles.
-    -- auth.users este deja inserat de GoTrue; nu blocam un alt rand auth.users pe aceasta cale.
-    v_portal_emp := (NEW.raw_app_meta_data->>'employee_id')::integer;
-    v_portal_id := (NEW.raw_app_meta_data->>'provisioning_id')::uuid;
-    PERFORM 1 FROM public.employees WHERE id=v_portal_emp FOR UPDATE;
-    IF NOT FOUND OR public.fn_portal_angajat_eligibil(v_portal_emp) IS NOT TRUE THEN
-      RAISE EXCEPTION 'PORTAL_RESERVATION_INVALID'; END IF;
-    SELECT * INTO v_portal FROM public.portal_provisioning WHERE provisioning_id=v_portal_id FOR UPDATE;
-    IF NOT FOUND OR v_portal.employee_id IS DISTINCT FROM v_portal_emp
-      OR v_portal.stare IS DISTINCT FROM 'rezervat' OR v_portal.auth_user_id IS NOT NULL
-      OR NEW.email IS DISTINCT FROM v_portal.email_calculat
-      OR EXISTS (SELECT FROM public.profiles WHERE employee_id=v_portal_emp)
-      OR EXISTS (SELECT FROM public.conturi_teren WHERE employee_id=v_portal_emp) THEN
-      RAISE EXCEPTION 'PORTAL_RESERVATION_INVALID'; END IF;
-    INSERT INTO public.conturi_tip(auth_user_id,tip,sursa,clasificat_de)
-      VALUES(NEW.id,'teren','provisioning_e1_1b',v_portal.cerut_de);
-    INSERT INTO public.conturi_teren(auth_user_id,employee_id,stare,provisioning_id)
-      VALUES(NEW.id,v_portal_emp,'in_creare',v_portal_id);
-    INSERT INTO public.profiles(id,email,name,role,employee_id)
-      SELECT NEW.id,NEW.email,e.name,'teren',e.id FROM public.employees e WHERE e.id=v_portal_emp;
-    UPDATE public.portal_provisioning SET stare='creat',auth_user_id=NEW.id
-      WHERE provisioning_id=v_portal_id AND stare='rezervat' AND auth_user_id IS NULL;
-    IF NOT FOUND THEN RAISE EXCEPTION 'PORTAL_RESERVATION_INVALID'; END IF;
-    RETURN NEW;
-  END IF;
-  -- Inserăm doar dacă nu există deja (idempotent) — neschimbat
-  INSERT INTO public.profiles (id, email, name, role)
-  VALUES (
-    NEW.id,
-    NEW.email,
-    INITCAP(REPLACE(REPLACE(SPLIT_PART(NEW.email, '@', 1), '.', ' '), '_', ' ')),
-    'in_asteptare'
-  )
-  ON CONFLICT (id) DO NOTHING;
-
-  -- R1 sub-bloc 1: DOAR potrivirea (fără nicio scriere în profiles). Nicio eroare de aici nu blochează crearea contului.
-  BEGIN
-    v_incredere := COALESCE(NEW.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true';
-    SELECT count(*), min(c.employee_id), min(c.employee_name), min(c.metoda),
-           COALESCE(bool_or(c.profil_legat IS NOT NULL), false)
-      INTO v_n, v_emp, v_nume, v_metoda, v_ocupat
-      FROM public.fn_cont_candidati_angajat(NEW.email) c;       -- emailul de LOGARE (GoTrue)
-    SELECT p.employee_id IS NOT NULL INTO v_are_fisa FROM public.profiles p WHERE p.id = NEW.id;
-    v_are_fisa := COALESCE(v_are_fisa, false);
-  EXCEPTION WHEN OTHERS THEN
-    v_eroare := SQLERRM;
-    RAISE WARNING 'handle_new_user R1 (%): % [%]', NEW.email, SQLERRM, SQLSTATE;
-  END;
-
-  -- R1 sub-bloc 2: notificarea owner-ilor (separat; best-effort)
-  BEGIN
-    IF v_eroare IS NULL AND v_n = 1 AND NOT v_ocupat AND NOT v_are_fisa THEN
-      IF NOT v_incredere THEN
-        -- orice domeniu: potrivirea pe email poate fi și pe adresa personală trecută pe fișă
-        PERFORM public.fn_cont_notifica_owneri('cont_legare_propusa', '🔗 Cont nou: confirmă legarea de fișă',
-          format('Cont nou %s → propunere: %s (#%s, prin %s). Dacă tu ai creat contul, confirmă din Admin → Manageri → „Leagă automat”. Dacă nu-l recunoști, NU-l lega și închide-l.',
-                 NEW.email, v_nume, v_emp, v_metoda),
-          '/admin?tab=managers&cont=' || NEW.id::text);
-      END IF;
-      -- calea de încredere: legarea și anunțul le face fn_cont_leaga_la_creare (cont-nou); dacă RPC-ul nu vine,
-      -- contul apare în alerta fara_angajat cu candidatul unic.
-    ELSIF v_eroare IS NOT NULL OR v_incredere
-          OR lower(split_part(btrim(COALESCE(NEW.email, '')), '@', 2)) = 'gazpet.ro' THEN
-      v_motiv := CASE
-        WHEN v_eroare IS NOT NULL THEN 'eroare la potrivire: ' || v_eroare
-        WHEN v_n = 0 THEN '0 candidați'
-        WHEN v_n > 1 THEN v_n || ' candidați'
-        WHEN v_ocupat THEN 'candidatul unic are deja cont'
-        ELSE 'legătură existentă păstrată' END;
-      PERFORM public.fn_cont_notifica_owneri('cont_nelegat', '⚠️ Cont nou nelegat de fișa de angajat',
-        format('Cont nou %s nelegat: %s', NEW.email, v_motiv),
-        '/admin?tab=managers&cont=' || NEW.id::text);
-    END IF;
-  EXCEPTION WHEN OTHERS THEN
-    RAISE WARNING 'handle_new_user R1 notificare (%): % [%]', NEW.email, SQLERRM, SQLSTATE;
-  END;
-
-  RETURN NEW;
-END;
-$function$;
 
 CREATE FUNCTION public.fn_portal_cont_finalizeaza(p_provisioning_id uuid) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
@@ -513,8 +446,6 @@ BEGIN
  RETURN NEW;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_revoca_la_plecare() FROM PUBLIC,anon,authenticated,service_role,teren;
-CREATE TRIGGER portal_revoca_la_plecare AFTER UPDATE OF active,termination_date ON public.employees
- FOR EACH ROW EXECUTE FUNCTION public.fn_portal_revoca_la_plecare();
 
 -- r3 (09.11.2026): amprenta pe LISTA ALBA (L15), nu pe toata schema public. Varianta r2 amprenta orice functie /
 -- tabel / politica din public si orice rand din employees / profiles / auth.users: orice migrare a altui modul sau
@@ -622,6 +553,167 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_porti_lipsa_1b() FROM PUBLIC,anon,authenticated,service_role,teren,supabase_auth_admin;
 CREATE TRIGGER portal_1b_manifest_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.portal_e1_1b_manifest
  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
+-- r9 (P1-01): PUNCTUL UNIC de lock pe tabelele folosite de utilizatori, la final. NOWAIT + reincercare la 50 ms, cel mult
+-- 3 s: cat timp incearca, aplicarea NU sta in coada (citirile ERP si login-urile nu se aseaza in spatele ei); o
+-- incercare ratata elibereaza tot ce luase (subtranzactie). Peste buget: 55P03 PORTAL_LOCK_BUDGET, nimic schimbat.
+-- Ordinea (L06): auth.users -> employees -> profiles -> user_module_access (ca la 18a si ca la crearea unui cont).
+-- Tabelele portalului (blocate mai sus) nu sunt folosite de utilizatori: hook-ul nu e pornit.
+--  * auth.users          SHARE ROW EXCLUSIVE: FK portal_provisioning -> auth.users; niciun cont nou pana la commit
+--                        (handle_new_user se inlocuieste sub acest lock). Blocheaza: scrierile Auth (login, cont nou).
+--                        Nu blocheaza citirile.
+--  * employees           SHARE ROW EXCLUSIVE: FK + triggerul de revocare. Blocheaza: editarile HR. Nu citirile.
+--  * profiles            ACCESS EXCLUSIVE: cerut de ALTER ... CHECK (rolurile noi). Blocheaza TOT pe profiles,
+--                        inclusiv citirile ERP (politicile RLS citesc profiles), doar pe coada de mai jos.
+--  * user_module_access  SHARE: drepturile conturilor teren nu se schimba intre poarta si amprenta. Blocheaza: scrierile.
+-- Durata (de aici pana la commit): CHECK-ul pe profiluri (~150 de randuri), 2 FK pe un tabel gol, 1 trigger, 1 functie,
+-- poarta finala si inregistrarea runnerului; estimat sub 1 s (masurat in harness, scripts/portal/concurrency_lock.sh).
+DO $locks$
+DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
+BEGIN
+  LOOP
+    v_n := v_n + 1;
+    BEGIN
+      LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.employees IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.user_module_access IN SHARE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
+        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: auth.users / employees / profiles / user_module_access ocupate % ms (% incercari); nimic schimbat',
+          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
+      END IF;
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  RAISE NOTICE 'PORTAL_LOCKS 19a: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $locks$;
+DO $roles$
+DECLARE c record;
+BEGIN
+ -- Sub lock: CHECK-ul si rolurile existente se reverifica fata de manifest (nicio schimbare intre citire si ALTER).
+ SELECT conname,pg_get_constraintdef(oid) AS def INTO STRICT c
+ FROM pg_constraint WHERE conrelid='public.profiles'::regclass AND conname='profiles_role_chk';
+ IF jsonb_build_object('name',c.conname,'definition',c.def) IS DISTINCT FROM
+   (SELECT valoare FROM public.portal_e1_1b_manifest WHERE cheie='role_live') THEN
+  RAISE EXCEPTION 'PORTAL_PROFILE_ROLES_CHANGED'; END IF;
+ IF EXISTS (SELECT FROM public.profiles WHERE role IS NULL OR role NOT IN
+  ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner'))
+ THEN RAISE EXCEPTION 'PORTAL_ROLE_PREFLIGHT'; END IF;
+END $roles$;
+ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk;
+ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_chk CHECK (role IN
+ ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner','teren','in_asteptare'));
+ALTER TABLE public.portal_provisioning
+ ADD CONSTRAINT portal_provisioning_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id),
+ ADD CONSTRAINT portal_provisioning_auth_user_id_fkey FOREIGN KEY (auth_user_id) REFERENCES auth.users(id);
+CREATE TRIGGER portal_revoca_la_plecare AFTER UPDATE OF active,termination_date ON public.employees
+ FOR EACH ROW EXECUTE FUNCTION public.fn_portal_revoca_la_plecare();
+-- handle_new_user se inlocuieste sub lock-ul pe auth.users, dupa CHECK-ul care accepta rolurile noi.
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_portal_emp integer; v_portal_id uuid; v_portal public.portal_provisioning%ROWTYPE;
+  v_n         integer := 0;
+  v_emp       integer;
+  v_nume      text;
+  v_metoda    text;
+  v_ocupat    boolean := false;
+  v_incredere boolean := false;
+  v_are_fisa  boolean := false;
+  v_eroare    text;
+  v_motiv     text;
+BEGIN
+
+  IF NEW.raw_app_meta_data->>'tip_cont' = 'teren' THEN
+    -- Ordine: employees -> portal_provisioning -> conturi_tip -> conturi_teren -> profiles.
+    -- auth.users este deja inserat de GoTrue; nu blocam un alt rand auth.users pe aceasta cale.
+    v_portal_emp := (NEW.raw_app_meta_data->>'employee_id')::integer;
+    v_portal_id := (NEW.raw_app_meta_data->>'provisioning_id')::uuid;
+    PERFORM 1 FROM public.employees WHERE id=v_portal_emp FOR UPDATE;
+    IF NOT FOUND OR public.fn_portal_angajat_eligibil(v_portal_emp) IS NOT TRUE THEN
+      RAISE EXCEPTION 'PORTAL_RESERVATION_INVALID'; END IF;
+    SELECT * INTO v_portal FROM public.portal_provisioning WHERE provisioning_id=v_portal_id FOR UPDATE;
+    IF NOT FOUND OR v_portal.employee_id IS DISTINCT FROM v_portal_emp
+      OR v_portal.stare IS DISTINCT FROM 'rezervat' OR v_portal.auth_user_id IS NOT NULL
+      OR NEW.email IS DISTINCT FROM v_portal.email_calculat
+      OR EXISTS (SELECT FROM public.profiles WHERE employee_id=v_portal_emp)
+      OR EXISTS (SELECT FROM public.conturi_teren WHERE employee_id=v_portal_emp) THEN
+      RAISE EXCEPTION 'PORTAL_RESERVATION_INVALID'; END IF;
+    INSERT INTO public.conturi_tip(auth_user_id,tip,sursa,clasificat_de)
+      VALUES(NEW.id,'teren','provisioning_e1_1b',v_portal.cerut_de);
+    INSERT INTO public.conturi_teren(auth_user_id,employee_id,stare,provisioning_id)
+      VALUES(NEW.id,v_portal_emp,'in_creare',v_portal_id);
+    INSERT INTO public.profiles(id,email,name,role,employee_id)
+      SELECT NEW.id,NEW.email,e.name,'teren',e.id FROM public.employees e WHERE e.id=v_portal_emp;
+    UPDATE public.portal_provisioning SET stare='creat',auth_user_id=NEW.id
+      WHERE provisioning_id=v_portal_id AND stare='rezervat' AND auth_user_id IS NULL;
+    IF NOT FOUND THEN RAISE EXCEPTION 'PORTAL_RESERVATION_INVALID'; END IF;
+    RETURN NEW;
+  END IF;
+  -- r9 (P2-01): contul nou primeste clasificarea 'neaprobat' odata cu profilul (inventarul Auth ramane complet;
+  -- hook-ul il refuza pana la fn_cont_aproba_erp). Ordinea ca pe ramura teren: conturi_tip -> profiles.
+  INSERT INTO public.conturi_tip(auth_user_id,tip,sursa) VALUES (NEW.id,'neaprobat','cont_nou_e1_1b')
+  ON CONFLICT (auth_user_id) DO NOTHING;
+  -- Inserăm doar dacă nu există deja (idempotent) — neschimbat
+  INSERT INTO public.profiles (id, email, name, role)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    INITCAP(REPLACE(REPLACE(SPLIT_PART(NEW.email, '@', 1), '.', ' '), '_', ' ')),
+    'in_asteptare'
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  -- R1 sub-bloc 1: DOAR potrivirea (fără nicio scriere în profiles). Nicio eroare de aici nu blochează crearea contului.
+  BEGIN
+    v_incredere := COALESCE(NEW.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true';
+    SELECT count(*), min(c.employee_id), min(c.employee_name), min(c.metoda),
+           COALESCE(bool_or(c.profil_legat IS NOT NULL), false)
+      INTO v_n, v_emp, v_nume, v_metoda, v_ocupat
+      FROM public.fn_cont_candidati_angajat(NEW.email) c;       -- emailul de LOGARE (GoTrue)
+    SELECT p.employee_id IS NOT NULL INTO v_are_fisa FROM public.profiles p WHERE p.id = NEW.id;
+    v_are_fisa := COALESCE(v_are_fisa, false);
+  EXCEPTION WHEN OTHERS THEN
+    v_eroare := SQLERRM;
+    RAISE WARNING 'handle_new_user R1 (%): % [%]', NEW.email, SQLERRM, SQLSTATE;
+  END;
+
+  -- R1 sub-bloc 2: notificarea owner-ilor (separat; best-effort)
+  BEGIN
+    IF v_eroare IS NULL AND v_n = 1 AND NOT v_ocupat AND NOT v_are_fisa THEN
+      IF NOT v_incredere THEN
+        -- orice domeniu: potrivirea pe email poate fi și pe adresa personală trecută pe fișă
+        PERFORM public.fn_cont_notifica_owneri('cont_legare_propusa', '🔗 Cont nou: confirmă legarea de fișă',
+          format('Cont nou %s → propunere: %s (#%s, prin %s). Dacă tu ai creat contul, confirmă din Admin → Manageri → „Leagă automat”. Dacă nu-l recunoști, NU-l lega și închide-l.',
+                 NEW.email, v_nume, v_emp, v_metoda),
+          '/admin?tab=managers&cont=' || NEW.id::text);
+      END IF;
+      -- calea de încredere: legarea și anunțul le face fn_cont_leaga_la_creare (cont-nou); dacă RPC-ul nu vine,
+      -- contul apare în alerta fara_angajat cu candidatul unic.
+    ELSIF v_eroare IS NOT NULL OR v_incredere
+          OR lower(split_part(btrim(COALESCE(NEW.email, '')), '@', 2)) = 'gazpet.ro' THEN
+      v_motiv := CASE
+        WHEN v_eroare IS NOT NULL THEN 'eroare la potrivire: ' || v_eroare
+        WHEN v_n = 0 THEN '0 candidați'
+        WHEN v_n > 1 THEN v_n || ' candidați'
+        WHEN v_ocupat THEN 'candidatul unic are deja cont'
+        ELSE 'legătură existentă păstrată' END;
+      PERFORM public.fn_cont_notifica_owneri('cont_nelegat', '⚠️ Cont nou nelegat de fișa de angajat',
+        format('Cont nou %s nelegat: %s', NEW.email, v_motiv),
+        '/admin?tab=managers&cont=' || NEW.id::text);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'handle_new_user R1 notificare (%): % [%]', NEW.email, SQLERRM, SQLSTATE;
+  END;
+
+  RETURN NEW;
+END;
+$function$;
 DO $post$
 BEGIN
  -- Ancorele, reverificate imediat inaintea fixarii amprentei (nicio schimbare externa in timpul apply-ului).
