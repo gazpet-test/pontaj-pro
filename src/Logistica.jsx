@@ -1554,7 +1554,11 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
       comodat_litri_lunari_agreati: form.tip_proprietate === 'comodat' && form.comodat_litri_lunari_agreati ? Number(form.comodat_litri_lunari_agreati) : null,
       inchiriere_furnizor: form.tip_proprietate === 'inchiriat' ? (form.inchiriere_furnizor?.trim() || null) : null,
     }
-    
+    // TKT-2026-0381: la editare, nr. inventar se trimite DOAR dacă s-a schimbat. Trigger-ul trg_active_nr_inventar e
+    // „BEFORE UPDATE OF nr_inventar” și pornește la orice UPDATE care conține coloana, chiar cu aceeași valoare —
+    // așa o simplă schimbare de stare (Funcțional ↔ Nefuncțional) trecea prin el și cădea odată cu el.
+    if (mode !== 'create' && payload.nr_inventar === (activ?.nr_inventar ?? null)) delete payload.nr_inventar
+
     let result
     if (mode === 'create') {
       const { data: { user } } = await supabase.auth.getUser()
@@ -1586,6 +1590,8 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
         if (msg.includes('cod_intern')) msg = `Codul intern "${form.cod_intern}" există deja!`
         else if (msg.includes('nr_inmatriculare')) msg = `Plăcuța "${form.nr_inmatriculare}" există deja!`
       }
+      // TKT-2026-0384 / 0386: refuzul de drept vine din baza de date, la verificarea nr. de inventar (corectura e la administrator)
+      if (msg.includes('fn_nr_inventar_norm')) msg = 'Nr. de inventar nu se poate salva momentan (problemă de drepturi în baza de date, anunțată administratorului). Încercați din nou după actualizare.'
       showToast(`Eroare: ${msg}`, 'error')
       return
     }
