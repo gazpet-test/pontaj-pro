@@ -52,13 +52,37 @@
 #   PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR din mediu ⇒ refuz; pre-verificarea cere drept de apel pe pg_control_system().
 #   În loc de --sha256: --aprobare <fișier> cu un rând „<hex64>  <nume>.sql” (formatul sha256sum).
 #   Runda 10 (11.11.2026, PR #892 r12): --plafon-tranzactie-ms <N> (opțional, 100..600000) = plafonul TOTAL al
-#   tranzacției de livrare, armat de PostgreSQL 17 la BEGIN. Runnerul îl trimite DOAR conexiunii livrării, ca parametru
-#   de pornire (PGOPTIONS="-c transaction_timeout=N", sursa 'client', prioritară față de ALTER ROLE/DATABASE … SET), deci
-#   ceasul pornește la BEGIN-ul lui psql --single-transaction cu exact valoarea aprobată, indiferent ce aveau rolul / baza.
-#   Peste N ms de la BEGIN până la intrarea în COMMIT, serverul închide sesiunea ⇒ ROLLBACK ⇒ reconcilierea dă 10. Prologul
-#   verifică în tranzacție valoarea și sursa (un pooler care ignoră parametrul de pornire ⇒ refuz, nimic trimis din
-#   migrare). Fără opțiune: comportamentul de dinainte, neschimbat. Pre-verificarea, reconcilierea și gate-ul 0e NU primesc
-#   plafonul. Migrarea care se bazează pe plafon îl verifică și ea (valoare + sursă) și refuză dacă lipsește.
+#   tranzacției de livrare, armat de PostgreSQL 17 la BEGIN (ceasul transaction_timeout).
+#   Runda 11 (11.11.2026, PR #892 r14 + Jakarinos r13 P2): pe producție conexiunea trece prin pooler-ul Supabase (session
+#   mode), care NU transmite opțiunile de conectare (PGOPTIONS / options=…: serverul vede 0/default) ⇒ plafonul NU mai e
+#   parametru de pornire. Cu opțiunea, livrarea rulează pe O conexiune, în ordinea:
+#     00_sesiune: SET transaction_timeout = N (instrucțiune de SESIUNE, în afara tranzacției; trece prin pooler, sursa
+#                 'session', prioritară față de ALTER ROLE/DATABASE … SET) apoi BEGIN ⇒ ceasul pornește la BEGIN cu N;
+#     0_prolog:   (prima după BEGIN) cere N/session din pg_catalog.pg_settings (calificat: un pg_temp.pg_settings nu-l poate
+#                 umbri) și pune marcajul plafonului gazpet.plafon_tranzactie = '<N>:<txid>' (pe care îl cere migrarea);
+#     1_pre, COPIA, 3_inreg — ca până acum;
+#     9_fin:      garda finală (ultima înainte de COMMIT): valoarea tot N/session + marcajul, iar timpul de la BEGIN
+#                 (clock_timestamp() − transaction_timestamp()) ≤ N ms; altfel refuz ⇒ ROLLBACK; apoi COMMIT și
+#                 RESET transaction_timeout (backend-ul pooler-ului nu rămâne cu plafonul nostru).
+#   psql FĂRĂ --single-transaction (BEGIN / COMMIT sunt în fișierele runnerului), cu ON_ERROR_STOP=1: la orice eroare psql
+#   se oprește și închide conexiunea, iar serverul anulează tranzacția deschisă (nimic comis) ⇒ reconcilierea dă 10.
+#   DE CE „N/session” văzut în prolog dovedește ceasul pornit la BEGIN cu N: valoarea unui GUC se schimbă într-un backend
+#   doar prin instrucțiuni rulate în el; între BEGIN și prolog nu rulează nimic (prologul e primul fișier după BEGIN, generat
+#   de runner), deci valoarea de la BEGIN = cea din prolog. SQL-ul singur NU poate deosebi „SET înainte de BEGIN” de
+#   „SET LOCAL după BEGIN” (ambele au sursa 'session') ⇒ ordinea o garantează runnerul, iar migrarea cere în plus marcajul
+#   plafonului (pus doar de prolog, după verificare).
+#   Validatorul primește --plafon-tranzactie: refuză orice artefact care menționează transaction_timeout sau pg_settings în
+#   afara citirii exacte „FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'” (SET / SET LOCAL / set_config /
+#   RESET / ALTER ROLE|FUNCTION … SET / CREATE FUNCTION … SET, oriunde: nivel superior, DO, corpuri de funcții) și orice
+#   RESET ALL. SQL-ul dinamic construit din bucăți nu se poate vedea static ⇒ garda finală 9_fin: un ceas oprit / repornit
+#   în tranzacție ⇒ valoare schimbată sau timp > N ⇒ ROLLBACK (limită declarată: o asemenea ocolire deliberată într-un
+#   artefact aprobat poate întârzia închiderea, dar nu poate comite).
+#   GARANȚIA (formulare exactă): aproximativ N ms de la BEGIN până la intrarea în COMMIT — timeout PostgreSQL pe ceasul
+#   serverului, nu timp real strict. COMMIT-ul propriu-zis NU e plafonat (PG17 oprește ceasul la intrarea în COMMIT): pe
+#   un server fără replicare sincronă înseamnă scrierea WAL a commit-ului; cu replicare sincronă, și așteptarea standby-ului.
+#   Fără opțiune: comportamentul de dinainte, NESCHIMBAT (psql --single-transaction, aceleași fișiere, fără SET).
+#   Cu opțiune, pre-verificarea, reconcilierea și gate-ul 0e rulează cu SET transaction_timeout = 0 înainte de BEGIN (fără
+#   plafon; un backend refolosit de pooler nu le poate impune unul rămas).
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
 # PGTARGETSESSIONATTRS, PGLOADBALANCEHOSTS, PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR. PGHOST/PGPORT: eliminate explicit (unset)
@@ -127,17 +151,22 @@ SHA_COPIE="$(sha256sum "$COPIE" | cut -d' ' -f1)"
 TAG="reg_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 CONTROL_0E="$(dirname "${BASH_SOURCE[0]}")/control_0e.sql"
 [ -f "$CONTROL_0E" ] || refuz 3 "gate-ul permanent 0e lipsește: $CONTROL_0E"
-VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG")" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
+# Runda 11: cu plafon, validatorul refuză în plus orice atingere a ceasului tranzacției (vezi antetul).
+VAL_PLAFON=(); [ -z "$PLAFON_MS" ] || VAL_PLAFON=(--plafon-tranzactie)
+VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG" ${VAL_PLAFON[@]+"${VAL_PLAFON[@]}"})" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
 echo "→ $NUME: sha256 $SHA_COPIE = aprobat; validator: $VAL_OUT"
 
 # --- fișierele runnerului (generate, nu provin din artefact) -----------------
 CHEIE="hashtext('gazpet.livrare_migrare')"
 PROI_EXPR="coalesce(current_setting('gazpet.proiect_aprobat', true), '')"
-# Runda 10: cu --plafon-tranzactie-ms, prologul cere în tranzacție exact valoarea aprobată, venită din conexiune (sursa
-# 'client' = parametrul de pornire trimis de runner; nimic nu l-a schimbat de la BEGIN).
+# Runda 11: cu --plafon-tranzactie-ms, prologul (primul după BEGIN) cere exact valoarea aprobată, cu sursa 'session'
+# (SET-ul runnerului dinaintea lui BEGIN), din pg_catalog.pg_settings (calificat: fără umbrire prin pg_temp), apoi pune
+# marcajul plafonului. Aceeași citire în garda finală (9_fin).
+PLAFON_CITIRE="(SELECT setting || '/' || source FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout')"
 PLAFON_CHECK=""
-[ -z "$PLAFON_MS" ] || PLAFON_CHECK="  IF (SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout') IS DISTINCT FROM '$PLAFON_MS/client' THEN
-    RAISE EXCEPTION 'Livrare $NUME: plafonul tranzactiei nu e $PLAFON_MS ms din conexiune (%)', (SELECT coalesce(setting || '/' || source, 'lipsa') FROM pg_settings WHERE name = 'transaction_timeout'); END IF;"
+[ -z "$PLAFON_MS" ] || PLAFON_CHECK="  IF $PLAFON_CITIRE IS DISTINCT FROM '$PLAFON_MS/session' THEN
+    RAISE EXCEPTION 'Livrare $NUME: plafonul tranzactiei nu e $PLAFON_MS ms pus de runner inainte de BEGIN (%)', coalesce($PLAFON_CITIRE, 'lipsa'); END IF;
+  PERFORM set_config('gazpet.plafon_tranzactie', '$PLAFON_MS:' || txid_current(), true);"
 cat > "$DIR/0_prolog.sql" <<SQL
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
 SET LOCAL standard_conforming_strings = on;
@@ -182,10 +211,30 @@ SQL
   printf "    RAISE EXCEPTION 'Înregistrare %s: statements ≠ artefactul aprobat'; END IF;\n" "$NUME"
   printf 'END $verif$;\n'
 } > "$DIR/3_inreg.sql"
+# Runda 11: cu plafon, începutul și sfârșitul tranzacției sunt fișiere ale runnerului (psql fără --single-transaction).
+# SESIUNE_0 = prefixul conexiunilor fără plafon (pre-verificare, reconciliere, gate 0e), doar cu opțiunea.
+SESIUNE_0=""
+if [ -n "$PLAFON_MS" ]; then
+  SESIUNE_0="SET transaction_timeout = 0;"
+  printf 'SET transaction_timeout = %s;\nBEGIN;\n' "$PLAFON_MS" > "$DIR/00_sesiune.sql"
+  cat > "$DIR/9_fin.sql" <<SQL
+DO \$plafon_fin\$ BEGIN
+  IF $PLAFON_CITIRE IS DISTINCT FROM '$PLAFON_MS/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '$PLAFON_MS:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare $NUME: PLAFON_SCHIMBAT in tranzactie (% / marcaj %) - refuz, nimic comis',
+      coalesce($PLAFON_CITIRE, 'lipsa'), coalesce(current_setting('gazpet.plafon_tranzactie', true), 'lipsa'); END IF;
+  IF clock_timestamp() - transaction_timestamp() > interval '$PLAFON_MS milliseconds' THEN
+    RAISE EXCEPTION 'Livrare $NUME: PLAFON_DEPASIT: % ms de la BEGIN > $PLAFON_MS ms fara inchiderea sesiunii (ceasul a fost oprit sau repornit in tranzactie) - refuz, nimic comis',
+      round(extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000); END IF;
+END \$plafon_fin\$;
+COMMIT;
+RESET transaction_timeout;
+SQL
+fi
 # Reconcilierea (și pre-verificarea): read-only, READ COMMITTED explicit PRIMUL, lock-ul într-o instrucțiune separată
 # ÎNAINTEA SELECT-ului pe istoric ⇒ SELECT-ul primește un snapshot luat după eliberarea lock-ului.
 # Rezultat: db|system_identifier|proiect|in_recovery|relevante (nume SAU versiune)|exacte (nume+versiune+sha)
-cat > "$DIR/reconc.sql" <<SQL
+{ [ -z "$SESIUNE_0" ] || echo "$SESIUNE_0"; cat <<SQL
 BEGIN;
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
 SET LOCAL lock_timeout = '120s';
@@ -201,10 +250,11 @@ SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_cont
   FROM supabase_migrations.schema_migrations WHERE version = '$VERSIUNE' OR name = '$NUME';
 COMMIT;
 SQL
+} > "$DIR/reconc.sql"
 # Gate-ul permanent 0e (după livrare): copie protejată a scripts/control_0e.sql, într-o tranzacție READ ONLY.
 # Același prolog lexical ca livrarea (standard_conforming_strings/client_encoding pot veni ostile din ALTER DATABASE … SET):
 # fără el, regex-urile cu „\” din control_0e.sql se parsează greșit ⇒ GATE 0e NERULAT (prins de 6.12).
-{ cat <<'P0E'
+{ [ -z "$SESIUNE_0" ] || echo "$SESIUNE_0"; cat <<'P0E'
 BEGIN;
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
 SET LOCAL standard_conforming_strings = on;
@@ -216,6 +266,7 @@ END $p0e$;
 P0E
   cat "$CONTROL_0E"; printf '\nCOMMIT;\n'; } > "$DIR/control_0e.sql"
 chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql" "$DIR/control_0e.sql"
+[ -z "$PLAFON_MS" ] || chmod 400 "$DIR/00_sesiune.sql" "$DIR/9_fin.sql"
 
 CONN=(-h "$C_HOST" -p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")   # explicite ⇒ au prioritate față de mediu
 CONN+=(-d "$TINTA_DB")   # validat [A-Za-z0-9_] ⇒ nu poate fi conninfo/URI
@@ -276,13 +327,17 @@ if [ "$R_REL" != 0 ]; then
   manual; exit 21
 fi
 
-echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]${PLAFON_MS:+; plafon $PLAFON_MS ms de la BEGIN până la intrarea în COMMIT (transaction_timeout din conexiune)}"
-# Runda 10: parametrul de pornire DOAR pentru conexiunea livrării (PGOPTIONS din mediu e refuzat mai sus).
-LIV_ENV=()
-[ -z "$PLAFON_MS" ] || LIV_ENV=(env "PGOPTIONS=-c transaction_timeout=$PLAFON_MS")
 set +e
-${LIV_ENV[@]+"${LIV_ENV[@]}"} "$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
-RC_PSQL=$?
+if [ -z "$PLAFON_MS" ]; then
+  echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
+  RC_PSQL=$?
+else
+  # Runda 11: o singură conexiune; SET de sesiune + BEGIN, apoi aceleași fișiere, garda finală și COMMIT (vezi antetul).
+  echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql [SET transaction_timeout = $PLAFON_MS + BEGIN + prolog + lock + țintă + istoric + marcaj + copie + înregistrare + gardă finală + COMMIT]; plafon ~$PLAFON_MS ms de la BEGIN până la intrarea în COMMIT (SET de sesiune înainte de BEGIN; COMMIT-ul propriu-zis neplafonat)"
+  "$PSQL" -X -q -v ON_ERROR_STOP=1 -f "$DIR/00_sesiune.sql" -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" -f "$DIR/9_fin.sql" "${CONN[@]}"
+  RC_PSQL=$?
+fi
 set -e
 
 # --- reconciliere read-only (conexiune nouă; așteaptă lock-ul ⇒ tranzacția livrării s-a terminat) ------------

@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
-# Runda 10 a runnerului (PR #892 r12): proba lui scripts/livrare_migrare.sh --plafon-tranzactie-ms pe un cluster
-# PostgreSQL 17 NOU, efemer: doar 127.0.0.1, port 6790 + slot (verificat liber), director nou in /tmp. Nu atinge nicio
-# alta baza si nu sterge nimic in afara directorului propriu.
+# Runda 10/11 a runnerului (PR #892 r12/r14, PR #1054): proba lui scripts/livrare_migrare.sh --plafon-tranzactie-ms pe
+# un cluster PostgreSQL 17 NOU, efemer: doar 127.0.0.1, port 6790 + slot (verificat liber), director nou in /tmp. Nu
+# atinge nicio alta baza si nu sterge nimic in afara directorului propriu.
 #   Linux / WSL, ca utilizatorul postgres (initdb refuza root):
 #     wsl -d Ubuntu-24.04 -u postgres -- bash /mnt/c/.../scripts/test_livrare_plafon.sh <slot 0-9>
 #   PG_BIN = binarele PG17 (implicit /usr/lib/postgresql/17/bin).
-# Ce dovedeste (fiecare caz cu prag care pica testul):
-#   argumente: valori invalide / PGOPTIONS din mediu => refuz 2, fara conexiune;
-#   ok:        cu --plafon-tranzactie-ms 1500, in tranzactie transaction_timeout = 1500, sursa 'client' => aplicat (0);
-#   rol:       ALTER ROLE ... SET transaction_timeout = '10s' nu schimba nimic: tot 1500/client => aplicat (0);
-#   lent:      o migrare care sta 3 s, cu plafon 1000 => serverul inchide sesiunea la ~1 s de la BEGIN, NEAPLICAT (10),
-#              nimic creat, nimic inregistrat, linie noua „transaction timeout” in jurnalul serverului;
-#   pooler:    un client care pierde parametrul de pornire (PGOPTIONS ignorat) => prologul refuza, NEAPLICAT (10);
-#   fara:      fara optiune => comportamentul vechi (transaction_timeout 0, sursa default) => aplicat (0).
+# Runda 11: plafonul = SET transaction_timeout DE SESIUNE inainte de BEGIN, pe aceeasi conexiune (pooler-ul Supabase nu
+# transmite optiunile de conectare). Ce dovedeste (fiecare caz cu prag care pica testul):
+#   argumente:  valori invalide / PGOPTIONS din mediu => refuz 2, fara conexiune;
+#   ok:         cu --plafon-tranzactie-ms 1500, in tranzactie transaction_timeout = 1500/session + marcajul plafonului
+#               => aplicat (0);
+#   rol:        ALTER ROLE ... SET transaction_timeout = '10s' nu schimba nimic: tot 1500/session => aplicat (0);
+#   lent:       migrare de 3 s cu plafon 1000 => serverul inchide sesiunea la ~1 s de la BEGIN, NEAPLICAT (10), nimic
+#               creat / inregistrat, linie noua „transaction timeout” in jurnalul serverului;
+#   pooler:     un client care PIERDE optiunile de conectare (ca pooler-ul) nu schimba nimic: SET-ul e instructiune
+#               => aplicat (0), 1500/session (designul runda 10 ar fi refuzat aici: 0/default);
+#   umbrire:    SET-ul pierdut + un pg_temp.pg_settings fals (1500/session) in aceeasi sesiune => prologul citeste
+#               pg_catalog.pg_settings (0/default) => refuz, NEAPLICAT (10); citirea necalificata ar fi vazut falsul;
+#   validator:  mutantul Jakarinos r13 (SET LOCAL transaction_timeout = 0; SELECT pg_sleep(3)) cu plafon => refuz 3,
+#               fara conexiune; FARA plafon acelasi artefact => aplicat (0), ca inainte;
+#   garda:      ceasul oprit prin SQL dinamic (invizibil static) => garda finala: valoare schimbata (PLAFON_SCHIMBAT) sau
+#               timp > plafon de la BEGIN (PLAFON_DEPASIT) => NEAPLICAT (10), nimic creat;
+#   fara:       fara optiune => comportamentul vechi (psql --single-transaction, 0/default) => aplicat (0).
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SLOT="${1:-0}"; [[ "$SLOT" =~ ^[0-9]$ ]] || { echo 'MEDIU: slot 0-9'; exit 2; }
@@ -46,12 +55,16 @@ q() { "$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgre
 SIS="$(q 'SELECT system_identifier FROM pg_control_system()')"
 [[ "$(q 'SELECT rolsuper FROM pg_roles WHERE rolname=current_user')" == f ]] || fail 'postgres trebuie sa fie NOSUPERUSER'
 
+# Citirea plafonului = forma exacta permisa de validator cu --plafon-tranzactie (schema calificata).
+CIT="(SELECT setting || '/' || source FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout')"
 mkdir "$TMP/mig"
 migrare() { # $1 numele, $2 starea asteptata a transaction_timeout in tranzactie ('' = nu se verifica), $3 SQL suplimentar
+  # Cu „N/session” se cere si marcajul plafonului pus de prologul runnerului ('N:' || txid), ca in migrarile portalului.
   local f="$TMP/mig/$1.sql"
   {
     printf "DO \$g\$ BEGIN\n  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '%s:' || txid_current() THEN\n    RAISE EXCEPTION 'PLAFON_RUNNER_REQUIRED'; END IF;\n" "$1"
-    [[ -z "$2" ]] || printf "  IF (SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout') IS DISTINCT FROM '%s' THEN\n    RAISE EXCEPTION 'PLAFON_STARE: %%', (SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout'); END IF;\n" "$2"
+    [[ -z "$2" ]] || printf "  IF %s IS DISTINCT FROM '%s' THEN\n    RAISE EXCEPTION 'PLAFON_STARE: %%', %s; END IF;\n" "$CIT" "$2" "$CIT"
+    [[ "$2" != */session ]] || printf "  IF current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '%s:' || txid_current() THEN\n    RAISE EXCEPTION 'PLAFON_MARCAJ_LIPSA'; END IF;\n" "${2%/session}"
     printf "END \$g\$;\n%s\nCREATE TABLE public.t_%s (id integer);\n" "$3" "$1"
   } >"$f"
   echo "$f"
@@ -70,9 +83,10 @@ asteapta() { # $1 eticheta, $2 codul asteptat, $3 jurnalul, restul = comanda
   "$@" >"$log" 2>&1 || rc=$?
   [[ "$rc" == "$exp" ]] || { cat "$log"; fail "$et: cod $rc, asteptat $exp"; }
 }
+inchideri() { grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true; }
 
 # 1. Argumente: refuz inainte de orice conexiune (cod 2).
-M_OK="$(migrare 20990101a_plafon_ok '1500/client' '')"
+M_OK="$(migrare 20990101a_plafon_ok '1500/session' '')"
 for v in abc 050 99 600001 1500ms; do
   asteapta "argument $v" 2 "$TMP/arg_$v.log" runner 20990101000001 "$M_OK" --plafon-tranzactie-ms "$v"
   grep -q 'plafon-tranzactie-ms invalid' "$TMP/arg_$v.log" || { cat "$TMP/arg_$v.log"; fail "argument $v: mesaj"; }
@@ -85,47 +99,101 @@ grep -q 'variabila PGOPTIONS e setată' "$TMP/arg_env.log" || { cat "$TMP/arg_en
 [[ "$(stare 20990101a_plafon_ok)" == 'false|false' ]] || fail 'argumente: ceva a fost aplicat'
 echo 'PLAFON_ARG: valori invalide (abc, 050, 99, 600001, 1500ms) si PGOPTIONS din mediu => refuz 2, fara conexiune'
 
-# 2. Cu plafon: valoarea exacta din conexiune, sursa client, in tranzactia livrarii.
+# 2. Cu plafon: SET de sesiune inainte de BEGIN => in tranzactie 1500/session + marcajul plafonului.
 asteapta ok 0 "$TMP/ok.log" runner 20990101000001 "$M_OK" --plafon-tranzactie-ms 1500
 [[ "$(stare 20990101a_plafon_ok)" == 'true|true' ]] || fail 'ok: neaplicat'
-grep -q 'plafon 1500 ms de la BEGIN' "$TMP/ok.log" || { cat "$TMP/ok.log"; fail 'ok: runnerul nu anunta plafonul'; }
-echo 'PLAFON_OK: in tranzactie transaction_timeout = 1500/client; APLICAT + INREGISTRAT (0)'
+grep -q 'plafon ~1500 ms de la BEGIN' "$TMP/ok.log" || { cat "$TMP/ok.log"; fail 'ok: runnerul nu anunta plafonul'; }
+[[ "$(q "$CIT")" == '0/default' ]] || fail 'ok: o conexiune noua vede alt transaction_timeout (setarea runnerului a ramas?)'
+echo 'PLAFON_OK: in tranzactie transaction_timeout = 1500/session + marcajul plafonului; APLICAT + INREGISTRAT (0)'
 
-# 3. O setare a rolului (ca ALTER ROLE ... SET pe productie) nu poate schimba plafonul: parametrul de pornire are prioritate.
+# 3. O setare a rolului (ca ALTER ROLE ... SET pe productie) nu poate schimba plafonul: SET-ul de sesiune are prioritate.
 "${ADMIN[@]}" -d "$DB" -c "ALTER ROLE postgres SET transaction_timeout = '10s'" >/dev/null
-[[ "$(q "SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout'")" == '10000/user' ]] || fail 'rol: setarea rolului nu s-a aplicat'
-M_ROL="$(migrare 20990101b_plafon_rol '1500/client' '')"
+[[ "$(q "$CIT")" == '10000/user' ]] || fail 'rol: setarea rolului nu s-a aplicat'
+M_ROL="$(migrare 20990101b_plafon_rol '1500/session' '')"
 asteapta rol 0 "$TMP/rol.log" runner 20990101000002 "$M_ROL" --plafon-tranzactie-ms 1500
 "${ADMIN[@]}" -d "$DB" -c 'ALTER ROLE postgres RESET transaction_timeout' >/dev/null
 [[ "$(stare 20990101b_plafon_rol)" == 'true|true' ]] || fail 'rol: neaplicat'
-echo 'PLAFON_ROL: rolul are 10 s (10000/user); livrarea vede 1500/client; APLICAT (0)'
+echo 'PLAFON_ROL: rolul are 10 s (10000/user); livrarea vede 1500/session; APLICAT (0)'
 
 # 4. Migrare lenta: inchisa de server la ~1 s de la BEGIN, nimic ramas.
-M_LENT="$(migrare 20990101c_plafon_lent '1000/client' 'SELECT pg_sleep(3);')"
-n0="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
-t0="$(date +%s%N)"
+M_LENT="$(migrare 20990101c_plafon_lent '1000/session' 'SELECT pg_sleep(3);')"
+n0="$(inchideri)"; t0="$(date +%s%N)"
 asteapta lent 10 "$TMP/lent.log" runner 20990101000003 "$M_LENT" --plafon-tranzactie-ms 1000
-ms=$(( ($(date +%s%N) - t0) / 1000000 ))
-n1="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
+ms=$(( ($(date +%s%N) - t0) / 1000000 )); n1="$(inchideri)"
 (( n1 == n0 + 1 )) || { cat "$TMP/lent.log"; fail "lent: jurnalul serverului nu arata inchiderea prin transaction timeout ($n0 -> $n1)"; }
 [[ "$(stare 20990101c_plafon_lent)" == 'false|false' ]] || fail 'lent: au ramas efecte'
 (( ms < 3000 )) || fail "lent: runnerul a durat $ms ms (migrarea trebuia oprita la ~1 s, nu dupa pg_sleep(3))"
 grep -q 'NEAPLICAT confirmat' "$TMP/lent.log" || { cat "$TMP/lent.log"; fail 'lent: reconcilierea'; }
 echo "PLAFON_LENT: migrare de 3 s cu plafon 1000 ms => sesiune inchisa de server (transaction timeout), NEAPLICAT confirmat (10), nimic creat / inregistrat; runner $ms ms in total"
 
-# 5. Parametrul de pornire pierdut pe drum (ca un pooler care il ignora) => prologul refuza, nimic din migrare.
-printf '#!/usr/bin/env bash\nunset PGOPTIONS\nexec "%s/psql" "$@"\n' "$PG_BIN" >"$TMP/psql_fara_optiuni"
+# 5. Pooler simulat: clientul pierde optiunile de conectare (PGOPTIONS / options). Runnerul nu se bazeaza pe ele.
+printf '#!/usr/bin/env bash\nunset PGOPTIONS\ntouch "%s/pooler_folosit"\nexec "%s/psql" "$@"\n' "$TMP" "$PG_BIN" >"$TMP/psql_fara_optiuni"
 chmod +x "$TMP/psql_fara_optiuni"
-M_POOL="$(migrare 20990101d_plafon_pooler '' '')"
-PSQL_BIN_TEST="$TMP/psql_fara_optiuni" asteapta pooler 10 "$TMP/pooler.log" runner 20990101000004 "$M_POOL" --plafon-tranzactie-ms 1500
-grep -q 'plafonul tranzactiei nu e 1500 ms din conexiune (0/default)' "$TMP/pooler.log" || { cat "$TMP/pooler.log"; fail 'pooler: mesajul prologului'; }
-[[ "$(stare 20990101d_plafon_pooler)" == 'false|false' ]] || fail 'pooler: au ramas efecte'
-echo 'PLAFON_POOLER: parametrul de pornire pierdut => prologul refuza (0/default), NEAPLICAT (10), nimic creat'
+M_POOL="$(migrare 20990101d_plafon_pooler '1500/session' '')"
+PSQL_BIN_TEST="$TMP/psql_fara_optiuni" asteapta pooler 0 "$TMP/pooler.log" runner 20990101000004 "$M_POOL" --plafon-tranzactie-ms 1500
+[[ -e "$TMP/pooler_folosit" && "$(stare 20990101d_plafon_pooler)" == 'true|true' ]] || fail 'pooler: neaplicat prin clientul fara optiuni'
+echo 'PLAFON_POOLER: client care pierde optiunile de conectare => SET-ul de sesiune ajunge, 1500/session; APLICAT (0)'
 
-# 6. Fara optiune: neschimbat fata de runda 9.
+# 6. Umbrire: SET-ul runnerului pierdut + pg_temp.pg_settings fals in aceeasi sesiune => prologul (calificat) refuza.
+cat >"$TMP/psql_umbrire" <<EOF
+#!/usr/bin/env bash
+# Inlocuieste DOAR fisierul 00_sesiune.sql (SET + BEGIN) cu: tabel temporar fals pg_settings (1500/session) + dovada ca o
+# citire NECALIFICATA vede falsul (ambele inainte de BEGIN, in aceeasi sesiune) + BEGIN. Restul apelurilor
+# (pre-verificare, reconciliere) trec neschimbate.
+a=()
+while [ \$# -gt 0 ]; do
+  if [ "\$1" = -f ] && [[ "\${2:-}" == */00_sesiune.sql ]]; then
+    a+=(-c "CREATE TEMP TABLE pg_settings AS SELECT 'transaction_timeout'::text AS name, '1500'::text AS setting, 'session'::text AS source"
+        -c "DO \\\$u\\\$ BEGIN IF (SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout') IS DISTINCT FROM '1500/session' THEN RAISE EXCEPTION 'UMBRIRE_NEFUNCTIONALA'; END IF; END \\\$u\\\$"
+        -c BEGIN)
+    touch "$TMP/umbrire_aplicata"; shift 2; continue
+  fi
+  a+=("\$1"); shift
+done
+exec "$PG_BIN/psql" "\${a[@]}"
+EOF
+chmod +x "$TMP/psql_umbrire"
+M_UMB="$(migrare 20990101f_plafon_umbrire '1500/session' '')"
+PSQL_BIN_TEST="$TMP/psql_umbrire" asteapta umbrire 10 "$TMP/umbrire.log" runner 20990101000006 "$M_UMB" --plafon-tranzactie-ms 1500
+[[ -e "$TMP/umbrire_aplicata" ]] || fail 'umbrire: substitutia nu s-a aplicat (proba nefunctionala)'
+! grep -q UMBRIRE_NEFUNCTIONALA "$TMP/umbrire.log" || { cat "$TMP/umbrire.log"; fail 'umbrire: tabelul temporar nu umbreste citirea necalificata (proba nefunctionala)'; }
+grep -q 'plafonul tranzactiei nu e 1500 ms pus de runner inainte de BEGIN (0/default)' "$TMP/umbrire.log" \
+  || { cat "$TMP/umbrire.log"; fail 'umbrire: prologul trebuia sa refuze cu 0/default (valoarea reala)'; }
+[[ "$(stare 20990101f_plafon_umbrire)" == 'false|false' ]] || fail 'umbrire: au ramas efecte'
+echo 'PLAFON_UMBRIRE: SET pierdut + pg_temp.pg_settings fals (1500/session, vazut de citirea necalificata) => prologul citeste pg_catalog.pg_settings (0/default) => refuz, NEAPLICAT (10)'
+
+# 7. Validatorul (Jakarinos r13 P2): cu plafon, artefactul nu poate opri ceasul; fara plafon, regulile vechi.
+M_MUT="$(migrare 20990101g_plafon_mutant '' 'SET LOCAL transaction_timeout = 0;
+SELECT pg_sleep(3);')"
+asteapta 'validator mutant' 3 "$TMP/mutant.log" runner 20990101000007 "$M_MUT" --plafon-tranzactie-ms 1000
+grep -q 'validatorul a refuzat' "$TMP/mutant.log" && grep -q 'transaction_timeout' "$TMP/mutant.log" \
+  || { cat "$TMP/mutant.log"; fail 'validator mutant: mesajul'; }
+[[ "$(stare 20990101g_plafon_mutant)" == 'false|false' ]] || fail 'validator mutant: ceva a fost aplicat'
+asteapta 'validator fara plafon' 0 "$TMP/mutant_fara.log" runner 20990101000008 "$M_MUT"
+[[ "$(stare 20990101g_plafon_mutant)" == 'true|true' ]] || fail 'validator fara plafon: neaplicat (regulile vechi s-au schimbat)'
+echo 'PLAFON_VALIDATOR: SET LOCAL transaction_timeout = 0 + pg_sleep(3) cu plafon => refuz 3, fara conexiune; fara plafon => APLICAT (0), ca inainte'
+
+# 8. Garda finala: ceasul oprit prin SQL dinamic (numele construit cu chr(95) — validatorul nu-l poate vedea).
+DIN="'transaction' || chr(95) || 'timeout'"
+M_SCH="$(migrare 20990101h_plafon_schimbat '1000/session' "DO \$d\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); END \$d\$;")"
+asteapta 'garda valoare' 10 "$TMP/garda_val.log" runner 20990101000009 "$M_SCH" --plafon-tranzactie-ms 1000
+grep -q 'PLAFON_SCHIMBAT in tranzactie (0/session' "$TMP/garda_val.log" || { cat "$TMP/garda_val.log"; fail 'garda valoare: mesajul'; }
+[[ "$(stare 20990101h_plafon_schimbat)" == 'false|false' ]] || fail 'garda valoare: au ramas efecte'
+M_DEP="$(migrare 20990101i_plafon_depasit '1000/session' "DO \$d\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5);
+  EXECUTE format('SET LOCAL %s = %s', $DIN, '1000'); END \$d\$;")"
+n0="$(inchideri)"; t0="$(date +%s%N)"
+asteapta 'garda timp' 10 "$TMP/garda_timp.log" runner 20990101000010 "$M_DEP" --plafon-tranzactie-ms 1000
+ms=$(( ($(date +%s%N) - t0) / 1000000 )); n1="$(inchideri)"
+grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 1000 ms' "$TMP/garda_timp.log" || { cat "$TMP/garda_timp.log"; fail 'garda timp: mesajul'; }
+(( n1 == n0 )) || fail 'garda timp: sesiunea trebuia refuzata de garda, nu inchisa de server'
+[[ "$(stare 20990101i_plafon_depasit)" == 'false|false' ]] || fail 'garda timp: au ramas efecte'
+echo "PLAFON_GARDA: ceas oprit prin SQL dinamic => garda finala: 0/session (PLAFON_SCHIMBAT) / 1,5 s > 1000 ms de la BEGIN (PLAFON_DEPASIT) => NEAPLICAT (10), nimic creat; runner $ms ms"
+
+# 9. Fara optiune: neschimbat fata de runda 9 (psql --single-transaction, fara SET).
 M_FARA="$(migrare 20990101e_plafon_fara '0/default' '')"
 asteapta fara 0 "$TMP/fara.log" runner 20990101000005 "$M_FARA"
 [[ "$(stare 20990101e_plafon_fara)" == 'true|true' ]] || fail 'fara: neaplicat'
-! grep -q 'plafon .* ms de la BEGIN' "$TMP/fara.log" || fail 'fara: runnerul anunta un plafon necerut'
-echo 'PLAFON_FARA: fara optiune => transaction_timeout 0/default (ca inainte); APLICAT (0)'
-echo "PASS LIVRARE_PLAFON runda 10 PG17 (postgres NOSUPERUSER): plafonul din conexiune, de la BEGIN, verificat in prolog; copie/log: $TMP"
+! grep -q 'plafon ~' "$TMP/fara.log" || fail 'fara: runnerul anunta un plafon necerut'
+grep -q 'psql --single-transaction \[prolog' "$TMP/fara.log" || { cat "$TMP/fara.log"; fail 'fara: forma veche a livrarii'; }
+echo 'PLAFON_FARA: fara optiune => psql --single-transaction, transaction_timeout 0/default (ca inainte); APLICAT (0)'
+echo "PASS LIVRARE_PLAFON runda 11 PG17 (postgres NOSUPERUSER): plafonul = SET de sesiune inainte de BEGIN, verificat in prolog (pg_catalog, marcaj) si in garda finala; validatorul refuza artefactele care ating ceasul; copie/log: $TMP"
