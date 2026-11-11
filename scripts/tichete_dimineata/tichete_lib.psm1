@@ -28,12 +28,14 @@ $script:MarcajeRezultat = @($script:Reguli.marcaje_rezultat)
 $script:RegiuniInterzise = @($script:Reguli.regiuni_interzise)
 $script:PrefixBranch  = [string]$script:Reguli.prefix_branch
 $script:GhPermise     = @($script:Reguli.gh_permise)
+$script:GhApiCitiri   = @($script:Reguli.gh_api_citiri)
 $script:GitPermise    = @($script:Reguli.git_permise)
-$script:Profil        = $script:Reguli.profil_tichete
+$script:Agent         = $script:Reguli.agent_tichete
 # stările finale ale unui tichet într-o rulare care NU fac rularea PARTIAL
 $script:StariOk       = @('PR_DRAFT', 'DECIZIE')
-# rezultatele cunoscute ale agentului (consumă o încercare)
-$script:StariConsuma  = @('PR_DRAFT', 'PR_FARA_REVIEW', 'DECIZIE', 'ESUAT')
+# rezultatele cunoscute ale agentului (consumă o încercare; același PR o singură dată)
+$script:StariConsuma  = @('PR_DRAFT', 'PR_FARA_REVIEW', 'PR_CI_NECITIT', 'DECIZIE', 'ESUAT')
+$script:VerdicteSalvabile = @('GO', 'GO_CU_CONDITII', 'NO_GO')
 # caractere de control (fără \n, \t) + bidi U+202A–U+202E, U+2066–U+2069 (construite din cod: editoarele le pot strica)
 $script:ReControl     = '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F' + [char]0x202A + '-' + [char]0x202E + [char]0x2066 + '-' + [char]0x2069 + ']'
 
@@ -161,8 +163,8 @@ function Get-StarePaw {
 }
 
 function Test-LansatorOcupat {
-  # rdr.ps1 / rvw.ps1 cu toate locurile ocupate: exit 3 și ultima linie din stdout „RDR_OCUPAT: …” / „RVW_OCUPAT: …”.
-  param([int]$Exit, [AllowNull()][string]$UltimaLinie, [ValidateSet('RDR', 'RVW')][string]$Cine)
+  # lanseaza_agent.ps1 / rvw.ps1 cu toate locurile ocupate: exit 3 și ultima linie din stdout „AGT_OCUPAT: …” / „RVW_OCUPAT: …”.
+  param([int]$Exit, [AllowNull()][string]$UltimaLinie, [ValidateSet('AGT', 'RVW')][string]$Cine)
   if ($Exit -ne 3 -or $null -eq $UltimaLinie) { return $false }
   return $UltimaLinie.Trim() -cmatch ('\A' + $Cine + '_OCUPAT:')
 }
@@ -222,8 +224,9 @@ function Sort-TicheteCoada {
 
 function Select-TicheteDeLucru {
   # Coada zilei (J9 / F8): filtrele „deja procesat” se aplică ÎNAINTE de plafon, pe toată lista ordonată.
-  # $Stare = @{ '<numar>' = @{ incercari; ultima_data; ultimul_rezultat; clasa; asteapta_decizie; motiv; pr; branch; review_complet } }.
-  # Întoarce @{ deLucru = @(@{ tichet; mod = 'nou'|'reluare_pr'|'review'; incercare; branch }); sarite = @(@{ numar; motiv }) }.
+  # $Stare = @{ '<numar>' = @{ incercari; ultima_data; ultimul_rezultat; clasa; asteapta_decizie; motiv; pr; branch; review_complet;
+  #                            pas_lipsa; verdicte } }.
+  # Întoarce @{ deLucru = @(@{ tichet; mod = 'nou'|'reluare_pr'|'review'|'ci'; incercare; branch; verdicte }); sarite = @(@{ numar; motiv }) }.
   param(
     [object[]]$Tichete = @(),
     [hashtable]$Stare = @{},
@@ -249,12 +252,17 @@ function Select-TicheteDeLucru {
     if ((Get-Camp $e 'asteapta_decizie') -eq $true) {
       [void]$sarite.Add(@{ numar = $nr; motiv = 'asteapta decizie (clasa ' + (Get-TextSigurLinie (Get-Camp $e 'clasa') 3) + '): ' + (Get-TextSigurLinie (Get-Camp $e 'motiv') 160) }); continue
     }
-    $mod = 'nou'; $br = $null; $n = $inc + 1
+    $mod = 'nou'; $br = $null; $n = $inc + 1; $ver = $null
     if ($pr -gt 0 -and (Get-Camp $e 'review_complet') -eq $true) { [void]$sarite.Add(@{ numar = $nr; motiv = 'are deja PR draft #' + $pr + ' (raportat)' }); continue }
     if ($pr -gt 0) {
       $br = [string](Get-Camp $e 'branch')
       if (-not (Test-BranchPropriu $nr $br)) { [void]$sarite.Add(@{ numar = $nr; motiv = 'stare locala nevalida (branch)' }); continue }
       $mod = 'review'; $n = $inc
+      # J7 (r4): review-ul e citit, lipsesc doar verificările CI => se reia DOAR pasul CI (verdictele salvate, același commit)
+      if ([string](Get-Camp $e 'pas_lipsa') -ceq 'ci') {
+        $ver = Get-VerdicteSalvate (Get-Camp $e 'verdicte')
+        if ($null -ne $ver) { $mod = 'ci' }
+      }
     } else {
       if ($inc -ge $MaxIncercari) { [void]$sarite.Add(@{ numar = $nr; motiv = 'a atins numarul maxim de incercari (' + $MaxIncercari + ')' }); continue }
       if ($Azi -and [string](Get-Camp $e 'ultima_data') -ceq $Azi -and [string](Get-Camp $e 'ultimul_rezultat') -ceq 'ESUAT') {
@@ -268,7 +276,7 @@ function Select-TicheteDeLucru {
       }
     }
     if ($deLucru.Count -ge $Max) { [void]$sarite.Add(@{ numar = $nr; motiv = 'peste plafonul zilei (' + $Max + ')' }); continue }
-    [void]$deLucru.Add(@{ tichet = $t; mod = $mod; incercare = $n; branch = $br })
+    [void]$deLucru.Add(@{ tichet = $t; mod = $mod; incercare = $n; branch = $br; verdicte = $ver })
   }
   return @{ deLucru = @($deLucru); sarite = @($sarite) }
 }
@@ -692,13 +700,19 @@ function Get-RezumatVerdict {
 # ── Gărzi pe comenzile orchestratorului (J1, defense in depth) ─────────────────────────────────────────────
 
 function Test-ComandaGhPermisa {
-  # Orchestratorul folosește doar citiri gh: auth status, api user (exact „api user --jq .login”), pr list / view / checks.
-  # Fără merge / ready / api de scriere / workflow / release / secret.
+  # Orchestratorul folosește doar citiri gh: auth status, pr list / view / checks și câteva citiri `gh api` EXACTE
+  # (reguli.json → gh_api_citiri: identitatea, drepturile pe repo, regulile unui branch, ocolirea unui ruleset; fără
+  # -X / --method / -f / --input). Fără merge / ready / api de scriere / workflow / release / secret.
   param([string[]]$Argv = @())
   $a = @($Argv)
   if ($a.Count -lt 2) { return $false }
+  if ($a[0] -ceq 'api') {
+    foreach ($x in $a) { if ([string]::IsNullOrEmpty($x) -or $x -cmatch '[\s\x00-\x1F]') { return $false } }
+    $j = $a -join ' '
+    foreach ($re in $script:GhApiCitiri) { if ($j -cmatch $re) { return $true } }
+    return $false
+  }
   if ($script:GhPermise -cnotcontains ($a[0] + ' ' + $a[1])) { return $false }
-  if ($a[0] -ceq 'api') { return (($a -join ' ') -ceq 'api user --jq .login') }
   foreach ($x in $a) { if ($x -cmatch '\A(-X|--method|--input|--web)\b') { return $false } }
   return $true
 }
@@ -712,80 +726,293 @@ function Test-ComandaGitPermisa {
   return $true
 }
 
-# ── Profilul „tichete” al lansatorului rdr.ps1 (J1) ─────────────────────────────────────────────────────────
+# ── Lansatorul PROPRIU al agentului (J1, r4): lanseaza_agent.ps1 ────────────────────────────────────────────
+# Orchestratorul NU mai citește și NU mai depinde de rdr.ps1. Linia de comandă a agentului se construiește AICI, doar din
+# reguli.json (agent_tichete) + branch-ul exact + efortul; tot ce nu e în lista închisă e refuzat (--permission-mode dontAsk).
 
-function Get-ListaPs {
-  # Lista PowerShell „$Nume = @('a', 'b', …)” dintr-un text (doar șiruri între apostrofuri, separate de virgule / spații /
-  # linii noi / backtick, comentarii „#” până la final de linie). Altă formă (variabile, ghilimele, '' în șir) => $null.
-  param([AllowNull()][string]$Text, [string]$Nume)
-  if ([string]::IsNullOrEmpty($Text) -or $Nume -cnotmatch '\A[A-Za-z_][A-Za-z0-9_]*\z') { return $null }
-  $re = '\$' + $Nume + '(?![A-Za-z0-9_])[ \t]*=[ \t]*@\('
-  $ms = [regex]::Matches($Text, $re)
-  if ($ms.Count -ne 1) { return $null }
-  $i = $ms[0].Index + $ms[0].Length
-  $lista = New-Object System.Collections.ArrayList
-  while ($i -lt $Text.Length) {
-    $c = $Text[$i]
-    if ($c -eq ')') { return @{ v = @($lista) } }
-    if (" `t`r`n,``".Contains([string]$c)) { $i++; continue }
-    if ($c -eq '#') { while ($i -lt $Text.Length -and $Text[$i] -ne "`n") { $i++ }; continue }
-    if ($c -eq "'") {
-      $j = $Text.IndexOf("'", $i + 1)
-      if ($j -lt 0) { return $null }
-      if ($j + 1 -lt $Text.Length -and $Text[$j + 1] -eq "'") { return $null }
-      [void]$lista.Add($Text.Substring($i + 1, $j - $i - 1)); $i = $j + 1; continue
-    }
-    return $null
-  }
-  return $null
+function Join-ArgvWindows {
+  # Citare pentru CommandLineToArgvW / CRT: ghilimele doar unde e nevoie (spații / ghilimele), backslash-urile dinaintea
+  # unei ghilimele și cele de la final dublate. Folosit pentru TOATE procesele pornite de orchestrator / lansator.
+  param([string[]]$Argv = @())
+  $q = @(foreach ($a in @($Argv)) {
+    $s = [string]$a
+    if ($s -eq '') { '""' }
+    elseif ($s -notmatch '[\s"]') { $s }
+    else { '"' + ($s -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }
+  })
+  return ($q -join ' ')
 }
 
-function Test-LansatorProfilTichete {
-  # Garda de la start (fail-closed): rdr.ps1 are -Profil cu 'tichete' în ValidateSet și blocul PROFIL_TICHETE cu
-  # $TichetePermise (fără forme largi și fără refuzuri), $TicheteRefuzate (toate refuzurile obligatorii) și
-  # $TicheteAdaugaDir = @() (gol). Întoarce @{ ok = bool; motive = @() }. Nu e un sandbox: e o verificare a contractului.
-  param([AllowNull()][string]$Text)
+function Get-CaiAgent {
+  # Căile FIXE ale configurării agentului, în afara repo-ului: <profilul contului>\.tichete-agent\ (README, „Bariera”).
+  param([string]$Profil)
+  if ([string]::IsNullOrEmpty($Profil)) { throw 'profil gol' }
+  $d = Join-Path $Profil ([string]$script:Agent.dir_config)
+  return @{ dir = $d; config = (Join-Path $d 'agent.json'); token = (Join-Path $d 'token_agent.txt')
+            gitconfig = (Join-Path $d 'gitconfig'); gh = (Join-Path $d 'gh') }
+}
+
+function Split-ComandaPermisiune {
+  # 'Bash(git add *)' -> @{ fix = @('git', 'add'); wild = $true }. Doar comenzi literale: cuvinte din [A-Za-z0-9._/=-]
+  # (':' doar cu -PermiteDouaPuncte, pentru refuzuri ca HEAD:main), '*' doar ca ULTIM cuvânt separat. Altceva => $null.
+  param([AllowNull()][string]$Intrare, [switch]$PermiteDouaPuncte)
+  if ([string]::IsNullOrEmpty($Intrare)) { return $null }
+  $m = [regex]::Match($Intrare, '\ABash\((.+)\)\z')
+  if (-not $m.Success) { return $null }
+  $cuv = if ($PermiteDouaPuncte) { '[A-Za-z0-9._/=:-]+' } else { '[A-Za-z0-9._/=-]+' }
+  $cmd = $m.Groups[1].Value
+  if ($cmd -cnotmatch ('\A' + $cuv + '(?: ' + $cuv + ')*(?: \*)?\z')) { return $null }
+  $tok = @($cmd -split ' ')
+  $wild = ($tok[$tok.Count - 1] -ceq '*')
+  $fix = @(if ($wild) { $tok[0..($tok.Count - 2)] } else { $tok })
+  return @{ fix = $fix; wild = $wild }
+}
+
+function Test-PrefixCuvinte {
+  # True dacă $P e prefix (pe cuvinte, fără deosebire de majuscule) al lui $T.
+  param([string[]]$P = @(), [string[]]$T = @())
+  if (@($P).Count -gt @($T).Count) { return $false }
+  for ($i = 0; $i -lt @($P).Count; $i++) { if ($P[$i] -ine $T[$i]) { return $false } }
+  return $true
+}
+
+function Test-ListaAgent {
+  # Lista ÎNCHISĂ a agentului (după înlocuirea __BRANCH__). Întoarce @{ ok; motive }. O intrare e permisă DOAR dacă:
+  #  - e o unealtă fără shell din unelte_fara_shell (Read / Glob / Grep / Edit / Write — ținute în worktree de --restricted), sau
+  #  - e Bash(<comandă literală>): programul din programe_shell (git / gh / npx), minimum 2 cuvinte fixe, '*' doar ca ultim
+  #    cuvânt, fără ':' / ghilimele / metacaractere, și nu poate acoperi niciun refuz (prefix pe cuvinte, în ambele sensuri).
+  # forme_largi sunt refuzate explicit (și testate negativ, inclusiv cu lista explicită golită).
+  param([string[]]$Permise = @(), [AllowNull()][object]$Config = $script:Agent)
   $mot = New-Object System.Collections.ArrayList
-  if ([string]::IsNullOrEmpty($Text)) { return @{ ok = $false; motive = @('lansatorul lipseste sau e gol') } }
-  $t = $Text -replace "`r`n", "`n"
-  $vs = [regex]::Match($t, '\[ValidateSet\(([^)]*)\)\][ \t]*\[string\][ \t]*\$Profil(?![A-Za-z0-9_])')
-  if (-not $vs.Success -or -not ($vs.Groups[1].Value -cmatch "'tichete'")) { [void]$mot.Add('lipseste parametrul -Profil cu valoarea tichete') }
-  $p = $script:Profil
-  $i0 = $t.IndexOf([string]$p.marcaj_start, [StringComparison]::Ordinal)
-  $i1 = $t.IndexOf([string]$p.marcaj_sfarsit, [StringComparison]::Ordinal)
-  $n0 = ([regex]::Matches($t, [regex]::Escape([string]$p.marcaj_start))).Count
-  $n1 = ([regex]::Matches($t, [regex]::Escape([string]$p.marcaj_sfarsit))).Count
-  if ($i0 -lt 0 -or $i1 -le $i0 -or $n0 -ne 1 -or $n1 -ne 1) { [void]$mot.Add('lipseste blocul PROFIL_TICHETE (o singura data, inceput inainte de sfarsit)'); return @{ ok = $false; motive = @($mot) } }
-  $bloc = $t.Substring($i0, $i1 - $i0)
-  foreach ($z in @($p.interzise_in_bloc)) { if ($bloc.IndexOf([string]$z, [StringComparison]::OrdinalIgnoreCase) -ge 0) { [void]$mot.Add('blocul contine ' + $z) } }
-  $perm = Get-ListaPs $bloc 'TichetePermise'
-  $refz = Get-ListaPs $bloc 'TicheteRefuzate'
-  $dirs = Get-ListaPs $bloc 'TicheteAdaugaDir'
-  if ($null -eq $perm) { [void]$mot.Add('$TichetePermise lipseste sau nu e o lista simpla') }
-  if ($null -eq $refz) { [void]$mot.Add('$TicheteRefuzate lipseste sau nu e o lista simpla') }
-  if ($null -eq $dirs) { [void]$mot.Add('$TicheteAdaugaDir lipseste sau nu e o lista simpla') }
-  elseif (@($dirs.v).Count -ne 0) { [void]$mot.Add('$TicheteAdaugaDir trebuie sa fie gol') }
+  $lista = @($Permise)
+  if ($lista.Count -eq 0) { return @{ ok = $false; motive = @('lista de unelte e goala') } }
+  $fara = @($Config.unelte_fara_shell | ForEach-Object { [string]$_ })
+  $prog = @($Config.programe_shell | ForEach-Object { [string]$_ })
+  foreach ($u in @($Config.unelte)) { if (@($fara + @('Bash')) -cnotcontains [string]$u) { [void]$mot.Add('unealta necunoscuta in --tools: ' + $u) } }
   $norm = { param($s) (([string]$s) -replace '\s+', ' ').Trim().ToLowerInvariant() }
-  if ($null -ne $refz) {
-    $rz = @($refz.v)
-    foreach ($o in @($p.refuzuri_obligatorii)) { if ($rz -cnotcontains [string]$o) { [void]$mot.Add('refuz lipsa: ' + $o) } }
+  $largi = @(@($Config.forme_largi) | ForEach-Object { & $norm $_ })
+  $refz = @(@($Config.refuzuri) | ForEach-Object { Split-ComandaPermisiune ([string]$_) -PermiteDouaPuncte } | Where-Object { $null -ne $_ })
+  $vazute = @{}
+  foreach ($x in $lista) {
+    $s = [string]$x
+    if ($vazute.ContainsKey($s)) { [void]$mot.Add('intrare dublata: ' + $s); continue }
+    $vazute[$s] = $true
+    if ($largi -ccontains (& $norm $s)) { [void]$mot.Add('forma larga: ' + $s); continue }
+    if ($fara -ccontains $s) { continue }
+    $c = Split-ComandaPermisiune $s
+    if ($null -eq $c) { [void]$mot.Add('forma nepermisa (unealta necunoscuta sau comanda ne-literala): ' + $s); continue }
+    if ($prog -cnotcontains [string]$c.fix[0]) { [void]$mot.Add('program nepermis: ' + $s); continue }
+    if (@($c.fix).Count -lt 2) { [void]$mot.Add('prea larga (minimum 2 cuvinte fixe): ' + $s); continue }
+    foreach ($r in $refz) {
+      $egal = (@($c.fix).Count -eq @($r.fix).Count)
+      if (((Test-PrefixCuvinte $c.fix $r.fix) -and ($c.wild -or $egal)) -or ((Test-PrefixCuvinte $r.fix $c.fix) -and ($r.wild -or $egal))) {
+        [void]$mot.Add('poate acoperi un refuz (' + (@($r.fix) -join ' ') + '): ' + $s); break
+      }
+    }
   }
-  if ($null -ne $perm) {
-    $rau = @(@($p.forme_largi) + @($p.refuzuri_obligatorii) | ForEach-Object { & $norm $_ })
-    foreach ($x in @($perm.v)) { if ($rau -ccontains (& $norm $x)) { [void]$mot.Add('permisiune prea larga / refuzata: ' + $x) } }
+  return @{ ok = ($mot.Count -eq 0); motive = @($mot) }
+}
+
+function Get-ArgvAgent {
+  # Linia de comandă COMPLETĂ a agentului (promptul vine pe stdin, nu în argumente). Construită DOAR din reguli.json
+  # (agent_tichete) + branch-ul exact (validat) + efortul; aruncă dacă lista nu trece Test-ListaAgent.
+  #   --restricted: ignoră setările din cont / proiect / local (repo-ul are .claude/settings.json cu permisiuni largi),
+  #                 ține uneltele de fișiere în worktree, refuză bypassPermissions
+  #   --permission-mode dontAsk + --permission-prompts none: tot ce nu e în --allowedTools e refuzat automat
+  #   --strict-mcp-config (fără MCP), --disable-slash-commands, --no-session-persistence; fără --add-dir / --settings.
+  param([string]$Numar, [string]$Branch, [string]$Effort, [AllowNull()][object]$Config = $script:Agent)
+  if (-not (Test-BranchPropriu $Numar $Branch)) { throw 'branch invalid' }
+  if (@($Config.efort_permis) -cnotcontains $Effort) { throw 'effort nepermis' }
+  if ([string]$Config.model -cnotmatch '\Aclaude-[a-z0-9-]{1,60}\z') { throw 'model invalid' }
+  $mt = [int]$Config.max_turns
+  if ($mt -lt 1 -or $mt -gt 500) { throw 'max_turns invalid' }
+  $perm = @(@($Config.permise) | ForEach-Object { ([string]$_).Replace('__BRANCH__', $Branch) })
+  $t = Test-ListaAgent -Permise $perm -Config $Config
+  if (-not $t.ok) { throw ('lista de unelte a agentului nu e inchisa: ' + ((@($t.motive) | Select-Object -First 3) -join '; ')) }
+  $refz = @(@($Config.refuzuri) | ForEach-Object { [string]$_ })
+  if ($refz.Count -eq 0) { throw 'lista de refuzuri e goala' }
+  $argv = @('-p', '--restricted', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence',
+    '--permission-mode', 'dontAsk', '--permission-prompts', 'none', '--model', [string]$Config.model, '--effort', $Effort,
+    '--max-turns', [string]$mt, '--output-format', 'json', '--tools', (@($Config.unelte) -join ','), '--allowedTools') + $perm + @('--disallowedTools') + $refz
+  foreach ($a in $argv) { if (@($Config.steaguri_interzise) -ccontains $a) { throw ('steag interzis in linia de comanda: ' + $a) } }
+  return $argv
+}
+
+function Test-FormaTokenAgent {
+  # Token GitHub al contului AGENTULUI: fine-grained (github_pat_…, de preferat) sau clasic (ghp_…, doar scope public_repo, pe
+  # contul dedicat — README). Drepturile reale le verifică bariera (rolul contului pe repo), nu forma tokenului.
+  param([AllowNull()][string]$Token)
+  if ([string]::IsNullOrEmpty($Token)) { return $false }
+  return $Token -cmatch '\A(?:github_pat_[A-Za-z0-9_]{22,255}|ghp_[A-Za-z0-9]{36,255})\z'
+}
+
+function Get-MediuAgent {
+  # Mediul procesului agentului, pe LISTĂ ALBĂ (mediu_pastrat) + valorile fixe de mai jos. NU trec: PGPASSWORD / PG*,
+  # SUPABASE_*, GITHUB_TOKEN, GH_TOKEN-ul serverului, ANTHROPIC_*, CLAUDE_CODE_*, GIT_ASKPASS, GIT_CONFIG_*, chei de mail etc.
+  # git: fără config de sistem (acolo stă helper-ul comun de credențiale), config global = gitconfig-ul agentului;
+  # gh: tokenul agentului + director de config propriu; Postgres: PGPASSFILE / PGSERVICEFILE = NUL; fără MCP claude.ai.
+  param([hashtable]$Baza = @{}, [AllowNull()][string]$Token, [hashtable]$Cai, [string]$ConfigClaude)
+  if (-not (Test-FormaTokenAgent $Token)) { throw 'token agent invalid' }
+  if ([string]::IsNullOrEmpty($ConfigClaude) -or $null -eq $Cai) { throw 'cai lipsa' }
+  $r = @{}
+  $past = @($script:Agent.mediu_pastrat | ForEach-Object { [string]$_ })
+  foreach ($k in @($Baza.Keys)) { foreach ($p in $past) { if ([string]$k -ieq $p) { $r[$p] = [string]$Baza[$k] } } }
+  $fix = [ordered]@{
+    CLAUDE_CONFIG_DIR = $ConfigClaude; GH_TOKEN = $Token; GH_CONFIG_DIR = [string]$Cai.gh; GH_PROMPT_DISABLED = '1'; GH_NO_UPDATE_NOTIFIER = '1'
+    GIT_CONFIG_NOSYSTEM = '1'; GIT_CONFIG_GLOBAL = [string]$Cai.gitconfig; GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
+    PGPASSFILE = 'NUL'; PGSERVICEFILE = 'NUL'; ENABLE_CLAUDEAI_MCP_SERVERS = 'false'; DISABLE_AUTOUPDATER = '1'; NO_COLOR = '1'
+  }
+  foreach ($k in $fix.Keys) { $r[$k] = $fix[$k] }
+  return $r
+}
+
+function Test-ConfigAgent {
+  # agent.json (în afara repo-ului): { versiune: 1, repo: "<owner>/<nume>", login_agent: "<login GitHub>",
+  # [email_commit], [clona_baza], [radacina_worktree], [_nota] }. Strict: chei necunoscute / forme greșite => refuz.
+  # Întoarce @{ ok; motive; cfg = @{ repo; login_agent; email_commit; clona_baza; radacina_worktree } }.
+  param([AllowNull()][string]$Text)
+  $rez = @{ ok = $false; motive = @(); cfg = $null }
+  if ([string]::IsNullOrEmpty($Text) -or -not $Text.Trim()) { $rez.motive = @('agent.json lipseste sau e gol'); return $rez }
+  try { $o = ConvertFrom-Json -InputObject ($Text.TrimStart([char]0xFEFF)) } catch { $rez.motive = @('agent.json nu e JSON valid'); return $rez }
+  if (-not ($o -is [System.Management.Automation.PSCustomObject])) { $rez.motive = @('agent.json nu e un obiect'); return $rez }
+  $mot = New-Object System.Collections.ArrayList
+  $chei = @('versiune', 'repo', 'login_agent', 'email_commit', 'clona_baza', 'radacina_worktree', '_nota')
+  foreach ($p in $o.PSObject.Properties) { if ($chei -cnotcontains $p.Name) { [void]$mot.Add('cheie necunoscuta: ' + (Get-TextSigurLinie $p.Name 40)) } }
+  $v = Get-Camp $o 'versiune'
+  if (-not ($v -is [int] -or $v -is [long]) -or $v -ne 1) { [void]$mot.Add('versiune trebuie sa fie 1') }
+  $repo = [string](Get-Camp $o 'repo')
+  if ($repo -cnotmatch '\A[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}\z') { [void]$mot.Add('repo invalid (owner/nume)') }
+  $login = [string](Get-Camp $o 'login_agent')
+  if ($login -cnotmatch '\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\z') { [void]$mot.Add('login_agent invalid') }
+  $email = Get-Camp $o 'email_commit'
+  if ($null -eq $email) { $email = $login + '@users.noreply.github.com' }
+  elseif ([string]$email -cnotmatch '\A[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}\z') { [void]$mot.Add('email_commit invalid') }
+  $c = @{}
+  foreach ($k in @('clona_baza', 'radacina_worktree')) {
+    $x = Get-Camp $o $k
+    if ($null -eq $x) { $c[$k] = '' }
+    elseif ([string]$x -cnotmatch '\A[A-Za-z]:\\[A-Za-z0-9_\\.-]+\z' -or ([string]$x).Contains('..')) { [void]$mot.Add($k + ' invalid (cale simpla, fara spatii)'); $c[$k] = '' }
+    else { $c[$k] = [string]$x }
+  }
+  $rez.motive = @($mot)
+  if ($mot.Count -eq 0) { $rez.ok = $true; $rez.cfg = @{ repo = $repo; login_agent = $login; email_commit = [string]$email; clona_baza = $c.clona_baza; radacina_worktree = $c.radacina_worktree } }
+  return $rez
+}
+
+function Get-TextGitconfigAgent {
+  # gitconfig-ul agentului (GIT_CONFIG_GLOBAL), rescris la fiecare pornire: identitatea commit-urilor + DOAR helper-ul gh,
+  # care folosește GH_TOKEN-ul agentului (helper-ul gol de pe primul rând golește lista moștenită).
+  param([hashtable]$Cfg)
+  if ($null -eq $Cfg -or [string]$Cfg.login_agent -cnotmatch '\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\z' -or [string]$Cfg.email_commit -cnotmatch '\A[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}\z') { throw 'config agent invalid' }
+  return ("# generat de lanseaza_agent.ps1 la fiecare pornire - nu se editeaza`n[user]`n`tname = " + $Cfg.login_agent + "`n`temail = " + $Cfg.email_commit +
+          "`n[credential]`n`thelper =`n`thelper = !gh auth git-credential`n")
+}
+
+function Test-ConfigGitAgent {
+  # `git config --show-origin -z --list` din worktree-ul agentului, rulat cu mediul agentului. Format: <origine>\0<cheie>\n<valoare>\0
+  # (sau <origine>\0<cheie>\0 fără valoare). Refuz: credential.* din altă sursă decât gitconfig-ul agentului; include / includeIf;
+  # http.*.extraheader / cookiefile; url.*.insteadOf / pushInsteadOf; core.askpass / core.sshcommand; remote.origin.pushurl;
+  # origine „command line:”; remote.origin.url diferit de https://github.com/<repo>(.git); gitconfig-ul agentului neîncărcat.
+  param([AllowNull()][string]$Iesire, [string]$FisierAgent, [string]$Repo)
+  if ([string]::IsNullOrEmpty($Iesire)) { return @{ ok = $false; motive = @('git config: iesire goala') } }
+  $t = @($Iesire.Split([char]0))
+  if ($t[$t.Count - 1] -ne '' -or ($t.Count - 1) % 2 -ne 0) { return @{ ok = $false; motive = @('git config: format neasteptat') } }
+  $mot = New-Object System.Collections.ArrayList
+  $fa = 'file:' + ($FisierAgent -replace '\\', '/')
+  $urls = New-Object System.Collections.ArrayList
+  $agentVazut = $false
+  for ($i = 0; $i -lt $t.Count - 1; $i += 2) {
+    $orig = $t[$i] -replace '\\', '/'
+    $kv = $t[$i + 1]
+    $j = $kv.IndexOf("`n")
+    $k = $(if ($j -lt 0) { $kv } else { $kv.Substring(0, $j) }).ToLowerInvariant()
+    $val = if ($j -lt 0) { '' } else { $kv.Substring($j + 1) }
+    $dinAgent = ($orig -ieq $fa)
+    if ($dinAgent) { $agentVazut = $true }
+    $ce = Get-TextSigurLinie $k 80
+    if ($orig.StartsWith('command line:', [StringComparison]::Ordinal)) { [void]$mot.Add('config git din linia de comanda / mediu: ' + $ce) }
+    if ($k.StartsWith('credential.', [StringComparison]::Ordinal) -and -not $dinAgent) { [void]$mot.Add('credential din alta sursa decat gitconfig-ul agentului: ' + $ce) }
+    if ($k -ceq 'include.path' -or $k.StartsWith('includeif.', [StringComparison]::Ordinal)) { [void]$mot.Add('include in config git: ' + $ce) }
+    if ($k -cmatch '\Ahttp\..*(extraheader|cookiefile)\z' -or $k -cmatch '\Aurl\..*\.(insteadof|pushinsteadof)\z' -or $k -ceq 'core.askpass' -or $k -ceq 'core.sshcommand' -or $k -ceq 'remote.origin.pushurl') {
+      [void]$mot.Add('cheie git nepermisa: ' + $ce)
+    }
+    if ($k -ceq 'remote.origin.url') { [void]$urls.Add($val) }
+  }
+  if (-not $agentVazut) { [void]$mot.Add('gitconfig-ul agentului nu e incarcat') }
+  if ($urls.Count -ne 1 -or ([string]$urls[0] -ine ('https://github.com/' + $Repo + '.git') -and [string]$urls[0] -ine ('https://github.com/' + $Repo))) {
+    [void]$mot.Add('remote.origin.url neasteptat (trebuie https://github.com/' + $Repo + ')')
+  }
+  return @{ ok = ($mot.Count -eq 0); motive = @($mot) }
+}
+
+function Get-RepoDinUrl {
+  # https://github.com/<owner>/<nume>(.git) -> '<owner>/<nume>'; altceva => ''.
+  param([AllowNull()][string]$Url)
+  $m = [regex]::Match(([string]$Url).Trim(), '\Ahttps://github\.com/([A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}?)(?:\.git)?/?\z')
+  if ($m.Success) { return $m.Groups[1].Value }
+  return ''
+}
+
+function Test-BarieraGitHub {
+  # Condiția de INSTALARE și de PORNIRE (P1 r3): identitatea cu care rulează agentul (tokenul lui) e alt cont decât al serverului,
+  # poate împinge branch-uri dar NU are admin / maintain, main cere PR (≥ 1 aprobare, aprobările vechi anulate la push nou)
+  # dintr-un ruleset pe care agentul NU îl poate ocoli, iar în afara tichete/* creările / actualizările / ștergerile sunt
+  # restricționate (tot fără ocolire). Pe tichete/* agentul trebuie să poată crea / actualiza. Intrările = răspunsurile
+  # `gh api` (citiri, tokenul agentului); $Ocolire = @{ '<ruleset_id>' = current_user_can_bypass }. Lipsă = refuz.
+  param([AllowNull()][string]$LoginServer, [AllowNull()][string]$LoginAgentConfig, [AllowNull()][string]$LoginAgent,
+        [AllowNull()][object]$Permisiuni, [object[]]$ReguliMain = @(), [object[]]$ReguliAlta = @(), [object[]]$ReguliTichete = @(),
+        [hashtable]$Ocolire = @{})
+  $mot = New-Object System.Collections.ArrayList
+  if ([string]::IsNullOrEmpty($LoginAgent) -or $LoginAgent -cne $LoginAgentConfig) { [void]$mot.Add('tokenul agentului nu e al contului din agent.json') }
+  if ([string]::IsNullOrEmpty($LoginServer) -or $LoginAgent -ieq $LoginServer) { [void]$mot.Add('agentul are aceeasi identitate GitHub ca serverul (coordonatorul)') }
+  if ((Get-Camp $Permisiuni 'push') -ne $true) { [void]$mot.Add('agentul nu poate impinge branch-uri (push)') }
+  if ((Get-Camp $Permisiuni 'admin') -ne $false) { [void]$mot.Add('agentul are (sau nu se stie daca are) drept de administrare pe repo') }
+  if ((Get-Camp $Permisiuni 'maintain') -ne $false) { [void]$mot.Add('agentul are (sau nu se stie daca are) drept maintain pe repo') }
+  $faraOcolire = { param($r) $id = [string](Get-Camp $r 'ruleset_id'); ($id -cmatch '\A[0-9]{1,12}\z' -and $Ocolire.ContainsKey($id) -and [string]$Ocolire[$id] -ceq 'never') }
+  $deTip = { param($lista, $tip) @(@($lista) | Where-Object { $null -ne $_ -and [string](Get-Camp $_ 'type') -ceq $tip -and (& $faraOcolire $_) }) }
+  $pr = @(& $deTip $ReguliMain 'pull_request' | Where-Object {
+    $p = Get-Camp $_ 'parameters'; $n = Get-Camp $p 'required_approving_review_count'
+    ($n -is [int] -or $n -is [long]) -and $n -ge 1 -and (Get-Camp $p 'dismiss_stale_reviews_on_push') -eq $true
+  })
+  if ($pr.Count -eq 0) { [void]$mot.Add('main nu are o regula de PR (minimum 1 aprobare, aprobarile vechi anulate la push nou) pe care agentul sa n-o poata ocoli') }
+  foreach ($tip in @('creation', 'update', 'deletion')) {
+    if (@(& $deTip $ReguliAlta $tip).Count -eq 0) { [void]$mot.Add('in afara tichete/* agentul nu are restrictia ' + $tip + ' (fara ocolire)') }
+  }
+  foreach ($tip in @('creation', 'update')) {
+    if (@(& $deTip $ReguliTichete $tip).Count -gt 0) { [void]$mot.Add('agentul nu poate face ' + $tip + ' pe tichete/* (restrictia se aplica si acolo)') }
   }
   return @{ ok = ($mot.Count -eq 0); motive = @($mot) }
 }
 
 # ── Starea tichetelor și a rulării (J7) ─────────────────────────────────────────────────────────────────────
 
+function Get-VerdicteSalvate {
+  # Verdictele salvate în stare.json pentru reluarea DOAR a pasului CI (J7, r4): @{ jak; fable; sha } valide, altfel $null
+  # (=> la reluare se face review nou). Verdict citit = GO / GO_CU_CONDITII / NO_GO cu P0 / P1 întregi >= 0; sha = 40 hex.
+  param([AllowNull()][object]$V)
+  if ($null -eq $V) { return $null }
+  $sha = [string](Get-Camp $V 'sha')
+  if ($sha -cnotmatch '\A[0-9a-f]{40}\z') { return $null }
+  $r = @{ sha = $sha }
+  foreach ($k in @('jak', 'fable')) {
+    $x = Get-Camp $V $k
+    $v = [string](Get-Camp $x 'verdict')
+    $p0 = Get-Camp $x 'p0'; $p1 = Get-Camp $x 'p1'
+    if ($script:VerdicteSalvabile -cnotcontains $v) { return $null }
+    foreach ($p in @($p0, $p1)) { if (-not ($p -is [int] -or $p -is [long]) -or $p -lt 0) { return $null } }
+    $r[$k] = @{ verdict = $v; p0 = [int]$p0; p1 = [int]$p1 }
+  }
+  return $r
+}
+
 function Get-StareNoua {
-  # Intrarea din stare.json după rezultatul de azi. $Rezultat = @{ stare; clasa; detaliu; pr; branch }.
-  # stare: PR_DRAFT (PR + ambele review-uri citite) | PR_FARA_REVIEW | DECIZIE | ESUAT | BLOCAT | NECUNOSCUT | EROARE | OPRIT.
+  # Intrarea din stare.json după rezultatul de azi. $Rezultat = @{ stare; clasa; detaliu; pr; branch; [verdicte] }.
+  # stare: PR_DRAFT (PR + review-uri + CI citite) | PR_CI_NECITIT (review-uri citite, CI / starea PR-ului necitite: se reia DOAR
+  # pasul CI) | PR_FARA_REVIEW | DECIZIE | ESUAT | BLOCAT | NECUNOSCUT | EROARE | OPRIT.
   # Încercarea se consumă DOAR la un rezultat cunoscut al agentului (PR / DECIZIE / ESUAT) și o singură dată pentru același PR;
   # NECUNOSCUT / EROARE / OPRIT nu o consumă (se reia la următoarea rulare, inclusiv la reîncercările zilei).
   param([AllowNull()][System.Collections.IDictionary]$Vechi, [string]$Numar, [System.Collections.IDictionary]$Rezultat, [string]$Azi)
-  $e = [ordered]@{ numar = $Numar; incercari = 0; ultima_data = ''; ultimul_rezultat = ''; clasa = ''; asteapta_decizie = $false; motiv = ''; pr = 0; branch = ''; review_complet = $false; ultima_eroare = '' }
+  $e = [ordered]@{ numar = $Numar; incercari = 0; ultima_data = ''; ultimul_rezultat = ''; clasa = ''; asteapta_decizie = $false; motiv = ''; pr = 0; branch = ''; review_complet = $false; ultima_eroare = ''; pas_lipsa = ''; verdicte = $null }
   if ($null -ne $Vechi) { foreach ($k in @($e.Keys)) { if ($Vechi.Contains($k) -and $null -ne $Vechi[$k]) { $e[$k] = $Vechi[$k] } } }
   $e['incercari'] = [int]$e['incercari']; $e['pr'] = [int]$e['pr']
   $e['asteapta_decizie'] = ($e['asteapta_decizie'] -eq $true); $e['review_complet'] = ($e['review_complet'] -eq $true)
@@ -795,8 +1022,16 @@ function Get-StareNoua {
     $e['incercari'] = $e['incercari'] + 1; $e['ultima_data'] = $Azi; $e['ultimul_rezultat'] = $st
   }
   $det = [string](Get-Camp $Rezultat 'detaliu')
-  if ($st -ceq 'PR_DRAFT' -or $st -ceq 'PR_FARA_REVIEW') {
+  if ($st -ceq 'PR_DRAFT' -or $st -ceq 'PR_FARA_REVIEW' -or $st -ceq 'PR_CI_NECITIT') {
     $e['pr'] = $prNou; $e['branch'] = [string](Get-Camp $Rezultat 'branch'); $e['review_complet'] = ($st -ceq 'PR_DRAFT'); $e['clasa'] = 'L'
+    $e['pas_lipsa'] = ''; $e['verdicte'] = $null
+    if ($st -ceq 'PR_CI_NECITIT') {
+      # J7 (r4): review-ul e citit; DOAR verificările CI / starea PR-ului lipsesc => la reluare doar pasul CI, pe același commit.
+      # Verdicte nevalide => fără pas_lipsa (reluarea face review nou, fail-closed).
+      $v = Get-VerdicteSalvate (Get-Camp $Rezultat 'verdicte')
+      if ($null -ne $v) { $e['pas_lipsa'] = 'ci'; $e['verdicte'] = $v }
+      $e['ultima_eroare'] = $Azi + ' ' + $st + ' ' + $det
+    }
   } elseif ($st -ceq 'DECIZIE') { $e['asteapta_decizie'] = $true; $e['clasa'] = [string](Get-Camp $Rezultat 'clasa'); $e['motiv'] = $det }
   elseif ($st -ceq 'BLOCAT') { $e['asteapta_decizie'] = $true; $e['clasa'] = '!'; $e['motiv'] = $det }
   elseif ($st -ceq 'ESUAT') { $e['motiv'] = $det }
@@ -824,5 +1059,6 @@ Export-ModuleMember -Function Get-ReguliTichete, Get-Camp, Test-NumarTichet, Get
   Select-PrTichet, Get-CaiNameStatusZ, Get-LiniiNumstatZ, Get-CaleNormalizata, Get-CaiProtejateAtinse,
   Test-DiffAreSecurityDefiner, Get-CuvinteInterziseDiff, Test-DiffAreMarcajeRezultat, Get-RegiuneFunctie,
   Test-DiffAtingeRegiune, Get-RegiuniInterziseAtinse, Test-ReviewTrece, Test-ChecksVerzi, Get-StareChecks,
-  Get-RecomandareMerge, Get-RezumatVerdict, Test-ComandaGhPermisa, Test-ComandaGitPermisa, Get-ListaPs,
-  Test-LansatorProfilTichete, Get-StareNoua, Get-StareRulare
+  Get-RecomandareMerge, Get-RezumatVerdict, Test-ComandaGhPermisa, Test-ComandaGitPermisa, Join-ArgvWindows, Get-CaiAgent,
+  Split-ComandaPermisiune, Test-ListaAgent, Get-ArgvAgent, Test-FormaTokenAgent, Get-MediuAgent, Test-ConfigAgent,
+  Get-TextGitconfigAgent, Test-ConfigGitAgent, Get-RepoDinUrl, Test-BarieraGitHub, Get-VerdicteSalvate, Get-StareNoua, Get-StareRulare

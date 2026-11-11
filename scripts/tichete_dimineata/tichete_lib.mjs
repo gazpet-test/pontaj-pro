@@ -16,7 +16,9 @@ export const REGULI = JSON.parse(citeste('reguli.json'))
 const SABLON_BRIEF = citeste('sablon_brief.md')
 const SABLON_REVIEW = citeste('sablon_review.md')
 const STARI_OK = ['PR_DRAFT', 'DECIZIE']
-const STARI_CONSUMA = ['PR_DRAFT', 'PR_FARA_REVIEW', 'DECIZIE', 'ESUAT']
+const STARI_CONSUMA = ['PR_DRAFT', 'PR_FARA_REVIEW', 'PR_CI_NECITIT', 'DECIZIE', 'ESUAT']
+const VERDICTE_SALVABILE = ['GO', 'GO_CU_CONDITII', 'NO_GO']
+const AGENT = REGULI.agent_tichete
 const c = n => String.fromCharCode(n)
 const RE_CONTROL = new RegExp('[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F' + c(0x202A) + '-' + c(0x202E) + c(0x2066) + '-' + c(0x2069) + ']', 'g')
 
@@ -36,8 +38,12 @@ export const MAPARE_PS = {
   'Test-DiffAtingeRegiune': 'testDiffAtingeRegiune', 'Get-RegiuniInterziseAtinse': 'getRegiuniInterziseAtinse',
   'Test-ReviewTrece': 'testReviewTrece', 'Test-ChecksVerzi': 'testChecksVerzi', 'Get-StareChecks': 'getStareChecks',
   'Get-RecomandareMerge': 'getRecomandareMerge', 'Get-RezumatVerdict': 'getRezumatVerdict',
-  'Test-ComandaGhPermisa': 'testComandaGhPermisa', 'Test-ComandaGitPermisa': 'testComandaGitPermisa', 'Get-ListaPs': 'getListaPs',
-  'Test-LansatorProfilTichete': 'testLansatorProfilTichete', 'Get-StareNoua': 'getStareNoua', 'Get-StareRulare': 'getStareRulare',
+  'Test-ComandaGhPermisa': 'testComandaGhPermisa', 'Test-ComandaGitPermisa': 'testComandaGitPermisa',
+  'Join-ArgvWindows': 'joinArgvWindows', 'Get-CaiAgent': 'getCaiAgent', 'Split-ComandaPermisiune': 'splitComandaPermisiune',
+  'Test-ListaAgent': 'testListaAgent', 'Get-ArgvAgent': 'getArgvAgent', 'Test-FormaTokenAgent': 'testFormaTokenAgent',
+  'Get-MediuAgent': 'getMediuAgent', 'Test-ConfigAgent': 'testConfigAgent', 'Get-TextGitconfigAgent': 'getTextGitconfigAgent',
+  'Test-ConfigGitAgent': 'testConfigGitAgent', 'Get-RepoDinUrl': 'getRepoDinUrl', 'Test-BarieraGitHub': 'testBarieraGitHub',
+  'Get-VerdicteSalvate': 'getVerdicteSalvate', 'Get-StareNoua': 'getStareNoua', 'Get-StareRulare': 'getStareRulare',
 }
 
 const str = v => (v === null || v === undefined ? '' : String(v))
@@ -129,7 +135,7 @@ export function getStarePaw(ultimaLinie) {
 }
 
 export function testLansatorOcupat(exit, ultimaLinie, cine) {
-  if (!['RDR', 'RVW'].includes(cine)) throw new Error('cine invalid')
+  if (!['AGT', 'RVW'].includes(cine)) throw new Error('cine invalid')
   if (exit !== 3 || ultimaLinie === null || ultimaLinie === undefined) return false
   return new RegExp('^' + cine + '_OCUPAT:').test(String(ultimaLinie).trim())
 }
@@ -187,12 +193,13 @@ export function selectTicheteDeLucru({ tichete = [], stare = {}, titluriPr = [],
     if (getCamp(e, 'asteapta_decizie') === true) {
       sarite.push({ numar: nr, motiv: 'asteapta decizie (clasa ' + getTextSigurLinie(getCamp(e, 'clasa'), 3) + '): ' + getTextSigurLinie(getCamp(e, 'motiv'), 160) }); continue
     }
-    let mod = 'nou', br = null, n = inc + 1
+    let mod = 'nou', br = null, n = inc + 1, ver = null
     if (pr > 0 && getCamp(e, 'review_complet') === true) { sarite.push({ numar: nr, motiv: `are deja PR draft #${pr} (raportat)` }); continue }
     if (pr > 0) {
       br = str(getCamp(e, 'branch'))
       if (!testBranchPropriu(nr, br)) { sarite.push({ numar: nr, motiv: 'stare locala nevalida (branch)' }); continue }
       mod = 'review'; n = inc
+      if (str(getCamp(e, 'pas_lipsa')) === 'ci') { ver = getVerdicteSalvate(getCamp(e, 'verdicte')); if (ver) mod = 'ci' }
     } else {
       if (inc >= maxIncercari) { sarite.push({ numar: nr, motiv: `a atins numarul maxim de incercari (${maxIncercari})` }); continue }
       if (azi && str(getCamp(e, 'ultima_data')) === azi && str(getCamp(e, 'ultimul_rezultat')) === 'ESUAT') {
@@ -206,7 +213,7 @@ export function selectTicheteDeLucru({ tichete = [], stare = {}, titluriPr = [],
       }
     }
     if (deLucru.length >= max) { sarite.push({ numar: nr, motiv: `peste plafonul zilei (${max})` }); continue }
-    deLucru.push({ tichet: t, mod, incercare: n, branch: br })
+    deLucru.push({ tichet: t, mod, incercare: n, branch: br, verdicte: ver })
   }
   return { deLucru, sarite }
 }
@@ -515,8 +522,12 @@ export function getRecomandareMerge({ jak, fable, checks = [], clasa = 'L', fisi
 
 export function testComandaGhPermisa(argv = []) {
   if (argv.length < 2) return false
+  if (argv[0] === 'api') {
+    if (argv.some(x => typeof x !== 'string' || x === '' || /[\s\x00-\x1F]/.test(x))) return false
+    const j = argv.join(' ')
+    return REGULI.gh_api_citiri.some(re => new RegExp(re).test(j))
+  }
   if (!REGULI.gh_permise.includes(argv[0] + ' ' + argv[1])) return false
-  if (argv[0] === 'api') return argv.join(' ') === 'api user --jq .login'
   return !argv.some(x => /^(-X|--method|--input|--web)\b/.test(x))
 }
 
@@ -525,67 +536,216 @@ export function testComandaGitPermisa(argv = []) {
   return !argv.some(x => /^--(upload-pack|receive-pack|exec|ext-diff)\b/.test(x) || x === '-c')
 }
 
-// ── Profilul „tichete” al lui rdr.ps1 ──────────────────────────────────────────────────────────────────────
+// ── Lansatorul PROPRIU al agentului (J1, r4): lanseaza_agent.ps1 ───────────────────────────────────────────
 
-export function getListaPs(text, nume) {
-  if (!text || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(nume)) return null
-  const re = new RegExp('\\$' + nume + '(?![A-Za-z0-9_])[ \\t]*=[ \\t]*@\\(', 'g')
-  const ms = [...text.matchAll(re)]
-  if (ms.length !== 1) return null
-  let i = ms[0].index + ms[0][0].length
-  const lista = []
-  while (i < text.length) {
-    const ch = text[i]
-    if (ch === ')') return { v: lista }
-    if (' \t\r\n,`'.includes(ch)) { i++; continue }
-    if (ch === '#') { while (i < text.length && text[i] !== '\n') i++; continue }
-    if (ch === "'") {
-      const j = text.indexOf("'", i + 1)
-      if (j < 0) return null
-      if (text[j + 1] === "'") return null
-      lista.push(text.slice(i + 1, j)); i = j + 1; continue
-    }
-    return null
-  }
-  return null
+export function joinArgvWindows(argv = []) {
+  return argv.map(a => {
+    const s = str(a)
+    if (s === '') return '""'
+    if (!/[\s"]/.test(s)) return s
+    return '"' + s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1') + '"'
+  }).join(' ')
 }
 
-export function testLansatorProfilTichete(text) {
+export function getCaiAgent(profil) {
+  if (!profil) throw new Error('profil gol')
+  const d = path.win32.join(profil, AGENT.dir_config)
+  return { dir: d, config: path.win32.join(d, 'agent.json'), token: path.win32.join(d, 'token_agent.txt'),
+    gitconfig: path.win32.join(d, 'gitconfig'), gh: path.win32.join(d, 'gh') }
+}
+
+export function splitComandaPermisiune(intrare, permiteDouaPuncte = false) {
+  if (!intrare) return null
+  const m = /^Bash\((.+)\)$/.exec(String(intrare))
+  if (!m) return null
+  const cuv = permiteDouaPuncte ? '[A-Za-z0-9._/=:-]+' : '[A-Za-z0-9._/=-]+'
+  if (!new RegExp('^' + cuv + '(?: ' + cuv + ')*(?: \\*)?$').test(m[1])) return null
+  const tok = m[1].split(' ')
+  const wild = tok[tok.length - 1] === '*'
+  return { fix: wild ? tok.slice(0, -1) : tok, wild }
+}
+
+const prefixCuvinte = (p, t) => p.length <= t.length && p.every((x, i) => x.toLowerCase() === t[i].toLowerCase())
+
+export function testListaAgent(permise = [], config = AGENT) {
   const mot = []
-  if (!text) return { ok: false, motive: ['lansatorul lipseste sau e gol'] }
-  const t = String(text).replace(/\r\n/g, '\n')
-  const vs = t.match(/\[ValidateSet\(([^)]*)\)\][ \t]*\[string\][ \t]*\$Profil(?![A-Za-z0-9_])/)
-  if (!vs || !vs[1].includes("'tichete'")) mot.push('lipseste parametrul -Profil cu valoarea tichete')
-  const p = REGULI.profil_tichete
-  const i0 = t.indexOf(p.marcaj_start), i1 = t.indexOf(p.marcaj_sfarsit)
-  const n0 = t.split(p.marcaj_start).length - 1, n1 = t.split(p.marcaj_sfarsit).length - 1
-  if (i0 < 0 || i1 <= i0 || n0 !== 1 || n1 !== 1) { mot.push('lipseste blocul PROFIL_TICHETE (o singura data, inceput inainte de sfarsit)'); return { ok: false, motive: mot } }
-  const bloc = t.slice(i0, i1)
-  for (const z of p.interzise_in_bloc) if (bloc.toLowerCase().includes(z.toLowerCase())) mot.push('blocul contine ' + z)
-  const perm = getListaPs(bloc, 'TichetePermise'), refz = getListaPs(bloc, 'TicheteRefuzate'), dirs = getListaPs(bloc, 'TicheteAdaugaDir')
-  if (!perm) mot.push('$TichetePermise lipseste sau nu e o lista simpla')
-  if (!refz) mot.push('$TicheteRefuzate lipseste sau nu e o lista simpla')
-  if (!dirs) mot.push('$TicheteAdaugaDir lipseste sau nu e o lista simpla')
-  else if (dirs.v.length !== 0) mot.push('$TicheteAdaugaDir trebuie sa fie gol')
+  if (!permise.length) return { ok: false, motive: ['lista de unelte e goala'] }
+  const fara = config.unelte_fara_shell.map(String), prog = config.programe_shell.map(String)
+  for (const u of config.unelte) if (![...fara, 'Bash'].includes(String(u))) mot.push('unealta necunoscuta in --tools: ' + u)
   const norm = s => String(s).replace(/\s+/g, ' ').trim().toLowerCase()
-  if (refz) for (const o of p.refuzuri_obligatorii) if (!refz.v.includes(o)) mot.push('refuz lipsa: ' + o)
-  if (perm) {
-    const rau = [...p.forme_largi, ...p.refuzuri_obligatorii].map(norm)
-    for (const x of perm.v) if (rau.includes(norm(x))) mot.push('permisiune prea larga / refuzata: ' + x)
+  const largi = config.forme_largi.map(norm)
+  const refz = config.refuzuri.map(r => splitComandaPermisiune(String(r), true)).filter(Boolean)
+  const vazute = new Set()
+  for (const x of permise) {
+    const s = String(x)
+    if (vazute.has(s)) { mot.push('intrare dublata: ' + s); continue }
+    vazute.add(s)
+    if (largi.includes(norm(s))) { mot.push('forma larga: ' + s); continue }
+    if (fara.includes(s)) continue
+    const c = splitComandaPermisiune(s)
+    if (!c) { mot.push('forma nepermisa (unealta necunoscuta sau comanda ne-literala): ' + s); continue }
+    if (!prog.includes(c.fix[0])) { mot.push('program nepermis: ' + s); continue }
+    if (c.fix.length < 2) { mot.push('prea larga (minimum 2 cuvinte fixe): ' + s); continue }
+    for (const r of refz) {
+      const egal = c.fix.length === r.fix.length
+      if ((prefixCuvinte(c.fix, r.fix) && (c.wild || egal)) || (prefixCuvinte(r.fix, c.fix) && (r.wild || egal))) {
+        mot.push('poate acoperi un refuz (' + r.fix.join(' ') + '): ' + s); break
+      }
+    }
   }
   return { ok: mot.length === 0, motive: mot }
+}
+
+export function getArgvAgent(numar, branch, effort, config = AGENT) {
+  if (!testBranchPropriu(numar, branch)) throw new Error('branch invalid')
+  if (!config.efort_permis.includes(effort)) throw new Error('effort nepermis')
+  if (!/^claude-[a-z0-9-]{1,60}$/.test(str(config.model))) throw new Error('model invalid')
+  const mt = parseInt(config.max_turns, 10)
+  if (!(mt >= 1 && mt <= 500)) throw new Error('max_turns invalid')
+  const perm = config.permise.map(x => String(x).split('__BRANCH__').join(branch))
+  const t = testListaAgent(perm, config)
+  if (!t.ok) throw new Error('lista de unelte a agentului nu e inchisa: ' + t.motive.slice(0, 3).join('; '))
+  const refz = config.refuzuri.map(String)
+  if (!refz.length) throw new Error('lista de refuzuri e goala')
+  const argv = ['-p', '--restricted', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence',
+    '--permission-mode', 'dontAsk', '--permission-prompts', 'none', '--model', str(config.model), '--effort', effort,
+    '--max-turns', String(mt), '--output-format', 'json', '--tools', config.unelte.join(','), '--allowedTools', ...perm, '--disallowedTools', ...refz]
+  for (const a of argv) if (config.steaguri_interzise.includes(a)) throw new Error('steag interzis in linia de comanda: ' + a)
+  return argv
+}
+
+export function testFormaTokenAgent(token) {
+  return typeof token === 'string' && /^(?:github_pat_[A-Za-z0-9_]{22,255}|ghp_[A-Za-z0-9]{36,255})$/.test(token)
+}
+
+export function getMediuAgent(baza = {}, token, cai, configClaude) {
+  if (!testFormaTokenAgent(token)) throw new Error('token agent invalid')
+  if (!configClaude || !cai) throw new Error('cai lipsa')
+  const r = {}
+  for (const k of Object.keys(baza)) for (const p of AGENT.mediu_pastrat) if (k.toLowerCase() === p.toLowerCase()) r[p] = String(baza[k])
+  Object.assign(r, {
+    CLAUDE_CONFIG_DIR: configClaude, GH_TOKEN: token, GH_CONFIG_DIR: String(cai.gh), GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1',
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: String(cai.gitconfig), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never',
+    PGPASSFILE: 'NUL', PGSERVICEFILE: 'NUL', ENABLE_CLAUDEAI_MCP_SERVERS: 'false', DISABLE_AUTOUPDATER: '1', NO_COLOR: '1',
+  })
+  return r
+}
+
+export function testConfigAgent(text) {
+  const rez = { ok: false, motive: [], cfg: null }
+  if (!text || !String(text).trim()) { rez.motive = ['agent.json lipseste sau e gol']; return rez }
+  let o
+  try { o = JSON.parse(faraBom(String(text))) } catch { rez.motive = ['agent.json nu e JSON valid']; return rez }
+  if (o === null || typeof o !== 'object' || Array.isArray(o)) { rez.motive = ['agent.json nu e un obiect']; return rez }
+  const mot = []
+  const chei = ['versiune', 'repo', 'login_agent', 'email_commit', 'clona_baza', 'radacina_worktree', '_nota']
+  for (const k of Object.keys(o)) if (!chei.includes(k)) mot.push('cheie necunoscuta: ' + getTextSigurLinie(k, 40))
+  if (o.versiune !== 1) mot.push('versiune trebuie sa fie 1')
+  const repo = str(o.repo), login = str(o.login_agent)
+  if (!/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(repo)) mot.push('repo invalid (owner/nume)')
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login)) mot.push('login_agent invalid')
+  let email = o.email_commit
+  if (email === undefined || email === null) email = login + '@users.noreply.github.com'
+  else if (!/^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}$/.test(str(email))) mot.push('email_commit invalid')
+  const c = {}
+  for (const k of ['clona_baza', 'radacina_worktree']) {
+    const x = o[k]
+    if (x === undefined || x === null) c[k] = ''
+    else if (!/^[A-Za-z]:\\[A-Za-z0-9_\\.-]+$/.test(str(x)) || str(x).includes('..')) { mot.push(k + ' invalid (cale simpla, fara spatii)'); c[k] = '' }
+    else c[k] = str(x)
+  }
+  rez.motive = mot
+  if (!mot.length) { rez.ok = true; rez.cfg = { repo, login_agent: login, email_commit: str(email), clona_baza: c.clona_baza, radacina_worktree: c.radacina_worktree } }
+  return rez
+}
+
+export function getTextGitconfigAgent(cfg) {
+  if (!cfg || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(str(cfg.login_agent)) || !/^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}$/.test(str(cfg.email_commit))) throw new Error('config agent invalid')
+  return '# generat de lanseaza_agent.ps1 la fiecare pornire - nu se editeaza\n[user]\n\tname = ' + cfg.login_agent + '\n\temail = ' + cfg.email_commit +
+    '\n[credential]\n\thelper =\n\thelper = !gh auth git-credential\n'
+}
+
+export function testConfigGitAgent(iesire, fisierAgent, repo) {
+  if (!iesire) return { ok: false, motive: ['git config: iesire goala'] }
+  const t = String(iesire).split('\0')
+  if (t[t.length - 1] !== '' || (t.length - 1) % 2 !== 0) return { ok: false, motive: ['git config: format neasteptat'] }
+  const mot = [], urls = []
+  const fa = ('file:' + String(fisierAgent).replace(/\\/g, '/')).toLowerCase()
+  let agentVazut = false
+  for (let i = 0; i < t.length - 1; i += 2) {
+    const orig = t[i].replace(/\\/g, '/'), kv = t[i + 1], j = kv.indexOf('\n')
+    const k = (j < 0 ? kv : kv.slice(0, j)).toLowerCase(), val = j < 0 ? '' : kv.slice(j + 1)
+    const dinAgent = orig.toLowerCase() === fa
+    if (dinAgent) agentVazut = true
+    const ce = getTextSigurLinie(k, 80)
+    if (orig.startsWith('command line:')) mot.push('config git din linia de comanda / mediu: ' + ce)
+    if (k.startsWith('credential.') && !dinAgent) mot.push('credential din alta sursa decat gitconfig-ul agentului: ' + ce)
+    if (k === 'include.path' || k.startsWith('includeif.')) mot.push('include in config git: ' + ce)
+    if (/^http\..*(extraheader|cookiefile)$/.test(k) || /^url\..*\.(insteadof|pushinsteadof)$/.test(k) || k === 'core.askpass' || k === 'core.sshcommand' || k === 'remote.origin.pushurl') mot.push('cheie git nepermisa: ' + ce)
+    if (k === 'remote.origin.url') urls.push(val)
+  }
+  if (!agentVazut) mot.push('gitconfig-ul agentului nu e incarcat')
+  const ok = u => [`https://github.com/${repo}.git`, `https://github.com/${repo}`].map(x => x.toLowerCase()).includes(String(u).toLowerCase())
+  if (urls.length !== 1 || !ok(urls[0])) mot.push(`remote.origin.url neasteptat (trebuie https://github.com/${repo})`)
+  return { ok: mot.length === 0, motive: mot }
+}
+
+export function getRepoDinUrl(url) {
+  const m = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec(str(url).trim())
+  return m ? m[1] : ''
+}
+
+export function testBarieraGitHub({ loginServer, loginAgentConfig, loginAgent, permisiuni, reguliMain = [], reguliAlta = [], reguliTichete = [], ocolire = {} } = {}) {
+  const mot = []
+  if (!loginAgent || loginAgent !== loginAgentConfig) mot.push('tokenul agentului nu e al contului din agent.json')
+  if (!loginServer || str(loginAgent).toLowerCase() === str(loginServer).toLowerCase()) mot.push('agentul are aceeasi identitate GitHub ca serverul (coordonatorul)')
+  if (getCamp(permisiuni, 'push') !== true) mot.push('agentul nu poate impinge branch-uri (push)')
+  if (getCamp(permisiuni, 'admin') !== false) mot.push('agentul are (sau nu se stie daca are) drept de administrare pe repo')
+  if (getCamp(permisiuni, 'maintain') !== false) mot.push('agentul are (sau nu se stie daca are) drept maintain pe repo')
+  const faraOcolire = r => { const id = str(getCamp(r, 'ruleset_id')); return /^[0-9]{1,12}$/.test(id) && Object.prototype.hasOwnProperty.call(ocolire, id) && ocolire[id] === 'never' }
+  const deTip = (lista, tip) => lista.filter(r => r && getCamp(r, 'type') === tip && faraOcolire(r))
+  const pr = deTip(reguliMain, 'pull_request').filter(r => {
+    const p = getCamp(r, 'parameters'), n = getCamp(p, 'required_approving_review_count')
+    return Number.isInteger(n) && n >= 1 && getCamp(p, 'dismiss_stale_reviews_on_push') === true
+  })
+  if (!pr.length) mot.push('main nu are o regula de PR (minimum 1 aprobare, aprobarile vechi anulate la push nou) pe care agentul sa n-o poata ocoli')
+  for (const tip of ['creation', 'update', 'deletion']) if (!deTip(reguliAlta, tip).length) mot.push('in afara tichete/* agentul nu are restrictia ' + tip + ' (fara ocolire)')
+  for (const tip of ['creation', 'update']) if (deTip(reguliTichete, tip).length) mot.push('agentul nu poate face ' + tip + ' pe tichete/* (restrictia se aplica si acolo)')
+  return { ok: mot.length === 0, motive: mot }
+}
+
+export function getVerdicteSalvate(v) {
+  if (v === null || v === undefined || typeof v !== 'object') return null
+  const sha = str(getCamp(v, 'sha'))
+  if (!/^[0-9a-f]{40}$/.test(sha)) return null
+  const r = { sha }
+  for (const k of ['jak', 'fable']) {
+    const x = getCamp(v, k), vd = str(getCamp(x, 'verdict')), p0 = getCamp(x, 'p0'), p1 = getCamp(x, 'p1')
+    if (!VERDICTE_SALVABILE.includes(vd)) return null
+    if (![p0, p1].every(p => Number.isInteger(p) && p >= 0)) return null
+    r[k] = { verdict: vd, p0, p1 }
+  }
+  return r
 }
 
 // ── Stare (J7) ─────────────────────────────────────────────────────────────────────────────────────────────
 
 export function getStareNoua(vechi, numar, rezultat, azi) {
-  const e = { numar, incercari: 0, ultima_data: '', ultimul_rezultat: '', clasa: '', asteapta_decizie: false, motiv: '', pr: 0, branch: '', review_complet: false, ultima_eroare: '' }
+  const e = { numar, incercari: 0, ultima_data: '', ultimul_rezultat: '', clasa: '', asteapta_decizie: false, motiv: '', pr: 0, branch: '', review_complet: false, ultima_eroare: '', pas_lipsa: '', verdicte: null }
   if (vechi) for (const k of Object.keys(e)) if (Object.prototype.hasOwnProperty.call(vechi, k) && vechi[k] !== null && vechi[k] !== undefined) e[k] = vechi[k]
   e.incercari = parseInt(e.incercari, 10) || 0; e.pr = parseInt(e.pr, 10) || 0
   e.asteapta_decizie = e.asteapta_decizie === true; e.review_complet = e.review_complet === true
   const st = str(rezultat.stare), prNou = parseInt(getCamp(rezultat, 'pr') ?? 0, 10) || 0, det = str(getCamp(rezultat, 'detaliu'))
   if (STARI_CONSUMA.includes(st) && !(prNou > 0 && e.pr === prNou)) { e.incercari += 1; e.ultima_data = azi; e.ultimul_rezultat = st }
-  if (st === 'PR_DRAFT' || st === 'PR_FARA_REVIEW') { e.pr = prNou; e.branch = str(getCamp(rezultat, 'branch')); e.review_complet = st === 'PR_DRAFT'; e.clasa = 'L' }
+  if (st === 'PR_DRAFT' || st === 'PR_FARA_REVIEW' || st === 'PR_CI_NECITIT') {
+    e.pr = prNou; e.branch = str(getCamp(rezultat, 'branch')); e.review_complet = st === 'PR_DRAFT'; e.clasa = 'L'
+    e.pas_lipsa = ''; e.verdicte = null
+    if (st === 'PR_CI_NECITIT') {
+      const v = getVerdicteSalvate(getCamp(rezultat, 'verdicte'))
+      if (v) { e.pas_lipsa = 'ci'; e.verdicte = v }
+      e.ultima_eroare = `${azi} ${st} ${det}`
+    }
+  }
   else if (st === 'DECIZIE') { e.asteapta_decizie = true; e.clasa = str(getCamp(rezultat, 'clasa')); e.motiv = det }
   else if (st === 'BLOCAT') { e.asteapta_decizie = true; e.clasa = '!'; e.motiv = det }
   else if (st === 'ESUAT') e.motiv = det

@@ -1,8 +1,7 @@
 ﻿# autotest.ps1 — teste fără rețea pentru funcțiile pure din tichete_lib.psm1 (aceleași cazuri ca tichete_lib.test.mjs).
 # Rulare: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tichete_dimineata\autotest.ps1   (exit 0 = tot verde)
-# Opțional: -Lansator <cale rdr.ps1> verifică și profilul „tichete” al lansatorului real (J1).
+# r4: lansatorul propriu (lanseaza_agent.ps1) + lista închisă din reguli.json; nu mai citește rdr.ps1.
 # Nu depinde de Pester (pe server e 3.4, vechi); nu atinge rețeaua, BD-ul sau fișierele din paw-data.
-param([string]$Lansator = '')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 Import-Module (Join-Path $PSScriptRoot 'tichete_lib.psm1') -Force
@@ -48,7 +47,8 @@ T 'garda gh: merge / ready / api / workflow / release / secret nu' {
   @($nu | Where-Object { Test-ComandaGhPermisa $_ }).Count -eq 0
 }
 T 'garda git' { (Test-ComandaGitPermisa @('diff', '--name-status', '-z')) -and -not (Test-ComandaGitPermisa @('push', 'origin', 'main')) -and -not (Test-ComandaGitPermisa @('fetch', '--upload-pack=calc')) -and -not (Test-ComandaGitPermisa @('-c', 'x=y', 'fetch')) -and -not (Test-ComandaGitPermisa @('diff', '--ext-diff')) }
-T 'agentul porneste cu -Profil tichete' { $OrchCod -match "'-Profil', 'tichete'" }
+T 'agentul porneste prin lanseaza_agent.ps1 (nu rdr.ps1)' { -not ($OrchCod -match 'rdr\.ps1') -and $OrchCod.Contains("'-File', `$Lansator") -and $OrchCod.Contains("'lanseaza_agent.ps1'") -and -not ($OrchCod -match "'-Profil'") }
+T 'bariera la fiecare pornire; picata => nu porneste' { $OrchCod.Contains('$bar = VerificaBariera') -and $OrchCod.Contains("throw ('bariera de identitate GitHub nu trece, nu pornesc: '") -and $OrchCod.Contains('$Autor = [string]$bar.login') }
 
 Write-Host 'SQL'
 $i0 = $Orch.IndexOf("`$sql = @'") + 9; $SQL = $Orch.Substring($i0, $Orch.IndexOf("'@", $i0) - $i0)
@@ -56,24 +56,128 @@ T 'SQL fix, READ ONLY, fara $' { $SQL.Contains('BEGIN TRANSACTION READ ONLY') -a
 T 'SQL: nerezolvat = status nefinal + descriere_interventie IS NULL' { $SQL.Contains("NOT IN ('rezolvat', 'inchis', 'anulat', 'respins')") -and $SQL.Contains('descriere_interventie IS NULL') -and $SQL.Contains("subcategorie IN ('eroare_erp', 'cerere_functie')") }
 T 'J9: fara LIMIT 50, doar plafonul 1001' { -not ($SQL -match 'LIMIT 50\b') -and ($SQL -match 'LIMIT 1001\b') }
 
-Write-Host 'J1: profilul tichete al lansatorului'
-$P = (Get-ReguliTichete).profil_tichete
-function Lans([string]$vs = "[ValidateSet('standard','tichete')][string]`$Profil = 'standard'", [string[]]$perm = @('Read', 'Edit', 'Bash(git commit:*)', 'Bash(gh pr create --draft:*)'), [string[]]$refz = @($P.refuzuri_obligatorii), [string[]]$dirs = @(), [string]$extra = '') {
-  $q = { param($a) (@($a) | ForEach-Object { "'" + $_ + "'" }) -join ', ' }
-  return ("param([string]`$Brief, $vs)`n" + $P.marcaj_start + " v1`n`$TichetePermise = @(" + (& $q $perm) + ")`n`$TicheteRefuzate = @(" + (& $q $refz) + ",`n  'Bash(curl:*)')`n`$TicheteAdaugaDir = @(" + (& $q $dirs) + ")`n" + $extra + $P.marcaj_sfarsit + "`n& claude @x`n")
+Write-Host 'J1 (r4): lansatorul propriu - lista inchisa, linia de comanda'
+$AG = (Get-ReguliTichete).agent_tichete
+$BRL = 'tichete/tkt-2026-0134-i1'
+# lista asteptata, scrisa AICI independent de reguli.json (L25): orice largire a listei cere si schimbarea testului (review)
+$PERM_ASTEPTAT = @('Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash(git status)', 'Bash(git diff)', 'Bash(git diff --stat)', 'Bash(git diff --cached)',
+  'Bash(git log --oneline -20)', 'Bash(git add *)', 'Bash(git commit *)', "Bash(git switch -c $BRL)", "Bash(git push -u origin $BRL)",
+  "Bash(gh pr create --draft --base main --head $BRL *)", 'Bash(npx vitest run)', 'Bash(npx vitest run *)', 'Bash(npx vite build)')
+$REFUZ_MINIM = @('Bash(gh pr merge *)', 'Bash(gh pr ready *)', 'Bash(gh api *)', 'Bash(gh workflow *)', 'Bash(gh release *)', 'Bash(gh secret *)',
+  'Bash(git push origin main *)', 'Bash(git push -u origin main *)', 'Bash(git push --force *)', 'Bash(vercel *)', 'Bash(npx vercel *)', 'Bash(supabase *)',
+  'Bash(npx supabase *)', 'Bash(psql *)', 'PowerShell', 'WebFetch', 'WebSearch')
+$ARGV = @(Get-ArgvAgent -Numar 'TKT-2026-0134' -Branch $BRL -Effort 'high')
+function ListaDupa($a, [string]$steag) {
+  $i = [array]::IndexOf($a, $steag); if ($i -lt 0) { return @() }
+  $r = New-Object System.Collections.ArrayList
+  for ($j = $i + 1; $j -lt $a.Count -and -not $a[$j].StartsWith('--'); $j++) { [void]$r.Add($a[$j]) }
+  return @($r)
 }
-T 'lansator conform => ok' { $r = Test-LansatorProfilTichete (Lans); $r.ok -and @($r.motive).Count -eq 0 }
-T 'lansatorul de azi (fara profil) => refuz' { -not (Test-LansatorProfilTichete "param([string]`$Brief, [ValidateSet('medium','high','max')][string]`$Effort = 'high')`nclaude --allowedTools 'Bash(gh:*)'").ok }
-T 'fara tichete in ValidateSet => refuz' { -not (Test-LansatorProfilTichete (Lans -vs "[ValidateSet('standard')][string]`$Profil = 'standard'")).ok }
-T 'refuz lipsa (gh pr merge / PowerShell) => refuz' { -not (Test-LansatorProfilTichete (Lans -refz @($P.refuzuri_obligatorii | Where-Object { $_ -cne 'Bash(gh pr merge:*)' }))).ok -and -not (Test-LansatorProfilTichete (Lans -refz @($P.refuzuri_obligatorii | Where-Object { $_ -cne 'PowerShell' }))).ok }
-T 'permisiune larga / refuzata => refuz' { -not (Test-LansatorProfilTichete (Lans -perm @('Read', 'Bash(gh:*)'))).ok -and -not (Test-LansatorProfilTichete (Lans -perm @('BASH(git:*) '))).ok -and -not (Test-LansatorProfilTichete (Lans -perm @('Bash(node:*)'))).ok -and -not (Test-LansatorProfilTichete (Lans -perm @('Bash(gh api:*)'))).ok }
-T 'director adaugat / --add-dir / bypassPermissions => refuz' { -not (Test-LansatorProfilTichete (Lans -dirs @('C:\x'))).ok -and -not (Test-LansatorProfilTichete (Lans -extra "`$x = '--add-dir'`n")).ok -and -not (Test-LansatorProfilTichete (Lans -extra "# bypassPermissions`n")).ok }
-T 'bloc lipsa / dublat / gol => refuz' { -not (Test-LansatorProfilTichete ((Lans).Replace($P.marcaj_start, '# x'))).ok -and -not (Test-LansatorProfilTichete ((Lans) + $P.marcaj_start)).ok -and -not (Test-LansatorProfilTichete '').ok }
-T 'Get-ListaPs' {
-  $a = Get-ListaPs ("`$A = @('x', 'y(z:*)',`n ``" + "`n 'w') # c") 'A'
-  (@($a.v) -join '|') -ceq 'x|y(z:*)|w' -and @((Get-ListaPs '$A = @()' 'A').v).Count -eq 0 -and $null -eq (Get-ListaPs "`$A = @('a''b')" 'A') -and $null -eq (Get-ListaPs '$A = @("x")' 'A') -and $null -eq (Get-ListaPs "`$AB = @('x')" 'A') -and $null -eq (Get-ListaPs "`$A = @('x')`n`$A = @('y')" 'A')
+function ValDupa($a, [string]$steag) { $i = [array]::IndexOf($a, $steag); if ($i -lt 0 -or $i + 1 -ge $a.Count) { return $null }; return $a[$i + 1] }
+T '--allowedTools = exact reguli.json (branch inlocuit)' { (@(ListaDupa $ARGV '--allowedTools') -join "`n") -ceq (@($AG.permise | ForEach-Object { ([string]$_).Replace('__BRANCH__', $BRL) }) -join "`n") }
+T '--allowedTools = lista asteptata din test (nimic in plus)' { (@(ListaDupa $ARGV '--allowedTools') -join "`n") -ceq ($PERM_ASTEPTAT -join "`n") }
+T '--disallowedTools = exact refuzurile; contine refuzurile minime' { $d = @(ListaDupa $ARGV '--disallowedTools'); ($d -join "`n") -ceq (@($AG.refuzuri) -join "`n") -and @($REFUZ_MINIM | Where-Object { $d -cnotcontains $_ }).Count -eq 0 }
+T 'steagurile: exact cele asteptate, cu valorile fixe' {
+  $st = @($ARGV | Where-Object { $_.StartsWith('--') })
+  $ast = @('--restricted', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence', '--permission-mode', '--permission-prompts', '--model', '--effort', '--max-turns', '--output-format', '--tools', '--allowedTools', '--disallowedTools')
+  $ARGV[0] -ceq '-p' -and ($st -join ' ') -ceq ($ast -join ' ') -and (ValDupa $ARGV '--permission-mode') -ceq 'dontAsk' -and (ValDupa $ARGV '--permission-prompts') -ceq 'none' -and
+  (ValDupa $ARGV '--output-format') -ceq 'json' -and (ValDupa $ARGV '--tools') -ceq 'Read,Glob,Grep,Edit,Write,Bash' -and (ValDupa $ARGV '--effort') -ceq 'high' -and
+  $ARGV.Count -eq (1 + $ast.Count + 7 + $PERM_ASTEPTAT.Count + @($AG.refuzuri).Count)
 }
-if ($Lansator) { T ('lansatorul real are profilul tichete: ' + $Lansator) { $r = Test-LansatorProfilTichete ([IO.File]::ReadAllText($Lansator)); if (-not $r.ok) { Write-Host ('       ' + (@($r.motive) -join '; ')) }; $r.ok } }
+T 'fara --add-dir / bypass / skip-permissions / settings / mcp-config' { @($ARGV | Where-Object { @($AG.steaguri_interzise) -ccontains $_ -or $_ -match 'dangerously|bypass|acceptEdits' }).Count -eq 0 }
+T 'branch / effort invalide => arunca' { @(@(@('TKT-2026-0134', 'main', 'high'), @('TKT-2026-0134', 'tichete/tkt-2026-0135-i1', 'high'), @('TKT-2026-0134', $BRL, 'max'), @('../x', $BRL, 'high')) | Where-Object { $c = $_; try { [void](Get-ArgvAgent -Numar $c[0] -Branch $c[1] -Effort $c[2]); $true } catch { $false } }).Count -eq 0 }
+T 'lista din reguli.json trece; fiecare forma larga e refuzata' {
+  (Test-ListaAgent -Permise @($AG.permise | ForEach-Object { ([string]$_).Replace('__BRANCH__', $BRL) })).ok -and @(@($AG.forme_largi) | Where-Object { (Test-ListaAgent -Permise @('Read', $_)).ok }).Count -eq 0
+}
+T 'formele largi sunt prinse si de regulile generale (lista explicita golita)' {
+  $c2 = $AG.PSObject.Copy(); $c2.forme_largi = @()
+  @(@($AG.forme_largi) | Where-Object { (Test-ListaAgent -Permise @('Read', $_) -Config $c2).ok }).Count -eq 0
+}
+T 'alte forme refuzate (program, acoperire de refuz, sintaxa, unelte)' {
+  $nu = @('Bash(git push *)', 'Bash(git push origin main)', 'Bash(git push -u origin main)', 'Bash(gh pr merge 7)', 'Bash(gh api repos/x)', 'Bash(git config --global a b)',
+    'Bash(npx vercel deploy)', 'Bash(npx supabase db push)', 'Bash(python -c x)', 'Bash(rm -rf x)', 'Bash(git commit:*)', 'Bash(git * main)', 'Bash(git push origin "main")',
+    'Bash(git status && curl x)', 'Bash(git status; x)', 'Bash(GIT status)', 'Bash(npx vitest)x', 'Bash()', 'PowerShell', 'WebFetch', 'WebSearch', 'mcp__Gmail__send_message',
+    'Task', 'Agent', 'NotebookEdit', 'Read(//C:/**)', 'Edit(//C:/x/**)', 'Bash(git push origin HEAD:main)', 'Bash(gh auth token)', 'Bash(git credential fill)')
+  @($nu | Where-Object { (Test-ListaAgent -Permise @($_)).ok }).Count -eq 0
+}
+T 'dublat / gol / unealta necunoscuta in --tools => refuz' {
+  $c3 = $AG.PSObject.Copy(); $c3.unelte = @(@($AG.unelte) + @('WebFetch'))
+  -not (Test-ListaAgent -Permise @('Read', 'Read')).ok -and -not (Test-ListaAgent -Permise @()).ok -and -not (Test-ListaAgent -Permise @('Read') -Config $c3).ok
+}
+T 'Split-ComandaPermisiune' { $c = Split-ComandaPermisiune 'Bash(git add *)'; (@($c.fix) -join ' ') -ceq 'git add' -and $c.wild -and -not (Split-ComandaPermisiune 'Bash(git status)').wild -and $null -eq (Split-ComandaPermisiune 'Bash(git push origin HEAD:main)') -and $null -ne (Split-ComandaPermisiune 'Bash(git push origin HEAD:main *)' -PermiteDouaPuncte) }
+T 'Join-ArgvWindows' { (Join-ArgvWindows @('a', 'b c', 'Bash(git add *)', '', 'x"y', 'C:\a b\')) -ceq 'a "b c" "Bash(git add *)" "" "x\"y" "C:\a b\\"' }
+$LansCod = (@([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'lanseaza_agent.ps1')) -split "\r?\n") | Where-Object { $_ -notmatch '^\s*#' } | ForEach-Object { $_ -replace '\s#\s.*$', '' }) -join "`n"
+T 'lanseaza_agent.ps1: nu citeste / nu apeleaza rdr.ps1; linia doar din Get-ArgvAgent; mediu inlocuit; git verificat' {
+  -not ($LansCod -match 'rdr\.ps1') -and $LansCod.Contains('Get-ArgvAgent') -and $LansCod.Contains('$psi.EnvironmentVariables.Clear()') -and $LansCod.Contains('VerificaGit $wt') -and
+  $LansCod.Contains('Exec $ClaudeExe $argv $wt') -and -not ($LansCod -match 'add-dir|bypass|acceptEdits|dangerously')
+}
+
+Write-Host 'J1 / P1 (r4): mediul agentului, agent.json, config git, bariera GitHub'
+$TOK = 'github_pat_' + ('A' * 30)
+$CAI = Get-CaiAgent 'C:\Users\x'
+$BAZA = @{ Path = 'C:\Windows'; SystemRoot = 'C:\Windows'; USERPROFILE = 'C:\Users\x'; APPDATA = 'C:\a'; PGPASSWORD = 's'; PGPASSFILE = 'C:\p'; PGUSER = 'u'
+  SUPABASE_SERVICE_ROLE_KEY = 's'; GITHUB_TOKEN = 's'; GH_TOKEN = 'server'; ANTHROPIC_API_KEY = 's'; CLAUDE_CODE_OAUTH_TOKEN = 's'; GIT_ASKPASS = 'x'
+  GIT_CONFIG_PARAMETERS = 'x'; GIT_CONFIG_COUNT = '1'; RESEND_API_KEY = 's'; SSH_AUTH_SOCK = 'x'; VERCEL_TOKEN = 's'; GH_CONFIG_DIR = 'C:\server' }
+$FIXE = @('CLAUDE_CONFIG_DIR', 'GH_TOKEN', 'GH_CONFIG_DIR', 'GH_PROMPT_DISABLED', 'GH_NO_UPDATE_NOTIFIER', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT',
+  'GCM_INTERACTIVE', 'PGPASSFILE', 'PGSERVICEFILE', 'ENABLE_CLAUDEAI_MCP_SERVERS', 'DISABLE_AUTOUPDATER', 'NO_COLOR')
+$MED = Get-MediuAgent -Baza $BAZA -Token $TOK -Cai $CAI -ConfigClaude 'C:\c'
+T 'mediu: lista alba + valori fixe; secretele serverului nu trec' {
+  @($MED.Keys | Where-Object { @($AG.mediu_pastrat) -notcontains $_ -and $FIXE -notcontains $_ }).Count -eq 0 -and $MED.GH_TOKEN -ceq $TOK -and $MED.PGPASSFILE -ceq 'NUL' -and
+  $MED.GIT_CONFIG_NOSYSTEM -ceq '1' -and $MED.GIT_CONFIG_GLOBAL -ceq 'C:\Users\x\.tichete-agent\gitconfig' -and $MED.GH_CONFIG_DIR -ceq 'C:\Users\x\.tichete-agent\gh' -and $MED.Path -ceq 'C:\Windows' -and
+  @(@('PGPASSWORD', 'PGUSER', 'SUPABASE_SERVICE_ROLE_KEY', 'GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GIT_ASKPASS', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'RESEND_API_KEY', 'SSH_AUTH_SOCK', 'VERCEL_TOKEN') | Where-Object { $MED.ContainsKey($_) }).Count -eq 0
+}
+T 'token: forma unui token GitHub de utilizator; token invalid => mediul nu se construieste' {
+  (Test-FormaTokenAgent $TOK) -and (Test-FormaTokenAgent ('ghp_' + ('a' * 36))) -and
+  @(@(('gho_' + ('a' * 36)), ('ghs_' + ('a' * 36)), '', 'github_pat_scurt', 'ghp_scurt', ($TOK + "`n"), ($TOK + ' x'), $null) | Where-Object { Test-FormaTokenAgent $_ }).Count -eq 0 -and
+  $(try { [void](Get-MediuAgent -Baza @{} -Token 'ghp_x' -Cai $CAI -ConfigClaude 'C:\c'); $false } catch { $true })
+}
+T 'agent.json valid (email implicit)' { $c = Test-ConfigAgent '{"versiune":1,"repo":"o/r","login_agent":"gazpet-tichete","_nota":"x"}'; $c.ok -and $c.cfg.email_commit -ceq 'gazpet-tichete@users.noreply.github.com' -and $c.cfg.clona_baza -ceq '' }
+T 'agent.json invalid => refuz' {
+  $nu = @('', 'x', '[]', '{"versiune":2,"repo":"o/r","login_agent":"a"}', '{"versiune":1,"repo":"o/r"}', '{"versiune":1,"repo":"o/r","login_agent":"-a"}', '{"versiune":1,"repo":"o/r","login_agent":"a","token":"x"}',
+    '{"versiune":1,"repo":"o","login_agent":"a"}', '{"versiune":1,"repo":"o/r","login_agent":"a","clona_baza":"C:\\a b"}', '{"versiune":1,"repo":"o/r","login_agent":"a","clona_baza":"C:\\a\\..\\b"}',
+    '{"versiune":1,"repo":"o/r","login_agent":"a","email_commit":"a b"}', '{"versiune":"1","repo":"o/r","login_agent":"a"}')
+  @($nu | Where-Object { (Test-ConfigAgent $_).ok }).Count -eq 0
+}
+T 'gitconfig agent: doar helper-ul gh, lista mostenita golita' { $g = Get-TextGitconfigAgent @{ login_agent = 'gazpet-tichete'; email_commit = 'a@b.c' }; $g.Contains("`thelper =`n`thelper = !gh auth git-credential`n") -and $g.Contains("name = gazpet-tichete") -and $(try { [void](Get-TextGitconfigAgent @{ login_agent = 'a b'; email_commit = 'a@b.c' }); $false } catch { $true }) }
+function IntrareZ([string]$o, [string]$kv) { return ($o + $NUL + $kv + $NUL) }
+$FAG = 'file:C:/Users/x/.tichete-agent/gitconfig'
+$GZ = (IntrareZ$FAG "user.name`nx") + (IntrareZ$FAG "credential.helper`n") + (IntrareZ$FAG "credential.helper`n!gh auth git-credential") + (IntrareZ'file:.git/config' "core.bare`nfalse") + (IntrareZ'file:.git/config' "remote.origin.url`nhttps://github.com/o/r.git")
+T 'config git: conform => ok' { (Test-ConfigGitAgent -Iesire $GZ -FisierAgent $CAI.gitconfig -Repo 'o/r').ok }
+T 'config git: credentiale / antete / include / remote straine => refuz' {
+  $nu = @(($GZ + (IntrareZ'file:C:/Program Files/Git/etc/gitconfig' "credential.helper`nmanager")), ($GZ + (IntrareZ'file:.git/config' "http.https://github.com/.extraHeader`nAUTHORIZATION: x")),
+    ($GZ + (IntrareZ'file:.git/config' "include.path`nC:/x")), ($GZ + (IntrareZ'file:.git/config' "includeIf.gitdir:C:/x/.path`ny")), ($GZ + (IntrareZ'file:.git/config' "url.https://x/.insteadOf`nhttps://github.com/")),
+    ($GZ + (IntrareZ'file:.git/config' "core.askpass`nx.exe")), ($GZ + (IntrareZ'file:.git/config' "remote.origin.pushurl`nhttps://x")), ($GZ + (IntrareZ'command line:' "user.name`nx")),
+    ($GZ + (IntrareZ'file:.git/config' "remote.origin.url`nhttps://github.com/o/alt")), $GZ.Replace('o/r.git', 'o/alt.git'), $GZ.Replace($FAG, 'file:C:/alt/gitconfig'),
+    $GZ.Substring(0, $GZ.Length - 1), '')
+  @($nu | Where-Object { (Test-ConfigGitAgent -Iesire $_ -FisierAgent $CAI.gitconfig -Repo 'o/r').ok }).Count -eq 0
+}
+T 'Get-RepoDinUrl' { (Get-RepoDinUrl 'https://github.com/o/r.git') -ceq 'o/r' -and (Get-RepoDinUrl "https://github.com/o/r`n") -ceq 'o/r' -and (Get-RepoDinUrl 'git@github.com:o/r.git') -ceq '' -and (Get-RepoDinUrl 'https://evil.example/o/r') -ceq '' }
+$PERM_OK = [pscustomobject]@{ admin = $false; maintain = $false; push = $true; triage = $true; pull = $true }
+$RMAIN = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = 1; dismiss_stale_reviews_on_push = $true } })
+$RALTA = @(@('creation', 'update', 'deletion') | ForEach-Object { [pscustomobject]@{ type = $_; ruleset_id = 12 } })
+function Bar([hashtable]$o = @{}) {
+  $p = @{ LoginServer = 'coordonator'; LoginAgentConfig = 'gazpet-tichete'; LoginAgent = 'gazpet-tichete'; Permisiuni = $PERM_OK; ReguliMain = $RMAIN; ReguliAlta = $RALTA; ReguliTichete = @(); Ocolire = @{ '11' = 'never'; '12' = 'never' } }
+  foreach ($k in $o.Keys) { $p[$k] = $o[$k] }
+  return (Test-BarieraGitHub @p)
+}
+T 'bariera: conform => ok' { $r = Bar; $r.ok -and @($r.motive).Count -eq 0 }
+T 'bariera: identitate / drepturi / reguli lipsa sau ocolibile => refuz' {
+  $nu = @(@{ LoginAgent = 'altcineva' }, @{ LoginAgent = 'Coordonator'; LoginAgentConfig = 'Coordonator' }, @{ LoginServer = '' }, @{ Permisiuni = [pscustomobject]@{ admin = $true; maintain = $false; push = $true } },
+    @{ Permisiuni = [pscustomobject]@{ admin = $false; maintain = $true; push = $true } }, @{ Permisiuni = [pscustomobject]@{ admin = $false; maintain = $false; push = $false } },
+    @{ Permisiuni = [pscustomobject]@{ maintain = $false; push = $true } }, @{ Permisiuni = $null }, @{ ReguliMain = @() },
+    @{ ReguliMain = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = 0; dismiss_stale_reviews_on_push = $true } }) },
+    @{ ReguliMain = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = '1'; dismiss_stale_reviews_on_push = $true } }) },
+    @{ ReguliMain = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = 1; dismiss_stale_reviews_on_push = $false } }) },
+    @{ Ocolire = @{ '11' = 'always'; '12' = 'never' } }, @{ Ocolire = @{ '11' = 'pull_requests_only'; '12' = 'never' } }, @{ Ocolire = @{ '12' = 'never' } }, @{ Ocolire = @{ '11' = 'never'; '12' = 'always' } },
+    @{ ReguliAlta = @($RALTA | Where-Object { $_.type -cne 'deletion' }) }, @{ ReguliTichete = @([pscustomobject]@{ type = 'creation'; ruleset_id = 12 }) })
+  @($nu | Where-Object { (Bar $_).ok }).Count -eq 0
+}
+T 'citirile gh api ale barierei sunt permise; scrierile nu' {
+  (Test-ComandaGhPermisa @('api', 'repos/o/r', '--jq', '.permissions')) -and (Test-ComandaGhPermisa @('api', 'repos/o/r/rules/branches/main')) -and (Test-ComandaGhPermisa @('api', 'repos/o/r/rules/branches/tichete%2Fverificare-bariera')) -and
+  (Test-ComandaGhPermisa @('api', 'repos/o/r/rulesets/42', '--jq', '.current_user_can_bypass')) -and
+  @(@(@('api', 'repos/o/r/rulesets/42', '-X', 'DELETE'), @('api', 'repos/o/r', '--jq', '.permissions', '-f', 'x=y'), @('api', 'repos/o/r/rules/branches/main', '--method', 'PUT'), @('api', 'repos/o/r/rules/branches/a b'),
+    @('api', 'repos/o/r/pulls/7/merge'), @('api', 'graphql'), @('api', "repos/o/r`n", '--jq', '.permissions'), @('api', 'repos/o/r/rulesets/42')) | Where-Object { Test-ComandaGhPermisa $_ }).Count -eq 0
+}
 
 Write-Host 'Numar / J2 slug / branch'
 T 'numere valide / invalide' { (Test-NumarTichet 'TKT-0339') -and (Test-NumarTichet 'TKT-2026-0134') -and @(@('TKT-1/../x', 'TKT-1 "a"', "TKT-12`n", $null, 'tkt-1', 'TKT-1234567', 'TKT-1999-0134', 'TKT-2026-', 'TKT-2026-0134-1') | Where-Object { Test-NumarTichet $_ }).Count -eq 0 }
@@ -187,7 +291,7 @@ $logJ = [string][char]0xFEFF + "PAW_START 20261111-0730-ab jak  C:\b.md`n" + $rj
 T 'raspunsul Jakarinos = stdout-ul dintre PAW_START si --- stderr ---' { (Get-RaspunsJak $logJ) -ceq $rj -and (Get-VerdictReview (Get-RaspunsJak $logJ)).p1 -eq 1 }
 T 'fara PAW_GATA / PAW_START => null; fara stderr => pana la PAW_GATA' { $null -eq (Get-RaspunsJak ($logJ -replace 'PAW_GATA[^\n]*\n$', "PAW_EROARE x jak_exit_1`n")) -and $null -eq (Get-RaspunsJak $logJ.Replace('PAW_START', 'XPAW_START')) -and (Get-RaspunsJak ("PAW_START a`n" + $rj + "`nPAW_GATA a")) -ceq $rj -and (Get-RaspunsJak "PAW_START a`nPAW_GATA a") -ceq '' -and $null -eq (Get-RaspunsJak $null) }
 T 'Get-StarePaw: doar ultima linie' { (Get-StarePaw 'PAW_GATA 123') -ceq 'GATA' -and (Get-StarePaw 'PAW_EROARE 1 timeout') -ceq 'EROARE' -and (Get-StarePaw 'PAW_EROARE 1 ocupat de alta rulare') -ceq 'OCUPAT' -and (Get-StarePaw 'VERDICT: GO') -ceq 'NECUNOSCUT' -and (Get-StarePaw 'PAW_GATAX') -ceq 'NECUNOSCUT' -and (Get-StarePaw $null) -ceq 'NECUNOSCUT' }
-T 'RDR_OCUPAT / RVW_OCUPAT (exit 3 + ultima linie)' { (Test-LansatorOcupat 3 'RVW_OCUPAT: 3 rulari deja active' 'RVW') -and (Test-LansatorOcupat 3 'RDR_OCUPAT: 3 rulari deja active' 'RDR') -and -not (Test-LansatorOcupat 1 'RVW_OCUPAT: x' 'RVW') -and -not (Test-LansatorOcupat 3 'RDR_OCUPAT: x' 'RVW') -and -not (Test-LansatorOcupat 3 'am vazut RVW_OCUPAT: in log' 'RVW') -and -not (Test-LansatorOcupat 3 'lock ocupat' 'RDR') }
+T 'AGT_OCUPAT / RVW_OCUPAT (exit 3 + ultima linie)' { (Test-LansatorOcupat 3 'RVW_OCUPAT: 3 rulari deja active' 'RVW') -and (Test-LansatorOcupat 3 'AGT_OCUPAT: 3 rulari deja active' 'AGT') -and -not (Test-LansatorOcupat 1 'RVW_OCUPAT: x' 'RVW') -and -not (Test-LansatorOcupat 3 'AGT_OCUPAT: x' 'RVW') -and -not (Test-LansatorOcupat 3 'am vazut RVW_OCUPAT: in log' 'RVW') -and -not (Test-LansatorOcupat 3 'lock ocupat' 'AGT') -and -not (Test-LansatorOcupat 3 'RDR_OCUPAT: x' 'AGT') }
 T 'Get-CampResult' { (Get-CampResult '{"result":"a\nb","x":1}') -ceq "a`nb" -and @(@('{oops', '{"a":1}', '{"result":5}', '', '[{"result":"x"}]') | Where-Object { $null -ne (Get-CampResult $_) }).Count -eq 0 }
 
 Write-Host 'F7: PR-ul rularii'
@@ -262,6 +366,32 @@ T 'PR cunoscut pe o eroare de review => reluare doar review' {
   $e['incercari'] -eq 0 -and $e['pr'] -eq 77 -and -not $e['review_complet'] -and $s.deLucru[0].mod -ceq 'review' -and $s.deLucru[0].branch -ceq $B1
 }
 T 'starea rularii' { (Get-StareRulare @('PR_DRAFT', 'DECIZIE')) -ceq 'OK' -and (Get-StareRulare @()) -ceq 'OK' -and @(@('ESUAT', 'NECUNOSCUT', 'EROARE', 'OPRIT', 'PR_FARA_REVIEW', 'BLOCAT', '') | Where-Object { (Get-StareRulare @('PR_DRAFT', $_)) -cne 'PARTIAL' }).Count -eq 0 -and (Get-StareRulare @('PR_DRAFT') 1) -ceq 'PARTIAL' -and (Get-StareRulare @('PR_DRAFT') 0 'psql') -ceq 'EROARE' }
+$VER = @{ jak = @{ verdict = 'GO'; p0 = 0; p1 = 0 }; fable = @{ verdict = 'NO_GO'; p0 = 0; p1 = 2 }; sha = $SHA }
+$ECI = Get-StareNoua -Vechi $null -Numar $N -Rezultat @{ stare = 'PR_CI_NECITIT'; pr = 77; branch = $B1; verdicte = $VER; detaliu = 'gh pr checks exit 1' } -Azi '2026-11-12'
+T 'J7 r4: eroare CI => PR_CI_NECITIT; rularea urmatoare reia DOAR CI, cu verdictele salvate' {
+  $s = Select-TicheteDeLucru -Tichete @(Tk $N) -Stare @{ $N = $ECI }
+  $ECI['incercari'] -eq 1 -and -not $ECI['review_complet'] -and $ECI['pas_lipsa'] -ceq 'ci' -and @($s.deLucru).Count -eq 1 -and $s.deLucru[0].mod -ceq 'ci' -and
+  $s.deLucru[0].verdicte.sha -ceq $SHA -and $s.deLucru[0].verdicte.fable.p1 -eq 2 -and $s.deLucru[0].branch -ceq $B1 -and $ECI['ultima_eroare'] -like '*PR_CI_NECITIT*'
+}
+T 'J7 r4: reluarea CI supravietuieste stare.json (JSON dus-intors)' {
+  $o = @(ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @($ECI) -Depth 6))[0]
+  $h = @{}; foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value }
+  $s = Select-TicheteDeLucru -Tichete @(Tk $N) -Stare @{ $N = $h }
+  $s.deLucru[0].mod -ceq 'ci' -and $s.deLucru[0].verdicte.jak.verdict -ceq 'GO' -and $s.deLucru[0].verdicte.fable.p1 -eq 2
+}
+T 'J7 r4: verdicte nevalide => fara pas_lipsa (review nou, fail-closed)' {
+  $rau = @(@{ jak = @{ verdict = 'NECUNOSCUT'; p0 = -1; p1 = -1 }; fable = $VER.fable; sha = $SHA }, @{ jak = $VER.jak; fable = $VER.fable; sha = 'x' }, @{ jak = $VER.jak; fable = @{ verdict = 'GO'; p0 = '0'; p1 = 0 }; sha = $SHA }, $null)
+  @($rau | Where-Object { $e = Get-StareNoua -Vechi $null -Numar $N -Rezultat @{ stare = 'PR_CI_NECITIT'; pr = 77; branch = $B1; verdicte = $_ } -Azi 'z'; $e['pas_lipsa'] -cne '' -or (Select-TicheteDeLucru -Tichete @(Tk $N) -Stare @{ $N = $e }).deLucru[0].mod -cne 'review' }).Count -eq 0
+}
+T 'J7 r4: dupa CI citit => PR_DRAFT, pas_lipsa / verdicte sterse, incercarea nu se consuma din nou' {
+  $e2 = Get-StareNoua -Vechi $ECI -Numar $N -Rezultat @{ stare = 'PR_DRAFT'; pr = 77; branch = $B1 } -Azi '2026-11-13'
+  $e2['review_complet'] -and $e2['pas_lipsa'] -ceq '' -and $null -eq $e2['verdicte'] -and $e2['incercari'] -eq 1 -and (Get-StareRulare @('PR_CI_NECITIT')) -ceq 'PARTIAL'
+}
+T 'J7 r4: orchestratorul nu marcheaza PR_DRAFT la eroare CI / pr view' {
+  $OrchCod.Contains("if (`$sc.stare -ceq 'eroare') { [void]`$x.erori.Add(`$sc.eroare); `$citit = `$false }") -and $OrchCod.Contains("Termina `$x `$(if (`$reviewOk) { 'PR_CI_NECITIT' } else { 'PR_FARA_REVIEW' })") -and
+  ([regex]::Matches($OrchCod, '\$citit = \$false')).Count -eq 3 -and $OrchCod.Contains("`$x.etapa = 'ci_prep'") -and $OrchCod.Contains('Termina $x (StareIntrerupt $x)')
+}
+T 'P2 r3: raport nescris => EROARE (reincercarile raman active)' { $OrchCod -match "raport nescris[^\n]*\n\s*\`$stareFinala = 'EROARE'" }
 T 'orchestratorul: doar OK opreste reincercarile; PARTIAL iese cu 2' { $Orch.Contains("StartsWith('OK ' + `$Azi)") -and ($OrchCod -match "'PARTIAL'\s+\{ ScrieStare 'PARTIAL' \`$rez; exit 2 \}") -and $OrchCod.Contains('Get-StareRulare') }
 
 Write-Host 'Regiunea SalariiPage din src/App.jsx'

@@ -13,13 +13,22 @@ Alegi exact o clasă:
 Scrii cod DOAR pentru clasa L. Pentru B / D / F / ? NU creezi branch și NU faci PR: scrii pe scurt, pe înțelesul
 owner-ului (nu programator), ce trebuie decis și de cine.
 
+## Unelte (lista e închisă: orice altă comandă e refuzată automat, fără să te întrebe cineva)
+- Fișiere: Read, Glob, Grep, Edit, Write — doar în worktree-ul curent (directorul de lucru).
+- Comenzi shell, EXACT în aceste forme, fiecare separat (fără `&&`, `;`, `|`, `cd`, `$( )`):
+  `git status`, `git diff`, `git diff --stat`, `git diff --cached`, `git log --oneline -20`, `git add <fișiere>`,
+  `git commit -m "<mesaj pe o linie>"`, `git switch -c __BRANCH__`, `git push -u origin __BRANCH__`,
+  `gh pr create --draft --base main --head __BRANCH__ --title "<titlu>" --body "<descriere>"`,
+  `npx vitest run`, `npx vitest run <fișier>`, `npx vite build`.
+- Nu ai acces la baza de date, la mail, la web sau în afara worktree-ului; nu încerca să ocolești lista.
+
 ## Pasul 2 — doar pentru clasa L
 1. Reproduci problema (citești codul paginii / ecranului indicat; dacă se poate, test care pică înainte de fix).
 2. Fix LOCAL, minim, în stilul codului existent (CLAUDE.md pct. 5). Fără librării noi, fără TypeScript.
 3. Teste: `npx vitest run` + `npx vite build` trebuie să treacă.
 4. Branch-ul are numele EXACT `__BRANCH__` (niciun alt nume), pornit din origin/main: `git switch -c __BRANCH__`;
-   commit; `git push -u origin __BRANCH__`; `gh pr create --draft --base main --head __BRANCH__` cu `__NR__` în TITLU.
-   În descrierea PR-ului: ce era stricat, ce ai schimbat, cum ai testat.
+   commit; `git push -u origin __BRANCH__`; `gh pr create --draft --base main --head __BRANCH__ --title … --body …`
+   cu `__NR__` în TITLU. În descrierea PR-ului: ce era stricat, ce ai schimbat, cum ai testat.
 5. Limite (CLAUDE.md pct. 1 și 6): NU atingi SalariiPage, schema BD, migrări (`supabase/`), RPC-uri, edge functions,
    `.github/`, `.claude/`, `scripts/`, `package.json`, `package-lock.json`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`,
    hook-uri git. Dacă reparația le cere, tichetul nu e clasa L.

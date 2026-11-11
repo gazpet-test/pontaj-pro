@@ -42,7 +42,7 @@ describe('paritate cu tichete_lib.psm1', () => {
     }
   })
   it('fără caractere de control / bidi literale în surse (editoarele le pot introduce din \\u)', () => {
-    for (const f of ['tichete_lib.psm1', 'tichete_lib.mjs', 'tichete_dimineata.ps1', 'autotest.ps1']) {
+    for (const f of ['tichete_lib.psm1', 'tichete_lib.mjs', 'tichete_dimineata.ps1', 'autotest.ps1', 'lanseaza_agent.ps1', 'instaleaza_task.ps1', 'tichete_lib.test.mjs']) {
       const t = fs.readFileSync(path.join(DIR, f), 'utf8').slice(1)
       const rau = [...t].filter(ch => { const c = ch.charCodeAt(0); return (c < 32 && c !== 9 && c !== 10 && c !== 13) || (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069) || c === 0xFEFF })
       expect(rau.length, f).toBe(0)
@@ -95,48 +95,185 @@ describe('faza 1: orchestratorul NU face merge (decizia coordonatorului)', () =>
     for (const nu of [['push', 'origin', 'main'], ['fetch', '--upload-pack=calc'], ['diff', '--ext-diff'], ['commit'], ['-c', 'core.x=y', 'fetch']])
       expect(L.testComandaGitPermisa(nu), nu.join(' ')).toBe(false)
   })
-  it('agentul pornește cu -Profil tichete', () => expect(faraComentarii).toMatch(/'-Profil', 'tichete'/))
+  it('agentul pornește prin lanseaza_agent.ps1 (nu rdr.ps1)', () => {
+    expect(faraComentarii).not.toMatch(/rdr\.ps1/)
+    expect(faraComentarii).toContain("'-File', $Lansator")
+    expect(faraComentarii).toContain("'lanseaza_agent.ps1'")
+    expect(faraComentarii).not.toMatch(/'-Profil'/)
+  })
+  it('bariera GitHub la fiecare pornire; picată => nu pornește; autorul PR = agentul', () => {
+    expect(faraComentarii).toContain('$bar = VerificaBariera')
+    expect(faraComentarii).toContain("throw ('bariera de identitate GitHub nu trece, nu pornesc: '")
+    expect(faraComentarii).toContain('$Autor = [string]$bar.login')
+  })
 })
 
-describe('J1: profilul „tichete” al lansatorului rdr.ps1 (garda de start, fail-closed)', () => {
-  const P = L.REGULI.profil_tichete
-  const q = a => a.map(x => `'${x}'`).join(', ')
-  const lans = ({ vs = "[ValidateSet('standard','tichete')][string]$Profil = 'standard'", perm = ['Read', 'Edit', 'Bash(git commit:*)', 'Bash(gh pr create --draft:*)', 'Bash(npx vitest run:*)'],
-    refz = P.refuzuri_obligatorii, dirs = [], extra = '' } = {}) =>
-    `param([string]$Brief, ${vs})\n${P.marcaj_start} v1\n$TichetePermise = @(${q(perm)})\n$TicheteRefuzate = @(${q(refz)},\n  'Bash(curl:*)')\n$TicheteAdaugaDir = @(${q(dirs)})\n${extra}${P.marcaj_sfarsit}\n& claude @x\n`
-  it('lansator conform => ok', () => expect(L.testLansatorProfilTichete(lans())).toEqual({ ok: true, motive: [] }))
-  it('lansatorul de azi (fără profil) => refuz', () => {
-    const azi = "param([Parameter(Mandatory)][string]$Brief, [ValidateSet('medium','high','max')][string]$Effort = 'high')\n$r = $prompt | claude -p --allowedTools 'Bash(gh:*)' 'Bash(node:*)'"
-    const r = L.testLansatorProfilTichete(azi)
-    expect(r.ok).toBe(false)
-    expect(r.motive.join(' ')).toMatch(/Profil/)
+describe('J1 (r4): lansatorul propriu — lista ÎNCHISĂ și linia de comandă a agentului', () => {
+  const AG = L.REGULI.agent_tichete
+  const BRL = 'tichete/tkt-2026-0134-i1'
+  // lista așteptată, scrisă AICI independent de reguli.json (L25): orice lărgire cere și schimbarea testului
+  const PERM_ASTEPTAT = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash(git status)', 'Bash(git diff)', 'Bash(git diff --stat)', 'Bash(git diff --cached)',
+    'Bash(git log --oneline -20)', 'Bash(git add *)', 'Bash(git commit *)', `Bash(git switch -c ${BRL})`, `Bash(git push -u origin ${BRL})`,
+    `Bash(gh pr create --draft --base main --head ${BRL} *)`, 'Bash(npx vitest run)', 'Bash(npx vitest run *)', 'Bash(npx vite build)']
+  const REFUZ_MINIM = ['Bash(gh pr merge *)', 'Bash(gh pr ready *)', 'Bash(gh api *)', 'Bash(gh workflow *)', 'Bash(gh release *)', 'Bash(gh secret *)',
+    'Bash(git push origin main *)', 'Bash(git push -u origin main *)', 'Bash(git push --force *)', 'Bash(vercel *)', 'Bash(npx vercel *)', 'Bash(supabase *)',
+    'Bash(npx supabase *)', 'Bash(psql *)', 'PowerShell', 'WebFetch', 'WebSearch']
+  const argv = L.getArgvAgent('TKT-2026-0134', BRL, 'high')
+  const dupa = s => { const i = argv.indexOf(s); const r = []; for (let j = i + 1; j < argv.length && !argv[j].startsWith('--'); j++) r.push(argv[j]); return r }
+  const val = s => argv[argv.indexOf(s) + 1]
+  it('--allowedTools = exact reguli.json (branch înlocuit) = lista așteptată din test', () => {
+    expect(dupa('--allowedTools')).toEqual(AG.permise.map(x => x.split('__BRANCH__').join(BRL)))
+    expect(dupa('--allowedTools')).toEqual(PERM_ASTEPTAT)
   })
-  const nu = {
-    'fără tichete în ValidateSet': { vs: "[ValidateSet('standard')][string]$Profil = 'standard'" },
-    'refuz lipsă (gh pr merge)': { refz: P.refuzuri_obligatorii.filter(x => x !== 'Bash(gh pr merge:*)') },
-    'refuz lipsă (PowerShell)': { refz: P.refuzuri_obligatorii.filter(x => x !== 'PowerShell') },
-    'permisiune largă gh:*': { perm: ['Read', 'Bash(gh:*)'] },
-    'permisiune largă git:* cu spații / majuscule': { perm: ['Read', 'BASH(git:*) '] },
-    'permis = refuzat (node:*)': { perm: ['Read', 'Bash(node:*)'] },
-    'gh api permis': { perm: ['Bash(gh api:*)'] },
-    'director adăugat': { dirs: ['C:\\Users\\Public\\paw-data'] },
-    '--add-dir în bloc': { extra: "$x = '--add-dir'\n" },
-    'bypassPermissions în bloc': { extra: '# --permission-mode bypassPermissions\n' },
-  }
-  for (const [n, o] of Object.entries(nu)) it(`${n} => refuz`, () => expect(L.testLansatorProfilTichete(lans(o)).ok).toBe(false))
-  it('bloc lipsă / dublat / listă cu variabile => refuz', () => {
-    expect(L.testLansatorProfilTichete(lans().replace(P.marcaj_start, '# x')).ok).toBe(false)
-    expect(L.testLansatorProfilTichete(lans() + P.marcaj_start).ok).toBe(false)
-    expect(L.testLansatorProfilTichete(lans().replace("$TichetePermise = @('Read'", "$TichetePermise = @($altele, 'Read'")).ok).toBe(false)
-    expect(L.testLansatorProfilTichete('').ok).toBe(false)
+  it('--disallowedTools = exact refuzurile; conține refuzurile minime', () => {
+    expect(dupa('--disallowedTools')).toEqual(AG.refuzuri)
+    for (const r of REFUZ_MINIM) expect(dupa('--disallowedTools'), r).toContain(r)
   })
-  it('getListaPs', () => {
-    expect(L.getListaPs("$A = @('x', 'y(z:*)',\n `\n 'w') # c", 'A')).toEqual({ v: ['x', 'y(z:*)', 'w'] })
-    expect(L.getListaPs("$A = @()", 'A')).toEqual({ v: [] })
-    expect(L.getListaPs("$A = @('a''b')", 'A')).toBeNull()
-    expect(L.getListaPs('$A = @("x")', 'A')).toBeNull()
-    expect(L.getListaPs("$AB = @('x')", 'A')).toBeNull()
-    expect(L.getListaPs("$A = @('x')\n$A = @('y')", 'A')).toBeNull()
+  it('steagurile: exact cele așteptate, cu valorile fixe, nimic în plus', () => {
+    const ast = ['--restricted', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence', '--permission-mode', '--permission-prompts', '--model', '--effort', '--max-turns', '--output-format', '--tools', '--allowedTools', '--disallowedTools']
+    expect(argv[0]).toBe('-p')
+    expect(argv.filter(a => a.startsWith('--'))).toEqual(ast)
+    expect([val('--permission-mode'), val('--permission-prompts'), val('--output-format'), val('--tools'), val('--effort')]).toEqual(['dontAsk', 'none', 'json', 'Read,Glob,Grep,Edit,Write,Bash', 'high'])
+    expect(argv.length).toBe(1 + ast.length + 7 + PERM_ASTEPTAT.length + AG.refuzuri.length)
+  })
+  it('fără --add-dir / bypass / skip-permissions / settings / mcp-config', () => {
+    expect(argv.filter(a => AG.steaguri_interzise.includes(a) || /dangerously|bypass|acceptEdits/.test(a))).toEqual([])
+  })
+  it('branch / effort / număr invalide => aruncă', () => {
+    for (const [n, b, e] of [['TKT-2026-0134', 'main', 'high'], ['TKT-2026-0134', 'tichete/tkt-2026-0135-i1', 'high'], ['TKT-2026-0134', BRL, 'max'], ['../x', BRL, 'high']])
+      expect(() => L.getArgvAgent(n, b, e), `${n} ${b} ${e}`).toThrow()
+  })
+  it('lista din reguli.json trece; fiecare formă largă e refuzată', () => {
+    expect(L.testListaAgent(AG.permise.map(x => x.split('__BRANCH__').join(BRL)))).toEqual({ ok: true, motive: [] })
+    for (const f of AG.forme_largi) expect(L.testListaAgent(['Read', f]).ok, f).toBe(false)
+  })
+  it('formele largi sunt prinse și de regulile generale (lista explicită golită)', () => {
+    const c2 = { ...AG, forme_largi: [] }
+    for (const f of AG.forme_largi) expect(L.testListaAgent(['Read', f], c2).ok, f).toBe(false)
+  })
+  it('alte forme refuzate (program, acoperire de refuz, sintaxă, unelte)', () => {
+    const nu = ['Bash(git push *)', 'Bash(git push origin main)', 'Bash(git push -u origin main)', 'Bash(gh pr merge 7)', 'Bash(gh api repos/x)', 'Bash(git config --global a b)',
+      'Bash(npx vercel deploy)', 'Bash(npx supabase db push)', 'Bash(python -c x)', 'Bash(rm -rf x)', 'Bash(git commit:*)', 'Bash(git * main)', 'Bash(git push origin "main")',
+      'Bash(git status && curl x)', 'Bash(git status; x)', 'Bash(GIT status)', 'Bash(npx vitest)x', 'Bash()', 'PowerShell', 'WebFetch', 'WebSearch', 'mcp__Gmail__send_message',
+      'Task', 'Agent', 'NotebookEdit', 'Read(//C:/**)', 'Edit(//C:/x/**)', 'Bash(git push origin HEAD:main)', 'Bash(gh auth token)', 'Bash(git credential fill)']
+    for (const x of nu) expect(L.testListaAgent([x]).ok, x).toBe(false)
+  })
+  it('dublat / gol / unealtă necunoscută în --tools => refuz', () => {
+    expect(L.testListaAgent(['Read', 'Read']).ok).toBe(false)
+    expect(L.testListaAgent([]).ok).toBe(false)
+    expect(L.testListaAgent(['Read'], { ...AG, unelte: [...AG.unelte, 'WebFetch'] }).ok).toBe(false)
+  })
+  it('splitComandaPermisiune', () => {
+    expect(L.splitComandaPermisiune('Bash(git add *)')).toEqual({ fix: ['git', 'add'], wild: true })
+    expect(L.splitComandaPermisiune('Bash(git status)')).toEqual({ fix: ['git', 'status'], wild: false })
+    expect(L.splitComandaPermisiune('Bash(git push origin HEAD:main)')).toBeNull()
+    expect(L.splitComandaPermisiune('Bash(git push origin HEAD:main *)', true)).toEqual({ fix: ['git', 'push', 'origin', 'HEAD:main'], wild: true })
+  })
+  it('joinArgvWindows: citire înapoi cu un parser CommandLineToArgvW independent', () => {
+    const a = ['a', 'b c', 'Bash(git add *)', '', 'x"y', 'C:\\a b\\', 'Bash(gh pr create --draft --base main --head tichete/tkt-1-i1 *)']
+    const s = L.joinArgvWindows(a)
+    expect(s).toBe('a "b c" "Bash(git add *)" "" "x\\"y" "C:\\a b\\\\" "Bash(gh pr create --draft --base main --head tichete/tkt-1-i1 *)"')
+    // parser după regulile documentate MSVCRT (2n backslash + " => n backslash, ghilimea delimitează; 2n+1 => n backslash + ")
+    const parse = t => { const out = []; let i = 0
+      while (i < t.length) { while (t[i] === ' ') i++; if (i >= t.length) break
+        let cur = '', q = false
+        for (; i < t.length; i++) {
+          let bs = 0; while (t[i] === '\\') { bs++; i++ }
+          if (t[i] === '"') { cur += '\\'.repeat(Math.floor(bs / 2)); if (bs % 2) { cur += '"'; continue } q = !q; continue }
+          cur += '\\'.repeat(bs); if (i >= t.length) break
+          if (t[i] === ' ' && !q) break
+          cur += t[i]
+        }
+        out.push(cur) }
+      return out }
+    expect(parse(s)).toEqual(a)
+  })
+  const lans = fs.readFileSync(path.join(DIR, 'lanseaza_agent.ps1'), 'utf8').split(/\r?\n/).filter(l => !/^\s*#/.test(l)).map(l => l.replace(/\s#\s.*$/, '')).join('\n')
+  it('lanseaza_agent.ps1: nu citește / nu apelează rdr.ps1; linia doar din Get-ArgvAgent; mediu înlocuit; git verificat', () => {
+    expect(lans).not.toMatch(/rdr\.ps1/)
+    expect(lans).toContain('Get-ArgvAgent')
+    expect(lans).toContain('$psi.EnvironmentVariables.Clear()')
+    expect(lans).toContain('VerificaGit $wt')
+    expect(lans).toContain('Exec $ClaudeExe $argv $wt')
+    expect(lans).not.toMatch(/add-dir|bypass|acceptEdits|dangerously/)
+  })
+})
+
+describe('J1 / P1 (r4): mediul agentului, agent.json, config git, bariera GitHub', () => {
+  const AG = L.REGULI.agent_tichete
+  const TOK = 'github_pat_' + 'A'.repeat(30)
+  const CAI = L.getCaiAgent('C:\\Users\\x')
+  const BAZA = { Path: 'C:\\Windows', SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\x', APPDATA: 'C:\\a', PGPASSWORD: 's', PGPASSFILE: 'C:\\p', PGUSER: 'u',
+    SUPABASE_SERVICE_ROLE_KEY: 's', GITHUB_TOKEN: 's', GH_TOKEN: 'server', ANTHROPIC_API_KEY: 's', CLAUDE_CODE_OAUTH_TOKEN: 's', GIT_ASKPASS: 'x',
+    GIT_CONFIG_PARAMETERS: 'x', GIT_CONFIG_COUNT: '1', RESEND_API_KEY: 's', SSH_AUTH_SOCK: 'x', VERCEL_TOKEN: 's', GH_CONFIG_DIR: 'C:\\server' }
+  const FIXE = ['CLAUDE_CONFIG_DIR', 'GH_TOKEN', 'GH_CONFIG_DIR', 'GH_PROMPT_DISABLED', 'GH_NO_UPDATE_NOTIFIER', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT',
+    'GCM_INTERACTIVE', 'PGPASSFILE', 'PGSERVICEFILE', 'ENABLE_CLAUDEAI_MCP_SERVERS', 'DISABLE_AUTOUPDATER', 'NO_COLOR']
+  it('mediu: listă albă + valori fixe; secretele serverului nu trec', () => {
+    const m = L.getMediuAgent(BAZA, TOK, CAI, 'C:\\c')
+    for (const k of Object.keys(m)) expect(AG.mediu_pastrat.includes(k) || FIXE.includes(k), k).toBe(true)
+    expect(m).toMatchObject({ GH_TOKEN: TOK, PGPASSFILE: 'NUL', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'C:\\Users\\x\\.tichete-agent\\gitconfig', GH_CONFIG_DIR: 'C:\\Users\\x\\.tichete-agent\\gh', Path: 'C:\\Windows' })
+    for (const k of ['PGPASSWORD', 'PGUSER', 'SUPABASE_SERVICE_ROLE_KEY', 'GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GIT_ASKPASS', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'RESEND_API_KEY', 'SSH_AUTH_SOCK', 'VERCEL_TOKEN'])
+      expect(Object.keys(m), k).not.toContain(k)
+  })
+  it('token: forma unui token GitHub de utilizator; token invalid => mediul nu se construiește', () => {
+    expect(L.testFormaTokenAgent(TOK)).toBe(true)
+    expect(L.testFormaTokenAgent('ghp_' + 'a'.repeat(36))).toBe(true)
+    for (const t of ['gho_' + 'a'.repeat(36), 'ghs_' + 'a'.repeat(36), '', 'github_pat_scurt', 'ghp_scurt', TOK + '\n', TOK + ' x', null]) expect(L.testFormaTokenAgent(t), String(t)).toBe(false)
+    expect(() => L.getMediuAgent({}, 'ghp_x', CAI, 'C:\\c')).toThrow()
+  })
+  it('agent.json valid (email implicit) / invalid', () => {
+    const c = L.testConfigAgent('{"versiune":1,"repo":"o/r","login_agent":"gazpet-tichete","_nota":"x"}')
+    expect(c.ok).toBe(true)
+    expect(c.cfg).toMatchObject({ email_commit: 'gazpet-tichete@users.noreply.github.com', clona_baza: '' })
+    for (const t of ['', 'x', '[]', '{"versiune":2,"repo":"o/r","login_agent":"a"}', '{"versiune":1,"repo":"o/r"}', '{"versiune":1,"repo":"o/r","login_agent":"-a"}', '{"versiune":1,"repo":"o/r","login_agent":"a","token":"x"}',
+      '{"versiune":1,"repo":"o","login_agent":"a"}', '{"versiune":1,"repo":"o/r","login_agent":"a","clona_baza":"C:\\\\a b"}', '{"versiune":1,"repo":"o/r","login_agent":"a","clona_baza":"C:\\\\a\\\\..\\\\b"}',
+      '{"versiune":1,"repo":"o/r","login_agent":"a","email_commit":"a b"}', '{"versiune":"1","repo":"o/r","login_agent":"a"}'])
+      expect(L.testConfigAgent(t).ok, t).toBe(false)
+  })
+  it('gitconfig agent: doar helper-ul gh, lista moștenită golită', () => {
+    const g = L.getTextGitconfigAgent({ login_agent: 'gazpet-tichete', email_commit: 'a@b.c' })
+    expect(g).toContain('\thelper =\n\thelper = !gh auth git-credential\n')
+    expect(g).toContain('name = gazpet-tichete')
+    expect(() => L.getTextGitconfigAgent({ login_agent: 'a b', email_commit: 'a@b.c' })).toThrow()
+  })
+  const E = (o, kv) => o + '\0' + kv + '\0'
+  const FAG = 'file:C:/Users/x/.tichete-agent/gitconfig'
+  const GZ = E(FAG, 'user.name\nx') + E(FAG, 'credential.helper\n') + E(FAG, 'credential.helper\n!gh auth git-credential') + E('file:.git/config', 'core.bare\nfalse') + E('file:.git/config', 'remote.origin.url\nhttps://github.com/o/r.git')
+  it('config git: conform => ok; credențiale / antete / include / remote străine => refuz', () => {
+    expect(L.testConfigGitAgent(GZ, CAI.gitconfig, 'o/r')).toEqual({ ok: true, motive: [] })
+    const nu = [GZ + E('file:C:/Program Files/Git/etc/gitconfig', 'credential.helper\nmanager'), GZ + E('file:.git/config', 'http.https://github.com/.extraHeader\nAUTHORIZATION: x'),
+      GZ + E('file:.git/config', 'include.path\nC:/x'), GZ + E('file:.git/config', 'includeIf.gitdir:C:/x/.path\ny'), GZ + E('file:.git/config', 'url.https://x/.insteadOf\nhttps://github.com/'),
+      GZ + E('file:.git/config', 'core.askpass\nx.exe'), GZ + E('file:.git/config', 'remote.origin.pushurl\nhttps://x'), GZ + E('command line:', 'user.name\nx'),
+      GZ + E('file:.git/config', 'remote.origin.url\nhttps://github.com/o/alt'), GZ.replace('o/r.git', 'o/alt.git'), GZ.split(FAG).join('file:C:/alt/gitconfig'), GZ.slice(0, -1), '']
+    for (const x of nu) expect(L.testConfigGitAgent(x, CAI.gitconfig, 'o/r').ok, JSON.stringify(x).slice(-80)).toBe(false)
+  })
+  it('getRepoDinUrl', () => {
+    expect(L.getRepoDinUrl('https://github.com/o/r.git')).toBe('o/r')
+    expect(L.getRepoDinUrl('https://github.com/o/r\n')).toBe('o/r')
+    expect(L.getRepoDinUrl('git@github.com:o/r.git')).toBe('')
+    expect(L.getRepoDinUrl('https://evil.example/o/r')).toBe('')
+  })
+  const PERM_OK = { admin: false, maintain: false, push: true, triage: true, pull: true }
+  const RMAIN = [{ type: 'pull_request', ruleset_id: 11, parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true } }]
+  const RALTA = ['creation', 'update', 'deletion'].map(type => ({ type, ruleset_id: 12 }))
+  const bar = (o = {}) => L.testBarieraGitHub({ loginServer: 'coordonator', loginAgentConfig: 'gazpet-tichete', loginAgent: 'gazpet-tichete', permisiuni: PERM_OK,
+    reguliMain: RMAIN, reguliAlta: RALTA, reguliTichete: [], ocolire: { 11: 'never', 12: 'never' }, ...o })
+  it('bariera: conform => ok', () => expect(bar()).toEqual({ ok: true, motive: [] }))
+  it('bariera: identitate / drepturi / reguli lipsă sau ocolibile => refuz', () => {
+    const pr = p => [{ type: 'pull_request', ruleset_id: 11, parameters: p }]
+    const nu = [{ loginAgent: 'altcineva' }, { loginAgent: 'Coordonator', loginAgentConfig: 'Coordonator' }, { loginServer: '' }, { permisiuni: { admin: true, maintain: false, push: true } },
+      { permisiuni: { admin: false, maintain: true, push: true } }, { permisiuni: { admin: false, maintain: false, push: false } }, { permisiuni: { maintain: false, push: true } }, { permisiuni: null },
+      { reguliMain: [] }, { reguliMain: pr({ required_approving_review_count: 0, dismiss_stale_reviews_on_push: true }) }, { reguliMain: pr({ required_approving_review_count: '1', dismiss_stale_reviews_on_push: true }) },
+      { reguliMain: pr({ required_approving_review_count: 1, dismiss_stale_reviews_on_push: false }) }, { ocolire: { 11: 'always', 12: 'never' } }, { ocolire: { 11: 'pull_requests_only', 12: 'never' } },
+      { ocolire: { 12: 'never' } }, { ocolire: { 11: 'never', 12: 'always' } }, { reguliAlta: RALTA.filter(r => r.type !== 'deletion') }, { reguliTichete: [{ type: 'creation', ruleset_id: 12 }] }]
+    for (const o of nu) expect(bar(o).ok, JSON.stringify(o)).toBe(false)
+  })
+  it('citirile gh api ale barierei sunt permise; scrierile nu', () => {
+    for (const ok of [['api', 'repos/o/r', '--jq', '.permissions'], ['api', 'repos/o/r/rules/branches/main'], ['api', 'repos/o/r/rules/branches/tichete%2Fverificare-bariera'], ['api', 'repos/o/r/rulesets/42', '--jq', '.current_user_can_bypass']])
+      expect(L.testComandaGhPermisa(ok), ok.join(' ')).toBe(true)
+    for (const nu of [['api', 'repos/o/r/rulesets/42', '-X', 'DELETE'], ['api', 'repos/o/r', '--jq', '.permissions', '-f', 'x=y'], ['api', 'repos/o/r/rules/branches/main', '--method', 'PUT'],
+      ['api', 'repos/o/r/rules/branches/a b'], ['api', 'repos/o/r/pulls/7/merge'], ['api', 'graphql'], ['api', 'repos/o/r\n', '--jq', '.permissions'], ['api', 'repos/o/r/rulesets/42']])
+      expect(L.testComandaGhPermisa(nu), nu.join(' ')).toBe(false)
   })
 })
 
@@ -380,13 +517,14 @@ describe('J3: ieșirile lansatoarelor (run_paw jak, rvw/rdr ocupat)', () => {
     expect(L.getStarePaw('PAW_EROARE 1 ocupat de alta rulare')).toBe('OCUPAT')
     for (const s of ['VERDICT: GO', 'PAW_GATAX', null]) expect(L.getStarePaw(s)).toBe('NECUNOSCUT')
   })
-  it('RDR_OCUPAT / RVW_OCUPAT (exit 3 + ultima linie)', () => {
+  it('AGT_OCUPAT / RVW_OCUPAT (exit 3 + ultima linie)', () => {
     expect(L.testLansatorOcupat(3, 'RVW_OCUPAT: 3 rulari deja active', 'RVW')).toBe(true)
-    expect(L.testLansatorOcupat(3, 'RDR_OCUPAT: 3 rulari deja active', 'RDR')).toBe(true)
+    expect(L.testLansatorOcupat(3, 'AGT_OCUPAT: 3 rulari deja active', 'AGT')).toBe(true)
     expect(L.testLansatorOcupat(1, 'RVW_OCUPAT: 3 rulari deja active', 'RVW')).toBe(false)
-    expect(L.testLansatorOcupat(3, 'RDR_OCUPAT: x', 'RVW')).toBe(false)
+    expect(L.testLansatorOcupat(3, 'AGT_OCUPAT: x', 'RVW')).toBe(false)
     expect(L.testLansatorOcupat(3, 'am vazut RVW_OCUPAT: in log', 'RVW')).toBe(false)
-    expect(L.testLansatorOcupat(3, 'lock ocupat', 'RDR')).toBe(false)
+    expect(L.testLansatorOcupat(3, 'lock ocupat', 'AGT')).toBe(false)
+    expect(L.testLansatorOcupat(3, 'RDR_OCUPAT: x', 'AGT')).toBe(false)
   })
   it('getCampResult', () => {
     expect(L.getCampResult('{"result":"a\\nb","x":1}')).toBe('a\nb')
@@ -522,6 +660,45 @@ describe('J7: starea tichetelor și a rulării — niciun „OK” fals', () => 
     for (const s of ['ESUAT', 'NECUNOSCUT', 'EROARE', 'OPRIT', 'PR_FARA_REVIEW', 'BLOCAT', '']) expect(L.getStareRulare(['PR_DRAFT', s]), s).toBe('PARTIAL')
     expect(L.getStareRulare(['PR_DRAFT'], 1)).toBe('PARTIAL')
     expect(L.getStareRulare(['PR_DRAFT'], 0, 'psql')).toBe('EROARE')
+  })
+  const VER = { jak: { verdict: 'GO', p0: 0, p1: 0 }, fable: { verdict: 'NO_GO', p0: 0, p1: 2 }, sha: SHA }
+  const eci = () => L.getStareNoua(null, N, { stare: 'PR_CI_NECITIT', pr: 77, branch: B1, verdicte: VER, detaliu: 'gh pr checks exit 1' }, '2026-11-12')
+  it('J7 r4: eroare CI => PR_CI_NECITIT; rularea următoare reia DOAR CI, cu verdictele salvate', () => {
+    const e = eci()
+    expect(e).toMatchObject({ incercari: 1, review_complet: false, pas_lipsa: 'ci' })
+    expect(e.ultima_eroare).toContain('PR_CI_NECITIT')
+    const s = L.selectTicheteDeLucru({ tichete: [tk(N)], stare: { [N]: e } })
+    expect(s.deLucru).toHaveLength(1)
+    expect(s.deLucru[0]).toMatchObject({ mod: 'ci', branch: B1 })
+    expect(s.deLucru[0].verdicte).toEqual(VER)
+  })
+  it('J7 r4: reluarea CI supraviețuiește stare.json (JSON dus-întors)', () => {
+    const e = JSON.parse(JSON.stringify(eci()))
+    const s = L.selectTicheteDeLucru({ tichete: [tk(N)], stare: { [N]: e } })
+    expect(s.deLucru[0].mod).toBe('ci')
+    expect(s.deLucru[0].verdicte).toEqual(VER)
+  })
+  it('J7 r4: verdicte nevalide => fără pas_lipsa (review nou, fail-closed)', () => {
+    for (const v of [{ ...VER, jak: { verdict: 'NECUNOSCUT', p0: -1, p1: -1 } }, { ...VER, sha: 'x' }, { ...VER, fable: { verdict: 'GO', p0: '0', p1: 0 } }, null]) {
+      const e = L.getStareNoua(null, N, { stare: 'PR_CI_NECITIT', pr: 77, branch: B1, verdicte: v }, 'z')
+      expect(e.pas_lipsa, JSON.stringify(v)).toBe('')
+      expect(L.selectTicheteDeLucru({ tichete: [tk(N)], stare: { [N]: e } }).deLucru[0].mod).toBe('review')
+    }
+  })
+  it('J7 r4: după CI citit => PR_DRAFT, pas_lipsa / verdicte șterse, încercarea nu se consumă din nou', () => {
+    const e2 = L.getStareNoua(eci(), N, { stare: 'PR_DRAFT', pr: 77, branch: B1 }, '2026-11-13')
+    expect(e2).toMatchObject({ review_complet: true, pas_lipsa: '', verdicte: null, incercari: 1 })
+    expect(L.getStareRulare(['PR_CI_NECITIT'])).toBe('PARTIAL')
+  })
+  it('J7 r4: orchestratorul nu marchează PR_DRAFT la eroare CI / pr view', () => {
+    expect(faraComentarii).toContain("if ($sc.stare -ceq 'eroare') { [void]$x.erori.Add($sc.eroare); $citit = $false }")
+    expect(faraComentarii).toContain("Termina $x $(if ($reviewOk) { 'PR_CI_NECITIT' } else { 'PR_FARA_REVIEW' })")
+    expect(faraComentarii.split('$citit = $false').length - 1).toBe(3)
+    expect(faraComentarii).toContain("$x.etapa = 'ci_prep'")
+    expect(faraComentarii).toContain('Termina $x (StareIntrerupt $x)')
+  })
+  it('P2 r3: raport nescris => EROARE (reîncercările rămân active)', () => {
+    expect(faraComentarii).toMatch(/raport nescris[^\n]*\n\s*\$stareFinala = 'EROARE'/)
   })
   it('orchestratorul: doar OK oprește reîncercările zilei; PARTIAL iese cu cod ≠ 0', () => {
     expect(orch).toMatch(/StartsWith\('OK ' \+ \$Azi\)/)
