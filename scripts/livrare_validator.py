@@ -48,8 +48,10 @@
 #     și „pg_settings” apar DOAR în citirea exactă PLAFON_CITIRE de mai jos ⇒ refuz la SET / SET LOCAL / set_config /
 #     RESET / ALTER ROLE|DATABASE|FUNCTION … SET / CREATE FUNCTION … SET / UPDATE pg_settings / citire necalificată;
 #   * orice „RESET ALL”.
-#   SQL-ul dinamic construit din bucăți (chr(), format, U& în corpuri) nu se poate vedea static: îl prinde garda finală a
-#   runnerului (valoarea și timpul de la BEGIN înainte de COMMIT). Fără opțiune: regulile de dinainte, neschimbate.
+#   SQL-ul dinamic construit din bucăți (chr(), format, U& în corpuri) și apelul unei funcții EXISTENTE cu
+#   SET transaction_timeout nu se pot vedea static: le prinde garda finală a runnerului (valoarea și timpul de la BEGIN,
+#   runda 12: în același mesaj cu COMMIT-ul). Validatorul e gardă de PROTOCOL, nu dovadă. Fără opțiune: regulile de
+#   dinainte, neschimbate.
 #
 # Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.

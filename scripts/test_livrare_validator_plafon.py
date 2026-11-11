@@ -6,6 +6,8 @@ Fiecare caz e un artefact minim (cu garda de livrare). Asteptat:
     (SET LOCAL transaction_timeout = 0; SELECT pg_sleep(3)), in DO, in functii create de artefact, prin concatenare,
     RESET / RESET ALL, ALTER ROLE ... SET, citirea necalificata (umbrire prin pg_temp.pg_settings), UPDATE pg_settings;
     citirea exacta „FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'” = acceptata;
+  * runda 12: LIMITA scrisa ca test — SQL-ul dinamic din bucati si apelul unei functii existente sunt ACCEPTATE (nu se
+    vad static); validatorul e garda de protocol, nu dovada; le prinde garda finala a runnerului;
   * FARA optiune: aceleasi artefacte au exact rezultatul de dinainte (regresie: runda 10 neschimbata);
   * apelul fara tag / cu argumente in plus = cod de utilizare 2.
 """
@@ -43,6 +45,11 @@ CAZURI = [
     ("citirea permisa de doua ori", ("DO $d$ DECLARE v text; BEGIN SELECT setting INTO v " + CITIRE + "; SELECT source INTO v "
                                      + CITIRE + "; END $d$;\n"), 0, 0),
     ("fara nicio mentiune", "CREATE TABLE public.t_ok (id integer);\n", 0, 0),
+    # Runda 12 (Jakarinos r14): LIMITA validatorului, scrisa ca test — formele de mai jos NU se vad static si sunt
+    # ACCEPTATE; le prinde garda finala a runnerului (acelasi mesaj cu COMMIT-ul; test_livrare_plafon.sh rearmare/functie).
+    ("limita: SQL dinamic din bucati (chr(95))",
+     "DO $d$ BEGIN EXECUTE format('SET LOCAL %s = 0', 'transaction' || chr(95) || 'timeout'); END $d$;\n", 0, 0),
+    ("limita: apelul unei functii existente", "SELECT public.f_dormi_plafon();\n", 0, 0),
 ]
 
 
