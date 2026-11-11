@@ -37,7 +37,7 @@ else
   [[ -x "$PG_BIN/initdb" ]] || { echo "MEDIU: PG$PG_MAJOR lipsa"; exit 2; }
 fi
 [[ "$("$PG_BIN/postgres" --version)" == *" $PG_MAJOR."* ]] || { echo "MEDIU: este necesar PG$PG_MAJOR"; exit 2; }
-# r11: portul trebuie sa fie liber (ex. clona locala a chat-ului ruleaza pe 5433; harness-ul foloseste 6700 + slot).
+# r11: portul trebuie sa fie liber (alt cluster local poate rula pe aceeasi masina; harness-ul foloseste 6700 + slot).
 PORT_RC=0; "$PG_BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT" -t 2 || PORT_RC=$?
 [[ "$PORT_RC" == 2 ]] || { echo "MEDIU: portul $PORT e ocupat (pg_isready=$PORT_RC), alege alt slot"; exit 2; }
 mkdir -p "$TMP"

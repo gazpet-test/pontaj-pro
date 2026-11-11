@@ -457,17 +457,18 @@ fusese rulata.
    SyncRep). 18a ruleaza complet si intra in COMMIT; dupa 3 s sesiunea e tot in COMMIT (SyncRep), cu lock-urile 18a,
    fara `transaction timeout`; la eliberarea asteptarii tranzactia se COMITE (starea = aplicat). Fereastra masurata > 3 s.
    Deci limita e reala si exact cea descrisa mai sus.
-4. **Rulare fara WSL (punctul 4 din brief):** `scripts/portal/harness_win.sh` = harness-ul din Git Bash cu binarele
-   Windows PostgreSQL 17 (`PORTAL_PG_BIN`, implicit `C:\Users\Public\pgsql\bin`), fara `su` / `chown`, copie LF noua in
-   `C:\Users\Public\paw-data\tmp_portal_<slot>_XXXXXXXX`, cluster efemer pe 127.0.0.1:6700+slot (verificat liber cu
-   `pg_isready`; clona chat-ului de pe 5433 nu e atinsa), fara socket unix, locale builtin C.UTF-8. Ca sa mearga pe
+4. **Rulare fara WSL:** `scripts/portal/harness_win.sh` = harness-ul din Git Bash cu binarele Windows PostgreSQL 17
+   (`PORTAL_PG_BIN`), fara `su` / `chown`, copie LF noua in `<PORTAL_TMP_BAZA>/tmp_portal_<slot>_XXXXXXXX` (ambele cai
+   obligatorii, fara valori implicite), cluster efemer pe 127.0.0.1:6700+slot (verificat liber cu `pg_isready`; alte
+   baze locale nu sunt atinse), fara socket unix, locale builtin C.UTF-8. Ca sa mearga pe
    Windows, harness-ul nu mai foloseste meta-comenzi psql (`\!` ruleaza in cmd.exe) si nici FIFO: pauzele / barierele
    clientului sunt SQL trimis pe stdin, dupa ce serverul a terminat partea 1 (`pg_stat_activity`: „idle in transaction”
    cu marcajul ca ultima instructiune) — la fel in `lock_budget_refusal` si in cursa din `concurrency_1b.sh`.
    Adaptoarele `psql` / `pg_dump` scot CR-ul din iesirea Windows. Linux / WSL: neschimbat (`harness_wsl.sh`).
 
 ### Dovezi (de rulat de chat; la mine `psql` / binarele PG si `bash -n` cer aprobare)
-- `bash scripts/portal/harness_win.sh 3 60` (Git Bash, din worktree). In log: `LOCK_CAP 18a|19a|rev19a|rev18a
+- `PORTAL_PG_BIN=<binare PG17> PORTAL_TMP_BAZA=<dosar de lucru> bash scripts/portal/harness_win.sh 3 60` (Git Bash,
+  din worktree). In log: `LOCK_CAP 18a|19a|rev19a|rev18a
   critic|commit|mostenit` (12 linii), `LOCK_COMMIT_LENT 18a`, restul probelor r10, ultima `PASS ... r11 ...` cu `cod=0`.
 - Sau WSL cu PG17: `harness_wsl.sh` (neschimbat), aceleasi linii.
 
