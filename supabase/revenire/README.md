@@ -284,3 +284,13 @@ COMMIT;
 RESET transaction_timeout;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; r2: PostgreSQL 17 + plafonul `3000/session` (ceasul de tranzacție pornit la BEGIN: ~3 s de la BEGIN până la intrarea în COMMIT, altfel serverul închide sesiunea și nu se schimbă nimic); precondiție = cele 4 funcții (corp, securitate, drepturi) + funcțiile 20261209a pe care le cheamă politicile; un singur punct de blocare după verificările de catalog (din `pg_locks`: nimic din public / storage / auth blocat înaintea lui), `NOWAIT` pe toate (tabelele acoperite în ordinea numelui + `storage.objects` ACCESS EXCLUSIVE, tabelul de acces + `sites` ACCESS SHARE), reîncercare în subtranzacție până la 1 s de la BEGIN, apoi 55P03 `BUGET_LOCK`, nimic scris — ÎNAINTEA verificării: fiecare politică `executie_acces_*` a 20261209a (inclusiv `executie_acces_proiect_citire`) = exact forma 20261213a și nicio politică în plus cu prefixul nostru; `ALTER POLICY` înapoi la textul 20261209a din același generator; postcondiție = forma 20261209a exactă, nimic nu mai depinde de funcțiile de aici, celelalte politici neschimbate; DROP fără CASCADE; dezarmare. Testat în `scripts/test_executie_acces_perf.sql` (T9r: revenirea 20261209a refuzată cât timp 20261213a e aplicată, nearmată = refuz, politică schimbată = refuz, fără plafon = refuz, politica tabelului de acces ștearsă = refuz, armată = amprenta politicilor 20261209a + echivalența pe conturi + planul vechi, re-aplicare), `scripts/test_executie_acces_perf_revenire.sql` (T9z, după T3–T6) și `scripts/test_executie_acces_perf_concurenta.sh` (clona: refuz curat cu un tabel ocupat, plafonul închide sesiunea, revenirea reală măsurată sub trafic).
+
+## 20261215c — Izometrie: mută o piesă la început (`20261215c_izometrie_muta_pozitie_ROLLBACK.sql`, NEAPLICAT)
+Scoate RPC-ul `fn_executie_tevi_muta_pozitie` (TKT-2026-0388). Nu atinge date: ordinea pieselor rămâne cea de acum; butonul ⤒ revine la „disponibil după actualizarea bazei de date”, ↑ / ↓ rămân ca azi. Nu redeschide nimic. **Dacă se scot amândouă, se rulează ÎNAINTEA revenirii 20261209a.** Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215c', 'SCOATE_MUTA_POZITIE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = funcția migrării (INVOKER, jsonb) și nimic legat de ea în `pg_depend`; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare); scenariul pe clonă: `supabase/tests/20261215c_izometrie_muta_pozitie.sql`.
