@@ -41,7 +41,21 @@
 #     logica gărzilor (prima/ultima, ce refuză) rămân parte din review-ul artefactului aprobat.
 # Literal/comentariu/dollar-quote neterminat, octeți non-UTF-8, NUL ⇒ REFUZ. Orice excepție ⇒ REFUZ (cod ≠ 0).
 #
-# Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>]
+# Runda 11 (11.11.2026, Jakarinos r13 P2 pe PR #1054): cu --plafon-tranzactie (runnerul cu --plafon-tranzactie-ms),
+#   artefactul NU are voie să atingă ceasul tranzacției, oriunde în fișier (nivel superior, DO, corpuri de funcții,
+#   literali, comentarii — fail-closed, ca la parametrii lexicali):
+#   * „transaction_timeout” (fără majuscule; și după eliminarea a tot ce nu e [a-z0-9_], ca 'transaction' || '_timeout')
+#     și „pg_settings” apar DOAR în citirea exactă PLAFON_CITIRE de mai jos ⇒ refuz la SET / SET LOCAL / set_config /
+#     RESET / ALTER ROLE|DATABASE|FUNCTION … SET / CREATE FUNCTION … SET / UPDATE pg_settings / citire necalificată;
+#   * orice „RESET ALL”.
+#   SQL-ul dinamic construit din bucăți (chr(), format, U& în corpuri) și apelul unei funcții EXISTENTE cu
+#   SET transaction_timeout nu se pot vedea static: le prinde garda finală a runnerului (valoarea și timpul de la BEGIN,
+#   runda 12: în același mesaj cu COMMIT-ul; runda 13: refuz PLAFON_AMANABIL pentru obiectele amânabile create /
+#   modificate în tranzacție). Garanția exactă și limitele ei (COMMIT-ul propriu-zis, codul preexistent care rulează
+#   amânat, ocolirea deliberată a runnerului) sunt în antetul scripts/livrare_migrare.sh. Validatorul și garda sunt
+#   gărzi de PROTOCOL, nu dovadă și nici autorizație. Fără opțiune: regulile de dinainte, neschimbate.
+#
+# Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.
 # Ieșire: 0 = acceptat (tipărește „OK <n instrucțiuni>”); 1 = refuzat (motivul pe stderr); orice altceva = eroare ⇒ refuz.
 # ============================================================================
@@ -54,6 +68,10 @@ PROTEJATE = set(LEXICALE) | {"search_path"}
 SET_INTERZISE = {"NAMES", "SCHEMA", "TRANSACTION", "SESSION"}  # după SET [LOCAL]: alias-uri/izolare
 SEARCH_PATH_OK = ["SET", "LOCAL", "SEARCH_PATH", "=", "PUBLIC", ",", "PG_TEMP"]
 GARDA = "gazpet.livrare_migrare"
+# Runda 11: singura formă permisă cu --plafon-tranzactie (citire, schemă calificată, octet cu octet).
+PLAFON_CITIRE = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
+PLAFON_NUME = ("transaction_timeout", "pg_settings")
+RESET_ALL = re.compile(r"(?<![a-z0-9_$])reset[ \t\n\r\f\v]+all(?![a-z0-9_$])")
 SPATIU = " \t\n\r\f\v"
 IDENT_START = re.compile(r"[A-Za-z_\u0080-\U0010FFFF]")
 TAG = re.compile(r"\$([A-Za-z_\u0080-\U0010FFFF][A-Za-z0-9_\u0080-\U0010FFFF]*)?\$")
@@ -288,7 +306,24 @@ def verifica_set_config(ln, toks):
                 raise Refuz(f"set_config('{toks[k + 2][1:]}') la nivel superior (linia {ln}) — parametru protejat")
 
 
-def valideaza(cale, tag_interzis=None):
+def verifica_plafon(text):
+    """Runda 11: cu --plafon-tranzactie, nicio atingere a ceasului tranzacției (vezi antetul). Numără pe textul BRUT
+    (fail-closed: și comentariile / literalii / corpurile), fără majuscule, apoi pe textul comprimat la [a-z0-9_]."""
+    mic = text.lower()
+    permise = text.count(PLAFON_CITIRE)
+    comprimat = re.sub(r"[^a-z0-9_]", "", mic)
+    for nume in PLAFON_NUME:
+        n, nc = mic.count(nume), comprimat.count(nume)
+        if n != permise or nc != permise:
+            raise Refuz(f"cu plafonul tranzacției activ, „{nume}” apare de {max(n, nc)} ori, dar doar {permise} în citirea "
+                        f"permisă „{PLAFON_CITIRE}” — artefactul nu are voie să schimbe / reseteze / citească altfel "
+                        f"ceasul tranzacției (SET, SET LOCAL, set_config, RESET, ALTER … SET, funcții cu SET)")
+    m = RESET_ALL.search(mic)
+    if m:
+        raise Refuz(f"cu plafonul tranzacției activ, RESET ALL e interzis oriunde (linia {linie(text, m.start())})")
+
+
+def valideaza(cale, tag_interzis=None, plafon=False):
     brut = open(cale, "rb").read()
     if b"\x00" in brut:
         raise Refuz("octet NUL în fișier")
@@ -305,6 +340,8 @@ def valideaza(cale, tag_interzis=None):
     for p in LEXICALE:
         if p in mic:
             raise Refuz(f"fișierul menționează parametrul lexical {p} (interzis oriunde; runnerul îl fixează)")
+    if plafon:
+        verifica_plafon(text)
     instr = instructiuni(text)
     if not instr:
         raise Refuz("fișier fără instrucțiuni")
@@ -330,11 +367,15 @@ def valideaza(cale, tag_interzis=None):
 
 
 def main(argv):
-    if len(argv) not in (2, 3):
-        print("Utilizare: livrare_validator.py <fișier.sql> [<tag-interzis>]", file=sys.stderr)
+    args = list(argv[1:])
+    plafon = bool(args) and args[-1] == "--plafon-tranzactie"
+    if plafon:
+        args.pop()
+    if len(args) not in (1, 2) or any(a.startswith("--") for a in args):
+        print("Utilizare: livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie]", file=sys.stderr)
         return 2
     try:
-        n = valideaza(argv[1], argv[2] if len(argv) == 3 else None)
+        n = valideaza(args[0], args[1] if len(args) == 2 else None, plafon)
     except Refuz as e:
         print(f"REFUZ validator: {e}", file=sys.stderr)
         return 1
