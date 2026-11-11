@@ -1,5 +1,6 @@
 ﻿# instaleaza_task.ps1 — creează (sau înlocuiește) task-ul Windows „Gazpet Tichete dimineata” pe serverul AI.
-# L–V 07:30, utilizator Gazpet-Ai, pornire cât mai curând după un start ratat, reîncercare de 3 ori la 30 de minute,
+# L–V 07:30, utilizator Gazpet-Ai (ORCHESTRATORUL; agentul îl pornește orchestratorul sub contul local dedicat din agent.json —
+# r5, refuz dacă e același cont), pornire cât mai curând după un start ratat, reîncercare de 3 ori la 30 de minute,
 # oprire după 3 ore, o singură instanță. NU rulează task-ul (prima rulare o pornește chat-ul, de preferat cu -Simulare).
 # Rulare (PowerShell ca Gazpet-Ai):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tichete_dimineata\instaleaza_task.ps1 [-RepoDir <clonă>] [-Mod Interactiv|Parola] [-Dezinstaleaza]
@@ -39,12 +40,26 @@ if (-not $cfgT.ok) { throw ('lipseste dovada barierei (' + $Cai.config + '): ' +
 $tok = if (Test-Path -LiteralPath $Cai.token -PathType Leaf) { ([IO.File]::ReadAllText($Cai.token)).Trim() } else { '' }
 if (-not (Test-FormaTokenAgent $tok)) { throw ('lipseste tokenul agentului (' + $Cai.token + ') - vezi README, „Bariera de identitate”') }
 $tok = $null
+# r5 (P1): contul Windows comun = condiție de instalare. Task-ul rulează ORCHESTRATORUL sub $Utilizator (coordonatorul: pgpass,
+# gh, raport); agentul rulează sub contul local DEDICAT din agent.json (cont_windows). Același cont (nume sau SID) => refuz.
+$contAg = [string]$cfgT.cfg.cont_windows
+$numeTask = ($Utilizator -split '\\')[-1]
+if ($contAg -ieq $numeTask -or $contAg -ieq $env:USERNAME) { throw ('agentul ar rula sub acelasi cont Windows ca orchestratorul (' + $contAg + ') - vezi README, „Contul Windows al agentului”') }
+try {
+  $sidTask = (New-Object Security.Principal.NTAccount($Utilizator)).Translate([Security.Principal.SecurityIdentifier]).Value
+  $sidAg = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, $contAg)).Translate([Security.Principal.SecurityIdentifier]).Value
+} catch { throw ('contul task-ului sau contul agentului nu exista: ' + $_.Exception.Message) }
+if ($sidTask -ceq $sidAg) { throw 'agentul ar rula sub acelasi cont Windows ca orchestratorul (acelasi SID)' }
+if ($sidTask -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { throw ('instaleaza_task.ps1 se ruleaza ca ' + $Utilizator + ' (contul coordonatorului, care tine agent.json si parola agentului)') }
+if (-not (Test-Path -LiteralPath $Cai.cont -PathType Leaf)) { throw ('lipseste ' + $Cai.cont + ' (parola contului agentului, Export-Clixml) - vezi README') }
 # lista închisă a agentului trebuie să treacă și aici (aceeași ca la fiecare lansare)
-[void](Get-ArgvAgent -Numar 'TKT-2026-0001' -Branch 'tichete/tkt-2026-0001-i1' -Effort 'high')
-$v = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script -RepoDir $RepoDir -DoarVerificare
+[void](Get-ArgvAgent -Numar 'TKT-2026-0001' -Branch 'tichete/tkt-2026-0001-i1' -Effort 'high' -Setari (Get-CaiRadacinaAgent $cfgT.cfg.radacina_agent).fisSetari)
+# bariera completă cu -Instalare: ruleset-urile (forma canonică, cu tokenul agentului) + bypass_actors citit cu identitatea
+# coordonatorului + scrierea amprentei + proba contului Windows al agentului (sub contul lui)
+$v = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script -RepoDir $RepoDir -DoarVerificare -Instalare
 $codV = $LASTEXITCODE
 $v | ForEach-Object { Write-Host $_ }
-if ($codV -ne 0) { throw 'bariera de identitate GitHub nu trece - task-ul nu se instaleaza (vezi mesajul de mai sus si README)' }
+if ($codV -ne 0) { throw 'bariera de identitate GitHub / contul Windows al agentului nu trec - task-ul nu se instaleaza (vezi mesajul de mai sus si README)' }
 
 $actiune = New-ScheduledTaskAction -Execute 'powershell.exe' `
   -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $Script + '" -RepoDir "' + $RepoDir + '"') `

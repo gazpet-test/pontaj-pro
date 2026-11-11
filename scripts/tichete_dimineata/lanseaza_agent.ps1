@@ -1,74 +1,128 @@
-﻿# lanseaza_agent.ps1 — lansatorul PROPRIU al agentului „Tichete dimineața” (r4, J1). Versionat în repo, revizuit odată cu
-# orchestratorul. NU citește și NU apelează rdr.ps1: construiește el însuși linia de comandă a agentului (Get-ArgvAgent din
-# tichete_lib.psm1, doar din reguli.json → agent_tichete), într-un worktree propriu pe tichet, cu mediu curățat și cu
-# identitatea GitHub SEPARATĂ a agentului (tokenul din %USERPROFILE%\.tichete-agent\, README → „Bariera de identitate”).
-# Utilizare (o face orchestratorul): powershell -File lanseaza_agent.ps1 -Brief <paw-data\brief\tkt-….md> -Numar TKT-2026-0134
-#   -Branch tichete/tkt-2026-0134-i1 [-Effort medium|high] [-DoarLinie]
-# Ieșire: paw-data\out\agent_<slug>.json (stdout-ul claude -p --output-format json) + agent_<slug>.err.log.
-# Ultima linie din stdout: AGT_GATA <slug> | AGT_OCUPAT: … (exit 3) | AGT_EROARE: <motiv> (exit 1).
-# -DoarLinie: scrie linia de comandă (JSON, fără secrete) și iese, fără să pornească nimic (pentru review / test).
-# Mediul serverului (din rdr.ps1, citit doar ca model): binarul claude din npm global, login-ul Claude în CLAUDE_CONFIG_DIR,
-# clona de bază + rădăcina worktree-urilor, cele 3 locuri comune cu rdr.ps1 (lock_rdr_1..3). Clona / rădăcina se pot schimba
-# din agent.json (clona_baza, radacina_worktree).
+﻿# lanseaza_agent.ps1 — lansatorul PROPRIU al agentului „Tichete dimineața” (r4 J1; r5: rulează SUB CONTUL WINDOWS AL AGENTULUI).
+# Versionat în repo, revizuit odată cu orchestratorul. NU citește și NU apelează rdr.ps1.
+# r5 (P1, contul Windows comun): orchestratorul (contul coordonatorului: tichete din BD prin pgpass, review-uri, raport) pornește
+# ACEST script sub contul local dedicat al agentului (Process.Start cu credențiale + profil încărcat, mediu dat explicit, job
+# object pentru oprire — tichete_dimineata.ps1 → PornesteLansator). Agentul primește DOAR: brief-ul (stdin), tokenul GitHub al
+# contului lui (TICHETE_GH_TOKEN), lansare.json (doar-citire) și worktree-ul. Nimic din profilul coordonatorului.
+# La FIECARE pornire, înainte de orice: VerificaCont (contul curent ≠ coordonatorul, nu e în Administrators, nu poate citi
+# profilul / pgpass / gh / paw-data ale coordonatorului, nu poate scrie garda / setările / lansare.json). Orice acces => refuz.
+# Utilizare (o face orchestratorul, sub contul agentului):
+#   powershell -NoProfile -File lanseaza_agent.ps1 -Config <rădăcină>\setari\lansare.json -Numar TKT-2026-0134
+#     -Branch tichete/tkt-2026-0134-i1 [-Effort medium|high]          (brief-ul pe stdin)
+#   … -DoarVerificareCont    doar probele contului (instalare / fiecare pornire a orchestratorului)
+#   … -DoarLinie             linia de comandă a agentului (JSON, fără secrete), fără să pornească nimic
+# Ieșire: <rădăcină>\iesire\<slug>\agent.json (stdout-ul claude -p --output-format json), agent.err.log, garda.log, stare.txt.
+# Ultima linie din stare.txt / stdout: AGT_GATA <slug> | AGT_CONT_OK | AGT_EROARE: <motiv>. Cod: 0 = gata, 1 = eroare.
 param(
-  [Parameter(Mandatory)][string]$Brief,
-  [Parameter(Mandatory)][string]$Numar,
-  [Parameter(Mandatory)][string]$Branch,
+  [Parameter(Mandatory)][string]$Config,
+  [string]$Numar = '',
+  [string]$Branch = '',
   [ValidateSet('medium', 'high')][string]$Effort = 'high',
-  [switch]$DoarLinie
+  [switch]$DoarLinie,
+  [switch]$DoarVerificareCont
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 Import-Module (Join-Path $PSScriptRoot 'tichete_lib.psm1') -Force
-
-$DataDir      = 'C:\Users\Public\paw-data'
-$ConfigClaude = 'C:\Users\Gazpet-Ai\.claude-redari'
-$ClonaImplicita = 'C:\Users\Gazpet-Ai\gazpet-erp-redari'
-$RadacinaImplicita = 'C:\Users\Gazpet-Ai\rdr-wt'
 $UTF8 = New-Object System.Text.UTF8Encoding($false)
 $Ag = (Get-ReguliTichete).agent_tichete
+$FisStareIesire = ''
 
-function Iesi([string]$linie, [int]$cod) { Write-Output $linie; exit $cod }
+function Iesi([string]$linie, [int]$cod) {
+  if ($FisStareIesire) { try { [IO.File]::WriteAllText($FisStareIesire, $linie + "`r`n", $UTF8) } catch {} }
+  Write-Output $linie
+  exit $cod
+}
+function Motiv($e) { return (Get-TextSigurLinie $e.Exception.Message 200) }
 
-# ── 1. Intrările (validare strictă) + linia de comandă ──────────────────────────────────────────────────────
+# ── 1. Configurarea (lansare.json, scrisă de orchestrator, doar-citire pentru agent) ──────────────────────────────
 try {
-  $slug = Get-SlugTichet $Numar
-  if (-not (Test-BranchPropriu $Numar $Branch)) { throw 'branch invalid pentru tichet' }
-  $argv = @(Get-ArgvAgent -Numar $Numar -Branch $Branch -Effort $Effort)
-} catch { Iesi ('AGT_EROARE: ' + (Get-TextSigurLinie $_.Exception.Message 200)) 1 }
-if ($DoarLinie) { Write-Output (ConvertTo-Json -Compress -InputObject @($argv)); exit 0 }
-
-try {
-  $b = (Resolve-Path -LiteralPath $Brief).Path
-  if (-not $b.StartsWith((Join-Path $DataDir 'brief') + '\', [StringComparison]::OrdinalIgnoreCase) -or -not $b.EndsWith('.md', [StringComparison]::OrdinalIgnoreCase)) { throw 'brief-ul trebuie sa fie un .md in paw-data\brief' }
-  $prompt = [IO.File]::ReadAllText($b, $UTF8)
-  if (-not $prompt.Trim()) { throw 'brief gol' }
-  # ── 2. Configurarea agentului (în afara repo-ului) + tokenul lui ───────────────────────────────────────────
-  $Cai = Get-CaiAgent $env:USERPROFILE
-  $cfgT = Test-ConfigAgent $(if (Test-Path -LiteralPath $Cai.config -PathType Leaf) { [IO.File]::ReadAllText($Cai.config, $UTF8) } else { '' })
-  if (-not $cfgT.ok) { throw ('agent.json: ' + ((@($cfgT.motive) | Select-Object -First 3) -join '; ')) }
+  if (-not (Test-CaleSimpla $Config) -or -not $Config.EndsWith('\setari\lansare.json', [StringComparison]::OrdinalIgnoreCase)) { throw 'Config trebuie sa fie <radacina>\setari\lansare.json' }
+  $cfgT = Test-ConfigAgent -Text ([IO.File]::ReadAllText($Config, $UTF8)) -Lansare
+  if (-not $cfgT.ok) { throw ('lansare.json: ' + ((@($cfgT.motive) | Select-Object -First 3) -join '; ')) }
   $Cfg = $cfgT.cfg
-  $token = if (Test-Path -LiteralPath $Cai.token -PathType Leaf) { ([IO.File]::ReadAllText($Cai.token, $UTF8)).Trim() } else { '' }
-  if (-not (Test-FormaTokenAgent $token)) { throw 'tokenul agentului lipseste sau nu are forma unui token GitHub de utilizator' }
-  $Clona = if ($Cfg.clona_baza) { $Cfg.clona_baza } else { $ClonaImplicita }
-  $Radacina = if ($Cfg.radacina_worktree) { $Cfg.radacina_worktree } else { $RadacinaImplicita }
-  # worktree pe încercare: <rădăcină>\tkt-2026-0134-i1 (branch-ul e deja validat: tichete/<slug>-i<n>)
-  $wt = Join-Path $Radacina $Branch.Substring(([string](Get-ReguliTichete).prefix_branch).Length)
-  $Mediu = Get-MediuAgent -Baza ([Environment]::GetEnvironmentVariables()) -Token $token -Cai $Cai -ConfigClaude $ConfigClaude
+  $Ra = Get-CaiRadacinaAgent $Cfg.radacina_agent
+  if ($Config -ine $Ra.fisLansare) { throw 'lansare.json nu e cel din radacina agentului' }
+  $slug = if ($DoarVerificareCont) { '_verificare' } else { Get-SlugTichet $Numar }
+  if (-not (Test-Path -LiteralPath $Ra.iesire)) { New-Item -ItemType Directory -Path $Ra.iesire | Out-Null }
+  $DirIesire = Join-Path $Ra.iesire $slug
+  if (-not (Test-Path -LiteralPath $DirIesire)) { New-Item -ItemType Directory -Path $DirIesire | Out-Null }
+  if (((Get-Item -LiteralPath $DirIesire -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'directorul de iesire e o legatura' }
+  $FisStareIesire = Join-Path $DirIesire 'stare.txt'
+} catch { Iesi ('AGT_EROARE: ' + (Motiv $_)) 1 }
+
+# ── 2. Contul Windows: probele de izolare (SUB contul agentului) ───────────────────────────────────────────────
+function TestCitire([string]$p) {
+  # $true dacă procesul curent poate citi calea (director: listare; fișier: deschidere pentru citire). Lipsă / refuz => $false.
+  try {
+    if (Test-Path -LiteralPath $p -PathType Container) { [void][IO.Directory]::GetFileSystemEntries($p); return $true }
+    if (Test-Path -LiteralPath $p -PathType Leaf) { $f = [IO.File]::Open($p, 'Open', 'Read', 'ReadWrite'); $f.Close(); return $true }
+  } catch {}
+  return $false
+}
+function TestScriere([string]$p) {
+  # $true dacă procesul curent poate scrie: director => creează (și șterge) un fișier de probă; fișier => deschidere pentru scriere
+  # FĂRĂ trunchiere. Lipsă / refuz => $false.
+  try {
+    if (Test-Path -LiteralPath $p -PathType Container) {
+      $pr = Join-Path $p ('proba_scriere_' + [guid]::NewGuid().ToString('N') + '.tmp')
+      $f = [IO.File]::Open($pr, 'CreateNew', 'Write', 'None'); $f.Close()
+      try { [IO.File]::Delete($pr) } catch {}
+      return $true
+    }
+    if (Test-Path -LiteralPath $p -PathType Leaf) { $f = [IO.File]::Open($p, 'Open', 'Write', 'ReadWrite'); $f.Close(); return $true }
+  } catch {}
+  return $false
+}
+function VerificaCont {
+  $eu = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $sid = $eu.User.Value
+  if ($sid -ceq $Cfg.sid_coordonator) { throw 'agentul ruleaza sub contul coordonatorului' }
+  $numeEu = [string]$eu.Name
+  if (-not $numeEu.EndsWith('\' + $Cfg.cont_windows, [StringComparison]::OrdinalIgnoreCase)) { throw ('contul curent nu e contul agentului din configurare') }
+  # grupurile tokenului, inclusiv cele „doar pentru refuz” (UAC): Administrators = S-1-5-32-544
+  $g = & whoami.exe /groups /fo csv /nh
+  if ($LASTEXITCODE -ne 0) { throw 'whoami /groups esuat' }
+  if (@($g | Where-Object { $_ -match 'S-1-5-32-544' }).Count -gt 0) { throw 'contul agentului e membru Administrators' }
+  foreach ($p in @($Cfg.interzise_citire)) { if (TestCitire $p) { throw ('contul agentului poate citi o cale a coordonatorului: ' + (Get-TextSigurLinie $p 120)) } }
+  $proprii = @($Ra.setari, $Ra.fisSetari, $Ra.fisLansare, $PSScriptRoot) + @(@('garda_agent.mjs', 'tichete_lib.mjs', 'tichete_lib.psm1', 'reguli.json', 'lanseaza_agent.ps1', 'sablon_brief.md') | ForEach-Object { Join-Path $PSScriptRoot $_ })
+  foreach ($p in @(@($Cfg.interzise_scriere) + $proprii)) { if (TestScriere $p) { throw ('contul agentului poate scrie o cale protejata: ' + (Get-TextSigurLinie $p 120)) } }
+  foreach ($p in @($Cfg.claude_exe, $Cfg.node_exe)) { if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { throw ('lipseste ' + (Split-Path -Leaf $p)) }; if (TestScriere $p) { throw ('contul agentului poate inlocui ' + (Split-Path -Leaf $p)) } }
+}
+# ── 3. Intrările (validare strictă) + linia de comandă (-DoarLinie: doar o afișează, fără probe și fără să pornească nimic) ─
+if (-not $DoarVerificareCont) {
+  try {
+    if (-not (Test-BranchPropriu $Numar $Branch)) { throw 'branch invalid pentru tichet' }
+    $argv = @(Get-ArgvAgent -Numar $Numar -Branch $Branch -Effort $Effort -Setari $Ra.fisSetari)
+  } catch { Iesi ('AGT_EROARE: ' + (Motiv $_)) 1 }
+  if ($DoarLinie) { Write-Output (ConvertTo-Json -Compress -InputObject @($argv)); exit 0 }
+}
+try { VerificaCont } catch { Iesi ('AGT_EROARE: ' + (Motiv $_)) 1 }
+if ($DoarVerificareCont) { Iesi 'AGT_CONT_OK' 0 }
+
+try {
+  # tokenul GitHub al agentului (pus de orchestrator în mediul acestui proces); scos din mediul propriu după citire
+  $token = [string][Environment]::GetEnvironmentVariable('TICHETE_GH_TOKEN')
+  [Environment]::SetEnvironmentVariable('TICHETE_GH_TOKEN', $null)
+  if (-not (Test-FormaTokenAgent $token)) { throw 'tokenul agentului lipseste din mediu' }
+  # brief-ul vine pe stdin (orchestratorul nu dă agentului acces la paw-data)
+  $ms = New-Object System.IO.MemoryStream
+  [Console]::OpenStandardInput().CopyTo($ms)
+  $prompt = $UTF8.GetString($ms.ToArray()).TrimStart([char]0xFEFF)
+  if (-not $prompt.Trim()) { throw 'brief gol pe stdin' }
+  if ($prompt.Length -gt 400000) { throw 'brief prea mare' }
+  # setările gărzii: exact cele așteptate (node.exe + garda din folderul acestui script), scrise de orchestrator
+  $Garda = Join-Path $PSScriptRoot 'garda_agent.mjs'
+  $setAstept = Get-TextSetariAgent -NodeExe $Cfg.node_exe -Garda $Garda
+  if (-not (Test-Path -LiteralPath $Ra.fisSetari -PathType Leaf) -or ([IO.File]::ReadAllText($Ra.fisSetari, $UTF8)).Trim() -cne $setAstept) { throw 'setarile garzii lipsesc sau difera de cele asteptate' }
+  # worktree pe încercare: <rădăcină>\wt\tkt-2026-0134-i1 (branch-ul e deja validat: tichete/<slug>-i<n>)
+  $wt = Join-Path $Ra.wt $Branch.Substring(([string](Get-ReguliTichete).prefix_branch).Length)
+  $Mediu = Get-MediuAgent -Baza ([Environment]::GetEnvironmentVariables()) -Token $token -Cfg $Cfg -Worktree $wt
+  $Mediu['TICHETE_BRANCH'] = $Branch
+  $Mediu['TICHETE_GARDA_LOG'] = Join-Path $DirIesire 'garda.log'
   $token = $null
   $GitExe = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-  $ClaudeExe = $null
-  $c = @(Get-Command claude.exe -CommandType Application -ErrorAction SilentlyContinue)
-  if ($c.Count -gt 0) { $ClaudeExe = $c[0].Source }
-  else {
-    $cmd = @(Get-Command claude.cmd -CommandType Application -ErrorAction SilentlyContinue)
-    if ($cmd.Count -gt 0) {
-      $e = Join-Path (Split-Path -Parent $cmd[0].Source) 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'
-      if (Test-Path -LiteralPath $e -PathType Leaf) { $ClaudeExe = $e }
-    }
-  }
-  if (-not $ClaudeExe) { throw 'nu gasesc claude.exe' }
-} catch { Iesi ('AGT_EROARE: ' + (Get-TextSigurLinie $_.Exception.Message 200)) 1 }
+} catch { Iesi ('AGT_EROARE: ' + (Motiv $_)) 1 }
 
 function Exec([string]$exe, [string[]]$a, [string]$cwd, [int]$sec = 300, [AllowNull()][string]$stdin = $null) {
   # proces cu mediul AGENTULUI (înlocuit complet, nu moștenit); stdin trimis ca octeți UTF-8; timeout => kill pe tot arborele
@@ -103,8 +157,17 @@ function VerificaGit([string]$dir) {
   # credențialele / remote-ul văzute de git cu mediul agentului (fail-closed)
   $r = Git @('-C', $dir, 'config', '--show-origin', '-z', '--list')
   if ($r.exit -ne 0) { throw 'git config --list esuat' }
-  $v = Test-ConfigGitAgent -Iesire $r.out -FisierAgent $Cai.gitconfig -Repo $Cfg.repo
-  if (-not $v.ok) { throw ('config git nepermis pentru agent: ' + ((@($v.motive) | Select-Object -First 3) -join '; ')) }
+  $vg = Test-ConfigGitAgent -Iesire $r.out -FisierAgent $Ra.gitconfig -Repo $Cfg.repo
+  if (-not $vg.ok) { throw ('config git nepermis pentru agent: ' + ((@($vg.motive) | Select-Object -First 3) -join '; ')) }
+}
+function ProbaGarda([string]$dir) {
+  # r5: garda chiar rulează și chiar refuză, ÎNAINTE de agent (node + garda_agent.mjs, cu mediul agentului, în worktree):
+  # `ls` (citire „sigură” pe care CLI-ul ar lăsa-o) => exit 2; `git status` => exit 0.
+  foreach ($caz in @(@{ cmd = 'ls'; cod = 2 }, @{ cmd = 'git status'; cod = 0 }, @{ cmd = 'git status; ls'; cod = 2 })) {
+    $in = ConvertTo-Json -Compress -InputObject ([ordered]@{ hook_event_name = 'PreToolUse'; cwd = $dir; tool_name = 'Bash'; tool_input = [ordered]@{ command = $caz.cmd } })
+    $r = Exec $Cfg.node_exe @($Garda) $dir 60 $in
+    if ($r.exit -ne $caz.cod) { throw ('proba garzii a esuat pe "' + $caz.cmd + '" (exit ' + $r.exit + ', asteptat ' + $caz.cod + ')') }
+  }
 }
 function WorktreeCurat([string]$dir) {
   # curat = fără modificări și fără commit-uri neîmpinse (la fel ca rdr.ps1); altfel rămâne pentru recuperare
@@ -118,52 +181,44 @@ function WorktreeCurat([string]$dir) {
 function StergeWorktree([string]$dir) {
   # (fără 2>$null: în PS 5.1, cu ErrorActionPreference = Stop, stderr-ul nativ redirecționat devine eroare terminală)
   if (Test-Path -LiteralPath (Join-Path $dir 'node_modules')) { & cmd.exe /d /c rmdir (Join-Path $dir 'node_modules') | Out-Null }
-  [void](Git @('-C', $Clona, 'worktree', 'remove', '--force', $dir))
+  [void](Git @('-C', $Ra.clona, 'worktree', 'remove', '--force', $dir))
 }
-
-# ── 3. Un loc din 3 (comun cu rdr.ps1: „maximum 3 rulări simultan”) ─────────────────────────────────────────
-$fs = $null
-foreach ($i in 1..3) {
-  try { $fs = [IO.File]::Open((Join-Path $DataDir ('lock_rdr_' + $i)), 'OpenOrCreate', 'ReadWrite', 'None'); break } catch { $fs = $null }
-}
-if (-not $fs) { Iesi 'AGT_OCUPAT: 3 rulari deja active' 3 }
 
 $final = ''; $cod = 1; $creat = $false
 try {
-  # ── 4. gitconfig + director gh ale agentului (rescrise la fiecare pornire) ───────────────────────────────────
-  if (-not (Test-Path -LiteralPath $Cai.gh)) { New-Item -ItemType Directory -Path $Cai.gh | Out-Null }
-  [IO.File]::WriteAllText($Cai.gitconfig, (Get-TextGitconfigAgent $Cfg), $UTF8)
-  VerificaGit $Clona
-  # ── 5. worktree propriu pe tichet (încercare), pornit din origin/main ────────────────────────────────────────
+  # ── 4. gitconfig + director gh ale agentului (rescrise la fiecare pornire, în <rădăcină>\cfg) ─────────────────
+  foreach ($d in @($Ra.cfg, $Ra.gh, $Ra.wt)) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
+  [IO.File]::WriteAllText($Ra.gitconfig, (Get-TextGitconfigAgent $Cfg), $UTF8)
+  VerificaGit $Ra.clona
+  # ── 5. worktree propriu pe tichet (încercare), pornit din origin/main ──────────────────────────────────────
   if (Test-Path -LiteralPath $wt) {
     if (-not (WorktreeCurat $wt)) { throw ('worktree ramas cu modificari neimpinse: ' + (Split-Path -Leaf $wt) + ' (de verificat de om)') }
     StergeWorktree $wt
     if (Test-Path -LiteralPath $wt) { throw ('worktree vechi blocat: ' + (Split-Path -Leaf $wt)) }
   }
-  $r = Git @('-C', $Clona, 'fetch', '-q', 'origin')
+  $r = Git @('-C', $Ra.clona, 'fetch', '-q', 'origin')
   if ($r.exit -ne 0) { throw 'git fetch esuat' }
-  $r = Git @('-C', $Clona, 'worktree', 'add', '-q', '--detach', $wt, 'origin/main')
+  $r = Git @('-C', $Ra.clona, 'worktree', 'add', '-q', '--detach', $wt, 'origin/main')
   if ($r.exit -ne 0) { throw 'git worktree add esuat' }
   $creat = $true
-  # dependențele: legătură către node_modules din clona de bază (ca rdr.ps1)
-  if (-not (Test-Path -LiteralPath (Join-Path $wt 'node_modules')) -and (Test-Path -LiteralPath (Join-Path $Clona 'node_modules'))) {
-    & cmd.exe /d /c mklink /J (Join-Path $wt 'node_modules') (Join-Path $Clona 'node_modules') | Out-Null
+  # dependențele: legătură către node_modules din clona de bază (garda refuză uneltele de fișiere pe node_modules)
+  if (-not (Test-Path -LiteralPath (Join-Path $wt 'node_modules')) -and (Test-Path -LiteralPath (Join-Path $Ra.clona 'node_modules'))) {
+    & cmd.exe /d /c mklink /J (Join-Path $wt 'node_modules') (Join-Path $Ra.clona 'node_modules') | Out-Null
   }
   VerificaGit $wt
-  # ── 6. agentul ────────────────────────────────────────────────────────────────────────────────────────────
-  $fOut = Join-Path $DataDir ('out\agent_' + $slug + '.json')
-  $r = Exec $ClaudeExe $argv $wt ([int]$Ag.minute_max * 60) $prompt
-  [IO.File]::WriteAllText($fOut, [string]$r.out, $UTF8)
-  [IO.File]::WriteAllText((Join-Path $DataDir ('out\agent_' + $slug + '.err.log')), [string]$r.err, $UTF8)
+  ProbaGarda $wt
+  # ── 6. agentul ──────────────────────────────────────────────────────────────────────────────────────────
+  $r = Exec $Cfg.claude_exe $argv $wt ([int]$Ag.minute_max * 60) $prompt
+  [IO.File]::WriteAllText((Join-Path $DirIesire 'agent.json'), [string]$r.out, $UTF8)
+  [IO.File]::WriteAllText((Join-Path $DirIesire 'agent.err.log'), [string]$r.err, $UTF8)
   if ($r.exit -eq -1) { throw 'agentul a depasit timpul maxim' }
   $final = 'AGT_GATA ' + $slug; $cod = 0
 } catch {
-  $final = 'AGT_EROARE: ' + (Get-TextSigurLinie $_.Exception.Message 200); $cod = 1
+  $final = 'AGT_EROARE: ' + (Motiv $_); $cod = 1
 } finally {
   $ErrorActionPreference = 'Continue'
   if ($creat -and (Test-Path -LiteralPath $wt)) {
     if (WorktreeCurat $wt) { StergeWorktree $wt } else { Write-Output ('AGT_PASTRAT: ' + (Split-Path -Leaf $wt) + ' are modificari neimpinse') }
   }
-  if ($fs) { $fs.Close() }
 }
 Iesi $final $cod

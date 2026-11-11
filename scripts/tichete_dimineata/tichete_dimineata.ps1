@@ -10,7 +10,11 @@
 #      („îndeplinește condițiile de merge: da / nu, de ce”); merge-ul îl face sesiunea de coordonare
 #   f. raport în paw-data\out; lock global; stare OK / PARTIAL / EROARE (OK doar dacă totul a ajuns la un rezultat cunoscut).
 # La FIECARE pornire (și cu -DoarVerificare, folosit de instaleaza_task.ps1): bariera de identitate GitHub (Test-BarieraGitHub,
-# citiri `gh api` cu tokenul agentului); verificare picată / imposibilă => EROARE, nu pornește nimic.
+# citiri `gh api` cu tokenul agentului: ruleset-urile ÎNSEȘI + proba pe 3 nume + amprenta de la instalare) și contul Windows
+# al agentului (r5: alt cont local, standard, fără acces la profilul coordonatorului — probe făcute SUB contul agentului);
+# verificare picată / imposibilă => EROARE, nu pornește nimic.
+# r5: împărțirea în două procese — ACEST script rulează ca coordonator (tichete din BD prin pgpass, gh pentru review-uri,
+# raport); agentul rulează în lanseaza_agent.ps1 SUB CONTUL AGENTULUI (PornesteLansator), cu brief-ul pe stdin și doar tokenul lui.
 # Fișa de securitate: README.md. Nimic din tichet nu ajunge în SQL / nume de fișier / linie de comandă.
 [CmdletBinding()]
 param(
@@ -19,7 +23,6 @@ param(
   [string]$Psql        = 'C:\Users\Public\pgsql\bin\psql.exe',
   [string]$PgHost      = 'aws-1-eu-central-1.pooler.supabase.com',
   [string]$PgUser      = 'postgres.dxczwkbciseqniprspcu',
-  [string]$Lansator    = '',                                        # implicit lanseaza_agent.ps1 de lângă acest script
   [string]$Rvw         = 'C:\Users\Gazpet-Ai\claude-redari\rvw.ps1',
   [string]$RunPaw      = 'C:\ProgramData\Gazpet\Paw\bin\run_paw.cmd',
   [int]$MaxParalel     = 3,
@@ -30,7 +33,9 @@ param(
   [int]$MinuteReview   = 45,      # plafon per review (Jakarinos are timeout propriu 20 min)
   [switch]$Simulare,              # citește tichetele + scrie brief-urile, NU pornește agentul / review (bariera doar raportată)
   [switch]$Forteaza,              # rulează chiar dacă azi există deja o rulare OK
-  [switch]$DoarVerificare         # doar bariera de identitate GitHub (exit 0 = trece); nu atinge starea, nu citește tichete
+  [switch]$DoarVerificare,        # doar bariera de identitate GitHub + contul Windows al agentului (exit 0 = trec); nu citește tichete
+  [switch]$Instalare              # cu -DoarVerificare (instaleaza_task.ps1): citește și bypass_actors cu identitatea coordonatorului și
+                                  # SCRIE amprenta ruleset-urilor (singurul loc unde se scrie)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,9 +51,11 @@ $Start = Get-Date
 $Deadline = $Start.AddMinutes($MinuteTotal)
 $Azi = $Start.ToString('yyyy-MM-dd')
 if (-not $RepoDir) { $RepoDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
-if (-not $Lansator) { $Lansator = Join-Path $PSScriptRoot 'lanseaza_agent.ps1' }
+# r5: lansatorul e FIX (lângă acest script, în clona orchestratorului, doar-citire pentru agent — verificat de proba contului)
+$Lansator = Join-Path $PSScriptRoot 'lanseaza_agent.ps1'
 $CaiAgent = Get-CaiAgent $env:USERPROFILE
 $TokenAgent = ''; $LoginAgent = ''
+$CfgAgent = $null; $RaAgent = $null; $CredAgent = $null
 $BriefDir = Join-Path $DataDir 'brief'
 $OutDir   = Join-Path $DataDir 'out'
 $StareDir = Join-Path $DataDir 'tichete_dimineata'
@@ -127,13 +134,26 @@ function JsonGh($r, [string]$ce) {
   if ($r.exit -ne 0) { throw ($ce + ': gh api esuat (' + (Get-TextSigurLinie $r.err 160) + ')') }
   try { return (ConvertFrom-Json -InputObject $r.out) } catch { throw ($ce + ': JSON necitit') }
 }
-function VerificaBariera {
-  # Condiția de instalare și de pornire (P1 r3, README „Bariera de identitate”): agent.json + token (în afara repo-ului),
-  # repo-ul din agent.json = cel al clonei, apoi citiri gh api cu tokenul agentului → Test-BarieraGitHub. Aruncă la orice
-  # verificare imposibilă; întoarce @{ ok; motive; login }.
+function JsonGhLista($r, [string]$ce) {
+  # răspunsul unei citiri gh api care TREBUIE să fie o listă JSON ('[...]'); altfel aruncă. Întoarce elementele (apelantul pune @()).
+  if ($r.exit -ne 0) { throw ($ce + ': gh api esuat (' + (Get-TextSigurLinie $r.err 160) + ')') }
+  $t = ([string]$r.out).Trim()
+  if (-not $t.StartsWith('[') -or -not $t.EndsWith(']')) { throw ($ce + ': raspunsul nu e o lista JSON') }
+  return (JsonLista $t)
+}
+function CitesteConfigAgent {
+  # agent.json (v2) din profilul coordonatorului; aruncă dacă lipsește / e invalid
   $cfgT = Test-ConfigAgent $(if (Test-Path -LiteralPath $CaiAgent.config -PathType Leaf) { [IO.File]::ReadAllText($CaiAgent.config, $UTF8) } else { '' })
-  if (-not $cfgT.ok) { return @{ ok = $false; motive = @(@($cfgT.motive) | ForEach-Object { 'agent.json: ' + $_ }); login = '' } }
-  $cfg = $cfgT.cfg
+  if (-not $cfgT.ok) { throw ('agent.json: ' + ((@($cfgT.motive) | Select-Object -First 4) -join '; ')) }
+  return $cfgT.cfg
+}
+function VerificaBariera {
+  # Condiția de instalare și de pornire (P1 r3, r5; README „Bariera de identitate”): agent.json + token (profilul coordonatorului),
+  # repo-ul din agent.json = cel al clonei, apoi citiri gh api cu tokenul agentului → Test-BarieraGitHub (ruleset-urile ÎNSEȘI +
+  # proba pe 3 nume), apoi: la instalare (-Instalare) recitirea ruleset-urilor canonice cu identitatea coordonatorului
+  # (bypass_actors) + scrierea amprentei; la pornire, compararea cu amprenta. Aruncă la orice verificare imposibilă;
+  # întoarce @{ ok; motive; login }.
+  try { $cfg = CitesteConfigAgent } catch { return @{ ok = $false; motive = @($_.Exception.Message); login = '' } }
   $script:TokenAgent = if (Test-Path -LiteralPath $CaiAgent.token -PathType Leaf) { ([IO.File]::ReadAllText($CaiAgent.token, $UTF8)).Trim() } else { '' }
   if (-not (Test-FormaTokenAgent $script:TokenAgent)) { return @{ ok = $false; motive = @('tokenul agentului lipseste sau nu are forma unui token GitHub (token_agent.txt)'); login = '' } }
   $u = Git @('ls-remote', '--get-url', 'origin')
@@ -142,25 +162,166 @@ function VerificaBariera {
   $rs = Gh @('api', 'user', '--jq', '.login') 60
   if ($rs.exit -ne 0) { throw ('gh api user (server) esuat: ' + (Get-TextSigurLinie $rs.err 160)) }
   $loginServer = $rs.out.Trim()
-  $ra = GhAgent @('api', 'user', '--jq', '.login')
-  if ($ra.exit -ne 0) { throw ('gh api user (agent) esuat: ' + (Get-TextSigurLinie $ra.err 160)) }
-  $loginAgent = $ra.out.Trim()
-  $perm = JsonGh (GhAgent @('api', ('repos/' + $cfg.repo), '--jq', '.permissions')) 'drepturile agentului'
-  $enc = { param($b) [uri]::EscapeDataString($b) }
-  $rm = @(JsonGh (GhAgent @('api', ('repos/' + $cfg.repo + '/rules/branches/main'))) 'regulile main' | ForEach-Object { $_ })
-  $ra2 = @(JsonGh (GhAgent @('api', ('repos/' + $cfg.repo + '/rules/branches/' + (& $enc ([string]$Reguli.agent_tichete.ramura_proba_restrictionata))))) 'regulile altor branch-uri' | ForEach-Object { $_ })
-  $rt = @(JsonGh (GhAgent @('api', ('repos/' + $cfg.repo + '/rules/branches/' + (& $enc ([string]$Reguli.agent_tichete.ramura_proba_tichete))))) 'regulile tichete/*' | ForEach-Object { $_ })
-  $ids = @(@($rm) + @($ra2) + @($rt) | Where-Object { $null -ne $_ } | ForEach-Object { [string](Get-Camp $_ 'ruleset_id') } | Where-Object { $_ -cmatch '\A[0-9]{1,12}\z' } | Sort-Object -Unique)
-  if ($ids.Count -gt 20) { throw 'prea multe rulesets de verificat' }
-  $ocolire = @{}
-  foreach ($id in $ids) {
-    $ro = GhAgent @('api', ('repos/' + $cfg.repo + '/rulesets/' + $id), '--jq', '.current_user_can_bypass')
-    if ($ro.exit -ne 0) { throw ('ruleset ' + $id + ': gh api esuat (' + (Get-TextSigurLinie $ro.err 160) + ')') }
-    $ocolire[$id] = $ro.out.Trim()
+  $rag = GhAgent @('api', 'user', '--jq', '.login')
+  if ($rag.exit -ne 0) { throw ('gh api user (agent) esuat: ' + (Get-TextSigurLinie $rag.err 160)) }
+  $loginAgent = $rag.out.Trim()
+  $baza = 'repos/' + $cfg.repo
+  $infoRepo = JsonGh (GhAgent @('api', $baza)) 'repo-ul (agent)'
+  $perm = Get-Camp $infoRepo 'permissions'
+  $ramura = [string](Get-Camp $infoRepo 'default_branch')
+  # ruleset-urile ÎNSEȘI: lista completă (o pagină de 100; >= max_rulesets => refuz, poate fi trunchiată), apoi fiecare în detaliu
+  $lista = @(JsonGhLista (GhAgent @('api', ($baza + '/rulesets?includes_parents=true&per_page=100'))) 'lista ruleset-urilor')
+  if ($lista.Count -gt 100) { throw 'lista ruleset-urilor: mai mult de o pagina' }
+  $det = @{}
+  foreach ($s in $lista) {
+    $idS = [string](Get-Camp $s 'id')
+    if ($idS -cnotmatch '\A[0-9]{1,12}\z') { throw 'lista ruleset-urilor: id invalid' }
+    $det[$idS] = JsonGh (GhAgent @('api', ($baza + '/rulesets/' + $idS))) ('ruleset ' + $idS)
   }
-  $v = Test-BarieraGitHub -LoginServer $loginServer -LoginAgentConfig $cfg.login_agent -LoginAgent $loginAgent -Permisiuni $perm `
-         -ReguliMain $rm -ReguliAlta $ra2 -ReguliTichete $rt -Ocolire $ocolire
-  return @{ ok = $v.ok; motive = @($v.motive); login = $loginAgent }
+  # proba pe nume (a doua plasă): un nume aleator la fiecare rulare, main, un nume aleator sub tichete/
+  $enc = { param($b) [uri]::EscapeDataString($b) }
+  $nA = [string]$Reguli.bariera_rulesets.prefix_proba + [guid]::NewGuid().ToString('N').Substring(0, 12)
+  $nT = [string]$Reguli.bariera_rulesets.prefix_proba_tichete + [guid]::NewGuid().ToString('N').Substring(0, 12)
+  $pA = @(JsonGhLista (GhAgent @('api', ($baza + '/rules/branches/' + (& $enc $nA)))) 'proba nume aleator')
+  $pM = @(JsonGhLista (GhAgent @('api', ($baza + '/rules/branches/main'))) 'proba main')
+  $pT = @(JsonGhLista (GhAgent @('api', ($baza + '/rules/branches/' + (& $enc $nT)))) 'proba tichete/')
+  $vb = Test-BarieraGitHub -LoginServer $loginServer -LoginAgentConfig $cfg.login_agent -LoginAgent $loginAgent -Permisiuni $perm `
+          -RamuraImplicita $ramura -ListaRulesets $lista -Detalii $det -ProbaAleator $pA -ProbaMain $pM -ProbaTichete $pT
+  if (-not $vb.ok) { return @{ ok = $false; motive = @($vb.motive); login = $loginAgent } }
+  if ($Instalare) {
+    # bypass_actors: GitHub îl întoarce doar cui poate edita ruleset-ul => identitatea coordonatorului (gh de pe server)
+    $detC = @{}
+    foreach ($idS in @($vb.idMain, $vb.idRestul)) { $detC[$idS] = JsonGh (Gh @('api', ($baza + '/rulesets/' + $idS))) ('ruleset ' + $idS + ' (coordonator)') }
+    $vi = Test-BarieraInstalare -Agent $det -Coordonator $detC -IdMain $vb.idMain -IdRestul $vb.idRestul
+    if (-not $vi.ok) { return @{ ok = $false; motive = @($vi.motive); login = $loginAgent } }
+    $txt = Get-TextAmprenta -Repo $cfg.repo -Amprenta @($vb.amprenta) -LoginCoordonator $loginServer -Data ((Get-Date).ToString('s'))
+    [IO.File]::WriteAllText($CaiAgent.amprenta, $txt, $UTF8)
+  } else {
+    $va = Test-Amprenta -Text $(if (Test-Path -LiteralPath $CaiAgent.amprenta -PathType Leaf) { [IO.File]::ReadAllText($CaiAgent.amprenta, $UTF8) } else { '' }) -Repo $cfg.repo -Curenta @($vb.amprenta)
+    if (-not $va.ok) { return @{ ok = $false; motive = @($va.motive); login = $loginAgent } }
+  }
+  return @{ ok = $true; motive = @(); login = $loginAgent }
+}
+
+# ── r5 (P1): contul Windows SEPARAT al agentului ──────────────────────────────────────────────────────────────
+$PsExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+function SidCont([string]$nume) {
+  return (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, $nume)).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+function MembriiAdministrators {
+  # SID-urile membrilor direcți ai grupului local Administrators (S-1-5-32-544), prin ADSI (numele grupului e localizat)
+  $numeGrup = ((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([Security.Principal.NTAccount]).Value -split '\\')[-1]
+  $grup = [ADSI]('WinNT://' + $env:COMPUTERNAME + '/' + $numeGrup + ',group')
+  $sids = New-Object System.Collections.ArrayList
+  foreach ($m in @($grup.Invoke('Members'))) {
+    $oct = $m.GetType().InvokeMember('objectSid', 'GetProperty', $null, $m, $null)
+    [void]$sids.Add((New-Object Security.Principal.SecurityIdentifier($oct, 0)).Value)
+  }
+  return @($sids)
+}
+function PregatesteContAgent {
+  # Partea COORDONATORULUI: configurarea v2, împărțirea pe disc (Test-SeparareCai), contul agentului ≠ contul curent (SID),
+  # nu e membru direct Administrators, parola lui (cont_agent.xml, DPAPI) pentru pornire; scrie setările gărzii și lansare.json
+  # în <rădăcină>\setari (doar-citire pentru agent). Apoi PROBA sub contul agentului (lanseaza_agent.ps1 -DoarVerificareCont:
+  # nu poate citi profilul / pgpass / gh / paw-data, nu poate scrie garda / setările, nu e admin). Aruncă la orice abatere.
+  $cfg = CitesteConfigAgent
+  $eu = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $sidEu = $eu.User.Value
+  $profilEu = [Environment]::GetFolderPath('UserProfile')
+  $mot = @(Test-SeparareCai -ProfilCoordonator $profilEu -DataDir $DataDir -RepoDir $RepoDir -Cfg $cfg)
+  if ($mot.Count -gt 0) { throw ('impartirea pe disc agent / coordonator: ' + ($mot -join '; ')) }
+  if ($cfg.cont_windows -ieq $env:USERNAME) { throw 'agentul ar rula sub acelasi cont Windows ca coordonatorul' }
+  try { $sidAg = SidCont $cfg.cont_windows } catch { throw ('contul Windows al agentului nu exista local: ' + $cfg.cont_windows) }
+  if ($sidAg -ceq $sidEu) { throw 'agentul ar rula sub acelasi cont Windows ca coordonatorul' }
+  if (@(MembriiAdministrators) -ccontains $sidAg) { throw 'contul agentului e membru Administrators' }
+  if (-not (Test-Path -LiteralPath $CaiAgent.cont -PathType Leaf)) { throw 'lipseste cont_agent.xml (parola contului agentului, README)' }
+  $cred = Import-Clixml -LiteralPath $CaiAgent.cont
+  if (-not ($cred -is [System.Management.Automation.PSCredential])) { throw 'cont_agent.xml nu e un PSCredential' }
+  # (regex-ul construit separat: într-un argument, „+” și „,” s-ar lega greșit de -replace)
+  $reDom = '\A(?:\.|' + [regex]::Escape($env:COMPUTERNAME) + ')\\'
+  $u = [regex]::Replace([string]$cred.UserName, $reDom, '', 'IgnoreCase')
+  if ($u -ine $cfg.cont_windows) { throw 'cont_agent.xml e pentru alt cont decat cont_windows' }
+  $ra = Get-CaiRadacinaAgent $cfg.radacina_agent
+  foreach ($d in @($ra.radacina, $ra.setari)) { if (-not (Test-Path -LiteralPath $d -PathType Container)) { throw ('lipseste ' + $d + ' (README: pregatirea contului agentului)') } }
+  $garda = Join-Path $PSScriptRoot 'garda_agent.mjs'
+  [IO.File]::WriteAllText($ra.fisSetari, (Get-TextSetariAgent -NodeExe $cfg.node_exe -Garda $garda), $UTF8)
+  $citire = @($profilEu, (Join-Path $env:APPDATA 'postgresql\pgpass.conf'), (Join-Path $env:APPDATA 'GitHub CLI'), $CaiAgent.dir, $DataDir)
+  if ($env:PGPASSFILE) { $citire += $env:PGPASSFILE }
+  $scriere = @($RepoDir, $PSScriptRoot, $ra.setari, $ra.fisSetari, $ra.fisLansare)
+  [IO.File]::WriteAllText($ra.fisLansare, (Get-TextLansare -Cfg $cfg -SidCoordonator $sidEu -InterziseCitire $citire -InterziseScriere $scriere), $UTF8)
+  $script:CfgAgent = $cfg; $script:RaAgent = $ra; $script:CredAgent = $cred
+  # proba sub contul agentului: DOAR codul de ieșire (din handle) decide; textul e informativ
+  $p = PornesteLansator -Argumente @('-DoarVerificareCont') -Stdin ''
+  if (-not $p.proc.WaitForExit(120000)) { OpresteJob $p; throw 'proba contului agentului: timeout' }
+  $fs = Join-Path (Join-Path $ra.iesire '_verificare') 'stare.txt'
+  $ult = Get-TextSigurLinie (CitesteIesireAgent $fs 4096) 200
+  $codP = $p.proc.ExitCode
+  OpresteJob $p
+  if ($codP -ne 0) { throw ('proba contului agentului a picat (exit ' + $codP + '): ' + $ult) }
+}
+function PornesteLansator([string[]]$Argumente, [AllowNull()][string]$Stdin) {
+  # lanseaza_agent.ps1 SUB CONTUL AGENTULUI: Process.Start cu UserName / Password (CreateProcessWithLogonW, serviciul
+  # „Secondary Logon”) + profil încărcat; mediul = Get-MediuLansator (nimic din mediul coordonatorului); stdin = brief-ul;
+  # procesul intră imediat într-un job object (oprire pe tot arborele, chiar dacă procesele sunt ale altui cont).
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $PsExe
+  $psi.Arguments = Join-ArgvWindows (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Lansator, '-Config', $RaAgent.fisLansare) + @($Argumente))
+  $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.LoadUserProfile = $true
+  $psi.UserName = $CfgAgent.cont_windows; $psi.Domain = $env:COMPUTERNAME; $psi.Password = $CredAgent.Password
+  $psi.WorkingDirectory = $RaAgent.radacina
+  $psi.RedirectStandardInput = $true
+  $mediu = Get-MediuLansator -Baza ([Environment]::GetEnvironmentVariables()) -Cfg $CfgAgent -Token $TokenAgent
+  $psi.EnvironmentVariables.Clear()
+  foreach ($k in $mediu.Keys) { $psi.EnvironmentVariables[$k] = [string]$mediu[$k] }
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $job = [JobAgent]::Creeaza()
+  if (-not [JobAgent]::Adauga($job, $proc.Handle)) { try { $proc.Kill() } catch {}; [JobAgent]::Inchide($job); throw 'job object: procesul agentului nu a putut fi atasat' }
+  $oct = $UTF8.GetBytes([string]$Stdin)
+  if ($oct.Length -gt 0) { $proc.StandardInput.BaseStream.Write($oct, 0, $oct.Length) }
+  $proc.StandardInput.Close()
+  return @{ proc = $proc; job = $job }
+}
+function OpresteJob($pj) {
+  # oprește TOT arborele lansatorului (job object) și eliberează job-ul
+  if ($null -eq $pj -or $null -eq $pj.job) { return }
+  try { [void][JobAgent]::Termina($pj.job) } catch {}
+  try { [JobAgent]::Inchide($pj.job) } catch {}
+  $pj.job = $null
+}
+function CitesteIesireAgent([string]$fis, [int]$max = 5242880) {
+  # fișierele scrise de agent sunt DATE neîncrezute: fără legături (reparse point) pe fișier și pe director, plafon de mărime
+  if (-not (Test-Path -LiteralPath $fis -PathType Leaf)) { return '' }
+  foreach ($x in @((Get-Item -LiteralPath $fis -Force), (Get-Item -LiteralPath (Split-Path -Parent $fis) -Force))) {
+    if (($x.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'iesirea agentului e o legatura (reparse point)' }
+  }
+  if ((Get-Item -LiteralPath $fis -Force).Length -gt $max) { throw 'iesirea agentului e prea mare' }
+  return [IO.File]::ReadAllText($fis, $UTF8)
+}
+if (-not ('JobAgent' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class JobAgent {
+  [StructLayout(LayoutKind.Sequential)] public struct BASIC { public long a; public long b; public uint LimitFlags; public UIntPtr c; public UIntPtr d; public uint e; public UIntPtr f; public uint g; public uint h; }
+  [StructLayout(LayoutKind.Sequential)] public struct IOC { public ulong a, b, c, d, e, f; }
+  [StructLayout(LayoutKind.Sequential)] public struct EXT { public BASIC Basic; public IOC Io; public UIntPtr a; public UIntPtr b; public UIntPtr c; public UIntPtr d; }
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr CreateJobObject(IntPtr attr, string name);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int cls, ref EXT info, uint len);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr proc);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr job, uint code);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr h);
+  public static IntPtr Creeaza() {
+    IntPtr j = CreateJobObject(IntPtr.Zero, null);
+    if (j == IntPtr.Zero) throw new InvalidOperationException("CreateJobObject");
+    EXT x = new EXT(); x.Basic.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (!SetInformationJobObject(j, 9, ref x, (uint)Marshal.SizeOf(typeof(EXT)))) { CloseHandle(j); throw new InvalidOperationException("SetInformationJobObject"); }
+    return j;
+  }
+  public static bool Adauga(IntPtr job, IntPtr proc) { return AssignProcessToJobObject(job, proc); }
+  public static bool Termina(IntPtr job) { return TerminateJobObject(job, 1); }
+  public static void Inchide(IntPtr job) { CloseHandle(job); }
+}
+'@
 }
 function JsonLista([string]$s) {
   # PS 5.1: „'[...]' | ConvertFrom-Json” emite array-ul ca UN obiect; aici îl întoarcem ca listă reală (apelantul NU pune @())
@@ -231,11 +392,13 @@ function StareIntrerupt($x) {
 }
 
 # ── -DoarVerificare (instaleaza_task.ps1): doar bariera, fără lock / stare / tichete ───────────────────────────
+if ($Instalare -and -not $DoarVerificare) { Write-Host 'BARIERA_EROARE: -Instalare merge doar cu -DoarVerificare'; exit 1 }
 if ($DoarVerificare) {
   try {
-    $v = VerificaBariera
-    if ($v.ok) { Write-Host ('BARIERA_OK agent=' + $v.login); exit 0 }
-    Write-Host ('BARIERA_REFUZ: ' + ((@($v.motive) | ForEach-Object { Get-TextSigurLinie $_ 200 }) -join '; ')); exit 1
+    $vb0 = VerificaBariera
+    if (-not $vb0.ok) { Write-Host ('BARIERA_REFUZ: ' + ((@($vb0.motive) | ForEach-Object { Get-TextSigurLinie $_ 200 }) -join '; ')); exit 1 }
+    PregatesteContAgent
+    Write-Host ('BARIERA_OK agent=' + $vb0.login + ' cont=' + $CfgAgent.cont_windows + $(if ($Instalare) { ' amprenta=scrisa' } else { '' })); exit 0
   } catch { Write-Host ('BARIERA_EROARE: ' + (Get-TextSigurLinie $_.Exception.Message 300)); exit 1 }
 }
 
@@ -283,6 +446,9 @@ try {
   }
   # PR-urile rulării sunt deschise de agent: autorul așteptat (F7) = identitatea lui, verificată mai sus
   $Autor = [string]$bar.login
+  # r5 (P1): contul Windows separat al agentului (probe sub contul lui). Picat => EROARE, fără agenți; în simulare doar raportat.
+  if (-not $Simulare) { PregatesteContAgent }
+  else { try { PregatesteContAgent } catch { Jurnal ('ATENTIE: contul Windows al agentului nu trece (' + (Get-TextSigurLinie $_.Exception.Message 200) + ') - in simulare nu pornesc agenti') } }
 
   # ── a. Tichetele (SELECT fix, fără niciun parametru) ────────────────────────────────────────────────────
   # nerezolvat = status nefinal ȘI fără descriere_interventie; FĂRĂ LIMIT de coadă (J9): filtrele locale se aplică înainte
@@ -342,7 +508,7 @@ ROLLBACK;
       sub = [string]$t.subcategorie; titlu = (Get-TextSigurLinie $t.titlu 90); incercare = $w.incercare; branch = $w.branch
       etapa = $(if ($w.mod -ceq 'nou') { 'coada' } else { 'pr_cauta' }); stare = ''; agent = $null; pr = 0; sha = ''
       jak = $null; fable = $null; checks = @(); ciStare = ''; recomandare = $null; nota = ''; erori = (New-Object System.Collections.ArrayList)
-      reincercari = 0; dupa = $Start; proc = $null; procJak = $null; procRvw = $null; ciPana = $null; reviewPana = $null
+      reincercari = 0; dupa = $Start; pj = $null; loc = $null; procJak = $null; procRvw = $null; ciPana = $null; reviewPana = $null
       reincercariJak = 0; reincercariRvw = 0; reviewDupa = $Start; fisiere = @(); diff = ''; linii = 0; regiuni = @(); briefReview = ''
       diffGata = $false; verdicte = $w.verdicte
     })
@@ -390,38 +556,63 @@ ROLLBACK;
     if ($activ.Count -eq 0) { break }
     if ((Get-Date) -gt $Deadline) {
       foreach ($x in $activ) {
-        OpresteArbore $x.proc; OpresteArbore $x.procJak; OpresteArbore $x.procRvw
+        OpresteJob $x.pj; if ($null -ne $x.loc) { $x.loc.Dispose(); $x.loc = $null }
+        OpresteArbore $x.procJak; OpresteArbore $x.procRvw
         Termina $x (StareIntrerupt $x) ('oprit la plafonul de timp in etapa ' + $x.etapa)
       }
       break
     }
 
-    # c1. agenți terminați
-    foreach ($x in @($Rezultate | Where-Object { $_.etapa -ceq 'agent' -and $_.proc.HasExited })) {
+    # c1. agenți terminați (lansatorul rulează sub contul agentului: codul de ieșire din handle, fișierele lui = date neîncrezute)
+    foreach ($x in @($Rezultate | Where-Object { $_.etapa -ceq 'agent' -and $_.pj.proc.HasExited })) {
+      $codAg = $x.pj.proc.ExitCode
+      OpresteJob $x.pj
+      if ($null -ne $x.loc) { $x.loc.Dispose(); $x.loc = $null }
       $logOut = Join-Path $OutDir ($x.slug + '_agent_stdout.log')
       $fJson = Join-Path $OutDir ('agent_' + $x.slug + '.json')
-      if ((Test-LansatorOcupat -Exit $x.proc.ExitCode -UltimaLinie (UltimaLinie $logOut) -Cine 'AGT') -and -not (Test-Path -LiteralPath $fJson) -and $x.reincercari -lt 20) {
-        # toate cele 3 locuri sunt ocupate (de chat / alte rulări): așteaptă, nu forța
-        $x.reincercari++; $x.dupa = (Get-Date).AddMinutes(3); $x.etapa = 'coada'; continue
+      $dirAg = Join-Path $RaAgent.iesire $x.slug
+      # copiile în paw-data\out (agentul nu are acces la paw-data): doar fișiere obișnuite, cu plafon de mărime
+      foreach ($cp in @(@{ s = 'stare.txt'; d = $logOut }, @{ s = 'agent.json'; d = $fJson }, @{ s = 'agent.err.log'; d = (Join-Path $OutDir ('agent_' + $x.slug + '.err.log')) },
+                        @{ s = 'garda.log'; d = (Join-Path $OutDir ($x.slug + '_garda.log')) })) {
+        try { [IO.File]::WriteAllText($cp.d, (CitesteIesireAgent (Join-Path $dirAg $cp.s)), $UTF8) } catch { [void]$x.erori.Add('iesirea agentului (' + $cp.s + '): ' + (Get-TextSigurLinie $_.Exception.Message 120)) }
       }
       # Rezultatul se citește DOAR din câmpul „result” al agent_<slug>.json (ultima linie nevidă); stdout-ul nu se parsează.
       $rezTxt = Get-CampResult (CitesteText $fJson)
-      if ($null -eq $rezTxt) { $x.agent = @{ tip = 'NECUNOSCUT'; clasa = ''; detaliu = ('lipseste / nu se citeste agent_' + $x.slug + '.json (exit ' + $x.proc.ExitCode + ': ' + (Get-TextSigurLinie (UltimaLinie $logOut) 160) + ')'); pr = 0 } }
+      if ($null -eq $rezTxt) { $x.agent = @{ tip = 'NECUNOSCUT'; clasa = ''; detaliu = ('lipseste / nu se citeste agent_' + $x.slug + '.json (exit ' + $codAg + ': ' + (Get-TextSigurLinie (UltimaLinie $logOut) 160) + ')'); pr = 0 } }
       else { $x.agent = Get-RezultatAgent $rezTxt }
-      Jurnal ('agent gata ' + $x.numar + ': ' + $x.agent.tip + ' ' + $x.agent.clasa)
+      Jurnal ('agent gata ' + $x.numar + ' (exit ' + $codAg + '): ' + $x.agent.tip + ' ' + $x.agent.clasa)
       $x.etapa = 'pr_cauta'
     }
 
-    # c2. pornește agentul (lansatorul propriu) cât sunt locuri
+    # c2. pornește agentul (lansatorul propriu, SUB CONTUL AGENTULUI) cât sunt locuri; locurile comune cu rdr.ps1 le ține
+    #     orchestratorul (agentul nu are acces la paw-data)
     $ruleaza = @($Rezultate | Where-Object { $_.etapa -ceq 'agent' }).Count
     foreach ($x in @($Rezultate | Where-Object { $_.etapa -ceq 'coada' -and $_.dupa -le (Get-Date) })) {
       if ($ruleaza -ge $MaxParalel) { break }
-      $logOut = Join-Path $OutDir ($x.slug + '_agent_stdout.log')
+      $loc = $null
+      foreach ($i in 1..3) { try { $loc = [IO.File]::Open((Join-Path $DataDir ('lock_rdr_' + $i)), 'OpenOrCreate', 'ReadWrite', 'None'); break } catch { $loc = $null } }
+      if ($null -eq $loc) {
+        # toate cele 3 locuri sunt ocupate (de chat / alte rulări): așteaptă, nu forța
+        if ($x.reincercari -ge 20) { Termina $x 'OPRIT' 'niciun loc liber pentru agent (3 rulari active)'; continue }
+        $x.reincercari++; $x.dupa = (Get-Date).AddMinutes(3); continue
+      }
       MutaVechi (Join-Path $OutDir ('agent_' + $x.slug + '.json'))
-      $x.proc = PornesteFundal 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Lansator, '-Brief', (CaleSimpla $x.brief),
-                  '-Numar', $x.numar, '-Branch', $x.branch, '-Effort', $x.effort) $logOut
+      try {
+        # ieșirile vechi ale agentului: șterse doar ca fișiere, într-un director care NU e legătură (altfel ștergerea ar trece
+        # printr-un junction pus de agent în altă parte)
+        $dirAg = Join-Path $RaAgent.iesire $x.slug
+        foreach ($d in @($RaAgent.iesire, $dirAg)) {
+          if ((Test-Path -LiteralPath $d) -and (((Get-Item -LiteralPath $d -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw ('directorul de iesire al agentului e o legatura: ' + $d) }
+        }
+        foreach ($f in @('stare.txt', 'agent.json', 'agent.err.log', 'garda.log')) {
+          $fa = Join-Path $dirAg $f
+          if (Test-Path -LiteralPath $fa -PathType Leaf) { Remove-Item -LiteralPath $fa -Force }
+        }
+        $x.pj = PornesteLansator -Argumente @('-Numar', $x.numar, '-Branch', $x.branch, '-Effort', $x.effort) -Stdin (CitesteText $x.brief)
+      } catch { $loc.Dispose(); [void]$x.erori.Add('pornirea agentului: ' + (Get-TextSigurLinie $_.Exception.Message 160)); Termina $x 'EROARE' ''; continue }
+      $x.loc = $loc
       $x.etapa = 'agent'; $ruleaza++
-      Jurnal ("agent pornit " + $x.numar + " effort=" + $x.effort + " branch=" + $x.branch)
+      Jurnal ("agent pornit " + $x.numar + " effort=" + $x.effort + " branch=" + $x.branch + " cont=" + $CfgAgent.cont_windows)
     }
 
     # c3. PR-ul rulării (F7): DOAR pe branch-ul exact, deschis, draft, baza main, autorul gh de pe server
@@ -553,12 +744,20 @@ ROLLBACK;
       }
       $clasa = if ($null -ne $x.agent -and $x.agent.clasa) { [string]$x.agent.clasa } else { 'L' }
       if ($null -ne $x.agent -and $x.agent.tip -ceq 'NECUNOSCUT') { $clasa = '?' }
+      $headAcum = [string](Get-Camp $pv 'headRefOid')
       $x.recomandare = Get-RecomandareMerge -Jak $x.jak -Fable $x.fable -Checks $x.checks -Clasa $clasa -Fisiere $x.fisiere `
         -Diff $x.diff -LiniiDiff $x.linii -MaxLiniiDiff $MaxLiniiDiff -CrossRepo ((Get-Camp $pv 'isCrossRepository') -ne $false) `
-        -HeadSchimbat ([string](Get-Camp $pv 'headRefOid') -cne $x.sha) -RegiuniAtinse $x.regiuni `
+        -HeadSchimbat ($headAcum -cne $x.sha) -RegiuniAtinse $x.regiuni `
         -BazaMain ([string](Get-Camp $pv 'baseRefName') -ceq 'main') -Deschis ([string](Get-Camp $pv 'state') -ceq 'OPEN') `
         -Draft ((Get-Camp $pv 'isDraft') -eq $true)
-      Termina $x $(if ($reviewOk) { 'PR_DRAFT' } else { 'PR_FARA_REVIEW' }) ''
+      # r5 (P2): head-ul PR-ului mutat după review (A -> B) => review INVALIDAT: starea PR_HEAD_SCHIMBAT (nu „complet”),
+      # rularea următoare face review nou pe B; recomandarea de azi rămâne „nu” (head schimbat).
+      $stCi = Get-StareDupaCi -ReviewOk $reviewOk -ShaRevizuit $x.sha -HeadActual $headAcum
+      if ($stCi -ceq 'PR_HEAD_SCHIMBAT') {
+        $hScurt = if ($headAcum -cmatch '\A[0-9a-f]{40}\z') { $headAcum.Substring(0, 8) } else { 'necitit' }
+        $x.nota = (@($x.nota, ('head-ul PR-ului s-a schimbat dupa review (' + $x.sha.Substring(0, 8) + ' -> ' + $hScurt + '); review nou la rularea urmatoare')) | Where-Object { $_ }) -join '; '
+      }
+      Termina $x $stCi ''
     }
 
     Start-Sleep -Seconds 15
@@ -571,7 +770,8 @@ ROLLBACK;
   $eroare = Get-TextSigurLinie $_.Exception.Message 300
   Jurnal ('EROARE: ' + $eroare)
   foreach ($x in $Rezultate) {
-    OpresteArbore $x.proc; OpresteArbore $x.procJak; OpresteArbore $x.procRvw
+    OpresteJob $x.pj; if ($null -ne $x.loc) { $x.loc.Dispose(); $x.loc = $null }
+    OpresteArbore $x.procJak; OpresteArbore $x.procRvw
     if ($x.etapa -cne 'gata') { Termina $x (StareIntrerupt $x) 'oprit de eroarea rularii' }
   }
 }
@@ -622,6 +822,7 @@ try {
   if ($p.Count -eq 0) { [void]$sb.AppendLine('- (niciunul)') }
   foreach ($x in $p) {
     $rec = if ($x.stare -ceq 'PR_CI_NECITIT') { 'neevaluat (review citit, CI necitit — se reia doar CI la rularea următoare)' }
+           elseif ($x.stare -ceq 'PR_HEAD_SCHIMBAT') { '**nu** (PR-ul a primit commit-uri noi după review — review nou la rularea următoare)' }
            elseif ($null -eq $x.recomandare) { 'neevaluat (review / CI neterminat)' }
            elseif ($x.recomandare.indeplineste) { '**da**' }
            else { '**nu**: ' + ((@($x.recomandare.motive) | ForEach-Object { Get-TextSigurLinie $_ 160 }) -join '; ') }
@@ -651,7 +852,7 @@ try {
   [void]$sb.AppendLine('## Note')
   [void]$sb.AppendLine('- CI e citit pe PR-ul DRAFT: verificările care rulează doar pe PR-uri non-draft (ex. regresia Ofertare) nu sunt incluse; le vezi după „ready”, înainte de merge.')
   [void]$sb.AppendLine('- Deblocarea unui tichet care așteaptă decizie: în paw-data\tichete_dimineata\stare.json, la intrarea lui, asteapta_decizie = false (sau ștergi intrarea).')
-  [void]$sb.AppendLine('- Loguri: paw-data\out\tkt-*_agent_stdout.log, agent_tkt-*.json, agent_tkt-*.err.log, tkt-*_jak.log, rvw_tkt-*.json, tkt-*_rvw_consola.log, tkt-*.diff; jurnal: paw-data\tichete_dimineata\jurnal.log')
+  [void]$sb.AppendLine('- Loguri: paw-data\out\tkt-*_agent_stdout.log, agent_tkt-*.json, agent_tkt-*.err.log, tkt-*_garda.log (comenzile refuzate de gardă), tkt-*_jak.log, rvw_tkt-*.json, tkt-*_rvw_consola.log, tkt-*.diff; jurnal: paw-data\tichete_dimineata\jurnal.log')
   [IO.File]::WriteAllText($FisRaport, $sb.ToString(), $UTF8)
 } catch {
   # P2 r3: raport nescris = rulare EROARE (reîncercările zilei rămân active), nu OK

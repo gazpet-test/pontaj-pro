@@ -38,7 +38,8 @@ Write-Host 'Faza 1: fara merge'
 T 'nicio cale ready / merge in codul executat' { -not ($OrchCod -match "'(merge|ready)'") -and -not $OrchCod.Contains('--match-head-commit') -and -not ($OrchCod -match 'FaraMerge') }
 T 'apelurile Gh @(...) sunt in lista de citiri' {
   $ap = @([regex]::Matches($OrchCod, '\bGh @\(([^)]*)\)') | ForEach-Object { ,@([regex]::Matches($_.Groups[1].Value, "'([^']*)'") | ForEach-Object { $_.Groups[1].Value }) })
-  $rau = @($ap | Where-Object { @((Get-ReguliTichete).gh_permise) -cnotcontains ($_[0] + ' ' + $_[1]) })
+  # apelurile `gh api` (r5: căi construite din repo) sunt verificate la rulare de Test-ComandaGhPermisa pe gh_api_citiri
+  $rau = @($ap | Where-Object { $_[0] -cne 'api' -and @((Get-ReguliTichete).gh_permise) -cnotcontains ($_[0] + ' ' + $_[1]) })
   $ap.Count -ge 6 -and $rau.Count -eq 0
 }
 T 'garda gh: citiri da' { (Test-ComandaGhPermisa @('auth', 'status')) -and (Test-ComandaGhPermisa @('api', 'user', '--jq', '.login')) -and (Test-ComandaGhPermisa @('pr', 'list', '--head', $BR)) -and (Test-ComandaGhPermisa @('pr', 'checks', '7', '--json', 'name,bucket')) }
@@ -66,7 +67,8 @@ $PERM_ASTEPTAT = @('Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash(git status)', 
 $REFUZ_MINIM = @('Bash(gh pr merge *)', 'Bash(gh pr ready *)', 'Bash(gh api *)', 'Bash(gh workflow *)', 'Bash(gh release *)', 'Bash(gh secret *)',
   'Bash(git push origin main *)', 'Bash(git push -u origin main *)', 'Bash(git push --force *)', 'Bash(vercel *)', 'Bash(npx vercel *)', 'Bash(supabase *)',
   'Bash(npx supabase *)', 'Bash(psql *)', 'PowerShell', 'WebFetch', 'WebSearch')
-$ARGV = @(Get-ArgvAgent -Numar 'TKT-2026-0134' -Branch $BRL -Effort 'high')
+$SET = 'C:\GazpetTichete\setari\setari_agent.json'
+$ARGV = @(Get-ArgvAgent -Numar 'TKT-2026-0134' -Branch $BRL -Effort 'high' -Setari $SET)
 function ListaDupa($a, [string]$steag) {
   $i = [array]::IndexOf($a, $steag); if ($i -lt 0) { return @() }
   $r = New-Object System.Collections.ArrayList
@@ -79,15 +81,24 @@ T '--allowedTools = lista asteptata din test (nimic in plus)' { (@(ListaDupa $AR
 T '--disallowedTools = exact refuzurile; contine refuzurile minime' { $d = @(ListaDupa $ARGV '--disallowedTools'); ($d -join "`n") -ceq (@($AG.refuzuri) -join "`n") -and @($REFUZ_MINIM | Where-Object { $d -cnotcontains $_ }).Count -eq 0 }
 T 'steagurile: exact cele asteptate, cu valorile fixe' {
   $st = @($ARGV | Where-Object { $_.StartsWith('--') })
-  $ast = @('--restricted', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence', '--permission-mode', '--permission-prompts', '--model', '--effort', '--max-turns', '--output-format', '--tools', '--allowedTools', '--disallowedTools')
+  $ast = @('--restricted', '--settings', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence', '--permission-mode', '--permission-prompts', '--model', '--effort', '--max-turns', '--output-format', '--tools', '--allowedTools', '--disallowedTools')
   $ARGV[0] -ceq '-p' -and ($st -join ' ') -ceq ($ast -join ' ') -and (ValDupa $ARGV '--permission-mode') -ceq 'dontAsk' -and (ValDupa $ARGV '--permission-prompts') -ceq 'none' -and
   (ValDupa $ARGV '--output-format') -ceq 'json' -and (ValDupa $ARGV '--tools') -ceq 'Read,Glob,Grep,Edit,Write,Bash' -and (ValDupa $ARGV '--effort') -ceq 'high' -and
-  $ARGV.Count -eq (1 + $ast.Count + 7 + $PERM_ASTEPTAT.Count + @($AG.refuzuri).Count)
+  (ValDupa $ARGV '--settings') -ceq $SET -and $ARGV.Count -eq (1 + $ast.Count + 8 + $PERM_ASTEPTAT.Count + @($AG.refuzuri).Count)
 }
-T 'fara --add-dir / bypass / skip-permissions / settings / mcp-config' { @($ARGV | Where-Object { @($AG.steaguri_interzise) -ccontains $_ -or $_ -match 'dangerously|bypass|acceptEdits' }).Count -eq 0 }
-T 'branch / effort invalide => arunca' { @(@(@('TKT-2026-0134', 'main', 'high'), @('TKT-2026-0134', 'tichete/tkt-2026-0135-i1', 'high'), @('TKT-2026-0134', $BRL, 'max'), @('../x', $BRL, 'high')) | Where-Object { $c = $_; try { [void](Get-ArgvAgent -Numar $c[0] -Branch $c[1] -Effort $c[2]); $true } catch { $false } }).Count -eq 0 }
+T 'fara --add-dir / bypass / skip-permissions / setting-sources / mcp-config; --settings o data, doar fisierul garzii' {
+  @($ARGV | Where-Object { @($AG.steaguri_interzise) -ccontains $_ -or $_ -match 'dangerously|bypass|acceptEdits' }).Count -eq 0 -and @($ARGV | Where-Object { $_ -ceq '--settings' }).Count -eq 1 -and
+  @(@('--add-dir', '--setting-sources', '--managed-settings', '--mcp-config', '--plugin-dir', '--dangerously-skip-permissions') | Where-Object { @($AG.steaguri_interzise) -cnotcontains $_ }).Count -eq 0 -and
+  @(@('', 'C:\a b\s.json', 'C:\a\..\s.json', 'C:\a\s.txt', '\\srv\s.json', 's.json', '--settings') | Where-Object { $s = $_; try { [void](Get-ArgvAgent -Numar 'TKT-2026-0134' -Branch $BRL -Effort 'high' -Setari $s); $true } catch { $false } }).Count -eq 0
+}
+T 'branch / effort invalide => arunca' { @(@(@('TKT-2026-0134', 'main', 'high'), @('TKT-2026-0134', 'tichete/tkt-2026-0135-i1', 'high'), @('TKT-2026-0134', $BRL, 'max'), @('../x', $BRL, 'high')) | Where-Object { $c = $_; try { [void](Get-ArgvAgent -Numar $c[0] -Branch $c[1] -Effort $c[2] -Setari $SET); $true } catch { $false } }).Count -eq 0 }
 T 'lista din reguli.json trece; fiecare forma larga e refuzata' {
-  (Test-ListaAgent -Permise @($AG.permise | ForEach-Object { ([string]$_).Replace('__BRANCH__', $BRL) })).ok -and @(@($AG.forme_largi) | Where-Object { (Test-ListaAgent -Permise @('Read', $_)).ok }).Count -eq 0
+  (Test-ListaAgent -Permise @($AG.permise | ForEach-Object { ([string]$_).Replace('__BRANCH__', $BRL) }) -Branch $BRL).ok -and @(@($AG.forme_largi) | Where-Object { (Test-ListaAgent -Permise @('Read', $_)).ok }).Count -eq 0
+}
+T 'r5: orice intrare cu * are regula ei de coada (altfel lista e refuzata)' {
+  $c4 = $AG.PSObject.Copy(); $oc = $AG.optiuni_coada.PSObject.Copy(); $oc.PSObject.Properties.Remove('git add'); $c4.optiuni_coada = $oc
+  $perm = @($AG.permise | ForEach-Object { ([string]$_).Replace('__BRANCH__', $BRL) })
+  -not (Test-ListaAgent -Permise $perm -Config $c4 -Branch $BRL).ok -and (Test-ListaAgent -Permise $perm -Branch $BRL).ok
 }
 T 'formele largi sunt prinse si de regulile generale (lista explicita golita)' {
   $c2 = $AG.PSObject.Copy(); $c2.forme_largi = @()
@@ -109,74 +120,252 @@ T 'Join-ArgvWindows' { (Join-ArgvWindows @('a', 'b c', 'Bash(git add *)', '', 'x
 $LansCod = (@([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'lanseaza_agent.ps1')) -split "\r?\n") | Where-Object { $_ -notmatch '^\s*#' } | ForEach-Object { $_ -replace '\s#\s.*$', '' }) -join "`n"
 T 'lanseaza_agent.ps1: nu citeste / nu apeleaza rdr.ps1; linia doar din Get-ArgvAgent; mediu inlocuit; git verificat' {
   -not ($LansCod -match 'rdr\.ps1') -and $LansCod.Contains('Get-ArgvAgent') -and $LansCod.Contains('$psi.EnvironmentVariables.Clear()') -and $LansCod.Contains('VerificaGit $wt') -and
-  $LansCod.Contains('Exec $ClaudeExe $argv $wt') -and -not ($LansCod -match 'add-dir|bypass|acceptEdits|dangerously')
+  $LansCod.Contains('Exec $Cfg.claude_exe $argv $wt') -and -not ($LansCod -match 'add-dir|bypass|acceptEdits|dangerously')
+}
+T 'r5: lansatorul verifica contul INAINTE de agent; garda probata inainte de claude; nimic din paw-data / profilul coordonatorului' {
+  $iV = $LansCod.IndexOf('try { VerificaCont }'); $iC = $LansCod.IndexOf('Exec $Cfg.claude_exe')
+  $iV -gt 0 -and $iV -lt $iC -and $LansCod.IndexOf('ProbaGarda $wt') -lt $iC -and $LansCod.Contains("'S-1-5-32-544'") -and
+  $LansCod.Contains('Get-TextSetariAgent -NodeExe $Cfg.node_exe -Garda $Garda') -and -not ($LansCod -match 'paw-data|Get-CaiAgent|USERPROFILE|-Brief') -and
+  $LansCod.Contains("GetEnvironmentVariable('TICHETE_GH_TOKEN')") -and $LansCod.Contains('OpenStandardInput')
 }
 
-Write-Host 'J1 / P1 (r4): mediul agentului, agent.json, config git, bariera GitHub'
+Write-Host 'J1 / P1 (r4, r5): mediul agentului, agent.json v2, config git'
 $TOK = 'github_pat_' + ('A' * 30)
-$CAI = Get-CaiAgent 'C:\Users\x'
+# configurarea v2 (r5: cont Windows separat), scrisa aici independent de cod
+$CFG2 = [ordered]@{ versiune = 2; repo = 'o/r'; login_agent = 'gazpet-tichete'; cont_windows = 'tichete-agent'; profil_agent = 'C:\Users\tichete-agent'
+  radacina_agent = 'C:\GazpetTichete'; config_claude = 'C:\Users\tichete-agent\.claude-tichete'; claude_exe = 'C:\Program Files\ClaudeCode\claude.exe'
+  node_exe = 'C:\Program Files\nodejs\node.exe' }
+function J2([hashtable]$o = @{}, [string[]]$fara = @()) {
+  $h = [ordered]@{}; foreach ($k in $CFG2.Keys) { if ($fara -cnotcontains $k) { $h[$k] = $CFG2[$k] } }
+  foreach ($k in $o.Keys) { $h[$k] = $o[$k] }
+  return (ConvertTo-Json -InputObject $h -Compress)
+}
+$CFG = (Test-ConfigAgent (J2)).cfg
+$WT = 'C:\GazpetTichete\wt\tkt-2026-0134-i1'
 $BAZA = @{ Path = 'C:\Windows'; SystemRoot = 'C:\Windows'; USERPROFILE = 'C:\Users\x'; APPDATA = 'C:\a'; PGPASSWORD = 's'; PGPASSFILE = 'C:\p'; PGUSER = 'u'
   SUPABASE_SERVICE_ROLE_KEY = 's'; GITHUB_TOKEN = 's'; GH_TOKEN = 'server'; ANTHROPIC_API_KEY = 's'; CLAUDE_CODE_OAUTH_TOKEN = 's'; GIT_ASKPASS = 'x'
-  GIT_CONFIG_PARAMETERS = 'x'; GIT_CONFIG_COUNT = '1'; RESEND_API_KEY = 's'; SSH_AUTH_SOCK = 'x'; VERCEL_TOKEN = 's'; GH_CONFIG_DIR = 'C:\server' }
+  GIT_CONFIG_PARAMETERS = 'x'; GIT_CONFIG_COUNT = '1'; RESEND_API_KEY = 's'; SSH_AUTH_SOCK = 'x'; VERCEL_TOKEN = 's'; GH_CONFIG_DIR = 'C:\server'; NODE_OPTIONS = '--require x' }
 $FIXE = @('CLAUDE_CONFIG_DIR', 'GH_TOKEN', 'GH_CONFIG_DIR', 'GH_PROMPT_DISABLED', 'GH_NO_UPDATE_NOTIFIER', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT',
-  'GCM_INTERACTIVE', 'PGPASSFILE', 'PGSERVICEFILE', 'ENABLE_CLAUDEAI_MCP_SERVERS', 'DISABLE_AUTOUPDATER', 'NO_COLOR')
-$MED = Get-MediuAgent -Baza $BAZA -Token $TOK -Cai $CAI -ConfigClaude 'C:\c'
-T 'mediu: lista alba + valori fixe; secretele serverului nu trec' {
-  @($MED.Keys | Where-Object { @($AG.mediu_pastrat) -notcontains $_ -and $FIXE -notcontains $_ }).Count -eq 0 -and $MED.GH_TOKEN -ceq $TOK -and $MED.PGPASSFILE -ceq 'NUL' -and
-  $MED.GIT_CONFIG_NOSYSTEM -ceq '1' -and $MED.GIT_CONFIG_GLOBAL -ceq 'C:\Users\x\.tichete-agent\gitconfig' -and $MED.GH_CONFIG_DIR -ceq 'C:\Users\x\.tichete-agent\gh' -and $MED.Path -ceq 'C:\Windows' -and
-  @(@('PGPASSWORD', 'PGUSER', 'SUPABASE_SERVICE_ROLE_KEY', 'GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GIT_ASKPASS', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'RESEND_API_KEY', 'SSH_AUTH_SOCK', 'VERCEL_TOKEN') | Where-Object { $MED.ContainsKey($_) }).Count -eq 0
+  'GCM_INTERACTIVE', 'PGPASSFILE', 'PGSERVICEFILE', 'ENABLE_CLAUDEAI_MCP_SERVERS', 'DISABLE_AUTOUPDATER', 'NO_COLOR', 'TICHETE_WT')
+$SECRETE = @('PGPASSWORD', 'PGUSER', 'SUPABASE_SERVICE_ROLE_KEY', 'GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GIT_ASKPASS', 'GIT_CONFIG_PARAMETERS',
+  'GIT_CONFIG_COUNT', 'RESEND_API_KEY', 'SSH_AUTH_SOCK', 'VERCEL_TOKEN', 'NODE_OPTIONS')
+T 'mediu claude: lista alba + valori fixe (radacina agentului); secretele serverului nu trec' {
+  $med = Get-MediuAgent -Baza $BAZA -Token $TOK -Cfg $CFG -Worktree $WT
+  $null -ne $CFG -and @($med.Keys | Where-Object { @($AG.mediu_pastrat) -notcontains $_ -and $FIXE -notcontains $_ }).Count -eq 0 -and $med.GH_TOKEN -ceq $TOK -and $med.PGPASSFILE -ceq 'NUL' -and
+  $med.GIT_CONFIG_NOSYSTEM -ceq '1' -and $med.GIT_CONFIG_GLOBAL -ceq 'C:\GazpetTichete\cfg\gitconfig' -and $med.GH_CONFIG_DIR -ceq 'C:\GazpetTichete\cfg\gh' -and $med.Path -ceq 'C:\Windows' -and
+  $med.CLAUDE_CONFIG_DIR -ceq 'C:\Users\tichete-agent\.claude-tichete' -and $med.TICHETE_WT -ceq $WT -and @($SECRETE | Where-Object { $med.ContainsKey($_) }).Count -eq 0 -and
+  @(@('C:\GazpetTichete\wt', 'C:\Users\x\wt\a', 'C:\GazpetTichete\clona', 'C:\a b\x') | Where-Object { $w = $_; try { [void](Get-MediuAgent -Baza $BAZA -Token $TOK -Cfg $CFG -Worktree $w); $true } catch { $false } }).Count -eq 0
+}
+T 'r5: mediul LANSATORULUI: sistem + Path fix + profilul AGENTULUI + tokenul lui; nimic de la coordonator' {
+  $b2 = @{}; foreach ($k in $BAZA.Keys) { $b2[$k] = $BAZA[$k] }; $b2['ComSpec'] = 'C:\Windows\system32\cmd.exe'; $b2['LOCALAPPDATA'] = 'C:\Users\Gazpet-Ai\AppData\Local'; $b2['TEMP'] = 'C:\Users\Gazpet-Ai\T'
+  $ml = Get-MediuLansator -Baza $b2 -Cfg $CFG -Token $TOK
+  $ml.USERPROFILE -ceq 'C:\Users\tichete-agent' -and $ml.APPDATA -ceq 'C:\Users\tichete-agent\AppData\Roaming' -and $ml.LOCALAPPDATA -ceq 'C:\Users\tichete-agent\AppData\Local' -and
+  $ml.TEMP -ceq 'C:\Users\tichete-agent\AppData\Local\Temp' -and $ml.HOMEDRIVE -ceq 'C:' -and $ml.HOMEPATH -ceq '\Users\tichete-agent' -and $ml.USERNAME -ceq 'tichete-agent' -and
+  $ml.TICHETE_GH_TOKEN -ceq $TOK -and $ml.ComSpec -ceq 'C:\Windows\system32\cmd.exe' -and ($ml.Path -split ';')[0] -ceq 'C:\Windows\system32' -and -not ($ml.Path -match 'Users') -and
+  @(@($SECRETE) + @('GH_TOKEN', 'GH_CONFIG_DIR') | Where-Object { $ml.ContainsKey($_) }).Count -eq 0 -and -not ((@($ml.Values) -join ';') -match 'Gazpet-Ai') -and
+  $(try { [void](Get-MediuLansator -Baza $BAZA -Cfg $CFG -Token 'x'); $false } catch { $true })
 }
 T 'token: forma unui token GitHub de utilizator; token invalid => mediul nu se construieste' {
   (Test-FormaTokenAgent $TOK) -and (Test-FormaTokenAgent ('ghp_' + ('a' * 36))) -and
   @(@(('gho_' + ('a' * 36)), ('ghs_' + ('a' * 36)), '', 'github_pat_scurt', 'ghp_scurt', ($TOK + "`n"), ($TOK + ' x'), $null) | Where-Object { Test-FormaTokenAgent $_ }).Count -eq 0 -and
-  $(try { [void](Get-MediuAgent -Baza @{} -Token 'ghp_x' -Cai $CAI -ConfigClaude 'C:\c'); $false } catch { $true })
+  $(try { [void](Get-MediuAgent -Baza @{} -Token 'ghp_x' -Cfg $CFG -Worktree $WT); $false } catch { $true })
 }
-T 'agent.json valid (email implicit)' { $c = Test-ConfigAgent '{"versiune":1,"repo":"o/r","login_agent":"gazpet-tichete","_nota":"x"}'; $c.ok -and $c.cfg.email_commit -ceq 'gazpet-tichete@users.noreply.github.com' -and $c.cfg.clona_baza -ceq '' }
+T 'agent.json v2 valid (email implicit)' { $c = Test-ConfigAgent (J2 @{ _nota = 'x' }); $c.ok -and $c.cfg.email_commit -ceq 'gazpet-tichete@users.noreply.github.com' -and $c.cfg.cont_windows -ceq 'tichete-agent' -and $c.cfg.radacina_agent -ceq 'C:\GazpetTichete' }
 T 'agent.json invalid => refuz' {
-  $nu = @('', 'x', '[]', '{"versiune":2,"repo":"o/r","login_agent":"a"}', '{"versiune":1,"repo":"o/r"}', '{"versiune":1,"repo":"o/r","login_agent":"-a"}', '{"versiune":1,"repo":"o/r","login_agent":"a","token":"x"}',
-    '{"versiune":1,"repo":"o","login_agent":"a"}', '{"versiune":1,"repo":"o/r","login_agent":"a","clona_baza":"C:\\a b"}', '{"versiune":1,"repo":"o/r","login_agent":"a","clona_baza":"C:\\a\\..\\b"}',
-    '{"versiune":1,"repo":"o/r","login_agent":"a","email_commit":"a b"}', '{"versiune":"1","repo":"o/r","login_agent":"a"}')
+  $nu = @('', 'x', '[]', (J2 @{ versiune = 1 }), (J2 @{ versiune = '2' }), (J2 @{} @('cont_windows')), (J2 @{} @('radacina_agent')), (J2 @{} @('claude_exe')), (J2 @{} @('node_exe')),
+    (J2 @{} @('config_claude')), (J2 @{} @('profil_agent')), (J2 @{ login_agent = '-a' }), (J2 @{ token = 'x' }), (J2 @{ repo = 'o' }), (J2 @{ cont_windows = 'a b' }), (J2 @{ cont_windows = ('x' * 21) }),
+    (J2 @{ cont_windows = 'DOMENIU\x' }), (J2 @{ radacina_agent = 'C:\a b' }), (J2 @{ radacina_agent = 'C:\a\..\b' }), (J2 @{ radacina_agent = 'C:\Users\tichete-agent\r' }), (J2 @{ radacina_agent = ('C:\' + ('a' * 70)) }),
+    (J2 @{ claude_exe = 'C:\x\claude.cmd' }), (J2 @{ claude_exe = 'claude.exe' }), (J2 @{ node_exe = 'C:\x\..\node.exe' }), (J2 @{ email_commit = 'a b' }), (J2 @{ sid_coordonator = 'S-1-5-21-1-2-3-1001' }))
   @($nu | Where-Object { (Test-ConfigAgent $_).ok }).Count -eq 0
+}
+T 'r5: lansare.json = configurarea + SID-ul coordonatorului + probele; validat strict' {
+  $t = Get-TextLansare -Cfg $CFG -SidCoordonator 'S-1-5-21-111-222-333-1001' -InterziseCitire @('C:\Users\Gazpet-Ai', 'C:\Users\Gazpet-Ai\AppData\Roaming\GitHub CLI') -InterziseScriere @('C:\GazpetTichete\setari')
+  $v = Test-ConfigAgent -Text $t -Lansare
+  $v.ok -and (@($v.cfg.interzise_citire) -join '|') -ceq 'C:\Users\Gazpet-Ai|C:\Users\Gazpet-Ai\AppData\Roaming\GitHub CLI' -and (@($v.cfg.interzise_scriere) -join '|') -ceq 'C:\GazpetTichete\setari' -and
+  -not (Test-ConfigAgent $t).ok -and -not ($t -match 'token|parola|password') -and
+  @(@(@('S-1-5-32-544', @('C:\x')), @('S-1-5-21-1-2-3-4', @()), @('S-1-5-21-1-2-3-4', @('\\srv\x')), @('S-1-5-21-1-2-3-4', @('C:\a\..\b'))) | Where-Object { $c = $_; try { [void](Get-TextLansare -Cfg $CFG -SidCoordonator $c[0] -InterziseCitire $c[1] -InterziseScriere @('C:\x')); $true } catch { $false } }).Count -eq 0
+}
+function CfgCu([hashtable]$o) { $h = @{}; foreach ($k in $CFG.Keys) { $h[$k] = $CFG[$k] }; foreach ($k in $o.Keys) { $h[$k] = $o[$k] }; return $h }
+T 'r5: impartirea pe disc coordonator / agent (Test-SeparareCai)' {
+  $P = 'C:\Users\Gazpet-Ai'; $D = 'C:\Users\Public\paw-data'; $RO = 'C:\GazpetOrchestrator\pontaj-pro'
+  $nu = @(@($P, $D, 'C:\Users\Gazpet-Ai\gazpet-erp', $CFG), @($P, $D, 'C:\GazpetTichete', $CFG), @($P, $D, 'C:\GazpetTichete\clona', $CFG), @($P, $D, 'C:\Users\tichete-agent\x', $CFG),
+    @($P, $D, $RO, (CfgCu @{ radacina_agent = 'C:\Users\Gazpet-Ai\agent' })), @($P, $D, $RO, (CfgCu @{ radacina_agent = 'C:\Users\Public\paw-data\agent' })), @($P, $D, $RO, (CfgCu @{ profil_agent = 'C:\Users\Gazpet-Ai' })),
+    @($P, $D, $RO, (CfgCu @{ claude_exe = 'C:\Users\Gazpet-Ai\AppData\Roaming\npm\claude.exe' })), @($P, $D, $RO, (CfgCu @{ node_exe = 'C:\GazpetTichete\node\node.exe' })),
+    @($P, $D, $RO, (CfgCu @{ claude_exe = 'C:\Users\tichete-agent\claude.exe' })), @($P, $D, $RO, (CfgCu @{ config_claude = 'C:\Users\Gazpet-Ai\.claude-redari' })), @($P, $D, $RO, (CfgCu @{ config_claude = 'C:\Altundeva\c' })),
+    @($P, 'C:\GazpetOrchestrator\pontaj-pro\pd', $RO, $CFG), @($P, $D, 'C:\GazpetTichete\orchestrator', $CFG))
+  @(Test-SeparareCai -ProfilCoordonator $P -DataDir $D -RepoDir $RO -Cfg $CFG).Count -eq 0 -and
+  @($nu | Where-Object { @(Test-SeparareCai -ProfilCoordonator $_[0] -DataDir $_[1] -RepoDir $_[2] -Cfg $_[3]).Count -eq 0 }).Count -eq 0 -and
+  -not (Test-CaleSub 'C:\ab' 'C:\a') -and (Test-CaleSub 'c:/A/b' 'C:\a')
+}
+T 'r5: setarile garzii = doar hook-ul PreToolUse, forma exec, onFailure block, matcher *' {
+  $s = ConvertFrom-Json (Get-TextSetariAgent -NodeExe 'C:\Program Files\nodejs\node.exe' -Garda 'C:\GazpetOrchestrator\pontaj-pro\scripts\tichete_dimineata\garda_agent.mjs')
+  $h = @($s.hooks.PreToolUse)
+  $c = @($h[0].hooks)
+  @($s.PSObject.Properties).Count -eq 1 -and @($s.hooks.PSObject.Properties).Count -eq 1 -and $h.Count -eq 1 -and $h[0].matcher -ceq '*' -and $c.Count -eq 1 -and $c[0].type -ceq 'command' -and
+  $c[0].command -ceq 'C:\Program Files\nodejs\node.exe' -and (@($c[0].args) -join '|') -ceq 'C:\GazpetOrchestrator\pontaj-pro\scripts\tichete_dimineata\garda_agent.mjs' -and $c[0].timeout -eq 30 -and $c[0].onFailure -ceq 'block' -and
+  @(@(@('node.exe', 'C:\a\garda_agent.mjs'), @('C:\n\node.exe', 'C:\a b\garda_agent.mjs'), @('C:\n\node.exe', 'C:\a\alta.mjs'), @('C:\n\node.exe', 'C:\a\..\garda_agent.mjs')) | Where-Object { $p = $_; try { [void](Get-TextSetariAgent -NodeExe $p[0] -Garda $p[1]); $true } catch { $false } }).Count -eq 0
 }
 T 'gitconfig agent: doar helper-ul gh, lista mostenita golita' { $g = Get-TextGitconfigAgent @{ login_agent = 'gazpet-tichete'; email_commit = 'a@b.c' }; $g.Contains("`thelper =`n`thelper = !gh auth git-credential`n") -and $g.Contains("name = gazpet-tichete") -and $(try { [void](Get-TextGitconfigAgent @{ login_agent = 'a b'; email_commit = 'a@b.c' }); $false } catch { $true }) }
 function IntrareZ([string]$o, [string]$kv) { return ($o + $NUL + $kv + $NUL) }
-$FAG = 'file:C:/Users/x/.tichete-agent/gitconfig'
+$RAG = Get-CaiRadacinaAgent 'C:\GazpetTichete'
+$FAG = 'file:C:/GazpetTichete/cfg/gitconfig'
 $GZ = (IntrareZ $FAG "user.name`nx") + (IntrareZ $FAG "credential.helper`n") + (IntrareZ $FAG "credential.helper`n!gh auth git-credential") + (IntrareZ 'file:.git/config' "core.bare`nfalse") + (IntrareZ 'file:.git/config' "remote.origin.url`nhttps://github.com/o/r.git")
-T 'config git: conform => ok' { (Test-ConfigGitAgent -Iesire $GZ -FisierAgent $CAI.gitconfig -Repo 'o/r').ok }
+T 'config git: conform => ok' { (Test-ConfigGitAgent -Iesire $GZ -FisierAgent $RAG.gitconfig -Repo 'o/r').ok }
 T 'config git: credentiale / antete / include / remote straine => refuz' {
   $nu = @(($GZ + (IntrareZ 'file:C:/Program Files/Git/etc/gitconfig' "credential.helper`nmanager")), ($GZ + (IntrareZ 'file:.git/config' "http.https://github.com/.extraHeader`nAUTHORIZATION: x")),
     ($GZ + (IntrareZ 'file:.git/config' "include.path`nC:/x")), ($GZ + (IntrareZ 'file:.git/config' "includeIf.gitdir:C:/x/.path`ny")), ($GZ + (IntrareZ 'file:.git/config' "url.https://x/.insteadOf`nhttps://github.com/")),
     ($GZ + (IntrareZ 'file:.git/config' "core.askpass`nx.exe")), ($GZ + (IntrareZ 'file:.git/config' "remote.origin.pushurl`nhttps://x")), ($GZ + (IntrareZ 'command line:' "user.name`nx")),
     ($GZ + (IntrareZ 'file:.git/config' "remote.origin.url`nhttps://github.com/o/alt")), $GZ.Replace('o/r.git', 'o/alt.git'), $GZ.Replace($FAG, 'file:C:/alt/gitconfig'),
     $GZ.Substring(0, $GZ.Length - 1), '')
-  @($nu | Where-Object { (Test-ConfigGitAgent -Iesire $_ -FisierAgent $CAI.gitconfig -Repo 'o/r').ok }).Count -eq 0
+  @($nu | Where-Object { (Test-ConfigGitAgent -Iesire $_ -FisierAgent $RAG.gitconfig -Repo 'o/r').ok }).Count -eq 0
 }
 T 'Get-RepoDinUrl' { (Get-RepoDinUrl 'https://github.com/o/r.git') -ceq 'o/r' -and (Get-RepoDinUrl "https://github.com/o/r`n") -ceq 'o/r' -and (Get-RepoDinUrl 'git@github.com:o/r.git') -ceq '' -and (Get-RepoDinUrl 'https://evil.example/o/r') -ceq '' }
-$PERM_OK = [pscustomobject]@{ admin = $false; maintain = $false; push = $true; triage = $true; pull = $true }
-$RMAIN = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = 1; dismiss_stale_reviews_on_push = $true } })
-$RALTA = @(@('creation', 'update', 'deletion') | ForEach-Object { [pscustomobject]@{ type = $_; ruleset_id = 12 } })
+T 'citirile gh api ale barierei sunt permise; scrierile nu' {
+  @(@(@('api', 'repos/o/r'), @('api', 'repos/o/r/rules/branches/main'), @('api', 'repos/o/r/rules/branches/tichete%2Fverificare-bariera-abc'), @('api', 'repos/o/r/rulesets?includes_parents=true&per_page=100'),
+    @('api', 'repos/o/r/rulesets/42')) | Where-Object { -not (Test-ComandaGhPermisa $_) }).Count -eq 0 -and
+  @(@(@('api', 'repos/o/r/rulesets/42', '-X', 'DELETE'), @('api', 'repos/o/r', '-f', 'x=y'), @('api', 'repos/o/r/rules/branches/main', '--method', 'PUT'), @('api', 'repos/o/r/rules/branches/a b'),
+    @('api', 'repos/o/r/pulls/7/merge'), @('api', 'graphql'), @('api', "repos/o/r`n"), @('api', 'repos/o/r/rulesets?per_page=1'), @('api', 'repos/o/r/rulesets?includes_parents=true&per_page=100', '--paginate'),
+    @('api', 'repos/o/r/rulesets/42', '--input', 'x'), @('api', 'repos/o/r/collaborators/x', '-X', 'PUT')) | Where-Object { Test-ComandaGhPermisa $_ }).Count -eq 0
+}
+
+Write-Host 'P1 (r5): bariera GitHub = ruleset-urile INSESI (forma canonica), proba pe 3 nume, amprenta'
+# ruleset-urile in forma raspunsului GET repos/<o>/<r>/rulesets/<id>, ca JSON (exact ce primeste orchestratorul de la gh api)
+function Js([string]$t) { return (ConvertFrom-Json -InputObject $t) }
+$RS_MAIN_T = '{"id":11,"name":"main","target":"branch","source_type":"Repository","source":"o/r","enforcement":"active","current_user_can_bypass":"never","conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},"rules":[{"type":"pull_request","parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true,"require_code_owner_review":false}},{"type":"non_fast_forward"}],"updated_at":"2026-11-11T10:00:00.000+02:00"}'
+$RS_REST_T = '{"id":12,"name":"restul","target":"branch","source_type":"Repository","source":"o/r","enforcement":"active","current_user_can_bypass":"never","conditions":{"ref_name":{"include":["~ALL"],"exclude":["refs/heads/tichete/**/*"]}},"rules":[{"type":"creation"},{"type":"update","parameters":{"update_allows_fetch_and_merge":false}},{"type":"deletion"}],"updated_at":"2026-11-11T10:05:00Z"}'
+# varianta modificata a unui ruleset: inlocuire de text pe JSON (scrisa explicit; inlocuirea trebuie sa existe)
+function RsVar([string]$baza, [string]$din, [string]$in) { if (-not $baza.Contains($din)) { throw ('RsVar: nu gasesc ' + $din) }; return (Js $baza.Replace($din, $in)) }
+function Reg([int]$id, [string[]]$tipuri) {
+  return @($tipuri | ForEach-Object {
+    if ($_ -ceq 'pull_request') { Js ('{"type":"pull_request","ruleset_id":' + $id + ',"parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true}}') }
+    else { Js ('{"type":"' + $_ + '","ruleset_id":' + $id + '}') }
+  })
+}
+function Lst([string]$t) { return @((Js $t) | ForEach-Object { $_ }) }
+$PERM_OK = Js '{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true}'
 function Bar([hashtable]$o = @{}) {
-  $p = @{ LoginServer = 'coordonator'; LoginAgentConfig = 'gazpet-tichete'; LoginAgent = 'gazpet-tichete'; Permisiuni = $PERM_OK; ReguliMain = $RMAIN; ReguliAlta = $RALTA; ReguliTichete = @(); Ocolire = @{ '11' = 'never'; '12' = 'never' } }
+  $p = @{ LoginServer = 'coordonator'; LoginAgentConfig = 'gazpet-tichete'; LoginAgent = 'gazpet-tichete'; Permisiuni = $PERM_OK; RamuraImplicita = 'main'
+          ListaRulesets = (Lst '[{"id":11},{"id":12}]'); Detalii = @{ '11' = (Js $RS_MAIN_T); '12' = (Js $RS_REST_T) }
+          ProbaAleator = @(Reg 12 @('creation', 'update', 'deletion')); ProbaMain = @(@(Reg 11 @('pull_request')) + @(Reg 12 @('creation', 'update', 'deletion'))); ProbaTichete = @() }
   foreach ($k in $o.Keys) { $p[$k] = $o[$k] }
   return (Test-BarieraGitHub @p)
 }
-T 'bariera: conform => ok' { $r = Bar; $r.ok -and @($r.motive).Count -eq 0 }
-T 'bariera: identitate / drepturi / reguli lipsa sau ocolibile => refuz' {
-  $nu = @(@{ LoginAgent = 'altcineva' }, @{ LoginAgent = 'Coordonator'; LoginAgentConfig = 'Coordonator' }, @{ LoginServer = '' }, @{ Permisiuni = [pscustomobject]@{ admin = $true; maintain = $false; push = $true } },
-    @{ Permisiuni = [pscustomobject]@{ admin = $false; maintain = $true; push = $true } }, @{ Permisiuni = [pscustomobject]@{ admin = $false; maintain = $false; push = $false } },
-    @{ Permisiuni = [pscustomobject]@{ maintain = $false; push = $true } }, @{ Permisiuni = $null }, @{ ReguliMain = @() },
-    @{ ReguliMain = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = 0; dismiss_stale_reviews_on_push = $true } }) },
-    @{ ReguliMain = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = '1'; dismiss_stale_reviews_on_push = $true } }) },
-    @{ ReguliMain = @([pscustomobject]@{ type = 'pull_request'; ruleset_id = 11; parameters = [pscustomobject]@{ required_approving_review_count = 1; dismiss_stale_reviews_on_push = $false } }) },
-    @{ Ocolire = @{ '11' = 'always'; '12' = 'never' } }, @{ Ocolire = @{ '11' = 'pull_requests_only'; '12' = 'never' } }, @{ Ocolire = @{ '12' = 'never' } }, @{ Ocolire = @{ '11' = 'never'; '12' = 'always' } },
-    @{ ReguliAlta = @($RALTA | Where-Object { $_.type -cne 'deletion' }) }, @{ ReguliTichete = @([pscustomobject]@{ type = 'creation'; ruleset_id = 12 }) })
+function DetCu([string]$id, $rs) { $d = @{ '11' = (Js $RS_MAIN_T); '12' = (Js $RS_REST_T) }; $d[$id] = $rs; return $d }
+T 'configuratia din README => ok, cu ruleset-urile alese si amprenta (id=updated_at, sortata)' {
+  $rb = Bar
+  $rb.ok -and @($rb.motive).Count -eq 0 -and $rb.idMain -ceq '11' -and $rb.idRestul -ceq '12' -and (@($rb.amprenta) -join '|') -ceq '11=2026-11-11T10:00:00.000+02:00|12=2026-11-11T10:05:00Z'
+}
+T 'CAZUL DIN VERDICT: ruleset aplicat doar pe numele de proba => refuz (desi proba pe acel nume ar trece)' {
+  $rsP = Js $RS_REST_T.Replace('"id":12', '"id":13').Replace('"include":["~ALL"],"exclude":["refs/heads/tichete/**/*"]', '"include":["refs/heads/verificare-bariera-tichete"],"exclude":[]')
+  $rb = Bar @{ ListaRulesets = (Lst '[{"id":11},{"id":13}]'); Detalii = @{ '11' = (Js $RS_MAIN_T); '13' = $rsP }; ProbaAleator = @(Reg 13 @('creation', 'update', 'deletion')); ProbaMain = @(Reg 11 @('pull_request')) }
+  -not $rb.ok -and ((@($rb.motive) -join ' ') -match 'niciun ruleset pentru restul')
+}
+T 'forme ne-canonice ale ruleset-ului restul => refuz (dezactivat, evaluate, include / exclude, regula lipsa, ocolire)' {
+  $vari = @(
+    @('"enforcement":"active"', '"enforcement":"disabled"'), @('"enforcement":"active"', '"enforcement":"evaluate"'), @('"enforcement":"active",', ''), @('"target":"branch"', '"target":"tag"'),
+    @('"include":["~ALL"]', '"include":["refs/heads/main","refs/heads/dev"]'), @('"exclude":["refs/heads/tichete/**/*"]', '"exclude":["refs/heads/tichete/**/*","refs/heads/claude/**/*"]'),
+    @('"exclude":["refs/heads/tichete/**/*"]', '"exclude":["refs/heads/**/*"]'), @(',"exclude":["refs/heads/tichete/**/*"]', ''), @('"include":["~ALL"]', '"include":"~ALL"'),
+    @('"conditions":{"ref_name":', '"conditions":{"repository_name":{"include":["~ALL"]},"ref_name":'), @('{"type":"deletion"}', '{"type":"non_fast_forward"}'),
+    @(',{"type":"update","parameters":{"update_allows_fetch_and_merge":false}}', ''), @('"update_allows_fetch_and_merge":false', '"update_allows_fetch_and_merge":true'),
+    @('"current_user_can_bypass":"never"', '"current_user_can_bypass":"always"'), @('"current_user_can_bypass":"never"', '"current_user_can_bypass":"pull_requests_only"'),
+    @('"current_user_can_bypass":"never"', '"current_user_can_bypass":"exempt"'), @('"current_user_can_bypass":"never",', ''),
+    @('"conditions":{"ref_name":{"include":["~ALL"],"exclude":["refs/heads/tichete/**/*"]}}', '"conditions":{}'),
+    @(',"rules":[{"type":"creation"},{"type":"update","parameters":{"update_allows_fetch_and_merge":false}},{"type":"deletion"}]', ''))
+  @($vari | Where-Object { (Bar @{ Detalii = (DetCu '12' (RsVar $RS_REST_T $_[0] $_[1])) }).ok }).Count -eq 0
+}
+T 'forme ne-canonice ale ruleset-ului main => refuz' {
+  $vari = @(@('"enforcement":"active"', '"enforcement":"evaluate"'), @('"include":["~DEFAULT_BRANCH"]', '"include":["refs/heads/main"]'), @('"exclude":[]', '"exclude":["refs/heads/x"]'),
+    @('"required_approving_review_count":1', '"required_approving_review_count":0'), @('"required_approving_review_count":1', '"required_approving_review_count":"1"'),
+    @('"dismiss_stale_reviews_on_push":true', '"dismiss_stale_reviews_on_push":false'), @('"current_user_can_bypass":"never"', '"current_user_can_bypass":"always"'))
+  @($vari | Where-Object { (Bar @{ Detalii = (DetCu '11' (RsVar $RS_MAIN_T $_[0] $_[1])) }).ok }).Count -eq 0
+}
+T 'identitate / drepturi / branch implicit => refuz' {
+  $nu = @(@{ LoginAgent = 'altcineva' }, @{ LoginAgent = 'Coordonator'; LoginAgentConfig = 'Coordonator' }, @{ LoginServer = '' }, @{ Permisiuni = (Js '{"admin":true,"maintain":false,"push":true}') },
+    @{ Permisiuni = (Js '{"admin":false,"maintain":true,"push":true}') }, @{ Permisiuni = (Js '{"admin":false,"maintain":false,"push":false}') }, @{ Permisiuni = (Js '{"maintain":false,"push":true}') }, @{ Permisiuni = $null },
+    @{ RamuraImplicita = 'master' }, @{ RamuraImplicita = '' })
   @($nu | Where-Object { (Bar $_).ok }).Count -eq 0
 }
-T 'citirile gh api ale barierei sunt permise; scrierile nu' {
-  (Test-ComandaGhPermisa @('api', 'repos/o/r', '--jq', '.permissions')) -and (Test-ComandaGhPermisa @('api', 'repos/o/r/rules/branches/main')) -and (Test-ComandaGhPermisa @('api', 'repos/o/r/rules/branches/tichete%2Fverificare-bariera')) -and
-  (Test-ComandaGhPermisa @('api', 'repos/o/r/rulesets/42', '--jq', '.current_user_can_bypass')) -and
-  @(@(@('api', 'repos/o/r/rulesets/42', '-X', 'DELETE'), @('api', 'repos/o/r', '--jq', '.permissions', '-f', 'x=y'), @('api', 'repos/o/r/rules/branches/main', '--method', 'PUT'), @('api', 'repos/o/r/rules/branches/a b'),
-    @('api', 'repos/o/r/pulls/7/merge'), @('api', 'graphql'), @('api', "repos/o/r`n", '--jq', '.permissions'), @('api', 'repos/o/r/rulesets/42')) | Where-Object { Test-ComandaGhPermisa $_ }).Count -eq 0
+T 'lista: trunchiata / dublata / fara detalii / detalii cu alt id => refuz' {
+  $max = [int](Get-ReguliTichete).bariera_rulesets.max_rulesets
+  $multe = @(0..($max - 1) | ForEach-Object { Js ('{"id":' + (100 + $_) + '}') })
+  $detM = @{ '12' = (Js $RS_REST_T) }; foreach ($m in $multe) { $detM[[string]$m.id] = Js $RS_MAIN_T.Replace('"id":11', ('"id":' + $m.id)) }
+  -not (Bar @{ ListaRulesets = @($multe + @(Js '{"id":12}')); Detalii = $detM }).ok -and
+  -not (Bar @{ ListaRulesets = (Lst '[{"id":11},{"id":12},{"id":12}]') }).ok -and
+  -not (Bar @{ ListaRulesets = (Lst '[{"id":11},{"id":12},{"id":14}]') }).ok -and
+  -not (Bar @{ Detalii = (DetCu '12' (Js $RS_REST_T.Replace('"id":12', '"id":99'))) }).ok -and
+  -not (Bar @{ ListaRulesets = (Lst '[{"id":"x"},{"id":11},{"id":12}]') }).ok
+}
+T 'alte ruleset-uri active pot exista (se cumuleaza) - intra in amprenta' {
+  $ex = Js $RS_MAIN_T.Replace('"id":11', '"id":15').Replace('"target":"branch"', '"target":"tag"').Replace('"current_user_can_bypass":"never"', '"current_user_can_bypass":"always"').Replace('2026-11-11T10:00:00.000+02:00', '2026-01-01T00:00:00Z')
+  $rb = Bar @{ ListaRulesets = (Lst '[{"id":11},{"id":12},{"id":15}]'); Detalii = @{ '11' = (Js $RS_MAIN_T); '12' = (Js $RS_REST_T); '15' = $ex } }
+  $rb.ok -and (@($rb.amprenta) -join '|') -ceq '11=2026-11-11T10:00:00.000+02:00|12=2026-11-11T10:05:00Z|15=2026-01-01T00:00:00Z'
+}
+T 'proba pe nume (a doua plasa): restrictii lipsa / din alt ruleset / ruleset necunoscut / tichete restrictionat => refuz' {
+  $nu = @(@{ ProbaAleator = @(Reg 12 @('creation', 'update')) }, @{ ProbaAleator = @() }, @{ ProbaMain = @(Reg 12 @('update')) }, @{ ProbaMain = @(Reg 11 @('pull_request')) },
+    @{ ProbaAleator = @(@(Reg 12 @('creation', 'update', 'deletion')) + @(Reg 77 @('creation'))) }, @{ ProbaTichete = @(Reg 12 @('creation')) }, @{ ProbaTichete = @(Reg 11 @('update')) })
+  $oc = Js $RS_MAIN_T.Replace('"id":11', '"id":16').Replace('"current_user_can_bypass":"never"', '"current_user_can_bypass":"always"').Replace('"include":["~DEFAULT_BRANCH"],"exclude":[]', '"include":["~ALL"],"exclude":[]')
+  $okOc = (Bar @{ ListaRulesets = (Lst '[{"id":11},{"id":12},{"id":16}]'); Detalii = @{ '11' = (Js $RS_MAIN_T); '12' = (Js $RS_REST_T); '16' = $oc }; ProbaTichete = @(Reg 16 @('creation')) }).ok
+  @($nu | Where-Object { (Bar $_).ok }).Count -eq 0 -and $okOc
+}
+function CoordBa([string]$bm, [string]$br) {
+  return @{ '11' = (Js $RS_MAIN_T.Replace('"current_user_can_bypass":"never"', ('"current_user_can_bypass":"never","bypass_actors":' + $bm)))
+            '12' = (Js $RS_REST_T.Replace('"current_user_can_bypass":"never"', ('"current_user_can_bypass":"never","bypass_actors":' + $br))) }
+}
+T 'instalare: bypass_actors (identitatea coordonatorului) doar admin; rol Write / echipa / aplicatie / lipsa => refuz' {
+  $ag = @{ '11' = (Js $RS_MAIN_T); '12' = (Js $RS_REST_T) }
+  $bun = Test-BarieraInstalare -Agent $ag -Coordonator (CoordBa '[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]' '[]') -IdMain '11' -IdRestul '12'
+  $rele = @('[{"actor_id":4,"actor_type":"RepositoryRole","bypass_mode":"always"}]', '[{"actor_id":7,"actor_type":"Team","bypass_mode":"always"}]', '[{"actor_id":1,"actor_type":"Integration","bypass_mode":"always"}]',
+    '[{"actor_id":null,"actor_type":"DeployKey","bypass_mode":"always"}]', '[{"actor_id":"5","actor_type":"RepositoryRole"}]', 'null', '"x"')
+  $altUpd = CoordBa '[]' '[]'; $altUpd['12'] = Js $RS_REST_T.Replace('"current_user_can_bypass":"never"', '"current_user_can_bypass":"never","bypass_actors":[]').Replace('2026-11-11T10:05:00Z', '2026-11-12T00:00:00Z')
+  $bun.ok -and @($rele | Where-Object { (Test-BarieraInstalare -Agent $ag -Coordonator (CoordBa $_ '[]') -IdMain '11' -IdRestul '12').ok }).Count -eq 0 -and
+  -not (Test-BarieraInstalare -Agent $ag -Coordonator $ag -IdMain '11' -IdRestul '12').ok -and -not (Test-BarieraInstalare -Agent $ag -Coordonator $altUpd -IdMain '11' -IdRestul '12').ok -and
+  -not (Test-BarieraInstalare -Agent $ag -Coordonator (CoordBa '[]' '[]') -IdMain '' -IdRestul '12').ok
+}
+T 'amprenta: aceeasi => ok; schimbata / adaugata / stearsa / alt repo / lipsa / stricata => refuz' {
+  $a = @((Bar).amprenta)
+  $t = Get-TextAmprenta -Repo 'o/r' -Amprenta $a -LoginCoordonator 'coordonator' -Data '2026-11-11T22:00:00'
+  $nu = @(@($t, 'o/r', @('11=2026-11-11T10:00:00.000+02:00', '12=2026-11-12T00:00:00Z')), @($t, 'o/r', @($a + @('15=2026-01-01T00:00:00Z'))), @($t, 'o/r', @($a[0])), @($t, 'o/alt', $a), @('', 'o/r', $a), @('{', 'o/r', $a),
+    @(('{"versiune":2,"repo":"o/r","rulesets":["' + ($a -join '","') + '"]}'), 'o/r', $a))
+  (Test-Amprenta -Text $t -Repo 'o/r' -Curenta $a).ok -and @($nu | Where-Object { (Test-Amprenta -Text $_[0] -Repo $_[1] -Curenta $_[2]).ok }).Count -eq 0 -and
+  -not (Test-Amprenta -Text $t -Repo 'o/r' -Curenta @()).ok -and $(try { [void](Get-AmprentaRulesets -Lista @(Js '{"id":11}') -Detalii @{ '11' = (Js $RS_MAIN_T.Replace(',"updated_at":"2026-11-11T10:00:00.000+02:00"', '')) }); $false } catch { $true })
+}
+T 'orchestratorul: lista + detalii + 3 probe (una aleatoare) cu tokenul agentului; bypass_actors doar cu -Instalare; amprenta comparata la pornire' {
+  $Orch.Contains("'/rulesets?includes_parents=true&per_page=100'") -and $Orch.Contains("'/rules/branches/main'") -and $Orch.Contains('[guid]::NewGuid()') -and
+  $Orch.Contains('Test-BarieraInstalare -Agent $det -Coordonator $detC') -and $Orch.Contains('Test-Amprenta -Text') -and -not ($Orch -match "ramura_proba_restrictionata|current_user_can_bypass'\)")
+}
+
+Write-Host 'P1 (r5): contul Windows separat; P2: head schimbat'
+$Inst = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'instaleaza_task.ps1'))
+T 'pornirea sub contul agentului: credentiale + profil + mediu explicit + job object; brief-ul pe stdin' {
+  @(@('$psi.UserName = $CfgAgent.cont_windows', '$psi.Password = $CredAgent.Password', '$psi.LoadUserProfile = $true', '$psi.EnvironmentVariables.Clear()', 'Get-MediuLansator -Baza',
+    '[JobAgent]::Adauga($job, $proc.Handle)', '-Stdin (CitesteText $x.brief)', 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE') | Where-Object { -not $Orch.Contains($_) }).Count -eq 0 -and
+  -not $OrchCod.Contains("'-Brief', (CaleSimpla `$x.brief)")
+}
+T 'inainte de orice agent: impartirea pe disc, SID diferit, nu e admin, parola DPAPI, proba sub contul agentului' {
+  @(@('Test-SeparareCai -ProfilCoordonator', 'if ($sidAg -ceq $sidEu)', 'MembriiAdministrators', 'Import-Clixml -LiteralPath $CaiAgent.cont', "PornesteLansator -Argumente @('-DoarVerificareCont')",
+    "throw ('proba contului agentului a picat (exit '", 'if (-not $Simulare) { PregatesteContAgent }', 'function CitesteIesireAgent', "throw ('directorul de iesire al agentului e o legatura: '") | Where-Object { -not $Orch.Contains($_) }).Count -eq 0 -and
+  $Orch.IndexOf('if (-not $Simulare) { PregatesteContAgent }') -lt $Orch.IndexOf('# ── a. Tichetele')
+}
+T 'instaleaza_task.ps1: refuza acelasi cont (nume / SID), cere parola agentului, bariera cu -Instalare' {
+  @(@('agentul ar rula sub acelasi cont Windows ca orchestratorul', 'if ($sidTask -ceq $sidAg)', '$Cai.cont', '-DoarVerificare -Instalare') | Where-Object { -not $Inst.Contains($_) }).Count -eq 0
+}
+$SA = 'a' * 40; $SB = 'b' * 40
+T 'P2: starea dupa CI: head diferit / necitit => PR_HEAD_SCHIMBAT' {
+  (Get-StareDupaCi -ReviewOk $true -ShaRevizuit $SA -HeadActual $SA) -ceq 'PR_DRAFT' -and (Get-StareDupaCi -ReviewOk $false -ShaRevizuit $SA -HeadActual $SA) -ceq 'PR_FARA_REVIEW' -and
+  @(@(@($true, $SA, $SB), @($false, $SA, $SB), @($true, $SA, ''), @($true, $SA, $null), @($true, '', ''), @($true, 'abc', 'abc')) | Where-Object { (Get-StareDupaCi -ReviewOk $_[0] -ShaRevizuit $_[1] -HeadActual $_[2]) -cne 'PR_HEAD_SCHIMBAT' }).Count -eq 0
+}
+T 'P2: stare.json PR_HEAD_SCHIMBAT => review_complet false, fara verdicte; rularea urmatoare = review' {
+  $e = Get-StareNoua -Vechi $null -Numar 'TKT-2026-0134' -Rezultat @{ stare = 'PR_HEAD_SCHIMBAT'; pr = 77; branch = 'tichete/tkt-2026-0134-i1'; detaliu = 'head schimbat' } -Azi '2026-11-11'
+  $sel = Select-TicheteDeLucru -Tichete @(Tk 'TKT-2026-0134') -Stare @{ 'TKT-2026-0134' = $e } -Azi '2026-11-12'
+  $w = @($sel.deLucru)
+  $e2 = Get-StareNoua -Vechi $e -Numar 'TKT-2026-0134' -Rezultat @{ stare = 'PR_HEAD_SCHIMBAT'; pr = 77; branch = 'tichete/tkt-2026-0134-i1' } -Azi '2026-11-12'
+  $e3 = Get-StareNoua -Vechi $e -Numar 'TKT-2026-0134' -Rezultat @{ stare = 'PR_DRAFT'; pr = 77; branch = 'tichete/tkt-2026-0134-i1' } -Azi '2026-11-12'
+  $e.pr -eq 77 -and $e.review_complet -eq $false -and $e.pas_lipsa -ceq '' -and $null -eq $e.verdicte -and $e.incercari -eq 1 -and $e.clasa -ceq 'L' -and
+  $w.Count -eq 1 -and $w[0].mod -ceq 'review' -and $w[0].branch -ceq 'tichete/tkt-2026-0134-i1' -and $w[0].incercare -eq 1 -and $e2.incercari -eq 1 -and $e3.review_complet -eq $true -and
+  (Get-StareRulare -Stari @('PR_HEAD_SCHIMBAT')) -ceq 'PARTIAL'
+}
+T 'P2: orchestratorul foloseste starea calculata dupa CI' {
+  $Orch.Contains('$stCi = Get-StareDupaCi -ReviewOk $reviewOk -ShaRevizuit $x.sha -HeadActual $headAcum') -and $Orch.Contains('Termina $x $stCi') -and -not $Orch.Contains("Termina `$x `$(if (`$reviewOk) { 'PR_DRAFT' }")
 }
 
 Write-Host 'Numar / J2 slug / branch'

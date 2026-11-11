@@ -31,10 +31,13 @@ $script:GhPermise     = @($script:Reguli.gh_permise)
 $script:GhApiCitiri   = @($script:Reguli.gh_api_citiri)
 $script:GitPermise    = @($script:Reguli.git_permise)
 $script:Agent         = $script:Reguli.agent_tichete
+$script:BarieraRs     = $script:Reguli.bariera_rulesets
 # stările finale ale unui tichet într-o rulare care NU fac rularea PARTIAL
 $script:StariOk       = @('PR_DRAFT', 'DECIZIE')
 # rezultatele cunoscute ale agentului (consumă o încercare; același PR o singură dată)
-$script:StariConsuma  = @('PR_DRAFT', 'PR_FARA_REVIEW', 'PR_CI_NECITIT', 'DECIZIE', 'ESUAT')
+$script:StariConsuma  = @('PR_DRAFT', 'PR_FARA_REVIEW', 'PR_CI_NECITIT', 'PR_HEAD_SCHIMBAT', 'DECIZIE', 'ESUAT')
+# stările cu PR găsit pe branch-ul rulării (se ține minte PR-ul + branch-ul)
+$script:StariCuPr     = @('PR_DRAFT', 'PR_FARA_REVIEW', 'PR_CI_NECITIT', 'PR_HEAD_SCHIMBAT')
 $script:VerdicteSalvabile = @('GO', 'GO_CU_CONDITII', 'NO_GO')
 # caractere de control (fără \n, \t) + bidi U+202A–U+202E, U+2066–U+2069 (construite din cod: editoarele le pot strica)
 $script:ReControl     = '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F' + [char]0x202A + '-' + [char]0x202E + [char]0x2066 + '-' + [char]0x2069 + ']'
@@ -43,12 +46,57 @@ function Get-ReguliTichete { return $script:Reguli }
 
 function Get-Camp {
   # proprietate dintr-un hashtable / PSCustomObject, $null dacă lipsește (StrictMode 2 aruncă altfel)
+  # ATENȚIE: o listă întoarsă de aici se desface în pipeline ([] => $null, ['x'] => 'x'); pentru liste: Get-CampLista.
   param([AllowNull()][object]$O, [string]$Nume)
   if ($null -eq $O) { return $null }
   if ($O -is [System.Collections.IDictionary]) { if ($O.Contains($Nume)) { return $O[$Nume] } else { return $null } }
   $p = $O.PSObject.Properties[$Nume]
   if ($null -eq $p) { return $null }
   return $p.Value
+}
+
+function Get-CampLista {
+  # r5: o listă JSON dintr-un obiect, FĂRĂ desfacerea din pipeline: @{ lista = $true dacă valoarea e chiar o listă; v = elementele }.
+  # Câmp lipsă / null / șir / obiect => lista = $false (apelantul refuză). Hashtable-ul nu se desface la return.
+  param([AllowNull()][object]$O, [string]$Nume)
+  $rez = @{ lista = $false; v = @() }
+  if ($null -eq $O) { return $rez }
+  $val = $null
+  if ($O -is [System.Collections.IDictionary]) { if (-not $O.Contains($Nume)) { return $rez }; $val = $O[$Nume] }
+  else {
+    $p = $O.PSObject.Properties[$Nume]
+    if ($null -eq $p) { return $rez }
+    $val = $p.Value
+  }
+  if ($val -is [System.Array]) { $rez.lista = $true; $rez.v = $val }
+  return $rez
+}
+
+function Test-ListaExacta {
+  # True dacă $L (rezultatul Get-CampLista) are EXACT șirurile din $Asteptat, în aceeași ordine (comparare literală, ordinală).
+  param([AllowNull()][hashtable]$L, [string[]]$Asteptat = @())
+  if ($null -eq $L -or $L.lista -ne $true) { return $false }
+  $a = @($Asteptat)
+  if (@($L.v).Count -ne $a.Count) { return $false }
+  for ($i = 0; $i -lt $a.Count; $i++) {
+    $e = $L.v[$i]
+    if (-not ($e -is [string]) -or $e -cne $a[$i]) { return $false }
+  }
+  return $true
+}
+
+function Test-ObiectJson {
+  # True dacă $O e un obiect JSON (PSCustomObject din ConvertFrom-Json sau hashtable din teste).
+  param([AllowNull()][object]$O)
+  return ($null -ne $O -and ($O -is [System.Management.Automation.PSCustomObject] -or $O -is [System.Collections.IDictionary]))
+}
+
+function Get-CheiObiect {
+  # Numele câmpurilor unui obiect JSON (ordine din sursă).
+  param([AllowNull()][object]$O)
+  if ($null -eq $O) { return @() }
+  if ($O -is [System.Collections.IDictionary]) { return @($O.Keys | ForEach-Object { [string]$_ }) }
+  return @($O.PSObject.Properties | ForEach-Object { [string]$_.Name })
 }
 
 # ── Număr, slug, branch ─────────────────────────────────────────────────────────────────────────────────────
@@ -744,12 +792,80 @@ function Join-ArgvWindows {
 }
 
 function Get-CaiAgent {
-  # Căile FIXE ale configurării agentului, în afara repo-ului: <profilul contului>\.tichete-agent\ (README, „Bariera”).
+  # Căile FIXE ale configurării agentului ținute de COORDONATOR, în profilul lui (contul agentului nu le poate citi, r5 P1):
+  # <profil coordonator>\.tichete-agent\ — agent.json, token_agent.txt, cont_agent.xml (parola contului Windows al agentului,
+  # DPAPI: doar coordonatorul o poate decripta), amprenta_rulesets.json (scrisă la instalare).
   param([string]$Profil)
   if ([string]::IsNullOrEmpty($Profil)) { throw 'profil gol' }
   $d = Join-Path $Profil ([string]$script:Agent.dir_config)
   return @{ dir = $d; config = (Join-Path $d 'agent.json'); token = (Join-Path $d 'token_agent.txt')
-            gitconfig = (Join-Path $d 'gitconfig'); gh = (Join-Path $d 'gh') }
+            cont = (Join-Path $d 'cont_agent.xml'); amprenta = (Join-Path $d 'amprenta_rulesets.json') }
+}
+
+function Test-CaleSimpla {
+  # Cale Windows absolută, fără spații / metacaractere (intră în linii de comandă): C:\a\b.c
+  param([AllowNull()][string]$Cale)
+  if ([string]::IsNullOrEmpty($Cale)) { return $false }
+  if ($Cale -cnotmatch '\A[A-Za-z]:\\[A-Za-z0-9_.-]+(?:\\[A-Za-z0-9_.-]+)*\z') { return $false }
+  foreach ($s in @($Cale.Substring(3) -split '\\')) { if ($s -ceq '..' -or $s -ceq '.' -or $s.EndsWith('.')) { return $false } }
+  return $true
+}
+
+function Test-CaleExe {
+  # Executabil (claude.exe / node.exe): cale absolută .exe; spații și paranteze permise (Program Files (x86)), nimic altceva.
+  param([AllowNull()][string]$Cale)
+  if ([string]::IsNullOrEmpty($Cale)) { return $false }
+  if ($Cale -cnotmatch '\A[A-Za-z]:\\[A-Za-z0-9 _.()-]+(?:\\[A-Za-z0-9 _.()-]+)*\.exe\z') { return $false }
+  foreach ($s in @($Cale.Substring(3) -split '\\')) { if ($s -ceq '..' -or $s -ceq '.' -or $s.EndsWith('.') -or $s.EndsWith(' ') -or $s.StartsWith(' ')) { return $false } }
+  return $true
+}
+
+function Test-CaleSub {
+  # True dacă $Cale e $Radacina sau sub ea (fără deosebire de majuscule, pe segmente: C:\ab NU e sub C:\a).
+  param([AllowNull()][string]$Cale, [AllowNull()][string]$Radacina)
+  if ([string]::IsNullOrEmpty($Cale) -or [string]::IsNullOrEmpty($Radacina)) { return $false }
+  $c = ($Cale -replace '/', '\').TrimEnd('\'); $r = ($Radacina -replace '/', '\').TrimEnd('\')
+  return ($c -ieq $r -or $c.StartsWith($r + '\', [StringComparison]::OrdinalIgnoreCase))
+}
+
+function Get-CaiRadacinaAgent {
+  # Directoarele din rădăcina agentului (în afara C:\Users\<coordonator>): clona de bază, worktree-urile, ieșirile, config-ul
+  # git / gh rescris la fiecare pornire (contul agentului scrie aici) și setari (DOAR coordonatorul scrie; agentul doar citește).
+  param([string]$Radacina)
+  if (-not (Test-CaleSimpla $Radacina)) { throw 'radacina agentului invalida' }
+  return @{ radacina = $Radacina; clona = (Join-Path $Radacina 'clona'); wt = (Join-Path $Radacina 'wt'); iesire = (Join-Path $Radacina 'iesire')
+            cfg = (Join-Path $Radacina 'cfg'); gitconfig = (Join-Path $Radacina 'cfg\gitconfig'); gh = (Join-Path $Radacina 'cfg\gh')
+            setari = (Join-Path $Radacina 'setari'); fisSetari = (Join-Path $Radacina 'setari\setari_agent.json'); fisLansare = (Join-Path $Radacina 'setari\lansare.json') }
+}
+
+function Test-SeparareCai {
+  # r5 (P1, contul Windows separat): împărțirea pe disc între coordonator și agent. Întoarce motivele de refuz (listă goală = ok).
+  #  - rădăcina agentului și profilul agentului: NU în profilul coordonatorului, NU în paw-data, nu același cu el;
+  #  - clona orchestratorului ($RepoDir: scripturile, garda, regulile) NU în profilul coordonatorului (agentul trebuie s-o citească)
+  #    și NU sub rădăcina / profilul agentului (agentul n-are voie s-o modifice);
+  #  - claude.exe / node.exe în afara ambelor profiluri și a rădăcinii agentului (instalări de sistem, doar-citire pentru agent).
+  param([string]$ProfilCoordonator, [string]$DataDir, [string]$RepoDir, [AllowNull()][hashtable]$Cfg)
+  $mot = New-Object System.Collections.ArrayList
+  if ($null -eq $Cfg) { return @('config agent lipsa') }
+  $R = [string]$Cfg.radacina_agent; $P = [string]$Cfg.profil_agent
+  foreach ($x in @(@{ c = $R; n = 'radacina_agent' }, @{ c = $P; n = 'profil_agent' })) {
+    if ((Test-CaleSub $x.c $ProfilCoordonator) -or (Test-CaleSub $ProfilCoordonator $x.c)) { [void]$mot.Add($x.n + ' se suprapune cu profilul coordonatorului') }
+    if ((Test-CaleSub $x.c $DataDir) -or (Test-CaleSub $DataDir $x.c)) { [void]$mot.Add($x.n + ' se suprapune cu paw-data') }
+  }
+  if (Test-CaleSub $RepoDir $ProfilCoordonator) { [void]$mot.Add('clona orchestratorului e in profilul coordonatorului (agentul trebuie sa citeasca garda fara acces la profil)') }
+  if ((Test-CaleSub $RepoDir $R) -or (Test-CaleSub $R $RepoDir) -or (Test-CaleSub $RepoDir $P)) { [void]$mot.Add('clona orchestratorului se suprapune cu radacina / profilul agentului') }
+  if (Test-CaleSub $DataDir $RepoDir) { [void]$mot.Add('paw-data e in clona orchestratorului') }
+  foreach ($k in @('claude_exe', 'node_exe', 'config_claude')) {
+    $v = [string]$Cfg[$k]
+    if (Test-CaleSub $v $ProfilCoordonator) { [void]$mot.Add($k + ' e in profilul coordonatorului') }
+  }
+  foreach ($k in @('claude_exe', 'node_exe')) {
+    $v = [string]$Cfg[$k]
+    if ((Test-CaleSub $v $R) -or (Test-CaleSub $v $P)) { [void]$mot.Add($k + ' e in zona agentului (l-ar putea inlocui)') }
+  }
+  $cc = [string]$Cfg.config_claude
+  if (-not ((Test-CaleSub $cc $P) -or (Test-CaleSub $cc $R))) { [void]$mot.Add('config_claude trebuie sa fie in profilul sau radacina agentului') }
+  return @($mot)
 }
 
 function Split-ComandaPermisiune {
@@ -776,16 +892,31 @@ function Test-PrefixCuvinte {
   return $true
 }
 
+function Get-OptiuniCoada {
+  # optiuni_coada din reguli.json, cu __BRANCH__ înlocuit în chei: @{ '<cuvinte fixe>' = <regula> }. Cheile '_*' = note.
+  param([AllowNull()][object]$Config = $script:Agent, [string]$Branch = '__BRANCH__')
+  $h = @{}
+  $oc = Get-Camp $Config 'optiuni_coada'
+  if ($null -eq $oc) { return $h }
+  foreach ($k in @(Get-CheiObiect $oc)) {
+    if ($k.StartsWith('_')) { continue }
+    $h[$k.Replace('__BRANCH__', $Branch)] = Get-Camp $oc $k
+  }
+  return $h
+}
+
 function Test-ListaAgent {
   # Lista ÎNCHISĂ a agentului (după înlocuirea __BRANCH__). Întoarce @{ ok; motive }. O intrare e permisă DOAR dacă:
   #  - e o unealtă fără shell din unelte_fara_shell (Read / Glob / Grep / Edit / Write — ținute în worktree de --restricted), sau
   #  - e Bash(<comandă literală>): programul din programe_shell (git / gh / npx), minimum 2 cuvinte fixe, '*' doar ca ultim
   #    cuvânt, fără ':' / ghilimele / metacaractere, și nu poate acoperi niciun refuz (prefix pe cuvinte, în ambele sensuri).
   # forme_largi sunt refuzate explicit (și testate negativ, inclusiv cu lista explicită golită).
-  param([string[]]$Permise = @(), [AllowNull()][object]$Config = $script:Agent)
+  # r5: orice intrare cu '*' trebuie să aibă regula ei de coadă în optiuni_coada (validată de garda PreToolUse); fără ea => refuz.
+  param([string[]]$Permise = @(), [AllowNull()][object]$Config = $script:Agent, [string]$Branch = '__BRANCH__')
   $mot = New-Object System.Collections.ArrayList
   $lista = @($Permise)
   if ($lista.Count -eq 0) { return @{ ok = $false; motive = @('lista de unelte e goala') } }
+  $coada = Get-OptiuniCoada -Config $Config -Branch $Branch
   $fara = @($Config.unelte_fara_shell | ForEach-Object { [string]$_ })
   $prog = @($Config.programe_shell | ForEach-Object { [string]$_ })
   foreach ($u in @($Config.unelte)) { if (@($fara + @('Bash')) -cnotcontains [string]$u) { [void]$mot.Add('unealta necunoscuta in --tools: ' + $u) } }
@@ -803,6 +934,7 @@ function Test-ListaAgent {
     if ($null -eq $c) { [void]$mot.Add('forma nepermisa (unealta necunoscuta sau comanda ne-literala): ' + $s); continue }
     if ($prog -cnotcontains [string]$c.fix[0]) { [void]$mot.Add('program nepermis: ' + $s); continue }
     if (@($c.fix).Count -lt 2) { [void]$mot.Add('prea larga (minimum 2 cuvinte fixe): ' + $s); continue }
+    if ($c.wild -and -not $coada.ContainsKey((@($c.fix) -join ' '))) { [void]$mot.Add('coada * fara regula in optiuni_coada: ' + $s); continue }
     foreach ($r in $refz) {
       $egal = (@($c.fix).Count -eq @($r.fix).Count)
       if (((Test-PrefixCuvinte $c.fix $r.fix) -and ($c.wild -or $egal)) -or ((Test-PrefixCuvinte $r.fix $c.fix) -and ($r.wild -or $egal))) {
@@ -819,23 +951,44 @@ function Get-ArgvAgent {
   #   --restricted: ignoră setările din cont / proiect / local (repo-ul are .claude/settings.json cu permisiuni largi),
   #                 ține uneltele de fișiere în worktree, refuză bypassPermissions
   #   --permission-mode dontAsk + --permission-prompts none: tot ce nu e în --allowedTools e refuzat automat
-  #   --strict-mcp-config (fără MCP), --disable-slash-commands, --no-session-persistence; fără --add-dir / --settings.
-  param([string]$Numar, [string]$Branch, [string]$Effort, [AllowNull()][object]$Config = $script:Agent)
+  #   --strict-mcp-config (fără MCP), --disable-slash-commands, --no-session-persistence; fără --add-dir.
+  #   r5 (P1): --settings <fișierul de setări al gărzii> = SINGURA sursă de setări în afara celor gestionate (CLI 2.1.319:
+  #   „--restricted … ignores user, project and local settings files (managed settings and --settings still apply)”); el
+  #   înregistrează garda PreToolUse (Get-TextSetariAgent). Fișierul îl scrie orchestratorul, într-un director doar-citire pentru agent.
+  param([string]$Numar, [string]$Branch, [string]$Effort, [string]$Setari, [AllowNull()][object]$Config = $script:Agent)
   if (-not (Test-BranchPropriu $Numar $Branch)) { throw 'branch invalid' }
   if (@($Config.efort_permis) -cnotcontains $Effort) { throw 'effort nepermis' }
   if ([string]$Config.model -cnotmatch '\Aclaude-[a-z0-9-]{1,60}\z') { throw 'model invalid' }
+  if ([string]$Setari -cnotmatch '\A[A-Za-z]:\\[A-Za-z0-9_\\.-]+\.json\z' -or ([string]$Setari).Contains('..')) { throw 'fisierul de setari al garzii lipseste / cale invalida' }
   $mt = [int]$Config.max_turns
   if ($mt -lt 1 -or $mt -gt 500) { throw 'max_turns invalid' }
   $perm = @(@($Config.permise) | ForEach-Object { ([string]$_).Replace('__BRANCH__', $Branch) })
-  $t = Test-ListaAgent -Permise $perm -Config $Config
+  $t = Test-ListaAgent -Permise $perm -Config $Config -Branch $Branch
   if (-not $t.ok) { throw ('lista de unelte a agentului nu e inchisa: ' + ((@($t.motive) | Select-Object -First 3) -join '; ')) }
   $refz = @(@($Config.refuzuri) | ForEach-Object { [string]$_ })
   if ($refz.Count -eq 0) { throw 'lista de refuzuri e goala' }
-  $argv = @('-p', '--restricted', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence',
+  $argv = @('-p', '--restricted', '--settings', $Setari, '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence',
     '--permission-mode', 'dontAsk', '--permission-prompts', 'none', '--model', [string]$Config.model, '--effort', $Effort,
     '--max-turns', [string]$mt, '--output-format', 'json', '--tools', (@($Config.unelte) -join ','), '--allowedTools') + $perm + @('--disallowedTools') + $refz
   foreach ($a in $argv) { if (@($Config.steaguri_interzise) -ccontains $a) { throw ('steag interzis in linia de comanda: ' + $a) } }
+  if (@($argv | Where-Object { $_ -ceq '--settings' }).Count -ne 1) { throw '--settings trebuie sa apara o singura data' }
   return $argv
+}
+
+function Get-TextSetariAgent {
+  # r5 (P1): setările date EXPLICIT agentului (--settings): DOAR garda PreToolUse pe TOATE uneltele (matcher „*”), în forma
+  # exec (command + args, fără shell), cu onFailure = block (CLI 2.1.319: „'block': the failure counts as exit code 2” — hook
+  # care nu pornește / expiră / iese cu alt cod = unealta refuzată). Căile: node.exe și garda_agent.mjs, ambele în afara
+  # worktree-ului și doar-citire pentru contul agentului (verificat la pornire de lansator).
+  param([string]$NodeExe, [string]$Garda)
+  if (-not (Test-CaleExe $NodeExe)) { throw 'node.exe: cale invalida' }
+  if ([string]$Garda -cnotmatch '\A[A-Za-z]:\\[A-Za-z0-9_\\.-]+\\garda_agent\.mjs\z' -or ([string]$Garda).Contains('..')) { throw 'garda: cale invalida' }
+  $o = [ordered]@{
+    hooks = [ordered]@{
+      PreToolUse = @([ordered]@{ matcher = '*'; hooks = @([ordered]@{ type = 'command'; command = $NodeExe; args = @($Garda); timeout = 30; onFailure = 'block' }) })
+    }
+  }
+  return (ConvertTo-Json -InputObject $o -Depth 8 -Compress)
 }
 
 function Test-FormaTokenAgent {
@@ -847,39 +1000,70 @@ function Test-FormaTokenAgent {
 }
 
 function Get-MediuAgent {
-  # Mediul procesului agentului, pe LISTĂ ALBĂ (mediu_pastrat) + valorile fixe de mai jos. NU trec: PGPASSWORD / PG*,
-  # SUPABASE_*, GITHUB_TOKEN, GH_TOKEN-ul serverului, ANTHROPIC_*, CLAUDE_CODE_*, GIT_ASKPASS, GIT_CONFIG_*, chei de mail etc.
-  # git: fără config de sistem (acolo stă helper-ul comun de credențiale), config global = gitconfig-ul agentului;
-  # gh: tokenul agentului + director de config propriu; Postgres: PGPASSFILE / PGSERVICEFILE = NUL; fără MCP claude.ai.
-  param([hashtable]$Baza = @{}, [AllowNull()][string]$Token, [hashtable]$Cai, [string]$ConfigClaude)
+  # Mediul procesului CLAUDE (pornit de lansator, sub contul agentului), pe LISTĂ ALBĂ (mediu_pastrat) + valorile fixe de mai jos.
+  # NU trec: PGPASSWORD / PG*, SUPABASE_*, GITHUB_TOKEN, ANTHROPIC_*, CLAUDE_CODE_*, GIT_ASKPASS, GIT_CONFIG_*, NODE_OPTIONS etc.
+  # git: fără config de sistem, config global = gitconfig-ul agentului; gh: tokenul agentului + director propriu;
+  # Postgres: PGPASSFILE / PGSERVICEFILE = NUL; fără MCP claude.ai; TICHETE_WT = worktree-ul tichetului (pentru gardă).
+  param([hashtable]$Baza = @{}, [AllowNull()][string]$Token, [hashtable]$Cfg, [string]$Worktree)
   if (-not (Test-FormaTokenAgent $Token)) { throw 'token agent invalid' }
-  if ([string]::IsNullOrEmpty($ConfigClaude) -or $null -eq $Cai) { throw 'cai lipsa' }
-  $r = @{}
+  if ($null -eq $Cfg -or -not (Test-CaleSimpla $Worktree)) { throw 'cai lipsa' }
+  $ra = Get-CaiRadacinaAgent ([string]$Cfg.radacina_agent)
+  if (-not (Test-CaleSub $Worktree $ra.wt) -or $Worktree -ieq $ra.wt) { throw 'worktree in afara radacinii agentului' }
+  $rez = @{}
   $past = @($script:Agent.mediu_pastrat | ForEach-Object { [string]$_ })
-  foreach ($k in @($Baza.Keys)) { foreach ($p in $past) { if ([string]$k -ieq $p) { $r[$p] = [string]$Baza[$k] } } }
+  foreach ($k in @($Baza.Keys)) { foreach ($p in $past) { if ([string]$k -ieq $p) { $rez[$p] = [string]$Baza[$k] } } }
   $fix = [ordered]@{
-    CLAUDE_CONFIG_DIR = $ConfigClaude; GH_TOKEN = $Token; GH_CONFIG_DIR = [string]$Cai.gh; GH_PROMPT_DISABLED = '1'; GH_NO_UPDATE_NOTIFIER = '1'
-    GIT_CONFIG_NOSYSTEM = '1'; GIT_CONFIG_GLOBAL = [string]$Cai.gitconfig; GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
+    CLAUDE_CONFIG_DIR = [string]$Cfg.config_claude; GH_TOKEN = $Token; GH_CONFIG_DIR = $ra.gh; GH_PROMPT_DISABLED = '1'; GH_NO_UPDATE_NOTIFIER = '1'
+    GIT_CONFIG_NOSYSTEM = '1'; GIT_CONFIG_GLOBAL = $ra.gitconfig; GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
     PGPASSFILE = 'NUL'; PGSERVICEFILE = 'NUL'; ENABLE_CLAUDEAI_MCP_SERVERS = 'false'; DISABLE_AUTOUPDATER = '1'; NO_COLOR = '1'
+    TICHETE_WT = $Worktree
   }
-  foreach ($k in $fix.Keys) { $r[$k] = $fix[$k] }
-  return $r
+  foreach ($k in $fix.Keys) { $rez[$k] = $fix[$k] }
+  return $rez
+}
+
+function Get-MediuLansator {
+  # r5 (P1): mediul lansatorului pornit de orchestrator SUB CONTUL AGENTULUI (Process.Start cu credențiale + profil încărcat).
+  # Blocul de mediu se dă explicit (altfel ar fi al coordonatorului): variabilele de sistem din mediu_sistem_lansator, un Path
+  # FIX de sistem (fără directoarele din profilul coordonatorului), profilul / AppData / Temp ale AGENTULUI, tokenul GitHub al
+  # agentului în TICHETE_GH_TOKEN. Nimic altceva din mediul coordonatorului (PG*, gh, chei).
+  param([hashtable]$Baza = @{}, [hashtable]$Cfg, [AllowNull()][string]$Token)
+  if (-not (Test-FormaTokenAgent $Token)) { throw 'token agent invalid' }
+  if ($null -eq $Cfg -or -not (Test-CaleSimpla ([string]$Cfg.profil_agent))) { throw 'profil agent invalid' }
+  $rez = @{}
+  foreach ($k in @($Baza.Keys)) { foreach ($p in @($script:Agent.mediu_sistem_lansator)) { if ([string]$k -ieq [string]$p) { $rez[[string]$p] = [string]$Baza[$k] } } }
+  $sr = if ($rez.ContainsKey('SystemRoot')) { $rez['SystemRoot'] } else { 'C:\Windows' }
+  $rez['Path'] = (@($script:Agent.path_sistem_lansator) | ForEach-Object { ([string]$_).Replace('%SystemRoot%', $sr) }) -join ';'
+  $pr = [string]$Cfg.profil_agent
+  $rez['USERPROFILE'] = $pr; $rez['HOMEDRIVE'] = $pr.Substring(0, 2); $rez['HOMEPATH'] = $pr.Substring(2)
+  $rez['APPDATA'] = $pr + '\AppData\Roaming'; $rez['LOCALAPPDATA'] = $pr + '\AppData\Local'
+  $rez['TEMP'] = $pr + '\AppData\Local\Temp'; $rez['TMP'] = $rez['TEMP']
+  $rez['USERNAME'] = [string]$Cfg.cont_windows
+  $rez['GIT_TERMINAL_PROMPT'] = '0'; $rez['GH_PROMPT_DISABLED'] = '1'; $rez['NO_COLOR'] = '1'
+  $rez['TICHETE_GH_TOKEN'] = $Token
+  return $rez
 }
 
 function Test-ConfigAgent {
-  # agent.json (în afara repo-ului): { versiune: 1, repo: "<owner>/<nume>", login_agent: "<login GitHub>",
-  # [email_commit], [clona_baza], [radacina_worktree], [_nota] }. Strict: chei necunoscute / forme greșite => refuz.
-  # Întoarce @{ ok; motive; cfg = @{ repo; login_agent; email_commit; clona_baza; radacina_worktree } }.
-  param([AllowNull()][string]$Text)
+  # agent.json (profilul COORDONATORULUI, în afara repo-ului), versiunea 2 (r5, cont Windows separat):
+  # { versiune: 2, repo: "<owner>/<nume>", login_agent: "<login GitHub>", [email_commit],
+  #   cont_windows: "<cont local standard al agentului>", profil_agent: "C:\Users\<cont>", radacina_agent: "C:\<director>",
+  #   config_claude: "<login-ul Claude al agentului, în profilul / rădăcina lui>", claude_exe: "<…\claude.exe>", node_exe: "<…\node.exe>",
+  #   [_nota] }.
+  # -Lansare: aceeași configurare, copiată de orchestrator în <rădăcină>\setari\lansare.json, cu în plus sid_coordonator,
+  #   interzise_citire, interzise_scriere (probele pe care lansatorul le face SUB contul agentului).
+  # Strict: chei necunoscute / forme greșite => refuz. Întoarce @{ ok; motive; cfg (hashtable) }.
+  param([AllowNull()][string]$Text, [switch]$Lansare)
   $rez = @{ ok = $false; motive = @(); cfg = $null }
   if ([string]::IsNullOrEmpty($Text) -or -not $Text.Trim()) { $rez.motive = @('agent.json lipseste sau e gol'); return $rez }
   try { $o = ConvertFrom-Json -InputObject ($Text.TrimStart([char]0xFEFF)) } catch { $rez.motive = @('agent.json nu e JSON valid'); return $rez }
   if (-not ($o -is [System.Management.Automation.PSCustomObject])) { $rez.motive = @('agent.json nu e un obiect'); return $rez }
   $mot = New-Object System.Collections.ArrayList
-  $chei = @('versiune', 'repo', 'login_agent', 'email_commit', 'clona_baza', 'radacina_worktree', '_nota')
+  $chei = @('versiune', 'repo', 'login_agent', 'email_commit', 'cont_windows', 'profil_agent', 'radacina_agent', 'config_claude', 'claude_exe', 'node_exe', '_nota')
+  if ($Lansare) { $chei += @('sid_coordonator', 'interzise_citire', 'interzise_scriere') }
   foreach ($p in $o.PSObject.Properties) { if ($chei -cnotcontains $p.Name) { [void]$mot.Add('cheie necunoscuta: ' + (Get-TextSigurLinie $p.Name 40)) } }
-  $v = Get-Camp $o 'versiune'
-  if (-not ($v -is [int] -or $v -is [long]) -or $v -ne 1) { [void]$mot.Add('versiune trebuie sa fie 1') }
+  $ver = Get-Camp $o 'versiune'
+  if (-not ($ver -is [int] -or $ver -is [long]) -or $ver -ne 2) { [void]$mot.Add('versiune trebuie sa fie 2 (cont Windows separat, README)') }
   $repo = [string](Get-Camp $o 'repo')
   if ($repo -cnotmatch '\A[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}\z') { [void]$mot.Add('repo invalid (owner/nume)') }
   $login = [string](Get-Camp $o 'login_agent')
@@ -887,16 +1071,52 @@ function Test-ConfigAgent {
   $email = Get-Camp $o 'email_commit'
   if ($null -eq $email) { $email = $login + '@users.noreply.github.com' }
   elseif ([string]$email -cnotmatch '\A[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,190}\z') { [void]$mot.Add('email_commit invalid') }
+  $cont = [string](Get-Camp $o 'cont_windows')
+  if ($cont -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,19}\z') { [void]$mot.Add('cont_windows invalid (nume de cont local, max 20)') }
   $c = @{}
-  foreach ($k in @('clona_baza', 'radacina_worktree')) {
-    $x = Get-Camp $o $k
-    if ($null -eq $x) { $c[$k] = '' }
-    elseif ([string]$x -cnotmatch '\A[A-Za-z]:\\[A-Za-z0-9_\\.-]+\z' -or ([string]$x).Contains('..')) { [void]$mot.Add($k + ' invalid (cale simpla, fara spatii)'); $c[$k] = '' }
-    else { $c[$k] = [string]$x }
+  foreach ($k in @('profil_agent', 'radacina_agent', 'config_claude')) {
+    $x = [string](Get-Camp $o $k)
+    if (-not (Test-CaleSimpla $x)) { [void]$mot.Add($k + ' invalid (cale simpla, fara spatii)'); $c[$k] = '' } else { $c[$k] = $x }
+  }
+  foreach ($k in @('claude_exe', 'node_exe')) {
+    $x = [string](Get-Camp $o $k)
+    if (-not (Test-CaleExe $x)) { [void]$mot.Add($k + ' invalid (cale absoluta .exe)'); $c[$k] = '' } else { $c[$k] = $x }
+  }
+  if ($c.radacina_agent -and $c.radacina_agent.Length -gt 60) { [void]$mot.Add('radacina_agent prea lunga (max 60, caile worktree-urilor)') }
+  if ($c.radacina_agent -and $c.radacina_agent -match '\A[A-Za-z]:\\Users\\') { [void]$mot.Add('radacina_agent nu are voie sa fie sub C:\Users (profilurile)') }
+  $l = @{ sid = ''; citire = @(); scriere = @() }
+  if ($Lansare) {
+    $l.sid = [string](Get-Camp $o 'sid_coordonator')
+    if ($l.sid -cnotmatch '\AS-1-5-21-[0-9]{1,10}-[0-9]{1,10}-[0-9]{1,10}-[0-9]{1,10}\z') { [void]$mot.Add('sid_coordonator invalid') }
+    foreach ($k in @('interzise_citire', 'interzise_scriere')) {
+      $lst = Get-CampLista $o $k
+      if (-not $lst.lista -or @($lst.v).Count -lt 1 -or @($lst.v).Count -gt 40) { [void]$mot.Add($k + ': lista 1..40 obligatorie'); continue }
+      foreach ($e in @($lst.v)) { if (-not ($e -is [string]) -or $e -cnotmatch '\A[A-Za-z]:\\[^<>:"|?*\x00-\x1F]{1,240}\z' -or $e.Contains('..')) { [void]$mot.Add($k + ': cale invalida') } }
+      if ($k -ceq 'interzise_citire') { $l.citire = @($lst.v) } else { $l.scriere = @($lst.v) }
+    }
   }
   $rez.motive = @($mot)
-  if ($mot.Count -eq 0) { $rez.ok = $true; $rez.cfg = @{ repo = $repo; login_agent = $login; email_commit = [string]$email; clona_baza = $c.clona_baza; radacina_worktree = $c.radacina_worktree } }
+  if ($mot.Count -eq 0) {
+    $rez.ok = $true
+    $rez.cfg = @{ repo = $repo; login_agent = $login; email_commit = [string]$email; cont_windows = $cont; profil_agent = $c.profil_agent
+                  radacina_agent = $c.radacina_agent; config_claude = $c.config_claude; claude_exe = $c.claude_exe; node_exe = $c.node_exe
+                  sid_coordonator = $l.sid; interzise_citire = $l.citire; interzise_scriere = $l.scriere }
+  }
   return $rez
+}
+
+function Get-TextLansare {
+  # lansare.json (scris de orchestrator în <rădăcină>\setari, doar-citire pentru agent): configurarea validată + SID-ul
+  # coordonatorului + căile pe care lansatorul (sub contul agentului) verifică că NU le poate citi / scrie. Fără token / parole.
+  param([hashtable]$Cfg, [string]$SidCoordonator, [string[]]$InterziseCitire = @(), [string[]]$InterziseScriere = @())
+  $o = [ordered]@{ versiune = 2; repo = $Cfg.repo; login_agent = $Cfg.login_agent; email_commit = $Cfg.email_commit; cont_windows = $Cfg.cont_windows
+                   profil_agent = $Cfg.profil_agent; radacina_agent = $Cfg.radacina_agent; config_claude = $Cfg.config_claude
+                   claude_exe = $Cfg.claude_exe; node_exe = $Cfg.node_exe; sid_coordonator = $SidCoordonator
+                   interzise_citire = @($InterziseCitire); interzise_scriere = @($InterziseScriere) }
+  $t = ConvertTo-Json -InputObject $o -Depth 4
+  $v = Test-ConfigAgent -Text $t -Lansare
+  if (-not $v.ok) { throw ('lansare.json nevalid: ' + ((@($v.motive) | Select-Object -First 3) -join '; ')) }
+  return $t
 }
 
 function Get-TextGitconfigAgent {
@@ -953,35 +1173,201 @@ function Get-RepoDinUrl {
   return ''
 }
 
-function Test-BarieraGitHub {
-  # Condiția de INSTALARE și de PORNIRE (P1 r3): identitatea cu care rulează agentul (tokenul lui) e alt cont decât al serverului,
-  # poate împinge branch-uri dar NU are admin / maintain, main cere PR (≥ 1 aprobare, aprobările vechi anulate la push nou)
-  # dintr-un ruleset pe care agentul NU îl poate ocoli, iar în afara tichete/* creările / actualizările / ștergerile sunt
-  # restricționate (tot fără ocolire). Pe tichete/* agentul trebuie să poată crea / actualiza. Intrările = răspunsurile
-  # `gh api` (citiri, tokenul agentului); $Ocolire = @{ '<ruleset_id>' = current_user_can_bypass }. Lipsă = refuz.
-  param([AllowNull()][string]$LoginServer, [AllowNull()][string]$LoginAgentConfig, [AllowNull()][string]$LoginAgent,
-        [AllowNull()][object]$Permisiuni, [object[]]$ReguliMain = @(), [object[]]$ReguliAlta = @(), [object[]]$ReguliTichete = @(),
-        [hashtable]$Ocolire = @{})
+function Test-RegulaPr {
+  # O regulă pull_request cu minimum 1 aprobare și aprobările vechi anulate la push nou.
+  param([AllowNull()][object]$Regula)
+  if ([string](Get-Camp $Regula 'type') -cne 'pull_request') { return $false }
+  $p = Get-Camp $Regula 'parameters'; $n = Get-Camp $p 'required_approving_review_count'
+  return (($n -is [int] -or $n -is [long]) -and $n -ge 1 -and (Get-Camp $p 'dismiss_stale_reviews_on_push') -eq $true)
+}
+
+function Test-RulesetCanonic {
+  # r5 (P1): UN ruleset (răspunsul GET repos/<o>/<r>/rulesets/<id>) în forma EXACTĂ din README / reguli.json → bariera_rulesets:
+  #  'main'   = țintă branch, activ, condiții DOAR ref_name, include exact ['~DEFAULT_BRANCH'], exclude exact [], cu pull_request
+  #             (≥ 1 aprobare + aprobările vechi anulate la push nou);
+  #  'restul' = țintă branch, activ, condiții DOAR ref_name, include exact ['~ALL'], exclude exact ['refs/heads/tichete/**/*'],
+  #             cu creation + update + deletion (update fără update_allows_fetch_and_merge = true).
+  # Ocolirea: 'agent' = current_user_can_bypass = 'never' (citit cu tokenul agentului: GitHub calculează ocolirea directă, prin rol
+  # sau echipă pentru contul care întreabă); 'instalare' = bypass_actors (citit cu identitatea coordonatorului — GitHub îl întoarce
+  # doar cui poate edita ruleset-ul) DOAR din ocolire_permisa; câmp lipsă = refuz. Întoarce @{ ok; motive }.
+  param([AllowNull()][object]$Rs, [ValidateSet('main', 'restul')][string]$Forma, [ValidateSet('agent', 'instalare')][string]$Ocolire)
   $mot = New-Object System.Collections.ArrayList
+  if (-not (Test-ObiectJson $Rs)) { return @{ ok = $false; motive = @('ruleset necitit') } }
+  $idRs = Get-Camp $Rs 'id'
+  if (-not ($idRs -is [int] -or $idRs -is [long]) -or $idRs -le 0) { [void]$mot.Add('id lipsa') }
+  if ([string](Get-Camp $Rs 'target') -cne 'branch') { [void]$mot.Add('tinta nu e branch') }
+  $enf = [string](Get-Camp $Rs 'enforcement')
+  if ($enf -cne 'active') { [void]$mot.Add('mod ' + $(if ($enf) { Get-TextSigurLinie $enf 20 } else { 'lipsa' }) + ' (trebuie active)') }
+  $cond = Get-Camp $Rs 'conditions'
+  $refn = Get-Camp $cond 'ref_name'
+  if (-not (Test-ObiectJson $cond) -or @(Get-CheiObiect $cond).Count -ne 1 -or -not (Test-ObiectJson $refn)) { [void]$mot.Add('conditii: doar ref_name (fara repository_name / alte conditii)') }
+  else {
+    if (@(Get-CheiObiect $refn | Where-Object { @('include', 'exclude') -cnotcontains $_ }).Count -gt 0) { [void]$mot.Add('ref_name: chei in plus') }
+    $incOk = @($script:BarieraRs.include_restul); $excOk = @($script:BarieraRs.exclude_restul)
+    if ($Forma -ceq 'main') { $incOk = @($script:BarieraRs.include_main); $excOk = @() }
+    if (-not (Test-ListaExacta (Get-CampLista $refn 'include') $incOk)) { [void]$mot.Add('include diferit de ' + ($incOk -join ',')) }
+    if (-not (Test-ListaExacta (Get-CampLista $refn 'exclude') $excOk)) { [void]$mot.Add('exclude diferit de [' + ($excOk -join ',') + ']') }
+  }
+  $rl = Get-CampLista $Rs 'rules'
+  if (-not $rl.lista) { [void]$mot.Add('rules lipsa') }
+  else {
+    $tipuri = @(@($rl.v) | ForEach-Object { [string](Get-Camp $_ 'type') })
+    if ($Forma -ceq 'main') {
+      if (@(@($rl.v) | Where-Object { Test-RegulaPr $_ }).Count -eq 0) { [void]$mot.Add('fara pull_request cu minimum 1 aprobare si aprobarile vechi anulate la push nou') }
+    } else {
+      foreach ($tp in @($script:BarieraRs.reguli_restul)) { if ($tipuri -cnotcontains [string]$tp) { [void]$mot.Add('fara regula ' + $tp) } }
+      foreach ($u in @(@($rl.v) | Where-Object { [string](Get-Camp $_ 'type') -ceq 'update' })) {
+        if ((Get-Camp (Get-Camp $u 'parameters') 'update_allows_fetch_and_merge') -eq $true) { [void]$mot.Add('update permite fetch and merge') }
+      }
+    }
+  }
+  if ($Ocolire -ceq 'agent') {
+    $cub = [string](Get-Camp $Rs 'current_user_can_bypass')
+    if ($cub -cne 'never') { [void]$mot.Add('agentul il poate ocoli (current_user_can_bypass = ' + $(if ($cub) { Get-TextSigurLinie $cub 30 } else { 'lipsa' }) + ')') }
+  } else {
+    $ba = Get-CampLista $Rs 'bypass_actors'
+    if (-not $ba.lista) { [void]$mot.Add('bypass_actors lipsa (identitatea de instalare nu poate edita ruleset-ul?)') }
+    else {
+      foreach ($a in @($ba.v)) {
+        $ok = $false
+        foreach ($pm in @($script:BarieraRs.ocolire_permisa)) {
+          $aid = Get-Camp $a 'actor_id'
+          if ([string](Get-Camp $a 'actor_type') -ceq [string]$pm.actor_type -and ($aid -is [int] -or $aid -is [long]) -and $aid -eq [int]$pm.actor_id) { $ok = $true }
+        }
+        if (-not $ok) { [void]$mot.Add('ocolire nepermisa: ' + (Get-TextSigurLinie (Get-Camp $a 'actor_type') 30) + ' ' + (Get-TextSigurLinie (Get-Camp $a 'actor_id') 12)) }
+      }
+    }
+  }
+  return @{ ok = ($mot.Count -eq 0); motive = @($mot) }
+}
+
+function Get-AmprentaRulesets {
+  # Amprenta = 'id=updated_at' pentru FIECARE ruleset din listă (din detalii), sortată ordinal. Lipsă / formă greșită => aruncă.
+  param([object[]]$Lista = @(), [hashtable]$Detalii = @{})
+  $a = New-Object System.Collections.ArrayList
+  foreach ($s in @($Lista)) {
+    $idS = [string](Get-Camp $s 'id')
+    if ($idS -cnotmatch '\A[0-9]{1,12}\z' -or -not $Detalii.ContainsKey($idS)) { throw 'amprenta: ruleset fara detalii' }
+    $u = [string](Get-Camp $Detalii[$idS] 'updated_at')
+    if ($u -cnotmatch '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,15}(?:Z|[+-][0-9]{2}:[0-9]{2})\z') { throw ('amprenta: updated_at lipsa la ruleset ' + $idS) }
+    [void]$a.Add($idS + '=' + $u)
+  }
+  $s2 = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($x in $a) { $s2.Add([string]$x) }
+  $s2.Sort([StringComparer]::Ordinal)
+  return @($s2)
+}
+
+function Test-BarieraGitHub {
+  # Condiția de INSTALARE și de PORNIRE (P1 r3, r5). Intrările = răspunsurile `gh api` citite cu tokenul AGENTULUI:
+  #  - identitatea: tokenul e al contului din agent.json, alt cont decât al serverului; push = true, admin / maintain = false;
+  #  - branch-ul implicit = main;
+  #  - ruleset-urile ÎNSEȘI (r5): lista completă (< max_rulesets, altfel poate fi trunchiată), detaliile fiecăruia, iar printre ele
+  #    cel puțin un ruleset 'main' și unul 'restul' în forma canonică (Test-RulesetCanonic, ocolire = 'agent'). Alte ruleset-uri
+  #    pot exista (se cumulează, nu pot slăbi), dar intră în amprentă;
+  #  - proba pe nume (a doua plasă): un nume aleator => creation + update + deletion fără ocolire, inclusiv din ruleset-ul
+  #    'restul'; main => pull_request (din ruleset-ul 'main') + update, fără ocolire; un nume aleator sub tichete/ => fără
+  #    creation / update neocolibile. Orice ruleset_id din probe care nu e în listă = refuz.
+  # Întoarce @{ ok; motive; idMain; idRestul; amprenta }.
+  param([AllowNull()][string]$LoginServer, [AllowNull()][string]$LoginAgentConfig, [AllowNull()][string]$LoginAgent,
+        [AllowNull()][object]$Permisiuni, [AllowNull()][string]$RamuraImplicita, [object[]]$ListaRulesets = @(), [hashtable]$Detalii = @{},
+        [object[]]$ProbaAleator = @(), [object[]]$ProbaMain = @(), [object[]]$ProbaTichete = @())
+  $mot = New-Object System.Collections.ArrayList
+  $rez = @{ ok = $false; motive = @(); idMain = ''; idRestul = ''; amprenta = @() }
   if ([string]::IsNullOrEmpty($LoginAgent) -or $LoginAgent -cne $LoginAgentConfig) { [void]$mot.Add('tokenul agentului nu e al contului din agent.json') }
   if ([string]::IsNullOrEmpty($LoginServer) -or $LoginAgent -ieq $LoginServer) { [void]$mot.Add('agentul are aceeasi identitate GitHub ca serverul (coordonatorul)') }
   if ((Get-Camp $Permisiuni 'push') -ne $true) { [void]$mot.Add('agentul nu poate impinge branch-uri (push)') }
   if ((Get-Camp $Permisiuni 'admin') -ne $false) { [void]$mot.Add('agentul are (sau nu se stie daca are) drept de administrare pe repo') }
   if ((Get-Camp $Permisiuni 'maintain') -ne $false) { [void]$mot.Add('agentul are (sau nu se stie daca are) drept maintain pe repo') }
-  $faraOcolire = { param($r) $id = [string](Get-Camp $r 'ruleset_id'); ($id -cmatch '\A[0-9]{1,12}\z' -and $Ocolire.ContainsKey($id) -and [string]$Ocolire[$id] -ceq 'never') }
-  $deTip = { param($lista, $tip) @(@($lista) | Where-Object { $null -ne $_ -and [string](Get-Camp $_ 'type') -ceq $tip -and (& $faraOcolire $_) }) }
-  $pr = @(& $deTip $ReguliMain 'pull_request' | Where-Object {
-    $p = Get-Camp $_ 'parameters'; $n = Get-Camp $p 'required_approving_review_count'
-    ($n -is [int] -or $n -is [long]) -and $n -ge 1 -and (Get-Camp $p 'dismiss_stale_reviews_on_push') -eq $true
-  })
-  if ($pr.Count -eq 0) { [void]$mot.Add('main nu are o regula de PR (minimum 1 aprobare, aprobarile vechi anulate la push nou) pe care agentul sa n-o poata ocoli') }
-  foreach ($tip in @('creation', 'update', 'deletion')) {
-    if (@(& $deTip $ReguliAlta $tip).Count -eq 0) { [void]$mot.Add('in afara tichete/* agentul nu are restrictia ' + $tip + ' (fara ocolire)') }
+  if ([string]$RamuraImplicita -cne [string]$script:BarieraRs.ramura_implicita) { [void]$mot.Add('branch-ul implicit nu e ' + $script:BarieraRs.ramura_implicita) }
+  $lista = @($ListaRulesets | Where-Object { $null -ne $_ })
+  if ($lista.Count -ge [int]$script:BarieraRs.max_rulesets) { [void]$mot.Add('prea multe ruleset-uri (' + $lista.Count + '): lista poate fi trunchiata') }
+  # (r5: numele listei NU are voie să difere doar prin majuscule de $idS — PowerShell le-ar trata ca aceeași variabilă)
+  $idVazute = New-Object System.Collections.ArrayList
+  $ocolire = @{}
+  $gasitMain = New-Object System.Collections.ArrayList; $gasitRestul = New-Object System.Collections.ArrayList
+  $motMain = New-Object System.Collections.ArrayList; $motRestul = New-Object System.Collections.ArrayList
+  foreach ($s in $lista) {
+    $idS = [string](Get-Camp $s 'id')
+    if ($idS -cnotmatch '\A[0-9]{1,12}\z') { [void]$mot.Add('ruleset cu id invalid in lista'); continue }
+    if ($idVazute.Contains($idS)) { [void]$mot.Add('ruleset dublat in lista: ' + $idS); continue }
+    [void]$idVazute.Add($idS)
+    $d = if ($Detalii.ContainsKey($idS)) { $Detalii[$idS] } else { $null }
+    if (-not (Test-ObiectJson $d) -or [string](Get-Camp $d 'id') -cne $idS) { [void]$mot.Add('ruleset ' + $idS + ': detalii necitite'); continue }
+    $ocolire[$idS] = [string](Get-Camp $d 'current_user_can_bypass')
+    $tm = Test-RulesetCanonic -Rs $d -Forma 'main' -Ocolire 'agent'
+    $tr = Test-RulesetCanonic -Rs $d -Forma 'restul' -Ocolire 'agent'
+    if ($tm.ok) { [void]$gasitMain.Add($idS) } else { [void]$motMain.Add($idS + ': ' + ((@($tm.motive) | Select-Object -First 2) -join ', ')) }
+    if ($tr.ok) { [void]$gasitRestul.Add($idS) } else { [void]$motRestul.Add($idS + ': ' + ((@($tr.motive) | Select-Object -First 2) -join ', ')) }
   }
-  foreach ($tip in @('creation', 'update')) {
-    if (@(& $deTip $ReguliTichete $tip).Count -gt 0) { [void]$mot.Add('agentul nu poate face ' + $tip + ' pe tichete/* (restrictia se aplica si acolo)') }
+  if ($gasitMain.Count -eq 0) { [void]$mot.Add('niciun ruleset main in forma ceruta (activ, ~DEFAULT_BRANCH, PR cu aprobare, fara ocolire pentru agent)' + $(if ($motMain.Count) { ' - ' + ((@($motMain) | Select-Object -First 3) -join '; ') } else { '' })) }
+  if ($gasitRestul.Count -eq 0) { [void]$mot.Add('niciun ruleset pentru restul branch-urilor in forma ceruta (activ, ~ALL minus refs/heads/tichete/**/*, creation + update + deletion, fara ocolire)' + $(if ($motRestul.Count) { ' - ' + ((@($motRestul) | Select-Object -First 3) -join '; ') } else { '' })) }
+  # proba pe nume: fiecare regulă vine dintr-un ruleset din listă; „neocolibilă” = current_user_can_bypass = never
+  $verif = {
+    param($proba, [string]$ce)
+    $t = @{}
+    foreach ($rg in @($proba)) {
+      if ($null -eq $rg) { continue }
+      $rid = [string](Get-Camp $rg 'ruleset_id')
+      if (-not $ocolire.ContainsKey($rid)) { [void]$mot.Add('proba ' + $ce + ': regula dintr-un ruleset necunoscut (' + (Get-TextSigurLinie $rid 14) + ')'); continue }
+      if ($ocolire[$rid] -cne 'never') { continue }
+      $tp = [string](Get-Camp $rg 'type')
+      if (-not $t.ContainsKey($tp)) { $t[$tp] = New-Object System.Collections.ArrayList }
+      [void]$t[$tp].Add(@{ id = $rid; regula = $rg })
+    }
+    return $t
+  }
+  $pa = & $verif $ProbaAleator 'nume aleator'
+  $pm = & $verif $ProbaMain 'main'
+  $pt = & $verif $ProbaTichete 'tichete/'
+  foreach ($tp in @($script:BarieraRs.reguli_restul)) {
+    if (-not $pa.ContainsKey($tp)) { [void]$mot.Add('proba nume aleator: fara restrictia ' + $tp + ' (neocolibila)') }
+    elseif (@($pa[$tp] | Where-Object { $gasitRestul -ccontains $_.id }).Count -eq 0) { [void]$mot.Add('proba nume aleator: ' + $tp + ' nu vine din ruleset-ul canonic') }
+  }
+  if (-not $pm.ContainsKey('pull_request') -or @($pm['pull_request'] | Where-Object { (Test-RegulaPr $_.regula) -and $gasitMain -ccontains $_.id }).Count -eq 0) { [void]$mot.Add('proba main: fara pull_request canonic neocolibil') }
+  if (-not $pm.ContainsKey('update')) { [void]$mot.Add('proba main: fara restrictia update (neocolibila)') }
+  foreach ($tp in @('creation', 'update')) { if ($pt.ContainsKey($tp)) { [void]$mot.Add('proba tichete/: agentul nu poate face ' + $tp + ' (restrictia se aplica si acolo)') } }
+  $rez.idMain = $(if ($gasitMain.Count) { [string]$gasitMain[0] } else { '' }); $rez.idRestul = $(if ($gasitRestul.Count) { [string]$gasitRestul[0] } else { '' })
+  if ($mot.Count -eq 0) { try { $rez.amprenta = @(Get-AmprentaRulesets -Lista $lista -Detalii $Detalii) } catch { [void]$mot.Add($_.Exception.Message) } }
+  $rez.motive = @($mot); $rez.ok = ($mot.Count -eq 0)
+  return $rez
+}
+
+function Test-BarieraInstalare {
+  # r5 (P1), la INSTALARE: ruleset-urile canonice alese de Test-BarieraGitHub, recitite cu identitatea COORDONATORULUI (poate
+  # edita ruleset-urile, deci vede bypass_actors): aceeași formă canonică, ocolire doar din ocolire_permisa, același updated_at
+  # ca la citirea cu tokenul agentului (altfel s-a schimbat între timp). Întoarce @{ ok; motive }.
+  param([hashtable]$Agent = @{}, [hashtable]$Coordonator = @{}, [string]$IdMain, [string]$IdRestul)
+  $mot = New-Object System.Collections.ArrayList
+  foreach ($x in @(@{ id = $IdMain; f = 'main' }, @{ id = $IdRestul; f = 'restul' })) {
+    if ([string]$x.id -cnotmatch '\A[0-9]{1,12}\z') { [void]$mot.Add('ruleset ' + $x.f + ' lipsa'); continue }
+    $dc = if ($Coordonator.ContainsKey($x.id)) { $Coordonator[$x.id] } else { $null }
+    $da = if ($Agent.ContainsKey($x.id)) { $Agent[$x.id] } else { $null }
+    $t = Test-RulesetCanonic -Rs $dc -Forma $x.f -Ocolire 'instalare'
+    if (-not $t.ok) { [void]$mot.Add('ruleset ' + $x.id + ' (' + $x.f + '): ' + ((@($t.motive) | Select-Object -First 3) -join ', ')) }
+    $u1 = [string](Get-Camp $da 'updated_at'); $u2 = [string](Get-Camp $dc 'updated_at')
+    if (-not $u1 -or $u1 -cne $u2) { [void]$mot.Add('ruleset ' + $x.id + ': updated_at diferit intre citiri (schimbat intre timp)') }
   }
   return @{ ok = ($mot.Count -eq 0); motive = @($mot) }
+}
+
+function Get-TextAmprenta {
+  # amprenta_rulesets.json (profilul coordonatorului, scrisă DOAR la instalare).
+  param([string]$Repo, [string[]]$Amprenta = @(), [string]$LoginCoordonator, [string]$Data)
+  if (@($Amprenta).Count -eq 0) { throw 'amprenta goala' }
+  return (ConvertTo-Json -Depth 3 -InputObject ([ordered]@{ versiune = 1; repo = $Repo; rulesets = @($Amprenta); verificat_de = $LoginCoordonator; verificat_la = $Data }))
+}
+
+function Test-Amprenta {
+  # La FIECARE pornire: ruleset-urile au aceleași id + updated_at ca la instalare (bypass_actors nu se vede cu tokenul agentului:
+  # orice editare a unui ruleset îi schimbă updated_at). Lipsă / stricată / alt repo / altă listă => refuz până la reinstalare.
+  param([AllowNull()][string]$Text, [string]$Repo, [string[]]$Curenta = @())
+  if ([string]::IsNullOrEmpty($Text) -or -not $Text.Trim()) { return @{ ok = $false; motive = @('amprenta ruleset-urilor lipseste (instalare neterminata: instaleaza_task.ps1)') } }
+  try { $o = ConvertFrom-Json -InputObject ($Text.TrimStart([char]0xFEFF)) } catch { return @{ ok = $false; motive = @('amprenta ruleset-urilor stricata') } }
+  if (-not (Test-ObiectJson $o) -or (Get-Camp $o 'versiune') -ne 1 -or [string](Get-Camp $o 'repo') -ine $Repo) { return @{ ok = $false; motive = @('amprenta ruleset-urilor: versiune / repo diferite') } }
+  $l = Get-CampLista $o 'rulesets'
+  if (-not (Test-ListaExacta $l @($Curenta)) -or @($Curenta).Count -eq 0) { return @{ ok = $false; motive = @('ruleset-urile s-au schimbat de la instalare (id / updated_at) - reinstalare cu verificarea coordonatorului') } }
+  return @{ ok = $true; motive = @() }
 }
 
 # ── Starea tichetelor și a rulării (J7) ─────────────────────────────────────────────────────────────────────
@@ -1023,16 +1409,19 @@ function Get-StareNoua {
     $e['incercari'] = $e['incercari'] + 1; $e['ultima_data'] = $Azi; $e['ultimul_rezultat'] = $st
   }
   $det = [string](Get-Camp $Rezultat 'detaliu')
-  if ($st -ceq 'PR_DRAFT' -or $st -ceq 'PR_FARA_REVIEW' -or $st -ceq 'PR_CI_NECITIT') {
+  if ($script:StariCuPr -ccontains $st) {
+    # r5 (P2): PR_HEAD_SCHIMBAT = head-ul PR-ului s-a mutat după review => review_complet = false, fără verdicte salvate:
+    # rularea următoare face review NOU pe noul head (mod 'review'), nu raportează vechiul review ca valabil.
     $e['pr'] = $prNou; $e['branch'] = [string](Get-Camp $Rezultat 'branch'); $e['review_complet'] = ($st -ceq 'PR_DRAFT'); $e['clasa'] = 'L'
     $e['pas_lipsa'] = ''; $e['verdicte'] = $null
     if ($st -ceq 'PR_CI_NECITIT') {
       # J7 (r4): review-ul e citit; DOAR verificările CI / starea PR-ului lipsesc => la reluare doar pasul CI, pe același commit.
       # Verdicte nevalide => fără pas_lipsa (reluarea face review nou, fail-closed).
-      $v = Get-VerdicteSalvate (Get-Camp $Rezultat 'verdicte')
-      if ($null -ne $v) { $e['pas_lipsa'] = 'ci'; $e['verdicte'] = $v }
+      $vs = Get-VerdicteSalvate (Get-Camp $Rezultat 'verdicte')
+      if ($null -ne $vs) { $e['pas_lipsa'] = 'ci'; $e['verdicte'] = $vs }
       $e['ultima_eroare'] = $Azi + ' ' + $st + ' ' + $det
     }
+    if ($st -ceq 'PR_HEAD_SCHIMBAT') { $e['ultima_eroare'] = $Azi + ' ' + $st + ' ' + $det }
   } elseif ($st -ceq 'DECIZIE') { $e['asteapta_decizie'] = $true; $e['clasa'] = [string](Get-Camp $Rezultat 'clasa'); $e['motiv'] = $det }
   elseif ($st -ceq 'BLOCAT') { $e['asteapta_decizie'] = $true; $e['clasa'] = '!'; $e['motiv'] = $det }
   elseif ($st -ceq 'ESUAT') { $e['motiv'] = $det }
@@ -1044,6 +1433,15 @@ function Get-StareNoua {
   return $e
 }
 
+function Get-StareDupaCi {
+  # r5 (P2): starea unui tichet după citirea CI + a stării PR-ului. Head-ul PR-ului diferit de commit-ul revizuit (sau necitit)
+  # => PR_HEAD_SCHIMBAT (review invalidat, review nou pe noul head la rularea următoare), oricare ar fi verdictele.
+  param([bool]$ReviewOk, [AllowNull()][string]$ShaRevizuit, [AllowNull()][string]$HeadActual)
+  if ([string]$ShaRevizuit -cnotmatch '\A[0-9a-f]{40}\z' -or [string]$HeadActual -cne [string]$ShaRevizuit) { return 'PR_HEAD_SCHIMBAT' }
+  if ($ReviewOk) { return 'PR_DRAFT' }
+  return 'PR_FARA_REVIEW'
+}
+
 function Get-StareRulare {
   # OK doar dacă nu a fost eroare globală, nicio eroare per tichet și toate tichetele au ajuns în PR_DRAFT / DECIZIE.
   param([string[]]$Stari = @(), [int]$NrErori = 0, [AllowNull()][string]$Eroare = '')
@@ -1053,7 +1451,10 @@ function Get-StareRulare {
   return 'OK'
 }
 
-Export-ModuleMember -Function Get-ReguliTichete, Get-Camp, Test-NumarTichet, Get-SerieTichet, Get-AnTichet, Test-SlugLansator,
+Export-ModuleMember -Function Get-CampLista, Test-ListaExacta, Test-ObiectJson, Get-CheiObiect, Get-OptiuniCoada, Get-TextSetariAgent,
+  Test-CaleSimpla, Test-CaleExe, Test-CaleSub, Get-CaiRadacinaAgent, Test-SeparareCai, Get-MediuLansator, Get-TextLansare,
+  Test-RegulaPr, Test-RulesetCanonic, Get-AmprentaRulesets, Test-BarieraInstalare, Get-TextAmprenta, Test-Amprenta, Get-StareDupaCi,
+  Get-ReguliTichete, Get-Camp, Test-NumarTichet, Get-SerieTichet, Get-AnTichet, Test-SlugLansator,
   Get-SlugTichet, Get-BranchTichet, Test-BranchPropriu, Test-TichetAreUrmaGit, Get-CampResult, Get-StarePaw, Test-LansatorOcupat,
   Get-RaspunsJak, Get-TextCurat, Get-TextSigurLinie, Sort-TicheteCoada, Select-TicheteDeLucru, Test-ListaCompleta,
   Get-EffortTichet, New-MarcajDate, New-BriefTichet, New-BriefReview, Get-RezultatAgent, Get-VerdictReview, Test-NumeBranch,

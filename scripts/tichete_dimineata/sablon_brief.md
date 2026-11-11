@@ -20,6 +20,10 @@ owner-ului (nu programator), ce trebuie decis și de cine.
   `git commit -m "<mesaj pe o linie>"`, `git switch -c __BRANCH__`, `git push -u origin __BRANCH__`,
   `gh pr create --draft --base main --head __BRANCH__ --title "<titlu>" --body "<descriere>"`,
   `npx vitest run`, `npx vitest run <fișier>`, `npx vite build`.
+- Fiecare comandă e verificată de o gardă înainte să ruleze: fișierele cu căi relative cu `/` (fără ghilimele, fără `..`);
+  mesajul, titlul și descrierea între ghilimele, pe O linie, fără dolar, backtick, backslash și fără `! * ? [ ] ~ # ^ ; & | < > ( ) { }`.
+  `git add` acceptă și `-A`, `-u`, `--`; `git commit` doar `-m` (și `-a`). Comenzile de citire (`ls`, `cat` …) sunt refuzate:
+  pentru fișiere folosești Read / Glob / Grep.
 - Nu ai acces la baza de date, la mail, la web sau în afara worktree-ului; nu încerca să ocolești lista.
 
 ## Pasul 2 — doar pentru clasa L
