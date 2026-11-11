@@ -1,0 +1,3 @@
+cod;cod_detaliu;plansa_sursa;denumire;tip;grup;echipament;cantitate;um;pozitie;etape;certitudine;observatii;stadiu
+F6-1;TEST-C-REZ-01;TEST-C-00;Fundație fictivă rezervor 1, reazem 1;fundatie;rezervoare;Rezervor fictiv 1;1;buc;Poziție fictivă A;sapatura>egalizare>armare_cofrare>turnare>elevatie>decofrare>umplutura>montaj;de_confirmat;Date inventate pentru test;egalizare@2026-10-20
+F6-2;TEST-C-REZ-01;TEST-C-00;Fundație fictivă rezervor 1, reazem 2;fundatie;rezervoare;Rezervor fictiv 1;1;buc;Poziție fictivă B;trasare>sapatura>egalizare>armare_cofrare>turnare>elevatie>decofrare>umplutura>montaj;de_confirmat;;

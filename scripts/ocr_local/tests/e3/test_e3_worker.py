@@ -1,21 +1,26 @@
 import contextlib
 import datetime as dt
 import hashlib
+import http.client
 import io
 import json
 import os
 import pathlib
+import re
 import socket
 import tempfile
+import time
 import unittest
+import urllib.error
 import uuid
 from unittest.mock import patch
+from ocr_local import e3_pdf
 from ocr_local.e3_contract import E3Error
 from ocr_local.e3_gpu import GpuLock, Coordinator, mutex
-from ocr_local.e3_serviciu import Worker, curata, noapte
-from ocr_local.e3_client import Edge, citeste_secret
+from ocr_local.e3_serviciu import ERRORS, Worker, cod_eroare, curata, noapte
+from ocr_local.e3_client import Edge, citeste_secret, refuz
 from ocr_local.e3_pdf import clasifica, valideaza_pdf
-from ocr_local.e3_read import citeste_orientat, _reader_process
+from ocr_local.e3_read import Reader, citeste_orientat, cod_citire, cod_exceptie_cititor, _reader_process
 
 HERE = pathlib.Path(__file__).parent
 BASE = HERE.parents[3]
@@ -226,7 +231,9 @@ class WorkerTests(unittest.TestCase):
 
     @patch('ocr_local.e3_serviciu.noapte', return_value=False)
     def test_pdf_error_branch_never_reaches_readers(self, _):
-        for kind, code in [('multi','multipagina'), ('invalid','pdf_invalid'), ('neverificabil','intern')]:
+        # E9: verdictul copilului PDF → cod; un verdict necunoscut rămâne intern.
+        for kind, code in [('multi','multipagina'), ('invalid','pdf_invalid'), ('neverificabil','pdf_corupt'),
+                           ('termen','timeout'), ('mediu','intern'), ('necunoscut','intern')]:
             with temporary() as root:
                 now = dt.datetime(2026,10,23,8,tzinfo=dt.timezone.utc)
                 edge = FakeEdge()
@@ -281,9 +288,14 @@ class WorkerTests(unittest.TestCase):
             edge = FakeEdge()
             edge.reject = True
             w = self.worker(edge, root, now)
-            with self.assertRaises(E3Error): w.process(req)
+            # E9: livrarea refuzată nu se reîncearcă și nu mai urcă la buclă: rămâne în jurnal, cu id-ul cererii.
+            w.process(req)
             self.assertFalse(orphan.exists())
             self.assertFalse(any(op=='arbitreaza' for op,_ in edge.calls))
+            self.assertEqual(sum(op=='rezultat' for op,_ in edge.calls), 1)
+            linii = [json.loads(l) for l in (root/'jurnal.jsonl').read_text().splitlines()]
+            self.assertIn({'id':req['id'], 'stare':'nelivrat', 'cod':'refuzat'},
+                          [{k: l[k] for k in ('id','stare','cod')} for l in linii])
 
     def test_hourly_cleanup_keeps_active_recent_and_unknown_directories(self):
         with temporary() as root:
@@ -327,7 +339,7 @@ class PdfTests(unittest.TestCase):
 
     def test_process_validation_timeout_and_normal(self):
         self.assertEqual(valideaza_pdf(self.pdf(), timeout=3), 'mono')
-        self.assertEqual(valideaza_pdf(self.pdf(), timeout=0), 'neverificabil')
+        self.assertEqual(valideaza_pdf(self.pdf(), timeout=0), 'termen')  # E9: termenul → timeout, nu pdf_corupt
 
     def test_real_e3_image_to_pdf_when_delivered(self):
         fixture = HERE/'imageToPdf_e3.pdf'
@@ -368,6 +380,482 @@ class ClientTests(unittest.TestCase):
         for url in ['https://bad.invalid/evil','https://example.invalid/storage/v1/object/sign/ofertare/id.pdf',
                     'https://example.invalid/storage/v1/object/sign/ocr-local-cereri/%2e%2e/evil']:
             with self.assertRaises(E3Error): edge.download(url)
+
+
+# --- E9: coduri reale de eroare + backoff la preia -------------------------------------------------------------------
+
+# Lista așteptată, scrisă independent de cod (L25); aceeași ca în supabase/functions/izo-e3-ocr-local/handler_test.ts.
+CODURI_E9 = {'structura_incerta', 'tabel_negasit', 'garda', 'prea_multe_dezacorduri', 'limita_randuri', 'pdf_invalid',
+             'multipagina', 'intern', 'retea', 'model_indisponibil', 'timeout', 'pdf_corupt', 'oprit'}
+ACUM = dt.datetime(2026, 10, 23, 8, tzinfo=dt.timezone.utc)
+
+
+def citire_fixture(name, image, out, timeout):
+    return (HERE / ('ocr_local_%s_aviz_comtech_26091505.txt' % name)).read_text(encoding='utf-8')
+
+
+def ridica(exc):
+    def f(*a, **k):
+        raise exc
+    return f
+
+
+class Coord:
+    def __init__(self): self.invalidari = 0
+    def invalidate(self): self.invalidari += 1
+
+
+class EdgeScenariu(FakeEdge):
+    """FakeEdge cu link / download înlocuibile (excepții de transport, refuzuri cu status)."""
+    def __init__(self, link=None, download=None):
+        super().__init__()
+        self._link, self._download = link, download
+    def call(self, op, **body):
+        if op == 'link' and self._link:
+            self.calls.append((op, body))
+            self._link()
+        return super().call(op, **body)
+    def download(self, url):
+        if self._download:
+            self._download()
+        return super().download(url)
+
+
+class E9CoduriTests(unittest.TestCase):
+    """Câte un caz pe cod: ce ajunge la edge în `rezultat` (exact o livrare) și dacă modelele se repornesc."""
+
+    def lucreaza(self, *, edge=None, req=None, noaptea=False, oprire=False, ceas=None, reader=citire_fixture,
+                 validator=None, render=None, perspective=None):
+        edge, coord = edge or FakeEdge(), Coord()
+        with temporary() as root, patch('ocr_local.e3_serviciu.noapte', return_value=noaptea):
+            w = Worker(edge, coord, root=root, reader=reader, clock=ceas or (lambda: ACUM),
+                       pdf_validator=validator or (lambda data: 'mono'), render=render or (lambda data: FakeImage()),
+                       perspective=perspective or (lambda im: (im, 'nesigura')))
+            if oprire:
+                w.stop_event.set()
+            w.process(req or request(ACUM))
+            jurnal = [json.loads(l) for l in (root/'jurnal.jsonl').read_text().splitlines()]
+            self.assertFalse(any((root/'work').iterdir()))
+        livrari = [b for op, b in edge.calls if op == 'rezultat']
+        self.assertEqual(len(livrari), 1)
+        self.assertIsNone(livrari[0]['obiect'])
+        self.assertIn(livrari[0]['eroare'], CODURI_E9)
+        self.assertEqual((jurnal[-1]['stare'], jurnal[-1]['cod']), ('esuata', livrari[0]['eroare']))
+        return livrari[0]['eroare'], coord.invalidari, [op for op, _ in edge.calls]
+
+    def test_retea_transport_si_edge_indisponibil_fara_repornirea_modelelor(self):
+        for edge in (EdgeScenariu(link=ridica(E3Error('edge_transport'))), EdgeScenariu(link=ridica(refuz(503))),
+                     EdgeScenariu(download=ridica(E3Error('retea')))):
+            cod, invalidari, ops = self.lucreaza(edge=edge, reader=lambda *a: self.fail('cititor apelat'))
+            self.assertEqual((cod, invalidari), ('retea', 0))
+            self.assertNotIn('arbitreaza', ops)
+
+    def test_refuz_4xx_la_link_ramane_intern(self):
+        cod, invalidari, _ = self.lucreaza(edge=EdgeScenariu(link=ridica(refuz(409))), reader=lambda *a: self.fail('cititor'))
+        self.assertEqual((cod, invalidari), ('intern', 1))  # ca până acum: necunoscutul repornește modelele
+
+    def test_model_indisponibil_reporneste_modelele(self):
+        cod, invalidari, _ = self.lucreaza(reader=ridica(E3Error('model_indisponibil')))
+        self.assertEqual((cod, invalidari), ('model_indisponibil', 1))
+
+    def test_timeout_inainte_in_timpul_si_dupa_citire(self):
+        expirata = request(ACUM - dt.timedelta(seconds=200))
+        cod, invalidari, ops = self.lucreaza(req=expirata, reader=lambda *a: self.fail('cititor'))
+        self.assertEqual((cod, invalidari, ops), ('timeout', 0, ['rezultat']))
+        cod, invalidari, _ = self.lucreaza(reader=ridica(E3Error('timeout')))
+        self.assertEqual((cod, invalidari), ('timeout', 1))  # termenul cititorului: modelul poate fi încă ocupat
+        trecut = [False]
+        def lenta(*a):
+            trecut[0] = True
+            return citire_fixture(*a)
+        cod, invalidari, ops = self.lucreaza(reader=lenta, ceas=lambda: ACUM + dt.timedelta(seconds=100 if trecut[0] else 0))
+        self.assertEqual((cod, invalidari), ('timeout', 0))  # citirea s-a încheiat; doar termenul local a trecut
+        self.assertNotIn('arbitreaza', ops)
+        # Jakarinos r1 P2: termenul consumat de descărcare / randare = timeout fără cititor și fără repornirea modelelor.
+        randat = [False]
+        def randare_lenta(data):
+            randat[0] = True
+            return FakeImage()
+        cod, invalidari, _ = self.lucreaza(render=randare_lenta, reader=lambda *a: self.fail('cititor apelat'),
+                                           ceas=lambda: ACUM + dt.timedelta(seconds=100 if randat[0] else 0))
+        self.assertEqual((cod, invalidari), ('timeout', 0))
+
+    def test_pdf_corupt_la_randare_fara_cititor_si_fara_repornire(self):
+        cod, invalidari, _ = self.lucreaza(render=ridica(E3Error('pdf_corupt')), reader=lambda *a: self.fail('cititor'))
+        self.assertEqual((cod, invalidari), ('pdf_corupt', 0))
+
+    def test_oprit_noaptea_si_la_oprirea_ceruta(self):
+        for kw in ({'noaptea': True}, {'oprire': True}):
+            cod, invalidari, ops = self.lucreaza(reader=lambda *a: self.fail('cititor'), **kw)
+            self.assertEqual((cod, invalidari, ops), ('oprit', 0, ['rezultat']))
+
+    def test_intern_ramane_pentru_defecte(self):
+        cod, invalidari, _ = self.lucreaza(perspective=ridica(ValueError('defect')))
+        self.assertEqual((cod, invalidari), ('intern', 1))
+
+    def test_cod_eroare(self):
+        for exc, cod in [(E3Error('retea'), 'retea'), (E3Error('edge_transport'), 'retea'), (refuz(503), 'retea'),
+                         (refuz(500), 'retea'), (refuz(409), 'intern'), (refuz(401), 'intern'), (refuz(None), 'intern'),
+                         (E3Error('edge_refuz'), 'intern'), (E3Error('link_invalid'), 'intern'), (ValueError('x'), 'intern'),
+                         (E3Error('timeout'), 'timeout'), (E3Error('oprit'), 'oprit'), (E3Error('pdf_corupt'), 'pdf_corupt'),
+                         (E3Error('model_indisponibil'), 'model_indisponibil'), (E3Error('vllm_control'), 'intern')]:
+            self.assertEqual(cod_eroare(exc), cod, exc)
+
+    def test_paritate_cu_edge_si_cu_lista_scrisa_independent(self):
+        ts = (BASE/'supabase/functions/izo-e3-ocr-local/contract.ts').read_text(encoding='utf-8')
+        m = re.search(r"^export const ERORI_LOCALE = \[([^\]]*)\]", ts, re.M)
+        self.assertIsNotNone(m)
+        edge = re.findall(r"'([a-z_]+)'", m.group(1))
+        self.assertEqual(len(edge), len(set(edge)))
+        self.assertEqual(set(edge), CODURI_E9)
+        self.assertEqual(ERRORS, CODURI_E9)
+        for cod in CODURI_E9:
+            self.assertRegex(cod, r'^[a-z_]{1,40}$')  # CHECK-ul coloanei eroare (20261108a)
+
+
+class Oprire:
+    """stop_event fals = ceasul injectat: wait(t) înregistrează pauza; după `pasi` așteptări bucla se oprește."""
+    def __init__(self, pasi): self.pasi, self.asteptari, self.oprit = pasi, [], False
+    def is_set(self): return self.oprit
+    def set(self): self.oprit = True
+    def wait(self, t):
+        self.asteptari.append(t)
+        self.oprit = self.oprit or len(self.asteptari) >= self.pasi
+        return self.oprit
+
+
+class EdgePreia:
+    """preia după scenariu: x = transport căzut, r = refuz 401, 5 = 503, c = cerere stricată, - = coadă goală."""
+    def __init__(self, scenariu): self.scenariu, self.calls = list(scenariu), []
+    def call(self, op, **body):
+        self.calls.append(op)
+        pas = self.scenariu.pop(0) if self.scenariu else '-'
+        if pas == 'x': raise E3Error('edge_transport')
+        if pas == 'r': raise refuz(401)
+        if pas == '5': raise refuz(503)
+        return {'cerere': {'id': 'nu-e-uuid', 'token': 't'} if pas == 'c' else None}
+
+
+class E9PauzaTests(unittest.TestCase):
+    TREPTE = [1, 2, 4, 8, 16, 32, 64, 128, 256, 300]
+
+    def bucla(self, scenariu, pasi, rnd=lambda: 0.0, stare='disponibil', noaptea=False):
+        with temporary() as root, patch('ocr_local.e3_serviciu.noapte', return_value=noaptea):
+            edge = EdgePreia(scenariu)
+            w = Worker(edge, None, root=root, reader=citire_fixture, clock=lambda: ACUM, rnd=rnd)
+            w.state, w.stop_event = stare, Oprire(pasi)
+            w.bucla_preia()
+            p = root/'jurnal.jsonl'
+            jurnal = [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+        return edge.calls, w.stop_event.asteptari, [(l['stare'], l['cod'], l['secunde']) for l in jurnal]
+
+    def test_trepte_plafon_resetare_si_jurnal_fara_spam(self):
+        calls, asteptari, jurnal = self.bucla('x' * 13 + '--' + 'xxx', 18)
+        self.assertEqual(asteptari, self.TREPTE + [300, 300, 300] + [1, 1] + [1, 2, 4])
+        self.assertEqual(jurnal, [('pauza', 'retea', t) for t in self.TREPTE] + [('reluat', None, None)]
+                         + [('pauza', 'retea', t) for t in (1, 2, 4)])
+        self.assertEqual(calls, ['preia'] * 18)
+
+    def test_jitter_mic_si_plafon_strict(self):
+        _, asteptari, _ = self.bucla('x' * 12, 12, rnd=lambda: 0.999)
+        for treapta, a in zip(self.TREPTE + [300, 300], asteptari):
+            self.assertGreaterEqual(a, treapta)
+            self.assertLessEqual(a, min(300, treapta * 1.1))
+        self.assertEqual(max(asteptari), 300)
+
+    def test_cauza_schimbata_pe_aceeasi_treapta_se_jurnalizeaza_o_data(self):
+        _, _, jurnal = self.bucla('x' * 10 + 'rr' + '55', 14)
+        self.assertEqual(len(jurnal), 12)
+        self.assertEqual(jurnal[-3:], [('pauza', 'retea', 300), ('pauza', 'intern', 300), ('pauza', 'retea', 300)])
+
+    def test_fara_preia_cand_nu_e_disponibil_sau_noaptea(self):
+        for kw in ({'stare': 'pornire'}, {'stare': 'eroare'}, {'noaptea': True}):
+            calls, asteptari, jurnal = self.bucla('x' * 5, 5, **kw)
+            self.assertEqual((calls, asteptari, jurnal), ([], [1] * 5, []))
+
+    def test_cerere_stricata_jurnalizata_cu_cod_fara_pauza(self):
+        calls, asteptari, jurnal = self.bucla('c-', 2)
+        self.assertEqual((calls, asteptari, jurnal), (['preia', 'preia'], [1, 1], [('eroare', 'intern', None)]))
+
+
+class E9ClientTests(unittest.TestCase):
+    URL = 'https://example.invalid/storage/v1/object/sign/ocr-local-cereri/id.pdf?token=signed'
+
+    class Transport:
+        def __init__(self, fapta): self.fapta = fapta
+        def open(self, request, **kw): return self.fapta()
+
+    @staticmethod
+    def raspuns(status, corp=b'{}', citire=None):
+        class R(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): self.close()
+            def read(self, *a): return citire() if citire else super().read(*a)
+        r = R(corp)
+        r.status = status
+        return r
+
+    @staticmethod
+    def http(code):
+        return urllib.error.HTTPError('https://example.invalid/x', code, 'x', {}, None)
+
+    def edge(self, fapta):
+        return Edge('a' * 64, base='https://example.invalid', transport=self.Transport(fapta))
+
+    def test_call_pastreaza_statusul_refuzului_si_separa_transportul(self):
+        for fapta, cod, status, rezultat in [
+                (ridica(self.http(503)), 'edge_refuz', 503, 'retea'),
+                (ridica(self.http(409)), 'edge_refuz', 409, 'intern'),
+                (ridica(self.http(401)), 'edge_refuz', 401, 'intern'),
+                (lambda: self.raspuns(204), 'edge_refuz', 204, 'intern'),
+                (ridica(urllib.error.URLError(ConnectionRefusedError())), 'edge_transport', None, 'retea'),
+                (ridica(TimeoutError()), 'edge_transport', None, 'retea'),
+                (lambda: self.raspuns(200, b'<html>'), 'edge_transport', None, 'retea')]:
+            with self.assertRaises(E3Error) as c:
+                self.edge(fapta).call('preia', worker_id='test')
+            e = c.exception
+            self.assertEqual((e.cod, getattr(e, 'status', None), cod_eroare(e)), (cod, status, rezultat))
+            self.assertNotIn('a' * 64, repr(e) + str(e.__context__ if not e.__suppress_context__ else ''))
+
+    def test_download_separa_reteaua_de_pdf_invalid(self):
+        mare = b'%PDF' + b'0' * 8388608
+        for fapta, cod in [
+                (ridica(self.http(503)), 'retea'), (ridica(self.http(502)), 'retea'),
+                (ridica(self.http(403)), 'pdf_invalid'), (ridica(self.http(404)), 'pdf_invalid'), (ridica(self.http(302)), 'pdf_invalid'),
+                (ridica(urllib.error.URLError(ConnectionResetError())), 'retea'), (ridica(TimeoutError()), 'retea'),
+                (lambda: self.raspuns(200, citire=ridica(http.client.IncompleteRead(b'%PDF'))), 'retea'),
+                (lambda: self.raspuns(200, citire=ridica(ConnectionResetError())), 'retea'),
+                (lambda: self.raspuns(206, b'%PDF'), 'pdf_invalid'), (lambda: self.raspuns(200, mare), 'pdf_invalid'),
+                (ridica(ValueError('url')), 'intern')]:
+            with self.assertRaises(E3Error) as c:
+                self.edge(fapta).download(self.URL)
+            self.assertEqual(c.exception.cod, cod)
+        self.assertEqual(self.edge(lambda: self.raspuns(200, b'%PDF ok')).download(self.URL), b'%PDF ok')
+
+
+class Capat:
+    def __init__(self, poll=False, recv=None): self._poll, self._recv = poll, recv
+    def poll(self, t): return self._poll() if callable(self._poll) else self._poll
+    def recv(self): return self._recv()
+    def close(self): pass
+
+
+class Proces:
+    def __init__(self, start=None): self._start, self.pid, self.terminat = start, None, False
+    def start(self):
+        if self._start: self._start()
+    def is_alive(self): return False
+    def terminate(self): self.terminat = True
+    def join(self, timeout=None): pass
+
+
+class Context:
+    def __init__(self, parinte, proces): self.parinte, self.proces = parinte, proces
+    def Pipe(self, duplex=False): return self.parinte, Capat()
+    def Process(self, **kw): return self.proces
+
+
+class E9CititorTests(unittest.TestCase):
+    def test_cod_citire(self):
+        for result, cod in [({'ok': False, 'signal': 'deadline', 'error': None}, 'timeout'),
+                            ({'ok': False, 'signal': 'deadline', 'error': 'OSError'}, 'timeout'),
+                            ({'ok': False, 'signal': None, 'error': 'ConnectionRefusedError'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'RemoteDisconnected'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'OSError'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'RuntimeError'}, 'model_indisponibil'),  # lighton: HTTP ≠ 200
+                            ({'ok': False, 'signal': None, 'error': 'ConnectError:All connection attempts failed'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'ReadTimeout:timed out'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'HTTPStatusError:Server error 503'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'ServerError:Failed to connect to server http://127.0.0.1:1. Please check if the server is running.'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'HttpResponseError:(503, \'\')'}, 'model_indisponibil'),
+                            ({'ok': False, 'signal': None, 'error': 'RequestError:The response was truncated due to length limit.'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'ClientClosedError:HTTP VLM client is closed'}, 'intern'),
+                            # Jakarinos r1 P2: defectele locale prinse de cititor nu sunt „model indisponibil”.
+                            ({'ok': False, 'signal': None, 'error': 'KeyError'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'JSONDecodeError'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'AttributeError'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'RuntimeError:mesaj din biblioteca MinerU'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': 'ValueError:x'}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': ['ConnectError']}, 'intern'),
+                            ({'ok': False, 'signal': None, 'error': None, 'finish_reason': 'length'}, 'intern'),
+                            ({'ok': False}, 'intern')]:
+            self.assertEqual(cod_citire(result), cod, result)
+
+    def test_formatul_real_read_lighton_pe_server_fals_loopback(self):
+        """read_lighton real contra unui server HTTP fals pe 127.0.0.1 (port efemer, niciun model): eroarea pe care o scrie
+        cititorul se clasifică corect — HTTP 503 / conexiune închisă = model_indisponibil, defect în gardă = intern."""
+        import http.server
+        import threading
+        from ocr_local import read
+        mod = {}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                if mod['caz'] == '503':
+                    self.send_response(503); self.send_header('Content-Length', '0'); self.end_headers()
+                elif mod['caz'] == 'flux':
+                    corp = b'data: {"choices":[{"delta":{"content":"x"}}]}\n\ndata: [DONE]\n\n'
+                    self.send_response(200); self.send_header('Content-Type', 'text/event-stream')
+                    self.send_header('Content-Length', str(len(corp))); self.end_headers(); self.wfile.write(corp)
+                else:
+                    self.close_connection = True  # închide fără răspuns
+        class GardaStricata:
+            event = None
+            def __call__(self, raw): raise KeyError('defect local')
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        fir = threading.Thread(target=server.serve_forever, daemon=True)
+        fir.start()
+        try:
+            cfg = {'endpoint': 'http://127.0.0.1:%d' % server.server_address[1], 'served_model_name': 'fals', 'request_settings': {}}
+            for caz, garda, cod in [('503', None, 'model_indisponibil'), ('inchis', None, 'model_indisponibil'),
+                                    ('flux', GardaStricata, 'intern')]:
+                mod['caz'] = caz
+                with temporary() as root, contextlib.ExitStack() as stack:
+                    if garda:
+                        stack.enter_context(patch.object(read, 'Guard', garda))
+                    raw, result = read.read_lighton(b'png', root, cfg, 5)
+                self.assertFalse(result['ok'], caz)
+                self.assertEqual(cod_citire(result), cod, (caz, result.get('error')))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_formatul_real_read_mineru_pe_server_fals_loopback(self):
+        """read_mineru real (clientul mineru_vl_utils) pe 127.0.0.1, port efemer, niciun model. Serverul căzut / 503 la
+        pornire = ServerError ridicat la construcția clientului (calea cod_exceptie_cititor); 503 la citire =
+        HttpResponseError în result['error'] (calea cod_citire). Toate = model_indisponibil, nu intern."""
+        try:
+            import mineru_vl_utils  # noqa: F401
+            from PIL import Image
+        except ImportError:
+            self.skipTest('mineru_vl_utils / PIL absente: se rulează cu interpretorul MinerU')
+        import http.server
+        import threading
+        from ocr_local import read
+        mod = {}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def raspunde(self, status, corp=b''):
+                self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                self.send_response(status); self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(corp))); self.end_headers(); self.wfile.write(corp)
+            def do_GET(self):
+                self.raspunde(200, b'{"data":[{"id":"fals"}]}') if mod['caz'] == 'citire503' else self.raspunde(503)
+            def do_POST(self): self.raspunde(503)
+        buf = io.BytesIO()
+        Image.new('RGB', (64, 64), 'white').save(buf, format='PNG')
+        def ruleaza(port):
+            cfg = {'endpoint': 'http://127.0.0.1:%d' % port, 'served_model_name': 'fals'}
+            with temporary() as root, patch.dict(read._MINERU, clear=True), patch.dict(os.environ):
+                try:
+                    raw, result = read.read_mineru(buf.getvalue(), root, cfg, 10)
+                except Exception as exc:
+                    return 'exceptie', cod_exceptie_cititor(exc), type(exc).__name__
+            self.assertFalse(result['ok'])
+            return 'rezultat', cod_citire(result), result.get('error')
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            for caz, cale in [('pornire503', 'exceptie'), ('citire503', 'rezultat')]:
+                mod['caz'] = caz
+                r = ruleaza(server.server_address[1])
+                self.assertEqual(r[:2], (cale, 'model_indisponibil'), (caz, r))
+        finally:
+            server.shutdown()
+            server.server_close()
+        liber = socket.socket()
+        liber.bind(('127.0.0.1', 0))
+        port_mort = liber.getsockname()[1]
+        liber.close()  # nimeni nu mai ascultă: conexiune refuzată
+        r = ruleaza(port_mort)
+        self.assertEqual(r[:2], ('exceptie', 'model_indisponibil'), r)
+
+    def test_exceptie_cititor(self):
+        httpx_eroare = type('ConnectError', (Exception,), {'__module__': 'httpx'})
+        httpx_url = type('InvalidURL', (Exception,), {'__module__': 'httpx'})
+        mineru_server = type('ServerError', (RuntimeError,), {'__module__': 'mineru_vl_utils.vlm_client.base_client'})
+        mineru_cerere = type('RequestError', (ValueError,), {'__module__': 'mineru_vl_utils.vlm_client.base_client'})
+        strain_server = type('ServerError', (RuntimeError,), {'__module__': 'alt_pachet'})
+        for exc, cod in [(ConnectionRefusedError(), 'model_indisponibil'), (TimeoutError(), 'model_indisponibil'),
+                         (http.client.RemoteDisconnected('x'), 'model_indisponibil'), (httpx_eroare('x'), 'model_indisponibil'),
+                         (mineru_server('Failed to connect'), 'model_indisponibil'), (httpx_url('x'), 'intern'),
+                         (mineru_cerere('Model not found'), 'intern'), (strain_server('x'), 'intern'),
+                         (FileNotFoundError(), 'intern'), (KeyError('x'), 'intern'), (ValueError('x'), 'intern')]:
+            self.assertEqual(cod_exceptie_cititor(exc), cod, exc)
+
+    def test_procesul_cititorului_trimite_cauza(self):
+        class Conn:
+            def send(self, value): self.value = value
+            def close(self): pass
+        from ocr_local import read
+        cazuri = [({'ok': False, 'signal': 'deadline', 'error': None}, {}, 'timeout'),
+                  ({'ok': False, 'signal': None, 'error': 'ConnectionRefusedError'}, {}, 'model_indisponibil'),
+                  ({'ok': False, 'signal': 'bucla', 'error': None}, {}, 'garda'),
+                  (None, {}, 'intern'),
+                  (None, {'side_effect': ConnectionRefusedError()}, 'model_indisponibil'),
+                  (None, {'side_effect': KeyError('x')}, 'intern')]
+        for result, kw, cod in cazuri:
+            with temporary() as root:
+                if result is not None:
+                    dest = root/'page0001/p0001_b0/lighton'
+                    dest.mkdir(parents=True)
+                    (dest/'result.json').write_text(json.dumps(result))
+                conn = Conn()
+                run = kw or {'return_value': {'status': 'stopped_no_retry'}}
+                with patch.object(read, 'protocol', return_value={'deadline_seconds': 180}), patch.object(read, 'run_reader', **run):
+                    _reader_process(root, 'lighton', 20, conn)
+                self.assertEqual(conn.value, (None, cod), (result, kw))
+
+    def test_termenul_trecut_inainte_de_citire_e_timeout(self):
+        with temporary() as root:
+            with self.assertRaises(E3Error) as c:
+                citeste_orientat(FakeImage(), 'aviz_teava', root, lambda *a: self.fail('cititor apelat'), 100, clock=lambda: 100)
+            self.assertEqual(c.exception.cod, 'timeout')
+
+    def test_cititor_tacut_la_termen_e_timeout_iar_eroarea_copilului_trece_neschimbata(self):
+        class Imagine:
+            def save(self, buf, format): buf.write(b'png')
+        for parinte, cod in [(Capat(poll=False), 'timeout'),
+                             (Capat(poll=True, recv=lambda: (None, 'model_indisponibil')), 'model_indisponibil')]:
+            with temporary() as root, patch('ocr_local.e3_read.multiprocessing.get_context', return_value=Context(parinte, Proces())):
+                with self.assertRaises(E3Error) as c:
+                    Reader()('lighton', Imagine(), root/'citire', 20)
+                self.assertEqual(c.exception.cod, cod)
+
+
+class E9PdfTests(unittest.TestCase):
+    def test_copil_care_nu_porneste_e_mediu_iar_copil_mort_e_neverificabil(self):
+        with patch('ocr_local.e3_pdf.multiprocessing.get_context', return_value=Context(Capat(), Proces(start=ridica(OSError('spawn'))))):
+            self.assertEqual(e3_pdf._izolat(b'%PDF', True, 3), ('mediu', None))
+        with patch('ocr_local.e3_pdf.multiprocessing.get_context', return_value=Context(Capat(poll=True, recv=ridica(EOFError())), Proces())):
+            self.assertEqual(e3_pdf._izolat(b'%PDF', True, 3), ('neverificabil', None))
+
+    def test_copil_oprit_de_termen_in_timpul_transferului_e_termen(self):
+        def poll_dupa_termen():
+            time.sleep(0.2)  # timerul de 0,01 s a oprit deja copilul
+            return True
+        proces = Proces()
+        with patch('ocr_local.e3_pdf.multiprocessing.get_context', return_value=Context(Capat(poll=poll_dupa_termen, recv=ridica(EOFError())), proces)):
+            self.assertEqual(e3_pdf._izolat(b'%PDF', True, 0.01), ('termen', None))
+        self.assertTrue(proces.terminat)
+
+    def test_copil_fara_limita_de_memorie_raspunde_mediu(self):
+        class Conn:
+            def send(self, value): self.value = value
+            def close(self): pass
+        conn = Conn()
+        with patch.object(e3_pdf, 'limite_memorie', side_effect=OSError('pdf_resource_limit')):
+            e3_pdf._pdf_child(b'%PDF', True, conn)
+        self.assertEqual(conn.value, ('mediu', None))
+
+    def test_randarea_codifica_verdictul(self):
+        for kind, cod in [('neverificabil', 'pdf_corupt'), ('termen', 'timeout'), ('mediu', 'intern'), ('invalid', 'pdf_invalid'),
+                          ('multi', 'multipagina'), ('altceva', 'intern'), ('mono', 'intern')]:
+            with patch.object(e3_pdf, '_izolat', return_value=(kind, None)):
+                with self.assertRaises(E3Error) as c:
+                    e3_pdf.randeaza(b'%PDF')
+                self.assertEqual(c.exception.cod, cod, kind)
 
 
 if __name__ == '__main__':
