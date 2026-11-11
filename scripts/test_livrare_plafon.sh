@@ -305,7 +305,8 @@ echo 'PLAFON_FUNCTIE: functie existenta cu SET transaction_timeout = 0 (1,5 s) +
 amanat() { # $1 sufixul tabelului
   printf '%s\n' "CREATE TABLE public.a_$1 (id integer);" \
     "CREATE FUNCTION public.fa_$1() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5); EXECUTE format('SET LOCAL %s = %s', $DIN, '1000'); RETURN NULL; END \$f\$;" \
-    "REVOKE EXECUTE ON FUNCTION public.fa_$1() FROM PUBLIC;" \n    "CREATE CONSTRAINT TRIGGER ta_$1 AFTER INSERT ON public.a_$1 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fa_$1();" \
+    "REVOKE EXECUTE ON FUNCTION public.fa_$1() FROM PUBLIC;" \
+    "CREATE CONSTRAINT TRIGGER ta_$1 AFTER INSERT ON public.a_$1 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fa_$1();" \
     "INSERT INTO public.a_$1 VALUES (1);"
 }
 cat >"$TMP/psql_fara_amanate" <<'EOF'
