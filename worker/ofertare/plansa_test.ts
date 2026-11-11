@@ -9,8 +9,8 @@ const docCu = (ca: any = null, p: any = {}) => ({ id: 470, licitatie_id: 95, ana
 // elig (loturi 20261024b): răspunsul porții pe document, implicit eligibil; funcție = răspuns pe apel (n = al câtelea)
 function fakeSupa(o: { elig?: (n: number) => any; job?: any; doc?: any; rpcErr?: any; pierdeLeaseLa?: number; costZi?: number;
   buget?: { rows: any[]; costZi: number }; manifest?: any[]; manifestError?: any; regularizareError?: boolean;
-  laRezervare?: (st: any, id: number) => void } = {}) {
-  const st = { job: o.job ? { ...o.job, stare: 'lucru', luat_de: 'w1' } : null, doc: o.doc, notif: [] as any[], updates: 0, poarta: 0 }
+  laRezervare?: (st: any, id: number) => void; poartaCh?: (n: number) => { data: unknown; error: unknown } } = {}) {
+  const st = { job: o.job ? { ...o.job, stare: 'lucru', luat_de: 'w1' } : null, doc: o.doc, notif: [] as any[], updates: 0, poarta: 0, poartaCh: [] as any[] }
   const buget = o.buget ?? { rows: [] as any[], costZi: o.costZi ?? 0 }
   if (st.job?.cost_usd) buget.rows.push({ id: buget.rows.length + 1, job_id: st.job.id, cost_usd: st.job.cost_usd, stare: 'regularizat' })
   const sumaJob = () => buget.rows.filter(r => r.job_id === st.job.id).reduce((s, r) => s + (r.cost_usd ?? r.rezervat_usd), 0)
@@ -27,6 +27,8 @@ function fakeSupa(o: { elig?: (n: number) => any; job?: any; doc?: any; rpcErr?:
         if (r instanceof Error) throw r
         return r
       }
+      // #908 r4: poarta pe cheltuială pe cerut_de-ul jobului, înaintea fiecărui apel plătit (implicit: trece)
+      if (n === 'fn_ofertare_poate_cheltui') { st.poartaCh.push({ ...a }); return o.poartaCh ? o.poartaCh(st.poartaCh.length) : { data: true, error: null } }
       if (n === 'ofertare_plansa_coada_ia') return { data: st.job ? [{ ...st.job }] : [], error: null }
       if (n === 'ofertare_plansa_rezerva') {
         verificaLease()
@@ -525,4 +527,23 @@ Deno.test('loturi: handler-ul răspunde blocat_lot (cursă) → anulat, rezervar
   await proceseazaPlansa(deps(s, h.handler))
   assertEquals(h.apeluri.length, 1); assertEquals(s.st.job.stare, 'anulat')
   assertEquals(s.buget.rows.map((r: any) => [r.stare, r.cost_usd]), [['regularizat', 0]])
+})
+
+// #908 r4 (review r3 Jakarinos P1-01 / Copilot P1-03): poarta pe cheltuială pe cerut_de-ul JOBULUI înaintea fiecărei runde plătite
+Deno.test('r4: revocare după prima rundă → oprit înainte de runda a doua (o singură rundă plătită), anulat cu motivul porții', async () => {
+  const s = fakeSupa({ job: JOB, doc: docCu(), poartaCh: (n) => ({ data: n === 1, error: null }) })
+  const h = raspunsuri([[200, { continua: true, de_la_urmator: 4, cost_usd: 0.5, citite_acum: 4 }]])
+  const hWrap = async (req: Request) => { const r = await h.handler(req); s.st.doc = docCu({ taiat_la: 't1' }); return r }
+  await proceseazaPlansa(deps(s, hWrap))
+  assertEquals(h.apeluri.length, 1); assertEquals(s.buget.rows.length, 1); assertEquals(s.st.job.stare, 'anulat')
+  assertEquals(s.st.poartaCh[0], { p_licitatie_id: 95, p_uid: 'u1' })
+})
+Deno.test('r4: job fără cerut_de / poarta NU / RPC căzut → anulat înainte de orice rezervare sau apel AI', async () => {
+  for (const [job, poartaCh] of [[{ ...JOB, cerut_de: null }, undefined], [JOB, () => ({ data: false, error: null })],
+    [JOB, () => ({ data: null, error: { message: 'x' } })]] as const) {
+    const s = fakeSupa({ job, doc: docCu(), poartaCh: poartaCh as any })
+    const h = raspunsuri([[200, { continua: false, cost_usd: 0.5, citite_acum: 4 }]])
+    await proceseazaPlansa(deps(s, h.handler))
+    assertEquals(h.apeluri.length, 0); assertEquals(s.buget.rows.length, 0); assertEquals(s.st.job.stare, 'anulat')
+  }
 })

@@ -48,6 +48,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { propuneAcoperiri } from './core.ts'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -57,22 +58,17 @@ async function autorizat(req: Request, supabase: any, licId: number, coadaTabel:
   // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
   // legacy pe care îl trimit workerii din Vault (verificat 14.09: comparația de string pica).
   const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
-  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
-  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') {
-    if (!coadaTabel) return 'apel neautorizat (cheie anon)'
-    const { data: c } = await supabase.from(coadaTabel).select('activ').eq('licitatie_id', licId).maybeSingle()
-    return c?.activ ? null : 'apel neautorizat (cheie anon, coada nu e activă)'
-  }
+  // r4 (#908, review r3 Jakarinos P1-01): cheia de serviciu NU mai e cale de cheltuială — autentificarea serviciului nu ține loc de dreptul
+  // de cheltuială al unei persoane (niciun apelant intern nu folosea calea; ofertare-rfq-inbox nu mai cheamă importul, decizia 1A 01.11)
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return 'apel neautorizat (cheie de serviciu)'
+  // r4: ramura „anon + coadă activă” e scoasă (singurul apelant trimitea coadaTabel = null; cheia anon e publică)
+  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') return 'apel neautorizat (cheie anon)'
   const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
-    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-  ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
-  return 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).'
+  if (await poateCheltui(supabase, licId, uid)) return null
+  return 'Citirea integrală o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
 }
 
 Deno.serve(async (req: Request) => {

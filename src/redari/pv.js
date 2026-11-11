@@ -158,7 +158,10 @@ export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinato
   if (pv.obiectii_redare && !plin(pv.obiectii_text)) lipsuri.push('textul obiectiilor')
   return lipsuri
 }
-function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
+function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator: detinatorArg, pv = {} }) {
+  // Test 08.11.2026: PV B / PV C (pe parcelă) primesc detinator: null din ModalPv; valoarea implicită `= {}` acoperea doar undefined,
+  // iar „Generează DOCX” pica cu „Cannot read properties of null (reading 'calitate')”.
+  const detinator = detinatorArg ?? {}
   const campuri = Object.fromEntries(CHEI_PV_A.map(k => [k, '']))
   // Draft: rol curent; semnat/anulat: exclusiv snapshot-ul inghetat de server.
   const rol = ['semnat', 'anulat'].includes(pv.stare) ? pv.calitate_semnatar : detinator.calitate

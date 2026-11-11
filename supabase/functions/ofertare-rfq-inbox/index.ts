@@ -1,7 +1,7 @@
 // ofertare-rfq-inbox v1 — primește ofertele sosite pe oferte@gazpet.ro.
 // Apelat de Google Apps Script (trigger 10 min pe contul oferte@): pentru fiecare
 // mail necitit cu „RFQ-##” în subiect trimite PDF-urile aici. Funcția: validează
-// RFQ-ul → urcă PDF-ul în storage → creează oferta → pornește citirea AI.
+// RFQ-ul → urcă PDF-ul în storage → creează oferta. Citirea AI NU mai pornește de aici (#908 r4, decizia 1A).
 // Auth: header x-inbox-secret.
 //
 // ADUSĂ ÎN REPO la 12.09.2026. Rula neversionată, cu secretul scris LITERAL în sursă
@@ -58,19 +58,10 @@ Deno.serve(async (req: Request) => {
       await supa.from('ofertare_rfq').update({ status: 'oferte_primite', updated_at: new Date().toISOString() }).eq('id', rfqId);
     }
 
-    // pornește citirea AI (fire-and-forget cu service role — trece de verify_jwt)
-    let ai = 'pornit';
-    try {
-      const r = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/ofertare-rfq-import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}` },
-        body: JSON.stringify({ oferta_id: of.id }),
-      });
-      const j = await r.json();
-      ai = j?.error ? 'eșuat: ' + j.error : `ok (${j?.preturi_gasite ?? '?'}/${j?.materiale ?? '?'} prețuri)`;
-    } catch (e) { ai = 'eșuat: ' + String(e?.message || e); }
-
-    return new Response(JSON.stringify({ ok: true, rfq_id: rfqId, oferta_id: of.id, import_ai: ai }), { headers: { 'Content-Type': 'application/json' } });
+    // #908 r4 (decizia Răzvan 1A, 01.11.2026): mailul (conținut EXTERN) doar ÎNREGISTREAZĂ oferta. Citirea AI (plătită) o pornește un om —
+    // ownerul / responsabilul licitației — din butonul din OfertareRFQ, prin poarta pe cheltuială. Nu mai chemăm ofertare-rfq-import de aici
+    // (cu cheia de serviciu, fără poartă); oricum, de la #908 r4 importul refuză cheia de serviciu.
+    return new Response(JSON.stringify({ ok: true, rfq_id: rfqId, oferta_id: of.id, import_ai: 'manual (din platformă, de owner / responsabil)' }), { headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
     return fail('eroare: ' + String(e?.message || e));
   }

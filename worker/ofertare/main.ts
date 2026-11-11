@@ -11,6 +11,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
 import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
+import { cerereaTrecePoarta, gardaCheltuiala, scrieCuReincercare, type CoadaAi, type Garda } from './poarta_coada.ts'
 import { proceseazaClarificari } from './clarificari.ts'
 import { proceseazaSourcePacks } from './source_pack.ts'
 import { proceseazaSeap } from './seap.ts'
@@ -55,17 +56,25 @@ async function proceseazaLicitatie(id: number) {
       const { data: c, error } = await supabase.from('ofertare_extragere_coada').select('*').eq('licitatie_id', id).maybeSingle()
       if (error || !c) { log(`#${id}: rândul din coadă nu se mai citește`, error?.message ?? ''); return }
       if (!c.activ) return
+      // r4 (#908, review r4 Jakarinos P1-01): TOATE scrierile pe coada extragerii sunt CAS pe cererea citită acum (cerut_la + cerut_de +
+      // activ); 'stop' = cererea a fost înlocuită / oprită între timp (sau workerul se oprește) → mă opresc fără s-o ating.
+      // r5 (review r5 Jakarinos P1-01): o scriere EȘUATĂ nu mai duce înapoi în buclă (ar reciti aceeași bucată și ar plăti din nou apelul AI):
+      // ACEEAȘI scriere (același rezultat deja obținut) se reîncearcă cu pauză crescătoare până reușește sau cererea e înlocuită / oprită.
+      const cerC = { cerut_la: c.cerut_la, cerut_de: c.cerut_de ?? null }
+      const scrieC = (patch: Record<string, unknown>): Promise<'ok' | 'stop' | 'reia'> =>
+        scrieCuReincercare(supabase, 'ofertare_extragere_coada', id, cerC, patch, { oprire: () => oprire, log: (m) => log(m) })
       // un apel lansat de tick-ul din Supabase (înainte să pornim noi) încă în zbor? îl lăsăm până expiră lease-ul
       if (c.req_id != null) {
         const vechime = Date.now() - new Date(c.lansat_la ?? 0).getTime()
         if (vechime < LEASE_TICK_MS) { inLucru.set(id, 'aștept apelul lansat de tick'); await sleep(30_000); continue }
-        await supabase.from('ofertare_extragere_coada').update({ req_id: null }).eq('licitatie_id', id)
+        const s0 = await scrieC({ req_id: null }); if (s0 === 'stop') return; if (s0 === 'reia') continue
       }
       const pasi: any[] = Array.isArray(c.pasi) ? c.pasi : []
       if (c.poz >= pasi.length) {
         const acum = new Date().toISOString()
         const nota = `${pasi.length} pași, ${c.cerinte_noi} cerințe noi, ${c.erori} pași cu eroare (worker NAS ${SHA})`
-        await supabase.from('ofertare_extragere_coada').update({ activ: false, terminat_la: acum, nota, ultimul_tick: acum }).eq('licitatie_id', id)
+        // r4: închiderea doar pe ACEEAȘI cerere (CAS); o cerere nouă pusă între timp nu se închide cu nota celei vechi
+        const sI = await scrieC({ activ: false, terminat_la: acum, nota, ultimul_tick: acum }); if (sI === 'stop') return; if (sI === 'reia') continue
         if (c.cerut_de) {
           const { data: li } = await supabase.from('ofertare_licitatii').select('id, nr_anunt').eq('id', id).maybeSingle()
           const { error: eN } = await supabase.from('notifications').insert({
@@ -78,6 +87,10 @@ async function proceseazaLicitatie(id: number) {
         log(`#${id}: GATA — ${nota}`)
         return
       }
+      // 20261124a (3A): un pas nou costă — doar dacă cine a cerut extragerea trece ACUM poarta pe cheltuială (poarta_coada.ts)
+      const { v: pc } = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id, cerC)
+      if (pc === 'refuz' || pc === 'inlocuita') { log(`#${id}: extragere ${pc === 'refuz' ? 'refuzată / oprită — cerut_de nu trece poarta pe cheltuială' : 'înlocuită de o cerere nouă'}`); return }
+      if (pc === 'eroare') { inLucru.set(id, 'aștept poarta pe cheltuială (eroare de citire)'); await sleep(30_000); continue }
       const pas = pasi[c.poz] ?? {}
       const body: Record<string, unknown> = { licitatie_id: id, bucata: c.bucata, bucata_max: BUCATA_MAX, model: c.model || 'claude-opus-5' }
       if (pas.doc_id != null) {
@@ -96,10 +109,11 @@ async function proceseazaLicitatie(id: number) {
       const el = pas.doc_id != null ? await documentEligibil(supabase, Number(pas.doc_id)) : null
       if (el && !el.eligibil && el.motiv !== 'eroare_poarta') {
         const acumL = new Date().toISOString()
-        await supabase.from('ofertare_extragere_coada').update({
+        const sL = await scrieC({
           poz: c.poz + 1, bucata: 0, incercari: 0, ultimul_tick: acumL,
           jurnal: [...(c.jurnal ?? []), { poz: c.poz, bucata: c.bucata, cerinte: 0, skip: mesajLot(el.motiv), blocat_lot: el.motiv, worker: NUME, la: acumL }],
-        }).eq('licitatie_id', id)
+        })
+        if (sL === 'stop') return; if (sL === 'reia') continue
         log(`#${id}: ${eticheta} sărit — ${mesajLot(el.motiv)}`)
         incercari = 0
         continue
@@ -112,13 +126,14 @@ async function proceseazaLicitatie(id: number) {
         const msg = String(r?.error ?? 'răspuns gol')
         log(`#${id}: ${eticheta} bucata ${c.bucata + 1} EROARE ${incercari}/${MAX_INCERCARI} (${ms} ms): ${msg}`)
         if (incercari >= MAX_INCERCARI) {
-          await supabase.from('ofertare_extragere_coada').update({
+          const sE = await scrieC({
             erori: c.erori + 1, poz: c.poz + 1, bucata: 0, incercari: 0, ultimul_tick: acum,
             jurnal: [...(c.jurnal ?? []), { poz: c.poz, bucata: c.bucata, eroare: msg.slice(0, 200), worker: NUME, la: acum }],
-          }).eq('licitatie_id', id)
+          })
+          if (sE === 'stop') return
           incercari = 0
         } else {
-          await supabase.from('ofertare_extragere_coada').update({ incercari, ultimul_tick: acum }).eq('licitatie_id', id)
+          if (await scrieC({ incercari, ultimul_tick: acum }) === 'stop') return
           await sleep(20_000 * incercari)
         }
         continue
@@ -128,10 +143,11 @@ async function proceseazaLicitatie(id: number) {
       const intrare: Record<string, unknown> = { poz: c.poz, bucata: c.bucata, cerinte: cer, bucati: r.bucati ?? null, ms, worker: NUME, la: acum }
       if (r.trunchiat === true) intrare.trunchiat = true
       if (r.skip) intrare.skip = r.skip
-      await supabase.from('ofertare_extragere_coada').update({
+      const sP = await scrieC({
         cerinte_noi: c.cerinte_noi + cer, bucata: continua ? (r.bucata_urmatoare ?? c.bucata + 1) : 0,
         poz: continua ? c.poz : c.poz + 1, incercari: 0, ultimul_tick: acum, jurnal: [...(c.jurnal ?? []), intrare],
-      }).eq('licitatie_id', id)
+      })
+      if (sP === 'stop') return
       log(`#${id}: ${eticheta} bucata ${c.bucata + 1}/${r.bucati ?? '?'} [${String(body.model).replace('claude-', '')}] → ${cer} cerințe${r.trunchiat ? ' (TĂIAT la max_tokens!)' : ''}${r.skip ? ' · ' + r.skip : ''} · ${ms} ms · ${r.cost_usd ?? '?'} USD`)
     }
   } catch (e) {
@@ -152,6 +168,15 @@ async function comitNou(): Promise<boolean> {
 for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => { log(`${s} — termin felia curentă și ies`); oprire = true })
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
+// 20261124a (3A + r2 P1-03): ingest / acoperire / clarificări pornesc doar dacă cerut_de trece poarta, iar procesarea primește o gardă
+// legată de cererea citită (cerut_la + cerut_de), întrebată înaintea FIECĂRUI apel plătit; scrierile pe coadă trec prin garda.scrie (CAS, r4).
+// La eroare de citire la pornire: pauză (fără cost), se reia.
+async function cuPoarta(tabel: CoadaAi, lid: number, lucru: (poarta: Garda) => Promise<unknown>) {
+  const { v, cerere } = await cerereaTrecePoarta(supabase, tabel, lid)
+  if (v === 'da' && cerere) return await lucru(gardaCheltuiala(supabase, tabel, lid, cerere, { oprire: () => oprire, log: (m) => log(m) }))
+  log(`#${lid}: ${tabel} ${v === 'eroare' ? 'poarta nu s-a putut verifica, reiau mai târziu' : v === 'refuz' ? 'refuzată — cerut_de nu trece poarta pe cheltuială' : 'înlocuită între timp'}`)
+  if (v === 'eroare') await sleep(30_000)
+}
 let ultimHb = Date.now(), ultimGit = Date.now()
 let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false, seapInLucru = false, plansaInLucru = false
 // R4 #142: citirea planșelor din ofertare_plansa_coada — același handler ca edge-ul, cu service_role și timeout pe AI.
@@ -172,7 +197,7 @@ while (!oprire) {
       if (lid) {
         ingestInLucru = true
         inLucru.set(-lid, 'citire documente')
-        proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`))
+        cuPoarta('ofertare_ingest_coada', lid, (p) => proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`), p))
           .catch(e => log('ingest:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-lid); ingestInLucru = false })
       }
@@ -184,7 +209,7 @@ while (!oprire) {
         acoperireInLucru = true
         inLucru.set(-1_000_000 - lid, 'acoperire')
         log(`#${lid}: propun acoperiri (coada)`)
-        proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`))
+        cuPoarta('ofertare_acoperire_coada', lid, (p) => proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`), p))
           .catch(e => log('acoperire:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-1_000_000 - lid); acoperireInLucru = false })
       }
@@ -196,7 +221,7 @@ while (!oprire) {
         clarificariInLucru = true
         inLucru.set(-2_000_000 - lid, 'clarificări')
         log(`#${lid}: propun clarificări (coada)`)
-        proceseazaClarificari(supabase, lid, s => inLucru.set(-2_000_000 - lid, `clarificări: ${s}`))
+        cuPoarta('ofertare_clarificari_coada', lid, (p) => proceseazaClarificari(supabase, lid, s => inLucru.set(-2_000_000 - lid, `clarificări: ${s}`), p))
           .catch(e => log('clarificari:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-2_000_000 - lid); clarificariInLucru = false })
       }

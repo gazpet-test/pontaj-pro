@@ -81,12 +81,16 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
     if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
     await load()
   }
+  // 20261208a: la o activitate principală (țintă din deviz), codurile / UM / tipul le schimbă doar Execuție editor / admin —
+  // refuzul vine din BD și se arată (înainte, eroarea se pierdea și ecranul arăta o salvare care nu avusese loc)
   const salveaza = async (id, patch) => {
-    await supabase.from('proiect_activitati').update(patch).eq('id', id)
+    const { data, error } = await supabase.from('proiect_activitati').update(patch).eq('id', id).select('id')
+    if (error || !data?.length) { showToast?.('Nu s-a salvat: ' + (error?.message || 'rândul nu mai există sau nu ai drept'), 'error'); await load(); return }
     setActs(list => list.map(a => a.id === id ? { ...a, ...patch } : a))
   }
   const sterge = async (id) => {
-    await supabase.from('proiect_activitati').delete().eq('id', id)
+    const { data, error } = await supabase.from('proiect_activitati').delete().eq('id', id).select('id')
+    if (error || !data?.length) { showToast?.('Nu s-a șters: ' + (error?.message || 'rândul nu mai există sau nu ai drept'), 'error'); await load(); return }
     setActs(list => list.filter(a => a.id !== id))
   }
   const sugereaza = async () => {

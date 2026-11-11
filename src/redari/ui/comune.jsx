@@ -4,6 +4,7 @@ import React, { useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { motivConvocatorUtilizator } from '../convocareUtilizatori.js'
 import { STARI } from '../stare.js'
+import { MOTIV_INFORMARE_NEPUBLICATA } from '../informareGdpr.js'
 
 export const SABLON_CONVOCATOR = '/redari/sabloane/convocator.docx'
 // Proiecții explicite (review Jakarinos P2-5): fără token_raspuns pe red_detinatori — tokenul stă în red_detinatori_token
@@ -72,6 +73,9 @@ export function motivBlocareConvocator(proiect, uat, rand) {
   const motivUtilizator = motivConvocatorUtilizator(proiect, rand)
   if (motivUtilizator) return motivUtilizator
   const lipsa = []
+  // Test weekend 06.11: fără autorizarea TGZ, „✓ gata” apărea în Setări / UAT-uri / Notificări, dar generarea era refuzată.
+  // Doar `false` explicit (proiectul încărcat prin cuInformarePublicata în Redari.jsx) blochează; lipsă / null = nu se știe aici.
+  if (proiect?.informare_publicata === false) lipsa.push(MOTIV_INFORMARE_NEPUBLICATA)
   if (rand) {
     if (rand.calitate === 'neidentificat') lipsa.push('deținător neidentificat → convocare prin afișare la Primărie')
     else if (rand.adresa_cunoscuta === false) lipsa.push('adresă necunoscută → convocare prin afișare la Primărie')

@@ -3,9 +3,10 @@
 export type Tabele = Record<string, Record<string, unknown>[]>
 
 // radarSecret: emulează fn_verifica_radar_secret — undefined = secretul NU există în vault (=> false mereu).
-export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string } = {}) {
+// eroareCheltuiala: RPC-ul fn_ofertare_poate_cheltui cade (poarta trebuie să refuze, fail-closed).
+export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string; eroareCheltuiala?: boolean } = {}) {
   // upsertate: payload-urile trimise la upsert, pe tabel (ca testele să verifice CE s-ar scrie, ex. tip_sursa)
-  const n = { scrieri: 0, storage: 0, ai: 0, rpcSecret: 0, citiri: [] as string[], upsertate: [] as { tabel: string; rows: any[] }[] }
+  const n = { scrieri: 0, storage: 0, ai: 0, rpcSecret: 0, rpcCheltuiala: 0, citiri: [] as string[], upsertate: [] as { tabel: string; rows: any[] }[] }
   const from = (t: string) => {
     let rows = [...(tabele[t] || [])]
     let scriere = false
@@ -26,11 +27,25 @@ export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string } = {}) {
   }
   const supa = {
     from,
-    rpc: (name: string, args?: { p_secret?: string | null }) => {
+    rpc: (name: string, args?: Record<string, unknown> & { p_secret?: string | null }) => {
       if (name === 'fn_verifica_radar_secret') {
         n.rpcSecret++
         const s = opt.radarSecret, p = args?.p_secret ?? ''
         return Promise.resolve({ data: s !== undefined && p.length === s.length && p === s, error: null })
+      }
+      if (name === 'fn_ofertare_poate_cheltui') {
+        // aceeași regulă ca SQL-ul din 20261124a: owner; sau responsabil 1/2 cu dovada de numire (2A: *_numitor_autorizat === true, scrisă de
+        // trigger la numire; numitorul ≠ responsabilul); numire veche fără „numit de” și fără dovadă (ambele lipsă / null) = permis (A)
+        n.rpcCheltuiala++
+        if (opt.eroareCheltuiala) return Promise.resolve({ data: null, error: { message: 'fake: poarta cheltuială căzută' } })
+        const a = (args ?? {}) as { p_licitatie_id?: number; p_uid?: string }
+        const prof = (u: unknown) => (tabele.profiles || []).find((p) => p.id === u)
+        const lic = (tabele.ofertare_licitatii || []).find((l) => String(l.id) === String(a.p_licitatie_id))
+        const ok = !!a.p_uid && a.p_licitatie_id != null && (prof(a.p_uid)?.is_owner === true || (!!lic &&
+          [[lic.responsabil_id, lic.responsabil_setat_de, lic.responsabil_numitor_autorizat],
+           [lic.responsabil2_id, lic.responsabil2_setat_de, lic.responsabil2_numitor_autorizat]]
+            .some(([r, s, d]) => r != null && r === a.p_uid && ((d === true && s !== a.p_uid) || (d == null && s == null)))))
+        return Promise.resolve({ data: ok, error: null })
       }
       n.scrieri++
       return Promise.resolve({ data: null, error: null })

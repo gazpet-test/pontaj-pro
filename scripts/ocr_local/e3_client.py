@@ -2,7 +2,11 @@
 
 Singura destinație a secretului este antetul POST către edge-ul fix. Transportul
 nu urmează redirecturi/proxy; erorile publice sunt coduri fără corpuri sau URL-uri.
+
+E9: refuzul edge-ului păstrează doar statusul HTTP (5xx = indisponibil, 4xx = refuz
+determinist); descărcarea separă rețeaua (`retea`) de PDF-ul invalid (`pdf_invalid`).
 """
+import http.client
 import json
 import pathlib
 import re
@@ -13,6 +17,13 @@ from .client import BASE, opener
 from .e3_contract import E3Error
 
 SECRET_FILE = pathlib.Path('C:/Users/Gazpet-Ai/.secrete/izo_ocr_local_secret.txt')
+
+
+def refuz(status):
+    """Refuzul edge-ului: numai codul și statusul HTTP (fără corp, URL sau secret)."""
+    e = E3Error('edge_refuz')
+    e.status = status if isinstance(status, int) else 0
+    return e
 
 
 def citeste_secret(path=SECRET_FILE):
@@ -41,10 +52,12 @@ class Edge:
         try:
             with self.transport.open(req, timeout=35 if op == 'arbitreaza' else 8) as r:
                 if r.status != 200:
-                    raise E3Error('edge_refuz')
+                    raise refuz(r.status)
                 return json.loads(r.read(524289))
-        except urllib.error.HTTPError:
-            raise E3Error('edge_refuz') from None
+        except E3Error:
+            raise
+        except urllib.error.HTTPError as e:
+            raise refuz(e.code) from None
         except Exception:
             # URL-urile semnate / secretul / textul OCR nu intră în excepția publică.
             raise E3Error('edge_transport') from None
@@ -59,9 +72,15 @@ class Edge:
         try:
             # Niciodată antetul de secret pe URL-ul Storage. Fără proxy sau redirect.
             with self.transport.open(urllib.request.Request(url), timeout=10) as r:
-                data = r.read(8388609)
-                if r.status != 200 or len(data) > 8388608:
-                    raise E3Error('pdf_invalid')
-                return data
+                data, status = r.read(8388609), r.status
+        except urllib.error.HTTPError as e:
+            # 5xx = Storage indisponibil (necunoscut, L05); 4xx / redirect = obiectul nu vine ca PDF.
+            raise E3Error('retea' if e.code >= 500 else 'pdf_invalid') from None
+        except (OSError, http.client.HTTPException):
+            # Conexiune refuzată / căzută / timeout / corp trunchiat: rețeaua, nu documentul.
+            raise E3Error('retea') from None
         except Exception:
-            raise E3Error('pdf_invalid') from None
+            raise E3Error('intern') from None
+        if status != 200 or len(data) > 8388608:
+            raise E3Error('retea' if status >= 500 else 'pdf_invalid')
+        return data

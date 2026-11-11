@@ -19,7 +19,7 @@
 // scris. Fiecare rulare lucrează cât îi permite bugetul, SCRIE ce a găsit, și întoarce
 // `continua: true` + indexul următor. Același tipar ca ofertare-seap-import.
 //
-// Auth: JWT de utilizator SAU x-radar-secret. Body: {licitatie_id, dry_run?, de_la?}.
+// Auth: JWT de utilizator + poarta pe cheltuială (x-radar-secret scos în #908 r4). Body: {licitatie_id, dry_run?, de_la?}.
 // ⚠️ dry_run = PREVIZUALIZARE AI PLĂTITĂ: apelurile AI rulează (consumă credit, se jurnalizează în
 // ai_usage_log), doar scrierea în ofertare_cantitati e sărită. NU e o probă gratuită; limitează cu max_felii.
 // Răspunsul poartă previzualizare_platita:true. (Propunere, neimplementată: mod `preflight` fără AI —
@@ -32,8 +32,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligibilLot.ts'
 import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
-import { poateCheltui } from './poarta.ts'
-import { MESAJ_ADMIN, motivRefuzAdmin } from './poarta_admin.ts'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 import { feliiDocument, type TipLista } from './sectiuni.ts'
 import { extrageStructurat, MAX_IESIRE } from './structurat.ts'
 import { raspunsCuPuls } from './puls.ts'
@@ -139,13 +138,6 @@ async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG:
 // FELIE / SUPRAPUNERE și feliile pe secțiuni (F3 / C6 / C7–C9): sectiuni.ts
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
 
-async function secretOk(req: Request, db: any): Promise<boolean> {
-  const s = req.headers.get('x-radar-secret')
-  if (!s) return false
-  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
-  return !error && data === true
-}
-
 const PROMPT = (nume: string, tip: string, obiectCurent: string) => `Ești inginer de devize într-o firmă de construcții de conducte. Citește bucata de mai jos din documentația unei licitații publice și extrage POZIȚIILE CANTITATIVE — materiale, lucrări, echipamente — cu cantitatea și unitatea lor.
 
 Document: "${nume}" (tip: ${tip})
@@ -207,14 +199,16 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 
   let uidApelant: string | null = null
   // TKT-0329 B: modul `structurat` (observații în ofertare_cant_obs, pe cerere de cheltuială activă) — x-radar-secret REFUZAT
-  // (secretul tehnic nu ține loc de acord, spec §4.3); doar utilizator owner / responsabil, sau admin Ofertare în condițiile din
-  // poarta_admin.ts (cerere activă exactă + plafon ≤ 5 USD + buget neblocat; 17.10.2026).
+  // (secretul tehnic nu ține loc de acord, spec §4.3); doar utilizator owner / responsabil 1-2 cu dovada de numire (poarta unică,
+  // 20261124a; excepția admin din 17.10 scoasă la 1A, 01.11.2026).
   let bodyBrut = ''
   try { bodyBrut = await req.clone().text() } catch { /* gol */ }
   let modCerut = ''
   try { modCerut = String(JSON.parse(bodyBrut || '{}')?.mod || '') } catch { /* gol */ }
   if (modCerut === 'structurat') return await ruleazaStructurat(req, deps, bodyBrut)
-  if (!(await secretOk(req, db))) {
+  // r4 (#908, review r3 Jakarinos P1-01): calea x-radar-secret e SCOASĂ și din modul vechi (fără apelanți în cron / edge / worker) —
+  // un secret tehnic nu ține loc de dreptul de cheltuială al unei persoane. Doar utilizator verificat de Auth + poarta unică.
+  {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim()
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
     uidApelant = await deps.getUser(jwt)
@@ -233,15 +227,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const M = MODELE[furnizor]
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
   // 25.09.2026 (audit țintit, CLAUDE.md 7d): apel PLĂTIT — „poarta pe cheltuială" și pe server, nu doar în UI.
-  // Pornește doar ownerul sau responsabilul licitației (calea x-radar-secret/worker rămâne neatinsă).
-  if (uidApelant) {
-    const [{ data: prof }, { data: lic }] = await Promise.all([
-      db.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
-      db.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-    ])
-    if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uidApelant))
-      return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
-  }
+  // Pornește doar ownerul sau responsabilul licitației (r4: fără excepția x-radar-secret).
+  if (!await poateCheltui(db, licId, uidApelant))   // poarta unică (20261124a): owner / responsabil 1-2 numit de owner sau admin
+    return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
   const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
     : furnizor === 'anthropic' ? (!KEY_A && 'ANTHROPIC_API_KEY')
     : (!KEY_O && 'OPENAI_API_KEY')
@@ -487,6 +475,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 }
 
 // ── TKT-0329 B: modul structurat ──
+export const MESAJ_STRUCTURAT = 'Extragerea costă — o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare.'
 async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Promise<Response> {
   if (req.headers.get('x-radar-secret')) return json({ error: 'Modul structurat nu acceptă x-radar-secret: pornește doar un utilizator, pe o cerere aprobată.' }, 403)
   const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim()
@@ -498,32 +487,14 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
   if (!cerereId) return json({ error: 'cerere_id lipsă — extragerea structurată pornește doar pe o cerere de cheltuială aprobată' }, 402)
   const db = deps.db
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    db.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
-    db.from('ofertare_licitatii').select('responsabil_id, stare_loturi').eq('id', licId).maybeSingle(),
+  const [poate, { data: lic }] = await Promise.all([
+    poateCheltui(db, licId, uid),   // poarta unică (20261124a): owner / responsabil 1-2 numit de owner sau admin Ofertare
+    db.from('ofertare_licitatii').select('stare_loturi').eq('id', licId).maybeSingle(),
   ])
-  if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uid)) {
-    // 17.10.2026 (decizia Răzvan „B”): un ADMIN Ofertare pornește DOAR pe o cerere activă a licitației, cu plafon ≤ 5 USD și buget
-    // neblocat (poarta_admin.ts). Adminul = aceeași interogare ca fn_ofertare_cb_este_admin (20261031d, neapelabilă din API).
-    // Ne-adminii primesc exact refuzul de până acum, fără citiri în cereri / buget. Orice eroare de citire = refuz (fail-closed).
-    // Clienții (Jakarinos r1 #753, P1-b): user_module_access cu service_role, ca profiles mai sus și ca celelalte edge-uri cu poartă de
-    // modul (detect_plate_orphan_msgs, extract-talon-ai, ofertare-raspuns-set) — tabelul nu e în lista de REVOKE din 20261031a.
-    // ofertare_ai_cereri / ofertare_ai_buget: 20261031a le REVOCĂ service_role (SELECT doar authenticated, policy fn_are_acces_ofertare(),
-    // pe care un admin Ofertare o îndeplinește) → se citesc cu clientul UTILIZATORULUI, ca în extrageStructurat.
-    const { data: uma, error: eUma } = await db.from('user_module_access').select('profile_id')
-      .eq('profile_id', uid).eq('module', 'ofertare').eq('access_level', 'admin').limit(1)
-    const esteAdmin = !eUma && Array.isArray(uma) && uma.length > 0
-    if (!esteAdmin) return json({ error: MESAJ_ADMIN.nu_e_admin }, 403)
-    if (!deps.dbUtilizator) return json({ error: 'configurare: client utilizator lipsă' }, 500)
-    const dbAdmin = deps.dbUtilizator(jwt)
-    const [{ data: cer, error: eCer }, { data: bug, error: eBug }] = await Promise.all([
-      dbAdmin.from('ofertare_ai_cereri').select('id, licitatie_id, scop, stare, valabil_pana').eq('id', cerereId).maybeSingle(),
-      dbAdmin.from('ofertare_ai_buget').select('plafon_usd, blocat').eq('licitatie_id', licId).eq('scop', 'cant_extragere').maybeSingle(),
-    ])
-    const motiv = motivRefuzAdmin({ este_admin: true, licitatie_id: licId, cerere_id: cerereId,
-      cerere: eCer ? null : cer ?? null, buget: eBug ? null : bug ?? null, acum: Date.now() })
-    if (motiv) return json({ error: MESAJ_ADMIN[motiv], motiv }, 403)
-  }
+  // 20261124a (decizia Răzvan 1A, 01.11.2026; review #908 r1 Copilot P1-02 / Jakarinos P1-3): excepția ADMIN din 17.10 („B”, poarta_admin.ts)
+  // e scoasă — cheltuie doar owner-ul și responsabilul 1 / 2 cu dovada de numire, prin poarta unică. Refuz și când RPC-ul porții cade
+  // (poateCheltui întoarce false la orice eroare), înainte de orice citire în cereri / buget și de orice apel AI.
+  if (!poate) return json({ error: MESAJ_STRUCTURAT }, 403)
   // PR A1: extractorul A (Haiku 5.5, structured outputs) DOAR la cerere explicită (`extractor: 'A'`); implicit rămâne B (gpt-5-mini)
   const extractor: 'A' | 'B' = body.extractor === 'A' ? 'A' : 'B'
   if (extractor === 'A' ? !deps.chei.A : !deps.chei.O) return json({ error: (extractor === 'A' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY') + ' lipsă din secretele funcției' }, 500)
