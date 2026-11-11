@@ -41,6 +41,20 @@
 #                     mostenit (rolul are 10 s) si mic (rolul are 500 ms), ultimele doua cu 0,8 s de lucru INAINTE de
 #                     $locks$. Asteptat in toate: sesiunea inchisa la ~2 s de la BEGIN (deci <= 2 s de la lock-uri);
 #  plafon_refuz       fara plafon in conexiune / ceas schimbat in tranzactie (alta valoare sau aceeasi) => refuz in $pre$.
+# r13 (harness-ul PG17 real, 11.11.2026: „plafon rev18a/mostenit: inchis la 3204 ms de la BEGIN”): CAUZA = ceasul de
+# perete al WSL2, nu migrarea si nu PostgreSQL. WSL2 isi potriveste ceasul cu gazda Windows in SALTURI (syslog-ul WSL:
+# „Clock change detected” la ~30-60 s; unul la 16:46:41.139, in fereastra probei 16:46:39.031-16:46:42.232). Toate
+# duratele probei se citesc pe ceasul de perete (xact_start, clock_timestamp, jurnalul serverului, date +%s) => un salt
+# inainte de ~1,2 s le umfla pe TOATE cu aceeasi marime: inchis 3201 ms (jurnal) / 3204 ms (fereastra), FEREASTRA 2348 ms
+# (= 2000 - 856 + 1204), TRAFIC 2344 ms. Ceasul transaction_timeout (setitimer ITIMER_REAL = ceas monoton) a inchis la
+# 2 s reali; un salt INAPOI ar fi micsorat masuratorile (ar fi putut ascunde o inchidere tarzie). Reparatia, in proba:
+#  ceas_*             abaterea ceasului de perete fata de cel MONOTON (/proc/uptime, neatins de potrivire) pe durata
+#                     fiecarei probe LOCK_CAP (si a cazului semantica armat_la_begin); |abatere| >= PORTAL_SALT_MS =>
+#                     masuratoarea e NEVALIDA in ambele sensuri (si cand ar fi trecut) si proba se repeta (cel mult
+#                     PORTAL_CAP_INCERCARI); ramasa nevalida = esec.
+#  CAP_ESECURI        un esec de plafon NU mai opreste harness-ul: se noteaza, se ruleaza toate cele 16 probe, volumul si
+#                     commit-ul lent, iar la final PLAFON_ESECURI = lista completa (harness-ul pica). Esecurile de
+#                     integritate (stare schimbata, sesiune ramasa, lock ramas) raman fatale pe loc.
 PORTAL_BUDGET_MS="${PORTAL_BUDGET_MS:-1000}"
 PORTAL_FEREASTRA_MS="${PORTAL_FEREASTRA_MS:-1000}"
 PORTAL_BLOCARE_MS="${PORTAL_BLOCARE_MS:-1000}"
@@ -54,6 +68,33 @@ PSQL_FARA=(env "PGOPTIONS=-c transaction_timeout=0" "${PSQL[@]}")
 LOCK_TABLES=(auth.users public.employees public.profiles public.user_module_access)
 BARIERA="DO \$b\$ BEGIN PERFORM pg_sleep(60); RAISE EXCEPTION 'PORTAL_BARIERA_EXPIRATA'; END \$b\$"
 PROBE_LIBER='citire auth.users=ok,scriere auth.users=ok,citire employees=ok,scriere employees=ok,citire profiles=ok,scriere profiles=ok,citire user_module_access=ok,scriere user_module_access=ok'
+PORTAL_SALT_MS=100       # r13: abaterea ceas de perete / ceas monoton peste care o masuratoare nu e valida (/proc/uptime = 10 ms)
+PORTAL_CAP_INCERCARI=3   # r13: incercari ale unei probe de plafon cand ceasul de perete a sarit in timpul ei
+CAP_ESECURI=(); CAP_PROBE=0; CAP_REPETARI=0; PRAG_DEPASIT=''
+
+# r13: ceasul monoton (ms). /proc/uptime (Linux, Git Bash) nu se schimba cand sistemul isi potriveste ceasul de perete;
+# altfel time.monotonic() din Python.
+ceas_mono_ms() {
+  local u=''
+  if [[ -r /proc/uptime ]] && read -r u _ </proc/uptime && [[ "$u" =~ ^[0-9]+\.[0-9]{2}$ ]]; then
+    echo $(( 10#${u/./} * 10 )); return 0
+  fi
+  python3 -c 'import time; print(int(time.monotonic() * 1000))'
+}
+ceas_start() { CEAS_R0="$(date +%s%3N)"; CEAS_M0="$(ceas_mono_ms)" || fail "ceas: niciun ceas monoton"; CEAS_SALT=0; }
+ceas_salt() { # CEAS_SALT = durata pe ceasul de perete - durata pe ceasul monoton (ms), de la ceas_start
+  local r1 m1
+  r1="$(date +%s%3N)"; m1="$(ceas_mono_ms)" || fail "ceas: niciun ceas monoton"
+  [[ "$r1" =~ ^[0-9]+$ && "$m1" =~ ^[0-9]+$ && "$CEAS_R0" =~ ^[0-9]+$ && "$CEAS_M0" =~ ^[0-9]+$ ]] || fail "ceas: valori invalide"
+  CEAS_SALT=$(( (r1 - CEAS_R0) - (m1 - CEAS_M0) ))
+}
+ceas_stabil() { (( CEAS_SALT < PORTAL_SALT_MS && CEAS_SALT > -PORTAL_SALT_MS )); }
+plafon_rezumat() { # r13: lista esecurilor de plafon (tiparita la final si la orice oprire)
+  local x
+  (( ${#CAP_ESECURI[@]} > 0 )) || return 0
+  echo "PLAFON_ESECURI: ${#CAP_ESECURI[@]} din $CAP_PROBE probe LOCK_CAP rulate (din 16) au picat:"
+  for x in "${CAP_ESECURI[@]}"; do echo "  ESEC_PLAFON $x"; done
+}
 
 # r11: clientul tine tranzactia deschisa intre doua parti, fara \! si fara FIFO. Iesirea producatorului = stdin-ul
 # clientului (psql -f -). Trimite partea 1 + un marcaj, asteapta ca SERVERUL sa fi terminat partea 1 (sesiunea
@@ -273,7 +314,7 @@ traffic_start() { # $1 eticheta
   for ((i=0;i<200;i++)); do grep -q 'PORTAL_TRAFIC ' "$TMP/traffic_$1.log" && return 0; sleep 0.05; done
   fail "trafic $1: nu a pornit"
 }
-traffic_stop() { # $1 eticheta, $2 plafonul in ms (0 = doar opreste)
+traffic_stop() { # $1 eticheta, $2 plafonul in ms (0 = doar opreste), $3 = moale: depasirea se noteaza in PRAG_DEPASIT (r13)
   local log="$TMP/traffic_$1.log" n max slow
   touch "$TMP/traffic_stop"; wait "$TRAFFIC_PID" || true
   [[ "$2" != 0 ]] || return 0
@@ -282,7 +323,11 @@ traffic_stop() { # $1 eticheta, $2 plafonul in ms (0 = doar opreste)
   max="$(grep -o 'PORTAL_TRAFIC [a-z_]* [0-9]*' "$log" | awk '{print $3}' | sort -n | tail -n 1 || true)"
   slow="$(grep -o 'PORTAL_TRAFIC [a-z_]* [0-9]*' "$log" | awk '$3 >= 5' | wc -l || true)"
   [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 && "$max" =~ ^[0-9]+$ ]] || fail "trafic $1: nicio operatie masurata"
-  (( max <= $2 )) || { grep -o 'PORTAL_TRAFIC [a-z_]* [0-9]*' "$log" | sort -k3 -n | tail -n 5; fail "trafic $1: asteptare $max ms > plafon $2 ms"; }
+  if (( max > $2 )); then
+    grep -o 'PORTAL_TRAFIC [a-z_]* [0-9]*' "$log" | sort -k3 -n | tail -n 5
+    [[ "${3:-}" == moale ]] || fail "trafic $1: asteptare $max ms > plafon $2 ms"
+    PRAG_DEPASIT+="trafic: asteptare $max ms > prag $2 ms; "
+  fi
   TRAFIC_MAX="$max"
   echo "TRAFIC $1: $n operatii concurente, $slow cu asteptare >= 5 ms, BLOCARE maxima $max ms (prag $2 ms)"
 }
@@ -328,26 +373,36 @@ fereastra_opreste() { # $1 eticheta
   [[ -z "$be" ]] || q "SELECT pg_cancel_backend($be)" >/dev/null
   wait "$FER_PID" || true
 }
-fereastra_stop() { # $1 eticheta, $2 pragul in ms; FER_MAX = cel mai lung segment, FER_FIN = sfarsitul lui (epoch ms)
+fereastra_stop() { # $1 eticheta, $2 pragul in ms, $3 = moale (r13, ca la traffic_stop); FER_MAX = cel mai lung segment, FER_FIN = sfarsitul lui (epoch ms)
   local log="$TMP/fer_$1.log" n max fin
   fereastra_opreste "$1"
   n="$(grep -c 'PORTAL_FEREASTRA_SEGMENT ' "$log" || true)"
   read -r max fin < <(grep -o 'PORTAL_FEREASTRA_SEGMENT [0-9]* [0-9]* [0-9]*' "$log" | awk '{print $3, $4}' | sort -n | tail -n 1 || true) || true
   FER_FIN="${fin:-}"
   [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 && "$max" =~ ^[0-9]+$ ]] || { cat "$log"; fail "fereastra $1: observatorul nu a vazut lock-urile livrarii"; }
-  (( max <= $2 )) || fail "fereastra $1: lock-uri tinute $max ms (de la primul lock la COMMIT) > prag $2 ms"
+  if (( max > $2 )); then
+    [[ "${3:-}" == moale ]] || fail "fereastra $1: lock-uri tinute $max ms (de la primul lock la COMMIT) > prag $2 ms"
+    PRAG_DEPASIT+="fereastra: lock-uri tinute $max ms > prag $2 ms; "
+  fi
   FER_MAX="$max"
   echo "FEREASTRA $1: $n segment(e), cel mai lung $max ms (prag $2 ms; plafonul din SQL ${PORTAL_PLAFON_MS} ms)"
 }
 masurat() { # $1 eticheta, $2 jurnalul, restul = comanda (runner ...); trafic + fereastra, praguri care pica testul
   local label="$1" log="$2"
   shift 2
+  PRAG_DEPASIT=''
+  ceas_start
   traffic_start "$label"
   fereastra_start "$label"
   "$@" >"$log" 2>&1 || { fereastra_opreste "$label"; traffic_stop "$label" 0 || true; cat "$log"; fail "livrare masurata $label"; }
-  fereastra_stop "$label" "$PORTAL_FEREASTRA_MS"
-  traffic_stop "$label" "$PORTAL_BLOCARE_MS"
-  echo "MASURAT $label: fereastra de lock $FER_MAX ms, blocare maxima a utilizatorilor $TRAFIC_MAX ms"
+  fereastra_stop "$label" "$PORTAL_FEREASTRA_MS" moale
+  traffic_stop "$label" "$PORTAL_BLOCARE_MS" moale
+  ceas_salt
+  # r13: livrarea reala nu se poate repeta in aceeasi rulare => cu ceasul de perete sarit masuratoarea e NEVALIDA in
+  # ambele sensuri (si sub prag: un salt inapoi micsoreaza timpii) si harness-ul pica cu motivul exact (de rerulat).
+  ceas_stabil || fail "masurat $label: ceasul de perete a sarit cu $CEAS_SALT ms in timpul masuratorii (${PRAG_DEPASIT:-sub prag}) => NEVALIDA, de rerulat"
+  [[ -z "$PRAG_DEPASIT" ]] || fail "masurat $label: ${PRAG_DEPASIT%; } (ceas stabil, abatere $CEAS_SALT ms)"
+  echo "MASURAT $label: fereastra de lock $FER_MAX ms, blocare maxima a utilizatorilor $TRAFIC_MAX ms; ceas stabil (abatere $CEAS_SALT ms)"
 }
 
 cap_parti() { # $1 artefactul, $2 marcajul runnerului (SQL), $3 modul, $4 partea 1, $5 partea 2
@@ -372,12 +427,15 @@ cap_parti() { # $1 artefactul, $2 marcajul runnerului (SQL), $3 modul, $4 partea
   [[ "$mod" != critic ]] || [[ "$(grep -c '^DO \$critic\$' "$4") $(grep -c '^DO \$critic\$' "$5")" == '0 1' ]] \
     || fail "plafon: \$critic\$ trebuie sa fie doar in partea 2 (critic)"
 }
-# r12: plafonul = ceasul pornit la BEGIN din conexiunea runnerului. Clientul e conectat EXACT ca runnerul (PSQL_LIV);
-# modurile mostenit / mic pun o valoare pe ROL (ca un ALTER ROLE ... SET de pe productie), pe care conexiunea o inlocuieste.
-# Asteptat in toate modurile: sesiunea inchisa de server la ~2 s de la BEGIN => lock-urile tinute <= 2 s pana la inchidere.
-lock_cap_refusal() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea dinainte), $4 marcajul, $5 critic|commit|mostenit|mic
+# r13: O INCERCARE. Esecurile de plafon (neinchis, inchis tarziu, praguri) se strang in CAP_MOTIV, nu opresc harness-ul;
+# cele de integritate (stare schimbata, sesiune ramasa, lock ramas, proba nefunctionala) raman fatale pe loc. CEAS_SALT =
+# abaterea ceasului de perete fata de cel monoton pe toata proba (de la pornirea traficului la oprirea observatorilor).
+lock_cap_incercare() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea dinainte), $4 marcajul, $5 critic|commit|mostenit|mic, $6 incercarea
   local label="$1" art="$2" stare="$3" marcaj="$4" mod="$5" et="cap_$1_$5" rc=0 n0 n1 tp xs got seg0 dela lucru rol="" vr="" vl
+  [[ "$6" == 1 ]] || et+="_i$6"
   local app="portal_$et" log="$TMP/$et.log" p1="$TMP/${et}_1.sql" p2="$TMP/${et}_2.sql"
+  CAP_MOTIV=''; CAP_LINIE=''; PRAG_DEPASIT=''
+  rm -f "$TMP/pauza_$app.t"
   [[ "$(q "$stare")" == t ]] || fail "plafon $label/$mod: starea initiala nu e cea asteptata"
   cap_parti "$art" "$marcaj" "$mod" "$p1" "$p2"
   case "$mod" in mostenit) rol='10s'; vr='10000/user' ;; mic) rol='500ms'; vr='500/user' ;; esac
@@ -391,34 +449,71 @@ lock_cap_refusal() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea d
   vl="$("${PSQL_LIV[@]}" -Atc "SELECT setting||'/'||source FROM pg_settings WHERE name='transaction_timeout'")"
   [[ "$vl" == "$PORTAL_PLAFON_MS/client" ]] || fail "plafon $label/$mod: conexiunea livrarii vede '$vl'"
   n0="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
+  ceas_start
   traffic_start "$et"
   fereastra_start "$et"
   # Clientul: partea 1, apoi 3 s fara nicio instructiune (stdin deschis, sesiunea 'idle in transaction'), apoi partea 2.
   producator "$app" "$p1" "$p2" sleep 3 | PGAPPNAME="$app" "${PSQL_LIV[@]}" -f - >"$log" 2>&1 || rc=$?
-  fereastra_stop "$et" $((PORTAL_PLAFON_MS + 500))
-  traffic_stop "$et" $((PORTAL_PLAFON_MS + 500))
+  fereastra_stop "$et" $((PORTAL_PLAFON_MS + 500)) moale
+  traffic_stop "$et" $((PORTAL_PLAFON_MS + 500)) moale
+  ceas_salt
   [[ -z "$rol" ]] || "${ADMIN[@]}" -d "$DB" -c 'ALTER ROLE postgres RESET transaction_timeout' >/dev/null
   n1="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
-  ! grep -q 'PORTAL_MARCAJ_NEATINS\|PORTAL_PLAFON_NEDECLANSAT' "$log" || { cat "$log"; fail "plafon $label/$mod: sesiunea NU a fost inchisa (sau nu a ajuns la pauza)"; }
-  [[ "$rc" != 0 ]] && (( n1 == n0 + 1 )) || { cat "$log"; fail "plafon $label/$mod: sesiunea trebuia inchisa de transaction_timeout (rc=$rc, jurnal $n0 -> $n1)"; }
+  ! grep -q 'PORTAL_MARCAJ_NEATINS' "$log" || { cat "$log"; fail "plafon $label/$mod: clientul nu a ajuns la pauza (proba nefunctionala)"; }
+  if grep -q 'PORTAL_PLAFON_NEDECLANSAT' "$log"; then
+    CAP_MOTIV+="sesiunea NU a fost inchisa de plafon (a ajuns la partea 2, ROLLBACK prin eroare explicita); "
+  elif ! [[ "$rc" != 0 ]] || ! (( n1 == n0 + 1 )); then
+    CAP_MOTIV+="sesiunea trebuia inchisa de transaction_timeout (rc=$rc, jurnal $n0 -> $n1); "
+  fi
+  [[ -z "$CAP_MOTIV" ]] || cat "$log"
   # Din a doua sesiune: sesiunea disparuta, niciun lock ramas (probele de utilizator trec toate), starea neschimbata.
   [[ "$(q "SELECT count(*) FROM pg_stat_activity WHERE application_name='$app'")" == 0 ]] || fail "plafon $label/$mod: sesiunea a ramas"
   got="$(probes "$PROBE_LIBER")"
   [[ "$got" == "$PROBE_LIBER" ]] || fail "plafon $label/$mod: dupa inchidere, probe '$got'"
   [[ "$(q "$stare")" == t ]] || fail "plafon $label/$mod: au ramas efecte dupa inchiderea sesiunii"
+  CAP_MOTIV+="$PRAG_DEPASIT"
+  [[ -z "$CAP_MOTIV" ]] || return 0
   # Timpii (ceasul serverului, xs = inceputul tranzactiei): pauza a inceput DUPA lock-uri si INAINTE de inchidere;
   # inchiderea la ~2 s de la BEGIN in TOATE modurile (nu la 2 s de la lock-uri, nu la valoarea rolului: 10 s / 0,5 s).
+  # r13: valabili doar cu ceasul de perete stabil pe durata probei (vezi lock_cap_refusal).
   read -r tp xs <"$TMP/pauza_$app.t"
   [[ "$tp" =~ ^[0-9]+$ && "$xs" =~ ^[0-9]+$ && "$FER_FIN" =~ ^[0-9]+$ ]] || fail "plafon $label/$mod: timpi lipsa"
   seg0=$(( FER_FIN - FER_MAX )); dela=$(( FER_FIN - xs )); lucru=$(( seg0 - xs ))
-  (( tp >= seg0 - 50 && tp < FER_FIN )) || fail "plafon $label/$mod: pauza ($tp) nu e intre lock-uri ($seg0) si inchidere ($FER_FIN)"
+  (( tp >= seg0 - 50 && tp < FER_FIN )) || CAP_MOTIV+="pauza ($tp) nu e intre lock-uri ($seg0) si inchidere ($FER_FIN); "
   (( dela >= PORTAL_PLAFON_MS - 50 && dela <= PORTAL_PLAFON_MS + 400 )) \
-    || fail "plafon $label/$mod: inchis la $dela ms de la BEGIN (asteptat ~${PORTAL_PLAFON_MS} ms; lock-urile la $lucru ms)"
-  (( FER_MAX <= dela )) || fail "plafon $label/$mod: lock-uri tinute $FER_MAX ms > $dela ms de la BEGIN"
+    || CAP_MOTIV+="inchis la $dela ms de la BEGIN (asteptat ~${PORTAL_PLAFON_MS} ms; lock-urile la $lucru ms); "
+  (( FER_MAX <= dela )) || CAP_MOTIV+="lock-uri tinute $FER_MAX ms > $dela ms de la BEGIN; "
   if [[ "$mod" == mostenit || "$mod" == mic ]]; then
-    (( lucru >= PORTAL_LUCRU_MS - 50 )) || fail "plafon $label/$mod: lock-urile la $lucru ms de la BEGIN (asteptat >= ${PORTAL_LUCRU_MS} ms de lucru inainte)"
+    (( lucru >= PORTAL_LUCRU_MS - 50 )) || CAP_MOTIV+="lock-urile la $lucru ms de la BEGIN (asteptat >= ${PORTAL_LUCRU_MS} ms de lucru inainte); "
   fi
-  echo "LOCK_CAP $label $mod: $(case "$mod" in critic) echo 'fara timeout prealabil, pauza 3 s intre $locks$ si $critic$' ;; commit) echo 'fara timeout prealabil, pauza 3 s dupa $critic$' ;; *) echo "rolul are $rol ($vr), ${PORTAL_LUCRU_MS} ms de lucru inainte de \$locks\$, pauza 3 s dupa \$critic\$" ;; esac); conexiunea livrarii $vl; lock-uri la $lucru ms de la BEGIN, sesiunea inchisa de server la $dela ms de la BEGIN (plafon ${PORTAL_PLAFON_MS} ms), lock-uri tinute $FER_MAX ms; ROLLBACK, sesiune disparuta, utilizatori liberi, nimic ramas; blocare maxima a traficului $TRAFIC_MAX ms"
+  CAP_LINIE="LOCK_CAP $label $mod: $(case "$mod" in critic) echo 'fara timeout prealabil, pauza 3 s intre $locks$ si $critic$' ;; commit) echo 'fara timeout prealabil, pauza 3 s dupa $critic$' ;; *) echo "rolul are $rol ($vr), ${PORTAL_LUCRU_MS} ms de lucru inainte de \$locks\$, pauza 3 s dupa \$critic\$" ;; esac); conexiunea livrarii $vl; lock-uri la $lucru ms de la BEGIN, sesiunea inchisa de server la $dela ms de la BEGIN (plafon ${PORTAL_PLAFON_MS} ms), lock-uri tinute $FER_MAX ms; ROLLBACK, sesiune disparuta, utilizatori liberi, nimic ramas; blocare maxima a traficului $TRAFIC_MAX ms; ceas stabil (abatere $CEAS_SALT ms)"
+}
+# r12: plafonul = ceasul pornit la BEGIN din conexiunea runnerului. Clientul e conectat EXACT ca runnerul (PSQL_LIV);
+# modurile mostenit / mic pun o valoare pe ROL (ca un ALTER ROLE ... SET de pe productie), pe care conexiunea o inlocuieste.
+# Asteptat in toate modurile: sesiunea inchisa de server la ~2 s de la BEGIN => lock-urile tinute <= 2 s pana la inchidere.
+# r13: o proba in timpul careia ceasul de perete a sarit (|CEAS_SALT| >= PORTAL_SALT_MS) e NEVALIDA in ambele sensuri
+# (un salt inainte umfla timpii, unul inapoi i-ar micsora) => se repeta, cel mult PORTAL_CAP_INCERCARI ori. O proba
+# valida care pica se noteaza in CAP_ESECURI (harness-ul continua si pica la final, cu lista completa).
+lock_cap_refusal() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea dinainte), $4 marcajul, $5 critic|commit|mostenit|mic
+  local k
+  CAP_PROBE=$((CAP_PROBE + 1))
+  for ((k=1;k<=PORTAL_CAP_INCERCARI;k++)); do
+    lock_cap_incercare "$@" "$k"
+    if ! ceas_stabil; then
+      CAP_REPETARI=$((CAP_REPETARI + 1))
+      echo "CEAS_SALT $1/$5 incercarea $k: ceasul de perete s-a abatut cu $CEAS_SALT ms fata de cel monoton in timpul probei => masuratoare NEVALIDA ($([[ -n "$CAP_MOTIV" ]] && echo "ar fi picat: ${CAP_MOTIV%; }" || echo 'ar fi trecut')); se repeta"
+      continue
+    fi
+    if [[ -z "$CAP_MOTIV" ]]; then
+      echo "$CAP_LINIE$( (( k == 1 )) || echo "; incercarea $k")"
+    else
+      CAP_ESECURI+=("$1/$5: ${CAP_MOTIV%; } (ceas stabil, abatere $CEAS_SALT ms; incercarea $k)")
+      echo "ESEC_PLAFON $1/$5: ${CAP_MOTIV%; } (ceas stabil, abatere $CEAS_SALT ms; incercarea $k) - harness-ul continua"
+    fi
+    return 0
+  done
+  CAP_ESECURI+=("$1/$5: NEVALID de $PORTAL_CAP_INCERCARI ori (ceasul de perete a sarit in fiecare incercare)")
+  echo "ESEC_PLAFON $1/$5: NEVALID de $PORTAL_CAP_INCERCARI ori (ceasul de perete a sarit in fiecare incercare) - harness-ul continua"
 }
 # r12: fara plafon in conexiune sau cu ceasul schimbat in tranzactie inaintea fisierului => refuz in $pre$, nimic schimbat.
 plafon_refuz() { # $1 eticheta, $2 artefactul, $3 SQL de stare, $4 marcajul
@@ -463,7 +558,16 @@ semantica_caz() { # $1 eticheta, $2 valoarea transaction_timeout din conexiune (
 }
 semantica_tt() {
   local DO0="DO \$s\$ BEGIN PERFORM set_config('transaction_timeout', '0', true); PERFORM set_config('transaction_timeout', '1s', true); END \$s\$"
-  semantica_caz armat_la_begin 1500 -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c 'SELECT pg_sleep(4)' -c 'ROLLBACK'
+  local k
+  # r13: singurul caz verificat cu prag => valabil doar cu ceasul de perete stabil (altfel se repeta, ca LOCK_CAP).
+  for ((k=1;k<=PORTAL_CAP_INCERCARI;k++)); do
+    ceas_start
+    semantica_caz armat_la_begin 1500 -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c 'SELECT pg_sleep(4)' -c 'ROLLBACK'
+    ceas_salt
+    ceas_stabil && break
+    echo "CEAS_SALT semantica/armat_la_begin incercarea $k: ceasul de perete s-a abatut cu $CEAS_SALT ms => masuratoare NEVALIDA; se repeta"
+  done
+  ceas_stabil || fail "semantica: ceasul de perete a sarit in toate cele $PORTAL_CAP_INCERCARI incercari ale cazului armat_la_begin"
   [[ "$SEM_REZ" == inchis ]] && (( SEM_MS >= 1450 && SEM_MS <= 2100 )) \
     || fail "semantica: ceasul armat la BEGIN din conexiune (1500 ms) nu a inchis sesiunea la ~1,5 s ($SEM_REZ, $SEM_MS ms) - designul r12 se bazeaza pe asta"
   semantica_caz setat_din_zero '' -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c "SET LOCAL transaction_timeout = '1s'" -c 'SELECT pg_sleep(4)' -c 'ROLLBACK'

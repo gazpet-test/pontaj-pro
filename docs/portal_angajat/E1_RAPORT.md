@@ -585,3 +585,47 @@ harness-ul tipareste `VOLUM: 400|400|1600|600|1500` si pica cu valorile gasite d
 | L20 | Trafic legitim concurent in toate probele de plafon (16), cu prag; traficul / observatorul ruleaza fara setarea de rol a probei. |
 | L25 | Comportamentul PG17 aratat (`semantica_tt`, prag pe singurul caz folosit), sesiuni reale, timpi pe ceasul serverului, a doua sesiune; nicio presupunere despre schimbarea ceasului in mijlocul tranzactiei. |
 | restul | n/a pentru delta r12 (plafon + harness + volum + runner). |
+
+## E1-1a/1b r13 — 11.11.2026 (un singur caz de plafon picat pe PG17 real: cauza = ceasul de perete al WSL)
+
+Harness-ul r12 (`bdf30bf0`) pe PostgreSQL 17.11 in WSL: `SEMANTICA_TT` confirma designul r12; `LOCK_CAP` trece pe 14 din
+16 variante (inchis la 2000–2002 ms de la BEGIN); pica `plafon rev18a/mostenit: inchis la 3204 ms de la BEGIN`
+(FEREASTRA 2348 ms, TRAFIC 2344 ms); `rev18a/mic` si volumul nu au mai rulat.
+
+### Cauza (din artefactele rularii, nu presupusa)
+- **Dovada directa:** `/var/log/syslog` din WSL: `systemd-resolved: Clock change detected` la **16:46:41.139**, adica in
+  fereastra probei (BEGIN 16:46:39.031 = `xact_start`; FATAL in jurnalul serverului 16:46:42.232). WSL2 isi potriveste
+  ceasul de perete cu gazda Windows in salturi: in syslog apar astfel de linii la ~30–60 s pe toata ziua.
+- **Toate cele trei masuratori sunt umflate cu ACEEASI marime (~1,2 s):** inchis 3201 ms (jurnal) / 3204 ms
+  (observator); FEREASTRA 2348 ms = 2000 − 856 + ~1200; TRAFIC 2344 ms. Exact asa arata un salt INAINTE de ~1,2 s:
+  duratele se citesc pe ceasul de perete (`xact_start`, `clock_timestamp()`, jurnal, `date`), iar ceasul
+  `transaction_timeout` e `setitimer(ITIMER_REAL)` (numara timp monoton). In timp real sesiunea a fost inchisa la 2 s.
+- **Ipotezele din brief, verificate:** (1) conexiunea nu primea `2000/client` — FALS: `$pre$` din aceeasi sesiune a trecut
+  (cere exact `2000/client`) si proba verificase `vl`; (2) instructiune neintreruptibila / `DROP ROLE` — FALS: sesiunea
+  era `idle in transaction` de la 901 ms (fisierul `pauza_*.t`: marcajul vazut de server), `$critic$` (cu `DROP ROLE`)
+  se terminase, iar clientul nu a mai trimis nimic pana la ~3,9 s; (3) proba masoara gresit pornirea clientului — FALS:
+  `xs` = `xact_start` al serverului, confirmat si de jurnal; (4) efect de ordine — FALS: starea verificata `t` inainte,
+  rolul resetat dupa fiecare proba. Ce masura gresit proba: durate pe un ceas care poate sari.
+- **Limita reala, mica (PostgreSQL):** la semnal, PG compara ceasul de perete cu termenul; un salt INAPOI de X ms in
+  timpul tranzactiei amana inchiderea cu X ms (inainte = inchidere la timp sau mai devreme). La fel bugetul de
+  asteptare al lock-urilor (`clock_timestamp() - now()`). Pe productie (NTP potriveste lin, fara salturi) neglijabil;
+  garantia exacta: „≤ 2 s pe ceasul serverului”. Nimic de schimbat in migrari sau in runner.
+
+### Ce s-a schimbat (doar harness-ul; migrarile, revenirile si runnerul #1054 neschimbate)
+- `ceas_*` (`concurrency_lock.sh`): abaterea ceasului de perete fata de ceasul MONOTON (`/proc/uptime`) pe toata durata
+  fiecarei probe `LOCK_CAP` si a cazului `semantica armat_la_begin`. |abatere| >= 100 ms => masuratoare **NEVALIDA in
+  ambele sensuri** (si cand ar fi trecut: un salt inapoi ar putea ascunde o inchidere tarzie) => linia `CEAS_SALT`, proba
+  se repeta (cel mult 3 incercari; nevalida de 3 ori = esec). `masurat` (aplicarile reale, nerepetabile) pica explicit
+  „NEVALIDA, de rerulat” daca ceasul a sarit; liniile `LOCK_CAP` / `MASURAT` arata abaterea.
+- Un esec de plafon NU mai opreste harness-ul: `ESEC_PLAFON <flux>/<mod>: <motive>` si se continua (toate 16 probe,
+  volumul, commit-ul lent); la final `PLAFON_ESECURI` = lista completa si cod 1 (lista se tipareste si la orice alta
+  oprire). Esecurile de integritate (stare schimbata, sesiune ramasa, lock ramas) raman fatale pe loc.
+- `harness_wsl.sh`: la final `CEAS_WSL` = liniile `Clock change detected` din syslog-ul WSL din timpul rularii (dovada
+  independenta pentru `CEAS_SALT`).
+
+| Regula | Dovada r13 |
+|---|---|
+| L14 | Neschimbat: refuz / inchidere = ROLLBACK la tot; dupa fiecare incercare (si repetare) starea verificata inainte de a continua. |
+| L18 | Masuratoare cu ceasul sarit = NEVALIDA (nu „trecut”), in ambele sensuri; esecurile listate toate, nu doar primul. |
+| L25 | Cauza aratata din artefactele rularii (syslog WSL, jurnalul serverului, fisierul pauzei, observatorul), nu presupusa; timpii validati fata de un ceas independent (monoton). |
+| restul | n/a pentru delta r13 (doar harness). |

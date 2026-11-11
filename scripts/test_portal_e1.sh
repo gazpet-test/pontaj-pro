@@ -48,7 +48,8 @@ PG_LOG="$TMP/pg.log"
 trap '"$PG_BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null 2>&1 || true' EXIT
 ADMIN=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U supabase_admin)
 PSQL=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB")
-fail() { echo "ESEC: $*" >&2; exit 1; }
+# r13: orice oprire tipareste si lista esecurilor de plafon strinse pana atunci (imaginea completa a rularii).
+fail() { echo "ESEC: $*" >&2; ! declare -F plafon_rezumat >/dev/null || plafon_rezumat >&2 || true; exit 1; }
 q() { "${PSQL[@]}" -Atc "$1"; }
 cluster_nou() { # r10: cluster efemer NOU in $DATA (jurnal $PG_LOG), aceeasi configuratie si fixture; seteaza SIS
   if [[ "$NATIV" == 1 ]]; then
@@ -450,4 +451,10 @@ DATA="$TMP/pg_commit"; PG_LOG="$TMP/pg_commit.log"
 cluster_nou
 lock_commit_lent 18a "$MIG" "$STARE_18A_NEAPLICAT" "$MARCAJ_18A" \
   'auth.users=ShareRowExclusiveLock,public.employees=ShareRowExclusiveLock,public.profiles=ShareLock,public.user_module_access=-'
-echo "PASS PORTAL_E1_1A+1B r12 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER$([[ "$NATIV" == 1 ]] && echo ', binare native PORTAL_PG_BIN')); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum; plafon ${PORTAL_PLAFON_MS} ms de la BEGIN pana la intrarea in COMMIT (ceasul din conexiunea runnerului) dovedit pe 18a / 19a / rev19a / rev18a (4 moduri: fara timeout prealabil x2, rol 10 s, rol 500 ms) + refuzurile fara plafon / ceas schimbat; COMMIT-ul intarziat NU e plafonat (LOCK_COMMIT_LENT)"
+# r13: un esec de plafon nu opreste harness-ul; aici, dupa volum si commit-ul lent, lista completa => cod 1.
+if (( ${#CAP_ESECURI[@]} > 0 )); then
+  fail "plafon: ${#CAP_ESECURI[@]} din $CAP_PROBE probe LOCK_CAP picate (lista PLAFON_ESECURI); restul harness-ului (volum, commit lent) a rulat si a trecut"
+fi
+(( CAP_PROBE == 16 )) || fail "plafon: $CAP_PROBE probe LOCK_CAP rulate, asteptat 16"
+echo "PLAFON_TOATE: 16/16 probe LOCK_CAP trecute cu ceasul de perete stabil (abatere < ${PORTAL_SALT_MS} ms fata de ceasul monoton); probe repetate dupa un salt de ceas: $CAP_REPETARI"
+echo "PASS PORTAL_E1_1A+1B r13 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER$([[ "$NATIV" == 1 ]] && echo ', binare native PORTAL_PG_BIN')); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum; plafon ${PORTAL_PLAFON_MS} ms de la BEGIN pana la intrarea in COMMIT (ceasul din conexiunea runnerului) dovedit pe 18a / 19a / rev19a / rev18a (4 moduri: fara timeout prealabil x2, rol 10 s, rol 500 ms) + refuzurile fara plafon / ceas schimbat; COMMIT-ul intarziat NU e plafonat (LOCK_COMMIT_LENT)"
