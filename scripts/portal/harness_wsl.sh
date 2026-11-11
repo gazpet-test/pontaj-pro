@@ -6,6 +6,29 @@ SLOT="${1:?slot 0-9}"; [[ "$SLOT" =~ ^[0-9]$ ]] || exit 2
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # r13: inceputul rularii, in formatul syslog-ului (ora locala), pentru CEAS_WSL de la final.
 T0="$(date '+%Y-%m-%dT%H:%M:%S')"
+# r16: procesele unei rulari = cele cu directorul de lucru sau linia de comanda in /tmp/portal_e1_<slot>_* (harness) sau
+# /tmp/livrare_plafon_<slot>_* (proba runnerului). $1 = prefixul cautat. Tipareste PID-urile (fara procesul curent).
+procese_rulare() {
+  local p pid cwd cmd out=''
+  for p in /proc/[0-9]*; do
+    pid="${p#/proc/}"; [[ "$pid" != "$$" && "$pid" != "$BASHPID" ]] || continue
+    cwd="$(readlink "$p/cwd" 2>/dev/null || true)"
+    cmd="$(tr '\0' ' ' 2>/dev/null <"$p/cmdline" || true)"
+    [[ "$cwd" == "$1"* || "$cmd" == *"$1"* ]] && out+="$pid "
+  done
+  echo "${out% }"
+}
+# r16 (harness r15): o bucla de trafic ramasa dintr-o rulare oprita pe ACELASI slot loveste clusterul nou de pe acelasi
+# port (r15: 4 probe LOCK_CAP „mic” picate, instructiunile ei inchise de valoarea rolului). Refuz, nu oprire automata:
+# coordonatorul vede ce a ramas si il opreste el.
+RAMASE="$(procese_rulare "/tmp/portal_e1_${SLOT}_") $(procese_rulare "/tmp/livrare_plafon_${SLOT}_")"
+RAMASE="$(echo $RAMASE)"
+if [[ -n "$RAMASE" ]]; then
+  echo "MEDIU: procese ramase din rulari anterioare pe slotul $SLOT (porturi $((6700+SLOT)) / $((6790+SLOT))): $RAMASE"
+  ps -o pid,etime,args -p "${RAMASE// /,}" 2>/dev/null | cut -c1-200 || true
+  echo "MEDIU: opriti-le (ex.: kill $RAMASE) si rerulati; harness-ul NU a pornit"
+  exit 2
+fi
 # Fara stergeri recursive si fara suprascrierea unui slot existent.
 DST="$(mktemp -d "/tmp/portal_e1_${SLOT}_XXXXXXXX")"
 mkdir -p "$DST/supabase"
@@ -39,6 +62,13 @@ if [[ -r /var/log/syslog ]]; then
   N_CEAS="$(awk -v t0="$T0" 'substr($1,1,19) >= t0 && /Clock change detected/' /var/log/syslog | wc -l)" || N_CEAS='?'
   echo "CEAS_WSL: $N_CEAS linii 'Clock change detected' in /var/log/syslog de la $T0 (WSL isi potriveste ceasul de perete in salturi)"
   awk -v t0="$T0" 'substr($1,1,19) >= t0 && /Clock change detected/ {print "CEAS_WSL   " $1}' /var/log/syslog | tail -n 20 || true
+fi
+# r16: fara procese ramase din ACEASTA rulare (bucle de trafic, observatori, clienti psql).
+RAMASE="$(procese_rulare "$DST") $(procese_rulare "/tmp/livrare_plafon_${SLOT}_")"; RAMASE="$(echo $RAMASE)"
+if [[ -n "$RAMASE" ]]; then
+  echo "ESEC: procese ramase dupa rulare: $RAMASE (opriti-le: kill $RAMASE)"; RC=1
+else
+  echo "PROCESE: niciun proces ramas din rulare"
 fi
 echo "portal E1-1a+1b slot=$SLOT cod=$RC; copie/log: $DST"
 exit "$RC"

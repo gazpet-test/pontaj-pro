@@ -332,7 +332,10 @@ traffic_start() { # $1 eticheta
   local i
   [[ -e "$TMP/traffic.sql" ]] || traffic_sql
   rm -f "$TMP/traffic_stop"; : >"$TMP/traffic_$1.log"
-  ( while [[ ! -e "$TMP/traffic_stop" ]]; do
+  # r16: bucla se opreste si cand harness-ul care a pornit-o nu mai exista ($$ = shell-ul principal). In r15 o bucla
+  # ramasa dintr-o rulare oprita pe acelasi slot a lovit clusterul NOU de pe acelasi port (vezi trafic_strain).
+  local parinte=$$
+  ( while [[ ! -e "$TMP/traffic_stop" ]] && kill -0 "$parinte" 2>/dev/null; do
       "${PSQL_FARA[@]}" -f "$TMP/traffic.sql" >>"$TMP/traffic_$1.log" 2>&1 || echo 'PORTAL_TRAFIC_EROARE' >>"$TMP/traffic_$1.log"
     done ) &
   TRAFFIC_PID=$!
@@ -478,6 +481,7 @@ lock_cap_incercare() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea
     -c "SELECT setting||'/'||source FROM pg_catalog.pg_settings WHERE name='transaction_timeout'" -c ROLLBACK)"
   [[ "$vl" == "$PORTAL_PLAFON_MS/session" ]] || fail "plafon $label/$mod: tranzactia livrarii vede '$vl'"
   n0="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
+  local l0; l0="$(wc -l <"$PG_LOG")"
   ceas_start
   traffic_start "$et"
   fereastra_start "$et"
@@ -493,6 +497,16 @@ lock_cap_incercare() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea
     CAP_MOTIV+="sesiunea NU a fost inchisa de plafon (a ajuns la partea 2, ROLLBACK prin eroare explicita); "
   elif ! [[ "$rc" != 0 ]] || ! (( n1 == n0 + 1 )); then
     CAP_MOTIV+="sesiunea trebuia inchisa de transaction_timeout (rc=$rc, jurnal $n0 -> $n1); "
+    # r16: verdictul ramane acelasi (exact O inchidere in fereastra, a clientului); se arata CE s-a inchis in plus.
+    # Traficul si observatorul harness-ului au transaction_timeout = 0 (PSQL_FARA) => o inchidere a unei instructiuni de
+    # trafic vine de la un client STRAIN (r15: bucla ramasa dintr-o rulare veche pe acelasi slot / port).
+    local inch
+    inch="$(tail -n "+$((l0 + 1))" "$PG_LOG" | grep -A 3 'terminating connection due to transaction timeout' || true)"
+    echo "INCHIDERI_IN_FEREASTRA $label/$mod (jurnalul serverului de la linia $((l0 + 1))):"
+    printf '%s\n' "$inch" | grep 'FATAL\|STATEMENT\|QUERY' | sed 's/^/  /' | head -n 30 || true
+    if [[ "$inch" == *PORTAL_TRAFIC* ]]; then
+      CAP_MOTIV+="CLIENT STRAIN: instructiuni de trafic inchise de plafon (traficul harness-ului are 0) => mediu contaminat, vezi harness_wsl.sh; "
+    fi
   fi
   [[ -z "$CAP_MOTIV" ]] || cat "$log"
   # Din a doua sesiune: sesiunea disparuta, niciun lock ramas (probele de utilizator trec toate), starea neschimbata.

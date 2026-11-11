@@ -765,3 +765,39 @@ dar nu poate comite” era FALSA (taiata mai sus). Al doilea recenzent: GO cu co
 | L20 | Caile legitime: fara optiune neschimbat (`PLAFON_FARA`, `FORMA_FARA`); triggerele amanate legitime ruleaza tot (doar mai devreme); `PLAFON_OK` / `PLAFON_ROL` / `PLAFON_POOLER` comit. |
 | L25 | Expected independent (psql fals + impartitor propriu de mesaje); PG17 real, NOSUPERUSER; fiecare mutant cu control functional. |
 | restul | n/a pentru delta r15 (doar runnerul + testele lui + `harness_wsl.sh`). |
+
+## E1-1a/1b r16 — 11.11.2026 (harness-ul PG17 pe r15: 3 esecuri, toate de MEDIU / TEST; runnerul si SQL-ul neschimbate)
+
+Rularea r15 (`harness_wsl.sh 5`, PG 17.11): `harness=1 validator=0 forma=1 runner=1`. Cauzele, din loguri:
+
+1. **RUNNER — `rearmare control: cod 10`.** Controlul e construit corect: proba de semantica din ACEEASI rulare
+   (`SEMANTICA_TT armat_0_apoi_1s_in_DO`: oprit apoi repornit cu 1 s la 0,5 s ⇒ inchis la 1508 ms) arata ca pe 17.11
+   oprirea + repornirea pornesc un ceas NOU, deci controlul (ceas nou de 2 s la ~1,55 s, COMMIT la ~2,6 s) trebuia sa
+   comita. Serverul l-a inchis la 20:02:29.119, la 0,6 s dupa un salt al ceasului de perete WSL (20:02:28.524, lista
+   `CEAS_WSL`): timeout-urile PostgreSQL masoara pe ceasul de perete, un salt inainte le declanseaza mai devreme. Testul
+   runnerului nu avea detectorul de salt pe care il are harness-ul (r13).
+   Reparat: `asteapta_ceas` pe cazurile cu timpi (lent, garda timp, rearmare, functie, amanat, cursor + controalele lor) —
+   abatere perete/monoton ≥ 100 ms = caz NEVALID in ambele sensuri (si cand ar fi trecut), curatat si repetat (≤ 3 ori).
+2. **FORMA — `fara: fisierele trimise mentioneaza plafonul`.** Fals pozitiv al testului: baza tinta a testului se numea
+   `plafon_test`, iar `1_pre.sql` (fara optiune, neschimbat) contine `current_database() IS DISTINCT FROM 'plafon_test'`.
+   Runnerul fara optiune trimite aceleasi fisiere ca inainte. Reparat: baza `forma_test`, garda ca datele testului nu
+   contin cuvintele cautate si CONTROL ca aceeasi cautare gaseste plafonul in fisierele trimise CU optiune.
+3. **HARNESS — `ESEC_PLAFON */mic` (4 din 16).** Proba asteapta `rc != 0` SI exact o inchidere noua in jurnalul serverului
+   (`n1 == n0 + 1`); a primit `rc=2` si 3 inchideri. Jurnalul serverului arata in fiecare fereastra „mic” doua instructiuni
+   de TRAFIC inchise la 500 ms (valoarea pusa pe rol) inaintea clientului. Traficul harness-ului are `transaction_timeout = 0`
+   si jurnalul lui e curat: instructiunile veneau de la o bucla de trafic RAMASA dintr-o rulare anterioara oprita pe
+   acelasi slot (alt director din `/tmp`, alta versiune), care se conecta la clusterul nou de pe acelasi port. Nu e
+   regresie (codul harness-ului e identic intre r14 si r15).
+   Reparat, fara sa slabeasca proba (tot exact O inchidere, a clientului): bucla de trafic se opreste si cand harness-ul
+   care a pornit-o nu mai exista; la orice iesire (si la `fail`) harness-ul opreste buclele din fundal inaintea clusterului;
+   `harness_wsl.sh` refuza sa porneasca daca pe slot au ramas procese din rulari vechi si verifica la final ca rularea
+   n-a lasat procese; la o numaratoare gresita proba tipareste inchiderile din fereastra si marcheaza `CLIENT STRAIN`.
+
+SQL-ul celor 4 fisiere: neschimbat (SHA-urile raman). Runnerul (`livrare_migrare.sh`): neschimbat.
+
+| Regula | Dovada r16 |
+|---|---|
+| L18 | Saltul de ceas = NEVALID, nu „trecut”; numaratoarea gresita ramane esec, cu cauza tiparita (`INCHIDERI_IN_FEREASTRA`, `CLIENT STRAIN`). |
+| L20 | Proba nu e slabita: tot `n1 == n0 + 1`; controlul de rearmare tot trebuie sa COMITA; forma tot cauta `transaction_timeout` / `plafon`, acum cu control pozitiv. |
+| L25 | Expected independent: control pozitiv in testul de forma; validitatea timpilor fata de ceasul monoton (`/proc/uptime`). |
+| restul | n/a (doar teste + harness). |

@@ -47,7 +47,17 @@ PORT_RC=0; "$PG_BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT" -t 2 || PORT_RC=$?
 mkdir -p "$TMP"
 export TMPDIR="$TMP"
 PG_LOG="$TMP/pg.log"
-trap '"$PG_BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null 2>&1 || true' EXIT
+# r16: la ORICE iesire (si la fail in mijlocul unei probe) se opresc intai buclele din fundal (trafic, observator,
+# clienti), apoi clusterul. In r15 o bucla de trafic ramasa dintr-o rulare oprita a lovit clusterul urmatoarei rulari
+# pe acelasi port (4 probe LOCK_CAP „mic” picate).
+iesire_curata() {
+  local j
+  touch "$TMP/traffic_stop" 2>/dev/null || true
+  j="$(jobs -pr)"; [[ -z "$j" ]] || kill $j 2>/dev/null || true
+  wait 2>/dev/null || true
+  "$PG_BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null 2>&1 || true
+}
+trap iesire_curata EXIT
 ADMIN=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U supabase_admin)
 PSQL=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB")
 # r13: orice oprire tipareste si lista esecurilor de plafon strinse pana atunci (imaginea completa a rularii).
