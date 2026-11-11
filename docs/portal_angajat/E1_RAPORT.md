@@ -335,9 +335,10 @@ functiilor `LANGUAGE sql` le analizeaza corpul), iar verificatorul static nu pri
    stergerile (reveniri). Un singur drum dus-intors client-server in loc de ~20.
 4. **Plafonul**: la obtinerea lock-urilor, `$locks$` seteaza `statement_timeout` 2 s (pentru `$critic$`) si porneste
    `transaction_timeout` = 2 s de la zero (intai 0, ca un plafon mai mare mostenit de la rol / baza sa nu ramana activ).
-   **Garantia reala**: serverul termina sesiunea daca tranzactia nu s-a incheiat in 2 s de la primul lock tinut — oricate
-   instructiuni, oricat dureaza fiecare, oricat asteapta clientul sau reteaua intre ele (inclusiv inregistrarea runnerului
-   si COMMIT-ul). Terminarea = ROLLBACK, toate lock-urile eliberate, runnerul raporteaza NEAPLICAT (cod 10).
+   **[Formulare GRESITA in r10, corectata in r11 — vezi sectiunea r11: COMMIT-ul propriu-zis NU e plafonat.]**
+   Serverul termina sesiunea daca tranzactia nu a ajuns la COMMIT in 2 s de la obtinerea lock-urilor — oricate
+   instructiuni, oricat dureaza fiecare, oricat asteapta clientul sau reteaua intre ele (inclusiv inregistrarea
+   runnerului). Terminarea = ROLLBACK, toate lock-urile eliberate, runnerul raporteaza NEAPLICAT (cod 10).
    `statement_timeout` singur NU ar fi ajuns: nu acopera pauzele dintre instructiuni.
 5. **Fereastra 18a -> 19a (P2-01)**: in `$critic$`, sub SHARE ROW EXCLUSIVE pe auth.users (niciun cont nou pana la
    COMMIT), 19a clasifica `neaprobat` (sursa `reconciliere_e1_1b`) orice cont fara rand in `conturi_tip` (creat cu
@@ -349,7 +350,9 @@ functiilor `LANGUAGE sql` le analizeaza corpul), iar verificatorul static nu pri
 6. **Revenirile**: aceleasi reguli (punctele 1–4).
 
 ### Lock-urile si cat tin (r10)
-Fereastra = de la primul lock tinut pe tabelele utilizatorilor pana la COMMIT; plafonul e 2 s in toate fisierele.
+Fereastra = de la primul lock tinut pe tabelele utilizatorilor pana la eliberarea lor (dupa COMMIT); plafonul de 2 s
+acopera tot pana la INTRAREA in COMMIT, in toate fisierele; COMMIT-ul adauga durata scrierii lui (r11). „Cel mult 2 s”
+din tabel = „cel mult 2 s pana la intrarea in COMMIT + COMMIT-ul (de regula milisecunde)”.
 
 | Fisier | Tabel | Nivel | Instructiunea care il cere | Ce blocheaza |
 |---|---|---|---|---|
@@ -398,3 +401,82 @@ alternativa ar fi renuntarea la rolurile noi in CHECK (schimbare de design, nu d
 | L20 | Cai legitime: trafic concurent fara erori pe aplicari SI reveniri; contul obisnuit aparut intre livrari trece (neaprobat). |
 | L25 | Sesiuni reale + bariere care nu pot face COMMIT, fereastra masurata de alta sesiune, prag care pica testul, plafon dovedit cu sesiune inchisa de server, volum pe cluster nou, PG17 NOSUPERUSER. |
 | L03–L05, L07–L11, L13, L16, L17, L19, L21–L24 | n/a pentru delta r10. |
+
+## E1-1a/1b r11 — 11.11.2026 (garantia de timp formulata exact si dovedita pe toate cele 4 fluxuri)
+
+Ambii recenzenti r10: NO-GO doar pe garantia de timp. Jakarinos P2: PG17 dezactiveaza `transaction_timeout` la intrarea
+in COMMIT (xact.c REL_17_STABLE, inainte de `RecordTransactionCommit()`), cand lock-urile sunt inca tinute => un COMMIT
+intarziat (flush WAL, replicare sincrona) poate depasi 2 s fara rollback; formularea r10 („pana la COMMIT, inclusiv
+COMMIT-ul”) era deci gresita. Al doilea recenzent P1-01: nu era DEMONSTRAT ca ceasul setat in tranzactia deja inceputa
+porneste de la setare si acopera pauza clientului dintre `$locks$` si `$critic$`; proba exista doar pentru 19a si nu
+fusese rulata.
+
+### Garantia, formulata exact (aceeasi in 18a, 19a, revenirea 19a, revenirea 18a)
+- **Ce plafoneaza ceasul.** `$locks$`, imediat dupa obtinerea lock-urilor, seteaza `transaction_timeout` intai pe 0
+  (opreste un ceas mostenit de la rol / baza / inceputul tranzactiei), apoi pe 2 s: PG17 porneste ceasul in acel moment
+  daca nu e deja pornit (de aici cele doua setari). De acolo PANA LA INTRAREA IN COMMIT trec cel mult 2 s: instructiunea
+  `$critic$`, inregistrarea runnerului, orice pauza a clientului sau a retelei intre instructiuni (inclusiv intre
+  `$locks$` si `$critic$`). Peste 2 s serverul termina sesiunea (FATAL, si cand e activa, si cand asteapta clientul) =>
+  ROLLBACK, toate lock-urile eliberate, nimic schimbat, runnerul raporteaza NEAPLICAT.
+- **Ce NU plafoneaza.** COMMIT-ul propriu-zis. PG17 opreste `transaction_timeout` la intrarea in COMMIT, iar
+  `statement_timeout` e oprit inainte de commit; lock-urile se elibereaza abia dupa scrierea commit-ului. COMMIT-ul
+  adauga deci: constrangerile amanate (niciuna: fara `DEFERRABLE` in cele 4 fisiere), scrierea + flush-ul WAL (de regula
+  milisecunde) si, NUMAI daca serverul are replicare sincrona configurata, asteptarea standby-ului — nelimitata de niciun
+  timeout (proba `lock_commit_lent` o arata). Daca productia nu are replicare sincrona, COMMIT-ul = flush WAL local;
+  de confirmat pe instanta reala in DRY (chat-ul): `SHOW synchronous_standby_names` (asteptat gol) si `synchronous_commit`.
+- **Pe scurt:** sectiunea critica e plafonata la 2 s pana la intrarea in COMMIT; COMMIT-ul adauga durata scrierii WAL,
+  de regula milisecunde. Nu promitem „maximum 2 s” pe toata durata lock-urilor.
+
+### DECIZIE pentru Razvan (de scris „da” / „nu” inainte de aplicare)
+1. **Acceptarea limitei:** la aplicare si la reveniri, lock-urile pe tabelele utilizatorilor tin cel mult 2 s pana la
+   intrarea in COMMIT + durata COMMIT-ului (de regula milisecunde). Pe 19a si pe reveniri asta inseamna ca, in acest
+   interval, loginurile si (pe profiles / la reveniri) citirile ERP asteapta. Daca serverul ar avea replicare sincrona si
+   standby-ul ar fi blocat, COMMIT-ul ar putea tine mai mult; nu exista mecanism PostgreSQL care sa-l anuleze (o
+   anulare in timpul asteptarii doar o opreste, tranzactia ramane comisa local).
+2. **Fereastra de aplicare:** in afara orelor de lucru (seara tarziu / dimineata devreme, cand aproape nimeni nu e
+   logat), cu chat-ul urmarind runnerul; inainte, in DRY pe clona: `SHOW synchronous_standby_names` (asteptat gol) si
+   timpii reali (estimare: sub 0,3 s de la primul lock la eliberare).
+
+### Ce s-a schimbat in r11
+1. **Formularea** in cele 4 fisiere SQL (antet + blocul `$locks$`, textul `PORTAL_LOCKS ... pana la intrarea in COMMIT`),
+   in acest raport si in `E1_REVENIRE_AUTH.md`. Logica SQL neschimbata (aceleasi instructiuni, aceleasi lock-uri).
+2. **`lock_cap_refusal` pe TOATE cele 4 fluxuri** (18a, 19a, revenire 19a, revenire 18a), in 3 moduri, cu sesiuni reale:
+   - `critic`: clientul sta 3 s INTRE `$locks$` si `$critic$` (fara nicio instructiune; sesiunea „idle in transaction”);
+   - `commit`: clientul sta 3 s DUPA `$critic$`, inainte de COMMIT;
+   - `mostenit`: un `transaction_timeout` de 10 s pornit la inceputul tranzactiei + 3 s de lucru pe server INAINTE de
+     `$locks$` + pauza de 3 s dupa `$critic$`. Arata semantica reala: daca ceasul ar porni la inceputul tranzactiei,
+     sesiunea ar muri inainte de lock-uri (fara fereastra => test picat); daca ceasul mostenit ar ramane activ, ar muri
+     la 10 s (fereastra ~6 s => test picat). Asteptat: inchidere la ~2 s de la lock-uri si ~5 s de la inceput.
+   Pentru fiecare: sesiunea inchisa de server (o linie noua `terminating connection due to transaction timeout` in
+   jurnalul serverului), fereastra de lock masurata din ALTA sesiune intre 1,9 s si 2,5 s, pauza clientului incepuse
+   dupa lock-uri si inainte de inchidere (ceasul serverului), sesiunea disparuta, cele 8 probe de utilizator libere,
+   starea neschimbata, traficul concurent asteapta <= 2,5 s. Daca sesiunea NU ar fi inchisa, clientul trimite o eroare
+   explicita (`PORTAL_PLAFON_NEDECLANSAT`) => ROLLBACK, testul pica (nu se comite nimic din greseala).
+3. **`lock_commit_lent` (proba optionala, pastrata fiindca e simpla si sigura):** pe un cluster efemer nou dedicat,
+   autovacuum oprit, `synchronous_standby_names` spre un standby inexistent (confirmat: o tranzactie de proba asteapta
+   SyncRep). 18a ruleaza complet si intra in COMMIT; dupa 3 s sesiunea e tot in COMMIT (SyncRep), cu lock-urile 18a,
+   fara `transaction timeout`; la eliberarea asteptarii tranzactia se COMITE (starea = aplicat). Fereastra masurata > 3 s.
+   Deci limita e reala si exact cea descrisa mai sus.
+4. **Rulare fara WSL (punctul 4 din brief):** `scripts/portal/harness_win.sh` = harness-ul din Git Bash cu binarele
+   Windows PostgreSQL 17 (`PORTAL_PG_BIN`, implicit `C:\Users\Public\pgsql\bin`), fara `su` / `chown`, copie LF noua in
+   `C:\Users\Public\paw-data\tmp_portal_<slot>_XXXXXXXX`, cluster efemer pe 127.0.0.1:6700+slot (verificat liber cu
+   `pg_isready`; clona chat-ului de pe 5433 nu e atinsa), fara socket unix, locale builtin C.UTF-8. Ca sa mearga pe
+   Windows, harness-ul nu mai foloseste meta-comenzi psql (`\!` ruleaza in cmd.exe) si nici FIFO: pauzele / barierele
+   clientului sunt SQL trimis pe stdin, dupa ce serverul a terminat partea 1 (`pg_stat_activity`: „idle in transaction”
+   cu marcajul ca ultima instructiune) — la fel in `lock_budget_refusal` si in cursa din `concurrency_1b.sh`.
+   Adaptoarele `psql` / `pg_dump` scot CR-ul din iesirea Windows. Linux / WSL: neschimbat (`harness_wsl.sh`).
+
+### Dovezi (de rulat de chat; la mine `psql` / binarele PG si `bash -n` cer aprobare)
+- `bash scripts/portal/harness_win.sh 3 60` (Git Bash, din worktree). In log: `LOCK_CAP 18a|19a|rev19a|rev18a
+  critic|commit|mostenit` (12 linii), `LOCK_COMMIT_LENT 18a`, restul probelor r10, ultima `PASS ... r11 ...` cu `cod=0`.
+- Sau WSL cu PG17: `harness_wsl.sh` (neschimbat), aceleasi linii.
+
+| Regula | Dovada r11 |
+|---|---|
+| L01 / L06 | Neschimbate (ordinea si NOWAIT din r10); probele ruleaza pe fisierele reale, nu pe copii simplificate. |
+| L02 | Coada = `$critic$`; in modul `critic` partea 2 incepe exact cu `$critic$` (verificat: un singur `$locks$` in partea 1, `$critic$` doar in partea 2). |
+| L14 | O tranzactie; ROLLBACK la inchidere verificat prin starea dinainte, pe aplicari si pe reveniri. |
+| L18 | Inchiderea se dovedeste pozitiv (linie noua in jurnalul serverului + fereastra masurata), nu din lipsa unei erori; marcaj neatins / plafon nedeclansat = eroare explicita. |
+| L20 | Traficul legitim concurent (citiri / scrieri, login simulat) masurat in toate cele 12 probe, prag care pica testul. |
+| L25 | Sesiuni reale + bariera pe stdin dupa starea serverului (fara sleep orb), timpi pe ceasul serverului, a doua sesiune pentru eliberare, praguri care pica testul, PG17 NOSUPERUSER, comportamentul real aratat (modul `mostenit`, COMMIT intarziat), nu presupus. |
+| L03–L05, L07–L13, L15–L17, L19, L21–L24 | n/a pentru delta r11 (doar comentarii SQL + harness). |

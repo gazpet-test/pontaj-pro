@@ -18,10 +18,15 @@
 -- r10 (al doilea recenzent r9 P1-01, punctul 7): aceleasi reguli ca aplicarea. Timeout-urile sunt primele instructiuni
 --  (inaintea lock-ului consultativ, luat cu pg_try_advisory_xact_lock + refuz); inainte de $locks$ nu se atinge niciun
 --  tabel existent; dupa $locks$ ramane o singura instructiune ($critic$: verificarea „fara date noi” + DROP-urile);
---  transaction_timeout = 2 s de la obtinerea lock-urilor pana la COMMIT (altfel sesiunea se inchide => ROLLBACK).
+--  transaction_timeout = 2 s de la obtinerea lock-urilor (altfel sesiunea se inchide => ROLLBACK).
 --  ACCESS EXCLUSIVE pe auth.users / employees e cerut exact de DROP TABLE conturi_tip / conturi_teren: stergerea unui
 --  FK sterge triggerele RI de pe tabelul referit (RemoveTriggerById), care cer ACCESS EXCLUSIVE; nu exista varianta
 --  mai slaba. Durata lui e plafonata la 2 s si masurata in harness.
+-- r11 (Jakarinos r10 P2 + al doilea recenzent r10 P1-01), formularea exacta (aceeasi semantica PG17 ca 18a): plafonul
+--  de 2 s acopera tot de la obtinerea lock-urilor PANA LA INTRAREA IN COMMIT ($critic$, inregistrarea runnerului,
+--  pauzele clientului / retelei, inclusiv intre $locks$ si $critic$). COMMIT-ul propriu-zis NU e plafonat: PG17 opreste
+--  ceasul la intrarea in COMMIT, iar ACCESS EXCLUSIVE se elibereaza dupa scrierea commit-ului (flush WAL, de regula
+--  milisecunde; asteptarea standby-ului numai cu replicare sincrona). Dovedit in harness (lock_cap_refusal rev18a).
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -79,11 +84,12 @@ BEGIN
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  -- r10: plafonul sectiunii critice (vezi 18a): 2 s de aici pana la COMMIT, pornit de la zero.
+  -- r10 / r11: plafonul sectiunii critice (vezi 18a): 2 s de aici pana la INTRAREA in COMMIT, pornit de ACUM (0, apoi
+  -- 2 s); COMMIT-ul propriu-zis (flush WAL / replicare sincrona) nu e plafonat.
   PERFORM set_config('statement_timeout', '2s', true);
   PERFORM set_config('transaction_timeout', '0', true);
   PERFORM set_config('transaction_timeout', '2s', true);
-  RAISE NOTICE 'PORTAL_LOCKS 18a revenire: % incercari, % ms; plafon 2 s pana la COMMIT', v_n,
+  RAISE NOTICE 'PORTAL_LOCKS 18a revenire: % incercari, % ms; plafon 2 s pana la intrarea in COMMIT', v_n,
     round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $locks$;
 -- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock) si stergerile.

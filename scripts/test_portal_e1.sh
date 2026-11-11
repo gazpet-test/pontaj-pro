@@ -5,18 +5,41 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_MAJOR="${PORTAL_PG_MAJOR:-17}"
 # r10: migrarile cer PostgreSQL 17 (transaction_timeout = plafonul sectiunii critice); PG16 nu mai e acceptat.
 [[ "$PG_MAJOR" == 17 ]] || { echo 'MEDIU: migrarile cer PG17 (transaction_timeout)'; exit 2; }
-PG_BIN="${PG_BIN:-/usr/lib/postgresql/$PG_MAJOR/bin}"
 SLOT="${PORTAL_E1_SLOT:-0}"
 [[ "$SLOT" =~ ^[0-9]$ ]] || exit 2
 [[ "$(id -u)" != 0 ]] || { echo 'MEDIU: ruleaza ca postgres, nu root'; exit 2; }
-[[ -x "$PG_BIN/initdb" ]] || { echo "MEDIU: PG$PG_MAJOR lipsa"; exit 2; }
-[[ "$("$PG_BIN/postgres" --version)" == *" $PG_MAJOR."* ]] || { echo "MEDIU: este necesar PG$PG_MAJOR"; exit 2; }
 for v in PGPASSWORD PGOPTIONS PGDATABASE PGSERVICE PGSERVICEFILE PGHOSTADDR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS PGSYSCONFDIR PSQLRC; do
   [[ -z "${!v+x}" ]] || { echo "MEDIU: variabila $v nepermisa"; exit 2; }
 done
 PORT=$((6700+SLOT)); DB=portal_e1_test
 TMP="$ROOT/.tmp/portal_e1_$SLOT"; DATA="$TMP/pg"
 [[ ! -e "$TMP" ]] || { echo 'MEDIU: slot existent, alege altul'; exit 2; }
+# r11: PORTAL_PG_BIN = binare native (ex. PostgreSQL 17 pentru Windows, rulat din Git Bash; scripts/portal/harness_win.sh),
+# fara su / chown. Prin adaptoare in $TMP/bin: psql / pg_dump fara CR la capat de linie (iesirea Windows), restul direct.
+NATIV=0
+if [[ -n "${PORTAL_PG_BIN:-}" ]]; then
+  NATIV=1
+  ! command -v cygpath >/dev/null 2>&1 || PORTAL_PG_BIN="$(cygpath -u "$PORTAL_PG_BIN")"
+  EXE=''; [[ ! -e "$PORTAL_PG_BIN/initdb.exe" ]] || EXE=.exe
+  [[ -x "$PORTAL_PG_BIN/initdb$EXE" && -x "$PORTAL_PG_BIN/psql$EXE" ]] || { echo "MEDIU: PORTAL_PG_BIN fara initdb / psql"; exit 2; }
+  mkdir -p "$TMP/bin"
+  for b in initdb pg_ctl postgres pg_isready; do
+    printf '#!/usr/bin/env bash\nexec "%s/%s%s" "$@"\n' "$PORTAL_PG_BIN" "$b" "$EXE" >"$TMP/bin/$b"
+  done
+  for b in psql pg_dump; do
+    printf '#!/usr/bin/env bash\nset -o pipefail\n"%s/%s%s" "$@" | tr -d %s\n' "$PORTAL_PG_BIN" "$b" "$EXE" "'\\r'" >"$TMP/bin/$b"
+  done
+  chmod +x "$TMP/bin"/*
+  PG_BIN="$TMP/bin"
+  export PGCLIENTENCODING=UTF8 LC_MESSAGES=C PYTHONUTF8=1
+else
+  PG_BIN="${PG_BIN:-/usr/lib/postgresql/$PG_MAJOR/bin}"
+  [[ -x "$PG_BIN/initdb" ]] || { echo "MEDIU: PG$PG_MAJOR lipsa"; exit 2; }
+fi
+[[ "$("$PG_BIN/postgres" --version)" == *" $PG_MAJOR."* ]] || { echo "MEDIU: este necesar PG$PG_MAJOR"; exit 2; }
+# r11: portul trebuie sa fie liber (ex. clona locala a chat-ului ruleaza pe 5433; harness-ul foloseste 6700 + slot).
+PORT_RC=0; "$PG_BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT" -t 2 || PORT_RC=$?
+[[ "$PORT_RC" == 2 ]] || { echo "MEDIU: portul $PORT e ocupat (pg_isready=$PORT_RC), alege alt slot"; exit 2; }
 mkdir -p "$TMP"
 export TMPDIR="$TMP"
 PG_LOG="$TMP/pg.log"
@@ -26,9 +49,18 @@ PSQL=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgre
 fail() { echo "ESEC: $*" >&2; exit 1; }
 q() { "${PSQL[@]}" -Atc "$1"; }
 cluster_nou() { # r10: cluster efemer NOU in $DATA (jurnal $PG_LOG), aceeasi configuratie si fixture; seteaza SIS
-  "$PG_BIN/initdb" -D "$DATA" -U supabase_admin --auth=trust --encoding=UTF8 --locale=C.UTF-8 >>"$TMP/init.log"
-  "$PG_BIN/pg_ctl" -D "$DATA" -l "$PG_LOG" -w -t 30 start \
-    -o "-p $PORT -c listen_addresses=127.0.0.1 -c unix_socket_directories='$TMP'"
+  if [[ "$NATIV" == 1 ]]; then
+    # r11: Windows nu are localul C.UTF-8 => providerul builtin C.UTF-8 al PG17 (Unicode, ca pe Linux); fara socket unix,
+    # doar 127.0.0.1; setarile in postgresql.conf (ghilimelele simple din -o nu trec prin linia de comanda Windows).
+    "$PG_BIN/initdb" -D "$DATA" -U supabase_admin --auth=trust --encoding=UTF8 --locale=C \
+      --locale-provider=builtin --builtin-locale=C.UTF-8 >>"$TMP/init.log"
+    printf "port = %s\nlisten_addresses = '127.0.0.1'\nunix_socket_directories = ''\n" "$PORT" >>"$DATA/postgresql.conf"
+    "$PG_BIN/pg_ctl" -D "$DATA" -l "$PG_LOG" -w -t 30 start
+  else
+    "$PG_BIN/initdb" -D "$DATA" -U supabase_admin --auth=trust --encoding=UTF8 --locale=C.UTF-8 >>"$TMP/init.log"
+    "$PG_BIN/pg_ctl" -D "$DATA" -l "$PG_LOG" -w -t 30 start \
+      -o "-p $PORT -c listen_addresses=127.0.0.1 -c unix_socket_directories='$TMP'"
+  fi
   "${ADMIN[@]}" -d postgres -f "$ROOT/supabase/tests/portal_e1_prodlike_bootstrap.sql"
   "${ADMIN[@]}" -d "$DB" -f "$ROOT/supabase/tests/portal_e1_schelet.sql"
   "${ADMIN[@]}" -d "$DB" -f "$ROOT/supabase/tests/portal_e1_1b_fixture.sql"
@@ -158,6 +190,10 @@ lock_budget_refusal 18a 20261118120000 "$MIG" \
   "UPDATE auth.users SET email=email WHERE id='00000000-0000-0000-0000-000000000002'" \
   'citire auth.users=ok,scriere auth.users=ok,scriere employees=ok,citire profiles=ok,scriere profiles=ok'
 [[ "$(q "$STARE_18A_NEAPLICAT")" == t ]] || fail 'partial 18a after lock budget refusal'
+# r11 (al doilea recenzent r10 P1-01): plafonul pe 18a, in cele 3 moduri (pauza intre $locks$ si $critic$, dupa $critic$,
+# ceas mostenit de 10 s + 3 s inainte de $locks$): sesiunea inchisa la ~2 s de la lock-uri, ROLLBACK, nimic ramas.
+MARCAJ_18A="SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate:'||txid_current(),true)"
+lock_cap_toate 18a "$MIG" "$STARE_18A_NEAPLICAT" "$MARCAJ_18A"
 # r10: aplicarea reala prin runner cu trafic concurent (citiri / scrieri profiles si employees, login simulat pe auth.users)
 # si observatorul pg_locks: fereastra de lock (primul lock -> COMMIT) si blocarea maxima a utilizatorilor, cu praguri.
 masurat 18a "$TMP/apply.log" runner 20261118120000 "$MIG"
@@ -230,9 +266,9 @@ lock_observe 19a 'auth.users=ShareRowExclusiveLock,public.employees=ShareRowExcl
 lock_budget_refusal 19a 20261119120000 "$MIG_1B" 'SELECT count(*) FROM public.profiles' \
   'citire auth.users=ok,scriere auth.users=ok,scriere employees=ok,citire profiles=ok,scriere profiles=ok'
 [[ "$(q "$STARE_19A_NEAPLICAT")" == t ]] || fail 'partial E1-1b after lock budget refusal'
-# r10 (P1-01): plafonul de BLOCARE. 19a ruleaza complet, apoi clientul sta 3 s intre instructiuni cu lock-urile tinute
-# (profiles ACCESS EXCLUSIVE = cazul cel mai rau): serverul inchide sesiunea la 2 s de la primul lock, ROLLBACK.
-lock_cap_refusal 19a "$MIG_1B" "$STARE_19A_NEAPLICAT" -c "$MARCAJ_19A"
+# r10 / r11 (P1-01): plafonul de BLOCARE pe 19a (profiles ACCESS EXCLUSIVE = cazul cel mai rau), in cele 3 moduri:
+# serverul inchide sesiunea la ~2 s de la obtinerea lock-urilor, ROLLBACK, lock-uri eliberate, nimic ramas.
+lock_cap_toate 19a "$MIG_1B" "$STARE_19A_NEAPLICAT" "$MARCAJ_19A"
 masurat 19a "$TMP/apply_1b.log" runner 20261119120000 "$MIG_1B"
 grep -q 'PORTAL_LOCKS 19a' "$TMP/apply_1b.log" || { cat "$TMP/apply_1b.log"; fail 'apply 19a fara PORTAL_LOCKS'; }
 grep -q 'PORTAL_1B_RECONCILIATE: 0 ' "$TMP/apply_1b.log" || { cat "$TMP/apply_1b.log"; fail 'apply 19a: reconcilierea trebuia sa gaseasca 0 conturi'; }
@@ -293,6 +329,8 @@ lock_pre_observe rev19a "$REV_1B" "$TAB_UTIL $TAB_18A $TAB_19A" -c "$MARCAJ_REV1
 lock_observe rev19a 'auth.users=AccessExclusiveLock,public.employees=AccessExclusiveLock,public.profiles=AccessExclusiveLock,public.user_module_access=ShareLock' \
   'citire auth.users=blocat,scriere auth.users=blocat,citire employees=blocat,scriere employees=blocat,citire profiles=blocat,scriere profiles=blocat,citire user_module_access=ok,scriere user_module_access=blocat' \
   "SELECT to_regclass('public.portal_provisioning') IS NOT NULL" -c "$MARCAJ_REV19A" -f "$REV_1B"
+# r11: plafonul pe revenirea 19a (ACCESS EXCLUSIVE pe auth.users / employees / profiles), cele 3 moduri; 19a ramane aplicat.
+lock_cap_toate rev19a "$REV_1B" "SELECT to_regclass('public.portal_provisioning') IS NOT NULL" "$MARCAJ_REV19A"
 masurat rev19a "$TMP/rollback_1b.log" runner 20261119120001 "$REV_1B"
 q "DROP FUNCTION public.alt_modul_fixture(); DROP TABLE public.alt_modul_fixture_tabel;
  UPDATE public.facturi SET suma=suma-1 WHERE id=1" >/dev/null
@@ -339,7 +377,7 @@ python3 - "$REV" "$ATTESTED_REV" <<'PY'
 from pathlib import Path
 import sys
 source, target = map(Path, sys.argv[1:])
-target.write_text("SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true);\n" + source.read_text(encoding='utf-8'), encoding='utf-8')
+target.write_text("SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true);\n" + source.read_text(encoding='utf-8').replace('\r\n', '\n'), encoding='utf-8', newline='\n')
 PY
 MARCAJ_REV18A="SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate_ROLLBACK:'||txid_current(),true)"
 lock_pre_observe rev18a "$ATTESTED_REV" "$TAB_UTIL $TAB_18A" -c "$MARCAJ_REV18A"
@@ -347,6 +385,8 @@ lock_pre_observe rev18a "$ATTESTED_REV" "$TAB_UTIL $TAB_18A" -c "$MARCAJ_REV18A"
 lock_observe rev18a 'auth.users=AccessExclusiveLock,public.employees=AccessExclusiveLock,public.profiles=-,public.user_module_access=-' \
   'citire auth.users=blocat,scriere auth.users=blocat,citire employees=blocat,scriere employees=blocat,citire profiles=ok,scriere profiles=ok,citire user_module_access=ok,scriere user_module_access=ok' \
   "SELECT to_regclass('public.conturi_tip') IS NOT NULL" -c "$MARCAJ_REV18A" -f "$ATTESTED_REV"
+# r11: plafonul pe revenirea 18a (ACCESS EXCLUSIVE pe auth.users / employees), cele 3 moduri; 18a ramane aplicat.
+lock_cap_toate rev18a "$ATTESTED_REV" "SELECT to_regclass('public.conturi_tip') IS NOT NULL" "$MARCAJ_REV18A"
 masurat rev18a "$TMP/rollback.log" runner 20261118120001 "$ATTESTED_REV"
 [[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 ]] || fail 'role left'
 [[ "$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('conturi_tip','conturi_teren','conturi_tip_jurnal','conturi_tip_jurnal_id_seq')")" == 0 ]] || fail 'tables left'
@@ -378,4 +418,11 @@ masurat vol_19a "$TMP/vol_19a.log" runner 20261119120000 "$MIG_1B"
 masurat vol_rev19a "$TMP/vol_rev19a.log" runner 20261119120001 "$REV_1B"
 masurat vol_rev18a "$TMP/vol_rev18a.log" runner 20261118120001 "$ATTESTED_REV"
 [[ "$(q "SELECT to_regclass('public.conturi_tip') IS NULL AND NOT EXISTS (SELECT FROM pg_roles WHERE rolname='teren')")" == t ]] || fail 'volum: revenirea incompleta'
-echo "PASS PORTAL_E1_1A+1B r10 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum, plafon ${PORTAL_PLAFON_MS} ms dovedit"
+# r11 (Jakarinos r10 P2): LIMITA plafonului, aratata: COMMIT intarziat (replicare sincrona spre un standby inexistent),
+# pe un cluster nou dedicat (fixture-ul de baza), fiindca proba lasa 18a COMIS.
+"$PG_BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null
+DATA="$TMP/pg_commit"; PG_LOG="$TMP/pg_commit.log"
+cluster_nou
+lock_commit_lent 18a "$MIG" "$STARE_18A_NEAPLICAT" "$MARCAJ_18A" \
+  'auth.users=ShareRowExclusiveLock,public.employees=ShareRowExclusiveLock,public.profiles=ShareLock,public.user_module_access=-'
+echo "PASS PORTAL_E1_1A+1B r11 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER$([[ "$NATIV" == 1 ]] && echo ', binare native PORTAL_PG_BIN')); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum; plafon ${PORTAL_PLAFON_MS} ms pana la intrarea in COMMIT dovedit pe 18a / 19a / rev19a / rev18a (3 moduri); COMMIT-ul intarziat NU e plafonat (LOCK_COMMIT_LENT)"

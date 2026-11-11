@@ -28,8 +28,9 @@ Revenirile 19a si 18a refuza (nimic schimbat) daca dupa aplicare a aparut orice 
   nou in jurnale;
 - orice deriva pe lista alba (functii, triggere, RLS, ACL, secvente) sau pe lista PUBLIC / net;
 - lock-urile ocupate mai mult de 3 s (`PORTAL_LOCK_BUDGET`, 55P03): se reincearca intr-o fereastra mai linistita;
-- r10: sectiunea critica (de la primul lock la COMMIT) peste 2 s (`transaction_timeout`; serverul inchide sesiunea):
-  ROLLBACK, runnerul raporteaza NEAPLICAT (cod 10); se cauta cauza (retea / server incarcat) inainte de reluare.
+- r10 / r11: sectiunea critica (de la obtinerea lock-urilor pana la intrarea in COMMIT) peste 2 s (`transaction_timeout`;
+  serverul inchide sesiunea): ROLLBACK, runnerul raporteaza NEAPLICAT (cod 10); se cauta cauza (retea / server incarcat)
+  inainte de reluare. COMMIT-ul propriu-zis nu e plafonat (vezi mai jos).
 
 Refuzul e sigur pentru date, dar dupa utilizare normala revenirea NU e un buton de urgenta. Procedura:
 1. Login-ul: 18a / 19a nu pornesc hook-ul. O problema de login dupa pornirea hook-ului se rezolva oprind hook-ul din
@@ -45,7 +46,9 @@ Auth ar fi ramas configurat pe aceasta functie, stergerea ei ar opri toate login
 INVOKER, EXECUTE numai pentru supabase_auth_admin, lasa conturile ERP si refuza conturile teren (`portal_e1_stub.test.sql`).
 
 Revenirile blocheaza si citirile pe auth.users / employees (si profiles la 19a) pe durata lor (ACCESS EXCLUSIVE, cerut
-de DROP-ul FK-urilor / triggerului), cel mult 2 s (plafonul r10; masurat 35–70 ms pe volum ~2x productia, PGlite):
-se ruleaza intr-o fereastra controlata.
+de DROP-ul FK-urilor / triggerului): cel mult 2 s pana la intrarea in COMMIT (plafonul r10, formulat exact in r11),
+plus durata COMMIT-ului (scrierea WAL, de regula milisecunde; nelimitata numai pe un server cu replicare sincrona, unde
+asteapta standby-ul). Masurat 35–70 ms pe volum ~2x productia (PGlite). Se ruleaza intr-o fereastra controlata
+(E1_RAPORT.md r11: decizia lui Razvan pe limita si pe fereastra).
 
 Exceptia de catalog din r2: pg_catalog ramane suprafata interna PostgreSQL. Functiile si relatiile standard information_schema cu OID sub 16384 sunt amprentate la apply; numai SELECT-ul existent pe relatii este admis, orice modificare si orice obiect nou ramane rosu. Nu sunt acordate privilegii. Aceasta exceptie este necesara pentru initdb standard si trebuie inclusa explicit in review: formula literala «numai 21+12+portal» nu acopera catalogul SQL standard.

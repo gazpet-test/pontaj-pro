@@ -16,7 +16,9 @@
 --    care citesc tabelele utilizatorilor sunt plpgsql (corpul nu se analizeaza la creare => niciun ACCESS SHARE implicit),
 --    handle_new_user si fn_teren_eligibil se inlocuiesc tot inainte (vizibile altor sesiuni abia la COMMIT, atomic cu
 --    CHECK-ul nou); lock-urile pe conturi_* (cascada din auth.users) s-au mutat in $locks$;
---  * dupa $locks$ ramane O SINGURA instructiune ($critic$), sub transaction_timeout = 2 s (de la primul lock la COMMIT);
+--  * dupa $locks$ ramane O SINGURA instructiune ($critic$), sub transaction_timeout = 2 s (r11: de la obtinerea
+--    lock-urilor pana la INTRAREA in COMMIT; COMMIT-ul propriu-zis - flush WAL / replicare sincrona - nu e plafonat,
+--    vezi blocul $locks$ si 18a);
 --  * fereastra 18a -> 19a (P2-01): conturile aparute intre cele doua livrari (handle_new_user vechi nu le clasifica) se
 --    clasifica explicit 'neaprobat' in $critic$, sub lock-ul pe auth.users; un cont teren neclasificat = refuz.
 SET LOCAL lock_timeout = '3s';
@@ -683,13 +685,18 @@ $function$;
 --                        PostgreSQL atat DROP CONSTRAINT cat si ADD CONSTRAINT ... CHECK (si varianta NOT VALID) cer
 --                        ACCESS EXCLUSIVE; doar FK-ul (SHARE ROW EXCLUSIVE) si VALIDATE (SHARE UPDATE EXCLUSIVE) au
 --                        niveluri mai mici, deci CHECK-ul nu se poate schimba fara sa opreasca si citirile. Blocheaza
---                        TOT pe profiles (inclusiv citirile ERP prin RLS) cel mult 2 s (plafonul de mai jos).
+--                        TOT pe profiles (inclusiv citirile ERP prin RLS): cel mult 2 s pana la intrarea in COMMIT
+--                        (plafonul de mai jos) + durata COMMIT-ului (de regula milisecunde).
 --  * user_module_access  SHARE: drepturile conturilor teren nu se schimba intre poarta si amprenta. Blocheaza: scrierile.
 --  * conturi_tip / jurnal SHARE (clasificarea nu se schimba; cascada unei stergeri asteapta), conturi_teren ACCESS
 --                        EXCLUSIVE (coloane noi). Le foloseste doar hook-ul, care nu e pornit.
--- PLAFONUL (r10): transaction_timeout = 2 s pornit de la zero imediat dupa obtinere: de la primul lock tinut pana la
--- COMMIT (inclusiv inregistrarea runnerului si pauzele de retea) trec cel mult 2 s, altfel serverul inchide sesiunea =>
--- ROLLBACK, lock-uri eliberate, nimic schimbat. statement_timeout = 2 s pe $critic$ = a doua plasa.
+-- PLAFONUL (r10, formulare exacta r11; aceeasi semantica PG17 ca 18a): transaction_timeout pornit de ACUM, imediat
+-- dupa obtinere (0, apoi 2 s). Plafoneaza: de aici PANA LA INTRAREA IN COMMIT (instructiunea $critic$, inregistrarea
+-- runnerului, pauzele clientului / retelei, inclusiv intre $locks$ si $critic$) cel mult 2 s, altfel serverul inchide
+-- sesiunea => ROLLBACK, lock-uri eliberate, nimic schimbat. NU plafoneaza COMMIT-ul propriu-zis (PG17 opreste ceasul
+-- la intrarea in COMMIT; lock-urile, inclusiv ACCESS EXCLUSIVE pe profiles, se elibereaza dupa scrierea commit-ului):
+-- se adauga flush-ul WAL (de regula milisecunde; fara constrangeri amanate) si, numai cu replicare sincrona, asteptarea
+-- standby-ului. statement_timeout = 2 s pe $critic$ = a doua plasa.
 DO $locks$
 DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
 BEGIN
@@ -714,7 +721,7 @@ BEGIN
   PERFORM set_config('statement_timeout', '2s', true);
   PERFORM set_config('transaction_timeout', '0', true);
   PERFORM set_config('transaction_timeout', '2s', true);
-  RAISE NOTICE 'PORTAL_LOCKS 19a: % incercari, % ms; plafon 2 s pana la COMMIT', v_n,
+  RAISE NOTICE 'PORTAL_LOCKS 19a: % incercari, % ms; plafon 2 s pana la intrarea in COMMIT', v_n,
     round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $locks$;
 -- r10: sectiunea critica = O SINGURA instructiune (un singur drum dus-intors client-server), toata sub plafon.
