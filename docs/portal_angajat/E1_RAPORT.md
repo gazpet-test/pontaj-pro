@@ -717,7 +717,8 @@ dar nu poate comite” era FALSA (taiata mai sus). Al doilea recenzent: GO cu co
 - De ce inchide golul: serverul primeste mesajul intreg inainte sa-l execute, deci intre garda si COMMIT nu exista drum
   client↔server; la eroarea garzii serverul abandoneaza restul mesajului (COMMIT-ul nu se executa), psql
   (`ON_ERROR_STOP`) iese, conexiunea se inchide, tranzactia se anuleaza. Orice pauza a clientului / retelei cade ACUM
-  inaintea garzii si e numarata de ea. Intre garda si COMMIT nu mai ruleaza cod SQL venit din artefact.
+  inaintea garzii si e numarata de ea. ~~Intre garda si COMMIT nu mai ruleaza cod SQL venit din artefact.~~ (r17: FALS —
+  un trigger amanat poate reamana si lasa alt trigger amanat pentru COMMIT; vezi sectiunea r17.)
 - Rearmarea ceasului din garda (0, apoi timpul ramas) NU e folosita: in forma de un mesaj n-ar adauga nimic si ar schimba
   valoarea verificata. Semantica rearmarii (valoare > 0 cu ceasul oprit ⇒ ceas nou de N ms; 0 ⇒ oprit) e cea citata de
   verdict din sursa PG 17.6 (`postgres.c`); n-am putut deschide sursa (domeniu in afara listei aprobate) — proba e
@@ -801,3 +802,89 @@ SQL-ul celor 4 fisiere: neschimbat (SHA-urile raman). Runnerul (`livrare_migrare
 | L20 | Proba nu e slabita: tot `n1 == n0 + 1`; controlul de rearmare tot trebuie sa COMITA; forma tot cauta `transaction_timeout` / `plafon`, acum cu control pozitiv. |
 | L25 | Expected independent: control pozitiv in testul de forma; validitatea timpilor fata de ceasul monoton (`/proc/uptime`). |
 | restul | n/a (doar teste + harness). |
+
+## E1-1a/1b r17 — 11.11.2026 (runnerul #1054 r5: triggerele reamanate dupa garda, inchidere prin catalog)
+
+Harness-ul PG 17.11 pe r16c a trecut integral (cod 0). Al doilea recenzent: runner GO (P2 de notat). Jakarinos r16: #1054
+NO-GO, un P2 nou; #892 GO cu conditii dupa #1054.
+
+**P2 (Jakarinos r16).** `SET CONSTRAINTS ALL IMMEDIATE` ruleaza triggerul amanat A; A executa `SET CONSTRAINTS ALL
+DEFERRED` si insereaza intr-un tabel cu trigger amanat B; B ramane in coada (PG17 `AfterTriggerSetState` proceseaza doar
+evenimentele devenite imediate), garda trece, iar in COMMIT B opreste ceasul si doarme => comite dupa termen. Afirmatia
+r15 „intre garda si COMMIT nu mai ruleaza cod SQL venit din artefact” era FALSA (taiata mai sus). Repetarea
+`SET CONSTRAINTS` nu e dovada (B poate reamana la randul lui).
+
+### Ce s-a schimbat (runnerul; SQL-ul portalului NESCHIMBAT, SHA-urile raman)
+- Garda finala (acelasi mesaj cu COMMIT-ul, dupa `SET CONSTRAINTS ALL IMMEDIATE`) refuza cu `PLAFON_AMANABIL` (nimic
+  comis) daca in tranzactia curenta a fost creat sau modificat: un trigger amanabil (`pg_trigger.tgdeferrable`, si cele
+  interne — mai strict decat „ne-interne”), o constrangere amanabila (`pg_constraint.condeferrable`; si
+  `ALTER CONSTRAINT … DEFERRABLE`, `ENABLE / DISABLE TRIGGER`), sau functia (`pg_proc`) a oricarui trigger amanabil,
+  inclusiv a celor EXISTENTE.
+- „Creat sau modificat in tranzactia curenta” = randul de catalog are `age(xmin) <= 0`. `age(xid)` =
+  `(int32)(GetStableLatestTransactionId() − xid)`, cu referinta = xid-ul de VARF, alocat de prolog (`txid_current()`)
+  inaintea oricarui cod al artefactului; garda verifica referinta (`age(xid(pg_current_xact_id())) = 0`, altfel refuz).
+  Subtranzactiile (blocuri EXCEPTION, SAVEPOINT) au xid propriu, mai mare decat al parintelui („a child always has an XID
+  later than its parent”, `AssignTransactionId`) => `age < 0`, prinse. De aceea NU `xmin = pg_current_xact_id()`: in
+  subtranzactie `pg_current_xact_id()` da tot varful, iar egalitatea ar rata randurile scrise in blocuri EXCEPTION.
+  Fals pozitiv posibil (fail-closed): o alta sesiune pornita dupa BEGIN-ul nostru care comite un obiect amanabil.
+- Sursa PG17 n-am putut-o deschide (domeniu in afara listei aprobate): argumentele de mai sus sunt din cunoasterea sursei
+  si au fost verificate EMPIRIC pe PGlite (PG 18, acelasi cod): xmin-ul unui FK creat in bloc EXCEPTION = xid-ul de varf
+  + 1 (`age = −1`); obiectele comise anterior `age > 0`; o subtranzactie anulata nu lasa nimic vizibil; scenariul A → B
+  reprodus (dupa `SET CONSTRAINTS ALL IMMEDIATE` doar A rulase, B a rulat in COMMIT). SQL-ul EXACT al garzii, extras din
+  runner, a fost rulat pe PGlite pe 11 cazuri (toate cu rezultatul asteptat). Dovada pe PG 17 = harness-ul.
+- Observatie din proba: la un FK amanabil cu `ON DELETE / ON UPDATE CASCADE`, doar triggerele de verificare
+  (`RI_FKey_check_*`) sunt amanabile; cele de actiune (`RI_FKey_cascade_*`) sunt ne-amanabile, ruleaza imediat.
+
+### Garantia r17 (formulare exacta; aceeasi in runner, validator si descrierile #1054 / #892)
+- **Ce e garantat:** pentru orice artefact care NU a creat si NU a modificat obiecte amanabile, de la BEGIN pana la
+  intrarea in COMMIT trec cel mult ~N ms (garda refuza peste N ms de la BEGIN pe ceasul serverului, oricum ar opri /
+  reporni artefactul ceasul; fara ocolire serverul inchide sesiunea la ~N ms — timeout PostgreSQL, nu timp real strict).
+  Artefactele care AU creat / modificat obiecte amanabile sunt refuzate (`PLAFON_AMANABIL`, nimic comis).
+- **Ce NU e garantat (limite declarate):** (1) COMMIT-ul propriu-zis: scrierea WAL, `ON COMMIT DROP`, procesarea interna,
+  cu replicare sincrona si asteptarea standby-ului; (2) codul PREEXISTENT din baza care ruleaza amanat — triggerele /
+  constrangerile amanabile existente (neatinse de artefact) ruleaza inaintea garzii, dar daca propriul lor cod reamana
+  evenimente, acelea raman pentru COMMIT; iar ce cheama ele INDIRECT (functiile apelate din functia triggerului,
+  triggerele ne-amanabile pornite de scrierile lui, operatorii tipurilor din cheile verificate) nu e verificat, chiar
+  daca artefactul le-a creat sau inlocuit pe acestea din urma; (3) un operator care ocoleste deliberat runnerul;
+  (4) o ocolire deliberata a ceasului poate TINE tranzactia deschisa peste N pana la garda (nu comite); (5) ceasul
+  serverului e ceas de perete. Validatorul si garda sunt garzi de PROTOCOL, nu autorizatie.
+- **Consecinta acceptata:** o migrare legitima care creeaza / modifica constrangeri sau triggere amanabile (sau functia
+  unui trigger amanabil) nu se poate livra cu plafon => se livreaza FARA optiune, cu review. La fel migrarile care se
+  bazeaza pe verificarea la COMMIT (ex. copil inserat inaintea parintelui intr-un FK amanabil, intr-un trigger):
+  `SET CONSTRAINTS ALL IMMEDIATE` le poate schimba rezultatul (observatia celui de-al doilea recenzent).
+
+### Cele 4 fisiere ale portalului
+Citite pe `portal/e1`: niciun `DEFERRABLE` / `INITIALLY DEFERRED` / `CONSTRAINT TRIGGER` / `SET CONSTRAINTS` / cursor
+`WITH HOLD` (doar un comentariu in 18a: „fara DEFERRABLE”). FK-urile noi (`conturi_* -> auth.users / employees`,
+`portal_provisioning -> employees / auth.users`, `conturi_teren.provisioning_id`) si `UNIQUE`-ul din 19a sunt
+ne-amanabile; triggerele noi sunt triggere obisnuite (BEFORE / AFTER, ne-amanabile). Deci nu creeaza nimic amanabil —
+ADEVARAT. Ramane O conditie de verificat pe productie (read-only): 19a face `CREATE OR REPLACE` pe
+`public.handle_new_user()` si `public.fn_teren_eligibil(uuid)`, iar revenirea 18a pe `public.fn_auth_token_hook(jsonb)`;
+daca vreuna ar fi functia triggerului amanabil ne-intern existent pe productie, garda ar refuza livrarea cu plafon
+(`PLAFON_AMANABIL`, nimic comis — fail-closed, nu pericol). Dupa migrarile din repo, acel trigger e
+`trg_red_raspunsuri_mail_sursa` (functia `fn_red_mail_raspuns_sursa_ceruta()`, 20261130k), iar FK-urile amanabile sunt
+cele din 20260929b si 20261008a — niciuna din cele 3 functii de mai sus. Confirmarea read-only pe productie:
+`SELECT tgrelid::regclass, tgname, tgfoid::regprocedure FROM pg_trigger WHERE tgdeferrable AND NOT tgisinternal;`
+
+### Teste r17
+- `scripts/test_livrare_plafon.sh` (PG17, in `harness_wsl.sh`): `PLAFON_REAMANAT` (scenariul exact din verdict; CONTROL
+  = forma r4c, clientul de test scoate blocul `PLAFON_AMANABIL` ⇒ COMITE dupa termen, ≥ 1,5 s, fara inchidere de server;
+  forma r17 ⇒ `PLAFON_AMANABIL`, nimic comis), `PLAFON_FK_AMANABIL` (FK `DEFERRABLE` creat intr-o subtranzactie; artefactul
+  verifica singur ca xmin-ul nu e al varfului; fara optiune ⇒ 0), `PLAFON_FUNCTIE_AMANATA` (functia unui trigger amanabil
+  existent inlocuita; fara optiune ⇒ 0), `PLAFON_FARA_AMANABILE` (FK / UNIQUE / trigger amanabile EXISTENTE folosite +
+  FK / trigger ne-amanabile noi ⇒ 0). `PLAFON_AMANAT` mutat pe un trigger PREEXISTENT (altfel l-ar refuza noua regula):
+  tot control fara `SET CONSTRAINTS` ⇒ comite, forma livrata ⇒ `PLAFON_DEPASIT`, nu `PLAFON_AMANABIL`. Functiile din
+  fixture-uri: `REVOKE EXECUTE … FROM PUBLIC` (gate-ul 0e, r4b).
+- `scripts/test_livrare_forma_fin.sh`: ordinea in mesajul final (constrangeri → search_path → amanabile → cursor →
+  valoare → timp → COMMIT) + cele trei surse din catalog si verificarea referintei.
+- Nerulate inca pe PG 17 (in sesiunea de lucru nu s-a putut rula bash / python); de rulat cu
+  `scripts/portal/harness_wsl.sh 5 200`, ca la r16c.
+
+| Regula | Dovada r17 |
+|---|---|
+| L14 | O tranzactie; refuzul garzii e in acelasi mesaj cu COMMIT-ul ⇒ COMMIT-ul nu se executa, ROLLBACK; reconcilierea decide codul (10). |
+| L15 | Inchiderea pe catalog (pg_trigger / pg_constraint / pg_proc), nu pe textul SQL; `search_path = pg_catalog`, functii / tipuri calificate. |
+| L18 | Refuz explicit pe mesaj exact (`PLAFON_AMANABIL`); referinta neconfirmata = refuz, nu „trecut”; controlul nefunctional (blocul negasit) = cod 7 = ESEC. |
+| L20 | Caile legitime: obiectele amanabile EXISTENTE nu dau fals pozitiv (`PLAFON_FARA_AMANABILE`, `PLAFON_AMANAT`, `PLAFON_OK`); fara optiune neschimbat (`PLAFON_FARA`, `FORMA_FARA`, `*_fara`). |
+| L25 | Control pe forma r4c pentru scenariul din verdict; subtranzactia dovedita in artefact; PG17 NOSUPERUSER in harness; expected scris in test, nu derivat din runner. |
+| restul | n/a (doar runner + testele lui + raport). |
