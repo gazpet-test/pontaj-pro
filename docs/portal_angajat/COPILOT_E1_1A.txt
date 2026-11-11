@@ -1,0 +1,556 @@
+﻿PAW_START 20261027-155832-e15ea9 cop 6ae06a9c C:\Users\Public\paw-data\brief\portal_e1_1a_cop.md
+Copilot — Review PR #892, Portal angajat E1-1a
+NO-GO cod — 4 P1
+
+P0: 0 | P1: 4 | P2: 5
+
+Verdict: arhitectura r7 rămâne aprobată, iar implementarea identității merge în direcția corectă. Totuși, PR #892 are patru probleme care trebuie rezolvate înainte de GO cod.
+
+Nu cer finalizarea întregului E1 pentru acest review de cod. Respect separarea stabilită: GO cod E1-1a ≠ GO merge ≠ GO apply. Merge rămâne condiționat de E1 complet și aprobarea explicită a lui Răzvan.
+
+Review-ul este static, pe fișierele prezentate. Nu am acces la repository sau la rezultatele efective ale runnerului. Referințele de linie sunt aproximative, raportate la fragmentele furnizate.
+
+1. P0 / P1
+P1-01 — Inventarul clasifică automat conturi neaprobate ca ERP
+
+supabase/migrations/20261118a_portal_teren_identitate.sql:234–240 — INSERT INTO public.conturi_tip
+
+Codul:
+
+SQL
+CASE WHEN email IN (...) THEN 'teren'
+     ELSE 'erp'
+END
+
+transformă orice utilizator Auth care nu se află în lista celor trei într-un cont ERP aprobat.
+
+Este aceeași categorie de risc închisă în r7: un cont nou, neconfirmat de owner, nu poate primi clasificarea erp implicit.
+
+Problema este demonstrată inclusiv de fixture:
+
+supabase/tests/portal_e1_schelet.sql — pending@example.invalid; portal_e1_1a.test.sql:35–38
+
+Fixture-ul pending@example.invalid primește erp, iar testul așteaptă succes.
+
+Acest test demonstrează funcționarea implementării actuale, nu respectarea regulii de aprobare r7.
+
+Corecție obligatorie:
+
+Inventarul inițial trebuie să aibă o sursă verificabilă pentru clasificarea erp: conturi aprobate de owner sau o listă de migrare confirmată.
+
+Un cont fără aprobare verificabilă nu poate primi automat erp.
+
+Dacă se dorește corespondență completă auth.users ↔ conturi_tip, introduceți o stare/tip explicit neaprobat care determină refuzul tokenului, ori opriți migrarea până la reconcilierea tuturor conturilor.
+
+Modificați fixture-ul pentru a demonstra că un cont pending nu devine authenticated.
+
+Nu solicit hardcodarea UUID-urilor tuturor conturilor ERP. Solicit o clasificare bazată pe aprobare, nu pe excluderea celor trei adrese.
+
+L07, L08, L18, L25 — P1 OPEN.
+
+P1-02 — Poarta acceptă modificarea periculoasă a unei funcții PUBLIC existente
+
+20261118a_portal_teren_identitate.sql:147–176, 203–211 — fn_portal_public_aprobat() și fn_portal_porti_lipsa()
+
+Lista albă reține doar semnăturile celor 21 de funcții.
+
+Scenariu concret:
+
+O funcție aprobată, de exemplu public.gen_numar_transport(), este modificată ulterior.
+
+Primește SECURITY DEFINER sau un corp care execută o operațiune privilegiată.
+
+Semnătura și dreptul EXECUTE rămân neschimbate.
+
+fn_portal_porti_lipsa() continuă să o considere aprobată.
+
+Rezultat: posibil false-green al porții de izolare.
+
+Faptul că 20 dintre funcțiile actuale sunt SECURITY INVOKER nu demonstrează că sunt inofensive. Un invoker poate efectua operațiuni permise fără granturi pe tabele sau poate apela funcții privilegiate deja accesibile.
+
+Corecție obligatorie:
+
+Baseline revizuit pentru fiecare dintre cele 21: semnătură, corp/definiție, prosecdef, proowner, proconfig și ACL.
+
+Verificarea apelurilor tranzitive relevante, inclusiv EXECUTE dinamic, conform L15.
+
+Orice schimbare semantică neaprobată → poarta roșie.
+
+Test negativ: modificarea corpului sau conversia unei funcții aprobate în SECURITY DEFINER, fără schimbarea semnăturii, trebuie detectată.
+
+Poarta nu trebuie să depindă doar de numele unei funcții.
+
+L07, L15, L18, L25 — P1 OPEN.
+
+P1-03 — Poarta verifică incomplet privilegiile efective ale rolului teren
+
+20261118a_portal_teren_identitate.sql:178–218 — fn_portal_porti_lipsa()
+
+Sunt verificate:
+
+atributele rolului;
+
+apartenența la authenticated, anon, service_role;
+
+relațiile, secvențele și funcțiile din public;
+
+dreptul CREATE în public.
+
+Acestea sunt verificări utile, dar nu reprezintă suprafața completă de acces.
+
+Scenarii nedetectate:
+
+teren primește apartenență la alt rol privilegiat, fără să fie unul dintre cele trei testate.
+
+teren primește USAGE și EXECUTE pe obiecte accesibile din storage, auth sau altă schemă expusă.
+
+O funcție privilegiată din afara public devine executabilă pentru teren.
+
+Apartenența necesară authenticator → teren este eliminată, iar poarta nu raportează configurația incompletă.
+
+În anumite combinații, poarta poate continua să returneze {}.
+
+Corecție obligatorie:
+
+Verificați apartenențele efective și opțiunile SET/INHERIT față de o listă aprobată, plus privilegiile rolului în toate schemele relevante pentru API, Auth, Storage și module.
+
+Nu trebuie eliminate drepturile PostgreSQL de sistem necesare funcționării normale. Este suficient un baseline precis cu excepțiile aprobate.
+
+Adăugați teste negative pentru o schemă din afara public, o funcție privilegiată și o apartenență suplimentară.
+
+L07, L09, L15, L18, L25 — P1 OPEN.
+
+P1-04 — Rollback-ul poate elimina funcția hook în timp ce Auth încă o utilizează
+
+supabase/revenire/20261118a_portal_teren_identitate_ROLLBACK.sql — blocul $check$, apoi DROP FUNCTION public.fn_auth_token_hook(jsonb)
+
+Rollback-ul verifică riguros datele și configurația obiectelor PostgreSQL create.
+
+Dar nu verifică dacă acel Custom Access Token Hook a fost activat în configurația Supabase Auth.
+
+Scenariu:
+
+E1-1a este aplicat.
+
+E1-1b/E1 ulterior activează hook-ul.
+
+Obiectele SQL urmărite rămân nemodificate.
+
+Se execută rollback-ul E1-1a.
+
+Snapshotul poate corespunde, iar funcția hook este eliminată.
+
+Auth continuă să invoce funcția inexistentă.
+
+Rezultatul poate fi blocarea emiterii de tokenuri pentru toți utilizatorii.
+
+Corecție obligatorie:
+
+Rollback-ul E1-1a trebuie să fie permis doar când hook-ul este demonstrabil dezactivat și nicio componentă ulterioară nu depinde de obiectele eliminate.
+
+Preflight-ul runnerului trebuie să verifice starea externă relevantă, nu doar catalogul PostgreSQL.
+
+Dacă verificarea nu poate fi făcută, rollback-ul refuză.
+
+După activarea hook-ului, revenirea trebuie orchestrată împreună cu procedura de urgență C1: blocare conturi teren, revocare sesiuni, verificare, dezactivare hook, apoi eliminare obiecte.
+
+Rollback-ul SQL singur nu poate demonstra starea configurației Auth.
+
+L02, L05, L14, L18 — P1 OPEN.
+
+2. Ce este corect în implementare
+
+Componentă
+
+	
+
+Evaluare
+
+
+
+
+Hook fail-closed
+
+	
+
+Corect în ramurile verificate static: clasificare lipsă, tip invalid, stare neeligibilă și excepții → eroare generică
+
+
+
+
+SECURITY INVOKER pentru hook
+
+	
+
+Corect; citirea conturi_tip este acordată explicit rolului supabase_auth_admin
+
+
+
+
+fn_portal_uid()
+
+	
+
+Soluție rezonabilă la lipsa grantului USAGE pe auth; helper DEFINER cu EXECUTE limitat
+
+
+
+
+fn_teren_eligibil()
+
+	
+
+Controlul identității proprii pentru teren este corect ca intenție; testul cu alt UID este relevant
+
+
+
+
+Revocare/eligibilitate
+
+	
+
+active IS TRUE, dată de terminare și ban sunt tratate fail-closed
+
+
+
+
+Audit conturi_tip
+
+	
+
+Trigger de audit plus blocarea UPDATE/DELETE/TRUNCATE pe jurnal
+
+
+
+
+Migrare atomică
+
+	
+
+Runner, advisory lock, blocări de tabele și postcondiții
+
+
+
+
+Teste negative
+
+	
+
+Acoperire utilă pentru drepturi, stări, schimbări de schemă și regresii de clasificare
+
+
+
+
+Revenire SQL
+
+	
+
+Snapshot detaliat, refuz la drift, verificarea restaurării și istoric runner păstrat
+
+Observație despre identitatea proprie
+
+În fn_teren_eligibil, combinația session_user, current_setting('role') și auth.uid() distinge apelul Auth privilegiat de apelul unui utilizator teren.
+
+Nu identific un bypass demonstrat în această expresie. Totuși, testul actual folosește un JWT simulat prin GUC; trebuie repetat pe fluxul real PostgREST/Auth, cu autentificare semnată, înainte de DRY.
+
+3. P2 — condiții pentru E1 complet
+
+ID
+
+	
+
+Fișier / secțiune
+
+	
+
+Recomandare
+
+
+
+
+P2-01
+
+	
+
+fn_auth_token_hook
+
+	
+
+Pentru conturile erp, verificați explicit că tokenul are rolul așteptat authenticated, nu doar returnați orbește orice obiect claims primit. Testați și metadate conflictuale.
+
+
+
+
+P2-02
+
+	
+
+conturi_tip_hook, fn_teren_eligibil
+
+	
+
+Verificați pe Supabase real că supabase_auth_admin are USAGE pe public, SELECT sub RLS, EXECUTE pe hook și capacitatea de a apela helperul DEFINER. Fixture-ul nu demonstrează toate granturile live.
+
+
+
+
+P2-03
+
+	
+
+scripts/test_portal_e1.sh
+
+	
+
+PG16 PASS este dovadă parțială. PG17 este obligatoriu înainte de merge/DRY. Fișierul transformat prin prepare_fixture.py trebuie comparat cu originalul, iar verificarea listei PUBLIC reale trebuie efectuată separat.
+
+
+
+
+P2-04
+
+	
+
+conturi_teren / inventar
+
+	
+
+test.razvan are stare='activ', dar fără angajat. Helperul îl refuză corect; documentați explicit această excepție temporară și asigurați-vă că E1-1b nu interpretează activ ca suficient.
+
+
+
+
+P2-05
+
+	
+
+fn_portal_porti_lipsa
+
+	
+
+Adăugați verificări pentru existența și configurarea corectă a grantului teren → authenticator (membership real: authenticator este membru al teren) și pentru drepturile funcțiilor hook. O poartă verde trebuie să confirme și condițiile necesare funcționării, nu doar absența accesului excesiv.
+
+4. L01–L25
+
+Regulă
+
+	
+
+Evaluare E1-1a
+
+
+
+
+L01
+
+	
+
+Lock înaintea inventarului: implementat; testul concurent cu auth.users trebuie păstrat
+
+
+
+
+L02
+
+	
+
+Migrare într-o singură tranzacție runner: conform intenției
+
+
+
+
+L03
+
+	
+
+n/a — fără derivate asincrone în E1-1a
+
+
+
+
+L04
+
+	
+
+n/a — fără operațiuni cantitative sau plăți; idempotenta livrării este gestionată de runner
+
+
+
+
+L05
+
+	
+
+Rezultat incert al livrării/revenirii: necesită reconciliere cu istoricul runnerului
+
+
+
+
+L06
+
+	
+
+Ordinea lockurilor declarată; de verificat și față de triggerele existente
+
+
+
+
+L07
+
+	
+
+OPEN P1-02/03: control complet al căilor și drepturilor
+
+
+
+
+L08
+
+	
+
+Identitate din JWT/Auth, fără parametru de utilizator acceptat necondiționat; verificare reală necesară
+
+
+
+
+L09
+
+	
+
+OPEN P1-03: verificare pe toate suprafețele privilegiate relevante
+
+
+
+
+L10
+
+	
+
+Erori generice, fără secrete expuse în hook; conform pentru acest scope
+
+
+
+
+L11–L13
+
+	
+
+n/a
+
+
+
+
+L14
+
+	
+
+OPEN P1-04: revenire sigură și după activarea configurației Auth
+
+
+
+
+L15
+
+	
+
+OPEN P1-02/03: baseline semantic și ACL complet
+
+
+
+
+L16
+
+	
+
+PK/FK/UNIQUE prezente; clasificarea inițială necesită P1-01
+
+
+
+
+L17
+
+	
+
+Fus Europe/Bucharest și dată inclusiv; teste prezente
+
+
+
+
+L18
+
+	
+
+Fail-closed în hook; P1-01 la clasificarea inițială și P1-02/03 la poarta de izolare
+
+
+
+
+L19
+
+	
+
+Predicat comun fn_teren_eligibil; GO pentru acest scope
+
+
+
+
+L20
+
+	
+
+Teste pentru inactiv, revocat, fără fișă, ban și termen de contract
+
+
+
+
+L21–L24
+
+	
+
+n/a pentru E1-1a
+
+
+
+
+L25
+
+	
+
+Teste negative utile, dar PG17 real și baseline PUBLIC de producție încă nedemonstrate
+
+5. Condiții de GO pentru revizia următoare
+
+Nu cer reproiectarea E1. Sunt suficiente patru corecții locale:
+
+Inventar: erp numai pentru identități aprobate, cu test negativ pentru pending.
+
+PUBLIC: fingerprint semantic al celor 21 de funcții, inclusiv proprietar, privilegiu DEFINER, configurație, ACL și apeluri relevante.
+
+Poarta teren: verificări de membership și privilegii efective și în afara public, cu teste de drift.
+
+Rollback: refuz demonstrabil dacă hook-ul este activ sau există dependențe din etapele ulterioare.
+
+Cele cinci P2 pot fi executate și demonstrate în cadrul E1, înainte de poarta finală de merge/DRY.
+
+Verdict final
+
+Arhitectură r7
+
+GO menținut
+
+PR #892 — GO cod
+
+NO-GO
+
+Merge / Apply
+
+HOLD
+
+P0: 0 · P1: 4 · P2: 5
+
+Instrucțiune pentru Claude/Jakarinos: corectați cele patru P1 în E1-1a, apoi retrimiteți delta la review. Păstrați structura de identitate, helperul fn_portal_uid, hook-ul fail-closed și runnerul tranzacțional.
+
+Nu autorizez merge sau apply. Acestea rămân condiționate de E1 complet, dovezi de test și aprobarea explicită a lui Răzvan.
+
+Finding-urile deja închise din planul r7 nu sunt redeschise.
+PAW_GATA 20261027-155832-e15ea9 cop 6ae06a9c 1254s exit=0

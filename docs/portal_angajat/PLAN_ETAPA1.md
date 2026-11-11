@@ -620,7 +620,7 @@ La review-ul implementării se cer dovezi (fișier / linie / test) pentru L02, L
 
 ### Starea reală la 27.10 (chat, citit din Dashboard)
 - Supabase Auth: „Allow new users to sign up” = **OFF**, anonymous sign-ins = OFF, Confirm email = ON. Expunerea prin înscriere publică **nu există**. Rămâne P1-ul existent: `employees` are SELECT `USING (true)` pentru orice `authenticated`, deci CNP / IBAN sunt vizibile.
-- **3 conturi „teren” create pe 27.10 ca `authenticated` obișnuite:** `florinel.ilie@teren.gazpet.ro`, `petronel.mititelu@teren.gazpet.ro`, `test.razvan@teren.gazpet.ro`.
+- **3 conturi „teren” create pe 27.10 ca `authenticated` obișnuite:** două ale unor angajați (fișele 55 și 70) și contul de test al lui Răzvan, toate pe domeniul `@teren.gazpet.ro` (adresele nu se trec în repo; migrarea 18a le identifică prin hash).
   - Profilul are `role = manager_santier` și au doar `probe_teren` editor.
   - **Până la migrarea spre rolul `teren`, au accesul larg al oricărui `authenticated`** (cele 290 de tabele, inclusiv CNP / IBAN).
   - În E1:
