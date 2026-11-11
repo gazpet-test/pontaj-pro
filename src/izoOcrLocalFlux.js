@@ -42,6 +42,18 @@ export function costEticheta(meta) {
   return 'Haiku, citire directă'
 }
 
+// E9: cauza eșecului local spusă simplu, înainte de citirea de rezervă. Codurile vin de la serverul local
+// (stare „esuata”); „timeout” vine și din termenul paginii. Un cod necunoscut primește textul general.
+export const CAUZE_OCR_LOCAL = Object.freeze({
+  structura_incerta:'Cititoarele nu s-au înțeles',
+  retea:'Serverul local a pierdut legătura',
+  model_indisponibil:'Serverul local nu e pregătit',
+  timeout:'Citirea locală a durat prea mult',
+  pdf_corupt:'Serverul local nu a putut deschide documentul',
+  oprit:'Serverul local s-a oprit',
+})
+export const cauzaOCRLocal = motiv => Object.hasOwn(CAUZE_OCR_LOCAL, motiv) ? CAUZE_OCR_LOCAL[motiv] : 'Citirea locală nu a reușit'
+
 // timers implicit cu wrapper: setTimeout apelat ca metoda a altui obiect da "Illegal invocation" in browser
 export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon, actual, invoke,
   progres = () => {}, timers = { now:() => Date.now(), setTimeout:(f, ms) => setTimeout(f, ms), clearTimeout:t => clearTimeout(t) } }) {
@@ -106,7 +118,7 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
       platit = true // înainte de transport: nici răspunsul pierdut nu permite al doilea apel.
       termen = timers.now() + fallback + marja
       ultimaStare = false; delay = polling
-      anunta(motiv === 'structura_incerta' ? 'Cititoarele nu s-au înțeles — citesc cu Haiku' : 'Citirea locală nu a reușit — citesc cu Haiku')
+      anunta(`${cauzaOCRLocal(motiv)} — citesc cu Haiku`)
       try { return await apel({ op:'fallback', cerere_id:id }, termen) }
       catch (e) {
         if (e === ABANDON) throw e

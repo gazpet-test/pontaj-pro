@@ -1,7 +1,12 @@
 import { ANTET_COMUN, ANTET_SPECIFIC, EroareE3, type SablonE3 } from '../ocr-packing-list/avizE3.ts'
 export const JWT_OPS = ['cere', 'stare', 'fallback']
 export const WORKER_OPS = ['preia', 'link', 'arbitreaza', 'rezultat', 'heartbeat']
-export const ERORI_LOCALE = ['structura_incerta', 'tabel_negasit', 'garda', 'prea_multe_dezacorduri', 'limita_randuri', 'pdf_invalid', 'multipagina', 'intern']
+// E9: lista e un SUPERSET (codurile vechi rămân valabile). Codurile noi spun cauza reală a eșecului local:
+// retea (edge / Storage de neatins), model_indisponibil (cititorul local nu răspunde), timeout (termenul local
+// sau al cititorului), pdf_corupt (randare eșuată pe un PDF validat), oprit (noapte / oprire cerută).
+// intern = numai defecte reale. Ordinea livrării: întâi edge-ul cu lista lărgită, apoi worker-ul care le trimite.
+export const ERORI_LOCALE = ['structura_incerta', 'tabel_negasit', 'garda', 'prea_multe_dezacorduri', 'limita_randuri', 'pdf_invalid', 'multipagina', 'intern',
+  'retea', 'model_indisponibil', 'timeout', 'pdf_corupt', 'oprit']
 export const obiect = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 export function exact(v: unknown, chei: string[]): asserts v is Record<string, unknown> {
   if (!obiect(v) || Object.keys(v).length !== chei.length || !chei.every(k => Object.hasOwn(v, k))) throw new EroareE3('cerere_invalida', 400)

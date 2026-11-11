@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { citesteLocal, costEticheta, descrieSursaOCR, esteNoapteOCR } from './izoOcrLocalFlux.js'
+import { CAUZE_OCR_LOCAL, cauzaOCRLocal, citesteLocal, costEticheta, descrieSursaOCR, esteNoapteOCR } from './izoOcrLocalFlux.js'
 
 const propunere = { success:true, tip:'aviz_e3', sablon:'aviz_teava', antet:{}, randuri:[{ serie:'001' }], model:'ocr_local:lighton+mineru', cost_usd:0 }
 const ok = raspuns => ({ data:raspuns, error:null })
@@ -106,6 +106,35 @@ describe('E9 — flux local fără efecte asupra formularului', () => {
     const p = start(invoke), verificare = expect(p).rejects.toMatchObject({ raspuns:{ eroare:'apel_pierdut' } })
     await vi.advanceTimersByTimeAsync(1500); await verificare
     expect(operatii(invoke)).toEqual(['cere', 'stare'])
+  })
+  // E9: codurile noi ale serverului local. Textele sunt scrise aici, independent de modul (L25).
+  it.each([
+    ['retea', 'Serverul local a pierdut legătura — citesc cu Haiku'],
+    ['model_indisponibil', 'Serverul local nu e pregătit — citesc cu Haiku'],
+    ['timeout', 'Citirea locală a durat prea mult — citesc cu Haiku'],
+    ['pdf_corupt', 'Serverul local nu a putut deschide documentul — citesc cu Haiku'],
+    ['oprit', 'Serverul local s-a oprit — citesc cu Haiku'],
+    ['intern', 'Citirea locală nu a reușit — citesc cu Haiku'],
+    ['cod_viitor', 'Citirea locală nu a reușit — citesc cu Haiku'],
+    ['structura_incerta', 'Cititoarele nu s-au înțeles — citesc cu Haiku'],
+  ])('esuata %s → exact un fallback, cu cauza spusă simplu', async (eroare, text) => {
+    const progres = vi.fn()
+    const invoke = vi.fn().mockResolvedValueOnce(ceruta())
+      .mockResolvedValueOnce(ok({ success:true, stare:'esuata', ramura:'locala', eroare }))
+      .mockResolvedValueOnce(ok({ ...propunere, sursa:{ ramura:'haiku' } }))
+    const p = start(invoke, { progres })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect((await p).raspuns.sursa.ramura).toBe('haiku')
+    expect(operatii(invoke)).toEqual(['cere', 'stare', 'fallback'])
+    expect(progres).toHaveBeenLastCalledWith(text)
+  })
+  it('cauzele noi nu numesc AI-ul și nu ies din lista cunoscută', () => {
+    expect(Object.keys(CAUZE_OCR_LOCAL).sort()).toEqual(['model_indisponibil', 'oprit', 'pdf_corupt', 'retea', 'structura_incerta', 'timeout'])
+    for (const [cod, text] of Object.entries(CAUZE_OCR_LOCAL)) {
+      if (cod !== 'structura_incerta') expect(text).not.toMatch(/\b(AI|Claude|Haiku|Sonnet|model|Rocky)\b/i)
+    }
+    expect(cauzaOCRLocal('toString')).toBe('Citirea locală nu a reușit')
+    expect(cauzaOCRLocal(undefined)).toBe('Citirea locală nu a reușit')
   })
   it('nu cunoaște aplicaAI/salveaza: returnează doar propunerea, fără mutații', async () => {
     const aplicaAI = vi.fn(), salveaza = vi.fn(), ed = { antet:{}, randuri:[] }

@@ -222,3 +222,43 @@ SELECT set_config('gazpet.revenire_20261103c', 'REDESCHIDE_INBOX_STORAGE:' || tx
 COMMIT;
 ```
 Armare verificată înaintea lock-urilor; `LOCK` `ai_documente_inbox` (SHARE ROW EXCLUSIVE) apoi `storage.objects` (ACCESS EXCLUSIVE) înaintea verificării stării (ordinea unui INSERT în coadă, al cărui trigger citește storage — fără ciclu de deadlock); nu atinge E3 (`izo_doc_*`); precondiție = exact patch-ul (expresiile comparate cu aceleași constante ca postcondiția migrării; definiția indexului unic; atributele, ACL-ul și corpul — md5 cu spațiile albe comprimate — ale celor două funcții; tipul / funcția / starea celor două trigger-e); armare persistentă = refuz; DROP fără CASCADE; postcondiție = exact politica veche, niciun obiect al patch-ului; dezarmare. Testat în `scripts/test_ai_inbox_storage_politici.sh` pasul 4 (inclusiv refuz la corp de funcție / index fără UNIQUE / trigger dezactivat / ACL schimbate). Plan: `docs/HR/INBOX_STORAGE_RLS.md`.
+
+## 20261201a — Execuție: sudurile nodului de cuplare (`20261201a_executie_noduri_suduri_ROLLBACK.sql`, NEAPLICAT)
+Scoate tabelul `executie_noduri_suduri` (cu trigger-ul de proveniență și politica de citire), cele 6 funcții `fn_executie_nod_*`, politica `noduri_scheme_citire` de pe `storage.objects` și bucket-ul `noduri-scheme`. Nu redeschide o gaură de securitate, dar **refuză dacă tabelul are rânduri sau bucket-ul are fișiere** (lista sudurilor, stările bifate și imaginile schemei nu se șterg de aici — decizie separată, cu export înainte). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261201a', 'SCOATE_NODURI_SUDURI:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO` (un refuz nu lasă nimic să ruleze după el). Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` `storage.objects` apoi tabelul (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificării „gol”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_executie_noduri_suduri.sql` (T12 nearmat / cu date = refuz, cu SQLSTATE și mesaj verificate explicit; T13 armat pe gol = scos, apoi re-aplicare).
+
+## 20261207a — Execuție: elementele de construcții ale nodului de cuplare (`20261207a_executie_noduri_constructii_ROLLBACK.sql`, NEAPLICAT)
+Scoate tabelul `executie_noduri_constructii` (cu trigger-ul de proveniență, politica de citire, indexurile și CHECK-urile lui) și cele 4 funcții `fn_executie_constr_*`. Nu atinge 20261201a (sudurile, `fn_executie_nod_*`, storage). Nu redeschide o gaură de securitate, dar **refuză dacă tabelul are rânduri** (lista elementelor și etapele bifate nu se șterg de aici — decizie separată, cu export înainte). Fără GO de execuție. **Ordinea:** 20261207a se scoate ÎNAINTEA lui 20261201a (revenirea 20261201a refuză cât timp politica de aici folosește `fn_executie_nod_drept`).
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261207a', 'SCOATE_NODURI_CONSTRUCTII:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = starea EXACTĂ a migrării (corpul celor 4 funcții — md5 fără CR —, limbaj, DEFINER, volatilitate, search_path, proprietar, EXECUTE; trigger-ul; politica cu expresia ei; privilegiile pe tabel / coloane / secvență); nimic altceva nu depinde de tabel / funcții; `LOCK … ACCESS EXCLUSIVE NOWAIT` înaintea verificării „gol”; DROP fără CASCADE; postcondiție (inclusiv că dreptul din 20261201a a rămas); dezarmare. Testat în `scripts/test_executie_noduri_constructii.sql` (T12 nearmat / cu date = refuz; T15 revenirea 20261201a refuză cât timp tabelul există; T16 corp de funcție / politică schimbate = refuz; T13 armat pe gol = scos, apoi re-aplicare).
+
+## 20261206a — Meteo: istoricul zilnic pe șantiere (`20261206a_meteo_istoric_zilnic_ROLLBACK.sql`, NEAPLICAT)
+Scoate vederea `v_meteo_zile`, funcția `fn_meteo_praguri_seteaza`, tabelele `meteo_istoric_zilnic` și `meteo_praguri_nelucrabil` (cu politicile lor). Nu redeschide o gaură de securitate, dar **refuză dacă istoricul are rânduri sau dacă pragurile nu mai sunt cele de pornire** (datele meteo preluate și pragurile alese de owner nu se șterg de aici — decizie separată, cu export înainte). Înainte de revenire se scoate din `meteo-sync` pasul de istoric (altfel scrierea zilnică eșuează și apare în răspunsul funcției). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261206a', 'SCOATE_METEO_ISTORIC:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării; `LOCK` istoricul apoi pragurile (ACCESS EXCLUSIVE, `lock_timeout` 5 s) înaintea verificărilor „gol / neschimbat”; DROP fără CASCADE; postcondiție = niciun obiect al migrării; dezarmare. Testat în `scripts/test_meteo_istoric.sql` (T6 nearmat / cu rânduri / praguri schimbate = refuz, cu SQLSTATE și mesaj verificate explicit; T7 armat pe stare goală = scos, apoi re-aplicare).
+
+## 20261211a — Execuție: fibra optică pe tronsoane (`20261211a_executie_fibra_optica_ROLLBACK.sql`, NEAPLICAT)
+Scoate tabelele `executie_fibra_jurnal`, `executie_fibra_intervale`, `executie_fibra_camerete` (cu trigger-ele, politicile și constrângerile lor), trigger-ul de gardă `trg_executie_fibra_garda_tronson` de pe `executie_tronsoane` și cele 14 funcții `fn_executie_fibra_*`. Nu redeschide o gaură de securitate, dar **refuză dacă oricare tabel are rânduri** (cameretele, raportările și jurnalul nu se șterg de aici — decizie separată, cu export înainte). **Golirea** (pasul separat, aprobat de Răzvan) trece doar în aceeași tranzacție armată, după `set_config` și înaintea fișierului: altfel `trg_executie_fibra_fara_stergere_*` refuză `DELETE` / `TRUNCATE` cu 42501 pentru oricine, inclusiv `postgres`. Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261211a', 'SCOATE_FIBRA_OPTICA:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării (cele 14 funcții, cele 9 trigger-e proprii — 3 de reguli + 6 fără ștergere, cu funcția și tipul lor —, garda de pe tronsoane cu funcția și tipul ei); nimic altceva nu depinde de tabele / funcții; lock-uri `NOWAIT` în ordinea RPC-urilor (`executie_proiecte`, `executie_tronsoane`, apoi tabelele de aici) înaintea verificării „gol”; DROP fără CASCADE; postcondiție; dezarmare. Testat în `scripts/test_executie_fibra_optica.sql` (T9b DELETE / TRUNCATE ca postgres = refuz 42501, și cu marcaj din altă tranzacție; T10 nearmat / cu date = refuz, cu SQLSTATE și mesaj verificate explicit; T11 golire armată, armat pe gol = scos, apoi re-aplicare cu garda din nou activă) și în `scripts/test_executie_fibra_concurenta.sh` (S0: cu o raportare deschisă = refuz imediat 55P03).

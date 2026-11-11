@@ -38,3 +38,19 @@ inclusiv false) si ups_runtime_min (0..10000 sau null) din metrics.json.
 Se foloseste jq deja existent, fara dependente noi. Cheile absente/invalide sunt
 omise; runtime null este transmis explicit. Colectorul Windows se modifica separat
 de operator. Frecventa Terra ramane 10 min; alerta nu este instantanee.
+
+## Limite conturi: cota redari@ + reset ca epoch (09.11.2026)
+Tipul aiserver mai trimite, din metrics.json:
+- procente 0..100: `ai_redari_saptamana_ramas_pct`, `ai_redari_saptamana_fable_ramas_pct`;
+- reset ca epoch în secunde (0..4e9): `ai_codex_reset_s`, `ai_anthropic_saptamana_reset_s`, `ai_anthropic_saptamana_fable_reset_s`,
+  `ai_redari_saptamana_reset_s`, `ai_redari_saptamana_fable_reset_s`;
+- text scurt: `ai_redari_saptamana_reset`, `ai_redari_saptamana_fable_reset`.
+
+Ca și până acum, valorile lipsă sau invalide se omit.
+
+**Ordinea la livrare e obligatorie:**
+1. Întâi se face deploy la `iot-retea` cu validatorul care acceptă cheile noi.
+2. Abia apoi se copiază `sonda.sh` pe Terra.
+
+Invers, validatorul vechi respinge tot lotul (o cheie necunoscută dă 400), iar toată rețeaua rămâne fără date până la deploy.
+Testul `src/cladireRetea.test.js` („Paritate chei”) verifică faptul că fiecare cheie din sondă e acceptată de `iot-retea`.

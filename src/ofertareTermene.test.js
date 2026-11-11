@@ -204,3 +204,13 @@ describe('calculeazaTermene — Mânăstirea pe 05.10.2026', () => {
     expect(x.repere).toEqual([]); expect(x.intarziereAC).toBe(false)
   })
 })
+
+describe('reperul depunerii pe timestamp (review Jakarinos #1027, L19)', () => {
+  it('în ziua termenului, după oră → trecut; înainte de oră → azi', () => {
+    const t = '2026-11-08T08:00:00Z'   // 10:00 RO
+    const dupa = calculeazaTermene({ termenDepunere: t, acum: new Date('2026-11-08T13:00:00Z') }).repere.find(r => r.cheie === 'depunere')
+    const inainte = calculeazaTermene({ termenDepunere: t, acum: new Date('2026-11-08T06:00:00Z') }).repere.find(r => r.cheie === 'depunere')
+    expect(dupa.stare).toBe('trecut'); expect(dupa.zile).toBe(0)
+    expect(inainte.stare).toBe('azi')
+  })
+})

@@ -21,7 +21,7 @@ export type CitireRetea = {
   ups_pe_baterie?: boolean;
   ups_runtime_min?: number | null;
   mac: string | null;
-} & { [K in typeof AI_PCT[number] | typeof AI_ISO[number] | typeof AI_TEXT[number]]: number | string | null };
+} & { [K in typeof AI_PCT[number] | typeof AI_EPOCH[number] | typeof AI_ISO[number] | typeof AI_TEXT[number]]: number | string | null };
 type Rezultat = { ok: true; citiri: CitireRetea[] } | { ok: false; error: string };
 
 const obiect = (x: unknown): x is Record<string, unknown> =>
@@ -30,14 +30,18 @@ const numarIn = (x: unknown, min: number, max: number): x is number =>
   typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max;
 
 // Limite AI din colectorul serverului (10.10.2026): whitelist explicit, nu prefix ai_* liber.
+// 09.11.2026: cota săptămânală a contului redari@ (aceeași formă ca ai_anthropic_saptamana_*) și resetul ca epoch în secunde,
+// uniform pentru toate conturile (…_reset_s), pentru afișarea zilei și orei în Clădire.
 export const AI_PCT = ['ai_codex_ramas_pct', 'ai_anthropic_saptamana_ramas_pct', 'ai_anthropic_saptamana_fable_ramas_pct',
-  'ai_anthropic_sesiune_ramas_pct'] as const;
+  'ai_anthropic_sesiune_ramas_pct', 'ai_redari_saptamana_ramas_pct', 'ai_redari_saptamana_fable_ramas_pct'] as const;
+export const AI_EPOCH = ['ai_codex_reset_s', 'ai_anthropic_saptamana_reset_s', 'ai_anthropic_saptamana_fable_reset_s',
+  'ai_redari_saptamana_reset_s', 'ai_redari_saptamana_fable_reset_s'] as const;  // secunde, ca ai_gemini_reset_s
 export const AI_ISO = ['ai_codex_reset', 'ai_codex_masurat_la'] as const;   // ISO UTC
 export const AI_TEXT = ['ai_codex_plan', 'ai_anthropic_saptamana_reset', 'ai_anthropic_saptamana_fable_reset',
-  'ai_anthropic_sesiune_reset'] as const;                                      // text scurt, ex. „Oct 12, 7:59am”
+  'ai_anthropic_sesiune_reset', 'ai_redari_saptamana_reset', 'ai_redari_saptamana_fable_reset'] as const; // text scurt, ex. „Oct 12, 7:59am”
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]00:00)$/;
 const TEXT_SCURT = /^[\p{L}\p{N} .,:+\-()\/]{1,40}$/u;
-export const AI_NOI = [...AI_PCT, ...AI_ISO, ...AI_TEXT];
+export const AI_NOI = [...AI_PCT, ...AI_EPOCH, ...AI_ISO, ...AI_TEXT];
 
 // 13.10.2026: MAC-ul văzut în ARP de sondă (Terra), comparat în index.ts cu meta.mac al dispozitivului.
 const MAC = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
@@ -90,6 +94,7 @@ export function valideazaCitiri(body: unknown): Rezultat {
     if ('ai_claude_reset_s' in c && !numarIn(c.ai_claude_reset_s, 0, 4e9)) return { ok: false, error: 'ai_claude_reset_s invalid' };
     if ('mac' in c && (typeof c.mac !== 'string' || !MAC.test(c.mac))) return { ok: false, error: 'mac invalid' };
     for (const k of AI_PCT) if (k in c && !numarIn(c[k], 0, 100)) return { ok: false, error: `${k} invalid` };
+    for (const k of AI_EPOCH) if (k in c && !numarIn(c[k], 0, 4e9)) return { ok: false, error: `${k} invalid` };
     for (const k of AI_ISO) {
       if (k in c && (typeof c[k] !== 'string' || !ISO_UTC.test(c[k] as string) || Number.isNaN(Date.parse(c[k] as string)))) {
         return { ok: false, error: `${k} invalid` };

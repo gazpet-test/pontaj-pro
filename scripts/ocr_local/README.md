@@ -339,7 +339,11 @@ modele încap sau ating ținta de 30 s. Dacă nu încap, varianta MinerU pornit 
 cerere necesită măsurare și ajustare înainte de B4; nu este selectată prin ghicire.
 
 Heartbeat-ul rulează separat, la 15 s, inclusiv în timpul hash-urilor / pornirii.
-Preluarea se încearcă la 1 s numai în `disponibil`. Reconcilierea este la pornire,
+Preluarea se încearcă la 1 s numai în `disponibil`. Un `preia` eșuat (rețea, edge
+indisponibil, refuz) nu se mai reia la 1 s: pauza crește min(2^k, 300) s, cu
+jitter de cel mult 10% sub plafon, și revine la 1 s la primul `preia` reușit. În
+`jurnal.jsonl` intră doar schimbarea treptei / a cauzei (`pauza`) și revenirea
+(`reluat`), nu o linie pe încercare. Reconcilierea este la pornire,
 la 60 s și la schimbarea ferestrei 06–22, Europe/Bucharest. `servicii.json`
 conține PID WSL, ora pornirii și SHA; adoptarea cere și `/health` / `/v1/models`.
 Un lock E3 mort sau anterior boot-ului poate fi reluat; un lock viu sau al
@@ -350,17 +354,39 @@ Un refuz / control WSL neconfirmat păstrează lacătul și starea `eroare`.
 
 Ambele cititoare primesc cadrul întreg, în paralel. Adaptorul apelează
 `read.run_reader(..., lock=False)` în procese separate, cu garda v5 și termen
-absolut; terminarea procesului oprește și firul intern MinerU. La gardă / timeout,
-modelele sunt invalidate pentru reconciliere înaintea unei alte preluări.
+absolut; terminarea procesului oprește și firul intern MinerU. La gardă, la
+`model_indisponibil`, la `intern` și la termenul depășit în timpul citirii,
+modelele sunt invalidate pentru reconciliere înaintea unei alte preluări (nu și
+la rețea, PDF, noapte / oprire sau termenul trecut înainte / după citire).
 Rotația este în sens orar; după găsirea antetului de LightOn, MinerU recitește
 aceeași imagine. Nu se păstrează sau refolosește o citire incompletă.
 
 PDF-ul este clasificat cu PyMuPDF într-un proces cu timeout 3 s: `mono`, `multi`,
-`invalid`, `neverificabil`. Criptarea inclusiv cu parolă goală, repararea structurii,
-trunchierea și lipsa antetului sunt refuzate. Numărul de pagini vine din bibliotecă.
-`multi` devine `multipagina`; `invalid` devine `pdf_invalid`. Pentru
-`neverificabil`, workerul trimite `intern`, deoarece lista B2 de erori `rezultat`
-nu include `verificare_indisponibila` (acel cod există numai la `cere`).
+`invalid`, `neverificabil` (documentul a oprit copilul), `termen` (n-a terminat la
+timp), `mediu` (copilul / biblioteca / limita de memorie nu pornesc). Criptarea
+inclusiv cu parolă goală, repararea structurii, trunchierea și lipsa antetului sunt
+refuzate. Numărul de pagini vine din bibliotecă. La validare și la randare:
+`multi` → `multipagina`, `invalid` → `pdf_invalid`, `neverificabil` → `pdf_corupt`,
+`termen` → `timeout`, `mediu` / necunoscut → `intern` (`verificare_indisponibila`
+există numai la `cere`).
+
+Coduri `rezultat` (E9, aceeași listă ca `ERORI_LOCALE` din edge, test de
+paritate). Pe lângă cele de conținut (`structura_incerta`, `tabel_negasit`,
+`garda`, `prea_multe_dezacorduri`, `limita_randuri`), PDF (`pdf_invalid`,
+`multipagina`), cele de mai sus și:
+- `retea`: transport căzut sau 5xx spre edge / Storage; descărcarea separă rețeaua de `pdf_invalid` (sha, mărime, 4xx);
+- `model_indisponibil`: cititorul raportează eroare de transport spre modelul local (conexiune refuzată, HTTP, flux rupt,
+  inclusiv `ServerError` / `HttpResponseError` din clientul MinerU, ridicate și la construcția lui); un defect local
+  prins de cititor (ex. `KeyError` în gardă, `RequestError`) rămâne `intern`;
+- `timeout`: termenul local (înainte / după citire) sau al cititorului;
+- `oprit`: fereastra de noapte sau oprirea cerută;
+- `intern`: numai defecte reale (inclusiv refuzuri 4xx neașteptate ale edge-ului).
+
+Livrarea `rezultat` se face O SINGURĂ dată: după o livrare reușită edge-ul
+răspunde 409 `token_invalid` (nu „deja primit”), deci o reîncercare n-ar putea
+deosebi livrarea reușită de tokenul expirat. O livrare eșuată rămâne în jurnal
+(`nelivrat`, cu `retea` / `refuzat` / `intern`). Workerul cu aceste coduri se
+instalează DUPĂ deploy-ul edge-ului care le acceptă.
 Randarea este la 150 dpi, plafon 25 MP. La perspectivă nesigură se păstrează
 originalul. Corecția cere dovada de luminanță / gradient a foii și transformă
 toate colțurile cadrului, cu plafon 25 MP; nu decupează tabelul.

@@ -8,6 +8,7 @@ import { verificaDateAdresaUat, genereazaAdresaUat, salveazaAdresaUat, descarcaB
 import { uat3 as uat3Din } from '../idParcela.js'
 import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, avertismenteUat, recomandariUat, MESAJ_TERMEN_RECOMANDAT, dataTintaRecomandata, lipsuriUat, motiveGataConvocare, rezumatZile, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
+import { avertismentInformare } from '../informareGdpr.js'
 
 // audit D8: acordul la singular („1 parcelă”), ca în restul ERP-ului
 export const numarParcele = n => (Number(n) === 1 ? '1 parcelă' : `${n} parcele`)
@@ -77,7 +78,8 @@ export default function UatEcran({ proiect, uats, nivel, show, onSchimbat }) {
                     <td style={S.td}>{n ? n.parcele : '…'}</td>
                     <td style={S.td}>{n ? n.convocati : '…'}</td>
                     <td style={{ ...S.td, fontSize: 12 }}>
-                      {!motive.length ? <span style={{ color: G.green }}>✓ da</span>
+                      {!motive.length && avertismentInformare(proiect) ? <span style={{ color: G.yellow }}>⚠ {avertismentInformare(proiect)}</span>
+                        : !motive.length ? <span style={{ color: G.green }}>✓ da</span>
                         : <span style={{ color: G.yellow }}>{motive.join('; ')}</span>}
                       {dataTintaRecomandata(u.sesiune_zi1) && <div style={{ color: G.dim, marginTop: 2 }}>
                         {`${rec.length > 0 ? 'ℹ afișarea începe după ținta recomandată' : 'ținta recomandată'} ${fmtDate(dataTintaRecomandata(u.sesiune_zi1))} (${MESAJ_TERMEN_RECOMANDAT})`}</div>}

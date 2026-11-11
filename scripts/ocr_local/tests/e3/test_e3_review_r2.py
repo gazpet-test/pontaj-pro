@@ -104,7 +104,8 @@ class PdfReviewTests(unittest.TestCase):
         before = {p.pid for p in multiprocessing.active_children()}
         with patch.object(e3_pdf, '_pdf_child', pdf_stall):
             started = time.monotonic()
-            self.assertEqual(e3_pdf._izolat(b'fixture', True, .2), ('neverificabil', None))
+            # E9: copilul oprit de termen = 'termen' (cod timeout), nu 'neverificabil' (pdf_corupt).
+            self.assertEqual(e3_pdf._izolat(b'fixture', True, .2), ('termen', None))
             self.assertLess(time.monotonic() - started, 3)
         self.assertEqual({p.pid for p in multiprocessing.active_children()}, before)
 
@@ -126,7 +127,7 @@ class PdfReviewTests(unittest.TestCase):
         self.assertEqual(kind, 'mono')
         self.assertEqual(result[:2], (150, 150))
         self.assertEqual(len(result[2]), 150 * 150 * 3)
-        self.assertEqual(e3_pdf._izolat(data, True, 0), ('neverificabil', None))
+        self.assertEqual(e3_pdf._izolat(data, True, 0), ('termen', None))
         with fitz.open() as doc:
             doc.new_page(width=10000, height=10000)
             oversized = doc.tobytes()

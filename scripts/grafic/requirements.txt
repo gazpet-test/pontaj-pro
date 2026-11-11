@@ -1,0 +1,12 @@
+# Importul graficelor (scripts/grafic/import_mpp.py): MPXJ prin pachetul Python oficial + JPype. Cere Java 17+ (JAVA_HOME sau java în PATH).
+# Instalare, într-un venv:  python -m pip install --require-hashes -r scripts/grafic/requirements.txt
+mpxj==16.10.0 \
+    --hash=sha256:5cc44621b58c9d218afd26f4a4a6baa614b41d207a69f8f4ff16a8f6d6f2e5cd \
+    --hash=sha256:12f34e5ce80d56a9804ea40c70e50ed5cc4043e71cb0816d9c13622551116b93
+JPype1==1.7.1 \
+    --hash=sha256:d7dad528c73d02987358485dc37fab36edb9ad8bce53533e65f54cff1b68a4bc \
+    --hash=sha256:969e160c15ab83b21c657837797ddae3701482d3db54f57ae81c75b558942533 \
+    --hash=sha256:3cd88838dc3d2d546f7eaeadaaff864e590010c15f2b6a44b6f37e60796a14b2
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c \
+    --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79

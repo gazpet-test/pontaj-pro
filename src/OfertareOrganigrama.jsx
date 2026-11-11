@@ -25,6 +25,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { normalizeazaDomeniiISC, acoperaDomeniul } from './iscRte.js'
+import { paginareKeyset } from './hrDeciziiUtil.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
@@ -104,9 +105,48 @@ const formatieNoua = (nume, operator_id, tip = 'instalatii') => tip === 'instala
   : { id: uid(), nume, operator_id, maistru_id: null, calificati: 2, necalificati: 3, tehnic: 0, auxiliar: 1, detalii: '2 zidari/fierari, 3 necalificați, 1 mașinist' }
 
 // ─────────────────────────────────────────────────────────────────
-// „Propune echipa din platformă": noduri din participanți + acoperire + spec.
+// Audit Ofertare 08.11.2026 (problema 2: „managerul de proiect / șeful de șantier ales greșit”). Pe licitația de test 103,
+// „Propune echipa” a dat: manager de proiect = oricine are certificatul „Manager proiect” (primul după id), șef de șantier niciodată
+// propus, „Diriginte de șantier” (rol al beneficiarului) pus în organigrama constructorului, cumulul interzis de fișă doar portocaliu,
+// alternativele 2–3 ale acoperirii intrate toate. Pe o licitație reală, managerul și șeful de șantier erau inversați între triere și
+// Formularul 9. Regulile de mai jos (pure, testate în OfertareOrganigrama.test.jsx):
 // ─────────────────────────────────────────────────────────────────
-export function construiesteNoduri({ licitatie, participanti = [], acoperiri = [], spec = null, existente = null }) {
+
+// Rândurile de acoperire folosite la propunere: fără cele nevalabile la depunere; pe o cerință cu alegere făcută de om (ales / ales_de),
+// doar rândurile alese — alternativele propuse de AI nu mai intră ca persoane în plus.
+// Review Jakarinos #1031 P1: cerințele „cu alegere” se stabilesc ÎNAINTEA filtrului de valabilitate — o alegere nevalabilă nu
+// readuce alternativele AI; rolul rămâne „de nominalizat” (vizibil), iar alegerile nevalabile se întorc separat, pentru semnalare.
+export function filtreazaAcoperiri(acoperiri = []) {
+  const esteAles = a => a.ales === true || a.ales_de != null
+  const cuAlegere = new Set(acoperiri.filter(esteAles).map(a => a.cerinta_id))
+  const pastrate = acoperiri.filter(a => (!cuAlegere.has(a.cerinta_id) || esteAles(a)) && a.valabil_la_depunere !== false)
+  pastrate.aleseNevalabile = acoperiri.filter(a => esteAles(a) && a.valabil_la_depunere === false)
+  return pastrate
+}
+
+// Fișa / caietul interzice cumulul de funcții? (cerință de tipul „O persoană nu poate îndeplini cumulativ mai multe funcții”)
+// Pe propoziție (review Jakarinos #1031 P2, L13): interzis dacă o formulă de interdicție vizează cumulul și propoziția nu o neagă
+// („nu este interzis”, „este permis”).
+const CUMUL_DA = [/se interzic[ea][^.]{0,40}cumul/, /cumul[^.]{0,120}(este |e |sunt )?interzis/, /nu (se )?(permite|accepta|admite)[^.]{0,40}cumul/,
+  /cumul[^.]{0,60}nu (este|e|se) (permis|accept|admis)/, /nu (poate|pot)[^.]{0,60}(cumul|mai multe (functii|roluri|pozitii))/]
+const CUMUL_NU = [/nu (este|e|sunt) interzis/, /nu se interzic/, /(?<!nu )\b(este|e|sunt) permis[^.]{0,30}cumul/, /cumul[^.]{0,40}(?<!nu )\b(este|e|sunt) permis/]
+export function cumulInterzisInText(text) {
+  return fara(text).split(/[.;\n]/).some(p => /cumul|mai multe (functii|roluri|pozitii)/.test(p) && CUMUL_DA.some(r => r.test(p)) && !CUMUL_NU.some(r => r.test(p)))
+}
+export const interzisCumulDin = (cerinte = []) => cerinte.some(c => cumulInterzisInText(c?.text_cerinta))
+
+// Rolul de conducere declarat în Formularul 9: manager de proiect / șef de șantier (sau null)
+export function rolConducereF9(rol) {
+  const t = fara(rol)
+  if (/sef\s*(de\s*)?santier|sef punct de lucru/.test(t)) return 'Șef de șantier'
+  if (/manager\s*(de\s*)?(proiect|contract)|director\s*(de\s*)?proiect|coordonator\s*(de\s*)?proiect/.test(t)) return 'Manager de proiect'
+  return null
+}
+
+// ─────────────────────────────────────────────────────────────────
+// „Propune echipa din platformă": noduri din participanți + acoperire + spec (+ Formularul 9, sursa declarată).
+// ─────────────────────────────────────────────────────────────────
+export function construiesteNoduri({ licitatie, participanti = [], acoperiri = [], spec = null, existente = null, echipaF9 = [] }) {
   const lider = { id: 'op_lider', tip: 'lider', nume: LIDER, partener_id: null }
   const operatori = [lider]
   for (const p of participanti) {
@@ -120,11 +160,15 @@ export function construiesteNoduri({ licitatie, participanti = [], acoperiri = [
 
   const persoane = []
   const vazut = new Set()
-  for (const a of acoperiri) {
+  for (const a of filtreazaAcoperiri(acoperiri)) {
     const aut = a.autorizatie
     if (!aut || !['acoperit', 'acoperit_partener'].includes(a.status)) continue
     const rd = rolDinAutorizatie(aut.tip?.cod, aut.tip?.denumire, aut.domenii)
     if (!rd) continue
+    // dirigintele de șantier e al beneficiarului (Legea 10/1995) — intră doar dacă documentația cere explicit linia lui
+    if (rd.rol === 'Diriginte de șantier' && spec?.linii_cerute?.diriginte !== true) continue
+    // managerul de proiect / șeful de șantier vin din Formularul 9 când acolo sunt declarați (mai jos), nu din certificatul de curs
+    if (echipaF9.some(e => (e.roluri || []).some(r => rolConducereF9(r) === rd.rol))) continue
     if (a.domeniu_rte && eRTE(rd.rol)) rd.domeniu_isc = rd.domeniu_isc || String(a.domeniu_rte)
     const nume = aut.emp?.name || aut.ext?.nume || DE_NOMINALIZAT
     const cheie = `${nume}|${rd.rol}`
@@ -134,6 +178,14 @@ export function construiesteNoduri({ licitatie, participanti = [], acoperiri = [
       operator_id: opDupaPartener(a.partener_id || aut.ext?.partener_id) || lider.id,
       employee_id: aut.employee_id || null, extern_id: aut.extern_id || null, autorizatie_id: aut.id,
       raporteaza_la: null, linie: rd.categorie === 'specialist' ? 'biunivoc' : 'subordonare', faza: '' })
+  }
+  // Formularul 9 = echipa declarată: managerul de proiect și șeful de șantier de acolo au prioritate (sursa: 'F9')
+  for (const e of echipaF9) for (const r of e.roluri || []) {
+    const rol = rolConducereF9(r)
+    if (!rol || !e.nume || persoane.some(p => p.rol === rol && p.nume === e.nume)) continue
+    persoane.push({ id: uid(), nume: e.nume, rol, categorie: 'conducere', domeniu_isc: '', operator_id: lider.id,
+      employee_id: e.employee_id || null, extern_id: e.extern_id || null, autorizatie_id: null, raporteaza_la: null,
+      linie: 'subordonare', faza: '', sursa: 'F9' })
   }
   // Rolurile de bază, chiar dacă spec-ul lipsește: fără ele diagrama n-are schelet.
   const roluriBaza = [{ rol: 'Manager de proiect', categorie: 'conducere' }, { rol: 'Șef de șantier', categorie: 'conducere' }]
@@ -188,8 +240,11 @@ export function totaluriOperatori(noduri) {
 }
 const totalGeneral = noduri => Object.values(totaluriOperatori(noduri)).reduce((s, t) => s + t.total, 0)
 
-export function verificaOrganigrama({ noduri, spec, docs = null }) {
+export function verificaOrganigrama({ noduri, spec, docs = null, interzisCumul = false, echipaF9 = [], contextNecitit = false, aleseNevalabile = 0 }) {
   const out = []
+  // review Jakarinos #1031 P1 (L18): fără cerințele / F9 citite, cumulul și concordanța cu F9 sunt NECUNOSCUTE, nu „în regulă”
+  if (contextNecitit) out.push({ cod: 'context_necitit', nivel: 'rosu', text: 'Cerințele licitației / Formularul 9 nu sunt citite (se încarcă sau au dat eroare) — cumulul și concordanța cu F9 sunt neverificate. Reverifică înainte de salvare.' })
+  if (aleseNevalabile > 0) out.push({ cod: 'alese_nevalabile', nivel: 'rosu', text: `${aleseNevalabile} alegeri făcute de om la acoperire nu mai sunt valabile la depunere — rolul lor rămâne „de nominalizat”; alege din nou în Cerințe & acoperire.` })
   const P = noduri?.persoane || []
   const nominalizate = P.filter(eNominalizat)
   // (a) RTE pe toate domeniile
@@ -213,7 +268,19 @@ export function verificaOrganigrama({ noduri, spec, docs = null }) {
   const cheie = p => p.employee_id ? 'e' + p.employee_id : p.extern_id ? 'x' + p.extern_id : 'n' + fara(p.nume).replace(/\s+/g, ' ')
   const peOm = new Map()
   for (const p of nominalizate.filter(p => ['conducere', 'specialist'].includes(p.categorie))) { const k = cheie(p); if (!peOm.has(k)) peOm.set(k, []); peOm.get(k).push(p) }
-  for (const [, ps] of peOm) if (ps.length > 1) out.push({ cod: 'cumul_' + cheie(ps[0]), nivel: 'portocaliu', text: `Cumul: ${ps[0].nume} are ${ps.length} roluri (${ps.map(p => p.rol).join(', ')}) — verifică dacă fișa interzice cumulul` })
+  for (const [, ps] of peOm) if (ps.length > 1) out.push(interzisCumul
+    ? { cod: 'cumul_' + cheie(ps[0]), nivel: 'rosu', text: `Cumul INTERZIS de documentație: ${ps[0].nume} are ${ps.length} roluri (${ps.map(p => p.rol).join(', ')}) — o persoană, un singur rol` }
+    : { cod: 'cumul_' + cheie(ps[0]), nivel: 'portocaliu', text: `Cumul: ${ps[0].nume} are ${ps.length} roluri (${ps.map(p => p.rol).join(', ')}) — verifică dacă fișa interzice cumulul` })
+  // (c2) managerul de proiect / șeful de șantier: aceleași persoane ca în Formularul 9 (echipa declarată)
+  // identitatea = angajat / extern (review Jakarinos #1031 P2); numele doar când lipsesc amândouă; mulțimi egale, nu incluziune
+  const idPers = x => x.employee_id ? 'e' + x.employee_id : x.extern_id ? 'x' + x.extern_id : 'n' + fara(x.nume).replace(/\s+/g, ' ').trim()
+  for (const rol of ['Manager de proiect', 'Șef de șantier']) {
+    const dinF9 = new Set(echipaF9.filter(e => (e.roluri || []).some(r => rolConducereF9(r) === rol)).map(idPers))
+    if (!dinF9.size) continue
+    const dinOrg = new Set(nominalizate.filter(p => acelasiRol(p.rol, rol)).map(idPers))
+    const ok = dinOrg.size === dinF9.size && [...dinOrg].every(k => dinF9.has(k))
+    out.push({ cod: 'f9_' + fara(rol), nivel: ok ? 'ok' : 'rosu', text: ok ? `${rol}: același ca în Formularul 9` : `${rol}: diferit de Formularul 9 (echipa declarată) — alege aceeași persoană în ambele` })
+  }
   // (d) formații per operator
   const T = totaluriOperatori(noduri)
   for (const o of noduri?.operatori || []) {
@@ -632,6 +699,9 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState('diagrama')
   const [deschis, setDeschis] = useState(false)
+  // audit 08.11.2026: contextul propunerii — interdicția de cumul din cerințe + echipa declarată în Formularul 9 (null = necitit)
+  const [ctx, setCtx] = useState(null)
+  const [aleseNevalabile, setAleseNevalabile] = useState(0)   // review Jakarinos #1031 r2: semnalul intră în toate verificările
   const [administrator, setAdministrator] = useState(ADMINISTRATOR)
   const svgRef = useRef(null)
   const poate = poatePorniProcesarea(profile, licitatie)
@@ -673,9 +743,9 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
   // Documentele HR (CV + declarație de disponibilitate) pentru angajații nominalizați.
   // Tipurile au cod `cv`; declarația n-are cod propriu → se caută în denumirea tipului / observații / numele fișierului,
   // plus hr_autorizatii cu tip FARA („Declarație de disponibilitate") — așa a fost încadrată în HR.
-  const incarcaDocs = async (N) => {
+  const incarcaDocs = async (N, aplica = true) => {
     const ids = [...new Set((N?.persoane || []).map(p => p.employee_id).filter(Boolean))]
-    if (!ids.length) { setDocs({}); return {} }
+    if (!ids.length) { if (aplica) setDocs({}); return {} }
     const [rD, rA] = await Promise.all([
       supabase.from('hr_documente_personale').select('employee_id, observatii, fisier_nume, tip:hr_documente_personale_tipuri(cod, denumire)').in('employee_id', ids).is('deleted_at', null).eq('activ', true).limit(5000),
       supabase.from('hr_autorizatii').select('employee_id, tip:hr_autorizatii_tipuri(cod, denumire)').in('employee_id', ids).is('deleted_at', null).limit(5000),
@@ -688,27 +758,84 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
       if (/disponibil/.test(t)) out[d.employee_id].disponibilitate = true
     }
     for (const a of rA.data || []) if (a.tip?.cod === 'FARA' || /disponibil/.test(fara(a.tip?.denumire))) if (out[a.employee_id]) out[a.employee_id].disponibilitate = true
-    setDocs(out)
+    if (aplica) setDocs(out)
     return out
   }
 
-  const propune = async () => {
-    setBusy(true)
-    // acoperirea licitației: prin cerințe (ofertare_acoperire n-are licitatie_id)
-    const rC = await supabase.from('ofertare_cerinte').select('id').eq('licitatie_id', licId).is('inlocuita_de', null).is('duplicat_al', null).limit(5000)
-    const cIds = (rC.data || []).map(c => c.id)
-    let acoperiri = []
-    if (cIds.length) {
-      const rA = await supabase.from('ofertare_acoperire')
-        .select('id, cerinta_id, status, partener_id, domeniu_rte, autorizatie:hr_autorizatii(id, employee_id, extern_id, domenii, tip:hr_autorizatii_tipuri(cod, denumire), emp:employees(name), ext:hr_personal_extern(nume, partener_id))')
-        .in('cerinta_id', cIds).in('status', ['acoperit', 'acoperit_partener']).not('autorizatie_id', 'is', null).order('id').limit(5000)
-      if (rA.error) showToast?.('Acoperirea nu s-a putut citi: ' + rA.error.message, 'err')
-      acoperiri = rA.data || []
+  // Contextul: cerințele licitației (toate, keyset — serverul taie la 1000) pentru interdicția de cumul + Formularul 9. La eroare:
+  // mesaj și null (verificările noi nu rulează), nu „fără interdicție” (L18).
+  const genCtx = useRef(0)
+  const genProp = useRef(0)   // generația propunerii (L24): fiecare apel nou o invalidează pe cea veche, inclusiv A→B→A
+  const licCurenta = useRef(licId)
+  useEffect(() => { licCurenta.current = licId }, [licId])
+  const incarcaContext = async () => {
+    const gen = ++genCtx.current, lic = licId
+    const curent = () => gen === genCtx.current && lic === licCurenta.current   // L24: doar ultimul apel, pe licitația încă deschisă
+    try {
+      const cerinte = await paginareKeyset((ultim, pas) => {
+        let q = supabase.from('ofertare_cerinte').select('id, text_cerinta').eq('licitatie_id', licId).is('inlocuita_de', null).is('duplicat_al', null).order('id', { ascending: true }).limit(pas)
+        if (ultim != null) q = q.gt('id', ultim)
+        return q
+      })
+      // review Jakarinos #1031 r2 (L23): Formularul 9 citit complet (keyset), nu primele 200
+      const randF9 = await paginareKeyset((ultim, pas) => {
+        let q = supabase.from('ofertare_pt_echipa').select('id, employee_id, extern_id, emp:employees(name), ext:hr_personal_extern(nume), roluri:ofertare_pt_echipa_roluri(rol_denumire)')
+          .eq('licitatie_id', licId).order('id', { ascending: true }).limit(pas)
+        if (ultim != null) q = q.gt('id', ultim)
+        return q
+      })
+      const echipaF9 = randF9.map(e => ({ nume: e.emp?.name || e.ext?.nume || '', employee_id: e.employee_id, extern_id: e.extern_id, roluri: (e.roluri || []).map(r => r.rol_denumire) }))
+      const c = { cerinte, interzisCumul: interzisCumulDin(cerinte), echipaF9 }
+      if (!curent()) return null
+      setCtx(c)
+      return c
+    } catch (e) {
+      if (!curent()) return null
+      showToast?.('Cerințele / Formularul 9 nu s-au putut citi — cumulul și concordanța cu F9 rămân neverificate: ' + (e?.message || e), 'err')
+      setCtx({ eroare: true })
+      return null
     }
-    const N = construiesteNoduri({ licitatie, participanti, acoperiri, spec, existente: noduri })
-    setNoduri(N)
-    const d = await incarcaDocs(N)
-    setVerificari(verificaOrganigrama({ noduri: N, spec, docs: d }))
+  }
+  // review Jakarinos #1031 r3: propunerea și semnalul ei țin de LICITAȚIE (se resetează doar la schimbarea ei, cu deblocarea lui busy);
+  // plierea / deschiderea secțiunii doar recitește contextul
+  useEffect(() => { genProp.current++; setAleseNevalabile(0); setBusy(false) }, [licId])
+  useEffect(() => { genCtx.current++; setCtx(null); if (deschis && licId) incarcaContext() }, [deschis, licId])
+  const ctxArgs = (c, alese = aleseNevalabile) => ({ interzisCumul: !!c?.interzisCumul, echipaF9: c?.echipaF9 || [], contextNecitit: !c || !!c.eroare, aleseNevalabile: alese })
+
+  const propune = async () => {
+    const lic = licId, gen = ++genProp.current
+    const curenta = () => gen === genProp.current && lic === licCurenta.current
+    setBusy(true)
+    const c = await incarcaContext()
+    if (!c || !curenta()) { if (gen === genProp.current) setBusy(false); return }   // fără cerințe / F9 citite (sau altă licitație) nu se propune
+    // acoperirea licitației: prin cerințe (ofertare_acoperire n-are licitatie_id) — pe bucăți de 150 de id-uri, keyset până la
+    // pagina goală (review Jakarinos #1031 P2, L23); la eroare nu se propune nimic (nu „echipă goală” afișată ca reușită)
+    const cIds = (c.cerinte || []).map(x => x.id)
+    const acoperiri = []
+    try {
+      for (let i = 0; i < cIds.length; i += 150) {
+        const bucata = cIds.slice(i, i + 150)
+        acoperiri.push(...await paginareKeyset((ultim, pas) => {
+          let q = supabase.from('ofertare_acoperire')
+            .select('id, cerinta_id, status, partener_id, domeniu_rte, ales, ales_de, valabil_la_depunere, autorizatie:hr_autorizatii(id, employee_id, extern_id, domenii, tip:hr_autorizatii_tipuri(cod, denumire), emp:employees(name), ext:hr_personal_extern(nume, partener_id))')
+            .in('cerinta_id', bucata).not('autorizatie_id', 'is', null).order('id', { ascending: true }).limit(pas)
+          if (ultim != null) q = q.gt('id', ultim)
+          return q
+        }))
+      }
+    } catch (e) {
+      if (curenta()) { setBusy(false); showToast?.('Acoperirea nu s-a putut citi — nu s-a propus nimic: ' + (e?.message || e), 'err') }
+      return
+    }
+    if (!curenta()) return
+    // filtrul pe status se face aici (rândurile alese trebuie văzute toate, ca o alegere nevalabilă să nu readucă alternativele)
+    const fa = filtreazaAcoperiri(acoperiri)
+    const N = construiesteNoduri({ licitatie, participanti, acoperiri: fa.filter(a => ['acoperit', 'acoperit_partener'].includes(a.status)), spec, existente: noduri, echipaF9: c.echipaF9 || [] })
+    const d = await incarcaDocs(N, false)
+    if (!curenta()) return
+    const nAlese = (fa.aleseNevalabile || []).length
+    setNoduri(N); setDocs(d); setAleseNevalabile(nAlese)
+    setVerificari(verificaOrganigrama({ noduri: N, spec, docs: d, ...ctxArgs(c, nAlese) }))
     setBusy(false); setTab('editor')
     showToast?.(`Echipă propusă: ${N.persoane.filter(eNominalizat).length} persoane din platformă, ${N.persoane.filter(p => !eNominalizat(p)).length} de nominalizat.`, 'ok')
   }
@@ -716,7 +843,7 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
   const verifica = async () => {
     if (!noduri) return
     const d = docs || await incarcaDocs(noduri)
-    const v = verificaOrganigrama({ noduri, spec, docs: d })
+    const v = verificaOrganigrama({ noduri, spec, docs: d, ...ctxArgs(ctx) })
     setVerificari(v)
     return v
   }
@@ -746,7 +873,7 @@ export default function OrganigramaSection({ licitatie, profile, participanti = 
   }
 
   // recalculează verificările la fiecare schimbare din editor (fără documente noi — alea se cer la salvare)
-  const verificariLive = useMemo(() => noduri ? verificaOrganigrama({ noduri, spec, docs }) : verificari, [noduri, spec, docs])
+  const verificariLive = useMemo(() => noduri ? verificaOrganigrama({ noduri, spec, docs, ...ctxArgs(ctx) }) : verificari, [noduri, spec, docs, ctx, aleseNevalabile])
   const rosii = verificariLive.filter(v => v.nivel === 'rosu').length, portocalii = verificariLive.filter(v => v.nivel === 'portocaliu').length
 
   if (!licId) return null

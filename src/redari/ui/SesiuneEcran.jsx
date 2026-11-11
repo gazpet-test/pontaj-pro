@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { aziBucuresti, formatDataRo } from '../docx.js'
-import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, intervalZiBucuresti } from '../sesiune.js'
+import { zileSesiune, ziImplicita, filtreazaSesiune, rezumatSesiune, randPrezenta, intervalZiBucuresti, poateMarcaPrezenta, verificaPrezentaLaClick, MESAJ_PREZENTA_DOAR_AZI } from '../sesiune.js'
 import { G, S, TagStare, msgEroare } from './comune.jsx'
 import ModalPv from './ModalPv.jsx'
 
@@ -90,7 +90,10 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
     return () => { generatie.current++ }
   }, [proiectId, uat.id, azi, reload])
   const prezent = async rand => {
-    if (!poateScrie || ocupat.current || !date || date.prezenti.has(rand.detinator_id) || !zile.some(z => z.data === zi)) return
+    if (!poateScrie || ocupat.current || !date || date.prezenti.has(rand.detinator_id)) return
+    const v = verificaPrezentaLaClick(zile, zi, azi, aziBucuresti())
+    if (v.aziNou) { setAzi(v.aziNou); return }   // efectul pe [azi] recitește lista; mesajul „doar în ziua sesiunii” apare dacă e cazul
+    if (!v.ok) return
     ocupat.current = true; setLucru(true); setMesaj('')
     const token = generatie.current, curent = () => token === generatie.current
     let confirmat = false
@@ -128,6 +131,7 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
     </label>
     <button style={buton} disabled={lucru} onClick={() => setReload(n => n + 1)}>↻ Reîncarcă</button>
     {mesaj && <p role="status">{mesaj}</p>}
+    {poateScrie && zile.length > 0 && !poateMarcaPrezenta(zile, zi, azi) && <p style={{ color: G.muted }}>{MESAJ_PREZENTA_DOAR_AZI}</p>}
     {lucru && <p>Se încarcă...</p>}
     {rezumat && <p>Total: {rezumat.total} | Semnate: {rezumat.semnate} | Trimise: {rezumat.trimise} | Fără PV: {rezumat.fara_pv} | Prezenți azi ({formatDataRo(azi)}): {rezumat.prezenti_azi}</p>}
     {date && !randuri.length && <p>Niciun rezultat.</p>}
@@ -136,7 +140,7 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
         <b>{r.id_parcela} - {r.nume}</b><p><TagStare cod={r.stare} /></p>
         <p>PV: {r.pv_nr || '-'} / {r.pv_stare || 'fără PV'}{date.prezenti.has(r.detinator_id) ? ' | Prezent azi' : ''}</p>
         {poateScrie && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-          {!date.prezenti.has(r.detinator_id) && <button style={buton} disabled={lucru || !zile.some(z => z.data === zi)} onClick={() => prezent(r)}>Prezent</button>}
+          {!date.prezenti.has(r.detinator_id) && <button style={buton} disabled={lucru || !poateMarcaPrezenta(zile, zi, azi)} title={poateMarcaPrezenta(zile, zi, azi) ? undefined : MESAJ_PREZENTA_DOAR_AZI} onClick={() => prezent(r)}>Prezent</button>}
           <button style={buton} disabled={lucru} onClick={() => setPv(r)}>PV A</button>
         </div>}
       </article>)}
