@@ -285,6 +285,26 @@ RESET transaction_timeout;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; r2: PostgreSQL 17 + plafonul `3000/session` (ceasul de tranzacție pornit la BEGIN: ~3 s de la BEGIN până la intrarea în COMMIT, altfel serverul închide sesiunea și nu se schimbă nimic); precondiție = cele 4 funcții (corp, securitate, drepturi) + funcțiile 20261209a pe care le cheamă politicile; un singur punct de blocare după verificările de catalog (din `pg_locks`: nimic din public / storage / auth blocat înaintea lui), `NOWAIT` pe toate (tabelele acoperite în ordinea numelui + `storage.objects` ACCESS EXCLUSIVE, tabelul de acces + `sites` ACCESS SHARE), reîncercare în subtranzacție până la 1 s de la BEGIN, apoi 55P03 `BUGET_LOCK`, nimic scris — ÎNAINTEA verificării: fiecare politică `executie_acces_*` a 20261209a (inclusiv `executie_acces_proiect_citire`) = exact forma 20261213a și nicio politică în plus cu prefixul nostru; `ALTER POLICY` înapoi la textul 20261209a din același generator; postcondiție = forma 20261209a exactă, nimic nu mai depinde de funcțiile de aici, celelalte politici neschimbate; DROP fără CASCADE; dezarmare. Testat în `scripts/test_executie_acces_perf.sql` (T9r: revenirea 20261209a refuzată cât timp 20261213a e aplicată, nearmată = refuz, politică schimbată = refuz, fără plafon = refuz, politica tabelului de acces ștearsă = refuz, armată = amprenta politicilor 20261209a + echivalența pe conturi + planul vechi, re-aplicare), `scripts/test_executie_acces_perf_revenire.sql` (T9z, după T3–T6) și `scripts/test_executie_acces_perf_concurenta.sh` (clona: refuz curat cu un tabel ocupat, plafonul închide sesiunea, revenirea reală măsurată sub trafic).
 
+## 20261215a — Achiziții: notițe interne pe comandă (`20261215a_achizitii_note_interne_ROLLBACK.sql`, NEAPLICAT)
+Scoate coloana `comenzi_furnizor.note_interne` și CHECK-ul ei de lungime (TKT-2026-0361). Nu redeschide nimic; **refuză dacă vreo comandă are o notiță scrisă** (notițele nu se pierd de aici — export + golire aprobată separat). Aplicația merge și fără coloană (câmpul se arată dezactivat). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215a', 'SCOATE_NOTE_INTERNE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = coloana text + CHECK-ul migrării; `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` (ocupat = 55P03, nimic scris) înaintea verificării „fără notițe”; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare, refuzuri) — pe clonă îl rulează chat-ul.
+
+## 20261215b — Ofertare: contactul la beneficiar pe oferta de probe (`20261215b_probe_oferte_contact_ROLLBACK.sql`, NEAPLICAT)
+Scoate coloanele `probe_oferte.client_contact_nume` / `_telefon` / `_email` și CHECK-urile lor de lungime (TKT-2026-0374). Nu redeschide nimic; **refuză dacă vreo ofertă are date de contact completate** (export + golire aprobată separat). Aplicația merge și fără coloane (câmpurile se arată dezactivate). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215b', 'SCOATE_CONTACT_PROBE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = cele 3 coloane text + cele 3 CHECK-uri ale migrării; `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` (ocupat = 55P03, nimic scris) înaintea verificării „fără date”; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare, refuzuri, RLS-ul existent pe cont fără acces) — pe clonă îl rulează chat-ul.
+
 ## 20261215c — Izometrie: mută o piesă la început (`20261215c_izometrie_muta_pozitie_ROLLBACK.sql`, NEAPLICAT)
 Scoate RPC-ul `fn_executie_tevi_muta_pozitie` (TKT-2026-0388). Nu atinge date: ordinea pieselor rămâne cea de acum; butonul ⤒ revine la „disponibil după actualizarea bazei de date”, ↑ / ↓ rămân ca azi. Nu redeschide nimic. **Dacă se scot amândouă, se rulează ÎNAINTEA revenirii 20261209a.** Fără GO de execuție.
 ```sql
