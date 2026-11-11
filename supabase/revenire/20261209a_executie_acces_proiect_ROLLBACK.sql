@@ -1,6 +1,6 @@
 -- Revenire 20261209a_executie_acces_proiect. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: tabelul executie_acces_proiect, cele 17 funcții (lista exactă; r6: + nerestrans_cont, lista_cont, candidati;
--- r8: − parinti, + obiect_permis; r9: − obiect_proiecte, − inbox_obiect, + inbox_propriu; r10: − inbox_propriu), politicile RESTRICTIVE executie_acces_*
+-- r8: − parinti, + obiect_permis; r9: − obiect_proiecte, − inbox_obiect, + inbox_propriu; r10: − inbox_propriu; r11: obiect_permis cu al 4-lea argument), politicile RESTRICTIVE executie_acces_*
 -- și trigger-ele trg_executie_acces_garda de pe tabelele 'proiect' / 'proiect_optional' / 'copil' / 'inbox' din inventar (r4: și antetul
 -- raportului zilnic, graficul intern, coada Inboxului AI), cele 4 politici de pe storage.objects, și redă
 -- EXACT corpurile vechi ale celor 5 funcții de drept (fn_executie_nod_drept / contract / grafic / tinte, fn_raport_santier_drept), cu
@@ -155,7 +155,7 @@ $f$$sql$;
   DROP FUNCTION public.fn_executie_acces_garda();
   DROP FUNCTION public.fn_executie_acces_garda_copil();
   DROP FUNCTION public.fn_executie_acces_garda_inbox();
-  DROP FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean);   -- r8 (predicatul Storage public)
+  DROP FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean, boolean);   -- r8 (predicatul Storage public; r11: + p_inlocuire)
   DROP FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean);
   DROP FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean);
   DROP FUNCTION public.fn_executie_proiect_permis(bigint, boolean);

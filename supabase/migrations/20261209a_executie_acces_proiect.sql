@@ -31,6 +31,11 @@
 -- Storage nu mai depinde deloc de rândul din coadă: adevărat, la citire și la scriere (decide doar prefixul căii + politicile existente
 -- din 20261103c). Fișierul e urcat de contul însuși (conținutul îl are deja); ce se protejează e LEGĂTURA cu proiectul, adică rândul din
 -- ai_documente_inbox, ascuns în continuare de RLS-ul cozii (r5). Niciun predicat al migrării nu mai citește ca proprietar după un argument.
+-- r11 (review r10 P1, ambii recenzenți: cu ramura r10 și la UPDATE / DELETE, contul restrâns își ștergea fișierul propriu și urca alt
+-- conținut pe aceeași cale, sub un rând din coadă pe care garda 4d nu-l mai vede): în folderul propriu, pentru contul RESTRÂNS, citirea și
+-- încărcarea rămân ca în r10, iar MODIFICAREA și ȘTERGEREA sunt refuzate uniform (al 4-lea argument al predicatului, p_inlocuire, doar pe
+-- politicile UPDATE / DELETE), fără nicio citire. Ștergerile legitime rămân pe calea serverului și a owner-ului. P2: prefixul strict `<uuid>/…`.
+-- Conturile nerestrânse și owner-ul: neschimbat.
 -- P2 (decizia chat-ului): poarta lui fn_executie_swap_tevi_pozitie cere și dreptul de SCRIERE pe modulul Execuție (fn_executie_nod_drept),
 -- pentru orice cont logat — închide o problemă care exista dinainte (detalii în raportul intern). Testul anti-oracol (T3e):
 -- fiecare funcție cu EXECUTE pentru clienți × fiecare fel de argument × 4 conturi (fără modul, restrâns, restrâns fără modul, editor
@@ -789,23 +794,32 @@ END $f$;
 --   * documente-proiect: citire = un rând VIZIBIL din documente_proiect cu această cale, pe un proiect de pe listă; scriere = FALS (azi doar
 --     serverul scrie în acest bucket — ingest-document / corespondența; UI-ul doar citește). Altfel scrierea ar depinde de rândurile pe
 --     care apelantul nu le vede (un fișier comun cu un proiect ascuns) — cazul scris în brief, închis prin refuz, nu prin citire ca proprietar;
---   * ai-documente-inbox: în folderul PROPRIU (`<auth.uid()>/…`, fără `..`) = adevărat, la citire și la scriere, FĂRĂ nicio citire (r10,
---     review r9 P1): același răspuns pentru o cale inexistentă, un fișier propriu fără rând, cu rând legat de un proiect permis sau de unul
---     nepermis. Restul îl decid politicile existente ale bucket-ului (20261103c, neatinse). Contul își vede / șterge propriul fișier ca
---     înainte de migrare; legătura cu proiectul (rândul din coadă) rămâne ascunsă de RLS-ul cozii. În afara folderului propriu, DOAR rândul VIZIBIL apelantului cu această
+--   * ai-documente-inbox: în folderul PROPRIU (forma strictă `<auth.uid()>/<cel puțin un caracter>`, fără `..`; r11, review r10 P2: calea
+--     egală cu uuid-ul, fără `/`, nu se califică), FĂRĂ nicio citire (r10, review r9 P1): CITIRE și ÎNCĂRCARE (INSERT) = adevărat;
+--     r11 (review r10 P1, ambii recenzenți): MODIFICARE și ȘTERGERE (p_inlocuire = true: UPDATE / DELETE, deci și upsert-ul pe o cale
+--     ocupată, mutarea, înlocuirea) = FALS. Același răspuns pentru o cale inexistentă, un fișier propriu fără rând, cu rând legat de un
+--     proiect permis sau de unul nepermis. Fără ștergere, o cale ocupată rămâne ocupată: un INSERT pe ea pică pe cheia unică
+--     (bucket_id, name), iar upsert-ul trece prin UPDATE (refuzat), deci conținutul unui fișier existent nu se poate înlocui sub un rând
+--     din coadă pe care garda 4d (20261103c) nu-l mai vede. Ștergerile legitime rămân pe calea serverului (service_role) și a owner-ului.
+--     Restul îl decid politicile existente ale bucket-ului (20261103c, neatinse). Contul își vede propriul fișier ca înainte de migrare;
+--     legătura cu proiectul (rândul din coadă) rămâne ascunsă de RLS-ul cozii. În afara folderului propriu, DOAR rândul VIZIBIL apelantului cu această
 --     cale (fisier_path e unic), după regula rândului la nivelul cerut. Fără rând vizibil = fals, la fel pentru o cale inexistentă, un rând
 --     al altui modul pe care nu-l vede și un rând nedecis pe care nu-l vede;
 --   * cale cu `..` = fals; bucket din afara listei = adevărat (neatins, nu citește nimic).
 -- Cont nerestrâns (și owner): adevărat pentru orice argument, fără nicio altă citire (nu află nimic). Bucket-urile sunt numite aici;
 -- preflight-ul cere ca inventarul să aibă exact aceleași (pasul 0) și dreptul de citire al lui authenticated pe coloanele căutate.
-CREATE FUNCTION public.fn_executie_acces_obiect_permis(p_bucket text, p_name text, p_scriere boolean) RETURNS boolean
+-- r11: p_inlocuire (implicit false) = modificarea / ștergerea unui obiect EXISTENT (politicile UPDATE / DELETE); cere p_scriere = true
+-- (combinația citire + înlocuire = fals). Diferă de scrierea simplă DOAR în folderul propriu al Inboxului; în rest = p_scriere.
+CREATE FUNCTION public.fn_executie_acces_obiect_permis(p_bucket text, p_name text, p_scriere boolean, p_inlocuire boolean DEFAULT false) RETURNS boolean
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
-  SELECT p_bucket IS NOT NULL AND p_name IS NOT NULL AND p_scriere IS NOT NULL
+  SELECT p_bucket IS NOT NULL AND p_name IS NOT NULL AND p_scriere IS NOT NULL AND p_inlocuire IS NOT NULL
+    AND (p_scriere OR NOT p_inlocuire)
     AND (public.fn_executie_acces_nerestrans()
          OR CASE
               WHEN p_bucket NOT IN ('ai-documente-inbox', 'documente-proiect', 'executie-borderouri', 'executie-contracte', 'executie-pachete-pdf') THEN true
               WHEN position('..' IN p_name) > 0 THEN false
-              WHEN p_bucket = 'ai-documente-inbox' AND split_part(p_name, '/', 1) = auth.uid()::text THEN true
+              -- folderul propriu, forma strictă `<uuid>/…` (uuid-ul canonic n-are `%` / `_`, deci LIKE nu are metacaractere din el)
+              WHEN p_bucket = 'ai-documente-inbox' AND p_name LIKE auth.uid()::text || '/_%' THEN NOT p_inlocuire
               WHEN p_bucket = 'ai-documente-inbox' THEN
                 EXISTS (SELECT 1 FROM public.ai_documente_inbox i
                          WHERE i.fisier_path = p_name
@@ -842,7 +856,7 @@ REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans() FROM PUBLIC, anon, 
 REVOKE ALL ON FUNCTION public.fn_executie_acces_lista(boolean) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean) FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean, boolean) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans_cont(uuid) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_lista_cont(uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
@@ -854,7 +868,7 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_acces_nerestrans() TO authenticated
 GRANT EXECUTE ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean, boolean) TO authenticated;
 
 -- RLS pe tabelul nou: owner vede tot, ceilalți doar rândurile proprii (ca UI-ul să știe ce i s-a dat); fără scriere directă (L07)
 ALTER TABLE public.executie_acces_proiect ENABLE ROW LEVEL SECURITY;
@@ -1047,7 +1061,7 @@ REVOKE ALL ON FUNCTION public.fn_executie_acces_garda_inbox() FROM PUBLIC, anon,
 -- r9: la copii și la Storage, predicatul pe rând caută părintele / rândul legat sub RLS-ul apelantului (o căutare pe cheie, cu politicile
 -- părintelui); tot doar pentru contul restrâns.
 DO $pol$
-DECLARE r record; v_cit text; v_scr text; v_bk text;
+DECLARE r record; v_cit text; v_scr text; v_bk text; v_inl text;
 BEGIN
   FOR r IN SELECT * FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox') ORDER BY obiect LOOP
     IF r.clasa = 'proiect' THEN
@@ -1090,10 +1104,14 @@ BEGIN
                   'OR public.fn_executie_acces_obiect_permis(bucket_id, name, false)', v_bk);
   v_scr := format('bucket_id <> ALL (ARRAY[%s]::text[]) OR (SELECT public.fn_executie_acces_nerestrans()) '
                   'OR public.fn_executie_acces_obiect_permis(bucket_id, name, true)', v_bk);
+  -- r11 (review r10 P1): UPDATE / DELETE = înlocuirea unui obiect existent (p_inlocuire = true): în folderul propriu al Inboxului, pentru
+  -- un cont restrâns, refuz uniform (predicatul nu citește nimic); în rest identic cu v_scr. INSERT-ul rămâne pe v_scr.
+  v_inl := format('bucket_id <> ALL (ARRAY[%s]::text[]) OR (SELECT public.fn_executie_acces_nerestrans()) '
+                  'OR public.fn_executie_acces_obiect_permis(bucket_id, name, true, true)', v_bk);
   EXECUTE format('CREATE POLICY executie_acces_obiect_citire ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated USING (%s)', v_cit);
   EXECUTE format('CREATE POLICY executie_acces_obiect_adauga ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (%s)', v_scr);
-  EXECUTE format('CREATE POLICY executie_acces_obiect_modifica ON storage.objects AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', v_scr, v_scr);
-  EXECUTE format('CREATE POLICY executie_acces_obiect_sterge ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated USING (%s)', v_scr);
+  EXECUTE format('CREATE POLICY executie_acces_obiect_modifica ON storage.objects AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', v_inl, v_inl);
+  EXECUTE format('CREATE POLICY executie_acces_obiect_sterge ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated USING (%s)', v_inl);
 END $pol$;
 
 -- ── 6. funcțiile de drept: aceeași regulă de modul + condiția de proiect (CREATE OR REPLACE păstrează owner / ACL) ──
@@ -1307,7 +1325,7 @@ BEGIN
            AND pol.polroles = ARRAY['authenticated'::regrole]::oid[]
            AND pol.polname IN ('executie_acces_obiect_citire', 'executie_acces_obiect_adauga', 'executie_acces_obiect_modifica', 'executie_acces_obiect_sterge')
            AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
-                        AND d.refobjid = 'public.fn_executie_acces_obiect_permis(text, text, boolean)'::regprocedure)
+                        AND d.refobjid = 'public.fn_executie_acces_obiect_permis(text, text, boolean, boolean)'::regprocedure)
            AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
                         AND d.refobjid = 'public.fn_executie_acces_nerestrans()'::regprocedure)) <> 4 THEN
     RAISE EXCEPTION '20261209a post: politicile Storage';
