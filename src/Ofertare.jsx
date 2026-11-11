@@ -10,7 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
-import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI } from './utils/probeCalc.js'
+import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI, etichetaDiametru } from './utils/probeCalc.js'
 import OfertareLicitatiiTab from './OfertareLicitatii.jsx'
 import OfertareBiblioteca from './OfertareBiblioteca.jsx'
 
@@ -595,8 +595,10 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
               <div><label style={S.lbl}>Diametru (DN)</label>
                 <select value={ci.dnId} onChange={e=>setCiK('dnId',e.target.value)} style={S.input}>
                   <option value="">— DN —</option>
-                  {diametre.map(d=><option key={d.id} value={d.id}>{d.dn_label} ({fmtLei(d.diametru_extern_mm)} mm)</option>)}
-                </select></div>
+                  {diametre.map(d=><option key={d.id} value={d.id}>{etichetaDiametru(d, fmtLei)}</option>)}
+                </select>
+                {/* TKT-2026-0348: echivalentul în țoli e în listă (10″ = Ø273,1 mm, 12″ = Ø323,9 mm) */}
+                <div style={{fontSize:10, color:G.dim, marginTop:3}}>Țeavă în țoli: 10″ = Ø273,1 mm · 12″ = Ø323,9 mm (căutați după țoli în listă)</div></div>
               <div><label style={S.lbl}>Configurație (≥ presiune)</label>
                 <select value={ci.configId} onChange={e=>setCiK('configId',e.target.value)} style={S.input}>
                   <option value="">— config —</option>
