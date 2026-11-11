@@ -147,20 +147,57 @@ class StaticDelivery(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("buget_lock", ROOT / "scripts/portal/buget_lock.py")
         buget = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(buget)
-        mig = MIGRATION.read_text(encoding="utf-8")
-        self.assertEqual(buget.probleme(mig, {"auth.users": "SHARE ROW EXCLUSIVE", "public.employees": "SHARE ROW EXCLUSIVE",
-                                              "public.profiles": "SHARE"}), [])
-        rev = ROLLBACK.read_text(encoding="utf-8")
-        self.assertEqual(buget.probleme(rev, {"auth.users": "ACCESS EXCLUSIVE", "public.employees": "ACCESS EXCLUSIVE"}), [])
-        # Tabelele cu FK spre auth.users / employees se creeaza dupa $locks$; inventarul teren si ERP se verifica sub lock.
+        mig = MIGRATION.read_text(encoding="utf-8").replace("\r\n", "\n")
+        moduri = {"auth.users": "SHARE ROW EXCLUSIVE", "public.employees": "SHARE ROW EXCLUSIVE", "public.profiles": "SHARE"}
+        # r10: 18a creeaza tabelele portalului inainte de $locks$ (fara FK); existente = doar tabelele utilizatorilor.
+        fn_mig = buget.functii_care_citesc([mig], buget.TABELE_UTILIZATORI)
+        self.assertTrue({"fn_teren_eligibil", "fn_portal_porti_lipsa", "fn_auth_token_hook"} <= fn_mig, fn_mig)
+        self.assertEqual(buget.probleme(mig, moduri, (), fn_mig), [])
+        rev = ROLLBACK.read_text(encoding="utf-8").replace("\r\n", "\n")
+        rev_moduri = {"auth.users": "ACCESS EXCLUSIVE", "public.employees": "ACCESS EXCLUSIVE"}
+        fn_rev = buget.functii_care_citesc([mig], buget.TABELE_UTILIZATORI + buget.TABELE_18A)
+        self.assertEqual(buget.probleme(rev, rev_moduri, buget.TABELE_18A, fn_rev), [])
+        # Tabelele portalului: create INAINTE de $locks$, fara REFERENCES; FK-urile, inventarul teren si ERP in $critic$.
         i = mig.index("DO $locks$")
-        for after in ("CREATE TABLE public.conturi_tip (", "CREATE TABLE public.conturi_teren (", "DO $inventory_pre$", "DO $erp_pre$"):
-            self.assertGreater(mig.index(after), i, after)
+        for before in ("CREATE TABLE public.conturi_tip (", "CREATE TABLE public.conturi_teren (", "DO $liste_pre$"):
+            self.assertLess(mig.index(before), i, before)
+        for t in ("conturi_tip (", "conturi_teren (", "conturi_tip_jurnal ("):
+            self.assertNotIn("REFERENCES", mig.split("CREATE TABLE public." + t, 1)[1].split(");", 1)[0], t)
+        crit = mig.split("DO $critic$", 1)[1]
+        for after in ("ADD CONSTRAINT conturi_tip_auth_user_id_fkey", "ADD CONSTRAINT conturi_teren_auth_user_id_fkey",
+                      "ADD CONSTRAINT conturi_teren_employee_id_fkey", "PORTAL_TERRAIN_INVENTORY_CHANGED",
+                      "PORTAL_ERP_APPROVAL_LIST_CHANGED", "PORTAL_ERP_APPROVAL_OWNER_MISSING",
+                      "INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)", "PORTAL_POSTCONDITION_FAILED"):
+            self.assertIn(after, crit, after)
         # 18a nu citeste si nu blocheaza user_module_access (in afara comentariilor).
         self.assertNotIn("user_module_access", "\n".join(l for l in mig.splitlines() if not l.lstrip().startswith("--")))
-        # Revenirea: atestarea si drepturile inaintea lock-urilor; lock-urile inaintea verificarii (L14).
+        # Revenirea: atestarea si drepturile inaintea lock-urilor; lock-urile inaintea verificarii (L14), in $critic$.
         self.assertLess(rev.index("DO $auth$"), rev.index("DO $locks$"))
-        self.assertLess(rev.index("DO $locks$"), rev.index("DO $check$"))
+        rcrit = rev.split("DO $critic$", 1)[1]
+        self.assertLess(rcrit.index("PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG"), rcrit.index("DROP TABLE public.conturi_tip;"))
+        # r10: mutanti ai contractului (al doilea recenzent r9 P1-01, Jakarinos r9 P2).
+        L = "DO $locks$"
+        mutanti = {
+            "SELECT pe profiles inainte de $locks$": mig.replace(L, "SELECT count(*) FROM public.profiles;\n" + L, 1),
+            "FK pe conturi_tip inainte": mig.replace("  auth_user_id uuid PRIMARY KEY,\n  tip text",
+                                                      "  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id),\n  tip text", 1),
+            "functie sql pe employees": mig.replace(L, "CREATE FUNCTION public.x() RETURNS bigint LANGUAGE sql AS $q$ SELECT count(*) FROM public.employees $q$;\n" + L, 1),
+            "DO cu poarta inainte": mig.replace(L, "DO $q$ BEGIN PERFORM public.fn_portal_porti_lipsa(); END $q$;\n" + L, 1),
+            "lock consultativ blocant": mig.replace("IF NOT pg_try_advisory_xact_lock(", "PERFORM pg_advisory_xact_lock(", 1),
+            "fara transaction_timeout": mig.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", "", 1),
+            "a doua instructiune dupa $locks$": mig.replace("END $locks$;\n", "END $locks$;\nSELECT 1;\n", 1),
+        }
+        for nume, text in mutanti.items():
+            with self.subTest(mutant=nume):
+                self.assertNotEqual(text, mig, nume)
+                self.assertNotEqual(buget.probleme(text, moduri, (), fn_mig), [], nume)
+        for nume, text in {
+            "rev: SELECT pe conturi_tip inainte": rev.replace(L, "SELECT count(*) FROM public.conturi_tip;\n" + L, 1),
+            "rev: fara transaction_timeout": rev.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", "", 1),
+        }.items():
+            with self.subTest(mutant=nume):
+                self.assertNotEqual(text, rev, nume)
+                self.assertNotEqual(buget.probleme(text, rev_moduri, buget.TABELE_18A, fn_rev), [], nume)
         # Proba efectiva de drepturi pe rol (subtranzactie anulata intentionat).
         priv = mig.split("DO $priv$", 1)[1].split("END $priv$;", 1)[0]
         for needle in ("CREATE ROLE portal_e1_proba_drepturi", "GRANT portal_e1_proba_drepturi TO authenticator",

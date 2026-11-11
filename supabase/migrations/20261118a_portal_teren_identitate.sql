@@ -11,6 +11,17 @@
 --    de FK-urile noi), profiles SHARE; citirile nu sunt blocate. user_module_access nu mai e blocat (18a nu-l citeste).
 --  * preflight de drepturi ($priv$) inaintea oricarei schimbari;
 --  * conturile teren existente: sha256 pe auth.users.id::text (fara adrese in repo), ca lista ERP.
+-- r10 (11.11.2026, al doilea recenzent r9 P1-01 + Jakarinos r9 P2): plafon pe DURATA sectiunii critice, nu doar pe
+-- asteptare. (1) timeout-urile sunt PRIMELE instructiuni (inaintea oricarui lock, inclusiv cel consultativ, luat acum cu
+-- pg_try_advisory_xact_lock + refuz); (2) inainte de $locks$ nu se atinge niciun tabel existent: tabelele portalului se
+-- creeaza fara FK, listele se verifica ca format; (3) dupa $locks$ ramane O SINGURA instructiune ($critic$: FK-urile pe
+-- tabelele noi goale, inventarul, clasificarea, poarta, amprenta); (4) la obtinerea lock-urilor $locks$ porneste
+-- transaction_timeout = 2 s (PG17): de la primul lock tinut pana la COMMIT (inclusiv inregistrarea runnerului si
+-- pauzele de retea dintre instructiuni) trec cel mult 2 s, altfel serverul inchide sesiunea => ROLLBACK, lock-uri
+-- eliberate, nimic schimbat. statement_timeout = 2 s pe $critic$ = a doua plasa. Masurat in harness (fereastra de lock
+-- si asteptarea maxima a traficului concurent, praguri care pica testul; scripts/portal/concurrency_lock.sh).
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
 DO $pre$
 BEGIN
   IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare', true)
@@ -20,9 +31,15 @@ BEGIN
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED';
   END IF;
-  -- Ordine comuna (L06): advisory livrare -> obiectele noi (rol, functii, baseline) -> auth.users -> employees
-  -- -> profiles ($locks$) -> tabelele noi cu FK. Calea de login/creare cont: auth.users -> profiles (aceeasi ordine).
-  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
+  -- r10: plafonul sectiunii critice cere transaction_timeout (PostgreSQL 17, ca productia).
+  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
+  -- Ordine comuna (L06): advisory livrare -> obiectele noi (rol, functii, baseline, tabelele portalului fara FK)
+  -- -> auth.users -> employees -> profiles ($locks$) -> FK-urile tabelelor noi ($critic$).
+  -- Calea de login/creare cont: auth.users -> profiles (aceeasi ordine).
+  -- r10: runnerul tine deja lock-ul consultativ (1_pre, reintrant); fara runner nu se asteapta: ocupat = refuz.
+  IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
+    RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03';
+  END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'teren')
     OR to_regclass('public.conturi_tip') IS NOT NULL
     OR to_regclass('public.conturi_teren') IS NOT NULL
@@ -34,9 +51,6 @@ BEGIN
   END IF;
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
--- r9 (P1-01): plasa pentru orice lock implicit (catalog, tabelele noi, inregistrarea runnerului) si plafon pe instructiune.
-SET LOCAL lock_timeout = '3s';
-SET LOCAL statement_timeout = '15s';
 -- r9 (P2-03): drepturile de care are nevoie postgres NOSUPERUSER, verificate INAINTEA oricarei schimbari.
 -- Rolul: proba EFECTIVA (CREATE ROLE + GRANT catre authenticator + REVOKE + DROP pe un rol de proba, intr-o
 -- subtranzactie anulata intentionat). Tabelele: cate un drept pe rand (has_table_privilege cu lista = ORICARE drept).
@@ -81,8 +95,9 @@ CREATE ROLE teren NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLIC
 GRANT teren TO authenticator;
 GRANT USAGE ON SCHEMA public TO teren;
 
--- r9: tabelele conturi_* (FK spre auth.users / employees = lock SHARE ROW EXCLUSIVE pe acestea) se creeaza dupa $locks$.
--- Functiile de mai jos le folosesc doar la executie (plpgsql), nu la creare.
+-- r10: tabelele conturi_* se creeaza INAINTE de $locks$, fara FK (un FK ia SHARE ROW EXCLUSIVE pe auth.users /
+-- employees); FK-urile se adauga in $critic$, pe tabele goale (validare instantanee). Functiile de mai jos le folosesc
+-- doar la executie (plpgsql: corpul nu se analizeaza la creare, deci nu blocheaza tabelele pe care le citeste).
 CREATE FUNCTION public.fn_conturi_tip_audit() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
 BEGIN
@@ -337,6 +352,44 @@ WHERE n.nspname='information_schema' AND c.oid<16384 AND c.relkind IN ('r','v')
  AND NOT has_any_column_privilege('teren',c.oid,'INSERT,UPDATE,REFERENCES');
 ALTER TABLE public.portal_public_baseline ENABLE TRIGGER portal_public_baseline_imuabil;
 
+-- Tabelele portalului. r10: create INAINTEA lock-urilor, FARA FK (FK-urile spre auth.users / employees se adauga in
+-- $critic$, sub lock-urile deja detinute; numele lor = numele generate automat in r9, aceeasi definitie in catalog).
+CREATE TABLE public.conturi_tip (
+  auth_user_id uuid PRIMARY KEY,
+  tip text NOT NULL CHECK (tip IN ('erp','teren','neaprobat')),
+  sursa text NOT NULL CHECK (sursa ~ '[^[:space:]]'),
+  clasificat_de uuid,
+  clasificat_la timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.conturi_teren (
+  auth_user_id uuid PRIMARY KEY,
+  employee_id integer UNIQUE,
+  stare text NOT NULL CHECK (stare IN ('in_creare','activ','revocat'))
+);
+CREATE TABLE public.conturi_tip_jurnal (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  auth_user_id uuid NOT NULL,
+  operatie text NOT NULL CHECK (operatie IN ('INSERT','UPDATE','DELETE')),
+  vechi jsonb, nou jsonb,
+  autor uuid, rol_sesiune text NOT NULL,
+  la timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+ALTER TABLE public.conturi_tip ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conturi_teren ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conturi_tip_jurnal ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.conturi_tip, public.conturi_teren, public.conturi_tip_jurnal
+  FROM PUBLIC, anon, authenticated, service_role, teren;
+REVOKE ALL ON SEQUENCE public.conturi_tip_jurnal_id_seq FROM PUBLIC, anon, authenticated, service_role, teren;
+GRANT SELECT ON public.conturi_tip TO supabase_auth_admin;
+CREATE POLICY conturi_tip_hook ON public.conturi_tip FOR SELECT TO supabase_auth_admin
+  USING (auth_user_id IS NOT NULL);
+CREATE TRIGGER conturi_tip_audit AFTER INSERT OR UPDATE OR DELETE ON public.conturi_tip
+  FOR EACH ROW EXECUTE FUNCTION public.fn_conturi_tip_audit();
+CREATE TRIGGER conturi_jurnal_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.conturi_tip_jurnal
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
+CREATE TRIGGER conturi_tip_no_truncate BEFORE TRUNCATE ON public.conturi_tip
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
+
 -- r3 (Copilot r2 P1-01): 'erp' DOAR pentru conturile aprobate explicit de owner. Legarea de fisa, is_owner sau un
 -- drept pe modul NU sunt dovada de aprobare. Lista = sha256 (hex) pe auth.users.id::text, revizuita de Razvan din
 -- raportul INTERN al inventarului read-only si fixata aici inainte de DRY (fara UUID-uri / emailuri in repo).
@@ -384,17 +437,37 @@ SELECT h,employee_id FROM (VALUES
  ('ef995b5c2b4f4de077db9103bdf5443a40247ac21ff9b519ba61faebf22d736a',NULL::integer)
 ) v(h,employee_id);
 
--- r9 (P1-01): PUNCTUL UNIC de lock pe tabelele folosite de utilizatori, dupa toate verificarile de catalog de mai sus.
+-- r10: verificarile de FORMAT ale listelor (doar tabelele temporare) inaintea lock-urilor; cele pe date, in $critic$.
+DO $liste_pre$
+DECLARE v text[];
+BEGIN
+  IF (SELECT count(*) FROM pg_temp.portal_teren_aprobat) <> 3
+    OR (SELECT count(DISTINCT h) FROM pg_temp.portal_teren_aprobat) <> 3
+    OR EXISTS (SELECT FROM pg_temp.portal_teren_aprobat WHERE h IS NULL OR h !~ '^[0-9a-f]{64}$') THEN
+    RAISE EXCEPTION 'PORTAL_TERRAIN_INVENTORY_CHANGED';
+  END IF;
+  SELECT lista INTO STRICT v FROM pg_temp.portal_erp_aprobat;
+  IF v IS NULL OR cardinality(v) = 0 THEN RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_MISSING'; END IF;
+  IF EXISTS (SELECT FROM unnest(v) h WHERE h IS NULL OR h !~ '^[0-9a-f]{64}$')
+    OR cardinality(v) <> (SELECT count(DISTINCT h) FROM unnest(v) h) THEN
+    RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_INVALID'; END IF;
+END $liste_pre$;
+
+-- r9 (P1-01) / r10: PUNCTUL UNIC de lock pe tabelele folosite de utilizatori. Inainte de el nu s-a atins niciun tabel
+-- existent (doar catalogul si obiectele noi; corpurile care le citesc sunt plpgsql, neanalizate la creare).
 -- NOWAIT + reincercare la 50 ms, cel mult 3 s: cat timp incearca, aplicarea NU sta in coada lock-ului (login-urile si
 -- citirile ERP nu se aseaza in spatele ei); o incercare ratata elibereaza tot ce luase (subtranzactie). Peste buget:
 -- 55P03 PORTAL_LOCK_BUDGET, tranzactia se anuleaza, nimic schimbat. Ordinea: auth.users -> employees -> profiles.
---  * auth.users  SHARE ROW EXCLUSIVE: cerut oricum de FK-urile conturi_* -> auth.users; tine setul de conturi fix pana la
---    commit. Blocheaza: scrierile Auth (actualizarea la login, conturi noi, ban). Nu blocheaza citirile.
+--  * auth.users  SHARE ROW EXCLUSIVE: cerut oricum de FK-urile conturi_* -> auth.users (ADD FOREIGN KEY); tine setul de
+--    conturi fix pana la commit. Blocheaza: scrierile Auth (actualizarea la login, conturi noi, ban). Nu citirile.
 --  * employees   SHARE ROW EXCLUSIVE: cerut de FK-ul conturi_teren -> employees. Blocheaza: editarile HR. Nu citirile.
 --  * profiles    SHARE: legatura fisa / is_owner nu se schimba intre verificare si clasificare. Blocheaza: scrierile in
 --    profiles (editari Admin, conturi noi). Nu blocheaza citirile ERP.
--- Durata: de aici pana la commit = verificarile de inventar, 3 tabele noi, clasificarea (~150 de conturi), poarta finala
--- si inregistrarea runnerului; estimat sub 1 s (masurat in harness, scripts/portal/concurrency_lock.sh).
+-- PLAFONUL (r10): imediat dupa obtinere, transaction_timeout = 2 s porneste de la ZERO (setat intai pe 0, ca un plafon
+-- mai mare mostenit de la rol / baza sa nu ramana activ). Garantia: serverul termina sesiunea daca tranzactia nu s-a
+-- incheiat in 2 s de la primul lock tinut - indiferent de cate instructiuni, cat dureaza fiecare sau cat asteapta
+-- clientul / reteaua intre ele; terminarea = ROLLBACK, toate lock-urile eliberate. statement_timeout = 2 s pentru
+-- $critic$ e a doua plasa (aceeasi limita, pe instructiune). Dupa $locks$ ramane exact o instructiune: $critic$.
 DO $locks$
 DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
 BEGIN
@@ -413,15 +486,24 @@ BEGIN
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  RAISE NOTICE 'PORTAL_LOCKS 18a: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+  PERFORM set_config('statement_timeout', '2s', true);
+  PERFORM set_config('transaction_timeout', '0', true);
+  PERFORM set_config('transaction_timeout', '2s', true);
+  RAISE NOTICE 'PORTAL_LOCKS 18a: % incercari, % ms; plafon 2 s pana la COMMIT', v_n,
+    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $locks$;
-DO $inventory_pre$
+-- r10: sectiunea critica = O SINGURA instructiune (un singur drum dus-intors client-server), toata sub plafon.
+DO $critic$
+DECLARE v text[]; v_count bigint; v_erp bigint; v_snapshot jsonb;
 BEGIN
-  IF (SELECT count(*) FROM pg_temp.portal_teren_aprobat) <> 3
-    OR (SELECT count(DISTINCT h) FROM pg_temp.portal_teren_aprobat) <> 3
-    OR EXISTS (SELECT FROM pg_temp.portal_teren_aprobat WHERE h IS NULL OR h !~ '^[0-9a-f]{64}$')
-    -- fiecare hash = exact un cont Auth, pe domeniul teren
-    OR (SELECT count(*) FROM auth.users u JOIN pg_temp.portal_teren_aprobat t
+  -- 1. FK-urile tabelelor noi (goale): SHARE ROW EXCLUSIVE pe auth.users / employees, deja detinut.
+  ALTER TABLE public.conturi_tip ADD CONSTRAINT conturi_tip_auth_user_id_fkey
+    FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+  ALTER TABLE public.conturi_teren
+    ADD CONSTRAINT conturi_teren_auth_user_id_fkey FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE CASCADE,
+    ADD CONSTRAINT conturi_teren_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id);
+  -- 2. inventarul teren, pe date (sub lock)
+  IF (SELECT count(*) FROM auth.users u JOIN pg_temp.portal_teren_aprobat t
       ON t.h=encode(sha256(convert_to(u.id::text,'UTF8')),'hex')
       WHERE lower(split_part(u.email,'@',2))='teren.gazpet.ro') <> 3
     -- niciun alt cont pe domeniul teren
@@ -435,15 +517,8 @@ BEGIN
       WHERE p.id IS NULL OR p.employee_id IS DISTINCT FROM t.employee_id) THEN
     RAISE EXCEPTION 'PORTAL_TERRAIN_INVENTORY_CHANGED';
   END IF;
-END $inventory_pre$;
-DO $erp_pre$
-DECLARE v text[];
-BEGIN
+  -- 3. lista ERP fata de conturile reale (formatul s-a verificat in $liste_pre$)
   SELECT lista INTO STRICT v FROM pg_temp.portal_erp_aprobat;
-  IF v IS NULL OR cardinality(v) = 0 THEN RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_MISSING'; END IF;
-  IF EXISTS (SELECT FROM unnest(v) h WHERE h IS NULL OR h !~ '^[0-9a-f]{64}$')
-    OR cardinality(v) <> (SELECT count(DISTINCT h) FROM unnest(v) h) THEN
-    RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_INVALID'; END IF;
   IF EXISTS (SELECT FROM unnest(v) h WHERE NOT EXISTS (SELECT FROM auth.users u
       WHERE encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=h)) THEN
     RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_CHANGED'; END IF;
@@ -454,66 +529,22 @@ BEGIN
     OR EXISTS (SELECT FROM public.profiles p WHERE p.is_owner IS TRUE
       AND encode(sha256(convert_to(p.id::text,'UTF8')),'hex') <> ALL(v)) THEN
     RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_OWNER_MISSING'; END IF;
-END $erp_pre$;
-
--- Tabelele portalului (dupa $locks$: FK-urile iau SHARE ROW EXCLUSIVE pe auth.users / employees, deja detinut).
-CREATE TABLE public.conturi_tip (
-  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  tip text NOT NULL CHECK (tip IN ('erp','teren','neaprobat')),
-  sursa text NOT NULL CHECK (sursa ~ '[^[:space:]]'),
-  clasificat_de uuid,
-  clasificat_la timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE public.conturi_teren (
-  auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  employee_id integer UNIQUE REFERENCES public.employees(id),
-  stare text NOT NULL CHECK (stare IN ('in_creare','activ','revocat'))
-);
-CREATE TABLE public.conturi_tip_jurnal (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  auth_user_id uuid NOT NULL,
-  operatie text NOT NULL CHECK (operatie IN ('INSERT','UPDATE','DELETE')),
-  vechi jsonb, nou jsonb,
-  autor uuid, rol_sesiune text NOT NULL,
-  la timestamptz NOT NULL DEFAULT clock_timestamp()
-);
-ALTER TABLE public.conturi_tip ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.conturi_teren ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.conturi_tip_jurnal ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.conturi_tip, public.conturi_teren, public.conturi_tip_jurnal
-  FROM PUBLIC, anon, authenticated, service_role, teren;
-REVOKE ALL ON SEQUENCE public.conturi_tip_jurnal_id_seq FROM PUBLIC, anon, authenticated, service_role, teren;
-GRANT SELECT ON public.conturi_tip TO supabase_auth_admin;
-CREATE POLICY conturi_tip_hook ON public.conturi_tip FOR SELECT TO supabase_auth_admin
-  USING (auth_user_id IS NOT NULL);
-CREATE TRIGGER conturi_tip_audit AFTER INSERT OR UPDATE OR DELETE ON public.conturi_tip
-  FOR EACH ROW EXECUTE FUNCTION public.fn_conturi_tip_audit();
-CREATE TRIGGER conturi_jurnal_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.conturi_tip_jurnal
-  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
-CREATE TRIGGER conturi_tip_no_truncate BEFORE TRUNCATE ON public.conturi_tip
-  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
-
--- Setul complet se recalculeaza sub lock: fara numar/UUID-uri ERP hardcodate.
-INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)
+  -- 4. clasificarea: setul complet se recalculeaza sub lock, fara numar/UUID-uri ERP hardcodate.
+  INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)
 SELECT id,CASE WHEN EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
    WHERE t.h=encode(sha256(convert_to(u.id::text,'UTF8')),'hex')) THEN 'teren'
  -- EXISTS + ANY(coloana array): `= ANY((SELECT lista ...))` ar fi forma ANY(subinterogare) = text = text[] (Jakarinos r3).
  WHEN EXISTS (SELECT FROM pg_temp.portal_erp_aprobat a
    WHERE encode(sha256(convert_to(u.id::text,'UTF8')),'hex')=ANY(a.lista)) THEN 'erp'
  ELSE 'neaprobat' END,'inventar_e1_1a_r3' FROM auth.users u;
-DO $pending$ DECLARE v_count bigint; v_erp bigint; BEGIN
- SELECT count(*) FILTER (WHERE tip='neaprobat'),count(*) FILTER (WHERE tip='erp') INTO v_count,v_erp FROM public.conturi_tip;
- -- Fiecare hash aprobat a clasificat exact un cont.
- IF v_erp <> (SELECT cardinality(lista) FROM pg_temp.portal_erp_aprobat) THEN
-   RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_CHANGED'; END IF;
- RAISE NOTICE 'PORTAL_ERP: %, PORTAL_NEAPROBATE: %',v_erp,v_count;
-END $pending$;
-INSERT INTO public.conturi_teren(auth_user_id,employee_id,stare)
-SELECT t.auth_user_id,p.employee_id,'activ' FROM public.conturi_tip t
-  JOIN public.profiles p ON p.id=t.auth_user_id WHERE t.tip='teren';
-DO $post$
-DECLARE v_snapshot jsonb;
-BEGIN
+  SELECT count(*) FILTER (WHERE tip='neaprobat'),count(*) FILTER (WHERE tip='erp') INTO v_count,v_erp FROM public.conturi_tip;
+  -- Fiecare hash aprobat a clasificat exact un cont.
+  IF v_erp <> cardinality(v) THEN RAISE EXCEPTION 'PORTAL_ERP_APPROVAL_LIST_CHANGED'; END IF;
+  RAISE NOTICE 'PORTAL_ERP: %, PORTAL_NEAPROBATE: %',v_erp,v_count;
+  INSERT INTO public.conturi_teren(auth_user_id,employee_id,stare)
+  SELECT t.auth_user_id,p.employee_id,'activ' FROM public.conturi_tip t
+    JOIN public.profiles p ON p.id=t.auth_user_id WHERE t.tip='teren';
+  -- 5. postconditia (poarta completa) si amprenta pentru revenire
   IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'; END IF;
   SELECT jsonb_build_object(
     'tip',(SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]') FROM public.conturi_tip t),
@@ -553,4 +584,4 @@ BEGIN
       WHERE s.seqrelid='public.conturi_tip_jurnal_id_seq'::regclass
     ) x)) INTO v_snapshot;
   EXECUTE format('COMMENT ON TABLE public.conturi_tip IS %L',v_snapshot::text);
-END $post$;
+END $critic$;

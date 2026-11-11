@@ -10,6 +10,17 @@
 --    (citirile HR nu se blocheaza); profiles ACCESS EXCLUSIVE doar pe coada (cerut de ALTER ... CHECK);
 --  * cont nou dupa 19a: handle_new_user scrie si clasificarea 'neaprobat' in conturi_tip (inventar Auth complet);
 --  * preflight de drepturi ($priv$) inaintea oricarei schimbari.
+-- r10 (11.11.2026, al doilea recenzent r9 P1-01 / P2-01 + Jakarinos r9 P2):
+--  * timeout-urile sunt PRIMELE instructiuni; lock-ul consultativ se ia cu pg_try_advisory_xact_lock + refuz;
+--  * inainte de $locks$ nu se atinge niciun tabel existent (nici al utilizatorilor, nici conturi_* din 18a): functiile
+--    care citesc tabelele utilizatorilor sunt plpgsql (corpul nu se analizeaza la creare => niciun ACCESS SHARE implicit),
+--    handle_new_user si fn_teren_eligibil se inlocuiesc tot inainte (vizibile altor sesiuni abia la COMMIT, atomic cu
+--    CHECK-ul nou); lock-urile pe conturi_* (cascada din auth.users) s-au mutat in $locks$;
+--  * dupa $locks$ ramane O SINGURA instructiune ($critic$), sub transaction_timeout = 2 s (de la primul lock la COMMIT);
+--  * fereastra 18a -> 19a (P2-01): conturile aparute intre cele doua livrari (handle_new_user vechi nu le clasifica) se
+--    clasifica explicit 'neaprobat' in $critic$, sub lock-ul pe auth.users; un cont teren neclasificat = refuz.
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
 DO $pre$
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
@@ -17,11 +28,11 @@ BEGIN
    RAISE EXCEPTION 'PORTAL_RUNNER_REQUIRED'; END IF;
  IF current_setting('transaction_isolation') <> 'read committed' THEN
    RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED'; END IF;
- PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
+ IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
+ IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
+   RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03'; END IF;
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
-SET LOCAL lock_timeout = '3s';
-SET LOCAL statement_timeout = '15s';
 -- r9 (P2-03): drepturile de care are nevoie postgres NOSUPERUSER, inaintea oricarei schimbari, cate unul pe rand.
 -- REFERENCES pentru FK-urile noi, TRIGGER pe employees, proprietar pe profiles (ALTER ... CHECK) si pe functiile
 -- inlocuite, LOCK in alt mod decat ACCESS SHARE = UPDATE / DELETE / TRUNCATE / MAINTAIN (PG17).
@@ -48,10 +59,8 @@ BEGIN
   IF cardinality(v) > 0 THEN
     RAISE EXCEPTION 'PORTAL_PRIVILEGES_MISSING: %', array_to_string(v,'; '); END IF;
 END $priv$;
--- Tabelele portalului (create de 18a; folosite doar de hook, care nu e pornit): conturi_teren primeste coloane noi
--- (ACCESS EXCLUSIVE oricum), conturi_tip / jurnalul SHARE = fara scrieri concurente, citirea hook-ului ramane libera.
-LOCK TABLE public.conturi_teren IN ACCESS EXCLUSIVE MODE;
-LOCK TABLE public.conturi_tip,public.conturi_tip_jurnal IN SHARE MODE;
+-- r10: tabelele portalului din 18a (conturi_tip / conturi_teren / jurnalul) se blocheaza abia in $locks$, dupa tabelele
+-- utilizatorilor (aceeasi ordine ca stergerea unui cont: auth.users -> conturi_*, in cascada).
 -- Jakarinos r6 P1: callee-urile EXTERNE din lista alba 1b si triggerele de pe auth.users / profiles / notifications
 -- (definitie, owner, DEFINER, config, ACL; triggere: activare, definitie, functie) se compara cu valorile revizuite
 -- din inventarul read-only pe prod (sectiunea 9 = scripts/portal/ancore_1b.sql), INAINTE de apply si inca o data la
@@ -206,13 +215,7 @@ CREATE TABLE public.portal_provisioning (
 );
 CREATE UNIQUE INDEX portal_provisioning_employee_deschis ON public.portal_provisioning(employee_id)
  WHERE stare IN ('rezervat','creat');
-ALTER TABLE public.conturi_teren
- ADD COLUMN provisioning_id uuid UNIQUE REFERENCES public.portal_provisioning(provisioning_id),
- ADD COLUMN creat_la timestamptz,
- ADD COLUMN revocat_la timestamptz,
- ADD COLUMN revocat_motiv text;
--- Legacy: data crearii este necunoscuta; nu o inventam la apply. DEFAULT numai pentru randurile noi.
-ALTER TABLE public.conturi_teren ALTER COLUMN creat_la SET DEFAULT now();
+-- r10: coloanele noi pe conturi_teren (tabel din 18a) se adauga in $critic$, sub lock-ul din $locks$.
 CREATE TABLE public.portal_provisioning_jurnal (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
  tabela text NOT NULL, operatie text NOT NULL, vechi jsonb,nou jsonb,
@@ -236,8 +239,7 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_provisioning_audit() FROM PUBLIC,anon,authenticated,service_role,teren;
 CREATE TRIGGER portal_provisioning_audit AFTER INSERT OR UPDATE OR DELETE ON public.portal_provisioning
  FOR EACH ROW EXECUTE FUNCTION public.fn_portal_provisioning_audit();
-CREATE TRIGGER portal_conturi_teren_audit AFTER INSERT OR UPDATE OR DELETE ON public.conturi_teren
- FOR EACH ROW EXECUTE FUNCTION public.fn_portal_provisioning_audit();
+-- r10: triggerul de audit pe conturi_teren se creeaza in $critic$ (tabel din 18a).
 CREATE TRIGGER portal_provisioning_jurnal_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.portal_provisioning_jurnal
  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
 CREATE TRIGGER portal_provisioning_no_truncate BEFORE TRUNCATE ON public.portal_provisioning
@@ -245,11 +247,14 @@ CREATE TRIGGER portal_provisioning_no_truncate BEFORE TRUNCATE ON public.portal_
 
 -- Brief E1-1b: UPDATE termination_date=azi revoca imediat; r6 avea ultima zi inclusiva.
 -- Predicat comun pentru pregatire, creare, finalizare, trigger si hook. Fisierul 18a ramane nemodificat.
+-- r10 (Jakarinos r9 P2): plpgsql, nu sql: corpul unei functii sql se analizeaza la creare (check_function_bodies) si ia
+-- ACCESS SHARE pe employees inainte de $locks$; corpul plpgsql se analizeaza abia la primul apel.
 CREATE FUNCTION public.fn_portal_angajat_eligibil(p_employee_id integer) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
- SELECT EXISTS (SELECT FROM public.employees e WHERE e.id=p_employee_id AND e.active IS TRUE
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
+BEGIN
+ RETURN EXISTS (SELECT FROM public.employees e WHERE e.id=p_employee_id AND e.active IS TRUE
   AND (e.termination_date IS NULL OR e.termination_date > (now() AT TIME ZONE 'Europe/Bucharest')::date));
-$fn$;
+END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_angajat_eligibil(integer) FROM PUBLIC,anon,authenticated,service_role,teren;
 
 DO $elig_manifest$
@@ -458,9 +463,12 @@ REVOKE ALL ON FUNCTION public.fn_portal_revoca_la_plecare() FROM PUBLIC,anon,aut
 --  * tabelele portalului complet (ACL, RLS, coloane, constrangeri, politici); pe profiles constrangerile (rolurile);
 --  * datele portalului + profilurile cu rolurile noi (teren / in_asteptare) + conturile Auth teren si drepturile lor.
 -- Enumerarea e din catalog (semnatura canonica cu oidvectortypes), fara regex pe text SQL.
+-- r10 (Jakarinos r9 P2): plpgsql (RETURN (interogare)), ca la crearea ei sa nu se analizeze interogarea si sa nu se ia
+-- ACCESS SHARE pe auth.users / profiles / user_module_access / conturi_* inainte de $locks$.
 CREATE FUNCTION public.fn_portal_1b_snapshot() RETURNS jsonb
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
- WITH sig AS (SELECT unnest(ARRAY[
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
+BEGIN
+ RETURN (WITH sig AS (SELECT unnest(ARRAY[
    'public.handle_new_user()','public.fn_cont_candidati_angajat(text)','public.fn_nume_cuvinte(text)',
    'public.fn_nume_familie(text)','extensions.unaccent(text)','public.fn_cont_notifica_owneri(text, text, text, text)',
    'public.fn_teren_eligibil(uuid)','public.fn_portal_angajat_eligibil(integer)','public.fn_portal_uid()',
@@ -524,8 +532,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $f
    UNION ALL SELECT 'p:'||p.oid,jsonb_build_array('policy',p.polrelid,p.polname,p.polcmd,p.polpermissive,p.polroles,
     pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid)) FROM pg_policy p
     WHERE p.polrelid IN (SELECT oid FROM rel)
-  ) x));
-$fn$;
+  ) x)));
+END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_1b_snapshot() FROM PUBLIC,anon,authenticated,service_role,teren,supabase_auth_admin;
 CREATE FUNCTION public.fn_portal_porti_lipsa_1b() RETURNS text[]
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
@@ -553,63 +561,9 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_porti_lipsa_1b() FROM PUBLIC,anon,authenticated,service_role,teren,supabase_auth_admin;
 CREATE TRIGGER portal_1b_manifest_imuabil BEFORE UPDATE OR DELETE OR TRUNCATE ON public.portal_e1_1b_manifest
  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_conturi_jurnal_imuabil();
--- r9 (P1-01): PUNCTUL UNIC de lock pe tabelele folosite de utilizatori, la final. NOWAIT + reincercare la 50 ms, cel mult
--- 3 s: cat timp incearca, aplicarea NU sta in coada (citirile ERP si login-urile nu se aseaza in spatele ei); o
--- incercare ratata elibereaza tot ce luase (subtranzactie). Peste buget: 55P03 PORTAL_LOCK_BUDGET, nimic schimbat.
--- Ordinea (L06): auth.users -> employees -> profiles -> user_module_access (ca la 18a si ca la crearea unui cont).
--- Tabelele portalului (blocate mai sus) nu sunt folosite de utilizatori: hook-ul nu e pornit.
---  * auth.users          SHARE ROW EXCLUSIVE: FK portal_provisioning -> auth.users; niciun cont nou pana la commit
---                        (handle_new_user se inlocuieste sub acest lock). Blocheaza: scrierile Auth (login, cont nou).
---                        Nu blocheaza citirile.
---  * employees           SHARE ROW EXCLUSIVE: FK + triggerul de revocare. Blocheaza: editarile HR. Nu citirile.
---  * profiles            ACCESS EXCLUSIVE: cerut de ALTER ... CHECK (rolurile noi). Blocheaza TOT pe profiles,
---                        inclusiv citirile ERP (politicile RLS citesc profiles), doar pe coada de mai jos.
---  * user_module_access  SHARE: drepturile conturilor teren nu se schimba intre poarta si amprenta. Blocheaza: scrierile.
--- Durata (de aici pana la commit): CHECK-ul pe profiluri (~150 de randuri), 2 FK pe un tabel gol, 1 trigger, 1 functie,
--- poarta finala si inregistrarea runnerului; estimat sub 1 s (masurat in harness, scripts/portal/concurrency_lock.sh).
-DO $locks$
-DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
-BEGIN
-  LOOP
-    v_n := v_n + 1;
-    BEGIN
-      LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE NOWAIT;
-      LOCK TABLE public.employees IN SHARE ROW EXCLUSIVE MODE NOWAIT;
-      LOCK TABLE public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;
-      LOCK TABLE public.user_module_access IN SHARE MODE NOWAIT;
-      EXIT;
-    EXCEPTION WHEN lock_not_available THEN
-      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
-        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: auth.users / employees / profiles / user_module_access ocupate % ms (% incercari); nimic schimbat',
-          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
-      END IF;
-      PERFORM pg_sleep(0.05);
-    END;
-  END LOOP;
-  RAISE NOTICE 'PORTAL_LOCKS 19a: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
-END $locks$;
-DO $roles$
-DECLARE c record;
-BEGIN
- -- Sub lock: CHECK-ul si rolurile existente se reverifica fata de manifest (nicio schimbare intre citire si ALTER).
- SELECT conname,pg_get_constraintdef(oid) AS def INTO STRICT c
- FROM pg_constraint WHERE conrelid='public.profiles'::regclass AND conname='profiles_role_chk';
- IF jsonb_build_object('name',c.conname,'definition',c.def) IS DISTINCT FROM
-   (SELECT valoare FROM public.portal_e1_1b_manifest WHERE cheie='role_live') THEN
-  RAISE EXCEPTION 'PORTAL_PROFILE_ROLES_CHANGED'; END IF;
- IF EXISTS (SELECT FROM public.profiles WHERE role IS NULL OR role NOT IN
-  ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner'))
- THEN RAISE EXCEPTION 'PORTAL_ROLE_PREFLIGHT'; END IF;
-END $roles$;
-ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk;
-ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_chk CHECK (role IN
- ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner','teren','in_asteptare'));
-ALTER TABLE public.portal_provisioning
- ADD CONSTRAINT portal_provisioning_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id),
- ADD CONSTRAINT portal_provisioning_auth_user_id_fkey FOREIGN KEY (auth_user_id) REFERENCES auth.users(id);
-CREATE TRIGGER portal_revoca_la_plecare AFTER UPDATE OF active,termination_date ON public.employees
- FOR EACH ROW EXECUTE FUNCTION public.fn_portal_revoca_la_plecare();
--- handle_new_user se inlocuieste sub lock-ul pe auth.users, dupa CHECK-ul care accepta rolurile noi.
+-- r10: handle_new_user se inlocuieste INAINTE de $locks$ (plpgsql: fara lock pe tabelele pe care le scrie). Alte sesiuni
+-- vad corpul nou abia la COMMIT, odata cu CHECK-ul care accepta rolurile noi si cu FK-urile, deci ordinea in tranzactie nu
+-- conteaza pentru ele; o inlocuire concurenta (alt rand pg_proc) asteapta / esueaza sub lock_timeout, nimic partial.
 CREATE OR REPLACE FUNCTION public.handle_new_user()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -714,11 +668,105 @@ BEGIN
   RETURN NEW;
 END;
 $function$;
-DO $post$
+-- r9 (P1-01) / r10: PUNCTUL UNIC de lock, la final. Inainte de el nu s-a atins niciun tabel existent (verificat static
+-- de scripts/portal/buget_lock.py si in harness: lock_pre_observe). NOWAIT + reincercare la 50 ms, cel mult 3 s: cat
+-- timp incearca, aplicarea NU sta in coada (citirile ERP si login-urile nu se aseaza in spatele ei); o incercare ratata
+-- elibereaza tot ce luase (subtranzactie). Peste buget: 55P03 PORTAL_LOCK_BUDGET, nimic schimbat.
+-- Ordinea (L06): auth.users -> employees -> profiles -> user_module_access -> conturi_tip / jurnal -> conturi_teren
+-- (ca la 18a, ca la crearea unui cont si ca stergerea unui cont: auth.users -> conturi_* in cascada).
+--  * auth.users          SHARE ROW EXCLUSIVE: FK portal_provisioning -> auth.users (ADD FOREIGN KEY); niciun cont nou
+--                        pana la commit (reconcilierea de mai jos e completa). Blocheaza: scrierile Auth (login, cont
+--                        nou). Nu blocheaza citirile.
+--  * employees           SHARE ROW EXCLUSIVE: FK + CREATE TRIGGER (revocare). Blocheaza: editarile HR. Nu citirile.
+--  * profiles            ACCESS EXCLUSIVE: cerut EXACT de `ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk,
+--                        ADD CONSTRAINT profiles_role_chk CHECK (...)` (rolurile noi 'teren' / 'in_asteptare'). In
+--                        PostgreSQL atat DROP CONSTRAINT cat si ADD CONSTRAINT ... CHECK (si varianta NOT VALID) cer
+--                        ACCESS EXCLUSIVE; doar FK-ul (SHARE ROW EXCLUSIVE) si VALIDATE (SHARE UPDATE EXCLUSIVE) au
+--                        niveluri mai mici, deci CHECK-ul nu se poate schimba fara sa opreasca si citirile. Blocheaza
+--                        TOT pe profiles (inclusiv citirile ERP prin RLS) cel mult 2 s (plafonul de mai jos).
+--  * user_module_access  SHARE: drepturile conturilor teren nu se schimba intre poarta si amprenta. Blocheaza: scrierile.
+--  * conturi_tip / jurnal SHARE (clasificarea nu se schimba; cascada unei stergeri asteapta), conturi_teren ACCESS
+--                        EXCLUSIVE (coloane noi). Le foloseste doar hook-ul, care nu e pornit.
+-- PLAFONUL (r10): transaction_timeout = 2 s pornit de la zero imediat dupa obtinere: de la primul lock tinut pana la
+-- COMMIT (inclusiv inregistrarea runnerului si pauzele de retea) trec cel mult 2 s, altfel serverul inchide sesiunea =>
+-- ROLLBACK, lock-uri eliberate, nimic schimbat. statement_timeout = 2 s pe $critic$ = a doua plasa.
+DO $locks$
+DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
 BEGIN
- -- Ancorele, reverificate imediat inaintea fixarii amprentei (nicio schimbare externa in timpul apply-ului).
- IF pg_temp.portal_1b_ancore() IS DISTINCT FROM (SELECT v FROM pg_temp.portal_1b_ancore_revizuit) THEN
-  RAISE EXCEPTION 'PORTAL_1B_ANCHOR_CHANGED'; END IF;
- IF public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_1B_POSTCONDITION'; END IF;
- INSERT INTO public.portal_e1_1b_manifest VALUES ('post_snapshot',public.fn_portal_1b_snapshot());
-END $post$;
+  LOOP
+    v_n := v_n + 1;
+    BEGIN
+      LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.employees IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.user_module_access IN SHARE MODE NOWAIT;
+      LOCK TABLE public.conturi_tip,public.conturi_tip_jurnal IN SHARE MODE NOWAIT;
+      LOCK TABLE public.conturi_teren IN ACCESS EXCLUSIVE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
+        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: auth.users / employees / profiles / user_module_access ocupate % ms (% incercari); nimic schimbat',
+          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
+      END IF;
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  PERFORM set_config('statement_timeout', '2s', true);
+  PERFORM set_config('transaction_timeout', '0', true);
+  PERFORM set_config('transaction_timeout', '2s', true);
+  RAISE NOTICE 'PORTAL_LOCKS 19a: % incercari, % ms; plafon 2 s pana la COMMIT', v_n,
+    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+END $locks$;
+-- r10: sectiunea critica = O SINGURA instructiune (un singur drum dus-intors client-server), toata sub plafon.
+DO $critic$
+DECLARE c record; v_rec bigint;
+BEGIN
+  -- 1. conturi_teren (din 18a): coloanele noi si auditul (ACCESS EXCLUSIVE, deja detinut).
+  ALTER TABLE public.conturi_teren
+   ADD COLUMN provisioning_id uuid UNIQUE REFERENCES public.portal_provisioning(provisioning_id),
+   ADD COLUMN creat_la timestamptz,
+   ADD COLUMN revocat_la timestamptz,
+   ADD COLUMN revocat_motiv text;
+  -- Legacy: data crearii este necunoscuta; nu o inventam la apply. DEFAULT numai pentru randurile noi.
+  ALTER TABLE public.conturi_teren ALTER COLUMN creat_la SET DEFAULT now();
+  CREATE TRIGGER portal_conturi_teren_audit AFTER INSERT OR UPDATE OR DELETE ON public.conturi_teren
+   FOR EACH ROW EXECUTE FUNCTION public.fn_portal_provisioning_audit();
+  -- 2. rolurile: CHECK-ul si rolurile existente se reverifica fata de manifest (nicio schimbare intre citire si ALTER),
+  --    apoi CHECK-ul nou intr-un SINGUR ALTER (o scanare a profilurilor, nu doua).
+  SELECT conname,pg_get_constraintdef(oid) AS def INTO STRICT c
+  FROM pg_constraint WHERE conrelid='public.profiles'::regclass AND conname='profiles_role_chk';
+  IF jsonb_build_object('name',c.conname,'definition',c.def) IS DISTINCT FROM
+    (SELECT valoare FROM public.portal_e1_1b_manifest WHERE cheie='role_live') THEN
+   RAISE EXCEPTION 'PORTAL_PROFILE_ROLES_CHANGED'; END IF;
+  IF EXISTS (SELECT FROM public.profiles WHERE role IS NULL OR role NOT IN
+   ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner'))
+  THEN RAISE EXCEPTION 'PORTAL_ROLE_PREFLIGHT'; END IF;
+  ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk,
+   ADD CONSTRAINT profiles_role_chk CHECK (role IN
+   ('superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner','teren','in_asteptare'));
+  -- 3. FK-urile provisioning-ului (tabel gol) si triggerul de revocare pe employees.
+  ALTER TABLE public.portal_provisioning
+   ADD CONSTRAINT portal_provisioning_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id),
+   ADD CONSTRAINT portal_provisioning_auth_user_id_fkey FOREIGN KEY (auth_user_id) REFERENCES auth.users(id);
+  CREATE TRIGGER portal_revoca_la_plecare AFTER UPDATE OF active,termination_date ON public.employees
+   FOR EACH ROW EXECUTE FUNCTION public.fn_portal_revoca_la_plecare();
+  -- 4. r10 (P2-01): reconcilierea ferestrei 18a -> 19a. Un cont creat dupa COMMIT-ul 18a are profil (handle_new_user
+  --    vechi), dar nu are rand in conturi_tip. Sub SHARE ROW EXCLUSIVE pe auth.users nu mai apare niciunul pana la COMMIT.
+  --    Contul obisnuit = 'neaprobat' (hook-ul il refuza pana la fn_cont_aproba_erp; rolul din profil ramane cel dat de
+  --    handle_new_user vechi, ca la conturile nelistate din 18a). Un cont teren (domeniu sau tip_cont) nu putea fi creat
+  --    legitim intre livrari (provisioning-ul nu exista) => refuz, nimic schimbat.
+  IF EXISTS (SELECT FROM auth.users u WHERE NOT EXISTS (SELECT FROM public.conturi_tip t WHERE t.auth_user_id=u.id)
+    AND (lower(split_part(u.email,'@',2))='teren.gazpet.ro' OR u.raw_app_meta_data->>'tip_cont'='teren')) THEN
+   RAISE EXCEPTION 'PORTAL_1B_TERRAIN_UNCLASSIFIED'; END IF;
+  INSERT INTO public.conturi_tip(auth_user_id,tip,sursa)
+  SELECT u.id,'neaprobat','reconciliere_e1_1b' FROM auth.users u
+   WHERE NOT EXISTS (SELECT FROM public.conturi_tip t WHERE t.auth_user_id=u.id);
+  GET DIAGNOSTICS v_rec = ROW_COUNT;
+  RAISE NOTICE 'PORTAL_1B_RECONCILIATE: % conturi aparute intre 18a si 19a, clasificate neaprobat', v_rec;
+  -- 5. ancorele, reverificate imediat inaintea fixarii amprentei (nicio schimbare externa in timpul apply-ului),
+  --    poarta 1b (inclusiv inventarul Auth complet) si amprenta pentru revenire.
+  IF pg_temp.portal_1b_ancore() IS DISTINCT FROM (SELECT v FROM pg_temp.portal_1b_ancore_revizuit) THEN
+   RAISE EXCEPTION 'PORTAL_1B_ANCHOR_CHANGED'; END IF;
+  IF public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_1B_POSTCONDITION'; END IF;
+  INSERT INTO public.portal_e1_1b_manifest VALUES ('post_snapshot',public.fn_portal_1b_snapshot());
+END $critic$;

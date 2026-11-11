@@ -262,8 +262,8 @@ class StaticProvisioning(unittest.TestCase):
         # oricarui obiect nou; se repeta, sub lock-uri, inaintea fixarii amprentei.
         self.assertLess(sql.index('DO $ancore_pre$'), sql.index('DO $locks$'))
         self.assertLess(sql.index('DO $ancore_pre$'), sql.index('CREATE TABLE public.portal_e1_1b_manifest'))
-        self.assertLess(sql.index('DO $locks$'), sql.index('DO $post$'))
-        post = sql.split('DO $post$', 1)[1]
+        self.assertLess(sql.index('DO $locks$'), sql.index('DO $critic$'))
+        post = sql.split('DO $critic$', 1)[1]
         self.assertLess(post.index('pg_temp.portal_1b_ancore()'), post.index("'post_snapshot'"))
 
     def test_fixture_1b_replaces_only_anchor_literal(self):
@@ -308,33 +308,103 @@ class StaticProvisioning(unittest.TestCase):
                       'public.profiles': 'ACCESS EXCLUSIVE', 'public.user_module_access': 'SHARE'}
         rev_moduri = {'auth.users': 'ACCESS EXCLUSIVE', 'public.employees': 'ACCESS EXCLUSIVE',
                       'public.profiles': 'ACCESS EXCLUSIVE', 'public.user_module_access': 'SHARE'}
-        mig = MIG.read_text(encoding='utf-8')
-        rev = REV.read_text(encoding='utf-8')
-        self.assertEqual(buget.probleme(mig, mig_moduri), [])
-        self.assertEqual(buget.probleme(rev, rev_moduri), [])
-        # Pe coada lui 19a (dupa $locks$): CHECK-ul, FK-urile, triggerul pe employees si handle_new_user.
+        mig = MIG.read_text(encoding='utf-8').replace('\r\n', '\n')
+        rev = REV.read_text(encoding='utf-8').replace('\r\n', '\n')
+        m18 = (ROOT / 'supabase/migrations/20261118a_portal_teren_identitate.sql').read_text(encoding='utf-8')
+        # r10: inainte de $locks$ nu se atinge niciun tabel existent: ale utilizatorilor + cele create de 18a
+        # (si, la revenire, cele create de 19a); nici prin functiile portalului care le citesc.
+        ex_mig = buget.TABELE_18A
+        ex_rev = buget.TABELE_18A + buget.TABELE_19A
+        fn_mig = buget.functii_care_citesc([m18, mig], buget.TABELE_UTILIZATORI + ex_mig)
+        fn_rev = buget.functii_care_citesc([m18, mig], buget.TABELE_UTILIZATORI + ex_rev)
+        for f in ('fn_portal_angajat_eligibil', 'fn_portal_1b_snapshot', 'fn_portal_porti_lipsa_1b', 'fn_teren_eligibil',
+                  'fn_portal_porti_lipsa', 'handle_new_user'):
+            self.assertIn(f, fn_mig, f)
+        self.assertEqual(buget.probleme(mig, mig_moduri, ex_mig, fn_mig), [])
+        self.assertEqual(buget.probleme(rev, rev_moduri, ex_rev, fn_rev), [])
+        # r10 (Jakarinos r9 P2): functiile care citesc tabelele utilizatorilor sunt plpgsql (nu se analizeaza la creare).
+        for name in ('fn_portal_angajat_eligibil(p_employee_id integer)', 'fn_portal_1b_snapshot()'):
+            head = mig.split('CREATE FUNCTION public.' + name, 1)[1].split(' AS $fn$', 1)[0]
+            self.assertIn('LANGUAGE plpgsql', head, name)
+        # Pe coada lui 19a (in $critic$, dupa $locks$): CHECK-ul (un singur ALTER), FK-urile, triggerul pe employees,
+        # coloanele conturi_teren, reconcilierea; handle_new_user se inlocuieste INAINTE (corp plpgsql, vizibil la COMMIT).
         i = mig.index('DO $locks$')
-        for after in ('ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk',
+        crit = mig.split('DO $critic$', 1)[1]
+        for after in ('ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk,\n   ADD CONSTRAINT profiles_role_chk CHECK',
                       'ADD CONSTRAINT portal_provisioning_employee_id_fkey', 'CREATE TRIGGER portal_revoca_la_plecare',
-                      'CREATE OR REPLACE FUNCTION public.handle_new_user()', "IF EXISTS (SELECT FROM public.profiles WHERE role IS NULL"):
-            self.assertGreater(mig.index(after), i, after)
+                      'ADD COLUMN provisioning_id uuid UNIQUE REFERENCES', 'CREATE TRIGGER portal_conturi_teren_audit',
+                      "IF EXISTS (SELECT FROM public.profiles WHERE role IS NULL", "'reconciliere_e1_1b'",
+                      'PORTAL_1B_TERRAIN_UNCLASSIFIED'):
+            self.assertIn(after, crit, after)
+        self.assertLess(mig.index('CREATE OR REPLACE FUNCTION public.handle_new_user()'), i)
+        self.assertNotIn('ALTER TABLE public.profiles ADD CONSTRAINT', mig)
         create_prov = mig.split('CREATE TABLE public.portal_provisioning (', 1)[1].split(');', 1)[0]
         self.assertNotIn('REFERENCES', create_prov)
-        # Revenirea: lock-urile inaintea verificarii „fara date noi” (L14).
-        self.assertLess(rev.index('DO $locks$'), rev.index('DO $check$'))
+        # Reconcilierea (P2-01): sub lock, inaintea portii si a amprentei; contul teren neclasificat = refuz inainte de INSERT.
+        self.assertLess(crit.index('PORTAL_1B_TERRAIN_UNCLASSIFIED'), crit.index("'reconciliere_e1_1b'"))
+        self.assertLess(crit.index("'reconciliere_e1_1b'"), crit.index('public.fn_portal_porti_lipsa_1b()'))
+        # Revenirea: lock-urile inaintea verificarii „fara date noi” (L14), restaurarea dupa verificare.
+        rcrit = rev.split('DO $critic$', 1)[1]
+        self.assertLess(rev.index('DO $locks$'), rev.index('DO $critic$'))
+        self.assertLess(rcrit.index('PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG'), rcrit.index("EXECUTE m->>'definition'"))
         # Mutanti: contractul trebuie sa-i respinga.
+        L = 'DO $locks$'
         mutanti = {
             'fara NOWAIT': mig.replace('public.profiles IN ACCESS EXCLUSIVE MODE NOWAIT;', 'public.profiles IN ACCESS EXCLUSIVE MODE;', 1),
             'LOCK pe profiles in afara': mig.replace('DO $priv$', 'LOCK TABLE public.profiles IN SHARE MODE;\nDO $priv$', 1),
             'fara lock_timeout': mig.replace("SET LOCAL lock_timeout = '3s';", '', 1),
             'mod mai slab declarat': mig.replace('public.user_module_access IN SHARE MODE NOWAIT', 'public.user_module_access IN ROW SHARE MODE NOWAIT', 1),
-            'fara 55P03': mig.replace("USING ERRCODE = '55P03'", '', 1),
+            'fara 55P03': mig.replace("USING ERRCODE = '55P03';\n      END IF;\n      PERFORM pg_sleep(0.05);", "\n      END IF;\n      PERFORM pg_sleep(0.05);", 1),
             'priv dupa prima schimbare': mig.replace('DO $priv$', 'CREATE TABLE public.x(id int);\nDO $priv$', 1),
+            # r10
+            'Jakarinos: SELECT pe profiles inainte de $locks$': mig.replace(L, 'SELECT count(*) FROM public.profiles;\n' + L, 1),
+            'SELECT necalificat pe employees': mig.replace(L, 'SELECT count(*) FROM employees;\n' + L, 1),
+            'functie sql pe auth.users': mig.replace(L, 'CREATE FUNCTION public.x() RETURNS bigint LANGUAGE sql AS $q$ SELECT count(*) FROM auth.users $q$;\n' + L, 1),
+            'DO care citeste user_module_access': mig.replace(L, 'DO $q$ BEGIN PERFORM 1 FROM public.user_module_access; END $q$;\n' + L, 1),
+            'DO care apeleaza poarta': mig.replace(L, 'DO $q$ BEGIN PERFORM public.fn_portal_porti_lipsa(); END $q$;\n' + L, 1),
+            'SELECT pe conturi_tip (18a) inainte': mig.replace(L, 'SELECT count(*) FROM public.conturi_tip;\n' + L, 1),
+            'EXECUTE dinamic inainte': mig.replace(L, "DO $q$ BEGIN EXECUTE 'SELECT 1'; END $q$;\n" + L, 1),
+            'snapshot inapoi pe sql': mig.replace('CREATE FUNCTION public.fn_portal_1b_snapshot() RETURNS jsonb\nLANGUAGE plpgsql',
+                                                  'CREATE FUNCTION public.fn_portal_1b_snapshot() RETURNS jsonb\nLANGUAGE sql', 1),
+            'FK pe tabelul nou inainte': mig.replace(' employee_id integer NOT NULL,\n email_calculat',
+                                                     ' employee_id integer NOT NULL REFERENCES public.employees(id),\n email_calculat', 1),
+            'trigger pe employees inainte': mig.replace(L, 'CREATE TRIGGER t AFTER UPDATE ON public.employees FOR EACH ROW EXECUTE FUNCTION public.fn_portal_revoca_la_plecare();\n' + L, 1),
+            'lock consultativ blocant': mig.replace('IF NOT pg_try_advisory_xact_lock(', 'PERFORM pg_advisory_xact_lock(', 1),
+            'timeout-urile dupa $pre$': mig.replace("SET LOCAL lock_timeout = '3s';\nSET LOCAL statement_timeout = '15s';\n", '', 1)
+                .replace('SET LOCAL search_path = public, pg_temp;\n',
+                         "SET LOCAL search_path = public, pg_temp;\nSET LOCAL lock_timeout = '3s';\nSET LOCAL statement_timeout = '15s';\n", 1),
+            'fara PG17': mig.replace("THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'", "THEN RAISE NOTICE 'PORTAL_PG17_REQUIRED'", 1),
+            'fara transaction_timeout': mig.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", '', 1),
+            'transaction_timeout nepornit de la zero': mig.replace("  PERFORM set_config('transaction_timeout', '0', true);\n", '', 1),
+            'plafon inaintea buclei': mig.replace("  PERFORM set_config('statement_timeout', '2s', true);\n", '', 1)
+                .replace('DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;\nBEGIN\n',
+                         "DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;\nBEGIN\n  PERFORM set_config('statement_timeout', '2s', true);\n", 1),
+            'a doua instructiune dupa $locks$': mig.replace('END $locks$;\n', 'END $locks$;\nSELECT 1;\n', 1),
+            'instructiune dupa $critic$': mig.rstrip('\n') + '\nANALYZE public.profiles;\n',
         }
         for nume, text in mutanti.items():
             with self.subTest(mutant=nume):
                 self.assertNotEqual(text, mig, nume)
-                self.assertNotEqual(buget.probleme(text, mig_moduri), [], nume)
+                self.assertNotEqual(buget.probleme(text, mig_moduri, ex_mig, fn_mig), [], nume)
+        # Martori negativi: ce NU ia lock la creare ramane permis (corp plpgsql, literal, catalog).
+        permise = {
+            'functie plpgsql pe profiles': mig.replace(L, 'CREATE FUNCTION public.x() RETURNS bigint LANGUAGE plpgsql AS $q$ BEGIN RETURN (SELECT count(*) FROM public.profiles); END $q$;\n' + L, 1),
+            'literal cu numele tabelului': mig.replace(L, "DO $q$ BEGIN PERFORM has_table_privilege('public.profiles','SELECT'); END $q$;\n" + L, 1),
+            'comentariu cu numele tabelului': mig.replace(L, '-- SELECT count(*) FROM public.profiles;\n' + L, 1),
+        }
+        for nume, text in permise.items():
+            with self.subTest(permis=nume):
+                self.assertNotEqual(text, mig, nume)
+                self.assertEqual(buget.probleme(text, mig_moduri, ex_mig, fn_mig), [], nume)
+        # Revenirea: aceleasi reguli (punctul 7).
+        for nume, text in {
+            'rev: SELECT pe portal_provisioning inainte': rev.replace(L, 'SELECT count(*) FROM public.portal_provisioning;\n' + L, 1),
+            'rev: fara transaction_timeout': rev.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", '', 1),
+            'rev: a doua instructiune dupa $locks$': rev.replace('END $locks$;\n', 'END $locks$;\nDROP TABLE public.portal_e1_1b_manifest;\n', 1),
+        }.items():
+            with self.subTest(mutant=nume):
+                self.assertNotEqual(text, rev, nume)
+                self.assertNotEqual(buget.probleme(text, rev_moduri, ex_rev, fn_rev), [], nume)
 
     def test_hook_and_provisioning_share_employee_predicate(self):
         sql = MIG.read_text(encoding='utf-8')

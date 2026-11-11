@@ -12,18 +12,25 @@
 --     valid pentru CHECK-ul vechi sau stergere); nu se forteaza aceasta revenire si nu se editeaza amprenta.
 -- r9 (P1-01): buget de lock ca la apply; lock-urile se iau o singura data ($locks$, NOWAIT, 3 s) INAINTEA verificarii
 --  „fara date noi” (L14). DROP-ul FK-urilor / triggerului si ALTER ... CHECK cer ACCESS EXCLUSIVE pe auth.users, employees
---  si profiles: revenirea blocheaza si citirile (login, ERP) pe durata ei (estimat sub 1 s).
+--  si profiles: revenirea blocheaza si citirile (login, ERP) pe durata ei.
+-- r10 (al doilea recenzent r9 P1-01, punctul 7): aceleasi reguli ca aplicarea: timeout-urile primele (lock-ul consultativ
+--  cu pg_try_advisory_xact_lock + refuz), niciun tabel existent atins inainte de $locks$, o singura instructiune dupa
+--  ($critic$), transaction_timeout = 2 s de la obtinerea lock-urilor pana la COMMIT. ACCESS EXCLUSIVE e cerut exact de:
+--  DROP TABLE portal_provisioning (FK-urile spre auth.users / employees: stergerea triggerelor RI de pe tabelul referit),
+--  DROP TRIGGER portal_revoca_la_plecare ON employees si ALTER ... CHECK pe profiles; durata lui e plafonata la 2 s.
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
 DO $pre$
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
   IS DISTINCT FROM '20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current() THEN
   RAISE EXCEPTION 'PORTAL_ROLLBACK_RUNNER_REQUIRED'; END IF;
  IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED'; END IF;
- PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
+ IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
+ IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
+  RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03'; END IF;
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
-SET LOCAL lock_timeout = '3s';
-SET LOCAL statement_timeout = '15s';
 -- r9 (P2-03): drepturile revenirii, inaintea oricarei schimbari (cate unul pe rand): proprietar pe profiles (CHECK) si
 -- pe employees (DROP TRIGGER), proprietar pe functiile restaurate, LOCK pe tabelele de mai jos.
 DO $priv$
@@ -68,18 +75,23 @@ BEGIN
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  RAISE NOTICE 'PORTAL_LOCKS 19a revenire: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+  -- r10: plafonul sectiunii critice (vezi 19a): 2 s de aici pana la COMMIT, pornit de la zero.
+  PERFORM set_config('statement_timeout', '2s', true);
+  PERFORM set_config('transaction_timeout', '0', true);
+  PERFORM set_config('transaction_timeout', '2s', true);
+  RAISE NOTICE 'PORTAL_LOCKS 19a revenire: % incercari, % ms; plafon 2 s pana la COMMIT', v_n,
+    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $locks$;
-DO $check$
+-- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock), restaurarea, stergerile.
+DO $critic$
+DECLARE m jsonb; c jsonb; v_actual jsonb; p record; v_key text;
 BEGIN
+ -- [check]
  IF public.fn_portal_1b_snapshot() IS DISTINCT FROM
   (SELECT valoare FROM public.portal_e1_1b_manifest WHERE cheie='post_snapshot')
   OR public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN
   RAISE EXCEPTION 'PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG'; END IF;
-END $check$;
-DO $restore$
-DECLARE m jsonb; c jsonb; v_actual jsonb; p record; v_key text;
-BEGIN
+ -- [restore] handle_new_user / fn_teren_eligibil din manifest, apoi CHECK-ul vechi (un singur ALTER)
  FOREACH v_key IN ARRAY ARRAY['handle_live','eligibil_live'] LOOP
  SELECT valoare INTO STRICT m FROM public.portal_e1_1b_manifest WHERE cheie=v_key;
  IF encode(sha256(convert_to((m-'sha256')::text,'UTF8')),'hex') IS DISTINCT FROM m->>'sha256'
@@ -93,27 +105,26 @@ BEGIN
  IF v_actual IS DISTINCT FROM m-'sha256' THEN RAISE EXCEPTION 'PORTAL_HANDLE_RESTORE_FAILED'; END IF;
  END LOOP;
  SELECT valoare INTO STRICT c FROM public.portal_e1_1b_manifest WHERE cheie='role_live';
- ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk;
- EXECUTE format('ALTER TABLE public.profiles ADD CONSTRAINT %I %s',c->>'name',c->>'definition');
-END $restore$;
-DROP TRIGGER portal_revoca_la_plecare ON public.employees;
-DROP TRIGGER portal_conturi_teren_audit ON public.conturi_teren;
-ALTER TABLE public.conturi_teren DROP COLUMN provisioning_id,DROP COLUMN creat_la,
- DROP COLUMN revocat_la,DROP COLUMN revocat_motiv;
-DROP FUNCTION public.fn_portal_porti_lipsa_1b();
-DROP FUNCTION public.fn_portal_1b_snapshot();
-DROP FUNCTION public.fn_portal_cont_pregateste(integer,uuid);
-DROP FUNCTION public.fn_portal_cont_finalizeaza(uuid);
-DROP FUNCTION public.fn_cont_aproba_erp(uuid,text);
-DROP FUNCTION public.fn_portal_revoca_la_plecare();
-DROP TABLE public.portal_provisioning;
-DROP TABLE public.portal_provisioning_jurnal;
-DROP FUNCTION public.fn_portal_provisioning_audit();
-DROP FUNCTION public.fn_portal_angajat_eligibil(integer);
-DROP TABLE public.portal_e1_1b_manifest;
-DO $post$
-BEGIN
+ EXECUTE format('ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk, ADD CONSTRAINT %I %s',
+  c->>'name',c->>'definition');
+ -- [drop]
+ DROP TRIGGER portal_revoca_la_plecare ON public.employees;
+ DROP TRIGGER portal_conturi_teren_audit ON public.conturi_teren;
+ ALTER TABLE public.conturi_teren DROP COLUMN provisioning_id,DROP COLUMN creat_la,
+  DROP COLUMN revocat_la,DROP COLUMN revocat_motiv;
+ DROP FUNCTION public.fn_portal_porti_lipsa_1b();
+ DROP FUNCTION public.fn_portal_1b_snapshot();
+ DROP FUNCTION public.fn_portal_cont_pregateste(integer,uuid);
+ DROP FUNCTION public.fn_portal_cont_finalizeaza(uuid);
+ DROP FUNCTION public.fn_cont_aproba_erp(uuid,text);
+ DROP FUNCTION public.fn_portal_revoca_la_plecare();
+ DROP TABLE public.portal_provisioning;
+ DROP TABLE public.portal_provisioning_jurnal;
+ DROP FUNCTION public.fn_portal_provisioning_audit();
+ DROP FUNCTION public.fn_portal_angajat_eligibil(integer);
+ DROP TABLE public.portal_e1_1b_manifest;
+ -- [post]
  IF to_regclass('public.portal_provisioning') IS NOT NULL
   OR to_regprocedure('public.fn_portal_cont_finalizeaza(uuid)') IS NOT NULL
   OR public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_1B_ROLLBACK_POSTCONDITION'; END IF;
-END $post$;
+END $critic$;

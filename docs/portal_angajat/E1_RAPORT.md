@@ -311,3 +311,90 @@ revenire 18a (fara atestare / cu cont nou = refuz) -> revenire 18a; plus refuzur
 | L20 | Cai legitime testate: trafic concurent fara erori, aplicarea trece cu lock-urile libere. |
 | L25 | Doua sesiuni reale + bariere (fisier / pg_stat_activity), motivul exact (`PORTAL_LOCK_BUDGET`, cod 10), PG17 NOSUPERUSER. |
 | L02–L05, L07, L09–L11, L13, L16, L17, L19, L21–L24 | n/a pentru delta r9. |
+
+## E1-1a/1b r10 — 11.11.2026 (plafon pe durata sectiunii critice; ambii recenzenti r9: NO-GO pe aceeasi tema)
+
+Problema (al doilea recenzent r9 P1-01): bugetul de 3 s plafona doar ASTEPTAREA lock-urilor; odata obtinute, ele se tin
+pana la COMMIT. Jakarinos r9 P2: 19a lua ACCESS SHARE implicit pe tabelele utilizatorilor inainte de `$locks$` (crearea
+functiilor `LANGUAGE sql` le analizeaza corpul), iar verificatorul static nu prindea un `SELECT` pus acolo; bariera din
+`lock_observe` putea expira cu COMMIT.
+
+### Ce s-a schimbat (aceeasi forma in toate cele 4 fisiere)
+1. **Timeout-urile sunt primele instructiuni** (`lock_timeout` 3 s, `statement_timeout` 15 s), inaintea lock-ului
+   consultativ; acesta se ia cu `pg_try_advisory_xact_lock` + refuz `PORTAL_DELIVERY_BUSY` (runnerul il tine deja din
+   `1_pre`, reintrant; acolo nu tine nimic al utilizatorilor, doar alte livrari il pot astepta). PostgreSQL 17 cerut.
+2. **Inainte de `$locks$` nu se atinge niciun tabel existent.** 18a creeaza tabelele `conturi_*` fara FK; 19a are
+   `fn_portal_angajat_eligibil` si `fn_portal_1b_snapshot` in plpgsql (corpul nu se analizeaza la creare), inlocuieste
+   `handle_new_user` / `fn_teren_eligibil` tot inainte (vizibile altor sesiuni abia la COMMIT, atomic cu CHECK-ul nou),
+   iar lock-urile pe `conturi_*` (cascada unei stergeri din auth.users) s-au mutat in `$locks$`. Dovada: `pg_locks` al
+   sesiunii dupa prefix = gol (PGlite pe toate 4 fisierele; harness: `lock_pre_observe`); controlul negativ pe 19a r9
+   arata exact ce a gasit Jakarinos (ACCESS SHARE pe auth.users, employees, profiles, user_module_access, conturi_*).
+3. **Dupa `$locks$` ramane O SINGURA instructiune (`$critic$`)**: FK-urile pe tabelele noi goale, re-verificarea
+   premiselor pe date, scrierile, poarta, amprenta (18a); coloanele `conturi_teren`, CHECK-ul (un singur ALTER DROP + ADD),
+   FK-urile, triggerul de revocare, reconcilierea, poarta, amprenta (19a); verificarea „fara date noi” + restaurarea +
+   stergerile (reveniri). Un singur drum dus-intors client-server in loc de ~20.
+4. **Plafonul**: la obtinerea lock-urilor, `$locks$` seteaza `statement_timeout` 2 s (pentru `$critic$`) si porneste
+   `transaction_timeout` = 2 s de la zero (intai 0, ca un plafon mai mare mostenit de la rol / baza sa nu ramana activ).
+   **Garantia reala**: serverul termina sesiunea daca tranzactia nu s-a incheiat in 2 s de la primul lock tinut — oricate
+   instructiuni, oricat dureaza fiecare, oricat asteapta clientul sau reteaua intre ele (inclusiv inregistrarea runnerului
+   si COMMIT-ul). Terminarea = ROLLBACK, toate lock-urile eliberate, runnerul raporteaza NEAPLICAT (cod 10).
+   `statement_timeout` singur NU ar fi ajuns: nu acopera pauzele dintre instructiuni.
+5. **Fereastra 18a -> 19a (P2-01)**: in `$critic$`, sub SHARE ROW EXCLUSIVE pe auth.users (niciun cont nou pana la
+   COMMIT), 19a clasifica `neaprobat` (sursa `reconciliere_e1_1b`) orice cont fara rand in `conturi_tip` (creat cu
+   handle_new_user vechi intre livrari; rolul din profil ramane cel vechi, ca la conturile nelistate din 18a). Un cont
+   teren (domeniu sau `tip_cont`) aparut intre livrari = refuz `PORTAL_1B_TERRAIN_UNCLASSIFIED` (nu avea o cale legitima).
+   Am ales reconcilierea, nu o singura tranzactie: runnerul livreaza si inregistreaza un fisier pe tranzactie (istoricul
+   pe nume + sha256), iar combinarea ar cere schimbarea runnerului, revizuit separat. Revenirea 18a refuza oricum dupa
+   orice cont nou (neschimbat).
+6. **Revenirile**: aceleasi reguli (punctele 1–4).
+
+### Lock-urile si cat tin (r10)
+Fereastra = de la primul lock tinut pe tabelele utilizatorilor pana la COMMIT; plafonul e 2 s in toate fisierele.
+
+| Fisier | Tabel | Nivel | Instructiunea care il cere | Ce blocheaza |
+|---|---|---|---|---|
+| 18a | auth.users / employees | SHARE ROW EXCLUSIVE | `ADD CONSTRAINT ... FOREIGN KEY` (conturi_tip, conturi_teren) | scrierile Auth (login, conturi noi) / editarile HR; citirile NU |
+| 18a | profiles | SHARE | stabilitatea legaturii fisa / is_owner intre verificare si clasificare | scrierile in profiles; citirile NU |
+| 19a | auth.users / employees | SHARE ROW EXCLUSIVE | FK-urile portal_provisioning; `CREATE TRIGGER` pe employees | scrierile Auth / HR; citirile NU |
+| 19a | profiles | ACCESS EXCLUSIVE | `ALTER TABLE public.profiles DROP CONSTRAINT profiles_role_chk, ADD CONSTRAINT profiles_role_chk CHECK (...)` | tot, inclusiv citirile ERP, cel mult 2 s |
+| 19a | user_module_access | SHARE | amprenta drepturilor conturilor teren (revenirea compara exact) | scrierile; citirile NU |
+| revenire 19a | auth.users, employees, profiles | ACCESS EXCLUSIVE | `DROP TABLE portal_provisioning` (FK-uri), `DROP TRIGGER` pe employees, ALTER CHECK | tot, cel mult 2 s |
+| revenire 18a | auth.users, employees | ACCESS EXCLUSIVE | `DROP TABLE conturi_tip / conturi_teren` (FK-uri) | tot, cel mult 2 s |
+
+De ce nu se poate mai putin pe profiles: in PostgreSQL, `DROP CONSTRAINT` si `ADD CONSTRAINT ... CHECK` (si varianta
+`NOT VALID`) cer ACCESS EXCLUSIVE; doar FK-ul (SHARE ROW EXCLUSIVE) si `VALIDATE CONSTRAINT` (SHARE UPDATE EXCLUSIVE) au
+niveluri mai mici. Stergerea unui FK sau a unui trigger (reveniri) cere ACCESS EXCLUSIVE pe tabelul referit. Singura
+alternativa ar fi renuntarea la rolurile noi in CHECK (schimbare de design, nu de livrare).
+
+### Masurat
+- PGlite (wasm, PG18, o sesiune), volum ~2x productia (406 conturi / profiluri, 403 angajati, 1.603 drepturi, 606 tabele
+  x 20 de coloane, 1.528 de functii in public): sectiunea critica (`$critic$` + COMMIT) **18a 75 ms, 19a 46 ms, revenire
+  19a 70 ms, revenire 18a 35 ms** (wasm e mai lent decat serverul real).
+- Estimare pe productie (~150 de conturi, ~200 de profiluri / angajati): lucrul pe server sub 0,1 s + 5 drumuri
+  dus-intors dupa lock (`$critic$`, cele 3 instructiuni ale runnerului, COMMIT) x latenta pooler-ului (zeci de ms) =
+  **sub 0,3 s**, fata de plafonul de 2 s; peste plafon = ROLLBACK automat, nu blocare mai lunga.
+- Harness PG17 (de rulat de chat), praguri care pica testul: `masurat` pe aplicarea / revenirea reala, pe fixture si pe
+  un cluster nou cu volum (`supabase/tests/portal_e1_volum.sql`): fereastra <= 1000 ms (`PORTAL_FEREASTRA_MS`) si
+  asteptarea maxima a traficului (citiri / scrieri profiles, employees, login simulat) <= 1000 ms (`PORTAL_BLOCARE_MS`);
+  `lock_cap_refusal`: 19a completa, clientul sta 3 s intre instructiuni cu lock-urile tinute => sesiunea inchisa de
+  `transaction_timeout`, fereastra ~2 s (<= 2,5 s), nimic ramas; `lock_pre_observe` pe toate 4 fisierele;
+  `lock_budget_refusal` cu 10 esantioane `pg_locks` (niciun lock tinut continuu in timpul reincercarilor);
+  `lock_observe` cu bariera care nu se poate incheia cu succes (expirata = `PORTAL_BARIERA_EXPIRATA` => ROLLBACK, starea
+  verificata dupa). Harness-ul cere acum PG17 (PG16 nu are `transaction_timeout`).
+- Static (`scripts/portal/buget_lock.py`, folosit de `test_static.py` / `test_static_1b.py`): pe langa r9 — timeout-urile
+  primele, doar `pg_try_advisory_xact_lock`, PG17, plafonul dupa bucla, exact o instructiune dupa `$locks$`, si niciun
+  lock implicit pe tabele existente inainte de `$locks$` (referinte in cod executat, corpuri de functii non-plpgsql,
+  apeluri ale functiilor portalului care citesc astfel de tabele, `EXECUTE` dinamic intr-un DO). 36 de mutanti respinsi
+  (inclusiv cel al lui Jakarinos, `SELECT count(*) FROM public.profiles` inainte de `$locks$`) si 3 martori acceptati
+  (corp plpgsql, literal, comentariu). Portul node al acestor teste: OK.
+
+| Regula | Dovada r10 |
+|---|---|
+| L01 / L06 | Ordinea in `$locks$`: auth.users -> employees -> profiles -> user_module_access -> conturi_* (ca stergerea unui cont, in cascada); NOWAIT; inainte de `$locks$` niciun lock pe tabele existente (static + `pg_locks`). |
+| L02 | Coada fiecarui fisier = o singura instructiune `$critic$`, totul sau nimic. |
+| L12 / L18 | Reconcilierea numara si raporteaza conturile (`PORTAL_1B_RECONCILIATE: n`); cont teren neclasificat = refuz explicit, nu clasificare tacita. |
+| L14 | O tranzactie; revenirile: lock inaintea verificarii, verificarea inaintea restaurarii, in `$critic$`; apply -> revenire -> re-apply (PGlite + harness). |
+| L15 | Amprentele / ancorele neschimbate; FK-urile 18a cu numele generate in r9 (aceeasi definitie in catalog); snapshot-ul 1b neschimbat ca continut (doar plpgsql). |
+| L20 | Cai legitime: trafic concurent fara erori pe aplicari SI reveniri; contul obisnuit aparut intre livrari trece (neaprobat). |
+| L25 | Sesiuni reale + bariere care nu pot face COMMIT, fereastra masurata de alta sesiune, prag care pica testul, plafon dovedit cu sesiune inchisa de server, volum pe cluster nou, PG17 NOSUPERUSER. |
+| L03–L05, L07–L11, L13, L16, L17, L19, L21–L24 | n/a pentru delta r10. |

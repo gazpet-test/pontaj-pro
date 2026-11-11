@@ -14,18 +14,27 @@
 --  migrare separata de curatenie, dupa confirmarea dezactivarii hook-ului (E1_REVENIRE_AUTH.md).
 -- r9 (P1-01): buget de lock ca la apply; lock-urile pe auth.users / employees se iau o singura data ($locks$, NOWAIT,
 --  3 s), INAINTEA verificarii „fara date noi” (L14). DROP-ul FK-urilor conturi_* -> auth.users / employees cere
---  ACCESS EXCLUSIVE pe acestea: revenirea blocheaza si citirile (login, citiri HR) pe durata ei (estimat sub 1 s).
+--  ACCESS EXCLUSIVE pe acestea: revenirea blocheaza si citirile (login, citiri HR) pe durata ei.
+-- r10 (al doilea recenzent r9 P1-01, punctul 7): aceleasi reguli ca aplicarea. Timeout-urile sunt primele instructiuni
+--  (inaintea lock-ului consultativ, luat cu pg_try_advisory_xact_lock + refuz); inainte de $locks$ nu se atinge niciun
+--  tabel existent; dupa $locks$ ramane o singura instructiune ($critic$: verificarea „fara date noi” + DROP-urile);
+--  transaction_timeout = 2 s de la obtinerea lock-urilor pana la COMMIT (altfel sesiunea se inchide => ROLLBACK).
+--  ACCESS EXCLUSIVE pe auth.users / employees e cerut exact de DROP TABLE conturi_tip / conturi_teren: stergerea unui
+--  FK sterge triggerele RI de pe tabelul referit (RemoveTriggerById), care cer ACCESS EXCLUSIVE; nu exista varianta
+--  mai slaba. Durata lui e plafonata la 2 s si masurata in harness.
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '15s';
 DO $pre$
 BEGIN
   IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
     IS DISTINCT FROM '20261118a_portal_teren_identitate_ROLLBACK:'||txid_current() THEN
     RAISE EXCEPTION 'PORTAL_ROLLBACK_RUNNER_REQUIRED'; END IF;
   IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED'; END IF;
-  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
+  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
+  IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
+    RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03'; END IF;
 END $pre$;
 SET LOCAL search_path = public, pg_temp;
-SET LOCAL lock_timeout = '3s';
-SET LOCAL statement_timeout = '15s';
 -- Auth extern nu poate fi interogat din SQL; atestarea operatorului este obligatorie (verificata inaintea lock-urilor).
 DO $auth$ BEGIN
  IF current_setting('gazpet.hook_auth_dezactivat',true) IS DISTINCT FROM 'ATEST:'||txid_current() THEN
@@ -70,11 +79,18 @@ BEGIN
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  RAISE NOTICE 'PORTAL_LOCKS 18a revenire: % incercari, % ms', v_n, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+  -- r10: plafonul sectiunii critice (vezi 18a): 2 s de aici pana la COMMIT, pornit de la zero.
+  PERFORM set_config('statement_timeout', '2s', true);
+  PERFORM set_config('transaction_timeout', '0', true);
+  PERFORM set_config('transaction_timeout', '2s', true);
+  RAISE NOTICE 'PORTAL_LOCKS 18a revenire: % incercari, % ms; plafon 2 s pana la COMMIT', v_n,
+    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $locks$;
-DO $check$
+-- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock) si stergerile.
+DO $critic$
 DECLARE v_snapshot jsonb;
 BEGIN
+  -- [check] amprenta + poarta, refuz la orice rand / configuratie noua
   SELECT jsonb_build_object(
     'tip',(SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]') FROM public.conturi_tip t),
     'teren',(SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]') FROM public.conturi_teren t),
@@ -115,12 +131,12 @@ BEGIN
   IF v_snapshot IS DISTINCT FROM obj_description('public.conturi_tip'::regclass,'pg_class')::jsonb
     OR public.fn_portal_porti_lipsa() <> '{}'::text[] THEN
     RAISE EXCEPTION 'PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG'; END IF;
-END $check$;
-DROP TABLE public.conturi_tip;
-DROP TABLE public.conturi_teren;
-DROP TABLE public.conturi_tip_jurnal;
-CREATE OR REPLACE FUNCTION public.fn_auth_token_hook(event jsonb) RETURNS jsonb
-LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path TO 'public','pg_temp' AS $fn$
+  -- [drop] tabelele cu FK (ACCESS EXCLUSIVE pe auth.users / employees, deja detinut), stub-ul hook-ului, restul
+  DROP TABLE public.conturi_tip;
+  DROP TABLE public.conturi_teren;
+  DROP TABLE public.conturi_tip_jurnal;
+  CREATE OR REPLACE FUNCTION public.fn_auth_token_hook(event jsonb) RETURNS jsonb
+  LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path TO 'public','pg_temp' AS $fn$
 BEGIN
  IF event->'claims'->'app_metadata'->>'tip_cont'='teren'
    OR event->'app_metadata'->>'tip_cont'='teren'
@@ -130,19 +146,20 @@ BEGIN
  END IF;
  RETURN event;
 END $fn$;
-REVOKE ALL ON FUNCTION public.fn_auth_token_hook(jsonb) FROM PUBLIC,anon,authenticated,service_role;
-GRANT EXECUTE ON FUNCTION public.fn_auth_token_hook(jsonb) TO supabase_auth_admin;
-DROP TABLE public.portal_public_baseline;
-DROP FUNCTION public.fn_portal_public_md5();
-DROP FUNCTION public.fn_portal_net_md5();
-DROP FUNCTION public.fn_portal_catalog_amprenta(oid);
-DROP FUNCTION public.fn_teren_eligibil(uuid);
-DROP FUNCTION public.fn_portal_porti_lipsa();
-DROP FUNCTION public.fn_portal_public_aprobat();
-DROP FUNCTION public.fn_conturi_tip_audit();
-DROP FUNCTION public.fn_conturi_jurnal_imuabil();
-DROP FUNCTION public.fn_portal_uid();
-REVOKE teren FROM authenticator;
-REVOKE USAGE ON SCHEMA public FROM teren;
-DROP ROLE teren;
+  REVOKE ALL ON FUNCTION public.fn_auth_token_hook(jsonb) FROM PUBLIC,anon,authenticated,service_role;
+  GRANT EXECUTE ON FUNCTION public.fn_auth_token_hook(jsonb) TO supabase_auth_admin;
+  DROP TABLE public.portal_public_baseline;
+  DROP FUNCTION public.fn_portal_public_md5();
+  DROP FUNCTION public.fn_portal_net_md5();
+  DROP FUNCTION public.fn_portal_catalog_amprenta(oid);
+  DROP FUNCTION public.fn_teren_eligibil(uuid);
+  DROP FUNCTION public.fn_portal_porti_lipsa();
+  DROP FUNCTION public.fn_portal_public_aprobat();
+  DROP FUNCTION public.fn_conturi_tip_audit();
+  DROP FUNCTION public.fn_conturi_jurnal_imuabil();
+  DROP FUNCTION public.fn_portal_uid();
+  REVOKE teren FROM authenticator;
+  REVOKE USAGE ON SCHEMA public FROM teren;
+  DROP ROLE teren;
+END $critic$;
 -- Istoricul runnerului ramane intact: reaplicarea aceleiasi livrari este refuzata.
