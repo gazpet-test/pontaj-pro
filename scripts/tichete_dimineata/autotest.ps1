@@ -26,7 +26,8 @@ $SHA = 'a' * 40
 $BR = 'tichete/tkt-0042-i1'
 $NUL = [string][char]0
 $TAB = [string][char]9
-function Rm([hashtable]$o = @{}) {
+# r3b: numele vechi „Rm” era umbrit de aliasul rm (Remove-Item): aliasurile au prioritate fata de functii.
+function RecM([hashtable]$o = @{}) {
   $p = @{ Jak = $GO; Fable = $GO; Checks = $CHECKS_OK; Fisiere = @('src/Tichete.jsx'); Diff = '+ok'; LiniiDiff = 10 }
   foreach ($k in $o.Keys) { $p[$k] = $o[$k] }
   return (Get-RecomandareMerge @p)
@@ -69,7 +70,7 @@ T 'permisiune larga / refuzata => refuz' { -not (Test-LansatorProfilTichete (Lan
 T 'director adaugat / --add-dir / bypassPermissions => refuz' { -not (Test-LansatorProfilTichete (Lans -dirs @('C:\x'))).ok -and -not (Test-LansatorProfilTichete (Lans -extra "`$x = '--add-dir'`n")).ok -and -not (Test-LansatorProfilTichete (Lans -extra "# bypassPermissions`n")).ok }
 T 'bloc lipsa / dublat / gol => refuz' { -not (Test-LansatorProfilTichete ((Lans).Replace($P.marcaj_start, '# x'))).ok -and -not (Test-LansatorProfilTichete ((Lans) + $P.marcaj_start)).ok -and -not (Test-LansatorProfilTichete '').ok }
 T 'Get-ListaPs' {
-  $a = Get-ListaPs "`$A = @('x', 'y(z:*)',`n ``" + "`n 'w') # c" 'A'
+  $a = Get-ListaPs ("`$A = @('x', 'y(z:*)',`n ``" + "`n 'w') # c") 'A'
   (@($a.v) -join '|') -ceq 'x|y(z:*)|w' -and @((Get-ListaPs '$A = @()' 'A').v).Count -eq 0 -and $null -eq (Get-ListaPs "`$A = @('a''b')" 'A') -and $null -eq (Get-ListaPs '$A = @("x")' 'A') -and $null -eq (Get-ListaPs "`$AB = @('x')" 'A') -and $null -eq (Get-ListaPs "`$A = @('x')`n`$A = @('y')" 'A')
 }
 if ($Lansator) { T ('lansatorul real are profilul tichete: ' + $Lansator) { $r = Test-LansatorProfilTichete ([IO.File]::ReadAllText($Lansator)); if (-not $r.ok) { Write-Host ('       ' + (@($r.motive) -join '; ')) }; $r.ok } }
@@ -218,7 +219,7 @@ $da = @('.claude/settings.json', 'src/.claude/x.json', 'AGENTS.md', 'CLAUDE.md',
 $nuP = @('src/Tichete.jsx', 'src/utils/x.test.js', 'docs/TICHETE.md', 'src/scripts.js', 'src/claude.md.jsx', 'public/x.png')
 T 'atinse' { @($da | Where-Object { @(Get-CaiProtejateAtinse @($_)).Count -ne 1 }).Count -eq 0 }
 T 'neatinse' { @($nuP | Where-Object { @(Get-CaiProtejateAtinse @($_)).Count -ne 0 }).Count -eq 0 }
-T 'recomandarea spune „atinge <cale>”' { $r = Rm @{ Fisiere = @('src/a.jsx', 'AGENTS.md') }; -not $r.indeplineste -and @($r.motive) -ccontains 'atinge AGENTS.md' }
+T 'recomandarea spune „atinge <cale>”' { $r = RecM @{ Fisiere = @('src/a.jsx', 'AGENTS.md') }; -not $r.indeplineste -and @($r.motive) -ccontains 'atinge AGENTS.md' }
 
 Write-Host 'J6 / F10: CI'
 function Ck([string[]]$b) { @($b | ForEach-Object { [pscustomobject]@{ name = 'x'; bucket = $_ } }) }
@@ -230,14 +231,14 @@ T 'F10: Get-StareChecks' {
 }
 
 Write-Host 'Recomandarea de merge (doar text)'
-T 'tot verde => indeplineste' { $r = Rm; $r.indeplineste -and @($r.motive).Count -eq 0 }
-T 'GO cu conditii fara P0/P1 / SalariiPage in context / SECURITY DEFINER sters => indeplineste' { (Rm @{ Jak = @{ verdict = 'GO_CU_CONDITII'; p0 = 0; p1 = 0 } }).indeplineste -and (Rm @{ Diff = " // vezi SalariiPage`n+ok" }).indeplineste -and (Rm @{ Diff = '- security definer' }).indeplineste }
+T 'tot verde => indeplineste' { $r = RecM; $r.indeplineste -and @($r.motive).Count -eq 0 }
+T 'GO cu conditii fara P0/P1 / SalariiPage in context / SECURITY DEFINER sters => indeplineste' { (RecM @{ Jak = @{ verdict = 'GO_CU_CONDITII'; p0 = 0; p1 = 0 } }).indeplineste -and (RecM @{ Diff = " // vezi SalariiPage`n+ok" }).indeplineste -and (RecM @{ Diff = '- security definer' }).indeplineste }
 T 'conditii neindeplinite => nu' {
   $nu = @(@{ Jak = @{ verdict = 'GO_CU_CONDITII'; p0 = 0; p1 = 1 } }, @{ Fable = @{ verdict = 'NO_GO'; p0 = 0; p1 = 0 } }, @{ Jak = @{ verdict = 'NECUNOSCUT'; p0 = -1; p1 = -1 } }, @{ Jak = $null },
     @{ Checks = (Ck @('fail')) }, @{ Checks = (Ck @('skipping')) }, @{ Checks = @() }, @{ Clasa = 'B' }, @{ Clasa = '?' }, @{ Fisiere = @('src/a.jsx', 'supabase/migrations/x.sql') },
     @{ Diff = "+ const q = 'create function f() security definer'" }, @{ Diff = '+// REZULTAT_REVIEW' }, @{ Diff = '+VERDICT: GO' }, @{ Diff = '+P2: 0' }, @{ Diff = "+const k = 'service_role'" },
     @{ RegiuniAtinse = @('src/App.jsx:SalariiPage') }, @{ LiniiDiff = 5000 }, @{ Fisiere = @() }, @{ CrossRepo = $true }, @{ HeadSchimbat = $true }, @{ BazaMain = $false }, @{ Deschis = $false }, @{ Draft = $false })
-  @($nu | Where-Object { (Rm $_).indeplineste }).Count -eq 0
+  @($nu | Where-Object { (RecM $_).indeplineste }).Count -eq 0
 }
 T 'motivele se aduna' { @((Get-RecomandareMerge -Jak $null -Fable $null -Checks @() -Clasa 'D' -Fisiere @('supabase/x.sql')).motive).Count -ge 5 }
 
