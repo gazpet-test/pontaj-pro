@@ -141,13 +141,13 @@ T 'agent.json invalid => refuz' {
 T 'gitconfig agent: doar helper-ul gh, lista mostenita golita' { $g = Get-TextGitconfigAgent @{ login_agent = 'gazpet-tichete'; email_commit = 'a@b.c' }; $g.Contains("`thelper =`n`thelper = !gh auth git-credential`n") -and $g.Contains("name = gazpet-tichete") -and $(try { [void](Get-TextGitconfigAgent @{ login_agent = 'a b'; email_commit = 'a@b.c' }); $false } catch { $true }) }
 function IntrareZ([string]$o, [string]$kv) { return ($o + $NUL + $kv + $NUL) }
 $FAG = 'file:C:/Users/x/.tichete-agent/gitconfig'
-$GZ = (IntrareZ$FAG "user.name`nx") + (IntrareZ$FAG "credential.helper`n") + (IntrareZ$FAG "credential.helper`n!gh auth git-credential") + (IntrareZ'file:.git/config' "core.bare`nfalse") + (IntrareZ'file:.git/config' "remote.origin.url`nhttps://github.com/o/r.git")
+$GZ = (IntrareZ $FAG "user.name`nx") + (IntrareZ $FAG "credential.helper`n") + (IntrareZ $FAG "credential.helper`n!gh auth git-credential") + (IntrareZ 'file:.git/config' "core.bare`nfalse") + (IntrareZ 'file:.git/config' "remote.origin.url`nhttps://github.com/o/r.git")
 T 'config git: conform => ok' { (Test-ConfigGitAgent -Iesire $GZ -FisierAgent $CAI.gitconfig -Repo 'o/r').ok }
 T 'config git: credentiale / antete / include / remote straine => refuz' {
-  $nu = @(($GZ + (IntrareZ'file:C:/Program Files/Git/etc/gitconfig' "credential.helper`nmanager")), ($GZ + (IntrareZ'file:.git/config' "http.https://github.com/.extraHeader`nAUTHORIZATION: x")),
-    ($GZ + (IntrareZ'file:.git/config' "include.path`nC:/x")), ($GZ + (IntrareZ'file:.git/config' "includeIf.gitdir:C:/x/.path`ny")), ($GZ + (IntrareZ'file:.git/config' "url.https://x/.insteadOf`nhttps://github.com/")),
-    ($GZ + (IntrareZ'file:.git/config' "core.askpass`nx.exe")), ($GZ + (IntrareZ'file:.git/config' "remote.origin.pushurl`nhttps://x")), ($GZ + (IntrareZ'command line:' "user.name`nx")),
-    ($GZ + (IntrareZ'file:.git/config' "remote.origin.url`nhttps://github.com/o/alt")), $GZ.Replace('o/r.git', 'o/alt.git'), $GZ.Replace($FAG, 'file:C:/alt/gitconfig'),
+  $nu = @(($GZ + (IntrareZ 'file:C:/Program Files/Git/etc/gitconfig' "credential.helper`nmanager")), ($GZ + (IntrareZ 'file:.git/config' "http.https://github.com/.extraHeader`nAUTHORIZATION: x")),
+    ($GZ + (IntrareZ 'file:.git/config' "include.path`nC:/x")), ($GZ + (IntrareZ 'file:.git/config' "includeIf.gitdir:C:/x/.path`ny")), ($GZ + (IntrareZ 'file:.git/config' "url.https://x/.insteadOf`nhttps://github.com/")),
+    ($GZ + (IntrareZ 'file:.git/config' "core.askpass`nx.exe")), ($GZ + (IntrareZ 'file:.git/config' "remote.origin.pushurl`nhttps://x")), ($GZ + (IntrareZ 'command line:' "user.name`nx")),
+    ($GZ + (IntrareZ 'file:.git/config' "remote.origin.url`nhttps://github.com/o/alt")), $GZ.Replace('o/r.git', 'o/alt.git'), $GZ.Replace($FAG, 'file:C:/alt/gitconfig'),
     $GZ.Substring(0, $GZ.Length - 1), '')
   @($nu | Where-Object { (Test-ConfigGitAgent -Iesire $_ -FisierAgent $CAI.gitconfig -Repo 'o/r').ok }).Count -eq 0
 }
@@ -374,7 +374,8 @@ T 'J7 r4: eroare CI => PR_CI_NECITIT; rularea urmatoare reia DOAR CI, cu verdict
   $s.deLucru[0].verdicte.sha -ceq $SHA -and $s.deLucru[0].verdicte.fable.p1 -eq 2 -and $s.deLucru[0].branch -ceq $B1 -and $ECI['ultima_eroare'] -like '*PR_CI_NECITIT*'
 }
 T 'J7 r4: reluarea CI supravietuieste stare.json (JSON dus-intors)' {
-  $o = @(ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @($ECI) -Depth 6))[0]
+  # r4b: PS 5.1 — ConvertFrom-Json emite array-ul ca UN obiect; fara enumerare, [0] ar fi chiar array-ul.
+  $o = @((ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @($ECI) -Depth 6)) | ForEach-Object { $_ })[0]
   $h = @{}; foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value }
   $s = Select-TicheteDeLucru -Tichete @(Tk $N) -Stare @{ $N = $h }
   $s.deLucru[0].mod -ceq 'ci' -and $s.deLucru[0].verdicte.jak.verdict -ceq 'GO' -and $s.deLucru[0].verdicte.fable.p1 -eq 2

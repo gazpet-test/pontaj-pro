@@ -996,11 +996,12 @@ function Get-VerdicteSalvate {
   $r = @{ sha = $sha }
   foreach ($k in @('jak', 'fable')) {
     $x = Get-Camp $V $k
-    $v = [string](Get-Camp $x 'verdict')
+    # r4b: PowerShell nu deosebeste majusculele in numele variabilelor: „$v” ar fi suprascris parametrul $V.
+    $vd = [string](Get-Camp $x 'verdict')
     $p0 = Get-Camp $x 'p0'; $p1 = Get-Camp $x 'p1'
-    if ($script:VerdicteSalvabile -cnotcontains $v) { return $null }
+    if ($script:VerdicteSalvabile -cnotcontains $vd) { return $null }
     foreach ($p in @($p0, $p1)) { if (-not ($p -is [int] -or $p -is [long]) -or $p -lt 0) { return $null } }
-    $r[$k] = @{ verdict = $v; p0 = [int]$p0; p1 = [int]$p1 }
+    $r[$k] = @{ verdict = $vd; p0 = [int]$p0; p1 = [int]$p1 }
   }
   return $r
 }
