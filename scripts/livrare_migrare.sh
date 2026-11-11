@@ -61,9 +61,15 @@
 #     0_prolog:   (prima după BEGIN) cere N/session din pg_catalog.pg_settings (calificat: un pg_temp.pg_settings nu-l poate
 #                 umbri) și pune marcajul plafonului gazpet.plafon_tranzactie = '<N>:<txid>' (pe care îl cere migrarea);
 #     1_pre, COPIA, 3_inreg — ca până acum;
-#     9_fin:      garda finală (ultima înainte de COMMIT): valoarea tot N/session + marcajul, iar timpul de la BEGIN
-#                 (clock_timestamp() − transaction_timestamp()) ≤ N ms; altfel refuz ⇒ ROLLBACK; apoi COMMIT și
-#                 RESET transaction_timeout (backend-ul pooler-ului nu rămâne cu plafonul nostru).
+#     9_fin:      (runda 12) UN SINGUR mesaj către server, instrucțiunile legate cu „\;” în psql:
+#                   SET CONSTRAINTS ALL IMMEDIATE  — triggerele amânate rulează ACUM, înaintea gărzii (timpul lor e numărat),
+#                                                    nu în COMMIT, după gardă;
+#                   SET LOCAL search_path = pg_catalog, pg_temp — funcțiile / operatorii gărzii nu pot fi umbriți;
+#                   garda finală — niciun cursor WITH HOLD deschis (s-ar materializa în COMMIT, după gardă); valoarea tot
+#                                  N/session + marcajul; timpul de la BEGIN pe ceasul SERVERULUI
+#                                  (clock_timestamp() − transaction_timestamp()) ≤ N ms; altfel refuz;
+#                   COMMIT;
+#                 apoi, mesaj separat, RESET transaction_timeout (backend-ul pooler-ului nu rămâne cu plafonul nostru).
 #   psql FĂRĂ --single-transaction (BEGIN / COMMIT sunt în fișierele runnerului), cu ON_ERROR_STOP=1: la orice eroare psql
 #   se oprește și închide conexiunea, iar serverul anulează tranzacția deschisă (nimic comis) ⇒ reconcilierea dă 10.
 #   DE CE „N/session” văzut în prolog dovedește ceasul pornit la BEGIN cu N: valoarea unui GUC se schimbă într-un backend
@@ -74,12 +80,27 @@
 #   Validatorul primește --plafon-tranzactie: refuză orice artefact care menționează transaction_timeout sau pg_settings în
 #   afara citirii exacte „FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'” (SET / SET LOCAL / set_config /
 #   RESET / ALTER ROLE|FUNCTION … SET / CREATE FUNCTION … SET, oriunde: nivel superior, DO, corpuri de funcții) și orice
-#   RESET ALL. SQL-ul dinamic construit din bucăți nu se poate vedea static ⇒ garda finală 9_fin: un ceas oprit / repornit
-#   în tranzacție ⇒ valoare schimbată sau timp > N ⇒ ROLLBACK (limită declarată: o asemenea ocolire deliberată într-un
-#   artefact aprobat poate întârzia închiderea, dar nu poate comite).
-#   GARANȚIA (formulare exactă): aproximativ N ms de la BEGIN până la intrarea în COMMIT — timeout PostgreSQL pe ceasul
-#   serverului, nu timp real strict. COMMIT-ul propriu-zis NU e plafonat (PG17 oprește ceasul la intrarea în COMMIT): pe
-#   un server fără replicare sincronă înseamnă scrierea WAL a commit-ului; cu replicare sincronă, și așteptarea standby-ului.
+#   RESET ALL. Validatorul e o gardă de PROTOCOL (refuză formele vizibile static), NU o dovadă: SQL-ul dinamic construit
+#   din bucăți și apelul unei funcții EXISTENTE cu SET transaction_timeout nu se văd static.
+#   Runda 12 (Jakarinos r14 P2): în runda 11 garda și COMMIT-ul erau mesaje SEPARATE. Un artefact care oprește ceasul și
+#   îl repornește (SQL dinamic; sau o funcție existentă cu SET transaction_timeout = 0, la ieșirea căreia valoarea
+#   restaurată pornește un ceas NOU de N ms) trecea garda, iar o pauză a clientului / rețelei între gardă și COMMIT lăsa
+#   tranzacția să comită după termen. Acum garda și COMMIT-ul sunt în ACELAȘI mesaj (simple query): serverul primește
+#   mesajul întreg înainte să-l execute, deci între gardă și COMMIT nu există drum client↔server; la eroarea gărzii
+#   serverul abandonează restul mesajului (COMMIT-ul nu se execută), psql (ON_ERROR_STOP) iese, conexiunea se închide și
+#   tranzacția se anulează. Orice pauză a clientului sau a rețelei cade ÎNAINTEA gărzii și e numărată de ea. Între gardă
+#   și COMMIT nu mai rulează cod SQL venit din artefact (triggere amânate rulate înainte, cursoare WITH HOLD refuzate).
+#   Rearmarea ceasului din gardă (0, apoi timpul rămas) NU e folosită: în forma de un mesaj n-ar adăuga nimic și ar
+#   schimba valoarea verificată (N/session).
+#   GARANȚIA (formulare exactă), cu opțiunea: o livrare NU poate COMITE dacă de la BEGIN până la garda finală (ultima
+#   instrucțiune înaintea intrării în COMMIT, în același mesaj) au trecut mai mult de N ms pe ceasul serverului — oricum
+#   ar opri / reporni artefactul ceasul transaction_timeout. Fără ocolire, serverul închide oricum sesiunea la ~N ms
+#   (timeout PostgreSQL, nu timp real strict).
+#   CE NU GARANTEAZĂ: (1) COMMIT-ul propriu-zis NU e plafonat (PG17 oprește ceasul la intrarea în COMMIT): scrierea WAL a
+#   commit-ului, acțiunile ON COMMIT ale tabelelor temporare, iar cu replicare sincronă și așteptarea standby-ului;
+#   (2) o ocolire deliberată a ceasului într-un artefact aprobat poate ȚINE tranzacția (și lock-urile) deschisă peste N
+#   până ajunge la gardă — nu comite, dar închiderea întârzie; (3) ceasul serverului e ceas de perete (un salt NTP mută
+#   măsurătoarea).
 #   Fără opțiune: comportamentul de dinainte, NESCHIMBAT (psql --single-transaction, aceleași fișiere, fără SET).
 #   Cu opțiune, pre-verificarea, reconcilierea și gate-ul 0e rulează cu SET transaction_timeout = 0 înainte de BEGIN (fără
 #   plafon; un backend refolosit de pooler nu le poate impune unul rămas).
@@ -217,16 +238,23 @@ SESIUNE_0=""
 if [ -n "$PLAFON_MS" ]; then
   SESIUNE_0="SET transaction_timeout = 0;"
   printf 'SET transaction_timeout = %s;\nBEGIN;\n' "$PLAFON_MS" > "$DIR/00_sesiune.sql"
+  # Runda 12: garda finală și COMMIT = UN SINGUR mesaj de interogare („\;” în psql ⇒ psql nu trimite nimic până la „;”-ul
+  # de după COMMIT). Ordinea în mesaj: triggerele amânate rulează ACUM (cu search_path-ul migrării), apoi search_path fixat
+  # pe pg_catalog, apoi garda, apoi COMMIT. RESET-ul e mesaj separat, după COMMIT (nu mai ține de tranzacție).
   cat > "$DIR/9_fin.sql" <<SQL
+SET CONSTRAINTS ALL IMMEDIATE \;
+SET LOCAL search_path = pg_catalog, pg_temp \;
 DO \$plafon_fin\$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_cursors WHERE is_holdable) THEN
+    RAISE EXCEPTION 'Livrare $NUME: PLAFON_CURSOR: cursor WITH HOLD deschis (s-ar executa in COMMIT, dupa garda) - refuz, nimic comis'; END IF;
   IF $PLAFON_CITIRE IS DISTINCT FROM '$PLAFON_MS/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '$PLAFON_MS:' || txid_current() THEN
+     OR pg_catalog.current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '$PLAFON_MS:' || pg_catalog.txid_current() THEN
     RAISE EXCEPTION 'Livrare $NUME: PLAFON_SCHIMBAT in tranzactie (% / marcaj %) - refuz, nimic comis',
-      coalesce($PLAFON_CITIRE, 'lipsa'), coalesce(current_setting('gazpet.plafon_tranzactie', true), 'lipsa'); END IF;
-  IF clock_timestamp() - transaction_timestamp() > interval '$PLAFON_MS milliseconds' THEN
-    RAISE EXCEPTION 'Livrare $NUME: PLAFON_DEPASIT: % ms de la BEGIN > $PLAFON_MS ms fara inchiderea sesiunii (ceasul a fost oprit sau repornit in tranzactie) - refuz, nimic comis',
-      round(extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000); END IF;
-END \$plafon_fin\$;
+      coalesce($PLAFON_CITIRE, 'lipsa'), coalesce(pg_catalog.current_setting('gazpet.plafon_tranzactie', true), 'lipsa'); END IF;
+  IF pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp() > interval '$PLAFON_MS milliseconds' THEN
+    RAISE EXCEPTION 'Livrare $NUME: PLAFON_DEPASIT: % ms de la BEGIN > $PLAFON_MS ms fara inchiderea sesiunii (ceas oprit / repornit in tranzactie sau pauza inainte de garda) - refuz, nimic comis',
+      round(extract(epoch FROM pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp()) * 1000); END IF;
+END \$plafon_fin\$ \;
 COMMIT;
 RESET transaction_timeout;
 SQL
@@ -334,7 +362,7 @@ if [ -z "$PLAFON_MS" ]; then
   RC_PSQL=$?
 else
   # Runda 11: o singură conexiune; SET de sesiune + BEGIN, apoi aceleași fișiere, garda finală și COMMIT (vezi antetul).
-  echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql [SET transaction_timeout = $PLAFON_MS + BEGIN + prolog + lock + țintă + istoric + marcaj + copie + înregistrare + gardă finală + COMMIT]; plafon ~$PLAFON_MS ms de la BEGIN până la intrarea în COMMIT (SET de sesiune înainte de BEGIN; COMMIT-ul propriu-zis neplafonat)"
+  echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql [SET transaction_timeout = $PLAFON_MS + BEGIN + prolog + lock + țintă + istoric + marcaj + copie + înregistrare + (gardă finală și COMMIT într-un singur mesaj)]; plafon ~$PLAFON_MS ms de la BEGIN până la intrarea în COMMIT (SET de sesiune înainte de BEGIN; COMMIT-ul propriu-zis neplafonat)"
   "$PSQL" -X -q -v ON_ERROR_STOP=1 -f "$DIR/00_sesiune.sql" -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" -f "$DIR/9_fin.sql" "${CONN[@]}"
   RC_PSQL=$?
 fi
