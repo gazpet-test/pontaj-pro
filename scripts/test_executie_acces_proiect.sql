@@ -47,6 +47,10 @@
 --   perechea din verdictul r12 (rând ascuns vs. cale fără rând). T3e — predicatele Storage pe Inbox și predicatul Inboxului = fals pentru
 --   B / B0 pe orice argument, fără excepția folderului propriu. Nerestrânșii și owner-ul: amprenta (cu Inboxul, INSERT-urile în coadă și
 --   grila predicatului) IDENTICĂ înainte / după (T1, T4); după scoaterea restricției, B = ca înainte (T5); revenirea redă corpul vechi (T8).
+-- 20261213a (performanța politicilor pentru contul restrâns, după T2): scripts/test_executie_acces_perf.sql (T9) și
+--   scripts/test_executie_acces_perf_revenire.sql (T9z, înaintea lui T7) — ÎNAINTE / DUPĂ, rând cu rând, ce vede și ce poate scrie fiecare
+--   cont (owner, A, A0, B, B0, C) = identic; proba de plan cu prag; T3–T6 (cu T3e) rulează peste politicile noi. Rulare fără 20261213a
+--   (harness-ul r13 exact): psql … -v fara_20261213a=1 -f scripts/test_executie_acces_proiect.sql
 -- NU presupune date reale: ia primul owner, primele 3 profiluri non-owner și cele 3 proiecte cu cele mai multe tabele acoperite cu date
 -- (dacă clona are doar 2, al treilea se creează în tranzacție), le leagă DOAR în tranzacție și scrie date FICTIVE (T-ACC*, TA-*, test-acces/…,
 -- NOD-TEST-ACCES, rapoarte pe 2001-01-01 / 1990–1998, mesajul TEST-ACCES-1).
@@ -55,6 +59,44 @@
 \set ON_ERROR_STOP 1
 BEGIN ISOLATION LEVEL READ COMMITTED;
 \ir executie_acces_catalog.sql
+
+-- ── T00 (r14): clona poate avea DEJA 20261209a (aplicată pe producție 11.11.2026) și, mai târziu, 20261213a. Harness-ul pleacă de la starea
+--   de dinainte: le scoate ÎN tranzacție, cu revenirile lor armate (în ordinea cerută: întâi 20261213a; 20261209a refuză dacă există conturi
+--   restrânse), după ce reține amprenta 20261209a de pe clonă (funcții, politici, trigger-e); după re-aplicarea din repo (înaintea lui T1),
+--   amprenta trebuie să fie aceeași (clona = repo). Totul se anulează la final.
+CREATE FUNCTION pg_temp.t_amprenta_09a() RETURNS text LANGUAGE sql STABLE AS $h$
+  SELECT md5(coalesce((SELECT string_agg(format('%s|%s|%s|%s|%s', p.oid::regprocedure, md5(replace(p.prosrc, chr(13), '')), p.prosecdef, p.proconfig, p.proacl), ';'
+                                         ORDER BY p.oid::regprocedure::text)
+                         FROM pg_proc p
+                        WHERE (p.pronamespace = 'public'::regnamespace OR p.pronamespace = to_regnamespace('executie_acces_intern'))
+                          AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname IN ('fn_executie_proiect_permis', 'fn_executie_nod_drept', 'fn_executie_contract_drept',
+                               'fn_executie_grafic_drept', 'fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_ai_inbox_poate_confirma', 'fn_executie_swap_tevi_pozitie'))), '')
+          || coalesce((SELECT string_agg(format('%s|%s|%s|%s|%s|%s|%s', polrelid::regclass, polname, polcmd, polpermissive, polroles,
+                                                coalesce(pg_get_expr(polqual, polrelid), ''), coalesce(pg_get_expr(polwithcheck, polrelid), '')), ';'
+                                         ORDER BY polrelid::regclass::text, polname)
+                         FROM pg_policy WHERE polname LIKE 'executie\_acces\_%'), '')
+          || coalesce((SELECT string_agg(format('%s|%s|%s|%s', tgrelid::regclass, tgname, tgfoid::regprocedure, tgenabled), ';' ORDER BY tgrelid::regclass::text, tgname)
+                         FROM pg_trigger WHERE tgname IN ('trg_executie_acces_garda', 'a0_executie_acces_inbox')), ''))
+$h$;
+\set ON_ERROR_STOP 1
+SELECT (to_regprocedure('public.fn_executie_acces_politici()') IS NOT NULL) AS t_13a_aplicata, (to_regclass('public.executie_acces_proiect') IS NOT NULL) AS t_09a_aplicata
+\gset
+\if :t_13a_aplicata
+SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
+\ir ../supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql
+-- dezarmare (armarea e legată de txid-ul acestei tranzacții: altfel testele „nearmat = refuz” de mai jos n-ar mai fi nearmate)
+SELECT set_config('gazpet.revenire_20261213a', '', true) = '' AS dezarmat_13a;
+\endif
+\if :t_09a_aplicata
+SELECT set_config('tacc.amprenta_09a_clona', pg_temp.t_amprenta_09a(), true) IS NOT NULL AS amprenta_09a_clona;
+SELECT set_config('gazpet.revenire_20261209a', 'SCOATE_ACCES_PROIECT:' || txid_current(), true);
+\ir ../supabase/revenire/20261209a_executie_acces_proiect_ROLLBACK.sql
+SELECT set_config('gazpet.revenire_20261209a', '', true) = '' AS dezarmat_09a;
+DO $t$ BEGIN
+  IF to_regclass('public.executie_acces_proiect') IS NOT NULL THEN RAISE EXCEPTION 'T00 FAIL: 20261209a de pe clonă nu s-a scos'; END IF;
+  RAISE NOTICE 'T00: 20261209a era aplicată pe clonă — scoasă în tranzacție (revenirea armată), harness-ul pleacă de la starea de dinainte';
+END $t$;
+\endif
 
 -- ── unelte ──
 CREATE FUNCTION pg_temp.t_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
@@ -824,6 +866,15 @@ END $t$;
 
 SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);
 \ir ../supabase/migrations/20261209a_executie_acces_proiect.sql
+-- T00 (r14): dacă 20261209a era pe clonă, cea re-aplicată din repo are aceeași amprentă (funcții, politici, trigger-e)
+\if :t_09a_aplicata
+DO $t$ BEGIN
+  IF pg_temp.t_amprenta_09a() IS DISTINCT FROM pg_temp.t_g('amprenta_09a_clona') THEN
+    RAISE EXCEPTION 'T00 FAIL: 20261209a de pe clonă diferă de cea din repo (funcții / politici / trigger-e)';
+  END IF;
+  RAISE NOTICE 'T00 OK (20261209a de pe clonă = cea din repo)';
+END $t$;
+\endif
 
 -- ── T1: după migrare, fără niciun rând = comportamentul de azi: amprenta FIECĂRUI cont identică (A, B, C, owner); politicile vechi neatinse ──
 DO $t$
@@ -877,6 +928,13 @@ BEGIN
   END IF;
   RAISE NOTICE 'T2 OK';
 END $t$;
+
+-- ── T9 (20261213a, performanța politicilor pentru contul restrâns): echivalența rând cu rând pe fiecare tip de cont, proba de plan, lista
+--   proprie, revenirea și re-aplicarea; T3–T6 rulează apoi peste politicile noi. Doar cu psql -v fara_20261213a=1 se sare (harness-ul r13).
+\if :{?fara_20261213a}
+\else
+\ir test_executie_acces_perf.sql
+\endif
 
 -- ── T3: B citește doar p1 + p2 (exact ce vedea înainte pe ele) și nimic pe p3, pe TOATE tabelele din catalog; scrie doar pe p1, pe toate căile ──
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
@@ -1993,6 +2051,12 @@ DO $t$ DECLARE x text; v_cols text; v_np bigint; BEGIN
   ELSE RAISE EXCEPTION 'T6 FAIL: ștergerea unui proiect cu un cont restrâns pe el: %', x; END IF;
   RAISE NOTICE 'T6 OK';
 END $t$;
+
+-- ── T9z (20261213a): revenirea 20261209a refuză cât timp 20261213a e aplicată; revenirea 20261213a redă politicile 20261209a ──
+\if :{?fara_20261213a}
+\else
+\ir test_executie_acces_perf_revenire.sql
+\endif
 
 -- ── T7: revenirea — nearmată = refuz; armată cu un cont restrâns (C) = refuz; nimic atins ──
 -- (r13: coada Inboxului are garda ei, a0_executie_acces_inbox, numărată separat)

@@ -54,6 +54,17 @@ const cuInlocuitor = t => {
   if (!t.includes(SWAP_REAL)) throw new Error('migrarea nu mai are amprenta reală a lui fn_executie_swap_tevi_pozitie')
   return t.split(SWAP_REAL).join(SWAP_INLOCUITOR)
 }
+// 20261213a (performanța politicilor): migrarea și revenirea ei verifică amprenta inventarului 20261209a, al cărui corp conține amprenta
+// swap (înlocuită mai sus doar aici, în test) → și amprenta inventarului se înlocuiește în textele 20261213a (doar în test)
+const MIG13 = join(ROOT, 'supabase/migrations/20261213a_executie_acces_proiect_perf.sql')
+const REV13 = join(ROOT, 'supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql')
+const INV_CAP = 'CREATE FUNCTION public.fn_executie_acces_inventar('
+const INV_REAL = md5(corp(citeste(MIG), INV_CAP))
+const INV_PGLITE = md5(corp(cuInlocuitor(citeste(MIG)), INV_CAP))
+const cuInventar13 = t => {
+  if (!t.includes(INV_REAL)) throw new Error('20261213a nu mai are amprenta reală a inventarului 20261209a')
+  return t.split(INV_REAL).join(INV_PGLITE)
+}
 
 // o funcție EXACT ca în migrarea ei (de la CREATE FUNCTION la sfârșitul corpului) + toate REVOKE / GRANT-urile ei
 function extrageFunctie(fisier, nume) {
@@ -74,16 +85,27 @@ function inlocuieste(text, vechi, nou) {
   return n.split(vechi).join(nou)
 }
 
-// mini-psql: doar ce folosește harness-ul
+// valoarea booleană a unei expresii \if (ca psql: variabilele :{?nume} / :nume, apoi true / false / on / off / 1 / 0 / yes / no)
+function boolPsql(expr, st) {
+  const v = expr.trim().replace(/:\{\?([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, n) => (n in st.vars ? 'TRUE' : 'FALSE'))
+    .replace(/^:([A-Za-z_][A-Za-z0-9_]*)$/, (m, n) => st.vars[n] ?? m).toLowerCase()
+  if (['true', 'on', '1', 'yes', 't', 'y'].includes(v)) return true
+  if (['false', 'off', '0', 'no', 'f', 'n'].includes(v)) return false
+  throw new Error('\\if: valoare nebooleană «' + expr + '»')
+}
+// mini-psql: doar ce folosește harness-ul (r14 / 20261213a: și \if / \elif / \else / \endif)
 async function ruleazaFisier(db, fisier, st, mut) {
   const text = mut[fisier] ? mut[fisier](citeste(fisier)) : citeste(fisier)
+  const stiva = []
+  const activ = () => stiva.every(s => s.activ)
   let buf = []
   const executa = async () => {
     const sql = buf.join('\n'); buf = []
     if (!sql.trim()) return
     try {
       await db.exec(sql, { onNotice: n => st.notite.push(n.message) })
-      st.vars.ERROR = 'false'
+      // ca psql: după o instrucțiune reușită ERROR = false și SQLSTATE = 00000 (LAST_ERROR_MESSAGE rămâne cel vechi)
+      st.vars.ERROR = 'false'; st.vars.SQLSTATE = '00000'
     } catch (e) {
       if (st.vars.ON_ERROR_STOP === '0') {
         st.vars.ERROR = 'true'; st.vars.SQLSTATE = e.code || ''; st.vars.LAST_ERROR_MESSAGE = e.message
@@ -98,6 +120,22 @@ async function ruleazaFisier(db, fisier, st, mut) {
     const l = brut.replace(/\r$/, '')
     if (l.startsWith('\\')) {
       const [cmd, ...rest] = l.slice(1).trim().split(/\s+/)
+      // ramurile condiționale (ca psql: o ramură inactivă nu execută și nu interpretează nimic)
+      if (cmd === 'if') {
+        if (activ()) await executa()
+        const parinte = activ(); const v = parinte ? boolPsql(rest.join(' '), st) : false
+        stiva.push({ parinte, activ: parinte && v, luat: v }); continue
+      }
+      if (cmd === 'elif' || cmd === 'else' || cmd === 'endif') {
+        const s = stiva.at(-1)
+        if (!s) throw new Error('\\' + cmd + ' fără \\if')
+        if (cmd === 'endif') { stiva.pop(); continue }
+        if (s.activ) await executa()
+        if (cmd === 'else') { s.activ = s.parinte && !s.luat; s.luat = true; continue }
+        const v = s.parinte && !s.luat ? boolPsql(rest.join(' '), st) : false
+        s.activ = v; s.luat = s.luat || v; continue
+      }
+      if (!activ()) continue
       if (cmd === 'gset') {
         // interogarea din buffer, un singur rând: coloanele devin variabile (ca psql)
         const sql = buf.join('\n'); buf = []
@@ -113,23 +151,31 @@ async function ruleazaFisier(db, fisier, st, mut) {
       } else if (cmd === 'ir') {
         await ruleazaFisier(db, resolve(dirname(fisier), rest.join(' ')), st, mut)
       } else throw new Error('meta-comandă necunoscută: ' + l)
-    } else {
+    } else if (activ()) {
       // :'var' -> literal SQL (doar pentru variabilele definite, ca psql)
       buf.push(l.replace(/:'([A-Za-z_][A-Za-z0-9_]*)'/g, (m, v) => (v in st.vars ? "'" + String(st.vars[v]).replace(/'/g, "''") + "'" : m)))
     }
   }
+  if (stiva.length) throw new Error('\\if neînchis în ' + fisier)
   await executa()
 }
 
 // opțional: node scripts/pglite/test_executie_acces_proiect_local.mjs '<regex pe numele scenariului>' (ex. '^(baza|m15)$')
 const DOAR = process.argv[2] ? new RegExp(process.argv[2]) : null
-async function scenariu(nume, { mutMig, mutRev, mutSchelet, mutDrept, mutDoc, inainte, doarMigrarea } = {}) {
+// cu13a: harness-ul cu 20261213a (T9 / T9z); fără = harness-ul r13 exact (psql -v fara_20261213a=1), ca mutanții 20261209a să pice
+// exact unde picau (politicile 20261213a le-ar înlocui pe cele mutate). doar13a: 20261209a aplicată, apoi `inainte13`, apoi DOAR 20261213a
+// (preflight-ul ei), într-o tranzacție anulată.
+async function scenariu(nume, { mutMig, mutRev, mutSchelet, mutDrept, mutDoc, inainte, doarMigrarea, cu13a, mutMig13, mutRev13, doar13a, inainte13 } = {}) {
   if (DOAR && !DOAR.test(nume)) return { sarit: true }
   const db = new PGlite()
-  const st = { vars: { ON_ERROR_STOP: '1' }, notite: [] }
+  // ca psql la pornire: LAST_ERROR_MESSAGE gol, LAST_ERROR_SQLSTATE 00000
+  const st = { vars: { ON_ERROR_STOP: '1', LAST_ERROR_MESSAGE: '', LAST_ERROR_SQLSTATE: '00000' }, notite: [] }
+  if (!cu13a) st.vars.fara_20261213a = '1'
   const mut = {}
   mut[MIG] = t => cuInlocuitor(mutMig ? mutMig(t) : t)
   if (mutRev) mut[REV] = t => mutRev(t)
+  mut[MIG13] = t => cuInventar13(mutMig13 ? mutMig13(t) : t)
+  mut[REV13] = t => cuInventar13(mutRev13 ? mutRev13(t) : t)
   try {
     let schelet = citeste(SCHELET)
     if (mutSchelet) schelet = mutSchelet(schelet)
@@ -176,9 +222,19 @@ INSERT INTO public.executie_fibra_intervale (proiect_id, etapa) VALUES (1, 'mono
         + mut[MIG](citeste(MIG)) + '\nROLLBACK;', { onNotice: n => st.notite.push(n.message) })
       return { ok: true, notite: st.notite }
     }
+    if (doar13a) {
+      await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);`
+        + mut[MIG](citeste(MIG)) + '\nCOMMIT;')
+      if (inainte13) await db.exec(inainte13)
+      await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);`
+        + mut[MIG13](citeste(MIG13)) + '\nROLLBACK;', { onNotice: n => st.notite.push(n.message) })
+      return { ok: true, notite: st.notite }
+    }
     await ruleazaFisier(db, HARNESS, st, mut)
     const ultima = st.notite.filter(n => /^T\d|^TB/.test(n)).pop() || ''
-    return { ok: /toate testele 20261209a au trecut/.test(ultima), notite: st.notite }
+    // cu 20261213a: și T9 / T9z trebuie să fi rulat efectiv (nu doar finalul r13)
+    const ok13 = !cu13a || (st.notite.some(n => /^T9 OK/.test(n)) && st.notite.some(n => /^T9z OK/.test(n)))
+    return { ok: /toate testele 20261209a au trecut/.test(ultima) && ok13, notite: st.notite }
   } catch (e) {
     return { ok: false, eroare: (e.code ? e.code + ' ' : '') + e.message, notite: st.notite }
   } finally {
@@ -193,7 +249,9 @@ const raport = (eticheta, r, asteptat, motiv) => {
   const bine = r.ok === asteptat && (!motiv || motiv.test(r.eroare || ''))
   if (!bine) esecuri++
   console.log(`${bine ? 'OK  ' : 'FAIL'} ${eticheta}: ${r.ok ? 'harness trecut' : 'oprit: ' + (r.eroare || 'fără mesaj final').slice(0, 300)}`)
-  if (!bine || process.env.DETALII || DOAR) for (const n of r.notite.filter(n => /^T|FAIL|NEPROBAT|20261209a/.test(n))) console.log('      · ' + n.slice(0, 1200))
+  if (!bine || process.env.DETALII || DOAR) for (const n of r.notite.filter(n => /^T|FAIL|NEPROBAT|20261209a|20261213a/.test(n))) console.log('      · ' + n.slice(0, 1200))
+  // MASURARE=1 (sau argumentul --masurare): și liniile scriptului de măsurare (timpi / forma planului, pe fiecare obiect)
+  if (process.env.MASURARE || process.argv.includes('--masurare')) for (const n of r.notite.filter(n => /^masurare /.test(n))) console.log('      ~ ' + n)
 }
 
 // 1) harness-ul real: trei proiecte pe „clonă”, apoi doar două (al treilea se creează în tranzacție)
@@ -559,6 +617,112 @@ raport('P31 predicatul Inboxului fără SECURITY DEFINER (același corp)', await
 raport('P32 predicatul Inboxului apelabil de anon', await scenariu('p32', { doarMigrarea: true,
   inainte: 'GRANT EXECUTE ON FUNCTION public.fn_ai_inbox_poate_confirma(text, bigint) TO anon;',
 }), false, /fn_ai_inbox_poate_confirma lipseste, are alt corp/)
+
+// 4) 20261213a — performanța politicilor pentru contul restrâns (harness-ul cu T9 / T9z: echivalența rând cu rând pe 6 conturi, proba de
+// plan cu prag, lista proprie, revenirea și re-aplicarea; T3–T6 peste politicile noi)
+raport('B13 baza cu 20261213a (3 proiecte)', await scenariu('b13', { cu13a: true }), true)
+raport('B13 doar 2 proiecte pe clonă, cu 20261213a', await scenariu('b13doua', { cu13a: true,
+  inainte: `DELETE FROM public.executie_situatii_plata_linii WHERE sl_id IN (SELECT id FROM public.executie_situatii_plata WHERE proiect_id = 2);
+            DELETE FROM public.executie_situatii_plata WHERE proiect_id = 2; DELETE FROM public.executie_bonuri_consum WHERE proiect_id = 2;
+            DELETE FROM public.executie_tronsoane WHERE proiect_id = 2; DELETE FROM public.proiect_articole WHERE proiect_id = 2;
+            DELETE FROM public.executie_proiecte WHERE id = 2;`,
+}), true)
+// T00: clona are DEJA 20261209a (ca producția din 11.11) / 20261209a + 20261213a — harness-ul le scoate în tranzacție și pleacă de la zero
+const APLICA_09A = `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);\n`
+  + cuInlocuitor(citeste(MIG)) + '\nCOMMIT;\n'
+const APLICA_13A = `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);\n`
+  + cuInventar13(citeste(MIG13)) + '\nCOMMIT;\n'
+raport('B13 clona are deja 20261209a (scoasă în tranzacție, amprenta = repo)', await scenariu('b13clona', { cu13a: true, inainte: APLICA_09A }), true)
+raport('B13 clona are deja 20261209a + 20261213a', await scenariu('b13clona13', { cu13a: true, inainte: APLICA_09A + APLICA_13A }), true)
+raport('B13 clona are o 20261209a DIFERITĂ de repo (T00 trebuie să o vadă)', await scenariu('b13clonadif', { cu13a: true,
+  inainte: APLICA_09A + `ALTER FUNCTION public.fn_executie_acces_candidati(uuid) SET work_mem = '8MB';` }), false, /T00 FAIL|starea nu e cea din 20261209a/)
+// mutanți pe 20261213a: fiecare schimbă o ramură a politicilor noi; harness-ul (echivalența T9b, planul T9c, lista T9d, revenirea T9r) sau
+// postcondițiile migrării trebuie să-i prindă EXACT
+const N_P_CIT = `      nou_cit := format('%s OR %I::bigint = ANY (%s)', ner, r.cheie, l_c);`
+const N_P_SCR = `      nou_scr := format('%s OR %I::bigint = ANY (%s)', ner, r.cheie, l_s);`
+const N_C_CIT = `      nou_cit := format('%s OR %I::bigint IN (%s)', ner, r.cheie, format(v_set, l_c));`
+const N_C_SCR = `      nou_scr := format('%s OR %I::bigint IN (%s)', ner, r.cheie, format(v_set, l_s));`
+const N_POST_DEP = `  IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_policy x ON d.classid = 'pg_policy'::regclass AND d.objid = x.oid`
+raport('N1 tabelele „proiect”: citirea cu lista de SCRIERE (B pierde proiectul „viewer”)', await scenariu('n1', { cu13a: true,
+  mutMig13: t => inlocuieste(t, N_P_CIT, N_P_CIT.replace('l_c);', 'l_s);')),
+}), false, /T9b FAIL: b /)
+raport('N2 părintele „site”: șantierul fără proiect nu mai intră în set', await scenariu('n2', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `WHEN 'site' THEN 'SELECT x.id::bigint FROM public.sites x WHERE x.proiect_id IS NULL OR x.proiect_id::bigint = ANY (%1$s)'`,
+    `WHEN 'site' THEN 'SELECT x.id::bigint FROM public.sites x WHERE x.proiect_id::bigint = ANY (%1$s)'`),
+}), false, /T9b FAIL: (b|b0|c) /)
+raport('N3 documente-proiect: scrierea urmează căile vizibile (în loc de „fals”)', await scenariu('n3', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `  nou_scr := format(v_set, l_s, 'false');`, `  nou_scr := format(v_set, l_s, v_doc);`),
+}), false, /T9b FAIL: (b|c) /)
+raport('N4 copiii: subinterogare CORELATĂ (aceeași semantică, pe rând) — pragul planului', await scenariu('n4', { cu13a: true,
+  mutMig13: t => inlocuieste(t, N_C_CIT, `      nou_cit := format('%s OR EXISTS (SELECT 1 FROM (%s) s(id) WHERE s.id IS NOT DISTINCT FROM %I::bigint)', ner, format(v_set, l_c), r.cheie);`),
+}), false, /T9c FAIL \(prag\): B[^\n]*subinterogări corelate/)
+// (textul trebuie să difere de cel vechi, altfel ALTER POLICY nu rulează și pică numărătoarea tabelelor schimbate, nu pg_depend)
+const VECHI_P = t => inlocuieste(inlocuieste(t, N_P_CIT, `      nou_cit := vechi_cit || ' OR false';`), N_P_SCR, `      nou_scr := vechi_scr || ' OR false';`)
+raport('N5a tabelele „proiect” păstrează predicatul pe rând (postcondiția pg_depend)', await scenariu('n5a', { cu13a: true,
+  mutMig13: VECHI_P,
+}), false, /inca depinde de un predicat pe rand/)
+raport('N5b la fel, cu postcondiția ocolită — pragul planului', await scenariu('n5b', { cu13a: true,
+  mutMig13: t => inlocuieste(VECHI_P(t), N_POST_DEP, N_POST_DEP.replace('IF EXISTS', 'IF false AND EXISTS')),
+}), false, /T9c FAIL \(prag\): B[^\n]*pe fiecare rând/)
+raport('N5c tabelele „proiect” neschimbate (postcondiția: toate tabelele în afara cozii)', await scenariu('n5c', { cu13a: true,
+  mutMig13: t => inlocuieste(inlocuieste(t, N_P_CIT, `      nou_cit := vechi_cit;`), N_P_SCR, `      nou_scr := vechi_scr;`),
+}), false, /tabele schimbate \(asteptat toate/)
+raport('N6 lista „proprie” ignoră apelantul (toate rândurile tabelului de acces)', await scenariu('n6', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `  SELECT public.fn_executie_acces_lista_cont(auth.uid(), false)\n$f$;`,
+    `  SELECT coalesce(array_agg(DISTINCT a.proiect_id ORDER BY a.proiect_id), '{}'::bigint[]) FROM public.executie_acces_proiect a\n$f$;`),
+}), false, /T9b FAIL|T9d FAIL/)
+raport('N7 lista proprie apelabilă de anon (postcondiția drepturilor)', await scenariu('n7', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `GRANT EXECUTE ON FUNCTION public.fn_executie_acces_proprii_citire() TO authenticated;`,
+    `GRANT EXECUTE ON FUNCTION public.fn_executie_acces_proprii_citire() TO authenticated, anon;`),
+}), false, /functiile noi \(securitate/)
+raport('N8 revenirea uită politicile Storage', await scenariu('n8', { cu13a: true,
+  mutRev13: t => inlocuieste(t, `WHERE nou_cit IS DISTINCT FROM vechi_cit OR nou_scr IS DISTINCT FROM vechi_scr ORDER BY tabel LOOP`,
+    `WHERE (nou_cit IS DISTINCT FROM vechi_cit OR nou_scr IS DISTINCT FROM vechi_scr) AND tabel <> 'storage.objects' ORDER BY tabel LOOP`),
+}), false, /revenire post: politicile nu au revenit la forma 20261209a: storage\.objects/)
+raport('N9 migrarea nu mai verifică forma veche a politicilor (o politică schimbată ar fi suprascrisă)', await scenariu('n9', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `v_dif := public.fn_executie_acces_politici_verifica('vechi');`, `v_dif := NULL;`),
+}), false, /T9a1 FAIL/)
+raport('N10 copiii: scrierea cu lista de CITIRE (B scrie copiii proiectului „viewer”)', await scenariu('n10', { cu13a: true,
+  mutMig13: t => inlocuieste(t, N_C_SCR, N_C_SCR.replace('format(v_set, l_s)', 'format(v_set, l_c)')),
+}), false, /T9b FAIL: b /)
+raport('N11 revenirea fără gardă de armare', await scenariu('n11', { cu13a: true,
+  mutRev13: t => inlocuieste(t, `  IF current_user IS DISTINCT FROM 'postgres'\n     OR current_setting('gazpet.revenire_20261213a', true) IS DISTINCT FROM 'REDA_POLITICILE_20261209A:' || txid_current() THEN\n    RAISE EXCEPTION '20261213a revenire: garda invalida`,
+    `  IF current_user IS DISTINCT FROM 'postgres' THEN\n    RAISE EXCEPTION '20261213a revenire: garda invalida`),
+}), false, /T9r2 FAIL/)
+raport('N12 pachetele (forma „aprobare”): perechea proiect / pachet ignorată, doar pachetul', await scenariu('n12', { cu13a: true,
+  mutMig13: t => inlocuieste(inlocuieste(t, `' THEN (split_part(name, ''/'', 1)::bigint, split_part(name, ''/'', 2)::bigint) IN'`,
+    `' THEN (0::bigint, split_part(name, ''/'', 2)::bigint) IN'`),
+    `' (SELECT k.proiect_id::bigint, k.id::bigint FROM public.executie_pachete_lansare k`, `' (SELECT 0::bigint, k.id::bigint FROM public.executie_pachete_lansare k`),
+}), false, /T9b FAIL|T3s FAIL|T3 FAIL/)
+raport('N13 Storage: căile cu `..` nu mai sunt refuzate', await scenariu('n13', { cu13a: true,
+  mutMig13: t => inlocuieste(t, ` AND position(''..'' IN name) = 0 AND CASE bucket_id'`, ` AND CASE bucket_id'`),
+}), false, /T9b FAIL: (b|c) /)
+raport('N14 executie-contracte: formele cu prefix (pccvi / ordin-incepere / probe-presiune) ignorate', await scenariu('n14', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `' substring(name FROM ''^(?:ordin-incepere|pccvi|probe-presiune)/([1-9][0-9]{0,17})/''))::bigint = ANY (%1$s)'`,
+    `' NULL::text)::bigint = ANY (%1$s)'`),
+}), false, /T9b FAIL: (b|c) /)
+// preflight-ul 20261213a (doar migrarea, după 20261209a)
+raport('Q0 20261213a se aplică peste 20261209a (control pozitiv al preflight-ului)', await scenariu('q0', { doar13a: true }), true)
+raport('Q1 predicatul pe rând al 20261209a cu alt corp (aceeași semantică)', await scenariu('q1', { doar13a: true,
+  inainte13: `CREATE OR REPLACE FUNCTION public.fn_executie_proiect_permis(p_proiect bigint, p_scriere boolean DEFAULT false) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT p_scriere IS NOT NULL AND (public.fn_executie_acces_nerestrans() OR (p_proiect IS NOT NULL AND p_proiect = ANY (public.fn_executie_acces_lista(p_scriere)))) $f$;`,
+}), false, /functiile 20261209a difera/)
+raport('Q2 politica unui părinte citește copilul (recursivitate la planificare, pentru toți)', await scenariu('q2', { doar13a: true,
+  inainte13: `CREATE POLICY bucla ON public.executie_pachete_lansare AS PERMISSIVE FOR SELECT TO authenticated
+              USING (EXISTS (SELECT 1 FROM public.executie_tevi t WHERE t.pachet_id = executie_pachete_lansare.id));`,
+}), false, /recursivitate[^\n]*executie_pachete_lansare -> executie_tevi/)
+raport('Q3 authenticated nu poate citi calea documentelor (coloana căutată de Storage)', await scenariu('q3', { doar13a: true,
+  inainte13: 'REVOKE SELECT ON public.documente_proiect FROM authenticated; GRANT SELECT (proiect_id) ON public.documente_proiect TO authenticated;',
+}), false, /documente_proiect\.storage_path[^\n]*fara drept de citire/)
+raport('Q4 o funcție fn_executie_acces_* în plus (starea nu e 20261209a)', await scenariu('q4', { doar13a: true,
+  inainte13: `CREATE FUNCTION public.fn_executie_acces_x() RETURNS integer LANGUAGE sql AS 'SELECT 1';`,
+}), false, /functiile 20261209a difera/)
+raport('Q5 lista (id-uri) din 20261209a apelabilă de authenticated (decizia r8 redeschisă)', await scenariu('q5', { doar13a: true,
+  inainte13: 'GRANT EXECUTE ON FUNCTION public.fn_executie_acces_lista(boolean) TO authenticated;',
+}), false, /functiile 20261209a difera/)
+raport('Q6 o politică Storage a 20261209a schimbată', await scenariu('q6', { doar13a: true,
+  inainte13: 'ALTER POLICY executie_acces_obiect_sterge ON storage.objects USING (true);',
+}), false, /politicile nu sunt cele din 20261209a: storage\.objects\.executie_acces_obiect_sterge/)
 
 console.log(esecuri ? `\n${esecuri} scenarii NU s-au comportat cum trebuie` : '\nToate scenariile s-au comportat cum trebuie')
 process.exit(esecuri ? 1 : 0)
