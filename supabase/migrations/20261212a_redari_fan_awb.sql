@@ -1,6 +1,6 @@
--- 20261131e_redari_fan_awb.sql — FAN Courier: AWB-urile plicurilor Redări, cu aprobarea owner-ului înainte de orice cost.
+-- 20261212a_redari_fan_awb.sql — FAN Courier: AWB-urile plicurilor Redări, cu aprobarea owner-ului înainte de orice cost.
 -- STARE: NEAPLICATĂ și NETESTATĂ pe BD (scrisă de redari@ 06.11.2026, fără acces la BD). Înainte de apply: DRY pe clona schemei,
--- review Jakarinos + Fable, „da”-ul lui Răzvan, aplicare de către chat. Revenire: supabase/revenire/20261131e_redari_fan_awb_ROLLBACK.sql.
+-- review Jakarinos + Fable, „da”-ul lui Răzvan, aplicare de către chat. Revenire: supabase/revenire/20261212a_redari_fan_awb_ROLLBACK.sql.
 -- Proiectare: docs/redari/FANCOURIER_INTEGRARE.md §3–§5.
 --
 -- De ce tabel separat: red_plicuri.awb + data_expediere sunt legate prin CHECK și marchează „expediat” pe convocări (termenul de
@@ -14,9 +14,9 @@
 BEGIN;
 
 DO $pre$ BEGIN
-  IF to_regclass('public.red_fan_awb') IS NOT NULL THEN RAISE EXCEPTION '20261131e: red_fan_awb există deja'; END IF;
-  IF to_regclass('public.red_plicuri') IS NULL OR to_regclass('public.red_loturi_plicuire') IS NULL THEN RAISE EXCEPTION '20261131e: lipsesc tabelele plicurilor (20261129i)'; END IF;
-  IF to_regprocedure('public.fn_red_nivel()') IS NULL THEN RAISE EXCEPTION '20261131e: lipsește fn_red_nivel()'; END IF;
+  IF to_regclass('public.red_fan_awb') IS NOT NULL THEN RAISE EXCEPTION '20261212a: red_fan_awb există deja'; END IF;
+  IF to_regclass('public.red_plicuri') IS NULL OR to_regclass('public.red_loturi_plicuire') IS NULL THEN RAISE EXCEPTION '20261212a: lipsesc tabelele plicurilor (20261129i)'; END IF;
+  IF to_regprocedure('public.fn_red_nivel()') IS NULL THEN RAISE EXCEPTION '20261212a: lipsește fn_red_nivel()'; END IF;
 END $pre$;
 
 CREATE TABLE public.red_fan_awb (
@@ -209,10 +209,10 @@ REVOKE ALL ON FUNCTION public.fn_red_fan_e_owner() FROM authenticated;
 
 -- postcondiții
 DO $post$ BEGIN
-  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.red_fan_awb'::regclass) THEN RAISE EXCEPTION '20261131e: RLS inactiv'; END IF;
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.red_fan_awb'::regclass) THEN RAISE EXCEPTION '20261212a: RLS inactiv'; END IF;
   IF has_table_privilege('authenticated', 'public.red_fan_awb', 'INSERT') OR has_table_privilege('authenticated', 'public.red_fan_awb', 'UPDATE')
-     OR has_table_privilege('authenticated', 'public.red_fan_awb', 'DELETE') THEN RAISE EXCEPTION '20261131e: authenticated are drept de scriere directă'; END IF;
-  IF has_function_privilege('anon', 'public.fn_red_fan_aproba(uuid, uuid[], text[])', 'EXECUTE') THEN RAISE EXCEPTION '20261131e: anon poate aproba'; END IF;
+     OR has_table_privilege('authenticated', 'public.red_fan_awb', 'DELETE') THEN RAISE EXCEPTION '20261212a: authenticated are drept de scriere directă'; END IF;
+  IF has_function_privilege('anon', 'public.fn_red_fan_aproba(uuid, uuid[], text[])', 'EXECUTE') THEN RAISE EXCEPTION '20261212a: anon poate aproba'; END IF;
 END $post$;
 
 COMMIT;
