@@ -1,5 +1,6 @@
 -- Revenire 20261209a_executie_acces_proiect. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
--- Scoate tot ce a creat migrarea: tabelul executie_acces_proiect, cele 19 funcții (lista exactă; r6: + nerestrans_cont, lista_cont, candidati), politicile RESTRICTIVE executie_acces_*
+-- Scoate tot ce a creat migrarea: tabelul executie_acces_proiect, cele 19 funcții (lista exactă; r6: + nerestrans_cont, lista_cont, candidati;
+-- r8: − parinti, + obiect_permis), politicile RESTRICTIVE executie_acces_*
 -- și trigger-ele trg_executie_acces_garda de pe tabelele 'proiect' / 'proiect_optional' / 'copil' / 'inbox' din inventar (r4: și antetul
 -- raportului zilnic, graficul intern, coada Inboxului AI), cele 4 politici de pe storage.objects, și redă
 -- EXACT corpurile vechi ale celor 5 funcții de drept (fn_executie_nod_drept / contract / grafic / tinte, fn_raport_santier_drept), cu
@@ -16,6 +17,9 @@
 -- numărată 0 și apoi pierdută la DROP), apoi tabelele acoperite, în ordinea numelui, ACCESS EXCLUSIVE NOWAIT; storage.objects la DROP POLICY
 -- (lock_timeout 5s). Ocupat = 55P03, nimic scris.
 -- Trebuie rulată ÎNAINTEA revenirii oricăreia dintre 20261201a / 20261203a / 20261204a / 20261208a (acelea verifică amprenta veche).
+-- ORDINEA REVENIRII (r8, review SQL P2-03): (1) restricțiile scoase din ecranul owner-ului („scoate restricția” pe fiecare cont; altfel
+-- fișierul refuză), (2) edge-ul citeste-orice înapoi la versiunea care NU cheamă fn_executie_acces_candidati (cu versiunea nouă rămasă,
+-- după acest fișier documentele de Execuție cu indiciu de proiect ar intra în eroare), (3) abia apoi acest fișier, armat.
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează (nimic nu rulează după el), iar harness-ul îi verifică mesajul.
 DO $revenire$
 DECLARE r record; v_n integer; v_swap text;
@@ -36,7 +40,7 @@ BEGIN
   IF to_regclass('public.executie_acces_proiect') IS NULL
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['fn_executie_acces_inventar', 'fn_executie_acces_e_owner', 'fn_executie_acces_nerestrans',
-            'fn_executie_acces_lista', 'fn_executie_proiect_permis', 'fn_executie_acces_parinte_permis', 'fn_executie_acces_parinti',
+            'fn_executie_acces_lista', 'fn_executie_proiect_permis', 'fn_executie_acces_parinte_permis', 'fn_executie_acces_obiect_permis',
             'fn_executie_acces_obiect_proiecte', 'fn_executie_acces_canon', 'fn_executie_acces_proiect_seteaza', 'fn_executie_acces_proiect_prov',
             'fn_executie_acces_garda', 'fn_executie_acces_garda_copil', 'fn_executie_acces_garda_inbox',
             'fn_executie_acces_inbox_rand', 'fn_executie_acces_inbox_obiect',
@@ -151,10 +155,10 @@ $f$$sql$;
   DROP FUNCTION public.fn_executie_acces_garda();
   DROP FUNCTION public.fn_executie_acces_garda_copil();
   DROP FUNCTION public.fn_executie_acces_garda_inbox();
+  DROP FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean);   -- r8 (predicatul Storage public)
   DROP FUNCTION public.fn_executie_acces_inbox_obiect(text, boolean);
   DROP FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean);
   DROP FUNCTION public.fn_executie_acces_obiect_proiecte(text, text);
-  DROP FUNCTION public.fn_executie_acces_parinti(text, boolean);
   DROP FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean);
   DROP FUNCTION public.fn_executie_proiect_permis(bigint, boolean);
   DROP TABLE public.executie_acces_proiect;   -- ia cu el politica și trigger-ul de proveniență
