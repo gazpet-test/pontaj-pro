@@ -21,6 +21,7 @@ import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
 import NodCuplareSectiuni from './NodCuplareSectiuni.jsx'   // nodul de cuplare: sudurile pe schemă (20261201a) + construcțiile (20261207a)
 import ProbeTronsoane from './ProbeTronsoane.jsx'       // probele pe tronsoane: intervale de km + etape (20261202a)
+import FibraOptica from './FibraOptica.jsx'             // fibra optică pe tronsoane: camerete + monotub / validat / suflat pe km (20261211a)
 import OameniSantierButon from './OameniSantierButon.jsx'   // „👷 Oameni pe șantier → Excel” (09.11.2026)
 import TabMeteoIstoric from './TabMeteoIstoric.jsx'        // 🌧️ Meteo: istoric zilnic + zile nelucrabile + Excel (20261206a)
 import ExecutieGrafic from './ExecutieGrafic.jsx'   // „📅 Grafic”: graficul de execuție importat din MS Project (20261204a)
@@ -184,7 +185,7 @@ export default function ExecutiePage() {
             <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
 
             {CONTEXT_TABS.map(t => {
-              const isActive = tabStr === t.key || (t.key === 'izometrie' && (tabStr === 'tronsoane' || tabStr === 'nod' || tabStr === 'probe'))
+              const isActive = tabStr === t.key || (t.key === 'izometrie' && (tabStr === 'tronsoane' || tabStr === 'nod' || tabStr === 'probe' || tabStr === 'fibra'))
               return (
                 <button
                   key={t.key}
@@ -269,9 +270,9 @@ export default function ExecutiePage() {
 // ===========================================================================
 function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
   const [proiect, setProiect] = useState(null)
-  // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod' | 'probe'
-  // Dacă vine cu tab=tronsoane (link vechi), tab=nod sau tab=probe (link direct de pe telefon), auto-selectăm sub-tab-ul
-  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' || tab === 'probe' ? tab : 'izometrie')
+  // Sub-tab izometrie: 'izometrie' | 'tronsoane' | 'nod' | 'probe' | 'fibra'
+  // Dacă vine cu tab=tronsoane (link vechi), tab=nod, tab=probe sau tab=fibra (link direct de pe telefon), auto-selectăm sub-tab-ul
+  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' || tab === 'nod' || tab === 'probe' || tab === 'fibra' ? tab : 'izometrie')
 
   useEffect(() => {
     // la schimbarea proiectului: bannerul nu mai arată proiectul vechi, iar un răspuns întârziat al celui vechi nu se aplică
@@ -360,7 +361,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
       {tab === 'contract'       && <ContractProiectTab proiectId={proiectId} />}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
-      {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod' || tab === 'probe') && (
+      {(tab === 'izometrie' || tab === 'tronsoane' || tab === 'nod' || tab === 'probe' || tab === 'fibra') && (
         <div>
           {/* Sub-tab bar */}
           <div style={{
@@ -372,6 +373,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
               {key:'tronsoane', label:'📍 Tronsoane',   desc:'Program · Status · Suduri'},
               {key:'nod',       label:'🔩 Nod cuplare', desc:'Schema nodului · suduri pe stări · construcții (fundații) pe etape'},
               {key:'probe',     label:'🧪 Probe pe tronsoane', desc:'Tronsoane de probă pe km · pistonare, uscare, calibrare, presiune'},
+              {key:'fibra',     label:'🧵 Fibră optică', desc:'Camerete · monotub montat · validat · fibră suflată, pe km, pe tronsoane'},
             ].map(st => {
               const active = izSubTab === st.key
               return (
@@ -392,6 +394,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
           {izSubTab === 'tronsoane' && <TabTronsoane  proiectId={proiectId} />}
           {izSubTab === 'nod'       && <NodCuplareSectiuni proiectId={Number(proiectId)} />}
           {izSubTab === 'probe'     && <ProbeTronsoane proiectId={Number(proiectId)} />}
+          {izSubTab === 'fibra'     && <FibraOptica proiectId={Number(proiectId)} />}
         </div>
       )}
     </div>
