@@ -185,6 +185,56 @@ CREATE POLICY ai_inbox_update ON public.ai_documente_inbox AS PERMISSIVE FOR UPD
         AND EXISTS (SELECT 1 FROM public.profiles h WHERE h.id = auth.uid() AND (h.is_owner = true OR h.can_access_personal_data = true)))
     OR (modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)))
   WITH CHECK (auth.uid() IS NOT NULL);
+-- r13: trigger-ele de legătură din 20261103c, text exact (garda 4a răspunde cu alt mesaj după cum obiectul există sau nu: garda migrării
+-- trebuie să ruleze ÎNAINTEA ei, iar harness-ul o probează pe un INSERT al contului restrâns)
+CREATE FUNCTION public.ai_inbox_fisier_legat()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path = public, pg_temp
+AS $f$
+DECLARE v_uid uuid := auth.uid();
+BEGIN
+  -- service_role / postgres (fără uid în JWT) ocolesc oricum RLS-ul; un cont logat leagă rândul DOAR de un fișier pe care l-a urcat
+  -- el (owner_id pus de storage-api din JWT). Altfel edge-urile service_role (citeste-orice descarcă, cleanup-recycle-bin șterge)
+  -- ar lucra pe fișierul altcuiva în numele unui rând falsificat. Același mesaj pentru „lipsește” și „e al altcuiva” (fără oracol).
+  IF v_uid IS NULL THEN RETURN NEW; END IF;
+  -- și calea e în folderul lui (sau wizard-angajare/, limitarea c): un rând pe `<A>/…` e mereu al lui A — premisa gărzii 4d
+  -- (NOT EXISTS sub RLS-ul cozii al lui A); fără ea, un obiect vechi lăsat de B în folderul lui A ar primi un rând al lui B
+  IF NEW.uploadat_de IS DISTINCT FROM v_uid
+     OR (split_part(NEW.fisier_path, '/', 1) IS DISTINCT FROM v_uid::text AND NOT starts_with(NEW.fisier_path, 'wizard-angajare/'))
+     OR NOT EXISTS (SELECT 1 FROM storage.objects o
+                     WHERE o.bucket_id = 'ai-documente-inbox' AND o.name = NEW.fisier_path AND o.owner_id = v_uid::text) THEN
+    RAISE EXCEPTION 'ai_documente_inbox: fișierul rândului nu e în coadă sau nu l-ai urcat tu — rândul se leagă doar de un fișier urcat de același cont'
+      USING ERRCODE = '42501', HINT = 'Urcă fișierul întâi (storage), apoi creează rândul cu aceeași cale și uploadat_de = contul tău.';
+  END IF;
+  RETURN NEW;
+END $f$;
+REVOKE EXECUTE ON FUNCTION public.ai_inbox_fisier_legat() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_ai_inbox_fisier_legat
+  BEFORE INSERT ON public.ai_documente_inbox
+  FOR EACH ROW EXECUTE FUNCTION public.ai_inbox_fisier_legat();
+CREATE FUNCTION public.ai_inbox_fisier_imutabil()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY INVOKER
+ SET search_path = public, pg_temp
+AS $f$
+BEGIN
+  -- legătura cu obiectul din storage (politicile ai_inbox_obj_select / _delete) se face pe fisier_path + uploadat_de: dacă s-ar
+  -- putea edita, oricine ar lega un rând „nedecis” de actul altcuiva. Numele / mărimea / tipul descriu același fișier (20261103a).
+  IF NEW.fisier_path IS DISTINCT FROM OLD.fisier_path OR NEW.uploadat_de IS DISTINCT FROM OLD.uploadat_de
+     OR NEW.fisier_nume IS DISTINCT FROM OLD.fisier_nume OR NEW.fisier_size_bytes IS DISTINCT FROM OLD.fisier_size_bytes
+     OR NEW.fisier_mime IS DISTINCT FROM OLD.fisier_mime THEN
+    RAISE EXCEPTION 'ai_documente_inbox #%: fișierul rândului (fisier_path / fisier_nume / fisier_size_bytes / fisier_mime) și uploadat_de sunt nemodificabile — se pun doar la INSERT', OLD.id
+      USING ERRCODE = '23514', HINT = 'Alt fișier = alt rând: respinge rândul și urcă fișierul din nou.';
+  END IF;
+  RETURN NEW;
+END $f$;
+REVOKE EXECUTE ON FUNCTION public.ai_inbox_fisier_imutabil() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_ai_inbox_fisier_imutabil
+  BEFORE UPDATE ON public.ai_documente_inbox
+  FOR EACH ROW EXECUTE FUNCTION public.ai_inbox_fisier_imutabil();
 -- module excluse (accesul lor e al lor): legate de proiecte, ca derivarea din catalog să le găsească și să se oprească la ele
 CREATE TABLE public.izo_tronson_config (tronson_id bigint PRIMARY KEY REFERENCES public.executie_tronsoane(id), activ boolean DEFAULT false);
 CREATE TABLE public.hr_decizii (id bigserial PRIMARY KEY, proiect_id bigint REFERENCES public.executie_proiecte(id), nr text NOT NULL);

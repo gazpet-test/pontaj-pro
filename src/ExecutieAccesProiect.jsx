@@ -20,7 +20,8 @@ const S = {
 // tabelul nu există încă (migrarea neaplicată): nici în BD nu există restricții → contul se comportă ca azi
 const TABEL_LIPSA = e => e && (e.code === 'PGRST205' || e.code === '42P01')
 
-export function useAccesProiectExecutie(client) {
+// activ = false: nu citește nimic (ex. panoul „Citește orice” închis); starea rămâne „încărcare” până la activare
+export function useAccesProiectExecutie(client, activ = true) {
   const [st, setSt] = useState({ gata: false })
   const gen = useRef(0)
   const reincarca = useCallback(async () => {
@@ -43,7 +44,11 @@ export function useAccesProiectExecutie(client) {
       if (g === gen.current) setSt({ gata: true, eroare: e?.message || String(e) })
     }
   }, [client])
-  useEffect(() => { reincarca(); return () => { gen.current++ } }, [reincarca])
+  useEffect(() => {
+    if (!activ) return undefined
+    reincarca()
+    return () => { gen.current++ }
+  }, [reincarca, activ])
   const acces = useMemo(() => stareAcces(st), [st])
   return { acces, reincarca }
 }
@@ -186,7 +191,8 @@ export function AccesProiecteOwnerModal({ client, onClose }) {
       dif.schimbate.length ? `nivel schimbat: ${dif.schimbate.map(eticheta).join(', ')}` : null,
     ].filter(Boolean)
     const intro = restrans ? '' : 'ATENȚIE: contul vede azi TOATE proiectele; după salvare va vedea DOAR cele bifate '
-      + '(și raportul zilnic doar pe șantierele lor; pe cele „doar citire” îl vede, dar nu-l salvează).\n\n'
+      + '(și raportul zilnic doar pe șantierele lor; pe cele „doar citire” îl vede, dar nu-l salvează). '
+      + 'Nu va mai avea acces nici la Inboxul de documente („Citește orice”), în niciun modul.\n\n'
     if (!window.confirm(`${intro}${contInfo?.name || 'Contul'} — ${nou.length} proiecte în Execuție:\n${linii.join('\n')}\n\nSalvez?`)) return
     trimite(true, nou)
   }
@@ -208,8 +214,12 @@ export function AccesProiecteOwnerModal({ client, onClose }) {
             Un cont fără nicio bifă vede toate proiectele pe care i le dă modulul Execuție (ca până acum). Cu cel puțin o bifă, vede și scrie
             DOAR în proiectele bifate („doar citire” = vede, nu modifică). Dreptul pe modul (viewer / editor) nu se schimbă de aici.
             Atenție: raportul zilnic din telefon nu se mai deschide pe șantierele proiectelor nebifate, iar pe cele „doar citire” se
-            vede, dar nu se salvează. Graficul lucrărilor și documentele din „Citește orice” trimise la Execuție urmează aceeași listă.
-            Coada „de repartizat” a corespondenței nu se mai vede (e comună tuturor proiectelor).
+            vede, dar nu se salvează. Graficul lucrărilor urmează aceeași listă. Coada „de repartizat” a corespondenței nu se mai vede
+            (e comună tuturor proiectelor).
+          </div>
+          <div style={{ fontSize: 12, color: G.yellow, lineHeight: 1.5, marginBottom: 14 }}>
+            ⚠️ Restrângerea scoate și Inboxul de documente („Citește orice”), în toate modulele: contul nu mai poate încărca documente acolo
+            și nu le mai vede, nici pe cele încărcate de el înainte (acelea rămân în coadă pentru tine și pentru conturile nerestrânse).
           </div>
           {eroare && <div style={{ color: G.red, fontSize: 13, marginBottom: 12 }}>Eroare la încărcare: {eroare}</div>}
           {incarcare ? <div style={{ color: G.muted, fontSize: 13 }}>Se încarcă…</div> : (

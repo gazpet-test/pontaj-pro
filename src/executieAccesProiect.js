@@ -49,6 +49,18 @@ export function verdictLinkProiect(idText, acces, proiect, eroareProiect) {
   return 'ok'
 }
 
+// r13 (decizia lui Răzvan, varianta A): un cont RESTRÂNS în Execuție nu folosește deloc „Citește orice” (coada de documente), în niciun
+// modul — aceeași regulă ca în BD (fn_executie_acces_nerestrans: owner și conturile fără rânduri = ca azi). Poarta reală e în BD; aici
+// doar nu oferim panoul și spunem clar de ce. 'incarcare' | 'eroare' | 'interzis' | 'ok'; eroarea NU e „are voie” (L18).
+export function verdictInbox(acces) {
+  if (!acces || acces.stare === 'incarcare') return 'incarcare'
+  if (acces.stare === 'eroare') return 'eroare'
+  if (acces.stare === 'restrans') return 'interzis'
+  if (acces.stare === 'nerestrans') return 'ok'
+  return 'eroare'
+}
+export const MESAJ_INBOX = 'Contul tău nu are acces la Inboxul de documente („Citește orice”). Trimite documentul responsabilului de proiect.'
+
 export const MESAJ_LINK = {
   interzis: 'Nu ai acces la acest proiect în Execuție. Dacă ai nevoie de el, cere-i lui Răzvan să ți-l adauge.',
   lipsa: 'Proiectul nu există sau nu ai acces la el în Execuție.',

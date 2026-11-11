@@ -224,8 +224,9 @@ export default function ExecutiePage() {
             </Link>
           )}
 
-          {/* Citește Orice — AI Document Router (dreapta) */}
-          {profile && (
+          {/* Citește Orice — AI Document Router (dreapta); 20261209a r13: nu se oferă contului restrâns pe proiecte (în celelalte module
+              panoul îi arată un mesaj clar) */}
+          {profile && acces?.stare !== 'restrans' && (
             <button
               onClick={() => setCitesteOpen(true)}
               title="Încarcă orice document — AI îl citește și îl pregătește pentru confirmare"

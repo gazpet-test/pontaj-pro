@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   stareAcces, filtreazaProiecte, verdictLinkProiect, listaPentruRpc, listaDinRanduri, diferenteAcces, rezultatSetare,
+  verdictInbox, MESAJ_INBOX,
 } from './executieAccesProiect.js'
 
 const PROIECTE = [{ id: 1, cod_intern: 'LOT1' }, { id: 2, cod_intern: 'LOT2' }, { id: 3, cod_intern: 'DOMNESTI' }]
@@ -78,6 +79,29 @@ describe('verdictLinkProiect (link direct ?proiect=)', () => {
   })
   it('id invalid în link', () => {
     for (const x of ['', 'abc', '0', '-1', '1.5', '01', null, undefined]) expect(verdictLinkProiect(x, restrans, null, null)).toBe('invalid')
+  })
+})
+
+// r13: decizia lui Răzvan (varianta A) — contul restrâns nu folosește „Citește orice”; owner și conturile fără rânduri: ca azi
+describe('verdictInbox („Citește orice” pentru contul curent)', () => {
+  it('cont restrâns = interzis (oricâte proiecte are, oricare nivel)', () => {
+    expect(verdictInbox(restrans)).toBe('interzis')
+    expect(verdictInbox(stareAcces({ gata: true, eOwner: false, randuri: [{ proiect_id: 1, nivel: 'viewer' }] }))).toBe('interzis')
+  })
+  it('owner și cont fără rânduri = ok (ca azi)', () => {
+    expect(verdictInbox(stareAcces({ gata: true, eOwner: true, randuri: [{ proiect_id: 1, nivel: 'editor' }] }))).toBe('ok')
+    expect(verdictInbox(stareAcces({ gata: true, eOwner: false, randuri: [] }))).toBe('ok')
+  })
+  it('eroare la citirea accesului ≠ „are voie” (L18); încărcarea = încă nu știm', () => {
+    expect(verdictInbox(stareAcces({ gata: true, eroare: 'timeout' }))).toBe('eroare')
+    expect(verdictInbox(stareAcces({ gata: true, eOwner: false, randuri: null }))).toBe('eroare')
+    expect(verdictInbox(stareAcces({ gata: false }))).toBe('incarcare')
+    expect(verdictInbox(undefined)).toBe('incarcare')
+    expect(verdictInbox({ stare: 'altceva' })).toBe('eroare')
+  })
+  it('mesajul spune ce să facă omul, fără eroare brută', () => {
+    expect(MESAJ_INBOX).toMatch(/nu are acces la Inboxul de documente/)
+    expect(MESAJ_INBOX).toMatch(/Trimite documentul responsabilului/)
   })
 })
 

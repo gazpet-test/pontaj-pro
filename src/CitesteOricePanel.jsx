@@ -65,6 +65,9 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+// acces pe proiect (20261209a r13): contul restrâns în Execuție nu folosește coada
+import { useAccesProiectExecutie } from './ExecutieAccesProiect.jsx'
+import { verdictInbox, MESAJ_INBOX } from './executieAccesProiect.js'
 import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare,
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
   citireNecesara, stareInchidere, mesajInchidere, avertizareStaging, textConfirmareRespingere, mesajRespingere,
@@ -254,6 +257,10 @@ export async function imageToPdf(file, { maxDim = IMG_MAX_DIM, calitate = 0.82, 
 export default function CitesteOricePanel({ open, onClose, profile, modul = 'executie', proiectContextId = null, proiectContextNume = null, onConfirmed }) {
   const cfg = MODUL_CFG[modul] || MODUL_CFG.executie
   const meta = MODUL_META[modul] || MODUL_META.executie
+  // 20261209a r13 (decizia lui Răzvan): un cont restrâns pe proiecte în Execuție nu folosește coada, în niciun modul — BD-ul refuză
+  // oricum; aici nu oferim panoul și spunem clar de ce, în loc de o eroare brută. Se verifică doar cât panoul e deschis.
+  const { acces: accesProiect, reincarca: reincarcaAcces } = useAccesProiectExecutie(supabase, open)
+  const inboxVerdict = verdictInbox(accesProiect)
 
   const [view, setView] = useState('upload')
   const busyRef = useRef(new Set())   // anti dublu-click, sincron (state-ul busyId nu apucă să se randeze în <100ms)            // 'upload' | 'confirm'
@@ -870,6 +877,32 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   if (!open) return null
 
   const accent = cfg.color
+
+  // contul restrâns / accesul încă necitit / eroare la citire: fără dropzone și fără coadă (eroarea NU înseamnă „are voie”, L18)
+  if (inboxVerdict !== 'ok') {
+    const titlu = inboxVerdict === 'interzis' ? 'Inbox indisponibil' : inboxVerdict === 'eroare' ? 'Nu am putut verifica accesul' : 'Se verifică accesul…'
+    return (
+      <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto' }}
+        onClick={onClose}>
+        <div style={{ width:'100%', maxWidth:520, background:G.surface, border:`1px solid ${inboxVerdict === 'eroare' ? G.red + '66' : G.border}`, borderRadius:14, padding:'22px 24px' }}
+          onClick={e => e.stopPropagation()}>
+          <div style={{ fontSize:26, marginBottom:8 }}>{inboxVerdict === 'interzis' ? '🔒' : inboxVerdict === 'eroare' ? '⚠️' : '⏳'}</div>
+          <div style={{ fontSize:15, fontWeight:800, color:G.text, marginBottom:8 }}>{titlu}</div>
+          <div style={{ fontSize:13, color:G.muted, lineHeight:1.5, marginBottom:16 }}>
+            {inboxVerdict === 'interzis' ? MESAJ_INBOX
+              : inboxVerdict === 'eroare' ? `Încearcă din nou peste câteva secunde. (${accesProiect?.eroare || 'eroare necunoscută'})`
+              : 'Un moment…'}
+          </div>
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+            {inboxVerdict === 'eroare' && (
+              <button onClick={reincarcaAcces} style={{ padding:'8px 14px', background:'transparent', border:`1px solid ${G.border}`, color:G.text, borderRadius:8, cursor:'pointer', fontSize:13, fontWeight:700 }}>Reîncearcă</button>
+            )}
+            <button onClick={onClose} style={{ padding:'8px 14px', background:G.card2, border:`1px solid ${G.border}`, color:G.text, borderRadius:8, cursor:'pointer', fontSize:13, fontWeight:700 }}>Închide</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto' }}
