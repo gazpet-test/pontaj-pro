@@ -11,10 +11,12 @@ param(
   [string]$RepoDir = '',
   [string]$Utilizator = "$env:COMPUTERNAME\Gazpet-Ai",
   [ValidateSet('Interactiv', 'Parola')][string]$Mod = 'Interactiv',
+  [string]$Rdr = 'C:\Users\Gazpet-Ai\claude-redari\rdr.ps1',
   [switch]$Dezinstaleaza
 )
 $ErrorActionPreference = 'Stop'
 $Nume = 'Gazpet Tichete dimineata'
+Import-Module (Join-Path $PSScriptRoot 'tichete_lib.psm1') -Force
 
 if ($Dezinstaleaza) {
   if (Get-ScheduledTask -TaskName $Nume -ErrorAction SilentlyContinue) {
@@ -28,6 +30,9 @@ if (-not $RepoDir) { $RepoDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..'))
 $Script = Join-Path $RepoDir 'scripts\tichete_dimineata\tichete_dimineata.ps1'
 if (-not (Test-Path -LiteralPath $Script -PathType Leaf)) { throw "nu gasesc $Script" }
 if ($RepoDir -match '\s') { throw "RepoDir nu are voie sa contina spatii: $RepoDir" }
+# J1 (r3): fără profilul „tichete” al lansatorului rdr.ps1 orchestratorul NU e instalabil (aceeași gardă ca la start).
+$prof = Test-LansatorProfilTichete $(if (Test-Path -LiteralPath $Rdr -PathType Leaf) { [IO.File]::ReadAllText($Rdr) } else { '' })
+if (-not $prof.ok) { throw ('rdr.ps1 nu are profilul tichete - task-ul nu se instaleaza: ' + (@($prof.motive) -join '; ')) }
 
 $actiune = New-ScheduledTaskAction -Execute 'powershell.exe' `
   -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $Script + '" -RepoDir "' + $RepoDir + '"') `
@@ -46,7 +51,7 @@ $logon = if ($Mod -eq 'Parola') { 'Password' } else { 'Interactive' }
 $principal = New-ScheduledTaskPrincipal -UserId $Utilizator -LogonType $logon -RunLevel Limited
 
 $task = New-ScheduledTask -Action $actiune -Trigger $declansator -Settings $setari -Principal $principal `
-  -Description 'Tichete 🐛/💡 din ERP -> rdr (cont redari@) -> review Jakarinos + Fable -> merge automat doar in limite. Raport: C:\Users\Public\paw-data\out\tichete_<data>.md. Detalii: scripts\tichete_dimineata\README.md'
+  -Description 'Tichete 🐛/💡 din ERP -> rdr -Profil tichete (cont redari@) -> PR DRAFT -> review Jakarinos + Fable -> raport cu recomandare. Faza 1: FARA merge, fara inchidere de tichete. Raport: C:\Users\Public\paw-data\out\tichete_<data>.md. Detalii: scripts\tichete_dimineata\README.md'
 
 if (Get-ScheduledTask -TaskName $Nume -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $Nume -Confirm:$false }
 if ($Mod -eq 'Interactiv') {
