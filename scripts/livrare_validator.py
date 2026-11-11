@@ -50,8 +50,10 @@
 #   * orice „RESET ALL”.
 #   SQL-ul dinamic construit din bucăți (chr(), format, U& în corpuri) și apelul unei funcții EXISTENTE cu
 #   SET transaction_timeout nu se pot vedea static: le prinde garda finală a runnerului (valoarea și timpul de la BEGIN,
-#   runda 12: în același mesaj cu COMMIT-ul). Validatorul e gardă de PROTOCOL, nu dovadă. Fără opțiune: regulile de
-#   dinainte, neschimbate.
+#   runda 12: în același mesaj cu COMMIT-ul; runda 13: refuz PLAFON_AMANABIL pentru obiectele amânabile create /
+#   modificate în tranzacție). Garanția exactă și limitele ei (COMMIT-ul propriu-zis, codul preexistent care rulează
+#   amânat, ocolirea deliberată a runnerului) sunt în antetul scripts/livrare_migrare.sh. Validatorul și garda sunt
+#   gărzi de PROTOCOL, nu dovadă și nici autorizație. Fără opțiune: regulile de dinainte, neschimbate.
 #
 # Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.

@@ -65,7 +65,8 @@
 #                   SET CONSTRAINTS ALL IMMEDIATE  — triggerele amânate rulează ACUM, înaintea gărzii (timpul lor e numărat),
 #                                                    nu în COMMIT, după gardă;
 #                   SET LOCAL search_path = pg_catalog, pg_temp — funcțiile / operatorii gărzii nu pot fi umbriți;
-#                   garda finală — niciun cursor WITH HOLD deschis (s-ar materializa în COMMIT, după gardă); valoarea tot
+#                   garda finală — (runda 13) niciun obiect amânabil creat / modificat în tranzacție (PLAFON_AMANABIL, vezi
+#                                  mai jos); niciun cursor WITH HOLD deschis (s-ar materializa în COMMIT, după gardă); valoarea tot
 #                                  N/session + marcajul; timpul de la BEGIN pe ceasul SERVERULUI
 #                                  (clock_timestamp() − transaction_timestamp()) ≤ N ms; altfel refuz;
 #                   COMMIT;
@@ -88,19 +89,51 @@
 #   tranzacția să comită după termen. Acum garda și COMMIT-ul sunt în ACELAȘI mesaj (simple query): serverul primește
 #   mesajul întreg înainte să-l execute, deci între gardă și COMMIT nu există drum client↔server; la eroarea gărzii
 #   serverul abandonează restul mesajului (COMMIT-ul nu se execută), psql (ON_ERROR_STOP) iese, conexiunea se închide și
-#   tranzacția se anulează. Orice pauză a clientului sau a rețelei cade ÎNAINTEA gărzii și e numărată de ea. Între gardă
-#   și COMMIT nu mai rulează cod SQL venit din artefact (triggere amânate rulate înainte, cursoare WITH HOLD refuzate).
+#   tranzacția se anulează. Orice pauză a clientului sau a rețelei cade ÎNAINTEA gărzii și e numărată de ea.
 #   Rearmarea ceasului din gardă (0, apoi timpul rămas) NU e folosită: în forma de un mesaj n-ar adăuga nimic și ar
 #   schimba valoarea verificată (N/session).
-#   GARANȚIA (formulare exactă), cu opțiunea: o livrare NU poate COMITE dacă de la BEGIN până la garda finală (ultima
-#   instrucțiune înaintea intrării în COMMIT, în același mesaj) au trecut mai mult de N ms pe ceasul serverului — oricum
-#   ar opri / reporni artefactul ceasul transaction_timeout. Fără ocolire, serverul închide oricum sesiunea la ~N ms
-#   (timeout PostgreSQL, nu timp real strict).
-#   CE NU GARANTEAZĂ: (1) COMMIT-ul propriu-zis NU e plafonat (PG17 oprește ceasul la intrarea în COMMIT): scrierea WAL a
-#   commit-ului, acțiunile ON COMMIT ale tabelelor temporare, iar cu replicare sincronă și așteptarea standby-ului;
-#   (2) o ocolire deliberată a ceasului într-un artefact aprobat poate ȚINE tranzacția (și lock-urile) deschisă peste N
-#   până ajunge la gardă — nu comite, dar închiderea întârzie; (3) ceasul serverului e ceas de perete (un salt NTP mută
-#   măsurătoarea).
+#   Runda 13 (11.11.2026, Jakarinos r16 P2 pe #1054): SET CONSTRAINTS ALL IMMEDIATE NU golește coada de triggere amânate
+#   pentru totdeauna: un trigger amânat A rulat de el poate executa SET CONSTRAINTS ALL DEFERRED și pune în coadă un
+#   trigger amânat B; B rămâne pentru COMMIT (PG17 AfterTriggerSetState procesează doar evenimentele devenite imediate;
+#   COMMIT-ul procesează și restul), deci rulează DUPĂ gardă. Repetarea SET CONSTRAINTS nu închide asta (B poate reamâna
+#   la rândul lui). ÎNCHIDEREA PRIN CATALOG (PLAFON_AMANABIL, în gardă, după SET CONSTRAINTS ALL IMMEDIATE): garda
+#   refuză (nimic comis) dacă în tranzacția curentă a fost creat sau modificat:
+#     * orice trigger amânabil (pg_trigger.tgdeferrable; și cele interne, ale FK-urilor amânabile — mai strict decât
+#       „ne-interne”, ca să prindă și FK-urile create / modificate);
+#     * orice constrângere amânabilă (pg_constraint.condeferrable: FK-uri — verificările RI_FKey_check_* / noaction sunt
+#       amânate, acțiunile CASCADE / SET NULL au triggere ne-amânabile, rulate imediat; UNIQUE / EXCLUDE; constraint
+#       triggers), creată sau modificată (ex. ALTER CONSTRAINT … DEFERRABLE, ENABLE / DISABLE TRIGGER);
+#     * funcția (pg_proc) a oricărui trigger amânabil, și a celor EXISTENTE (funcție înlocuită de artefact).
+#   „Creat sau modificat în tranzacția curentă” = rândul de catalog vizibil are age(xmin) <= 0. De ce e exact (sursa PG17):
+#   age(xid) = (int32)(GetStableLatestTransactionId() − xid), iar referința e xid-ul de VÂRF al tranzacției, dacă era deja
+#   alocat la primul apel age() din tranzacție — prologul (primul fișier după BEGIN, fără niciun age()) îl alocă prin
+#   txid_current(), înaintea oricărui cod al artefactului, iar garda verifică age(xid(pg_current_xact_id())) = 0.
+#   Subtranzacțiile (blocuri EXCEPTION, SAVEPOINT) au xid PROPRIU, dar AssignTransactionId alocă întâi părintele („a
+#   child always has an XID later than its parent”), deci xid-ul lor > vârful ⇒ age < 0, prinse. Un rând scris de o
+#   subtranzacție ANULATĂ nu e vizibil (și evenimentele ei amânate sunt aruncate). Rândurile comise anterior au xid-uri
+#   mai vechi ⇒ age > 0 (xid-urile permanente / înghețate: INT_MAX). Un pg_current_xact_id() din subtranzacție dă tot
+#   vârful (comparația xmin = pg_current_xact_id() ar RATA subtranzacțiile — de aceea age, nu egalitatea). Fals pozitiv
+#   posibil (fail-closed, refuz): o altă sesiune care a pornit DUPĂ BEGIN-ul nostru și a comis între timp un obiect
+#   amânabil. Proba: test_livrare_plafon.sh 8f–8i (inclusiv FK creat într-o subtranzacție).
+#   CONSECINȚĂ ACCEPTATĂ: o migrare legitimă care creează / modifică constrângeri sau triggere amânabile (sau funcția
+#   unui trigger amânabil) NU se poate livra cu plafon ⇒ se livrează FĂRĂ opțiune, cu review. La fel migrările care se
+#   bazează pe verificarea la COMMIT (ex. copil inserat înaintea părintelui într-un FK amânabil): SET CONSTRAINTS ALL
+#   IMMEDIATE le poate schimba rezultatul (eroare FK înainte de gardă) — observația celui de-al doilea recenzent.
+#   GARANȚIA (formulare exactă), cu opțiunea: pentru orice artefact care NU a creat și NU a modificat obiecte amânabile
+#   (cele de mai sus), de la BEGIN până la intrarea în COMMIT trec cel mult ~N ms: garda finală (ultima instrucțiune
+#   înaintea COMMIT-ului, în același mesaj) refuză dacă pe ceasul serverului au trecut > N ms de la BEGIN, oricum ar
+#   opri / reporni artefactul ceasul transaction_timeout; fără ocolire, serverul închide oricum sesiunea la ~N ms (timeout
+#   PostgreSQL, nu timp real strict). Artefactele care AU creat / modificat obiecte amânabile sunt refuzate (nimic comis).
+#   CE NU GARANTEAZĂ (limite declarate): (1) COMMIT-ul propriu-zis NU e plafonat: scrierea WAL a commit-ului, acțiunile
+#   ON COMMIT (ex. ON COMMIT DROP), procesarea internă, iar cu replicare sincronă și așteptarea standby-ului;
+#   (2) codul PREEXISTENT din bază care rulează amânat: triggerele / constrângerile amânabile existente (neatinse de
+#   artefact) rulează înaintea gărzii, dar dacă propriul lor cod reamână evenimente, acelea rămân pentru COMMIT; iar ce
+#   cheamă ele INDIRECT nu e verificat — funcțiile apelate din funcția triggerului, triggerele ne-amânabile pornite de
+#   scrierile lui, operatorii tipurilor din cheile verificate — chiar dacă artefactul le-a creat sau înlocuit pe acestea
+#   din urmă; (3) un operator care ocolește deliberat runnerul (psql direct, set_config
+#   manual); (4) o ocolire deliberată a ceasului într-un artefact aprobat poate ȚINE tranzacția (și lock-urile) deschisă
+#   peste N până ajunge la gardă — nu comite, dar închiderea întârzie; (5) ceasul serverului e ceas de perete (un salt
+#   NTP mută măsurătoarea). Validatorul și garda sunt GĂRZI DE PROTOCOL, nu autorizație.
 #   Fără opțiune: comportamentul de dinainte, NESCHIMBAT (psql --single-transaction, aceleași fișiere, fără SET).
 #   Cu opțiune, pre-verificarea, reconcilierea și gate-ul 0e rulează cu SET transaction_timeout = 0 înainte de BEGIN (fără
 #   plafon; un backend refolosit de pooler nu le poate impune unul rămas).
@@ -241,10 +274,26 @@ if [ -n "$PLAFON_MS" ]; then
   # Runda 12: garda finală și COMMIT = UN SINGUR mesaj de interogare („\;” în psql ⇒ psql nu trimite nimic până la „;”-ul
   # de după COMMIT). Ordinea în mesaj: triggerele amânate rulează ACUM (cu search_path-ul migrării), apoi search_path fixat
   # pe pg_catalog, apoi garda, apoi COMMIT. RESET-ul e mesaj separat, după COMMIT (nu mai ține de tranzacție).
+  # Runda 13 (r5, Jakarinos r16 P2): închiderea prin catalog (PLAFON_AMANABIL), după SET CONSTRAINTS ALL IMMEDIATE — vezi
+  # antetul. „Scris în tranzacția curentă” = age(xmin) <= 0, cu referința verificată (age(xid-ul de vârf) = 0).
   cat > "$DIR/9_fin.sql" <<SQL
 SET CONSTRAINTS ALL IMMEDIATE \;
 SET LOCAL search_path = pg_catalog, pg_temp \;
-DO \$plafon_fin\$ BEGIN
+DO \$plafon_fin\$ DECLARE v_amanabile text; BEGIN
+  IF pg_catalog.age(pg_catalog.xid(pg_catalog.pg_current_xact_id())) IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION 'Livrare $NUME: PLAFON_AMANABIL: referinta tranzactiei curente (age = 0 pentru xid-ul de varf) nu se confirma - refuz, nimic comis'; END IF;
+  SELECT pg_catalog.string_agg(o, ', ' ORDER BY o) INTO v_amanabile FROM (
+    SELECT 'trigger ' || t.tgrelid::pg_catalog.regclass::pg_catalog.text || '.' || t.tgname AS o
+      FROM pg_catalog.pg_trigger t WHERE t.tgdeferrable AND pg_catalog.age(t.xmin) <= 0
+    UNION ALL
+    SELECT 'constrangere ' || c.conname::pg_catalog.text
+      FROM pg_catalog.pg_constraint c WHERE c.condeferrable AND pg_catalog.age(c.xmin) <= 0
+    UNION ALL
+    SELECT 'functia ' || p.oid::pg_catalog.regprocedure::pg_catalog.text || ' a triggerului ' || t.tgname::pg_catalog.text
+      FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+     WHERE t.tgdeferrable AND pg_catalog.age(p.xmin) <= 0) s;
+  IF v_amanabile IS NOT NULL THEN
+    RAISE EXCEPTION 'Livrare $NUME: PLAFON_AMANABIL: obiecte amanabile create / modificate in tranzactie (%) - cod al artefactului ar putea rula in COMMIT, dupa garda; cu plafon se refuza (livrare fara optiune, cu review) - nimic comis', v_amanabile; END IF;
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_cursors WHERE is_holdable) THEN
     RAISE EXCEPTION 'Livrare $NUME: PLAFON_CURSOR: cursor WITH HOLD deschis (s-ar executa in COMMIT, dupa garda) - refuz, nimic comis'; END IF;
   IF $PLAFON_CITIRE IS DISTINCT FROM '$PLAFON_MS/session'

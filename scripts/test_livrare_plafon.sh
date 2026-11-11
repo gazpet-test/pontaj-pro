@@ -28,11 +28,18 @@
 #               => control (garda si COMMIT separate) COMITE (0); forma livrata => pauza cade inaintea garzii =>
 #               PLAFON_DEPASIT, NEAPLICAT (10), fara inchidere de catre server;
 #   functie:    la fel, cu o functie EXISTENTA cu SET transaction_timeout = 0 apelata de artefact (validatorul n-o vede);
-#   amanat:     trigger DEFERRABLE INITIALLY DEFERRED (ceas oprit, 1,5 s, repornit; N=1000) => control fara
+#   amanat:     trigger DEFERRABLE INITIALLY DEFERRED PREEXISTENT (ceas oprit, 1,5 s, repornit; N=1000) => control fara
 #               SET CONSTRAINTS ALL IMMEDIATE il ruleaza in COMMIT, dupa garda, si COMITE (0); forma livrata il ruleaza
 #               inaintea garzii => PLAFON_DEPASIT (10);
 #   cursor:     cursor WITH HOLD deschis => fara optiune se executa la COMMIT (>= 1,5 s, control 0); cu plafon
 #               PLAFON_CURSOR (10).
+# Runda 13 / r5 (Jakarinos r16 P2): inchiderea prin catalog (PLAFON_AMANABIL), cu control pe forma r4c:
+#   reamanat:   A amanat reamana (SET CONSTRAINTS ALL DEFERRED) si pune B amanat in coada; B opreste ceasul si doarme
+#               1,5 s in COMMIT => forma r4c COMITE dupa termen (control 0, >= 1,5 s); forma r13 => PLAFON_AMANABIL (10);
+#   fk:         FK DEFERRABLE creat de artefact intr-o subtranzactie (xmin != xid-ul de varf) => PLAFON_AMANABIL (10);
+#               fara optiune => 0;
+#   functie amanata: functia unui trigger amanabil EXISTENT inlocuita => PLAFON_AMANABIL (10); fara optiune => 0;
+#   fara amanabile: FK / UNIQUE / trigger amanabile EXISTENTE folosite, FK / trigger ne-amanabile noi => 0.
 # Forma mesajelor (fara PostgreSQL): scripts/test_livrare_forma_fin.sh.
 # Runda 13 (harness r15): cazurile cu timpi (lent, garda timp, 8b-8e) ruleaza prin asteapta_ceas: un salt al ceasului de
 # perete >= 100 ms in timpul cazului il face NEVALID (in ambele sensuri), se curata si se repeta (cel mult 3 ori).
@@ -300,15 +307,17 @@ echo 'PLAFON_FUNCTIE: functie existenta cu SET transaction_timeout = 0 (1,5 s) +
 
 # r16b: functia de trigger a probei scrie un GUC prin SQL dinamic; fara REVOKE FROM PUBLIC, gate-ul 0e al runnerului o
 #     semnaleaza (cod 30) dupa comitere si controlul pica din alt motiv decat cel probat.
-# 8d. Trigger AMANAT (DEFERRABLE INITIALLY DEFERRED) care opreste ceasul, doarme 1,5 s si il reporneste: fara
+# 8d. Trigger AMANAT (DEFERRABLE INITIALLY DEFERRED) PREEXISTENT (creat inaintea livrarii, nu de artefact), care opreste
+#     ceasul, doarme 1,5 s si il reporneste; artefactul doar insereaza in tabelul lui (pune evenimentul in coada). Fara
 #     SET CONSTRAINTS ALL IMMEDIATE ar rula IN COMMIT, dupa garda (control, fara pauza); cu el ruleaza inaintea garzii.
-amanat() { # $1 sufixul tabelului
-  printf '%s\n' "CREATE TABLE public.a_$1 (id integer);" \
-    "CREATE FUNCTION public.fa_$1() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5); EXECUTE format('SET LOCAL %s = %s', $DIN, '1000'); RETURN NULL; END \$f\$;" \
-    "REVOKE EXECUTE ON FUNCTION public.fa_$1() FROM PUBLIC;" \
-    "CREATE CONSTRAINT TRIGGER ta_$1 AFTER INSERT ON public.a_$1 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fa_$1();" \
-    "INSERT INTO public.a_$1 VALUES (1);"
-}
+#     r5 (Jakarinos r16): triggerul e preexistent, ca sa nu-l refuze inchiderea prin catalog (PLAFON_AMANABIL, 8f-8h) —
+#     aici se proba doar ca SET CONSTRAINTS ALL IMMEDIATE numara timpul triggerelor existente.
+q "CREATE TABLE public.a_pre (id integer);
+CREATE FUNCTION public.fa_pre() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5); EXECUTE format('SET LOCAL %s = %s', $DIN, '1000'); RETURN NULL; END \$f\$;
+REVOKE EXECUTE ON FUNCTION public.fa_pre() FROM PUBLIC;
+CREATE CONSTRAINT TRIGGER ta_pre AFTER INSERT ON public.a_pre DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fa_pre();" >/dev/null
+[[ "$(q "SELECT count(*) FROM pg_catalog.pg_trigger WHERE tgname = 'ta_pre' AND tgdeferrable AND tginitdeferred")" == 1 ]] \
+  || fail 'amanat: triggerul preexistent nu e DEFERRABLE INITIALLY DEFERRED (proba nefunctionala)'
 cat >"$TMP/psql_fara_amanate" <<'EOF'
 #!/usr/bin/env bash
 # CONTROL: 9_fin.sql fara SET CONSTRAINTS ALL IMMEDIATE (triggerele amanate raman pentru COMMIT). Restul neschimbat.
@@ -326,24 +335,25 @@ done
 exec "$PAUZA_PG_BIN/psql" "${a[@]}"
 EOF
 chmod +x "$TMP/psql_fara_amanate"
-M_AC="$(migrare 20990101n_plafon_amanat_ctl '1000/session' "$(amanat ctl)")"
+M_AC="$(migrare 20990101n_plafon_amanat_ctl '1000/session' 'INSERT INTO public.a_pre VALUES (1);')"
 PAUZA_DIR="$TMP" PAUZA_PG_BIN="$PG_BIN" PSQL_BIN_TEST="$TMP/psql_fara_amanate" \
   asteapta_ceas 'amanat control' 0 "$TMP/amanat_ctl.log" \
-  "$(curata 20990101n_plafon_amanat_ctl 'DROP TABLE IF EXISTS public.a_ctl; DROP FUNCTION IF EXISTS public.fa_ctl();')" \
+  "$(curata 20990101n_plafon_amanat_ctl 'DELETE FROM public.a_pre;')" \
   -- runner 20990101000015 "$M_AC" --plafon-tranzactie-ms 1000
 ms="$CAZ_MS"
 [[ -e "$TMP/fara_amanate_aplicat" && "$(stare 20990101n_plafon_amanat_ctl)" == 'true|true' ]] \
   || { cat "$TMP/amanat_ctl.log"; fail 'amanat control: triggerul amanat din COMMIT trebuia sa treaca de garda (proba nefunctionala)'; }
-[[ "$(q 'SELECT count(*) FROM public.a_ctl')" == 1 ]] || fail 'amanat control: randul lipseste'
-M_AM="$(migrare 20990101o_plafon_amanat '1000/session' "$(amanat liv)")"
-asteapta_ceas amanat 10 "$TMP/amanat.log" \
-  "$(curata 20990101o_plafon_amanat 'DROP TABLE IF EXISTS public.a_liv; DROP FUNCTION IF EXISTS public.fa_liv();')" \
+[[ "$(q 'SELECT count(*) FROM public.a_pre')" == 1 ]] || fail 'amanat control: randul lipseste'
+(( ms >= 1500 )) || fail "amanat control: livrarea a durat $ms ms (triggerul trebuia sa doarma 1,5 s in COMMIT)"
+M_AM="$(migrare 20990101o_plafon_amanat '1000/session' 'INSERT INTO public.a_pre VALUES (2);')"
+asteapta_ceas amanat 10 "$TMP/amanat.log" "$(curata 20990101o_plafon_amanat 'DELETE FROM public.a_pre WHERE id = 2;')" \
   -- runner 20990101000016 "$M_AM" --plafon-tranzactie-ms 1000
 n0="$CAZ_N0"
 grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 1000 ms' "$TMP/amanat.log" || { cat "$TMP/amanat.log"; fail 'amanat: garda trebuia sa refuze (triggerul rulat inaintea ei)'; }
+! grep -q PLAFON_AMANABIL "$TMP/amanat.log" || { cat "$TMP/amanat.log"; fail 'amanat: un trigger PREEXISTENT nu trebuie refuzat prin catalog'; }
 (( "$(inchideri)" == n0 )) || fail 'amanat: trebuia refuzata de garda, nu inchisa de server'
-[[ "$(stare 20990101o_plafon_amanat)" == 'false|false' && -z "$(q "SELECT to_regclass('public.a_liv')")" ]] || fail 'amanat: au ramas efecte'
-echo "PLAFON_AMANAT: trigger amanat (ceas oprit, 1,5 s, repornit; N=1000) => fara SET CONSTRAINTS ALL IMMEDIATE ruleaza in COMMIT, dupa garda, si COMITE ($ms ms, control 0); forma r12 il ruleaza inaintea garzii => PLAFON_DEPASIT, NEAPLICAT (10)"
+[[ "$(stare 20990101o_plafon_amanat)" == 'false|false' && "$(q 'SELECT count(*) FROM public.a_pre')" == 1 ]] || fail 'amanat: au ramas efecte'
+echo "PLAFON_AMANAT: trigger amanat PREEXISTENT (ceas oprit, 1,5 s, repornit; N=1000) => fara SET CONSTRAINTS ALL IMMEDIATE ruleaza in COMMIT, dupa garda, si COMITE ($ms ms, control 0); forma livrata il ruleaza inaintea garzii => PLAFON_DEPASIT (nu PLAFON_AMANABIL: e preexistent), NEAPLICAT (10)"
 
 # 8e. Cursor WITH HOLD lasat deschis: s-ar materializa (executa) in COMMIT, dupa garda => refuz explicit. Control: fara
 #     optiune acelasi artefact comite, iar livrarea dureaza >= 1,5 s (cursorul chiar ruleaza la COMMIT).
@@ -359,6 +369,123 @@ grep -q 'PLAFON_CURSOR: cursor WITH HOLD deschis' "$TMP/cursor.log" || { cat "$T
 [[ "$(stare 20990101q_plafon_cursor)" == 'false|false' ]] || fail 'cursor: au ramas efecte'
 echo "PLAFON_CURSOR: cursor WITH HOLD deschis => fara optiune se executa in COMMIT ($ms ms, control 0); cu plafon garda refuza (PLAFON_CURSOR), NEAPLICAT (10)"
 
+# 8f-8i. Runda 13 (r5, Jakarinos r16 P2): SET CONSTRAINTS ALL IMMEDIATE nu goleste coada pentru totdeauna (un trigger
+# amanat A o poate reamana si pune B in coada pentru COMMIT). Inchiderea prin catalog: garda refuza (PLAFON_AMANABIL)
+# orice obiect amanabil creat / modificat in tranzactie. CONTROL = forma r4c: clientul de test scoate din 9_fin.sql
+# exact blocul PLAFON_AMANABIL (altfel proba e nefunctionala, cod 7 => psql nu porneste => controlul pica).
+cat >"$TMP/psql_r4c" <<'EOF'
+#!/usr/bin/env bash
+# CONTROL: 9_fin.sql in forma r4c (fara blocul PLAFON_AMANABIL al garzii). Restul apelurilor neschimbate.
+set -euo pipefail
+a=()
+while [ $# -gt 0 ]; do
+  if [ "$1" = -f ] && [[ "${2:-}" == */9_fin.sql ]]; then
+    c="$PAUZA_DIR/9_fin_r4c_$$.sql"
+    awk '/^  IF pg_catalog\.age\(pg_catalog\.xid\(/ { sar = 1; n++ }
+         !sar { print }
+         sar && /v_amanabile; END IF;$/ { sar = 0 }
+         END { exit (n == 1 && !sar ? 0 : 7) }' "$2" >"$c"
+    if grep -q 'PLAFON_AMANABIL\|pg_trigger\|pg_constraint' "$c"; then exit 7; fi
+    touch "$PAUZA_DIR/r4c_aplicat"
+    a+=(-f "$c"); shift 2; continue
+  fi
+  a+=("$1"); shift
+done
+exec "$PAUZA_PG_BIN/psql" "${a[@]}"
+EOF
+chmod +x "$TMP/psql_r4c"
+# Scenariul exact din verdict: A (amanat) ruleaza la SET CONSTRAINTS ALL IMMEDIATE, executa SET CONSTRAINTS ALL DEFERRED
+# si insereaza in tabelul lui B (amanat); B opreste ceasul prin SQL dinamic si doarme 1,5 s. N=1000.
+reamanare() { # $1 sufixul obiectelor
+  printf '%s\n' "CREATE TABLE public.ra_$1 (id integer);" "CREATE TABLE public.rb_$1 (id integer);" \
+    "CREATE FUNCTION public.fra_$1() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN SET CONSTRAINTS ALL DEFERRED; INSERT INTO public.rb_$1 VALUES (1); RETURN NULL; END \$f\$;" \
+    "CREATE FUNCTION public.frb_$1() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5); RETURN NULL; END \$f\$;" \
+    "REVOKE EXECUTE ON FUNCTION public.fra_$1() FROM PUBLIC;" "REVOKE EXECUTE ON FUNCTION public.frb_$1() FROM PUBLIC;" \
+    "CREATE CONSTRAINT TRIGGER tra_$1 AFTER INSERT ON public.ra_$1 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fra_$1();" \
+    "CREATE CONSTRAINT TRIGGER trb_$1 AFTER INSERT ON public.rb_$1 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.frb_$1();" \
+    "INSERT INTO public.ra_$1 VALUES (1);"
+}
+# 8f. Control (forma r4c): B ruleaza in COMMIT, dupa garda => COMITE dupa termen (>= 1,5 s, fara inchidere de server).
+M_RAC="$(migrare 20990101r_plafon_reamanat_ctl '1000/session' "$(reamanare ctl)")"
+PAUZA_DIR="$TMP" PAUZA_PG_BIN="$PG_BIN" PSQL_BIN_TEST="$TMP/psql_r4c" \
+  asteapta_ceas 'reamanare control' 0 "$TMP/reamanat_ctl.log" \
+  "$(curata 20990101r_plafon_reamanat_ctl 'DROP TABLE IF EXISTS public.ra_ctl, public.rb_ctl; DROP FUNCTION IF EXISTS public.fra_ctl(); DROP FUNCTION IF EXISTS public.frb_ctl();')" \
+  -- runner 20990101000019 "$M_RAC" --plafon-tranzactie-ms 1000
+ms="$CAZ_MS"; n0="$CAZ_N0"
+[[ -e "$TMP/r4c_aplicat" && "$(stare 20990101r_plafon_reamanat_ctl)" == 'true|true' ]] \
+  || { cat "$TMP/reamanat_ctl.log"; fail 'reamanare control: forma r4c trebuia sa comita (proba nefunctionala)'; }
+[[ "$(q 'SELECT count(*) FROM public.rb_ctl')" == 1 ]] || fail 'reamanare control: B nu a fost pus in coada'
+(( ms >= 1500 )) || fail "reamanare control: livrarea a durat $ms ms (B trebuia sa doarma 1,5 s in COMMIT, dupa garda)"
+(( "$(inchideri)" == n0 )) || fail 'reamanare control: serverul a inchis sesiunea (B trebuia sa ruleze fara ceas, in COMMIT)'
+# 8f. Forma livrata: refuz prin catalog, nimic comis.
+M_RA="$(migrare 20990101s_plafon_reamanat '1000/session' "$(reamanare liv)")"
+asteapta reamanare 10 "$TMP/reamanat.log" runner 20990101000020 "$M_RA" --plafon-tranzactie-ms 1000
+grep -q 'PLAFON_AMANABIL: obiecte amanabile create / modificate in tranzactie (.*trigger public\.rb_liv\.trb_liv' "$TMP/reamanat.log" \
+  || { cat "$TMP/reamanat.log"; fail 'reamanare: garda trebuia sa refuze cu PLAFON_AMANABIL'; }
+[[ "$(stare 20990101s_plafon_reamanat)" == 'false|false' && -z "$(q "SELECT to_regclass('public.ra_liv')")" ]] || fail 'reamanare: au ramas efecte'
+echo "PLAFON_REAMANAT: A reamana si pune B in coada (B: ceas oprit, 1,5 s in COMMIT; N=1000) => forma r4c COMITE dupa termen ($ms ms, control 0); forma r13 => PLAFON_AMANABIL, NEAPLICAT (10), nimic comis"
+
+# 8g. FK AMANABIL creat de artefact INTR-O SUBTRANZACTIE (bloc EXCEPTION, xid propriu — artefactul verifica singur ca
+#     xmin-ul constrangerii NU e xid-ul de varf, altfel proba e nefunctionala) => refuz; fara optiune acelasi corp => 0.
+fk_subtranzactie() { # $1 sufixul obiectelor
+  printf '%s\n' "CREATE TABLE public.gp_$1 (id integer PRIMARY KEY);" "CREATE TABLE public.gc_$1 (id integer, p integer);" \
+    "DO \$s\$ BEGIN" \
+    "  BEGIN" \
+    "    ALTER TABLE public.gc_$1 ADD CONSTRAINT gc_$1_fk FOREIGN KEY (p) REFERENCES public.gp_$1(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;" \
+    "  EXCEPTION WHEN others THEN RAISE;" \
+    "  END;" \
+    "  IF (SELECT c.xmin::text FROM pg_catalog.pg_constraint c WHERE c.conname = 'gc_$1_fk') IS NOT DISTINCT FROM pg_catalog.xid(pg_catalog.pg_current_xact_id())::text THEN" \
+    "    RAISE EXCEPTION 'PROBA_SUBTRANZACTIE_NEFUNCTIONALA: FK-ul are xmin-ul varfului'; END IF;" \
+    "END \$s\$;"
+}
+M_FK="$(migrare 20990101t_plafon_fk_amanabil '1000/session' "$(fk_subtranzactie liv)")"
+asteapta 'fk amanabil' 10 "$TMP/fk.log" runner 20990101000021 "$M_FK" --plafon-tranzactie-ms 1000
+! grep -q PROBA_SUBTRANZACTIE_NEFUNCTIONALA "$TMP/fk.log" || { cat "$TMP/fk.log"; fail 'fk amanabil: constrangerea nu e din subtranzactie (proba nefunctionala)'; }
+grep -q 'PLAFON_AMANABIL: obiecte amanabile create / modificate in tranzactie (constrangere gc_liv_fk' "$TMP/fk.log" \
+  || { cat "$TMP/fk.log"; fail 'fk amanabil: garda trebuia sa refuze cu PLAFON_AMANABIL'; }
+[[ "$(stare 20990101t_plafon_fk_amanabil)" == 'false|false' && -z "$(q "SELECT to_regclass('public.gc_liv')")" ]] || fail 'fk amanabil: au ramas efecte'
+M_FKF="$(migrare 20990101u_plafon_fk_amanabil_fara '' "$(fk_subtranzactie fara)")"
+asteapta 'fk amanabil fara optiune' 0 "$TMP/fk_fara.log" runner 20990101000022 "$M_FKF"
+[[ "$(stare 20990101u_plafon_fk_amanabil_fara)" == 'true|true' ]] || { cat "$TMP/fk_fara.log"; fail 'fk amanabil fara optiune: neaplicat'; }
+echo 'PLAFON_FK_AMANABIL: FK DEFERRABLE creat intr-o subtranzactie (xmin = xid-ul subtranzactiei, nu al varfului) => PLAFON_AMANABIL, NEAPLICAT (10); fara optiune acelasi corp => APLICAT (0)'
+
+# 8h. Functia unui trigger amanabil EXISTENT inlocuita de artefact (CREATE OR REPLACE) => refuz; fara optiune => 0.
+q "CREATE TABLE public.h_pre (id integer);
+CREATE FUNCTION public.fh_pre() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN RETURN NULL; END \$f\$;
+REVOKE EXECUTE ON FUNCTION public.fh_pre() FROM PUBLIC;
+CREATE CONSTRAINT TRIGGER th_pre AFTER INSERT ON public.h_pre DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fh_pre();" >/dev/null
+INLOC='CREATE OR REPLACE FUNCTION public.fh_pre() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN PERFORM 1; RETURN NULL; END $f$;'
+M_FH="$(migrare 20990101v_plafon_functie_amanata '1000/session' "$INLOC")"
+asteapta 'functie amanata' 10 "$TMP/fh.log" runner 20990101000023 "$M_FH" --plafon-tranzactie-ms 1000
+grep -q 'PLAFON_AMANABIL: obiecte amanabile create / modificate in tranzactie (functia public.fh_pre() a triggerului th_pre)' "$TMP/fh.log" \
+  || { cat "$TMP/fh.log"; fail 'functie amanata: garda trebuia sa refuze cu PLAFON_AMANABIL (doar functia)'; }
+[[ "$(stare 20990101v_plafon_functie_amanata)" == 'false|false' ]] || fail 'functie amanata: au ramas efecte'
+[[ "$(q "SELECT position('PERFORM 1' IN prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.fh_pre()'::regprocedure")" == 0 ]] \
+  || fail 'functie amanata: functia a ramas inlocuita'
+M_FHF="$(migrare 20990101w_plafon_functie_amanata_fara '' "$INLOC")"
+asteapta 'functie amanata fara optiune' 0 "$TMP/fh_fara.log" runner 20990101000024 "$M_FHF"
+[[ "$(stare 20990101w_plafon_functie_amanata_fara)" == 'true|true' ]] || { cat "$TMP/fh_fara.log"; fail 'functie amanata fara optiune: neaplicat'; }
+echo 'PLAFON_FUNCTIE_AMANATA: functia triggerului amanabil existent th_pre inlocuita => PLAFON_AMANABIL, NEAPLICAT (10); fara optiune => APLICAT (0)'
+
+# 8i. Fara nimic amanabil CREAT: obiectele amanabile EXISTENTE (FK, UNIQUE, trigger — ca pe productie) folosite de
+#     artefact (evenimente in coada, copilul inserat inaintea parintelui), plus FK / trigger NE-amanabile noi => APLICAT (0).
+q "CREATE TABLE public.i_p (id integer PRIMARY KEY);
+CREATE TABLE public.i_c (id integer, p integer CONSTRAINT i_c_fk REFERENCES public.i_p(id) DEFERRABLE INITIALLY DEFERRED);
+CREATE TABLE public.i_u (id integer CONSTRAINT i_u_uq UNIQUE DEFERRABLE INITIALLY DEFERRED);" >/dev/null
+M_NIM="$(migrare 20990101x_plafon_fara_amanabile '1500/session' 'INSERT INTO public.i_c VALUES (1, 1);
+INSERT INTO public.i_p VALUES (1);
+INSERT INTO public.i_u VALUES (1);
+INSERT INTO public.h_pre VALUES (1);
+CREATE TABLE public.i_nou (id integer CONSTRAINT i_nou_fk REFERENCES public.i_p(id));
+CREATE FUNCTION public.fi_normal() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NULL; END $f$;
+REVOKE EXECUTE ON FUNCTION public.fi_normal() FROM PUBLIC;
+CREATE TRIGGER ti_normal AFTER INSERT ON public.i_nou FOR EACH ROW EXECUTE FUNCTION public.fi_normal();
+INSERT INTO public.i_nou VALUES (1);')"
+asteapta 'fara amanabile' 0 "$TMP/nimic.log" runner 20990101000025 "$M_NIM" --plafon-tranzactie-ms 1500
+[[ "$(stare 20990101x_plafon_fara_amanabile)" == 'true|true' && "$(q 'SELECT count(*) FROM public.i_c')" == 1 ]] \
+  || { cat "$TMP/nimic.log"; fail 'fara amanabile: neaplicat (fals pozitiv al inchiderii prin catalog?)'; }
+echo 'PLAFON_FARA_AMANABILE: FK / UNIQUE / trigger amanabile EXISTENTE folosite + FK si trigger ne-amanabile noi, cu plafon 1500 => APLICAT (0)'
+
 # 9. Fara optiune: neschimbat fata de runda 9 (psql --single-transaction, fara SET).
 M_FARA="$(migrare 20990101e_plafon_fara '0/default' '')"
 asteapta fara 0 "$TMP/fara.log" runner 20990101000005 "$M_FARA"
@@ -367,4 +494,4 @@ asteapta fara 0 "$TMP/fara.log" runner 20990101000005 "$M_FARA"
 grep -q 'psql --single-transaction \[prolog' "$TMP/fara.log" || { cat "$TMP/fara.log"; fail 'fara: forma veche a livrarii'; }
 echo 'PLAFON_FARA: fara optiune => psql --single-transaction, transaction_timeout 0/default (ca inainte); APLICAT (0)'
 echo "CEAS: $CEAS_REPETARI incercari NEVALIDE repetate (salt al ceasului de perete >= $SALT_MS ms in timpul cazului)"
-echo "PASS LIVRARE_PLAFON runda 13 PG17 (postgres NOSUPERUSER): plafonul = SET de sesiune inainte de BEGIN, verificat in prolog (pg_catalog, marcaj) si in garda finala, trimisa in ACELASI mesaj cu COMMIT-ul (rearmare / functie / amanat / cursor: nimic comis dupa termen, controalele r11 comiteau); validatorul refuza artefactele care ating vizibil ceasul; copie/log: $TMP"
+echo "PASS LIVRARE_PLAFON runda 13 r5 PG17 (postgres NOSUPERUSER): plafonul = SET de sesiune inainte de BEGIN, verificat in prolog (pg_catalog, marcaj) si in garda finala, trimisa in ACELASI mesaj cu COMMIT-ul (rearmare / functie / amanat / cursor: nimic comis dupa termen, controalele r11 comiteau); obiectele amanabile create / modificate de artefact => PLAFON_AMANABIL (reamanare: controlul r4c comitea; fk in subtranzactie; functie inlocuita); obiectele amanabile existente nu dau fals pozitiv; validatorul refuza artefactele care ating vizibil ceasul; copie/log: $TMP"
