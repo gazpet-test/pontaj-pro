@@ -298,12 +298,14 @@ grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 2000 ms' "$TMP/functie.log" || 
 [[ "$(stare 20990101m_plafon_functie)" == 'false|false' ]] || fail 'functie: au ramas efecte'
 echo 'PLAFON_FUNCTIE: functie existenta cu SET transaction_timeout = 0 (1,5 s) + pauza 1 s => forma r11 COMITEA (control, 0); forma r12 => PLAFON_DEPASIT, NEAPLICAT (10)'
 
+# r16b: functia de trigger a probei scrie un GUC prin SQL dinamic; fara REVOKE FROM PUBLIC, gate-ul 0e al runnerului o
+#     semnaleaza (cod 30) dupa comitere si controlul pica din alt motiv decat cel probat.
 # 8d. Trigger AMANAT (DEFERRABLE INITIALLY DEFERRED) care opreste ceasul, doarme 1,5 s si il reporneste: fara
 #     SET CONSTRAINTS ALL IMMEDIATE ar rula IN COMMIT, dupa garda (control, fara pauza); cu el ruleaza inaintea garzii.
 amanat() { # $1 sufixul tabelului
   printf '%s\n' "CREATE TABLE public.a_$1 (id integer);" \
     "CREATE FUNCTION public.fa_$1() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5); EXECUTE format('SET LOCAL %s = %s', $DIN, '1000'); RETURN NULL; END \$f\$;" \
-    "CREATE CONSTRAINT TRIGGER ta_$1 AFTER INSERT ON public.a_$1 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fa_$1();" \
+    "REVOKE EXECUTE ON FUNCTION public.fa_$1() FROM PUBLIC;" \n    "CREATE CONSTRAINT TRIGGER ta_$1 AFTER INSERT ON public.a_$1 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fa_$1();" \
     "INSERT INTO public.a_$1 VALUES (1);"
 }
 cat >"$TMP/psql_fara_amanate" <<'EOF'
