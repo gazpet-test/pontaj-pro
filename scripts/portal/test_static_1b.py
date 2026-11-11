@@ -25,6 +25,68 @@ def live_source():
     return definition.split('AS $function$', 1)[1].rsplit('$function$', 1)[0]
 
 
+# r8 (Jakarinos r8 P2): numitor INDEPENDENT de literalul verificat. Triggerele de pe calea portalului din inventarul
+# read-only pe prod din 10.11.2026 (sectiunea 8, alta rulare decat ancorele din 11.11): cheie -> functia triggerului.
+TRIGGERE_REVIZUITE = {
+    'auth.users:on_auth_user_created': 'public.handle_new_user()',
+    'public.notifications:trg_notificari_ruteaza_ofertare': 'public.fn_notificari_ruteaza_ofertare()',
+    'public.profiles:prevent_role_escalation_trigger': 'public.prevent_role_escalation()',
+    'public.profiles:trg_enforce_owner_only_salary_flags': 'public.enforce_owner_only_salary_flags()',
+    'public.profiles:trg_profiles_campuri_owner_only': 'public.fn_profiles_campuri_owner_only()',
+    'public.profiles:trg_profiles_protectie_legatura': 'public.fn_profiles_protectie_legatura()',
+    'public.profiles:trg_protect_can_access_pontaj_brut': 'public.protect_can_access_pontaj_brut()',
+}
+# Contractul functiilor: (owner, SECURITY DEFINER, proconfig). Functiile Supabase (auth, extensions) sunt INVOKER fara
+# config; functiile public de pe cale sunt DEFINER cu search_path fix (inventarul 10.11, sectiunile 5 / 8).
+CONTRACT_SUPABASE = {'auth.uid()': ('supabase_auth_admin', False, None),
+                     'auth.jwt()': ('supabase_auth_admin', False, None),
+                     'extensions.unaccent(text)': ('supabase_admin', False, None)}
+CONTRACT_PUBLIC = ('postgres', True, ['search_path=public, pg_temp'])
+ACL_ITEM = re.compile(r'^[a-z_]*=[a-zA-Z*]+/[a-z_]+$')
+
+
+def numite_din_interogare(text):
+    """Cele 10 functii numite in lista IN (...) a interogarii de ancore (text normalizat LF)."""
+    lista = text.split('-- ANCORE_1B_START', 1)[1].split(' IN (', 1)[1].split(')\n', 1)[0] + ')'
+    numite = set(re.findall(r"'([a-z_]+\.[a-z_]+\([a-z, ]*\))'", lista))
+    if len(numite) != 10:
+        raise AssertionError(f'interogarea de ancore numeste {len(numite)} functii, nu 10')
+    return numite
+
+
+def probleme_ancore(ancore, numite):
+    """Lista abaterilor unei valori de ancore fata de contract; goala = acceptat (folosita si pe mutanti)."""
+    p = []
+    if not isinstance(ancore, dict) or set(ancore) != {'functii', 'triggere'}:
+        return ['chei']
+    tr, fn = ancore['triggere'], ancore['functii']
+    if not isinstance(tr, dict) or not isinstance(fn, dict):
+        return ['tipuri']
+    if set(tr) != set(TRIGGERE_REVIZUITE):
+        p.append('set triggere')
+    for k, a in tr.items():
+        if not (isinstance(a, list) and len(a) == 3 and a[0] == 'O' and isinstance(a[1], str)
+                and re.fullmatch(r'[0-9a-f]{32}', a[1]) and a[2] == TRIGGERE_REVIZUITE.get(k)):
+            p.append('trigger ' + k)
+    asteptat = set(numite) | (set(TRIGGERE_REVIZUITE.values()) - {'public.handle_new_user()'})
+    if set(fn) != asteptat:
+        p.append('set functii')
+    for s, a in fn.items():
+        if not (isinstance(a, list) and len(a) == 5):
+            p.append('forma ' + s)
+            continue
+        contract = CONTRACT_SUPABASE.get(s, CONTRACT_PUBLIC if s.startswith('public.') else None)
+        if contract is None or (a[1], a[2], a[3]) != contract:
+            p.append('contract ' + s)
+        if not (isinstance(a[0], str) and re.fullmatch(r'[0-9a-f]{32}', a[0])):
+            p.append('md5 ' + s)
+        if not (isinstance(a[4], list) and a[4] and all(isinstance(x, str) and ACL_ITEM.match(x) for x in a[4])):
+            p.append('acl ' + s)
+        elif s.startswith('public.') and any(x.startswith('=') for x in a[4]):
+            p.append('acl PUBLIC ' + s)
+    return p
+
+
 class StaticProvisioning(unittest.TestCase):
     def test_delivery_artifacts(self):
         for path in (MIG, REV):
@@ -148,25 +210,46 @@ class StaticProvisioning(unittest.TestCase):
         else:
             ancore = json.loads(m[0].replace("''", "'"))
             self.assertEqual(set(ancore), {'functii', 'triggere'})
-            # r8 (L12/L15): completitudine fata de interogare - cele 10 functii numite + functiile tuturor triggerelor
-            # ancorate, fara handle_new_user (ancorat separat); fiecare trigger activ si cu functia lui in 'functii'.
-            numite = set(re.findall(r"'([a-z_]+\.[a-z_]+\([a-z, ]*\))'", comun.split(' IN (', 1)[1].split(')\n', 1)[0] + ')'))
-            self.assertEqual(len(numite), 10, numite)
-            tr = ancore['triggere']
-            self.assertTrue(tr)
-            for k, a in tr.items():
-                self.assertRegex(k, r'^(auth\.users|public\.(profiles|notifications)):[a-z_]+$')
-                self.assertEqual(len(a), 3, k)
-                self.assertEqual(a[0], 'O', k)
-                self.assertRegex(a[1], r'^[0-9a-f]{32}$')
-            fn_tr = {a[2] for a in tr.values()} - {'public.handle_new_user()'}
-            self.assertIn('public.handle_new_user()', {a[2] for a in tr.values()})
-            self.assertEqual(set(ancore['functii']), numite | fn_tr)
-            for s, a in ancore['functii'].items():
-                self.assertEqual(len(a), 5, s)
-                self.assertRegex(a[0], r'^[0-9a-f]{32}$')
-                self.assertIsInstance(a[2], bool)
-                self.assertTrue(a[4], s)
+            # r8 (L12/L15, Jakarinos r8 P2): completitudine fata de numitori independenti de literal - cele 10 functii
+            # numite in interogare + functiile celor 7 triggere revizuite (fara handle_new_user, ancorat separat) -
+            # si contractul fiecarei functii (owner, DEFINER, config, ACL).
+            self.assertEqual(probleme_ancore(ancore, numite_din_interogare(comun)), [])
+
+    def test_anchor_contract_rejects_mutants(self):
+        # r8 (Jakarinos r8 P2): omisiunile si abaterile de atribute sunt prinse, nu doar forma.
+        sql = MIG.read_text(encoding='utf-8').replace('\r\n', '\n')
+        m = re.findall(r"CREATE TEMP TABLE portal_1b_ancore_revizuit ON COMMIT DROP AS\nSELECT '(.*?)'::jsonb AS v; -- PORTAL_1B_ANCORE\n", sql, re.S)
+        if m[0] == '{}':
+            self.skipTest('ancorele de productie inca necompletate')
+        baza = json.loads(m[0].replace("''", "'"))
+        comun = (ROOT / 'scripts/portal/ancore_1b.sql').read_text(encoding='utf-8').replace('\r\n', '\n')
+        numite = numite_din_interogare(comun)
+        self.assertEqual(probleme_ancore(baza, numite), [])
+
+        def mutant(f):
+            a = json.loads(json.dumps(baza))
+            f(a)
+            return probleme_ancore(a, numite)
+        notif_t, notif_f = 'public.notifications:trg_notificari_ruteaza_ofertare', 'public.fn_notificari_ruteaza_ofertare()'
+        cazuri = {
+            'trigger + functia lui sterse': lambda a: (a['triggere'].pop(notif_t), a['functii'].pop(notif_f)),
+            'trigger sters': lambda a: a['triggere'].pop(notif_t),
+            'functie numita stearsa': lambda a: a['functii'].pop('auth.uid()'),
+            'functie in plus': lambda a: a['functii'].__setitem__('public.f()', a['functii'][notif_f]),
+            'trigger dezactivat': lambda a: a['triggere'][notif_t].__setitem__(0, 'D'),
+            'trigger pe alta functie': lambda a: a['triggere'][notif_t].__setitem__(2, 'public.prevent_role_escalation()'),
+            'owner null peste tot': lambda a: [v.__setitem__(1, None) for v in a['functii'].values()],
+            'owner schimbat': lambda a: a['functii']['auth.jwt()'].__setitem__(1, 'postgres'),
+            'DEFINER pierdut': lambda a: a['functii'][notif_f].__setitem__(2, False),
+            'config pierdut pe public': lambda a: a['functii'][notif_f].__setitem__(3, None),
+            'config pe functie Supabase': lambda a: a['functii']['extensions.unaccent(text)'].__setitem__(3, ['search_path=public']),
+            'ACL gol': lambda a: a['functii'][notif_f].__setitem__(4, []),
+            'ACL PUBLIC pe public': lambda a: a['functii'][notif_f][4].append('=X/postgres'),
+            'md5 invalid': lambda a: a['functii'][notif_f].__setitem__(0, 'x'),
+        }
+        for nume, f in cazuri.items():
+            with self.subTest(caz=nume):
+                self.assertNotEqual(mutant(f), [], nume)
         # verificarea ancorelor e prima dupa lock-uri si se repeta inaintea fixarii amprentei
         self.assertLess(sql.index('LOCK TABLE public.employees'), sql.index('DO $ancore_pre$'))
         self.assertLess(sql.index('DO $ancore_pre$'), sql.index('CREATE TABLE public.portal_e1_1b_manifest'))
