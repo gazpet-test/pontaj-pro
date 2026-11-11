@@ -25,6 +25,9 @@
 -- r8 (review SQL P1-01 / P1-02): T3e cheamă DIRECT fiecare funcție publică a migrării, ca A0 (logat, fără drept pe modul), A (editor
 --   nerestrâns) și B (restrâns), cu un id / o cale permisă, una existentă nepermisă și una inexistentă: „nepermis” = „inexistent”, valorile
 --   = specificația, funcțiile interne = 42501.
+-- r9 (review r8, ambii recenzenți P1): T3e SISTEMATIC — fiecare funcție cu EXECUTE pentru clienți × fiecare fel de argument × 4 conturi (A0,
+--   A, B, B0 = B fără modul); vizibilitatea argumentului măsurată ca apelantul; existent invizibil = inexistent, exact (valoare / eroare /
+--   SQLSTATE / mesaj); cazurile literale din verdicte; poarta swap cere scrierea pe modul (T3e, T4).
 -- NU presupune date reale: ia primul owner, primele 3 profiluri non-owner și cele 3 proiecte cu cele mai multe tabele acoperite cu date
 -- (dacă clona are doar 2, al treilea se creează în tranzacție), le leagă DOAR în tranzacție și scrie date FICTIVE (T-ACC*, TA-*, test-acces/…,
 -- NOD-TEST-ACCES, rapoarte pe 2001-01-01 / 1990–1998, mesajul TEST-ACCES-1).
@@ -953,33 +956,41 @@ BEGIN
   END LOOP;
   RAISE NOTICE 'T3s OK (obiecte p3 probate: %, încărcări refuzate de politică după ce reușeau înainte: %)', n, n_up;
 END $t$;
+-- r9: rezolvarea căilor, prin predicatul PUBLIC, ca B (restrâns: p1 editor, p2 viewer) — fn_executie_acces_obiect_proiecte nu mai există.
+-- Pachetul și documentul se aleg ca postgres; ca B, aceleași căi.
 SELECT pg_temp.t_ca(NULL, 'postgres');
+SELECT set_config('tacc.t3s_pk', coalesce((SELECT min(id)::text FROM public.executie_pachete_lansare WHERE proiect_id = pg_temp.t_g('p1')::bigint), ''), true) IS NOT NULL AS t3s_pk,
+       set_config('tacc.t3s_doc3', coalesce((SELECT storage_path FROM public.documente_proiect WHERE id = pg_temp.t_g('doc3')::bigint), ''), true) IS NOT NULL AS t3s_doc3;
+SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
 DO $t$
-DECLARE p1 text := pg_temp.t_g('p1'); p3 text := pg_temp.t_g('p3'); v_pk bigint;
+DECLARE p1 text := pg_temp.t_g('p1'); p2 text := pg_temp.t_g('p2'); p3 text := pg_temp.t_g('p3'); v_pk text := pg_temp.t_g('t3s_pk'); v_doc3 text := pg_temp.t_g('t3s_doc3');
 BEGIN
-  IF public.fn_executie_acces_obiect_proiecte('executie-contracte', p1 || '/docs_tehnice/x.pdf') <> ARRAY[p1::bigint]
-     OR public.fn_executie_acces_obiect_proiecte('executie-contracte', 'pccvi/' || p1 || '/x.pdf') <> ARRAY[p1::bigint]
-     OR public.fn_executie_acces_obiect_proiecte('executie-contracte', 'ordin-incepere/' || p3 || '/x.pdf') <> ARRAY[p3::bigint]
-     OR public.fn_executie_acces_obiect_proiecte('executie-contracte', '_nou/' || p1 || '/x.pdf') <> '{}'
-     OR public.fn_executie_acces_obiect_proiecte('executie-contracte', p1 || '/../' || p3 || '/x.pdf') <> '{}'
-     OR public.fn_executie_acces_obiect_proiecte('executie-contracte', 'x' || p1 || '/y.pdf') <> '{}'
-     OR public.fn_executie_acces_obiect_proiecte('executie-borderouri', 'sl_' || p3 || '/1_borderou.xls') <> ARRAY[p3::bigint]
-     OR public.fn_executie_acces_obiect_proiecte('executie-borderouri', 'x/sl_' || p3 || '/1.xls') <> '{}'
-     OR public.fn_executie_acces_obiect_proiecte('alt-bucket', p1 || '/x.pdf') <> '{}'
-     OR public.fn_executie_acces_obiect_proiecte('ai-documente-inbox', p1 || '/x.pdf') <> '{}'
-     OR public.fn_executie_acces_obiect_proiecte(NULL, 'x') <> '{}' THEN
-    RAISE EXCEPTION 'T3s FAIL: rezolvarea căilor (contracte / borderouri)';
+  IF public.fn_executie_acces_obiect_permis('executie-contracte', p1 || '/docs_tehnice/x.pdf', true) IS NOT TRUE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', 'pccvi/' || p1 || '/x.pdf', true) IS NOT TRUE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', 'probe-presiune/' || p2 || '/x.pdf', false) IS NOT TRUE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', 'probe-presiune/' || p2 || '/x.pdf', true) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', 'ordin-incepere/' || p3 || '/x.pdf', false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', '_nou/' || p1 || '/x.pdf', false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', p1 || '/../' || p3 || '/x.pdf', false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', 'x' || p1 || '/y.pdf', false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('executie-borderouri', 'sl_' || p1 || '/1_borderou.xls', true) IS NOT TRUE
+     OR public.fn_executie_acces_obiect_permis('executie-borderouri', 'sl_' || p3 || '/1_borderou.xls', false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('executie-borderouri', 'x/sl_' || p1 || '/1.xls', false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('alt-bucket', p3 || '/x.pdf', true) IS NOT TRUE
+     OR public.fn_executie_acces_obiect_permis(NULL, 'x', false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('executie-contracte', NULL, false) IS NOT FALSE THEN
+    RAISE EXCEPTION 'T3s FAIL: rezolvarea căilor (contracte / borderouri), ca B';
   END IF;
-  SELECT id INTO v_pk FROM public.executie_pachete_lansare WHERE proiect_id = p1::bigint ORDER BY id LIMIT 1;
-  IF v_pk IS NOT NULL AND (public.fn_executie_acces_obiect_proiecte('executie-pachete-pdf', v_pk || '/2026-11-01_ab_x.xlsx') <> ARRAY[p1::bigint]
-     OR public.fn_executie_acces_obiect_proiecte('executie-pachete-pdf', p1 || '/' || v_pk || '/aprobare/x.pdf') <> ARRAY[p1::bigint]
-     OR public.fn_executie_acces_obiect_proiecte('executie-pachete-pdf', p3 || '/' || v_pk || '/aprobare/x.pdf') <> '{}') THEN
-    RAISE EXCEPTION 'T3s FAIL: rezolvarea căilor (pachete)';
+  IF v_pk IS NOT NULL AND (public.fn_executie_acces_obiect_permis('executie-pachete-pdf', v_pk || '/2026-11-01_ab_x.xlsx', true) IS NOT TRUE
+     OR public.fn_executie_acces_obiect_permis('executie-pachete-pdf', p1 || '/' || v_pk || '/aprobare/x.pdf', true) IS NOT TRUE
+     OR public.fn_executie_acces_obiect_permis('executie-pachete-pdf', p3 || '/' || v_pk || '/aprobare/x.pdf', false) IS NOT FALSE) THEN
+    RAISE EXCEPTION 'T3s FAIL: rezolvarea căilor (pachete), ca B';
   END IF;
   IF v_pk IS NULL THEN PERFORM pg_temp.t_neprobat('Storage executie-pachete-pdf: niciun pachet pe p1'); END IF;
-  IF public.fn_executie_acces_obiect_proiecte('documente-proiect', (SELECT storage_path FROM public.documente_proiect WHERE id = pg_temp.t_g('doc3')::bigint))
-       IS DISTINCT FROM ARRAY[p3::bigint] THEN
-    RAISE EXCEPTION 'T3s FAIL: rezolvarea documentelor';
+  -- documentul lui p3: fals (rândul nu se vede); scrierea în documente-proiect: fals pentru contul restrâns (r9, doar serverul scrie acolo)
+  IF v_doc3 IS NULL OR public.fn_executie_acces_obiect_permis('documente-proiect', v_doc3, false) IS NOT FALSE
+     OR public.fn_executie_acces_obiect_permis('documente-proiect', v_doc3, true) IS NOT FALSE THEN
+    RAISE EXCEPTION 'T3s FAIL: rezolvarea documentelor, ca B (%)', v_doc3;
   END IF;
 END $t$;
 
@@ -1165,15 +1176,22 @@ BEGIN
   END IF;
 END $t$;
 
--- ── T3e (r8, review SQL P1-01 / P1-02): EXPUNEREA prin apel DIRECT (RPC, argumente alese de apelant). Trei identități: A0 = logat FĂRĂ drept
---   pe modulul executie (A cu dreptul scos, într-un savepoint anulat), A = editor nerestrâns, B = restrâns (p1 editor, p2 viewer). Pentru
---   fiecare funcție publică: un id / o cale EXISTENTĂ PERMISĂ (p1), EXISTENTĂ NEPERMISĂ pentru B (p3) și INEXISTENTĂ:
---   (a) „nepermis” și „inexistent” dau EXACT același rezultat (pentru B și A0, pe fiecare cheie) — fără oracol de existență;
---   (b) valorile = SPECIFICAȚIA (nu codul): predicatele publice = adevărat pentru orice argument la contul nerestrâns (A0, A: nu află nimic),
---       [adevărat, fals, fals] la B; funcțiile de drept cer modulul (A0 = fals peste tot, în afara alocării pe șantier citite din date);
---   (c) funcțiile interne (lista, proiectele unui obiect, fișierul Inboxului, regula pe un cont dat, candidații, canonul, inventarul) =
---       42501 pentru toți trei; setul părinților nu mai există; RPC-ul owner-ului = același 42501 pentru cont existent și inexistent.
---   Limită scrisă (vezi migrarea): în folderul PROPRIU al Inboxului, fără rând, contul restrâns primește adevărat (încărcarea).
+-- ── T3e (r8; r9 SISTEMATIC — review r8, ambii recenzenți P1: un boolean poate fi tot oracol). EXPUNEREA prin apel DIRECT (RPC, argumente
+--   alese de apelant), pentru FIECARE funcție cu EXECUTE pentru clienți și FIECARE fel de argument, ca patru conturi:
+--     A0 = logat FĂRĂ drept pe modulul executie (A cu dreptul scos, savepoint anulat), A = editor nerestrâns,
+--     B = restrâns (p1 editor, p2 viewer), B0 = B fără drept pe modul (savepoint anulat), restrâns în continuare.
+--   Argumentele (alese ca postgres): pe p1 / p2 / p3, fără proiect (șantierul lui B și unul neatribuit lui B), rândurile Inboxului (ale lui A
+--   pe p1 / p2 / p3, al altui modul, nedecis; ale lui B pe p3 / fără proiect), țevile și câte un argument INEXISTENT.
+--   VIZIBILITATEA fiecărui argument se măsoară CA APELANTUL (SELECT sub RLS-ul lui, pe rândul căutat de funcție).
+--   (a) ORACOL: un argument EXISTENT, dar INVIZIBIL apelantului, dă EXACT rezultatul celui inexistent (valoare, NULL, eroare cu SQLSTATE și
+--       mesaj) — pe fiecare funcție × argument × cont. Singura excepție, scrisă în migrare și verificată aici cu valorile ei: folderul PROPRIU
+--       al Inboxului pentru contul restrâns (documentele urcate chiar de el; fn_executie_acces_inbox_propriu).
+--   (b) SPECIFICAȚIA pe argumentele vizibile (nu codul): predicatele = adevărat pentru orice argument la contul nerestrâns (A0, A); la B / B0
+--       citire p1 / p2 / fără proiect = adevărat, p3 = fals; scriere doar p1 / fără proiect; documente-proiect: scriere = fals; funcțiile de
+--       drept cer modulul; poarta swap cere scrierea pe modul (P2: A0 = refuz, ca țeava inexistentă; mesaj fără id-uri).
+--   (c) cazurile LITERALE din verdictele r8: B0 + șantier / raport fără proiect; B + rândul Inboxului al altui modul / nedecis, în afara
+--       folderului propriu; A0 + schimbul de țevi.
+--   (d) funcțiile interne = 42501 pentru toți; rezolvările brute din r8 nu mai există; RPC-ul owner-ului = același 42501.
 SELECT pg_temp.t_ca(NULL, 'postgres');
 CREATE FUNCTION pg_temp.t_val(p_sql text) RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE r text;
@@ -1181,80 +1199,122 @@ BEGIN
   EXECUTE p_sql INTO r; RETURN coalesce(r, 'null');
 EXCEPTION WHEN OTHERS THEN RETURN SQLSTATE || ' ' || SQLERRM;
 END $h$;
--- id-urile / căile de probă, ca postgres (fără RLS): [p1, p3, inexistent] pe fiecare fel de argument; NULL = nu există rând de probă
+-- argumentele, ca postgres (fără RLS): pe fiecare fel, {eticheta: valoare}; un argument fără rând de probă lipsește (NEPROBAT la final)
 DO $t$
-DECLARE p1 bigint := pg_temp.t_g('p1')::bigint; p3 bigint := pg_temp.t_g('p3')::bigint; v jsonb := '{}'::jsonb; r record; a bigint; b bigint; x bigint;
+DECLARE p jsonb := jsonb_build_object('p1', pg_temp.t_g('p1')::bigint, 'p2', pg_temp.t_g('p2')::bigint, 'p3', pg_temp.t_g('p3')::bigint);
+  v jsonb := '{}'::jsonb; r record; k text; x jsonb; b uuid := pg_temp.t_g('b')::uuid; v_nul2 bigint;
 BEGIN
-  v := v || jsonb_build_object('proiect', jsonb_build_array(p1, p3, (SELECT coalesce(max(id), 0) + 100000 FROM public.executie_proiecte)));
+  v := v || jsonb_build_object('proiect', p || jsonb_build_object('inex', (SELECT coalesce(max(id), 0) + 100000 FROM public.executie_proiecte)));
   FOR r IN SELECT * FROM (VALUES ('sl', 'executie_situatii_plata'), ('bon', 'executie_bonuri_consum'), ('pachet', 'executie_pachete_lansare'),
-                                 ('cumulat', 'executie_pachete_cumulat_final'), ('activitate', 'proiect_activitati'), ('site', 'sites')) q(tip, tabel) LOOP
-    EXECUTE format('SELECT min(id) FILTER (WHERE proiect_id = $1), min(id) FILTER (WHERE proiect_id = $2), coalesce(max(id), 0) + 100000 FROM public.%I', r.tabel)
-      INTO a, b, x USING p1, p3;
-    v := v || jsonb_build_object(r.tip, jsonb_build_array(a, b, x));
+                                 ('cumulat', 'executie_pachete_cumulat_final'), ('activitate', 'proiect_activitati'), ('site', 'sites')) q(fel, tabel) LOOP
+    EXECUTE format('SELECT jsonb_strip_nulls(jsonb_build_object(%L, min(id) FILTER (WHERE proiect_id = $1), %L, min(id) FILTER (WHERE proiect_id = $2), %L, min(id) FILTER (WHERE proiect_id = $3),'
+                   || ' %L, coalesce(max(id), 0) + 100000)) FROM public.%I', 'p1', 'p2', 'p3', 'inex', r.tabel)
+      INTO x USING (p->>'p1')::bigint, (p->>'p2')::bigint, (p->>'p3')::bigint;
+    v := v || jsonb_build_object(r.fel, x);
   END LOOP;
-  v := v || jsonb_build_object('raport', jsonb_build_array(
-         (SELECT min(z.id) FROM public.rapoarte_zilnice z JOIN public.sites s ON s.id = z.site_id WHERE s.proiect_id = p1),
-         (SELECT min(z.id) FROM public.rapoarte_zilnice z JOIN public.sites s ON s.id = z.site_id WHERE s.proiect_id = p3),
-         (SELECT coalesce(max(id), 0) + 100000 FROM public.rapoarte_zilnice)));
-  -- documente-proiect: o cale legată DOAR de p1 / DOAR de p3; inexistentă
-  v := v || jsonb_build_object('doc', jsonb_build_array(
-         (SELECT min(d.storage_path) FROM public.documente_proiect d WHERE d.proiect_id = p1 AND d.storage_path IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM public.documente_proiect e WHERE e.storage_path = d.storage_path AND e.proiect_id IS DISTINCT FROM p1)),
-         (SELECT min(d.storage_path) FROM public.documente_proiect d WHERE d.proiect_id = p3 AND d.storage_path IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM public.documente_proiect e WHERE e.storage_path = d.storage_path AND e.proiect_id IS DISTINCT FROM p3)),
-         'test-acces/inexistent-' || gen_random_uuid() || '.pdf'));
-  -- Inboxul AI: rândurile de probă ale lui A pe p1 / p3 (folderul lui A, nu al lui B) și o cale inexistentă tot în folderul lui A
-  v := v || jsonb_build_object('inbox', jsonb_build_array(
-         (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'p1' AND t_ib.id IS NOT NULL), (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'p3' AND t_ib.id IS NOT NULL),
-         pg_temp.t_g('a') || '/test-acces-inexistent-' || gen_random_uuid() || '.pdf'));
+  -- șantierele fără proiect: cel al lui B (T0c) și unul NEATRIBUIT lui B (cazul literal din verdict: B0 nu-l vede prin alocare)
+  SELECT min(s.id) INTO v_nul2 FROM public.sites s
+   WHERE s.proiect_id IS NULL AND NOT EXISTS (SELECT 1 FROM public.profile_sites ps WHERE ps.profile_id = b AND ps.site_id = s.id);
+  v := jsonb_set(v, '{site}', (v->'site') || jsonb_strip_nulls(jsonb_build_object('nul', pg_temp.t_g('site0')::bigint, 'nul2', v_nul2)));
+  v := v || jsonb_build_object('raport', jsonb_strip_nulls(jsonb_build_object(
+         'p1', (SELECT min(z.id) FROM public.rapoarte_zilnice z JOIN public.sites s ON s.id = z.site_id WHERE s.proiect_id = (p->>'p1')::bigint),
+         'p2', (SELECT min(z.id) FROM public.rapoarte_zilnice z JOIN public.sites s ON s.id = z.site_id WHERE s.proiect_id = (p->>'p2')::bigint),
+         'p3', (SELECT min(z.id) FROM public.rapoarte_zilnice z JOIN public.sites s ON s.id = z.site_id WHERE s.proiect_id = (p->>'p3')::bigint),
+         'nul', (SELECT min(z.id) FROM public.rapoarte_zilnice z WHERE z.site_id = pg_temp.t_g('site0')::bigint),
+         'nul2', (SELECT min(z.id) FROM public.rapoarte_zilnice z WHERE z.site_id = v_nul2),
+         'inex', (SELECT coalesce(max(id), 0) + 100000 FROM public.rapoarte_zilnice))));
+  -- documente-proiect: o cale legată DOAR de proiectul ei
+  x := '{}'::jsonb;
+  FOR k IN SELECT jsonb_object_keys(p) LOOP
+    x := x || jsonb_strip_nulls(jsonb_build_object(k, (SELECT min(d.storage_path) FROM public.documente_proiect d WHERE d.proiect_id = (p->>k)::bigint AND d.storage_path IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM public.documente_proiect e WHERE e.storage_path = d.storage_path AND e.proiect_id IS DISTINCT FROM d.proiect_id))));
+  END LOOP;
+  v := v || jsonb_build_object('doc', x || jsonb_build_object('inex', 'test-acces/inexistent-' || gen_random_uuid() || '.pdf'));
+  -- Inboxul AI: rândurile de probă (t_ib) + căi inexistente în folderul lui A, al lui B și într-unul al nimănui
+  v := v || jsonb_build_object('inbox', jsonb_strip_nulls(jsonb_build_object(
+         'a_p1', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'p1' AND t_ib.id IS NOT NULL), 'a_p2', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'p2' AND t_ib.id IS NOT NULL),
+         'a_p3', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'p3' AND t_ib.id IS NOT NULL), 'a_hr', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'hr' AND t_ib.id IS NOT NULL),
+         'a_nedecis', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'nedecis' AND t_ib.id IS NOT NULL),
+         'b_p3', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'p3_al_lui_b' AND t_ib.id IS NOT NULL),
+         'b_nul', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'nul_al_lui_b' AND t_ib.id IS NOT NULL),
+         'inex_a', pg_temp.t_g('a') || '/test-acces-inexistent-' || gen_random_uuid() || '.pdf',
+         'inex_b', pg_temp.t_g('b') || '/test-acces-inexistent-' || gen_random_uuid() || '.pdf',
+         'inex_x', gen_random_uuid() || '/test-acces-inexistent-' || gen_random_uuid() || '.pdf')));
+  -- țevile: perechi din același pachet (T0c); inexistente
+  v := v || jsonb_build_object('tevi', jsonb_strip_nulls(jsonb_build_object('p1', pg_temp.t_g('tevi1'), 'p3', pg_temp.t_g('tevi3'), 'inex', '-1,-2')));
   PERFORM set_config('tacc.e_ids', v::text, true);
 END $t$;
--- toate apelurile, ca apelantul curent; cheia = '<funcție>:<0 = p1 | 1 = p3 | 2 = inexistent>'
-CREATE FUNCTION pg_temp.t_expunere() RETURNS jsonb LANGUAGE plpgsql AS $h$
-DECLARE e jsonb := pg_temp.t_g('e_ids')::jsonb; v jsonb := '{}'::jsonb; i integer; t text; x text;
+-- funcțiile probate: cheie → felul argumentului + apelul (%1$s = valoarea, ca literal SQL); 'proba' = scrisă efectiv, apoi anulată
+CREATE TEMP TABLE t_exp_fn (cheie text PRIMARY KEY, fel text NOT NULL, cale text NOT NULL, sql text NOT NULL);
+INSERT INTO t_exp_fn VALUES
+  ('permis_c', 'proiect', 'val', 'SELECT public.fn_executie_proiect_permis(%1$s::bigint, false)'),
+  ('permis_s', 'proiect', 'val', 'SELECT public.fn_executie_proiect_permis(%1$s::bigint, true)'),
+  ('inbox_rand', 'proiect', 'val', 'SELECT public.fn_executie_acces_inbox_rand(''executie'', %1$s::bigint, NULL, false)'),
+  ('nod', 'proiect', 'val', 'SELECT public.fn_executie_nod_drept(%1$s::bigint, false)'),
+  ('contract', 'proiect', 'val', 'SELECT public.fn_executie_contract_drept(%1$s::bigint, false)'),
+  ('grafic', 'proiect', 'val', 'SELECT public.fn_executie_grafic_drept(%1$s::bigint)'),
+  ('tinte', 'proiect', 'val', 'SELECT public.fn_executie_tinte_drept(%1$s::bigint, ''citire'')'),
+  ('contracte_c', 'proiect', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''executie-contracte'', %1$s || ''/test-acces/x.pdf'', false)'),
+  ('contracte_s', 'proiect', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''executie-contracte'', ''pccvi/'' || %1$s || ''/x.pdf'', true)'),
+  ('borderouri_c', 'proiect', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''executie-borderouri'', ''sl_'' || %1$s || ''/x.xls'', false)'),
+  ('borderouri_s', 'proiect', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''executie-borderouri'', ''sl_'' || %1$s || ''/x.xls'', true)'),
+  ('pachete_c', 'pachet', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''executie-pachete-pdf'', %1$s || ''/x.pdf'', false)'),
+  ('pachete_s', 'pachet', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''executie-pachete-pdf'', %1$s || ''/x.pdf'', true)'),
+  ('raport_santier', 'site', 'val', 'SELECT public.fn_raport_santier_drept(%1$s::bigint)'),
+  ('documente_c', 'doc', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''documente-proiect'', %1$s, false)'),
+  ('documente_s', 'doc', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''documente-proiect'', %1$s, true)'),
+  ('inbox_c', 'inbox', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''ai-documente-inbox'', %1$s, false)'),
+  ('inbox_s', 'inbox', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''ai-documente-inbox'', %1$s, true)'),
+  ('propriu_c', 'inbox', 'val', 'SELECT public.fn_executie_acces_inbox_propriu(%1$s, false)'),
+  ('propriu_s', 'inbox', 'val', 'SELECT public.fn_executie_acces_inbox_propriu(%1$s, true)'),
+  ('swap', 'tevi', 'proba', 'SELECT public.fn_executie_swap_tevi_pozitie(split_part(%1$s, '','', 1)::bigint, split_part(%1$s, '','', 2)::bigint)');
+INSERT INTO t_exp_fn SELECT 'parinte_' || t || '_' || c, t, 'val', format('SELECT public.fn_executie_acces_parinte_permis(%L, %%1$s::bigint, %s)', t, CASE c WHEN 's' THEN 'true' ELSE 'false' END)
+  FROM unnest(ARRAY['sl', 'bon', 'pachet', 'cumulat', 'activitate', 'site', 'raport']) t, unnest(ARRAY['c', 's']) c;
+GRANT SELECT ON t_exp_fn TO authenticated, anon, service_role;
+-- vizibilitatea unui argument CA APELANTUL: câte dintre rândurile căutate de funcție le vede prin RLS (comparație pe tipul coloanei, ca
+-- filtrul să nu aștepte politicile pe fiecare rând)
+CREATE FUNCTION pg_temp.t_vizibil(p_fel text, p_v text) RETURNS integer LANGUAGE plpgsql AS $h$
+DECLARE v_t text; v_c text; v_tip text; n integer;
 BEGIN
-  FOR i IN 0..2 LOOP
-    x := e->'proiect'->>i;
-    v := v || jsonb_build_object(
-      'permis_c:' || i, pg_temp.t_val(format('SELECT public.fn_executie_proiect_permis(%s, false)', x)),
-      'permis_s:' || i, pg_temp.t_val(format('SELECT public.fn_executie_proiect_permis(%s, true)', x)),
-      'inbox_rand:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_inbox_rand(%L, %s, NULL, false)', 'executie', x)),
-      'nod:' || i, pg_temp.t_val(format('SELECT public.fn_executie_nod_drept(%s, false)', x)),
-      'contract:' || i, pg_temp.t_val(format('SELECT public.fn_executie_contract_drept(%s, false)', x)),
-      'grafic:' || i, pg_temp.t_val(format('SELECT public.fn_executie_grafic_drept(%s)', x)),
-      'tinte:' || i, pg_temp.t_val(format('SELECT public.fn_executie_tinte_drept(%s, %L)', x, 'citire')),
-      'contracte_c:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, false)', 'executie-contracte', x || '/test-acces/x.pdf')),
-      'contracte_s:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, true)', 'executie-contracte', 'pccvi/' || x || '/x.pdf')),
-      'borderouri_c:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, false)', 'executie-borderouri', 'sl_' || x || '/x.xls')));
-    FOREACH t IN ARRAY ARRAY['sl', 'bon', 'pachet', 'cumulat', 'activitate', 'site', 'raport'] LOOP
-      IF e->t->>i IS NOT NULL THEN
-        v := v || jsonb_build_object('parinte_' || t || ':' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_parinte_permis(%L, %s, false)', t, e->t->>i)));
-      END IF;
+  SELECT x.t, x.c INTO v_t, v_c FROM (VALUES ('proiect', 'executie_proiecte', 'id'), ('sl', 'executie_situatii_plata', 'id'), ('bon', 'executie_bonuri_consum', 'id'),
+      ('pachet', 'executie_pachete_lansare', 'id'), ('cumulat', 'executie_pachete_cumulat_final', 'id'), ('activitate', 'proiect_activitati', 'id'),
+      ('site', 'sites', 'id'), ('raport', 'rapoarte_zilnice', 'id'), ('doc', 'documente_proiect', 'storage_path'), ('inbox', 'ai_documente_inbox', 'fisier_path'),
+      ('tevi', 'executie_tevi', 'id')) x(f, t, c) WHERE x.f = p_fel;
+  IF v_t IS NULL THEN RAISE EXCEPTION 't_vizibil: fel necunoscut %', p_fel; END IF;
+  SELECT format_type(a.atttypid, NULL) INTO v_tip FROM pg_attribute a WHERE a.attrelid = ('public.' || v_t)::regclass AND a.attname = v_c;
+  IF p_fel = 'tevi' THEN
+    EXECUTE format('SELECT count(*) FROM public.%I x WHERE x.%I = ANY (CAST(string_to_array($1, %L) AS %s[]))', v_t, v_c, ',', v_tip) INTO n USING p_v;
+  ELSE
+    EXECUTE format('SELECT count(*) FROM public.%I x WHERE x.%I = CAST($1 AS %s)', v_t, v_c, v_tip) INTO n USING p_v;
+  END IF;
+  RETURN n;
+EXCEPTION WHEN insufficient_privilege THEN RETURN 0;
+END $h$;
+-- toate apelurile, ca apelantul curent: {'<cheie>|<eticheta>': rezultat}, plus vizibilitatea {'<fel>|<eticheta>': rânduri văzute} și
+-- predicatele fără argument / funcțiile interne (cheile i_*)
+CREATE FUNCTION pg_temp.t_expunere() RETURNS jsonb LANGUAGE plpgsql AS $h$
+DECLARE e jsonb := pg_temp.t_g('e_ids')::jsonb; v jsonb := '{}'::jsonb; viz jsonb := '{}'::jsonb; f record; et text; x text; q text;
+BEGIN
+  FOR f IN SELECT * FROM t_exp_fn ORDER BY cheie LOOP
+    FOR et IN SELECT jsonb_object_keys(e->f.fel) LOOP
+      q := format(f.sql, quote_literal(e->f.fel->>et));
+      x := CASE f.cale WHEN 'proba' THEN pg_temp.t_proba(q) ELSE pg_temp.t_val(q) END;
+      v := v || jsonb_build_object(f.cheie || '|' || et, x);
     END LOOP;
-    IF e->'pachet'->>i IS NOT NULL THEN
-      v := v || jsonb_build_object('pachete_c:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, false)', 'executie-pachete-pdf', (e->'pachet'->>i) || '/x.pdf')));
-    END IF;
-    IF e->'site'->>i IS NOT NULL THEN
-      v := v || jsonb_build_object('raport_santier:' || i, pg_temp.t_val(format('SELECT public.fn_raport_santier_drept(%s)', e->'site'->>i)));
-    END IF;
-    IF e->'doc'->>i IS NOT NULL THEN
-      v := v || jsonb_build_object('documente_c:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, false)', 'documente-proiect', e->'doc'->>i)));
-    END IF;
-    IF e->'inbox'->>i IS NOT NULL THEN
-      v := v || jsonb_build_object('inbox_c:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, false)', 'ai-documente-inbox', e->'inbox'->>i)),
-                                   'inbox_s:' || i, pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, true)', 'ai-documente-inbox', e->'inbox'->>i)));
-    END IF;
   END LOOP;
-  v := v || jsonb_build_object(
-    'inbox_propriu', pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, true)', 'ai-documente-inbox',
-                                          coalesce(auth.uid()::text, '-') || '/test-acces-propriu-' || gen_random_uuid() || '.pdf')),
-    'alt_bucket', pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, false)', 'alt-bucket', (e->'proiect'->>1) || '/x.pdf')),
+  FOR f IN SELECT DISTINCT fel FROM t_exp_fn LOOP
+    FOR et IN SELECT jsonb_object_keys(e->f.fel) LOOP
+      viz := viz || jsonb_build_object(f.fel || '|' || et, pg_temp.t_vizibil(f.fel, e->f.fel->>et));
+    END LOOP;
+  END LOOP;
+  RETURN jsonb_build_object('r', v, 'viz', viz, 'x', jsonb_build_object(
+    'inbox_propriu_nou', pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, true)', 'ai-documente-inbox',
+                                              coalesce(auth.uid()::text, '-') || '/test-acces-propriu-' || gen_random_uuid() || '.pdf')),
+    'alt_bucket', pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_permis(%L, %L, true)', 'alt-bucket', (e->'proiect'->>'p3') || '/x.pdf')),
     'e_owner', pg_temp.t_val('SELECT public.fn_executie_acces_e_owner()'),
     'nerestrans', pg_temp.t_val('SELECT public.fn_executie_acces_nerestrans()'),
     -- interne: 42501 pentru orice client
     'i_lista', pg_temp.t_val('SELECT public.fn_executie_acces_lista(false)::text'),
-    'i_obiect_proiecte', pg_temp.t_val(format('SELECT public.fn_executie_acces_obiect_proiecte(%L, %L)::text', 'executie-pachete-pdf', (e->'pachet'->>1) || '/x.pdf')),
-    'i_inbox_obiect', pg_temp.t_val(format('SELECT public.fn_executie_acces_inbox_obiect(%L, false)', e->'inbox'->>2)),
     'i_nerestrans_cont', pg_temp.t_val(format('SELECT public.fn_executie_acces_nerestrans_cont(%L::uuid)', pg_temp.t_g('b'))),
     'i_lista_cont', pg_temp.t_val(format('SELECT public.fn_executie_acces_lista_cont(%L::uuid, false)::text', pg_temp.t_g('b'))),
     'i_candidati', pg_temp.t_val(format('SELECT public.fn_executie_acces_candidati(%L::uuid)::text', pg_temp.t_g('b'))),
@@ -1262,17 +1322,17 @@ BEGIN
     'i_inventar', pg_temp.t_val('SELECT count(*) FROM public.fn_executie_acces_inventar()'),
     -- RPC-ul owner-ului: același refuz pentru un cont existent și pentru unul inexistent
     'seteaza_existent', pg_temp.t_val(format('SELECT public.fn_executie_acces_proiect_seteaza(%L::uuid, true, %L::jsonb, %L::jsonb)::text',
-                                             pg_temp.t_g('c'), jsonb_build_array(jsonb_build_object('proiect_id', (e->'proiect'->>1)::bigint, 'nivel', 'viewer')), '[]')),
+                                             pg_temp.t_g('c'), jsonb_build_array(jsonb_build_object('proiect_id', (e->'proiect'->>'p3')::bigint, 'nivel', 'viewer')), '[]')),
     'seteaza_inexistent', pg_temp.t_val(format('SELECT public.fn_executie_acces_proiect_seteaza(%L::uuid, true, %L::jsonb, %L::jsonb)::text',
-                                               gen_random_uuid(), jsonb_build_array(jsonb_build_object('proiect_id', (e->'proiect'->>1)::bigint, 'nivel', 'viewer')), '[]')));
-  RETURN v;
+                                               gen_random_uuid(), jsonb_build_array(jsonb_build_object('proiect_id', (e->'proiect'->>'p3')::bigint, 'nivel', 'viewer')), '[]'))));
 END $h$;
-GRANT EXECUTE ON FUNCTION pg_temp.t_val(text), pg_temp.t_expunere() TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION pg_temp.t_val(text), pg_temp.t_vizibil(text, text), pg_temp.t_expunere() TO authenticated, anon, service_role;
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
 SELECT length(set_config('tacc.e_b', pg_temp.t_expunere()::text, true)) AS expunere_b;
 SELECT pg_temp.t_ca(pg_temp.t_g('a')::uuid, 'authenticated');
 SELECT length(set_config('tacc.e_a', pg_temp.t_expunere()::text, true)) AS expunere_a;
--- A0: A fără dreptul pe modul, într-un savepoint anulat (rezultatul trece prin \gset, ca la T3c)
+-- A0 = A fără dreptul pe modul, B0 = B fără dreptul pe modul (restrâns în continuare), fiecare într-un savepoint anulat (rezultatul trece
+-- prin \gset, ca la T3c)
 SAVEPOINT t3e;
 SELECT pg_temp.t_ca(NULL, 'postgres');
 SELECT pg_temp.t_stare(format('DELETE FROM public.user_module_access WHERE profile_id = %L::uuid AND module = %L', pg_temp.t_g('a'), 'executie')) AS a0_fara_modul;
@@ -1283,100 +1343,173 @@ SELECT coalesce(pg_temp.t_g('e_a0'), '{}') AS e_a0_json
 \gset
 ROLLBACK TO SAVEPOINT t3e;
 SELECT set_config('tacc.e_a0', :'e_a0_json', true) IS NOT NULL AS e_a0_inapoi;
+SAVEPOINT t3e_b0;
+SELECT pg_temp.t_ca(NULL, 'postgres');
+SELECT pg_temp.t_stare(format('DELETE FROM public.user_module_access WHERE profile_id = %L::uuid AND module = %L', pg_temp.t_g('b'), 'executie')) AS b0_fara_modul;
+SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
+SELECT set_config('tacc.e_b0', pg_temp.t_expunere()::text, true) IS NOT NULL AS expunere_b0;
+\set ON_ERROR_STOP 1
+SELECT coalesce(pg_temp.t_g('e_b0'), '{}') AS e_b0_json
+\gset
+ROLLBACK TO SAVEPOINT t3e_b0;
+SELECT set_config('tacc.e_b0', :'e_b0_json', true) IS NOT NULL AS e_b0_inapoi;
 SELECT pg_temp.t_ca(NULL, 'postgres');
 DO $t$
-DECLARE e jsonb := pg_temp.t_g('e_ids')::jsonb; c text; k text; i integer; n integer := 0; n_eg integer := 0;
-  rb jsonb := pg_temp.t_g('e_b')::jsonb; ra jsonb := pg_temp.t_g('e_a')::jsonb; r0 jsonb := pg_temp.t_g('e_a0')::jsonb;
-  pred text[] := ARRAY['permis_c', 'permis_s', 'inbox_rand', 'contracte_c', 'contracte_s', 'borderouri_c', 'parinte_sl', 'parinte_bon', 'parinte_pachet',
-                       'parinte_cumulat', 'parinte_activitate', 'parinte_site', 'parinte_raport', 'pachete_c', 'documente_c', 'inbox_c', 'inbox_s'];
-  drept text[] := ARRAY['nod', 'contract', 'grafic', 'tinte'];
-  v_a uuid := pg_temp.t_g('a')::uuid; v_ast text;
+DECLARE e jsonb := pg_temp.t_g('e_ids')::jsonb; f record; et text; ref text; cont text; m jsonb; rez text; ast text; vz integer;
+  n_oracol integer := 0; n_spec integer := 0; n_lit integer := 0; n integer := 0; v_fold text; v_propriu text; k2 text; n_or_b integer := 0; n_or_b0 integer := 0;
+  toate jsonb := jsonb_build_object('a0', pg_temp.t_g('e_a0')::jsonb, 'a', pg_temp.t_g('e_a')::jsonb, 'b', pg_temp.t_g('e_b')::jsonb, 'b0', pg_temp.t_g('e_b0')::jsonb);
+  v_a uuid := pg_temp.t_g('a')::uuid; v_b uuid := pg_temp.t_g('b')::uuid;
+  poarta text := '42501 Execuție: nu ai drept de scriere pe acest proiect';
+  pred text[] := ARRAY['permis_c', 'permis_s', 'inbox_rand', 'contracte_c', 'contracte_s', 'borderouri_c', 'borderouri_s', 'pachete_c', 'pachete_s',
+                       'documente_c', 'documente_s', 'inbox_c', 'inbox_s'];
 BEGIN
-  IF r0 = '{}'::jsonb OR rb IS NULL OR ra IS NULL THEN RAISE EXCEPTION 'T3e FAIL: rezultatele lipsesc (A0 % / B % / A %)', r0 IS NULL, rb IS NULL, ra IS NULL; END IF;
-  -- (a) „nepermis” (p3) = „inexistent”, pe FIECARE cheie, pentru B și A0
-  FOR k IN SELECT DISTINCT split_part(x, ':', 1) FROM jsonb_object_keys(rb) x WHERE x LIKE '%:1' LOOP
-    IF rb->>(k || ':1') IS DISTINCT FROM rb->>(k || ':2') THEN
-      RAISE EXCEPTION 'T3e FAIL: oracol de existență pentru B pe %: nepermis % / inexistent %', k, rb->>(k || ':1'), rb->>(k || ':2');
-    END IF;
-    -- (A0: țintele la citire urmează alocarea pe șantier, din date — verificate la (b), nu aici)
-    IF k <> 'tinte' AND r0->>(k || ':1') IS DISTINCT FROM r0->>(k || ':2') THEN
-      RAISE EXCEPTION 'T3e FAIL: oracol de existență pentru A0 (fără modul) pe %: p3 % / inexistent %', k, r0->>(k || ':1'), r0->>(k || ':2');
-    END IF;
-    n_eg := n_eg + 1;
+  FOREACH cont IN ARRAY ARRAY['a0', 'a', 'b', 'b0'] LOOP
+    IF toate->cont IS NULL OR toate->cont = '{}'::jsonb OR toate->cont->'r' IS NULL THEN RAISE EXCEPTION 'T3e FAIL: rezultatele lipsesc pentru %', cont; END IF;
   END LOOP;
-  -- (b) specificația, pe fiecare cheie probată
-  FOREACH c IN ARRAY pred LOOP
-    IF NOT rb ? (c || ':0') THEN PERFORM pg_temp.t_neprobat('T3e ' || c || ': fără rând de probă pe p1'); CONTINUE; END IF;
-    IF NOT rb ? (c || ':1') THEN PERFORM pg_temp.t_neprobat('T3e ' || c || ': fără rând de probă pe p3'); END IF;
-    FOR i IN 0..2 LOOP
-      IF NOT rb ? (c || ':' || i) THEN CONTINUE; END IF;
-      IF rb->>(c || ':' || i) IS DISTINCT FROM (CASE WHEN i = 0 THEN 'true' ELSE 'false' END) THEN
-        RAISE EXCEPTION 'T3e FAIL: B pe %:% = % (așteptat %)', c, i, rb->>(c || ':' || i), CASE WHEN i = 0 THEN 'true' ELSE 'false' END;
+  FOR f IN SELECT * FROM t_exp_fn ORDER BY cheie LOOP
+    FOR et IN SELECT jsonb_object_keys(e->f.fel) LOOP
+      FOREACH cont IN ARRAY ARRAY['a0', 'a', 'b', 'b0'] LOOP
+        m := toate->cont;
+        rez := m->'r'->>(f.cheie || '|' || et);
+        vz := (m->'viz'->>(f.fel || '|' || et))::integer;
+        IF rez IS NULL OR vz IS NULL THEN RAISE EXCEPTION 'T3e FAIL: lipsește %|% pentru %', f.cheie, et, cont; END IF;
+        -- folderul Inboxului: al lui A (a_*, inex_a), al lui B (b_*, inex_b), al nimănui (inex_x); propriu = al contului
+        v_fold := CASE WHEN f.fel <> 'inbox' THEN NULL WHEN et LIKE 'a\_%' OR et = 'inex_a' THEN 'a' WHEN et LIKE 'b\_%' OR et = 'inex_b' THEN 'b' ELSE 'x' END;
+        v_propriu := CASE WHEN cont IN ('a', 'a0') THEN 'a' ELSE 'b' END;
+        ref := CASE WHEN f.fel = 'inbox' THEN 'inex_' || v_fold ELSE 'inex' END;
+        -- (a) ORACOL: existent + invizibil = inexistent (exact), în afara excepției scrise (folderul propriu al contului restrâns)
+        -- (v_fold e NULL în afara Inboxului: comparația trece prin coalesce, altfel condiția ar fi NULL și verificarea ar fi sărită)
+        IF et NOT LIKE 'inex%' AND vz = 0 AND NOT (cont IN ('b', 'b0') AND coalesce(v_fold = v_propriu, false)) THEN
+          IF rez IS DISTINCT FROM m->'r'->>(f.cheie || '|' || ref) THEN
+            RAISE EXCEPTION 'T3e FAIL: oracol de existență pentru % pe %(%): existent invizibil = % / inexistent (%) = %', cont, f.cheie, et, rez, ref, m->'r'->>(f.cheie || '|' || ref);
+          END IF;
+          n_oracol := n_oracol + 1;
+          IF cont = 'b' THEN n_or_b := n_or_b + 1; ELSIF cont = 'b0' THEN n_or_b0 := n_or_b0 + 1; END IF;
+        END IF;
+        -- calea inexistentă într-un folder al nimănui = aceeași ca într-un folder străin
+        IF et = 'inex_x' AND rez IS DISTINCT FROM m->'r'->>(f.cheie || '|inex_' || CASE v_propriu WHEN 'a' THEN 'b' ELSE 'a' END) THEN
+          RAISE EXCEPTION 'T3e FAIL: oracol pe folder pentru % pe %: folder al nimănui % / folder străin %', cont, f.cheie, rez,
+            m->'r'->>(f.cheie || '|inex_' || CASE v_propriu WHEN 'a' THEN 'b' ELSE 'a' END);
+        END IF;
+        -- (b) SPECIFICAȚIA
+        ast := NULL;
+        IF f.cheie = 'raport_santier' THEN
+          -- fn_raport_santier_drept NU e apelabilă de clienți (20261208a: doar din RPC-urile raportului) — rămâne așa
+          IF rez NOT LIKE '42501 permission denied for function fn\_raport\_santier\_drept%' THEN
+            RAISE EXCEPTION 'T3e FAIL: fn_raport_santier_drept|% pentru % = % (așteptat 42501)', et, cont, rez;
+          END IF;
+          n_spec := n_spec + 1; CONTINUE;
+        ELSIF f.cheie = 'swap' THEN
+          ast := CASE WHEN cont = 'a' AND et <> 'inex' THEN 'OK 1' WHEN cont = 'b' AND et = 'p1' THEN 'OK 1' ELSE poarta END;
+        ELSIF f.cheie IN ('nod', 'contract', 'grafic', 'tinte') THEN
+          ast := CASE WHEN et = 'inex' THEN 'false'
+                      WHEN cont = 'a' THEN 'true'
+                      WHEN cont = 'b' THEN (et IN ('p1', 'p2'))::text
+                      -- fără modul: fals; ținte la citire: alocarea pe un șantier al proiectului (din date), în limita listei (B0)
+                      WHEN f.cheie = 'tinte' THEN (EXISTS (SELECT 1 FROM public.profile_sites ps JOIN public.sites s ON s.id = ps.site_id
+                                                            WHERE ps.profile_id = CASE cont WHEN 'a0' THEN v_a ELSE v_b END AND s.proiect_id = (e->'proiect'->>et)::bigint
+                                                              AND (ps.valid_until IS NULL OR ps.valid_until >= (now() AT TIME ZONE 'Europe/Bucharest')::date))
+                                                   AND (cont = 'a0' OR et IN ('p1', 'p2')))::text
+                      ELSE 'false' END;
+        ELSIF f.cheie IN ('propriu_c', 'propriu_s') THEN
+          -- doar folderul propriu; în afara lui = fals pentru oricine
+          ast := CASE WHEN v_fold IS DISTINCT FROM v_propriu THEN 'false'
+                      WHEN cont IN ('a', 'a0') THEN 'true'
+                      WHEN et = 'inex_b' THEN 'true'
+                      WHEN et = 'b_nul' THEN (f.cheie = 'propriu_c')::text
+                      ELSE 'false' END;
+        ELSIF f.cheie = ANY (pred) OR f.cheie LIKE 'parinte\_%' THEN
+          IF cont IN ('a', 'a0') THEN ast := 'true';
+          ELSIF f.fel = 'inbox' AND v_fold = v_propriu THEN
+            -- excepția scrisă (folderul propriu al contului restrâns), cu valorile ei: fără rând = adevărat; documentul propriu fără proiect =
+            -- citire da, scriere nu; documentul propriu pe p3 = nimic
+            ast := CASE WHEN et = 'inex_b' THEN 'true' WHEN et = 'b_nul' THEN (f.cheie = 'inbox_c')::text ELSE 'false' END;
+          ELSIF et LIKE 'inex%' OR vz = 0 THEN ast := 'false';
+          ELSIF f.cheie = 'documente_s' THEN ast := 'false';
+          ELSIF f.cheie LIKE '%\_s' THEN ast := (et IN ('p1', 'nul', 'nul2', 'a_p1', 'a_hr', 'a_nedecis'))::text;
+          ELSE ast := (et IN ('p1', 'p2', 'nul', 'nul2', 'a_p1', 'a_p2', 'a_hr', 'a_nedecis'))::text;
+          END IF;
+        END IF;
+        IF ast IS NULL THEN RAISE EXCEPTION 'T3e FAIL: cheie fără specificație: %', f.cheie; END IF;
+        IF rez IS DISTINCT FROM ast THEN
+          RAISE EXCEPTION 'T3e FAIL: % pe %(%) = % (așteptat %; vizibil: %)', cont, f.cheie, et, rez, ast, vz;
+        END IF;
+        n_spec := n_spec + 1;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+  -- argumentele fără rând de probă: NEPROBAT, cu numele lor
+  FOR f IN SELECT DISTINCT fel FROM t_exp_fn LOOP
+    FOREACH et IN ARRAY CASE f.fel WHEN 'inbox' THEN ARRAY['a_p1', 'a_p2', 'a_p3', 'a_hr', 'a_nedecis', 'b_p3', 'b_nul']
+                                   WHEN 'site' THEN ARRAY['p1', 'p2', 'p3', 'nul', 'nul2'] WHEN 'raport' THEN ARRAY['p1', 'p2', 'p3', 'nul', 'nul2']
+                                   WHEN 'tevi' THEN ARRAY['p1', 'p3'] ELSE ARRAY['p1', 'p2', 'p3'] END LOOP
+      IF NOT (e->f.fel) ? et THEN PERFORM pg_temp.t_neprobat('T3e: argument ' || f.fel || '|' || et || ' fără rând de probă'); END IF;
+    END LOOP;
+  END LOOP;
+  -- (c) cazurile LITERALE din verdictele r8 (pe lângă regula generală de mai sus, cu numele lor)
+  --   Jakarinos P1-1 / al doilea recenzent P1-02: contul restrâns fără modul (B0), șantier / raport FĂRĂ proiect, față de id inexistent
+  FOREACH k2 IN ARRAY ARRAY['site', 'raport'] LOOP
+    et := 'nul2';
+    IF (e->k2) ? et THEN
+      vz := (toate->'b0'->'viz'->>(k2 || '|' || et))::integer;
+      IF vz = 0 THEN
+        IF toate->'b0'->'r'->>('parinte_' || k2 || '_c|nul2') IS DISTINCT FROM toate->'b0'->'r'->>('parinte_' || k2 || '_c|inex')
+           OR toate->'b0'->'r'->>('parinte_' || k2 || '_c|nul2') IS DISTINCT FROM 'false' THEN
+          RAISE EXCEPTION 'T3e FAIL: cazul literal r8 (B0, % fără proiect): % / inexistent %', k2,
+            toate->'b0'->'r'->>('parinte_' || k2 || '_c|nul2'), toate->'b0'->'r'->>('parinte_' || k2 || '_c|inex');
+        END IF;
+        n_lit := n_lit + 1;
+      ELSE PERFORM pg_temp.t_neprobat('T3e literal ' || k2 || ': B0 vede șantierul fără proiect (RLS-ul lui sites pe această bază) — răspunsul e cel al unui SELECT direct'); END IF;
+    ELSE PERFORM pg_temp.t_neprobat('T3e literal ' || k2 || ': niciun șantier fără proiect neatribuit lui B'); END IF;
+  END LOOP;
+  --   Jakarinos P1-2 / al doilea recenzent P1-01: B, rândul Inboxului al altui modul / nedecis, pe care NU îl vede, în afara folderului propriu
+  FOREACH et IN ARRAY ARRAY['a_hr', 'a_nedecis'] LOOP
+    IF (e->'inbox') ? et AND (toate->'b'->'viz'->>('inbox|' || et))::integer = 0 THEN
+      IF toate->'b'->'r'->>('inbox_c|' || et) IS DISTINCT FROM toate->'b'->'r'->>'inbox_c|inex_a'
+         OR toate->'b'->'r'->>('inbox_s|' || et) IS DISTINCT FROM toate->'b'->'r'->>'inbox_s|inex_a'
+         OR toate->'b'->'r'->>('inbox_c|' || et) IS DISTINCT FROM 'false' THEN
+        RAISE EXCEPTION 'T3e FAIL: cazul literal r8 (B, Inbox %, rând ascuns): % / inexistent %', et, toate->'b'->'r'->>('inbox_c|' || et), toate->'b'->'r'->>'inbox_c|inex_a';
       END IF;
-      IF ra->>(c || ':' || i) IS DISTINCT FROM 'true' OR r0->>(c || ':' || i) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'T3e FAIL: contul nerestrâns pe %:% = A % / A0 % (așteptat true: predicatul nu-i spune nimic)', c, i, ra->>(c || ':' || i), r0->>(c || ':' || i);
+      n_lit := n_lit + 1;
+    ELSE PERFORM pg_temp.t_neprobat('T3e literal Inbox ' || et || ': rândul lipsește sau B îl vede pe această bază'); END IF;
+  END LOOP;
+  --   Jakarinos P2: contul nerestrâns FĂRĂ modul (A0) nu mai ajunge la originalul swap; refuzul nu conține id-uri (doar SQLSTATE-ul are cifre)
+  FOR et IN SELECT jsonb_object_keys(e->'tevi') LOOP
+    rez := toate->'a0'->'r'->>('swap|' || et);
+    IF rez IS DISTINCT FROM poarta OR substr(rez, 7) ~ '[0-9]' THEN RAISE EXCEPTION 'T3e FAIL: A0 (fără modul) la schimbul de țevi %: %', et, rez; END IF;
+    n_lit := n_lit + 1;
+  END LOOP;
+  IF NOT (e->'tevi') ? 'p3' THEN PERFORM pg_temp.t_neprobat('T3e literal swap: nu există două țevi pe p3'); END IF;
+  -- (d) despre apelant, interne, RPC-ul owner-ului
+  FOREACH cont IN ARRAY ARRAY['a0', 'a', 'b', 'b0'] LOOP
+    m := toate->cont->'x';
+    IF m->>'e_owner' <> 'false' OR m->>'nerestrans' <> (cont IN ('a', 'a0'))::text OR m->>'alt_bucket' <> 'true' OR m->>'inbox_propriu_nou' <> 'true' THEN
+      RAISE EXCEPTION 'T3e FAIL: predicatele despre apelant pentru %: %', cont, jsonb_build_array(m->'e_owner', m->'nerestrans', m->'alt_bucket', m->'inbox_propriu_nou');
+    END IF;
+    FOR et IN SELECT x FROM jsonb_object_keys(m) x WHERE x LIKE 'i\_%' LOOP
+      IF coalesce(m->>et, '') NOT LIKE '42501 permission denied for function fn\_executie\_acces\_%' THEN
+        RAISE EXCEPTION 'T3e FAIL: funcția internă % apelabilă de % : %', et, cont, left(m->>et, 120);
       END IF;
       n := n + 1;
     END LOOP;
-  END LOOP;
-  FOREACH c IN ARRAY drept LOOP
-    FOR i IN 0..2 LOOP
-      IF rb->>(c || ':' || i) IS DISTINCT FROM (CASE WHEN i = 0 THEN 'true' ELSE 'false' END)
-         OR ra->>(c || ':' || i) IS DISTINCT FROM (CASE WHEN i < 2 THEN 'true' ELSE 'false' END) THEN
-        RAISE EXCEPTION 'T3e FAIL: funcția de drept %:% = B % / A % (așteptat B [t,f,f], A [t,t,f])', c, i, rb->>(c || ':' || i), ra->>(c || ':' || i);
-      END IF;
-      -- A0: fără modul = fals; ținte la citire: doar alocarea pe un șantier al proiectului (din date)
-      v_ast := CASE WHEN c = 'tinte' AND EXISTS (SELECT 1 FROM public.profile_sites ps JOIN public.sites s ON s.id = ps.site_id
-                                                  WHERE ps.profile_id = v_a AND s.proiect_id = (e->'proiect'->>i)::bigint
-                                                    AND (ps.valid_until IS NULL OR ps.valid_until >= (now() AT TIME ZONE 'Europe/Bucharest')::date))
-                    THEN 'true' ELSE 'false' END;
-      IF r0->>(c || ':' || i) IS DISTINCT FROM v_ast THEN
-        RAISE EXCEPTION 'T3e FAIL: funcția de drept %:% pentru A0 (fără modul) = % (așteptat %)', c, i, r0->>(c || ':' || i), v_ast;
-      END IF;
-      n := n + 1;
-    END LOOP;
-  END LOOP;
-  -- raportul zilnic: fn_raport_santier_drept NU e apelabilă de clienți (20261208a: doar din RPC-urile raportului) — rămâne așa
-  FOR i IN 0..2 LOOP
-    IF NOT rb ? ('raport_santier:' || i) THEN CONTINUE; END IF;
-    IF coalesce(rb->>('raport_santier:' || i), '') NOT LIKE '42501 permission denied for function fn\_raport\_santier\_drept%'
-       OR ra->>('raport_santier:' || i) IS DISTINCT FROM rb->>('raport_santier:' || i) OR r0->>('raport_santier:' || i) IS DISTINCT FROM rb->>('raport_santier:' || i) THEN
-      RAISE EXCEPTION 'T3e FAIL: fn_raport_santier_drept:% = B % / A % / A0 % (așteptat 42501 pentru toți)', i, rb->>('raport_santier:' || i), ra->>('raport_santier:' || i),
-        r0->>('raport_santier:' || i);
+    IF (SELECT count(*) FROM jsonb_object_keys(m) x WHERE x LIKE 'i\_%') <> 6 THEN RAISE EXCEPTION 'T3e FAIL: lipsesc probe pe funcțiile interne'; END IF;
+    IF coalesce(m->>'seteaza_existent', '') NOT LIKE '42501 acces proiect: doar owner-ul%' OR m->>'seteaza_existent' IS DISTINCT FROM m->>'seteaza_inexistent'
+       OR m->>'seteaza_existent' IS DISTINCT FROM toate->'b'->'x'->>'seteaza_existent' THEN
+      RAISE EXCEPTION 'T3e FAIL: RPC-ul de setare ca non-owner (%): % / %', cont, m->>'seteaza_existent', m->>'seteaza_inexistent';
     END IF;
-    n := n + 1;
   END LOOP;
-  -- despre apelant: owner nu; nerestrâns: A și A0 da, B nu; bucket neacoperit = adevărat (nu citește nimic); folderul propriu (limita scrisă)
-  IF rb->>'e_owner' <> 'false' OR ra->>'e_owner' <> 'false' OR r0->>'e_owner' <> 'false'
-     OR rb->>'nerestrans' <> 'false' OR ra->>'nerestrans' <> 'true' OR r0->>'nerestrans' <> 'true'
-     OR rb->>'alt_bucket' <> 'true' OR ra->>'alt_bucket' <> 'true' OR r0->>'alt_bucket' <> 'true'
-     OR rb->>'inbox_propriu' <> 'true' OR ra->>'inbox_propriu' <> 'true' OR r0->>'inbox_propriu' <> 'true' THEN
-    RAISE EXCEPTION 'T3e FAIL: predicatele despre apelant: B % / A % / A0 %',
-      jsonb_build_array(rb->'e_owner', rb->'nerestrans', rb->'alt_bucket', rb->'inbox_propriu'),
-      jsonb_build_array(ra->'e_owner', ra->'nerestrans', ra->'alt_bucket', ra->'inbox_propriu'),
-      jsonb_build_array(r0->'e_owner', r0->'nerestrans', r0->'alt_bucket', r0->'inbox_propriu');
-  END IF;
-  -- (c) interne: 42501 pentru toți trei
-  FOR k IN SELECT x FROM jsonb_object_keys(rb) x WHERE x LIKE 'i\_%' LOOP
-    IF coalesce(rb->>k, '') NOT LIKE '42501 permission denied for function fn\_executie\_acces\_%'
-       OR coalesce(ra->>k, '') NOT LIKE '42501 permission denied for function fn\_executie\_acces\_%'
-       OR coalesce(r0->>k, '') NOT LIKE '42501 permission denied for function fn\_executie\_acces\_%' THEN
-      RAISE EXCEPTION 'T3e FAIL: funcția internă % apelabilă de un client: B % / A % / A0 %', k, left(rb->>k, 120), left(ra->>k, 120), left(r0->>k, 120);
-    END IF;
-    n := n + 1;
-  END LOOP;
-  IF (SELECT count(*) FROM jsonb_object_keys(rb) x WHERE x LIKE 'i\_%') <> 8 THEN RAISE EXCEPTION 'T3e FAIL: lipsesc probe pe funcțiile interne'; END IF;
-  IF to_regprocedure('public.fn_executie_acces_parinti(text, boolean)') IS NOT NULL THEN RAISE EXCEPTION 'T3e FAIL: setul părinților (id-uri) încă există'; END IF;
-  -- RPC-ul owner-ului: același refuz, înainte de orice citire, pentru cont existent și inexistent (B, A, A0)
-  IF coalesce(rb->>'seteaza_existent', '') NOT LIKE '42501 acces proiect: doar owner-ul%'
-     OR rb->>'seteaza_existent' IS DISTINCT FROM rb->>'seteaza_inexistent'
-     OR ra->>'seteaza_existent' IS DISTINCT FROM rb->>'seteaza_existent' OR ra->>'seteaza_inexistent' IS DISTINCT FROM rb->>'seteaza_existent'
-     OR r0->>'seteaza_existent' IS DISTINCT FROM rb->>'seteaza_existent' OR r0->>'seteaza_inexistent' IS DISTINCT FROM rb->>'seteaza_existent' THEN
-    RAISE EXCEPTION 'T3e FAIL: RPC-ul de setare ca non-owner: B % / % · A % / % · A0 % / %', rb->>'seteaza_existent', rb->>'seteaza_inexistent',
-      ra->>'seteaza_existent', ra->>'seteaza_inexistent', r0->>'seteaza_existent', r0->>'seteaza_inexistent';
+  IF to_regprocedure('public.fn_executie_acces_parinti(text, boolean)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_obiect_proiecte(text, text)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_inbox_obiect(text, boolean)') IS NOT NULL THEN
+    RAISE EXCEPTION 'T3e FAIL: o rezolvare brută (setul părinților / proiectele unui obiect / fișierul Inboxului) încă există';
   END IF;
   IF (SELECT count(*) FROM public.executie_acces_proiect) <> 3 THEN RAISE EXCEPTION 'T3e FAIL: apelurile au scris în lista de acces'; END IF;
-  RAISE NOTICE 'T3e OK (% verificări; % chei cu nepermis = inexistent pentru B și A0; interne = 42501; setarea = același refuz)', n, n_eg;
+  -- verificarea anti-oracol trebuie să fi rulat efectiv pe conturile restrânse (nu doar pe cele pentru care totul e „adevărat”)
+  IF n_or_b = 0 OR n_or_b0 = 0 OR n_lit = 0 THEN
+    RAISE EXCEPTION 'T3e FAIL: perechi existent invizibil / inexistent probate: B %, B0 %, literale % (trebuie > 0)', n_or_b, n_or_b0, n_lit;
+  END IF;
+  RAISE NOTICE 'T3e OK (% funcții × argumente × 4 conturi: % verificări de specificație, % perechi existent invizibil = inexistent — B %, B0 % —, % cazuri literale din r8, % interne = 42501)',
+    (SELECT count(*) FROM t_exp_fn), n_spec, n_oracol, n_or_b, n_or_b0, n_lit, n;
 END $t$;
 
 -- ── T3x: ce rămâne EXCLUS (decizie scrisă): câte rânduri ale lui p3 vede B pe fiecare tabel exclus din catalog (informativ) ──
@@ -1410,6 +1543,12 @@ BEGIN
      OR public.fn_executie_tinte_drept(p1, 'configurare') THEN
     RAISE EXCEPTION 'T4 FAIL: C (modul viewer) a primit scriere prin proiect';
   END IF;
+  -- r9 (P2): schimbul de țevi cere scrierea pe MODUL — C (viewer pe modul, editor pe p1) e refuzat de poartă, ca țeava inexistentă
+  IF pg_temp.t_g('tevi1') IS NOT NULL
+     AND pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)', split_part(pg_temp.t_g('tevi1'), ',', 1), split_part(pg_temp.t_g('tevi1'), ',', 2)))
+         IS DISTINCT FROM '42501 Execuție: nu ai drept de scriere pe acest proiect' THEN
+    RAISE EXCEPTION 'T4 FAIL: C (modul viewer) schimbă țevile pe p1';
+  END IF;
 END $t$;
 SELECT pg_temp.t_ca(pg_temp.t_g('own')::uuid, 'authenticated');
 DO $t$ DECLARE m jsonb := pg_temp.t_amprenta(); BEGIN
@@ -1423,17 +1562,18 @@ DO $t$ DECLARE m jsonb := pg_temp.t_amprenta(); BEGIN
   IF m IS DISTINCT FROM pg_temp.t_g('ma0')::jsonb OR EXISTS (SELECT 1 FROM public.executie_acces_proiect) THEN
     RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) afectat / vede rândurile altora: %', pg_temp.t_dif(m, pg_temp.t_g('ma0')::jsonb);
   END IF;
-  -- poarta swap: pentru un cont nerestrâns = originalul (schimbul pe p3 reușește, țeava inexistentă primește mesajul de azi)
+  -- poarta swap: pentru un editor nerestrâns schimbul pe p3 reușește ca azi
   IF pg_temp.t_g('tevi3') IS NOT NULL
      AND pg_temp.t_proba(format('SELECT public.fn_executie_swap_tevi_pozitie(%s, %s)', split_part(pg_temp.t_g('tevi3'), ',', 1), split_part(pg_temp.t_g('tevi3'), ',', 2))) <> 'OK 1' THEN
     RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) nu mai schimbă țevile pe p3';
   END IF;
-  -- r5: referința = rezultatul de dinainte de migrare (TB, același cont), SQLSTATE + mesaj; înainte trebuia să fie un refuz
+  -- r9 (P2): țeava inexistentă nu mai ajunge la original nici pentru contul nerestrâns: refuzul porții (fără id-uri), nu mesajul de azi
+  -- (TB, același cont: înainte trebuia să fie tot un refuz, al originalului)
   IF pg_temp.t_g('swap0') IS NULL OR pg_temp.t_g('swap0') LIKE 'OK %' THEN
     RAISE EXCEPTION 'T4 FAIL: înainte de migrare, țeava inexistentă nu era refuzată (%): comparația n-ar dovedi nimic', pg_temp.t_g('swap0');
   END IF;
-  IF pg_temp.t_norm(pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)')) IS DISTINCT FROM pg_temp.t_g('swap0') THEN
-    RAISE EXCEPTION 'T4 FAIL: A (nerestrâns) primește alt rezultat decât cel de azi pentru o țeavă inexistentă (azi: %)', pg_temp.t_g('swap0');
+  IF pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)') IS DISTINCT FROM '42501 Execuție: nu ai drept de scriere pe acest proiect' THEN
+    RAISE EXCEPTION 'T4 FAIL: A (nerestrâns), țeavă inexistentă: % (așteptat refuzul porții; azi: %)', pg_temp.t_proba('SELECT public.fn_executie_swap_tevi_pozitie(-1, -2)'), pg_temp.t_g('swap0');
   END IF;
   RAISE NOTICE 'T4 OK (owner și A: amprenta identică cu cea de dinainte)';
 END $t$;

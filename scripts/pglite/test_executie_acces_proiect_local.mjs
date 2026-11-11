@@ -10,6 +10,9 @@
 // r6: mutanții M26–M31 pe candidații clasificatorului (fn_executie_acces_candidati): lista contului ignorată, lista de scriere în loc de
 // citire, proiectele inactive incluse, EXECUTE pentru authenticated, rândul fără cont fără candidați, revenirea care uită funcția.
 // r7: M32 (UUID fără profil primește iar „toate”), M33 (refuzul prinde și rândul fără cont, NULL).
+// r9: M40–M44 (predicatele citite iar ca proprietar = oracolele din r8, poarta swap fără modul, folderul propriu deschis spre alte foldere,
+// scrierea în documente-proiect), P26–P27 (dreptul de citire al predicatelor INVOKER, bucla politicilor); schema falsă are RLS pe modul
+// pentru pachete și șantiere (rânduri existente, dar invizibile unui cont fără modul).
 import { PGlite } from '@electric-sql/pglite'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -230,10 +233,12 @@ raport('M7 revenirea nu verifică conturile restrânse', await scenariu('m7', {
 raport('M8 copiii fără politica de citire', await scenariu('m8', {
   mutMig: t => inlocuieste(t, POL_C_CIT, POL_C_CIT.replace(`) OR public.fn_executie_acces_parinte_permis`, `) OR true OR public.fn_executie_acces_parinte_permis`)),
 }), false, /T3 FAIL: citire pe (executie_|raport_)/)
-raport('M9 părintele „pachet” = orice pachet (r8: predicatul pe rând)', await scenariu('m9', {
-  mutMig: t => inlocuieste(t, `    WHEN 'pachet' THEN public.fn_executie_proiect_permis((SELECT k.proiect_id::bigint FROM public.executie_pachete_lansare k WHERE k.id = p_id), p_scriere)`,
-    `    WHEN 'pachet' THEN EXISTS (SELECT 1 FROM public.executie_pachete_lansare k WHERE k.id = p_id)`),
-}), false, /T3 FAIL: citire pe executie_(pachete_documente|tevi)/)
+// r9: căutarea părintelui e sub RLS-ul apelantului, deci la CITIRE un pachet nepermis e deja invizibil (restricția lui); mutantul care
+// contează e nivelul: scrierea pe copiii pachetului cu lista de CITIRE (B, viewer pe p2, ar scrie țevile lui p2)
+raport('M9 părintele „pachet”: scrierea cere doar lista de citire', await scenariu('m9', {
+  mutMig: t => inlocuieste(t, `    WHEN 'pachet' THEN EXISTS (SELECT 1 FROM public.executie_pachete_lansare k WHERE k.id = p_id AND public.fn_executie_proiect_permis(k.proiect_id::bigint, p_scriere))`,
+    `    WHEN 'pachet' THEN EXISTS (SELECT 1 FROM public.executie_pachete_lansare k WHERE k.id = p_id AND public.fn_executie_proiect_permis(k.proiect_id::bigint, false))`),
+}), false, /T3 FAIL[^\n]*executie_(pachete_documente|tevi)/)
 raport('M10 raportul zilnic fără condiția de proiect', await scenariu('m10', {
   mutMig: t => inlocuieste(inlocuieste(t, `    AND (public.fn_executie_acces_nerestrans()
          OR EXISTS (SELECT 1 FROM public.sites s WHERE s.id = p_site`, `    AND (true
@@ -254,7 +259,7 @@ raport('M13 scrierea legitimă oprită de politică (regula neatinsă)', await s
 }), false, /T3 FAIL: (scrierea legitimă|INSERT-ul legitim|UPDATE \/ DELETE)/)
 
 // r3: poarta swap dezactivată (amprenta porții recalculată, ca postcondiția / revenirea să nu fie ele cele care pică)
-const POARTA_COND = `  IF auth.uid() IS NOT NULL AND NOT public.fn_executie_acces_nerestrans()\n     AND EXISTS`
+const POARTA_COND = `  IF auth.uid() IS NOT NULL\n     AND EXISTS`
 raport('M14 poarta swap nu mai verifică proiectul', await scenariu('m14', {
   mutMig: t => {
     const m = inlocuieste(t, POARTA_COND, `  IF false\n     AND EXISTS`)
@@ -289,9 +294,12 @@ raport('M20 Inbox AI: garda pe rând dezactivată (calea DEFINER scrie pe p3)', 
 }), false, /T3i FAIL[^\n]*DEFINER/)
 // (citirea fișierelor Inboxului e oprită deja de politica de azi, prin rândul ascuns de politica cozii: ramura de citire din Storage e o
 // a doua barieră și nu se poate pica izolat; ramura care schimbă ceva e scrierea / ștergerea)
-raport('M21 Storage Inbox: ștergerea fișierelor lasă tot (dependența păstrată)', await scenariu('m21', {
-  mutMig: t => inlocuieste(t, `WHEN p_bucket = 'ai-documente-inbox' THEN public.fn_executie_acces_inbox_obiect(p_name, p_scriere) IS TRUE`,
-    `WHEN p_bucket = 'ai-documente-inbox' THEN p_scriere OR public.fn_executie_acces_inbox_obiect(p_name, p_scriere) IS TRUE`),
+const INBOX_STRAIN = `              WHEN p_bucket = 'ai-documente-inbox' THEN
+                EXISTS (SELECT 1 FROM public.ai_documente_inbox i
+                         WHERE i.fisier_path = p_name
+                           AND public.fn_executie_acces_inbox_rand(i.modul_tinta, i.entitate_id::bigint, i.uploadat_de, p_scriere))`
+raport('M21 Storage Inbox: ștergerea fișierelor din afara folderului propriu lasă tot (dependența păstrată)', await scenariu('m21', {
+  mutMig: t => inlocuieste(t, INBOX_STRAIN, INBOX_STRAIN.replace(`THEN\n                EXISTS`, `THEN\n                p_scriere OR EXISTS`)),
 }), false, /T3i FAIL[^\n]*șterge fișierul/)
 raport('M22 garda „proiect” lasă rândurile fără proiect și pe tabelele stricte', await scenariu('m22', {
   mutMig: t => inlocuieste(t, `  v_nul := TG_NARGS = 2;`, `  v_nul := true;`),
@@ -350,29 +358,63 @@ const GRANT_PUBLIC_ULTIM = `GRANT EXECUTE ON FUNCTION public.fn_executie_acces_o
 raport('M34 lista (id-uri) iar apelabilă de authenticated', await scenariu('m34', {
   mutMig: t => inlocuieste(t, GRANT_PUBLIC_ULTIM, GRANT_PUBLIC_ULTIM + `\nGRANT EXECUTE ON FUNCTION public.fn_executie_acces_lista(boolean) TO authenticated;`),
 }), false, /functii noi \(definer/)
-// regula GENERALĂ trebuie să prindă singură (lista exactă e „păcălită” în același mutant)
-raport('M35 proiectele unui obiect apelabile + trecute pe lista exactă (prinde regula generală)', await scenariu('m35', {
-  mutMig: t => inlocuieste(inlocuieste(t, GRANT_PUBLIC_ULTIM, GRANT_PUBLIC_ULTIM + `\nGRANT EXECUTE ON FUNCTION public.fn_executie_acces_obiect_proiecte(text, text) TO authenticated;`),
-    `'fn_executie_acces_parinte_permis', 'fn_executie_acces_inbox_rand', 'fn_executie_acces_obiect_permis',\n                                          'fn_executie_acces_proiect_seteaza')))) THEN`,
-    `'fn_executie_acces_parinte_permis', 'fn_executie_acces_inbox_rand', 'fn_executie_acces_obiect_permis', 'fn_executie_acces_obiect_proiecte',\n                                          'fn_executie_acces_proiect_seteaza')))) THEN`),
-}), false, /intorc altceva decat boolean.*fn_executie_acces_obiect_proiecte/)
-raport('M36 Inbox: fișierul fără rând = adevărat oriunde (oracolul din r7)', await scenariu('m36', {
-  mutMig: t => inlocuieste(t, `             ELSE split_part(p_name, '/', 1) = auth.uid()::text END`, `             ELSE true END`),
-}), false, /T3e FAIL: oracol de existență pentru B pe inbox/)
-// doar la CITIRE (la scriere, garda copilului îl prinde deja în T3: „părinte inexistent”) — ca să dovedească T3e
-raport('M37 părintele „sl” inexistent = adevărat la citire (oracol pe id)', await scenariu('m37', {
-  mutMig: t => inlocuieste(t, `    WHEN 'sl' THEN public.fn_executie_proiect_permis((SELECT s.proiect_id::bigint FROM public.executie_situatii_plata s WHERE s.id = p_id), p_scriere)`,
-    `    WHEN 'sl' THEN CASE WHEN p_scriere THEN public.fn_executie_proiect_permis((SELECT s.proiect_id::bigint FROM public.executie_situatii_plata s WHERE s.id = p_id), p_scriere)
-                        ELSE NOT EXISTS (SELECT 1 FROM public.executie_situatii_plata s WHERE s.id = p_id AND public.fn_executie_proiect_permis(s.proiect_id::bigint, false) IS NOT TRUE) END`),
-}), false, /T3e FAIL: oracol de existență pentru B pe parinte_sl/)
+// regula GENERALĂ trebuie să prindă singură (lista exactă e „păcălită” în același mutant); r9: lista (bigint[]) în locul rezolvării scoase
+const LISTA_EXACTA = `'fn_executie_acces_parinte_permis', 'fn_executie_acces_inbox_rand', 'fn_executie_acces_inbox_propriu',\n                                          'fn_executie_acces_obiect_permis', 'fn_executie_acces_proiect_seteaza')))) THEN`
+raport('M35 lista (id-uri) apelabilă + trecută pe lista exactă (prinde regula generală)', await scenariu('m35', {
+  mutMig: t => inlocuieste(inlocuieste(t, GRANT_PUBLIC_ULTIM, GRANT_PUBLIC_ULTIM + `\nGRANT EXECUTE ON FUNCTION public.fn_executie_acces_lista(boolean) TO authenticated;`),
+    LISTA_EXACTA, LISTA_EXACTA.replace(`'fn_executie_acces_proiect_seteaza'`, `'fn_executie_acces_proiect_seteaza', 'fn_executie_acces_lista'`)),
+}), false, /intorc altceva decat boolean.*fn_executie_acces_lista/)
+// r9: în afara folderului propriu, „fără rând vizibil” = adevărat (oracolul din r7, sub altă formă)
+raport('M36 Inbox: în afara folderului propriu, fără rând vizibil = adevărat', await scenariu('m36', {
+  mutMig: t => inlocuieste(t, INBOX_STRAIN, `              WHEN p_bucket = 'ai-documente-inbox' THEN
+                NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i
+                         WHERE i.fisier_path = p_name
+                           AND public.fn_executie_acces_inbox_rand(i.modul_tinta, i.entitate_id::bigint, i.uploadat_de, p_scriere) IS NOT TRUE)`),
+}), false, /T3i FAIL|T3e FAIL[^\n]*inbox/)
+// r9: părintele „sl” inexistent = adevărat la citire (sub RLS-ul apelantului, rândul ascuns e tot „inexistent” → adevărat și el: îl prinde
+// specificația, iar citirea copiilor lui p3 de către B)
+raport('M37 părintele „sl” inexistent / invizibil = adevărat la citire', await scenariu('m37', {
+  mutMig: t => inlocuieste(t, `    WHEN 'sl' THEN EXISTS (SELECT 1 FROM public.executie_situatii_plata s WHERE s.id = p_id AND public.fn_executie_proiect_permis(s.proiect_id::bigint, p_scriere))`,
+    `    WHEN 'sl' THEN (p_scriere IS FALSE AND NOT EXISTS (SELECT 1 FROM public.executie_situatii_plata s WHERE s.id = p_id))
+      OR EXISTS (SELECT 1 FROM public.executie_situatii_plata s WHERE s.id = p_id AND public.fn_executie_proiect_permis(s.proiect_id::bigint, p_scriere))`),
+}), false, /T3 FAIL: citire pe executie_(situatii_plata_linii|sl_ajustari)|T3e FAIL[^\n]*parinte_sl/)
 raport('M38 o politică Storage cheamă din nou o funcție internă', await scenariu('m38', {
   mutMig: t => inlocuieste(t, `'OR public.fn_executie_acces_obiect_permis(bucket_id, name, false)'`,
-    `'OR (cardinality(public.fn_executie_acces_obiect_proiecte(bucket_id, name)) < 0) OR public.fn_executie_acces_obiect_permis(bucket_id, name, false)'`),
+    `'OR (cardinality(public.fn_executie_acces_lista(false)) < 0) OR public.fn_executie_acces_obiect_permis(bucket_id, name, false)'`),
 }), false, /politici care cheama functii interne/)
-raport('M39 predicatul Storage spune „există” (pachet al altui proiect = adevărat la citire)', await scenariu('m39', {
-  mutMig: t => inlocuieste(t, `                             ELSE o.ids && public.fn_executie_acces_lista(false) END`,
-    `                             ELSE o.ids && public.fn_executie_acces_lista(false) OR (p_bucket = 'executie-pachete-pdf' AND cardinality(o.ids) > 0) END`),
-}), false, /T3s FAIL|T3e FAIL/)
+// r9: la citire, pachetul nepermis e invizibil (restricția lui); nivelul de scriere e cel care se poate pierde
+raport('M39 Storage pachete: scrierea cere doar lista de citire', await scenariu('m39', {
+  mutMig: t => inlocuieste(t, `                         WHERE k.id = substring(p_name FROM '^([1-9][0-9]{0,17})/')::bigint
+                           AND public.fn_executie_proiect_permis(k.proiect_id::bigint, p_scriere))`,
+    `                         WHERE k.id = substring(p_name FROM '^([1-9][0-9]{0,17})/')::bigint
+                           AND public.fn_executie_proiect_permis(k.proiect_id::bigint, false))`),
+}), false, /T3e FAIL[^\n]*pachete_s/)
+
+// r9: review r8 (ambii recenzenți P1) — predicatele răspund după ce VEDE apelantul; mutanții întorc comportamentul din r8
+const LISTA_DEFINER = `'fn_executie_proiect_permis', 'fn_executie_acces_proiect_seteaza',`
+const caDefiner = (t, cap, nume) => inlocuieste(inlocuieste(t, cap + `\nLANGUAGE sql STABLE SECURITY INVOKER`, cap + `\nLANGUAGE sql STABLE SECURITY DEFINER`),
+  LISTA_DEFINER, LISTA_DEFINER + ` '${nume}',`)
+raport('M40 părintele citit ca proprietar (r8: oracolul „șantier fără proiect” / „pachet” pentru B0)', await scenariu('m40', {
+  mutMig: t => caDefiner(t, 'CREATE FUNCTION public.fn_executie_acces_parinte_permis(p_tip text, p_id bigint, p_scriere boolean) RETURNS boolean', 'fn_executie_acces_parinte_permis'),
+}), false, /T3e FAIL: (oracol de existență pentru b0|cazul literal r8 \(B0)/)
+raport('M41 obiectul Storage căutat ca proprietar (r8: oracolul Inboxului — rând ascuns al altui modul)', await scenariu('m41', {
+  mutMig: t => caDefiner(t, 'CREATE FUNCTION public.fn_executie_acces_obiect_permis(p_bucket text, p_name text, p_scriere boolean) RETURNS boolean', 'fn_executie_acces_obiect_permis'),
+}), false, /T3e FAIL: (oracol de existență pentru b|cazul literal r8 \(B, Inbox)/)
+// P2: poarta din r8 (fără dreptul pe modul): A0 ar ajunge iar la original (amprenta porții recalculată, ca postcondiția / revenirea să nu pice)
+const POARTA_R8 = t => t.replace(`                  WHERE public.fn_executie_nod_drept(\n`, `                  WHERE public.fn_executie_proiect_permis(\n`)
+raport('M42 poarta swap fără dreptul pe modul (ca în r8)', await scenariu('m42', {
+  mutMig: t => {
+    const m = inlocuieste(t, `                  WHERE public.fn_executie_nod_drept(\n`, `                  WHERE public.fn_executie_proiect_permis(\n`)
+    return inlocuieste(m, POARTA_MD5, md5(corp(m, POARTA_CAP)))
+  },
+  mutRev: t => inlocuieste(t, POARTA_MD5, md5(corp(POARTA_R8(citeste(MIG).replace(/\r\n/g, '\n')), POARTA_CAP))),
+}), false, /T3e FAIL[^\n]*(swap|schimbul)/)
+raport('M43 folderul propriu al Inboxului: funcția răspunde și pentru alte foldere', await scenariu('m43', {
+  mutMig: t => inlocuieste(t, `    AND split_part(p_name, '/', 1) = auth.uid()::text AND position('..' IN p_name) = 0\n`, `    AND position('..' IN p_name) = 0\n`),
+}), false, /T3e FAIL/)
+raport('M44 documente-proiect: contul restrâns scrie după rândul vizibil (fișier comun cu un proiect ascuns)', await scenariu('m44', {
+  mutMig: t => inlocuieste(t, `              WHEN p_bucket = 'documente-proiect' AND p_scriere THEN false\n`, ''),
+}), false, /T3e FAIL[^\n]*documente_s/)
 
 // 3) preflight-ul refuză o schemă care ar face restricția falsă sau un inventar incomplet
 raport('P1 vedere cunoscută „definer” peste proiecte', await scenariu('p1', { doarMigrarea: true,
@@ -460,6 +502,14 @@ raport('P24 funcție care numește originalul swap în corp', await scenariu('p2
 raport('P25 inventarul nu mai acoperă un bucket numit de predicatul Storage', await scenariu('p25', { doarMigrarea: true,
   mutMig: t => inlocuieste(t, `  ('bucket', 'documente-proiect', 'tabel', NULL, NULL,`, `  ('bucket', 'documente-proiect', 'exclus', NULL, NULL,`),
 }), false, /bucket-urile acoperite din inventar difera/)
+// r9: predicatele INVOKER au nevoie de dreptul de citire pe coloanele căutate și de politici ale părinților care nu citesc copilul (buclă)
+raport('P26 authenticated nu poate citi proiectul șantierului (predicatul INVOKER ar da 42501)', await scenariu('p26', { doarMigrarea: true,
+  inainte: 'REVOKE SELECT ON public.sites FROM authenticated; GRANT SELECT (id, name) ON public.sites TO authenticated;',
+}), false, /nu poate citi coloanele cautate.*sites\.proiect_id/)
+raport('P27 politica unui părinte citește copilul (buclă la evaluare)', await scenariu('p27', { doarMigrarea: true,
+  inainte: `CREATE POLICY bucla ON public.executie_pachete_lansare AS RESTRICTIVE FOR SELECT TO authenticated
+              USING (EXISTS (SELECT 1 FROM public.executie_tevi t WHERE t.pachet_id = executie_pachete_lansare.id) OR true);`,
+}), false, /bucla[^\n]*executie_pachete_lansare\.bucla -> executie_tevi/)
 
 console.log(esecuri ? `\n${esecuri} scenarii NU s-au comportat cum trebuie` : '\nToate scenariile s-au comportat cum trebuie')
 process.exit(esecuri ? 1 : 0)

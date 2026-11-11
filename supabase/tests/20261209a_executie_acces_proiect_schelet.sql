@@ -192,13 +192,13 @@ CREATE TABLE public.red_proiecte (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 DO $rls$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['profiles', 'user_module_access', 'executie_proiecte', 'sites', 'profile_sites',
+  FOREACH t IN ARRAY ARRAY['profiles', 'user_module_access', 'executie_proiecte', 'profile_sites',
                            'executie_tronsoane', 'executie_documente_contract', 'executie_acte_aditionale', 'executie_ordine_sistare',
                            'executie_ordine_detectate', 'executie_completari_propuse', 'executie_faze_determinante', 'executie_probe_presiune',
                            'executie_situatii_plata', 'executie_situatii_plata_linii', 'executie_sl_ajustari', 'executie_bonuri_consum',
                            'executie_bonuri_consum_linii', 'executie_alocari_personal', 'executie_ture', 'executie_tura_subcontractori',
                            'executie_tura_activitati', 'executie_tura_naveta', 'proiect_unitati', 'proiect_activitati', 'proiect_articole',
-                           'executie_pachete_lansare', 'executie_pachete_documente', 'executie_tevi', 'documente_proiect',
+                           'executie_pachete_documente', 'executie_tevi', 'documente_proiect',
                            'rapoarte_zilnice', 'raport_lucrari', 'raport_distributie_linii',
                            'executie_alerte_ai', 'executie_documente_referinta', 'executie_pachete_cumulat_final', 'executie_pachete_cumulat_tevi',
                            'executie_pachete_exports', 'executie_pachete_sudura_sant', 'proiect_activitate_coduri',
@@ -210,6 +210,30 @@ BEGIN
 END $rls$;
 ALTER TABLE public.raport_zilnic_salvari ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.raport_zilnic_salvari FROM PUBLIC, anon, authenticated, service_role;
+-- r9: două tabele-părinte cu RLS care depinde de MODUL (ca în producție), ca proba anti-oracol (T3e) să aibă rânduri existente, dar
+-- INVIZIBILE unui cont fără modul: pachetele (20261029a: citire owner / executie / ctc, scriere owner / executie) și șantierele (aici:
+-- owner, orice drept pe executie sau alocarea pe șantier — o formă plauzibilă; pe clonă decide RLS-ul real, testul îl măsoară).
+ALTER TABLE public.executie_pachete_lansare ENABLE ROW LEVEL SECURITY;
+CREATE POLICY executie_pachete_lansare_select ON public.executie_pachete_lansare FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = auth.uid() AND u.module IN ('executie', 'ctc')));
+CREATE POLICY executie_pachete_lansare_insert ON public.executie_pachete_lansare FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+              OR EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = auth.uid() AND u.module = 'executie'));
+CREATE POLICY executie_pachete_lansare_update ON public.executie_pachete_lansare FOR UPDATE TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = auth.uid() AND u.module = 'executie'));
+CREATE POLICY executie_pachete_lansare_delete ON public.executie_pachete_lansare FOR DELETE TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = auth.uid() AND u.module = 'executie'));
+ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
+CREATE POLICY sites_citire ON public.sites FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = auth.uid() AND u.module = 'executie')
+         OR EXISTS (SELECT 1 FROM public.profile_sites ps WHERE ps.profile_id = auth.uid() AND ps.site_id = sites.id));
+CREATE POLICY sites_scriere ON public.sites FOR ALL TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE));
 
 -- vederile citite de Execuție (security_invoker, ca în producție pentru cele din repo) + una veche „definer” peste un tabel EXCLUS (nu e treaba migrării)
 CREATE VIEW public.v_executie_dashboard WITH (security_invoker = on) AS SELECT p.id, p.cod_intern, p.nume FROM public.executie_proiecte p;
@@ -264,7 +288,7 @@ INSERT INTO public.profiles (id, name, email, is_owner) VALUES
   ('00000000-0000-4000-8000-000000000003', 'DOI TEST', 'doi@test.invalid', false),
   ('00000000-0000-4000-8000-000000000004', 'TREI TEST', 'trei@test.invalid', false);
 INSERT INTO public.executie_proiecte (cod_intern, nume) VALUES ('CLONA-A', 'Proiect clona A'), ('CLONA-B', 'Proiect clona B'), ('CLONA-C', 'Proiect clona C');
-INSERT INTO public.sites (name, proiect_id) VALUES ('Santier A', 1), ('Santier C', 3), ('Santier fara proiect', NULL);
+INSERT INTO public.sites (name, proiect_id) VALUES ('Santier A', 1), ('Santier C', 3), ('Santier fara proiect', NULL), ('Santier fara proiect 2', NULL);
 INSERT INTO public.executie_tronsoane (proiect_id, cod) VALUES (1, 'TR-A1'), (1, 'TR-A2'), (2, 'TR-B1'), (3, 'TR-C1');
 INSERT INTO public.executie_situatii_plata (proiect_id, nr_situatie) VALUES (1, 1), (2, 1), (3, 1);
 INSERT INTO public.executie_situatii_plata_linii (sl_id, ord) VALUES (1, 1), (1, 2), (2, 1), (3, 1);
@@ -292,7 +316,8 @@ INSERT INTO public.employees (name, site_id) VALUES ('ANGAJAT UNU', 1), ('ANGAJA
 INSERT INTO public.documente_proiect (proiect_id, sursa, gmail_message_id, nume_fisier, storage_path) VALUES
   (1, 'gmail', 'm-a', 'a.pdf', 'clona-a/2026/11/a.pdf'), (3, 'gmail', 'm-c', 'c.pdf', 'clona-c/2026/11/c.pdf');
 INSERT INTO public.executie_ordine_detectate (proiect_id, tip, documente_proiect_id) VALUES (NULL, 'sistare', NULL), (3, 'sistare', 2), (1, 'sistare', 1);
-INSERT INTO public.rapoarte_zilnice (site_id, data, probleme) VALUES (1, '2026-11-02', 'A'), (2, '2026-11-02', 'C'), (3, '2026-11-02', 'fara proiect');
+INSERT INTO public.rapoarte_zilnice (site_id, data, probleme) VALUES (1, '2026-11-02', 'A'), (2, '2026-11-02', 'C'), (3, '2026-11-02', 'fara proiect'),
+  (4, '2026-11-02', 'fara proiect 2');
 INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, unitate_id, cantitate) VALUES (1, 1, 1, 1, 5), (2, 3, 2, 2, 7);
 INSERT INTO public.raport_distributie_linii (raport_id, tabel, nr_crt, unitate_id) VALUES (1, 'conducta', 1, 1), (2, 'conducta', 1, 2), (3, 'conducta', 1, NULL);
 INSERT INTO public.izo_tronson_config (tronson_id) VALUES (1), (4);
