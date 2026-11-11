@@ -30,12 +30,21 @@
 -- fn_executie_acces_inbox_propriu (r9, citea rândul ca proprietar) a IEȘIT. În folderul PROPRIU al Inboxului (`<auth.uid()>/…`) predicatul
 -- Storage nu mai depinde deloc de rândul din coadă: adevărat, la citire și la scriere (decide doar prefixul căii + politicile existente
 -- din 20261103c). Fișierul e urcat de contul însuși (conținutul îl are deja); ce se protejează e LEGĂTURA cu proiectul, adică rândul din
--- ai_documente_inbox, ascuns în continuare de RLS-ul cozii (r5). Niciun predicat al migrării nu mai citește ca proprietar după un argument.
+-- ai_documente_inbox, ascuns în continuare de RLS-ul cozii (r5). Niciun predicat al migrării nu mai citește ca proprietar după un argument
+-- (r12: excepția unică, argumentată, e fn_executie_acces_inbox_propriu_liber — doar calea din folderul apelantului, doar „există rând”).
 -- r11 (review r10 P1, ambii recenzenți: cu ramura r10 și la UPDATE / DELETE, contul restrâns își ștergea fișierul propriu și urca alt
 -- conținut pe aceeași cale, sub un rând din coadă pe care garda 4d nu-l mai vede): în folderul propriu, pentru contul RESTRÂNS, citirea și
 -- încărcarea rămân ca în r10, iar MODIFICAREA și ȘTERGEREA sunt refuzate uniform (al 4-lea argument al predicatului, p_inlocuire, doar pe
 -- politicile UPDATE / DELETE), fără nicio citire. Ștergerile legitime rămân pe calea serverului și a owner-ului. P2: prefixul strict `<uuid>/…`.
 -- Conturile nerestrânse și owner-ul: neschimbat.
+-- r12 (review r11, Jakarinos P1: dacă ALTCINEVA — alt cont, serverul sau panoul la confirmare, src/CitesteOricePanel.jsx — șterge obiectul
+-- și rândul din coadă rămâne, ascuns pentru uploaderul restrâns, garda 4d din 20261103c nu-l mai vedea, iar uploaderul re-ocupa aceeași
+-- cale cu alt conținut): în folderul propriu, pentru contul RESTRÂNS, ÎNCĂRCAREA (INSERT) cere în plus ca NICIUN rând din coadă să nu
+-- refere calea, indiferent dacă rândul îi e vizibil și de proiectul lui — fn_executie_acces_inbox_propriu_liber (DEFINER, boolean, aceeași
+-- potrivire ca garda 4d: fisier_path = name, text = text, aceeași colație, verificată în preflight). Răspunsul depinde DOAR de „există un
+-- rând pe calea mea?” (fapt pe care uploaderul îl știa deja înainte de migrare: rândul lui îi era vizibil), deci e identic pentru un rând
+-- vizibil fără proiect, unul pe un proiect permis și unul pe un proiect nepermis (ascuns); diferă doar pentru o cale cu adevărat liberă,
+-- exact ca înainte de migrare. Citirea și refuzul uniform la modificare / ștergere (r11): neschimbate.
 -- P2 (decizia chat-ului): poarta lui fn_executie_swap_tevi_pozitie cere și dreptul de SCRIERE pe modulul Execuție (fn_executie_nod_drept),
 -- pentru orice cont logat — închide o problemă care exista dinainte (detalii în raportul intern). Testul anti-oracol (T3e):
 -- fiecare funcție cu EXECUTE pentru clienți × fiecare fel de argument × 4 conturi (fără modul, restrâns, restrâns fără modul, editor
@@ -522,6 +531,21 @@ BEGIN
   IF v_lista IS NOT NULL THEN
     RAISE EXCEPTION '20261209a: authenticated nu poate citi coloanele cautate de predicatele INVOKER: %', v_lista;
   END IF;
+  -- r12: fn_executie_acces_inbox_propriu_liber potrivește calea EXACT ca garda 4d din 20261103c (i.fisier_path = objects.name): ambele
+  -- coloane text, aceeași colație, deterministă (o colație nedeterministă ar face „aproape identic” = egal), plus indexul unic al căii
+  -- (un rând per fișier; căutarea e pe index)
+  IF (SELECT count(*) FROM pg_attribute a
+       WHERE NOT a.attisdropped AND a.attnum > 0 AND a.atttypid = 'text'::regtype
+         AND ((a.attrelid = 'public.ai_documente_inbox'::regclass AND a.attname = 'fisier_path')
+              OR (a.attrelid = 'storage.objects'::regclass AND a.attname = 'name'))) <> 2
+     OR (SELECT count(DISTINCT a.attcollation) FROM pg_attribute a
+          WHERE (a.attrelid, a.attname) IN (('public.ai_documente_inbox'::regclass, 'fisier_path'), ('storage.objects'::regclass, 'name'))) <> 1
+     OR EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_collation c ON c.oid = a.attcollation
+                 WHERE a.attrelid = 'public.ai_documente_inbox'::regclass AND a.attname = 'fisier_path' AND c.collisdeterministic IS NOT TRUE)
+     OR (SELECT pg_get_indexdef(to_regclass('public.idx_ai_inbox_fisier_path')))
+          IS DISTINCT FROM 'CREATE UNIQUE INDEX idx_ai_inbox_fisier_path ON public.ai_documente_inbox USING btree (fisier_path)' THEN
+    RAISE EXCEPTION '20261209a: calea Inboxului (ai_documente_inbox.fisier_path / storage.objects.name) are alt tip / alta colatie sau lipseste indexul unic (20261103c)';
+  END IF;
   -- r9: recursivitatea politicilor. Politica tabelului care cheamă predicatul (copilul / storage.objects) face o căutare în tabelul
   -- părinte; dacă o politică a PĂRINTELUI ar citi chiar tabelul care îl cheamă, evaluarea ar intra în buclă. Refuz dacă vreo politică a
   -- unui tabel căutat depinde (pg_depend, nu text) de tabelul care îl caută. 'raport': antetul și, prin el, șantierul (două niveluri).
@@ -783,6 +807,29 @@ BEGIN
    WHERE e.activ IS TRUE
      AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids)));
 END $f$;
+-- r12 (review r11, Jakarinos P1): calea din folderul PROPRIU al Inboxului e liberă = niciun rând din coadă nu o referă, ORICARE ar fi rândul
+-- (vizibil sau ascuns apelantului, fără proiect, pe un proiect permis sau nepermis). O cere predicatul Storage la ÎNCĂRCAREA (INSERT) unui
+-- cont restrâns în folderul propriu: altfel, după ce altcineva (alt cont, serverul, panoul la confirmare) șterge obiectul și rândul rămâne
+-- ascuns pentru uploader, garda 4d din 20261103c (NOT EXISTS sub RLS-ul cozii al apelantului) nu-l mai vede, iar uploaderul re-ocupă calea
+-- cu alt conținut, sub clasificarea veche. Potrivirea = EXACT cea a gărzii 4d (fisier_path = name, text = text, aceeași colație
+-- deterministă, verificată în preflight).
+-- De ce SECURITY DEFINER și de ce EXECUTE pentru authenticated (excepția argumentată de la „niciun predicat nu citește ca proprietar”):
+--   * rândul trebuie văzut independent de RLS-ul cozii (exact rândurile pe care contul restrâns NU le mai vede), deci citirea e ca proprietar;
+--   * o politică Storage se evaluează în numele apelantului, iar predicatul care o cheamă (fn_executie_acces_obiect_permis) e INVOKER, deci
+--     PostgreSQL cere EXECUTE pentru authenticated pe orice funcție din lanț — fără el, ORICE încărcare a contului restrâns ar da 42501;
+--   * apelul direct (RPC) nu spune nimic în plus: răspunde DOAR pentru o cale din folderul apelantului (forma strictă `<auth.uid()>/…`, fără
+--     `..`; orice altă cale = fals, constant), iar acolo un rând îl creează doar apelantul însuși (20261103c, trg_ai_inbox_fisier_legat: un
+--     cont logat leagă rândul doar de propriul folder și propriul fișier; precondiția 3 a lui 20261103c pe datele vechi) și nu îl poate
+--     șterge (ai_inbox_delete = owner). Răspunsul e „există un rând pe calea mea?”, adică exact ce primea contul înainte de migrare la
+--     încărcare (42501 de la garda 4d) și la un SELECT pe rândul propriu (ai_inbox_select: uploadat_de = auth.uid()); NU depinde de proiectul
+--     rândului, de vizibilitate sau de stare (T3e: identic pentru rând vizibil fără proiect / pe proiect permis / pe proiect nepermis).
+--   * Nu întoarce nimic altceva decât boolean și nu scrie nimic. Fără auth.uid() = fals (L08).
+CREATE FUNCTION public.fn_executie_acces_inbox_propriu_liber(p_name text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND p_name IS NOT NULL
+    AND p_name LIKE auth.uid()::text || '/_%' AND position('..' IN p_name) = 0
+    AND NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i WHERE i.fisier_path = p_name)
+$f$;
 -- r8 (review SQL P1-01): predicatul PUBLIC al politicilor Storage, DOAR adevărat / fals despre apelant.
 -- r9 (review r8 P1, ambii recenzenți): SECURITY INVOKER, iar rezolvarea brută (fn_executie_acces_obiect_proiecte, internă în r8) a ieșit:
 -- orice rând căutat după argument (pachetul, documentul proiectului, rândul Inboxului) se caută cu drepturile APELANTULUI (RLS-ul tabelului
@@ -801,6 +848,8 @@ END $f$;
 --     proiect permis sau de unul nepermis. Fără ștergere, o cale ocupată rămâne ocupată: un INSERT pe ea pică pe cheia unică
 --     (bucket_id, name), iar upsert-ul trece prin UPDATE (refuzat), deci conținutul unui fișier existent nu se poate înlocui sub un rând
 --     din coadă pe care garda 4d (20261103c) nu-l mai vede. Ștergerile legitime rămân pe calea serverului (service_role) și a owner-ului.
+--     r12 (review r11 P1): ÎNCĂRCAREA cere în plus o cale fără NICIUN rând în coadă (fn_executie_acces_inbox_propriu_liber, independent de
+--     vizibilitatea și de proiectul rândului): obiectul șters de altcineva, cu rândul rămas, nu se mai re-ocupă. Citirea: adevărat, ca în r10.
 --     Restul îl decid politicile existente ale bucket-ului (20261103c, neatinse). Contul își vede propriul fișier ca înainte de migrare;
 --     legătura cu proiectul (rândul din coadă) rămâne ascunsă de RLS-ul cozii. În afara folderului propriu, DOAR rândul VIZIBIL apelantului cu această
 --     cale (fisier_path e unic), după regula rândului la nivelul cerut. Fără rând vizibil = fals, la fel pentru o cale inexistentă, un rând
@@ -819,7 +868,8 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
               WHEN p_bucket NOT IN ('ai-documente-inbox', 'documente-proiect', 'executie-borderouri', 'executie-contracte', 'executie-pachete-pdf') THEN true
               WHEN position('..' IN p_name) > 0 THEN false
               -- folderul propriu, forma strictă `<uuid>/…` (uuid-ul canonic n-are `%` / `_`, deci LIKE nu are metacaractere din el)
-              WHEN p_bucket = 'ai-documente-inbox' AND p_name LIKE auth.uid()::text || '/_%' THEN NOT p_inlocuire
+              WHEN p_bucket = 'ai-documente-inbox' AND p_name LIKE auth.uid()::text || '/_%' THEN
+                NOT p_inlocuire AND (NOT p_scriere OR public.fn_executie_acces_inbox_propriu_liber(p_name))
               WHEN p_bucket = 'ai-documente-inbox' THEN
                 EXISTS (SELECT 1 FROM public.ai_documente_inbox i
                          WHERE i.fisier_path = p_name
@@ -861,6 +911,7 @@ REVOKE ALL ON FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, b
 REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans_cont(uuid) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_lista_cont(uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_candidati(uuid) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_inbox_propriu_liber(text) FROM PUBLIC, anon, authenticated, service_role;
 -- r6: candidații clasificatorului doar pentru service_role (contul e parametru: un client logat ar putea întreba despre ALT cont)
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_candidati(uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_e_owner() TO authenticated;
@@ -869,6 +920,8 @@ GRANT EXECUTE ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) TO 
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean, boolean) TO authenticated;
+-- r12: cerut de lanțul politică -> predicat INVOKER -> funcție (vezi argumentarea de la definiție); răspunde doar despre folderul apelantului
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_inbox_propriu_liber(text) TO authenticated;
 
 -- RLS pe tabelul nou: owner vede tot, ceilalți doar rândurile proprii (ca UI-ul să știe ce i s-a dat); fără scriere directă (L07)
 ALTER TABLE public.executie_acces_proiect ENABLE ROW LEVEL SECURITY;
@@ -1229,12 +1282,13 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = v_rel AND tgname = 'trg_executie_acces_proiect_prov' AND tgenabled = 'O') THEN
     RAISE EXCEPTION '20261209a post: trigger-ul de proveniență';
   END IF;
-  -- funcțiile noi: exact 17 (r6: + nerestrans_cont, lista_cont, candidati; r8: − parinti, + obiect_permis; r9: − obiect_proiecte,
-  -- − inbox_obiect, + inbox_propriu; r10: − inbox_propriu), DEFINER doar unde trebuie, search_path fix, EXECUTE doar unde trebuie: authenticated EXACT pe
+  -- funcțiile noi: exact 18 (r6: + nerestrans_cont, lista_cont, candidati; r8: − parinti, + obiect_permis; r9: − obiect_proiecte,
+  -- − inbox_obiect, + inbox_propriu; r10: − inbox_propriu; r12: + inbox_propriu_liber), DEFINER doar unde trebuie, search_path fix, EXECUTE doar unde trebuie: authenticated EXACT pe
   -- predicatele publice (boolean, despre apelant) + RPC-ul owner-ului; service_role DOAR pe candidati; nimeni pe cele interne.
   -- r9: predicatele publice care caută un rând după argument (părintele, obiectul Storage) sunt INVOKER (căutarea sub RLS-ul apelantului).
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-       WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')) <> 17
+       WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')) <> 18
+     OR to_regprocedure('public.fn_executie_acces_inbox_propriu_liber(text)') IS NULL
      OR to_regprocedure('public.fn_executie_acces_parinti(text, boolean)') IS NOT NULL
      OR to_regprocedure('public.fn_executie_acces_obiect_proiecte(text, text)') IS NOT NULL
      OR to_regprocedure('public.fn_executie_acces_inbox_obiect(text, boolean)') IS NOT NULL
@@ -1244,14 +1298,16 @@ BEGIN
                    AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
                         OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_executie_acces_e_owner', 'fn_executie_acces_nerestrans', 'fn_executie_acces_lista',
                                                                        'fn_executie_proiect_permis', 'fn_executie_acces_proiect_seteaza',
-                                                                       'fn_executie_acces_inbox_rand', 'fn_executie_acces_candidati'))
+                                                                       'fn_executie_acces_inbox_rand', 'fn_executie_acces_candidati',
+                                                                       'fn_executie_acces_inbox_propriu_liber'))
                         OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
                         OR has_function_privilege('anon', p.oid, 'EXECUTE')
                         OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM (p.proname = 'fn_executie_acces_candidati')
                         OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM
                            (p.proname IN ('fn_executie_acces_e_owner', 'fn_executie_acces_nerestrans', 'fn_executie_proiect_permis',
                                           'fn_executie_acces_parinte_permis', 'fn_executie_acces_inbox_rand',
-                                          'fn_executie_acces_obiect_permis', 'fn_executie_acces_proiect_seteaza')))) THEN
+                                          'fn_executie_acces_obiect_permis', 'fn_executie_acces_inbox_propriu_liber',
+                                          'fn_executie_acces_proiect_seteaza')))) THEN
     RAISE EXCEPTION '20261209a post: functii noi (definer / search_path / EXECUTE)';
   END IF;
   -- r8 (review SQL P1-01 / P1-02), regula GENERALĂ, pe catalog (nu pe lista de mai sus): o funcție a migrării (orice fn_executie_acces_%,

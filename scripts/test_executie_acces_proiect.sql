@@ -32,6 +32,11 @@
 --   excepția din T3e a ieșit (folderul propriu e verificat ca oricare altul: invizibil = inexistent); rânduri de probă noi — documentul lui B
 --   pe p1 și un fișier al lui B FĂRĂ rând; T3f = cazul literal (a) cale inexistentă, (b) fișier propriu cu rând pe un proiect nepermis,
 --   (c) cu rând pe un proiect permis, (d) fără rând: citirea dă același rezultat în toate patru; scrierea comparată înainte / după.
+-- r12 (review r11, Jakarinos P1: obiectul șters de altcineva, rândul rămas ascuns → uploaderul restrâns re-ocupa calea): T0d — owner-ul
+--   (ca panoul la confirmare, src/CitesteOricePanel.jsx) și serverul șterg obiectele unor documente ale lui B, rândul rămâne (fără proiect /
+--   p1 / p3); T3f (e)–(i): încărcarea pe aceeași cale = refuz ÎNAINTE și DUPĂ migrare, identic pe rând vizibil / permis / ascuns, reușită
+--   doar pe o cale fără rând (și pe una „aproape identică”); T3e: fn_executie_acces_inbox_propriu_liber + încărcarea în folderul propriu
+--   au ca oracol „există rând?” (ca postgres), nu vizibilitatea.
 -- NU presupune date reale: ia primul owner, primele 3 profiluri non-owner și cele 3 proiecte cu cele mai multe tabele acoperite cu date
 -- (dacă clona are doar 2, al treilea se creează în tranzacție), le leagă DOAR în tranzacție și scrie date FICTIVE (T-ACC*, TA-*, test-acces/…,
 -- NOD-TEST-ACCES, rapoarte pe 2001-01-01 / 1990–1998, mesajul TEST-ACCES-1).
@@ -308,7 +313,9 @@ CREATE TEMP TABLE t_ins_sql (tabel text, n integer, sql text, PRIMARY KEY (tabel
 CREATE TEMP TABLE t_proba_motiv (tabel text, n integer, motiv text, PRIMARY KEY (tabel, n));
 CREATE TEMP TABLE t_ib (k text PRIMARY KEY, id bigint, cale text, motiv text);
 CREATE TEMP TABLE t_up (k text PRIMARY KEY, n integer, sql text);
-GRANT SELECT ON t_most, t_ins_sql, t_ib, t_up TO authenticated, anon, service_role;
+-- r12: rândurile lui B al căror obiect îl șterge ALTCINEVA (T0d); separat de t_ib (amprenta și T3i rămân pe probele de până acum)
+CREATE TEMP TABLE t_ib_sters (k text PRIMARY KEY, id bigint, cale text, motiv text, sters text);
+GRANT SELECT ON t_most, t_ins_sql, t_ib, t_up, t_ib_sters TO authenticated, anon, service_role;
 DO $t$
 DECLARE own uuid; ids uuid[]; pr bigint[]; v_cols text; p3 bigint; n integer; j integer; r record; v_ct text; v_val text; v_src text;
   v_are boolean; v_trecere integer; n_probe integer := 0; v_sql text; v_site bigint;
@@ -516,6 +523,20 @@ BEGIN
   v_ct := pg_temp.t_obiect_nou('ai-documente-inbox', v_val, pg_temp.t_g('b')::uuid);
   INSERT INTO t_ib VALUES ('orfan_al_lui_b', NULL, v_val, v_ct);
   IF v_ct NOT LIKE 'OK %' THEN PERFORM pg_temp.t_neprobat('fișierul fără rând al lui B: ' || left(v_ct, 120)); END IF;
+  -- r12 (review r11 P1): documente ale lui B (rând + fișier, ca după un upload normal) al căror OBIECT îl șterge mai jos altcineva (T0d),
+  -- rândul rămânând: fără proiect (vizibil lui B și după restrângere), pe p1 (permis), pe p3 (ascuns după restrângere) — de două ori,
+  -- o dată pentru owner (panoul la confirmare), o dată pentru server
+  FOR r IN SELECT * FROM (VALUES ('sters_nul', 0), ('sters_p1', 1), ('sters_p3_owner', 3), ('sters_p3_server', 3)) x(k, n) LOOP
+    v_val := pg_temp.t_g('b') || '/test-acces-' || r.k || '-' || gen_random_uuid() || '.pdf';
+    v_sql := pg_temp.t_sql_proba('public.ai_documente_inbox'::regclass, 'entitate_id', CASE WHEN r.n > 0 THEN pr[r.n]::text ELSE '' END, v_src,
+               jsonb_build_object('modul_tinta', '''executie''::text', 'uploadat_de', quote_literal(pg_temp.t_g('b')) || '::uuid',
+                                  'fisier_path', quote_literal(v_val) || '::text')
+               || CASE WHEN v_src IS NULL THEN jsonb_build_object('status', '''clasificat''::text') ELSE '{}'::jsonb END);
+    v_ct := pg_temp.t_stare(v_sql);
+    IF v_ct = 'OK 1' THEN v_ct := pg_temp.t_obiect_nou('ai-documente-inbox', v_val, pg_temp.t_g('b')::uuid); END IF;
+    INSERT INTO t_ib_sters VALUES (r.k, (SELECT i.id FROM public.ai_documente_inbox i WHERE i.fisier_path = v_val), v_val, v_ct, NULL);
+    IF v_ct NOT LIKE 'OK %' THEN PERFORM pg_temp.t_neprobat('rândul / fișierul de probă r12 (' || r.k || '): ' || left(v_ct, 140)); END IF;
+  END LOOP;
   -- căile cazului literal din T3f: (a) inexistentă, (b) rând pe p3, (c) rând pe p1, (d) fără rând — toate în folderul lui B
   PERFORM set_config('tacc.propriu_cai', jsonb_strip_nulls(jsonb_build_object(
     'a', pg_temp.t_g('b') || '/test-acces-propriu-inexistent-' || gen_random_uuid() || '.pdf',
@@ -619,6 +640,11 @@ CREATE FUNCTION pg_temp.t_norm(p text) RETURNS text LANGUAGE sql IMMUTABLE AS $h
   SELECT CASE WHEN p IS NULL OR p LIKE 'OK %' OR position(' ' IN p) = 0 THEN p
               ELSE split_part(p, ' ', 1) || ' ' || regexp_replace(substr(p, position(' ' IN p) + 1), '[0-9]+', '#', 'g') END
 $h$;
+-- r12 (T3f): refuzul unei încărcări vine fie de la politica PERMISSIVE din 20261103c (mesaj fără nume), fie de la cea RESTRICTIVĂ a
+-- migrării (PostgreSQL pune numele politicii restrictive în mesaj); comparația „ascuns = vizibil” ignoră DOAR acest nume
+CREATE FUNCTION pg_temp.t_fara_pol(p text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT replace(p, 'row-level security policy "executie_acces_obiect_adauga" for table', 'row-level security policy for table')
+$h$;
 -- AMPRENTA apelantului curent: tot ce vede și tot ce poate scrie, pe toate probele
 CREATE FUNCTION pg_temp.t_amprenta() RETURNS jsonb LANGUAGE plpgsql AS $h$
 DECLARE r record; j integer; sr jsonb := '{}'::jsonb; sd jsonb := '{}'::jsonb; ir jsonb := '{}'::jsonb; idf jsonb := '{}'::jsonb; up jsonb := '{}'::jsonb; u record;
@@ -653,8 +679,57 @@ GRANT EXECUTE ON FUNCTION pg_temp.t_ca(uuid, text), pg_temp.t_g(text), pg_temp.t
   pg_temp.t_e_garda(text), pg_temp.t_e_rls(text), pg_temp.t_eroare(text, text, text, text, text, text), pg_temp.t_neprobat(text),
   pg_temp.t_seteaza(text, boolean, jsonb, jsonb), pg_temp.t_lista(text), pg_temp.t_nul_permis(text), pg_temp.t_dif(jsonb, jsonb),
   pg_temp.t_vede(), pg_temp.t_scrie(text, integer, text), pg_temp.t_ins(text, integer, text), pg_temp.t_vede_obiecte(), pg_temp.t_inbox_stare(),
-  pg_temp.t_norm(text), pg_temp.t_amprenta(), pg_temp.t_raport_salveaza(text, boolean), pg_temp.t_propriu()
+  pg_temp.t_norm(text), pg_temp.t_amprenta(), pg_temp.t_raport_salveaza(text, boolean), pg_temp.t_propriu(), pg_temp.t_fara_pol(text)
   TO authenticated, anon, service_role;
+
+-- ── T0d (r12, review r11 P1 — cazul LITERAL): obiectul unui document al lui B îl șterge ALTCINEVA, rândul din coadă RĂMÂNE:
+--   owner-ul, ca panoul la confirmare (src/CitesteOricePanel.jsx, finalizeInbox: staging-ul se șterge chiar dacă închiderea rândului
+--   pică), și serverul (service_role), ca o curățenie. Totul ÎNAINTE de migrare: referința „înainte” a lui T3f vede deja rândul fără obiect.
+--   storage.allow_delete_query = cum deschide storage-api garda protect_objects_delete (dacă baza o are), doar pe durata ștergerii.
+CREATE FUNCTION pg_temp.t_sterge_sters(p_k text[]) RETURNS void LANGUAGE plpgsql AS $h$
+DECLARE r record; v_vechi text := current_setting('storage.allow_delete_query', true);
+BEGIN
+  PERFORM set_config('storage.allow_delete_query', 'true', true);
+  FOR r IN SELECT * FROM t_ib_sters WHERE k = ANY (p_k) AND id IS NOT NULL ORDER BY k LOOP
+    UPDATE t_ib_sters SET sters = current_user::text || ': ' || pg_temp.t_stare(format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L',
+                                                                                      'ai-documente-inbox', r.cale))
+     WHERE k = r.k;
+  END LOOP;
+  PERFORM set_config('storage.allow_delete_query', coalesce(v_vechi, ''), true);
+END $h$;
+GRANT EXECUTE ON FUNCTION pg_temp.t_sterge_sters(text[]) TO authenticated, service_role;
+GRANT UPDATE ON t_ib_sters TO authenticated, service_role;
+SELECT pg_temp.t_ca(pg_temp.t_g('own')::uuid, 'authenticated');
+SELECT pg_temp.t_sterge_sters(ARRAY['sters_nul', 'sters_p3_owner']);
+SELECT pg_temp.t_ca(NULL, 'postgres');
+SELECT pg_temp.t_ca(NULL, 'service_role');
+SELECT pg_temp.t_sterge_sters(ARRAY['sters_p1', 'sters_p3_server']);
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$
+DECLARE r record; c jsonb := coalesce(pg_temp.t_g('propriu_cai'), '{}')::jsonb; v_lit text;
+BEGIN
+  FOR r IN SELECT t.*, CASE t.k WHEN 'sters_nul' THEN 'e' WHEN 'sters_p1' THEN 'f' WHEN 'sters_p3_owner' THEN 'g' ELSE 'h' END AS lit,
+                  CASE WHEN t.k IN ('sters_p1', 'sters_p3_server') THEN 'service_role: OK 1' ELSE 'authenticated: OK 1' END AS asteptat
+             FROM t_ib_sters t ORDER BY t.k LOOP
+    IF r.id IS NULL OR r.sters IS DISTINCT FROM r.asteptat
+       OR NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i WHERE i.id = r.id AND i.fisier_path = r.cale)
+       OR EXISTS (SELECT 1 FROM storage.objects s WHERE s.bucket_id = 'ai-documente-inbox' AND s.name = r.cale) THEN
+      PERFORM pg_temp.t_neprobat('T0d / T3f r12 (' || r.k || '): rândul rămas fără obiect nu s-a putut pregăti (' || coalesce(r.motiv, '-') || ' / ' || coalesce(r.sters, 'neșters') || ')');
+      CONTINUE;
+    END IF;
+    c := c || jsonb_build_object(r.lit, r.cale);
+  END LOOP;
+  -- (i) o cale „aproape identică” cu (g): același folder, alt caz al literelor, fără rând și fără obiect (potrivirea e EXACTĂ, ca garda 4d)
+  IF c ? 'g' THEN
+    v_lit := replace(c->>'g', '/test-acces-', '/TEST-ACCES-');
+    IF v_lit IS DISTINCT FROM c->>'g' AND NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i WHERE i.fisier_path = v_lit)
+       AND NOT EXISTS (SELECT 1 FROM storage.objects s WHERE s.bucket_id = 'ai-documente-inbox' AND s.name = v_lit) THEN
+      c := c || jsonb_build_object('i', v_lit);
+    END IF;
+  END IF;
+  PERFORM set_config('tacc.propriu_cai', c::text, true);
+  RAISE NOTICE 'T0d OK (obiecte șterse de altcineva, rândul rămas: %)', (SELECT string_agg(k || ' ' || coalesce(sters, '-'), '; ' ORDER BY k) FROM t_ib_sters);
+END $t$;
 
 -- ── TB: ÎNAINTE de migrare, ca fiecare cont (RLS-ul de azi): amprenta completă; raportul zilnic ──
 SELECT pg_temp.t_ca(pg_temp.t_g('a')::uuid, 'authenticated');
@@ -1110,84 +1185,125 @@ BEGIN
   RAISE NOTICE 'T3i OK (citiri refuzate %, scrieri refuzate %, documente proprii fără proiect vizibile %)', n_cit, n_scr, n_al;
 END $t$;
 
--- ── T3f (r10, Jakarinos r9 P1 — cazul LITERAL): B (restrâns), folderul PROPRIU al Inboxului: (a) cale inexistentă, (b) fișier propriu cu rând
---   pe p3 (proiect NEPERMIS: rândul nu-i mai e vizibil), (c) fișier propriu cu rând pe p1 (permis), (d) fișier propriu FĂRĂ rând.
---   CITIRE: predicatul Storage (la citire, la încărcare, la modificare / ștergere) = ACELAȘI în toate patru; ce vede B din obiecte = exact
---   ca înainte de migrare.
---   SCRIERE (ștergere, modificare, încărcare pe aceeași cale, upsert, „reurcare” = ștergere + încărcare): comparată înainte / după:
---     (1) (b) „rând ascuns” = (d) „fără rând” pe FIECARE operație (invizibil = inexistent, exact);
---     (2) o pereche de căi care se distinge DUPĂ, dar nu se distingea ÎNAINTE, are neapărat rândul din coadă SAU obiectul (r11) vizibil
---         pentru B pe una și invizibil pe cealaltă (B o deosebește oricum printr-un SELECT): Storage nu adaugă nimic peste ce vede B;
---     (3) r11 (review r10 P1): ștergerea și modificarea = REFUZ UNIFORM după migrare (0 rânduri, identic în a/b/c/d); încărcarea pe o cale
---         nouă (a) = ca înainte și reușește; pe o cale OCUPATĂ (b/c/d) încărcarea, upsert-ul și reurcarea nu reușesc (conținutul unui fișier
---         existent nu se poate înlocui); cazul literal Jakarinos r10 (b: rând pe p3, proiect retras): reurcarea refuzată înainte ȘI după.
+-- ── T3f (r10 / r11 / r12 — cazurile LITERALE din verdictele Jakarinos r9, r10, r11): B (restrâns), folderul PROPRIU al Inboxului:
+--   (a) cale liberă, (b) fișier propriu cu rând pe p3 (proiect NEPERMIS: rândul nu-i mai e vizibil), (c) fișier propriu cu rând pe p1
+--   (permis), (d) fișier propriu FĂRĂ rând; r12 (review r11 P1): obiectul ȘTERS de ALTCINEVA, rândul RĂMAS (T0d) — (e) rând fără proiect
+--   (vizibil), șters de owner ca panoul la confirmare, (f) rând pe p1 (permis), șters de server, (g) rând pe p3 (ascuns), șters de owner,
+--   (h) rând pe p3 (ascuns), șters de server; (i) o cale „aproape identică” cu (g) (alt caz al literelor), liberă.
+--   PREDICATUL Storage: citirea = adevărat și modificarea / ștergerea = fals pe TOATE căile; încărcarea = adevărat DOAR pe căile fără
+--   NICIUN rând în coadă (a, d, i) și fals pe toate cele cu rând (b, c, e, f, g, h), oricare ar fi rândul (vizibil / ascuns, proiectul).
+--   CE VEDE B din obiecte = exact ca înainte de migrare.
+--   SCRIERE (ștergere, modificare, încărcare, upsert, „reurcare” = ștergere + încărcare), înainte / după:
+--     (1) rândul ascuns = rândul vizibil, pe FIECARE operație: b = c (obiect prezent), e = f = g = h (obiect șters). Singura diferență
+--         admisă e numele politicii din mesajul de refuz (42501 de la politica RESTRICTIVĂ a migrării în loc de cea PERMISSIVE din
+--         20261103c) și apare DOAR unde B nu vede rândul — ceea ce B află oricum printr-un SELECT pe coadă;
+--     (2) o pereche care se distinge DUPĂ, dar nu ÎNAINTE, are neapărat obiectul vizibil pe una și nu pe cealaltă (r11: ștergerea refuzată
+--         lasă calea ocupată); r12: vizibilitatea rândului din coadă NU mai e un motiv admis;
+--     (3) ștergerea și modificarea = refuz uniform (OK 0) pe toate căile (r11);
+--     (4) r12: ÎNCĂRCAREA și upsert-ul = EXACT ca înainte de migrare pe FIECARE cale (mesajul normalizat ca la (1)) — refuz pe orice cale
+--         cu rând, inclusiv obiectul șters de altcineva sub rândul ascuns (cazul literal din verdictul r11: înainte 42501, după tot 42501,
+--         nu „OK 1”); reușită pe calea liberă (a) și pe cea „aproape identică” (i); pe o cale cu rând sau ocupată nu reușește nimic;
+--     (5) cazul literal r10 (b): reurcarea refuzată înainte ȘI după; obiectul rămâne pe loc.
 --   Tabelul înainte / după apare în NOTICE (și în PR). ──
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
 DO $t$
 DECLARE v jsonb := pg_temp.t_propriu(); v0 jsonb := coalesce(pg_temp.t_g('pb0'), '{}')::jsonb; c jsonb := coalesce(pg_temp.t_g('propriu_cai'), '{}')::jsonb;
-  op text; x text; y text; k text; pr jsonb := '{}'::jsonb; tabel text := ''; n integer := 0;
+  op text; x text; y text; k text; pr jsonb := '{}'::jsonb; tabel text := ''; n integer := 0; cai text[];
+  -- premisele, din cum au fost create probele (T0c / T0d): [obiect înainte, rând văzut înainte, rând văzut după, rând existent]
+  prem CONSTANT jsonb := '{"a": [0, 0, 0, 0], "b": [1, 1, 0, 1], "c": [1, 1, 1, 1], "d": [1, 0, 0, 0], "e": [0, 1, 1, 1],
+                           "f": [0, 1, 1, 1], "g": [0, 1, 0, 1], "h": [0, 1, 0, 1], "i": [0, 0, 0, 0]}';
 BEGIN
   IF NOT (c ?& ARRAY['a', 'b', 'c', 'd']) THEN
     PERFORM pg_temp.t_neprobat('T3f: lipsește o cale de probă din folderul lui B: ' || c::text);
     RAISE NOTICE 'T3f NEPROBAT (căi lipsă)';
     RETURN;
   END IF;
-  -- premisele: (b), (c), (d) au obiect pe care B îl vedea înainte; rândul lui (b) era vizibil înainte și nu mai e; (c) vizibil; (d) fără rând
-  IF (v0->'a'->>'citeste')::integer <> 0 OR (v0->'b'->>'citeste')::integer <> 1 OR (v0->'c'->>'citeste')::integer <> 1 OR (v0->'d'->>'citeste')::integer <> 1
-     OR (v0->'b'->>'rand')::integer <> 1 OR (v->'b'->>'rand')::integer <> 0 OR (v->'c'->>'rand')::integer <> 1
-     OR (v0->'d'->>'rand')::integer <> 0 OR (v->'d'->>'rand')::integer <> 0 THEN
-    RAISE EXCEPTION 'T3f FAIL: premisele cazului literal (înainte %, după %)', v0, v;
+  IF NOT (c ?& ARRAY['e', 'f', 'g', 'h', 'i']) THEN
+    PERFORM pg_temp.t_neprobat('T3f r12: lipsește un caz „obiect șters de altcineva, rândul rămas” (e–i): ' || c::text);
+    RAISE NOTICE 'T3f r12 NEPROBAT pe cazurile lipsă (restul se verifică)';
   END IF;
-  -- CITIRE: predicatul, același în toate patru: citire și încărcare adevărat, modificare / ștergere fals (r11)
-  FOR k IN SELECT jsonb_object_keys(c) LOOP
+  cai := ARRAY(SELECT jsonb_object_keys(c) ORDER BY 1);
+  FOREACH k IN ARRAY cai LOOP
+    IF NOT prem ? k
+       OR (v0->k->>'citeste')::integer IS DISTINCT FROM (prem->k->>0)::integer
+       OR (v0->k->>'rand')::integer IS DISTINCT FROM (prem->k->>1)::integer
+       OR (v->k->>'rand')::integer IS DISTINCT FROM (prem->k->>2)::integer THEN
+      RAISE EXCEPTION 'T3f FAIL: premisele cazului % (înainte %, după %)', k, v0->k, v->k;
+    END IF;
+  END LOOP;
+  -- PREDICATUL: citire adevărat; încărcare = „niciun rând pe cale” (independent de vizibilitate / proiect); modificare / ștergere fals;
+  -- funcția gărzii r12, chemată direct, dă exact același „niciun rând”
+  FOREACH k IN ARRAY cai LOOP
     pr := pr || jsonb_build_object(k, jsonb_build_array(public.fn_executie_acces_obiect_permis('ai-documente-inbox', c->>k, false),
                                                         public.fn_executie_acces_obiect_permis('ai-documente-inbox', c->>k, true),
-                                                        public.fn_executie_acces_obiect_permis('ai-documente-inbox', c->>k, true, true)));
+                                                        public.fn_executie_acces_obiect_permis('ai-documente-inbox', c->>k, true, true),
+                                                        public.fn_executie_acces_inbox_propriu_liber(c->>k)));
+    IF pr->k IS DISTINCT FROM jsonb_build_array(true, prem->k->>3 = '0', false, prem->k->>3 = '0') THEN
+      RAISE EXCEPTION 'T3f FAIL: predicatul Storage în folderul propriu pe % = % (așteptat [citire, încărcare, înlocuire, cale liberă] = [true, %, false, %])',
+        k, pr->k, prem->k->>3 = '0', prem->k->>3 = '0';
+    END IF;
   END LOOP;
-  IF (SELECT count(DISTINCT pr->k2) FROM unnest(ARRAY['a', 'b', 'c', 'd']) k2) <> 1 OR pr->'a' IS DISTINCT FROM '[true, true, false]'::jsonb THEN
-    RAISE EXCEPTION 'T3f FAIL: predicatul Storage în folderul propriu diferă între cazuri (a/b/c/d): %', pr;
-  END IF;
   -- ce vede B din obiecte = ca înainte
-  FOREACH k IN ARRAY ARRAY['a', 'b', 'c', 'd'] LOOP
+  FOREACH k IN ARRAY cai LOOP
     IF v->k->'citeste' IS DISTINCT FROM v0->k->'citeste' THEN RAISE EXCEPTION 'T3f FAIL: citirea obiectului (%): după % / înainte %', k, v->k->'citeste', v0->k->'citeste'; END IF;
   END LOOP;
   FOREACH op IN ARRAY ARRAY['sterge', 'modifica', 'urca', 'upsert', 'reurca'] LOOP
-    -- (1) rând ascuns = fără rând
-    IF v->'b'->op IS DISTINCT FROM v->'d'->op THEN
-      RAISE EXCEPTION 'T3f FAIL: % — rândul ascuns (b: %) se deosebește de lipsa rândului (d: %)', op, v->'b'->>op, v->'d'->>op;
-    END IF;
-    -- (2) deosebirile noi urmează doar ce VEDE B: rândul din coadă sau (r11) obiectul propriu — o cale ocupată (B vede obiectul) nu se mai
-    --     poate elibera prin ștergere, deci se deosebește de una liberă la reurcare; B le deosebește oricum printr-un SELECT pe obiecte
-    FOREACH x IN ARRAY ARRAY['a', 'b', 'c', 'd'] LOOP
-      FOREACH y IN ARRAY ARRAY['a', 'b', 'c', 'd'] LOOP
+    -- (1) rândul ascuns = rândul vizibil (mesajul fără numele politicii), pe fiecare pereche prezentă
+    FOREACH x IN ARRAY ARRAY['b:c', 'e:f', 'e:g', 'e:h', 'f:g', 'f:h', 'g:h'] LOOP
+      CONTINUE WHEN NOT (c ? split_part(x, ':', 1) AND c ? split_part(x, ':', 2));
+      IF pg_temp.t_fara_pol(v->split_part(x, ':', 1)->>op) IS DISTINCT FROM pg_temp.t_fara_pol(v->split_part(x, ':', 2)->>op) THEN
+        RAISE EXCEPTION 'T3f FAIL: % — rândul ascuns / vizibil se deosebesc (%: % / %)', op, x, v->split_part(x, ':', 1)->>op, v->split_part(x, ':', 2)->>op;
+      END IF;
+    END LOOP;
+    FOREACH k IN ARRAY cai LOOP
+      -- (1) numele politicii restrictive apare DOAR pe o cale cu rând pe care B nu-l vede (b, g, h)
+      IF position('"executie_acces_' IN coalesce(v->k->>op, '')) > 0 AND NOT (prem->k->>2 = '0' AND prem->k->>3 = '1') THEN
+        RAISE EXCEPTION 'T3f FAIL: % pe % — refuzul vine de la politica migrării deși B vede rândul / nu există rând: %', op, k, v->k->>op;
+      END IF;
+      -- (3) r11: ștergerea și modificarea: refuz uniform (niciun rând atins), pe toate căile
+      IF op IN ('sterge', 'modifica') AND v->k->>op IS DISTINCT FROM 'OK 0' THEN
+        RAISE EXCEPTION 'T3f FAIL: % pe % după migrare = % (așteptat refuz uniform, OK 0)', op, k, v->k->>op;
+      END IF;
+      -- (4) r12: încărcarea și upsert-ul = exact ca înainte, pe fiecare cale; reurcarea = ca înainte pe căile cu rând
+      IF (op IN ('urca', 'upsert') OR (op = 'reurca' AND prem->k->>3 = '1'))
+         AND pg_temp.t_fara_pol(v->k->>op) IS DISTINCT FROM v0->k->>op THEN
+        RAISE EXCEPTION 'T3f FAIL: % pe % — după migrare % / înainte % (încărcarea trebuie să fie exact ca înainte)', op, k, v->k->>op, v0->k->>op;
+      END IF;
+      -- (4) pe o cale cu rând sau ocupată (b–h) nicio operație de scriere nu reușește după migrare (conținutul / legătura nu se înlocuiesc)
+      IF op IN ('urca', 'upsert', 'reurca') AND (prem->k->>0 = '1' OR prem->k->>3 = '1') AND v->k->>op LIKE 'OK %' THEN
+        RAISE EXCEPTION 'T3f FAIL: % pe calea ocupată / cu rând % reușește după migrare (%)', op, k, v->k->>op;
+      END IF;
+    END LOOP;
+    -- (2) deosebirile noi urmează doar ce VEDE B din obiecte (r11: o cale ocupată nu se mai poate elibera prin ștergere, deci se
+    --     deosebește de una liberă la reurcare); r12: rândul din coadă nu mai e un motiv
+    FOREACH x IN ARRAY cai LOOP
+      FOREACH y IN ARRAY cai LOOP
         CONTINUE WHEN x >= y;
-        IF v->x->op IS DISTINCT FROM v->y->op AND v0->x->op IS NOT DISTINCT FROM v0->y->op
-           AND v->x->'rand' IS NOT DISTINCT FROM v->y->'rand' AND v->x->'citeste' IS NOT DISTINCT FROM v->y->'citeste' THEN
-          RAISE EXCEPTION 'T3f FAIL: % — % și % se deosebesc după migrare (% / %), nu și înainte (%), deși B vede la fel rândul din coadă și obiectul', op, x, y,
+        IF pg_temp.t_fara_pol(v->x->>op) IS DISTINCT FROM pg_temp.t_fara_pol(v->y->>op) AND v0->x->op IS NOT DISTINCT FROM v0->y->op
+           AND v->x->'citeste' IS NOT DISTINCT FROM v->y->'citeste' THEN
+          RAISE EXCEPTION 'T3f FAIL: % — % și % se deosebesc după migrare (% / %), nu și înainte (%), deși B vede la fel obiectul', op, x, y,
             v->x->>op, v->y->>op, v0->x->>op;
         END IF;
         n := n + 1;
       END LOOP;
     END LOOP;
-    -- (3) r11: ștergerea și modificarea: refuz uniform (niciun rând atins), pe toate căile
-    IF op IN ('sterge', 'modifica') THEN
-      FOREACH k IN ARRAY ARRAY['a', 'b', 'c', 'd'] LOOP
-        IF v->k->>op IS DISTINCT FROM 'OK 0' THEN RAISE EXCEPTION 'T3f FAIL: % pe % după migrare = % (așteptat refuz uniform, OK 0)', op, k, v->k->>op; END IF;
-      END LOOP;
-    END IF;
-    -- (3) r11: pe o cale ocupată (b/c/d) nicio operație de scriere nu reușește după migrare (conținutul existent nu se înlocuiește)
-    IF op IN ('urca', 'upsert', 'reurca') THEN
-      FOREACH k IN ARRAY ARRAY['b', 'c', 'd'] LOOP
-        IF v->k->>op LIKE 'OK %' THEN RAISE EXCEPTION 'T3f FAIL: % pe calea ocupată % reușește după migrare (%)', op, k, v->k->>op; END IF;
-      END LOOP;
-    END IF;
-    tabel := tabel || format(' | %s: înainte a=%s b=%s c=%s d=%s ; după a=%s b=%s c=%s d=%s', op,
-      v0->'a'->>op, v0->'b'->>op, v0->'c'->>op, v0->'d'->>op, v->'a'->>op, v->'b'->>op, v->'c'->>op, v->'d'->>op);
+    tabel := tabel || ' | ' || op || ': ' || (SELECT string_agg(format('%s=%s→%s', q, v0->q->>op, v->q->>op), ' ' ORDER BY q) FROM unnest(cai) q);
   END LOOP;
-  -- (3) încărcarea pe o cale nouă: ca înainte și reușește (calea legitimă a panoului, L20)
-  IF v->'a'->>'urca' IS DISTINCT FROM 'OK 1' OR v0->'a'->>'urca' IS DISTINCT FROM 'OK 1' THEN
-    RAISE EXCEPTION 'T3f FAIL: încărcarea pe o cale nouă din folderul propriu: după % / înainte %', v->'a'->>'urca', v0->'a'->>'urca';
-  END IF;
+  -- (4) încărcarea pe o cale nouă (a) și pe cea „aproape identică” (i): ca înainte și reușește (calea legitimă a panoului, L20)
+  FOREACH k IN ARRAY ARRAY['a', 'i'] LOOP
+    CONTINUE WHEN NOT c ? k;
+    IF v->k->>'urca' IS DISTINCT FROM 'OK 1' OR v0->k->>'urca' IS DISTINCT FROM 'OK 1' THEN
+      RAISE EXCEPTION 'T3f FAIL: încărcarea pe o cale liberă din folderul propriu (%): după % / înainte %', k, v->k->>'urca', v0->k->>'urca';
+    END IF;
+  END LOOP;
+  -- cazul LITERAL din verdictul Jakarinos r11: obiectul șters de altcineva (owner = panoul / serverul), rândul rămas ascuns (g, h) —
+  -- re-urcarea pe aceeași cale = refuz 42501 ÎNAINTE și DUPĂ migrare (r11 dădea „OK 1” după); la fel pe rândul vizibil (e, f)
+  FOREACH k IN ARRAY ARRAY['e', 'f', 'g', 'h'] LOOP
+    CONTINUE WHEN NOT c ? k;
+    IF coalesce(v0->k->>'urca', '') NOT LIKE '42501 %' OR coalesce(v->k->>'urca', '') NOT LIKE '42501 %' THEN
+      RAISE EXCEPTION 'T3f FAIL: cazul literal r11 (%: obiect șters de altcineva, rândul rămas): înainte % / după %', k, v0->k->>'urca', v->k->>'urca';
+    END IF;
+  END LOOP;
   -- cazul LITERAL din verdictul Jakarinos r10: după retragerea accesului la proiect (b: rândul pe p3, ascuns), ștergere + re-urcare pe
   -- aceeași cale = refuz ÎNAINTE și DUPĂ migrare; obiectul rămâne pe loc (B îl vede în continuare, tot ca înainte)
   IF v0->'b'->>'reurca' LIKE 'OK %' OR v->'b'->>'reurca' LIKE 'OK %' OR coalesce(v->'b'->>'reurca', '') = ''
@@ -1195,7 +1311,8 @@ BEGIN
     RAISE EXCEPTION 'T3f FAIL: cazul literal r10 (ștergere + re-urcare sub rândul ascuns): înainte % / după %; upsert înainte % / după %',
       v0->'b'->>'reurca', v->'b'->>'reurca', v0->'b'->>'upsert', v->'b'->>'upsert';
   END IF;
-  RAISE NOTICE 'T3f OK (folderul propriu al lui B: predicat identic a/b/c/d = %, citirea obiectelor ca înainte; % perechi comparate%)', pr->'a', n, tabel;
+  RAISE NOTICE 'T3f OK (folderul propriu al lui B, căi %: predicat [citire, încărcare, înlocuire, cale liberă] %, citirea obiectelor ca înainte; % perechi comparate%)',
+    cai, pr, n, tabel;
 END $t$;
 
 -- ── T3c: clasificarea (r6, review r5 P1 — dispariția documentului propriu era ea însăși un semnal de existență), simulată ca edge-ul
@@ -1342,6 +1459,8 @@ END $t$;
 --   (c) cazurile LITERALE din verdictele r8: B0 + șantier / raport fără proiect; B + rândul Inboxului al altui modul / nedecis, în afara
 --       folderului propriu; A0 + schimbul de țevi. r10 (verdictul r9): B / B0, folderul propriu — cale inexistentă, fișier propriu cu rând pe
 --       un proiect nepermis / permis, fără rând: același predicat (la citire și la scriere) în toate (detaliat, cu scrierea, în T3f).
+--       r12 (verdictul r11): la ÎNCĂRCARE în folderul propriu (predicatul + fn_executie_acces_inbox_propriu_liber) — rând vizibil fără
+--       proiect = rând pe proiect permis = rând pe proiect nepermis (ascuns) = fals, cu sau fără obiect; adevărat doar fără niciun rând.
 --   (d) funcțiile interne = 42501 pentru toți; rezolvările brute din r8 nu mai există; RPC-ul owner-ului = același 42501.
 SELECT pg_temp.t_ca(NULL, 'postgres');
 CREATE FUNCTION pg_temp.t_val(p_sql text) RETURNS text LANGUAGE plpgsql AS $h$
@@ -1390,9 +1509,17 @@ BEGIN
          'b_p1', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'p1_al_lui_b' AND t_ib.id IS NOT NULL),
          'b_nul', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'nul_al_lui_b' AND t_ib.id IS NOT NULL),
          'b_orfan', (SELECT t_ib.cale FROM t_ib WHERE t_ib.k = 'orfan_al_lui_b' AND t_ib.motiv LIKE 'OK %'),
+         -- r12: rândurile lui B al căror obiect l-a șters altcineva (T0d): fără proiect, pe p1, pe p3 (owner / server)
+         'b_sters_nul', (SELECT t.cale FROM t_ib_sters t WHERE t.k = 'sters_nul' AND t.id IS NOT NULL),
+         'b_sters_p1', (SELECT t.cale FROM t_ib_sters t WHERE t.k = 'sters_p1' AND t.id IS NOT NULL),
+         'b_sters_p3o', (SELECT t.cale FROM t_ib_sters t WHERE t.k = 'sters_p3_owner' AND t.id IS NOT NULL),
+         'b_sters_p3s', (SELECT t.cale FROM t_ib_sters t WHERE t.k = 'sters_p3_server' AND t.id IS NOT NULL),
          'inex_a', pg_temp.t_g('a') || '/test-acces-inexistent-' || gen_random_uuid() || '.pdf',
          'inex_b', pg_temp.t_g('b') || '/test-acces-inexistent-' || gen_random_uuid() || '.pdf',
          'inex_x', gen_random_uuid() || '/test-acces-inexistent-' || gen_random_uuid() || '.pdf')));
+  -- r12: oracolul independent pentru încărcarea în folderul propriu = „există un rând pe cale?”, măsurat ca postgres (fără RLS)
+  v := v || jsonb_build_object('inbox_are_rand', (SELECT jsonb_object_agg(q.key, EXISTS (SELECT 1 FROM public.ai_documente_inbox i WHERE i.fisier_path = q.value))
+                                                    FROM jsonb_each_text(v->'inbox') q));
   -- țevile: perechi din același pachet (T0c); inexistente
   v := v || jsonb_build_object('tevi', jsonb_strip_nulls(jsonb_build_object('p1', pg_temp.t_g('tevi1'), 'p3', pg_temp.t_g('tevi3'), 'inex', '-1,-2')));
   PERFORM set_config('tacc.e_ids', v::text, true);
@@ -1420,6 +1547,8 @@ INSERT INTO t_exp_fn VALUES
   ('inbox_s', 'inbox', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''ai-documente-inbox'', %1$s, true)'),
   -- r11: modificarea / ștergerea (al 4-lea argument, politicile UPDATE / DELETE)
   ('inbox_m', 'inbox', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''ai-documente-inbox'', %1$s, true, true)'),
+  -- r12: garda încărcării în folderul propriu (EXECUTE pentru authenticated, cerut de lanțul politicii)
+  ('inbox_liber', 'inbox', 'val', 'SELECT public.fn_executie_acces_inbox_propriu_liber(%1$s)'),
   ('contracte_m', 'proiect', 'val', 'SELECT public.fn_executie_acces_obiect_permis(''executie-contracte'', ''pccvi/'' || %1$s || ''/x.pdf'', true, true)'),
   ('swap', 'tevi', 'proba', 'SELECT public.fn_executie_swap_tevi_pozitie(split_part(%1$s, '','', 1)::bigint, split_part(%1$s, '','', 2)::bigint)');
 INSERT INTO t_exp_fn SELECT 'parinte_' || t || '_' || c, t, 'val', format('SELECT public.fn_executie_acces_parinte_permis(%L, %%1$s::bigint, %s)', t, CASE c WHEN 's' THEN 'true' ELSE 'false' END)
@@ -1537,8 +1666,11 @@ BEGIN
         v_fold := CASE WHEN f.fel <> 'inbox' THEN NULL WHEN et LIKE 'a\_%' OR et = 'inex_a' THEN 'a' WHEN et LIKE 'b\_%' OR et = 'inex_b' THEN 'b' ELSE 'x' END;
         v_propriu := CASE WHEN cont IN ('a', 'a0') THEN 'a' ELSE 'b' END;
         ref := CASE WHEN f.fel = 'inbox' THEN 'inex_' || v_fold ELSE 'inex' END;
-        -- (a) ORACOL: existent + invizibil = inexistent (exact), pe TOATE argumentele (r10: fără excepția folderului propriu din r9)
-        IF et NOT LIKE 'inex%' AND vz = 0 THEN
+        -- (a) ORACOL: existent + invizibil = inexistent (exact), pe TOATE argumentele (r10: fără excepția folderului propriu din r9).
+        --     r12, singura excepție: ÎNCĂRCAREA în folderul PROPRIU (inbox_s / inbox_liber) răspunde „există un rând pe calea mea?”,
+        --     independent de vizibilitate — exact ca înainte de migrare (garda 4d vedea atunci toate rândurile proprii); acolo oracolul
+        --     independent e inbox_are_rand (ca postgres), verificat la (b), iar (c) cere același răspuns pe rând vizibil / permis / ascuns
+        IF et NOT LIKE 'inex%' AND vz = 0 AND NOT (f.cheie IN ('inbox_s', 'inbox_liber') AND v_fold = v_propriu) THEN
           IF rez IS DISTINCT FROM m->'r'->>(f.cheie || '|' || ref) THEN
             RAISE EXCEPTION 'T3e FAIL: oracol de existență pentru % pe %(%): existent invizibil = % / inexistent (%) = %', cont, f.cheie, et, rez, ref, m->'r'->>(f.cheie || '|' || ref);
           END IF;
@@ -1570,13 +1702,19 @@ BEGIN
                                                               AND (ps.valid_until IS NULL OR ps.valid_until >= (now() AT TIME ZONE 'Europe/Bucharest')::date))
                                                    AND (cont = 'a0' OR et IN ('p1', 'p2')))::text
                       ELSE 'false' END;
+        ELSIF f.cheie = 'inbox_liber' THEN
+          -- r12: pentru ORICE cont, doar în folderul propriu: adevărat = niciun rând pe cale (ca postgres); orice altă cale = fals, constant
+          ast := (v_fold = v_propriu AND (e->'inbox_are_rand'->>et)::boolean IS FALSE)::text;
         ELSIF f.cheie = ANY (pred) OR f.cheie LIKE 'parinte\_%' THEN
           IF cont IN ('a', 'a0') THEN ast := 'true';
           ELSIF f.fel = 'inbox' AND v_fold = v_propriu THEN
             -- r10: folderul propriu al contului restrâns = adevărat pentru ORICE cale (inexistentă, fără rând, rând pe p1 / pe p3 / fără proiect),
             -- la citire și la scriere: răspunsul nu depinde de rândul din coadă (restul îl decid politicile 20261103c, T3f)
             -- r11: modificarea / ștergerea = fals pentru ORICE cale din folderul propriu (tot fără să depindă de rând)
-            ast := (f.cheie <> 'inbox_m')::text;
+            -- r12: încărcarea = adevărat doar pe o cale fără NICIUN rând (ca postgres), oricare ar fi rândul
+            ast := CASE f.cheie WHEN 'inbox_m' THEN 'false'
+                                WHEN 'inbox_s' THEN ((e->'inbox_are_rand'->>et)::boolean IS FALSE)::text
+                                ELSE 'true' END;
           ELSIF et LIKE 'inex%' OR vz = 0 THEN ast := 'false';
           ELSIF f.cheie = 'documente_s' THEN ast := 'false';
           ELSIF f.cheie LIKE '%\_s' OR f.cheie LIKE '%\_m' THEN ast := (et IN ('p1', 'nul', 'nul2', 'a_p1', 'a_hr', 'a_nedecis'))::text;
@@ -1593,7 +1731,8 @@ BEGIN
   END LOOP;
   -- argumentele fără rând de probă: NEPROBAT, cu numele lor
   FOR f IN SELECT DISTINCT fel FROM t_exp_fn LOOP
-    FOREACH et IN ARRAY CASE f.fel WHEN 'inbox' THEN ARRAY['a_p1', 'a_p2', 'a_p3', 'a_hr', 'a_nedecis', 'b_p3', 'b_p1', 'b_nul', 'b_orfan']
+    FOREACH et IN ARRAY CASE f.fel WHEN 'inbox' THEN ARRAY['a_p1', 'a_p2', 'a_p3', 'a_hr', 'a_nedecis', 'b_p3', 'b_p1', 'b_nul', 'b_orfan',
+                                                           'b_sters_nul', 'b_sters_p1', 'b_sters_p3o', 'b_sters_p3s']
                                    WHEN 'site' THEN ARRAY['p1', 'p2', 'p3', 'nul', 'nul2'] WHEN 'raport' THEN ARRAY['p1', 'p2', 'p3', 'nul', 'nul2']
                                    WHEN 'tevi' THEN ARRAY['p1', 'p3'] ELSE ARRAY['p1', 'p2', 'p3'] END LOOP
       IF NOT (e->f.fel) ? et THEN PERFORM pg_temp.t_neprobat('T3e: argument ' || f.fel || '|' || et || ' fără rând de probă'); END IF;
@@ -1629,18 +1768,34 @@ BEGIN
   --   r10, Jakarinos r9 P1: contul restrâns (B și B0), folderul PROPRIU — (a) cale inexistentă, (b) fișier propriu cu rând pe p3 (nepermis,
   --   rândul invizibil), (c) cu rând pe p1 (permis), (d) fără rând: același predicat, la citire și la scriere (adevărat);
   --   r11 (review r10 P1): la modificare / ștergere același predicat în toate patru, FALS
+  --   r12 (review r11 P1): la ÎNCĂRCARE (inbox_s, inbox_liber) răspunsul depinde DOAR de „există un rând pe cale?”: IDENTIC pentru rândul
+  --   vizibil fără proiect (b_nul, b_sters_nul), pe un proiect permis (b_p1, b_sters_p1) și pe unul nepermis, ascuns (b_p3, b_sters_p3o,
+  --   b_sters_p3s) = fals; diferit DOAR pentru o cale fără niciun rând (inex_b, b_orfan) = adevărat — ca înainte de migrare (T3f)
   FOREACH cont IN ARRAY ARRAY['b', 'b0'] LOOP
-    FOREACH k2 IN ARRAY ARRAY['inbox_c', 'inbox_s', 'inbox_m'] LOOP
-      IF NOT ((e->'inbox') ? 'b_p3' AND (e->'inbox') ? 'b_p1' AND (e->'inbox') ? 'b_orfan') THEN
-        PERFORM pg_temp.t_neprobat('T3e literal r9 (' || cont || ', ' || k2 || '): lipsește un fișier de probă al lui B'); CONTINUE;
+    FOREACH k2 IN ARRAY ARRAY['inbox_c', 'inbox_s', 'inbox_m', 'inbox_liber'] LOOP
+      IF NOT ((e->'inbox') ?& ARRAY['b_p3', 'b_p1', 'b_nul', 'b_orfan', 'b_sters_nul', 'b_sters_p1', 'b_sters_p3o', 'b_sters_p3s']) THEN
+        PERFORM pg_temp.t_neprobat('T3e literal r9 / r12 (' || cont || ', ' || k2 || '): lipsește un fișier de probă al lui B'); CONTINUE;
       END IF;
-      IF (toate->cont->'viz'->>'inbox|b_p3')::integer <> 0 THEN
-        PERFORM pg_temp.t_neprobat('T3e literal r9 (' || cont || '): rândul lui B de pe p3 e vizibil pe această bază'); CONTINUE;
+      IF (toate->cont->'viz'->>'inbox|b_p3')::integer <> 0 OR (toate->cont->'viz'->>'inbox|b_sters_p3o')::integer <> 0
+         OR (toate->cont->'viz'->>'inbox|b_sters_p3s')::integer <> 0 OR (toate->cont->'viz'->>'inbox|b_p1')::integer <> 1
+         OR (toate->cont->'viz'->>'inbox|b_sters_p1')::integer <> 1 OR (toate->cont->'viz'->>'inbox|b_sters_nul')::integer <> 1 THEN
+        PERFORM pg_temp.t_neprobat('T3e literal r9 / r12 (' || cont || '): vizibilitatea rândurilor lui B diferă de cea așteptată pe această bază'); CONTINUE;
       END IF;
-      IF (SELECT count(DISTINCT coalesce(toate->cont->'r'->>(k2 || '|' || x), '(lipsă)')) FROM unnest(ARRAY['inex_b', 'b_p3', 'b_p1', 'b_orfan']) x) <> 1
-         OR toate->cont->'r'->>(k2 || '|inex_b') IS DISTINCT FROM (k2 <> 'inbox_m')::text THEN
-        RAISE EXCEPTION 'T3e FAIL: cazul literal r9 (%, %, folderul propriu): inexistent % / rând pe p3 % / rând pe p1 % / fără rând %', cont, k2,
-          toate->cont->'r'->>(k2 || '|inex_b'), toate->cont->'r'->>(k2 || '|b_p3'), toate->cont->'r'->>(k2 || '|b_p1'), toate->cont->'r'->>(k2 || '|b_orfan');
+      IF k2 IN ('inbox_c', 'inbox_m') THEN
+        IF (SELECT count(DISTINCT coalesce(toate->cont->'r'->>(k2 || '|' || x), '(lipsă)'))
+              FROM unnest(ARRAY['inex_b', 'b_p3', 'b_p1', 'b_nul', 'b_orfan', 'b_sters_nul', 'b_sters_p1', 'b_sters_p3o', 'b_sters_p3s']) x) <> 1
+           OR toate->cont->'r'->>(k2 || '|inex_b') IS DISTINCT FROM (k2 <> 'inbox_m')::text THEN
+          RAISE EXCEPTION 'T3e FAIL: cazul literal r9 (%, %, folderul propriu): inexistent % / rând pe p3 % / rând pe p1 % / fără rând %', cont, k2,
+            toate->cont->'r'->>(k2 || '|inex_b'), toate->cont->'r'->>(k2 || '|b_p3'), toate->cont->'r'->>(k2 || '|b_p1'), toate->cont->'r'->>(k2 || '|b_orfan');
+        END IF;
+      ELSIF (SELECT count(DISTINCT coalesce(toate->cont->'r'->>(k2 || '|' || x), '(lipsă)'))
+               FROM unnest(ARRAY['b_p3', 'b_p1', 'b_nul', 'b_sters_nul', 'b_sters_p1', 'b_sters_p3o', 'b_sters_p3s']) x) <> 1
+            OR toate->cont->'r'->>(k2 || '|b_p3') IS DISTINCT FROM 'false'
+            OR toate->cont->'r'->>(k2 || '|inex_b') IS DISTINCT FROM 'true' OR toate->cont->'r'->>(k2 || '|b_orfan') IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'T3e FAIL: cazul literal r12 (%, %, încărcare în folderul propriu): ascuns p3 % / % / % — permis p1 % / % — vizibil fără proiect % / % — fără rând % / %',
+          cont, k2, toate->cont->'r'->>(k2 || '|b_p3'), toate->cont->'r'->>(k2 || '|b_sters_p3o'), toate->cont->'r'->>(k2 || '|b_sters_p3s'),
+          toate->cont->'r'->>(k2 || '|b_p1'), toate->cont->'r'->>(k2 || '|b_sters_p1'), toate->cont->'r'->>(k2 || '|b_nul'), toate->cont->'r'->>(k2 || '|b_sters_nul'),
+          toate->cont->'r'->>(k2 || '|inex_b'), toate->cont->'r'->>(k2 || '|b_orfan');
       END IF;
       n_lit := n_lit + 1;
     END LOOP;
