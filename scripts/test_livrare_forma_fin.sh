@@ -23,7 +23,7 @@ n=$(( $(cat "$FALS_DIR/n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$FALS_DIR/n
 a=""; for x in "$@"; do a="$a ${x##*/}"; case "$x" in *.sql) cp -- "$x" "$FALS_DIR/${n}_${x##*/}" ;; esac; done
 echo "$n:$a" >>"$FALS_DIR/apeluri"
 case "$a" in
-  *reconc.sql*) if [ -e "$FALS_DIR/livrat" ]; then echo 'plafon_test|42||false|1|1'; else echo 'plafon_test|42||false|0|0'; fi ;;
+  *reconc.sql*) if [ -e "$FALS_DIR/livrat" ]; then echo 'forma_test|42||false|1|1'; else echo 'forma_test|42||false|0|0'; fi ;;
   *control_0e.sql*) : ;;
   *) touch "$FALS_DIR/livrat" ;;
 esac
@@ -59,7 +59,7 @@ SHA="$(sha256sum "$MIG" | cut -d' ' -f1)"
 livreaza() { # $1 directorul de captura, restul = optiuni suplimentare
   mkdir "$1"
   FALS_DIR="$1" PSQL_BIN="$TMP/psql_fals" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$MIG" --sha256 "$SHA" \
-    --versiune 20990101000001 --tinta-db plafon_test --tinta-sistem 42 --tinta-host 127.0.0.1 --tinta-port 1 "${@:2}" \
+    --versiune 20990101000001 --tinta-db forma_test --tinta-sistem 42 --tinta-host 127.0.0.1 --tinta-port 1 "${@:2}" \
     >"$1/runner.log" 2>&1 || { cat "$1/runner.log"; fail "runnerul a iesit cu eroare (${*:2})"; }
 }
 
@@ -97,6 +97,13 @@ LIV="$(grep -v 'reconc.sql\|control_0e.sql' "$F/apeluri")"
 [[ "$LIV" == *" -X -q -v ON_ERROR_STOP=1 --single-transaction -f 0_prolog.sql -f 1_pre.sql -f 20990101a_forma_fin.sql -f 3_inreg.sql -h "* ]] \
   || fail "fara: invocarea veche (--single-transaction, 4 fisiere): $LIV"
 ! ls "$F" | grep -q '_00_sesiune.sql\|_9_fin.sql' || fail 'fara: 00_sesiune / 9_fin trimise fara optiune'
-! cat "$F"/*_*.sql | grep -qi 'transaction_timeout\|plafon' || fail 'fara: fisierele trimise mentioneaza plafonul'
+# r13 (harness r15): datele testului (baza tinta, numele si continutul migrarii) NU au voie sa contina cuvintele cautate,
+# altfel verificarea de mai jos raspunde la ele, nu la runner (r15 folosea --tinta-db plafon_test => fals pozitiv in 1_pre).
+! printf '%s\n' forma_test "${MIG##*/}" | cat - "$MIG" | grep -qi 'transaction_timeout\|plafon' \
+  || fail 'proba nefunctionala: datele testului contin cuvintele cautate'
+# Control: aceeasi cautare pe fisierele trimise CU optiune le gaseste (deci cautarea chiar prinde mentiunile plafonului).
+cat "$P"/*_*.sql | grep -qi 'transaction_timeout' && cat "$P"/*_*.sql | grep -qi 'plafon' \
+  || fail 'proba nefunctionala: cautarea nu gaseste plafonul nici in fisierele trimise cu optiune'
+! cat "$F"/*_*.sql | grep -qi 'transaction_timeout\|plafon' || { grep -il 'transaction_timeout\|plafon' "$F"/*_*.sql; fail 'fara: fisierele trimise mentioneaza plafonul'; }
 echo 'FORMA_FARA: psql --single-transaction cu 0_prolog, 1_pre, copia, 3_inreg (ca inainte); nicio mentiune a plafonului'
 echo 'PASS test_livrare_forma_fin: garda finala si COMMIT intr-un singur mesaj (cu plafon); forma veche neschimbata (fara)'
