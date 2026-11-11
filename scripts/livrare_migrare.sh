@@ -44,13 +44,21 @@
 # Utilizare (parola NU pe linia de comandă și nici în chat: ~/.pgpass / PGPASSFILE):
 #   bash scripts/livrare_migrare.sh --migrare supabase/migrations/<nume>.sql --sha256 <hex64> \
 #        --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
-#        --tinta-host <H> --tinta-port <P> [--tinta-proiect <marcaj>] [--user U]
+#        --tinta-host <H> --tinta-port <P> [--tinta-proiect <marcaj>] [--user U] [--plafon-tranzactie-ms N]
 #   Runda 7: aprobarea țintei = db + system_identifier + ENDPOINTUL DE SCRIERE (host:port) [+ proiect]. Pre-verificarea,
 #   tranzacția principală și reconcilierea cer în plus pg_is_in_recovery() = false (o replică fizică are același
 #   system_identifier) ⇒ altfel 22 / refuz. (Runda 9: servicii libpq refuzate, vezi mai jos.)
 #   Runda 9: suportul --service e RETRAS (verificarea noastră nu reproducea selecția libpq a secțiunii) ⇒ --service = refuz 2;
 #   PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR din mediu ⇒ refuz; pre-verificarea cere drept de apel pe pg_control_system().
 #   În loc de --sha256: --aprobare <fișier> cu un rând „<hex64>  <nume>.sql” (formatul sha256sum).
+#   Runda 10 (11.11.2026, PR #892 r12): --plafon-tranzactie-ms <N> (opțional, 100..600000) = plafonul TOTAL al
+#   tranzacției de livrare, armat de PostgreSQL 17 la BEGIN. Runnerul îl trimite DOAR conexiunii livrării, ca parametru
+#   de pornire (PGOPTIONS="-c transaction_timeout=N", sursa 'client', prioritară față de ALTER ROLE/DATABASE … SET), deci
+#   ceasul pornește la BEGIN-ul lui psql --single-transaction cu exact valoarea aprobată, indiferent ce aveau rolul / baza.
+#   Peste N ms de la BEGIN până la intrarea în COMMIT, serverul închide sesiunea ⇒ ROLLBACK ⇒ reconcilierea dă 10. Prologul
+#   verifică în tranzacție valoarea și sursa (un pooler care ignoră parametrul de pornire ⇒ refuz, nimic trimis din
+#   migrare). Fără opțiune: comportamentul de dinainte, neschimbat. Pre-verificarea, reconcilierea și gate-ul 0e NU primesc
+#   plafonul. Migrarea care se bazează pe plafon îl verifică și ea (valoare + sursă) și refuză dacă lipsește.
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
 # PGTARGETSESSIONATTRS, PGLOADBALANCEHOSTS, PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR. PGHOST/PGPORT: eliminate explicit (unset)
@@ -65,7 +73,7 @@ umask 077
 
 refuz() { echo "REFUZ (neaplicat, fără conexiune): $2" >&2; exit "$1"; }
 
-MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" TINTA_PROI="" C_HOST="" C_PORT="" C_USER=""
+MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" TINTA_PROI="" C_HOST="" C_PORT="" C_USER="" PLAFON_MS=""
 while [ $# -gt 0 ]; do
   [ $# -ge 2 ] || refuz 2 "opțiunea $1 fără valoare"
   case "$1" in
@@ -73,8 +81,9 @@ while [ $# -gt 0 ]; do
     --versiune) VERSIUNE="$2" ;;    --tinta-db) TINTA_DB="$2" ;;   --tinta-sistem) TINTA_SIS="$2" ;;
     --tinta-proiect) TINTA_PROI="$2" ;;
     --tinta-host) C_HOST="$2" ;;    --tinta-port) C_PORT="$2" ;;   --user) C_USER="$2" ;;
+    --plafon-tranzactie-ms) PLAFON_MS="$2" ;;
     --service) refuz 2 "--service nu mai e acceptat (Runda 9: suport retras — endpoint explicit --tinta-host/--tinta-port + ~/.pgpass/PGPASSFILE)" ;;
-    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem --tinta-host --tinta-port [--tinta-proiect --user])" ;;
+    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem --tinta-host --tinta-port [--tinta-proiect --user --plafon-tranzactie-ms])" ;;
   esac
   shift 2
 done
@@ -94,6 +103,11 @@ NUME="$(basename "$MIG" .sql)"
 [[ "$C_HOST" =~ ^[A-Za-z0-9._/-]{1,253}$ ]] || refuz 2 "--tinta-host OBLIGATORIU (endpointul de scriere aprobat): '$C_HOST'"
 [[ "$C_PORT" =~ ^[0-9]{1,5}$ ]] || refuz 2 "--tinta-port OBLIGATORIU (portul endpointului de scriere aprobat): '$C_PORT'"
 [ -z "$C_USER" ] || [[ "$C_USER" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--user invalid"
+# Runda 10: plafonul total, în milisecunde, ca număr întreg simplu (fără unități, fără zerouri în față): 100..600000.
+if [ -n "$PLAFON_MS" ]; then
+  [[ "$PLAFON_MS" =~ ^[1-9][0-9]{2,5}$ ]] && [ "$PLAFON_MS" -le 600000 ] \
+    || refuz 2 "--plafon-tranzactie-ms invalid (milisecunde, 100..600000): '$PLAFON_MS'"
+fi
 if [ -n "$APROBARE" ]; then
   [ -z "$SHA" ] || refuz 2 "--sha256 și --aprobare se exclud"
   [ -f "$APROBARE" ] || refuz 2 "fișier de aprobare lipsă: $APROBARE"
@@ -119,6 +133,11 @@ echo "→ $NUME: sha256 $SHA_COPIE = aprobat; validator: $VAL_OUT"
 # --- fișierele runnerului (generate, nu provin din artefact) -----------------
 CHEIE="hashtext('gazpet.livrare_migrare')"
 PROI_EXPR="coalesce(current_setting('gazpet.proiect_aprobat', true), '')"
+# Runda 10: cu --plafon-tranzactie-ms, prologul cere în tranzacție exact valoarea aprobată, venită din conexiune (sursa
+# 'client' = parametrul de pornire trimis de runner; nimic nu l-a schimbat de la BEGIN).
+PLAFON_CHECK=""
+[ -z "$PLAFON_MS" ] || PLAFON_CHECK="  IF (SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout') IS DISTINCT FROM '$PLAFON_MS/client' THEN
+    RAISE EXCEPTION 'Livrare $NUME: plafonul tranzactiei nu e $PLAFON_MS ms din conexiune (%)', (SELECT coalesce(setting || '/' || source, 'lipsa') FROM pg_settings WHERE name = 'transaction_timeout'); END IF;"
 cat > "$DIR/0_prolog.sql" <<SQL
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
 SET LOCAL standard_conforming_strings = on;
@@ -127,6 +146,7 @@ DO \$prolog\$ BEGIN
   IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN RAISE EXCEPTION 'Livrare $NUME: izolarea nu e READ COMMITTED'; END IF;
   IF current_setting('standard_conforming_strings') IS DISTINCT FROM 'on' THEN RAISE EXCEPTION 'Livrare $NUME: standard_conforming_strings nu e on'; END IF;
   IF current_setting('client_encoding') IS DISTINCT FROM 'UTF8' THEN RAISE EXCEPTION 'Livrare $NUME: client_encoding nu e UTF8'; END IF;
+$PLAFON_CHECK
 END \$prolog\$;
 SQL
 PROI_CHECK=""
@@ -256,9 +276,12 @@ if [ "$R_REL" != 0 ]; then
   manual; exit 21
 fi
 
-echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]"
+echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]${PLAFON_MS:+; plafon $PLAFON_MS ms de la BEGIN până la intrarea în COMMIT (transaction_timeout din conexiune)}"
+# Runda 10: parametrul de pornire DOAR pentru conexiunea livrării (PGOPTIONS din mediu e refuzat mai sus).
+LIV_ENV=()
+[ -z "$PLAFON_MS" ] || LIV_ENV=(env "PGOPTIONS=-c transaction_timeout=$PLAFON_MS")
 set +e
-"$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
+${LIV_ENV[@]+"${LIV_ENV[@]}"} "$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
 RC_PSQL=$?
 set -e
 
