@@ -294,3 +294,13 @@ SELECT set_config('gazpet.revenire_20261215a', 'SCOATE_NOTE_INTERNE:' || txid_cu
 COMMIT;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = coloana text + CHECK-ul migrării; `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` (ocupat = 55P03, nimic scris) înaintea verificării „fără notițe”; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare, refuzuri) — pe clonă îl rulează chat-ul.
+
+## 20261215b — Ofertare: contactul la beneficiar pe oferta de probe (`20261215b_probe_oferte_contact_ROLLBACK.sql`, NEAPLICAT)
+Scoate coloanele `probe_oferte.client_contact_nume` / `_telefon` / `_email` și CHECK-urile lor de lungime (TKT-2026-0374). Nu redeschide nimic; **refuză dacă vreo ofertă are date de contact completate** (export + golire aprobată separat). Aplicația merge și fără coloane (câmpurile se arată dezactivate). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215b', 'SCOATE_CONTACT_PROBE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = cele 3 coloane text + cele 3 CHECK-uri ale migrării; `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` (ocupat = 55P03, nimic scris) înaintea verificării „fără date”; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare, refuzuri, RLS-ul existent pe cont fără acces) — pe clonă îl rulează chat-ul.
