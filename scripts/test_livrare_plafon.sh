@@ -34,6 +34,8 @@
 #   cursor:     cursor WITH HOLD deschis => fara optiune se executa la COMMIT (>= 1,5 s, control 0); cu plafon
 #               PLAFON_CURSOR (10).
 # Forma mesajelor (fara PostgreSQL): scripts/test_livrare_forma_fin.sh.
+# Runda 13 (harness r15): cazurile cu timpi (lent, garda timp, 8b-8e) ruleaza prin asteapta_ceas: un salt al ceasului de
+# perete >= 100 ms in timpul cazului il face NEVALID (in ambele sensuri), se curata si se repeta (cel mult 3 ori).
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SLOT="${1:-0}"; [[ "$SLOT" =~ ^[0-9]$ ]] || { echo 'MEDIU: slot 0-9'; exit 2; }
@@ -97,6 +99,45 @@ asteapta() { # $1 eticheta, $2 codul asteptat, $3 jurnalul, restul = comanda
 }
 inchideri() { grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true; }
 
+# Runda 13 (harness r15): ceasul de perete al WSL sare (syslog „Clock change detected”, ~1,2 s). Timeout-urile PostgreSQL
+# si garda finala (clock_timestamp() - transaction_timestamp()) masoara pe ceasul de perete => un salt in timpul unui caz
+# cu timpi il falsifica IN AMBELE SENSURI: un salt inainte inchide sesiunea mai devreme (r15: controlul de rearmare a fost
+# inchis la 0,6 s dupa saltul de la 20:02:28) sau umfla timpul vazut de garda (refuz „corect” din motiv gresit).
+# Regula (ca in harness, scripts/portal/concurrency_lock.sh r13): cazul cu |perete - monoton| >= 100 ms e NEVALID oricare
+# i-ar fi rezultatul => se curata ce a lasat si se repeta, de cel mult 3 ori; altfel testul pica cu motivul exact.
+SALT_MS=100; CAZ_INCERCARI=3; CEAS_REPETARI=0
+ceas_mono_ms() {
+  local u=''
+  if [[ -r /proc/uptime ]] && read -r u _ </proc/uptime && [[ "$u" =~ ^[0-9]+\.[0-9]{2}$ ]]; then echo $(( 10#${u/./} * 10 )); return 0; fi
+  python3 -c 'import time; print(int(time.monotonic() * 1000))'
+}
+# asteapta_ceas <eticheta> <cod> <jurnal> <SQL de curatare a unei incercari nevalide> -- comanda...
+# Seteaza CAZ_N0 (inchiderile din jurnalul serverului la inceputul incercarii VALIDE), CAZ_MS (durata ei) si CAZ_SALT.
+asteapta_ceas() {
+  local et="$1" exp="$2" log="$3" cur="$4" k rc r0 m0 r1 m1
+  shift 4; [[ "$1" == -- ]] && shift
+  for ((k=1;k<=CAZ_INCERCARI;k++)); do
+    rm -f "$TMP"/pauza_* "$TMP/fara_amanate_aplicat"
+    CAZ_N0="$(inchideri)"; rc=0
+    r0="$(date +%s%3N)"; m0="$(ceas_mono_ms)"
+    "$@" >"$log" 2>&1 || rc=$?
+    r1="$(date +%s%3N)"; m1="$(ceas_mono_ms)"
+    CAZ_MS=$(( r1 - r0 )); CAZ_SALT=$(( (r1 - r0) - (m1 - m0) ))
+    if (( CAZ_SALT < SALT_MS && CAZ_SALT > -SALT_MS )); then
+      [[ "$rc" == "$exp" ]] || { cat "$log"; fail "$et: cod $rc, asteptat $exp (ceas stabil, abatere $CAZ_SALT ms; incercarea $k)"; }
+      (( k == 1 )) || echo "CEAS_REPETAT $et: valid la incercarea $k (abatere $CAZ_SALT ms)"
+      return 0
+    fi
+    CEAS_REPETARI=$((CEAS_REPETARI + 1))
+    echo "CEAS_SALT $et incercarea $k: ceasul de perete s-a abatut cu $CAZ_SALT ms fata de cel monoton (cod $rc, asteptat $exp) => NEVALID, se curata si se repeta"
+    [[ -z "$cur" ]] || "${ADMIN[@]}" -d "$DB" -c "$cur" >/dev/null
+  done
+  fail "$et: NEVALID de $CAZ_INCERCARI ori (ceasul de perete a sarit in fiecare incercare), de rerulat"
+}
+curata() { # SQL de curatare pentru migrarea de test $1 (tabelul ei + randul din istoric) + obiecte suplimentare ($2)
+  printf "DROP TABLE IF EXISTS public.t_%s; DELETE FROM supabase_migrations.schema_migrations WHERE name = '%s'; %s" "$1" "$1" "${2:-}"
+}
+
 # 1. Argumente: refuz inainte de orice conexiune (cod 2).
 M_OK="$(migrare 20990101a_plafon_ok '1500/session' '')"
 for v in abc 050 99 600001 1500ms; do
@@ -129,9 +170,8 @@ echo 'PLAFON_ROL: rolul are 10 s (10000/user); livrarea vede 1500/session; APLIC
 
 # 4. Migrare lenta: inchisa de server la ~1 s de la BEGIN, nimic ramas.
 M_LENT="$(migrare 20990101c_plafon_lent '1000/session' 'SELECT pg_sleep(3);')"
-n0="$(inchideri)"; t0="$(date +%s%N)"
-asteapta lent 10 "$TMP/lent.log" runner 20990101000003 "$M_LENT" --plafon-tranzactie-ms 1000
-ms=$(( ($(date +%s%N) - t0) / 1000000 )); n1="$(inchideri)"
+asteapta_ceas lent 10 "$TMP/lent.log" "$(curata 20990101c_plafon_lent)" -- runner 20990101000003 "$M_LENT" --plafon-tranzactie-ms 1000
+n0="$CAZ_N0"; ms="$CAZ_MS"; n1="$(inchideri)"
 (( n1 == n0 + 1 )) || { cat "$TMP/lent.log"; fail "lent: jurnalul serverului nu arata inchiderea prin transaction timeout ($n0 -> $n1)"; }
 [[ "$(stare 20990101c_plafon_lent)" == 'false|false' ]] || fail 'lent: au ramas efecte'
 (( ms < 3000 )) || fail "lent: runnerul a durat $ms ms (migrarea trebuia oprita la ~1 s, nu dupa pg_sleep(3))"
@@ -193,9 +233,8 @@ grep -q 'PLAFON_SCHIMBAT in tranzactie (0/session' "$TMP/garda_val.log" || { cat
 [[ "$(stare 20990101h_plafon_schimbat)" == 'false|false' ]] || fail 'garda valoare: au ramas efecte'
 M_DEP="$(migrare 20990101i_plafon_depasit '1000/session' "DO \$d\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5);
   EXECUTE format('SET LOCAL %s = %s', $DIN, '1000'); END \$d\$;")"
-n0="$(inchideri)"; t0="$(date +%s%N)"
-asteapta 'garda timp' 10 "$TMP/garda_timp.log" runner 20990101000010 "$M_DEP" --plafon-tranzactie-ms 1000
-ms=$(( ($(date +%s%N) - t0) / 1000000 )); n1="$(inchideri)"
+asteapta_ceas 'garda timp' 10 "$TMP/garda_timp.log" "$(curata 20990101i_plafon_depasit)" -- runner 20990101000010 "$M_DEP" --plafon-tranzactie-ms 1000
+n0="$CAZ_N0"; ms="$CAZ_MS"; n1="$(inchideri)"
 grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 1000 ms' "$TMP/garda_timp.log" || { cat "$TMP/garda_timp.log"; fail 'garda timp: mesajul'; }
 (( n1 == n0 )) || fail 'garda timp: sesiunea trebuia refuzata de garda, nu inchisa de server'
 [[ "$(stare 20990101i_plafon_depasit)" == 'false|false' ]] || fail 'garda timp: au ramas efecte'
@@ -232,12 +271,12 @@ pauza() { # $1 modul ('' = forma livrata), restul = argumentele runner()
 REARM="DO \$d\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5);
   EXECUTE format('SET LOCAL %s = %s', $DIN, '2000'); END \$d\$;"
 M_RC="$(migrare 20990101j_plafon_rearm_ctl '2000/session' "$REARM")"
-asteapta 'rearmare control' 0 "$TMP/rearm_ctl.log" pauza despartit 20990101000011 "$M_RC" --plafon-tranzactie-ms 2000
+asteapta_ceas 'rearmare control' 0 "$TMP/rearm_ctl.log" "$(curata 20990101j_plafon_rearm_ctl)" -- pauza despartit 20990101000011 "$M_RC" --plafon-tranzactie-ms 2000
 [[ -e "$TMP/pauza_despartit" && "$(stare 20990101j_plafon_rearm_ctl)" == 'true|true' ]] \
   || { cat "$TMP/rearm_ctl.log"; fail 'rearmare control: forma r11 + pauza trebuia sa comita dupa termen (proba nefunctionala)'; }
 M_RM="$(migrare 20990101k_plafon_rearm '2000/session' "$REARM")"
-n0="$(inchideri)"
-asteapta rearmare 10 "$TMP/rearm.log" pauza '' 20990101000012 "$M_RM" --plafon-tranzactie-ms 2000
+asteapta_ceas rearmare 10 "$TMP/rearm.log" "$(curata 20990101k_plafon_rearm)" -- pauza '' 20990101000012 "$M_RM" --plafon-tranzactie-ms 2000
+n0="$CAZ_N0"
 [[ -e "$TMP/pauza_unic" ]] || fail 'rearmare: pauza nu s-a aplicat (proba nefunctionala)'
 grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 2000 ms' "$TMP/rearm.log" || { cat "$TMP/rearm.log"; fail 'rearmare: garda trebuia sa refuze (pauza inaintea mesajului final)'; }
 (( "$(inchideri)" == n0 )) || fail 'rearmare: trebuia refuzata de garda, nu inchisa de server'
@@ -248,12 +287,12 @@ echo 'PLAFON_REARMARE: ceas oprit prin SQL dinamic si repornit la ~1,5 s (N=2000
 #     artefact (validatorul nu o vede); aceeasi pauza.
 q "CREATE FUNCTION public.f_dormi_plafon() RETURNS void LANGUAGE plpgsql SET transaction_timeout = 0 AS \$f\$ BEGIN PERFORM pg_sleep(1.5); END \$f\$" >/dev/null
 M_FC="$(migrare 20990101l_plafon_functie_ctl '2000/session' 'SELECT public.f_dormi_plafon();')"
-asteapta 'functie control' 0 "$TMP/functie_ctl.log" pauza despartit 20990101000013 "$M_FC" --plafon-tranzactie-ms 2000
+asteapta_ceas 'functie control' 0 "$TMP/functie_ctl.log" "$(curata 20990101l_plafon_functie_ctl)" -- pauza despartit 20990101000013 "$M_FC" --plafon-tranzactie-ms 2000
 [[ "$(stare 20990101l_plafon_functie_ctl)" == 'true|true' ]] \
   || { cat "$TMP/functie_ctl.log"; fail 'functie control: forma r11 + pauza trebuia sa comita dupa termen (proba nefunctionala)'; }
 M_FN="$(migrare 20990101m_plafon_functie '2000/session' 'SELECT public.f_dormi_plafon();')"
-n0="$(inchideri)"
-asteapta functie 10 "$TMP/functie.log" pauza '' 20990101000014 "$M_FN" --plafon-tranzactie-ms 2000
+asteapta_ceas functie 10 "$TMP/functie.log" "$(curata 20990101m_plafon_functie)" -- pauza '' 20990101000014 "$M_FN" --plafon-tranzactie-ms 2000
+n0="$CAZ_N0"
 grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 2000 ms' "$TMP/functie.log" || { cat "$TMP/functie.log"; fail 'functie: garda trebuia sa refuze'; }
 (( "$(inchideri)" == n0 )) || fail 'functie: trebuia refuzata de garda, nu inchisa de server'
 [[ "$(stare 20990101m_plafon_functie)" == 'false|false' ]] || fail 'functie: au ramas efecte'
@@ -285,16 +324,19 @@ exec "$PAUZA_PG_BIN/psql" "${a[@]}"
 EOF
 chmod +x "$TMP/psql_fara_amanate"
 M_AC="$(migrare 20990101n_plafon_amanat_ctl '1000/session' "$(amanat ctl)")"
-t0="$(date +%s%N)"
 PAUZA_DIR="$TMP" PAUZA_PG_BIN="$PG_BIN" PSQL_BIN_TEST="$TMP/psql_fara_amanate" \
-  asteapta 'amanat control' 0 "$TMP/amanat_ctl.log" runner 20990101000015 "$M_AC" --plafon-tranzactie-ms 1000
-ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+  asteapta_ceas 'amanat control' 0 "$TMP/amanat_ctl.log" \
+  "$(curata 20990101n_plafon_amanat_ctl 'DROP TABLE IF EXISTS public.a_ctl; DROP FUNCTION IF EXISTS public.fa_ctl();')" \
+  -- runner 20990101000015 "$M_AC" --plafon-tranzactie-ms 1000
+ms="$CAZ_MS"
 [[ -e "$TMP/fara_amanate_aplicat" && "$(stare 20990101n_plafon_amanat_ctl)" == 'true|true' ]] \
   || { cat "$TMP/amanat_ctl.log"; fail 'amanat control: triggerul amanat din COMMIT trebuia sa treaca de garda (proba nefunctionala)'; }
 [[ "$(q 'SELECT count(*) FROM public.a_ctl')" == 1 ]] || fail 'amanat control: randul lipseste'
 M_AM="$(migrare 20990101o_plafon_amanat '1000/session' "$(amanat liv)")"
-n0="$(inchideri)"
-asteapta amanat 10 "$TMP/amanat.log" runner 20990101000016 "$M_AM" --plafon-tranzactie-ms 1000
+asteapta_ceas amanat 10 "$TMP/amanat.log" \
+  "$(curata 20990101o_plafon_amanat 'DROP TABLE IF EXISTS public.a_liv; DROP FUNCTION IF EXISTS public.fa_liv();')" \
+  -- runner 20990101000016 "$M_AM" --plafon-tranzactie-ms 1000
+n0="$CAZ_N0"
 grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 1000 ms' "$TMP/amanat.log" || { cat "$TMP/amanat.log"; fail 'amanat: garda trebuia sa refuze (triggerul rulat inaintea ei)'; }
 (( "$(inchideri)" == n0 )) || fail 'amanat: trebuia refuzata de garda, nu inchisa de server'
 [[ "$(stare 20990101o_plafon_amanat)" == 'false|false' && -z "$(q "SELECT to_regclass('public.a_liv')")" ]] || fail 'amanat: au ramas efecte'
@@ -304,9 +346,8 @@ echo "PLAFON_AMANAT: trigger amanat (ceas oprit, 1,5 s, repornit; N=1000) => far
 #     optiune acelasi artefact comite, iar livrarea dureaza >= 1,5 s (cursorul chiar ruleaza la COMMIT).
 CUR="DECLARE c_plafon CURSOR WITH HOLD FOR SELECT pg_sleep(1.5);"
 M_CC="$(migrare 20990101p_plafon_cursor_ctl '' "$CUR")"
-t0="$(date +%s%N)"
-asteapta 'cursor control' 0 "$TMP/cursor_ctl.log" runner 20990101000017 "$M_CC"
-ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+asteapta_ceas 'cursor control' 0 "$TMP/cursor_ctl.log" "$(curata 20990101p_plafon_cursor_ctl)" -- runner 20990101000017 "$M_CC"
+ms="$CAZ_MS"
 [[ "$(stare 20990101p_plafon_cursor_ctl)" == 'true|true' ]] || { cat "$TMP/cursor_ctl.log"; fail 'cursor control: neaplicat'; }
 (( ms >= 1500 )) || fail "cursor control: livrarea a durat $ms ms (cursorul WITH HOLD trebuia materializat la COMMIT, >= 1500 ms)"
 M_CU="$(migrare 20990101q_plafon_cursor '1000/session' "$CUR")"
@@ -322,4 +363,5 @@ asteapta fara 0 "$TMP/fara.log" runner 20990101000005 "$M_FARA"
 ! grep -q 'plafon ~' "$TMP/fara.log" || fail 'fara: runnerul anunta un plafon necerut'
 grep -q 'psql --single-transaction \[prolog' "$TMP/fara.log" || { cat "$TMP/fara.log"; fail 'fara: forma veche a livrarii'; }
 echo 'PLAFON_FARA: fara optiune => psql --single-transaction, transaction_timeout 0/default (ca inainte); APLICAT (0)'
-echo "PASS LIVRARE_PLAFON runda 12 PG17 (postgres NOSUPERUSER): plafonul = SET de sesiune inainte de BEGIN, verificat in prolog (pg_catalog, marcaj) si in garda finala, trimisa in ACELASI mesaj cu COMMIT-ul (rearmare / functie / amanat / cursor: nimic comis dupa termen, controalele r11 comiteau); validatorul refuza artefactele care ating vizibil ceasul; copie/log: $TMP"
+echo "CEAS: $CEAS_REPETARI incercari NEVALIDE repetate (salt al ceasului de perete >= $SALT_MS ms in timpul cazului)"
+echo "PASS LIVRARE_PLAFON runda 13 PG17 (postgres NOSUPERUSER): plafonul = SET de sesiune inainte de BEGIN, verificat in prolog (pg_catalog, marcaj) si in garda finala, trimisa in ACELASI mesaj cu COMMIT-ul (rearmare / functie / amanat / cursor: nimic comis dupa termen, controalele r11 comiteau); validatorul refuza artefactele care ating vizibil ceasul; copie/log: $TMP"
