@@ -10,32 +10,47 @@
 #                      utilizator (lock_timeout 200 ms); apoi bariera e anulata => ROLLBACK la tot. Bariera NU se poate
 #                      incheia cu succes: daca expira, ridica PORTAL_BARIERA_EXPIRATA => ROLLBACK, iar starea se
 #                      verifica dupa (Jakarinos r9 P2). Plafonul de 2 s se ridica intentionat aici (citirea + 8 probe
-#                      dureaza mai mult); plafonul il dovedeste lock_cap_refusal.
+#                      dureaza mai mult; r12: copie_obs, plafon 120 s din conexiune); plafonul il dovedeste lock_cap_refusal.
 #  lock_budget_refusal o tranzactie lunga tine un tabel; livrarea prin runner trebuie sa refuze cu PORTAL_LOCK_BUDGET
-#                      (55P03) in ~3 s, cod 10, fara obiecte ramase; CAT TIMP incearca utilizatorii nu sunt blocati si
-#                      livrarea nu tine continuu niciun lock pe tabelele utilizatorilor (10 esantioane pg_locks).
+#                      (55P03) la ~1 s de la BEGIN (r12; inainte 3 s), cod 10, fara obiecte ramase; CAT TIMP incearca
+#                      utilizatorii nu sunt blocati si livrarea nu tine continuu niciun lock (6 esantioane pg_locks).
 #  masurat             aplicarea / revenirea REALA prin runner, cu trafic continuu (citiri / scrieri profiles si employees,
 #                      login simulat = UPDATE pe auth.users) si un observator pg_locks la 2 ms: FEREASTRA = cel mai lung
 #                      interval continuu in care livrarea tine un lock >= SHARE pe tabelele utilizatorilor (de la primul
 #                      lock la COMMIT); BLOCARE = cea mai lunga asteptare a unei operatii de utilizator. Ambele cu prag
 #                      care pica testul.
-#  lock_cap_refusal    r11 (al doilea recenzent r10 P1-01), pe TOATE cele 4 fluxuri, in 3 moduri: clientul sta 3 s
-#                      (critic) INTRE $locks$ si $critic$, (commit) DUPA $critic$ inainte de COMMIT, (mostenit) dupa
-#                      $critic$, cu un ceas transaction_timeout de 10 s pornit la inceputul tranzactiei si 3 s de lucru
-#                      pe server INAINTE de $locks$. Asteptat: serverul inchide sesiunea la ~2 s de la obtinerea
-#                      lock-urilor (nu de la inceputul tranzactiei, nu la 10 s) => ROLLBACK; verificat din a doua sesiune:
-#                      fereastra masurata, sesiunea disparuta, probele de utilizator libere, starea neschimbata. Daca PG17
-#                      s-ar comporta altfel (ceas de la inceputul tranzactiei / ceas mostenit nerepornit), proba pica.
+#  lock_cap_refusal    r11 pe TOATE cele 4 fluxuri; r12: 4 moduri, vezi mai jos (proba r11 "mostenit" a infirmat
+#                      plafonul pornit din SQL: harness-ul PG17 real, 11.11.2026). Verificat din a doua sesiune:
+#                      fereastra masurata, sesiunea disparuta, probele de utilizator libere, starea neschimbata.
 #  lock_commit_lent    r11 (Jakarinos r10 P2): LIMITA, aratata, nu presupusa. Pe un cluster nou, replicare sincrona spre
-#                      un standby inexistent: COMMIT-ul 18a asteapta standby-ul cu lock-urile tinute; dupa 3 s (> plafon)
+#                      un standby inexistent: COMMIT-ul 18a (r12: conectat ca runnerul, plafon 2 s din conexiune)
+#                      asteapta standby-ul cu lock-urile tinute; dupa 3 s (> plafon)
 #                      sesiunea e tot in COMMIT (SyncRep), cu lock-urile, iar transaction_timeout NU intervine; la
 #                      eliberarea asteptarii tranzactia se COMITE. Deci plafonul acopera doar pana la intrarea in COMMIT.
 # r11: fara meta-comenzi psql (\!) si fara FIFO: pauzele / barierele clientului = SQL pe stdin (producator), portabil
 # Linux si Git Bash pe Windows (unde \! ruleaza in cmd.exe).
-PORTAL_BUDGET_MS="${PORTAL_BUDGET_MS:-3000}"
+# r12 (harness-ul PG17 real a infirmat proba "mostenit" r11): plafonul NU mai e pornit din SQL. E ceasul pornit de
+# PostgreSQL la BEGIN cu transaction_timeout din CONEXIUNE (runnerul: --plafon-tranzactie-ms 2000 => PGOPTIONS, sursa
+# 'client'); fisierele il verifica in $pre$ (2000/client) si nu-l schimba. In harness:
+#  semantica_tt       sonda PG17: ce face transaction_timeout schimbat in mijlocul tranzactiei (7 cazuri, timpi reali);
+#                     designul r12 cere DOAR cazul "armat la BEGIN" (verificat cu prag), restul e documentatie aratata;
+#  PSQL_LIV           o livrare simulata direct (fara runner) se conecteaza exact ca runnerul (plafonul in conexiune);
+#  copie_obs          LOCK_PRE / LOCK_OBS tin intentionat tranzactia deschisa (bariera): ruleaza pe o COPIE in care
+#                     plafonul cerut e ridicat la 120 s si cu acelasi plafon in conexiune (nu sunt probe de plafon);
+#  lock_cap_refusal   4 moduri pe fiecare flux, toate cu plafonul din conexiune: critic / commit (fara timeout prealabil),
+#                     mostenit (rolul are 10 s) si mic (rolul are 500 ms), ultimele doua cu 0,8 s de lucru INAINTE de
+#                     $locks$. Asteptat in toate: sesiunea inchisa la ~2 s de la BEGIN (deci <= 2 s de la lock-uri);
+#  plafon_refuz       fara plafon in conexiune / ceas schimbat in tranzactie (alta valoare sau aceeasi) => refuz in $pre$.
+PORTAL_BUDGET_MS="${PORTAL_BUDGET_MS:-1000}"
 PORTAL_FEREASTRA_MS="${PORTAL_FEREASTRA_MS:-1000}"
 PORTAL_BLOCARE_MS="${PORTAL_BLOCARE_MS:-1000}"
-PORTAL_PLAFON_MS=2000   # transaction_timeout din SQL ($locks$); nu se configureaza din harness
+PORTAL_PLAFON_MS=2000       # = --plafon-tranzactie-ms al runnerului = literalul '2000/client' din $pre$; nu se configureaza
+PORTAL_PLAFON_OBS_MS=120000 # DOAR copiile de observatie (copie_obs)
+PORTAL_LUCRU_MS=800         # lucrul de dinaintea lui $locks$ in modurile mostenit / mic
+PSQL_LIV=(env "PGOPTIONS=-c transaction_timeout=$PORTAL_PLAFON_MS" "${PSQL[@]}")
+PSQL_OBS=(env "PGOPTIONS=-c transaction_timeout=$PORTAL_PLAFON_OBS_MS" "${PSQL[@]}")
+# Traficul si observatorul pg_locks: neatinse de setarile de rol puse intentionat in probele mostenit / mic.
+PSQL_FARA=(env "PGOPTIONS=-c transaction_timeout=0" "${PSQL[@]}")
 LOCK_TABLES=(auth.users public.employees public.profiles public.user_module_access)
 BARIERA="DO \$b\$ BEGIN PERFORM pg_sleep(60); RAISE EXCEPTION 'PORTAL_BARIERA_EXPIRATA'; END \$b\$"
 PROBE_LIBER='citire auth.users=ok,scriere auth.users=ok,citire employees=ok,scriere employees=ok,citire profiles=ok,scriere profiles=ok,citire user_module_access=ok,scriere user_module_access=ok'
@@ -121,13 +136,21 @@ wait_pid_query() { # $1 = application_name, $2 = conditie SQL suplimentara, $3 =
   return 1
 }
 
+# r12: copia de observatie = artefactul cu plafonul cerut in $pre$ ridicat la PORTAL_PLAFON_OBS_MS (exact o inlocuire).
+copie_obs() { # $1 artefactul, $2 copia
+  [[ "$(grep -c "'$PORTAL_PLAFON_MS/client'" "$1")" == 1 ]] || fail "copie_obs: $1 trebuie sa ceara exact o data $PORTAL_PLAFON_MS/client"
+  sed "s#'$PORTAL_PLAFON_MS/client'#'$PORTAL_PLAFON_OBS_MS/client'#" "$1" >"$2"
+  [[ "$(grep -c "'$PORTAL_PLAFON_OBS_MS/client'" "$2")" == 1 ]] || fail "copie_obs: inlocuirea in $2"
+}
+
 lock_pre_observe() { # $1 eticheta, $2 artefactul, $3 tabelele existente (separate prin spatiu), restul = argumente psql (marcaj)
-  local label="$1" art="$2" tabele="$3" log="$TMP/pre_$1.log" pre="$TMP/pre_$1.sql" rc=0 be held
+  local label="$1" art="$2" tabele="$3" log="$TMP/pre_$1.log" pre="$TMP/pre_$1.sql" obs="$TMP/pre_obs_$1.sql" rc=0 be held
   shift 3
+  copie_obs "$art" "$obs"
   # Prefixul = tot ce precede linia „DO $locks$” (o singura aparitie, verificata static de buget_lock.py).
-  awk '/^DO \$locks\$/{exit} {print}' "$art" >"$pre"
-  grep -q '^DO \$locks\$' "$art" && grep -q 'DO \$priv\$' "$pre" || fail "pre $label: prefixul nu a putut fi separat"
-  PGAPPNAME="portal_pre_$label" "${PSQL[@]}" --single-transaction "$@" -f "$pre" -c "$BARIERA" >"$log" 2>&1 &
+  awk '/^DO \$locks\$/{exit} {print}' "$obs" >"$pre"
+  grep -q '^DO \$locks\$' "$obs" && grep -q 'DO \$priv\$' "$pre" || fail "pre $label: prefixul nu a putut fi separat"
+  PGAPPNAME="portal_pre_$label" "${PSQL_OBS[@]}" --single-transaction "$@" -f "$pre" -c "$BARIERA" >"$log" 2>&1 &
   local client=$!
   be="$(wait_pid_query "portal_pre_$label" "wait_event='PgSleep' AND query LIKE '%PORTAL_BARIERA_EXPIRATA%'" "$client")" \
     || { wait "$client" || true; cat "$log"; fail "pre $label: prefixul nu a ajuns la bariera"; }
@@ -143,11 +166,19 @@ lock_pre_observe() { # $1 eticheta, $2 artefactul, $3 tabelele existente (separa
 }
 
 lock_observe() { # $1 eticheta, $2 moduri asteptate, $3 probe asteptate, $4 SQL de stare (t inainte si dupa), restul = argumentele psql
-  local label="$1" exp_modes="$2" exp_probes="$3" stare="$4" log="$TMP/obs_$1.log" rc=0 be modes got
+  local label="$1" exp_modes="$2" exp_probes="$3" stare="$4" log="$TMP/obs_$1.log" rc=0 be modes got x prev="" k=0 c
+  local -a a=()
   shift 4
   [[ "$(q "$stare")" == t ]] || fail "observatie $label: starea initiala nu e cea asteptata"
-  PGAPPNAME="portal_obs_$label" "${PSQL[@]}" --single-transaction "$@" \
-    -c 'SET LOCAL transaction_timeout = 0' -c 'SET LOCAL statement_timeout = 0' -c "$BARIERA" >"$log" 2>&1 &
+  # r12: fiecare fisier (-f) ruleaza din copia de observatie (plafon 120 s, cu acelasi plafon in conexiune); tranzactia nu
+  # mai schimba transaction_timeout (doar statement_timeout, ca bariera sa nu fie oprita de cel de 15 s al fisierului).
+  for x in "$@"; do
+    if [[ "$prev" == -f ]]; then k=$((k + 1)); c="$TMP/obs_${label}_$k.sql"; copie_obs "$x" "$c"; a+=("$c"); else a+=("$x"); fi
+    prev="$x"
+  done
+  (( k >= 1 )) || fail "observatie $label: niciun fisier"
+  PGAPPNAME="portal_obs_$label" "${PSQL_OBS[@]}" --single-transaction "${a[@]}" \
+    -c 'SET LOCAL statement_timeout = 0' -c "$BARIERA" >"$log" 2>&1 &
   local client=$!
   be="$(wait_pid_query "portal_obs_$label" "wait_event='PgSleep' AND query LIKE '%PORTAL_BARIERA_EXPIRATA%'" "$client")" \
     || { wait "$client" || true; cat "$log"; fail "observatie $label: tranzactia nu a ajuns la bariera"; }
@@ -164,7 +195,7 @@ lock_observe() { # $1 eticheta, $2 moduri asteptate, $3 probe asteptate, $4 SQL 
 }
 
 lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $4 SQL-ul tranzactiei lungi, $5 probe asteptate
-  local label="$1" log="$TMP/budget_$1.log" release="$TMP/budget_$1.release" app="portal_hold_$1" rc=0 hrc=0 be got t0 t1 ms s t persist=""
+  local label="$1" log="$TMP/budget_$1.log" release="$TMP/budget_$1.release" app="portal_hold_$1" rc=0 hrc=0 be got t0 t1 ms s t srv persist=""
   local -A vazut=()
   # r11: tranzactia lunga fara \! / FIFO: partea 1 (BEGIN + instructiunea) pe stdin, COMMIT abia dupa fisierul release.
   printf 'BEGIN;\n%s;\n' "$4" >"$TMP/budget_${label}_1.sql"
@@ -182,13 +213,14 @@ lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $
   got="$(probes "$5")"
   # r10 (Jakarinos r9 P2): in timpul reincercarilor livrarea nu tine CONTINUU niciun lock pe tabelele utilizatorilor
   # (o incercare NOWAIT ratata tine cateva microsecunde; un lock luat inainte de $locks$ ar aparea in toate esantioanele).
-  for ((s=0;s<10;s++)); do
+  # r12: reincercarea dureaza acum pana la 1 s de la BEGIN => 6 esantioane la ~10 ms.
+  for ((s=0;s<6;s++)); do
     while read -r t; do [[ -n "$t" ]] && vazut[$t]=$(( ${vazut[$t]:-0} + 1 )); done < <(q "SELECT DISTINCT l.relation::regclass::text
       FROM pg_locks l WHERE l.pid=$be AND l.locktype='relation' AND l.granted
        AND l.relation IN ('auth.users'::regclass,'public.employees'::regclass,'public.profiles'::regclass,'public.user_module_access'::regclass)")
-    sleep 0.02
+    sleep 0.01
   done
-  for t in "${!vazut[@]}"; do (( ${vazut[$t]} < 10 )) || persist+="$t "; done
+  for t in "${!vazut[@]}"; do (( ${vazut[$t]} < 6 )) || persist+="$t "; done
   # Probele si esantioanele au rulat CAT TIMP livrarea inca incerca (nu dupa refuz).
   [[ "$(q "SELECT count(*) FROM pg_stat_activity WHERE pid=$be AND query LIKE '%DO \$locks\$%' AND state='active'")" == 1 ]] \
     || fail "buget $label: probele nu au prins fereastra de incercare"
@@ -200,8 +232,13 @@ lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $
   [[ "$rc" == 10 ]] && grep -q 'PORTAL_LOCK_BUDGET' "$log" || { cat "$log"; fail "buget $label: asteptat refuz PORTAL_LOCK_BUDGET cu cod 10, primit $rc"; }
   [[ "$got" == "$5" ]] || fail "buget $label: probe '$got', asteptat '$5'"
   [[ -z "$persist" ]] || fail "buget $label: lock-uri tinute continuu in timpul reincercarilor: $persist"
-  (( ms >= 2900 && ms <= 20000 )) || fail "buget $label: refuzul a venit dupa $ms ms (asteptat ~3 s + runner)"
-  echo "LOCK_BUDGET $label: refuz 55P03 dupa $ms ms (runner inclus); utilizatori in timpul incercarii: $got; lock tinut continuu: niciunul"
+  # r12: bugetul de asteptare se socoteste de la BEGIN (ceasul serverului, din mesajul refuzului): >= 1 s si sub plafon.
+  srv="$(grep -o 'incercari, [0-9]* ms de la BEGIN' "$log" | head -n 1 | awk '{print $2}')" || srv=""
+  [[ "$srv" =~ ^[0-9]+$ ]] || { cat "$log"; fail "buget $label: refuzul nu spune cat a asteptat de la BEGIN"; }
+  (( srv >= PORTAL_BUDGET_MS && srv < PORTAL_PLAFON_MS )) || fail "buget $label: refuz la $srv ms de la BEGIN (asteptat [${PORTAL_BUDGET_MS}, ${PORTAL_PLAFON_MS}) ms)"
+  (( ms >= PORTAL_BUDGET_MS - 100 && ms <= 20000 )) || fail "buget $label: refuzul a venit dupa $ms ms (asteptat ~1 s + runner)"
+  ! grep -q 'transaction timeout' "$log" || fail "buget $label: refuzul trebuia sa vina din bucla (55P03), nu din plafon"
+  echo "LOCK_BUDGET $label: refuz 55P03 la $srv ms de la BEGIN ($ms ms cu runnerul); utilizatori in timpul incercarii: $got; lock tinut continuu: niciunul"
 }
 
 traffic_sql() {
@@ -230,7 +267,7 @@ traffic_start() { # $1 eticheta
   [[ -e "$TMP/traffic.sql" ]] || traffic_sql
   rm -f "$TMP/traffic_stop"; : >"$TMP/traffic_$1.log"
   ( while [[ ! -e "$TMP/traffic_stop" ]]; do
-      "${PSQL[@]}" -f "$TMP/traffic.sql" >>"$TMP/traffic_$1.log" 2>&1 || echo 'PORTAL_TRAFIC_EROARE' >>"$TMP/traffic_$1.log"
+      "${PSQL_FARA[@]}" -f "$TMP/traffic.sql" >>"$TMP/traffic_$1.log" 2>&1 || echo 'PORTAL_TRAFIC_EROARE' >>"$TMP/traffic_$1.log"
     done ) &
   TRAFFIC_PID=$!
   for ((i=0;i<200;i++)); do grep -q 'PORTAL_TRAFIC ' "$TMP/traffic_$1.log" && return 0; sleep 0.05; done
@@ -279,7 +316,7 @@ SQL
 fereastra_start() { # $1 eticheta; observatorul pg_locks (alta sesiune), la 2 ms
   local i
   [[ -e "$TMP/fereastra.sql" ]] || fereastra_sql
-  PGAPPNAME="portal_fer_$1" "${PSQL[@]}" -f "$TMP/fereastra.sql" >"$TMP/fer_$1.log" 2>&1 &
+  PGAPPNAME="portal_fer_$1" "${PSQL_FARA[@]}" -f "$TMP/fereastra.sql" >"$TMP/fer_$1.log" 2>&1 &
   FER_PID=$!
   for ((i=0;i<200;i++)); do grep -q PORTAL_FEREASTRA_GATA "$TMP/fer_$1.log" && return 0; kill -0 "$FER_PID" 2>/dev/null || break; sleep 0.05; done
   cat "$TMP/fer_$1.log"; fail "fereastra $1: observatorul nu a pornit"
@@ -316,14 +353,15 @@ masurat() { # $1 eticheta, $2 jurnalul, restul = comanda (runner ...); trafic + 
 cap_parti() { # $1 artefactul, $2 marcajul runnerului (SQL), $3 modul, $4 partea 1, $5 partea 2
   local art="$1" marcaj="$2" mod="$3"
   { echo 'BEGIN;'
-    # Ceas mostenit: un transaction_timeout de 10 s pornit la inceputul tranzactiei (ca o valoare a rolului / bazei).
-    [[ "$mod" != mostenit ]] || echo "SET LOCAL transaction_timeout = '10s';"
     printf '%s;\n' "$marcaj"
     case "$mod" in
       critic) awk '/^DO \$critic\$/{exit} {print}' "$art" ;;
       commit) cat "$art" ;;
-      # 3 s de lucru pe server INAINTE de $locks$ (nu tine nimic al utilizatorilor: LOCK_PRE), apoi restul fisierului.
-      mostenit) awk '/^DO \$locks\$/{exit} {print}' "$art"; echo 'SELECT pg_sleep(3);'; awk '/^DO \$locks\$/{f=1} f' "$art" ;;
+      # r12: 0,8 s de lucru pe server INAINTE de $locks$ (nu tine nimic al utilizatorilor: LOCK_PRE), apoi restul fisierului:
+      # daca plafonul s-ar socoti de la lock-uri, inchiderea ar veni la ~2,8 s de la BEGIN, nu la 2 s.
+      mostenit|mic) awk '/^DO \$locks\$/{exit} {print}' "$art"
+        echo "SELECT pg_sleep($((PORTAL_LUCRU_MS / 1000)).$(printf '%03d' $((PORTAL_LUCRU_MS % 1000))));"
+        awk '/^DO \$locks\$/{f=1} f' "$art" ;;
       *) fail "plafon: mod necunoscut $mod" ;;
     esac
   } >"$4"
@@ -334,44 +372,107 @@ cap_parti() { # $1 artefactul, $2 marcajul runnerului (SQL), $3 modul, $4 partea
   [[ "$mod" != critic ]] || [[ "$(grep -c '^DO \$critic\$' "$4") $(grep -c '^DO \$critic\$' "$5")" == '0 1' ]] \
     || fail "plafon: \$critic\$ trebuie sa fie doar in partea 2 (critic)"
 }
-# r11 (al doilea recenzent r10 P1-01): lock-urile ramase de clientul oprit se elibereaza la ~2 s de la OBTINEREA lor.
-lock_cap_refusal() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea dinainte), $4 marcajul runnerului, $5 critic|commit|mostenit
-  local label="$1" art="$2" stare="$3" marcaj="$4" mod="$5" et="cap_$1_$5" rc=0 n0 n1 tp xs got seg0 dela
+# r12: plafonul = ceasul pornit la BEGIN din conexiunea runnerului. Clientul e conectat EXACT ca runnerul (PSQL_LIV);
+# modurile mostenit / mic pun o valoare pe ROL (ca un ALTER ROLE ... SET de pe productie), pe care conexiunea o inlocuieste.
+# Asteptat in toate modurile: sesiunea inchisa de server la ~2 s de la BEGIN => lock-urile tinute <= 2 s pana la inchidere.
+lock_cap_refusal() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = starea dinainte), $4 marcajul, $5 critic|commit|mostenit|mic
+  local label="$1" art="$2" stare="$3" marcaj="$4" mod="$5" et="cap_$1_$5" rc=0 n0 n1 tp xs got seg0 dela lucru rol="" vr="" vl
   local app="portal_$et" log="$TMP/$et.log" p1="$TMP/${et}_1.sql" p2="$TMP/${et}_2.sql"
   [[ "$(q "$stare")" == t ]] || fail "plafon $label/$mod: starea initiala nu e cea asteptata"
   cap_parti "$art" "$marcaj" "$mod" "$p1" "$p2"
+  case "$mod" in mostenit) rol='10s'; vr='10000/user' ;; mic) rol='500ms'; vr='500/user' ;; esac
+  if [[ -n "$rol" ]]; then
+    "${ADMIN[@]}" -d "$DB" -c "ALTER ROLE postgres SET transaction_timeout = '$rol'" >/dev/null
+    # Dovada ca valoarea rolului e reala pentru o conexiune obisnuita (sursa 'user')...
+    [[ "$(q "SELECT setting||'/'||source FROM pg_settings WHERE name='transaction_timeout'")" == "$vr" ]] \
+      || fail "plafon $label/$mod: setarea rolului ($rol) nu se vede intr-o conexiune obisnuita"
+  fi
+  # ... si ca, in conexiunea livrarii, valoarea runnerului o inlocuieste (sursa 'client').
+  vl="$("${PSQL_LIV[@]}" -Atc "SELECT setting||'/'||source FROM pg_settings WHERE name='transaction_timeout'")"
+  [[ "$vl" == "$PORTAL_PLAFON_MS/client" ]] || fail "plafon $label/$mod: conexiunea livrarii vede '$vl'"
   n0="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
   traffic_start "$et"
   fereastra_start "$et"
   # Clientul: partea 1, apoi 3 s fara nicio instructiune (stdin deschis, sesiunea 'idle in transaction'), apoi partea 2.
-  producator "$app" "$p1" "$p2" sleep 3 | PGAPPNAME="$app" "${PSQL[@]}" -f - >"$log" 2>&1 || rc=$?
+  producator "$app" "$p1" "$p2" sleep 3 | PGAPPNAME="$app" "${PSQL_LIV[@]}" -f - >"$log" 2>&1 || rc=$?
   fereastra_stop "$et" $((PORTAL_PLAFON_MS + 500))
   traffic_stop "$et" $((PORTAL_PLAFON_MS + 500))
+  [[ -z "$rol" ]] || "${ADMIN[@]}" -d "$DB" -c 'ALTER ROLE postgres RESET transaction_timeout' >/dev/null
   n1="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
   ! grep -q 'PORTAL_MARCAJ_NEATINS\|PORTAL_PLAFON_NEDECLANSAT' "$log" || { cat "$log"; fail "plafon $label/$mod: sesiunea NU a fost inchisa (sau nu a ajuns la pauza)"; }
   [[ "$rc" != 0 ]] && (( n1 == n0 + 1 )) || { cat "$log"; fail "plafon $label/$mod: sesiunea trebuia inchisa de transaction_timeout (rc=$rc, jurnal $n0 -> $n1)"; }
-  (( FER_MAX >= PORTAL_PLAFON_MS - 100 )) || fail "plafon $label/$mod: fereastra $FER_MAX ms, asteptat ~${PORTAL_PLAFON_MS} ms (clientul a stat 3 s)"
   # Din a doua sesiune: sesiunea disparuta, niciun lock ramas (probele de utilizator trec toate), starea neschimbata.
   [[ "$(q "SELECT count(*) FROM pg_stat_activity WHERE application_name='$app'")" == 0 ]] || fail "plafon $label/$mod: sesiunea a ramas"
   got="$(probes "$PROBE_LIBER")"
   [[ "$got" == "$PROBE_LIBER" ]] || fail "plafon $label/$mod: dupa inchidere, probe '$got'"
   [[ "$(q "$stare")" == t ]] || fail "plafon $label/$mod: au ramas efecte dupa inchiderea sesiunii"
-  # Timpii (ceasul serverului): pauza clientului a inceput DUPA lock-uri si INAINTE de inchidere => inchiderea a venit in
-  # pauza; la "mostenit": de la inceputul tranzactiei >= 3 s + plafon (ceasul NU a pornit la BEGIN) si < 10 s - 1 s
-  # (ceasul mostenit NU a ramas activ).
+  # Timpii (ceasul serverului, xs = inceputul tranzactiei): pauza a inceput DUPA lock-uri si INAINTE de inchidere;
+  # inchiderea la ~2 s de la BEGIN in TOATE modurile (nu la 2 s de la lock-uri, nu la valoarea rolului: 10 s / 0,5 s).
   read -r tp xs <"$TMP/pauza_$app.t"
   [[ "$tp" =~ ^[0-9]+$ && "$xs" =~ ^[0-9]+$ && "$FER_FIN" =~ ^[0-9]+$ ]] || fail "plafon $label/$mod: timpi lipsa"
-  seg0=$(( FER_FIN - FER_MAX )); dela=$(( FER_FIN - xs ))
+  seg0=$(( FER_FIN - FER_MAX )); dela=$(( FER_FIN - xs )); lucru=$(( seg0 - xs ))
   (( tp >= seg0 - 50 && tp < FER_FIN )) || fail "plafon $label/$mod: pauza ($tp) nu e intre lock-uri ($seg0) si inchidere ($FER_FIN)"
-  if [[ "$mod" == mostenit ]]; then
-    (( dela >= 3000 + PORTAL_PLAFON_MS - 100 && dela <= 9000 )) \
-      || fail "plafon $label/mostenit: inchis la $dela ms de la inceputul tranzactiei (asteptat ~$((3000 + PORTAL_PLAFON_MS)) ms, nu 10 s)"
+  (( dela >= PORTAL_PLAFON_MS - 50 && dela <= PORTAL_PLAFON_MS + 400 )) \
+    || fail "plafon $label/$mod: inchis la $dela ms de la BEGIN (asteptat ~${PORTAL_PLAFON_MS} ms; lock-urile la $lucru ms)"
+  (( FER_MAX <= dela )) || fail "plafon $label/$mod: lock-uri tinute $FER_MAX ms > $dela ms de la BEGIN"
+  if [[ "$mod" == mostenit || "$mod" == mic ]]; then
+    (( lucru >= PORTAL_LUCRU_MS - 50 )) || fail "plafon $label/$mod: lock-urile la $lucru ms de la BEGIN (asteptat >= ${PORTAL_LUCRU_MS} ms de lucru inainte)"
   fi
-  echo "LOCK_CAP $label $mod: pauza clientului 3 s ($( [[ "$mod" == critic ]] && echo 'intre $locks$ si $critic$' || echo 'dupa $critic$, inainte de COMMIT')); sesiunea inchisa de server la $FER_MAX ms de la lock-uri, $dela ms de la inceputul tranzactiei (plafon ${PORTAL_PLAFON_MS} ms); ROLLBACK, sesiune disparuta, utilizatori liberi, nimic ramas; blocare maxima a traficului $TRAFIC_MAX ms"
+  echo "LOCK_CAP $label $mod: $(case "$mod" in critic) echo 'fara timeout prealabil, pauza 3 s intre $locks$ si $critic$' ;; commit) echo 'fara timeout prealabil, pauza 3 s dupa $critic$' ;; *) echo "rolul are $rol ($vr), ${PORTAL_LUCRU_MS} ms de lucru inainte de \$locks\$, pauza 3 s dupa \$critic\$" ;; esac); conexiunea livrarii $vl; lock-uri la $lucru ms de la BEGIN, sesiunea inchisa de server la $dela ms de la BEGIN (plafon ${PORTAL_PLAFON_MS} ms), lock-uri tinute $FER_MAX ms; ROLLBACK, sesiune disparuta, utilizatori liberi, nimic ramas; blocare maxima a traficului $TRAFIC_MAX ms"
 }
-lock_cap_toate() { # $1 eticheta, $2 artefactul, $3 SQL de stare, $4 marcajul: cele 3 moduri pe acelasi flux
+# r12: fara plafon in conexiune sau cu ceasul schimbat in tranzactie inaintea fisierului => refuz in $pre$, nimic schimbat.
+plafon_refuz() { # $1 eticheta, $2 artefactul, $3 SQL de stare, $4 marcajul
+  local label="$1" art="$2" stare="$3" marcaj="$4" caz log rc exp
+  local -a cmd
+  for caz in fara_runner alta_valoare aceeasi_valoare; do
+    log="$TMP/refuz_${label}_$caz.log"; rc=0
+    case "$caz" in
+      fara_runner) cmd=("${PSQL[@]}" --single-transaction -c "$marcaj" -f "$art"); exp='0/default' ;;
+      alta_valoare) cmd=("${PSQL_LIV[@]}" --single-transaction -c "SET LOCAL transaction_timeout = '10s'" -c "$marcaj" -f "$art"); exp='10000/session' ;;
+      aceeasi_valoare) cmd=("${PSQL_LIV[@]}" --single-transaction -c "SET LOCAL transaction_timeout = '${PORTAL_PLAFON_MS}ms'" -c "$marcaj" -f "$art"); exp="$PORTAL_PLAFON_MS/session" ;;
+    esac
+    [[ "$(q "$stare")" == t ]] || fail "refuz plafon $label/$caz: starea initiala"
+    "${cmd[@]}" >"$log" 2>&1 || rc=$?
+    [[ "$rc" != 0 ]] && grep -q "PORTAL_PLAFON_TRANZACTIE_REQUIRED: $exp " "$log" || { cat "$log"; fail "refuz plafon $label/$caz: asteptat PORTAL_PLAFON_TRANZACTIE_REQUIRED: $exp"; }
+    [[ "$(q "$stare")" == t ]] || fail "refuz plafon $label/$caz: au ramas efecte"
+  done
+  echo "PLAFON_REFUZ $label: fara plafon in conexiune (0/default), ceas schimbat in tranzactie (10000/session), aceeasi valoare setata in tranzactie ($PORTAL_PLAFON_MS/session) => refuz in \$pre\$, nimic schimbat"
+}
+lock_cap_toate() { # $1 eticheta, $2 artefactul, $3 SQL de stare, $4 marcajul: cele 4 moduri + refuzurile, pe acelasi flux
   local m
-  for m in critic commit mostenit; do lock_cap_refusal "$1" "$2" "$3" "$4" "$m"; done
+  for m in critic commit mostenit mic; do lock_cap_refusal "$1" "$2" "$3" "$4" "$m"; done
+  plafon_refuz "$1" "$2" "$3" "$4"
+}
+
+# r12: SONDA de semantica PG17 (documentatie aratata, nu presupusa). Fiecare caz: o sesiune noua, timpul de la pornirea
+# clientului pana la iesire (include conectarea, ~zeci de ms) si daca serverul a inchis-o prin transaction timeout.
+# Designul r12 se bazeaza DOAR pe cazul armat_la_begin (prag care pica testul); celelalte arata de ce SQL-ul nu mai
+# schimba timeout-ul in mijlocul tranzactiei.
+semantica_caz() { # $1 eticheta, $2 valoarea transaction_timeout din conexiune ('' = niciuna), restul = instructiunile (-c ...)
+  local et="$1" opt="$2" log="$TMP/sem_$1.log" t0 rc=0 x d=""
+  shift 2
+  for x in "$@"; do [[ "$x" == -c ]] || d+="$x; "; done
+  t0="$(date +%s%N)"
+  if [[ -n "$opt" ]]; then env "PGOPTIONS=-c transaction_timeout=$opt" "${PSQL[@]}" "$@" >"$log" 2>&1 || rc=$?
+  else "${PSQL[@]}" "$@" >"$log" 2>&1 || rc=$?; fi
+  SEM_MS=$(( ($(date +%s%N) - t0) / 1000000 ))
+  if grep -q 'terminating connection due to transaction timeout' "$log"; then SEM_REZ=inchis
+  elif [[ "$rc" == 0 ]]; then SEM_REZ=neinchis
+  else cat "$log"; fail "semantica $et: eroare neasteptata (rc=$rc)"; fi
+  echo "SEMANTICA_TT $et: ${SEM_REZ} la ${SEM_MS} ms de la pornirea clientului ($([[ -n "$opt" ]] && echo "conexiune $opt ms" || echo 'fara valoare in conexiune'): ${d%; })"
+}
+semantica_tt() {
+  local DO0="DO \$s\$ BEGIN PERFORM set_config('transaction_timeout', '0', true); PERFORM set_config('transaction_timeout', '1s', true); END \$s\$"
+  semantica_caz armat_la_begin 1500 -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c 'SELECT pg_sleep(4)' -c 'ROLLBACK'
+  [[ "$SEM_REZ" == inchis ]] && (( SEM_MS >= 1450 && SEM_MS <= 2100 )) \
+    || fail "semantica: ceasul armat la BEGIN din conexiune (1500 ms) nu a inchis sesiunea la ~1,5 s ($SEM_REZ, $SEM_MS ms) - designul r12 se bazeaza pe asta"
+  semantica_caz setat_din_zero '' -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c "SET LOCAL transaction_timeout = '1s'" -c 'SELECT pg_sleep(4)' -c 'ROLLBACK'
+  semantica_caz armat_0_apoi_1s_in_DO 4000 -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c "$DO0" -c 'SELECT pg_sleep(5)' -c 'ROLLBACK'
+  semantica_caz armat_set_local_0 3000 -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c 'SET LOCAL transaction_timeout = 0' -c 'SELECT pg_sleep(3.5)' -c 'ROLLBACK'
+  semantica_caz armat_mai_mic 4000 -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c "SET LOCAL transaction_timeout = '1s'" -c 'SELECT pg_sleep(5)' -c 'ROLLBACK'
+  semantica_caz armat_mai_mare 1500 -c 'BEGIN' -c 'SELECT pg_sleep(0.5)' -c "SET LOCAL transaction_timeout = '10s'" -c 'SELECT pg_sleep(2)' -c 'ROLLBACK'
+  semantica_caz r11_mostenit '' -c 'BEGIN' -c "SET LOCAL transaction_timeout = '4s'" -c 'SELECT pg_sleep(0.5)' -c "$DO0" -c 'SELECT pg_sleep(5)' -c 'ROLLBACK'
+  echo "SEMANTICA_TT: cititi timpii fata de: armat la BEGIN (1500) ~1500 inchis = DESIGNUL r12; un caz 'armat_*' inchis la valoarea de la BEGIN (4000 / 3000 / 1500) = schimbarea din mijlocul tranzactiei NU repune ceasul; ~1500 = il repune de la setare; neinchis = l-a oprit"
 }
 
 # r11 (Jakarinos r10 P2): COMMIT-ul propriu-zis NU e plafonat. Cluster efemer dedicat (starea lui nu mai conteaza),
@@ -397,7 +498,9 @@ lock_commit_lent() { # $1 eticheta, $2 artefactul, $3 SQL de stare (t = neaplica
   [[ -n "$proba" ]] || fail "commit lent $label: replicarea sincrona nu s-a activat"
   { printf 'BEGIN;\n%s;\n' "$marcaj"; cat "$art"; printf 'COMMIT;\n'; } >"$TMP/commit_$label.sql"
   fereastra_start "commit_$label"
-  PGAPPNAME="$app" "${PSQL[@]}" -f "$TMP/commit_$label.sql" >"$log" 2>&1 &
+  # r12: conectat ca runnerul (plafonul de 2 s in conexiune): COMMIT-ul care asteapta > 3 s arata ca plafonul se opreste
+  # la intrarea in COMMIT.
+  PGAPPNAME="$app" "${PSQL_LIV[@]}" -f "$TMP/commit_$label.sql" >"$log" 2>&1 &
   local client=$!
   be="$(wait_pid_query "$app" "wait_event='SyncRep'" "$client")" \
     || { "${ADMIN[@]}" -d postgres -c 'ALTER SYSTEM RESET synchronous_standby_names' -c 'SELECT pg_reload_conf()' >/dev/null

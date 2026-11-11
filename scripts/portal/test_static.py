@@ -184,8 +184,21 @@ class StaticDelivery(unittest.TestCase):
             "functie sql pe employees": mig.replace(L, "CREATE FUNCTION public.x() RETURNS bigint LANGUAGE sql AS $q$ SELECT count(*) FROM public.employees $q$;\n" + L, 1),
             "DO cu poarta inainte": mig.replace(L, "DO $q$ BEGIN PERFORM public.fn_portal_porti_lipsa(); END $q$;\n" + L, 1),
             "lock consultativ blocant": mig.replace("IF NOT pg_try_advisory_xact_lock(", "PERFORM pg_advisory_xact_lock(", 1),
-            "fara transaction_timeout": mig.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", "", 1),
             "a doua instructiune dupa $locks$": mig.replace("END $locks$;\n", "END $locks$;\nSELECT 1;\n", 1),
+            # r12: fisierul nu are voie sa schimbe transaction_timeout; plafonul se verifica (2000/client) in $pre$.
+            "plafon repornit in $locks$ (r11)": mig.replace("  RAISE NOTICE 'PORTAL_LOCKS 18a",
+                "  PERFORM set_config('transaction_timeout', '0', true);\n  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 18a", 1),
+            "SET LOCAL transaction_timeout la inceput": mig.replace("SET LOCAL statement_timeout = '15s';\n",
+                "SET LOCAL statement_timeout = '15s';\nSET LOCAL transaction_timeout = '2s';\n", 1),
+            "fara verificarea plafonului": mig.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", "IF false THEN", 1),
+            "plafon acceptat din sesiune": mig.replace("'2000/client'", "'2000/session'", 1),
+            "verificarea plafonului dupa lock-ul consultativ": mig.replace(
+                "  SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';\n", "", 1).replace(
+                "    RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';\n",
+                "    RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';\n  SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';\n", 1),
+            "reincercare socotita de la $locks$": mig.replace("IF clock_timestamp() >= now() + interval '1 second' THEN",
+                "IF clock_timestamp() >= statement_timestamp() + interval '1 second' THEN", 1),
+            "RESET in DO": mig.replace("DO $liste_pre$\nDECLARE v text[];\nBEGIN\n", "DO $liste_pre$\nDECLARE v text[];\nBEGIN\n  RESET ALL;\n", 1),
         }
         for nume, text in mutanti.items():
             with self.subTest(mutant=nume):
@@ -193,7 +206,9 @@ class StaticDelivery(unittest.TestCase):
                 self.assertNotEqual(buget.probleme(text, moduri, (), fn_mig), [], nume)
         for nume, text in {
             "rev: SELECT pe conturi_tip inainte": rev.replace(L, "SELECT count(*) FROM public.conturi_tip;\n" + L, 1),
-            "rev: fara transaction_timeout": rev.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", "", 1),
+            "rev: plafon repornit in $locks$ (r11)": rev.replace("  RAISE NOTICE 'PORTAL_LOCKS 18a revenire",
+                "  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 18a revenire", 1),
+            "rev: fara verificarea plafonului": rev.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", "IF false THEN", 1),
         }.items():
             with self.subTest(mutant=nume):
                 self.assertNotEqual(text, rev, nume)

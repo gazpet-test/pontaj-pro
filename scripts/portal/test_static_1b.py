@@ -374,11 +374,14 @@ class StaticProvisioning(unittest.TestCase):
                 .replace('SET LOCAL search_path = public, pg_temp;\n',
                          "SET LOCAL search_path = public, pg_temp;\nSET LOCAL lock_timeout = '3s';\nSET LOCAL statement_timeout = '15s';\n", 1),
             'fara PG17': mig.replace("THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'", "THEN RAISE NOTICE 'PORTAL_PG17_REQUIRED'", 1),
-            'fara transaction_timeout': mig.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", '', 1),
-            'transaction_timeout nepornit de la zero': mig.replace("  PERFORM set_config('transaction_timeout', '0', true);\n", '', 1),
-            'plafon inaintea buclei': mig.replace("  PERFORM set_config('statement_timeout', '2s', true);\n", '', 1)
-                .replace('DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;\nBEGIN\n',
-                         "DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;\nBEGIN\n  PERFORM set_config('statement_timeout', '2s', true);\n", 1),
+            # r12: plafonul = ceasul de la BEGIN din conexiune; fisierul il verifica, nu-l schimba.
+            'plafon repornit in $locks$ (r11)': mig.replace("  RAISE NOTICE 'PORTAL_LOCKS 19a",
+                "  PERFORM set_config('transaction_timeout', '0', true);\n  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 19a", 1),
+            'plafon schimbat inainte de $locks$': mig.replace(L, "DO $q$ BEGIN PERFORM set_config('transaction_timeout', '10s', true); END $q$;\n" + L, 1),
+            'fara verificarea plafonului': mig.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", 'IF false THEN', 1),
+            'plafon cu alta valoare': mig.replace("'2000/client'", "'20000/client'", 1),
+            'reincercare 3 s de la $locks$': mig.replace("IF clock_timestamp() >= now() + interval '1 second' THEN",
+                "IF clock_timestamp() >= now() + interval '3 seconds' THEN", 1),
             'a doua instructiune dupa $locks$': mig.replace('END $locks$;\n', 'END $locks$;\nSELECT 1;\n', 1),
             'instructiune dupa $critic$': mig.rstrip('\n') + '\nANALYZE public.profiles;\n',
         }
@@ -399,7 +402,9 @@ class StaticProvisioning(unittest.TestCase):
         # Revenirea: aceleasi reguli (punctul 7).
         for nume, text in {
             'rev: SELECT pe portal_provisioning inainte': rev.replace(L, 'SELECT count(*) FROM public.portal_provisioning;\n' + L, 1),
-            'rev: fara transaction_timeout': rev.replace("  PERFORM set_config('transaction_timeout', '2s', true);\n", '', 1),
+            'rev: plafon repornit in $locks$ (r11)': rev.replace("  RAISE NOTICE 'PORTAL_LOCKS 19a revenire",
+                "  PERFORM set_config('transaction_timeout', '2s', true);\n  RAISE NOTICE 'PORTAL_LOCKS 19a revenire", 1),
+            'rev: fara verificarea plafonului': rev.replace("IF v_plafon IS DISTINCT FROM '2000/client' THEN", 'IF false THEN', 1),
             'rev: a doua instructiune dupa $locks$': rev.replace('END $locks$;\n', 'END $locks$;\nDROP TABLE public.portal_e1_1b_manifest;\n', 1),
         }.items():
             with self.subTest(mutant=nume):

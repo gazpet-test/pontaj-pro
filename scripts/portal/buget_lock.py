@@ -8,8 +8,13 @@ probleme(sql, moduri, existente) intoarce lista abaterilor; goala = acceptat.
 r10 (al doilea recenzent r9 P1-01, Jakarinos r9 P2):
   * lock_timeout / statement_timeout sunt PRIMELE instructiuni (inaintea oricarui lock, inclusiv cel consultativ);
     lock-ul consultativ numai pg_try_advisory_xact_lock (refuz, nu asteptare); PostgreSQL 17 cerut;
-  * in $locks$, dupa bucla: statement_timeout = 2 s si transaction_timeout pornit de la zero (0, apoi 2 s);
+  * [r10/r11, INLOCUIT in r12] in $locks$, dupa bucla: transaction_timeout pornit de la zero (0, apoi 2 s);
   * dupa $locks$ ramane exact o instructiune: DO $critic$;
+r12 (harness-ul PG17 real: un ceas transaction_timeout deja pornit nu se reporneste in mijlocul tranzactiei):
+  * fisierul NU schimba transaction_timeout nicaieri: in textul executat (fara comentarii; cu literali si corpuri)
+    numele apare EXACT o data, in verificarea din $pre$ (pg_settings ... '2000/client' => PORTAL_PLAFON_TRANZACTIE_REQUIRED),
+    inaintea lock-ului consultativ si a primei schimbari; niciun RESET in codul executat;
+  * reincercarea din $locks$ se socoteste de la BEGIN: clock_timestamp() >= now() + interval '1 second'.
   * inainte de $locks$ nicio instructiune care ia (fie si ACCESS SHARE) un lock pe un tabel EXISTENT: referinte in
     codul executat (nivel superior, corpuri DO, corpuri de functii non-plpgsql, care se analizeaza la creare), apeluri
     ale functiilor portalului care citesc astfel de tabele, EXECUTE dinamic intr-un DO. Literalii, comentariile si
@@ -119,6 +124,27 @@ def _instructiuni(text):
 
 def _cod(text):
     return ' '.join(s for t, s in _segmente(text) if t == 'cod')
+
+
+def _fara_comentarii(text, adanc=0):
+    """r12: textul executat, fara comentarii, cu literalii si corpurile $...$ (analizate la randul lor, fara comentarii).
+    Un corp care nu se poate analiza ramane intreg (fail-closed: mentiunile din el se numara)."""
+    rez = []
+    try:
+        seg = _segmente(text)
+    except ValueError:
+        return text
+    for t, s in seg:
+        if t == 'dolar':
+            rez.append(_fara_comentarii(s, adanc + 1) if adanc < 8 else s)
+        else:
+            rez.append(s)
+    return ' '.join(rez)
+
+
+VERIFICARE_PLAFON = ("SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';",
+                     "IF v_plafon IS DISTINCT FROM '2000/client' THEN",
+                     "PORTAL_PLAFON_TRANZACTIE_REQUIRED")
 
 
 def _cod_livrare(text):
@@ -243,7 +269,7 @@ def probleme(sql, moduri, existente=TABELE_UTILIZATORI, functii=()):
     if re.search(r'pg_advisory_(xact_)?lock(_shared)?\s*\(', cod_tot) or 'pg_try_advisory_xact_lock(' not in cod_tot:
         p.append('lock consultativ blocant (doar pg_try_advisory_xact_lock + refuz)')
     if "current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'" not in sql:
-        p.append('PostgreSQL 17 necerut (transaction_timeout)')
+        p.append('PostgreSQL 17 necerut (plafonul tranzactiei)')
     # Pe tabelele utilizatorilor: numai in $locks$, toate cu NOWAIT, cu modurile asteptate.
     for tabele, _, _ in _instructiuni_lock(afara):
         for t in (x.strip() for x in tabele.split(',')):
@@ -258,17 +284,23 @@ def probleme(sql, moduri, existente=TABELE_UTILIZATORI, functii=()):
                 gasite[t] = mod.strip()
     if gasite != moduri:
         p.append(f'moduri {gasite} != {moduri}')
-    if "interval '3 seconds'" not in bloc or 'PORTAL_LOCK_BUDGET' not in bloc or "USING ERRCODE = '55P03'" not in bloc \
-            or 'WHEN lock_not_available' not in bloc or 'pg_sleep(0.05)' not in bloc:
-        p.append('bucla $locks$ incompleta (buget 3 s / 55P03 / NOWAIT prins / pauza)')
-    # r10: plafonul sectiunii critice, pornit DUPA bucla (la obtinerea lock-urilor), de la zero.
-    dupa = bloc.split('END LOOP;', 1)[1] if 'END LOOP;' in bloc else ''
-    plafon = ["PERFORM set_config('statement_timeout', '2s', true);",
-              "PERFORM set_config('transaction_timeout', '0', true);",
-              "PERFORM set_config('transaction_timeout', '2s', true);"]
-    poz = [dupa.find(x) for x in plafon]
-    if min(poz) < 0 or poz != sorted(poz) or sum(bloc.count(x) for x in plafon) != 3:
-        p.append('plafonul sectiunii critice lipsa (statement_timeout 2 s + transaction_timeout 0 -> 2 s dupa bucla)')
+    if "IF clock_timestamp() >= now() + interval '1 second' THEN" not in bloc or 'PORTAL_LOCK_BUDGET' not in bloc \
+            or "USING ERRCODE = '55P03'" not in bloc or 'WHEN lock_not_available' not in bloc or 'pg_sleep(0.05)' not in bloc:
+        p.append('bucla $locks$ incompleta (buget 1 s de la BEGIN / 55P03 / NOWAIT prins / pauza)')
+    # r12: plafonul = ceasul de la BEGIN din conexiunea runnerului; fisierul doar il VERIFICA (in $pre$), nu-l schimba.
+    executat = _fara_comentarii(sql)
+    if len(re.findall(r'transaction_timeout', executat, re.I)) != 1:
+        p.append('transaction_timeout apare in codul executat in afara verificarii din $pre$ (fisierul nu are voie sa-l schimbe)')
+    if re.search(r'\bRESET\b', _cod_livrare(sql), re.I):
+        p.append('RESET in codul executat (poate readuce sau schimba setarile tranzactiei)')
+    i_pre, f_pre = sql.find('DO $pre$'), sql.find('END $pre$;')
+    pre = sql[i_pre:f_pre] if 0 <= i_pre < f_pre else ''
+    poz_v = [pre.find(x) for x in VERIFICARE_PLAFON]
+    i_cons = pre.find('pg_try_advisory_xact_lock(')
+    m0 = PRIMA_SCHIMBARE.search(sql)
+    if min(poz_v) < 0 or poz_v != sorted(poz_v) or i_cons < 0 or poz_v[-1] > i_cons \
+            or sum(sql.count(x) for x in VERIFICARE_PLAFON[:2]) != 2 or (m0 and m0.start() < f_pre):
+        p.append('verificarea plafonului (2000/client) lipsa din $pre$ sau dupa lock-ul consultativ / prima schimbare')
     # r10: dupa $locks$ exact o instructiune: DO $critic$.
     coada = sql[b + len('END $locks$;'):]
     rest = _instructiuni(coada)

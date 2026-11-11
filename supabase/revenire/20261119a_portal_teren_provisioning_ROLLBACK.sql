@@ -15,24 +15,32 @@
 --  si profiles: revenirea blocheaza si citirile (login, ERP) pe durata ei.
 -- r10 (al doilea recenzent r9 P1-01, punctul 7): aceleasi reguli ca aplicarea: timeout-urile primele (lock-ul consultativ
 --  cu pg_try_advisory_xact_lock + refuz), niciun tabel existent atins inainte de $locks$, o singura instructiune dupa
---  ($critic$), transaction_timeout = 2 s de la obtinerea lock-urilor. ACCESS EXCLUSIVE e cerut exact de:
+--  ($critic$). ACCESS EXCLUSIVE e cerut exact de:
 --  DROP TABLE portal_provisioning (FK-urile spre auth.users / employees: stergerea triggerelor RI de pe tabelul referit),
---  DROP TRIGGER portal_revoca_la_plecare ON employees si ALTER ... CHECK pe profiles; durata lui e plafonata la 2 s.
--- r11 (Jakarinos r10 P2 + al doilea recenzent r10 P1-01), formularea exacta (aceeasi semantica PG17 ca 18a / 19a):
---  plafonul de 2 s acopera tot de la obtinerea lock-urilor PANA LA INTRAREA IN COMMIT ($critic$, inregistrarea
---  runnerului, pauzele clientului / retelei, inclusiv intre $locks$ si $critic$). COMMIT-ul propriu-zis NU e plafonat:
---  PG17 opreste ceasul la intrarea in COMMIT, iar ACCESS EXCLUSIVE se elibereaza dupa scrierea commit-ului (flush WAL,
---  de regula milisecunde; asteptarea standby-ului numai cu replicare sincrona). Dovedit in harness (lock_cap_refusal
---  rev19a).
+--  DROP TRIGGER portal_revoca_la_plecare ON employees si ALTER ... CHECK pe profiles; durata lui e plafonata (r12).
+-- r11: [plafonul „2 s de la obtinerea lock-urilor” e INFIRMAT de harness-ul PG17 real si inlocuit in r12]. Ramane
+--  valabil: COMMIT-ul propriu-zis NU e plafonat (PG17 opreste ceasul la intrarea in COMMIT; ACCESS EXCLUSIVE se
+--  elibereaza dupa scrierea commit-ului: flush WAL, de regula milisecunde; standby-ul numai cu replicare sincrona).
+-- r12 (aceeasi solutie ca 18a / 19a): fisierul NU schimba niciun timeout dupa $pre$. PLAFONUL = ceasul pornit de
+--  PostgreSQL la BEGIN cu valoarea din CONEXIUNEA runnerului (livrare_migrare.sh --plafon-tranzactie-ms 2000, PR #1054;
+--  sursa 'client'); $pre$ cere exact 2000/client. GARANTIA: de la BEGIN (deci si de la primul lock) PANA LA INTRAREA IN
+--  COMMIT cel mult 2 s, altfel ROLLBACK la tot. Reincercarea lock-urilor: pana la 1 s de la BEGIN. Dovedit in harness
+--  (lock_cap_refusal rev19a).
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
+DECLARE v_plafon text;
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
   IS DISTINCT FROM '20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current() THEN
   RAISE EXCEPTION 'PORTAL_ROLLBACK_RUNNER_REQUIRED'; END IF;
  IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED'; END IF;
  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
+ -- r12: plafonul din conexiunea runnerului, neschimbat de la BEGIN (sursa 'client').
+ SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';
+ IF v_plafon IS DISTINCT FROM '2000/client' THEN
+  RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % (cerut 2000/client: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+    coalesce(v_plafon, 'lipsa'); END IF;
  IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
   RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03'; END IF;
 END $pre$;
@@ -57,11 +65,12 @@ BEGIN
   IF cardinality(v) > 0 THEN
     RAISE EXCEPTION 'PORTAL_PRIVILEGES_MISSING: %', array_to_string(v,'; '); END IF;
 END $priv$;
--- Punct unic de lock, NOWAIT + reincercare 3 s (nu intra in coada); peste buget = 55P03 PORTAL_LOCK_BUDGET, nimic
--- schimbat. Ordinea: auth.users -> employees -> profiles -> user_module_access -> tabelele portalului.
--- auth.users / employees / profiles ACCESS EXCLUSIVE = nivelul cerut oricum de DROP FK / DROP TRIGGER / ALTER CHECK.
+-- Punct unic de lock, NOWAIT + reincercare pana la 1 s de la BEGIN (nu intra in coada); peste buget = 55P03
+-- PORTAL_LOCK_BUDGET, nimic schimbat. Ordinea: auth.users -> employees -> profiles -> user_module_access -> tabelele
+-- portalului. auth.users / employees / profiles ACCESS EXCLUSIVE = nivelul cerut oricum de DROP FK / DROP TRIGGER /
+-- ALTER CHECK. r12: niciun timeout schimbat aici; plafonul = ceasul de la BEGIN (vezi antetul).
 DO $locks$
-DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
+DECLARE v_n integer := 0;
 BEGIN
   LOOP
     v_n := v_n + 1;
@@ -74,20 +83,15 @@ BEGIN
         public.portal_provisioning_jurnal,public.portal_e1_1b_manifest IN ACCESS EXCLUSIVE MODE NOWAIT;
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
-      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
-        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: tabelele revenirii 1b ocupate % ms (% incercari); nimic schimbat',
-          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
+      IF clock_timestamp() >= now() + interval '1 second' THEN
+        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: tabelele revenirii 1b ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
+          v_n, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
       END IF;
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  -- r10 / r11: plafonul sectiunii critice (vezi 19a): 2 s de aici pana la INTRAREA in COMMIT, pornit de ACUM (0, apoi
-  -- 2 s); COMMIT-ul propriu-zis (flush WAL / replicare sincrona) nu e plafonat.
-  PERFORM set_config('statement_timeout', '2s', true);
-  PERFORM set_config('transaction_timeout', '0', true);
-  PERFORM set_config('transaction_timeout', '2s', true);
-  RAISE NOTICE 'PORTAL_LOCKS 19a revenire: % incercari, % ms; plafon 2 s pana la intrarea in COMMIT', v_n,
-    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+  RAISE NOTICE 'PORTAL_LOCKS 19a revenire: % incercari, lock-uri la % ms de la BEGIN; plafon 2 s de la BEGIN pana la intrarea in COMMIT', v_n,
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 END $locks$;
 -- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock), restaurarea, stergerile.
 DO $critic$

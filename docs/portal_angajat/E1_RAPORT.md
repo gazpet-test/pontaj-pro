@@ -412,6 +412,10 @@ porneste de la setare si acopera pauza clientului dintre `$locks$` si `$critic$`
 fusese rulata.
 
 ### Garantia, formulata exact (aceeasi in 18a, 19a, revenirea 19a, revenirea 18a)
+> **[INFIRMAT in r12]** Primul punct de mai jos („ceasul pornit la lock-uri”) e FALS cand tranzactia are deja un
+> `transaction_timeout` pornit: harness-ul PG17 real (proba `mostenit`) a aratat lock-uri tinute 3,7 s si tranzactia
+> ajunsa la COMMIT. Garantia valabila e cea din sectiunea r12. Punctul „Ce NU plafoneaza” (COMMIT-ul) ramane valabil.
+
 - **Ce plafoneaza ceasul.** `$locks$`, imediat dupa obtinerea lock-urilor, seteaza `transaction_timeout` intai pe 0
   (opreste un ceas mostenit de la rol / baza / inceputul tranzactiei), apoi pe 2 s: PG17 porneste ceasul in acel moment
   daca nu e deja pornit (de aici cele doua setari). De acolo PANA LA INTRAREA IN COMMIT trec cel mult 2 s: instructiunea
@@ -481,3 +485,103 @@ fusese rulata.
 | L20 | Traficul legitim concurent (citiri / scrieri, login simulat) masurat in toate cele 12 probe, prag care pica testul. |
 | L25 | Sesiuni reale + bariera pe stdin dupa starea serverului (fara sleep orb), timpi pe ceasul serverului, a doua sesiune pentru eliberare, praguri care pica testul, PG17 NOSUPERUSER, comportamentul real aratat (modul `mostenit`, COMMIT intarziat), nu presupus. |
 | L03–L05, L07–L13, L15–L17, L19, L21–L24 | n/a pentru delta r11 (doar comentarii SQL + harness). |
+
+## E1-1a/1b r12 — 11.11.2026 (harness-ul PG17 real a infirmat plafonul r11 in varianta „mostenit”)
+
+Chat-ul a rulat harness-ul pe PostgreSQL 17.11 (WSL). r10: toate probele de lock trec pe cele 4 fluxuri, apoi
+`volum: fixture incomplet`. r11: `LOCK_CAP 18a critic` si `commit` trec (sesiune inchisa la 2001 ms de la lock-uri,
+2031 ms de la BEGIN), apoi **`fereastra cap_18a_mostenit: lock-uri tinute 3729 ms > 2500 ms`**: cu un
+`transaction_timeout` de 10 s deja pornit, `set_config` 0 apoi 2 s dupa lock-uri NU a dat 2 s; nimic nu a inchis
+sesiunea pana la eroarea trimisa intentionat de client. Garantia r11 („cel mult 2 s de la lock-uri pana la intrarea in
+COMMIT”) era deci FALSA in acest caz. In cazurile critic / commit iesise bine doar pentru ca BEGIN-ul si lock-urile
+erau aproape simultane.
+
+### 1. Semantica `transaction_timeout` in PG17, cand e schimbat in mijlocul tranzactiei
+- **Ce e documentat si pe ce ne bazam:** ceasul e al TRANZACTIEI — porneste la inceputul ei (BEGIN explicit sau
+  tranzactia implicita a unei instructiuni), cu valoarea in vigoare atunci, si se opreste la final (iar la COMMIT, la
+  intrarea in COMMIT: proba `lock_commit_lent`). In sursa: `StartTransaction()` (xact.c) porneste ceasul daca valoarea e
+  > 0. Asta e singurul comportament pe care se sprijina r12.
+- **Ce NU e documentat si nu folosim:** schimbarea valorii in mijlocul tranzactiei trece prin functia de atribuire a
+  setarii (`assign_transaction_timeout`, postgres.c). Proba r11 a aratat pe 17.11: pornit din 0 in mijlocul tranzactiei
+  => ceasul porneste la setare (critic / commit); deja pornit (10 s) + 0 apoi 2 s => NU s-a obtinut un ceas de 2 s de
+  la setare (mostenit). Concluzia de lucru: o schimbare in mijlocul tranzactiei nu e un mecanism pe care sa ne bazam.
+  **Limita onesta:** pe server nu am sursa 17.11 si nici acces la paginile postgresql.org / GitHub (nu sunt pe lista de
+  domenii permise), deci trimiterea exacta la cod o cer chat-ului (extrasul `assign_transaction_timeout` si
+  `StartTransaction` din REL_17_STABLE, pentru review). Ce nu depinde de asta: proba de mai jos.
+- **Proba, pe acelasi server:** `semantica_tt` (inceputul harness-ului), 7 cazuri cu timpi reali, fiecare intr-o sesiune
+  noua: `armat_la_begin` (1,5 s din conexiune; PRAG care pica testul: inchis la ~1,5 s), `setat_din_zero`,
+  `armat_0_apoi_1s_in_DO` (forma r10 / r11), `armat_set_local_0`, `armat_mai_mic`, `armat_mai_mare`, `r11_mostenit`
+  (exact proba picata). Fiecare linie `SEMANTICA_TT` spune „inchis” / „neinchis” si dupa cat; ultima linie explica cum se
+  citesc (inchis la valoarea de la BEGIN = schimbarea nu repune ceasul; ~1,5 s = il repune de la setare; neinchis = l-a
+  oprit). Rezultatul intra in raport la rulare; designul nu depinde de el, cu exceptia primului caz.
+
+### 2. Plafonul, independent de aceasta semantica si de ce a setat sesiunea / rolul
+- **Alegerea: pregatirea ramane in ACEEASI tranzactie, ceasul e pus de la bun inceput (BEGIN), iar bugetul TOTAL al
+  tranzactiei e plafonat la 2 s.** Runnerul trimite `transaction_timeout = 2000` ca parametru de pornire al conexiunii
+  livrarii (`livrare_migrare.sh --plafon-tranzactie-ms 2000`, PR separat **#1054**, cu testul lui
+  `scripts/test_livrare_plafon.sh`). Sursa valorii in server e `client`, prioritara fata de `ALTER ROLE / ALTER DATABASE
+  … SET`, deci PostgreSQL porneste ceasul la BEGIN-ul lui `psql --single-transaction` cu exact 2 s, orice ar avea rolul /
+  baza. Fisierele nu mai ating `transaction_timeout` (contractul static: numele apare o singura data in codul executat,
+  in verificare; niciun `RESET`). `$pre$` cere `2000/client` inaintea lock-ului consultativ si a oricarei schimbari:
+  runner vechi / fara optiune, pooler care pierde parametrul, ceas schimbat in tranzactie (alta valoare SAU aceeasi
+  valoare: sursa devine `session`) => `PORTAL_PLAFON_TRANZACTIE_REQUIRED`, nimic schimbat.
+- **Atomicitatea (de ce nu o tranzactie separata pentru partea critica):** daca pregatirea s-ar comite separat si partea
+  critica ar refuza, ar ramane obiectele pregatirii (rol, functii, tabele goale) fara curatenie automata — exact ce
+  refuzurile atomice de pana acum interzic. In aceeasi tranzactie, orice refuz (eroare, `PORTAL_LOCK_BUDGET`, inchiderea
+  sesiunii de catre ceas) = ROLLBACK la TOT, pregatirea inclusa. Pretul: cele 2 s includ si pregatirea (pe fixture
+  ~30 ms; de masurat in DRY pe clona) si asteptarea lock-urilor.
+- **Asteptarea lock-urilor:** NOWAIT + reincercare la 50 ms pana la **1 s de la BEGIN** (`now()` = inceputul
+  tranzactiei; inainte 3 s de la intrarea in `$locks$`), ca sa ramana cel putin ~1 s pentru `$critic$`; peste = 55P03,
+  nimic schimbat.
+- **Compatibil cu runnerul oficial:** da, tot `psql --single-transaction`, o singura tranzactie; schimbarea ceruta e
+  doar optiunea noua din #1054 (fara ea, comportamentul runnerului ramane neschimbat, iar aceste migrari refuza).
+  **Ordinea de merge: #1054 inainte de #892.** La DRY / aplicare: endpointul trebuie sa transmita parametrul de pornire
+  (conexiunea directa il transmite; un pooler care il ignora e prins de prolog = refuz, fara efecte).
+
+### 3. Probele (cele 4 fluxuri: 18a, 19a, revenire 19a, revenire 18a)
+`lock_cap_refusal`, toate conectate exact ca runnerul, clientul tine sesiunea 3 s fara instructiuni:
+- `critic` / `commit`: fara niciun timeout prealabil; pauza intre `$locks$` si `$critic$` / dupa `$critic$`;
+- `mostenit`: ROLUL are `transaction_timeout = 10s` (verificat `10000/user` intr-o conexiune obisnuita), 0,8 s de lucru
+  INAINTE de `$locks$`, pauza dupa `$critic$`;
+- `mic`: rolul are 500 ms (`500/user`), la fel 0,8 s de lucru inainte.
+Asteptat in toate: conexiunea livrarii vede `2000/client`; serverul inchide sesiunea (linie noua in jurnal) la
+**~2 s de la BEGIN** (fereastra [1950, 2400] ms; daca s-ar socoti de la lock-uri, mostenit / mic ar da ~2,8 s; daca ar
+conta rolul, 10 s / 0,5 s inainte de lock-uri); lock-urile tinute <= timpul de la BEGIN; sesiune disparuta, probe libere,
+stare neschimbata, trafic concurent masurat. `plafon_refuz` pe fiecare flux: fara plafon in conexiune (`0/default`),
+`SET LOCAL` 10 s in tranzactie (`10000/session`), `SET LOCAL` cu aceeasi valoare (`2000/session`) => refuz in `$pre$`,
+nimic schimbat. Plus `PLAFON_RUNNER 18a` (runnerul fara optiune => cod 10), `LOCK_BUDGET` (refuz la >= 1 s si < 2 s de
+la BEGIN, din mesajul serverului), `LOCK_COMMIT_LENT` (conectat cu plafon 2 s: COMMIT-ul asteapta > 3 s fara inchidere,
+apoi se comite — limita ramane). `LOCK_PRE` / `LOCK_OBS` tin intentionat tranzactia deschisa: ruleaza pe o copie in care
+plafonul cerut si cel din conexiune sunt 120 s (`copie_obs`, exact o inlocuire), nu sunt probe de plafon.
+
+### 4. `volum: fixture incomplet`
+Cauza: verificarea numara in `pg_class` si indexurile `volum_tN_pkey` (1.200 in loc de 600 de tabele). Reparat: doar
+`relkind = 'r'`, nume exacte prin regex, plus conturi / profiluri legate de fise / drepturi pe module numarate exact;
+harness-ul tipareste `VOLUM: 400|400|1600|600|1500` si pica cu valorile gasite daca difera.
+
+### 5. Garantia r12 (aceeasi in cele 4 fisiere, in PR si in E1_REVENIRE_AUTH.md)
+- **Plafonat:** de la BEGIN-ul tranzactiei de livrare (deci si de la primul lock, care vine dupa) PANA LA INTRAREA IN
+  COMMIT trec cel mult 2 s — pregatirea, asteptarea lock-urilor, `$critic$`, inregistrarea runnerului, orice pauza a
+  clientului / retelei. Peste: serverul inchide sesiunea => ROLLBACK la tot, runnerul raporteaza NEAPLICAT (10).
+- **Neplafonat (limita r11, neschimbata):** COMMIT-ul propriu-zis — flush WAL (de regula milisecunde) si, numai cu
+  replicare sincrona, asteptarea standby-ului.
+- **Decizia pentru Razvan (r11) ramane, cu doua precizari:** limita e acum mai stricta (2 s de la BEGIN, nu de la
+  lock-uri); asteptarea lock-urilor e de cel mult 1 s (refuz mai des daca cineva tine tabelele — sigur, se reia).
+
+### Dovezi
+- Mine: contractul static (portul node al `buget_lock.py` + mutantii din `test_static*.py`): cele 4 fisiere acceptate,
+  46/46 mutanti respinsi (inclusiv „plafon repornit in `$locks$`”, `SET LOCAL transaction_timeout`, fara verificare,
+  `2000/session`, verificare dupa lock-ul consultativ, reincercare socotita de la `$locks$`, `RESET`), 3 martori acceptati.
+- De rulat de chat (la mine binarele PG, Python si `bash -n` cer aprobare):
+  `wsl -d Ubuntu-24.04 -u root -- bash /mnt/c/Users/Gazpet-Ai/rdr-wt/portal-e1-r12/scripts/portal/harness_wsl.sh <slot> 160`
+  si, pentru #1054, `wsl -d Ubuntu-24.04 -u postgres -- bash /mnt/c/Users/Gazpet-Ai/rdr-wt/portal-e1-r12/scripts/test_livrare_plafon.sh <slot>`.
+
+| Regula | Dovada r12 |
+|---|---|
+| L01 / L06 | Ordinea lock-urilor si NOWAIT neschimbate; reincercarea socotita de la BEGIN (static: mutant respins). |
+| L02 | Pregatirea si partea critica raman in ACEEASI tranzactie (nu o tranzactie separata pentru partea critica: un refuz ar lasa pregatirea comisa); coada = `$critic$`, o singura instructiune dupa `$locks$`. |
+| L14 | O singura tranzactie: refuzul / inchiderea = ROLLBACK la tot, pregatirea inclusa; verificat prin starea dinainte pe aplicari si reveniri (`lock_cap_refusal`, `plafon_refuz`, `PLAFON_RUNNER`). |
+| L18 | Inchiderea dovedita pozitiv (linie noua in jurnal + fereastra + timpul de la BEGIN), refuzurile pe mesajul exact (`PORTAL_PLAFON_TRANZACTIE_REQUIRED: <valoare>/<sursa>`). |
+| L20 | Trafic legitim concurent in toate probele de plafon (16), cu prag; traficul / observatorul ruleaza fara setarea de rol a probei. |
+| L25 | Comportamentul PG17 aratat (`semantica_tt`, prag pe singurul caz folosit), sesiuni reale, timpi pe ceasul serverului, a doua sesiune; nicio presupunere despre schimbarea ceasului in mijlocul tranzactiei. |
+| restul | n/a pentru delta r12 (plafon + harness + volum + runner). |

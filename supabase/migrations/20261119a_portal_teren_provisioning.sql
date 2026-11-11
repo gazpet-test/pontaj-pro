@@ -16,14 +16,20 @@
 --    care citesc tabelele utilizatorilor sunt plpgsql (corpul nu se analizeaza la creare => niciun ACCESS SHARE implicit),
 --    handle_new_user si fn_teren_eligibil se inlocuiesc tot inainte (vizibile altor sesiuni abia la COMMIT, atomic cu
 --    CHECK-ul nou); lock-urile pe conturi_* (cascada din auth.users) s-au mutat in $locks$;
---  * dupa $locks$ ramane O SINGURA instructiune ($critic$), sub transaction_timeout = 2 s (r11: de la obtinerea
---    lock-urilor pana la INTRAREA in COMMIT; COMMIT-ul propriu-zis - flush WAL / replicare sincrona - nu e plafonat,
---    vezi blocul $locks$ si 18a);
+--  * dupa $locks$ ramane O SINGURA instructiune ($critic$);
+--    [plafonul r10 / r11 "2 s de la obtinerea lock-urilor" e INFIRMAT de harness-ul PG17 real si inlocuit in r12]
 --  * fereastra 18a -> 19a (P2-01): conturile aparute intre cele doua livrari (handle_new_user vechi nu le clasifica) se
 --    clasifica explicit 'neaprobat' in $critic$, sub lock-ul pe auth.users; un cont teren neclasificat = refuz.
+-- r12 (harness-ul PG17 real, proba "mostenit" r11; aceeasi solutie ca 18a): un transaction_timeout deja pornit nu se
+-- reporneste in mijlocul tranzactiei, deci fisierul NU schimba niciun timeout dupa $pre$. PLAFONUL = ceasul pornit de
+-- PostgreSQL la BEGIN cu valoarea din CONEXIUNEA runnerului (livrare_migrare.sh --plafon-tranzactie-ms 2000, PR #1054;
+-- sursa 'client'); $pre$ cere exact 2000/client. GARANTIA: de la BEGIN (deci si de la primul lock) PANA LA INTRAREA IN
+-- COMMIT cel mult 2 s, altfel ROLLBACK la tot (pregatirea e in aceeasi tranzactie). COMMIT-ul propriu-zis ramane
+-- neplafonat (limita r11). Reincercarea lock-urilor: pana la 1 s de la BEGIN.
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
+DECLARE v_plafon text;
 BEGIN
  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare',true)
    IS DISTINCT FROM '20261119a_portal_teren_provisioning:'||txid_current() THEN
@@ -31,6 +37,11 @@ BEGIN
  IF current_setting('transaction_isolation') <> 'read committed' THEN
    RAISE EXCEPTION 'PORTAL_READ_COMMITTED_REQUIRED'; END IF;
  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION 'PORTAL_PG17_REQUIRED'; END IF;
+ -- r12: plafonul din conexiunea runnerului, neschimbat de la BEGIN (sursa 'client').
+ SELECT setting || '/' || source INTO v_plafon FROM pg_settings WHERE name = 'transaction_timeout';
+ IF v_plafon IS DISTINCT FROM '2000/client' THEN
+   RAISE EXCEPTION 'PORTAL_PLAFON_TRANZACTIE_REQUIRED: % (cerut 2000/client: livrare_migrare.sh --plafon-tranzactie-ms 2000)',
+     coalesce(v_plafon, 'lipsa'); END IF;
  IF NOT pg_try_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) THEN
    RAISE EXCEPTION 'PORTAL_DELIVERY_BUSY' USING ERRCODE = '55P03'; END IF;
 END $pre$;
@@ -685,20 +696,20 @@ $function$;
 --                        PostgreSQL atat DROP CONSTRAINT cat si ADD CONSTRAINT ... CHECK (si varianta NOT VALID) cer
 --                        ACCESS EXCLUSIVE; doar FK-ul (SHARE ROW EXCLUSIVE) si VALIDATE (SHARE UPDATE EXCLUSIVE) au
 --                        niveluri mai mici, deci CHECK-ul nu se poate schimba fara sa opreasca si citirile. Blocheaza
---                        TOT pe profiles (inclusiv citirile ERP prin RLS): cel mult 2 s pana la intrarea in COMMIT
---                        (plafonul de mai jos) + durata COMMIT-ului (de regula milisecunde).
+--                        TOT pe profiles (inclusiv citirile ERP prin RLS): cel mult 2 s de la BEGIN pana la intrarea in
+--                        COMMIT (plafonul de mai jos) + durata COMMIT-ului (de regula milisecunde).
 --  * user_module_access  SHARE: drepturile conturilor teren nu se schimba intre poarta si amprenta. Blocheaza: scrierile.
 --  * conturi_tip / jurnal SHARE (clasificarea nu se schimba; cascada unei stergeri asteapta), conturi_teren ACCESS
 --                        EXCLUSIVE (coloane noi). Le foloseste doar hook-ul, care nu e pornit.
--- PLAFONUL (r10, formulare exacta r11; aceeasi semantica PG17 ca 18a): transaction_timeout pornit de ACUM, imediat
--- dupa obtinere (0, apoi 2 s). Plafoneaza: de aici PANA LA INTRAREA IN COMMIT (instructiunea $critic$, inregistrarea
--- runnerului, pauzele clientului / retelei, inclusiv intre $locks$ si $critic$) cel mult 2 s, altfel serverul inchide
--- sesiunea => ROLLBACK, lock-uri eliberate, nimic schimbat. NU plafoneaza COMMIT-ul propriu-zis (PG17 opreste ceasul
--- la intrarea in COMMIT; lock-urile, inclusiv ACCESS EXCLUSIVE pe profiles, se elibereaza dupa scrierea commit-ului):
--- se adauga flush-ul WAL (de regula milisecunde; fara constrangeri amanate) si, numai cu replicare sincrona, asteptarea
--- standby-ului. statement_timeout = 2 s pe $critic$ = a doua plasa.
+-- PLAFONUL (r12; ca 18a): ceasul pornit la BEGIN din conexiunea runnerului (verificat in $pre$); aici NU se schimba
+-- niciun timeout. Plafoneaza: de la BEGIN PANA LA INTRAREA IN COMMIT (pregatirea, asteptarea lock-urilor, $critic$,
+-- inregistrarea runnerului, pauzele clientului / retelei, inclusiv intre $locks$ si $critic$) cel mult 2 s, altfel serverul
+-- inchide sesiunea => ROLLBACK la tot, lock-uri eliberate, nimic schimbat. NU plafoneaza COMMIT-ul propriu-zis (PG17
+-- opreste ceasul la intrarea in COMMIT; lock-urile, inclusiv ACCESS EXCLUSIVE pe profiles, se elibereaza dupa scrierea
+-- commit-ului): se adauga flush-ul WAL (de regula milisecunde; fara constrangeri amanate) si, numai cu replicare
+-- sincrona, asteptarea standby-ului. Reincercarea NOWAIT: pana la 1 s de la BEGIN (now() = inceputul tranzactiei).
 DO $locks$
-DECLARE v_t0 timestamptz := clock_timestamp(); v_n integer := 0;
+DECLARE v_n integer := 0;
 BEGIN
   LOOP
     v_n := v_n + 1;
@@ -711,18 +722,15 @@ BEGIN
       LOCK TABLE public.conturi_teren IN ACCESS EXCLUSIVE MODE NOWAIT;
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
-      IF clock_timestamp() - v_t0 >= interval '3 seconds' THEN
-        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: auth.users / employees / profiles / user_module_access ocupate % ms (% incercari); nimic schimbat',
-          round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_n USING ERRCODE = '55P03';
+      IF clock_timestamp() >= now() + interval '1 second' THEN
+        RAISE EXCEPTION 'PORTAL_LOCK_BUDGET: auth.users / employees / profiles / user_module_access ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
+          v_n, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
       END IF;
       PERFORM pg_sleep(0.05);
     END;
   END LOOP;
-  PERFORM set_config('statement_timeout', '2s', true);
-  PERFORM set_config('transaction_timeout', '0', true);
-  PERFORM set_config('transaction_timeout', '2s', true);
-  RAISE NOTICE 'PORTAL_LOCKS 19a: % incercari, % ms; plafon 2 s pana la intrarea in COMMIT', v_n,
-    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
+  RAISE NOTICE 'PORTAL_LOCKS 19a: % incercari, lock-uri la % ms de la BEGIN; plafon 2 s de la BEGIN pana la intrarea in COMMIT', v_n,
+    round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 END $locks$;
 -- r10: sectiunea critica = O SINGURA instructiune (un singur drum dus-intors client-server), toata sub plafon.
 DO $critic$
