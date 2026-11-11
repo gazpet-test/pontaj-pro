@@ -1,0 +1,3 @@
+# PowerShell 5.1 pe serverul AI: CRLF + BOM UTF-8, păstrate exact cum sunt în repo (fără conversii git)
+*.ps1 -text
+*.psm1 -text
