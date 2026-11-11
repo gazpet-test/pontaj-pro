@@ -655,7 +655,9 @@ Supabase (session mode), care **nu transmite optiunile de conectare** (`PGOPTION
   in comentarii (fail-closed) — si pentru orice `RESET ALL`. Mutantul din verdict (`SET LOCAL transaction_timeout = 0;
   SELECT pg_sleep(3)`) = refuz 3. SQL-ul dinamic construit din bucati (ex. `chr(95)`) nu se vede static: il prinde garda
   finala (valoare schimbata = `PLAFON_SCHIMBAT`; ceas oprit apoi repornit = `PLAFON_DEPASIT`), ROLLBACK, nimic comis.
-  Limita declarata: o asemenea ocolire DELIBERATA intr-un artefact aprobat poate intarzia inchiderea, dar nu poate comite.
+  ~~Limita declarata: o asemenea ocolire DELIBERATA intr-un artefact aprobat poate intarzia inchiderea, dar nu poate
+  comite.~~ **FALS in r14** (Jakarinos r14 P2): garda si COMMIT-ul erau mesaje separate, deci o pauza client / retea dupa
+  garda permitea COMMIT dupa termen. Corectat in r15 (garda si COMMIT-ul intr-un singur mesaj), vezi sectiunea r15.
 - **Cele 4 fisiere:** `$pre$` cere exact `2000/session` din `pg_catalog.pg_settings` (calificat: al doilea recenzent r13
   P1, umbrirea prin `pg_temp.pg_settings`) **si** marcajul plafonului `'2000:' || txid_current()`. Refuza `0/default`,
   `2000/client` (optiunea r13), `2000/user` (rolul), `2000/database`, alta valoare de sesiune, si `2000/session` fara marcaj
@@ -698,3 +700,68 @@ anuleaza randurile si schema, dar poate lasa goluri in secventa. Nu e pierdere d
 | L20 | Caile legitime: aplicarea / revenirea reala prin runner (`masurat`, volum) si fara optiune (regresie `PLAFON_FARA`, mutantul acceptat fara plafon). |
 | L25 | Comportamentul PG17 aratat cu prag (`sesiune_inainte_de_begin`); pooler simulat (client fara optiuni); doua sesiuni reale in probele de plafon. |
 | restul | n/a pentru delta r14 (runner + validator + preflight + harness). |
+
+## E1-1a/1b r15 — 11.11.2026 (termenul trebuie sa tina pana la COMMIT; doar runnerul #1054 r3)
+
+Verdictul Jakarinos r14: #1054 NO-GO, un singur P2 — in runner, garda finala (timpul de la BEGIN) si `COMMIT` erau
+instructiuni (mesaje) separate. Un artefact care opreste ceasul si il reporneste (SQL dinamic; sau o functie EXISTENTA cu
+`SET transaction_timeout = 0`, la iesirea careia valoarea restaurata porneste un ceas NOU de N ms) trece garda, iar o
+pauza client / retea inainte de COMMIT lasa tranzactia sa comita dupa termen. Afirmatia r14 „poate intarzia inchiderea,
+dar nu poate comite” era FALSA (taiata mai sus). Al doilea recenzent: GO cu conditii la aplicare (P0 = 0, P1 = 0, P2 = 2).
+
+### Ce s-a schimbat (runnerul; SQL-ul portalului NESCHIMBAT, SHA-urile raman)
+- `9_fin.sql` = UN SINGUR mesaj de interogare (instructiunile legate cu `\;` in psql): `SET CONSTRAINTS ALL IMMEDIATE`
+  (triggerele amanate ruleaza ACUM, inaintea garzii, nu in COMMIT) → `SET LOCAL search_path = pg_catalog, pg_temp` →
+  garda (niciun cursor `WITH HOLD` deschis — s-ar materializa in COMMIT; valoarea tot `N/session` + marcajul; timpul de la
+  BEGIN pe ceasul SERVERULUI ≤ N) → `COMMIT`. `RESET transaction_timeout` ramane mesaj separat, dupa COMMIT.
+- De ce inchide golul: serverul primeste mesajul intreg inainte sa-l execute, deci intre garda si COMMIT nu exista drum
+  client↔server; la eroarea garzii serverul abandoneaza restul mesajului (COMMIT-ul nu se executa), psql
+  (`ON_ERROR_STOP`) iese, conexiunea se inchide, tranzactia se anuleaza. Orice pauza a clientului / retelei cade ACUM
+  inaintea garzii si e numarata de ea. Intre garda si COMMIT nu mai ruleaza cod SQL venit din artefact.
+- Rearmarea ceasului din garda (0, apoi timpul ramas) NU e folosita: in forma de un mesaj n-ar adauga nimic si ar schimba
+  valoarea verificata. Semantica rearmarii (valoare > 0 cu ceasul oprit ⇒ ceas nou de N ms; 0 ⇒ oprit) e cea citata de
+  verdict din sursa PG 17.6 (`postgres.c`); n-am putut deschide sursa (domeniu in afara listei aprobate) — proba e
+  comportamentala, in harness (controalele de mai jos).
+- Preflight-ul celor 4 fisiere: NESCHIMBAT. Forma noua nu schimba nimic din ce vad ele (`2000/session` + marcajul pus de
+  prolog); garda finala e a runnerului. Fisierele portalului nu ating ceasul (validatorul cu plafon le accepta), deci
+  pentru ele garantia de mai jos e cea „fara ocolire”.
+
+### Garantia r15 (formulare exacta)
+- **Fara ocolire** (cazul celor 4 fisiere): serverul inchide sesiunea la ~2 s de la BEGIN daca tranzactia n-a ajuns in
+  COMMIT (timeout PostgreSQL pe ceasul serverului, nu timp real strict).
+- **Cu orice ocolire a ceasului din artefact**: livrarea NU poate COMITE daca de la BEGIN pana la garda finala (ultima
+  instructiune inaintea intrarii in COMMIT, in acelasi mesaj) au trecut peste N ms pe ceasul serverului.
+- **Ce NU garanteaza:** (1) COMMIT-ul propriu-zis NU e plafonat (P2-01 al doilea recenzent): scrierea WAL, actiunile
+  ON COMMIT ale tabelelor temporare, iar cu replicare sincrona si asteptarea standby-ului — cere acceptul explicit al lui
+  Razvan; (2) o ocolire deliberata poate TINE tranzactia (si lock-urile) deschisa peste N pana ajunge la garda — nu comite,
+  dar inchiderea intarzie; (3) ceasul serverului e ceas de perete; (4) validatorul e garda de PROTOCOL (refuza formele
+  vizibile static), nu dovada — SQL-ul dinamic din bucati si apelul unei functii existente trec de el (scris ca test).
+
+### Notele celui de-al doilea recenzent (r14, fara cod nou)
+- **P2-01 — COMMIT neplafonat:** confirmat, nereparat (vezi mai sus); conditie de aplicare: acceptul explicit al ownerului.
+- **P2-02 — secventa jurnalului:** un refuz al tranzactiei poate lasa goluri in ID-urile `conturi_tip_jurnal_id_seq`; fara
+  pierdere de randuri comise; nu blocheaza aplicarea.
+- **Revenirea:** dupa ce portalul a fost folosit (date noi), revenirea completa poate refuza INTENTIONAT; NU e mecanism de
+  urgenta (procedura de urgenta: `E1_REVENIRE_AUTH.md` — oprirea hook-ului din configuratia Auth, fara SQL).
+
+### Teste r15
+- `scripts/test_livrare_plafon.sh` (PG17 real, in `harness_wsl.sh`), cazuri noi, fiecare cu CONTROL care arata ca forma
+  veche comitea dupa termen: `PLAFON_REARMARE` (N = 2000, ceas oprit prin SQL dinamic si repornit la ~1,5 s, pauza client
+  1 s chiar inaintea liniei COMMIT ⇒ control r11 comite, forma r15 `PLAFON_DEPASIT`, nimic comis), `PLAFON_FUNCTIE`
+  (functie existenta cu `SET transaction_timeout = 0`), `PLAFON_AMANAT` (trigger `DEFERRABLE INITIALLY DEFERRED` ⇒ fara
+  `SET CONSTRAINTS ALL IMMEDIATE` ruleaza in COMMIT, dupa garda), `PLAFON_CURSOR` (cursor `WITH HOLD` ⇒ refuz). Cazurile
+  vechi neschimbate (`PLAFON_FARA` = fara optiune, ca inainte).
+- `scripts/test_livrare_forma_fin.sh` (fara BD, psql fals): cu optiunea, `9_fin.sql` = exact 2 mesaje
+  ([constrangeri; search_path; garda; COMMIT] + [RESET]); fara optiune, invocarea `--single-transaction` de dinainte.
+- `scripts/test_livrare_validator_plafon.py`: 20 de cazuri (2 noi = limita validatorului, acceptate) + cele 4 fisiere.
+- Harness-ul portalului (`liv` / `obs`) simuleaza inceputul livrarii ca runnerul; garda finala si COMMIT-ul in acelasi
+  mesaj se probeaza in testele runnerului de mai sus (LOCK_CAP masoara inchiderea de catre server, neschimbata).
+
+| Regula | Dovada r15 |
+|---|---|
+| L14 | O tranzactie; garda + COMMIT in acelasi mesaj: la eroarea garzii COMMIT-ul nu se executa, conexiunea se inchide = ROLLBACK; reconcilierea decide codul. |
+| L15 | Garda nu poate fi umbrita: `search_path` fixat pe `pg_catalog` in mesajul final, functiile calificate; citirea calificata neschimbata. |
+| L18 | Refuz pe mesaj exact (`PLAFON_DEPASIT`, `PLAFON_CURSOR`, `PLAFON_SCHIMBAT`); controalele care nu se activeaza = proba nefunctionala = ESEC, nu „trecut”. |
+| L20 | Caile legitime: fara optiune neschimbat (`PLAFON_FARA`, `FORMA_FARA`); triggerele amanate legitime ruleaza tot (doar mai devreme); `PLAFON_OK` / `PLAFON_ROL` / `PLAFON_POOLER` comit. |
+| L25 | Expected independent (psql fals + impartitor propriu de mesaje); PG17 real, NOSUPERUSER; fiecare mutant cu control functional. |
+| restul | n/a pentru delta r15 (doar runnerul + testele lui + `harness_wsl.sh`). |

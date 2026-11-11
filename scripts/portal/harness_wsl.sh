@@ -22,15 +22,18 @@ tail -n "${2:-35}" "$DST/harness.log"
 # r14: in aceeasi rulare, testul validatorului (fara BD) si proba runnerului (PR #1054, cluster propriu pe 6790 + slot).
 RC_VAL=0; python3 "$DST/scripts/test_livrare_validator_plafon.py" >"$DST/validator.log" 2>&1 || RC_VAL=$?
 echo "=== VALIDATOR (scripts/test_livrare_validator_plafon.py) cod=$RC_VAL"; tail -n 6 "$DST/validator.log"
+# r15: forma mesajelor runnerului (fara BD, psql fals): garda finala si COMMIT-ul intr-un singur mesaj.
+RC_FORMA=0; (cd "$DST" && bash scripts/test_livrare_forma_fin.sh) >"$DST/forma.log" 2>&1 || RC_FORMA=$?
+echo "=== FORMA (scripts/test_livrare_forma_fin.sh) cod=$RC_FORMA"; tail -n 3 "$DST/forma.log"
 RC_RUN=0
 if [[ "$(id -u)" == 0 ]]; then
   su postgres -s /bin/bash -c "cd '$DST' && bash scripts/test_livrare_plafon.sh $SLOT" >"$DST/runner.log" 2>&1 || RC_RUN=$?
 else
   (cd "$DST" && bash scripts/test_livrare_plafon.sh "$SLOT") >"$DST/runner.log" 2>&1 || RC_RUN=$?
 fi
-echo "=== RUNNER (scripts/test_livrare_plafon.sh) cod=$RC_RUN"; tail -n 14 "$DST/runner.log"
-echo "portal E1-1a+1b slot=$SLOT harness=$RC validator=$RC_VAL runner=$RC_RUN"
-(( RC != 0 )) || (( RC_VAL == 0 && RC_RUN == 0 )) || RC=1
+echo "=== RUNNER (scripts/test_livrare_plafon.sh) cod=$RC_RUN"; tail -n 16 "$DST/runner.log"
+echo "portal E1-1a+1b slot=$SLOT harness=$RC validator=$RC_VAL forma=$RC_FORMA runner=$RC_RUN"
+(( RC != 0 )) || (( RC_VAL == 0 && RC_FORMA == 0 && RC_RUN == 0 )) || RC=1
 # r13: potrivirile ceasului de perete facute de WSL in timpul rularii (dovada independenta pentru liniile CEAS_SALT).
 if [[ -r /var/log/syslog ]]; then
   N_CEAS="$(awk -v t0="$T0" 'substr($1,1,19) >= t0 && /Clock change detected/' /var/log/syslog | wc -l)" || N_CEAS='?'
