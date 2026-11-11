@@ -82,14 +82,23 @@ M2="$(awk 'f && !/^@@$/ { print } /^@@$/ { f++ }' "$P/mesaje")"
 [[ "$M1" == *'; COMMIT' ]] || fail "cu plafon: mesajul final trebuie sa se termine cu COMMIT: ...${M1: -80}"
 poz() { local x="${M1%%"$1"*}"; [[ "$x" != "$M1" ]] || fail "cu plafon: lipseste „$1” din mesajul final"; echo "${#x}"; }
 p1="$(poz 'SET CONSTRAINTS ALL IMMEDIATE')"; p2="$(poz 'SET LOCAL search_path = pg_catalog, pg_temp')"
+p2b="$(poz 'PLAFON_AMANABIL')"
 p3="$(poz 'PLAFON_CURSOR')"; p4="$(poz 'PLAFON_SCHIMBAT')"; p5="$(poz 'PLAFON_DEPASIT')"; p6="$(poz '; COMMIT')"
-(( p1 < p2 && p2 < p3 && p3 < p4 && p4 < p5 && p5 < p6 )) \
-  || fail "cu plafon: ordinea in mesajul final (constrangeri $p1, search_path $p2, cursor $p3, valoare $p4, timp $p5, COMMIT $p6)"
+(( p1 < p2 && p2 < p2b && p2b < p3 && p3 < p4 && p4 < p5 && p5 < p6 )) \
+  || fail "cu plafon: ordinea in mesajul final (constrangeri $p1, search_path $p2, amanabile $p2b, cursor $p3, valoare $p4, timp $p5, COMMIT $p6)"
+# r13 (r5, Jakarinos r16): inchiderea prin catalog — cele trei surse (trigger / constrangere / functia triggerului) cu
+# „scris in tranzactia curenta” = age(xmin) <= 0, plus verificarea referintei (xid-ul de varf are age 0).
+for s in 'pg_catalog.age(pg_catalog.xid(pg_catalog.pg_current_xact_id())) IS DISTINCT FROM 0' \
+         'FROM pg_catalog.pg_trigger t WHERE t.tgdeferrable AND pg_catalog.age(t.xmin) <= 0' \
+         'FROM pg_catalog.pg_constraint c WHERE c.condeferrable AND pg_catalog.age(c.xmin) <= 0' \
+         'JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid WHERE t.tgdeferrable AND pg_catalog.age(p.xmin) <= 0'; do
+  grep -qF "$s" <<<"$M1" || fail "cu plafon: garda nu contine „$s”"
+done
 [[ "$(grep -o '; COMMIT' <<<"$M1" | wc -l | tr -d ' ')" == 1 ]] || fail 'cu plafon: o singura instructiune COMMIT in mesajul final'
 grep -q "pg_catalog.clock_timestamp() - pg_catalog.transaction_timestamp() > interval '2000 milliseconds'" <<<"$M1" \
   || fail 'cu plafon: garda trebuie sa masoare cu ceasul serverului de la BEGIN'
 grep -q 'APLICAT + ÎNREGISTRAT confirmat' "$P/runner.log" || { cat "$P/runner.log"; fail 'cu plafon: reconcilierea'; }
-echo 'FORMA_CU_PLAFON: 00_sesiune, 0_prolog, 1_pre, copia, 3_inreg, 9_fin fara --single-transaction; 9_fin = 2 mesaje: [SET CONSTRAINTS ALL IMMEDIATE; SET LOCAL search_path = pg_catalog, pg_temp; garda (cursor, valoare, timp de la BEGIN); COMMIT] + [RESET]'
+echo 'FORMA_CU_PLAFON: 00_sesiune, 0_prolog, 1_pre, copia, 3_inreg, 9_fin fara --single-transaction; 9_fin = 2 mesaje: [SET CONSTRAINTS ALL IMMEDIATE; SET LOCAL search_path = pg_catalog, pg_temp; garda (amanabile prin catalog, cursor, valoare, timp de la BEGIN); COMMIT] + [RESET]'
 
 # 2. Fara optiune: invocarea de dinainte, nimic despre plafon.
 F="$TMP/fara"; livreaza "$F"
