@@ -5,13 +5,15 @@
 // Three.js se încarcă DOAR aici, prin import dinamic (fișier separat la build; pagina principală nu crește).
 // Randare la cerere (la mișcare / schimbare), nu în buclă continuă: nu consumă bateria cât ecranul stă.
 // L24: încărcarea are generația ei (o încărcare întârziată nu se aplică pe alt grup sau după demontare); totul se eliberează la ieșire.
+// Vederea „Toată instalația” (grup.parti, varianta B): fiecare grup e o parte a scenei (ascunde / arată, „du-mă la”), etichetele
+// de tip `eticheta` se ascund dintr-un buton; piesele se lipesc pe material (câteva apeluri de desenare, nu sute).
 // Datele vin de la NodCuplareSchema.jsx; aici nu se citește și nu se scrie nimic în BD.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { G, S } from './NodCuplareVizualizare.jsx'
 import { celMaiAproape, RAZA_ATINGERE } from './nodCuplareLogica.js'
-import { culoarePunct3d, culoareDn, dnuriGrup, diametruExterior, razaSfera, cutieGrup, spreScena, esteAtingere, gestNou, gestMisca } from './nodSchema3dLogica.js'
+import { culoarePunct3d, culoareDn, dnuriGrup, diametruExterior, razaSfera, cutieGrup, spreScena, esteAtingere, gestNou, gestMisca, puncteVizibile, departareCamera } from './nodSchema3dLogica.js'
 
 export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   const gazda = useRef(null)
@@ -22,6 +24,13 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   const [eroare, setEroare] = useState('')
   const [incercare, setIncercare] = useState(0)
   const [teren, setTeren] = useState(true)
+  // vederea comună („Toată instalația”, grup.parti): grupuri ascunse și etichetele de tip `eticheta`; pagina remontează
+  // componenta la schimbarea vederii (key), deci aceste stări pornesc curate pe fiecare vedere
+  const [ascunse, setAscunse] = useState(() => new Set())
+  const [etichete, setEtichete] = useState(true)
+  const comun = Array.isArray(grup?.parti)
+  const areEtichete = comun && grup.elemente.some(e => e.tip === 'eticheta')
+  const vizibile = useMemo(() => puncteVizibile(puncte || [], ascunse), [puncte, ascunse])
 
   // ── încărcarea Three.js + scena statică a grupului ──
   useEffect(() => {
@@ -53,8 +62,16 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
   }, [grup, incercare])
 
   // ── sferele sudurilor: se refac la orice schimbare de stare / filtru / selecție, fără să reconstruiască țevile ──
-  useEffect(() => { if (stare === 'gata') scena.current?.aplicaPuncte(puncte || [], selectatId) }, [puncte, selectatId, stare])
+  useEffect(() => { if (stare === 'gata') scena.current?.aplicaPuncte(vizibile, selectatId) }, [vizibile, selectatId, stare])
   useEffect(() => { if (stare === 'gata') scena.current?.teren(teren) }, [teren, stare])
+  useEffect(() => { if (stare === 'gata') scena.current?.etichete(etichete) }, [etichete, stare])
+  useEffect(() => { if (stare === 'gata') scena.current?.ascunde(ascunse) }, [ascunse, stare])
+  const comuta = id => setAscunse(a => { const n = new Set(a); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  // „du-mă la” un grup ascuns îl arată întâi (altfel camera ar merge la un loc gol)
+  const mergiLa = id => {
+    if (ascunse.has(id)) { const n = new Set(ascunse); n.delete(id); setAscunse(n); scena.current?.ascunde(n) }
+    scena.current?.mergiLa(id)
+  }
 
   const dnuri = dnuriGrup(grup)
   return (
@@ -69,12 +86,35 @@ export default function NodSchema3D({ grup, puncte, selectatId, onSelect }) {
           </Mesaj>
         )}
         {stare === 'gata' && (
-          <div style={{ position: 'absolute', right: 8, bottom: 8, display: 'flex', gap: 6 }}>
+          <div style={{ position: 'absolute', right: 8, bottom: 8, display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {areEtichete && (
+              <button onClick={() => setEtichete(x => !x)} title="Arată / ascunde etichetele din schemă"
+                style={{ ...S.btn, height: 44, padding: '0 10px', fontSize: 13, background: etichete ? G.surface2 : G.bg }}>{etichete ? '🏷 Etichete' : '🏷 Fără etichete'}</button>
+            )}
             <button onClick={() => setTeren(x => !x)} style={{ ...S.btn, height: 44, padding: '0 10px', fontSize: 13, background: teren ? G.surface2 : G.bg }}>{teren ? '▦ Teren' : '▢ Teren'}</button>
             <button onClick={() => scena.current?.incadreaza()} style={{ ...S.btn, height: 44, padding: '0 10px', fontSize: 13 }}>⤢ Încadrează</button>
           </div>
         )}
       </div>
+      {comun && stare === 'gata' && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+          {grup.parti.map(p => {
+            const vizibil = !ascunse.has(p.id)
+            return (
+              <span key={p.id} style={{ display: 'inline-flex', border: `1px solid ${G.border}`, borderRadius: 10, overflow: 'hidden', opacity: vizibil ? 1 : 0.6 }}>
+                <button onClick={() => comuta(p.id)} title={vizibil ? 'Ascunde grupul' : 'Arată grupul'} aria-pressed={vizibil}
+                  style={{ ...S.btn, minHeight: 44, padding: '0 10px', fontSize: 13, border: 'none', borderRadius: 0, background: vizibil ? G.surface2 : G.bg }}>
+                  {vizibil ? '👁' : '🚫'} {p.titlu}
+                </button>
+                <button onClick={() => mergiLa(p.id)} title={`Camera pe ${p.titlu}`}
+                  style={{ ...S.btn, minHeight: 44, padding: '0 10px', fontSize: 13, border: 'none', borderLeft: `1px solid ${G.border}`, borderRadius: 0 }}>
+                  ⤢ Du-mă la
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, fontSize: 11, color: G.muted, alignItems: 'center' }}>
         <span>Țevi:</span>
         {dnuri.map(d => (
@@ -141,19 +181,39 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
       }
       return materiale.get(k)
     }
-    const statice = new THREE.Group()
-    scene.add(statice)
+    // Părțile scenei: în vederea pe grup una singură (grupul); în „Toată instalația” câte una pe grup (ascundere / „du-mă la”).
+    // Fiecare parte = un THREE.Group cu piesele ei + un sub-grup cu etichetele de tip `eticheta` (butonul „Etichete”).
+    const parti = new Map()
+    let parte = null                   // partea în construcție
     const sus = new THREE.Vector3(0, 1, 0)
+    // piesele nu intră direct în scenă: se strâng pe material și se lipesc la final într-o singură plasă pe material și parte
+    // (sute de piese = câteva apeluri de desenare; contează pe telefon). Atingerea nu folosește plasele (vezi „atingerea”).
+    const adauga = mesh => {
+      if (!parte.piese.has(mesh.material)) parte.piese.set(mesh.material, [])
+      parte.piese.get(mesh.material).push(mesh)
+      return mesh
+    }
+    eliberari.push(() => { for (const p of parti.values()) for (const l of p.piese.values()) for (const x of l) x.geometry.dispose() })
     const cilindru = (a, b, r1, r2, m) => {
       const va = V(a), vb = V(b), d = vb.clone().sub(va), L = d.length()
       if (L < 1e-4) return null
       const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r2, r1, L, 18, 1), m)
       mesh.position.copy(va).addScaledVector(d, 0.5)
       mesh.quaternion.setFromUnitVectors(sus, d.normalize())
-      statice.add(mesh)
-      return mesh
+      return adauga(mesh)
     }
-    const eticheta = (text, p, inaltime) => {
+    const lipeste = p => {
+      for (const [m, l] of p.piese) {
+        for (const x of l) { x.updateMatrix(); x.geometry.applyMatrix4(x.matrix); x.position.set(0, 0, 0); x.quaternion.identity(); x.scale.set(1, 1, 1) }
+        const unit = l.length > 1 && THREE.mergeGeometries ? THREE.mergeGeometries(l.map(x => x.geometry), false) : null
+        if (unit) {
+          p.obiect.add(new THREE.Mesh(unit, m))
+          for (const x of l) x.geometry.dispose()
+        } else for (const x of l) p.obiect.add(x)           // nu s-au putut lipi: piesele merg separat (același aspect)
+      }
+      p.piese.clear()
+    }
+    const eticheta = (text, p, inaltime, inGrupEtichete = false) => {
       const c = document.createElement('canvas')
       const ctx = c.getContext('2d')
       if (!ctx) return
@@ -173,15 +233,15 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
       sp.renderOrder = 10
       sp.position.copy(V(p))
       sp.scale.set(inaltime * (w / 64), inaltime, 1)
-      statice.add(sp)
+      ;(inGrupEtichete ? parte.etichete : parte.obiect).add(sp)
     }
 
     // mărimea grupului: etichetele și încadrarea se raportează la ea (un grup mic nu primește etichete uriașe)
     const cutie = cutieGrup(grup) || { min: [-1000, -1000, -1000], max: [1000, 1000, 1000], centru: [0, 0, 0], marime: 2000 }
     const hEt = Math.min(Math.max(mm(cutie.marime) * 0.012, 0.05), 0.3)
 
-    // ── piesele ──
-    for (const e of grup.elemente) {
+    // ── o piesă (în partea în construcție) ──
+    const piesa = e => {
       const est = e.cert === 'estimat'
       const r = e.dn ? mm(diametruExterior(e.dn)) / 2 : 0
       const m = e.dn ? mat(culoareDn(e.dn), est) : null
@@ -191,7 +251,7 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
         case 'reductie': cilindru(e.a, e.b, r, mm(diametruExterior(e.dn2)) / 2, m); break
         case 'cot': {
           const curba = new THREE.QuadraticBezierCurve3(V(e.a), V(e.c), V(e.b))
-          statice.add(new THREE.Mesh(new THREE.TubeGeometry(curba, 12, r, 14, false), m))
+          adauga(new THREE.Mesh(new THREE.TubeGeometry(curba, 12, r, 14, false), m))
           break
         }
         case 'teu': {
@@ -207,7 +267,7 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
           const c = V([(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2, (e.a[2] + e.b[2]) / 2])
           const bila = new THREE.Mesh(new THREE.SphereGeometry(r * 1.6, 18, 12), corp)
           bila.position.copy(c)
-          statice.add(bila)
+          adauga(bila)
           if (e.et) eticheta(e.et, [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2, Math.max(e.a[2], e.b[2]) + Math.max(diametruExterior(e.dn) * 1.6, hEt * 900)], hEt * 0.8)
           break
         }
@@ -221,15 +281,29 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
               fund.position.copy(V(capat))
               fund.quaternion.copy(corp.quaternion)
               fund.scale.set(1, 0.5, 1)
-              statice.add(fund)
+              adauga(fund)
             }
           }
           break
         }
-        case 'eticheta': eticheta(e.text, e.p, hEt); break
+        case 'eticheta': eticheta(e.text, e.p, hEt, true); break
         default: break
       }
     }
+    // ── piesele, pe părți ──
+    const listaParti = grup.parti || [{ id: grup.id, elemente: grup.elemente, suduri: grup.suduri }]
+    for (const pg of listaParti) {
+      const obiect = new THREE.Group(), etichete = new THREE.Group()
+      obiect.add(etichete)
+      scene.add(obiect)                // în scenă de la început: dacă ceva pică mai jos, eliberarea (traverse) o găsește
+      parte = { obiect, etichete, piese: new Map(), puncte: [] }
+      parti.set(pg.id, parte)
+      for (const e of pg.elemente) for (const k of ['a', 'b', 'c', 'r', 'p']) if (e[k]) parte.puncte.push(V(e[k]))
+      for (const sd of pg.suduri) parte.puncte.push(V(sd.p))
+      for (const e of pg.elemente) piesa(e)
+      lipeste(parte)
+    }
+    parte = null
 
     // ── terenul: plan translucid la z = teren, cu caroiaj de 1 m (țevile îngropate se văd prin el) ──
     const terenGrup = new THREE.Group()
@@ -251,36 +325,58 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
 
     // ── camera + rotirea / zoom-ul ──
     const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 1000)
+    // sfera care cuprinde TOT ce e în scenă (piese, rezervoare, etichete, teren; sferele sudurilor stau pe piese, +1 m rezervă):
+    // planul îndepărtat se potrivește după ea la fiecare randare (review r1: amplasările depărtate depășeau 1000 m și dispăreau)
+    scene.updateMatrixWorld(true)
+    const cutieScena = new THREE.Box3().setFromObject(scene)
+    for (const p of [...parti.values()].flatMap(x => x.puncte)) cutieScena.expandByPoint(p)
+    const sferaScena = cutieScena.isEmpty() ? null : cutieScena.getBoundingSphere(new THREE.Sphere())
+    const potrivestePlanuri = () => {
+      const far = sferaScena ? departareCamera(camera.position.distanceTo(sferaScena.center), sferaScena.radius + 1) : camera.far
+      if (far !== camera.far) { camera.far = far; camera.updateProjectionMatrix() }
+    }
     const controale = new OrbitControls(camera, canvas)
     eliberari.push(() => controale.dispose())
     controale.enableDamping = false
     controale.screenSpacePanning = true
-    const centru = new THREE.Vector3(...spreScena(cutie.centru))
     // punctele reale ale pieselor și sudurilor (nu colțurile cutiei, care au mult gol): încadrarea strânsă pe geometrie
-    const colturi = []
-    for (const e of grup.elemente) for (const k of ['a', 'b', 'c', 'r', 'p']) if (e[k]) colturi.push(V(e[k]))
-    for (const sd of grup.suduri) colturi.push(V(sd.p))
-    if (!colturi.length) colturi.push(V(cutie.min), V(cutie.max))
+    const toatePunctele = [...parti.values()].flatMap(p => p.puncte)
+    if (!toatePunctele.length) toatePunctele.push(V(cutie.min), V(cutie.max))
     controale.minDistance = 0.3
-    let atins = false                  // după ce omul a rotit / mărit, redimensionarea nu mai mută camera
-    controale.addEventListener('start', () => { atins = true })
+    let atins = false                  // după ce omul a rotit / mărit / a ales „du-mă la”, redimensionarea nu mai mută camera
+    const laStart = () => { atins = true }
+    controale.addEventListener('start', laStart)
+    eliberari.push(() => controale.removeEventListener('start', laStart))
+    const centruDe = pts => {
+      const mn = new THREE.Vector3(Infinity, Infinity, Infinity), mx = new THREE.Vector3(-Infinity, -Infinity, -Infinity)
+      for (const c of pts) { mn.min(c); mx.max(c) }
+      return mn.add(mx).multiplyScalar(0.5)
+    }
     // Încadrarea: toate punctele în câmpul vizual, pe ambele axe ale ecranului. Pe ecran îngust (telefon ținut vertical)
     // privim de-a lungul ansamblului (lungimea lui intră în adâncime), dinspre capătul x mic; pe ecran lat, din lateral (tot dinspre x mic).
-    const incadreaza = () => {
+    // `id` = un grup („du-mă la”); fără id = grupurile vizibile (toate, dacă niciunul nu e vizibil).
+    const incadreaza = id => {
       const f = (camera.aspect < 0.9 ? new THREE.Vector3(-1, 0.9, 0.6) : new THREE.Vector3(-0.55, 0.62, 1)).normalize()
       const dr = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), f).normalize()
       const su = new THREE.Vector3().crossVectors(f, dr)
       const tv = Math.tan((camera.fov * Math.PI) / 360), th = tv * camera.aspect
-      let d = 0.5
-      for (const c of colturi) {
-        const p = c.clone().sub(centru)
-        const z = p.dot(f)
-        d = Math.max(d, Math.abs(p.dot(dr)) / th + z, Math.abs(p.dot(su)) / tv + z)
+      const distanta = (pts, centru) => {
+        let d = 0.5
+        for (const c of pts) {
+          const p = c.clone().sub(centru)
+          const z = p.dot(f)
+          d = Math.max(d, Math.abs(p.dot(dr)) / th + z, Math.abs(p.dot(su)) / tv + z)
+        }
+        return d * 1.04
       }
-      d *= 1.04
+      let pts = id != null && parti.has(id) ? parti.get(id).puncte : [...parti.values()].filter(p => p.obiect.visible).flatMap(p => p.puncte)
+      if (!pts.length) pts = toatePunctele
+      const centru = centruDe(pts), d = distanta(pts, centru)
       camera.position.copy(centru).addScaledVector(f, d)
       controale.target.copy(centru)
-      controale.maxDistance = d * 3
+      // zoom-ul înapoi trebuie să ajungă până la toată instalația și după un „du-mă la” pe un grup mic
+      const centruTot = centruDe(toatePunctele)
+      controale.maxDistance = Math.max(d, distanta(toatePunctele, centruTot) + centru.distanceTo(centruTot)) * 3
       controale.update()
       randeaza()
     }
@@ -291,10 +387,11 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     let tinte = []            // [{ cheie, centru: Vector3 }] pentru atingere
     const geomSfera = new Map()
     const sfera = raza => { const k = Math.round(raza); if (!geomSfera.has(k)) geomSfera.set(k, new THREE.SphereGeometry(mm(raza), 18, 12)); return geomSfera.get(k) }
-    const golesteSfere = () => {
-      for (const o of [...sfere.children]) { sfere.remove(o); o.material?.dispose?.() }
-    }
-    eliberari.push(() => { golesteSfere(); for (const g of geomSfera.values()) g.dispose() })
+    // materialele sferelor: câte unul pe culoare / certitudine (nu unul pe sferă — sute de suduri în vederea comună); rămân până la ieșire
+    const matSfere = new Map()
+    const matSfera = (k, fa) => { if (!matSfere.has(k)) matSfere.set(k, fa()); return matSfere.get(k) }
+    const golesteSfere = () => { for (const o of [...sfere.children]) sfere.remove(o) }
+    eliberari.push(() => { golesteSfere(); for (const g of geomSfera.values()) g.dispose(); for (const m of matSfere.values()) m.dispose() })
     const aplicaPuncte = (lista, selectatId) => {
       golesteSfere()
       tinte = []
@@ -303,11 +400,12 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
         const culoare = culoarePunct3d(g)
         const raza = razaSfera(g.puncte[0]?.sudura?.dn) * (ales ? 1.5 : 1)
         const c = V(g.p)
+        const est = g.cert === 'estimat'
         // conturul (sferă puțin mai mare, întoarsă): închis normal, alb la selecție — sfera se vede pe orice fundal
-        const contur = new THREE.Mesh(sfera(raza * 1.22), new THREE.MeshBasicMaterial({ color: ales ? 0xffffff : 0x0d1117, side: THREE.BackSide }))
+        const contur = new THREE.Mesh(sfera(raza * 1.22), matSfera(`contur|${ales ? 1 : 0}`, () => new THREE.MeshBasicMaterial({ color: ales ? 0xffffff : 0x0d1117, side: THREE.BackSide })))
         contur.position.copy(c)
-        const miez = new THREE.Mesh(sfera(raza), new THREE.MeshStandardMaterial({ color: culoare, emissive: culoare, emissiveIntensity: 0.45, metalness: 0, roughness: 0.4,
-          transparent: g.cert === 'estimat', opacity: g.cert === 'estimat' ? 0.8 : 1 }))
+        const miez = new THREE.Mesh(sfera(raza), matSfera(`miez|${culoare}|${est ? 1 : 0}`, () => new THREE.MeshStandardMaterial({ color: culoare, emissive: culoare,
+          emissiveIntensity: 0.45, metalness: 0, roughness: 0.4, transparent: est, opacity: est ? 0.8 : 1 })))
         miez.position.copy(c)
         sfere.add(contur, miez)
         tinte.push({ cheie: g.cheie, centru: c })
@@ -357,6 +455,7 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
     // ── randare la cerere ──
     let cadru = 0
     function randeaza() {
+      potrivestePlanuri()               // imediat (nu în cadru): camera mutată de încadrare / zoom / pan își vede toată scena
       if (cadru) return
       cadru = requestAnimationFrame(() => { cadru = 0; renderer.render(scene, camera) })
     }
@@ -378,8 +477,13 @@ export function construiesteScena(THREE, OrbitControls, gazda, grup, onSelect) {
 
     return {
       aplicaPuncte,
-      incadreaza,
+      incadreaza: () => incadreaza(),
+      // „du-mă la”: camera pe grup; după asta redimensionarea nu mai reîncadrează pe tot
+      mergiLa: id => { atins = true; incadreaza(id) },
       teren: vizibil => { terenGrup.visible = vizibil; randeaza() },
+      etichete: vizibil => { for (const p of parti.values()) p.etichete.visible = vizibil; randeaza() },
+      // grupurile ascunse (vederea comună); sferele lor le scoate pagina din lista dată la aplicaPuncte (puncteVizibile)
+      ascunde: ascunse => { for (const [id, p] of parti) p.obiect.visible = !ascunse?.has(id); randeaza() },
       dispose: elibereaza,
     }
   } catch (e) {

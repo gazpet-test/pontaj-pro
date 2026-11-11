@@ -342,7 +342,7 @@ export function clasificaReluare({ r, error }) {
 export const RPC_PROBE = ['fn_executie_proba_salveaza', 'fn_executie_proba_anuleaza', 'fn_executie_proba_etapa']
 export const prefixRegistru = (utilizator, proiect) => `gazpet.probe_tronsoane.incert.v2:${utilizator}:${proiect}:`
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const intrareValida = (x, cheieStocare, prefix) => !!x && typeof x.tinta === 'string' && RPC_PROBE.includes(x.rpc) && RE_UUID.test(x.cheie || '')
+const intrareValida = (x, cheieStocare, prefix, rpcPermise) => !!x && typeof x.tinta === 'string' && rpcPermise.includes(x.rpc) && RE_UUID.test(x.cheie || '')
   && cheieStocare === prefix + x.cheie && !!x.payload && typeof x.payload === 'object' && !Array.isArray(x.payload)
 /**
  * Registrul pentru (utilizator, proiect), peste o stocare de tip localStorage (length / key / getItem / setItem / removeItem).
@@ -351,8 +351,9 @@ const intrareValida = (x, cheieStocare, prefix) => !!x && typeof x.tinta === 'st
  *  pune(intrare)      -> true doar dacă scrierea DURABILĂ a reușit (altfel cererea NU trebuie trimisă)
  *  scoate(cheie)      -> true dacă intrarea nu mai e în stocare
  * Fără stocare sau fără identitate: registrul nu e utilizabil (pune -> false, toate -> null), deci nu se trimite nimic.
+ * `rpcPermise`: RPC-urile acceptate în registru (implicit cele ale probelor; Fibra optică își dă lista ei, alt prefix).
  */
-export function registruNou(stocare, prefix) {
+export function registruNou(stocare, prefix, rpcPermise = RPC_PROBE) {
   const ok = !!(stocare && prefix)
   const toate = () => {
     if (!ok) return null
@@ -364,7 +365,7 @@ export function registruNou(stocare, prefix) {
         const brut = stocare.getItem(k)            // o citire eșuată NU e „intrare inexistentă”: aruncă -> tot registrul = null
         let x = null
         try { x = JSON.parse(brut) } catch { x = null }   // doar conținutul stricat se ignoră
-        if (intrareValida(x, k, prefix)) l.push(x)
+        if (intrareValida(x, k, prefix, rpcPermise)) l.push(x)
       }
       return l.sort((a, b) => String(a.pusLa || '').localeCompare(String(b.pusLa || '')) || a.cheie.localeCompare(b.cheie))
     } catch { return null }
@@ -374,7 +375,7 @@ export function registruNou(stocare, prefix) {
     toate,
     pentruTinta: tinta => { const l = toate(); return l && l.filter(x => x.tinta === tinta) },
     pune: intrare => {
-      if (!ok || !intrareValida(intrare, prefix + intrare?.cheie, prefix)) return false
+      if (!ok || !intrareValida(intrare, prefix + intrare?.cheie, prefix, rpcPermise)) return false
       try {
         stocare.setItem(prefix + intrare.cheie, JSON.stringify(intrare))
         return stocare.getItem(prefix + intrare.cheie) !== null
