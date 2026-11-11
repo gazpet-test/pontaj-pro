@@ -1,0 +1,306 @@
+[
+  {
+    "nume": "raport complet (două obiecte, bifă, utilaj defect fără nume, meteo cu alertă)",
+    "intrare": {
+      "santier": "Lot 9 Alfa – Beta",
+      "proiect": "Contract 99/2026 Lot 9",
+      "data": "2026-11-10",
+      "meteo": {
+        "temp": 8.3,
+        "precip_mm": 2.4,
+        "alerte": [
+          "Cod galben ploi"
+        ],
+        "vreme": "Rain",
+        "umiditate": 91
+      },
+      "personal": {
+        "sudori": 4,
+        "lacatusi": 3,
+        "operatori": 2,
+        "soferi": 1,
+        "necalificati": 6,
+        "tesa": 1,
+        "altii": 0,
+        "total": 17
+      },
+      "utilaje": [
+        {
+          "nume": "EXCAVATOR CAT 320",
+          "cod": "EX-07",
+          "stare": "functional",
+          "motiv": null
+        },
+        {
+          "nume": "BULDOEXCAVATOR JCB 3CX",
+          "cod": "BX-02",
+          "stare": "nefunctional",
+          "motiv": "furtun hidraulic spart"
+        },
+        {
+          "nume": "",
+          "cod": "GEN-1",
+          "stare": "nefunctional",
+          "motiv": ""
+        }
+      ],
+      "linii": [
+        {
+          "obiect_cod": "TR1",
+          "obiect_nume": "Tronson 1",
+          "activitate": "Săpătură șanț",
+          "um": "mc",
+          "cantitate": 35.5,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "TR1",
+          "obiect_nume": "Tronson 1",
+          "activitate": "Sudură cap la cap",
+          "um": "buc",
+          "cantitate": 12,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "TR2",
+          "obiect_nume": "Tronson 2",
+          "activitate": "Lansare conductă",
+          "um": "m",
+          "cantitate": 147.25,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "TR2",
+          "obiect_nume": "Tronson 2",
+          "activitate": "Probă presiune",
+          "um": null,
+          "cantitate": 1,
+          "bifa": true
+        }
+      ],
+      "distributie": null,
+      "lucrari": "S-a continuat pe TR1 și TR2.",
+      "probleme": "Acces dificil după ploaie.",
+      "masini": null,
+      "poze": 6
+    },
+    "asteptat": "Lot 9 Alfa – Beta (proiect Contract 99/2026 Lot 9) · 10.11.2026 · 8,3 °C, precipitații 2,4 mm, alerte: Cod galben ploi\nOameni: 17 (sudori 4, lăcătuși 3, operatori utilaje 2, șoferi 1, necalificați 6, TESA 1) · Utilaje: 3 (nefuncționale: BULDOEXCAVATOR JCB 3CX – furtun hidraulic spart; GEN-1) · Poze: 6\nLucrări TR1 · Tronson 1: Săpătură șanț 35,5 mc; Sudură cap la cap 12 buc\nLucrări TR2 · Tronson 2: Lansare conductă 147,25 m; Probă presiune (efectuat)\nDetalii: S-a continuat pe TR1 și TR2.\nProbleme: Acces dificil după ploaie."
+  },
+  {
+    "nume": "raport minim: doar șantierul și data (câmpurile lipsă nu apar deloc)",
+    "intrare": {
+      "santier": "Șantier test",
+      "proiect": null,
+      "data": "2026-11-11",
+      "meteo": null,
+      "personal": null,
+      "utilaje": null,
+      "linii": [],
+      "distributie": null,
+      "lucrari": null,
+      "probleme": null,
+      "masini": null,
+      "poze": null
+    },
+    "asteptat": "Șantier test · 11.11.2026"
+  },
+  {
+    "nume": "intrare goală",
+    "intrare": {},
+    "asteptat": "Raport zilnic"
+  },
+  {
+    "nume": "cantități cu zecimale și unități diferite, fără obiect; zero oameni e o valoare, listele goale nu",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-09",
+      "meteo": {
+        "temp": -2.5,
+        "precip_mm": 0,
+        "alerte": []
+      },
+      "personal": {
+        "sudori": 0,
+        "total": 0
+      },
+      "utilaje": [],
+      "linii": [
+        {
+          "obiect_cod": null,
+          "obiect_nume": null,
+          "activitate": "Izolație",
+          "um": "mp",
+          "cantitate": 0.125,
+          "bifa": false
+        },
+        {
+          "obiect_cod": null,
+          "obiect_nume": null,
+          "activitate": "Țeavă DN 500",
+          "um": "100 M.",
+          "cantitate": 1.50,
+          "bifa": false
+        },
+        {
+          "obiect_cod": null,
+          "obiect_nume": null,
+          "activitate": "Sudură",
+          "um": "",
+          "cantitate": 3,
+          "bifa": false
+        },
+        {
+          "obiect_cod": null,
+          "obiect_nume": null,
+          "activitate": "Beton",
+          "um": "MC",
+          "cantitate": 10000000,
+          "bifa": false
+        },
+        {
+          "obiect_cod": null,
+          "obiect_nume": null,
+          "activitate": "Geotextil",
+          "um": "kg",
+          "cantitate": null,
+          "bifa": false
+        }
+      ],
+      "poze": 0
+    },
+    "asteptat": "S · 09.11.2026 · -2,5 °C\nOameni: 0\nLucrări: Izolație 0,125 mp; Țeavă DN 500 1,5 100 M.; Sudură 3; Beton 10000000 MC; Geotextil (fără cantitate)"
+  },
+  {
+    "nume": "obiect doar cu cod sau doar cu nume; liniile fără obiect după cele cu obiect rămân în ordinea primei apariții",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-09",
+      "linii": [
+        {
+          "obiect_cod": "OB3",
+          "obiect_nume": null,
+          "activitate": "Sudură",
+          "um": "buc",
+          "cantitate": 2,
+          "bifa": false
+        },
+        {
+          "obiect_cod": null,
+          "obiect_nume": "Stația de robinete",
+          "activitate": "Vopsire",
+          "um": "mp",
+          "cantitate": 4.75,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "OB3",
+          "obiect_nume": null,
+          "activitate": "Radiografii",
+          "um": "buc",
+          "cantitate": 2,
+          "bifa": false
+        },
+        {
+          "obiect_cod": null,
+          "obiect_nume": null,
+          "activitate": "Curățenie",
+          "um": null,
+          "cantitate": 1,
+          "bifa": true
+        }
+      ]
+    },
+    "asteptat": "S · 09.11.2026\nLucrări OB3: Sudură 2 buc; Radiografii 2 buc\nLucrări Stația de robinete: Vopsire 4,75 mp\nLucrări: Curățenie (efectuat)"
+  },
+  {
+    "nume": "text lung în observații: tăiere pe cuvinte la 240; cuvânt unic lung tăiat la limită; text de exact 240 rămâne întreg",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-09",
+      "lucrari": "lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrareX",
+      "probleme": "lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare",
+      "masini": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "asteptat": "S · 09.11.2026\nLucrări: lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrareX\nProbleme: lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare lucrare… · Mașini: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+  },
+  {
+    "nume": "caractere speciale: diacritice, ghilimele românești, emoji, etichete HTML, rânduri noi și taburi în text; proiectul identic cu șantierul nu se repetă",
+    "intrare": {
+      "santier": "  Șantier „Bărăgan”  🚧 ",
+      "proiect": "Șantier „Bărăgan” 🚧",
+      "data": "2026-11-09",
+      "utilaje": [
+        "nu e obiect",
+        {
+          "nume": "Pompă\tdrenaj",
+          "stare": "nefunctional",
+          "motiv": "linia 1\nlinia 2\r\n  linia 3"
+        }
+      ],
+      "lucrari": "<b>ș ț Ș Ț ă î â</b> &amp; \"citat\"\n\tdupă tab",
+      "probleme": "   \n\t  "
+    },
+    "asteptat": "Șantier „Bărăgan” 🚧 · 09.11.2026\nUtilaje: 2 (nefuncționale: Pompă drenaj – linia 1 linia 2 linia 3)\nLucrări: <b>ș ț Ș Ț ă î â</b> &amp; \"citat\" după tab"
+  },
+  {
+    "nume": "fără lucrări pe activități: textul liber devine „Lucrări:”; oameni doar pe categorii (fără total); distribuție gaze",
+    "intrare": {
+      "santier": "Distribuție Ploiești",
+      "proiect": "Rețea str. Exemplu",
+      "data": "2026-11-08",
+      "personal": {
+        "sudori": 2,
+        "necalificati": 3,
+        "categorie_noua": 5
+      },
+      "linii": [],
+      "distributie": {
+        "conducte": 3,
+        "bransamente": 0
+      },
+      "lucrari": "Montaj conductă PE 110 pe str. Exemplu.",
+      "masini": "Dacia: bec far stânga ars",
+      "poze": 4
+    },
+    "asteptat": "Distribuție Ploiești (proiect Rețea str. Exemplu) · 08.11.2026\nOameni: sudori 2, necalificați 3 · Poze: 4\nDistribuție gaze (rânduri): conducte 3\nLucrări: Montaj conductă PE 110 pe str. Exemplu.\nMașini: Dacia: bec far stânga ars"
+  },
+  {
+    "nume": "valori de alt tip nu se interpretează (text în loc de număr, dată invalidă, listă în loc de obiect)",
+    "intrare": {
+      "santier": "S",
+      "data": "10.11.2026",
+      "meteo": {
+        "temp": "8",
+        "precip_mm": "3",
+        "alerte": "Cod galben"
+      },
+      "personal": {
+        "total": "12",
+        "sudori": "2"
+      },
+      "utilaje": {
+        "nume": "nu e listă"
+      },
+      "linii": [
+        {
+          "activitate": "Sudură",
+          "um": "buc",
+          "cantitate": "4",
+          "bifa": "true"
+        }
+      ],
+      "poze": "3"
+    },
+    "asteptat": "S\nLucrări: Sudură (fără cantitate)"
+  },
+  {
+    "nume": "cuvânt terminat exact la limită (următorul caracter e spațiu): rămâne întreg",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-09",
+      "probleme": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx abcd efgh",
+      "masini": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx abcd efgh"
+    },
+    "asteptat": "S · 09.11.2026\nProbleme: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx abcd… · Mașini: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx abcd…"
+  }
+]

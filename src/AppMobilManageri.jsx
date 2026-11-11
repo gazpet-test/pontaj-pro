@@ -19,6 +19,8 @@ import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, a
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 // Raportul legat de devize (20261208a): obiecte pe raport, ținte din v_executie_tinte, linii salvate atomic prin RPC
 import { blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
+// Rezumatul scurt salvat pe raport (20261215a): îl scrie serverul la salvare; aici se vede, se copiază, se corectează
+import RubricaRezumat from './RubricaRezumat.jsx'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -161,6 +163,7 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [poze, setPoze] = useState([])           // File[] noi (de urcat)
   const [pozeExistente, setPozeExistente] = useState([])  // [{path, url}] din raport salvat
   const [existingId, setExistingId] = useState(null)      // id raport azi dacă există → editare
+  const [raportSalvat, setRaportSalvat] = useState(null)  // rândul salvat (rezumatul lui), din același instantaneu cu versiunea
   const [loadingData, setLoadingData] = useState(false)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -175,6 +178,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     setIncarcat(null)
     setLoadingData(true)
     setMsg(null)
+    setRaportSalvat(null)
     // ── Activitățile proiectului legat de lucrare (Faza 5 pas 3) ──
     const { data: siteRow } = await supabase.from('sites').select('proiect_id, name, adresa').eq('id', sid).maybeSingle()
     if (!viu()) return
@@ -249,6 +253,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         if (existing.distributie_antet) setDAntet(existing.distributie_antet)
       }
       setExistingId(existing.id)
+      setRaportSalvat(existing)
       setLucrari(existing.lucrari_efectuate || '')
       setMasini(existing.masini || '')
       setProbleme(existing.probleme || '')
@@ -634,6 +639,17 @@ function RaportZilnic({ profile, sites, onBack }) {
             <div style={{ padding: '10px 14px', borderRadius: 10, marginBottom: 16, background: G.yellow + '22', color: G.yellow, fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
               {`✏️ Există deja raport pe ${fmtDate(dataRaport)} pentru această lucrare — îl editezi (nu se creează duplicat).`}
             </div>
+          )}
+          {/* rezumatul raportului salvat (20261215a): de copiat pe WhatsApp; o corectură mărește versiunea, deci formularul o preia (CAS) */}
+          {raportSalvat && 'rezumat_sursa' in raportSalvat && (
+            <Section title="📝 Rezumat (pentru WhatsApp / director)" hint="al raportului salvat">
+              <RubricaRezumat raport={raportSalvat} poateEdita={!saving} compact
+                onActualizat={(row) => {
+                  if (row.id !== existingId) return
+                  setRaportSalvat(r => (r && r.id === row.id ? { ...r, ...row } : r))
+                  if (Number.isInteger(row.versiune_salvare)) setVersiune(row.versiune_salvare)
+                }} />
+            </Section>
           )}
           {/* Personal auto din pontaj */}
           <Section title="👷 Personal (din pontaj)" hint="completat automat — ajustează dacă e cazul">
