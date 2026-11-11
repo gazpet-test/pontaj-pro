@@ -5216,9 +5216,9 @@ function ReportsPage() {
       const alocare=alocaDiurneTransa({recsLuna:recs,df,dt,legalSet,diurnaAmt})
 
       // BIC din IBAN (bicBanca.js) — TKT-2026-0355: tabel corectat (WBAN = WBANRO22XXX, BIC-uri de 11 caractere);
-      // băncile lipsă din tabel primesc o valoare de rezervă și sunt raportate la final, de verificat înainte de trimitere
+      // băncile necunoscute / desființate / preluate sunt raportate la final cu motivul, de verificat înainte de trimitere
       const bicGhicit=[]
-      const getBIC=(emp)=>{const r=bicDinIban(emp.iban);if(!r.cunoscut&&emp.iban)bicGhicit.push(emp.name);return r.bic}
+      const getBIC=(emp)=>{const r=bicDinIban(emp.iban);if(!r.cunoscut&&emp.iban)bicGhicit.push(`${emp.name} (${r.motiv})`);return r.bic}
       const today=new Date()
       const excelDateStr=`${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`
 
@@ -5247,7 +5247,7 @@ function ReportsPage() {
       XLSX.utils.book_append_sheet(wb,ws,'DIURNE')
       XLSX.writeFile(wb,`BT_Diurne_${df}_${dt}.xlsx`)
       const totalConfirmat=rows.reduce((s,r)=>s+r[6],0)
-      const msg=(faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:'')+(bicGhicit.length?` · ⚠ BIC de verificat (bancă necunoscută): ${bicGhicit.join(', ')}`:'')||' ✓'
+      const msg=(faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:'')+(bicGhicit.length?` · ⚠ cont de verificat: ${bicGhicit.join('; ')}`:'')||' ✓'
       playBeep(1040,0.18); showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`,(faraIBAN.length||bicGhicit.length)?'warn':undefined)
     }catch(e){showToast('Eroare export BT','error')}finally{setExpBT(false)}
   }
