@@ -27,8 +27,21 @@
 #      schimbat; CÂT TIMP reîncearcă, celelalte tabele acoperite sunt libere (probe cu lock_timeout 200 ms) și migrarea nu ține continuu
 #      niciun lock pe ele (6 eșantioane pg_locks); la fel pe storage.objects; la revenire, pe documente_proiect
 #   E  clientul întârzie COMMIT-ul (pauză 5 s după fișier): serverul închide sesiunea la ~3 s de la BEGIN (transaction timeout), nimic
-#      schimbat, niciun lock rămas; în pauză se citesc lock-urile ținute: EXACT ACCESS EXCLUSIVE pe tabelele acoperite + storage.objects,
-#      ACCESS SHARE pe tabelul de acces + sites, nimic altceva din public / storage / auth; probele: acoperitele blocate, controlul liber
+#      schimbat, niciun lock rămas. CAUZA se dovedește pe server, nu din textul clientului (psql de Windows nu scrie în log mesajul FATAL,
+#      vede doar conexiunea închisă): martorul vede backend-ul dispărut la ~3 s de la BEGIN, iar abia DUPĂ aceea verifică fanionul pe care
+#      clientul îl pune înainte să trimită garda finală și COMMIT-ul → lipsă = clientul nu trimisese nimic după fișier, deci doar serverul
+#      o putea închide; idle_in_transaction_session_timeout al rolului trebuie să fie 0 sau ≥ 5 s (altfel cauza nu e sigur plafonul).
+#      În logul clientului se acceptă oricare: „transaction timeout” SAU conexiunea pierdută (psql iese cu 2 / mesajul libpq); un COMMIT
+#      reușit (marcajul de după COMMIT) = FAIL.
+#      În pauză se citesc lock-urile ținute (cel mai tare mod pe fiecare relație, orice schemă în afară de pg_catalog / information_schema /
+#      pg_toast* / pg_temp_*, fără indexuri): EXACT ACCESS EXCLUSIVE pe tabelele acoperite + storage.objects, EXACT ACCESS SHARE pe tabelul
+#      de acces + sites; pe orice altă relație cel mult ACCESS SHARE (lista lor se tipărește informativ, nu se fixează literal; orice mod
+#      ≥ ROW SHARE pe o relație neașteptată = FAIL). De unde vin cele în plus (pe clonă: izo_avize_iesire, profiles,
+#      red_corespondenta_fisiere): amprenta „celorlalte politici” (cele care nu sunt executie_acces_*) de pe tabelele acoperite și de pe
+#      storage.objects — migrarea §3 (v_alte0, pg_get_expr), revenirea înainte și după ALTER POLICY (pg_get_expr) — deparsează expresiile
+#      acelor politici, iar deparsarea deschide cu ACCESS SHARE fiecare tabel citat în ele. ACCESS SHARE intră în conflict doar cu
+#      ACCESS EXCLUSIVE: poate aștepta doar un DDL concurent pe acele tabele, nu citiri sau scrieri.
+#      Probele în pauză: acoperitele blocate, controlul liber.
 #   C  aplicarea REALĂ măsurată (trafic + observator): fereastra și blocarea maximă sub prag, controlul fără așteptare; starea = forma nouă
 #   D  revenirea REALĂ măsurată, la fel; starea = exact cea de la început
 # Praguri (ms, se pot da din mediu): EXACC_FEREASTRA_MS (1000), EXACC_BLOCARE_MS (1000), EXACC_CONTROL_MS (200). Plafonul (3000) și
@@ -341,47 +354,85 @@ proba_B() { # $1 aplicare|revenire, $2 tabelul ținut, $3 starea așteptată, $4
 
 # ── E: clientul întârzie COMMIT-ul → serverul închide sesiunea la ~3 s de la BEGIN; în pauză, lock-urile ținute exact ─────────────────
 proba_E() { # $1 aplicare|revenire, $2 starea așteptată
-  local et="E $1 (clientul întârzie COMMIT-ul)" log="$DIR/E_$1.log" cl be x0 ms moduri asteptat got i
+  local et="E $1 (clientul întârzie COMMIT-ul)" log="$DIR/E_$1.log" trimis="$DIR/E_trimis_$1" cl be x0 ms lk got i rc=0 iit
+  local dif tari extra n_ael martor="" client=""
+  rm -f "$trimis"
+  # fanionul $trimis se pune ÎNAINTE de garda finală + COMMIT: cât lipsește, clientul nu a trimis nimic după fișier
   { if [ "$1" = aplicare ]; then text_liv; else text_rev; fi
-    printf "SELECT 'EXACC_MARCAJ_E';\n"; sleep 5; cat "$DIR/fin.sql"; printf 'COMMIT;\n'; } 2>/dev/null \
+    printf "SELECT 'EXACC_MARCAJ_E';\n"; sleep 5; : >"$trimis"; cat "$DIR/fin.sql"; printf "COMMIT;\nSELECT 'EXACC_DUPA_COMMIT';\n"; } 2>/dev/null \
     | PGAPPNAME=exacc_E "${P[@]}" -f - >"$log" 2>&1 &
   cl=$!; PIDS+=("$cl")
   be="$(asteapta_pid exacc_E "state = 'idle in transaction' AND query LIKE '%EXACC_MARCAJ_E%'" "$cl")" \
     || { wait "$cl"; rezultat FAIL "$et: tranzacția nu a ajuns la pauză: $(tr '\n' ' ' <"$log" | cut -c1-300)"; return; }
   x0="$(q "SELECT round(extract(epoch FROM xact_start) * 1000)::bigint FROM pg_stat_activity WHERE pid = $be")"
-  # lock-urile ținute în pauză (cel mai tare mod pe fiecare relație din public / storage / auth, fără indexuri)
-  moduri="$(q "SELECT string_agg(r || '=' || m, ',' ORDER BY r) FROM (SELECT l.relation::regclass::text AS r,
-      (array_agg(l.mode::text ORDER BY array_position(ARRAY['AccessShareLock','RowShareLock','RowExclusiveLock','ShareUpdateExclusiveLock',
-        'ShareLock','ShareRowExclusiveLock','ExclusiveLock','AccessExclusiveLock'], l.mode::text) DESC))[1] AS m
-    FROM pg_locks l JOIN pg_class c ON c.oid = l.relation JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE l.pid = $be AND l.locktype = 'relation' AND l.granted AND n.nspname IN ('public', 'storage', 'auth') AND c.relkind NOT IN ('i', 'I')
-    GROUP BY 1) x")"
-  asteptat="$(q "SELECT string_agg(r || '=' || m, ',' ORDER BY r) FROM (
+  # lock-urile ținute în pauză, comparate cu așteptarea într-o singură interogare → 'DIF=…|TARI=…|EXTRA=…|AEL=n'
+  #   DIF   = relațiile așteptate cu alt mod (sau lipsă); TARI = relații neașteptate cu un mod > ACCESS SHARE (ambele = FAIL)
+  #   EXTRA = relații neașteptate cu ACCESS SHARE (informativ); AEL = câte relații ACCESS EXCLUSIVE
+  lk="$(q "WITH act AS (
+      SELECT l.relation::regclass::text AS r,
+        (array_agg(l.mode::text ORDER BY array_position(ARRAY['AccessShareLock','RowShareLock','RowExclusiveLock','ShareUpdateExclusiveLock',
+          'ShareLock','ShareRowExclusiveLock','ExclusiveLock','AccessExclusiveLock'], l.mode::text) DESC))[1] AS m
+        FROM pg_locks l JOIN pg_class c ON c.oid = l.relation JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE l.pid = $be AND l.locktype = 'relation' AND l.granted AND c.relkind NOT IN ('i', 'I')
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_toast%' AND n.nspname NOT LIKE 'pg\_temp\_%'
+       GROUP BY 1),
+    ast AS (
       SELECT to_regclass('public.' || quote_ident(obiect))::text AS r, 'AccessExclusiveLock' AS m FROM public.fn_executie_acces_inventar()
        WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox')
-      UNION ALL SELECT 'storage.objects', 'AccessExclusiveLock'
-      UNION ALL SELECT 'executie_acces_proiect', 'AccessShareLock' UNION ALL SELECT 'sites', 'AccessShareLock') x")"
+      UNION ALL SELECT 'storage.objects'::regclass::text, 'AccessExclusiveLock'
+      UNION ALL SELECT 'public.executie_acces_proiect'::regclass::text, 'AccessShareLock'
+      UNION ALL SELECT 'public.sites'::regclass::text, 'AccessShareLock')
+    SELECT 'DIF=' || coalesce((SELECT string_agg(a.r || '=' || coalesce(x.m, 'lipsa') || '(asteptat ' || a.m || ')', ',' ORDER BY a.r)
+                                 FROM ast a LEFT JOIN act x ON x.r = a.r WHERE x.m IS DISTINCT FROM a.m), '')
+      || '|TARI=' || coalesce((SELECT string_agg(x.r || '=' || x.m, ',' ORDER BY x.r) FROM act x
+                                WHERE x.r NOT IN (SELECT r FROM ast) AND x.m <> 'AccessShareLock'), '')
+      || '|EXTRA=' || coalesce((SELECT string_agg(x.r, ' ' ORDER BY x.r) FROM act x
+                                WHERE x.r NOT IN (SELECT r FROM ast) AND x.m = 'AccessShareLock'), '')
+      || '|AEL=' || (SELECT count(*) FROM act WHERE m = 'AccessExclusiveLock')")"
+  dif="$(printf '%s' "$lk" | sed -n 's/^DIF=\([^|]*\)|.*/\1/p')"
+  tari="$(printf '%s' "$lk" | sed -n 's/.*|TARI=\([^|]*\)|.*/\1/p')"
+  extra="$(printf '%s' "$lk" | sed -n 's/.*|EXTRA=\([^|]*\)|.*/\1/p')"
+  n_ael="$(printf '%s' "$lk" | sed -n 's/.*|AEL=\([0-9]*\)$/\1/p')"
   got="$(probe 'citire:public.executie_tevi=blocat,scriere:storage.objects=blocat,citire:public.executie_acces_proiect=ok,scriere:public.sites=ok')"
-  # sesiunea trebuie închisă de server (transaction timeout) la ~3 s de la BEGIN
+  # martorul: backend-ul dispare la ~3 s de la BEGIN; fanionul se citește DUPĂ ce s-a văzut dispariția (lipsă = nimic trimis până atunci)
   ms=""
   for i in $(seq 1 200); do
-    if [ "$(q "SELECT count(*) FROM pg_stat_activity WHERE pid = $be")" = 0 ]; then ms="$(( $(q "SELECT round(extract(epoch FROM clock_timestamp()) * 1000)::bigint") - x0 ))"; break; fi
+    if [ "$(q "SELECT count(*) FROM pg_stat_activity WHERE pid = $be")" = 0 ]; then
+      ms="$(( $(q "SELECT round(extract(epoch FROM clock_timestamp()) * 1000)::bigint") - x0 ))"
+      if [ -e "$trimis" ]; then martor=dupa; else martor=inainte; fi
+      break
+    fi
     sleep 0.03
   done
-  wait "$cl" 2>/dev/null
+  wait "$cl" || rc=$?
+  # idle_in_transaction_session_timeout al rolului / bazei (sesiunea E nu-l schimbă): 0 sau ≥ 5 s, ca închiderea să nu poată veni din el
+  iit="$(q "SELECT setting::bigint FROM pg_settings WHERE name = 'idle_in_transaction_session_timeout'")"
+  # ce a văzut clientul: textul serverului sau conexiunea pierdută (psql iese cu 2 la conexiune pierdută, independent de limbă)
+  if [ "$rc" != 0 ] && grep -q 'transaction timeout' "$log"; then client="mesajul „transaction timeout”, cod $rc"
+  elif [ "$rc" = 2 ]; then client="conexiune închisă de server (cod 2)"
+  elif [ "$rc" != 0 ] && grep -Eqi 'server closed the connection|connection to server was lost|no connection to the server|could not receive data from server' "$log"; then
+    client="conexiune închisă de server (mesaj libpq, cod $rc)"
+  fi
   local ok=1 motiv=""
-  [ -n "$ms" ] || { ok=0; motiv+="sesiunea nu s-a închis în 6 s; "; }
+  [ -n "$ms" ] || { ok=0; motiv+="sesiunea nu s-a închis; "; }
   [ -z "$ms" ] || { [ "$ms" -ge $(( PLAFON_MS - 100 )) ] && [ "$ms" -le $(( PLAFON_MS + 1000 )) ]; } || { ok=0; motiv+="închisă la $ms ms de la BEGIN (așteptat ~$PLAFON_MS); "; }
-  grep -q 'transaction timeout' "$log" || { ok=0; motiv+="fără mesajul serverului „transaction timeout”: $(tr '\n' ' ' <"$log" | cut -c1-200); "; }
-  [ "$moduri" = "$asteptat" ] || { ok=0; motiv+="lock-uri ținute: $moduri (așteptat $asteptat); "; }
+  [ -z "$ms" ] || [ "$martor" = inainte ] || { ok=0; motiv+="backend-ul a dispărut abia după ce clientul a trimis garda finală / COMMIT (nu e dovada plafonului); "; }
+  printf '%s' "$iit" | grep -Eq '^[0-9]+$' && { [ "$iit" = 0 ] || [ "$iit" -ge 5000 ]; } \
+    || { ok=0; motiv+="idle_in_transaction_session_timeout = '$iit' ms (trebuie 0 sau ≥ 5000, altfel cauza închiderii nu e dovedită); "; }
+  [ "$rc" != 0 ] || { ok=0; motiv+="clientul a ieșit cu 0; "; }
+  ! grep -q 'EXACC_DUPA_COMMIT' "$log" || { ok=0; motiv+="COMMIT-ul a reușit; "; }
+  [ -n "$client" ] || { ok=0; motiv+="clientul nu arată nici „transaction timeout”, nici conexiune pierdută (cod $rc): $(tr '\n' ' ' <"$log" | tail -c 200); "; }
+  [ -n "$lk" ] && [ -n "$n_ael" ] || { ok=0; motiv+="nu am putut citi lock-urile din pauză ('$lk'); "; }
+  [ -z "$dif" ] || { ok=0; motiv+="lock-uri diferite de așteptare: $dif; "; }
+  [ -z "$tari" ] || { ok=0; motiv+="mod mai tare decât ACCESS SHARE pe relații neașteptate: $tari; "; }
   [ "$got" = 'citire:public.executie_tevi=blocat,scriere:storage.objects=blocat,citire:public.executie_acces_proiect=ok,scriere:public.sites=ok' ] \
     || { ok=0; motiv+="probe în pauză: $got; "; }
   [ "$(stare)" = "$2" ] || { ok=0; motiv+="starea s-a schimbat (trebuia ROLLBACK la tot); "; }
   fara_sesiuni || { ok=0; motiv+="au rămas sesiuni exacc_*; "; }
   [ "$(q "SELECT count(*) FROM pg_locks WHERE pid = $be")" = 0 ] || { ok=0; motiv+="lock-uri rămase; "; }
   if [ "$ok" = 1 ]; then
-    rezultat OK "$et: sesiunea închisă de server la $ms ms de la BEGIN, nimic schimbat; în pauză: $(printf '%s' "$moduri" | tr ',' '\n' | grep -c AccessExclusiveLock) tabele ACCESS EXCLUSIVE (acoperitele + storage.objects), tabelul de acces + sites ACCESS SHARE, nimic altceva; probe: $got"
-  else rezultat FAIL "$et: ${motiv%; }"; fi
+    rezultat OK "$et: sesiunea închisă de server la $ms ms de la BEGIN, înainte ca clientul să trimită ceva după fișier (idle_in_transaction $iit ms); clientul: $client; nimic schimbat; în pauză: $n_ael relații ACCESS EXCLUSIVE (exact acoperitele + storage.objects), tabelul de acces + sites ACCESS SHARE, ACCESS SHARE în plus (informativ): ${extra:-niciuna}, nimic mai tare în altă parte; probe: $got"
+  else rezultat FAIL "$et: ${motiv%; } [ACCESS SHARE în plus: ${extra:-niciuna}]"; fi
 }
 
 # ── C / D: aplicarea / revenirea REALĂ, măsurată ──────────────────────────────────────────────────────────────────────────────────────
