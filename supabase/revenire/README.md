@@ -304,3 +304,13 @@ SELECT set_config('gazpet.revenire_20261215b', 'SCOATE_CONTACT_PROBE:' || txid_c
 COMMIT;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = cele 3 coloane text + cele 3 CHECK-uri ale migrării; `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` (ocupat = 55P03, nimic scris) înaintea verificării „fără date”; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare, refuzuri, RLS-ul existent pe cont fără acces) — pe clonă îl rulează chat-ul.
+
+## 20261215c — Izometrie: mută o piesă la început (`20261215c_izometrie_muta_pozitie_ROLLBACK.sql`, NEAPLICAT)
+Scoate RPC-ul `fn_executie_tevi_muta_pozitie` (TKT-2026-0388). Nu atinge date: ordinea pieselor rămâne cea de acum; butonul ⤒ revine la „disponibil după actualizarea bazei de date”, ↑ / ↓ rămân ca azi. Nu redeschide nimic. **Dacă se scot amândouă, se rulează ÎNAINTEA revenirii 20261209a.** Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215c', 'SCOATE_MUTA_POZITIE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = funcția migrării (INVOKER, jsonb) și nimic legat de ea în `pg_depend`; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare); scenariul pe clonă: `supabase/tests/20261215c_izometrie_muta_pozitie.sql`.
