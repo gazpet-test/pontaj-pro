@@ -148,6 +148,25 @@ class StaticProvisioning(unittest.TestCase):
         else:
             ancore = json.loads(m[0].replace("''", "'"))
             self.assertEqual(set(ancore), {'functii', 'triggere'})
+            # r8 (L12/L15): completitudine fata de interogare - cele 10 functii numite + functiile tuturor triggerelor
+            # ancorate, fara handle_new_user (ancorat separat); fiecare trigger activ si cu functia lui in 'functii'.
+            numite = set(re.findall(r"'([a-z_]+\.[a-z_]+\([a-z, ]*\))'", comun.split(' IN (', 1)[1].split(')\n', 1)[0] + ')'))
+            self.assertEqual(len(numite), 10, numite)
+            tr = ancore['triggere']
+            self.assertTrue(tr)
+            for k, a in tr.items():
+                self.assertRegex(k, r'^(auth\.users|public\.(profiles|notifications)):[a-z_]+$')
+                self.assertEqual(len(a), 3, k)
+                self.assertEqual(a[0], 'O', k)
+                self.assertRegex(a[1], r'^[0-9a-f]{32}$')
+            fn_tr = {a[2] for a in tr.values()} - {'public.handle_new_user()'}
+            self.assertIn('public.handle_new_user()', {a[2] for a in tr.values()})
+            self.assertEqual(set(ancore['functii']), numite | fn_tr)
+            for s, a in ancore['functii'].items():
+                self.assertEqual(len(a), 5, s)
+                self.assertRegex(a[0], r'^[0-9a-f]{32}$')
+                self.assertIsInstance(a[2], bool)
+                self.assertTrue(a[4], s)
         # verificarea ancorelor e prima dupa lock-uri si se repeta inaintea fixarii amprentei
         self.assertLess(sql.index('LOCK TABLE public.employees'), sql.index('DO $ancore_pre$'))
         self.assertLess(sql.index('DO $ancore_pre$'), sql.index('CREATE TABLE public.portal_e1_1b_manifest'))

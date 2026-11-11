@@ -215,3 +215,25 @@ handle_new_user, profiles_role_chk, hook-ul sau rolurile; niciuna nu da EXECUTE 
   Harness: functia triggerului de pe notifications schimbata / trigger de pe profiles dezactivat inainte de apply = refuz.
 - r7, P2: owner-ul functiilor net (supabase_admin) verificat inainte de baseline; harness: owner schimbat = refuz.
 - Ancorele de productie se completeaza din sectiunea 9 (o rulare read-only); pana atunci 19a refuza atomic.
+
+## E1-1b r8 — 11.11.2026 (ancorele de productie)
+- `origin/main` adus prin merge (fara conflicte). Migrarile intrate intre timp (20261131f/g, 20261202a–20261208b,
+  20261211a) si cele din PR-urile deschise (20261209a, 20261132a, 20261131e) nu ating `handle_new_user`, triggerele de
+  pe auth.users / profiles / notifications sau functiile ancorate; nu lasa functii noi executabile de PUBLIC (ar schimba
+  setul de 21 din 18a). Numele 18a / 19a nu se ciocnesc cu nimic de pe origin; versiunea se da explicit la livrare.
+- 19a, marcajul `PORTAL_1B_ANCORE`: valoarea rulata read-only pe prod de sesiunea de chat (`ancore_1b.sql` la
+  c0e22df7, 11.11.2026): 16 functii (cele 10 numite + 6 ale triggerelor, fara handle_new_user) si 7 triggere active.
+- `test_static_1b.py`: pentru ancore completate verifica si completitudinea (functii = cele 10 numite + functiile
+  triggerelor, fiecare trigger activ cu md5 si functie, fiecare functie cu md5 / owner / DEFINER / config / ACL).
+- Harness: artefactul original refuza in continuare pe clusterul efemer (`PORTAL_1B_ANCHOR_CHANGED`), copia de test
+  primeste ancorele clusterului (`prepare_fixture_1b.py`), deci comanda si asteptarile raman aceleasi.
+
+| Regula | Dovada r8 |
+|---|---|
+| L12 | Setul de ancore e complet fata de interogare (test static nou); lipsa / diferenta = refuz. |
+| L14 | Neschimbat: refuz atomic inainte de orice obiect, verificare repetata la final; revenirea neatinsa. |
+| L15 | Ancore din catalogul prod (md5 corp, owner, DEFINER, config, ACL; triggere: activare, md5 definitie, functie). |
+| L18 | Valoare goala tot refuz (`= '{}'`), comparatie `IS DISTINCT FROM`. |
+| L19 | O singura interogare in `ancore_1b.sql`, 19a si inventar (paritate testata). |
+| L25 | Harness-ul PG17 si testele SQL raman la operator; Auth real = testul B1 pe proiect separat. |
+| L01–L11, L13, L16, L17, L20–L24 | n/a pentru delta r8 (fara cod nou in afara literalului si a testului). |
