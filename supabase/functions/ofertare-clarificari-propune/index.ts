@@ -3,6 +3,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { propuneClarificari } from './core.ts'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -12,18 +13,16 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<st
   if (!jwt) return 'lipsește autorizarea'
   let rol = ''
   try { rol = JSON.parse(atob(jwt.split('.')[1] || '')).role || '' } catch (_) { /* nu e JWT */ }
-  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  // r4 (#908, review r3 Jakarinos P1-01): cheia de serviciu NU mai e cale de cheltuială — autentificarea serviciului nu ține loc de dreptul
+  // de cheltuială al unei persoane (niciun apelant intern nu folosea calea; ofertare-rfq-inbox nu mai cheamă importul, decizia 1A 01.11)
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return 'apel neautorizat (cheie de serviciu)'
   if (rol === 'anon') return 'apel neautorizat (cheie anon)'
   const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
-    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-  ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
-  return 'Propunerea de clarificări o pornește doar ownerul sau responsabilul licitației (costă).'
+  if (await poateCheltui(supabase, licId, uid)) return null
+  return 'Propunerea de clarificări o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
 }
 
 Deno.serve(async (req: Request) => {

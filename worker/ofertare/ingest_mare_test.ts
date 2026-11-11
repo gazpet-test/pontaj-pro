@@ -124,6 +124,10 @@ function bd(tabele: Record<string, any[]>, fisiere: Record<string, Uint8Array>) 
 
 const arePoppler = await (async () => { try { return (await new Deno.Command('pdftotext', { args: ['-v'], stderr: 'null', stdout: 'null' }).output()).success } catch { return false } })()
 
+// 20261124a r4: proceseazaIngest cere garda pe cheltuială (poarta_coada.ts) — aici una care trece mereu și scrie pe coadă ca înainte
+// deno-lint-ignore no-explicit-any
+const gardaTest = (supa: any, lic: number) => Object.assign(async () => true, { cerere: { cerut_la: 'g', cerut_de: null }, scrie: async (p: Record<string, unknown>) => { await supa.from('ofertare_ingest_coada').update(p).eq('licitatie_id', lic); return 'ok' as const } })
+
 Deno.test({ name: 'proceseazaIngest: 770 (ignorat pe mărime) citit pe felii; documentul care rămâne candidat e oprit, nu buclează', ignore: !arePoppler, sanitizeOps: false, sanitizeResources: false, fn: async () => {
   const pdf770 = pdfMinimal(Array.from({ length: 30 }, (_, i) => i === 4 ? '' : `Studiu geotehnic Huedin pagina ${i + 1} foraj F${i + 1} argila prafoasa cafenie plastic vartoasa nivel hidrostatic ${i + 1} m`))
   const tabele: Record<string, any[]> = {
@@ -151,7 +155,7 @@ Deno.test({ name: 'proceseazaIngest: 770 (ignorat pe mărime) citit pe felii; do
   raspEdge[901] = () => json({ ok: true, doc_id: 901, pagini: 1, pagini_procesate: 1, status: 'procesat', continua: false })
   const edge0 = apeluri.edge
   const t0 = Date.now()
-  await proceseazaIngest(supa, 101, () => false, () => {})
+  await proceseazaIngest(supa, 101, () => false, () => {}, gardaTest(supa, 101))
   const d = (id: number) => tabele.ofertare_documente_atribuire.find(x => x.id === id)
 
   // (1) 770
@@ -179,7 +183,7 @@ Deno.test({ name: 'proceseazaIngest: 770 (ignorat pe mărime) citit pe felii; do
   // a doua activare a cozii: nimic de făcut pe 770 (sărit fără scriere), 900 rămâne eroare → încă o trecere, apoi stop
   tabele.ofertare_ingest_coada[0].activ = true
   const inainte = JSON.stringify(d(770))
-  await proceseazaIngest(supa, 101, () => false, () => {})
+  await proceseazaIngest(supa, 101, () => false, () => {}, gardaTest(supa, 101))
   assertEquals(JSON.stringify(d(770)), inainte)
   assertEquals(tabele.ofertare_ingest_coada[0].activ, false)
 } })
@@ -241,7 +245,7 @@ Deno.test({ name: 'rollback în timpul citirii lui 770 (coada activ=false + docu
     const x = d(770); delete x.analiza.citire_mare
     Object.assign(x, { status_procesare: 'ignorat', eroare: EROARE_EDGE, analiza: Object.keys(x.analiza).length ? x.analiza : null,
       text_extras: null, pagini: null, pagini_procesate: 0, pagini_necitite: [] })
-  })
+  }, gardaTest(supa, 101))
   assert(rollback, 'rollback-ul a avut loc în timpul feliilor')
   assertEquals([d(770).status_procesare, d(770).eroare, d(770).analiza, d(770).text_extras, d(770).pagini], ['ignorat', EROARE_EDGE, null, null, null])
   assertEquals(d(905).status_procesare, 'neprocesat'); assertEquals(apeluri.edge, edge0, '905 nu mai e trimis la edge')

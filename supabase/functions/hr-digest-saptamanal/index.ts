@@ -41,23 +41,26 @@ Deno.serve(async (req: Request) => {
   const acum7 = new Date(Date.now() - 7 * 864e5).toISOString();
 
   // Toate citirile, in paralel. Fiecare e mica; impreuna dau tot tabloul.
+  // TKT-2026-0376: autorizatiile REINNOITE (butonul Reinnoieste din HR) raman randuri vii, cu inlocuita_de_id spre cea noua;
+  // fara filtrul pe inlocuita_de_id, cea veche aparea in continuare la „Expira in 60 de zile” desi exista una noua.
+  // Aceeasi regula ca alertele din platforma (adminAlerte.js) si v_chuck_hr_alerte (migrarea 20260925_hr_autorizatii_reinnoire).
   const [fise, expira, expirate, neclas, aduse, noi] = await Promise.all([
     // 1. angajati activi fara fisa de aptitudini (tipul AVIZ_MEDICAL, redenumit in UI)
     supa.from('hr_autorizatii')
       .select('id, employees!inner(name, active), hr_autorizatii_tipuri!inner(cod)')
-      .is('deleted_at', null).is('fisier_path', null)
+      .is('deleted_at', null).is('inlocuita_de_id', null).is('fisier_path', null)
       .eq('hr_autorizatii_tipuri.cod', 'AVIZ_MEDICAL').eq('employees.active', true),
     // 2. autorizatii care expira in urmatoarele 60 de zile (oricare tip, fara medicale)
     supa.from('hr_autorizatii')
       .select('numar_autorizatie, data_expirare, employees!inner(name, active), hr_autorizatii_tipuri!inner(cod, denumire)')
-      .is('deleted_at', null).eq('employees.active', true)
+      .is('deleted_at', null).is('inlocuita_de_id', null).eq('employees.active', true)
       .gte('data_expirare', azi).lte('data_expirare', in60)
       .neq('hr_autorizatii_tipuri.cod', 'AVIZ_MEDICAL')
       .order('data_expirare'),
     // 3. deja expirate, la oameni activi (fara medicale — alea au sectiunea lor)
     supa.from('hr_autorizatii')
       .select('data_expirare, employees!inner(name, active), hr_autorizatii_tipuri!inner(cod, denumire)')
-      .is('deleted_at', null).eq('employees.active', true)
+      .is('deleted_at', null).is('inlocuita_de_id', null).eq('employees.active', true)
       .lt('data_expirare', azi)
       .neq('hr_autorizatii_tipuri.cod', 'AVIZ_MEDICAL')
       .order('data_expirare'),

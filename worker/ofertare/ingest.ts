@@ -15,6 +15,7 @@ import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR
 import { MAX_TEXT, MARCAJ_PREA_MARE, PRAG_MARE, citesteMare, compuneText, decizieCitireMare, esteMare, imparteText, mesajNecitite, trecereBlocata } from './citire_mare.ts'
 // LOTURI (20261024b): poarta unică — logica e DOAR în SQL; helper-ul e fail-closed (RPC căzut = nimic eligibil)
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, mesajLot } from '../../supabase/functions/_shared/eligibilLot.ts'
+import type { Garda } from './poarta_coada.ts'   // 20261124a r4: garda pe cheltuială, obligatorie, + scrierile CAS pe coadă
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY'), ANTHROPIC_KEY = env('ANTHROPIC_API_KEY')
@@ -128,7 +129,9 @@ export function aAvansat(inainte: ProgresDoc | null, dupa: ProgresDoc | null): b
 const RUNDE_AI = 240
 
 // drumul vechi, cu AI (scanuri): edge function-ul ofertare-ingest-doc, apel după apel cât timp continua=true
-export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () => boolean = () => false): Promise<string> {
+// r4 (#908, review r3 Jakarinos P1-02): poarta = garda pe cheltuială a cererii (worker/ofertare/poarta_coada.ts), întrebată înaintea
+// FIECĂREI runde (fiecare rundă = un apel AI plătit în edge). Edge-ul reverifică și el poarta pe cerut_de la fiecare invocare internă.
+export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () => boolean = () => false, poarta?: () => Promise<boolean>): Promise<string> {
   const progres = async (): Promise<ProgresDoc | null> => {
     try {
       const { data, error } = await supabase.from('ofertare_documente_atribuire').select('status_procesare, pagini, pagini_procesate').eq('id', docId).maybeSingle()
@@ -141,6 +144,7 @@ export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () 
     // SIGTERM: ies doar ÎNTRE apeluri — apelul anterior s-a încheiat sau pauza lungă a trecut, deci nicio invocare edge
     // nu mai lucrează pe document; felia scrisă rămâne, iar următoarea tură reia de la pagini_procesate
     if (runda > 0 && esteOprire()) return `întrerupt: SIGTERM (${inainte?.pagini_procesate ?? '?'}/${inainte?.pagini ?? '?'} pagini, AI; se reia de acolo)`
+    if (poarta && !(await poarta())) return `oprit: poarta pe cheltuială (${inainte?.pagini_procesate ?? '?'}/${inainte?.pagini ?? '?'} pagini, AI)`
     let data: any, http = 0
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/ofertare-ingest-doc`, {
@@ -187,14 +191,15 @@ export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () 
 }
 
 // R6: drumul „PDF mare” (citire_mare.ts) cu dependențele de producție: antetul cu Haiku, ca pe drumul obișnuit
-const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void, supa?: Supa) => ({
-  cerutDe, esteOprire, stare, antet: (t: string, docId?: number) => antetDinText(t, supa && docId != null ? { supa, docId } : undefined), modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
+// r4: antetul (Haiku, plătit) trece prin poarta pe cheltuială; refuz → fără antet, fără apel AI
+const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void, supa?: Supa, poarta?: () => Promise<boolean>) => ({
+  cerutDe, esteOprire, stare, antet: async (t: string, docId?: number) => (poarta && !(await poarta())) ? { antet: null, tokIn: 0, tokOut: 0 } : antetDinText(t, supa && docId != null ? { supa, docId } : undefined), modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
 })
 
-export async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}): Promise<string> {
+export async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}, poarta?: () => Promise<boolean>): Promise<string> {
   // peste 60 MB (sau 'ignorat' de edge pe mărime): nu în memorie și nu prin edge (care îl refuză) — pe felii, pe disc
   // runda 3 (J3): și drumul pe felii (> 60 MB) trece prin gardă — lease + token + descărcarea numărată (nu se restituie)
-  if (esteMare(doc)) return await citesteMareCuGarda(supabase, doc, cerutDe, esteOprire, stare)
+  if (esteMare(doc)) return await citesteMareCuGarda(supabase, doc, cerutDe, esteOprire, stare, poarta)
   // GARDA (2)+(3): pe drumul local contorul se ține aici (pe drumul AI îl ține edge-ul, la fiecare invocare).
   // Runda 2: „continua” = token + lease; altă încercare în curs („in_curs”) → fără descărcare. După „continua”, cuIncercare
   // garantează EXACT un _rezultat: explicit pe fiecare drum, 'esec' pe excepție (download, pdfinfo/pdftotext, parser, BD).
@@ -204,7 +209,7 @@ export async function citesteDocument(supabase: Supa, doc: any, cerutDe: string 
   const inc = incercareGarda(supabase, doc.id, garda.token!)
   // runda 3 (J2): excepția → 'esec' + documentul 'eroare' scrise ATOMIC sub token; proceseazaIngest nu mai scrie nimic după
   try {
-    return await cuIncercare(inc, () => citesteDupaGarda(supabase, doc, inc, meta, cerutDe, esteOprire, stare),
+    return await cuIncercare(inc, () => citesteDupaGarda(supabase, doc, inc, meta, cerutDe, esteOprire, stare, poarta),
       (m) => ({ status_procesare: 'eroare', eroare: ('eroare: ' + m).slice(0, 500) }))
   } catch (e) { return 'eroare(salvat): ' + mesajEroare(e) }
 }
@@ -212,7 +217,7 @@ export async function citesteDocument(supabase: Supa, doc: any, cerutDe: string 
 // Runda 3 (J3): PDF > 60 MB (citire_mare.ts) sub gardă. Lease-ul se prelungește la PAUZE.leaseReinnoireMs (citirea durează
 // până la ~80 min); dacă prelungirea e respinsă (token preluat) citirea se oprește la felia următoare (esteOprire).
 // Descărcarea se numără la _incearca și NU se restituie la SIGTERM (contorul propriu al citire_mare poate reveni, al gărzii nu).
-async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void): Promise<string> {
+async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void, poarta?: () => Promise<boolean>): Promise<string> {
   const meta = await metaObiect(supabase, BUCKET, doc.fisier_path)
   const garda = await gardaIncearca(supabase, doc.id, meta, 'nas:citire_mare')
   if (garda.actiune !== 'continua') return `garda: ${garda.actiune} — ${garda.motiv}`
@@ -232,7 +237,7 @@ async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | nu
   })()
   try {
     return GESTIONAT + await cuIncercare(inc, async () => {
-      const rez = await _mare.citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare, supabase))
+      const rez = await _mare.citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare, supabase, poarta))
       if (pierdut) {   // lease pierdut: NU raportăm procesat/parțial, oricare ar fi rezultatul local
         await inc.inchide({ rezultat: 'predat', eroare: 'lease pierdut în timpul citirii pe felii' })
         return `garda: lease pierdut în timpul citirii pe felii — rezultat local ignorat (${rez.slice(0, 120)})`
@@ -247,7 +252,7 @@ async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | nu
 
 // Munca unei încercări acordate de gardă (lease-ul e al nostru). Fiecare `return` închide încercarea explicit; o excepție
 // ajunge în cuIncercare (→ 'esec'), apoi în proceseazaIngest (→ documentul 'eroare', ca înainte).
-async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: MetaObiect | null, cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void): Promise<string> {
+async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: MetaObiect | null, cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void, poarta?: () => Promise<boolean>): Promise<string> {
   const off = Math.max(0, Number(doc.pagina_offset) || 0)
   const termen = Date.now() + TERMENE.lucruLocalMs   // runda 3 (J2): tot lucrul local (download, pdfinfo, pdftotext) sub lease
   const { data: blob, error: dlErr } = await cuTermen(descarcaCuJurnal(supabase, BUCKET, doc.fisier_path, 'nas:ingest', doc.id), termen - Date.now(), 'download') as any   // garda → poarta egress (#543) → descărcare
@@ -262,14 +267,14 @@ async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: 
     // runda 4 (Copilot 3): mărimea reală se scrie ATOMIC cu predarea (sub token), nu printr-un UPDATE direct
     await inc.inchide({ rezultat: 'predat', eroare: `peste ${Math.round(PRAG_MARE / 1048576)} MB după descărcare → citire pe felii (citire_mare)`, doc: { size_bytes: bytes.length } })
     if (inc.raspuns?.acceptat !== true) return `garda: predare NECONFIRMATĂ (${inc.raspuns?.motiv ?? 'fără răspuns'}) — stare necunoscută`
-    return await citesteMareCuGarda(supabase, { ...doc, size_bytes: bytes.length }, cerutDe, esteOprire, stare)
+    return await citesteMareCuGarda(supabase, { ...doc, size_bytes: bytes.length }, cerutDe, esteOprire, stare, poarta)
   }
   // predat către edge (scan / fără strat de text): lease-ul se eliberează ÎNAINTE, altfel edge-ul ar primi „in_curs”;
   // contoarele nu se ating (fiecare invocare edge își ia propria încercare, numărată acolo)
   const predaLaAI = async (motiv: string) => {
     await inc.inchide({ rezultat: 'predat', eroare: motiv })
     // runda 4 (Copilot 1): ownership-ul e la edge (tokenurile lui) — orice rezultat din aval e „gestionat”, fără scriere aici
-    return GESTIONAT + await citesteCuAI(supabase, doc.id, esteOprire)
+    return GESTIONAT + await citesteCuAI(supabase, doc.id, esteOprire, poarta)
   }
   const cale = `/tmp/ingest_${doc.id}.pdf`
   await Deno.writeFile(cale, bytes)
@@ -285,7 +290,8 @@ async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: 
     const comp = compuneText(local.pagini, local.nPag, off, MAX_TEXT)
     const necitite = comp.necitite, text = comp.text
     let antet: any = null, tokIn = 0, tokOut = 0
-    try { const a = await antetDinText(local.pagini.slice(0, 2).join('\n\n'), { supa: supabase, docId: doc.id }); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#${doc.id} antet:`, (e as Error).message) }
+    try { if (poarta && !(await poarta())) throw new Error('poarta pe cheltuială: antet sărit (fără apel AI)')
+      const a = await antetDinText(local.pagini.slice(0, 2).join('\n\n'), { supa: supabase, docId: doc.id }); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#${doc.id} antet:`, (e as Error).message) }
     try { await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: HAIKU.id, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * HAIKU.in + tokOut * HAIKU.out, ref_table: 'ofertare_documente_atribuire', ref_id: doc.id }) } catch (_) {}
     const upd: Record<string, unknown> = {
       text_extras: text.trim() || null, pagini: local.nPag, size_bytes: bytes.length, pagini_procesate: local.nPag, pagini_necitite: necitite,
@@ -438,7 +444,7 @@ async function coadaActiva(supabase: Supa, licId: number): Promise<boolean> {
 // LOTURI: licitațiile la care poarta n-a răspuns — până când nu se mai încearcă (în memorie; repornirea o golește)
 const poartaCazuta = new Map<number, number>()
 
-export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire: () => boolean, stare: (s: string) => void) {
+export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire: () => boolean, stare: (s: string) => void, poarta: Garda) {
   const { data: c } = await supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
   // LOTURI: poarta pe loturi n-a răspuns → NIMIC din licitația asta în tura asta (fail-closed). Coada rămâne activă (fără „GATA”
@@ -448,7 +454,9 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
   const amanaPoarta = async (unde: string) => {
     poartaCazuta.set(licId, Date.now() + PAUZE.poartaLoturiMs)
     log(`#${licId} citire: poarta pe loturi n-a răspuns (${unde}) — nu procesez nimic din licitație în tura asta; reîncerc peste ${Math.round(PAUZE.poartaLoturiMs / 1000)} s`)
-    await (supabase as any).from('ofertare_ingest_coada').update({ ultimul_tick: new Date().toISOString() }).eq('licitatie_id', licId)
+    // r5 (Copilot r4 P2-02): tura se oprește oricum aici (return la apelant); rezultatul negativ al scrierii se spune explicit
+    const sa = await poarta.scrie({ ultimul_tick: new Date().toISOString() })
+    if (sa !== 'ok') log(`#${licId} citire: ultimul_tick nu s-a scris (${sa === 'inlocuita' ? 'cerere înlocuită / oprită' : 'eroare'})`)
   }
   {
     const p0 = await eligibilitateLicitatie(supabase as any, licId)
@@ -488,12 +496,16 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
     let rez = ''
     if (trecereBlocata(deCate, d._mare === true)) rez = `eroare: documentul revine în coadă după ${deCate - 1 === 1 ? 'o trecere' : `${deCate - 1} treceri`} în aceeași tură — oprit, ca să nu intre în buclă`
     else {
-      try { rez = await citesteDocument(supabase, d, c.cerut_de ?? null, esteOprire, s => stare(`${s} (${citite + 1}; ${lista.length} rămase)`)) } catch (e) { rez = 'eroare: ' + String((e as Error)?.message ?? e) }
+      // 20261124a (r2 P1-03): poarta pe cheltuială înaintea fiecărui document (citirea poate chema AI)
+      if (!(await poarta())) { log(`#${licId} citire: oprit de poarta pe cheltuială (${citite} citite în tura asta)`); return }
+      try { rez = await citesteDocument(supabase, d, c.cerut_de ?? null, esteOprire, s => stare(`${s} (${citite + 1}; ${lista.length} rămase)`), poarta) } catch (e) { rez = 'eroare: ' + String((e as Error)?.message ?? e) }
     }
     log(`#${licId} doc ${d.id} „${String(d.nume_original).slice(-50)}" → ${rez} · ${Math.round((Date.now() - t0) / 1000)} s`)
     if (rez.startsWith(GESTIONAT)) {
       // runda 4: după predare / pe calea pe felii, documentul NU se atinge de aici (fără fallback de 'eroare')
       const interior = rez.slice(GESTIONAT.length)
+      // r4: garda a refuzat între două runde AI (revocare / cerere înlocuită / eroare) — rularea se oprește aici, fără notă finală
+      if (/^oprit: poarta/.test(interior)) { log(`#${licId} citire: oprit de poarta pe cheltuială în timpul documentului ${d.id}`); return }
       if (/^(eroare|garda|blocat_lot)/.test(interior)) esuate.add(d.id)
       else if (!/^(reia|întrerupt)/.test(interior)) citite++
     } else if (rez.startsWith('garda') || rez.startsWith('eroare(salvat)')) {
@@ -506,14 +518,18 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
       // PDF mare: încercarea e deja numărată în BD (max. MAX_INCERCARI_MARE), se reia în tura asta; întrerupt = SIGTERM
       // (și pe drumul AI, între felii: documentul rămâne 'in_lucru' cu pagini_procesate, tura următoare continuă de acolo)
     } else citite++
-    await supabase.from('ofertare_ingest_coada').update({ ultimul_tick: new Date().toISOString(), lansari: (c.lansari ?? 0) + citite + esuate.size }).eq('licitatie_id', licId)
+    // r5 (review r4 Jakarinos P2-01 / Copilot P2-02): orice rezultat diferit de „ok” (înlocuită / oprită / eroare de scriere) oprește tura
+    const sp = await poarta.scrie({ ultimul_tick: new Date().toISOString(), lansari: (c.lansari ?? 0) + citite + esuate.size })
+    if (sp !== 'ok') { log(`#${licId} citire: scrierea progresului pe coadă — ${sp === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp' : 'eroare'} — mă opresc`); return }
   }
   if (esteOprire()) return
   const { data: toate } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%')
   const n = (s: string[]) => (toate ?? []).filter(d => s.includes(d.status_procesare)).length
   const nBlocLot = Object.values(blocateLot).reduce((a, b) => a + b, 0)
   const nota = `${n(['procesat'])} procesate, ${n(['partial'])} parțiale, ${n(['eroare', 'neprocesat', 'in_lucru'])} cu eroare/epuizate${nBlocLot ? `; ${nBlocLot} sărite — blocate pe loturi (${rezumatBlocate(blocateLot)}), se citesc după triere cu încă un „Procesează”` : ''} (worker NAS: ${citite} citite acum, ${esuate.size} eșuate)`
-  await supabase.from('ofertare_ingest_coada').update({ activ: false, terminat_la: new Date().toISOString(), nota, ultimul_tick: new Date().toISOString() }).eq('licitatie_id', licId)
+  // r4 (Jakarinos r3 P2-01): închiderea doar pe ACEEAȘI cerere (CAS) — rezultatul unei rulări vechi nu închide cererea nouă
+  const rInch = await poarta.scrie({ activ: false, terminat_la: new Date().toISOString(), nota, ultimul_tick: new Date().toISOString() })
+  if (rInch !== 'ok') { log(`#${licId}: rezultatul NU s-a scris pe coadă (${rInch === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp' : 'eroare de scriere'})`); return }
   if (c.cerut_de) {
     const { data: li } = await supabase.from('ofertare_licitatii').select('nr_anunt').eq('id', licId).maybeSingle()
     await supabase.from('notifications').insert({ profile_id: c.cerut_de, type: 'info', modul: 'Ofertare', title: `Ofertare: citirea documentelor s-a terminat la ${li?.nr_anunt ?? '#' + licId}`, message: `${nota}. Poți extrage cerințele.`, link_to: '/ofertare' })

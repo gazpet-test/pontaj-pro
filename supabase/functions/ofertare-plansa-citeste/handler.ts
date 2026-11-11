@@ -16,7 +16,7 @@
 // Bugetul unei rulari e limitat, deci se citesc cel mult FELII_PE_RULARE bucati si se
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { poateCheltui } from './poarta.ts';
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts';   // poarta unică pe cheltuială (20261124a)
 // LOTURI (20261024b): poarta unică pe document (fail-closed) — aceeași pentru edge, worker NAS (plansa.ts) și importul CLI
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts';
 // R5 (Copilot 26.09.2026, condiția 1): CÂND o aprobare nu mai e valabilă — copie identică a src/ofertareCantitatiInvalidare.js
@@ -1952,12 +1952,11 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // (nu poate enumera id-urile). Ownerul / apelul intern cu service key primesc 404 pe doc inexistent.
   // Storage și AI rulează strict după poartă.
   if (uidApelant) {
-    const [{ data: prof }, { data: lic }] = await Promise.all([
-      supa.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
-      doc ? supa.from('ofertare_licitatii').select('responsabil_id').eq('id', doc.licitatie_id).maybeSingle()
-          : Promise.resolve({ data: null }),
-    ]);
-    if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uidApelant))
+    // poarta unică (20261124a) pe licitația documentului; pe doc inexistent doar ownerul trece (primește 404, ca înainte)
+    const permis = doc
+      ? await poateCheltui(supa, doc.licitatie_id, uidApelant)
+      : (await supa.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle()).data?.is_owner === true;
+    if (!permis)
       return json({ error: MESAJ_FARA_DREPT }, 403);
   }
   if (!doc) return json({ error: 'document inexistent' }, 404);

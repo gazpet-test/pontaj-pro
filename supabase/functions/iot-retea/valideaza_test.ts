@@ -150,6 +150,39 @@ Deno.test('respinge chei AI noi invalide', () => {
   rau({ ai_anthropic_saptamana_reset: null });
   rau({ ai_altceva_pct: 5 });
 });
+// 09.11.2026: cota redari@ + reseturile ca epoch în secunde (…_reset_s)
+Deno.test('chei noi: cota redari@ și reseturi epoch, păstrate ca atare', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true,
+    ai_redari_saptamana_ramas_pct: 23, ai_redari_saptamana_fable_ramas_pct: 0,
+    ai_redari_saptamana_reset_s: 1794981600, ai_redari_saptamana_fable_reset_s: 1794981600,
+    ai_redari_saptamana_reset: 'Nov 13, 10:00am', ai_redari_saptamana_fable_reset: 'Nov 13, 10:00am',
+    ai_codex_reset_s: 1795000000, ai_anthropic_saptamana_reset_s: 1794981600, ai_anthropic_saptamana_fable_reset_s: 0 }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].ai_redari_saptamana_ramas_pct, 23);
+  assertEquals(r.citiri[0].ai_redari_saptamana_fable_ramas_pct, 0);
+  assertEquals(r.citiri[0].ai_redari_saptamana_reset_s, 1794981600);
+  assertEquals(r.citiri[0].ai_redari_saptamana_reset, 'Nov 13, 10:00am');
+  assertEquals(r.citiri[0].ai_codex_reset_s, 1795000000);
+  assertEquals(r.citiri[0].ai_anthropic_saptamana_fable_reset_s, 0);
+});
+Deno.test('chei noi lipsă rămân null', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].ai_redari_saptamana_ramas_pct, null);
+  assertEquals(r.citiri[0].ai_redari_saptamana_fable_reset_s, null);
+  assertEquals(r.citiri[0].ai_anthropic_saptamana_reset_s, null);
+});
+Deno.test('respinge chei noi invalide', () => {
+  const rau = (x: Record<string, unknown>) => assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ...x }] }).ok, false);
+  rau({ ai_redari_saptamana_ramas_pct: 100.5 });
+  rau({ ai_redari_saptamana_fable_ramas_pct: '40' });
+  rau({ ai_redari_saptamana_reset_s: '1794981600' });
+  rau({ ai_redari_saptamana_reset_s: 5e9 });
+  rau({ ai_anthropic_saptamana_reset_s: -1 });
+  rau({ ai_codex_reset_s: null });
+  rau({ ai_redari_saptamana_reset: '<b>x</b>' });
+  rau({ ai_redari_altceva_pct: 5 });
+});
 
 // 13.10.2026: MAC văzut de sondă (comparat în index.ts cu meta.mac)
 Deno.test('acceptă mac valid și îl normalizează', () => {

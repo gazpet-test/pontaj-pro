@@ -19,6 +19,7 @@ import { mesajFaraText, citesteCuAi, avertismentCitire } from './ofertareCitireD
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
+import { poateCheltuiUI } from './ofertareResponsabili.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -189,8 +190,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   // goluri din acoperire + ambiguități din registru + diferențe de cantități + răspunsuri primite → propuneri de verificat.
   const propuneServer = async () => {
     if (!licId) return
-    if (!(profile?.is_owner || licitatii?.find(l => l.id === licId)?.responsabil_id === profile?.id)) { showToast('Propunerea de clarificări o pornește ownerul sau responsabilul licitației (costă).', 'err'); return }
-    const { error } = await supabase.from('ofertare_clarificari_coada').upsert({ licitatie_id: licId, activ: true, cerut_de: profile?.id || null, cerut_la: new Date().toISOString(), terminat_la: null, nota: null, rezultat: null }, { onConflict: 'licitatie_id' })
+    if (!poateCheltuiUI(licitatii?.find(l => l.id === licId), profile)) { showToast('Propunerea de clarificări o pornește ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).', 'err'); return }
+    // 20261124a (3A): coada se pornește doar prin RPC (poarta pe cheltuială pe server, cerut_de = utilizatorul logat)
+    const { error } = await supabase.rpc('ofertare_coada_porneste', { p_coada: 'clarificari', p_licitatie_id: licId })
     if (error) { showToast('Nu s-a putut porni: ' + error.message, 'err'); return }
     setBusy('Sonnet citește registrul, golurile, cantitățile și răspunsurile primite, pe server (1-3 min)...')
     for (let i = 0; i < 120; i++) {

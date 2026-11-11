@@ -4,6 +4,35 @@ import { grupeazaPentruPlicuri, textAR, docxSimplu, genereazaOpis, genereazaPvPl
 import { termenExpediere, textTermenExpediere, avertismentExpediere } from './plicuri.js'
 import { vi } from 'vitest'
 import { confirmaExpediereRecitita } from './plicuri.js'
+import { convocareDeRegenerat } from './plicuri.js'
+
+// Test weekend 06.11.2026: RD008 la „Creează plicuri” — convocările fără calitate în document / cu calitate schimbată nu se mai propun.
+describe('grupeazaPentruPlicuri — convocări de regenerat (RD008)', () => {
+  const c = extra => conv({ calitate_document: 'proprietar', calitate_detinator: 'proprietar', ...extra })
+  it('calitate egală → plic propus', () => {
+    const r = grupeazaPentruPlicuri([c()])
+    expect(r.grupuri).toHaveLength(1); expect(r.de_regenerat).toEqual([])
+  })
+  it('calitate_document NULL (legacy, dinainte de 20261131c) → de regenerat, nu propus', () => {
+    const r = grupeazaPentruPlicuri([c({ calitate_document: null })])
+    expect(r.grupuri).toEqual([]); expect(r.de_regenerat).toHaveLength(1)
+  })
+  it('calitatea deținătorului s-a schimbat după generare → de regenerat', () => {
+    expect(grupeazaPentruPlicuri([c({ calitate_detinator: 'coproprietar' })]).de_regenerat).toHaveLength(1)
+  })
+  it('o singură convocare de regenerat oprește tot plicul persoanei (serverul cere toate convocările persoanei din UAT)', () => {
+    const r = grupeazaPentruPlicuri([c(), c({ conv_id: 'conv-fictiva-2', id_parcela: 'ABC-0002', nr_document: 'C-0013', calitate_document: null })])
+    expect(r.grupuri).toEqual([]); expect(r.de_regenerat).toHaveLength(1); expect(r.de_regenerat[0].convocari).toHaveLength(2)
+    expect(r.de_regenerat[0].convocari.filter(convocareDeRegenerat).map(x => x.nr_document)).toEqual(['C-0013'])
+  })
+  it('alte persoane rămân propuse', () => {
+    const r = grupeazaPentruPlicuri([c(), c({ conv_id: 'x2', nume_normalizat: 'ALTA PERSOANA', calitate_document: null })])
+    expect(r.grupuri).toHaveLength(1); expect(r.de_regenerat).toHaveLength(1)
+  })
+  it('rând fără câmpul calitate_document (apelant vechi) → necunoscut, nu se exclude', () => {
+    expect(convocareDeRegenerat(conv())).toBe(false)
+  })
+})
 
 // Exclusiv date fictive, fără identificatori de persoane reale.
 const conv = extra => ({ conv_id: 'conv-fictiva-1', nr_document: 'C-0012', uat_id: 'uat-fictiv-1', uat3: 'ABC', uat_nume: 'Comuna Fictivă',
@@ -28,7 +57,7 @@ describe('grupeazaPentruPlicuri', () => {
   })
   it('adresă necunoscută sau goală nu devine plic', () => {
     const rs = [conv({ adresa: { cunoscuta: false } }), conv({ adresa: { cunoscuta: true, strada: ' ' } }), conv({ adresa: null })]
-    expect(grupeazaPentruPlicuri(rs)).toEqual({ grupuri: [], fara_adresa: rs, prea_mari: [] })
+    expect(grupeazaPentruPlicuri(rs)).toEqual({ grupuri: [], fara_adresa: rs, prea_mari: [], de_regenerat: [] })
   })
   it('200 convocări = un plic; 201 = blocaj explicit (fără împărțire, serverul refuză plicurile parțiale)', () => {
     const fa = n => Array.from({ length: n }, (_, i) => conv({ conv_id: `fictiv-${i}`, nr_document: `C-${String(i + 1).padStart(4, '0')}` }))
@@ -97,6 +126,14 @@ describe('csvEtichete', () => {
     }
     expect(csvEtichete([{ ...plic, destinatar_nume: 'Fictiv "Test"', proiect: { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'T', imputernicire_data: '2026-11-01' } }], { [plic.id]: [conv()] })).toContain('Fictiv ""Test""')
     expect(() => csvEtichete([plic], { [plic.id]: [conv()] })).toThrow()   // fără împuternicire nu se generează AR
+  })
+  // Test 08.11.2026: forma reală a apelului din PlicuriEcran — rândurile plicurilor NU au `proiect`, proiectul vine ca parametru
+  it('apelul din ecran (proiect ca parametru, rânduri fără proiect) → CSV cu textul AR; fără proiect → refuz', () => {
+    const pr = { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'T', imputernicire_data: '2026-11-01' }
+    const csv = csvEtichete([plic], { [plic.id]: [conv()] }, { proiect: pr })
+    expect(csv).toContain(plic.nr_plic); expect(csv).toMatch(/Conține: 1 convocare/)
+    expect(() => csvEtichete([plic], { [plic.id]: [conv()] })).toThrow(/împuternicirea/)
+    expect(() => csvEtichete([plic], { [plic.id]: [conv()] }, { proiect: { ...pr, cod: 'TEST-RAZVAN' } })).toThrow(/nu e validat juridic/)
   })
 })
 

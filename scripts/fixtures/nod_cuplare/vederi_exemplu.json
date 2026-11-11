@@ -1,0 +1,4 @@
+[
+  { "vedere": "PLAN", "fisier": "PLAN.png", "latime_px": 1200, "inaltime_px": 800, "titlu": "Plan sintetic (test)" },
+  { "vedere": "A", "fisier": "A.png", "latime_px": 1000, "inaltime_px": 400, "titlu": "Vedere A sintetică (test)" }
+]

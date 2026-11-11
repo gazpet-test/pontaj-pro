@@ -7,6 +7,11 @@
 
 // LOTURI (20261024b): poarta unică pe document — fail-closed (RPC căzut = neeligibil, motiv eroare_poarta)
 import { documentEligibil, mesajLot } from '../../supabase/functions/_shared/eligibilLot.ts'
+// #908 r4 (review r3 Jakarinos P1-01 / Copilot P1-03): poarta unică pe cheltuială, întrebată pe cerut_de-ul JOBULUI înaintea fiecărui
+// apel plătit (rundă / lipire) — o revocare după înscriere (sau un job înscris înainte de 20261124a de cineva care nu mai trece) oprește
+// consumul. Prin HTTP, edge-ul nu mai acceptă cheia de serviciu (ofertare-plansa-citeste/index.ts), deci calea asta e singura internă.
+import { poateCheltui } from '../../supabase/functions/_shared/poartaCheltuiala.ts'
+export const MOTIV_POARTA = 'cine a cerut citirea planșei nu mai trece poarta pe cheltuială (owner / responsabil numit de owner sau de un admin Ofertare), sau poarta n-a putut fi verificată — reînscrie planșa'
 
 export const LEASE_MIN = 10
 export const PAUZA_ALT_TAB_MS = 60_000
@@ -179,6 +184,12 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       luat_de: null, lease_pana: null, eroare: mesajLot(motiv) })
     return true
   }
+  // poarta pe cheltuială pe cerut_de-ul jobului, pe licitația documentului citit ACUM (fail-closed: cerut_de lipsă / RPC căzut = refuz)
+  const poartaRefuza = async (lic: unknown): Promise<boolean> => !job.cerut_de || !(await poateCheltui(supabase, Number(lic ?? job.licitatie_id), job.cerut_de))
+  const opresteLaPoarta = async () => {
+    jurnal.push({ la: new Date().toISOString(), poarta_cheltuiala: 'refuz' })
+    await incheie('anulat', { motiv_anulare: MOTIV_POARTA }); log(`job ${job.id} (doc ${job.doc_id}): anulat — poarta pe cheltuială`); return true
+  }
   const lotBlocat = async (): Promise<string | null> => { const e = await documentEligibil(supabase, Number(job.doc_id)); return e.eligibil ? null : e.motiv }
 
   const opresteLaBuget = async (motiv: string) => {
@@ -211,6 +222,7 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
       const ml = await lotBlocat()   // la fiecare rundă: o debifare de lot oprește jobul înainte de runda următoare
       if (ml) return await opresteLaLot(ml)
+      if (await poartaRefuza(doc?.licitatie_id)) return await opresteLaPoarta()   // r4: înaintea fiecărei runde plătite
       const mb = await bugetOk(REZERVA_RUNDA_USD)
       if (mb) return await opresteLaBuget(mb)
       doc = await verificaDupaRezervare()
@@ -295,6 +307,7 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
       const ml = await lotBlocat()
       if (ml) return await opresteLaLot(ml)
+      if (await poartaRefuza(doc?.licitatie_id)) return await opresteLaPoarta()   // r4: și înaintea lipirii
       const mb = await bugetOk(REZERVA_LIPIRE_USD)
       if (mb) return await opresteLaBuget(mb)
       doc = await verificaDupaRezervare()

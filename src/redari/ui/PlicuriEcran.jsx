@@ -3,17 +3,22 @@ import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob } from '../docx.js'
 import { sesiuneEcran } from '../corespondenta.js'
 import { propune, aplica } from '../importPostal.js'
-import { grupeazaPentruPlicuri, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire,
+import { grupeazaPentruPlicuri, convocareDeRegenerat, MESAJ_DE_REGENERAT, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire,
   termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita, textTintaExpediere, recomandareExpediere } from '../plicuri.js'
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
+import FanAwbPrevizualizare from './FanAwbPrevizualizare.jsx'
 
 const COL_PLIC = 'id,proiect_id,uat_id,nr_plic,destinatar_nume,lot_id,awb,data_expediere,data_ar,ar_scan_path,ar_primit_de,ar_primit_calitate,ar_mentiune,opis_path,retur,retur_detaliu,retur_data,retur_scan_path,stare,motiv_anulare,versiune'
 const COL_LOT = 'id,proiect_id,nr_lot,data_plicuire,semnatar1_id,semnatar2_id,pv_path,observatii,versiune'
 const starea = p => p.stare === 'anulat' ? 'anulat' : p.data_ar ? 'AR' : p.retur ? 'retur' : p.data_expediere ? 'expediat' : p.lot_id ? 'in_lot' : 'fara_lot'
 // Jakarinos + Copilot f10 UI P2: 55P03 (operație concurentă, din protocolul pe UAT) are mesajul lui, separat de rezultatul neconfirmat (rețea)
-const eroareScriere = e => e?.code === '42501' ? 'Accesul de scriere a fost refuzat.' : e?.code === '55P03' ? `Operație concurentă: ${msgEroare(e)} Reîncarcă datele și reîncearcă.`
+// E2E 06.11.2026: codurile de business ale modulului (RDnnn, ex. RD008 din 20261131c) sunt refuzuri explicite ale serverului, nu rezultate
+// necunoscute — se afișează motivul (înainte cădeau pe „Rezultat neconfirmat”, iar operatorul nu afla că trebuie regenerat convocatorul).
+const SUGESTII_RD = { RD008: 'Convocatorul a fost generat pentru altă calitate a deținătorului: regenerează-l (Registru → 📄 Convocator → „Regenerează același număr”), apoi creează plicul.' }
+export const eroareScriere = e => e?.code === '42501' ? 'Accesul de scriere a fost refuzat.' : e?.code === '55P03' ? `Operație concurentă: ${msgEroare(e)} Reîncarcă datele și reîncearcă.`
+  : /^RD\d{3}$/.test(e?.code || '') ? `${msgEroare(e)}${SUGESTII_RD[e.code] ? ` — ${SUGESTII_RD[e.code]}` : ''}`
   : e?.code === 'P0001' || e?.code === '23514' || e?.code === '22023' || e?.code === '0A000' ? msgEroare(e) : 'Rezultat neconfirmat. Reîncarcă și verifică starea înainte de reluare.'
 
 export async function citesteDatePlicuri(client, proiectId, poateScrie, esteCurent) {
@@ -37,15 +42,15 @@ export async function citesteDatePlicuri(client, proiectId, poateScrie, esteCure
   const idsAcces = [...new Set(acces.map(a => a.profile_id))]
   const cuAcces = idsAcces.length ? await inLoturi(idsAcces, 'profiles', 'id,name', 'id') : []
   const utilizatori = [...new Map([...owneri, ...cuAcces].map(p => [p.id, { id: p.id, name: p.name || '(fără nume)' }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'ro'))
-  const det = await inLoturi(parcele.map(p => p.id), 'red_detinatori', 'id,parcela_id,nume,nume_normalizat', 'parcela_id', q => q.is('sters_la', null))
+  const det = await inLoturi(parcele.map(p => p.id), 'red_detinatori', 'id,parcela_id,nume,nume_normalizat,calitate', 'parcela_id', q => q.is('sters_la', null))
   const [conv, contacte] = await Promise.all([
-    inLoturi(det.map(d => d.id), 'red_convocari', 'id,detinator_id,nr_document,plic_id,data_expediere', 'detinator_id', q => q.eq('stare', 'activ').eq('canal', 'posta').is('sters_la', null)),
+    inLoturi(det.map(d => d.id), 'red_convocari', 'id,detinator_id,nr_document,plic_id,data_expediere,calitate_document', 'detinator_id', q => q.eq('stare', 'activ').eq('canal', 'posta').is('sters_la', null)),
     poateScrie ? inLoturi(det.map(d => d.id), 'red_detinatori_contact', 'detinator_id,adresa_strada,adresa_sat,adresa_comuna,adresa_judet,cod_postal,adresa_cunoscuta', 'detinator_id', q => q, 'detinator_id') : Promise.resolve([]),
   ])
   const ps = new Map(parcele.map(p => [p.id, p])), ds = new Map(det.map(d => [d.id, d])), cs = new Map(contacte.map(c => [c.detinator_id, c]))
   const randuri = conv.map(c => {
     const d = ds.get(c.detinator_id), p = ps.get(d.parcela_id), a = cs.get(d.id)
-    return { ...p, ...c, conv_id: c.id, detinator_nume: d.nume, nume_normalizat: d.nume_normalizat,
+    return { ...p, ...c, conv_id: c.id, detinator_nume: d.nume, nume_normalizat: d.nume_normalizat, calitate_detinator: d.calitate,
       adresa: { strada: a?.adresa_strada, sat: a?.adresa_sat, comuna: a?.adresa_comuna, judet: a?.adresa_judet, cod_postal: a?.cod_postal, cunoscuta: a?.adresa_cunoscuta === true } }
   })
   return { plicuri, loturi, randuri, utilizatori }
@@ -74,14 +79,14 @@ const stampila = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Buch
 export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0, onSchimbat }) {
   const [date, setDate] = useState(null), [reload, setReload] = useState(0), [lucru, setLucru] = useState(false)
   const [mesaj, setMesaj] = useState(''), [incarcare, setIncarcare] = useState(true), [selectate, setSelectate] = useState([]), [uatId, setUatId] = useState(''), [filtru, setFiltru] = useState('')
-  const [modal, setModal] = useState(null), [f, setF] = useState({}), [arText, setArText] = useState('')
+  const [modal, setModal] = useState(null), [f, setF] = useState({}), [arText, setArText] = useState(''), [fanLot, setFanLot] = useState(null)
   const sesiune = useRef(sesiuneEcran()), ocupat = useRef(false), identitate = useRef(`${proiect.id}/${nivel}`)
   const cheie = `${proiect.id}/${nivel}`
   if (identitate.current !== cheie) { identitate.current = cheie; sesiune.current.noua() }
   const poateScrie = ['admin', 'editor'].includes(nivel)
   const captureaza = () => { const expirat = sesiune.current.captureaza(), id = cheie; return () => !expirat() && identitate.current === id }
   useEffect(() => {
-    sesiune.current.noua(); ocupat.current = false; setLucru(false); setDate(null); setModal(null); setSelectate([]); setMesaj(''); setArText(''); setUatId(''); setFiltru('')
+    sesiune.current.noua(); ocupat.current = false; setLucru(false); setDate(null); setModal(null); setFanLot(null); setSelectate([]); setMesaj(''); setArText(''); setUatId(''); setFiltru('')
     return () => { sesiune.current.noua() }
   }, [cheie])
   useEffect(() => {
@@ -150,7 +155,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       return 'Opis descărcat (exemplarul arhivat la dosar).'
     }
     const blob = tip === 'opis' ? await genereazaOpis(rand, pePlic[rand.id] || [], { proiect, uat: uats.find(u => u.id === rand.uat_id) })
-      : tip === 'pv' ? await genereazaPvPlicuire(rand, lista, pePlic, { proiect }) : new Blob([csvEtichete(lista.filter(p => p.stare === 'activ'), pePlic)], { type: 'text/csv;charset=utf-8' })
+      : tip === 'pv' ? await genereazaPvPlicuire(rand, lista, pePlic, { proiect }) : new Blob([csvEtichete(lista.filter(p => p.stare === 'activ'), pePlic, { proiect })], { type: 'text/csv;charset=utf-8' })
     // juridic#021 pct. 3: opisul în 2 exemplare — ACELAȘI fișier: întâi se atașează la dosar, apoi se descarcă pentru plic (o singură generare)
     if (tip === 'opis' && poateScrie && rand.stare === 'activ' && !rand.data_expediere) {
       if (!curent()) return
@@ -248,6 +253,10 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       </div>}
       {grupare.prea_mari?.length > 0 && <p style={{ color: G.yellow }}>Peste 200 de convocări la aceeași persoană în același UAT (nu se împart, serverul cere un singur plic complet): {grupare.prea_mari.map(g => `${g.destinatar} (${g.convocari.length})`).join('; ')}. Necesită o decizie separată.</p>}
       {grupare.grupuri.map(g => <details key={g.cheie} style={{ marginBottom: 8 }}><summary>{g.uat3} · {g.destinatar} · {adresaPlic(g.convocari[0]?.adresa)} · {g.convocari.length} convocări · {textTermenExpediere(uatDe(g.uat_id))}</summary><p>{g.convocari.map(c => `${c.nr_document} (${c.id_parcela})`).join('; ')}</p></details>)}
+      {grupare.de_regenerat?.length > 0 && <div style={{ ...S.card, borderColor: G.yellow, marginBottom: 8 }}>
+        <b style={{ color: G.yellow }}>De regenerat înainte de plic ({grupare.de_regenerat.length})</b> — {MESAJ_DE_REGENERAT}. Din 📋 Registru → 📄 Convocator → „🔁 Regenerează același număr”.
+        {grupare.de_regenerat.map(g => <div key={g.cheie}>{g.uat3} · {g.destinatar}: {g.convocari.filter(convocareDeRegenerat).map(c => `${c.nr_document} (${c.id_parcela})`).join('; ')}</div>)}
+      </div>}
       {btn(`Creează ${grupare.grupuri.length} plicuri`, () => { if (window.confirm(`Creează ${grupare.grupuri.length} plicuri în ${proiect.cod}?`)) executa(creeaza, true) }, !date || !grupare.grupuri.length)}
       <p>Fără adresă (afișare): {grupare.fara_adresa.length}</p>
       {grupare.fara_adresa.map(c => <p key={c.conv_id}>{c.nr_document} · {c.detinator_nume} · {c.id_parcela}</p>)}
@@ -286,8 +295,10 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       {btn('PV (DOCX)', () => executa(c => document('pv', l, c)))}
       {btn('Etichete CSV', () => executa(c => document('csv', l, c)), !poateScrie || !imputernicire)}
       {poateScrie && <>{btn('Editează semnatarii / observațiile', () => deschide('semnatari', l))}{!l.pv_path && btn('Atașează PV semnat', () => deschide('pv_semnat', l))}</>}
+      {poateScrie && btn('📦 AWB FAN — previzualizare', () => setFanLot(l))}
       {l.pv_path && <p>PV semnat atașat.</p>}
     </div>) : <Gol />}
+    {fanLot && poateScrie && <FanAwbPrevizualizare proiect={proiect} lot={fanLot} plicuri={plicuri.filter(p => p.lot_id === fanLot.id && p.stare === 'activ')} onClose={() => setFanLot(null)} />}
     {modal && <Modal titlu={({ lot: 'Lot de plicuire', semnatari: 'Semnatari și observații', pv_semnat: 'PV semnat', anulare: 'Anulare plic', expediere: 'Expediere plic', ar: 'Confirmare AR', retur: 'Retur' })[modal.tip]} onClose={() => { if (!lucru) setModal(null) }}>
       <div style={{ display: 'grid', gap: 12 }}>
         {['lot', 'expediere', 'ar', 'retur'].includes(modal.tip) && <Camp eticheta="Data"><input style={S.input} disabled={lucru} type="date" min={['ar', 'retur'].includes(modal.tip) ? modal.rand.data_expediere : undefined} value={f.data} onChange={e => camp('data', e.target.value)} /></Camp>}

@@ -138,7 +138,8 @@ describe('pregatesteLot — gărzi', () => {
     expect(c.jurnal.informare).toBeGreaterThan(0)
     expect(rez.plan.filter(p => p.actiune === 'nou')).toEqual([])
     expect(rez.exclusi.length).toBeGreaterThan(0)
-    expect(rez.exclusi.every(x => /informarea GDPR de pe verso nu e publicată/.test(x.motiv))).toBe(true)
+    // test weekend 06.11: motivul vine acum din garda comună (motivBlocareConvocator) — aceeași cauză, textul scurt
+    expect(rez.exclusi.every(x => /informarea GDPR (de pe verso nu e publicată|nepublicată)/.test(x.motiv))).toBe(true)
     expect(c.jurnal.apeluriRezerva).toBe(0)
   })
   it('r7: proiect fără împuternicire → generarea nouă blocată (motiv), niciun nou în plan, nicio rezervare', async () => {
