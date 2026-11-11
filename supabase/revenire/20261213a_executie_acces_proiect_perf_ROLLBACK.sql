@@ -3,19 +3,29 @@
 -- (fn_executie_acces_proprii_citire / _scriere, fn_executie_acces_politici, fn_executie_acces_politici_verifica). NU redeschide nimic:
 -- regula de acces e aceeași (un cont restrâns rămâne restrâns, doar mai lent), deci NU refuză când există conturi restrânse.
 -- Trebuie rulată ÎNAINTEA revenirii 20261209a (aceea refuză cât timp funcțiile de aici există).
--- Gestionarul tranzacției e operatorul (fișierul nu are BEGIN / COMMIT). Un singur string:
+-- Gestionarul tranzacției e operatorul (fișierul nu are BEGIN / COMMIT). Un singur string, pe O conexiune (r2: plafonul total ca la
+-- aplicare — SET de sesiune ÎNAINTEA lui BEGIN, deci ceasul de tranzacție pornește la BEGIN cu 3000 ms):
+--   SET transaction_timeout = 3000;
 --   BEGIN ISOLATION LEVEL READ COMMITTED;
 --   SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
 --   <conținutul exact al fișierului>
 --   COMMIT;
+--   RESET transaction_timeout;
 -- harness-armare: gazpet.revenire_20261213a REDA_POLITICILE_20261209A
--- Ordinea lock-urilor (L06, aceeași ca migrarea): tabelele acoperite în ordinea numelui (o singură instrucțiune), apoi storage.objects,
--- ACCESS EXCLUSIVE NOWAIT (ocupat = 55P03, nimic scris), ÎNAINTEA verificării stării (o schimbare concurentă nu se poate strecura între
--- verificare și ALTER POLICY).
+-- Ordinea lock-urilor (L06, r2: aceeași ca migrarea): un singur punct de blocare, după verificările care citesc doar catalogul (verificat
+-- din pg_locks: fișierul nu a blocat nimic din public / storage / auth înaintea lui); tabelele acoperite în ordinea numelui + storage.objects
+-- ACCESS EXCLUSIVE (cerut oricum de ALTER POLICY), tabelul de acces + sites ACCESS SHARE; NOWAIT pe toate, într-o subtranzacție (o încercare
+-- ratată eliberează tot), reîncercare la 50 ms până la 1 s de la BEGIN, apoi refuz 55P03 BUGET_LOCK, nimic scris. ÎNAINTEA verificării
+-- stării (o schimbare concurentă nu se poate strecura între verificare și ALTER POLICY). Plafonul: ~3 s de la BEGIN până la intrarea în
+-- COMMIT, altfel serverul închide sesiunea (ROLLBACK la tot); COMMIT-ul propriu-zis nu e plafonat.
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează.
 DO $revenire$
-DECLARE r record; v_lista text; v_dif text; v_alte0 text; v_alte1 text;
+DECLARE r record; v_lista text; v_dif text; v_alte0 text; v_alte1 text; v_plafon text; v_lock0 text[]; v_tinute text;
+  v_incercari integer := 0; v_ms_lock bigint;
 BEGIN
+  SELECT coalesce(array_agg(DISTINCT n.nspname || '.' || c.relname || '=' || l.mode), ARRAY[]::text[]) INTO v_lock0
+    FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_class c ON c.oid = l.relation JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+   WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND l.granted AND n.nspname IN ('public', 'storage', 'auth');
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.revenire_20261213a', true) IS DISTINCT FROM 'REDA_POLITICILE_20261209A:' || txid_current() THEN
     RAISE EXCEPTION '20261213a revenire: garda invalida (armare lipsa sau din alta tranzactie)';
@@ -26,7 +36,13 @@ BEGIN
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION '20261213a revenire: necesita READ COMMITTED (acum %)', current_setting('transaction_isolation');
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  -- r2: plafonul total (ceasul de tranzacție PostgreSQL 17, pornit la BEGIN cu 3000 ms: SET de sesiune înainte de BEGIN), citit calificat
+  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20261213a revenire: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
+  SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
+  IF v_plafon IS DISTINCT FROM '3000/session' THEN
+    RAISE EXCEPTION '20261213a revenire: PLAFON_TRANZACTIE lipsa: % (cerut 3000/session: SET de sesiune la 3000 inainte de BEGIN, vezi antetul)', coalesce(v_plafon, 'lipsa');
+  END IF;
+  PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- starea exactă: cele 4 funcții ale migrării (corp, securitate, drepturi) + funcțiile 20261209a pe care le cheamă politicile vechi / noi
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -35,9 +51,10 @@ BEGIN
           ('public.fn_executie_acces_proprii_citire()', '5b98134ac198c85aa30b6dad945c888c', true, true),
           ('public.fn_executie_acces_proprii_scriere()', 'd789f4fffefcf4f61b101f20e375b82f', true, true),
           ('public.fn_executie_acces_politici()', 'd51293ad8182cfe5d492204a7eb2d856', false, false),
-          ('public.fn_executie_acces_politici_verifica(text)', '962cf7edb1138582b3bed1264dfd136d', false, false),
+          ('public.fn_executie_acces_politici_verifica(text)', '8065d2b536786fb31f753f6ca2377733', false, false),
           ('public.fn_executie_acces_inventar()', 'f778d649059b169235d262ae3121de9f', false, false),
           ('public.fn_executie_acces_nerestrans()', 'b863c5324684dbf4eb9af81474fbc4e1', true, true),
+          ('public.fn_executie_acces_e_owner()', '4ea29d605a2a8b491594f9d43da7385c', true, true),
           ('public.fn_executie_acces_lista_cont(uuid, boolean)', 'e7cf9b852002a1c1cbe781772c33bf0c', false, false),
           ('public.fn_executie_proiect_permis(bigint, boolean)', 'bd4320f76e9f36f492c7186c0a982155', true, true),
           ('public.fn_executie_acces_parinte_permis(text, bigint, boolean)', '112454c743c8116ef76003b2f92e7e00', false, true),
@@ -49,11 +66,29 @@ BEGIN
            OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_auth) THEN
     RAISE EXCEPTION '20261213a revenire: starea nu e cea din 20261213a (functii)';
   END IF;
-  -- lock-uri ÎNAINTEA verificării politicilor
+  -- ── punctul unic de blocare, ÎNAINTEA verificării politicilor (ca migrarea, r2)
+  SELECT string_agg(DISTINCT n.nspname || '.' || c.relname || '=' || l.mode, ', ') INTO v_tinute
+    FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_class c ON c.oid = l.relation JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+   WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND l.granted AND n.nspname IN ('public', 'storage', 'auth')
+     AND (n.nspname || '.' || c.relname || '=' || l.mode) <> ALL (v_lock0);
+  IF v_tinute IS NOT NULL THEN RAISE EXCEPTION '20261213a revenire: lock-uri luate inaintea punctului unic de blocare: %', v_tinute; END IF;
   SELECT string_agg(format('public.%I', obiect), ', ' ORDER BY obiect) INTO v_lista
     FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox');
-  EXECUTE 'LOCK TABLE ' || v_lista || ' IN ACCESS EXCLUSIVE MODE NOWAIT';
-  LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE NOWAIT;
+  LOOP
+    v_incercari := v_incercari + 1;
+    BEGIN
+      EXECUTE 'LOCK TABLE ' || v_lista || ', storage.objects IN ACCESS EXCLUSIVE MODE NOWAIT';
+      LOCK TABLE public.executie_acces_proiect, public.sites IN ACCESS SHARE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF clock_timestamp() >= now() + interval '1 second' THEN
+        RAISE EXCEPTION '20261213a revenire: BUGET_LOCK: tabelele Executiei / storage.objects ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
+          v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
+      END IF;
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  v_ms_lock := round(extract(epoch FROM clock_timestamp() - now()) * 1000);
   v_dif := public.fn_executie_acces_politici_verifica('nou');
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261213a revenire: starea nu e cea din 20261213a (politici: %)', v_dif; END IF;
   SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s|%s', x.polrelid::regclass, x.polname, x.polcmd, x.polpermissive, x.polroles,
@@ -111,4 +146,6 @@ BEGIN
   IF current_setting('gazpet.revenire_20261213a', true) IS DISTINCT FROM 'REDA_POLITICILE_20261209A:' || txid_current() THEN
     RAISE EXCEPTION '20261213a revenire: garda final invalida';
   END IF;
+  RAISE NOTICE '20261213a revenire LOCK: % incercari, lock-uri la % ms de la BEGIN, gata la % ms (plafon 3000 ms de la BEGIN pana la intrarea in COMMIT)',
+    v_incercari, v_ms_lock, round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 END $revenire$;

@@ -191,9 +191,14 @@ BEGIN
 END $t$;
 
 -- ── T9a: refuzurile la aplicare (o politică 20261209a schimbată) ──
+-- r2: migrarea cere plafonul de tranzacție al runnerului (3000/session + marcajul gazpet.plafon_tranzactie). În tranzacția harness-ului:
+-- SET LOCAL (sursa tot 'session') + marcajul, doar pe durata aplicării, apoi 0 (ceasul fie nu se armează în mijlocul tranzacției, fie se
+-- armează 3 s doar pentru aplicare și se oprește la 0). Plafonul REAL (SET înainte de BEGIN) îl probează test_executie_acces_perf_concurenta.sh.
 SAVEPOINT t9a1;
 ALTER POLICY executie_acces_citire ON public.executie_tronsoane USING ((SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_proiect_permis(proiect_id::bigint, true));
 SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);
 \set ON_ERROR_STOP 0
 \ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
 \set t9a1_eroare :ERROR
@@ -204,6 +209,8 @@ SELECT pg_temp.t_eroare('T9a1', :'t9a1_eroare', :'t9a1_stare', :'LAST_ERROR_MESS
 -- fără marcaj de livrare = refuz
 SAVEPOINT t9a2;
 SELECT set_config('gazpet.livrare_migrare', '', true);
+SET LOCAL transaction_timeout = 3000;
+SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);
 \set ON_ERROR_STOP 0
 \ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
 \set t9a2_eroare :ERROR
@@ -211,10 +218,61 @@ SELECT set_config('gazpet.livrare_migrare', '', true);
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t9a2;
 SELECT pg_temp.t_eroare('T9a2', :'t9a2_eroare', :'t9a2_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'garda start invalida');
+-- r2: fără plafonul runnerului = refuz (nici valoarea, nici marcajul)
+SAVEPOINT t9a4;
+SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 0;
+\set ON_ERROR_STOP 0
+\ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
+\set t9a4_eroare :ERROR
+\set t9a4_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t9a4;
+SELECT pg_temp.t_eroare('T9a4', :'t9a4_eroare', :'t9a4_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'PLAFON_TRANZACTIE lipsa');
+-- r2: valoarea corectă, dar fără marcajul prologului runnerului (un SET pus de altcineva) = refuz
+SAVEPOINT t9a5;
+SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+\set ON_ERROR_STOP 0
+\ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
+\set t9a5_eroare :ERROR
+\set t9a5_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t9a5;
+SELECT pg_temp.t_eroare('T9a5', :'t9a5_eroare', :'t9a5_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'PLAFON_TRANZACTIE lipsa');
+-- r2 (Jakarinos r1 P1): politica clasei 'drept' a 20261209a ștearsă = refuz, cu numele ei
+SAVEPOINT t9a6;
+DROP POLICY executie_acces_proiect_citire ON public.executie_acces_proiect;
+SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);
+\set ON_ERROR_STOP 0
+\ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
+\set t9a6_eroare :ERROR
+\set t9a6_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t9a6;
+SELECT pg_temp.t_eroare('T9a6', :'t9a6_eroare', :'t9a6_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'executie_acces_proiect.executie_acces_proiect_citire');
+-- r2: o politică în plus cu prefixul nostru, pe un tabel din afara celor acoperite (șantierele) = refuz, cu numele ei
+SAVEPOINT t9a7;
+CREATE POLICY executie_acces_x ON public.sites AS RESTRICTIVE FOR SELECT TO authenticated USING (true);
+SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);
+\set ON_ERROR_STOP 0
+\ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
+\set t9a7_eroare :ERROR
+\set t9a7_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t9a7;
+SELECT pg_temp.t_eroare('T9a7', :'t9a7_eroare', :'t9a7_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'in plus public.sites.executie_acces_x');
 
 -- ── aplicarea 20261213a ──
 SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);
 \ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
+SET LOCAL transaction_timeout = 0;
 DO $t$ BEGIN
   IF public.fn_executie_acces_politici_verifica('nou') IS NOT NULL OR pg_temp.t13_pol() = pg_temp.t_g('pol13_0') THEN
     RAISE EXCEPTION 'T9 FAIL: după aplicare, politicile nu au forma nouă: %', public.fn_executie_acces_politici_verifica('nou');
@@ -223,6 +281,8 @@ END $t$;
 -- a doua aplicare = refuz
 SAVEPOINT t9a3;
 SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);
 \set ON_ERROR_STOP 0
 \ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
 \set t9a3_eroare :ERROR
@@ -389,6 +449,7 @@ SELECT pg_temp.t_eroare('T9r2', :'t9r2_eroare', :'t9r2_stare', :'LAST_ERROR_MESS
 SAVEPOINT t9r3;
 ALTER POLICY executie_acces_sterge ON public.executie_tronsoane USING (true);
 SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
 \set ON_ERROR_STOP 0
 \ir ../supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql
 \set t9r3_eroare :ERROR
@@ -396,9 +457,34 @@ SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || t
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t9r3;
 SELECT pg_temp.t_eroare('T9r3', :'t9r3_eroare', :'t9r3_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'starea nu e cea din 20261213a');
+-- r2: armată, dar fără plafon = refuz
+SAVEPOINT t9r4;
+SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
+SET LOCAL transaction_timeout = 0;
+\set ON_ERROR_STOP 0
+\ir ../supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql
+\set t9r4_eroare :ERROR
+\set t9r4_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t9r4;
+SELECT pg_temp.t_eroare('T9r4', :'t9r4_eroare', :'t9r4_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'PLAFON_TRANZACTIE lipsa');
+-- r2: politica clasei 'drept' ștearsă după aplicare = refuz (revenirea verifică aceeași mulțime completă)
+SAVEPOINT t9r5;
+DROP POLICY executie_acces_proiect_citire ON public.executie_acces_proiect;
+SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+\set ON_ERROR_STOP 0
+\ir ../supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql
+\set t9r5_eroare :ERROR
+\set t9r5_stare :SQLSTATE
+\set ON_ERROR_STOP 1
+ROLLBACK TO SAVEPOINT t9r5;
+SELECT pg_temp.t_eroare('T9r5', :'t9r5_eroare', :'t9r5_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'executie_acces_proiect.executie_acces_proiect_citire');
 -- (d) armată = politicile 20261209a la loc, echivalența și planul vechi din nou
 SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
 \ir ../supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql
+SET LOCAL transaction_timeout = 0;
 DO $t$ BEGIN
   IF pg_temp.t13_pol() IS DISTINCT FROM pg_temp.t_g('pol13_0')
      OR to_regprocedure('public.fn_executie_acces_politici()') IS NOT NULL OR to_regprocedure('public.fn_executie_acces_proprii_citire()') IS NOT NULL
@@ -431,7 +517,10 @@ BEGIN
 END $t$;
 -- (e) re-aplicarea: din nou forma nouă și echivalența
 SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);
+SET LOCAL transaction_timeout = 3000;
+SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);
 \ir ../supabase/migrations/20261213a_executie_acces_proiect_perf.sql
+SET LOCAL transaction_timeout = 0;
 SELECT pg_temp.t_ca(pg_temp.t_g('b')::uuid, 'authenticated');
 SELECT length(set_config('tacc.s3_b', pg_temp.t13_tot()::text, true)) AS s3_b;
 SELECT pg_temp.t_ca(pg_temp.t_g('a')::uuid, 'authenticated');
@@ -446,5 +535,5 @@ BEGIN
       RAISE EXCEPTION 'T9r FAIL: % după re-aplicare diferă: %', k, pg_temp.t_dif(pg_temp.t_g('s3_' || k)::jsonb, pg_temp.t_g('s0_' || k)::jsonb);
     END IF;
   END LOOP;
-  RAISE NOTICE 'T9 OK — 20261213a: refuzuri la aplicare (politică schimbată, fără marcaj, a doua oară), echivalența pe 6 conturi, planul fără predicat pe rând, lista proprie, revenirea (refuz 20261209a / nearmată / politică schimbată; armată = exact 20261209a) și re-aplicarea';
+  RAISE NOTICE 'T9 OK — 20261213a: refuzuri la aplicare (politică schimbată, fără marcaj, a doua oară, fără plafon / fără marcajul plafonului, politica tabelului de acces ștearsă, politică în plus cu prefixul nostru), echivalența pe 6 conturi, planul fără predicat pe rând, lista proprie, revenirea (refuz 20261209a / nearmată / politică schimbată / fără plafon / politica tabelului de acces ștearsă; armată = exact 20261209a) și re-aplicarea';
 END $t$;

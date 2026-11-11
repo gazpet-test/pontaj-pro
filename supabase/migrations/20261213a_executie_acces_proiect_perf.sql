@@ -39,14 +39,50 @@
 --   tabelele cu RLS; dreptul de citire al lui authenticated pe FIECARE coloană căutată (pe rând, nu cu o listă de drepturi); SUB LOCK-URI,
 --   fiecare politică = EXACT expresia generată de 20261209a (deparsată de același server: o politică de probă construită din textul vechi,
 --   comparată cu pg_get_expr, apoi ștearsă).
--- Ordinea lock-urilor (L06): tabelele acoperite în ordinea numelui (o singură instrucțiune LOCK), apoi storage.objects; ACCESS EXCLUSIVE (îl
---   cere oricum ALTER POLICY), lock_timeout 5 s. Doar catalog după lock-uri: fereastra e scurtă (fără scanări de date).
+-- r2 (11.11.2026, Jakarinos r1 P1 + al doilea recenzent r1 P1-01):
+--   * Forma veche verificată COMPLET: fiecare politică executie_acces_* creată de 20261209a, din toate clasele — cele 4 de pe fiecare tabel
+--     acoperit (proiect / proiect_optional / copil / inbox), cele 4 de pe storage.objects și executie_acces_proiect_citire de pe tabelul de
+--     acces (clasa 'drept', PERMISSIVE, singura politică 20261209a din afara buclei pe inventar) — există cu expresia exactă; în plus
+--     mulțimea TUTUROR politicilor executie_acces_* din bază = exact cea așteptată (o politică în plus cu prefixul nostru, pe orice tabel,
+--     = refuz). Aceeași verificare la postcondiții și în revenire (fn_executie_acces_politici_verifica).
+--   * Buget de blocare (L06), cu argumentul nivelului minim:
+--     - ACCESS EXCLUSIVE pe tabelele acoperite și pe storage.objects: îl ia ORICUM fiecare ALTER POLICY / CREATE POLICY (PostgreSQL 17,
+--       commands/policy.c: AccessExclusiveLock pe tabel); un nivel mai mic luat înainte ar însemna o urcare de nivel în mijlocul migrării
+--       (așteptare cu lock-uri ținute, risc de deadlock). Deci nivelul minim = cel pe care îl cere oricum ALTER POLICY, luat o dată, la
+--       început, pe toate (atomicitatea verificare → schimbare: nimic nu se poate strecura între ele).
+--     - ACCESS SHARE (nu blochează nici citirile, nici scrierile) pe executie_acces_proiect și sites: nu se schimbă, dar expresiile le citesc
+--       (sites în seturile 'site' / 'raport') sau politica lor e verificată (executie_acces_proiect_citire); ACCESS SHARE e suficient ca nicio
+--       altă sesiune să nu le schimbe politicile / structura până la COMMIT (orice ALTER / DROP / CREATE POLICY cere ACCESS EXCLUSIVE).
+--       Politica lor e deparsată pe un tabel TEMPORAR cu aceeași coloană (nu pe tabelul real): fără ACCESS EXCLUSIVE pe tabelul de acces,
+--       deci funcțiile de drept ale celorlalte module (care îl citesc) nu se opresc în fereastră.
+--     - Un SINGUR punct de blocare, după toate verificările care citesc doar catalogul; înaintea lui, nicio relație din public / storage /
+--       auth nu e blocată de această sesiune (verificat în migrare din pg_locks: altfel refuz). Toate lock-urile cu NOWAIT, în două
+--       instrucțiuni (o listă pentru fiecare nivel, în ordinea numelui; storage.objects ultimul), într-o subtranzacție: o încercare ratată
+--       eliberează tot ce luase, se reîncearcă la 50 ms, până la 1 s de la BEGIN; peste = refuz 55P03 BUGET_LOCK, nimic schimbat. Niciun lock
+--       pe tabelele utilizatorilor nu e ținut cât se așteaptă (nici în coadă: NOWAIT nu intră în coada lock-ului, deci citirile noi nu se
+--       așează în spatele migrării). lock_timeout 100 ms pe tot fișierul (o așteptare implicită neprevăzută = eroare, nu blocare).
+--     - PLAFONUL TOTAL = ceasul de tranzacție al PostgreSQL 17, pornit la BEGIN cu 3000 ms de runner (scripts/livrare_migrare.sh
+--       --plafon-tranzactie-ms 3000, PR #1054: SET de sesiune înainte de BEGIN, verificat de prologul runnerului, care pune marcajul
+--       gazpet.plafon_tranzactie = '3000:<txid>'). Migrarea cere ambele (valoarea citită calificat din pg_catalog + marcajul), ca portalul
+--       r14. Garanția (formulare exactă): aproximativ 3 s de la BEGIN până la INTRAREA în COMMIT (timeout pe ceasul serverului); altfel
+--       serverul închide sesiunea ⇒ ROLLBACK la tot. COMMIT-ul propriu-zis nu e plafonat (scrierea WAL; fără replicare sincronă pe producție).
+--       De ce 3000: după lock-uri rămân doar operații de catalog (fără scanări de date): verificarea formei vechi (o politică de probă pe
+--       fiecare tabel), ~4 × 40 de ALTER POLICY, verificarea formei noi; pe PGlite (WASM, mai lent decât serverul) tot blocul durează sub
+--       1 s, iar bugetul de lock se oprește la 1 s ⇒ ≥ 2 s pentru restul. Ordinea de merge: PR #1054 (runnerul cu plafon) ÎNAINTEA acestuia.
+--   * Proba concurentă: scripts/test_executie_acces_perf_concurenta.sh (clona; trafic pe 4 tabele acoperite + storage.objects în timpul
+--     aplicării și al revenirii, fereastra de lock și blocarea maximă cu prag, refuz curat cu un tabel ocupat, plafonul închide sesiunea).
 -- DEPENDENȚĂ / ORDINE: după 20261209a. Revenirea 20261209a REFUZĂ cât timp aceasta e aplicată (numără exact 16 funcții fn_executie_acces_*;
 --   aici se adaugă 4) → întâi revenirea ACESTEIA (supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql), care redă exact
 --   politicile 20261209a (contul restrâns rămâne restrâns, doar mai lent).
 -- Un SINGUR bloc DO (ca revenirea): un refuz e singura instrucțiune care eșuează, nimic nu rulează după el (și harness-ul îi verifică mesajul).
 DO $m$
+DECLARE v_plafon text; v_lock0 text[]; v_lt0 text;
 BEGIN
+  -- r2: lock-urile pe relațiile utilizatorilor ținute deja de tranzacție la începutul fișierului (sub runner: niciunul); la punctul unic de
+  -- blocare se verifică faptul că fișierul nu a adăugat niciunul înaintea lui
+  SELECT coalesce(array_agg(DISTINCT n.nspname || '.' || c.relname || '=' || l.mode), ARRAY[]::text[]) INTO v_lock0
+    FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_class c ON c.oid = l.relation JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+   WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND l.granted AND n.nspname IN ('public', 'storage', 'auth');
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261213a_executie_acces_proiect_perf:' || txid_current() THEN
     RAISE EXCEPTION '20261213a: garda start invalida';
@@ -54,7 +90,22 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.livrare_migrare=%') THEN
     RAISE EXCEPTION '20261213a: armare persistenta refuzata';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION '20261213a: necesita READ COMMITTED (acum %)', current_setting('transaction_isolation');
+  END IF;
+  -- r2: plafonul total = ceasul de tranzacție PostgreSQL 17, pornit la BEGIN cu 3000 ms de runner (SET de sesiune înainte de BEGIN, sursa
+  -- 'session'), citit CALIFICAT (pg_catalog: un tabel temporar omonim nu-l poate umbri) + marcajul pus de prologul runnerului
+  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20261213a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
+  SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
+  IF v_plafon IS DISTINCT FROM '3000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '3000:' || txid_current() THEN
+    RAISE EXCEPTION '20261213a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 3000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 3000)',
+      coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
+  END IF;
+  -- nicio așteptare de lock pe tăcute (lock-urile explicite sunt NOWAIT; orice altă așteptare = eroare la 100 ms, nu blocare); valoarea
+  -- de dinainte se pune la loc la final (înregistrarea runnerului, după fișier, rămâne cu setarea lui)
+  v_lt0 := current_setting('lock_timeout');
+  PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz
   IF to_regprocedure('public.fn_executie_acces_proprii_citire()') IS NOT NULL OR to_regprocedure('public.fn_executie_acces_proprii_scriere()') IS NOT NULL
@@ -70,6 +121,8 @@ BEGIN
      OR EXISTS (SELECT 1 FROM (VALUES
           ('public.fn_executie_acces_inventar()', 'f778d649059b169235d262ae3121de9f', false, false),
           ('public.fn_executie_acces_nerestrans()', 'b863c5324684dbf4eb9af81474fbc4e1', true, true),
+          -- r2: și funcția din politica executie_acces_proiect_citire (verificată acum și ea)
+          ('public.fn_executie_acces_e_owner()', '4ea29d605a2a8b491594f9d43da7385c', true, true),
           ('public.fn_executie_acces_nerestrans_cont(uuid)', '9a07e0089139e54ba5c6a0cfaaf093cc', false, false),
           ('public.fn_executie_acces_lista(boolean)', 'd9e123a46b83530a7203d4a24da5cf9b', true, false),
           ('public.fn_executie_acces_lista_cont(uuid, boolean)', 'e7cf9b852002a1c1cbe781772c33bf0c', false, false),
@@ -185,16 +238,46 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_politici() FROM PUBLIC, anon, authenticated, service_role;
 
--- Verificarea unei forme ('vechi' / 'nou') pe TOATE politicile executie_acces_* acoperite: pe fiecare tabel, o politică de probă construită
--- din textul formei (USING = citire, WITH CHECK = scriere) e deparsată de ACELAȘI server și comparată cu cele 4 politici reale (nume, comandă,
--- RESTRICTIVE, rolul authenticated, USING / WITH CHECK), apoi ștearsă. Întoarce NULL = identic, altfel diferențele. Doar proprietarul
--- tabelelor (migrarea, revenirea, harness-ul ca postgres); fără EXECUTE pentru clienți.
+-- Verificarea unei forme ('vechi' / 'nou') pe TOATE politicile executie_acces_* ale 20261209a: pe fiecare tabel acoperit și pe
+-- storage.objects, o politică de probă construită din textul formei (USING = citire, WITH CHECK = scriere) e deparsată de ACELAȘI server și
+-- comparată cu cele 4 politici reale (nume, comandă, RESTRICTIVE, rolul authenticated, USING / WITH CHECK), apoi ștearsă. r2: plus politica
+-- clasei 'drept' (executie_acces_proiect_citire, aceeași în ambele forme: textul exact din 20261209a, deparsat pe un tabel TEMPORAR cu
+-- aceeași coloană, ca tabelul de acces să nu ceară ACCESS EXCLUSIVE) și mulțimea TUTUROR politicilor executie_acces_* din bază = exact cea
+-- așteptată (orice politică în plus cu prefixul nostru, pe orice tabel, = diferență). Întoarce NULL = identic, altfel diferențele. Doar
+-- proprietarul tabelelor (migrarea, revenirea, harness-ul ca postgres); fără EXECUTE pentru clienți.
 CREATE FUNCTION public.fn_executie_acces_politici_verifica(p_forma text) RETURNS text
 LANGUAGE plpgsql VOLATILE SET search_path = public, pg_temp AS $f$
-DECLARE r record; p record; v_rel regclass; v_q text; v_w text; v_pfx text; v_dif text[] := ARRAY[]::text[];
+DECLARE r record; p record; v_rel regclass; v_q text; v_w text; v_pfx text; v_dif text[] := ARRAY[]::text[]; v_tip text;
+  v_asteptat text[] := ARRAY[]::text[];
+  -- 20261209a, pasul 2 (politica tabelului de acces): textul EXACT de acolo
+  c_drept constant text := 'auth.uid() IS NOT NULL AND (profile_id = (SELECT auth.uid()) OR (SELECT public.fn_executie_acces_e_owner()))';
 BEGIN
   IF p_forma IS NULL OR p_forma NOT IN ('vechi', 'nou') THEN RAISE EXCEPTION 'politici_verifica: forma vechi / nou'; END IF;
+  -- clasa 'drept': tabelul de acces (RLS pornit) are politica 20261209a exact (PERMISSIVE, SELECT, authenticated, USING = textul de mai sus)
+  v_rel := to_regclass('public.executie_acces_proiect');
+  SELECT format_type(atttypid, atttypmod) INTO v_tip FROM pg_attribute
+   WHERE attrelid = v_rel AND attname = 'profile_id' AND attnum > 0 AND NOT attisdropped;
+  IF v_rel IS NULL OR v_tip IS NULL OR (SELECT relrowsecurity FROM pg_class WHERE oid = v_rel) IS NOT TRUE THEN
+    v_dif := v_dif || 'executie_acces_proiect: lipsa / fara profile_id / fara RLS'::text;
+  ELSE
+    EXECUTE format('CREATE TEMP TABLE zz_executie_acces_proba_drept (profile_id %s) ON COMMIT DROP', v_tip);
+    EXECUTE format('CREATE POLICY zz_executie_acces_proba_forma ON pg_temp.zz_executie_acces_proba_drept FOR SELECT TO authenticated USING (%s)', c_drept);
+    SELECT pg_get_expr(x.polqual, x.polrelid) INTO v_q
+      FROM pg_policy x WHERE x.polrelid = 'pg_temp.zz_executie_acces_proba_drept'::regclass AND x.polname = 'zz_executie_acces_proba_forma';
+    DROP TABLE pg_temp.zz_executie_acces_proba_drept;
+    SELECT x.polname, x.polcmd, x.polpermissive, x.polroles, pg_get_expr(x.polqual, x.polrelid) AS lq, x.polwithcheck IS NULL AS fara_w INTO p
+      FROM pg_policy x WHERE x.polrelid = v_rel AND x.polname = 'executie_acces_proiect_citire';
+    IF p.polname IS NULL OR p.polcmd::text IS DISTINCT FROM 'r' OR p.polpermissive IS DISTINCT FROM true
+       OR p.polroles IS DISTINCT FROM ARRAY[(SELECT oid FROM pg_roles WHERE rolname = 'authenticated')]
+       OR v_q IS NULL OR p.lq IS DISTINCT FROM v_q OR p.fara_w IS NOT TRUE THEN
+      v_dif := v_dif || 'executie_acces_proiect.executie_acces_proiect_citire'::text;
+    END IF;
+  END IF;
+  v_asteptat := v_asteptat || 'public.executie_acces_proiect.executie_acces_proiect_citire'::text;
   FOR r IN SELECT * FROM public.fn_executie_acces_politici() ORDER BY tabel LOOP
+    v_asteptat := v_asteptat || ARRAY(SELECT CASE WHEN r.tabel = 'storage.objects' THEN 'storage.objects.executie_acces_obiect_'
+                                                  ELSE 'public.' || r.tabel || '.executie_acces_' END || s
+                                        FROM unnest(ARRAY['citire', 'adauga', 'modifica', 'sterge']) s);
     v_rel := CASE WHEN r.tabel = 'storage.objects' THEN 'storage.objects'::regclass ELSE to_regclass('public.' || quote_ident(r.tabel)) END;
     IF v_rel IS NULL THEN v_dif := v_dif || ('lipsa ' || r.tabel); CONTINUE; END IF;
     EXECUTE format('CREATE POLICY zz_executie_acces_proba_forma ON %s AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', v_rel,
@@ -217,19 +300,26 @@ BEGIN
       END IF;
     END LOOP;
   END LOOP;
+  -- r2: nicio politică executie_acces_* în afara celor așteptate, pe NICIUN tabel din bază (inclusiv tabelele 'drept', 'exclus' sau din
+  -- afara inventarului); cele lipsă sunt raportate mai sus, pe tabelul lor
+  v_dif := v_dif || ARRAY(SELECT 'in plus ' || n.nspname || '.' || c.relname || '.' || x.polname
+                            FROM pg_policy x JOIN pg_class c ON c.oid = x.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+                           WHERE x.polname LIKE 'executie\_acces\_%'
+                             AND (n.nspname || '.' || c.relname || '.' || x.polname) <> ALL (v_asteptat)
+                           ORDER BY 1);
   IF cardinality(v_dif) = 0 THEN RETURN NULL; END IF;
   RETURN left(array_to_string(v_dif, '; '), 1500);
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_executie_acces_politici_verifica(text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- ── 3. preflight pe inventar + lock-uri + verificarea formei vechi + ALTER POLICY + postcondiții ──────────────────────────────────────────
-  DECLARE r record; v_tip text; v_lista text; v_alte0 text; v_alte1 text; v_dif text; v_n integer := 0;
+  DECLARE r record; v_tip text; v_lista text; v_alte0 text; v_alte1 text; v_dif text; v_n integer := 0; v_incercari integer := 0;
+    v_ms_lock bigint; v_tinute text;
   BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261213a_executie_acces_proiect_perf:' || txid_current() THEN
     RAISE EXCEPTION '20261213a: garda invalida';
   END IF;
-  PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- inventarul: clasele și părinții pe care generatorul le știe (ce nu e aici = refuz, nu ghicit)
   IF EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i
@@ -286,11 +376,34 @@ REVOKE ALL ON FUNCTION public.fn_executie_acces_politici_verifica(text) FROM PUB
                     AND d.refobjid = CASE WHEN m.copil = 'storage.objects' THEN 'storage.objects'::regclass ELSE to_regclass('public.' || quote_ident(m.copil)) END;
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261213a: politica parintelui citeste copilul (recursivitate): %', v_dif; END IF;
 
-  -- LOCK-urile (L06): tabelele acoperite în ordinea numelui, o singură instrucțiune, apoi storage.objects
+  -- ── PUNCTUL UNIC de blocare (L06, r2). Până aici: doar catalog (și obiectele noi, plpgsql / sql fără tabele în corp): dovada, din pg_locks
+  -- al propriei sesiuni — nicio relație din public / storage / auth blocată (lock-urile runnerului pe istoricul migrărilor nu contează aici).
+  -- (față de cele ținute deja la începutul fișierului: zero sub runner; în harness, tranzacția lui de test)
+  SELECT string_agg(DISTINCT n.nspname || '.' || c.relname || '=' || l.mode, ', ') INTO v_tinute
+    FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_class c ON c.oid = l.relation JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+   WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND l.granted AND n.nspname IN ('public', 'storage', 'auth')
+     AND (n.nspname || '.' || c.relname || '=' || l.mode) <> ALL (v_lock0);
+  IF v_tinute IS NOT NULL THEN RAISE EXCEPTION '20261213a: lock-uri luate inaintea punctului unic de blocare: %', v_tinute; END IF;
+  -- tabelele acoperite în ordinea numelui + storage.objects (ultimul): ACCESS EXCLUSIVE, cerut oricum de ALTER POLICY; tabelul de acces și
+  -- sites: ACCESS SHARE (nu blochează nici citirile, nici scrierile). NOWAIT pe toate, într-o subtranzacție: o încercare ratată eliberează
+  -- tot ce luase; reîncercare la 50 ms până la 1 s de la BEGIN (now() = începutul tranzacției), apoi refuz 55P03, nimic schimbat.
   SELECT string_agg(format('public.%I', obiect), ', ' ORDER BY obiect) INTO v_lista
     FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox');
-  EXECUTE 'LOCK TABLE ' || v_lista || ' IN ACCESS EXCLUSIVE MODE';
-  LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
+  LOOP
+    v_incercari := v_incercari + 1;
+    BEGIN
+      EXECUTE 'LOCK TABLE ' || v_lista || ', storage.objects IN ACCESS EXCLUSIVE MODE NOWAIT';
+      LOCK TABLE public.executie_acces_proiect, public.sites IN ACCESS SHARE MODE NOWAIT;
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF clock_timestamp() >= now() + interval '1 second' THEN
+        RAISE EXCEPTION '20261213a: BUGET_LOCK: tabelele Executiei / storage.objects ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
+          v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
+      END IF;
+      PERFORM pg_sleep(0.05);
+    END;
+  END LOOP;
+  v_ms_lock := round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 
   -- sub lock-uri (autoritar, L01): fiecare politică = EXACT forma 20261209a
   v_dif := public.fn_executie_acces_politici_verifica('vechi');
@@ -361,5 +474,9 @@ REVOKE ALL ON FUNCTION public.fn_executie_acces_politici_verifica(text) FROM PUB
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261213a_executie_acces_proiect_perf:' || txid_current() THEN
     RAISE EXCEPTION '20261213a: garda final invalida';
   END IF;
+  -- măsurătoarea (proba concurentă o citește): încercările de lock, momentul lock-urilor și sfârșitul blocului, de la BEGIN
+  RAISE NOTICE '20261213a LOCK: % incercari, lock-uri la % ms de la BEGIN, gata la % ms (plafon 3000 ms de la BEGIN pana la intrarea in COMMIT)',
+    v_incercari, v_ms_lock, round(extract(epoch FROM clock_timestamp() - now()) * 1000);
+  PERFORM set_config('lock_timeout', v_lt0, true);
   END;
 END $m$;

@@ -82,8 +82,13 @@ $h$;
 SELECT (to_regprocedure('public.fn_executie_acces_politici()') IS NOT NULL) AS t_13a_aplicata, (to_regclass('public.executie_acces_proiect') IS NOT NULL) AS t_09a_aplicata
 \gset
 \if :t_13a_aplicata
+-- 20261213a r2: revenirea cere plafonul (3000/session). Aici, în tranzacția harness-ului, SET LOCAL (sursa tot 'session') doar pe durata
+-- revenirii, apoi 0: ceasul fie nu se armează în mijlocul tranzacției, fie se armează 3 s doar pentru revenire și se oprește la 0. Plafonul
+-- REAL (SET înainte de BEGIN) îl probează scripts/test_executie_acces_perf_concurenta.sh.
+SET LOCAL transaction_timeout = 3000;
 SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
 \ir ../supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql
+SET LOCAL transaction_timeout = 0;
 -- dezarmare (armarea e legată de txid-ul acestei tranzacții: altfel testele „nearmat = refuz” de mai jos n-ar mai fi nearmate)
 SELECT set_config('gazpet.revenire_20261213a', '', true) = '' AS dezarmat_13a;
 \endif

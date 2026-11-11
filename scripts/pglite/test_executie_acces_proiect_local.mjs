@@ -57,6 +57,7 @@ const cuInlocuitor = t => {
 // 20261213a (performanța politicilor): migrarea și revenirea ei verifică amprenta inventarului 20261209a, al cărui corp conține amprenta
 // swap (înlocuită mai sus doar aici, în test) → și amprenta inventarului se înlocuiește în textele 20261213a (doar în test)
 const MIG13 = join(ROOT, 'supabase/migrations/20261213a_executie_acces_proiect_perf.sql')
+const DRY13 = join(ROOT, 'scripts/executie_acces_masurare_dry_20261213a.sql')
 const REV13 = join(ROOT, 'supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql')
 const INV_CAP = 'CREATE FUNCTION public.fn_executie_acces_inventar('
 const INV_REAL = md5(corp(citeste(MIG), INV_CAP))
@@ -165,7 +166,7 @@ const DOAR = process.argv[2] ? new RegExp(process.argv[2]) : null
 // cu13a: harness-ul cu 20261213a (T9 / T9z); fără = harness-ul r13 exact (psql -v fara_20261213a=1), ca mutanții 20261209a să pice
 // exact unde picau (politicile 20261213a le-ar înlocui pe cele mutate). doar13a: 20261209a aplicată, apoi `inainte13`, apoi DOAR 20261213a
 // (preflight-ul ei), într-o tranzacție anulată.
-async function scenariu(nume, { mutMig, mutRev, mutSchelet, mutDrept, mutDoc, inainte, doarMigrarea, cu13a, mutMig13, mutRev13, doar13a, inainte13 } = {}) {
+async function scenariu(nume, { mutMig, mutRev, mutSchelet, mutDrept, mutDoc, inainte, doarMigrarea, cu13a, mutMig13, mutRev13, doar13a, inainte13, fara13aPlafon, doarRev13, dry13 } = {}) {
   if (DOAR && !DOAR.test(nume)) return { sarit: true }
   const db = new PGlite()
   // ca psql la pornire: LAST_ERROR_MESSAGE gol, LAST_ERROR_SQLSTATE 00000
@@ -222,12 +223,51 @@ INSERT INTO public.executie_fibra_intervale (proiect_id, etapa) VALUES (1, 'mono
         + mut[MIG](citeste(MIG)) + '\nROLLBACK;', { onNotice: n => st.notite.push(n.message) })
       return { ok: true, notite: st.notite }
     }
+    if (dry13) {
+      // r2: DRY-ul de producție (scripts/executie_acces_masurare_dry_20261213a.sql) pe 20261209a aplicată: înainte READ ONLY, după cu
+      // plafonul (SET de sesiune 3000 + BEGIN), ROLLBACK, comparația; 20261213a NU rămâne aplicată
+      await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);`
+        + mut[MIG](citeste(MIG)) + '\nCOMMIT;')
+      await db.exec(`INSERT INTO public.profiles (id, name, is_owner) VALUES ('00000000-0000-0000-0000-0000000000d1', 'DRY OWNER', true),
+        ('00000000-0000-0000-0000-0000000000d2', 'DRY NERESTRANS', false), ('00000000-0000-0000-0000-0000000000d3', 'DRY RESTRANS', false);
+        INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('00000000-0000-0000-0000-0000000000d2', 'executie', 'edit'),
+        ('00000000-0000-0000-0000-0000000000d3', 'executie', 'edit');
+        INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES ('00000000-0000-0000-0000-0000000000d3', 1, 'editor');`)
+      Object.assign(st.vars, { cont: '00000000-0000-0000-0000-0000000000d3', cont_nerestrans: '00000000-0000-0000-0000-0000000000d2',
+        cont_owner: '00000000-0000-0000-0000-0000000000d1' })
+      await ruleazaFisier(db, DRY13, st, mut)
+      const r = await db.query(`SELECT to_regprocedure('public.fn_executie_acces_politici()') IS NULL AS neaplicata,
+        (SELECT setting || '/' || source FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout') AS plafon`)
+      const n = k => st.notite.filter(x => x.startsWith('masurare ' + k + ' |')).length
+      const ok = r.rows[0].neaplicata === true && r.rows[0].plafon === '0/default'
+        && ['inainte restrans', 'inainte nerestrans', 'inainte owner', 'dupa restrans', 'dupa nerestrans', 'dupa owner'].every(k => n(k) > 40)
+        && st.notite.some(x => /^20261213a LOCK: 1 incercari/.test(x))
+      st.notite.push(`DRY: neaplicată după ROLLBACK = ${r.rows[0].neaplicata}, plafon după RESET = ${r.rows[0].plafon}, linii de măsurare: `
+        + ['inainte restrans', 'dupa restrans', 'inainte nerestrans', 'dupa nerestrans', 'dupa owner'].map(k => k + ' ' + n(k)).join(', '))
+      return { ok, eroare: ok ? undefined : 'DRY incomplet', notite: st.notite }
+    }
+    if (doarRev13) {
+      // r2: 20261209a + 20261213a aplicate (ca runnerul, cu plafon), apoi DOAR revenirea 20261213a, într-o tranzacție PROASPĂTĂ (fără
+      // lock-urile harness-ului), cu șirul din antetul ei (SET de sesiune 3000, armarea), anulată
+      await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);`
+        + mut[MIG](citeste(MIG)) + '\nCOMMIT;')
+      await db.exec(APLICA_13A)
+      if (inainte13) await db.exec(inainte13)
+      await db.exec(`SET transaction_timeout = 3000; BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);`
+        + mut[REV13](citeste(REV13)) + '\nROLLBACK; SET transaction_timeout = 0;', { onNotice: n => st.notite.push(n.message) })
+      return { ok: true, notite: st.notite }
+    }
     if (doar13a) {
       await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);`
         + mut[MIG](citeste(MIG)) + '\nCOMMIT;')
       if (inainte13) await db.exec(inainte13)
-      await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);`
-        + mut[MIG13](citeste(MIG13)) + '\nROLLBACK;', { onNotice: n => st.notite.push(n.message) })
+      // r2: ca runnerul cu --plafon-tranzactie-ms 3000: SET de sesiune înainte de BEGIN, apoi prologul pune marcajul plafonului
+      // (fara13aPlafon: fără SET / fără marcaj, ca refuzul să fie probat; PGlite nu are timere, deci ceasul nu închide nimic aici)
+      const plafon = fara13aPlafon === 'tot' ? '' : `SET transaction_timeout = 3000;`
+      const marcaj = fara13aPlafon ? '' : `SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);`
+      await db.exec(`${plafon} BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true); ${marcaj}`
+        + mut[MIG13](citeste(MIG13)) + '\nROLLBACK; SET transaction_timeout = 0;', { onNotice: n => st.notite.push(n.message) })
       return { ok: true, notite: st.notite }
     }
     await ruleazaFisier(db, HARNESS, st, mut)
@@ -630,8 +670,10 @@ raport('B13 doar 2 proiecte pe clonă, cu 20261213a', await scenariu('b13doua', 
 // T00: clona are DEJA 20261209a (ca producția din 11.11) / 20261209a + 20261213a — harness-ul le scoate în tranzacție și pleacă de la zero
 const APLICA_09A = `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261209a_executie_acces_proiect:' || txid_current(), true);\n`
   + cuInlocuitor(citeste(MIG)) + '\nCOMMIT;\n'
-const APLICA_13A = `BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);\n`
-  + cuInventar13(citeste(MIG13)) + '\nCOMMIT;\n'
+// r2: ca runnerul cu --plafon-tranzactie-ms 3000 (SET de sesiune înainte de BEGIN + marcajul prologului)
+const APLICA_13A = `SET transaction_timeout = 3000; BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261213a_executie_acces_proiect_perf:' || txid_current(), true);\n`
+  + `SELECT set_config('gazpet.plafon_tranzactie', '3000:' || txid_current(), true);\n`
+  + cuInventar13(citeste(MIG13)) + '\nCOMMIT;\nSET transaction_timeout = 0;\n'
 raport('B13 clona are deja 20261209a (scoasă în tranzacție, amprenta = repo)', await scenariu('b13clona', { cu13a: true, inainte: APLICA_09A }), true)
 raport('B13 clona are deja 20261209a + 20261213a', await scenariu('b13clona13', { cu13a: true, inainte: APLICA_09A + APLICA_13A }), true)
 raport('B13 clona are o 20261209a DIFERITĂ de repo (T00 trebuie să o vadă)', await scenariu('b13clonadif', { cu13a: true,
@@ -723,6 +765,95 @@ raport('Q5 lista (id-uri) din 20261209a apelabilă de authenticated (decizia r8 
 raport('Q6 o politică Storage a 20261209a schimbată', await scenariu('q6', { doar13a: true,
   inainte13: 'ALTER POLICY executie_acces_obiect_sterge ON storage.objects USING (true);',
 }), false, /politicile nu sunt cele din 20261209a: storage\.objects\.executie_acces_obiect_sterge/)
+
+// r2 (Jakarinos r1 P1): forma veche verificată pe TOATE politicile 20261209a. Pe fiecare clasă: politică lipsă, politică în plus cu prefixul
+// nostru, expresie schimbată — fiecare trebuie refuzată cu numele politicii (nu oriunde)
+const CLASE_R2 = [
+  // [clasa, tabelul, politica de șters / schimbat, schimbarea, politica în plus]
+  ['proiect', 'public.executie_tronsoane', 'executie_acces_modifica', 'USING (true)', 'executie_acces_x'],
+  ['proiect_optional', 'public.grafic_activitati', 'executie_acces_citire', 'USING (true)', 'executie_acces_x'],
+  ['copil', 'public.executie_tevi', 'executie_acces_adauga', 'WITH CHECK (true)', 'executie_acces_x'],
+  ['inbox', 'public.ai_documente_inbox', 'executie_acces_sterge', 'USING (true)', 'executie_acces_x'],
+  ['drept', 'public.executie_acces_proiect', 'executie_acces_proiect_citire', 'USING (true)', 'executie_acces_x'],
+  ['storage', 'storage.objects', 'executie_acces_obiect_citire', 'USING (true)', 'executie_acces_obiect_x'],
+]
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+for (const [clasa, tabel, pol, schimbare, inPlus] of CLASE_R2) {
+  const scurt = tabel.replace(/^public\./, '')
+  raport(`Q7 ${clasa}: ${pol} lipsă`, await scenariu(`q7_${clasa}_lipsa`, { doar13a: true,
+    inainte13: `DROP POLICY ${pol} ON ${tabel};`,
+  }), false, new RegExp('politicile nu sunt cele din 20261209a: [^\\n]*' + reEsc(scurt + '.' + pol)))
+  raport(`Q7 ${clasa}: ${pol} cu altă expresie`, await scenariu(`q7_${clasa}_schimbata`, { doar13a: true,
+    inainte13: `ALTER POLICY ${pol} ON ${tabel} ${schimbare};`,
+  }), false, new RegExp('politicile nu sunt cele din 20261209a: [^\\n]*' + reEsc(scurt + '.' + pol)))
+  raport(`Q7 ${clasa}: politică în plus ${inPlus}`, await scenariu(`q7_${clasa}_inplus`, { doar13a: true,
+    inainte13: `CREATE POLICY ${inPlus} ON ${tabel} AS RESTRICTIVE FOR SELECT TO authenticated USING (true);`,
+  }), false, new RegExp('politicile nu sunt cele din 20261209a: [^\\n]*in plus ' + reEsc(tabel + '.' + inPlus)))
+}
+// politică în plus cu prefixul nostru pe tabele din afara celor acoperite: o tabelă 'drept' a altei migrări și una 'exclus'
+raport('Q7 drept (altă migrare): politică în plus executie_acces_x pe sudurile pe nod', await scenariu('q7_drept_alt', { doar13a: true,
+  inainte13: 'CREATE POLICY executie_acces_x ON public.executie_noduri_suduri AS RESTRICTIVE FOR SELECT TO authenticated USING (true);',
+}), false, /in plus public\.executie_noduri_suduri\.executie_acces_x/)
+raport('Q7 exclus: politică în plus executie_acces_x pe șantiere', await scenariu('q7_exclus', { doar13a: true,
+  inainte13: 'CREATE POLICY executie_acces_x ON public.sites AS PERMISSIVE FOR SELECT TO authenticated USING (true);',
+}), false, /in plus public\.sites\.executie_acces_x/)
+// RLS oprit pe tabelul de acces (politica rămâne, dar nu mai decide nimic)
+raport('Q7 drept: RLS oprit pe tabelul de acces', await scenariu('q7_drept_rls', { doar13a: true,
+  inainte13: 'ALTER TABLE public.executie_acces_proiect DISABLE ROW LEVEL SECURITY;',
+}), false, /executie_acces_proiect: lipsa \/ fara profile_id \/ fara RLS/)
+raport('Q7 drept: funcția owner-ului cu alt corp', await scenariu('q7_drept_owner', { doar13a: true,
+  inainte13: `CREATE OR REPLACE FUNCTION public.fn_executie_acces_e_owner() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`,
+}), false, /functiile 20261209a difera/)
+
+// r2: plafonul și punctul unic de blocare
+raport('Q8 fără marcajul plafonului (SET corect, fără prologul runnerului)', await scenariu('q8_marcaj', { doar13a: true, fara13aPlafon: 'marcaj' }),
+  false, /PLAFON_TRANZACTIE lipsa: 3000\/session marcaj lipsa/)
+raport('Q8 fără plafon deloc', await scenariu('q8_tot', { doar13a: true, fara13aPlafon: 'tot' }), false, /PLAFON_TRANZACTIE lipsa: 0\/default/)
+const PUNCT_UNIC = `  -- ── PUNCTUL UNIC de blocare (L06, r2).`
+raport('Q9 un lock pe un tabel acoperit înaintea punctului unic (citire în preflight)', await scenariu('q9', { doar13a: true,
+  mutMig13: t => inlocuieste(t, PUNCT_UNIC, `  PERFORM 1 FROM public.executie_tevi LIMIT 1;\n` + PUNCT_UNIC),
+}), false, /lock-uri luate inaintea punctului unic de blocare: public\.executie_tevi=AccessShareLock/)
+// mutanți pe 20261213a r2: harness-ul trebuie să-i prindă exact
+raport('N15 migrarea fără verificarea plafonului', await scenariu('n15', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `  IF v_plafon IS DISTINCT FROM '3000/session'\n     OR current_setting('gazpet.plafon_tranzactie', true)`,
+    `  IF false AND v_plafon IS DISTINCT FROM '3000/session'\n     OR false AND current_setting('gazpet.plafon_tranzactie', true)`),
+}), false, /T9a4 FAIL/)
+raport('N16 verificarea formei fără politica tabelului de acces (clasa drept)', await scenariu('n16', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `      v_dif := v_dif || 'executie_acces_proiect.executie_acces_proiect_citire'::text;`, `      NULL;`),
+}), false, /T9a6 FAIL/)
+raport('N17 verificarea formei fără mulțimea globală (politici în plus)', await scenariu('n17', { cu13a: true,
+  mutMig13: t => inlocuieste(t, `                           WHERE x.polname LIKE 'executie\\_acces\\_%'\n                             AND (n.nspname`,
+    `                           WHERE false AND x.polname LIKE 'executie\\_acces\\_%'\n                             AND (n.nspname`),
+}), false, /T9a7 FAIL/)
+raport('N18 revenirea fără verificarea plafonului', await scenariu('n18', { cu13a: true,
+  mutRev13: t => inlocuieste(t, `  IF v_plafon IS DISTINCT FROM '3000/session' THEN`, `  IF false THEN`),
+}), false, /T9r4 FAIL/)
+raport('D1 DRY-ul de producție: înainte READ ONLY, după cu plafon, ROLLBACK (restrâns complet, nerestrâns + owner pe plan)', await scenariu('d1', { dry13: true }), true)
+// (într-o tranzacție PROASPĂTĂ: în tranzacția harness-ului lock-ul pe executie_tevi e deja ținut de testele dinainte, deci nu e „adăugat”)
+raport('R0 revenirea 20261213a într-o tranzacție proaspătă (control pozitiv)', await scenariu('r0', { doarRev13: true }), true)
+raport('N19 revenirea citește un tabel acoperit înaintea punctului unic', await scenariu('n19', { doarRev13: true,
+  mutRev13: t => inlocuieste(t, `  -- ── punctul unic de blocare, ÎNAINTEA verificării politicilor (ca migrarea, r2)`,
+    `  PERFORM 1 FROM public.executie_tevi LIMIT 1;\n  -- ── punctul unic de blocare, ÎNAINTEA verificării politicilor (ca migrarea, r2)`),
+}), false, /revenire: lock-uri luate inaintea punctului unic de blocare: public\.executie_tevi=AccessShareLock/)
+
+// r2, static: lock-urile explicite ale migrării și ale revenirii = exact cele două instrucțiuni ale punctului unic, toate NOWAIT; plafonul
+// cerut o singură dată, în forma pe care o acceptă validatorul runnerului (PR #1054)
+for (const [eticheta, fisier] of [['migrarea', MIG13], ['revenirea', REV13]]) {
+  const cod = citeste(fisier).replace(/\r/g, '').split('\n').filter(l => !/^\s*--/.test(l)).join('\n')
+  const lockuri = cod.match(/LOCK TABLE[^;]*;/g) || []
+  const bine = lockuri.length === 2 && lockuri.every(l => /NOWAIT/.test(l))
+    && /ACCESS EXCLUSIVE MODE NOWAIT/.test(lockuri[0]) && /storage\.objects IN ACCESS EXCLUSIVE/.test(lockuri[0])
+    && /LOCK TABLE public\.executie_acces_proiect, public\.sites IN ACCESS SHARE MODE NOWAIT;/.test(lockuri[1])
+  const text = citeste(fisier).toLowerCase()
+  const citire = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
+  const nCit = citeste(fisier).split(citire).length - 1
+  // doar migrarea trece prin validator (revenirea o rulează operatorul, cu SET-ul în antet)
+  const plafonOk = eticheta === 'revenirea'
+    || (nCit === 1 && text.split('transaction_timeout').length - 1 === 1 && text.split('pg_settings').length - 1 === 1)
+  if (!bine || !plafonOk) esecuri++
+  console.log(`${bine && plafonOk ? 'OK  ' : 'FAIL'} S1 ${eticheta}: ${lockuri.length} instrucțiuni LOCK, toate NOWAIT = ${bine}; plafonul citit o dată, în forma validatorului = ${plafonOk}`)
+}
 
 console.log(esecuri ? `\n${esecuri} scenarii NU s-au comportat cum trebuie` : '\nToate scenariile s-au comportat cum trebuie')
 process.exit(esecuri ? 1 : 0)

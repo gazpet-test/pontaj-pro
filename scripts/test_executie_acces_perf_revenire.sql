@@ -12,7 +12,10 @@ SELECT set_config('gazpet.revenire_20261209a', 'SCOATE_ACCES_PROIECT:' || txid_c
 ROLLBACK TO SAVEPOINT t9z1;
 SELECT pg_temp.t_eroare('T9z1', :'t9z1_eroare', :'t9z1_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'starea nu e cea din 20261209a');
 SELECT set_config('gazpet.revenire_20261213a', 'REDA_POLITICILE_20261209A:' || txid_current(), true);
+-- r2: plafonul cerut de revenire (în tranzacția harness-ului: SET LOCAL doar pe durata ei; vezi T9a)
+SET LOCAL transaction_timeout = 3000;
 \ir ../supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql
+SET LOCAL transaction_timeout = 0;
 DO $t$ BEGIN
   IF pg_temp.t13_pol() IS DISTINCT FROM pg_temp.t_g('pol13_0')
      OR to_regprocedure('public.fn_executie_acces_proprii_citire()') IS NOT NULL OR to_regprocedure('public.fn_executie_acces_politici()') IS NOT NULL THEN

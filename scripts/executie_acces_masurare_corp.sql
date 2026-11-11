@@ -15,12 +15,18 @@
 --   initplan_loops_max = de câte ori s-a executat cel mai des un InitPlan care cheamă o funcție de acces (prag: ≤ 1);
 --   subplan_corelate = câte subplanuri au un scan executat de mai multe ori (subinterogare corelată, pe rând).
 -- Timpul: statement_timeout se socotește pe tot blocul DO (îl pune scriptul care îl include).
+-- r2: tacc.masurare_mod = 'complet' (implicit, ca până acum: count(*) de două ori + EXPLAIN ANALYZE) sau 'plan' (doar planificarea, FĂRĂ
+--   execuție: EXPLAIN (VERBOSE, SUMMARY) de două ori, se păstrează a doua — fără costul primei planificări după schimbarea politicilor):
+--   ms_planificare, noduri (câte noduri are planul), initplanuri, subplanuri, fn_pe_rand; randuri / ms1 / ms2 / subplan_corelate = NULL.
+--   Folosit de DRY pentru conturile NERESTRÂNSE / owner (regresia de planificare), unde a doua tranzacție are plafonul de 3 s.
 DO $masurare$
 DECLARE
   v_cont uuid; v_et text := coalesce(nullif(current_setting('tacc.masurare_eticheta', true), ''), '-');
+  v_mod text := coalesce(nullif(current_setting('tacc.masurare_mod', true), ''), 'complet');
   v_obi jsonb; o record; v_rez jsonb := '{}'::jsonb; v_m jsonb; t0 timestamptz; n bigint; ms1 numeric; ms2 numeric; pl json; pj jsonb;
   v_claims text := current_setting('request.jwt.claims', true); v_sub text := current_setting('request.jwt.claim.sub', true);
 BEGIN
+  IF v_mod NOT IN ('complet', 'plan') THEN RAISE EXCEPTION 'masurare: tacc.masurare_mod = complet | plan'; END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION 'masurare: ruleaza ca postgres (identitatea contului o pune scriptul)';
   END IF;
@@ -52,9 +58,15 @@ BEGIN
   END IF;
   FOR o IN SELECT * FROM jsonb_to_recordset(v_obi) AS q(obiect text, clasa text, sql text) LOOP
     BEGIN
-      t0 := clock_timestamp(); EXECUTE o.sql INTO n; ms1 := round((extract(epoch FROM clock_timestamp() - t0) * 1000)::numeric, 2);
-      t0 := clock_timestamp(); EXECUTE o.sql INTO n; ms2 := round((extract(epoch FROM clock_timestamp() - t0) * 1000)::numeric, 2);
-      EXECUTE 'EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) ' || o.sql INTO pl;
+      IF v_mod = 'plan' THEN
+        n := NULL; ms1 := NULL; ms2 := NULL;
+        EXECUTE 'EXPLAIN (VERBOSE, SUMMARY, FORMAT JSON) ' || o.sql INTO pl;
+        EXECUTE 'EXPLAIN (VERBOSE, SUMMARY, FORMAT JSON) ' || o.sql INTO pl;
+      ELSE
+        t0 := clock_timestamp(); EXECUTE o.sql INTO n; ms1 := round((extract(epoch FROM clock_timestamp() - t0) * 1000)::numeric, 2);
+        t0 := clock_timestamp(); EXECUTE o.sql INTO n; ms2 := round((extract(epoch FROM clock_timestamp() - t0) * 1000)::numeric, 2);
+        EXECUTE 'EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) ' || o.sql INTO pl;
+      END IF;
       pj := pl::jsonb -> 0;
       WITH RECURSIVE nod(x, sub_rad) AS (
         SELECT pj -> 'Plan', NULL::text
@@ -72,8 +84,9 @@ BEGIN
         'initplan_loops_max', coalesce((SELECT max((nod.x ->> 'Actual Loops')::numeric) FROM nod
                                          WHERE nod.x ->> 'Parent Relationship' = 'InitPlan' AND (nod.x -> 'Output')::text LIKE '%fn\_executie\_acces\_%'), 0),
         'subplanuri', (SELECT count(*) FROM nod WHERE nod.x ->> 'Parent Relationship' = 'SubPlan'),
-        'subplan_corelate', (SELECT count(DISTINCT nod.sub_rad) FROM nod
-                              WHERE nod.sub_rad IS NOT NULL AND nod.x ->> 'Node Type' LIKE '%Scan%' AND (nod.x ->> 'Actual Loops')::numeric > 1))
+        'noduri', (SELECT count(*) FROM nod),
+        'subplan_corelate', CASE WHEN v_mod = 'plan' THEN NULL ELSE (SELECT count(DISTINCT nod.sub_rad) FROM nod
+                              WHERE nod.sub_rad IS NOT NULL AND nod.x ->> 'Node Type' LIKE '%Scan%' AND (nod.x ->> 'Actual Loops')::numeric > 1) END)
         INTO v_m;
       v_rez := v_rez || jsonb_build_object(o.obiect, jsonb_build_object('clasa', o.clasa, 'randuri', n, 'ms1', ms1, 'ms2', ms2,
                                                                        'ms_executie', pj -> 'Execution Time', 'ms_planificare', pj -> 'Planning Time') || v_m);
