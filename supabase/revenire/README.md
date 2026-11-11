@@ -263,6 +263,16 @@ COMMIT;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării (cele 14 funcții, cele 9 trigger-e proprii — 3 de reguli + 6 fără ștergere, cu funcția și tipul lor —, garda de pe tronsoane cu funcția și tipul ei); nimic altceva nu depinde de tabele / funcții; lock-uri `NOWAIT` în ordinea RPC-urilor (`executie_proiecte`, `executie_tronsoane`, apoi tabelele de aici) înaintea verificării „gol”; DROP fără CASCADE; postcondiție; dezarmare. Testat în `scripts/test_executie_fibra_optica.sql` (T9b DELETE / TRUNCATE ca postgres = refuz 42501, și cu marcaj din altă tranzacție; T10 nearmat / cu date = refuz, cu SQLSTATE și mesaj verificate explicit; T11 golire armată, armat pe gol = scos, apoi re-aplicare cu garda din nou activă) și în `scripts/test_executie_fibra_concurenta.sh` (S0: cu o raportare deschisă = refuz imediat 55P03).
 
+## 20261214a — Logistică: EXECUTE pe `fn_nr_inventar_norm` pentru `authenticated` (`20261214a_logistica_nr_inventar_grant_ROLLBACK.sql`, NEAPLICAT)
+Ia înapoi dreptul dat de 20261214a. **Readuce defectul** din TKT-2026-0384 / 0386 („permission denied for function fn_nr_inventar_norm” la activ nou și la schimbarea numărului de inventar), deci se rulează doar dacă dreptul trebuie retras din alt motiv. Armare:
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261214a', 'IA_INAPOI_EXECUTE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = `authenticated` are EXECUTE; la final `authenticated` fără, `service_role` cu. Nu atinge date, politici sau triggerul.
+
 ## 20261213a — Execuție: acces pe proiect, performanța politicilor (`20261213a_executie_acces_proiect_perf_ROLLBACK.sql`, NEAPLICAT)
 Redă EXACT politicile `executie_acces_*` din 20261209a (predicatele pe rând) pe tabelele acoperite și pe `storage.objects` și scoate cele 4 funcții ale migrării (`fn_executie_acces_proprii_citire` / `_scriere`, `fn_executie_acces_politici`, `fn_executie_acces_politici_verifica`). Nu redeschide nimic: regula de acces e aceeași (un cont restrâns rămâne restrâns, doar mai lent), deci NU refuză când există conturi restrânse. **Trebuie rulată înaintea revenirii 20261209a** (aceea refuză cât timp funcțiile de aici există). Fără GO de execuție.
 ```sql

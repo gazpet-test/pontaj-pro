@@ -92,3 +92,31 @@ export const fmtH = h => {
 }
 
 export const fmtNr = (n, d = 2) => (Number(n) || 0).toLocaleString('ro-RO', { minimumFractionDigits: d, maximumFractionDigits: d })
+
+// ════════════════════════════════════════════════════════════════
+// ȚOLI (NPS) — TKT-2026-0348: probele pe țevi de 10″ / 12″ nu se regăseau în lista de DN.
+// Echivalentul se deduce din DIAMETRUL EXTERIOR al rândului (cel folosit și la calcul), nu din eticheta DN:
+// la PE eticheta DN e chiar exteriorul (DN 250 = Ø250), deci un „DN250” de polietilenă NU e 10″ (oțel Ø273,1).
+// Diametre exterioare standard pentru țeava de oțel (EN 10220 / ASME B36.10; 2½″ are două valori uzuale).
+// ════════════════════════════════════════════════════════════════
+const OD_TOLI = [
+  [21.3, '1/2'], [26.9, '3/4'], [33.7, '1'], [42.4, '1 1/4'], [48.3, '1 1/2'], [60.3, '2'], [73.0, '2 1/2'], [76.1, '2 1/2'],
+  [88.9, '3'], [114.3, '4'], [139.7, '5'], [168.3, '6'], [219.1, '8'], [273.1, '10'], [323.9, '12'], [355.6, '14'],
+  [406.4, '16'], [457.0, '18'], [508.0, '20'], [559.0, '22'], [610.0, '24'], [660.0, '26'], [711.0, '28'], [762.0, '30'],
+  [813.0, '32'], [864.0, '34'], [914.0, '36'], [1016.0, '40'], [1067.0, '42'], [1118.0, '44'], [1219.0, '48'],
+]
+const TOLERANTA_OD_MM = 0.5   // 273,0 / 273,1 și 323,8 / 323,9 apar ambele în fișe; Ø250 (PE) rămâne departe de 273,1
+
+// Întoarce țolii („10″”) pentru un diametru exterior în mm, sau null dacă nu e o țeavă de oțel standard.
+export function toliDinDiametruExterior(mm) {
+  const d = typeof mm === 'number' ? mm : Number(String(mm ?? '').trim().replace(',', '.'))
+  if (!Number.isFinite(d) || d <= 0) return null
+  const gasit = OD_TOLI.find(([od]) => Math.abs(od - d) <= TOLERANTA_OD_MM)
+  return gasit ? `${gasit[1]}″` : null
+}
+
+// Eticheta din lista de diametre: „DN250 · 10″ (273,1 mm)”; fără țoli dacă exteriorul nu e unul standard.
+export function etichetaDiametru(d, fmtMm = v => fmtNr(v, 1)) {
+  const toli = toliDinDiametruExterior(d?.diametru_extern_mm)
+  return `${d?.dn_label ?? '?'}${toli ? ` · ${toli}` : ''} (${fmtMm(d?.diametru_extern_mm)} mm)`
+}

@@ -14,7 +14,7 @@ import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx-js-style'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
-import { calcProbe, fmtH, fmtNr } from './utils/probeCalc.js'
+import { calcProbe, fmtH, fmtNr, etichetaDiametru } from './utils/probeCalc.js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
 
@@ -774,7 +774,7 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
             <label style={S.lbl}>Diametru (DN)</label>
             <select value={dnId} onChange={e => setDnId(e.target.value)} style={S.input}>
               <option value="">— alege diametrul —</option>
-              {diametre.map(d => <option key={d.id} value={d.id}>{d.dn_label} ({fmtNr(d.diametru_extern_mm,1)} mm)</option>)}
+              {diametre.map(d => <option key={d.id} value={d.id}>{etichetaDiametru(d)}</option>)}
             </select>
           </div>
 
