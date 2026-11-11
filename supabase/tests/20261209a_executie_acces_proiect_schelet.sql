@@ -23,6 +23,8 @@ CREATE SCHEMA storage;
 GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
 CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
 CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text REFERENCES storage.buckets(id), name text, owner_id text);
+-- r10: ca în Supabase (indexul unic bucketid_objname): o încărcare pe o cale ocupată = 23505 (T3f compară încărcările înainte / după)
+CREATE UNIQUE INDEX bucketid_objname ON storage.objects (bucket_id, name);
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 GRANT ALL ON storage.buckets, storage.objects TO anon, authenticated, service_role;
 CREATE FUNCTION storage.foldername(name text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $f$
