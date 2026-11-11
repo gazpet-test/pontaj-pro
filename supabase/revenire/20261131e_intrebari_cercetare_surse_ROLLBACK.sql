@@ -62,11 +62,11 @@ BEGIN
      -- nimic altceva nu depinde de jurnal sau de coloanele noi (DROP fără CASCADE ar eșua oricum; aici refuzul e explicit)
      OR EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid
                  WHERE rw.ev_class <> d.refobjid
-                   AND (d.refobjid = 'public.intrebari_preluari'::regclass
+                   AND (d.refobjid = to_regclass('public.intrebari_preluari')
                         OR (d.refobjid = 'public.intrebari_tehnice'::regclass AND d.refobjsubid IN (
                               SELECT attnum FROM pg_attribute WHERE attrelid = 'public.intrebari_tehnice'::regclass
                                 AND attname IN ('surse', 'de_verificat_la', 'interogari_web')))))
-     OR EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid = 'public.intrebari_preluari'::regclass) THEN
+     OR EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid = to_regclass('public.intrebari_preluari')) THEN
     RAISE EXCEPTION '20261131e revenire: starea nu e exact cea a lui 20261131e';
   END IF;
 
@@ -219,8 +219,13 @@ ALTER TABLE public.intrebari_tehnice
 NOTIFY pgrst, 'reload schema';
 
 -- ─── postcondiție = starea 20261105a; dezarmare ───────────────────────────
+-- Runda 3 (review r2 P2-4): arhiva se verifică DOAR prin OID-ul din to_regclass(), într-un bloc separat, executat doar pe calea
+-- ARHIVEAZA. Un literal '…arhiva…'::regclass (sau has_table_privilege pe numele ei ca text) se rezolvă și când ramura nu e luată,
+-- deci revenirea standard (fără arhivă) ar fi picat chiar în postcondiție.
 DO $final$
-DECLARE v text := current_setting('gazpet.revenire_20261131e', true);
+DECLARE
+  v text := current_setting('gazpet.revenire_20261131e', true);
+  v_arhiva oid := to_regclass('public.intrebari_cercetare_arhiva_20261131e');
 BEGIN
   IF v IS DISTINCT FROM 'SCOATE_CERCETARE:' || txid_current() AND v IS DISTINCT FROM 'SCOATE_CERCETARE_ARHIVEAZA:' || txid_current() THEN
     RAISE EXCEPTION '20261131e revenire: armarea s-a pierdut pe parcurs';
@@ -243,13 +248,21 @@ BEGIN
      OR has_table_privilege('authenticated', 'public.intrebari_tehnice', 'UPDATE')
      OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.intrebari_tehnice'::regclass AND conname = 'intrebari_tehnice_stare_check'
                       AND pg_get_constraintdef(oid) NOT LIKE '%de_verificat%')
-     OR EXISTS (SELECT 1 FROM public.intrebari_tehnice WHERE stare NOT IN ('noua', 'in_lucru', 'raspuns', 'eroare'))
-     OR (v = 'SCOATE_CERCETARE_ARHIVEAZA:' || txid_current() AND (to_regclass('public.intrebari_cercetare_arhiva_20261131e') IS NULL
-          OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.intrebari_cercetare_arhiva_20261131e'::regclass)
-          OR has_table_privilege('authenticated', 'public.intrebari_cercetare_arhiva_20261131e', 'SELECT')
-          OR has_table_privilege('anon', 'public.intrebari_cercetare_arhiva_20261131e', 'SELECT')))
-     OR (v = 'SCOATE_CERCETARE:' || txid_current() AND to_regclass('public.intrebari_cercetare_arhiva_20261131e') IS NOT NULL) THEN
+     OR EXISTS (SELECT 1 FROM public.intrebari_tehnice WHERE stare NOT IN ('noua', 'in_lucru', 'raspuns', 'eroare')) THEN
     RAISE EXCEPTION '20261131e revenire: postcondiția (starea 20261105a) a eșuat';
+  END IF;
+  IF v = 'SCOATE_CERCETARE:' || txid_current() THEN
+    IF v_arhiva IS NOT NULL THEN RAISE EXCEPTION '20261131e revenire: postcondiția a eșuat (arhivă creată fără token de arhivare)'; END IF;
+  ELSE
+    -- calea ARHIVEAZA: arhiva există, are RLS, fără politici, și nu e citibilă de anon / authenticated (verificat pe OID)
+    IF v_arhiva IS NULL
+       OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = v_arhiva)
+       OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = v_arhiva)
+       OR has_table_privilege('authenticated', v_arhiva, 'SELECT')
+       OR has_table_privilege('anon', v_arhiva, 'SELECT')
+       OR NOT has_table_privilege('service_role', v_arhiva, 'SELECT') THEN
+      RAISE EXCEPTION '20261131e revenire: postcondiția arhivei a eșuat';
+    END IF;
   END IF;
   PERFORM set_config('gazpet.revenire_20261131e', '', true);   -- dezarmare
 END $final$;

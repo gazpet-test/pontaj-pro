@@ -62,12 +62,12 @@ function Raspuns({ q, owner }) {
   </>
 }
 
-// Audit (doar ownerul): exact ce s-a trimis la căutarea web — speța nu intră în acel apel, doar aceste interogări filtrate.
+// Audit (doar ownerul): exact ce s-a trimis la căutarea web — speța nu intră în acel apel, doar interogări compuse din vocabularul aprobat.
 function Interogari({ lista }) {
   return <details style={{ marginTop:10, fontSize:12, color:G.muted }}>
     <summary style={{ cursor:'pointer' }}>🔎 Interogări trimise la căutarea web ({lista.length}) · audit owner</summary>
     {lista.length ? <ul style={{ margin:'6px 0 0', paddingLeft:18 }}>{lista.map((x, i) => <li key={i}>{x}</li>)}</ul>
-      : <div style={{ marginTop:6 }}>Nicio căutare web (fără interogări valide după filtru sau întrebare de dinainte de cercetare).</div>}
+      : <div style={{ marginTop:6 }}>Nicio căutare web (niciun termen din vocabularul aprobat sau întrebare de dinainte de cercetare).</div>}
   </details>
 }
 

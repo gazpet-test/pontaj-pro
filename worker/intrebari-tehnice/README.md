@@ -18,47 +18,68 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    registrul cerințelor atomice cu locator, registrul surselor, practica CNSC, tipare de clarificări, surse lipsă). NU intră:
    `docs/juridic` (dosare cu date de proiect), brief-uri / rapoarte de lucru, SQL. Indexul se caută local, pe cuvinte-cheie
    (BM25 simplu, fără serviciu extern) → max 8 extrase `C1..C8` (≤ 1500 caractere fiecare, ≤ 14000 în total, max 3 pe fișier).
-2. **Web oficial — speța NU intră în apelul cu căutare** (runda 2, review P1-a). Trei pași:
+2. **Web oficial — speța NU intră în apelul cu căutare; interogările le COMPUNE codul** (runda 3, review r2 P1-1). Trei pași:
    - **a. propunere, fără unelte**: `MODEL_INTEROGARI` (Sonnet) primește titlul + speța curățate de mailuri / linkuri /
-     telefoane / numere lungi (contextul de proiect, atașamentele și extrasele interne nu ajung nici aici) și propune max 5
-     interogări scurte, ca JSON;
-   - **b. filtru local strict** (`cercetare.filtreaza_interogari`): o interogare se aruncă ÎNTREAGĂ dacă are > 80 de caractere,
-     mail / link / domeniu, caractere în afara literelor, cifrelor și punctuației simple, un cuvânt cu majusculă care nu e în
-     `ACTE_INSTITUTII` (acte normative, instituții, standarde: ISCIR, ANRE, NTPEE, Legea, HG, SR EN …), sau o cifră care nu e
-     număr de act / articol / standard (adică nu urmează după `art.`, `alin.`, `Legea`, `HG`, `nr.`, `SR EN`, `ISO`, `PT C` …).
-     Limită declarată: un nume propriu scris cu literă mică nu poate fi recunoscut automat — de aceea pasul (a) nu vede
-     contextul, iar pasul (c) nu vede speța deloc;
-   - **c. căutarea**: un apel cu unealta `web_search` a API-ului, `allowed_domains` = `cercetare.DOMENII_OFICIALE` (listă fixă,
-     identică în `src/intrebariSurse.js` și în edge; testul vitest le compară), care primește DOAR interogările filtrate.
-     **Interogările efectiv trimise** (blocurile `server_tool_use`) se salvează pe întrebare în `interogari_web` și în jurnalul
-     `intrebari_preluari` — ownerul le vede în ecran („🔎 Interogări trimise la căutarea web”). Fără interogări valide → nu se
-     caută pe web, răspunsul vine doar din corpus.
+     telefoane / numere lungi (contextul de proiect, atașamentele și extrasele interne nu ajung nici aici) și vocabularul aprobat,
+     și propune max 5 interogări, ca JSON;
+   - **b. compunere din vocabular** (`cercetare.compune_interogari`): codul păstrează DOAR termenii din
+     **`vocabular_web.json`** (listă închisă, versionată în repo: termeni tehnici + acte normative / standarde din listă) și
+     compune el interogarea, din forma din vocabular (nu din textul modelului). Orice alt cuvânt — nume de persoane, firme,
+     proiecte, localități, numere de contract — se aruncă, **indiferent de majuscule**, și doar se numără (`termeni_aruncati` în
+     jurnal, fără text). Cifrele există doar în numerele actelor din listă, recunoscute după un tipar strict („Legea 10/1995”,
+     „HG nr. 273 din 1994”, „Ordinul ANRE 89/2018”, „SR EN 12007-2”, „NTPEE-2018”, „NP 133”); „nr” singur nu mai autorizează nimic.
+     O interogare = min. 2 elemente (sau un act), max 8, max 80 de caractere. Vocabularul se schimbă doar prin PR; testele
+     verifică forma lui (litere mici fără diacritice, fără dubluri, acte recunoscute întregi, fără nume de firme / localități
+     cunoscute) — un vocabular lipsă sau stricat oprește workerul (fail closed);
+   - **c. căutarea**: câte O cerere cu unealta `web_search` a API-ului pe FIECARE interogare compusă (max 5), cu `max_uses` = 1 și
+     `allowed_domains` = `cercetare.DOMENII_OFICIALE` (listă fixă, identică în `src/intrebariSurse.js` și în edge, toate din
+     lista aprobată în CLAUDE.md pct. 11 — de aceea `iscir.ro` a ieșit în runda 3; testul vitest le compară). Modelul din cerere
+     vede DOAR interogarea compusă (nu speța, contextul sau extrasele), deci nu are de unde să pună altceva în căutare; rezultatul
+     se folosește doar dacă interogarea executată e exact cea compusă (`interogare_respectata`), altfel e ignorat
+     (`cautari_ignorate`). **Interogările efectiv trimise** (blocurile `server_tool_use`) se salvează pe întrebare în
+     `interogari_web` și în jurnalul `intrebari_preluari` — ownerul le vede în ecran. Fără interogări compuse → nu se caută pe
+     web, răspunsul vine doar din corpus.
+     Limită declarată: căutarea web e unealta server-side a API-ului — o execută modelul la Anthropic, nu codul nostru direct.
+     Controlul e la intrare (cererea conține doar interogarea compusă din vocabular) și la ieșire (rezultat folosit doar pe
+     interogarea exactă). O căutare executată integral de cod ar cere un serviciu de căutare separat (cheie nouă) — decizia lui Răzvan.
    Sursele `W1..Wn` = citările + rezultatele, filtrate încă o dată pe domeniu (și în edge, și în UI); plafon total C + W ≤ 30
-   ÎNAINTE de generare. **Rezultat web incomplet** (`max_tokens`, `pause_turn` epuizat, plafonul de căutări consumat,
-   `web_search_tool_result_error`, propunerea de interogări tăiată) → NU se publică nimic: eroare „Cercetare incompletă: …”.
+   ÎNAINTE de generare. **Rezultat web incomplet** (`max_tokens`, `pause_turn`, `web_search_tool_result_error`, propunerea de
+   interogări tăiată) → NU se publică nimic: eroare „Cercetare incompletă: …”.
 3. **Răspunsul** — fără unelte, doar din `<surse>` (conținutul speței, al extraselor și al paginilor e neutralizat: `<`/`>` →
    `‹`/`›`, deci nu poate închide `<surse>` / `<speta>`): prima linie = verdict (Da / Nu / Depinde de … / Incert — de verificat),
    fiecare afirmație normativă cu marcaj `[C1]` / `[W2]`. `cercetare.analizeaza` (aceleași reguli în `src/intrebariSurse.js`,
    cazuri comune în `teste_validare.json`):
-   - normativă = act / articol / standard / cifră cu unitate **sau obligație** („obligatoriu”, „trebuie”, „interzis”, „impune”,
-     „conform” …);
+   - normativă = act / articol / standard / cifră cu unitate **sau obligație / interdicție** („obligatoriu”, „trebuie”,
+     „interzis”, „impune”, „conform”, „nu se admite”, „nu este permis” …);
    - excepția „Nu am găsit sursa oficială pentru …” scutește DOAR o linie care e exclusiv declarația de lipsă (fără `;`, fără
      altă propoziție, fără „dar/însă/iar”, fără articol / cifră / obligație) — „Proba se face la 99 bar; nu am găsit sursa
      oficială pentru alt detaliu.” NU e scutită;
-   - o afirmație cu marcaj trece doar dacă măcar una dintre cifrele ei apare în titlul/extrasul sursei citate („Art. 999 impune
-     99 bar [C1]” trece doar dacă C1 conține „999” sau „99”);
-   dacă pică → o singură reparare; ce rămâne fără sursă se scoate (`curata_raspuns`); un verdict rămas fără nicio sursă citată
-   (sau lipsă) devine **„Incert — de verificat”**, nu un „Depinde” generic. Sursele citate trec verificarea finală pe setul care
-   se salvează (`verifica_surse_finale`: max 30, ID-uri unice dintre cele trimise, domenii / căi valide, < 80 KB) → `surse`.
+   - o afirmație cu marcaj trece doar dacă **TOATE** cifrele ei apar în sursele citate (runda 3; „Art. 999 impune 99 bar [C1]”
+     cere și „999”, și „99”);
+   - **suport lexical** (runda 3, review r2 P1-2): orice afirmație cu marcaj trebuie să aibă termenii ei în titlul / extrasul
+     surselor citate. Termenii-cheie = cuvintele de ≥ 3 litere, normalizate (fără diacritice, rădăcina de 6 litere), fără
+     cuvinte de legătură, verbe generice („este”, „face”, „aplică”), structura actelor („art.”, „alin.”) și cuvintele de
+     obligație („obligatoriu” nu e ce trebuie să repete sursa, ci *ce* e obligatoriu). Pragul: o afirmație normativă cere
+     **majoritatea** termenilor (2 din 2, 2 din 3, 3 din 4), una descriptivă cel puțin jumătate; o obligație fără niciun termen
+     verificabil și fără cifre („Este obligatoriu [C1]”) se scoate. „Este obligatoriu un responsabil autorizat [C1]” cu un C1
+     despre recepție → scoasă; „…un responsabil tehnic cu sudura atestat [C1]” cu un C1 care spune exact asta → păstrată.
+     Limită declarată: verificarea e pe cuvinte, nu pe sens (o negație din sursă nu e prinsă dacă termenii coincid) — de aceea
+     răspunsul rămâne informativ, iar extrasul citat stă sub răspuns;
+   - **verdictul are nevoie de temei** (runda 3, review r2 P2-3): „Da / Nu / Depinde” rămâne doar dacă după curățare există
+     măcar o afirmație cu dovadă pozitivă (majoritatea termenilor ei în sursă, sau cifrele ei confirmate); o linie neutră care
+     doar citează C1 („Document consultat [C1]”) nu ține verdictul. Altfel prima linie devine **„Incert — de verificat: nu am
+     găsit o sursă care să susțină verdictul propus.”**;
+   dacă pică → o singură reparare (cu motivul fiecărei linii); ce rămâne nesusținut se scoate (`curata_raspuns`). Sursele citate
+   trec verificarea finală pe setul care se salvează (`verifica_surse_finale`: max 30, ID-uri unice dintre cele trimise,
+   domenii / căi valide, < 80 KB) → `surse`.
 4. **Model**: întrebările cu temei normativ / juridic (detectate după cuvinte-cheie: lege, normativ, articol, ISCIR, ANRE,
    autorizare, recepție, sudură, contract, achiziții …) merg **implicit pe Opus** — `MODEL_NORMATIV` = `claude-opus-5-5`, cel mai
    scump model, pentru pașii de căutare, răspuns și reparare; restul pe `MODEL_GENERAL` = `claude-sonnet-5-5`. Propunerea de
    interogări e mereu pe Sonnet. Constantele stau în `cercetare.py`; schimbarea modelului = PR.
-5. **Cost — maxim de apeluri API pe o preluare, numărând și continuările**: 1 (interogări) + până la 4 la căutare (1 cerere +
-   `MAX_PAUZE_WEB` = 3 continuări `pause_turn`) + 1 (răspuns) + 1 (reparare) = **max 7 apeluri**; în mod obișnuit 3–4.
-   Căutările web: **max 5 pe întrebare în total** (`max_uses` scade la fiecare continuare; plafon consumat + încă `pause_turn` →
-   „Cercetare incompletă”). Tokenii + `web_search_requests` + `apeluri` se adună în `tokeni` (și la erori). Un 429/529 după un
-   pas plătit NU se reia automat (s-ar plăti iar) — eroare vizibilă.
+5. **Cost — maxim de apeluri API pe o preluare**: 1 (interogări) + până la 5 la căutare (o cerere pe interogare compusă,
+   `max_uses` = 1, fără continuări — un `pause_turn` = „Cercetare incompletă”) + 1 (răspuns) + 1 (reparare) = **max 8 apeluri**;
+   în mod obișnuit 4–6. Căutările web: **max 5 pe întrebare**. Tokenii + `web_search_requests` + `apeluri` se adună în `tokeni`
+   (și la erori). Un 429/529 după un pas plătit NU se reia automat (s-ar plăti iar) — eroare vizibilă.
    **Plafonul global de 40 de preluări pe zi** se numără din jurnalul durabil `intrebari_preluari` (un rând la fiecare preluare,
    cu costul ei), deci **include reluările**: „🔁 Reia cu cercetare” nu mai poate ocoli plafonul (review r1 P1-c). Amânările certe
    fără cost (429/529 la primul apel) nu se numără.
@@ -89,7 +110,8 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    (ecranul merge și fără ea, pe coloanele vechi, dar butoanele noi cer funcțiile) și înainte de edge.
 2. Deploy edge `intrebari-tehnice-worker` v2 (verify_jwt = false, ca înainte).
 3. Web search activat în Console pentru workspace-ul cheii API (altfel apelul de cercetare dă 400 → eroare vizibilă).
-4. Pe server, din clona la zi pe `main`: copiezi `intrebari_worker.py`, `cercetare.py` **și** `corpus_manifest.json` în
+4. Pe server, din clona la zi pe `main`: copiezi `intrebari_worker.py`, `cercetare.py`, `corpus_manifest.json` **și**
+   `vocabular_web.json` (runda 3; lipsă / stricat → workerul nu preia nimic, `vocabular_invalid` în jurnal) în
    `C:\Users\Public\intrebari_worker\`, apoi `node scripts/intrebari/construieste_corpus.mjs C:\Users\Public\intrebari_worker\corpus_index.json`
    (iese cu 1 dacă un fișier din corpus lipsește). La pornire workerul verifică `sha256(corpus_index.json)` = `index_sha256` din
    manifest; index lipsă / stricat / nepotrivit (sau cheia API lipsă) → **nu preia nimic** (`corpus_invalid` în jurnal) —
@@ -124,15 +146,22 @@ Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utili
 
 ## Ce NU face
 Nu caută pe web în afara domeniilor oficiale fixe (decizia Silviu + Răzvan 06.11.2026 lărgește regula 27.10.2026 doar pentru
-acest worker: apelul cu web nu primește speța, atașamente, context de proiect sau extrase interne — doar interogările filtrate —
+acest worker: apelul cu web nu primește speța, atașamente, context de proiect sau extrase interne — doar câte o interogare compusă
+de cod din vocabularul aprobat —
 iar ieșirea e limitată la `allowed_domains`), nu deschide pagini în afara căutării, nu trimite mail, nu scrie în alte tabele
 decât rândul întrebării și jurnalul ei de preluări, nu vede ERP-ul, nu folosește Copilot / Jakarinos (ar expune contextul intern
 al echipei Paw).
 
 ## Teste
-- `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs`
-- `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` (validarea are cazurile comune în `teste_validare.json`;
-  `test_worker.py` rulează fluxul complet FĂRĂ rețea — `apel` / `edge` înlocuite: speța nu ajunge în apelul cu web_search,
-  rezultat web incomplet nepublicat, plafonul de căutări pe întrebare, corpus invalid = nicio preluare)
+- `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs scripts/intrebari/interogari.test.mjs`
+- `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` — **paritate Python ↔ JS pe aceleași fișiere**:
+  validarea (`teste_validare.json`: verdict, fără sursă, cifre neconfirmate, fără suport lexical, temei, textul după curățare) și
+  compunerea interogărilor (`teste_interogari.json`, pe vocabularul real; portarea JS e `scripts/intrebari/interogari.mjs`).
+  `test_worker.py` rulează fluxul complet FĂRĂ rețea — `apel` / `edge` înlocuite: cererea web primește doar interogarea compusă,
+  o cerere pe interogare cu `max_uses` = 1, căutarea modificată de model e ignorată, rezultat web incomplet nepublicat,
+  obligația cu sursă fără legătură devine „Incert”, corpus / vocabular invalid = nicio preluare.
 - `node scripts/intrebari/construieste_corpus.mjs --verifica worker/intrebari-tehnice/corpus_manifest.json` (manifestul la zi)
+- BD (doar pe clonă, le rulează chat-ul): `supabase/tests/20261131e_intrebari_cercetare_surse_dryrun.sql` (apply → revenire
+  standard → re-apply; revenire cu arhivă; expirarea în `fn_intrebari_preia`) și `scripts/test_intrebari_preia_lock.sh --sistem …`
+  (două sesiuni reale: expirarea contra unui răspuns întârziat, fără deadlock; `--mutant-r2` trebuie să dea 40P01).
 - Revenirea BD: `supabase/revenire/20261131e_intrebari_cercetare_surse_ROLLBACK.sql` (vezi `supabase/revenire/README.md`).

@@ -28,9 +28,10 @@ const VALABIL_SEC = 300
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CALE = /^[0-9a-f-]{36}\/[0-9a-f-]{36}\.(pdf|jpg|jpeg|png|webp)$/
 // v2 (06.11.2026, migrarea 20261131e): răspunsul vine cu sursele citate. Aceeași listă fixă ca worker/intrebari-tehnice/cercetare.py
-// și src/intrebariSurse.js (testul vitest „domenii identice”). O sursă web în afara listei sau o cale de corpus în afara docs/ se aruncă.
+// și src/intrebariSurse.js (testul vitest „domenii identice”), toate din lista aprobată în CLAUDE.md pct. 11 (runda 3: fără iscir.ro).
+// O sursă web în afara listei sau o cale de corpus în afara docs/ se aruncă.
 const DOMENII_OFICIALE = [
-  'legislatie.just.ro', 'monitoruloficial.ro', 'iscir.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
+  'legislatie.just.ro', 'monitoruloficial.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
   'transgaz.ro', 'anap.gov.ro', 'e-licitatie.ro', 'eur-lex.europa.eu', 'magazin.asro.ro',
 ]
 const SURSE_MAX = 30

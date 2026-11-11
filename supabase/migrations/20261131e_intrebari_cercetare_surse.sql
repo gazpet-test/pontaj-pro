@@ -8,10 +8,13 @@
 -- jurnalul durabil `intrebari_preluari` (un rând la fiecare preluare, niciodată șters de reluare), nu din `preluat_la`, pe care o
 -- reluare îl putea goli/suprascrie. Tot în jurnal stă costul fiecărei încercări (`tokeni`) și interogările web trimise.
 -- Runda 2 (P1-a): `interogari_web` — interogările EFECTIV trimise la căutarea web (audit, ownerul le vede în ecran).
+-- Runda 3 (review r2 P2-5): fn_intrebari_preia blochează întrebările expirate ÎNAINTEA jurnalului lor (aceeași ordine ca
+-- fn_intrebari_raspunde / _amana: intrebari_tehnice → intrebari_preluari) — fără deadlock între expirare și un răspuns întârziat.
 --
 -- FIȘA DE SECURITATE (CLAUDE.md pct. 7) — diferențele față de 20261105a:
 --  (a) conținut EXTERN nou: paginile web de pe domeniile oficiale (citite server-side de unealta web search a API-ului) → DATE;
---      speța NU ajunge în apelul cu web search: acolo intră doar interogările filtrate local (worker, cercetare.filtreaza_interogari);
+--      speța NU ajunge în apelul cu web search: acolo intră câte O interogare COMPUSĂ de worker doar din vocabularul aprobat
+--      (worker/intrebari-tehnice/vocabular_web.json, cercetare.compune_interogari — runda 3);
 --  (b) scrie în plus: `surse` + `interogari_web` pe rândul întrebării; starea 'de_verificat'; jurnalul `intrebari_preluari`
 --      (doar prin funcțiile SECURITY DEFINER ale workerului); reluarea readuce întrebarea în coadă. Fără mail, bani, drepturi;
 --      fără notificări noi;
@@ -132,20 +135,33 @@ REVOKE ALL ON FUNCTION public.fn_intrebari_inainte_insert() FROM PUBLIC, anon, a
 
 -- ─── worker: preluarea numără plafonul din jurnal (include reluările) și scrie rândul de jurnal ───
 -- CREATE OR REPLACE păstrează ACL-ul din 20261105a (doar service_role).
+-- ORDINEA LOCK-URILOR (L06, runda 3 — review r2 P2-5), aceeași pe toate căile care ating ambele tabele:
+--   [advisory 'intrebari_tehnice:preia', doar aici] → intrebari_tehnice (rândurile, ORDER BY id) → intrebari_preluari.
+--   fn_intrebari_raspunde / fn_intrebari_amana: UPDATE intrebari_tehnice (rândul) → UPDATE intrebari_preluari. Înainte, expirarea
+--   bloca ÎNTÂI jurnalul și apoi întrebarea, iar un răspuns întârziat bloca întrebarea și apoi jurnalul → deadlock posibil.
+--   Acum expirarea ia ÎNTÂI rândurile întrebărilor expirate (FOR UPDATE, ORDER BY id), abia apoi jurnalul lor.
+--   INSERT-ul în jurnal (FK spre intrebari_tehnice) ia KEY SHARE pe rândul întrebării deja blocat de noi.
 CREATE OR REPLACE FUNCTION public.fn_intrebari_preia() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE r public.intrebari_tehnice; v_inc uuid := gen_random_uuid();
+DECLARE r public.intrebari_tehnice; v_inc uuid := gen_random_uuid(); v_exp_id bigint[]; v_exp_inc uuid[];
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('intrebari_tehnice:preia'));
-  -- expirate (worker oprit în timpul apelului AI): jurnalul se închide ÎNAINTE ca incercare_id să fie golit
+  -- expirate (worker oprit în timpul apelului AI): 1) rândurile întrebărilor, blocate în ordinea id-ului (un răspuns întârziat
+  -- care le ține deja e așteptat aici; după COMMIT-ul lui rândul nu mai e 'in_lucru' și iese din listă — READ COMMITTED reevaluează)
+  SELECT coalesce(array_agg(x.id ORDER BY x.id), '{}'), coalesce(array_agg(x.incercare_id ORDER BY x.id), '{}')
+    INTO v_exp_id, v_exp_inc
+    FROM (SELECT t.id, t.incercare_id FROM public.intrebari_tehnice t
+           WHERE t.stare = 'in_lucru' AND t.preluat_la < now() - interval '30 minutes'
+           ORDER BY t.id FOR UPDATE OF t) x;
+  -- 2) jurnalul lor se închide ÎNAINTE ca incercare_id să fie golit
   UPDATE public.intrebari_preluari p SET inchis_la = now(), rezultat = 'expirat', tokeni = coalesce(p.tokeni, '{"cost_necunoscut": true}'::jsonb)
-    FROM public.intrebari_tehnice t
-   WHERE t.stare = 'in_lucru' AND t.preluat_la < now() - interval '30 minutes' AND p.incercare_id = t.incercare_id AND p.inchis_la IS NULL;
+   WHERE p.incercare_id = ANY (v_exp_inc) AND p.inchis_la IS NULL;
+  -- 3) întrebările (deja blocate de noi la pasul 1)
   WITH expirate AS (
     UPDATE public.intrebari_tehnice
        SET stare = 'eroare', eroare = 'Procesarea a fost întreruptă. Pune întrebarea din nou.', raspuns_la = now(), incercare_id = NULL,
            tokeni = coalesce(tokeni, '{"cost_necunoscut": true}'::jsonb)   -- apelul AI întrerupt poate fi fost facturat (review r3 P2-4)
-     WHERE stare = 'in_lucru' AND preluat_la < now() - interval '30 minutes'
+     WHERE id = ANY (v_exp_id) AND stare = 'in_lucru'
      RETURNING autor, titlu, id)
   INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
   SELECT autor, 'info', 'general', '❓ Întrebarea nu a primit răspuns', left(titlu, 200), '/intrebari?id=' || id FROM expirate;

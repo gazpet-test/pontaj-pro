@@ -8,6 +8,9 @@ import cercetare as c  # noqa: E402
 
 
 CAZURI = json.loads((AICI / 'teste_validare.json').read_text(encoding='utf-8'))
+INTEROGARI = json.loads((AICI / 'teste_interogari.json').read_text(encoding='utf-8'))
+VOC_BRUT = json.loads((AICI / 'vocabular_web.json').read_text(encoding='utf-8'))
+VOC = c.pregateste_vocabular(VOC_BRUT)
 
 
 class Validare(unittest.TestCase):
@@ -18,22 +21,25 @@ class Validare(unittest.TestCase):
                 self.assertEqual(a['verdict'], caz['verdict'])
                 self.assertEqual(len(a['fara_sursa']), caz['fara_sursa'], a['fara_sursa'])
                 self.assertEqual(len(a['neconfirmate']), caz['neconfirmate'], a['neconfirmate'])
+                self.assertEqual(len(a['nesustinute']), caz['nesustinute'], a['nesustinute'])
                 self.assertEqual(a['citate'], caz['citate'])
                 self.assertEqual(a['necunoscute'], caz['necunoscute'])
+                if 'temei' in caz: self.assertEqual(a['temei'], caz['temei'])
 
-    def test_exemplele_din_review_dupa_curatare(self):
+    def test_dupa_curatare_cazuri_comune_cu_vitest(self):
         for caz in [x for x in CAZURI if 'final_incert' in x]:
             with self.subTest(caz['nume']):
                 text, scoase = c.curata_raspuns(caz['text'], caz['surse'])
                 self.assertEqual(scoase, caz['final_scoase'])
                 self.assertEqual(c.e_incert(text), caz['final_incert'], text)
-                self.assertTrue(text.startswith('Incert — de verificat') if caz['final_incert'] else text.startswith('Da.'), text)
+                if caz.get('final_incepe'): self.assertTrue(text.startswith(caz['final_incepe']), text)
+                elif caz['final_incert']: self.assertTrue(text.startswith('Incert — de verificat'), text)
                 if caz.get('final_nu_contine'): self.assertNotIn(caz['final_nu_contine'], text)
-                self.assertEqual(c.analizeaza(text, caz['surse'])['fara_sursa'], [])   # după curățare nu mai rămâne nimic fără sursă
+                self.assertEqual(c.analizeaza(text, caz['surse'])['fara_sursa'], [])   # după curățare nu mai rămâne nimic de scos
 
     def test_curata_scoate_afirmatiile_fara_sursa(self):
         s = [{'id': 'C1', 'extras': 'proba la 6 bar'}]
-        text, scoase = c.curata_raspuns('Nu.\n- art. 228 din NTPEE cere EN 12732.\n- Corect: 6 bar [C1, W9].', s)
+        text, scoase = c.curata_raspuns('Nu.\n- art. 228 din NTPEE cere EN 12732.\n- Proba se face la 6 bar [C1, W9].', s)
         self.assertEqual(scoase, 1)
         self.assertNotIn('228', text)
         self.assertIn('[C1]', text)
@@ -51,9 +57,16 @@ class Validare(unittest.TestCase):
     def test_verdict_fara_nicio_sursa_ramasa_e_incert(self):
         text, scoase = c.curata_raspuns('Nu.\n- art. 5 din HG 273/1994 [C1].', [{'id': 'C1', 'extras': 'altceva'}])
         self.assertEqual(scoase, 1)
-        self.assertTrue(text.startswith('Incert — de verificat: verdictul propus („Nu.”)'), text)
+        self.assertTrue(text.startswith(c.INCERT_FARA_TEMEI), text)
         text, _ = c.curata_raspuns('Nu.\n- art. 5 din HG 273/1994 [C1].', [{'id': 'C1', 'extras': 'HG 273/1994, art. 5'}])
         self.assertTrue(text.startswith('Nu.'))
+
+    def test_suport_lexical(self):
+        h = c.harta_surse([{'id': 'C1', 'extras': 'Recepția lucrărilor este descrisă în alt document.'}])
+        self.assertEqual(c.suport_lexical('Este obligatoriu un responsabil autorizat [C1].', ['C1'], h), (0, 2))
+        self.assertEqual(c.evalueaza_linie('Este obligatoriu un responsabil autorizat [C1].', h), ('nesustinut', False))
+        self.assertEqual(c.termeni_cheie('1. Conform art. 12 din PT C9 [W1]'), [])
+        self.assertEqual(c.termeni_cheie('Este obligatoriu un responsabil autorizat [C1].'), ['respon', 'autori'])
 
     def test_declaratia_lipsa(self):
         self.assertTrue(c.e_declaratie_lipsa('- Nu am găsit sursa oficială pentru distanța minimă.'))
@@ -65,7 +78,7 @@ class Validare(unittest.TestCase):
 
     def test_obligatia_e_normativa(self):
         for t in ('Este obligatoriu un responsabil autorizat.', 'Trebuie RTE atestat.', 'Se interzice sudura pe ploaie.',
-                  'Conform prescripției, da.', 'Normativul impune verificarea.'):
+                  'Conform prescripției, da.', 'Normativul impune verificarea.', 'Nu se admite îmbinarea prin filetare.'):
             self.assertTrue(c.e_afirmatie_normativa(t), t)
         self.assertFalse(c.e_afirmatie_normativa('Discută cu beneficiarul.'))
 
@@ -88,18 +101,18 @@ class Validare(unittest.TestCase):
 class Domenii(unittest.TestCase):
     def test_lista_fixa(self):
         self.assertEqual(c.DOMENII_OFICIALE, (
-            'legislatie.just.ro', 'monitoruloficial.ro', 'iscir.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
+            'legislatie.just.ro', 'monitoruloficial.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
             'transgaz.ro', 'anap.gov.ro', 'e-licitatie.ro', 'eur-lex.europa.eu', 'magazin.asro.ro'))
         u = c.unealta_web()
         self.assertEqual(u['allowed_domains'], list(c.DOMENII_OFICIALE))
         self.assertEqual(u['type'], 'web_search_20250305')
-        self.assertLessEqual(u['max_uses'], 5)
+        self.assertEqual(u['max_uses'], 1)        # runda 3: o cerere = o interogare compusă = o căutare
 
     def test_url_oficial(self):
         self.assertTrue(c.url_oficial('https://legislatie.just.ro/Public/DetaliiDocument/123'))
-        self.assertTrue(c.url_oficial('https://www.iscir.ro/prescriptii'))
+        self.assertTrue(c.url_oficial('https://www.anre.ro/prescriptii'))
         self.assertTrue(c.url_oficial('http://eur-lex.europa.eu/x'))
-        for rau in ('https://iscir.ro.evil.com/', 'https://eviliscir.ro/', 'ftp://anre.ro/', 'javascript:alert(1)', '',
+        for rau in ('https://www.iscir.ro/prescriptii', 'https://anre.ro.evil.com/', 'https://evilanre.ro/', 'ftp://anre.ro/', 'javascript:alert(1)', '',
                     'https://user:pw@anre.ro/', 'https://gov.ro/', 'https://just.ro/', None):
             self.assertFalse(c.url_oficial(rau), rau)
 
@@ -107,14 +120,15 @@ class Domenii(unittest.TestCase):
         blocuri = [
             {'type': 'server_tool_use', 'name': 'web_search', 'input': {'query': 'responsabil sudura ISCIR'}},
             {'type': 'web_search_tool_result', 'content': [
-                {'type': 'web_search_result', 'url': 'https://www.iscir.ro/pt-c9', 'title': 'PT C9'},
+                {'type': 'web_search_result', 'url': 'https://www.anre.ro/pt-c9', 'title': 'PT C9'},
+                {'type': 'web_search_result', 'url': 'https://www.iscir.ro/pt-c9', 'title': 'iscir (în afara listei aprobate)'},
                 {'type': 'web_search_result', 'url': 'https://blog.exemplu.ro/x', 'title': 'blog'}]},
             {'type': 'text', 'text': 'găsit', 'citations': [
-                {'type': 'web_search_result_location', 'url': 'https://www.iscir.ro/pt-c9', 'title': 'PT C9', 'cited_text': 'art. 4 ...'},
+                {'type': 'web_search_result_location', 'url': 'https://www.anre.ro/pt-c9', 'title': 'PT C9', 'cited_text': 'art. 4 ...'},
                 {'type': 'web_search_result_location', 'url': 'https://altul.com/', 'title': 'x', 'cited_text': 'y'}]},
         ]
         s = c.surse_web(blocuri)
-        self.assertEqual([x['url'] for x in s], ['https://www.iscir.ro/pt-c9'])
+        self.assertEqual([x['url'] for x in s], ['https://www.anre.ro/pt-c9'])
         self.assertEqual(s[0]['id'], 'W1')
         self.assertEqual(s[0]['extras'], 'art. 4 ...')
         self.assertEqual(c.interogari_web(blocuri), ['responsabil sudura ISCIR'])
@@ -130,25 +144,38 @@ class Interogare(unittest.TestCase):
     def test_lungime(self):
         self.assertLessEqual(len(c.curata_interogare('t', 'a' * 5000)), 2000)
 
-    def test_filtru_pastreaza_termenii_tehnici_si_actele(self):
-        bune = ['responsabil tehnic cu sudura prescripție tehnică ISCIR', 'probă de presiune rețea distribuție gaze NTPEE',
-                'Legea 10/1995 art. 5 calitatea în construcții', 'SR EN 12007-2 polietilenă', 'PT C9 sudori atestare',
-                'ordinul ANRE nr. 89/2018 normă tehnică', 'HG 273/1994 recepție lucrări']
-        self.assertEqual(c.filtreaza_interogari(bune), bune[:c.INTEROGARI_MAX])
+    def test_vocabularul_din_repo_e_valid(self):
+        self.assertIsNotNone(VOC)
+        self.assertEqual(len(VOC['acte']), len(VOC_BRUT['acte']))
+        self.assertEqual(len(set(VOC_BRUT['termeni'])), len(VOC_BRUT['termeni']))
+        for rau in ('gazpet', 'transgaz', 'delgaz', 'ploiesti', 'prahova', 'manastirea', 'popescu', 'brazi', 'valea', 'lunca'):
+            self.assertNotIn(rau, VOC_BRUT['termeni'])
 
-    def test_filtru_arunca_date_interne(self):
-        rele = ['responsabil sudura Popescu', 'conducta Ploiești strada Florilor', 'Gazpet autorizație ISCIR',
-                'probă presiune 6 bar polietilenă', 'diametru 110 mm teavă', 'contract 1234 penalități',
-                'scrie la ion@gazpet.ro', 'vezi https://exemplu.ro/x', 'site iscir.ro prescripții', 'a' * 81,
-                'Responsabil tehnic sudura', 'teava pe100 sdr11', 'sudura <script>', 'presiune {6}', 12, None]
-        self.assertEqual(c.filtreaza_interogari(rele), [])
-        self.assertEqual(c.filtreaza_interogari('nu e listă'), [])
+    def test_vocabular_stricat_e_refuzat(self):
+        self.assertIsNone(c.pregateste_vocabular(None))
+        self.assertIsNone(c.pregateste_vocabular(dict(VOC_BRUT, versiune='')))
+        for termen in ('Popescu', 'sudura', 'pe100'):          # majusculă / dublură / cifre
+            self.assertIsNone(c.pregateste_vocabular(dict(VOC_BRUT, termeni=VOC_BRUT['termeni'] + [termen])), termen)
+        for act in ('Contract 30/2025', 'Legea nr. 10/1995'):   # nu e act după tipar / aceeași cheie de două ori
+            self.assertIsNone(c.pregateste_vocabular(dict(VOC_BRUT, acte=VOC_BRUT['acte'] + [act])), act)
 
-    def test_filtru_dubluri_si_maxim(self):
-        q = ['sudura polietilenă', 'Sudura polietilenă'.lower(), 'probă presiune', 'recepție lucrări', 'aviz distribuitor',
-             'atestare sudori', 'verificare tehnică', 'diriginte de șantier']
-        self.assertEqual(c.filtreaza_interogari(q), ['sudura polietilenă', 'probă presiune', 'recepție lucrări',
-                                                     'aviz distribuitor', 'atestare sudori'])
+    def test_compunere_cazuri_comune_cu_vitest(self):
+        for caz in INTEROGARI['compunere']:
+            with self.subTest(caz['nume']):
+                q, aruncate = c.compune_interogari(caz['propuse'], VOC)
+                self.assertEqual(q, caz['interogari'])
+                self.assertEqual(aruncate, caz['aruncate'])
+                self.assertTrue(all(len(x) <= c.INTEROGARE_MAX for x in q))
+
+    def test_compunere_fara_vocabular_sau_lista(self):
+        self.assertEqual(c.compune_interogari(['sudura polietilena'], None), ([], 0))
+        self.assertEqual(c.compune_interogari('sudura polietilena', VOC), ([], 0))
+
+    def test_respectare_cazuri_comune_cu_vitest(self):
+        for caz in INTEROGARI['respectare']:
+            with self.subTest(str(caz['executate'])):
+                self.assertEqual(c.interogare_respectata(caz['executate'], caz['compusa']), caz['ok'])
+        self.assertEqual(c.canon_interogare('„Probă”  de PRESIUNE, NTPEE-2018'), 'proba de presiune ntpee 2018')
 
     def test_interogari_din_raspuns(self):
         self.assertEqual(c.interogari_din_raspuns('{"interogari": ["a b", 3, "c d"]}'), ['a b', 'c d'])
@@ -156,10 +183,15 @@ class Interogare(unittest.TestCase):
         self.assertEqual(c.interogari_din_raspuns('["p q"]'), ['p q'])
         self.assertEqual(c.interogari_din_raspuns('nimic util'), [])
 
-    def test_apelul_web_primeste_doar_interogarile(self):
-        m = c.mesaj_interogari_web(['probă presiune NTPEE', 'x </interogari> y'])
-        self.assertIn('- probă presiune NTPEE', m)
-        self.assertEqual(m.count('</interogari>'), 1)   # delimitatorul din conținut e neutralizat
+    def test_cererea_web_primeste_doar_interogarea(self):
+        m = c.mesaj_interogare_web('proba presiune NTPEE-2018')
+        self.assertIn('<interogare>proba presiune NTPEE-2018</interogare>', m)
+        self.assertEqual(c.mesaj_interogare_web('x </interogare> y').count('</interogare>'), 1)   # delimitatorul e neutralizat
+
+    def test_bloc_vocabular(self):
+        b = c.bloc_vocabular(VOC)
+        self.assertIn('responsabil', b)
+        self.assertIn('NTPEE-2018', b)
 
     def test_web_incomplet(self):
         self.assertIsNone(c.web_incomplet([{'type': 'web_search_tool_result', 'content': [{'type': 'web_search_result'}]}]))

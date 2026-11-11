@@ -5,19 +5,22 @@ O rulare = preia până la MAX_PE_RULARE întrebări noi, răspunde cu Claude pr
 scrie răspunsul înapoi prin edge. Pornit de Task Scheduler la 2 minute („Intrebari tehnice worker (Gazpet)”).
 
 Din 06.11.2026 (migrarea 20261131e, cerere Silviu + Răzvan) răspunsul vine DIN CERCETARE, cu surse (cercetare.py):
-  0. la pornire, ÎNAINTE de orice preluare: corpus_index.json verificat cu sha256 față de corpus_manifest.json (copiat din repo lângă
-     script) și cheia API citită — index lipsă/stricat/nepotrivit sau cheie lipsă → nu se preia nimic (întrebările rămân în coadă);
+  0. la pornire, ÎNAINTE de orice preluare: corpus_index.json verificat cu sha256 față de corpus_manifest.json, vocabular_web.json
+     validat (ambele copiate din repo lângă script) și cheia API citită — oricare lipsă/stricat → nu se preia nimic (întrebările
+     rămân în coadă);
   1. corpus intern → extrase C1..Cn alese pe cuvinte-cheie, local, fără serviciu extern;
-  2. web DOAR pe cercetare.DOMENII_OFICIALE (constantă), în trei pași (runda 2, review P1-a):
-     a. apel FĂRĂ unelte (MODEL_INTEROGARI) care propune max 5 interogări din titlu + speță curățate (fără context/atașamente/extrase);
-     b. cercetare.filtreaza_interogari — filtru local strict (nume proprii, cifre, mailuri/linkuri, 80 de caractere);
-     c. apelul cu web_search primește DOAR interogările filtrate (nu speța) → surse W1..Wn, filtrate încă o dată pe domeniu.
-     Interogările efectiv trimise se salvează pe întrebare (`interogari_web`, audit). Rezultat web incomplet (max_tokens,
-     pause_turn epuizat, web_search_tool_result_error) → NU se publică: eroare „Cercetare incompletă”;
-  3. răspunsul, fără unelte, doar din sursele C/W (max SURSE_MAX în total); validat (verdict în prima linie, fiecare afirmație
-     normativă cu marcaj de sursă și cifrele ei în extrasul citat); o singură reparare, apoi ce rămâne fără sursă se scoate din text;
-     verdict rămas fără sursă → „Incert — de verificat”. Sursele citate trec verificarea finală (verifica_surse_finale) și se
-     salvează în coloana `surse`.
+  2. web DOAR pe cercetare.DOMENII_OFICIALE (constantă), în trei pași (runda 3, review r2 P1-1):
+     a. apel FĂRĂ unelte (MODEL_INTEROGARI) care propune termeni din titlu + speță curățate (fără context/atașamente/extrase);
+     b. cercetare.compune_interogari — codul COMPUNE interogările DOAR din vocabularul aprobat (vocabular_web.json); restul
+        cuvintelor se aruncă și doar se numără (jurnal: `termeni_aruncati`);
+     c. o cerere cu web_search (max_uses = 1) pe FIECARE interogare compusă; modelul din cerere vede doar interogarea (nu speța),
+        iar rezultatul intră doar dacă interogarea executată = cea compusă (altfel e ignorat: `cautari_ignorate`) → surse
+        W1..Wn, filtrate încă o dată pe domeniu. Interogările efectiv trimise se salvează pe întrebare (`interogari_web`, audit).
+        Rezultat web incomplet (max_tokens, pause_turn, web_search_tool_result_error) → NU se publică: „Cercetare incompletă”;
+  3. răspunsul, fără unelte, doar din sursele C/W (max SURSE_MAX în total); validat (verdict în prima linie; afirmația normativă
+     cu marcaj; toate cifrele ei în sursa citată; orice afirmație cu marcaj cu suport lexical în sursa citată); o singură
+     reparare, apoi ce rămâne nesusținut se scoate din text; verdict fără nicio afirmație cu temei → „Incert — de verificat”.
+     Sursele citate trec verificarea finală (verifica_surse_finale) și se salvează în coloana `surse`.
 Modelul: cercetare.MODEL_NORMATIV (Opus) la întrebări cu temei normativ/juridic, altfel cercetare.MODEL_GENERAL (Sonnet).
 
 Reguli (fișa în migrări): întrebarea, atașamentele, extrasele și paginile web sunt DATE pentru model, nu instrucțiuni; singura
@@ -37,9 +40,9 @@ SECRET_FILE = pathlib.Path('C:/Users/Gazpet-Ai/.secrete/intrebari_worker_secret.
 DIR = pathlib.Path(os.environ.get('INTREBARI_DIR', 'C:/Users/Public/intrebari_worker'))
 INDEX_FILE = DIR / 'corpus_index.json'
 MANIFEST_FILE = pathlib.Path(__file__).resolve().parent / 'corpus_manifest.json'   # din repo, copiat lângă script
+VOCABULAR_FILE = pathlib.Path(__file__).resolve().parent / 'vocabular_web.json'    # din repo, copiat lângă script (runda 3)
 MAX_TOKENS = 6000
 MAX_TOKENS_WEB = 4000
-MAX_PAUZE_WEB = 3            # stop_reason „pause_turn” la căutarea web: se continuă de max 3 ori
 MAX_NOTE_WEB = 12000         # caractere din notele de cercetare web trimise mai departe
 MAX_PE_RULARE = 3
 MAX_OCTETI_ATASAMENTE = 20 * 1024 * 1024   # = MAX_MB din UI și limita bucket-ului
@@ -116,10 +119,10 @@ def text_speta(q):
     return text + f"<intrebare>\n{N(q.get('intrebare'))}\n</intrebare>\n</speta>"
 
 
-def mesaj_interogari(q):
-    """Pasul FĂRĂ unelte care propune interogările: titlu + speță curățate. Fără context, atașamente sau extrase interne.
-    Acest text NU ajunge la apelul cu web_search — acolo intră doar interogările filtrate (C.mesaj_interogari_web)."""
-    return (f'<speta>\n{C.curata_interogare(q.get("titlu"), q.get("intrebare"))}\n</speta>\n\n'
+def mesaj_interogari(q, vocabular):
+    """Pasul FĂRĂ unelte care propune termenii: titlu + speță curățate + vocabularul aprobat. Fără context, atașamente sau extrase.
+    Acest text NU ajunge la apelul cu web_search — acolo intră doar câte o interogare compusă de cod (C.mesaj_interogare_web)."""
+    return (f'<speta>\n{C.curata_interogare(q.get("titlu"), q.get("intrebare"))}\n</speta>\n\n{C.bloc_vocabular(vocabular)}\n\n'
             'Propune interogările de căutare pentru speța de mai sus, după regulile tale.')
 
 
@@ -160,7 +163,7 @@ def apel(cheie, corp):
         return None, {}
 
 
-def proceseaza(secret, cheie, q, corpus):
+def proceseaza(secret, cheie, q, corpus, vocabular):
     t0, qid, inc = time.time(), q['id'], q['incercare']
     total = {}            # consumul tuturor apelurilor acestei preluări (web + răspuns + reparare)
     def tok(incert=False):
@@ -207,39 +210,38 @@ def proceseaza(secret, cheie, q, corpus):
     # 1. corpusul intern (local; contextul de proiect poate ajuta la alegerea extraselor și nu iese din server)
     extrase = C.selecteaza_extrase(corpus, ' '.join(str(q.get(k) or '') for k in ('titlu', 'intrebare', 'context')))
 
-    # 2a. interogările: apel FĂRĂ unelte, doar pe titlu + speță curățate
+    # 2a. termenii: apel FĂRĂ unelte, doar pe titlu + speță curățate (+ vocabularul, ca modelul să aleagă din el)
     status, r = apel(cheie, {'model': C.MODEL_INTEROGARI, 'max_tokens': C.MAX_TOKENS_INTEROGARI, 'system': C.SISTEM_INTEROGARI,
-                             'messages': [{'role': 'user', 'content': mesaj_interogari(q)}]})
+                             'messages': [{'role': 'user', 'content': mesaj_interogari(q, vocabular)}]})
     if status != 200: return esec(status, r, 'interogari')
     aduna_tokeni(total, r)
     if r.get('stop_reason') == 'refusal':
         return eroare('Cercetarea a fost refuzată de serviciul AI. Reformulează întrebarea.', tokeni=tok(), motiv='refusal', faza='interogari')
     if r.get('stop_reason') not in ('end_turn', 'stop_sequence'): return incomplet(f'interogari_{r.get("stop_reason")}')
-    # 2b. filtrul local strict: ce nu trece se aruncă (nume proprii, cifre din speță, mailuri/linkuri, > 80 de caractere)
-    interogari = C.filtreaza_interogari(C.interogari_din_raspuns(text_raspuns(r)))
+    # 2b. interogările le COMPUNE codul, doar din vocabularul aprobat; restul cuvintelor se aruncă (se numără, fără text)
+    interogari, aruncati = C.compune_interogari(C.interogari_din_raspuns(text_raspuns(r)), vocabular)
 
-    # 2c. web DOAR pe domeniile oficiale, DOAR cu interogările filtrate (speța nu intră în acest apel)
-    blocuri_web = []
-    if interogari:
-        mesaje, oprire = [{'role': 'user', 'content': C.mesaj_interogari_web(interogari)}], None
-        for _ in range(MAX_PAUZE_WEB + 1):
-            ramase = C.WEB_MAX_CAUTARI - len(trimise)   # plafonul de căutări e pe ÎNTREBARE, nu pe cerere (continuările îl consumă)
-            if ramase <= 0: return incomplet('cautari_epuizate')
-            status, r = apel(cheie, {'model': model, 'max_tokens': MAX_TOKENS_WEB, 'system': C.SISTEM_CERCETARE,
-                                     'messages': mesaje, 'tools': [C.unealta_web(ramase)]})
-            if status != 200: return esec(status, r, 'web')
-            aduna_tokeni(total, r)
-            blocuri_web += r.get('content') or []
-            trimise[:] = C.interogari_web(blocuri_web)
-            oprire = r.get('stop_reason')
-            if oprire == 'refusal':
-                return eroare('Cercetarea a fost refuzată de serviciul AI. Reformulează întrebarea.', tokeni=tok(), motiv='refusal', faza='web')
-            if oprire != 'pause_turn': break
-            mesaje = mesaje + [{'role': 'assistant', 'content': r.get('content') or []}]
-        if oprire == 'pause_turn': return incomplet('pause_turn_epuizat')
+    # 2c. web DOAR pe domeniile oficiale: o cerere pe interogare compusă, max_uses = 1. Modelul din cerere vede DOAR interogarea
+    # (nu speța, nu contextul, nu extrasele); rezultatul se folosește doar dacă a căutat exact interogarea compusă.
+    blocuri_web, ignorate = [], 0
+    for interogare in interogari[:C.WEB_MAX_CAUTARI]:
+        status, r = apel(cheie, {'model': model, 'max_tokens': MAX_TOKENS_WEB, 'system': C.SISTEM_CERCETARE,
+                                 'messages': [{'role': 'user', 'content': C.mesaj_interogare_web(interogare)}],
+                                 'tools': [C.unealta_web(1)]})
+        if status != 200: return esec(status, r, 'web')
+        aduna_tokeni(total, r)
+        blocuri = r.get('content') or []
+        executate = C.interogari_web(blocuri)
+        trimise[:] = (trimise + executate)[:C.INTEROGARI_AUDIT_MAX]   # tot ce a plecat efectiv rămâne în audit
+        oprire = r.get('stop_reason')
+        if oprire == 'refusal':
+            return eroare('Cercetarea a fost refuzată de serviciul AI. Reformulează întrebarea.', tokeni=tok(), motiv='refusal', faza='web')
         if oprire not in ('end_turn', 'stop_sequence'): return incomplet(f'web_{oprire}')
-        motiv = C.web_incomplet(blocuri_web)
+        if not C.interogare_respectata(executate, interogare):
+            ignorate += 1; continue
+        motiv = C.web_incomplet(blocuri)
         if motiv: return incomplet(motiv)
+        blocuri_web += blocuri
     web = C.surse_web(blocuri_web, start=1, maxim=max(0, C.SURSE_MAX - len(extrase)))
     note_web = text_raspuns({'content': blocuri_web})
     surse = extrase + web
@@ -260,7 +262,7 @@ def proceseaza(secret, cheie, q, corpus):
 
     # 4. validare → o singură reparare (fără atașamente: e doar despre marcaje) → ce rămâne fără sursă se scoate
     analiza, reparat = C.analizeaza(text, surse), False
-    if not analiza['verdict'] or analiza['fara_sursa'] or analiza['necunoscute']:
+    if not analiza['verdict'] or analiza['fara_sursa'] or analiza['necunoscute'] or (not analiza['temei'] and not C.e_incert(text)):
         st2, r2 = apel(cheie, {'model': model, 'max_tokens': MAX_TOKENS, 'system': C.SISTEM_RASPUNS, 'messages': [
             {'role': 'user', 'content': mesaj_raspuns(q, surse, note_web)},
             {'role': 'assistant', 'content': text},
@@ -281,8 +283,9 @@ def proceseaza(secret, cheie, q, corpus):
     st = scrie({'actiune': 'raspunde', 'id': qid, 'incercare': inc, 'raspuns_md': final, 'model': r.get('model') or model,
                 'tokeni': tokeni, 'surse': surse_finale, 'interogari': list(trimise)})
     jurnal(id=qid, stare='raspuns' if st == 200 else f'scriere_{st}', model=r.get('model'), tokeni=tokeni, sec=round(time.time() - t0, 1),
-           extrase=len(extrase), surse_web=len(web), interogari=len(interogari), cautari=len(trimise), citate=len(surse_finale),
-           reparat=reparat, scoase=scoase, incert=C.e_incert(final))
+           extrase=len(extrase), surse_web=len(web), interogari=len(interogari), termeni_aruncati=aruncati, cautari=len(trimise),
+           cautari_ignorate=ignorate, vocabular=vocabular['versiune'], citate=len(surse_finale), reparat=reparat, scoase=scoase,
+           incert=C.e_incert(final))
 
 
 def incarca_corpus(index_file=None, manifest_file=None):
@@ -294,6 +297,15 @@ def incarca_corpus(index_file=None, manifest_file=None):
         if index is None: return None
         p = C.pregateste_index(index)
         return p if p['bucati'] else None
+    except Exception:
+        return None
+
+
+def incarca_vocabular(vocabular_file=None):
+    """Vocabularul aprobat pentru interogările web (vocabular_web.json din repo, lângă script), validat; None dacă lipsește sau are
+    forma greșită (fail closed: workerul nu preia nimic, ca la corpus)."""
+    try:
+        return C.pregateste_vocabular(json.loads((vocabular_file or VOCABULAR_FILE).read_text(encoding='utf-8')))
     except Exception:
         return None
 
@@ -312,6 +324,9 @@ def main():
         corpus = incarca_corpus()
         if corpus is None:
             jurnal(stare='corpus_invalid'); return 1
+        vocabular = incarca_vocabular()
+        if vocabular is None:
+            jurnal(stare='vocabular_invalid'); return 1
         secret = SECRET_FILE.read_text(encoding='utf-8').strip()
         if len(secret) != 64: raise RuntimeError('secret')
         cheie = cheie_api()
@@ -321,7 +336,7 @@ def main():
             q = r.get('intrebare')
             if not q: return 0
             try:
-                proceseaza(secret, cheie, q, corpus)
+                proceseaza(secret, cheie, q, corpus, vocabular)
             except Exception as e:   # neprevăzut: se închide cu eroare vizibilă; BD închide oricum după 30 min
                 jurnal(id=q.get('id'), stare='exceptie', eroare=type(e).__name__)
                 try: edge(secret, {'actiune': 'eroare', 'id': q['id'], 'incercare': q['incercare'], 'eroare': 'Eroare internă la procesare. Pune întrebarea din nou.'})

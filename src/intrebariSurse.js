@@ -2,11 +2,19 @@
 // Aceleași reguli ca worker/intrebari-tehnice/cercetare.py (validarea are cazurile comune în worker/intrebari-tehnice/teste_validare.json,
 // rulate și de vitest, și de unittest). Testat în intrebariSurse.test.js.
 
-// Lista fixă de domenii oficiale pentru căutarea web — identică în cercetare.py și în edge-ul intrebari-tehnice-worker (test „domenii identice”).
+// Lista fixă de domenii oficiale pentru căutarea web — identică în cercetare.py și în edge-ul intrebari-tehnice-worker (test „domenii identice”),
+// toate din lista aprobată în CLAUDE.md pct. 11 (runda 3: iscir.ro a ieșit — nu e în lista aprobată).
 export const DOMENII_OFICIALE = [
-  'legislatie.just.ro', 'monitoruloficial.ro', 'iscir.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
+  'legislatie.just.ro', 'monitoruloficial.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
   'transgaz.ro', 'anap.gov.ro', 'e-licitatie.ro', 'eur-lex.europa.eu', 'magazin.asro.ro',
 ]
+// Cuvintele de legătură (= STOP din cercetare.py) și cuvintele generice (= GENERICE) — testul de paritate le compară cu Python.
+export const STOP = new Set(`si sau de la in pe cu din pentru care este sunt ca ce un o unei unui al ai ale a se nu da mai sa fi fost are au prin catre
+dupa fara intre sub peste cum cand daca acest aceasta aceste acestui acesta cel cea cei cele lui lor ei el ea noi voi poate trebuie avem
+am ne va vor iar deci doar tot toate fie unde cine cat cate the of and or for to is are be pe`.split(/\s+/))
+export const GENERICE = new Set(`verdict depinde este sunt fie face fac facut facute aplica aplic aplicat aplicabil aplicabila cere cerut ceruta
+cer exista poate pot alt alta alte altul altei acel acea aceea astfel privind referitor caz cazul orice toti fiecare art articol
+articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele`.split(/\s+/))
 const FARA_SURSA = 'nu am gasit sursa oficiala'
 
 export const normalizeaza = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -24,8 +32,10 @@ const REGULI_NORMATIVE = [
   /\bnp\s*-?\s*\d{2,}/,
   /\d(?:[.,]\d+)?\s*(?:(?:mm|cm|m|km|bar|mbar|kpa|mpa|zile|ore|luni|ani|lei|euro|kg|grade)\b|%)/,
 ]
-// obligații / prescripții fără cifre (runda 2, P1-b) — aceeași listă ca REGULA_OBLIGATIE din cercetare.py
-const REGULA_OBLIGATIE = /\b(?:obliga\w*|trebuie|interzi\w*|impun\w*|impus\w*|prevede\w*|prevad\w*|prevazut\w*|conform|potrivit|temeiul|necesar\w*)\b/
+// obligații / prescripții fără cifre (runda 2, P1-b; runda 3: + admis/admite/permis/permite) — aceeași listă ca REGULA_OBLIGATIE din cercetare.py
+const OBLIGATIE = 'obliga\\w*|trebuie|interzi\\w*|impun\\w*|impus\\w*|prevede\\w*|prevad\\w*|prevazut\\w*|conform|potrivit|temeiul|necesar\\w*|admi[st]\\w*|permi[st]\\w*'
+const REGULA_OBLIGATIE = new RegExp(`\\b(?:${OBLIGATIE})\\b`)
+const CUVANT_OBLIGATIE = new RegExp(`^(?:${OBLIGATIE})$`)
 const MARCAJ = /\[\s*([cw]\d{1,2}(?:\s*[,;]\s*[cw]\d{1,2})*)\s*\]/g
 const VERDICT_CURATA = /^[\s#>*_`-]*(?:verdict\s*[:\-–—]?\s*)?[*_`]*\s*/i
 const PREFIX_LINIE = /^[\s>*_`#•·\-–—]*(?:\d{1,2}[.)]\s+)?[*_`\s]*/
@@ -72,14 +82,42 @@ function hartaSurse(surse) {
   return h
 }
 
-/** null = linia e în regulă; 'fara_marcaj' / 'neconfirmat' (marcaj valid, dar niciuna dintre cifrele ei nu e în sursa citată). */
-function problemaLinie(linie, harta) {
-  if (!linie.trim() || !eAfirmatieNormativa(linie) || eDeclaratieLipsa(linie)) return null
+/** Termenii-cheie ai unei afirmații (= termeni_cheie din cercetare.py): rădăcini de 6 litere, fără STOP / GENERICE / obligații. */
+export function termeniCheie(linie) {
+  const n = normalizeaza(linie).replace(PREFIX_LINIE, '').replace(MARCAJ, ' ')
+  const out = []
+  for (const w of n.match(/[a-z]+/g) || []) {
+    if (w.length < 3 || STOP.has(w) || GENERICE.has(w) || CUVANT_OBLIGATIE.test(w)) continue
+    if (!out.includes(w.slice(0, 6))) out.push(w.slice(0, 6))
+  }
+  return out
+}
+
+/** [potriviți, total] — câți termeni-cheie ai liniei apar în sursele citate (= suport_lexical din cercetare.py). */
+function suportLexical(linie, ids, harta) {
+  const k = termeniCheie(linie)
+  const cuvinte = new Set((normalizeaza(ids.map(i => harta.get(i)).join('\n')).match(/[a-z]+/g) || []).filter(w => w.length >= 3))
+  const radacini = new Set([...cuvinte].map(w => w.slice(0, 6)))
+  const pot = k.filter(x => radacini.has(x) || (x.length < 6 && [...cuvinte].some(w => w.startsWith(x)))).length
+  return [pot, k.length]
+}
+
+/** [problemă, temei] — aceleași reguli ca evalueaza_linie din cercetare.py (vezi docstring-ul de acolo). */
+function evalueazaLinie(linie, harta) {
+  if (!linie.trim() || eDeclaratieLipsa(linie)) return [null, false]
+  const normativ = eAfirmatieNormativa(linie)
   const ok = marcaje(linie).filter(i => harta.has(i))
-  if (!ok.length) return 'fara_marcaj'
+  if (!ok.length) return [normativ ? 'fara_marcaj' : null, false]
   const a = ancore(linie)
-  if (a.length && !a.some(x => ok.some(i => ancoraIn(x, harta.get(i))))) return 'neconfirmat'
-  return null
+  if (a.length && !a.every(x => ok.some(i => ancoraIn(x, harta.get(i))))) return ['neconfirmat', false]
+  const [pot, tot] = suportLexical(linie, ok, harta)
+  if (tot) {
+    const prag = normativ ? Math.floor(tot / 2) + 1 : Math.floor((tot + 1) / 2)
+    if (pot < prag) return ['nesustinut', false]
+    return [null, pot * 2 > tot || a.length > 0]
+  }
+  if (!a.length && REGULA_OBLIGATIE.test(normalizeaza(linie))) return ['nesustinut', false]
+  return [null, a.length > 0]
 }
 
 /** Prima linie nevidă, dacă e un verdict (Da / Nu / Depinde de X / Incert). Altfel null. */
@@ -95,18 +133,56 @@ export function verdict(text) {
   return null
 }
 
-/** { verdict, fara_sursa, neconfirmate, citate, necunoscute } — ca analizeaza() din cercetare.py; `surse` = obiecte sau ID-uri. */
+/** { verdict, fara_sursa, neconfirmate, nesustinute, citate, necunoscute, temei } — ca analizeaza() din cercetare.py; `surse` = obiecte sau ID-uri. */
 export function analizeaza(text, surse) {
   const harta = hartaSurse(surse)
-  const fara = [], neconf = [], citate = new Set(), necunoscute = new Set()
+  const fara = [], neconf = [], nesust = [], citate = new Set(), necunoscute = new Set()
+  let temei = false
   for (const linie of String(text ?? '').replace(/\r/g, '').split('\n')) {
     if (!linie.trim()) continue
     for (const i of marcaje(linie)) (harta.has(i) ? citate : necunoscute).add(i)
-    const p = problemaLinie(linie, harta)
+    const [p, t] = evalueazaLinie(linie, harta)
+    temei = temei || t
     if (p) fara.push(linie.trim())
     if (p === 'neconfirmat') neconf.push(linie.trim())
+    if (p === 'nesustinut') nesust.push(linie.trim())
   }
-  return { verdict: verdict(text), fara_sursa: fara, neconfirmate: neconf, citate: [...citate].sort(), necunoscute: [...necunoscute].sort() }
+  return { verdict: verdict(text), fara_sursa: fara, neconfirmate: neconf, nesustinute: nesust, citate: [...citate].sort(),
+    necunoscute: [...necunoscute].sort(), temei }
+}
+
+export const INCERT = 'Incert — de verificat'
+export const INCERT_FARA_TEMEI = `${INCERT}: nu am găsit o sursă care să susțină verdictul propus.`
+const NOTE = {
+  fara_marcaj: '> ⚠️ Afirmație scoasă: nu avea sursă găsită în cercetare.',
+  neconfirmat: '> ⚠️ Afirmație scoasă: cifrele sau articolul ei nu apar în sursa citată.',
+  nesustinut: '> ⚠️ Afirmație scoasă: sursa citată nu conține termenii ei (vorbește despre altceva).',
+}
+const MARCAJ_ORICE = /\[\s*([CcWw]\d{1,2}(?:\s*[,;]\s*[CcWw]\d{1,2})*)\s*\]/g
+
+/** [text, scoase] — ca curata_raspuns() din cercetare.py (paritate pe teste_validare.json). */
+export function curataRaspuns(text, surse) {
+  const harta = hartaSurse(surse)
+  const faraNecunoscute = linie => linie.replace(MARCAJ_ORICE, (_, g) => {
+    const p = g.split(/[,;]/).map(y => y.trim().toUpperCase()).filter(x => harta.has(x))
+    return p.length ? `[${p.join(', ')}]` : ''
+  })
+  const out = []
+  let scoase = 0, temei = false
+  for (const brut of String(text ?? '').replace(/\r/g, '').split('\n')) {
+    const linie = faraNecunoscute(brut)
+    const [p, t] = evalueazaLinie(linie, harta)
+    if (p) { scoase++; out.push(NOTE[p]) } else { out.push(linie); temei = temei || t }
+  }
+  let rez = out.join('\n').trim()
+  const v = verdict(rez)
+  if (!v) rez = `${INCERT}: din sursele găsite nu rezultă un verdict sigur.\n\n` + rez
+  else if (!normalizeaza(v).startsWith('incert') && !temei) {
+    const linii = rez.split('\n')
+    linii[linii.findIndex(l => l.trim())] = INCERT_FARA_TEMEI
+    rez = linii.join('\n')
+  }
+  return [rez, scoase]
 }
 
 /** http(s) pe un domeniu oficial (sau subdomeniu), fără user:parolă. */
