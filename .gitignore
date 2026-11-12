@@ -7,6 +7,9 @@ dist/
 test-fixtures/import-documente/spike/
 test-fixtures/import-documente/out/
 supabase/.temp/
+# fisiere de lucru locale (harness-uri, probe, jurnale): .tmp/ in radacina si *.tmp oriunde — nu intra in commit
+.tmp/
+*.tmp
 
 # config local Claude Code (per masina, fara secrete in repo)
 .mcp.json

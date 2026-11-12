@@ -26,13 +26,17 @@
 # (o poarta pe linie) si in iesire; NOTICE-ul PORTAL_NET_REL (obiectele pg_net acceptate prin amprenta) apare la timpi.
 # Cod de iesire: 0 PROBA OK (garda trecuta, ROLLBACK, amprenta identica) | 1 PROBA PICATA (refuz / timeout / garda;
 #   amprenta identica, nimic schimbat) | 2 argumente | 3 generare / verificare locala | 22 tinta neconfirmata (inainte de
-#   proba, nimic trimis) | 5 AMPRENTA DIFERITA dupa proba (se analizeaza manual; o alta sesiune poate fi schimbat schema
-#   intre timp) | 6 conexiunea de amprenta a esuat.
+#   proba, nimic trimis) | 23 (r22) API-ul expune net / raspuns necunoscut / API nelegat de tinta (inainte de orice
+#   conexiune la baza, nimic trimis) | 5 AMPRENTA DIFERITA dupa proba (se analizeaza manual; o alta sesiune poate fi
+#   schimbat schema intre timp) | 6 conexiunea de amprenta a esuat.
+# r22 (Jakarinos r21 P2): PRIMUL pas (dupa argumente) = scripts/portal/scheme_expuse.sh pe API-ul proiectului tintei
+#   (--api-url, legat de --user / --tinta-host; cheia publica in SUPABASE_ANON_KEY, niciodata tiparita): orice cod in afara
+#   de 0 = refuz 23. Nu exista optiune de a-l sari (doar --doar-genereaza, care nu se conecteaza nicaieri).
 #
 # Utilizare (Git Bash pe serverul de livrare; PSQL_BIN = psql-ul folosit la livrare):
-#   PSQL_BIN=<psql-ul folosit la livrare> bash scripts/portal/dry_prod_e1.sh \
+#   SUPABASE_ANON_KEY=<cheia publica> PSQL_BIN=<psql-ul folosit la livrare> bash scripts/portal/dry_prod_e1.sh \
 #     --tinta-host <endpointul de scriere aprobat> --tinta-port <portul lui> --tinta-db postgres \
-#     --tinta-sistem <system_identifier> --user <utilizatorul de livrare> \
+#     --tinta-sistem <system_identifier> --user <utilizatorul de livrare> --api-url https://<referinta>.supabase.co \
 #     [--versiune-18a AAAALLZZHHMMSS] [--versiune-19a AAAALLZZHHMMSS] [--doar-18a] [--jurnal <dosar_nou>] \
 #     [--diagnostic-porti] [--doar-genereaza <dosar_nou>]
 #   Versiunile implicite (20261118120000 / 20261119120000) trebuie sa fie LIBERE in istoric (1_pre refuza altfel).
@@ -65,7 +69,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLAFON_MS=2000
 M18="$ROOT/supabase/migrations/20261118a_portal_teren_identitate.sql"
 M19="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
-H="" P="" D="" SIS="" U="" V18=20261118120000 V19=20261119120000 DOAR18=0 JURNAL="" DIAG=0 GEN=""
+H="" P="" D="" SIS="" U="" V18=20261118120000 V19=20261119120000 DOAR18=0 JURNAL="" DIAG=0 GEN="" API_URL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --doar-18a) DOAR18=1; shift; continue ;;
@@ -75,6 +79,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --tinta-host) H="$2" ;; --tinta-port) P="$2" ;; --tinta-db) D="$2" ;; --tinta-sistem) SIS="$2" ;; --user) U="$2" ;;
     --versiune-18a) V18="$2" ;; --versiune-19a) V19="$2" ;; --jurnal) JURNAL="$2" ;; --doar-genereaza) GEN="$2" ;;
+    --api-url) API_URL="$2" ;;
     *) refuz 2 "optiune nepermisa: $1" ;;
   esac
   shift 2
@@ -95,6 +100,19 @@ unset PGHOST PGPORT
 [[ "$U" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--user obligatoriu"
 [[ "$V18" =~ ^[0-9]{14}$ && "$V19" =~ ^[0-9]{14}$ && "$V18" != "$V19" ]] || refuz 2 "versiuni invalide"
 [ -f "$M18" ] && [ -f "$M19" ] || refuz 3 "migrarile lipsesc din $ROOT/supabase/migrations"
+# r22 (Jakarinos r21 P2): verificarea „net nu e expusa prin API” e BLOCANTA, inainte de orice conexiune la baza: API-ul
+# proiectului tintei (--api-url, legat de --user / --tinta-host in scheme_expuse.sh) + cheia publica din mediu
+# (SUPABASE_ANON_KEY; nu se tipareste). Cod 1 (net expusa) / 2 (necunoscut) / 3 (API nelegat / parametri) = refuz 23.
+# Doar --doar-genereaza (fara nicio conexiune, nimic trimis) nu o cere.
+if [ -z "$GEN" ]; then
+  [ -n "$API_URL" ] || refuz 2 "--api-url obligatoriu (API-ul REST al proiectului tintei; cheia publica in SUPABASE_ANON_KEY)"
+  [ -n "${SUPABASE_ANON_KEY:-}" ] || refuz 2 "SUPABASE_ANON_KEY lipsa din mediu (cheia publica a proiectului tintei)"
+  API_RC=0; API_OUT="$(mktemp)"
+  SUPABASE_URL="$API_URL" bash "$ROOT/scripts/portal/scheme_expuse.sh" --tinta-host "$H" --user "$U" >"$API_OUT" 2>&1 || API_RC=$?
+  sed 's/^/API: /' "$API_OUT"; rm -f -- "$API_OUT"
+  [ "$API_RC" = 0 ] || refuz 23 "verificarea schemelor expuse prin API: cod $API_RC (1 = net expusa, 2 = necunoscut, 3 = API nelegat de tinta / parametri) — proba NU porneste"
+  echo "✓ API: net nu e expusa prin API-ul proiectului tintei"
+fi
 PSQL="${PSQL_BIN:-psql}"
 export PGCLIENTENCODING=UTF8
 W="$(mktemp -d)"; trap 'chmod -R u+w "$W" 2>/dev/null; rm -rf "$W"' EXIT

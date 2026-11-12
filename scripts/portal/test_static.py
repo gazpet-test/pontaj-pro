@@ -82,7 +82,7 @@ class StaticDelivery(unittest.TestCase):
             fp = amprente(folder)
             a, b = Path(folder) / "a.sql", Path(folder) / "b.sql"
             for path in (a, b):
-                result = run(GENERATOR, MIGRATION, path, "--amprente", fp, "--erp", OWNER)
+                result = run(GENERATOR, MIGRATION, path, "--amprente", fp, "--net-rel-necompletat", "--erp", OWNER)
                 self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(a.read_bytes(), b.read_bytes())
             sql = a.read_text(encoding="utf-8")
@@ -99,7 +99,7 @@ class StaticDelivery(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             # Fara --erp, lista ramane goala (testul negativ din harness).
             c = Path(folder) / "c.sql"
-            result = run(GENERATOR, MIGRATION, c, "--amprente", fp)
+            result = run(GENERATOR, MIGRATION, c, "--amprente", fp, "--net-rel-necompletat")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotRegex(c.read_text(encoding="utf-8").split("AS lista;", 1)[0].rsplit("SELECT ARRAY[", 1)[1], "[0-9a-f]{64}")
         self.assertEqual(MIGRATION.read_bytes(), before)
@@ -127,7 +127,7 @@ class StaticDelivery(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="portal_teren_", dir=scratch()) as folder:
             fp = amprente(folder)
             out = Path(folder) / "t.sql"
-            result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--erp", OWNER, "--teren", *fixture_ids)
+            result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--net-rel-necompletat", "--erp", OWNER, "--teren", *fixture_ids)
             self.assertEqual(result.returncode, 0, result.stderr)
             sql = out.read_text(encoding="utf-8")
             for value in fixture_ids:
@@ -137,7 +137,7 @@ class StaticDelivery(unittest.TestCase):
             self.assertEqual(run(VALIDATOR, out).returncode, 0)
             for bad in (fixture_ids[:2], fixture_ids + ["e1000000-0000-0000-0000-0000000000aa=1"], ["nu-e-uuid=1"] + fixture_ids[1:]):
                 out.unlink(missing_ok=True)
-                result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--teren", *bad)
+                result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--net-rel-necompletat", "--teren", *bad)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("HOLD", result.stderr)
                 self.assertFalse(out.exists())
@@ -233,17 +233,42 @@ class StaticDelivery(unittest.TestCase):
             source, target = Path(folder) / "source.sql", Path(folder) / "target.sql"
             for sql in ("SELECT 1;", MIGRATION.read_text(encoding="utf-8") * 2):
                 source.write_text(sql, encoding="utf-8")
-                result = run(GENERATOR, source, target, "--amprente", fp)
+                result = run(GENERATOR, source, target, "--amprente", fp, "--net-rel-necompletat")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("HOLD", result.stderr)
                 self.assertFalse(target.exists())
+
+    def test_r22_fixture_net_rel(self):
+        # r22: copia de harness primeste amprentele pg_net ale clusterului (--net-rel); artefactul ramane DE_COMPLETAT.
+        chei = ["net._http_response", "net.http_request_queue", "net.http_request_queue_id_seq"]
+        gol = '{' + ','.join(f'"{k}":"DE_COMPLETAT"' for k in chei) + '}'
+        before = MIGRATION.read_bytes()
+        self.assertEqual(before.replace(b"\r\n", b"\n").decode("utf-8").count(gol), 1)
+        with tempfile.TemporaryDirectory(prefix="portal_net_rel_", dir=scratch()) as folder:
+            fp = amprente(folder)
+            ok_json, rau_json = Path(folder) / "ok.json", Path(folder) / "rau.json"
+            ok_json.write_text(json.dumps(dict(zip(chei, ["a" * 32, "b" * 32, "c" * 32]))), encoding="utf-8")
+            rau_json.write_text(json.dumps(dict(zip(chei[:2], ["a" * 32, "b" * 32]))), encoding="utf-8")
+            out = Path(folder) / "n.sql"
+            result = run(GENERATOR, MIGRATION, out, "--amprente", fp, "--net-rel", ok_json, "--erp", OWNER)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            sql = out.read_text(encoding="utf-8")
+            self.assertNotIn("DE_COMPLETAT\"", sql.split("PORTAL_NET_REL_APROBAT", 1)[1].split("$netrel$;", 1)[0])
+            self.assertIn('"net.http_request_queue":"' + "b" * 32 + '"', sql)
+            self.assertEqual(run(VALIDATOR, out).returncode, 0)
+            for extra in (["--net-rel", rau_json], ["--net-rel", ok_json, "--net-rel-necompletat"], []):
+                out.unlink(missing_ok=True)
+                result = run(GENERATOR, MIGRATION, out, "--amprente", fp, *extra)
+                self.assertNotEqual(result.returncode, 0, extra)
+                self.assertFalse(out.exists())
+        self.assertEqual(MIGRATION.read_bytes(), before)
 
     def test_fixture_refuses_bad_fingerprints_or_uuid(self):
         with tempfile.TemporaryDirectory(prefix="portal_bad_fp_", dir=scratch()) as folder:
             target = Path(folder) / "target.sql"
             for fp, extra in ((amprente(folder, public=20), []), (amprente(folder, net=11), []),
                               (amprente(folder), ["--erp", "nu-e-uuid"])):
-                result = run(GENERATOR, MIGRATION, target, "--amprente", fp, *extra)
+                result = run(GENERATOR, MIGRATION, target, "--amprente", fp, "--net-rel-necompletat", *extra)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("HOLD", result.stderr)
                 self.assertFalse(target.exists())

@@ -7,8 +7,11 @@ Verifica:
   - O SINGURA definitie a amprentei (L19): textul dintre marcajele AMPRENTA_NET_REL din 18a (corpul lui
     public.fn_portal_net_rel_amprenta) = textul din sectiunea G a lui scripts/portal/porti_citire.sql (spatiile
     normalizate), fiecare marcaj exact o data; acelasi search_path (pg_catalog, pg_temp) in ambele.
-  - O SINGURA lista acceptata: marcajul PORTAL_NET_REL_APROBAT exact o data in tot repo-ul (18a), cu exact cele 3 chei
-    si md5-urile citite pe productie 12.11.2026 (expected scris aici din jurnalul citirii, sursa independenta de cod).
+  - O SINGURA lista acceptata: marcajul PORTAL_NET_REL_APROBAT exact o data in tot repo-ul (18a), cu exact cele 3 chei;
+    r22: valorile sunt toate DE_COMPLETAT (necitite inca pe productie; $public_pre$ refuza cu
+    PORTAL_NET_REL_LIST_NECOMPLETATA) sau toate md5 = PROD_R22 (scris de net_rel_completeaza.py din G-ul de productie);
+    nicio valoare r21 (amprenta veche) nu are voie sa ramana; amprenta contine triggerele, politicile, DEFAULT-urile,
+    regulile, constrangerile, indecsii si secventa (L15).
   - Poarta si preconditia folosesc ACELEASI doua predicate (fn_portal_teren_rel_drept, fn_portal_net_rel_acceptat);
     poarta nu mai are has_table_privilege / has_sequence_privilege proprii pe teren in bucla relatiilor.
   - Cei 4 helperi noi apar peste tot unde apar helperii existenti: verificarea „exista deja” din 18a, amprenta DDL din 18a
@@ -31,12 +34,17 @@ R19 = ROOT / "supabase/revenire/20261119a_portal_teren_provisioning_ROLLBACK.sql
 CIT = ROOT / "scripts/portal/porti_citire.sql"
 HARN = ROOT / "scripts/test_portal_e1.sh"
 
-# Productie, 12.11.2026, porti_citire.sql sectiunea G (jurnalul citirii read-only al coordonatorului).
-PROD = {
+# r22: amprenta s-a completat (triggere, politici, DEFAULT-uri ...) => valorile citite pe productie pe 12.11 (forma r21)
+# nu mai sunt valabile si nu au voie sa ramana in 18a. Lista din 18a e DE_COMPLETAT pana cand coordonatorul reruleaza
+# porti_citire.sql pe productie; scripts/portal/net_rel_completeaza.py scrie ACELEASI valori (din G) in 18a si in PROD_R22.
+CHEI = ["net._http_response", "net.http_request_queue", "net.http_request_queue_id_seq"]
+NECOMPLETAT = "DE_COMPLETAT"
+R21_VECHI = {
     "net._http_response": "af629f9c5992f34ede3bc889d2db669c",
     "net.http_request_queue": "e0e96a399d23c7eb05ca2216618e1b72",
     "net.http_request_queue_id_seq": "d7e907e6bf5f93c94b754f45839161d1",
 }
+PROD_R22 = {}  # NET_REL_PROD_R22 (productie, porti_citire.sql G, amprenta r22; gol = necitit inca)
 HELPERI = ["fn_portal_net_rel_aprobat", "fn_portal_net_rel_amprenta", "fn_portal_net_rel_acceptat", "fn_portal_teren_rel_drept"]
 SEMNATURI = ["public.fn_portal_net_rel_aprobat()", "public.fn_portal_net_rel_amprenta(oid)",
              "public.fn_portal_net_rel_acceptat(oid)", "public.fn_portal_teren_rel_drept(oid)"]
@@ -83,8 +91,9 @@ def lista_ddl(text):
     return sorted(re.findall(r"'([a-z_0-9]+)'", m.group(1)))
 
 
-def verifica(m18, cit, r18, m19, r19, harn):
-    """Lista motivelor de refuz (goala = acceptat)."""
+def verifica(m18, cit, r18, m19, r19, harn, prod=None):
+    """Lista motivelor de refuz (goala = acceptat). prod = valorile de productie asteptate (implicit PROD_R22)."""
+    prod = PROD_R22 if prod is None else prod
     mot = []
     try:
         if amprenta(m18) != amprenta(cit):
@@ -106,10 +115,28 @@ def verifica(m18, cit, r18, m19, r19, harn):
         mot.append(f"marcajul PORTAL_NET_REL_APROBAT apare de {n_marcaj} ori (cerut exact o data, in 18a)")
     try:
         lista, nr_chei = lista_aprobata(m18)
-        if lista != PROD or nr_chei != len(PROD):
-            mot.append(f"lista aprobata difera de productie: {lista}")
+        valori = [lista.get(k) for k in CHEI]
+        if sorted(lista) != CHEI or nr_chei != len(CHEI):
+            mot.append(f"lista aprobata: alte chei decat cele trei obiecte pg_net: {sorted(lista)}")
+        elif all(v == NECOMPLETAT for v in valori):
+            if prod:
+                mot.append("lista aprobata DE_COMPLETAT, dar testul are valorile de productie (PROD_R22): lipeste-le in 18a")
+        elif all(re.fullmatch(r"[0-9a-f]{32}", v or "") for v in valori):
+            if lista != prod:
+                mot.append(f"lista aprobata difera de productie (PROD_R22): {lista}")
+        else:
+            mot.append(f"lista aprobata completata pe jumatate: {lista}")
+        if any(v in R21_VECHI.values() for v in valori) or any(v in m18 for v in R21_VECHI.values()):
+            mot.append("valoare r21 (amprenta veche, fara triggere / politici / DEFAULT-uri) in 18a")
     except AssertionError as e:
         mot.append(str(e))
+    if "PORTAL_NET_REL_LIST_NECOMPLETATA" not in m18[m18.find("DO $public_pre$"):m18.find("END $public_pre$;")]:
+        mot.append("$public_pre$: refuzul listei necompletate lipseste")
+    corp_amp = amprenta(m18) if m18.count(INCEPUT) == 1 and m18.count(SFARSIT) == 1 else ""
+    for parte in ("pg_trigger", "pg_policy", "pg_attrdef", "pg_rewrite", "pg_constraint", "pg_index", "pg_sequence",
+                  "pg_get_triggerdef", "pg_get_functiondef", "tgenabled", "attidentity", "attgenerated", "deptype"):
+        if corp_amp and parte not in corp_amp:
+            mot.append(f"amprenta: lipseste {parte} (L15: triggere, politici, DEFAULT-uri, secventa)")
     # aceleasi predicate in poarta si in preconditie
     try:
         poarta = functie(m18, "fn_portal_porti_lipsa")
@@ -184,19 +211,61 @@ class NetRel(unittest.TestCase):
         self.assertEqual(verifica(*self.f), [])
 
     def test_amprenta_un_caracter(self):
-        self.refuz(1, "at.attnotnull, at.attacl::text) ORDER BY at.attnum)", "at.attnotnull) ORDER BY at.attnum)",
+        self.refuz(1, "at.attnotnull, at.attacl::text, at.attidentity::text", "at.attnotnull, at.attidentity::text",
+                   "amprenta din 18a difera")
+
+    def test_amprenta_fara_politici_doar_in_citire(self):
+        self.refuz(1, "FROM pg_policy po WHERE po.polrelid = c.oid),", "FROM pg_policy po WHERE false),",
                    "amprenta din 18a difera")
 
     def test_amprenta_marcaj_dublu(self):
         self.refuz(0, INCEPUT, INCEPUT + "\n" + INCEPUT, "exact o data")
 
-    def test_cheie_in_plus(self):
-        self.refuz(0, '"net.http_request_queue_id_seq":"d7e907e6bf5f93c94b754f45839161d1"',
-                   '"net.http_request_queue_id_seq":"d7e907e6bf5f93c94b754f45839161d1","net.altul":"00000000000000000000000000000000"',
-                   "lista aprobata difera")
+    LISTA = ('{"net._http_response":"DE_COMPLETAT","net.http_request_queue":"DE_COMPLETAT",'
+             '"net.http_request_queue_id_seq":"DE_COMPLETAT"}')
 
-    def test_md5_schimbat(self):
-        self.refuz(0, "af629f9c5992f34ede3bc889d2db669c", "af629f9c5992f34ede3bc889d2db669d", "lista aprobata difera")
+    def completata(self, valori):
+        return '{' + ','.join(f'"{k}":"{v}"' for k, v in zip(CHEI, valori)) + '}'
+
+    def test_cheie_in_plus(self):
+        self.refuz(0, self.LISTA, self.LISTA[:-1] + ',"net.altul":"DE_COMPLETAT"}', "alte chei")
+
+    def test_necompletat_cu_productie_in_test(self):
+        mot = verifica(*self.f, prod=dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32])))
+        self.assertTrue(any("lipeste-le in 18a" in m for m in mot), mot)
+
+    def test_completat_egal_productie_acceptat(self):
+        prod = dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32]))
+        f = list(self.f)
+        f[0] = f[0].replace(self.LISTA, self.completata(prod.values()))
+        self.assertEqual(verifica(*f, prod=prod), [])
+
+    def test_completat_diferit_de_productie(self):
+        prod = dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32]))
+        f = list(self.f)
+        f[0] = f[0].replace(self.LISTA, self.completata(["a" * 32, "b" * 32, "d" * 32]))
+        self.assertTrue(any("difera de productie" in m for m in verifica(*f, prod=prod)))
+
+    def test_completat_pe_jumatate(self):
+        self.refuz(0, self.LISTA, self.completata(["a" * 32, NECOMPLETAT, NECOMPLETAT]), "pe jumatate")
+
+    def test_valori_r21_refuzate(self):
+        self.refuz(0, self.LISTA, self.completata(R21_VECHI.values()), "valoare r21")
+
+    def test_fara_refuz_necompletat(self):
+        self.refuz(0, "RAISE EXCEPTION 'PORTAL_NET_REL_LIST_NECOMPLETATA", "RAISE EXCEPTION 'PORTAL_NET_REL_LIST_X",
+                   "refuzul listei necompletate")
+
+    def test_amprenta_fara_triggere(self):
+        # amprenta r21 (fara triggere / politici / DEFAULT-uri), in ambele fisiere: paritatea trece, completitudinea nu
+        f = list(self.f)
+        for i in (0, 1):
+            a = f[i].index(INCEPUT) + len(INCEPUT)
+            b = f[i].index(SFARSIT)
+            f[i] = f[i][:a] + "\n jsonb_build_array(c.relkind::text, c.relacl::text)::text\n  " + f[i][b:]
+        mot = verifica(*f)
+        self.assertTrue(any("lipseste pg_trigger" in m for m in mot) and any("lipseste pg_policy" in m for m in mot)
+                        and any("lipseste pg_attrdef" in m for m in mot), mot)
 
     def test_lista_a_doua_oara(self):
         self.refuz(0, "-- PORTAL_NET_REL_APROBAT:", "-- PORTAL_NET_REL_APROBAT PORTAL_NET_REL_APROBAT:", "apare de 2 ori")
@@ -222,6 +291,56 @@ class NetRel(unittest.TestCase):
         self.refuz(0, "LANGUAGE sql STABLE SET search_path TO 'pg_catalog','pg_temp' AS $fn$",
                    "LANGUAGE sql STABLE SET search_path TO 'public','net','pg_temp' AS $fn$", "search_path pg_catalog")
 
+
+class Completeaza(unittest.TestCase):
+    """scripts/portal/net_rel_completeaza.py: citirea G (fara scriere) si refuzurile."""
+
+    def setUp(self):
+        import hashlib
+        import importlib.util
+        import tempfile
+        spec = importlib.util.spec_from_file_location("nrc", ROOT / "scripts/portal/net_rel_completeaza.py")
+        self.nrc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.nrc)
+        self.dir = tempfile.mkdtemp()
+        self.md5 = lambda t: hashlib.md5(t.encode("utf-8")).hexdigest()
+
+    def g(self, randuri, crlf=False):
+        p = Path(self.dir) / f"g{len(list(Path(self.dir).iterdir()))}.out"
+        text = "\n".join(["A_scheme|net|supabase_admin|f"] + randuri) + "\n"
+        p.write_bytes(text.replace("\n", "\r\n" if crlf else "\n").encode("utf-8"))
+        return p
+
+    def rand(self, rel, text, md5=None):
+        return f"G_amprenta_net|{rel}|{md5 or self.md5(text)}|{text}"
+
+    def refuzat(self, cale, motiv):
+        with self.assertRaises(SystemExit) as e:
+            self.nrc.citeste_g(cale)
+        self.assertEqual(e.exception.code, 1)
+
+    def test_trei_obiecte_crlf_cu_bara_in_text(self):
+        r = [self.rand(k, '["r", "a||b", "' + k + '"]') for k in CHEI]
+        self.assertEqual(sorted(self.nrc.citeste_g(self.g(r, crlf=True))), CHEI)
+
+    def test_al_patrulea_obiect(self):
+        r = [self.rand(k, k) for k in CHEI] + [self.rand("net.portal_mutant", "x")]
+        self.refuzat(self.g(r), "exact")
+
+    def test_obiect_lipsa(self):
+        self.refuzat(self.g([self.rand(k, k) for k in CHEI[:2]]), "exact")
+
+    def test_md5_nu_corespunde_textului(self):
+        r = [self.rand(k, k) for k in CHEI]
+        r[1] = self.rand(CHEI[1], "trunchiat", md5=self.md5("altceva"))
+        self.refuzat(self.g(r), "corespunde")
+
+    def test_lista_din_18a_e_cea_cautata(self):
+        self.assertEqual(citeste(M18).count(self.nrc.LISTA_GOALA), 1)
+        self.assertEqual(len(self.nrc.MARCAJ_TEST.findall(TEST_SURSA.read_bytes())), 1)
+
+
+TEST_SURSA = Path(__file__).resolve()
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

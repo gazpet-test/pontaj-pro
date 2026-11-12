@@ -145,12 +145,25 @@ q "SELECT jsonb_build_object(
     WHERE n.nspname='public' AND p.proname ~ '^portal_fixture_public_[0-9]{2}\$'),
   'net',(SELECT jsonb_object_agg('net.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')',md5(pg_get_functiondef(p.oid)))
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='net'))" >"$AMPRENTE"
+# r22: amprentele obiectelor pg_net ale fixture-ului = sectiunea G din porti_citire.sql rulata pe clusterul efemer INAINTE
+# de apply, citita cu ACELASI script ca pe productie (net_rel_completeaza.py, aici --json, fara scriere in repo); intra in
+# copie ca literalii listei din 18a (artefactul ramane DE_COMPLETAT). Harness-ul nu are pg_cron: cron.job minimal (I).
+NET_REL="$TMP/net_rel.json"
+q "CREATE SCHEMA cron; CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, command text NOT NULL,
+   username text NOT NULL DEFAULT current_user, active boolean NOT NULL DEFAULT true, jobname text)" >/dev/null
+"${PSQL[@]}" -At -F '|' -f "$ROOT/scripts/portal/porti_citire.sql" >"$TMP/porti_citire_inainte.out" 2>&1 \
+  || { cat "$TMP/porti_citire_inainte.out"; fail 'porti_citire.sql inainte de apply'; }
+q "DROP TABLE cron.job; DROP SCHEMA cron" >/dev/null
+python3 "$ROOT/scripts/portal/net_rel_completeaza.py" "$TMP/porti_citire_inainte.out" --json "$NET_REL" \
+  || fail 'G din porti_citire.sql: nu are exact cele trei obiecte pg_net'
+G_FIXTURE="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(k+"|"+d[k] for k in sorted(d)))' "$NET_REL")"
+echo "NET_REL fixture (G inainte de apply): $G_FIXTURE"
 # r9: conturile teren ale fixture-ului (sintetice) -> hash-uri in copie; artefactul de productie are hash-urile reale.
 TEREN_FIXTURE=(e1000000-0000-0000-0000-000000000055=55 e1000000-0000-0000-0000-000000000070=70 e1000000-0000-0000-0000-0000000000ff=)
 fixture() { # $1 = varianta (director nou in TMP), restul = argumentele --erp
   mkdir "$TMP/$1"
   python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/$1/20261118a_portal_teren_identitate.sql" \
-    --amprente "$AMPRENTE" --teren "${TEREN_FIXTURE[@]}" "${@:2}" >/dev/null
+    --amprente "$AMPRENTE" --net-rel "$NET_REL" --teren "${TEREN_FIXTURE[@]}" "${@:2}" >/dev/null
 }
 source "$ROOT/scripts/portal/concurrency_lock.sh"
 # r12: ce face PG17 cu transaction_timeout schimbat in mijlocul tranzactiei (timpi reali; prag doar pe cazul folosit).
@@ -176,8 +189,15 @@ hold_18a "$TMP/v_erp_teren/20261118a_portal_teren_identitate.sql" PORTAL_ERP_APP
 # r9: hash-urile conturilor teren de productie nu se potrivesc cu fixture-ul = refuz atomic (inventarul teren e verificat).
 mkdir "$TMP/v_teren_prod"
 python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/v_teren_prod/20261118a_portal_teren_identitate.sql" \
-  --amprente "$AMPRENTE" --erp 00000000-0000-0000-0000-000000000001 >/dev/null
+  --amprente "$AMPRENTE" --net-rel "$NET_REL" --erp 00000000-0000-0000-0000-000000000001 >/dev/null
 hold_18a "$TMP/v_teren_prod/20261118a_portal_teren_identitate.sql" PORTAL_TERRAIN_INVENTORY_CHANGED teren_prod
+# r22: lista pg_net DE_COMPLETAT (ca artefactul pana la recitirea G pe productie), restul fixture-ului corect = refuz
+# atomic cu motivul exact.
+mkdir "$TMP/v_net_rel_gol"
+python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/v_net_rel_gol/20261118a_portal_teren_identitate.sql" \
+  --amprente "$AMPRENTE" --net-rel-necompletat --teren "${TEREN_FIXTURE[@]}" --erp 00000000-0000-0000-0000-000000000001 >/dev/null
+hold_18a "$TMP/v_net_rel_gol/20261118a_portal_teren_identitate.sql" PORTAL_NET_REL_LIST_NECOMPLETATA net_rel_gol
+echo 'NET_REL 18a: lista DE_COMPLETAT => refuz atomic PORTAL_NET_REL_LIST_NECOMPLETATA'
 fixture v_ok --erp 00000000-0000-0000-0000-000000000001
 MIG="$TMP/v_ok/20261118a_portal_teren_identitate.sql"
 # r12: runnerul fara --plafon-tranzactie-ms (ca unul vechi) => 18a refuza in $pre$, atomic, nimic ramas.
@@ -213,7 +233,14 @@ hold_18a "$MIG" 'PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: net.http_request_queue' n
 "${ADMIN[@]}" -d "$DB" -c 'CREATE TABLE net.portal_mutant (id integer); GRANT SELECT ON net.portal_mutant TO PUBLIC' >/dev/null
 hold_18a "$MIG" 'PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: net.portal_mutant' net_rel_obiect_nou
 "${ADMIN[@]}" -d "$DB" -c 'DROP TABLE net.portal_mutant' >/dev/null
-echo 'NET_REL 18a: drept in plus pe coada / obiect nou in net inainte de apply => refuz atomic care le numeste'
+# r22 (Jakarinos r21 P1): un trigger nou pe coada (fara drept nou, fara coloana noua) inainte de apply = refuz atomic.
+# Functia lui sta intr-o schema fara USAGE pentru PUBLIC (teren nu o vede), ca refuzul sa vina DOAR din amprenta.
+"${ADMIN[@]}" -d "$DB" -c 'CREATE SCHEMA portal_mut' \
+  -c 'CREATE FUNCTION portal_mut.tg() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$' \
+  -c 'CREATE TRIGGER portal_mut_t BEFORE INSERT ON net.http_request_queue FOR EACH ROW EXECUTE FUNCTION portal_mut.tg()' >/dev/null
+hold_18a "$MIG" 'PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: net.http_request_queue' net_rel_trigger
+"${ADMIN[@]}" -d "$DB" -c 'DROP TRIGGER portal_mut_t ON net.http_request_queue' -c 'DROP SCHEMA portal_mut CASCADE' >/dev/null
+echo 'NET_REL 18a: drept in plus pe coada / obiect nou in net / trigger nou pe coada inainte de apply => refuz atomic care le numeste'
 # r10 (Jakarinos r9 P2): tot ce precede $locks$ ruleaza fara niciun lock pe tabelele utilizatorilor (pg_locks, bariera).
 TAB_UTIL='auth.users public.employees public.profiles public.user_module_access'
 TAB_18A='public.conturi_tip public.conturi_teren public.conturi_tip_jurnal public.portal_public_baseline'
@@ -243,12 +270,57 @@ lock_cap_toate 18a "$MIG" "$STARE_18A_NEAPLICAT" "$MARCAJ_18A"
 DIAG_ROOT="$TMP/diag_root"; mkdir -p "$DIAG_ROOT/supabase/migrations"
 cp -r "$ROOT/scripts" "$DIAG_ROOT/"
 cp -- "$MIG" "$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql" "$DIAG_ROOT/supabase/migrations/"
-dry_e1() { # $1 eticheta (jurnal $TMP/dry_<eticheta>), restul = optiunile; tipareste codul
+# r22 (Jakarinos r21 P2): verificarea schemelor expuse prin API e BLOCANTA in dry_prod_e1.sh si in livrare_e1.sh. Clusterul
+# efemer n-are API => API-uri REST FALSE doar pe 127.0.0.1 (scripts/portal/api_sonda_stub.py): verde (public,
+# graphql_public), rosu (public, net) si raspuns nerecunoscut. Se opresc la finalul blocului (si la orice iesire).
+API_PIDS=()
+api_stub() { # $1 = variabila care primeste URL-ul, restul = argumentele stub-ului
+  local pf="$TMP/api_$1.port" i
+  python3 "$ROOT/scripts/portal/api_sonda_stub.py" --port-fisier "$pf" --durata 1800 "${@:2}" >"$TMP/api_$1.log" 2>&1 &
+  API_PIDS+=("$!")
+  for i in $(seq 1 100); do [[ -s "$pf" ]] && break; sleep 0.1; done
+  [[ -s "$pf" ]] || { cat "$TMP/api_$1.log"; fail "stub API $1 nu a pornit"; }
+  printf -v "$1" 'http://127.0.0.1:%s' "$(cat "$pf")"
+}
+api_stub API_OK --scheme 'public, graphql_public'
+api_stub API_NET --scheme 'public, net'
+api_stub API_ALT --brut '{"code":"PGRST301","details":null,"hint":null,"message":"JWT expired"}'
+export SUPABASE_ANON_KEY=cheie_publica_de_test_harness
+dry_e1() { # $1 eticheta (jurnal $TMP/dry_<eticheta>), restul = optiunile; tipareste codul. API: $DRY_API (implicit verde)
   local rc=0
   PSQL_BIN="$PG_BIN/psql" bash "$DIAG_ROOT/scripts/portal/dry_prod_e1.sh" --tinta-host 127.0.0.1 --tinta-port "$PORT" \
-    --tinta-db "$DB" --tinta-sistem "$SIS" --user postgres --jurnal "$TMP/dry_$1" "${@:2}" >"$TMP/dry_$1.log" 2>&1 || rc=$?
+    --tinta-db "$DB" --tinta-sistem "$SIS" --user postgres --api-url "${DRY_API:-$API_OK}" --jurnal "$TMP/dry_$1" "${@:2}" \
+    >"$TMP/dry_$1.log" 2>&1 || rc=$?
   echo "$rc"
 }
+for caz in "API_NET:1" "API_ALT:2"; do
+  v="${caz%%:*}"; cod="${caz##*:}"
+  rc="$(DRY_API="${!v}" dry_e1 "api_${v}" --doar-18a)"
+  [[ "$rc" == 23 ]] && grep -q "cod $cod" "$TMP/dry_api_${v}.log" && [[ ! -e "$TMP/dry_api_${v}" ]] \
+    || { cat "$TMP/dry_api_${v}.log"; fail "dry_prod cu $v: asteptat refuz 23 (cod API $cod) inainte de orice conexiune, primit $rc"; }
+  ! grep -q cheie_publica_de_test_harness "$TMP/dry_api_${v}.log" || fail "dry_prod cu $v: cheia publica apare in iesire"
+done
+rc=0; PSQL_BIN="$PG_BIN/psql" bash "$DIAG_ROOT/scripts/portal/dry_prod_e1.sh" --tinta-host 127.0.0.1 --tinta-port "$PORT" \
+  --tinta-db "$DB" --tinta-sistem "$SIS" --user postgres --doar-18a --jurnal "$TMP/dry_fara_api" >"$TMP/dry_fara_api.log" 2>&1 || rc=$?
+[[ "$rc" == 2 && ! -e "$TMP/dry_fara_api" ]] || { cat "$TMP/dry_fara_api.log"; fail "dry_prod fara --api-url: asteptat refuz 2, primit $rc"; }
+# livrare_e1.sh: API rosu => runnerul nu porneste (nimic aplicat); API verde => runnerul primeste exact argumentele
+# (aici --genereaza-in: cod 40, fara conexiune); alta migrare decat 18a / 19a => refuz 2.
+SHA_MIG="$(sha256sum "$MIG" | cut -d' ' -f1)"
+ARG_LIV=(--migrare "$MIG" --sha256 "$SHA_MIG" --versiune 20261118120000 --tinta-db "$DB" --tinta-sistem "$SIS"
+  --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres --plafon-tranzactie-ms 2000)
+rc=0; PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/portal/livrare_e1.sh" --api-url "$API_NET" -- "${ARG_LIV[@]}" \
+  >"$TMP/livrare_e1_net.log" 2>&1 || rc=$?
+[[ "$rc" == 23 && "$(q "$STARE_18A_NEAPLICAT")" == t ]] \
+  && ! grep -q 'pornesc runnerul' "$TMP/livrare_e1_net.log" \
+  || { cat "$TMP/livrare_e1_net.log"; fail "livrare_e1 cu net expusa: asteptat 23 si nimic aplicat, primit $rc"; }
+rc=0; PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/portal/livrare_e1.sh" --api-url "$API_OK" -- "${ARG_LIV[@]}" \
+  --genereaza-in "$TMP/livrare_e1_gen" >"$TMP/livrare_e1_ok.log" 2>&1 || rc=$?
+[[ "$rc" == 40 && -d "$TMP/livrare_e1_gen" ]] && grep -q 'pornesc runnerul oficial' "$TMP/livrare_e1_ok.log" \
+  || { cat "$TMP/livrare_e1_ok.log"; fail "livrare_e1 cu API verde + --genereaza-in: asteptat 40 (runnerul), primit $rc"; }
+rc=0; bash "$ROOT/scripts/portal/livrare_e1.sh" --api-url "$API_OK" -- --migrare "$ROOT/supabase/migrations/20261216a_x.sql" \
+  --tinta-host 127.0.0.1 --user postgres >"$TMP/livrare_e1_alta.log" 2>&1 || rc=$?
+[[ "$rc" == 2 ]] || { cat "$TMP/livrare_e1_alta.log"; fail "livrare_e1 cu alta migrare: asteptat 2, primit $rc"; }
+echo "API_SCHEME r22: dry_prod refuza 23 cu net expusa / raspuns necunoscut si 2 fara --api-url (nicio conexiune); livrare_e1: 23 cu net expusa (nimic aplicat), runnerul (40) cu API verde, 2 pe alta migrare"
 STARE_DIAG="SELECT ($STARE_18A_NEAPLICAT) AND NOT EXISTS (SELECT FROM supabase_migrations.schema_migrations WHERE name LIKE '20261118a%')"
 q "CREATE TABLE public.diag_poarta_fixture(id integer); GRANT SELECT ON public.diag_poarta_fixture TO PUBLIC;
    CREATE SEQUENCE public.diag_poarta_fixture_seq; GRANT USAGE ON SEQUENCE public.diag_poarta_fixture_seq TO PUBLIC" >/dev/null
@@ -286,10 +358,16 @@ sect() { grep -E "^$1\|" "$TMP/porti_citire.out" | cut -d'|' -f"$2" | paste -sd,
 [[ "$(sect A_scheme 2)" == information_schema,net,public && "$(sect B_relatii 3)" == _http_response,http_request_queue,diag_poarta_fixture \
    && "$(sect C_secvente 3)" == http_request_queue_id_seq,diag_poarta_fixture_seq && -z "$(sect D_functii 3)" ]] \
   || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql: A / B / C / D diferite de diagnosticul portii'; }
-[[ "$(grep -E '^G_amprenta_net\|' "$TMP/porti_citire.out" | cut -d'|' -f2,3 | paste -sd, -)" == \
-   'net._http_response|af629f9c5992f34ede3bc889d2db669c,net.http_request_queue|e0e96a399d23c7eb05ca2216618e1b72,net.http_request_queue_id_seq|d7e907e6bf5f93c94b754f45839161d1' ]] \
-  || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql G: fixture-ul pg_net nu are amprentele productiei'; }
+# r22: G = aceleasi amprente ca inainte de apply (cele lipite in copia 18a); amprenta nu depinde de OID-uri / ordinea rularii.
+[[ "$(grep -E '^G_amprenta_net\|' "$TMP/porti_citire.out" | cut -d'|' -f2,3 | paste -sd, -)" == "$G_FIXTURE" ]] \
+  || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql G: amprentele pg_net s-au schimbat fata de citirea dinainte de apply'; }
 [[ "$(grep -cE '^M_teren_executa\|' "$TMP/porti_citire.out")" == 33 ]] || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql M: asteptat 21 + 12 functii'; }
+# r22: N (auditul tranzitiv) pe fixture: 21 + 12 functii sintetice („SELECT 1”) + coada / raspunsurile (scriere prin PUBLIC)
+# => 0 cai spre net, 0 nerezolvate, 0 nume necunoscute; radacinile numarate exact.
+rez_n() { grep -E "^N_audit_rezumat\|$1\|" "$TMP/porti_citire.out" | cut -d'|' -f6; }
+[[ "$(rez_n radacini_functii_in_afara_net) $(rez_n radacini_functii_net) $(rez_n radacini_relatii_scriere) $(rez_n cai_spre_net) $(rez_n nerezolvate) $(rez_n nume_necunoscute)" == '21 12 2 0 0 0' ]] \
+  || { grep -E '^N_audit' "$TMP/porti_citire.out"; fail 'porti_citire.sql N: asteptat 21 / 12 / 2 radacini, 0 cai, 0 nerezolvate, 0 necunoscute'; }
+[[ "$(grep -cE '^N_audit_(cale|nerezolvat|necunoscut)\|' "$TMP/porti_citire.out")" == 0 ]] || { grep -E '^N_audit' "$TMP/porti_citire.out"; fail 'porti_citire.sql N: randuri de cale / nerezolvat'; }
 [[ "$(q "$STARE_DIAG")" == t ]] || fail 'porti_citire.sql: a ramas ceva'
 echo "PORTI_CITIRE: B=$(sect B_relatii 3) C=$(sect C_secvente 3) D=0 (= diagnosticul), ROLLBACK"
 q "DROP TABLE public.diag_poarta_fixture; DROP SEQUENCE public.diag_poarta_fixture_seq" >/dev/null
@@ -300,6 +378,8 @@ rc="$(dry_e1 diag_curat --diagnostic-porti)"
   || { cat "$TMP/dry_diag_curat.log"; fail "diagnostic pe fixture curat: cod $rc, asteptat 0 cu 0 porti"; }
 [[ "$(q "$STARE_DIAG")" == t ]] || fail 'dry_prod: a ramas ceva din 18a sau din istoric'
 echo "DIAG_PORTI 18a: poarta stricata => proba PORTAL_POSTCONDITION_FAILED, diagnosticul: $(paste -sd' ' "$TMP/dry_diag_stricata/porti_lipsa.txt"); curat => PROBA OK + 0 porti; ROLLBACK, amprenta identica"
+grep -q '✓ API: net nu e expusa' "$TMP/dry_proba_curata.log" || { cat "$TMP/dry_proba_curata.log"; fail 'dry_prod: verificarea API nu apare in proba curata'; }
+kill "${API_PIDS[@]}" 2>/dev/null || true; for p in "${API_PIDS[@]}"; do wait "$p" 2>/dev/null || true; done
 # r10: aplicarea reala prin runner cu trafic concurent (citiri / scrieri profiles si employees, login simulat pe auth.users)
 # si observatorul pg_locks: fereastra de lock (primul lock -> COMMIT) si blocarea maxima a utilizatorilor, cu praguri.
 masurat 18a "$TMP/apply.log" runner 20261118120000 "$MIG"
@@ -329,6 +409,22 @@ adm 'ALTER TABLE net._http_response OWNER TO postgres'; poarta_are 'relatie:_htt
 adm 'ALTER TABLE net._http_response OWNER TO supabase_admin'; poarta_verde 'proprietar refacut'
 adm 'CREATE TABLE net.portal_mutant (id integer); GRANT SELECT ON net.portal_mutant TO PUBLIC'; poarta_are 'relatie:portal_mutant' 'al patrulea obiect in net'
 adm 'DROP TABLE net.portal_mutant'; poarta_verde 'obiect sters'
+# r22 (Jakarinos r21 P1): schimbari de COMPORTAMENT fara drept / coloana noua => poarta rosie; refacute => verde.
+adm 'CREATE SCHEMA portal_mut'
+adm 'CREATE FUNCTION portal_mut.tg() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$'
+adm 'CREATE TRIGGER portal_mut_t BEFORE INSERT ON net.http_request_queue FOR EACH ROW EXECUTE FUNCTION portal_mut.tg()'
+poarta_are 'relatie:http_request_queue' 'trigger nou pe coada'
+adm 'DROP TRIGGER portal_mut_t ON net.http_request_queue'; poarta_verde 'trigger sters'
+adm 'CREATE POLICY portal_mut_p ON net.http_request_queue FOR SELECT USING (true)'
+poarta_are 'relatie:http_request_queue' 'politica noua pe coada (RLS neschimbat)'
+adm 'DROP POLICY portal_mut_p ON net.http_request_queue'; poarta_verde 'politica stearsa'
+adm "ALTER TABLE net._http_response ALTER COLUMN created SET DEFAULT '2000-01-01'::timestamptz"
+poarta_are 'relatie:_http_response' 'DEFAULT schimbat pe _http_response.created'
+adm 'ALTER TABLE net._http_response ALTER COLUMN created SET DEFAULT now()'; poarta_verde 'DEFAULT refacut'
+adm 'ALTER SEQUENCE net.http_request_queue_id_seq OWNED BY NONE'
+poarta_are 'secventa:http_request_queue_id_seq' 'secventa fara coloana-proprietar'
+adm 'ALTER SEQUENCE net.http_request_queue_id_seq OWNED BY net.http_request_queue.id'; poarta_verde 'OWNED BY refacut'
+adm 'DROP SCHEMA portal_mut CASCADE'
 adm "ALTER ROLE authenticator SET pgrst.db_schemas = 'public, net'"; poarta_are 'teren PostgREST expune net' 'net in schemele PostgREST'
 adm 'ALTER ROLE authenticator RESET pgrst.db_schemas'; poarta_verde 'setarea PostgREST stearsa'
 adm 'REVOKE ALL ON net.http_request_queue, net._http_response FROM PUBLIC; REVOKE ALL ON SEQUENCE net.http_request_queue_id_seq FROM PUBLIC'
@@ -343,7 +439,7 @@ TEREN_SQL="$("${PSQL[@]}" -At -c 'BEGIN' -c 'SET LOCAL ROLE teren' \
 [[ "$(printf '%s\n' "$TEREN_SQL" | grep -E '^(coada|raspunsuri):' | paste -sd' ' -)" == 'coada:da raspunsuri:0' ]] \
   || { printf '%s\n' "$TEREN_SQL"; fail 'teren la nivel SQL: asteptat coada:da raspunsuri:0 (drepturile PUBLIC din productie)'; }
 [[ "$(q 'SELECT count(*) FROM net.http_request_queue')" == 0 ]] || fail 'teren la nivel SQL: a ramas un rand in coada'
-echo 'NET_REL 18a: 6 abateri pg_net / PostgREST => poarta rosie cu numele lor, refacute => verde; PUBLIC retras => verde; teren la nivel SQL: coada + raspunsuri (fara cale de SQL in net)'
+echo 'NET_REL 18a: 10 abateri pg_net / PostgREST (r22: trigger, politica, DEFAULT, secventa) => poarta rosie cu numele lor, refacute => verde; PUBLIC retras => verde; teren la nivel SQL: coada + raspunsuri (fara cale de SQL in net)'
 MIG_1B_SRC="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
 REV_1B="$ROOT/supabase/revenire/20261119a_portal_teren_provisioning_ROLLBACK.sql"
 baseline "$TMP/before_1b.sql"

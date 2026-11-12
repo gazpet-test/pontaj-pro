@@ -8,7 +8,11 @@
 - r9: lista conturilor teren existente (PORTAL_TEREN_APROBAT) -> sha256 pe UUID-urile sintetice din --teren UUID=EMP
   (EMP gol = fara fisa); fara --teren raman hash-urile productiei (testul negativ: inventar teren schimbat).
 
-Utilizare: prepare_fixture.py <sursa.sql> <destinatie.sql> --amprente <fisier.json> [--erp UUID ...] [--teren UUID=EMP ...]
+- r22: lista obiectelor pg_net (DE_COMPLETAT in 18a) -> amprentele din --net-rel (JSON, porti_citire.sql G pe clusterul
+  efemer, citit prin net_rel_completeaza.py --json); --net-rel-necompletat o lasa DE_COMPLETAT (testul negativ).
+
+Utilizare: prepare_fixture.py <sursa.sql> <destinatie.sql> --amprente <fisier.json> (--net-rel <fisier.json> |
+           --net-rel-necompletat) [--erp UUID ...] [--teren UUID=EMP ...]
 """
 from pathlib import Path
 import argparse
@@ -46,6 +50,12 @@ parser.add_argument("destination", type=Path)
 parser.add_argument("--amprente", type=Path, required=True)
 parser.add_argument("--erp", nargs="*", default=[])
 parser.add_argument("--teren", nargs="*", default=None)
+# r22: lista obiectelor pg_net (fn_portal_net_rel_aprobat) e DE_COMPLETAT in 18a; copia de fixture primeste amprentele
+# citite de harness din clusterul efemer (porti_citire.sql G, prin net_rel_completeaza.py --json), ca pe productie.
+# --net-rel-necompletat lasa lista DE_COMPLETAT (testul negativ: PORTAL_NET_REL_LIST_NECOMPLETATA).
+grup_net_rel = parser.add_mutually_exclusive_group(required=True)
+grup_net_rel.add_argument("--net-rel", type=Path)
+grup_net_rel.add_argument("--net-rel-necompletat", action="store_true")
 args = parser.parse_args()
 TEREN = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})=([0-9]{1,9})?$")
 teren = []
@@ -99,6 +109,17 @@ if teren:
     rows = ",\n".join(" ('" + h + "'," + (emp if emp else "NULL::integer") + ")" for h, emp in teren)
     text = teren_pattern.sub(lambda m: m.group(1) + rows + m.group(2), text, count=1)
 
+NET_REL_CHEI = ["net._http_response", "net.http_request_queue", "net.http_request_queue_id_seq"]
+LISTA_GOALA = '{' + ','.join(f'"{k}":"DE_COMPLETAT"' for k in NET_REL_CHEI) + '}'
+if text.count(LISTA_GOALA) != 1:
+    hold("lista pg_net DE_COMPLETAT din 18a: trebuie exact o aparitie")
+if args.net_rel is not None:
+    net_rel = json.loads(args.net_rel.read_text(encoding="utf-8"))
+    if not isinstance(net_rel, dict) or sorted(net_rel) != NET_REL_CHEI or not all(MD5.match(v) for v in net_rel.values()):
+        hold("--net-rel: exact cele trei obiecte pg_net, cu md5")
+    text = text.replace(LISTA_GOALA, '{' + ','.join(f'"{k}":"{net_rel[k]}"' for k in NET_REL_CHEI) + '}', 1)
+
 args.destination.write_text(text, encoding="utf-8", newline="\n")
 print(f"FIXTURE ONLY: 21 public + 12 net sintetice cu amprente literale; ERP aprobate: {len(args.erp)}; "
-      f"teren: {'sintetice' if teren else 'productie'}")
+      f"teren: {'sintetice' if teren else 'productie'}; obiecte pg_net: "
+      f"{'DE_COMPLETAT' if args.net_rel_necompletat else 'amprentele clusterului'}")

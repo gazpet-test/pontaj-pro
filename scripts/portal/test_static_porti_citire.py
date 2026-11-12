@@ -13,7 +13,9 @@ Verifica, pe textul fara comentarii si fara literali (siruri '...' si $tag$...$t
     iar cron.job.command / pg_proc.prosrc doar in predicate (~) sau in extragerea numelor public.*;
   - reparatiile r20: has_sequence_privilege doar in CASE WHEN c.relkind = 'S', has_table_privilege /
     has_any_column_privilege pe 'public' doar in CASE pe relkind, nicio ordonare pe pozitie cu COLLATE;
-  - fiecare sectiune A-L apare exact o data.
+  - fiecare sectiune A-N apare exact o data;
+  - r22 (sectiunea N, auditul tranzitiv): pg_proc.prosrc se citeste in afara predicatelor DOAR prin regexp_matches cu
+    cele doua expresii ale grafului (REGEX_CORP: nume urmate de "(" si cuvinte); sectiunea are plafonul ei de timp.
 Mutantii (scriere, COMMIT, nextval, comanda afisata, interogarea C / A din r19, psql meta, DO, sectiune lipsa) trebuie
 refuzati cu motivul exact. Rularea efectiva (PGlite, schema falsa): scripts/portal/porti_citire_pglite.mjs.
 """
@@ -26,7 +28,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SQL = ROOT / "scripts/portal/porti_citire.sql"
 SECTIUNI = ["A_scheme", "B_relatii", "C_secvente", "D_functii", "D_numar", "E_net_schema", "F_net_drepturi",
             "G_amprenta_net", "H_functii_net", "I_cron", "J_postgrest", "K_roluri_login", "L_triggere_net",
-            "M_teren_executa"]
+            "M_teren_executa", "N_audit_rezumat", "N_audit_nod", "N_audit_cale", "N_audit_nerezolvat",
+            "N_audit_necunoscut"]
+# r22 (sectiunea N): corpurile functiilor se citesc DOAR prin aceste doua expresii (nume urmate de "(" si cuvinte), ca
+# sa construiasca graful; textul corpului nu iese in rezultat (iese doar numele rezolvate / necunoscute).
+REGEX_CORP = {
+    "'(?:([A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\")[[:space:]]*[.][[:space:]]*)?([A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\")[[:space:]]*[(]'",
+    "'([A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\")'",
+}
 INTERZISE = ["INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE", "CREATE", "ALTER", "DROP", "GRANT", "REVOKE", "COPY",
              "CALL", "DO", "COMMIT", "ABORT", "SAVEPOINT", "RELEASE", "PREPARE", "EXECUTE", "LOCK", "VACUUM", "ANALYZE",
              "CLUSTER", "REINDEX", "REFRESH", "NOTIFY", "LISTEN", "UNLISTEN", "DISCARD", "RESET", "IMPORT", "COMMENT",
@@ -130,6 +139,11 @@ def verifica(text):
         col = m.group(2)
         if col in ("command", "prosrc") and re.match(r"\s*~", dupa):
             continue
+        if col == "prosrc" and m.group(1) == "p." and inainte.endswith("regexp_matches(") \
+                and re.match(r", \$L\d+\$, \$L\d+\$\)", dupa):
+            a, b = (int(x) for x in re.match(r", \$L(\d+)\$, \$L(\d+)\$\)", dupa).groups())
+            if lit[a] in REGEX_CORP and lit[b] == "'g'":
+                continue
         if col == "command" and inainte.endswith("regexp_matches(") and re.match(r", \$L\d+\$, \$L\d+\$\)", dupa):
             idx = int(re.match(r", \$L(\d+)\$", dupa).group(1))
             if lit[idx] == "'public[.]([a-z_][a-z0-9_]*)'":
@@ -235,6 +249,21 @@ class TestPortiCitire(unittest.TestCase):
         self._refuz(self.text.replace("p.prosecdef AS security_definer, pg_get_userbyid(p.proowner) AS proprietar,\n               p.prorettype",
                                       "p.prosrc, p.prosecdef AS security_definer, pg_get_userbyid(p.proowner) AS proprietar,\n               p.prorettype", 1),
                     "coloana cu continut afisata")
+
+    def test_mutant_prosrc_alt_regex(self):
+        # r22: corpul se poate citi doar cu cele doua expresii ale grafului; alta expresie (care ar scoate text) = refuz
+        self._refuz(self.text.replace("regexp_matches(p.prosrc, '([A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\")', 'g')",
+                                      "regexp_matches(p.prosrc, '(.*)', 'g')", 1), "coloana cu continut afisata")
+
+    def test_mutant_prosrc_afisat_in_audit(self):
+        self._refuz(self.text.replace("SELECT DISTINCT f.oid, CASE WHEN left(m.t[1], 1)",
+                                      "SELECT DISTINCT f.oid, p.prosrc AS corp, CASE WHEN left(m.t[1], 1)", 1),
+                    "coloana cu continut afisata")
+
+    def test_sectiunea_n_are_plafon_propriu(self):
+        t = curata(self.text.replace("\r\n", "\n"))[0]
+        k = t.index("WITH RECURSIVE")
+        self.assertRegex(t[:k].rstrip(), r"SET LOCAL statement_timeout = \$L\d+\$;$")
 
     def test_mutant_c_din_r19(self):
         # interogarea C din r19: has_sequence_privilege direct in WHERE (a picat pe productie pe un index)

@@ -95,8 +95,8 @@ END $fixture$;
 RESET ROLE;
 -- r21: tabelele pg_net in forma de PE PRODUCTIE (12.11.2026, porti_citire.sql B / C / G): proprietar supabase_admin,
 -- aceleasi coloane si TOATE drepturile pentru PUBLIC (acordate de supabase_admin), ca harness-ul sa nu treaca pe o stare
--- mai curata decat cea reala. Amprentele lor = exact md5-urile din lista 18a (fn_portal_net_rel_aprobat), verificat de
--- harness (porti_citire.sql G) si de scripts/portal/net_rel_pglite.mjs. Fara randuri.
+-- mai curata decat cea reala. r22: amprenta completa (triggere, politici, DEFAULT-uri ...) se citeste de harness din G
+-- INAINTE de apply si intra in copia 18a (artefactul ramane DE_COMPLETAT pana la recitirea pe productie). Fara randuri.
 CREATE TYPE net.http_method AS ENUM ('GET','POST','DELETE');
 CREATE TABLE net.http_request_queue (id bigserial NOT NULL, method net.http_method NOT NULL, url text NOT NULL,
  headers jsonb, body bytea, timeout_milliseconds integer NOT NULL);

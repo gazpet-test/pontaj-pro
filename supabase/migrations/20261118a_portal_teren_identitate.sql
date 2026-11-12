@@ -51,12 +51,17 @@
 --  * obiectele pg_net la care ajunge teren prin PUBLIC (net._http_response, net.http_request_queue si secventa ei) sunt
 --    acceptate de poarta DOAR cu amprenta fixata din productie (lista unica: fn_portal_net_rel_aprobat, cu marcajul
 --    listei in corp; definitia amprentei: fn_portal_net_rel_amprenta = sectiunea G din porti_citire.sql, L19).
---    Orice drept nou, coloana noua, alt proprietar sau alt obiect in net = poarta rosie, ca pana acum. Mai putine drepturi
+--    Orice drept nou, coloana noua, alt proprietar sau orice alt obiect din net la care teren are acces = poarta rosie
+--    (un obiect nou din net fara niciun drept pentru teren nu e privit: verificarea e de acces). Mai putine drepturi
 --    (PUBLIC retras de platforma) = obiectul nu mai e accesibil, poarta ramane verde;
 --  * dreptul lui teren pe o relatie / secventa = o singura functie (fn_portal_teren_rel_drept), folosita de poarta si de
 --    preconditia $public_pre$;
 --  * poarta: schemele expuse de PostgREST, daca sunt setate in baza (rolul authenticator), nu au voie sa contina net;
 --  * postconditia (pasul 5 din $critic$) spune in mesaj CE porti lipsesc: numarul si lista lor.
+-- r22 (Jakarinos r21 P1): amprenta obiectelor pg_net include si triggerele (cu functia si starea), politicile,
+--    DEFAULT-urile / IDENTITY / GENERATED, regulile, constrangerile, indecsii, parametrii si coloana-proprietar a secventei
+--    si functiile de care depind acestea. Valorile de productie se recitesc (porti_citire.sql G): pana atunci lista e
+--    DE_COMPLETAT = refuz (PORTAL_NET_REL_LIST_NECOMPLETATA) si poarta rosie.
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -288,29 +293,81 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_teren_rel_drept(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
 -- r21 (varianta c): amprenta de structura a unui obiect din net = EXACT expresia sectiunii G din
--- scripts/portal/porti_citire.sql (tip, proprietar, ACL, RLS, FORCE RLS, coloane: numar, nume, tip, NOT NULL, ACL), cu
--- acelasi search_path (pg_catalog, pg_temp: tipul net.http_method se scrie calificat). Paritatea textului e testata static
--- (scripts/portal/test_static_net_rel.py) si pe PostgreSQL (scripts/portal/net_rel_pglite.mjs). Fara randuri din tabele.
+-- scripts/portal/porti_citire.sql, cu acelasi search_path (pg_catalog, pg_temp: numele iesite din pg_get_* sunt calificate).
+-- r22 (Jakarinos r21 P1, L15): pe langa tip, proprietar, ACL, RLS, FORCE RLS si coloane (numar, nume, tip, NOT NULL, ACL),
+-- amprenta are tot ce schimba COMPORTAMENTUL unui INSERT / SELECT pe obiect: DEFAULT-ul, IDENTITY si GENERATED pe fiecare
+-- coloana; triggerele (definitia completa cu evenimente si WHEN, starea, corpul functiei); politicile (comanda, permisiva,
+-- roluri, USING, WITH CHECK); regulile; constrangerile (si FK-urile care trimit spre obiect); indecsii; pentru secventa
+-- parametrii (fara valoarea curenta) si coloana care o detine; plus corpul / DEFINER / proprietarul / configuratia oricarei
+-- functii de aplicatie de care depind acestea (pg_depend). Paritatea textului: scripts/portal/test_static_net_rel.py;
+-- pe PostgreSQL: scripts/portal/net_rel_pglite.mjs + harness-ul PG17. Fara randuri din tabele.
 CREATE FUNCTION public.fn_portal_net_rel_amprenta(p_oid oid) RETURNS text
 LANGUAGE sql STABLE SET search_path TO 'pg_catalog','pg_temp' AS $fn$
  SELECT
   -- AMPRENTA_NET_REL inceput
   jsonb_build_array(c.relkind::text, pg_get_userbyid(c.relowner), c.relacl::text, c.relrowsecurity,
-                 c.relforcerowsecurity,
-                 (SELECT jsonb_agg(jsonb_build_array(at.attnum, at.attname::text, format_type(at.atttypid, at.atttypmod),
-                                                     at.attnotnull, at.attacl::text) ORDER BY at.attnum)
-                    FROM pg_attribute at WHERE at.attrelid = c.oid AND at.attnum > 0 AND NOT at.attisdropped))::text
+    c.relforcerowsecurity,
+    (SELECT jsonb_agg(jsonb_build_array(at.attnum, at.attname::text, format_type(at.atttypid, at.atttypmod),
+                                        at.attnotnull, at.attacl::text, at.attidentity::text, at.attgenerated::text,
+                                        (SELECT pg_get_expr(ad.adbin, ad.adrelid) FROM pg_attrdef ad
+                                          WHERE ad.adrelid = at.attrelid AND ad.adnum = at.attnum)) ORDER BY at.attnum)
+       FROM pg_attribute at WHERE at.attrelid = c.oid AND at.attnum > 0 AND NOT at.attisdropped),
+    (SELECT jsonb_agg(jsonb_build_array(tg.tgname::text, tg.tgenabled::text, tg.tgisinternal, pg_get_triggerdef(tg.oid),
+                                        md5(pg_get_functiondef(tg.tgfoid))) ORDER BY tg.tgname::text COLLATE "C")
+       FROM pg_trigger tg WHERE tg.tgrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(po.polname::text, po.polcmd::text, po.polpermissive,
+                                        (SELECT jsonb_agg(CASE WHEN pr.rol = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(pr.rol) END
+                                                          ORDER BY pr.poz)
+                                           FROM unnest(po.polroles) WITH ORDINALITY AS pr(rol, poz)),
+                                        pg_get_expr(po.polqual, po.polrelid), pg_get_expr(po.polwithcheck, po.polrelid))
+                      ORDER BY po.polname::text COLLATE "C")
+       FROM pg_policy po WHERE po.polrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(ru.rulename::text, ru.ev_enabled::text, pg_get_ruledef(ru.oid))
+                      ORDER BY ru.rulename::text COLLATE "C")
+       FROM pg_rewrite ru WHERE ru.ev_class = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(co.conname::text, co.conrelid::regclass::text, co.contype::text, co.condeferrable,
+                                        co.condeferred, co.convalidated, pg_get_constraintdef(co.oid))
+                      ORDER BY co.conrelid::regclass::text COLLATE "C", co.conname::text COLLATE "C")
+       FROM pg_constraint co WHERE co.conrelid = c.oid OR co.confrelid = c.oid),
+    (SELECT jsonb_agg(pg_get_indexdef(ix.indexrelid) ORDER BY pg_get_indexdef(ix.indexrelid) COLLATE "C")
+       FROM pg_index ix WHERE ix.indrelid = c.oid),
+    (SELECT jsonb_build_array(format_type(sq.seqtypid, NULL), sq.seqstart, sq.seqincrement, sq.seqmax, sq.seqmin,
+                              sq.seqcache, sq.seqcycle)
+       FROM pg_sequence sq WHERE sq.seqrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(dp.deptype::text, dp.refobjid::regclass::text, dp.refobjsubid)
+                      ORDER BY dp.refobjid::regclass::text COLLATE "C", dp.refobjsubid)
+       FROM pg_depend dp WHERE dp.classid = 'pg_class'::regclass AND dp.objid = c.oid
+         AND dp.refclassid = 'pg_class'::regclass AND dp.deptype IN ('a', 'i')),
+    (SELECT jsonb_agg(DISTINCT jsonb_build_array(fp.oid::regprocedure::text, fp.prosecdef, pg_get_userbyid(fp.proowner),
+                                                 fp.proconfig::text,
+                                                 CASE WHEN fp.prokind = 'a' THEN (SELECT md5(ag::text) FROM pg_aggregate ag
+                                                                                   WHERE ag.aggfnoid = fp.oid)
+                                                      ELSE md5(pg_get_functiondef(fp.oid)) END))
+       FROM pg_depend fd JOIN pg_proc fp ON fp.oid = fd.refobjid
+      WHERE fd.refclassid = 'pg_proc'::regclass AND fp.oid >= 16384
+        AND ((fd.classid = 'pg_trigger'::regclass AND fd.objid IN (SELECT tg.oid FROM pg_trigger tg WHERE tg.tgrelid = c.oid))
+          OR (fd.classid = 'pg_policy'::regclass AND fd.objid IN (SELECT po.oid FROM pg_policy po WHERE po.polrelid = c.oid))
+          OR (fd.classid = 'pg_attrdef'::regclass AND fd.objid IN (SELECT ad.oid FROM pg_attrdef ad WHERE ad.adrelid = c.oid))
+          OR (fd.classid = 'pg_constraint'::regclass AND fd.objid IN (SELECT co.oid FROM pg_constraint co
+                                                                       WHERE co.conrelid = c.oid))
+          OR (fd.classid = 'pg_rewrite'::regclass AND fd.objid IN (SELECT ru.oid FROM pg_rewrite ru WHERE ru.ev_class = c.oid))
+          OR (fd.classid = 'pg_class'::regclass AND fd.objid IN (SELECT ix.indexrelid FROM pg_index ix
+                                                                  WHERE ix.indrelid = c.oid)))))::text
   -- AMPRENTA_NET_REL sfarsit
    FROM pg_class c WHERE c.oid = p_oid;
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_net_rel_amprenta(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
 -- r21 (varianta c): LISTA UNICA a obiectelor pg_net acceptate de poarta, cu md5-ul amprentei citit read-only pe productie
--- (12.11.2026, porti_citire.sql sectiunea G; textul amprentei e in jurnalul citirii). Cheia = schema.nume (quote_ident).
+-- (porti_citire.sql sectiunea G; textul amprentei e in jurnalul citirii). Cheia = schema.nume (quote_ident).
 -- Se schimba DOAR prin review (SHA nou); nu se invata la apply.
+-- r22: amprenta s-a completat (triggere, politici, DEFAULT-uri ...), deci valorile din 12.11 nu mai sunt valabile.
+-- DE_COMPLETAT = necitit inca pe productie => $public_pre$ refuza (PORTAL_NET_REL_LIST_NECOMPLETATA) si poarta e rosie.
+-- Coordonatorul reruleaza porti_citire.sql pe productie (doar citire) si lipeste cele trei valori din G cu
+-- scripts/portal/net_rel_completeaza.py (aceleasi valori ajung si in testul static).
 CREATE FUNCTION public.fn_portal_net_rel_aprobat() RETURNS jsonb
 LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $netrel$
- -- PORTAL_NET_REL_APROBAT: net._http_response, net.http_request_queue, net.http_request_queue_id_seq (productie, 12.11.2026)
- SELECT '{"net._http_response":"af629f9c5992f34ede3bc889d2db669c","net.http_request_queue":"e0e96a399d23c7eb05ca2216618e1b72","net.http_request_queue_id_seq":"d7e907e6bf5f93c94b754f45839161d1"}'::jsonb;
+ -- PORTAL_NET_REL_APROBAT: net._http_response, net.http_request_queue, net.http_request_queue_id_seq (amprenta r22, de citit pe productie)
+ SELECT '{"net._http_response":"DE_COMPLETAT","net.http_request_queue":"DE_COMPLETAT","net.http_request_queue_id_seq":"DE_COMPLETAT"}'::jsonb;
 $netrel$;
 REVOKE ALL ON FUNCTION public.fn_portal_net_rel_aprobat() FROM PUBLIC,anon,authenticated,service_role,teren;
 -- r21 (varianta c): obiectul e in net, e in lista si amprenta lui de acum = md5-ul revizuit. Cheie lipsa / amprenta NULL =
@@ -368,7 +425,8 @@ BEGIN
     -- r21: orice drept al lui teren (tabel / coloane / secventa) = fn_portal_teren_rel_drept (aceeasi definitie in $public_pre$).
     CONTINUE WHEN public.fn_portal_teren_rel_drept(r.oid) IS NOT TRUE;
     -- r21 (varianta c): cele trei obiecte pg_net revizuite trec DOAR cu amprenta identica celei din productie; orice drept
-    -- nou, coloana noua, alt proprietar sau alt obiect din net ramane poarta rosie (relatie: / secventa:).
+    -- nou, coloana noua, alt proprietar, trigger / politica / DEFAULT (r22) sau orice alt obiect din net la care teren are
+    -- acces ramane poarta rosie (relatie: / secventa:).
     CONTINUE WHEN r.nspname='net' AND public.fn_portal_net_rel_acceptat(r.oid) IS TRUE;
     IF r.relkind='S' THEN
       v:=array_append(v,'secventa:'||r.relname);
@@ -447,6 +505,11 @@ BEGIN
   -- r21 (varianta c): lista obiectelor pg_net acceptate are forma ceruta (cheie net.<nume>, md5), iar orice relatie /
   -- secventa din net la care ajunge teren e in lista, cu amprenta identica (acelasi predicat ca poarta). Un obiect din
   -- lista la care teren nu mai ajunge (drepturi retrase) nu e o abatere: e raportat, nu refuzat.
+  -- r22: lista necompletata (amprenta noua, necitita inca pe productie) = refuz explicit, inaintea formei.
+  IF jsonb_typeof(public.fn_portal_net_rel_aprobat()) = 'object'
+    AND EXISTS (SELECT FROM jsonb_each(public.fn_portal_net_rel_aprobat()) e WHERE e.value = '"DE_COMPLETAT"'::jsonb) THEN
+    RAISE EXCEPTION 'PORTAL_NET_REL_LIST_NECOMPLETATA: valorile din porti_citire.sql G (productie) nu sunt lipite in 18a';
+  END IF;
   IF jsonb_typeof(public.fn_portal_net_rel_aprobat()) IS DISTINCT FROM 'object'
     OR EXISTS (SELECT FROM jsonb_each(public.fn_portal_net_rel_aprobat()) e
       WHERE e.key !~ '^net[.][a-z_][a-z0-9_]*$' OR jsonb_typeof(e.value) IS DISTINCT FROM 'string'
