@@ -1,5 +1,6 @@
 // TKT-2026-0388 — Izometrie: „mută la început” (și, în general, la poziția N) o piesă din pachet, dintr-o dată.
-// Serverul (fn_executie_tevi_muta_pozitie, migrarea 20261215c) face mutarea ATOMIC: blochează toate rândurile pachetului, apoi cheamă
+// Serverul (fn_executie_tevi_muta_pozitie, migrarea 20261215c) face mutarea ATOMIC: blochează pachetul și toate rândurile lui fără să
+// aștepte (ocupat = 55P03, „reîncearcă”), apoi cheamă
 // schimbul existent (fn_executie_swap_tevi_pozitie — gărzile, dreptul pe proiect și recalcularea POZ KM rămân ale lui) între piesă și
 // vecinul ei, pas cu pas, în aceeași tranzacție. Planul de mai jos e ACELAȘI algoritm (aceleași cazuri ca în
 // supabase/tests/20261215c_izometrie_muta_pozitie.sql, L19); în ecran îl folosim pentru textul de confirmare.
@@ -58,6 +59,8 @@ export function mesajEroareMutare(error) {
   const cod = String(error?.code || '')
   if (lipsaRpcMutare(error)) return 'Mutarea la început va fi disponibilă după actualizarea bazei de date.'
   if (cod === '42501') return String(error.message || '').startsWith('E4a flux') ? 'Pachetul e în fluxul de montaj: ordinea nu se mai schimbă din editor.' : 'Nu ai drept de scriere pe acest proiect.'
+  // 55P03 (r2): protocolul de lock pe pachet nu așteaptă — un ↑ / ↓ sau o altă mutare în curs pe același pachet = refuz imediat
+  if (cod === '55P03') return 'Pachetul e modificat chiar acum de altcineva. Nu s-a schimbat nimic: reîncearcă peste câteva secunde.'
   if (cod === '40001' || cod === '40P01') return 'Pachetul a fost modificat în același timp de altcineva. Nu s-a schimbat nimic: reîncearcă.'
   if (cod === '57014') return 'Mutarea a durat prea mult și a fost oprită. Nu s-a schimbat nimic.'
   return 'Eroare la mutare: ' + (error?.message || error)
