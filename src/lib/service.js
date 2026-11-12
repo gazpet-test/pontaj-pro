@@ -35,6 +35,66 @@ export async function incarcaFiseService(tabel, { pagina = 1000, incercari = 3 }
   return rows.sort(ordineListaFise)
 }
 
+// TKT-2026-0380 (r4): TOATE citirile din care iese verdictul „depășit / la zi” (KPI, filtrul „Scadențe”,
+// exportul) se citesc complet, cu același helper ca fișele, și au O SINGURĂ stare de eroare:
+//  - fișele de service (scadențele);
+//  - activele (acoperirea flotei + fara_service_gazpet: comodat / închiriat ies din scadențe);
+//  - km / ore live din v_active_km_ore (fără ele o revizie depășită la km / ore nu mai apare deloc).
+// Eșecul ORICĂREIA = eroare (date goale + mesaj), niciodată „Toate la zi” din date parțiale.
+// Itemii preset (șablonul unei fișe noi) nu intră în verdict: eroarea lor are mesaj separat.
+export const SELECT_ACTIVE_SERVICE = 'id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, fara_service_gazpet, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)'
+export const NUME_ACTIVE_SERVICE = { pl: 'active', plArt: 'activele', unul: 'un activ', art: 'activul' }
+export const NUME_KM_ORE = { pl: 'citiri km / ore live', plArt: 'citirile km / ore live', unul: 'o citire km / ore live', art: 'citirea km / ore a activului' }
+export const NUME_PRESET = { pl: 'itemi preset', plArt: 'itemii preset', unul: 'un item preset', art: 'itemul preset' }
+// Ordinea de până acum a activelor: cod_intern crescător (fără cod la final), apoi id
+const ordineActive = (a, b) => {
+  const x = a.cod_intern ?? null, y = b.cod_intern ?? null
+  if (x !== y) { if (x == null) return 1; if (y == null) return -1; const c = String(x).localeCompare(String(y), 'ro'); if (c) return c }
+  return a.id - b.id
+}
+const ordinePreset = (a, b) => {
+  const ga = a.grupa ?? '', gb = b.grupa ?? ''
+  if (ga !== gb) return String(ga).localeCompare(String(gb), 'ro')
+  return (a.ordine ?? 0) - (b.ordine ?? 0) || a.id - b.id
+}
+const mesajEroare = e => e?.message || String(e)
+
+// client = supabase (sau un fals în teste). Întoarce
+// { fise, active, kmOre: { [activ_id]: { km_live, ore_live } }, preset, eroare, eroarePreset }.
+// eroare ≠ '' → fise / active / kmOre sunt GOALE (nu se publică nimic parțial).
+export async function incarcaDateService(client, { pagina = 1000, incercari = 3 } = {}) {
+  const citeste = (tabel, select, nume, { cheie = 'id', filtru = q => q } = {}) =>
+    citesteCompletDupaId(o => filtru(client.from(tabel).select(o.head ? cheie : select, o)), { pagina, incercari, nume, cheie })
+  const [fiseR, activeR, kmR, presetR] = await Promise.allSettled([
+    incarcaFiseService(() => client.from('logistica_service_fise'), { pagina, incercari }),
+    citeste('logistica_active', SELECT_ACTIVE_SERVICE, NUME_ACTIVE_SERVICE),
+    citeste('v_active_km_ore', 'activ_id, km_live, ore_live', NUME_KM_ORE, { cheie: 'activ_id' }),
+    citeste('logistica_service_itemi_preset', '*', NUME_PRESET, { filtru: q => q.eq('activ', true) }),
+  ])
+  const erori = []
+  if (fiseR.status === 'rejected') erori.push(`fișe de service: ${mesajEroare(fiseR.reason)}`)
+  if (activeR.status === 'rejected') erori.push(`active: ${mesajEroare(activeR.reason)}`)
+  if (kmR.status === 'rejected') erori.push(`km / ore live: ${mesajEroare(kmR.reason)}`)
+  const preset = presetR.status === 'fulfilled' ? presetR.value.sort(ordinePreset) : []
+  const eroarePreset = presetR.status === 'rejected' ? mesajEroare(presetR.reason) : ''
+  if (erori.length) return { fise: [], active: [], kmOre: {}, preset, eroare: erori.join(' · '), eroarePreset }
+  const kmOre = {}
+  for (const r of kmR.value) kmOre[r.activ_id] = r
+  const active = activeR.value.sort(ordineActive).map(a => ({
+    ...a,
+    categorie: a.logistica_categorii ? { tip: a.logistica_categorii.tip, subcategorie: a.logistica_categorii.subcategorie } : null,
+  }))
+  return { fise: fiseR.value, active, kmOre, preset, eroare: '', eroarePreset }
+}
+
+// Scadențele deschise pe activ (KPI + filtrul „Scadențe”) din rezultatul lui incarcaDateService.
+// null = date incomplete → nu există verdict (UI-ul arată „—”, filtrul și exportul refuză).
+export function scadenteDinDate({ fise, active, kmOre, eroare }, { azi = aziBucuresti(), acoperiri = null } = {}) {
+  if (eroare) return null
+  const faraService = new Set((active || []).filter(a => a.fara_service_gazpet).map(a => a.id))
+  return scadenteDeschisePeActiv(fise, kmOre, { azi, acoperiri, exclude: id => faraService.has(id) })
+}
+
 // Praguri pentru a marca o scadență drept „aproape" (galben)
 export const PRAG_ZILE = 30
 export const PRAG_KM   = 1000

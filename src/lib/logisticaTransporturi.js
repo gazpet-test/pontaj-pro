@@ -107,18 +107,19 @@ const numarConfirmat = (count, nume = NUME_TRANSPORTURI) => {
 // O trecere: { rows, anomalie }. interogare(optiuni) = builder cu .select(..., optiuni) + filtre,
 // FĂRĂ ordine / limită / cheie (le pune helperul). optiuni: { count: 'exact' } pe prima pagină,
 // {} pe următoarele, { count: 'exact', head: true } la numărarea finală.
-export async function citesteOTrecereDupaId(interogare, pagina = PAGINA_TRANSPORTURI, nume = NUME_TRANSPORTURI) {
+// cheie = coloana întreagă și unică după care se paginează (implicit 'id'; 'activ_id' la v_active_km_ore).
+export async function citesteOTrecereDupaId(interogare, pagina = PAGINA_TRANSPORTURI, nume = NUME_TRANSPORTURI, cheie = 'id') {
   const rows = [], ids = new Set()
   let total = null, ultim = null
   while (true) {
     let q = interogare(total === null ? { count: 'exact' } : {})
-    if (ultim !== null) q = q.gt('id', ultim)
-    const { data, error, count } = await q.order('id', { ascending: true }).limit(pagina)
+    if (ultim !== null) q = q.gt(cheie, ultim)
+    const { data, error, count } = await q.order(cheie, { ascending: true }).limit(pagina)
     if (error) throw error
     if (!Array.isArray(data)) throw new Error(`Serverul a întors un răspuns invalid pentru ${nume.pl}.`)
     if (total === null) total = numarConfirmat(count, nume)
     for (const row of data) {
-      const id = row?.id
+      const id = row?.[cheie]
       if (!Number.isSafeInteger(id)) throw new Error(`Serverul a întors ${nume.unul} fără ID valid; lista nu poate fi paginată sigur.`)
       if (ultim !== null && !(id > ultim)) throw new Error(`Serverul a întors ${nume.plArt} în altă ordine decât cea cerută.`)
       if (ids.has(id)) return { rows, anomalie: `${nume.art} #${id} a apărut de două ori` }
@@ -140,10 +141,10 @@ export async function citesteOTrecereDupaId(interogare, pagina = PAGINA_TRANSPOR
   return { rows, anomalie: null }
 }
 
-export async function citesteCompletDupaId(interogare, { pagina = PAGINA_TRANSPORTURI, incercari = 3, nume = NUME_TRANSPORTURI } = {}) {
+export async function citesteCompletDupaId(interogare, { pagina = PAGINA_TRANSPORTURI, incercari = 3, nume = NUME_TRANSPORTURI, cheie = 'id' } = {}) {
   let anomalie = null
   for (let i = 0; i < incercari; i++) {
-    const r = await citesteOTrecereDupaId(interogare, pagina, nume)
+    const r = await citesteOTrecereDupaId(interogare, pagina, nume, cheie)
     if (!r.anomalie) return r.rows
     anomalie = r.anomalie
   }

@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest'
 import assert from 'node:assert/strict'
-import { incarcaFiseService, ordineListaFise, scadenteDeschisePeActiv, urmServiceLevel } from './service.js'
+import { incarcaFiseService, ordineListaFise, scadenteDeschisePeActiv, urmServiceLevel, incarcaDateService, scadenteDinDate } from './service.js'
 import { textSursaValoriiActiv } from './citiriBord.js'
 import { TRANSPORTURI_INSTABILE } from './logisticaTransporturi.js'
 
@@ -14,6 +14,7 @@ function serverFals(randuri, { maxRows = 1000, laCerere = null } = {}) {
     const b = {
       select(cols, opts = {}) { st.cols = cols; st.opts = opts; return b },
       gt(c, v) { st.filtre.push(r => r[c] != null && r[c] > v); return b },
+      eq(c, v) { st.filtre.push(r => r[c] === v); return b },
       order(c, o) { st.order.push([c, o?.ascending !== false, o?.nullsFirst]); return b },
       limit(n) { st.limit = n; return b },
       then(ok, ko) { return Promise.resolve().then(() => raspunde(st)).then(ok, ko) },
@@ -125,5 +126,154 @@ describe('textSursaValoriiActiv — formularul de alimentare din Logistică (r3,
   })
   it('încă necitite → se caută', () => {
     assert.equal(textSursaValoriiActiv(600000, null, 'km'), '— se caută sursa…')
+  })
+})
+
+// TKT-2026-0380 r4 (Jakarinos #1070 r3): TOATE citirile din care iese verdictul (fișe, active, km / ore
+// live) trec prin incarcaDateService — funcția reală apelată de loadAll din ServiceTab. Server fals cu
+// plafon de 1.000 de rânduri pe fiecare tabel. Scenariul din review: activul 1053, revizie la 2.250 h,
+// live 4.000 h → „depășit”. Activul 1060 e comodat (fara_service_gazpet) cu o scadență depășită: nu
+// trebuie să apară. Așteptările sunt scrise de mână (L25): fie „depășit” corect, fie eroare, niciodată „la zi”.
+const NR_ACTIVE = 1100
+function setDate() {
+  const active = [], km = []
+  for (let id = 1; id <= NR_ACTIVE; id++) {
+    active.push({ id, cod_intern: `TST-${String(id).padStart(4, '0')}`, fara_service_gazpet: id === 1060, logistica_categorii: { tip: 'Utilaj', subcategorie: null } })
+    km.push({ activ_id: id, km_live: null, ore_live: id === 1053 ? 4000 : id === 1060 ? 9000 : 100 })
+  }
+  const fise = [
+    { id: 1, activ_id: 1053, data_fisei: '2026-03-01', status: 'finalizat', tip: 'mentenanta', ore_iesire: 2000, urmatoarea_ore: 2250 },
+    { id: 2, activ_id: 1060, data_fisei: '2026-03-01', status: 'finalizat', tip: 'mentenanta', ore_iesire: 2000, urmatoarea_ore: 3000 },
+    { id: 3, activ_id: 5, data_fisei: '2026-10-01', status: 'finalizat', tip: 'mentenanta', ore_iesire: 50, urmatoarea_ore: 5000 },
+  ]
+  const preset = [{ id: 2, activ: true, grupa: 'B', ordine: 1 }, { id: 1, activ: true, grupa: 'A', ordine: 2 }, { id: 3, activ: false, grupa: 'A', ordine: 1 }]
+  return { active, km, fise, preset }
+}
+function clientFals({ km = {}, active = {}, preset = {} } = {}) {
+  const d = setDate()
+  const t = {
+    logistica_service_fise: serverFals(d.fise),
+    logistica_active: serverFals(d.active, active),
+    v_active_km_ore: serverFals(d.km, km),
+    logistica_service_itemi_preset: serverFals(d.preset, preset),
+  }
+  return { t, client: { from: n => t[n].tabel() } }
+}
+// Verdictul pe care îl afișează KPI-ul: 'eroare' (cifre „—”) sau nivelul fiecărui activ cu scadență
+function verdict(d) {
+  const s = scadenteDinDate(d, { azi: AZI })
+  if (!s) return 'eroare'
+  return Object.fromEntries(Object.entries(s).map(([id, { u }]) => [id, urmServiceLevel(u)]))
+}
+const TIMEOUT = { message: 'canceling statement due to statement timeout', code: '57014' }
+
+describe('incarcaDateService — toate citirile verdictului „depășit / la zi” (r4)', () => {
+  it('date complete: 1053 „depășit”, comodatul 1060 exclus, toate cele 1.100 de active și citiri km / ore', async () => {
+    const { client, t } = clientFals()
+    const d = await incarcaDateService(client)
+    assert.equal(d.eroare, '')
+    assert.equal(d.active.length, NR_ACTIVE)
+    assert.equal(Object.keys(d.kmOre).length, NR_ACTIVE)
+    assert.deepEqual(verdict(d), { 1053: 'depasit', 5: 'ok' })
+    // paginare reală: pe vederea km / ore cheia e activ_id (nu id), cu numărare la final
+    const c = t.v_active_km_ore.cereri
+    assert.ok(c.length >= 3)
+    assert.ok(c.filter(x => !x.opts.head).every(x => x.order.length === 1 && x.order[0][0] === 'activ_id'))
+    assert.ok(c.some(x => x.opts.head && x.cols === 'activ_id'))
+    // ordinea activelor de până acum (cod_intern), categoria pregătită pentru modale
+    assert.equal(d.active[0].id, 1)
+    assert.deepEqual(d.active[0].categorie, { tip: 'Utilaj', subcategorie: null })
+    // preset: doar cele active, ordonate după grupă / ordine
+    assert.deepEqual(d.preset.map(p => p.id), [1, 2])
+  })
+
+  it('(a) vechea citire km / ore (un singur SELECT) pierde activul 1053 → ar fi apărut „la zi”', async () => {
+    const { t } = clientFals()
+    const { data } = await t.v_active_km_ore.tabel().select('activ_id, km_live, ore_live')
+    assert.equal(data.length, 1000)
+    const kmOre = Object.fromEntries(data.map(r => [r.activ_id, r]))
+    assert.equal(verdict({ fise: setDate().fise, active: setDate().active, kmOre, eroare: '' })[1053], undefined)
+  })
+
+  it('(a) cu citirea completă, același plafon de 1.000 nu mai pierde nimic (și nici la pagină de 1.000)', async () => {
+    for (const pagina of [1000, 300]) {
+      const d = await incarcaDateService(clientFals().client, { pagina })
+      assert.equal(verdict(d)[1053], 'depasit')
+    }
+  })
+
+  it('(b) eroare pe pagina a doua din v_active_km_ore → stare de eroare comună, fără date', async () => {
+    const { client } = clientFals({ km: { laCerere: (st, nr) => (nr === 1 ? { error: { message: 'eroare simulată' } } : null) } })
+    const d = await incarcaDateService(client)
+    assert.match(d.eroare, /^km \/ ore live: eroare simulată$/)
+    assert.deepEqual([d.fise, d.active, d.kmOre], [[], [], {}])
+    assert.equal(verdict(d), 'eroare')
+  })
+
+  it('(b) timeout pe v_active_km_ore → eroare, nu „Toate la zi”', async () => {
+    const { client } = clientFals({ km: { laCerere: () => ({ error: TIMEOUT }) } })
+    const d = await incarcaDateService(client)
+    assert.match(d.eroare, /statement timeout/)
+    assert.equal(verdict(d), 'eroare')
+  })
+
+  it('(b) vederea km / ore fără număr confirmat → eroare', async () => {
+    const { client, t } = clientFals()
+    const orig = client.from
+    client.from = n => {
+      const b = orig(n)
+      if (n !== 'v_active_km_ore') return b
+      const sel = b.select
+      b.select = (c, o = {}) => sel(c, { ...o, count: undefined })
+      return b
+    }
+    const d = await incarcaDateService(client)
+    assert.match(d.eroare, /numărul total de citiri km \/ ore live/)
+    assert.equal(verdict(d), 'eroare')
+    assert.ok(t.v_active_km_ore.cereri.length >= 1)
+  })
+
+  it('(b) un activ apare de două ori în vedere la fiecare trecere → eroare de instabilitate, nu o hartă aleasă', async () => {
+    const { client } = clientFals({ km: { laCerere: (st, nr, r) => (st.opts.head ? null : { randuri: [...r, { activ_id: 7, km_live: 1, ore_live: 1 }] }) } })
+    const d = await incarcaDateService(client, { pagina: 2000 })
+    assert.match(d.eroare, /^km \/ ore live: /)
+    assert.equal(verdict(d), 'eroare')
+  })
+
+  it('(c) vechea citire a activelor (un singur SELECT) pierde comodatul 1060 → ar fi apărut la scadențe', async () => {
+    const { t } = clientFals()
+    const { data } = await t.logistica_active.tabel().select('*')
+    assert.equal(data.length, 1000)
+    const kmOre = Object.fromEntries(setDate().km.map(r => [r.activ_id, r]))
+    assert.equal(verdict({ fise: setDate().fise, active: data, kmOre, eroare: '' })[1060], 'depasit')
+  })
+
+  it('(c) lista activelor citită complet peste plafon → comodatul exclus, 1053 „depășit”', async () => {
+    const d = await incarcaDateService(clientFals().client)
+    assert.ok(d.active.some(a => a.id === 1060 && a.fara_service_gazpet === true))
+    const v = verdict(d)
+    assert.equal(v[1060], undefined)
+    assert.equal(v[1053], 'depasit')
+  })
+
+  it('(c) eroare / timeout pe lista activelor → stare de eroare comună', async () => {
+    for (const laCerere of [(st, nr) => (nr === 1 ? { error: { message: 'pagina 2 picată' } } : null), () => ({ error: TIMEOUT })]) {
+      const d = await incarcaDateService(clientFals({ active: { laCerere } }).client)
+      assert.match(d.eroare, /^active: /)
+      assert.deepEqual([d.fise, d.active, d.kmOre], [[], [], {}])
+      assert.equal(verdict(d), 'eroare')
+    }
+  })
+
+  it('mai multe citiri picate → un singur mesaj cu toate', async () => {
+    const d = await incarcaDateService(clientFals({ km: { laCerere: () => ({ error: TIMEOUT }) }, active: { laCerere: () => ({ error: { message: 'x' } }) } }).client)
+    assert.match(d.eroare, /^active: x · km \/ ore live: canceling statement/)
+  })
+
+  it('preset picat → mesaj separat, verdictul rămâne (șablonul fișei noi nu intră în scadențe)', async () => {
+    const d = await incarcaDateService(clientFals({ preset: { laCerere: () => ({ error: { message: 'preset picat' } }) } }).client)
+    assert.equal(d.eroare, '')
+    assert.equal(d.eroarePreset, 'preset picat')
+    assert.equal(verdict(d)[1053], 'depasit')
   })
 })

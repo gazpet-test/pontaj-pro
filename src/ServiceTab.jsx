@@ -20,7 +20,7 @@ import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
-import { calcUrmService, urmServiceLevel, urmServiceColor, acopeririScadente, scadenteDeschisePeActiv, incarcaFiseService, aziBucuresti, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
+import { calcUrmService, urmServiceLevel, urmServiceColor, acopeririScadente, scadenteDinDate, incarcaDateService, aziBucuresti, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
 import { PRAG_CITIRI, MAX_ORE, MAX_KM, verificaCitire, incarcaSurseMaxime, stabilesteSursa, textSursa, descrieSursa, confirmaAjustareManuala } from './lib/citiriBord.js'
 import PieseCatalogSection from './PieseCatalogSection.jsx'
 import ImportFiseServiceModal from './ImportFiseServiceModal.jsx'
@@ -2132,47 +2132,25 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     setFise(p => p.filter(f => f.id !== fisa.id))
   }, [showToast])
 
-  // TKT-2026-0380 (r3): fișele se citesc COMPLET (incarcaFiseService: paginat, verificat prin numărare).
-  // Dacă nu se pot citi toate: eroareFise + KPI-ul / filtrul „Scadențe” nu arată o cifră parțială.
+  // TKT-2026-0380 (r4): fișele, activele și km / ore live se citesc COMPLET (incarcaDateService: același
+  // helper paginat + numărat pentru toate). Eșecul ORICĂREIA = o singură stare de eroare (eroareDate):
+  // cifrele „—”, lista ascunsă, filtrul „Scadențe” și exportul refuză, buton „Reîncarcă”.
   // genLoad: o încărcare veche (sau una terminată după demontare) nu mai scrie peste cea nouă (L24).
-  const [eroareFise, setEroareFise] = useState('')
+  const [eroareDate, setEroareDate] = useState('')
   const genLoad = useRef(0)
   useEffect(() => () => { genLoad.current++ }, [])
   const loadAll = useCallback(async () => {
     const gen = ++genLoad.current
     setLoad(true)
-    const [fisRes, actRes, presetRes, kmOreRes] = await Promise.all([
-      incarcaFiseService(() => supabase.from('logistica_service_fise'))
-        .then(data => ({ data, error: null }), error => ({ data: null, error })),
-      supabase
-        .from('logistica_active')
-        .select('id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, fara_service_gazpet, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)')
-        .order('cod_intern', { nullsFirst:false }),
-      supabase
-        .from('logistica_service_itemi_preset')
-        .select('*').eq('activ', true).order('grupa').order('ordine'),
-      // Pachet C: km/ore live per activ (din toate sursele agregate)
-      supabase
-        .from('v_active_km_ore')
-        .select('activ_id, km_live, ore_live'),
-    ])
+    const d = await incarcaDateService(supabase)
     if (gen !== genLoad.current) return
-    const mesajFise = fisRes.error ? (fisRes.error.message || String(fisRes.error)) : ''
-    if (mesajFise) showToast(`Eroare la încărcare fișe: ${mesajFise}`, 'error')
-    if (actRes.error) showToast(`Eroare la încărcare active: ${actRes.error.message}`, 'error')
-    if (presetRes.error) showToast(`Eroare la preset itemi: ${presetRes.error.message}`, 'error')
-    if (kmOreRes.error) showToast(`Eroare la km/ore live: ${kmOreRes.error.message}`, 'error')
-    setEroareFise(mesajFise)
-    setFise(fisRes.data || [])
-    setActiveFull((actRes.data || []).map(a => ({
-      ...a,
-      categorie: a.logistica_categorii ? { tip: a.logistica_categorii.tip, subcategorie: a.logistica_categorii.subcategorie } : null,
-    })))
-    setPresetItems(presetRes.data || [])
-    // Populez kmOreMap: { [activ_id]: { km_live, ore_live } }
-    const map = {}
-    for (const r of (kmOreRes.data || [])) map[r.activ_id] = r
-    setKmOreMap(map)
+    if (d.eroare) showToast(`Eroare la încărcarea datelor de service: ${d.eroare}`, 'error')
+    if (d.eroarePreset) showToast(`Eroare la preset itemi: ${d.eroarePreset}`, 'error')
+    setEroareDate(d.eroare)
+    setFise(d.fise)
+    setActiveFull(d.active)
+    setPresetItems(d.preset)
+    setKmOreMap(d.kmOre)   // Pachet C: { [activ_id]: { km_live, ore_live } }
     setLoad(false)
   }, [showToast])
 
@@ -2183,12 +2161,6 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     for (const f of fise) m[f.activ_id] = (m[f.activ_id] || 0) + 1
     return m
   }, [fise])
-
-  const activMap = useMemo(() => {
-    const m = {}
-    for (const a of activeFull) m[a.id] = a
-    return m
-  }, [activeFull])
 
   // TKT-2026-0380 (r2): o scadență a unei fișe e închisă DOAR de o fișă ulterioară FINALIZATĂ, de tip
   // mentenanță, cu scadență pe aceeași dimensiune (acopeririScadente). Reparațiile, fișele programate /
@@ -2201,9 +2173,10 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     return calcUrmService(f, km?.km_live, km?.ore_live, { azi, acoperite: acoperiri[f.id], referinte })
   }, [kmOreMap, azi, acoperiri])
   // KPI + filtrul „Scadențe”: cea mai urgentă scadență DESCHISĂ a fiecărui activ, din toate fișele lui
-  const deschisePeActiv = useMemo(() => scadenteDeschisePeActiv(fise, kmOreMap, {
-    azi, acoperiri, exclude: id => !!activMap[id]?.fara_service_gazpet,   // comodat / închiriat: fără scadențe
-  }), [fise, kmOreMap, azi, acoperiri, activMap])
+  // (comodat / închiriat: fără scadențe). null = date incomplete → fără verdict (r4).
+  const deschisePeActiv = useMemo(() => scadenteDinDate(
+    { fise, active: activeFull, kmOre: kmOreMap, eroare: eroareDate }, { azi, acoperiri },
+  ), [fise, activeFull, kmOreMap, eroareDate, azi, acoperiri])
 
   const kpi = useMemo(() => {
     const total = fise.length
@@ -2217,7 +2190,7 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     // TKT-2026-0380 (r2): pe activ, cea mai urgentă scadență deschisă din TOATE fișele (nu doar din
     // ultima fișă); o depășire cu „citire de verificat” rămâne numărată la depășite.
     let scadDepasite = 0, scadAproape = 0
-    for (const { u } of Object.values(deschisePeActiv)) {
+    for (const { u } of Object.values(deschisePeActiv || {})) {
       const lvl = urmServiceLevel(u)
       if (lvl === 'depasit') scadDepasite++
       else if (lvl === 'aproape') scadAproape++
@@ -2259,7 +2232,7 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
       if (scadenteOnly) {
         // TKT-2026-0380 (r2): pe activ, fișa cu cea mai urgentă scadență DESCHISĂ (aceeași regulă ca
         // KPI-ul, deci numărul din KPI = rândurile de aici); comodat / închiriat sunt excluse acolo.
-        const d = deschisePeActiv[f.activ_id]
+        const d = deschisePeActiv?.[f.activ_id]
         if (!d || d.fisa.id !== f.id) return false
         const lvl = urmServiceLevel(d.u)
         if (lvl !== 'depasit' && lvl !== 'aproape') return false
@@ -2331,6 +2304,8 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
   }, [filtered, scadentaFisa])
 
   const exportExcel = () => {
+    // r4: fără date complete (fișe, active, km / ore live) exportul ar pierde scadențe → refuz
+    if (eroareDate) { showToast('Exportul nu e disponibil: datele de service nu s-au citit complet. Apasă „Reîncarcă”.', 'error'); return }
     const header = ['#', 'Data', 'Cod TST', 'Plăcuță', 'Marcă', 'Model', 'Categorie', 'Tip', 'Status', 'Titlu', 'Locație', 'Nr. factură', 'Sumă (RON)', 'Manoperă (RON)', 'KM in', 'KM out', 'Ore in', 'Ore out', 'Diagnostic', 'Următor KM', 'Următor Ore', 'Următor data', 'Scadență', 'Observații']
     const rows = filtered.map((f, i) => {
       const a = f.logistica_active || {}
@@ -2395,8 +2370,8 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     : kpi.scadAproape > 0
       ? `${kpi.scadAproape} aproape (≤${PRAG_ZILE}z / ${PRAG_KM}km / ${PRAG_ORE}h)`
       : 'Toate la zi'
-  // TKT-2026-0380 (r3): fără lista completă de fișe nu există o cifră corectă (nici „Toate la zi”)
-  const faraFise = !!eroareFise
+  // TKT-2026-0380 (r3/r4): fără fișe, active și km / ore live complete nu există o cifră corectă (nici „Toate la zi”)
+  const faraFise = !!eroareDate
 
   return (
     <>
@@ -2422,10 +2397,10 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
       <>
       <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
         {faraFise ? (<>
-          <KPICard icon="📋" label="Total fișe" value="—" color={G.muted} sub="fișele nu s-au putut citi" />
+          <KPICard icon="📋" label="Total fișe" value="—" color={G.muted} sub="datele nu s-au putut citi complet" />
           <KPICard icon="💰" label="Sumă totală" value="—" color={G.muted} />
           <KPICard icon="📊" label="Acoperire flotă" value="—" color={G.muted} />
-          <KPICard icon="⛔" label="Scadențe service" value="—" color={G.red} sub="necunoscut: fișele nu s-au putut citi complet" />
+          <KPICard icon="⛔" label="Scadențe service" value="—" color={G.red} sub="necunoscut: datele nu s-au putut citi complet" />
         </>) : (<>
         <KPICard icon="📋" label="Total fișe" value={kpi.total} color={G.logistica}
           sub={`${kpi.programat} programate · ${kpi.in_lucru} în lucru · ${kpi.finalizat} finalizate`} />
@@ -2443,7 +2418,7 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
         <div style={{ ...S.card, padding:'10px 14px', marginBottom:14, borderLeft:`3px solid ${G.red}`, background: G.red + '11',
           display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
           <div style={{fontSize:13, color:G.text}}>
-            ⛔ <strong>Fișele de service nu s-au putut citi complet</strong> — lista, totalurile și scadențele nu se afișează ca să nu pară complete. Detalii: {eroareFise}
+            ⛔ <strong>Datele de service nu s-au putut citi complet</strong> (fișe, active sau km / ore live) — lista, totalurile, scadențele și exportul nu sunt disponibile ca să nu pară complete. Detalii: {eroareDate}
           </div>
           <button onClick={loadAll} style={{...S.btnS, padding:'5px 12px', fontSize:11}}>↻ Reîncarcă</button>
         </div>
@@ -2544,10 +2519,12 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
           {sumaFiltrata > 0 && <> · sumă: <strong style={{color:G.green}}>{sumaFiltrata.toLocaleString('ro-RO', {minimumFractionDigits:2, maximumFractionDigits:2})} RON</strong></>}
         </div>
         <div style={{display:'flex', gap:8}}>
-          <button onClick={() => setAcoperireModal(true)} style={{...S.btnS, color: kpi.fara > 0 ? G.red : G.green, borderColor: (kpi.fara > 0 ? G.red : G.green) + '55'}}>
-            📊 Acoperire flotă {kpi.fara > 0 && `(${kpi.fara})`}
+          {/* r4: fără date complete, acoperirea și exportul nu se pot calcula corect → dezactivate */}
+          <button onClick={() => setAcoperireModal(true)} disabled={faraFise}
+            style={faraFise ? {...S.btnS, opacity:.4} : {...S.btnS, color: kpi.fara > 0 ? G.red : G.green, borderColor: (kpi.fara > 0 ? G.red : G.green) + '55'}}>
+            📊 Acoperire flotă {!faraFise && kpi.fara > 0 && `(${kpi.fara})`}
           </button>
-          <button onClick={exportExcel} disabled={filtered.length === 0} style={{...S.btnS, opacity: filtered.length === 0 ? .4 : 1}}>📥 Excel</button>
+          <button onClick={exportExcel} disabled={faraFise || filtered.length === 0} style={{...S.btnS, opacity: faraFise || filtered.length === 0 ? .4 : 1}}>📥 Excel</button>
           {canEdit && (
             <button onClick={() => setImportModal(true)} style={{...S.btnS, color: G.purple, borderColor: G.purple + '55'}} title="Import fișe vechi din XLSX (istoric)">
               📤 Import
@@ -2566,7 +2543,7 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
         </div>
       ) : faraFise ? (
         <div style={{...S.card, padding:40, textAlign:'center', color:G.muted}}>
-          <div style={{fontSize:14}}>Lista fișelor nu e disponibilă până la o încărcare completă (vezi mesajul de mai sus).</div>
+          <div style={{fontSize:14}}>Lista fișelor și scadențele nu sunt disponibile până la o încărcare completă (vezi mesajul de mai sus).</div>
         </div>
       ) : filtered.length === 0 ? (
         <div style={{...S.card, padding:60, textAlign:'center', color:G.muted}}>
