@@ -104,8 +104,8 @@ anon_rel AS (
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e, anon_id a WHERE e.grantee = a.oid AND e.grantor <> c.relowner)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e, anon_id a
                       WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = a.oid AND e.grantor <> c.relowner)) AS alt_acordant,
-         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv). Și: blocarea din migrări (o
-         -- retragere FROM PUBLIC fără efect) cere ca PUBLIC să nu aibă nimic pe obiectele de retras.
+         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv), deci obiectul rămâne, cu motivul.
+         -- (r4: blocarea din migrări nu mai folosește PUBLIC, ci un rol-santinelă creat în tranzacție.)
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e WHERE e.grantee = 0)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e
                       WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = 0)) AS are_public,
@@ -253,22 +253,32 @@ SELECT 'POLITICI_ANON' AS sectiune, c.oid::regclass::text AS tabel, pol.polname:
 
 -- ── SIMULARE (NOTICE): ca anon (JWT fără utilizator), doar citire — ce CITEȘTE anon efectiv din relațiile pe care are drept de citire? ──
 --    Se citesc VALORILE (cel mult 2 rânduri, doar coloanele pe care anon le poate citi), nu doar existența unui rând (r2, review #1081 P2:
---    EXISTS nu evaluează valorile, iar o vedere-agregat dă un rând chiar fără date). Fiecare relație primește UNA din patru clase:
+--    EXISTS nu evaluează valorile, iar o vedere-agregat dă un rând chiar fără date). Fiecare relație primește UNA din clasele:
 --      GOL                = 0 rânduri;
---      AGREGAT_FARA_DATE  = exact 1 rând și TOATE valorile lui sunt NULL sau zero (ex. o vedere de contoare peste tabele pe care anon nu le vede);
+--      un rând cu TOATE valorile NULL / zero = AMBIGUU (r4, review r3 P2: un tabel obișnuit cu un rând vizibil „(0)” arată la fel ca o vedere
+--                           de contoare fără date), confirmat apoi separat, din DEFINIȚIA relației:
+--        AGREGAT_FARA_DATE  = vedere (relkind v) a cărei interogare de vârf (arborele din pg_rewrite, citit fără deparsare) e UNA singură,
+--                             SELECT, cu agregate, FĂRĂ GROUP BY / GROUPING SETS / HAVING / operații de mulțimi / funcții-mulțime în listă:
+--                             o astfel de interogare dă mereu exact un rând, oricâte date ar vedea anon (zero = nimic vizibil);
+--        DATE_CITIBILE      = orice altceva (tabel, vedere materializată, tabel străin, vedere fără agregat de vârf sau cu GROUP BY): rândul
+--                             poate fi chiar un rând de date;
+--        AMBIGUU            = rămâne așa doar dacă definiția nu se poate citi / descifra (lipsă, altă formă decât cea știută): neconfirmat;
 --      DATE_CITIBILE      = orice alt rezultat (un rând cu o valoare nenulă / nezero sau ≥ 2 rânduri) => o pagină / un client poate depinde de
 --                           acel drept: se analizează ÎNAINTE de T2;
---      EROARE             = cererea pică (SQLSTATE + mesaj; ex. 42501 pe un tabel citit de o vedere security_invoker).
---    Așteptat: 0 relații cu DATE_CITIBILE. Valorile NU se afișează (doar clasa și numele relației). Politicile care cer cont sunt filtre
---    constante. Tot blocul are plafon 120 s; la depășire = eroare, se rulează pe clonă.
+--      EROARE             = cererea pică (SQLSTATE + mesaj); 42501 = drept refuzat (nimic citit), altă eroare = rezultat NECUNOSCUT.
+--    Concluzia „zero date citibile” cere 0 DATE_CITIBILE, 0 AMBIGUU neconfirmate și 0 erori necunoscute (linia „SIMULARE concluzie”). O vedere
+--    peste o altă vedere-agregat (SELECT * FROM v_contor) iese prudent DATE_CITIBILE: se analizează de mână. Valorile NU se afișează (doar clasa
+--    și numele relației). Politicile care cer cont sunt filtre constante. Tot blocul are plafon 120 s; la depășire = eroare, se rulează pe clonă.
 SET LOCAL statement_timeout = '120s';
 SET LOCAL ROLE anon;
 SELECT set_config('request.jwt.claims', '{"role":"anon"}', true), set_config('request.jwt.claim.role', 'anon', true),
        set_config('request.jwt.claim.sub', '', true);
 DO $simulare$
 DECLARE r record; v_cols text; v_j jsonb; v_date integer := 0; v_agregat integer := 0; v_gol integer := 0; v_err integer := 0;
+        v_ambiguu integer := 0; v_err_necunoscut integer := 0; v_def text; v_sus text; v_ad integer; v_q integer; v_esc boolean; v_ch text;
+        v_clasa text;
 BEGIN
-  FOR r IN SELECT c.oid, quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS nume FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  FOR r IN SELECT c.oid, c.relkind::text AS tip, quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS nume FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
               AND (has_table_privilege(c.oid, 'SELECT') OR has_any_column_privilege(c.oid, 'SELECT'))
             ORDER BY 2 LOOP
@@ -286,16 +296,55 @@ BEGIN
       ELSIF jsonb_array_length(v_j) = 1
             AND NOT EXISTS (SELECT 1 FROM jsonb_each(v_j -> 0) e
                              WHERE NOT (jsonb_typeof(e.value) = 'null' OR (jsonb_typeof(e.value) = 'number' AND e.value::text::numeric = 0))) THEN
-        v_agregat := v_agregat + 1; RAISE NOTICE 'SIMULARE anon AGREGAT_FARA_DATE in % (1 rand, toate valorile NULL / zero)', r.nume;
+        -- AMBIGUU (un rând, doar NULL / zero): confirmat din definiție. Câmpurile interogării de VÂRF din arborele vederii (pg_rewrite,
+        -- „({QUERY :camp valoare …})”): se păstrează doar textul de la adâncimea 2 (în interiorul primei acolade), fără subarbori; caracterul
+        -- de după un backslash (chr(92), escape-ul din arbore) nu deschide / închide nimic.
+        v_clasa := 'DATE_CITIBILE';
+        IF r.tip = 'v' THEN
+          v_def := (SELECT rw.ev_action::text FROM pg_rewrite rw WHERE rw.ev_class = r.oid AND rw.rulename = '_RETURN');
+          v_sus := ''; v_ad := 0; v_q := 0; v_esc := false;
+          IF v_def IS NOT NULL THEN
+            FOREACH v_ch IN ARRAY regexp_split_to_array(v_def, '') LOOP
+              IF v_esc THEN v_esc := false; IF v_ad = 2 THEN v_sus := v_sus || 'x'; END IF;
+              ELSIF v_ch = chr(92) THEN v_esc := true;
+              ELSIF v_ch IN ('{', '(') THEN v_ad := v_ad + 1; IF v_ad = 2 THEN v_q := v_q + 1; END IF;
+              ELSIF v_ch IN ('}', ')') THEN v_ad := v_ad - 1;
+              ELSIF v_ad = 2 THEN v_sus := v_sus || v_ch;
+              END IF;
+            END LOOP;
+            v_sus := ' ' || v_sus || ' ';
+          END IF;
+          IF v_def IS NULL OR v_q <> 1 OR v_ad <> 0 OR position('QUERY ' IN v_sus) <> 2
+             OR position(' :hasAggs ' IN v_sus) = 0 OR position(' :groupClause ' IN v_sus) = 0 OR position(' :groupingSets ' IN v_sus) = 0
+             OR position(' :havingQual ' IN v_sus) = 0 OR position(' :setOperations ' IN v_sus) = 0 OR position(' :hasTargetSRFs ' IN v_sus) = 0 THEN
+            v_clasa := 'AMBIGUU';   -- forma arborelui nu e cea știută: neconfirmat (nu se ghicește)
+          ELSIF position(' :commandType 1 ' IN v_sus) > 0 AND position(' :hasAggs true ' IN v_sus) > 0
+                AND position(' :groupClause <> ' IN v_sus) > 0 AND position(' :groupingSets <> ' IN v_sus) > 0
+                AND position(' :havingQual <> ' IN v_sus) > 0 AND position(' :setOperations <> ' IN v_sus) > 0
+                AND position(' :hasTargetSRFs false ' IN v_sus) > 0 THEN
+            v_clasa := 'AGREGAT_FARA_DATE';
+          END IF;
+        END IF;
+        IF v_clasa = 'AGREGAT_FARA_DATE' THEN
+          v_agregat := v_agregat + 1; RAISE NOTICE 'SIMULARE anon AGREGAT_FARA_DATE in % (1 rand, doar NULL / zero; confirmat: vedere cu agregat fara GROUP BY)', r.nume;
+        ELSIF v_clasa = 'AMBIGUU' THEN
+          v_ambiguu := v_ambiguu + 1; RAISE NOTICE 'SIMULARE anon AMBIGUU in % (1 rand, doar NULL / zero; definitia nu s-a putut confirma - de analizat)', r.nume;
+        ELSE
+          v_date := v_date + 1; RAISE NOTICE 'SIMULARE anon DATE_CITIBILE in % (1 rand, doar NULL / zero, dar nu e vedere cu agregat fara GROUP BY: poate fi un rand de date)', r.nume;
+        END IF;
       ELSE
         v_date := v_date + 1; RAISE NOTICE 'SIMULARE anon DATE_CITIBILE in % (% randuri citite, valorile nu se afiseaza)', r.nume, jsonb_array_length(v_j);
       END IF;
     EXCEPTION WHEN OTHERS THEN
-      v_err := v_err + 1; RAISE NOTICE 'SIMULARE anon EROARE la % (%): %', r.nume, SQLSTATE, SQLERRM;
+      v_err := v_err + 1;
+      IF SQLSTATE <> '42501' THEN v_err_necunoscut := v_err_necunoscut + 1; END IF;
+      RAISE NOTICE 'SIMULARE anon EROARE la % (%): %', r.nume, SQLSTATE, SQLERRM;
     END;
   END LOOP;
-  RAISE NOTICE 'SIMULARE rezumat: rolul curent %, % relatii cu date citibile, % agregate fara date, % goale, % erori',
-    current_user, v_date, v_agregat, v_gol, v_err;
+  RAISE NOTICE 'SIMULARE rezumat: rolul curent %, % relatii cu date citibile, % ambigue neconfirmate, % agregate fara date (confirmate), % goale, % erori (din care % necunoscute, altele decat 42501)',
+    current_user, v_date, v_ambiguu, v_agregat, v_gol, v_err, v_err_necunoscut;
+  RAISE NOTICE 'SIMULARE concluzie: %', CASE WHEN v_date = 0 AND v_ambiguu = 0 AND v_err_necunoscut = 0 THEN 'ZERO date citibile ca anon (dovedit pe aceasta baza)'
+    ELSE 'NEDOVEDIT: ' || v_date || ' cu date citibile, ' || v_ambiguu || ' ambigue, ' || v_err_necunoscut || ' erori necunoscute - de analizat inainte de T2' END;
 END $simulare$;
 RESET ROLE;
 
@@ -306,7 +355,8 @@ DO $statistici$
 DECLARE r record; v_schema text;
 BEGIN
   SELECT n.nspname INTO v_schema FROM pg_extension x JOIN pg_namespace n ON n.oid = x.extnamespace WHERE x.extname = 'pg_stat_statements';
-  IF v_schema IS NULL THEN RAISE NOTICE 'STATISTICI: extensia pg_stat_statements nu e instalata'; RETURN; END IF;
+  -- r4: sărit = LIPSĂ DE DOVADĂ, nu „zero apeluri ca anon” (condiția T2 cere statistici citite efectiv)
+  IF v_schema IS NULL THEN RAISE NOTICE 'STATISTICI: extensia pg_stat_statements nu e instalata - LIPSA DE DOVADA (nu inseamna zero apeluri ca anon)'; RETURN; END IF;
   BEGIN  -- extensia poate fi instalata fara sa fie incarcata (clona locala): nu e eroare a citirii
   FOR r IN EXECUTE format('SELECT s.calls, left(regexp_replace(s.query, %L, %L, %L), 300) AS q FROM %I.pg_stat_statements s '
                           'WHERE s.userid = %L::regrole ORDER BY s.calls DESC LIMIT 300', '[[:space:]]+', ' ', 'g', v_schema, 'anon') LOOP
@@ -316,7 +366,7 @@ BEGIN
     RAISE NOTICE 'STATISTICI: resetate ultima data la %', r.stats_reset;
   END LOOP;
   EXCEPTION WHEN object_not_in_prerequisite_state THEN
-    RAISE NOTICE 'STATISTICI: pg_stat_statements instalata, dar neincarcata (shared_preload_libraries) - sectiune sarita';
+    RAISE NOTICE 'STATISTICI: pg_stat_statements instalata, dar neincarcata (shared_preload_libraries) - sectiune sarita = LIPSA DE DOVADA (nu inseamna zero apeluri ca anon)';
   END;
 END $statistici$;
 ROLLBACK;

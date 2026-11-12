@@ -11,12 +11,17 @@
 --
 -- Ce face: gărzile; lista T3 calculată (REGULA_ANON v2) = EXACT BASELINE-ul revizuit; un drept implicit global al lui postgres pentru anon =
 --   refuz (reanaliză); câte un rând de jurnal pe tip (tabele / secvențe) cu drepturile exacte; BLOCAREA celor două rânduri din pg_default_acl
---   (retragere fără efect FROM PUBLIC, dovedită pe xmin) + RECITIREA regulii = jurnalul (ca la 20261218a: un ALTER DEFAULT PRIVILEGES
---   concurent comis înainte = refuz, unul după blocare așteaptă și pică după COMMIT-ul nostru); ALTER DEFAULT PRIVILEGES FOR ROLE postgres
---   IN SCHEMA public REVOKE ALL ON TABLES / ON SEQUENCES FROM anon; postcondiții: nimic implicit pentru anon de la postgres pe public, regula
---   recalculată nu mai găsește nimic în T3, sonda (un tabel cu serial și o vedere create ACUM de postgres în public, șterse în aceeași
---   tranzacție) nu dă nimic lui anon, celelalte roluri neschimbate (ALTE_ROLURI v1, după ștergerea sondei), timpul.
--- Lock-uri: doar catalog (pg_default_acl); sonda creează și șterge două obiecte proprii. Nu atinge niciun obiect existent.
+--   (r4: retragere fără efect de la un ROL-SANTINELĂ creat în tranzacție, dovedită pe xmin; r3 folosea FROM PUBLIC, care ar fi șters un drept
+--   implicit dat concurent lui PUBLIC — review r3 P1) + RECITIREA regulii = jurnalul + RECITIREA drepturilor implicite COMPLETE (toate
+--   rolurile, inclusiv PUBLIC) = instantaneul de la calcul (ca la 20261218a: un ALTER DEFAULT PRIVILEGES concurent comis înainte = refuz,
+--   unul după blocare așteaptă și pică după COMMIT-ul nostru); ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON
+--   TABLES / ON SEQUENCES FROM anon; santinela ștearsă; postcondiții: nimic implicit pentru anon de la postgres pe public, regula recalculată
+--   nu mai găsește nimic în T3, drepturile implicite complete „după” = „înainte” fără EXACT intrările lui anon din jurnal, sonda (un tabel cu
+--   serial și o vedere create ACUM de postgres în public, șterse în aceeași tranzacție) nu dă nimic lui anon, celelalte roluri neschimbate
+--   (ALTE_ROLURI v1, după ștergerea sondei), timpul.
+-- Lock-uri: doar catalog (pg_default_acl); sonda creează și șterge două obiecte proprii. Nu atinge niciun obiect existent. Blocarea NU e
+--   „fără urme”: rescrie cele două rânduri (xmin nou, WAL; ALTER DEFAULT PRIVILEGES le rescrie sortate, cu același conținut) și creează /
+--   șterge un rol în tranzacție.
 -- Revenire: supabase/revenire/20261218c_securitate_anon_drepturi_implicite_ROLLBACK.sql.
 DO $pre$
 DECLARE v_plafon text;
@@ -53,6 +58,13 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_default_acl d, aclexplode(d.defaclacl) e
               WHERE d.defaclrole = 'postgres'::regrole AND d.defaclnamespace = 0 AND e.grantee = 'anon'::regrole) THEN
     RAISE EXCEPTION '20261218c: postgres are drepturi implicite GLOBALE pentru anon (reanaliza)';
+  END IF;
+  -- blocarea cere un rol-santinelă creat în tranzacție: numele liber + dreptul de a crea roluri, verificate ÎNAINTE de orice scriere
+  IF to_regrole('gazpet_santinela_20261218c') IS NOT NULL THEN
+    RAISE EXCEPTION '20261218c: rolul gazpet_santinela_20261218c exista deja (ramas din alta rulare sau nume ocupat; nimic schimbat)';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = current_user AND (r.rolcreaterole OR r.rolsuper)) THEN
+    RAISE EXCEPTION '20261218c: postgres nu poate crea rolul-santinela (CREATEROLE lipsa; nimic schimbat)';
   END IF;
 END $pre$;
 
@@ -131,8 +143,8 @@ anon_rel AS (
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e, anon_id a WHERE e.grantee = a.oid AND e.grantor <> c.relowner)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e, anon_id a
                       WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = a.oid AND e.grantor <> c.relowner)) AS alt_acordant,
-         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv). Și: blocarea din migrări (o
-         -- retragere FROM PUBLIC fără efect) cere ca PUBLIC să nu aibă nimic pe obiectele de retras.
+         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv), deci obiectul rămâne, cu motivul.
+         -- (r4: blocarea din migrări nu mai folosește PUBLIC, ci un rol-santinelă creat în tranzacție.)
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e WHERE e.grantee = 0)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e
                       WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = 0)) AS are_public,
@@ -233,11 +245,30 @@ SELECT md5(coalesce(string_agg(y.l, chr(10) ORDER BY y.l COLLATE "C"), '')) FROM
 ) y
 -- <<< ALTE_ROLURI v1
 $alte$;
-CREATE TEMP TABLE anon_calc_20261218c AS SELECT * FROM pg_temp.anon_regula_20261218c();
+CREATE FUNCTION pg_temp.anon_acl_implicit_20261218c(p_tip text, p_fara_anon boolean) RETURNS text[]
+LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $acl$
+-- ACL-ul COMPLET al dreptului implicit al lui postgres pe public pentru tipul p_tip ('r' / 'S'): TOATE intrările, ale oricărui rol (inclusiv
+-- PUBLIC și anon), sortate (colația C); rândul lipsă = listă goală. p_fara_anon = fără intrările lui anon (starea de după retragere).
+SELECT coalesce(array_agg(y.l ORDER BY y.l COLLATE "C"), '{}'::text[]) FROM (
+  SELECT x.it::text AS l
+    FROM pg_catalog.pg_default_acl d CROSS JOIN LATERAL unnest(d.defaclacl) x(it)
+   WHERE d.defaclrole = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = 'postgres')
+     AND d.defaclnamespace = (SELECT n.oid FROM pg_catalog.pg_namespace n WHERE n.nspname = 'public')
+     AND d.defaclobjtype::text = p_tip
+     AND NOT (p_fara_anon AND EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e JOIN pg_catalog.pg_roles r ON r.oid = e.grantee WHERE r.rolname = 'anon'))
+) y
+$acl$;
+-- lista calculată O DATĂ; în ACEEAȘI instrucțiune (același instantaneu), drepturile implicite complete ale fiecărei ținte (cu și fără anon);
+-- tipul = ultimul cuvânt din etichetă ('implicit postgres public r' / '... S', verificat mai jos)
+CREATE TEMP TABLE anon_calc_20261218c AS
+  SELECT g.*, CASE WHEN g.r_treapta = 'T3' THEN pg_temp.anon_acl_implicit_20261218c(split_part(g.r_eticheta, ' ', 4), false) END AS r_acl,
+         CASE WHEN g.r_treapta = 'T3' THEN pg_temp.anon_acl_implicit_20261218c(split_part(g.r_eticheta, ' ', 4), true) END AS r_acl_fara_anon
+    FROM pg_temp.anon_regula_20261218c() g;
 CREATE TEMP TABLE anon_alte_inainte_20261218c AS SELECT pg_temp.anon_alte_20261218c() AS amprenta;
 CREATE FUNCTION pg_temp.anon_agregat_20261218c() RETURNS TABLE (a_treapta text, a_obiecte integer, a_amprenta text)
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $agregat$
-WITH anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (SELECT * FROM pg_temp.anon_calc_20261218c)
+WITH anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (
+  SELECT c.r_treapta, c.r_oid, c.r_eticheta, c.r_detaliu, c.r_drepturi, c.r_coloane, c.r_motiv FROM pg_temp.anon_calc_20261218c c)
 ,
 -- >>> AGREGAT_ANON v2
 -- amprenta unei trepte = md5 pe liniile „eticheta = md5(detaliu)” sortate (colația C); numărul de obiecte alături. Treapta goală: 0 și md5('').
@@ -297,9 +328,12 @@ BEGIN
     RAISE EXCEPTION '20261218c: jurnalul are % randuri, BASELINE-ul %', v_n, (SELECT b.obiecte FROM pg_temp.anon_baseline_20261218c() b);
   END IF;
 END $jurnal$;
--- blocarea: retragere fără efect de la PUBLIC => cele două rânduri din pg_default_acl sunt rescrise de noi și rămân ale noastre până la COMMIT
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC;
+-- blocarea (r4): retragere fără efect de la santinelă (creată ACUM, invizibilă altor sesiuni: n-are și nu primește niciun drept) => cele două
+-- rânduri din pg_default_acl sunt rescrise de noi și rămân ale noastre până la COMMIT, cu ACL-ul exact cum l-a comis ultima tranzacție
+-- (FROM PUBLIC, în r3, ar fi șters un drept implicit dat concurent lui PUBLIC)
+CREATE ROLE gazpet_santinela_20261218c NOLOGIN NOINHERIT;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM gazpet_santinela_20261218c;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM gazpet_santinela_20261218c;
 DO $blocare$
 DECLARE v_xid text := (txid_current() % 4294967296)::text; v_dif text;
 BEGIN
@@ -318,9 +352,18 @@ BEGIN
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261218c: schimbare concurenta intre calculul listei si blocare pe: % (nimic schimbat; se reia citirea)', v_dif;
   END IF;
+  -- recitirea drepturilor implicite COMPLETE pe rândurile blocate (r4): ale oricui (PUBLIC, alte roluri, anon) = EXACT instantaneul
+  SELECT string_agg(c.r_eticheta, ', ' ORDER BY c.r_eticheta COLLATE "C") INTO v_dif
+    FROM pg_temp.anon_calc_20261218c c
+   WHERE c.r_treapta = 'T3'
+     AND (c.r_acl IS NULL OR pg_temp.anon_acl_implicit_20261218c(split_part(c.r_eticheta, ' ', 4), false) IS DISTINCT FROM c.r_acl);
+  IF v_dif IS NOT NULL THEN
+    RAISE EXCEPTION '20261218c: ACL complet schimbat concurent intre calculul listei si blocare pe: % (drept implicit nou / scos pentru oricine, inclusiv PUBLIC; nimic schimbat; se reia citirea)', v_dif;
+  END IF;
 END $blocare$;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon;
+DROP ROLE gazpet_santinela_20261218c;
 
 -- ── sonda: un tabel cu serial și o vedere create ACUM de postgres în public nu dau nimic lui anon (șterse imediat) ──
 CREATE TABLE public._sec_anon_sonda_20261218c (id serial PRIMARY KEY, x text);
@@ -353,6 +396,16 @@ BEGIN
   END IF;
   SELECT string_agg(r.r_eticheta, ', ') INTO v_dif FROM pg_temp.anon_regula_20261218c() r WHERE r.r_treapta = 'T3';
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218c post: drepturi implicite ramase in T3: %', v_dif; END IF;
+  -- (r4) drepturile implicite COMPLETE: „după” = „înainte” fără intrările lui anon, iar intrările scoase = EXACT cele din jurnal
+  SELECT string_agg(c.r_eticheta, ', ' ORDER BY c.r_eticheta COLLATE "C") INTO v_dif
+    FROM pg_temp.anon_calc_20261218c c LEFT JOIN securitate_intern.anon_revocari j ON j.migrare = '20261218c' AND j.eticheta = c.r_eticheta
+   WHERE c.r_treapta = 'T3'
+     AND (c.r_acl IS NULL OR j.eticheta IS NULL
+          OR pg_temp.anon_acl_implicit_20261218c(split_part(c.r_eticheta, ' ', 4), false) IS DISTINCT FROM c.r_acl_fara_anon
+          OR ARRAY(SELECT z.l FROM (SELECT x FROM unnest(c.r_acl) x EXCEPT ALL SELECT y FROM unnest(c.r_acl_fara_anon) y) z(l) ORDER BY z.l COLLATE "C")
+             IS DISTINCT FROM ARRAY(SELECT z.l FROM unnest(j.drepturi) z(l) ORDER BY z.l COLLATE "C"));
+  IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218c post: drepturile implicite complete nu difera EXACT prin intrarile lui anon din jurnal pe: %', v_dif; END IF;
+  IF to_regrole('gazpet_santinela_20261218c') IS NOT NULL THEN RAISE EXCEPTION '20261218c post: rolul-santinela inca exista'; END IF;
   SELECT string_agg(DISTINCT coalesce(a.r_eticheta, b.r_eticheta), ', ') INTO v_dif
     FROM (SELECT r_treapta, r_eticheta, md5(r_detaliu) m FROM pg_temp.anon_calc_20261218c WHERE r_treapta <> 'T3') a
     FULL JOIN (SELECT r_treapta, r_eticheta, md5(r_detaliu) m FROM pg_temp.anon_regula_20261218c() WHERE r_treapta <> 'T3') b
@@ -367,5 +420,6 @@ BEGIN
   END IF;
   RAISE NOTICE '20261218c: drepturile implicite pentru anon retrase; sfarsit la % ms de la BEGIN', round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 END $post$;
-DROP FUNCTION pg_temp.anon_agregat_20261218c(), pg_temp.anon_regula_20261218c(), pg_temp.anon_alte_20261218c(), pg_temp.anon_baseline_20261218c();
+DROP FUNCTION pg_temp.anon_agregat_20261218c(), pg_temp.anon_regula_20261218c(), pg_temp.anon_alte_20261218c(), pg_temp.anon_baseline_20261218c(),
+  pg_temp.anon_acl_implicit_20261218c(text, boolean);
 DROP TABLE pg_temp.anon_calc_20261218c, pg_temp.anon_alte_inainte_20261218c;

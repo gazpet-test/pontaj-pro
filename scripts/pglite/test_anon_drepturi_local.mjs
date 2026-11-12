@@ -206,9 +206,30 @@ verifica(ob.find(r => r.eticheta === 'tabel public.t_coloane')?.detaliu.includes
 verifica(sectiune(C0, 'FUNCTII_ANON').some(r => r.functie === 'public.fn_invoker_citeste()') && !sectiune(C0, 'FUNCTII_ANON').some(r => /fn_pagina_publica/.test(r.functie)),
   'FUNCTII_ANON: funcția fără DEFINER apelabilă de anon (nu și RPC-ul DEFINER)')
 verifica(sectiune(C0, 'RAMANE').some(r => r.treapta === 'dupa T1+T2+T3' && r.eticheta === 'tabel'), 'RAMANE după toate treptele: tabelele cu politici / alt proprietar')
-verifica(C0.jurnal.some(m => /SIMULARE rezumat: rolul curent anon, 0 relatii cu date citibile, 1 agregate fara date, \d+ goale, \d+ erori/.test(m)),
-  'SIMULARE: rulează ca anon, 0 relații cu date citibile, vederea-contor = agregat fără date')
-verifica(C0.jurnal.some(m => /SIMULARE anon AGREGAT_FARA_DATE in public\.v_contor/.test(m)), 'SIMULARE: vederea-contor clasată AGREGAT_FARA_DATE')
+verifica(C0.jurnal.some(m => /SIMULARE rezumat: rolul curent anon, 0 relatii cu date citibile, 0 ambigue neconfirmate, 1 agregate fara date \(confirmate\), \d+ goale, \d+ erori \(din care 0 necunoscute/.test(m))
+  && C0.jurnal.some(m => /^SIMULARE concluzie: ZERO date citibile/.test(m)),
+  'SIMULARE: rulează ca anon, 0 relații cu date citibile, 0 ambigue, vederea-contor = agregat fără date (confirmat); concluzia ZERO')
+verifica(C0.jurnal.some(m => /SIMULARE anon AGREGAT_FARA_DATE in public\.v_contor \(1 rand, doar NULL \/ zero; confirmat: vedere cu agregat fara GROUP BY\)/.test(m)),
+  'SIMULARE: vederea-contor (agregat fără GROUP BY) confirmată din definiție AGREGAT_FARA_DATE')
+// r4 (review r3 P2): „un rând, doar zero / NULL” e AMBIGUU, confirmat din definiție. Un tabel cu un rând vizibil (0), o vedere cu GROUP BY
+// și o vedere peste vederea-contor ies DATE_CITIBILE; concluzia devine NEDOVEDIT (totul anulat la final)
+{
+  await db.exec(`BEGIN; CREATE TABLE public.t_zero (n integer); INSERT INTO public.t_zero VALUES (0); GRANT SELECT ON public.t_zero TO anon;
+    CREATE VIEW public.v_grup WITH (security_invoker = on) AS SELECT max(n) AS m FROM public.t_zero GROUP BY n; GRANT SELECT ON public.v_grup TO anon;
+    CREATE VIEW public.v_peste_contor WITH (security_invoker = on) AS SELECT * FROM public.v_contor; GRANT SELECT ON public.v_peste_contor TO anon;`)
+  const SP = (t) => t.replace('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;', 'SAVEPOINT s_citire;').replace(/ROLLBACK;\s*$/, 'ROLLBACK TO SAVEPOINT s_citire;')
+  const cz = await citire(db, SP(CITIRE))
+  // mutant: arborele nu se mai recunoaște (câmp redenumit) => vederea-contor rămâne AMBIGUU, nu e ghicită
+  const cm = await citire(db, SP(aplica(CITIRE, [["position(' :hasAggs ' IN v_sus) = 0", "position(' :hasAggsX ' IN v_sus) = 0"]])))
+  await db.exec('ROLLBACK')
+  console.log('   ' + cz.jurnal.filter(m => /SIMULARE (anon DATE|anon AGREGAT|anon AMBIGUU|rezumat|concluzie)/.test(m)).join(' | '))
+  verifica(['t_zero', 'v_grup', 'v_peste_contor'].every(n => cz.jurnal.some(m => m.startsWith(`SIMULARE anon DATE_CITIBILE in public.${n} (1 rand, doar NULL / zero, dar nu e vedere cu agregat`)))
+    && cz.jurnal.some(m => /SIMULARE anon AGREGAT_FARA_DATE in public\.v_contor/.test(m))
+    && cz.jurnal.some(m => /^SIMULARE concluzie: NEDOVEDIT: 3 cu date citibile, 0 ambigue/.test(m)),
+    'SIMULARE (review r3 P2): un rând (0) într-un tabel, o vedere cu GROUP BY și o vedere peste contor = DATE_CITIBILE; doar agregatul fără GROUP BY e confirmat')
+  verifica(cm.jurnal.some(m => /SIMULARE anon AMBIGUU in public\.v_contor/.test(m)) && cm.jurnal.some(m => /^SIMULARE concluzie: NEDOVEDIT: \d+ cu date citibile, [1-9]\d* ambigue/.test(m)),
+    'SIMULARE mutant (arbore nerecunoscut): vederea-contor rămâne AMBIGUU și concluzia e NEDOVEDIT, nu „zero”')
+}
 // SIMULARE deosebește datele citibile: o politică temporară care lasă anon să vadă un rând => DATE_CITIBILE (anulată la final)
 {
   await db.exec(`BEGIN; INSERT INTO public.t_cu_politica (x) VALUES ('vizibil'); CREATE POLICY p_tmp ON public.t_cu_politica FOR SELECT TO anon USING (true);`)
@@ -221,7 +242,7 @@ verifica(C0.jurnal.some(m => /SIMULARE anon AGREGAT_FARA_DATE in public\.v_conto
     'SIMULARE: un rând vizibil = DATE_CITIBILE (tabelul și contorul cu valoare nenulă), fără valori în NOTICE')
   verifica(!cs.jurnal.some(m => m.includes('vizibil')), 'SIMULARE: valorile citite nu apar în NOTICE')
 }
-verifica(C0.jurnal.some(m => /STATISTICI: extensia pg_stat_statements nu e instalata/.test(m)), 'STATISTICI: lipsa extensiei raportată, fără eroare')
+verifica(C0.jurnal.some(m => /STATISTICI: extensia pg_stat_statements nu e instalata - LIPSA DE DOVADA/.test(m)), 'STATISTICI: lipsa extensiei raportată ca LIPSĂ DE DOVADĂ, fără eroare')
 
 // lock-urile ținute de tranzacția T2 la final (OBSERVAȚIE pe PG18, nu garanție pentru PG17.6): pe relațiile din public cel mult ACCESS SHARE
 // (nu oprește citiri / scrieri); serializarea cu alte sesiuni vine din rândurile de catalog rescrise (xmin, verificat mai jos), nu din lock-uri
@@ -231,7 +252,12 @@ const lk = await caRunner(db, NUME.b, M.b, { inainteDeCommit: `SELECT l.mode, c.
 const lkr = lk.rez[lk.rez.length - 2].rows
 const moduri = [...new Set(lkr.filter(r => r.nspname === 'public').map(r => r.mode))]
 console.log('   lock-uri observate (PG18): public = ' + moduri.join(', ') + '; catalog = ' + [...new Set(lkr.filter(r => r.nspname === 'pg_catalog' && /^pg_(class|attribute)$/.test(r.relname)).map(r => r.relname + ' ' + r.mode))].join(', '))
-verifica(moduri.every(m => m === 'AccessShareLock'), `T2: pe relațiile din public nu ține nimic peste ACCESS SHARE (observat: ${moduri.join(', ') || 'nimic'})`)
+// r4: lista goală NU e „ok” (L18; PGlite 0.3 nu raporta pg_locks): ACCESS SHARE pe FIECARE tabel / vedere din T2 (LOCK explicit, review r3 P1)
+const blocate = new Set(lkr.filter(r => r.nspname === 'public' && r.mode === 'AccessShareLock').map(r => r.relname))
+const T2_LOCK = ['t_coloane', 't_fara_politici', 't_identity', 't_part_1', 't_part2', 'v_contor', 'v_formular_public', 'v_simplu']
+verifica(moduri.length > 0 && moduri.every(m => m === 'AccessShareLock') && T2_LOCK.every(n => blocate.has(n)),
+  `T2: ACCESS SHARE pe fiecare țintă (tabele, partiții, vederi) și nimic peste ACCESS SHARE în public (observat: ${moduri.join(', ') || 'nimic'}; ${blocate.size} relații)`)
+verifica(!blocate.has('t_part2_1'), 'T2: LOCK … ONLY — partiția din afara listei (cu politică) nu e blocată prin părinte')
 const xm = (await caRunner(db, NUME.b, M.b, { inainteDeCommit: `SELECT count(*) FILTER (WHERE c.xmin::text <> (txid_current() % 4294967296)::text)::int AS straine, count(*)::int AS n
   FROM securitate_intern.anon_revocari j JOIN pg_class c ON c.oid = j.obiect_oid WHERE j.migrare = '20261218b';` })).rez
 verifica(xm[xm.length - 2].rows[0].straine === 0 && xm[xm.length - 2].rows[0].n === 8, 'T2: la final, rândul din pg_class al fiecărui obiect din jurnal e al tranzacției (blocat până la COMMIT)')
@@ -385,22 +411,33 @@ for (const [k, nume, sql] of RECREARI) {
 // cu instrucțiunea ei injectată EXACT în fereastră (proba cu două sesiuni reale: scripts/anon_drepturi_concurenta.mjs, pe clona PG17).
 const INJ_A = '-- ── jurnalul comun al treptelor (neexpus în API, doar postgres) ──'
 const INJ_B = '-- ── jurnal, blocarea rândurilor + recitirea, apoi UN SINGUR REVOKE pe lista din jurnal + verificarea coloanelor ──'
-const INJ_C = '-- blocarea: retragere fără efect de la PUBLIC => cele două rânduri din pg_default_acl sunt rescrise de noi și rămân ale noastre până la COMMIT'
+const INJ_C = 'CREATE ROLE gazpet_santinela_20261218c NOLOGIN NOINHERIT;'
 const REV_B_IN = "  EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';"
+// blocarea din r3 (FROM PUBLIC), pentru mutanții care reproduc defectul review-ului r3 P1
+const SANT = {
+  a: ["  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM gazpet_santinela_20261218a';", "  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM PUBLIC';"],
+  b: ["  EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM gazpet_santinela_20261218b';", "  EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM PUBLIC';"],
+  c: ['ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM gazpet_santinela_20261218c;',
+      'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;'],
+}
 const GRANT_SEQ = 'GRANT SELECT ON SEQUENCE public.t_identity_id_seq TO anon WITH GRANT OPTION;'
 const jurnalT = async (d, m, e) => (await d.query(`SELECT drepturi, coloane FROM securitate_intern.anon_revocari WHERE migrare = '${m}' AND eticheta = '${e}'`)).rows[0]
 await cuBaza(async (d) => {
   const { mig } = await migrariCuBaseline(d)
   await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [[INJ_A, GRANT_SEQ + '\n' + INJ_A]])), 'schimbare concurenta',
     'cursa a: un drept nou (opțiune de acordare) pe o secvență din listă, între calcul și blocare')
-  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [["  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM PUBLIC';", '  NULL;']])),
+  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [[SANT.a[0], '  NULL;']])),
     'blocarea randurilor din catalog nu s-a facut', 'mutant a fără blocare: dovada pe xmin refuză')
-  // mutantul fără recitire: aceeași cursă TRECE și dreptul injectat dispare fără jurnal (defectul din review, reprodus)
-  await caRunner(d, NUME.a, aplica(mig.a, [[INJ_A, GRANT_SEQ + '\n' + INJ_A],
-    ["  IF v_dif IS NOT NULL THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta", "  IF false THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta"]]))
+  // r4: fără recitirea regulii, aceeași cursă e prinsă de recitirea ACL-ului complet (intrarea lui anon s-a schimbat)
+  const FARA_REG = ["  IF v_dif IS NOT NULL THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta", "  IF false THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta"]
+  const FARA_ACL = ["  IF v_dif IS NOT NULL THEN\n    RAISE EXCEPTION '20261218a: ACL complet schimbat concurent", "  IF false THEN\n    RAISE EXCEPTION '20261218a: ACL complet schimbat concurent"]
+  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [[INJ_A, GRANT_SEQ + '\n' + INJ_A], FARA_REG])), 'ACL complet schimbat concurent',
+    'a fără recitirea regulii: dreptul nou al lui anon e prins de recitirea ACL complet')
+  // mutantul fără AMBELE recitiri: aceeași cursă TRECE și dreptul injectat dispare fără jurnal (defectul din review, reprodus)
+  await caRunner(d, NUME.a, aplica(mig.a, [[INJ_A, GRANT_SEQ + '\n' + INJ_A], FARA_REG, FARA_ACL]))
   const j = await jurnalT(d, '20261218a', 'secventa public.t_identity_id_seq')
   const acum = (await d.query(`SELECT has_sequence_privilege('anon', 'public.t_identity_id_seq', 'SELECT WITH GRANT OPTION') x`)).rows[0].x
-  verifica(j && !j.drepturi.some(x => x.includes('*')) && !acum, 'mutant a fără recitire: dreptul dat în fereastră e retras și LIPSEȘTE din jurnal (recitirea e cea care îl prinde)')
+  verifica(j && !j.drepturi.some(x => x.includes('*')) && !acum, 'mutant a fără cele două recitiri: dreptul dat în fereastră e retras și LIPSEȘTE din jurnal (recitirile îl prind)')
 })
 await cuBaza(async (d) => {
   const { mig } = await migrariCuBaseline(d)
@@ -419,6 +456,74 @@ await cuBaza(async (d) => {
   await caRunner(d, NUME.a, mig.a)
   await trebuieSaRefuze(caRunner(d, NUME.c, aplica(mig.c, [[INJ_C, 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT TRUNCATE ON TABLES TO anon;\n' + INJ_C]])),
     'schimbare concurenta', 'cursa c: un drept implicit nou pentru anon, între calcul și blocare')
+})
+// r4 (review r3 P1): un drept dat lui PUBLIC între calcul și blocare. Cu santinela: refuz (dreptul nu e consumat, recitirea îl vede).
+// Mutantul cu blocarea din r3 (FROM PUBLIC): A COMITE și dreptul PUBLIC dispare fără jurnal = defectul din review, reprodus.
+const PUB = {
+  a: ['GRANT SELECT ON SEQUENCE public.t_identity_id_seq TO PUBLIC;', INJ_A, `SELECT count(*)::int n FROM pg_class c, aclexplode(c.relacl) e WHERE c.oid = 'public.t_identity_id_seq'::regclass AND e.grantee = 0`],
+  b: ['GRANT SELECT ON public.t_identity TO PUBLIC;', INJ_B, `SELECT count(*)::int n FROM pg_class c, aclexplode(c.relacl) e WHERE c.oid = 'public.t_identity'::regclass AND e.grantee = 0`],
+  c: ['ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC;', INJ_C,
+      `SELECT count(*)::int n FROM pg_default_acl d, aclexplode(d.defaclacl) e WHERE d.defaclrole = 'postgres'::regrole AND d.defaclnamespace = 'public'::regnamespace AND d.defaclobjtype = 'r' AND e.grantee = 0`],
+}
+for (const k of ['a', 'b', 'c']) {
+  await cuBaza(async (d) => {
+    const { mig } = await migrariCuBaseline(d)
+    if (k !== 'a') await caRunner(d, NUME.a, mig.a)
+    const [g, inj, nPub] = PUB[k]
+    await trebuieSaRefuze(caRunner(d, NUME[k], aplica(mig[k], [[inj, g + '\n' + inj]])), k === 'c' ? 'ACL complet schimbat concurent' : 'schimbare concurenta',
+      `cursa ${k} (R7): un drept nou pentru PUBLIC pe o țintă, între calcul și blocare => refuz, nimic consumat`)
+    await caRunner(d, NUME[k], aplica(mig[k], [[inj, g + '\n' + inj], SANT[k]]))
+    const dupa = (await d.query(nPub)).rows[0].n
+    verifica(dupa === 0, `mutant ${k} cu blocarea din r3 (FROM PUBLIC): A comite și dreptul PUBLIC dat în fereastră DISPARE (${dupa} intrări PUBLIC după) — defectul review-ului r3, reprodus`)
+  })
+}
+// r4: recitirea ACL-ului COMPLET e plasa a doua. Pe c, regula nu vede PUBLIC (detaliul T3 = doar anon), deci recitirea ACL o prinde; fără ea
+// (mutant) refuză abia sonda (tabelul nou primește SELECT prin PUBLIC). Pe a, fără recitirea regulii, o prinde recitirea ACL.
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  await caRunner(d, NUME.a, mig.a)
+  const FARA_ACL_C = ['  IF v_dif IS NOT NULL THEN\n    RAISE EXCEPTION \'20261218c: ACL complet schimbat concurent', '  IF false THEN\n    RAISE EXCEPTION \'20261218c: ACL complet schimbat concurent']
+  await trebuieSaRefuze(caRunner(d, NUME.c, aplica(mig.c, [[PUB.c[1], PUB.c[0] + '\n' + PUB.c[1]], FARA_ACL_C])), 'obiecte-sonda',
+    'mutant c fără recitirea ACL complet: dreptul implicit PUBLIC dat în fereastră e prins abia de sondă')
+})
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  const FARA_REG_A = ["  IF v_dif IS NOT NULL THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta", "  IF false THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta"]
+  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [[PUB.a[1], PUB.a[0] + '\n' + PUB.a[1]], FARA_REG_A])), 'ACL complet schimbat concurent',
+    'a fără recitirea regulii: dreptul PUBLIC dat în fereastră e prins de recitirea ACL complet')
+  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [[PUB.a[1], 'GRANT SELECT ON SEQUENCE public.t_identity_id_seq TO authenticated WITH GRANT OPTION;\n' + PUB.a[1]]])),
+    'ACL complet schimbat concurent', 'a: un drept nou pentru ALT rol pe o țintă, între calcul și blocare => refuz (ACL complet)')
+})
+// r4 (review r3 P1, T2): o politică pentru anon creată între recitire și REVOKE. În PGlite (o conexiune, aceeași tranzacție) lock-ul ACCESS
+// SHARE nu se poate proba (îl probează R6 pe clonă); aici: postcondiția b1 refuză, iar fără ea (mutant) apare exact defectul din review
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  await caRunner(d, NUME.a, mig.a)
+  const POL = `  EXECUTE 'CREATE POLICY p_cursa ON public.t_identity FOR SELECT TO anon USING (true)';\n` + REV_B_IN
+  await trebuieSaRefuze(caRunner(d, NUME.b, aplica(mig.b, [[REV_B_IN, POL]])), 'politica pentru anon / PUBLIC (aparuta concurent sau regula gresita)',
+    'cursa b (R6): politică pentru anon creată între recitire și REVOKE => refuz la postcondiția b1')
+  const FARA_B1 = ["  IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218b post: obiecte din jurnal cu politica", "  IF false THEN RAISE EXCEPTION '20261218b post: obiecte din jurnal cu politica"]
+  await caRunner(d, NUME.b, aplica(mig.b, [[REV_B_IN, POL], FARA_B1]))
+  const pol = (await d.query(`SELECT count(*)::int n FROM pg_policy WHERE polname = 'p_cursa'`)).rows[0].n
+  const jur = (await d.query(`SELECT count(*)::int n FROM securitate_intern.anon_revocari WHERE migrare = '20261218b' AND eticheta = 'tabel public.t_identity'`)).rows[0].n
+  const x = await caAnon(d, 'SELECT * FROM public.t_identity')
+  verifica(pol === 1 && jur === 1 && !x.ok && x.code === '42501',
+    `mutant b fără postcondiția b1: A comite, politica există (${pol}), tabelul e în jurnal (${jur}), SELECT ca anon = ${x.code || 'ok'} — defectul review-ului r3, reprodus`)
+})
+// r4: santinela nu rămâne și nu poate fi ocupată dinainte
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  await d.exec('CREATE ROLE gazpet_santinela_20261218a NOLOGIN;')
+  await trebuieSaRefuze(caRunner(d, NUME.a, mig.a), 'rolul gazpet_santinela_20261218a exista deja', 'a: numele santinelei ocupat => refuz înainte de orice scriere')
+  await d.exec('DROP ROLE gazpet_santinela_20261218a;')
+  await caRunner(d, NUME.a, mig.a); await caRunner(d, NUME.b, mig.b); await caRunner(d, NUME.c, mig.c)
+  const r = (await d.query(`SELECT count(*)::int n FROM pg_roles WHERE rolname LIKE 'gazpet_santinela_%'`)).rows[0].n
+  verifica(r === 0, 'după a + b + c: niciun rol-santinelă rămas')
+})
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [['  DROP ROLE gazpet_santinela_20261218a;', '  NULL;']])), 'rolul-santinela inca exista',
+    'mutant a fără DROP ROLE: postcondiția refuză (santinela nu poate rămâne)')
 })
 await cuBaza(async (d) => {
   const { mig } = await migrariCuBaseline(d)
@@ -458,7 +563,10 @@ await cuBaza(async (d) => {
 // mutanți pe migrare / revenire: fiecare TREBUIE să pice la verificarea lui
 const MUTANTI = [
   ['a fără REVOKE', 'a', [["EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM anon';", 'NULL;']], 'anon mai are drepturi'],
-  ['b retrage și de la authenticated', 'b', [["EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';", "EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon, authenticated';"]], 'drepturile altor roluri'],
+  // r4: prins acum mai devreme, de ACL-ul complet (b2), înaintea amprentei ALTE_ROLURI
+  ['b retrage și de la authenticated', 'b', [["EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';", "EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon, authenticated';"]], 'ACL-ul complet nu difera EXACT prin intrarile lui anon'],
+  ['b retrage și de la authenticated, fără b2', 'b', [["EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';", "EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon, authenticated';"],
+    ["  IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218b post: ACL-ul complet", "  IF false THEN RAISE EXCEPTION '20261218b post: ACL-ul complet"]], 'drepturile altor roluri'],
   ['b retrage doar SELECT (coloanele rămân)', 'b', [["EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';", "EXECUTE 'REVOKE SELECT ON TABLE ' || v_lista || ' FROM anon';"]], 'anon mai are drepturi'],
   ['c fără secvențe', 'c', [['ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon;', '']], 'obiecte-sonda'],
 ]
@@ -488,9 +596,12 @@ for (const [nume, k, inl, fragment] of MUTANTI_REV) {
 await cuBaza(async (d) => {
   const R = [["                  WHEN r.politici_anon > 0 THEN 'RAMANE'\n", '']]
   const { mig } = await migrariCuBaseline(d, { citireText: aplica(CITIRE, R), mig: { a: aplica(MIG.a, R), b: aplica(MIG.b, R), c: aplica(MIG.c, R) } })
-  await caRunner(d, NUME.a, mig.a); await caRunner(d, NUME.b, mig.b)
+  await caRunner(d, NUME.a, mig.a)
+  // r4: postcondiția b1 (niciun obiect din jurnal cu politică pentru anon / PUBLIC) prinde și o regulă greșită, nu doar cursa
+  await trebuieSaRefuze(caRunner(d, NUME.b, mig.b), 'politica pentru anon / PUBLIC', 'mutant regulă fără excepția politicilor: refuz la postcondiția b1')
+  await caRunner(d, NUME.b, aplica(mig.b, [["  IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218b post: obiecte din jurnal cu politica", "  IF false THEN RAISE EXCEPTION '20261218b post: obiecte din jurnal cu politica"]]))
   const a = anonDin(await instantaneu(d))
-  verifica(!a.some(l => l.startsWith('rel t_cu_politica ')), 'mutant regulă fără excepția politicilor: tabelul cu politică chiar pierde dreptul (verificarea principală l-ar prinde)')
+  verifica(!a.some(l => l.startsWith('rel t_cu_politica ')), 'mutant regulă fără excepția politicilor și fără b1: tabelul cu politică chiar pierde dreptul (verificarea principală l-ar prinde)')
 })
 
 console.log(`\n${treceri} verificări trecute, ${esecuri} picate`)

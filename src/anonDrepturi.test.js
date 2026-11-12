@@ -77,21 +77,48 @@ describe('L19 — o singură definiție a regulii, a agregatului și a amprentei
 describe('r2 — cursa dintre calculul listei și REVOKE (review #1081 P1)', () => {
   const ordine = (t, ...frag) => { let i = -1; for (const f of frag) { const j = t.indexOf(f, i + 1); expect(j, f).toBeGreaterThan(i); i = j } }
   for (const [k, seq] of [['a', 'SEQUENCE'], ['b', 'TABLE']]) {
-    it(`${MIG[k]}: jurnal -> blocare (FROM PUBLIC) -> dovada pe xmin -> recitire = jurnal -> REVOKE FROM anon`, () => {
+    it(`${MIG[k]}: jurnal -> blocare (santinelă, r4) -> dovada pe xmin -> recitire = jurnal -> ACL complet = instantaneu -> REVOKE FROM anon -> DROP ROLE`, () => {
       const t = citeste(MIG[k])
-      ordine(t, 'INSERT INTO securitate_intern.anon_revocari', `EXECUTE 'REVOKE ALL ON ${seq} ' || v_lista || ' FROM PUBLIC';`,
+      ordine(t, `THEN pg_temp.anon_acl_20261218${k}(g.r_oid, false) END AS r_acl`, 'INSERT INTO securitate_intern.anon_revocari',
+        `CREATE ROLE gazpet_santinela_20261218${k} NOLOGIN NOINHERIT;`, `EXECUTE 'REVOKE ALL ON ${seq} ' || v_lista || ' FROM gazpet_santinela_20261218${k}';`,
         "c.xmin::text IS DISTINCT FROM v_xid", 'blocarea randurilor din catalog nu s-a facut', `FROM pg_temp.anon_regula_20261218${k}() WHERE r_treapta = '${T[k]}') b`,
-        'schimbare concurenta intre calculul listei si blocare', `EXECUTE 'REVOKE ALL ON ${seq} ' || v_lista || ' FROM anon';`)
+        'schimbare concurenta intre calculul listei si blocare', `pg_temp.anon_acl_20261218${k}(j.obiect_oid, false) IS DISTINCT FROM c.r_acl`,
+        'ACL complet schimbat concurent', `EXECUTE 'REVOKE ALL ON ${seq} ' || v_lista || ' FROM anon';`, `DROP ROLE gazpet_santinela_20261218${k};`,
+        `IS DISTINCT FROM c.r_acl_fara_anon`, 'ACL-ul complet nu difera EXACT prin intrarile lui anon din jurnal', `IF to_regrole('gazpet_santinela_20261218${k}') IS NOT NULL THEN RAISE EXCEPTION`)
     })
   }
+  it('r4 (review r3 P1): blocarea NU mai e o retragere de la PUBLIC (ar consuma un drept dat concurent lui PUBLIC)', () => {
+    for (const k of 'ab') expect(citeste(MIG[k])).not.toContain("|| v_lista || ' FROM PUBLIC'")
+    expect(citeste(MIG.c)).not.toMatch(/REVOKE ALL ON (TABLES|SEQUENCES) FROM PUBLIC;/)
+    // santinela: nume liber + CREATEROLE verificate în gărzile de start, înainte de orice scriere
+    for (const k of 'abc') ordine(citeste(MIG[k]), `IF to_regrole('gazpet_santinela_20261218${k}') IS NOT NULL THEN`, 'CREATEROLE lipsa', 'END $pre$;')
+  })
+  it('ACL_COMPLET v1: o singură definiție, identică în a și b (L19)', () => {
+    const x = blocuri(citeste(MIG.a), 'ACL_COMPLET v1')
+    expect(x).toHaveLength(1)
+    expect(blocuri(citeste(MIG.b), 'ACL_COMPLET v1')).toEqual(x)
+    expect(x[0]).toContain("'obiect ' || x.it::text"); expect(x[0]).toContain("'coloana ' || a.attnum::text || ' ' || x.it::text")
+  })
+  it('r4 (review r3 P1, T2): ACCESS SHARE pe ținte ÎNAINTEA blocării; postcondiția „nicio politică pentru anon / PUBLIC pe obiectele din jurnal”', () => {
+    const t = citeste(MIG.b)
+    ordine(t, "SELECT string_agg('ONLY ' || format('%I.%I', n.nspname, c.relname)", "c.relkind IN ('r', 'p', 'v')",
+      "EXECUTE 'LOCK TABLE ' || v_lock || ' IN ACCESS SHARE MODE';", 'CREATE ROLE gazpet_santinela_20261218b', "EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';",
+      'JOIN pg_policy pol ON pol.polrelid = j.obiect_oid', "(0::oid = ANY (pol.polroles) OR 'anon'::regrole::oid = ANY (pol.polroles))",
+      'cu politica pentru anon / PUBLIC (aparuta concurent sau regula gresita)')
+    expect(t).toContain('Blocarea NU e „fără urme”')
+  })
   it('b: după REVOKE, rândurile de coloane rescrise = exact cele cu drepturi la recitire (coloana neblocată)', () => {
     ordine(citeste(MIG.b), 'v_col := ARRAY(', "EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';", 'v_col_dupa := ARRAY(', 'a.xmin::text = v_xid',
       'IF v_col_dupa IS DISTINCT FROM v_col THEN', 'drepturi pe coloane schimbate concurent')
   })
-  it('c: blocarea celor două rânduri din pg_default_acl + recitire, înaintea retragerii', () => {
-    ordine(citeste(MIG.c), 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;',
-      'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC;', 'd.xmin::text = v_xid',
-      'schimbare concurenta intre calculul listei si blocare', 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon;')
+  it('c: blocarea celor două rânduri din pg_default_acl (santinelă) + recitire + ACL complet, înaintea retragerii; postcondiția pe ACL complet', () => {
+    ordine(citeste(MIG.c), "THEN pg_temp.anon_acl_implicit_20261218c(split_part(g.r_eticheta, ' ', 4), false) END AS r_acl",
+      'CREATE ROLE gazpet_santinela_20261218c NOLOGIN NOINHERIT;',
+      'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM gazpet_santinela_20261218c;',
+      'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM gazpet_santinela_20261218c;', 'd.xmin::text = v_xid',
+      'schimbare concurenta intre calculul listei si blocare', 'ACL complet schimbat concurent',
+      'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon;', 'DROP ROLE gazpet_santinela_20261218c;',
+      'drepturile implicite complete nu difera EXACT prin intrarile lui anon din jurnal')
   })
   it('comentariile nu mai promit „ACCESS SHARE pe fiecare țintă” și spun ce se detectează exact', () => {
     for (const k of 'abc') expect(citeste(MIG[k])).not.toMatch(/ia ACCESS SHARE pe fiecare/)
@@ -103,8 +130,25 @@ describe('r2 — cursa dintre calculul listei și REVOKE (review #1081 P1)', () 
   it('proba cu două sesiuni pe clonă: gărzi de țintă (system_identifier, PG17, nu Supabase), scenariile și mutanții', () => {
     const p = citeste('scripts/anon_drepturi_concurenta.mjs')
     for (const s of ['pg_control_system()', 'process.exit(22)', "supabase\\.(co|com)", 'pg_blocking_pids', "wait_event = 'PgSleep'", 'SET transaction_timeout = 2000',
-      'R1', 'R2', 'R3', 'R4', 'R5', 'fara_recitire', 'fara_coloane', '1500']) expect(p, s).toContain(s)
+      'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7a', 'R7b', 'R7c', 'R8', 'R9', 'fara_recitire', 'fara_coloane', 'blocare_public', 'fara_lock', '1500',
+      "rolname LIKE 'gazpet", 'iesire = 26']) expect(p, s).toContain(s)
     expect(p.startsWith('#!')).toBe(false)
+  })
+  it('proba cu două sesiuni: fiecare ancoră de instrumentare / mutant există EXACT o dată în migrarea ei', () => {
+    const p = citeste('scripts/anon_drepturi_concurenta.mjs')
+    const n = (k, s) => citeste(MIG[k]).split(s).length - 1
+    for (const [k, s] of [['a', '-- ── jurnalul comun al treptelor (neexpus în API, doar postgres) ──'],
+      ['b', '-- ── jurnal, blocarea rândurilor + recitirea, apoi UN SINGUR REVOKE pe lista din jurnal + verificarea coloanelor ──'],
+      ['c', 'CREATE ROLE gazpet_santinela_20261218c NOLOGIN NOINHERIT;'], ['b', 'DROP FUNCTION pg_temp.anon_agregat_20261218b(), pg_temp.anon_regula_20261218b()'],
+      ['c', 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon;'],
+      ['a', "  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM gazpet_santinela_20261218a';"],
+      ['b', "  EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM gazpet_santinela_20261218b';"],
+      ['c', 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM gazpet_santinela_20261218c;'],
+      ['b', "    EXECUTE 'LOCK TABLE ' || v_lock || ' IN ACCESS SHARE MODE';"],
+      ['a', "  IF v_dif IS NOT NULL THEN\n    RAISE EXCEPTION '20261218a: ACL complet schimbat concurent"]]) {
+      expect(n(k, s), `${k}: ${s.slice(0, 60)}`).toBe(1)
+      expect(p, s.slice(0, 60)).toContain(s.replace(/\n/g, '\\n'))
+    }
   })
 })
 
@@ -127,7 +171,22 @@ describe('r2 — citirea: SIMULARE pe valori, CONTROL pentru RAMANE', () => {
   it('SIMULARE citește valorile (nu EXISTS) și separă cele patru clase; așteptarea = 0 cu date citibile', () => {
     expect(t).not.toContain('SELECT EXISTS (SELECT 1 FROM')
     for (const s of ['GOL', 'AGREGAT_FARA_DATE', 'DATE_CITIBILE', 'EROARE', 'to_jsonb(anon_sim_q.*)', 'has_column_privilege(r.oid, a.attnum, \'SELECT\')',
-      'relatii cu date citibile', 'Așteptat: 0 relații cu DATE_CITIBILE']) expect(t, s).toContain(s)
+      'relatii cu date citibile', 'Concluzia „zero date citibile” cere 0 DATE_CITIBILE, 0 AMBIGUU neconfirmate și 0 erori necunoscute']) expect(t, s).toContain(s)
+  })
+  it('r4 (review r3 P2): „un rând, doar zero / NULL” = AMBIGUU, confirmat din definiția vederii; concluzia cere 0 date + 0 ambigue', () => {
+    const i = t.indexOf("v_clasa := 'DATE_CITIBILE';")
+    expect(i).toBeGreaterThan(0)
+    for (const s of ["IF r.tip = 'v' THEN", "rw.rulename = '_RETURN'", "v_clasa := 'AMBIGUU';", "v_clasa := 'AGREGAT_FARA_DATE';", "position(' :hasAggs true ' IN v_sus) > 0",
+      "position(' :groupClause <> ' IN v_sus) > 0", "position(' :groupingSets <> ' IN v_sus) > 0", "position(' :havingQual <> ' IN v_sus) > 0",
+      "position(' :setOperations <> ' IN v_sus) > 0", "position(' :hasTargetSRFs false ' IN v_sus) > 0", 'chr(92)'])
+      expect(t.indexOf(s, i), s).toBeGreaterThan(i)
+    expect(t).toContain("WHEN v_date = 0 AND v_ambiguu = 0 AND v_err_necunoscut = 0 THEN 'ZERO date citibile")
+    // fără deparsare și fără backslash literal în citire
+    expect(t.slice(i, t.indexOf('END $simulare$;'))).not.toMatch(/pg_get_viewdef|pg_get_ruledef/)
+    expect(t).not.toContain('\\')
+  })
+  it('r4: STATISTICI sărită = LIPSĂ DE DOVADĂ, nu zero apeluri', () => {
+    expect(t.split('LIPSA DE DOVADA (nu inseamna zero apeluri ca anon)').length - 1).toBe(2)
   })
   it('CONTROL = amprenta RAMANE; BASELINE doar T1 / T2 / T3', () => {
     expect(t).toContain("SELECT 'CONTROL', 2, 4, a.treapta")

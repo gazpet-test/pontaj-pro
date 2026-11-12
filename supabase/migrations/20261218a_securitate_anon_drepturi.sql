@@ -16,18 +16,26 @@
 --      Necompletat / diferit = refuz, nimic schimbat (lista de acum în NOTICE). BASELINE-ul se ia din ACEEAȘI bază (oid-urile diferă între bazi);
 --   3. jurnalul: schemă nouă securitate_intern (neexpusă în API, fără niciun drept pentru alt rol decât postgres) cu tabelul anon_revocari,
 --      câte un rând pe secvență, cu drepturile EXACTE ale lui anon (aclitem, cu acordantul și opțiunea de acordare);
---   4. BLOCAREA (review #1081 P1): o retragere FĂRĂ efect (REVOKE ALL ... FROM PUBLIC; PUBLIC nu are nimic pe aceste obiecte, altfel regula
---      le-ar fi lăsat la RAMANE) rescrie rândul fiecărei secvențe din pg_class; se verifică că TOATE rândurile sunt acum ale acestei tranzacții
---      (xmin), altfel refuz; apoi RECITIREA: regula recalculată ACUM, pe rândurile blocate, = EXACT jurnalul (etichetă + detaliu), altfel refuz;
---   5. UN SINGUR REVOKE ALL ON SEQUENCE <lista din jurnal> FROM anon (nume citate din catalog), pe rândurile blocate;
+--   4. BLOCAREA (review #1081 P1; r4): o retragere FĂRĂ efect de la un ROL-SANTINELĂ creat ACUM, în această tranzacție (nicio altă sesiune
+--      nu-l vede până la COMMIT, deci nimeni nu-i poate da sau lua ceva: retragerea NU poate schimba ACL-ul nimănui) rescrie rândul fiecărei
+--      secvențe din pg_class. r3 folosea FROM PUBLIC: un drept dat concurent lui PUBLIC între calcul și blocare era ȘTERS chiar de blocare,
+--      iar recitirea găsea starea inițială (review r3 P1). Se verifică că TOATE rândurile sunt acum ale acestei tranzacții (xmin), altfel
+--      refuz; apoi RECITIREA: (a) regula recalculată ACUM, pe rândurile blocate, = EXACT jurnalul (etichetă + detaliu) și (b) ACL-ul COMPLET
+--      al fiecărei secvențe (TOATE rolurile, inclusiv PUBLIC; blocul ACL_COMPLET v1) = EXACT instantaneul luat în ACEEAȘI instrucțiune cu
+--      calculul listei; orice diferență = refuz, nimic schimbat;
+--   5. UN SINGUR REVOKE ALL ON SEQUENCE <lista din jurnal> FROM anon (nume citate din catalog), pe rândurile blocate; santinela se șterge;
 --   6. postcondiții: anon nu mai are niciun drept pe secvențele din jurnal (dreptul efectiv); regula recalculată ACUM nu mai găsește nimic în
---      T1 (o secvență apărută între timp = refuz); restul listei (T2 / T3 / RAMANE) neschimbat; drepturile TUTUROR celorlalte roluri neschimbate
---      (ALTE_ROLURI v1, înainte = după); jurnalul și schema fără drepturi pentru nimeni altcineva; timpul.
+--      T1 (o secvență apărută între timp = refuz); ACL-ul complet al fiecărei secvențe „după” = „înainte” fără EXACT intrările lui anon din
+--      jurnal (nimic în plus, nimic în minus pentru alt rol); restul listei (T2 / T3 / RAMANE) neschimbat; drepturile TUTUROR celorlalte
+--      roluri neschimbate (ALTE_ROLURI v1, înainte = după); santinela nu mai există; jurnalul și schema fără drepturi pentru altcineva; timpul.
+--   Blocarea NU e „fără urme”: rescrie rândurile din catalog (xmin nou, WAL), creează și șterge un rol (pg_authid, catalog comun al
+--   clusterului) — totul în aceeași tranzacție; la refuz nu rămâne nimic.
 --
 -- Ce se detectează EXACT (fără promisiuni generale):
 --   * schimbat ÎNAINTE de calcul (de la citirea BASELINE-ului): orice intră în amprentă (obiect nou / șters / recreat, drepturile lui anon,
 --     proprietar, RLS / FORCE, părinți, opțiuni, corpul vederii, politicile, DEFAULT-urile) => refuz la pasul 2;
---   * comis ÎNTRE calcul și blocare (altă sesiune): aceleași câmpuri => refuz la recitire (pasul 4);
+--   * comis ÎNTRE calcul și blocare (altă sesiune): aceleași câmpuri SAU orice intrare din ACL-ul secvenței, a oricui (inclusiv un drept
+--     nou pentru PUBLIC) => refuz la recitire (pasul 4); blocarea nu mai consumă nimic, deci starea recitită e cea comisă de cealaltă sesiune;
 --   * încercat DUPĂ blocare pe aceleași secvențe (GRANT / REVOKE / ALTER care rescriu rândul): așteaptă după noi și pică după COMMIT-ul nostru
 --     („tuple concurrently updated”) => nu se aplică, deci nu se pierde; o tranzacție care rescrisese deja rândul (necomisă) ne face să așteptăm:
 --     lock_timeout 100 ms => refuz; comisă între timp => pică retragerea noastră => refuz. Nimic schimbat;
@@ -72,6 +80,13 @@ BEGIN
   -- dreptul efectiv al lui anon = direct + PUBLIC: anon nu moștenește nimic de la alte roluri (altfel retragerea directă n-ar ajunge)
   IF EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = 'anon'::regrole) THEN
     RAISE EXCEPTION '20261218a: anon e membru in alte roluri (reanaliza: dreptul efectiv nu e doar cel direct)';
+  END IF;
+  -- blocarea cere un rol-santinelă creat în tranzacție (pasul 4): numele liber + dreptul de a crea roluri, verificate ÎNAINTE de orice scriere
+  IF to_regrole('gazpet_santinela_20261218a') IS NOT NULL THEN
+    RAISE EXCEPTION '20261218a: rolul gazpet_santinela_20261218a exista deja (ramas din alta rulare sau nume ocupat; nimic schimbat)';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = current_user AND (r.rolcreaterole OR r.rolsuper)) THEN
+    RAISE EXCEPTION '20261218a: postgres nu poate crea rolul-santinela (CREATEROLE lipsa; nimic schimbat)';
   END IF;
 END $pre$;
 
@@ -150,8 +165,8 @@ anon_rel AS (
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e, anon_id a WHERE e.grantee = a.oid AND e.grantor <> c.relowner)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e, anon_id a
                       WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = a.oid AND e.grantor <> c.relowner)) AS alt_acordant,
-         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv). Și: blocarea din migrări (o
-         -- retragere FROM PUBLIC fără efect) cere ca PUBLIC să nu aibă nimic pe obiectele de retras.
+         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv), deci obiectul rămâne, cu motivul.
+         -- (r4: blocarea din migrări nu mai folosește PUBLIC, ci un rol-santinelă creat în tranzacție.)
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e WHERE e.grantee = 0)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e
                       WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = 0)) AS are_public,
@@ -252,12 +267,37 @@ SELECT md5(coalesce(string_agg(y.l, chr(10) ORDER BY y.l COLLATE "C"), '')) FROM
 ) y
 -- <<< ALTE_ROLURI v1
 $alte$;
--- lista calculată O DATĂ: aceeași pentru comparația cu BASELINE-ul, jurnal și REVOKE; drepturile celorlalte roluri, înainte
-CREATE TEMP TABLE anon_calc_20261218a AS SELECT * FROM pg_temp.anon_regula_20261218a();
+CREATE FUNCTION pg_temp.anon_acl_20261218a(p_oid oid, p_fara_anon boolean) RETURNS text[]
+LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $acl$
+-- >>> ACL_COMPLET v1
+-- ACL-ul COMPLET al unei relații (review #1081 r3 P1): TOATE intrările, ale oricărui rol (inclusiv PUBLIC și anon), pe obiect
+-- („obiect <aclitem>”) și pe fiecare coloană („coloana <attnum> <aclitem>”, inclusiv cele de sistem / șterse), sortate (colația C).
+-- p_fara_anon = fără intrările lui anon: starea care TREBUIE să rămână după retragere. Comparația e pe listă: o intrare în plus sau în minus,
+-- a oricui, = diferență.
+SELECT coalesce(array_agg(y.l ORDER BY y.l COLLATE "C"), '{}'::text[]) FROM (
+  SELECT 'obiect ' || x.it::text AS l
+    FROM pg_catalog.pg_class c CROSS JOIN LATERAL unnest(c.relacl) x(it)
+   WHERE c.oid = p_oid
+     AND NOT (p_fara_anon AND EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e JOIN pg_catalog.pg_roles r ON r.oid = e.grantee WHERE r.rolname = 'anon'))
+  UNION ALL
+  SELECT 'coloana ' || a.attnum::text || ' ' || x.it::text
+    FROM pg_catalog.pg_attribute a CROSS JOIN LATERAL unnest(a.attacl) x(it)
+   WHERE a.attrelid = p_oid
+     AND NOT (p_fara_anon AND EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e JOIN pg_catalog.pg_roles r ON r.oid = e.grantee WHERE r.rolname = 'anon'))
+) y
+-- <<< ACL_COMPLET v1
+$acl$;
+-- lista calculată O DATĂ: aceeași pentru comparația cu BASELINE-ul, jurnal și REVOKE; în ACEEAȘI instrucțiune (același instantaneu),
+-- ACL-ul complet al fiecărei ținte (cu și fără anon); drepturile celorlalte roluri, înainte
+CREATE TEMP TABLE anon_calc_20261218a AS
+  SELECT g.*, CASE WHEN g.r_treapta = 'T1' THEN pg_temp.anon_acl_20261218a(g.r_oid, false) END AS r_acl,
+         CASE WHEN g.r_treapta = 'T1' THEN pg_temp.anon_acl_20261218a(g.r_oid, true) END AS r_acl_fara_anon
+    FROM pg_temp.anon_regula_20261218a() g;
 CREATE TEMP TABLE anon_alte_inainte_20261218a AS SELECT pg_temp.anon_alte_20261218a() AS amprenta;
 CREATE FUNCTION pg_temp.anon_agregat_20261218a() RETURNS TABLE (a_treapta text, a_obiecte integer, a_amprenta text)
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $agregat$
-WITH anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (SELECT * FROM pg_temp.anon_calc_20261218a)
+WITH anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (
+  SELECT c.r_treapta, c.r_oid, c.r_eticheta, c.r_detaliu, c.r_drepturi, c.r_coloane, c.r_motiv FROM pg_temp.anon_calc_20261218a c)
 ,
 -- >>> AGREGAT_ANON v2
 -- amprenta unei trepte = md5 pe liniile „eticheta = md5(detaliu)” sortate (colația C); numărul de obiecte alături. Treapta goală: 0 și md5('').
@@ -341,8 +381,11 @@ BEGIN
   IF v_n IS DISTINCT FROM (SELECT count(*)::integer FROM securitate_intern.anon_revocari WHERE migrare = '20261218a') THEN
     RAISE EXCEPTION '20261218a: jurnalul nu corespunde catalogului (% din %)', v_n, (SELECT count(*) FROM securitate_intern.anon_revocari WHERE migrare = '20261218a');
   END IF;
-  -- blocarea: retragere fără efect de la PUBLIC => rândul fiecărei secvențe din pg_class e rescris de noi și rămâne al nostru până la COMMIT
-  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM PUBLIC';
+  -- blocarea (r4): retragere fără efect de la santinelă => rândul fiecărei secvențe din pg_class e rescris de noi și rămâne al nostru până la
+  -- COMMIT. Santinela e creată ACUM: nimeni altcineva n-o vede, deci n-are și nu primește niciun drept; retragerea ei lasă ACL-ul fiecărei
+  -- secvențe exact cum l-a comis ultima tranzacție (nu șterge nimic al nimănui, spre deosebire de FROM PUBLIC din r3)
+  CREATE ROLE gazpet_santinela_20261218a NOLOGIN NOINHERIT;
+  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM gazpet_santinela_20261218a';
   -- dovada blocării (fail-closed): fiecare rând e acum al ACESTEI tranzacții (xmin = xid-ul ei, bloc fără subtranzacție)
   v_xid := (txid_current() % 4294967296)::text;
   SELECT string_agg(j.eticheta, ', ') INTO v_dif
@@ -361,7 +404,15 @@ BEGIN
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261218a: schimbare concurenta intre calculul listei si blocare pe: % (nimic schimbat; se reia citirea)', v_dif;
   END IF;
+  -- recitirea ACL-ului COMPLET pe rândurile blocate (r4): al oricui (PUBLIC, alte roluri, anon) = EXACT instantaneul de la calcul
+  SELECT string_agg(j.eticheta, ', ' ORDER BY j.eticheta COLLATE "C") INTO v_dif
+    FROM securitate_intern.anon_revocari j LEFT JOIN pg_temp.anon_calc_20261218a c ON c.r_oid = j.obiect_oid AND c.r_treapta = 'T1'
+   WHERE j.migrare = '20261218a' AND (c.r_acl IS NULL OR pg_temp.anon_acl_20261218a(j.obiect_oid, false) IS DISTINCT FROM c.r_acl);
+  IF v_dif IS NOT NULL THEN
+    RAISE EXCEPTION '20261218a: ACL complet schimbat concurent intre calculul listei si blocare pe: % (drept nou / scos pentru oricine, inclusiv PUBLIC; nimic schimbat; se reia citirea)', v_dif;
+  END IF;
   EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM anon';
+  DROP ROLE gazpet_santinela_20261218a;
   RAISE NOTICE '20261218a: REVOKE pe % secvente la % ms de la BEGIN', v_n, round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 END $aplica$;
 
@@ -379,6 +430,21 @@ BEGIN
   -- b. regula recalculată ACUM: nimic în T1 (o secvență apărută între timp, pe care n-am revizuit-o = refuz)
   SELECT string_agg(r.r_eticheta, ', ') INTO v_dif FROM pg_temp.anon_regula_20261218a() r WHERE r.r_treapta = 'T1';
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218a post: secvente noi cu drept pentru anon, nerevizuite: %', v_dif; END IF;
+  -- b2. (r4) ACL-ul COMPLET al fiecărei secvențe: „după” = „înainte” fără intrările lui anon, iar intrările scoase = EXACT cele din jurnal
+  --     (nimic în plus sau în minus pentru PUBLIC ori alt rol, nimic al lui anon scos fără jurnal)
+  SELECT string_agg(j.eticheta, ', ' ORDER BY j.eticheta COLLATE "C") INTO v_dif
+    FROM securitate_intern.anon_revocari j LEFT JOIN pg_temp.anon_calc_20261218a c ON c.r_oid = j.obiect_oid AND c.r_treapta = 'T1'
+   WHERE j.migrare = '20261218a'
+     AND (c.r_acl IS NULL
+          OR pg_temp.anon_acl_20261218a(j.obiect_oid, false) IS DISTINCT FROM c.r_acl_fara_anon
+          OR ARRAY(SELECT z.l FROM (SELECT x FROM unnest(c.r_acl) x EXCEPT ALL SELECT y FROM unnest(c.r_acl_fara_anon) y) z(l) ORDER BY z.l COLLATE "C")
+             IS DISTINCT FROM
+             ARRAY(SELECT z.l FROM (SELECT 'obiect ' || d FROM unnest(j.drepturi) d
+                                    UNION ALL
+                                    SELECT 'coloana ' || split_part(k, ':', 1) || ' ' || reverse(split_part(reverse(k), ' ', 1)) FROM unnest(j.coloane) k) z(l)
+                    ORDER BY z.l COLLATE "C"));
+  IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218a post: ACL-ul complet nu difera EXACT prin intrarile lui anon din jurnal pe: %', v_dif; END IF;
+  IF to_regrole('gazpet_santinela_20261218a') IS NOT NULL THEN RAISE EXCEPTION '20261218a post: rolul-santinela inca exista'; END IF;
   -- c. restul listei (alte trepte, ce rămâne) neschimbat
   SELECT string_agg(DISTINCT coalesce(a.r_eticheta, b.r_eticheta), ', ') INTO v_dif
     FROM (SELECT r_treapta, r_eticheta, md5(r_detaliu) m FROM pg_temp.anon_calc_20261218a WHERE r_treapta <> 'T1') a
@@ -406,5 +472,6 @@ BEGIN
   SELECT count(*) INTO v_n FROM securitate_intern.anon_revocari WHERE migrare = '20261218a';
   RAISE NOTICE '20261218a: % secvente retrase de la anon; sfarsit la % ms de la BEGIN', v_n, round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 END $post$;
-DROP FUNCTION pg_temp.anon_agregat_20261218a(), pg_temp.anon_regula_20261218a(), pg_temp.anon_alte_20261218a(), pg_temp.anon_baseline_20261218a();
+DROP FUNCTION pg_temp.anon_agregat_20261218a(), pg_temp.anon_regula_20261218a(), pg_temp.anon_alte_20261218a(), pg_temp.anon_baseline_20261218a(),
+  pg_temp.anon_acl_20261218a(oid, boolean);
 DROP TABLE pg_temp.anon_calc_20261218a, pg_temp.anon_alte_inainte_20261218a;

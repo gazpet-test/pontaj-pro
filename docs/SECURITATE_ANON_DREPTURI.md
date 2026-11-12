@@ -7,6 +7,11 @@
 **Runda 2 (review #1081):** amprenta listei prinde și obiectele recreate; retragerea blochează rândurile din catalog și recitește lista
 înainte de REVOKE; revenirea pe coloane verifică identitatea coloanei; citirea separă „date citibile” de „agregat fără date”; T2 are o
 condiție nouă (§2, §6).
+**Runda 4 (review r3):** blocarea nu mai folosește PUBLIC (ar fi șters un drept dat concurent lui PUBLIC), ci un rol-santinelă creat în
+tranzacție; migrarea recitește și ACL-ul complet al fiecărei ținte (toate rolurile) și verifică la final că „după” diferă de „înainte” exact
+prin intrările lui `anon` din jurnal; T2 ține ACCESS SHARE pe ținte (oprește o politică nouă creată în paralel) și verifică la final că
+nicio țintă nu are politică pentru `anon` / PUBLIC; citirea marchează „un rând doar cu zero / NULL” ca ambiguu și îl confirmă din
+definiție (§5).
 
 ## 1. Pe scurt
 
@@ -91,8 +96,10 @@ cu drepturi acordate de `postgres`. Restul apare la „rămâne”, cu motivul.
   părinte nu atinge partițiile și invers. O cerere pe părinte cere doar dreptul pe părinte; una direct pe partiție, doar dreptul pe partiție.
 - **Ce se strică dacă greșim:** o cerere fără cont pe un astfel de obiect primește 42501 / 401 în loc de listă goală. **Azi există astfel de
   cereri** (§2), deci T2 are condiția de la §2. La fel pentru o funcție fără SECURITY DEFINER apelată de `anon` care citește un obiect retras.
-- **Verificare înainte (citire):** `SIMULARE` (așteptat **0 relații cu date citibile**; agregatele fără date și erorile se listează separat),
-  `FUNCTII_ANON` (niciuna folosită de o pagină publică), `STATISTICI` după reset (zero interogări directe pe tabele) și jurnalele API.
+- **Verificare înainte (citire):** `SIMULARE` (așteptat **0 relații cu date citibile**, linia `SIMULARE concluzie: ZERO …`; agregatele
+  fără date și erorile se listează separat), `FUNCTII_ANON` (niciuna folosită de o pagină publică), `STATISTICI` după reset (zero
+  interogări directe pe tabele) și jurnalele API. **`STATISTICI` sărită** (extensia lipsă sau neîncărcată) = **lipsă de dovadă**, nu
+  „zero apeluri”: condiția T2 nu e îndeplinită până nu se citesc efectiv.
 - **Risc:** mic **după** condiția de la §2; înainte, regresie sigură în interfață.
 
 ### T3: drepturile implicite (`20261218c`)
@@ -131,18 +138,35 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
   opțiunile, corpul vederii, toate politicile (cu expresiile lor), DEFAULT-urile (la o secvență: DEFAULT-urile care o folosesc).
 - **Ce se detectează exact, pe ferestre:**
   - schimbat înainte de calcul (de la citire): orice câmp din amprentă => refuz;
-  - comis de altă sesiune între calcul și REVOKE: migrarea **blochează** întâi rândurile din catalog ale obiectelor din listă (o retragere fără
-    efect de la PUBLIC, care rescrie rândul fiecărui obiect; se verifică că toate sunt acum ale tranzacției), apoi **recitește** lista: diferită
-    de jurnal => refuz, nimic schimbat;
+  - comis de altă sesiune între calcul și REVOKE: migrarea **blochează** întâi rândurile din catalog ale obiectelor din listă, apoi
+    **recitește** lista și **ACL-ul complet** al fiecărui obiect (toate rolurile, inclusiv PUBLIC): orice diferență față de ce s-a calculat
+    => refuz, nimic schimbat. Blocarea = o retragere fără efect de la un **rol-santinelă** creat chiar în tranzacție: nicio altă sesiune nu-l
+    vede până la COMMIT, deci nu are și nu poate primi niciun drept, iar retragerea lui nu schimbă ACL-ul nimănui, dar rescrie rândul fiecărui
+    obiect (se verifică că toate sunt acum ale tranzacției). În runda 3 blocarea era o retragere de la PUBLIC: un drept dat lui PUBLIC de
+    altă sesiune chiar în acea fereastră era șters de blocare și recitirea nu mai vedea nimic (review r3). Santinela se șterge în aceeași
+    tranzacție; postcondiția verifică că nu a rămas;
+  - **T2, politică nouă pe o țintă** (`CREATE POLICY … TO anon`, review r3): schimbă alt catalog decât rândul blocat. De aceea T2 ia
+    **ACCESS SHARE** pe fiecare tabel / vedere din listă, înainte de blocare, până la COMMIT. Nu oprește citiri sau scrieri, dar intră în
+    conflict cu tot DDL-ul care cere ACCESS EXCLUSIVE: CREATE / ALTER / DROP POLICY, pornirea / oprirea RLS, rescrierea unei vederi, DROP,
+    schimbarea proprietarului (CREATE POLICY probat cu două sesiuni, R6; restul de confirmat pe sursa 17.6 la review). Un astfel de DDL
+    venit după noi așteaptă și rulează după COMMIT, peste starea nouă (îl vede controlul periodic); unul deja în curs la pornire => 100 ms,
+    apoi refuz. Vederile materializate și tabelele străine nu se pot bloca așa, dar nici nu pot avea politici. A doua plasă: la final,
+    niciun obiect din jurnal nu are politică pentru `anon` / PUBLIC (altfel refuz). **Costul:** câte un lock pe relație (~400, plus
+    relațiile citite de vederi), câteva ms; un DDL care cere ACCESS EXCLUSIVE pe o țintă cât suntem în tranzacție așteaptă după noi (cel mult
+    până la plafonul de 2000 ms) și, cât așteaptă, ține la coadă cererile care vin după el pe acel tabel. Tabela de lock-uri plină = refuz;
   - încercat de altă sesiune după blocare, pe aceleași obiecte (GRANT / REVOKE / ALTER care rescriu rândul): așteaptă după noi și pică după
     COMMIT („tuple concurrently updated”), deci nu se aplică și nu se pierde;
   - un drept pe o **coloană** care nu avea drepturi (rândul ei nu se blochează): prins după REVOKE (coloanele rescrise trebuie să fie exact
     cele de la recitire) => refuz;
   - obiecte noi / drepturi pe obiecte din afara listei, apărute după blocare: nu sunt atinse; prinse de postcondiții dacă sunt comise
     înaintea lor, altfel de controlul periodic.
-  Garanția: ce retrage REVOKE-ul = exact ce e în jurnal, deci revenirea reface exact.
+  Garanția: ce retrage REVOKE-ul = exact ce e în jurnal, deci revenirea reface exact. Postcondiția o verifică direct: ACL-ul complet
+  „după” al fiecărei ținte = „înainte” fără EXACT intrările lui `anon` din jurnal (nimic în plus, nimic în minus pentru alt rol).
+- **Blocarea nu e „fără urme”:** rescrie rândurile din catalog ale țintelor (alt `xmin`, scrie în WAL, cu același conținut) și creează /
+  șterge un rol (catalogul de roluri e comun pentru tot serverul). Totul în aceeași tranzacție: la refuz nu rămâne nimic.
 - **Lock-uri (PostgreSQL 17.6, citit din sursă la review):** GRANT / REVOKE **nu iau lock pe obiectele-țintă**. Deschid catalogul
-  (`pg_class`, `pg_attribute`, `pg_default_acl`) și rescriu rândul fiecărui obiect. Deci nu opresc citiri, scrieri sau `nextval`. Ce ne
+  (`pg_class`, `pg_attribute`, `pg_default_acl`) și rescriu rândul fiecărui obiect. Singurul lock pe relații e ACCESS SHARE-ul luat
+  explicit de T2 (mai sus). Deci nu opresc citiri, scrieri sau `nextval`. Ce ne
   serializează cu alte sesiuni sunt rândurile din catalog rescrise de noi, ținute până la COMMIT (vezi mai sus). Noi așteptăm doar după o
   tranzacție care rescrisese deja rândul (100 ms, apoi refuz). VACUUM / ANALYZE pe aceleași obiecte pot aștepta cel mult cât tranzacția
   noastră (sub plafon). Duratele din PGlite (PostgreSQL 18, o singură conexiune) **nu validează** producția.
@@ -153,9 +177,13 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
 - **Proba pe clonă PostgreSQL 17 (înainte de orice „da”):**
   1. citirea pe clonă → rândurile `BASELINE` ale clonei;
   2. proba cu două sesiuni reale: `scripts/anon_drepturi_concurenta.mjs --sistem <identificatorul clonei>` (refuză altă țintă, altă versiune
-     sau o gazdă Supabase). Scenarii: drept comis între calcul și blocare (refuz), drept încercat după blocare (cealaltă sesiune stă blocată
-     de noi și pică după COMMIT), drept în zbor la pornire (refuz în 100 ms), drept pe o coloană neblocată (refuz), aplicare + revenire
-     fără concurență (exactă). Apoi `--mutant fara_recitire` și `--mutant fara_coloane`: fiecare trebuie să arate defectul (ieșire 0 = prins);
+     sau o gazdă Supabase). Scenarii: drept comis între calcul și blocare (R1, refuz), drept nou pentru PUBLIC în aceeași fereastră pe `a`,
+     `b` și `c` (R7a / R7b / R7c: refuz, iar dreptul celeilalte sesiuni rămâne), drept încercat după blocare (R2: cealaltă sesiune stă
+     blocată de noi și pică după COMMIT), drept în zbor la pornire (R3, refuz în 100 ms), drept pe o coloană neblocată (R4, refuz), politică
+     nouă pentru `anon` pe o țintă T2 după postcondiții (R6: cealaltă sesiune stă blocată până la COMMIT-ul nostru), `c` cu un ALTER DEFAULT
+     PRIVILEGES după blocare + revenire exactă (R8), aplicare + revenire fără concurență (R5 pe `b`; R9 pe `c` și `a`, cu duratele). Apoi
+     mutanții `fara_recitire`, `fara_coloane`, `blocare_public` (blocarea din runda 3) și `fara_lock` (fără ACCESS SHARE): fiecare trebuie să
+     arate defectul (ieșire 0 = prins);
   3. livrarea reală prin runner, cu `--plafon-tranzactie-ms 2000`: `a` → `b` → `c`, câte o livrare, cu BASELINE-ul clonei. Timpul din
      NOTICE-ul „sfarsit la … ms”: țintă sub 1000 ms; **la 1500 ms sau peste nu se aplică pe producție** (se împarte lista);
   4. citirea din nou (T1 / T2 / T3 = 0), reveniri `c` → `b` → `a` prin runner (instantaneul drepturilor = cel de la început), re-aplicare.
@@ -168,8 +196,10 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
 1. Producție, doar citire: `scripts/anon_drepturi_citire.sql` (ieșirea rămâne pe server). Se verifică:
    - `RPC_PUBLIC`: toate cu `definer = true` și `anon_execute = true`;
    - `FUNCTII_ANON`: niciuna folosită de paginile publice;
-   - `SIMULARE`: **0 relații cu date citibile** (agregatele fără date și erorile se notează, nu blochează);
-   - `STATISTICI`: pentru T2, după PR-ul de client și resetarea statisticilor, zero interogări directe pe tabele;
+   - `SIMULARE`: **0 relații cu date citibile și 0 ambigue neconfirmate** (linia `SIMULARE concluzie: ZERO …`). „Un rând doar cu zero /
+     NULL” nu mai e socotit automat agregat fără date: e confirmat din definiție (vedere cu agregat fără GROUP BY); un tabel cu un rând
+     vizibil `(0)` iese „date citibile”. Agregatele confirmate și erorile de drept (42501) se notează, nu blochează; o altă eroare = necunoscut;
+   - `STATISTICI`: pentru T2, după PR-ul de client și resetarea statisticilor, zero interogări directe pe tabele. Sărită = lipsă de dovadă;
    - `OBIECT`: lista pe trepte; `CONTROL`: amprenta lui „rămâne”.
 2. Clonă: proba de la §5 (pașii 1–4).
 3. Review pe diff-ul cu BASELINE-ul completat. Lista pe obiecte se revizuiește din ieșirea citirii.
@@ -186,12 +216,16 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
 
 ## 7. Regulile de review respectate
 
-- **L01 / L03** — lista e recitită sub blocare (rândurile din catalog ale obiectelor, rescrise de tranzacție) înainte de REVOKE; o schimbare
-  apărută între calcul și retragere = refuz, nu suprascriere.
-- **L06** — o singură ordine: jurnal → blocarea rândurilor din catalog → recitire → REVOKE; nicio altă tabelă blocată; așteptare 100 ms.
+- **L01 / L03** — lista și ACL-ul complet sunt recitite sub blocare (rândurile din catalog ale obiectelor, rescrise de tranzacție) înainte
+  de REVOKE; o schimbare apărută între calcul și retragere = refuz, nu suprascriere. Blocarea nu schimbă nimic înainte de verificare
+  (santinela, r4); în T2 și DDL-ul pe ținte e oprit (ACCESS SHARE).
+- **L06** — o singură ordine: jurnal → (T2: ACCESS SHARE pe ținte) → santinela → blocarea rândurilor din catalog → recitire → REVOKE;
+  așteptare 100 ms.
 - **L07** — regula se impune în bază, pe orice cale (dreptul lipsește, nu e doar ascuns în UI).
 - **L09** — fiecare obiect e verificat pe identitate + nume + tip înainte de REVOKE și la revenire; fiecare coloană pe număr + tip + nume.
-- **L12 / L18** — citirea separă „date citibile”, „agregat fără date”, „gol” și „eroare”; nimic nu e numărat ca „gol” din greșeală.
+- **L12 / L18** — citirea separă „date citibile”, „ambiguu” (confirmat din definiție), „agregat fără date”, „gol” și „eroare” (de drept /
+  necunoscută); concluzia „zero” cere 0 date, 0 ambigue, 0 erori necunoscute; statistici sărite = lipsă de dovadă; o listă de lock-uri
+  goală în proba locală = eșec, nu „ok”.
 - **L14** — o tranzacție prin runner, cu postcondiții; revenire testată aplicare → revenire → re-aplicare. Revenirea refuză la istoric nou.
 - **L15** — lista calculată din catalog comparată cu BASELINE-ul, înainte și sub blocare. Amprenta cuprinde identitatea, RLS / FORCE,
   politicile, corpul vederilor, DEFAULT-urile. Fără regex pe SQL. Un singur REVOKE pe nume citate din catalog.
@@ -199,5 +233,6 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
   pct. 1 rămâne, partițiile păstrate se citesc.
 - **L24** — condiția T2: clientul nu mai pornește interogări fără sesiune (PR separat).
 - **L25** — verificări independente de regulă (instantaneul complet al drepturilor, cereri reale ca `anon`), mutanți pe migrări, reveniri și
-  regulă; cursa: simulată determinist în PGlite + probă cu două sesiuni reale pe clona PG 17.6 (rulată 12.11.2026, comportamentele confirmate;
-  proba compară pe nume calificate explicit și iese „probă nefuncțională”, nu verdict, când starea așteptată e goală).
+  regulă; cursa: simulată determinist în PGlite + probă cu două sesiuni reale pe clona PG 17.6 (R1–R5 rulate 12.11.2026, comportamentele
+  confirmate; R6–R9 și mutanții `blocare_public` / `fara_lock` noi în runda 4, de rulat pe clonă; proba compară pe nume calificate explicit și
+  iese „probă nefuncțională”, nu verdict, când starea așteptată e goală sau niciun scenariu n-a fost judecat).
