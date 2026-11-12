@@ -51,6 +51,7 @@ import { instrumenteazaStorageRls } from './lib/storageRls.js'
 // acces pe proiect (20261209a): contul restrâns vede doar proiectele lui; poarta reală e în BD
 import { useAccesProiectExecutie, AccesProiecteOwnerModal, MesajAccesProiect } from './ExecutieAccesProiect.jsx'
 import { filtreazaProiecte, verdictLinkProiect } from './executieAccesProiect.js'
+import { TIP_TRASEU, ACCEPT_DOC_CONTRACT, mimeTraseu, tipPentruFisier, verificaInceputTraseu, clasificaEroareUpload, refuzDeterminist } from './executieDocTraseu.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -1598,6 +1599,7 @@ const TIPURI_DOC_CONTRACT = [
   { value: 'aviz',               label: '📌 Aviz de amplasament' },
   { value: 'grafic',             label: '📅 Grafic de execuție' },
   { value: 'protocol_receptie',  label: '✅ Protocol recepție' },
+  { value: TIP_TRASEU,           label: '🗺️ Traseu (KML / KMZ)' },   // TKT-2026-0372
   { value: 'altele',             label: '📎 Altele' },
 ]
 const BUCKET_CONTRACTE = 'executie-contracte'
@@ -1924,23 +1926,45 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   const handleUploadDoc = async (e) => {
     const file = e.target.files[0]
     if (!file) return
+    // TKT-2026-0372: KML / KMZ = „Traseu” (tipul se alege singur), cu tipul MIME corect; la „Traseu” intră doar KML / KMZ
+    const alegere = tipPentruFisier(uploadTip, file.name)
+    if (alegere.eroare) { showToast(alegere.eroare, 'error'); e.target.value = ''; return }
+    const tip = alegere.tip
+    const mime = mimeTraseu(file.name)
     setUploadingDoc(true)
     try {
+      if (mime) {
+        const neconform = verificaInceputTraseu(file.name, new Uint8Array(await file.slice(0, 1024).arrayBuffer()))
+        if (neconform) { showToast(neconform, 'error'); return }
+        if (alegere.schimbat) { setUploadTip(TIP_TRASEU); showToast('Fișierul KML / KMZ se salvează ca „Traseu (KML / KMZ)”.', 'info') }
+      }
       const safeName = file.name.replace(/\s+/g, '_')
-      const path = `${proiect.id}/${uploadTip}/${Date.now()}_${safeName}`
-      const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file)
-      if (upErr) throw upErr
+      const path = `${proiect.id}/${tip}/${Date.now()}_${safeName}`
+      const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file, mime ? { contentType: mime } : undefined)
+      if (upErr) {
+        const fel = clasificaEroareUpload(upErr)
+        if (fel === 'tip') throw new Error(mime ? 'Serverul de fișiere nu acceptă încă fișiere KML / KMZ pentru documentele lucrării — anunțați administratorul.' : 'Serverul de fișiere nu acceptă acest tip de fișier.')
+        if (fel === 'marime') throw new Error('Fișierul e prea mare pentru documentele lucrării.')
+        throw upErr
+      }
       const { data: { user } } = await supabase.auth.getUser()
       const { error: insErr } = await supabase.from('executie_documente_contract').insert({
         proiect_id:       proiect.id,
-        tip_document:     uploadTip,
+        tip_document:     tip,
         fisier_path:      path,
         fisier_nume:      file.name,
         fisier_size_bytes: file.size,
-        fisier_mime:      file.type || 'application/pdf',
+        fisier_mime:      mime || file.type || 'application/pdf',
         uploadat_de:      user?.id,
       })
-      if (insErr) throw insErr
+      if (insErr) {
+        // refuz determinist al rândului: fișierul abia urcat nu rămâne orfan (L05: la rețea / 5xx nu se șterge nimic)
+        if (refuzDeterminist(insErr)) {
+          await supabase.storage.from(BUCKET_CONTRACTE).remove([path])
+          if (tip === TIP_TRASEU && String(insErr.code) === '23514') throw new Error('Tipul „Traseu (KML / KMZ)” trebuie activat în baza de date — anunțați administratorul.')
+        }
+        throw insErr
+      }
       showToast('Document adăugat!', 'success')
       loadDocs()
     } catch(e) {
@@ -2600,7 +2624,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
                     {uploadingDoc ? '⏳ Upload...' : '📎 Adaugă'}
                     <input
                       type="file"
-                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx"
+                      accept={ACCEPT_DOC_CONTRACT}
                       onChange={handleUploadDoc}
                       disabled={uploadingDoc}
                       style={{ display: 'none' }}
