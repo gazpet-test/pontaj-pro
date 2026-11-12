@@ -364,6 +364,10 @@ SELECT 'M_teren_executa' AS sectiune, x.schema, x.functie, x.security_definer, x
 --        mereu) si NUMAI daca rolul functiei are dreptul pe relatie pentru acea operatie (altfel: permission denied);
 --      trigger: relatie + operatie de scriere -> functia triggerelor ne-interne declansate de acea operatie (tgtype), ca rx
 --        (sau proprietarul, daca e DEFINER); la fel triggerele INSTEAD OF ale vederilor;
+--      when (r26, Jakarinos r25 P1): relatie + operatie de scriere -> functiile din conditia WHEN a acelorasi triggere
+--        (pg_trigger.tgqual, prin pg_depend-ul triggerului, fara functia triggerului). WHEN se evalueaza SEPARAT, inaintea
+--        functiei triggerului, ca rx (cine face scrierea), iar PostgreSQL CERE EXECUTE al lui rx pe fiecare functie din ea
+--        (spre deosebire de functia triggerului); WHEN nu poate contine subinterogari => doar functii;
 --      politica: relatie cu RLS, rol (de verificare) care NU ocoleste RLS (nu e superuser / BYPASSRLS / proprietar fara
 --        FORCE), politica pentru PUBLIC sau un rol al lui -> functiile din expresie (ca rx) si relatiile din expresie (ca
 --        rol; supra-aproximare: orice comanda, relatiile fara verificarea SELECT);
@@ -387,7 +391,9 @@ SELECT 'M_teren_executa' AS sectiune, x.schema, x.functie, x.security_definer, x
 --    e gol): SQL dinamic (cuvantul EXECUTE in corp), corp opac (alt limbaj decat sql / plpgsql, in afara net), apel la un
 --    executor de text din nucleu. NUME NECUNOSCUT (doar informativ): nume urmat de "(" fara functie, tip sau relatie.
 --    Asteptat dupa 18a cu (d): cai_spre_net = 0, nerezolvate = 0, radacini in afara net = fn_teren_eligibil +
---    fn_portal_uid, radacinile net = cele 12 functii + coada, raspunsurile si secventa. Ce NU dovedeste: E1_RAPORT.md r23.
+--    fn_portal_uid, radacinile net = cele 12 functii + coada, raspunsurile si secventa. Ce NU dovedeste: E1_RAPORT.md r23;
+--    expresiile din catalog NEACOPERITE (domenii cu CHECK, operatori, cast-uri / I/O de tip in corpuri text, statistici
+--    extinse): E1_RAPORT.md r26.
 SET LOCAL statement_timeout = '120s';
 WITH RECURSIVE
 par AS (SELECT CASE WHEN to_regrole('teren') IS NOT NULL THEN 'teren' ELSE 'public' END AS rol0),
@@ -557,6 +563,19 @@ muchie AS MATERIALIZED (
         FROM pg_trigger tg JOIN fn g ON g.oid = tg.tgfoid
              CROSS JOIN LATERAL (VALUES ('INSERT', 4), ('DELETE', 8), ('UPDATE', 16), ('TRUNCATE', 32)) AS o(op, bit)
        WHERE NOT tg.tgisinternal AND (tg.tgtype::integer & o.bit) <> 0
+      UNION
+      -- r26 (Jakarinos r25 P1): conditia WHEN a triggerului = functiile din tgqual (pg_depend al triggerului, fara tgfoid),
+      -- la aceleasi operatii ca triggerul; ca rx (sau proprietarul, daca e DEFINER), cu EXECUTE al lui rx (verificat de
+      -- PostgreSQL la evaluarea conditiei). Bitii scrisi in alta ordine decat la trigger (textul mutantului ramane unic).
+      SELECT 'r', tg.tgrelid, o.op, 'f', g.oid, '', 'when ' || o.op,
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END, CASE WHEN g.definer THEN g.proprietar END,
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END, CASE WHEN g.definer THEN g.proprietar END, true, false, NULL::oid
+        FROM pg_trigger tg
+             JOIN pg_depend d ON d.classid = 'pg_trigger'::regclass AND d.objid = tg.oid
+                             AND d.refclassid = 'pg_proc'::regclass AND d.refobjid <> tg.tgfoid
+             JOIN fn g ON g.oid = d.refobjid
+             CROSS JOIN LATERAL (VALUES ('INSERT', 4), ('DELETE', 8), ('UPDATE', 16), ('TRUNCATE', 32)) AS o(op, bit)
+       WHERE NOT tg.tgisinternal AND tg.tgqual IS NOT NULL AND (o.bit & tg.tgtype::integer) <> 0
       UNION
       -- politica: aleasa dupa rol (cel de verificare); functiile din expresie ruleaza ca rx (EXECUTE al lui rx), relatiile
       -- din expresie se verifica tot ca rol
@@ -763,7 +782,7 @@ SELECT z.sectiune, z.obiect, z.adancime, z.security_definer, z.proprietar, z.det
     SELECT 'N_audit_rezumat' AS sectiune, s.cheie AS obiect, NULL::integer AS adancime, NULL::boolean AS security_definer,
            NULL::text AS proprietar, s.valoare AS detaliu, s.ord AS o1, ''::text AS o2
       FROM (VALUES
-        (1, 'model', 'r25: stare = obiect + rol de verificare + rol de executie + operatie; fara limita de adancime'),
+        (1, 'model', 'r26: stare = obiect + rol de verificare + rol de executie + operatie; fara limita de adancime; + conditia WHEN a triggerelor'),
         (2, 'rol_radacina', (SELECT rol0 FROM par)),
         (3, 'radacini_functii_in_afara_net', (SELECT count(*) FROM radacina r WHERE r.k = 'f' AND NOT r.net)::text),
         (4, 'radacini_functii_net', (SELECT count(*) FROM radacina r WHERE r.k = 'f' AND r.net)::text),

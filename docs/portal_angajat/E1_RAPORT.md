@@ -1668,9 +1668,10 @@ altfel masurat pe PostgreSQL 17.5 / PGlite, `audit_tranzitiv_pglite.mjs`, cu ape
 | Politica RLS pe o relatie citita direct | executantul | executantul | executantul (politicile lui) | Doc CREATE POLICY / RLS; functia + EXECUTE: masurat | corect |
 | Politica RLS pe relatia unei vederi fara invoker | executantul | executantul | proprietarul vederii (politicile lui si relatiile din politica) | Doc CREATE VIEW: „the row-level security policies of the view owner are applied, and access to any additional relations referred to by those policies is determined by the permissions of the view owner”; functia: masurat | **gresit** (functia ca proprietarul vederii) |
 | Regula ne-SELECT (DO ALSO / INSTEAD) | executantul | executantul | proprietarul relatiei cu regula | Doc „Rules and Privileges”: relatiile folosite din cauza regulilor se verifica ca proprietarul regulii (= al relatiei); functia + EXECUTE: masurat | **gresit** (functia ca proprietarul relatiei) |
-| Trigger (BEFORE / AFTER, si INSTEAD OF pe vederi) | cine face scrierea (sau proprietarul, la DEFINER) | **nimic la declansare** (doar la CREATE TRIGGER) | rolul functiei | Doc CREATE TRIGGER (EXECUTE la creare); declansarea fara EXECUTE: masurat (r23 si r25) | corect in functii; **gresit** dupa o vedere |
+| Trigger (BEFORE / AFTER, si INSTEAD OF pe vederi): **executarea functiei triggerului** | cine face scrierea (sau proprietarul, la DEFINER) | **nimic la declansare** (doar la CREATE TRIGGER) | rolul functiei | Doc CREATE TRIGGER (EXECUTE la creare); declansarea fara EXECUTE: masurat (r23 si r25) | corect in functii; **gresit** dupa o vedere |
+| Trigger: **evaluarea conditiei WHEN** (`pg_trigger.tgqual`), separat de functia triggerului si inaintea ei (corectat r26) | cine face scrierea (functiile din conditie; proprietarul, la DEFINER) | **cine face scrierea, pe fiecare functie din conditie** (spre deosebire de functia triggerului) | — (WHEN nu poate contine subinterogari) | Doc CREATE TRIGGER (WHEN separat de corp); rolul si EXECUTE: masurat r26 (fara EXECUTE = `permission denied for function`; functia triggerului fara EXECUTE = permis) | **lipsa** in r23-r25 (Jakarinos r25 P1) |
 | DEFAULT, coloana GENERATED, CHECK, expresie de index la INSERT / UPDATE | executantul instructiunii | executantul | secventele din DEFAULT (`nextval`): executantul | masurat (si prin vedere: executantul, nu proprietarul vederii) | **gresit** dupa o vedere; fara EXECUTE (supra-aproximare) |
-| Mentenanta (VACUUM / ANALYZE / REINDEX / CLUSTER / REFRESH) | proprietarul tabelului | — | proprietarul | codul PostgreSQL (operatie restrictionata); cere MAINTAIN / proprietar — `teren` nu are, deci in afara modelului | n/a |
+| Mentenanta (VACUUM / ANALYZE / REINDEX / CLUSTER / REFRESH / LOCK) | proprietarul tabelului (expresiile de index si statisticile extinse) | — | proprietarul | codul PostgreSQL (operatie restrictionata); cere MAINTAIN / proprietar. **Corectat r26**: „teren nu are MAINTAIN” era FALS pentru tabelele `net` — iesirea de productie arata MAINTAIN pentru PUBLIC pe ambele, deci `teren` il are prin PUBLIC. Pe orice alta relatie `teren` nu are MAINTAIN (poarta cere zero drepturi in afara celor trei obiecte `net`, MAINTAIN inclus). Nu e muchie in N: tabelele `net` sunt deja tinte; indecsii lor sunt in amprenta pg_net, statisticile extinse NU (lista „neacoperit”, r26) | n/a (MAINTAIN nu e operatie in model) |
 | Actiune FK ON DELETE / UPDATE CASCADE / SET NULL / SET DEFAULT | interogarea RI: proprietarul copilului; triggerele BEFORE ale copilului: el; triggerele AFTER: **executantul** instructiunii initiale | — (triggere) | proprietarul copilului | Doc nu o scrie; codul `ri_triggers.c` (rolul proprietarului) + masurat (BEFORE = proprietar, AFTER = executant) | **gresit** pe jumatate (doar proprietarul) |
 | Verificarea FK la INSERT / UPDATE in copil | — (nu declanseaza nimic in parinte) | — | proprietarul parintelui | codul `ri_triggers.c` | corect (nu e muchie) |
 | Mostenire / partitii | ca la parinte | ca la parinte | DOAR parintele (copilul nu se mai verifica), politicile parintelui | Doc „Inheritance”: „Querying a parent table can automatically access data in child tables without further access privilege checking” si politicile parintelui | corect |
@@ -1719,9 +1720,12 @@ putem retrage dreptul (nu suntem proprietarul); putem doar dovedi ca `teren` nu 
 - **(i) Continuam cu poarta + auditul pana la GO.** Ce mai poate aparea: lista „ce NU vede” e scrisa si nu e goala
   (operatori, cast-uri, functii de I/O ale tipurilor, SQL construit la rulare, cod C). Fiecare runda costa aproximativ o
   zi de lucru + un review. O dovada „completa” statica nu e realista: un GO pe (i) tot va insemna acceptarea acestei liste.
-- **(ii) Aplicam portalul DUPA ce Supabase retrage drepturile PUBLIC de pe pg_net.** Atunci `teren` nu mai ajunge deloc la
-  net: poarta ramane verde fara nicio schimbare, iar (c) si auditul N devin de prisos. Cat dureaza: nu depinde de noi
-  (cerere la suport; de la zile la niciodata). Cererea o poate trimite doar Razvan.
+- **(ii) Aplicam portalul DUPA ce Supabase retrage drepturile PUBLIC de pe pg_net.** Atunci `teren` nu mai are drept
+  DIRECT pe net: poarta ramane verde fara nicio schimbare, iar (c) (lista celor trei obiecte acceptate) devine de prisos.
+  (Formulare corectata in r26; inainte: „auditul N devine de prisos” — prea tare.) Retragerea PUBLIC NU elimina eventuale
+  punti SECURITY DEFINER (sau vederi / reguli ale unui proprietar) prin care `teren` ajunge la un rol care pastreaza
+  dreptul pe net (serviciile care il primesc explicit, proprietarii functiilor); auditul N ramane verificarea acestor
+  punti. Cat dureaza: nu depinde de noi (cerere la suport; de la zile la niciodata). Cererea o poate trimite doar Razvan.
 - **(iii) Aplicam acum, cu riscul acceptat in scris.** Ce anume se accepta: rolul `teren` are, la nivel SQL, aceleasi
   drepturi pe pg_net ca `anon` (cereri HTTP din baza, citirea raspunsurilor); il opresc trei lucruri verificate tehnic:
   nu se poate loga (NOLOGIN, membru in nimic — poarta), schema `net` nu e expusa prin API (blocant la proba si livrare),
@@ -1734,6 +1738,13 @@ care o are azi orice vizitator al API-ului si pe care o acceptam deja de facto p
 `public` e de doua functii revizuite de om; iar (i) are randament in scadere — fiecare runda inchide o cale teoretica si
 deschide alta, fara sa schimbe riscul real. Auditul N ar ramane ca citire periodica (supraveghere), nu ca poarta de merge.
 Daca Razvan prefera (i), urmatorul pas firesc ar fi operatorii / cast-urile (muchii din `pg_operator` / `pg_cast`).
+
+**Pozitia recenzentului (Jakarinos, verdictul r25; adaugata in r26 langa a mea, a mea neschimbata):** prefera **(ii)**, cu
+pastrarea explicita a accesului necesar serviciilor existente. Pentru (i): randament descrescator; nu cere un analizor
+static universal, dar WHEN era o omisiune concreta in mecanismele deja declarate acoperite (inchisa in r26). (iii) poate
+fi o decizie explicita de risc a ownerului, nu un GO tehnic justificat prin rezultatul N actual. Fraza lui de risc pentru
+(iii), de semnat de owner daca o alege: **„Acceptam ca un cont de teren ar putea gasi o cale neobservata prin care sa
+trimita cereri pe internet din baza noastra sau sa citeasca raspunsuri destinate altor procese.”**
 
 ### Ce face coordonatorul (nimic din ele nu scrie in productie)
 1. Harness PG17 (noile verificari r25: contraexemplul N, mostenirea, helperul de nivel 2).
@@ -1762,4 +1773,103 @@ Daca Razvan prefera (i), urmatorul pas firesc ar fi operatorii / cast-urile (muc
 | L19 | `REZOLVARE_APEL` = un singur text in amprenta 18a, G si N (testat static); amprenta 18a = G (paritate text + md5 pe PGlite). |
 | L20 | Cai legitime: setval, PUBLIC retras, helperii refacuti, copil sters + ANALYZE = verde; perechea negativa (functie din vedere fara EXECUTE = fara cale, apelul real refuzat). |
 | L25 | Expected din documentatia PG17 + apelul REAL in PostgreSQL pe fiecare caz nou (martor independent de interogare); 14 mutanti ai auditului, fiecare respins de cazul lui; harness pe PG17 real. |
+| restul | n/a (L01-L06, L08-L11, L13, L14, L16, L17, L21-L24: fara cozi, identitate, bani, AI, UI; tranzactia, lock-urile si revenirile neschimbate). |
+
+## E1-1a r26 — 12.11.2026 (dupa review r25: conditia WHEN in auditul N, mostenirea = refuz, corecturi de text)
+
+Verdictul r25: merge NO-GO; proba cu ROLLBACK GO cu conditii; aplicarea NO-GO in forma actuala (1 x P1 audit, 1 gol la
+amprenta, 1 x P2). Runda inchide DOAR golurile numite de recenzent; modelul nu se extinde dincolo de ele. **18a se schimba
+(SHA nou, doar predicatul `fn_portal_net_rel_acceptat`); amprenta pg_net NESCHIMBATA => cele trei valori de productie
+lipite in 18a raman valabile** (lista NU revine la DE_COMPLETAT). 19a si ambele reveniri neschimbate. Nimic aplicat,
+nicio BD.
+
+SHA256 (forma LF): 18a `c7be096f…8fe0090c`; 19a `8d77286e…9ba6cc7`, revenirea 18a `95766d26…fbc0dd320`, revenirea 19a
+`3e0135c1…f46dda5223` (neschimbate fata de r25).
+
+### P1. Auditul N: functiile din conditia WHEN a triggerelor
+- Muchie noua `when <operatie>`: relatie + operatie de scriere -> fiecare functie din `pg_trigger.tgqual` (prin
+  `pg_depend` al triggerului, fara functia triggerului), la aceleasi operatii ca triggerul (bitii `tgtype`). Rolul: cel
+  care face scrierea (`rx`; proprietarul, la DEFINER); **EXECUTE verificat pentru rx** — spre deosebire de functia
+  triggerului. WHEN nu poate contine subinterogari, deci nu are relatii. Tabelul regulilor (r25) are acum doua randuri
+  separate: executarea functiei triggerului / evaluarea conditiei WHEN.
+- Masurat pe PGlite (PG17): `pg_depend` al triggerului contine functiile din WHEN (deptype `n`); WHEN cu functie fara
+  EXECUTE pentru cel care scrie = `permission denied for function`; functia triggerului fara EXECUTE = permis.
+- Contraexemplul recenzentului ca test (`audit_tranzitiv_pglite.mjs`, cu apelul REAL ca `teren`): `public.entry_when()
+  {executor} -[scriere INSERT]-> public.when_target [INSERT] {executor} -[when INSERT]-> hidden.side() {executor}
+  -[apel]-> net.http_post(text, integer) {executor}`; apelul real pune 1 rand in coada. Perechea negativa (functia din
+  WHEN fara EXECUTE pentru executant): fara cale, apelul real refuzat. Doi mutanti noi: „fara conditia WHEN” (= r25) si
+  „WHEN fara verificarea EXECUTE”, fiecare respins de cazul lui.
+- Harness PG17 (`test_portal_e1.sh`, bloc `N_R26`, coordonatorul): aceeasi forma cu radacina executabila de PUBLIC,
+  drumul exact cerut, apelul real ca `anon` (tranzactie anulata) scrie in coada, totul sters dupa.
+
+### Expresiile din catalog care pot contine apeluri de functii: ce e acoperit
+„Acoperit” = exista muchie (N) / intra in amprenta (18a). Sursa: codul celor doua interogari + masuratori PGlite r26
+(`pg_depend` al triggerului, al politicii, al DEFAULT-ului, al agregatului, al unei functii BEGIN ATOMIC).
+
+| Expresie | Cand ruleaza, ca cine | Auditul N | Amprenta pg_net (18a) |
+|---|---|---|---|
+| `pg_trigger.tgqual` (WHEN) | la scriere, ca cel care scrie, EXECUTE verificat | **acoperit din r26** (muchia `when`) | acoperit (definitia triggerului + functiile din `pg_depend` al lui, inchiderea) |
+| `pg_policy.polqual` / `polwithcheck` | la citire / scriere; functiile ca executantul, relatiile ca rolul de verificare | acoperit (functii + relatii din `pg_depend` al politicii) | acoperit (text + functii) |
+| `pg_attrdef.adbin` (DEFAULT si coloane GENERATED) | INSERT / UPDATE, ca executantul | acoperit | acoperit |
+| `pg_constraint.conbin` (CHECK si EXCLUDE pe tabel) | INSERT / UPDATE, ca executantul | acoperit | acoperit |
+| `pg_index.indexprs` / `indpred` | INSERT / UPDATE ca executantul; la mentenanta ca proprietarul | acoperit pentru INSERT / UPDATE; mentenanta nu e operatie in model (vezi MAINTAIN) | acoperit (definitia indexului + functiile) |
+| `pg_rewrite.ev_action` (+ conditia regulii) | vederi si reguli (rolurile din tabelul r25) | acoperit (`pg_depend` al regulii) | acoperit (definitia regulii + functiile) |
+| `pg_proc.prosqlbody` (BEGIN ATOMIC) | la apel | acoperit (`pg_depend`: functii + relatii) | acoperit (inchiderea) |
+| cast-uri (`pg_cast.castfunc`) | ca functia | in expresiile din catalog si BEGIN ATOMIC: acoperit (cast-ul cu functie apare in `pg_depend` ca functia insasi — masurat pe un DEFAULT); in corpurile text (`x::tip`, conversiile implicite din plpgsql): **NEACOPERIT** | idem: acoperit in catalog, **NEACOPERIT** in corpurile text |
+| agregate (`pg_aggregate`: functiile de tranzitie / finale / combinare) | ca executantul | agregatul e gasit (apel pe nume / `pg_depend`), functiile lui de suport prin `pg_depend` al agregatului (masurat); agregatul are limbaj `internal` => NEREZOLVAT (corp opac) = audit rosu, nu tacut (din cod, necazuit separat) | acoperit (md5 pe randul `pg_aggregate`) |
+| domenii cu CHECK (`pg_constraint` cu `contypid`, `conrelid = 0`) | la orice conversie spre domeniu (scriere in coloana, argumente / rezultat, variabile plpgsql) | **NEACOPERIT** (filtrul `conrelid <> 0`; nu exista muchie coloana / functie -> domeniu) | **NEACOPERIT** (tipul coloanei apare doar ca nume; azi coloanele `net` nu au domenii, schimbarea tipului ar schimba amprenta) |
+| operatori (`pg_operator.oprcode`; `oprrest` / `oprjoin` la planificare) | ca functia | **NEACOPERIT**: in expresiile din catalog `pg_depend` trimite la operator, nu la functia lui (masurat r26 pe WHEN si pe o politica); in corpurile text operatorul nu e „nume(” | **NEACOPERIT** (acelasi motiv) |
+| functiile de I/O ale tipurilor (`typinput` / `typoutput` / `typreceive` / `typsend`) | la conversia din / in text | **NEACOPERIT** | **NEACOPERIT** |
+| statisticile extinse (`pg_statistic_ext.stxexprs`) | la ANALYZE, ca proprietarul tabelului | **NEACOPERIT** (MAINTAIN nu e operatie in model) | **NEACOPERIT** (doar proprietarul / superuser le poate crea) |
+| triggere de eveniment, filtrele publicatiilor (`pg_publication_rel.prqual`) | DDL / replicare, nu ca `teren` | in afara modelului | n/a |
+
+### Amprenta pg_net: mostenirea = refuz (nu se amprenteaza)
+Recenzentul a aratat ca, cu un copil DEJA atasat, amprenta vede metadatele copilului, dar nu triggerele / functiile lui
+(corpul functiei triggerului copilului schimbat = acelasi hash). Limita spusa de el: atasarea copilului inroseste oricum
+baseline-ul de azi (pe productie nu exista copii), deci nu e o ocolire a celor trei hash-uri actuale. Varianta aleasa, mai
+simpla si mai sigura: **`fn_portal_net_rel_acceptat` refuza orice parinte / copil (`pg_inherits` in ambele sensuri,
+`relispartition`) pe cele trei obiecte, indiferent de amprenta** — „mostenire prezenta = rosu”. Predicatul e acelasi in
+poarta si in preconditie (L19), deci regula tine in ambele. Amprenta nu s-a schimbat (blocul de mostenire ramane, redundant
+spre rosu), deci valorile lipite raman.
+- PGlite (`net_rel_pglite.mjs`, 59 OK): reproducerea recenzentului (amprenta identica dupa schimbarea corpului, UPDATE prin
+  parinte ca `teren`: `inainte` -> `dupa`); cu lista re-invatata CU copilul: RESPINS inainte si dupa; mutantul „predicatul
+  fara clauza de mostenire” = acceptat (testul prinde clauza); dupa curatare, starea initiala.
+- Harness PG17: aceeasi proba intr-o tranzactie anulata (copil + trigger, lista re-invatata cu copilul) => `t|f|t` (lista =
+  amprenta, refuzat, poarta rosie); blocul SQL verificat pe PGlite cu helperii exacti din 18a.
+
+### P2. Corecturi de text (E1_RAPORT.md, in locul lor din r25, marcate „corectat r26”)
+- Tabelul regulilor: „`teren` nu are MAINTAIN” era fals pentru tabelele `net` (iesirea de productie: MAINTAIN pentru
+  PUBLIC) — corectat, cu ce inseamna (mentenanta ruleaza ca proprietarul; indecsii `net` sunt in amprenta, statisticile
+  extinse nu).
+- Tabelul regulilor: randul triggerelor despartit in executarea functiei (fara EXECUTE) si evaluarea WHEN (cu EXECUTE).
+- (ii): „dupa ce Supabase retrage PUBLIC, auditul devine inutil” reformulat: retragerea nu elimina eventuale punti
+  SECURITY DEFINER catre roluri care pastreaza dreptul; N ramane verificarea lor; de prisos devine doar lista (c).
+- Paragraful pentru owner: pozitia recenzentului adaugata langa a mea (a mea neschimbata), cu fraza lui de risc pentru (iii).
+
+### Ce face coordonatorul (nimic din ele nu scrie in productie)
+1. Harness PG17 (noile blocuri `N_R26` si proba de mostenire r26).
+2. Productie, doar citire, optional: `porti_citire.sql` N noua (cu WHEN) — rezultatul asteptat ramane „3 functii, 3 noduri,
+   0 relatii” daca niciun trigger accesibil nu are WHEN cu functii; G neschimbata (amprentele lipite raman).
+3. Review pe diff (SHA nou al lui 18a), apoi proba cu ROLLBACK ca in r24 / r25.
+
+### Rulat (r26)
+- PGlite: `audit_tranzitiv_pglite.mjs` **133 OK** (123 din r25 + 2 cazuri noi + 2 mutanti noi); `net_rel_pglite.mjs`
+  **59 OK**; `porti_citire_pglite.mjs` OK; `public_d_pglite.mjs` OK.
+- Statice: `test_static_net_rel.py` 32 OK (paritatea G = 18a, valorile de productie acceptate), `test_static_porti_citire.py`
+  32 OK, `test_static.py` 10 OK, `test_static_public_d.py` 15 OK, `test_static_diag_porti.py` 18 OK, `test_static_1b.py`
+  12 OK, `test_static_r2.py` 2 OK.
+- `npx vitest run`: 220 fisiere OK, 1 pica local (acelasi `scripts/noduri_cuplare_import_sql.test.js`, shebang + CRLF,
+  neatins); `npx vite build` OK.
+- **Nerulat de mine**: harness-ul PG17 (binarele PG17 cer aprobare pe acest server); blocurile noi au fost verificate pe
+  PGlite (forma echivalenta a contraexemplului; SQL-ul exact al probei de mostenire).
+
+| Regula | Dovada r26 |
+|---|---|
+| L07 | Regula ramane in BD: predicatul unic al portii si al preconditiei refuza mostenirea; auditul N vede si WHEN. |
+| L12 | Nimic tacut: lista expresiilor din catalog cu „NEACOPERIT” explicit (domenii, operatori, cast-uri in corpuri text, I/O de tip, statistici extinse); agregatele = NEREZOLVAT (rosu). |
+| L15 | Poarta: mostenire prezenta = refuz (in loc de amprentarea triggerelor / functiilor copiilor); amprenta si valorile lipite neschimbate (paritatea G = 18a testata). |
+| L18 | Lista re-invatata cu copilul nu poate face poarta verde (testat); zero cai cu WHEN neacoperit nu mai inseamna „fara drum”. |
+| L20 | Perechea negativa WHEN (fara EXECUTE = fara cale, apelul real refuzat); copil sters + ANALYZE = verde (r25, neschimbat); dupa proba, poarta verde. |
+| L25 | Expected din constructia cazului + apelul REAL in PostgreSQL (rand in coada / refuzul exact); 16 mutanti ai auditului + mutantul predicatului, fiecare respins / detectat; harness pe PG17 real (coordonatorul). |
+| L19 | Acelasi predicat in poarta si in preconditie; `REZOLVARE_APEL` si amprenta (G = 18a) neschimbate, testate static. |
 | restul | n/a (L01-L06, L08-L11, L13, L14, L16, L17, L21-L24: fara cozi, identitate, bani, AI, UI; tranzactia, lock-urile si revenirile neschimbate). |

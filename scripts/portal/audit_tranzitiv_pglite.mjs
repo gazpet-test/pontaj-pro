@@ -484,6 +484,48 @@ const CAZURI = [
     faraCale(r, 'public.entry_x()'),
     [r.coada === 0 && /permission denied for function bridge_x/.test(r.realEroare || ''), `apelul real refuzat: ${r.coada} ${r.realEroare || ''}`],
   ], { rol: 'anon', sql: 'SELECT public.entry_x()' }],
+  // r26 (Jakarinos r25 P1): conditia WHEN a unui trigger se evalueaza separat de functia triggerului (care aici doar
+  // intoarce NEW), ca rolul care scrie, cu EXECUTE verificat. Contraexemplul recenzentului, cu apelul real ca teren.
+  ['r26 contraexemplul recenzentului: teren -> entry_when DEFINER(executor) -> INSERT when_target -> WHEN(hidden.side()) -> net', HID + `
+    CREATE ROLE teren NOLOGIN;
+    CREATE FUNCTION hidden.side() RETURNS boolean LANGUAGE plpgsql SET search_path TO 'pg_catalog', 'pg_temp'
+      AS $f$ BEGIN PERFORM net.http_post('https://exemplu.invalid/when'); RETURN true; END $f$;
+    REVOKE ALL ON FUNCTION hidden.side() FROM PUBLIC; GRANT EXECUTE ON FUNCTION hidden.side() TO executor;
+    CREATE FUNCTION public.tg_w() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN NEW; END $f$;
+    REVOKE ALL ON FUNCTION public.tg_w() FROM PUBLIC;
+    CREATE TABLE public.when_target (id integer); GRANT INSERT ON public.when_target TO executor;
+    CREATE TRIGGER when_target_bi BEFORE INSERT ON public.when_target FOR EACH ROW WHEN (hidden.side())
+      EXECUTE FUNCTION public.tg_w();
+    CREATE FUNCTION public.entry_when() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN INSERT INTO public.when_target VALUES (1); END $f$;
+    ALTER FUNCTION public.entry_when() OWNER TO executor; REVOKE ALL ON FUNCTION public.entry_when() FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION public.entry_when() TO teren;`,
+  r => [
+    [r.rez.rol_radacina === 'teren', `rol_radacina = teren: ${r.rez.rol_radacina}`],
+    [are(r.cai, c => c.drum === `public.entry_when() {executor} -[scriere INSERT]-> public.when_target [INSERT] {executor} -[when INSERT]-> hidden.side() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact prin conditia WHEN: ${drumuri(r)}`],
+    [r.rez.cai_spre_net !== '0' && r.rez.nerezolvate === '0', `cai_spre_net = ${r.rez.cai_spre_net} (r25 dadea 0), nerezolvate = ${r.rez.nerezolvate}`],
+    [r.coada === 1 && !r.realEroare, `apelul real ca teren ajunge in coada: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'teren', sql: 'SELECT public.entry_when()' }],
+  ['r26 WHEN cu functie fara EXECUTE pentru cel care scrie: PostgreSQL refuza, fara cale (perechea negativa)', HID + `
+    CREATE ROLE teren NOLOGIN;
+    CREATE FUNCTION hidden.side_x() RETURNS boolean LANGUAGE plpgsql SET search_path TO 'pg_catalog', 'pg_temp'
+      AS $f$ BEGIN PERFORM net.http_post('https://exemplu.invalid/when_x'); RETURN true; END $f$;
+    REVOKE ALL ON FUNCTION hidden.side_x() FROM PUBLIC;
+    CREATE FUNCTION public.tg_wx() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN NEW; END $f$;
+    REVOKE ALL ON FUNCTION public.tg_wx() FROM PUBLIC;
+    CREATE TABLE public.when_x (id integer); GRANT INSERT ON public.when_x TO executor;
+    CREATE TRIGGER when_x_bi BEFORE INSERT ON public.when_x FOR EACH ROW WHEN (hidden.side_x()) EXECUTE FUNCTION public.tg_wx();
+    CREATE FUNCTION public.entry_wx() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN INSERT INTO public.when_x VALUES (1); END $f$;
+    ALTER FUNCTION public.entry_wx() OWNER TO executor; REVOKE ALL ON FUNCTION public.entry_wx() FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION public.entry_wx() TO teren;`,
+  r => [
+    faraCale(r, 'public.entry_wx()'),
+    [r.coada === 0 && /permission denied for function side_x/.test(r.realEroare || ''), `apelul real refuzat: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'teren', sql: 'SELECT public.entry_wx()' }],
 ]
 
 let esecuri = 0
@@ -570,6 +612,10 @@ const MUTANTI = [
   ['functia din vedere fara verificarea EXECUTE',
     "q.refclassid = 'pg_proc'::regclass, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type = '1'",
     "false, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type = '1'", 'r25 vedere: functia din vedere fara EXECUTE'],
+  // r26: conditia WHEN a triggerelor
+  ['r25: fara conditia WHEN (doar functia triggerului)', 'tg.tgqual IS NOT NULL AND', 'false AND', 'r26 contraexemplul recenzentului'],
+  ['WHEN fara verificarea EXECUTE', 'true, false, NULL::oid\n        FROM pg_trigger tg\n', 'false, false, NULL::oid\n        FROM pg_trigger tg\n',
+    'r26 WHEN cu functie fara EXECUTE'],
 ]
 for (const [desc, din, in_, caz] of MUTANTI) {
   if (filtru) break

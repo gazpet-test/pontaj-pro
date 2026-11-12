@@ -416,6 +416,37 @@ adm25 'DROP SCHEMA r25_proba CASCADE; DROP SCHEMA r25_ascuns CASCADE; DROP ROLE 
   || fail 'contraexemplul r25: a ramas ceva (roluri, scheme sau randuri in coada)'
 [[ "$(q "$STARE_DIAG")" == t ]] || fail 'contraexemplul r25: a ramas ceva din 18a'
 echo "N_R25: contraexemplul recenzentului gasit de audit pe PG17 (vedere -> functie ca executantul), apelul real confirmat, curatat"
+# r26 (Jakarinos r25 P1): conditia WHEN a unui trigger pe PG17 real. Radacina (executabila de PUBLIC) = functie DEFINER a
+# lui r26_executor -> INSERT in r26_proba.tinta -> trigger BEFORE INSERT cu WHEN (r26_ascuns.side()), a carui functie doar
+# intoarce NEW -> side() (EXECUTE doar r26_executor, intr-o schema vazuta doar de el) scrie in coada pg_net. N trebuie sa
+# dea drumul prin WHEN, iar apelul real (ca anon, tranzactie anulata) chiar scrie in coada. r25 dadea 0 cai.
+R26_COADA="$(q 'SELECT count(*) FROM net.http_request_queue')"
+adm25 'CREATE ROLE r26_executor NOLOGIN'
+adm25 'CREATE SCHEMA r26_ascuns; GRANT USAGE ON SCHEMA r26_ascuns TO r26_executor; CREATE SCHEMA r26_proba; GRANT USAGE ON SCHEMA r26_proba TO PUBLIC'
+adm25 "CREATE FUNCTION r26_ascuns.side() RETURNS boolean LANGUAGE plpgsql SET search_path TO 'pg_catalog', 'pg_temp' AS \$f\$ BEGIN INSERT INTO net.http_request_queue (method, url, timeout_milliseconds) VALUES ('POST', 'https://exemplu.invalid/r26', 1); RETURN true; END \$f\$"
+adm25 'REVOKE ALL ON FUNCTION r26_ascuns.side() FROM PUBLIC; GRANT EXECUTE ON FUNCTION r26_ascuns.side() TO r26_executor'
+adm25 "CREATE FUNCTION r26_proba.tg_w() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'r26_proba', 'pg_temp' AS \$f\$ BEGIN RETURN NEW; END \$f\$"
+adm25 'REVOKE ALL ON FUNCTION r26_proba.tg_w() FROM PUBLIC'
+adm25 'CREATE TABLE r26_proba.tinta (id integer); GRANT INSERT ON r26_proba.tinta TO r26_executor'
+adm25 'CREATE TRIGGER tinta_bi BEFORE INSERT ON r26_proba.tinta FOR EACH ROW WHEN (r26_ascuns.side()) EXECUTE FUNCTION r26_proba.tg_w()'
+adm25 "CREATE FUNCTION r26_proba.entry_when() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'r26_proba', 'pg_temp' AS \$f\$ BEGIN INSERT INTO r26_proba.tinta VALUES (1); RETURN 1; END \$f\$"
+adm25 'ALTER FUNCTION r26_proba.entry_when() OWNER TO r26_executor'
+q "CREATE SCHEMA cron; CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, command text NOT NULL,
+   username text NOT NULL DEFAULT current_user, active boolean NOT NULL DEFAULT true, jobname text)" >/dev/null
+"${PSQL[@]}" -At -F '|' -f "$ROOT/scripts/portal/porti_citire.sql" >"$TMP/porti_citire_r26.out" 2>&1 \
+  || { cat "$TMP/porti_citire_r26.out"; fail 'porti_citire.sql pe contraexemplul r26'; }
+q "DROP TABLE cron.job; DROP SCHEMA cron" >/dev/null
+R26_DRUM='r26_proba.entry_when() {r26_executor} -[scriere INSERT]-> r26_proba.tinta [INSERT] {r26_executor} -[when INSERT]-> r26_ascuns.side() {r26_executor} -[scriere INSERT]-> net.http_request_queue [INSERT] {r26_executor}'
+grep -qF "N_audit_cale|$R26_DRUM|" "$TMP/porti_citire_r26.out" \
+  || { grep -E '^N_audit_(cale|rezumat)' "$TMP/porti_citire_r26.out"; fail 'porti_citire.sql N (r26): drumul prin conditia WHEN lipseste'; }
+[[ "$("${ADMIN[@]}" -d "$DB" -At -c 'BEGIN' -c 'SET LOCAL ROLE anon' -c 'SELECT r26_proba.entry_when() IS NOT NULL' \
+     -c 'SELECT count(*) FROM net.http_request_queue' -c 'ROLLBACK' | paste -sd' ' -)" == "t $((R26_COADA + 1))" ]] \
+  || fail 'contraexemplul r26: apelul real ca anon nu a scris in coada (martorul independent al auditului)'
+adm25 'DROP SCHEMA r26_proba CASCADE; DROP SCHEMA r26_ascuns CASCADE; DROP ROLE r26_executor'
+[[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'r26%'") $(q "SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'r26%'") $(q 'SELECT count(*) FROM net.http_request_queue')" == "0 0 $R26_COADA" ]] \
+  || fail 'contraexemplul r26: a ramas ceva (roluri, scheme sau randuri in coada)'
+[[ "$(q "$STARE_DIAG")" == t ]] || fail 'contraexemplul r26: a ramas ceva din 18a'
+echo "N_R26: contraexemplul WHEN gasit de audit pe PG17 (conditia triggerului ca executantul), apelul real confirmat, curatat"
 rc="$(dry_e1 proba_curata --doar-18a)"
 [[ "$rc" == 0 ]] || { cat "$TMP/dry_proba_curata.log"; fail "dry_prod pe fixture curat: cod $rc, asteptat 0 (PROBA OK)"; }
 rc="$(dry_e1 diag_curat --diagnostic-porti)"
@@ -502,6 +533,25 @@ adm 'DROP TABLE portal_mut.copil'; adm 'ANALYZE net._http_response'; poarta_verd
 adm 'CREATE TABLE portal_mut.parinte (id bigint)'; adm 'ALTER TABLE net._http_response INHERIT portal_mut.parinte'
 poarta_are 'relatie:_http_response' '_http_response atasata la un parinte nou'
 adm 'ALTER TABLE net._http_response NO INHERIT portal_mut.parinte'; adm 'DROP TABLE portal_mut.parinte'; poarta_verde 'parinte scos'
+# r26 (Jakarinos r25): orice mostenire prezenta = rosu INDIFERENT de amprenta. Copil cu trigger BEFORE UPDATE, lista
+# re-invatata (in memorie, in tranzactie) CU copilul: poarta tot rosie; dupa ROLLBACK, totul ca inainte.
+R26_MOST="$("${ADMIN[@]}" -d "$DB" -At <<'SQL'
+BEGIN;
+CREATE TABLE portal_mut.copil2 () INHERITS (net._http_response);
+CREATE TRIGGER portal_mut_c2 BEFORE UPDATE ON portal_mut.copil2 FOR EACH ROW EXECUTE FUNCTION portal_mut.tg();
+DO $d$ BEGIN
+  EXECUTE format('CREATE OR REPLACE FUNCTION public.fn_portal_net_rel_aprobat() RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path TO %L, %L AS %L',
+    'public', 'pg_temp', 'SELECT ' || quote_literal((public.fn_portal_net_rel_aprobat()
+      || jsonb_build_object('net._http_response', md5(public.fn_portal_net_rel_amprenta('net._http_response'::regclass))))::text) || '::jsonb');
+END $d$;
+SELECT public.fn_portal_net_rel_aprobat()->>'net._http_response' = md5(public.fn_portal_net_rel_amprenta('net._http_response'::regclass)) AS lista,
+       public.fn_portal_net_rel_acceptat('net._http_response'::regclass) AS acceptat,
+       'relatie:_http_response' = ANY(public.fn_portal_porti_lipsa()) AS rosu;
+ROLLBACK;
+SQL
+)" || fail 'r26: proba de mostenire nu a rulat'
+[[ "$R26_MOST" == 't|f|t' ]] || fail "r26: mostenire prezenta trebuia rosie si cu lista re-invatata cu copilul (lista=amprenta|acceptat|rosu: $R26_MOST)"
+poarta_verde 'dupa proba de mostenire r26 (ROLLBACK)'
 # r25: inchiderea tranzitiva - amprenta lui _http_response cu un trigger -> helper -> helper2; schimbarea lui helper2
 # (nivelul 2, fara atingerea triggerului) schimba amprenta (si valoarea inserata); refacut = aceeasi amprenta.
 adm 'CREATE FUNCTION portal_mut.helper2() RETURNS text LANGUAGE sql AS $f$ SELECT $$inainte$$::text $f$'

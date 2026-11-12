@@ -448,10 +448,15 @@ $netrel$;
 REVOKE ALL ON FUNCTION public.fn_portal_net_rel_aprobat() FROM PUBLIC,anon,authenticated,service_role,teren;
 -- r21 (varianta c): obiectul e in net, e in lista si amprenta lui de acum = md5-ul revizuit. Cheie lipsa / amprenta NULL =
 -- fals (fail-closed). Predicatul unic (L19) al poartei si al preconditiei.
+-- r26 (Jakarinos r25): orice parinte sau copil (INHERITS / partitie) pe obiect = REFUZ, indiferent de amprenta. Amprenta
+-- descrie descendentii, dar nu si triggerele / functiile lor; in loc sa le amprentam, mostenirea prezenta e rosie (pe
+-- productie nu exista). Amprenta nu se schimba => valorile lipite raman valabile.
 CREATE FUNCTION public.fn_portal_net_rel_acceptat(p_oid oid) RETURNS boolean
 LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $fn$
  SELECT EXISTS (SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
    WHERE c.oid=p_oid AND n.nspname='net'
+     AND NOT c.relispartition
+     AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits ih WHERE ih.inhrelid=c.oid OR ih.inhparent=c.oid)
      AND public.fn_portal_net_rel_aprobat()->>(quote_ident(n.nspname)||'.'||quote_ident(c.relname))
        = md5(public.fn_portal_net_rel_amprenta(c.oid)));
 $fn$;

@@ -12,6 +12,7 @@
 //     obiect nou in net, si (r22, Jakarinos r21 P1) TRIGGER nou, POLITICA noua, DEFAULT schimbat / nou, REGULA noua, INDEX
 //     nou, CHECK nou, secventa fara proprietar (OWNED BY NONE) sau cu alt pas; cu un trigger revizuit: corpul functiei
 //     triggerului schimbat sau triggerul dezactivat = RESPINS. Valoarea curenta a secventei (setval) NU e in amprenta;
+//     r26: orice parinte / copil (mostenire, partitie) = RESPINS indiferent de amprenta (si cu lista recitita cu copilul);
 //  4. fn_portal_teren_rel_drept: adevarat azi (prin PUBLIC); fals dupa REVOKE de la proprietar (poarta ramane verde);
 //  5. CE POATE teren la nivel SQL, azi: inserare in coada si citirea raspunsurilor (prin PUBLIC);
 //  6. verificarea PostgREST din poarta (expresia copiata din 18a): net in pgrst.db_schemas / db_extra_search_path = rosu.
@@ -260,6 +261,48 @@ ok(sH1 === 'RESPINS/accesibil', `helper (nivelul 1) schimbat: ${sH1}`)
 ok(sAcl === 'RESPINS/accesibil', `dreptul pe helper2 schimbat: ${sAcl}`)
 ok(sAt === 'RESPINS/accesibil' && cAt === 'inaintey', `functie BEGIN ATOMIC (nivelul 2) schimbata: ${sAt}, continut ${cAt}`)
 ok(JSON.stringify(await stare()) === JSON.stringify(s0), 'dupa helperi: starea initiala (lista G)')
+
+// 3e. r26 (Jakarinos r25): contraexemplul recenzentului - copil deja atasat la _http_response, cu trigger BEFORE UPDATE;
+// schimbarea corpului functiei triggerului COPILULUI pastreaza amprenta (limita ei, reprodusa aici), dar poarta refuza
+// orice mostenire prezenta: RESPINS chiar cu lista recitita CU copilul. Mutantul (predicatul fara clauza de mostenire)
+// trebuie sa accepte in aceeasi situatie, altfel testul nu dovedeste clauza.
+await db.exec(`
+  CREATE FUNCTION portal_mut.tg_copil() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN NEW.content := 'inainte'; RETURN NEW; END $f$;
+  CREATE TABLE portal_mut.copil () INHERITS (net._http_response);
+  CREATE TRIGGER portal_mut_copil_bu BEFORE UPDATE ON portal_mut.copil FOR EACH ROW EXECUTE FUNCTION portal_mut.tg_copil();
+  INSERT INTO portal_mut.copil (id, content) VALUES (7, 'x');`)
+const gC = await citesteG()
+await aprobat(gC)
+const hC0 = await ampR()
+const sC0 = await stare()
+const prinParinteUpdate = async () => {
+  await db.exec("BEGIN; SET LOCAL ROLE teren; UPDATE net._http_response SET content = 'teren' WHERE id = 7;")
+  const c = (await q('SELECT content FROM net._http_response WHERE id = 7'))[0]?.content
+  await db.exec('ROLLBACK;')
+  return c
+}
+const cC0 = await prinParinteUpdate()
+await db.exec("CREATE OR REPLACE FUNCTION portal_mut.tg_copil() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN NEW.content := 'dupa'; RETURN NEW; END $f$;")
+const hC1 = await ampR()
+const sC1 = await stare()
+const cC1 = await prinParinteUpdate()
+// mutantul: acelasi predicat din 18a, fara clauza de mostenire (in memorie; fisierul nu se schimba)
+const ACC_A = HELPERI_18A.indexOf('CREATE FUNCTION public.fn_portal_net_rel_acceptat(')
+const ACC_B = HELPERI_18A.indexOf('$fn$;', ACC_A)
+const ACC_18A = HELPERI_18A.slice(ACC_A, ACC_B + 5)
+const CLAUZA = '     AND NOT c.relispartition\n     AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits ih WHERE ih.inhrelid=c.oid OR ih.inhparent=c.oid)\n'
+ok(ACC_A >= 0 && ACC_18A.split(CLAUZA).length === 2, 'r26: predicatul din 18a are clauza de mostenire exact o data')
+await db.exec(ACC_18A.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION').replace(CLAUZA, ''))
+const sMut = await stare()
+await db.exec(ACC_18A.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION'))
+await db.exec('DROP TABLE portal_mut.copil; DROP FUNCTION portal_mut.tg_copil(); ANALYZE net._http_response;')
+await aprobat(g)
+ok(hC0 === hC1 && cC0 === 'inainte' && cC1 === 'dupa',
+  `limita amprentei (recenzent): corpul triggerului copilului schimbat => amprenta identica (${hC0 === hC1}), UPDATE prin parinte ca teren: ${cC0} -> ${cC1}`)
+ok(gC[R] !== g[R] && sC0[R] === 'RESPINS/accesibil' && sC1[R] === 'RESPINS/accesibil',
+  `r26: mostenire prezenta = RESPINS si cu lista recitita cu copilul: ${sC0[R]} / ${sC1[R]}`)
+ok(sMut[R] === 'acceptat/accesibil', `mutant „predicatul fara clauza de mostenire”: ${sMut[R]} (trebuie acceptat => testul prinde clauza)`)
+ok(JSON.stringify(await stare()) === JSON.stringify(s0), 'dupa mostenire: starea initiala (lista G)')
 
 // 4. Ce poate teren la nivel SQL azi (prin PUBLIC), daca ar avea o cale de a rula SQL: scrie in coada, citeste raspunsurile.
 let er1 = '', er2 = '', idNou = null
