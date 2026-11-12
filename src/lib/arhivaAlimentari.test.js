@@ -4,6 +4,7 @@ import {
   citesteArhivaCompleta, citesteOTrecere, filtruDupa, ARHIVA_INSTABILA,
   incarcaNumeAngajati, proprietariDisponibili, numeAngajat,
   proprietarComodatId, esteComodatNeatribuit,
+  SURSA_ROMPETROL_TOATE, esteSursaRompetrol, surseRompetrol, potrivesteSursa,
 } from './arhivaAlimentari.js'
 
 // Server PostgREST simulat: ordonează (data desc, id desc), aplică filtrul keyset `or=(...)`
@@ -251,5 +252,57 @@ describe('TKT-2026-0340: proprietar comodat', () => {
     assert.equal(esteComodatNeatribuit({ data_alimentare: '2026-09-02', logistica_active: { tip_proprietate: 'firma' } }), false)
     assert.equal(esteComodatNeatribuit({ data_alimentare: '2026-09-02', logistica_active: null }), false)
     assert.equal(esteComodatNeatribuit({ data_alimentare: '2026-09-02', logistica_active: comodat(7) }), false)
+  })
+})
+
+// TKT-2026-0378: opțiunea „Rompetrol — toate” din filtrul de sursă.
+// Numele surselor sunt cele din date (import „Rompetrol” + variante cu sufix); exemplele de mai jos
+// și totalurile așteptate sunt scrise de mână, independent de helper (L25).
+describe('filtrul de sursă — Rompetrol toate', () => {
+  const R1 = 'Rompetrol', R2 = 'Rompetrol (pending QR match)', R3 = 'ROMPETROL Card GAZPET'
+  const arhiva = [
+    { id: 1, statie_combustibil: R1, cantitate_litri: 50, pret_total: 500 },
+    { id: 2, statie_combustibil: R2, cantitate_litri: 40.7, pret_total: 443.63 },
+    { id: 3, statie_combustibil: R3, cantitate_litri: 10, pret_total: 100 },
+    { id: 4, statie_combustibil: 'Petrom', cantitate_litri: 30, pret_total: 300 },
+    { id: 5, statie_combustibil: 'Gazpet - Oscar 1 (vrac propriu)', cantitate_litri: 200, pret_total: 0 },
+    { id: 6, statie_combustibil: null, cantitate_litri: 5, pret_total: 50 },
+  ]
+  const ids = filtru => arhiva.filter(a => potrivesteSursa(a.statie_combustibil, filtru)).map(a => a.id)
+  const suma = (rows, k) => Math.round(rows.reduce((s, a) => s + Number(a[k] || 0), 0) * 100) / 100
+  it('grupul cuprinde toate cele trei variante Rompetrol și nimic altceva', () => {
+    assert.deepEqual(ids(SURSA_ROMPETROL_TOATE), [1, 2, 3])
+  })
+  it('totalurile pe grup = suma celor trei exporturi separate', () => {
+    const grup = arhiva.filter(a => potrivesteSursa(a.statie_combustibil, SURSA_ROMPETROL_TOATE))
+    const separat = [R1, R2, R3].flatMap(s => arhiva.filter(a => potrivesteSursa(a.statie_combustibil, s)))
+    assert.equal(suma(grup, 'cantitate_litri'), 100.7)
+    assert.equal(suma(grup, 'pret_total'), 1043.63)
+    assert.equal(suma(separat, 'cantitate_litri'), 100.7)
+    assert.equal(suma(separat, 'pret_total'), 1043.63)
+  })
+  it('celelalte opțiuni rămân neschimbate: „Toate” și egalitatea exactă', () => {
+    assert.deepEqual(ids('Toate'), [1, 2, 3, 4, 5, 6])
+    assert.deepEqual(ids(R2), [2])
+    assert.deepEqual(ids('Petrom'), [4])
+    assert.deepEqual(ids('rompetrol'), [])  // o sursă anume se compară exact, nu ca grup
+  })
+  it('recunoaște doar textele care conțin „rompetrol”; gol / null / alt tip = nu', () => {
+    assert.equal(esteSursaRompetrol('rompetrol'), true)
+    assert.equal(esteSursaRompetrol('Statia ROMPETROL Ploiesti'), true)
+    assert.equal(esteSursaRompetrol('Petrom'), false)
+    assert.equal(esteSursaRompetrol(''), false)
+    assert.equal(esteSursaRompetrol(null), false)
+    assert.equal(esteSursaRompetrol(undefined), false)
+    assert.equal(esteSursaRompetrol(42), false)
+  })
+  it('lista surselor din grup păstrează ordinea filtrului și tolerează lipsa listei', () => {
+    assert.deepEqual(surseRompetrol(['Lukoil', R1, 'Petrom', R2, R3]), [R1, R2, R3])
+    assert.deepEqual(surseRompetrol(null), [])
+    assert.deepEqual(surseRompetrol([]), [])
+  })
+  it('valoarea specială nu e un nume de stație din date și nu se confundă cu „Toate”', () => {
+    assert.equal(arhiva.some(a => a.statie_combustibil === SURSA_ROMPETROL_TOATE), false)
+    assert.notEqual(SURSA_ROMPETROL_TOATE, 'Toate')
   })
 })
