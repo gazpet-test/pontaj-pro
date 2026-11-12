@@ -2,7 +2,8 @@
 // + paritatea textelor care trebuie să fie identice între migrare, scriptul de probă și harness-ul SQL (L19).
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
-import { rezumatRaport, rezumatZi, cuNumar, citesteRapoarteZi, intrareZi, santiereDeRaportat, COLOANE_ZI,curata, trunchiaza, fmtNr, fmtGrad, normNume, etichetaRezumat, valideazaEditat, MAX_EDITAT, LIMITE, LIMITE_ZI } from './raportRezumat.js'
+import { rezumatRaport, rezumatZi, cuNumar, citesteRapoarteZi, intrareZi, santiereDeRaportat, COLOANE_ZI,curata, trunchiaza, fmtNr, fmtGrad, normNume, etichetaRezumat, valideazaEditat, MAX_EDITAT, LIMITE, LIMITE_ZI,
+  curataEditat, plafoneaza, avertizareEroare, MAX_AUTOMAT, SUFIX_SCURTAT } from './raportRezumat.js'
 
 const citeste = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r/g, '')
 const CAZURI = JSON.parse(citeste('./raportRezumat.cazuri.json'))
@@ -80,6 +81,36 @@ describe('unelte de text', () => {
     expect(valideazaEditat('x'.repeat(MAX_EDITAT))).toBe(null)
     expect(valideazaEditat('x'.repeat(MAX_EDITAT + 1))).toMatch(/maximum/)
   })
+  it('r3: curataEditat — aceleași caractere de control ca textul automat -> spațiu, rândul nou rămâne (CR / CRLF -> LF)', () => {
+    const c = String.fromCharCode
+    expect(curataEditat(`a${c(13)}${c(10)}b${c(9)}c${c(127)}`)).toBe(`a${c(10)}b c `)
+    expect(curataEditat(`x${c(13)}y${c(1)}z${c(31)}`)).toBe(`x${c(10)}y z `)
+    expect(curataEditat('  două  spații\nrămân  ')).toBe('  două  spații\nrămân  ')   // nimic altceva nu se schimbă
+    expect(curataEditat(null)).toBe(null)
+    // validarea se face DUPĂ curățare: doar controale = gol; lungimea se numără pe textul curățat (CRLF = un caracter)
+    expect(valideazaEditat(`${c(9)}${c(1)} `)).toMatch(/gol/)
+    expect(valideazaEditat('x'.repeat(MAX_EDITAT - 1) + `${c(13)}${c(10)}`)).toBe(null)
+  })
+  it('r3: plafoneaza — sub plafon neschimbat; peste: rânduri întregi + sufix; primul rând prea lung = tăiat în rând', () => {
+    expect(MAX_AUTOMAT).toBe(3000)
+    expect(plafoneaza('scurt\ntext')).toBe('scurt\ntext')
+    const exact = 'y'.repeat(MAX_AUTOMAT)
+    expect(plafoneaza(exact)).toBe(exact)
+    const rand = 'r'.repeat(99)                       // 100 de caractere cu rândul nou
+    const lung = Array.from({ length: 40 }, () => rand).join('\n')   // 3999
+    const t = plafoneaza(lung)
+    // 3000 - 38 = 2962 de caractere disponibile => 29 de rânduri întregi (29 × 100 - 1 = 2899), apoi sufixul
+    expect(Array.from(SUFIX_SCURTAT).length).toBe(38)
+    expect(t).toBe(Array.from({ length: 29 }, () => rand).join('\n') + SUFIX_SCURTAT)
+    expect(plafoneaza('z'.repeat(3100))).toBe('z'.repeat(2962) + SUFIX_SCURTAT)
+  })
+  it('r3: avertizareEroare — doar la textul automat / lipsă, cu codul; fără cod = nimic', () => {
+    expect(avertizareEroare({ rezumat_sursa: 'automat', rezumat_eroare: '42703' })).toMatch(/nu s-a putut reface.*42703.*de dinainte/)
+    expect(avertizareEroare({ rezumat_sursa: null, rezumat_eroare: '42703' })).toMatch(/nu s-a putut genera.*42703/)
+    expect(avertizareEroare({ rezumat_sursa: 'automat', rezumat_eroare: null })).toBe(null)
+    expect(avertizareEroare({ rezumat_sursa: 'editat', rezumat_eroare: '42703' })).toBe(null)
+    expect(avertizareEroare(null)).toBe(null)
+  })
 })
 
 // ── r2: rezumatul ZILEI pe toate șantierele (doar în aplicație). Așteptările sunt scrise de mână (L25). ──
@@ -123,14 +154,34 @@ describe('rezumatZi — rezumatul zilei pe toate șantierele', () => {
     expect(rezumatZi(CINCI, '2026-11-11')).toBe(TEXT_CINCI)
     expect(rezumatZi(CINCI, '2026-11-11', { santiereActive: null })).toBe(TEXT_CINCI)
   })
-  it('o zi cu 5 rapoarte + șantierele active care n-au trimis (în ordinea numelui; id-uri text sau număr)', () => {
+  it('o zi cu 5 rapoarte + șantierele active care n-au trimis (în ordinea numelui; id-uri text sau număr) — owner, azi', () => {
     const active = [1, 2, 3, 4, 5].map(id => ({ id: String(id), nume: `S${id}` })).concat([{ id: 7, nume: 'Zeta' }, { id: 6, nume: 'Beta' }])
-    expect(rezumatZi(CINCI, '2026-11-11', { santiereActive: active })).toBe(TEXT_CINCI + '\n\nFără raport (2): Beta, Zeta')
+    expect(rezumatZi(CINCI, '2026-11-11', { santiereActive: active, vedeToate: true, azi: '2026-11-11' })).toBe(TEXT_CINCI + '\n\nFără raport (2): Beta, Zeta')
+  })
+  // r3 (Jakarinos P2): „fără raport” afirmat DOAR când contul vede tot și ziua e azi; altfel formularea prudentă
+  it('r3: cont restrâns / zi trecută / necunoscut = „fără raport vizibil pentru contul tău” / „din lista curentă de șantiere”', () => {
+    const active = [{ id: 1, nume: 'S1' }, { id: 6, nume: 'Beta' }]
+    const r = [{ site_id: 1, santier: 'S1', personal: { total: 2 } }]
+    const coada = (opt) => rezumatZi(r, '2026-11-11', { santiereActive: active, ...opt }).split('\n').at(-1)
+    expect(coada({ vedeToate: true, azi: '2026-11-11' })).toBe('Fără raport (1): Beta')
+    expect(coada({ vedeToate: true, azi: '2026-11-12' })).toBe('Fără raport, din lista curentă de șantiere (1): Beta')
+    expect(coada({ vedeToate: false, azi: '2026-11-11' })).toBe('Fără raport vizibil pentru contul tău (1): Beta')
+    expect(coada({ vedeToate: false, azi: '2026-11-12' })).toBe('Fără raport vizibil pentru contul tău, din lista curentă de șantiere (1): Beta')
+    // necunoscut (lipsă / nu e exact true, ziua de azi lipsă) = cel mai prudent
+    expect(coada({})).toBe('Fără raport vizibil pentru contul tău, din lista curentă de șantiere (1): Beta')
+    expect(coada({ vedeToate: 'da', azi: '2026-11-11' })).toBe('Fără raport vizibil pentru contul tău (1): Beta')
+    expect(coada({ vedeToate: true })).toBe('Fără raport, din lista curentă de șantiere (1): Beta')
+    // toate au raport: aceeași regulă
+    const toate = (opt) => rezumatZi(r, '2026-11-11', { santiereActive: [{ id: 1, nume: 'S1' }], ...opt }).split('\n').at(-1)
+    expect(toate({ vedeToate: true, azi: '2026-11-11' })).toBe('Toate șantierele active au trimis raport.')
+    expect(toate({ vedeToate: true, azi: '2026-11-10' })).toBe('Toate șantierele din lista curentă au raport în ziua aceasta.')
+    expect(toate({ azi: '2026-11-11' })).toBe('Toate șantierele active din lista ta au un raport vizibil pentru contul tău.')
+    expect(toate({})).toBe('Toate șantierele din lista curentă au un raport vizibil pentru contul tău în ziua aceasta.')
   })
   it('o zi cu un singur raport (singular peste tot); toate activele au raport', () => {
     const r = [{ site_id: 9, santier: 'Șantier test', personal: { total: 1 }, utilaje: [{ cod: 'GEN-1', stare: 'nefunctional', motiv: 'nu pornește' }],
       lucrari: 'Probă.' }]
-    expect(rezumatZi(r, '2026-11-12', { santiereActive: [{ id: 9, nume: 'Șantier test' }] })).toBe([
+    expect(rezumatZi(r, '2026-11-12', { santiereActive: [{ id: 9, nume: 'Șantier test' }], vedeToate: true, azi: '2026-11-12' })).toBe([
       'Rapoarte șantiere — 12.11.2026: 1 șantier, 1 om, 1 utilaj',
       '',
       '• Șantier test: 1 om · 1 utilaj (nefuncționale 1: GEN-1)',
@@ -142,7 +193,7 @@ describe('rezumatZi — rezumatul zilei pe toate șantierele', () => {
   it('o zi fără niciun raport (cu și fără lista activelor); intrarea care nu e listă', () => {
     expect(rezumatZi([], '2026-11-11')).toBe('Rapoarte șantiere — 11.11.2026: niciun raport')
     expect(rezumatZi(null, '2026-11-11')).toBe('Rapoarte șantiere — 11.11.2026: niciun raport')
-    expect(rezumatZi([], '2026-11-11', { santiereActive: [{ id: 2, nume: 'Doi' }, { id: 1, nume: 'Ăla' }, { id: 3, nume: '' }] }))
+    expect(rezumatZi([], '2026-11-11', { santiereActive: [{ id: 2, nume: 'Doi' }, { id: 1, nume: 'Ăla' }, { id: 3, nume: '' }], vedeToate: true, azi: '2026-11-11' }))
       .toBe('Rapoarte șantiere — 11.11.2026: niciun raport\n\nFără raport (3): Ăla, Doi, Șantier #3')
     expect(rezumatZi([], 'nu e dată')).toBe('Rapoarte șantiere: niciun raport')
   })
@@ -291,7 +342,8 @@ describe('rezumatul zilei în aplicație: citirea și forma intrării', () => {
       '  Subcontractori: Sub',
       '  Probleme: Pb',
       '',
-      'Fără raport (1): Cinci',
+      // r3: fără vedeToate / azi (cont restrâns, zi necunoscută) = formularea prudentă
+      'Fără raport vizibil pentru contul tău, din lista curentă de șantiere (1): Cinci',
     ].join('\n'))
     expect(intrareZi(null)).toEqual({ site_id: null, santier: null, personal: null, utilaje: null, linii: [], lucrari: null, subcontractori: null, probleme: null })
   })
@@ -302,6 +354,59 @@ describe('paritate între fișiere (L19)', () => {
   it('blocul INTRARE din migrare = cel din scriptul de probă (aceeași intrare pentru SQL și JS)', () => {
     const PROBA = citeste('../scripts/raport_rezumat_proba.sql')
     expect(bloc(PROBA, '-- INTRARE-START', '-- INTRARE-END')).toBe(bloc(MIG, '-- INTRARE-START', '-- INTRARE-END'))
+  })
+  it('r3: proba de vizibilitate compune EXACT aceeași intrare, de două ori (ca cititorul și ca proprietarul)', () => {
+    const VIZ = citeste('../scripts/raport_rezumat_vizibilitate.sql')
+    const A = '-- INTRARE-START', B = '-- INTRARE-END', toate = []
+    for (let i = VIZ.indexOf(A); i >= 0; i = VIZ.indexOf(A, i + 1)) toate.push(VIZ.slice(i + A.length, VIZ.indexOf(B, i)))
+    expect(toate).toHaveLength(2)
+    for (const b of toate) expect(b).toBe(bloc(MIG, A, B))
+    // doar citire: o tranzacție READ ONLY, ROLLBACK, fără scrieri; rolul schimbat doar local
+    expect(VIZ).toMatch(/^BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;$/m)
+    expect(VIZ.trim().endsWith('ROLLBACK;')).toBe(true)
+    const fara = VIZ.replace(/--[^\n]*/g, '')
+    expect(fara).not.toMatch(/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|GRANT|REVOKE|TRUNCATE|COMMIT)\b/i)
+    expect(fara).toContain("EXECUTE 'SET LOCAL ROLE authenticated'")
+    // ieșirea nu tipărește id-uri de conturi (doar „cont #k”) și nici textele rapoartelor
+    expect(fara).not.toMatch(/RAISE NOTICE[^;]*c\.id/)
+  })
+  it('r3: intrarea ia DOAR liniile / activitățile / obiectele proiectului șantierului', () => {
+    const b = bloc(MIG, '-- INTRARE-START', '-- INTRARE-END')
+    expect(b).toContain('JOIN public.sites sp ON sp.id = z.site_id')
+    expect(b).toContain('AND (rl.proiect_id IS NULL OR rl.proiect_id = sp.proiect_id)')
+    expect(b).toContain('AND (pa.id IS NULL OR pa.proiect_id = sp.proiect_id)')
+    expect(b).toContain('AND (pu.id IS NULL OR pu.proiect_id = sp.proiect_id)')
+  })
+  it('r3: plafonul total și curățarea corecturii sunt aceleași în SQL', () => {
+    expect(MIG).toContain(`c_max constant integer := ${MAX_AUTOMAT};`)
+    expect(MIG).toContain(`c_sufix constant text := chr(10) || '${SUFIX_SCURTAT.slice(1)}';`)
+    expect(MIG).toContain("'[' || chr(1) || '-' || chr(9) || chr(11) || '-' || chr(31) || chr(127) || ']'")
+    expect(MIG).toContain('NEW.rezumat_text := public.fn_raport_rezumat_curata_editat(NEW.rezumat_text);')
+  })
+  it('r3: livrarea cere plafonul de 2000 ms; CHECK NOT VALID (fără scanare sub lock); lock-urile NOWAIT după verificările de catalog', () => {
+    expect(MIG).toContain("IS DISTINCT FROM '2000/session'")
+    expect(MIG).toContain("current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '2000:' || txid_current()")
+    expect(MIG).toMatch(/\) NOT VALID;\n/)
+    const iInainte = MIG.indexOf("PERFORM pg_temp.amp_verifica_20261216a('inainte')")
+    const iLock = MIG.indexOf('LOCK TABLE public.rapoarte_zilnice IN ACCESS EXCLUSIVE MODE NOWAIT;')
+    const iAlter = MIG.indexOf('ALTER TABLE public.rapoarte_zilnice')
+    expect(iInainte).toBeGreaterThan(0)
+    expect(iLock).toBeGreaterThan(iInainte)
+    expect(iAlter).toBeGreaterThan(iLock)
+    expect(MIG.indexOf('LOCK TABLE public.raport_zilnic_salvari IN SHARE ROW EXCLUSIVE MODE NOWAIT;')).toBeGreaterThan(iLock)
+    // nicio citire a tabelului sub lock (r2 avea „SELECT 1 FROM public.rapoarte_zilnice WHERE rezumat_sursa …” în postcondiții)
+    expect(MIG.slice(iLock)).not.toMatch(/FROM public\.rapoarte_zilnice\b/)
+    // validatorul runnerului cu plafon (scripts/livrare_validator.py, verifica_plafon): pe textul BRUT (și comentariile), fără majuscule,
+    // și pe textul comprimat la [a-z0-9_], transaction_timeout / pg_settings apar EXACT de câte ori apare citirea permisă
+    const CITIRE = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
+    const permise = MIG.split(CITIRE).length - 1
+    const mic = MIG.toLowerCase(), comprimat = mic.replace(/[^a-z0-9_]/g, '')
+    expect(permise).toBe(1)
+    for (const n of ['transaction_timeout', 'pg_settings']) {
+      expect(mic.split(n).length - 1, n).toBe(permise)
+      expect(comprimat.split(n).length - 1, n + ' (comprimat)').toBe(permise)
+    }
+    expect(mic).not.toMatch(/(?<![a-z0-9_$])reset[ \t\n\r\f\v]+all(?![a-z0-9_$])/)
   })
   it('harness-ul SQL rulează EXACT tabelul de cazuri din src/raportRezumat.cazuri.json', () => {
     const H = citeste('../scripts/test_executie_raport_rezumat.sql')
@@ -334,7 +439,7 @@ describe('paritate între fișiere (L19)', () => {
     const { createHash } = await import('node:crypto')
     const REV = citeste('../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql')
     const linii = bloc(REV, '-- AMPRENTE-START', '-- AMPRENTE-END').split('\n').filter(l => l.includes("('fn_raport_rezumat_"))
-    expect(linii.length).toBe(8)
+    expect(linii.length).toBe(9)
     for (const l of linii) {
       const [, nume, amp] = /\('(fn_raport_rezumat_[a-z_]+)', '[^']+', '([0-9a-f]{32})'\)/.exec(l)
       const i = MIG.indexOf(`CREATE FUNCTION public.${nume}(`)
@@ -352,7 +457,8 @@ describe('paritate între fișiere (L19)', () => {
   })
   it('migrarea nu atinge RPC-urile 20261208a (amprenta lor e ținută de 20261209a / 20261213a)', () => {
     expect(MIG).not.toMatch(/CREATE (OR REPLACE )?FUNCTION public\.fn_raport_zilnic_/)
-    expect(MIG).not.toMatch(/GRANT /)
+    // (comentariile scoase: corpul comun al amprentei L15 explică „* = cu GRANT OPTION”)
+    expect(MIG.replace(/--[^\n]*/g, '')).not.toMatch(/GRANT /)
   })
   it('numele și versiunea migrării: 20261216a / 20261216120000, marcajele de livrare și revenire pe același nume', () => {
     expect(MIG.split('\n')[0]).toContain('Version 20261216120000.')

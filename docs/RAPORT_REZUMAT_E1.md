@@ -32,6 +32,10 @@ Probleme: Acces dificil după ploaie.
 Cifrele nu se rotunjesc, nu se adună și nu se deduc (două linii pe aceeași activitate rămân două); singura rotunjire e temperatura
 (jumătatea departe de zero: 8,5 → 9; −0,3 → 0). Virgula zecimală e cea românească (12,5). Numele șefului de șantier nu intră în rezumat.
 
+r3: textul automat are un **plafon total de 3000 de caractere**: peste el rămân rândurile întregi care încap, apoi
+„… (rezumat scurtat; restul în raport)”. În rezumat intră **doar ce ține de proiectul șantierului**: o linie, activitate sau obiect al altui
+proiect (rămas pe raport după o mutare a șantierului, de exemplu) nu apare în text.
+
 **Ce a ieșit la proba pe 20 de rapoarte reale (r2):** rapoartele reale au lucrările ca **text liber** (`lucrari_efectuate`), nu pe linii (în ultimele
 două zile niciun raport nu avea linii în `raport_lucrari`) — rezumatul le redă ca „Lucrări: …”. Lipseau subcontractorii, aprovizionarea și
 planul pentru mâine (completate des) → adăugate; antetul repeta numele (șantier + proiect aproape identic) → un singur nume; lista utilajelor
@@ -39,7 +43,8 @@ nefuncționale putea fi lungă → primele 3 + „+N”; temperatura cu zecimale
 
 ## Unde se generează (decizia de la pct. 3) — în baza de date, în aceeași tranzacție cu salvarea
 
-Coloanele noi pe `rapoarte_zilnice`: `rezumat_text`, `rezumat_sursa` (`automat` / `editat`), `rezumat_la`, `rezumat_de` (gol la automat).
+Coloanele noi pe `rapoarte_zilnice`: `rezumat_text`, `rezumat_sursa` (`automat` / `editat`), `rezumat_la`, `rezumat_de` (gol la automat),
+`rezumat_eroare` (r3: codul ultimei compuneri automate eșuate; gol = a reușit).
 
 **Ales: generarea pe server, prin trigger, nu în client.** Motivele:
 
@@ -58,9 +63,15 @@ Cum lucrează:
 - trigger `AFTER INSERT` pe jurnalul salvărilor (`raport_zilnic_salvari`, ultimul pas al RPC-ului): rezumatul se reface pe antetul + liniile +
   distribuția finale;
 - textul automat e derivat, deci o scriere care schimbă **doar** rezumatul automat nu mărește `versiune_salvare` (altfel telefonul ar vedea un
-  conflict fals după propria salvare); corectura omului **mărește** versiunea (e o modificare a raportului);
-- corectura: `UPDATE` cu CAS pe `versiune_salvare` din aplicație, cu dreptul de scriere de azi pe tabel; trigger-ul cere dreptul pe șantier
-  (`fn_raport_santier_drept`, aceeași regulă ca salvarea), text nevid, maximum 4000 de caractere (peste = refuz, nu tăiere); autorul și ora le pune serverul.
+  conflict fals după propria salvare); orice **decizie a omului** mărește versiunea: corectura și (r3) „Revino la automat” — două telefoane care au
+  citit aceeași versiune nu se mai pot suprascrie în tăcere (al doilea primește „s-a modificat între timp”);
+- corectura: `UPDATE` cu CAS pe `versiune_salvare` din aplicație, cu dreptul de scriere de azi pe tabel; trigger-ul cere un cont logat (r3: fără
+  identitate = refuz, nicio cale de server nu corectează în locul unui om) și dreptul pe șantier (`fn_raport_santier_drept`, aceeași regulă ca
+  salvarea), curăță caracterele de control (rândul nou rămâne), apoi cere text nevid, maximum 4000 de caractere (peste = refuz, nu tăiere);
+  autorul și ora le pune serverul;
+- (r3) **rezumatul nu poate strica salvarea raportului**: dacă citirea / compunerea rezumatului dă o eroare la o salvare a raportului, raportul se
+  salvează, rezumatul rămâne cel de dinainte (raport nou: fără rezumat), iar codul erorii se notează pe rând (`rezumat_eroare`, doar codul);
+  rubrica arată „Rezumatul automat nu s-a putut reface la ultima salvare (cod …)”. La „Generează” / „Revino la automat” eroarea se arată omului.
 
 Prețul: regula textului există în două limbaje — SQL (`fn_raport_rezumat_text`, cea care scrie în BD) și JS (`rezumatRaport` din
 `src/raportRezumat.js`, pentru proba pe date reale). Paritatea e verificată pe **același tabel de cazuri** (`src/raportRezumat.cazuri.json`,
@@ -93,8 +104,10 @@ Un singur text pe zi, pentru directorul de execuție / WhatsApp. **Fără schem�
   - câte 2–4 rânduri pe șantier, în ordinea numărului de oameni: „• nume: oameni · utilaje (nefuncționale)”, „Lucrări: …” (cantitățile exacte pe
     obiecte, apoi textul liber scurtat la 200), „Subcontractori: …” (120) și „Probleme: …” (160) dacă există; fără lucrări = „nimic trecut în raport”;
   - la final, șantierele care trebuiau să raporteze și n-au trimis (aceeași regulă ca „Lipsă azi” din ecran: active, cu raport zilnic necesar).
-- **Limită cunoscută:** lista „fără raport” vine din șantierele din ecran (starea de azi a șantierelor, nu cea din ziua aleasă), ca „Lipsă azi”.
-  Dacă un cont restrâns are în listă un șantier ale cărui rapoarte nu le poate citi, șantierul apare „fără raport” — la fel ca alerta existentă.
+- **Formularea listei de la final (r3):** lista e diferența dintre șantiere și rapoartele pe care contul le **vede**, deci „Fără raport” se
+  afirmă doar când contul vede tot (owner) **și** ziua e azi. Altfel: „Fără raport vizibil pentru contul tău” (cont restrâns: un raport pe care
+  nu-l poate citi nu devine „lipsă”) și/sau „din lista curentă de șantiere” (o zi trecută: starea de azi a șantierelor nu dovedește că trebuiau
+  să raporteze atunci).
 
 Exemplu (date inventate):
 
@@ -145,9 +158,15 @@ Recomandare: **A** acum (rapid, fără risc), **B** când e nevoie de poze pe tr
 - `src/RubricaRezumat.jsx` (+ `.test.jsx`, jsdom) — rubrica; legată în `src/RapoarteSantierPage.jsx` și `src/AppMobilManageri.jsx`
 - `src/RezumatZiModal.jsx` (+ `.test.jsx`, jsdom) — fereastra „Rezumatul zilei” din Rapoarte Șantier
 - `supabase/migrations/20261216a_executie_raport_rezumat.sql` (NEAPLICAT) + `supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql`
-- `scripts/test_executie_raport_rezumat.sql` — harness pentru clonă (T0–T9: paritate, salvare prin RPC, CAS, corectură, drepturi, căile directe, revenire, re-aplicare)
-- `scripts/pglite/test_raport_rezumat_local.mjs` — același harness local (PGlite) + 20 de mutanți
+- `scripts/raport_rezumat_amprente.sql` — (r3) amprenta L15 pentru blocul BASELINE al migrării, DOAR citire (coordonatorul, pe producție)
+- `scripts/raport_rezumat_vizibilitate.sql` — (r3) proba „cititorul vede tot ce intră în rezumat”, DOAR citire (clonă / producție)
+- `scripts/raport_rezumat_concurenta.sh` — (r3) două telefoane pe aceeași versiune, cu două sesiuni reale (DOAR clonă)
+- `scripts/test_executie_raport_rezumat.sql` — harness pentru clonă (T0–T11: paritate, salvare prin RPC, CAS, corectură, identitate, drepturi,
+  căile directe, eroare injectată în compunere, linii din alt proiect, revenire, re-aplicare)
+- `scripts/pglite/test_raport_rezumat_local.mjs` — același harness local (PGlite) + 31 de mutanți + scenariile de refuz (baseline, plafon, stare schimbată, revenire)
 - `scripts/raport_rezumat_proba.sql` + `.mjs` — proba pe 20 de rapoarte reale, DOAR citire, înainte de aplicare
+- **Livrarea** (r3): DOAR cu `scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000`, după ce blocul BASELINE e completat și revizuit
+  (pașii exacți: antetul migrării și raportul PR-ului).
 
 Proba pe date reale (coordonatorul):
 

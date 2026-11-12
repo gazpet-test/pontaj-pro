@@ -7,13 +7,20 @@
 -- NU presupune date reale: ia primul owner, primele 2 profiluri non-owner, primul proiect și primul șantier, le leagă DOAR în tranzacție
 -- și scrie date FICTIVE (zilele 2001-01-02 / 03, activitățile „… test rezumat”, obiectul TRZ1).
 -- Fiecare test se termină cu NOTICE „Tn OK”; orice abatere oprește rularea (RAISE EXCEPTION).
+-- r3: migrarea cere (1) BASELINE-ul L15 completat (scripts/raport_rezumat_amprente.sql pe clonă, copiat în blocul marcat; necompletat =
+--   refuz la \ir) și (2) plafonul de livrare: harness-ul pune, DOAR în jurul lui \ir, ce pune runnerul (transaction_timeout = 2000 cu sursa
+--   'session' + marcajul gazpet.plafon_tranzactie) și oprește ceasul imediat după. Migrarea e trimisă instrucțiune cu instrucțiune (~40 de
+--   drumuri client-server): rulează harness-ul de lângă clonă (drum scurt); pe un traseu lent serverul poate închide sesiunea
+--   („terminating connection due to transaction timeout”) — nimic scris, se reia de aproape.
 \set ON_ERROR_STOP 1
 BEGIN ISOLATION LEVEL READ COMMITTED;
 -- baseline: politicile și drepturile tabelelor atinse ÎNAINTE de migrare (după ea trebuie să fie identice: migrarea nu dă niciun drept)
 SELECT set_config('trez.pol0', (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s/%s', tablename, policyname, permissive, roles, cmd, coalesce(qual, ''), coalesce(with_check, '')), ';' ORDER BY tablename, policyname), '')) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('rapoarte_zilnice', 'raport_zilnic_salvari', 'raport_lucrari')), true),
        set_config('trez.acl0', (SELECT md5(string_agg(c.relname || '=' || coalesce(c.relacl::text, '') || '/' || c.relrowsecurity || c.relforcerowsecurity, ';' ORDER BY c.relname)) FROM pg_class c WHERE c.oid IN ('public.rapoarte_zilnice'::regclass, 'public.raport_zilnic_salvari'::regclass, 'public.raport_lucrari'::regclass)), true);
 SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat:' || txid_current(), true);
+SELECT set_config('transaction_timeout', '2000', true), set_config('gazpet.plafon_tranzactie', '2000:' || txid_current(), true);
 \ir ../supabase/migrations/20261216a_executie_raport_rezumat.sql
+SELECT set_config('transaction_timeout', '0', true), set_config('gazpet.plafon_tranzactie', '', true);
 
 -- ── unelte ──
 -- identitatea: ambele surse JWT (auth.uid() citește întâi request.jwt.claim.sub), apoi rolul fără BYPASSRLS
@@ -40,6 +47,16 @@ EXCEPTION WHEN OTHERS THEN
   IF SQLSTATE <> p_stare THEN RAISE NOTICE 't_refuza: așteptat %, primit % (%)', p_stare, SQLSTATE, left(SQLERRM, 200); END IF;
   RETURN SQLSTATE = p_stare;
 END $h$;
+-- r3: refuzul cu motivul EXACT (SQLSTATE + fragmentul mesajului), nu doar codul (L25)
+CREATE FUNCTION pg_temp.t_refuza_msg(p_sql text, p_stare text, p_fragment text) RETURNS boolean LANGUAGE plpgsql AS $h$
+BEGIN
+  EXECUTE p_sql; RAISE NOTICE 't_refuza_msg: a trecut fără eroare: %', left(p_sql, 200); RETURN false;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLSTATE <> p_stare OR position(p_fragment IN SQLERRM) = 0 THEN
+    RAISE NOTICE 't_refuza_msg: așteptat % / %, primit % (%)', p_stare, p_fragment, SQLSTATE, left(SQLERRM, 200); RETURN false;
+  END IF;
+  RETURN true;
+END $h$;
 -- scrierea trece: întoarce numărul de rânduri; orice eroare = -1
 CREATE FUNCTION pg_temp.t_trece(p_sql text) RETURNS integer LANGUAGE plpgsql AS $h$
 DECLARE n integer;
@@ -63,8 +80,8 @@ BEGIN
   END IF;
   RAISE NOTICE '% refuz confirmat: %', p_test, p_mesaj;
 END $h$;
-GRANT EXECUTE ON FUNCTION pg_temp.t_ca(uuid, text), pg_temp.t_refuza(text, text), pg_temp.t_trece(text), pg_temp.t_g(text),
-  pg_temp.t_salv(date, jsonb, jsonb, integer, uuid) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION pg_temp.t_ca(uuid, text), pg_temp.t_refuza(text, text), pg_temp.t_refuza_msg(text, text, text), pg_temp.t_trece(text),
+  pg_temp.t_g(text), pg_temp.t_salv(date, jsonb, jsonb, integer, uuid) TO authenticated, anon, service_role;
 
 -- ── TB: migrarea nu schimbă politicile / drepturile tabelelor atinse ──
 DO $t$
@@ -78,14 +95,16 @@ END $t$;
 
 -- ── T0: identități, drepturi rescrise în tranzacție, date fictive ──
 DO $t$
-DECLARE own uuid; ids uuid[]; p1 bigint; s1 bigint; a1 bigint; a2 bigint; u1 bigint;
+DECLARE own uuid; ids uuid[]; p1 bigint; p2 bigint; s1 bigint; a1 bigint; a2 bigint; a3 bigint; u1 bigint; u2 bigint;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'T0 FAIL: rulează ca postgres'; END IF;
   SELECT id INTO own FROM public.profiles WHERE is_owner IS TRUE ORDER BY id LIMIT 1;
   SELECT array_agg(id ORDER BY id) INTO ids FROM (SELECT id FROM public.profiles WHERE is_owner IS NOT TRUE ORDER BY id LIMIT 2) x;
   SELECT id INTO p1 FROM public.executie_proiecte ORDER BY id LIMIT 1;
+  -- r3: al doilea proiect (T11: linia / activitatea / obiectul ALTUI proiect nu intră în rezumat)
+  SELECT id INTO p2 FROM public.executie_proiecte WHERE id <> p1 ORDER BY id LIMIT 1;
   SELECT id INTO s1 FROM public.sites ORDER BY id LIMIT 1;
-  IF own IS NULL OR cardinality(ids) <> 2 OR p1 IS NULL OR s1 IS NULL THEN RAISE EXCEPTION 'T0 FAIL: lipsesc profiluri / proiect / șantier'; END IF;
+  IF own IS NULL OR cardinality(ids) <> 2 OR p1 IS NULL OR p2 IS NULL OR s1 IS NULL THEN RAISE EXCEPTION 'T0 FAIL: lipsesc profiluri / proiecte / șantier'; END IF;
   UPDATE public.sites SET proiect_id = p1 WHERE id = s1;
   DELETE FROM public.profile_sites WHERE profile_id = ANY (ids);
   DELETE FROM public.user_module_access WHERE profile_id = ANY (ids);
@@ -94,9 +113,12 @@ BEGIN
   INSERT INTO public.proiect_activitati (proiect_id, nume, um, tip_raportare, ordine, activ) VALUES (p1, 'Sudură test rezumat', 'buc', 'cantitate', 1, true) RETURNING id INTO a1;
   INSERT INTO public.proiect_activitati (proiect_id, nume, um, tip_raportare, ordine, activ) VALUES (p1, 'Probă test rezumat', NULL, 'bifa', 2, true) RETURNING id INTO a2;
   INSERT INTO public.proiect_unitati (proiect_id, tip, cod, nume, ordine, activ) VALUES (p1, 'tronson', 'TRZ1', 'Tronson test rezumat', 1, true) RETURNING id INTO u1;
+  INSERT INTO public.proiect_activitati (proiect_id, nume, um, tip_raportare, ordine, activ) VALUES (p2, 'Activitate străină test rezumat', 'm', 'cantitate', 1, true) RETURNING id INTO a3;
+  INSERT INTO public.proiect_unitati (proiect_id, tip, cod, nume, ordine, activ) VALUES (p2, 'tronson', 'TRZ9', 'Obiect străin test rezumat', 1, true) RETURNING id INTO u2;
   PERFORM set_config('trez.own', own::text, true), set_config('trez.sef', ids[1]::text, true), set_config('trez.fara', ids[2]::text, true),
-          set_config('trez.p1', p1::text, true), set_config('trez.s1', s1::text, true),
-          set_config('trez.a1', a1::text, true), set_config('trez.a2', a2::text, true), set_config('trez.u1', u1::text, true);
+          set_config('trez.p1', p1::text, true), set_config('trez.p2', p2::text, true), set_config('trez.s1', s1::text, true),
+          set_config('trez.a1', a1::text, true), set_config('trez.a2', a2::text, true), set_config('trez.a3', a3::text, true),
+          set_config('trez.u1', u1::text, true), set_config('trez.u2', u2::text, true);
   RAISE NOTICE 'T0 OK';
 END $t$;
 
@@ -476,6 +498,351 @@ DECLARE c jsonb; v text; n integer := 0;
       ]
     },
     "asteptat": "S · 09.11.2026\nUtilaje: 7 (nefuncționale 6: U1 – m1; U2 – m2; U3 – m3; +3)"
+  },
+  {
+    "nume": "r3: plafonul total — 40 de obiecte (peste 3000 de caractere): rândurile întregi care încap, apoi „… (rezumat scurtat; restul în raport)”",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-09",
+      "linii": [
+        {
+          "obiect_cod": "O01",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 1,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O02",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 2,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O03",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 3,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O04",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 4,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O05",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 5,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O06",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 6,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O07",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 7,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O08",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 8,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O09",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 9,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O10",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 10,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O11",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 11,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O12",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 12,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O13",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 13,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O14",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 14,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O15",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 15,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O16",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 16,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O17",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 17,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O18",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 18,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O19",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 19,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O20",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 20,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O21",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 21,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O22",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 22,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O23",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 23,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O24",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 24,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O25",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 25,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O26",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 26,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O27",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 27,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O28",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 28,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O29",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 29,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O30",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 30,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O31",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 31,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O32",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 32,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O33",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 33,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O34",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 34,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O35",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 35,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O36",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 36,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O37",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 37,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O38",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 38,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O39",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 39,
+          "bifa": false
+        },
+        {
+          "obiect_cod": "O40",
+          "obiect_nume": null,
+          "activitate": "Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "um": "buc",
+          "cantitate": 40,
+          "bifa": false
+        }
+      ],
+      "probleme": "ultima rubrică"
+    },
+    "asteptat": "S · 09.11.2026\nLucrări O01: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 1 buc\nLucrări O02: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 2 buc\nLucrări O03: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 3 buc\nLucrări O04: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 4 buc\nLucrări O05: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 5 buc\nLucrări O06: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 6 buc\nLucrări O07: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 7 buc\nLucrări O08: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 8 buc\nLucrări O09: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 9 buc\nLucrări O10: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 10 buc\nLucrări O11: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 11 buc\nLucrări O12: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 12 buc\nLucrări O13: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 13 buc\nLucrări O14: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 14 buc\nLucrări O15: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 15 buc\nLucrări O16: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 16 buc\nLucrări O17: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 17 buc\nLucrări O18: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 18 buc\nLucrări O19: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 19 buc\nLucrări O20: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 20 buc\nLucrări O21: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 21 buc\nLucrări O22: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 22 buc\nLucrări O23: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 23 buc\nLucrări O24: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 24 buc\nLucrări O25: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 25 buc\nLucrări O26: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 26 buc\nLucrări O27: Lucrare de test xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 27 buc\n… (rezumat scurtat; restul în raport)"
+  },
+  {
+    "nume": "r3: plafonul total — primul rând singur e mai lung decât plafonul: tăiat în rând, apoi sufixul",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-09",
+      "meteo": {
+        "alerte": [
+          "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ]
+      },
+      "probleme": "nu mai încape"
+    },
+    "asteptat": "S · 09.11.2026 · alerte: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n… (rezumat scurtat; restul în raport)"
   }
 ]$cazuri$;
   -- CAZURI-END
@@ -577,7 +944,9 @@ BEGIN
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = NULL, rezumat_sursa = 'editat' WHERE id = %s$q$, r), '22023')
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = repeat('x', 4001), rezumat_sursa = 'editat' WHERE id = %s$q$, r), '22023')
      OR NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'a', rezumat_sursa = 'altceva' WHERE id = %s$q$, r), '22023')
-     OR NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = NULL WHERE id = %s$q$, r), '22023') THEN
+     OR NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = NULL WHERE id = %s$q$, r), '22023')
+     -- r3: doar caractere de control = gol DUPĂ curățare (tab, cod 1)
+     OR NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = E'\t\x01 ', rezumat_sursa = 'editat' WHERE id = %s$q$, r), '22023') THEN
     RAISE EXCEPTION 'T4 FAIL: un text corectat invalid a trecut';
   END IF;
   -- exact 4000 de caractere trece; autorul / ora trimise de client sunt înlocuite (L08); CAS pe versiune ca în aplicație
@@ -599,6 +968,31 @@ BEGIN
   RAISE NOTICE 'T4 OK';
 END $t$;
 
+-- ── T4b (r3, L08): fără auth.uid() nu există corectură și nici „Revino la automat”: postgres fără JWT și service_role fără sub = refuz cu
+--    motivul gărzii (nu un refuz de drepturi pe tabel); rândul rămâne neatins ──
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$
+DECLARE z public.rapoarte_zilnice; r text := pg_temp.t_g('r1');
+BEGIN
+  IF NOT pg_temp.t_refuza_msg(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'fara autor', rezumat_sursa = 'editat' WHERE id = %s$q$, r), '42501', 'rezumat: nu ai drept')
+     OR NOT pg_temp.t_refuza_msg(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s$q$, r), '42501', 'rezumat: nu ai drept') THEN
+    RAISE EXCEPTION 'T4b FAIL: postgres fără JWT a corectat / a scos corectura';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'service_role');
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'T4b FAIL: service_role are uid'; END IF;
+  IF NOT pg_temp.t_refuza_msg(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'fara autor', rezumat_sursa = 'editat' WHERE id = %s$q$, r), '42501', 'rezumat: nu ai drept')
+     OR NOT pg_temp.t_refuza_msg(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s$q$, r), '42501', 'rezumat: nu ai drept') THEN
+    RAISE EXCEPTION 'T4b FAIL: service_role fără sub a corectat / a scos corectura';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  z := pg_temp.t_r(r::bigint);
+  IF z.rezumat_sursa <> 'editat' OR z.rezumat_text <> 'Text corectat de om' OR z.rezumat_de IS DISTINCT FROM pg_temp.t_g('sef')::uuid OR z.versiune_salvare <> 4 THEN
+    RAISE EXCEPTION 'T4b FAIL: rândul s-a schimbat (% / % / v%)', z.rezumat_sursa, z.rezumat_de, z.versiune_salvare;
+  END IF;
+  RAISE NOTICE 'T4b OK';
+END $t$;
+SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+
 -- ── T5: salvarea prin RPC și scrierea directă a antetului NU suprascriu textul corectat ──
 DO $t$
 DECLARE r jsonb; z public.rapoarte_zilnice; a1 bigint := pg_temp.t_g('a1')::bigint; u1 bigint := pg_temp.t_g('u1')::bigint;
@@ -606,19 +1000,22 @@ BEGIN
   r := pg_temp.t_salv(DATE '2001-01-02', '{"probleme": "Test rezumat 3"}'::jsonb,
                       jsonb_build_array(jsonb_build_object('activitate_id', a1, 'unitate_id', u1, 'cantitate', 9)), 4, '00000000-0000-4000-8000-0000000000a4');
   IF r ->> 'ok' IS DISTINCT FROM 'true' OR (r ->> 'versiune')::int <> 5 THEN RAISE EXCEPTION 'T5 FAIL: salvarea %', r; END IF;
-  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET probleme = 'Direct' WHERE id = %s$q$, pg_temp.t_g('r1'))) <> 1 THEN
+  -- (r3: și un cod de eroare trimis de client pe rândul corectat e ignorat — îl scrie doar serverul)
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET probleme = 'Direct', rezumat_eroare = 'ABCDE' WHERE id = %s$q$, pg_temp.t_g('r1'))) <> 1 THEN
     RAISE EXCEPTION 'T5 FAIL: scrierea directă a antetului';
   END IF;
   PERFORM pg_temp.t_ca(NULL, 'postgres');
   z := pg_temp.t_r(pg_temp.t_g('r1')::bigint);
-  IF z.rezumat_sursa <> 'editat' OR z.rezumat_text <> 'Text corectat de om' OR z.versiune_salvare <> 6 OR z.probleme <> 'Direct' THEN
+  IF z.rezumat_sursa <> 'editat' OR z.rezumat_text <> 'Text corectat de om' OR z.versiune_salvare <> 6 OR z.probleme <> 'Direct'
+     OR z.rezumat_eroare IS NOT NULL THEN
     RAISE EXCEPTION 'T5 FAIL: textul corectat a fost atins (% / %) sau versiunea % nu a crescut', z.rezumat_sursa, z.rezumat_text, z.versiune_salvare;
   END IF;
   PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
   RAISE NOTICE 'T5 OK';
 END $t$;
 
--- ── T6: „Revino la automat”: fără drept = refuz; cu drept = textul îl scrie serverul (cel trimis de client e ignorat), versiunea rămâne ──
+-- ── T6: „Revino la automat”: fără drept = refuz; cu drept = textul îl scrie serverul (cel trimis de client e ignorat); r3 (P2): e o decizie
+--    a omului, deci versiunea CREȘTE (6 -> 7) ──
 SELECT pg_temp.t_ca(pg_temp.t_g('fara')::uuid, 'authenticated');
 DO $t$
 DECLARE n integer;
@@ -641,13 +1038,29 @@ BEGIN
   END IF;
   PERFORM pg_temp.t_ca(NULL, 'postgres');
   z := pg_temp.t_r(pg_temp.t_g('r1')::bigint);
-  IF z.rezumat_sursa <> 'automat' OR z.rezumat_text = 'fals' OR z.rezumat_de IS NOT NULL OR z.versiune_salvare <> 6
+  IF z.rezumat_sursa <> 'automat' OR z.rezumat_text = 'fals' OR z.rezumat_de IS NOT NULL OR z.versiune_salvare <> 7
      OR z.rezumat_text IS DISTINCT FROM public.fn_raport_rezumat_text(public.fn_raport_rezumat_intrare(z))
      OR position('Sudură test rezumat 9 buc' IN z.rezumat_text) = 0 OR position('Probleme: Direct' IN z.rezumat_text) = 0 THEN
     RAISE EXCEPTION 'T6 FAIL: % / % / v%', z.rezumat_sursa, to_jsonb(z.rezumat_text), z.versiune_salvare;
   END IF;
   PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
   RAISE NOTICE 'T6 OK';
+END $t$;
+
+-- ── T6b (r3, P2): al doilea telefon a citit tot versiunea 6 (înainte de „Revino la automat”) și trimite corectura veche cu CAS = 6:
+--    0 rânduri (conflict), rezumatul rămâne automat. Varianta cu două sesiuni reale: scripts/raport_rezumat_concurenta.sh (clonă) ──
+DO $t$
+DECLARE z public.rapoarte_zilnice;
+BEGIN
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'Corectura veche', rezumat_sursa = 'editat'
+                                 WHERE id = %s AND versiune_salvare = 6$q$, pg_temp.t_g('r1'))) <> 0 THEN
+    RAISE EXCEPTION 'T6b FAIL: corectura pe versiunea de dinainte de „Revino la automat” a scris';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  z := pg_temp.t_r(pg_temp.t_g('r1')::bigint);
+  IF z.rezumat_sursa <> 'automat' OR z.versiune_salvare <> 7 THEN RAISE EXCEPTION 'T6b FAIL: % / v%', z.rezumat_sursa, z.versiune_salvare; END IF;
+  PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+  RAISE NOTICE 'T6b OK';
 END $t$;
 
 -- ── T7: căile directe (telefonul vechi, alte module): antetul scris direct reface rezumatul automat (versiunea crește: e o scriere a
@@ -657,13 +1070,15 @@ DECLARE z public.rapoarte_zilnice; r text := pg_temp.t_g('r1');
 BEGIN
   IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET probleme = 'Al doilea' WHERE id = %s$q$, r)) <> 1
      OR pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'fals2' WHERE id = %s$q$, r)) <> 1
-     OR pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_de = %L, rezumat_la = '2000-01-01' WHERE id = %s$q$, pg_temp.t_g('own'), r)) <> 1 THEN
+     OR pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_de = %L, rezumat_la = '2000-01-01', rezumat_eroare = 'ABCDE' WHERE id = %s$q$, pg_temp.t_g('own'), r)) <> 1
+     -- r3: codul erorii trimis de client e ignorat (îl scrie doar serverul)
+     OR pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_eroare = 'ABCDE' WHERE id = %s$q$, r)) <> 1 THEN
     RAISE EXCEPTION 'T7 FAIL: scrierile directe';
   END IF;
   PERFORM pg_temp.t_ca(NULL, 'postgres');
   z := pg_temp.t_r(r::bigint);
-  IF z.rezumat_sursa <> 'automat' OR z.rezumat_text = 'fals2' OR position('Probleme: Al doilea' IN z.rezumat_text) = 0
-     OR z.rezumat_de IS NOT NULL OR z.rezumat_la < now() - interval '1 hour' OR z.versiune_salvare <> 7 THEN
+  IF z.rezumat_sursa <> 'automat' OR z.rezumat_text = 'fals2' OR position('Probleme: Al doilea' IN z.rezumat_text) = 0 OR z.rezumat_eroare IS NOT NULL
+     OR z.rezumat_de IS NOT NULL OR z.rezumat_la < now() - interval '1 hour' OR z.versiune_salvare <> 8 THEN
     RAISE EXCEPTION 'T7 FAIL: % / % / % / v%', z.rezumat_sursa, to_jsonb(z.rezumat_text), z.rezumat_de, z.versiune_salvare;
   END IF;
   -- raport nou scris direct (fără RPC), cu un rezumat „editat” falsificat: devine automat
@@ -684,6 +1099,7 @@ BEGIN
   IF NOT pg_temp.t_refuza($q$SELECT public.fn_raport_rezumat_text('{}'::jsonb)$q$, '42501')
      OR NOT pg_temp.t_refuza(format($q$SELECT public.fn_raport_rezumat_intrare(z) FROM public.rapoarte_zilnice z WHERE z.id = %s$q$, pg_temp.t_g('r1')), '42501')
      OR NOT pg_temp.t_refuza($q$SELECT public.fn_raport_rezumat_taie('abc', 1)$q$, '42501')
+     OR NOT pg_temp.t_refuza($q$SELECT public.fn_raport_rezumat_curata_editat('abc')$q$, '42501')
      OR NOT pg_temp.t_refuza(format($q$INSERT INTO public.raport_zilnic_salvari (cheie, raport_id, versiune, amprenta, profile_id)
                                      VALUES (gen_random_uuid(), %s, 99, md5('x'), auth.uid())$q$, pg_temp.t_g('r1')), '42501') THEN
     RAISE EXCEPTION 'T8 FAIL: funcții / jurnal accesibile clientului';
@@ -692,8 +1108,122 @@ BEGIN
 END $t$;
 SELECT pg_temp.t_ca(NULL, 'postgres');
 
+-- ── T10 (r3, Jakarinos P1): EROARE INJECTATĂ în compunerea rezumatului — o coloană citită de intrare dispare (redenumită în tranzacție,
+--    apoi pusă la loc). Salvarea prin RPC (antet + linii + jurnal) și scrierea directă a antetului TREC; rezumatul rămâne cel de dinainte,
+--    codul erorii (42703) pe rând, versiunea = cea întoarsă de RPC; un raport nou se salvează fără rezumat; o CERERE explicită de rezumat
+--    = eroare către om; corectura omului merge (nu compune) și e curățată de caracterele de control. După reparare: generarea fără UID
+--    (NULL -> automat, calea de server) și „Revino la automat” refac textul și șterg codul erorii ──
+ALTER TABLE public.proiect_unitati RENAME COLUMN cod TO cod_t10_injectat;
+SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+DO $t$
+DECLARE r jsonb; z public.rapoarte_zilnice; t0 text; v0 integer; a1 bigint := pg_temp.t_g('a1')::bigint; u1 bigint := pg_temp.t_g('u1')::bigint; n integer;
+BEGIN
+  r := public.fn_raport_zilnic_citeste(pg_temp.t_g('s1')::bigint, DATE '2001-01-02');
+  v0 := (r ->> 'versiune')::int; t0 := r -> 'raport' ->> 'rezumat_text';
+  IF t0 IS NULL OR r -> 'raport' ->> 'rezumat_sursa' IS DISTINCT FROM 'automat' THEN RAISE EXCEPTION 'T10 FAIL: starea de plecare %', r -> 'raport'; END IF;
+  BEGIN
+    r := pg_temp.t_salv(DATE '2001-01-02', '{"probleme": "T10 salvat"}'::jsonb,
+                        jsonb_build_array(jsonb_build_object('activitate_id', a1, 'unitate_id', u1, 'cantitate', 3)), v0, '00000000-0000-4000-8000-0000000000b1');
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'T10 FAIL: eroarea compunerii a anulat salvarea raportului (% %)', SQLSTATE, SQLERRM;
+  END;
+  IF r ->> 'ok' IS DISTINCT FROM 'true' OR (r ->> 'versiune')::int <> v0 + 1 THEN RAISE EXCEPTION 'T10 FAIL: salvarea cu compunerea stricată %', r; END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  z := pg_temp.t_r(pg_temp.t_g('r1')::bigint);
+  IF z.probleme IS DISTINCT FROM 'T10 salvat' OR z.rezumat_text IS DISTINCT FROM t0 OR z.rezumat_sursa <> 'automat' OR z.rezumat_eroare IS DISTINCT FROM '42703'
+     OR z.versiune_salvare <> v0 + 1
+     OR (SELECT count(*) FROM public.raport_lucrari WHERE raport_id = z.id AND cantitate = 3) <> 1
+     OR NOT EXISTS (SELECT 1 FROM public.raport_zilnic_salvari WHERE cheie = '00000000-0000-4000-8000-0000000000b1') THEN
+    RAISE EXCEPTION 'T10 FAIL: după salvare % / % / % / v%', z.probleme, z.rezumat_eroare, to_jsonb(z.rezumat_text), z.versiune_salvare;
+  END IF;
+  PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+  -- scrierea directă a antetului trece și ea
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET masini = 'T10 direct' WHERE id = %s$q$, pg_temp.t_g('r1'))) <> 1 THEN
+    RAISE EXCEPTION 'T10 FAIL: scrierea directă a antetului cu compunerea stricată';
+  END IF;
+  -- raport nou: se salvează FĂRĂ rezumat (NULL), cu codul erorii
+  INSERT INTO public.rapoarte_zilnice (site_id, data, probleme, created_by, updated_at)
+  VALUES (pg_temp.t_g('s1')::bigint, DATE '2001-01-04', 'T10 nou', pg_temp.t_g('sef')::uuid, now()) RETURNING * INTO z;
+  IF z.rezumat_sursa IS NOT NULL OR z.rezumat_text IS NOT NULL OR z.rezumat_eroare IS DISTINCT FROM '42703' THEN
+    RAISE EXCEPTION 'T10 FAIL: raportul nou % / %', z.rezumat_sursa, z.rezumat_eroare;
+  END IF;
+  PERFORM set_config('trez.r4', z.id::text, true);
+  -- cererea explicită de rezumat („Generează”) = eroarea către om, nimic schimbat
+  IF NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s$q$, z.id), '42703') THEN
+    RAISE EXCEPTION 'T10 FAIL: cererea explicită cu compunerea stricată nu a dat eroare';
+  END IF;
+  -- corectura omului nu compune: merge, cu caracterele de control curățate (rândul nou rămâne), codul erorii șters
+  z := pg_temp.t_r(pg_temp.t_g('r1')::bigint);
+  n := pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = E'Corectat\tin T10\r\nrand 2\x7f', rezumat_sursa = 'editat'
+                                  WHERE id = %s AND versiune_salvare = %s$q$, z.id, z.versiune_salvare));
+  IF n <> 1 THEN RAISE EXCEPTION 'T10 FAIL: corectura cu compunerea stricată %', n; END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  z := pg_temp.t_r(pg_temp.t_g('r1')::bigint);
+  IF z.rezumat_sursa <> 'editat' OR z.rezumat_text IS DISTINCT FROM E'Corectat in T10\nrand 2 ' OR z.rezumat_eroare IS NOT NULL THEN
+    RAISE EXCEPTION 'T10 FAIL: corectura % / % / %', z.rezumat_sursa, to_jsonb(z.rezumat_text), z.rezumat_eroare;
+  END IF;
+  PERFORM set_config('trez.v10', z.versiune_salvare::text, true);
+  RAISE NOTICE 'T10 OK (cu compunerea stricată: raportul salvat, rezumat neschimbat, cod %)', '42703';
+END $t$;
+ALTER TABLE public.proiect_unitati RENAME COLUMN cod_t10_injectat TO cod;
+DO $t$
+DECLARE z public.rapoarte_zilnice; v integer;
+BEGIN
+  -- generarea fără UID (postgres, fără JWT) pe raportul rămas fără rezumat: NULL -> automat, versiunea rămâne, codul erorii șters
+  v := (pg_temp.t_r(pg_temp.t_g('r4')::bigint)).versiune_salvare;
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s$q$, pg_temp.t_g('r4'))) <> 1 THEN
+    RAISE EXCEPTION 'T10 FAIL: generarea fără UID după reparare';
+  END IF;
+  z := pg_temp.t_r(pg_temp.t_g('r4')::bigint);
+  IF z.rezumat_sursa <> 'automat' OR position('Probleme: T10 nou' IN z.rezumat_text) = 0 OR z.rezumat_eroare IS NOT NULL OR z.versiune_salvare <> v THEN
+    RAISE EXCEPTION 'T10 FAIL: generarea % / % / v% (înainte v%)', z.rezumat_sursa, z.rezumat_eroare, z.versiune_salvare, v;
+  END IF;
+  -- „Revino la automat” (șeful) pe raportul salvat cu compunerea stricată: textul nou are salvarea din T10, versiunea crește
+  PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s AND versiune_salvare = %s$q$,
+                            pg_temp.t_g('r1'), pg_temp.t_g('v10'))) <> 1 THEN
+    RAISE EXCEPTION 'T10 FAIL: „Revino la automat” după reparare';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  z := pg_temp.t_r(pg_temp.t_g('r1')::bigint);
+  IF z.rezumat_sursa <> 'automat' OR position('Probleme: T10 salvat · Mașini: T10 direct' IN z.rezumat_text) = 0
+     OR position('Sudură test rezumat 3 buc' IN z.rezumat_text) = 0 OR z.rezumat_eroare IS NOT NULL
+     OR z.versiune_salvare <> pg_temp.t_g('v10')::int + 1 THEN
+    RAISE EXCEPTION 'T10 FAIL: după reparare % / % / v%', to_jsonb(z.rezumat_text), z.rezumat_eroare, z.versiune_salvare;
+  END IF;
+  RAISE NOTICE 'T10 OK (după reparare)';
+END $t$;
+
+-- ── T11 (r3, „ce nu vedea altfel”): o linie a ALTUI proiect pe raport (proiectul liniei, activitatea sau obiectul din alt proiect) NU
+--    intră în rezumat — intrarea ia doar ce ține de proiectul șantierului ──
+DO $t$
+DECLARE z public.rapoarte_zilnice; r bigint := pg_temp.t_g('r1')::bigint; p1 bigint := pg_temp.t_g('p1')::bigint; p2 bigint := pg_temp.t_g('p2')::bigint;
+  a1 bigint := pg_temp.t_g('a1')::bigint; a3 bigint := pg_temp.t_g('a3')::bigint; u2 bigint := pg_temp.t_g('u2')::bigint; n integer;
+BEGIN
+  INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, unitate_id, cantitate) VALUES
+    (r, p2, a1, NULL, 41),     -- linia altui proiect (activitatea e a proiectului șantierului)
+    (r, p1, a3, NULL, 42),     -- activitatea altui proiect
+    (r, p1, a1, u2, 43);       -- obiectul altui proiect
+  UPDATE public.rapoarte_zilnice SET probleme = 'T11' WHERE id = r;
+  z := pg_temp.t_r(r);
+  n := jsonb_array_length(public.fn_raport_rezumat_intrare(z) -> 'linii');
+  IF position('străin' IN z.rezumat_text) > 0 OR position('TRZ9' IN z.rezumat_text) > 0 OR z.rezumat_text ~ '4[123]'
+     OR position('Sudură test rezumat 3 buc' IN z.rezumat_text) = 0 OR position('Probleme: T11' IN z.rezumat_text) = 0
+     OR n <> (SELECT count(*) FROM public.raport_lucrari WHERE raport_id = r AND cantitate NOT IN (41, 42, 43)) THEN
+    RAISE EXCEPTION 'T11 FAIL: % linii în intrare; text %', n, to_jsonb(z.rezumat_text);
+  END IF;
+  DELETE FROM public.raport_lucrari WHERE raport_id = r AND cantitate IN (41, 42, 43);
+  RAISE NOTICE 'T11 OK';
+END $t$;
+
 -- ── T9: revenirea — nearmată = refuz; armată cu un rezumat corectat = refuz; armată fără = scoate tot; re-aplicare ──
-UPDATE public.rapoarte_zilnice SET rezumat_text = 'Corectat pentru T9', rezumat_sursa = 'editat' WHERE id = pg_temp.t_g('r1')::bigint;
+-- (r3: corectura o face un om — fără UID e refuzată de gardă)
+SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+SELECT pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'Corectat pentru T9', rezumat_sursa = 'editat' WHERE id = %s$q$, pg_temp.t_g('r1'))) = 1 AS t9_corectura;
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  IF (pg_temp.t_r(pg_temp.t_g('r1')::bigint)).rezumat_sursa IS DISTINCT FROM 'editat' THEN RAISE EXCEPTION 'T9 FAIL: corectura de plecare lipsește'; END IF;
+END $t$;
 SAVEPOINT t9a;
 \set ON_ERROR_STOP 0
 \ir ../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql
@@ -711,8 +1241,15 @@ SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t9b;
 SELECT pg_temp.t_eroare('T9b', :'t9b_eroare', :'t9b_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'rezumate corectate de om');
--- fără corecturi: revenirea armată scoate tot; RPC-ul de salvare merge ca înainte de migrare
-UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE rezumat_sursa = 'editat' AND site_id = pg_temp.t_g('s1')::bigint AND data = DATE '2001-01-02';
+-- fără corecturi: revenirea armată scoate tot; RPC-ul de salvare merge ca înainte de migrare („Revino la automat” = tot un om, r3)
+SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+SELECT pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s$q$, pg_temp.t_g('r1'))) = 1 AS t9_automat;
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE rezumat_sursa = 'editat' AND site_id = pg_temp.t_g('s1')::bigint) THEN
+    RAISE EXCEPTION 'T9 FAIL: corectura de test a rămas';
+  END IF;
+END $t$;
 SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
 \ir ../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql
 DO $t$
@@ -732,7 +1269,9 @@ BEGIN
   RAISE NOTICE 'T9 OK (revenire)';
 END $t$;
 SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat:' || txid_current(), true);
+SELECT set_config('transaction_timeout', '2000', true), set_config('gazpet.plafon_tranzactie', '2000:' || txid_current(), true);
 \ir ../supabase/migrations/20261216a_executie_raport_rezumat.sql
+SELECT set_config('transaction_timeout', '0', true), set_config('gazpet.plafon_tranzactie', '', true);
 DO $t$
 DECLARE r jsonb; z public.rapoarte_zilnice;
 BEGIN

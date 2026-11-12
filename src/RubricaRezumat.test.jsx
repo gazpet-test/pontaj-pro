@@ -139,4 +139,18 @@ dom(numeDom('RubricaRezumat'), () => {
     expect(cereri[0].patch).toEqual({ rezumat_sursa: 'automat' })
     expect(cereri[0].eq).toEqual([['id', 7], ['versiune_salvare', 3]])
   })
+  it('r3: corectura se trimite curățată de caracterele de control (rândul nou rămâne, CRLF -> LF)', async () => {
+    const u = await monteaza({ raport: RAPORT })
+    await u.apasa('corecteaza')
+    await u.scrie('Linia 1\r\nLinia\t2')
+    await u.apasa('salveaza')
+    expect(cereri[0].patch).toEqual({ rezumat_text: 'Linia 1\nLinia 2', rezumat_sursa: 'editat' })
+  })
+  it('r3: codul erorii compunerii se arată (raportul e salvat, textul e de dinainte); fără cod = nimic', async () => {
+    const u = await monteaza({ raport: { ...RAPORT, rezumat_eroare: '42703' } })
+    expect(u.q('avertizare').textContent).toMatch(/nu s-a putut reface.*42703.*de dinainte/)
+    expect(u.q('text').textContent).toBe(RAPORT.rezumat_text)
+    await u.randeaza({ raport: { ...RAPORT, rezumat_eroare: null } })
+    expect(u.q('avertizare')).toBe(null)
+  })
 })

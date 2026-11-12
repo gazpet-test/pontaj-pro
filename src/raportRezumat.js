@@ -26,6 +26,9 @@ export const LIMITE = {
 }
 // textul corectat de om: cel mult atâtea caractere (aceeași limită ca în BD; peste = refuz, nu tăiere)
 export const MAX_EDITAT = 4000
+// r3: plafonul total al textului automat (aceeași valoare și același sufix în SQL: c_max / c_sufix din fn_raport_rezumat_text)
+export const MAX_AUTOMAT = 3000
+export const SUFIX_SCURTAT = '\n… (rezumat scurtat; restul în raport)'
 
 const CATEGORII = [
   ['sudori', 'sudori'], ['lacatusi', 'lăcătuși'], ['operatori', 'operatori utilaje'], ['soferi', 'șoferi'],
@@ -39,6 +42,26 @@ const CONTROL = new RegExp('[' + String.fromCharCode(1) + '-' + String.fromCharC
 export function curata(s) {
   if (typeof s !== 'string') return ''
   return s.replace(CONTROL, ' ').replace(/ {2,}/g, ' ').replace(/^ +| +$/g, '')
+}
+
+// r3: textul corectat de om — aceleași caractere de control (1–31, 127) -> spațiu, DAR rândul nou rămâne (CR / CRLF -> LF); nimic altceva
+// (oglinda lui fn_raport_rezumat_curata_editat; serverul o aplică oricum, aici e ca omul să vadă exact ce se salvează)
+const CONTROL_EDITAT = new RegExp('[' + String.fromCharCode(1) + '-' + String.fromCharCode(9) + String.fromCharCode(11) + '-'
+  + String.fromCharCode(31) + String.fromCharCode(127) + ']', 'g')
+const CR = String.fromCharCode(13), LF = String.fromCharCode(10)
+export function curataEditat(s) {
+  if (typeof s !== 'string') return s
+  return s.split(CR + LF).join(LF).split(CR).join(LF).replace(CONTROL_EDITAT, ' ')
+}
+
+// r3: peste MAX_AUTOMAT: rândurile întregi care încap înaintea sufixului (un prim rând mai lung = tăiat), apoi sufixul
+export function plafoneaza(t) {
+  const cp = Array.from(t)
+  if (cp.length <= MAX_AUTOMAT) return t
+  let c = cp.slice(0, MAX_AUTOMAT - Array.from(SUFIX_SCURTAT).length).join('')
+  const i = c.lastIndexOf(LF)
+  if (i > 0) c = c.slice(0, i)
+  return c + SUFIX_SCURTAT
 }
 
 // cel mult n caractere (puncte de cod, ca length() din PostgreSQL), tăiat la ultimul spațiu; un singur cuvânt mai lung = tăiat la n
@@ -173,7 +196,8 @@ export function rezumatRaport(r) {
   if (ap) out.push(`Aprovizionare: ${ap}`)
   const pm = trunchiaza(x.plan_maine, LIMITE.plan_maine)
   if (pm) out.push(`Plan pentru mâine: ${pm}`)
-  return out.join('\n')
+  // 7. r3: plafonul total
+  return plafoneaza(out.join('\n'))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -184,6 +208,8 @@ export function rezumatRaport(r) {
 //             (santier, personal, utilaje, linii, lucrari, subcontractori, probleme; restul câmpurilor nu intră în rezumatul zilei)
 //   data:     'AAAA-LL-ZZ'
 //   opt.santiereActive: [{ id, nume }] = șantierele care trebuiau să raporteze (lipsă / nu e listă = partea „fără raport” NU apare)
+//   opt.vedeToate:      true DOAR dacă contul vede toate rapoartele (owner); altfel lista spune „fără raport VIZIBIL pentru contul tău” (r3)
+//   opt.azi:            'AAAA-LL-ZZ' = ziua de azi (Europe/Bucharest); altă zi = „din lista curentă de șantiere” (r3)
 // Antetul ADUNĂ oamenii (personal.total) și utilajele (numărul din listă) — cerința zilei; un raport fără număr nu devine 0:
 // se spune câte rapoarte n-au avut numărul. Cantitățile nu se adună (fiecare șantier cu ale lui, exact ca în raport).
 // Șantierele: în ordinea numărului de oameni (descrescător; fără număr la final), apoi după nume.
@@ -249,9 +275,27 @@ export function rezumatZi(rapoarte, data, opt = {}) {
       .map(s => trunchiaza(s.nume, LIMITE_ZI.santier) || `Șantier #${s.id}`)
       .sort((a, b) => a.localeCompare(b, 'ro'))
     out.push('')
-    out.push(lipsa.length ? `Fără raport (${lipsa.length}): ${lipsa.join(', ')}` : 'Toate șantierele active au trimis raport.')
+    out.push(textLipsa(lipsa, opt.vedeToate === true, typeof opt.azi === 'string' && opt.azi === data))
   }
   return out.join('\n')
+}
+
+// r3 (Jakarinos P2): lista „fără raport” e diferența dintre șantiere și rapoartele VĂZUTE de cont. Se afirmă „fără raport” doar când contul
+// vede tot (vedeToate = owner) ȘI ziua e azi (lista de azi a șantierelor de raportat = obligația de azi). Altfel formularea prudentă:
+// „fără raport vizibil pentru contul tău” (un raport pe care RLS-ul nu i-l arată nu devine „lipsă”) și/sau „în lista curentă de șantiere”
+// (pentru o zi trecută, starea de AZI a șantierelor nu dovedește că trebuiau să raporteze atunci). Necunoscut (lipsă / nu e true) = prudent.
+function textLipsa(lipsa, vedeToate, eAzi) {
+  if (vedeToate && eAzi) return lipsa.length ? `Fără raport (${lipsa.length}): ${lipsa.join(', ')}` : 'Toate șantierele active au trimis raport.'
+  if (vedeToate) {
+    return lipsa.length ? `Fără raport, din lista curentă de șantiere (${lipsa.length}): ${lipsa.join(', ')}`
+      : 'Toate șantierele din lista curentă au raport în ziua aceasta.'
+  }
+  if (eAzi) {
+    return lipsa.length ? `Fără raport vizibil pentru contul tău (${lipsa.length}): ${lipsa.join(', ')}`
+      : 'Toate șantierele active din lista ta au un raport vizibil pentru contul tău.'
+  }
+  return lipsa.length ? `Fără raport vizibil pentru contul tău, din lista curentă de șantiere (${lipsa.length}): ${lipsa.join(', ')}`
+    : 'Toate șantierele din lista curentă au un raport vizibil pentru contul tău în ziua aceasta.'
 }
 
 // liniile din raport_lucrari (select cu proiect_activitati / proiect_unitati) -> forma „linii” a intrării, în ordinea din
@@ -334,9 +378,18 @@ export function etichetaRezumat(raport, numeAutor) {
   if (raport.rezumat_sursa === 'editat') return `editat de ${numeAutor || 'un utilizator'}`
   return null
 }
-// textul corectat de om, validat ca în BD: nevid (nu doar spații), cel mult MAX_EDITAT caractere (fără tăiere)
-export function valideazaEditat(t) {
+// textul corectat de om, validat ca în BD, DUPĂ curățare (r3): nevid (nu doar spații), cel mult MAX_EDITAT caractere (fără tăiere)
+export function valideazaEditat(t0) {
+  const t = curataEditat(t0)
   if (typeof t !== 'string' || !/[^\s]/.test(t)) return 'Rezumatul nu poate fi gol. Pentru textul automat folosește „Revino la automat”.'
   if (Array.from(t).length > MAX_EDITAT) return `Rezumatul are ${Array.from(t).length} caractere; maximum ${MAX_EDITAT}.`
   return null
+}
+// r3: rezumatul automat nu s-a putut reface la ultima salvare a raportului (raportul s-a salvat; textul e cel de dinainte / lipsește)
+export function avertizareEroare(raport) {
+  if (!raport || typeof raport.rezumat_eroare !== 'string' || !raport.rezumat_eroare) return null
+  if (raport.rezumat_sursa === 'editat') return null   // textul omului nu depinde de compunerea automată
+  return raport.rezumat_sursa == null
+    ? `Rezumatul automat nu s-a putut genera la ultima salvare (cod ${raport.rezumat_eroare}). Raportul e salvat.`
+    : `Rezumatul automat nu s-a putut reface la ultima salvare (cod ${raport.rezumat_eroare}): textul de mai jos e de dinainte. Raportul e salvat.`
 }

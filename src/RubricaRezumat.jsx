@@ -4,19 +4,21 @@
 // „Copiază”, iar pentru cine are drept de scriere pe raport: corectură, „Revino la automat”, „Generează” (rapoartele vechi).
 // Textul automat îl scrie SERVERUL (trigger pe rapoarte_zilnice); aici doar se cere: sursa 'editat' + textul omului, sau sursa 'automat'.
 // Scrierea = UPDATE cu CAS pe versiune_salvare (L01): 0 rânduri = raportul s-a schimbat între timp sau lipsește dreptul → reîncarci.
+// r3: și „Revino la automat” mărește versiunea pe server (decizie a omului), deci rândul întors aduce versiunea nouă (onActualizat).
+// r3: rezumat_eroare = compunerea automată a eșuat la ultima salvare (raportul e salvat): se arată o avertizare cu codul.
 // Fără buton de trimitere (WhatsApp / mail) în etapa 1.
 // Înainte de aplicarea migrării (coloanele lipsesc din rând) rubrica nu apare deloc.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { etichetaRezumat, valideazaEditat, MAX_EDITAT } from './raportRezumat.js'
+import { etichetaRezumat, valideazaEditat, curataEditat, avertizareEroare, MAX_EDITAT } from './raportRezumat.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
   text: '#E6EDF3', muted: '#8B949E', dim: '#6E7681',
   blue: '#58A6FF', green: '#3FB950', red: '#F85149', yellow: '#D29922', purple: '#BC8CFF',
 }
-const COLOANE = 'id, versiune_salvare, rezumat_text, rezumat_sursa, rezumat_la, rezumat_de, updated_at'
+const COLOANE = 'id, versiune_salvare, rezumat_text, rezumat_sursa, rezumat_la, rezumat_de, rezumat_eroare, updated_at'
 const fmtMoment = (t) => t ? new Date(t).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Bucharest' }) : ''
 const btn = (culoare, plin) => ({
   background: plin ? culoare : culoare + '18', color: plin ? '#0D1117' : culoare, border: `1px solid ${culoare}55`, borderRadius: 8,
@@ -87,8 +89,10 @@ export default function RubricaRezumat({ raport, poateEdita, onActualizat, compa
   const salveaza = () => {
     const er = valideazaEditat(text)
     if (er) { setEroare(er); return }
-    trimite({ rezumat_text: text, rezumat_sursa: 'editat' })
+    // r3: aceeași curățare a caracterelor de control ca serverul (rândul nou rămâne): se trimite exact ce se salvează
+    trimite({ rezumat_text: curataEditat(text), rezumat_sursa: 'editat' })
   }
+  const avertizare = avertizareEroare(raport)
   const laAutomat = () => {
     if (raport.rezumat_sursa === 'editat' && !window.confirm('Înlocuiești textul corectat cu rezumatul generat automat din raport?')) return
     trimite({ rezumat_sursa: 'automat' })
@@ -101,6 +105,7 @@ export default function RubricaRezumat({ raport, poateEdita, onActualizat, compa
 
   return (
     <div style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: compact ? 10 : 12 }}>
+      {avertizare && !editez && <div data-rezumat-avertizare style={{ marginBottom: 8, fontSize: 12, color: G.yellow }}>⚠️ {avertizare}</div>}
       {raport.rezumat_sursa == null ? (
         <div style={{ fontSize: 13, color: G.dim }}>
           Raportul a fost salvat înainte de rubrica de rezumat — încă nu are rezumat.
@@ -112,7 +117,7 @@ export default function RubricaRezumat({ raport, poateEdita, onActualizat, compa
             style={{ width: '100%', boxSizing: 'border-box', background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8,
               padding: '9px 11px', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.45, resize: 'vertical', outline: 'none' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11.5, color: G.dim }}>{Array.from(text).length}/{MAX_EDITAT} · textul corectat nu se mai schimbă singur la salvarea raportului</span>
+            <span style={{ fontSize: 11.5, color: G.dim }}>{Array.from(curataEditat(text)).length}/{MAX_EDITAT} · textul corectat nu se mai schimbă singur la salvarea raportului</span>
             <span style={{ display: 'flex', gap: 6 }}>
               <button data-rezumat-renunta disabled={lucreaza} onClick={() => { setEditez(false); setEroare(null) }} style={btn(G.muted)}>Renunță</button>
               <button data-rezumat-salveaza disabled={lucreaza} onClick={salveaza} style={btn(G.green, true)}>{lucreaza ? 'Se salvează…' : 'Salvează'}</button>

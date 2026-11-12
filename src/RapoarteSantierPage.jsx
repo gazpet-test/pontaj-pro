@@ -63,7 +63,7 @@ export default function RapoarteSantierPage() {
   const [exporting, setExporting] = useState(null) // 'excel' | 'pdf' | null
   const [exportErr, setExportErr] = useState(null)
   // rezumatul (20261216a): corectura o face cine are drept de scriere pe raport — owner sau alocat pe șantier (aceeași regulă ca salvarea;
-  // serverul decide oricum, aici doar se arată butoanele)
+  // serverul decide oricum, aici doar se arată butoanele). scriere.tot (owner) e și semnalul „vede toate rapoartele” al rezumatului zilei (r3)
   const [scriere, setScriere] = useState({ tot: false, site: new Set() })
   const [rezumatZi, setRezumatZi] = useState(false)  // fereastra „Rezumatul zilei”
 
@@ -262,7 +262,7 @@ export default function RapoarteSantierPage() {
           setDetaliu(d => (d && d.id === row.id ? { ...d, ...row } : d))
           setRapoarte(list => list.map(r => (r.id === row.id ? { ...r, ...row } : r)))
         }} />}
-      {rezumatZi && <RezumatZiModal ziInitiala={to} sites={sites} onClose={() => setRezumatZi(false)} />}
+      {rezumatZi && <RezumatZiModal ziInitiala={to} sites={sites} vedeToate={scriere.tot} onClose={() => setRezumatZi(false)} />}
     </Shell>
   )
 }

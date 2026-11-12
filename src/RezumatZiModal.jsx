@@ -20,8 +20,12 @@ const btn = (culoare) => ({
   padding: '8px 13px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
 })
 
+// ziua de azi pe ora României (L17), pentru formularea listei „fără raport” (r3)
+const aziRo = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date())
+
 // sites = șantierele din ecran (cele pe care le vede utilizatorul); numele vin de aici (sites.name)
-export default function RezumatZiModal({ ziInitiala, sites, onClose }) {
+// vedeToate = contul vede toate rapoartele (owner, semnalul deja existent în ecran); altfel lista spune „fără raport vizibil” (r3)
+export default function RezumatZiModal({ ziInitiala, sites, vedeToate, onClose }) {
   const [zi, setZi] = useState(ziInitiala || '')
   const [stare, setStare] = useState({ incarc: false, eroare: null, text: '', nr: 0 })
   const [copiat, setCopiat] = useState(false)
@@ -38,7 +42,8 @@ export default function RezumatZiModal({ ziInitiala, sites, onClose }) {
       try {
         const randuri = await citesteRapoarteZi(supabase, siteIds, zi)
         if (gen !== genRef.current) return
-        const text = rezumatZi(randuri.map(r => intrareZi(r, id => nume.get(String(id)))), zi, { santiereActive: active })
+        const text = rezumatZi(randuri.map(r => intrareZi(r, id => nume.get(String(id)))), zi,
+          { santiereActive: active, vedeToate: vedeToate === true, azi: aziRo() })
         setStare({ incarc: false, eroare: null, text, nr: randuri.length })
       } catch (e) {
         // L18: o eroare de citire NU devine „niciun raport”
@@ -46,7 +51,7 @@ export default function RezumatZiModal({ ziInitiala, sites, onClose }) {
       }
     })()
     return () => { genRef.current++ }
-  }, [zi, siteIds, nume, active])
+  }, [zi, siteIds, nume, active, vedeToate])
 
   const onCopiaza = async () => {
     const ok = await copiaza(stare.text)

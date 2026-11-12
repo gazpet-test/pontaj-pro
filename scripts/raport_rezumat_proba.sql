@@ -24,9 +24,13 @@ SELECT coalesce(jsonb_agg(jsonb_build_object('id', r.id, 'site_id', r.site_id, '
                                                              'cantitate', rl.cantitate, 'bifa', coalesce(pa.tip_raportare, 'cantitate') = 'bifa')
                                           ORDER BY (rl.unitate_id IS NOT NULL), pu.ordine, pu.id, pa.ordine, pa.id, rl.id), '[]'::jsonb)
                   FROM public.raport_lucrari rl
+                  JOIN public.sites sp ON sp.id = z.site_id
                   LEFT JOIN public.proiect_activitati pa ON pa.id = rl.activitate_id
                   LEFT JOIN public.proiect_unitati pu ON pu.id = rl.unitate_id
-                 WHERE rl.raport_id = z.id),
+                 WHERE rl.raport_id = z.id
+                   AND (rl.proiect_id IS NULL OR rl.proiect_id = sp.proiect_id)
+                   AND (pa.id IS NULL OR pa.proiect_id = sp.proiect_id)
+                   AND (pu.id IS NULL OR pu.proiect_id = sp.proiect_id)),
       'distributie', (SELECT CASE WHEN count(*) = 0 THEN NULL
                                   ELSE jsonb_build_object('conducte', count(*) FILTER (WHERE d.tabel = 'conducta'),
                                                           'bransamente', count(*) FILTER (WHERE d.tabel = 'bransament')) END

@@ -91,12 +91,26 @@ dom(numeDom('RezumatZiModal'), () => {
       '• Domnești: 3 oameni · 0 utilaje',
       '  Lucrări: Montaj',
       '',
-      'Fără raport (1): Lot 1',
+      // r3: fără semnalul „vede tot” (cont restrâns) și pentru o zi care nu e azi = formularea prudentă
+      'Fără raport vizibil pentru contul tău, din lista curentă de șantiere (1): Lot 1',
     ].join('\n')
     expect(u.q('text').value).toBe(text)
     expect(S.cereri.find(c => c.t === 'rapoarte_zilnice').f.slice(0, 2)).toEqual([['in', 'site_id', [1, 2, 3]], ['eq', 'data', '2026-11-11']])
     await u.apasa('copiaza')
     expect(u.copiate).toEqual([text])
+  })
+  it('r3: owner (vedeToate) pe ziua de AZI (ora României) = „Fără raport”; owner pe altă zi / cont restrâns azi = prudent', async () => {
+    const azi = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date())
+    S.rapoarte = [{ id: 5, site_id: 2, data: azi, personal_snapshot: { total: 3 }, utilaje_snapshot: [] }]
+    const ultima = async (props) => {
+      const u = await monteaza(props)
+      const t = u.q('text').value.split('\n').at(-1)
+      curata.forEach(f => f()); curata = []; S.cereri.length = 0
+      return t
+    }
+    expect(await ultima({ ziInitiala: azi, vedeToate: true })).toBe('Fără raport (1): Lot 1')
+    expect(await ultima({ ziInitiala: azi })).toBe('Fără raport vizibil pentru contul tău (1): Lot 1')
+    expect(await ultima({ ziInitiala: '2001-01-02', vedeToate: true })).toBe('Fără raport, din lista curentă de șantiere (2): Domnești, Lot 1')
   })
   it('o eroare de citire se vede (nu „niciun raport”); fără zi = „Alege ziua”, nicio cerere', async () => {
     S.eroare = 'raport_lucrari'
