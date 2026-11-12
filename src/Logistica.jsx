@@ -6,6 +6,8 @@ import { employeeFieldRead, withEmployeePersonal } from './employeesPersonal.js'
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 import { confirmaCitiriAlimentari, confirmaAjustareManuala, incarcaSurseMaxime, sursaValoriiMari, descrieSursa } from './lib/citiriBord.js'
+import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
+import { ziBucuresti } from './adminAlerte.js'
 import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT, SURSA_ROMPETROL_TOATE, surseRompetrol, potrivesteSursa } from './lib/arhivaAlimentari.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -25,6 +27,7 @@ import CarteTehnicaSearch from './CarteTehnicaSearch.jsx'
 import FisaActivExport from './FisaActivExport.jsx'
 import BmwCardataCard from './BmwCardataCard.jsx'
 import { construiesteF23, numeFisier, descarcaDocx } from './OfertareExport.js'
+import { pregatesteF23Categorie, NOTA_F23_CATEGORIE } from './logisticaF23Dovezi.js'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
@@ -7026,12 +7029,15 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
   const nav = useNavigate()
   const [allInPeriod, setAllInPeriod] = useState([])  // TOATE din perioadă (pentru KPI corect)
   const [loading, setLoading] = useState(false)
-  // Când vin din bannerul „Transporturi blocate", filtrul implicit pe luna curentă
-  // ar ascunde exact transporturile pentru care am fost trimis aici — cele blocate
-  // sunt vechi prin definiție. Deschid pe „Toate" + „Aprobat".
+  // Când vin din bannerul „Transporturi blocate" deschid pe filtrul „Blocate” = exact regula
+  // bannerului (esteTransportBlocat: aprobat/programat cu data trecută + în tranzit nelivrat),
+  // pe toată perioada. Înainte se deschidea pe „Aprobat”, care ascundea statusul vechi
+  // „programat” și transporturile în tranzit, deși bannerul le număra (TKT-2026-0356).
   const venitDinBlocate = initialFocus === 'blocate'
-  const [statusFilter, setStatusFilter] = useState(venitDinBlocate ? 'aprobat' : 'Toate')
+  const [statusFilter, setStatusFilter] = useState(venitDinBlocate ? FILTRU_BLOCATE : 'Toate')
   const [perioadaFilter, setPerioadaFilter] = useState(venitDinBlocate ? 'tot' : 'luna')
+  const [loadError, setLoadError] = useState('')
+  const fetchReq = useRef(0)
   const [meleFilter, setMeleFilter] = useState(false)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [showComanda, setShowComanda] = useState(false)
@@ -7055,9 +7061,11 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
   }, [loc.search])
   
   const fetchAll = async () => {
+    const req = ++fetchReq.current
     setLoading(true)
-    let q = supabase.from('logistica_transporturi')
-      .select(`*,
+    setLoadError('')
+    const azi = ziBucuresti()
+    const select = `*,
         activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
         masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
         remorca:logistica_active!remorca_id(id, cod_intern, marca, model, nr_inmatriculare, logistica_categorii(tip)),
@@ -7070,48 +7078,36 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
         manager_plecare:profiles!manager_plecare_id(id, name, role),
         manager_destinatie:profiles!manager_destinatie_id(id, name, role),
         confirmat_de:profiles!confirmat_primire_de(name)
-      `)
-    
-    // Filtru perioadă (aplicat la nivel DB)
-    const today = new Date().toISOString().split('T')[0]
-    if (perioadaFilter === 'luna') {
-      const y = new Date().getFullYear()
-      const m = String(new Date().getMonth() + 1).padStart(2, '0')
-      q = q.gte('data_transport', `${y}-${m}-01`)
-    } else if (perioadaFilter === 'sapt') {
-      const d = new Date(); d.setDate(d.getDate() - 7)
-      q = q.gte('data_transport', d.toISOString().split('T')[0])
-    } else if (perioadaFilter === 'azi') {
-      q = q.eq('data_transport', today)
+      `
+    // Citire COMPLETĂ, paginată pe id, cu numărare la început și la final (incarcaTransporturi,
+    // src/lib/logisticaTransporturi.js; r2 / L23): (1) transporturile din perioadă, (2) cele încă
+    // deschise (aprobat / programat / în tranzit) planificate înainte de perioadă și (3) cele deschise
+    // fără dată — rămân vizibile până pleacă / sunt livrate / anulate. „Doar ale mele” pe fiecare.
+    // Orice eroare sau listă care nu se poate citi întreagă = mesaj vizibil, NU listă parțială.
+    try {
+      const rows = await incarcaTransporturi(() => supabase.from('logistica_transporturi'), {
+        select, perioada: perioadaFilter, azi, meleId: (meleFilter && profile?.id) ? profile.id : null,
+      })
+      if (req !== fetchReq.current) return
+      setAllInPeriod(rows)
+    } catch (e) {
+      if (req !== fetchReq.current) return
+      // L18: eroarea nu se afișează ca „nicio cerere în această perioadă”
+      console.error('Eroare fetch transporturi:', e)
+      setAllInPeriod([])
+      setLoadError(e?.message || String(e))
+    } finally {
+      if (req === fetchReq.current) setLoading(false)
     }
-    
-    // Filtru "Doar ale mele" se aplică tot la DB
-    if (meleFilter && profile?.id) {
-      q = q.or(`solicitant_id.eq.${profile.id},manager_destinatie_id.eq.${profile.id},manager_plecare_id.eq.${profile.id}`)
-    }
-    
-    const { data, error } = await q
-    if (error) console.error('Eroare fetch transporturi:', error)
-    setAllInPeriod(data || [])
-    setLoading(false)
   }
   
   useEffect(() => { fetchAll() }, [perioadaFilter, meleFilter])
   
-  // Lista filtrată după status (în memorie)
-  const list = useMemo(() => {
-    let result = [...allInPeriod]
-    if (statusFilter !== 'Toate') result = result.filter(t => t.status === statusFilter)
-    
-    // Sortare specială pentru aprobate (după data_transport ASC — cele mai apropiate sus)
-    if (statusFilter === 'aprobat' || statusFilter === 'programat') {
-      result.sort((a, b) => (a.data_transport || '').localeCompare(b.data_transport || ''))
-    } else {
-      // Default: descrescător pe data_transport (cele recente sus)
-      result.sort((a, b) => (b.data_transport || '').localeCompare(a.data_transport || '') || (b.id - a.id))
-    }
-    return result
-  }, [allInPeriod, statusFilter])
+  // Lista filtrată după status (în memorie) + ordinea: filtreazaTransporturi (src/lib/logisticaTransporturi.js).
+  // „Aprobat” cuprinde și statusul vechi „programat” (KPI-ul „Aprobate” le numără împreună);
+  // „Blocate” = exact regula bannerului de pe Active.
+  const list = useMemo(() => filtreazaTransporturi(allInPeriod, statusFilter, ziBucuresti()), [allInPeriod, statusFilter])
+  const nrBlocate = useMemo(() => filtreazaTransporturi(allInPeriod, FILTRU_BLOCATE, ziBucuresti()).length, [allInPeriod])
   
   // KPI calculate din TOATE transporturile din perioadă (NU se schimbă cu filtrul status)
   const kpi = useMemo(() => {
@@ -7221,15 +7217,15 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
         
         {/* Status — fără 'programat' (eliminat din flow nou; rămâne accesibil dacă există date vechi cu acel status) */}
         <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
-          {['Toate', 'cerut', 'aprobat', 'in_tranzit', 'livrat', 'respins', 'anulat'].map(s => (
+          {['Toate', 'cerut', 'aprobat', 'in_tranzit', 'livrat', 'respins', 'anulat', FILTRU_BLOCATE].map(s => (
             <button key={s} onClick={() => setStatusFilter(s)} style={{
               padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
-              border:`1px solid ${statusFilter === s ? G.logistica : G.border}`,
+              border:`1px solid ${statusFilter === s ? G.logistica : (s === FILTRU_BLOCATE && nrBlocate > 0 ? G.orange + '88' : G.border)}`,
               background: statusFilter === s ? G.logistica + '22' : 'transparent',
-              color: statusFilter === s ? G.logistica : G.muted,
+              color: statusFilter === s ? G.logistica : (s === FILTRU_BLOCATE && nrBlocate > 0 ? G.orange : G.muted),
               cursor:'pointer'
-            }}>
-              {s === 'Toate' ? 'Toate' : (STATUS_TRANSPORT[s]?.label || s)}
+            }} title={s === FILTRU_BLOCATE ? 'Aprobate cu data trecută care n-au plecat + în tranzit cu livrarea neconfirmată (aceeași regulă ca bannerul de pe Active)' : undefined}>
+              {s === 'Toate' ? 'Toate' : s === FILTRU_BLOCATE ? `⚠️ Blocate (${nrBlocate})` : (STATUS_TRANSPORT[s]?.label || s)}
             </button>
           ))}
         </div>
@@ -7287,9 +7283,16 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
       </div>
       
       {/* Lista transporturi */}
+      {loadError && !loading && (
+        <div style={{...S.card, padding:'10px 14px', marginBottom:10, borderLeft:`4px solid ${G.orange}`, color:G.orange, fontSize:12}}>
+          ⚠️ {allInPeriod.length === 0 ? 'Transporturile nu s-au putut încărca: ' : ''}{loadError}
+        </div>
+      )}
       <div style={{...S.card, padding:0, overflow:'hidden'}}>
         {loading ? (
           <div style={{padding:40, textAlign:'center', color:G.muted}}>Se încarcă...</div>
+        ) : list.length === 0 && loadError && allInPeriod.length === 0 ? (
+          <div style={{padding:40, textAlign:'center', color:G.orange, fontSize:13}}>Lista nu e disponibilă (eroare la încărcare, vezi mai sus). Reîncercați cu Ctrl+Shift+R.</div>
         ) : list.length === 0 ? (
           <div style={{padding:40, textAlign:'center', color:G.muted}}>
             <div style={{fontSize:32, marginBottom:8}}>🚚</div>
@@ -11437,8 +11440,8 @@ export default function LogisticaPage() {
           destinatie_site:sites!destinatie_site_id(name),
           solicitant:profiles!solicitant_id(name),
           sofer:profiles!sofer_id(name)`)
-        .in('status', ['aprobat', 'programat', 'in_tranzit'])
-        .lt('data_transport', todayISO)
+        .in('status', STATUS_DESCHIS)
+        .lt('data_transport', ziBucuresti())
         .order('data_transport', { ascending: true })
         .limit(30),
     ])
@@ -11460,15 +11463,13 @@ export default function LogisticaPage() {
       inTranzit: transpArr.filter(t => t.status === 'in_tranzit').length,
       livrate: transpArr.filter(t => t.status === 'livrat').length,
     })
-    // Filtrez blocate strict pe client:
+    // Filtrez blocate strict pe client, cu ACEEAȘI regulă ca filtrul „Blocate” din tab-ul
+    // Transporturi (esteTransportBlocat, src/lib/logisticaTransporturi.js; azi în Europe/Bucharest):
     // - aprobat/programat blocat: data_transport < azi (data plănuită a trecut, nu a plecat)
     // - in_tranzit blocat: data_transport < ieri (depășit cu 1+ zi termenul fără confirmare)
     const allBloc = transpBlocRes.data || []
-    const blocate = allBloc.filter(t => {
-      if (t.status === 'aprobat' || t.status === 'programat') return t.data_transport < todayISO
-      if (t.status === 'in_tranzit') return t.data_transport < yesterdayISO
-      return false
-    })
+    const aziBuc = ziBucuresti()
+    const blocate = allBloc.filter(t => esteTransportBlocat(t, aziBuc))
     setTranspBlocate(blocate)
     // Map ultima alimentare per activ
     const map = {}
@@ -11523,6 +11524,34 @@ export default function LogisticaPage() {
       showToast(`Formularul 23 exportat: ${dotari.length} poziții, ${data.length} bucăți. Completează autoritatea și sediul în declarație.`, 'ok')
     } catch (e) {
       showToast('Exportul F23 a eșuat: ' + (e?.message || e), 'err')
+    } finally { setBusyF23(false) }
+  }
+
+  // ─── TKT-2026-0362: F23 pe o categorie (ex. aparatele de sudură automată), cu dovada deținerii / chiriei ──
+  // Doar date existente pe activ (categoria, forma de deținere, contractul atașat, nr. de inventar); vezi logisticaF23Dovezi.js.
+  // r2: exportul își citește singur, complet și paginat, activele categoriei (pregatesteF23Categorie) — NU pleacă
+  // din lista din ecran (`active`, citită fără paginare). Lista de categorii = toate categoriile, fără numărători
+  // din ecran (ar putea fi incomplete); numărul real îl dă exportul.
+  const [f23Cat, setF23Cat] = useState(null)   // null = panou închis; '' = deschis, nimic ales; altfel id-ul categoriei
+  const exportF23Categorie = async () => {
+    const cat = categorii.find(c => String(c.id) === String(f23Cat))
+    if (!cat) { showToast('Alege categoria.', 'err'); return }
+    setBusyF23(true)
+    try {
+      const { randuri, foaie, eticheta, azi, avertisment } = await pregatesteF23Categorie(nume => supabase.from(nume), cat)
+      if (avertisment) showToast(avertisment, 'warn')
+      if (!randuri.length) { showToast('Nu există utilaje active în categoria aleasă.', 'err'); return }
+      const ws = XLSX.utils.aoa_to_sheet(foaie)
+      ws['!cols'] = [{ wch: 7 }, { wch: 34 }, { wch: 12 }, { wch: 18 }, { wch: 6 }, { wch: 12 }, { wch: 12 }, { wch: 70 }, { wch: 14 }]
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'F23 categorie')
+      const slug = eticheta.normalize('NFD').replace(/\p{M}/gu, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'categorie'
+      XLSX.writeFile(wb, `F23_${slug}_${azi}.xlsx`)
+      const lipsa = randuri.filter(r => r.stare !== 'ok').length
+      showToast(`Lista „${eticheta}”: ${randuri.length} bucăți${lipsa ? `, ${lipsa} fără dovadă completă (marcate în fișier)` : ', toate cu dovadă'}.`, lipsa ? 'warn' : 'ok')
+      setF23Cat(null)
+    } catch (e) {
+      showToast('Exportul listei pe categorie a eșuat: ' + (e?.message || e), 'err')
     } finally { setBusyF23(false) }
   }
 
@@ -12836,6 +12865,23 @@ export default function LogisticaPage() {
           <button onClick={exportF23} disabled={busyF23} style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '55', opacity: busyF23 ? .5 : 1}} title="Declarația privind utilajele (Formular 23) — pentru orice client care cere dovada dotării">
             {busyF23 ? '⏳ Se generează…' : '🚜 Formular 23'}
           </button>
+          {/* TKT-2026-0362: listă separată pe o categorie, cu dovada deținerii / chiriei */}
+          <button onClick={() => setF23Cat(v => v === null ? '' : null)} disabled={busyF23} style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '55', opacity: busyF23 ? .5 : 1}}
+            title="Listă separată din Formularul 23 pentru o singură categorie de utilaje (ex. aparate de sudură automată), cu dovada deținerii sau a chiriei">
+            🔩 F23 pe categorie
+          </button>
+          {f23Cat !== null && (
+            <span style={{display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap'}}>
+              <select value={f23Cat} onChange={e => setF23Cat(e.target.value)} style={{...S.input, width: 'auto', minWidth: 220, fontSize: 12, padding: '6px 8px'}}>
+                <option value="">— alege categoria —</option>
+                {categorii.map(c => <option key={c.id} value={c.id}>{[c.tip, c.subcategorie].filter(Boolean).join(' · ')}</option>)}
+              </select>
+              <button onClick={exportF23Categorie} disabled={busyF23 || !f23Cat} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55', opacity: (busyF23 || !f23Cat) ? .5 : 1}}>
+                📥 Excel cu dovezi
+              </button>
+              <span style={{fontSize: 11, color: G.muted, maxWidth: 520, lineHeight: 1.35}}>ℹ️ {NOTA_F23_CATEGORIE}</span>
+            </span>
+          )}
           {canEdit && (
             <button onClick={() => setModal({ mode: 'create', activ: null })} style={{...S.btnP, background: G.logistica, color: '#000'}}>
               + Activ nou
