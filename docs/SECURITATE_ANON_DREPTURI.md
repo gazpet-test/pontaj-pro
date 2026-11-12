@@ -236,3 +236,10 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
   regulă; cursa: simulată determinist în PGlite + probă cu două sesiuni reale pe clona PG 17.6 (R1–R5 rulate 12.11.2026, comportamentele
   confirmate; R6–R9 și mutanții `blocare_public` / `fara_lock` noi în runda 4, de rulat pe clonă; proba compară pe nume calificate explicit și
   iese „probă nefuncțională”, nu verdict, când starea așteptată e goală sau niciun scenariu n-a fost judecat).
+
+## Deschis după review-ul rundei 4 (nu blochează merge-ul migrărilor neaplicate)
+
+- **SIMULARE, clasa „agregat fără date”** (blochează T2): absența GROUP BY dovedește forma rezultatului, nu absența datelor (`sum` peste `1` și `-1` dă tot zero). Până la confirmarea expresiei agregate, un astfel de rând rămâne AMBIGUU, iar T2 nu se aplică.
+- **POLITICI_ANON**: o politică pentru contul nelogat creată după retragere pe un tabel fără drept nu dă acces, dar secțiunea CONTROL nu o semnalează; se urmărește în POLITICI_ANON la fiecare citire.
+- **ATTACH PARTITION** ia doar ShareUpdateExclusive pe părinte, deci nu e oprit de lock-ul ACCESS SHARE al treptei T2; nu acordă drepturi și nu redeschide cursa cu politicile.
+- **Înainte de aplicarea oricărei trepte**: probă prin runnerul real pe clonă (aplicare, revenire, reaplicare, sub 1500 ms), citire pe producție chiar înainte, BASELINE din aceeași citire, confirmarea atributului CREATEROLE și a triggerelor de eveniment pe producție, acordul owner-ului pentru fiecare treaptă.
