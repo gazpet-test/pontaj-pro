@@ -24,8 +24,7 @@ import CarteTehnicaSearch from './CarteTehnicaSearch.jsx'
 import FisaActivExport from './FisaActivExport.jsx'
 import BmwCardataCard from './BmwCardataCard.jsx'
 import { construiesteF23, numeFisier, descarcaDocx } from './OfertareExport.js'
-import { randuriF23Categorie, foaieF23Categorie } from './logisticaF23Dovezi.js'
-import { ziBucuresti } from './lib/izoTeren.js'
+import { pregatesteF23Categorie, NOTA_F23_CATEGORIE } from './logisticaF23Dovezi.js'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
@@ -11468,31 +11467,19 @@ export default function LogisticaPage() {
 
   // ─── TKT-2026-0362: F23 pe o categorie (ex. aparatele de sudură automată), cu dovada deținerii / chiriei ──
   // Doar date existente pe activ (categoria, forma de deținere, contractul atașat, nr. de inventar); vezi logisticaF23Dovezi.js.
+  // r2: exportul își citește singur, complet și paginat, activele categoriei (pregatesteF23Categorie) — NU pleacă
+  // din lista din ecran (`active`, citită fără paginare). Lista de categorii = toate categoriile, fără numărători
+  // din ecran (ar putea fi incomplete); numărul real îl dă exportul.
   const [f23Cat, setF23Cat] = useState(null)   // null = panou închis; '' = deschis, nimic ales; altfel id-ul categoriei
-  const categoriiCuActive = useMemo(() => {
-    const n = new Map()
-    for (const a of active) if (a.categorie_id != null && !a.vandut && !a.deep_sleep) n.set(String(a.categorie_id), (n.get(String(a.categorie_id)) || 0) + 1)
-    return categorii.filter(c => n.has(String(c.id))).map(c => ({ ...c, nr: n.get(String(c.id)) }))
-  }, [active, categorii])
   const exportF23Categorie = async () => {
     const cat = categorii.find(c => String(c.id) === String(f23Cat))
     if (!cat) { showToast('Alege categoria.', 'err'); return }
     setBusyF23(true)
     try {
-      const azi = ziBucuresti()
-      // proprietarii utilajelor în comodat: doar numele celor din categoria aleasă
-      const ids = [...new Set(active.filter(a => String(a.categorie_id) === String(cat.id) && a.tip_proprietate === 'comodat' && a.comodat_employee_id != null)
-        .map(a => a.comodat_employee_id))]
-      let nume = new Map()
-      if (ids.length) {
-        const r = await incarcaNumeAngajati(() => supabase.from('employees').select('id, name', { count: 'exact' }).in('id', ids))
-        nume = r.nume
-        if (r.avertisment) showToast(r.avertisment, 'warn')
-      }
-      const randuri = randuriF23Categorie(active, cat.id, azi, id => (id == null ? null : numeAngajat(nume, id)))
+      const { randuri, foaie, eticheta, azi, avertisment } = await pregatesteF23Categorie(nume => supabase.from(nume), cat)
+      if (avertisment) showToast(avertisment, 'warn')
       if (!randuri.length) { showToast('Nu există utilaje active în categoria aleasă.', 'err'); return }
-      const eticheta = [cat.tip, cat.subcategorie].filter(Boolean).join(' · ')
-      const ws = XLSX.utils.aoa_to_sheet(foaieF23Categorie(randuri, eticheta, azi))
+      const ws = XLSX.utils.aoa_to_sheet(foaie)
       ws['!cols'] = [{ wch: 7 }, { wch: 34 }, { wch: 12 }, { wch: 18 }, { wch: 6 }, { wch: 12 }, { wch: 12 }, { wch: 70 }, { wch: 14 }]
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'F23 categorie')
@@ -12816,11 +12803,12 @@ export default function LogisticaPage() {
             <span style={{display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap'}}>
               <select value={f23Cat} onChange={e => setF23Cat(e.target.value)} style={{...S.input, width: 'auto', minWidth: 220, fontSize: 12, padding: '6px 8px'}}>
                 <option value="">— alege categoria —</option>
-                {categoriiCuActive.map(c => <option key={c.id} value={c.id}>{[c.tip, c.subcategorie].filter(Boolean).join(' · ')} ({c.nr})</option>)}
+                {categorii.map(c => <option key={c.id} value={c.id}>{[c.tip, c.subcategorie].filter(Boolean).join(' · ')}</option>)}
               </select>
               <button onClick={exportF23Categorie} disabled={busyF23 || !f23Cat} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55', opacity: (busyF23 || !f23Cat) ? .5 : 1}}>
                 📥 Excel cu dovezi
               </button>
+              <span style={{fontSize: 11, color: G.muted, maxWidth: 520, lineHeight: 1.35}}>ℹ️ {NOTA_F23_CATEGORIE}</span>
             </span>
           )}
           {canEdit && (
