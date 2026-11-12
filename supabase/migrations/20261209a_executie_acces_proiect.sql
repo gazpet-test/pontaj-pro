@@ -1,0 +1,1463 @@
+-- Version 20261209120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
+-- 20261209a_executie_acces_proiect — Execuție: acces pe PROIECT (decizia lui Răzvan, 10.11.2026). Un șef de șantier vede și scrie în Execuție
+-- doar proiectele lui (ex. Lot 1 + Lot 2), lista se extinde ulterior. r2: inventarul complet (review r1 NO-GO). r3: clasificarea întregului
+-- catalog al clonei schemei de producție (tabele, vederi, funcții SECURITY DEFINER) + poarta pe proiect în fn_executie_swap_tevi_pozitie.
+-- r4 (review r3 NO-GO): (a) „doar citire” nu scrie nicăieri — antetul raportului zilnic (rapoarte_zilnice) intră sub gardă ca rând-copil al
+-- șantierului (orice cale de scriere, inclusiv salvarea doar a antetului prin RPC, cere nivel 'editor' pe proiectul șantierului);
+-- (b) pentru contul RESTRÂNS, graficul intern (grafic_activitati, rândurile cu proiect) și Inboxul AI (rândurile și fișierele clasificate
+-- pentru Execuție) urmează lista lui; conturile nerestrânse: neschimbat.
+-- r5 (review r4 P1): excepția „documentul urcat chiar de cont” ține doar cât rândul NU are proiect (entitate_id NULL); după ce
+-- clasificatorul AI îl potrivește pe un proiect din afara listei, rândul și fișierul nu i se mai arată (fără proiect, scor, id).
+-- r6 (review r5 P1: dispariția era ea însăși un semnal de existență): clasificatorul (edge citeste-orice, service_role) caută potrivirea
+-- DOAR în proiectele permise celui care a urcat documentul, listă dată de BD: fn_executie_acces_candidati(cont) (doar service_role).
+-- Regula pe cont e una singură: fn_executie_acces_nerestrans_cont / fn_executie_acces_lista_cont, pe care și variantele pe apelant
+-- (auth.uid()) le cheamă (L19). Plasa din r5 rămâne, dar pentru un cont restrâns nu mai are ce ascunde (nu mai e observabilă).
+-- r8 (review SQL P1-01 / P1-02): orice funcție a migrării pe care un client o poate chema DIRECT (RPC, cu argumente alese de el) întoarce
+-- DOAR adevărat / fals despre apelantul însuși, iar „nu există” și „nu ai voie” dau aceeași valoare. Rezolvările brute (lista de proiecte,
+-- proiectele unui obiect Storage, fișierul Inboxului) sunt interne: fără EXECUTE pentru clienți; le cheamă doar predicatele publice
+-- SECURITY DEFINER (ca proprietarul lor). Politicile cheamă doar predicatele publice: fn_executie_acces_nerestrans (o evaluare pe
+-- interogare: contul nerestrâns iese din prima condiție, fără nicio altă citire), apoi, DOAR pentru contul restrâns, predicatul pe rând
+-- (fn_executie_proiect_permis / fn_executie_acces_parinte_permis / fn_executie_acces_inbox_rand / fn_executie_acces_obiect_permis).
+-- Setul părinților (fn_executie_acces_parinti) a ieșit. Tabelul de expunere al fiecărei funcții: în PR. Postcondiție generală: nicio
+-- funcție a migrării care întoarce altceva decât boolean nu are EXECUTE pentru anon / authenticated, în afara excepțiilor enumerate.
+-- r9 (review r8, ambii recenzenți, P1: un boolean poate fi tot oracol — „șantier existent fără proiect = adevărat, id inexistent = fals”;
+-- „rând ascuns al altui modul în Inbox = adevărat, cale inexistentă = fals”): predicatele publice răspund după ce POATE VEDEA apelantul, nu
+-- după ce există. Cele care caută un rând după argument (fn_executie_acces_parinte_permis, fn_executie_acces_obiect_permis) sunt SECURITY
+-- INVOKER: căutarea se face sub RLS-ul apelantului, deci „inexistent” și „invizibil” sunt același caz. Rezolvările brute ale lui r8
+-- (fn_executie_acces_obiect_proiecte, fn_executie_acces_inbox_obiect) au ieșit. Scrierea în documente-proiect: fals pentru contul
+-- restrâns (doar serverul scrie acolo).
+-- r10 (review r9, Jakarinos P1: în folderul propriu, documentul propriu legat de un proiect nepermis = fals, cale inexistentă = adevărat):
+-- fn_executie_acces_inbox_propriu (r9, citea rândul ca proprietar) a IEȘIT. În folderul PROPRIU al Inboxului (`<auth.uid()>/…`) predicatul
+-- Storage nu mai depinde deloc de rândul din coadă: adevărat, la citire și la scriere (decide doar prefixul căii + politicile existente
+-- din 20261103c). Fișierul e urcat de contul însuși (conținutul îl are deja); ce se protejează e LEGĂTURA cu proiectul, adică rândul din
+-- ai_documente_inbox, ascuns în continuare de RLS-ul cozii (r5). Niciun predicat al migrării nu mai citește ca proprietar după un argument
+-- (r12: excepția unică, argumentată, e fn_executie_acces_inbox_propriu_liber — doar calea din folderul apelantului, doar „există rând”).
+-- r11 (review r10 P1, ambii recenzenți: cu ramura r10 și la UPDATE / DELETE, contul restrâns își ștergea fișierul propriu și urca alt
+-- conținut pe aceeași cale, sub un rând din coadă pe care garda 4d nu-l mai vede): în folderul propriu, pentru contul RESTRÂNS, citirea și
+-- încărcarea rămân ca în r10, iar MODIFICAREA și ȘTERGEREA sunt refuzate uniform (al 4-lea argument al predicatului, p_inlocuire, doar pe
+-- politicile UPDATE / DELETE), fără nicio citire. Ștergerile legitime rămân pe calea serverului și a owner-ului. P2: prefixul strict `<uuid>/…`.
+-- Conturile nerestrânse și owner-ul: neschimbat.
+-- r12 (review r11, Jakarinos P1: dacă ALTCINEVA — alt cont, serverul sau panoul la confirmare, src/CitesteOricePanel.jsx — șterge obiectul
+-- și rândul din coadă rămâne, ascuns pentru uploaderul restrâns, garda 4d din 20261103c nu-l mai vedea, iar uploaderul re-ocupa aceeași
+-- cale cu alt conținut): în folderul propriu, pentru contul RESTRÂNS, ÎNCĂRCAREA (INSERT) cere în plus ca NICIUN rând din coadă să nu
+-- refere calea, indiferent dacă rândul îi e vizibil și de proiectul lui — fn_executie_acces_inbox_propriu_liber (DEFINER, boolean, aceeași
+-- potrivire ca garda 4d: fisier_path = name, text = text, aceeași colație, verificată în preflight). Răspunsul depinde DOAR de „există un
+-- rând pe calea mea?” (fapt pe care uploaderul îl știa deja înainte de migrare: rândul lui îi era vizibil), deci e identic pentru un rând
+-- vizibil fără proiect, unul pe un proiect permis și unul pe un proiect nepermis (ascuns); diferă doar pentru o cale cu adevărat liberă,
+-- exact ca înainte de migrare. Citirea și refuzul uniform la modificare / ștergere (r11): neschimbate.
+-- r13 (decizia lui Răzvan, 11.11.2026, varianta A; review r12: un recenzent cerea ca reocuparea căii să fie refuzată, celălalt ca
+-- funcția din r12 să nu spună „există un rând ascuns pe calea mea” — cerințe care se exclud cât timp contul restrâns folosește Inboxul):
+-- un cont RESTRÂNS NU folosește deloc Inboxul AI. Pentru el, tot ce ține de Inbox răspunde uniform „nu”, FĂRĂ nicio citire a rândurilor
+-- sau a obiectelor: coada (ai_documente_inbox: 0 rânduri la citire / modificare / ștergere, orice INSERT refuzat de gardă ÎNAINTEA
+-- gărzii de legătură din 20261103c — trigger-ul gărzii e primul pe tabel, verificat în postcondiții), fișierele (bucket-ul
+-- ai-documente-inbox: fals la citire / urcare / modificare / ștergere, pe orice cale) și predicatul Inboxului fn_ai_inbox_poate_confirma
+-- (fals pentru orice modul / entitate; înlocuit aici cu amprenta verificată, pasul 6c). Același răspuns pentru o cale / un rând
+-- inexistent, propriu, al altuia, cu sau fără proiect. Au IEȘIT: fn_executie_acces_inbox_rand, fn_executie_acces_inbox_propriu_liber,
+-- excepția folderului propriu (r10–r12), excepția „documentul propriu fără proiect” (r5) și al 4-lea argument al predicatului Storage
+-- (r11). Documentele urcate de un cont ÎNAINTE să fie restrâns rămân în coadă, la owner și la conturile nerestrânse (politicile de azi);
+-- contul restrâns nu le mai vede. Conturile nerestrânse și owner-ul: exact ca azi.
+-- P2 (decizia chat-ului): poarta lui fn_executie_swap_tevi_pozitie cere și dreptul de SCRIERE pe modulul Execuție (fn_executie_nod_drept),
+-- pentru orice cont logat — închide o problemă care exista dinainte (detalii în raportul intern). Testul anti-oracol (T3e):
+-- fiecare funcție cu EXECUTE pentru clienți × fiecare fel de argument × 4 conturi (fără modul, restrâns, restrâns fără modul, editor
+-- nerestrâns): un argument existent, dar INVIZIBIL apelantului, dă exact rezultatul celui inexistent (valoare, NULL, eroare, SQLSTATE).
+--
+-- Regula (o singură definiție, L19):
+--   * cont FĂRĂ niciun rând în executie_acces_proiect = ca azi (vede / scrie ce îi dă modulul);
+--   * cont CU cel puțin un rând = doar proiectele listate; nivel 'viewer' = doar citire pe acel proiect, 'editor' = citire + scriere
+--     (în limita dreptului pe modul: un 'editor' pe proiect cu modulul 'viewer' tot nu scrie);
+--   * owner (profiles.is_owner) = tot, indiferent de rânduri.
+--   „Restrâns” e decis într-un singur loc, fn_executie_acces_nerestrans_cont(cont) (r6; fn_executie_acces_nerestrans() = același, pe apelant) (varianta B — bifă explicită „restrâns” pe cont — schimbă doar
+--   această funcție și RPC-ul de setare). fn_executie_acces_lista(scriere) = proiectele permise (internă, r8); fn_executie_proiect_permis(proiect, scriere)
+--   = nerestrans OR proiect în listă. Politicile: „(SELECT nerestrans()) OR <predicat pe rând>” (r8: predicatele publice întorc doar boolean).
+--
+-- INVENTARUL (r2): o SINGURĂ listă, fn_executie_acces_inventar(), din care se trag preflight-ul, politicile, postcondițiile și revenirea.
+--   Fiecare obiect care ajunge la un proiect de Execuție are o clasă:
+--     tabel  'proiect' — coloana `cheie` e proiectul: 4 politici RESTRICTIVE + trigger BEFORE INSERT/UPDATE/DELETE pe OLD și NEW;
+--     tabel  'proiect_optional' — ca 'proiect', dar rândul FĂRĂ proiect (cheia NULL) e al altui modul și rămâne neatins (r4: graficul
+--                        intern, unde rândurile doar cu licitație sunt ale Ofertării);
+--     tabel  'copil'   — proiectul vine din părinte (`parinte`: sl | bon | pachet | raport | cumulat | activitate | site): la fel, politicile
+--                        cu predicatul pe părinte (r8: fn_executie_acces_parinte_permis, boolean; înainte, setul părinților — o funcție care
+--                        întorcea id-uri, apelabilă direct); 'site' / 'raport': șantierul fără proiect = permis (nu sunt date de proiect);
+--     tabel  'inbox'   — Inboxul AI (r13): pentru contul restrâns NICIUN rând (citire / scriere), orice modul, fără citiri; contul
+--                        nerestrâns: neschimbat (politicile de azi). Clasa 'inbox' mai acoperă bucket-ul cozii și predicatul ei;
+--     tabel  'drept'   — are deja funcția lui de drept (20261201a–20261211a), căreia i se adaugă condiția de proiect (direct sau prin
+--                        funcția la care delegă); poate lipsi (migrarea lui încă neaplicată), dar dacă există, funcția lui trebuie să existe;
+--     tabel  'exclus' / 'prefix_tabel' — alt modul, cu dreptul lui; motivul și riscul sunt scrise (decizie pentru Răzvan, nu omisiune);
+--     tabel  'comun'   — dimensiune comună (cont, angajat, alocare pe șantier…): NU ajunge la date de proiect; afirmația se VERIFICĂ
+--                        (refuz dacă tabelul are o coloană întreagă proiect_id sau o cheie străină spre executie_proiecte / un tabel acoperit);
+--     functie 'drept' | 'verifica' | 'garda' | 'delega' | 'poarta' | 'exclus' — SECURITY DEFINER apelabile din API care ating tabelele de
+--                        mai sus, fiecare cu amprenta corpului revizuit (L15): drept = funcția de drept (înlocuită aici); verifica = cheamă
+--                        o funcție de drept pe proiectul fiecărui id; garda = doar scrie în tabele acoperite (trigger-ul de gardă o oprește)
+--                        și nu întoarce date ale altor proiecte; delega = funcție de drept care doar cheamă una înlocuită aici (poate
+--                        lipsi); poarta = funcție creată direct în BD, fără condiția de proiect: migrarea îi pune poarta (vezi 6b);
+--                        inbox = predicatul Inboxului AI (r13: fals pentru contul restrâns, vezi 6c);
+--                        exclus = alt modul (motivul: ce citește / întoarce, cu ce drept); bucket 'cale' | 'tabel' | 'inbox' | 'drept' |
+--                        'exclus' ('inbox' = fișierele Inboxului AI: r13, nimic pentru contul restrâns).
+--   Nu mai există excluderi de funcții pe prefix (r3): fiecare funcție găsită are numele și amprenta ei în listă.
+--   Preflight-ul derivă din CATALOG (nu din listă) ce ajunge la un proiect și REFUZĂ orice obiect neclasificat, cu numele lui:
+--     tabelele legate prin FK (tranzitiv) de executie_proiecte sau cu o coloană întreagă proiect_id; vederile (și vederile peste vederi)
+--     peste tabelele acoperite care nu sunt security_invoker (sau sunt materializate) și pe care le poate citi API-ul; funcțiile SECURITY
+--     DEFINER din public, apelabile de anon / authenticated, al căror corp numește un tabel / o vedere acoperită (sau au alt corp decât
+--     cel revizuit). Ce nu e în listă oprește migrarea; lista din catalog se poate scoate și fără migrare: scripts/executie_acces_catalog.sql.
+--   Detectorul e îngust intenționat (r3): din tabelele 'exclus' / 'comun' nu se coboară (altfel prin sites → employees → profiles se ajunge
+--   la toată baza: 378 de tabele și 220 de funcții pe clonă), iar la funcții caută doar numele tabelelor ACOPERITE și ale vederilor peste ele
+--   (nu profiles sau alte tabele comune). Cazurile din r1 (documente_proiect, pachetele, raportul zilnic, vederile) rămân prinse (P5–P12).
+--
+-- Ce face, pe scurt:
+--   1. Tabel nou executie_acces_proiect (profile_id, proiect_id, nivel, acordat_de, acordat_la), PK (profile_id, proiect_id). Scrierea DOAR
+--      prin fn_executie_acces_proiect_seteaza (owner, lista completă a unui cont, CAS pe lista văzută, lock pe cont). FK pe proiect = RESTRICT.
+--   2. Tabelele 'proiect' / 'copil': politici RESTRICTIVE (se adună cu AND peste ce există) + trigger de gardă pe ORICE cale de scriere
+--      (REST, RPC SECURITY DEFINER vechi, CASCADE, reparentare).
+--   3. Funcțiile de drept: fn_executie_nod_drept / contract / grafic / tinte + fn_raport_santier_drept (raportul zilnic, 20261208a):
+--      CREATE OR REPLACE cu aceeași semnătură / owner / ACL, amprenta veche verificată înainte (L15).
+--      Raportul zilnic: un cont restrâns nu citește și nu salvează raportul unui șantier al unui proiect din afara listei (RPC-urile
+--      fn_raport_zilnic_citeste / _salveaza trec prin fn_raport_santier_drept); antetul (rapoarte_zilnice, r4) și liniile (raport_lucrari,
+--      raport_distributie_linii) au gardă pe ORICE cale de scriere, cu nivelul de SCRIERE pe proiectul șantierului: un 'viewer' pe proiect
+--      citește raportul, dar nu-l salvează (nici doar antetul). Șantier fără proiect = ca înainte.
+--   4. Storage: politici RESTRICTIVE pe storage.objects, doar pentru bucket-urile 'cale' / 'tabel' / 'inbox' din inventar (proiectul
+--      obiectului din cale sau din tabelul care îl referă; Inboxul AI: nimic pentru contul restrâns, r13); alt bucket nu e atins.
+--   5. fn_executie_swap_tevi_pozitie (creată direct în BD, fără condiția de proiect): originalul, cu amprenta verificată, se mută NESCHIMBAT
+--      (corp, owner, drepturi) în schema internă executie_acces_intern (fără USAGE pentru clienți), iar în public rămâne, cu același nume și
+--      aceiași parametri, o poartă care verifică proiectul pachetului FIECĂREI țevi pentru contul restrâns și apoi cheamă originalul.
+--      Contul nerestrâns: exact ca azi (aceleași mesaje). Revenirea mută originalul înapoi.
+--   6. (r13) Inboxul AI: fn_ai_inbox_poate_confirma (creată direct în BD, amprenta verificată) primește la început „cont restrâns = fals”
+--      (CREATE OR REPLACE: același OID, owner, drepturi; politicile din 20261103c o cheamă în continuare); restul corpului, neschimbat.
+--      Revenirea redă corpul vechi, cu amprenta verificată.
+-- Ce NU face: nicio dată (niciun cont nu e restrâns după migrare: comportamentul rămâne exact cel de azi până când owner-ul bifează),
+--   niciun drept pe modul, nicio schimbare a corpurilor RPC-urilor vechi (în afara funcțiilor de drept de la 3 și a porții de la 5).
+-- Calea server fără JWT (cron, chat-ul prin psql, edge cu service_role): restricția e pe CONT; fără auth.uid() trigger-ul nu se amestecă
+--   (comportamentul de azi), iar service_role are BYPASSRLS ca și până acum.
+-- Ordinea lock-urilor (L06): RPC-ul de setare ia (1) lock consultativ pe cont, (2) FOR KEY SHARE NOWAIT pe rândul profilului, (3) rândurile
+--   contului din executie_acces_proiect (DELETE apoi INSERT … ON CONFLICT, ORDER BY proiect_id). Trigger-ele de gardă și funcțiile de regulă
+--   doar citesc (fără lock-uri de rând).
+-- DEPENDENȚĂ: se aplică DUPĂ 20261201a, 20261203a, 20261204a, 20261208a (verificat mai jos). Revenirile acelor migrări (sau preflight-urile
+--   20261202a / 20261207a / 20261211a, dacă nu sunt încă aplicate) verifică amprenta veche a lui fn_executie_nod_drept: întâi revenirea
+--   ACESTEIA. Fibra optică (20261211a) poate fi aplicată sau nu: dacă e, tabelele ei sunt 'drept' (fn_executie_fibra_drept delegă la
+--   fn_executie_nod_drept, deci primește condiția de proiect de aici), iar RPC-urile ei sunt verificate pe amprentă. (11.11.2026: 20261211a
+--   e aplicată pe producție, deci preflight-ul de aici îi verifică RPC-urile pe amprentă; revenirea ei nu verifică funcțiile de aici.)
+--   r4: cere și coada Inboxului AI (ai_documente_inbox cu RLS, 20261103c) și graficul intern (grafic_activitati cu RLS, 20261012a);
+--   revenirile acelora (dacă vreodată) vin DUPĂ revenirea acesteia (politicile RESTRICTIVE și trigger-ele de aici stau pe tabelele lor).
+-- Revenire: supabase/revenire/20261209a_executie_acces_proiect_ROLLBACK.sql. Test pe clonă: scripts/test_executie_acces_proiect.sql.
+DO $pre$
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres'
+     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261209a_executie_acces_proiect:' || txid_current() THEN
+    RAISE EXCEPTION '20261209a: garda start invalida';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.livrare_migrare=%') THEN
+    RAISE EXCEPTION '20261209a: armare persistenta refuzata';
+  END IF;
+  PERFORM set_config('lock_timeout', '5s', true);
+  PERFORM set_config('search_path', 'public, pg_temp', true);
+  -- reaplicare = refuz
+  IF to_regclass('public.executie_acces_proiect') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis'))
+     OR EXISTS (SELECT 1 FROM pg_policy WHERE polname LIKE 'executie\_acces\_%')
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_executie_acces_garda', 'a0_executie_acces_inbox'))
+     OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'executie_acces_intern') THEN
+    RAISE EXCEPTION '20261209a: obiectele exista deja (reaplicare)';
+  END IF;
+  -- dependențele de bază
+  IF (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.executie_proiecte'::regclass AND attname = 'id' AND NOT attisdropped) IS DISTINCT FROM 'bigint'
+     OR (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.profiles'::regclass AND attname = 'id' AND NOT attisdropped) IS DISTINCT FROM 'uuid'
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.profiles'::regclass AND contype IN ('p', 'u')
+                     AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.profiles'::regclass AND attname = 'id')]::int2[])
+     OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'is_owner' AND data_type = 'boolean')
+     OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_module_access'
+          AND column_name IN ('profile_id', 'module', 'access_level')) <> 3
+     OR to_regprocedure('auth.uid()') IS NULL
+     OR (SELECT prorettype FROM pg_proc WHERE oid = to_regprocedure('auth.uid()')) IS DISTINCT FROM 'uuid'::regtype::oid
+     OR to_regclass('storage.objects') IS NULL
+     OR (SELECT relrowsecurity FROM pg_class WHERE oid = 'storage.objects'::regclass) IS NOT TRUE THEN
+    RAISE EXCEPTION '20261209a: dependentele (executie_proiecte.id bigint, profiles.id uuid unic, profiles.is_owner, user_module_access, auth.uid, storage.objects cu RLS) difera';
+  END IF;
+END $pre$;
+
+-- ── 0. inventarul: O SINGURĂ listă (L19). Owner-ul migrării îl citește; clienții nu au EXECUTE. ──────────────────────────────────────────
+-- tip:    tabel | prefix_tabel | functie | bucket
+-- clasa:  tabel: proiect | proiect_optional | copil | inbox | drept | exclus | comun; prefix_tabel: exclus | comun;
+--         functie: drept | verifica | garda | delega | poarta | inbox | exclus; bucket: cale | tabel | inbox | drept | exclus
+-- cheie:  tabel proiect/proiect_optional/copil = coloana (inbox: fără, r13); tabel drept = funcția de drept; functie = md5(corp fără CR) revizuit
+-- parinte: copil = sl | bon | pachet | raport | cumulat | activitate | site
+-- r3: lista acoperă TOT catalogul clonei schemei de producție (10.11.2026): 378 de tabele (ce nu e aici pe nume intră pe un prefix),
+--   147 de vederi (toate security_invoker: niciuna nu oprește migrarea) și cele 34 de funcții care numesc un tabel acoperit sau o vedere
+--   (orice vedere, nu doar cele peste tabele acoperite: dependențele vederilor nu sunt în ieșirea clonei, deci lista e mai largă decât
+--   detectorul), plus fn_executie_fibra_drept (delegată; nu numește niciun tabel, deci detectorul n-o vede, dar o verificăm pe amprentă).
+CREATE FUNCTION public.fn_executie_acces_inventar()
+RETURNS TABLE (tip text, obiect text, clasa text, cheie text, parinte text, motiv text)
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
+  SELECT * FROM (VALUES
+  -- tabelele Execuției cu proiectul pe rând
+  ('tabel', 'executie_proiecte', 'proiect', 'id', NULL::text, 'proiectul însuși'),
+  ('tabel', 'executie_tronsoane', 'proiect', 'proiect_id', NULL, 'tronsoane'),
+  ('tabel', 'executie_documente_contract', 'proiect', 'proiect_id', NULL, 'documentele contractului'),
+  ('tabel', 'executie_acte_aditionale', 'proiect', 'proiect_id', NULL, 'acte adiționale'),
+  ('tabel', 'executie_ordine_sistare', 'proiect', 'proiect_id', NULL, 'ordine de sistare'),
+  ('tabel', 'executie_ordine_detectate', 'proiect', 'proiect_id', NULL, 'ordine detectate din corespondență'),
+  ('tabel', 'executie_completari_propuse', 'proiect', 'proiect_id', NULL, 'completări propuse'),
+  ('tabel', 'executie_faze_determinante', 'proiect', 'proiect_id', NULL, 'faze determinante'),
+  ('tabel', 'executie_probe_presiune', 'proiect', 'proiect_id', NULL, 'probe de presiune (vechi)'),
+  ('tabel', 'executie_situatii_plata', 'proiect', 'proiect_id', NULL, 'situații de plată'),
+  ('tabel', 'executie_bonuri_consum', 'proiect', 'proiect_id', NULL, 'bonuri de consum'),
+  ('tabel', 'executie_alocari_personal', 'proiect', 'proiect_id', NULL, 'alocări de personal'),
+  ('tabel', 'executie_ture', 'proiect', 'proiect_id', NULL, 'ture'),
+  ('tabel', 'executie_tura_subcontractori', 'proiect', 'proiect_id', NULL, 'ture subcontractori'),
+  ('tabel', 'executie_tura_activitati', 'proiect', 'proiect_id', NULL, 'ture activități'),
+  ('tabel', 'executie_tura_naveta', 'proiect', 'proiect_id', NULL, 'ture navetă'),
+  ('tabel', 'proiect_unitati', 'proiect', 'proiect_id', NULL, 'unitățile proiectului (obiecte / tronsoane din deviz)'),
+  ('tabel', 'proiect_activitati', 'proiect', 'proiect_id', NULL, 'activitățile proiectului'),
+  ('tabel', 'proiect_articole', 'proiect', 'proiect_id', NULL, 'articolele de deviz'),
+  ('tabel', 'executie_pachete_lansare', 'proiect', 'proiect_id', NULL, 'pachetele de izometrii (citire executie / ctc, scriere executie: 20261029a)'),
+  ('tabel', 'documente_proiect', 'proiect', 'proiect_id', NULL, 'corespondența proiectului (tab Documente)'),
+  ('tabel', 'documente_de_repartizat', 'proiect', 'repartizat_in_proiect_id', NULL,
+     'coada comună de repartizat: rândurile încă nerepartizate n-au proiect, deci un cont restrâns NU vede coada și NU repartizează / ignoră (decizie de confirmat de Răzvan; varianta: rândurile cu candidat pe proiectele lui)'),
+  ('tabel', 'raport_lucrari', 'proiect', 'proiect_id', NULL, 'liniile raportului zilnic (cantități pe activitate / obiect)'),
+  -- r3: tabelele Execuției create direct în BD (găsite în catalogul clonei)
+  ('tabel', 'executie_alerte_ai', 'proiect', 'proiect_id', NULL, 'alertele AI ale proiectului'),
+  ('tabel', 'executie_documente_referinta', 'proiect', 'proiect_id', NULL, 'documentele de referință ale proiectului'),
+  ('tabel', 'executie_pachete_cumulat_final', 'proiect', 'proiect_id', NULL, 'cumulatul final al pachetelor de izometrii'),
+  ('tabel', 'executie_pachete_sudura_sant', 'proiect', 'proiect_id', NULL, 'sudurile de șanț ale pachetelor'),
+  -- copiii fără proiect pe rând
+  ('tabel', 'executie_situatii_plata_linii', 'copil', 'sl_id', 'sl', 'liniile situațiilor de plată'),
+  ('tabel', 'executie_sl_ajustari', 'copil', 'sl_id', 'sl', 'ajustările situațiilor de plată'),
+  ('tabel', 'executie_bonuri_consum_linii', 'copil', 'bon_id', 'bon', 'liniile bonurilor de consum'),
+  ('tabel', 'executie_pachete_documente', 'copil', 'pachet_id', 'pachet', 'documentele pachetelor (centralizator, PDF aprobat)'),
+  ('tabel', 'executie_tevi', 'copil', 'pachet_id', 'pachet', 'țevile pachetelor de izometrii'),
+  ('tabel', 'raport_distributie_linii', 'copil', 'raport_id', 'raport', 'liniile „Raport lucrări executate” (distribuție gaze)'),
+  ('tabel', 'executie_pachete_cumulat_tevi', 'copil', 'cumulat_id', 'cumulat', 'țevile cumulatului final (r3)'),
+  ('tabel', 'executie_pachete_exports', 'copil', 'pachet_cumulat_id', 'cumulat', 'exporturile cumulatului final (r3)'),
+  ('tabel', 'proiect_activitate_coduri', 'copil', 'activitate_id', 'activitate', 'codurile de deviz ale activităților proiectului (r3)'),
+  -- r4: antetul raportului zilnic, pe șantier (proiectul = al șantierului; șantier fără proiect = ca azi). Garda de scriere oprește și
+  -- salvarea doar a antetului prin fn_raport_zilnic_salveaza pentru un 'viewer' pe proiect (review r3 P1)
+  ('tabel', 'rapoarte_zilnice', 'copil', 'site_id', 'site',
+     'antetul raportului zilnic (pe șantier): citire pe lista de citire, scriere (orice cale, inclusiv RPC-ul de salvare) pe lista de scriere'),
+  -- r4: graficul intern (Gantt): rândurile cu proiect urmează lista; cele doar cu licitație (proiect_id NULL) sunt ale Ofertării, neatinse
+  ('tabel', 'grafic_activitati', 'proiect_optional', 'proiect_id', NULL,
+     'graficul intern (Gantt): rândurile unui proiect urmează lista contului restrâns; rândurile fără proiect (licitații, Ofertare) rămân ca azi'),
+  -- r13: Inboxul AI: contul restrâns nu are niciun rând (orice modul, citire și scriere); conturile nerestrânse: politicile de azi
+  ('tabel', 'ai_documente_inbox', 'inbox', NULL, NULL,
+     'Inboxul AI: un cont restrâns nu vede, nu adaugă, nu modifică și nu șterge niciun rând (orice modul); conturile nerestrânse și owner-ul: neschimbat'),
+  -- tabelele noi cu funcția lor de drept (condiția de proiect intră în funcție)
+  ('tabel', 'executie_noduri_suduri', 'drept', 'fn_executie_nod_drept', NULL, '20261201a'),
+  ('tabel', 'executie_noduri_constructii', 'drept', 'fn_executie_nod_drept', NULL, '20261207a'),
+  ('tabel', 'executie_probe_tronsoane', 'drept', 'fn_executie_nod_drept', NULL, '20261202a'),
+  ('tabel', 'executie_probe_etape', 'drept', 'fn_executie_nod_drept', NULL, '20261202a'),
+  ('tabel', 'executie_probe_jurnal', 'drept', 'fn_executie_nod_drept', NULL, '20261202a'),
+  ('tabel', 'executie_contract_repere', 'drept', 'fn_executie_contract_drept', NULL, '20261203a'),
+  ('tabel', 'executie_contract_repere_chei', 'drept', 'fn_executie_contract_drept', NULL, '20261203a (cheile RPC-ului; fără drepturi pentru clienți)'),
+  ('tabel', 'executie_grafic_revizii', 'drept', 'fn_executie_grafic_drept', NULL, '20261204a'),
+  ('tabel', 'executie_grafic_activitati', 'drept', 'fn_executie_grafic_drept', NULL, '20261204a'),
+  ('tabel', 'executie_tinte_setari', 'drept', 'fn_executie_tinte_drept', NULL, '20261208a'),
+  ('tabel', 'executie_acces_proiect', 'drept', 'fn_executie_acces_e_owner', NULL, 'tabelul acestei migrări'),
+  ('tabel', 'executie_fibra_camerete', 'drept', 'fn_executie_fibra_drept', NULL, '20261211a (fibra optică; politicile ei cer fn_executie_fibra_drept)'),
+  ('tabel', 'executie_fibra_intervale', 'drept', 'fn_executie_fibra_drept', NULL, '20261211a (fibra optică)'),
+  ('tabel', 'executie_fibra_jurnal', 'drept', 'fn_executie_fibra_drept', NULL, '20261211a (fibra optică; jurnalul, doar citire)'),
+  -- excluse, cu motiv și risc (decizie pentru Răzvan)
+  ('tabel', 'sites', 'exclus', NULL, NULL,
+     'șantierele (pontaj): cheia rapoartelor zilnice; restricția pe proiect se aplică raportului prin fn_raport_santier_drept și liniilor, nu listei de șantiere (lista de șantiere rămâne cea de azi)'),
+  ('tabel', 'raport_zilnic_salvari', 'exclus', NULL, NULL, 'jurnalul salvărilor (20261208a): fără niciun drept pentru clienți'),
+  ('prefix_tabel', 'izo_', 'exclus', NULL, NULL,
+     'Izometrie: are atribuirea ei pe proiect (izo_atribuiri / fn_izo_acces), care decide în RPC-urile ei; scrierile în tabelele Execuției (pachete, țevi, tronsoane) trec totuși prin gardă'),
+  ('prefix_tabel', 'magazie_', 'exclus', NULL, NULL, 'Magazie: modul separat (gestiune), cu dreptul lui pe modul'),
+  ('prefix_tabel', 'stocuri_', 'exclus', NULL, NULL, 'Magazie (mișcări de stoc): modul separat'),
+  ('prefix_tabel', 'logistica_', 'exclus', NULL, NULL, 'Logistica: modul separat (utilaje, alocări, transporturi)'),
+  ('prefix_tabel', 'comenzi', 'exclus', NULL, NULL, 'Achiziții (comenzi / comenzi furnizor): modul separat, cu dreptul lui pe modul'),
+  ('prefix_tabel', 'comanda_', 'exclus', NULL, NULL, 'Achiziții: liniile comenzilor'),
+  ('prefix_tabel', 'upa_', 'exclus', NULL, NULL, 'Achiziții UPA'),
+  ('prefix_tabel', 'contracte_', 'exclus', NULL, NULL, 'Contracte cu terți (linii, acte adiționale, polițe, facturi de subcontract): modul separat (Financiar)'),
+  ('prefix_tabel', 'facturi_', 'exclus', NULL, NULL, 'Facturi: modul Financiar'),
+  ('prefix_tabel', 'garantii', 'exclus', NULL, NULL, 'Garanții / GBE: modul Financiar'),
+  ('prefix_tabel', 'gbe_', 'exclus', NULL, NULL, 'GBE: modul Financiar'),
+  ('prefix_tabel', 'polite', 'exclus', NULL, NULL, 'Polițe: modul separat'),
+  ('prefix_tabel', 'hr_', 'exclus', NULL, NULL, 'HR (decizii, autorizații): modul separat'),
+  ('prefix_tabel', 'ctc_', 'exclus', NULL, NULL, 'CTC: modul separat'),
+  ('prefix_tabel', 'probe_', 'exclus', NULL, NULL, 'modulul Probe: dreptul lui (probe_teren_drept)'),
+  ('prefix_tabel', 'red_', 'exclus', NULL, NULL, 'Redări: proiectele Redări au poarta lor (red_*)'),
+  ('prefix_tabel', 'sms_', 'exclus', NULL, NULL, 'SMS Redări'),
+  ('prefix_tabel', 'ofertare_', 'exclus', NULL, NULL, 'Ofertare: modul separat'),
+  ('prefix_tabel', 'nas_', 'exclus', NULL, NULL, 'Documente NAS (index de fișiere): modul separat'),
+  ('prefix_tabel', 'ocr_', 'exclus', NULL, NULL, 'OCR local: cale server, fără drepturi de citire pe proiect pentru utilizatori'),
+  ('prefix_tabel', 'meteo_', 'exclus', NULL, NULL, 'Meteo: pe șantier, fără date de proiect'),
+  ('prefix_tabel', 'sedinte', 'exclus', NULL, NULL, 'Ședințe: modul separat'),
+  ('prefix_tabel', 'ai_', 'exclus', NULL, NULL, 'AI (costuri, feedback): cale server / owner; coada Inboxului AI e clasificată separat (r4)'),
+  -- r3: restul catalogului clonei, alte module (cu dreptul lor pe modul; un cont restrâns în Execuție care are SEPARAT modulul vede acolo
+  -- toate proiectele — decizie pentru Răzvan, scrisă)
+  ('tabel', 'magazii', 'exclus', NULL, NULL, 'Magazie: gestiunile (magaziile) proiectelor, cu dreptul modulului Magazie'),
+  ('prefix_tabel', 'transferuri_', 'exclus', NULL, NULL, 'Magazie: transferurile între gestiuni'),
+  ('prefix_tabel', 'eip_', 'exclus', NULL, NULL, 'Magazie: echipamentele individuale de protecție'),
+  ('prefix_tabel', 'necesar_', 'exclus', NULL, NULL, 'Necesar de materiale / Achiziții'),
+  ('prefix_tabel', 'productie_', 'exclus', NULL, NULL, 'Producție'),
+  ('prefix_tabel', 'contab_', 'exclus', NULL, NULL, 'Contabilitate (importul expertului contabil, maparea șantierelor): Financiar'),
+  ('prefix_tabel', 'trezorerie_', 'exclus', NULL, NULL, 'Trezorerie (conturi, extrase): Financiar'),
+  ('prefix_tabel', 'grafic_', 'exclus', NULL, NULL,
+     'parametrii / versiunile graficului intern al licitațiilor (pe licitație, Ofertare); activitățile graficului sunt clasificate separat (r4)'),
+  ('tabel', 'proiecte_ofertare', 'exclus', NULL, NULL, 'Ofertare'),
+  ('tabel', 'oferta_materiale', 'exclus', NULL, NULL, 'Ofertare'),
+  ('prefix_tabel', 'pontaj_', 'exclus', NULL, NULL, 'Pontaj (pe angajat și șantier)'),
+  ('prefix_tabel', 'salarii_', 'exclus', NULL, NULL, 'Salarii'),
+  ('tabel', 'employee_salaries', 'exclus', NULL, NULL, 'Salarii (pe angajat)'),
+  ('tabel', 'diurna_payment_details', 'exclus', NULL, NULL, 'HR / diurne (pe angajat)'),
+  ('tabel', 'ordine_deplasare_arhiva', 'exclus', NULL, NULL, 'HR / ordine de deplasare (pe angajat)'),
+  ('tabel', 'organigrama_propuneri', 'exclus', NULL, NULL, 'HR / organigramă'),
+  ('tabel', 'supliment_hrana_istoric', 'exclus', NULL, NULL, 'HR / supliment de hrană (pe angajat)'),
+  ('tabel', 'olx_mesaje_procesate', 'exclus', NULL, NULL, 'HR / recrutare'),
+  ('tabel', 'evogps_alias', 'exclus', NULL, NULL, 'Logistica / GPS (pe utilaj)'),
+  ('tabel', 'registru_imobilizari', 'exclus', NULL, NULL, 'Logistica / imobilizări (pe utilaj)'),
+  ('prefix_tabel', 'service_import_', 'exclus', NULL, NULL, 'Logistica / service (pe utilaj)'),
+  ('tabel', 'talon_extract_staging', 'exclus', NULL, NULL, 'Logistica / talon (pe utilaj)'),
+  ('tabel', 'whatsapp_messages_processed', 'exclus', NULL, NULL, 'Logistica / alimentări (pe utilaj)'),
+  ('tabel', 'avize_cjp', 'exclus', NULL, NULL, 'Logistica / depozite (avize)'),
+  ('prefix_tabel', 'iot_', 'exclus', NULL, NULL, 'IoT pe șantier (dispozitive, lumini)'),
+  ('prefix_tabel', 'locatii_', 'exclus', NULL, NULL, 'Cazări închiriate (Administrativ)'),
+  ('prefix_tabel', 'marketing_', 'exclus', NULL, NULL, 'Marketing'),
+  ('prefix_tabel', 'tichete', 'exclus', NULL, NULL, 'Tichete (raportări interne)'),
+  ('tabel', 'intrebari_tehnice', 'exclus', NULL, NULL, 'Întrebări tehnice'),
+  -- r3: dimensiuni comune — NU ajung la date de proiect (verificat în preflight: fără proiect_id, fără FK spre proiecte / tabele acoperite)
+  ('tabel', 'employees', 'comun', NULL, NULL, 'angajații: legați de un șantier, nu de datele unui proiect'),
+  ('tabel', 'profiles', 'comun', NULL, NULL, 'conturile'),
+  ('tabel', 'profile_sites', 'comun', NULL, NULL, 'alocarea conturilor pe șantiere (raportul zilnic o folosește ca drept, nu e dată de proiect)'),
+  ('tabel', 'user_module_access', 'comun', NULL, NULL, 'drepturile pe module'),
+  ('tabel', 'notifications', 'comun', NULL, NULL, 'notificările unui cont'),
+  ('tabel', 'setari_recycle_bin', 'comun', NULL, NULL, 'setări'),
+  ('tabel', 'rag_ingest_queue', 'comun', NULL, NULL, 'coada de indexare a documentelor'),
+  ('prefix_tabel', 'claude_', 'comun', NULL, NULL, 'infrastructura asistentului (context, silențieri)'),
+  -- funcțiile SECURITY DEFINER care ating tabelele de mai sus (amprenta corpului revizuit)
+  ('functie', 'fn_executie_nod_drept', 'drept', '144649bae9a218b41b7e6df90cba5d9e', NULL, '20261201a; înlocuită aici'),
+  ('functie', 'fn_executie_contract_drept', 'drept', '85a131c3aa59813b1a8cb8535c53e703', NULL, '20261203a; înlocuită aici'),
+  ('functie', 'fn_executie_grafic_drept', 'drept', '1dbaedfd117f7234a6e30fdaf856ac7b', NULL, '20261204a; înlocuită aici'),
+  ('functie', 'fn_executie_tinte_drept', 'drept', 'bda0b6c3e01a5a039732b2713df8ebab', NULL, '20261208a; înlocuită aici'),
+  ('functie', 'fn_raport_santier_drept', 'drept', '2c8833d76db7145ab0bd2fc5103e55e9', NULL, '20261208a (raportul zilnic); înlocuită aici'),
+  ('functie', 'fn_executie_nod_sudura_stare', 'verifica', 'e915c6d52f3d00635eec4a2cc38ae392', NULL, 'fn_executie_nod_drept pe proiectul sudurii'),
+  ('functie', 'fn_executie_nod_obiect_citire', 'verifica', '9cb603a372aff84fb64dbd6861de1929', NULL, 'fn_executie_nod_drept pe proiectul din cale'),
+  ('functie', 'fn_executie_constr_etapa', 'verifica', '65e10dce50bfe8c8a46d8075aef96648', NULL, 'fn_executie_nod_drept pe proiectul rândului'),
+  ('functie', 'fn_executie_proba_salveaza', 'verifica', '19dfba358fabf4e5eb545f0c5a327cde', NULL, 'fn_executie_nod_drept pe proiect'),
+  ('functie', 'fn_executie_proba_anuleaza', 'verifica', '8aab99218411beb5e60d90826889b821', NULL, 'fn_executie_nod_drept pe proiectul rândului'),
+  ('functie', 'fn_executie_proba_etapa', 'verifica', '32bb3199a080744439c3de3bd2d54d61', NULL, 'fn_executie_nod_drept pe proiectul etapei'),
+  ('functie', 'fn_executie_contract_salveaza', 'verifica', '5eef3d74ee3dee18954da889fad7cd28', NULL, 'fn_executie_contract_drept pe proiect'),
+  ('functie', 'fn_executie_tinte_nod', 'verifica', '5747275c7d136b9ecc41027e5a7612f6', NULL, 'fn_executie_tinte_drept pe proiect'),
+  ('functie', 'fn_executie_tinte_calcul', 'verifica', 'e66e41c404bf7711763f1f2b1513d0d6', NULL, 'fn_executie_tinte_drept pe fiecare proiect (v_executie_tinte)'),
+  ('functie', 'fn_raport_zilnic_citeste', 'verifica', '6083e8f7379c781a1151d73a46631c5c', NULL, 'fn_raport_santier_drept pe șantier'),
+  ('functie', 'fn_raport_zilnic_salveaza', 'verifica', 'c9c6b6b3d27f14fe29712196b7f23e2c', NULL, 'fn_raport_santier_drept pe șantier; liniile trec și prin gardă'),
+  ('functie', 'fn_bon_salveaza', 'garda', 'd3373fddfbe539bb6c9fefc8c72212b2', NULL, 'scrie bonul și liniile (gardă); întoarce doar id / versiune'),
+  ('functie', 'fn_bon_preia', 'garda', 'f63b5b3b8d66da5e228104ecf982a2ae', NULL, 'scrie bonul și liniile (gardă); întoarce doar id / versiune'),
+  ('functie', 'fn_doc_repartizeaza', 'garda', '6fab78a4a83a71a8fb6b1f34e57c3b92', NULL, 'scrie documente_proiect + coada (gardă pe ambele)'),
+  ('functie', 'fn_doc_ignora', 'garda', '61e4c8f8e8a858509500b5f2a6f7d70b', NULL, 'scrie coada (gardă)'),
+  ('functie', 'fn_doc_muta_in_coada', 'garda', 'ac04bbd85d144983b5491117c5fab4b9', NULL, 'doar owner'),
+  ('functie', 'fn_completare_aplica', 'garda', 'dc82ba4fea0071de3417f60a5c26e6cb', NULL, 'scrie completarea + proiectul (gardă)'),
+  ('functie', '_completare_scrie_camp', 'garda', 'cc54cb28a6ee513323e22df607c51724', NULL, 'scrie proiectul (gardă)'),
+  ('functie', '_completare_goleste_camp', 'garda', '62a817c812d0c932aa1d629aba13b541', NULL, 'scrie proiectul (gardă)'),
+  -- r3: fibra optică (20261211a, creată pe clonă; identică cu branch-ul ei): RPC-urile cheamă fn_executie_fibra_drept pe proiectul
+  -- tronsonului / rândului înaintea oricărei citiri întoarse; fn_executie_fibra_drept doar delegă la fn_executie_nod_drept (înlocuită aici)
+  ('functie', 'fn_executie_fibra_drept', 'delega', '0fa635d3638845faa6b1f940328fb138', NULL, '20261211a: = fn_executie_nod_drept(proiect, scriere)'),
+  ('functie', 'fn_executie_fibra_raporteaza', 'verifica', '580771adb9b680ede692684c9d6dcc32', NULL, 'fn_executie_fibra_drept pe proiectul tronsonului'),
+  ('functie', 'fn_executie_fibra_anuleaza', 'verifica', '7393cca2ea848d5a5ff8ccdc1b7d2b9c', NULL, 'fn_executie_fibra_drept pe proiectul rândului (blocat)'),
+  ('functie', 'fn_executie_fibra_camereta_adauga', 'verifica', '80ad984b472e96ab8c9b914640615dbf', NULL, 'fn_executie_fibra_drept pe proiectul tronsonului'),
+  ('functie', 'fn_executie_fibra_camereta_stare', 'verifica', '2eed50fc739c8a6fd09efd8a94db134a', NULL, 'fn_executie_fibra_drept pe proiectul cameretei (blocată), înaintea răspunsului „conflict”'),
+  -- r3: creată direct în BD, fără condiția de proiect: poarta se pune aici (pasul 6b)
+  ('functie', 'fn_executie_swap_tevi_pozitie', 'poarta', '551affa41371b0ff3367b0ddebe9b603', NULL,
+     'schimbă pozițiile a două țevi din același pachet; scrierea trecea deja prin gardă, poarta oprește și citirile / mesajele despre țevile altor proiecte'),
+  -- r3: alte module, cu corpul revizuit (ce citesc / întorc și cu ce drept)
+  ('functie', 'fn_ai_inbox_poate_confirma', 'inbox', '1fcdef410eebff3c7ccdbb87acf8e08b', NULL,
+     'Inbox AI: predicatul (adevărat / fals) cerut de politicile cozii și ale fișierelor (20261103c); r13: fals pentru contul restrâns (pasul 6c), restul neschimbat'),
+  ('functie', 'fn_next_numar_comanda_furnizor', 'exclus', 'b3161bc54a9f57c42b2b75b1c6896b44', NULL, 'Achiziții: numărul comenzii (citește doar codul proiectului)'),
+  ('functie', 'fn_hr_decizie_ataseaza_scan', 'exclus', 'ce4a148541e12f97bc800cff7e9c7077', NULL,
+     'HR (fn_hr_decizii_poate): completările propuse pe proiect le scrie prin gardă; întoarce starea deciziei'),
+  ('functie', 'fn_hr_decizie_inlocuieste_scan', 'exclus', '30b3655428515632a16e8cebe759bbb4', NULL, 'HR, doar owner'),
+  ('functie', 'fn_izo_flux_pdf_blocat', 'exclus', '222e14159a498d399bc0757b06743425', NULL, 'Izometrie: predicat pentru Storage (adevărat / fals)'),
+  ('functie', 'fn_izo_iesire_cu_aviz', 'exclus', '559542328c6b41803cb7b6499ac50ce2', NULL, 'Izometrie: fn_izo_citire pe proiectul tronsonului'),
+  ('functie', 'fn_izo_proiecte_protejate', 'exclus', 'ac8c3df60135585879bc3e8d5ded67a8', NULL, 'Izometrie: lista proiectelor cu Izometrie pornită (id, șantier, nivel), fără alte date'),
+  ('functie', 'fn_probe_creeaza_teren', 'exclus', 'a1989193d5136e7751106d63dead7aa1', NULL, 'Probe: probe_teren_drept; citește doar tronsoanele proiectului ales'),
+  ('functie', 'fn_red_pv_c_creeaza', 'exclus', 'a4ddfd572dc9c22e4889fd6309d9a3ba', NULL, 'Redări (red_v_tronson)'),
+  ('functie', 'fn_red_pv_c_neacoperite', 'exclus', 'ad42b1c7c1e4be49a2ea99a5eca9e3dd', NULL, 'Redări (red_v_tronson)'),
+  ('functie', 'fn_ofertare_source_pack_import', 'exclus', 'be897d73e8fb826b4e7a85a518b9b908', NULL, 'Ofertare (v_ofertare_source_pack_decizie_curenta)'),
+  ('functie', 'fn_ai_cost_lunar', 'exclus', '762830388fc554a9a81c679555a02572', NULL, 'raportul Cost AI (v_ai_cost_lunar): doar owner'),
+  -- Storage
+  ('bucket', 'executie-contracte', 'cale', NULL, NULL, '<proiect>/…, ordin-incepere|pccvi|probe-presiune/<proiect>/…; altă formă (ex. _nou/) = refuz pentru contul restrâns'),
+  ('bucket', 'executie-borderouri', 'cale', NULL, NULL, 'sl_<proiect>/…'),
+  ('bucket', 'executie-pachete-pdf', 'cale', NULL, NULL, '<pachet>/… (proiectul pachetului) sau <proiect>/<pachet>/aprobare/… (pachetul trebuie să fie al proiectului)'),
+  ('bucket', 'documente-proiect', 'tabel', NULL, NULL, 'proiectele rândurilor din documente_proiect cu acest storage_path; fără rând (ex. coada _de_repartizat/) = refuz pentru contul restrâns'),
+  ('bucket', 'ai-documente-inbox', 'inbox', NULL, NULL,
+     'fișierele Inboxului AI: r13, contul restrâns nu citește, nu urcă, nu modifică și nu șterge niciun obiect (nici în folderul propriu); conturile nerestrânse: politicile de azi'),
+  ('bucket', 'noduri-scheme', 'drept', NULL, NULL, 'fn_executie_nod_obiect_citire (20261201a)'),
+  ('bucket', 'comenzi-furnizor', 'exclus', NULL, NULL, 'Achiziții'),
+  ('bucket', 'probe-citiri', 'exclus', NULL, NULL, 'modulul Probe'),
+  ('bucket', 'izo-documente', 'exclus', NULL, NULL, 'Izometrie'),
+  ('bucket', 'izo-avize', 'exclus', NULL, NULL, 'Izometrie'),
+  ('bucket', 'hr-semnaturi', 'exclus', NULL, NULL, 'HR'),
+  ('bucket', 'hr-decizii', 'exclus', NULL, NULL, 'HR'),
+  ('bucket', 'redari', 'exclus', NULL, NULL, 'Redări'),
+  ('bucket', 'ctc-documente', 'exclus', NULL, NULL, 'CTC')
+  ) v(tip, obiect, clasa, cheie, parinte, motiv)
+$f$;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_inventar() FROM PUBLIC, anon, authenticated, service_role;
+
+-- ── preflight pe inventar + CATALOG ───────────────────────────────────────────────────────────────────────────────────────────────
+DO $pre2$
+DECLARE r record; v_tip text; v_lista text; v_regex text;
+BEGIN
+  -- inventarul însuși: fără dubluri, clase și părinți din lista albă
+  IF EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() GROUP BY tip, obiect HAVING count(*) > 1)
+     OR EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i
+                 WHERE NOT ((i.tip = 'tabel' AND i.clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox', 'drept', 'exclus', 'comun'))
+                         OR (i.tip = 'prefix_tabel' AND i.clasa IN ('exclus', 'comun'))
+                         OR (i.tip = 'functie' AND i.clasa IN ('drept', 'verifica', 'garda', 'delega', 'poarta', 'inbox', 'exclus') AND i.cheie ~ '^[0-9a-f]{32}$')
+                         OR (i.tip = 'bucket' AND i.clasa IN ('cale', 'tabel', 'inbox', 'drept', 'exclus')))
+                    OR (i.clasa = 'copil') IS DISTINCT FROM (i.parinte IS NOT NULL)
+                    OR (i.clasa = 'copil' AND i.parinte NOT IN ('sl', 'bon', 'pachet', 'raport', 'cumulat', 'activitate', 'site'))
+                    OR (i.tip = 'tabel' AND i.clasa IN ('proiect', 'proiect_optional', 'copil') AND i.cheie IS NULL)
+                    -- inbox (r13): exact coada Inboxului AI (fără cheie: regula nu citește rândul), bucket-ul ei și predicatul ei, cu amprenta
+                    -- revizuită (pasul 6c îl înlocuiește; politicile și gărzile din pașii 2 / 5 sunt scrise pentru ele)
+                    OR (i.clasa = 'inbox' AND (i.tip, i.obiect, coalesce(i.cheie, '-')) NOT IN (('tabel', 'ai_documente_inbox', '-'), ('bucket', 'ai-documente-inbox', '-'),
+                                                                                             ('functie', 'fn_ai_inbox_poate_confirma', '1fcdef410eebff3c7ccdbb87acf8e08b')))
+                    OR (SELECT count(*) FROM public.fn_executie_acces_inventar() j WHERE j.clasa = 'inbox') <> 3
+                    OR (i.tip = 'tabel' AND i.clasa = 'drept' AND i.cheie !~ '^fn_[a-z_]+$')
+                    -- poarta e cod scris pentru fiecare funcție în parte (pasul 6b): doar cele de acolo
+                    OR (i.clasa = 'poarta' AND i.obiect NOT IN ('fn_executie_swap_tevi_pozitie'))
+                    OR i.motiv IS NULL OR i.motiv !~ '[^[:space:]]') THEN
+    RAISE EXCEPTION '20261209a: inventarul are dubluri sau clase invalide';
+  END IF;
+  -- prefixele nu se suprapun (clasa unui tabel nu depinde de ordinea lor)
+  IF EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() a JOIN public.fn_executie_acces_inventar() b
+              ON a.tip = 'prefix_tabel' AND b.tip = 'prefix_tabel' AND a.obiect <> b.obiect AND starts_with(b.obiect, a.obiect)) THEN
+    RAISE EXCEPTION '20261209a: prefixe de tabel suprapuse in inventar';
+  END IF;
+  -- tabelele acoperite: există, tabel obișnuit, cheia întreagă, RLS PORNIT (o politică RESTRICTIVE pe un tabel fără RLS nu face nimic, L07)
+  FOR r IN SELECT * FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox') ORDER BY obiect LOOP
+    IF to_regclass('public.' || r.obiect) IS NULL
+       OR (SELECT relkind FROM pg_class WHERE oid = to_regclass('public.' || r.obiect)) IS DISTINCT FROM 'r' THEN
+      RAISE EXCEPTION '20261209a: tabelul % lipseste sau nu e tabel obisnuit', r.obiect;
+    END IF;
+    -- r13: coada Inboxului nu are cheie (regula ei nu citește nicio coloană a rândului)
+    IF r.clasa <> 'inbox' THEN
+      SELECT format_type(atttypid, atttypmod) INTO v_tip FROM pg_attribute
+       WHERE attrelid = to_regclass('public.' || r.obiect) AND attname = r.cheie AND attnum > 0 AND NOT attisdropped;
+      IF v_tip IS NULL OR v_tip NOT IN ('bigint', 'integer') THEN
+        RAISE EXCEPTION '20261209a: %.% lipseste sau nu e intreg (%)', r.obiect, r.cheie, coalesce(v_tip, 'lipsa');
+      END IF;
+    END IF;
+    IF (SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public.' || r.obiect)) IS NOT TRUE THEN
+      RAISE EXCEPTION '20261209a: % nu are RLS pornit (restrictia ar fi falsa)', r.obiect;
+    END IF;
+  END LOOP;
+  -- părinții copiilor (id + legătura spre proiect, întregi)
+  FOR r IN SELECT * FROM (VALUES ('executie_situatii_plata', 'id'), ('executie_situatii_plata', 'proiect_id'),
+                                 ('executie_bonuri_consum', 'id'), ('executie_bonuri_consum', 'proiect_id'),
+                                 ('executie_pachete_lansare', 'id'), ('executie_pachete_lansare', 'proiect_id'),
+                                 ('rapoarte_zilnice', 'id'), ('rapoarte_zilnice', 'site_id'), ('sites', 'id'), ('sites', 'proiect_id'),
+                                 ('executie_pachete_cumulat_final', 'id'), ('executie_pachete_cumulat_final', 'proiect_id'),
+                                 ('proiect_activitati', 'id'), ('proiect_activitati', 'proiect_id'),
+                                 ('executie_tevi', 'id'), ('executie_tevi', 'pachet_id'),
+                                 ('documente_proiect', 'storage_path')) x(t, c) LOOP
+    -- (r13: coada Inboxului AI nu mai e căutată de niciun predicat)
+    SELECT format_type(atttypid, atttypmod) INTO v_tip FROM pg_attribute
+     WHERE attrelid = to_regclass('public.' || r.t) AND attname = r.c AND attnum > 0 AND NOT attisdropped;
+    IF v_tip IS NULL OR v_tip NOT IN (CASE WHEN r.c = 'storage_path' THEN 'text' ELSE 'bigint' END,
+                                      CASE WHEN r.c = 'storage_path' THEN 'text' ELSE 'integer' END) THEN
+      RAISE EXCEPTION '20261209a: %.% lipseste sau are alt tip (%)', r.t, r.c, coalesce(v_tip, 'lipsa');
+    END IF;
+  END LOOP;
+  -- L15: funcțiile de drept, exact cum le-au lăsat migrările lor (corp fără CR, DEFINER, search_path, owner, EXECUTE)
+  IF EXISTS (SELECT 1 FROM (VALUES
+               ('public.fn_executie_nod_drept(bigint, boolean)', 'fn_executie_nod_drept', true, true),
+               ('public.fn_executie_contract_drept(bigint, boolean)', 'fn_executie_contract_drept', true, true),
+               ('public.fn_executie_grafic_drept(bigint)', 'fn_executie_grafic_drept', true, true),
+               ('public.fn_executie_tinte_drept(bigint, text)', 'fn_executie_tinte_drept', false, true),
+               ('public.fn_raport_santier_drept(bigint)', 'fn_raport_santier_drept', false, false)) a(semnatura, nume, cu_service, cu_auth)
+              JOIN public.fn_executie_acces_inventar() i ON i.tip = 'functie' AND i.obiect = a.nume AND i.clasa = 'drept'
+              LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
+              WHERE p.oid IS NULL
+                 OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM i.cheie
+                 OR p.prolang IS DISTINCT FROM (SELECT oid FROM pg_language WHERE lanname = 'sql')
+                 OR p.prosecdef IS NOT TRUE
+                 OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+                 OR p.prorettype IS DISTINCT FROM 'boolean'::regtype::oid
+                 OR p.provolatile IS DISTINCT FROM 's'
+                 OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
+                 OR has_function_privilege('anon', p.oid, 'EXECUTE')
+                 OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_auth
+                 OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_service)
+     OR (SELECT count(*) FROM public.fn_executie_acces_inventar() WHERE tip = 'functie' AND clasa = 'drept') <> 5 THEN
+    RAISE EXCEPTION '20261209a: functiile de drept (20261201a / 20261203a / 20261204a / 20261208a) lipsesc sau difera de amprenta revizuita: aplica-le intai / verifica';
+  END IF;
+  -- funcțiile de drept DELEGATE (migrarea lor poate să nu fie aplicată): dacă există, exact corpul revizuit, DEFINER, search_path fix,
+  -- owner-ul migrării (altfel condiția de proiect n-ar ajunge la tabelele lor)
+  SELECT string_agg(p.oid::regprocedure::text, ', ') INTO v_lista
+    FROM public.fn_executie_acces_inventar() i JOIN pg_proc p ON p.proname = i.obiect AND p.pronamespace = 'public'::regnamespace
+   WHERE i.tip = 'functie' AND i.clasa = 'delega'
+     AND (md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM i.cheie OR p.prosecdef IS NOT TRUE
+          OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
+          OR p.prorettype IS DISTINCT FROM 'boolean'::regtype::oid);
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: functii de drept delegate cu alt corp / alte proprietati decat cele revizuite: %', v_lista;
+  END IF;
+  -- un tabel 'drept' care există cere funcția lui de drept (înlocuită aici sau delegată, din inventar); executie_acces_proiect (al acestei
+  -- migrări) nu există încă aici
+  SELECT string_agg(i.obiect, ', ' ORDER BY i.obiect) INTO v_lista
+    FROM public.fn_executie_acces_inventar() i
+   WHERE i.tip = 'tabel' AND i.clasa = 'drept' AND to_regclass('public.' || i.obiect) IS NOT NULL
+     AND (NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.proname = i.cheie AND p.pronamespace = 'public'::regnamespace)
+          OR NOT EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() f
+                          WHERE f.tip = 'functie' AND f.obiect = i.cheie AND f.clasa IN ('drept', 'delega')));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: tabele cu functie de drept lipsa sau necunoscuta: %', v_lista;
+  END IF;
+  -- poarta (pasul 6b): originalul, exact cel revizuit (L15), apelabil azi de authenticated
+  IF NOT EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i JOIN pg_proc p ON p.oid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                  WHERE i.tip = 'functie' AND i.obiect = 'fn_executie_swap_tevi_pozitie' AND i.clasa = 'poarta'
+                    AND md5(replace(p.prosrc, chr(13), '')) = i.cheie
+                    AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql')
+                    AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
+                    AND p.prorettype = 'void'::regtype::oid AND pg_get_userbyid(p.proowner) = current_user
+                    AND has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_executie_swap_tevi_pozitie') <> 1 THEN
+    RAISE EXCEPTION '20261209a: fn_executie_swap_tevi_pozitie lipseste, are alt corp decat cel revizuit sau alte proprietati (nu se inlocuieste)';
+  END IF;
+  -- r8 (review SQL P2-01): mutarea păstrează OID-ul originalului, deci tot ce l-ar ține DUPĂ OID (trigger, politică, vedere, valoare
+  -- implicită, CHECK, funcție cu corp SQL standard, trigger de eveniment — toate lasă un rând în pg_depend) ar chema după migrare
+  -- ORIGINALUL din schema internă, ocolind poarta. Refuz dacă există vreunul.
+  SELECT string_agg(pg_describe_object(d.classid, d.objid, d.objsubid), ', ' ORDER BY d.classid, d.objid) INTO v_lista
+    FROM pg_depend d
+   WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)');
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: obiecte legate de fn_executie_swap_tevi_pozitie dupa OID (ar ocoli poarta): %', v_lista;
+  END IF;
+  -- … și niciun alt corp de funcție nu o numește. Un nume (calificat `public.` sau prin search_path) se rezolvă la execuție spre poarta din
+  -- public, deci NU o ocolește; refuzul ține totuși inventarul exact (L15): un apelant necunoscut se analizează înainte (cine îl poate porni,
+  -- cu ce drept), nu după. Pe clona din 10.11.2026: niciunul.
+  SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid) INTO v_lista
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE p.oid NOT IN (to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)'),
+                       to_regprocedure('public.fn_executie_acces_inventar()'))   -- inventarul acestei migrări (doar textul clasificării)
+     AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast_)?temp_'
+     AND p.prosrc ~* '\mfn_executie_swap_tevi_pozitie\M';
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: functii care numesc fn_executie_swap_tevi_pozitie (de analizat inaintea portii): %', v_lista;
+  END IF;
+  -- r9: predicatele publice INVOKER (fn_executie_acces_parinte_permis, fn_executie_acces_obiect_permis) caută rândurile cu drepturile
+  -- apelantului: authenticated trebuie să poată citi coloanele căutate (altfel politicile ar da 42501 în loc de rânduri). RLS-ul lor rămâne
+  -- cel de azi; un tabel fără RLS e citibil oricum de authenticated, deci predicatul tot nu spune mai mult decât un SELECT direct.
+  SELECT string_agg(x.t || '.' || x.c, ', ' ORDER BY x.t, x.c) INTO v_lista
+    FROM (VALUES ('sites', 'id'), ('sites', 'proiect_id'), ('rapoarte_zilnice', 'id'), ('rapoarte_zilnice', 'site_id'),
+                 ('executie_situatii_plata', 'id'), ('executie_situatii_plata', 'proiect_id'), ('executie_bonuri_consum', 'id'),
+                 ('executie_bonuri_consum', 'proiect_id'), ('executie_pachete_lansare', 'id'), ('executie_pachete_lansare', 'proiect_id'),
+                 ('executie_pachete_cumulat_final', 'id'), ('executie_pachete_cumulat_final', 'proiect_id'), ('proiect_activitati', 'id'),
+                 ('proiect_activitati', 'proiect_id'), ('documente_proiect', 'storage_path'), ('documente_proiect', 'proiect_id')) x(t, c)
+   WHERE to_regclass('public.' || x.t) IS NULL
+      OR NOT has_column_privilege('authenticated', to_regclass('public.' || x.t), x.c, 'SELECT');
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: authenticated nu poate citi coloanele cautate de predicatele INVOKER: %', v_lista;
+  END IF;
+  -- r13 (pasul 6c): predicatul Inboxului, exact cum e azi (L15): corpul revizuit (amprenta din inventar), plpgsql, DEFINER, search_path
+  -- fix, boolean, STABLE, owner-ul migrării (îl înlocuiește păstrând OID-ul, ca politicile din 20261103c să-l cheme în continuare; cheamă
+  -- fn_executie_acces_nerestrans_cont ca proprietar), EXECUTE pentru authenticated (politicile), nu pentru anon; o singură semnătură.
+  IF NOT EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i JOIN pg_proc p ON p.oid = to_regprocedure('public.fn_ai_inbox_poate_confirma(text, bigint)')
+                  WHERE i.tip = 'functie' AND i.obiect = 'fn_ai_inbox_poate_confirma' AND i.clasa = 'inbox'
+                    AND md5(replace(p.prosrc, chr(13), '')) = i.cheie
+                    AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql')
+                    AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND p.provolatile = 's'
+                    AND p.prorettype = 'boolean'::regtype::oid AND pg_get_userbyid(p.proowner) = current_user
+                    AND p.proargnames = ARRAY['p_modul', 'p_entitate_id']::text[]
+                    AND has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE'))
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_ai_inbox_poate_confirma') <> 1 THEN
+    RAISE EXCEPTION '20261209a: fn_ai_inbox_poate_confirma lipseste, are alt corp decat cel revizuit sau alte proprietati (nu se inlocuieste)';
+  END IF;
+  -- r9: recursivitatea politicilor. Politica tabelului care cheamă predicatul (copilul / storage.objects) face o căutare în tabelul
+  -- părinte; dacă o politică a PĂRINTELUI ar citi chiar tabelul care îl cheamă, evaluarea ar intra în buclă. Refuz dacă vreo politică a
+  -- unui tabel căutat depinde (pg_depend, nu text) de tabelul care îl caută. 'raport': antetul și, prin el, șantierul (două niveluri).
+  SELECT string_agg(DISTINCT pol.polrelid::regclass::text || '.' || pol.polname || ' -> ' || d.refobjid::regclass::text, ', ') INTO v_lista
+    FROM (SELECT i.obiect AS cheama, CASE i.parinte WHEN 'sl' THEN 'executie_situatii_plata' WHEN 'bon' THEN 'executie_bonuri_consum'
+                   WHEN 'pachet' THEN 'executie_pachete_lansare' WHEN 'cumulat' THEN 'executie_pachete_cumulat_final'
+                   WHEN 'activitate' THEN 'proiect_activitati' WHEN 'site' THEN 'sites' WHEN 'raport' THEN 'rapoarte_zilnice' END AS cautat
+            FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'tabel' AND i.clasa = 'copil'
+          UNION ALL
+          SELECT i.obiect, 'sites' FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'tabel' AND i.clasa = 'copil' AND i.parinte = 'raport'
+          UNION ALL
+          SELECT 'rapoarte_zilnice', 'sites'
+          UNION ALL
+          SELECT 'storage.objects', x FROM unnest(ARRAY['executie_pachete_lansare', 'documente_proiect']) x) q
+    JOIN pg_policy pol ON pol.polrelid = to_regclass('public.' || q.cautat)
+    JOIN pg_depend d ON d.classid = 'pg_policy'::regclass AND d.objid = pol.oid AND d.refclassid = 'pg_class'::regclass
+                    AND d.refobjid = CASE WHEN q.cheama = 'storage.objects' THEN 'storage.objects'::regclass ELSE to_regclass('public.' || q.cheama) END;
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: politici ale tabelelor cautate de predicate care citesc tabelul care le cauta (bucla): %', v_lista;
+  END IF;
+  -- r8: predicatul Storage public (fn_executie_acces_obiect_permis, pasul 2) numește bucket-urile acoperite: exact cele din inventar
+  IF (SELECT array_agg(i.obiect ORDER BY i.obiect) FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'bucket' AND i.clasa IN ('cale', 'tabel'))
+       IS DISTINCT FROM ARRAY['documente-proiect', 'executie-borderouri', 'executie-contracte', 'executie-pachete-pdf']
+     OR (SELECT array_agg(i.obiect ORDER BY i.obiect) FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'bucket' AND i.clasa = 'inbox')
+       IS DISTINCT FROM ARRAY['ai-documente-inbox'] THEN
+    RAISE EXCEPTION '20261209a: bucket-urile acoperite din inventar difera de cele numite in fn_executie_acces_obiect_permis';
+  END IF;
+
+  -- CATALOG 1: tabelele care ajung la un proiect (FK tranzitiv din executie_proiecte + coloane întregi proiect_id). Din cele 'exclus' /
+  -- 'comun' nu se mai coboară (modulul lor își are dreptul / nu sunt date de proiect). Orice tabel găsit și neclasificat = refuz, cu lista.
+  CREATE TEMP TABLE executie_acces_pre_tabele ON COMMIT DROP AS
+  WITH RECURSIVE inv AS (SELECT * FROM public.fn_executie_acces_inventar()),
+  noduri(rel) AS (
+    SELECT 'public.executie_proiecte'::regclass::oid
+    UNION
+    SELECT a.attrelid FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+     WHERE a.attname = 'proiect_id' AND a.attnum > 0 AND NOT a.attisdropped AND a.atttypid IN ('int4'::regtype, 'int8'::regtype)
+       AND c.relkind IN ('r', 'p') AND c.relnamespace = 'public'::regnamespace
+    UNION
+    -- copiii unui nod care nu e 'exclus' / 'comun' (pe nume sau pe prefix; numele are întâietate)
+    SELECT k.conrelid FROM noduri n JOIN pg_constraint k ON k.confrelid = n.rel AND k.contype = 'f' AND k.conrelid <> n.rel
+      JOIN pg_class c2 ON c2.oid = n.rel
+     WHERE coalesce((SELECT i.clasa FROM inv i WHERE i.tip = 'tabel' AND i.obiect = c2.relname AND c2.relnamespace = 'public'::regnamespace),
+                    (SELECT i.clasa FROM inv i WHERE i.tip = 'prefix_tabel' AND starts_with(c2.relname, i.obiect)
+                       AND c2.relnamespace = 'public'::regnamespace), '-') NOT IN ('exclus', 'comun'))
+  SELECT n.rel, c.relname::text AS nume, c.relnamespace = 'public'::regnamespace AS e_public,
+         coalesce((SELECT i.clasa FROM inv i WHERE i.tip = 'tabel' AND i.obiect = c.relname AND c.relnamespace = 'public'::regnamespace),
+                  (SELECT i.clasa FROM inv i WHERE i.tip = 'prefix_tabel' AND starts_with(c.relname, i.obiect)
+                     AND c.relnamespace = 'public'::regnamespace)) AS clasa
+    FROM noduri n JOIN pg_class c ON c.oid = n.rel;
+  SELECT string_agg(n.nspname || '.' || c.relname, ', ' ORDER BY n.nspname, c.relname) INTO v_lista
+    FROM executie_acces_pre_tabele t JOIN pg_class c ON c.oid = t.rel JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE t.clasa IS NULL;
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: tabele legate de proiecte si neclasificate in inventar (adauga-le cu clasa si motivul): %', v_lista;
+  END IF;
+  -- 'comun' = NU ajunge la date de proiect: afirmația se verifică pe TOATE tabelele clasei (pe nume sau pe prefix), nu doar pe cele găsite:
+  -- fără coloană întreagă proiect_id și fără cheie străină spre executie_proiecte sau spre un tabel acoperit (proiect / copil / drept)
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO v_lista
+    FROM pg_class c
+   WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p')
+     AND coalesce((SELECT i.clasa FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'tabel' AND i.obiect = c.relname),
+                  (SELECT i.clasa FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'prefix_tabel' AND starts_with(c.relname, i.obiect))) = 'comun'
+     AND (EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'proiect_id' AND a.attnum > 0 AND NOT a.attisdropped
+                   AND a.atttypid IN ('int4'::regtype, 'int8'::regtype))
+          OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = c.oid AND k.contype = 'f'
+                      AND (k.confrelid = 'public.executie_proiecte'::regclass
+                           OR k.confrelid IN (SELECT to_regclass('public.' || i.obiect) FROM public.fn_executie_acces_inventar() i
+                                               WHERE i.tip = 'tabel' AND i.clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox', 'drept')))));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: tabele clasificate „comun” care ajung totusi la date de proiect (proiect_id sau cheie straina spre un tabel acoperit): %', v_lista;
+  END IF;
+  -- CATALOG 2: vederile (și vederile peste vederi, tranzitiv) peste tabelele acoperite; refuz la cele citibile din API care NU citesc
+  -- drept utilizatorul (fără security_invoker) sau sunt materializate
+  CREATE TEMP TABLE executie_acces_pre_vederi ON COMMIT DROP AS
+  WITH RECURSIVE baza AS (
+    SELECT t.rel FROM executie_acces_pre_tabele t WHERE t.clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox', 'drept')
+    UNION
+    SELECT to_regclass('public.' || i.obiect)::oid FROM public.fn_executie_acces_inventar() i
+     WHERE i.tip = 'tabel' AND i.clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox', 'drept') AND to_regclass('public.' || i.obiect) IS NOT NULL),
+  dep(rel) AS (
+    SELECT rw.ev_class FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid
+     WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass AND d.refobjid IN (SELECT rel FROM baza) AND rw.ev_class <> d.refobjid
+    UNION
+    SELECT rw.ev_class FROM dep JOIN pg_depend d ON d.refobjid = dep.rel AND d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass
+      JOIN pg_rewrite rw ON rw.oid = d.objid WHERE rw.ev_class <> dep.rel)
+  SELECT DISTINCT dep.rel, c.relname::text AS nume FROM dep JOIN pg_class c ON c.oid = dep.rel WHERE c.relkind IN ('v', 'm');
+  SELECT string_agg(n.nspname || '.' || c.relname || CASE c.relkind WHEN 'm' THEN ' (materializata)' ELSE '' END, ', ' ORDER BY n.nspname, c.relname) INTO v_lista
+    FROM executie_acces_pre_vederi v JOIN pg_class c ON c.oid = v.rel JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE (c.relkind = 'm' OR NOT EXISTS (SELECT 1 FROM unnest(coalesce(c.reloptions, '{}'::text[])) o
+                                          WHERE lower(o) IN ('security_invoker=on', 'security_invoker=true', 'security_invoker=1', 'security_invoker=yes')))
+     AND (has_table_privilege('anon', c.oid, 'SELECT') OR has_table_privilege('authenticated', c.oid, 'SELECT'));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: vederi fara security_invoker peste tabele acoperite, citibile din API (ar arata tuturor toate proiectele): %', v_lista;
+  END IF;
+  -- CATALOG 3: funcțiile SECURITY DEFINER din public, apelabile de anon / authenticated, care numesc un tabel / o vedere acoperită.
+  -- Căutarea pe nume e doar DETECȚIE (refuz la neclasificat sau la alt corp decât cel revizuit); o funcție care construiește numele
+  -- dinamic nu e găsită: limită scrisă în PR. r3: fără excluderi pe prefix — fiecare funcție găsită are numele și amprenta ei în listă.
+  SELECT '\m(' || string_agg(DISTINCT x.nume, '|') || ')\M' INTO v_regex
+    FROM (SELECT nume FROM executie_acces_pre_tabele WHERE clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox', 'drept') AND e_public
+          UNION SELECT obiect FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox', 'drept')
+          UNION SELECT nume FROM executie_acces_pre_vederi) x;
+  SELECT string_agg(format('%s [%s]', p.oid::regprocedure, md5(replace(p.prosrc, chr(13), ''))), ', ' ORDER BY p.proname) INTO v_lista
+    FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef AND p.prorettype <> 'trigger'::regtype
+     AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+     AND p.prosrc ~* v_regex
+     AND NOT EXISTS (SELECT 1 FROM public.fn_executie_acces_inventar() i
+                      WHERE i.tip = 'functie' AND i.obiect = p.proname AND i.cheie = md5(replace(p.prosrc, chr(13), '')));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a: functii SECURITY DEFINER care ating tabele acoperite, neclasificate sau cu alt corp decat cel revizuit: %', v_lista;
+  END IF;
+  DROP TABLE executie_acces_pre_vederi;
+  DROP TABLE executie_acces_pre_tabele;
+END $pre2$;
+
+-- ── 1. tabelul ───────────────────────────────────────────────────────────────────────────────────────────
+CREATE TABLE public.executie_acces_proiect (
+  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id) ON DELETE RESTRICT,
+  nivel text NOT NULL DEFAULT 'editor',
+  acordat_de uuid,
+  acordat_la timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT executie_acces_proiect_pk PRIMARY KEY (profile_id, proiect_id),
+  CONSTRAINT executie_acces_proiect_nivel_ck CHECK (nivel IN ('viewer', 'editor'))
+);
+CREATE INDEX executie_acces_proiect_proiect_idx ON public.executie_acces_proiect (proiect_id);
+COMMENT ON TABLE public.executie_acces_proiect IS
+  'Execuție: proiectele unui cont restrâns. Cont fără rânduri = vede tot ce îi dă modulul; cu rânduri = doar acestea; owner = tot. '
+  'Se scrie DOAR prin fn_executie_acces_proiect_seteaza (owner). 20261209a.';
+COMMENT ON COLUMN public.executie_acces_proiect.nivel IS 'viewer = doar citire pe proiect; editor = citire + scriere (în limita dreptului pe modulul executie).';
+
+-- proveniența (L08): acordat_de / acordat_la le pune serverul; identitatea rândului e imuabilă
+CREATE FUNCTION public.fn_executie_acces_proiect_prov() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'UPDATE' AND (NEW.profile_id, NEW.proiect_id) IS DISTINCT FROM (OLD.profile_id, OLD.proiect_id) THEN
+    RAISE EXCEPTION 'acces proiect: contul și proiectul rândului nu se schimbă' USING ERRCODE = '23514';
+  END IF;
+  NEW.acordat_de := auth.uid();
+  NEW.acordat_la := now();
+  RETURN NEW;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_proiect_prov() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_executie_acces_proiect_prov BEFORE INSERT OR UPDATE ON public.executie_acces_proiect
+  FOR EACH ROW EXECUTE FUNCTION public.fn_executie_acces_proiect_prov();
+
+-- ── 2. regula: O SINGURĂ definiție (L19) ──────────────────────────────────────────────────────────────────
+CREATE FUNCTION public.fn_executie_acces_e_owner() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+$f$;
+-- r6: regula pe un CONT DAT (o singură definiție, L19). Variantele pe apelant de mai jos (auth.uid()) o cheamă cu auth.uid(); clasificatorul
+-- Inboxului AI (edge, service_role, fără JWT) o folosește prin fn_executie_acces_candidati(cont) pentru contul care a urcat documentul.
+-- Fără SECURITY DEFINER și fără EXECUTE pentru clienți: se cheamă doar din funcțiile DEFINER ale migrării (rulează ca proprietarul lor).
+-- adevărat = contul NU e restrâns pe proiect (owner sau cont fără niciun rând). Cont NULL = fals (L08).
+-- Varianta B (bifă explicită „restrâns”) se schimbă DOAR aici: „cont fără bifă” în loc de „cont fără rânduri”.
+CREATE FUNCTION public.fn_executie_acces_nerestrans_cont(p_profile uuid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT p_profile IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile AND p.is_owner IS TRUE)
+         OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a WHERE a.profile_id = p_profile))
+$f$;
+-- proiectele listate pentru cont (scriere = doar cele 'editor'); gol = niciunul (NU „toate”: „toate” e doar nerestrans)
+CREATE FUNCTION public.fn_executie_acces_lista_cont(p_profile uuid, p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(array_agg(a.proiect_id ORDER BY a.proiect_id), '{}'::bigint[])
+    FROM public.executie_acces_proiect a
+   WHERE p_profile IS NOT NULL AND p_scriere IS NOT NULL AND a.profile_id = p_profile
+     AND (p_scriere IS FALSE OR a.nivel = 'editor')
+$f$;
+-- adevărat = apelantul NU e restrâns pe proiect. Fără auth.uid() = fals (L08).
+CREATE FUNCTION public.fn_executie_acces_nerestrans() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(public.fn_executie_acces_nerestrans_cont(auth.uid()), false)
+$f$;
+-- proiectele listate pentru apelant; fără auth.uid() = gol. r8: INTERNĂ (întoarce id-uri; fără EXECUTE pentru clienți — politicile și
+-- UI-ul folosesc predicatele boolean; contul își vede lista în executie_acces_proiect, pe rândurile proprii)
+CREATE FUNCTION public.fn_executie_acces_lista(p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT public.fn_executie_acces_lista_cont(auth.uid(), p_scriere)
+$f$;
+-- regula pe un proiect: pentru RPC-uri, trigger-e, funcțiile de drept și UI
+CREATE FUNCTION public.fn_executie_proiect_permis(p_proiect bigint, p_scriere boolean DEFAULT false) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT p_scriere IS NOT NULL
+    AND (public.fn_executie_acces_nerestrans()
+         OR (p_proiect IS NOT NULL AND p_proiect = ANY (public.fn_executie_acces_lista(p_scriere))))
+$f$;
+-- un rând-copil: proiectul vine din părinte. 'raport': șantierul raportului; 'site' (r4, antetul raportului): șantierul însuși; șantier
+-- fără proiect = permis (nu sunt date de proiect). Nivelul cerut e cel primit (p_scriere): scrierea cere lista de SCRIERE (L09, review r3 P1).
+-- r9 (review r8, ambii recenzenți P1: „șantier existent fără proiect = adevărat, id inexistent = fals” — oracol): SECURITY INVOKER. Părintele
+-- se caută cu drepturile APELANTULUI, deci RLS-ul tabelului părinte (politicile lui de azi + restricția de aici) se aplică și căutării: un
+-- părinte pe care apelantul nu-l poate citi și un părinte inexistent sunt ACELAȘI caz (fals). Răspunsul depinde doar de ce apelantul ar vedea
+-- oricum cu un SELECT direct pe tabelul părinte, nu de ce există. Contul nerestrâns (și owner-ul): adevărat pentru orice argument, fără nicio
+-- citire. Folosit în politici RESTRICTIVE (AND cu cele existente): „fals” pentru un părinte invizibil nu ascunde nimic ce apelantul vedea, în
+-- afara copiilor unui părinte pe care nu-l vede (doar contul restrâns; scris în PR).
+-- Recursivitate: politica copilului C citește părintele P; politicile lui P nu citesc C (preflight pe pg_depend + harness-ul citește fiecare
+-- copil ca restrâns). 'raport' citește antetul (rapoarte_zilnice), a cărui politică citește șantierul (sites): lanț de două niveluri.
+-- Dreptul de citire pe coloanele căutate (authenticated) e cerut în preflight: fără el politica ar da 42501 în loc de rânduri.
+CREATE FUNCTION public.fn_executie_acces_parinte_permis(p_tip text, p_id bigint, p_scriere boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  SELECT p_tip IS NOT NULL AND p_scriere IS NOT NULL
+    AND (public.fn_executie_acces_nerestrans()
+         OR CASE p_tip
+    WHEN 'site' THEN EXISTS (SELECT 1 FROM public.sites si
+                  WHERE si.id = p_id AND (si.proiect_id IS NULL OR public.fn_executie_proiect_permis(si.proiect_id::bigint, p_scriere)))
+    WHEN 'sl' THEN EXISTS (SELECT 1 FROM public.executie_situatii_plata s WHERE s.id = p_id AND public.fn_executie_proiect_permis(s.proiect_id::bigint, p_scriere))
+    WHEN 'bon' THEN EXISTS (SELECT 1 FROM public.executie_bonuri_consum b WHERE b.id = p_id AND public.fn_executie_proiect_permis(b.proiect_id::bigint, p_scriere))
+    WHEN 'pachet' THEN EXISTS (SELECT 1 FROM public.executie_pachete_lansare k WHERE k.id = p_id AND public.fn_executie_proiect_permis(k.proiect_id::bigint, p_scriere))
+    WHEN 'cumulat' THEN EXISTS (SELECT 1 FROM public.executie_pachete_cumulat_final k WHERE k.id = p_id AND public.fn_executie_proiect_permis(k.proiect_id::bigint, p_scriere))
+    WHEN 'activitate' THEN EXISTS (SELECT 1 FROM public.proiect_activitati a WHERE a.id = p_id AND public.fn_executie_proiect_permis(a.proiect_id::bigint, p_scriere))
+    WHEN 'raport' THEN EXISTS (SELECT 1 FROM public.rapoarte_zilnice r
+                  WHERE r.id = p_id AND public.fn_executie_acces_parinte_permis('site', r.site_id::bigint, p_scriere))
+    ELSE false END)
+$f$;
+-- r8 (review SQL P1-02): setul părinților permiși (fn_executie_acces_parinti, r1–r7) a IEȘIT: întorcea id-uri (șantierele și rapoartele
+-- fără proiect chiar și unui cont fără drept pe modul), apelabil direct. Politicile copiilor cheamă acum predicatul pe rând de mai sus
+-- (boolean; părinte inexistent = părinte al unui proiect nepermis = fals), doar pentru contul restrâns.
+-- Inboxul AI (r13, decizia lui Răzvan, varianta A): un cont RESTRÂNS nu folosește deloc Inboxul. Regula e chiar
+-- fn_executie_acces_nerestrans() (L19, aceeași ca peste tot): politicile cozii și ale fișierelor, garda cozii și predicatul Inboxului
+-- (fn_ai_inbox_poate_confirma, pasul 6c) răspund „nu” contului restrâns FĂRĂ să citească rândul sau obiectul — nu mai există nimic de
+-- dedus din răspuns (rând / obiect inexistent, propriu, al altuia, cu sau fără proiect = același „nu”). Predicatul pe rând din r4–r12
+-- (fn_executie_acces_inbox_rand: lista pe entitate_id + excepția „documentul propriu fără proiect”) și garda căii libere din r12
+-- (fn_executie_acces_inbox_propriu_liber) au IEȘIT. Documentele urcate de un cont înainte să fie restrâns rămân în coadă pentru owner și
+-- conturile nerestrânse (politicile din 20261103c, neatinse); contul, odată restrâns, nu le mai vede.
+-- r6: candidații clasificatorului (edge citeste-orice) pentru documentul urcat de p_profile = proiectele ACTIVE (ca filtrul de azi al
+-- edge-ului, activ = true) pe care contul le poate CITI după aceeași regulă (nerestrans_cont / lista_cont, L19): cont nerestrâns / owner =
+-- toate cele active, ca azi; cont restrâns = doar cele active din lista lui (și cele 'viewer'). r13: un cont restrâns nu mai urcă nimic
+-- și nu-și mai vede documentele, deci lista nu mai protejează nimic; rămâne doar plasă pentru documentele urcate ÎNAINTE de restrângere
+-- (potrivite doar pe proiectele contului; le vede owner-ul / un cont nerestrâns). p_profile NULL = rând fără cont (cale server; un cont logat nu poate crea un
+-- rând fără uploadat_de — 20261103c, trg_ai_inbox_fisier_legat) = toate cele active, ca azi: nu e documentul nimănui, deci nu
+-- e semnal pentru nimeni. Un singur tablou jsonb [{id, nume, cod_intern}] ordonat după id (un singur rând: fără plafonul max-rows, L23).
+-- Doar service_role (clasificatorul n-are JWT, deci contul vine ca parametru; L08: calea server cu rolul verificat de GRANT).
+-- r7 (review r6 P2): un cont DAT care nu există (fără profil) = refuz explicit (22023), NU „nerestrâns = toate”: un UUID fără profil nu
+-- are cum fi restrâns (FK pe profiles), deci „toate” ar fi o presupunere, nu o dovadă (L08, L18). NULL rămâne „toate” (rândul fără cont).
+CREATE FUNCTION public.fn_executie_acces_candidati(p_profile uuid) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF p_profile IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile) THEN
+    RAISE EXCEPTION 'acces proiect: candidații cer un cont existent' USING ERRCODE = '22023';
+  END IF;
+  RETURN (
+  WITH c AS (SELECT public.fn_executie_acces_nerestrans_cont(p_profile) AS tot,
+                    public.fn_executie_acces_lista_cont(p_profile, false) AS ids)
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', e.id, 'nume', e.nume, 'cod_intern', e.cod_intern) ORDER BY e.id), '[]'::jsonb)
+    FROM public.executie_proiecte e CROSS JOIN c
+   WHERE e.activ IS TRUE
+     AND (p_profile IS NULL OR c.tot OR e.id = ANY (c.ids)));
+END $f$;
+-- r8 (review SQL P1-01): predicatul PUBLIC al politicilor Storage, DOAR adevărat / fals despre apelant.
+-- r9 (review r8 P1, ambii recenzenți): SECURITY INVOKER, iar rezolvarea brută (fn_executie_acces_obiect_proiecte, internă în r8) a ieșit:
+-- orice rând căutat după argument (pachetul, documentul proiectului, rândul Inboxului) se caută cu drepturile APELANTULUI (RLS-ul tabelului
+-- se aplică și căutării), deci „nu există” și „există, dar apelantul nu-l vede” dau aceeași valoare. Regula, pentru contul RESTRÂNS:
+--   * executie-contracte / executie-borderouri: proiectul vine DOAR din cale (formele din inventar, ancorate; L13): proiect de pe listă (la
+--     nivelul cerut) = adevărat; altă formă / alt proiect = fals. Nu citește niciun rând (depinde doar de cale și de lista apelantului);
+--   * executie-pachete-pdf: pachetul din cale (`<pachet>/…` sau `<proiect>/<pachet>/aprobare/…`, pachetul trebuie să fie al proiectului),
+--     VIZIBIL apelantului și pe un proiect de pe lista lui, la nivelul cerut;
+--   * documente-proiect: citire = un rând VIZIBIL din documente_proiect cu această cale, pe un proiect de pe listă; scriere = FALS (azi doar
+--     serverul scrie în acest bucket — ingest-document / corespondența; UI-ul doar citește). Altfel scrierea ar depinde de rândurile pe
+--     care apelantul nu le vede (un fișier comun cu un proiect ascuns) — cazul scris în brief, închis prin refuz, nu prin citire ca proprietar;
+--   * ai-documente-inbox (r13, varianta A a lui Răzvan): FALS, pe orice cale (și în folderul propriu), la citire și la scriere, FĂRĂ nicio
+--     citire — contul restrâns nu folosește Inboxul AI. Același răspuns pentru o cale inexistentă, un fișier propriu cu sau fără rând în
+--     coadă, cu rândul pe un proiect permis sau nepermis, un obiect șters de altcineva cu rândul rămas, o cale a altui cont. Excepția
+--     folderului propriu (r10–r12) și al 4-lea argument (p_inlocuire, r11) au ieșit: nu mai e nimic de deosebit;
+--   * cale cu `..` = fals; bucket din afara listei = adevărat (neatins, nu citește nimic).
+-- Cont nerestrâns (și owner): adevărat pentru orice argument, fără nicio altă citire (nu află nimic). Bucket-urile sunt numite aici;
+-- preflight-ul cere ca inventarul să aibă exact aceleași (pasul 0) și dreptul de citire al lui authenticated pe coloanele căutate.
+CREATE FUNCTION public.fn_executie_acces_obiect_permis(p_bucket text, p_name text, p_scriere boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  SELECT p_bucket IS NOT NULL AND p_name IS NOT NULL AND p_scriere IS NOT NULL
+    AND (public.fn_executie_acces_nerestrans()
+         OR CASE
+              WHEN p_bucket NOT IN ('ai-documente-inbox', 'documente-proiect', 'executie-borderouri', 'executie-contracte', 'executie-pachete-pdf') THEN true
+              -- r13: Inboxul AI = nimic pentru contul restrâns (nicio citire, nicio deosebire între căi)
+              WHEN p_bucket = 'ai-documente-inbox' THEN false
+              WHEN position('..' IN p_name) > 0 THEN false
+              WHEN p_bucket = 'executie-contracte' THEN
+                coalesce(substring(p_name FROM '^([1-9][0-9]{0,17})/'),
+                         substring(p_name FROM '^(?:ordin-incepere|pccvi|probe-presiune)/([1-9][0-9]{0,17})/')) IS NOT NULL
+                AND public.fn_executie_proiect_permis(coalesce(substring(p_name FROM '^([1-9][0-9]{0,17})/'),
+                                                               substring(p_name FROM '^(?:ordin-incepere|pccvi|probe-presiune)/([1-9][0-9]{0,17})/'))::bigint, p_scriere)
+              WHEN p_bucket = 'executie-borderouri' THEN
+                substring(p_name FROM '^sl_([1-9][0-9]{0,17})/') IS NOT NULL
+                AND public.fn_executie_proiect_permis(substring(p_name FROM '^sl_([1-9][0-9]{0,17})/')::bigint, p_scriere)
+              WHEN p_bucket = 'executie-pachete-pdf' AND p_name ~ '^[1-9][0-9]{0,17}/[1-9][0-9]{0,17}/aprobare/' THEN
+                EXISTS (SELECT 1 FROM public.executie_pachete_lansare k
+                         WHERE k.id = split_part(p_name, '/', 2)::bigint AND k.proiect_id::bigint = split_part(p_name, '/', 1)::bigint
+                           AND public.fn_executie_proiect_permis(k.proiect_id::bigint, p_scriere))
+              WHEN p_bucket = 'executie-pachete-pdf' THEN
+                EXISTS (SELECT 1 FROM public.executie_pachete_lansare k
+                         WHERE k.id = substring(p_name FROM '^([1-9][0-9]{0,17})/')::bigint
+                           AND public.fn_executie_proiect_permis(k.proiect_id::bigint, p_scriere))
+              WHEN p_bucket = 'documente-proiect' AND p_scriere THEN false
+              WHEN p_bucket = 'documente-proiect' THEN
+                EXISTS (SELECT 1 FROM public.documente_proiect d
+                         WHERE d.storage_path = p_name AND d.proiect_id IS NOT NULL
+                           AND public.fn_executie_proiect_permis(d.proiect_id::bigint, false))
+              ELSE false END)
+$f$;
+-- EXECUTE (r8, review SQL P1-01 / P1-02): authenticated DOAR pe predicatele publice — întorc numai adevărat / fals despre apelant, iar
+-- „inexistent” = „nepermis” (politicile se evaluează în numele apelantului, deci au nevoie de EXECUTE pe ele). Lista și regula pe un cont
+-- dat: fără EXECUTE pentru clienți (le cheamă predicatele DEFINER ca proprietar). r9: predicatele care caută un rând după argument
+-- (părintele, obiectul Storage) sunt INVOKER și cheamă doar funcții publice; nicio rezolvare brută nu mai există. Nimic pentru anon.
+REVOKE ALL ON FUNCTION public.fn_executie_acces_e_owner() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_lista(boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans_cont(uuid) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_lista_cont(uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_candidati(uuid) FROM PUBLIC, anon, authenticated, service_role;
+-- r6: candidații clasificatorului doar pentru service_role (contul e parametru: un client logat ar putea întreba despre ALT cont)
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_candidati(uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_e_owner() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_nerestrans() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_parinte_permis(text, bigint, boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean) TO authenticated;
+
+-- RLS pe tabelul nou: owner vede tot, ceilalți doar rândurile proprii (ca UI-ul să știe ce i s-a dat); fără scriere directă (L07)
+ALTER TABLE public.executie_acces_proiect ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.executie_acces_proiect FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.executie_acces_proiect TO authenticated, service_role;
+CREATE POLICY executie_acces_proiect_citire ON public.executie_acces_proiect FOR SELECT TO authenticated
+  USING (auth.uid() IS NOT NULL AND (profile_id = (SELECT auth.uid()) OR (SELECT public.fn_executie_acces_e_owner())));
+
+-- ── 3. setarea (owner): lista COMPLETĂ a unui cont, într-un singur pas (L01, L02, L03, L04, L08, L18) ─────────────
+-- p_lista = [{"proiect_id": <id>, "nivel": "viewer"|"editor"}, …]: validată strict, fără dubluri, 1..500 elemente.
+-- Canonicul: aceeași formă, sortată după proiect_id. Folosit pentru CAS (lista văzută de owner) și pentru idempotență.
+CREATE FUNCTION public.fn_executie_acces_canon(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$
+DECLARE e jsonb; v_ids bigint[] := ARRAY[]::bigint[]; v_out jsonb := '[]'::jsonb; v_id bigint;
+BEGIN
+  IF p IS NULL OR jsonb_typeof(p) <> 'array' THEN
+    RAISE EXCEPTION 'acces proiect: lista trebuie să fie un tablou' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_array_length(p) > 500 THEN RAISE EXCEPTION 'acces proiect: cel mult 500 de proiecte' USING ERRCODE = '22023'; END IF;
+  FOR e IN SELECT x FROM jsonb_array_elements(p) x LOOP
+    -- pași separați: tipul, cheile, apoi valorile (fără să ne bazăm pe ordinea de evaluare a unui OR)
+    IF jsonb_typeof(e) <> 'object' THEN RAISE EXCEPTION 'acces proiect: element invalid' USING ERRCODE = '22023'; END IF;
+    IF NOT (e ?& ARRAY['proiect_id', 'nivel']) OR EXISTS (SELECT 1 FROM jsonb_object_keys(e) k WHERE k NOT IN ('proiect_id', 'nivel')) THEN
+      RAISE EXCEPTION 'acces proiect: elementul cere exact proiect_id și nivel' USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_typeof(e->'proiect_id') <> 'number' OR (e->>'proiect_id') !~ '^[1-9][0-9]{0,17}$'
+       OR jsonb_typeof(e->'nivel') <> 'string' OR (e->>'nivel') NOT IN ('viewer', 'editor') THEN
+      RAISE EXCEPTION 'acces proiect: proiect_id întreg pozitiv și nivel viewer / editor' USING ERRCODE = '22023';
+    END IF;
+    v_id := (e->>'proiect_id')::bigint;
+    IF v_id = ANY (v_ids) THEN RAISE EXCEPTION 'acces proiect: proiectul % apare de două ori', v_id USING ERRCODE = '22023'; END IF;
+    v_ids := v_ids || v_id;
+  END LOOP;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('proiect_id', (x->>'proiect_id')::bigint, 'nivel', x->>'nivel') ORDER BY (x->>'proiect_id')::bigint), '[]'::jsonb)
+    INTO v_out FROM jsonb_array_elements(p) x;
+  RETURN v_out;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_canon(jsonb) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Rezultat: {ok:true, duplicat, lista} sau {ok:false, motiv:'conflict', lista} (lista s-a schimbat între timp: UI-ul reîncarcă).
+-- p_restrans = false scoate restricția (șterge toate rândurile contului = „vede tot”): doar explicit, cu p_lista = [].
+-- p_restrans = true cu listă goală = REFUZ (ar însemna „vede tot” pe tăcute, L18).
+CREATE FUNCTION public.fn_executie_acces_proiect_seteaza(p_profile uuid, p_restrans boolean, p_lista jsonb, p_lista_veche jsonb) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_owner boolean;
+  v_tinta jsonb; v_veche jsonb; v_curent jsonb;
+  v_lipsa bigint;
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'acces proiect: autentificare necesară' USING ERRCODE = '42501'; END IF;
+  IF NOT public.fn_executie_acces_e_owner() THEN
+    RAISE EXCEPTION 'acces proiect: doar owner-ul stabilește proiectele unui cont' USING ERRCODE = '42501';
+  END IF;
+  IF p_profile IS NULL OR p_restrans IS NULL THEN RAISE EXCEPTION 'acces proiect: parametri lipsă' USING ERRCODE = '22023'; END IF;
+  -- validarea înaintea lock-urilor (nu ține nimic blocat pe o cerere greșită)
+  v_tinta := public.fn_executie_acces_canon(p_lista);
+  v_veche := public.fn_executie_acces_canon(p_lista_veche);
+  IF p_restrans AND jsonb_array_length(v_tinta) = 0 THEN
+    RAISE EXCEPTION 'acces proiect: lista goală ar da acces la TOATE proiectele; pentru asta folosește „scoate restricția”' USING ERRCODE = '22023';
+  END IF;
+  IF NOT p_restrans AND jsonb_array_length(v_tinta) <> 0 THEN
+    RAISE EXCEPTION 'acces proiect: „scoate restricția” nu primește proiecte' USING ERRCODE = '22023';
+  END IF;
+  -- (1) lock pe cont, (2) rândul profilului (nu dispare în timpul scrierii), (3) rândurile contului
+  PERFORM pg_advisory_xact_lock(hashtextextended('executie_acces_proiect:' || p_profile::text, 0));
+  -- rândul altui modul (profiles): KEY SHARE (același lock pe care l-ar lua FK-ul la INSERT), NOWAIT: ocupat = 55P03, nimic scris
+  SELECT p.is_owner INTO v_owner FROM public.profiles p WHERE p.id = p_profile FOR KEY SHARE NOWAIT;
+  IF NOT FOUND THEN RAISE EXCEPTION 'acces proiect: contul nu există' USING ERRCODE = '22023'; END IF;
+  IF v_owner IS TRUE AND p_restrans THEN
+    RAISE EXCEPTION 'acces proiect: un owner vede oricum toate proiectele' USING ERRCODE = '22023';
+  END IF;
+  SELECT x INTO v_lipsa FROM (SELECT (e->>'proiect_id')::bigint AS x FROM jsonb_array_elements(v_tinta) e) t
+   WHERE NOT EXISTS (SELECT 1 FROM public.executie_proiecte ep WHERE ep.id = t.x) LIMIT 1;
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'acces proiect: proiectul % nu există', v_lipsa USING ERRCODE = '22023'; END IF;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object('proiect_id', a.proiect_id, 'nivel', a.nivel) ORDER BY a.proiect_id), '[]'::jsonb)
+    INTO v_curent FROM public.executie_acces_proiect a WHERE a.profile_id = p_profile;
+  -- idempotență (L04): starea cerută există deja = succesul de data trecută (și la reluarea aceleiași cereri)
+  IF v_curent = v_tinta THEN
+    RETURN jsonb_build_object('ok', true, 'duplicat', true, 'lista', v_curent);
+  END IF;
+  -- CAS (L01/L03): owner-ul a pornit de la altă listă decât cea de acum = conflict, nu suprascriere
+  IF v_curent IS DISTINCT FROM v_veche THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'conflict', 'lista', v_curent);
+  END IF;
+
+  DELETE FROM public.executie_acces_proiect a
+   WHERE a.profile_id = p_profile
+     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_tinta) e WHERE (e->>'proiect_id')::bigint = a.proiect_id);
+  INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel)
+  SELECT p_profile, (e->>'proiect_id')::bigint, e->>'nivel' FROM jsonb_array_elements(v_tinta) e ORDER BY (e->>'proiect_id')::bigint
+  ON CONFLICT (profile_id, proiect_id) DO UPDATE SET nivel = EXCLUDED.nivel
+   WHERE public.executie_acces_proiect.nivel IS DISTINCT FROM EXCLUDED.nivel;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object('proiect_id', a.proiect_id, 'nivel', a.nivel) ORDER BY a.proiect_id), '[]'::jsonb)
+    INTO v_curent FROM public.executie_acces_proiect a WHERE a.profile_id = p_profile;
+  IF v_curent IS DISTINCT FROM v_tinta THEN
+    RAISE EXCEPTION 'acces proiect: scrierea nu a dat lista cerută' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'duplicat', false, 'lista', v_curent);
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_proiect_seteaza(uuid, boolean, jsonb, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_proiect_seteaza(uuid, boolean, jsonb, jsonb) TO authenticated;
+
+-- ── 4. garda de scriere: trigger BEFORE pe OLD / NEW (L07) ──────────────────────────────────
+-- 'proiect': argumentul = coloana de proiect. UPDATE verifică ȘI proiectul vechi, ȘI pe cel nou (mutarea pe alt proiect).
+-- 'proiect_optional' (r4): al doilea argument 'nul' = rândul fără proiect (cheia NULL) e al altui modul și trece neatins.
+CREATE FUNCTION public.fn_executie_acces_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+DECLARE v_vechi bigint; v_nou bigint; v_nul boolean;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    -- calea server (fără JWT): comportamentul de azi; restricția e pe cont
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_NARGS NOT IN (1, 2) OR (TG_NARGS = 2 AND TG_ARGV[1] IS DISTINCT FROM 'nul') THEN
+    RAISE EXCEPTION 'acces proiect: trigger configurat greșit pe %', TG_TABLE_NAME;
+  END IF;
+  v_nul := TG_NARGS = 2;
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    v_vechi := (to_jsonb(OLD) ->> TG_ARGV[0])::bigint;
+    IF NOT (v_nul AND v_vechi IS NULL) AND NOT public.fn_executie_proiect_permis(v_vechi, true) THEN
+      RAISE EXCEPTION 'Execuție: nu ai drept de scriere pe acest proiect' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+  IF TG_OP IN ('UPDATE', 'INSERT') THEN
+    v_nou := (to_jsonb(NEW) ->> TG_ARGV[0])::bigint;
+    IF NOT (v_nul AND v_nou IS NULL) AND NOT public.fn_executie_proiect_permis(v_nou, true) THEN
+      RAISE EXCEPTION 'Execuție: nu ai drept de scriere pe acest proiect' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $f$;
+-- 'copil': argumentele = tipul părintelui + coloana spre părinte; părintele se citește prin fn_executie_acces_parinte_permis (r9: INVOKER,
+-- deci cu rolul curent al scrierii: pe REST = apelantul, sub RLS-ul părintelui — un părinte pe care nu-l vede nu primește copii, ca politica
+-- WITH CHECK; pe o cale SECURITY DEFINER veche = proprietarul funcției, care vede toți părinții — proiectul lor real decide).
+CREATE FUNCTION public.fn_executie_acces_garda_copil() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_NARGS <> 2 OR TG_ARGV[0] NOT IN ('sl', 'bon', 'pachet', 'raport', 'cumulat', 'activitate', 'site') THEN
+    RAISE EXCEPTION 'acces proiect: trigger configurat greșit pe %', TG_TABLE_NAME;
+  END IF;
+  IF TG_OP IN ('UPDATE', 'DELETE')
+     AND public.fn_executie_acces_parinte_permis(TG_ARGV[0], (to_jsonb(OLD) ->> TG_ARGV[1])::bigint, true) IS NOT TRUE THEN
+    RAISE EXCEPTION 'Execuție: nu ai drept de scriere pe acest proiect' USING ERRCODE = '42501';
+  END IF;
+  IF TG_OP IN ('UPDATE', 'INSERT')
+     AND public.fn_executie_acces_parinte_permis(TG_ARGV[0], (to_jsonb(NEW) ->> TG_ARGV[1])::bigint, true) IS NOT TRUE THEN
+    RAISE EXCEPTION 'Execuție: nu ai drept de scriere pe acest proiect' USING ERRCODE = '42501';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $f$;
+-- 'inbox' (r13): coada Inboxului AI — un cont restrâns nu scrie NIMIC în ea, pe nicio cale (REST, RPC SECURITY DEFINER vechi): refuz
+-- uniform, cu un singur mesaj, FĂRĂ să citească rândul (OLD / NEW nu contează). Trigger-ul are un nume care îl pune PRIMUL între
+-- trigger-ele BEFORE ale cozii (a0_executie_acces_inbox; PostgreSQL le rulează în ordinea numelui, verificat în postcondiții): altfel
+-- garda de legătură din 20261103c (trg_ai_inbox_fisier_legat, DEFINER) ar răspunde ÎNAINTE, cu alt mesaj după cum există sau nu
+-- obiectul pe cale, adică un oracol. Fără auth.uid() (cale server): neatins, ca azi.
+CREATE FUNCTION public.fn_executie_acces_garda_inbox() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_NARGS <> 0 THEN RAISE EXCEPTION 'acces proiect: trigger configurat greșit pe %', TG_TABLE_NAME; END IF;
+  IF public.fn_executie_acces_nerestrans() IS NOT TRUE THEN
+    RAISE EXCEPTION 'Inbox AI: contul tău nu are acces la Inboxul de documente' USING ERRCODE = '42501';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_garda() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_garda_copil() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_garda_inbox() FROM PUBLIC, anon, authenticated, service_role;
+
+-- ── 5. politicile RESTRICTIVE + trigger-ele, din inventar; Storage pe bucket-urile 'cale' / 'tabel' ──────────────
+-- Forma „(SELECT nerestrans())” = o singură evaluare pe interogare (initplan): contul nerestrâns (aproape toți) iese din prima condiție a
+-- OR-ului, fără nicio altă citire, ca înainte. r8: pentru contul RESTRÂNS, predicatul public pe rând (boolean, review SQL P1-01 / P1-02)
+-- în locul listei / setului de id-uri apelabile direct; costul pe rând îl plătește doar contul restrâns (EXPLAIN pe producție: chat, P2-02).
+-- r9: la copii și la Storage, predicatul pe rând caută părintele / rândul legat sub RLS-ul apelantului (o căutare pe cheie, cu politicile
+-- părintelui); tot doar pentru contul restrâns.
+DO $pol$
+DECLARE r record; v_cit text; v_scr text; v_bk text;
+BEGIN
+  FOR r IN SELECT * FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox') ORDER BY obiect LOOP
+    IF r.clasa = 'proiect' THEN
+      v_cit := format('(SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_proiect_permis(%I::bigint, false)', r.cheie);
+      v_scr := format('(SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_proiect_permis(%I::bigint, true)', r.cheie);
+    ELSIF r.clasa = 'proiect_optional' THEN
+      v_cit := format('(SELECT public.fn_executie_acces_nerestrans()) OR %I IS NULL OR public.fn_executie_proiect_permis(%I::bigint, false)', r.cheie, r.cheie);
+      v_scr := format('(SELECT public.fn_executie_acces_nerestrans()) OR %I IS NULL OR public.fn_executie_proiect_permis(%I::bigint, true)', r.cheie, r.cheie);
+    ELSIF r.clasa = 'inbox' THEN
+      -- r13: nimic pentru contul restrâns, fără nicio coloană a rândului (o singură evaluare pe interogare); nerestrânsul iese din initplan
+      v_cit := '(SELECT public.fn_executie_acces_nerestrans())';
+      v_scr := v_cit;
+    ELSE
+      v_cit := format('(SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_acces_parinte_permis(%L, %I::bigint, false)', r.parinte, r.cheie);
+      v_scr := format('(SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_acces_parinte_permis(%L, %I::bigint, true)', r.parinte, r.cheie);
+    END IF;
+    EXECUTE format('CREATE POLICY executie_acces_citire ON public.%I AS RESTRICTIVE FOR SELECT TO authenticated USING (%s)', r.obiect, v_cit);
+    EXECUTE format('CREATE POLICY executie_acces_adauga ON public.%I AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (%s)', r.obiect, v_scr);
+    EXECUTE format('CREATE POLICY executie_acces_modifica ON public.%I AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', r.obiect, v_scr, v_scr);
+    EXECUTE format('CREATE POLICY executie_acces_sterge ON public.%I AS RESTRICTIVE FOR DELETE TO authenticated USING (%s)', r.obiect, v_scr);
+    IF r.clasa = 'proiect' THEN
+      EXECUTE format('CREATE TRIGGER trg_executie_acces_garda BEFORE INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_executie_acces_garda(%L)',
+                     r.obiect, r.cheie);
+    ELSIF r.clasa = 'proiect_optional' THEN
+      EXECUTE format('CREATE TRIGGER trg_executie_acces_garda BEFORE INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_executie_acces_garda(%L, %L)',
+                     r.obiect, r.cheie, 'nul');
+    ELSIF r.clasa = 'inbox' THEN
+      -- r13: numele îl pune primul între trigger-ele BEFORE ale cozii (înaintea gărzii de legătură din 20261103c; postcondiții)
+      EXECUTE format('CREATE TRIGGER a0_executie_acces_inbox BEFORE INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_executie_acces_garda_inbox()',
+                     r.obiect);
+    ELSE
+      EXECUTE format('CREATE TRIGGER trg_executie_acces_garda BEFORE INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.fn_executie_acces_garda_copil(%L, %L)',
+                     r.obiect, r.parinte, r.cheie);
+    END IF;
+  END LOOP;
+  -- Storage: doar bucket-urile 'cale' / 'tabel' / 'inbox'; alt bucket trece neatins (prima condiție). r8: decide predicatul public
+  -- fn_executie_acces_obiect_permis (boolean; proiectele obiectului se rezolvă intern; Inboxul AI = fals pentru contul restrâns, r13).
+  -- r13: UPDATE / DELETE folosesc din nou aceeași expresie ca INSERT (al 4-lea argument din r11 a ieșit odată cu folderul propriu).
+  SELECT string_agg(quote_literal(obiect), ', ' ORDER BY obiect) INTO v_bk FROM public.fn_executie_acces_inventar() WHERE tip = 'bucket' AND clasa IN ('cale', 'tabel', 'inbox');
+  IF v_bk IS NULL THEN RAISE EXCEPTION '20261209a: bucket-urile acoperite lipsesc din inventar'; END IF;
+  v_cit := format('bucket_id <> ALL (ARRAY[%s]::text[]) OR (SELECT public.fn_executie_acces_nerestrans()) '
+                  'OR public.fn_executie_acces_obiect_permis(bucket_id, name, false)', v_bk);
+  v_scr := format('bucket_id <> ALL (ARRAY[%s]::text[]) OR (SELECT public.fn_executie_acces_nerestrans()) '
+                  'OR public.fn_executie_acces_obiect_permis(bucket_id, name, true)', v_bk);
+  EXECUTE format('CREATE POLICY executie_acces_obiect_citire ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated USING (%s)', v_cit);
+  EXECUTE format('CREATE POLICY executie_acces_obiect_adauga ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (%s)', v_scr);
+  EXECUTE format('CREATE POLICY executie_acces_obiect_modifica ON storage.objects AS RESTRICTIVE FOR UPDATE TO authenticated USING (%s) WITH CHECK (%s)', v_scr, v_scr);
+  EXECUTE format('CREATE POLICY executie_acces_obiect_sterge ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated USING (%s)', v_scr);
+END $pol$;
+
+-- ── 6. funcțiile de drept: aceeași regulă de modul + condiția de proiect (CREATE OR REPLACE păstrează owner / ACL) ──
+CREATE OR REPLACE FUNCTION public.fn_executie_nod_drept(p_proiect bigint, p_scriere boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND p_proiect IS NOT NULL AND p_scriere IS NOT NULL
+    AND EXISTS (SELECT 1 FROM public.executie_proiecte e WHERE e.id = p_proiect)
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u
+                     WHERE u.profile_id = auth.uid() AND u.module = 'executie'
+                       AND (u.access_level IN ('editor', 'admin') OR (p_scriere IS FALSE AND u.access_level = 'viewer'))))
+    AND public.fn_executie_proiect_permis(p_proiect, p_scriere)
+$f$;
+CREATE OR REPLACE FUNCTION public.fn_executie_contract_drept(p_proiect bigint, p_scriere boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND p_proiect IS NOT NULL AND p_scriere IS NOT NULL
+    AND EXISTS (SELECT 1 FROM public.executie_proiecte e WHERE e.id = p_proiect)
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u
+                     WHERE u.profile_id = auth.uid() AND u.module = 'executie'
+                       AND (u.access_level = 'admin' OR (p_scriere IS FALSE AND u.access_level IN ('viewer', 'editor')))))
+    AND public.fn_executie_proiect_permis(p_proiect, p_scriere)
+$f$;
+CREATE OR REPLACE FUNCTION public.fn_executie_grafic_drept(p_proiect bigint) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND p_proiect IS NOT NULL
+    AND EXISTS (SELECT 1 FROM public.executie_proiecte e WHERE e.id = p_proiect)
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u
+                     WHERE u.profile_id = auth.uid() AND u.module = 'executie' AND u.access_level IN ('viewer', 'editor', 'admin')))
+    AND public.fn_executie_proiect_permis(p_proiect, false)
+$f$;
+CREATE OR REPLACE FUNCTION public.fn_executie_tinte_drept(p_proiect bigint, p_nivel text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND p_proiect IS NOT NULL AND p_nivel IN ('citire', 'configurare')
+    AND EXISTS (SELECT 1 FROM public.executie_proiecte e WHERE e.id = p_proiect)
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.user_module_access u
+                     WHERE u.profile_id = auth.uid() AND u.module = 'executie'
+                       AND (u.access_level IN ('editor', 'admin') OR (p_nivel = 'citire' AND u.access_level = 'viewer')))
+         OR (p_nivel = 'citire' AND EXISTS (
+               SELECT 1 FROM public.profile_sites ps JOIN public.sites s ON s.id = ps.site_id
+                WHERE ps.profile_id = auth.uid() AND s.proiect_id = p_proiect
+                  AND (ps.valid_until IS NULL OR ps.valid_until >= (now() AT TIME ZONE 'Europe/Bucharest')::date))))
+    AND public.fn_executie_proiect_permis(p_proiect, p_nivel = 'configurare')
+$f$;
+-- raportul zilnic (20261208a): șantierul unui proiect din afara listei = fără raport (citire și salvare); șantier fără proiect = ca înainte
+CREATE OR REPLACE FUNCTION public.fn_raport_santier_drept(p_site bigint) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND p_site IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
+         OR EXISTS (SELECT 1 FROM public.profile_sites ps WHERE ps.profile_id = auth.uid() AND ps.site_id = p_site
+                      AND (ps.valid_until IS NULL OR ps.valid_until >= (now() AT TIME ZONE 'Europe/Bucharest')::date)))
+    AND (public.fn_executie_acces_nerestrans()
+         OR EXISTS (SELECT 1 FROM public.sites s WHERE s.id = p_site
+                     AND (s.proiect_id IS NULL OR public.fn_executie_proiect_permis(s.proiect_id::bigint, false))))
+$f$;
+
+-- ── 6b. poarta pe proiect pentru fn_executie_swap_tevi_pozitie (creată direct în BD; amprenta verificată în preflight) ──
+-- Originalul NU se rescrie și nu se copiază: se mută neschimbat (corp, owner, drepturi, OID) în schema internă executie_acces_intern, la
+-- care clienții n-au USAGE (deci nu-l mai pot apela direct), iar în public rămâne poarta, cu același nume, aceiași parametri și același
+-- tip întors (apelurile din UI nu se schimbă). Revenirea îl mută înapoi.
+-- Ordinea (L06): poarta doar CITEȘTE țevile și pachetele (fără lock-uri), apoi originalul blochează cele două țevi FOR UPDATE și le scrie;
+-- scrierea trece prin trigger-ul de gardă al lui executie_tevi ('copil' pe pachet), care reverifică proiectul pe rândul curent (garanția
+-- finală, și la o mutare concurentă a țevii pe alt pachet).
+CREATE SCHEMA executie_acces_intern;
+COMMENT ON SCHEMA executie_acces_intern IS 'Execuție / acces pe proiect (20261209a): originalele funcțiilor cu poartă în public; fără USAGE pentru clienți.';
+REVOKE ALL ON SCHEMA executie_acces_intern FROM PUBLIC, anon, authenticated, service_role;
+ALTER FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) SET SCHEMA executie_acces_intern;
+CREATE FUNCTION public.fn_executie_swap_tevi_pozitie(p_id_a bigint, p_id_b bigint) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  -- r9 (P2, decizia chat-ului cu mandatul lui Răzvan; închide o problemă care exista ÎNAINTE de această migrare, detalii în raportul
+  -- intern): ORICE apelant cu JWT trebuie să aibă dreptul de SCRIERE în Execuție pe proiectul pachetului FIECĂREI țevi —
+  -- fn_executie_nod_drept(proiect, true): owner, sau modulul executie 'editor' / 'admin' ȘI (cont restrâns) proiectul pe lista de scriere.
+  -- Țeavă / pachet inexistent, țeavă a altui proiect, cont fără modul = ACELAȘI refuz, cu un mesaj fără id-uri, înaintea originalului
+  -- (L09). Fără JWT (cale server): originalul, ca azi.
+  IF auth.uid() IS NOT NULL
+     AND EXISTS (SELECT 1 FROM unnest(ARRAY[p_id_a, p_id_b]) x(id)
+                  WHERE public.fn_executie_nod_drept(
+                          (SELECT k.proiect_id::bigint FROM public.executie_tevi t JOIN public.executie_pachete_lansare k ON k.id = t.pachet_id
+                            WHERE t.id = x.id), true) IS NOT TRUE) THEN
+    RAISE EXCEPTION 'Execuție: nu ai drept de scriere pe acest proiect' USING ERRCODE = '42501';
+  END IF;
+  PERFORM executie_acces_intern.fn_executie_swap_tevi_pozitie(p_id_a, p_id_b);
+END $f$;
+-- drepturile porții: authenticated (ca originalul, cerut în preflight) + service_role dacă originalul îl avea; niciodată anon / PUBLIC
+REVOKE ALL ON FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) TO authenticated;
+DO $poarta$
+BEGIN
+  IF has_function_privilege('service_role', 'executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)', 'EXECUTE') THEN
+    GRANT EXECUTE ON FUNCTION public.fn_executie_swap_tevi_pozitie(bigint, bigint) TO service_role;
+  END IF;
+END $poarta$;
+
+-- ── 6c. (r13) predicatul Inboxului AI: cont restrâns = fals (creată direct în BD; amprenta, owner-ul și drepturile verificate în preflight) ──
+-- CREATE OR REPLACE păstrează OID-ul, owner-ul și drepturile: politicile din 20261103c (coada și fișierele) și orice apel direct (RPC) trec
+-- prin noul corp. Singura schimbare: imediat după ramura „fără auth.uid()” (cale server, neschimbată), un cont restrâns primește FALS
+-- pentru orice modul / entitate, fără nicio altă citire (azi, pentru 'executie', funcția citea proiectul și alocarea pe șantier — un
+-- răspuns despre proiecte pe care contul restrâns nu le vede). Regula e aceeași funcție pe cont (fn_executie_acces_nerestrans_cont, L19),
+-- chemată ca proprietar. Restul corpului: EXACT cel de azi (amprenta veche în inventar, cea nouă în postcondiții; revenirea îl redă).
+CREATE OR REPLACE FUNCTION public.fn_ai_inbox_poate_confirma(p_modul text, p_entitate_id bigint)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_uid UUID := auth.uid(); v_owner BOOLEAN; v_rec RECORD;
+BEGIN
+  IF v_uid IS NULL THEN RETURN true; END IF;  -- service_role / migrări
+  -- 20261209a (r13): cont restrâns pe proiect în Execuție = fără Inbox AI (fals pentru orice modul / entitate, fără altă citire)
+  IF public.fn_executie_acces_nerestrans_cont(v_uid) IS NOT TRUE THEN RETURN false; END IF;
+  SELECT is_owner, role, can_access_personal_data, can_access_financiar
+    INTO v_rec FROM public.profiles WHERE id = v_uid;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF v_rec.is_owner THEN RETURN true; END IF;              -- owner vede tot
+  IF p_modul IS NULL THEN RETURN true; END IF;             -- coada „nedecis": oricine logat
+  IF p_modul = 'hr'         THEN RETURN COALESCE(v_rec.can_access_personal_data,false); END IF;
+  IF p_modul = 'logistica'  THEN RETURN v_rec.role = 'admin_logistica'; END IF;
+  IF p_modul = 'financiar'  THEN RETURN COALESCE(v_rec.can_access_financiar,false); END IF;
+  IF p_modul = 'executie'   THEN
+    -- MP: are profile_sites pe site_id-ul proiectului documentului
+    IF p_entitate_id IS NULL THEN RETURN false; END IF;    -- fără proiect determinat → owner-only
+    RETURN EXISTS (
+      SELECT 1 FROM public.executie_proiecte ep
+      JOIN public.profile_sites ps ON ps.site_id = ep.site_id AND ps.profile_id = v_uid
+      WHERE ep.id = p_entitate_id
+        AND (ps.valid_until IS NULL OR ps.valid_until >= CURRENT_DATE)
+    );
+  END IF;
+  RETURN false;
+END $function$;
+
+-- ── postcondiții ──
+DO $post$
+DECLARE v_rel oid := 'public.executie_acces_proiect'::regclass; r record; v_n integer; v_lista text;
+BEGIN
+  -- tabelul nou: RLS, o politică de citire, doar SELECT pentru authenticated / service_role
+  IF (SELECT relrowsecurity FROM pg_class WHERE oid = v_rel) IS NOT TRUE
+     OR (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_acces_proiect') <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'executie_acces_proiect'
+                     AND policyname = 'executie_acces_proiect_citire' AND cmd = 'SELECT' AND roles = '{authenticated}' AND permissive = 'PERMISSIVE') THEN
+    RAISE EXCEPTION '20261209a post: RLS / politica tabelului nou';
+  END IF;
+  IF EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) rl, unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) pv
+              WHERE has_table_privilege(rl, v_rel, pv))
+     OR has_table_privilege('anon', v_rel, 'SELECT')
+     OR NOT has_table_privilege('authenticated', v_rel, 'SELECT')
+     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = v_rel AND attnum > 0 AND attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '20261209a post: privilegii pe tabelul nou';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = v_rel AND tgname = 'trg_executie_acces_proiect_prov' AND tgenabled = 'O') THEN
+    RAISE EXCEPTION '20261209a post: trigger-ul de proveniență';
+  END IF;
+  -- funcțiile noi: exact 16 (r6: + nerestrans_cont, lista_cont, candidati; r8: − parinti, + obiect_permis; r9: − obiect_proiecte,
+  -- − inbox_obiect, + inbox_propriu; r10: − inbox_propriu; r12: + inbox_propriu_liber; r13: − inbox_rand, − inbox_propriu_liber,
+  -- obiect_permis fără al 4-lea argument), DEFINER doar unde trebuie, search_path fix, EXECUTE doar unde trebuie: authenticated EXACT pe
+  -- predicatele publice (boolean, despre apelant) + RPC-ul owner-ului; service_role DOAR pe candidati; nimeni pe cele interne.
+  -- r9: predicatele publice care caută un rând după argument (părintele, obiectul Storage) sunt INVOKER (căutarea sub RLS-ul apelantului).
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')) <> 16
+     OR to_regprocedure('public.fn_executie_acces_obiect_permis(text, text, boolean)') IS NULL
+     OR to_regprocedure('public.fn_executie_acces_obiect_permis(text, text, boolean, boolean)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_inbox_rand(text, bigint, uuid, boolean)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_inbox_propriu_liber(text)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_parinti(text, boolean)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_obiect_proiecte(text, text)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_inbox_obiect(text, boolean)') IS NOT NULL
+     OR to_regprocedure('public.fn_executie_acces_inbox_propriu(text, boolean)') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')
+                   AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+                        OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_executie_acces_e_owner', 'fn_executie_acces_nerestrans', 'fn_executie_acces_lista',
+                                                                       'fn_executie_proiect_permis', 'fn_executie_acces_proiect_seteaza',
+                                                                       'fn_executie_acces_candidati'))
+                        OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
+                        OR has_function_privilege('anon', p.oid, 'EXECUTE')
+                        OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM (p.proname = 'fn_executie_acces_candidati')
+                        OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM
+                           (p.proname IN ('fn_executie_acces_e_owner', 'fn_executie_acces_nerestrans', 'fn_executie_proiect_permis',
+                                          'fn_executie_acces_parinte_permis', 'fn_executie_acces_obiect_permis',
+                                          'fn_executie_acces_proiect_seteaza')))) THEN
+    RAISE EXCEPTION '20261209a post: functii noi (definer / search_path / EXECUTE)';
+  END IF;
+  -- r8 (review SQL P1-01 / P1-02), regula GENERALĂ, pe catalog (nu pe lista de mai sus): o funcție a migrării (orice fn_executie_acces_%,
+  -- predicatul pe proiect, funcțiile de drept înlocuite, poarta) apelabilă de anon / authenticated întoarce DOAR boolean. Excepții,
+  -- enumerate și justificate:
+  --   * fn_executie_acces_proiect_seteaza (jsonb) — ecranul owner-ului; refuză 42501 orice cont care nu e owner ÎNAINTE de orice citire
+  --     (același refuz pentru cont existent / inexistent, proiect existent / inexistent);
+  --   * fn_executie_swap_tevi_pozitie (void, poarta) — RPC-ul ecranului de țevi; nu întoarce date; r9: pentru ORICE cont logat, țeavă
+  --     inexistentă = țeavă a altui proiect = fără drept de scriere pe modul = același refuz 42501, înaintea originalului.
+  SELECT string_agg(p.oid::regprocedure::text || ' -> ' || format_type(p.prorettype, NULL), ', ' ORDER BY p.oid) INTO v_lista
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND (p.proname LIKE 'fn\_executie\_acces\_%'
+          OR p.proname IN ('fn_executie_proiect_permis', 'fn_executie_nod_drept', 'fn_executie_contract_drept', 'fn_executie_grafic_drept',
+                           'fn_executie_tinte_drept', 'fn_raport_santier_drept', 'fn_executie_swap_tevi_pozitie'))
+     AND p.prorettype IS DISTINCT FROM 'boolean'::regtype::oid
+     AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+     AND p.oid NOT IN (to_regprocedure('public.fn_executie_acces_proiect_seteaza(uuid, boolean, jsonb, jsonb)'),
+                       to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)'));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a post: functii apelabile de clienti care intorc altceva decat boolean (in afara exceptiilor): %', v_lista;
+  END IF;
+  -- r6: semnătura exactă pe care o cheamă edge-ul citeste-orice (nume + parametru + tip întors; testul edge citește aceeași semnătură)
+  IF to_regprocedure('public.fn_executie_acces_candidati(uuid)') IS NULL
+     OR (SELECT p.proargnames FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_acces_candidati(uuid)')) IS DISTINCT FROM ARRAY['p_profile']::text[]
+     OR (SELECT p.prorettype FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_acces_candidati(uuid)')) IS DISTINCT FROM 'jsonb'::regtype::oid THEN
+    RAISE EXCEPTION '20261209a post: semnatura fn_executie_acces_candidati(p_profile uuid) -> jsonb';
+  END IF;
+  -- tabelele acoperite: 4 politici RESTRICTIVE pentru authenticated, fiecare legată (pg_depend, nu text) de funcțiile regulii;
+  -- trigger-ul activ, cu argumentele lui
+  FOR r IN SELECT i.*, CASE i.clasa WHEN 'proiect' THEN encode(convert_to(i.cheie, 'UTF8'), 'hex') || '00'
+                                    WHEN 'proiect_optional' THEN encode(convert_to(i.cheie, 'UTF8'), 'hex') || '00' || encode(convert_to('nul', 'UTF8'), 'hex') || '00'
+                                    WHEN 'inbox' THEN ''
+                            ELSE encode(convert_to(i.parinte, 'UTF8'), 'hex') || '00' || encode(convert_to(i.cheie, 'UTF8'), 'hex') || '00' END AS args_hex,
+                    CASE i.clasa WHEN 'proiect' THEN 1 WHEN 'proiect_optional' THEN 2 WHEN 'inbox' THEN 0 ELSE 2 END AS nargs,
+                    CASE i.clasa WHEN 'copil' THEN 'public.fn_executie_acces_garda_copil()'::regprocedure
+                                 WHEN 'inbox' THEN 'public.fn_executie_acces_garda_inbox()'::regprocedure
+                                 ELSE 'public.fn_executie_acces_garda()'::regprocedure END AS fn_garda,
+                    CASE i.clasa WHEN 'copil' THEN 'public.fn_executie_acces_parinte_permis(text, bigint, boolean)'::regprocedure
+                                 WHEN 'inbox' THEN 'public.fn_executie_acces_nerestrans()'::regprocedure
+                                 ELSE 'public.fn_executie_proiect_permis(bigint, boolean)'::regprocedure END AS fn_regula,
+                    CASE i.clasa WHEN 'inbox' THEN 'a0_executie_acces_inbox' ELSE 'trg_executie_acces_garda' END AS tg_nume
+             FROM public.fn_executie_acces_inventar() i WHERE i.tip = 'tabel' AND i.clasa IN ('proiect', 'proiect_optional', 'copil', 'inbox') LOOP
+    SELECT count(*) INTO v_n FROM pg_policy pol
+     WHERE pol.polrelid = to_regclass('public.' || r.obiect) AND pol.polname LIKE 'executie\_acces\_%'
+       AND NOT pol.polpermissive AND pol.polroles = ARRAY['authenticated'::regrole]::oid[]
+       AND ((pol.polname = 'executie_acces_citire' AND pol.polcmd = 'r' AND pol.polqual IS NOT NULL AND pol.polwithcheck IS NULL)
+         OR (pol.polname = 'executie_acces_adauga' AND pol.polcmd = 'a' AND pol.polqual IS NULL AND pol.polwithcheck IS NOT NULL)
+         OR (pol.polname = 'executie_acces_modifica' AND pol.polcmd = 'w' AND pol.polqual IS NOT NULL AND pol.polwithcheck IS NOT NULL)
+         OR (pol.polname = 'executie_acces_sterge' AND pol.polcmd = 'd' AND pol.polqual IS NOT NULL AND pol.polwithcheck IS NULL))
+       AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid AND d.refclassid = 'pg_proc'::regclass
+                    AND d.refobjid = 'public.fn_executie_acces_nerestrans()'::regprocedure)
+       AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid AND d.refclassid = 'pg_proc'::regclass
+                    AND d.refobjid = r.fn_regula);
+    IF v_n <> 4
+       OR (SELECT count(*) FROM pg_policy WHERE polrelid = to_regclass('public.' || r.obiect) AND polname LIKE 'executie\_acces\_%') <> 4
+       OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = to_regclass('public.' || r.obiect) AND tg.tgname = r.tg_nume
+                       AND tg.tgenabled = 'O' AND tg.tgnargs = r.nargs AND tg.tgqual IS NULL
+                       AND tg.tgfoid = r.fn_garda
+                       AND tg.tgtype = (1 | 2 | 4 | 8 | 16)   -- ROW, BEFORE, INSERT, DELETE, UPDATE
+                       AND encode(tg.tgargs, 'hex') = r.args_hex) THEN
+      RAISE EXCEPTION '20261209a post: politicile / trigger-ul pe %', r.obiect;
+    END IF;
+    -- r13: politicile cozii nu citesc nimic din rând (nicio dependență de coloane) și nu cheamă altă funcție decât regula pe apelant;
+    -- garda cozii e PRIMUL trigger BEFORE (ordinea numelui, ca PostgreSQL): niciun alt trigger BEFORE nu răspunde înaintea ei
+    IF r.clasa = 'inbox'
+       AND (EXISTS (SELECT 1 FROM pg_policy pol JOIN pg_depend d ON d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
+                     WHERE pol.polrelid = to_regclass('public.' || r.obiect) AND pol.polname LIKE 'executie\_acces\_%'
+                       AND ((d.refclassid = 'pg_class'::regclass AND d.refobjsubid <> 0)
+                            OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid <> 'public.fn_executie_acces_nerestrans()'::regprocedure)))
+            OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = to_regclass('public.' || r.obiect) AND NOT tg.tgisinternal
+                        AND (tg.tgtype & 2) = 2 AND tg.tgname <> r.tg_nume AND tg.tgname::text COLLATE "C" < r.tg_nume COLLATE "C")) THEN
+      RAISE EXCEPTION '20261209a post: coada Inboxului — politicile citesc randul sau garda nu e primul trigger BEFORE (%)', r.obiect;
+    END IF;
+  END LOOP;
+  IF (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_executie_acces_garda')
+     <> (SELECT count(*) FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa IN ('proiect', 'proiect_optional', 'copil'))
+     OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'a0_executie_acces_inbox')
+        <> (SELECT count(*) FROM public.fn_executie_acces_inventar() WHERE tip = 'tabel' AND clasa = 'inbox') THEN
+    RAISE EXCEPTION '20261209a post: numarul trigger-elor de garda';
+  END IF;
+  -- Storage: exact 4 politici RESTRICTIVE, legate de regula și de rezolvarea obiectului
+  IF (SELECT count(*) FROM pg_policy pol WHERE pol.polrelid = 'storage.objects'::regclass AND pol.polname LIKE 'executie\_acces\_%') <> 4
+     OR (SELECT count(*) FROM pg_policy pol WHERE pol.polrelid = 'storage.objects'::regclass AND NOT pol.polpermissive
+           AND pol.polroles = ARRAY['authenticated'::regrole]::oid[]
+           AND pol.polname IN ('executie_acces_obiect_citire', 'executie_acces_obiect_adauga', 'executie_acces_obiect_modifica', 'executie_acces_obiect_sterge')
+           AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
+                        AND d.refobjid = 'public.fn_executie_acces_obiect_permis(text, text, boolean)'::regprocedure)
+           AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
+                        AND d.refobjid = 'public.fn_executie_acces_nerestrans()'::regprocedure)) <> 4 THEN
+    RAISE EXCEPTION '20261209a post: politicile Storage';
+  END IF;
+  -- r8: nicio politică (pe niciun tabel) nu cheamă o funcție internă a migrării: politicile se evaluează în numele apelantului, deci o
+  -- funcție internă ar cere EXECUTE pentru clienți (adică ar redeveni apelabilă direct)
+  SELECT string_agg(pol.polrelid::regclass::text || '.' || pol.polname, ', ' ORDER BY pol.oid) INTO v_lista
+    FROM pg_policy pol JOIN pg_depend d ON d.classid = 'pg_policy'::regclass AND d.objid = pol.oid AND d.refclassid = 'pg_proc'::regclass
+    JOIN pg_proc p ON p.oid = d.refobjid JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND (p.proname LIKE 'fn\_executie\_acces\_%' OR p.proname = 'fn_executie_proiect_permis')
+     AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE');
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION '20261209a post: politici care cheama functii interne: %', v_lista;
+  END IF;
+  -- funcțiile de drept: corpul nou revizuit (amprentă fără CR) + aceleași proprietăți și ACL ca înainte
+  IF EXISTS (SELECT 1 FROM (VALUES
+               ('public.fn_executie_nod_drept(bigint, boolean)', '1f0faa030d0459412aafb6e1a024beff', true, true),
+               ('public.fn_executie_contract_drept(bigint, boolean)', 'f3c3dc6add32d563682494e804864e99', true, true),
+               ('public.fn_executie_grafic_drept(bigint)', '5df5d4ecce38a81472fc4f17cf410b97', true, true),
+               ('public.fn_executie_tinte_drept(bigint, text)', '9bc9c10212d8f0a7ca5ad94e0220c7c2', false, true),
+               ('public.fn_raport_santier_drept(bigint)', '640bdc86e81468fc7c5025f6eb54a23f', false, false)) a(semnatura, amprenta, cu_service, cu_auth)
+              LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
+              WHERE p.oid IS NULL
+                 OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM a.amprenta
+                 OR p.prosecdef IS NOT TRUE
+                 OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+                 OR p.provolatile IS DISTINCT FROM 's'
+                 OR pg_get_userbyid(p.proowner) IS DISTINCT FROM current_user
+                 OR has_function_privilege('anon', p.oid, 'EXECUTE')
+                 OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_auth
+                 OR has_function_privilege('service_role', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_service) THEN
+    RAISE EXCEPTION '20261209a post: functiile de drept (corp / proprietati / EXECUTE)';
+  END IF;
+  -- r13 (6c): predicatul Inboxului — corpul nou revizuit (amprentă fără CR), același OID / owner / proprietăți / drepturi ca înainte
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_ai_inbox_poate_confirma(text, bigint)')
+                  AND md5(replace(p.prosrc, chr(13), '')) = 'ee831a07d9ec33ea5be8de44a2d0a00c'
+                  AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND p.provolatile = 's'
+                  AND p.prorettype = 'boolean'::regtype::oid AND pg_get_userbyid(p.proowner) = current_user
+                  AND has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE'))
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_ai_inbox_poate_confirma') <> 1 THEN
+    RAISE EXCEPTION '20261209a post: fn_ai_inbox_poate_confirma (corp / proprietati / EXECUTE)';
+  END IF;
+  -- poarta (6b): originalul neschimbat în schema internă, poarta revizuită în public, schema fără USAGE pentru clienți
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN public.fn_executie_acces_inventar() i ON i.tip = 'functie' AND i.obiect = 'fn_executie_swap_tevi_pozitie'
+                  WHERE p.oid = to_regprocedure('executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                    AND md5(replace(p.prosrc, chr(13), '')) = i.cheie AND p.prosecdef AND pg_get_userbyid(p.proowner) = current_user)
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_executie_swap_tevi_pozitie(bigint, bigint)')
+                     AND md5(replace(p.prosrc, chr(13), '')) = 'ab1f7875a2784791f9584580b71be38f'
+                     AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = current_user
+                     AND p.prorettype = 'void'::regtype::oid
+                     AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                     AND has_function_privilege('service_role', p.oid, 'EXECUTE')
+                         = has_function_privilege('service_role', 'executie_acces_intern.fn_executie_swap_tevi_pozitie(bigint, bigint)', 'EXECUTE'))
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_executie_swap_tevi_pozitie') <> 2
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'executie_acces_intern')) <> 1
+     OR EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'executie_acces_intern'))
+     OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) rl
+                 WHERE has_schema_privilege(rl, 'executie_acces_intern', 'USAGE') OR has_schema_privilege(rl, 'executie_acces_intern', 'CREATE'))
+     OR pg_get_userbyid((SELECT nspowner FROM pg_namespace WHERE nspname = 'executie_acces_intern')) IS DISTINCT FROM current_user THEN
+    RAISE EXCEPTION '20261209a post: poarta fn_executie_swap_tevi_pozitie (original / poarta / schema interna)';
+  END IF;
+  -- nicio dată: niciun cont nu e restrâns după migrare
+  IF EXISTS (SELECT 1 FROM public.executie_acces_proiect) THEN
+    RAISE EXCEPTION '20261209a post: migrarea nu scrie date';
+  END IF;
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261209a_executie_acces_proiect:' || txid_current() THEN
+    RAISE EXCEPTION '20261209a: garda final invalida';
+  END IF;
+END $post$;

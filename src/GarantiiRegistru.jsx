@@ -11,12 +11,16 @@
 //   07.10.2026 (TKT-2026-0331, varianta A): „＋ Poliță existentă” — o poliță deja emisă intră direct în registru
 //   (forma polita_asigurare, același drum de scriere: RLS fn_poate_scrie_garantii, canEdit), ca să i se poată trece BO-urile.
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import CerereOfertaPanel, { useTipuriGarantii } from './GarantiiCerereOferta.jsx'
 import { TIPURI_CERERE } from './garantiiCerereOferta.js'
 import BiletePanel from './GarantiiBileteOrdin.jsx'
 import { rezumatBOPeGarantie } from './garantiiBileteOrdin.js'
+// Polițe 20261205a: citirea documentului + salvarea confirmată (polița pe contract + rândul legat din Registru)
+import PolitaCitire, { stilCampPropus } from './PolitaCitire.jsx'
+import { formDinPropunere, mesajEroare, aplicaPropunere } from './polite.js'
+import { paginareKeyset } from './hrDeciziiUtil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -44,62 +48,133 @@ const STARE = {
 
 // ── TKT-2026-0331: o poliță DEJA emisă (nu prin „Cere ofertă”) se înregistrează direct, ca să i se poată atașa BO-urile.
 const TIP_POLITA = { buna_executie:'Bună execuție (GBE)', avans:'Returnare avans', participare:'Participare', mentenanta:'Mentenanță', car:'CAR' }
+// Polițe 20261205a (D1): tipul din Registru ↔ tipul poliței de pe contract; „mentenanță” nu are corespondent pe contract (rămâne doar aici)
+const TIP_CONTRACT = { buna_executie:'GBE', car:'CAR', participare:'GPL', avans:'avans' }
+const TIP_DIN_CONTRACT = { GBE:'buna_executie', CAR:'car', GPL:'participare', avans:'avans' }
 function PolitaExistentaPanel({ tipuriPermise, onClose, onDone, showToast }) {
-  const [f, setF] = useState({ tip:'buna_executie', beneficiar:'', lucrare:'', contract_numar:'', contract_data:'', emitent:'', numar_document:'',
-    valoare:'', moneda:'RON', data_emitere:'', data_expirare:'', observatii:'' })
+  const init = useRef({ tip:'buna_executie', beneficiar:'', lucrare:'', contract_numar:'', contract_data:'', emitent:'', numar_document:'',
+    valoare:'', moneda:'RON', data_emitere:'', data_expirare:'', observatii:'', contract_id:'', executie_de_la:'', executie_pana_la:'', garantie_de_la:'', garantie_pana_la:'' })
+  const [f, setF] = useState(init.current)
+  const citireRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
+  const [fisier, setFisier] = useState(null)
+  const [citire, setCitire] = useState(null)
+  const [contracte, setContracte] = useState([])
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
   const tipuri = Object.keys(TIP_POLITA).filter(t => t !== 'car' || tipuriPermise.includes('car'))
+  useEffect(() => {
+    let viu = true
+    // toate contractele (keyset pe id, L23: plafonul de 1000 rânduri al serverului), apoi ordinea de afișare (cele mai noi întâi)
+    paginareKeyset((ultim, pas) => {
+      let q = supabase.from('contracte_terti').select('id, numar_contract, denumire, data_semnare').order('id').limit(pas)
+      return ultim == null ? q : q.gt('id', ultim)
+    }).then(rows => {
+      if (!viu) return
+      setContracte(rows.sort((a, b) => String(b.data_semnare || '').localeCompare(String(a.data_semnare || '')) || b.id - a.id))
+    }).catch(() => { if (viu) setErr('Lista contractelor nu s-a putut citi: polița se poate salva doar în Registru.') })
+    return () => { viu = false }
+  }, [])
+  // r2 (P2-4): câmpurile propuse de documentul anterior revin întâi la valoarea inițială
+  const laPropunere = p => {
+    const vechi = citireRef.current?.propuse || []
+    let nou = null
+    if (p) {
+      const r = formDinPropunere(p, 'registru', { asigurator:'emitent', nr_polita:'numar_document' })
+      const v = { ...r.valori }
+      if (v.tip) { if (TIP_DIN_CONTRACT[v.tip]) v.tip = TIP_DIN_CONTRACT[v.tip]; else delete v.tip }
+      if (p.contract_propus?.id) v.contract_id = String(p.contract_propus.id)
+      nou = { propunere:p, ...r, valori:v, propuse:Object.keys(v) }
+    }
+    citireRef.current = nou
+    setCitire(nou)
+    setF(x => aplicaPropunere(x, init.current, vechi, nou?.valori))
+  }
+  const alegeContract = id => {
+    set('contract_id', id)
+    const c = contracte.find(x => String(x.id) === String(id))
+    if (c) setF(x => ({ ...x, contract_id:id, contract_numar:x.contract_numar || c.numar_contract || '', contract_data:x.contract_data || c.data_semnare || '', lucrare:x.lucrare || c.denumire || '' }))
+  }
   const lipsuri = [!f.beneficiar.trim() && 'beneficiarul', !f.emitent.trim() && 'asigurătorul', !f.numar_document.trim() && 'nr. poliței',
     !(Number(f.valoare) > 0) && 'valoarea'].filter(Boolean)
   const salveaza = async () => {
     if (lipsuri.length) return setErr('Completează: ' + lipsuri.join(', ') + '.')
     if (f.data_emitere && f.data_expirare && f.data_expirare < f.data_emitere) return setErr('Data expirării e înaintea datei emiterii.')
+    if (f.tip === 'mentenanta' && f.contract_id) return setErr('Polița de mentenanță se ține doar în Registru: scoate contractul ales.')
     setBusy(true); setErr(null)
-    const { error } = await supabase.from('garantii').insert({
-      forma:'polita_asigurare', tip:f.tip, beneficiar:f.beneficiar.trim(), lucrare:f.lucrare.trim() || null,
-      contract_numar:f.contract_numar.trim() || null, contract_data:f.contract_data || null,
-      emitent:f.emitent.trim(), numar_document:f.numar_document.trim(), valoare:Number(f.valoare), moneda:f.moneda || 'RON',
-      data_emitere:f.data_emitere || null, data_expirare:f.data_expirare || null, stare:'activa', sursa_document:'manual',
-      observatii:f.observatii.trim() || null,
-    })
+    let error
+    if (f.tip === 'mentenanta') {
+      // ca înainte: doar rândul din Registru
+      ;({ error } = await supabase.from('garantii').insert({
+        forma:'polita_asigurare', tip:f.tip, beneficiar:f.beneficiar.trim(), lucrare:f.lucrare.trim() || null,
+        contract_numar:f.contract_numar.trim() || null, contract_data:f.contract_data || null,
+        emitent:f.emitent.trim(), numar_document:f.numar_document.trim(), valoare:Number(f.valoare), moneda:f.moneda || 'RON',
+        data_emitere:f.data_emitere || null, data_expirare:f.data_expirare || null, stare:'activa', sursa_document:'manual',
+        observatii:f.observatii.trim() || null,
+      }))
+    } else {
+      // polița pe contract (dacă e ales) + rândul legat din Registru, sau doar rândul din Registru — o singură tranzacție (fn_polita_salveaza)
+      const p_date = { tinta:f.contract_id ? 'polita' : 'registru', contract_id:f.contract_id ? Number(f.contract_id) : null, tip:TIP_CONTRACT[f.tip],
+        asigurator:f.emitent.trim(), nr_polita:f.numar_document.trim(), valoare:String(f.valoare).trim(), moneda:f.moneda || 'RON',
+        data_emitere:f.data_emitere || null, data_expirare:f.data_expirare || null, executie_de_la:f.executie_de_la || null, executie_pana_la:f.executie_pana_la || null,
+        garantie_de_la:f.garantie_de_la || null, garantie_pana_la:f.garantie_pana_la || null, observatii:f.observatii.trim() || null }
+      const p_registru = { beneficiar:f.beneficiar.trim(), lucrare:f.lucrare.trim() || null, contract_numar:f.contract_numar.trim() || null, contract_data:f.contract_data || null }
+      const p_propunere_id = citire?.propunere && !citire.propunere.doar_valori ? citire.propunere.id : null
+      ;({ error } = await supabase.rpc('fn_polita_salveaza', { p_propunere_id, p_date, p_registru }))
+    }
     setBusy(false)
-    if (error) return setErr('Nu s-a salvat: ' + error.message)
-    showToast?.('✓ Polița e în registru — acum îi poți trece biletele la ordin (🧾 BO)', 'ok')
+    if (error) return setErr('Nu s-a salvat: ' + mesajEroare(error))
+    showToast?.(f.contract_id ? '✓ Polița e pe contract și în registru — îi poți trece biletele la ordin (🧾 BO)' : '✓ Polița e în registru — acum îi poți trece biletele la ordin (🧾 BO)', 'ok')
     onDone?.(); onClose?.()
   }
+  const stil = k => stilCampPropus(S.input, k, f[k], citire)
   const camp = (k, l, props = {}) => (
-    <div><label style={S.lbl}>{l}</label><input value={f[k]} onChange={e => set(k, e.target.value)} style={S.input} {...props} /></div>
+    <div><label style={S.lbl}>{l}</label><input value={f[k]} onChange={e => set(k, e.target.value)} style={stil(k)} {...props} /></div>
   )
+  const pc = citire?.propunere?.contract_propus
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'40px 12px'}}>
-      <div style={{background:G.card,border:`1px solid ${G.border}`,borderRadius:12,width:'100%',maxWidth:620,padding:18,color:G.text}}>
+      <div style={{background:G.card,border:`1px solid ${G.border}`,borderRadius:12,width:'100%',maxWidth:fisier ? 1120 : 620,padding:18,color:G.text}}>
         <div style={{display:'flex',alignItems:'center',marginBottom:6}}>
           <div style={{fontWeight:700,fontSize:15}}>＋ Poliță existentă</div>
           <button onClick={onClose} style={{...S.btnS,marginLeft:'auto'}}>✕</button>
         </div>
-        <div style={{fontSize:12,color:G.muted,marginBottom:14}}>Pentru o poliță deja emisă (GBE, avans…). După salvare, pe rândul ei apare „🧾 BO” — acolo treci biletele la ordin date ca garanție.</div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10}}>
-          <div><label style={S.lbl}>Tip</label>
-            <select value={f.tip} onChange={e => set('tip', e.target.value)} style={S.input}>{tipuri.map(t => <option key={t} value={t}>{TIP_POLITA[t]}</option>)}</select></div>
-          {camp('beneficiar', 'Beneficiar *')}
-          {camp('lucrare', 'Lucrare')}
-          {camp('contract_numar', 'Nr. contract')}
-          {camp('contract_data', 'Data contract', { type:'date' })}
-          {camp('emitent', 'Asigurător *', { placeholder:'ex. Groupama, Euroins' })}
-          {camp('numar_document', 'Nr. poliță *')}
-          {camp('valoare', 'Valoare asigurată *', { inputMode:'decimal' })}
-          <div><label style={S.lbl}>Monedă</label><select value={f.moneda} onChange={e => set('moneda', e.target.value)} style={S.input}><option>RON</option><option>EUR</option></select></div>
-          {camp('data_emitere', 'Valabilă de la', { type:'date' })}
-          {camp('data_expirare', 'Valabilă până la', { type:'date' })}
-        </div>
-        <div style={{marginTop:10}}><label style={S.lbl}>Observații</label>
-          <textarea value={f.observatii} onChange={e => set('observatii', e.target.value)} rows={2} style={{...S.input,resize:'vertical'}} /></div>
-        {err && <div style={{marginTop:10,padding:'8px 10px',borderRadius:7,background:G.red+'22',color:G.red,fontSize:12.5}}>{err}</div>}
-        <div style={{display:'flex',gap:8,marginTop:14,justifyContent:'flex-end'}}>
-          <button onClick={onClose} style={S.btnS}>Renunță</button>
-          <button onClick={salveaza} disabled={busy} style={{...S.btnS,background:G.green+'22',color:G.green,border:`1px solid ${G.green}66`}}>{busy ? 'Se salvează…' : '✓ Salvează polița'}</button>
+        <div style={{fontSize:12,color:G.muted,marginBottom:14}}>Pentru o poliță deja emisă (GBE, CAR, avans…). Dacă alegi contractul, polița se trece și pe contract, iar alertele de expirare pleacă de acolo. După salvare, pe rândul ei apare „🧾 BO” — acolo treci biletele la ordin date ca garanție.</div>
+        <div style={{display:'grid',gridTemplateColumns:fisier ? 'minmax(0,1fr) minmax(0,1fr)' : '1fr',gap:18}}>
+          <div><PolitaCitire fisier={fisier} onFisier={setFisier} onPropunere={laPropunere} eticheta="PDF poliță (opțional, pentru citire)" /></div>
+          <div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10}}>
+              <div><label style={S.lbl}>Tip</label>
+                <select value={f.tip} onChange={e => set('tip', e.target.value)} style={stil('tip')}>{tipuri.map(t => <option key={t} value={t}>{TIP_POLITA[t]}</option>)}</select></div>
+              <div style={{gridColumn:'1 / -1'}}><label style={S.lbl}>Contract (opțional)</label>
+                <select value={f.contract_id} onChange={e => alegeContract(e.target.value)} style={stil('contract_id')}>
+                  <option value="">— fără contract în ERP (doar Registru) —</option>
+                  {contracte.map(c => <option key={c.id} value={c.id}>{[c.numar_contract, c.denumire].filter(Boolean).join(' · ') || `#${c.id}`}</option>)}
+                </select></div>
+              {camp('beneficiar', 'Beneficiar *')}
+              {camp('lucrare', 'Lucrare')}
+              {camp('contract_numar', 'Nr. contract')}
+              {camp('contract_data', 'Data contract', { type:'date' })}
+              {camp('emitent', 'Asigurător *', { placeholder:'ex. Groupama, Euroins' })}
+              {camp('numar_document', 'Nr. poliță *')}
+              {camp('valoare', 'Valoare asigurată *', { inputMode:'decimal' })}
+              <div><label style={S.lbl}>Monedă</label><select value={f.moneda} onChange={e => set('moneda', e.target.value)} style={stil('moneda')}><option>RON</option><option>EUR</option></select></div>
+              {camp('data_emitere', 'Valabilă de la', { type:'date' })}
+              {camp('data_expirare', 'Valabilă până la', { type:'date' })}
+              {f.contract_id && camp('executie_de_la', 'Execuție de la', { type:'date' })}
+              {f.contract_id && camp('executie_pana_la', 'Execuție până la', { type:'date' })}
+              {f.contract_id && camp('garantie_de_la', 'Garanție de la', { type:'date' })}
+              {f.contract_id && camp('garantie_pana_la', 'Garanție până la', { type:'date' })}
+            </div>
+            {pc && String(pc.id) !== String(f.contract_id) && <div style={{marginTop:8,fontSize:11.5,color:G.yellow}}>⚠ Documentul pomenește contractul {pc.numar_contract || '#' + pc.id}{pc.denumire ? ` (${pc.denumire})` : ''}.</div>}
+            <div style={{marginTop:10}}><label style={S.lbl}>Observații</label>
+              <textarea value={f.observatii} onChange={e => set('observatii', e.target.value)} rows={2} style={{...S.input,resize:'vertical'}} /></div>
+            {err && <div style={{marginTop:10,padding:'8px 10px',borderRadius:7,background:G.red+'22',color:G.red,fontSize:12.5}}>{err}</div>}
+            <div style={{display:'flex',gap:8,marginTop:14,justifyContent:'flex-end'}}>
+              <button onClick={onClose} style={S.btnS}>Renunță</button>
+              <button onClick={salveaza} disabled={busy} style={{...S.btnS,background:G.green+'22',color:G.green,border:`1px solid ${G.green}66`}}>{busy ? 'Se salvează…' : citire && !citire.propunere?.doar_valori ? '✓ Confirmă și salvează' : '✓ Salvează polița'}</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -181,13 +256,24 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
     const { data } = await supabase.from('garantii_bilete_ordin').select('garantie_id, stare, data_scadenta').in('garantie_id', ids).order('garantie_id')
     setBoRezumat(rezumatBOPeGarantie(data || []))
   }, [])
+  const [legate, setLegate] = useState(new Set())   // Polițe 20261205a: rândurile legate de o poliță de pe contract
+  const [eroareCitire, setEroareCitire] = useState(null)
   const load = useCallback(async () => {
     setLoading(true)
-    const [{ data: g }, { data: p }] = await Promise.all([
-      supabase.from('v_garantii_situatie').select('*').order('data_expirare', { ascending: true, nullsFirst: false }),
-      supabase.from('v_garantii_plafon_emitent').select('*'),
-    ])
-    setRanduri(g || []); setPlafon(p || []); setLoading(false)
+    // Polițe 20261205a (r5): Registrul citește v_garantii_registru — pe rândurile legate de o poliță de pe contract, asigurătorul, nr.,
+    // valoarea, moneda, emiterea și expirarea efectivă vin din poliță (*_ef); fără migrare, vederea veche (rânduri nelegate)
+    // r6 (Jakarinos r5 P2-1): vederea veche DOAR cand vederea nouă lipsește (migrarea neaplicată: 42P01 / PGRST205); orice altă eroare
+    // (drept, rețea) se afișează — altfel s-ar vedea valorile istorice ca fiind curente
+    let { data: g, error: eg } = await supabase.from('v_garantii_registru').select('*').order('data_expirare_ef', { ascending: true, nullsFirst: false })
+    if (eg && ['42P01', 'PGRST205'].includes(eg.code)) {
+      ({ data: g, error: eg } = await supabase.from('v_garantii_situatie').select('*').order('data_expirare', { ascending: true, nullsFirst: false }))
+    }
+    setEroareCitire(eg ? 'Registrul nu s-a putut citi: ' + (eg.message || 'eroare necunoscută') + '. Reîncarcă pagina.' : null)
+    const { data: p } = await supabase.from('v_garantii_plafon_emitent').select('*')
+    const ef = r => 'emitent_ef' in r ? { ...r, tip: r.tip_ef, emitent: r.emitent_ef, numar_document: r.numar_document_ef, valoare: r.valoare_ef, moneda: r.moneda_ef,
+      data_emitere: r.data_emitere_ef, data_expirare: r.data_expirare_ef, zile_pana_expirare: r.zile_pana_expirare_ef, de_facut: r.de_facut_ef } : r
+    const rows = (g || []).map(ef)
+    setRanduri(rows); setPlafon(p || []); setLegate(new Set(rows.filter(r => r.pe_contract).map(r => r.id))); setLoading(false)
     incarcaBo(g)
   }, [incarcaBo])
   useEffect(() => { load() }, [load])
@@ -216,6 +302,7 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
   const inLitigiu   = vizibile.filter(r => r.blocat_litigiu).reduce((s, r) => s + Number(r.valoare || 0), 0)
 
   if (loading) return <div style={{color:G.muted,fontSize:13,padding:20}}>Se încarcă registrul…</div>
+  if (eroareCitire) return <div role="alert" style={{color:G.red,fontSize:13,padding:20}}>{eroareCitire}</div>
 
   return (
     <div>
@@ -289,6 +376,7 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
                 </td>
                 <td style={{padding:'9px 12px'}} title={r.iban || r.numar_document || ''}>
                   {FORMA[r.forma]?.e} {FORMA[r.forma]?.l}
+                  {legate.has(r.id) && <div title="Datele poliței (asigurător, nr., valoare, expirare) vin de pe contract: se modifică acolo, cu actul adițional" style={{fontSize:10.5,color:G.blue,marginTop:3,fontWeight:700}}>🔗 pe contract</div>}
                 </td>
                 <td style={{padding:'9px 12px',color:G.muted}}>{r.emitent || r.banca || '—'}</td>
                 <td style={{padding:'9px 12px',fontWeight:700,whiteSpace:'nowrap'}}>{fmtLei(r.valoare)}</td>

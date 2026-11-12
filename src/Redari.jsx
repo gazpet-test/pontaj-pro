@@ -91,7 +91,11 @@ export default function Redari() {
     const { data, error } = await supabase.from('red_proiecte').select('*').eq('activ', true).order('created_at')
     if (generatieProiecte.current !== token) return
     if (error) { show('Proiecte: ' + msgEroare(error), 'error'); return }
-    setProiecte(data || [])
+    // Test weekend 06.11: starea informării GDPR (autorizarea TGZ) vine de la server pe fiecare proiect, ca „gata de convocare”
+    // din Setări / UAT-uri / Notificări / Registru să spună același lucru ca generarea. null (verificare eșuată) nu blochează nimic aici.
+    const cuInformare = await Promise.all((data || []).map(p => cuInformarePublicata(supabase, p)))
+    if (generatieProiecte.current !== token) return
+    setProiecte(cuInformare)
     const cerut = !selectieInitiala.current && (data || []).some(p => p.id === proiectInitial.current) ? proiectInitial.current : null
     selectieInitiala.current = true
     setProiectId(prev => cerut || (prev && (data || []).some(p => p.id === prev) ? prev : (data?.[0]?.id || '')))

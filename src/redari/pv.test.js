@@ -80,6 +80,13 @@ const dateB = () => {
   return d
 }
 const sablonB=()=>readFileSync('public/redari/sabloane/pv_b.docx')
+// Test 08.11.2026: forma reală din ModalPv pentru PV B — detinator: null (PV pe parcelă)
+it('PV B cu detinator: null (ca din ModalPv) se generează, fără eroare pe calitate', async () => {
+  const b = { ...dateB(), detinator: null, pv: { ...dateB().pv, motiv_pv_b: 'neprezentat' } }
+  const { campuri } = await genereazaPvB({ ...b, templateArrayBuffer: sablonB() })
+  expect(campuri.nume).toMatch(/FICTIV UNU/)
+  expect(campuri.bifa_neprezentat).toBeTruthy()
+})
 it('PV B: conv_retur prezent și mențiunea AR doar scurtă (fără textul liber, către TGZ) — regresie Copilot/Jakarinos f10 r2',async()=>{
   const b=dateB()
   b.convocari=[{id:'c1',detinator_id:'d1',canal:'posta',stare:'activ',sters_la:null,created_at:'2026-11-01',data_expediere:'2026-11-02',data_confirmare_primire:'2026-11-05',retur:'decedat',ar_alta_persoana:'FICTIV text liber'}]

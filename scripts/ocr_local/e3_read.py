@@ -1,11 +1,51 @@
 """Două cititoare pe același cadru; reutilizează read.py / garda v5, fără lock per cerere."""
 import concurrent.futures
+import http.client
 import io
 import multiprocessing
 import pathlib
 import time
 from .e3_contract import E3Error
 from .e3_mapare import mapare
+
+
+# Erorile de TRANSPORT spre modelul local, după numele excepției pe care read.py îl pune în result['error']
+# (read_lighton: „Tip”; read_mineru: „Tip:mesaj”). Orice alt tip (KeyError în gardă, JSON stricat, ValueError) = defect.
+ERORI_TRANSPORT = frozenset({
+    'OSError', 'ConnectionError', 'ConnectionRefusedError', 'ConnectionResetError', 'ConnectionAbortedError', 'BrokenPipeError',
+    'TimeoutError', 'timeout', 'gaierror', 'HTTPException', 'RemoteDisconnected', 'IncompleteRead', 'BadStatusLine', 'LineTooLong',
+    'ResponseNotReady', 'CannotSendRequest', 'CannotSendHeader', 'ImproperConnectionState',
+    # httpx, transportul clientului MinerU
+    'TransportError', 'NetworkError', 'ConnectError', 'ReadError', 'WriteError', 'CloseError', 'ProxyError', 'ProtocolError',
+    'RemoteProtocolError', 'TimeoutException', 'ConnectTimeout', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout', 'HTTPStatusError',
+    # mineru_vl_utils 2.0.7 învelește eșecurile serverului: ServerError (conexiune eșuată, răspuns stricat de la server),
+    # HttpResponseError (status ≠ 200). RequestError (răspuns trunchiat, cerere invalidă) rămâne defect.
+    'ServerError', 'HttpResponseError'})
+
+
+def cod_citire(result):
+    """E9: cititor oprit fără gardă → termenul = timeout; eroare de transport spre modelul local
+    (conexiune, HTTP, flux rupt) = model_indisponibil; orice alt defect sau răspuns gol / trunchiat = intern."""
+    if result.get('signal') == 'deadline':
+        return 'timeout'
+    error = result.get('error')
+    if not isinstance(error, str) or not error:
+        return 'intern'
+    # read_lighton pune doar numele tipului; singurul RuntimeError din blocul lui e statusul HTTP ≠ 200 al serverului local.
+    if error == 'RuntimeError' or error.partition(':')[0] in ERORI_TRANSPORT:
+        return 'model_indisponibil'
+    return 'intern'
+
+
+def cod_exceptie_cititor(exc):
+    """Excepție în procesul cititorului: transportul spre modelul local = model_indisponibil; restul = defect."""
+    if isinstance(exc, (ConnectionError, TimeoutError, http.client.HTTPException)):
+        return 'model_indisponibil'
+    # Clientul MinerU (httpx / mineru_vl_utils) pică deja la construcție, în afara firului de citire, când serverul
+    # e căzut („Failed to connect / get model name” = ServerError): aceeași listă albă ca în result['error'].
+    if type(exc).__module__.split('.')[0] in ('httpx', 'mineru_vl_utils') and type(exc).__name__ in ERORI_TRANSPORT:
+        return 'model_indisponibil'
+    return 'intern'
 
 
 def _reader_process(out, name, timeout, conn):
@@ -20,12 +60,12 @@ def _reader_process(out, name, timeout, conn):
         if state.get('benzi_garda') or read.garda_oprita(result):
             conn.send((None, 'garda'))
         elif state['status'] != 'complete' or not result.get('ok'):
-            conn.send((None, 'intern'))
+            conn.send((None, cod_citire(result)))
         else:
             raw = (pathlib.Path(out) / 'page0001/p0001_b0' / name / 'raw.txt').read_text(encoding='utf-8')
             conn.send((raw, None))
-    except Exception:
-        conn.send((None, 'intern'))
+    except Exception as exc:
+        conn.send((None, cod_exceptie_cititor(exc)))
     finally:
         conn.close()
 
@@ -62,7 +102,8 @@ class Reader:
                     guard = garda_oprita(result)
                 except (OSError, ValueError):
                     pass
-                raise E3Error('garda' if guard else 'intern')
+                # E9: termenul cititorului a trecut (model lent / blocat); refuzul conexiunii vine ca model_indisponibil.
+                raise E3Error('garda' if guard else 'timeout')
             raw, error = parent.recv()
             if error:
                 raise E3Error(error)
@@ -81,7 +122,7 @@ def citeste_orientat(image, sablon, root, reader, deadline, clock=time.monotonic
     def call(name, im, angle):
         remaining = deadline - clock()
         if remaining <= 0:
-            raise E3Error('intern')
+            raise E3Error('timeout')
         return reader(name, im, root / ('r%s_%s' % (angle, name)), remaining)
     def pair(im, angle):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:

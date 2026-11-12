@@ -10,7 +10,9 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
-import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI } from './utils/probeCalc.js'
+import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI, etichetaDiametru } from './utils/probeCalc.js'
+import { CONTACT_COLOANE, CONTACT_MAX, ETICHETE as ETICHETE_CONTACT, stareContactDinSonda, lipsaColoaneContact, avertismentTelefon, avertismentEmail,
+  depasireLungime, contactPayload, randuriContactExport, esc } from './probeOfertaContact.js'
 import OfertareLicitatiiTab from './OfertareLicitatii.jsx'
 import OfertareBiblioteca from './OfertareBiblioteca.jsx'
 
@@ -353,19 +355,27 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     inc_calibrare: oferta.inc_calibrare ?? true,
     status: oferta.status || 'draft',
     observatii: oferta.observatii || '',
+    // TKT-2026-0374: contactul la beneficiar (coloanele vin din 20261215b; lipsă = câmpuri goale, dezactivate)
+    client_contact_nume: oferta.client_contact_nume || '',
+    client_contact_telefon: oferta.client_contact_telefon || '',
+    client_contact_email: oferta.client_contact_email || '',
   })
   const setK = (k,v) => setF(p => ({...p,[k]:v}))
+  const [contactStare, setContactStare] = useState(null)   // 'da' | 'nu' (migrarea neaplicată) | 'eroare' | null (se verifică)
 
   useEffect(() => {
     (async () => {
-      const [cRes, dRes, cfgRes, ttRes] = await Promise.all([
+      const [cRes, dRes, cfgRes, ttRes, contactRes] = await Promise.all([
         supabase.from('probe_calcule')
           .select('id, tip_fluid, lungime_m, presiune_bar, v_conducta_mc, durata_proba_h, durata_pistonare_h, durata_total_h, consum_motorina_l, proiect_id, config_id, probe_diametre(dn_label), probe_configuratii!config_id(denumire, tarif_lei_h, tarif_lei_mc, categorie_transport), executie_proiecte(cod_intern, nume)')
           .order('created_at', { ascending: false }).limit(100),
         supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
         supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
         supabase.from('probe_transport_tarife').select('*'),
+        // TKT-2026-0374: sondă — există coloanele de contact (migrarea 20261215b)?
+        supabase.from('probe_oferte').select(CONTACT_COLOANE.join(', ')).limit(1),
       ])
+      setContactStare(stareContactDinSonda(contactRes))
       // TKT-2026-0330: probe_calcule are două FK spre probe_configuratii (config_id + config_real_id) — fără !config_id
       // embed-ul era ambiguu (PGRST201), lista venea goală tăcut și „Din calcul salvat” nu mai avea nimic de ales
       if (cRes.error) onError('Calculele de probă nu s-au încărcat: ' + cRes.error.message)
@@ -539,11 +549,19 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
         inc_pistonare: !!f.inc_pistonare, inc_uscare: !!f.inc_uscare, inc_calibrare: !!f.inc_calibrare,
         status: f.status, observatii: f.observatii.trim()||null,
         created_by: profile?.id||null,
+        // TKT-2026-0374: doar dacă migrarea e aplicată (altfel payload-ul e exact cel de azi)
+        ...contactPayload(f, contactStare),
       }
+      const prea = contactStare === 'da' ? depasireLungime(f) : null
+      if (prea) { setBusy(false); return onError(prea) }
       let error
       if (isNew) { ({ error } = await supabase.from('probe_oferte').insert(payload)) }
       else { ({ error } = await supabase.from('probe_oferte').update(payload).eq('id', oferta.id)) }
-      if (error) { setBusy(false); return onError('Eroare: ' + error.message) }
+      if (error) {
+        setBusy(false)
+        if (lipsaColoaneContact(error)) { setContactStare('nu'); return onError('Datele de contact vor putea fi salvate după actualizarea bazei de date. Oferta NU a fost salvată: apăsați din nou Salvează.') }
+        return onError('Eroare: ' + error.message)
+      }
 
       // 2. Dacă oferta tocmai a devenit câștigată/acceptată → notifică Achiziții
       const eraCastigata = ['castigata','acceptata'].includes(oferta.status)
@@ -595,8 +613,10 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
               <div><label style={S.lbl}>Diametru (DN)</label>
                 <select value={ci.dnId} onChange={e=>setCiK('dnId',e.target.value)} style={S.input}>
                   <option value="">— DN —</option>
-                  {diametre.map(d=><option key={d.id} value={d.id}>{d.dn_label} ({fmtLei(d.diametru_extern_mm)} mm)</option>)}
-                </select></div>
+                  {diametre.map(d=><option key={d.id} value={d.id}>{etichetaDiametru(d, fmtLei)}</option>)}
+                </select>
+                {/* TKT-2026-0348: echivalentul în țoli e în listă (10″ = Ø273,1 mm, 12″ = Ø323,9 mm) */}
+                <div style={{fontSize:10, color:G.dim, marginTop:3}}>Țeavă în țoli: 10″ = Ø273,1 mm · 12″ = Ø323,9 mm (căutați după țoli în listă)</div></div>
               <div><label style={S.lbl}>Configurație (≥ presiune)</label>
                 <select value={ci.configId} onChange={e=>setCiK('configId',e.target.value)} style={S.input}>
                   <option value="">— config —</option>
@@ -649,6 +669,28 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
           <div><label style={S.lbl}>Distanță (km)</label><input type="number" value={f.distanta_km} onChange={e=>setK('distanta_km',e.target.value)} style={S.input} /></div>
           <div><label style={S.lbl}>Data ofertei</label><input type="date" value={f.data_oferta} onChange={e=>setK('data_oferta',e.target.value)} style={S.input} /></div>
         </div>
+
+        {/* TKT-2026-0374: persoana de contact la beneficiar — apare în Excel / PDF doar dacă e completată */}
+        {(() => {
+          const activ = contactStare === 'da'
+          const avert = { client_contact_telefon: avertismentTelefon(f.client_contact_telefon), client_contact_email: avertismentEmail(f.client_contact_email) }
+          return (
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:12, fontWeight:800, color:G.text, marginBottom:6}}>👤 Contact la beneficiar <span style={{fontWeight:400, color:G.dim}}>(opțional)</span></div>
+              {contactStare === 'nu' && <div style={{fontSize:11, color:G.muted, marginBottom:6}}>Disponibil după actualizarea bazei de date.</div>}
+              {contactStare === 'eroare' && <div style={{fontSize:11, color:G.red, marginBottom:6}}>Nu s-a putut verifica dacă datele de contact sunt disponibile. Redeschideți oferta.</div>}
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10}}>
+                {[['client_contact_nume', 'text', 'ex: Popescu Ion'], ['client_contact_telefon', 'tel', 'ex: 0722 123 456'], ['client_contact_email', 'email', 'ex: nume@firma.ro']].map(([k, tip, ph]) => (
+                  <div key={k}><label style={S.lbl}>{ETICHETE_CONTACT[k]}</label>
+                    <input type={tip} value={f[k]} onChange={e=>setK(k, e.target.value)} disabled={!activ} maxLength={CONTACT_MAX[k]}
+                      style={{...S.input, opacity: activ ? 1 : .5}} placeholder={activ ? ph : ''} />
+                    {activ && avert[k] && <div style={{fontSize:10, color:G.orange, marginTop:3}}>{avert[k]}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })()}
 
         <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:8}}>
           <div style={{fontSize:12, fontWeight:800, color:G.text}}>💰 Costuri (lei, fără TVA)</div>
@@ -818,7 +860,7 @@ function TarifeTransportModal({ tarife, onClose, onSaved }) {
 // ════════════════════════════════════════════════════════════════
 // EXPORT EXCEL — xlsx-js-style
 // ════════════════════════════════════════════════════════════════
-async function generateOfertaExcel(d) {
+export async function generateOfertaExcel(d) {
   const XLSX = await import('xlsx-js-style')
   const calc = d.calc || {}
   const dn = calc.probe_diametre?.dn_label || '—'
@@ -836,6 +878,8 @@ async function generateOfertaExcel(d) {
     [{v:`Nr. ${d.nr_oferta}   ·   Data: ${d.data_oferta}`, s:{font:{italic:true}}}],
     [],
     [{v:'Client', s:bBold}, {v:d.client||'—'}],
+    // TKT-2026-0374: contactul la beneficiar, doar rândurile completate
+    ...randuriContactExport(d).map(([l, v]) => [{v:l, s:bBold}, {v}]),
     [{v:'Localitate', s:bBold}, {v:d.localitate||'—'}],
     [{v:'Distanță (km)', s:bBold}, {v:d.distanta_km||'—'}],
     [],
@@ -863,7 +907,9 @@ async function generateOfertaExcel(d) {
 
   const ws = XLSX.utils.aoa_to_sheet(rows)
   ws['!cols'] = [{wch:28},{wch:22}]
-  ws['!merges'] = [ {s:{r:8,c:0},e:{r:8,c:1}}, {s:{r:16,c:0},e:{r:16,c:1}} ]
+  // antetele de secțiune se îmbină pe poziția lor reală (rândurile de contact sunt opționale, deci indicii nu mai sunt ficși)
+  ws['!merges'] = ['PARAMETRI TEHNICI', 'DETALIERE COSTURI'].map(t => rows.findIndex(r => r[0]?.v === t)).filter(r => r >= 0)
+    .map(r => ({s:{r,c:0},e:{r,c:1}}))
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Ofertă')
   const clientClean = (d.client||'CLIENT').replace(/[^a-zA-Z0-9]/g,'').toUpperCase().slice(0,12)
@@ -874,9 +920,8 @@ async function generateOfertaExcel(d) {
 // ════════════════════════════════════════════════════════════════
 // EXPORT PDF — html2canvas + jsPDF (A4 portrait)
 // ════════════════════════════════════════════════════════════════
-async function generateOfertaPDF(d) {
-  const { jsPDF } = await import('jspdf')
-  const html2canvas = (await import('html2canvas')).default
+// TKT-2026-0374: HTML-ul ofertei separat de randare (testabil fără DOM)
+export function buildOfertaProbaHtml(d) {
   const calc = d.calc || {}
   const dn = calc.probe_diametre?.dn_label || '—'
   const cfg = calc.probe_configuratii?.denumire || '—'
@@ -894,7 +939,7 @@ async function generateOfertaPDF(d) {
         <div style="font-size:12px;color:#555">Data: ${d.data_oferta}</div></div>
     </div>
     <table style="width:100%;font-size:12px;margin-bottom:16px"><tbody>
-      ${row('Client', d.client||'—')}${row('Localitate', d.localitate||'—')}${row('Distanță', (d.distanta_km||'—')+' km')}
+      ${row('Client', d.client||'—')}${randuriContactExport(d).map(([l, v]) => row(l, esc(v))).join('')}${row('Localitate', d.localitate||'—')}${row('Distanță', (d.distanta_km||'—')+' km')}
     </tbody></table>
     <div style="font-size:13px;font-weight:bold;color:#3B6D11;margin:6px 0 6px">Parametri tehnici</div>
     <table style="width:100%;font-size:12px;margin-bottom:16px"><tbody>
@@ -922,6 +967,13 @@ async function generateOfertaPDF(d) {
     </div>
     <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:right">Generat ${new Date().toLocaleString('ro-RO')}</div>
   </div>`
+  return html
+}
+
+async function generateOfertaPDF(d) {
+  const { jsPDF } = await import('jspdf')
+  const html2canvas = (await import('html2canvas')).default
+  const html = buildOfertaProbaHtml(d)
 
   const div = document.createElement('div')
   div.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff'

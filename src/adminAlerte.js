@@ -7,6 +7,8 @@ export const SURSE_ADMIN = [
   { id: 'flota', label: 'Logistică · documente', module: 'logistica', path: '/logistica?tab=documente&sub=alerte' },
   { id: 'firma', label: 'Documente firmă', module: 'administrativ', submodule: 'administrativ.documente', path: '/administrativ' },
   { id: 'gbe', label: 'Garanții GBE', module: 'financiar', path: '/financiar?tab=gbe' },
+  // Polițe 20261205a: scadențele polițelor active (contract + Registru nelegat), din v_polite_scadente — aceeași regulă ca mailurile
+  { id: 'polite', label: 'Polițe CAR / GBE', module: 'financiar', path: '/financiar?tab=garantii' },
   { id: 'comenzi', label: 'Aprobări comenzi', module: 'achizitii', path: '/achizitii', approval: true },
   { id: 'transport', label: 'Aprobări transport', module: 'logistica', path: '/logistica?tab=transporturi', approval: true },
   // 29.09.2026 (R1/R2): administrarea conturilor e doar a owner-ului — și în BD (poarta din fn_admin_conturi_alerte).
@@ -151,6 +153,25 @@ export function alerteGbeAdmin(balances, policies, contracts, today) {
     if (item) rows.push(item)
   }
   return rows
+}
+
+// ---- Polițe CAR / GBE (20261205a) -------------------------------------------------------------
+// Pragul vine din BD (fn_polite_scadente: 60 / 30 / 15 / 0 / săptămânal după expirare); aici doar prioritatea afișată.
+const textPrag = (prag, zile) => prag === '0' ? (zile === 0 ? 'expiră azi' : `a expirat acum ${-zile} zile`)
+  : prag?.startsWith('r') ? `expirată de ${-zile} zile, fără prelungire` : `expiră în ${zile} zile`
+export function alertePolite(rows) {
+  return (rows || []).filter(r => r.prag != null || r.data_expirare == null).map(r => alerta('polite', r.cheie, {
+    title: `Poliță ${r.tip || ''} ${r.nr_polita || 'fără număr'} · ${r.data_expirare == null ? 'fără dată de expirare' : textPrag(r.prag, r.zile)}`,
+    reference: [r.asigurator, r.numar_contract && `contract ${r.numar_contract}`, r.proiect_nume].filter(Boolean).join(' · '),
+    date: r.data_expirare || null,
+    priority: r.data_expirare == null ? 'missing' : r.zile < 0 ? 'critical' : r.zile <= 7 ? 'week' : 'attention',
+    owner: 'Financiar · Execuție (proiect)',
+    path: r.proiect_id ? `/executie?proiect=${r.proiect_id}` : '/financiar?tab=garantii',
+    impact: r.data_expirare == null ? 'Polița activă nu are dată de expirare: completeaz-o pe contract, altfel nu primește alerte.'
+      : 'Cere asigurătorului prelungirea (act adițional) și încarc-o pe contract; dacă polița nu se mai prelungește, marcheaz-o închisă.',
+    reason: 'Expirarea efectivă = cea mai târzie dată din actele adiționale, altfel data poliței. Aceeași regulă trimite și mailurile de alertă.',
+    locator: `v_polite_scadente · ${r.cheie}`,
+  }))
 }
 
 // ---- Conturi platformă (R1 legare cont↔fișă, R2 cont închis la încetare) --------------------
@@ -302,6 +323,7 @@ export const SELECT_ADMIN = {
   logistica_tipuri_documente: 'id,nume',
   v_gbe_per_contract: 'contract_id,numar_contract,denumire,gbe_ramas,gbe_data_estimata_recuperare,gbe_cont_valabil_pana,status',
   gbe_polite: 'id,contract_id,numar_polita,data_expirare,activ',
+  v_polite_scadente: 'cheie,sursa,ref_id,contract_id,numar_contract,contract_denumire,proiect_id,proiect_nume,tip,asigurator,nr_polita,valoare,moneda,data_expirare,zile,prag',
   contracte_terti: 'id,numar_contract,status',
   comenzi_furnizor_aprobari: 'id,comanda:comenzi_furnizor(id,numar_comanda,moneda,status,linii:comenzi_furnizor_linii(cantitate,pret_unitar))',
   logistica_comenzi_transport: 'id,numar_comanda,data_transport,status',
@@ -393,6 +415,7 @@ export async function incarcaSursaAdmin(client, source, profile, { signal, now =
     if (source.id === 'ofertare') rows = alerteOfertare(await read('ofertare_licitatii', q => q.in('status', ['identificata', 'analiza', 'go', 'in_lucru'])), now)
     if (source.id === 'hr') rows = alerteHr(await read('v_hr_autorizatii_status'), today)
     if (source.id === 'conturi') rows = alerteConturi(await read('v_admin_conturi_alerte'), today)
+    if (source.id === 'polite') rows = alertePolite(await read('v_polite_scadente', q => q, 'cheie'))
     if (source.id === 'sms_sold') rows = alerteSmsSold((await read('v_sms_sold'))[0] ?? null, now.getTime())
     if (source.id === 'gmail') rows = alerteGmail(await read('executie_proiecte', q => q.eq('activ', true)))
     if (source.id === 'firma') rows = alerteFirma(await read('documente_firma', q => q.eq('activ', true)), today)

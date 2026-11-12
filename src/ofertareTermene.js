@@ -181,6 +181,9 @@ export function calculeazaTermene({ termenDepunere, zileIntrebari = null, zileRa
     repere.push(reper('raspuns', 'AC răspunde consolidat până la', zr != null ? plusZile(depunere, -zr) : null,
       { sursa: zileRaspuns != null ? `fișa de date: ${zileRaspuns} zile înainte` : raspImplicit != null ? `implicit L98 art. 161: ${raspImplicit} zile (${canal === 'seap_scn' ? 'procedură simplificată' : 'licitație deschisă'})` : 'necunoscut — canal nespecificat' }))
     repere.push(reper('depunere', 'Depunerea ofertei', depunere, { ora: termenDepunere ? new Date(termenDepunere).toLocaleTimeString('ro-RO', { timeZone: FUS, hour: '2-digit', minute: '2-digit' }) : null }))
+    // review Jakarinos #1027 (L19): reperul depunerii e „trecut” pe timestamp exact, ca lista și antetul fișei (ofertareStareTermen.js) —
+    // în ziua termenului, după oră, nu mai arată „AZI”
+    { const d = repere[repere.length - 1]; if (d.stare === 'azi' && new Date(termenDepunere).getTime() <= new Date(acum).getTime()) d.stare = 'trecut' }
   }
 
   // L101 art. 8 alin. (1): 7 zile sub prag, 10 zile la/peste prag, de la luarea la cunoștință de actul atacat (zile calendaristice).
