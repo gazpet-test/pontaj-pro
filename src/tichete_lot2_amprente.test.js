@@ -62,8 +62,7 @@ describe('AMPRENTA_L15: o singură definiție (script = migrări)', () => {
     })
     it(`${x}: baseline-ul e fie necompletat (→ refuz), fie completat din producție cu amprente md5 valide`, () => {
       const bloc = t.slice(t.indexOf(`-- >>> BASELINE ${x}`), t.indexOf(`-- <<< BASELINE ${x}`))
-      const linii = bloc.split('
-').map(l => l.trim()).filter(l => /^(, )?\('/.test(l))
+      const linii = bloc.split('\n').map(l => l.trim()).filter(l => /^(, )?\('/.test(l))
       expect(linii.length).toBeGreaterThan(0)
       if (linii.some(l => l.includes('DE_COMPLETAT'))) {
         expect(linii).toEqual([`('DE_COMPLETAT: scripts/tichete_lot2_amprente.sql, sectiunea ${x}', '-')`])
