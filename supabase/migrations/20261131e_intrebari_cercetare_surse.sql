@@ -90,22 +90,27 @@ CREATE FUNCTION pg_temp.fn_20261131e_asteptat()
 AS $asteptat$
   -- >>> AMPRENTE BASELINE (singurul loc de completat: îl înlocuiește INTEGRAL blocul tipărit de scripts/intrebari_cercetare_amprente.sql)
   SELECT '{
-    "coloane:public.intrebari_tehnice": "__DE_COMPLETAT__",
-    "coloane:public.notifications": "__DE_COMPLETAT__",
-    "coloane:public.profiles": "__DE_COMPLETAT__",
-    "coloane:storage.objects": "__DE_COMPLETAT__",
-    "constrangeri:public.intrebari_tehnice": "__DE_COMPLETAT__",
-    "fn:auth.uid()": "__DE_COMPLETAT__",
-    "fn:public.fn_are_acces_intrebari()": "__DE_COMPLETAT__",
-    "fn:public.fn_intrebari_amana(bigint,uuid)": "__DE_COMPLETAT__",
-    "fn:public.fn_intrebari_inainte_insert()": "__DE_COMPLETAT__",
-    "fn:public.fn_intrebari_preia()": "__DE_COMPLETAT__",
-    "fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)": "__DE_COMPLETAT__",
-    "pol:public.intrebari_tehnice.intrebari_tehnice_ins": "__DE_COMPLETAT__",
-    "pol:public.intrebari_tehnice.intrebari_tehnice_sel": "__DE_COMPLETAT__",
-    "tabel:public.intrebari_tehnice": "__DE_COMPLETAT__",
-    "tabel:public.notifications": "__DE_COMPLETAT__",
-    "trg:public.intrebari_tehnice.intrebari_tehnice_inainte_insert": "__DE_COMPLETAT__"
+    "coloane:public.intrebari_tehnice": "4a7df8af9f94b48120146050ccbcc8cc",
+    "coloane:public.notifications": "b09da75685e5c7bd2d63aa9f2b2fca20",
+    "coloane:public.profiles": "a18d16a2edd79d5ceb02eae299d5e745",
+    "coloane:storage.objects": "3f51104a940597b0954b564a1ae3e012",
+    "constrangeri:public.intrebari_tehnice": "4792b81586586965b10f6d060d08edd9",
+    "fn:auth.uid()": "388dc2e37b0b91d0e7333ce308af8670",
+    "fn:public.fn_are_acces_intrebari()": "a88ce8dc42e4ca77fcfc08489b00e87f",
+    "fn:public.fn_intrebari_amana(bigint,uuid)": "31d553495fdf36baa2f2193916b0619f",
+    "fn:public.fn_intrebari_inainte_insert()": "5a2c969bcc5e5d951c18b9e69764c3df",
+    "fn:public.fn_intrebari_preia()": "d1d68a5186c4eb050d6481d14866c8dd",
+    "fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)": "6d40f1f83d58537793e43c44e95ded53",
+    "pol:public.intrebari_tehnice.intrebari_tehnice_ins": "b56cfd5e85a307ac220bb0116ce545d9",
+    "pol:public.intrebari_tehnice.intrebari_tehnice_sel": "2963def0baebc636f23c62983aac7aff",
+    "pol:public.notifications.notifications_delete_own_or_owner": "f211695980dbae0c3abee8a95bcb8dbe",
+    "pol:public.notifications.notifications_insert_authenticated": "257fe6661616f42fbb992993ef96d8c1",
+    "pol:public.notifications.notifications_select_own_or_owner": "e7282ed3a8454882ca4d8fac50dee5e2",
+    "pol:public.notifications.notifications_update_own_or_owner": "050b30dec24e3d72dad3810caa5085ef",
+    "tabel:public.intrebari_tehnice": "540b4fdd884738723bd4c1ab391c6beb",
+    "tabel:public.notifications": "7aa97656582563bb7db3312d64c9d045",
+    "trg:public.intrebari_tehnice.intrebari_tehnice_inainte_insert": "d3a5868cad12d2761d3846e33ff9f4bc",
+    "trg:public.notifications.trg_notificari_ruteaza_ofertare": "767f588932f0e05e0b15a03b97183a10"
   }'::jsonb
   -- <<< AMPRENTE BASELINE
 $asteptat$;
