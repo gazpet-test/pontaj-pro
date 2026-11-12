@@ -73,6 +73,30 @@ describe('garda: fără sesiune, nicio cerere către tabele', () => {
     expect(new URL(String(u)).pathname).toBe('/rest/v1/tichete')
     expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${JWT_USER}`)
   })
+  it('sesiune PERSISTENTĂ recuperată de supabase-js (stocare în memorie, citire întârziată) + citire imediată la pornire: pleacă cu tokenul utilizatorului', async () => {
+    const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
+    const acum = Math.floor(Date.now() / 1000)
+    const jwt = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: '00000000-0000-0000-0000-000000000001', role: 'authenticated', exp: acum + 3600 })}.semnatura`
+    const sesiune = { access_token: jwt, refresh_token: 'reimprospatare-test', token_type: 'bearer', expires_in: 3600, expires_at: acum + 3600, user: { id: '00000000-0000-0000-0000-000000000001' } }
+    const cheie = 'sb-test-auth-token'
+    const memorie = new Map([[cheie, JSON.stringify(sesiune)]])
+    const stocare = {   // asincronă, ca recuperarea să NU fie gata la primul select
+      getItem: async (k) => { await new Promise(r => setTimeout(r, 5)); return memorie.has(k) ? memorie.get(k) : null },
+      setItem: async (k, v) => { memorie.set(k, v) },
+      removeItem: async (k) => { memorie.delete(k) },
+    }
+    const spion = vi.fn(async () => raspunsOk())
+    const sb = createClient(URL_B, ANON, {
+      auth: { persistSession: true, autoRefreshToken: false, detectSessionInUrl: false, storageKey: cheie, storage: stocare },
+      global: { fetch: creeazaFetchCuSesiune(ANON, spion) },
+    })
+    const r = await sb.from('notifications').select('id').limit(1)   // imediat după createClient, fără await pe getSession
+    expect(r.error).toBeNull()
+    const cereri = cereriRest(spion)
+    expect(cereri).toHaveLength(1)
+    expect(new Headers(cereri[0][1].headers).get('Authorization')).toBe(`Bearer ${jwt}`)
+    await sb.auth.stopAutoRefresh()
+  })
   it('eCerereFaraSesiune: antet lipsă / cheia publică = fără sesiune; alt token = cu sesiune; în afara /rest/v1/ = nu se atinge', () => {
     expect(eCerereFaraSesiune(`${URL_B}/rest/v1/tichete`, { headers: {} }, ANON)).toBe(true)
     expect(eCerereFaraSesiune(`${URL_B}/rest/v1/tichete`, { headers: { authorization: `Bearer ${ANON}` } }, ANON)).toBe(true)
@@ -152,6 +176,51 @@ describe('polling: oprit fără sesiune, repornit când revine sesiunea', () => 
     const opreste = pornestePolling(apel, 1000, { client: authFals() })
     await asteaptaPromisiuni()
     await creeazaFetchCuSesiune(ANON, vi.fn())(`${URL_B}/rest/v1/stocuri`, { headers: {} })
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(apel).toHaveBeenCalledTimes(1)
+    opreste()
+  })
+  it('cerere în zbor -> TOKEN_REFRESHED (polling activ) -> răspunsul VECHI vine cu 401: polling-ul NU se oprește (reîncercare o dată)', async () => {
+    const rezolvari = []
+    const apel = vi.fn(() => new Promise(r => rezolvari.push(r)))
+    const A = authFals()
+    const opreste = pornestePolling(apel, 1000, { client: A })
+    expect(apel).toHaveBeenCalledTimes(1)                    // cererea 1 pleacă cu tokenul vechi și rămâne în zbor
+    A.emite('TOKEN_REFRESHED', { access_token: 'nou' })      // pauza = false: fără repornire, doar generația crește
+    rezolvari[0]({ status: 401, error: { code: 'PGRST301' } })
+    await asteaptaPromisiuni()
+    expect(apel).toHaveBeenCalledTimes(2)                    // reîncercarea imediată, sub generația nouă
+    rezolvari[1]({ status: 200, error: null })
+    await asteaptaPromisiuni()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(apel).toHaveBeenCalledTimes(3)                    // intervalul a rămas: clopoțelul / chat-ul nu îngheață
+    rezolvari[2]({ status: 200, error: null })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(apel).toHaveBeenCalledTimes(4)
+    opreste()
+  })
+  it('generația: reîncercarea care dă TOT 401 (sesiune chiar invalidă) oprește polling-ul — fără buclă', async () => {
+    const rezolvari = []
+    const apel = vi.fn(() => new Promise(r => rezolvari.push(r)))
+    const A = authFals()
+    const opreste = pornestePolling(apel, 1000, { client: A })
+    A.emite('TOKEN_REFRESHED', { access_token: 'nou' })
+    rezolvari[0]({ status: 401, error: null })
+    await asteaptaPromisiuni()
+    rezolvari[1]({ status: 401, error: null })               // sub generația curentă: e o eroare reală
+    await asteaptaPromisiuni()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(apel).toHaveBeenCalledTimes(2)
+    opreste()
+  })
+  it('generația: SIGNED_OUT cât cererea e în zbor -> răspunsul vechi nu repornește nimic', async () => {
+    const rezolvari = []
+    const apel = vi.fn(() => new Promise(r => rezolvari.push(r)))
+    const A = authFals()
+    const opreste = pornestePolling(apel, 1000, { client: A })
+    A.emite('SIGNED_OUT', null)
+    rezolvari[0]({ status: 401, error: null })
+    await asteaptaPromisiuni()
     await vi.advanceTimersByTimeAsync(10000)
     expect(apel).toHaveBeenCalledTimes(1)
     opreste()

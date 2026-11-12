@@ -13,7 +13,8 @@
 //   2. eEroareSesiune(error, status): 401 / 403 sau codurile de JWT lipsă / expirat / FARA_SESIUNE.
 //   3. pornestePolling(fn, ms, { client }): rulează fn acum și la fiecare ms; la o eroare de sesiune (fn întoarce { error, status })
 //      sau la o cerere blocată de pct. 1 se OPREȘTE (fără buclă, fără zgomot); repornește singur când clientul are din nou sesiune
-//      (SIGNED_IN / TOKEN_REFRESHED), se oprește de tot la SIGNED_OUT și la demontare.
+//      (SIGNED_IN / TOKEN_REFRESHED), se oprește de tot la SIGNED_OUT și la demontare. Eroarea unei cereri pornite ÎNAINTEA
+//      ultimului eveniment de sesiune (tokenul vechi) nu oprește polling-ul: se reîncearcă o dată (generația de autentificare).
 // Nu schimbă drepturile nimănui: e doar partea de client (drepturile se impun în bază).
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -72,17 +73,23 @@ export function eEroareSesiune(error, status) {
   return CODURI_SESIUNE.has(error.code)
 }
 
-// polling care se oprește fără sesiune și repornește când sesiunea revine
+// polling care se oprește fără sesiune și repornește când sesiunea revine.
+// Generația de autentificare (review #1082 r2): crește la fiecare SIGNED_IN / TOKEN_REFRESHED / SIGNED_OUT. Un răspuns de sesiune
+// (401 / 403) al unei cereri pornite sub o generație mai VECHE nu mai oprește polling-ul (sesiunea s-a schimbat între timp, iar
+// eroarea e a tokenului vechi): se reîncearcă O DATĂ pe loc, sub generația curentă; dacă și aceea dă eroare de sesiune, se oprește.
 export function pornestePolling(fn, ms, { client = null, imediat = true } = {}) {
-  let terminat = false, pauza = false, t = null, ruleaza = false
+  let terminat = false, pauza = false, t = null, ruleaza = false, generatie = 0
   const opresteIntervalul = () => { if (t) { clearInterval(t); t = null } }
   const pune = () => { pauza = true; opresteIntervalul() }
   const pas = async () => {
     if (terminat || pauza || ruleaza) return
     ruleaza = true
+    const gen = generatie
     let r
     try { r = await fn() } catch (e) { r = { error: e } } finally { ruleaza = false }
-    if (!terminat && r && eEroareSesiune(r.error, r.status)) pune()
+    if (terminat || !r || !eEroareSesiune(r.error, r.status)) return
+    if (gen !== generatie) { if (!pauza) pas(); return }   // rezultat învechit: nu oprește; o singură reîncercare (gen nou)
+    pune()
   }
   const porneste = (acum) => {
     if (terminat) return
@@ -95,6 +102,7 @@ export function pornestePolling(fn, ms, { client = null, imediat = true } = {}) 
   let dezabAuth = () => {}
   try {
     const sub = client?.auth?.onAuthStateChange?.((ev, sesiune) => {
+      if (ev === 'SIGNED_IN' || ev === 'TOKEN_REFRESHED' || ev === 'SIGNED_OUT') generatie++
       if (ev === 'SIGNED_OUT' || !sesiune) pune()
       else if (pauza && (ev === 'SIGNED_IN' || ev === 'TOKEN_REFRESHED')) porneste(true)   // sesiunea a revenit: reîmprospătare imediată
     })
