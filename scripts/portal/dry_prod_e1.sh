@@ -31,8 +31,30 @@
 #   PSQL_BIN=<psql-ul folosit la livrare> bash scripts/portal/dry_prod_e1.sh \
 #     --tinta-host <endpointul de scriere aprobat> --tinta-port <portul lui> --tinta-db postgres \
 #     --tinta-sistem <system_identifier> --user <utilizatorul de livrare> \
-#     [--versiune-18a AAAALLZZHHMMSS] [--versiune-19a AAAALLZZHHMMSS] [--doar-18a] [--jurnal <dosar_nou>]
+#     [--versiune-18a AAAALLZZHHMMSS] [--versiune-19a AAAALLZZHHMMSS] [--doar-18a] [--jurnal <dosar_nou>] \
+#     [--diagnostic-porti] [--doar-genereaza <dosar_nou>]
 #   Versiunile implicite (20261118120000 / 20261119120000) trebuie sa fie LIBERE in istoric (1_pre refuza altfel).
+#
+# MODUL --diagnostic-porti (portal r19, 12.11.2026): proba pe productie a picat la postconditia 18a
+# (PORTAL_POSTCONDITION_FAILED), iar mesajul nu spune CE porti lipsesc. Diagnosticul ruleaza, cu ACELEASI garzi de tinta
+# (system_identifier, in_recovery, istoricul, parola doar din pgpass, plafonul 2000 ms, amprenta inainte = dupa), DOAR 18a
+# pana INAINTE de postconditie si tipareste lista completa a portilor lipsa (DIAG_PORTI_LIPSA), apoi garda finala si
+# ROLLBACK. NU e forma de livrare si nu poate fi confundat cu ea:
+#   * copia 18a = copia protejata a runnerului (sha256 aprobat verificat de runner) din care scripts/portal/diag_porti_taie.py
+#     scoate EXACT pasul 5 din $critic$ (postconditia + amprenta pentru revenire), pe marcajele existente (refuz daca
+#     vreunul nu apare exact o data); SQL-ul livrarii nu se schimba;
+#   * mesajul: BEGIN; prolog; verificarea un mesaj (eticheta DIAGNOSTIC_PORTI_18a, cu sha-ul copiei TAIATE); antetul de
+#     diagnostic; 1_pre 18a; copia taiata; ;; blocul scripts/portal/diag_porti.sql (doar citire); garda finala; ROLLBACK.
+#     FARA 3_inreg (nicio inregistrare in schema_migrations), FARA 19a, FARA COMMIT nicaieri; trimis cu aliasul
+#     diagnostic_porti_nu_e_livrare;
+#   * verificat local INAINTE de conexiune: scripts/portal/test_diag_porti_mesaj.py trebuie sa-l accepte, iar
+#     verificatorul livrarii (scripts/test_livrare_mesaj_unic.py) trebuie sa-l REFUZE;
+#   * jurnalul: DIAGNOSTIC_mesaj_tranzactie.sql, diagnostic.out, porti_lipsa.txt (o poarta pe linie); liniile tiparite au
+#     prefixul „DIAGNOSTIC PORTI”.
+#   Cod de iesire in acest mod: 0 DIAGNOSTIC RULAT (lista completa tiparita, chiar daca nu e goala; ROLLBACK; amprenta
+#   identica) | 1 diagnosticul nu s-a terminat (refuz / timeout / lista incompleta) | 2, 3, 5, 6, 22 ca mai sus.
+# --doar-genereaza <dosar_nou>: construieste si verifica local mesajul (oricare mod), il copiaza in dosar si iese cu 40,
+#   FARA nicio conexiune (pentru review-ul textului inainte de rulare; folosit de scripts/portal/test_diag_porti.sh).
 # ============================================================================
 set -Eeuo pipefail
 umask 077
@@ -41,19 +63,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLAFON_MS=2000
 M18="$ROOT/supabase/migrations/20261118a_portal_teren_identitate.sql"
 M19="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
-H="" P="" D="" SIS="" U="" V18=20261118120000 V19=20261119120000 DOAR18=0 JURNAL=""
+H="" P="" D="" SIS="" U="" V18=20261118120000 V19=20261119120000 DOAR18=0 JURNAL="" DIAG=0 GEN=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --doar-18a) DOAR18=1; shift; continue ;;
+    --diagnostic-porti) DIAG=1; shift; continue ;;
   esac
   [ $# -ge 2 ] || refuz 2 "optiunea $1 fara valoare"
   case "$1" in
     --tinta-host) H="$2" ;; --tinta-port) P="$2" ;; --tinta-db) D="$2" ;; --tinta-sistem) SIS="$2" ;; --user) U="$2" ;;
-    --versiune-18a) V18="$2" ;; --versiune-19a) V19="$2" ;; --jurnal) JURNAL="$2" ;;
+    --versiune-18a) V18="$2" ;; --versiune-19a) V19="$2" ;; --jurnal) JURNAL="$2" ;; --doar-genereaza) GEN="$2" ;;
     *) refuz 2 "optiune nepermisa: $1" ;;
   esac
   shift 2
 done
+# r19: diagnosticul porneste DOAR 18a (19a cere postconditia 18a trecuta).
+[ "$DIAG" = 0 ] || DOAR18=1
+if [ -n "$GEN" ]; then
+  [ ! -e "$GEN" ] && [ -d "$(dirname "$GEN")" ] || refuz 2 "--doar-genereaza: dosarul trebuie sa fie NOU: $GEN"
+fi
 for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS PGSERVICE PGSERVICEFILE PGSYSCONFDIR; do
   [ -z "${!v+x}" ] || refuz 2 "variabila $v e setata (parola: ~/.pgpass / PGPASSFILE)"
 done
@@ -99,19 +127,50 @@ adauga() { # $1 dosarul generat, $2 numele migrarii, $3 sha
   { cat "$1/$2.sql"; lm_sep; cat "$1/3_inreg.sql"; lm_timp "$2"; } >>"$REST"
 }
 : >"$REST"
-adauga "$W/g18" "$N18" "$SHA18"
-[ "$DOAR18" = 1 ] || adauga "$W/g19" "$N19" "$SHA19"
-lm_fin dry_prod_e1 "$PLAFON_MS" ROLLBACK >>"$REST" || refuz 3 "garda finala"
-lm_mesaj "$W/g18/0_prolog.sql" "$REST" "$W/m_mesaj.sql" dry_prod_e1 "${FELII[@]}" || refuz 3 "construirea mesajului"
 TAG_M="lm_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-lm_trimite "$W/m_mesaj.sql" "$TAG_M" "$W/5_mesaj.sql" || refuz 3 "fisierul de trimitere"
-python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" ROLLBACK \
-  || refuz 3 "verificarea locala a mesajului (18a)"
-[ "$DOAR18" = 1 ] || python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g19/$N19.sql" "$SHA19" "$PLAFON_MS" ROLLBACK \
-  || refuz 3 "verificarea locala a mesajului (19a)"
+if [ "$DIAG" = 0 ]; then
+  NUME_FIN=dry_prod_e1; MESAJ_J=mesaj_tranzactie.sql; OUT_J=proba.out; PFX=""
+  adauga "$W/g18" "$N18" "$SHA18"
+  [ "$DOAR18" = 1 ] || adauga "$W/g19" "$N19" "$SHA19"
+  lm_fin "$NUME_FIN" "$PLAFON_MS" ROLLBACK >>"$REST" || refuz 3 "garda finala"
+  lm_mesaj "$W/g18/0_prolog.sql" "$REST" "$W/m_mesaj.sql" "$NUME_FIN" "${FELII[@]}" || refuz 3 "construirea mesajului"
+  lm_trimite "$W/m_mesaj.sql" "$TAG_M" "$W/5_mesaj.sql" || refuz 3 "fisierul de trimitere"
+  python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" ROLLBACK \
+    || refuz 3 "verificarea locala a mesajului (18a)"
+  [ "$DOAR18" = 1 ] || python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g19/$N19.sql" "$SHA19" "$PLAFON_MS" ROLLBACK \
+    || refuz 3 "verificarea locala a mesajului (19a)"
+else
+  # r19: mesajul de DIAGNOSTIC (vezi antetul): 18a fara postconditie + lista portilor, fara inregistrare, ROLLBACK.
+  NUME_FIN=DIAGNOSTIC_PORTI_18a; MESAJ_J=DIAGNOSTIC_mesaj_tranzactie.sql; OUT_J=diagnostic.out; PFX="DIAGNOSTIC PORTI: "
+  BLOC="$ROOT/scripts/portal/diag_porti.sql"
+  [ -f "$BLOC" ] || refuz 3 "blocul de diagnostic lipseste: $BLOC"
+  python3 "$ROOT/scripts/portal/diag_porti_taie.py" "$W/g18/$N18.sql" "$W/diag_18a.sql" \
+    || refuz 3 "taietura postconditiei 18a (marcajele nu se gasesc exact o data)"
+  printf '%s\n' "DO \$diag_antet\$ BEGIN RAISE NOTICE 'DIAG_PORTI: mesaj de DIAGNOSTIC, NU livrarea: 18a fara postconditie, apoi lista portilor lipsa; ROLLBACK la final, fara inregistrare in istoric, nimic comis'; END \$diag_antet\$;" >>"$REST"
+  cat "$W/g18/1_pre.sql" >>"$REST"
+  FELII+=("$(lm_octeti "$REST"):$(lm_octeti "$W/diag_18a.sql"):$(lm_sha "$W/diag_18a.sql")")
+  { cat "$W/diag_18a.sql"; lm_sep; cat "$BLOC"; } >>"$REST"
+  lm_fin "$NUME_FIN" "$PLAFON_MS" ROLLBACK >>"$REST" || refuz 3 "garda finala"
+  lm_mesaj "$W/g18/0_prolog.sql" "$REST" "$W/m_mesaj.sql" "$NUME_FIN" "${FELII[@]}" || refuz 3 "construirea mesajului"
+  # Trimiterea: aceeasi forma ca lm_trimite (un SELECT + \gexec), alt alias => verificatorul livrarii il refuza.
+  if grep -qF "\$$TAG_M\$" "$W/m_mesaj.sql"; then refuz 3 "tag-ul mesajului apare in text"; fi
+  { printf 'SELECT $%s$' "$TAG_M"; cat "$W/m_mesaj.sql"; printf '$%s$ AS diagnostic_porti_nu_e_livrare \\gexec\n' "$TAG_M"; } >"$W/5_mesaj.sql"
+  python3 "$ROOT/scripts/portal/test_diag_porti_mesaj.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" "$BLOC" \
+    || refuz 3 "verificarea locala a mesajului de diagnostic"
+  if python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" ROLLBACK >/dev/null 2>&1; then
+    refuz 3 "verificatorul LIVRARII a acceptat mesajul de diagnostic (s-ar putea confunda cu livrarea)"
+  fi
+  echo "${PFX}verificatorul livrarii REFUZA mesajul (corect: nu e forma de livrare)"
+fi
 cp -- "$W/g18/00_sesiune.sql" "$W/g18/9_reset.sql" "$W/"
-cp -- "$W/m_mesaj.sql" "$JURNAL/mesaj_tranzactie.sql"
-echo "→ mesajul tranzactiei: $(lm_octeti "$W/m_mesaj.sql") octeti, un singur mesaj de la BEGIN la ROLLBACK ($( [ "$DOAR18" = 1 ] && echo 18a || echo '18a + 19a'))"
+cp -- "$W/m_mesaj.sql" "$JURNAL/$MESAJ_J"
+echo "→ ${PFX}mesajul tranzactiei: $(lm_octeti "$W/m_mesaj.sql") octeti, un singur mesaj de la BEGIN la ROLLBACK ($( [ "$DIAG" = 1 ] && echo '18a fara postconditie + lista portilor' || { [ "$DOAR18" = 1 ] && echo 18a || echo '18a + 19a'; } ))"
+if [ -n "$GEN" ]; then
+  mkdir -- "$GEN" && cp -- "$W/00_sesiune.sql" "$W/5_mesaj.sql" "$W/9_reset.sql" "$W/m_mesaj.sql" "$GEN/" || refuz 3 "--doar-genereaza: copierea"
+  [ "$DIAG" = 0 ] || cp -- "$W/diag_18a.sql" "$GEN/"
+  echo "✓ ${PFX}GENERAT si verificat local (fara conexiune, nimic trimis): $GEN ($(cd "$GEN" && ls | tr '\n' ' '))"
+  exit 40
+fi
 
 CONN=(-h "$H" -p "$P" -U "$U" -d "$D")
 # 3. / 5. Amprenta (read-only, fara plafon) + tinta. Rezultat pe o linie: db|system_identifier|in_recovery|versiune|md5|istoric
@@ -179,19 +238,38 @@ t0="$(date +%s%3N)"; "$PSQL" -X -q -At -f "$W/drum.sql" "${CONN[@]}" >/dev/null 
 echo "✓ tinta: db=$A_DB system_identifier=$A_SIS in_recovery=false PG $A_VER; amprenta inainte $A_MD5; 10 x SELECT 1 (cu conectarea) = $((t1 - t0)) ms"
 
 # 4. Proba: exact forma livrarii (SET de sesiune; mesajul; RESET), cu ROLLBACK.
-echo "→ proba: SET transaction_timeout = $PLAFON_MS; UN mesaj [BEGIN ... garda finala, ROLLBACK]; RESET"
+echo "→ ${PFX}proba: SET transaction_timeout = $PLAFON_MS; UN mesaj [BEGIN ... garda finala, ROLLBACK]; RESET"
 t0="$(date +%s%3N)"; rc=0
 "$PSQL" -X -q -v ON_ERROR_STOP=1 -f "$W/00_sesiune.sql" -f "$W/5_mesaj.sql" -f "$W/9_reset.sql" "${CONN[@]}" \
-  >"$JURNAL/proba.out" 2>&1 || rc=$?
+  >"$JURNAL/$OUT_J" 2>&1 || rc=$?
 t1="$(date +%s%3N)"
-echo "--- timpi (din jurnalul probei, ms de la BEGIN) ---"
-grep -E 'PORTAL_LOCKS|LIVRARE_TIMP|PLAFON_TIMP|PORTAL_1B_RECONCILIATE' "$JURNAL/proba.out" | sed 's/^.*NOTICE: *//' || true
-echo "total psql (conectare + SET + trimiterea mesajului + executie + RESET): $((t1 - t0)) ms; cod psql $rc"
+echo "--- ${PFX}timpi (din jurnalul probei, ms de la BEGIN) ---"
+grep -E 'PORTAL_LOCKS|LIVRARE_TIMP|PLAFON_TIMP|PORTAL_1B_RECONCILIATE' "$JURNAL/$OUT_J" | sed 's/^.*NOTICE: *//' || true
+echo "${PFX}total psql (conectare + SET + trimiterea mesajului + executie + RESET): $((t1 - t0)) ms; cod psql $rc"
 REZ=0
-if [ "$rc" != 0 ] || ! grep -q 'PLAFON_TIMP dry_prod_e1: garda trecuta' "$JURNAL/proba.out"; then
+if [ "$rc" != 0 ] || ! grep -q "PLAFON_TIMP $NUME_FIN: garda trecuta" "$JURNAL/$OUT_J"; then
   REZ=1
-  echo "✗ PROBA PICATA (cod psql $rc). Motivul (ultimele linii ale jurnalului):" >&2
-  grep -E 'ERROR|FATAL|terminating|MESAJ_UNIC|PLAFON_|PORTAL_' "$JURNAL/proba.out" | tail -n 8 >&2 || tail -n 8 "$JURNAL/proba.out" >&2
+  echo "✗ ${PFX}PROBA PICATA (cod psql $rc). Motivul (ultimele linii ale jurnalului):" >&2
+  grep -E 'ERROR|FATAL|terminating|MESAJ_UNIC|PLAFON_|PORTAL_|DIAG_PORTI' "$JURNAL/$OUT_J" | tail -n 8 >&2 || tail -n 8 "$JURNAL/$OUT_J" >&2
+fi
+if [ "$DIAG" = 1 ]; then
+  # r19: lista portilor din NOTICE-uri (psql nativ pe Windows scrie CRLF). Completitudine (L12): numarul anuntat de
+  # server = numarul de linii DIAG_PORTI_LIPSA, numerotate 1..N in ordine; altfel diagnosticul e INCOMPLET (REZ=1).
+  tr -d '\r' <"$JURNAL/$OUT_J" | grep -E 'NOTICE: +DIAG_PORTI' | sed -E 's/^.*NOTICE: +//' >"$JURNAL/diagnostic_linii.txt" || true
+  N_ANUNT="$(sed -nE 's/^DIAG_PORTI 18a: ([0-9]+) porti lipsa$/\1/p' "$JURNAL/diagnostic_linii.txt")"
+  sed -nE 's/^DIAG_PORTI_LIPSA [0-9]+: //p' "$JURNAL/diagnostic_linii.txt" >"$JURNAL/porti_lipsa.txt"
+  N_LIN="$(wc -l <"$JURNAL/porti_lipsa.txt" | tr -d ' ')"
+  NUM_OK=1; i=0
+  while IFS= read -r l; do i=$((i + 1)); [[ "$l" == "DIAG_PORTI_LIPSA $i: "* ]] || NUM_OK=0; done \
+    < <(grep -E '^DIAG_PORTI_LIPSA ' "$JURNAL/diagnostic_linii.txt")
+  echo "--- ${PFX}lista portilor lipsa (din fn_portal_porti_lipsa, in tranzactia anulata) ---"
+  if [[ "$N_ANUNT" =~ ^[0-9]+$ ]] && [ "$N_ANUNT" = "$N_LIN" ] && [ "$NUM_OK" = 1 ]; then
+    echo "${PFX}$N_ANUNT porti lipsa:"
+    grep -E '^DIAG_PORTI_(LIPSA|DETALIU|CONTEXT)' "$JURNAL/diagnostic_linii.txt" | sed "s/^/${PFX}/" || true
+  else
+    REZ=1
+    echo "✗ ${PFX}lista INCOMPLETA sau lipsa (anuntat '${N_ANUNT:-nimic}', primite $N_LIN, numerotare ok=$NUM_OK)" >&2
+  fi
 fi
 
 # 5. Dupa: amprenta identica, istoricul fara 18a / 19a.
@@ -201,11 +279,15 @@ if [ "$B_SIS" != "$SIS" ] || [ "$B_MD5" != "$A_MD5" ] || [ "$B_IST" != 0 ]; then
   echo "✗ AMPRENTA DIFERITA dupa proba: inainte $A_MD5, dupa $B_MD5 (istoric 18a/19a: $B_IST) — analiza manuala (o alta sesiune poate fi schimbat schema intre timp); jurnal: $JURNAL" >&2
   exit 5
 fi
-echo "✓ amprenta dupa = inainte ($B_MD5); istoricul fara 18a / 19a; nimic comis"
-if [ "$REZ" = 0 ]; then
+echo "✓ ${PFX}amprenta dupa = inainte ($B_MD5); istoricul fara 18a / 19a; nimic comis"
+if [ "$DIAG" = 1 ] && [ "$REZ" = 0 ]; then
+  echo "✓ DIAGNOSTIC PORTI RULAT: $N_ANUNT porti lipsa (lista in $JURNAL/porti_lipsa.txt), garda trecuta, ROLLBACK; NU e o proba de livrare; jurnal: $JURNAL"
+elif [ "$DIAG" = 1 ]; then
+  echo "✗ DIAGNOSTIC PORTI NETERMINAT, nimic schimbat; jurnal: $JURNAL" >&2
+elif [ "$REZ" = 0 ]; then
   echo "✓ PROBA OK: forma de livrare cu plafon $PLAFON_MS incape (garda trecuta, ROLLBACK); jurnal: $JURNAL"
 else
   echo "✗ PROBA PICATA, nimic schimbat; jurnal: $JURNAL" >&2
 fi
-[ "$JURNAL" != "$W/jurnal" ] || { echo "--- jurnalul probei ---"; cat "$JURNAL/proba.out"; }
+[ "$JURNAL" != "$W/jurnal" ] || { echo "--- ${PFX}jurnalul probei ---"; cat "$JURNAL/$OUT_J"; }
 exit "$REZ"

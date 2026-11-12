@@ -226,6 +226,45 @@ lock_budget_refusal 18a 20261118120000 "$MIG" \
 # ceas mostenit de 10 s + 3 s inainte de $locks$): sesiunea inchisa la ~2 s de la lock-uri, ROLLBACK, nimic ramas.
 MARCAJ_18A="SELECT set_config('gazpet.livrare_migrare','20261118a_portal_teren_identitate:'||txid_current(),true)"
 lock_cap_toate 18a "$MIG" "$STARE_18A_NEAPLICAT" "$MARCAJ_18A"
+# r19 (proba pe productie 12.11: PORTAL_POSTCONDITION_FAILED fara lista): scripts/portal/dry_prod_e1.sh pe acest cluster,
+# cu artefactul fixture-ului ca 18a (radacina separata: scripts + migrarile). Doua porti stricate INTENTIONAT (un tabel si
+# o secventa cu drept pentru PUBLIC, la care ajunge deci si teren) => proba normala pica exact ca pe productie
+# (PORTAL_POSTCONDITION_FAILED), iar --diagnostic-porti numeste EXACT cele doua porti (lista completa, in ordine), cu
+# ROLLBACK, amprenta identica, istoricul neatins; fara stricare => proba normala OK si diagnosticul da 0 porti.
+DIAG_ROOT="$TMP/diag_root"; mkdir -p "$DIAG_ROOT/supabase/migrations"
+cp -r "$ROOT/scripts" "$DIAG_ROOT/"
+cp -- "$MIG" "$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql" "$DIAG_ROOT/supabase/migrations/"
+dry_e1() { # $1 eticheta (jurnal $TMP/dry_<eticheta>), restul = optiunile; tipareste codul
+  local rc=0
+  PSQL_BIN="$PG_BIN/psql" bash "$DIAG_ROOT/scripts/portal/dry_prod_e1.sh" --tinta-host 127.0.0.1 --tinta-port "$PORT" \
+    --tinta-db "$DB" --tinta-sistem "$SIS" --user postgres --jurnal "$TMP/dry_$1" "${@:2}" >"$TMP/dry_$1.log" 2>&1 || rc=$?
+  echo "$rc"
+}
+STARE_DIAG="SELECT ($STARE_18A_NEAPLICAT) AND NOT EXISTS (SELECT FROM supabase_migrations.schema_migrations WHERE name LIKE '20261118a%')"
+q "CREATE TABLE public.diag_poarta_fixture(id integer); GRANT SELECT ON public.diag_poarta_fixture TO PUBLIC;
+   CREATE SEQUENCE public.diag_poarta_fixture_seq; GRANT USAGE ON SEQUENCE public.diag_poarta_fixture_seq TO PUBLIC" >/dev/null
+rc="$(dry_e1 proba_stricata --doar-18a)"
+[[ "$rc" == 1 ]] && grep -q PORTAL_POSTCONDITION_FAILED "$TMP/dry_proba_stricata/proba.out" \
+  || { cat "$TMP/dry_proba_stricata.log"; fail "dry_prod cu poarta stricata: asteptat cod 1 + PORTAL_POSTCONDITION_FAILED, primit $rc"; }
+rc="$(dry_e1 diag_stricata --diagnostic-porti)"
+[[ "$rc" == 0 ]] || { cat "$TMP/dry_diag_stricata.log"; fail "diagnostic cu poarta stricata: cod $rc, asteptat 0"; }
+[[ "$(cat "$TMP/dry_diag_stricata/porti_lipsa.txt")" == $'relatie:diag_poarta_fixture\nsecventa:diag_poarta_fixture_seq' ]] \
+  || { cat "$TMP/dry_diag_stricata.log"; fail "diagnostic: lista portilor (asteptat exact relatie + secventa fixture)"; }
+grep -q 'DIAG_PORTI_DETALIU 1: public.diag_poarta_fixture tip=r' "$TMP/dry_diag_stricata.log" \
+  && grep -q 'amprenta dupa = inainte' "$TMP/dry_diag_stricata.log" \
+  && ! grep -q 'PORTAL_POSTCONDITION_FAILED' "$TMP/dry_diag_stricata/diagnostic.out" \
+  || { cat "$TMP/dry_diag_stricata.log"; fail 'diagnostic: detaliul / amprenta / postconditia taiata'; }
+[[ "$(q "$STARE_DIAG")" == t ]] || fail 'diagnostic: a ramas ceva din 18a sau din istoric'
+[[ "$(q "SELECT to_regclass('public.diag_poarta_fixture') IS NOT NULL AND has_table_privilege('public.diag_poarta_fixture','SELECT')")" == t ]] \
+  || fail 'diagnostic: a schimbat obiectele existente'
+q "DROP TABLE public.diag_poarta_fixture; DROP SEQUENCE public.diag_poarta_fixture_seq" >/dev/null
+rc="$(dry_e1 proba_curata --doar-18a)"
+[[ "$rc" == 0 ]] || { cat "$TMP/dry_proba_curata.log"; fail "dry_prod pe fixture curat: cod $rc, asteptat 0 (PROBA OK)"; }
+rc="$(dry_e1 diag_curat --diagnostic-porti)"
+[[ "$rc" == 0 && ! -s "$TMP/dry_diag_curat/porti_lipsa.txt" ]] && grep -q 'DIAGNOSTIC PORTI RULAT: 0 porti lipsa' "$TMP/dry_diag_curat.log" \
+  || { cat "$TMP/dry_diag_curat.log"; fail "diagnostic pe fixture curat: cod $rc, asteptat 0 cu 0 porti"; }
+[[ "$(q "$STARE_DIAG")" == t ]] || fail 'dry_prod: a ramas ceva din 18a sau din istoric'
+echo "DIAG_PORTI 18a: poarta stricata => proba PORTAL_POSTCONDITION_FAILED, diagnosticul: $(paste -sd' ' "$TMP/dry_diag_stricata/porti_lipsa.txt"); curat => PROBA OK + 0 porti; ROLLBACK, amprenta identica"
 # r10: aplicarea reala prin runner cu trafic concurent (citiri / scrieri profiles si employees, login simulat pe auth.users)
 # si observatorul pg_locks: fereastra de lock (primul lock -> COMMIT) si blocarea maxima a utilizatorilor, cu praguri.
 masurat 18a "$TMP/apply.log" runner 20261118120000 "$MIG"

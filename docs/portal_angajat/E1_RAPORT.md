@@ -978,3 +978,132 @@ reformuleaza (decizia autorului ei, alt PR).
 | L20 | Caile legitime: forma livrata APLICA (plafon, latenta, fara optiune); copia fara „;” final aplicata; fara optiune neschimbat. |
 | L25 | Expected din artefactul original si sha-ul lui (`test_livrare_mesaj_unic.py`), control pe forma veche (latenta, pauza), PG17 NOSUPERUSER, latenta reala pe socket. |
 | restul | n/a (runner + teste + raport). |
+
+## E1-1a r19 — 12.11.2026 (proba pe productie trece de plafon, se opreste la postconditia 18a: diagnosticul portilor)
+
+### Constatarea (proba r18 pe productie, nimic comis)
+Mesajul unic a trecut prin pooler neschimbat, lock-urile la ~340 ms de la BEGIN, total ~1,2 s: plafonul nu mai e problema.
+`$critic$` a ajuns la pasul 5 (`PORTAL_ERP: 27, PORTAL_NEAPROBATE: 7`), apoi `PORTAL_POSTCONDITION_FAILED`:
+`fn_portal_porti_lipsa()` intoarce cel putin o poarta, iar mesajul nu spune care. Amprenta schemei dupa = inainte.
+
+**Ce e deja exclus de proba insasi** (verificarile ruleaza INAINTEA postconditiei si au trecut): `$public_pre$` a
+confirmat ca setul functiilor din `public` executabile de PUBLIC e exact lista de 21 si ca fiecare are md5-ul revizuit
+(proprietar postgres), iar in `net` setul executabil = exact cele 12 chei, fara DEFINER, md5 + proprietar revizuite. Deci
+NU e o lista de functii imbatranita, NU e versiunea pg_net. Iar portile `amprenta:` compara cu `portal_public_baseline`,
+scris din catalog IN ACEEASI tranzactie cu cateva instructiuni mai devreme: nu pot raspunde la ce s-a aplicat pe productie
+intre review si proba. Raman (in ordinea probabilitatii): `relatie:` / `secventa:` (tabel, vedere sau secventa cu drept
+pentru PUBLIC intr-o schema la care ajunge teren — inventarul din 10.11 nu le-a listat), `teren scheme USAGE` / `functie:`
+(alta schema cu USAGE pentru PUBLIC, sau o functie ne-standard in `information_schema`), `teren CREATE ...`.
+
+### Ce s-a adaugat (SQL-ul celor 4 fisiere ale portalului NESCHIMBAT, SHA-urile raman)
+- `scripts/portal/dry_prod_e1.sh --diagnostic-porti`: aceleasi garzi de tinta (system_identifier, in_recovery, istoricul,
+  parola doar din pgpass, plafonul 2000 ms, amprenta inainte = dupa); DOAR 18a, pana inainte de postconditie, apoi lista
+  completa a portilor (`DIAG_PORTI_LIPSA <i>: <poarta>`, cu detalii: schema, tip, proprietar, drepturi), garda finala,
+  ROLLBACK. Rezultatul: `porti_lipsa.txt` in jurnal (o poarta pe linie); completitudinea se verifica (numarul anuntat de
+  server = liniile primite, numerotate 1..N), altfel cod 1.
+- Copia 18a de diagnostic: `scripts/portal/diag_porti_taie.py` scoate din copia protejata a runnerului (sha256 aprobat)
+  EXACT pasul 5 din `$critic$` (postconditia + amprenta pentru revenire), pe marcajele existente — refuz daca vreunul nu
+  apare exact o data. Blocul de diagnostic: `scripts/portal/diag_porti.sql` (doar citire, un singur apel al portii).
+- NU e forma de livrare si nu se poate confunda cu ea: fara 3_inreg (nicio inregistrare in istoric), fara 19a, fara COMMIT
+  nicaieri, alt alias (`diagnostic_porti_nu_e_livrare`), eticheta DIAGNOSTIC_PORTI_18a in verificarea un mesaj si in garda.
+  Verificat local INAINTE de conexiune: `scripts/portal/test_diag_porti_mesaj.py` (independent de taietor: copia din mesaj
+  = copia aprobata cu O SINGURA bucata stearsa, care incepe cu comentariul + postconditia si dupa care ramane doar
+  `END $critic$;`; COMMIT doar in `ON COMMIT DROP`; bloc doar citire) trebuie sa-l accepte, iar verificatorul livrarii
+  (`scripts/test_livrare_mesaj_unic.py`) trebuie sa-l REFUZE.
+- `--doar-genereaza <dosar_nou>`: construieste si verifica mesajul (oricare mod) fara conexiune, cod 40 — textul se poate
+  citi inainte de rulare.
+
+Comanda (coordonatorul, owner-ul pe manual; aceeasi tinta ca proba r18):
+```
+PSQL_BIN=<psql-ul livrarii> bash scripts/portal/dry_prod_e1.sh --tinta-host <endpoint> --tinta-port <port> \
+  --tinta-db postgres --tinta-sistem <system_identifier> --user <utilizatorul livrarii> --diagnostic-porti --jurnal <dosar_nou>
+```
+Cod 0 = diagnostic rulat (lista tiparita, chiar daca nu e goala). Optional, inainte: acelasi apel cu `--doar-genereaza <dosar_nou>`.
+
+### Lista pentru owner: ce inseamna fiecare poarta, cum se verifica doar prin citire, ce se schimba
+Interogarile ruleaza pe productie intr-o tranzactie `BEGIN READ ONLY; ... ROLLBACK;`. Rolul `teren` nu exista inca, dar el
+ajunge la obiecte DOAR prin PUBLIC (e NOINHERIT, membru in nimic), deci se intreaba pentru `public` (ca sectiunea 0 din
+`scripts/portal/inventar_prod_e1.sql`). Raspunsul asteptat al fiecareia: 0 randuri (la A: exact cele 3 scheme, `create` = false).
+
+| Poarta | Pe intelesul unui om | Ce se schimba ca sa treaca |
+|---|---|---|
+| `teren scheme USAGE` | Contul de teren ar vedea o schema in plus fata de cele 3 revizuite (sau ar lipsi una). | Schema in plus: drept de curatat (`REVOKE USAGE ... FROM PUBLIC`, dupa ce rolurile ERP primesc explicit ce le trebuie) = **decizia owner-ului**; SAU schema intra in lista din 18a, cu functiile ei in amprente = **SHA nou + review**. |
+| `teren CREATE public` / `teren CREATE schema accesibila` | Orice cont de teren ar putea crea tabele / functii intr-o schema comuna. | Drept de curatat (`REVOKE CREATE ON SCHEMA ... FROM PUBLIC`) = **decizia owner-ului**. Nu se accepta prin lista. |
+| `relatie:<nume>` | Contul de teren ar putea citi (sau scrie) direct acel tabel / vedere, cu tokenul lui. | Aproape mereu drept de curatat (`REVOKE ... ON <tabel> FROM PUBLIC`; anon / authenticated au granturile lor) = **decizia owner-ului**. O exceptie in 18a ar slabi poarta (teren ar citi tabelul) — nerecomandat. |
+| `secventa:<nume>` | Contul de teren ar putea citi / avansa un contor (secventa). | Drept de curatat (`REVOKE ... ON SEQUENCE ... FROM PUBLIC`) = **decizia owner-ului**. |
+| `functie:<semnatura>` | O functie pe care contul de teren ar putea-o apela, nerevizuita. In `public` / `net` e exclusa (verificata mai devreme); ramane o schema in plus sau o functie ne-standard in `information_schema`. | `REVOKE EXECUTE ... FROM PUBLIC` = **decizia owner-ului**; SAU functia intra in lista revizuita din 18a = **SHA nou + review**. |
+| `amprenta:<semnatura>` | Obiectul s-a schimbat intre doua citiri din ACEEASI tranzactie — nu e o lista veche. | Nimic pe productie: e un defect al portii, se analizeaza din detaliul diagnosticului (fixat / acum) = **SHA nou + review**. |
+| `inventar identitati`, `teren lipsa / atribute / membership`, `config incompleta: authenticator teren` | Obiecte create de 18a insasi, sub lock: nu ar trebui sa apara. | Defect al migrarii (sau al mediului: rolul `authenticator`) = **SHA nou + review**. |
+
+```sql
+-- A. schemele la care ajunge teren (prin PUBLIC); asteptat exact information_schema, net, public si create = false
+SELECT n.nspname, has_schema_privilege('public', n.oid, 'CREATE') AS create_public
+  FROM pg_namespace n
+ WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_' AND has_schema_privilege('public', n.oid, 'USAGE')
+ ORDER BY 1 COLLATE "C";
+-- B. relatii cu orice drept pentru PUBLIC in acele scheme (fara catalogul standard doar-citire din information_schema)
+SELECT n.nspname, c.relname, c.relkind, c.oid < 16384 AS din_initdb, c.relacl::text AS drepturi
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_' AND has_schema_privilege('public', n.oid, 'USAGE')
+   AND c.relkind IN ('r','p','v','m','f')
+   AND (has_table_privilege('public', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+        OR has_any_column_privilege('public', c.oid, 'SELECT,INSERT,UPDATE,REFERENCES'))
+   AND NOT (n.nspname = 'information_schema' AND c.oid < 16384 AND c.relkind IN ('r','v')
+            AND NOT has_table_privilege('public', c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+            AND NOT has_any_column_privilege('public', c.oid, 'INSERT,UPDATE,REFERENCES'))
+ ORDER BY 1, 2;
+-- C. secvente cu drept pentru PUBLIC
+SELECT n.nspname, c.relname, c.relacl::text AS drepturi
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE c.relkind = 'S' AND n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
+   AND has_schema_privilege('public', n.oid, 'USAGE') AND has_sequence_privilege('public', c.oid, 'USAGE,SELECT,UPDATE')
+ ORDER BY 1, 2;
+-- D. functii executabile prin PUBLIC in afara listelor public (21) / net (12) si a catalogului standard
+SELECT n.nspname, p.oid::regprocedure::text AS functie, p.prosecdef, pg_get_userbyid(p.proowner) AS proprietar,
+       p.oid < 16384 AS din_initdb
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_' AND has_schema_privilege('public', n.oid, 'USAGE')
+   AND has_function_privilege('public', p.oid, 'EXECUTE') AND n.nspname NOT IN ('public', 'net')
+   AND NOT (n.nspname = 'information_schema' AND p.oid < 16384 AND NOT p.prosecdef AND p.proowner = n.nspowner)
+ ORDER BY 1, 2;
+```
+Diagnosticul da lista autoritara (aceeasi functie ca postconditia, in tranzactia reala); A-D sunt verificarea omului si se
+pot rula oricand, fara `teren` si fara lock-uri.
+
+### Propunere pentru viitor (doar text, fara cod acum)
+1. **Postconditia sa spuna ce lipseste**: in `$critic$`, `v := public.fn_portal_porti_lipsa(); IF v <> '{}' THEN RAISE
+   EXCEPTION 'PORTAL_POSTCONDITION_FAILED: % porti: %', cardinality(v), array_to_string(v, '; ')` (numele sunt obiecte de
+   schema, fara date personale), la fel postconditia 1b. Schimba SHA-ul lui 18a (si 19a) => se face ODATA cu
+   actualizarea listelor, in acelasi review, nu separat.
+2. **Listele sa nu imbatraneasca intre review si aplicare**: (a) un script DOAR de citire `scripts/portal/verifica_porti_e1.sql`
+   (interogarile A-D + sectiunile 0-2 din inventar, comparate cu literalii din migrare: cele 21 + md5, cele 12 + md5,
+   cele 3 scheme), cu iesire „LISTE_LA_ZI” sau diferenta exacta; (b) `dry_prod_e1.sh` (si runnerul, pentru 18a / 19a) il
+   ruleaza in conexiunea read-only de la pasul 3 si REFUZA sa trimita proba / livrarea daca listele nu mai corespund
+   (fara lock-uri, fara `teren`); (c) paritate pe harness (L19): aceleasi cazuri stricate (relatie, secventa, schema,
+   functie) date si diagnosticului si scriptului, cu acelasi rezultat; (d) regula de proces: orice migrare aplicata pe
+   productie dupa review-ul listelor (aici 20261213a, 20261214a) => scriptul se reruleaza in ziua probei / aplicarii.
+
+### Teste r19
+- `scripts/portal/test_static_diag_porti.py` (fara BD, fara bash, 18 cazuri): taietura pe 18a real (CRLF si LF) si 5
+  refuzuri (marcaj dublu / lipsa, fara `END $critic$;`, postconditie mutata, text dupa END); mesajul construit din textul
+  REAL al runnerului (heredoc-urile 0_prolog / 1_pre / lm_fin) acceptat; verificatorul livrarii il refuza; mutanti
+  refuzati cu motivul exact: COMMIT final / in bloc, inregistrare in istoric, taietura prea mare / lipsa / cu inlocuire,
+  copie schimbata, bloc cu DELETE / EXECUTE / nerevizuit, octet schimbat dupa calcul.
+- `scripts/portal/test_diag_porti.sh` (bash, fara conexiune): `--diagnostic-porti --doar-genereaza` => 40, verificatorii
+  (diagnostic accepta, livrare refuza); modul normal neschimbat (invers); taietor stricat / bloc cu scriere intr-o copie a
+  scripturilor => refuz 3 inainte de conexiune; dosar existent => 2.
+- `scripts/test_portal_e1.sh` (PG17, inainte de aplicarea reala): tabel + secventa cu drept pentru PUBLIC => proba
+  normala `PORTAL_POSTCONDITION_FAILED` (ca pe productie), diagnosticul numeste exact `relatie:diag_poarta_fixture` si
+  `secventa:diag_poarta_fixture_seq` (+ detaliul), ROLLBACK, amprenta identica, istoricul neatins; dupa curatare: proba
+  OK si diagnosticul 0 porti.
+
+| Regula | Dovada r19 |
+|---|---|
+| L12 | Lista completa: numarul anuntat de server = liniile primite, numerotate 1..N; altfel cod 1 (nu „OK”); NULL = NECUNOSCUT. |
+| L13 | Marcajele taieturii: octeti exacti, linie intreaga, exact o data (refuz altfel), fara regex pe SQL; teste pozitive + negative. |
+| L14 | O tranzactie, un mesaj, ROLLBACK; fara COMMIT / inregistrare (verificat local inainte de conexiune); amprenta inainte = dupa. |
+| L15 | Poarta neschimbata (aceeasi functie, aceleasi liste); diagnosticul doar o citeste. |
+| L18 | Lista goala (0 porti) distincta de lista lipsa / incompleta / NULL; proba picata ramane cod 1. |
+| L19 | Lista autoritara = un apel al functiei portii; detaliile (si A-D) sunt ajutor de citire, paritatea propusa la pct. 2c. |
+| L25 | Verificatorul independent de taietor (stergere pura vs marcaje); textul real al runnerului; PG17 NOSUPERUSER cu poarta stricata real. |
+| restul | n/a (unealta de diagnostic + teste + raport; fara schema, RPC, date sau drepturi noi). |
