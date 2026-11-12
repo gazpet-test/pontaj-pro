@@ -59,9 +59,12 @@ Lista de rapoarte conține doar id-uri, zile, proiecte și ora salvării. Corec�
 
 1. **Datele de azi (producție, doar citire)**:
    `psql -X -v ON_ERROR_STOP=1 -v sistem=<system_identifier producție> -h <host> -p <port> -U <user> -d postgres -f scripts/raport_linii_proiect_verifica_date.sql > linii_proiect_date.txt`
-2. **Defectul pe clonă, înainte de migrare** (sesiuni reale):
-   `PSQL=/c/Users/Public/pgsql/bin/psql.exe bash scripts/raport_linii_proiect_concurenta.sh --sistem <id clonă> --asteptat defect -- -h <host clonă> -p <port> -U postgres -d postgres`
-   Așteptat: `L0 OK`, `L1/L2/L3 … DEFECT reprodus`, `L4 OK`, ieșire 0.
+2. **Defectul pe clonă, înainte de migrare** (sesiuni reale). Întâi bariera singură (fără mutare, nimic comis, merge în ambele stări ale migrării):
+   `PSQL=/c/Users/Public/pgsql/bin/psql.exe bash scripts/raport_linii_proiect_concurenta.sh --sistem <id clonă> --verifica-bariera -- -h <host clonă> -p <port> -U postgres -d postgres`
+   Așteptat: un NOTICE `B0 BARIERA tine: salvarea (pid …) asteapta [transactionid …], blocata de control (pid …)`, apoi `BARIERA OK`, ieșire 0 (26 = bariera nu ține: proba nu are ce dovedi).
+   Apoi proba: `… raport_linii_proiect_concurenta.sh --sistem <id clonă> --asteptat defect -- …`
+   Așteptat: `OK … L0`, `OK … L1 DEFECT reprodus`, `OK … L2 DEFECT reprodus`, `OK … L3 DEFECT reprodus pe calea directa`, `OK … L4`, `TOATE SCENARIILE OK (--asteptat defect)`, ieșire 0.
+   Fiecare rând începe cu starea lui: `OK` (rezultatul cerut), `CONTRAR` (fereastra s-a deschis, rezultatul e celălalt; ieșire 1) sau `PROBA_NEFUNCTIONALA` (bariera / mutarea nu a ținut, o sesiune a picat; ieșire 26, are prioritate — nimic din rulare nu e dovadă).
 3. **Baseline-ul L15 (producție, READ ONLY)**:
    `psql -X -v ON_ERROR_STOP=1 -h <host> -p <port> -U <user> -d postgres -f scripts/raport_linii_proiect_amprente.sql > amprente_20261217a.txt`
    Coloana `linie_baseline` se copiază întreagă între `>>> BASELINE 20261217a` și `<<< BASELINE 20261217a` (în locul rândului `DE_COMPLETAT`); coloana `detaliu` intră în review. Același script pe clonă trebuie să dea identic (altfel clona nu e ca producția).
@@ -85,3 +88,4 @@ Notă pentru clonă: scenariile de concurență mută primul șantier cu proiect
 ## Istoric
 
 - 12.11.2026 — r1: analiza, 20261217a + revenire, harness, PGlite, concurență pe clonă, scriptul de date.
+- 12.11.2026 — r2 (proba de concurență pe clonă, înainte de migrare: L1 / L2 / L4 „salvarea nu a asteptat la activitate”): bariera ținea (mutarea pornea doar după ce vedea salvarea în așteptare), dar r1 cerea ca salvarea să fi așteptat ≥ 1 s, iar controlul elibera activitatea la ~0,1 s după mutare; eroarea aruncată de probă anula apoi tranzacția salvării (de aici „liniile pe P-”). Acum: așteptarea e observată pe pid (`pg_blocking_pids` = pid-ul controlului, sesiuni cu `application_name`), durata nu mai e criteriu, proba nu mai anulează salvarea, L3 fără `pg_sleep` de ținere; trei stări pe rând (OK / CONTRAR / PROBA_NEFUNCTIONALA, ieșiri 0 / 1 / 26); modul `--verifica-bariera`. Scriptul de date: mesaj clar fără `-v sistem`. Migrarea și amprentele: neschimbate.

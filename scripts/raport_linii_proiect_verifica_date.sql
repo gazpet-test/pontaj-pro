@@ -20,6 +20,13 @@
 --     raport_distributie_linii, care nu are coloană de proiect).
 -- Fără corecții de date aici: ce iese se discută cu Răzvan (preview -> „da” -> apply, separat).
 \set ON_ERROR_STOP 1
+-- r2: fără -v sistem, psql pica la variabila sistem cu o eroare de sintaxă greu de citit; acum mesaj clar, apoi garda țintei de mai jos refuză
+--   (valoarea „lipsa” nu e niciun system_identifier), înainte de orice citire. Doar meta-comenzi psql aici.
+\if :{?sistem}
+\else
+\echo 'REFUZ: lipseste -v sistem=<system_identifier al bazei> (psql -X -v ON_ERROR_STOP=1 -v sistem=... -f scripts/raport_linii_proiect_verifica_date.sql); nimic citit'
+\set sistem lipsa
+\endif
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL statement_timeout = '120s';
 SELECT set_config('tlp.sistem', :'sistem', true) IS NOT NULL AS sistem_setat;

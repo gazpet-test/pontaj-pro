@@ -150,4 +150,18 @@ describe('scriptul de concurență (clonă)', () => {
     expect(t.indexOf('REFUZ: system_identifier')).toBeLessThan(t.indexOf('INSERT INTO public.proiect_activitati'))
     expect(t).toContain("trap 'curata || exit 25' EXIT")
   })
+  it('r2: fereastra se deschide pe lock-uri observate, nu pe timp; proba nefuncțională are ieșirea ei', () => {
+    const t = readFileSync(cale, 'utf8')
+    // așteptarea salvării e observată pe pid-ul controlului (nu „orice sesiune în Lock”)
+    expect(t).toMatch(/v_c = ANY \(pg_blocking_pids\(a\.pid\)\)/)
+    expect(t).toContain("a.application_name = 'rlp17_$1_s'")
+    // nicio ținere pe pg_sleep (doar pași de sondare de 0,05 s) și nicio eroare a probei în tranzacția salvării pe criteriu de durată
+    expect(t.match(/pg_sleep\(([^)]*)\)/g).every((s) => s === 'pg_sleep(0.05)')).toBe(true)
+    expect(t).not.toMatch(/salvarea nu a asteptat la activitate/)
+    // trei stări, ieșiri distincte; modul doar-barieră
+    expect(t).toContain('verdict NEFUNCTIONAL')
+    expect(t).toMatch(/^\s*exit 26$/m)
+    expect(t).toContain('--verifica-bariera) VERIFICA=1')
+    expect(t).toContain('salvare B0 172170001 2001-02-01 0 ROLLBACK')
+  })
 })

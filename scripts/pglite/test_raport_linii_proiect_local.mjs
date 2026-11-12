@@ -189,7 +189,13 @@ async function scenariu(nume, motiv, fn) {
   console.log(`${bine ? 'OK    ' : 'GREȘIT'} ${nume}: ${eroare === null ? 'trecut' : 'refuz: ' + eroare.slice(0, 220)}`)
 }
 const migCu = (lista) => aplica(MIG_B, lista)
-await scenariu('S1 baseline necompletat (cum e în repo) = refuz', /20261217a: baseline L15 necompletat/, async (db) => { await aplicaMig(db, citeste(MIG)) })
+// r2: blocul are de la 4dcb8a8d valorile de PRODUCȚIE lipite (47 de etichete), deci „necompletat” = toate amprentele scoase, ca înainte de
+//   lipire (tiparul din test_raport_rezumat_local.mjs), iar blocul din repo pe schema falsă = altă bază = refuz pe diferență
+await scenariu('S1 baseline necompletat = refuz', /20261217a: baseline L15 necompletat/, async (db) => {
+  if (!/'[0-9a-f]{32}'\)/.test(PLACEHOLDER)) throw new Error('blocul BASELINE din repo nu are amprente de inlocuit')
+  await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, PLACEHOLDER.replace(/'[0-9a-f]{32}'\)/g, "'DE_COMPLETAT')")]]))
+})
+await scenariu('S1p blocul din repo (producția) pe altă bază = refuz pe diferență', /starea de acces \(inainte\) difera de baseline/, async (db) => { await aplicaMig(db, citeste(MIG)) })
 await scenariu('S2 baseline cu o etichetă dublă = refuz', /20261217a: baseline L15 cu etichete duble/, async (db) => {
   await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, B0.map(r => r.linie_baseline).join('\n') + '\n  , ' + B0[0].linie_baseline.trim()]]))
 })
