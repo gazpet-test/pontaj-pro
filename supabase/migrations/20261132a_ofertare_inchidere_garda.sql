@@ -81,24 +81,24 @@ CREATE FUNCTION pg_temp.fn_20261132a_asteptat()
 AS $asteptat$
   -- >>> AMPRENTE BASELINE (singurul loc de completat: îl înlocuiește INTEGRAL blocul tipărit de scripts/ofertare_inchidere_garda_amprente.sql)
   SELECT '{
-    "coloane:public.ofertare_licitatii": "__DE_COMPLETAT__",
-    "coloane:public.profiles": "__DE_COMPLETAT__",
-    "fn:auth.uid()": "__DE_COMPLETAT__",
-    "fn:public.fn_are_acces_ofertare()": "__DE_COMPLETAT__",
-    "fn:public.fn_ofertare_licitatii_scriere()": "__DE_COMPLETAT__",
-    "fn:public.fn_ofertare_poate_cheltui(bigint,uuid)": "__DE_COMPLETAT__",
-    "fn:public.fn_ofertare_responsabil_setat_de()": "__DE_COMPLETAT__",
-    "pol:ofertare_licitatii_delete": "__DE_COMPLETAT__",
-    "pol:ofertare_licitatii_insert": "__DE_COMPLETAT__",
-    "pol:ofertare_licitatii_select": "__DE_COMPLETAT__",
-    "pol:ofertare_licitatii_update": "__DE_COMPLETAT__",
-    "tabel:public.ofertare_licitatii": "__DE_COMPLETAT__",
-    "trg:a00_ofertare_derogare_garda_j05": "__DE_COMPLETAT__",
-    "trg:a00_ofertare_licitatii_scriere": "__DE_COMPLETAT__",
-    "trg:a01_ofertare_licitatii_loturi_garda": "__DE_COMPLETAT__",
-    "trg:trg_gate_depunere": "__DE_COMPLETAT__",
-    "trg:trg_ofertare_j02b_sens_unic": "__DE_COMPLETAT__",
-    "trg:trg_ofertare_responsabil_setat_de": "__DE_COMPLETAT__"
+    "coloane:public.ofertare_licitatii": "f4744c6e4ab2b2480bd44c45950dd15b",
+    "coloane:public.profiles": "a18d16a2edd79d5ceb02eae299d5e745",
+    "fn:auth.uid()": "388dc2e37b0b91d0e7333ce308af8670",
+    "fn:public.fn_are_acces_ofertare()": "35ac0991e0739d265a7997c0115df120",
+    "fn:public.fn_ofertare_licitatii_scriere()": "237284a2a2e70520f28ac1638a4b961d",
+    "fn:public.fn_ofertare_poate_cheltui(bigint,uuid)": "c01245b9c8676ef6e05004a818271107",
+    "fn:public.fn_ofertare_responsabil_setat_de()": "ebcd68026bedd5fdb3598a390de2ae06",
+    "pol:ofertare_licitatii_delete": "6b8723228b3dbd6e9a2b6cb7535d8eed",
+    "pol:ofertare_licitatii_insert": "dca4cc4d23acb9818de1fcddcf3a73a5",
+    "pol:ofertare_licitatii_select": "81c323cb060b947c51b99b320b2e0f7e",
+    "pol:ofertare_licitatii_update": "8fe95639a0a05b11f3445d2d67b3dffb",
+    "tabel:public.ofertare_licitatii": "7aa97656582563bb7db3312d64c9d045",
+    "trg:a00_ofertare_derogare_garda_j05": "f967d77f80686c3338d3b7029ac27d75",
+    "trg:a00_ofertare_licitatii_scriere": "dd087e59d127121fc17e298e7cc1211f",
+    "trg:a01_ofertare_licitatii_loturi_garda": "2789f8df478200542a1680dbeda81b9a",
+    "trg:trg_gate_depunere": "1d1ccc07b65edfe078e34b1993ba314e",
+    "trg:trg_ofertare_j02b_sens_unic": "ab7a9e20e13c4638724cae682db24986",
+    "trg:trg_ofertare_responsabil_setat_de": "c90c5fb867a6c9ecb2254bb8e7635c93"
   }'::jsonb
   -- <<< AMPRENTE BASELINE
 $asteptat$;
