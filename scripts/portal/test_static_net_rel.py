@@ -44,7 +44,7 @@ R21_VECHI = {
     "net.http_request_queue": "e0e96a399d23c7eb05ca2216618e1b72",
     "net.http_request_queue_id_seq": "d7e907e6bf5f93c94b754f45839161d1",
 }
-PROD_R22 = {}  # NET_REL_PROD_R22 (productie, porti_citire.sql G, amprenta r22; gol = necitit inca)
+PROD_R22 = {"net._http_response": "70a6f8fb4293956bcf7d186a2ff88061", "net.http_request_queue": "c376cee77afa265287547fe22e19084d", "net.http_request_queue_id_seq": "a8957a09016363e60f6b877e27bd87ac"}  # NET_REL_PROD_R22 (productie, porti_citire.sql G, amprenta r22)
 HELPERI = ["fn_portal_net_rel_aprobat", "fn_portal_net_rel_amprenta", "fn_portal_net_rel_acceptat", "fn_portal_teren_rel_drept"]
 SEMNATURI = ["public.fn_portal_net_rel_aprobat()", "public.fn_portal_net_rel_amprenta(oid)",
              "public.fn_portal_net_rel_acceptat(oid)", "public.fn_portal_teren_rel_drept(oid)"]
