@@ -9,6 +9,7 @@ import cercetare as c  # noqa: E402
 
 CAZURI = json.loads((AICI / 'teste_validare.json').read_text(encoding='utf-8'))
 INTEROGARI = json.loads((AICI / 'teste_interogari.json').read_text(encoding='utf-8'))
+NORMATIVE = json.loads((AICI / 'teste_normative.json').read_text(encoding='utf-8'))
 VOC_BRUT = json.loads((AICI / 'vocabular_web.json').read_text(encoding='utf-8'))
 VOC = c.pregateste_vocabular(VOC_BRUT)
 
@@ -46,7 +47,8 @@ class Validare(unittest.TestCase):
         self.assertNotIn('W9', text)
         a = c.analizeaza(text, s)
         self.assertEqual(a['fara_sursa'], [])
-        self.assertEqual(a['verdict'], 'Nu.')
+        # runda 4: s-a scos o afirmație normativă (art. 228) pe care se putea sprijini verdictul → Incert
+        self.assertEqual(a['verdict'], c.INCERT_FARA_TEMEI)
 
     def test_verdict_lipsa_devine_incert_nu_depinde(self):
         text, _ = c.curata_raspuns('Pe scurt: se poate [C1].', ['C1'])
@@ -81,12 +83,38 @@ class Validare(unittest.TestCase):
                   'Conform prescripției, da.', 'Normativul impune verificarea.', 'Nu se admite îmbinarea prin filetare.'):
             self.assertTrue(c.e_afirmatie_normativa(t), t)
         self.assertFalse(c.e_afirmatie_normativa('Discută cu beneficiarul.'))
+        # runda 4 (aceleași cazuri ca vitest): fără marcaj, „nu se poate” și „minim” ca adjectiv nu sunt reguli; „cel puțin” da
+        self.assertFalse(c.e_afirmatie_normativa('Nu se poate stabili din surse.'))
+        self.assertFalse(c.e_afirmatie_normativa('Distanța minimă față de clădiri.'))
+        self.assertTrue(c.e_afirmatie_normativa('Trebuie cel puțin un RTS.'))
+        self.assertTrue(c.e_afirmatie_normativa('Sudarea e permisă numai dacă nu plouă.'))
 
     def test_ancore(self):
-        self.assertEqual(c.ancore('1. Distanța e 0,5 m față de art. 12 [C1, W2]'), ['0.5', '12'])
-        self.assertTrue(c.ancora_in('0.5', 'minim 0,5 m'))
-        self.assertFalse(c.ancora_in('99', '999 și 99.5 și 1.99'))
-        self.assertTrue(c.ancora_in('99', 'la 99 bar'))
+        # runda 4: token complet = semn + număr + unitate
+        self.assertEqual(c.ancore('1. Distanța e 0,5 m față de art. 12 [C1, W2]'), ['0.5 m', '12'])
+        self.assertEqual(c.ancore('Proba se face la −5 bar [C1]'), ['-5 bar'])
+        self.assertNotIn('99', c.tokeni_numerici(c.normalizeaza('999 și 99.5 și 1.99')))
+
+    def test_normative_cazuri_comune_cu_vitest(self):
+        for t in NORMATIVE['tokeni']:
+            with self.subTest(t['text']):
+                self.assertEqual(c.tokeni_numerici(c.normalizeaza(t['text'])), t['tokeni'])
+        for t in NORMATIVE['polaritati']:
+            with self.subTest(t['text']):
+                n = c.normalizeaza(t['text'])
+                self.assertEqual(sorted(c.polaritati(n)), t['clase'])
+                self.assertEqual(sorted(c.polaritati(n, True)), t.get('extins', t['clase']))
+        for t in NORMATIVE['propozitii']:
+            with self.subTest(t['text']):
+                self.assertEqual(c.propozitii(t['text']), t['propozitii'])
+
+    def test_afirmatia_normativa_cere_toti_termenii_in_aceeasi_propozitie(self):
+        h = c.harta_surse([{'id': 'C1', 'extras': 'Recepția lucrărilor trebuie făcută de responsabilul beneficiarului.'}])
+        self.assertEqual(c.evalueaza_linie('Este obligatoriu un responsabil autorizat pentru recepția lucrărilor [C1].', h), ('nesustinut', False))
+        self.assertEqual(c.evalueaza_linie('Este obligatoriu un responsabil pentru recepția lucrărilor [C1].', h), (None, True))
+        # aceeași afirmație, termenii împărțiți pe două propoziții → nesusținută
+        h2 = c.harta_surse([{'id': 'C1', 'extras': 'Recepția lucrărilor se face la final. Un responsabil trebuie numit.'}])
+        self.assertEqual(c.evalueaza_linie('Este obligatoriu un responsabil pentru recepția lucrărilor [C1].', h2), ('nesustinut', False))
 
     def test_mesaj_reparare_listeaza_problemele(self):
         a = c.analizeaza('Pe scurt\n- art. 5 din HG 273/1994 [W4]\n- art. 7 cere 2 m [C1]', [{'id': 'C1', 'extras': 'nimic'}])

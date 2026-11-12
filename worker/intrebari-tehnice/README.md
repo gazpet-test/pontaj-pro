@@ -49,26 +49,40 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    `‹`/`›`, deci nu poate închide `<surse>` / `<speta>`): prima linie = verdict (Da / Nu / Depinde de … / Incert — de verificat),
    fiecare afirmație normativă cu marcaj `[C1]` / `[W2]`. `cercetare.analizeaza` (aceleași reguli în `src/intrebariSurse.js`,
    cazuri comune în `teste_validare.json`):
-   - normativă = act / articol / standard / cifră cu unitate **sau obligație / interdicție** („obligatoriu”, „trebuie”,
-     „interzis”, „impune”, „conform”, „nu se admite”, „nu este permis” …);
+   - normativă = act / articol / standard / cifră cu unitate **sau o regulă**: obligație, interdicție, permisiune, condiție,
+     limită („obligatoriu”, „trebuie”, „se interzice”, „nu se admite”, „este permis”, „are voie”, „numai dacă”, „cu condiția”,
+     „cu excepția”, „cel puțin”, „cel mult”, „impune”, „conform” …); pe o linie CU marcaj, și „se poate” / „nu se poate”;
    - excepția „Nu am găsit sursa oficială pentru …” scutește DOAR o linie care e exclusiv declarația de lipsă (fără `;`, fără
      altă propoziție, fără „dar/însă/iar”, fără articol / cifră / obligație) — „Proba se face la 99 bar; nu am găsit sursa
      oficială pentru alt detaliu.” NU e scutită;
-   - o afirmație cu marcaj trece doar dacă **TOATE** cifrele ei apar în sursele citate (runda 3; „Art. 999 impune 99 bar [C1]”
-     cere și „999”, și „99”);
-   - **suport lexical** (runda 3, review r2 P1-2): orice afirmație cu marcaj trebuie să aibă termenii ei în titlul / extrasul
-     surselor citate. Termenii-cheie = cuvintele de ≥ 3 litere, normalizate (fără diacritice, rădăcina de 6 litere), fără
-     cuvinte de legătură, verbe generice („este”, „face”, „aplică”), structura actelor („art.”, „alin.”) și cuvintele de
-     obligație („obligatoriu” nu e ce trebuie să repete sursa, ci *ce* e obligatoriu). Pragul: o afirmație normativă cere
-     **majoritatea** termenilor (2 din 2, 2 din 3, 3 din 4), una descriptivă cel puțin jumătate; o obligație fără niciun termen
-     verificabil și fără cifre („Este obligatoriu [C1]”) se scoate. „Este obligatoriu un responsabil autorizat [C1]” cu un C1
-     despre recepție → scoasă; „…un responsabil tehnic cu sudura atestat [C1]” cu un C1 care spune exact asta → păstrată.
-     Limită declarată: verificarea e pe cuvinte, nu pe sens (o negație din sursă nu e prinsă dacă termenii coincid) — de aceea
-     răspunsul rămâne informativ, iar extrasul citat stă sub răspuns;
-   - **verdictul are nevoie de temei** (runda 3, review r2 P2-3): „Da / Nu / Depinde” rămâne doar dacă după curățare există
-     măcar o afirmație cu dovadă pozitivă (majoritatea termenilor ei în sursă, sau cifrele ei confirmate); o linie neutră care
-     doar citează C1 („Document consultat [C1]”) nu ține verdictul. Altfel prima linie devine **„Incert — de verificat: nu am
-     găsit o sursă care să susțină verdictul propus.”**;
+   - **cifrele** (runda 4, review r3 P2): o afirmație cu marcaj trece doar dacă **TOATE** cifrele ei apar în sursele citate, ca
+     token COMPLET = semn + număr + unitate („−5 bar” nu e „5 bar”; „30 de zile” = „30 zile”; „10 metri” = „10 m”). La o afirmație
+     normativă, o cifră fără unitate nu e confirmată de aceeași cifră cu unitate în sursă (și invers): „proba se face la 6” față
+     de „6 bar” → scoasă. Unitățile recunoscute: bar, mbar, kPa, MPa, mm, cm, m, km, °C, grade, %, zile, ore, săptămâni, luni,
+     ani, minute, lei, euro, kg, mc, mp; semnul contează doar lipit de cifră („−5”), nu într-un interval („5-10 bar”);
+   - **susținerea pe propoziție** (runda 4, review r3 P1 — înlocuiește „majoritatea termenilor” din runda 3): o afirmație cu
+     marcaj trece doar dacă O PROPOZIȚIE dintr-o sursă citată (titlul sursei se adaugă la fiecare propoziție) are:
+     · **același tip de regulă**: o obligație cere „obligatoriu / trebuie / necesar / impune” în sursă, o interdicție cere
+       „se interzice / nu se admite / nu este permis / nu trebuie”, o permisiune cere „este permis / se admite”; tipul opus
+       sau lipsa lui = nesusținută („Se interzice sudarea pe ploaie [C1]” cu sursa „Este permisă sudarea pe ploaie” → scoasă;
+       „nu este obligatoriu” nu e susținut de „este obligatoriu”); propoziția sursei nu are voie să aibă o interdicție, o
+       condiție („numai dacă”, „cu excepția”) sau — la o valoare — o limită („cel puțin”) pe care afirmația o omite;
+     · **aceeași negație** („Proba nu se face …” nu e susținut de „Proba se face …”);
+     · **toți termenii de conținut** ai unei afirmații normative, inclusiv calificativele („autorizat”, „atestat”, „calificat”,
+       „în scris”, „prealabil”), plus cifrele ei cu unitate — în ACEEAȘI propoziție (nu adunați din propoziții diferite);
+       la o afirmație descriptivă rămâne pragul din runda 3: cel puțin jumătate din termeni, acum tot pe propoziție.
+     „Este obligatoriu un responsabil autorizat pentru recepția lucrărilor [C1]” cu sursa „Recepția lucrărilor se face de
+     responsabilul beneficiarului.” → scoasă (sursa n-are nici obligația, nici „autorizat”). Termenii-cheie = cuvintele de ≥ 3
+     litere, normalizate (fără diacritice, rădăcina de 6 litere), fără cuvinte de legătură, verbe generice („este”, „face”,
+     „aplică”), structura actelor („art.”, „alin.”) și marcatorii de regulă. O regulă fără niciun termen verificabil și fără
+     cifre („Este obligatoriu [C1]”) se scoate;
+   - **limita asumată** (runda 4): potrivirea e pe cuvinte, nu pe sens. Suntem intenționat stricți: o parafrază corectă cu alt
+     cuvânt e respinsă — „personal competent” pentru sursa „personal calificat”, „impune” pentru sursa „se face la 99 bar” — iar
+     răspunsul devine „Incert — de verificat” (de verificat de om), nu greșit. Nu adăugăm sinonime ghicite;
+   - **o afirmație normativă scoasă nu se „repară”** prin tăierea unui cuvânt: linia se înlocuiește întreagă cu o notă, iar
+     verdictul „Da / Nu / Depinde” se schimbă în **„Incert — de verificat: nu am găsit o sursă care să susțină verdictul
+     propus.”** (runda 4: verdictul se putea sprijini pe ea). Tot așa, verdictul are nevoie de temei (runda 3, P2-3): rămâne doar
+     dacă după curățare există măcar o afirmație cu dovadă pozitivă; o linie neutră care doar citează C1 nu ține verdictul;
    dacă pică → o singură reparare (cu motivul fiecărei linii); ce rămâne nesusținut se scoate (`curata_raspuns`). Sursele citate
    trec verificarea finală pe setul care se salvează (`verifica_surse_finale`: max 30, ID-uri unice dintre cele trimise,
    domenii / căi valide, < 80 KB) → `surse`.
@@ -86,7 +100,31 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
 6. **UI**: verdictul evidențiat (galben dacă e „Incert”), textul, apoi „Surse” (linkuri doar pe domeniile oficiale); ownerul vede
    și interogările web trimise. „⚑ Răspuns neclar — trimite la verificare” (autorul) → stare `de_verificat`, fără alte efecte.
    „🔁 Reia cu cercetare” — DOAR ownerul (costă, intră în plafon). Rezultatul unei acțiuni rămâne legat de întrebarea pe care
-   s-a apăsat (id + generație), nu apare sub altă întrebare deschisă între timp.
+   s-a apăsat (id + generație), nu apare sub altă întrebare deschisă între timp. Cele două butoane apar **doar după ce ecranul a
+   detectat migrarea 20261131e** (coloanele ei s-au citit fără eroare — runda 4, review r3 P2); până atunci, în locul lor, o
+   notă: „disponibile după actualizarea bazei de date” (`actiuniIntrebare` în `src/intrebariSurse.js`).
+
+## Ce ajunge la furnizorul modelului (Anthropic) — pe înțelesul ownerului
+Întrebările trec prin modelele Claude (Anthropic), prin API-ul firmei. Pe pași, ce pleacă din ERP:
+- **(a) propunerea de căutări**: titlul și textul întrebării, curățate de e-mailuri, linkuri, telefoane și numere lungi.
+  Numele de persoane, firme sau localități scrise în întrebare **rămân** în acest pas (nu le putem deosebi sigur de termeni).
+- **(b) scrierea răspunsului**: **întrebarea întreagă**, contextul (proiect, localitate), atașamentele (PDF / poze), extrasele
+  din documentele noastre de cercetare și din paginile oficiale găsite și rezumatul căutării web. **Repararea** (o singură dată,
+  doar dacă răspunsul n-a trecut verificarea): din nou întrebarea, contextul, extrasele și primul răspuns — fără atașamente.
+- **(c) căutarea pe web**: DOAR căutarea compusă de program din lista aprobată de cuvinte (de ex. „responsabil tehnic sudura
+  iscir”) — fără nume, fără întrebare, fără context. Căutările trimise le vezi la fiecare răspuns („🔎 Interogări”).
+Ce nu pleacă: date din alte module, alte întrebări, parole sau chei. Conform condițiilor comerciale ale API-ului, Anthropic nu
+folosește implicit aceste date la antrenarea modelelor; ele trec totuși prin serverele lui și pot fi păstrate o perioadă limitată.
+**Dacă (b) nu e acceptabil**, variantele (decizia lui Răzvan):
+- **A — mascarea numelor** înainte de trimitere (persoane, firme, localități înlocuite cu „[NUME 1]”, „[LOCALITATE 1]”).
+  Pierdem: răspunsurile care depind de loc (zonă, distribuitor, aviz local) devin mai generale, iar mascarea automată poate
+  scăpa nume scrise neobișnuit; atașamentele (PDF / poze) nu se pot masca sigur — ar trebui oprite.
+- **B — răspuns doar din documentele noastre**, fără model extern: căutare în corpus și afișarea extraselor găsite, fără text
+  scris de AI. Pierdem: verdictul „Da / Nu / Depinde”, explicația și căutarea pe site-urile oficiale; colegul citește singur
+  extrasele.
+- **C — acceptăm cum e**, cu o notă în ecran pentru cine pune întrebarea („întrebarea, contextul și atașamentele se trimit la
+  Anthropic pentru răspuns; nu scrie date personale care nu sunt necesare”).
+Până la decizie, codul rămâne cum e (varianta C fără notă); nimic nu se schimbă automat.
 
 ## Identitate
 - Claude prin **API** (cheia din Credential Manager `anthropic-claude-code` / `api`, workspace-ul cu plafon lunar), NU abonamentul:
@@ -153,15 +191,23 @@ decât rândul întrebării și jurnalul ei de preluări, nu vede ERP-ul, nu fol
 al echipei Paw).
 
 ## Teste
-- `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs scripts/intrebari/interogari.test.mjs`
+- `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs scripts/intrebari/interogari.test.mjs scripts/intrebari_cercetare_amprente.test.js`
 - `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` — **paritate Python ↔ JS pe aceleași fișiere**:
-  validarea (`teste_validare.json`: verdict, fără sursă, cifre neconfirmate, fără suport lexical, temei, textul după curățare) și
-  compunerea interogărilor (`teste_interogari.json`, pe vocabularul real; portarea JS e `scripts/intrebari/interogari.mjs`).
+  validarea (`teste_validare.json`: verdict, fără sursă, cifre neconfirmate, nesusținute, temei, textul după curățare — runda 4:
+  polaritatea, calificativele, negația, propozițiile, semnul și unitatea), tokenii numerici / tipul regulii / propozițiile
+  (`teste_normative.json`, runda 4) și compunerea interogărilor (`teste_interogari.json`, pe vocabularul real; portarea JS e
+  `scripts/intrebari/interogari.mjs`).
+- Amprentele migrării (runda 4, L15): `scripts/intrebari_cercetare_amprente.test.js` (vitest: interogarea identică în migrare și
+  în scriptul coordonatorului, blocul unic fail-closed, md5-urile corpurilor recalculate din migrare, revenirea = 20261105a verbatim)
+  și proba locală PGlite `npm install --no-save @electric-sql/pglite && node scripts/pglite/test_intrebari_cercetare_local.mjs`
+  (schemă falsă; NU înlocuiește dry-run-ul pe clonă).
   `test_worker.py` rulează fluxul complet FĂRĂ rețea — `apel` / `edge` înlocuite: cererea web primește doar interogarea compusă,
   o cerere pe interogare cu `max_uses` = 1, căutarea modificată de model e ignorată, rezultat web incomplet nepublicat,
   obligația cu sursă fără legătură devine „Incert”, corpus / vocabular invalid = nicio preluare.
 - `node scripts/intrebari/construieste_corpus.mjs --verifica worker/intrebari-tehnice/corpus_manifest.json` (manifestul la zi)
 - BD (doar pe clonă, le rulează chat-ul): `supabase/tests/20261131e_intrebari_cercetare_surse_dryrun.sql` (apply → revenire
-  standard → re-apply; revenire cu arhivă; expirarea în `fn_intrebari_preia`) și `scripts/test_intrebari_preia_lock.sh --sistem …`
+  standard → re-apply; revenire cu arhivă; expirarea în `fn_intrebari_preia`; T4–T5: migrarea și revenirea refuză o versiune
+  ulterioară a unei funcții — cere blocul AMPRENTE BASELINE completat din `scripts/intrebari_cercetare_amprente.sql`) și
+  `scripts/test_intrebari_preia_lock.sh --sistem …`
   (două sesiuni reale: expirarea contra unui răspuns întârziat, fără deadlock; `--mutant-r2` trebuie să dea 40P01).
 - Revenirea BD: `supabase/revenire/20261131e_intrebari_cercetare_surse_ROLLBACK.sql` (vezi `supabase/revenire/README.md`).

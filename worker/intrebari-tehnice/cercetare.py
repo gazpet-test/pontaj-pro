@@ -16,13 +16,19 @@ Fluxul (intrebari_worker.py):
         (interogare_respectata). Interogările efectiv trimise se salvează pe întrebare (`interogari_web`, audit ownerului);
   3. răspuns fără unelte, cu sursele C/W numerotate (max SURSE_MAX în total); analizeaza() verifică verdictul din prima linie și,
      pe fiecare linie: afirmația normativă (articol, act, standard, cifră cu unitate, obligație / interdicție) are un marcaj valid;
-     TOATE cifrele ei apar în sursele citate; iar orice afirmație cu marcaj are SUPORT LEXICAL în sursele citate (runda 3,
-     review r2 P1-2: termenii-cheie ai afirmației, normalizați, se regăsesc în titlu/extras — majoritatea lor la o afirmație
-     normativă, cel puțin jumătate la una descriptivă); excepția „Nu am găsit sursa oficială” scutește DOAR o linie care e exclusiv
-     declarația de lipsă;
-  4. o singură reparare dacă validarea pică; ce rămâne nesusținut se scoate (curata_raspuns). Verdictul Da / Nu / Depinde rămâne
-     DOAR dacă după curățare rămâne măcar o afirmație cu temei (runda 3, review r2 P2-3); altfel răspunsul devine
+     TOATE cifrele ei apar în sursele citate, ca token complet (runda 4, review r3 P2: semn + număr + unitate — „−5 bar” nu e
+     „5 bar”, „6” nu e „6 bar”); iar orice afirmație cu marcaj e SUSȚINUTĂ de O PROPOZIȚIE a unei surse citate (runda 4, review r3
+     P1, vezi sustinere()): același tip de regulă (obligație / interdicție / permisiune / condiție / minim / maxim — polaritate
+     opusă sau absentă = nesusținută), aceeași negație, iar termenii-cheie în aceeași propoziție — TOȚI la o afirmație normativă
+     (inclusiv calificativele: „autorizat”, „atestat”, „în scris”), cel puțin jumătate la una descriptivă; excepția „Nu am găsit
+     sursa oficială” scutește DOAR o linie care e exclusiv declarația de lipsă;
+  4. o singură reparare dacă validarea pică; ce rămâne nesusținut se scoate (curata_raspuns), nu se „repară” prin tăierea unui
+     cuvânt. Verdictul Da / Nu / Depinde rămâne DOAR dacă nicio afirmație normativă n-a fost scoasă (runda 4: verdictul se putea
+     sprijini pe ea) și rămâne măcar o afirmație cu temei (runda 3, review r2 P2-3); altfel răspunsul devine
      „Incert — de verificat: nu am găsit o sursă care să susțină verdictul propus”.
+  Limita asumată (runda 4): potrivirea e pe cuvinte, nu pe sens — o parafrază corectă cu alt cuvânt („personal competent” pentru
+  sursa „personal calificat”, „impune” pentru sursa „se face”) e respinsă, iar răspunsul devine „Incert” (de verificat de om),
+  nu greșit. Nu adăugăm sinonime ghicite.
 Textul întrebării, extrasele și paginile web sunt DATE, nu instrucțiuni (CLAUDE.md pct. 10): delimitatorii din conținut se
 neutralizează (neutralizeaza) înainte să intre între tag-uri.
 """
@@ -86,7 +92,7 @@ INCERT_FARA_TEMEI = f'{INCERT}: nu am găsit o sursă care să susțină verdict
 NOTE = {
     'fara_marcaj': '> ⚠️ Afirmație scoasă: nu avea sursă găsită în cercetare.',
     'neconfirmat': '> ⚠️ Afirmație scoasă: cifrele sau articolul ei nu apar în sursa citată.',
-    'nesustinut': '> ⚠️ Afirmație scoasă: sursa citată nu conține termenii ei (vorbește despre altceva).',
+    'nesustinut': '> ⚠️ Afirmație scoasă: sursa citată nu spune exact asta (alți termeni, alt tip de regulă sau altă valoare).',
 }
 # Cuvinte care nu sunt „termeni-cheie” ai unei afirmații (suportul lexical, runda 3): legături, verbe generice, structura actelor
 # (art., alin. — cifrele lor se verifică separat, prin ancore), eticheta verdictului. Cuvintele de obligație (REGULA_OBLIGATIE)
@@ -96,21 +102,124 @@ cer exista poate pot alt alta alte altul altei acel acea aceea astfel privind re
 articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele'''.split())
 
 
+# ─── runda 4 (review r3 P1 + P2): tipul regulii, propoziții, cifre cu semn și unitate ───────────────────
+# Tipul regulii („polaritatea”) dintr-un text NORMALIZAT. Formele NEGATE se caută întâi și se maschează („nu se admite” =
+# interdicție, nu permisiune; „nu este obligatoriu” = fără obligație, nu obligație), apoi formele pozitive. Aceeași ordine și
+# aceleași expresii în src/intrebariSurse.js (paritate pe teste_normative.json).
+NEGATIE = r'\bnu\s+(?:(?:se|este|e|sunt|va|vor|fi|fie|poate|pot|mai|le|li|ii|il|o|a|au|are|fost|in|mod)\s+){0,3}'
+POLARITATI = [(k, re.compile(p)) for k, p in (
+    ('fara_obligatie', NEGATIE + r'(?:obliga\w*|necesar\w*|impun\w*|impus\w*)'),
+    ('interdictie', NEGATIE + r'(?:admi[st]\w*|permi[st]\w*|trebui\w*|voie\b)'),
+    ('permisiune', NEGATIE + r'interzi\w*'),
+    ('interdictie', r'\binterzi\w*'),
+    ('obligatie', r'\b(?:obliga\w*|trebui\w*|necesar\w*|impun\w*|impus\w*)'),
+    ('permisiune', r'\b(?:admi[st]\w*|permi[st]\w*)|\b(?:are|au|e|este)\s+voie\b'),
+    ('conditie', r'\b(?:numai|doar)\s+(?:daca|dupa|cu|in\s+cazul)\b|\bcu\s+conditia\b|\bcu\s+exceptia\b|\bexceptand\b'),
+    ('minim', r'\bcel\s+putin\b|\bnu\s+mai\s+putin\s+de\b|\bminim\w*'),
+    ('maxim', r'\bcel\s+mult\b|\bnu\s+mai\s+mult\s+de\b|\bmaxim\w*'),
+)]
+# „se poate” / „nu se poate” = permisiune / interdicție DOAR pe o linie cu marcaj și în surse (extins=True): pe o linie fără
+# marcaj, „nu se poate stabili din surse” nu e o regulă.
+POLARITATI_POATE = [(k, re.compile(p)) for k, p in (
+    ('interdictie', NEGATIE + r'po(?:ate|t)\b'),
+    ('permisiune', r'\bse\s+po(?:ate|t)\b'),
+)]
+# „minim” / „maxim” ca adjectiv („distanța minimă”) nu fac singure o linie normativă; „cel puțin” / „cel mult” da.
+LIMITA_EXPLICITA = re.compile(r'\bcel\s+(?:putin|mult)\b|\bnu\s+mai\s+(?:putin|mult)\s+de\b')
+NEGATIE_SIMPLA = re.compile(r'\b(?:nu|nici|niciun\w*|nicio|niciodata)\b')
+VERDICT_INCEPUT = re.compile(r'^\s*(?:da|nu)\b\s*[,.:;!—–-]+')   # „Nu, …” / „Da — …”: eticheta verdictului nu e negație
+OPUSE = {'obligatie': 'fara_obligatie', 'fara_obligatie': 'obligatie', 'interdictie': 'permisiune', 'permisiune': 'interdictie'}
+NU_SE_PIERD = ('interdictie', 'fara_obligatie', 'conditie')   # o afirmație care le omite schimbă sensul propoziției din sursă
+LIMITE = ('minim', 'maxim')                                    # la fel, dacă afirmația dă o valoare
+
+# Cifre: token complet = semn + număr + unitate (L11). Unitățile se scriu canonic; ordinea alternativelor: cele lungi întâi (L13).
+UM = (r'grade\s+celsius|metri\s+patrati|metri\s+cubi|centimetri|centimetru|kilometri|kilometru|milimetri|milimetru|kilograme'
+      r'|kilogram|saptamani|saptamana|procente|procent|minute|grade|metri|metru|mbari|mbar|zile|euro|luni|luna|bari|bar|kpa|mpa'
+      r'|ore|ora|ani|min|lei|eur|°\s*c|mm|cm|km|kg|mc|mp|m3|m2|m³|m²|zi|an|m|h|°|%')
+UNITATI = {'grade celsius': '°c', 'metri patrati': 'mp', 'metri cubi': 'mc', 'centimetri': 'cm', 'centimetru': 'cm', 'kilometri': 'km',
+           'kilometru': 'km', 'milimetri': 'mm', 'milimetru': 'mm', 'kilograme': 'kg', 'kilogram': 'kg', 'saptamani': 'saptamani',
+           'saptamana': 'saptamani', 'procente': '%', 'procent': '%', 'minute': 'minute', 'grade': 'grade', 'metri': 'm', 'metru': 'm',
+           'mbari': 'mbar', 'mbar': 'mbar', 'zile': 'zile', 'euro': 'euro', 'luni': 'luni', 'luna': 'luni', 'bari': 'bar', 'bar': 'bar',
+           'kpa': 'kpa', 'mpa': 'mpa', 'ore': 'ore', 'ora': 'ore', 'ani': 'ani', 'min': 'minute', 'lei': 'lei', 'eur': 'euro',
+           '°c': '°c', '° c': '°c', 'mm': 'mm', 'cm': 'cm', 'km': 'km', 'kg': 'kg', 'mc': 'mc', 'mp': 'mp', 'm3': 'mc', 'm2': 'mp',
+           'm³': 'mc', 'm²': 'mp', 'zi': 'zile', 'an': 'ani', 'm': 'm', 'h': 'ore', '°': 'grade', '%': '%'}
+# semnul contează doar lipit de cifră și după un început / spațiu / paranteză („−5 bar”), nu într-un interval („5-10 bar”)
+NUMERIC = re.compile(r'(?:(?<![0-9a-z])([-+−–±]))?(?<![0-9])([0-9]+(?:[.,][0-9]+)?)(?:\s*(?:de\s+)?(' + UM + r')(?![a-z0-9]))?')
+SEMNE = {'-': '-', '−': '-', '–': '-', '+': '', '±': '±'}
+# propoziții: . ! ? ; și rând nou, dar nu după o abreviere („art. 5”), înaintea unei cifre / paranteze („alin. (2)”) sau în
+# interiorul unui număr („0.5”); apoi și la „dar / însă / iar …” (o propoziție nu poate amesteca două reguli opuse)
+ABREVIERI = frozenset('art alin pct lit nr ord hg oug cap sect par fig pag ex cca min max str ed vol pt np sr en iso stas tab pl'.split())
+SEPARATOR = re.compile(r'[.!?;\n]')
+CONTRAST_PROP = re.compile(r'\b(?:dar|insa|iar|totusi|desi|in\s+schimb|pe\s+cand)\b')
+
+
+def _polaritati(n, extins=False):
+    """(tipurile de regulă găsite, textul rămas după mascarea marcatorilor) — `n` e deja normalizat."""
+    clase = set()
+    for k, r in POLARITATI + (POLARITATI_POATE if extins else []):
+        if r.search(n):
+            clase.add(k)
+            n = r.sub(' ', n)
+    return clase, n
+
+
+def polaritati(n, extins=False):
+    """Tipurile de regulă dintr-un text normalizat: obligatie / fara_obligatie / interdictie / permisiune / conditie / minim / maxim."""
+    return _polaritati(n, extins)[0]
+
+
+def tokeni_numerici(n):
+    """Cifrele unui text normalizat, ca tokeni compleți: „−5 bar” → „-5 bar”, „0,5 m” → „0.5 m”, „30 de zile” → „30 zile”,
+    „+5 °C” → „5 °c”, „art. 12” → „12” (fără unitate)."""
+    out = []
+    for m in NUMERIC.finditer(n):
+        um = UNITATI.get(' '.join((m.group(3) or '').split()), '')
+        out.append(SEMNE.get(m.group(1) or '', '') + m.group(2).replace(',', '.') + (' ' + um if um else ''))
+    return out
+
+
+def corp_afirmatie(linie):
+    """Linia normalizată, fără buline / numerotare și fără marcaje."""
+    return MARCAJ.sub(' ', PREFIX_LINIE.sub('', normalizeaza(linie)))
+
+
+def propozitii(text):
+    """Propozițiile unui text (normalizate), vezi SEPARATOR / ABREVIERI / CONTRAST_PROP."""
+    n = normalizeaza(text)
+    bucati, start = [], 0
+    for m in SEPARATOR.finditer(n):
+        k = m.start()
+        if n[k] in '.!?':
+            if k + 1 < len(n) and not re.match(r'\s', n[k + 1]): continue
+            if n[k] == '.':
+                cuv = re.search(r'[a-z]+$', n[start:k])
+                if cuv and cuv.group(0) in ABREVIERI: continue
+            urm = re.match(r'\s*(\S)', n[k + 1:])
+            if urm and re.match(r'[0-9(]', urm.group(1)): continue
+        bucati.append(n[start:k])
+        start = k + 1
+    bucati.append(n[start:])
+    return [p.strip() for b in bucati for p in CONTRAST_PROP.split(b) if p.strip()]
+
+
 def e_afirmatie_normativa(linie):
-    """Act, articol, standard, cifră cu unitate SAU o obligație/prescripție („obligatoriu”, „trebuie”, „interzis”, „conform” …)."""
+    """Act, articol, standard, cifră cu unitate SAU o regulă: obligație / interdicție / permisiune / condiție / limită
+    („obligatoriu”, „trebuie”, „se interzice”, „nu se admite”, „este permis”, „numai dacă”, „cel puțin”, „cel mult”, „conform” …)."""
     n = normalizeaza(linie)
-    return any(r.search(n) for r in REGULI_NORMATIVE) or bool(REGULA_OBLIGATIE.search(n))
+    return (any(r.search(n) for r in REGULI_NORMATIVE) or bool(REGULA_OBLIGATIE.search(n)) or bool(LIMITA_EXPLICITA.search(n))
+            or bool(polaritati(n) - set(LIMITE)) or any(' ' in t for t in ancore(linie)))
 
 
 def e_declaratie_lipsa(linie):
     """True DOAR dacă linia e exclusiv declarația „Nu am găsit sursa oficială pentru …” (eventual cu ce document trebuie cerut):
-    fără altă propoziție (;, punct urmat de text, „dar/însă/iar …”), fără articol/cifră/standard, fără obligație afirmată."""
+    fără altă propoziție (;, punct urmat de text, „dar/însă/iar …”), fără articol/cifră/standard, fără regulă afirmată."""
     n = PREFIX_LINIE.sub('', normalizeaza(linie)).strip()
     if not n.startswith(FARA_SURSA): return False
     rest = n[len(FARA_SURSA):].strip().rstrip('.!*_` ')
     if ';' in rest or re.search(r'[.!?]\s+\S', rest) or CONTRAST.search(rest): return False
-    if any(r.search(rest) for r in REGULI_NORMATIVE): return False
-    return not REGULA_OBLIGATIE.search(CERERE_DOCUMENT.sub(' ', rest))
+    if any(r.search(rest) for r in REGULI_NORMATIVE) or any(' ' in t for t in tokeni_numerici(rest)): return False
+    r = CERERE_DOCUMENT.sub(' ', rest)
+    return not REGULA_OBLIGATIE.search(r) and not LIMITA_EXPLICITA.search(r) and not (polaritati(r) - set(LIMITE))
 
 
 def marcaje(linie):
@@ -119,18 +228,12 @@ def marcaje(linie):
 
 
 def ancore(linie):
-    """Numerele afirmate într-o linie (fără marcaje și fără numerotarea listei), canonice: „0,5” → „0.5”."""
-    n = MARCAJ.sub(' ', PREFIX_LINIE.sub('', normalizeaza(linie)))
-    return sorted({x.replace(',', '.') for x in re.findall(r'\d+(?:[.,]\d+)?', n)})
-
-
-def ancora_in(ancora, text):
-    t = normalizeaza(text).replace(',', '.')
-    return re.search(r'(?<!\d)(?<!\d\.)' + re.escape(ancora) + r'(?!\d|\.\d)', t) is not None
+    """Cifrele afirmate într-o linie (fără marcaje și fără numerotarea listei), ca tokeni compleți (tokeni_numerici), sortați."""
+    return sorted(set(tokeni_numerici(corp_afirmatie(linie))))
 
 
 def harta_surse(surse):
-    """{ID: titlu + extras}. Acceptă și o listă de ID-uri simple (fără extrase: cifrele lor nu se pot confirma)."""
+    """{ID: titlu + rând nou + extras}. Acceptă și o listă de ID-uri simple (fără extrase: nimic nu se poate confirma din ele)."""
     h = {}
     for s in surse or []:
         if isinstance(s, dict):
@@ -142,9 +245,10 @@ def harta_surse(surse):
 
 
 def termeni_cheie(linie):
-    """Termenii-cheie ai unei afirmații (runda 3, suport lexical): cuvintele din litere (≥ 3), fără marcaje, numerotare, cuvinte
-    de legătură (STOP), cuvinte generice (GENERICE) și cuvinte de obligație; rădăcina = primele 6 litere, fără dubluri."""
-    n = MARCAJ.sub(' ', PREFIX_LINIE.sub('', normalizeaza(linie)))
+    """Termenii de conținut ai unei afirmații: cuvintele din litere (≥ 3), fără marcaje, numerotare, cuvinte de legătură (STOP),
+    cuvinte generice (GENERICE), cuvinte de obligație / atribuire (REGULA_OBLIGATIE), marcatorii de regulă (POLARITATI) și
+    cifrele cu unitatea lor; rădăcina = primele 6 litere, fără dubluri. Calificativele („autorizat”, „atestat”) RĂMÂN termeni."""
+    n = NUMERIC.sub(' ', _polaritati(corp_afirmatie(linie), True)[1])
     out = []
     for w in re.findall(r'[a-z]+', n):
         if len(w) < 3 or w in STOP or w in GENERICE or REGULA_OBLIGATIE.fullmatch(w): continue
@@ -152,38 +256,104 @@ def termeni_cheie(linie):
     return out
 
 
+def cuvinte(text):
+    return {w for w in re.findall(r'[a-z]+', text) if len(w) >= 3}
+
+
+def potriviti(termeni, cuv):
+    """Câți termeni apar în mulțimea de cuvinte `cuv`: pe rădăcina de 6 litere; unul mai scurt („gaz”, „bar”, „timp”) și ca
+    început al unui cuvânt din sursă."""
+    radacini = {w[:6] for w in cuv}
+    return sum(1 for x in termeni if x in radacini or (len(x) < 6 and any(w.startswith(x) for w in cuv)))
+
+
 def suport_lexical(linie, ids, harta):
-    """(potriviți, total): câți termeni-cheie ai liniei apar în titlul + extrasul surselor citate `ids`. Un termen se potrivește
-    pe rădăcina de 6 litere; unul mai scurt („gaz”, „bar”, „timp”) se potrivește și cu un cuvânt din sursă care începe cu el."""
+    """(potriviți, total) pe tot textul surselor citate `ids` (titlu + extras) — măsură de ansamblu (teste); decizia o ia
+    sustinere(), pe propoziții."""
     k = termeni_cheie(linie)
-    cuvinte = {w for w in re.findall(r'[a-z]+', normalizeaza('\n'.join(harta[i] for i in ids))) if len(w) >= 3}
-    radacini = {w[:6] for w in cuvinte}
-    pot = sum(1 for x in k if x in radacini or (len(x) < 6 and any(w.startswith(x) for w in cuvinte)))
-    return pot, len(k)
+    return potriviti(k, cuvinte(normalizeaza('\n'.join(harta[i] for i in ids)))), len(k)
+
+
+def descrie_afirmatia(linie):
+    """{clase, neg, termeni, tok} pentru o linie: tipul regulii (extins: și „se poate”), negația rămasă după marcatori
+    („Proba nu se face …”; eticheta verdictului „Nu, …” nu contează), termenii de conținut, cifrele."""
+    n = corp_afirmatie(linie)
+    clase, rest = _polaritati(n, True)
+    return {'clase': clase, 'neg': bool(NEGATIE_SIMPLA.search(VERDICT_INCEPUT.sub(' ', rest))), 'termeni': termeni_cheie(linie),
+            'tok': tokeni_numerici(n)}
+
+
+def propozitii_surse(ids, harta):
+    """Propozițiile surselor citate: [{clase, neg, cuvinte, tok}]. Titlul sursei se adaugă la fiecare propoziție (contextul
+    actului: „PT C9”, „Legea 10/1995”), dar tipul regulii și negația se iau DOAR din propoziție."""
+    out = []
+    for i in ids:
+        titlu, _, extras = harta[i].partition('\n')
+        nt = normalizeaza(titlu)
+        for p in propozitii(extras):
+            clase, rest = _polaritati(p, True)
+            ctx = nt + '\n' + p
+            out.append({'clase': clase, 'neg': bool(NEGATIE_SIMPLA.search(rest)), 'cuvinte': cuvinte(ctx), 'tok': set(tokeni_numerici(ctx))})
+    return out
+
+
+def potrivire_propozitie(af, prop):
+    """Tipul regulii din propoziție îl acoperă pe cel al afirmației: fiecare tip afirmat există în propoziție, niciunul opus
+    („se interzice” față de „este permisă”), propoziția nu are o interdicție / lipsă de obligație / condiție pe care afirmația o
+    omite (nici „cel puțin / cel mult”, dacă afirmația dă o valoare), iar negația e aceeași."""
+    if not af['clase'] <= prop['clase']: return False
+    if any(OPUSE.get(k) in prop['clase'] for k in af['clase']): return False
+    pierdute = prop['clase'] - af['clase']
+    if any(k in pierdute for k in NU_SE_PIERD): return False
+    if af['tok'] and any(k in pierdute for k in LIMITE): return False
+    return af['neg'] == prop['neg']
+
+
+def sustinere(linie, ids, harta, normativ):
+    """(susținută, potriviți, total): există O propoziție dintr-o sursă citată care are același tip de regulă (potrivire_propozitie)
+    și termenii afirmației — TOȚI la o afirmație normativă, inclusiv calificativele, plus cifrele cu unitate în aceeași propoziție;
+    cel puțin jumătate la una descriptivă (regula din runda 3, acum pe propoziție). Termenii nu se adună din propoziții diferite."""
+    af = descrie_afirmatia(linie)
+    tot, cu_um, cel_mai_bun = len(af['termeni']), [t for t in af['tok'] if ' ' in t], -1
+    for p in propozitii_surse(ids, harta):
+        if not potrivire_propozitie(af, p): continue
+        if normativ and not all(t in p['tok'] for t in cu_um): continue
+        cel_mai_bun = max(cel_mai_bun, potriviti(af['termeni'], p['cuvinte']))
+    if cel_mai_bun < 0: return False, 0, tot
+    return cel_mai_bun >= (tot if normativ else (tot + 1) // 2), cel_mai_bun, tot
+
+
+def _evalueaza(linie, harta):
+    """(problemă, temei, normativă) — vezi evalueaza_linie."""
+    if not linie.strip() or e_declaratie_lipsa(linie): return None, False, False
+    normativ = e_afirmatie_normativa(linie)
+    ok = [i for i in marcaje(linie) if i in harta]
+    if not ok: return ('fara_marcaj' if normativ else None), False, normativ
+    normativ = normativ or bool(polaritati(corp_afirmatie(linie), True))
+    a = ancore(linie)
+    din_surse = set().union(*(tokeni_numerici(normalizeaza(harta[i])) for i in ok))
+    if normativ:
+        lipsa = [x for x in a if x not in din_surse]                  # token complet: semn + număr + unitate
+    else:
+        valori = {x.split(' ')[0] for x in din_surse}                  # descriptivă (fără unități): semn + număr
+        lipsa = [x for x in a if x.split(' ')[0] not in valori]
+    if lipsa: return 'neconfirmat', False, normativ
+    k = termeni_cheie(linie)
+    if not k and not a: return ('nesustinut', False, True) if normativ else (None, False, False)
+    if not k and not normativ: return None, True, False                # descriptivă doar cu cifre, confirmate mai sus
+    sust, pot, tot = sustinere(linie, ok, harta, normativ)
+    if not sust: return 'nesustinut', False, normativ
+    return None, normativ or pot * 2 > tot or bool(a), normativ
 
 
 def evalueaza_linie(linie, harta):
     """(problemă, temei) pentru o linie.
     problemă: None = în regulă; 'fara_marcaj' = afirmație normativă fără marcaj valid; 'neconfirmat' = are marcaj, dar nu TOATE
-    cifrele ei apar în sursele citate („Art. 999 impune 99 bar [C1]” cere și „999”, și „99” în C1); 'nesustinut' = are marcaj, dar
-    sursele citate nu conțin termenii ei (runda 3, P1-2: „Este obligatoriu un responsabil autorizat [C1]” cu un C1 despre recepție):
-    o afirmație normativă cere MAJORITATEA termenilor-cheie, una descriptivă cel puțin jumătate; o obligație / interdicție fără
-    niciun termen verificabil și fără cifre nu se poate verifica → nesusținută.
-    temei: True dacă linia rămâne ȘI are dovadă pozitivă (majoritatea termenilor ei în sursă, sau cifre confirmate) — doar
-    asemenea linii țin un verdict Da / Nu / Depinde (runda 3, P2-3)."""
-    if not linie.strip() or e_declaratie_lipsa(linie): return None, False
-    normativ = e_afirmatie_normativa(linie)
-    ok = [i for i in marcaje(linie) if i in harta]
-    if not ok: return ('fara_marcaj' if normativ else None), False
-    a = ancore(linie)
-    if a and not all(any(ancora_in(x, harta[i]) for i in ok) for x in a): return 'neconfirmat', False
-    pot, tot = suport_lexical(linie, ok, harta)
-    if tot:
-        prag = tot // 2 + 1 if normativ else (tot + 1) // 2
-        if pot < prag: return 'nesustinut', False
-        return None, pot * 2 > tot or bool(a)
-    if not a and REGULA_OBLIGATIE.search(normalizeaza(linie)): return 'nesustinut', False
-    return None, bool(a)
+    cifrele ei apar în sursele citate ca token complet (runda 4: „−5 bar” ≠ „5 bar”; la o afirmație normativă „6” ≠ „6 bar”);
+    'nesustinut' = are marcaj, dar nicio propoziție din sursele citate nu o susține (sustinere: tip de regulă, negație, termeni,
+    cifre cu unitate). O afirmație normativă fără niciun termen și fără cifre nu se poate verifica → nesusținută.
+    temei: True dacă linia rămâne ȘI are dovadă pozitivă — doar asemenea linii țin un verdict Da / Nu / Depinde (runda 3, P2-3)."""
+    return _evalueaza(linie, harta)[:2]
 
 
 def problema_linie(linie, harta):
@@ -226,21 +396,23 @@ def analizeaza(text, surse):
 
 
 def curata_raspuns(text, surse):
-    """După reparare: marcajele necunoscute se scot, liniile cu o problemă (fără sursă, cifre neconfirmate, fără suport lexical) se
-    înlocuiesc cu o notă. Verdict lipsă → „Incert — de verificat”; verdict Da / Nu / Depinde rămas FĂRĂ nicio linie cu temei (runda 3,
-    P2-3: o linie neutră care doar citează C1 nu ține verdictul) → prima linie devine INCERT_FARA_TEMEI."""
+    """După reparare: marcajele necunoscute se scot, liniile cu o problemă (fără sursă, cifre neconfirmate, nesusținute) se
+    înlocuiesc ÎNTREGI cu o notă — nu se taie un cuvânt ca să treacă. Verdict lipsă → „Incert — de verificat”; verdict
+    Da / Nu / Depinde → prima linie devine INCERT_FARA_TEMEI dacă s-a scos o afirmație NORMATIVĂ (runda 4: verdictul se putea
+    sprijini pe ea) sau dacă nu rămâne nicio linie cu temei (runda 3, P2-3)."""
     harta = harta_surse(surse)
     def fara_necunoscute(linie):
         def inloc(m):
             pastrate = [x for x in (y.strip().upper() for y in re.split(r'[,;]', m.group(1))) if x in harta]
             return f"[{', '.join(pastrate)}]" if pastrate else ''
         return MARCAJ_ORICE.sub(inloc, linie)
-    out, scoase, temei = [], 0, False
+    out, scoase, temei, normativ_scos = [], 0, False, False
     for linie in str(text or '').replace('\r', '').split('\n'):
         linie = fara_necunoscute(linie)
-        p, t = evalueaza_linie(linie, harta)
+        p, t, normativ = _evalueaza(linie, harta)
         if p:
             scoase += 1
+            normativ_scos = normativ_scos or normativ
             out.append(NOTE[p])
         else:
             out.append(linie)
@@ -248,7 +420,7 @@ def curata_raspuns(text, surse):
     rez = '\n'.join(out).strip()
     if not verdict(rez):
         rez = f'{INCERT}: din sursele găsite nu rezultă un verdict sigur.\n\n' + rez
-    elif not e_incert(rez) and not temei:
+    elif not e_incert(rez) and (normativ_scos or not temei):
         linii = rez.split('\n')
         i = next(k for k, l in enumerate(linii) if l.strip())
         linii[i] = INCERT_FARA_TEMEI
@@ -647,7 +819,7 @@ SISTEM_RASPUNS = """Ești consultantul tehnic al Gazpet Instal SRL (Ploiești) �
 Formatul răspunsului (obligatoriu):
 1. PRIMA LINIE = verdictul scurt, singur pe linie, începând exact cu „Da”, „Nu” sau „Depinde de …” (ex. „Da — …”, „Nu, …”, „Depinde de tipul instalației: …”). Fără titlu înaintea lui.
 2. Apoi justificarea, pe puncte scurte. FIECARE afirmație normativă (act, articol, alineat, punct, standard, cifră, termen, presiune, distanță, obligație) are la final marcajul sursei din care vine, între paranteze drepte: [C1], [W2] sau [C1, W3]. Folosește doar ID-uri din <surse>.
-3. Dacă sursele nu acoperă o parte a întrebării, scrie pe linie separată DOAR „Nu am găsit sursa oficială pentru …” și ce document trebuie cerut (ex. textul consolidat al prescripției, avizul, contractul) — fără cifre, articole sau obligații în acea linie. NU completa din memorie, nu inventa articole, numere sau cifre, nu folosi „[DE VERIFICAT]”. Cifrele și articolele pe care le citezi trebuie să apară exact în extrasul sursei marcate, iar sursa marcată trebuie să spună chiar lucrul afirmat (termenii afirmației se regăsesc în extras) — nu pune un marcaj pe o afirmație pe care sursa n-o conține. Dacă din surse nu rezultă un verdict, prima linie e „Incert — de verificat: …”.
+3. Dacă sursele nu acoperă o parte a întrebării, scrie pe linie separată DOAR „Nu am găsit sursa oficială pentru …” și ce document trebuie cerut (ex. textul consolidat al prescripției, avizul, contractul) — fără cifre, articole sau obligații în acea linie. NU completa din memorie, nu inventa articole, numere sau cifre, nu folosi „[DE VERIFICAT]”. Cifrele și articolele pe care le citezi trebuie să apară exact în extrasul sursei marcate, iar sursa marcată trebuie să spună chiar lucrul afirmat (termenii afirmației se regăsesc în extras) — nu pune un marcaj pe o afirmație pe care sursa n-o conține. La o obligație, interdicție, permisiune sau condiție („obligatoriu”, „trebuie”, „se interzice”, „nu se admite”, „este permis”, „numai dacă”, „cel puțin”, „cel mult”), aceeași propoziție din sursă trebuie să aibă același tip de regulă și toți termenii afirmației, inclusiv calificativele („autorizat”, „atestat”, „în scris”); cifrele se scriu cu același semn și aceeași unitate ca în sursă. Nu adăuga calificative sau condiții pe care sursa nu le are și nu le omite pe cele pe care le are. Dacă din surse nu rezultă un verdict, prima linie e „Incert — de verificat: …”.
 4. La final, dacă e util, „Ce aș face” — pași concreți, tot cu surse pentru partea normativă.
 Nu scrie o secțiune „Surse” (ecranul o afișează singur din marcaje). În română, direct, ca un coleg cu experiență, fără introduceri.
 
@@ -671,9 +843,12 @@ def mesaj_reparare(analiza, ids_valide):
         p.append('- La aceste afirmații, cifrele/articolul nu apar în extrasul sursei citate. Citează sursa care le conține exact, '
                  'sau scoate cifra:\n' + '\n'.join(f'  · {x[:300]}' for x in sorted(neconf)[:20]))
     if nesust:
-        p.append('- La aceste afirmații, sursa citată nu conține termenii lor (vorbește despre altceva). Citează sursa care spune '
-                 'exact asta, sau înlocuiește afirmația cu „Nu am găsit sursa oficială pentru …”:\n' +
-                 '\n'.join(f'  · {x[:300]}' for x in sorted(nesust)[:20]))
+        p.append('- La aceste afirmații, sursa citată nu spune exact asta: nicio propoziție din ea nu are toți termenii afirmației '
+                 '(inclusiv calificative ca „autorizat”, „atestat”, „în scris”), același tip de regulă (obligație / interdicție / '
+                 'permisiune / condiție / „cel puțin”) sau aceeași valoare cu semn și unitate. Citează sursa care spune exact asta. '
+                 'NU slăbi afirmația ca să treacă (nu tăia calificativul, nu schimba „se interzice” în altceva): dacă nicio sursă nu o '
+                 'spune, înlocuiește-o cu „Nu am găsit sursa oficială pentru …”, iar dacă verdictul se sprijinea pe ea, prima linie '
+                 'devine „Incert — de verificat: …”:\n' + '\n'.join(f'  · {x[:300]}' for x in sorted(nesust)[:20]))
     if analiza['necunoscute']:
         p.append(f'- Marcaje care nu există în <surse>: {", ".join(analiza["necunoscute"])}. ID-uri valide: {", ".join(ids_valide) or "niciunul"}.')
     return ('Răspunsul de mai sus nu respectă regulile:\n' + '\n'.join(p) +

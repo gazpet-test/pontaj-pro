@@ -29,8 +29,31 @@
 -- LIVRARE: doar prin scripts/livrare_migrare.sh. NEAPLICATĂ la commit — o aplică chat-ul.
 -- REVENIRE: supabase/revenire/20261131e_intrebari_cercetare_surse_ROLLBACK.sql (bloc complet, armat, refuză dacă există date
 --   noi — sau le arhivează explicit cu al doilea token; vezi supabase/revenire/README.md).
+--
+-- AMPRENTELE (runda 4, review r3 P2 / L15 — același tipar ca PR #1029 r2). Migrarea refuză dacă schema de pe țintă nu e EXACT
+-- baseline-ul revizuit. Valorile stau într-UN SINGUR loc, blocul „AMPRENTE BASELINE” din pg_temp.fn_20261131e_asteptat de mai jos;
+-- până se completează, migrarea refuză (fail-closed) cu mesajul „nu sunt completate”. Ce acoperă (interogarea „AMPRENTE”, identică
+-- în scripts/intrebari_cercetare_amprente.sql — testul vitest compară textul):
+--   * fiecare funcție înlocuită aici (fn_intrebari_inainte_insert, _preia, _amana, _raspunde cu 6 parametri) și fiecare funcție de
+--     care depind (auth.uid(), fn_are_acces_intrebari): definiția completă (pg_get_functiondef: corp, SECURITY DEFINER, search_path,
+--     volatilitate), proprietar, ACL (sortat; NULL marcat explicit), supraîncărcări — o versiune ulterioară a uneia = refuz;
+--   * FIECARE trigger ne-intern și FIECARE politică RLS de pe tabelele atinse (intrebari_tehnice, notifications — funcțiile
+--     de aici scriu în ea), cu materialul complet al funcției triggerului;
+--   * tabelele: proprietar, RLS, FORCE RLS, ACL pe tabel și pe coloane; constrângerile intrebari_tehnice (una e înlocuită aici);
+--   * tipurile coloanelor citite / scrise de funcții (intrebari_tehnice, profiles, notifications, storage.objects).
+-- Interogarea stă într-o funcție TEMPORARĂ (pg_temp.fn_20261131e_amprente, SET search_path = pg_catalog, pg_temp: deparsarea nu
+-- depinde de sesiune). După creare ($post$): obiectele neatinse au tot amprenta baseline (o schimbare comisă între timp de altă
+-- sesiune = refuz), iar cele create / înlocuite aici au exact corpul din acest fișier (md5 fără CR) + atributele așteptate.
+-- PAȘII COORDONATORULUI (sesiunea de cod nu are acces la BD):
+--   1. Pe PRODUCȚIE, din rădăcina repo-ului (scriptul își deschide singur o tranzacție READ ONLY și o închide cu ROLLBACK):
+--        psql -X -v ON_ERROR_STOP=1 -f scripts/intrebari_cercetare_amprente.sql -o <ieșire_prod.txt>
+--   2. Review pe MATERIAL (nu doar copiere): definițiile funcțiilor = cele din 20261105a; politicile / triggerele de pe notifications
+--      se verifică față de ce așteaptă echipa. Orice diferență neexplicată = stop.
+--   3. Același script pe CLONĂ: ieșirea identică cu producția (diff), altfel dry-run-ul nu dovedește nimic.
+--   4. Blocul tipărit înlocuiește INTEGRAL conținutul dintre marcajele „>>> AMPRENTE BASELINE” și „<<< AMPRENTE BASELINE”.
+--   5. sha256 pe fișierul completat → la review și la runner; apoi dry-run-ul pe clonă (supabase/tests/…_dryrun.sql, cu T4–T5).
 -- ════════════════════════════════════════════════════════════════════════════
-DO $pre$
+DO $start$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261131e_intrebari_cercetare_surse:' || txid_current() THEN
     RAISE EXCEPTION '20261131e: garda start invalida';
@@ -54,6 +77,163 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.intrebari_tehnice'::regclass AND conname = 'intrebari_tehnice_stare_check') THEN
     RAISE EXCEPTION '20261131e: lipsește constrângerea intrebari_tehnice_stare_check';
+  END IF;
+  -- același lock pe care îl ia oricum ALTER TABLE de mai jos, luat ÎNAINTEA amprentelor: triggerele, politicile și constrângerile
+  -- de pe intrebari_tehnice nu se mai pot schimba până la COMMIT (orice CREATE / ALTER / DROP pe tabel îl așteaptă)
+  LOCK TABLE public.intrebari_tehnice IN ACCESS EXCLUSIVE MODE;
+END $start$;
+
+CREATE FUNCTION pg_temp.fn_20261131e_asteptat()
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $asteptat$
+  -- >>> AMPRENTE BASELINE (singurul loc de completat: îl înlocuiește INTEGRAL blocul tipărit de scripts/intrebari_cercetare_amprente.sql)
+  SELECT '{
+    "coloane:public.intrebari_tehnice": "__DE_COMPLETAT__",
+    "coloane:public.notifications": "__DE_COMPLETAT__",
+    "coloane:public.profiles": "__DE_COMPLETAT__",
+    "coloane:storage.objects": "__DE_COMPLETAT__",
+    "constrangeri:public.intrebari_tehnice": "__DE_COMPLETAT__",
+    "fn:auth.uid()": "__DE_COMPLETAT__",
+    "fn:public.fn_are_acces_intrebari()": "__DE_COMPLETAT__",
+    "fn:public.fn_intrebari_amana(bigint,uuid)": "__DE_COMPLETAT__",
+    "fn:public.fn_intrebari_inainte_insert()": "__DE_COMPLETAT__",
+    "fn:public.fn_intrebari_preia()": "__DE_COMPLETAT__",
+    "fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)": "__DE_COMPLETAT__",
+    "pol:public.intrebari_tehnice.intrebari_tehnice_ins": "__DE_COMPLETAT__",
+    "pol:public.intrebari_tehnice.intrebari_tehnice_sel": "__DE_COMPLETAT__",
+    "tabel:public.intrebari_tehnice": "__DE_COMPLETAT__",
+    "tabel:public.notifications": "__DE_COMPLETAT__",
+    "trg:public.intrebari_tehnice.intrebari_tehnice_inainte_insert": "__DE_COMPLETAT__"
+  }'::jsonb
+  -- <<< AMPRENTE BASELINE
+$asteptat$;
+
+CREATE FUNCTION pg_temp.fn_20261131e_amprente()
+ RETURNS TABLE (eticheta text, amprenta text, material text)
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'pg_catalog', 'pg_temp'
+AS $amprente$
+-- >>> AMPRENTE: interogarea (text IDENTIC în migrarea 20261131e și în scripts/intrebari_cercetare_amprente.sql; testul vitest compară)
+WITH tabele(rel) AS (VALUES ('public.intrebari_tehnice'), ('public.notifications')
+), tab AS (
+  SELECT c.oid, t.rel, c.relowner, c.relrowsecurity, c.relforcerowsecurity, c.relacl
+    FROM tabele t JOIN pg_catalog.pg_class c ON c.oid = to_regclass(t.rel)
+), fn_lista(eticheta, sig) AS (VALUES
+  ('fn:auth.uid()', 'auth.uid()'),
+  ('fn:public.fn_are_acces_intrebari()', 'public.fn_are_acces_intrebari()'),
+  ('fn:public.fn_intrebari_amana(bigint,uuid)', 'public.fn_intrebari_amana(bigint,uuid)'),
+  ('fn:public.fn_intrebari_inainte_insert()', 'public.fn_intrebari_inainte_insert()'),
+  ('fn:public.fn_intrebari_preia()', 'public.fn_intrebari_preia()'),
+  ('fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)', 'public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)')
+), trg AS (
+  SELECT t.*, tb.rel FROM pg_catalog.pg_trigger t JOIN tab tb ON t.tgrelid = tb.oid WHERE NOT t.tgisinternal
+), fn_mat AS (
+  SELECT p.oid,
+         'semnatura: ' || n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
+      || E'\nproprietar: ' || pg_get_userbyid(p.proowner)
+      || E'\nsecurity_definer: ' || p.prosecdef::text
+      || E'\nproconfig: ' || coalesce(p.proconfig::text, '<NULL>')
+      || E'\nacl: ' || coalesce((SELECT string_agg(a::text, ',' ORDER BY a::text COLLATE "C") FROM unnest(p.proacl) AS a),
+                               '<NULL = drepturile implicite, inclusiv EXECUTE pentru PUBLIC>')
+      || E'\nlimbaj: ' || l.lanname || ', volatil: ' || p.provolatile::text || ', strict: ' || p.proisstrict::text
+      || ', leakproof: ' || p.proleakproof::text || ', paralel: ' || p.proparallel::text
+      || E'\nsupraincarcari cu acelasi nume: ' || (SELECT count(*) FROM pg_catalog.pg_proc q
+                                                     WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname)::text
+      || E'\ndefinitia (pg_get_functiondef, fara CR):\n' || replace(pg_get_functiondef(p.oid), chr(13), '') AS material
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+    JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+   WHERE p.oid IN (SELECT to_regprocedure(f.sig)::oid FROM fn_lista f UNION SELECT trg.tgfoid FROM trg)
+), amprente(eticheta, material) AS (
+  SELECT f.eticheta, coalesce(m.material, '<LIPSA: ' || f.sig || '>')
+    FROM fn_lista f LEFT JOIN fn_mat m ON m.oid = to_regprocedure(f.sig)::oid
+  UNION ALL
+  SELECT 'trg:' || t.rel || '.' || t.tgname,
+         'definitia: ' || pg_get_triggerdef(t.oid)
+      || E'\ntgtype: ' || t.tgtype::text || ', activ: ' || t.tgenabled::text || ', amanabil: ' || t.tgdeferrable::text
+      || ', amanat_initial: ' || t.tginitdeferred::text || ', constrangere: ' || (t.tgconstraint <> 0)::text
+      || E'\nWHEN: ' || coalesce(pg_get_expr(t.tgqual, t.tgrelid), '<NULL = fara conditie>')
+      || E'\nUPDATE OF: ' || coalesce((SELECT string_agg(a.attname::text, ',' ORDER BY k.ord)
+                                         FROM unnest(t.tgattr::int2[]) WITH ORDINALITY AS k(attnum, ord)
+                                         JOIN pg_catalog.pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = k.attnum),
+                                      '<toate coloanele>')
+      || E'\nargumente: ' || t.tgnargs::text || ' ' || encode(t.tgargs, 'hex')
+      || E'\ntabele de tranzitie: ' || coalesce(t.tgoldtable::text, '<NULL>') || ' / ' || coalesce(t.tgnewtable::text, '<NULL>')
+      || E'\n--- functia triggerului ---\n' || coalesce(m.material, '<LIPSA>')
+    FROM trg t LEFT JOIN fn_mat m ON m.oid = t.tgfoid
+  UNION ALL
+  SELECT 'pol:' || tb.rel || '.' || pol.polname,
+         'comanda: ' || pol.polcmd::text || ', permisiva: ' || pol.polpermissive::text
+      || E'\nroluri: ' || coalesce((SELECT string_agg(r.nume, ',' ORDER BY r.nume COLLATE "C")
+                                      FROM (SELECT CASE WHEN x.rol = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.rol)::text END AS nume
+                                              FROM unnest(pol.polroles) AS x(rol)) AS r), '<NULL>')
+      || E'\nUSING: ' || coalesce(pg_get_expr(pol.polqual, pol.polrelid), '<NULL = true>')
+      || E'\nWITH CHECK: ' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '<NULL>')
+    FROM pg_catalog.pg_policy pol JOIN tab tb ON pol.polrelid = tb.oid
+  UNION ALL
+  SELECT 'tabel:' || t.rel,
+         coalesce((SELECT 'proprietar: ' || pg_get_userbyid(tb.relowner)
+                       || E'\nrls: ' || tb.relrowsecurity::text
+                       || E'\nforce_rls: ' || tb.relforcerowsecurity::text
+                       || E'\nacl: ' || coalesce((SELECT string_agg(a::text, ',' ORDER BY a::text COLLATE "C") FROM unnest(tb.relacl) AS a),
+                                                 '<NULL = drepturile implicite ale proprietarului>')
+                       || E'\nacl pe coloane: ' || coalesce((SELECT string_agg(at.attname::text || '=' || (SELECT string_agg(a::text, ',' ORDER BY a::text COLLATE "C")
+                                                                                                          FROM unnest(at.attacl) AS a),
+                                                                               '; ' ORDER BY at.attname::text COLLATE "C")
+                                                            FROM pg_catalog.pg_attribute at
+                                                           WHERE at.attrelid = tb.oid AND at.attacl IS NOT NULL AND NOT at.attisdropped),
+                                                          '<niciunul>')
+                    FROM tab tb WHERE tb.rel = t.rel), '<LIPSA: ' || t.rel || '>')
+    FROM tabele t
+  UNION ALL
+  SELECT 'constrangeri:public.intrebari_tehnice',
+         coalesce((SELECT string_agg(co.conname::text || ' [' || co.contype::text || ', validata: ' || co.convalidated::text || ']: '
+                                     || pg_get_constraintdef(co.oid), E'\n' ORDER BY co.conname::text COLLATE "C")
+                     FROM pg_catalog.pg_constraint co WHERE co.conrelid = to_regclass('public.intrebari_tehnice')), '<niciuna>')
+  UNION ALL
+  SELECT 'coloane:' || c.tabel,
+         string_agg(c.col || ': ' || coalesce((SELECT format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
+                                                 FROM pg_catalog.pg_attribute a
+                                                WHERE a.attrelid = to_regclass(c.tabel) AND a.attname = c.col AND NOT a.attisdropped),
+                                              '<LIPSA>'),
+                    E'\n' ORDER BY c.col COLLATE "C")
+    FROM (VALUES ('public.intrebari_tehnice', 'id'), ('public.intrebari_tehnice', 'autor'), ('public.intrebari_tehnice', 'titlu'),
+                 ('public.intrebari_tehnice', 'intrebare'), ('public.intrebari_tehnice', 'context'), ('public.intrebari_tehnice', 'atasamente'),
+                 ('public.intrebari_tehnice', 'stare'), ('public.intrebari_tehnice', 'raspuns_md'), ('public.intrebari_tehnice', 'model'),
+                 ('public.intrebari_tehnice', 'tokeni'), ('public.intrebari_tehnice', 'eroare'), ('public.intrebari_tehnice', 'incercari'),
+                 ('public.intrebari_tehnice', 'incercare_id'), ('public.intrebari_tehnice', 'creat_la'), ('public.intrebari_tehnice', 'preluat_la'),
+                 ('public.intrebari_tehnice', 'raspuns_la'),
+                 ('public.profiles', 'id'), ('public.profiles', 'is_owner'),
+                 ('public.notifications', 'profile_id'), ('public.notifications', 'type'), ('public.notifications', 'modul'),
+                 ('public.notifications', 'title'), ('public.notifications', 'message'), ('public.notifications', 'link_to'),
+                 ('storage.objects', 'bucket_id'), ('storage.objects', 'name')) AS c(tabel, col)
+   GROUP BY c.tabel
+)
+SELECT eticheta, md5(material) AS amprenta, material FROM amprente ORDER BY eticheta COLLATE "C"
+-- <<< AMPRENTE: interogarea
+$amprente$;
+
+DO $pre$
+DECLARE
+  v_asteptat jsonb := pg_temp.fn_20261131e_asteptat();
+  v_calc jsonb;
+  v_dif text;
+BEGIN
+  -- (triggerele / politicile de pe notifications nu sunt în migrările din repo: cheile lor vin din ieșirea scriptului coordonatorului)
+  IF position('__DE_COMPLETAT__' IN v_asteptat::text) > 0 THEN
+    RAISE EXCEPTION '20261131e: amprentele baseline nu sunt completate (pasii 1-5 din antet: scripts/intrebari_cercetare_amprente.sql)';
+  END IF;
+  SELECT coalesce(jsonb_object_agg(a.eticheta, a.amprenta), '{}'::jsonb) INTO v_calc FROM pg_temp.fn_20261131e_amprente() AS a;
+  IF v_calc IS DISTINCT FROM v_asteptat THEN
+    SELECT string_agg(coalesce(c.key, a.key) || ' (' || CASE WHEN c.key IS NULL THEN 'lipseste pe tinta' WHEN a.key IS NULL THEN 'nou pe tinta'
+                                                           ELSE 'difera' END || ')', '; ' ORDER BY coalesce(c.key, a.key) COLLATE "C")
+      INTO v_dif
+      FROM jsonb_each_text(v_calc) AS c FULL JOIN jsonb_each_text(v_asteptat) AS a ON a.key = c.key
+     WHERE c.value IS DISTINCT FROM a.value;
+    RAISE EXCEPTION '20261131e: amprentele schemei difera de baseline-ul revizuit: %', coalesce(v_dif, '?');
   END IF;
 END $pre$;
 
@@ -265,6 +445,64 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.fn_intrebari_reia(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_intrebari_reia(bigint) TO authenticated;
+
+-- ─── postcondiții pe amprente (runda 4, L15) ─────────────────────────────
+DO $post$
+DECLARE
+  -- md5(corpul fiecărei funcții create / înlocuite mai sus, fără CR); ACELEAȘI valori în revenire, ca precondiție
+  -- (testul vitest scripts/intrebari_cercetare_amprente.test.js le recalculează din acest fișier)
+  c_corpuri CONSTANT jsonb := '{
+    "public.fn_intrebari_amana(bigint,uuid)": "badeb4273e51b12d4ba868bc67312148",
+    "public.fn_intrebari_de_verificat(bigint)": "532002403818cdb223e896c971abce0e",
+    "public.fn_intrebari_inainte_insert()": "faeca2cd890341524950ca45d0d5156d",
+    "public.fn_intrebari_preia()": "65336457781dc5a796376bdaadd31b54",
+    "public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text,jsonb,jsonb)": "1c676fa234d086b8e8368eaa04414b5a",
+    "public.fn_intrebari_reia(bigint)": "8745d896032fb72cda593ca11f3f6bd7"
+  }'::jsonb;
+  -- etichetele care se schimbă INTENȚIONAT aici (verificate pe corp mai sus); triggerul de inserare își schimbă amprenta doar prin
+  -- funcția lui: definiția triggerului nu se putea schimba între timp (ACCESS EXCLUSIVE pe intrebari_tehnice, luat în $start$)
+  c_schimbate CONSTANT text[] := ARRAY['fn:public.fn_intrebari_amana(bigint,uuid)', 'fn:public.fn_intrebari_inainte_insert()',
+    'fn:public.fn_intrebari_preia()', 'fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)',
+    'constrangeri:public.intrebari_tehnice', 'trg:public.intrebari_tehnice.intrebari_tehnice_inainte_insert'];
+  v_asteptat jsonb := pg_temp.fn_20261131e_asteptat();
+  v_calc jsonb;
+  v_dif text;
+  k text;
+  f record;
+BEGIN
+  FOR k IN SELECT jsonb_object_keys(c_corpuri) LOOP
+    SELECT p.prosecdef, p.proconfig, pg_get_userbyid(p.proowner) AS owner, l.lanname, md5(replace(p.prosrc, chr(13), '')) AS corp,
+           (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari,
+           has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec,
+           EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
+                    WHERE x.grantee = 0 AND x.privilege_type = 'EXECUTE') AS public_exec
+      INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(k);
+    IF NOT FOUND OR f.corp IS DISTINCT FROM c_corpuri->>k OR NOT f.prosecdef OR f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+       OR f.owner IS DISTINCT FROM 'postgres' OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1 OR f.anon_exec OR f.public_exec THEN
+      RAISE EXCEPTION '20261131e: postconditie functie % (corp / definer / search_path / proprietar / supraincarcari / ACL)', k;
+    END IF;
+  END LOOP;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.intrebari_tehnice'::regclass AND t.tgname = 'intrebari_tehnice_inainte_insert'
+                   AND t.tgfoid = 'public.fn_intrebari_inainte_insert()'::regprocedure AND t.tgenabled = 'O') THEN
+    RAISE EXCEPTION '20261131e: postconditie trigger intrebari_tehnice_inainte_insert';
+  END IF;
+  -- tot restul: exact baseline-ul (o schimbare comisă între timp de altă sesiune, de ex. pe notifications sau pe auth.uid() = refuz)
+  SELECT coalesce(jsonb_object_agg(a.eticheta, a.amprenta), '{}'::jsonb) INTO v_calc FROM pg_temp.fn_20261131e_amprente() AS a;
+  IF (v_calc - c_schimbate) IS DISTINCT FROM (v_asteptat - c_schimbate) THEN
+    SELECT string_agg(coalesce(c.key, a.key), '; ' ORDER BY coalesce(c.key, a.key) COLLATE "C") INTO v_dif
+      FROM jsonb_each_text(v_calc - c_schimbate) AS c FULL JOIN jsonb_each_text(v_asteptat - c_schimbate) AS a ON a.key = c.key
+     WHERE c.value IS DISTINCT FROM a.value;
+    RAISE EXCEPTION '20261131e: postconditie amprente (schema s-a schimbat in timpul migrarii): %', coalesce(v_dif, '?');
+  END IF;
+  IF v_calc->>'fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)'
+       IS DISTINCT FROM md5('<LIPSA: public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)>') THEN
+    RAISE EXCEPTION '20261131e: postconditie (fn_intrebari_raspunde cu 6 parametri inca exista)';
+  END IF;
+END $post$;
+
+-- funcțiile temporare ale amprentelor nu rămân (sunt în pg_temp, dar se șterg explicit înaintea gărzii finale)
+DROP FUNCTION pg_temp.fn_20261131e_amprente();
+DROP FUNCTION pg_temp.fn_20261131e_asteptat();
 
 DO $final$
 BEGIN

@@ -224,7 +224,16 @@ class Flux(unittest.TestCase):
         self.assertNotIn('obligatoriu', r['raspuns_md'])
         reparari = [a for a in self.apeluri if a['system'] == C.SISTEM_RASPUNS and len(a['messages']) == 3]
         self.assertEqual(len(reparari), 1)                         # a cerut o reparare, cu motivul
-        self.assertIn('nu conține termenii', reparari[0]['messages'][2]['content'])
+        self.assertIn('nu spune exact asta', reparari[0]['messages'][2]['content'])
+        self.assertIn('nu tăia calificativul', reparari[0]['messages'][2]['content'])
+
+    def test_calificativ_inventat_face_verdictul_incert(self):   # review r3 P1, pe fluxul complet
+        # prima linie are temei (corpusul spune „RTS e atestat ISCIR”), dar obligația „autorizat ANRE” nu e în sursă
+        self.raspuns = 'Da — RTS atestat ISCIR [C1].\n- Este obligatoriu un RTS autorizat ANRE [C1].'
+        self.proceseaza()
+        r = self.raspunsul()
+        self.assertTrue(r['raspuns_md'].startswith(C.INCERT_FARA_TEMEI), r['raspuns_md'])
+        self.assertNotIn('autorizat', r['raspuns_md'])
 
 
 class Pornire(unittest.TestCase):

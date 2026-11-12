@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { DOMENII_OFICIALE, STOP, GENERICE, analizeaza, curataRaspuns, verdict, urlOficial, surseAfisabile, imparteRaspuns, eDeclaratieLipsa,
-  ancore, interogariAfisabile, termeniCheie, normalizeaza } from './intrebariSurse.js'
+  ancore, interogariAfisabile, termeniCheie, normalizeaza, tokeniNumerici, polaritati, propozitii, eAfirmatieNormativa,
+  lipsesteMigrarea, actiuniIntrebare } from './intrebariSurse.js'
 
 const CAZURI = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_validare.json', 'utf8'))
+const NORMATIVE = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_normative.json', 'utf8'))
 const LISTA = ['legislatie.just.ro', 'monitoruloficial.ro', 'anre.ro', 'isc.gov.ro', 'igsu.ro',
   'transgaz.ro', 'anap.gov.ro', 'e-licitatie.ro', 'eur-lex.europa.eu', 'magazin.asro.ro']
 
@@ -70,8 +72,10 @@ describe('verdict și surse (aceleași cazuri ca unittest)', () => {
     expect(analizeaza('Da.\nEste obligatoriu un responsabil autorizat.', ['C1']).fara_sursa).toHaveLength(1)
     // runda 3: TOATE cifrele unei afirmații cu marcaj trebuie să apară în sursele citate (nu doar una)
     expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1].', [{ id: 'C1', extras: 'art. 999' }]).neconfirmate).toHaveLength(1)
-    expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1].', [{ id: 'C1', extras: 'art. 999, 99 bar' }]).fara_sursa).toEqual([])
-    expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1, W1].', [{ id: 'C1', extras: 'art. 999' }, { id: 'W1', extras: '99 bar' }]).fara_sursa).toEqual([])
+    // runda 4: „impune” cere și o obligație („trebuie”) în propoziția care are „99 bar”
+    expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1].', [{ id: 'C1', extras: 'art. 999, 99 bar' }]).nesustinute).toHaveLength(1)
+    expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1].', [{ id: 'C1', extras: 'art. 999: proba trebuie făcută la 99 bar' }]).fara_sursa).toEqual([])
+    expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1, W1].', [{ id: 'C1', extras: 'art. 999' }, { id: 'W1', extras: 'Proba trebuie făcută la 99 bar.' }]).fara_sursa).toEqual([])
     expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1].', [{ id: 'C1', extras: 'art. 9990' }]).neconfirmate).toHaveLength(1)
     expect(analizeaza('Da.\nArt. 999 impune 99 bar [C1].', ['C1']).neconfirmate).toHaveLength(1)   // fără extras: nimic de confirmat
     // runda 3: suport lexical — o sursă fără extras nu susține nicio afirmație cu termeni
@@ -82,12 +86,61 @@ describe('verdict și surse (aceleași cazuri ca unittest)', () => {
     for (const rau of ['Proba e la 99 bar; nu am găsit sursa oficială pentru alt detaliu.', 'Nu am găsit sursa oficială pentru X; e obligatoriu Y.',
       'Nu am găsit sursa oficială pentru X. Distanța e 2 m.', 'Nu am găsit sursa oficială pentru X, dar e interzis.'])
       expect(eDeclaratieLipsa(rau)).toBe(false)
-    expect(ancore('1. Distanța e 0,5 m față de art. 12 [C1, W2]')).toEqual(['0.5', '12'])
+    // runda 4: token complet = semn + număr + unitate
+    expect(ancore('1. Distanța e 0,5 m față de art. 12 [C1, W2]')).toEqual(['0.5 m', '12'])
+    expect(ancore('Proba se face la −5 bar [C1]')).toEqual(['-5 bar'])
+  })
+  it('runda 4: tokeni, tipul regulii și propozițiile (aceleași cazuri ca unittest)', () => {
+    for (const t of NORMATIVE.tokeni) expect(tokeniNumerici(normalizeaza(t.text)), t.text).toEqual(t.tokeni)
+    for (const t of NORMATIVE.polaritati) {
+      const n = normalizeaza(t.text)
+      expect(polaritati(n), t.text).toEqual(t.clase)
+      expect(polaritati(n, true), t.text).toEqual(t.extins ?? t.clase)
+    }
+    for (const t of NORMATIVE.propozitii) expect(propozitii(t.text), t.text).toEqual(t.propozitii)
+  })
+  it('runda 4: termenii unei afirmații normative nu se adună din propoziții diferite', () => {
+    const s = [{ id: 'C1', extras: 'Recepția lucrărilor se face la final. Un responsabil trebuie numit.' }]
+    expect(analizeaza('Da.\nEste obligatoriu un responsabil pentru recepția lucrărilor [C1].', s).nesustinute).toHaveLength(1)
+    expect(eAfirmatieNormativa('Nu se poate stabili din surse.')).toBe(false)     // fără marcaj, „nu se poate” nu e o regulă
+    expect(eAfirmatieNormativa('Distanța minimă față de clădiri.')).toBe(false)   // „minim” ca adjectiv, fără cifră
+    expect(eAfirmatieNormativa('Trebuie cel puțin un RTS.')).toBe(true)
   })
   it('împărțirea pentru ecran', () => {
     expect(imparteRaspuns('**Verdict:** Da [W1]\n\n- motiv [W1]')).toEqual({ verdict: 'Da [W1]', rest: '- motiv [W1]', incert: false })
     expect(imparteRaspuns('**Pe scurt**\ntext')).toEqual({ verdict: null, rest: '**Pe scurt**\ntext', incert: false })
     expect(imparteRaspuns('Incert — de verificat: x\n\nrest').incert).toBe(true)
+  })
+  it('runda 4 (condiția de merge): cu migrarea neaplicată, ecranul nu arată butoanele ale căror RPC-uri lipsesc', () => {
+    // eroarea PostgREST la coloanele noi = migrarea lipsește; altă eroare nu e confundată cu ea
+    expect(lipsesteMigrarea({ message: 'column intrebari_tehnice.surse does not exist' })).toBe(true)
+    expect(lipsesteMigrarea({ message: 'column intrebari_tehnice.interogari_web does not exist' })).toBe(true)
+    expect(lipsesteMigrarea({ message: 'permission denied for table intrebari_tehnice' })).toBe(false)
+    expect(lipsesteMigrarea(null)).toBe(false)
+    const autor = { stare: 'raspuns', eAutor: true, eOwner: false }, owner = { stare: 'raspuns', eAutor: false, eOwner: true }
+    // migrare neaplicată (false) sau încă nedetectată (null): niciun buton, doar nota
+    for (const v2 of [false, null, undefined]) {
+      expect(actiuniIntrebare({ v2, ...autor })).toEqual({ verificare: false, reia: false, nota: true })
+      expect(actiuniIntrebare({ v2, ...owner })).toEqual({ verificare: false, reia: false, nota: true })
+      expect(actiuniIntrebare({ v2, stare: 'eroare', eAutor: false, eOwner: true })).toEqual({ verificare: false, reia: false, nota: true })
+    }
+    // migrare detectată: butoanele, după drept și stare
+    expect(actiuniIntrebare({ v2: true, ...autor })).toEqual({ verificare: true, reia: false, nota: false })
+    expect(actiuniIntrebare({ v2: true, ...owner })).toEqual({ verificare: true, reia: true, nota: false })
+    expect(actiuniIntrebare({ v2: true, stare: 'de_verificat', eAutor: true, eOwner: false })).toEqual({ verificare: false, reia: false, nota: false })
+    expect(actiuniIntrebare({ v2: true, stare: 'de_verificat', eAutor: false, eOwner: true })).toEqual({ verificare: false, reia: true, nota: false })
+    expect(actiuniIntrebare({ v2: true, stare: 'noua', eAutor: true, eOwner: true })).toEqual({ verificare: false, reia: false, nota: false })
+    // un coleg care nu e autorul nu vede nici nota
+    expect(actiuniIntrebare({ v2: false, stare: 'raspuns', eAutor: false, eOwner: false })).toEqual({ verificare: false, reia: false, nota: false })
+  })
+  it('runda 4: ecranul folosește actiuniIntrebare și nu cheamă RPC-urile fără migrarea detectată', () => {
+    const jsx = readFileSync('src/IntrebariTehnice.jsx', 'utf8').replace(/\r\n/g, '\n')
+    expect(jsx).toContain('if (lucruRand !== null || v2 !== true) return')
+    expect(jsx).toContain('{act.verificare &&')
+    expect(jsx).toContain('{act.reia &&')
+    expect(jsx).toContain('disponibile după actualizarea bazei de date')
+    expect(jsx).not.toMatch(/q\.stare === 'raspuns' && \(q\.autor === profile\.id/)   // condiția veche, fără detectarea migrării
+    expect(jsx).toContain('setV2(colV2.current)')
   })
   it('interogările pentru audit', () => {
     expect(interogariAfisabile(['a b', 3, '', 'x'.repeat(300)])).toEqual(['a b', 'x'.repeat(200)])

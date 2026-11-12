@@ -1,6 +1,7 @@
 // ❓ Întreabă echipa — răspuns DIN SURSE (06.11.2026, cerere Silviu + Răzvan; migrarea 20261131e).
 // Aceleași reguli ca worker/intrebari-tehnice/cercetare.py (validarea are cazurile comune în worker/intrebari-tehnice/teste_validare.json,
-// rulate și de vitest, și de unittest). Testat în intrebariSurse.test.js.
+// rulate și de vitest, și de unittest; runda 4: tokenii numerici, tipul regulii și propozițiile în teste_normative.json). Testat în
+// intrebariSurse.test.js.
 
 // Lista fixă de domenii oficiale pentru căutarea web — identică în cercetare.py și în edge-ul intrebari-tehnice-worker (test „domenii identice”),
 // toate din lista aprobată în CLAUDE.md pct. 11 (runda 3: iscir.ro a ieșit — nu e în lista aprobată).
@@ -42,17 +43,114 @@ const PREFIX_LINIE = /^[\s>*_`#•·\-–—]*(?:\d{1,2}[.)]\s+)?[*_`\s]*/
 const CERERE_DOCUMENT = /\btrebuie\s+(?:cerut|consultat|solicitat|verificat)\w*/g
 const CONTRAST = /\b(?:dar|insa|iar|totusi|desi|but)\b/
 
-/** Linia conține o afirmație normativă (act, articol, standard, cifră cu unitate, obligație) care cere sursă. */
-export const eAfirmatieNormativa = linie => { const n = normalizeaza(linie); return REGULI_NORMATIVE.some(r => r.test(n)) || REGULA_OBLIGATIE.test(n) }
+// ─── runda 4 (review r3 P1 + P2): tipul regulii, propoziții, cifre cu semn și unitate — = cercetare.py (paritate pe teste_normative.json)
+// Formele NEGATE întâi, mascate, apoi cele pozitive („nu se admite” = interdicție, „nu este obligatoriu” = fără obligație).
+const NEGATIE = '\\bnu\\s+(?:(?:se|este|e|sunt|va|vor|fi|fie|poate|pot|mai|le|li|ii|il|o|a|au|are|fost|in|mod)\\s+){0,3}'
+const POLARITATI = [
+  ['fara_obligatie', NEGATIE + '(?:obliga\\w*|necesar\\w*|impun\\w*|impus\\w*)'],
+  ['interdictie', NEGATIE + '(?:admi[st]\\w*|permi[st]\\w*|trebui\\w*|voie\\b)'],
+  ['permisiune', NEGATIE + 'interzi\\w*'],
+  ['interdictie', '\\binterzi\\w*'],
+  ['obligatie', '\\b(?:obliga\\w*|trebui\\w*|necesar\\w*|impun\\w*|impus\\w*)'],
+  ['permisiune', '\\b(?:admi[st]\\w*|permi[st]\\w*)|\\b(?:are|au|e|este)\\s+voie\\b'],
+  ['conditie', '\\b(?:numai|doar)\\s+(?:daca|dupa|cu|in\\s+cazul)\\b|\\bcu\\s+conditia\\b|\\bcu\\s+exceptia\\b|\\bexceptand\\b'],
+  ['minim', '\\bcel\\s+putin\\b|\\bnu\\s+mai\\s+putin\\s+de\\b|\\bminim\\w*'],
+  ['maxim', '\\bcel\\s+mult\\b|\\bnu\\s+mai\\s+mult\\s+de\\b|\\bmaxim\\w*'],
+].map(([k, p]) => [k, new RegExp(p, 'g')])
+// „se poate” / „nu se poate” doar pe linii cu marcaj și în surse (extins)
+const POLARITATI_POATE = [
+  ['interdictie', NEGATIE + 'po(?:ate|t)\\b'],
+  ['permisiune', '\\bse\\s+po(?:ate|t)\\b'],
+].map(([k, p]) => [k, new RegExp(p, 'g')])
+const LIMITA_EXPLICITA = /\bcel\s+(?:putin|mult)\b|\bnu\s+mai\s+(?:putin|mult)\s+de\b/
+const NEGATIE_SIMPLA = /\b(?:nu|nici|niciun\w*|nicio|niciodata)\b/
+const VERDICT_INCEPUT = new RegExp('^\\s*(?:da|nu)\\b\\s*[,.:;!' + String.fromCharCode(0x2014, 0x2013) + '-]+')
+const OPUSE = { obligatie: 'fara_obligatie', fara_obligatie: 'obligatie', interdictie: 'permisiune', permisiune: 'interdictie' }
+const NU_SE_PIERD = ['interdictie', 'fara_obligatie', 'conditie']
+const LIMITE = ['minim', 'maxim']
+const GRAD = String.fromCharCode(0xb0), CUB = String.fromCharCode(0xb3), PATRAT = String.fromCharCode(0xb2)
+const UM = 'grade\\s+celsius|metri\\s+patrati|metri\\s+cubi|centimetri|centimetru|kilometri|kilometru|milimetri|milimetru|kilograme'
+  + '|kilogram|saptamani|saptamana|procente|procent|minute|grade|metri|metru|mbari|mbar|zile|euro|luni|luna|bari|bar|kpa|mpa'
+  + `|ore|ora|ani|min|lei|eur|${GRAD}\\s*c|mm|cm|km|kg|mc|mp|m3|m2|m${CUB}|m${PATRAT}|zi|an|m|h|${GRAD}|%`
+const UNITATI = {
+  'grade celsius': `${GRAD}c`, 'metri patrati': 'mp', 'metri cubi': 'mc', centimetri: 'cm', centimetru: 'cm', kilometri: 'km',
+  kilometru: 'km', milimetri: 'mm', milimetru: 'mm', kilograme: 'kg', kilogram: 'kg', saptamani: 'saptamani',
+  saptamana: 'saptamani', procente: '%', procent: '%', minute: 'minute', grade: 'grade', metri: 'm', metru: 'm',
+  mbari: 'mbar', mbar: 'mbar', zile: 'zile', euro: 'euro', luni: 'luni', luna: 'luni', bari: 'bar', bar: 'bar',
+  kpa: 'kpa', mpa: 'mpa', ore: 'ore', ora: 'ore', ani: 'ani', min: 'minute', lei: 'lei', eur: 'euro',
+  [`${GRAD}c`]: `${GRAD}c`, [`${GRAD} c`]: `${GRAD}c`, mm: 'mm', cm: 'cm', km: 'km', kg: 'kg', mc: 'mc', mp: 'mp', m3: 'mc', m2: 'mp',
+  [`m${CUB}`]: 'mc', [`m${PATRAT}`]: 'mp', zi: 'zile', an: 'ani', m: 'm', h: 'ore', [GRAD]: 'grade', '%': '%',
+}
+const MINUS = String.fromCharCode(0x2212), LINIUTA = String.fromCharCode(0x2013), PLUSMINUS = String.fromCharCode(0xb1)
+const NUMERIC = new RegExp(`(?:(?<![0-9a-z])([-+${MINUS}${LINIUTA}${PLUSMINUS}]))?(?<![0-9])([0-9]+(?:[.,][0-9]+)?)(?:\\s*(?:de\\s+)?(${UM})(?![a-z0-9]))?`, 'g')
+const SEMNE = { '-': '-', [MINUS]: '-', [LINIUTA]: '-', '+': '', [PLUSMINUS]: PLUSMINUS }
+const ABREVIERI = new Set('art alin pct lit nr ord hg oug cap sect par fig pag ex cca min max str ed vol pt np sr en iso stas tab pl'.split(' '))
+const SEPARATOR = /[.!?;\n]/g
+const CONTRAST_PROP = /\b(?:dar|insa|iar|totusi|desi|in\s+schimb|pe\s+cand)\b/
 
-/** Linia e EXCLUSIV declarația „Nu am găsit sursa oficială pentru …” (fără altă propoziție, cifre, articole sau obligații). */
+/** [tipuri de regulă (Set), textul rămas după mascare] — `n` deja normalizat (= _polaritati din cercetare.py). */
+function polaritatiSiRest(n, extins = false) {
+  const clase = new Set()
+  for (const [k, r] of extins ? [...POLARITATI, ...POLARITATI_POATE] : POLARITATI) {
+    r.lastIndex = 0
+    if (r.test(n)) { clase.add(k); r.lastIndex = 0; n = n.replace(r, ' ') }
+    r.lastIndex = 0
+  }
+  return [clase, n]
+}
+/** Tipurile de regulă, sortate (paritate cu sorted(polaritati(...)) în teste). */
+export const polaritati = (n, extins = false) => [...polaritatiSiRest(n, extins)[0]].sort()
+
+/** Cifrele unui text normalizat, ca tokeni compleți: „−5 bar” → „-5 bar”, „30 de zile” → „30 zile”, „art. 12” → „12”. */
+export function tokeniNumerici(n) {
+  const out = []
+  for (const m of n.matchAll(NUMERIC)) {
+    const um = UNITATI[(m[3] || '').split(/\s+/).filter(Boolean).join(' ')] || ''
+    out.push((SEMNE[m[1] || ''] ?? '') + m[2].replace(',', '.') + (um ? ' ' + um : ''))
+  }
+  return out
+}
+const corpAfirmatie = linie => normalizeaza(linie).replace(PREFIX_LINIE, '').replace(MARCAJ, ' ')
+
+/** Propozițiile unui text, normalizate (= propozitii din cercetare.py). */
+export function propozitii(text) {
+  const n = normalizeaza(text)
+  const bucati = []
+  let start = 0
+  for (const m of n.matchAll(SEPARATOR)) {
+    const k = m.index
+    if ('.!?'.includes(n[k])) {
+      if (k + 1 < n.length && !/\s/.test(n[k + 1])) continue
+      if (n[k] === '.') {
+        const cuv = n.slice(start, k).match(/[a-z]+$/)
+        if (cuv && ABREVIERI.has(cuv[0])) continue
+      }
+      const urm = n.slice(k + 1).match(/^\s*(\S)/)
+      if (urm && /[0-9(]/.test(urm[1])) continue
+    }
+    bucati.push(n.slice(start, k))
+    start = k + 1
+  }
+  bucati.push(n.slice(start))
+  return bucati.flatMap(b => b.split(CONTRAST_PROP)).map(p => p.trim()).filter(Boolean)
+}
+
+/** Linia conține o afirmație normativă (act, articol, standard, cifră cu unitate, obligație / interdicție / permisiune / condiție / limită). */
+export const eAfirmatieNormativa = linie => {
+  const n = normalizeaza(linie)
+  return REGULI_NORMATIVE.some(r => r.test(n)) || REGULA_OBLIGATIE.test(n) || LIMITA_EXPLICITA.test(n)
+    || polaritati(n).some(k => !LIMITE.includes(k)) || ancore(linie).some(t => t.includes(' '))
+}
+
+/** Linia e EXCLUSIV declarația „Nu am găsit sursa oficială pentru …” (fără altă propoziție, cifre, articole sau reguli). */
 export function eDeclaratieLipsa(linie) {
   const n = normalizeaza(linie).replace(PREFIX_LINIE, '').trim()
   if (!n.startsWith(FARA_SURSA)) return false
   const rest = n.slice(FARA_SURSA.length).trim().replace(/[.!*_` ]+$/, '')
   if (rest.includes(';') || /[.!?]\s+\S/.test(rest) || CONTRAST.test(rest)) return false
-  if (REGULI_NORMATIVE.some(r => r.test(rest))) return false
-  return !REGULA_OBLIGATIE.test(rest.replace(CERERE_DOCUMENT, ' '))
+  if (REGULI_NORMATIVE.some(r => r.test(rest)) || tokeniNumerici(rest).some(t => t.includes(' '))) return false
+  const r = rest.replace(CERERE_DOCUMENT, ' ')
+  return !REGULA_OBLIGATIE.test(r) && !LIMITA_EXPLICITA.test(r) && !polaritati(r).some(k => !LIMITE.includes(k))
 }
 
 /** ID-urile citate într-o linie, canonice (C1, W2). */
@@ -64,15 +162,12 @@ export function marcaje(linie) {
   return out
 }
 
-/** Numerele afirmate într-o linie (fără marcaje și numerotare), canonice: „0,5” → „0.5”. */
+/** Cifrele afirmate într-o linie (fără marcaje și numerotare), ca tokeni compleți, sortați (= ancore din cercetare.py). */
 export function ancore(linie) {
-  const n = normalizeaza(linie).replace(PREFIX_LINIE, '').replace(MARCAJ, ' ')
-  return [...new Set((n.match(/\d+(?:[.,]\d+)?/g) || []).map(x => x.replace(',', '.')))].sort()
+  return [...new Set(tokeniNumerici(corpAfirmatie(linie)))].sort()
 }
-const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const ancoraIn = (a, text) => new RegExp('(?<!\\d)(?<!\\d\\.)' + escRe(a) + '(?!\\d|\\.\\d)').test(normalizeaza(text).replace(/,/g, '.'))
 
-/** {ID: titlu + extras}; acceptă și o listă de ID-uri simple (fără extrase: cifrele lor nu se pot confirma). */
+/** {ID: titlu + rând nou + extras}; acceptă și o listă de ID-uri simple (fără extrase: nimic nu se poate confirma din ele). */
 function hartaSurse(surse) {
   const h = new Map()
   for (const s of surse || []) {
@@ -82,9 +177,9 @@ function hartaSurse(surse) {
   return h
 }
 
-/** Termenii-cheie ai unei afirmații (= termeni_cheie din cercetare.py): rădăcini de 6 litere, fără STOP / GENERICE / obligații. */
+/** Termenii de conținut (= termeni_cheie din cercetare.py): rădăcini de 6 litere, fără STOP / GENERICE / obligații / marcatori / cifre. */
 export function termeniCheie(linie) {
-  const n = normalizeaza(linie).replace(PREFIX_LINIE, '').replace(MARCAJ, ' ')
+  const n = polaritatiSiRest(corpAfirmatie(linie), true)[1].replace(NUMERIC, ' ')
   const out = []
   for (const w of n.match(/[a-z]+/g) || []) {
     if (w.length < 3 || STOP.has(w) || GENERICE.has(w) || CUVANT_OBLIGATIE.test(w)) continue
@@ -92,32 +187,71 @@ export function termeniCheie(linie) {
   }
   return out
 }
-
-/** [potriviți, total] — câți termeni-cheie ai liniei apar în sursele citate (= suport_lexical din cercetare.py). */
-function suportLexical(linie, ids, harta) {
-  const k = termeniCheie(linie)
-  const cuvinte = new Set((normalizeaza(ids.map(i => harta.get(i)).join('\n')).match(/[a-z]+/g) || []).filter(w => w.length >= 3))
-  const radacini = new Set([...cuvinte].map(w => w.slice(0, 6)))
-  const pot = k.filter(x => radacini.has(x) || (x.length < 6 && [...cuvinte].some(w => w.startsWith(x)))).length
-  return [pot, k.length]
+const cuvinte = text => new Set((text.match(/[a-z]+/g) || []).filter(w => w.length >= 3))
+function potriviti(termeni, cuv) {
+  const radacini = new Set([...cuv].map(w => w.slice(0, 6)))
+  return termeni.filter(x => radacini.has(x) || (x.length < 6 && [...cuv].some(w => w.startsWith(x)))).length
 }
 
-/** [problemă, temei] — aceleași reguli ca evalueaza_linie din cercetare.py (vezi docstring-ul de acolo). */
-function evalueazaLinie(linie, harta) {
-  if (!linie.trim() || eDeclaratieLipsa(linie)) return [null, false]
-  const normativ = eAfirmatieNormativa(linie)
-  const ok = marcaje(linie).filter(i => harta.has(i))
-  if (!ok.length) return [normativ ? 'fara_marcaj' : null, false]
-  const a = ancore(linie)
-  if (a.length && !a.every(x => ok.some(i => ancoraIn(x, harta.get(i))))) return ['neconfirmat', false]
-  const [pot, tot] = suportLexical(linie, ok, harta)
-  if (tot) {
-    const prag = normativ ? Math.floor(tot / 2) + 1 : Math.floor((tot + 1) / 2)
-    if (pot < prag) return ['nesustinut', false]
-    return [null, pot * 2 > tot || a.length > 0]
+function descrieAfirmatia(linie) {
+  const n = corpAfirmatie(linie)
+  const [clase, rest] = polaritatiSiRest(n, true)
+  return { clase, neg: NEGATIE_SIMPLA.test(rest.replace(VERDICT_INCEPUT, ' ')), termeni: termeniCheie(linie), tok: tokeniNumerici(n) }
+}
+function propozitiiSurse(ids, harta) {
+  const out = []
+  for (const i of ids) {
+    const t = harta.get(i), k = t.indexOf('\n')
+    const titlu = k < 0 ? t : t.slice(0, k), extras = k < 0 ? '' : t.slice(k + 1)
+    const nt = normalizeaza(titlu)
+    for (const p of propozitii(extras)) {
+      const [clase, rest] = polaritatiSiRest(p, true)
+      const ctx = nt + '\n' + p
+      out.push({ clase, neg: NEGATIE_SIMPLA.test(rest), cuvinte: cuvinte(ctx), tok: new Set(tokeniNumerici(ctx)) })
+    }
   }
-  if (!a.length && REGULA_OBLIGATIE.test(normalizeaza(linie))) return ['nesustinut', false]
-  return [null, a.length > 0]
+  return out
+}
+function potrivirePropozitie(af, prop) {
+  for (const k of af.clase) if (!prop.clase.has(k) || prop.clase.has(OPUSE[k])) return false
+  const pierdute = [...prop.clase].filter(k => !af.clase.has(k))
+  if (pierdute.some(k => NU_SE_PIERD.includes(k))) return false
+  if (af.tok.length && pierdute.some(k => LIMITE.includes(k))) return false
+  return af.neg === prop.neg
+}
+/** [susținută, potriviți, total] — = sustinere din cercetare.py. */
+function sustinere(linie, ids, harta, normativ) {
+  const af = descrieAfirmatia(linie)
+  const tot = af.termeni.length, cuUm = af.tok.filter(t => t.includes(' '))
+  let celMaiBun = -1
+  for (const p of propozitiiSurse(ids, harta)) {
+    if (!potrivirePropozitie(af, p)) continue
+    if (normativ && !cuUm.every(t => p.tok.has(t))) continue
+    celMaiBun = Math.max(celMaiBun, potriviti(af.termeni, p.cuvinte))
+  }
+  if (celMaiBun < 0) return [false, 0, tot]
+  return [celMaiBun >= (normativ ? tot : Math.floor((tot + 1) / 2)), celMaiBun, tot]
+}
+
+/** [problemă, temei, normativă] — aceleași reguli ca _evalueaza din cercetare.py (vezi docstring-ul evalueaza_linie de acolo). */
+function evalueazaLinie(linie, harta) {
+  if (!linie.trim() || eDeclaratieLipsa(linie)) return [null, false, false]
+  let normativ = eAfirmatieNormativa(linie)
+  const ok = marcaje(linie).filter(i => harta.has(i))
+  if (!ok.length) return [normativ ? 'fara_marcaj' : null, false, normativ]
+  normativ = normativ || polaritati(corpAfirmatie(linie), true).length > 0
+  const a = ancore(linie)
+  const dinSurse = new Set(ok.flatMap(i => tokeniNumerici(normalizeaza(harta.get(i)))))
+  let lipsa
+  if (normativ) lipsa = a.filter(x => !dinSurse.has(x))
+  else { const valori = new Set([...dinSurse].map(x => x.split(' ')[0])); lipsa = a.filter(x => !valori.has(x.split(' ')[0])) }
+  if (lipsa.length) return ['neconfirmat', false, normativ]
+  const k = termeniCheie(linie)
+  if (!k.length && !a.length) return normativ ? ['nesustinut', false, true] : [null, false, false]
+  if (!k.length && !normativ) return [null, true, false]
+  const [sust, pot, tot] = sustinere(linie, ok, harta, normativ)
+  if (!sust) return ['nesustinut', false, normativ]
+  return [null, normativ || pot * 2 > tot || a.length > 0, normativ]
 }
 
 /** Prima linie nevidă, dacă e un verdict (Da / Nu / Depinde de X / Incert). Altfel null. */
@@ -156,7 +290,7 @@ export const INCERT_FARA_TEMEI = `${INCERT}: nu am găsit o sursă care să sus�
 const NOTE = {
   fara_marcaj: '> ⚠️ Afirmație scoasă: nu avea sursă găsită în cercetare.',
   neconfirmat: '> ⚠️ Afirmație scoasă: cifrele sau articolul ei nu apar în sursa citată.',
-  nesustinut: '> ⚠️ Afirmație scoasă: sursa citată nu conține termenii ei (vorbește despre altceva).',
+  nesustinut: '> ⚠️ Afirmație scoasă: sursa citată nu spune exact asta (alți termeni, alt tip de regulă sau altă valoare).',
 }
 const MARCAJ_ORICE = /\[\s*([CcWw]\d{1,2}(?:\s*[,;]\s*[CcWw]\d{1,2})*)\s*\]/g
 
@@ -168,16 +302,17 @@ export function curataRaspuns(text, surse) {
     return p.length ? `[${p.join(', ')}]` : ''
   })
   const out = []
-  let scoase = 0, temei = false
+  let scoase = 0, temei = false, normativScos = false
   for (const brut of String(text ?? '').replace(/\r/g, '').split('\n')) {
     const linie = faraNecunoscute(brut)
-    const [p, t] = evalueazaLinie(linie, harta)
-    if (p) { scoase++; out.push(NOTE[p]) } else { out.push(linie); temei = temei || t }
+    const [p, t, normativ] = evalueazaLinie(linie, harta)
+    if (p) { scoase++; normativScos = normativScos || normativ; out.push(NOTE[p]) } else { out.push(linie); temei = temei || t }
   }
   let rez = out.join('\n').trim()
   const v = verdict(rez)
   if (!v) rez = `${INCERT}: din sursele găsite nu rezultă un verdict sigur.\n\n` + rez
-  else if (!normalizeaza(v).startsWith('incert') && !temei) {
+  // runda 4: o afirmație normativă scoasă = verdictul se putea sprijini pe ea → Incert (ca în cercetare.py)
+  else if (!normalizeaza(v).startsWith('incert') && (normativScos || !temei)) {
     const linii = rez.split('\n')
     linii[linii.findIndex(l => l.trim())] = INCERT_FARA_TEMEI
     rez = linii.join('\n')
@@ -212,6 +347,19 @@ export function imparteRaspuns(md) {
   const linii = String(md ?? '').replace(/\r/g, '').split('\n')
   const i = linii.findIndex(l => l.trim())
   return { verdict: v, rest: linii.slice(i + 1).join('\n').trim(), incert: normalizeaza(v).startsWith('incert') }
+}
+
+/** Eroarea unei citiri care cere coloanele migrării 20261131e (`surse` / `interogari_web`) pe o bază fără ea. */
+export const lipsesteMigrarea = e => !!e && /surse|interogari_web/.test(String(e.message || ''))
+
+/** Acțiunile arătate pe o întrebare (runda 4, review r3 P2 — condiția de merge): butoanele care cheamă fn_intrebari_de_verificat /
+ *  fn_intrebari_reia apar DOAR cu migrarea 20261131e detectată (`v2 === true`: coloanele ei s-au citit fără eroare — migrarea le
+ *  adaugă în aceeași tranzacție cu funcțiile). Necunoscut (încă se încarcă) sau lipsă → nimic de apăsat; `nota` = unde ar fi apărut
+ *  un buton, ca ecranul să spună „disponibil după actualizarea bazei de date”. */
+export function actiuniIntrebare({ v2, stare, eAutor, eOwner }) {
+  const verificare = stare === 'raspuns' && !!(eAutor || eOwner)
+  const reia = !!eOwner && ['raspuns', 'de_verificat', 'eroare'].includes(stare)
+  return v2 === true ? { verificare, reia, nota: false } : { verificare: false, reia: false, nota: verificare || reia }
 }
 
 /** Interogările web trimise (audit, doar ownerul le vede): listă de șiruri, max 20 × 200 de caractere. */

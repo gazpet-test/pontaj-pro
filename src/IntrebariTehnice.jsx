@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { poateIntreba, caleAtasament, verificaFisier, totalPreaMare, blocuriMd, bucatiRand, ETICHETA_STARE, MAX_ATASAMENTE, MAX_MB } from './intrebariUtil.js'
-import { imparteRaspuns, surseAfisabile, interogariAfisabile } from './intrebariSurse.js'
+import { imparteRaspuns, surseAfisabile, interogariAfisabile, lipsesteMigrarea, actiuniIntrebare } from './intrebariSurse.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', border:'#30363D', blue:'#1F6FEB', green:'#2EA043', yellow:'#D29922', red:'#F85149', acc:'#56D4DD' }
 const S = {
@@ -93,7 +93,10 @@ export default function IntrebariTehnice({ profile }) {
   const COL_V1 = 'id, autor, titlu, context, intrebare, atasamente, stare, raspuns_md, model, eroare, creat_la, raspuns_la, profiles(name)'
   const colV2 = useRef(true)                     // coloanele `surse` / `interogari_web` (20261131e); fără migrare, ecranul merge pe v1
   const COL = () => colV2.current ? COL_V1 + ', surse, interogari_web' : COL_V1
-  const lipsaV2 = e => colV2.current && e && /surse|interogari_web/.test(e.message || '') && (colV2.current = false, true)
+  const lipsaV2 = e => colV2.current && lipsesteMigrarea(e) && (colV2.current = false, true)
+  // runda 4 (review r3 P2): migrarea DETECTATĂ — true doar după o citire reușită cu coloanele v2; până atunci (null) sau fără ea
+  // (false) butoanele care cheamă RPC-urile 20261131e nu apar (actiuniIntrebare)
+  const [v2, setV2] = useState(null)
   const [lucruRand, setLucruRand] = useState(null)   // id-ul întrebării cu acțiune în curs (una singură odată)
   const [mesajRand, setMesajRand] = useState(null)   // { id, ok, text } — se afișează DOAR sub întrebarea cu acel id
   const actGen = useRef(0)                           // generația acțiunii: rezultatul uneia vechi nu suprascrie mesajul uneia noi
@@ -108,7 +111,7 @@ export default function IntrebariTehnice({ profile }) {
     if (lipsaV2(l.error) || lipsaV2(d.error)) [l, d] = await cere()
     if (g !== gen.current) return
     if (l.error) setErr('Nu s-au putut încărca întrebările: ' + l.error.message)
-    else { setLista(l.data || []); if (!vechi.length) setMaiSunt((l.data || []).length === PAG) }
+    else { setV2(colV2.current); setLista(l.data || []); if (!vechi.length) setMaiSunt((l.data || []).length === PAG) }
     if (selectat) {
       if (d.error) setErrDet('Întrebarea nu a putut fi încărcată: ' + d.error.message)
       else if (!d.data) setErrDet('Întrebarea nu există sau nu ai acces la ea.')
@@ -136,7 +139,7 @@ export default function IntrebariTehnice({ profile }) {
   // Id-ul și generația se fixează la pornire: dacă între timp s-a deschis altă întrebare, mesajul rămâne legat de întrebarea
   // pe care s-a apăsat (nu apare sub alta), iar reîncărcarea folosește URL-ul CURENT (incarcaRef), nu pe cel de la apăsare.
   async function actiuneRand(rpc, id, mesajOk) {
-    if (lucruRand !== null) return
+    if (lucruRand !== null || v2 !== true) return   // fără migrarea 20261131e detectată, RPC-urile nu există
     const g = ++actGen.current
     setLucruRand(id); setMesajRand(null)
     let rez
@@ -202,7 +205,7 @@ export default function IntrebariTehnice({ profile }) {
       setParams({ id: String(data.id) })
     } catch (e) { setErr(e.message) } finally { setLucru(false) }
   }
-
+  const act = q ? actiuniIntrebare({ v2, stare: q.stare, eAutor: q.autor === profile.id, eOwner: !!profile.is_owner }) : null
 
   return (
     <div style={{ minHeight:'100vh', background:G.bg, color:G.text, padding:'16px 16px 48px', fontFamily:'system-ui, sans-serif' }}>
@@ -240,14 +243,16 @@ export default function IntrebariTehnice({ profile }) {
               </> : <div style={{ color:G.muted }}>{ETICHETA_STARE[q.stare]?.t} Pagina se actualizează singură.</div>}
             </div>
             <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:14 }}>
-              {q.stare === 'raspuns' && (q.autor === profile.id || profile.is_owner) &&
+              {act.verificare &&
                 <button style={{ ...S.btnS, opacity: lucruRand !== null ? 0.6 : 1 }} disabled={lucruRand !== null}
                   onClick={() => actiuneRand('fn_intrebari_de_verificat', q.id, 'Răspunsul a fost trimis la verificare.')}>⚑ Răspuns neclar — trimite la verificare</button>}
-              {profile.is_owner && ['raspuns', 'de_verificat', 'eroare'].includes(q.stare) &&
+              {act.reia &&
                 <button style={{ ...S.btnS, borderColor:G.acc, opacity: lucruRand !== null ? 0.6 : 1 }} disabled={lucruRand !== null}
                   onClick={() => window.confirm('Reiei întrebarea cu cercetare? Răspunsul actual se înlocuiește și apelul AI costă (intră în plafonul de 40/zi).') &&
                     actiuneRand('fn_intrebari_reia', q.id, 'Întrebarea a intrat din nou în coadă.')}>🔁 Reia cu cercetare</button>}
             </div>
+            {act.nota && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>
+              Trimiterea la verificare și reluarea cu cercetare sunt disponibile după actualizarea bazei de date.</div>}
             {mesajRand?.id === q.id && <div style={{ color: mesajRand.ok ? G.green : G.red, fontSize:13, marginTop:8 }}>{mesajRand.text}</div>}
           </div>
         ) : !selectat && <>

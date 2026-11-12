@@ -4,6 +4,9 @@
 -- fără jurnalul `intrebari_preluari`, fără fn_intrebari_de_verificat / fn_intrebari_reia; fn_intrebari_raspunde cu 6 parametri,
 -- fn_intrebari_preia / fn_intrebari_amana / fn_intrebari_inainte_insert cu corpurile VERBATIM din 20261105a.
 -- Consecință: plafonul de 40/zi revine la numărarea din preluat_la / raspuns_la (fără reluare în UI, gaura P1-c nu se redeschide).
+-- Runda 4 (review r3 P2 / L15): înainte de orice DROP, fiecare funcție trebuie să fie EXACT versiunea 20261131e (md5 pe corpul fără
+-- CR + SECURITY DEFINER, search_path, proprietar, o singură supraîncărcare) — o versiune ulterioară sub același nume = refuz; după
+-- revenire, corpurile readuse se verifică la fel față de 20261105a (md5-urile le recalculează scripts/intrebari_cercetare_amprente.test.js).
 --
 -- BLOC TRANZACȚIONAL COMPLET: gestionarul tranzacției e operatorul (convenția supabase/revenire/README.md — fișierul nu are
 -- BEGIN/COMMIT); armarea e legată de txid_current(), deci rulat în afara unei tranzacții explicite fișierul REFUZĂ
@@ -27,6 +30,18 @@ DO $start$
 DECLARE
   v text := current_setting('gazpet.revenire_20261131e', true);
   v_date_noi boolean;
+  -- runda 4 (review r3 P2 / L15): md5(corpul fără CR) al FIECĂREI funcții create / înlocuite de 20261131e — aceleași valori ca în
+  -- postcondiția migrării (testul vitest scripts/intrebari_cercetare_amprente.test.js le recalculează din migrarea din repo)
+  c_mig CONSTANT jsonb := '{
+    "public.fn_intrebari_amana(bigint,uuid)": "badeb4273e51b12d4ba868bc67312148",
+    "public.fn_intrebari_de_verificat(bigint)": "532002403818cdb223e896c971abce0e",
+    "public.fn_intrebari_inainte_insert()": "faeca2cd890341524950ca45d0d5156d",
+    "public.fn_intrebari_preia()": "65336457781dc5a796376bdaadd31b54",
+    "public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text,jsonb,jsonb)": "1c676fa234d086b8e8368eaa04414b5a",
+    "public.fn_intrebari_reia(bigint)": "8745d896032fb72cda593ca11f3f6bd7"
+  }'::jsonb;
+  k text;
+  f record;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261131e revenire: doar postgres'; END IF;
   IF v IS DISTINCT FROM 'SCOATE_CERCETARE:' || txid_current() AND v IS DISTINCT FROM 'SCOATE_CERCETARE_ARHIVEAZA:' || txid_current() THEN
@@ -51,9 +66,6 @@ BEGIN
      OR to_regprocedure('public.fn_intrebari_reia(bigint)') IS NULL
      OR to_regprocedure('public.fn_intrebari_preia()') IS NULL
      OR to_regprocedure('public.fn_intrebari_amana(bigint,uuid)') IS NULL
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_intrebari_preia()'::regprocedure) NOT LIKE '%intrebari_preluari%'
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_intrebari_amana(bigint,uuid)'::regprocedure) NOT LIKE '%intrebari_preluari%'
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_intrebari_inainte_insert()'::regprocedure) NOT LIKE '%interogari_web%'
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'intrebari_tehnice'
            AND column_name IN ('surse', 'de_verificat_la', 'interogari_web')) <> 3
      OR to_regclass('public.intrebari_cercetare_arhiva_20261131e') IS NOT NULL
@@ -66,9 +78,28 @@ BEGIN
                         OR (d.refobjid = 'public.intrebari_tehnice'::regclass AND d.refobjsubid IN (
                               SELECT attnum FROM pg_attribute WHERE attrelid = 'public.intrebari_tehnice'::regclass
                                 AND attname IN ('surse', 'de_verificat_la', 'interogari_web')))))
-     OR EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid = to_regclass('public.intrebari_preluari')) THEN
+     OR EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid = to_regclass('public.intrebari_preluari'))
+     -- nimic nou agățat de jurnal (trigger / politică), iar triggerul de inserare e tot cel din 20261105a, pe funcția de mai jos
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('public.intrebari_preluari') AND NOT tgisinternal)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.intrebari_tehnice'::regclass AND t.tgname = 'intrebari_tehnice_inainte_insert'
+                      AND t.tgfoid = 'public.fn_intrebari_inainte_insert()'::regprocedure AND t.tgenabled = 'O') THEN
     RAISE EXCEPTION '20261131e revenire: starea nu e exact cea a lui 20261131e';
   END IF;
+  -- exact versiunea 20261131e a fiecărei funcții (corp + atribute), nu fragmente de text: o versiune ulterioară sub același nume
+  -- (alt corp, SECURITY INVOKER, alt search_path / proprietar, o supraîncărcare nouă) = REFUZ — revenirea nu suprascrie munca altei
+  -- migrări cu corpurile din 20261105a
+  FOR k IN SELECT jsonb_object_keys(c_mig) LOOP
+    SELECT p.prosecdef, p.proconfig, pg_get_userbyid(p.proowner) AS owner, l.lanname, md5(replace(p.prosrc, chr(13), '')) AS corp,
+           (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari
+      INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(k);
+    IF NOT FOUND OR f.corp IS DISTINCT FROM c_mig->>k THEN
+      RAISE EXCEPTION '20261131e revenire: % are alt corp decat versiunea 20261131e (alta versiune sub acelasi nume) - refuz', k;
+    END IF;
+    IF NOT f.prosecdef OR f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR f.owner IS DISTINCT FROM 'postgres'
+       OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1 THEN
+      RAISE EXCEPTION '20261131e revenire: atributele % difera de versiunea 20261131e - refuz', k;
+    END IF;
+  END LOOP;
 
   SELECT EXISTS (SELECT 1 FROM public.intrebari_tehnice
                   WHERE surse IS DISTINCT FROM '[]'::jsonb OR interogari_web IS DISTINCT FROM '[]'::jsonb
@@ -226,6 +257,16 @@ DO $final$
 DECLARE
   v text := current_setting('gazpet.revenire_20261131e', true);
   v_arhiva oid := to_regclass('public.intrebari_cercetare_arhiva_20261131e');
+  -- runda 4 (L15): md5(corpul fără CR) al funcțiilor readuse = corpurile VERBATIM din 20261105a (testul vitest verifică egalitatea
+  -- cu supabase/migrations/20261105a_intrebari_tehnice.sql și cu corpurile din acest fișier)
+  c_105a CONSTANT jsonb := '{
+    "public.fn_intrebari_amana(bigint,uuid)": "5a0f5e883119206ec0f2d37230fd9529",
+    "public.fn_intrebari_inainte_insert()": "534153df75132ee7054e8cbbbeb3f6b2",
+    "public.fn_intrebari_preia()": "23acffcb5a216ca21e7f4dd1186d11b6",
+    "public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)": "d9bec061a41ff310b323557e4e4a794b"
+  }'::jsonb;
+  k text;
+  f record;
 BEGIN
   IF v IS DISTINCT FROM 'SCOATE_CERCETARE:' || txid_current() AND v IS DISTINCT FROM 'SCOATE_CERCETARE_ARHIVEAZA:' || txid_current() THEN
     RAISE EXCEPTION '20261131e revenire: armarea s-a pierdut pe parcurs';
@@ -237,9 +278,6 @@ BEGIN
      OR to_regprocedure('public.fn_intrebari_reia(bigint)') IS NOT NULL
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'intrebari_tehnice'
                   AND column_name IN ('surse', 'de_verificat_la', 'interogari_web'))
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_intrebari_preia()'::regprocedure) LIKE '%intrebari_preluari%'
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_intrebari_amana(bigint,uuid)'::regprocedure) LIKE '%intrebari_preluari%'
-     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_intrebari_inainte_insert()'::regprocedure) LIKE '%surse%'
      OR has_function_privilege('authenticated', 'public.fn_intrebari_raspunde(bigint, uuid, text, text, jsonb, text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.fn_intrebari_raspunde(bigint, uuid, text, text, jsonb, text)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.fn_intrebari_raspunde(bigint, uuid, text, text, jsonb, text)', 'EXECUTE')
@@ -251,6 +289,15 @@ BEGIN
      OR EXISTS (SELECT 1 FROM public.intrebari_tehnice WHERE stare NOT IN ('noua', 'in_lucru', 'raspuns', 'eroare')) THEN
     RAISE EXCEPTION '20261131e revenire: postcondiția (starea 20261105a) a eșuat';
   END IF;
+  FOR k IN SELECT jsonb_object_keys(c_105a) LOOP
+    SELECT p.prosecdef, p.proconfig, pg_get_userbyid(p.proowner) AS owner, l.lanname, md5(replace(p.prosrc, chr(13), '')) AS corp,
+           (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari
+      INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(k);
+    IF NOT FOUND OR f.corp IS DISTINCT FROM c_105a->>k OR NOT f.prosecdef OR f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+       OR f.owner IS DISTINCT FROM 'postgres' OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1 THEN
+      RAISE EXCEPTION '20261131e revenire: postcondiția % (corpul / atributele din 20261105a) a eșuat', k;
+    END IF;
+  END LOOP;
   IF v = 'SCOATE_CERCETARE:' || txid_current() THEN
     IF v_arhiva IS NOT NULL THEN RAISE EXCEPTION '20261131e revenire: postcondiția a eșuat (arhivă creată fără token de arhivare)'; END IF;
   ELSE
