@@ -126,7 +126,7 @@ SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_cont
          SELECT 'n|' || n.nspname || '|' || pg_get_userbyid(n.nspowner) || '|' || coalesce(n.nspacl::text, '') AS x
            FROM pg_namespace n WHERE n.nspname !~ '^pg_(toast_)?temp_'
          UNION ALL
-         SELECT 'c|' || c.oid::regclass::text || '|' || c.relkind || '|' || pg_get_userbyid(c.relowner) || '|' ||
+         SELECT 'c|' || c.oid::regclass::text || '|' || c.relkind::text || '|' || pg_get_userbyid(c.relowner) || '|' ||
                 coalesce(c.relacl::text, '') || '|' || c.relrowsecurity::text || c.relforcerowsecurity::text
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
           WHERE n.nspname !~ '^pg_(toast_)?temp_' AND n.nspname <> 'pg_toast'
@@ -143,10 +143,10 @@ SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_cont
                 pg_get_userbyid(p.proowner) || '|' || coalesce(p.proacl::text, '') || '|' || coalesce(p.proconfig::text, '')
            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname !~ '^pg_(toast_)?temp_'
          UNION ALL
-         SELECT 't|' || t.tgrelid::regclass::text || '|' || t.tgname || '|' || t.tgenabled || '|' || t.tgfoid::regprocedure::text
+         SELECT 't|' || t.tgrelid::regclass::text || '|' || t.tgname || '|' || t.tgenabled::text || '|' || t.tgfoid::regprocedure::text
            FROM pg_trigger t
          UNION ALL
-         SELECT 'p|' || pol.polrelid::regclass::text || '|' || pol.polname || '|' || pol.polcmd || '|' || pol.polroles::text || '|' ||
+         SELECT 'p|' || pol.polrelid::regclass::text || '|' || pol.polname || '|' || pol.polcmd::text || '|' || pol.polroles::text || '|' ||
                 coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') || '|' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '')
            FROM pg_policy pol
          UNION ALL
