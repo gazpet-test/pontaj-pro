@@ -7,7 +7,7 @@ import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
 import { ziBucuresti } from './adminAlerte.js'
-import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT } from './lib/arhivaAlimentari.js'
+import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT, SURSA_ROMPETROL_TOATE, surseRompetrol, potrivesteSursa } from './lib/arhivaAlimentari.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -7966,7 +7966,9 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
     arhiva.forEach(a => { if (a.statie_combustibil) s.add(a.statie_combustibil) })
     return Array.from(s).sort()
   }, [arhiva])
-  
+  // Sursele cuprinse de opțiunea „Rompetrol — toate” (TKT-2026-0378)
+  const surseRompetrolDisponibile = useMemo(() => surseRompetrol(surseDisponibile), [surseDisponibile])
+
   const siteuriDisponibile = useMemo(() => {
     const s = new Set()
     arhiva.forEach(a => { if (a.sites?.name) s.add(a.sites.name) })
@@ -7981,7 +7983,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
       if (employeeFilter === COMODAT_NEATRIBUIT) { if (!esteComodatNeatribuit(a)) return false }
       else if (employeeFilter !== 'Toate' && proprietarComodatId(a) !== employeeFilter) return false
       if (tipFilter !== 'Toate' && av?.logistica_categorii?.tip !== tipFilter) return false
-      if (sursaFilter !== 'Toate' && a.statie_combustibil !== sursaFilter) return false
+      if (!potrivesteSursa(a.statie_combustibil, sursaFilter)) return false
       if (siteFilter !== 'Toate' && a.sites?.name !== siteFilter) return false
       if (q) {
         const hay = `${av?.marca || ''} ${av?.model || ''} ${av?.cod_intern || ''} ${av?.nr_inmatriculare || ''} ${a.sites?.name || ''} ${a.statie_combustibil || ''} ${a.profile_creator?.name || ''}`.toLowerCase()
@@ -8313,7 +8315,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
       const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 12) }))
       ws['!cols'] = colWidths
       
-      const filename = `Arhiva_Alimentari_${new Date().toISOString().split('T')[0]}.xlsx`
+      const filename = `Arhiva_Alimentari_${sursaFilter === SURSA_ROMPETROL_TOATE ? 'Rompetrol_toate_' : ''}${new Date().toISOString().split('T')[0]}.xlsx`
       XLSX.writeFile(wb, filename)
       showToast(`✓ Export reușit: ${filtered.length} rânduri`)
     } catch (e) {
@@ -8410,6 +8412,11 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
           </select>
           <select value={sursaFilter} onChange={e => setSursaFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
             <option value="Toate">Toate sursele</option>
+            {(surseRompetrolDisponibile.length > 0 || sursaFilter === SURSA_ROMPETROL_TOATE) && (
+              <option value={SURSA_ROMPETROL_TOATE} title={surseRompetrolDisponibile.join(' · ')}>
+                ⛽ Rompetrol — toate ({surseRompetrolDisponibile.length} {surseRompetrolDisponibile.length === 1 ? 'sursă' : 'surse'})
+              </option>
+            )}
             {surseDisponibile.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
@@ -8437,6 +8444,13 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
         </div>
         {numeWarning && (
           <div style={{marginTop: 8, fontSize: 11, color: G.yellow, lineHeight: 1.4}}>⚠️ {numeWarning}</div>
+        )}
+        {sursaFilter === SURSA_ROMPETROL_TOATE && (
+          <div style={{marginTop: 8, fontSize: 11, color: G.muted, lineHeight: 1.4}}>
+            ⛽ „Rompetrol — toate” cuprinde: {surseRompetrolDisponibile.length > 0
+              ? surseRompetrolDisponibile.map(s => <b key={s} style={{color: G.text}}>{s}</b>).reduce((acc, el, i) => i === 0 ? [el] : [...acc, ' · ', el], [])
+              : 'nicio sursă Rompetrol în perioada aleasă'}. Totalurile și exportul Excel sunt pe toate împreună.
+          </div>
         )}
         {employeeFilter !== 'Toate' && (
           <div style={{marginTop: 8, fontSize: 11, color: G.muted, lineHeight: 1.4}}>
