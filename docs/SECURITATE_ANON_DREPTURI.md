@@ -146,6 +146,10 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
   serializează cu alte sesiuni sunt rândurile din catalog rescrise de noi, ținute până la COMMIT (vezi mai sus). Noi așteptăm doar după o
   tranzacție care rescrisese deja rândul (100 ms, apoi refuz). VACUUM / ANALYZE pe aceleași obiecte pot aștepta cel mult cât tranzacția
   noastră (sub plafon). Duratele din PGlite (PostgreSQL 18, o singură conexiune) **nu validează** producția.
+- **Confirmat pe clona PostgreSQL 17.6, cu două sesiuni reale (12.11.2026):** sesiunea care încearcă un GRANT pe un obiect deja blocat de noi
+  stă blocată și pică la COMMIT-ul nostru cu „tuple concurrently updated”; rândul unei coloane fără drepturi nu se blochează (GRANT-ul pe ea
+  trece imediat), iar verificarea coloanelor îl prinde. Drept în zbor la pornire: refuz prin lock_timeout (~270 ms de la pornire). Durate
+  pe clonă: `b` ~220 ms, revenirea lui `b` ~50 ms de la BEGIN. Ambii mutanți (`fara_recitire`, `fara_coloane`) sunt prinși.
 - **Proba pe clonă PostgreSQL 17 (înainte de orice „da”):**
   1. citirea pe clonă → rândurile `BASELINE` ale clonei;
   2. proba cu două sesiuni reale: `scripts/anon_drepturi_concurenta.mjs --sistem <identificatorul clonei>` (refuză altă țintă, altă versiune
@@ -195,4 +199,5 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
   pct. 1 rămâne, partițiile păstrate se citesc.
 - **L24** — condiția T2: clientul nu mai pornește interogări fără sesiune (PR separat).
 - **L25** — verificări independente de regulă (instantaneul complet al drepturilor, cereri reale ca `anon`), mutanți pe migrări, reveniri și
-  regulă; cursa: simulată determinist în PGlite + probă cu două sesiuni reale pe clona PG17 (de rulat de coordonator).
+  regulă; cursa: simulată determinist în PGlite + probă cu două sesiuni reale pe clona PG 17.6 (rulată 12.11.2026, comportamentele confirmate;
+  proba compară pe nume calificate explicit și iese „probă nefuncțională”, nu verdict, când starea așteptată e goală).

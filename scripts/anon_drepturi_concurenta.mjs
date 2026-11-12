@@ -67,8 +67,10 @@ const inSomn = (app) => async () => (await q(`SELECT count(*) FROM pg_stat_activ
 const blocataDe = (b, a) => async () => (await q(`SELECT count(*) FROM pg_stat_activity x, pg_stat_activity y
   WHERE x.application_name = '${b}' AND y.application_name = '${a}' AND y.pid = ANY (pg_blocking_pids(x.pid))`))[0] === '1'
 const aplica = (t, lista) => { for (const [din, in_] of lista) { if (!t.includes(din)) throw new Error('textul lipsește: ' + din.slice(0, 80)); t = t.split(din).join(in_) } return t }
-const INSTANTANEU = `SELECT 'rel ' || c.oid::regclass::text || ' ' || x::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, unnest(c.relacl) x WHERE n.nspname = 'public'
-  UNION ALL SELECT 'col ' || c.oid::regclass::text || '.' || a.attname || ' ' || x::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+// numele = schema.nume citate EXPLICIT (ca eticheta din citire / jurnal): c.oid::regclass::text depinde de search_path (pe clonă, cu
+// psql, ieșea „x_seq” fără „public.”) și comparația cu SEQ găsea șirul gol (r3)
+const INSTANTANEU = `SELECT 'rel ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || ' ' || x::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, unnest(c.relacl) x WHERE n.nspname = 'public'
+  UNION ALL SELECT 'col ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || '.' || quote_ident(a.attname) || ' ' || x::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     JOIN pg_attribute a ON a.attrelid = c.oid, unnest(a.attacl) x WHERE n.nspname = 'public'
   UNION ALL SELECT 'def ' || d.defaclrole::regrole::text || ' ' || coalesce(d.defaclnamespace::regnamespace::text, '-') || ' ' || d.defaclobjtype::text || ' ' || x::text
     FROM pg_default_acl d, unnest(d.defaclacl) x ORDER BY 1;`
@@ -118,7 +120,10 @@ async function main() {
   console.log(`clona PG ${ver}; ținte: secvența T1 #1, tabelul T2 cu o coloană fără drepturi (numele rămân în ieșirea de pe server)`)
   const S0 = await instantaneu(); S0G = S0
   const jurnalSeq = async () => (await q(`SELECT array_to_string(drepturi, ',') FROM securitate_intern.anon_revocari WHERE migrare = '20261218a' AND eticheta = 'secventa ${SEQ}'`))[0]
-  const anonInainte = (S, obj) => S.split('\n').filter(l => l.startsWith(`rel ${obj} anon=`)).map(l => l.split(' ')[2]).sort().join(',')
+  const anonInainte = (S, obj) => S.split('\n').filter(l => l.startsWith(`rel ${obj} anon=`)).map(l => l.slice(`rel ${obj} `.length)).sort().join(',')
+  // „așteptat” gol pentru o secvență din T1 e imposibil (T1 = secvențe pe care anon ARE drepturi): sondă greșită, nu verdict (r3)
+  const ASTEPTAT_SEQ = anonInainte(S0, SEQ)
+  if (!ASTEPTAT_SEQ || !/^anon=[a-zA-Z*]+\/\S+$/.test(ASTEPTAT_SEQ.split(',')[0])) { console.error('PROBA_NEFUNCTIONALA: instantaneul nu are drepturile lui anon pe secvența țintă (format nume / rând)'); process.exit(26) }
 
   // ── R1: B comite între calcul și blocare ──
   if (MUTANT !== 'fara_coloane') {
@@ -132,7 +137,7 @@ async function main() {
       if (b.code !== 0 || !inca) nota('R1', 'PROBA_NEFUNCTIONALA', `B ${b.code === 0 ? 'a terminat după fereastră' : 'a picat: ' + b.err.trim()}`)
       else if (MUTANT === 'fara_recitire') {
         const j = a.code === 0 ? await jurnalSeq() : null
-        nota('R1', a.code === 0 && j && !j.includes('*') ? 'OK' : 'CONTRAR', a.code === 0 ? `mutant: A a comis, jurnalul secvenței = ${j} (fără dreptul lui B) — DEFECT reprodus, mutant prins` : 'mutant: A a refuzat (' + a.err.trim().slice(0, 160) + ')')
+        nota('R1', a.code === 0 && j === ASTEPTAT_SEQ ? 'OK' : 'CONTRAR', a.code === 0 ? `mutant: A a comis, jurnalul secvenței = ${j} (fără dreptul lui B) — DEFECT reprodus, mutant prins` : 'mutant: A a refuzat (' + a.err.trim().slice(0, 160) + ')')
         if (a.code === 0) { const r = await caRunner(NUME.a + '_ROLLBACK', REV.a, 'anon_conc_rev'); if (r.code !== 0) throw new Error('revenirea a după mutant: ' + r.err.trim()) }
       } else nota('R1', a.code !== 0 && /schimbare concurenta/.test(a.err) ? 'OK' : 'CONTRAR', a.code !== 0 ? 'A refuză: ' + a.err.trim().split('\n').find(l => /ERROR/.test(l)) : 'A A COMIS (fereastra deschisă)')
       await q(SCOATE_SEQ); curatenie = curatenie.filter(x => x !== SCOATE_SEQ)
@@ -163,7 +168,7 @@ async function main() {
       const inca = await inSomn('anon_conc_A')()
       const a = await A, b = await B
       const j = a.code === 0 ? await jurnalSeq() : null
-      const corect = j === anonInainte(S0, SEQ)
+      const corect = j === ASTEPTAT_SEQ
       const dupa = (await q(`SELECT has_sequence_privilege('anon', '${SEQ}', 'SELECT WITH GRANT OPTION')`))[0] === 't'
       if (!blocata || !inca) nota('R2', 'PROBA_NEFUNCTIONALA', `B ${blocata ? '' : 'NU '}a fost văzută blocată de A cât A era în fereastră`)
       else if (a.code === 0 && corect && ((b.code !== 0 && /concurrently/.test(b.err)) || (b.code === 0 && dupa)))
@@ -188,8 +193,10 @@ async function main() {
       const blocata = await asteapta(blocataDe('anon_conc_B', 'anon_conc_A'), 600)
       const a = await A, b = await B
       const jc = a.code === 0 ? (await q(`SELECT count(*) FROM securitate_intern.anon_revocari j, unnest(j.coloane) c WHERE j.migrare = '20261218b' AND c LIKE '% ${COL.replace(/'/g, "''")} anon=%' AND j.obiect_oid = '${TAB}'::regclass`))[0] : null
+      // r3: „0 rânduri în jurnal” singur trece și cu un tipar greșit -> defectul se dovedește și pe instantaneu: dreptul comis de B a dispărut
+      const colDupa = a.code === 0 ? (await instantaneu()).split('\n').some(l => l.startsWith(`col ${TAB}.${COL} anon=`)) : null
       if (MUTANT === 'fara_coloane') {
-        nota('R4', a.code === 0 && b.code === 0 && jc === '0' ? 'OK' : 'CONTRAR', a.code === 0 ? `mutant: A a comis, dreptul lui B pe coloană e retras fără jurnal (${jc} rânduri) — DEFECT reprodus, mutant prins` : 'mutant: A a refuzat (' + a.err.trim().slice(0, 160) + ')')
+        nota('R4', a.code === 0 && b.code === 0 && jc === '0' && colDupa === false ? 'OK' : 'CONTRAR', a.code === 0 ? `mutant: A a comis, dreptul lui B pe coloană ${colDupa === false ? 'e retras' : 'NU e retras (?)'} fără jurnal (${jc} rânduri) — ${colDupa === false ? 'DEFECT reprodus, mutant prins' : 'defectul nu se vede'}` : 'mutant: A a refuzat (' + a.err.trim().slice(0, 160) + ')')
       } else if (b.code === 0 && !blocata) nota('R4', a.code !== 0 && /coloane schimbate concurent/.test(a.err) ? 'OK' : 'CONTRAR', a.code !== 0 ? 'B neblocată (rând de coloană neblocat, ca în PGlite); A refuză: ' + a.err.trim().split('\n').find(l => /ERROR/.test(l)) : 'A A COMIS cu dreptul lui B scos fără jurnal')
       else if (blocata) nota('R4', a.code === 0 && b.code !== 0 ? 'OK' : 'CONTRAR', `B a fost BLOCATĂ (pe PG17 rândul era blocat); A cod ${a.code}, B cod ${b.code}: ${b.err.trim().slice(0, 120)}`)
       else nota('R4', 'PROBA_NEFUNCTIONALA', 'B a picat: ' + b.err.trim().slice(0, 160))

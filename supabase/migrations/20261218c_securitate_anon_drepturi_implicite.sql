@@ -309,7 +309,8 @@ BEGIN
     RAISE EXCEPTION '20261218c: blocarea randurilor din pg_default_acl nu s-a facut (nimic schimbat)';
   END IF;
   -- recitirea pe rândurile blocate: regula de ACUM pe T3 = EXACT jurnalul
-  SELECT string_agg(coalesce(a.eticheta, b.r_eticheta), ', ') INTO v_dif
+  -- DISTINCT: un obiect cu detaliul schimbat iese pe ambele părți ale FULL JOIN (o dată fiecare), deci numele lui apărea de două ori
+  SELECT string_agg(DISTINCT coalesce(a.eticheta, b.r_eticheta), ', ') INTO v_dif
     FROM (SELECT eticheta, detaliu FROM securitate_intern.anon_revocari WHERE migrare = '20261218c') a
     FULL JOIN (SELECT r_eticheta, r_detaliu FROM pg_temp.anon_regula_20261218c() WHERE r_treapta = 'T3') b
       ON b.r_eticheta = a.eticheta AND b.r_detaliu = a.detaliu
@@ -352,7 +353,7 @@ BEGIN
   END IF;
   SELECT string_agg(r.r_eticheta, ', ') INTO v_dif FROM pg_temp.anon_regula_20261218c() r WHERE r.r_treapta = 'T3';
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218c post: drepturi implicite ramase in T3: %', v_dif; END IF;
-  SELECT string_agg(coalesce(a.r_eticheta, b.r_eticheta), ', ') INTO v_dif
+  SELECT string_agg(DISTINCT coalesce(a.r_eticheta, b.r_eticheta), ', ') INTO v_dif
     FROM (SELECT r_treapta, r_eticheta, md5(r_detaliu) m FROM pg_temp.anon_calc_20261218c WHERE r_treapta <> 'T3') a
     FULL JOIN (SELECT r_treapta, r_eticheta, md5(r_detaliu) m FROM pg_temp.anon_regula_20261218c() WHERE r_treapta <> 'T3') b
       ON b.r_eticheta = a.r_eticheta AND b.r_treapta = a.r_treapta AND b.m = a.m
