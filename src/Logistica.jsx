@@ -5,6 +5,7 @@ import { employeeFieldRead, withEmployeePersonal } from './employeesPersonal.js'
 
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
+import { confirmaCitiriAlimentari, confirmaAjustareManuala, incarcaSurseMaxime, textSursaValoriiActiv } from './lib/citiriBord.js'
 import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
 import { ziBucuresti } from './adminAlerte.js'
 import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT, SURSA_ROMPETROL_TOATE, surseRompetrol, potrivesteSursa } from './lib/arhivaAlimentari.js'
@@ -457,7 +458,21 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
   const anomalieOre = oreNoi > 0 && oreActuale > 0 && oreNoi < oreActuale
   const anomalieKm = kmNoi > 0 && kmActuale > 0 && kmNoi < kmActuale
   const hasAnomalie = anomalieOre || anomalieKm
-  
+  // TKT-2026-0380: când citirea e mai mică decât valoarea din sistem, arăt DE UNDE vine valoarea
+  // mare (alimentare / fișă / telemetrie, cu data și numărul rândului), ca omul să știe ce rând e greșit.
+  const [surseMari, setSurseMari] = useState(null)   // null = încă necitite
+  useEffect(() => {
+    if (!hasAnomalie || surseMari || !activ?.id) return
+    let curent = true
+    incarcaSurseMaxime(supabase, activ.id)
+      .then(r => { if (curent) setSurseMari(r) })
+      .catch(e => { if (curent) setSurseMari({ km: [], ore: [], erori: [e?.message || String(e)] }) })
+    return () => { curent = false }
+  }, [hasAnomalie, activ?.id])  // eslint-disable-line react-hooks/exhaustive-deps
+  // Sursa valorii din sistem: un rând din alimentări / fișe / telemetrie egal cu ea; „scrisă direct pe
+  // activ” doar dacă toate sursele s-au citit (r3: aceeași gardă ca în tabul Service).
+  const sursaSistem = (val, tip) => textSursaValoriiActiv(val, surseMari, tip)
+
   const isGazpet = isStatieGazpet(form.statie_combustibil)
   const rezervorActiv = useMemo(
     () => getRezervorPentruStatie(form.statie_combustibil, rezervoare),
@@ -534,8 +549,10 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
       const ok = window.confirm(`⚠️ Preț/litru atipic: ${form.pret_per_litru} RON/L\n\nPentru motorină, prețul ar trebui între 6-9 RON/L.\nVerifică valorile introduse!\n\nContinui oricum?`)
       if (!ok) return
     }
-    
+
     setSaving(true)
+    // TKT-2026-0380: aceeași verificare anti-typo ca la fișele de service (salt / regres / plafon)
+    if (!(await confirmaCitiriAlimentari(supabase, [{ active_id: activ.id, data_alimentare: form.data_alimentare, km_la_alimentare: form.km_la_alimentare, ore_la_alimentare: form.ore_la_alimentare }]))) { setSaving(false); return }
     const { data: { user } } = await supabase.auth.getUser()
     
     const payload = {
@@ -639,6 +656,11 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
               {anomalieKm && (
                 <div>🛣️ <strong>Km introduși:</strong> {kmNoi.toLocaleString('ro-RO')} km &nbsp;·&nbsp; <strong>Km actuali în sistem:</strong> {kmActuale.toLocaleString('ro-RO')} km &nbsp;·&nbsp; <strong style={{color: G.red}}>Diferență: -{(kmActuale - kmNoi).toLocaleString('ro-RO')} km</strong></div>
               )}
+              {anomalieOre && <div style={{color: G.muted}}>🔎 Valoarea de {oreActuale.toLocaleString('ro-RO')} h {sursaSistem(oreActuale, 'ore')}.</div>}
+              {anomalieKm && <div style={{color: G.muted}}>🔎 Valoarea de {kmActuale.toLocaleString('ro-RO')} km {sursaSistem(kmActuale, 'km')}.</div>}
+              <div style={{color: G.muted, marginTop: 4}}>
+                Salvarea cere bifa și motivul pentru că citirea e mai mică decât valoarea din sistem. Dacă cifra ta de la bord e corectă, rândul de mai sus e cel greșit: corectează-l (sau cere corectarea lui), altfel valoarea afișată rămâne cea mare.
+              </div>
             </div>
             <FieldTextarea 
               label="Motiv (obligatoriu)" 
@@ -1411,7 +1433,13 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
     if (oreModificat && oreCurent && oreNouNum < oreCurent * 0.5) {
       if (!confirm(`⚠️ Reduci ore de la ${oreCurent.toLocaleString('ro-RO')} la ${oreNouNum.toLocaleString('ro-RO')} (peste 50% reducere). Sigur?`)) return
     }
-    
+    // TKT-2026-0380: valoarea afișată = maximul tuturor surselor; dacă o alimentare / fișă / telemetrie
+    // e mai mare, ajustarea nu o coboară → spunem înainte ce rând o ține sus (cu numărul și data lui).
+    setSavingAjust(true)
+    const okSurse = await confirmaAjustareManuala(supabase, activ.id, { km: kmModificat ? kmNouNum : null, ore: oreModificat ? oreNouNum : null })
+    setSavingAjust(false)
+    if (!okSurse) return
+
     setSavingAjust(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -2816,6 +2844,8 @@ function EditAlimentareModal({ canDelete, alim, sites, rezervoare, pretMotorina,
       if (!window.confirm(`⚠️ Pe bon mai sunt ${ramasi} L nedistribuiți, tu adaugi ${litri} L (s-ar depăși totalul bonului). Continui?`)) return
     }
     setSplitSaving(true)
+    // TKT-2026-0380: verificare anti-typo km / ore (confirmare explicită, nu blocare)
+    if (!(await confirmaCitiriAlimentari(supabase, [{ active_id: Number(splitForm.active_id), data_alimentare: alim.data_alimentare, km_la_alimentare: splitForm.km, ore_la_alimentare: splitForm.ore }]))) { setSplitSaving(false); return }
     const { data: { user } } = await supabase.auth.getUser()
     const pretL = Number(alim.pret_per_litru || form.pret_per_litru) || null
     const { error } = await supabase.from('logistica_alimentari').insert({
@@ -2857,8 +2887,17 @@ function EditAlimentareModal({ canDelete, alim, sites, rezervoare, pretMotorina,
       const ok = window.confirm(`⚠️ Preț/L atipic: ${form.pret_per_litru} RON/L\nContinui oricum?`)
       if (!ok) return
     }
-    
+
     setSaving(true)
+    // TKT-2026-0380: verific doar citirile schimbate (sau toate, dacă s-a schimbat data); rândul
+    // editat nu intră în referință, ca o cifră greșită corectată să nu fie judecată după ea însăși.
+    const dataSchimbata = form.data_alimentare !== alim.data_alimentare
+    const schimbat = (nou, vechi) => dataSchimbata || String(nou ?? '') !== String(vechi ?? '')
+    if (alim.active_id != null && !(await confirmaCitiriAlimentari(supabase, [{
+      active_id: alim.active_id, data_alimentare: form.data_alimentare,
+      km_la_alimentare: schimbat(form.km_la_alimentare, alim.km_la_alimentare) ? form.km_la_alimentare : null,
+      ore_la_alimentare: schimbat(form.ore_la_alimentare, alim.ore_la_alimentare) ? form.ore_la_alimentare : null,
+    }], { excludeAlimIds: [alim.id] }))) { setSaving(false); return }
     const payload = {
       data_alimentare: form.data_alimentare,
       cantitate_litri: Number(form.cantitate_litri),
@@ -3434,8 +3473,10 @@ function AlimentariBulkPage({ canDelete, active, ultimeAlim, sites, rezervoare, 
       const ok = window.confirm(`⚠️ Preț/litru atipic: ${pretL} RON/L pentru ${activ.cod_intern || activ.nr_inmatriculare}\n\nContinui oricum?`)
       if (!ok) return
     }
-    
+
     setSavingId(activ.id)
+    // TKT-2026-0380: verificare anti-typo km / ore (confirmare explicită, nu blocare)
+    if (!(await confirmaCitiriAlimentari(supabase, [{ active_id: activ.id, data_alimentare: dataAlim, km_la_alimentare: f.km_la_alimentare, ore_la_alimentare: f.ore_la_alimentare, eticheta: activ.cod_intern || activ.nr_inmatriculare || '' }]))) { setSavingId(null); return }
     const { data: { user } } = await supabase.auth.getUser()
     
     // Calc ore lucrate efectiv = ore_la_alimentare - ore_precedente (dacă e disponibil)
@@ -9169,6 +9210,9 @@ function QrReconciliereTab({ profile, showToast }) {
   async function salveazaAlocare() {
     if (!alocModal?.activeId) { showToast?.('Alege un utilaj', 'warning'); return }
     setProcessingId(alocModal.alim.id)
+    // TKT-2026-0380: km-ul citit la pompă (din raportul Rompetrol) trece pe vehiculul ales →
+    // aceeași verificare anti-typo ca la orice alimentare (confirmare explicită, nu blocare).
+    if (!(await confirmaCitiriAlimentari(supabase, [{ active_id: Number(alocModal.activeId), data_alimentare: alocModal.alim.data_alimentare, km_la_alimentare: alocModal.alim.km_la_alimentare }]))) { setProcessingId(null); return }
     try {
       const upd = {
         active_id: alocModal.activeId,
@@ -12011,6 +12055,15 @@ export default function LogisticaPage() {
       vazute.add(k); return true
     })
     
+    // TKT-2026-0380: verificare anti-typo km / ore pe tot fișierul, o singură confirmare cu lista.
+    // Istoricul se citește de la un an înainte de prima dată din fișier (referința = ultimele citiri).
+    if (deInserat.length) {
+      const prima = deInserat.map(r => r.data_alimentare).filter(Boolean).sort()[0]
+      const deLa = prima ? new Date(Date.UTC(Number(prima.slice(0, 4)) - 1, Number(prima.slice(5, 7)) - 1, Number(prima.slice(8, 10)))).toISOString().slice(0, 10) : null
+      const ok = await confirmaCitiriAlimentari(supabase,
+        deInserat.map(r => ({ ...r, eticheta: `${r.data_alimentare} · ${r.activ_label}` })), { deLa })
+      if (!ok) { showToast('Import anulat: corectează citirile semnalate în fișier și reîncarcă-l.', 'info'); return }
+    }
     const payload = deInserat.map(r => {
       const { activ_label, site_label, ...rest } = r  // strip label-uri UI-only
       return { ...rest, pret_per_litru: r.pret_total && r.cantitate_litri ? Number((r.pret_total / r.cantitate_litri).toFixed(4)) : null, created_by: user?.id }
