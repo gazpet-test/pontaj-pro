@@ -170,8 +170,10 @@ def main(a):
     if ramas.rstrip(b"\r\n") != b"END $critic$;":
         esec(f"dupa bucata stearsa trebuie sa ramana doar END $critic$; (ramas {ramas[:60]!r})")
     linii = R.split(b"\n")
-    if len(linii) < 2 or not linii[0].strip().startswith(b"--") or \
-            not linii[1].strip().startswith(b"IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'"):
+    # r21: postconditia = apelul portii intr-o variabila, apoi refuzul cu lista portilor in mesaj
+    if len(linii) < 3 or not linii[0].strip().startswith(b"--") or \
+            linii[1].strip() != b"v_porti := public.fn_portal_porti_lipsa();" or \
+            not linii[2].strip().startswith(b"IF v_porti IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED"):
         esec("bucata stearsa trebuie sa inceapa cu un comentariu urmat de postconditie (nimic din pasii 1-4)")
     if C.count(b"PORTAL_POSTCONDITION_FAILED") != 1 or b"PORTAL_POSTCONDITION_FAILED" in D:
         esec("postconditia trebuie sa fie doar in bucata stearsa")

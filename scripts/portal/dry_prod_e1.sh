@@ -22,6 +22,8 @@
 #      se pastreaza; se tiparesc timpii: lock-uri (PORTAL_LOCKS), sfarsitul fiecarei migrari (LIVRARE_TIMP), garda
 #      (PLAFON_TIMP), total;
 #   5. DUPA: aceeasi amprenta (TREBUIE identica) + istoricul fara 18a / 19a.
+# r21: postconditia 18a / 19a spune in mesaj ce porti lipsesc; la PROBA PICATA lista ajunge in porti_postconditie.txt
+# (o poarta pe linie) si in iesire; NOTICE-ul PORTAL_NET_REL (obiectele pg_net acceptate prin amprenta) apare la timpi.
 # Cod de iesire: 0 PROBA OK (garda trecuta, ROLLBACK, amprenta identica) | 1 PROBA PICATA (refuz / timeout / garda;
 #   amprenta identica, nimic schimbat) | 2 argumente | 3 generare / verificare locala | 22 tinta neconfirmata (inainte de
 #   proba, nimic trimis) | 5 AMPRENTA DIFERITA dupa proba (se analizeaza manual; o alta sesiune poate fi schimbat schema
@@ -244,13 +246,20 @@ t0="$(date +%s%3N)"; rc=0
   >"$JURNAL/$OUT_J" 2>&1 || rc=$?
 t1="$(date +%s%3N)"
 echo "--- ${PFX}timpi (din jurnalul probei, ms de la BEGIN) ---"
-grep -E 'PORTAL_LOCKS|LIVRARE_TIMP|PLAFON_TIMP|PORTAL_1B_RECONCILIATE' "$JURNAL/$OUT_J" | sed 's/^.*NOTICE: *//' || true
+grep -E 'PORTAL_LOCKS|LIVRARE_TIMP|PLAFON_TIMP|PORTAL_1B_RECONCILIATE|PORTAL_NET_REL:' "$JURNAL/$OUT_J" | sed 's/^.*NOTICE: *//' || true
 echo "${PFX}total psql (conectare + SET + trimiterea mesajului + executie + RESET): $((t1 - t0)) ms; cod psql $rc"
 REZ=0
 if [ "$rc" != 0 ] || ! grep -q "PLAFON_TIMP $NUME_FIN: garda trecuta" "$JURNAL/$OUT_J"; then
   REZ=1
   echo "✗ ${PFX}PROBA PICATA (cod psql $rc). Motivul (ultimele linii ale jurnalului):" >&2
   grep -E 'ERROR|FATAL|terminating|MESAJ_UNIC|PLAFON_|PORTAL_|DIAG_PORTI' "$JURNAL/$OUT_J" | tail -n 8 >&2 || tail -n 8 "$JURNAL/$OUT_J" >&2
+  # r21: postconditia 18a / 19a numeste portile lipsa in mesaj => le scriem o poarta pe linie (porti_postconditie.txt).
+  tr -d '\r' <"$JURNAL/$OUT_J" | sed -nE 's/^.*PORTAL_(POSTCONDITION_FAILED|1B_POSTCONDITION): [0-9]+ porti: //p' | head -n 1 \
+    | awk -F'; ' '{ for (i = 1; i <= NF; i++) print $i }' >"$JURNAL/porti_postconditie.txt" || true
+  if [ -s "$JURNAL/porti_postconditie.txt" ]; then
+    echo "--- ${PFX}portile lipsa, din mesajul postconditiei ($(wc -l <"$JURNAL/porti_postconditie.txt" | tr -d ' ')) ---" >&2
+    sed "s/^/${PFX}/" "$JURNAL/porti_postconditie.txt" >&2
+  fi
 fi
 if [ "$DIAG" = 1 ]; then
   # r19: lista portilor din NOTICE-uri (psql nativ pe Windows scrie CRLF). Completitudine (L12): numarul anuntat de

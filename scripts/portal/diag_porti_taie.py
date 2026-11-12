@@ -7,7 +7,7 @@ Utilizare: python3 scripts/portal/diag_porti_taie.py <copia 18a> <iesire>
 Taietura, pe marcajele EXISTENTE din 18a (octeti, fara regex pe SQL; refuz daca vreunul nu apare exact o data):
   * inceputul = linia „  -- 5. postconditia (poarta completa) si amprenta pentru revenire” (comentariul pasului 5);
   * sfarsitul = linia „END $critic$;” (pastrata, cu tot ce urmeaza dupa ea: doar sfarsitul de linie);
-  * intre ele trebuie sa fie linia postconditiei (IF public.fn_portal_porti_lipsa() <> ... PORTAL_POSTCONDITION_FAILED),
+  * intre ele trebuie sa fie postconditia (r21: v_porti := public.fn_portal_porti_lipsa(); apoi refuzul cu lista),
     iar „PORTAL_POSTCONDITION_FAILED” sa apara o singura data in tot fisierul (deci copia taiata nu-l mai contine);
   * „DO $critic$” exact o data, inaintea inceputului (taietura e in corpul lui $critic$, care ramane inchis).
 Iesire 0 = copia scrisa (tipareste DIAG_TAIE_OK ...); 1 = refuz (motivul pe stderr), nimic scris.
@@ -17,7 +17,10 @@ import sys
 
 INCEPUT = b"  -- 5. postconditia (poarta completa) si amprenta pentru revenire"
 SFARSIT = b"END $critic$;"
-POSTCOND = b"IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'; END IF;"
+# r21: postconditia are acum doua linii (apelul portii intr-o variabila + refuzul cu lista portilor in mesaj).
+APEL = b"  v_porti := public.fn_portal_porti_lipsa();"
+POSTCOND = (b"IF v_porti IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED: % porti: %', "
+            b"coalesce(cardinality(v_porti)::text, 'NECUNOSCUT'), coalesce(array_to_string(v_porti, '; '), 'NECUNOSCUT'); END IF;")
 CRITIC = b"DO $critic$"
 
 
@@ -50,15 +53,15 @@ def main(a):
         refuz("DO $critic$ trebuie sa apara exact o data, inaintea pasului 5")
     if not i < s:
         refuz("pasul 5 trebuie sa fie inaintea lui END $critic$;")
-    if b.count(b"PORTAL_POSTCONDITION_FAILED") != 1 or b.count(POSTCOND) != 1:
-        refuz("postconditia trebuie sa apara exact o data")
-    p = b.index(POSTCOND)
-    if not i < p < s:
-        refuz("postconditia nu e intre pasul 5 si END $critic$;")
+    if b.count(b"PORTAL_POSTCONDITION_FAILED") != 1 or b.count(POSTCOND) != 1 or b.count(APEL) != 1:
+        refuz("postconditia (apelul portii + refuzul) trebuie sa apara exact o data")
+    p, pa = b.index(POSTCOND), b.index(APEL)
+    if not i < pa < p < s:
+        refuz("postconditia nu e intre pasul 5 si END $critic$; (apelul portii inaintea refuzului)")
     if b[s + len(SFARSIT):].strip(b"\r\n") != b"":
         refuz("dupa END $critic$; mai urmeaza ceva (fisierul nu mai are forma revizuita)")
     rez = b[:i] + b[s:]
-    if b"PORTAL_POSTCONDITION_FAILED" in rez or b"fn_portal_porti_lipsa() <>" in rez:
+    if b"PORTAL_POSTCONDITION_FAILED" in rez or APEL in rez:
         refuz("copia taiata inca contine postconditia (eroare interna)")
     with open(a[2], "xb") as f:
         f.write(rez)

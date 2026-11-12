@@ -205,6 +205,15 @@ q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer 
 "${ADMIN[@]}" -d "$DB" -c 'ALTER FUNCTION net.portal_fixture_net_02() OWNER TO supabase_auth_admin' >/dev/null
 hold_18a "$MIG" PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED net_owner
 "${ADMIN[@]}" -d "$DB" -c 'ALTER FUNCTION net.portal_fixture_net_02() OWNER TO postgres' >/dev/null
+# r21 (varianta c): obiectele pg_net (in forma productiei, cu PUBLIC) trec preconditia DOAR cu amprenta revizuita; un drept
+# in plus pe coada sau un al patrulea obiect in net cu drept PUBLIC, inainte de apply = refuz atomic care le numeste.
+"${ADMIN[@]}" -d "$DB" -c 'GRANT SELECT ON net.http_request_queue TO anon' >/dev/null
+hold_18a "$MIG" 'PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: net.http_request_queue' net_rel_drept
+"${ADMIN[@]}" -d "$DB" -c 'REVOKE SELECT ON net.http_request_queue FROM anon' >/dev/null
+"${ADMIN[@]}" -d "$DB" -c 'CREATE TABLE net.portal_mutant (id integer); GRANT SELECT ON net.portal_mutant TO PUBLIC' >/dev/null
+hold_18a "$MIG" 'PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: net.portal_mutant' net_rel_obiect_nou
+"${ADMIN[@]}" -d "$DB" -c 'DROP TABLE net.portal_mutant' >/dev/null
+echo 'NET_REL 18a: drept in plus pe coada / obiect nou in net inainte de apply => refuz atomic care le numeste'
 # r10 (Jakarinos r9 P2): tot ce precede $locks$ ruleaza fara niciun lock pe tabelele utilizatorilor (pg_locks, bariera).
 TAB_UTIL='auth.users public.employees public.profiles public.user_module_access'
 TAB_18A='public.conturi_tip public.conturi_teren public.conturi_tip_jurnal public.portal_public_baseline'
@@ -246,6 +255,12 @@ q "CREATE TABLE public.diag_poarta_fixture(id integer); GRANT SELECT ON public.d
 rc="$(dry_e1 proba_stricata --doar-18a)"
 [[ "$rc" == 1 ]] && grep -q PORTAL_POSTCONDITION_FAILED "$TMP/dry_proba_stricata/proba.out" \
   || { cat "$TMP/dry_proba_stricata.log"; fail "dry_prod cu poarta stricata: asteptat cod 1 + PORTAL_POSTCONDITION_FAILED, primit $rc"; }
+# r21: mesajul postconditiei numeste EXACT portile lipsa (aceeasi lista ca diagnosticul, in ordine); obiectele pg_net
+# (cu drepturile productiei) NU apar: sunt acceptate prin amprenta.
+grep -q 'PORTAL_POSTCONDITION_FAILED: 2 porti: relatie:diag_poarta_fixture; secventa:diag_poarta_fixture_seq' "$TMP/dry_proba_stricata/proba.out" \
+  || { cat "$TMP/dry_proba_stricata/proba.out"; fail 'postconditia: mesajul nu numeste exact cele doua porti'; }
+[[ "$(cat "$TMP/dry_proba_stricata/porti_postconditie.txt")" == $'relatie:diag_poarta_fixture\nsecventa:diag_poarta_fixture_seq' ]] \
+  || { cat "$TMP/dry_proba_stricata.log"; fail 'dry_prod: porti_postconditie.txt diferit de lista din mesaj'; }
 rc="$(dry_e1 diag_stricata --diagnostic-porti)"
 [[ "$rc" == 0 ]] || { cat "$TMP/dry_diag_stricata.log"; fail "diagnostic cu poarta stricata: cod $rc, asteptat 0"; }
 [[ "$(cat "$TMP/dry_diag_stricata/porti_lipsa.txt")" == $'relatie:diag_poarta_fixture\nsecventa:diag_poarta_fixture_seq' ]] \
@@ -266,9 +281,15 @@ q "CREATE SCHEMA cron; CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, comma
   || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql pe clusterul PG17'; }
 q "DROP TABLE cron.job; DROP SCHEMA cron" >/dev/null
 sect() { grep -E "^$1\|" "$TMP/porti_citire.out" | cut -d'|' -f"$2" | paste -sd, -; }
-[[ "$(sect A_scheme 2)" == information_schema,net,public && "$(sect B_relatii 3)" == diag_poarta_fixture \
-   && "$(sect C_secvente 3)" == diag_poarta_fixture_seq && -z "$(sect D_functii 3)" ]] \
+# r21: B / C au in plus obiectele pg_net (drepturile productiei, PUBLIC inclus); G le da EXACT md5-urile din lista 18a,
+# deci diagnosticul = B / C fara obiectele acceptate prin amprenta (paritate L19); M = cele 21 + 12 functii sintetice.
+[[ "$(sect A_scheme 2)" == information_schema,net,public && "$(sect B_relatii 3)" == _http_response,http_request_queue,diag_poarta_fixture \
+   && "$(sect C_secvente 3)" == http_request_queue_id_seq,diag_poarta_fixture_seq && -z "$(sect D_functii 3)" ]] \
   || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql: A / B / C / D diferite de diagnosticul portii'; }
+[[ "$(grep -E '^G_amprenta_net\|' "$TMP/porti_citire.out" | cut -d'|' -f2,3 | paste -sd, -)" == \
+   'net._http_response|af629f9c5992f34ede3bc889d2db669c,net.http_request_queue|e0e96a399d23c7eb05ca2216618e1b72,net.http_request_queue_id_seq|d7e907e6bf5f93c94b754f45839161d1' ]] \
+  || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql G: fixture-ul pg_net nu are amprentele productiei'; }
+[[ "$(grep -cE '^M_teren_executa\|' "$TMP/porti_citire.out")" == 33 ]] || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql M: asteptat 21 + 12 functii'; }
 [[ "$(q "$STARE_DIAG")" == t ]] || fail 'porti_citire.sql: a ramas ceva'
 echo "PORTI_CITIRE: B=$(sect B_relatii 3) C=$(sect C_secvente 3) D=0 (= diagnosticul), ROLLBACK"
 q "DROP TABLE public.diag_poarta_fixture; DROP SEQUENCE public.diag_poarta_fixture_seq" >/dev/null
@@ -292,6 +313,37 @@ q 'GRANT teren TO postgres WITH INHERIT FALSE, SET TRUE' >/dev/null
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1a.test.sql" >"$TMP/tests.log" 2>&1 || { cat "$TMP/tests.log"; fail tests; }
 grep -q PORTAL_E1_1A_TEST_END "$TMP/tests.log" || fail 'test end marker'
 [[ "$(q 'SELECT public.fn_portal_porti_lipsa()')" == '{}' ]] || fail gate
+# r21 (varianta c): dupa apply, obiectele pg_net (drepturile productiei) sunt acceptate DOAR cu amprenta identica. Fiecare
+# abatere inroseste poarta cu numele obiectului; revenirea la forma revizuita o face din nou verde. Retragerea drepturilor
+# PUBLIC (cererea catre suport) e legitima: poarta ramane verde.
+poarta_are() { [[ "$(q "SELECT '$1' = ANY(public.fn_portal_porti_lipsa())")" == t ]] || fail "poarta nu a prins: $1 ($2)"; }
+poarta_verde() { [[ "$(q 'SELECT public.fn_portal_porti_lipsa()')" == '{}' ]] || fail "poarta trebuia verde: $1"; }
+adm() { "${ADMIN[@]}" -d "$DB" -c "$1" >/dev/null; }
+adm 'GRANT SELECT ON net.http_request_queue TO anon'; poarta_are 'relatie:http_request_queue' 'drept in plus pe coada'
+adm 'REVOKE SELECT ON net.http_request_queue FROM anon'; poarta_verde 'drept retras'
+adm 'GRANT USAGE ON SEQUENCE net.http_request_queue_id_seq TO anon'; poarta_are 'secventa:http_request_queue_id_seq' 'drept in plus pe secventa'
+adm 'REVOKE USAGE ON SEQUENCE net.http_request_queue_id_seq FROM anon'; poarta_verde 'drept pe secventa retras'
+adm 'ALTER TABLE net._http_response ADD COLUMN portal_mutant text'; poarta_are 'relatie:_http_response' 'coloana noua'
+adm 'ALTER TABLE net._http_response DROP COLUMN portal_mutant'; poarta_verde 'coloana stearsa'
+adm 'ALTER TABLE net._http_response OWNER TO postgres'; poarta_are 'relatie:_http_response' 'alt proprietar'
+adm 'ALTER TABLE net._http_response OWNER TO supabase_admin'; poarta_verde 'proprietar refacut'
+adm 'CREATE TABLE net.portal_mutant (id integer); GRANT SELECT ON net.portal_mutant TO PUBLIC'; poarta_are 'relatie:portal_mutant' 'al patrulea obiect in net'
+adm 'DROP TABLE net.portal_mutant'; poarta_verde 'obiect sters'
+adm "ALTER ROLE authenticator SET pgrst.db_schemas = 'public, net'"; poarta_are 'teren PostgREST expune net' 'net in schemele PostgREST'
+adm 'ALTER ROLE authenticator RESET pgrst.db_schemas'; poarta_verde 'setarea PostgREST stearsa'
+adm 'REVOKE ALL ON net.http_request_queue, net._http_response FROM PUBLIC; REVOKE ALL ON SEQUENCE net.http_request_queue_id_seq FROM PUBLIC'
+poarta_verde 'PUBLIC retras (mai putin acces)'
+adm 'GRANT ALL ON net.http_request_queue, net._http_response TO PUBLIC; GRANT ALL ON SEQUENCE net.http_request_queue_id_seq TO PUBLIC'
+poarta_verde 'drepturile productiei refacute'
+# Ce poate teren la nivel SQL azi (prin PUBLIC), daca ar avea o cale de a rula SQL in net: scrie in coada, citeste
+# raspunsurile (E1_RAPORT.md r21). Tranzactie anulata.
+TEREN_SQL="$("${PSQL[@]}" -At -c 'BEGIN' -c 'SET LOCAL ROLE teren' \
+  -c "INSERT INTO net.http_request_queue (method, url, timeout_milliseconds) VALUES ('GET', 'https://exemplu.invalid/teren', 1) RETURNING 'coada:da'" \
+  -c "SELECT 'raspunsuri:' || count(*) FROM net._http_response" -c 'ROLLBACK' 2>&1)" || true
+[[ "$(printf '%s\n' "$TEREN_SQL" | grep -E '^(coada|raspunsuri):' | paste -sd' ' -)" == 'coada:da raspunsuri:0' ]] \
+  || { printf '%s\n' "$TEREN_SQL"; fail 'teren la nivel SQL: asteptat coada:da raspunsuri:0 (drepturile PUBLIC din productie)'; }
+[[ "$(q 'SELECT count(*) FROM net.http_request_queue')" == 0 ]] || fail 'teren la nivel SQL: a ramas un rand in coada'
+echo 'NET_REL 18a: 6 abateri pg_net / PostgREST => poarta rosie cu numele lor, refacute => verde; PUBLIC retras => verde; teren la nivel SQL: coada + raspunsuri (fara cale de SQL in net)'
 MIG_1B_SRC="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
 REV_1B="$ROOT/supabase/revenire/20261119a_portal_teren_provisioning_ROLLBACK.sql"
 baseline "$TMP/before_1b.sql"
@@ -475,7 +527,7 @@ lock_cap_toate rev18a "$ATTESTED_REV" "SELECT to_regclass('public.conturi_tip') 
 masurat rev18a "$TMP/rollback.log" runner 20261118120001 "$ATTESTED_REV"
 [[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 ]] || fail 'role left'
 [[ "$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('conturi_tip','conturi_teren','conturi_tip_jurnal','conturi_tip_jurnal_id_seq')")" == 0 ]] || fail 'tables left'
-[[ "$(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_teren_eligibil','fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil')")" == 0 ]] || fail 'functions left'
+[[ "$(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_teren_eligibil','fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_net_rel_aprobat','fn_portal_net_rel_amprenta','fn_portal_net_rel_acceptat','fn_portal_teren_rel_drept')")" == 0 ]] || fail 'functions left'
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_stub.test.sql" >"$TMP/stub.log" 2>&1 || { cat "$TMP/stub.log"; fail stub; }
 baseline "$TMP/after.sql" omit-stub
 roles "$TMP/roles_after.json"

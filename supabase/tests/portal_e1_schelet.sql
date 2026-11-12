@@ -93,3 +93,14 @@ BEGIN
  END LOOP;
 END $fixture$;
 RESET ROLE;
+-- r21: tabelele pg_net in forma de PE PRODUCTIE (12.11.2026, porti_citire.sql B / C / G): proprietar supabase_admin,
+-- aceleasi coloane si TOATE drepturile pentru PUBLIC (acordate de supabase_admin), ca harness-ul sa nu treaca pe o stare
+-- mai curata decat cea reala. Amprentele lor = exact md5-urile din lista 18a (fn_portal_net_rel_aprobat), verificat de
+-- harness (porti_citire.sql G) si de scripts/portal/net_rel_pglite.mjs. Fara randuri.
+CREATE TYPE net.http_method AS ENUM ('GET','POST','DELETE');
+CREATE TABLE net.http_request_queue (id bigserial NOT NULL, method net.http_method NOT NULL, url text NOT NULL,
+ headers jsonb, body bytea, timeout_milliseconds integer NOT NULL);
+CREATE UNLOGGED TABLE net._http_response (id bigint, status_code integer, content_type text, headers jsonb, content text,
+ timed_out boolean, error_msg text, created timestamptz NOT NULL DEFAULT now());
+GRANT ALL ON net.http_request_queue, net._http_response TO PUBLIC;
+GRANT ALL ON SEQUENCE net.http_request_queue_id_seq TO PUBLIC;

@@ -1199,3 +1199,93 @@ originea drepturilor in F).
 | L19 | Paritate `porti_citire.sql` = diagnosticul portii pe acelasi cluster (B / C / D). |
 | L25 | Expected din productie (B, mesajele de eroare), PG17 real in harness + PGlite; controale pe forma veche si pe REVOKE. |
 | restul | n/a (script de citire + teste + raport; fara schema, RPC, date sau drepturi noi). |
+
+## E1-1a/1b r21 — 12.11.2026 (varianta c pregatita ca DRAFT: poarta accepta cele trei obiecte pg_net doar cu amprenta din productie)
+
+Decizia owner-ului intre (c) si cererea la suportul Supabase NU e luata; (c) e gata de review daca o alege. Cele doua nu se
+exclud: daca suportul retrage drepturile PUBLIC, poarta ramane verde fara nicio schimbare (vezi „mai putin acces”).
+**SHA-urile celor 4 fisiere se schimba** (18a, 19a, ambele reveniri) => review nou pe toate.
+
+### Ce s-a schimbat
+- **18a, lista unica**: `fn_portal_net_rel_aprobat()` (marcajul listei in corp) = `net._http_response`,
+  `net.http_request_queue`, `net.http_request_queue_id_seq`, cu md5-urile citite pe productie (porti_citire.sql G, 12.11).
+  Nu se invata la apply; se schimba doar prin review.
+- **18a, definitia unica a amprentei (L19)**: `fn_portal_net_rel_amprenta(oid)` = exact expresia sectiunii G (tip,
+  proprietar, ACL, RLS, FORCE RLS, coloane cu tip / NOT NULL / ACL), acelasi search_path (`pg_catalog, pg_temp`).
+  Textul dintre marcajele `AMPRENTA_NET_REL` e identic in migrare si in porti_citire.sql (test static).
+- **18a, predicatele comune**: `fn_portal_net_rel_acceptat(oid)` (in net + in lista + amprenta identica; lipsa = fals) si
+  `fn_portal_teren_rel_drept(oid)` (orice drept al lui teren pe tabel / coloane / secventa). Poarta si preconditia le
+  folosesc pe amandoua; bucla relatiilor din poarta nu mai calculeaza dreptul a doua oara.
+- **Poarta**: un obiect din net trece DOAR daca e acceptat; orice drept nou (tabel, coloana, secventa), coloana noua, tip
+  schimbat, alt proprietar, RLS pornit sau alt obiect in net = `relatie:<nume>` / `secventa:<nume>`, ca pana acum.
+  Mai putin acces (PUBLIC retras de proprietar) = obiectul nu mai e accesibil, poarta nu-l mai priveste (verde).
+  Nou: `teren PostgREST expune net` daca setarile PostgREST scrise IN baza (rolul authenticator) contin net.
+- **Preconditia `$public_pre$`**: forma listei (`PORTAL_NET_REL_LIST_INVALID`); orice obiect din net accesibil lui teren
+  si neacceptat = `PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: <obiectele>`, refuz atomic; NOTICE `PORTAL_NET_REL: n obiecte
+  pg_net accesibile prin PUBLIC, toate cu amprenta revizuita (3 in lista)`.
+- **Postconditiile spun ce lipseste**: `PORTAL_POSTCONDITION_FAILED: <n> porti: <lista>` (18a) si
+  `PORTAL_1B_POSTCONDITION: <n> porti: <lista>` (19a); comparatia e `IS DISTINCT FROM` (o poarta NULL nu mai trece).
+  Revenirile: `PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG: amprenta <identica|schimbata fata de apply>; porti: <lista>` (la fel
+  1b), `PORTAL_1B_ROLLBACK_POSTCONDITION: porti 18a: <lista>`. Doar nume de obiecte de schema, fara date.
+- **Revenirea 18a**: amprenta DDL si stergerile includ cei 4 helperi. **19a**: `fn_portal_1b_snapshot` ii amprenteaza.
+- **porti_citire.sql**: G cu marcajele definitiei unice; sectiune noua M (ce functii poate rula teren: schema, semnatura,
+  DEFINER, functie de trigger, cuvantul EXECUTE in corp, apel pg_net; doar adevarat / fals, fara corpuri).
+- **dry_prod_e1.sh**: la proba picata, lista din mesajul postconditiei in `porti_postconditie.txt` (o poarta pe linie);
+  NOTICE-ul `PORTAL_NET_REL` la timpi. **scheme_expuse.sh** (nou): schemele expuse de API, citite din raspunsul API-ului.
+- **Diagnosticul r19** (`diag_porti_taie.py`, verificatorul mesajului, testele lui): adaptate la postconditia pe doua linii.
+- **Harness**: scheletul are tabelele pg_net in forma productiei (proprietar supabase_admin, toate drepturile pentru
+  PUBLIC), deci harness-ul nu mai trece pe o stare mai curata decat cea reala; amprentele lor = exact lista de productie
+  (verificat prin G), deci copia de harness NU inlocuieste lista.
+
+### Ce poate face rolul `teren` cu pg_net (raspunsul cerut, probat)
+1. **La nivel SQL, da**: prin drepturile PUBLIC de pe productie, `teren` ar putea apela cele 12 functii `net.*`
+   (inclusiv `http_get` / `http_post` / `http_delete`: cereri HTTP trimise de baza), ar putea scrie direct in coada si
+   ar putea citi coada si raspunsurile tuturor apelurilor pg_net. Probat: PGlite (`net_rel_pglite.mjs`: inserare in coada
+   si citirea raspunsurilor ca `teren`) si harness-ul PG17 (aceeasi proba, tranzactie anulata). Poarta NU poate inchide
+   asta: drepturile sunt ale lui `supabase_admin`, iar un REVOKE dat de `postgres` nu are efect (r20).
+2. **Ce il opreste azi** (toate trei trebuie sa ramana adevarate; primele doua le impune poarta, a treia scriptul):
+   - `teren` nu se poate loga (NOLOGIN, membru in nimic, NOINHERIT; poarta: `teren atribute` / `teren membership`);
+   - functiile pe care le poate rula = exact cele 21 din public + cele 12 din net, cu corpul / DEFINER / ACL fixate prin
+     md5 (orice functie noua = `functie:<semnatura>`); singura DEFINER e o functie de trigger (nu se poate apela direct);
+     porti_citire.sql M (de rulat pe productie) arata, fara corpuri, daca vreuna are SQL dinamic (asteptat: niciuna din public);
+   - API-ul REST (singura cale a lui `teren` spre baza) cheama doar tabele / functii din schemele expuse; `net` nu are
+     voie sa fie expusa. Din baza se vede doar configurarea scrisa in baza (poarta + porti_citire.sql J; pe productie J =
+     0 randuri); configurarea proiectului se citeste din raspunsul API-ului cu `scripts/portal/scheme_expuse.sh` (cod 1 daca
+     net e expusa, 2 = necunoscut), la fiecare proba / livrare 18a-19a.
+3. **Inchiderea completa** = drepturile PUBLIC retrase de proprietar (cererea catre suport, in raportul intern r21).
+   Daca se intampla, poarta ramane verde (mai putin acces), iar lista din 18a poate fi golita intr-o migrare ulterioara.
+
+### Teste r21
+- `python3 scripts/portal/test_static_net_rel.py` — 12 OK: definitia unica (text identic + search_path), lista unica cu
+  valorile productiei (expected din jurnalul citirii), aceleasi predicate in poarta si preconditie, helperii peste tot
+  (verificarea „exista”, amprenta DDL 18a = revenire 18a, stergeri, lista 1b, harness), postconditii cu lista si
+  `IS DISTINCT FROM`; 11 mutanti refuzati cu motivul exact.
+- `node scripts/portal/net_rel_pglite.mjs` (PGlite PG17, `npm install --no-save @electric-sql/pglite@0.3`) — 24 OK: schema
+  falsa in forma productiei da EXACT md5-urile productiei; paritate G = helperul; 9 mutanti (drept pe tabel / coloana /
+  secventa, coloana noua, tip schimbat, alt proprietar, RLS, obiect nou, PUBLIC retras); `teren` la nivel SQL; conditia
+  PostgREST pe 5 cazuri (inclusiv `network`, fara potrivire pe subsir).
+- Restul statice: `test_static.py` 8, `test_static_1b.py` 12, `test_static_r2.py` 2, `test_static_diag_porti.py` 18,
+  `test_static_porti_citire.py` 24, `scripts/test_livrare_validator_plafon.py` PASS; `porti_citire_pglite.mjs` 29 OK.
+- Test de fum local (PGlite, o sesiune, fixture-ul harness-ului, postgres NOSUPERUSER; nu e in repo): 18a cu drept in plus /
+  obiect nou in net = refuz care le numeste; poarta stricata = `PORTAL_POSTCONDITION_FAILED: 2 porti: relatie:...;
+  secventa:...`; apply 18a, poarta verde, 6 abateri dupa apply = rosu cu numele lor, reparate = verde; testele 1a; 19a
+  (copia cu ancorele clusterului) + testele 1b; revenirile 19a si 18a refuzate cu mesajul nou, apoi reale. Concurenta,
+  plafonul si traficul raman la harness-ul PG17.
+- Harness PG17 (`scripts/test_portal_e1.sh`, coordonatorul): refuzurile `PORTAL_NET_REL_UNREVIEWED_OR_CHANGED` inainte de
+  apply; mesajul postconditiei si `porti_postconditie.txt` cu exact cele doua porti; porti_citire.sql B / C cu obiectele
+  pg_net, G = md5-urile productiei, M = 33; dupa apply 6 abateri rosii + refacute verzi, PUBLIC retras verde; `teren` la
+  nivel SQL; „functii ramase” cu cei 4 helperi.
+- **Nerulate de mine**: harness-ul PG17, `bash -n`, `scheme_expuse.sh --test` (bash cere aprobare pe acest server).
+
+| Regula | Dovada r21 |
+|---|---|
+| L07 | Regula de acces in BD: poarta + preconditia (fara cai ocolitoare); `teren` fara cale de SQL, verificata pe trei niveluri. |
+| L12 | Lista portilor completa in mesaj; obiect accesibil dar neacceptat = refuz numit; necunoscut (NULL) = `NECUNOSCUT`, nu „0”. |
+| L13 | Chei `^net[.][a-z_][a-z0-9_]*$`, md5 `^[0-9a-f]{32}$`; LIKE fara backslash (`_` mai larg = mai strict); test `network`. |
+| L14 | O tranzactie; preconditie inainte de orice obiect; reveniri cu lock inaintea verificarii, refuz cu motiv; fum apply -> revenire. |
+| L15 | Amprenta pe structura + proprietar + ACL (si pe coloane), fixata inainte de apply din productie, nu invatata; enumerare din catalog, fara regex pe SQL. |
+| L18 | `IS DISTINCT FROM` la toate postconditiile / refuzurile; `IS TRUE` / `IS NOT TRUE` pe predicate; cheie lipsa = fals. |
+| L19 | O definitie a amprentei (text identic, test static + paritate PGlite), un predicat de acces si unul de acceptare, folosite si de poarta si de preconditie. |
+| L20 | Cai legitime: forma productiei verde, PUBLIC retras verde, coloana stearsa verde, revenire dupa reparare. |
+| L25 | Expected din jurnalul productiei; fixture cu aceleasi drepturi ca productia (PUBLIC inclus); NOSUPERUSER; PG17 real la harness. |
+| restul | n/a (fara cozi, bani, AI, UI; L01 / L06 neschimbate: nicio ordine noua de lock). |

@@ -11,6 +11,8 @@
 --      has_sequence_privilege a primit un index, eroare "is not a sequence" pe productie);
 --   D: semnatura construita explicit (nu ::regprocedure, care depinde de search_path), ordonare COLLATE "C".
 -- Sectiunile E-L sunt noi (decizia a / b / c din E1_RAPORT.md r20).
+-- r21: G = definitia unica a amprentei (aceeasi expresie ca fn_portal_net_rel_amprenta din 18a, intre marcajele
+--   AMPRENTA_NET_REL); M = ce functii poate rula teren (doar adevarat / fals, fara corpuri).
 BEGIN READ ONLY;
 SET LOCAL statement_timeout = '30s';
 SET LOCAL lock_timeout = '2s';
@@ -123,15 +125,21 @@ SELECT 'F_net_drepturi' AS sectiune, x.relatie, x.tip, x.proprietar, x.beneficia
          GROUP BY c.oid, c.relname, c.relkind, c.relowner, a.grantee, a.grantor) x
  ORDER BY x.relatie COLLATE "C", x.beneficiar COLLATE "C", x.acordat_de COLLATE "C";
 
--- G. Amprenta de structura a relatiilor / secventelor din net la care ajunge PUBLIC (doar pentru varianta c: literalii
---    revizuiti din 18a). Structura = tip, proprietar, ACL, RLS, coloane (nume, tip, NOT NULL, ACL); fara randuri.
+-- G. Amprenta de structura a relatiilor / secventelor din net la care ajunge PUBLIC (varianta c: literalii revizuiti din
+--    18a, fn_portal_net_rel_aprobat). Structura = tip, proprietar, ACL, RLS, coloane (nume, tip, NOT NULL, ACL); fara
+--    randuri. r21: expresia dintre marcajele AMPRENTA_NET_REL e ACEEASI (text identic, testat static) cu corpul lui
+--    public.fn_portal_net_rel_amprenta din 18a, rulata cu acelasi search_path (pg_catalog, pg_temp) => md5_amprenta de aici
+--    = valoarea pe care o compara poarta. Lista din 18a se schimba DOAR prin review, cu valorile citite aici.
 SELECT 'G_amprenta_net' AS sectiune, x.relatie, md5(x.amprenta) AS md5_amprenta, x.amprenta
   FROM (SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS relatie,
-               jsonb_build_array(c.relkind::text, pg_get_userbyid(c.relowner), c.relacl::text, c.relrowsecurity,
+  -- AMPRENTA_NET_REL inceput
+  jsonb_build_array(c.relkind::text, pg_get_userbyid(c.relowner), c.relacl::text, c.relrowsecurity,
                  c.relforcerowsecurity,
                  (SELECT jsonb_agg(jsonb_build_array(at.attnum, at.attname::text, format_type(at.atttypid, at.atttypmod),
                                                      at.attnotnull, at.attacl::text) ORDER BY at.attnum)
-                    FROM pg_attribute at WHERE at.attrelid = c.oid AND at.attnum > 0 AND NOT at.attisdropped))::text AS amprenta,
+                    FROM pg_attribute at WHERE at.attrelid = c.oid AND at.attnum > 0 AND NOT at.attisdropped))::text
+  -- AMPRENTA_NET_REL sfarsit
+               AS amprenta,
                CASE WHEN c.relkind = 'S' THEN has_sequence_privilege('public', c.oid, 'USAGE,SELECT,UPDATE')
                     WHEN c.relkind IN ('r', 'p', 'v', 'm', 'f') THEN
                       has_table_privilege('public', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
@@ -210,5 +218,22 @@ SELECT 'L_triggere_net' AS sectiune, x.tabel, x.trigger_nume, x.functie, x.secur
            AND (n.nspname = 'supabase_functions'
                 OR p.prosrc ~ 'net[.]|http_request_queue|_http_response|http_collect_response')) x
  ORDER BY x.tabel COLLATE "C", x.trigger_nume COLLATE "C";
+
+-- M (r21). Ce poate rula rolul teren: toate functiile executabile prin PUBLIC din schemele la care ajunge, fara catalogul
+--    standard. teren nu se poate loga (NOLOGIN); ajunge la SQL doar prin PostgREST, care cheama numai functii din schemele
+--    expuse (J + scripts/portal/scheme_expuse.sh). Asteptat: exact cele 21 din public + cele 12 din net (D_numar);
+--    security_definer adevarat doar la functii de trigger (nu se pot apela direct); sql_dinamic (cuvantul EXECUTE in corp)
+--    fals la toate functiile din public. Corpul NU se afiseaza: doar adevarat / fals.
+SELECT 'M_teren_executa' AS sectiune, x.schema, x.functie, x.security_definer, x.trigger_fn, x.sql_dinamic, x.apel_net
+  FROM (SELECT n.nspname::text AS schema,
+               quote_ident(n.nspname) || '.' || quote_ident(p.proname) || '(' || oidvectortypes(p.proargtypes) || ')' AS functie,
+               p.prosecdef AS security_definer, p.prorettype = 'trigger'::regtype AS trigger_fn,
+               p.prosrc ~* '(^|[^a-z0-9_])execute([^a-z0-9_]|$)' AS sql_dinamic,
+               p.prosrc ~ 'net[.]|http_request_queue|_http_response|http_collect_response' AS apel_net
+          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
+           AND has_schema_privilege('public', n.oid, 'USAGE') AND has_function_privilege('public', p.oid, 'EXECUTE')
+           AND NOT (n.nspname = 'information_schema' AND p.oid < 16384 AND NOT p.prosecdef AND p.proowner = n.nspowner)) x
+ ORDER BY x.schema COLLATE "C", x.functie COLLATE "C";
 
 ROLLBACK;

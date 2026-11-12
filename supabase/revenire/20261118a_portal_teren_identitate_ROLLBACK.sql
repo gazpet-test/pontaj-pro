@@ -33,6 +33,8 @@
 --  la BEGIN (deci si de la primul lock) PANA LA INTRAREA IN COMMIT, altfel ROLLBACK la tot; timeout PostgreSQL, nu timp
 --  real strict; COMMIT-ul propriu-zis neplafonat (fara replicare sincrona = scrierea WAL). Reincercarea lock-urilor: pana
 --  la 1 s de la BEGIN. Dovedit in harness (lock_cap_refusal rev18a).
+-- r21 (varianta c, aceeasi forma ca 18a): amprenta DDL si stergerile includ cei 4 helperi noi ai portii
+--  (fn_portal_net_rel_aprobat / _amprenta / _acceptat, fn_portal_teren_rel_drept); refuzul spune ce s-a schimbat.
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -103,7 +105,7 @@ BEGIN
 END $locks$;
 -- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock) si stergerile.
 DO $critic$
-DECLARE v_snapshot jsonb;
+DECLARE v_snapshot jsonb; v_porti text[];
 BEGIN
   -- [check] amprenta + poarta, refuz la orice rand / configuratie noua
   SELECT jsonb_build_object(
@@ -115,7 +117,8 @@ BEGIN
       SELECT 'f:'||p.oid AS cheie,jsonb_build_array('functie',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig) AS obj
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil','fn_portal_porti_lipsa',
-        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')
+        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid',
+        'fn_portal_net_rel_aprobat','fn_portal_net_rel_amprenta','fn_portal_net_rel_acceptat','fn_portal_teren_rel_drept')
       UNION ALL
       SELECT 'r:'||c.oid,jsonb_build_array('relatie',c.relname,c.relkind,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
       FROM pg_class c WHERE c.oid IN ('public.conturi_tip'::regclass,'public.conturi_teren'::regclass,
@@ -143,9 +146,14 @@ BEGIN
       SELECT 's:'||s.seqrelid,to_jsonb(s) FROM pg_sequence s
       WHERE s.seqrelid='public.conturi_tip_jurnal_id_seq'::regclass
     ) x)) INTO v_snapshot;
+  -- r21: refuzul spune ce s-a schimbat (amprenta datelor / DDL fata de apply si lista portilor lipsa), fara date.
+  v_porti := public.fn_portal_porti_lipsa();
   IF v_snapshot IS DISTINCT FROM obj_description('public.conturi_tip'::regclass,'pg_class')::jsonb
-    OR public.fn_portal_porti_lipsa() <> '{}'::text[] THEN
-    RAISE EXCEPTION 'PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG'; END IF;
+    OR v_porti IS DISTINCT FROM '{}'::text[] THEN
+    RAISE EXCEPTION 'PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG: amprenta %; porti: %',
+      CASE WHEN v_snapshot IS DISTINCT FROM obj_description('public.conturi_tip'::regclass,'pg_class')::jsonb
+        THEN 'schimbata fata de apply' ELSE 'identica' END,
+      coalesce(nullif(array_to_string(v_porti, '; '), ''), CASE WHEN v_porti IS NULL THEN 'NECUNOSCUT' ELSE '0' END); END IF;
   -- [drop] tabelele cu FK (ACCESS EXCLUSIVE pe auth.users / employees, deja detinut), stub-ul hook-ului, restul
   DROP TABLE public.conturi_tip;
   DROP TABLE public.conturi_teren;
@@ -169,6 +177,11 @@ END $fn$;
   DROP FUNCTION public.fn_portal_catalog_amprenta(oid);
   DROP FUNCTION public.fn_teren_eligibil(uuid);
   DROP FUNCTION public.fn_portal_porti_lipsa();
+  -- r21: helperii portii (varianta c), dupa poarta care ii apeleaza; acceptat inaintea celor pe care ii apeleaza.
+  DROP FUNCTION public.fn_portal_net_rel_acceptat(oid);
+  DROP FUNCTION public.fn_portal_net_rel_aprobat();
+  DROP FUNCTION public.fn_portal_net_rel_amprenta(oid);
+  DROP FUNCTION public.fn_portal_teren_rel_drept(oid);
   DROP FUNCTION public.fn_portal_public_aprobat();
   DROP FUNCTION public.fn_conturi_tip_audit();
   DROP FUNCTION public.fn_conturi_jurnal_imuabil();

@@ -47,6 +47,16 @@
 -- PostgreSQL pe ceasul serverului, nu timp real strict (masurat: 2000-2003 ms). COMMIT-ul propriu-zis NU e plafonat (limita
 -- r11): pe productie, fara replicare sincrona (synchronous_standby_names gol), inseamna scrierea WAL a commit-ului.
 -- Asteptarea lock-urilor: NOWAIT + reincercare pana la 1 s de la BEGIN.
+-- r21 (12.11.2026, varianta c din E1_RAPORT.md r20; citirea read-only de pe productie, porti_citire.sql A-L):
+--  * obiectele pg_net la care ajunge teren prin PUBLIC (net._http_response, net.http_request_queue si secventa ei) sunt
+--    acceptate de poarta DOAR cu amprenta fixata din productie (lista unica: fn_portal_net_rel_aprobat, cu marcajul
+--    listei in corp; definitia amprentei: fn_portal_net_rel_amprenta = sectiunea G din porti_citire.sql, L19).
+--    Orice drept nou, coloana noua, alt proprietar sau alt obiect in net = poarta rosie, ca pana acum. Mai putine drepturi
+--    (PUBLIC retras de platforma) = obiectul nu mai e accesibil, poarta ramane verde;
+--  * dreptul lui teren pe o relatie / secventa = o singura functie (fn_portal_teren_rel_drept), folosita de poarta si de
+--    preconditia $public_pre$;
+--  * poarta: schemele expuse de PostgREST, daca sunt setate in baza (rolul authenticator), nu au voie sa contina net;
+--  * postconditia (pasul 5 din $critic$) spune in mesaj CE porti lipsesc: numarul si lista lor.
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -82,7 +92,8 @@ BEGIN
     OR to_regclass('public.conturi_tip_jurnal') IS NOT NULL
     OR EXISTS (SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil',
-        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')) THEN
+        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid',
+        'fn_portal_net_rel_aprobat','fn_portal_net_rel_amprenta','fn_portal_net_rel_acceptat','fn_portal_teren_rel_drept')) THEN
     RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';
   END IF;
 END $pre$;
@@ -257,6 +268,61 @@ LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $fn$
  FROM pg_class c WHERE c.oid=p_oid;
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_portal_catalog_amprenta(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): dreptul lui teren pe o relatie / secventa (orice drept: tabel, coloane; MAINTAIN doar din PG17).
+-- Definitia unica (L19), folosita de poarta (bucla relatiilor) si de preconditia $public_pre$. plpgsql: functia
+-- has_sequence_privilege nu primeste niciodata altceva decat o secventa (pe productie un index a rupt o citire, r20).
+CREATE FUNCTION public.fn_portal_teren_rel_drept(p_oid oid) RETURNS boolean
+LANGUAGE plpgsql STABLE SET search_path TO 'public','pg_temp' AS $fn$
+DECLARE v_kind "char";
+BEGIN
+  SELECT c.relkind INTO v_kind FROM pg_catalog.pg_class c WHERE c.oid=p_oid;
+  IF v_kind = 'S' THEN RETURN has_sequence_privilege('teren',p_oid,'USAGE,SELECT,UPDATE'); END IF;
+  IF v_kind IN ('r','p','v','m','f') THEN
+    -- MAINTAIN exista doar din PG17 (prod).
+    RETURN has_table_privilege('teren',p_oid,CASE WHEN current_setting('server_version_num')::int >= 170000
+        THEN 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        ELSE 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' END)
+      OR has_any_column_privilege('teren',p_oid,'SELECT,INSERT,UPDATE,REFERENCES');
+  END IF;
+  RETURN false;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_portal_teren_rel_drept(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): amprenta de structura a unui obiect din net = EXACT expresia sectiunii G din
+-- scripts/portal/porti_citire.sql (tip, proprietar, ACL, RLS, FORCE RLS, coloane: numar, nume, tip, NOT NULL, ACL), cu
+-- acelasi search_path (pg_catalog, pg_temp: tipul net.http_method se scrie calificat). Paritatea textului e testata static
+-- (scripts/portal/test_static_net_rel.py) si pe PostgreSQL (scripts/portal/net_rel_pglite.mjs). Fara randuri din tabele.
+CREATE FUNCTION public.fn_portal_net_rel_amprenta(p_oid oid) RETURNS text
+LANGUAGE sql STABLE SET search_path TO 'pg_catalog','pg_temp' AS $fn$
+ SELECT
+  -- AMPRENTA_NET_REL inceput
+  jsonb_build_array(c.relkind::text, pg_get_userbyid(c.relowner), c.relacl::text, c.relrowsecurity,
+                 c.relforcerowsecurity,
+                 (SELECT jsonb_agg(jsonb_build_array(at.attnum, at.attname::text, format_type(at.atttypid, at.atttypmod),
+                                                     at.attnotnull, at.attacl::text) ORDER BY at.attnum)
+                    FROM pg_attribute at WHERE at.attrelid = c.oid AND at.attnum > 0 AND NOT at.attisdropped))::text
+  -- AMPRENTA_NET_REL sfarsit
+   FROM pg_class c WHERE c.oid = p_oid;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_portal_net_rel_amprenta(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): LISTA UNICA a obiectelor pg_net acceptate de poarta, cu md5-ul amprentei citit read-only pe productie
+-- (12.11.2026, porti_citire.sql sectiunea G; textul amprentei e in jurnalul citirii). Cheia = schema.nume (quote_ident).
+-- Se schimba DOAR prin review (SHA nou); nu se invata la apply.
+CREATE FUNCTION public.fn_portal_net_rel_aprobat() RETURNS jsonb
+LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $netrel$
+ -- PORTAL_NET_REL_APROBAT: net._http_response, net.http_request_queue, net.http_request_queue_id_seq (productie, 12.11.2026)
+ SELECT '{"net._http_response":"af629f9c5992f34ede3bc889d2db669c","net.http_request_queue":"e0e96a399d23c7eb05ca2216618e1b72","net.http_request_queue_id_seq":"d7e907e6bf5f93c94b754f45839161d1"}'::jsonb;
+$netrel$;
+REVOKE ALL ON FUNCTION public.fn_portal_net_rel_aprobat() FROM PUBLIC,anon,authenticated,service_role,teren;
+-- r21 (varianta c): obiectul e in net, e in lista si amprenta lui de acum = md5-ul revizuit. Cheie lipsa / amprenta NULL =
+-- fals (fail-closed). Predicatul unic (L19) al poartei si al preconditiei.
+CREATE FUNCTION public.fn_portal_net_rel_acceptat(p_oid oid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path TO 'public','pg_temp' AS $fn$
+ SELECT EXISTS (SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+   WHERE c.oid=p_oid AND n.nspname='net'
+     AND public.fn_portal_net_rel_aprobat()->>(quote_ident(n.nspname)||'.'||quote_ident(c.relname))
+       = md5(public.fn_portal_net_rel_amprenta(c.oid)));
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_portal_net_rel_acceptat(oid) FROM PUBLIC,anon,authenticated,service_role,teren;
 CREATE TABLE public.portal_public_baseline (semnatura text PRIMARY KEY, amprenta jsonb NOT NULL);
 ALTER TABLE public.portal_public_baseline ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.portal_public_baseline FROM PUBLIC,anon,authenticated,service_role,teren,supabase_auth_admin;
@@ -299,24 +365,32 @@ BEGIN
   FOR r IN SELECT c.oid,c.relkind,c.relname,n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
       AND has_schema_privilege('teren',n.oid,'USAGE') AND c.relkind IN ('r','p','v','m','f','S') ORDER BY c.oid LOOP
+    -- r21: orice drept al lui teren (tabel / coloane / secventa) = fn_portal_teren_rel_drept (aceeasi definitie in $public_pre$).
+    CONTINUE WHEN public.fn_portal_teren_rel_drept(r.oid) IS NOT TRUE;
+    -- r21 (varianta c): cele trei obiecte pg_net revizuite trec DOAR cu amprenta identica celei din productie; orice drept
+    -- nou, coloana noua, alt proprietar sau alt obiect din net ramane poarta rosie (relatie: / secventa:).
+    CONTINUE WHEN r.nspname='net' AND public.fn_portal_net_rel_acceptat(r.oid) IS TRUE;
     IF r.relkind='S' THEN
-      IF has_sequence_privilege('teren',r.oid,'USAGE,SELECT,UPDATE') THEN
-        v:=array_append(v,'secventa:'||r.relname); END IF;
-    -- MAINTAIN exista doar din PG17 (prod); harness-ul local PG16 il omite.
-    ELSIF has_table_privilege('teren',r.oid,CASE WHEN current_setting('server_version_num')::int >= 170000
-        THEN 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
-        ELSE 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' END)
-      OR has_any_column_privilege('teren',r.oid,'SELECT,INSERT,UPDATE,REFERENCES') THEN
-      -- Catalogul standard permite doar SELECT-ul fixat la apply, fara DML/DDL sau granturi pe coloane noi.
-      IF r.nspname <> 'information_schema' OR r.oid >= 16384
-        OR has_table_privilege('teren',r.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-        OR has_any_column_privilege('teren',r.oid,'INSERT,UPDATE,REFERENCES')
-        OR NOT EXISTS (SELECT FROM public.portal_public_baseline b
-          WHERE b.semnatura='rel:information_schema.'||quote_ident(r.relname)
-          AND b.amprenta=public.fn_portal_catalog_amprenta(r.oid)) THEN
-        v:=array_append(v,'relatie:'||r.relname); END IF;
+      v:=array_append(v,'secventa:'||r.relname);
+    -- Catalogul standard permite doar SELECT-ul fixat la apply, fara DML/DDL sau granturi pe coloane noi.
+    ELSIF r.nspname <> 'information_schema' OR r.oid >= 16384
+      OR has_table_privilege('teren',r.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+      OR has_any_column_privilege('teren',r.oid,'INSERT,UPDATE,REFERENCES')
+      OR NOT EXISTS (SELECT FROM public.portal_public_baseline b
+        WHERE b.semnatura='rel:information_schema.'||quote_ident(r.relname)
+        AND b.amprenta=public.fn_portal_catalog_amprenta(r.oid)) THEN
+      v:=array_append(v,'relatie:'||r.relname);
     END IF;
   END LOOP;
+  -- r21: teren ajunge la net doar daca un client poate rula SQL in net. Din baza se poate verifica doar configurarea
+  -- PostgREST scrisa IN baza (setarile rolului authenticator); cea din panoul proiectului se verifica separat
+  -- (scripts/portal/scheme_expuse.sh). net in schemele expuse / in search_path-ul suplimentar = poarta rosie.
+  IF EXISTS (SELECT FROM pg_catalog.pg_db_role_setting rs CROSS JOIN LATERAL unnest(rs.setconfig) AS s(cfg)
+      WHERE rs.setrole IN (SELECT oid FROM pg_roles WHERE rolname IN ('authenticator','teren'))
+        -- `_` din LIKE prinde orice caracter: potrivire mai larga = mai stricta (fara backslash, cerut de validatorul livrarii)
+        AND (s.cfg LIKE 'pgrst.db_schemas=%' OR s.cfg LIKE 'pgrst.db_extra_search_path=%')
+        AND 'net' = ANY (string_to_array(replace(replace(substr(s.cfg, strpos(s.cfg, '=') + 1), ' ', ''), '"', ''), ','))) THEN
+    v:=array_append(v,'teren PostgREST expune net'); END IF;
   FOR r IN SELECT p.oid,p.proname,p.proargtypes,n.nspname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
     WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
       AND has_schema_privilege('teren',n.oid,'USAGE') AND has_function_privilege('teren',p.oid,'EXECUTE') ORDER BY p.oid LOOP
@@ -370,6 +444,24 @@ BEGIN
       WHERE p.oid=to_regprocedure(r.key) AND pg_get_userbyid(p.proowner)=c_net_owner) THEN
       RAISE EXCEPTION 'PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED'; END IF;
   END LOOP;
+  -- r21 (varianta c): lista obiectelor pg_net acceptate are forma ceruta (cheie net.<nume>, md5), iar orice relatie /
+  -- secventa din net la care ajunge teren e in lista, cu amprenta identica (acelasi predicat ca poarta). Un obiect din
+  -- lista la care teren nu mai ajunge (drepturi retrase) nu e o abatere: e raportat, nu refuzat.
+  IF jsonb_typeof(public.fn_portal_net_rel_aprobat()) IS DISTINCT FROM 'object'
+    OR EXISTS (SELECT FROM jsonb_each(public.fn_portal_net_rel_aprobat()) e
+      WHERE e.key !~ '^net[.][a-z_][a-z0-9_]*$' OR jsonb_typeof(e.value) IS DISTINCT FROM 'string'
+        OR e.value #>> '{}' !~ '^[0-9a-f]{32}$') THEN
+    RAISE EXCEPTION 'PORTAL_NET_REL_LIST_INVALID'; END IF;
+  SELECT coalesce(array_agg(quote_ident(n.nspname)||'.'||quote_ident(c.relname) ORDER BY c.relname COLLATE "C"),'{}')
+    INTO v_live FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='net' AND c.relkind IN ('r','p','v','m','f','S')
+      AND public.fn_portal_teren_rel_drept(c.oid) IS TRUE AND public.fn_portal_net_rel_acceptat(c.oid) IS NOT TRUE;
+  IF cardinality(v_live) > 0 THEN
+    RAISE EXCEPTION 'PORTAL_NET_REL_UNREVIEWED_OR_CHANGED: %', array_to_string(v_live, ', '); END IF;
+  RAISE NOTICE 'PORTAL_NET_REL: % obiecte pg_net accesibile prin PUBLIC, toate cu amprenta revizuita (% in lista)',
+    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='net' AND c.relkind IN ('r','p','v','m','f','S') AND public.fn_portal_teren_rel_drept(c.oid) IS TRUE),
+    (SELECT count(*) FROM jsonb_object_keys(public.fn_portal_net_rel_aprobat()));
 END $public_pre$;
 ALTER TABLE public.portal_public_baseline DISABLE TRIGGER portal_public_baseline_imuabil;
 INSERT INTO public.portal_public_baseline
@@ -534,7 +626,7 @@ BEGIN
 END $locks$;
 -- r10: sectiunea critica = O SINGURA instructiune (un singur drum dus-intors client-server), toata sub plafon.
 DO $critic$
-DECLARE v text[]; v_count bigint; v_erp bigint; v_snapshot jsonb;
+DECLARE v text[]; v_count bigint; v_erp bigint; v_snapshot jsonb; v_porti text[];
 BEGIN
   -- 1. FK-urile tabelelor noi (goale): SHARE ROW EXCLUSIVE pe auth.users / employees, deja detinut.
   ALTER TABLE public.conturi_tip ADD CONSTRAINT conturi_tip_auth_user_id_fkey
@@ -585,7 +677,8 @@ SELECT id,CASE WHEN EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
   SELECT t.auth_user_id,p.employee_id,'activ' FROM public.conturi_tip t
     JOIN public.profiles p ON p.id=t.auth_user_id WHERE t.tip='teren';
   -- 5. postconditia (poarta completa) si amprenta pentru revenire
-  IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'; END IF;
+  v_porti := public.fn_portal_porti_lipsa();
+  IF v_porti IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED: % porti: %', coalesce(cardinality(v_porti)::text, 'NECUNOSCUT'), coalesce(array_to_string(v_porti, '; '), 'NECUNOSCUT'); END IF;
   SELECT jsonb_build_object(
     'tip',(SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]') FROM public.conturi_tip t),
     'teren',(SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY auth_user_id),'[]') FROM public.conturi_teren t),
@@ -595,7 +688,8 @@ SELECT id,CASE WHEN EXISTS (SELECT FROM pg_temp.portal_teren_aprobat t
       SELECT 'f:'||p.oid AS cheie,jsonb_build_array('functie',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig) AS obj
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil','fn_portal_porti_lipsa',
-        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')
+        'fn_portal_public_aprobat','fn_portal_public_md5','fn_portal_net_md5','fn_portal_catalog_amprenta','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid',
+        'fn_portal_net_rel_aprobat','fn_portal_net_rel_amprenta','fn_portal_net_rel_acceptat','fn_portal_teren_rel_drept')
       UNION ALL
       SELECT 'r:'||c.oid,jsonb_build_array('relatie',c.relname,c.relkind,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
       FROM pg_class c WHERE c.oid IN ('public.conturi_tip'::regclass,'public.conturi_teren'::regclass,

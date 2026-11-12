@@ -25,7 +25,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SQL = ROOT / "scripts/portal/porti_citire.sql"
 SECTIUNI = ["A_scheme", "B_relatii", "C_secvente", "D_functii", "D_numar", "E_net_schema", "F_net_drepturi",
-            "G_amprenta_net", "H_functii_net", "I_cron", "J_postgrest", "K_roluri_login", "L_triggere_net"]
+            "G_amprenta_net", "H_functii_net", "I_cron", "J_postgrest", "K_roluri_login", "L_triggere_net",
+            "M_teren_executa"]
 INTERZISE = ["INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE", "CREATE", "ALTER", "DROP", "GRANT", "REVOKE", "COPY",
              "CALL", "DO", "COMMIT", "ABORT", "SAVEPOINT", "RELEASE", "PREPARE", "EXECUTE", "LOCK", "VACUUM", "ANALYZE",
              "CLUSTER", "REINDEX", "REFRESH", "NOTIFY", "LISTEN", "UNLISTEN", "DISCARD", "RESET", "IMPORT", "COMMENT",

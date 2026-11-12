@@ -28,6 +28,10 @@ NUME = "20261118a_portal_teren_identitate"
 ET = "DIAGNOSTIC_PORTI_18a"
 PLAFON = 2000
 TAG = "lm_0123456789abcdef"
+# r21: postconditia 18a = apelul portii intr-o variabila + refuzul cu lista portilor in mesaj (doua linii).
+APEL_LINIE = b"  v_porti := public.fn_portal_porti_lipsa();"
+POSTCOND_LINIE = (b"  IF v_porti IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED: % porti: %', "
+                  b"coalesce(cardinality(v_porti)::text, 'NECUNOSCUT'), coalesce(array_to_string(v_porti, '; '), 'NECUNOSCUT'); END IF;")
 
 
 def ruleaza(*a):
@@ -137,7 +141,7 @@ class DiagPorti(unittest.TestCase):
     # --- taietura -----------------------------------------------------------------------------------------------
     def test_taietura_pe_18a(self):
         self.assertNotIn(b"PORTAL_POSTCONDITION_FAILED", self.taiat)
-        self.assertNotIn(b"fn_portal_porti_lipsa() <>", self.taiat)
+        self.assertNotIn(b"v_porti := public.fn_portal_porti_lipsa();", self.taiat)
         self.assertTrue(self.taiat.rstrip(b"\r\n").endswith(b"END $critic$;"))
         k = self.taiat.index(b"END $critic$;")
         self.assertEqual(self.copie[:k], self.taiat[:k], "tot ce precede pasul 5 se pastreaza")
@@ -163,9 +167,11 @@ class DiagPorti(unittest.TestCase):
             "marcaj_dublu": self.copie[:k] + marc + b"\n" + self.copie[k:],
             "fara_marcaj": self.copie.replace(marc, b"  -- 5. altceva"),
             "fara_end": self.copie.replace(b"END $critic$;", b"END $critic2$;"),
-            "postcond_mutata": self.copie.replace(
-                b"  IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'; END IF;", b"  NULL;"
-            ).replace(b"DO $critic$", b"DO $critic$ /* IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'; END IF; */", 1),
+            "postcond_mutata": self.copie.replace(POSTCOND_LINIE, b"  NULL;").replace(
+                b"DO $critic$", b"DO $critic$ /* " + POSTCOND_LINIE.strip() + b" */", 1),
+            # r21: apelul portii mutat dupa refuz (variabila ar fi goala la verificare)
+            "apel_dupa_refuz": self.copie.replace(b"\r\n", b"\n").replace(APEL_LINIE + b"\n", b"", 1).replace(
+                POSTCOND_LINIE, POSTCOND_LINIE + b"\n" + APEL_LINIE, 1),
             "coada_dupa_end": self.copie.rstrip(b"\r\n") + b"\nSELECT 1;\n",
         }
         for nume, b in cazuri.items():
@@ -209,8 +215,7 @@ class DiagPorti(unittest.TestCase):
         self.refuzat("fara", mesaj(self.copie, self.bloc), "nu s-a taiat nimic")
 
     def test_inlocuire_refuzata(self):
-        inl = self.copie.replace(
-            b"IF public.fn_portal_porti_lipsa() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_POSTCONDITION_FAILED'; END IF;", b"NULL;")
+        inl = self.copie.replace(POSTCOND_LINIE.strip(), b"NULL;")
         self.refuzat("inlocuire", mesaj(inl, self.bloc), "o singura bucata stearsa")
 
     def test_alta_copie_refuzata(self):
