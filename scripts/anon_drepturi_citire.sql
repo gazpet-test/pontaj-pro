@@ -7,10 +7,16 @@
 -- Rulare (ieșirea rămâne pe server, NU în repo: conține lista completă a obiectelor):
 --   psql -X -v ON_ERROR_STOP=1 -P pager=off -A -F '<TAB>' -f scripts/anon_drepturi_citire.sql > <dosarul de rapoarte>/anon_drepturi_citire_<data>.tsv 2>&1
 -- Secțiunile (prima coloană): CONTEXT, INVENTAR, OBIECT (un rând pe obiect: treapta, eticheta, amprenta, detaliu, motiv), BASELINE (rândul de
---   lipit în fiecare migrare), RAMANE (ce mai are anon după fiecare treaptă), RPC_PUBLIC, FUNCTII_ANON, POLITICI_ANON; apoi NOTICE-urile
---   SIMULARE (ce vede anon azi, ca anon, doar citire) și STATISTICI (interogările rulate ca anon, dacă extensia de statistici e instalată).
--- Lista revizuită = secțiunea OBIECT. Migrarea calculează aceeași listă (blocul REGULA_ANON v1, identic octet cu octet) și o compară cu
---   numărul + amprenta din BASELINE: orice diferență (obiect nou, șters, alte drepturi) = refuz, iar migrarea își scrie lista în NOTICE.
+--   lipit în fiecare migrare), CONTROL (numărul + amprenta lui RAMANE, pentru controlul periodic), RAMANE (ce mai are anon după fiecare
+--   treaptă), RPC_PUBLIC, FUNCTII_ANON, POLITICI_ANON; apoi NOTICE-urile SIMULARE (ce citește anon azi, ca anon, doar citire) și STATISTICI
+--   (interogările rulate ca anon, dacă extensia de statistici e instalată).
+-- Lista revizuită = secțiunea OBIECT. Migrarea calculează aceeași listă (blocul REGULA_ANON v2, identic octet cu octet) și o compară cu
+--   numărul + amprenta din BASELINE: orice diferență (obiect nou, șters, RECREAT, alte drepturi, alte politici / RLS / corp de vedere /
+--   DEFAULT-uri) = refuz, iar migrarea își scrie lista în NOTICE. Amprenta conține oid-uri: BASELINE-ul se ia din ACEEAȘI bază pe care se
+--   aplică (cel de pe clonă nu merge pe producție și invers).
+-- Controlul periodic (după fiecare migrare și lunar): rândurile BASELINE (T1 / T2 / T3 = 0 obiecte după aplicare) și rândul CONTROL RAMANE
+--   se compară cu ultima citire revizuită. Un CONTROL schimbat = ceva nou la „rămâne” (ex. un obiect creat de supabase_admin, cu drepturile
+--   lui implicite pentru anon, sau o politică nouă pe un tabel rămas): se caută în OBIECT (treapta RAMANE) și se analizează.
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL search_path = pg_catalog, pg_temp;
 SET LOCAL statement_timeout = '60s';
@@ -34,12 +40,18 @@ SELECT 'INVENTAR' AS sectiune, c.relkind::text AS tip, count(*) AS obiecte,
  WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
  GROUP BY c.relkind ORDER BY 2;
 
--- ── OBIECT + BASELINE + RAMANE: lista calculată (REGULA_ANON v1) și ce rezultă din ea ──
+-- ── OBIECT + BASELINE + CONTROL + RAMANE: lista calculată (REGULA_ANON v2) și ce rezultă din ea ──
 WITH RECURSIVE
--- >>> REGULA_ANON v1
+-- >>> REGULA_ANON v2
 -- (L19: O SINGURĂ definiție, copiată octet cu octet în scripts/anon_drepturi_citire.sql și în migrările 20261218a / b / c; testul
 --  src/anonDrepturi.test.js verifică identitatea.) Rezultatul: anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv),
 --  treapta = T1 (secvență de retras) | T2 (tabel / vedere de retras) | T3 (drept implicit de retras) | RAMANE (cu motivul) | LIPSA.
+-- v2 (review #1081): detaliul (deci amprenta din BASELINE) cuprinde și IDENTITATEA obiectului (oid), RLS / FORCE, părinții (partiție /
+--   moștenire), opțiunile, regulile (corpul vederii), TOATE politicile (nume, comandă, fel, roluri, expresiile USING / CHECK) și DEFAULT-urile
+--   (la o secvență: DEFAULT-urile care o folosesc). Corpurile sunt arborii interni din catalog (pg_rewrite / pg_policy / pg_attrdef), care
+--   conțin oid-urile obiectelor referite, citiți ca text FĂRĂ lock (pg_get_viewdef / pg_get_expr ar deparsa și ar lua lock-uri pe obiectele
+--   referite). Deci un obiect șters și recreat cu același nume, o vedere / politică / DEFAULT rescrise schimbă amprenta. Coloanele (cu
+--   sistemul inclus): „attnum:tip:typmod nume aclitem”: o coloană redenumită și alta nouă cu numele vechi nu se confundă la revenire.
 -- pct. 1 (docs/SECURITATE_ANON_DREPTURI.md): obiectele din public folosite DIRECT de cererile fără cont, cu motivul (nume calificat,
 --   ex. 'public.formular'). Azi NICIUNUL: paginile publice merg doar prin RPC SECURITY DEFINER și prin funcții edge. Rând nou = review nou.
 anon_pastrate(obiect, motiv) AS (
@@ -77,37 +89,57 @@ anon_secvente_pastrate(oid) AS (
                                AND d.refclassid = 'pg_catalog.pg_class'::regclass
     JOIN pg_catalog.pg_class s ON s.oid = d.refobjid AND s.relkind = 'S'
 ),
--- relațiile din public și drepturile EXACTE ale lui anon pe ele (pe obiect și pe coloane, aclitem cu acordantul)
+-- relațiile din public și drepturile EXACTE ale lui anon pe ele (pe obiect și pe coloane, aclitem cu acordantul) + identitatea lor (v2)
 anon_rel AS (
   SELECT c.oid, c.relkind::text AS tip, n.nspname::text AS nspname, c.relname::text AS relname,
          pg_catalog.pg_get_userbyid(c.relowner)::text AS proprietar,
          coalesce((SELECT array_agg(x.it::text ORDER BY x.it::text COLLATE "C") FROM unnest(c.relacl) x(it)
                     WHERE EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e, anon_id a WHERE e.grantee = a.oid)), '{}'::text[]) AS drepturi,
-         coalesce((SELECT array_agg(quote_ident(att.attname) || ' ' || x.it::text ORDER BY att.attname COLLATE "C", x.it::text COLLATE "C")
+         coalesce((SELECT array_agg(att.attnum::text || ':' || att.atttypid::text || ':' || att.atttypmod::text || ' ' || quote_ident(att.attname)
+                                    || ' ' || x.it::text ORDER BY att.attnum, x.it::text COLLATE "C")
                      FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL unnest(att.attacl) x(it)
-                    WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped
+                    WHERE att.attrelid = c.oid AND NOT att.attisdropped
                       AND EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e, anon_id a WHERE e.grantee = a.oid)), '{}'::text[]) AS coloane,
          -- un drept al lui anon acordat de altcineva decât proprietarul: REVOKE-ul proprietarului nu l-ar scoate, revenirea nu l-ar reface exact
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e, anon_id a WHERE e.grantee = a.oid AND e.grantor <> c.relowner)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e, anon_id a
-                      WHERE att.attrelid = c.oid AND att.attnum > 0 AND e.grantee = a.oid AND e.grantor <> c.relowner)) AS alt_acordant,
-         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv)
+                      WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = a.oid AND e.grantor <> c.relowner)) AS alt_acordant,
+         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv). Și: blocarea din migrări (o
+         -- retragere FROM PUBLIC fără efect) cere ca PUBLIC să nu aibă nimic pe obiectele de retras.
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e WHERE e.grantee = 0)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e
-                      WHERE att.attrelid = c.oid AND att.attnum > 0 AND e.grantee = 0)) AS are_public,
+                      WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = 0)) AS are_public,
          (SELECT count(*) FROM pg_catalog.pg_policy pol, anon_id a
            WHERE pol.polrelid = c.oid AND (0::oid = ANY (pol.polroles) OR a.oid = ANY (pol.polroles)))::integer AS politici_anon,
-         coalesce((SELECT o.option_value FROM pg_catalog.pg_options_to_table(c.reloptions) o WHERE o.option_name = 'security_invoker'), '-') AS invoker
+         coalesce((SELECT o.option_value FROM pg_catalog.pg_options_to_table(c.reloptions) o WHERE o.option_name = 'security_invoker'), '-') AS invoker,
+         c.relrowsecurity::text || '/' || c.relforcerowsecurity::text AS rls,
+         coalesce((SELECT string_agg(i.inhparent::text, ',' ORDER BY i.inhseqno) FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid), '-') AS parinti,
+         coalesce(array_to_string(c.reloptions, ','), '-') AS optiuni,
+         coalesce((SELECT md5(string_agg(rw.rulename::text || ':' || rw.ev_type::text || ':' || rw.ev_enabled::text || ':' || rw.is_instead::text
+                                         || ':' || rw.ev_qual::text || ':' || rw.ev_action::text, chr(10) ORDER BY rw.rulename COLLATE "C"))
+                     FROM pg_catalog.pg_rewrite rw WHERE rw.ev_class = c.oid), '-') AS reguli,
+         coalesce((SELECT md5(string_agg(pol.polname::text || ':' || pol.polcmd::text || ':' || pol.polpermissive::text || ':' || pol.polroles::text
+                                         || ':' || coalesce(pol.polqual::text, '-') || ':' || coalesce(pol.polwithcheck::text, '-'),
+                                         chr(10) ORDER BY pol.polname COLLATE "C"))
+                     FROM pg_catalog.pg_policy pol WHERE pol.polrelid = c.oid), '-') AS politici,
+         coalesce((SELECT md5(string_agg(y.l, chr(10) ORDER BY y.l COLLATE "C")) FROM (
+                     SELECT ad.adrelid::text || '.' || ad.adnum::text || '=' || ad.adbin::text AS l FROM pg_catalog.pg_attrdef ad WHERE ad.adrelid = c.oid
+                     UNION
+                     SELECT ad.adrelid::text || '.' || ad.adnum::text || '=' || ad.adbin::text
+                       FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_attrdef ad ON ad.oid = d.objid
+                      WHERE d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = c.oid AND d.classid = 'pg_catalog.pg_attrdef'::regclass) y), '-') AS implicite
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
 ),
 anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (
   SELECT x.treapta, x.oid, x.eticheta,
-         'tip=' || x.tip || '; proprietar=' || x.proprietar || '; anon=' || array_to_string(x.drepturi, ',')
-           || '; coloane=' || array_to_string(x.coloane, ';') || '; politici_anon=' || x.politici_anon::text || '; invoker=' || x.invoker,
+         'tip=' || x.tip || '; oid=' || x.oid::text || '; proprietar=' || x.proprietar || '; anon=' || array_to_string(x.drepturi, ',')
+           || '; coloane=' || array_to_string(x.coloane, ';') || '; politici_anon=' || x.politici_anon::text || '; invoker=' || x.invoker
+           || '; rls=' || x.rls || '; parinti=' || x.parinti || '; optiuni=' || x.optiuni || '; reguli=' || x.reguli
+           || '; politici=' || x.politici || '; implicite=' || x.implicite,
          x.drepturi, x.coloane, x.motiv
     FROM (
-      SELECT r.oid, r.tip, r.proprietar, r.drepturi, r.coloane, r.politici_anon, r.invoker,
+      SELECT r.oid, r.tip, r.proprietar, r.drepturi, r.coloane, r.politici_anon, r.invoker, r.rls, r.parinti, r.optiuni, r.reguli, r.politici, r.implicite,
              CASE r.tip WHEN 'S' THEN 'secventa' WHEN 'v' THEN 'vedere' WHEN 'm' THEN 'vedere_materializata' WHEN 'f' THEN 'tabel_strain'
                         WHEN 'p' THEN 'tabel_partitionat' ELSE 'tabel' END || ' ' || quote_ident(r.nspname) || '.' || quote_ident(r.relname) AS eticheta,
              CASE WHEN r.proprietar <> 'postgres' OR r.alt_acordant OR r.are_public THEN 'RAMANE'
@@ -148,18 +180,20 @@ anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (
     ) d
    WHERE d.drepturi IS NOT NULL
 )
--- <<< REGULA_ANON v1
+-- <<< REGULA_ANON v2
 ,
--- >>> AGREGAT_ANON v1
+-- >>> AGREGAT_ANON v2
 -- amprenta unei trepte = md5 pe liniile „eticheta = md5(detaliu)” sortate (colația C); numărul de obiecte alături. Treapta goală: 0 și md5('').
+-- v2: și RAMANE (ce nu se retrage, cu motivul), pentru controlul periodic (secțiunea CONTROL a citirii): un obiect nou al lui supabase_admin,
+--   o politică / un drept nou pe un obiect rămas îi schimbă amprenta.
 anon_agregat(treapta, obiecte, amprenta) AS (
   SELECT t.treapta, count(g.eticheta)::integer,
          md5(coalesce(string_agg(g.eticheta || ' = ' || md5(g.detaliu), chr(10) ORDER BY g.eticheta COLLATE "C"), ''))
-    FROM (VALUES ('T1'), ('T2'), ('T3')) t(treapta)
+    FROM (VALUES ('T1'), ('T2'), ('T3'), ('RAMANE')) t(treapta)
     LEFT JOIN anon_regula g ON g.treapta = t.treapta
    GROUP BY t.treapta
 )
--- <<< AGREGAT_ANON v1
+-- <<< AGREGAT_ANON v2
 ,
 anon_etape(etapa, ordine, aplicate) AS (VALUES ('dupa T1', 1, ARRAY['T1']), ('dupa T1+T2', 2, ARRAY['T1', 'T2']), ('dupa T1+T2+T3', 3, ARRAY['T1', 'T2', 'T3']))
 SELECT y.sectiune, y.treapta, y.eticheta, y.amprenta, y.detaliu, y.motiv FROM (
@@ -172,7 +206,11 @@ SELECT y.sectiune, y.treapta, y.eticheta, y.amprenta, y.detaliu, y.motiv FROM (
          CASE a.treapta WHEN 'T1' THEN '20261218a_securitate_anon_drepturi' WHEN 'T2' THEN '20261218b_securitate_anon_drepturi_tabele'
                         ELSE '20261218c_securitate_anon_drepturi_implicite' END,
          a.amprenta, format('    (%L, %s, %L)', a.treapta, a.obiecte, a.amprenta), a.obiecte::text || ' obiecte'
-    FROM anon_agregat a
+    FROM anon_agregat a WHERE a.treapta IN ('T1', 'T2', 'T3')
+  UNION ALL
+  -- controlul periodic: ce rămâne (nu se retrage), număr + amprentă
+  SELECT 'CONTROL', 2, 4, a.treapta, 'ramane dupa toate treptele', a.amprenta, a.obiecte::text || ' obiecte', 'se compara cu ultima citire revizuita'
+    FROM anon_agregat a WHERE a.treapta = 'RAMANE'
   UNION ALL
   -- ce mai are anon după fiecare treaptă (cumulat), pe categorie și motiv; detaliu = numărul de obiecte
   SELECT 'RAMANE', 3, e.ordine, e.etapa, split_part(g.eticheta, ' ', 1), NULL, count(*)::text,
@@ -213,29 +251,51 @@ SELECT 'POLITICI_ANON' AS sectiune, c.oid::regclass::text AS tabel, pol.polname:
  WHERE n.nspname = 'public' AND (0::oid = ANY (pol.polroles) OR 'anon'::regrole::oid = ANY (pol.polroles))
  ORDER BY 2, 3;
 
--- ── SIMULARE (NOTICE): ca anon (JWT fără utilizator), doar citire — vede anon VREUN rând în relațiile pe care are drept de citire? ──
---    Așteptat: 0 „VEDE”. Un „VEDE” = o pagină / un client ar putea depinde de acel drept => se analizează ÎNAINTE de T2.
---    Politicile care cer cont sunt filtre constante (evaluate o dată, fără citirea tabelului). Tot blocul are plafon 120 s; la depășire = eroare,
---    se rulează pe clonă.
+-- ── SIMULARE (NOTICE): ca anon (JWT fără utilizator), doar citire — ce CITEȘTE anon efectiv din relațiile pe care are drept de citire? ──
+--    Se citesc VALORILE (cel mult 2 rânduri, doar coloanele pe care anon le poate citi), nu doar existența unui rând (r2, review #1081 P2:
+--    EXISTS nu evaluează valorile, iar o vedere-agregat dă un rând chiar fără date). Fiecare relație primește UNA din patru clase:
+--      GOL                = 0 rânduri;
+--      AGREGAT_FARA_DATE  = exact 1 rând și TOATE valorile lui sunt NULL sau zero (ex. o vedere de contoare peste tabele pe care anon nu le vede);
+--      DATE_CITIBILE      = orice alt rezultat (un rând cu o valoare nenulă / nezero sau ≥ 2 rânduri) => o pagină / un client poate depinde de
+--                           acel drept: se analizează ÎNAINTE de T2;
+--      EROARE             = cererea pică (SQLSTATE + mesaj; ex. 42501 pe un tabel citit de o vedere security_invoker).
+--    Așteptat: 0 relații cu DATE_CITIBILE. Valorile NU se afișează (doar clasa și numele relației). Politicile care cer cont sunt filtre
+--    constante. Tot blocul are plafon 120 s; la depășire = eroare, se rulează pe clonă.
 SET LOCAL statement_timeout = '120s';
 SET LOCAL ROLE anon;
 SELECT set_config('request.jwt.claims', '{"role":"anon"}', true), set_config('request.jwt.claim.role', 'anon', true),
        set_config('request.jwt.claim.sub', '', true);
 DO $simulare$
-DECLARE r record; v boolean; v_vede integer := 0; v_gol integer := 0; v_err integer := 0;
+DECLARE r record; v_cols text; v_j jsonb; v_date integer := 0; v_agregat integer := 0; v_gol integer := 0; v_err integer := 0;
 BEGIN
   FOR r IN SELECT c.oid, quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS nume FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
               AND (has_table_privilege(c.oid, 'SELECT') OR has_any_column_privilege(c.oid, 'SELECT'))
             ORDER BY 2 LOOP
     BEGIN
-      EXECUTE 'SELECT EXISTS (SELECT 1 FROM ' || r.nume || ')' INTO v;
-      IF v THEN v_vede := v_vede + 1; RAISE NOTICE 'SIMULARE anon VEDE randuri in %', r.nume; ELSE v_gol := v_gol + 1; END IF;
+      -- doar coloanele citibile de anon (cu drepturi doar pe unele coloane, SELECT * ar da 42501 fără să spună nimic despre date)
+      SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) INTO v_cols FROM pg_attribute a
+       WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped AND has_column_privilege(r.oid, a.attnum, 'SELECT');
+      IF v_cols IS NULL THEN
+        v_err := v_err + 1; RAISE NOTICE 'SIMULARE anon EROARE la % (-): nicio coloana citibila', r.nume; CONTINUE;
+      END IF;
+      -- „alias.*” = rândul întreg (un „to_jsonb(x)” simplu ar lua coloana x, dacă relația are una cu acest nume)
+      EXECUTE 'SELECT coalesce(jsonb_agg(to_jsonb(anon_sim_q.*)), ''[]''::jsonb) FROM (SELECT ' || v_cols || ' FROM ' || r.nume || ' LIMIT 2) anon_sim_q' INTO v_j;
+      IF jsonb_array_length(v_j) = 0 THEN
+        v_gol := v_gol + 1;
+      ELSIF jsonb_array_length(v_j) = 1
+            AND NOT EXISTS (SELECT 1 FROM jsonb_each(v_j -> 0) e
+                             WHERE NOT (jsonb_typeof(e.value) = 'null' OR (jsonb_typeof(e.value) = 'number' AND e.value::text::numeric = 0))) THEN
+        v_agregat := v_agregat + 1; RAISE NOTICE 'SIMULARE anon AGREGAT_FARA_DATE in % (1 rand, toate valorile NULL / zero)', r.nume;
+      ELSE
+        v_date := v_date + 1; RAISE NOTICE 'SIMULARE anon DATE_CITIBILE in % (% randuri citite, valorile nu se afiseaza)', r.nume, jsonb_array_length(v_j);
+      END IF;
     EXCEPTION WHEN OTHERS THEN
       v_err := v_err + 1; RAISE NOTICE 'SIMULARE anon EROARE la % (%): %', r.nume, SQLSTATE, SQLERRM;
     END;
   END LOOP;
-  RAISE NOTICE 'SIMULARE rezumat: rolul curent %, % relatii cu randuri vizibile, % goale, % erori', current_user, v_vede, v_gol, v_err;
+  RAISE NOTICE 'SIMULARE rezumat: rolul curent %, % relatii cu date citibile, % agregate fara date, % goale, % erori',
+    current_user, v_date, v_agregat, v_gol, v_err;
 END $simulare$;
 RESET ROLE;
 

@@ -1,6 +1,6 @@
 // Drepturile rolului anon în public (20261218a / b / c): verificări statice ale livrării. Comportamentul (aplicare, reveniri, refuzuri,
 // mutanți): scripts/pglite/test_anon_drepturi_local.mjs.
-// (1) L19: regula (REGULA_ANON v1), agregatul (AGREGAT_ANON v1) și amprenta celorlalte roluri (ALTE_ROLURI v1) au O SINGURĂ definiție,
+// (1) L19: regula (REGULA_ANON v2), agregatul (AGREGAT_ANON v2) și amprenta celorlalte roluri (ALTE_ROLURI v1) au O SINGURĂ definiție,
 //     copiată octet cu octet în scriptul coordonatorului, în migrări și în reveniri. (2) L15: BASELINE într-un singur bloc marcat, necompletat
 //     în repo (= refuz). (3) Artefactele trec regulile validatorului runnerului cu plafon (scripts/livrare_validator.py; rulat și direct dacă
 //     există Python). (4) Scriptul coordonatorului e doar citire. (5) Documentul pentru owner există și nu conține căi de pe server.
@@ -35,15 +35,15 @@ const nivelSuperior = t => {
 }
 
 describe('L19 — o singură definiție a regulii, a agregatului și a amprentei celorlalte roluri', () => {
-  const canonic = blocuri(citeste(CIT), 'REGULA_ANON v1')
-  it('REGULA_ANON v1: o dată în citire și o dată în fiecare migrare, identic', () => {
+  const canonic = blocuri(citeste(CIT), 'REGULA_ANON v2')
+  it('REGULA_ANON v2: o dată în citire și o dată în fiecare migrare, identic', () => {
     expect(canonic).toHaveLength(1)
-    for (const k of 'abc') expect(blocuri(citeste(MIG[k]), 'REGULA_ANON v1'), MIG[k]).toEqual(canonic)
+    for (const k of 'abc') expect(blocuri(citeste(MIG[k]), 'REGULA_ANON v2'), MIG[k]).toEqual(canonic)
   })
-  it('AGREGAT_ANON v1: o dată în citire și o dată în fiecare migrare, identic', () => {
-    const ag = blocuri(citeste(CIT), 'AGREGAT_ANON v1')
+  it('AGREGAT_ANON v2: o dată în citire și o dată în fiecare migrare, identic', () => {
+    const ag = blocuri(citeste(CIT), 'AGREGAT_ANON v2')
     expect(ag).toHaveLength(1)
-    for (const k of 'abc') expect(blocuri(citeste(MIG[k]), 'AGREGAT_ANON v1'), MIG[k]).toEqual(ag)
+    for (const k of 'abc') expect(blocuri(citeste(MIG[k]), 'AGREGAT_ANON v2'), MIG[k]).toEqual(ag)
   })
   it('ALTE_ROLURI v1: o dată în fiecare migrare, de două ori în fiecare revenire (înainte / după), identic', () => {
     const al = blocuri(citeste(MIG.a), 'ALTE_ROLURI v1')
@@ -61,9 +61,78 @@ describe('L19 — o singură definiție a regulii, a agregatului și a amprentei
   })
   it('coloanele „char” sunt convertite explicit înainte de || (ambiguu pe producție, #1078)', () => {
     for (const t of [canonic[0], blocuri(citeste(MIG.a), 'ALTE_ROLURI v1')[0]]) {
-      expect(t).not.toMatch(/\|\|\s*[a-z_]+\.(relkind|defaclobjtype|polcmd)(?!::)/)
-      expect(t).not.toMatch(/(relkind|defaclobjtype|polcmd)\s*\|\|/)
+      expect(t).not.toMatch(/\|\|\s*[a-z_]+\.(relkind|defaclobjtype|polcmd|ev_type|ev_enabled|polpermissive|is_instead|relrowsecurity|relforcerowsecurity)(?!::)/)
+      expect(t).not.toMatch(/(relkind|defaclobjtype|polcmd|ev_type|ev_enabled|polpermissive|is_instead|relrowsecurity|relforcerowsecurity)\s*\|\|/)
     }
+  })
+  it('v2 (review #1081): amprenta cuprinde oid, RLS / FORCE, părinții, opțiunile, regulile, toate politicile, DEFAULT-urile; coloanele cu attnum:tip:typmod', () => {
+    for (const s of ["'; oid=' || x.oid::text", "'; rls=' || x.rls", "'; parinti=' || x.parinti", "'; optiuni=' || x.optiuni", "'; reguli=' || x.reguli",
+      "'; politici=' || x.politici", "'; implicite=' || x.implicite", 'rw.ev_action::text', 'pol.polqual::text', 'pol.polwithcheck::text', 'ad.adbin::text',
+      "att.attnum::text || ':' || att.atttypid::text || ':' || att.atttypmod::text || ' ' || quote_ident(att.attname)"]) expect(canonic[0], s).toContain(s)
+    // fără deparsare (ia lock-uri pe obiectele referite)
+    expect(canonic[0].replace(/--[^\n]*/g, '')).not.toMatch(/pg_get_viewdef|pg_get_expr|pg_get_ruledef/)
+  })
+})
+
+describe('r2 — cursa dintre calculul listei și REVOKE (review #1081 P1)', () => {
+  const ordine = (t, ...frag) => { let i = -1; for (const f of frag) { const j = t.indexOf(f, i + 1); expect(j, f).toBeGreaterThan(i); i = j } }
+  for (const [k, seq] of [['a', 'SEQUENCE'], ['b', 'TABLE']]) {
+    it(`${MIG[k]}: jurnal -> blocare (FROM PUBLIC) -> dovada pe xmin -> recitire = jurnal -> REVOKE FROM anon`, () => {
+      const t = citeste(MIG[k])
+      ordine(t, 'INSERT INTO securitate_intern.anon_revocari', `EXECUTE 'REVOKE ALL ON ${seq} ' || v_lista || ' FROM PUBLIC';`,
+        "c.xmin::text IS DISTINCT FROM v_xid", 'blocarea randurilor din catalog nu s-a facut', `FROM pg_temp.anon_regula_20261218${k}() WHERE r_treapta = '${T[k]}') b`,
+        'schimbare concurenta intre calculul listei si blocare', `EXECUTE 'REVOKE ALL ON ${seq} ' || v_lista || ' FROM anon';`)
+    })
+  }
+  it('b: după REVOKE, rândurile de coloane rescrise = exact cele cu drepturi la recitire (coloana neblocată)', () => {
+    ordine(citeste(MIG.b), 'v_col := ARRAY(', "EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';", 'v_col_dupa := ARRAY(', 'a.xmin::text = v_xid',
+      'IF v_col_dupa IS DISTINCT FROM v_col THEN', 'drepturi pe coloane schimbate concurent')
+  })
+  it('c: blocarea celor două rânduri din pg_default_acl + recitire, înaintea retragerii', () => {
+    ordine(citeste(MIG.c), 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;',
+      'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC;', 'd.xmin::text = v_xid',
+      'schimbare concurenta intre calculul listei si blocare', 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon;')
+  })
+  it('comentariile nu mai promit „ACCESS SHARE pe fiecare țintă” și spun ce se detectează exact', () => {
+    for (const k of 'abc') expect(citeste(MIG[k])).not.toMatch(/ia ACCESS SHARE pe fiecare/)
+    for (const k of 'ab') expect(citeste(REV[k])).not.toMatch(/ia ACCESS SHARE pe fiecare/)
+    for (const k of 'ab') expect(citeste(MIG[k])).toContain('NoLock')
+    expect(citeste(MIG.a)).toContain('Ce se detectează EXACT')
+    expect(citeste(MIG.b)).toContain('Ce se detectează EXACT')
+  })
+  it('proba cu două sesiuni pe clonă: gărzi de țintă (system_identifier, PG17, nu Supabase), scenariile și mutanții', () => {
+    const p = citeste('scripts/anon_drepturi_concurenta.mjs')
+    for (const s of ['pg_control_system()', 'process.exit(22)', "supabase\\.(co|com)", 'pg_blocking_pids', "wait_event = 'PgSleep'", 'SET transaction_timeout = 2000',
+      'R1', 'R2', 'R3', 'R4', 'R5', 'fara_recitire', 'fara_coloane', '1500']) expect(p, s).toContain(s)
+    expect(p.startsWith('#!')).toBe(false)
+  })
+})
+
+describe('r2 — revenirea pe coloane (review #1081 P1)', () => {
+  it('revenirea b verifică attnum + tip + typmod + nume ÎNAINTE de GRANT și dă dreptul pe coloana cu același attnum', () => {
+    const t = citeste(REV.b)
+    const i = t.indexOf('coloane schimbate dupa livrare'), g = t.indexOf("EXECUTE format('GRANT %s (%s) ON TABLE %s TO anon'")
+    expect(i).toBeGreaterThan(0); expect(g).toBeGreaterThan(i)
+    expect(t).toContain("regexp_match(col, '^(-?[0-9]+):([0-9]+):(-?[0-9]+) (.+) ([^ ]+)$')")
+    expect(t).toContain('a.attnum = p.m[1]::smallint')
+    expect(t).not.toContain("substring(col FROM '^(.*) [^ ]+$')")
+  })
+  it('revenirea a refuză un jurnal T1 cu coloane (secvențele nu au)', () => {
+    expect(citeste(REV.a)).toContain('jurnalul T1 are drepturi pe coloane')
+  })
+})
+
+describe('r2 — citirea: SIMULARE pe valori, CONTROL pentru RAMANE', () => {
+  const t = citeste(CIT)
+  it('SIMULARE citește valorile (nu EXISTS) și separă cele patru clase; așteptarea = 0 cu date citibile', () => {
+    expect(t).not.toContain('SELECT EXISTS (SELECT 1 FROM')
+    for (const s of ['GOL', 'AGREGAT_FARA_DATE', 'DATE_CITIBILE', 'EROARE', 'to_jsonb(anon_sim_q.*)', 'has_column_privilege(r.oid, a.attnum, \'SELECT\')',
+      'relatii cu date citibile', 'Așteptat: 0 relații cu DATE_CITIBILE']) expect(t, s).toContain(s)
+  })
+  it('CONTROL = amprenta RAMANE; BASELINE doar T1 / T2 / T3', () => {
+    expect(t).toContain("SELECT 'CONTROL', 2, 4, a.treapta")
+    expect(t).toContain("FROM anon_agregat a WHERE a.treapta IN ('T1', 'T2', 'T3')")
+    expect(blocuri(t, 'AGREGAT_ANON v2')[0]).toContain("(VALUES ('T1'), ('T2'), ('T3'), ('RAMANE'))")
   })
 })
 
@@ -160,6 +229,15 @@ describe('documentul pentru owner', () => {
   const d = citeste('docs/SECURITATE_ANON_DREPTURI.md')
   it('are treptele, riscul fiecăreia, recomandarea și pașii coordonatorului', () => {
     for (const s of ['T1', 'T2', 'T3', 'Recomandare', 'Ce se strică', 'Cum revenim', 'pct. 1']) expect(d, s).toContain(s)
+  })
+  it('r2: corectura „există acces direct” + condiția explicită pentru T2 (clientul fără interogări fără sesiune) + proba pe clonă PG17', () => {
+    expect(d).toContain('EXISTĂ acces direct')
+    expect(d).toContain('**Condiția pentru T2 (obligatorie):**')
+    expect(d).toMatch(/T2 e câștigul principal, dar \*\*NU se aplică\*\*/)
+    expect(d).not.toMatch(/Rezultat: niciun tabel, nicio vedere și nicio secvență nu e folosit direct de `anon`/)
+    expect(d).not.toMatch(/iau doar ACCESS SHARE/)
+    for (const s of ['scripts/anon_drepturi_concurenta.mjs', '1500 ms', 'PostgreSQL 17', '0 relații cu date citibile', 'CONTROL']) expect(d, s).toContain(s)
+    expect(citeste(MIG.b)).toContain('T2 NU se aplică înainte ca PR-ul „client fără interogări fără sesiune” să fie pe producție')
   })
   it('fără căi de pe server sau din rețea', () => {
     expect(d).not.toMatch(/[A-Za-z]:\\|\\\\|paw-data|Users\\|Users\//)

@@ -11,19 +11,35 @@
 -- Ce face (o tranzacție, prin runner):
 --   1. gărzile: marcajul runnerului legat de txid, plafonul de 2000 ms, READ COMMITTED, PostgreSQL 17, postgres, reaplicare = refuz, anon fără
 --      apartenențe la alte roluri;
---   2. lista T1 calculată din catalog după REGULA_ANON v1 (aceeași, octet cu octet, cu scripts/anon_drepturi_citire.sql) = EXACT BASELINE-ul
---      revizuit (număr de obiecte + amprenta listei, AGREGAT_ANON v1). Necompletat / diferit = refuz, nimic schimbat (lista de acum în NOTICE);
+--   2. lista T1 calculată din catalog după REGULA_ANON v2 (aceeași, octet cu octet, cu scripts/anon_drepturi_citire.sql) = EXACT BASELINE-ul
+--      revizuit (număr de obiecte + amprenta listei, AGREGAT_ANON v2; amprenta cuprinde oid-ul și tot ce schimbă accesul, vezi regula).
+--      Necompletat / diferit = refuz, nimic schimbat (lista de acum în NOTICE). BASELINE-ul se ia din ACEEAȘI bază (oid-urile diferă între bazi);
 --   3. jurnalul: schemă nouă securitate_intern (neexpusă în API, fără niciun drept pentru alt rol decât postgres) cu tabelul anon_revocari,
 --      câte un rând pe secvență, cu drepturile EXACTE ale lui anon (aclitem, cu acordantul și opțiunea de acordare);
---   4. UN SINGUR REVOKE ALL ON SEQUENCE <lista din jurnal> FROM anon (nume citate din catalog);
---   5. postcondiții: anon nu mai are niciun drept pe secvențele din jurnal (dreptul efectiv); regula recalculată ACUM nu mai găsește nimic în
+--   4. BLOCAREA (review #1081 P1): o retragere FĂRĂ efect (REVOKE ALL ... FROM PUBLIC; PUBLIC nu are nimic pe aceste obiecte, altfel regula
+--      le-ar fi lăsat la RAMANE) rescrie rândul fiecărei secvențe din pg_class; se verifică că TOATE rândurile sunt acum ale acestei tranzacții
+--      (xmin), altfel refuz; apoi RECITIREA: regula recalculată ACUM, pe rândurile blocate, = EXACT jurnalul (etichetă + detaliu), altfel refuz;
+--   5. UN SINGUR REVOKE ALL ON SEQUENCE <lista din jurnal> FROM anon (nume citate din catalog), pe rândurile blocate;
+--   6. postcondiții: anon nu mai are niciun drept pe secvențele din jurnal (dreptul efectiv); regula recalculată ACUM nu mai găsește nimic în
 --      T1 (o secvență apărută între timp = refuz); restul listei (T2 / T3 / RAMANE) neschimbat; drepturile TUTUROR celorlalte roluri neschimbate
 --      (ALTE_ROLURI v1, înainte = după); jurnalul și schema fără drepturi pentru nimeni altcineva; timpul.
 --
--- Lock-uri: niciun LOCK explicit. REVOKE ia ACCESS SHARE pe fiecare secvență din listă (probat: scripts/pglite/test_anon_drepturi_local.mjs) și
---   rândul ei din pg_class, ținute până la COMMIT. ACCESS SHARE se ciocnește DOAR cu ACCESS EXCLUSIVE (DROP / ALTER ținut de altă tranzacție):
---   lock_timeout 100 ms => refuz, nimic schimbat, se reia. Nu oprește nicio citire, scriere sau nextval. Câteva sute de lock-uri ACCESS SHARE
---   într-o tranzacție încap în tabela de lock-uri; „out of shared memory” = refuz, nimic schimbat (se împarte, vezi documentul).
+-- Ce se detectează EXACT (fără promisiuni generale):
+--   * schimbat ÎNAINTE de calcul (de la citirea BASELINE-ului): orice intră în amprentă (obiect nou / șters / recreat, drepturile lui anon,
+--     proprietar, RLS / FORCE, părinți, opțiuni, corpul vederii, politicile, DEFAULT-urile) => refuz la pasul 2;
+--   * comis ÎNTRE calcul și blocare (altă sesiune): aceleași câmpuri => refuz la recitire (pasul 4);
+--   * încercat DUPĂ blocare pe aceleași secvențe (GRANT / REVOKE / ALTER care rescriu rândul): așteaptă după noi și pică după COMMIT-ul nostru
+--     („tuple concurrently updated”) => nu se aplică, deci nu se pierde; o tranzacție care rescrisese deja rândul (necomisă) ne face să așteptăm:
+--     lock_timeout 100 ms => refuz; comisă între timp => pică retragerea noastră => refuz. Nimic schimbat;
+--   * după blocare, pe ALTE obiecte (secvență nouă, drept nou pe o secvență nelistată): nu le atingem; dacă sunt comise înaintea
+--     postcondițiilor => refuz (pct. b / c), altfel rămân pentru citirea următoare (controlul periodic).
+--   Garanția: ce retrage REVOKE-ul = EXACT ce e în jurnal (revenirea reface exact).
+-- Lock-uri (PostgreSQL 17.6, citit din sursă la review): GRANT / REVOKE NU iau lock pe secvențele-țintă (le rezolvă cu NoLock); deschid
+--   pg_class cu RowExclusiveLock și rescriu rândul fiecărui obiect. Deci nu opresc nicio citire, scriere sau nextval și nu se ciocnesc prin
+--   lock-ul obiectului cu DDL-ul altora. Ce ne serializează = rândurile din pg_class rescrise de noi la pasul 4, ținute până la COMMIT (vezi
+--   mai sus); VACUUM / ANALYZE pe aceleași obiecte (actualizare pe loc a rândului) pot aștepta cel mult cât tranzacția (sub plafon) — de
+--   măsurat pe clonă. Duratele din PGlite (PG18, o conexiune) NU validează producția: proba pe clonă PG17, cu două sesiuni și runnerul real,
+--   e în docs/SECURITATE_ANON_DREPTURI.md §5 (plafon 2000 ms; la ≥ 1500 ms nu se aplică).
 -- Ce NU face: nicio dată, niciun drept al altui rol, nimic pe tabele / vederi (T2 = 20261218b) sau pe drepturile implicite (T3 = 20261218c).
 -- Revenire: supabase/revenire/20261218a_securitate_anon_drepturi_ROLLBACK.sql (după revenirile 20261218c / 20261218b, dacă au fost aplicate).
 -- Probe: scripts/pglite/test_anon_drepturi_local.mjs (local, cu mutanți) + src/anonDrepturi.test.js (static).
@@ -72,10 +88,16 @@ CREATE FUNCTION pg_temp.anon_regula_20261218a()
 RETURNS TABLE (r_treapta text, r_oid oid, r_eticheta text, r_detaliu text, r_drepturi text[], r_coloane text[], r_motiv text)
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $regula$
 WITH RECURSIVE
--- >>> REGULA_ANON v1
+-- >>> REGULA_ANON v2
 -- (L19: O SINGURĂ definiție, copiată octet cu octet în scripts/anon_drepturi_citire.sql și în migrările 20261218a / b / c; testul
 --  src/anonDrepturi.test.js verifică identitatea.) Rezultatul: anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv),
 --  treapta = T1 (secvență de retras) | T2 (tabel / vedere de retras) | T3 (drept implicit de retras) | RAMANE (cu motivul) | LIPSA.
+-- v2 (review #1081): detaliul (deci amprenta din BASELINE) cuprinde și IDENTITATEA obiectului (oid), RLS / FORCE, părinții (partiție /
+--   moștenire), opțiunile, regulile (corpul vederii), TOATE politicile (nume, comandă, fel, roluri, expresiile USING / CHECK) și DEFAULT-urile
+--   (la o secvență: DEFAULT-urile care o folosesc). Corpurile sunt arborii interni din catalog (pg_rewrite / pg_policy / pg_attrdef), care
+--   conțin oid-urile obiectelor referite, citiți ca text FĂRĂ lock (pg_get_viewdef / pg_get_expr ar deparsa și ar lua lock-uri pe obiectele
+--   referite). Deci un obiect șters și recreat cu același nume, o vedere / politică / DEFAULT rescrise schimbă amprenta. Coloanele (cu
+--   sistemul inclus): „attnum:tip:typmod nume aclitem”: o coloană redenumită și alta nouă cu numele vechi nu se confundă la revenire.
 -- pct. 1 (docs/SECURITATE_ANON_DREPTURI.md): obiectele din public folosite DIRECT de cererile fără cont, cu motivul (nume calificat,
 --   ex. 'public.formular'). Azi NICIUNUL: paginile publice merg doar prin RPC SECURITY DEFINER și prin funcții edge. Rând nou = review nou.
 anon_pastrate(obiect, motiv) AS (
@@ -113,37 +135,57 @@ anon_secvente_pastrate(oid) AS (
                                AND d.refclassid = 'pg_catalog.pg_class'::regclass
     JOIN pg_catalog.pg_class s ON s.oid = d.refobjid AND s.relkind = 'S'
 ),
--- relațiile din public și drepturile EXACTE ale lui anon pe ele (pe obiect și pe coloane, aclitem cu acordantul)
+-- relațiile din public și drepturile EXACTE ale lui anon pe ele (pe obiect și pe coloane, aclitem cu acordantul) + identitatea lor (v2)
 anon_rel AS (
   SELECT c.oid, c.relkind::text AS tip, n.nspname::text AS nspname, c.relname::text AS relname,
          pg_catalog.pg_get_userbyid(c.relowner)::text AS proprietar,
          coalesce((SELECT array_agg(x.it::text ORDER BY x.it::text COLLATE "C") FROM unnest(c.relacl) x(it)
                     WHERE EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e, anon_id a WHERE e.grantee = a.oid)), '{}'::text[]) AS drepturi,
-         coalesce((SELECT array_agg(quote_ident(att.attname) || ' ' || x.it::text ORDER BY att.attname COLLATE "C", x.it::text COLLATE "C")
+         coalesce((SELECT array_agg(att.attnum::text || ':' || att.atttypid::text || ':' || att.atttypmod::text || ' ' || quote_ident(att.attname)
+                                    || ' ' || x.it::text ORDER BY att.attnum, x.it::text COLLATE "C")
                      FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL unnest(att.attacl) x(it)
-                    WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped
+                    WHERE att.attrelid = c.oid AND NOT att.attisdropped
                       AND EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e, anon_id a WHERE e.grantee = a.oid)), '{}'::text[]) AS coloane,
          -- un drept al lui anon acordat de altcineva decât proprietarul: REVOKE-ul proprietarului nu l-ar scoate, revenirea nu l-ar reface exact
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e, anon_id a WHERE e.grantee = a.oid AND e.grantor <> c.relowner)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e, anon_id a
-                      WHERE att.attrelid = c.oid AND att.attnum > 0 AND e.grantee = a.oid AND e.grantor <> c.relowner)) AS alt_acordant,
-         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv)
+                      WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = a.oid AND e.grantor <> c.relowner)) AS alt_acordant,
+         -- un drept pentru PUBLIC: anon îl are oricum (retragerea de la anon n-ar schimba dreptul efectiv). Și: blocarea din migrări (o
+         -- retragere FROM PUBLIC fără efect) cere ca PUBLIC să nu aibă nimic pe obiectele de retras.
          (EXISTS (SELECT 1 FROM aclexplode(c.relacl) e WHERE e.grantee = 0)
           OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) e
-                      WHERE att.attrelid = c.oid AND att.attnum > 0 AND e.grantee = 0)) AS are_public,
+                      WHERE att.attrelid = c.oid AND NOT att.attisdropped AND e.grantee = 0)) AS are_public,
          (SELECT count(*) FROM pg_catalog.pg_policy pol, anon_id a
            WHERE pol.polrelid = c.oid AND (0::oid = ANY (pol.polroles) OR a.oid = ANY (pol.polroles)))::integer AS politici_anon,
-         coalesce((SELECT o.option_value FROM pg_catalog.pg_options_to_table(c.reloptions) o WHERE o.option_name = 'security_invoker'), '-') AS invoker
+         coalesce((SELECT o.option_value FROM pg_catalog.pg_options_to_table(c.reloptions) o WHERE o.option_name = 'security_invoker'), '-') AS invoker,
+         c.relrowsecurity::text || '/' || c.relforcerowsecurity::text AS rls,
+         coalesce((SELECT string_agg(i.inhparent::text, ',' ORDER BY i.inhseqno) FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid), '-') AS parinti,
+         coalesce(array_to_string(c.reloptions, ','), '-') AS optiuni,
+         coalesce((SELECT md5(string_agg(rw.rulename::text || ':' || rw.ev_type::text || ':' || rw.ev_enabled::text || ':' || rw.is_instead::text
+                                         || ':' || rw.ev_qual::text || ':' || rw.ev_action::text, chr(10) ORDER BY rw.rulename COLLATE "C"))
+                     FROM pg_catalog.pg_rewrite rw WHERE rw.ev_class = c.oid), '-') AS reguli,
+         coalesce((SELECT md5(string_agg(pol.polname::text || ':' || pol.polcmd::text || ':' || pol.polpermissive::text || ':' || pol.polroles::text
+                                         || ':' || coalesce(pol.polqual::text, '-') || ':' || coalesce(pol.polwithcheck::text, '-'),
+                                         chr(10) ORDER BY pol.polname COLLATE "C"))
+                     FROM pg_catalog.pg_policy pol WHERE pol.polrelid = c.oid), '-') AS politici,
+         coalesce((SELECT md5(string_agg(y.l, chr(10) ORDER BY y.l COLLATE "C")) FROM (
+                     SELECT ad.adrelid::text || '.' || ad.adnum::text || '=' || ad.adbin::text AS l FROM pg_catalog.pg_attrdef ad WHERE ad.adrelid = c.oid
+                     UNION
+                     SELECT ad.adrelid::text || '.' || ad.adnum::text || '=' || ad.adbin::text
+                       FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_attrdef ad ON ad.oid = d.objid
+                      WHERE d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = c.oid AND d.classid = 'pg_catalog.pg_attrdef'::regclass) y), '-') AS implicite
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
 ),
 anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (
   SELECT x.treapta, x.oid, x.eticheta,
-         'tip=' || x.tip || '; proprietar=' || x.proprietar || '; anon=' || array_to_string(x.drepturi, ',')
-           || '; coloane=' || array_to_string(x.coloane, ';') || '; politici_anon=' || x.politici_anon::text || '; invoker=' || x.invoker,
+         'tip=' || x.tip || '; oid=' || x.oid::text || '; proprietar=' || x.proprietar || '; anon=' || array_to_string(x.drepturi, ',')
+           || '; coloane=' || array_to_string(x.coloane, ';') || '; politici_anon=' || x.politici_anon::text || '; invoker=' || x.invoker
+           || '; rls=' || x.rls || '; parinti=' || x.parinti || '; optiuni=' || x.optiuni || '; reguli=' || x.reguli
+           || '; politici=' || x.politici || '; implicite=' || x.implicite,
          x.drepturi, x.coloane, x.motiv
     FROM (
-      SELECT r.oid, r.tip, r.proprietar, r.drepturi, r.coloane, r.politici_anon, r.invoker,
+      SELECT r.oid, r.tip, r.proprietar, r.drepturi, r.coloane, r.politici_anon, r.invoker, r.rls, r.parinti, r.optiuni, r.reguli, r.politici, r.implicite,
              CASE r.tip WHEN 'S' THEN 'secventa' WHEN 'v' THEN 'vedere' WHEN 'm' THEN 'vedere_materializata' WHEN 'f' THEN 'tabel_strain'
                         WHEN 'p' THEN 'tabel_partitionat' ELSE 'tabel' END || ' ' || quote_ident(r.nspname) || '.' || quote_ident(r.relname) AS eticheta,
              CASE WHEN r.proprietar <> 'postgres' OR r.alt_acordant OR r.are_public THEN 'RAMANE'
@@ -184,7 +226,7 @@ anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (
     ) d
    WHERE d.drepturi IS NOT NULL
 )
--- <<< REGULA_ANON v1
+-- <<< REGULA_ANON v2
 SELECT g.treapta, g.oid, g.eticheta, g.detaliu, g.drepturi, g.coloane, g.motiv FROM anon_regula g
 $regula$;
 CREATE FUNCTION pg_temp.anon_alte_20261218a() RETURNS text
@@ -217,16 +259,18 @@ CREATE FUNCTION pg_temp.anon_agregat_20261218a() RETURNS TABLE (a_treapta text, 
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $agregat$
 WITH anon_regula(treapta, oid, eticheta, detaliu, drepturi, coloane, motiv) AS (SELECT * FROM pg_temp.anon_calc_20261218a)
 ,
--- >>> AGREGAT_ANON v1
+-- >>> AGREGAT_ANON v2
 -- amprenta unei trepte = md5 pe liniile „eticheta = md5(detaliu)” sortate (colația C); numărul de obiecte alături. Treapta goală: 0 și md5('').
+-- v2: și RAMANE (ce nu se retrage, cu motivul), pentru controlul periodic (secțiunea CONTROL a citirii): un obiect nou al lui supabase_admin,
+--   o politică / un drept nou pe un obiect rămas îi schimbă amprenta.
 anon_agregat(treapta, obiecte, amprenta) AS (
   SELECT t.treapta, count(g.eticheta)::integer,
          md5(coalesce(string_agg(g.eticheta || ' = ' || md5(g.detaliu), chr(10) ORDER BY g.eticheta COLLATE "C"), ''))
-    FROM (VALUES ('T1'), ('T2'), ('T3')) t(treapta)
+    FROM (VALUES ('T1'), ('T2'), ('T3'), ('RAMANE')) t(treapta)
     LEFT JOIN anon_regula g ON g.treapta = t.treapta
    GROUP BY t.treapta
 )
--- <<< AGREGAT_ANON v1
+-- <<< AGREGAT_ANON v2
 SELECT a.treapta, a.obiecte, a.amprenta FROM anon_agregat a
 $agregat$;
 
@@ -278,9 +322,9 @@ REVOKE ALL ON TABLE securitate_intern.anon_revocari FROM PUBLIC, anon, authentic
 ALTER TABLE securitate_intern.anon_revocari ENABLE ROW LEVEL SECURITY;
 COMMENT ON TABLE securitate_intern.anon_revocari IS 'Drepturile exacte ale rolului anon retrase de 20261218a / b / c (docs/SECURITATE_ANON_DREPTURI.md); revenirile le refac din acest jurnal.';
 
--- ── jurnal, apoi UN SINGUR REVOKE pe lista din jurnal ──
+-- ── jurnal, blocarea rândurilor + recitirea, apoi UN SINGUR REVOKE pe lista din jurnal ──
 DO $aplica$
-DECLARE v_lista text; v_n integer;
+DECLARE v_lista text; v_n integer; v_xid text; v_dif text;
 BEGIN
   INSERT INTO securitate_intern.anon_revocari (migrare, treapta, eticheta, obiect_oid, drepturi, coloane, detaliu, amprenta, txid)
   SELECT '20261218a', 'T1', c.r_eticheta, c.r_oid, c.r_drepturi, c.r_coloane, c.r_detaliu, md5(c.r_detaliu), txid_current()
@@ -296,6 +340,25 @@ BEGIN
    WHERE j.migrare = '20261218a' AND c.relkind = 'S' AND j.eticheta = 'secventa ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname);
   IF v_n IS DISTINCT FROM (SELECT count(*)::integer FROM securitate_intern.anon_revocari WHERE migrare = '20261218a') THEN
     RAISE EXCEPTION '20261218a: jurnalul nu corespunde catalogului (% din %)', v_n, (SELECT count(*) FROM securitate_intern.anon_revocari WHERE migrare = '20261218a');
+  END IF;
+  -- blocarea: retragere fără efect de la PUBLIC => rândul fiecărei secvențe din pg_class e rescris de noi și rămâne al nostru până la COMMIT
+  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM PUBLIC';
+  -- dovada blocării (fail-closed): fiecare rând e acum al ACESTEI tranzacții (xmin = xid-ul ei, bloc fără subtranzacție)
+  v_xid := (txid_current() % 4294967296)::text;
+  SELECT string_agg(j.eticheta, ', ') INTO v_dif
+    FROM securitate_intern.anon_revocari j LEFT JOIN pg_class c ON c.oid = j.obiect_oid
+   WHERE j.migrare = '20261218a' AND c.xmin::text IS DISTINCT FROM v_xid;
+  IF v_dif IS NOT NULL THEN
+    RAISE EXCEPTION '20261218a: blocarea randurilor din catalog nu s-a facut pe: % (nimic schimbat)', v_dif;
+  END IF;
+  -- recitirea pe rândurile blocate: regula de ACUM pe T1 = EXACT jurnalul (o schimbare comisă între calcul și blocare = refuz)
+  SELECT string_agg(coalesce(a.eticheta, b.r_eticheta), ', ') INTO v_dif
+    FROM (SELECT eticheta, detaliu FROM securitate_intern.anon_revocari WHERE migrare = '20261218a') a
+    FULL JOIN (SELECT r_eticheta, r_detaliu FROM pg_temp.anon_regula_20261218a() WHERE r_treapta = 'T1') b
+      ON b.r_eticheta = a.eticheta AND b.r_detaliu = a.detaliu
+   WHERE a.eticheta IS NULL OR b.r_eticheta IS NULL;
+  IF v_dif IS NOT NULL THEN
+    RAISE EXCEPTION '20261218a: schimbare concurenta intre calculul listei si blocare pe: % (nimic schimbat; se reia citirea)', v_dif;
   END IF;
   EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM anon';
   RAISE NOTICE '20261218a: REVOKE pe % secvente la % ms de la BEGIN', v_n, round(extract(epoch FROM clock_timestamp() - now()) * 1000);

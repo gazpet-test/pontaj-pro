@@ -92,6 +92,17 @@ DECLARE v integer; BEGIN INSERT INTO public.t_fara_politici (x) VALUES (p_x) RET
 REVOKE ALL ON FUNCTION public.fn_pagina_publica(text) FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.fn_pagina_publica(text) TO anon;
 -- funcție FĂRĂ DEFINER apelabilă de anon (FUNCTII_ANON)
 CREATE FUNCTION public.fn_invoker_citeste() RETURNS bigint LANGUAGE sql STABLE AS $f$ SELECT count(*) FROM public.t_fara_politici $f$;
+-- vedere-agregat (contoare): anon primește UN rând cu zero, fără date (SIMULARE: AGREGAT_FARA_DATE, nu DATE_CITIBILE)
+CREATE VIEW public.v_contor WITH (security_invoker = on) AS SELECT count(*) AS n FROM public.t_cu_politica;
+-- partiții (r2): părintele cu politică pentru PUBLIC + partiție fără politici; și invers
+CREATE TABLE public.t_part (id integer, x text) PARTITION BY RANGE (id);
+CREATE TABLE public.t_part_1 PARTITION OF public.t_part FOR VALUES FROM (0) TO (100);
+ALTER TABLE public.t_part ENABLE ROW LEVEL SECURITY; ALTER TABLE public.t_part_1 ENABLE ROW LEVEL SECURITY;
+CREATE POLICY t_part_p ON public.t_part FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE TABLE public.t_part2 (id integer, x text) PARTITION BY RANGE (id);
+CREATE TABLE public.t_part2_1 PARTITION OF public.t_part2 FOR VALUES FROM (0) TO (100);
+ALTER TABLE public.t_part2 ENABLE ROW LEVEL SECURITY; ALTER TABLE public.t_part2_1 ENABLE ROW LEVEL SECURITY;
+CREATE POLICY t_part2_1_p ON public.t_part2_1 FOR SELECT USING (auth.uid() IS NOT NULL);
 `
 
 async function bazaNoua() {
@@ -174,25 +185,56 @@ verifica(JSON.stringify(tr('T1')) === JSON.stringify(['secventa public.t_coloane
 verifica(['secventa public.formular_public_id_seq', 'secventa public.t_cu_politica_id_seq'].every(e => ob.some(r => r.eticheta === e && r.treapta === 'RAMANE' && /poate insera/.test(r.motiv))),
   'RAMANE: secvențele tabelelor în care anon poate insera după politici (INSERT / ALL)')
 verifica(JSON.stringify(tr('T2')) === JSON.stringify(['tabel public.t_coloane', 'tabel public.t_fara_politici',
-  'tabel public.t_identity', 'vedere public.v_formular_public', 'vedere public.v_simplu']), 'T2 = tabelele fără politici pentru anon/PUBLIC + vederile')
+  'tabel public.t_identity', 'tabel public.t_part_1', 'tabel_partitionat public.t_part2', 'vedere public.v_contor', 'vedere public.v_formular_public',
+  'vedere public.v_simplu']), 'T2 = tabelele fără politici pentru anon/PUBLIC + vederile; partițiile judecate separat de părinte')
+verifica(['tabel_partitionat public.t_part', 'tabel public.t_part2_1'].every(e => ob.some(r => r.eticheta === e && r.treapta === 'RAMANE')),
+  'partiții: părintele cu politică și partiția cu politică rămân, fiecare pe rândul ei')
+const det = (e) => ob.find(r => r.eticheta === e)?.detaliu || ''
+verifica(/; oid=\d+;/.test(det('tabel public.t_identity')) && /; rls=true\/false;/.test(det('tabel public.t_identity'))
+  && /; reguli=[0-9a-f]{32};/.test(det('vedere public.v_simplu')) && /; politici=[0-9a-f]{32};/.test(det('tabel public.t_fara_politici'))
+  && /; implicite=[0-9a-f]{32}$/.test(det('secventa public.t_fara_politici_id_seq')) && /; parinti=\d+;/.test(det('tabel public.t_part_1')),
+  'amprenta v2: oid, RLS / FORCE, corpul vederii, politicile, DEFAULT-urile (și la secvență), părintele partiției')
+verifica(sectiune(C0, 'CONTROL').length === 1 && /^\d+ obiecte$/.test(sectiune(C0, 'CONTROL')[0].detaliu) && sectiune(C0, 'BASELINE').length === 3,
+  'citirea: 3 rânduri BASELINE (T1 / T2 / T3) + 1 rând CONTROL (RAMANE)')
 verifica(ob.some(r => r.treapta === 'RAMANE' && r.eticheta === 'tabel public.formular_public'), 'RAMANE: tabelul cu politică INSERT pentru anon')
 verifica(JSON.stringify(tr('T3')) === JSON.stringify(['implicit postgres public S', 'implicit postgres public r']), 'T3 = implicitele lui postgres pe public (tabele + secvențe)')
 verifica(ob.some(r => r.treapta === 'RAMANE' && r.eticheta === 'tabel public.t_cu_politica' && /politici/.test(r.motiv)), 'RAMANE: tabelul cu politică pentru PUBLIC')
 verifica(ob.some(r => r.treapta === 'RAMANE' && r.eticheta === 'tabel public.t_alt_proprietar' && /proprietar supabase_admin/.test(r.motiv)), 'RAMANE: tabelul altui proprietar')
 verifica(ob.some(r => r.treapta === 'RAMANE' && r.eticheta === 'implicit supabase_admin public r'), 'RAMANE: implicitul lui supabase_admin')
-verifica(ob.find(r => r.eticheta === 'tabel public.t_coloane')?.detaliu.includes('coloane=a anon=r/postgres;id anon=r/postgres'), 'drepturile pe coloane în detaliu')
+verifica(ob.find(r => r.eticheta === 'tabel public.t_coloane')?.detaliu.includes('coloane=1:23:-1 id anon=r/postgres;2:25:-1 a anon=r/postgres'),
+  'drepturile pe coloane în detaliu, cu attnum:tip:typmod')
 verifica(sectiune(C0, 'FUNCTII_ANON').some(r => r.functie === 'public.fn_invoker_citeste()') && !sectiune(C0, 'FUNCTII_ANON').some(r => /fn_pagina_publica/.test(r.functie)),
   'FUNCTII_ANON: funcția fără DEFINER apelabilă de anon (nu și RPC-ul DEFINER)')
 verifica(sectiune(C0, 'RAMANE').some(r => r.treapta === 'dupa T1+T2+T3' && r.eticheta === 'tabel'), 'RAMANE după toate treptele: tabelele cu politici / alt proprietar')
-verifica(C0.jurnal.some(m => /SIMULARE rezumat: rolul curent anon, 0 relatii cu randuri vizibile/.test(m)), 'SIMULARE: rulează ca anon, 0 relații vizibile')
+verifica(C0.jurnal.some(m => /SIMULARE rezumat: rolul curent anon, 0 relatii cu date citibile, 1 agregate fara date, \d+ goale, \d+ erori/.test(m)),
+  'SIMULARE: rulează ca anon, 0 relații cu date citibile, vederea-contor = agregat fără date')
+verifica(C0.jurnal.some(m => /SIMULARE anon AGREGAT_FARA_DATE in public\.v_contor/.test(m)), 'SIMULARE: vederea-contor clasată AGREGAT_FARA_DATE')
+// SIMULARE deosebește datele citibile: o politică temporară care lasă anon să vadă un rând => DATE_CITIBILE (anulată la final)
+{
+  await db.exec(`BEGIN; INSERT INTO public.t_cu_politica (x) VALUES ('vizibil'); CREATE POLICY p_tmp ON public.t_cu_politica FOR SELECT TO anon USING (true);`)
+  const cs = await citire(db, CITIRE.replace('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;', 'SAVEPOINT s_citire;').replace(/ROLLBACK;\s*$/, 'ROLLBACK TO SAVEPOINT s_citire;'))
+  await db.exec('ROLLBACK')
+  console.log('   ' + cs.jurnal.filter(m => /SIMULARE (anon DATE|anon AGREGAT|anon EROARE|rezumat)/.test(m)).join(' | '))
+  verifica(cs.jurnal.some(m => /SIMULARE anon DATE_CITIBILE in public\.t_cu_politica \(1 randuri/.test(m))
+    && cs.jurnal.some(m => /SIMULARE anon DATE_CITIBILE in public\.v_contor/.test(m))
+    && cs.jurnal.some(m => /SIMULARE rezumat: rolul curent anon, 2 relatii cu date citibile/.test(m)),
+    'SIMULARE: un rând vizibil = DATE_CITIBILE (tabelul și contorul cu valoare nenulă), fără valori în NOTICE')
+  verifica(!cs.jurnal.some(m => m.includes('vizibil')), 'SIMULARE: valorile citite nu apar în NOTICE')
+}
 verifica(C0.jurnal.some(m => /STATISTICI: extensia pg_stat_statements nu e instalata/.test(m)), 'STATISTICI: lipsa extensiei raportată, fără eroare')
 
-// lock-urile luate de REVOKE (T2): doar ACCESS SHARE pe relațiile din public
+// lock-urile ținute de tranzacția T2 la final (OBSERVAȚIE pe PG18, nu garanție pentru PG17.6): pe relațiile din public cel mult ACCESS SHARE
+// (nu oprește citiri / scrieri); serializarea cu alte sesiuni vine din rândurile de catalog rescrise (xmin, verificat mai jos), nu din lock-uri
 await caRunner(db, NUME.a, M.a)
-const lk = await caRunner(db, NUME.b, M.b, { inainteDeCommit: `SELECT l.mode, c.relname FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
-  JOIN pg_namespace n ON n.oid = c.relnamespace WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND n.nspname = 'public';` })
-const moduri = [...new Set(lk.rez[lk.rez.length - 2].rows.map(r => r.mode))]
-verifica(JSON.stringify(moduri) === JSON.stringify(['AccessShareLock']), `T2: lock-urile pe public = doar ${moduri.join(', ')} (${lk.rez[lk.rez.length - 2].rows.length} relații)`)
+const lk = await caRunner(db, NUME.b, M.b, { inainteDeCommit: `SELECT l.mode, c.relname, n.nspname FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+  JOIN pg_namespace n ON n.oid = c.relnamespace WHERE l.pid = pg_backend_pid() AND l.locktype = 'relation' AND n.nspname IN ('public', 'pg_catalog');` })
+const lkr = lk.rez[lk.rez.length - 2].rows
+const moduri = [...new Set(lkr.filter(r => r.nspname === 'public').map(r => r.mode))]
+console.log('   lock-uri observate (PG18): public = ' + moduri.join(', ') + '; catalog = ' + [...new Set(lkr.filter(r => r.nspname === 'pg_catalog' && /^pg_(class|attribute)$/.test(r.relname)).map(r => r.relname + ' ' + r.mode))].join(', '))
+verifica(moduri.every(m => m === 'AccessShareLock'), `T2: pe relațiile din public nu ține nimic peste ACCESS SHARE (observat: ${moduri.join(', ') || 'nimic'})`)
+const xm = (await caRunner(db, NUME.b, M.b, { inainteDeCommit: `SELECT count(*) FILTER (WHERE c.xmin::text <> (txid_current() % 4294967296)::text)::int AS straine, count(*)::int AS n
+  FROM securitate_intern.anon_revocari j JOIN pg_class c ON c.oid = j.obiect_oid WHERE j.migrare = '20261218b';` })).rez
+verifica(xm[xm.length - 2].rows[0].straine === 0 && xm[xm.length - 2].rows[0].n === 8, 'T2: la final, rândul din pg_class al fiecărui obiect din jurnal e al tranzacției (blocat până la COMMIT)')
 const jb = await caRunner(db, NUME.b, M.b)
 console.log('   ' + jb.jurnal.filter(m => /sfarsit/.test(m)).join(' | '))
 const jc = await caRunner(db, NUME.c, M.c)
@@ -201,8 +243,17 @@ const inst1 = await instantaneu(db)
 console.log('   anon după a+b+c:', anonDin(inst1).join(' | '))
 verifica(JSON.stringify(altiiDin(inst1)) === JSON.stringify(altiiDin(inst0)), 'celelalte roluri: exact ca înainte (instantaneu independent)')
 verifica(JSON.stringify(anonDin(inst1).map(l => l.split(' ').slice(0, 2).join(' '))) === JSON.stringify(['def supabase_admin', 'rel formular_public',
-  'rel formular_public_id_seq', 'rel t_alt_proprietar', 'rel t_cu_politica', 'rel t_cu_politica_id_seq']),
-  'anon păstrează DOAR: tabelele cu politici (+ secvențele lor), tabelul altui proprietar, implicitul supabase_admin')
+  'rel formular_public_id_seq', 'rel t_alt_proprietar', 'rel t_cu_politica', 'rel t_cu_politica_id_seq', 'rel t_part', 'rel t_part2_1']),
+  'anon păstrează DOAR: tabelele cu politici (+ secvențele lor, + părintele / partiția cu politică), tabelul altui proprietar, implicitul supabase_admin')
+// partițiile (r2): retragerea nu se propagă; cererea pe părinte cere doar dreptul pe părinte, cea directă doar pe partiție
+let rp = await caAnon(db, 'SELECT * FROM public.t_part')
+verifica(rp.ok && rp.rows.length === 0, 'partiții: părintele păstrat (politică) se citește ca anon (0 rânduri), deși partiția lui e retrasă' + (rp.ok ? '' : ' — ' + rp.mesaj))
+rp = await caAnon(db, 'SELECT * FROM public.t_part_1')
+verifica(!rp.ok && rp.code === '42501', 'partiții: partiția fără politici, retrasă: 42501 direct')
+rp = await caAnon(db, 'SELECT * FROM public.t_part2')
+verifica(!rp.ok && rp.code === '42501', 'partiții: părintele fără politici, retras: 42501 (partiția păstrată nu-l deschide)')
+rp = await caAnon(db, 'SELECT * FROM public.t_part2_1')
+verifica(rp.ok && rp.rows.length === 0, 'partiții: partiția cu politică, păstrată: 0 rânduri direct (retragerea pe părinte n-a atins-o)' + (rp.ok ? '' : ' — ' + rp.mesaj))
 // căile reale (L20): RPC-ul paginii publice merge; citirea directă a unui obiect retras = 42501; obiectul rămas = 0 rânduri, fără eroare
 let r = await caAnon(db, `SELECT public.fn_pagina_publica('din pagina')`)
 verifica(r.ok, 'RPC SECURITY DEFINER al paginii publice: merge după T1+T2+T3' + (r.ok ? '' : ' — ' + r.mesaj))
@@ -223,7 +274,19 @@ await db.exec('DROP VIEW public.v_dupa; DROP TABLE public.t_dupa;')
 const C1 = await citire(db)
 verifica(sectiune(C1, 'OBIECT').filter(x => ['T1', 'T2', 'T3'].includes(x.treapta)).length === 0, 'citirea după: nimic de retras în T1 / T2 / T3')
 const jr = (await db.query(`SELECT migrare, count(*)::int n FROM securitate_intern.anon_revocari GROUP BY 1 ORDER BY 1`)).rows
-verifica(JSON.stringify(jr) === JSON.stringify([{ migrare: '20261218a', n: 3 }, { migrare: '20261218b', n: 5 }, { migrare: '20261218c', n: 2 }]), 'jurnalul = listele: ' + JSON.stringify(jr))
+verifica(JSON.stringify(jr) === JSON.stringify([{ migrare: '20261218a', n: 3 }, { migrare: '20261218b', n: 8 }, { migrare: '20261218c', n: 2 }]), 'jurnalul = listele: ' + JSON.stringify(jr))
+// controlul periodic pe RAMANE (r2): un obiect creat de platformă (supabase_admin, cu drepturile lui implicite pentru anon) după aplicare
+{
+  const k0 = sectiune(C1, 'CONTROL')[0]
+  await db.exec('SET ROLE supabase_admin; CREATE TABLE public.t_platforma (id integer); RESET ROLE;')
+  const C2 = await citire(db)
+  const k1 = sectiune(C2, 'CONTROL')[0]
+  verifica(k1.amprenta !== k0.amprenta && Number(k1.detaliu.split(' ')[0]) === Number(k0.detaliu.split(' ')[0]) + 1
+    && sectiune(C2, 'OBIECT').some(x => x.eticheta === 'tabel public.t_platforma' && x.treapta === 'RAMANE' && /proprietar supabase_admin/.test(x.motiv))
+    && sectiune(C2, 'BASELINE').every(x => x.detaliu.includes(", 0, '")),
+    'control periodic: obiectul nou al lui supabase_admin schimbă CONTROL RAMANE (+1, amprentă nouă) și apare în OBIECT; T1 / T2 / T3 rămân 0')
+  await db.exec('DROP TABLE public.t_platforma;')
+}
 const acl = (await db.query(`SELECT has_table_privilege('anon', 'securitate_intern.anon_revocari', 'SELECT') a, has_schema_privilege('anon', 'securitate_intern', 'USAGE') s,
   has_table_privilege('authenticated', 'securitate_intern.anon_revocari', 'SELECT') b, has_table_privilege('service_role', 'securitate_intern.anon_revocari', 'SELECT') c`)).rows[0]
 verifica(!acl.a && !acl.s && !acl.b && !acl.c, 'jurnalul: niciun drept pentru anon / authenticated / service_role')
@@ -244,7 +307,19 @@ await trebuieSaRefuze(caRunner(db, NUME.a, M.a), 'exista deja', 'a de două ori'
 // revenirea refuză când starea s-a schimbat după livrare
 await db.exec('GRANT SELECT ON public.t_identity TO anon;')
 await trebuieSaRefuze(caRunner(db, NUME.b + '_ROLLBACK', REV.b), 'drepturi noi pentru anon', 'revenirea b după un drept nou pentru anon pe un obiect retras')
-await db.exec('REVOKE SELECT ON public.t_identity FROM anon; DROP VIEW public.v_simplu;')
+await db.exec('REVOKE SELECT ON public.t_identity FROM anon;')
+// coloana recreată (contraexemplul review-ului #1081 P1): „a” redenumită, alta nouă cu numele „a” => refuz, iar coloana nouă nu primește nimic
+await db.exec('ALTER TABLE public.t_coloane RENAME COLUMN a TO a_vechi; ALTER TABLE public.t_coloane ADD COLUMN a text;')
+await trebuieSaRefuze(caRunner(db, NUME.b + '_ROLLBACK', REV.b), 'coloane schimbate', 'revenirea b după redenumirea coloanei a + o coloană nouă „a”')
+verifica(!(await db.query(`SELECT has_column_privilege('anon', 'public.t_coloane', 'a', 'SELECT') x`)).rows[0].x
+  && !(await db.query(`SELECT has_column_privilege('anon', 'public.t_coloane', 'a_vechi', 'SELECT') x`)).rows[0].x, 'coloana nouă „a” (și cea veche) NU au primit dreptul')
+await db.exec('ALTER TABLE public.t_coloane DROP COLUMN a; ALTER TABLE public.t_coloane RENAME COLUMN a_vechi TO a;')
+await db.exec('ALTER TABLE public.t_coloane ALTER COLUMN a TYPE varchar(50);')
+await trebuieSaRefuze(caRunner(db, NUME.b + '_ROLLBACK', REV.b), 'coloane schimbate', 'revenirea b după schimbarea tipului coloanei a')
+await db.exec('ALTER TABLE public.t_coloane ALTER COLUMN a TYPE text;')
+await db.exec('ALTER TABLE public.t_coloane DROP COLUMN a; ALTER TABLE public.t_coloane ADD COLUMN a text;')
+await trebuieSaRefuze(caRunner(db, NUME.b + '_ROLLBACK', REV.b), 'coloane schimbate', 'revenirea b după scoaterea coloanei a și adăugarea alteia cu același nume')
+await db.exec('DROP VIEW public.v_simplu;')
 await trebuieSaRefuze(caRunner(db, NUME.b + '_ROLLBACK', REV.b), 'disparute', 'revenirea b după ștergerea unui obiect retras')
 await db.exec('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO anon;')
 await trebuieSaRefuze(caRunner(db, NUME.c + '_ROLLBACK', REV.c), 'date dupa livrare', 'revenirea c după un drept implicit nou pentru anon')
@@ -283,6 +358,67 @@ await cuBaza(async (d) => {
   await trebuieSaRefuze(caRunner(d, NUME.b, mig.b), 'difera de BASELINE', 'b: alte drepturi (o coloană) după citire')
   await d.exec('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE USAGE ON SEQUENCES FROM anon;')
   await trebuieSaRefuze(caRunner(d, NUME.c, mig.c), 'difera de BASELINE', 'c: implicitele schimbate după citire')
+})
+// r2 (review #1081 P1): un obiect RECREAT cu același nume / aceleași drepturi, sau schimbat în ce nu ține de drepturile lui anon, după citire
+const RECREARI = [
+  ['a', 'secvența IDENTITY recreată (tabelul șters și recreat identic)', `DROP TABLE public.t_identity;
+    CREATE TABLE public.t_identity (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, x text); ALTER TABLE public.t_identity ENABLE ROW LEVEL SECURITY;`],
+  ['a', 'secvența scoasă din DEFAULT-ul tabelului ei', 'ALTER TABLE public.t_coloane ALTER COLUMN id SET DEFAULT 0;'],
+  ['b', 'vederea ștearsă și recreată IDENTIC (alt oid)', `DROP VIEW public.v_simplu;
+    CREATE VIEW public.v_simplu WITH (security_invoker = on) AS SELECT id, x FROM public.t_fara_politici;`],
+  ['b', 'corpul vederii rescris (același oid)', 'CREATE OR REPLACE VIEW public.v_simplu WITH (security_invoker = on) AS SELECT id, x, 1 AS y FROM public.t_fara_politici;'],
+  ['b', 'FORCE ROW LEVEL SECURITY pornit', 'ALTER TABLE public.t_identity FORCE ROW LEVEL SECURITY;'],
+  ['b', 'RLS oprit', 'ALTER TABLE public.t_identity DISABLE ROW LEVEL SECURITY;'],
+  ['b', 'expresia unei politici (pentru authenticated) schimbată', 'ALTER POLICY t_fp_auth ON public.t_fara_politici USING (true);'],
+  ['b', 'un DEFAULT schimbat', `ALTER TABLE public.t_fara_politici ALTER COLUMN x SET DEFAULT 'z';`],
+  ['b', 'partiția desprinsă de părinte', 'ALTER TABLE public.t_part DETACH PARTITION public.t_part_1;'],
+]
+for (const [k, nume, sql] of RECREARI) {
+  await cuBaza(async (d) => {
+    const { mig } = await migrariCuBaseline(d)
+    if (k !== 'a') await caRunner(d, NUME.a, mig.a)
+    await d.exec(sql)
+    await trebuieSaRefuze(caRunner(d, NUME[k], mig[k]), 'difera de BASELINE', `${k}: ${nume} după citire`)
+  })
+}
+// r2: CURSA dintre calculul listei și REVOKE (review #1081 P1). PGlite are o singură conexiune: „cealaltă sesiune” e simulată determinist,
+// cu instrucțiunea ei injectată EXACT în fereastră (proba cu două sesiuni reale: scripts/anon_drepturi_concurenta.mjs, pe clona PG17).
+const INJ_A = '-- ── jurnalul comun al treptelor (neexpus în API, doar postgres) ──'
+const INJ_B = '-- ── jurnal, blocarea rândurilor + recitirea, apoi UN SINGUR REVOKE pe lista din jurnal + verificarea coloanelor ──'
+const INJ_C = '-- blocarea: retragere fără efect de la PUBLIC => cele două rânduri din pg_default_acl sunt rescrise de noi și rămân ale noastre până la COMMIT'
+const REV_B_IN = "  EXECUTE 'REVOKE ALL ON TABLE ' || v_lista || ' FROM anon';"
+const GRANT_SEQ = 'GRANT SELECT ON SEQUENCE public.t_identity_id_seq TO anon WITH GRANT OPTION;'
+const jurnalT = async (d, m, e) => (await d.query(`SELECT drepturi, coloane FROM securitate_intern.anon_revocari WHERE migrare = '${m}' AND eticheta = '${e}'`)).rows[0]
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [[INJ_A, GRANT_SEQ + '\n' + INJ_A]])), 'schimbare concurenta',
+    'cursa a: un drept nou (opțiune de acordare) pe o secvență din listă, între calcul și blocare')
+  await trebuieSaRefuze(caRunner(d, NUME.a, aplica(mig.a, [["  EXECUTE 'REVOKE ALL ON SEQUENCE ' || v_lista || ' FROM PUBLIC';", '  NULL;']])),
+    'blocarea randurilor din catalog nu s-a facut', 'mutant a fără blocare: dovada pe xmin refuză')
+  // mutantul fără recitire: aceeași cursă TRECE și dreptul injectat dispare fără jurnal (defectul din review, reprodus)
+  await caRunner(d, NUME.a, aplica(mig.a, [[INJ_A, GRANT_SEQ + '\n' + INJ_A],
+    ["  IF v_dif IS NOT NULL THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta", "  IF false THEN\n    RAISE EXCEPTION '20261218a: schimbare concurenta"]]))
+  const j = await jurnalT(d, '20261218a', 'secventa public.t_identity_id_seq')
+  const acum = (await d.query(`SELECT has_sequence_privilege('anon', 'public.t_identity_id_seq', 'SELECT WITH GRANT OPTION') x`)).rows[0].x
+  verifica(j && !j.drepturi.some(x => x.includes('*')) && !acum, 'mutant a fără recitire: dreptul dat în fereastră e retras și LIPSEȘTE din jurnal (recitirea e cea care îl prinde)')
+})
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  await caRunner(d, NUME.a, mig.a)
+  await trebuieSaRefuze(caRunner(d, NUME.b, aplica(mig.b, [[INJ_B, 'GRANT SELECT ON public.t_identity TO anon WITH GRANT OPTION;\n' + INJ_B]])), 'schimbare concurenta',
+    'cursa b: un drept nou pe un tabel din listă, între calcul și blocare')
+  const COL = `  EXECUTE 'GRANT SELECT (x) ON public.t_identity TO anon';\n` + REV_B_IN
+  await trebuieSaRefuze(caRunner(d, NUME.b, aplica(mig.b, [[REV_B_IN, COL]])), 'drepturi pe coloane schimbate concurent',
+    'cursa b: un drept pe o coloană FĂRĂ drepturi (rând neblocat), între recitire și REVOKE')
+  await caRunner(d, NUME.b, aplica(mig.b, [[REV_B_IN, COL], ['  IF v_col_dupa IS DISTINCT FROM v_col THEN', '  IF false THEN']]))
+  const j = await jurnalT(d, '20261218b', 'tabel public.t_identity')
+  verifica(j && !j.coloane.some(x => / x anon=/.test(x)), 'mutant b fără verificarea coloanelor: dreptul pe coloană dat în fereastră e retras și LIPSEȘTE din jurnal')
+})
+await cuBaza(async (d) => {
+  const { mig } = await migrariCuBaseline(d)
+  await caRunner(d, NUME.a, mig.a)
+  await trebuieSaRefuze(caRunner(d, NUME.c, aplica(mig.c, [[INJ_C, 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT TRUNCATE ON TABLES TO anon;\n' + INJ_C]])),
+    'schimbare concurenta', 'cursa c: un drept implicit nou pentru anon, între calcul și blocare')
 })
 await cuBaza(async (d) => {
   const { mig } = await migrariCuBaseline(d)

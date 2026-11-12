@@ -9,8 +9,11 @@
 --   bash scripts/livrare_migrare.sh --migrare supabase/revenire/20261218a_securitate_anon_drepturi_ROLLBACK.sql --sha256 <sha256 al fișierului>
 --        --versiune 20261218120001 --tinta-db postgres --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P> --user postgres
 --        --plafon-tranzactie-ms 2000
--- Lock-uri: ca migrarea (GRANT ia ACCESS SHARE pe fiecare obiect + rândul lui din pg_class, până la COMMIT; lock_timeout 100 ms). GRANT-urile
---   sunt grupate pe seturi identice de drepturi (câteva instrucțiuni, nu una pe obiect). Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează.
+-- Lock-uri (PostgreSQL 17.6): GRANT nu ia lock pe secvențe (NoLock); deschide pg_class cu RowExclusiveLock și rescrie rândul fiecărei
+--   secvențe, ținut până la COMMIT (un GRANT / DDL concurent pe aceeași secvență așteaptă și pică după COMMIT; noi așteptăm doar după o
+--   tranzacție care rescrisese deja rândul: lock_timeout 100 ms => refuz). Un drept dat concurent înainte de GRANT-ul nostru e prins de
+--   postcondiția „exact jurnalul”. GRANT-urile sunt grupate pe seturi identice de drepturi (câteva instrucțiuni, nu una pe obiect). Un SINGUR
+--   bloc DO: un refuz e singura instrucțiune care eșuează.
 DO $revenire$
 DECLARE v_plafon text; v_dif text; v_alte text; v_n integer; g record;
 BEGIN
@@ -59,7 +62,7 @@ BEGIN
                                          || ' ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname)
           OR c.relkind::text NOT IN ('S')
           OR EXISTS (SELECT 1 FROM aclexplode(c.relacl) e WHERE e.grantee = 'anon'::regrole)
-          OR EXISTS (SELECT 1 FROM pg_attribute a, aclexplode(a.attacl) e WHERE a.attrelid = c.oid AND a.attnum > 0 AND e.grantee = 'anon'::regrole));
+          OR EXISTS (SELECT 1 FROM pg_attribute a, aclexplode(a.attacl) e WHERE a.attrelid = c.oid AND NOT a.attisdropped AND e.grantee = 'anon'::regrole));
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261218a revenire: obiecte disparute / redenumite sau cu drepturi noi pentru anon dupa livrare: % (nimic schimbat)', v_dif;
   END IF;
@@ -104,27 +107,20 @@ SELECT md5(coalesce(string_agg(y.l, chr(10) ORDER BY y.l COLLATE "C"), '')) FROM
     IF g.simple IS NOT NULL THEN EXECUTE format('GRANT %s ON SEQUENCE %s TO anon', g.simple, g.lista); END IF;
     IF g.cu_optiune IS NOT NULL THEN EXECUTE format('GRANT %s ON SEQUENCE %s TO anon WITH GRANT OPTION', g.cu_optiune, g.lista); END IF;
   END LOOP;
-  -- 4. drepturile pe coloane (rândul de jurnal: „coloana_citată aclitem”), grupate pe tabel și set de drepturi
-  FOR g IN
-    SELECT y.tabel, y.drept, y.optiune, string_agg(y.coloana, ', ' ORDER BY y.coloana COLLATE "C") AS coloane
-      FROM (SELECT format('%I.%I', n.nspname, c.relname) AS tabel, substring(col FROM '^(.*) [^ ]+$') AS coloana,
-                   e.privilege_type AS drept, e.is_grantable AS optiune
-              FROM securitate_intern.anon_revocari j JOIN pg_class c ON c.oid = j.obiect_oid JOIN pg_namespace n ON n.oid = c.relnamespace,
-                   unnest(j.coloane) col, aclexplode(ARRAY[substring(col FROM ' ([^ ]+)$')::aclitem]) e
-             WHERE j.migrare = '20261218a') y
-     GROUP BY y.tabel, y.drept, y.optiune
-  LOOP
-    EXECUTE format('GRANT %s (%s) ON TABLE %s TO anon', g.drept, g.coloane, g.tabel) || CASE WHEN g.optiune THEN ' WITH GRANT OPTION' ELSE '' END;
-  END LOOP;
+  -- 4. o secvență nu are drepturi pe coloane: un rând T1 cu coloane = jurnal nevalid => refuz (nimic de refăcut pe coloane aici)
+  IF EXISTS (SELECT 1 FROM securitate_intern.anon_revocari j WHERE j.migrare = '20261218a' AND cardinality(j.coloane) > 0) THEN
+    RAISE EXCEPTION '20261218a revenire: jurnalul T1 are drepturi pe coloane (secventele nu au coloane cu drepturi; nimic schimbat)';
+  END IF;
   -- 5. postcondiții: anon are EXACT drepturile din jurnal (pe obiect și pe coloane, același format ca regula); celelalte roluri neatinse
   SELECT string_agg(j.eticheta, ', ') INTO v_dif
     FROM securitate_intern.anon_revocari j JOIN pg_class c ON c.oid = j.obiect_oid
    WHERE j.migrare = '20261218a'
      AND (coalesce((SELECT array_agg(x.it::text ORDER BY x.it::text COLLATE "C") FROM unnest(c.relacl) x(it)
                      WHERE EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e WHERE e.grantee = 'anon'::regrole)), '{}'::text[]) IS DISTINCT FROM j.drepturi
-          OR coalesce((SELECT array_agg(quote_ident(att.attname) || ' ' || x.it::text ORDER BY att.attname COLLATE "C", x.it::text COLLATE "C")
+          OR coalesce((SELECT array_agg(att.attnum::text || ':' || att.atttypid::text || ':' || att.atttypmod::text || ' ' || quote_ident(att.attname)
+                                        || ' ' || x.it::text ORDER BY att.attnum, x.it::text COLLATE "C")
                          FROM pg_attribute att CROSS JOIN LATERAL unnest(att.attacl) x(it)
-                        WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped
+                        WHERE att.attrelid = c.oid AND NOT att.attisdropped
                           AND EXISTS (SELECT 1 FROM aclexplode(ARRAY[x.it]) e WHERE e.grantee = 'anon'::regrole)), '{}'::text[]) IS DISTINCT FROM j.coloane);
   IF v_dif IS NOT NULL THEN RAISE EXCEPTION '20261218a revenire post: drepturile lui anon nu sunt exact cele din jurnal pe: %', v_dif; END IF;
   IF (
