@@ -37,8 +37,20 @@ const LISTA_GOALA = '{"net._http_response":"DE_COMPLETAT","net.http_request_queu
 const a = M18.indexOf('CREATE FUNCTION public.fn_portal_teren_rel_drept(')
 const b = M18.indexOf('CREATE TABLE public.portal_public_baseline')
 if (a < 0 || b < 0 || !(a < b)) { console.log('PICA: bucata cu helperii nu se gaseste in 18a'); process.exit(1) }
-const HELPERI = M18.slice(a, b)
-if (HELPERI.split(LISTA_GOALA).length !== 2) { console.log('PICA: lista DE_COMPLETAT nu apare exact o data in helperi'); process.exit(1) }
+const HELPERI_18A = M18.slice(a, b)
+// r24: 18a poate fi NECOMPLETAT (DE_COMPLETAT) sau COMPLETAT din productie (md5). Literalul se citeste in forma CURENTA
+// (exact o aparitie, in fn_portal_net_rel_aprobat); pasul 1 (necompletat = refuz) ruleaza pe aceiasi helperi, cu literalul
+// adus in memorie la DE_COMPLETAT (fisierul nu se schimba). Daca 18a e completat, valorile trebuie sa fie md5 si nu r21.
+const LISTE = [...HELPERI_18A.matchAll(/SELECT '(\{[^']*\})'::jsonb;/g)].map(m => m[1])
+if (LISTE.length !== 1 || HELPERI_18A.split(LISTE[0]).length !== 2) { console.log('PICA: literalul listei pg_net nu apare exact o data in helperi'); process.exit(1) }
+const LISTA_18A = LISTE[0]
+let VALORI_18A
+try { VALORI_18A = JSON.parse(LISTA_18A) } catch { console.log('PICA: literalul listei pg_net nu e JSON'); process.exit(1) }
+const STARE_18A = LISTA_18A === LISTA_GOALA ? 'necompletat'
+  : (JSON.stringify(Object.keys(VALORI_18A)) === JSON.stringify(CHEI) && Object.values(VALORI_18A).every(v => /^[0-9a-f]{32}$/.test(v))
+     && LISTA_18A === '{' + CHEI.map(k => `"${k}":"${VALORI_18A[k]}"`).join(',') + '}') ? 'completat' : null
+if (!STARE_18A) { console.log(`PICA: lista pg_net din 18a nu e nici DE_COMPLETAT, nici completata (md5): ${LISTA_18A}`); process.exit(1) }
+const HELPERI = HELPERI_18A.replace(LISTA_18A, LISTA_GOALA)
 // Conditia PostgREST din poarta, exact textul din 18a.
 const pa = M18.indexOf('EXISTS (SELECT FROM pg_catalog.pg_db_role_setting')
 const pb = M18.indexOf(" THEN\n    v:=array_append(v,'teren PostgREST expune net')")
@@ -89,6 +101,8 @@ try { g = await citesteG() } catch (e) { console.log(`PICA porti_citire.sql: ${e
 ok(JSON.stringify(Object.keys(g).sort()) === JSON.stringify(CHEI) && Object.values(g).every(v => /^[0-9a-f]{32}$/.test(v)),
   `G pe schema falsa: cele 3 obiecte, md5 ${JSON.stringify(g)}`)
 ok(Object.values(g).every(v => !R21_VECHI.includes(v)), 'r22: amprenta noua difera de cea din r21 (md5-urile r21 de pe productie nu mai ies)')
+ok(STARE_18A === 'necompletat' || Object.values(VALORI_18A).every(v => !R21_VECHI.includes(v)),
+  `r24: lista din 18a: ${STARE_18A}${STARE_18A === 'completat' ? ' (valori de productie, nicio valoare r21)' : ''}`)
 
 // 1. Helperii EXACT din 18a (lista DE_COMPLETAT): toate cele 3 obiecte respinse.
 await db.exec(HELPERI)
@@ -97,7 +111,7 @@ const stare = async () => Object.fromEntries((await q(`SELECT quote_ident(n.nspn
   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='net' AND c.relkind IN ('r','p','v','m','f','S')`))
   .map(r => [r.k, `${r.acc ? 'acceptat' : 'RESPINS'}/${r.drept ? 'accesibil' : 'neaccesibil'}`]).sort())
 const sGol = await stare()
-ok(CHEI.every(k => sGol[k] === 'RESPINS/accesibil'), `lista DE_COMPLETAT din 18a: toate respinse (necompletat = refuz): ${JSON.stringify(sGol)}`)
+ok(CHEI.every(k => sGol[k] === 'RESPINS/accesibil'), `lista DE_COMPLETAT (helperii din 18a${STARE_18A === 'completat' ? ', literalul adus in memorie la DE_COMPLETAT' : ''}): toate respinse (necompletat = refuz): ${JSON.stringify(sGol)}`)
 
 // 2. paritatea L19 pe fiecare obiect.
 const amp = async () => Object.fromEntries((await q(`SELECT quote_ident(n.nspname)||'.'||quote_ident(c.relname) AS k,

@@ -147,7 +147,8 @@ q "SELECT jsonb_build_object(
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='net'))" >"$AMPRENTE"
 # r22: amprentele obiectelor pg_net ale fixture-ului = sectiunea G din porti_citire.sql rulata pe clusterul efemer INAINTE
 # de apply, citita cu ACELASI script ca pe productie (net_rel_completeaza.py, aici --json, fara scriere in repo); intra in
-# copie ca literalii listei din 18a (artefactul ramane DE_COMPLETAT). Harness-ul nu are pg_cron: cron.job minimal (I).
+# copie ca literalii listei din 18a (r24: oricare ar fi starea artefactului, DE_COMPLETAT sau completat din productie,
+# prepare_fixture.py inlocuieste literalul curent). Harness-ul nu are pg_cron: cron.job minimal (I).
 NET_REL="$TMP/net_rel.json"
 q "CREATE SCHEMA cron; CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, command text NOT NULL,
    username text NOT NULL DEFAULT current_user, active boolean NOT NULL DEFAULT true, jobname text)" >/dev/null
@@ -192,7 +193,7 @@ python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/v_teren_prod
   --amprente "$AMPRENTE" --net-rel "$NET_REL" --erp 00000000-0000-0000-0000-000000000001 >/dev/null
 hold_18a "$TMP/v_teren_prod/20261118a_portal_teren_identitate.sql" PORTAL_TERRAIN_INVENTORY_CHANGED teren_prod
 # r22: lista pg_net DE_COMPLETAT (ca artefactul pana la recitirea G pe productie), restul fixture-ului corect = refuz
-# atomic cu motivul exact.
+# atomic cu motivul exact. r24: --net-rel-necompletat pune explicit DE_COMPLETAT si dupa ce 18a e completat in repo.
 mkdir "$TMP/v_net_rel_gol"
 python3 "$ROOT/scripts/portal/prepare_fixture.py" "$ORIGINAL" "$TMP/v_net_rel_gol/20261118a_portal_teren_identitate.sql" \
   --amprente "$AMPRENTE" --net-rel-necompletat --teren "${TEREN_FIXTURE[@]}" --erp 00000000-0000-0000-0000-000000000001 >/dev/null

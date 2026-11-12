@@ -1574,3 +1574,40 @@ PUBLIC retrase de pe pg_net) = cererea catre suportul Supabase; daca vine, poart
 | L20 | Cai legitime: authenticated / service_role apeleaza, triggerul se declanseaza, revenirea reda PUBLIC, drepturile explicite existente raman. |
 | L25 | Expected din regulile PostgreSQL si din citirea de productie (nu din codul testat); mutanti pe fiecare regula; NOSUPERUSER si PG17 la harness. |
 | restul | n/a (L01-L06, L08-L11, L13, L16, L17, L21-L24: fara cozi, identitate noua, bani, AI, UI; ordinea lock-urilor neschimbata). |
+
+## E1-1a r24 — 12.11.2026 (testele trec si dupa lipirea amprentelor pg_net; reperul determinist al buclei de lock)
+
+Coordonatorul a lipit in 18a amprentele pg_net din productie (`net_rel_completeaza.py --scrie`); dupa lipire
+`test_static_net_rel.py` pica (6 teste), pentru ca testele cautau textul fix `DE_COMPLETAT`. SQL-ul lui 18a / 19a /
+reveniri NU se schimba in r24 (sha256 18a, forma LF, ramane cel trimis la review).
+
+- **Testul static**: mutantii pe lista pornesc de la literalul CURENT din 18a (citit din `fn_portal_net_rel_aprobat`);
+  testul trece in ambele stari valide (necompletat = `DE_COMPLETAT` + `PROD_R22 = {}`; completat = lista = `PROD_R22`).
+  Test nou pe drumul coordonatorului, pe o copie temporara: necompletat -> testele trec -> `--scrie` -> testele trec ->
+  a doua completare cu aceleasi valori = nimic scris, cod 0, aceleasi SHA-uri -> alte valori = refuz, nimic scris; starea
+  amestecata (doar unul din fisiere completat) = refuz.
+- **`net_rel_completeaza.py`**: idempotent pe aceleasi valori; refuz pe alte valori sau pe stare amestecata.
+- **Aceeasi presupunere, reparata si in**: `prepare_fixture.py` (harness-ul; inlocuieste literalul curent, iar
+  `--net-rel-necompletat` pune explicit `DE_COMPLETAT`), `test_static.py` (generatorul pe ambele stari + lista pe jumatate
+  refuzata), `net_rel_pglite.mjs` (pasul „necompletat = refuz” pe helperii din 18a cu literalul adus in memorie la
+  `DE_COMPLETAT`; daca 18a e completat: md5 si nicio valoare r21). Celelalte teste (porti_citire, public_d, audit, diag,
+  1b, r2, vitest) nu aveau presupunerea.
+- **`lock_budget_refusal` (review #1072)**: reperul r18 (advisory lock-ul runnerului) se lua inaintea intregii migrari,
+  deci probele puteau rula in prefix. Reperul nou, fara schimbare in SQL: backendul livrarii activ, in tranzactie, in
+  `PgSleep` = pauza din bucla `$locks$`, care ruleaza numai dupa o incercare NOWAIT ratata. Precondita verificata la
+  rulare si static: exact un `pg_sleep` in 18a si in 19a, in bucla; runnerul fara `pg_sleep`. La final: aceeasi tranzactie
+  (`xact_start`) tot in bucla, iar refuzul are >= 2 incercari. Daca livrarea refuza inainte de bucla, testul spune ca
+  prefixul a consumat bugetul (cu numarul de incercari si ms de la BEGIN), nu „fereastra ratata”; iesirea arata si la cate
+  ms de la BEGIN a intrat in bucla.
+
+Rulat: `test_static_net_rel.py` 28 OK, `test_static.py` 10 OK, `test_static_porti_citire.py` 32, `test_static_public_d.py`
+15, `test_static_diag_porti.py` 18, `test_static_1b.py` 12, `test_static_r2.py` 2 OK; PGlite `net_rel`, `public_d`,
+`audit_tranzitiv`, `porti_citire` OK; `npx vitest run` 219 fisiere OK, 1 pica local (acelasi shebang + CRLF, neatins);
+`npx vite build` OK. **Nerulat de mine**: harness-ul PG17 (bash / PG17 cer aprobare pe acest server), deci noul reper al
+buclei e dovedit static, nu pe cluster.
+
+| Regula | Dovada r24 |
+|---|---|
+| L19 | O singura forma a literalului listei (`lista_json` / `LISTA_18A`), folosita de test si de scriptul de completare. |
+| L25 | Expected independent (valori sintetice + drumul real al scriptului pe copie); bariera de concurenta = stare observabila a backendului (PgSleep in bucla), nu un reper luat prea devreme; motivul exact al esecului. |
+| restul | n/a (fara schimbari de SQL, drepturi, cozi, UI). |

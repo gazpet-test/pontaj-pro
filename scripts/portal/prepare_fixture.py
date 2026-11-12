@@ -53,7 +53,7 @@ parser.add_argument("--erp", nargs="*", default=[])
 parser.add_argument("--teren", nargs="*", default=None)
 # r22: lista obiectelor pg_net (fn_portal_net_rel_aprobat) e DE_COMPLETAT in 18a; copia de fixture primeste amprentele
 # citite de harness din clusterul efemer (porti_citire.sql G, prin net_rel_completeaza.py --json), ca pe productie.
-# --net-rel-necompletat lasa lista DE_COMPLETAT (testul negativ: PORTAL_NET_REL_LIST_NECOMPLETATA).
+# --net-rel-necompletat pune lista DE_COMPLETAT (testul negativ: PORTAL_NET_REL_LIST_NECOMPLETATA), oricare ar fi starea 18a (r24).
 grup_net_rel = parser.add_mutually_exclusive_group(required=True)
 grup_net_rel.add_argument("--net-rel", type=Path)
 grup_net_rel.add_argument("--net-rel-necompletat", action="store_true")
@@ -131,13 +131,24 @@ if teren:
 
 NET_REL_CHEI = ["net._http_response", "net.http_request_queue", "net.http_request_queue_id_seq"]
 LISTA_GOALA = '{' + ','.join(f'"{k}":"DE_COMPLETAT"' for k in NET_REL_CHEI) + '}'
-if text.count(LISTA_GOALA) != 1:
-    hold("lista pg_net DE_COMPLETAT din 18a: trebuie exact o aparitie")
+# r24: 18a poate fi NECOMPLETAT (DE_COMPLETAT) sau COMPLETAT din productie (md5); literalul se citeste in forma lui
+# curenta (exact o aparitie, toate DE_COMPLETAT sau toate md5) si se inlocuieste explicit in ambele variante:
+# --net-rel => amprentele clusterului, --net-rel-necompletat => DE_COMPLETAT (testul negativ nu mai depinde de repo).
+LISTA_18A = re.compile(r"SELECT '(\{" + ",".join(f'"{re.escape(k)}":"([^"\']*)"' for k in NET_REL_CHEI) + r"\})'::jsonb;")
+gasite = LISTA_18A.findall(text)
+if len(gasite) != 1:
+    hold("lista pg_net din 18a (fn_portal_net_rel_aprobat): trebuie exact o aparitie")
+lista_curenta, valori_curente = gasite[0][0], gasite[0][1:]
+if text.count(lista_curenta) != 1 or not (all(v == "DE_COMPLETAT" for v in valori_curente)
+                                          or all(MD5.match(v) for v in valori_curente)):
+    hold("lista pg_net din 18a: nici DE_COMPLETAT, nici completata (md5) peste tot")
 if args.net_rel is not None:
     net_rel = json.loads(args.net_rel.read_text(encoding="utf-8"))
     if not isinstance(net_rel, dict) or sorted(net_rel) != NET_REL_CHEI or not all(MD5.match(v) for v in net_rel.values()):
         hold("--net-rel: exact cele trei obiecte pg_net, cu md5")
-    text = text.replace(LISTA_GOALA, '{' + ','.join(f'"{k}":"{net_rel[k]}"' for k in NET_REL_CHEI) + '}', 1)
+    text = text.replace(lista_curenta, '{' + ','.join(f'"{k}":"{net_rel[k]}"' for k in NET_REL_CHEI) + '}', 1)
+else:
+    text = text.replace(lista_curenta, LISTA_GOALA, 1)
 
 args.destination.write_text(text, encoding="utf-8", newline="\n")
 print(f"FIXTURE ONLY: 21 public + 12 net sintetice cu amprente literale; ERP aprobate: {len(args.erp)}; "

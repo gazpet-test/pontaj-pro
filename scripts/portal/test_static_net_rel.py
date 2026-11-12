@@ -19,6 +19,9 @@ Verifica:
     „functii ramase” din harness.
   - Postconditiile 18a / 19a si refuzurile revenirilor: IS DISTINCT FROM (NULL nu trece) si lista portilor in mesaj.
 Mutantii (o litera schimbata in amprenta, o cheie in plus, un md5 schimbat, un helper uitat la revenire) sunt refuzati.
+r24: testul trece in AMBELE stari ale lui 18a (necompletat si completat din productie); mutantii pe lista pornesc de la
+literalul CURENT din 18a. Completeaza.test_drum_complet_* ruleaza drumul coordonatorului pe o copie temporara
+(necompletat -> testele trec -> net_rel_completeaza.py --scrie -> testele trec -> a doua completare = idempotent).
 Rularea pe PostgreSQL (PGlite, schema falsa in forma productiei): scripts/portal/net_rel_pglite.mjs.
 """
 import re
@@ -74,12 +77,37 @@ def functie(text, nume):
     return m.group(0)
 
 
-def lista_aprobata(text):
+def literal_lista(text):
+    """Literalul jsonb al listei aprobate, asa cum e ACUM in 18a (DE_COMPLETAT sau completat din productie)."""
     corp = functie(text, "fn_portal_net_rel_aprobat")
     m = re.findall(r"SELECT '(\{[^']*\})'::jsonb;", corp)
     if len(m) != 1:
         raise AssertionError("lista aprobata: cerut exact un literal jsonb")
-    return dict(re.findall(r'"([^"]+)":"([^"]+)"', m[0])), m[0].count(":")
+    return m[0]
+
+
+def lista_aprobata(text):
+    lit = literal_lista(text)
+    return dict(re.findall(r'"([^"]+)":"([^"]+)"', lit)), lit.count(":")
+
+
+def lista_json(valori):
+    """Forma exacta a literalului (cheile in ordinea CHEI), ca in 18a si ca in net_rel_completeaza.py."""
+    return '{' + ','.join(f'"{k}":"{v}"' for k, v in zip(CHEI, valori)) + '}'
+
+
+LISTA_GOALA = lista_json([NECOMPLETAT] * len(CHEI))
+
+
+def stare_18a(m18, prod):
+    """r24: cele DOUA stari valide ale perechii (18a, PROD_R22): 'necompletat' (lista DE_COMPLETAT, PROD_R22 gol) sau
+    'completat' (lista = PROD_R22, md5 hex). Orice altceva = None (verifica() spune motivul)."""
+    lit = literal_lista(m18)
+    if lit == LISTA_GOALA and not prod:
+        return "necompletat"
+    if prod and sorted(prod) == CHEI and lit == lista_json(prod[k] for k in CHEI):
+        return "completat"
+    return None
 
 
 def lista_ddl(text):
@@ -197,18 +225,36 @@ def verifica(m18, cit, r18, m19, r19, harn, prod=None):
 
 
 class NetRel(unittest.TestCase):
+    # r24: mutantii pe lista pornesc de la literalul CURENT din 18a (citit din functia marcata), nu de la un text fix:
+    # testul trebuie sa treaca si inainte, si dupa ce coordonatorul lipeste valorile de productie (net_rel_completeaza.py).
     def setUp(self):
         self.f = [citeste(p) for p in (M18, CIT, R18, M19, R19, HARN)]
+        self.LISTA = literal_lista(self.f[0])
 
-    def refuz(self, i, vechi, nou, motiv, count=1):
+    def refuz(self, i, vechi, nou, motiv, count=1, prod=None):
         f = list(self.f)
         self.assertIn(vechi, f[i], f"mutantul nu se aplica: {vechi[:60]}")
         f[i] = f[i].replace(vechi, nou, count)
-        mot = verifica(*f)
+        mot = verifica(*f, prod=prod)
         self.assertTrue(any(motiv in m for m in mot), f"asteptat refuz «{motiv}», primit {mot}")
 
+    def cu_lista(self, lit):
+        """Fisierele cu literalul listei din 18a inlocuit (exact o data)."""
+        f = list(self.f)
+        self.assertEqual(f[0].count(self.LISTA), 1, "literalul listei trebuie sa apara exact o data in 18a")
+        f[0] = f[0].replace(self.LISTA, lit, 1)
+        return f
+
     def test_real_acceptat(self):
+        self.assertIn(stare_18a(self.f[0], PROD_R22), ("necompletat", "completat"),
+                      f"18a / PROD_R22 nu sunt intr-o stare valida: {self.LISTA} / {PROD_R22}")
         self.assertEqual(verifica(*self.f), [])
+
+    def test_cele_doua_stari_acceptate(self):
+        # necompletat (DE_COMPLETAT + PROD_R22 gol) si completat (valori = PROD_R22): ambele trec, oricare ar fi starea din repo
+        self.assertEqual(verifica(*self.cu_lista(LISTA_GOALA), prod={}), [])
+        prod = dict(zip(CHEI, ["1" * 32, "2" * 32, "3" * 32]))
+        self.assertEqual(verifica(*self.cu_lista(lista_json(prod.values())), prod=prod), [])
 
     def test_amprenta_un_caracter(self):
         self.refuz(1, "at.attnotnull, at.attacl::text, at.attidentity::text", "at.attnotnull, at.attidentity::text",
@@ -221,36 +267,41 @@ class NetRel(unittest.TestCase):
     def test_amprenta_marcaj_dublu(self):
         self.refuz(0, INCEPUT, INCEPUT + "\n" + INCEPUT, "exact o data")
 
-    LISTA = ('{"net._http_response":"DE_COMPLETAT","net.http_request_queue":"DE_COMPLETAT",'
-             '"net.http_request_queue_id_seq":"DE_COMPLETAT"}')
-
-    def completata(self, valori):
-        return '{' + ','.join(f'"{k}":"{v}"' for k, v in zip(CHEI, valori)) + '}'
+    completata = staticmethod(lista_json)
 
     def test_cheie_in_plus(self):
-        self.refuz(0, self.LISTA, self.LISTA[:-1] + ',"net.altul":"DE_COMPLETAT"}', "alte chei")
+        # pe lista curenta (oricare stare) si pe cea necompletata
+        self.refuz(0, self.LISTA, self.LISTA[:-1] + ',"net.altul":"' + "e" * 32 + '"}', "alte chei")
+        mot = verifica(*self.cu_lista(LISTA_GOALA[:-1] + ',"net.altul":"DE_COMPLETAT"}'), prod={})
+        self.assertTrue(any("alte chei" in m for m in mot), mot)
 
     def test_necompletat_cu_productie_in_test(self):
-        mot = verifica(*self.f, prod=dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32])))
+        mot = verifica(*self.cu_lista(LISTA_GOALA), prod=dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32])))
         self.assertTrue(any("lipeste-le in 18a" in m for m in mot), mot)
+
+    def test_completat_cu_test_gol(self):
+        # 18a completat, dar PROD_R22 gol in test (s-a scris doar 18a) = refuz
+        mot = verifica(*self.cu_lista(self.completata(["a" * 32, "b" * 32, "c" * 32])), prod={})
+        self.assertTrue(any("difera de productie" in m for m in mot), mot)
 
     def test_completat_egal_productie_acceptat(self):
         prod = dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32]))
-        f = list(self.f)
-        f[0] = f[0].replace(self.LISTA, self.completata(prod.values()))
-        self.assertEqual(verifica(*f, prod=prod), [])
+        self.assertEqual(verifica(*self.cu_lista(self.completata(prod.values())), prod=prod), [])
 
     def test_completat_diferit_de_productie(self):
         prod = dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32]))
-        f = list(self.f)
-        f[0] = f[0].replace(self.LISTA, self.completata(["a" * 32, "b" * 32, "d" * 32]))
-        self.assertTrue(any("difera de productie" in m for m in verifica(*f, prod=prod)))
+        mot = verifica(*self.cu_lista(self.completata(["a" * 32, "b" * 32, "d" * 32])), prod=prod)
+        self.assertTrue(any("difera de productie" in m for m in mot), mot)
+        # si pe starea reala: o litera schimbata in lista curenta (daca e completata) / test cu alte valori
+        mot = verifica(*self.f, prod=dict(zip(CHEI, ["a" * 32, "b" * 32, "c" * 32])))
+        self.assertNotEqual(mot, [])
 
     def test_completat_pe_jumatate(self):
         self.refuz(0, self.LISTA, self.completata(["a" * 32, NECOMPLETAT, NECOMPLETAT]), "pe jumatate")
 
     def test_valori_r21_refuzate(self):
-        self.refuz(0, self.LISTA, self.completata(R21_VECHI.values()), "valoare r21")
+        self.refuz(0, self.LISTA, self.completata(R21_VECHI.values()), "valoare r21",
+                   prod=dict(R21_VECHI))
 
     def test_fara_refuz_necompletat(self):
         self.refuz(0, "RAISE EXCEPTION 'PORTAL_NET_REL_LIST_NECOMPLETATA", "RAISE EXCEPTION 'PORTAL_NET_REL_LIST_X",
@@ -336,8 +387,90 @@ class Completeaza(unittest.TestCase):
         self.refuzat(self.g(r), "corespunde")
 
     def test_lista_din_18a_e_cea_cautata(self):
-        self.assertEqual(citeste(M18).count(self.nrc.LISTA_GOALA), 1)
-        self.assertEqual(len(self.nrc.MARCAJ_TEST.findall(TEST_SURSA.read_bytes())), 1)
+        # r24: scriptul gaseste literalul in ORICARE stare a lui 18a si linia PROD_R22 din test exact o data
+        m18, test = M18.read_bytes(), TEST_SURSA.read_bytes()
+        gasite = self.nrc.LISTA_18A.findall(m18)
+        self.assertEqual(len(gasite), 1)
+        self.assertEqual(gasite[0].decode(), literal_lista(citeste(M18)))
+        self.assertEqual(self.nrc.LISTA_GOALA, LISTA_GOALA)
+        self.assertEqual(len(self.nrc.LINIE_TEST.findall(test)), 1)
+        self.assertIn(stare_18a(citeste(M18), PROD_R22), ("necompletat", "completat"))
+
+    def copie_repo(self, stare_goala):
+        """Copie temporara cu fisierele pe care le citesc scriptul si testul (finalurile de linie pastrate); daca
+        stare_goala, 18a + testul se aduc in starea NECOMPLETAT (lista DE_COMPLETAT, PROD_R22 = {})."""
+        import shutil
+        rad = Path(self.dir) / "repo"
+        for p in (M18, M19, R18, R19, CIT, HARN, TEST_SURSA, ROOT / "scripts/portal/net_rel_completeaza.py"):
+            d = rad / p.relative_to(ROOT)
+            d.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(p, d)
+        m18, t = rad / M18.relative_to(ROOT), rad / TEST_SURSA.relative_to(ROOT)
+        if stare_goala:
+            b = m18.read_bytes()
+            lit = self.nrc.LISTA_18A.findall(b)[0]
+            m18.write_bytes(b.replace(lit, LISTA_GOALA.encode(), 1))
+            t.write_bytes(self.nrc.LINIE_TEST.sub(b"PROD_R22 = {}  # NET_REL_PROD_R22 (de completat din productie)",
+                                                  t.read_bytes(), 1))
+        return rad, m18, t
+
+    def ruleaza(self, *argv, cwd=None):
+        import subprocess
+        return subprocess.run([sys.executable, "-X", "utf8", *map(str, argv)], capture_output=True, text=True,
+                              encoding="utf-8", cwd=cwd, env={**__import__("os").environ, "PORTAL_NET_REL_FARA_DRUM": "1"})
+
+    @unittest.skipIf(__import__("os").environ.get("PORTAL_NET_REL_FARA_DRUM") == "1", "deja in copia temporara")
+    def test_drum_complet_necompletat_completeaza_idempotent(self):
+        # r24: exact drumul coordonatorului, pe o copie: necompletat -> testele trec -> completeaza --scrie -> testele
+        # trec -> a doua completare cu aceleasi valori = nimic scris, cod 0 -> alte valori = refuz, nimic scris.
+        rad, m18, t = self.copie_repo(stare_goala=True)
+        script = rad / "scripts/portal/net_rel_completeaza.py"
+        r = self.ruleaza(t)
+        self.assertEqual(r.returncode, 0, "necompletat:\n" + r.stdout + r.stderr)
+        crlf = b"\r\n" in m18.read_bytes()
+        g = self.g([self.rand(k, '["r", "amprenta ' + k + '"]') for k in CHEI])
+        vals = self.nrc.citeste_g(g)
+        r = self.ruleaza(script, g)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("nimic scris", r.stdout)
+        self.assertIn(LISTA_GOALA, citeste(m18))
+        r = self.ruleaza(script, g, "--scrie")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("SCRIS", r.stdout)
+        sha = [l for l in r.stdout.split("\n") if l.startswith("sha256")]
+        self.assertEqual(len(sha), 2, r.stdout)
+        self.assertEqual(literal_lista(citeste(m18)), lista_json(vals[k] for k in CHEI))
+        self.assertEqual(b"\r\n" in m18.read_bytes(), crlf, "finalurile de linie din 18a s-au schimbat")
+        r = self.ruleaza(t)
+        self.assertEqual(r.returncode, 0, "dupa completare:\n" + r.stdout + r.stderr)
+        inainte = (m18.read_bytes(), t.read_bytes())
+        r2 = self.ruleaza(script, g, "--scrie")
+        self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+        self.assertIn("DEJA COMPLETAT", r2.stdout)
+        self.assertEqual((m18.read_bytes(), t.read_bytes()), inainte, "a doua completare a schimbat fisierele")
+        self.assertEqual(sha, [l for l in r2.stdout.split("\n") if l.startswith("sha256")])
+        alt = self.g([self.rand(k, '["r", "alta ' + k + '"]') for k in CHEI])
+        r3 = self.ruleaza(script, alt, "--scrie")
+        self.assertEqual(r3.returncode, 1, r3.stdout + r3.stderr)
+        self.assertIn("ALTE valori", r3.stdout)
+        self.assertEqual((m18.read_bytes(), t.read_bytes()), inainte)
+        r = self.ruleaza(t)
+        self.assertEqual(r.returncode, 0, "dupa refuz:\n" + r.stdout + r.stderr)
+
+    @unittest.skipIf(__import__("os").environ.get("PORTAL_NET_REL_FARA_DRUM") == "1", "deja in copia temporara")
+    def test_stare_amestecata_refuzata(self):
+        rad, m18, t = self.copie_repo(stare_goala=True)
+        script = rad / "scripts/portal/net_rel_completeaza.py"
+        g = self.g([self.rand(k, '["r", "x ' + k + '"]') for k in CHEI])
+        self.assertEqual(self.ruleaza(script, g, "--scrie").returncode, 0)
+        # testul revine la PROD_R22 gol, 18a ramane completat => amestecat: refuz, nimic scris; testul static pica
+        t.write_bytes(self.nrc.LINIE_TEST.sub(b"PROD_R22 = {}  # NET_REL_PROD_R22 (de completat)", t.read_bytes(), 1))
+        inainte = (m18.read_bytes(), t.read_bytes())
+        r = self.ruleaza(script, g, "--scrie")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("amestecata", r.stdout)
+        self.assertEqual((m18.read_bytes(), t.read_bytes()), inainte)
+        self.assertNotEqual(self.ruleaza(t).returncode, 0)
 
 
 TEST_SURSA = Path(__file__).resolve()
