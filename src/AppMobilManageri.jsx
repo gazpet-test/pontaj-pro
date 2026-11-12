@@ -19,7 +19,7 @@ import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, a
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 // Raportul legat de devize (20261208a): obiecte pe raport, ținte din v_executie_tinte, linii salvate atomic prin RPC
 import { blocNou, blocuriDinLinii, liniiDinBlocuri, activitatiBloc, tintaPe, fmtNr, citesteTinte, cantitateLinie } from './devizTinte.js'
-// Rezumatul scurt salvat pe raport (20261215a): îl scrie serverul la salvare; aici se vede, se copiază, se corectează
+// Rezumatul scurt salvat pe raport (20261216a): îl scrie serverul la salvare; aici se vede, se copiază, se corectează
 import RubricaRezumat from './RubricaRezumat.jsx'
 
 const G = {
@@ -640,7 +640,7 @@ function RaportZilnic({ profile, sites, onBack }) {
               {`✏️ Există deja raport pe ${fmtDate(dataRaport)} pentru această lucrare — îl editezi (nu se creează duplicat).`}
             </div>
           )}
-          {/* rezumatul raportului salvat (20261215a): de copiat pe WhatsApp; o corectură mărește versiunea, deci formularul o preia (CAS) */}
+          {/* rezumatul raportului salvat (20261216a): de copiat pe WhatsApp; o corectură mărește versiunea, deci formularul o preia (CAS) */}
           {raportSalvat && 'rezumat_sursa' in raportSalvat && (
             <Section title="📝 Rezumat (pentru WhatsApp / director)" hint="al raportului salvat">
               <RubricaRezumat raport={raportSalvat} poateEdita={!saving} compact

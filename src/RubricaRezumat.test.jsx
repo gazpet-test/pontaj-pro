@@ -1,4 +1,4 @@
-// Teste de componentă pentru RubricaRezumat (20261215a): componenta reală montată cu react-dom în jsdom; clientul Supabase e înlocuit
+// Teste de componentă pentru RubricaRezumat (20261216a): componenta reală montată cu react-dom în jsdom; clientul Supabase e înlocuit
 // cu promisiuni eliberate manual de test (ordinea răspunsurilor controlată). Fără rețea, fără librării noi: jsdom se caută în node_modules
 // sau în REDARI_JSDOM_DIR (tiparul din OameniSantierButon.test.jsx); fără el, suita e SĂRITĂ VIZIBIL.
 import React from 'react'

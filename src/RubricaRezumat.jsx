@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// RubricaRezumat.jsx — rubrica „Rezumat” a raportului zilnic (20261215a, etapa 1)
+// RubricaRezumat.jsx — rubrica „Rezumat” a raportului zilnic (20261216a, etapa 1)
 // Textul scurt salvat pe raport (pentru WhatsApp / directorul de execuție): eticheta „generat automat” / „editat de <nume>”,
 // „Copiază”, iar pentru cine are drept de scriere pe raport: corectură, „Revino la automat”, „Generează” (rapoartele vechi).
 // Textul automat îl scrie SERVERUL (trigger pe rapoarte_zilnice); aici doar se cere: sursa 'editat' + textul omului, sau sursa 'automat'.
@@ -23,7 +23,8 @@ const btn = (culoare, plin) => ({
   padding: '7px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
 })
 
-async function copiaza(text) {
+// folosit și de rezumatul zilei (RezumatZiModal.jsx)
+export async function copiaza(text) {
   try { await navigator.clipboard.writeText(text); return true } catch { /* browser vechi / fără permisiune: varianta clasică */ }
   try {
     const ta = document.createElement('textarea')

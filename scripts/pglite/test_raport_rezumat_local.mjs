@@ -1,4 +1,4 @@
-// Proba LOCALĂ a migrării 20261215a (rezumatul raportului zilnic) pe PGlite (Postgres în WASM, în memorie) — NU atinge nicio bază reală.
+// Proba LOCALĂ a migrării 20261216a (rezumatul raportului zilnic) pe PGlite (Postgres în WASM, în memorie) — NU atinge nicio bază reală.
 // Rulează harness-ul REAL scripts/test_executie_raport_rezumat.sql (cel pe care chat-ul îl rulează pe clonă) printr-un mini-psql
 // (\ir, \set, :ERROR / :SQLSTATE / :'LAST_ERROR_MESSAGE', ON_ERROR_STOP), peste schema falsă supabase/tests/20261208a_executie_devize_tinte_schelet.sql
 // + 20261027a, 20261201a, 20261208a întregi (cu marcajul de livrare, ca runner-ul).
@@ -14,8 +14,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const citeste = (rel) => readFileSync(join(ROOT, rel), 'utf8')
 const SCHELET = 'supabase/tests/20261208a_executie_devize_tinte_schelet.sql'
 const DEP = ['20261027a_raport_distributie_gaze', '20261201a_executie_noduri_suduri', '20261208a_executie_devize_tinte']
-const MIG = 'supabase/migrations/20261215a_executie_raport_rezumat.sql'
-const REV = 'supabase/revenire/20261215a_executie_raport_rezumat_ROLLBACK.sql'
+const MIG = 'supabase/migrations/20261216a_executie_raport_rezumat.sql'
+const REV = 'supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql'
 const HARNESS = 'scripts/test_executie_raport_rezumat.sql'
 
 // mini-psql: blocurile SQL dintre meta-comenzi merg întregi la server (db.exec); \ir citește fișierul (cu înlocuirile mutantului)
@@ -92,7 +92,7 @@ console.log('harness: OK pe migrarea reală')
 {
   const { rezumatRaport } = await import('../../src/raportRezumat.js')
   const db = await bazaNoua()
-  await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261215a_executie_raport_rezumat:' || txid_current(), true);\n${citeste(MIG)}\nCOMMIT;`)
+  await db.exec(`BEGIN; SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat:' || txid_current(), true);\n${citeste(MIG)}\nCOMMIT;`)
   await db.exec(`
     INSERT INTO public.proiect_activitati (proiect_id, nume, um, tip_raportare, ordine) VALUES (1, 'Săpătură', 'mc', 'cantitate', 1), (1, 'Probă', NULL, 'bifa', 2);
     INSERT INTO public.proiect_unitati (proiect_id, tip, cod, nume, ordine) VALUES (1, 'tronson', 'T1', 'Tronson unu', 1);
@@ -143,12 +143,15 @@ const mutanti = [
   ['M13b EXECUTE dat clienților după migrare', 'T8', { [HARNESS]: [["-- ── T8: funcțiile nu sunt apelabile din API", "GRANT EXECUTE ON FUNCTION public.fn_raport_rezumat_intrare(public.rapoarte_zilnice) TO authenticated;\n-- ── T8: funcțiile nu sunt apelabile din API"]] }],
   ['M14 versiunea nu crește la corectura omului', 'T4', { [M]: [["    NEW.rezumat_de := v_uid;\n    RETURN NEW;", "    NEW.rezumat_de := v_uid;\n    NEW.versiune_salvare := OLD.versiune_salvare;\n    RETURN NEW;"]] }],
   ['M15 scrierea fără rezumat nu reface rezumatul automat', 'T2', { [M]: [["    IF OLD.rezumat_sursa = 'editat' THEN RETURN NEW; END IF;\n    NEW.rezumat_sursa := 'automat';", "    RETURN NEW;"]] }],
+  // r2: rubricile noi citite din raport; lista nefuncționalelor scurtată la 3
+  ['M16 planul pentru mâine lipsă din intrare', 'T2', { [M]: [["      'plan_maine', z.plan_maine,\n      'poze', cardinality(z.poze))\n    -- INTRARE-END\n$f$;", "      'poze', cardinality(z.poze))\n    -- INTRARE-END\n$f$;"]] }],
+  ['M17 toate utilajele nefuncționale listate', 'T1', { [M]: [["array_to_string(nef[1:3], '; ')", "array_to_string(nef, '; ')"]] }],
 ]
 let rau = 0
 for (const [nume, test, inl] of mutanti) {
   const r = await ruleaza(inl)
   // „post” = o postcondiție a migrării (migrarea nu se aplică deloc); altfel testul din mesajul „Tn FAIL”
-  const picatLa = r.ok ? null : /20261215a post/.test(r.eroare) ? 'post' : (/(T[0-9]+[a-z]?|TB) FAIL/.exec(r.eroare) || [])[1] || 'altundeva'
+  const picatLa = r.ok ? null : /20261216a post/.test(r.eroare) ? 'post' : (/(T[0-9]+[a-z]?|TB) FAIL/.exec(r.eroare) || [])[1] || 'altundeva'
   const bine = !r.ok && picatLa === test
   if (!bine) rau++
   console.log(`${bine ? 'prins ' : 'SCĂPAT'} ${nume}: ${r.ok ? 'harness-ul a trecut' : 'pică la ' + picatLa}${bine ? '' : ' (așteptat ' + test + ')' + (r.ok ? '' : ' — ' + r.eroare.slice(0, 220))}`)

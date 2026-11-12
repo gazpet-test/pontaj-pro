@@ -8,26 +8,34 @@ Fără buton de trimitere (WhatsApp / mail).
 
 Câteva rânduri, în ordinea asta (rândul / bucata lipsește când câmpul lipsește din raport — nu „0”, nu „necunoscut”):
 
-1. șantierul (+ proiectul, dacă are alt nume) · data · vremea (temperatura, precipitațiile > 0, alertele)
-2. oameni (totalul + categoriile cu valoare > 0) · utilaje (numărul + cele nefuncționale, cu motivul) · poze (numărul)
+1. **un singur nume**: șantierul (`sites.name`, scurtat pe cuvinte la 80); proiectul apare doar dacă numele lui NU e deja conținut în numele
+   șantierului (comparație fără diacritice / majuscule) și atunci scurtat la 60 · data · vremea (temperatura **la grad întreg**, precipitațiile > 0, alertele)
+2. oameni (totalul + categoriile cu valoare > 0) · utilaje (numărul + cele nefuncționale: numărul lor și **cel mult primele 3**, cu motivul, apoi „+N”) · poze (numărul)
 3. câte un rând de lucrări pe obiect (tronson / nod), cu cantitățile **exact ca în raport** și unitatea de măsură; activitățile cu bifă = „(efectuat)”
 4. distribuție gaze (numărul de rânduri conducte / branșamente), dacă e cazul
 5. textul liber al lucrărilor („Detalii:” dacă există și cantități), tăiat pe cuvinte la 240 de caractere, cu „…”
-6. probleme (240) · mașini (160)
+6. subcontractorii (200), dacă rubrica e completată
+7. probleme (240) · mașini (160)
+8. aprovizionarea (160) și planul pentru mâine (200), fiecare doar dacă e completat — textul omului, nimic dedus
 
 Exemplu (date inventate):
 
 ```
-Lot 9 Alfa – Beta (proiect Contract 99/2026 Lot 9) · 10.11.2026 · 8,3 °C, precipitații 2,4 mm, alerte: Cod galben ploi
-Oameni: 17 (sudori 4, lăcătuși 3, operatori utilaje 2, șoferi 1, necalificați 6, TESA 1) · Utilaje: 3 (nefuncționale: BULDOEXCAVATOR JCB 3CX – furtun hidraulic spart; GEN-1) · Poze: 6
+Lot 9 Alfa – Beta (proiect Contract 99/2026 Lot 9) · 10.11.2026 · 8 °C, precipitații 2,4 mm, alerte: Cod galben ploi
+Oameni: 17 (sudori 4, lăcătuși 3, operatori utilaje 2, șoferi 1, necalificați 6, TESA 1) · Utilaje: 3 (nefuncționale 2: BULDOEXCAVATOR JCB 3CX – furtun hidraulic spart; GEN-1) · Poze: 6
 Lucrări TR1 · Tronson 1: Săpătură șanț 35,5 mc; Sudură cap la cap 12 buc
 Lucrări TR2 · Tronson 2: Lansare conductă 147,25 m; Probă presiune (efectuat)
 Detalii: S-a continuat pe TR1 și TR2.
 Probleme: Acces dificil după ploaie.
 ```
 
-Cifrele nu se rotunjesc, nu se adună și nu se deduc (două linii pe aceeași activitate rămân două). Virgula zecimală e cea românească (12,5).
-Numele șefului de șantier nu intră în rezumat.
+Cifrele nu se rotunjesc, nu se adună și nu se deduc (două linii pe aceeași activitate rămân două); singura rotunjire e temperatura
+(jumătatea departe de zero: 8,5 → 9; −0,3 → 0). Virgula zecimală e cea românească (12,5). Numele șefului de șantier nu intră în rezumat.
+
+**Ce a ieșit la proba pe 20 de rapoarte reale (r2):** rapoartele reale au lucrările ca **text liber** (`lucrari_efectuate`), nu pe linii (în ultimele
+două zile niciun raport nu avea linii în `raport_lucrari`) — rezumatul le redă ca „Lucrări: …”. Lipseau subcontractorii, aprovizionarea și
+planul pentru mâine (completate des) → adăugate; antetul repeta numele (șantier + proiect aproape identic) → un singur nume; lista utilajelor
+nefuncționale putea fi lungă → primele 3 + „+N”; temperatura cu zecimale („8,19 °C”) → grad întreg.
 
 ## Unde se generează (decizia de la pct. 3) — în baza de date, în aceeași tranzacție cu salvarea
 
@@ -70,18 +78,45 @@ mărește versiunile (schimbă doar rezumatul automat).
 - Dacă raportul a fost salvat din nou după o corectură, rubrica avertizează că textul corectat poate să nu mai corespundă.
 - Înainte de aplicarea migrării, rubrica nu apare deloc (coloanele lipsesc din rând): deploy-ul poate merge înaintea migrării.
 
-## Lustruirea cu un model local (doar proiectare, fără cod în etapa 1)
+## Rezumatul ZILEI, pe toate șantierele (r2)
 
-- **Unde:** pe serverul AI din birou, model local (Ollama), ca serviciul OCR. Fără apeluri din browser către server și fără API-uri externe.
-- **Cum e chemat:** coadă în BD. La o schimbare a textului automat, serverul pune o cerere (raport, amprenta textului determinist). Un worker
-  local ia cererile cu un cont de serviciu care vede DOAR coada, trimite modelului DOAR textul determinist (nimic altceva din raport) și scrie
-  propunerea înapoi tot în coadă.
-- **Verificare mecanică înainte de acceptare:** din ambele texte se scot perechile „număr + unitate” cu același cititor; mulțimile trebuie să fie
-  identice și să nu apară niciun număr nou (nici în cuvinte); lungime maximă; fără linkuri. Altfel propunerea e respinsă și rămâne textul determinist.
-- **Fără rezultat vechi:** propunerea se scrie doar dacă amprenta textului determinist e încă cea din cerere (altfel raportul s-a schimbat → aruncată).
-- **Textul corectat de om nu e atins niciodată**; varianta „în frază” ar sta lângă cea deterministă, iar omul alege ce copiază.
-- **Conținut extern:** textele raportului sunt scrise de oameni; modelul nu are unelte și nu poate scrie altceva decât propunerea, verificată ca mai sus.
-- **Resurse:** ziua GPU-ul e ocupat de OCR → lustruirea ar rula cu prioritate mică (model mic) sau noaptea.
+Un singur text pe zi, pentru directorul de execuție / WhatsApp. **Fără schemă nouă**: se calculează în aplicație, la cerere, și nu se salvează.
+
+- **Unde:** Rapoarte Șantier (ecranul de birou) → butonul „📝 Rezumatul zilei” → fereastră cu ziua (implicit capătul intervalului din filtru),
+  textul și „📋 Copiază”. Fără buton de trimitere.
+- **Ce citește:** doar `SELECT` pe `rapoarte_zilnice` (ziua aleasă, șantierele din ecran) și `raport_lucrari` (liniile acelor rapoarte), cu
+  drepturile de azi ale celui care cere. Fiecare vede doar ce vede deja: lista de șantiere din ecran (owner / contabilitate = toate active;
+  ceilalți = cele alocate) + RLS-ul existent (un cont restrâns pe proiect primește doar rapoartele lui). Nimic ocolit, niciun drept nou.
+- **Textul** (`rezumatZi` din `src/raportRezumat.js`, determinist):
+  - antet: „Rapoarte șantiere — 11.11.2026: 5 șantiere, 95 de oameni, 98 de utilaje” (oamenii = suma totalurilor din rapoarte, utilajele = suma
+    listelor; un raport fără număr NU devine 0 — se spune câte rapoarte n-au avut numărul);
+  - câte 2–4 rânduri pe șantier, în ordinea numărului de oameni: „• nume: oameni · utilaje (nefuncționale)”, „Lucrări: …” (cantitățile exacte pe
+    obiecte, apoi textul liber scurtat la 200), „Subcontractori: …” (120) și „Probleme: …” (160) dacă există; fără lucrări = „nimic trecut în raport”;
+  - la final, șantierele care trebuiau să raporteze și n-au trimis (aceeași regulă ca „Lipsă azi” din ecran: active, cu raport zilnic necesar).
+- **Limită cunoscută:** lista „fără raport” vine din șantierele din ecran (starea de azi a șantierelor, nu cea din ziua aleasă), ca „Lipsă azi”.
+  Dacă un cont restrâns are în listă un șantier ale cărui rapoarte nu le poate citi, șantierul apare „fără raport” — la fel ca alerta existentă.
+
+Exemplu (date inventate):
+
+```
+Rapoarte șantiere — 11.11.2026: 5 șantiere, 95 de oameni, 98 de utilaje
+
+• Lot 1 Prunișor – Jupa: 40 de oameni · 32 de utilaje (nefuncționale 4: N1; N2; N3; +1)
+  Lucrări: Sudură TR3, lansare 120 m.
+  Probleme: Ploaie după-amiaza.
+• Domnești: 25 de oameni · 20 de utilaje
+  Lucrări: Montaj conductă.
+  Subcontractori: Rominsta — foraj orizontal
+…
+
+Fără raport (2): Beta, Zeta
+```
+
+## Fără AI în textul rezumatului (constatare r2)
+
+Textul rămâne **determinist** în etapa 1, și pentru rezumatul raportului, și pentru cel al zilei. O probă separată cu un model local care
+„lustruia” textul a arătat că modelul **inventează planul de mâine** când rubrica e goală și **mută în viitor** lucrările subcontractorilor.
+De aceea nu există și nu se pregătește nicio etapă de lustruire cu AI pe acest text; orice idee în direcția asta trece întâi pe la Răzvan.
 
 ## Pozele raportului → proiect / contract (analiză, fără implementare)
 
@@ -106,11 +141,12 @@ Recomandare: **A** acum (rapid, fără risc), **B** când e nevoie de poze pe tr
 
 ## Fișiere și teste
 
-- `src/raportRezumat.js` — regula JS (oglinda); `src/raportRezumat.cazuri.json` — tabelul de cazuri comun; `src/raportRezumat.test.js`
+- `src/raportRezumat.js` — regula JS (oglinda) + `rezumatZi` (rezumatul zilei) și citirea lui; `src/raportRezumat.cazuri.json` — tabelul de cazuri comun; `src/raportRezumat.test.js`
 - `src/RubricaRezumat.jsx` (+ `.test.jsx`, jsdom) — rubrica; legată în `src/RapoarteSantierPage.jsx` și `src/AppMobilManageri.jsx`
-- `supabase/migrations/20261215a_executie_raport_rezumat.sql` (NEAPLICAT) + `supabase/revenire/20261215a_executie_raport_rezumat_ROLLBACK.sql`
+- `src/RezumatZiModal.jsx` (+ `.test.jsx`, jsdom) — fereastra „Rezumatul zilei” din Rapoarte Șantier
+- `supabase/migrations/20261216a_executie_raport_rezumat.sql` (NEAPLICAT) + `supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql`
 - `scripts/test_executie_raport_rezumat.sql` — harness pentru clonă (T0–T9: paritate, salvare prin RPC, CAS, corectură, drepturi, căile directe, revenire, re-aplicare)
-- `scripts/pglite/test_raport_rezumat_local.mjs` — același harness local (PGlite) + 19 mutanți
+- `scripts/pglite/test_raport_rezumat_local.mjs` — același harness local (PGlite) + 20 de mutanți
 - `scripts/raport_rezumat_proba.sql` + `.mjs` — proba pe 20 de rapoarte reale, DOAR citire, înainte de aplicare
 
 Proba pe date reale (coordonatorul):

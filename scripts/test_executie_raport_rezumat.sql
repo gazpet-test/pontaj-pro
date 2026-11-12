@@ -1,4 +1,4 @@
--- Harness 20261215a_executie_raport_rezumat — DOAR pe clona schemei de producție (sau local, PGlite), NICIODATĂ pe producție.
+-- Harness 20261216a_executie_raport_rezumat — DOAR pe clona schemei de producție (sau local, PGlite), NICIODATĂ pe producție.
 -- Rulare din rădăcina repo-ului (20261208a deja aplicată pe clonă):  psql -X -v ON_ERROR_STOP=1 -f scripts/test_executie_raport_rezumat.sql
 -- Local: node scripts/pglite/test_raport_rezumat_local.mjs (schema falsă + 20261027a + 20261201a + 20261208a, apoi acest fișier).
 -- O singură tranzacție, ANULATĂ la final (ROLLBACK): migrare (marcajul de livrare) -> paritatea textului SQL cu tabelul de cazuri JS ->
@@ -12,8 +12,8 @@ BEGIN ISOLATION LEVEL READ COMMITTED;
 -- baseline: politicile și drepturile tabelelor atinse ÎNAINTE de migrare (după ea trebuie să fie identice: migrarea nu dă niciun drept)
 SELECT set_config('trez.pol0', (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s/%s', tablename, policyname, permissive, roles, cmd, coalesce(qual, ''), coalesce(with_check, '')), ';' ORDER BY tablename, policyname), '')) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('rapoarte_zilnice', 'raport_zilnic_salvari', 'raport_lucrari')), true),
        set_config('trez.acl0', (SELECT md5(string_agg(c.relname || '=' || coalesce(c.relacl::text, '') || '/' || c.relrowsecurity || c.relforcerowsecurity, ';' ORDER BY c.relname)) FROM pg_class c WHERE c.oid IN ('public.rapoarte_zilnice'::regclass, 'public.raport_zilnic_salvari'::regclass, 'public.raport_lucrari'::regclass)), true);
-SELECT set_config('gazpet.livrare_migrare', '20261215a_executie_raport_rezumat:' || txid_current(), true);
-\ir ../supabase/migrations/20261215a_executie_raport_rezumat.sql
+SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat:' || txid_current(), true);
+\ir ../supabase/migrations/20261216a_executie_raport_rezumat.sql
 
 -- ── unelte ──
 -- identitatea: ambele surse JWT (auth.uid() citește întâi request.jwt.claim.sub), apoi rolul fără BYPASSRLS
@@ -190,7 +190,7 @@ DECLARE c jsonb; v text; n integer := 0;
       "masini": null,
       "poze": 6
     },
-    "asteptat": "Lot 9 Alfa – Beta (proiect Contract 99/2026 Lot 9) · 10.11.2026 · 8,3 °C, precipitații 2,4 mm, alerte: Cod galben ploi\nOameni: 17 (sudori 4, lăcătuși 3, operatori utilaje 2, șoferi 1, necalificați 6, TESA 1) · Utilaje: 3 (nefuncționale: BULDOEXCAVATOR JCB 3CX – furtun hidraulic spart; GEN-1) · Poze: 6\nLucrări TR1 · Tronson 1: Săpătură șanț 35,5 mc; Sudură cap la cap 12 buc\nLucrări TR2 · Tronson 2: Lansare conductă 147,25 m; Probă presiune (efectuat)\nDetalii: S-a continuat pe TR1 și TR2.\nProbleme: Acces dificil după ploaie."
+    "asteptat": "Lot 9 Alfa – Beta (proiect Contract 99/2026 Lot 9) · 10.11.2026 · 8 °C, precipitații 2,4 mm, alerte: Cod galben ploi\nOameni: 17 (sudori 4, lăcătuși 3, operatori utilaje 2, șoferi 1, necalificați 6, TESA 1) · Utilaje: 3 (nefuncționale 2: BULDOEXCAVATOR JCB 3CX – furtun hidraulic spart; GEN-1) · Poze: 6\nLucrări TR1 · Tronson 1: Săpătură șanț 35,5 mc; Sudură cap la cap 12 buc\nLucrări TR2 · Tronson 2: Lansare conductă 147,25 m; Probă presiune (efectuat)\nDetalii: S-a continuat pe TR1 și TR2.\nProbleme: Acces dificil după ploaie."
   },
   {
     "nume": "raport minim: doar șantierul și data (câmpurile lipsă nu apar deloc)",
@@ -274,7 +274,7 @@ DECLARE c jsonb; v text; n integer := 0;
       ],
       "poze": 0
     },
-    "asteptat": "S · 09.11.2026 · -2,5 °C\nOameni: 0\nLucrări: Izolație 0,125 mp; Țeavă DN 500 1,5 100 M.; Sudură 3; Beton 10000000 MC; Geotextil (fără cantitate)"
+    "asteptat": "S · 09.11.2026 · -3 °C\nOameni: 0\nLucrări: Izolație 0,125 mp; Țeavă DN 500 1,5 100 M.; Sudură 3; Beton 10000000 MC; Geotextil (fără cantitate)"
   },
   {
     "nume": "obiect doar cu cod sau doar cu nume; liniile fără obiect după cele cu obiect rămân în ordinea primei apariții",
@@ -346,7 +346,7 @@ DECLARE c jsonb; v text; n integer := 0;
       "lucrari": "<b>ș ț Ș Ț ă î â</b> &amp; \"citat\"\n\tdupă tab",
       "probleme": "   \n\t  "
     },
-    "asteptat": "Șantier „Bărăgan” 🚧 · 09.11.2026\nUtilaje: 2 (nefuncționale: Pompă drenaj – linia 1 linia 2 linia 3)\nLucrări: <b>ș ț Ș Ț ă î â</b> &amp; \"citat\" după tab"
+    "asteptat": "Șantier „Bărăgan” 🚧 · 09.11.2026\nUtilaje: 2 (nefuncționale 1: Pompă drenaj – linia 1 linia 2 linia 3)\nLucrări: <b>ș ț Ș Ț ă î â</b> &amp; \"citat\" după tab"
   },
   {
     "nume": "fără lucrări pe activități: textul liber devine „Lucrări:”; oameni doar pe categorii (fără total); distribuție gaze",
@@ -408,6 +408,74 @@ DECLARE c jsonb; v text; n integer := 0;
       "masini": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx abcd efgh"
     },
     "asteptat": "S · 09.11.2026\nProbleme: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx abcd… · Mașini: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx abcd…"
+  },
+  {
+    "nume": "r2: rubricile subcontractori, aprovizionare, plan pentru mâine (fiecare pe rândul ei, în ordinea asta); temperatura la grad întreg (8,19 -> 8)",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-11",
+      "meteo": {
+        "temp": 8.19
+      },
+      "lucrari": "Săpătură manuală.",
+      "subcontractori": "Rominsta — sudură obiecte speciale TR10 – 2 buc",
+      "probleme": "Ploaie",
+      "aprovizionare": "electrozi E7018 – 50 kg",
+      "plan_maine": "Continuăm lansarea pe TR10."
+    },
+    "asteptat": "S · 11.11.2026 · 8 °C\nLucrări: Săpătură manuală.\nSubcontractori: Rominsta — sudură obiecte speciale TR10 – 2 buc\nProbleme: Ploaie\nAprovizionare: electrozi E7018 – 50 kg\nPlan pentru mâine: Continuăm lansarea pe TR10."
+  },
+  {
+    "nume": "r2: rubricile noi goale / doar spații / de alt tip nu apar; planul lung tăiat pe cuvinte la 200",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-11",
+      "subcontractori": "   \n ",
+      "aprovizionare": 12,
+      "plan_maine": "mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine"
+    },
+    "asteptat": "S · 11.11.2026\nPlan pentru mâine: mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine mâine…"
+  },
+  {
+    "nume": "r2: antetul cu un singur nume — proiectul conținut deja în numele șantierului (fără diacritice / majuscule) nu se repetă; -0,3 °C -> 0",
+    "intrare": {
+      "santier": "Lot 1 Prunișor – Jupa (Contract 30/2025 Transgaz)",
+      "proiect": "LOT 1 PRUNISOR – JUPA",
+      "data": "2026-11-09",
+      "meteo": {
+        "temp": -0.3
+      }
+    },
+    "asteptat": "Lot 1 Prunișor – Jupa (Contract 30/2025 Transgaz) · 09.11.2026 · 0 °C"
+  },
+  {
+    "nume": "r2: antetul cu nume lungi — șantierul scurtat la 80, proiectul (alt nume) la 60, pe cuvinte; 8,5 °C -> 9",
+    "intrare": {
+      "santier": "alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa",
+      "proiect": "beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta",
+      "data": "2026-11-09",
+      "meteo": {
+        "temp": 8.5
+      }
+    },
+    "asteptat": "alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa alfa… (proiect beta beta beta beta beta beta beta beta beta beta beta beta…) · 09.11.2026 · 9 °C"
+  },
+  {
+    "nume": "r2: utilaje cu 6 nefuncționale — numărul lor și primele 3 (în ordinea din raport), apoi +3",
+    "intrare": {
+      "santier": "S",
+      "data": "2026-11-09",
+      "utilaje": [
+        { "nume": "U1", "stare": "nefunctional", "motiv": "m1" },
+        { "nume": "U0", "stare": "functional", "motiv": null },
+        { "nume": "U2", "stare": "nefunctional", "motiv": "m2" },
+        { "nume": "U3", "stare": "nefunctional", "motiv": "m3" },
+        { "nume": "U4", "stare": "nefunctional", "motiv": "m4" },
+        { "nume": "U5", "stare": "nefunctional", "motiv": "m5" },
+        { "nume": "U6", "stare": "nefunctional", "motiv": "m6" }
+      ]
+    },
+    "asteptat": "S · 09.11.2026\nUtilaje: 7 (nefuncționale 6: U1 – m1; U2 – m2; U3 – m3; +3)"
   }
 ]$cazuri$;
   -- CAZURI-END
@@ -433,7 +501,9 @@ DO $t$
 DECLARE r jsonb; z public.rapoarte_zilnice; a1 bigint := pg_temp.t_g('a1')::bigint; a2 bigint := pg_temp.t_g('a2')::bigint; u1 bigint := pg_temp.t_g('u1')::bigint;
 BEGIN
   r := pg_temp.t_salv(DATE '2001-01-02', jsonb_build_object('personal_snapshot', jsonb_build_object('sudori', 2, 'total', 2), 'probleme', 'Test rezumat',
-                                                            'utilaje_snapshot', '[]'::jsonb, 'poze', '[]'::jsonb),
+                                                            'utilaje_snapshot', '[]'::jsonb, 'poze', '[]'::jsonb,
+                                                            'subcontractori', 'Sub test rezumat', 'aprovizionare', 'Aprov test rezumat',
+                                                            'plan_maine', 'Plan test rezumat'),
                       jsonb_build_array(jsonb_build_object('activitate_id', a1, 'unitate_id', u1, 'cantitate', 12.5),
                                         jsonb_build_object('activitate_id', a2, 'unitate_id', NULL, 'cantitate', 1)),
                       0, '00000000-0000-4000-8000-0000000000a1');
@@ -445,7 +515,10 @@ BEGIN
      OR z.rezumat_text IS DISTINCT FROM public.fn_raport_rezumat_text(public.fn_raport_rezumat_intrare(z))
      OR position('Lucrări TRZ1 · Tronson test rezumat: Sudură test rezumat 12,5 buc' IN z.rezumat_text) = 0
      OR position('Lucrări: Probă test rezumat (efectuat)' IN z.rezumat_text) = 0
-     OR position('Oameni: 2 (sudori 2)' IN z.rezumat_text) = 0 OR position('Probleme: Test rezumat' IN z.rezumat_text) = 0 THEN
+     OR position('Oameni: 2 (sudori 2)' IN z.rezumat_text) = 0 OR position('Probleme: Test rezumat' IN z.rezumat_text) = 0
+     -- r2: rubricile noi vin din rândul salvat (intrarea le citește din coloanele raportului)
+     OR position('Subcontractori: Sub test rezumat' IN z.rezumat_text) = 0 OR position('Aprovizionare: Aprov test rezumat' IN z.rezumat_text) = 0
+     OR position('Plan pentru mâine: Plan test rezumat' IN z.rezumat_text) = 0 THEN
     RAISE EXCEPTION 'T2 FAIL: rezumatul după salvare %', to_jsonb(z.rezumat_text);
   END IF;
   -- versiunea = cea întoarsă de RPC (rezumatul refăcut după jurnal nu o mărește), jurnalul are aceeași versiune
@@ -623,16 +696,16 @@ SELECT pg_temp.t_ca(NULL, 'postgres');
 UPDATE public.rapoarte_zilnice SET rezumat_text = 'Corectat pentru T9', rezumat_sursa = 'editat' WHERE id = pg_temp.t_g('r1')::bigint;
 SAVEPOINT t9a;
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261215a_executie_raport_rezumat_ROLLBACK.sql
+\ir ../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql
 \set t9a_eroare :ERROR
 \set t9a_stare :SQLSTATE
 \set ON_ERROR_STOP 1
 ROLLBACK TO SAVEPOINT t9a;
 SELECT pg_temp.t_eroare('T9a', :'t9a_eroare', :'t9a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'garda invalida');
 SAVEPOINT t9b;
-SELECT set_config('gazpet.revenire_20261215a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
+SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
 \set ON_ERROR_STOP 0
-\ir ../supabase/revenire/20261215a_executie_raport_rezumat_ROLLBACK.sql
+\ir ../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql
 \set t9b_eroare :ERROR
 \set t9b_stare :SQLSTATE
 \set ON_ERROR_STOP 1
@@ -640,15 +713,15 @@ ROLLBACK TO SAVEPOINT t9b;
 SELECT pg_temp.t_eroare('T9b', :'t9b_eroare', :'t9b_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'rezumate corectate de om');
 -- fără corecturi: revenirea armată scoate tot; RPC-ul de salvare merge ca înainte de migrare
 UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE rezumat_sursa = 'editat' AND site_id = pg_temp.t_g('s1')::bigint AND data = DATE '2001-01-02';
-SELECT set_config('gazpet.revenire_20261215a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
-\ir ../supabase/revenire/20261215a_executie_raport_rezumat_ROLLBACK.sql
+SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
+\ir ../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql
 DO $t$
 DECLARE r jsonb;
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice' AND column_name LIKE 'rezumat\_%')
      OR EXISTS (SELECT 1 FROM pg_proc WHERE proname LIKE 'fn\_raport\_rezumat\_%')
      OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_zilnic_zz_rezumat', 'trg_raport_zilnic_salvari_rezumat'))
-     OR current_setting('gazpet.revenire_20261215a', true) <> '' THEN
+     OR current_setting('gazpet.revenire_20261216a', true) <> '' THEN
     RAISE EXCEPTION 'T9 FAIL: revenirea a lăsat obiecte sau armarea';
   END IF;
   PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
@@ -658,8 +731,8 @@ BEGIN
   PERFORM pg_temp.t_ca(NULL, 'postgres');
   RAISE NOTICE 'T9 OK (revenire)';
 END $t$;
-SELECT set_config('gazpet.livrare_migrare', '20261215a_executie_raport_rezumat:' || txid_current(), true);
-\ir ../supabase/migrations/20261215a_executie_raport_rezumat.sql
+SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat:' || txid_current(), true);
+\ir ../supabase/migrations/20261216a_executie_raport_rezumat.sql
 DO $t$
 DECLARE r jsonb; z public.rapoarte_zilnice;
 BEGIN

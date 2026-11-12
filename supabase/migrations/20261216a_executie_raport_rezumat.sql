@@ -1,5 +1,5 @@
--- Version 20261215120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
--- 20261215a_executie_raport_rezumat — Raportul zilnic de șantier: REZUMATUL scurt salvat pe raport (etapa 1, determinist, fără AI).
+-- Version 20261216120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh (psql --single-transaction, marcajul gazpet.livrare_migrare legat de txid).
+-- 20261216a_executie_raport_rezumat — Raportul zilnic de șantier: REZUMATUL scurt salvat pe raport (etapa 1, determinist, fără AI).
 --
 -- Ce face:
 --   * rapoarte_zilnice + rezumat_text, rezumat_sursa ('automat' / 'editat'), rezumat_la, rezumat_de (NULL la automat). Rândurile vechi rămân
@@ -28,17 +28,17 @@
 -- Dependențe: 20261208a aplicată (fn_raport_zilnic_salveaza cu amprenta revizuită, fn_raport_zilnic_versiune, raport_zilnic_salvari) și 20261027a.
 -- Ordinea lock-urilor (L06), aceeași ca în fn_raport_zilnic_salveaza: rapoarte_zilnice (ACCESS EXCLUSIVE) -> raport_zilnic_salvari (SHARE ROW EXCLUSIVE).
 --   La rulare: trigger-ul de pe jurnal actualizează rândul raportului deja blocat de RPC (FOR UPDATE, pasul 1) — niciun lock nou.
--- Revenire: supabase/revenire/20261215a_executie_raport_rezumat_ROLLBACK.sql. Test: scripts/test_executie_raport_rezumat.sql (clonă) +
+-- Revenire: supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql. Test: scripts/test_executie_raport_rezumat.sql (clonă) +
 --   scripts/pglite/test_raport_rezumat_local.mjs (local, PGlite).
 DO $pre$
 DECLARE r record; v_tip text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
-     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261215a_executie_raport_rezumat:' || txid_current() THEN
-    RAISE EXCEPTION '20261215a: garda start invalida';
+     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261216a_executie_raport_rezumat:' || txid_current() THEN
+    RAISE EXCEPTION '20261216a: garda start invalida';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.livrare_migrare=%') THEN
-    RAISE EXCEPTION '20261215a: armare persistenta refuzata';
+    RAISE EXCEPTION '20261216a: armare persistenta refuzata';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
@@ -49,7 +49,7 @@ BEGIN
                  WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_raport\_rezumat\_%')
      OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_zilnic_zz_rezumat', 'trg_raport_zilnic_salvari_rezumat'))
      OR EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rapoarte_zilnice_rezumat_ck') THEN
-    RAISE EXCEPTION '20261215a: obiectele exista deja (reaplicare)';
+    RAISE EXCEPTION '20261216a: obiectele exista deja (reaplicare)';
   END IF;
   -- 20261208a aplicată, cu corpurile revizuite (L15): salvarea scrie jurnalul ULTIMA (după antet, linii, distribuție), versiunea crește la orice scriere
   IF to_regprocedure('public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid)') IS NULL
@@ -63,20 +63,21 @@ BEGIN
                      AND tg.tgfoid = to_regprocedure('public.fn_raport_zilnic_versiune()')
                      AND tg.tgtype = (1 | 2 | 4 | 16))   -- ROW, BEFORE, INSERT, UPDATE
      OR to_regclass('public.raport_zilnic_salvari') IS NULL THEN
-    RAISE EXCEPTION '20261215a: 20261208a nu e aplicata sau RPC-ul de salvare / versiunea difera de amprenta revizuita';
+    RAISE EXCEPTION '20261216a: 20261208a nu e aplicata sau RPC-ul de salvare / versiunea difera de amprenta revizuita';
   END IF;
   -- dreptul pe șantier (20261208a; 20261209a îi adaugă condiția de proiect): doar contractul, nu corpul
   IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_raport_santier_drept(bigint)')
                    AND p.prorettype = 'boolean'::regtype AND p.prosecdef) THEN
-    RAISE EXCEPTION '20261215a: fn_raport_santier_drept(bigint) lipseste sau nu e DEFINER boolean';
+    RAISE EXCEPTION '20261216a: fn_raport_santier_drept(bigint) lipseste sau nu e DEFINER boolean';
   END IF;
   IF to_regprocedure('auth.uid()') IS NULL OR to_regclass('public.raport_distributie_linii') IS NULL THEN
-    RAISE EXCEPTION '20261215a: auth.uid / raport_distributie_linii (20261027a) lipsesc';
+    RAISE EXCEPTION '20261216a: auth.uid / raport_distributie_linii (20261027a) lipsesc';
   END IF;
   -- coloanele citite de rezumat, cu tipurile acceptate (din migrările 20261027a / 20261208a și din cod; ce diferă oprește migrarea)
   FOR r IN SELECT * FROM (VALUES
       ('rapoarte_zilnice', 'id', 'bigint'), ('rapoarte_zilnice', 'site_id', 'integer|bigint'), ('rapoarte_zilnice', 'data', 'date'),
       ('rapoarte_zilnice', 'lucrari_efectuate', 'text'), ('rapoarte_zilnice', 'probleme', 'text'), ('rapoarte_zilnice', 'masini', 'text'),
+      ('rapoarte_zilnice', 'subcontractori', 'text'), ('rapoarte_zilnice', 'aprovizionare', 'text'), ('rapoarte_zilnice', 'plan_maine', 'text'),
       ('rapoarte_zilnice', 'personal_snapshot', 'jsonb'), ('rapoarte_zilnice', 'utilaje_snapshot', 'jsonb'), ('rapoarte_zilnice', 'meteo', 'jsonb'),
       ('rapoarte_zilnice', 'poze', 'ARRAY'), ('rapoarte_zilnice', 'versiune_salvare', 'integer'), ('rapoarte_zilnice', 'updated_at', 'timestamp with time zone'),
       ('sites', 'id', 'integer|bigint'), ('sites', 'name', 'text|character varying'), ('sites', 'proiect_id', 'integer|bigint'),
@@ -91,11 +92,11 @@ BEGIN
     ) v(t, c, tipuri) LOOP
     SELECT data_type INTO v_tip FROM information_schema.columns WHERE table_schema = 'public' AND table_name = r.t AND column_name = r.c;
     IF v_tip IS NULL OR NOT (v_tip = ANY (string_to_array(r.tipuri, '|'))) THEN
-      RAISE EXCEPTION '20261215a: coloana %.% lipseste sau are alt tip (%; asteptat %)', r.t, r.c, coalesce(v_tip, 'lipsa'), r.tipuri;
+      RAISE EXCEPTION '20261216a: coloana %.% lipseste sau are alt tip (%; asteptat %)', r.t, r.c, coalesce(v_tip, 'lipsa'), r.tipuri;
     END IF;
   END LOOP;
   IF (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.rapoarte_zilnice'::regclass AND attname = 'poze' AND NOT attisdropped) <> 'text[]' THEN
-    RAISE EXCEPTION '20261215a: rapoarte_zilnice.poze nu e text[]';
+    RAISE EXCEPTION '20261216a: rapoarte_zilnice.poze nu e text[]';
   END IF;
   -- trigger-ul nostru compară rândul DUPĂ celelalte trigger-e BEFORE: niciun trigger BEFORE ROW necunoscut nu rulează după el
   -- (ordinea PostgreSQL = numele, colația C) și nu-i schimbă rândul după comparație
@@ -103,7 +104,7 @@ BEGIN
    WHERE tg.tgrelid = 'public.rapoarte_zilnice'::regclass AND NOT tg.tgisinternal AND (tg.tgtype & 2) = 2 AND (tg.tgtype & 1) = 1
      AND tg.tgname::text COLLATE "C" > 'trg_raport_zilnic_zz_rezumat' COLLATE "C";
   IF v_tip IS NOT NULL THEN
-    RAISE EXCEPTION '20261215a: trigger-e BEFORE ROW necunoscute dupa garda rezumatului pe rapoarte_zilnice: %', v_tip;
+    RAISE EXCEPTION '20261216a: trigger-e BEFORE ROW necunoscute dupa garda rezumatului pe rapoarte_zilnice: %', v_tip;
   END IF;
   -- lock-urile, în ordinea RPC-ului (L06), înaintea oricărei schimbări
   LOCK TABLE public.rapoarte_zilnice IN ACCESS EXCLUSIVE MODE;
@@ -121,10 +122,10 @@ ALTER TABLE public.rapoarte_zilnice
     OR (rezumat_sursa = 'automat' AND rezumat_text IS NOT NULL AND rezumat_la IS NOT NULL AND rezumat_de IS NULL)
     OR (rezumat_sursa = 'editat' AND rezumat_text ~ '[^[:space:]]' AND char_length(rezumat_text) <= 4000 AND rezumat_la IS NOT NULL));
 COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_text IS
-  'Rezumatul scurt al raportului (WhatsApp / director). Automat = fn_raport_rezumat_text, refăcut de server la fiecare salvare; editat = corectat de om, nu se suprascrie. 20261215a.';
-COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_sursa IS 'automat / editat (NULL = raport salvat înainte de 20261215a, încă fără rezumat). 20261215a.';
-COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_la IS 'Când s-a schimbat ultima dată textul rezumatului (pus de server). 20261215a.';
-COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_de IS 'Cine a corectat rezumatul (auth.uid(), pus de server); NULL la automat. 20261215a.';
+  'Rezumatul scurt al raportului (WhatsApp / director). Automat = fn_raport_rezumat_text, refăcut de server la fiecare salvare; editat = corectat de om, nu se suprascrie. 20261216a.';
+COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_sursa IS 'automat / editat (NULL = raport salvat înainte de 20261216a, încă fără rezumat). 20261216a.';
+COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_la IS 'Când s-a schimbat ultima dată textul rezumatului (pus de server). 20261216a.';
+COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_de IS 'Cine a corectat rezumatul (auth.uid(), pus de server); NULL la automat. 20261216a.';
 
 -- ── unelte de text: O SINGURĂ regulă (aceeași în src/raportRezumat.js: curata / trunchiaza / fmtNr) ──
 -- un singur rând: caracterele de control (1–31, 127) -> spațiu, spațiile repetate -> unul, fără spații la capete
@@ -170,15 +171,23 @@ DECLARE
   l jsonb; cod text; nume text; et text; act text; buc text; c text; um text; k integer;
   grp_et text[] := ARRAY[]::text[]; grp_b text[] := ARRAY[]::text[];
   di jsonb; dp text[] := ARRAY[]::text[]; t text; pb text[];
+  -- comparația numelor fără diacritice / majuscule: DOAR literele românești + A–Z (aceeași hartă în JS, ca rezultatul să nu depindă de colație)
+  c_din constant text := 'ĂÂÎȘŞȚŢăâîșşțţABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  c_in constant text := 'aaissttaaissttabcdefghijklmnopqrstuvwxyz';
 BEGIN
-  -- 1. șantierul (+ proiectul, dacă e altul), data, vremea
+  -- 1. un singur nume: șantierul (sites.name, scurtat la 80); proiectul doar dacă numele lui NU e deja în numele șantierului
+  --    (fără diacritice / majuscule), scurtat la 60; data; vremea (temperatura la grad întreg)
   s := public.fn_raport_rezumat_curata(public.fn_raport_rezumat_sir(x, 'santier'));
   pr := public.fn_raport_rezumat_curata(public.fn_raport_rezumat_sir(x, 'proiect'));
+  pr := CASE WHEN pr = '' OR strpos(translate(s, c_din, c_in), translate(pr, c_din, c_in)) > 0 THEN ''
+             ELSE public.fn_raport_rezumat_taie(pr, 60) END;
+  s := public.fn_raport_rezumat_taie(s, 80);
   d := CASE WHEN jsonb_typeof(x -> 'data') = 'string' AND (x ->> 'data') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
             THEN substr(x ->> 'data', 9, 2) || '.' || substr(x ->> 'data', 6, 2) || '.' || substr(x ->> 'data', 1, 4) ELSE '' END;
   m := x -> 'meteo';
   IF jsonb_typeof(m) = 'object' THEN
-    IF jsonb_typeof(m -> 'temp') = 'number' THEN mp := mp || (public.fn_raport_rezumat_nr(m -> 'temp') || ' °C'); END IF;
+    -- round(numeric) = jumătatea departe de zero (8,5 -> 9; -2,5 -> -3), ca în JS
+    IF jsonb_typeof(m -> 'temp') = 'number' THEN mp := mp || (round((m ->> 'temp')::numeric)::text || ' °C'); END IF;
     IF jsonb_typeof(m -> 'precip_mm') = 'number' AND (m ->> 'precip_mm')::numeric > 0 THEN
       mp := mp || ('precipitații ' || public.fn_raport_rezumat_nr(m -> 'precip_mm') || ' mm');
     END IF;
@@ -191,7 +200,7 @@ BEGIN
     END IF;
   END IF;
   v_out := v_out || (coalesce(nullif(s, ''), 'Raport zilnic')
-                     || CASE WHEN pr <> '' AND pr <> s THEN ' (proiect ' || pr || ')' ELSE '' END
+                     || CASE WHEN pr <> '' THEN ' (proiect ' || pr || ')' ELSE '' END
                      || CASE WHEN d <> '' THEN ' · ' || d ELSE '' END
                      || CASE WHEN cardinality(mp) > 0 THEN ' · ' || array_to_string(mp, ', ') ELSE '' END);
   -- 2. oameni · utilaje · poze
@@ -216,7 +225,10 @@ BEGIN
                    public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(q.e, 'motiv'), 80) AS mo
               FROM jsonb_array_elements(u) WITH ORDINALITY q(e, o)
              WHERE jsonb_typeof(q.e) = 'object' AND public.fn_raport_rezumat_sir(q.e, 'stare') = 'nefunctional') w;
-    v_ut := 'Utilaje: ' || jsonb_array_length(u) || CASE WHEN nef IS NOT NULL THEN ' (nefuncționale: ' || array_to_string(nef, '; ') || ')' ELSE '' END;
+    -- nefuncționale: numărul lor + cel mult primele 3 (în ordinea din raport), apoi „+N”
+    v_ut := 'Utilaje: ' || jsonb_array_length(u)
+            || CASE WHEN nef IS NOT NULL THEN ' (nefuncționale ' || cardinality(nef) || ': ' || array_to_string(nef[1:3], '; ')
+                    || CASE WHEN cardinality(nef) > 3 THEN '; +' || (cardinality(nef) - 3) ELSE '' END || ')' ELSE '' END;
   END IF;
   IF jsonb_typeof(x -> 'poze') = 'number' AND (x ->> 'poze')::numeric > 0 THEN v_pz := 'Poze: ' || public.fn_raport_rezumat_nr(x -> 'poze'); END IF;
   ech := array_remove(ARRAY[v_oam, v_ut, v_pz], '');
@@ -252,6 +264,9 @@ BEGIN
   -- 4. textul liber al lucrărilor (detalii, dacă există și cantități)
   t := public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(x, 'lucrari'), 240);
   IF t <> '' THEN v_out := v_out || (CASE WHEN cardinality(grp_et) > 0 THEN 'Detalii' ELSE 'Lucrări' END || ': ' || t); END IF;
+  -- 4b. subcontractorii (ce au lucrat azi), dacă rubrica e completată
+  t := public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(x, 'subcontractori'), 200);
+  IF t <> '' THEN v_out := v_out || ('Subcontractori: ' || t); END IF;
   -- 5. probleme · mașini
   pb := array_remove(ARRAY[
           CASE WHEN public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(x, 'probleme'), 240) <> ''
@@ -259,6 +274,11 @@ BEGIN
           CASE WHEN public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(x, 'masini'), 160) <> ''
                THEN 'Mașini: ' || public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(x, 'masini'), 160) END], NULL);
   IF cardinality(pb) > 0 THEN v_out := v_out || array_to_string(pb, ' · '); END IF;
+  -- 6. aprovizionarea cerută și planul pentru mâine, fiecare doar dacă e completat (textul omului, nimic dedus)
+  t := public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(x, 'aprovizionare'), 160);
+  IF t <> '' THEN v_out := v_out || ('Aprovizionare: ' || t); END IF;
+  t := public.fn_raport_rezumat_taie(public.fn_raport_rezumat_sir(x, 'plan_maine'), 200);
+  IF t <> '' THEN v_out := v_out || ('Plan pentru mâine: ' || t); END IF;
   RETURN array_to_string(v_out, chr(10));
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_raport_rezumat_text(jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -290,6 +310,9 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
       'lucrari', z.lucrari_efectuate,
       'probleme', z.probleme,
       'masini', z.masini,
+      'subcontractori', z.subcontractori,
+      'aprovizionare', z.aprovizionare,
+      'plan_maine', z.plan_maine,
       'poze', cardinality(z.poze))
     -- INTRARE-END
 $f$;
@@ -371,7 +394,7 @@ BEGIN
              OR (column_name = 'rezumat_de' AND data_type = 'uuid'))) <> 4
      OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.rapoarte_zilnice'::regclass AND conname = 'rapoarte_zilnice_rezumat_ck'
                      AND contype = 'c' AND convalidated) THEN
-    RAISE EXCEPTION '20261215a post: coloanele / constrangerea';
+    RAISE EXCEPTION '20261216a post: coloanele / constrangerea';
   END IF;
   -- funcțiile: search_path fix; DEFINER doar garda; NICIUN EXECUTE pentru clienți (nu sunt apelabile din API)
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (v_fn)) <> 8
@@ -383,7 +406,7 @@ BEGIN
                         OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
                         OR has_function_privilege('service_role', p.oid, 'EXECUTE')
                         OR EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0))) THEN
-    RAISE EXCEPTION '20261215a post: functii (definer / search_path / owner / EXECUTE)';
+    RAISE EXCEPTION '20261216a post: functii (definer / search_path / owner / EXECUTE)';
   END IF;
   -- trigger-ele: exact forma (L15) și ordinea (garda rezumatului DUPĂ versiune)
   IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.rapoarte_zilnice'::regclass AND tg.tgname = 'trg_raport_zilnic_zz_rezumat'
@@ -393,19 +416,20 @@ BEGIN
                    AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgfoid = 'public.fn_raport_rezumat_dupa_salvare()'::regprocedure
                    AND tg.tgtype = (1 | 4))   -- ROW, AFTER, INSERT
      OR NOT ('trg_raport_zilnic_versiune' COLLATE "C" < 'trg_raport_zilnic_zz_rezumat' COLLATE "C") THEN
-    RAISE EXCEPTION '20261215a post: trigger-ele';
+    RAISE EXCEPTION '20261216a post: trigger-ele';
   END IF;
   -- textul: un caz cu diacritice, amprenta UTF-8 a rezultatului (prinde și o codare greșită a fișierului la aplicare)
-  IF md5(convert_to(public.fn_raport_rezumat_text(jsonb_build_object('santier', 'Ș', 'data', '2026-01-02',
+  -- (proiectul „ș” e ascuns doar dacă harta diacriticelor s-a citit corect: altfel textul are „(proiect …)” și amprenta diferă)
+  IF md5(convert_to(public.fn_raport_rezumat_text(jsonb_build_object('santier', 'Ș', 'proiect', 'ș', 'data', '2026-01-02',
            'personal', jsonb_build_object('lacatusi', 2, 'total', 2), 'probleme', 'a' || chr(9) || 'b')), 'UTF8')) <> 'eb4f44e7d61bfc57dd33cc2b7e2d37d0'
      OR public.fn_raport_rezumat_text('{}'::jsonb) <> 'Raport zilnic' THEN
-    RAISE EXCEPTION '20261215a post: textul rezumatului difera de cel asteptat (codarea fisierului?)';
+    RAISE EXCEPTION '20261216a post: textul rezumatului difera de cel asteptat (codarea fisierului?)';
   END IF;
   -- migrarea nu scrie date
   IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE rezumat_sursa IS NOT NULL OR rezumat_text IS NOT NULL) THEN
-    RAISE EXCEPTION '20261215a post: migrarea nu scrie date';
+    RAISE EXCEPTION '20261216a post: migrarea nu scrie date';
   END IF;
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261215a_executie_raport_rezumat:' || txid_current() THEN
-    RAISE EXCEPTION '20261215a: garda final invalida';
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261216a_executie_raport_rezumat:' || txid_current() THEN
+    RAISE EXCEPTION '20261216a: garda final invalida';
   END IF;
 END $post$;

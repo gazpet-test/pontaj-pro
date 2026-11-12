@@ -1,4 +1,4 @@
--- Revenire 20261215a_executie_raport_rezumat. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
+-- Revenire 20261216a_executie_raport_rezumat. NEAPLICAT. Fără GO de execuție: doar la cererea explicită a lui Răzvan (supabase/revenire/README.md).
 -- Scoate tot ce a creat migrarea: cele 2 trigger-e (trg_raport_zilnic_zz_rezumat pe rapoarte_zilnice, trg_raport_zilnic_salvari_rezumat pe
 -- raport_zilnic_salvari), cele 8 funcții fn_raport_rezumat_* (lista exactă, cu amprenta corpului verificată, L15), constrângerea și cele 4 coloane rezumat_*.
 -- REFUZĂ dacă există rezumate CORECTATE de om (rezumat_sursa = 'editat'): textul lor ar dispărea în tăcere (golirea = decizie separată,
@@ -6,10 +6,10 @@
 -- Rapoartele, liniile și jurnalul salvărilor NU se ating.
 -- Gestionarul tranzacției e operatorul (fișierul nu are BEGIN / COMMIT). Un singur string:
 --   BEGIN ISOLATION LEVEL READ COMMITTED;
---   SELECT set_config('gazpet.revenire_20261215a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
+--   SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
 --   <conținutul exact al fișierului>
 --   COMMIT;
--- harness-armare: gazpet.revenire_20261215a SCOATE_REZUMAT_RAPORT
+-- harness-armare: gazpet.revenire_20261216a SCOATE_REZUMAT_RAPORT
 -- Ordinea lock-urilor (ca RPC-ul de salvare): rapoarte_zilnice, raport_zilnic_salvari — ACCESS EXCLUSIVE NOWAIT, ÎNAINTEA verificării „fără
 -- rezumate editate” (o corectură concurentă nu poate fi numărată 0 și apoi pierdută la DROP COLUMN). Ocupat = 55P03, nimic scris.
 -- Un SINGUR bloc DO: un refuz e singura instrucțiune care eșuează.
@@ -19,14 +19,14 @@ DECLARE v_fn name[] := ARRAY['fn_raport_rezumat_curata', 'fn_raport_rezumat_taie
   v_n integer;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
-     OR current_setting('gazpet.revenire_20261215a', true) IS DISTINCT FROM 'SCOATE_REZUMAT_RAPORT:' || txid_current() THEN
-    RAISE EXCEPTION '20261215a revenire: garda invalida (armare lipsa sau din alta tranzactie)';
+     OR current_setting('gazpet.revenire_20261216a', true) IS DISTINCT FROM 'SCOATE_REZUMAT_RAPORT:' || txid_current() THEN
+    RAISE EXCEPTION '20261216a revenire: garda invalida (armare lipsa sau din alta tranzactie)';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261215a=%') THEN
-    RAISE EXCEPTION '20261215a revenire: armare persistenta refuzata';
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261216a=%') THEN
+    RAISE EXCEPTION '20261216a revenire: armare persistenta refuzata';
   END IF;
   IF current_setting('transaction_isolation') <> 'read committed' THEN
-    RAISE EXCEPTION '20261215a revenire: necesita READ COMMITTED (acum %)', current_setting('transaction_isolation');
+    RAISE EXCEPTION '20261216a revenire: necesita READ COMMITTED (acum %)', current_setting('transaction_isolation');
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
@@ -41,8 +41,8 @@ BEGIN
             ('fn_raport_rezumat_taie', 'public.fn_raport_rezumat_taie(text, integer)', '7903b72e96c3ab4617c865805cfe6d6f'),
             ('fn_raport_rezumat_sir', 'public.fn_raport_rezumat_sir(jsonb, text)', '053653a3014609f9a13c4f96b99af586'),
             ('fn_raport_rezumat_nr', 'public.fn_raport_rezumat_nr(jsonb)', '52082fbf3726918e913f1e0dcf30c2e9'),
-            ('fn_raport_rezumat_text', 'public.fn_raport_rezumat_text(jsonb)', '6896bfa956aea66abda6050524ccfc6b'),
-            ('fn_raport_rezumat_intrare', 'public.fn_raport_rezumat_intrare(public.rapoarte_zilnice)', 'c1b80cf36793b1cc44d40dfed3f8abd2'),
+            ('fn_raport_rezumat_text', 'public.fn_raport_rezumat_text(jsonb)', '00283f5c3cd80066ba57baab70ab085b'),
+            ('fn_raport_rezumat_intrare', 'public.fn_raport_rezumat_intrare(public.rapoarte_zilnice)', '478794ce25a5b838533267d0035259b1'),
             ('fn_raport_rezumat_garda', 'public.fn_raport_rezumat_garda()', '29a1018cde4d7fbcd11f892d658059d0'),
             ('fn_raport_rezumat_dupa_salvare', 'public.fn_raport_rezumat_dupa_salvare()', '7bc75002375853875eda7876413390c6')
             -- AMPRENTE-END
@@ -57,7 +57,7 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.rapoarte_zilnice'::regclass AND conname = 'rapoarte_zilnice_rezumat_ck')
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice'
           AND column_name IN ('rezumat_text', 'rezumat_sursa', 'rezumat_la', 'rezumat_de')) <> 4 THEN
-    RAISE EXCEPTION '20261215a revenire: starea nu e cea din 20261215a';
+    RAISE EXCEPTION '20261216a revenire: starea nu e cea din 20261216a';
   END IF;
   -- nimic altceva nu depinde de coloane / funcții: vederi, politici, alte funcții (dependențe în catalog și apeluri textuale)
   IF EXISTS (SELECT 1 FROM pg_depend d
@@ -78,12 +78,12 @@ BEGIN
                    AND n.nspname !~ '^pg_(toast_)?temp_'   -- funcțiile temporare ale sesiunii (ex. harness-ul) dispar cu ea
                    AND NOT (n.nspname = 'public' AND p.proname = ANY (v_fn))
                    AND p.prosrc ~ '\mfn_raport_rezumat_[a-z_]+\M') THEN
-    RAISE EXCEPTION '20261215a revenire: alte obiecte depind de coloanele / functiile rezumatului';
+    RAISE EXCEPTION '20261216a revenire: alte obiecte depind de coloanele / functiile rezumatului';
   END IF;
   LOCK TABLE public.rapoarte_zilnice IN ACCESS EXCLUSIVE MODE NOWAIT;
   LOCK TABLE public.raport_zilnic_salvari IN ACCESS EXCLUSIVE MODE NOWAIT;
   IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE rezumat_sursa = 'editat') THEN
-    RAISE EXCEPTION '20261215a revenire: exista rezumate corectate de om (rezumat_sursa = editat) — decizie separata inainte';
+    RAISE EXCEPTION '20261216a revenire: exista rezumate corectate de om (rezumat_sursa = editat) — decizie separata inainte';
   END IF;
   -- scoaterea (fără CASCADE): trigger-ele, apoi funcțiile (garda depinde de intrare / text), apoi coloanele
   DROP TRIGGER trg_raport_zilnic_salvari_rezumat ON public.raport_zilnic_salvari;
@@ -106,7 +106,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_zilnic_zz_rezumat', 'trg_raport_zilnic_salvari_rezumat'))
      OR EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rapoarte_zilnice_rezumat_ck')
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.rapoarte_zilnice'::regclass AND tgname = 'trg_raport_zilnic_versiune') THEN
-    RAISE EXCEPTION '20261215a revenire post: au ramas obiecte sau lipseste trigger-ul de versiune (20261208a)';
+    RAISE EXCEPTION '20261216a revenire post: au ramas obiecte sau lipseste trigger-ul de versiune (20261208a)';
   END IF;
-  PERFORM set_config('gazpet.revenire_20261215a', '', true);   -- dezarmare
+  PERFORM set_config('gazpet.revenire_20261216a', '', true);   -- dezarmare
 END $revenire$;

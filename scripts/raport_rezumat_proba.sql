@@ -1,11 +1,11 @@
--- Proba rezumatului raportului zilnic (20261215a) pe rapoarte REALE, ÎNAINTE de orice aplicare. DOAR CITIRE.
+-- Proba rezumatului raportului zilnic (20261216a) pe rapoarte REALE, ÎNAINTE de orice aplicare. DOAR CITIRE.
 -- Scoate ultimele 20 de rapoarte zilnice în forma de intrare a lui rezumatRaport() (src/raportRezumat.js), ca JSON pe un singur rând.
 -- Nu creează nimic, nu scrie nimic: tranzacție READ ONLY, anulată la final. Nu scoate numele șefului de șantier (sef_santier) sau autorul.
--- Textele libere (lucrări, probleme, mașini) pot conține nume de persoane: ieșirea rămâne la coordonator (NU în repo, NU în PR).
+-- Textele libere (lucrări, subcontractori, probleme, mașini, aprovizionare, plan pentru mâine) pot conține nume de persoane: ieșirea rămâne la coordonator (NU în repo, NU în PR).
 -- Rulare (coordonatorul, pe producție, cu psql):
 --   psql -X -A -t -v ON_ERROR_STOP=1 -f scripts/raport_rezumat_proba.sql -o <folder de lucru>/intrari_rezumat.json
 --   node scripts/raport_rezumat_proba.mjs <folder de lucru>/intrari_rezumat.json > <folder de lucru>/rezumate_proba.txt
--- Blocul INTRARE e copiat IDENTIC din fn_raport_rezumat_intrare (migrarea 20261215a); testul src/raportRezumat.test.js verifică.
+-- Blocul INTRARE e copiat IDENTIC din fn_raport_rezumat_intrare (migrarea 20261216a); testul src/raportRezumat.test.js verifică.
 \set ON_ERROR_STOP 1
 BEGIN TRANSACTION READ ONLY;
 SET LOCAL statement_timeout = '30s';
@@ -34,6 +34,9 @@ SELECT coalesce(jsonb_agg(jsonb_build_object('id', r.id, 'site_id', r.site_id, '
       'lucrari', z.lucrari_efectuate,
       'probleme', z.probleme,
       'masini', z.masini,
+      'subcontractori', z.subcontractori,
+      'aprovizionare', z.aprovizionare,
+      'plan_maine', z.plan_maine,
       'poze', cardinality(z.poze))
     -- INTRARE-END
       AS intrare

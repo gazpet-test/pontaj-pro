@@ -16,6 +16,8 @@ import { exportRapoarteExcel, exportRapoartePDF } from './rapoarteExport.js'
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 import { MeteoRaportChip, MeteoRaportText } from './Meteo.jsx'
 import RubricaRezumat from './RubricaRezumat.jsx'
+// rezumatul ZILEI pe toate șantierele din ecran (r2): doar citire, text de copiat
+import RezumatZiModal from './RezumatZiModal.jsx'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -60,9 +62,10 @@ export default function RapoarteSantierPage() {
   const [istoricSite, setIstoricSite] = useState('') // șantier selectat în tab istoric
   const [exporting, setExporting] = useState(null) // 'excel' | 'pdf' | null
   const [exportErr, setExportErr] = useState(null)
-  // rezumatul (20261215a): corectura o face cine are drept de scriere pe raport — owner sau alocat pe șantier (aceeași regulă ca salvarea;
+  // rezumatul (20261216a): corectura o face cine are drept de scriere pe raport — owner sau alocat pe șantier (aceeași regulă ca salvarea;
   // serverul decide oricum, aici doar se arată butoanele)
   const [scriere, setScriere] = useState({ tot: false, site: new Set() })
+  const [rezumatZi, setRezumatZi] = useState(false)  // fereastra „Rezumatul zilei”
 
   // ── init: profil + șantiere accesibile ──
   useEffect(() => {
@@ -84,7 +87,7 @@ export default function RapoarteSantierPage() {
       if (vedeTot) {
         setSites(active)
       } else {
-        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal, raport_zilnic_necesar, tip_locatie)').eq('profile_id', user.id)
+        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal, active, raport_zilnic_necesar, tip_locatie)').eq('profile_id', user.id)
         setSites((ps || []).map(r => r.sites).filter(Boolean).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
       }
       setLoadingInit(false)
@@ -218,8 +221,13 @@ export default function RapoarteSantierPage() {
             }}>{p.l}</button>
           ))}
         </div>
+        {/* rezumatul zilei: toate șantierele din ecran, pentru ziua aleasă (implicit capătul intervalului) */}
+        <button data-rezumat-zi-deschide onClick={() => setRezumatZi(true)} title="Un singur text pe zi, pe toate șantierele tale, de copiat pe WhatsApp" style={{
+          background: G.blue + '18', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 8, padding: '8px 13px',
+          fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto',
+        }}>📝 Rezumatul zilei</button>
         {/* export — pe Parc Auto nu au sens (raportul lui vine din Probleme Parc) */}
-        {!parcSelectat && <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+        {!parcSelectat && <div style={{ display: 'flex', gap: 6 }}>
           <button onClick={doExportExcel} disabled={!!exporting} title="Exportă rapoartele filtrate în Excel" style={{
             background: G.green + '18', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 8, padding: '8px 13px',
             fontSize: 13, fontWeight: 700, cursor: exporting ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: exporting ? .6 : 1,
@@ -254,6 +262,7 @@ export default function RapoarteSantierPage() {
           setDetaliu(d => (d && d.id === row.id ? { ...d, ...row } : d))
           setRapoarte(list => list.map(r => (r.id === row.id ? { ...r, ...row } : r)))
         }} />}
+      {rezumatZi && <RezumatZiModal ziInitiala={to} sites={sites} onClose={() => setRezumatZi(false)} />}
     </Shell>
   )
 }
@@ -389,7 +398,7 @@ function ModalDetaliu({ raport, siteName, onClose, poateEdita, onRezumat }) {
           <button onClick={onClose} style={{ background: G.bg, border: `1px solid ${G.border}`, color: G.text, borderRadius: 9, width: 34, height: 34, fontSize: 17, cursor: 'pointer' }}>×</button>
         </div>
 
-        {/* rezumatul scurt (20261215a): de copiat pe WhatsApp / pentru directorul de execuție */}
+        {/* rezumatul scurt (20261216a): de copiat pe WhatsApp / pentru directorul de execuție */}
         {'rezumat_sursa' in raport && (
           <Bloc titlu="📝 Rezumat">
             <RubricaRezumat raport={raport} poateEdita={poateEdita} onActualizat={onRezumat} />
