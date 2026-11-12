@@ -59,7 +59,11 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
      token COMPLET = semn + număr + unitate („−5 bar” nu e „5 bar”; „30 de zile” = „30 zile”; „10 metri” = „10 m”). La o afirmație
      normativă, o cifră fără unitate nu e confirmată de aceeași cifră cu unitate în sursă (și invers): „proba se face la 6” față
      de „6 bar” → scoasă. Unitățile recunoscute: bar, mbar, kPa, MPa, mm, cm, m, km, °C, grade, %, zile, ore, săptămâni, luni,
-     ani, minute, lei, euro, kg, mc, mp; semnul contează doar lipit de cifră („−5”), nu într-un interval („5-10 bar”);
+     ani, minute, secunde, litri, lei, euro, kg, mc, mp. Runda 5 (review r4 P2): unitatea se ia ÎNTREAGĂ — exponent și numitori
+     („5 m/s²” ≠ „5 m/s”; „km/h”, „kg/m3”, un numitor necunoscut rămâne scris cum e); semnul contează și despărțit prin spațiu
+     („- 5 bar” = „-5 bar”, nu „5 bar”), iar la început de rând e ambiguu (bulină sau minus?) și nu confirmă nimic; un interval
+     („între 2 și 6 bar”, „de la 2 la 6 bar”, „2–6 bar”) e UN token „2..6 bar” — un capăt nu confirmă „2 bar”. Cu liniuță doar
+     dacă măcar un capăt are unitate („EN 12732-1” rămâne „12732” și „1”);
    - **susținerea pe propoziție** (runda 4, review r3 P1 — înlocuiește „majoritatea termenilor” din runda 3): o afirmație cu
      marcaj trece doar dacă O PROPOZIȚIE dintr-o sursă citată (titlul sursei se adaugă la fiecare propoziție) are:
      · **același tip de regulă**: o obligație cere „obligatoriu / trebuie / necesar / impune” în sursă, o interdicție cere
@@ -76,6 +80,16 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
      litere, normalizate (fără diacritice, rădăcina de 6 litere), fără cuvinte de legătură, verbe generice („este”, „face”,
      „aplică”), structura actelor („art.”, „alin.”) și marcatorii de regulă. O regulă fără niciun termen verificabil și fără
      cifre („Este obligatoriu [C1]”) se scoate;
+     · **runda 5 (review r4 P1) — restricțiile sursei nu se pot omite**: propoziția din sursă se ia ÎNTREAGĂ, cu adversativele
+       și subordonatele ei (nu se mai taie la „dar”; o propoziție care începe cu „Însă / Dacă / Cu excepția …” ține de cea
+       dinainte); „dacă”, „numai”, „doar” simple sunt condiții. La o afirmație normativă comparația e în AMBELE sensuri: fiecare
+       restricție a propoziției din sursă (după „dar / însă / totuși / dacă / numai / doar / în cazul în care / cu condiția /
+       cu excepția / în afară de / până la”) trebuie să apară în afirmație — un marcator din aceeași familie și toți termenii /
+       cifrele ei („numai după verificare și autorizare” NU susține „numai după verificare”); la „sau / ori” ajunge o variantă
+       („numai după verificare sau autorizare” susține „numai după verificare”). „Sudarea este permisă [C1]” cu sursa „Sudarea
+       este permisă, dar se interzice pe ploaie.” → scoasă; citarea întreagă trece;
+     · **fiecare propoziție a rândului** se verifică separat (aceeași trimitere [C1] le acoperă pe toate): „Proba trebuie făcută
+       la 6 bar. Durata trebuie să fie 2 ore. [C1]” trece dacă sursa le are pe amândouă, fiecare în propoziția ei;
    - **limita asumată** (runda 4): potrivirea e pe cuvinte, nu pe sens. Suntem intenționat stricți: o parafrază corectă cu alt
      cuvânt e respinsă — „personal competent” pentru sursa „personal calificat”, „impune” pentru sursa „se face la 99 bar” — iar
      răspunsul devine „Incert — de verificat” (de verificat de om), nu greșit. Nu adăugăm sinonime ghicite;
@@ -102,7 +116,10 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    „🔁 Reia cu cercetare” — DOAR ownerul (costă, intră în plafon). Rezultatul unei acțiuni rămâne legat de întrebarea pe care
    s-a apăsat (id + generație), nu apare sub altă întrebare deschisă între timp. Cele două butoane apar **doar după ce ecranul a
    detectat migrarea 20261131e** (coloanele ei s-au citit fără eroare — runda 4, review r3 P2); până atunci, în locul lor, o
-   notă: „disponibile după actualizarea bazei de date” (`actiuniIntrebare` în `src/intrebariSurse.js`).
+   notă: „disponibile după actualizarea bazei de date” (`actiuniIntrebare` în `src/intrebariSurse.js`). Runda 5 (review r4 P2):
+   fără migrarea detectată, răspunsul arată EXACT ca înainte (eticheta „Răspuns AI · informativ, neverificat”, textul simplu,
+   avertizarea despre „[DE VERIFICAT]”); cu migrarea, eticheta „din cercetare” apare doar pe răspunsurile cu surse sau
+   interogări salvate (`prezentareRaspuns`).
 
 ## Ce ajunge la furnizorul modelului (Anthropic) — pe înțelesul ownerului
 Întrebările trec prin modelele Claude (Anthropic), prin API-ul firmei. Pe pași, ce pleacă din ERP:

@@ -62,6 +62,14 @@ describe('20261131e: amprentele schemei (L15)', () => {
     }
     expect(q).not.toMatch(/relacl::text\s*\|\|/)
     expect(q).not.toMatch(/prosrc\s+(NOT\s+)?LIKE/i)
+    // runda 5 (review r4 P2 / L15): valorile implicite ale coloanelor și secvențele (cu ACL-ul lor), fără valoarea curentă a secvenței
+    for (const s of ["SELECT 'implicite:' || t.rel", 'pg_catalog.pg_attrdef d', 'pg_get_expr(d.adbin, d.adrelid)', 'a.attidentity', 'a.attgenerated',
+                     "SELECT 'secvente:' || t.rel", 'pg_catalog.pg_sequence sq', 'unnest(s.relacl)', "dp.deptype IN ('a', 'i')",
+                     "dp.classid = 'pg_catalog.pg_attrdef'::regclass",
+                     "AND NOT (t.rel = 'public.intrebari_tehnice' AND a.attname IN ('surse', 'de_verificat_la', 'interogari_web'))"]) {
+      expect(q).toContain(s)
+    }
+    expect(q).not.toMatch(/last_value|pg_sequence_last_value/)
   })
 
   it('valorile baseline stau într-UN singur loc și, necompletate, refuză (fail-closed)', () => {
@@ -73,8 +81,12 @@ describe('20261131e: amprentele schemei (L15)', () => {
       'fn:auth.uid()', 'fn:public.fn_intrebari_preia()', 'fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)',
       'tabel:public.intrebari_tehnice', 'tabel:public.notifications', 'trg:public.intrebari_tehnice.intrebari_tehnice_inainte_insert',
       'constrangeri:public.intrebari_tehnice', 'coloane:public.notifications',
+      'implicite:public.intrebari_tehnice', 'implicite:public.notifications', 'secvente:public.intrebari_tehnice', 'secvente:public.notifications',
     ]))
-    expect(MIG.split('__DE_COMPLETAT__').length - 1).toBe(chei.length + 1)   // + verificarea din $pre$
+    // fiecare valoare e fie o amprentă (md5, lipită de coordonator), fie marcajul de completat; oricâte marcaje ar rămâne, $pre$ refuză
+    for (const [k, v] of Object.entries(json)) expect(v, k).toMatch(/^(?:[0-9a-f]{32}|__DE_COMPLETAT__)$/)
+    const deCompletat = Object.values(json).filter(v => v === '__DE_COMPLETAT__').length
+    expect(MIG.split('__DE_COMPLETAT__').length - 1).toBe(deCompletat + 1)   // + verificarea din $pre$
     expect(MIG).toContain("IF position('__DE_COMPLETAT__' IN v_asteptat::text) > 0 THEN")
     // amprentele se verifică după LOCK-ul pe tabel și înaintea oricărei schimbări de schemă
     const iLock = MIG.indexOf('LOCK TABLE public.intrebari_tehnice IN ACCESS EXCLUSIVE MODE;')
@@ -115,10 +127,26 @@ describe('20261131e: corpurile funcțiilor — migrare, revenire, 20261105a', ()
     const inainte = RB.slice(0, iDrop)
     for (const s of ['IF NOT FOUND OR f.corp IS DISTINCT FROM c_mig->>k THEN', 'NOT f.prosecdef',
                      "f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']", 'f.supraincarcari <> 1',
-                     'LOCK TABLE public.intrebari_tehnice, public.intrebari_preluari IN ACCESS EXCLUSIVE MODE']) {
+                     'LOCK TABLE public.intrebari_tehnice, public.intrebari_preluari IN ACCESS EXCLUSIVE MODE',
+                     // runda 5 (review r4 P2): ACL-ul exact și volatilitatea, tot înainte de DROP
+                     'OR f.acl IS DISTINCT FROM c_acl->>k', "OR f.provolatile <> 'v' OR f.proisstrict OR f.proleakproof OR f.proparallel <> 'u'"]) {
       expect(inainte).toContain(s)
     }
     expect(RB).not.toMatch(/prosrc\s+(NOT\s+)?LIKE/i)
+  })
+
+  it('runda 5: ACL-ul exact al fiecărei funcții e ACEEAȘI constantă în postcondiția migrării și în precondiția revenirii', () => {
+    const aclMig = constanta(MIG, 'c_acl'), aclRb = constanta(RB, 'c_acl')
+    expect(aclRb).toEqual(aclMig)
+    expect(Object.keys(aclMig).sort()).toEqual(Object.keys(dinMigrare).sort())   // o intrare pe fiecare funcție creată / înlocuită
+    // valorile, scrise aici independent: worker-ul = postgres + service_role (ca pe producție azi), funcțiile UI + authenticated
+    const worker = 'postgres=X/postgres,service_role=X/postgres', ui = 'authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres'
+    for (const [k, v] of Object.entries(aclMig)) expect(v, k).toBe(/^public\.fn_intrebari_(?:de_verificat|reia)\(/.test(k) ? ui : worker)
+    expect(MIG).toContain('OR f.acl IS DISTINCT FROM c_acl->>k')
+    expect(MIG).toContain("IS DISTINCT FROM 'de_verificat_la=<NULL>/false; interogari_web=''[]''::jsonb/true; surse=''[]''::jsonb/true' THEN")
+    // după revenire: funcțiile readuse au tot drepturile stării 20261105a
+    const fin = RB.slice(RB.indexOf('DO $final$'))
+    expect(fin).toContain("OR f.acl IS DISTINCT FROM 'postgres=X/postgres,service_role=X/postgres'")
   })
 
   it('revenirea readuce corpurile VERBATIM din 20261105a și le verifică în postcondiție', () => {
@@ -135,5 +163,10 @@ describe('20261131e: corpurile funcțiilor — migrare, revenire, 20261105a', ()
     expect(DRY).toContain("\\copy r31e_src (linie) FROM 'supabase/revenire/20261131e_intrebari_cercetare_surse_ROLLBACK.sql'")
     expect(DRY).toMatch(/T4[a-z]? .*amprentele schemei difera/)
     expect(DRY).toMatch(/T5[a-z]? .*alt corp decat versiunea 20261131e/)
+    // runda 5: valoarea implicită (T4d), dreptul pe secvență (T4e), doar ACL (T5c), volatilitatea (T5d)
+    expect(DRY).toContain('implicite:public.notifications (difera)')
+    expect(DRY).toContain('secvente:public.intrebari_tehnice (difera)')
+    expect(DRY).toContain("'GRANT EXECUTE ON FUNCTION public.fn_intrebari_reia(bigint) TO anon', 'rb'")
+    expect(DRY).toContain("'ALTER FUNCTION public.fn_intrebari_reia(bigint) STABLE', 'rb'")
   })
 })

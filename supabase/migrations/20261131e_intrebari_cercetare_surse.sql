@@ -40,7 +40,25 @@
 --   * FIECARE trigger ne-intern și FIECARE politică RLS de pe tabelele atinse (intrebari_tehnice, notifications — funcțiile
 --     de aici scriu în ea), cu materialul complet al funcției triggerului;
 --   * tabelele: proprietar, RLS, FORCE RLS, ACL pe tabel și pe coloane; constrângerile intrebari_tehnice (una e înlocuită aici);
---   * tipurile coloanelor citite / scrise de funcții (intrebari_tehnice, profiles, notifications, storage.objects).
+--   * tipurile coloanelor citite / scrise de funcții (intrebari_tehnice, profiles, notifications, storage.objects);
+--   * runda 5 (review r4 P2 / L15): „implicite:” — valoarea implicită (+ identity / generată) a FIECĂREI coloane din intrebari_tehnice
+--     și notifications (funcțiile inserează pe ele fără să dea toate coloanele), fără cele trei coloane adăugate aici (postcondiția le
+--     verifică separat); „secvente:” — secvențele legate de tabele (owned / identity) sau folosite în valorile implicite: proprietar,
+--     ACL, tip, start, pas, min, max, cache, ciclic (NU valoarea curentă, care se schimbă la fiecare inserare).
+--     Etichetele runda 5 sunt NOI: valorile celor 21 lipite pe 12.11.2026 rămân valabile (interogarea lor nu s-a schimbat), iar cele
+--     4 noi stau ca „de completat” → migrarea refuză până le completează coordonatorul (pașii 1-5, aceeași rulare a scriptului).
+-- Postcondiția verifică în plus (runda 5) ACL-ul EXACT și volatilitatea fiecărei funcții create / înlocuite (constanta c_acl, aceeași
+-- în revenire) și valorile implicite ale coloanelor noi.
+-- LOCK-UL ȘI DURATA (runda 5, review r4 — notă, fără schimbare de cod): `LOCK … ACCESS EXCLUSIVE` din $start$ se ține până la
+--   sfârșitul tranzacției și blochează și CITIRILE pe intrebari_tehnice (ecranul „Întreabă echipa”, workerul); `lock_timeout = 5s`
+--   limitează doar AȘTEPTAREA lock-ului, nu cât îl ținem. Migrarea are 37 de instrucțiuni de nivel superior, toate după lock; pe
+--   drumul spre producție (pooler) fiecare costă ~41 ms → ~1,5 s doar din drumuri, plus ~10 mesaje ale runnerului (~0,4 s) și
+--   execuția (amprentele de două ori, completarea jurnalului din istoric: zeci de rânduri) → ~2–2,5 s cu lock-ul ținut.
+--   RECOMANDARE: livrare cu `scripts/livrare_migrare.sh … --plafon-tranzactie-ms 4000` (migrarea nu creează și nu modifică
+--   obiecte amânabile: FK-ul jurnalului, CHECK-urile și UNIQUE-ul sunt imediate, triggerul de inserare e BEFORE, nu amânabil).
+--   La 4 s: rezervă ~1,5 s față de durata estimată; dacă lock-ul nu se obține repede (o citire lungă în curs), tranzacția e oprită
+--   înainte de COMMIT și nu se scrie nimic (se reia în afara orelor de lucru). Cu plafon mai mare (ex. 8000, ca să acopere tot
+--   lock_timeout-ul de 5 s), citirile pot sta blocate până la ~8 s; nu recomand.
 -- Interogarea stă într-o funcție TEMPORARĂ (pg_temp.fn_20261131e_amprente, SET search_path = pg_catalog, pg_temp: deparsarea nu
 -- depinde de sesiune). După creare ($post$): obiectele neatinse au tot amprenta baseline (o schimbare comisă între timp de altă
 -- sesiune = refuz), iar cele create / înlocuite aici au exact corpul din acest fișier (md5 fără CR) + atributele așteptate.
@@ -101,12 +119,16 @@ AS $asteptat$
     "fn:public.fn_intrebari_inainte_insert()": "5a2c969bcc5e5d951c18b9e69764c3df",
     "fn:public.fn_intrebari_preia()": "d1d68a5186c4eb050d6481d14866c8dd",
     "fn:public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text)": "6d40f1f83d58537793e43c44e95ded53",
+    "implicite:public.intrebari_tehnice": "__DE_COMPLETAT__",
+    "implicite:public.notifications": "__DE_COMPLETAT__",
     "pol:public.intrebari_tehnice.intrebari_tehnice_ins": "b56cfd5e85a307ac220bb0116ce545d9",
     "pol:public.intrebari_tehnice.intrebari_tehnice_sel": "2963def0baebc636f23c62983aac7aff",
     "pol:public.notifications.notifications_delete_own_or_owner": "f211695980dbae0c3abee8a95bcb8dbe",
     "pol:public.notifications.notifications_insert_authenticated": "257fe6661616f42fbb992993ef96d8c1",
     "pol:public.notifications.notifications_select_own_or_owner": "e7282ed3a8454882ca4d8fac50dee5e2",
     "pol:public.notifications.notifications_update_own_or_owner": "050b30dec24e3d72dad3810caa5085ef",
+    "secvente:public.intrebari_tehnice": "__DE_COMPLETAT__",
+    "secvente:public.notifications": "__DE_COMPLETAT__",
     "tabel:public.intrebari_tehnice": "540b4fdd884738723bd4c1ab391c6beb",
     "tabel:public.notifications": "7aa97656582563bb7db3312d64c9d045",
     "trg:public.intrebari_tehnice.intrebari_tehnice_inainte_insert": "d3a5868cad12d2761d3846e33ff9f4bc",
@@ -198,6 +220,52 @@ WITH tabele(rel) AS (VALUES ('public.intrebari_tehnice'), ('public.notifications
          coalesce((SELECT string_agg(co.conname::text || ' [' || co.contype::text || ', validata: ' || co.convalidated::text || ']: '
                                      || pg_get_constraintdef(co.oid), E'\n' ORDER BY co.conname::text COLLATE "C")
                      FROM pg_catalog.pg_constraint co WHERE co.conrelid = to_regclass('public.intrebari_tehnice')), '<niciuna>')
+  UNION ALL
+  SELECT 'implicite:' || t.rel,
+         CASE WHEN NOT EXISTS (SELECT 1 FROM tab tb WHERE tb.rel = t.rel) THEN '<LIPSA: ' || t.rel || '>'
+              ELSE coalesce((SELECT string_agg(a.attname::text || ': ' || coalesce(pg_get_expr(d.adbin, d.adrelid), '<fara valoare implicita>')
+                                               || CASE a.attidentity WHEN 'a' THEN ' [identity ALWAYS]' WHEN 'd' THEN ' [identity BY DEFAULT]' ELSE '' END
+                                               || CASE WHEN a.attgenerated IN ('s', 'v') THEN ' [generata ' || a.attgenerated::text || ']' ELSE '' END,
+                                               E'\n' ORDER BY a.attname::text COLLATE "C")
+                               FROM tab tb
+                               JOIN pg_catalog.pg_attribute a ON a.attrelid = tb.oid AND a.attnum > 0 AND NOT a.attisdropped
+                               LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                              WHERE tb.rel = t.rel
+                                AND NOT (t.rel = 'public.intrebari_tehnice' AND a.attname IN ('surse', 'de_verificat_la', 'interogari_web'))),
+                            '<nicio coloana>') END
+    FROM tabele t
+  UNION ALL
+  SELECT 'secvente:' || t.rel,
+         CASE WHEN NOT EXISTS (SELECT 1 FROM tab tb WHERE tb.rel = t.rel) THEN '<LIPSA: ' || t.rel || '>'
+              ELSE coalesce((SELECT string_agg('secventa: ' || s.oid::regclass::text
+                                               || E'\n  atasata de: ' || coalesce((SELECT string_agg(ac.attname::text || ' (' || dp.deptype::text || ')', ','
+                                                                                                     ORDER BY ac.attname::text COLLATE "C")
+                                                                                     FROM pg_catalog.pg_depend dp
+                                                                                     JOIN pg_catalog.pg_attribute ac ON ac.attrelid = dp.refobjid AND ac.attnum = dp.refobjsubid
+                                                                                    WHERE dp.classid = 'pg_catalog.pg_class'::regclass AND dp.objid = s.oid
+                                                                                      AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                                                                                      AND dp.deptype IN ('a', 'i')), '<neatasata>')
+                                               || E'\n  proprietar: ' || pg_get_userbyid(s.relowner)
+                                               || E'\n  acl: ' || coalesce((SELECT string_agg(x::text, ',' ORDER BY x::text COLLATE "C") FROM unnest(s.relacl) AS x),
+                                                                           '<NULL = drepturile implicite ale proprietarului>')
+                                               || E'\n  tip: ' || format_type(sq.seqtypid, NULL) || ', start: ' || sq.seqstart::text
+                                               || ', pas: ' || sq.seqincrement::text || ', min: ' || sq.seqmin::text || ', max: ' || sq.seqmax::text
+                                               || ', cache: ' || sq.seqcache::text || ', ciclic: ' || sq.seqcycle::text
+                                               || ', persistenta: ' || s.relpersistence::text,
+                                               E'\n' ORDER BY s.oid::regclass::text COLLATE "C")
+                               FROM tab tb
+                               JOIN pg_catalog.pg_class s ON s.relkind = 'S' AND s.oid IN (
+                                      SELECT dp.objid FROM pg_catalog.pg_depend dp
+                                       WHERE dp.classid = 'pg_catalog.pg_class'::regclass AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                                         AND dp.refobjid = tb.oid AND dp.deptype IN ('a', 'i')
+                                      UNION
+                                      SELECT dp.refobjid FROM pg_catalog.pg_attrdef ad
+                                        JOIN pg_catalog.pg_depend dp ON dp.classid = 'pg_catalog.pg_attrdef'::regclass AND dp.objid = ad.oid
+                                                                    AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                                       WHERE ad.adrelid = tb.oid)
+                               JOIN pg_catalog.pg_sequence sq ON sq.seqrelid = s.oid
+                              WHERE tb.rel = t.rel), '<niciuna>') END
+    FROM tabele t
   UNION ALL
   SELECT 'coloane:' || c.tabel,
          string_agg(c.col || ': ' || coalesce((SELECT format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
@@ -464,6 +532,17 @@ DECLARE
     "public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text,jsonb,jsonb)": "1c676fa234d086b8e8368eaa04414b5a",
     "public.fn_intrebari_reia(bigint)": "8745d896032fb72cda593ca11f3f6bd7"
   }'::jsonb;
+  -- runda 5 (review r4 P2 / L15): ACL-ul EXACT (sortat, COLLATE "C") al fiecărei funcții după migrare — ACEEAȘI constantă în revenire,
+  -- verificată înainte de DROP (o schimbare ulterioară DOAR de drepturi = refuz). Pe producție, funcțiile workerului au azi exact
+  -- „postgres + service_role” (ieșirea scriptului amprentelor, 12.11.2026); cele noi primesc aceleași drepturi implicite + GRANT-urile de mai sus.
+  c_acl CONSTANT jsonb := '{
+    "public.fn_intrebari_amana(bigint,uuid)": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_de_verificat(bigint)": "authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_inainte_insert()": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_preia()": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text,jsonb,jsonb)": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_reia(bigint)": "authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres"
+  }'::jsonb;
   -- etichetele care se schimbă INTENȚIONAT aici (verificate pe corp mai sus); triggerul de inserare își schimbă amprenta doar prin
   -- funcția lui: definiția triggerului nu se putea schimba între timp (ACCESS EXCLUSIVE pe intrebari_tehnice, luat în $start$)
   c_schimbate CONSTANT text[] := ARRAY['fn:public.fn_intrebari_amana(bigint,uuid)', 'fn:public.fn_intrebari_inainte_insert()',
@@ -480,13 +559,25 @@ BEGIN
            (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari,
            has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec,
            EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
-                    WHERE x.grantee = 0 AND x.privilege_type = 'EXECUTE') AS public_exec
+                    WHERE x.grantee = 0 AND x.privilege_type = 'EXECUTE') AS public_exec,
+           coalesce((SELECT string_agg(a::text, ',' ORDER BY a::text COLLATE "C") FROM unnest(p.proacl) AS a), '<NULL>') AS acl,
+           p.provolatile, p.proisstrict, p.proleakproof, p.proparallel
       INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(k);
     IF NOT FOUND OR f.corp IS DISTINCT FROM c_corpuri->>k OR NOT f.prosecdef OR f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
-       OR f.owner IS DISTINCT FROM 'postgres' OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1 OR f.anon_exec OR f.public_exec THEN
-      RAISE EXCEPTION '20261131e: postconditie functie % (corp / definer / search_path / proprietar / supraincarcari / ACL)', k;
+       OR f.owner IS DISTINCT FROM 'postgres' OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1 OR f.anon_exec OR f.public_exec
+       OR f.acl IS DISTINCT FROM c_acl->>k
+       OR f.provolatile <> 'v' OR f.proisstrict OR f.proleakproof OR f.proparallel <> 'u' THEN
+      RAISE EXCEPTION '20261131e: postconditie functie % (corp / definer / search_path / proprietar / supraincarcari / ACL % / volatilitate)', k, f.acl;
     END IF;
   END LOOP;
+  -- runda 5: valorile implicite ale coloanelor NOI (cele vechi sunt în amprenta „implicite:” și nu se schimbă aici)
+  IF (SELECT string_agg(a.attname::text || '=' || coalesce(pg_get_expr(d.adbin, d.adrelid), '<NULL>') || '/' || a.attnotnull::text, '; '
+                        ORDER BY a.attname::text COLLATE "C")
+        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+       WHERE a.attrelid = 'public.intrebari_tehnice'::regclass AND a.attname IN ('surse', 'de_verificat_la', 'interogari_web') AND NOT a.attisdropped)
+     IS DISTINCT FROM 'de_verificat_la=<NULL>/false; interogari_web=''[]''::jsonb/true; surse=''[]''::jsonb/true' THEN
+    RAISE EXCEPTION '20261131e: postconditie (valorile implicite / NOT NULL ale coloanelor noi)';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.intrebari_tehnice'::regclass AND t.tgname = 'intrebari_tehnice_inainte_insert'
                    AND t.tgfoid = 'public.fn_intrebari_inainte_insert()'::regprocedure AND t.tgenabled = 'O') THEN
     RAISE EXCEPTION '20261131e: postconditie trigger intrebari_tehnice_inainte_insert';

@@ -19,7 +19,9 @@
 --   T4 (runda 4, review r3 P2 / L15) MIGRAREA REFUZĂ o schemă care nu e baseline-ul: după revenire, o versiune ulterioară a unei
 --      funcții înlocuite (T4a, corp schimbat), o setare nouă pe o funcție de care depinde (T4b) și un trigger nou pe tabel (T4c);
 --      martorul T4m (fără mutant) trece. Cere blocul AMPRENTE BASELINE completat (pașii 1-5 din antetul migrării).
---   T5 (runda 4) REVENIREA REFUZĂ o versiune ulterioară sub același nume: corp schimbat (T5a), SECURITY INVOKER (T5b).
+--      Runda 5 (review r4 P2): și o valoare implicită schimbată pe notifications (T4d), un drept nou doar pe secvența tabelului (T4e).
+--   T5 (runda 4) REVENIREA REFUZĂ o versiune ulterioară sub același nume: corp schimbat (T5a), SECURITY INVOKER (T5b);
+--      runda 5: o schimbare DOAR de drepturi (T5c, GRANT pe fn_intrebari_reia) și altă volatilitate (T5d).
 --   Fișierele migrării și revenirii se citesc EXACT de pe disc (\copy, linie cu linie) și se execută prin pg_temp.r31e_aplica;
 --   fiecare mutant se anulează (santinelă), ca la PR #1029.
 CREATE FUNCTION pg_temp.r31e_intrebare(p_titlu text) RETURNS bigint LANGUAGE plpgsql AS $h$
@@ -203,7 +205,17 @@ BEGIN
   IF v_r NOT LIKE 'P0001: 20261131e: amprentele schemei difera%trg:public.intrebari_tehnice.zz_dryrun_20261131e (nou pe tinta)%' THEN
     RAISE EXCEPTION 'T4c FAIL: amprentele schemei difera era asteptat pentru triggerul nou, a iesit: %', v_r;
   END IF;
-  RAISE NOTICE 'T4 OK: migrarea refuza versiunea ulterioara a unei functii, o setare noua si un trigger nou (martorul trece)';
+  -- T4d (runda 5, review r4 P2 / L15): o valoare implicită schimbată pe o coloană în care scriu funcțiile (notifications.type)
+  v_r := pg_temp.r31e_mutant(true, 'ALTER TABLE public.notifications ALTER COLUMN type SET DEFAULT ''dryrun_20261131e''', 'mig');
+  IF v_r NOT LIKE 'P0001: 20261131e: amprentele schemei difera%implicite:public.notifications (difera)%' THEN
+    RAISE EXCEPTION 'T4d FAIL: amprentele schemei difera era asteptat pentru valoarea implicita, a iesit: %', v_r;
+  END IF;
+  -- T4e (runda 5): un drept nou DOAR pe secvența tabelului (ACL-ul tabelului rămâne același)
+  v_r := pg_temp.r31e_mutant(true, 'GRANT USAGE ON SEQUENCE public.intrebari_tehnice_id_seq TO anon', 'mig');
+  IF v_r NOT LIKE 'P0001: 20261131e: amprentele schemei difera%secvente:public.intrebari_tehnice (difera)%' THEN
+    RAISE EXCEPTION 'T4e FAIL: amprentele schemei difera era asteptat pentru secventa, a iesit: %', v_r;
+  END IF;
+  RAISE NOTICE 'T4 OK: migrarea refuza versiunea ulterioara a unei functii, o setare noua, un trigger nou, o valoare implicita si un drept pe secventa (martorul trece)';
 
   -- T5a: revenirea pe o versiune ulterioară a unei funcții create de migrare (corp schimbat)
   v_r := pg_temp.r31e_mutant(false, 'DO $m$ BEGIN EXECUTE pg_temp.r31e_corp_schimbat(''public.fn_intrebari_preia()''::regprocedure); END $m$', 'rb');
@@ -215,10 +227,20 @@ BEGIN
   IF v_r NOT LIKE 'P0001: 20261131e revenire: atributele public.fn_intrebari_reia(bigint) difera%' THEN
     RAISE EXCEPTION 'T5b FAIL: refuzul pe atribute era asteptat, a iesit: %', v_r;
   END IF;
+  -- T5c (runda 5, review r4 P2): o schimbare DOAR de drepturi pe fn_intrebari_reia
+  v_r := pg_temp.r31e_mutant(false, 'GRANT EXECUTE ON FUNCTION public.fn_intrebari_reia(bigint) TO anon', 'rb');
+  IF v_r NOT LIKE 'P0001: 20261131e revenire: atributele public.fn_intrebari_reia(bigint) difera%' THEN
+    RAISE EXCEPTION 'T5c FAIL: refuzul pe ACL era asteptat, a iesit: %', v_r;
+  END IF;
+  -- T5d (runda 5): aceeași funcție, altă volatilitate
+  v_r := pg_temp.r31e_mutant(false, 'ALTER FUNCTION public.fn_intrebari_reia(bigint) STABLE', 'rb');
+  IF v_r NOT LIKE 'P0001: 20261131e revenire: atributele public.fn_intrebari_reia(bigint) difera%' THEN
+    RAISE EXCEPTION 'T5d FAIL: refuzul pe volatilitate era asteptat, a iesit: %', v_r;
+  END IF;
   -- martorul T5m: revenirea neschimbată trece (și se anulează)
   v_r := pg_temp.r31e_mutant(false, NULL, 'rb');
   IF v_r IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'T5m FAIL: revenirea fara mutant: %', v_r; END IF;
-  RAISE NOTICE 'T5 OK: revenirea refuza o versiune ulterioara (alt corp decat versiunea 20261131e, alt atribut); martorul trece';
+  RAISE NOTICE 'T5 OK: revenirea refuza o versiune ulterioara (alt corp decat versiunea 20261131e, alt atribut, alt ACL, alta volatilitate); martorul trece';
 END $t$;
 
-DO $t$ BEGIN RAISE NOTICE 'DRY 20261131e r4: T1–T5 OK (tranzacția se anulează de runner)'; END $t$;
+DO $t$ BEGIN RAISE NOTICE 'DRY 20261131e r5: T1–T5 OK (tranzacția se anulează de runner)'; END $t$;

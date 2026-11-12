@@ -57,11 +57,19 @@ const POLARITATI = [
   ['minim', '\\bcel\\s+putin\\b|\\bnu\\s+mai\\s+putin\\s+de\\b|\\bminim\\w*'],
   ['maxim', '\\bcel\\s+mult\\b|\\bnu\\s+mai\\s+mult\\s+de\\b|\\bmaxim\\w*'],
 ].map(([k, p]) => [k, new RegExp(p, 'g')])
-// „se poate” / „nu se poate” doar pe linii cu marcaj și în surse (extins)
+// „se poate” / „nu se poate” doar pe linii cu marcaj și în surse (extins); runda 5 (review r4 P1): tot aici condițiile simple
+// („dacă”, „numai” / „doar”, „în cazul în care”, „în afară de”) — = POLARITATI_POATE din cercetare.py
 const POLARITATI_POATE = [
   ['interdictie', NEGATIE + 'po(?:ate|t)\\b'],
   ['permisiune', '\\bse\\s+po(?:ate|t)\\b'],
+  ['conditie', '\\b(?:daca|numai|doar|in\\s+cazul\\s+in\\s+care|in\\s+afara\\s+(?:de|cazului))\\b'],
 ].map(([k, p]) => [k, new RegExp(p, 'g')])
+// Runda 5 (review r4 P1): restricțiile unei propoziții din sursă (grupe: conditie / exceptie / limita / contrast) — = RESTRICTIE
+// din cercetare.py. Clauza = textul de după marcator, până la următorul marcator sau la sfârșitul propoziției.
+const RESTRICTIE_SURSA = '\\b(?:(?<conditie>doar\\s+daca|numai\\s+daca|in\\s+cazul\\s+in\\s+care|cu\\s+conditia(?:\\s+ca)?|numai|doar|daca)'
+  + '|(?<exceptie>cu\\s+exceptia|exceptand|in\\s+afara\\s+(?:de|cazului))|(?<limita>pana\\s+la)|(?<contrast>dar|insa|totusi|desi))\\b'
+const RESTRICTIE = new RegExp(RESTRICTIE_SURSA, 'g')
+const ALTERNATIVA = /\b(?:sau|ori)\b/
 const LIMITA_EXPLICITA = /\bcel\s+(?:putin|mult)\b|\bnu\s+mai\s+(?:putin|mult)\s+de\b/
 const NEGATIE_SIMPLA = /\b(?:nu|nici|niciun\w*|nicio|niciodata)\b/
 const VERDICT_INCEPUT = new RegExp('^\\s*(?:da|nu)\\b\\s*[,.:;!' + String.fromCharCode(0x2014, 0x2013) + '-]+')
@@ -70,23 +78,40 @@ const NU_SE_PIERD = ['interdictie', 'fara_obligatie', 'conditie']
 const LIMITE = ['minim', 'maxim']
 const GRAD = String.fromCharCode(0xb0), CUB = String.fromCharCode(0xb3), PATRAT = String.fromCharCode(0xb2)
 const UM = 'grade\\s+celsius|metri\\s+patrati|metri\\s+cubi|centimetri|centimetru|kilometri|kilometru|milimetri|milimetru|kilograme'
-  + '|kilogram|saptamani|saptamana|procente|procent|minute|grade|metri|metru|mbari|mbar|zile|euro|luni|luna|bari|bar|kpa|mpa'
-  + `|ore|ora|ani|min|lei|eur|${GRAD}\\s*c|mm|cm|km|kg|mc|mp|m3|m2|m${CUB}|m${PATRAT}|zi|an|m|h|${GRAD}|%`
+  + '|kilogram|saptamani|saptamana|procente|procent|secunde|secunda|minute|grade|metri|metru|litri|litru|mbari|mbar|zile|euro'
+  + `|luni|luna|bari|bar|kpa|mpa|ore|ora|ani|min|lei|eur|${GRAD}\\s*c|mm|cm|km|kg|mc|mp|m3|m2|m${CUB}|m${PATRAT}|zi|an|m|h|l|s|${GRAD}|%`
 const UNITATI = {
   'grade celsius': `${GRAD}c`, 'metri patrati': 'mp', 'metri cubi': 'mc', centimetri: 'cm', centimetru: 'cm', kilometri: 'km',
   kilometru: 'km', milimetri: 'mm', milimetru: 'mm', kilograme: 'kg', kilogram: 'kg', saptamani: 'saptamani',
-  saptamana: 'saptamani', procente: '%', procent: '%', minute: 'minute', grade: 'grade', metri: 'm', metru: 'm',
+  saptamana: 'saptamani', procente: '%', procent: '%', secunde: 's', secunda: 's', minute: 'minute',
+  grade: 'grade', metri: 'm', metru: 'm', litri: 'l', litru: 'l',
   mbari: 'mbar', mbar: 'mbar', zile: 'zile', euro: 'euro', luni: 'luni', luna: 'luni', bari: 'bar', bar: 'bar',
   kpa: 'kpa', mpa: 'mpa', ore: 'ore', ora: 'ore', ani: 'ani', min: 'minute', lei: 'lei', eur: 'euro',
   [`${GRAD}c`]: `${GRAD}c`, [`${GRAD} c`]: `${GRAD}c`, mm: 'mm', cm: 'cm', km: 'km', kg: 'kg', mc: 'mc', mp: 'mp', m3: 'mc', m2: 'mp',
-  [`m${CUB}`]: 'mc', [`m${PATRAT}`]: 'mp', zi: 'zile', an: 'ani', m: 'm', h: 'ore', [GRAD]: 'grade', '%': '%',
+  [`m${CUB}`]: 'mc', [`m${PATRAT}`]: 'mp', zi: 'zile', an: 'ani', m: 'm', h: 'ore', l: 'l', s: 's', [GRAD]: 'grade', '%': '%',
 }
 const MINUS = String.fromCharCode(0x2212), LINIUTA = String.fromCharCode(0x2013), PLUSMINUS = String.fromCharCode(0xb1)
-const NUMERIC = new RegExp(`(?:(?<![0-9a-z])([-+${MINUS}${LINIUTA}${PLUSMINUS}]))?(?<![0-9])([0-9]+(?:[.,][0-9]+)?)(?:\\s*(?:de\\s+)?(${UM})(?![a-z0-9]))?`, 'g')
+const LINIE_LUNGA = String.fromCharCode(0x2014), PUNCTE = String.fromCharCode(0x2026)
+// runda 5 (review r4 P2): unitatea întreagă — exponent și numitori (= NUMERIC / NUMITOR din cercetare.py)
+const EXPONENT = `(?:\\^?[23](?![0-9])|[${PATRAT}${CUB}])`
+const NUMERIC_SURSA = `(?<![0-9])([0-9]+(?:[.,][0-9]+)?)(?:\\s*(?:de\\s+)?(${UM})(${EXPONENT})?((?:\\s*/\\s*[a-z${GRAD}]+${EXPONENT}?)*)(?![a-z0-9]))?`
+const NUMERIC = new RegExp(NUMERIC_SURSA, 'g')
+const NUMITOR = new RegExp(`/\\s*([a-z${GRAD}]+)(${EXPONENT})?`, 'g')
 const SEMNE = { '-': '-', [MINUS]: '-', [LINIUTA]: '-', '+': '', [PLUSMINUS]: PLUSMINUS }
+// semnul lipit / despărțit prin spațiu (= SEMN_LIPIT / SEMN_DESPARTIT); intervalele (= INTERVAL_* din cercetare.py)
+const SEMN_CLASA = `[-+${MINUS}${LINIUTA}${PLUSMINUS}]`
+const SEMN_LIPIT = new RegExp(`(?:^|(?<=[^0-9a-z]))(${SEMN_CLASA})$`)
+const SEMN_DESPARTIT = new RegExp(`(${SEMN_CLASA})[ \\t]+$`)
+const SEMN_CAPAT2 = `[-+${MINUS}${PLUSMINUS}]`
+const INTERVAL_LINIE = new RegExp(`^[ \\t]*(?:[-${MINUS}${LINIUTA}${LINIE_LUNGA}]|\\.{2,3}|${PUNCTE})[ \\t]*(?:(?<=[ \\t])(${SEMN_CAPAT2}))?$`)
+const INTERVAL_SI = new RegExp(`^\\s+si\\s+(?:(${SEMN_CAPAT2})[ \\t]*)?$`)
+const INTERVAL_LA = new RegExp(`^\\s+(?:pana\\s+)?la\\s+(?:(${SEMN_CAPAT2})[ \\t]*)?$`)
+const INAINTE_INTRE = /\bintre\s+$/
+const INAINTE_DE_LA = /\bde\s+la\s+$/
 const ABREVIERI = new Set('art alin pct lit nr ord hg oug cap sect par fig pag ex cca min max str ed vol pt np sr en iso stas tab pl'.split(' '))
 const SEPARATOR = /[.!?;\n]/g
-const CONTRAST_PROP = /\b(?:dar|insa|iar|totusi|desi|in\s+schimb|pe\s+cand)\b/
+// runda 5: propoziția întreagă; o bucată care începe cu un marcator de restricție se lipește de cea dinainte (= INCEPE_CU_RESTRICTIE)
+const INCEPE_CU_RESTRICTIE = new RegExp(`^\\s*[,:${LINIE_LUNGA}${LINIUTA}-]?\\s*` + RESTRICTIE_SURSA)
 
 /** [tipuri de regulă (Set), textul rămas după mascare] — `n` deja normalizat (= _polaritati din cercetare.py). */
 function polaritatiSiRest(n, extins = false) {
@@ -101,12 +126,61 @@ function polaritatiSiRest(n, extins = false) {
 /** Tipurile de regulă, sortate (paritate cu sorted(polaritati(...)) în teste). */
 export const polaritati = (n, extins = false) => [...polaritatiSiRest(n, extins)[0]].sort()
 
-/** Cifrele unui text normalizat, ca tokeni compleți: „−5 bar” → „-5 bar”, „30 de zile” → „30 zile”, „art. 12” → „12”. */
+const exp = e => (e || '').replace('^', '').replace(PATRAT, '2').replace(CUB, '3')
+const areCheie = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
+/** O parte de unitate, canonică (= _parte_unitate din cercetare.py): „m” + „2” → „mp”, „s” + „2” → „s2”; necunoscută → cum e. */
+function parteUnitate(baza, e) {
+  const x = exp(e)
+  if (x && areCheie(UNITATI, baza + x)) return UNITATI[baza + x]
+  return (areCheie(UNITATI, baza) ? UNITATI[baza] : baza) + x
+}
+function unitate(m) {
+  if (!m[2]) return ''
+  let um = parteUnitate(m[2].split(/\s+/).filter(Boolean).join(' '), m[3])
+  for (const d of (m[4] || '').matchAll(NUMITOR)) um += '/' + parteUnitate(d[1], d[2])
+  return um
+}
+/** [semnul, poziția de unde începe] pentru numărul de la `start` (= _semn din cercetare.py). */
+function semn(n, start) {
+  const pre = n.slice(0, start)
+  let m = pre.match(SEMN_LIPIT)
+  if (m) return [SEMNE[m[1]], m.index + m[0].length - m[1].length]
+  m = pre.match(SEMN_DESPARTIT)
+  if (m) {
+    const inainte = pre.slice(0, m.index)
+    const ultim = inainte.replace(/[ \t]+$/, '').slice(-1)
+    if (/[0-9]/.test(ultim)) return ['', start]
+    if (!inainte.split('\n').pop().trim()) return ['?', m.index]
+    return [SEMNE[m[1]], m.index]
+  }
+  return ['', start]
+}
+/** Cifrele unui text normalizat, ca tokeni compleți (= tokeni_numerici din cercetare.py): „−5 bar” / „- 5 bar” → „-5 bar”,
+ *  „30 de zile” → „30 zile”, „5 m/s²” → „5 m/s2”, „între 2 și 6 bar” / „2–6 bar” → „2..6 bar”, „art. 12” → „12”. */
 export function tokeniNumerici(n) {
-  const out = []
+  const bucati = []
   for (const m of n.matchAll(NUMERIC)) {
-    const um = UNITATI[(m[3] || '').split(/\s+/).filter(Boolean).join(' ')] || ''
-    out.push((SEMNE[m[1] || ''] ?? '') + m[2].replace(',', '.') + (um ? ' ' + um : ''))
+    const [s, poz] = semn(n, m.index)
+    bucati.push({ poz, start: m.index, end: m.index + m[0].length, semn: s, val: m[1].replace(',', '.'), um: unitate(m) })
+  }
+  const out = []
+  for (let i = 0; i < bucati.length; i++) {
+    const a = bucati[i], b = bucati[i + 1]
+    if (b) {
+      const intre = n.slice(a.end, b.start)
+      const um = a.um && b.um && a.um !== b.um ? null : (b.um || a.um)
+      let m = intre.match(INTERVAL_LINIE)
+      if (!(m && (a.um || b.um))) {
+        const pre = n.slice(0, a.poz)
+        m = (INAINTE_INTRE.test(pre) ? intre.match(INTERVAL_SI) : null) || (INAINTE_DE_LA.test(pre) ? intre.match(INTERVAL_LA) : null)
+      }
+      if (m && um !== null) {
+        out.push(`${a.semn}${a.val}..${SEMNE[m[1] || ''] ?? ''}${b.val}` + (um ? ' ' + um : ''))
+        i++
+        continue
+      }
+    }
+    out.push(a.semn + a.val + (a.um ? ' ' + a.um : ''))
   }
   return out
 }
@@ -128,11 +202,33 @@ export function propozitii(text) {
       const urm = n.slice(k + 1).match(/^\s*(\S)/)
       if (urm && /[0-9(]/.test(urm[1])) continue
     }
+    if (INCEPE_CU_RESTRICTIE.test(n.slice(k + 1))) continue
     bucati.push(n.slice(start, k))
     start = k + 1
   }
   bucati.push(n.slice(start))
-  return bucati.flatMap(b => b.split(CONTRAST_PROP)).map(p => p.trim()).filter(Boolean)
+  return bucati.map(p => p.trim()).filter(Boolean)
+}
+
+/** [[grupa, clauza]] — restricțiile unei propoziții normalizate (= restrictii din cercetare.py). */
+export function restrictii(p) {
+  const ms = [...p.matchAll(RESTRICTIE)]
+  return ms.map((m, j) => [Object.keys(m.groups).find(g => m.groups[g] !== undefined),
+    p.slice(m.index + m[0].length, j + 1 < ms.length ? ms[j + 1].index : p.length)])
+}
+/** Restricțiile propoziției din sursă se regăsesc în afirmație (= restrictii_acoperite din cercetare.py). */
+function restrictiiAcoperite(afText, propText) {
+  const grupe = new Set(restrictii(afText).map(([g]) => g))
+  const cuv = cuvinte(afText), tok = new Set(tokeniNumerici(afText))
+  for (const [g, clauza] of restrictii(propText)) {
+    if (!grupe.has(g)) return false
+    const ok = clauza.split(ALTERNATIVA).some(v => {
+      const t = termeni(v)
+      return potriviti(t, cuv) === t.length && tokeniNumerici(v).every(x => tok.has(x))
+    })
+    if (!ok) return false
+  }
+  return true
 }
 
 /** Linia conține o afirmație normativă (act, articol, standard, cifră cu unitate, obligație / interdicție / permisiune / condiție / limită). */
@@ -178,8 +274,10 @@ function hartaSurse(surse) {
 }
 
 /** Termenii de conținut (= termeni_cheie din cercetare.py): rădăcini de 6 litere, fără STOP / GENERICE / obligații / marcatori / cifre. */
-export function termeniCheie(linie) {
-  const n = polaritatiSiRest(corpAfirmatie(linie), true)[1].replace(NUMERIC, ' ')
+export const termeniCheie = linie => termeni(corpAfirmatie(linie))
+/** termeniCheie pe un text deja normalizat, fără marcaje (= _termeni din cercetare.py). */
+function termeni(text) {
+  const n = polaritatiSiRest(text, true)[1].replace(NUMERIC, ' ')
   const out = []
   for (const w of n.match(/[a-z]+/g) || []) {
     if (w.length < 3 || STOP.has(w) || GENERICE.has(w) || CUVANT_OBLIGATIE.test(w)) continue
@@ -193,10 +291,10 @@ function potriviti(termeni, cuv) {
   return termeni.filter(x => radacini.has(x) || (x.length < 6 && [...cuv].some(w => w.startsWith(x)))).length
 }
 
-function descrieAfirmatia(linie) {
-  const n = corpAfirmatie(linie)
+/** O propoziție a afirmației (normalizată, fără marcaje) — = descrie_afirmatia din cercetare.py. */
+function descrieAfirmatia(n) {
   const [clase, rest] = polaritatiSiRest(n, true)
-  return { clase, neg: NEGATIE_SIMPLA.test(rest.replace(VERDICT_INCEPUT, ' ')), termeni: termeniCheie(linie), tok: tokeniNumerici(n) }
+  return { text: n, clase, neg: NEGATIE_SIMPLA.test(rest.replace(VERDICT_INCEPUT, ' ')), termeni: termeni(n), tok: tokeniNumerici(n) }
 }
 function propozitiiSurse(ids, harta) {
   const out = []
@@ -207,30 +305,40 @@ function propozitiiSurse(ids, harta) {
     for (const p of propozitii(extras)) {
       const [clase, rest] = polaritatiSiRest(p, true)
       const ctx = nt + '\n' + p
-      out.push({ clase, neg: NEGATIE_SIMPLA.test(rest), cuvinte: cuvinte(ctx), tok: new Set(tokeniNumerici(ctx)) })
+      out.push({ text: p, clase, neg: NEGATIE_SIMPLA.test(rest), cuvinte: cuvinte(ctx), tok: new Set(tokeniNumerici(ctx)) })
     }
   }
   return out
 }
 function potrivirePropozitie(af, prop) {
-  for (const k of af.clase) if (!prop.clase.has(k) || prop.clase.has(OPUSE[k])) return false
+  // opusul din propoziție contează doar dacă afirmația nu-l spune și ea (runda 5: citarea întreagă „permisă, dar se interzice …”)
+  for (const k of af.clase) if (!prop.clase.has(k) || (prop.clase.has(OPUSE[k]) && !af.clase.has(OPUSE[k]))) return false
   const pierdute = [...prop.clase].filter(k => !af.clase.has(k))
   if (pierdute.some(k => NU_SE_PIERD.includes(k))) return false
   if (af.tok.length && pierdute.some(k => LIMITE.includes(k))) return false
   return af.neg === prop.neg
 }
-/** [susținută, potriviți, total] — = sustinere din cercetare.py. */
+/** [susținută, potriviți, total] — = sustinere din cercetare.py (runda 5: fiecare propoziție a rândului separat + restricțiile
+ *  propoziției din sursă regăsite în afirmația normativă). */
 function sustinere(linie, ids, harta, normativ) {
-  const af = descrieAfirmatia(linie)
-  const tot = af.termeni.length, cuUm = af.tok.filter(t => t.includes(' '))
-  let celMaiBun = -1
-  for (const p of propozitiiSurse(ids, harta)) {
-    if (!potrivirePropozitie(af, p)) continue
-    if (normativ && !cuUm.every(t => p.tok.has(t))) continue
-    celMaiBun = Math.max(celMaiBun, potriviti(af.termeni, p.cuvinte))
+  const surse = propozitiiSurse(ids, harta)
+  let totalPot = 0, totalTot = 0
+  for (const fraza of propozitii(corpAfirmatie(linie))) {
+    const af = descrieAfirmatia(fraza)
+    if (!af.termeni.length && !af.tok.length && !af.clase.size) continue
+    const tot = af.termeni.length, cuUm = af.tok.filter(t => t.includes(' '))
+    let celMaiBun = -1
+    for (const p of surse) {
+      if (!potrivirePropozitie(af, p)) continue
+      if (normativ && !cuUm.every(t => p.tok.has(t))) continue
+      if (normativ && !restrictiiAcoperite(fraza, p.text)) continue
+      celMaiBun = Math.max(celMaiBun, potriviti(af.termeni, p.cuvinte))
+    }
+    if (celMaiBun < (normativ ? tot : Math.floor((tot + 1) / 2))) return [false, Math.max(celMaiBun, 0), tot]
+    totalPot += celMaiBun
+    totalTot += tot
   }
-  if (celMaiBun < 0) return [false, 0, tot]
-  return [celMaiBun >= (normativ ? tot : Math.floor((tot + 1) / 2)), celMaiBun, tot]
+  return [true, totalPot, totalTot]
 }
 
 /** [problemă, temei, normativă] — aceleași reguli ca _evalueaza din cercetare.py (vezi docstring-ul evalueaza_linie de acolo). */
@@ -360,6 +468,18 @@ export function actiuniIntrebare({ v2, stare, eAutor, eOwner }) {
   const verificare = stare === 'raspuns' && !!(eAutor || eOwner)
   const reia = !!eOwner && ['raspuns', 'de_verificat', 'eroare'].includes(stare)
   return v2 === true ? { verificare, reia, nota: false } : { verificare: false, reia: false, nota: verificare || reia }
+}
+
+/** Runda 5 (review r4 P2): prezentarea unui răspuns. Fără migrarea 20261131e detectată (`v2 !== true`, același semnal ca la
+ *  butoane) ecranul arată EXACT ca înainte: eticheta veche, textul în Markdown, fără verdict evidențiat și fără blocul de surse.
+ *  Cu migrarea: componenta nouă (verdict + surse), iar eticheta „din cercetare” DOAR pe răspunsurile fluxului nou — cele cu surse
+ *  sau interogări web salvate (un răspuns de dinainte rămâne cu `surse` = [] și păstrează eticheta veche). */
+export const ETICHETA_VECHE = '🤖 Răspuns AI · informativ, neverificat'
+export const ETICHETA_CERCETARE = '🤖 Răspuns AI din cercetare · informativ, neverificat'
+export function prezentareRaspuns({ v2, surse, interogari }) {
+  if (v2 !== true) return { v2: false, cercetare: false, eticheta: ETICHETA_VECHE }
+  const cercetare = surseAfisabile(surse).length > 0 || interogariAfisabile(interogari).length > 0
+  return { v2: true, cercetare, eticheta: cercetare ? ETICHETA_CERCETARE : ETICHETA_VECHE }
 }
 
 /** Interogările web trimise (audit, doar ownerul le vede): listă de șiruri, max 20 × 200 de caractere. */

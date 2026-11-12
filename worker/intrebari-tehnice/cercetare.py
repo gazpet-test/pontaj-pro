@@ -21,7 +21,11 @@ Fluxul (intrebari_worker.py):
      P1, vezi sustinere()): același tip de regulă (obligație / interdicție / permisiune / condiție / minim / maxim — polaritate
      opusă sau absentă = nesusținută), aceeași negație, iar termenii-cheie în aceeași propoziție — TOȚI la o afirmație normativă
      (inclusiv calificativele: „autorizat”, „atestat”, „în scris”), cel puțin jumătate la una descriptivă; excepția „Nu am găsit
-     sursa oficială” scutește DOAR o linie care e exclusiv declarația de lipsă;
+     sursa oficială” scutește DOAR o linie care e exclusiv declarația de lipsă. Runda 5 (review r4): propoziția din sursă se ia
+     ÎNTREAGĂ (cu „dar / însă / dacă / numai / cu excepția / până la …”), iar la o afirmație normativă comparația e în AMBELE
+     sensuri — orice condiție, excepție sau element cumulativ („și”) al restricției din sursă care lipsește din afirmație o face
+     nesusținută (o alternativă „sau” omisă nu); fiecare propoziție a rândului se verifică separat; cifrele sunt tokeni compleți
+     și pentru unități compuse („m/s²”), semn despărțit prin spațiu („- 5 bar”) și intervale („2..6 bar”);
   4. o singură reparare dacă validarea pică; ce rămâne nesusținut se scoate (curata_raspuns), nu se „repară” prin tăierea unui
      cuvânt. Verdictul Da / Nu / Depinde rămâne DOAR dacă nicio afirmație normativă n-a fost scoasă (runda 4: verdictul se putea
      sprijini pe ea) și rămâne măcar o afirmație cu temei (runda 3, review r2 P2-3); altfel răspunsul devine
@@ -119,11 +123,22 @@ POLARITATI = [(k, re.compile(p)) for k, p in (
     ('maxim', r'\bcel\s+mult\b|\bnu\s+mai\s+mult\s+de\b|\bmaxim\w*'),
 )]
 # „se poate” / „nu se poate” = permisiune / interdicție DOAR pe o linie cu marcaj și în surse (extins=True): pe o linie fără
-# marcaj, „nu se poate stabili din surse” nu e o regulă.
+# marcaj, „nu se poate stabili din surse” nu e o regulă. Runda 5 (review r4 P1): tot aici și condițiile simple — „dacă”,
+# „numai” / „doar” fără „dacă / după”, „în cazul în care”, „în afară de” (o linie fără marcaj care spune „depinde dacă …” nu
+# devine normativă doar din „dacă”).
 POLARITATI_POATE = [(k, re.compile(p)) for k, p in (
     ('interdictie', NEGATIE + r'po(?:ate|t)\b'),
     ('permisiune', r'\bse\s+po(?:ate|t)\b'),
+    ('conditie', r'\b(?:daca|numai|doar|in\s+cazul\s+in\s+care|in\s+afara\s+(?:de|cazului))\b'),
 )]
+# Runda 5 (review r4 P1): restricțiile unei propoziții din sursă. Fiecare marcator deschide o „clauză” (până la următorul
+# marcator sau la sfârșitul propoziției). O afirmație normativă care se sprijină pe propoziție trebuie să aibă un marcator din
+# ACEEAȘI grupă și toți termenii (și cifrele) clauzei — „verificare și autorizare” cere ambele; la „sau / ori” ajunge una dintre
+# variante (omiterea unei alternative nu pierde restricția). Alternativa lungă întâi (L13).
+RESTRICTIE = re.compile(r'\b(?:(?P<conditie>doar\s+daca|numai\s+daca|in\s+cazul\s+in\s+care|cu\s+conditia(?:\s+ca)?|numai|doar|daca)'
+                        r'|(?P<exceptie>cu\s+exceptia|exceptand|in\s+afara\s+(?:de|cazului))|(?P<limita>pana\s+la)'
+                        r'|(?P<contrast>dar|insa|totusi|desi))\b')
+ALTERNATIVA = re.compile(r'\b(?:sau|ori)\b')
 # „minim” / „maxim” ca adjectiv („distanța minimă”) nu fac singure o linie normativă; „cel puțin” / „cel mult” da.
 LIMITA_EXPLICITA = re.compile(r'\bcel\s+(?:putin|mult)\b|\bnu\s+mai\s+(?:putin|mult)\s+de\b')
 NEGATIE_SIMPLA = re.compile(r'\b(?:nu|nici|niciun\w*|nicio|niciodata)\b')
@@ -134,23 +149,42 @@ LIMITE = ('minim', 'maxim')                                    # la fel, dacă a
 
 # Cifre: token complet = semn + număr + unitate (L11). Unitățile se scriu canonic; ordinea alternativelor: cele lungi întâi (L13).
 UM = (r'grade\s+celsius|metri\s+patrati|metri\s+cubi|centimetri|centimetru|kilometri|kilometru|milimetri|milimetru|kilograme'
-      r'|kilogram|saptamani|saptamana|procente|procent|minute|grade|metri|metru|mbari|mbar|zile|euro|luni|luna|bari|bar|kpa|mpa'
-      r'|ore|ora|ani|min|lei|eur|°\s*c|mm|cm|km|kg|mc|mp|m3|m2|m³|m²|zi|an|m|h|°|%')
+      r'|kilogram|saptamani|saptamana|procente|procent|secunde|secunda|minute|grade|metri|metru|litri|litru|mbari|mbar|zile|euro'
+      r'|luni|luna|bari|bar|kpa|mpa|ore|ora|ani|min|lei|eur|°\s*c|mm|cm|km|kg|mc|mp|m3|m2|m³|m²|zi|an|m|h|l|s|°|%')
 UNITATI = {'grade celsius': '°c', 'metri patrati': 'mp', 'metri cubi': 'mc', 'centimetri': 'cm', 'centimetru': 'cm', 'kilometri': 'km',
            'kilometru': 'km', 'milimetri': 'mm', 'milimetru': 'mm', 'kilograme': 'kg', 'kilogram': 'kg', 'saptamani': 'saptamani',
-           'saptamana': 'saptamani', 'procente': '%', 'procent': '%', 'minute': 'minute', 'grade': 'grade', 'metri': 'm', 'metru': 'm',
+           'saptamana': 'saptamani', 'procente': '%', 'procent': '%', 'secunde': 's', 'secunda': 's', 'minute': 'minute',
+           'grade': 'grade', 'metri': 'm', 'metru': 'm', 'litri': 'l', 'litru': 'l',
            'mbari': 'mbar', 'mbar': 'mbar', 'zile': 'zile', 'euro': 'euro', 'luni': 'luni', 'luna': 'luni', 'bari': 'bar', 'bar': 'bar',
            'kpa': 'kpa', 'mpa': 'mpa', 'ore': 'ore', 'ora': 'ore', 'ani': 'ani', 'min': 'minute', 'lei': 'lei', 'eur': 'euro',
            '°c': '°c', '° c': '°c', 'mm': 'mm', 'cm': 'cm', 'km': 'km', 'kg': 'kg', 'mc': 'mc', 'mp': 'mp', 'm3': 'mc', 'm2': 'mp',
-           'm³': 'mc', 'm²': 'mp', 'zi': 'zile', 'an': 'ani', 'm': 'm', 'h': 'ore', '°': 'grade', '%': '%'}
-# semnul contează doar lipit de cifră și după un început / spațiu / paranteză („−5 bar”), nu într-un interval („5-10 bar”)
-NUMERIC = re.compile(r'(?:(?<![0-9a-z])([-+−–±]))?(?<![0-9])([0-9]+(?:[.,][0-9]+)?)(?:\s*(?:de\s+)?(' + UM + r')(?![a-z0-9]))?')
+           'm³': 'mc', 'm²': 'mp', 'zi': 'zile', 'an': 'ani', 'm': 'm', 'h': 'ore', 'l': 'l', 's': 's', '°': 'grade', '%': '%'}
+# Runda 5 (review r4 P2): unitatea se ia ÎNTREAGĂ — exponent („m²”, „m^2”) și numitori („m/s²”, „km/h”, „kg/m3”, „lei/mp”;
+# un numitor necunoscut rămâne scris cum e, nu se taie: „5 m/x” ≠ „5 m”).
+EXPONENT = r'(?:\^?[23](?![0-9])|[²³])'
+NUMERIC = re.compile(r'(?<![0-9])([0-9]+(?:[.,][0-9]+)?)(?:\s*(?:de\s+)?(' + UM + r')(' + EXPONENT + r')?((?:\s*/\s*[a-z°]+'
+                     + EXPONENT + r'?)*)(?![a-z0-9]))?')
+NUMITOR = re.compile(r'/\s*([a-z°]+)(' + EXPONENT + r')?')
 SEMNE = {'-': '-', '−': '-', '–': '-', '+': '', '±': '±'}
+# Semnul: lipit de cifră („−5”), după un început / spațiu / paranteză (nu „np-061”); sau despărțit prin spațiu („- 5 bar”), dacă
+# înaintea lui nu e o cifră („5 - 10” e un interval). Despărțit la ÎNCEPUTUL unui rând e ambiguu (bulină sau minus?) → „?5 bar”,
+# care nu confirmă nici „5 bar”, nici „-5 bar” (L11: ambiguu = incert).
+SEMN_LIPIT = re.compile(r'(?:^|(?<=[^0-9a-z]))([-+−–±])\Z')
+SEMN_DESPARTIT = re.compile(r'([-+−–±])[ \t]+\Z')
+# Intervale (review r4 P2): „între 2 și 6 bar”, „de la 2 (până) la 6 bar”, „2–6 bar”, „2...6 bar” → UN token „2..6 bar”. Cu liniuță
+# / puncte doar dacă măcar un capăt are unitate („EN 12732-1” rămâne „12732” și „1”); unitățile diferite nu fac un interval.
+INTERVAL_LINIE = re.compile(r'^[ \t]*(?:[-−–—]|\.{2,3}|…)[ \t]*(?:(?<=[ \t])([-+−±]))?\Z')
+INTERVAL_SI = re.compile(r'^\s+si\s+(?:([-+−±])[ \t]*)?\Z')
+INTERVAL_LA = re.compile(r'^\s+(?:pana\s+)?la\s+(?:([-+−±])[ \t]*)?\Z')
+INAINTE_INTRE = re.compile(r'\bintre\s+\Z')
+INAINTE_DE_LA = re.compile(r'\bde\s+la\s+\Z')
 # propoziții: . ! ? ; și rând nou, dar nu după o abreviere („art. 5”), înaintea unei cifre / paranteze („alin. (2)”) sau în
-# interiorul unui număr („0.5”); apoi și la „dar / însă / iar …” (o propoziție nu poate amesteca două reguli opuse)
+# interiorul unui număr („0.5”). Runda 5 (review r4 P1): propoziția se ia ÎNTREAGĂ, cu adversativele și subordonatele ei (nu se
+# mai taie la „dar / însă / iar”, ca restricția să nu se piardă), iar o bucată care ÎNCEPE cu un marcator de restricție („Însă
+# …”, „; cu excepția …”, „. Dacă …”) se lipește de propoziția dinainte.
 ABREVIERI = frozenset('art alin pct lit nr ord hg oug cap sect par fig pag ex cca min max str ed vol pt np sr en iso stas tab pl'.split())
 SEPARATOR = re.compile(r'[.!?;\n]')
-CONTRAST_PROP = re.compile(r'\b(?:dar|insa|iar|totusi|desi|in\s+schimb|pe\s+cand)\b')
+INCEPE_CU_RESTRICTIE = re.compile(r'\s*[,:—–-]?\s*' + RESTRICTIE.pattern)
 
 
 def _polaritati(n, extins=False):
@@ -168,13 +202,65 @@ def polaritati(n, extins=False):
     return _polaritati(n, extins)[0]
 
 
+def _exp(e):
+    return (e or '').replace('^', '').replace('²', '2').replace('³', '3')
+
+
+def _parte_unitate(baza, e):
+    """O parte de unitate, canonică: „m” + „2” → „mp”, „s” + „2” → „s2”, „ora” → „ore”; necunoscută → scrisă cum e."""
+    e = _exp(e)
+    if e and baza + e in UNITATI: return UNITATI[baza + e]
+    return UNITATI.get(baza, baza) + e
+
+
+def _unitate(m):
+    if not m.group(2): return ''
+    um = _parte_unitate(' '.join(m.group(2).split()), m.group(3))
+    for d, e in NUMITOR.findall(m.group(4) or ''):
+        um += '/' + _parte_unitate(d, e)
+    return um
+
+
+def _semn(n, start):
+    """(semnul, poziția de unde începe) pentru numărul care începe la `start` (vezi SEMN_LIPIT / SEMN_DESPARTIT)."""
+    pre = n[:start]
+    m = SEMN_LIPIT.search(pre)
+    if m: return SEMNE[m.group(1)], m.start(1)
+    m = SEMN_DESPARTIT.search(pre)
+    if m:
+        inainte = pre[:m.start(1)]
+        ultim = inainte.rstrip(' \t')[-1:]
+        if re.match(r'[0-9]', ultim): return '', start
+        if not inainte.rsplit('\n', 1)[-1].strip(): return '?', m.start(1)
+        return SEMNE[m.group(1)], m.start(1)
+    return '', start
+
+
 def tokeni_numerici(n):
-    """Cifrele unui text normalizat, ca tokeni compleți: „−5 bar” → „-5 bar”, „0,5 m” → „0.5 m”, „30 de zile” → „30 zile”,
-    „+5 °C” → „5 °c”, „art. 12” → „12” (fără unitate)."""
-    out = []
+    """Cifrele unui text normalizat, ca tokeni compleți: „−5 bar” / „- 5 bar” → „-5 bar”, „0,5 m” → „0.5 m”, „30 de zile” →
+    „30 zile”, „+5 °C” → „5 °c”, „5 m/s²” → „5 m/s2”, „între 2 și 6 bar” / „2–6 bar” → „2..6 bar”, „art. 12” → „12”."""
+    bucati = []
     for m in NUMERIC.finditer(n):
-        um = UNITATI.get(' '.join((m.group(3) or '').split()), '')
-        out.append(SEMNE.get(m.group(1) or '', '') + m.group(2).replace(',', '.') + (' ' + um if um else ''))
+        semn, poz = _semn(n, m.start(1))
+        bucati.append({'poz': poz, 'start': m.start(1), 'end': m.end(), 'semn': semn, 'val': m.group(1).replace(',', '.'),
+                       'um': _unitate(m)})
+    out, i = [], 0
+    while i < len(bucati):
+        a = bucati[i]
+        b = bucati[i + 1] if i + 1 < len(bucati) else None
+        if b:
+            intre = n[a['end']:b['start']]
+            um = None if a['um'] and b['um'] and a['um'] != b['um'] else (b['um'] or a['um'])
+            m = INTERVAL_LINIE.match(intre)
+            if not (m and (a['um'] or b['um'])):
+                m = ((INTERVAL_SI.match(intre) if INAINTE_INTRE.search(n[:a['poz']]) else None)
+                     or (INTERVAL_LA.match(intre) if INAINTE_DE_LA.search(n[:a['poz']]) else None))
+            if m and um is not None:
+                out.append(f"{a['semn']}{a['val']}..{SEMNE.get(m.group(1) or '', '')}{b['val']}" + (' ' + um if um else ''))
+                i += 2
+                continue
+        out.append(a['semn'] + a['val'] + (' ' + a['um'] if a['um'] else ''))
+        i += 1
     return out
 
 
@@ -184,7 +270,7 @@ def corp_afirmatie(linie):
 
 
 def propozitii(text):
-    """Propozițiile unui text (normalizate), vezi SEPARATOR / ABREVIERI / CONTRAST_PROP."""
+    """Propozițiile unui text (normalizate), vezi SEPARATOR / ABREVIERI / INCEPE_CU_RESTRICTIE."""
     n = normalizeaza(text)
     bucati, start = [], 0
     for m in SEPARATOR.finditer(n):
@@ -196,10 +282,32 @@ def propozitii(text):
                 if cuv and cuv.group(0) in ABREVIERI: continue
             urm = re.match(r'\s*(\S)', n[k + 1:])
             if urm and re.match(r'[0-9(]', urm.group(1)): continue
+        if INCEPE_CU_RESTRICTIE.match(n, k + 1): continue
         bucati.append(n[start:k])
         start = k + 1
     bucati.append(n[start:])
-    return [p.strip() for b in bucati for p in CONTRAST_PROP.split(b) if p.strip()]
+    return [p.strip() for p in bucati if p.strip()]
+
+
+def restrictii(p):
+    """[(grupa, clauza)] — restricțiile unei propoziții normalizate (vezi RESTRICTIE): clauza = textul de după marcator, până la
+    următorul marcator sau la sfârșitul propoziției."""
+    ms = list(RESTRICTIE.finditer(p))
+    return [(m.lastgroup, p[m.end():(ms[j + 1].start() if j + 1 < len(ms) else len(p))]) for j, m in enumerate(ms)]
+
+
+def restrictii_acoperite(af_text, prop_text):
+    """Runda 5 (review r4 P1), sensul sursă → afirmație: fiecare restricție a propoziției din sursă se regăsește în afirmație —
+    un marcator din aceeași grupă și, pentru măcar o variantă a clauzei („sau / ori”), toți termenii ei (și cifrele, ca token
+    complet). „numai după verificare și autorizare” nu susține „numai după verificare”; „numai după verificare sau autorizare” da."""
+    grupe = {g for g, _ in restrictii(af_text)}
+    cuv, tok = cuvinte(af_text), set(tokeni_numerici(af_text))
+    for g, clauza in restrictii(prop_text):
+        if g not in grupe: return False
+        variante = ALTERNATIVA.split(clauza)
+        if not any(potriviti(_termeni(v), cuv) == len(_termeni(v)) and all(t in tok for t in tokeni_numerici(v)) for v in variante):
+            return False
+    return True
 
 
 def e_afirmatie_normativa(linie):
@@ -248,7 +356,12 @@ def termeni_cheie(linie):
     """Termenii de conținut ai unei afirmații: cuvintele din litere (≥ 3), fără marcaje, numerotare, cuvinte de legătură (STOP),
     cuvinte generice (GENERICE), cuvinte de obligație / atribuire (REGULA_OBLIGATIE), marcatorii de regulă (POLARITATI) și
     cifrele cu unitatea lor; rădăcina = primele 6 litere, fără dubluri. Calificativele („autorizat”, „atestat”) RĂMÂN termeni."""
-    n = NUMERIC.sub(' ', _polaritati(corp_afirmatie(linie), True)[1])
+    return _termeni(corp_afirmatie(linie))
+
+
+def _termeni(n):
+    """termeni_cheie pe un text deja normalizat, fără marcaje (o propoziție a liniei sau o clauză din sursă)."""
+    n = NUMERIC.sub(' ', _polaritati(n, True)[1])
     out = []
     for w in re.findall(r'[a-z]+', n):
         if len(w) < 3 or w in STOP or w in GENERICE or REGULA_OBLIGATIE.fullmatch(w): continue
@@ -274,12 +387,12 @@ def suport_lexical(linie, ids, harta):
     return potriviti(k, cuvinte(normalizeaza('\n'.join(harta[i] for i in ids)))), len(k)
 
 
-def descrie_afirmatia(linie):
-    """{clase, neg, termeni, tok} pentru o linie: tipul regulii (extins: și „se poate”), negația rămasă după marcatori
-    („Proba nu se face …”; eticheta verdictului „Nu, …” nu contează), termenii de conținut, cifrele."""
-    n = corp_afirmatie(linie)
+def descrie_afirmatia(n):
+    """{text, clase, neg, termeni, tok} pentru o propoziție a afirmației (normalizată, fără marcaje): tipul regulii (extins: și
+    „se poate”, „dacă”), negația rămasă după marcatori („Proba nu se face …”; eticheta verdictului „Nu, …” nu contează),
+    termenii de conținut, cifrele."""
     clase, rest = _polaritati(n, True)
-    return {'clase': clase, 'neg': bool(NEGATIE_SIMPLA.search(VERDICT_INCEPUT.sub(' ', rest))), 'termeni': termeni_cheie(linie),
+    return {'text': n, 'clase': clase, 'neg': bool(NEGATIE_SIMPLA.search(VERDICT_INCEPUT.sub(' ', rest))), 'termeni': _termeni(n),
             'tok': tokeni_numerici(n)}
 
 
@@ -293,16 +406,18 @@ def propozitii_surse(ids, harta):
         for p in propozitii(extras):
             clase, rest = _polaritati(p, True)
             ctx = nt + '\n' + p
-            out.append({'clase': clase, 'neg': bool(NEGATIE_SIMPLA.search(rest)), 'cuvinte': cuvinte(ctx), 'tok': set(tokeni_numerici(ctx))})
+            out.append({'text': p, 'clase': clase, 'neg': bool(NEGATIE_SIMPLA.search(rest)), 'cuvinte': cuvinte(ctx),
+                        'tok': set(tokeni_numerici(ctx))})
     return out
 
 
 def potrivire_propozitie(af, prop):
     """Tipul regulii din propoziție îl acoperă pe cel al afirmației: fiecare tip afirmat există în propoziție, niciunul opus
-    („se interzice” față de „este permisă”), propoziția nu are o interdicție / lipsă de obligație / condiție pe care afirmația o
-    omite (nici „cel puțin / cel mult”, dacă afirmația dă o valoare), iar negația e aceeași."""
+    („se interzice” față de „este permisă”) — afară de cazul în care afirmația îl spune și ea (citarea întreagă a „este permisă,
+    dar se interzice pe ploaie”) —, propoziția nu are o interdicție / lipsă de obligație / condiție pe care afirmația o omite
+    (nici „cel puțin / cel mult”, dacă afirmația dă o valoare), iar negația e aceeași."""
     if not af['clase'] <= prop['clase']: return False
-    if any(OPUSE.get(k) in prop['clase'] for k in af['clase']): return False
+    if any(OPUSE.get(k) in prop['clase'] and OPUSE.get(k) not in af['clase'] for k in af['clase']): return False
     pierdute = prop['clase'] - af['clase']
     if any(k in pierdute for k in NU_SE_PIERD): return False
     if af['tok'] and any(k in pierdute for k in LIMITE): return False
@@ -312,15 +427,24 @@ def potrivire_propozitie(af, prop):
 def sustinere(linie, ids, harta, normativ):
     """(susținută, potriviți, total): există O propoziție dintr-o sursă citată care are același tip de regulă (potrivire_propozitie)
     și termenii afirmației — TOȚI la o afirmație normativă, inclusiv calificativele, plus cifrele cu unitate în aceeași propoziție;
-    cel puțin jumătate la una descriptivă (regula din runda 3, acum pe propoziție). Termenii nu se adună din propoziții diferite."""
-    af = descrie_afirmatia(linie)
-    tot, cu_um, cel_mai_bun = len(af['termeni']), [t for t in af['tok'] if ' ' in t], -1
-    for p in propozitii_surse(ids, harta):
-        if not potrivire_propozitie(af, p): continue
-        if normativ and not all(t in p['tok'] for t in cu_um): continue
-        cel_mai_bun = max(cel_mai_bun, potriviti(af['termeni'], p['cuvinte']))
-    if cel_mai_bun < 0: return False, 0, tot
-    return cel_mai_bun >= (tot if normativ else (tot + 1) // 2), cel_mai_bun, tot
+    cel puțin jumătate la una descriptivă (regula din runda 3, acum pe propoziție). Termenii nu se adună din propoziții diferite.
+    Runda 5 (review r4): (a) rândul se împarte în propoziții și FIECARE trebuie susținută de o propoziție din sursele citate (aceeași
+    trimitere le acoperă pe toate; o propoziție fără termeni, cifre sau regulă — „Da.” — nu cere nimic); (b) la o afirmație
+    normativă și invers: restricțiile propoziției din sursă trebuie să fie în afirmație (restrictii_acoperite)."""
+    surse = propozitii_surse(ids, harta)
+    total_pot = total_tot = 0
+    for fraza in propozitii(corp_afirmatie(linie)):
+        af = descrie_afirmatia(fraza)
+        if not af['termeni'] and not af['tok'] and not af['clase']: continue
+        tot, cu_um, cel_mai_bun = len(af['termeni']), [t for t in af['tok'] if ' ' in t], -1
+        for p in surse:
+            if not potrivire_propozitie(af, p): continue
+            if normativ and not all(t in p['tok'] for t in cu_um): continue
+            if normativ and not restrictii_acoperite(fraza, p['text']): continue
+            cel_mai_bun = max(cel_mai_bun, potriviti(af['termeni'], p['cuvinte']))
+        if cel_mai_bun < (tot if normativ else (tot + 1) // 2): return False, max(cel_mai_bun, 0), tot
+        total_pot, total_tot = total_pot + cel_mai_bun, total_tot + tot
+    return True, total_pot, total_tot
 
 
 def _evalueaza(linie, harta):

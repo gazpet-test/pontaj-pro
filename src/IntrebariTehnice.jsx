@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { poateIntreba, caleAtasament, verificaFisier, totalPreaMare, blocuriMd, bucatiRand, ETICHETA_STARE, MAX_ATASAMENTE, MAX_MB } from './intrebariUtil.js'
-import { imparteRaspuns, surseAfisabile, interogariAfisabile, lipsesteMigrarea, actiuniIntrebare } from './intrebariSurse.js'
+import { imparteRaspuns, surseAfisabile, interogariAfisabile, lipsesteMigrarea, actiuniIntrebare, prezentareRaspuns } from './intrebariSurse.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', border:'#30363D', blue:'#1F6FEB', green:'#2EA043', yellow:'#D29922', red:'#F85149', acc:'#56D4DD' }
 const S = {
@@ -206,6 +206,8 @@ export default function IntrebariTehnice({ profile }) {
     } catch (e) { setErr(e.message) } finally { setLucru(false) }
   }
   const act = q ? actiuniIntrebare({ v2, stare: q.stare, eAutor: q.autor === profile.id, eOwner: !!profile.is_owner }) : null
+  // runda 5 (review r4 P2): fără migrarea detectată, răspunsul arată exact ca înainte (eticheta veche, Markdown simplu)
+  const pr = q ? prezentareRaspuns({ v2, surse: q.surse, interogari: q.interogari_web }) : null
 
   return (
     <div style={{ minHeight:'100vh', background:G.bg, color:G.text, padding:'16px 16px 48px', fontFamily:'system-ui, sans-serif' }}>
@@ -216,8 +218,13 @@ export default function IntrebariTehnice({ profile }) {
         </div>
         <div style={{ ...S.card, borderColor:G.yellow, marginBottom:14, fontSize:13, color:G.muted }}>
           Răspunsurile sunt date de AI și sunt <strong style={{ color:G.yellow }}>informative</strong>. Le vezi doar tu.
-          Fiecare temei are un marcaj de sursă ([C…] = document intern de cercetare, [W…] = site oficial) — deschide sursa înainte să te bazezi pe ea.
-          Ce n-a fost găsit apare ca „Nu am găsit sursa oficială”; un verdict fără temei în surse apare ca „Incert — de verificat”. Decizia e a ta.
+          {v2 === true ? <>
+            {' '}Fiecare temei are un marcaj de sursă ([C…] = document intern de cercetare, [W…] = site oficial) — deschide sursa înainte să te bazezi pe ea.
+            Ce n-a fost găsit apare ca „Nu am găsit sursa oficială”; un verdict fără temei în surse apare ca „Incert — de verificat”.
+            La răspunsurile mai vechi, fără surse, verifică temeiurile marcate „[DE VERIFICAT]”. Decizia e a ta.
+          </> : <>
+            {' '}Verifică temeiurile marcate „[DE VERIFICAT]” înainte să te bazezi pe ele. Decizia e a ta.
+          </>}
         </div>
 
         {selectat && !q && <div style={{ ...S.card, color: errDet ? G.red : G.muted, fontSize:13, marginBottom:10 }}>
@@ -232,17 +239,17 @@ export default function IntrebariTehnice({ profile }) {
             <div style={{ whiteSpace:'pre-wrap', fontSize:14, background:G.bg, borderRadius:8, padding:12, border:`1px solid ${G.border}` }}>{q.intrebare}</div>
             {(q.atasamente || []).length > 0 && <div style={{ fontSize:12, color:G.muted, marginTop:6 }}>📎 {(q.atasamente || []).map(a => a.nume).join(', ')}</div>}
             <div style={{ marginTop:16 }}>
-              {(q.stare === 'raspuns' || q.stare === 'de_verificat') && q.raspuns_md ? <>
-                <div style={{ fontSize:12, color:G.yellow, marginBottom:6 }}>🤖 Răspuns AI din cercetare · informativ, neverificat · {fmtData(q.raspuns_la)}</div>
+              {(pr.v2 ? (q.stare === 'raspuns' || q.stare === 'de_verificat') && q.raspuns_md : q.stare === 'raspuns') ? <>
+                <div style={{ fontSize:12, color:G.yellow, marginBottom:6 }}>{pr.eticheta} · {fmtData(q.raspuns_la)}</div>
                 {q.stare === 'de_verificat' && <div style={{ fontSize:12, color:ETICHETA_STARE.de_verificat.c, marginBottom:6 }}>
                   ⚑ Marcat ca neclar — așteaptă verificarea.</div>}
-                <Raspuns q={q} owner={!!profile.is_owner}/>
+                {pr.v2 ? <Raspuns q={q} owner={!!profile.is_owner}/> : <Markdown md={q.raspuns_md}/>}
               </> : q.stare === 'eroare' ? <>
                 <div style={{ color:G.red }}>Nu s-a putut răspunde: {q.eroare || 'eroare'}. Poți pune întrebarea din nou.</div>
-                {profile.is_owner && <Interogari lista={interogariAfisabile(q.interogari_web)}/>}
+                {pr.v2 && profile.is_owner && <Interogari lista={interogariAfisabile(q.interogari_web)}/>}
               </> : <div style={{ color:G.muted }}>{ETICHETA_STARE[q.stare]?.t} Pagina se actualizează singură.</div>}
             </div>
-            <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:14 }}>
+            {(act.verificare || act.reia) && <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:14 }}>
               {act.verificare &&
                 <button style={{ ...S.btnS, opacity: lucruRand !== null ? 0.6 : 1 }} disabled={lucruRand !== null}
                   onClick={() => actiuneRand('fn_intrebari_de_verificat', q.id, 'Răspunsul a fost trimis la verificare.')}>⚑ Răspuns neclar — trimite la verificare</button>}
@@ -250,7 +257,7 @@ export default function IntrebariTehnice({ profile }) {
                 <button style={{ ...S.btnS, borderColor:G.acc, opacity: lucruRand !== null ? 0.6 : 1 }} disabled={lucruRand !== null}
                   onClick={() => window.confirm('Reiei întrebarea cu cercetare? Răspunsul actual se înlocuiește și apelul AI costă (intră în plafonul de 40/zi).') &&
                     actiuneRand('fn_intrebari_reia', q.id, 'Întrebarea a intrat din nou în coadă.')}>🔁 Reia cu cercetare</button>}
-            </div>
+            </div>}
             {act.nota && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>
               Trimiterea la verificare și reluarea cu cercetare sunt disponibile după actualizarea bazei de date.</div>}
             {mesajRand?.id === q.id && <div style={{ color: mesajRand.ok ? G.green : G.red, fontSize:13, marginTop:8 }}>{mesajRand.text}</div>}

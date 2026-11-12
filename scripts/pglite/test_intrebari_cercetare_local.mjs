@@ -71,7 +71,7 @@ const aplicare = await incearca(db, `BEGIN; SELECT set_config('gazpet.livrare_mi
 ok(aplicare === 'ok', 'migrarea completată se aplică: ' + aplicare.slice(0, 200))
 
 // 4) T4 / T5 exact din dry-run (fișierele puse în r31e_src cum le-ar pune \copy), într-o tranzacție anulată
-const seg = DRY.slice(DRY.indexOf('-- aplică migrarea (\'mig\''), DRY.indexOf("DO $t$ BEGIN RAISE NOTICE 'DRY 20261131e r4"))
+const seg = DRY.slice(DRY.indexOf('-- aplică migrarea (\'mig\''), DRY.indexOf("DO $t$ BEGIN RAISE NOTICE 'DRY 20261131e r5"))
 const linii = (f, t) => t.split('\n').map(l => `('${f}', ${l === '' ? 'NULL' : `'${l.replace(/'/g, "''")}'`})`).join(',\n')
 const pregatire = `CREATE TEMP TABLE r31e_src (fisier text, nr bigint GENERATED ALWAYS AS IDENTITY, linie text);
 INSERT INTO r31e_src (fisier, linie) VALUES ${linii('mig', MIGC)};
@@ -85,6 +85,23 @@ const RBm = RB.replace('"public.fn_intrebari_reia(bigint)": "', '"public.fn_intr
 const pregatireM = pregatire.replace(linii('rb', RB), () => linii('rb', RBm))
 const rm = await (async () => { try { await db.exec(`BEGIN ISOLATION LEVEL READ COMMITTED;\n${pregatireM}\n${seg}\nROLLBACK;`); return 'ok' } catch (e) { try { await db.exec('ROLLBACK') } catch {} return e.message } })()
 ok(/T[45][a-z]? FAIL.*fn_intrebari_reia\(bigint\) are alt corp/.test(rm), 'mutant (md5 greșit în revenire) e prins de dry-run: ' + rm.slice(0, 160))
+// 5b) runda 5 (review r4 P2): revenirea FĂRĂ verificarea ACL-ului trebuie prinsă de T5c (o schimbare doar de drepturi)
+const RBa = RB.replace('       OR f.acl IS DISTINCT FROM c_acl->>k\n', '')
+ok(RBa !== RB, 'mutantul fără verificarea ACL-ului s-a construit')
+const pregatireA = pregatire.replace(linii('rb', RB), () => linii('rb', RBa))
+const ra = await (async () => { try { await db.exec(`BEGIN ISOLATION LEVEL READ COMMITTED;\n${pregatireA}\n${seg}\nROLLBACK;`); return 'ok' } catch (e) { try { await db.exec('ROLLBACK') } catch {} return e.message } })()
+ok(/T5c FAIL/.test(ra), 'mutant (revenire fără ACL) e prins de T5c: ' + ra.slice(0, 160))
+// 5c) migrarea FĂRĂ eticheta „implicite:” trebuie prinsă de T4d (baseline-ul = cel de la pasul 2, fără etichetele „implicite:”,
+//     adică exact ce ar fi tipărit interogarea mutantă pe starea de dinainte)
+const MIGi = MIGC.replace(/  UNION ALL\n  SELECT 'implicite:'[\s\S]*?    FROM tabele t\n/, '')
+ok(MIGi !== MIGC, 'mutantul fără „implicite:” s-a construit')
+const rezI = rez.filter(r => !r.eticheta.startsWith('implicite:'))
+ok(rezI.length === rez.length - 2, 'etichetele „implicite:” sunt două (intrebari_tehnice, notifications)')
+const jsonI = '{\n' + rezI.map(r => `    ${JSON.stringify(r.eticheta)}: ${JSON.stringify(r.amprenta)}`).join(',\n') + '\n  }'
+const MIGi2 = MIGi.replace(intre(MIGi, '  -- >>> AMPRENTE BASELINE', '  -- <<< AMPRENTE BASELINE'), () => `  SELECT '${jsonI}'::jsonb`)
+const pregatireI = pregatire.replace(linii('mig', MIGC), () => linii('mig', MIGi2))
+const ri = await (async () => { try { await db.exec(`BEGIN ISOLATION LEVEL READ COMMITTED;\n${pregatireI}\n${seg}\nROLLBACK;`); return 'ok' } catch (e) { try { await db.exec('ROLLBACK') } catch {} return e.message } })()
+ok(/T4d FAIL/.test(ri), 'mutant (migrare fără „implicite:”) e prins de T4d: ' + ri.slice(0, 160))
 
 // 6) revenirea reală + re-aplicarea (apply → rollback → re-apply), ca T1
 const rev = await incearca(db, `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT set_config('gazpet.revenire_20261131e', 'SCOATE_CERCETARE:' || txid_current(), true);\n${RB}\nCOMMIT;`)

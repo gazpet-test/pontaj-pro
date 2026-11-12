@@ -5,7 +5,8 @@
 -- fn_intrebari_preia / fn_intrebari_amana / fn_intrebari_inainte_insert cu corpurile VERBATIM din 20261105a.
 -- Consecință: plafonul de 40/zi revine la numărarea din preluat_la / raspuns_la (fără reluare în UI, gaura P1-c nu se redeschide).
 -- Runda 4 (review r3 P2 / L15): înainte de orice DROP, fiecare funcție trebuie să fie EXACT versiunea 20261131e (md5 pe corpul fără
--- CR + SECURITY DEFINER, search_path, proprietar, o singură supraîncărcare) — o versiune ulterioară sub același nume = refuz; după
+-- CR + SECURITY DEFINER, search_path, proprietar, o singură supraîncărcare; runda 5: și ACL-ul exact + volatil / strict / leakproof /
+-- paralel) — o versiune ulterioară sub același nume (inclusiv o schimbare DOAR de drepturi) = refuz; după
 -- revenire, corpurile readuse se verifică la fel față de 20261105a (md5-urile le recalculează scripts/intrebari_cercetare_amprente.test.js).
 --
 -- BLOC TRANZACȚIONAL COMPLET: gestionarul tranzacției e operatorul (convenția supabase/revenire/README.md — fișierul nu are
@@ -39,6 +40,16 @@ DECLARE
     "public.fn_intrebari_preia()": "65336457781dc5a796376bdaadd31b54",
     "public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text,jsonb,jsonb)": "1c676fa234d086b8e8368eaa04414b5a",
     "public.fn_intrebari_reia(bigint)": "8745d896032fb72cda593ca11f3f6bd7"
+  }'::jsonb;
+  -- runda 5 (review r4 P2 / L15): ACL-ul EXACT lăsat de migrare (aceeași constantă c_acl ca în postcondiția ei; testul vitest compară)
+  -- — o schimbare ulterioară DOAR de drepturi (ex. GRANT pe fn_intrebari_reia) = refuz, la fel volatilitatea / strict / leakproof
+  c_acl CONSTANT jsonb := '{
+    "public.fn_intrebari_amana(bigint,uuid)": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_de_verificat(bigint)": "authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_inainte_insert()": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_preia()": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_raspunde(bigint,uuid,text,text,jsonb,text,jsonb,jsonb)": "postgres=X/postgres,service_role=X/postgres",
+    "public.fn_intrebari_reia(bigint)": "authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres"
   }'::jsonb;
   k text;
   f record;
@@ -90,14 +101,18 @@ BEGIN
   -- migrări cu corpurile din 20261105a
   FOR k IN SELECT jsonb_object_keys(c_mig) LOOP
     SELECT p.prosecdef, p.proconfig, pg_get_userbyid(p.proowner) AS owner, l.lanname, md5(replace(p.prosrc, chr(13), '')) AS corp,
-           (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari
+           (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari,
+           coalesce((SELECT string_agg(a::text, ',' ORDER BY a::text COLLATE "C") FROM unnest(p.proacl) AS a), '<NULL>') AS acl,
+           p.provolatile, p.proisstrict, p.proleakproof, p.proparallel
       INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(k);
     IF NOT FOUND OR f.corp IS DISTINCT FROM c_mig->>k THEN
       RAISE EXCEPTION '20261131e revenire: % are alt corp decat versiunea 20261131e (alta versiune sub acelasi nume) - refuz', k;
     END IF;
     IF NOT f.prosecdef OR f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR f.owner IS DISTINCT FROM 'postgres'
-       OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1 THEN
-      RAISE EXCEPTION '20261131e revenire: atributele % difera de versiunea 20261131e - refuz', k;
+       OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1
+       OR f.acl IS DISTINCT FROM c_acl->>k
+       OR f.provolatile <> 'v' OR f.proisstrict OR f.proleakproof OR f.proparallel <> 'u' THEN
+      RAISE EXCEPTION '20261131e revenire: atributele % difera de versiunea 20261131e (ACL %, volatil %) - refuz', k, f.acl, f.provolatile;
     END IF;
   END LOOP;
 
@@ -291,10 +306,15 @@ BEGIN
   END IF;
   FOR k IN SELECT jsonb_object_keys(c_105a) LOOP
     SELECT p.prosecdef, p.proconfig, pg_get_userbyid(p.proowner) AS owner, l.lanname, md5(replace(p.prosrc, chr(13), '')) AS corp,
-           (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari
+           (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari,
+           coalesce((SELECT string_agg(a::text, ',' ORDER BY a::text COLLATE "C") FROM unnest(p.proacl) AS a), '<NULL>') AS acl,
+           p.provolatile, p.proisstrict, p.proleakproof, p.proparallel
       INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(k);
+    -- runda 5: și ACL-ul exact al stării 20261105a (= materialul baseline de pe producție: „postgres + service_role”) + volatilitatea
     IF NOT FOUND OR f.corp IS DISTINCT FROM c_105a->>k OR NOT f.prosecdef OR f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
-       OR f.owner IS DISTINCT FROM 'postgres' OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1 THEN
+       OR f.owner IS DISTINCT FROM 'postgres' OR f.lanname <> 'plpgsql' OR f.supraincarcari <> 1
+       OR f.acl IS DISTINCT FROM 'postgres=X/postgres,service_role=X/postgres'
+       OR f.provolatile <> 'v' OR f.proisstrict OR f.proleakproof OR f.proparallel <> 'u' THEN
       RAISE EXCEPTION '20261131e revenire: postcondiția % (corpul / atributele din 20261105a) a eșuat', k;
     END IF;
   END LOOP;

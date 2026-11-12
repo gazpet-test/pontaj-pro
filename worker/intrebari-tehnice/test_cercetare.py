@@ -107,6 +107,9 @@ class Validare(unittest.TestCase):
         for t in NORMATIVE['propozitii']:
             with self.subTest(t['text']):
                 self.assertEqual(c.propozitii(t['text']), t['propozitii'])
+        for t in NORMATIVE['restrictii']:   # runda 5 (review r4 P1)
+            with self.subTest(t['text']):
+                self.assertEqual([[g, x.strip()] for g, x in c.restrictii(c.normalizeaza(t['text']))], t['restrictii'])
 
     def test_afirmatia_normativa_cere_toti_termenii_in_aceeasi_propozitie(self):
         h = c.harta_surse([{'id': 'C1', 'extras': 'Recepția lucrărilor trebuie făcută de responsabilul beneficiarului.'}])

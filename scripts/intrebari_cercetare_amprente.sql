@@ -5,7 +5,9 @@
 -- Tranzacție READ ONLY (deschisă și închisă aici, cu ROLLBACK): scriptul nu scrie nimic, nu ia lock-uri explicite și nu creează obiecte.
 -- Tipărește:
 --   1. pentru FIECARE etichetă: amprenta (md5) și MATERIALUL din care s-a calculat (definiția funcției, a triggerului, a politicii,
---      ACL-urile, RLS / FORCE, constrângerile, tipurile coloanelor) — se revizuiește față de migrările din repo, nu se copiază orbește;
+--      ACL-urile, RLS / FORCE, constrângerile, tipurile coloanelor; runda 5: valorile implicite ale coloanelor și secvențele, cu ACL)
+--      — se revizuiește față de migrările din repo, nu se copiază orbește. Runda 5: cele 21 de etichete de pe 12.11.2026 au aceeași
+--      interogare (valorile lor trebuie să iasă identice); se adaugă 4 etichete noi (implicite:… și secvente:… pe cele două tabele);
 --   2. blocul gata de lipit: înlocuiește INTEGRAL conținutul dintre marcajele „>>> AMPRENTE BASELINE” și „<<< AMPRENTE BASELINE” din
 --      supabase/migrations/20261131e_intrebari_cercetare_surse.sql (apoi sha256 pe fișier, review, dry-run — pașii din antetul migrării).
 -- Valorile pentru REVENIRE nu vin de aici: revenirea verifică obiectele create de migrare (md5 pe corpurile funcțiilor, fără CR,
@@ -101,6 +103,52 @@ WITH tabele(rel) AS (VALUES ('public.intrebari_tehnice'), ('public.notifications
          coalesce((SELECT string_agg(co.conname::text || ' [' || co.contype::text || ', validata: ' || co.convalidated::text || ']: '
                                      || pg_get_constraintdef(co.oid), E'\n' ORDER BY co.conname::text COLLATE "C")
                      FROM pg_catalog.pg_constraint co WHERE co.conrelid = to_regclass('public.intrebari_tehnice')), '<niciuna>')
+  UNION ALL
+  SELECT 'implicite:' || t.rel,
+         CASE WHEN NOT EXISTS (SELECT 1 FROM tab tb WHERE tb.rel = t.rel) THEN '<LIPSA: ' || t.rel || '>'
+              ELSE coalesce((SELECT string_agg(a.attname::text || ': ' || coalesce(pg_get_expr(d.adbin, d.adrelid), '<fara valoare implicita>')
+                                               || CASE a.attidentity WHEN 'a' THEN ' [identity ALWAYS]' WHEN 'd' THEN ' [identity BY DEFAULT]' ELSE '' END
+                                               || CASE WHEN a.attgenerated IN ('s', 'v') THEN ' [generata ' || a.attgenerated::text || ']' ELSE '' END,
+                                               E'\n' ORDER BY a.attname::text COLLATE "C")
+                               FROM tab tb
+                               JOIN pg_catalog.pg_attribute a ON a.attrelid = tb.oid AND a.attnum > 0 AND NOT a.attisdropped
+                               LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                              WHERE tb.rel = t.rel
+                                AND NOT (t.rel = 'public.intrebari_tehnice' AND a.attname IN ('surse', 'de_verificat_la', 'interogari_web'))),
+                            '<nicio coloana>') END
+    FROM tabele t
+  UNION ALL
+  SELECT 'secvente:' || t.rel,
+         CASE WHEN NOT EXISTS (SELECT 1 FROM tab tb WHERE tb.rel = t.rel) THEN '<LIPSA: ' || t.rel || '>'
+              ELSE coalesce((SELECT string_agg('secventa: ' || s.oid::regclass::text
+                                               || E'\n  atasata de: ' || coalesce((SELECT string_agg(ac.attname::text || ' (' || dp.deptype::text || ')', ','
+                                                                                                     ORDER BY ac.attname::text COLLATE "C")
+                                                                                     FROM pg_catalog.pg_depend dp
+                                                                                     JOIN pg_catalog.pg_attribute ac ON ac.attrelid = dp.refobjid AND ac.attnum = dp.refobjsubid
+                                                                                    WHERE dp.classid = 'pg_catalog.pg_class'::regclass AND dp.objid = s.oid
+                                                                                      AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                                                                                      AND dp.deptype IN ('a', 'i')), '<neatasata>')
+                                               || E'\n  proprietar: ' || pg_get_userbyid(s.relowner)
+                                               || E'\n  acl: ' || coalesce((SELECT string_agg(x::text, ',' ORDER BY x::text COLLATE "C") FROM unnest(s.relacl) AS x),
+                                                                           '<NULL = drepturile implicite ale proprietarului>')
+                                               || E'\n  tip: ' || format_type(sq.seqtypid, NULL) || ', start: ' || sq.seqstart::text
+                                               || ', pas: ' || sq.seqincrement::text || ', min: ' || sq.seqmin::text || ', max: ' || sq.seqmax::text
+                                               || ', cache: ' || sq.seqcache::text || ', ciclic: ' || sq.seqcycle::text
+                                               || ', persistenta: ' || s.relpersistence::text,
+                                               E'\n' ORDER BY s.oid::regclass::text COLLATE "C")
+                               FROM tab tb
+                               JOIN pg_catalog.pg_class s ON s.relkind = 'S' AND s.oid IN (
+                                      SELECT dp.objid FROM pg_catalog.pg_depend dp
+                                       WHERE dp.classid = 'pg_catalog.pg_class'::regclass AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                                         AND dp.refobjid = tb.oid AND dp.deptype IN ('a', 'i')
+                                      UNION
+                                      SELECT dp.refobjid FROM pg_catalog.pg_attrdef ad
+                                        JOIN pg_catalog.pg_depend dp ON dp.classid = 'pg_catalog.pg_attrdef'::regclass AND dp.objid = ad.oid
+                                                                    AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                                       WHERE ad.adrelid = tb.oid)
+                               JOIN pg_catalog.pg_sequence sq ON sq.seqrelid = s.oid
+                              WHERE tb.rel = t.rel), '<niciuna>') END
+    FROM tabele t
   UNION ALL
   SELECT 'coloane:' || c.tabel,
          string_agg(c.col || ': ' || coalesce((SELECT format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END

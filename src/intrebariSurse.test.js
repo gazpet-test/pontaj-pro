@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { DOMENII_OFICIALE, STOP, GENERICE, analizeaza, curataRaspuns, verdict, urlOficial, surseAfisabile, imparteRaspuns, eDeclaratieLipsa,
   ancore, interogariAfisabile, termeniCheie, normalizeaza, tokeniNumerici, polaritati, propozitii, eAfirmatieNormativa,
-  lipsesteMigrarea, actiuniIntrebare } from './intrebariSurse.js'
+  lipsesteMigrarea, actiuniIntrebare, restrictii, prezentareRaspuns } from './intrebariSurse.js'
 
 const CAZURI = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_validare.json', 'utf8'))
 const NORMATIVE = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_normative.json', 'utf8'))
@@ -98,6 +98,8 @@ describe('verdict și surse (aceleași cazuri ca unittest)', () => {
       expect(polaritati(n, true), t.text).toEqual(t.extins ?? t.clase)
     }
     for (const t of NORMATIVE.propozitii) expect(propozitii(t.text), t.text).toEqual(t.propozitii)
+    // runda 5 (review r4 P1): restricțiile din sursă
+    for (const t of NORMATIVE.restrictii) expect(restrictii(normalizeaza(t.text)).map(([g, x]) => [g, x.trim()]), t.text).toEqual(t.restrictii)
   })
   it('runda 4: termenii unei afirmații normative nu se adună din propoziții diferite', () => {
     const s = [{ id: 'C1', extras: 'Recepția lucrărilor se face la final. Un responsabil trebuie numit.' }]
@@ -141,6 +143,29 @@ describe('verdict și surse (aceleași cazuri ca unittest)', () => {
     expect(jsx).toContain('disponibile după actualizarea bazei de date')
     expect(jsx).not.toMatch(/q\.stare === 'raspuns' && \(q\.autor === profile\.id/)   // condiția veche, fără detectarea migrării
     expect(jsx).toContain('setV2(colV2.current)')
+  })
+  it('runda 5 (review r4 P2): fără migrare, răspunsul arată exact ca înainte; „din cercetare” doar pe răspunsurile fluxului nou', () => {
+    const vechi = { eticheta: '🤖 Răspuns AI · informativ, neverificat' }   // textul din ecranul de pe main, scris aici independent
+    const cuSurse = [{ id: 'C1', tip: 'corpus', cale: 'docs/cercetare/a.md', titlu: 'A', extras: 'x' }]
+    for (const v2 of [false, null, undefined]) {
+      expect(prezentareRaspuns({ v2, surse: undefined, interogari: undefined })).toEqual({ v2: false, cercetare: false, ...vechi })
+      expect(prezentareRaspuns({ v2, surse: cuSurse, interogari: ['q'] })).toEqual({ v2: false, cercetare: false, ...vechi })
+    }
+    expect(prezentareRaspuns({ v2: true, surse: [], interogari: [] })).toEqual({ v2: true, cercetare: false, ...vechi })   // răspuns de dinainte
+    expect(prezentareRaspuns({ v2: true, surse: cuSurse, interogari: [] }))
+      .toEqual({ v2: true, cercetare: true, eticheta: '🤖 Răspuns AI din cercetare · informativ, neverificat' })
+    expect(prezentareRaspuns({ v2: true, surse: [], interogari: ['termen'] }).cercetare).toBe(true)
+    expect(prezentareRaspuns({ v2: true, surse: [{ id: 'W1', tip: 'web', url: 'https://rau.com/' }], interogari: [] }).cercetare).toBe(false)
+    const jsx = readFileSync('src/IntrebariTehnice.jsx', 'utf8').replace(/\r\n/g, '\n')
+    // ecranul: componenta nouă și Interogările doar cu migrarea detectată; altfel Markdown-ul simplu și avertizarea veche
+    expect(jsx).toContain('{pr.v2 ? <Raspuns q={q} owner={!!profile.is_owner}/> : <Markdown md={q.raspuns_md}/>}')
+    expect(jsx).toContain("(pr.v2 ? (q.stare === 'raspuns' || q.stare === 'de_verificat') && q.raspuns_md : q.stare === 'raspuns')")
+    expect(jsx).toContain('{pr.eticheta} · {fmtData(q.raspuns_la)}')
+    expect(jsx).toContain('{pr.v2 && profile.is_owner && <Interogari')
+    expect(jsx).toContain("{' '}Verifică temeiurile marcate „[DE VERIFICAT]” înainte să te bazezi pe ele. Decizia e a ta.")
+    expect(jsx).toMatch(/\{v2 === true \? <>\n\s*\{' '\}Fiecare temei are un marcaj de sursă/)
+    expect(jsx).not.toContain('Răspuns AI din cercetare')   // eticheta nouă vine DOAR din prezentareRaspuns
+    expect(jsx).toContain('{(act.verificare || act.reia) && <div')   // fără butoane, nici rândul lor gol
   })
   it('interogările pentru audit', () => {
     expect(interogariAfisabile(['a b', 3, '', 'x'.repeat(300)])).toEqual(['a b', 'x'.repeat(200)])
