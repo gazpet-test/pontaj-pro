@@ -259,11 +259,23 @@ BEGIN
   IF pg_temp.t_trece(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, unitate_id, cantitate) VALUES (%s, %s, %s, %s, 1)', z, p1, a1, u1)) <> 1 THEN
     RAISE EXCEPTION 'T4 FAIL: inserarea corectă';
   END IF;
-  IF NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, cantitate) VALUES (%s, %s, %s, 1)', z, p2, a9), '22023', frag)
-     OR NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, cantitate) VALUES (%s, NULL, %s, 1)', z, a1), '22023', frag)
-     OR NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, cantitate) VALUES (%s, %s, %s, 1)', z, p1, a9), '22023', 'activitatea')
-     OR NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, unitate_id, cantitate) VALUES (%s, %s, %s, %s, 1)', z, p1, a1, u9), '22023', 'obiectul')
+  -- r3: cazurile pe care le vede DOAR comparația (activitatea / obiectul sunt ale proiectului șantierului): fără comparație TREC (rezultat,
+  --   nu doar motiv) — proiect NULL, linie fără activitate cu proiect străin, proiectul schimbat pe o linie existentă
+  --   (linia fără activitate: doar dacă schema o permite — activitate_id fără NOT NULL)
+  IF NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, cantitate) VALUES (%s, NULL, %s, 1)', z, a1), '22023', frag)
+     OR ((SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'raport_lucrari' AND column_name = 'activitate_id') = 'YES'
+         AND NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, cantitate) VALUES (%s, %s, NULL, 1)', z, p2), '22023', frag))
      OR NOT pg_temp.t_refuza_msg(format('UPDATE public.raport_lucrari SET proiect_id = %s WHERE raport_id = %s', p2, z), '22023', frag) THEN
+    RAISE EXCEPTION 'T4 FAIL: doar comparatia: o linie cu proiectul altul decât al șantierului (activitatea corectă / fără activitate) a trecut (sau refuz cu alt motiv)';
+  END IF;
+  RAISE NOTICE 'T4 doar comparatia: proiect NULL, linie fara activitate pe alt proiect, proiect schimbat = refuz 22023';
+  -- r3: cazurile pe care le vede DOAR verificarea activității / obiectului (proiectul liniei = al șantierului)
+  IF NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, cantitate) VALUES (%s, %s, %s, 1)', z, p1, a9), '22023', 'activitatea')
+     OR NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, unitate_id, cantitate) VALUES (%s, %s, %s, %s, 1)', z, p1, a1, u9), '22023', 'obiectul') THEN
+    RAISE EXCEPTION 'T4 FAIL: doar verificarea activitatii / obiectului: activitatea / obiectul altui proiect a trecut (sau refuz cu alt motiv)';
+  END IF;
+  -- ambele văd linia (proiect + activitate străine); motivul e al comparației (prima verificare)
+  IF NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_lucrari (raport_id, proiect_id, activitate_id, cantitate) VALUES (%s, %s, %s, 1)', z, p2, a9), '22023', frag) THEN
     RAISE EXCEPTION 'T4 FAIL: o linie pe alt proiect decât al șantierului a trecut (sau refuz cu alt motiv)';
   END IF;
   -- mutarea liniei pe raportul unui ALT șantier, din alt proiect = refuz; pe un raport al aceluiași proiect = trece

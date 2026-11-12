@@ -40,6 +40,16 @@ Un trigger `BEFORE INSERT OR UPDATE OF raport_id, proiect_id` pe `raport_lucrari
 
 **Ce rămâne neschimbat**: salvarea normală (proiectul de la pasul 1 = cel de sub lock); liniile ISTORICE ale unui șantier mutat legitim (un UPDATE care nu mută linia nu e verificat); RPC-ul, datele, drepturile, politicile.
 
+**Ce închide fereastra, pe fiecare cale (r3)**:
+
+| cale | ce o închide | dovada |
+|---|---|---|
+| RPC, raport nou / existent fără rezumat | DOUĂ verificări, fiecare singură: comparația (proiectul liniei = cel citit la pasul 1, deci vechi) și verificarea activității (activitatea, validată la pasul 5 pe proiectul vechi și ținută FOR SHARE). Redundanță voită: RPC-ul pune mereu activitate pe linie | harness T2; PGlite M1 (fără comparație: refuz tot 22023, dar din verificarea activității), M11 (fără ambele: defectul revine); concurență L1 cu `--mutant fara_comparatie` (închis de activitate) și `--mutant fara_verificare` (defect) |
+| RPC, raport existent cu rezumat | mutarea refuză NOWAIT (20261216a); salvarea trece și prin gardă (proiect = cel de sub lock) | concurență L4 |
+| scriere directă | lock-ul `FOR SHARE` pe șantier (ambele verificări citesc proiectul de după mutare). DOAR comparația vede linia fără activitate / cu proiect NULL / proiectul schimbat pe o linie existentă; DOAR verificarea activității vede proiectul corect cu activitatea altui proiect | harness T4 (blocurile „doar comparatia” / „doar verificarea activitatii”); PGlite M1b, M3, M4, M7; concurență L3 (`fara_for_share`), L5 (`fara_comparatie`) |
+
+Deci nicio verificare nu e de prisos: pe RPC se acoperă una pe alta, pe calea directă fiecare are cazuri pe care doar ea le vede.
+
 **Concurența (L06)**: în RPC trigger-ul nu adaugă nicio așteptare (raportul și șantierul sunt deja ținute de aceeași tranzacție). Pe calea directă, o linie scrisă în timpul unei mutări așteaptă rândul șantierului, apoi citește proiectul nou și refuză. Mutarea nu așteaptă niciodată rapoarte (NOWAIT, 20261216a), deci nu se poate închide un ciclu. În REPEATABLE READ / SERIALIZABLE, un șantier mutat după imaginea tranzacției dă 40001.
 
 **Limite**:
@@ -73,19 +83,20 @@ Lista de rapoarte conține doar id-uri, zile, proiecte și ora salvării. Corec�
    Așteptat: T0, T1, TB, T2–T5, T6a/T6b (refuz confirmat), T6 (revenire), T6 (re-aplicare) OK.
 5. **Aplicare pe clonă prin runner + concurența după**:
    `bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261217a_executie_raport_linii_proiect.sql --sha256 <sha256> --versiune 20261217120000 --tinta-db postgres --tinta-sistem <id clonă> --tinta-host <H> --tinta-port <P> --user postgres --plafon-tranzactie-ms 2000`
-   Apoi `… raport_linii_proiect_concurenta.sh --sistem <id clonă> -- …` (așteptat: `TOATE SCENARIILE OK (--asteptat inchis)`), apoi mutanții:
-   `… --mutant fara_comparatie -- …` și `… --mutant fara_for_share -- …` (așteptat: `MUTANT … PRINS`, ieșire 0).
+   Apoi `… raport_linii_proiect_concurenta.sh --sistem <id clonă> -- …` (așteptat: `OK` pe L0, L1, L2, L3, L5 `FEREASTRA INCHISA`, L4, `TOATE SCENARIILE OK (--asteptat inchis)`), apoi mutanții:
+   `… --mutant fara_comparatie -- …` (L1 `FEREASTRA INCHISA de verificarea activitatii` + L5 `DEFECT reprodus`), `… --mutant fara_verificare -- …` (L1 `DEFECT reprodus`) și `… --mutant fara_for_share -- …` (L3 `DEFECT reprodus`); așteptat la fiecare: `MUTANT … PRINS`, ieșire 0.
    NOTICE-ul „20261217a: sfarsit la Y ms” trebuie să fie sub 1000 ms (peste 1500 ms nu se aplică).
 6. **Producția**: aceeași comandă de runner (după review + „da” Răzvan). Revenirea: `supabase/revenire/20261217a_executie_raport_linii_proiect_ROLLBACK.sql`, tot prin runner, cu `--versiune 20261217120001 --plafon-tranzactie-ms 2000`.
 
-Notă pentru clonă: scenariile de concurență mută primul șantier cu proiect dus-întors, deci rezumatele automate ale rapoartelor lui reale de pe clonă devin `de_recompus` (ca la `raport_rezumat_concurenta.sh`). Rapoartele sintetice (2001-02-01 … 05) și activitatea sintetică se șterg la final.
+Notă pentru clonă: scenariile de concurență mută primul șantier cu proiect dus-întors, deci rezumatele automate ale rapoartelor lui reale de pe clonă devin `de_recompus` (ca la `raport_rezumat_concurenta.sh`). Rapoartele sintetice (2001-02-01 … 06) și activitățile sintetice se șterg la final.
 
 ## 5. Probe locale (fără bază reală)
 
-- `node scripts/pglite/test_raport_linii_proiect_local.mjs` (după `npm install --no-save @electric-sql/pglite`): harness-ul real pe schema falsă + 20261216a, 10 mutanți, scenariile de refuz ale migrării și ale revenirii, lock-ul pe șantier pe calea directă (cu mutantul lui și starea de azi), scriptul de date pe cazuri plantate.
+- `node scripts/pglite/test_raport_linii_proiect_local.mjs` (după `npm install --no-save @electric-sql/pglite`): harness-ul real pe schema falsă + 20261216a, 12 mutanți (cu motivul căderii verificat: M1 pe motiv la T2, M1b pe rezultat la T4, M11 defectul la T2), scenariile de refuz ale migrării și ale revenirii, lock-ul pe șantier pe calea directă (cu mutantul lui și starea de azi), scriptul de date pe cazuri plantate.
 - `npx vitest run src/raportLiniiProiectAmprente.test.js`: o singură definiție AMPRENTA_L15, blocul BASELINE, amprenta revenirii = corpul din migrare, scripturile doar citire, `bash -n` pe scriptul de concurență.
 
 ## Istoric
 
 - 12.11.2026 — r1: analiza, 20261217a + revenire, harness, PGlite, concurență pe clonă, scriptul de date.
 - 12.11.2026 — r2 (proba de concurență pe clonă, înainte de migrare: L1 / L2 / L4 „salvarea nu a asteptat la activitate”): bariera ținea (mutarea pornea doar după ce vedea salvarea în așteptare), dar r1 cerea ca salvarea să fi așteptat ≥ 1 s, iar controlul elibera activitatea la ~0,1 s după mutare; eroarea aruncată de probă anula apoi tranzacția salvării (de aici „liniile pe P-”). Acum: așteptarea e observată pe pid (`pg_blocking_pids` = pid-ul controlului, sesiuni cu `application_name`), durata nu mai e criteriu, proba nu mai anulează salvarea, L3 fără `pg_sleep` de ținere; trei stări pe rând (OK / CONTRAR / PROBA_NEFUNCTIONALA, ieșiri 0 / 1 / 26); modul `--verifica-bariera`. Scriptul de date: mesaj clar fără `-v sistem`. Migrarea și amprentele: neschimbate.
+- 12.11.2026 — r3 (după migrare pe clonă: L4 „bariera nu a aparut”; mutantul `fara_comparatie` „SCAPAT”). (1) L4: defect al PROBEI, nu al migrării — observatorul sonda `pg_stat_activity` într-o singură tranzacție, iar PostgreSQL fixează lista sesiunilor la prima citire din tranzacție; salvarea, conectată după acea citire, n-a mai apărut, deși stătea chiar la lock-ul controlului (55P03 la 20 s, cât ținea controlul). Acum fiecare pas începe cu `pg_stat_clear_snapshot()` (și la mutarea în zbor din L3 / L5); la expirare se tipăresc sesiunile cu așteptarea și blocanții. Forma lui L4 rămâne: e corectă și după migrare. (2) `fara_comparatie`: pe calea RPC fereastra rămâne închisă de verificarea activității (jurnalul: „activitatea … nu e a proiectului șantierului raportului”) — mutantul nu putea fi prins pe L1. Scenariu nou L5 (scriere directă cu linia fără activitate, unde doar comparația vede), mutant nou `fara_verificare` (fără ambele verificări, L1 arată defectul), harness T4 cu blocurile „doar comparatia” / „doar verificarea activitatii”, PGlite M1 / M1b / M11. Migrarea și amprentele: neschimbate.

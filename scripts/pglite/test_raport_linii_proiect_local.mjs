@@ -153,27 +153,38 @@ console.log('harness: OK pe migrarea reală')
 
 // ── 2. mutanții: fiecare trebuie să pice exact la testul lui ──
 const M = MIG, R = REV
+// r3: al patrulea element (opțional) = ce trebuie să spună eroarea (pică pe REZULTAT, nu doar pe motiv)
+const FARA_COMP = ['  IF NEW.proiect_id IS DISTINCT FROM v_proiect THEN\n', '  IF false THEN\n']
+const FARA_ACT_OB = ['    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n', '    IF false THEN\n']   // ambele (activitatea + obiectul)
+// T2 relaxat: acceptă ORICE refuz 22023 al gărzii (ca M1b să arate unde pică pe rezultat, nu pe textul mesajului)
+const T2_ORICE_REFUZ = ["  frag text := 'șantierul raportului e acum în alt proiect';\nBEGIN\n  v := pg_temp.t_cu_mutare(",
+                        "  frag text := 'raport: ';\nBEGIN\n  v := pg_temp.t_cu_mutare("]
 const mutanti = [
-  ['M1 fără comparația proiectului (defectul revine)', 'T2', { [M]: [['  IF NEW.proiect_id IS DISTINCT FROM v_proiect THEN\n', '  IF false THEN\n']] }],
+  // pe calea RPC fereastra rămâne ÎNCHISĂ (verificarea activității refuză): T2 pică DOAR pe motiv (alt mesaj)
+  ['M1 fără comparația proiectului (RPC: refuzul vine din verificarea activității)', 'T2', { [M]: [FARA_COMP] }, /T2 FAIL: raport nou: eroare\|22023\|raport: activitatea/],
+  // același mutant, cu T2 acceptând orice refuz: pică pe REZULTAT la cazurile pe care le vede doar comparația (proiect NULL / schimbat)
+  ['M1b fără comparația proiectului, T2 relaxat (dovada pe rezultat)', 'T4', { [M]: [FARA_COMP], [HARNESS]: [T2_ORICE_REFUZ] }, /T4 FAIL: doar comparatia/],
+  // fără comparație ȘI fără verificarea activității / obiectului: defectul revine pe RPC (liniile pe p1, șantierul în p2)
+  ['M11 fără comparație și fără verificarea activității / obiectului (defectul revine)', 'T2', { [M]: [FARA_COMP, FARA_ACT_OB] }, /T2 FAIL: raport nou: ok\|/],
   ['M2 proiectul luat de pe linie, nu de pe șantier', 'T2', { [M]: [['  SELECT s.proiect_id INTO v_proiect FROM public.sites s WHERE s.id = v_site FOR SHARE OF s;\n',
                                                                    '  PERFORM 1 FROM public.sites s WHERE s.id = v_site FOR SHARE OF s;\n  v_proiect := NEW.proiect_id;\n']] }],
-  ['M3 fără verificarea activității', 'T4', { [M]: [["    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n      RAISE EXCEPTION 'raport: activitatea", "    IF false THEN\n      RAISE EXCEPTION 'raport: activitatea"]] }],
-  ['M4 fără verificarea obiectului', 'T4', { [M]: [["    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n      RAISE EXCEPTION 'raport: obiectul", "    IF false THEN\n      RAISE EXCEPTION 'raport: obiectul"]] }],
+  ['M3 fără verificarea activității', 'T4', { [M]: [["    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n      RAISE EXCEPTION 'raport: activitatea", "    IF false THEN\n      RAISE EXCEPTION 'raport: activitatea"]] }, /T4 FAIL: doar verificarea activitatii/],
+  ['M4 fără verificarea obiectului', 'T4', { [M]: [["    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n      RAISE EXCEPTION 'raport: obiectul", "    IF false THEN\n      RAISE EXCEPTION 'raport: obiectul"]] }, /T4 FAIL: doar verificarea activitatii/],
   ['M5 trigger-ul doar la INSERT (mutarea liniei pe alt proiect scapă)', 'post', { [M]: [['BEFORE INSERT OR UPDATE OF raport_id, proiect_id ON public.raport_lucrari\n', 'BEFORE INSERT ON public.raport_lucrari\n']] }],
   ['M6 UPDATE verificat mereu (liniile istorice nu mai sunt editabile)', 'T3', { [M]: [[
     "  IF TG_OP = 'UPDATE' AND NEW.raport_id IS NOT DISTINCT FROM OLD.raport_id AND NEW.proiect_id IS NOT DISTINCT FROM OLD.proiect_id THEN\n    RETURN NEW;\n  END IF;\n", '']] }],
-  ['M7 NULL tratat ca „orice proiect”', 'T4', { [M]: [['  IF NEW.proiect_id IS DISTINCT FROM v_proiect THEN\n', '  IF NEW.proiect_id <> v_proiect THEN\n']] }],
+  ['M7 NULL tratat ca „orice proiect”', 'T4', { [M]: [['  IF NEW.proiect_id IS DISTINCT FROM v_proiect THEN\n', '  IF NEW.proiect_id <> v_proiect THEN\n']] }, /T4 FAIL: doar comparatia/],
   ['M8 EXECUTE lăsat clienților', 'post', { [M]: [['REVOKE ALL ON FUNCTION public.fn_raport_lucrari_proiect_garda() FROM PUBLIC, anon, authenticated, service_role;',
                                                    'REVOKE ALL ON FUNCTION public.fn_raport_lucrari_proiect_garda() FROM anon, service_role;']] }],
   ['M9 revenirea nu verifică drepturile funcției', 'T6b', { [R]: [["                      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')\n", '']] }],
   ['M10 revenirea nu scoate trigger-ul (postcondiția ei)', 'revenire-post', { [R]: [['  DROP TRIGGER trg_raport_lucrari_zz_proiect ON public.raport_lucrari;\n  DROP FUNCTION public.fn_raport_lucrari_proiect_garda();\n', '']] }],
 ]
 let rau = 0
-for (const [nume, test, inl] of mutanti) {
+for (const [nume, test, inl, motiv] of mutanti) {
   const r = await ruleaza(inl)
   const picatLa = r.ok ? null : /20261217a post/.test(r.eroare) ? 'post' : /20261217a revenire post/.test(r.eroare) ? 'revenire-post'
     : (/(T[0-9]+[a-z]?|TB) FAIL/.exec(r.eroare) || [])[1] || 'altundeva'
-  const bine = !r.ok && picatLa === test
+  const bine = !r.ok && picatLa === test && (!motiv || motiv.test(r.eroare))
   if (!bine) rau++
   console.log(`${bine ? 'prins ' : 'SCĂPAT'} ${nume}: ${r.ok ? 'harness-ul a trecut' : 'pică la ' + picatLa}${bine ? '' : ' (așteptat ' + test + ')' + (r.ok ? '' : ' — ' + r.eroare.slice(0, 260))}`)
 }

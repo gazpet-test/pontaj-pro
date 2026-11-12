@@ -164,4 +164,36 @@ describe('scriptul de concurență (clonă)', () => {
     expect(t).toContain('--verifica-bariera) VERIFICA=1')
     expect(t).toContain('salvare B0 172170001 2001-02-01 0 ROLLBACK')
   })
+  it('r3: fiecare buclă care citește pg_stat_activity reia lista sesiunilor la fiecare pas; mutanții au scenariile lor', () => {
+    const t = readFileSync(cale, 'utf8')
+    // fiecare citire din pg_stat_activity e într-o buclă care începe cu pg_stat_clear_snapshot() (instantaneul e per tranzacție)
+    const bucle = [...t.matchAll(/LOOP\n([\s\S]*?)END LOOP/g)].map((m) => m[1]).filter((b) => b.includes('FROM pg_stat_activity'))
+    expect(bucle.length).toBe(2)   // observatorul salvării (L1, L2, L4, B0) + mutarea în zbor (L3, L5)
+    // în afara buclelor: doar verificarea de start (o instrucțiune, tranzacția ei)
+    expect(nr(t, 'FROM pg_stat_activity')).toBe(bucle.reduce((s, b) => s + nr(b, 'FROM pg_stat_activity'), 0) + 1)
+    for (const b of bucle) {
+      expect(b.indexOf('PERFORM pg_stat_clear_snapshot();')).toBeGreaterThanOrEqual(0)
+      expect(b.indexOf('PERFORM pg_stat_clear_snapshot();')).toBeLessThan(b.indexOf('FROM pg_stat_activity'))
+    }
+    // fara_comparatie: L1 rămâne închis de verificarea activității, L5 (doar comparația) arată defectul; fara_verificare: L1 arată defectul
+    expect(t).toContain('fara_comparatie) fereastra L1 2001-02-01 0 172170011 172170012 inchis_activitate')
+    expect(t).toContain('fara_comparatie) directa L5 2001-02-06 "$ACT_L5" 172170051 172170052 defect')
+    expect(t).toContain('fara_verificare) fereastra L1 2001-02-01 0 172170011 172170012 defect')
+    expect(t).toContain('fara_for_share) directa L3 2001-02-03 "$ACT" 172170031 172170032 defect')
+    // mutantul e PRINS doar cu defectul arătat ȘI fără scenarii CONTRAR
+    expect(t).toContain('if [ "$DEFECT_VAZUT" = 1 ] && [ "$CONTRAR" = 0 ]; then echo "MUTANT $MUTANT PRINS"; exit 0; fi')
+    // zilele de test (01 … 06) la fel în verificarea de start și în curățenie
+    expect(nr(t, "DATE '2001-02-01' AND DATE '2001-02-06'")).toBe(2)
+    expect(t).not.toContain("DATE '2001-02-05')")
+  })
+})
+describe('harness-ul SQL: un caz pe care îl vede DOAR comparația (r3)', () => {
+  it('T4 are blocul „doar comparatia” (proiect NULL, UPDATE proiect_id) separat de „doar verificarea activitatii”', () => {
+    const i = HARNESS.indexOf('T4 FAIL: doar comparatia'), j = HARNESS.indexOf('T4 FAIL: doar verificarea activitatii')
+    expect(i).toBeGreaterThan(0)
+    expect(j).toBeGreaterThan(i)
+    const bloc = HARNESS.slice(HARNESS.lastIndexOf('-- r3: cazurile pe care le vede DOAR comparația', i), i)
+    expect(bloc).toContain('VALUES (%s, NULL, %s, 1)')
+    expect(bloc).toContain('UPDATE public.raport_lucrari SET proiect_id = %s WHERE raport_id = %s')
+  })
 })
