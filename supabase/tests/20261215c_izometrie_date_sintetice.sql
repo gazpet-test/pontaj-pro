@@ -47,19 +47,21 @@ END $f$;
 DO $sintetic$
 DECLARE
   v_et text := 'T15C-' || substr(md5(clock_timestamp()::text || random()::text), 1, 8);
-  v_proiect bigint; v_pachet bigint; v_teava bigint; v_tevi bigint[] := '{}'; k integer; v_extra jsonb;
+  v_proiect bigint; v_tronson bigint; v_pachet bigint; v_teava bigint; v_tevi bigint[] := '{}'; k integer; v_extra jsonb;
   v_editor uuid := nullif(current_setting('t.editor', true), '')::uuid;
 BEGIN
   -- câmpurile de identificare, dacă există (ca un om să recunoască rândurile de test pe clonă)
   SELECT coalesce(jsonb_object_agg(a.attname, v_et), '{}') INTO v_extra FROM pg_attribute a
    WHERE a.attrelid = 'public.executie_proiecte'::regclass AND a.attname IN ('cod_intern', 'nume') AND NOT a.attisdropped;
   v_proiect := pg_temp.t15c_rand('public.executie_proiecte', v_extra, v_et || '-P');
-  v_pachet := pg_temp.t15c_rand('public.executie_pachete_lansare', jsonb_build_object('proiect_id', v_proiect), v_et || '-K');
+  -- tronsonul de test (pachetul îl cere: tronson_id NOT NULL cu FK pe executie_tronsoane)
+  v_tronson := pg_temp.t15c_rand('public.executie_tronsoane', jsonb_build_object('proiect_id', v_proiect, 'status', 'neinceput'), v_et || '-R');
+  v_pachet := pg_temp.t15c_rand('public.executie_pachete_lansare', jsonb_build_object('proiect_id', v_proiect, 'tronson_id', v_tronson, 'status', 'draft', 'tip_pachet', 'lansare_conducta'), v_et || '-K');
   FOR k IN 1 .. 5 LOOP
     -- lungimi diferite pe fiecare țeavă (dacă tabelul are o coloană numerică „lungime…”), ca POZ KM să iasă diferit pe fiecare rând
     SELECT coalesce(jsonb_object_agg(a.attname, 10 * k + 0.5), '{}') INTO v_extra FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
      WHERE a.attrelid = 'public.executie_tevi'::regclass AND a.attname LIKE 'lungime%' AND NOT a.attisdropped AND t.typcategory = 'N';
-    v_teava := pg_temp.t15c_rand('public.executie_tevi', jsonb_build_object('pachet_id', v_pachet, 'poz_in_pachet', k) || v_extra, v_et || '-T' || k);
+    v_teava := pg_temp.t15c_rand('public.executie_tevi', jsonb_build_object('pachet_id', v_pachet, 'poz_in_pachet', k, 'tip_rand', 'teava') || v_extra, v_et || '-T' || k);
     v_tevi := v_tevi || v_teava;
   END LOOP;
   -- editorul (NON-owner): modulul executie 'editor', doar în tranzacția curentă
