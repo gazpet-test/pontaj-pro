@@ -32,7 +32,7 @@ export const MAX_ORE = PRAG_CITIRI.ore.plafon
 
 const ZI = /^\d{4}-\d{2}-\d{2}$/
 export const zi = v => (typeof v === 'string' && ZI.test(v.slice(0, 10)) ? v.slice(0, 10) : null)
-const zileIntre = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000)
+export const zileIntre = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000)
 export const fmtZi = z => (zi(z) ? `${z.slice(8, 10)}.${z.slice(5, 7)}.${z.slice(0, 4)}` : '')
 const fmtNr = n => Number(n).toLocaleString('ro-RO')
 const numar = v => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null))
@@ -118,6 +118,31 @@ export function sursaValoriiMari(valoare, candidati) {
   const egal = ok.find(c => Math.abs(Number(c.val) - v) < 0.5)
   if (egal) return { ...egal, exact: true }
   return { ...ok.reduce((a, b) => (Number(b.val) > Number(a.val) ? b : a)), exact: false }
+}
+
+// TKT-2026-0380 (r2): sursa valorii mari, cu garda pe citirile incomplete. surse = rezultatul lui
+// incarcaSurseMaxime ({ km, ore, erori }). Dacă o sursă n-a putut fi citită, nu numim o sursă care
+// poate fi greșită: un rând (alimentare / fișă / telemetrie) care are EXACT valoarea e sigur o sursă
+// adevărată; altfel (doar manualul egal — poate fi copiat din altă sursă — sau nimic egal) → sursa nu
+// a putut fi stabilită. faraManual = true când valoarea manuală e chiar ce se ajustează.
+// Întoarce { sursa: cand | null, stabilita: bool, erori: [] }.
+export function stabilesteSursa(valoare, surse, tip, { faraManual = false } = {}) {
+  if (!surse) return { sursa: null, stabilita: false, erori: [], seIncarca: true }
+  const erori = surse.erori || []
+  const cand = (surse[tip] || []).filter(c => !faraManual || c.sursa !== 'manual')
+  const s = sursaValoriiMari(valoare, cand)
+  if (!s) return { sursa: null, stabilita: false, erori }
+  if (erori.length && !(s.exact && s.sursa !== 'manual')) return { sursa: null, stabilita: false, erori }
+  return { sursa: s, stabilita: s.exact, erori }
+}
+
+// Textul scurt pentru om pe baza lui stabilesteSursa.
+export function textSursa(r, unit) {
+  if (r.seIncarca) return 'se caută sursa…'
+  if (r.sursa && r.stabilita) return `vine din ${descrieSursa(r.sursa)}`
+  const de = r.erori?.length ? ` (${r.erori.join('; ')})` : ''
+  if (r.sursa) return `sursa nu a putut fi stabilită exact; cea mai mare citire găsită: ${fmtNr(r.sursa.val)} ${unit}, din ${descrieSursa(r.sursa)}`
+  return `sursa nu a putut fi stabilită${de}`
 }
 
 // TKT-2026-0380 (c) „softul nu ne lasă să modificăm km”: ajustarea manuală (fișa activului sau
@@ -255,9 +280,16 @@ export async function incarcaSurseMaxime(client, activId) {
   if (!Number.isFinite(id)) return out
   const max = (col) => client.from('logistica_alimentari').select(`id, data_alimentare, ${col}`)
     .eq('active_id', id).not(col, 'is', null).order(col, { ascending: false }).order('id', { ascending: false }).limit(1)
+  // TKT-2026-0380 (r2): fișele se citesc COMPLET (keyset pe id până la pagina goală), pentru că
+  // serverul taie orice răspuns la 1.000 de rânduri fără eroare: maximul din fișa #1.001 s-ar pierde.
+  const toateFisele = paginareKeyset((ultim, pas) => {
+    let q = client.from('logistica_service_fise').select('id, data_fisei, km_intrare, km_iesire, ore_intrare, ore_iesire').eq('activ_id', id)
+    if (ultim != null) q = q.gt('id', ultim)
+    return q.order('id', { ascending: true }).limit(pas)
+  }).then(data => ({ data, error: null }))
   const [aKm, aOre, fise, tel, act] = await Promise.all([
     max('km_la_alimentare'), max('ore_la_alimentare'),
-    client.from('logistica_service_fise').select('id, data_fisei, km_intrare, km_iesire, ore_intrare, ore_iesire').eq('activ_id', id),
+    toateFisele,
     client.from('logistica_telemetrie_zilnica').select('data, km_sfarsit_zi').eq('asset_id', id)
       .not('km_sfarsit_zi', 'is', null).order('km_sfarsit_zi', { ascending: false }).limit(1),
     client.from('logistica_active').select('km_actuali, ore_functionare_actuale').eq('id', id).maybeSingle(),

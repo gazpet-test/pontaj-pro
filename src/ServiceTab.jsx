@@ -20,8 +20,8 @@ import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
-import { calcUrmService, urmServiceLevel, urmServiceColor, ultimeleFiseCuScadenta, fisaInlocuitaDe, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
-import { PRAG_CITIRI, MAX_ORE, MAX_KM, verificaCitire, incarcaSurseMaxime, sursaValoriiMari, descrieSursa, confirmaAjustareManuala } from './lib/citiriBord.js'
+import { calcUrmService, urmServiceLevel, urmServiceColor, acopeririScadente, scadenteDeschisePeActiv, aziBucuresti, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
+import { PRAG_CITIRI, MAX_ORE, MAX_KM, verificaCitire, incarcaSurseMaxime, stabilesteSursa, textSursa, descrieSursa, confirmaAjustareManuala } from './lib/citiriBord.js'
 import PieseCatalogSection from './PieseCatalogSection.jsx'
 import ImportFiseServiceModal from './ImportFiseServiceModal.jsx'
 import PiesePozeSection from './PiesePozeSection.jsx'  // 08.09.2026: piese schimbate — serie + poze per activ
@@ -191,45 +191,56 @@ function TipBadge({ tip }) {
 // prima și colorată. Înainte se afișa una singură, iar dacă exista dată, km-ii
 // dispăreau din coloană — exact reclamația lui Oancea.
 const URM_ICON = { data: '📅', km: '🛣️', ore: '⏱️' }
-// TKT-2026-0380: o depășire imposibilă (calcUrmService → deVerificat) apare ca „citire de verificat”,
-// cu valoarea curentă și — când e citită — sursa care o ține sus (alimentare / fișă / telemetrie / manual).
+// TKT-2026-0380 (r2): o depășire rămâne „depășit” (roșu, în KPI și în filtrul „Scadențe”). Dacă citirea
+// curentă e neverosimilă (calcUrmService → deVerificat), sub ea apare ÎN PLUS „🔎 citire de verificat”,
+// cu motivul (ritm imposibil față de o citire datată / peste plafon) și sursa care ține valoarea sus.
 const fmtNrRO = n => Number(n).toLocaleString('ro-RO')
+function motivVerificare(r) {
+  const unit = r.tip === 'km' ? 'km' : 'h'
+  const v = r.verificare || {}
+  if (v.motiv === 'plafon') return `${fmtNrRO(r.live)} ${unit} e peste plafonul posibil (${fmtNrRO(v.plafon)} ${unit})`
+  if (v.motiv === 'ritm') return `${fmtNrRO(r.live)} ${unit} = +${fmtNrRO(Math.round(v.crestere))} ${unit} față de ${descrieSursa(v.ref)} (${fmtNrRO(v.ref.val)} ${unit}); în ${fmtNrRO(v.zile)} ${v.zile === 1 ? 'zi' : 'zile'} se pot face cel mult ~${fmtNrRO(v.posibil)} ${unit}`
+  return `${fmtNrRO(r.live)} ${unit}`
+}
 function textDeVerificat(r, surse) {
   const unit = r.tip === 'km' ? 'km' : 'h'
-  const baza = `${r.tip === 'km' ? 'Km' : 'Ore'} curente ${fmtNrRO(r.live)} ${unit}: depășirea calculată (${fmtNrRO(r.depasire)} ${unit}) e imposibilă, deci o citire e greșită — nu e o revizie ratată.`
-  if (!surse) return baza
-  const s = sursaValoriiMari(r.live, surse[r.tip])
-  if (!s) return baza + (surse.erori?.length ? ` Sursa nu s-a putut citi (${surse.erori.join('; ')}).` : '')
-  return baza + (s.exact ? ` Valoarea vine din ${descrieSursa(s)}: acolo trebuie corectat.` : ` Cea mai mare citire găsită: ${fmtNrRO(s.val)} ${unit}, din ${descrieSursa(s)}.`)
+  return `Revizia rămâne marcată depășită. În plus, citirea curentă pare greșită: ${motivVerificare(r)}. ` +
+    `Valoarea ${textSursa(stabilesteSursa(r.live, surse, r.tip), unit)}: verifică și corectează rândul acela.`
 }
-function UrmServiceBadge({ u, surse }) {
-  if (!u) return <span style={{color:G.dim, fontSize:11}}>—</span>
+function UrmServiceBadge({ u, surse, acoperite }) {
+  // Dimensiunile închise de o fișă ulterioară finalizată (mentenanță) — le arătăm, ca să se vadă de ce lipsesc
+  const inchise = Object.entries(acoperite || {})
+  const notaInchise = inchise.map(([dim, g], i) => (
+    <span key={'a' + i} style={{fontSize:10, color:G.dim, paddingLeft:3, whiteSpace:'nowrap'}}>
+      {URM_ICON[dim]} închisă de fișa din {fmtDate(g.data_fisei)}
+    </span>
+  ))
+  if (!u) return inchise.length
+    ? <span style={{display:'inline-flex', flexDirection:'column', gap:2, alignItems:'flex-start'}}>{notaInchise}</span>
+    : <span style={{color:G.dim, fontSize:11}}>—</span>
   const c = urmServiceColor(u)
   const restul = (u.toate || []).slice(1)
-  const linie = (r) => r.deVerificat ? `🔎 ${r.tip === 'km' ? 'km' : 'ore'}: ${r.label}` : `${URM_ICON[r.tip]} ${r.label}`
   const deVerificat = (u.toate || [u]).filter(r => r.deVerificat)
   return (
     <span style={{display:'inline-flex', flexDirection:'column', gap:2, alignItems:'flex-start'}}>
-      <span title={u.deVerificat ? textDeVerificat(u, surse) : undefined} style={{
+      <span style={{
         display:'inline-block', padding:'3px 9px', borderRadius:8,
         background: c + '22', color: c, fontWeight:700, fontSize:11,
         whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums'
       }}>
-        {linie(u)}
+        {URM_ICON[u.tip]} {u.label}
       </span>
       {restul.map((r, i) => (
-        <span key={i} title={r.deVerificat ? textDeVerificat(r, surse) : undefined} style={{fontSize:10, color: r.deVerificat ? G.purple : G.dim, whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums', paddingLeft:3}}>
-          {linie(r)}
+        <span key={i} style={{fontSize:10, color:G.dim, whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums', paddingLeft:3}}>
+          {URM_ICON[r.tip]} {r.label}
         </span>
       ))}
-      {deVerificat.map((r, i) => {
-        const s = surse ? sursaValoriiMari(r.live, surse[r.tip]) : null
-        return (
-          <span key={'v' + i} style={{fontSize:10, color:G.muted, paddingLeft:3, maxWidth:260, whiteSpace:'normal', lineHeight:1.3}}>
-            {fmtNrRO(r.live)} {r.tip === 'km' ? 'km' : 'h'}{s ? (s.exact ? ` ← ${descrieSursa(s)}` : ` · max găsit ${fmtNrRO(s.val)} ← ${descrieSursa(s)}`) : surse ? ' · sursă negăsită' : ''}
-          </span>
-        )
-      })}
+      {deVerificat.map((r, i) => (
+        <span key={'v' + i} title={textDeVerificat(r, surse)} style={{fontSize:10, color:G.purple, paddingLeft:3, maxWidth:260, whiteSpace:'normal', lineHeight:1.3}}>
+          🔎 citire de verificat ({r.tip === 'km' ? 'km' : 'ore'}): {motivVerificare(r)}. Valoarea {textSursa(stabilesteSursa(r.live, surse, r.tip), r.tip === 'km' ? 'km' : 'h')}.
+        </span>
+      ))}
+      {notaInchise}
     </span>
   )
 }
@@ -1183,7 +1194,8 @@ function DetailFisaModal({ canDelete, fisaId, canEdit, onClose, onSaved, showToa
   const tipColor = fisa.tip === 'reparatie' ? G.orange : G.green
   const isReadonly = !editMode || !canEdit
   // Pachet C: folosim km/ore live din v_active_km_ore (a.km_actuali e 100% null)
-  const urmService = calcUrmService(fisa, kmOre?.km_live, kmOre?.ore_live)
+  // TKT-2026-0380 (r2): citirile din alte surse (când sunt încărcate) intră în verificarea „citire de verificat”
+  const urmService = calcUrmService(fisa, kmOre?.km_live, kmOre?.ore_live, { referinte: surseMari })
   // Valori afișate în header — preferăm live, fallback la coloana din active
   const kmAfisat = kmOre?.km_live ?? a.km_actuali
   const oreAfisat = kmOre?.ore_live ?? a.ore_functionare_actuale
@@ -1243,10 +1255,10 @@ function DetailFisaModal({ canDelete, fisaId, canEdit, onClose, onSaved, showToa
           const orePollutat = oreLive != null && oreManual != null && (oreLive - oreManual) > PRAG_CITIRI.ore.salt
           const kmPollutat = kmLive != null && kmManual != null && (kmLive - kmManual) > PRAG_CITIRI.km.salt
           // Rândul care ține valoarea live sus (fără valoarea manuală, care e chiar ce se ajustează aici)
+          // TKT-2026-0380 (r2): cu o sursă necitită nu numim o sursă care poate fi greșită (stabilesteSursa)
           const sursaLive = (val, tip) => {
-            if (!surseMari) return ' Se caută sursa…'
-            const s = sursaValoriiMari(val, (surseMari[tip] || []).filter(c => c.sursa !== 'manual'))
-            return s ? ` Valoarea live vine din ${descrieSursa(s)}${s.exact ? '' : ` (cea mai mare citire găsită: ${Number(s.val).toLocaleString('ro-RO')})`}: acolo trebuie corectată.` : ''
+            const r = stabilesteSursa(val, surseMari, tip, { faraManual: true })
+            return ` Valoarea live ${textSursa(r, tip === 'km' ? 'km' : 'h')}${r.sursa && r.stabilita ? ': acolo trebuie corectată' : ''}.`
           }
           return (
             <div style={{marginBottom: 14, background: G.bg, border: `2px dashed ${G.blue}55`, borderRadius: 10, padding: 14}}>
@@ -2165,26 +2177,26 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     return m
   }, [fise])
 
-  const ultimaFisaPerActiv = useMemo(() => {
-    const m = {}
-    for (const f of fise) {
-      const cur = m[f.activ_id]
-      if (!cur || (f.data_fisei || '') > (cur.data_fisei || '')) m[f.activ_id] = f
-    }
-    return m
-  }, [fise])
-
   const activMap = useMemo(() => {
     const m = {}
     for (const a of activeFull) m[a.id] = a
     return m
   }, [activeFull])
 
-  // TKT-2026-0380: o fișă mai veche decât ultima fișă CU scadență a aceluiași activ are scadența
-  // înlocuită (revizia următoare s-a făcut): nu o mai comparăm cu km/orele de azi, altfel orice fișă
-  // veche ar apărea „depășită” cu zeci de mii de km. Întoarce fișa care o înlocuiește sau null.
-  const ultimaCuScadenta = useMemo(() => ultimeleFiseCuScadenta(fise), [fise])
-  const inlocuitaDe = useCallback(f => fisaInlocuitaDe(f, ultimaCuScadenta), [ultimaCuScadenta])
+  // TKT-2026-0380 (r2): o scadență a unei fișe e închisă DOAR de o fișă ulterioară FINALIZATĂ, de tip
+  // mentenanță, cu scadență pe aceeași dimensiune (acopeririScadente). Reparațiile, fișele programate /
+  // în lucru sau cele pe altă dimensiune nu ascund restanța. azi = ziua din România (se schimbă la miezul nopții).
+  const azi = aziBucuresti()
+  const acoperiri = useMemo(() => acopeririScadente(fise, azi), [fise, azi])
+  // Scadența afișată a unei fișe (fără dimensiunile închise); referinte = citirile din alte surse, când sunt încărcate
+  const scadentaFisa = useCallback((f, referinte = null) => {
+    const km = kmOreMap[f.activ_id]
+    return calcUrmService(f, km?.km_live, km?.ore_live, { azi, acoperite: acoperiri[f.id], referinte })
+  }, [kmOreMap, azi, acoperiri])
+  // KPI + filtrul „Scadențe”: cea mai urgentă scadență DESCHISĂ a fiecărui activ, din toate fișele lui
+  const deschisePeActiv = useMemo(() => scadenteDeschisePeActiv(fise, kmOreMap, {
+    azi, acoperiri, exclude: id => !!activMap[id]?.fara_service_gazpet,   // comodat / închiriat: fără scadențe
+  }), [fise, kmOreMap, azi, acoperiri, activMap])
 
   const kpi = useMemo(() => {
     const total = fise.length
@@ -2195,19 +2207,16 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     const fara = activeFull.filter(a => !a.fara_service_gazpet && !fiseCountByActiv[a.id]).length
     const acoperire = activeFull.length > 0 ? Math.round((1 - fara / activeFull.length) * 100) : 0
 
+    // TKT-2026-0380 (r2): pe activ, cea mai urgentă scadență deschisă din TOATE fișele (nu doar din
+    // ultima fișă); o depășire cu „citire de verificat” rămâne numărată la depășite.
     let scadDepasite = 0, scadAproape = 0
-    for (const f of Object.values(ultimaFisaPerActiv)) {
-      // Exclud activele fără service Gazpet (comodat/închiriat) din scadențe
-      if (activMap[f.activ_id]?.fara_service_gazpet) continue
-      // Pachet C: folosim km/ore live din view
-      const km = kmOreMap[f.activ_id]
-      const u = calcUrmService(f, km?.km_live, km?.ore_live)
+    for (const { u } of Object.values(deschisePeActiv)) {
       const lvl = urmServiceLevel(u)
       if (lvl === 'depasit') scadDepasite++
       else if (lvl === 'aproape') scadAproape++
     }
     return { total, programat, in_lucru, finalizat, sumaTotala, fara, acoperire, scadDepasite, scadAproape }
-  }, [fise, activeFull, fiseCountByActiv, ultimaFisaPerActiv, kmOreMap, activMap])
+  }, [fise, activeFull, fiseCountByActiv, deschisePeActiv])
 
   const filtered = useMemo(() => {
     let dStart = null, dEnd = null
@@ -2241,13 +2250,11 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
       }
       // ETAPA 8.6: filtru scadențe (când userul a apăsat KPI Scadențe Service)
       if (scadenteOnly) {
-        // Exclud activele fără service Gazpet (comodat/închiriat)
-        if (activMap[f.activ_id]?.fara_service_gazpet) return false
-        // Vrem DOAR ultima fișă per activ care are scadență „aproape" sau „depasit"
-        if (ultimaFisaPerActiv[f.activ_id]?.id !== f.id) return false
-        const km = kmOreMap[f.activ_id]
-        const u = calcUrmService(f, km?.km_live, km?.ore_live)
-        const lvl = urmServiceLevel(u)
+        // TKT-2026-0380 (r2): pe activ, fișa cu cea mai urgentă scadență DESCHISĂ (aceeași regulă ca
+        // KPI-ul, deci numărul din KPI = rândurile de aici); comodat / închiriat sunt excluse acolo.
+        const d = deschisePeActiv[f.activ_id]
+        if (!d || d.fisa.id !== f.id) return false
+        const lvl = urmServiceLevel(d.u)
         if (lvl !== 'depasit' && lvl !== 'aproape') return false
       }
       return true
@@ -2265,9 +2272,8 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
         case 'suma_factura':  return Number(f.suma_factura || 0)
         case 'numar_factura': return (f.numar_factura || '').toLowerCase()
         case 'urmator': {
-          // Pachet C: folosim km/ore live din view
-          const km = kmOreMap[f.activ_id]
-          const u = inlocuitaDe(f) ? null : calcUrmService(f, km?.km_live, km?.ore_live)
+          // Pachet C: folosim km/ore live din view (fără dimensiunile închise de o fișă ulterioară)
+          const u = scadentaFisa(f)
           // TKT-0152: sortăm după urgența normalizată, nu după `ramas` brut
           // (altfel se compară zile cu km și ordinea e falsă).
           return u ? u.urgenta : Number.MAX_SAFE_INTEGER
@@ -2282,13 +2288,15 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
       return 0
     })
     return r
-  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, kmMin, kmMax, sortBy, kmOreMap, scadenteOnly, ultimaFisaPerActiv, activMap, inlocuitaDe])
+  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, kmMin, kmMax, sortBy, scadenteOnly, deschisePeActiv, scadentaFisa])
 
   const sumaFiltrata = useMemo(() => filtered.reduce((s, f) => s + Number(f.suma_factura || 0), 0), [filtered])
 
-  // TKT-2026-0380: pentru „citire de verificat” arătăm sursa valorii mari. Se citește doar pentru
-  // activele cu o astfel de citire în lista filtrată, câte 4 odată, o singură dată pe încărcare;
-  // la o reîncărcare a km/ore live (kmOreMap nou) cache-ul se golește (generație nouă, L24).
+  // TKT-2026-0380: sursele citirilor (maximul din alimentări / fișe / telemetrie / manual) pentru
+  // activele cu o depășire la km / ore în lista filtrată: din ele se verifică dacă citirea curentă e
+  // plauzibilă (citireNeverosimila) și se arată ce rând ține valoarea sus. Doar eticheta „citire de
+  // verificat” depinde de ele — nivelul „depășit”, KPI-ul și filtrul nu. Câte 4 active odată, o singură
+  // dată pe încărcare; la o reîncărcare a km/ore live (kmOreMap nou) cache-ul se golește (generație nouă, L24).
   const [surseMari, setSurseMari] = useState({})   // { [activ_id]: { km, ore, erori } }
   const surseCerute = useRef(new Set())
   const genSurse = useRef(0)
@@ -2296,10 +2304,9 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
   useEffect(() => {
     const ids = []
     for (const f of filtered) {
-      if (inlocuitaDe(f) || surseCerute.current.has(f.activ_id)) continue
-      const km = kmOreMap[f.activ_id]
-      const u = calcUrmService(f, km?.km_live, km?.ore_live)
-      if ((u?.toate || []).some(r => r.deVerificat)) { ids.push(f.activ_id); surseCerute.current.add(f.activ_id) }
+      if (surseCerute.current.has(f.activ_id)) continue
+      const u = scadentaFisa(f)
+      if ((u?.toate || []).some(r => r.tip !== 'data' && r.ramas < 0)) { ids.push(f.activ_id); surseCerute.current.add(f.activ_id) }
     }
     if (!ids.length) return
     const gen = genSurse.current
@@ -2312,20 +2319,21 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
         setSurseMari(p => { const n = { ...p }; lot.forEach((id, j) => { n[id] = rez[j] }); return n })
       }
     })()
-  }, [filtered, kmOreMap, inlocuitaDe])
+  }, [filtered, scadentaFisa])
 
   const exportExcel = () => {
     const header = ['#', 'Data', 'Cod TST', 'Plăcuță', 'Marcă', 'Model', 'Categorie', 'Tip', 'Status', 'Titlu', 'Locație', 'Nr. factură', 'Sumă (RON)', 'Manoperă (RON)', 'KM in', 'KM out', 'Ore in', 'Ore out', 'Diagnostic', 'Următor KM', 'Următor Ore', 'Următor data', 'Scadență', 'Observații']
     const rows = filtered.map((f, i) => {
       const a = f.logistica_active || {}
       // Pachet C: folosim km/ore live din view
-      const km = kmOreMap[f.activ_id]
-      const inloc = inlocuitaDe(f)
-      const u = inloc ? null : calcUrmService(f, km?.km_live, km?.ore_live)
-      // TKT-2026-0380: „citire de verificat” spune și ce (km / ore) și valoarea curentă
-      const scad = inloc ? `înlocuită de fișa din ${fmtDate(inloc.data_fisei)}`
-        : u?.deVerificat ? `citire de verificat (${u.tip === 'km' ? 'km' : 'ore'} curente ${Number(u.live).toLocaleString('ro-RO')})`
-        : u ? u.label : ''
+      const acop = acoperiri[f.id]
+      const u = scadentaFisa(f, surseMari[f.activ_id])
+      // TKT-2026-0380 (r2): depășirea rămâne depășire; „citire de verificat” se adaugă, cu ce (km / ore) și
+      // valoarea curentă; dimensiunile închise de o fișă ulterioară se spun explicit
+      const verif = (u?.toate || []).filter(r => r.deVerificat)
+        .map(r => `citire de verificat (${r.tip === 'km' ? 'km' : 'ore'} curente ${Number(r.live).toLocaleString('ro-RO')})`)
+      const inchise = Object.entries(acop || {}).map(([dim, g]) => `${dim} închisă de fișa din ${fmtDate(g.data_fisei)}`)
+      const scad = [u ? u.label : '', ...verif, ...inchise].filter(Boolean).join(' · ')
       return [
         i + 1, f.data_fisei ? new Date(f.data_fisei).toLocaleDateString('ro-RO') : '',
         a.cod_intern || '', a.nr_inmatriculare || '', a.marca || '', a.model || '',
@@ -2558,10 +2566,9 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
                   const a = f.logistica_active || {}
                   const cat = a.logistica_categorii || {}
                   const nrIntrari = (f.logistica_service_intrari || []).length
-                  // Pachet C: folosim km/ore live din view
-                  const km = kmOreMap[f.activ_id]
-                  const inloc = inlocuitaDe(f)   // TKT-2026-0380: scadență înlocuită de o fișă mai nouă
-                  const u = inloc ? null : calcUrmService(f, km?.km_live, km?.ore_live)
+                  // Pachet C: folosim km/ore live din view. TKT-2026-0380 (r2): fără dimensiunile închise
+                  // de o fișă ulterioară finalizată (mentenanță), cu verificarea citirii pe sursele încărcate
+                  const u = scadentaFisa(f, surseMari[f.activ_id])
                   return (
                     <tr key={f.id} style={{borderBottom:`1px solid ${G.border}`}}
                         onMouseEnter={e => e.currentTarget.style.background = G.bg}
@@ -2589,9 +2596,7 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
                         {f.suma_factura ? fmtRON(f.suma_factura) : '—'}
                       </td>
                       <td style={{padding:'10px 8px'}}>
-                        {inloc
-                          ? <span title="Revizia următoare s-a făcut deja: scadența acestei fișe nu se mai compară cu km / orele de azi." style={{fontSize:10, color:G.dim}}>înlocuită de fișa din {fmtDate(inloc.data_fisei)}</span>
-                          : <UrmServiceBadge u={u} surse={surseMari[f.activ_id]} />}
+                        <UrmServiceBadge u={u} surse={surseMari[f.activ_id]} acoperite={acoperiri[f.id]} />
                       </td>
                       <td style={{padding:'10px 8px'}}><StatusBadge status={f.status} /></td>
                       <td style={{padding:'10px 8px', textAlign:'right', whiteSpace:'nowrap'}}>
