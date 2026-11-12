@@ -307,6 +307,7 @@ DECLARE r record; v_schema text;
 BEGIN
   SELECT n.nspname INTO v_schema FROM pg_extension x JOIN pg_namespace n ON n.oid = x.extnamespace WHERE x.extname = 'pg_stat_statements';
   IF v_schema IS NULL THEN RAISE NOTICE 'STATISTICI: extensia pg_stat_statements nu e instalata'; RETURN; END IF;
+  BEGIN  -- extensia poate fi instalata fara sa fie incarcata (clona locala): nu e eroare a citirii
   FOR r IN EXECUTE format('SELECT s.calls, left(regexp_replace(s.query, %L, %L, %L), 300) AS q FROM %I.pg_stat_statements s '
                           'WHERE s.userid = %L::regrole ORDER BY s.calls DESC LIMIT 300', '[[:space:]]+', ' ', 'g', v_schema, 'anon') LOOP
     RAISE NOTICE 'STATISTICI anon: % apeluri | %', r.calls, r.q;
@@ -314,5 +315,8 @@ BEGIN
   FOR r IN EXECUTE format('SELECT stats_reset FROM %I.pg_stat_statements_info', v_schema) LOOP
     RAISE NOTICE 'STATISTICI: resetate ultima data la %', r.stats_reset;
   END LOOP;
+  EXCEPTION WHEN object_not_in_prerequisite_state THEN
+    RAISE NOTICE 'STATISTICI: pg_stat_statements instalata, dar neincarcata (shared_preload_libraries) - sectiune sarita';
+  END;
 END $statistici$;
 ROLLBACK;
