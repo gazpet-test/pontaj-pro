@@ -120,6 +120,24 @@ export function proprietariDisponibili(arhiva, nume) {
 // Valoarea specială a filtrului: alimentări pe vehicule în comodat care NU cad în contractul curent.
 export const COMODAT_NEATRIBUIT = 'neatribuit'
 
+// Filtrul „sursă” (statie_combustibil) are și o opțiune de grup: toate sursele Rompetrol deodată
+// (desfășurătorul lunar pentru contabilitate, TKT-2026-0378). Sursele vin din DATE, nu dintr-o listă
+// fixă (importul scrie „Rompetrol”, alte căi scriu variante cu sufix), deci grupul = orice sursă al
+// cărei nume conține „rompetrol” (fără diferență de litere mari/mici). Valoarea specială nu poate fi
+// un nume real de stație.
+export const SURSA_ROMPETROL_TOATE = '__rompetrol_toate__'
+export const esteSursaRompetrol = sursa => typeof sursa === 'string' && sursa.toLowerCase().includes('rompetrol')
+
+// Sursele Rompetrol prezente în listă (în ordinea primită), ca UI-ul să arate exact ce cuprinde grupul.
+export const surseRompetrol = surse => (surse || []).filter(esteSursaRompetrol)
+
+// Predicatul unic al filtrului de sursă: 'Toate' = orice; grupul Rompetrol; altfel egalitate exactă.
+export function potrivesteSursa(statie, filtru) {
+  if (filtru === 'Toate') return true
+  if (filtru === SURSA_ROMPETROL_TOATE) return esteSursaRompetrol(statie)
+  return statie === filtru
+}
+
 const zi = v => {
   const s = v == null ? '' : String(v).slice(0, 10)
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null
