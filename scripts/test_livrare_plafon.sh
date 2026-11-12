@@ -40,6 +40,15 @@
 #               fara optiune => 0;
 #   functie amanata: functia unui trigger amanabil EXISTENT inlocuita => PLAFON_AMANABIL (10); fara optiune => 0;
 #   fara amanabile: FK / UNIQUE / trigger amanabile EXISTENTE folosite, FK / trigger ne-amanabile noi => 0.
+# Runda 14 (portal r18, proba pe productie 12.11): TOATA tranzactia (BEGIN ... garda, COMMIT) e UN mesaj (\gexec), cu
+# verificarea in server (DO $mesaj_unic$: lungimea + sha256 ale mesajului curent). Controalele de mai sus modifica acum
+# mesajul prin scripts/test_livrare_psql_control.sh (nu 9_fin.sql, care nu mai exista):
+#   rearmare / functie: control despartit_pauza (instructiune cu instructiune + pauza 1 s inaintea COMMIT) COMITE dupa
+#               termen (0); forma livrata nu are drum client-server intre BEGIN si COMMIT => comite in < N (PLAFON_TIMP
+#               masurat); o pauza inserata in mesaj (pauza_in_mesaj) => MESAJ_UNIC, NEAPLICAT (10);
+#   mesaj unic: acelasi mesaj trimis instructiune cu instructiune (instructiuni_verif) => MESAJ_UNIC (10), nimic;
+#   notice:     NOTICE-urile migrarii ajung in jurnalul livrarii; o copie care se termina fara „;” si cu un comentariu
+#               fara LF => aplicata (despartitorul).
 # Forma mesajelor (fara PostgreSQL): scripts/test_livrare_forma_fin.sh.
 # Runda 13 (harness r15): cazurile cu timpi (lent, garda timp, 8b-8e) ruleaza prin asteapta_ceas: un salt al ceasului de
 # perete >= 100 ms in timpul cazului il face NEVALID (in ambele sensuri), se curata si se repeta (cel mult 3 ori).
@@ -124,7 +133,7 @@ asteapta_ceas() {
   local et="$1" exp="$2" log="$3" cur="$4" k rc r0 m0 r1 m1
   shift 4; [[ "$1" == -- ]] && shift
   for ((k=1;k<=CAZ_INCERCARI;k++)); do
-    rm -f "$TMP"/pauza_* "$TMP/fara_amanate_aplicat"
+    rm -f "$TMP"/control_*
     CAZ_N0="$(inchideri)"; rc=0
     r0="$(date +%s%3N)"; m0="$(ceas_mono_ms)"
     "$@" >"$log" 2>&1 || rc=$?
@@ -146,7 +155,7 @@ curata() { # SQL de curatare pentru migrarea de test $1 (tabelul ei + randul din
 }
 
 # 1. Argumente: refuz inainte de orice conexiune (cod 2).
-M_OK="$(migrare 20990101a_plafon_ok '1500/session' '')"
+M_OK="$(migrare 20990101a_plafon_ok '1500/session' "DO \$n\$ BEGIN RAISE NOTICE 'PLAFON_NOTICE_DIN_MIGRARE'; END \$n\$;")"
 for v in abc 050 99 600001 1500ms; do
   asteapta "argument $v" 2 "$TMP/arg_$v.log" runner 20990101000001 "$M_OK" --plafon-tranzactie-ms "$v"
   grep -q 'plafon-tranzactie-ms invalid' "$TMP/arg_$v.log" || { cat "$TMP/arg_$v.log"; fail "argument $v: mesaj"; }
@@ -164,7 +173,12 @@ asteapta ok 0 "$TMP/ok.log" runner 20990101000001 "$M_OK" --plafon-tranzactie-ms
 [[ "$(stare 20990101a_plafon_ok)" == 'true|true' ]] || fail 'ok: neaplicat'
 grep -q 'plafon ~1500 ms de la BEGIN' "$TMP/ok.log" || { cat "$TMP/ok.log"; fail 'ok: runnerul nu anunta plafonul'; }
 [[ "$(q "$CIT")" == '0/default' ]] || fail 'ok: o conexiune noua vede alt transaction_timeout (setarea runnerului a ramas?)'
-echo 'PLAFON_OK: in tranzactie transaction_timeout = 1500/session + marcajul plafonului; APLICAT + INREGISTRAT (0)'
+# r14: NOTICE-urile migrarii ajung in jurnalul livrarii si in forma un mesaj; garda raporteaza timpul de la BEGIN.
+grep -q 'PLAFON_NOTICE_DIN_MIGRARE' "$TMP/ok.log" || { cat "$TMP/ok.log"; fail 'ok: NOTICE-ul migrarii lipseste din jurnalul livrarii'; }
+grep -q 'LIVRARE_TIMP 20990101a_plafon_ok: corp + inregistrare terminate la [0-9]* ms' "$TMP/ok.log" || { cat "$TMP/ok.log"; fail 'ok: LIVRARE_TIMP'; }
+T_OK="$(sed -n 's/.*PLAFON_TIMP 20990101a_plafon_ok: garda trecuta la \([0-9]*\) ms de la BEGIN.*/\1/p' "$TMP/ok.log")"
+[[ "$T_OK" =~ ^[0-9]+$ ]] && (( T_OK < 1500 )) || { cat "$TMP/ok.log"; fail "ok: PLAFON_TIMP lipsa / >= plafon ($T_OK)"; }
+echo "PLAFON_OK: in tranzactie transaction_timeout = 1500/session + marcajul plafonului; APLICAT + INREGISTRAT (0); un mesaj, garda la $T_OK ms de la BEGIN; NOTICE-ul migrarii in jurnal"
 
 # 3. O setare a rolului (ca ALTER ROLE ... SET pe productie) nu poate schimba plafonul: SET-ul de sesiune are prioritate.
 "${ADMIN[@]}" -d "$DB" -c "ALTER ROLE postgres SET transaction_timeout = '10s'" >/dev/null
@@ -196,15 +210,14 @@ echo 'PLAFON_POOLER: client care pierde optiunile de conectare => SET-ul de sesi
 # 6. Umbrire: SET-ul runnerului pierdut + pg_temp.pg_settings fals in aceeasi sesiune => prologul (calificat) refuza.
 cat >"$TMP/psql_umbrire" <<EOF
 #!/usr/bin/env bash
-# Inlocuieste DOAR fisierul 00_sesiune.sql (SET + BEGIN) cu: tabel temporar fals pg_settings (1500/session) + dovada ca o
-# citire NECALIFICATA vede falsul (ambele inainte de BEGIN, in aceeasi sesiune) + BEGIN. Restul apelurilor
-# (pre-verificare, reconciliere) trec neschimbate.
+# Inlocuieste DOAR fisierul 00_sesiune.sql (SET-ul de sesiune; r14: BEGIN e in mesajul tranzactiei) cu: tabel temporar
+# fals pg_settings (1500/session) + dovada ca o citire NECALIFICATA vede falsul (ambele inainte de BEGIN, in aceeasi
+# sesiune). Restul apelurilor (pre-verificare, mesajul tranzactiei, reconciliere) trec neschimbate.
 a=()
 while [ \$# -gt 0 ]; do
   if [ "\$1" = -f ] && [[ "\${2:-}" == */00_sesiune.sql ]]; then
     a+=(-c "CREATE TEMP TABLE pg_settings AS SELECT 'transaction_timeout'::text AS name, '1500'::text AS setting, 'session'::text AS source"
-        -c "DO \\\$u\\\$ BEGIN IF (SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout') IS DISTINCT FROM '1500/session' THEN RAISE EXCEPTION 'UMBRIRE_NEFUNCTIONALA'; END IF; END \\\$u\\\$"
-        -c BEGIN)
+        -c "DO \\\$u\\\$ BEGIN IF (SELECT setting || '/' || source FROM pg_settings WHERE name = 'transaction_timeout') IS DISTINCT FROM '1500/session' THEN RAISE EXCEPTION 'UMBRIRE_NEFUNCTIONALA'; END IF; END \\\$u\\\$")
     touch "$TMP/umbrire_aplicata"; shift 2; continue
   fi
   a+=("\$1"); shift
@@ -247,63 +260,57 @@ grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 1000 ms' "$TMP/garda_timp.log" 
 [[ "$(stare 20990101i_plafon_depasit)" == 'false|false' ]] || fail 'garda timp: au ramas efecte'
 echo "PLAFON_GARDA: ceas oprit prin SQL dinamic => garda finala: 0/session (PLAFON_SCHIMBAT) / 1,5 s > 1000 ms de la BEGIN (PLAFON_DEPASIT) => NEAPLICAT (10), nimic creat; runner $ms ms"
 
-# 8b-8e. Runda 12 (Jakarinos r14 P2): termenul trebuie sa tina pana la COMMIT. Clientul de test PSQL_PAUZA face o pauza de
-# 1 s chiar inaintea liniei „COMMIT;” din 9_fin.sql (o pauza client / retea in cel mai rau loc). PAUZA_MOD=despartit =
-# CONTROL: „\;” de la capat de rand devine „;” => garda si COMMIT-ul ajung mesaje separate (forma r11), ca proba sa arate
-# ca scenariul chiar comitea dupa termen.
-cat >"$TMP/psql_pauza" <<'EOF'
-#!/usr/bin/env bash
-# Inlocuieste DOAR -f .../9_fin.sql cu o copie: (optional) mesajul despartit, apoi „\! sleep 1” chiar inaintea liniei
-# „COMMIT;” (exact o data, altfel nu scrie marcajul => proba nefunctionala). Restul apelurilor neschimbate.
-set -euo pipefail
-a=()
-while [ $# -gt 0 ]; do
-  if [ "$1" = -f ] && [[ "${2:-}" == */9_fin.sql ]]; then
-    c="$PAUZA_DIR/9_fin_pauza_$$.sql"
-    if [ "${PAUZA_MOD:-}" = despartit ]; then sed 's/ \\;$/;/' "$2"; else cat "$2"; fi | awk '/^COMMIT;$/ { print "\\! sleep 1"; n++ } { print } END { exit (n == 1 ? 0 : 7) }' >"$c"
-    touch "$PAUZA_DIR/pauza_${PAUZA_MOD:-unic}"
-    a+=(-f "$c"); shift 2; continue
-  fi
-  a+=("$1"); shift
-done
-exec "$PAUZA_PG_BIN/psql" "${a[@]}"
-EOF
-chmod +x "$TMP/psql_pauza"
-pauza() { # $1 modul ('' = forma livrata), restul = argumentele runner()
+# 8b-8e. Runda 12 (Jakarinos r14 P2): termenul trebuie sa tina pana la COMMIT. Runda 14: clientul de CONTROL
+# scripts/test_livrare_psql_control.sh (PSQL_BIN) schimba doar mesajul tranzactiei (5_mesaj.sql):
+#   despartit_pauza = forma r11 (instructiune cu instructiune) + pauza client 1 s chiar inaintea lui COMMIT — arata ca
+#                     scenariul chiar comitea dupa termen;
+#   pauza_in_mesaj  = o pauza de 1 s INSERATA in mesaj inaintea lui COMMIT => textul nu mai e cel generat => MESAJ_UNIC.
+# Forma livrata (fara client de control) nu are niciun drum client-server intre BEGIN si COMMIT: nu exista loc pentru o
+# pauza a clientului / retelei; comite in < N, cu timpul masurat de garda (PLAFON_TIMP).
+printf '#!/usr/bin/env bash\nexec bash "%s" "$@"\n' "$ROOT/scripts/test_livrare_psql_control.sh" >"$TMP/psql_control"
+chmod +x "$TMP/psql_control"
+control() { # $1 modul, restul = argumentele runner()
   local mod="$1"; shift
-  PAUZA_DIR="$TMP" PAUZA_PG_BIN="$PG_BIN" PAUZA_MOD="$mod" PSQL_BIN_TEST="$TMP/psql_pauza" runner "$@"
+  CONTROL_DIR="$TMP" CONTROL_PG_BIN="$PG_BIN" CONTROL_MOD="$mod" PSQL_BIN_TEST="$TMP/psql_control" runner "$@"
 }
+timp_garda() { sed -n "s/.*PLAFON_TIMP $1: garda trecuta la \([0-9]*\) ms de la BEGIN.*/\1/p" "$2"; }
 # 8b. Mutantul din verdict: N=2000, artefactul opreste ceasul prin SQL dinamic si il reporneste la ~1,5 s (ceas NOU de
 #     2 s, expira la ~3,5 s), garda la ~1,6 s, pauza 1 s, COMMIT.
 REARM="DO \$d\$ BEGIN EXECUTE format('SET LOCAL %s = 0', $DIN); PERFORM pg_sleep(1.5);
   EXECUTE format('SET LOCAL %s = %s', $DIN, '2000'); END \$d\$;"
 M_RC="$(migrare 20990101j_plafon_rearm_ctl '2000/session' "$REARM")"
-asteapta_ceas 'rearmare control' 0 "$TMP/rearm_ctl.log" "$(curata 20990101j_plafon_rearm_ctl)" -- pauza despartit 20990101000011 "$M_RC" --plafon-tranzactie-ms 2000
-[[ -e "$TMP/pauza_despartit" && "$(stare 20990101j_plafon_rearm_ctl)" == 'true|true' ]] \
+asteapta_ceas 'rearmare control' 0 "$TMP/rearm_ctl.log" "$(curata 20990101j_plafon_rearm_ctl)" -- control despartit_pauza 20990101000011 "$M_RC" --plafon-tranzactie-ms 2000
+ms="$CAZ_MS"
+[[ -e "$TMP/control_despartit_pauza" && "$(stare 20990101j_plafon_rearm_ctl)" == 'true|true' ]] \
   || { cat "$TMP/rearm_ctl.log"; fail 'rearmare control: forma r11 + pauza trebuia sa comita dupa termen (proba nefunctionala)'; }
+(( ms >= 2500 )) || fail "rearmare control: livrarea a durat $ms ms (1,5 s + pauza 1 s: COMMIT-ul trebuia sa vina dupa termen)"
+M_RP="$(migrare 20990101y_plafon_rearm_pauza '2000/session' "$REARM")"
+asteapta 'rearmare pauza in mesaj' 10 "$TMP/rearm_pauza.log" control pauza_in_mesaj 20990101000026 "$M_RP" --plafon-tranzactie-ms 2000
+[[ -e "$TMP/control_pauza_in_mesaj" ]] || fail 'rearmare pauza in mesaj: transformarea nu s-a aplicat (proba nefunctionala)'
+grep -q 'MESAJ_UNIC' "$TMP/rearm_pauza.log" || { cat "$TMP/rearm_pauza.log"; fail 'rearmare pauza in mesaj: trebuia refuz MESAJ_UNIC'; }
+[[ "$(stare 20990101y_plafon_rearm_pauza)" == 'false|false' ]] || fail 'rearmare pauza in mesaj: au ramas efecte'
 M_RM="$(migrare 20990101k_plafon_rearm '2000/session' "$REARM")"
-asteapta_ceas rearmare 10 "$TMP/rearm.log" "$(curata 20990101k_plafon_rearm)" -- pauza '' 20990101000012 "$M_RM" --plafon-tranzactie-ms 2000
-n0="$CAZ_N0"
-[[ -e "$TMP/pauza_unic" ]] || fail 'rearmare: pauza nu s-a aplicat (proba nefunctionala)'
-grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 2000 ms' "$TMP/rearm.log" || { cat "$TMP/rearm.log"; fail 'rearmare: garda trebuia sa refuze (pauza inaintea mesajului final)'; }
-(( "$(inchideri)" == n0 )) || fail 'rearmare: trebuia refuzata de garda, nu inchisa de server'
-[[ "$(stare 20990101k_plafon_rearm)" == 'false|false' ]] || fail 'rearmare: au ramas efecte'
-echo 'PLAFON_REARMARE: ceas oprit prin SQL dinamic si repornit la ~1,5 s (N=2000) + pauza client 1 s inaintea COMMIT => forma r11 (garda si COMMIT separate) COMITEA (control, 0); forma r12 (un mesaj) => pauza cade inaintea garzii => PLAFON_DEPASIT, NEAPLICAT (10), nimic comis'
+asteapta_ceas rearmare 0 "$TMP/rearm.log" "$(curata 20990101k_plafon_rearm)" -- runner 20990101000012 "$M_RM" --plafon-tranzactie-ms 2000
+T_RM="$(timp_garda 20990101k_plafon_rearm "$TMP/rearm.log")"
+[[ "$T_RM" =~ ^[0-9]+$ ]] && (( T_RM >= 1500 && T_RM < 2000 )) || { cat "$TMP/rearm.log"; fail "rearmare: garda trebuia sa treaca intre 1500 si 2000 ms de la BEGIN ($T_RM)"; }
+[[ "$(stare 20990101k_plafon_rearm)" == 'true|true' ]] || fail 'rearmare: forma livrata trebuia sa comita in termen'
+echo "PLAFON_REARMARE: ceas oprit prin SQL dinamic si repornit la ~1,5 s (N=2000) + pauza client 1 s inaintea COMMIT => forma r11 (instructiune cu instructiune) COMITEA dupa termen ($ms ms, control 0); pauza inserata in mesaj => MESAJ_UNIC, NEAPLICAT (10); forma livrata (un mesaj, 0 drumuri intre BEGIN si COMMIT) => garda la $T_RM ms < 2000, COMITE in termen (0)"
 
 # 8c. Functie EXISTENTA cu SET transaction_timeout = 0 (la iesire valoarea restaurata porneste un ceas nou), apelata de
 #     artefact (validatorul nu o vede); aceeasi pauza.
 q "CREATE FUNCTION public.f_dormi_plafon() RETURNS void LANGUAGE plpgsql SET transaction_timeout = 0 AS \$f\$ BEGIN PERFORM pg_sleep(1.5); END \$f\$" >/dev/null
 M_FC="$(migrare 20990101l_plafon_functie_ctl '2000/session' 'SELECT public.f_dormi_plafon();')"
-asteapta_ceas 'functie control' 0 "$TMP/functie_ctl.log" "$(curata 20990101l_plafon_functie_ctl)" -- pauza despartit 20990101000013 "$M_FC" --plafon-tranzactie-ms 2000
+asteapta_ceas 'functie control' 0 "$TMP/functie_ctl.log" "$(curata 20990101l_plafon_functie_ctl)" -- control despartit_pauza 20990101000013 "$M_FC" --plafon-tranzactie-ms 2000
+ms="$CAZ_MS"
 [[ "$(stare 20990101l_plafon_functie_ctl)" == 'true|true' ]] \
   || { cat "$TMP/functie_ctl.log"; fail 'functie control: forma r11 + pauza trebuia sa comita dupa termen (proba nefunctionala)'; }
+(( ms >= 2500 )) || fail "functie control: livrarea a durat $ms ms (COMMIT-ul trebuia sa vina dupa termen)"
 M_FN="$(migrare 20990101m_plafon_functie '2000/session' 'SELECT public.f_dormi_plafon();')"
-asteapta_ceas functie 10 "$TMP/functie.log" "$(curata 20990101m_plafon_functie)" -- pauza '' 20990101000014 "$M_FN" --plafon-tranzactie-ms 2000
-n0="$CAZ_N0"
-grep -q 'PLAFON_DEPASIT: [0-9]* ms de la BEGIN > 2000 ms' "$TMP/functie.log" || { cat "$TMP/functie.log"; fail 'functie: garda trebuia sa refuze'; }
-(( "$(inchideri)" == n0 )) || fail 'functie: trebuia refuzata de garda, nu inchisa de server'
-[[ "$(stare 20990101m_plafon_functie)" == 'false|false' ]] || fail 'functie: au ramas efecte'
-echo 'PLAFON_FUNCTIE: functie existenta cu SET transaction_timeout = 0 (1,5 s) + pauza 1 s => forma r11 COMITEA (control, 0); forma r12 => PLAFON_DEPASIT, NEAPLICAT (10)'
+asteapta_ceas functie 0 "$TMP/functie.log" "$(curata 20990101m_plafon_functie)" -- runner 20990101000014 "$M_FN" --plafon-tranzactie-ms 2000
+T_FN="$(timp_garda 20990101m_plafon_functie "$TMP/functie.log")"
+[[ "$T_FN" =~ ^[0-9]+$ ]] && (( T_FN >= 1500 && T_FN < 2000 )) || { cat "$TMP/functie.log"; fail "functie: garda trebuia sa treaca intre 1500 si 2000 ms ($T_FN)"; }
+[[ "$(stare 20990101m_plafon_functie)" == 'true|true' ]] || fail 'functie: forma livrata trebuia sa comita in termen'
+echo "PLAFON_FUNCTIE: functie existenta cu SET transaction_timeout = 0 (1,5 s) + pauza 1 s => forma r11 COMITEA dupa termen ($ms ms, control 0); forma livrata => garda la $T_FN ms < 2000, COMITE in termen (0)"
 
 # r16b: functia de trigger a probei scrie un GUC prin SQL dinamic; fara REVOKE FROM PUBLIC, gate-ul 0e al runnerului o
 #     semnaleaza (cod 30) dupa comitere si controlul pica din alt motiv decat cel probat.
@@ -318,30 +325,13 @@ REVOKE EXECUTE ON FUNCTION public.fa_pre() FROM PUBLIC;
 CREATE CONSTRAINT TRIGGER ta_pre AFTER INSERT ON public.a_pre DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.fa_pre();" >/dev/null
 [[ "$(q "SELECT count(*) FROM pg_catalog.pg_trigger WHERE tgname = 'ta_pre' AND tgdeferrable AND tginitdeferred")" == 1 ]] \
   || fail 'amanat: triggerul preexistent nu e DEFERRABLE INITIALLY DEFERRED (proba nefunctionala)'
-cat >"$TMP/psql_fara_amanate" <<'EOF'
-#!/usr/bin/env bash
-# CONTROL: 9_fin.sql fara SET CONSTRAINTS ALL IMMEDIATE (triggerele amanate raman pentru COMMIT). Restul neschimbat.
-set -euo pipefail
-a=()
-while [ $# -gt 0 ]; do
-  if [ "$1" = -f ] && [[ "${2:-}" == */9_fin.sql ]]; then
-    c="$PAUZA_DIR/9_fin_fara_amanate_$$.sql"
-    grep -v '^SET CONSTRAINTS ALL IMMEDIATE' "$2" >"$c"
-    touch "$PAUZA_DIR/fara_amanate_aplicat"
-    a+=(-f "$c"); shift 2; continue
-  fi
-  a+=("$1"); shift
-done
-exec "$PAUZA_PG_BIN/psql" "${a[@]}"
-EOF
-chmod +x "$TMP/psql_fara_amanate"
+# CONTROL (r14): mesajul tranzactiei fara SET CONSTRAINTS ALL IMMEDIATE (triggerele amanate raman pentru COMMIT).
 M_AC="$(migrare 20990101n_plafon_amanat_ctl '1000/session' 'INSERT INTO public.a_pre VALUES (1);')"
-PAUZA_DIR="$TMP" PAUZA_PG_BIN="$PG_BIN" PSQL_BIN_TEST="$TMP/psql_fara_amanate" \
-  asteapta_ceas 'amanat control' 0 "$TMP/amanat_ctl.log" \
+asteapta_ceas 'amanat control' 0 "$TMP/amanat_ctl.log" \
   "$(curata 20990101n_plafon_amanat_ctl 'DELETE FROM public.a_pre;')" \
-  -- runner 20990101000015 "$M_AC" --plafon-tranzactie-ms 1000
+  -- control fara_amanate 20990101000015 "$M_AC" --plafon-tranzactie-ms 1000
 ms="$CAZ_MS"
-[[ -e "$TMP/fara_amanate_aplicat" && "$(stare 20990101n_plafon_amanat_ctl)" == 'true|true' ]] \
+[[ -e "$TMP/control_fara_amanate" && "$(stare 20990101n_plafon_amanat_ctl)" == 'true|true' ]] \
   || { cat "$TMP/amanat_ctl.log"; fail 'amanat control: triggerul amanat din COMMIT trebuia sa treaca de garda (proba nefunctionala)'; }
 [[ "$(q 'SELECT count(*) FROM public.a_pre')" == 1 ]] || fail 'amanat control: randul lipseste'
 (( ms >= 1500 )) || fail "amanat control: livrarea a durat $ms ms (triggerul trebuia sa doarma 1,5 s in COMMIT)"
@@ -371,29 +361,9 @@ echo "PLAFON_CURSOR: cursor WITH HOLD deschis => fara optiune se executa in COMM
 
 # 8f-8i. Runda 13 (r5, Jakarinos r16 P2): SET CONSTRAINTS ALL IMMEDIATE nu goleste coada pentru totdeauna (un trigger
 # amanat A o poate reamana si pune B in coada pentru COMMIT). Inchiderea prin catalog: garda refuza (PLAFON_AMANABIL)
-# orice obiect amanabil creat / modificat in tranzactie. CONTROL = forma r4c: clientul de test scoate din 9_fin.sql
-# exact blocul PLAFON_AMANABIL (altfel proba e nefunctionala, cod 7 => psql nu porneste => controlul pica).
-cat >"$TMP/psql_r4c" <<'EOF'
-#!/usr/bin/env bash
-# CONTROL: 9_fin.sql in forma r4c (fara blocul PLAFON_AMANABIL al garzii). Restul apelurilor neschimbate.
-set -euo pipefail
-a=()
-while [ $# -gt 0 ]; do
-  if [ "$1" = -f ] && [[ "${2:-}" == */9_fin.sql ]]; then
-    c="$PAUZA_DIR/9_fin_r4c_$$.sql"
-    awk '/^  IF pg_catalog\.age\(pg_catalog\.xid\(/ { sar = 1; n++ }
-         !sar { print }
-         sar && /v_amanabile; END IF;$/ { sar = 0 }
-         END { exit (n == 1 && !sar ? 0 : 7) }' "$2" >"$c"
-    if grep -q 'PLAFON_AMANABIL\|pg_trigger\|pg_constraint' "$c"; then exit 7; fi
-    touch "$PAUZA_DIR/r4c_aplicat"
-    a+=(-f "$c"); shift 2; continue
-  fi
-  a+=("$1"); shift
-done
-exec "$PAUZA_PG_BIN/psql" "${a[@]}"
-EOF
-chmod +x "$TMP/psql_r4c"
+# orice obiect amanabil creat / modificat in tranzactie. CONTROL = forma r4c: clientul de control (r14:
+# scripts/test_livrare_psql_control.sh, mod r4c) scoate din mesajul tranzactiei exact blocul PLAFON_AMANABIL (altfel
+# proba e nefunctionala, cod 7 => psql nu porneste => controlul pica).
 # Scenariul exact din verdict: A (amanat) ruleaza la SET CONSTRAINTS ALL IMMEDIATE, executa SET CONSTRAINTS ALL DEFERRED
 # si insereaza in tabelul lui B (amanat); B opreste ceasul prin SQL dinamic si doarme 1,5 s. N=1000.
 reamanare() { # $1 sufixul obiectelor
@@ -407,12 +377,11 @@ reamanare() { # $1 sufixul obiectelor
 }
 # 8f. Control (forma r4c): B ruleaza in COMMIT, dupa garda => COMITE dupa termen (>= 1,5 s, fara inchidere de server).
 M_RAC="$(migrare 20990101r_plafon_reamanat_ctl '1000/session' "$(reamanare ctl)")"
-PAUZA_DIR="$TMP" PAUZA_PG_BIN="$PG_BIN" PSQL_BIN_TEST="$TMP/psql_r4c" \
-  asteapta_ceas 'reamanare control' 0 "$TMP/reamanat_ctl.log" \
+asteapta_ceas 'reamanare control' 0 "$TMP/reamanat_ctl.log" \
   "$(curata 20990101r_plafon_reamanat_ctl 'DROP TABLE IF EXISTS public.ra_ctl, public.rb_ctl; DROP FUNCTION IF EXISTS public.fra_ctl(); DROP FUNCTION IF EXISTS public.frb_ctl();')" \
-  -- runner 20990101000019 "$M_RAC" --plafon-tranzactie-ms 1000
+  -- control r4c 20990101000019 "$M_RAC" --plafon-tranzactie-ms 1000
 ms="$CAZ_MS"; n0="$CAZ_N0"
-[[ -e "$TMP/r4c_aplicat" && "$(stare 20990101r_plafon_reamanat_ctl)" == 'true|true' ]] \
+[[ -e "$TMP/control_r4c" && "$(stare 20990101r_plafon_reamanat_ctl)" == 'true|true' ]] \
   || { cat "$TMP/reamanat_ctl.log"; fail 'reamanare control: forma r4c trebuia sa comita (proba nefunctionala)'; }
 [[ "$(q 'SELECT count(*) FROM public.rb_ctl')" == 1 ]] || fail 'reamanare control: B nu a fost pus in coada'
 (( ms >= 1500 )) || fail "reamanare control: livrarea a durat $ms ms (B trebuia sa doarma 1,5 s in COMMIT, dupa garda)"
@@ -485,6 +454,25 @@ asteapta 'fara amanabile' 0 "$TMP/nimic.log" runner 20990101000025 "$M_NIM" --pl
 [[ "$(stare 20990101x_plafon_fara_amanabile)" == 'true|true' && "$(q 'SELECT count(*) FROM public.i_c')" == 1 ]] \
   || { cat "$TMP/nimic.log"; fail 'fara amanabile: neaplicat (fals pozitiv al inchiderii prin catalog?)'; }
 echo 'PLAFON_FARA_AMANABILE: FK / UNIQUE / trigger amanabile EXISTENTE folosite + FK si trigger ne-amanabile noi, cu plafon 1500 => APLICAT (0)'
+
+# 8j. Runda 14: verificarea „un mesaj” chiar prinde un mesaj despartit — ACELASI M, trimis instructiune cu instructiune
+#     (psql -f) => DO $mesaj_unic$ vede doar instructiunea lui in current_query() => MESAJ_UNIC, refuz inaintea
+#     lock-urilor, nimic comis.
+M_MU="$(migrare 20990101z_plafon_mesaj_unic '1500/session' '')"
+asteapta 'mesaj despartit' 10 "$TMP/mesaj_unic.log" control instructiuni_verif 20990101000027 "$M_MU" --plafon-tranzactie-ms 1500
+[[ -e "$TMP/control_instructiuni_verif" ]] || fail 'mesaj despartit: transformarea nu s-a aplicat (proba nefunctionala)'
+grep -q 'MESAJ_UNIC: tranzactia nu a ajuns la server intr-un singur mesaj' "$TMP/mesaj_unic.log" || { cat "$TMP/mesaj_unic.log"; fail 'mesaj despartit: trebuia refuz MESAJ_UNIC'; }
+[[ "$(stare 20990101z_plafon_mesaj_unic)" == 'false|false' ]] || fail 'mesaj despartit: au ramas efecte'
+# Aceeasi migrare, forma livrata => APLICAT (verificarea nu da fals pozitiv).
+asteapta 'mesaj unic' 0 "$TMP/mesaj_unic_ok.log" runner 20990101000027 "$M_MU" --plafon-tranzactie-ms 1500
+[[ "$(stare 20990101z_plafon_mesaj_unic)" == 'true|true' ]] || fail 'mesaj unic: neaplicat'
+# 8k. Despartitorul: o copie a carei ultima instructiune nu are „;” si care se termina cu un comentariu „--” FARA LF.
+M_SEP="$TMP/mig/20990102a_plafon_fara_final.sql"
+{ printf "DO \$g\$ BEGIN\n  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20990102a_plafon_fara_final:' || txid_current() THEN\n    RAISE EXCEPTION 'PLAFON_RUNNER_REQUIRED'; END IF;\nEND \$g\$;\n"
+  printf 'CREATE TABLE public.t_20990102a_plafon_fara_final (id integer)\n-- fara punct si virgula si fara LF la final'; } >"$M_SEP"
+asteapta 'fara final' 0 "$TMP/fara_final.log" runner 20990101000028 "$M_SEP" --plafon-tranzactie-ms 1500
+[[ "$(stare 20990102a_plafon_fara_final)" == 'true|true' ]] || { cat "$TMP/fara_final.log"; fail 'fara final: neaplicat'; }
+echo 'PLAFON_MESAJ_UNIC: acelasi mesaj trimis instructiune cu instructiune => MESAJ_UNIC, NEAPLICAT (10), nimic; forma livrata => APLICAT (0); copie fara „;” final si cu comentariu fara LF => APLICAT (0)'
 
 # 9. Fara optiune: neschimbat fata de runda 9 (psql --single-transaction, fara SET).
 M_FARA="$(migrare 20990101e_plafon_fara '0/default' '')"

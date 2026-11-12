@@ -50,6 +50,19 @@ CAZURI = [
     ("limita: SQL dinamic din bucati (chr(95))",
      "DO $d$ BEGIN EXECUTE format('SET LOCAL %s = 0', 'transaction' || chr(95) || 'timeout'); END $d$;\n", 0, 0),
     ("limita: apelul unei functii existente", "SELECT public.f_dormi_plafon();\n", 0, 0),
+    # Runda 14 (portal r18): cu plafon, tranzactia e UN mesaj (\gexec) => meta-comenzile si variabilele psql din artefact
+    # NU mai sunt interpretate de psql (ar ajunge la server ca text). Validatorul le refuza la nivel superior (cu si fara
+    # plafon), deci un artefact acceptat nu are niciuna; in corpuri $…$ / E'…' psql nu le interpreta nici in forma veche.
+    ("meta: \\set", "\\set x 1\nSELECT 1;\n", 1, 1),
+    ("meta: \\i", "SELECT 1;\n\\i alt.sql\n", 1, 1),
+    ("meta: \\if / \\endif", "\\if true\nSELECT 1;\n\\endif\n", 1, 1),
+    ("meta: \\gexec", "SELECT 'SELECT 1' \\gexec\n", 1, 1),
+    ("meta: \\; (lipire de mesaje)", "SELECT 1 \\;\nSELECT 2;\n", 1, 1),
+    ("meta: \\! (comanda de sistem)", "\\! sleep 1\nSELECT 1;\n", 1, 1),
+    ("variabila psql :x", "SELECT :x;\n", 1, 1),
+    ("variabila psql :'x'", "SELECT :'x';\n", 1, 1),
+    ("backslash in corp $…$ (plpgsql, la executie)", "DO $d$ BEGIN PERFORM E'a\\\\nb'; END $d$;\n", 0, 0),
+    ("backslash in E'…' la nivel superior", "SELECT E'a\\\\nb';\n", 0, 0),
 ]
 
 
@@ -91,6 +104,12 @@ def main():
         print(f"{stare} {rel}: cod {rc} cu --plafon-tranzactie (asteptat 0)")
         if stare != "ok":
             esecuri.append(rel)
+    # Runda 14: 20261213a (livrat cu plafon 3000) si revenirea lui — INFORMATIV (constatare raportata, nu poarta aici).
+    for rel in ("supabase/migrations/20261213a_executie_acces_proiect_perf.sql",
+                "supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql"):
+        cale = ROOT / rel
+        if cale.exists():
+            print(f"info {rel}: cod {ruleaza(cale, 'reg_test', '--plafon-tranzactie')} cu --plafon-tranzactie")
     if esecuri:
         print(f"ESEC test_livrare_validator_plafon: {len(esecuri)} caz(uri): {', '.join(esecuri)}")
         return 1
