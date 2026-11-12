@@ -293,7 +293,7 @@ fi
 # ── r5 (Jakarinos r4). Șantierul e în P0 aici (S5 l-a pus la loc; în modul mutant nu s-a mișcat). ──
 muta() { q -c "UPDATE public.sites SET proiect_id = nullif('$1', '')::bigint WHERE id = $SITE;" >/dev/null; }
 raport_sintetic() {   # $1 = ziua, $2 = 'replica' (fără trigger-e: raport vechi, rezumat NULL) sau gol (cu garda)
-  if [ "$2" = replica ]; then
+  if [ "${2:-}" = replica ]; then
     q -c "BEGIN; SET LOCAL session_replication_role = replica;
           INSERT INTO public.rapoarte_zilnice (site_id, data, probleme, created_by, updated_at)
           VALUES ($SITE, DATE '$1', 'Proba concurenta r5', '$OWNER', now()); COMMIT;" >/dev/null 2>"$TMP/replica.err"
