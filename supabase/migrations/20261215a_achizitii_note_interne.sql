@@ -57,7 +57,17 @@ END $pre$;
 CREATE FUNCTION pg_temp.amp_baseline_20261215a() RETURNS TABLE (eticheta text, amprenta text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
   SELECT v.eticheta, v.amprenta FROM (VALUES
-    ('DE_COMPLETAT: scripts/tichete_lot2_amprente.sql, sectiunea 20261215a', '-')
+    ('functie auth.jwt()', '0a339ea1d249a021248f635d6afb9687')
+    , ('functie auth.uid()', '547eb1864858f1efce909a735a04d521')
+    , ('functie fn_cerere_rollup_status(bigint)', '3ddd8962c24948398645507c90cf6ba7')
+    , ('functie fn_cf_sync_cereri()', '5b0835efe9793d318a39193e01a18da8')
+    , ('functie fn_cf_touch_updated()', '5e8168d574ae63d35854fbb576a8abc9')
+    , ('tabel comenzi_furnizor | acl', '565553b4fd23bff3761a45bfba76d27c')
+    , ('tabel comenzi_furnizor | acl coloane', 'a0e240c36ade38bbb43163c61b36e86b')
+    , ('tabel comenzi_furnizor | politici', 'c333a2bdb4e07d29760a6916c8c70588')
+    , ('tabel comenzi_furnizor | rls', '0a318f8ff8d8cc0bbd7b4b61a975f7b3')
+    , ('tabel comenzi_furnizor | secvente', 'feac2a746299425d74f9c4ec5f17dfd6')
+    , ('tabel comenzi_furnizor | triggere', '287982c9b30e066719ab13329e7d774c')
   ) v(eticheta, amprenta)
 $bl$;
 -- <<< BASELINE 20261215a

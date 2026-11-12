@@ -58,7 +58,16 @@ END $pre$;
 CREATE FUNCTION pg_temp.amp_baseline_20261215b() RETURNS TABLE (eticheta text, amprenta text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
   SELECT v.eticheta, v.amprenta FROM (VALUES
-    ('DE_COMPLETAT: scripts/tichete_lot2_amprente.sql, sectiunea 20261215b', '-')
+    ('functie auth.jwt()', '0a339ea1d249a021248f635d6afb9687')
+    , ('functie auth.uid()', '547eb1864858f1efce909a735a04d521')
+    , ('functie fn_are_acces_ofertare()', 'f060eebc2439bcff301212ef9424d68c')
+    , ('functie probe_teren_oferta_guard()', 'dd0bf91598de0a627e4ea65634582543')
+    , ('tabel probe_oferte | acl', '7ac76ed37dc6d6d174e23d9fe0069f77')
+    , ('tabel probe_oferte | acl coloane', 'a0e240c36ade38bbb43163c61b36e86b')
+    , ('tabel probe_oferte | politici', '30dd457965b922556f7a71463b468c84')
+    , ('tabel probe_oferte | rls', '0a318f8ff8d8cc0bbd7b4b61a975f7b3')
+    , ('tabel probe_oferte | secvente', 'fae9b7ec2c1bd81c5d6fe488d761094a')
+    , ('tabel probe_oferte | triggere', '870af9511142bb46d21da101cc50a051')
   ) v(eticheta, amprenta)
 $bl$;
 -- <<< BASELINE 20261215b
