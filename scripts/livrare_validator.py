@@ -54,6 +54,13 @@
 #   modificate în tranzacție). Garanția exactă și limitele ei (COMMIT-ul propriu-zis, codul preexistent care rulează
 #   amânat, ocolirea deliberată a runnerului) sunt în antetul scripts/livrare_migrare.sh. Validatorul și garda sunt
 #   gărzi de PROTOCOL, nu dovadă și nici autorizație. Fără opțiune: regulile de dinainte, neschimbate.
+# Runda 14 (12.11.2026, portal r18): cu plafon, runnerul trimite TOATĂ tranzacția într-un singur mesaj (\gexec,
+#   scripts/livrare_mesaj.sh) ⇒ meta-comenzile psql (\set, \i, \if, \gexec, \;, \! …) și variabilele psql (:x, :'x')
+#   din artefact NU ar mai fi interpretate de psql, ci ar ajunge la server ca text. Regula de mai sus (REFUZ orice
+#   backslash / interpolare la nivel superior, cu și fără plafon) le refuză deja pe toate ⇒ codul validatorului e
+#   neschimbat; cazurile sunt acum teste explicite (scripts/test_livrare_validator_plafon.py). În corpuri $…$ și în
+#   literali E'…' psql nu le interpreta nici în forma veche (aceeași semantică). Invarianța la
+#   standard_conforming_strings (runda 6) e cea care face sigură citirea întregului mesaj de către server la primire.
 #
 # Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>] [--plafon-tranzactie]
 #   <tag-interzis> = tag-ul dollar-quote al înregistrării generate de runner; nu are voie să apară în fișier.

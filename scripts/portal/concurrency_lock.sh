@@ -263,6 +263,10 @@ lock_observe() { # $1 eticheta, $2 moduri asteptate, $3 probe asteptate, $4 SQL 
 lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $4 SQL-ul tranzactiei lungi, $5 probe asteptate
   local label="$1" log="$TMP/budget_$1.log" release="$TMP/budget_$1.release" app="portal_hold_$1" rc=0 hrc=0 be got t0 t1 ms s t srv persist=""
   local -A vazut=()
+  # r18: in forma „un singur mesaj” pg_stat_activity.query arata doar inceputul mesajului (track_activity_query_size), deci
+  # „DO $locks$” nu mai apare in text. Acolo, „a ajuns la $locks$” = backend activ, in tranzactie, cu advisory lock-ul runnerului
+  # luat (runnerul il ia chiar inaintea blocului de lock-uri, iar serverul nu mai asteapta nimic de la client intre ele).
+  local la_locks="state='active' AND (query LIKE '%DO \$locks\$%' OR (xact_start IS NOT NULL AND EXISTS (SELECT 1 FROM pg_locks al WHERE al.pid = pg_stat_activity.pid AND al.locktype = 'advisory' AND al.granted)))"
   # r11: tranzactia lunga fara \! / FIFO: partea 1 (BEGIN + instructiunea) pe stdin, COMMIT abia dupa fisierul release.
   printf 'BEGIN;\n%s;\n' "$4" >"$TMP/budget_${label}_1.sql"
   printf 'COMMIT;\n' >"$TMP/budget_${label}_2.sql"
@@ -274,7 +278,7 @@ lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $
   ( export PGAPPNAME="portal_apply_$label"; runner "$2" "$3" ) >"$log" 2>&1 &
   local apply=$!
   # psql poate trimite si comentariile dinaintea instructiunii => LIKE pe '%DO $locks$%'.
-  be="$(wait_pid_query "portal_apply_$label" "query LIKE '%DO \$locks\$%' AND state='active'" "$apply")" \
+  be="$(wait_pid_query "portal_apply_$label" "$la_locks" "$apply")" \
     || { wait "$apply" || true; touch "$release"; wait "$holder" || true; cat "$log"; fail "buget $label: livrarea nu a ajuns la \$locks\$"; }
   got="$(probes "$5")"
   # r10 (Jakarinos r9 P2): in timpul reincercarilor livrarea nu tine CONTINUU niciun lock pe tabelele utilizatorilor
@@ -288,7 +292,7 @@ lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $
   done
   for t in "${!vazut[@]}"; do (( ${vazut[$t]} < 6 )) || persist+="$t "; done
   # Probele si esantioanele au rulat CAT TIMP livrarea inca incerca (nu dupa refuz).
-  [[ "$(q "SELECT count(*) FROM pg_stat_activity WHERE pid=$be AND query LIKE '%DO \$locks\$%' AND state='active'")" == 1 ]] \
+  [[ "$(q "SELECT count(*) FROM pg_stat_activity WHERE pid=$be AND $la_locks")" == 1 ]] \
     || fail "buget $label: probele nu au prins fereastra de incercare"
   wait "$apply" || rc=$?
   t1="$(date +%s%N)"; ms=$(( (t1 - t0) / 1000000 ))
