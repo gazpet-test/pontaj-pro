@@ -56,7 +56,8 @@ describe('20261132a: amprentele schemei', () => {
     ]))
     expect(chei.some(k => k.includes('a02_ofertare_licitatii_inchidere_garda'))).toBe(false)
     // în afara blocului nu există nicio altă valoare de completat
-    expect(MIG.split('__DE_COMPLETAT__').length - 1).toBe(chei.length + 1)  // + verificarea din $pre$
+    // necompletat: câte una pe cheie + verificarea din $pre$; completat (după rularea pe producție): rămâne doar verificarea
+    expect([1, chei.length + 1]).toContain(MIG.split('__DE_COMPLETAT__').length - 1)
     expect(MIG).toContain("IF position('__DE_COMPLETAT__' IN v_asteptat::text) > 0 THEN")
     expect(MIG).not.toContain('__MD5_LA_DRY__')
     expect(RB).not.toContain('__MD5_LA_DRY__')

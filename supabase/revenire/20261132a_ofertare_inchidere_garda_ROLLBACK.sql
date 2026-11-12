@@ -2,7 +2,8 @@
 -- Scoate DOAR ce a creat migrarea: trigger-ul a02_ofertare_licitatii_inchidere_garda și funcția fn_ofertare_inchidere_garda().
 -- Nu atinge date: migrarea n-a scris rânduri. După revenire, regula „cine închide” rămâne doar în UI (cum era înainte de migrare).
 -- Ordinea la livrare: întâi UI-ul pe versiunea anterioară (dacă e cazul), apoi revenirea.
--- r2 (review Jakarinos 11.11, P2): înainte de DROP se verifică AMPRENTA EXACTĂ a obiectelor, nu doar existența — o altă versiune sub
+-- r2 (review 11.11, P2): înainte de DROP se verifică amprenta obiectelor (corp, atribute, paralelism, trigger; la drepturi: fără EXECUTE
+-- pentru PUBLIC / anon / authenticated — lista exactă a drepturilor depinde de drepturile implicite ale bazei), nu doar existența — o altă versiune sub
 -- același nume (corp schimbat, SECURITY INVOKER, alt search_path / proprietar, trigger redefinit: alt moment, alte coloane, WHEN,
 -- argumente, dezactivat) = refuz, ca revenirea să nu șteargă munca unei migrări ulterioare. Valorile sunt cele ale migrării din repo:
 -- md5 pe corpul funcției fără CR (testul vitest îl recalculează din migrare), tgtype 19 = BEFORE UPDATE FOR EACH ROW, UPDATE OF status.
@@ -22,14 +23,17 @@ BEGIN
   END IF;
   -- funcția: exact versiunea migrării 20261132a (corp + atribute)
   SELECT p.prosecdef, p.proconfig, pg_get_userbyid(p.proowner) AS owner, l.lanname, p.prorettype, p.pronargs, p.provolatile,
-         p.proisstrict, p.proleakproof, md5(replace(p.prosrc, chr(13), '')) AS corp,
+         p.proisstrict, p.proleakproof, p.proparallel,
+         EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
+                  WHERE x.privilege_type = 'EXECUTE' AND (x.grantee = 0 OR x.grantee IN (SELECT oid FROM pg_roles WHERE rolname IN ('anon', 'authenticated')))) AS exec_larg,
+         md5(replace(p.prosrc, chr(13), '')) AS corp,
          (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname) AS supraincarcari
     INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = 'public.fn_ofertare_inchidere_garda()'::regprocedure;
   IF f.corp IS DISTINCT FROM c_corp_md5 THEN
     RAISE EXCEPTION '20261132a ROLLBACK: fn_ofertare_inchidere_garda are alt corp decat versiunea 20261132a (alta versiune sub acelasi nume) - refuz';
   END IF;
   IF NOT f.prosecdef OR f.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] OR f.owner <> 'postgres' OR f.lanname <> 'plpgsql'
-     OR f.prorettype <> 'trigger'::regtype OR f.pronargs <> 0 OR f.provolatile <> 'v' OR f.proisstrict OR f.proleakproof OR f.supraincarcari <> 1 THEN
+     OR f.prorettype <> 'trigger'::regtype OR f.pronargs <> 0 OR f.provolatile <> 'v' OR f.proisstrict OR f.proleakproof OR f.proparallel <> 'u' OR f.exec_larg OR f.supraincarcari <> 1 THEN
     RAISE EXCEPTION '20261132a ROLLBACK: atributele fn_ofertare_inchidere_garda difera de versiunea 20261132a - refuz';
   END IF;
   -- trigger-ul: exact cel creat de migrare
