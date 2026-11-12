@@ -15,6 +15,9 @@ import { supabase } from './lib/supabase.js'
 import { exportRapoarteExcel, exportRapoartePDF } from './rapoarteExport.js'
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 import { MeteoRaportChip, MeteoRaportText } from './Meteo.jsx'
+import RubricaRezumat from './RubricaRezumat.jsx'
+// rezumatul ZILEI pe toate șantierele din ecran (r2): doar citire, text de copiat
+import RezumatZiModal from './RezumatZiModal.jsx'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -59,6 +62,10 @@ export default function RapoarteSantierPage() {
   const [istoricSite, setIstoricSite] = useState('') // șantier selectat în tab istoric
   const [exporting, setExporting] = useState(null) // 'excel' | 'pdf' | null
   const [exportErr, setExportErr] = useState(null)
+  // rezumatul (20261216a): corectura o face cine are drept de scriere pe raport — owner sau alocat pe șantier (aceeași regulă ca salvarea;
+  // serverul decide oricum, aici doar se arată butoanele). scriere.tot (owner) e și semnalul „vede toate rapoartele” al rezumatului zilei (r3)
+  const [scriere, setScriere] = useState({ tot: false, site: new Set() })
+  const [rezumatZi, setRezumatZi] = useState(false)  // fereastra „Rezumatul zilei”
 
   // ── init: profil + șantiere accesibile ──
   useEffect(() => {
@@ -71,10 +78,16 @@ export default function RapoarteSantierPage() {
       const active = (toate || []).filter(s => s.active)
       setAllSites(active)
       const vedeTot = prof?.is_owner || prof?.role === 'contabilitate'
+      if (prof?.is_owner) setScriere({ tot: true, site: new Set() })
+      else {
+        const aziRo = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date())
+        const { data: psw } = await supabase.from('profile_sites').select('site_id, valid_until').eq('profile_id', user.id)
+        setScriere({ tot: false, site: new Set((psw || []).filter(r => !r.valid_until || r.valid_until >= aziRo).map(r => r.site_id)) })
+      }
       if (vedeTot) {
         setSites(active)
       } else {
-        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal, raport_zilnic_necesar, tip_locatie)').eq('profile_id', user.id)
+        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal, active, raport_zilnic_necesar, tip_locatie)').eq('profile_id', user.id)
         setSites((ps || []).map(r => r.sites).filter(Boolean).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
       }
       setLoadingInit(false)
@@ -208,8 +221,13 @@ export default function RapoarteSantierPage() {
             }}>{p.l}</button>
           ))}
         </div>
+        {/* rezumatul zilei: toate șantierele din ecran, pentru ziua aleasă (implicit capătul intervalului) */}
+        <button data-rezumat-zi-deschide onClick={() => setRezumatZi(true)} title="Un singur text pe zi, pe toate șantierele tale, de copiat pe WhatsApp" style={{
+          background: G.blue + '18', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 8, padding: '8px 13px',
+          fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto',
+        }}>📝 Rezumatul zilei</button>
         {/* export — pe Parc Auto nu au sens (raportul lui vine din Probleme Parc) */}
-        {!parcSelectat && <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+        {!parcSelectat && <div style={{ display: 'flex', gap: 6 }}>
           <button onClick={doExportExcel} disabled={!!exporting} title="Exportă rapoartele filtrate în Excel" style={{
             background: G.green + '18', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 8, padding: '8px 13px',
             fontSize: 13, fontWeight: 700, cursor: exporting ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: exporting ? .6 : 1,
@@ -238,7 +256,13 @@ export default function RapoarteSantierPage() {
         <IstoricSantier istoricSite={istoricSite} rapoarte={istoricRapoarte} siteName={siteName} onOpen={setDetaliu} />
       )}
 
-      {detaliu && <ModalDetaliu raport={detaliu} siteName={siteName} onClose={() => setDetaliu(null)} />}
+      {detaliu && <ModalDetaliu raport={detaliu} siteName={siteName} onClose={() => setDetaliu(null)}
+        poateEdita={scriere.tot || scriere.site.has(detaliu.site_id)}
+        onRezumat={(row) => {
+          setDetaliu(d => (d && d.id === row.id ? { ...d, ...row } : d))
+          setRapoarte(list => list.map(r => (r.id === row.id ? { ...r, ...row } : r)))
+        }} />}
+      {rezumatZi && <RezumatZiModal ziInitiala={to} sites={sites} vedeToate={scriere.tot} onClose={() => setRezumatZi(false)} />}
     </Shell>
   )
 }
@@ -326,7 +350,7 @@ function CardRaport({ r, siteName, onOpen, showSite }) {
 }
 
 // ── Modal detaliu ──
-function ModalDetaliu({ raport, siteName, onClose }) {
+function ModalDetaliu({ raport, siteName, onClose, poateEdita, onRezumat }) {
   const [pozeUrls, setPozeUrls] = useState([])
   const [zoom, setZoom] = useState(null)
   const [lucrariAct, setLucrariAct] = useState([])   // cantități pe activități (raport_lucrari + nume activitate)
@@ -350,7 +374,7 @@ function ModalDetaliu({ raport, siteName, onClose }) {
         setDistrUnitati(un || [])
       } else setDistrUnitati([])
     })()
-  }, [raport])
+  }, [raport.id])   // doar alt raport reîncarcă pozele / liniile (o corectură a rezumatului schimbă obiectul, nu raportul)
   const [distrLinii, setDistrLinii] = useState([])
   const [distrUnitati, setDistrUnitati] = useState([])
   const [distrPdf, setDistrPdf] = useState(false)
@@ -373,6 +397,13 @@ function ModalDetaliu({ raport, siteName, onClose }) {
           </div>
           <button onClick={onClose} style={{ background: G.bg, border: `1px solid ${G.border}`, color: G.text, borderRadius: 9, width: 34, height: 34, fontSize: 17, cursor: 'pointer' }}>×</button>
         </div>
+
+        {/* rezumatul scurt (20261216a): de copiat pe WhatsApp / pentru directorul de execuție */}
+        {'rezumat_sursa' in raport && (
+          <Bloc titlu="📝 Rezumat">
+            <RubricaRezumat raport={raport} poateEdita={poateEdita} onActualizat={onRezumat} />
+          </Bloc>
+        )}
 
         {/* personal */}
         <Bloc titlu="👷 Personal">

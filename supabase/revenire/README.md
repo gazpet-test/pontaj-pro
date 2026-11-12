@@ -325,3 +325,13 @@ SELECT set_config('gazpet.revenire_20261215c', 'SCOATE_MUTA_POZITIE:' || txid_cu
 COMMIT;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = funcția migrării (INVOKER, jsonb) și nimic legat de ea în `pg_depend`; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare); scenariul pe clonă: `supabase/tests/20261215c_izometrie_muta_pozitie.sql`.
+
+## 20261216a — Execuție: rezumatul scurt al raportului zilnic (`20261216a_executie_raport_rezumat_ROLLBACK.sql`, NEAPLICAT)
+Scoate cele 2 trigger-e (`trg_raport_zilnic_zz_rezumat` pe `rapoarte_zilnice`, `trg_raport_zilnic_salvari_rezumat` pe `raport_zilnic_salvari`), cele 9 funcții `fn_raport_rezumat_*` (r3: + `fn_raport_rezumat_curata_editat`), constrângerea `rapoarte_zilnice_rezumat_ck` și coloanele `rezumat_text` / `rezumat_sursa` / `rezumat_la` / `rezumat_de` / `rezumat_eroare`. Nu redeschide nicio gaură. **Refuză dacă există rezumate corectate de om** (`rezumat_sursa = 'editat'`): golirea lor e o decizie separată (preview → „da” Răzvan → export → apply). Rezumatele automate se pierd fără refuz (sunt derivate din raport). Rapoartele, liniile și jurnalul salvărilor nu se ating. Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: altfel fișierul refuză
+SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = exact obiectele migrării (cele 9 funcții cu amprenta corpului, securitatea, proprietarul și — r3 — configurația `search_path` și drepturile, fără EXECUTE pentru clienți / PUBLIC; cele 2 trigger-e cu funcția, tipul, fără condiție și — r3 — active; constrângerea cu — r3 — definiția exactă, cu sau fără `NOT VALID`; coloanele); nimic altceva nu depinde de coloane / funcții (catalog + apeluri textuale în alte funcții, politici); lock-uri `NOWAIT` în ordinea salvării (`rapoarte_zilnice`, `raport_zilnic_salvari`) ÎNAINTEA verificării „fără corecturi”; DROP fără CASCADE; postcondiție (inclusiv trigger-ul de versiune 20261208a neatins); dezarmare. Testat în `scripts/test_executie_raport_rezumat.sql` (T9a nearmat = refuz; T9b armat cu un rezumat corectat = refuz, cu SQLSTATE și mesaj verificate; armat fără = scos, salvarea prin RPC merge, apoi re-aplicare) și local în `scripts/pglite/test_raport_rezumat_local.mjs` (mutantul M12: revenirea care nu refuză corecturile e prinsă; r3, S15 / S16: configurația unei funcții, un EXECUTE dat, un trigger oprit și alt CHECK = refuz, iar cu verificarea respectivă scoasă aceeași stare trece — dovada că ea refuză).
