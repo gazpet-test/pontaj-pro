@@ -58,25 +58,21 @@ describe('20261216a — AMPRENTA_L15: o singură definiție (PR #1071 = scriptul
     expect(new Set(et).size).toBe(et.length)
     expect(MIG).toContain(`RAISE EXCEPTION '${X}: baseline L15 necompletat sau invalid`)
   })
-  it('r4: cele 29 de etichete din producție rămân cu valorile lipite; sites intră doar ca etichete noi DE_COMPLETAT', () => {
+  // r5: după #1075 blocul are TOATE cele 37 de valori lipite de coordonator (29 din r3 + 6 sites din r4 + 2), verificate 37/37 de review-ul r4.
+  // r5 nu adaugă obiecte în amprentă (nicio etichetă nouă, niciun DE_COMPLETAT): lista e înghețată pe amprenta ei de la #1075.
+  it('r5: cele 37 de etichete din producție rămân exact cele lipite la #1075; nicio etichetă nouă', async () => {
+    const { createHash } = await import('node:crypto')
     const bloc = MIG.slice(MIG.indexOf(`-- >>> BASELINE ${X}`), MIG.indexOf(`-- <<< BASELINE ${X}`))
     const perechi = [...bloc.matchAll(/\('([^']+)', '([^']+)'\)/g)].map(m => [m[1], m[2]])
     const lipite = perechi.filter(([, v]) => /^[0-9a-f]{32}$/.test(v))
-    const noi = perechi.filter(([, v]) => v === 'DE_COMPLETAT').map(([e]) => e)
+    expect(perechi.filter(([, v]) => v === 'DE_COMPLETAT')).toEqual([])
+    expect(lipite).toHaveLength(37)
+    expect(lipite).toHaveLength(perechi.length)
     expect(lipite.find(([e]) => e === 'tabel rapoarte_zilnice | acl')[1]).toBe('565553b4fd23bff3761a45bfba76d27c')
     expect(lipite.find(([e]) => e === 'functie fn_raport_santier_drept(bigint)')[1]).toBe('0d759c83376de45804392f28353a370d')
-    const sites = ['acl', 'acl coloane', 'politici', 'rls', 'secvente', 'triggere'].map(s => `tabel sites | ${s}`)
-    if (noi.length) {
-      // înainte de rularea coordonatorului pe producție: cele 29 lipite + sites de completat (migrarea refuză)
-      expect(lipite).toHaveLength(29)
-      expect(lipite.some(([e]) => e.startsWith('tabel sites'))).toBe(false)
-      expect(noi).toEqual(sites)
-    } else {
-      // după (12.11.2026): tot blocul e completat din producție — cele 29 + sites + funcțiile din politicile / triggerele lui
-      expect(lipite.length).toBeGreaterThanOrEqual(29 + sites.length)
-      for (const e of sites) expect(lipite.some(([x]) => x === e)).toBe(true)
-      expect(new Set(lipite.map(([e]) => e)).size).toBe(lipite.length)
-    }
+    expect(lipite.filter(([e]) => e.startsWith('tabel sites')).map(([e]) => e))
+      .toEqual(['acl', 'acl coloane', 'politici', 'rls', 'secvente', 'triggere'].map(s => `tabel sites | ${s}`))
+    expect(createHash('md5').update(lipite.map(([e, v]) => `${e}=${v}`).join('\n'), 'utf8').digest('hex')).toBe('392e9d98030d764a319226d1cc5c23c4')
   })
   it('verificarea rulează ÎNAINTE (înaintea lock-urilor și a schimbării) și DUPĂ (după postcondiții), apoi funcțiile pg_temp se șterg', () => {
     const iInainte = MIG.indexOf(`PERFORM pg_temp.amp_verifica_${X}('inainte')`)

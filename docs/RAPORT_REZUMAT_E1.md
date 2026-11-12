@@ -78,11 +78,20 @@ Cum lucrează:
   ține și proiectul pentru care s-a compus textul (`rezumat_proiect_id`). La mutarea șantierului (trigger pe `sites`, în aceeași tranzacție):
   - rezumatele **automate** devin „de refăcut” (`rezumat_sursa = 'de_recompus'`, text gol; versiunea raportului nu crește); rubrica spune
     „Șantierul a fost mutat în alt proiect: rezumatul vechi a fost scos” și se reface la următoarea salvare sau cu „Generează”, pe proiectul nou;
-  - rezumatele **corectate de om** opresc mutarea: mesajul cere „Revino la automat” pe ele întâi. Textul omului descrie lucrările proiectului
-    vechi, deci pentru cel nou e oricum greșit; refuzul lasă decizia omului, fără să piardă nimic în tăcere;
+  - rezumatele **corectate de om** opresc mutarea: mesajul cere „Revino la automat” pe ele întâi și (r5) spune câte rapoarte sunt și din ce
+    zile (primele 5, apoi „+N”), de exemplu „șantierul are 7 rapoarte cu rezumatul corectat de om pentru proiectul vechi (zilele 01.03.2026,
+    02.03.2026, 03.03.2026, 04.03.2026, 05.03.2026 +2)”. Textul omului descrie lucrările proiectului vechi, deci pentru cel nou e oricum
+    greșit; refuzul lasă decizia omului, fără să piardă nimic în tăcere;
   - același lucru dacă un raport e mutat pe un șantier din alt proiect;
-  - mutarea așteaptă salvările de rapoarte în curs (cel mult 3 s, altfel nu trece) și invers, ca niciun raport salvat „în paralel” să nu
-    rămână cu textul vechi; costul: un `UPDATE` pe raport, fără recompunere (pe PGlite: 2000 de rapoarte în ~75 ms).
+  - (r5) **blocarea e doar pe șantierul mutat**, nu pe tot tabelul: orice scriere a rezumatului ține rândul șantierului (`FOR SHARE`) până la
+    sfârșit, iar mutarea ține același rând. Mutarea așteaptă salvările în curs ale șantierului și oprește salvările lui care încep după (ele
+    compun apoi pe proiectul nou); salvările celorlalte șantiere nu așteaptă deloc. Dacă o salvare a apucat să ia rândul raportului, mutarea
+    refuză imediat („un raport al acestui șantier se salvează chiar acum; reîncearcă”), în loc să aștepte (altfel cele două s-ar bloca una pe
+    alta); salvarea nu pică niciodată din cauza asta;
+  - (r5) o tranzacție în REPEATABLE READ / SERIALIZABLE care și-a luat imaginea înainte de mutare nu mai poate compune textul pe proiectul vechi:
+    primește eroare de serializare (se reîncearcă); aplicația lucrează în READ COMMITTED și citește proiectul nou;
+  - costul mutării: un `UPDATE` pe raport, fără recompunere (pe PGlite: 2000 de rapoarte în zeci de ms). Pe clonă, la volum real:
+    `scripts/raport_rezumat_mutare_durata.sql` (vezi mai jos).
 
 Prețul: regula textului există în două limbaje — SQL (`fn_raport_rezumat_text`, cea care scrie în BD) și JS (`rezumatRaport` din
 `src/raportRezumat.js`, pentru proba pe date reale). Paritatea e verificată pe **același tabel de cazuri** (`src/raportRezumat.cazuri.json`,
@@ -184,12 +193,18 @@ Recomandare: **A** acum (rapid, fără risc), **B** când e nevoie de poze pe tr
 - `scripts/raport_rezumat_amprente.sql` — (r3) amprenta L15 pentru blocul BASELINE al migrării, DOAR citire (coordonatorul, pe producție)
 - `scripts/raport_rezumat_vizibilitate.sql` — (r3) proba „cititorul vede tot ce intră în rezumat”, DOAR citire (clonă / producție)
 - `scripts/raport_rezumat_concurenta.sh` — (r3) două telefoane pe aceeași versiune, cu două sesiuni reale (DOAR clonă); (r4) S4 / S5:
-  mutarea șantierului cu o salvare în zbor, în ambele ordini
+  mutarea șantierului cu o salvare în zbor, în ambele ordini; (r5) S6: „Generează” pe un raport fără rezumat dintr-o imagine de dinaintea
+  mutării (REPEATABLE READ, SERIALIZABLE: eroare de serializare; READ COMMITTED: text pe proiectul nou), S7: salvarea pe alt șantier nu
+  așteaptă mutarea, S8: salvarea care ține rândul raportului + mutarea = refuz imediat al mutării, fără deadlock; `--mutant fara_for_share`
+  / `fara_nowait` / `lock_tabel` strică intenționat funcția pe clonă și cere ca scenariul ei să pice (ieșire 0 = prins), apoi o pune la loc
+- `scripts/raport_rezumat_mutare_durata.sql` — (r5) durata mutării unui șantier cu N rapoarte (500 / 2000 / 10000), DOAR clonă, tranzacție
+  anulată; în antet și interogarea (doar citire) pentru cel mai mare șantier de azi
 - `scripts/test_executie_raport_rezumat.sql` — harness pentru clonă (T0–T12: paritate, salvare prin RPC, CAS, corectură, identitate, drepturi,
   căile directe, eroare injectată în compunere, linii din alt proiect, (r4) mutarea șantierului citită de un cont restrâns la proiectul nou,
   revenire, re-aplicare)
 - `scripts/pglite/test_raport_rezumat_local.mjs` — același harness local (PGlite) + 39 de mutanți + scenariile de refuz (baseline, plafon, stare
-  schimbată, mutare în REPEATABLE READ, revenire fără plafon / armată vechi, costul mutării)
+  schimbată, mutare în REPEATABLE READ, revenire fără plafon / armată vechi, costul mutării); (r5) mesajul de refuz cu zilele, rândul
+  șantierului ținut de gardă (și mutantul fără `FOR SHARE`), mutarea fără lock pe tabel (și mutantul r4), scriptul de durată
 - `scripts/raport_rezumat_proba.sql` + `.mjs` — proba pe 20 de rapoarte reale, DOAR citire, înainte de aplicare
 - **Livrarea** (r3): DOAR cu `scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000`, după ce blocul BASELINE e completat și revizuit
   (pașii exacți: antetul migrării și raportul PR-ului). (r4) Și **revenirea** trece prin același runner, cu același plafon (antetul ei).
