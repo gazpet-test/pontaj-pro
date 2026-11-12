@@ -56,7 +56,7 @@ BEGIN
   v_proiect := pg_temp.t15c_rand('public.executie_proiecte', v_extra, v_et || '-P');
   -- tronsonul de test (pachetul îl cere: tronson_id NOT NULL cu FK pe executie_tronsoane)
   v_tronson := pg_temp.t15c_rand('public.executie_tronsoane', jsonb_build_object('proiect_id', v_proiect, 'status', 'neinceput'), v_et || '-R');
-  v_pachet := pg_temp.t15c_rand('public.executie_pachete_lansare', jsonb_build_object('proiect_id', v_proiect, 'tronson_id', v_tronson, 'status', 'draft', 'tip_pachet', 'lansare_conducta'), v_et || '-K');
+  v_pachet := pg_temp.t15c_rand('public.executie_pachete_lansare', jsonb_build_object('proiect_id', v_proiect, 'tronson_id', v_tronson, 'status', 'draft', 'tip_pachet', 'lansare_conducta', 'km_start_m', 1000), v_et || '-K');
   FOR k IN 1 .. 5 LOOP
     -- lungimi diferite pe fiecare țeavă (dacă tabelul are o coloană numerică „lungime…”), ca POZ KM să iasă diferit pe fiecare rând
     SELECT coalesce(jsonb_object_agg(a.attname, 10 * k + 0.5), '{}') INTO v_extra FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
