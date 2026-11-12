@@ -2,6 +2,8 @@
 -- Nu activeaza hook-ul Auth, nu modifica inventarul legacy.
 -- r3 (09.11.2026): amprenta si poarta 1b pe lista alba (fn_portal_1b_snapshot); vezi comentariul de acolo.
 -- r7 (10.11.2026): ancorele revizuite ale obiectelor externe (scripts/portal/ancore_1b.sql) inainte de apply.
+-- r21 (12.11.2026, varianta c in 18a): fn_portal_1b_snapshot amprenteaza si cei 4 helperi noi ai portii 18a; postconditia
+--  1b spune CE porti lipsesc (PORTAL_1B_POSTCONDITION: <n> porti: <lista>).
 -- r9 (11.11.2026, al doilea recenzent r8 P1-01 / P2-01 / P2-03):
 --  * buget de lock: lock_timeout / statement_timeout; tot ce nu cere lock pe tabelele utilizatorilor (ancore, tabele si
 --    functii noi) ruleaza INAINTE; lock-urile pe auth.users / employees / profiles / user_module_access se iau o singura
@@ -495,6 +497,9 @@ BEGIN
    'public.fn_teren_eligibil(uuid)','public.fn_portal_angajat_eligibil(integer)','public.fn_portal_uid()',
    'public.fn_auth_token_hook(jsonb)','public.fn_portal_porti_lipsa()','public.fn_portal_public_aprobat()',
    'public.fn_portal_public_md5()','public.fn_portal_net_md5()','public.fn_portal_catalog_amprenta(oid)','public.fn_conturi_tip_audit()',
+   -- r21 (varianta c): helperii portii 18a pentru obiectele pg_net (lista + amprenta + predicat) si dreptul lui teren.
+   'public.fn_portal_net_rel_aprobat()','public.fn_portal_net_rel_amprenta(oid)','public.fn_portal_net_rel_acceptat(oid)',
+   'public.fn_portal_teren_rel_drept(oid)',
    'public.fn_conturi_jurnal_imuabil()','public.fn_portal_cont_pregateste(integer, uuid)',
    'public.fn_portal_cont_finalizeaza(uuid)','public.fn_cont_aproba_erp(uuid, text)',
    'public.fn_portal_revoca_la_plecare()','public.fn_portal_provisioning_audit()',
@@ -742,7 +747,7 @@ BEGIN
 END $locks$;
 -- r10: sectiunea critica = O SINGURA instructiune (un singur drum dus-intors client-server), toata sub plafon.
 DO $critic$
-DECLARE c record; v_rec bigint;
+DECLARE c record; v_rec bigint; v_porti text[];
 BEGIN
   -- 1. conturi_teren (din 18a): coloanele noi si auditul (ACCESS EXCLUSIVE, deja detinut).
   ALTER TABLE public.conturi_teren
@@ -790,6 +795,8 @@ BEGIN
   --    poarta 1b (inclusiv inventarul Auth complet) si amprenta pentru revenire.
   IF pg_temp.portal_1b_ancore() IS DISTINCT FROM (SELECT v FROM pg_temp.portal_1b_ancore_revizuit) THEN
    RAISE EXCEPTION 'PORTAL_1B_ANCHOR_CHANGED'; END IF;
-  IF public.fn_portal_porti_lipsa_1b() <> '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_1B_POSTCONDITION'; END IF;
+  -- r21: postconditia spune CE porti lipsesc (nume de obiecte de schema, fara date).
+  v_porti := public.fn_portal_porti_lipsa_1b();
+  IF v_porti IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'PORTAL_1B_POSTCONDITION: % porti: %', coalesce(cardinality(v_porti)::text, 'NECUNOSCUT'), coalesce(array_to_string(v_porti, '; '), 'NECUNOSCUT'); END IF;
   INSERT INTO public.portal_e1_1b_manifest VALUES ('post_snapshot',public.fn_portal_1b_snapshot());
 END $critic$;

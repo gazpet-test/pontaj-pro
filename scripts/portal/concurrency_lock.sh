@@ -262,11 +262,19 @@ lock_observe() { # $1 eticheta, $2 moduri asteptate, $3 probe asteptate, $4 SQL 
 
 lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $4 SQL-ul tranzactiei lungi, $5 probe asteptate
   local label="$1" log="$TMP/budget_$1.log" release="$TMP/budget_$1.release" app="portal_hold_$1" rc=0 hrc=0 be got t0 t1 ms s t srv persist=""
+  local xs intrare n_inc i prins=0 pos
   local -A vazut=()
-  # r18: in forma „un singur mesaj” pg_stat_activity.query arata doar inceputul mesajului (track_activity_query_size), deci
-  # „DO $locks$” nu mai apare in text. Acolo, „a ajuns la $locks$” = backend activ, in tranzactie, cu advisory lock-ul runnerului
-  # luat (runnerul il ia chiar inaintea blocului de lock-uri, iar serverul nu mai asteapta nimic de la client intre ele).
-  local la_locks="state='active' AND (query LIKE '%DO \$locks\$%' OR (xact_start IS NOT NULL AND EXISTS (SELECT 1 FROM pg_locks al WHERE al.pid = pg_stat_activity.pid AND al.locktype = 'advisory' AND al.granted)))"
+  # r24 (review #1072): reperul r18 (advisory lock-ul runnerului luat) era prea DEVREME: in forma „un singur mesaj” runnerul
+  # il ia inaintea INTREGII migrari, deci probele puteau rula in prefix (inainte de $locks$), iar fereastra ramasa pentru
+  # bucla putea fi deja consumata => „probele nu au prins fereastra de incercare” intermitent. Reperul DETERMINIST, fara nicio
+  # schimbare in SQL-ul migrarilor: singurul pg_sleep din tranzactia de livrare e PAUZA din bucla $locks$, care se executa
+  # numai DUPA o incercare NOWAIT ratata (ramura EXCEPTION WHEN lock_not_available). Backendul livrarii vazut activ, in
+  # tranzactie, in asteptarea PgSleep = a intrat in bucla de reincercare (cel putin o incercare ratata). Precondita se
+  # verifica pe artefact chiar aici (exact un pg_sleep, in bucla $locks$; runnerul nu are pg_sleep in fisierele lui).
+  local in_bucla="state='active' AND xact_start IS NOT NULL AND wait_event_type='Timeout' AND wait_event='PgSleep'"
+  pos="$(awk '/^DO \$locks\$/{f=1} /^END \$locks\$;/{f=0} /pg_sleep\(/{n++; if (f) k++} END{print n+0, k+0}' "$3")"
+  [[ "$pos" == '1 1' ]] || fail "buget $label: artefactul trebuie sa aiba exact un pg_sleep, in bucla \$locks\$ (gasit: total/in bucla = $pos)"
+  ! grep -q 'pg_sleep' "$ROOT/scripts/livrare_migrare.sh" || fail "buget $label: runnerul are pg_sleep (reperul buclei nu mai e unic)"
   # r11: tranzactia lunga fara \! / FIFO: partea 1 (BEGIN + instructiunea) pe stdin, COMMIT abia dupa fisierul release.
   printf 'BEGIN;\n%s;\n' "$4" >"$TMP/budget_${label}_1.sql"
   printf 'COMMIT;\n' >"$TMP/budget_${label}_2.sql"
@@ -277,9 +285,16 @@ lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $
   t0="$(date +%s%N)"
   ( export PGAPPNAME="portal_apply_$label"; runner "$2" "$3" ) >"$log" 2>&1 &
   local apply=$!
-  # psql poate trimite si comentariile dinaintea instructiunii => LIKE pe '%DO $locks$%'.
-  be="$(wait_pid_query "portal_apply_$label" "$la_locks" "$apply")" \
-    || { wait "$apply" || true; touch "$release"; wait "$holder" || true; cat "$log"; fail "buget $label: livrarea nu a ajuns la \$locks\$"; }
+  # r24: bariera = intrarea in bucla de reincercare (PgSleep), nu advisory lock-ul. Daca livrarea se termina inainte, a
+  # refuzat fara sa reincerce (prefixul a consumat bugetul de 1 s de la BEGIN): esec cu motivul exact, nu „fereastra ratata”.
+  be="$(wait_pid_query "portal_apply_$label" "$in_bucla" "$apply")" || {
+    wait "$apply" || true; touch "$release"; wait "$holder" || true; cat "$log"
+    fail "buget $label: livrarea nu a intrat in bucla de reincercare \$locks\$ ($(grep -o '[0-9]* incercari, [0-9]* ms de la BEGIN' "$log" | head -n 1))"; }
+  xs="$(q "SELECT xact_start FROM pg_stat_activity WHERE pid=$be")"
+  intrare="$(q "SELECT round(extract(epoch FROM clock_timestamp() - xact_start) * 1000) FROM pg_stat_activity WHERE pid=$be")"
+  [[ -n "$xs" && "$intrare" =~ ^[0-9]+$ ]] || {
+    wait "$apply" || true; touch "$release"; wait "$holder" || true; cat "$log"
+    fail "buget $label: livrarea a iesit din bucla imediat dupa reper (fereastra ramasa ~0)"; }
   got="$(probes "$5")"
   # r10 (Jakarinos r9 P2): in timpul reincercarilor livrarea nu tine CONTINUU niciun lock pe tabelele utilizatorilor
   # (o incercare NOWAIT ratata tine cateva microsecunde; un lock luat inainte de $locks$ ar aparea in toate esantioanele).
@@ -291,13 +306,20 @@ lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $
     sleep 0.01
   done
   for t in "${!vazut[@]}"; do (( ${vazut[$t]} < 6 )) || persist+="$t "; done
-  # Probele si esantioanele au rulat CAT TIMP livrarea inca incerca (nu dupa refuz).
-  [[ "$(q "SELECT count(*) FROM pg_stat_activity WHERE pid=$be AND $la_locks")" == 1 ]] \
-    || fail "buget $label: probele nu au prins fereastra de incercare"
+  # Probele si esantioanele au rulat CAT TIMP livrarea inca incerca (nu dupa refuz): aceeasi tranzactie (xact_start) e
+  # tot in bucla. Bucla doarme ~50 ms din fiecare ciclu: pana la 20 de citiri la 5 ms o prind sigur daca inca incearca.
+  for ((i=0;i<20;i++)); do
+    [[ "$(q "SELECT count(*) FROM pg_stat_activity WHERE pid=$be AND xact_start='$xs'::timestamptz AND $in_bucla")" == 1 ]] && { prins=1; break; }
+    sleep 0.005
+  done
   wait "$apply" || rc=$?
   t1="$(date +%s%N)"; ms=$(( (t1 - t0) / 1000000 ))
   touch "$release"
   wait "$holder" || hrc=$?
+  (( prins )) || { cat "$log"; fail "buget $label: probele nu au prins fereastra de incercare (intrare in bucla la $intrare ms de la BEGIN; $(grep -o '[0-9]* incercari, [0-9]* ms de la BEGIN' "$log" | head -n 1))"; }
+  # Reperul a vazut o pauza => cel putin doua incercari in refuz.
+  n_inc="$(grep -o '[0-9]* incercari, [0-9]* ms de la BEGIN' "$log" | head -n 1 | awk '{print $1}')" || n_inc=""
+  [[ "$n_inc" =~ ^[0-9]+$ ]] && (( n_inc >= 2 )) || { cat "$log"; fail "buget $label: refuzul are '$n_inc' incercari (asteptat >= 2 dupa reperul PgSleep)"; }
   [[ "$hrc" == 0 ]] || { cat "$TMP/budget_${label}_holder.log"; fail "buget $label: tranzactia lunga a esuat"; }
   [[ "$rc" == 10 ]] && grep -q 'PORTAL_LOCK_BUDGET' "$log" || { cat "$log"; fail "buget $label: asteptat refuz PORTAL_LOCK_BUDGET cu cod 10, primit $rc"; }
   [[ "$got" == "$5" ]] || fail "buget $label: probe '$got', asteptat '$5'"
@@ -308,7 +330,7 @@ lock_budget_refusal() { # $1 eticheta, $2 versiunea runnerului, $3 artefactul, $
   (( srv >= PORTAL_BUDGET_MS && srv < PORTAL_PLAFON_MS )) || fail "buget $label: refuz la $srv ms de la BEGIN (asteptat [${PORTAL_BUDGET_MS}, ${PORTAL_PLAFON_MS}) ms)"
   (( ms >= PORTAL_BUDGET_MS - 100 && ms <= 20000 )) || fail "buget $label: refuzul a venit dupa $ms ms (asteptat ~1 s + runner)"
   ! grep -q 'transaction timeout' "$log" || fail "buget $label: refuzul trebuia sa vina din bucla (55P03), nu din plafon"
-  echo "LOCK_BUDGET $label: refuz 55P03 la $srv ms de la BEGIN ($ms ms cu runnerul); utilizatori in timpul incercarii: $got; lock tinut continuu: niciunul"
+  echo "LOCK_BUDGET $label: in bucla la $intrare ms de la BEGIN; refuz 55P03 la $srv ms ($n_inc incercari, $ms ms cu runnerul); utilizatori in timpul incercarii: $got; lock tinut continuu: niciunul"
 }
 
 traffic_sql() {

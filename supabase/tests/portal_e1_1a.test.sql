@@ -166,14 +166,12 @@ BEGIN
    OR public.fn_teren_eligibil(NULL) IS NOT FALSE THEN RAISE EXCEPTION 'self check boundary'; END IF;
  FOR p IN SELECT pr.oid,pr.proname FROM pg_proc pr JOIN pg_namespace n ON n.oid=pr.pronamespace
     WHERE n.nspname='public' AND has_function_privilege(current_user,pr.oid,'EXECUTE') LOOP
-   IF p.proname NOT IN ('fn_teren_eligibil','fn_portal_uid') AND p.proname NOT IN
-     ('portal_fixture_public_01','portal_fixture_public_02','portal_fixture_public_03','portal_fixture_public_04',
-      'portal_fixture_public_05','portal_fixture_public_06','portal_fixture_public_07','portal_fixture_public_08',
-      'portal_fixture_public_09','portal_fixture_public_10','portal_fixture_public_11','portal_fixture_public_12',
-      'portal_fixture_public_13','portal_fixture_public_14','portal_fixture_public_15','portal_fixture_public_16',
-      'portal_fixture_public_17','portal_fixture_public_18','portal_fixture_public_19','portal_fixture_public_20','portal_fixture_public_21') THEN
+   -- r23 (varianta d): in public teren executa DOAR cele doua functii ale portalului (cele 21 nu mai au PUBLIC).
+   IF p.proname NOT IN ('fn_teren_eligibil','fn_portal_uid') THEN
      RAISE EXCEPTION 'unexpected client function %',p.oid::regprocedure; END IF;
  END LOOP;
+ BEGIN PERFORM public.portal_fixture_public_19(); RAISE EXCEPTION 'teren calls a former PUBLIC function';
+ EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN PERFORM public.fn_auth_token_hook('{}'); RAISE EXCEPTION 'client hook execute';
  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN PERFORM public.fn_portal_porti_lipsa(); RAISE EXCEPTION 'client gate execute';
@@ -183,12 +181,42 @@ RESET ROLE;
 -- Demonstreaza ca fixture-urile sunt chiar deschise pentru authenticated.
 SET LOCAL ROLE authenticated;
 DO $$ BEGIN IF (SELECT count(*) FROM public.employees) <> 3 THEN RAISE EXCEPTION 'fixture RLS not broad'; END IF; END $$;
+-- r23 (varianta d), apelantii legitimi dupa REVOKE ... FROM PUBLIC: authenticated apeleaza o functie apelabila (GRANT
+-- explicit) si declanseaza un trigger a carui functie nu mai are EXECUTE pentru nimeni in afara proprietarului.
+DO $$ BEGIN
+ IF has_function_privilege('public','public.portal_fixture_public_01()','EXECUTE')
+   OR has_function_privilege('public','public.portal_fixture_public_19()','EXECUTE') THEN RAISE EXCEPTION 'PUBLIC still executes'; END IF;
+ IF has_function_privilege('authenticated','public.portal_fixture_public_01()','EXECUTE') THEN RAISE EXCEPTION 'trigger function granted'; END IF;
+ PERFORM public.portal_fixture_public_19();
+ UPDATE public.facturi SET suma=suma WHERE id=1;
+ IF NOT FOUND THEN RAISE EXCEPTION 'facturi update (trigger without EXECUTE) did not run'; END IF;
+END $$;
 RESET ROLE;
+SET LOCAL ROLE service_role;
+SELECT public.portal_fixture_public_20();
+RESET ROLE;
+-- mutant: GRANT lipsa pentru un apelant legitim => apelul lui pica (testul de apel il prinde) si amprenta ACL e rosie
+SAVEPOINT grant_lipsa;
+REVOKE EXECUTE ON FUNCTION public.portal_fixture_public_19() FROM authenticated;
+SET LOCAL ROLE authenticated;
+DO $$ BEGIN
+ BEGIN PERFORM public.portal_fixture_public_19(); RAISE EXCEPTION 'missing grant not detected by the call test';
+ EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $$;
+RESET ROLE;
+DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_19()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'grant drift missed'; END IF; END $$;
+ROLLBACK TO grant_lipsa;
+-- mutant: PUBLIC redat pe o functie din cele 21 => functie: + amprenta: (poarta rosie chiar daca e in baseline)
+SAVEPOINT public_redat;
+GRANT EXECUTE ON FUNCTION public.portal_fixture_public_19() TO PUBLIC;
+DO $$ BEGIN IF NOT ('functie:public.portal_fixture_public_19()'=ANY(public.fn_portal_porti_lipsa()))
+  OR NOT ('amprenta:public.portal_fixture_public_19()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'PUBLIC regrant missed'; END IF; END $$;
+ROLLBACK TO public_redat;
 REVOKE USAGE ON SCHEMA auth FROM teren;
 REVOKE USAGE ON SCHEMA portal_test FROM teren;
 SAVEPOINT drift;
 CREATE FUNCTION public.portal_bad_public() RETURNS integer LANGUAGE sql AS $$SELECT 1$$;
-DO $$ BEGIN IF cardinality(public.fn_portal_porti_lipsa())=0 THEN RAISE EXCEPTION 'new public function missed'; END IF; END $$;
+DO $$ BEGIN IF NOT ('functie:public.portal_bad_public()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'new public function missed'; END IF; END $$;
 ROLLBACK TO drift;
 SAVEPOINT grant_drift;
 GRANT SELECT ON public.employees TO teren;
@@ -234,15 +262,17 @@ DO $$ BEGIN
 END $$;
 
 SAVEPOINT body_drift;
-CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS $$SELECT 99$$;
-DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'body drift missed'; END IF; END $$;
+-- r23: 01 e functie de trigger (tipul intors nu se schimba cu CREATE OR REPLACE) => corpul se schimba pe 19 (apelabila)
+CREATE OR REPLACE FUNCTION public.portal_fixture_public_19() RETURNS integer LANGUAGE sql IMMUTABLE AS $$SELECT 99$$;
+DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_19()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'body drift missed'; END IF; END $$;
 ROLLBACK TO body_drift;
 SAVEPOINT definer_drift;
 ALTER FUNCTION public.portal_fixture_public_01() SECURITY DEFINER;
 DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'definer drift missed'; END IF; END $$;
 ROLLBACK TO definer_drift;
 SAVEPOINT acl_drift;
-REVOKE EXECUTE ON FUNCTION public.portal_fixture_public_01() FROM PUBLIC;
+-- r23 (d): PUBLIC e deja retras; abaterea de ACL = un drept NOU (aici pe o functie de trigger)
+GRANT EXECUTE ON FUNCTION public.portal_fixture_public_01() TO anon;
 DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'ACL drift missed'; END IF; END $$;
 ROLLBACK TO acl_drift;
 SAVEPOINT config_drift;
