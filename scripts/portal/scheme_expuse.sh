@@ -53,5 +53,5 @@ case "$SUPABASE_URL" in https://*) ;; *) echo 'SUPABASE_URL trebuie sa inceapa c
 # Cheia trece doar prin antete citite dintr-un fisier temporar (nu apare in linia de comanda a procesului).
 H="$(mktemp)"; trap 'rm -f "$H"' EXIT
 printf 'apikey: %s\nAuthorization: Bearer %s\nAccept-Profile: %s\n' "$SUPABASE_ANON_KEY" "$SUPABASE_ANON_KEY" "$PROFIL_SONDA" >"$H"
-R="$(curl -sS --max-time 20 -H @"$H" "${SUPABASE_URL%/}/rest/v1/" 2>&1)" || { echo "NECUNOSCUT: cererea a esuat" >&2; exit 2; }
+R="$(curl -sS --max-time 20 -H @"$H" "${SUPABASE_URL%/}/rest/v1/portal_e1_sonda?limit=1" 2>&1)" || { echo "NECUNOSCUT: cererea a esuat" >&2; exit 2; }
 rc=0; interpreteaza "$R" || rc=$?; exit "$rc"
