@@ -1107,3 +1107,95 @@ pot rula oricand, fara `teren` si fara lock-uri.
 | L19 | Lista autoritara = un apel al functiei portii; detaliile (si A-D) sunt ajutor de citire, paritatea propusa la pct. 2c. |
 | L25 | Verificatorul independent de taietor (stergere pura vs marcaje); textul real al runnerului; PG17 NOSUPERUSER cu poarta stricata real. |
 | restul | n/a (unealta de diagnostic + teste + raport; fara schema, RPC, date sau drepturi noi). |
+
+## E1-1a r20 — 12.11.2026 (cauza postconditiei 18a: doua tabele ale extensiei pg_net; citirile A-D reparate)
+
+### Constatarea (citire pe productie, tranzactie READ ONLY, coordonatorul)
+- A: exact `information_schema`, `net`, `public`, fara CREATE — in regula.
+- B: doua relatii, ambele ale extensiei pg_net, proprietar `supabase_admin`: `net._http_response` si `net.http_request_queue`,
+  cu toate drepturile pentru PUBLIC (acordate de `supabase_admin`). Rolul `teren` ajunge la ele prin PUBLIC => poarta
+  intoarce `relatie:_http_response`, `relatie:http_request_queue` => `PORTAL_POSTCONDITION_FAILED`. Pe harness tabelele
+  pg_net nu existau / nu aveau aceste drepturi, de aceea a trecut.
+- C a picat (`... is not a sequence`: un index a ajuns la `has_sequence_privilege`, filtrul pe `relkind` din WHERE nu
+  are ordine garantata), D nu a mai rulat; A picase intai pe `ORDER BY 1 COLLATE "C"` (literal intreg, nu pozitie).
+  Probabil (de confirmat cu C reparat): si secventa cozii (`net.http_request_queue_id_seq`) are drept pentru PUBLIC,
+  pentru ca `net.http_post` (INVOKER) scrie in coada cu drepturile apelantului.
+
+### Ce s-a adaugat (SQL-ul celor 4 fisiere ale portalului NESCHIMBAT, SHA-urile raman)
+- `scripts/portal/porti_citire.sql`: o tranzactie `BEGIN READ ONLY ... ROLLBACK`, doar catalog; A-D reparate (ordonare pe
+  coloana; `has_*_privilege` doar in `CASE` pe `relkind`; semnaturi explicite) + E-L pentru decizie: proprietarul schemei
+  `net` si al extensiei, cine poate retrage drepturi, drepturile pe fiecare obiect din `net` (beneficiar, acordant,
+  `pg_init_privs`), amprenta de structura a obiectelor la care ajunge PUBLIC (pentru varianta c), functiile / joburile
+  cron / triggerele care folosesc pg_net si ca ce rol ruleaza (fara corpuri si fara comenzi: doar adevarat / fals si
+  nume), setarea PostgREST din baza, rolurile cu login. Iesirea: nume, roluri, drepturi, numere, md5-uri de structura.
+  Rulare: `psql -X -v ON_ERROR_STOP=1 -f scripts/portal/porti_citire.sql`.
+- `scripts/portal/test_static_porti_citire.py` (24 de cazuri): fara scrieri / DDL / control de tranzactie / functii cu
+  efect / comenzi psql; nicio citire de randuri din tabele de date; `has_sequence_privilege` doar in `CASE WHEN
+  c.relkind = 'S'`; nicio ordonare pe pozitie cu COLLATE; mutantii (inclusiv interogarile A si C din r19) refuzati.
+- `scripts/portal/porti_citire_pglite.mjs`: rularea efectiva pe PostgreSQL in proces (PGlite, PG17) cu schema falsa in
+  forma de pe productie (drepturile din B, indexul care a rupt C) — 29 de verificari, inclusiv controalele de mai jos.
+- `scripts/test_portal_e1.sh`: pe clusterul PG17, cu portile stricate intentionat din r19, `porti_citire.sql` numeste
+  EXACT aceleasi obiecte ca diagnosticul (B = `diag_poarta_fixture`, C = `diag_poarta_fixture_seq`, D = 0), nimic ramas.
+
+### Variantele pentru cele doua tabele pg_net (decizia owner-ului; nimic aplicat)
+Cum folosesc aplicatia pg_net (din repo; lista autoritara = sectiunile H / I / L ale scriptului, pe productie):
+- joburi cron care apeleaza `net.http_post` direct, toate cu `username = postgres` (verificat in migrarile 20261015b /
+  20261016a): `recycle_bin_cleanup_zilnic`, `rag_utilaj_process_queue`, `rag_utilaj_process_pending`, `redirect-mai-gov`,
+  `reminder-rapoarte-zilnice`, `necesar-deschidere` / `-reminder` / `-inchidere`, `probleme-parc-reminder`,
+  `upa-plafon-alerta`, `api_consum_extern_zilnic`, `normative_scan_continua`, `sms_sold_zilnic`,
+  `polite_alerte_departamente` (+ `ofertare_rc_necitit`, programat in afara migrarilor, de confirmat cu I);
+- functii SECURITY DEFINER (proprietar postgres) chemate de cron: `iot_cron_tick`, `iot_lumini_cron_tick`,
+  `ofertare_ingest_tick` (citeste si coada si raspunsurile), `ofertare_extragere_tick` (citeste raspunsurile);
+- triggere SECURITY DEFINER (proprietar postgres), pornite de scrieri ale utilizatorilor: `fn_detect_ordine_trigger`,
+  `fn_ai_inbox_trigger_clasificare`;
+- citiri manuale / rutina zilnica: `net._http_response` ca `postgres` (MCP, runbook-ul normative-scan);
+- edge functions: niciuna nu atinge tabelele (doar comentarii); nicio functie INVOKER apelata de utilizatori nu foloseste
+  `net.` (de confirmat cu H: `exec_authenticated` / `exec_anon` pe randurile cu `security_definer = false`).
+Toate ruleaza deci ca `postgres` (sau ca workerul pg_net), iar `postgres` ajunge azi la cele doua tabele DOAR prin PUBLIC
+(B: ACL-ul are numai `supabase_admin` si PUBLIC).
+
+| | (a) REVOKE pe tabele FROM PUBLIC | (b) REVOKE USAGE pe schema net FROM PUBLIC | (c) poarta accepta explicit obiectele pg_net |
+|---|---|---|---|
+| Cine o poate face | Doar proprietarul (`supabase_admin`) sau cine are drept de redistribuire; dat de `postgres`, REVOKE-ul NU are efect (doar WARNING) — demonstrat pe PGlite; pe productie: E / F (`postgres_poate_retrage`). Practic: cerere la suportul Supabase. | La fel: cine a acordat USAGE lui PUBLIC (probabil `supabase_admin`, de confirmat cu E). | Noi, prin migrare (SHA nou + review). |
+| Ce strica | Fara GRANT-uri explicite inainte: TOATE apelurile pg_net ale lui `postgres` (joburile, tick-urile, triggerele de mai sus). Minimul pentru `http_post`: INSERT + SELECT(id) pe coada (`RETURNING id`) + USAGE pe secventa — doar INSERT nu ajunge (demonstrat); SELECT pe raspunsuri pentru tick-uri si citirile manuale; acelasi lucru pentru `supabase_functions_admin` / `service_role` daca le folosesc. | Doar rolurile fara USAGE explicit pe `net` (E arata cine il are; platforma il da la crearea extensiei lui postgres, anon, authenticated, service_role, supabase_functions_admin). Mai putin riscant decat (a), daca E confirma granturile explicite. | Nimic in aplicatie. |
+| Rezista la actualizarea pg_net? | Nu e garantat: daca drepturile vin din scriptul extensiei (F: `drepturi_initiale_extensie`), o actualizare le poate pune la loc => poarta ar inrosi din nou (fail-closed, nu o gaura). | La fel (evenimentul platformei la crearea extensiei + scripturile de actualizare). | Amprenta fixata inrosește poarta la orice schimbare (fail-closed); se re-amprenteaza prin review. |
+| Ce se schimba in 18a / 19a | Nimic (SHA-urile raman); doar rerulare `porti_citire.sql` + proba. | 18a: schemele asteptate devin `information_schema`, `public` => SHA nou; 19a neschimbat. | 18a: lista revizuita a obiectelor pg_net (vezi mai jos) => SHA nou; 19a: semnatura functiei noi in `fn_portal_1b_snapshot` => SHA nou. Review nou pe ambele. |
+| Ce decide owner-ul | Daca deschide cererea la Supabase si fereastra de GRANT-uri. | La fel + lista rolurilor cu USAGE explicit. | Daca accepta ca `teren` sa ramana, fata de pg_net, exact ca anon / authenticated azi. |
+| Risc operational | Mare (toate joburile pe un singur pas facut de altcineva; revenire posibila la actualizari). | Mediu. | Mic. |
+
+Ce ar urma ca cod pentru (c), dupa decizie (NU e facut in r20):
+- 18a: functie noua `public.fn_portal_net_rel_md5()` cu literalii revizuiti din sectiunea G (cheia = `net.<relatie>`,
+  valoarea = md5-ul amprentei: tip, proprietar, ACL, RLS, coloane), completata din citirea pe productie, NU invatata la
+  apply (ca `fn_portal_net_md5`); in `$public_pre$`: setul obiectelor din `net` la care ajunge PUBLIC = exact cheile
+  (ambele directii), fiecare membru al extensiei pg_net, amprenta identica, altfel `PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED`;
+  in `fn_portal_porti_lipsa()`: `relatie:` / `secventa:` sar DOAR peste obiectele din `net` cu amprenta identica cu
+  literalul (orice drept in plus, coloana noua, alt proprietar, alt obiect = poarta ramane rosie).
+- 19a: `fn_portal_net_rel_md5()` in lista din `fn_portal_1b_snapshot`.
+- Harness: tabelele pg_net in forma de pe productie (proprietar `supabase_admin`, drepturile din B, membre ale extensiei);
+  mutanti: drept in plus pentru anon, coloana noua, obiect nou in `net` cu drept pentru PUBLIC, obiect nemembru al
+  extensiei => poarta rosie; paritate `porti_citire.sql` (B / C / G) = poarta.
+
+**Recomandarea: (c)**, cu amprenta fixata — este singura in puterea noastra, nu atinge joburile si ramane fail-closed la
+actualizarile platformei. Igiena (a) / (b) e o tema separata a intregii baze (nu doar a portalului), de discutat cu
+suportul Supabase. Prima rerulare a `porti_citire.sql` decide detaliile (secventa cozii in C, cine poate retrage in E / F,
+originea drepturilor in F).
+
+### Teste r20
+- `python3 scripts/portal/test_static_porti_citire.py` — 24 OK (fisierul real LF si CRLF, ASCII, 20 de mutanti refuzati
+  cu motivul exact, literalii cu cuvinte interzise acceptati).
+- `node scripts/portal/porti_citire_pglite.mjs` (dupa `npm install --no-save @electric-sql/pglite@0.3`) — 29 OK: forma
+  veche A pica exact ca pe productie; A / B / C / D / D_numar / E-L corecte pe schema falsa; REVOKE de la ne-proprietar
+  = WARNING, ACL neschimbat; dupa REVOKE de la proprietar B / C / G goale, dar `http_post` al unui rol obisnuit pica;
+  doar INSERT + USAGE pe secventa nu ajunge; cu SELECT(id) merge.
+- `scripts/test_portal_e1.sh` (PG17, ruleaza coordonatorul): cazul de paritate de mai sus.
+
+| Regula | Dovada r20 |
+|---|---|
+| L12 | Fiecare sectiune apare exact o data (test static); lipsa unei sectiuni = refuz, nu „0 randuri”. |
+| L13 | Predicatele pe text (corpuri, comenzi cron) doar ca adevarat / fals, cu `[.]` in loc de escape; test pozitiv + negativ pe PGlite (functie fara pg_net nu apare). |
+| L14 | O tranzactie READ ONLY + ROLLBACK, fara scrieri (test static + harness: starea neschimbata). |
+| L15 | Poarta neschimbata; propunerea (c) = amprenta pe structura + ACL, fixata inainte de apply, nu invatata. |
+| L18 | `IS TRUE` / `IS FALSE` pe rezultatele CASE (NULL nu trece drept fals). |
+| L19 | Paritate `porti_citire.sql` = diagnosticul portii pe acelasi cluster (B / C / D). |
+| L25 | Expected din productie (B, mesajele de eroare), PG17 real in harness + PGlite; controale pe forma veche si pe REVOKE. |
+| restul | n/a (script de citire + teste + raport; fara schema, RPC, date sau drepturi noi). |

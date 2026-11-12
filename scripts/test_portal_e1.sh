@@ -257,6 +257,20 @@ grep -q 'DIAG_PORTI_DETALIU 1: public.diag_poarta_fixture tip=r' "$TMP/dry_diag_
 [[ "$(q "$STARE_DIAG")" == t ]] || fail 'diagnostic: a ramas ceva din 18a sau din istoric'
 [[ "$(q "SELECT to_regclass('public.diag_poarta_fixture') IS NOT NULL AND has_table_privilege('public.diag_poarta_fixture','SELECT')")" == t ]] \
   || fail 'diagnostic: a schimbat obiectele existente'
+# r20: scripts/portal/porti_citire.sql (citirea omului A-L, tranzactie READ ONLY) pe acelasi cluster, cu aceleasi porti
+# stricate: B / C numesc EXACT obiectele numite de diagnostic (paritate L19), A = cele 3 scheme, D = 0 randuri; nimic
+# ramas. Harness-ul nu are pg_cron: cron.job minimal (sectiunea I) doar pe durata cazului.
+q "CREATE SCHEMA cron; CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, command text NOT NULL,
+   username text NOT NULL DEFAULT current_user, active boolean NOT NULL DEFAULT true, jobname text)" >/dev/null
+"${PSQL[@]}" -At -F '|' -f "$ROOT/scripts/portal/porti_citire.sql" >"$TMP/porti_citire.out" 2>&1 \
+  || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql pe clusterul PG17'; }
+q "DROP TABLE cron.job; DROP SCHEMA cron" >/dev/null
+sect() { grep -E "^$1\|" "$TMP/porti_citire.out" | cut -d'|' -f"$2" | paste -sd, -; }
+[[ "$(sect A_scheme 2)" == information_schema,net,public && "$(sect B_relatii 3)" == diag_poarta_fixture \
+   && "$(sect C_secvente 3)" == diag_poarta_fixture_seq && -z "$(sect D_functii 3)" ]] \
+  || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql: A / B / C / D diferite de diagnosticul portii'; }
+[[ "$(q "$STARE_DIAG")" == t ]] || fail 'porti_citire.sql: a ramas ceva'
+echo "PORTI_CITIRE: B=$(sect B_relatii 3) C=$(sect C_secvente 3) D=0 (= diagnosticul), ROLLBACK"
 q "DROP TABLE public.diag_poarta_fixture; DROP SEQUENCE public.diag_poarta_fixture_seq" >/dev/null
 rc="$(dry_e1 proba_curata --doar-18a)"
 [[ "$rc" == 0 ]] || { cat "$TMP/dry_proba_curata.log"; fail "dry_prod pe fixture curat: cod $rc, asteptat 0 (PROBA OK)"; }
