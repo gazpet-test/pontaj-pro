@@ -220,6 +220,7 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
   SELECT v.eticheta, v.amprenta FROM (VALUES
     ('functie auth.jwt()', '0a339ea1d249a021248f635d6afb9687')
     , ('functie auth.uid()', '547eb1864858f1efce909a735a04d521')
+    , ('functie fn_auto_create_executie_proiect()', '65ba246342e6d1594eed6152298e5c3d')
     , ('functie fn_executie_acces_garda_copil()', '4344ff23cd4110f4c7f02e10d9e65704')
     , ('functie fn_executie_acces_lista(boolean)', '8dae19e2f5e53aeaec7d4a7d360f046b')
     , ('functie fn_executie_acces_lista_cont(uuid,boolean)', '4f382e2182a748dd9790e9f65f9cd9a5')
@@ -235,6 +236,7 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
     , ('functie fn_raport_santier_drept(bigint)', '0d759c83376de45804392f28353a370d')
     , ('functie fn_raport_zilnic_salveaza(bigint,date,jsonb,jsonb,jsonb,integer,uuid)', 'e3ab72f918a8c8a99bd655a4dd3c1386')
     , ('functie fn_raport_zilnic_versiune()', 'e86174ecabbbea46f897842626089602')
+    , ('functie fn_site_name_to_cod_intern(text)', '90576f5e637d8bdf9bd5873d50bcbf9a')
     , ('tabel rapoarte_zilnice | acl', '565553b4fd23bff3761a45bfba76d27c')
     , ('tabel rapoarte_zilnice | acl coloane', 'a0e240c36ade38bbb43163c61b36e86b')
     , ('tabel rapoarte_zilnice | politici', '0b44f3ed9a1b5b3b92e65027716ac55e')
@@ -247,15 +249,12 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
     , ('tabel raport_zilnic_salvari | rls', '0a318f8ff8d8cc0bbd7b4b61a975f7b3')
     , ('tabel raport_zilnic_salvari | secvente', 'c682593c295df7f5bac08453a7869d18')
     , ('tabel raport_zilnic_salvari | triggere', '7fd4342f774415f814a99973b428be52')
-    -- r4: etichete NOI (tabelul sites intră în amprentă); DE_COMPLETAT = refuz. Coordonatorul rulează din nou scripts/raport_rezumat_amprente.sql
-    --     și lipește TOATĂ coloana linie_baseline (cele 29 de mai sus trebuie să iasă identic); scriptul dă în plus și funcțiile din
-    --     politicile / triggerele lui sites, care nu se pot ști de aici (etichete „functie …”).
-    , ('tabel sites | acl', 'DE_COMPLETAT')
-    , ('tabel sites | acl coloane', 'DE_COMPLETAT')
-    , ('tabel sites | politici', 'DE_COMPLETAT')
-    , ('tabel sites | rls', 'DE_COMPLETAT')
-    , ('tabel sites | secvente', 'DE_COMPLETAT')
-    , ('tabel sites | triggere', 'DE_COMPLETAT')
+    , ('tabel sites | acl', '565553b4fd23bff3761a45bfba76d27c')
+    , ('tabel sites | acl coloane', 'a0e240c36ade38bbb43163c61b36e86b')
+    , ('tabel sites | politici', '40efb11aeae2999fe40956b624c430e0')
+    , ('tabel sites | rls', '0a318f8ff8d8cc0bbd7b4b61a975f7b3')
+    , ('tabel sites | secvente', 'fdda94678348628259941ebf2c046662')
+    , ('tabel sites | triggere', '9bad825768e3d868bc4b95c82c0218dc')
   ) v(eticheta, amprenta)
 $bl$;
 -- <<< BASELINE 20261216a
