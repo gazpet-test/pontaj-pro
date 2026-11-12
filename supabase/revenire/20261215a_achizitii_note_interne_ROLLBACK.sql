@@ -24,6 +24,23 @@ BEGIN
   END IF;
   -- L14: lock înaintea verificării „fără date”; ocupat = refuz imediat (55P03), nimic scris
   LOCK TABLE public.comenzi_furnizor IN ACCESS EXCLUSIVE MODE NOWAIT;
+  -- r2 (L15): amprenta EXACTĂ a ce scoatem = ce a creat 20261215a: coloana text nullable, fără valoare implicită, fără drepturi proprii,
+  -- CHECK-ul cu definiția exactă și nimic altceva legat de coloană (politică, vedere, index, alt CHECK). Altă formă = refuz (de analizat).
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.comenzi_furnizor'::regclass AND a.attname = 'note_interne' AND NOT a.attisdropped
+                  AND format_type(a.atttypid, a.atttypmod) = 'text' AND NOT a.attnotnull AND NOT a.atthasdef AND a.attacl IS NULL
+                  AND a.attgenerated = '' AND a.attidentity = '')
+     OR (SELECT string_agg(c.conname || '=' || c.contype::text || '=' || pg_get_constraintdef(c.oid), '; ' ORDER BY c.conname COLLATE "C")
+           FROM pg_constraint c WHERE c.conrelid = 'public.comenzi_furnizor'::regclass
+            AND (c.conname = 'comenzi_furnizor_note_interne_lung_ck'
+                 OR (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = 'public.comenzi_furnizor'::regclass AND a.attname = 'note_interne') = ANY (c.conkey)))
+        IS DISTINCT FROM 'comenzi_furnizor_note_interne_lung_ck=c=CHECK (((note_interne IS NULL) OR (length(note_interne) <= 4000)))'
+     OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = 'public.comenzi_furnizor'::regclass
+                 AND d.refobjsubid = (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = 'public.comenzi_furnizor'::regclass AND a.attname = 'note_interne')
+                 AND NOT (d.classid = 'pg_constraint'::regclass
+                          AND d.objid = (SELECT c.oid FROM pg_constraint c WHERE c.conrelid = 'public.comenzi_furnizor'::regclass
+                                          AND c.conname = 'comenzi_furnizor_note_interne_lung_ck'))) THEN
+    RAISE EXCEPTION '20261215a revenire: note_interne / CHECK-ul ei difera de ce a creat 20261215a (drepturi proprii, alta definitie sau obiecte legate)';
+  END IF;
   IF EXISTS (SELECT 1 FROM public.comenzi_furnizor WHERE note_interne IS NOT NULL) THEN
     RAISE EXCEPTION '20261215a revenire: exista comenzi cu notite interne scrise (export + golire aprobata, apoi revenirea)';
   END IF;
