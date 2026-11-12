@@ -73,9 +73,9 @@ BEGIN
             ('fn_raport_rezumat_nr', 'public.fn_raport_rezumat_nr(jsonb)', '52082fbf3726918e913f1e0dcf30c2e9'),
             ('fn_raport_rezumat_text', 'public.fn_raport_rezumat_text(jsonb)', '8424e32d89ec23ea3eac50d70cbb2df0'),
             ('fn_raport_rezumat_intrare', 'public.fn_raport_rezumat_intrare(public.rapoarte_zilnice)', '9c2aa741a066d78b444972052e5e2148'),
-            ('fn_raport_rezumat_garda', 'public.fn_raport_rezumat_garda()', '1324d142371abf6ac8d1656f3b53a090'),
+            ('fn_raport_rezumat_garda', 'public.fn_raport_rezumat_garda()', '30c2221a1e8983a9fae77259e0ea8f5f'),
             ('fn_raport_rezumat_dupa_salvare', 'public.fn_raport_rezumat_dupa_salvare()', 'c50a62999b1f6f685d5dde349f7c2d6c'),
-            ('fn_raport_rezumat_santier_mutat', 'public.fn_raport_rezumat_santier_mutat()', '05f49870feda416bb6bb9a42402f7f98')
+            ('fn_raport_rezumat_santier_mutat', 'public.fn_raport_rezumat_santier_mutat()', 'ff538640101ea652192f10a89edd5220')
             -- AMPRENTE-END
           ) a(nume, semnatura, amprenta) ON p.oid = to_regprocedure(a.semnatura)
          WHERE n.nspname = 'public' AND md5(replace(p.prosrc, chr(13), '')) = a.amprenta

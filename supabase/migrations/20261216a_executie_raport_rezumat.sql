@@ -52,21 +52,30 @@
 --       șantierului compuse pentru alt proiect devin 'de_recompus' (text NULL, rezumat_la = momentul invalidării, fără compunere: costul e un
 --       UPDATE pe rând, prin indexul (site_id, data)); versiunea raportului NU crește (se schimbă doar derivatul). Următoarea salvare sau
 --       „Generează” îl refac pe proiectul NOU;
---     - rezumatele CORECTATE de om (editat) pentru proiectul vechi OPRESC mutarea (55000, nimic schimbat), până la „Revino la automat” pe ele.
+--     - rezumatele CORECTATE de om (editat) pentru proiectul vechi OPRESC mutarea (55000, nimic schimbat), până la „Revino la automat” pe ele;
+--       r5: mesajul spune câte rapoarte și din ce zile (primele 5, apoi „+N”).
 --       De ce refuz și nu ascundere / mutare a textului: textul omului descrie lucrările proiectului vechi (pentru proiectul nou e greșit
 --       oricum); ascunderea la citire nu se poate impune în BD fără drepturi pe coloane (rupe select('*') din aplicație), iar o copie „doar
 --       pentru owner” = tabel nou + RLS nou pentru un caz rar. Refuzul nu pierde nimic în tăcere (L12) și lasă decizia omului, pe calea care
 --       există deja (identitate + drept pe șantier + CAS);
 --     - aceeași regulă pe rândul raportului (garda): o scriere fără rezumat pe un rând al cărui rezumat e pentru alt proiect decât cel de acum
 --       al șantierului (raport mutat pe alt șantier) = automat -> 'de_recompus', editat -> refuz 55000;
---     - concurența (L06): mutarea ia, după rândul șantierului (luat de UPDATE), lock-ul EXCLUSIVE pe rapoarte_zilnice (așteptare ≤ 3 s, peste =
---       55P03, mutarea nu trece). EXCLUSIVE intră în conflict și cu ROW SHARE (FOR UPDATE din RPC): o salvare în curs (care a citit proiectul
---       vechi) se termină înainte, iar invalidarea o vede; o salvare care începe după așteaptă mutarea și compune pe proiectul nou. Fără
---       lock, un raport NOU inserat în paralel (necomis, invizibil pentru UPDATE) ar rămâne cu textul proiectului vechi
---       (scripts/raport_rezumat_concurenta.sh S4 / S5). Salvarea nu blochează niciodată rândul șantierului (FK-ul ia FOR KEY SHARE, compatibil
---       cu UPDATE-ul lui proiect_id), deci nu există ciclu. Mutarea cere READ COMMITTED (altfel invalidarea n-ar vedea rândurile comise între
---       timp): refuz 0A000. Trigger-ul de acces pe rapoarte (20261209a) verifică și aici dreptul celui care mută pe proiectul rapoartelor:
---       un cont restrâns fără drept de scriere pe proiectul nou nu poate muta un șantier cu rezumate (42501).
+--     - concurența (L06), r5 (Jakarinos r4 P1 + P2): UN protocol pe rândul ȘANTIERULUI, nu pe tabel.
+--       * Orice scriere care atinge rezumatul (garda, pe toate ramurile: raport nou, salvare, corectură, „Generează”, „Revino la automat”)
+--         citește proiectul cu FOR SHARE pe rândul șantierului, ÎNAINTEA compunerii, ținut până la COMMIT. În READ COMMITTED o mutare în
+--         zbor e așteptată și se citește proiectul nou; în REPEATABLE READ / SERIALIZABLE, un șantier mutat după imaginea tranzacției dă
+--         eroare de serializare (40001) — textul nu se mai poate compune pe proiectul din imagine (r4 P1: „Generează” pe un raport vechi,
+--         cu rezumat NULL, pe care mutarea nu-l atinsese, deci fără conflict de versiune).
+--       * Mutarea ține rândul șantierului (UPDATE-ul lui proiect_id, FOR NO KEY UPDATE): așteaptă salvările în zbor ale șantierului (o salvare
+--         în curs, care a citit proiectul vechi, se termină înainte, iar invalidarea o vede — S4) și oprește salvările care încep după (ele
+--         compun pe proiectul nou — S5). Apoi blochează doar rapoartele ȘANTIERULUI de schimbat, NOWAIT: un raport ținut de o salvare în
+--         curs = refuz imediat al mutării (55P03, nimic schimbat, se reîncearcă), niciodată așteptare (altfel ciclu cu salvarea care ține
+--         rândul raportului și cere rândul șantierului — S8). Salvările altor șantiere nu așteaptă deloc (S7).
+--       * Mutarea cere READ COMMITTED (altfel invalidarea n-ar vedea rândurile comise între timp): refuz 0A000. Trigger-ul de acces pe
+--         rapoarte (20261209a) verifică și aici dreptul celui care mută pe proiectul rapoartelor: un cont restrâns fără drept de scriere pe
+--         proiectul nou nu poate muta un șantier cu rezumate (42501).
+--       * Cât ține mutarea: doar salvările ȘANTIERULUI mutat așteaptă, cât durează invalidarea lui (un UPDATE pe rând, fără compunere);
+--         durata la volum se măsoară pe clonă cu scripts/raport_rezumat_mutare_durata.sql (docs/RAPORT_REZUMAT_E1.md).
 --     - Ce NU acoperă (date care nu se mută azi din aplicație): o activitate / un obiect / o linie mutată în alt proiect după compunere.
 -- De ce NU se schimbă fn_raport_zilnic_salveaza: 20261209a (acces pe proiect, neaplicată la scriere) îi ține amprenta corpului în inventar,
 --   iar 20261213a ține amprenta inventarului; o schimbare a RPC-ului le-ar opri pe amândouă. Funcțiile de aici nu sunt apelabile din API
@@ -88,6 +97,8 @@
 --   r4: tabelul sites intră în amprentă (trigger-ul nou de mutare stă pe el): etichetele „tabel sites | …” și funcțiile din politicile /
 --   triggerele lui sunt NOI în baseline, marcate DE_COMPLETAT (= refuz) până le scoate coordonatorul cu același script. Cele 29 de etichete
 --   deja lipite nu se schimbă (fiecare se calculează doar pe obiectul ei); scriptul rulat din nou trebuie să le dea identic.
+--   r5: toate cele 37 de valori sunt lipite (#1075: 29 + 6 etichete sites + 2 funcții din politicile / triggerele lui) și NU se schimbă:
+--   r5 nu adaugă obiecte în amprentă (garda și mutarea sunt funcțiile noi ale migrării, verificate de postcondiții, nu de baseline).
 --   Decizie separată a owner-ului (r3 P2, fără cod aici): baseline-ul îngheață drepturile de AZI pe rapoarte_zilnice — rolul anon are
 --   SELECT / INSERT / UPDATE / DELETE / REFERENCES / TRIGGER pe tabel (RLS fără politică pentru anon blochează rândurile) și SELECT / USAGE /
 --   UPDATE pe secvența rapoarte_zilnice_id_seq (RLS nu protejează secvența). Migrarea nu le acceptă și nu le schimbă: o curățare ulterioară
@@ -103,7 +114,8 @@
 --   catalogul (garda, amprenta L15 „înainte”), cu NOWAIT, într-o sub-tranzacție reîncercată la 50 ms până la 1 s de la BEGIN; peste =
 --   refuz 55P03, nimic schimbat (NOWAIT nu intră în coada lock-ului: citirile / salvările telefoanelor nu se așează în spatele migrării).
 --   lock_timeout 100 ms pentru orice altă așteptare. La rulare: trigger-ul de pe jurnal actualizează rândul raportului deja blocat de RPC
---   (FOR UPDATE, pasul 1) — niciun lock nou.
+--   (FOR UPDATE, pasul 1); r5: garda adaugă un singur lock, FOR SHARE pe rândul șantierului raportului (compatibil cu alte salvări și cu
+--   FK-urile; în conflict doar cu UPDATE-ul / ștergerea rândului șantierului).
 --   CE ȚINE LOCK-UL, după r3: DOAR catalog. Coloanele noi sunt nullable, fără valoare implicită (fără rescriere), iar CHECK-ul se adaugă
 --   NOT VALID: nicio scanare a tabelului sub ACCESS EXCLUSIVE (în r2 CHECK-ul validat scana tot tabelul, iar postcondiția „nu scrie date”
 --   îl mai citea o dată). NOT VALID nu slăbește nimic: CHECK-ul se aplică oricărui rând nou / modificat, iar rândurile existente au
@@ -116,7 +128,8 @@
 --   PLAFON_TIMP ale runnerului; țintă Y < 1000. Dacă Y ≥ 1500 pe clonă, NU se aplică: se cere altă valoare în review (nu se urcă singur).
 --   Garanția (formularea runnerului): ~2 s de la BEGIN până la intrarea în COMMIT; COMMIT-ul propriu-zis nu e plafonat.
 -- Revenire: supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql (r4: tot prin runner, cu --plafon-tranzactie-ms 2000). Test: scripts/test_executie_raport_rezumat.sql (clonă) +
---   scripts/pglite/test_raport_rezumat_local.mjs (local, PGlite) + scripts/raport_rezumat_concurenta.sh (clonă, două sesiuni).
+--   scripts/pglite/test_raport_rezumat_local.mjs (local, PGlite) + scripts/raport_rezumat_concurenta.sh (clonă, două sesiuni; r5: S6–S8
+--   + --mutant) + scripts/raport_rezumat_mutare_durata.sql (clonă, durata mutării la N rapoarte, tranzacție anulată).
 DO $pre$
 DECLARE r record; v_tip text; v_plafon text;
 BEGIN
@@ -669,8 +682,17 @@ REVOKE ALL ON FUNCTION public.fn_raport_rezumat_intrare(public.rapoarte_zilnice)
 -- pe (1)(2) eroarea ei NU anulează scrierea raportului (rezumat_eroare = SQLSTATE), pe (4) e eroare către om.
 -- r4: (2') pe o scriere fără rezumat, un rezumat compus / corectat pentru ALT proiect decât cel de acum al șantierului (șantier mutat — calea
 -- trigger-ului de pe sites —, raport mutat pe alt șantier) = automat -> 'de_recompus' fără compunere; editat -> refuz 55000.
--- Proiectul citit aici e și cel pe care îl citește intrarea (aceeași interogare pe sites): o mutare comisă între cele două citiri nu e
--- posibilă, pentru că mutarea cere EXCLUSIVE pe rapoarte_zilnice (vezi fn_raport_rezumat_santier_mutat), iar scrierea de aici ține ROW EXCLUSIVE.
+-- r5 (Jakarinos r4 P1): proiectul șantierului se citește cu FOR SHARE pe rândul lui, ÎNAINTEA oricărei ramuri (compunere, corectură,
+-- invalidare), și lock-ul ține până la COMMIT. Nu depinde de imaginea tranzacției:
+--   * READ COMMITTED: o mutare în zbor (UPDATE pe rândul șantierului, FOR NO KEY UPDATE) e așteptată, apoi se citește proiectul NOU; o mutare
+--     care începe după nu poate trece până nu se termină scrierea de aici (FOR SHARE intră în conflict cu UPDATE-ul lui proiect_id);
+--   * REPEATABLE READ / SERIALIZABLE: dacă rândul șantierului s-a schimbat după imaginea tranzacției, FOR SHARE dă eroare de serializare
+--     (40001), deci nimic nu se compune pe proiectul din imagine; dacă nu s-a schimbat, proiectul din imagine = cel curent și rămâne așa.
+--   Intrarea (fn_raport_rezumat_intrare) citește apoi același rând, deja blocat: același proiect.
+-- Ordinea lock-urilor (L06), pe toate căile: rândul raportului (RPC-ul de salvare îl ia primul, FOR UPDATE) -> rândul șantierului (aici, FOR
+--   SHARE). Mutarea ia rândul șantierului și NU așteaptă niciun rând de raport cât îl ține (NOWAIT, vezi fn_raport_rezumat_santier_mutat),
+--   deci nu se poate închide un ciclu. FK-ul raportului (FOR KEY SHARE) și FOR SHARE-urile mai multor salvări sunt compatibile între ele:
+--   salvările nu se așteaptă una pe alta, nici pe alte șantiere.
 CREATE FUNCTION public.fn_raport_rezumat_garda() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_uid uuid := auth.uid(); v_text text; v_cerere boolean := false; v_om boolean := false; v_stare text; v_proiect bigint;
@@ -679,8 +701,8 @@ BEGIN
   -- codul erorii derivatului și proiectul rezumatului le scrie DOAR serverul (L08): ce trimite clientul nu contează
   NEW.rezumat_eroare := CASE WHEN TG_OP = 'UPDATE' THEN OLD.rezumat_eroare END;
   NEW.rezumat_proiect_id := CASE WHEN TG_OP = 'UPDATE' THEN OLD.rezumat_proiect_id END;
-  -- proiectul ȘANTIERULUI de acum (NULL = șantier fără proiect sau inexistent)
-  v_proiect := (SELECT s.proiect_id FROM public.sites s WHERE s.id = NEW.site_id);
+  -- proiectul ȘANTIERULUI de acum (NULL = șantier fără proiect sau inexistent), cu rândul șantierului blocat până la COMMIT (r5, vezi sus)
+  SELECT s.proiect_id INTO v_proiect FROM public.sites s WHERE s.id = NEW.site_id FOR SHARE OF s;
   IF TG_OP = 'INSERT' THEN
     -- raport nou: rezumatul automat (o corectură se face doar pe un raport existent); ce a trimis clientul nu contează (L08)
     NEW.rezumat_sursa := 'automat';
@@ -790,31 +812,45 @@ CREATE TRIGGER trg_raport_zilnic_salvari_rezumat AFTER INSERT ON public.raport_z
 -- ── r4 (Jakarinos r3 P1): șantierul trece în alt proiect => în ACEEAȘI tranzacție, rezumatele compuse pentru proiectul vechi ies de pe
 --    rapoartele lui (automat -> 'de_recompus', prin garda de mai sus; editat -> refuz, mutarea nu trece). DEFINER: vede și scrie toate
 --    rapoartele șantierului, oricare ar fi RLS-ul celui care mută (trigger-ul de acces pe rapoarte îi verifică totuși dreptul pe proiect).
---    Ordinea lock-urilor (L06): rândul șantierului (UPDATE-ul care a pornit trigger-ul) -> rapoarte_zilnice EXCLUSIVE -> rândurile
---    rapoartelor șantierului (UPDATE, prin indexul (site_id, data)). Salvarea raportului nu blochează niciodată rândul șantierului (FK =
---    FOR KEY SHARE, compatibil cu UPDATE-ul lui proiect_id), deci nu se poate închide un ciclu. EXCLUSIVE (nu SHARE / SHARE ROW EXCLUSIVE):
---    intră în conflict și cu ROW SHARE (FOR UPDATE, pasul 1 al RPC-ului), altfel o salvare care a luat deja rândul raportului ar aștepta
---    mutarea la UPDATE, iar mutarea ar aștepta rândul ei (deadlock, lecția din PR #1045). Așteptarea lock-ului: cel mult 3 s
---    (sau lock_timeout-ul apelantului, dacă e mai mic), peste = 55P03 și mutarea nu trece; citirile rapoartelor nu sunt oprite.
+--    r5 (Jakarinos r4 P2): blocarea e DOAR pe șantierul mutat, nu pe tot tabelul — salvările celorlalte șantiere nu așteaptă mutarea.
+--    Ordinea lock-urilor (L06): rândul șantierului (UPDATE-ul care a pornit trigger-ul; a așteptat, dacă era cazul, salvările în zbor pe
+--    șantier, care țin FOR SHARE pe el din gardă) -> rândurile rapoartelor șantierului care trebuie schimbate, FOR NO KEY UPDATE NOWAIT,
+--    în ordinea id-ului. NOWAIT: o salvare care a luat deja rândul raportului (FOR UPDATE, pasul 1 al RPC-ului) și urmează să ceară rândul
+--    șantierului în gardă ar închide un ciclu dacă mutarea ar aștepta-o (lecția din PR #1045); așa, mutarea refuză imediat (55P03, nimic
+--    schimbat, se reîncearcă), iar salvarea trece. Salvarea nu e oprită niciodată de regula asta.
+--    Cât ține rândul șantierului, nicio scriere nouă de raport pe el nu trece de gardă, deci starea rezumatelor șantierului e înghețată: ce
+--    blochează aici rămâne exact mulțimea de schimbat până la COMMIT. NO KEY: compatibil cu FOR KEY SHARE (FK-ul liniilor raportului).
 --    READ COMMITTED obligatoriu: invalidarea trebuie să vadă și rapoartele comise după începutul tranzacției celui care mută. ──
 CREATE FUNCTION public.fn_raport_rezumat_santier_mutat() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_lt text := current_setting('lock_timeout');
+DECLARE v_n integer; v_zile text;
 BEGIN
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'rezumat: mutarea unui șantier în alt proiect cere READ COMMITTED (acum %)', current_setting('transaction_isolation')
       USING ERRCODE = '0A000';
   END IF;
-  IF v_lt::interval = interval '0' OR v_lt::interval > interval '3 seconds' THEN PERFORM set_config('lock_timeout', '3s', true); END IF;
-  LOCK TABLE public.rapoarte_zilnice IN EXCLUSIVE MODE;
-  PERFORM set_config('lock_timeout', v_lt, true);
-  -- după lock: nicio scriere de raport nu mai e în zbor; citirile de mai jos văd tot ce s-a comis (READ COMMITTED, instrucțiuni noi)
-  IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice r
-              WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'editat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id) THEN
-    RAISE EXCEPTION 'rezumat: șantierul are rapoarte cu rezumatul corectat de om pentru proiectul vechi; „Revino la automat” pe ele înainte de mutare'
+  -- rândurile de schimbat / de verificat, blocate fără așteptare (vezi sus); citirile văd tot ce s-a comis (READ COMMITTED, instrucțiune nouă)
+  BEGIN
+    PERFORM 1 FROM public.rapoarte_zilnice r
+     WHERE r.site_id = NEW.id AND r.rezumat_sursa IN ('automat', 'editat') AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id
+     ORDER BY r.id FOR NO KEY UPDATE OF r NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'rezumat: un raport al acestui șantier se salvează chiar acum; reîncearcă mutarea peste câteva secunde (nimic schimbat)'
+      USING ERRCODE = '55P03';
+  END;
+  -- r5: refuzul spune câte rapoarte și din ce zile (primele 5, apoi „+N”), ca omul să știe unde apasă „Revino la automat”
+  SELECT count(*)::integer, string_agg(to_char(x.data, 'DD.MM.YYYY'), ', ' ORDER BY x.data, x.id) FILTER (WHERE x.nr <= 5)
+    INTO v_n, v_zile
+    FROM (SELECT r.id, r.data, row_number() OVER (ORDER BY r.data, r.id) AS nr FROM public.rapoarte_zilnice r
+           WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'editat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id) x;
+  IF v_n > 0 THEN
+    RAISE EXCEPTION 'rezumat: șantierul are % cu rezumatul corectat de om pentru proiectul vechi (%); „Revino la automat” pe ele înainte de mutare',
+      CASE WHEN v_n = 1 THEN 'un raport' WHEN v_n % 100 BETWEEN 1 AND 19 THEN v_n || ' rapoarte' ELSE v_n || ' de rapoarte' END,
+      CASE WHEN v_n = 1 THEN 'ziua ' ELSE 'zilele ' END || v_zile || CASE WHEN v_n > 5 THEN ' +' || (v_n - 5) ELSE '' END
       USING ERRCODE = '55000';
   END IF;
-  -- scriere „fără rezumat” pe rândurile vizate: garda le trece în 'de_recompus' (ramura 2'), fără compunere, fără să mărească versiunea
+  -- scriere „fără rezumat” pe rândurile vizate (deja blocate): garda le trece în 'de_recompus' (ramura 2'), fără compunere, fără să
+  -- mărească versiunea
   UPDATE public.rapoarte_zilnice r SET rezumat_sursa = r.rezumat_sursa
    WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'automat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id;
   RETURN NULL;

@@ -241,8 +241,8 @@ const mutanti = [
   ['M30 mutarea nu scoate rezumatele automate ale proiectului vechi', 'T12', { [M]: [[
     "  UPDATE public.rapoarte_zilnice r SET rezumat_sursa = r.rezumat_sursa\n   WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'automat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id;\n", '']] }],
   ['M31 mutarea nu refuză corecturile pentru proiectul vechi', 'T12', { [M]: [[
-    "              WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'editat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id) THEN",
-    "              WHERE false) THEN"]] }],
+    "  IF v_n > 0 THEN\n    RAISE EXCEPTION 'rezumat: șantierul are %",
+    "  IF false THEN\n    RAISE EXCEPTION 'rezumat: șantierul are %"]] }],
   ['M32 garda nu deosebește rezumatul pentru alt proiect (îl recompune)', 'T12', { [M]: [[
     "    IF OLD.rezumat_sursa IN ('automat', 'editat') AND OLD.rezumat_proiect_id IS DISTINCT FROM v_proiect THEN", '    IF false THEN']] }],
   ['M33 proiectul rezumatului nepus la compunere', 'T2', { [M]: [['    NEW.rezumat_proiect_id := v_proiect;   -- r4: proiectul pentru care s-a compus textul\n', '']] }],
@@ -277,7 +277,10 @@ async function scenariu(nume, motiv, fn) {
   console.log(`${bine ? 'OK    ' : 'GREȘIT'} ${nume}: ${eroare === null ? 'trecut' : 'refuz: ' + eroare.slice(0, 200)}`)
 }
 const migCu = (lista) => aplica(MIG_B, lista)
-await scenariu('S1 baseline necompletat = refuz', /20261216a: baseline L15 necompletat/, async (db) => { await aplicaMig(db, citeste(MIG)) })
+// (r5: blocul are de la #1075 valorile de producție lipite, deci „necompletat” = toate amprentele scoase, ca înainte de lipire)
+await scenariu('S1 baseline necompletat = refuz', /20261216a: baseline L15 necompletat/, async (db) => {
+  await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, PLACEHOLDER.replace(/'[0-9a-f]{32}'\)/g, "'DE_COMPLETAT')")]]))
+})
 await scenariu('S2 baseline cu o etichetă dublă = refuz', /20261216a: baseline L15 cu etichete duble/, async (db) => {
   await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, B0.map(r => r.linie_baseline).join('\n') + '\n  , ' + B0[0].linie_baseline.trim()]]))
 })
@@ -365,7 +368,7 @@ await scenariu('S17b … cu verificarea scoasă, mutarea în REPEATABLE READ tre
   await db.exec(RAPORT_SITE1)
   await db.exec('BEGIN ISOLATION LEVEL REPEATABLE READ; UPDATE public.sites SET proiect_id = 2 WHERE id = 1; COMMIT;')
 })
-await scenariu('S20 mutarea păstrează lock_timeout-ul apelantului; rezumatul trece în de_recompus', null, async (db) => {
+await scenariu('S20 mutarea nu schimbă lock_timeout-ul apelantului; rezumatul trece în de_recompus', null, async (db) => {
   await aplicaMig(db, MIG_B); await db.exec(RAPORT_SITE1)
   let rand
   try {
@@ -405,6 +408,94 @@ await scenariu('S19 costul mutării: 2000 de rapoarte cu rezumat automat', null,
   const r = (await db.query(`SELECT count(*) FILTER (WHERE rezumat_sursa = 'de_recompus')::int AS d, count(*)::int AS n FROM public.rapoarte_zilnice WHERE site_id = 1`)).rows[0]
   if (r.d !== 2000 || r.n !== 2000) throw new Error(`după mutare: ${r.d} / ${r.n} de_recompus`)
   console.log(`       2000 de rapoarte: inserate (cu rezumat) în ${t1 - t0} ms; mutarea șantierului (invalidare) în ${t2 - t1} ms`)
+})
+// ── r5 ──
+// P3: refuzul mutării spune câte rapoarte au corecturi pentru proiectul vechi și din ce zile (primele 5, apoi „+N”). Corecturile se scriu
+// direct (session_replication_role = replica: fără gardă, doar CHECK-ul), ca o stare deja existentă; mutarea refuză și nu schimbă nimic.
+const corecturi = (n) => `SET session_replication_role = replica;
+  INSERT INTO public.rapoarte_zilnice (site_id, data, probleme, rezumat_text, rezumat_sursa, rezumat_la, rezumat_de, rezumat_proiect_id)
+  SELECT 1, DATE '1980-03-01' + (g - 1), 'Corectura ' || g, 'Corectat ' || g, 'editat', now(), '00000000-0000-4000-8000-000000000001',
+         (SELECT proiect_id FROM public.sites WHERE id = 1)
+    FROM generate_series(1, ${n}) g;
+  SET session_replication_role = origin;`
+for (const [n, re] of [
+  [7, /șantierul are 7 rapoarte cu rezumatul corectat de om pentru proiectul vechi \(zilele 01\.03\.1980, 02\.03\.1980, 03\.03\.1980, 04\.03\.1980, 05\.03\.1980 \+2\); „Revino la automat”/],
+  [1, /șantierul are un raport cu rezumatul corectat de om pentru proiectul vechi \(ziua 01\.03\.1980\); „Revino la automat”/],
+  [20, /șantierul are 20 de rapoarte cu rezumatul corectat de om pentru proiectul vechi \(zilele 01\.03\.1980, .*, 05\.03\.1980 \+15\)/],
+]) {
+  await scenariu(`S21 refuzul mutării cu ${n} corecturi: numărul și zilele`, re, async (db) => {
+    await aplicaMig(db, MIG_B); await db.exec(corecturi(n))
+    const p0 = (await db.query('SELECT proiect_id FROM public.sites WHERE id = 1')).rows[0].proiect_id
+    try { await db.exec('UPDATE public.sites SET proiect_id = 2 WHERE id = 1;') } catch (e) {
+      const dupa = (await db.query(`SELECT (SELECT proiect_id FROM public.sites WHERE id = 1) AS p,
+        (SELECT count(*)::int FROM public.rapoarte_zilnice WHERE site_id = 1 AND rezumat_sursa = 'editat') AS n`)).rows[0]
+      if (dupa.p !== p0 || dupa.n !== n) throw new Error(`refuzul a schimbat ceva: proiect ${dupa.p} / corecturi ${dupa.n}`)
+      if (e.code !== '55000') throw new Error(`cod ${e.code}: ${e.message}`)
+      throw e
+    }
+  })
+}
+// P1: orice scriere a rezumatului ține rândul ȘANTIERULUI (FOR SHARE) până la COMMIT: xmax-ul rândului = tranzacția care scrie raportul, fără
+// ca șantierul să fi fost modificat. (PGlite = o sesiune: conflictul real, REPEATABLE READ → 40001, îl probează S6 pe clonă.)
+// La raportul NOU xmax-ul îl pune oricum și FK-ul (FOR KEY SHARE, care NU oprește mutarea): acolo proba nu deosebește, de aceea mutantul
+// e prins pe UPDATE-uri (salvare, „Generează”), unde FK-ul nu ia nimic.
+const tineSantierul = async (db) => {
+  const verif = async (eticheta, sql) => {
+    await db.exec('BEGIN;')
+    try {
+      await db.exec(sql)
+      const r = (await db.query(`SELECT (SELECT xmax::text FROM public.sites WHERE id = 1) AS xm, (txid_current() % 4294967296)::text AS tx`)).rows[0]
+      if (r.xm !== r.tx) throw new Error(`${eticheta}: rândul șantierului nu e blocat de scriere (xmax ${r.xm}, tranzacția ${r.tx})`)
+    } finally { await db.exec('ROLLBACK;') }
+  }
+  await verif('raport nou', RAPORT_SITE1)
+  await db.exec(RAPORT_SITE1)
+  await verif('salvare fără rezumat', `UPDATE public.rapoarte_zilnice SET probleme = 'alta' WHERE site_id = 1 AND data = DATE '2026-11-10';`)
+  await verif('„Generează”', `UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE site_id = 1 AND data = DATE '2026-11-10';`)
+}
+await scenariu('S22 garda ține rândul șantierului (raport nou, salvare, „Generează”)', null, async (db) => { await aplicaMig(db, MIG_B); await tineSantierul(db) })
+await scenariu('S22b … mutantul fără FOR SHARE în gardă e prins', /rândul șantierului nu e blocat/, async (db) => {
+  await aplicaMig(db, migCu([['FROM public.sites s WHERE s.id = NEW.site_id FOR SHARE OF s;', 'FROM public.sites s WHERE s.id = NEW.site_id;']]))
+  await tineSantierul(db)
+})
+// P2: mutarea nu mai ia lock pe TOT tabelul rapoarte_zilnice (doar rândurile șantierului): în tranzacția mutării, pg_locks are pe
+// rapoarte_zilnice doar modurile pe care le iau citirile / scrierile de rând (AccessShare, RowShare din FOR NO KEY UPDATE, RowExclusive din
+// UPDATE) — niciunul nu oprește salvările altor rânduri; și chiar s-a atins un rând (RowExclusive prezent)
+const faraLockTabel = async (db) => {
+  await db.exec(RAPORT_SITE1)
+  await db.exec('BEGIN; UPDATE public.sites SET proiect_id = 2 WHERE id = 1;')
+  try {
+    const r = (await db.query(`SELECT string_agg(DISTINCT mode, ',' ORDER BY mode) FILTER (WHERE mode NOT IN ('AccessShareLock', 'RowShareLock', 'RowExclusiveLock')) AS m,
+                                      bool_or(mode = 'RowExclusiveLock') AS scris FROM pg_locks
+                                WHERE locktype = 'relation' AND relation = 'public.rapoarte_zilnice'::regclass AND pid = pg_backend_pid()`)).rows[0]
+    if (r.m !== null || r.scris !== true) throw new Error(`mutarea ține pe rapoarte_zilnice: ${r.m} (rând scris: ${r.scris})`)
+  } finally { await db.exec('ROLLBACK;') }
+}
+await scenariu('S23 mutarea ține doar lock-uri de rând pe rapoarte_zilnice (nu tot tabelul)', null, async (db) => { await aplicaMig(db, MIG_B); await faraLockTabel(db) })
+await scenariu('S23b … mutantul cu LOCK TABLE EXCLUSIVE (r4) e prins', /mutarea ține pe rapoarte_zilnice: ExclusiveLock/, async (db) => {
+  await aplicaMig(db, migCu([['  -- rândurile de schimbat / de verificat, blocate fără așteptare', '  LOCK TABLE public.rapoarte_zilnice IN EXCLUSIVE MODE;\n  -- rândurile de schimbat / de verificat, blocate fără așteptare']]))
+  await faraLockTabel(db)
+})
+// scriptul de măsurare de pe clonă (scripts/raport_rezumat_mutare_durata.sql), rulat aici ca psql cu -v sistem / -v n: tipărește durata,
+// anulează tot (nimic rămas) și refuză altă țintă
+const DURATA = citeste('scripts/raport_rezumat_mutare_durata.sql').split('\n').filter((l) => !l.startsWith('\\')).join('\n')
+const durataCu = (sistem, n) => DURATA.replace(":'sistem'", `'${sistem}'`).replace(":'n'", `'${n}'`)
+await scenariu('S19b scriptul de durată (n = 500): DURATA_MUTARE + nimic rămas', null, async (db) => {
+  await aplicaMig(db, MIG_B)
+  const sistem = (await db.query('SELECT system_identifier::text AS s FROM pg_control_system()')).rows[0].s
+  const inainte = (await db.query('SELECT count(*)::int AS n FROM public.rapoarte_zilnice')).rows[0].n
+  const p0 = (await db.query('SELECT proiect_id FROM public.sites WHERE id = 1')).rows[0].proiect_id
+  const st = []
+  await db.exec(durataCu(sistem, 500), { onNotice: (n) => st.push(n.message) })
+  const d = st.find((m) => /^DURATA_MUTARE n=500 \(\+ \d+ rapoarte reale/.test(m))
+  if (!d || !/: [5-9]\d\d rezumate invalidate; mutarea \d+ ms/.test(d)) throw new Error('lipsește / greșit DURATA_MUTARE: ' + st.join(' | '))
+  const dupa = (await db.query(`SELECT count(*)::int AS n, (SELECT proiect_id FROM public.sites WHERE id = 1) AS p FROM public.rapoarte_zilnice`)).rows[0]
+  if (dupa.n !== inainte || dupa.p !== p0) throw new Error(`a rămas ceva: rapoarte ${inainte} -> ${dupa.n}, proiect ${p0} -> ${dupa.p}`)
+  console.log('       ' + d)
+})
+await scenariu('S19c scriptul de durată pe altă țintă = refuz', /REFUZ: system_identifier/, async (db) => {
+  await aplicaMig(db, MIG_B)
+  try { await db.exec(durataCu('123', 500)) } catch (e) { try { await db.exec('ROLLBACK') } catch { /* anulată */ } throw e }
 })
 if (rau) { console.error(`${rau} mutanți / scenarii greșite`); process.exit(1) }
 console.log('mutanți: toți prinși la testul lor; scenariile de refuz: toate cu motivul lor')

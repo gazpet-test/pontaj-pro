@@ -442,6 +442,28 @@ describe('paritate între fișiere (L19)', () => {
     // sub lock-ul exclusiv: nicio citire a tabelului (doar catalog + DROP)
     expect(REV.slice(iExcl)).not.toMatch(/FROM public\.rapoarte_zilnice\b/)
   })
+  it('r5: garda ține rândul șantierului ÎNAINTEA oricărei ramuri; mutarea blochează doar rândurile șantierului, NOWAIT, fără lock pe tabel', () => {
+    const corp = (nume) => {
+      const i = MIG.indexOf(`CREATE FUNCTION public.${nume}()`)
+      return MIG.slice(i, MIG.indexOf('END $f$;', i))
+    }
+    const g = corp('fn_raport_rezumat_garda')
+    const iLock = g.indexOf('SELECT s.proiect_id INTO v_proiect FROM public.sites s WHERE s.id = NEW.site_id FOR SHARE OF s;')
+    expect(iLock).toBeGreaterThan(0)
+    // o singură citire a proiectului, înainte de prima ramură și de compunere
+    expect(g.split('FROM public.sites s WHERE s.id = NEW.site_id').length - 1).toBe(1)
+    expect(iLock).toBeLessThan(g.indexOf("IF TG_OP = 'INSERT' THEN"))
+    expect(iLock).toBeLessThan(g.indexOf('public.fn_raport_rezumat_text(public.fn_raport_rezumat_intrare(NEW))'))
+    const m = corp('fn_raport_rezumat_santier_mutat')
+    expect(m).not.toMatch(/LOCK TABLE/)
+    expect(m).not.toMatch(/lock_timeout/)
+    const iNowait = m.indexOf('ORDER BY r.id FOR NO KEY UPDATE OF r NOWAIT;')
+    expect(iNowait).toBeGreaterThan(0)
+    // lock-ul pe rânduri înaintea verificării corecturilor și a UPDATE-ului (L01 / L06)
+    expect(iNowait).toBeLessThan(m.indexOf("r.rezumat_sursa = 'editat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id) x;"))
+    expect(iNowait).toBeLessThan(m.indexOf('UPDATE public.rapoarte_zilnice r SET rezumat_sursa = r.rezumat_sursa'))
+    expect(m).toContain("RAISE EXCEPTION 'rezumat: șantierul are % cu rezumatul corectat de om pentru proiectul vechi (%)")
+  })
   it('harness-ul SQL rulează EXACT tabelul de cazuri din src/raportRezumat.cazuri.json', () => {
     const H = citeste('../scripts/test_executie_raport_rezumat.sql')
     const j = bloc(H, '-- CAZURI-START', '-- CAZURI-END')
