@@ -456,6 +456,73 @@ masurat vol_19a "$TMP/vol_19a.log" runner 20261119120000 "$MIG_1B"
 masurat vol_rev19a "$TMP/vol_rev19a.log" runner 20261119120001 "$REV_1B"
 masurat vol_rev18a "$TMP/vol_rev18a.log" runner 20261118120001 "$ATTESTED_REV"
 [[ "$(q "SELECT to_regclass('public.conturi_tip') IS NULL AND NOT EXISTS (SELECT FROM pg_roles WHERE rolname='teren')")" == t ]] || fail 'volum: revenirea incompleta'
+# r18 (runda 14 a runnerului, proba pe productie 12.11.2026): LATENTA. Pe productie un drum client-server = ~41 ms
+# (60 x „SELECT 1;” intr-o tranzactie = 2476 ms) si 18a trimis instructiune cu instructiune a fost inchis de plafon inca
+# in verificari. Aici: cluster NOU (fixture-ul de baza) + proxy TCP local (scripts/portal/proxy_latenta.py, ~21 ms pe
+# fiecare sens = ~42 ms pe drum, ca utilizatorul harness-ului, oprit la final si la orice iesire de iesire_curata).
+#   calibrare: aceleasi 60 de „SELECT 1;” prin proxy => >= 2100 ms (latenta chiar se aplica);
+#   control:   18a in forma VECHE (acelasi mesaj, trimis instructiune cu instructiune: test_livrare_psql_control.sh,
+#              mod instructiuni), plafon 2000 => NU incape: NEAPLICAT (10), nimic ramas, inchis de server (transaction
+#              timeout) sau refuzat de garda;
+#   forma noua: 18a, 19a, rev19a, rev18a prin acelasi proxy => APLICAT (0); marja = 2000 - timpul garzii (PLAFON_TIMP),
+#              comparata cu livrarea fara latenta de pe primul cluster.
+"$PG_BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null
+DATA="$TMP/pg_latenta"; PG_LOG="$TMP/pg_latenta.log"
+cluster_nou
+LAT_PORT=$((6720+SLOT)); LAT_MS=21
+PORT_RC=0; "$PG_BIN/pg_isready" -q -h 127.0.0.1 -p "$LAT_PORT" -t 2 || PORT_RC=$?
+[[ "$PORT_RC" == 2 ]] || fail "latenta: portul proxy-ului $LAT_PORT e ocupat (pg_isready=$PORT_RC)"
+python3 "$ROOT/scripts/portal/proxy_latenta.py" --asculta "$LAT_PORT" --tinta "$PORT" --intarziere-ms "$LAT_MS" \
+  --gata "$TMP/proxy_gata" >"$TMP/proxy.log" 2>&1 &
+PROXY_PID=$!
+for _ in $(seq 1 100); do [[ -s "$TMP/proxy_gata" ]] && break; sleep 0.1; done
+[[ -s "$TMP/proxy_gata" ]] || { cat "$TMP/proxy.log"; fail 'latenta: proxy-ul nu a pornit'; }
+printf '#!/usr/bin/env bash\nexec bash "%s" "$@"\n' "$ROOT/scripts/test_livrare_psql_control.sh" >"$TMP/psql_control"
+chmod +x "$TMP/psql_control"
+runner_lat() { # $1 versiunea, $2 artefactul, $3 = psql (implicit cel real); prin proxy, plafon 2000
+  local sha; sha="$(sha256sum "$2" | cut -d' ' -f1)"
+  PSQL_BIN="${3:-$PG_BIN/psql}" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$2" --sha256 "$sha" --versiune "$1" \
+    --tinta-db "$DB" --tinta-sistem "$SIS" --tinta-host 127.0.0.1 --tinta-port "$LAT_PORT" --user postgres \
+    --plafon-tranzactie-ms 2000
+}
+timp_garda() { sed -n "s/.*PLAFON_TIMP $1: garda trecuta la \([0-9]*\) ms de la BEGIN.*/\1/p" "$2" | tail -n 1; }
+{ echo 'BEGIN;'; for _ in $(seq 1 60); do echo 'SELECT 1;'; done; echo 'COMMIT;'; } >"$TMP/lat_60.sql"
+t0="$(date +%s%3N)"
+"$PG_BIN/psql" -X -q -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$LAT_PORT" -U postgres -d "$DB" -f "$TMP/lat_60.sql" >/dev/null \
+  || fail 'latenta: calibrarea prin proxy'
+LAT_60=$(( $(date +%s%3N) - t0 ))
+(( LAT_60 >= 2100 )) || fail "latenta: 60 x SELECT 1 prin proxy = $LAT_60 ms (< 2100: latenta nu se aplica, proba nefunctionala)"
+echo "LATENTA_CALIBRARE: 60 x „SELECT 1;” intr-o tranzactie prin proxy ($LAT_MS ms pe sens) = $LAT_60 ms (productia, 12.11: 2476 ms)"
+# Control: forma veche pe 18a.
+n0="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
+rc=0; CONTROL_DIR="$TMP" CONTROL_PG_BIN="$PG_BIN" CONTROL_MOD=instructiuni \
+  runner_lat 20261118120000 "$MIG" "$TMP/psql_control" >"$TMP/lat_veche_18a.log" 2>&1 || rc=$?
+n1="$(grep -c 'terminating connection due to transaction timeout' "$PG_LOG" || true)"
+[[ -e "$TMP/control_instructiuni" ]] || fail 'latenta control: transformarea nu s-a aplicat (proba nefunctionala)'
+[[ "$rc" == 10 ]] || { cat "$TMP/lat_veche_18a.log"; fail "latenta control: forma veche pe 18a prin proxy trebuia NEAPLICAT (10), cod $rc"; }
+[[ "$(q "$STARE_18A_NEAPLICAT")" == t ]] || fail 'latenta control: au ramas obiecte 18a'
+if (( n1 == n0 + 1 )); then LAT_VECHE='inchisa de server (transaction timeout)'
+elif grep -q 'PLAFON_DEPASIT' "$TMP/lat_veche_18a.log"; then LAT_VECHE='refuzata de garda (PLAFON_DEPASIT)'
+else cat "$TMP/lat_veche_18a.log"; fail 'latenta control: refuzul trebuia sa vina din plafon (transaction timeout / PLAFON_DEPASIT), nu din alt motiv'; fi
+echo "LATENTA_CONTROL 18a: forma veche (instructiune cu instructiune) prin proxy, plafon 2000 => NU incape: $LAT_VECHE, NEAPLICAT (10), nimic ramas"
+# Forma noua: cele patru livrari, prin acelasi proxy.
+T_DIRECT="$(timp_garda 20261118a_portal_teren_identitate "$TMP/apply.log")"
+lat_nou() { # $1 eticheta, $2 numele migrarii (pentru PLAFON_TIMP), $3 versiunea, $4 artefactul
+  local log="$TMP/lat_nou_$1.log" rc=0 t
+  runner_lat "$3" "$4" >"$log" 2>&1 || rc=$?
+  [[ "$rc" == 0 ]] || { cat "$log"; fail "latenta $1: forma noua prin proxy trebuia APLICAT (0), cod $rc"; }
+  t="$(timp_garda "$2" "$log")"
+  [[ "$t" =~ ^[0-9]+$ ]] && (( t < 2000 )) || { cat "$log"; fail "latenta $1: PLAFON_TIMP lipsa / >= 2000 ($t)"; }
+  echo "LATENTA_NOU $1: un mesaj prin proxy => APLICAT (0); garda la $t ms de la BEGIN, marja $((2000 - t)) ms din 2000"
+}
+lat_nou 18a 20261118a_portal_teren_identitate 20261118120000 "$MIG"
+echo "LATENTA_DIRECT 18a: aceeasi livrare fara proxy (primul cluster): garda la ${T_DIRECT:-?} ms de la BEGIN (drumurile nu mai conteaza intre BEGIN si COMMIT)"
+lat_nou 19a 20261119a_portal_teren_provisioning 20261119120000 "$MIG_1B"
+[[ "$(q 'SELECT public.fn_portal_porti_lipsa_1b()')" == '{}' ]] || fail 'latenta: poarta 1b'
+lat_nou rev19a 20261119a_portal_teren_provisioning_ROLLBACK 20261119120001 "$REV_1B"
+lat_nou rev18a "$(basename "$ATTESTED_REV" .sql)" 20261118120001 "$ATTESTED_REV"
+[[ "$(q "SELECT to_regclass('public.conturi_tip') IS NULL AND NOT EXISTS (SELECT FROM pg_roles WHERE rolname='teren')")" == t ]] || fail 'latenta: revenirea incompleta'
+kill "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" 2>/dev/null || true
 # r11 (Jakarinos r10 P2): LIMITA plafonului, aratata: COMMIT intarziat (replicare sincrona spre un standby inexistent),
 # pe un cluster nou dedicat (fixture-ul de baza), fiindca proba lasa 18a COMIS.
 "$PG_BIN/pg_ctl" -D "$DATA" -m fast -w stop >/dev/null
@@ -470,4 +537,4 @@ fi
 (( CAP_PROBE == 16 )) || fail "plafon: $CAP_PROBE probe LOCK_CAP rulate, asteptat 16"
 echo "PLAFON_TOATE: 16/16 probe LOCK_CAP trecute cu ceasul de perete stabil (abatere < ${PORTAL_SALT_MS} ms fata de ceasul monoton); probe repetate dupa un salt de ceas: $CAP_REPETARI"
 echo "LOCK_COMMIT_LENT_STARE: ${COMMIT_LENT_STARE:-NEEXECUTAT: proba nu a rulat}"
-echo "PASS PORTAL_E1_1A+1B r14 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER$([[ "$NATIV" == 1 ]] && echo ', binare native PORTAL_PG_BIN')); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum; plafon ~${PORTAL_PLAFON_MS} ms de la BEGIN pana la intrarea in COMMIT (SET de sesiune pus de runner inainte de BEGIN, ca prin pooler; timeout PostgreSQL, nu timp real strict) dovedit pe 18a / 19a / rev19a / rev18a (4 moduri: fara timeout prealabil x2, rol 10 s, rol 500 ms) + 6 refuzuri (fara plafon, optiunea de conectare r13, rol, alta valoare, SET LOCAL fara marcaj, umbrire pg_temp.pg_settings); COMMIT-ul intarziat NU e plafonat (LOCK_COMMIT_LENT: ${COMMIT_LENT_STARE:-NEEXECUTAT})"
+echo "PASS PORTAL_E1_1A+1B r14 PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER$([[ "$NATIV" == 1 ]] && echo ', binare native PORTAL_PG_BIN')); public/net/ERP sintetice in harness, listele revizuite in migrare; fereastra <= ${PORTAL_FEREASTRA_MS} ms si blocare <= ${PORTAL_BLOCARE_MS} ms pe fixture si pe volum; plafon ~${PORTAL_PLAFON_MS} ms de la BEGIN pana la intrarea in COMMIT (SET de sesiune pus de runner inainte de BEGIN, ca prin pooler; timeout PostgreSQL, nu timp real strict) dovedit pe 18a / 19a / rev19a / rev18a (4 moduri: fara timeout prealabil x2, rol 10 s, rol 500 ms) + 6 refuzuri (fara plafon, optiunea de conectare r13, rol, alta valoare, SET LOCAL fara marcaj, umbrire pg_temp.pg_settings); COMMIT-ul intarziat NU e plafonat (LOCK_COMMIT_LENT: ${COMMIT_LENT_STARE:-NEEXECUTAT}); r18 LATENTA ~$((2 * LAT_MS)) ms pe drum (calibrare $LAT_60 ms / 60 instructiuni): forma veche pe 18a NU incape (control), forma un mesaj incape pe 18a / 19a / rev19a / rev18a (marjele in liniile LATENTA_NOU)"

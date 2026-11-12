@@ -60,8 +60,18 @@ describe('AMPRENTA_L15: o singură definiție (script = migrări)', () => {
       // nimic după DROP în afara spațiilor (migrarea se termină cu curățenia)
       expect(t.slice(iDrop).trim().split('\n')).toHaveLength(1)
     })
-    it(`${x}: baseline-ul de pe branch e necompletat (îl completează coordonatorul din producție) → refuz`, () => {
-      expect(t).toContain(`('DE_COMPLETAT: scripts/tichete_lot2_amprente.sql, sectiunea ${x}', '-')`)
+    it(`${x}: baseline-ul e fie necompletat (→ refuz), fie completat din producție cu amprente md5 valide`, () => {
+      const bloc = t.slice(t.indexOf(`-- >>> BASELINE ${x}`), t.indexOf(`-- <<< BASELINE ${x}`))
+      const linii = bloc.split('\n').map(l => l.trim()).filter(l => /^(, )?\('/.test(l))
+      expect(linii.length).toBeGreaterThan(0)
+      if (linii.some(l => l.includes('DE_COMPLETAT'))) {
+        expect(linii).toEqual([`('DE_COMPLETAT: scripts/tichete_lot2_amprente.sql, sectiunea ${x}', '-')`])
+      } else {
+        // completat: fiecare linie = (eticheta, md5), prima fără virgulă, restul cu virgulă, etichete unice
+        linii.forEach((l, i) => expect(l).toMatch(i === 0 ? /^\('[^']+', '[0-9a-f]{32}'\)$/ : /^, \('[^']+', '[0-9a-f]{32}'\)$/))
+        const et = linii.map(l => l.match(/\('([^']+)'/)[1])
+        expect(new Set(et).size).toBe(et.length)
+      }
       expect(t).toContain(`RAISE EXCEPTION '${x}: baseline L15 necompletat sau invalid`)
     })
     it(`${x}: fără marcaje de generare rămase și fără backslash în afara corpurilor`, () => {

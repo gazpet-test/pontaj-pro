@@ -888,3 +888,93 @@ cele din 20260929b si 20261008a — niciuna din cele 3 functii de mai sus. Confi
 | L20 | Caile legitime: obiectele amanabile EXISTENTE nu dau fals pozitiv (`PLAFON_FARA_AMANABILE`, `PLAFON_AMANAT`, `PLAFON_OK`); fara optiune neschimbat (`PLAFON_FARA`, `FORMA_FARA`, `*_fara`). |
 | L25 | Control pe forma r4c pentru scenariul din verdict; subtranzactia dovedita in artefact; PG17 NOSUPERUSER in harness; expected scris in test, nu derivat din runner. |
 | restul | n/a (doar runner + testele lui + raport). |
+
+## E1-1a/1b r18 — 12.11.2026 (proba pe productie: plafonul de 2 s consumat de drumurile client-server; runnerul r6 / runda 14)
+
+### Constatarea (proba din 12.11.2026, owner-ul pe manual, nimic schimbat)
+Forma de livrare r17 (`SET transaction_timeout = 2000` de sesiune, BEGIN, prolog, 1_pre, fisierul, 3_inreg, mesajul
+final) a lui 18a, prin pooler-ul Supabase (session mode) de pe serverul din Ploiesti: serverul a inchis sesiunea cu
+„terminating connection due to transaction timeout” pe la linia 373 din 627, inca in verificari, INAINTEA lock-urilor;
+nimic schimbat (verificat). Masurat separat pe acelasi traseu: 60 x `SELECT 1;` cu `psql -f` intr-o tranzactie = 2476 ms
+= ~41 ms pe instructiune. psql trimite un fisier instructiune cu instructiune si asteapta raspunsul fiecareia, iar
+18a are 59 de instructiuni de nivel superior (19a 47, revenirile 8 / 7, 20261213a una singura), plus ~11 ale runnerului:
+~70 x 41 ≈ 2,9 s DOAR de retea pe 18a, ~58 x 41 ≈ 2,4 s pe 19a. Pe harness (cluster local) drumul e ~0, de aceea trecea.
+
+**Ce inseamna pentru ORICE livrare cu plafon de pe un traseu cu latenta:** plafonul (ceasul `transaction_timeout`
+pornit la BEGIN + garda finala pe ceasul serverului) masoara si timpul retelei. O livrare trimisa instructiune cu
+instructiune consuma din plafon ~(numarul de mesaje dupa BEGIN) x RTT inainte de orice lucru al migrarii; pe acelasi
+fisier, rezultatul depinde de unde e rulat runnerul. O proba pe harness fara latenta NU dovedeste incadrarea pe productie.
+Garantia ramane corecta (fail-closed: s-a anulat tot), dar livrarea devenea imposibila.
+
+### Ce s-a schimbat (runnerul + testele; SQL-ul celor 4 fisiere ale portalului NESCHIMBAT, SHA-urile raman)
+- Cu `--plafon-tranzactie-ms`, TOATA tranzactia (BEGIN ... garda finala, COMMIT) e UN SINGUR mesaj de interogare
+  (`scripts/livrare_mesaj.sh`, sursat doar cu optiunea): `SET transaction_timeout = N` (mesaj de sesiune), apoi
+  `SELECT $lm_<aleator>$<M>$lm_<aleator>$ \gexec` — serverul intoarce M, iar `\gexec` il trimite „literally” ca un mesaj
+  (documentatia psql), apoi `RESET`. M = BEGIN; prolog (primul, neschimbat); verificarea „un mesaj”; 1_pre; COPIA;
+  despartitor; 3_inreg; NOTICE LIVRARE_TIMP; garda finala r13 (+ NOTICE PLAFON_TIMP); COMMIT. Serverul citeste mesajul
+  intreg inainte sa-l execute ⇒ intre BEGIN si COMMIT nu mai exista niciun drum client-server.
+- **Dovada in server, la fiecare livrare** (DO `$mesaj_unic$`, imediat dupa prolog, inaintea lock-urilor):
+  `current_query()` (textul intregului mesaj curent) trebuie sa aiba lungimea exacta calculata de runner, sha256 al
+  restului mesajului = cel calculat de runner, iar felia copiei = sha256 APROBAT. Mesaj despartit (alt client, alt
+  mecanism) sau octet schimbat ⇒ `MESAJ_UNIC`, refuz, nimic comis (10). Nu depindem de presupuneri despre psql.
+- De ce nu `psql -c "<fisier>"`: 18a are 48 KB, 19a 62 KB, linia de comanda Windows are 32.767 caractere. De ce nu
+  `\;` intre instructiunile artefactului: runnerul ar trebui sa re-imparta si sa RESCRIE artefactul exact ca lexerul psql
+  (o nepotrivire ar strica in tacere un corp de functie); forma aleasa trimite copia octet cu octet, nerescrisa.
+- Diferente de semantica (scrise in antetul `livrare_mesaj.sh`): serverul citeste literalii intregului mesaj la primire
+  (prologul nu mai schimba `standard_conforming_strings` pentru restul mesajului — validatorul refuza deja backslash-ul in
+  literalii obisnuiti, deci citirea e identica; 18a / 19a / revenirile n-au niciun backslash, 20261213a doar in corpul
+  DO, citit de plpgsql la executie); `statement_timestamp()` e acelasi pe tot mesajul (`now()` / `clock_timestamp()`,
+  folosite de portal, neschimbate); meta-comenzile / variabilele psql nu mai sunt interpretate — validatorul le refuza
+  la nivel superior (cu si fara plafon; teste noi in `test_livrare_validator_plafon.py`: `\set`, `\i`, `\if`, `\gexec`,
+  `\;`, `\!`, `:x`, `:'x'`). Cele 4 fisiere ale portalului: acceptate cu plafon, fara meta-comenzi.
+- `--genereaza-in <dosar_nou>`: runnerul face toate verificarile locale si scrie fisierele livrarii, FARA conexiune
+  (cod 40) — folosit de proba pe productie, ca ea sa trimita exact textul livrarii.
+- Fara optiune: neschimbat (`psql --single-transaction`, aceleasi 4 fisiere).
+
+### Drumuri ramase si bugetul (la 41 ms pe drum)
+| | intre BEGIN si COMMIT | in afara tranzactiei (pe conexiunea livrarii) |
+|---|---|---|
+| r17 (instructiune cu instructiune) | 18a: ~70 drumuri ≈ 2,9 s; 19a: ~58 ≈ 2,4 s | conectare, SET |
+| r18 (un mesaj) | **0** | conectare (TCP / TLS / autentificare), SET (1), SELECT-ul care intoarce M (1 + transferul lui M, ~2 x artefactul), incarcarea lui M (inaintea lui BEGIN), RESET (1) |
+
+Bugetul pentru server (prolog, lock-uri, verificari, migrare, inregistrare, garda): 2000 − 0 x 41 = **2000 ms** (in r17:
+negativ pe 18a si ~−380 ms pe 19a). Singurul efect al retelei ramas in interiorul ceasului: daca clientul nu citeste
+raspunsurile, serverul se poate bloca la trimitere cand i se umple bufferul — timpul e numarat (fail-closed).
+SELECT-ul care intoarce M ruleaza in tranzactia lui implicita sub acelasi N (fara lock-uri; un esec acolo = nimic trimis).
+
+### Probe
+- `scripts/test_livrare_forma_fin.sh` (fara BD): fisierele 00_sesiune (doar SET), 5_mesaj (O interogare + `\gexec`),
+  9_reset; M verificat octet cu octet de `scripts/test_livrare_mesaj_unic.py` (independent: octetii artefactului
+  original + sha-ul lui; ordinea pasilor; lungimea, felia rest, felia copiei) + control (copia schimbata ⇒ respins);
+  `--genereaza-in` ⇒ cod 40, niciun apel psql; fara optiune neschimbat.
+- `scripts/test_livrare_plafon.sh` (PG17): controalele r12-r13 modifica acum mesajul prin
+  `scripts/test_livrare_psql_control.sh`; rearmare / functie: control instructiune cu instructiune + pauza 1 s ⇒ COMITE
+  dupa termen; pauza inserata in mesaj ⇒ `MESAJ_UNIC`; forma livrata ⇒ comite in termen, garda masurata 1,5–2 s;
+  `PLAFON_MESAJ_UNIC`: acelasi mesaj trimis instructiune cu instructiune ⇒ `MESAJ_UNIC` (10); copie fara „;” final si cu
+  comentariu fara LF ⇒ aplicata; NOTICE-ul migrarii ajunge in jurnalul livrarii.
+- `scripts/test_portal_e1.sh` sectiunea **LATENTA** (cluster nou, proxy TCP `scripts/portal/proxy_latenta.py`, 21 ms pe
+  sens ≈ 42 ms pe drum, ca utilizatorul harness-ului — `tc netem` ar cere root si ar intarzia tot loopback-ul; proxy-ul e
+  oprit la final si de `iesire_curata` la orice iesire): calibrare (60 x `SELECT 1;` ≥ 2100 ms); CONTROL 18a in forma
+  veche ⇒ NU incape (NEAPLICAT 10, inchis de server / garda, nimic ramas); forma noua pe 18a / 19a / rev19a / rev18a ⇒
+  APLICAT, cu marja = 2000 − PLAFON_TIMP tiparita (comparata cu livrarea fara latenta). Harness-ul fara latenta: aceleasi
+  livrari, acum in forma noua.
+- `scripts/portal/dry_prod_e1.sh` — proba pe PRODUCTIE pentru coordonator (owner-ul pe manual): 18a apoi 19a in forma
+  exacta de livrare cu plafon 2000, O tranzactie terminata cu ROLLBACK (ambele impart acelasi plafon — mai strict decat
+  doua livrari; `--doar-18a` = exact livrarea 18a); refuz daca system_identifier / db / in_recovery nu sunt cele date sau
+  18a / 19a sunt deja in istoric; timpii (PORTAL_LOCKS, LIVRARE_TIMP, PLAFON_TIMP, total), amprenta schemei inainte / dupa
+  (trebuie identica, altfel cod 5); parola doar din pgpass. Comanda: in antetul scriptului.
+
+### Constatare pe 20261213a (raportata, SQL neatins)
+`supabase/revenire/20261213a_executie_acces_proiect_perf_ROLLBACK.sql` e REFUZATA de validator cu plafon: comentariile
+din antet mentioneaza `SET transaction_timeout = 3000;` / `RESET transaction_timeout;` (validatorul numara fail-closed si
+comentariile). Migrarea 20261213a e acceptata. Daca revenirea trebuie livrata prin runner cu plafon, comentariile se
+reformuleaza (decizia autorului ei, alt PR).
+
+| Regula | Dovada r18 |
+|---|---|
+| L14 | O tranzactie, acum intr-un mesaj: orice eroare ⇒ restul mesajului sarit (protocol), conexiunea inchisa, ROLLBACK; reconcilierea decide codul. Proba pe productie = aceeasi forma, cu ROLLBACK. |
+| L15 | Integritatea mesajului verificata in server pe octeti (lungime + sha256), nu pe text / regex; copia = sha256 aprobat. |
+| L18 | Mesaj despartit / schimbat = refuz explicit `MESAJ_UNIC`; controalele nefunctionale (transformare negasita) = cod 7; proba pe productie: amprenta diferita = cod 5, nu „OK”. |
+| L20 | Caile legitime: forma livrata APLICA (plafon, latenta, fara optiune); copia fara „;” final aplicata; fara optiune neschimbat. |
+| L25 | Expected din artefactul original si sha-ul lui (`test_livrare_mesaj_unic.py`), control pe forma veche (latenta, pauza), PG17 NOSUPERUSER, latenta reala pe socket. |
+| restul | n/a (runner + teste + raport). |
