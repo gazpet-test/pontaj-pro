@@ -3,7 +3,8 @@
 -- Local: node scripts/pglite/test_raport_rezumat_local.mjs (schema falsă + 20261027a + 20261201a + 20261208a, apoi acest fișier).
 -- O singură tranzacție, ANULATĂ la final (ROLLBACK): migrare (marcajul de livrare) -> paritatea textului SQL cu tabelul de cazuri JS ->
 -- salvări prin RPC ca șef de șantier (SET LOCAL ROLE + JWT în ambele surse) -> corectura omului, drepturi, refuzuri -> căile directe ->
--- revenire refuzată (nearmată / cu rezumate corectate) -> revenire armată -> re-aplicare.
+-- (r4) mutarea șantierului în alt proiect citită de un cont restrâns la proiectul nou (T12) ->
+-- revenire refuzată (nearmată / cu rezumate corectate) -> revenire armată (r4: marcajul runnerului + plafonul) -> re-aplicare.
 -- NU presupune date reale: ia primul owner, primele 2 profiluri non-owner, primul proiect și primul șantier, le leagă DOAR în tranzacție
 -- și scrie date FICTIVE (zilele 2001-01-02 / 03, activitățile „… test rezumat”, obiectul TRZ1).
 -- Fiecare test se termină cu NOTICE „Tn OK”; orice abatere oprește rularea (RAISE EXCEPTION).
@@ -1216,6 +1217,167 @@ BEGIN
   RAISE NOTICE 'T11 OK';
 END $t$;
 
+-- ── T12 (r4, Jakarinos r3 P1): textul SALVAT după mutarea șantierului în alt proiect — exact scenariul din verdict: rezumat compus când
+--    șantierul era în proiectul A (p1) -> șantierul mutat în B (p2) -> un cititor RESTRÂNS la B vede raportul, dar nu textul compus pentru A.
+--    Restricția: pe clonă cea reală (20261209a: executie_acces_proiect, „viewer” pe B); pe PGlite (schema falsă, fără 20261209a) aceeași
+--    regulă emulată cu o politică RESTRICTIVĂ pe rapoarte. Ambele se scot la final (ca re-aplicarea din T9 să vadă baseline-ul neschimbat).
+--    Și: mutarea cu un rezumat corectat pentru A = refuz 55000 (nimic schimbat); după „Revino la automat” mutarea trece, rezumatele automate
+--    devin 'de_recompus' fără să crească versiunea; „Generează” compune pe B; clientul nu poate cere 'de_recompus'; raportul mutat pe un
+--    șantier din alt proiect: automat -> 'de_recompus', editat -> refuz ──
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$
+DECLARE p2 bigint := pg_temp.t_g('p2')::bigint; fara uuid := pg_temp.t_g('fara')::uuid; s1 bigint := pg_temp.t_g('s1')::bigint; s2 bigint;
+BEGIN
+  INSERT INTO public.profile_sites (profile_id, site_id) VALUES (fara, s1) ON CONFLICT DO NOTHING;   -- citirea șantierului (RLS-ul lui sites)
+  IF to_regclass('public.executie_acces_proiect') IS NOT NULL THEN
+    DELETE FROM public.executie_acces_proiect WHERE profile_id = fara;
+    INSERT INTO public.executie_acces_proiect (profile_id, proiect_id, nivel) VALUES (fara, p2, 'viewer');
+    PERFORM set_config('trez.t12_mod', 'acces', true);
+  ELSE
+    EXECUTE format($p$CREATE POLICY t12_proiect ON public.rapoarte_zilnice AS RESTRICTIVE FOR SELECT TO authenticated
+      USING (auth.uid() IS DISTINCT FROM %L::uuid OR EXISTS (SELECT 1 FROM public.sites s WHERE s.id = site_id AND s.proiect_id = %s))$p$, fara, p2);
+    PERFORM set_config('trez.t12_mod', 'politica', true);
+  END IF;
+  SELECT id INTO s2 FROM public.sites WHERE id <> s1 ORDER BY id LIMIT 1;
+  IF s2 IS NULL THEN RAISE EXCEPTION 'T12 FAIL: lipsește al doilea șantier'; END IF;
+  DELETE FROM public.rapoarte_zilnice WHERE site_id IN (s1, s2) AND data IN (DATE '2001-01-06', DATE '2001-01-07');
+  PERFORM set_config('trez.s2', s2::text, true);
+END $t$;
+-- (1) în A: r5 (automat, cu liniile A), r6 (corectat de om)
+SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+DO $t$
+DECLARE r jsonb; z public.rapoarte_zilnice; a1 bigint := pg_temp.t_g('a1')::bigint; u1 bigint := pg_temp.t_g('u1')::bigint;
+BEGIN
+  r := pg_temp.t_salv(DATE '2001-01-06', '{"probleme": "T12 in A"}'::jsonb,
+                      jsonb_build_array(jsonb_build_object('activitate_id', a1, 'unitate_id', u1, 'cantitate', 5)), 0, '00000000-0000-4000-8000-0000000000c1');
+  IF r ->> 'ok' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'T12 FAIL: salvarea r5 %', r; END IF;
+  PERFORM set_config('trez.r5', r ->> 'raport_id', true);
+  r := pg_temp.t_salv(DATE '2001-01-07', '{"probleme": "T12 corectat"}'::jsonb,
+                      jsonb_build_array(jsonb_build_object('activitate_id', a1, 'unitate_id', u1, 'cantitate', 6)), 0, '00000000-0000-4000-8000-0000000000c2');
+  IF r ->> 'ok' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'T12 FAIL: salvarea r6 %', r; END IF;
+  PERFORM set_config('trez.r6', r ->> 'raport_id', true);
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'Corectat T12: Sudură test rezumat TRZ1', rezumat_sursa = 'editat'
+                               WHERE id = %s AND versiune_salvare = %s$q$, r ->> 'raport_id', r ->> 'versiune')) <> 1 THEN
+    RAISE EXCEPTION 'T12 FAIL: corectura r6';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  z := pg_temp.t_r(pg_temp.t_g('r5')::bigint);
+  IF z.rezumat_sursa <> 'automat' OR position('Sudură test rezumat 5 buc' IN z.rezumat_text) = 0 OR position('TRZ1' IN z.rezumat_text) = 0
+     OR z.rezumat_proiect_id IS DISTINCT FROM pg_temp.t_g('p1')::bigint
+     OR (pg_temp.t_r(pg_temp.t_g('r6')::bigint)).rezumat_proiect_id IS DISTINCT FROM pg_temp.t_g('p1')::bigint THEN
+    RAISE EXCEPTION 'T12 FAIL: plecarea % / % / proiect %', z.rezumat_sursa, to_jsonb(z.rezumat_text), z.rezumat_proiect_id;
+  END IF;
+END $t$;
+-- (2) cititorul restrâns la B nu vede rapoartele cât șantierul e în A (altfel proba de mai jos n-ar dovedi nimic)
+SELECT pg_temp.t_ca(pg_temp.t_g('fara')::uuid, 'authenticated');
+DO $t$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE id IN (pg_temp.t_g('r5')::bigint, pg_temp.t_g('r6')::bigint)) THEN
+    RAISE EXCEPTION 'T12 FAIL: cititorul restrâns la B vede rapoartele șantierului din A (restricția % nu lucrează)', pg_temp.t_g('t12_mod');
+  END IF;
+END $t$;
+-- (3) mutarea cu un rezumat corectat pentru A = refuz 55000, nimic schimbat; (4) după „Revino la automat” mutarea trece
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$
+DECLARE s1 bigint := pg_temp.t_g('s1')::bigint; p1 bigint := pg_temp.t_g('p1')::bigint; p2 bigint := pg_temp.t_g('p2')::bigint; z public.rapoarte_zilnice;
+BEGIN
+  IF NOT pg_temp.t_refuza_msg(format('UPDATE public.sites SET proiect_id = %s WHERE id = %s', p2, s1), '55000', 'corectat de om pentru proiectul vechi') THEN
+    RAISE EXCEPTION 'T12 FAIL: mutarea cu un rezumat corectat pentru proiectul vechi a trecut';
+  END IF;
+  z := pg_temp.t_r(pg_temp.t_g('r5')::bigint);
+  IF (SELECT proiect_id FROM public.sites WHERE id = s1) IS DISTINCT FROM p1 OR z.rezumat_sursa <> 'automat' OR z.rezumat_text IS NULL THEN
+    RAISE EXCEPTION 'T12 FAIL: refuzul a schimbat ceva (% / %)', z.rezumat_sursa, (SELECT proiect_id FROM public.sites WHERE id = s1);
+  END IF;
+  PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s AND versiune_salvare = %s$q$,
+                            pg_temp.t_g('r6'), (pg_temp.t_r(pg_temp.t_g('r6')::bigint)).versiune_salvare)) <> 1 THEN
+    RAISE EXCEPTION 'T12 FAIL: „Revino la automat” pe r6';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  -- versiunile de dinainte (mutarea nu le schimbă: doar derivatul)
+  PERFORM set_config('trez.t12_ver', (SELECT jsonb_object_agg(id, versiune_salvare)::text FROM public.rapoarte_zilnice WHERE site_id = s1), true);
+  IF pg_temp.t_trece(format('UPDATE public.sites SET proiect_id = %s WHERE id = %s', p2, s1)) <> 1 THEN
+    RAISE EXCEPTION 'T12 FAIL: mutarea după „Revino la automat”';
+  END IF;
+  z := pg_temp.t_r(pg_temp.t_g('r5')::bigint);
+  IF z.rezumat_sursa IS DISTINCT FROM 'de_recompus' OR z.rezumat_text IS NOT NULL OR z.rezumat_proiect_id IS NOT NULL OR z.rezumat_la IS NULL
+     OR z.rezumat_de IS NOT NULL OR (pg_temp.t_r(pg_temp.t_g('r6')::bigint)).rezumat_sursa IS DISTINCT FROM 'de_recompus'
+     OR (pg_temp.t_r(pg_temp.t_g('r1')::bigint)).rezumat_sursa IS DISTINCT FROM 'de_recompus' THEN
+    RAISE EXCEPTION 'T12 FAIL: după mutare r5 % / % / proiect %', z.rezumat_sursa, to_jsonb(z.rezumat_text), z.rezumat_proiect_id;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE site_id = s1 AND rezumat_sursa IN ('automat', 'editat') AND rezumat_proiect_id IS DISTINCT FROM p2)
+     OR (SELECT jsonb_object_agg(id, versiune_salvare)::text FROM public.rapoarte_zilnice WHERE site_id = s1) IS DISTINCT FROM pg_temp.t_g('t12_ver') THEN
+    RAISE EXCEPTION 'T12 FAIL: au rămas rezumate pentru A pe șantier sau mutarea a mărit versiuni';
+  END IF;
+END $t$;
+-- (5) cititorul restrâns la B: VEDE rapoartele (șantierul e acum în B), dar nimic din textul compus pentru A
+SELECT pg_temp.t_ca(pg_temp.t_g('fara')::uuid, 'authenticated');
+DO $t$ BEGIN
+  IF (SELECT count(*) FROM public.rapoarte_zilnice WHERE id IN (pg_temp.t_g('r5')::bigint, pg_temp.t_g('r6')::bigint)) <> 2 THEN
+    RAISE EXCEPTION 'T12 FAIL: cititorul restrâns la B nu vede rapoartele după mutare (proba nu dovedește nimic)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE site_id = pg_temp.t_g('s1')::bigint
+              AND (position('Sudură test rezumat' IN coalesce(rezumat_text, '')) > 0 OR position('TRZ1' IN coalesce(rezumat_text, '')) > 0)) THEN
+    RAISE EXCEPTION 'T12 FAIL: cititorul restrâns la B vede text compus pentru A';
+  END IF;
+  RAISE NOTICE 'T12 OK (mutare: cititorul restrâns la B vede rapoartele, fără textul compus pentru A)';
+END $t$;
+-- (6) „Generează” (șeful) pe r5: compus pe B (liniile A nu intră), versiunea rămâne; cititorul B vede textul nou; (7) clientul nu cere 'de_recompus'
+SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+DO $t$
+DECLARE z public.rapoarte_zilnice; v integer := (pg_temp.t_r(pg_temp.t_g('r5')::bigint)).versiune_salvare; t text;
+BEGIN
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE id = %s$q$, pg_temp.t_g('r5'))) <> 1 THEN
+    RAISE EXCEPTION 'T12 FAIL: „Generează” pe r5';
+  END IF;
+  IF NOT pg_temp.t_refuza(format($q$UPDATE public.rapoarte_zilnice SET rezumat_sursa = 'de_recompus', rezumat_text = NULL WHERE id = %s$q$, pg_temp.t_g('r5')), '22023') THEN
+    RAISE EXCEPTION 'T12 FAIL: clientul a cerut de_recompus';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  z := pg_temp.t_r(pg_temp.t_g('r5')::bigint);
+  IF z.rezumat_sursa <> 'automat' OR z.rezumat_proiect_id IS DISTINCT FROM pg_temp.t_g('p2')::bigint OR z.versiune_salvare <> v
+     OR position('Probleme: T12 in A' IN z.rezumat_text) = 0 OR position('Sudură test rezumat' IN z.rezumat_text) > 0 OR position('TRZ1' IN z.rezumat_text) > 0 THEN
+    RAISE EXCEPTION 'T12 FAIL: „Generează” după mutare % / proiect % / v% (înainte v%)', to_jsonb(z.rezumat_text), z.rezumat_proiect_id, z.versiune_salvare, v;
+  END IF;
+  PERFORM pg_temp.t_ca(pg_temp.t_g('fara')::uuid, 'authenticated');
+  SELECT rezumat_text INTO t FROM public.rapoarte_zilnice WHERE id = pg_temp.t_g('r5')::bigint;
+  IF t IS DISTINCT FROM z.rezumat_text THEN RAISE EXCEPTION 'T12 FAIL: cititorul B nu vede textul compus pe B'; END IF;
+  RAISE NOTICE 'T12 OK (Generează pe B; clientul nu poate cere de_recompus)';
+END $t$;
+-- (8) raportul mutat pe un șantier din ALT proiect: automat -> 'de_recompus'; editat -> refuz 55000; apoi curățenia T12
+SELECT pg_temp.t_ca(NULL, 'postgres');
+DO $t$
+DECLARE s2 bigint := pg_temp.t_g('s2')::bigint; z public.rapoarte_zilnice;
+BEGIN
+  UPDATE public.sites SET proiect_id = pg_temp.t_g('p1')::bigint WHERE id = s2;
+  IF pg_temp.t_trece(format('UPDATE public.rapoarte_zilnice SET site_id = %s WHERE id = %s', s2, pg_temp.t_g('r5'))) <> 1 THEN
+    RAISE EXCEPTION 'T12 FAIL: mutarea raportului r5 pe alt șantier';
+  END IF;
+  z := pg_temp.t_r(pg_temp.t_g('r5')::bigint);
+  IF z.rezumat_sursa IS DISTINCT FROM 'de_recompus' OR z.rezumat_text IS NOT NULL THEN
+    RAISE EXCEPTION 'T12 FAIL: raportul mutat pe un șantier din alt proiect % / %', z.rezumat_sursa, to_jsonb(z.rezumat_text);
+  END IF;
+  PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
+  IF pg_temp.t_trece(format($q$UPDATE public.rapoarte_zilnice SET rezumat_text = 'Corectat T12 pentru B', rezumat_sursa = 'editat'
+                               WHERE id = %s AND versiune_salvare = %s$q$, pg_temp.t_g('r6'), (pg_temp.t_r(pg_temp.t_g('r6')::bigint)).versiune_salvare)) <> 1 THEN
+    RAISE EXCEPTION 'T12 FAIL: corectura r6 pe B';
+  END IF;
+  PERFORM pg_temp.t_ca(NULL, 'postgres');
+  IF (pg_temp.t_r(pg_temp.t_g('r6')::bigint)).rezumat_proiect_id IS DISTINCT FROM pg_temp.t_g('p2')::bigint
+     OR NOT pg_temp.t_refuza_msg(format('UPDATE public.rapoarte_zilnice SET site_id = %s WHERE id = %s', s2, pg_temp.t_g('r6')), '55000', 'corectat de om pentru alt proiect') THEN
+    RAISE EXCEPTION 'T12 FAIL: raportul cu rezumat corectat mutat pe un șantier din alt proiect';
+  END IF;
+  -- curățenia T12 (totul se anulează oricum la final): rapoartele de test, șantierul înapoi în A, restricția scoasă
+  DELETE FROM public.rapoarte_zilnice WHERE id IN (pg_temp.t_g('r5')::bigint, pg_temp.t_g('r6')::bigint);
+  UPDATE public.sites SET proiect_id = pg_temp.t_g('p1')::bigint WHERE id = pg_temp.t_g('s1')::bigint;
+  DELETE FROM public.profile_sites WHERE profile_id = pg_temp.t_g('fara')::uuid;
+  IF pg_temp.t_g('t12_mod') = 'acces' THEN
+    DELETE FROM public.executie_acces_proiect WHERE profile_id = pg_temp.t_g('fara')::uuid;
+  ELSE
+    DROP POLICY t12_proiect ON public.rapoarte_zilnice;
+  END IF;
+  RAISE NOTICE 'T12 OK (raport mutat pe alt proiect: automat scos, corectura refuzată)';
+END $t$;
+
 -- ── T9: revenirea — nearmată = refuz; armată cu un rezumat corectat = refuz; armată fără = scoate tot; re-aplicare ──
 -- (r3: corectura o face un om — fără UID e refuzată de gardă)
 SELECT pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
@@ -1233,7 +1395,9 @@ SAVEPOINT t9a;
 ROLLBACK TO SAVEPOINT t9a;
 SELECT pg_temp.t_eroare('T9a', :'t9a_eroare', :'t9a_stare', :'LAST_ERROR_MESSAGE', 'P0001', 'garda invalida');
 SAVEPOINT t9b;
-SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
+-- r4: revenirea se livrează prin runner (marcajul de livrare cu numele ei + plafonul 2000 ms), ca migrarea
+SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat_ROLLBACK:' || txid_current(), true);
+SELECT set_config('transaction_timeout', '2000', true), set_config('gazpet.plafon_tranzactie', '2000:' || txid_current(), true);
 \set ON_ERROR_STOP 0
 \ir ../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql
 \set t9b_eroare :ERROR
@@ -1250,16 +1414,17 @@ DO $t$ BEGIN
     RAISE EXCEPTION 'T9 FAIL: corectura de test a rămas';
   END IF;
 END $t$;
-SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);
+SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat_ROLLBACK:' || txid_current(), true);
+SELECT set_config('transaction_timeout', '2000', true), set_config('gazpet.plafon_tranzactie', '2000:' || txid_current(), true);
 \ir ../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql
+SELECT set_config('transaction_timeout', '0', true), set_config('gazpet.plafon_tranzactie', '', true), set_config('gazpet.livrare_migrare', '', true);
 DO $t$
 DECLARE r jsonb;
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice' AND column_name LIKE 'rezumat\_%')
      OR EXISTS (SELECT 1 FROM pg_proc WHERE proname LIKE 'fn\_raport\_rezumat\_%')
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_zilnic_zz_rezumat', 'trg_raport_zilnic_salvari_rezumat'))
-     OR current_setting('gazpet.revenire_20261216a', true) <> '' THEN
-    RAISE EXCEPTION 'T9 FAIL: revenirea a lăsat obiecte sau armarea';
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_zilnic_zz_rezumat', 'trg_raport_zilnic_salvari_rezumat', 'trg_raport_rezumat_santier_mutat')) THEN
+    RAISE EXCEPTION 'T9 FAIL: revenirea a lăsat obiecte';
   END IF;
   PERFORM pg_temp.t_ca(pg_temp.t_g('sef')::uuid, 'authenticated');
   r := public.fn_raport_zilnic_citeste(pg_temp.t_g('s1')::bigint, DATE '2001-01-02');

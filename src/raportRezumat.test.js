@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import { rezumatRaport, rezumatZi, cuNumar, citesteRapoarteZi, intrareZi, santiereDeRaportat, COLOANE_ZI,curata, trunchiaza, fmtNr, fmtGrad, normNume, etichetaRezumat, valideazaEditat, MAX_EDITAT, LIMITE, LIMITE_ZI,
-  curataEditat, plafoneaza, avertizareEroare, MAX_AUTOMAT, SUFIX_SCURTAT } from './raportRezumat.js'
+  curataEditat, plafoneaza, avertizareEroare, lipsaRezumat, MAX_AUTOMAT, SUFIX_SCURTAT } from './raportRezumat.js'
 
 const citeste = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r/g, '')
 const CAZURI = JSON.parse(citeste('./raportRezumat.cazuri.json'))
@@ -80,6 +80,14 @@ describe('unelte de text', () => {
     expect(valideazaEditat('  \n ')).toMatch(/gol/)
     expect(valideazaEditat('x'.repeat(MAX_EDITAT))).toBe(null)
     expect(valideazaEditat('x'.repeat(MAX_EDITAT + 1))).toMatch(/maximum/)
+  })
+  it('r4: rezumatul scos la mutarea șantierului (de_recompus): fără etichetă, rubrica spune de ce; eroarea = „nu s-a putut genera”', () => {
+    expect(etichetaRezumat({ rezumat_sursa: 'de_recompus' })).toBe(null)
+    expect(lipsaRezumat({ rezumat_sursa: 'de_recompus' })).toMatch(/mutat în alt proiect/)
+    expect(lipsaRezumat({ rezumat_sursa: null })).toMatch(/înainte de rubrica de rezumat/)
+    expect(lipsaRezumat({ rezumat_sursa: 'automat', rezumat_text: 'x' })).toBe(null)
+    expect(lipsaRezumat({ rezumat_sursa: 'editat', rezumat_text: 'x' })).toBe(null)
+    expect(avertizareEroare({ rezumat_sursa: 'de_recompus', rezumat_eroare: '42703' })).toMatch(/nu s-a putut genera/)
   })
   it('r3: curataEditat — aceleași caractere de control ca textul automat -> spațiu, rândul nou rămâne (CR / CRLF -> LF)', () => {
     const c = String.fromCharCode
@@ -395,7 +403,11 @@ describe('paritate între fișiere (L19)', () => {
     expect(iAlter).toBeGreaterThan(iLock)
     expect(MIG.indexOf('LOCK TABLE public.raport_zilnic_salvari IN SHARE ROW EXCLUSIVE MODE NOWAIT;')).toBeGreaterThan(iLock)
     // nicio citire a tabelului sub lock (r2 avea „SELECT 1 FROM public.rapoarte_zilnice WHERE rezumat_sursa …” în postcondiții)
-    expect(MIG.slice(iLock)).not.toMatch(/FROM public\.rapoarte_zilnice\b/)
+    // r4: corpurile plpgsql NU rulează la creare (fn_raport_rezumat_santier_mutat citește rapoartele doar la mutarea unui șantier); restul
+    // textului de după lock (instrucțiuni, funcții sql, postcondiții) nu citește tabelul
+    const faraCorpuri = MIG.slice(iLock).replace(/LANGUAGE plpgsql[^\n]*AS \$f\$[\s\S]*?\$f\$;/g, '')
+    expect(faraCorpuri).toContain('CREATE FUNCTION public.fn_raport_rezumat_santier_mutat()')
+    expect(faraCorpuri).not.toMatch(/FROM public\.rapoarte_zilnice\b/)
     // validatorul runnerului cu plafon (scripts/livrare_validator.py, verifica_plafon): pe textul BRUT (și comentariile), fără majuscule,
     // și pe textul comprimat la [a-z0-9_], transaction_timeout / pg_settings apar EXACT de câte ori apare citirea permisă
     const CITIRE = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
@@ -407,6 +419,28 @@ describe('paritate între fișiere (L19)', () => {
       expect(comprimat.split(n).length - 1, n + ' (comprimat)').toBe(permise)
     }
     expect(mic).not.toMatch(/(?<![a-z0-9_$])reset[ \t\n\r\f\v]+all(?![a-z0-9_$])/)
+  })
+  it('r4: revenirea trece de validatorul runnerului cu plafon; corecturile se caută ÎNAINTEA lock-ului exclusiv, sub SHARE', () => {
+    const REV = citeste('../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql')
+    const CITIRE = "FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout'"
+    const mic = REV.toLowerCase(), comprimat = mic.replace(/[^a-z0-9_]/g, '')
+    expect(REV.split(CITIRE).length - 1).toBe(1)
+    for (const n of ['transaction_timeout', 'pg_settings']) {
+      expect(mic.split(n).length - 1, n).toBe(1)
+      expect(comprimat.split(n).length - 1, n + ' (comprimat)').toBe(1)
+    }
+    // fără control de tranzacție la nivel superior și fără meta-comenzi psql (un singur bloc DO)
+    const sus = REV.replace(/--[^\n]*/g, '').replace(/DO \$revenire\$[\s\S]*\$revenire\$;/, '')
+    expect(sus.trim()).toBe('')
+    const cauta = "IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE rezumat_sursa = 'editat') THEN"
+    const iCauta1 = REV.indexOf(cauta), iShare = REV.indexOf('LOCK TABLE public.rapoarte_zilnice IN SHARE MODE NOWAIT;')
+    const iCauta2 = REV.indexOf(cauta, iShare), iExcl = REV.indexOf('LOCK TABLE public.rapoarte_zilnice IN ACCESS EXCLUSIVE MODE;')
+    expect(iCauta1).toBeGreaterThan(0)
+    expect(iShare).toBeGreaterThan(iCauta1)
+    expect(iCauta2).toBeGreaterThan(iShare)
+    expect(iExcl).toBeGreaterThan(iCauta2)
+    // sub lock-ul exclusiv: nicio citire a tabelului (doar catalog + DROP)
+    expect(REV.slice(iExcl)).not.toMatch(/FROM public\.rapoarte_zilnice\b/)
   })
   it('harness-ul SQL rulează EXACT tabelul de cazuri din src/raportRezumat.cazuri.json', () => {
     const H = citeste('../scripts/test_executie_raport_rezumat.sql')
@@ -439,7 +473,7 @@ describe('paritate între fișiere (L19)', () => {
     const { createHash } = await import('node:crypto')
     const REV = citeste('../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql')
     const linii = bloc(REV, '-- AMPRENTE-START', '-- AMPRENTE-END').split('\n').filter(l => l.includes("('fn_raport_rezumat_"))
-    expect(linii.length).toBe(9)
+    expect(linii.length).toBe(10)   // r4: + fn_raport_rezumat_santier_mutat
     for (const l of linii) {
       const [, nume, amp] = /\('(fn_raport_rezumat_[a-z_]+)', '[^']+', '([0-9a-f]{32})'\)/.exec(l)
       const i = MIG.indexOf(`CREATE FUNCTION public.${nume}(`)
@@ -465,7 +499,10 @@ describe('paritate între fișiere (L19)', () => {
     expect(MIG).toContain("'20261216a_executie_raport_rezumat:' || txid_current()")
     expect(MIG).not.toContain('20261215')
     const H = citeste('../scripts/test_executie_raport_rezumat.sql'), REV = citeste('../supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql')
-    expect(REV).toContain("current_setting('gazpet.revenire_20261216a', true)")
+    // r4: revenirea se livrează prin runner (marcajul de livrare cu numele fișierului de revenire), cu plafonul de 2000 ms
+    expect(REV).toContain("current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261216a_executie_raport_rezumat_ROLLBACK:' || txid_current()")
+    expect(REV).toContain("IS DISTINCT FROM '2000/session'")
+    expect(REV).not.toContain('gazpet.revenire_20261216a')
     expect(H + REV).not.toContain('20261215a')
   })
 })

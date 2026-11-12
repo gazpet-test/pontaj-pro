@@ -153,4 +153,12 @@ dom(numeDom('RubricaRezumat'), () => {
     await u.randeaza({ raport: { ...RAPORT, rezumat_eroare: null } })
     expect(u.q('avertizare')).toBe(null)
   })
+  it('r4: rezumat scos la mutarea șantierului (de_recompus): fără text vechi, motivul, „Generează” cere sursa automat', async () => {
+    const u = await monteaza({ raport: { ...RAPORT, rezumat_text: null, rezumat_sursa: 'de_recompus', rezumat_la: '2026-11-12T10:00:00+00:00' } })
+    expect(u.q('text')).toBe(null)
+    expect(u.q('lipsa').textContent).toMatch(/mutat în alt proiect/)
+    await u.apasa('genereaza')
+    expect(cereri[0].patch).toEqual({ rezumat_sursa: 'automat' })
+    expect(cereri[0].eq).toEqual([['id', 7], ['versiune_salvare', 3]])
+  })
 })

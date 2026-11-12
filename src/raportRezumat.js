@@ -373,7 +373,7 @@ export function santiereDeRaportat(sites) {
 // ── pentru rubrica din aplicație ──
 // eticheta: „generat automat” / „editat de <nume>”; rezumatul lipsă (raport salvat înainte de migrare) = null
 export function etichetaRezumat(raport, numeAutor) {
-  if (!raport || raport.rezumat_sursa == null) return null
+  if (!raport || raport.rezumat_sursa == null || raport.rezumat_sursa === 'de_recompus') return null
   if (raport.rezumat_sursa === 'automat') return 'generat automat'
   if (raport.rezumat_sursa === 'editat') return `editat de ${numeAutor || 'un utilizator'}`
   return null
@@ -389,7 +389,17 @@ export function valideazaEditat(t0) {
 export function avertizareEroare(raport) {
   if (!raport || typeof raport.rezumat_eroare !== 'string' || !raport.rezumat_eroare) return null
   if (raport.rezumat_sursa === 'editat') return null   // textul omului nu depinde de compunerea automată
-  return raport.rezumat_sursa == null
+  return raport.rezumat_sursa == null || raport.rezumat_sursa === 'de_recompus'
     ? `Rezumatul automat nu s-a putut genera la ultima salvare (cod ${raport.rezumat_eroare}). Raportul e salvat.`
     : `Rezumatul automat nu s-a putut reface la ultima salvare (cod ${raport.rezumat_eroare}): textul de mai jos e de dinainte. Raportul e salvat.`
+}
+// r4: rubrica fără text — raport de dinainte de rezumat (NULL) sau rezumat scos la mutarea șantierului în alt proiect ('de_recompus');
+// null = rubrica are text
+export function lipsaRezumat(raport) {
+  if (!raport) return null
+  if (raport.rezumat_sursa == null) return 'Raportul a fost salvat înainte de rubrica de rezumat — încă nu are rezumat.'
+  if (raport.rezumat_sursa === 'de_recompus') {
+    return 'Șantierul a fost mutat în alt proiect: rezumatul vechi a fost scos. Se reface la următoarea salvare a raportului.'
+  }
+  return null
 }

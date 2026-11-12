@@ -15,6 +15,9 @@
 #   S2 ordinea inversă: telefonul 1 salvează o corectură (CAS = V, deschisă), telefonul 2 face „Revino la automat” cu CAS = V
 #      → al doilea așteaptă, apoi 0 rânduri; rămâne corectura telefonului 1, V+1;
 #   S3 una după alta (fără suprapunere): „Revino la automat” comis, apoi corectura veche cu CAS = V → 0 rânduri.
+#   r4 (mutarea șantierului în alt proiect, cu o salvare în zbor; șantierul e pus la loc în proiectul lui în trap):
+#   S4 raport nou inserat (necomis) + mutarea → mutarea AȘTEAPTĂ, apoi raportul comis trece în 'de_recompus';
+#   S5 mutarea înapoi (necomisă) + un raport nou → salvarea AȘTEAPTĂ și compune pe proiectul de după mutare.
 #   La fiecare: codul de ieșire al fiecărei sesiuni se păstrează (wait PID), starea finală e citită din BD.
 # Ieșire: 0 = toate scenariile OK; 1 = un scenariu a picat; 2 = argumente; 22 = altă țintă; 23 = 20261216a neaplicată;
 #   24 = owner-ul sintetic lipsește / ziua de test e ocupată.
@@ -171,6 +174,81 @@ cat "$TMP/s3_a.log" "$TMP/s3_b.log"
 FINAL="$(stare)"; ASTEPTAT_PREFIX="automat|$((V + 1))|"
 if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && [[ "$FINAL" == "$ASTEPTAT_PREFIX"* ]] && [[ "$FINAL" != *"Corectura veche"* ]]; then R=0; else R=1; fi
 verdict "$R" "S3 revino la automat comis, apoi corectura veche (CAS $V): conflict; final ${FINAL%%|*} v$(echo "$FINAL" | cut -d'|' -f2) (asteptat automat, v$((V + 1))); iesiri $RC_A/$RC_B"
+
+# ── r4 (Jakarinos r3 P1): mutarea șantierului în alt proiect cu o salvare în zbor. Șantierul își schimbă proiectul pe clonă (P0 -> P1 -> P0) și
+#    e pus la loc în trap; rapoartele sintetice ale zilelor 2001-01-06 / 07 se șterg în trap.
+#   S4 salvarea în zbor (raport NOU inserat, necomis, rezumat compus pe P0), apoi mutarea în P1: mutarea AȘTEAPTĂ (lock-ul EXCLUSIVE pe
+#      rapoarte_zilnice), apoi vede raportul comis și îl trece în 'de_recompus'. Fără lock, UPDATE-ul mutării nu vede rândul necomis și textul
+#      compus pe P0 ar rămâne pe un raport din P1;
+#   S5 mutarea în zbor (înapoi în P0, necomisă), apoi o salvare nouă: salvarea AȘTEAPTĂ mutarea și compune pe P0 (rezumat_proiect_id = P0).
+P0="$(q -c "SELECT coalesce(proiect_id::text, '') FROM public.sites WHERE id = $SITE")"
+P1="$(q -c "SELECT id FROM public.executie_proiecte WHERE id IS DISTINCT FROM nullif('$P0', '')::bigint ORDER BY id LIMIT 1")"
+[[ "$P1" =~ ^[0-9]+$ ]] || { echo "nu gasesc un al doilea proiect pe clona" >&2; exit 24; }
+if [ "$(q -c "SELECT EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE site_id = $SITE AND data IN (DATE '2001-01-06', DATE '2001-01-07'))")" != "f" ]; then
+  echo "REFUZ: zilele de test 2001-01-06 / 07 sunt ocupate pe santierul $SITE (nu sterg nimic)" >&2; exit 24
+fi
+curata_r4() {
+  q -c "DELETE FROM public.rapoarte_zilnice WHERE site_id = $SITE AND data IN (DATE '2001-01-06', DATE '2001-01-07') AND probleme LIKE 'Proba concurenta mutare%';" >/dev/null \
+    || echo "ATENTIE: de sters manual pe clona: rapoartele 2001-01-06 / 07 ale santierului $SITE" >&2
+  q -c "UPDATE public.sites SET proiect_id = nullif('$P0', '')::bigint WHERE id = $SITE AND proiect_id IS DISTINCT FROM nullif('$P0', '')::bigint;" >/dev/null \
+    || echo "ATENTIE: de pus la loc manual pe clona: santierul $SITE in proiectul '${P0:-fara}'" >&2
+}
+trap 'curata_r4; curata' EXIT
+stare_zi() { q -c "SELECT coalesce(rezumat_sursa, '-') || '|' || coalesce(rezumat_proiect_id::text, '-') FROM public.rapoarte_zilnice WHERE site_id = $SITE AND data = DATE '$1'"; }
+
+cat > "$TMP/s4_a.sql" <<SQL
+\set ON_ERROR_STOP 1
+BEGIN; $JWT
+INSERT INTO public.rapoarte_zilnice (site_id, data, probleme, created_by, updated_at)
+VALUES ($SITE, DATE '2001-01-06', 'Proba concurenta mutare S4', '$OWNER', now());
+SELECT pg_advisory_xact_lock(162160004);
+SELECT pg_sleep(2);
+COMMIT;
+SQL
+cat > "$TMP/s4_b.sql" <<SQL
+\set ON_ERROR_STOP 1
+$(asteapta 162160004)
+BEGIN;
+DO \$t\$ DECLARE t0 timestamptz := clock_timestamp(); n integer;
+BEGIN
+  UPDATE public.sites SET proiect_id = $P1 WHERE id = $SITE;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n <> 1 THEN RAISE EXCEPTION 'FAIL S4: mutarea a atins % randuri', n; END IF;
+  IF clock_timestamp() - t0 < interval '1 second' THEN RAISE EXCEPTION 'FAIL S4: mutarea nu a asteptat salvarea in zbor (%)', clock_timestamp() - t0; END IF;
+  RAISE NOTICE 'S4 mutarea: a asteptat % (salvarea in zbor)', clock_timestamp() - t0;
+END \$t\$;
+COMMIT;
+SQL
+ruleaza_doua s4
+FINAL="$(stare_zi 2001-01-06)"
+if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && [ "$FINAL" = "de_recompus|-" ]; then R=0; else R=1; fi
+verdict "$R" "S4 salvare in zbor + mutare P${P0:-fara}->P$P1: raportul nou '$FINAL' (asteptat 'de_recompus|-'); iesiri $RC_A/$RC_B"
+
+cat > "$TMP/s5_b.sql" <<SQL
+\set ON_ERROR_STOP 1
+BEGIN;
+UPDATE public.sites SET proiect_id = nullif('$P0', '')::bigint WHERE id = $SITE;
+SELECT pg_advisory_xact_lock(162160005);
+SELECT pg_sleep(2);
+COMMIT;
+SQL
+cat > "$TMP/s5_a.sql" <<SQL
+\set ON_ERROR_STOP 1
+$(asteapta 162160005)
+BEGIN; $JWT
+DO \$t\$ DECLARE t0 timestamptz := clock_timestamp();
+BEGIN
+  INSERT INTO public.rapoarte_zilnice (site_id, data, probleme, created_by, updated_at)
+  VALUES ($SITE, DATE '2001-01-07', 'Proba concurenta mutare S5', '$OWNER', now());
+  IF clock_timestamp() - t0 < interval '1 second' THEN RAISE EXCEPTION 'FAIL S5: salvarea nu a asteptat mutarea in zbor (%)', clock_timestamp() - t0; END IF;
+  RAISE NOTICE 'S5 salvarea: a asteptat % (mutarea in zbor)', clock_timestamp() - t0;
+END \$t\$;
+COMMIT;
+SQL
+ruleaza_doua s5
+FINAL="$(stare_zi 2001-01-07)"; ASTEPTAT="automat|${P0:--}"
+if [ "$RC_A" = 0 ] && [ "$RC_B" = 0 ] && [ "$FINAL" = "$ASTEPTAT" ]; then R=0; else R=1; fi
+verdict "$R" "S5 mutare in zbor (inapoi in P${P0:-fara}) + salvare noua: '$FINAL' (asteptat '$ASTEPTAT'); iesiri $RC_A/$RC_B"
 
 if [ "$ESEC" = 0 ]; then echo "Toate scenariile de concurenta 20261216a au trecut"; else echo "Cel putin un scenariu de concurenta a picat"; fi
 exit "$ESEC"

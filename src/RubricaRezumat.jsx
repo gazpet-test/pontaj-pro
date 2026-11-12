@@ -6,12 +6,13 @@
 // Scrierea = UPDATE cu CAS pe versiune_salvare (L01): 0 rânduri = raportul s-a schimbat între timp sau lipsește dreptul → reîncarci.
 // r3: și „Revino la automat” mărește versiunea pe server (decizie a omului), deci rândul întors aduce versiunea nouă (onActualizat).
 // r3: rezumat_eroare = compunerea automată a eșuat la ultima salvare (raportul e salvat): se arată o avertizare cu codul.
+// r4: rezumat_sursa 'de_recompus' = șantierul s-a mutat în alt proiect și serverul a scos textul vechi: rubrica arată de ce și „Generează”.
 // Fără buton de trimitere (WhatsApp / mail) în etapa 1.
 // Înainte de aplicarea migrării (coloanele lipsesc din rând) rubrica nu apare deloc.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { etichetaRezumat, valideazaEditat, curataEditat, avertizareEroare, MAX_EDITAT } from './raportRezumat.js'
+import { etichetaRezumat, valideazaEditat, curataEditat, avertizareEroare, lipsaRezumat, MAX_EDITAT } from './raportRezumat.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -93,6 +94,7 @@ export default function RubricaRezumat({ raport, poateEdita, onActualizat, compa
     trimite({ rezumat_text: curataEditat(text), rezumat_sursa: 'editat' })
   }
   const avertizare = avertizareEroare(raport)
+  const lipsa = lipsaRezumat(raport)   // r4: și 'de_recompus' (șantier mutat în alt proiect)
   const laAutomat = () => {
     if (raport.rezumat_sursa === 'editat' && !window.confirm('Înlocuiești textul corectat cu rezumatul generat automat din raport?')) return
     trimite({ rezumat_sursa: 'automat' })
@@ -106,9 +108,9 @@ export default function RubricaRezumat({ raport, poateEdita, onActualizat, compa
   return (
     <div style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: compact ? 10 : 12 }}>
       {avertizare && !editez && <div data-rezumat-avertizare style={{ marginBottom: 8, fontSize: 12, color: G.yellow }}>⚠️ {avertizare}</div>}
-      {raport.rezumat_sursa == null ? (
-        <div style={{ fontSize: 13, color: G.dim }}>
-          Raportul a fost salvat înainte de rubrica de rezumat — încă nu are rezumat.
+      {lipsa ? (
+        <div data-rezumat-lipsa style={{ fontSize: 13, color: G.dim }}>
+          {lipsa}
           {scrie && <div style={{ marginTop: 8 }}><button data-rezumat-genereaza disabled={lucreaza} onClick={laAutomat} style={btn(G.blue)}>{lucreaza ? '…' : 'Generează rezumatul'}</button></div>}
         </div>
       ) : editez ? (
