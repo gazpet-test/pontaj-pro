@@ -16,6 +16,10 @@ Verifica, pe textul fara comentarii si fara literali (siruri '...' si $tag$...$t
   - fiecare sectiune A-N apare exact o data;
   - r22 (sectiunea N, auditul tranzitiv): pg_proc.prosrc se citeste in afara predicatelor DOAR prin regexp_matches cu
     cele doua expresii ale grafului (REGEX_CORP: nume urmate de "(" si cuvinte); sectiunea are plafonul ei de timp.
+  - r23 (sectiunea N, modelul precis): fara limita de adancime (inchidere cu UNION pe stari), apelul cere EXECUTE,
+    functiile de trigger nu sunt radacini; sectiunile noi N_audit_radacina / N_audit_trigger_exclus;
+  - r23: aceleasi reguli (doar citire, fara corpuri / comenzi afisate) pe scripts/portal/public21_apelanti.sql si
+    public21_apelanti_pss.sql, cu sectiunile lor.
 Mutantii (scriere, COMMIT, nextval, comanda afisata, interogarea C / A din r19, psql meta, DO, sectiune lipsa) trebuie
 refuzati cu motivul exact. Rularea efectiva (PGlite, schema falsa): scripts/portal/porti_citire_pglite.mjs.
 """
@@ -29,7 +33,11 @@ SQL = ROOT / "scripts/portal/porti_citire.sql"
 SECTIUNI = ["A_scheme", "B_relatii", "C_secvente", "D_functii", "D_numar", "E_net_schema", "F_net_drepturi",
             "G_amprenta_net", "H_functii_net", "I_cron", "J_postgrest", "K_roluri_login", "L_triggere_net",
             "M_teren_executa", "N_audit_rezumat", "N_audit_nod", "N_audit_cale", "N_audit_nerezolvat",
-            "N_audit_necunoscut"]
+            "N_audit_necunoscut", "N_audit_radacina", "N_audit_trigger_exclus"]
+SQL_APELANTI = ROOT / "scripts/portal/public21_apelanti.sql"
+SQL_APELANTI_PSS = ROOT / "scripts/portal/public21_apelanti_pss.sql"
+SECTIUNI_APELANTI = ["P_clasificare", "P_apelanti_corp", "P_dependente", "P_cron", "P_pierde", "P_statistici"]
+SECTIUNI_APELANTI_PSS = ["Q_statements"]
 # r22 (sectiunea N): corpurile functiilor se citesc DOAR prin aceste doua expresii (nume urmate de "(" si cuvinte), ca
 # sa construiasca graful; textul corpului nu iese in rezultat (iese doar numele rezolvate / necunoscute).
 REGEX_CORP = {
@@ -96,8 +104,9 @@ def curata(text):
     return "".join(out), lit
 
 
-def verifica(text):
+def verifica(text, sectiuni=None):
     """Intoarce lista de motive de refuz (goala = acceptat)."""
+    sectiuni = SECTIUNI if sectiuni is None else sectiuni
     motive = []
     text = text.replace("\r\n", "\n")
     try:
@@ -178,7 +187,7 @@ def verifica(text):
                 motive.append(f"{m.group(1)} pe 'public' in afara CASE pe relkind")
     if re.search(r"ORDER BY[^;]*?(?<![A-Za-z0-9_.$\"])\d+\s+COLLATE", corp, re.I):
         motive.append("ORDER BY pe pozitie cu COLLATE")
-    for s in SECTIUNI:
+    for s in sectiuni:
         k = sum(1 for x in lit if x == f"'{s}'")
         if k != 1:
             motive.append(f"sectiunea {s} apare de {k} ori")
@@ -289,6 +298,37 @@ class TestPortiCitire(unittest.TestCase):
 
     def test_mutant_literal_neinchis(self):
         self._refuz(self._inainte_de_rollback("SELECT 'x;"), "parsare")
+
+    # r23: modelul precis al lui N
+    def _n(self):
+        t = self.text.replace("\r\n", "\n")
+        return t[t.index("-- N (r23"):t.rindex("ROLLBACK;")]
+
+    def test_n_fara_limita_de_adancime(self):
+        n = curata(self._n())[0]
+        self.assertNotIn("adancime_max", n)
+        self.assertRegex(n, r"atins\(k, id, rol, op, net\) AS \(\s*SELECT r\.k, r\.id, r\.rol, r\.op, false FROM radacina r WHERE NOT r\.net\s*UNION\s*SELECT")
+
+    def test_n_apelul_cere_execute_si_triggerele_nu_sunt_radacini(self):
+        n = curata(self._n())[0]
+        self.assertIn("JOIN exec x ON x.oid = g.oid WHERE NOT g.trigger_fn", " ".join(n.split()))
+        self.assertIn("has_function_privilege((SELECT rol0 FROM par), f.oid, $L", " ".join(n.split()))
+        self.assertRegex(" ".join(n.split()), r"AND NOT f\.trigger_fn AND NOT \(f\.schema = \$L\d+\$ AND f\.oid < 16384")
+
+    def test_apelanti_acceptat(self):
+        self.assertEqual(verifica(SQL_APELANTI.read_text(encoding="utf-8"), SECTIUNI_APELANTI), [])
+        self.assertEqual(verifica(SQL_APELANTI_PSS.read_text(encoding="utf-8"), SECTIUNI_APELANTI_PSS), [])
+        for f in (SQL_APELANTI, SQL_APELANTI_PSS):
+            self.assertTrue(all(ord(ch) < 128 for ch in f.read_text(encoding="utf-8")), f.name)
+
+    def test_apelanti_mutant_comanda_afisata(self):
+        t = SQL_APELANTI.read_text(encoding="utf-8").replace("j.active AS activ,", "j.active AS activ, j.command,", 1)
+        self.assertTrue(any("coloana cu continut afisata" in m for m in verifica(t, SECTIUNI_APELANTI)))
+
+    def test_apelanti_mutant_order_by_pozitie(self):
+        t = SQL_APELANTI.read_text(encoding="utf-8").replace('ORDER BY x.functie COLLATE "C", x.obiect COLLATE "C";',
+                                                             'ORDER BY 2 COLLATE "C", 4 COLLATE "C";', 1)
+        self.assertIn("ORDER BY pe pozitie cu COLLATE", verifica(t, SECTIUNI_APELANTI))
 
     def test_cuvinte_doar_in_literali_acceptate(self):
         # privilegiile 'INSERT,UPDATE,...' si to_regclass('net.http_request_queue') sunt in literali: acceptate

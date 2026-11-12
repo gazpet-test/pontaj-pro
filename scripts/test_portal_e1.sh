@@ -218,9 +218,18 @@ hold_18a "$MIG" 'PORTAL_PRIVILEGES_MISSING: REFERENCES pe auth.users' priv_refer
 q "CREATE OR REPLACE FUNCTION net.portal_fixture_net_01() RETURNS integer LANGUAGE sql AS 'SELECT 2'" >/dev/null
 hold_18a "$MIG" PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED net_corp
 q "CREATE OR REPLACE FUNCTION net.portal_fixture_net_01() RETURNS integer LANGUAGE sql AS 'SELECT 1'" >/dev/null
-q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 2'" >/dev/null
+# r23: 01..18 sunt functii de trigger (ca in productie); corpul se schimba pe 19 (apelabila, RETURNS integer).
+q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_19() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 2'" >/dev/null
 hold_18a "$MIG" PORTAL_PUBLIC_BASELINE_UNREVIEWED_OR_CHANGED public_corp
-q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 1'" >/dev/null
+q "CREATE OR REPLACE FUNCTION public.portal_fixture_public_19() RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 1'" >/dev/null
+# r23 (varianta d): clasificarea verificata pe catalog INAINTE de orice schimbare: o functie de trigger trecuta ca apelabila
+# (copia fixture-ului cu 01 marcat {authenticated}) = refuz atomic care o numeste, nimic schimbat.
+mkdir "$TMP/v_clasif_gresita"
+sed "s/ ('public.portal_fixture_public_01()','{}')/ ('public.portal_fixture_public_01()','{authenticated}')/" "$MIG" \
+  >"$TMP/v_clasif_gresita/20261118a_portal_teren_identitate.sql"
+! cmp -s "$MIG" "$TMP/v_clasif_gresita/20261118a_portal_teren_identitate.sql" || fail 'mutantul clasificarii nu s-a aplicat'
+hold_18a "$TMP/v_clasif_gresita/20261118a_portal_teren_identitate.sql" 'PORTAL_PUBLIC_CLASIFICARE_SCHIMBATA: public.portal_fixture_public_01()' clasif_gresita
+[[ "$(q "SELECT has_function_privilege('public','public.portal_fixture_public_01()','EXECUTE')")" == t ]] || fail 'clasificare gresita: PUBLIC retras partial'
 # Jakarinos r6 P2: owner-ul unei functii net schimbat inainte de apply (definitie si set neschimbate) = refuz.
 "${ADMIN[@]}" -d "$DB" -c 'ALTER FUNCTION net.portal_fixture_net_02() OWNER TO supabase_auth_admin' >/dev/null
 hold_18a "$MIG" PORTAL_NET_BASELINE_UNREVIEWED_OR_CHANGED net_owner
@@ -362,11 +371,14 @@ sect() { grep -E "^$1\|" "$TMP/porti_citire.out" | cut -d'|' -f"$2" | paste -sd,
 [[ "$(grep -E '^G_amprenta_net\|' "$TMP/porti_citire.out" | cut -d'|' -f2,3 | paste -sd, -)" == "$G_FIXTURE" ]] \
   || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql G: amprentele pg_net s-au schimbat fata de citirea dinainte de apply'; }
 [[ "$(grep -cE '^M_teren_executa\|' "$TMP/porti_citire.out")" == 33 ]] || { cat "$TMP/porti_citire.out"; fail 'porti_citire.sql M: asteptat 21 + 12 functii'; }
-# r22: N (auditul tranzitiv) pe fixture: 21 + 12 functii sintetice („SELECT 1”) + coada / raspunsurile (scriere prin PUBLIC)
-# => 0 cai spre net, 0 nerezolvate, 0 nume necunoscute; radacinile numarate exact.
+# r23: N (auditul precis) pe fixture INAINTE de apply (teren nu exista => rolul PUBLIC): radacinile in afara net = cele 3
+# apelabile (19..21); cele 18 functii de trigger sunt EXCLUSE (listate); net = 12 functii + coada / raspunsuri / secventa;
+# relatiile cu drept PUBLIC in afara net = cele doua porti stricate intentionat (tabel + secventa) => 0 cai, 0 nerezolvate.
 rez_n() { grep -E "^N_audit_rezumat\|$1\|" "$TMP/porti_citire.out" | cut -d'|' -f6; }
-[[ "$(rez_n radacini_functii_in_afara_net) $(rez_n radacini_functii_net) $(rez_n radacini_relatii_scriere) $(rez_n cai_spre_net) $(rez_n nerezolvate) $(rez_n nume_necunoscute)" == '21 12 2 0 0 0' ]] \
-  || { grep -E '^N_audit' "$TMP/porti_citire.out"; fail 'porti_citire.sql N: asteptat 21 / 12 / 2 radacini, 0 cai, 0 nerezolvate, 0 necunoscute'; }
+[[ "$(rez_n rol_radacina) $(rez_n radacini_functii_in_afara_net) $(rez_n functii_trigger_excluse) $(rez_n radacini_functii_net) $(rez_n radacini_relatii_net) $(rez_n radacini_relatii_in_afara_net) $(rez_n cai_spre_net) $(rez_n nerezolvate) $(rez_n nume_necunoscute)" == 'public 3 18 12 3 2 0 0 0' ]] \
+  || { grep -E '^N_audit' "$TMP/porti_citire.out"; fail 'porti_citire.sql N: asteptat public / 3 / 18 excluse / 12 / 3 / 2 radacini, 0 cai, 0 nerezolvate, 0 necunoscute'; }
+[[ "$(grep -cE '^N_audit_trigger_exclus\|public[.]portal_fixture_public_(0[1-9]|1[0-8])[(][)]\|' "$TMP/porti_citire.out")" == 18 ]] \
+  || { grep -E '^N_audit_trigger' "$TMP/porti_citire.out"; fail 'porti_citire.sql N: cele 18 functii de trigger nu sunt listate ca excluse'; }
 [[ "$(grep -cE '^N_audit_(cale|nerezolvat|necunoscut)\|' "$TMP/porti_citire.out")" == 0 ]] || { grep -E '^N_audit' "$TMP/porti_citire.out"; fail 'porti_citire.sql N: randuri de cale / nerezolvat'; }
 [[ "$(q "$STARE_DIAG")" == t ]] || fail 'porti_citire.sql: a ramas ceva'
 echo "PORTI_CITIRE: B=$(sect B_relatii 3) C=$(sect C_secvente 3) D=0 (= diagnosticul), ROLLBACK"
@@ -393,6 +405,32 @@ q 'GRANT teren TO postgres WITH INHERIT FALSE, SET TRUE' >/dev/null
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1a.test.sql" >"$TMP/tests.log" 2>&1 || { cat "$TMP/tests.log"; fail tests; }
 grep -q PORTAL_E1_1A_TEST_END "$TMP/tests.log" || fail 'test end marker'
 [[ "$(q 'SELECT public.fn_portal_porti_lipsa()')" == '{}' ]] || fail gate
+# r23 (varianta d): dupa apply, in public teren executa DOAR cele doua functii ale portalului; PUBLIC nu mai are niciuna
+# din cele 21; cele 3 apelabile au GRANT explicit (authenticated, service_role); revenirea are lista GRANT-urilor adaugate.
+[[ "$(q "SELECT string_agg(p.proname, ',' ORDER BY p.proname) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+   WHERE n.nspname='public' AND has_function_privilege('teren',p.oid,'EXECUTE')")" == 'fn_portal_uid,fn_teren_eligibil' ]] \
+  || fail '(d): teren executa in public altceva decat cele doua functii ale portalului'
+[[ "$(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'
+   AND p.proname ~ '^portal_fixture_public_[0-9]{2}\$' AND has_function_privilege('public',p.oid,'EXECUTE')")" == 0 ]] \
+  || fail '(d): PUBLIC executa inca una din cele 21'
+[[ "$(q "SELECT count(*) FROM unnest(ARRAY['19','20','21']) i CROSS JOIN unnest(ARRAY['authenticated','service_role']) r
+   WHERE has_function_privilege(r, ('public.portal_fixture_public_'||i||'()')::regprocedure, 'EXECUTE')")" == 6 ]] \
+  || fail '(d): apelabilele fara GRANT explicit'
+[[ "$(q "SELECT jsonb_array_length(amprenta) FROM public.portal_public_baseline WHERE semnatura='grant_d:'")" == 6 ]] \
+  || fail '(d): randul grant_d: din baseline (6 GRANT-uri adaugate pe fixture, ACL implicit)'
+grep -q 'PORTAL_PUBLIC_D: 21 functii fara PUBLIC (18 de trigger, 3 apelabile); GRANT-uri adaugate: 6' "$TMP/apply.log" \
+  || { cat "$TMP/apply.log"; fail '(d): NOTICE PORTAL_PUBLIC_D lipsa din jurnalul aplicarii'; }
+# N dupa apply: rolul teren, radacinile in afara net = exact cele doua functii ale portalului, 0 cai, 0 nerezolvate.
+q "CREATE SCHEMA cron; CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, command text NOT NULL,
+   username text NOT NULL DEFAULT current_user, active boolean NOT NULL DEFAULT true, jobname text)" >/dev/null
+"${PSQL[@]}" -At -F '|' -f "$ROOT/scripts/portal/porti_citire.sql" >"$TMP/porti_citire_dupa.out" 2>&1 \
+  || { cat "$TMP/porti_citire_dupa.out"; fail 'porti_citire.sql dupa apply'; }
+q "DROP TABLE cron.job; DROP SCHEMA cron" >/dev/null
+rez_d() { grep -E "^N_audit_rezumat\|$1\|" "$TMP/porti_citire_dupa.out" | cut -d'|' -f6; }
+[[ "$(rez_d rol_radacina) $(rez_d radacini_functii_in_afara_net) $(rez_d functii_trigger_excluse) $(rez_d radacini_relatii_in_afara_net) $(rez_d cai_spre_net) $(rez_d nerezolvate)" == 'teren 2 0 0 0 0' ]] \
+  && [[ "$(grep -E '^N_audit_radacina\|public[.]' "$TMP/porti_citire_dupa.out" | cut -d'|' -f2 | paste -sd, -)" == 'public.fn_portal_uid(),public.fn_teren_eligibil(uuid)' ]] \
+  || { grep -E '^N_audit_(rezumat|radacina|cale|nerezolvat)' "$TMP/porti_citire_dupa.out"; fail 'porti_citire.sql N dupa apply: asteptat teren / 2 radacini (portalul) / 0 cai / 0 nerezolvate'; }
+echo "PUBLIC_D 18a: teren executa in public doar fn_portal_uid + fn_teren_eligibil; N dupa apply: 0 cai, 0 nerezolvate, radacinile net: $(rez_d radacini_functii_net) functii + $(rez_d radacini_relatii_net) obiecte"
 # r21 (varianta c): dupa apply, obiectele pg_net (drepturile productiei) sunt acceptate DOAR cu amprenta identica. Fiecare
 # abatere inroseste poarta cu numele obiectului; revenirea la forma revizuita o face din nou verde. Retragerea drepturilor
 # PUBLIC (cererea catre suport) e legitima: poarta ramane verde.

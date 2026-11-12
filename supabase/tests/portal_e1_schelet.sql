@@ -84,14 +84,24 @@ BEGIN
    lpad(i::text,2,'0'),'SELECT 1');
  END LOOP;
 END $net_fixture$;
--- Exact 21 de functii sintetice: NU reprezinta inventarul PUBLIC din productie.
+-- Exact 21 de functii sintetice: NU reprezinta inventarul PUBLIC din productie, dar au FORMA lui (r23, varianta d):
+-- 01..18 = functii de TRIGGER (ca cele 18 din productie, porti_citire.sql M), 19..21 = apelabile. Toate cu ACL-ul implicit
+-- (EXECUTE pentru PUBLIC), ca in productie. Triggerul facturi_fixture_touch foloseste 01: dovada ca un trigger se
+-- declanseaza si dupa REVOKE EXECUTE ... FROM PUBLIC (testul din harness, ca authenticated).
 DO $fixture$
 BEGIN
  FOR i IN 1..21 LOOP
-  EXECUTE format('CREATE FUNCTION public.portal_fixture_public_%s() RETURNS integer LANGUAGE sql IMMUTABLE AS %L',
-   lpad(i::text,2,'0'),'SELECT 1');
+  IF i <= 18 THEN
+   EXECUTE format('CREATE FUNCTION public.portal_fixture_public_%s() RETURNS trigger LANGUAGE plpgsql AS %L',
+    lpad(i::text,2,'0'),'BEGIN RETURN NEW; END');
+  ELSE
+   EXECUTE format('CREATE FUNCTION public.portal_fixture_public_%s() RETURNS integer LANGUAGE sql IMMUTABLE AS %L',
+    lpad(i::text,2,'0'),'SELECT 1');
+  END IF;
  END LOOP;
 END $fixture$;
+CREATE TRIGGER facturi_fixture_touch BEFORE UPDATE ON public.facturi
+ FOR EACH ROW EXECUTE FUNCTION public.portal_fixture_public_01();
 RESET ROLE;
 -- r21: tabelele pg_net in forma de PE PRODUCTIE (12.11.2026, porti_citire.sql B / C / G): proprietar supabase_admin,
 -- aceleasi coloane si TOATE drepturile pentru PUBLIC (acordate de supabase_admin), ca harness-ul sa nu treaca pe o stare

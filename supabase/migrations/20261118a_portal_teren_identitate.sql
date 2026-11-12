@@ -62,6 +62,18 @@
 --    DEFAULT-urile / IDENTITY / GENERATED, regulile, constrangerile, indecsii, parametrii si coloana-proprietar a secventei
 --    si functiile de care depind acestea. Valorile de productie se recitesc (porti_citire.sql G): pana atunci lista e
 --    DE_COMPLETAT = refuz (PORTAL_NET_REL_LIST_NECOMPLETATA) si poarta rosie.
+-- r23 (varianta d, E1_RAPORT.md r23): suprafata lui teren in public se micsoreaza la cele doua functii ale portalului.
+--  * cele 21 de functii executabile prin PUBLIC (ale noastre, proprietar postgres) sunt clasificate in migrare din
+--    citirea de productie (porti_citire.sql M, coloana trigger_fn): 18 de TRIGGER (nu se pot apela direct, iar la
+--    declansare PostgreSQL nu verifica EXECUTE => niciun GRANT) + 3 apelabile (GRANT explicit catre authenticated si
+--    service_role, rolurile prin care le apeleaza azi aplicatia / API-ul). Clasificarea se verifica pe catalog
+--    (prorettype) inainte de orice schimbare: alta forma = refuz PORTAL_PUBLIC_CLASIFICARE_*;
+--  * $public_d$: REVOKE EXECUTE ... FROM PUBLIC pe toate 21; GRANT doar unde rolul nu are deja un drept explicit, iar ce
+--    s-a adaugat se inregistreaza in baseline (randul 'grant_d:'), ca revenirea sa retraga EXACT acele drepturi si sa
+--    redea PUBLIC (aceleasi drepturi ca inainte de 18a). Postconditia: niciuna din 21 cu PUBLIC, cele 3 apelabile
+--    executabile de rolurile lor, teren executa in public DOAR fn_teren_eligibil si fn_portal_uid;
+--  * poarta: in public, orice functie executabila de teren in afara celor doua = rosu (functie:<semnatura>), chiar daca
+--    e in baseline; amprenta celor 21 (corp, DEFINER, proprietar, configuratie, ACL dupa d) ramane in baseline (L15).
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -217,6 +229,7 @@ GRANT EXECUTE ON FUNCTION public.fn_auth_token_hook(jsonb) TO supabase_auth_admi
 -- 20 INVOKER si un DEFINER trigger, conform inventarului furnizat. Nu deducem siguranta doar din INVOKER;
 -- corpurile sunt ancorate in md5-urile revizuite, iar orice drift al definitiei/configuratiei/ACL este refuzat.
 -- Orice schimbare a setului PUBLIC pe prod face apply-ul sa refuze (precondiția de mai jos) si poarta rosie.
+-- r23 (d): lista = setul de PUBLIC DINAINTEA lui 18a (preconditia); 18a ii retrage PUBLIC ($public_d$, mai jos).
 CREATE FUNCTION public.fn_portal_public_aprobat() RETURNS text[]
 LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $fn$
   SELECT ARRAY[
@@ -410,7 +423,8 @@ BEGIN
         AND has_schema_privilege('teren',oid,'USAGE'))
       IS DISTINCT FROM ARRAY['information_schema','net','public']::text[] THEN
     v:=array_append(v,'teren scheme USAGE'); END IF;
-  FOR r IN SELECT * FROM public.portal_public_baseline WHERE semnatura NOT LIKE 'rel:%' LOOP
+  -- r23 (d): randul 'grant_d:' (GRANT-urile adaugate de 18a, pentru revenire) nu e o functie.
+  FOR r IN SELECT * FROM public.portal_public_baseline WHERE semnatura NOT LIKE 'rel:%' AND semnatura <> 'grant_d:' LOOP
     IF r.amprenta IS DISTINCT FROM (SELECT jsonb_build_array(md5(pg_get_functiondef(p.oid)),
         p.prosecdef,p.proowner,p.proconfig,p.proacl) FROM pg_proc p WHERE p.oid=to_regprocedure(r.semnatura)) THEN
       v:=array_append(v,'amprenta:'||r.semnatura); END IF;
@@ -454,8 +468,10 @@ BEGIN
       AND has_schema_privilege('teren',n.oid,'USAGE') AND has_function_privilege('teren',p.oid,'EXECUTE') ORDER BY p.oid LOOP
     -- Semnatura canonica: schema + nume + tipuri (fara numele argumentelor).
     v_signature := quote_ident(r.nspname) || '.' || quote_ident(r.proname) || '(' || oidvectortypes(r.proargtypes) || ')';
+    -- r23 (d): in public teren executa DOAR cele doua functii ale portalului; baseline-ul nu mai acopera public
+    -- (cele 21 sunt in baseline doar pentru amprenta lor). In net / information_schema: lista din baseline, ca pana acum.
     IF v_signature NOT IN ('public.fn_teren_eligibil(uuid)','public.fn_portal_uid()')
-      AND NOT EXISTS (SELECT FROM public.portal_public_baseline WHERE semnatura=v_signature) THEN
+      AND (r.nspname = 'public' OR NOT EXISTS (SELECT FROM public.portal_public_baseline WHERE semnatura=v_signature)) THEN
       v:=array_append(v,'functie:'||v_signature);
     END IF;
   END LOOP;
@@ -526,6 +542,102 @@ BEGIN
       WHERE n.nspname='net' AND c.relkind IN ('r','p','v','m','f','S') AND public.fn_portal_teren_rel_drept(c.oid) IS TRUE),
     (SELECT count(*) FROM jsonb_object_keys(public.fn_portal_net_rel_aprobat()));
 END $public_pre$;
+-- r23 (varianta d): clasificarea celor 21, revizuita din productie (porti_citire.sql M, 12.11.2026: trigger_fn).
+-- granturi = rolurile care primesc EXECUTE explicit (gol = functie de trigger: nu se apeleaza direct, fara GRANT).
+-- Cele 3 apelabile: get_istoric_importuri_evogps = RPC din UI (src/Logistica.jsx, rol authenticated); celelalte doua
+-- nu au apelant in repo / cron (sectiunea I) => aceleasi doua roluri ca API-ul de azi, ca nimic sa nu se strice;
+-- apelantii reali din baza se citesc inainte de apply cu scripts/portal/public21_apelanti.sql (E1_RAPORT.md r23).
+CREATE TEMP TABLE portal_public_clasificare ON COMMIT DROP AS
+SELECT v.semnatura, v.granturi::text[] AS granturi FROM (VALUES
+ -- PORTAL_PUBLIC_CLASIFICARE: 18 de trigger (granturi gol) + 3 apelabile
+ ('public.auto_cost_from_tichet()','{}'),
+ ('public.auto_flag_agabaritic()','{}'),
+ ('public.check_alerta_consum()','{}'),
+ ('public.fn_claude_context_cleanup()','{authenticated,service_role}'),
+ ('public.fn_contracte_linii_updated_at()','{}'),
+ ('public.fn_executie_touch_updated_at()','{}'),
+ ('public.fn_notif_lipsa_fisa_service(bigint)','{authenticated,service_role}'),
+ ('public.fn_trg_categorie_cantitate()','{}'),
+ ('public.gen_numar_transport()','{}'),
+ ('public.get_istoric_importuri_evogps()','{authenticated,service_role}'),
+ ('public.hr_recrutare_touch_updated_at()','{}'),
+ ('public.notify_tichet_opener_on_resolve()','{}'),
+ ('public.set_updated_at()','{}'),
+ ('public.tg_active_lipsa_fisa()','{}'),
+ ('public.tg_hr_employees_private_touch()','{}'),
+ ('public.tg_lsf_touch_updated()','{}'),
+ ('public.update_hr_semnaturi_modificat_la()','{}'),
+ ('public.update_modificat_la_hr_docp()','{}'),
+ ('public.update_modificat_la_ord_setari()','{}'),
+ ('public.update_stoc_achizitie()','{}'),
+ ('public.update_stoc_rezervor()','{}')
+) v(semnatura,granturi);
+CREATE TEMP TABLE portal_public_grant_d (semnatura text NOT NULL, rol text NOT NULL) ON COMMIT DROP;
+-- r23 (d): (1) forma clasificarii + verificarea pe catalog + ce GRANT-uri lipsesc (inregistrate pentru revenire), fara SQL
+-- dinamic (regula bugetului de lock: nimic neanalizabil inainte de $locks$); (2) GRANT / REVOKE statice, exact pe lista
+-- clasificarii (testul static compara listele); (3) postconditia pe catalog. Ating doar ACL-ul celor 21 (randurile lor
+-- din pg_proc), niciun tabel de aplicatie. Un apelant concurent al unei functii apelabile nu e blocat; vede ACL-ul nou la COMMIT.
+DO $public_d_pre$
+DECLARE r record; v text[] := '{}';
+BEGIN
+  IF (SELECT count(*) FROM pg_temp.portal_public_clasificare) <> 21
+    OR (SELECT array_agg(c.semnatura ORDER BY c.semnatura COLLATE "C") FROM pg_temp.portal_public_clasificare c)
+      IS DISTINCT FROM (SELECT array_agg(x ORDER BY x COLLATE "C") FROM unnest(public.fn_portal_public_aprobat()) x)
+    OR EXISTS (SELECT FROM pg_temp.portal_public_clasificare c WHERE c.granturi IS NULL
+      OR EXISTS (SELECT FROM unnest(c.granturi) gr WHERE gr IS NULL OR gr NOT IN ('authenticated','service_role')
+        OR to_regrole(gr) IS NULL)
+      OR cardinality(c.granturi) <> (SELECT count(DISTINCT gr) FROM unnest(c.granturi) gr)) THEN
+    RAISE EXCEPTION 'PORTAL_PUBLIC_CLASIFICARE_INVALIDA'; END IF;
+  -- de trigger (fara GRANT) <=> intoarce trigger, pe catalog; proprietar postgres (cerut si de $public_pre$)
+  FOR r IN SELECT c.semnatura, c.granturi, p.oid, p.prorettype, p.proowner FROM pg_temp.portal_public_clasificare c
+      LEFT JOIN pg_catalog.pg_proc p ON p.oid = to_regprocedure(c.semnatura) ORDER BY c.semnatura COLLATE "C" LOOP
+    IF r.oid IS NULL OR r.proowner IS DISTINCT FROM 'postgres'::regrole
+      OR (r.prorettype = 'trigger'::regtype) IS DISTINCT FROM (cardinality(r.granturi) = 0) THEN
+      v := array_append(v, r.semnatura); END IF;
+  END LOOP;
+  IF cardinality(v) > 0 THEN RAISE EXCEPTION 'PORTAL_PUBLIC_CLASIFICARE_SCHIMBATA: %', array_to_string(v, ', '); END IF;
+  -- GRANT-urile care lipsesc azi (rolul nu are EXECUTE explicit, de la nimeni): GRANT-ul static de mai jos le adauga,
+  -- revenirea le retrage exact pe ele. Celelalte exista deja si raman neatinse (GRANT pe un drept existent = fara efect).
+  INSERT INTO pg_temp.portal_public_grant_d(semnatura, rol)
+  SELECT c.semnatura, gr FROM pg_temp.portal_public_clasificare c CROSS JOIN LATERAL unnest(c.granturi) AS gr
+   WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_proc p
+                       CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                      WHERE p.oid = to_regprocedure(c.semnatura) AND a.grantee = to_regrole(gr) AND a.privilege_type = 'EXECUTE');
+END $public_d_pre$;
+-- PORTAL_PUBLIC_D_GRANT inceput (exact functiile cu granturi din clasificare, catre exact acele roluri)
+GRANT EXECUTE ON FUNCTION public.fn_claude_context_cleanup(), public.fn_notif_lipsa_fisa_service(bigint),
+  public.get_istoric_importuri_evogps() TO authenticated, service_role;
+-- PORTAL_PUBLIC_D_GRANT sfarsit
+-- PORTAL_PUBLIC_D_REVOKE inceput (exact cele 21 din clasificare)
+REVOKE EXECUTE ON FUNCTION public.auto_cost_from_tichet(), public.auto_flag_agabaritic(), public.check_alerta_consum(),
+  public.fn_claude_context_cleanup(), public.fn_contracte_linii_updated_at(), public.fn_executie_touch_updated_at(),
+  public.fn_notif_lipsa_fisa_service(bigint), public.fn_trg_categorie_cantitate(), public.gen_numar_transport(),
+  public.get_istoric_importuri_evogps(), public.hr_recrutare_touch_updated_at(), public.notify_tichet_opener_on_resolve(),
+  public.set_updated_at(), public.tg_active_lipsa_fisa(), public.tg_hr_employees_private_touch(), public.tg_lsf_touch_updated(),
+  public.update_hr_semnaturi_modificat_la(), public.update_modificat_la_hr_docp(), public.update_modificat_la_ord_setari(),
+  public.update_stoc_achizitie(), public.update_stoc_rezervor() FROM PUBLIC;
+-- PORTAL_PUBLIC_D_REVOKE sfarsit
+DO $public_d_post$
+DECLARE r record; v text[] := '{}';
+BEGIN
+  FOR r IN SELECT c.semnatura, c.granturi, to_regprocedure(c.semnatura) AS f FROM pg_temp.portal_public_clasificare c
+      ORDER BY c.semnatura COLLATE "C" LOOP
+    IF EXISTS (SELECT FROM pg_catalog.pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+        WHERE p.oid = r.f AND a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+      OR has_function_privilege('teren', r.f, 'EXECUTE')
+      OR EXISTS (SELECT FROM unnest(r.granturi) gr WHERE NOT has_function_privilege(gr, r.f, 'EXECUTE')) THEN
+      v := array_append(v, r.semnatura); END IF;
+  END LOOP;
+  SELECT v || coalesce(array_agg('teren executa: ' || p.oid::regprocedure::text ORDER BY p.oid), '{}') INTO v
+    FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND has_function_privilege('teren', p.oid, 'EXECUTE')
+     AND p.oid NOT IN ('public.fn_teren_eligibil(uuid)'::regprocedure, 'public.fn_portal_uid()'::regprocedure);
+  IF cardinality(v) > 0 THEN RAISE EXCEPTION 'PORTAL_PUBLIC_D_POSTCONDITIE: %', array_to_string(v, ', '); END IF;
+  RAISE NOTICE 'PORTAL_PUBLIC_D: 21 functii fara PUBLIC (% de trigger, % apelabile); GRANT-uri adaugate: %',
+    (SELECT count(*) FROM pg_temp.portal_public_clasificare WHERE cardinality(granturi) = 0),
+    (SELECT count(*) FROM pg_temp.portal_public_clasificare WHERE cardinality(granturi) > 0),
+    (SELECT count(*) FROM pg_temp.portal_public_grant_d);
+END $public_d_post$;
 ALTER TABLE public.portal_public_baseline DISABLE TRIGGER portal_public_baseline_imuabil;
 INSERT INTO public.portal_public_baseline
 SELECT quote_ident(n.nspname)||'.'||quote_ident(p.proname)||'('||oidvectortypes(p.proargtypes)||')',
@@ -541,6 +653,10 @@ WHERE n.nspname='information_schema' AND c.oid<16384 AND c.relkind IN ('r','v')
  AND has_table_privilege('teren',c.oid,'SELECT')
  AND NOT has_table_privilege('teren',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
  AND NOT has_any_column_privilege('teren',c.oid,'INSERT,UPDATE,REFERENCES');
+-- r23 (d): GRANT-urile adaugate de $public_d$ (semnatura, rol), pentru revenire; '[]' = niciunul (rolurile aveau deja drept).
+INSERT INTO public.portal_public_baseline
+SELECT 'grant_d:', coalesce(jsonb_agg(jsonb_build_array(g.semnatura, g.rol) ORDER BY g.semnatura COLLATE "C", g.rol COLLATE "C"), '[]'::jsonb)
+FROM pg_temp.portal_public_grant_d g;
 ALTER TABLE public.portal_public_baseline ENABLE TRIGGER portal_public_baseline_imuabil;
 
 -- Tabelele portalului. r10: create INAINTEA lock-urilor, FARA FK (FK-urile spre auth.users / employees se adauga in

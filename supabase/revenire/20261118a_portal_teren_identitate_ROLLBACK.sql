@@ -35,6 +35,8 @@
 --  la 1 s de la BEGIN. Dovedit in harness (lock_cap_refusal rev18a).
 -- r21 (varianta c, aceeasi forma ca 18a): amprenta DDL si stergerile includ cei 4 helperi noi ai portii
 --  (fn_portal_net_rel_aprobat / _amprenta / _acceptat, fn_portal_teren_rel_drept); refuzul spune ce s-a schimbat.
+-- r23 (varianta d): inaintea stergerii baseline-ului, drepturile celor 21 de functii revin la forma de dinainte de 18a:
+--  REVOKE pe GRANT-urile adaugate de 18a (randul 'grant_d:'), apoi GRANT EXECUTE ... TO PUBLIC. Nimic altceva.
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '15s';
 DO $pre$
@@ -105,7 +107,7 @@ BEGIN
 END $locks$;
 -- r10: sectiunea critica = o singura instructiune: verificarea „fara date noi” (L14, sub lock) si stergerile.
 DO $critic$
-DECLARE v_snapshot jsonb; v_porti text[];
+DECLARE v_snapshot jsonb; v_porti text[]; r record;
 BEGIN
   -- [check] amprenta + poarta, refuz la orice rand / configuratie noua
   SELECT jsonb_build_object(
@@ -171,6 +173,17 @@ BEGIN
 END $fn$;
   REVOKE ALL ON FUNCTION public.fn_auth_token_hook(jsonb) FROM PUBLIC,anon,authenticated,service_role;
   GRANT EXECUTE ON FUNCTION public.fn_auth_token_hook(jsonb) TO supabase_auth_admin;
+  -- r23 (varianta d): drepturile celor 21 ca inainte de 18a: se retrag EXACT GRANT-urile adaugate de 18a (randul
+  -- 'grant_d:' din baseline, verificat mai sus prin amprenta = cea de la apply) si se reda EXECUTE lui PUBLIC. Poarta de
+  -- mai sus a confirmat ca cele 21 exista cu amprenta de la apply (altfel refuz, nimic schimbat).
+  FOR r IN SELECT x.e->>0 AS semnatura, x.e->>1 AS rol FROM public.portal_public_baseline b
+      CROSS JOIN LATERAL jsonb_array_elements(b.amprenta) AS x(e) WHERE b.semnatura = 'grant_d:' LOOP
+    EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %I', to_regprocedure(r.semnatura)::regprocedure, r.rol);
+  END LOOP;
+  FOR r IN SELECT x.s AS semnatura FROM unnest(public.fn_portal_public_aprobat()) AS x(s) ORDER BY x.s COLLATE "C" LOOP
+    IF to_regprocedure(r.semnatura) IS NULL THEN RAISE EXCEPTION 'PORTAL_ROLLBACK_PUBLIC_LIPSA: %', r.semnatura; END IF;
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO PUBLIC', to_regprocedure(r.semnatura)::regprocedure);
+  END LOOP;
   DROP TABLE public.portal_public_baseline;
   DROP FUNCTION public.fn_portal_public_md5();
   DROP FUNCTION public.fn_portal_net_md5();

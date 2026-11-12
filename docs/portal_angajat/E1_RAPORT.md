@@ -1415,3 +1415,162 @@ net la care `teren` are acces = rosu” (un obiect nou din net fara niciun drept
 | L20 | Cai legitime: setval acceptat, trigger revizuit acceptat, PUBLIC retras verde, API verde -> runnerul primeste exact argumentele. |
 | L25 | Expected din constructia cazului (drumul exact), mutanti pe fiecare clasa (inclusiv auditul stricat), PG17 la harness, NOSUPERUSER. |
 | restul | n/a (L01-L06, L08-L11, L16, L17, L21-L24: fara cozi, identitate noua, bani, AI, UI; ordinea lock-urilor neschimbata). |
+
+## E1-1a r23 — 12.11.2026 (auditul tranzitiv pe productie: 1 cale, 38 nerezolvate, adancimea 8 atinsa => varianta d + auditul precis)
+
+**18a si revenirea 18a se schimba (SHA nou)**; 19a si revenirea 19a neschimbate. Lista obiectelor pg_net ramane
+**DE_COMPLETAT** (amprentele G se lipesc dupa forma finala a lui 18a, pasul 3 de mai jos). Nimic aplicat, nicio BD.
+
+### Ce am ales si de ce
+Amandoua, pentru ca impreuna se pot DOVEDI: **(d)** micsoreaza suprafata (teren executa in `public` doar
+`fn_teren_eligibil` si `fn_portal_uid`, ambele DEFINER, care doar citesc patru tabele), iar **auditul precis** arata
+asta din catalog, cu muchii doar acolo unde PostgreSQL chiar executa ceva. Cu (d) aplicat, dovada nu mai depinde de
+cele 618 functii atinse de modelul r22: radacinile din `public` sunt doua, iar drumul lor e scurt si revizuibil de un om.
+
+### Cele 21 de functii: clasificarea (din productie, porti_citire.sql M, 12.11)
+- **18 functii de TRIGGER** (intorc `trigger`): `auto_cost_from_tichet`, `auto_flag_agabaritic`, `check_alerta_consum`,
+  `fn_contracte_linii_updated_at`, `fn_executie_touch_updated_at`, `fn_trg_categorie_cantitate` (singura DEFINER),
+  `gen_numar_transport`, `hr_recrutare_touch_updated_at`, `notify_tichet_opener_on_resolve`, `set_updated_at`,
+  `tg_active_lipsa_fisa`, `tg_hr_employees_private_touch`, `tg_lsf_touch_updated`, `update_hr_semnaturi_modificat_la`,
+  `update_modificat_la_hr_docp`, `update_modificat_la_ord_setari`, `update_stoc_achizitie`, `update_stoc_rezervor`.
+  Nu se pot apela direct („trigger functions can only be called as triggers”, si pentru proprietar), iar la declansare
+  PostgreSQL NU verifica EXECUTE => **niciun GRANT**. Probat pe PG17 (PGlite) cu textul real din 18a: dupa REVOKE,
+  `set_updated_at` ruleaza la UPDATE facut de `authenticated`; apelul direct = eroare 0A000.
+- **3 apelabile**: `get_istoric_importuri_evogps()` = RPC din UI (`src/Logistica.jsx`, apelat ca `authenticated`);
+  `fn_claude_context_cleanup()` si `fn_notif_lipsa_fisa_service(bigint)` = fara apelant in repo si fara job cron care sa
+  le numeasca cu prefixul `public.` (sectiunea I); `fn_notif_lipsa_fisa_service` are forma unui ajutor apelat dintr-un
+  trigger (de ex. `tg_active_lipsa_fisa`), deci rolul care scrie tabelul are nevoie de EXECUTE pe ea.
+  **GRANT EXECUTE catre `authenticated` si `service_role`** (rolurile prin care le apeleaza azi aplicatia, API-ul si
+  functiile edge), ca nimic sa nu se strice; `anon` nu (nicio cale fara login). Apelantii reali din baza se citesc
+  inainte de apply cu `scripts/portal/public21_apelanti.sql` (mai jos); daca nu apare niciun apelant, lista de GRANT se
+  poate restrange intr-o migrare ulterioara.
+
+### Ce face 18a (varianta d), in ordine (toate inainte de `$locks$`, fara tabele de aplicatie)
+1. `$public_pre$` (neschimbat): setul de functii cu PUBLIC = exact cele 21 revizuite, corpurile = md5-urile revizuite.
+2. Clasificarea `PORTAL_PUBLIC_CLASIFICARE` (tabel temporar): 21 de randuri = lista alba; `$public_d_pre$` verifica pe
+   catalog ca exact cele cu granturi goale intorc `trigger`, proprietarul e `postgres`, rolurile sunt doar
+   `authenticated` / `service_role` (altfel `PORTAL_PUBLIC_CLASIFICARE_INVALIDA` / `_SCHIMBATA: <functia>`, nimic
+   schimbat) si noteaza GRANT-urile care lipsesc azi (rolul nu are EXECUTE explicit). Fara SQL dinamic (regula bugetului
+   de lock: nimic neanalizabil inainte de `$locks$`).
+3. GRANT static pe cele 3 catre `authenticated, service_role`; REVOKE static `... FROM PUBLIC` pe toate 21 (testul static
+   compara ambele liste cu clasificarea).
+4. `$public_d_post$`: niciuna din 21 cu PUBLIC, `teren` nu executa niciuna, rolurile cu GRANT le pot executa, iar in
+   `public` `teren` executa DOAR cele doua functii ale portalului; altfel `PORTAL_PUBLIC_D_POSTCONDITIE: <lista>`.
+   NOTICE: `PORTAL_PUBLIC_D: 21 functii fara PUBLIC (18 de trigger, 3 apelabile); GRANT-uri adaugate: <n>`.
+5. Baseline-ul (L15) primeste amprenta celor 21 DUPA (d) (corp, DEFINER, proprietar, configuratie, ACL) + randul
+   `grant_d:` cu GRANT-urile adaugate (pentru revenire). Poarta: in `public`, orice functie executabila de `teren` in
+   afara celor doua = `functie:<semnatura>`, chiar daca e in baseline; orice schimbare de ACL / corp pe cele 21 =
+   `amprenta:<semnatura>`.
+
+**Revenirea 18a**: inaintea stergerii baseline-ului retrage EXACT GRANT-urile din `grant_d:` si reda `GRANT EXECUTE ...
+TO PUBLIC` pe lista alba => drepturile celor 21 = cele dinainte de 18a (ca multime pe fiecare functie; probat: drepturi
+implicite si drepturi explicite deja existente pentru anon / authenticated / service_role, apoi re-aplicare).
+
+### Riscuri si cum le verificam INAINTE, doar prin citire
+- **Ce se poate strica**: un rol care apeleaza azi una din cele 3 DOAR prin PUBLIC si nu e `authenticated` /
+  `service_role` (de ex. un rol intern al platformei, un job cron care ruleaza ca alt rol, un trigger INVOKER declansat de
+  scrierile altui rol) ar primi `42501 permission denied`. Functiile de trigger nu au acest risc. `postgres` (cron, MCP)
+  e proprietarul, deci nu pierde nimic.
+- **De ce `pg_stat_user_functions` nu ajunge**: numara doar cu `track_functions` pornit (implicit `none`), nu spune
+  ROLUL apelantului, se reseteaza odata cu statisticile si nu vede functiile SQL inlinate. Lipsa unui numar nu inseamna
+  „nefolosita”.
+- **Ce citim in plus** (nimic nu scrie, fara corpuri / comenzi / texte afisate):
+  1. `scripts/portal/public21_apelanti.sql`: `P_clasificare` (trigger, DEFINER, triggerele si tabelele lor, drepturile
+     explicite anon / authenticated / service_role), `P_apelanti_corp` (functiile care le apeleaza din SQL, DEFINER sau
+     de trigger, pe ce tabele), `P_dependente` (politici, DEFAULT-uri, vederi), `P_cron` (joburile care le numesc, cu
+     sau fara prefix, si rolul lor), **`P_pierde`** (rolurile care se pot loga + rolurile API care le pot executa azi DOAR
+     prin PUBLIC = exact cine ar pierde dreptul), `P_statistici`.
+  2. `scripts/portal/public21_apelanti_pss.sql` (daca exista pg_stat_statements): rolul care a rulat instructiuni ce le
+     numesc (doar rol / functie / numar; cu `track = top` se vad doar instructiunile de nivel superior).
+  3. Jurnalele API din panoul proiectului (cererile `rpc/<nume>` din ultimele zile) si codul functiilor edge publicate
+     (nu toate sunt in repo).
+  Regula: daca `P_pierde` are un rol in afara de `teren` pe una din cele 3, iar 1-3 arata ca il foloseste, se adauga in
+  clasificare inainte de apply (schimbare de 18a, review nou).
+- **Revenirea**: aceeasi tranzactie de revenire reda PUBLIC (vezi mai sus); un GRANT uitat dupa apply se repara si fara
+  revenire (`GRANT EXECUTE ... TO <rol>`), dar poarta il vede (`amprenta:`) => se face prin migrare revizuita.
+- **L15**: drepturile celor 21 raman in baseline (amprenta cu ACL de dupa d); orice GRANT / REVOKE ulterior pe ele = rosu.
+
+### Auditul precis (porti_citire.sql N, rescrisa)
+- **Starea** = (obiect, rolul efectiv, operatia pe relatie). Rolul de pornire: `teren` (dupa 18a) sau PUBLIC (inainte).
+  Intrarea intr-o functie DEFINER schimba rolul in proprietar; triggerul ruleaza cu rolul care scrie (sau proprietarul,
+  daca e DEFINER); actiunea RI a unui FK ruleaza ca proprietarul copilului; vederea, ca proprietarul ei (sau apelantul,
+  la `security_invoker`).
+- **Radacini** = ce poate APELA rolul: functii executabile, **fara functiile de trigger** (listate separat:
+  `N_audit_trigger_exclus`), plus relatiile pe care are un drept (citirea evalueaza politicile, scrierea triggerele).
+  Radacinile din `net` sunt riscul acceptat (lista scurta in `N_audit_radacina`), nu se exploreaza.
+- **Muchii**: apel din corp NUMAI cu EXECUTE al rolului curent pe tinta (PostgreSQL verifica la fiecare apel);
+  citire / scriere NUMAI cu dreptul rolului pentru acea operatie (cuvantul operatiei trebuie sa apara in corp); trigger
+  NUMAI pentru operatia care il declanseaza (bitii `tgtype`); politica NUMAI pentru un rol care nu ocoleste RLS si caruia
+  i se aplica politica; FK NUMAI pentru `ON DELETE / ON UPDATE CASCADE / SET NULL / SET DEFAULT` (si TRUNCATE CASCADE);
+  vedere, regula, DEFAULT / CHECK / index, mostenire. **Nu sunt muchii** (scris in SQL): verificarile RI la INSERT /
+  UPDATE in copil (citesc parintele ca proprietarul lui, fara RLS, fara triggere), FK `NO ACTION` / `RESTRICT` (doar
+  verifica), citirea unei vederi materializate (nu ruleaza interogarea). Supra-aproximari ramase (muchii in plus, nu in
+  minus): cuvintele din siruri / comentarii, orice comanda a unei politici, functiile din DEFAULT / CHECK / index /
+  politici fara verificarea EXECUTE.
+- **Fara limita de adancime**: inchidere completa cu `UNION` pe stari (multimea e finita, ciclurile se opresc singure);
+  distanta pana la net = parcurgere in latime inversa, un strat pe iteratie, pana la stratul gol. „Adancime depasita”
+  nu mai exista; NEREZOLVAT = doar SQL dinamic, corp opac, executor de text = **esec al auditului** daca nu e gol.
+- **Calea falsa din productie (r22)** `notify_tichet_opener_on_resolve -> tichete -> politica -> fn_is_app_owner ->
+  profiles -> fk -> hr_documente_personale -> trigger -> ... -> net.http_post`: pornea dintr-o functie de trigger
+  (nu e radacina) si trecea printr-un FK la simpla citire a lui `profiles` (nu e muchie). Reprodusa pe PGlite in aceeasi
+  forma: 0 cai; aceeasi forma cu un DELETE real si FK CASCADE spre un trigger DELETE: calea exacta, cu rolurile.
+- **Asteptat**: pe productie inainte de 18a (rolul PUBLIC): radacinile din `public` = cele 3 apelabile, 18 excluse; dupa
+  18a (harness): `rol_radacina = teren`, radacinile din `public` = exact `fn_portal_uid()` + `fn_teren_eligibil(uuid)`,
+  0 cai, 0 nerezolvate, radacinile `net` = 12 functii + coada, raspunsurile, secventa.
+- **Ce NU dovedeste** (ramane din r22): apeluri prin operatori / cast-uri / functiile de I/O ale tipurilor, triggere de
+  eveniment, functiile de suport ale agregatelor; interiorul functiilor din `pg_catalog` (in afara executorilor de text
+  listati); nimic dupa momentul citirii (de aceea propunerea de rulare periodica din r22 ramane).
+- Volum: 1.500 de functii + 400 de tabele cu politici, FK in cascada si triggere = ~2 s pe PGlite.
+
+### Ce ramane ca risc acceptat cu (c) + (d) — pentru owner
+Dupa 18a, contul de teren poate executa, la nivel SQL, cele 12 functii `net.*` (inclusiv cererile HTTP ale bazei) si
+are drepturi pe coada, raspunsurile si secventa pg_net, exact ca `anon` si `authenticated` azi, pentru ca drepturile
+acelea sunt date de proprietarul extensiei (platforma), nu de noi. Ce il opreste sa le foloseasca: (1) rolul nu se
+poate loga (NOLOGIN, membru in nimic) — o impune poarta; (2) nu are nicio cale de a rula SQL: in `public` poate executa
+doar cele doua functii ale portalului, care doar citesc patru tabele (varianta d, poarta + auditul N); (3) schema `net`
+nu e expusa prin API — verificata tehnic la fiecare proba si livrare (blocant). Inchiderea definitiva (drepturile
+PUBLIC retrase de pe pg_net) = cererea catre suportul Supabase; daca vine, poarta ramane verde fara nicio schimbare.
+
+### Pentru coordonator (ordinea; nimic din ele nu scrie in productie)
+1. Harness PG17 (`scripts/test_portal_e1.sh` / `harness_win.sh`): noile verificari (d) + N inainte / dupa apply.
+2. Productie, doar citire: `porti_citire.sql` (G + N noua) si `public21_apelanti.sql` (+ `_pss.sql` daca exista
+   pg_stat_statements), format `-At -F '|'`. De trimis la review: `G_*`, `N_audit_rezumat` / `_radacina` / `_cale` /
+   `_nerezolvat`, toate `P_*`.
+3. Daca `P_pierde` nu cere alt rol: `net_rel_completeaza.py <iesirea porti_citire> --scrie` (valorile G de azi: neschimbate
+   de r23, verificate pe iesirea r22 a productiei); altfel, intai clasificarea.
+4. Restul ca in r22 (scheme_expuse.sh, proba cu ROLLBACK, apoi aplicarea dupa GO + „da”).
+
+### Teste r23
+- `node scripts/portal/public_d_pglite.mjs` (PGlite PG17, textul real din 18a si din revenire) — 35 OK: 21 fara PUBLIC,
+  3 apelabile cu GRANT, teren doar cele doua functii, 42501 pentru teren, triggerul fara EXECUTE ruleaza ca
+  authenticated, apelul direct al unei functii de trigger = 0A000, `grant_d:` = 6 pe ACL implicit / 0 pe drepturi
+  explicite, revenirea reface exact drepturile (ambele forme), re-aplicare; 6 mutanti respinsi cu motivul exact si nimic
+  schimbat; functie public noua cu PUBLIC = postconditie rosie; GRANT lipsa = scrierea / RPC-ul legitim pica cu 42501;
+  `public21_apelanti.sql` pe aceeasi schema (apelantul din trigger, jobul cron fara comanda, `P_pierde` inainte = cele 3,
+  dupa = nimic).
+- `node scripts/portal/audit_tranzitiv_pglite.mjs` — 77 OK pe 24 de cazuri (EXECUTE lipsa / prin DEFINER, scriere fara /
+  cu drept, trigger pe alta operatie, functie de trigger exclusa, calea falsa r22 = 0, FK CASCADE = calea exacta, FK NO
+  ACTION = 0, politica pentru PUBLIC / pentru alt rol, vedere cu / fara drept, partitie, BEGIN ATOMIC, lant de 13 pasi
+  fara limita, forma 18a cu teren) + 6 mutanti ai auditului (fara EXECUTE, triggere ca radacini, FK generic, scriere fara
+  drept, politica fara roluri, trigger pe orice operatie), toti respinsi de cazul lor.
+- Statice: `test_static_public_d.py` 15 OK (clasificarea = productia M, GRANT / REVOKE = clasificarea, ordinea, poarta,
+  revenirea; 13 mutanti), `test_static_porti_citire.py` 32 OK (N fara limita, UNION, EXECUTE, triggere excluse; fisierele
+  noi de citire), `test_static.py` 9 (inclusiv validatorul livrarii si bugetul de lock pe 18a), `test_static_1b.py`,
+  `test_static_r2.py`, `test_static_diag_porti.py`, `test_static_net_rel.py` OK; `test_livrare_validator_plafon.py` PASS.
+- `porti_citire_pglite.mjs`, `net_rel_pglite.mjs` OK. `npx vitest run`: 219 fisiere OK, 1 pica local (acelasi
+  `scripts/noduri_cuplare_import_sql.test.js`, shebang + CRLF pe Windows, neatins); `npx vite build` OK.
+- Harness PG17 actualizat (fixture: 01..18 functii de trigger, 19..21 apelabile, trigger pe `facturi` cu 01; refuzul
+  clasificarii gresite; N inainte / dupa apply; (d) dupa apply; testul 1a: apel legitim, trigger fara EXECUTE, GRANT lipsa,
+  PUBLIC redat). **Nerulat de mine** (bash / binarele PG17 cer aprobare pe acest server).
+
+| Regula | Dovada r23 |
+|---|---|
+| L07 | Suprafata in BD: REVOKE PUBLIC + poarta (in public doar cele doua functii, orice alta = rosu); auditul porneste doar din ce se poate apela efectiv. |
+| L12 | Nimic tacut: triggerele excluse listate, NEREZOLVAT = esec, „adancime depasita” eliminata (inchidere completa); `P_statistici` 0 = necunoscut, nu „nefolosita”. |
+| L14 | O tranzactie; clasificarea verificata pe catalog inainte de orice schimbare; revenire exacta (grant_d:) testata apply -> revenire -> re-aplicare. |
+| L15 | Cele 21 raman in baseline cu ACL de dupa d; clasificarea din productie (expected independent in test); fara SQL dinamic inainte de lock-uri. |
+| L18 | Rolul PUBLIC fara OID: comparatia cu proprietarul ar fi dat NULL si taia politicile (prins de test, `coalesce` la fals). |
+| L19 | O singura definitie a muchiilor (`muchie`), folosita si de inchidere, si de distanta / calea martor; aceeasi clasificare pentru GRANT, REVOKE si postconditie (test static). |
+| L20 | Cai legitime: authenticated / service_role apeleaza, triggerul se declanseaza, revenirea reda PUBLIC, drepturile explicite existente raman. |
+| L25 | Expected din regulile PostgreSQL si din citirea de productie (nu din codul testat); mutanti pe fiecare regula; NOSUPERUSER si PG17 la harness. |
+| restul | n/a (L01-L06, L08-L11, L13, L16, L17, L21-L24: fara cozi, identitate noua, bani, AI, UI; ordinea lock-urilor neschimbata). |

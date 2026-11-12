@@ -86,8 +86,16 @@ class StaticDelivery(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(a.read_bytes(), b.read_bytes())
             sql = a.read_text(encoding="utf-8")
-            self.assertEqual(sql.count("'public.portal_fixture_public_"), 21)
+            # r23 (d): lista alba + clasificarea (21 + 21 cu ghilimele) + GRANT (3) / REVOKE (21) statice, toate sintetice
+            self.assertEqual(sql.count("'public.portal_fixture_public_"), 42)
             self.assertNotIn("public.update_stoc_rezervor()", sql)
+            self.assertNotIn("public.get_istoric_importuri_evogps()", sql)
+            self.assertEqual(len(re.findall(r"^ \('public\.portal_fixture_public_(?:0[1-9]|1[0-8])\(\)','\{\}'\),?$", sql, re.M)), 18)
+            self.assertEqual(len(re.findall(r"^ \('public\.portal_fixture_public_(?:19|20|21)\(\)','\{authenticated,service_role\}'\),?$", sql, re.M)), 3)
+            self.assertIn("GRANT EXECUTE ON FUNCTION public.portal_fixture_public_19(), public.portal_fixture_public_20(), "
+                          "public.portal_fixture_public_21() TO authenticated, service_role;", sql)
+            self.assertEqual(sql.split("-- PORTAL_PUBLIC_D_REVOKE inceput", 1)[1].split("-- PORTAL_PUBLIC_D_REVOKE sfarsit", 1)[0]
+                             .count("public.portal_fixture_public_"), 21)
             self.assertIn('"net.portal_fixture_net_12()"', sql)
             self.assertNotIn("'{}'::jsonb;\n$nethash$", sql)
             self.assertIn("'" + hashlib.sha256(OWNER.encode()).hexdigest() + "'", sql)

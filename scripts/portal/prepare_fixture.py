@@ -10,6 +10,7 @@
 
 - r22: lista obiectelor pg_net (DE_COMPLETAT in 18a) -> amprentele din --net-rel (JSON, porti_citire.sql G pe clusterul
   efemer, citit prin net_rel_completeaza.py --json); --net-rel-necompletat o lasa DE_COMPLETAT (testul negativ).
+- r23 (varianta d): clasificarea celor 21 (PORTAL_PUBLIC_CLASIFICARE) -> sinteticele 01..18 de trigger, 19..21 apelabile.
 
 Utilizare: prepare_fixture.py <sursa.sql> <destinatie.sql> --amprente <fisier.json> (--net-rel <fisier.json> |
            --net-rel-necompletat) [--erp UUID ...] [--teren UUID=EMP ...]
@@ -84,6 +85,25 @@ if len(matches) != 1 or matches[0][1].count("'public.") != 21:
     hold("lista alba PUBLIC din migrare nu are exact 21 de semnaturi; revizuieste fixture-ul")
 signatures = ",".join("'" + s + "'" for s in sorted(public))
 text = pattern.sub(lambda m: m.group(1) + "ARRAY[" + signatures + "]::text[]" + m.group(3), text)
+
+# r23 (varianta d): clasificarea celor 21 -> functiile sintetice in aceeasi forma ca productia (porti_citire.sql M):
+# portal_fixture_public_01..18 = functii de TRIGGER (granturi gol), 19..21 = apelabile (GRANT authenticated, service_role).
+clasif_pattern = re.compile(r"(CREATE TEMP TABLE portal_public_clasificare ON COMMIT DROP AS\n"
+                            r"SELECT v\.semnatura, v\.granturi::text\[\] AS granturi FROM \(VALUES\n"
+                            r" -- PORTAL_PUBLIC_CLASIFICARE:[^\n]*\n)(.*?)(\n\) v\(semnatura,granturi\);)", re.S)
+clasif = clasif_pattern.findall(text)
+if len(clasif) != 1 or len(re.findall(r"^ \('public\.[^']+\(.*?\)','\{[a-z_,]*\}'\),?$", clasif[0][1], re.M)) != 21:
+    hold("clasificarea PUBLIC din migrare nu are exact 21 de randuri; revizuieste fixture-ul")
+APELABILE_FIXTURE = {f"public.portal_fixture_public_{i:02d}()" for i in (19, 20, 21)}
+rows = ",\n".join(" ('" + s + "','" + ("{authenticated,service_role}" if s in APELABILE_FIXTURE else "{}") + "')"
+                  for s in sorted(public))
+text = clasif_pattern.sub(lambda m: m.group(1) + rows + m.group(3), text, count=1)
+# ... si instructiunile statice GRANT / REVOKE dintre marcaje (aceleasi liste ca clasificarea, verificate static in 18a)
+for marcaj, instr in (
+        ("PORTAL_PUBLIC_D_GRANT", "GRANT EXECUTE ON FUNCTION " + ", ".join(sorted(APELABILE_FIXTURE)) + " TO authenticated, service_role;"),
+        ("PORTAL_PUBLIC_D_REVOKE", "REVOKE EXECUTE ON FUNCTION " + ", ".join(sorted(public)) + " FROM PUBLIC;")):
+    bloc = re.compile(r"(-- " + marcaj + r" inceput[^\n]*\n).*?(\n-- " + marcaj + r" sfarsit\n)", re.S)
+    text = replace_once(bloc, text, lambda m, i=instr: m.group(1) + i + m.group(2), marcaj)
 
 hash_pattern = re.compile(r"(CREATE FUNCTION public\.fn_portal_public_md5\(\) RETURNS jsonb.*?AS \$hash\$).*?(\$hash\$;)", re.S)
 text = replace_once(hash_pattern, text, lambda m: m.group(1) + "\n SELECT " + sql_literal(public) + ";\n" + m.group(2), "public md5")
