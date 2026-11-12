@@ -443,7 +443,7 @@ REVOKE ALL ON FUNCTION public.fn_portal_net_rel_amprenta(oid) FROM PUBLIC,anon,a
 CREATE FUNCTION public.fn_portal_net_rel_aprobat() RETURNS jsonb
 LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $netrel$
  -- PORTAL_NET_REL_APROBAT: net._http_response, net.http_request_queue, net.http_request_queue_id_seq (amprenta r22, de citit pe productie)
- SELECT '{"net._http_response":"DE_COMPLETAT","net.http_request_queue":"DE_COMPLETAT","net.http_request_queue_id_seq":"DE_COMPLETAT"}'::jsonb;
+ SELECT '{"net._http_response":"5c3136d9172c92eee8859786db345e61","net.http_request_queue":"4b9faa9e4423a4129820c63d86ec3c8b","net.http_request_queue_id_seq":"fbd6b1bc19db8407495087c9ceb8f18a"}'::jsonb;
 $netrel$;
 REVOKE ALL ON FUNCTION public.fn_portal_net_rel_aprobat() FROM PUBLIC,anon,authenticated,service_role,teren;
 -- r21 (varianta c): obiectul e in net, e in lista si amprenta lui de acum = md5-ul revizuit. Cheie lipsa / amprenta NULL =

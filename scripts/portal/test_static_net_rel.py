@@ -54,7 +54,7 @@ R22_VECHI = {
     "net.http_request_queue_id_seq": "a8957a09016363e60f6b877e27bd87ac",
 }
 VECHI = list(R21_VECHI.values()) + list(R22_VECHI.values())
-PROD_R22 = {}  # NET_REL_PROD_R22 (productie, porti_citire.sql G, amprenta r25; gol = necitit inca)
+PROD_R22 = {"net._http_response": "5c3136d9172c92eee8859786db345e61", "net.http_request_queue": "4b9faa9e4423a4129820c63d86ec3c8b", "net.http_request_queue_id_seq": "fbd6b1bc19db8407495087c9ceb8f18a"}  # NET_REL_PROD_R22 (productie, porti_citire.sql G, amprenta r22)
 HELPERI = ["fn_portal_net_rel_aprobat", "fn_portal_net_rel_amprenta", "fn_portal_net_rel_acceptat", "fn_portal_teren_rel_drept"]
 SEMNATURI = ["public.fn_portal_net_rel_aprobat()", "public.fn_portal_net_rel_amprenta(oid)",
              "public.fn_portal_net_rel_acceptat(oid)", "public.fn_portal_teren_rel_drept(oid)"]
