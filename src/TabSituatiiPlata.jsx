@@ -16,10 +16,12 @@ import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx-js-style'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { optiuniClient } from './lib/sesiuneCereri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  optiuniClient(import.meta.env.VITE_SUPABASE_ANON_KEY)
 ))
 
 const G = {

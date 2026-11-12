@@ -15,6 +15,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
+import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', border: '#21262D', border2: '#30363D',
@@ -139,9 +140,11 @@ export default function InternalChat({ profile }) {
   // ─── Load chats list ────────────────────────────────────────────────
   const loadChats = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      const { data, error, status } = await supabase
         .from('v_chat_list')
         .select('*')
+      // fără sesiune (401 / 403): fără log în consolă; polling-ul se oprește și repornește la sesiune (src/lib/sesiuneCereri.js)
+      if (eEroareSesiune(error, status)) return { error, status }
       if (error) throw error
       setChats(data || [])
       // Total unread
@@ -439,8 +442,7 @@ export default function InternalChat({ profile }) {
   // ─── Periodic refresh chats every 60s (fallback realtime) ──────────
   useEffect(() => {
     if (!currentUserId) return
-    const interval = setInterval(loadChats, 60000)
-    return () => clearInterval(interval)
+    return pornestePolling(loadChats, 60000, { client: supabase, imediat: false })
   }, [currentUserId, loadChats])
 
   // ─── Listen for external toggle events (button în navbar) ──────────

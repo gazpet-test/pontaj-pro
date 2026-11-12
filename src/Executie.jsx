@@ -48,6 +48,7 @@ import { eContractNelegat, ETICHETA_CONTRACT_NELEGAT, TOOLTIP_CONTRACT_NELEGAT }
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { optiuniClient } from './lib/sesiuneCereri.js'
 // acces pe proiect (20261209a): contul restrâns vede doar proiectele lui; poarta reală e în BD
 import { useAccesProiectExecutie, AccesProiecteOwnerModal, MesajAccesProiect } from './ExecutieAccesProiect.jsx'
 import { filtreazaProiecte, verdictLinkProiect } from './executieAccesProiect.js'
@@ -55,7 +56,8 @@ import { TIP_TRASEU, ACCEPT_DOC_CONTRACT, mimeTraseu, tipPentruFisier, verificaI
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  optiuniClient(import.meta.env.VITE_SUPABASE_ANON_KEY)
 ))
 
 const G = {
