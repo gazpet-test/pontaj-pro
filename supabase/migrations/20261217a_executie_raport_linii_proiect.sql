@@ -1,8 +1,9 @@
 -- Version 20261217120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid).
--- 20261217a_executie_raport_linii_proiect — Raportul zilnic: liniile raportului (raport_lucrari) se scriu DOAR cu proiectul pe care îl are
--- șantierul raportului în momentul scrierii, citit sub lock-ul rândului șantierului (tichet de integritate din review-ul 20261216a r5).
+-- 20261217a_executie_raport_linii_proiect — Raportul zilnic: liniile raportului (raport_lucrari) și rândurile distribuției de gaze
+-- (raport_distributie_linii) se scriu DOAR pe proiectul pe care îl are șantierul raportului în momentul scrierii, citit sub lock-ul rândului
+-- șantierului (tichet de integritate din review-ul 20261216a r5). r4: gărzile NU așteaptă niciodată (fără ciclu cu salvarea) + distribuția.
 --
--- Defectul (analiza: docs/RAPORT_LINII_PROIECT.md; reprodus: scripts/test_executie_raport_linii_proiect.sql T1, scripts/raport_linii_proiect_concurenta.sh L1–L2):
+-- Defectul (analiza: docs/RAPORT_LINII_PROIECT.md; reprodus: scripts/test_executie_raport_linii_proiect.sql T1, scripts/raport_linii_proiect_concurenta.sh L1–L3, L7):
 --   fn_raport_zilnic_salveaza (20261208a) citește proiectul șantierului FĂRĂ lock (pasul 1), validează activitățile / obiectele pe el (pasul 5)
 --   și scrie liniile cu el (pasul 7). Garda rezumatului (20261216a) ia rândul șantierului FOR SHARE abia la scrierea antetului (pasul 6), deci
 --   DUPĂ citire. O mutare a șantierului în alt proiect comisă între pasul 1 și pasul 6 lasă liniile pe proiectul VECHI, pe un raport al cărui
@@ -11,48 +12,61 @@
 --     * raportul existent fără rezumat (NULL = salvat înainte de 20261216a) sau 'de_recompus' (mutarea nu-l atinge, deci nu-l încearcă);
 --   și e ÎNCHISĂ pentru raportul existent cu rezumat 'automat' / 'editat' (mutarea încearcă rândul raportului ținut FOR UPDATE de salvare,
 --   NOWAIT: refuz 55P03, salvarea trece pe proiectul vechi, care rămâne și al șantierului).
---   Căile directe (INSERT în raport_lucrari ca postgres / service_role, sau ca authenticated cât 20261208b nu e aplicată) nu iau niciun lock.
+--   Căile directe (INSERT / UPDATE în raport_lucrari sau raport_distributie_linii ca postgres / service_role, sau ca authenticated cât
+--   20261208b nu e aplicată) nu iau niciun lock: trigger-ul tronsonului din 20261027a citește proiectul fără lock (r4, review P1-2).
 --
--- Ce face (schimbarea minimă, fără să atingă RPC-ul): UN trigger BEFORE INSERT OR UPDATE OF raport_id, proiect_id pe raport_lucrari
---   (trg_raport_lucrari_zz_proiect -> fn_raport_lucrari_proiect_garda, SECURITY DEFINER, fără EXECUTE pentru nimeni). Pe ORICE cale (L07):
---   rândul raportului FOR SHARE -> rândul șantierului lui FOR SHARE (ținute până la COMMIT; aceeași ordine ca garda rezumatului: raport ->
---   șantier) -> proiectul citit sub lock; linia trece doar dacă proiect_id-ul ei = acest proiect, iar activitatea și obiectul ei (dacă sunt) sunt
---   ale lui. Altfel refuz 22023 („reîncarcă raportul”), nimic scris (RPC-ul e o tranzacție: antet + linii + jurnal se anulează împreună).
+-- Ce face (schimbarea minimă, fără să atingă RPC-ul sau funcțiile existente): DOUĂ trigger-e BEFORE, câte unul pe fiecare tabel:
+--   * trg_raport_lucrari_zz_proiect (INSERT OR UPDATE OF raport_id, proiect_id pe raport_lucrari) -> fn_raport_lucrari_proiect_garda:
+--     linia trece doar dacă proiect_id-ul ei = proiectul șantierului citit sub lock, iar activitatea și obiectul ei (dacă sunt) sunt ale lui;
+--   * trg_raport_distributie_zz_proiect (INSERT OR UPDATE OF raport_id, unitate_id pe raport_distributie_linii) ->
+--     fn_raport_distributie_proiect_garda: rândul cu tronson trece doar dacă tronsonul e al proiectului șantierului citit sub lock (rândul
+--     fără tronson nu depinde de proiect: neatins, fără lock).
+--   Ambele SECURITY DEFINER, fără EXECUTE pentru nimeni, pe ORICE cale (L07). Protocolul comun, O SINGURĂ instrucțiune pe rând (r4, cost):
+--   rândul raportului și rândul șantierului lui FOR SHARE ... SKIP LOCKED (ordinea raport -> șantier, ținute până la COMMIT), proiectul
+--   citit sub lock. Ocupat (alt raport / șantier ținut de altă tranzacție: o salvare, o mutare, o editare a antetului) = niciun rând =>
+--   refuz 55P03 „reîncearcă peste câteva secunde”, nimic scris. Proiect diferit = refuz 22023 „reîncarcă raportul”.
 --   În RPC proiectul liniilor e cel citit la pasul 1; trigger-ul îl compară cu cel citit sub lock: egale = salvarea normală, neschimbată;
 --   diferite = exact fereastra de mai sus -> refuz (la reîncercare RPC-ul citește proiectul nou și refuză activitățile vechi cu mesajul lui).
---   UPDATE care nu schimbă raport_id / proiect_id (cantitatea, observațiile, SET NULL pe obiect din cheia străină): neverificat, fără lock —
---   liniile ISTORICE ale unui șantier mutat legitim (scrise cât era în proiectul vechi) rămân valide și editabile.
--- De ce NU se schimbă fn_raport_zilnic_salveaza: corpul lui e amprentat în inventarul 20261209a (aplicată) și în baseline-ul 20261216a; o altă
---   versiune ar face inventarul de acces să mintă. Trigger-ul acoperă în plus căile directe, pe care RPC-ul nu le vede.
--- Concurența (L06): ordinea pe toate căile = rândul raportului -> rândul șantierului.
---   * RPC: raportul e deja ținut FOR UPDATE (pasul 1) sau tocmai inserat, șantierul deja ținut FOR SHARE de garda rezumatului (pasul 6), deci
---     trigger-ul nu adaugă nicio așteptare; FOR SHARE-urile mai multor salvări sunt compatibile.
---   * Mutarea (UPDATE sites, 20261216a) ține rândul șantierului și încearcă rapoartele DOAR cu NOWAIT: o linie scrisă direct care ține raportul
---     FOR SHARE o face să refuze imediat (55P03), niciodată să aștepte; o linie scrisă în timpul mutării așteaptă rândul șantierului, apoi citește
---     proiectul NOU și refuză. Niciun ciclu.
+--   UPDATE care nu mută rândul (cantitatea, observațiile, SET NULL din cheia străină): neverificat, fără lock — liniile ISTORICE ale unui
+--   șantier mutat legitim (scrise cât era în proiectul vechi) rămân valide și editabile.
+-- De ce NU se schimbă fn_raport_zilnic_salveaza / fn_raport_distributie_unitate_check: corpul RPC-ului e amprentat în inventarul 20261209a
+--   (aplicată) și în baseline-ul 20261216a; o altă versiune ar face inventarul de acces să mintă. Trigger-ele noi acoperă în plus căile directe.
+-- Concurența (L06; r4, review P1-1: deadlock UPDATE direct <-> salvare): PostgreSQL blochează rândul modificat ÎNAINTEA trigger-elor BEFORE
+--   UPDATE, iar o tranzacție directă poate ține deja linii din instrucțiuni anterioare — trigger-ul nu poate ști ce ține. De aceea gărzile
+--   NU AȘTEAPTĂ NICIODATĂ un rând (SKIP LOCKED, nu NOWAIT: fără sub-tranzacție pe fiecare linie, mesajul e al nostru): orice ciclu care ar trece
+--   prin ele e tăiat înainte să se formeze, iar cel refuzat e scrierea directă, niciodată salvarea care ține deja raportul.
+--   * RPC: raportul e deja ținut FOR UPDATE (pasul 1) sau tocmai inserat, șantierul deja ținut FOR SHARE de garda rezumatului (pasul 6, în
+--     baseline): rânduri proprii, deci SKIP LOCKED le ia mereu; FOR SHARE-urile mai multor salvări sunt compatibile.
+--   * UPDATE direct al unei linii (proiect / raport) cât o salvare ține raportul: linia e ținută de scriere, raportul e ocupat -> refuz 55P03
+--     imediat, scrierea își eliberează linia, salvarea trece (concurență L6u, L8; mutantul cu_asteptare reproduce 40P01).
+--   * INSERT direct cât o salvare ține raportul: refuz 55P03 imediat (L6i). DELETE direct: niciun trigger nou, nicio așteptare în gărzi (L6d).
+--   * Mutarea (UPDATE sites, 20261216a) ține rândul șantierului și încearcă rapoartele DOAR cu NOWAIT; o scriere directă în timpul ei găsește
+--     șantierul ocupat -> refuz 55P03; una după COMMIT-ul mutării citește proiectul NOU și refuză 22023 (L3, L5, L7).
 --   * REPEATABLE READ / SERIALIZABLE: șantierul mutat după imaginea tranzacției = 40001 la FOR SHARE (nimic scris pe proiectul din imagine).
 -- Ce NU face: nicio dată (liniile existente rămân; numărarea lor: scripts/raport_linii_proiect_verifica_date.sql, DOAR citire), niciun drept,
---   nicio politică, nimic pe rapoarte_zilnice / sites / raport_distributie_linii (distribuția: tronsonul e verificat de trigger-ul 20261027a
---   pe proiectul de acum al șantierului, după garda rezumatului în RPC, deci consecvent pe calea RPC; calea directă: docs/RAPORT_LINII_PROIECT.md).
--- Dependențe: 20261208a (fn_raport_zilnic_salveaza cu corpul revizuit c9c6…, coloanele raport_lucrari). 20261216a nu e cerută (trigger-ul își ia
---   singur lock-urile), dar e în baseline-ul L15 de pe producție.
+--   nicio politică, nimic pe rapoarte_zilnice / sites, nicio funcție existentă schimbată.
+-- Dependențe: 20261208a (fn_raport_zilnic_salveaza cu corpul revizuit c9c6…, coloanele raport_lucrari), 20261027a (raport_distributie_linii),
+--   20261216a (garda rezumatului: rândul șantierului ținut de salvare înaintea liniilor — cerută prin baseline-ul L15).
 --
 -- L15 (tiparul 20261216a, corpul AMPRENTA_L15 v1 IDENTIC, L19; testul src/raportLiniiProiectAmprente.test.js): amprenta COMPLETĂ a stării de acces
---   a tabelelor raport_lucrari, rapoarte_zilnice și sites (drepturi pe tabel / coloane / secvențe, proprietar, RLS + FORCE, toate politicile,
---   inventarul triggerelor) și a funcțiilor din BASELINE (pornirea: fn_raport_zilnic_salveaza, singura cale a aplicației care scrie liniile, cu
---   callee-urile ei; plus funcțiile din politicile / triggerele celor trei tabele, găsite de catalog), comparată cu BASELINE-ul din producție
---   ÎNAINTE și DUPĂ. Valorile le scoate coordonatorul cu scripts/raport_linii_proiect_amprente.sql (tranzacție READ ONLY) în blocul marcat;
---   necompletat = refuz. „După” = baseline-ul exact, cu DOUĂ excepții declarate: inventarul triggerelor lui raport_lucrari are în plus EXACT
---   triggerul nou (restul liniilor, octet cu octet, ca înainte) și lista de funcții are în plus EXACT fn_raport_lucrari_proiect_garda()
---   (proprietățile ei: postcondițiile).
+--   a tabelelor raport_lucrari, raport_distributie_linii (r4), rapoarte_zilnice și sites (drepturi pe tabel / coloane / secvențe, proprietar,
+--   RLS + FORCE, toate politicile, inventarul triggerelor) și a funcțiilor din BASELINE (pornirea: fn_raport_zilnic_salveaza, singura cale a
+--   aplicației care scrie liniile, cu callee-urile ei; plus funcțiile din politicile / triggerele celor patru tabele, găsite de catalog),
+--   comparată cu BASELINE-ul din producție ÎNAINTE și DUPĂ. Valorile le scoate coordonatorul cu scripts/raport_linii_proiect_amprente.sql
+--   (tranzacție READ ONLY) în blocul marcat; necompletat = refuz. „După” = baseline-ul exact, cu excepțiile declarate: inventarul triggerelor
+--   lui raport_lucrari și al lui raport_distributie_linii are în plus EXACT triggerul nou al tabelului (restul liniilor, octet cu octet, ca
+--   înainte) și lista de funcții are în plus EXACT fn_raport_lucrari_proiect_garda() și fn_raport_distributie_proiect_garda() (proprietățile
+--   lor: postcondițiile).
 --
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$).
---   Lock-uri (L06, ordinea salvării: rapoarte_zilnice -> sites -> raport_lucrari), luate DUPĂ verificările de catalog, NOWAIT, reîncercate la
---   50 ms până la 1 s de la BEGIN (peste = 55P03, nimic schimbat): rapoarte_zilnice și sites SHARE UPDATE EXCLUSIVE (NU opresc nici citirile,
---   nici salvările — doar DDL-ul pe ele: trigger / politică / index, ca amprenta „după” să rămână adevărată până la COMMIT), apoi raport_lucrari
---   SHARE ROW EXCLUSIVE (cerut de CREATE TRIGGER: o salvare care ajunge la linii așteaptă cât catalogul de după, sub plafon). lock_timeout 100 ms.
---   Sub lock DOAR catalog: o funcție, un trigger, postcondițiile, amprenta „după”. Se MĂSOARĂ pe clonă cu runnerul (NOTICE-urile „20261217a:
---   lock-uri la X ms … sfarsit la Y ms”); țintă Y < 1000; Y ≥ 1500 = nu se aplică.
+--   Lock-uri (L06, ordinea salvării: rapoarte_zilnice -> sites -> raport_lucrari -> raport_distributie_linii), luate DUPĂ verificările de
+--   catalog, NOWAIT, reîncercate la 50 ms până la 1 s de la BEGIN (peste = 55P03, nimic schimbat): rapoarte_zilnice și sites SHARE UPDATE
+--   EXCLUSIVE (NU opresc nici citirile, nici salvările — doar DDL-ul pe ele: trigger / politică / index, ca amprenta „după” să rămână
+--   adevărată până la COMMIT), apoi raport_lucrari și raport_distributie_linii SHARE ROW EXCLUSIVE (cerut de CREATE TRIGGER: o salvare care
+--   ajunge la linii așteaptă cât catalogul de după, sub plafon). lock_timeout 100 ms.
+--   Sub lock DOAR catalog: două funcții, două trigger-e, postcondițiile, amprenta „după”. Se MĂSOARĂ pe clonă cu runnerul (NOTICE-urile
+--   „20261217a: lock-uri la X ms … sfarsit la Y ms”); țintă Y < 1000; Y ≥ 1500 = nu se aplică. Costul salvărilor mari (50 / 200 / 500 de
+--   linii, înainte / după): scripts/raport_linii_proiect_cost.sql (clonă, tranzacție anulată).
 -- Revenire: supabase/revenire/20261217a_executie_raport_linii_proiect_ROLLBACK.sql (tot prin runner, cu --plafon-tranzactie-ms 2000).
 -- Probe: scripts/test_executie_raport_linii_proiect.sql (clonă, tranzacție anulată) + scripts/pglite/test_raport_linii_proiect_local.mjs (local)
 --   + scripts/raport_linii_proiect_concurenta.sh (clonă, sesiuni reale, cu --mutant).
@@ -80,8 +94,8 @@ BEGIN
   PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz
-  IF to_regprocedure('public.fn_raport_lucrari_proiect_garda()') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_raport_lucrari_zz_proiect') THEN
+  IF to_regprocedure('public.fn_raport_lucrari_proiect_garda()') IS NOT NULL OR to_regprocedure('public.fn_raport_distributie_proiect_garda()') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_lucrari_zz_proiect', 'trg_raport_distributie_zz_proiect')) THEN
     RAISE EXCEPTION '20261217a: obiectele exista deja (reaplicare)';
   END IF;
   -- 20261208a aplicată, cu corpul revizuit al salvării (analiza de mai sus e pe EXACT acest corp; sursa amprentei: repo-ul)
@@ -90,10 +104,11 @@ BEGIN
                    AND md5(replace(p.prosrc, chr(13), '')) = 'c9c6b6b3d27f14fe29712196b7f23e2c') THEN
     RAISE EXCEPTION '20261217a: 20261208a nu e aplicata sau RPC-ul de salvare difera de corpul analizat';
   END IF;
-  -- coloanele citite de trigger, cu tipurile acceptate (ce diferă oprește migrarea)
+  -- coloanele citite de trigger-e, cu tipurile acceptate (ce diferă oprește migrarea)
   FOR r IN SELECT * FROM (VALUES
       ('raport_lucrari', 'raport_id', 'bigint'), ('raport_lucrari', 'proiect_id', 'integer|bigint'),
       ('raport_lucrari', 'activitate_id', 'integer|bigint'), ('raport_lucrari', 'unitate_id', 'integer|bigint'),
+      ('raport_distributie_linii', 'raport_id', 'bigint'), ('raport_distributie_linii', 'unitate_id', 'bigint'),
       ('rapoarte_zilnice', 'id', 'bigint'), ('rapoarte_zilnice', 'site_id', 'integer|bigint'),
       ('sites', 'id', 'integer|bigint'), ('sites', 'proiect_id', 'integer|bigint'),
       ('proiect_activitati', 'id', 'integer|bigint'), ('proiect_activitati', 'proiect_id', 'integer|bigint'),
@@ -104,18 +119,21 @@ BEGIN
       RAISE EXCEPTION '20261217a: coloana %.% lipseste sau are alt tip (%; asteptat %)', r.t, r.c, coalesce(v_tip, 'lipsa'), r.tipuri;
     END IF;
   END LOOP;
-  -- trigger-ul nostru compară rândul DUPĂ celelalte trigger-e BEFORE: niciun trigger BEFORE ROW nu rulează după el (ordinea = numele, colația C)
-  SELECT string_agg(tg.tgname, ', ') INTO v_tip FROM pg_trigger tg
-   WHERE tg.tgrelid = 'public.raport_lucrari'::regclass AND NOT tg.tgisinternal AND (tg.tgtype & 2) = 2 AND (tg.tgtype & 1) = 1
-     AND tg.tgname::text COLLATE "C" > 'trg_raport_lucrari_zz_proiect' COLLATE "C";
+  -- trigger-ele noastre compară rândul DUPĂ celelalte trigger-e BEFORE: niciun trigger BEFORE ROW nu rulează după ele (ordinea = numele, colația C)
+  SELECT string_agg(tg.tgrelid::regclass::text || '.' || tg.tgname, ', ') INTO v_tip FROM pg_trigger tg
+    JOIN (VALUES ('public.raport_lucrari'::regclass, 'trg_raport_lucrari_zz_proiect'),
+                 ('public.raport_distributie_linii'::regclass, 'trg_raport_distributie_zz_proiect')) g(rel, nume) ON g.rel = tg.tgrelid
+   WHERE NOT tg.tgisinternal AND (tg.tgtype & 2) = 2 AND (tg.tgtype & 1) = 1 AND tg.tgname::text COLLATE "C" > g.nume COLLATE "C";
   IF v_tip IS NOT NULL THEN
-    RAISE EXCEPTION '20261217a: trigger-e BEFORE ROW necunoscute dupa garda pe raport_lucrari: %', v_tip;
+    RAISE EXCEPTION '20261217a: trigger-e BEFORE ROW necunoscute dupa garda: %', v_tip;
   END IF;
 END $pre$;
 
 -- ── L15: amprenta COMPLETĂ a stării de acces, verificată ÎNAINTE și DUPĂ schimbare (tiparul 20261216a) ──
 -- >>> BASELINE 20261217a — SINGURUL loc cu valori din producție: coloana linie_baseline din scripts/raport_linii_proiect_amprente.sql, copiată
 --     ÎNTREAGĂ, în ordinea afișată; coloana „detaliu” de acolo intră în review. Necompletat = migrarea refuză.
+--     r4: cele 47 de valori lipite pe 12.11.2026 rămân; etichetele NOI ale distribuției (tabelul raport_distributie_linii + funcția trigger-ului
+--     ei din 20261027a) sunt marcate DE_COMPLETAT (= refuz) până le scoate coordonatorul din producție cu același script.
 CREATE FUNCTION pg_temp.amp_baseline_20261217a() RETURNS TABLE (eticheta text, amprenta text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
   SELECT v.eticheta, v.amprenta FROM (VALUES
@@ -133,6 +151,7 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
     , ('functie fn_executie_acces_proprii_scriere()', '3936848939fd2aede49be5d992171f06')
     , ('functie fn_executie_proiect_permis(bigint,boolean)', 'bb8d39285aee035d640af6f7371e5476')
     , ('functie fn_raport_distributie_salveaza(bigint,jsonb)', 'a20c8c6c286b39cb234ece5348ed4346')
+    , ('functie fn_raport_distributie_unitate_check()', 'DE_COMPLETAT')
     , ('functie fn_raport_lucrari_amprenta_linii(jsonb)', '1e02fe0a2cc17f19618ad252df1d1508')
     , ('functie fn_raport_lucrari_json(bigint)', '43c3306824a4c7e6ac3fde5ca84f704e')
     , ('functie fn_raport_rezumat_curata(text)', 'dc38d2661be6fea5039d6ee5376c4079')
@@ -154,6 +173,12 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
     , ('tabel rapoarte_zilnice | rls', '0a318f8ff8d8cc0bbd7b4b61a975f7b3')
     , ('tabel rapoarte_zilnice | secvente', 'a16ae5a66e83dcdefa56f139b4521258')
     , ('tabel rapoarte_zilnice | triggere', 'a6c092a13047bcc9bea08a4c24285911')
+    , ('tabel raport_distributie_linii | acl', 'DE_COMPLETAT')
+    , ('tabel raport_distributie_linii | acl coloane', 'DE_COMPLETAT')
+    , ('tabel raport_distributie_linii | politici', 'DE_COMPLETAT')
+    , ('tabel raport_distributie_linii | rls', 'DE_COMPLETAT')
+    , ('tabel raport_distributie_linii | secvente', 'DE_COMPLETAT')
+    , ('tabel raport_distributie_linii | triggere', 'DE_COMPLETAT')
     , ('tabel raport_lucrari | acl', 'ab2fa556bebf1b95359b0de005bfed8d')
     , ('tabel raport_lucrari | acl coloane', 'a0e240c36ade38bbb43163c61b36e86b')
     , ('tabel raport_lucrari | politici', '3896f45fe3d0701c62ff2ac74fab9937')
@@ -172,7 +197,7 @@ $bl$;
 CREATE FUNCTION pg_temp.amp_calc_20261217a() RETURNS TABLE (eticheta text, amprenta text, detaliu text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $amp$
 WITH
-amp_tabele(oid) AS (VALUES ('public.raport_lucrari'::regclass::oid), ('public.rapoarte_zilnice'::regclass::oid), ('public.sites'::regclass::oid)),
+amp_tabele(oid) AS (VALUES ('public.raport_lucrari'::regclass::oid), ('public.raport_distributie_linii'::regclass::oid), ('public.rapoarte_zilnice'::regclass::oid), ('public.sites'::regclass::oid)),
 amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_20261217a() b WHERE b.eticheta LIKE 'functie %'),
 -- >>> AMPRENTA_L15 v1
 amp_functii(oid) AS (
@@ -254,7 +279,7 @@ amp_calc(eticheta, amprenta, detaliu) AS (
 -- <<< AMPRENTA_L15 v1
 SELECT c.eticheta, c.amprenta, c.detaliu FROM amp_calc c
 $amp$;
--- „înainte”: exact baseline-ul. „după”: exact baseline-ul, cu cele două excepții declarate în antet (triggerul nou + funcția lui).
+-- „înainte”: exact baseline-ul. „după”: exact baseline-ul, cu excepțiile declarate în antet (triggerul nou al fiecărui tabel + funcția lui).
 CREATE FUNCTION pg_temp.amp_verifica_20261217a(p_moment text) RETURNS void
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $vf$
 DECLARE v_dif text;
@@ -268,22 +293,26 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261217a() b GROUP BY b.eticheta HAVING count(*) > 1) THEN
     RAISE EXCEPTION '20261217a: baseline L15 cu etichete duble';
   END IF;
-  WITH calc AS (
+  WITH noi(eticheta, trg, fn) AS (VALUES
+         ('tabel raport_lucrari | triggere', 'trg\_raport\_lucrari\_zz\_proiect | %',
+          'trg\_raport\_lucrari\_zz\_proiect | fn\_raport\_lucrari\_proiect\_garda() | stare=O | %'),
+         ('tabel raport_distributie_linii | triggere', 'trg\_raport\_distributie\_zz\_proiect | %',
+          'trg\_raport\_distributie\_zz\_proiect | fn\_raport\_distributie\_proiect\_garda() | stare=O | %')),
+  calc AS (
     SELECT c.eticheta,
            CASE
-             -- inventarul triggerelor lui raport_lucrari DUPĂ: fără linia triggerului nou (exact una, activă, cu funcția noastră), restul = înainte
-             WHEN p_moment = 'dupa' AND c.eticheta = 'tabel raport_lucrari | triggere' THEN
-               CASE WHEN (SELECT count(*) FROM unnest(string_to_array(c.detaliu, chr(10))) l WHERE l LIKE 'trg\_raport\_lucrari\_zz\_proiect | %') = 1
-                         AND (SELECT count(*) FROM unnest(string_to_array(c.detaliu, chr(10))) l
-                               WHERE l LIKE 'trg\_raport\_lucrari\_zz\_proiect | fn\_raport\_lucrari\_proiect\_garda() | stare=O | %') = 1
+             -- inventarul triggerelor DUPĂ: fără linia triggerului nou al tabelului (exact una, activă, cu funcția noastră), restul = înainte
+             WHEN p_moment = 'dupa' AND n.eticheta IS NOT NULL THEN
+               CASE WHEN (SELECT count(*) FROM unnest(string_to_array(c.detaliu, chr(10))) l WHERE l LIKE n.trg) = 1
+                         AND (SELECT count(*) FROM unnest(string_to_array(c.detaliu, chr(10))) l WHERE l LIKE n.fn) = 1
                     THEN md5(coalesce(nullif((SELECT string_agg(u.l, chr(10) ORDER BY u.o)
                                                 FROM unnest(string_to_array(c.detaliu, chr(10))) WITH ORDINALITY u(l, o)
-                                               WHERE u.l NOT LIKE 'trg\_raport\_lucrari\_zz\_proiect | %'), ''), '(fara triggere)'))
+                                               WHERE u.l NOT LIKE n.trg), ''), '(fara triggere)'))
                     ELSE 'triggerul nou lipseste / e dublat / oprit' END
              ELSE c.amprenta END AS amprenta
-      FROM pg_temp.amp_calc_20261217a() c
-     -- funcția triggerului nou există doar DUPĂ (proprietățile ei: postcondițiile)
-     WHERE NOT (p_moment = 'dupa' AND c.eticheta = 'functie fn_raport_lucrari_proiect_garda()')
+      FROM pg_temp.amp_calc_20261217a() c LEFT JOIN noi n ON n.eticheta = c.eticheta
+     -- funcțiile trigger-elor noi există doar DUPĂ (proprietățile lor: postcondițiile)
+     WHERE NOT (p_moment = 'dupa' AND c.eticheta IN ('functie fn_raport_lucrari_proiect_garda()', 'functie fn_raport_distributie_proiect_garda()'))
   )
   SELECT string_agg(coalesce(c.eticheta, b.eticheta) || ' = ' || coalesce(c.amprenta, 'LIPSESTE') || ' (baseline ' || coalesce(b.amprenta, 'NU ARE') || ')',
                     '; ' ORDER BY coalesce(c.eticheta, b.eticheta) COLLATE "C")
@@ -311,10 +340,11 @@ BEGIN
       LOCK TABLE public.rapoarte_zilnice IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;   -- doar DDL-ul oprit (amprenta „după” rămâne adevărată)
       LOCK TABLE public.sites IN SHARE UPDATE EXCLUSIVE MODE NOWAIT;
       LOCK TABLE public.raport_lucrari IN SHARE ROW EXCLUSIVE MODE NOWAIT;        -- cerut de CREATE TRIGGER
+      LOCK TABLE public.raport_distributie_linii IN SHARE ROW EXCLUSIVE MODE NOWAIT;   -- r4: idem (după liniile, ca în salvare)
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
       IF clock_timestamp() >= now() + interval '1 second' THEN
-        RAISE EXCEPTION '20261217a: BUGET_LOCK: rapoarte_zilnice / sites / raport_lucrari ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
+        RAISE EXCEPTION '20261217a: BUGET_LOCK: rapoarte_zilnice / sites / raport_lucrari / raport_distributie_linii ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
           v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
       END IF;
       PERFORM pg_sleep(0.05);
@@ -326,38 +356,46 @@ END $lock$;
 -- ── garda liniilor: proiectul liniei = proiectul șantierului raportului, citit sub lock, pe ORICE cale de scriere (L07) ──
 -- DEFINER: citește și blochează rândul raportului / șantierului oricare ar fi RLS-ul și drepturile celui care scrie (FOR SHARE cere drept de
 -- modificare pe tabel). Nu e apelabilă din API (trigger, fără EXECUTE). Ce trimite clientul nu se schimbă: linia trece întocmai sau e refuzată.
--- Ordinea lock-urilor (L06): rândul raportului (FOR SHARE) -> rândul șantierului (FOR SHARE), ținute până la COMMIT; aceeași ordine ca garda
---   rezumatului (20261216a) și ca RPC-ul de salvare (care le ține deja pe amândouă când ajunge la linii). Activitatea / obiectul: doar citite
---   (RPC-ul le ține FOR SHARE din pasul 5; cheia străină a liniei ia oricum FOR KEY SHARE pe ele).
+-- Ordinea lock-urilor (L06): rândul raportului -> rândul șantierului (FOR SHARE OF r, s, în ordinea clauzei), ținute până la COMMIT; aceeași
+--   ordine ca garda rezumatului (20261216a) și ca RPC-ul de salvare (care le ține deja pe amândouă când ajunge la linii). NICIO AȘTEPTARE
+--   (r4): SKIP LOCKED = un rând ocupat de altă tranzacție nu se așteaptă, nu iese => refuz 55P03 (cel care scrie direct poate ține deja
+--   linia, iar salvarea ar aștepta-o: ciclu). Activitatea / obiectul: doar citite (RPC-ul le ține FOR SHARE din pasul 5; cheia străină a
+--   liniei ia oricum FOR KEY SHARE pe ele). O singură instrucțiune pe linie (r4, costul salvărilor mari).
 CREATE FUNCTION public.fn_raport_lucrari_proiect_garda() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_site bigint; v_proiect bigint; v_p bigint;
+DECLARE v_proiect bigint; v_are_act boolean; v_act bigint; v_are_ob boolean; v_ob bigint;
 BEGIN
   -- UPDATE care nu mută linia (alt raport / alt proiect): neverificat, fără lock (liniile istorice ale unui șantier mutat rămân editabile)
   IF TG_OP = 'UPDATE' AND NEW.raport_id IS NOT DISTINCT FROM OLD.raport_id AND NEW.proiect_id IS NOT DISTINCT FROM OLD.proiect_id THEN
     RETURN NEW;
   END IF;
-  -- 1. rândul raportului: șantierul lui nu se mai schimbă până la COMMIT (în RPC: rândul e deja al nostru)
-  SELECT r.site_id INTO v_site FROM public.rapoarte_zilnice r WHERE r.id = NEW.raport_id FOR SHARE OF r;
-  IF NOT FOUND THEN RETURN NEW; END IF;   -- raport inexistent: refuzul îl dă cheia străină (23503)
-  -- 2. proiectul șantierului, sub lock: o mutare în zbor e așteptată (READ COMMITTED: se citește proiectul nou), una ulterioară așteaptă COMMIT-ul
-  SELECT s.proiect_id INTO v_proiect FROM public.sites s WHERE s.id = v_site FOR SHARE OF s;
+  -- 1. rândul raportului și al șantierului lui, fără așteptare; proiectul șantierului citit sub lock; proiectul activității / obiectului liniei
+  SELECT s.proiect_id, pa.id IS NOT NULL, pa.proiect_id, pu.id IS NOT NULL, pu.proiect_id
+    INTO v_proiect, v_are_act, v_act, v_are_ob, v_ob
+    FROM public.rapoarte_zilnice r JOIN public.sites s ON s.id = r.site_id
+    LEFT JOIN public.proiect_activitati pa ON pa.id = NEW.activitate_id
+    LEFT JOIN public.proiect_unitati pu ON pu.id = NEW.unitate_id
+   WHERE r.id = NEW.raport_id
+     FOR SHARE OF r, s SKIP LOCKED;
+  IF NOT FOUND THEN
+    -- raport inexistent: refuzul îl dă cheia străină (23503); altfel raportul / șantierul e ținut acum de altă tranzacție
+    IF NOT EXISTS (SELECT 1 FROM public.rapoarte_zilnice r WHERE r.id = NEW.raport_id) THEN RETURN NEW; END IF;
+    RAISE EXCEPTION 'raport: raportul se salvează sau șantierul lui se mută chiar acum; reîncearcă peste câteva secunde (nimic salvat)'
+      USING ERRCODE = '55P03';
+  END IF;
+  -- 2. proiectul liniei = proiectul de acum al șantierului (o mutare comisă între timp: proiectul nou)
   IF NEW.proiect_id IS DISTINCT FROM v_proiect THEN
     RAISE EXCEPTION 'raport: linia e pentru proiectul %, dar șantierul raportului e acum în alt proiect (%); reîncarcă raportul și salvează din nou',
       coalesce(NEW.proiect_id::text, '-'), coalesce(v_proiect::text, 'fără proiect') USING ERRCODE = '22023';
   END IF;
   -- 3. activitatea și obiectul liniei: ale aceluiași proiect (inexistente: refuzul îl dă cheia străină)
-  IF NEW.activitate_id IS NOT NULL THEN
-    SELECT pa.proiect_id INTO v_p FROM public.proiect_activitati pa WHERE pa.id = NEW.activitate_id;
-    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN
-      RAISE EXCEPTION 'raport: activitatea % nu e a proiectului șantierului raportului', NEW.activitate_id USING ERRCODE = '22023';
-    END IF;
+  IF v_are_act AND v_act IS DISTINCT FROM v_proiect THEN
+    RAISE EXCEPTION 'raport: activitatea % de pe linie e din alt proiect decât cel în care e acum șantierul raportului; reîncarcă raportul și salvează din nou',
+      NEW.activitate_id USING ERRCODE = '22023';
   END IF;
-  IF NEW.unitate_id IS NOT NULL THEN
-    SELECT pu.proiect_id INTO v_p FROM public.proiect_unitati pu WHERE pu.id = NEW.unitate_id;
-    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN
-      RAISE EXCEPTION 'raport: obiectul % nu e al proiectului șantierului raportului', NEW.unitate_id USING ERRCODE = '22023';
-    END IF;
+  IF v_are_ob AND v_ob IS DISTINCT FROM v_proiect THEN
+    RAISE EXCEPTION 'raport: obiectul % de pe linie e din alt proiect decât cel în care e acum șantierul raportului; reîncarcă raportul și salvează din nou',
+      NEW.unitate_id USING ERRCODE = '22023';
   END IF;
   RETURN NEW;
 END $f$;
@@ -366,30 +404,71 @@ REVOKE ALL ON FUNCTION public.fn_raport_lucrari_proiect_garda() FROM PUBLIC, ano
 CREATE TRIGGER trg_raport_lucrari_zz_proiect BEFORE INSERT OR UPDATE OF raport_id, proiect_id ON public.raport_lucrari
   FOR EACH ROW EXECUTE FUNCTION public.fn_raport_lucrari_proiect_garda();
 
+-- ── r4 (review P1-2): garda distribuției — tronsonul rândului = al proiectului șantierului raportului, citit sub lock, pe ORICE cale ──
+-- Același protocol ca garda liniilor (L19: aceeași instrucțiune de lock, verificată identic de test): rândul raportului -> rândul șantierului,
+-- FOR SHARE ... SKIP LOCKED (nicio așteptare), ținute până la COMMIT; ocupat = 55P03 „reîncearcă”, tronson străin = 22023 „reîncarcă”.
+-- Trigger-ul vechi al tronsonului (20261027a) rămâne neschimbat (rulează înainte, fără lock); acesta îl dublează sub lock.
+-- Rândul fără tronson nu depinde de proiect (neatins, fără lock); UPDATE care nu-l mută (alt raport / alt tronson): la fel.
+CREATE FUNCTION public.fn_raport_distributie_proiect_garda() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_proiect bigint; v_are_ob boolean; v_ob bigint;
+BEGIN
+  IF NEW.unitate_id IS NULL
+     OR (TG_OP = 'UPDATE' AND NEW.raport_id IS NOT DISTINCT FROM OLD.raport_id AND NEW.unitate_id IS NOT DISTINCT FROM OLD.unitate_id) THEN
+    RETURN NEW;
+  END IF;
+  SELECT s.proiect_id, pu.id IS NOT NULL, pu.proiect_id
+    INTO v_proiect, v_are_ob, v_ob
+    FROM public.rapoarte_zilnice r JOIN public.sites s ON s.id = r.site_id
+    LEFT JOIN public.proiect_unitati pu ON pu.id = NEW.unitate_id
+   WHERE r.id = NEW.raport_id
+     FOR SHARE OF r, s SKIP LOCKED;
+  IF NOT FOUND THEN
+    -- raport inexistent: refuzul îl dă cheia străină (23503); altfel raportul / șantierul e ținut acum de altă tranzacție
+    IF NOT EXISTS (SELECT 1 FROM public.rapoarte_zilnice r WHERE r.id = NEW.raport_id) THEN RETURN NEW; END IF;
+    RAISE EXCEPTION 'raport: raportul se salvează sau șantierul lui se mută chiar acum; reîncearcă peste câteva secunde (nimic salvat)'
+      USING ERRCODE = '55P03';
+  END IF;
+  IF v_are_ob AND v_ob IS DISTINCT FROM v_proiect THEN
+    RAISE EXCEPTION 'raport: tronsonul % din „Raport lucrări executate” e din alt proiect decât cel în care e acum șantierul raportului; reîncarcă raportul și salvează din nou',
+      NEW.unitate_id USING ERRCODE = '22023';
+  END IF;
+  RETURN NEW;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_raport_distributie_proiect_garda() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_raport_distributie_zz_proiect BEFORE INSERT OR UPDATE OF raport_id, unitate_id ON public.raport_distributie_linii
+  FOR EACH ROW EXECUTE FUNCTION public.fn_raport_distributie_proiect_garda();
+
 -- ── postcondiții ──
 DO $post$
+DECLARE r record;
 BEGIN
-  -- funcția: plpgsql, DEFINER, search_path fix, proprietar postgres, NICIUN EXECUTE (nici PUBLIC)
-  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
-                  WHERE p.oid = to_regprocedure('public.fn_raport_lucrari_proiect_garda()') AND l.lanname = 'plpgsql' AND p.prosecdef
-                    AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
-                    AND p.prorettype = 'trigger'::regtype
-                    AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
-                    AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
-                    AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)) THEN
-    RAISE EXCEPTION '20261217a post: functia (definer / search_path / owner / EXECUTE)';
-  END IF;
-  -- trigger-ul: forma exactă (BEFORE, pe rând, INSERT + UPDATE OF raport_id, proiect_id, fără WHEN), activ, singurul cu funcția noastră, ultimul BEFORE ROW
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.raport_lucrari'::regclass AND tg.tgname = 'trg_raport_lucrari_zz_proiect'
-                   AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0
-                   AND tg.tgfoid = 'public.fn_raport_lucrari_proiect_garda()'::regprocedure AND tg.tgtype = (1 | 2 | 4 | 16)
-                   AND pg_get_triggerdef(tg.oid) = 'CREATE TRIGGER trg_raport_lucrari_zz_proiect BEFORE INSERT OR UPDATE OF raport_id, proiect_id '
-                       || 'ON public.raport_lucrari FOR EACH ROW EXECUTE FUNCTION fn_raport_lucrari_proiect_garda()')
-     OR (SELECT count(*) FROM pg_trigger tg WHERE tg.tgfoid = 'public.fn_raport_lucrari_proiect_garda()'::regprocedure) <> 1
-     OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.raport_lucrari'::regclass AND NOT tg.tgisinternal
-                  AND (tg.tgtype & 2) = 2 AND (tg.tgtype & 1) = 1 AND tg.tgname::text COLLATE "C" > 'trg_raport_lucrari_zz_proiect' COLLATE "C") THEN
-    RAISE EXCEPTION '20261217a post: trigger-ul';
-  END IF;
+  FOR r IN SELECT * FROM (VALUES
+      ('public.raport_lucrari'::regclass, 'trg_raport_lucrari_zz_proiect', 'public.fn_raport_lucrari_proiect_garda()',
+       'CREATE TRIGGER trg_raport_lucrari_zz_proiect BEFORE INSERT OR UPDATE OF raport_id, proiect_id ON public.raport_lucrari FOR EACH ROW EXECUTE FUNCTION fn_raport_lucrari_proiect_garda()'),
+      ('public.raport_distributie_linii'::regclass, 'trg_raport_distributie_zz_proiect', 'public.fn_raport_distributie_proiect_garda()',
+       'CREATE TRIGGER trg_raport_distributie_zz_proiect BEFORE INSERT OR UPDATE OF raport_id, unitate_id ON public.raport_distributie_linii FOR EACH ROW EXECUTE FUNCTION fn_raport_distributie_proiect_garda()')
+    ) v(rel, trg, fn, def) LOOP
+    -- funcția: plpgsql, DEFINER, search_path fix, proprietar postgres, NICIUN EXECUTE (nici PUBLIC)
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+                    WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = 'plpgsql' AND p.prosecdef
+                      AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
+                      AND p.prorettype = 'trigger'::regtype
+                      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                      AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+                      AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)) THEN
+      RAISE EXCEPTION '20261217a post: functia % (definer / search_path / owner / EXECUTE)', r.fn;
+    END IF;
+    -- trigger-ul: forma exactă (BEFORE, pe rând, INSERT + UPDATE OF <coloane>, fără WHEN), activ, singurul cu funcția lui, ultimul BEFORE ROW
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = r.rel AND tg.tgname = r.trg
+                     AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0
+                     AND tg.tgfoid = to_regprocedure(r.fn) AND tg.tgtype = (1 | 2 | 4 | 16) AND pg_get_triggerdef(tg.oid) = r.def)
+       OR (SELECT count(*) FROM pg_trigger tg WHERE tg.tgfoid = to_regprocedure(r.fn)) <> 1
+       OR EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = r.rel AND NOT tg.tgisinternal
+                    AND (tg.tgtype & 2) = 2 AND (tg.tgtype & 1) = 1 AND tg.tgname::text COLLATE "C" > r.trg COLLATE "C") THEN
+      RAISE EXCEPTION '20261217a post: trigger-ul %', r.trg;
+    END IF;
+  END LOOP;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261217a_executie_raport_linii_proiect:' || txid_current() THEN
     RAISE EXCEPTION '20261217a: garda final invalida';
   END IF;

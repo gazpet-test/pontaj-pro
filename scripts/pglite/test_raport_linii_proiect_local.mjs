@@ -10,7 +10,9 @@
 //    aplicare -> revenire -> re-aplicare, refuzurile revenirii (+ dovada că verificarea respectivă refuză), lock-ul pe rândul șantierului
 //    (xmax) pe calea directă + mutantul fără el, scriptul de date (DOAR citire) pe cazuri plantate.
 // Rulare (din rădăcina repo-ului): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_raport_linii_proiect_local.mjs
-// Limită: PGlite nu are timere și nici concurență reală — așteptările / NOWAIT / 40001 le probează scripts/raport_linii_proiect_concurenta.sh pe clonă.
+// Limită: PGlite nu are timere și nici concurență reală — așteptările / SKIP LOCKED (refuzul „ocupat” 55P03) / deadlock-ul / 40001 le probează
+//   scripts/raport_linii_proiect_concurenta.sh pe clonă (L3, L5–L8 + mutanții cu_asteptare / distributie_fara_lock).
+// r4: + garda distribuției (T4d, M12–M15, M17, S19d/e), etichetele noi ale amprentei (S1p/S1q, S6b, S8b, S10b, S11b), costul (S21, S22).
 import { PGlite } from '@electric-sql/pglite'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve, join } from 'node:path'
@@ -111,7 +113,8 @@ const BAZA0 = await bazaNoua()
 const B0 = await baseline(BAZA0, 'scripts/raport_linii_proiect_amprente.sql')
 await BAZA0.close()
 for (const e of ['functie fn_raport_zilnic_salveaza(bigint,date,jsonb,jsonb,jsonb,integer,uuid)', 'functie fn_raport_rezumat_garda()',
-                 'functie fn_raport_rezumat_santier_mutat()', 'tabel raport_lucrari | triggere', 'tabel sites | triggere']) {
+                 'functie fn_raport_rezumat_santier_mutat()', 'tabel raport_lucrari | triggere', 'tabel sites | triggere',
+                 'tabel raport_distributie_linii | triggere', 'functie fn_raport_distributie_unitate_check()']) {
   if (!B0.some(r => r.eticheta === e)) { console.error('baseline: lipsește ' + e + ' (am: ' + B0.map(r => r.eticheta).join(', ') + ')'); process.exit(1) }
 }
 console.log(`baseline L15 20261217a (schema falsă): ${B0.length} etichete — ${B0.map(r => r.eticheta + (r.atentie ? ' [' + r.atentie + ']' : '')).join('; ')}`)
@@ -130,15 +133,17 @@ async function ruleaza(inlocuiri = {}) {
   } finally { await db.close() }
 }
 
-// ── 0. amprenta corpului funcției (cea din revenire trebuie să fie exact aceasta) ──
+// ── 0. amprenta corpului fiecărei funcții (cea din revenire trebuie să fie exact aceasta) ──
 {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
-  const amp = (await db.query(`SELECT md5(replace(prosrc, chr(13), '')) AS m FROM pg_proc WHERE oid = 'public.fn_raport_lucrari_proiect_garda()'::regprocedure`)).rows[0].m
+  for (const [fn, eticheta] of [['fn_raport_lucrari_proiect_garda', 'garda liniilor'], ['fn_raport_distributie_proiect_garda', 'garda distributiei']]) {
+    const amp = (await db.query(`SELECT md5(replace(prosrc, chr(13), '')) AS m FROM pg_proc WHERE oid = 'public.${fn}()'::regprocedure`)).rows[0].m
+    const din = new RegExp(`-- AMPRENTA-START ${eticheta}\\n\\s*'([0-9a-f]{32})',\\n\\s*-- AMPRENTA-END ${eticheta}\\n`).exec(citeste(REV))
+    console.log(`amprenta corpului ${fn}: ${amp} (revenirea: ${din && din[1]})`)
+    if (!din || din[1] !== amp) { console.error('revenirea are altă amprentă a corpului decât migrarea: ' + fn); process.exit(1) }
+  }
   await db.close()
-  const din = /-- AMPRENTA-START\n\s*AND md5\(replace\(p\.prosrc, chr\(13\), ''\)\) = '([^']+)'\n/.exec(citeste(REV))
-  console.log(`amprenta corpului fn_raport_lucrari_proiect_garda: ${amp} (revenirea: ${din && din[1]})`)
-  if (!din || din[1] !== amp) { console.error('revenirea are altă amprentă a corpului decât migrarea'); process.exit(1) }
 }
 
 // ── 1. harness-ul pe migrarea reală: toate testele trebuie să treacă ──
@@ -146,7 +151,7 @@ const real = await ruleaza()
 const oke = real.jurnal.filter((m) => / OK|refuz confirmat|20261217a: (lock-uri|sfarsit)|20261217a revenire: (exclusiv|sfarsit)/.test(m))
 console.log(oke.map((m) => '  ' + m).join('\n'))
 if (!real.ok) { console.error('HARNESS PICAT: ' + real.eroare + '\n' + real.jurnal.slice(-25).join('\n')); process.exit(1) }
-for (const t of ['T0', 'T1', 'TB', 'T2', 'T3', 'T4', 'T5', 'T6a', 'T6b', 'T6']) {
+for (const t of ['T0', 'T1', 'TB', 'T2', 'T3', 'T4', 'T4d', 'T5', 'T6a', 'T6b', 'T6']) {
   if (!oke.some((m) => m.startsWith(t + ' OK') || m.startsWith(t + ' refuz confirmat'))) { console.error('lipsește ' + t + ' OK'); process.exit(1) }
 }
 console.log('harness: OK pe migrarea reală')
@@ -155,7 +160,9 @@ console.log('harness: OK pe migrarea reală')
 const M = MIG, R = REV
 // r3: al patrulea element (opțional) = ce trebuie să spună eroarea (pică pe REZULTAT, nu doar pe motiv)
 const FARA_COMP = ['  IF NEW.proiect_id IS DISTINCT FROM v_proiect THEN\n', '  IF false THEN\n']
-const FARA_ACT_OB = ['    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n', '    IF false THEN\n']   // ambele (activitatea + obiectul)
+// r4: verificările activității / obiectului liniei (textul RAISE le face unice: garda distribuției are aceeași formă pe tronson)
+const FARA_ACT = ["  IF v_are_act AND v_act IS DISTINCT FROM v_proiect THEN\n    RAISE EXCEPTION 'raport: activitatea", "  IF false THEN\n    RAISE EXCEPTION 'raport: activitatea"]
+const FARA_OB = ["  IF v_are_ob AND v_ob IS DISTINCT FROM v_proiect THEN\n    RAISE EXCEPTION 'raport: obiectul", "  IF false THEN\n    RAISE EXCEPTION 'raport: obiectul"]
 // T2 relaxat: acceptă ORICE refuz 22023 al gărzii (ca M1b să arate unde pică pe rezultat, nu pe textul mesajului)
 const T2_ORICE_REFUZ = ["  frag text := 'șantierul raportului e acum în alt proiect';\nBEGIN\n  v := pg_temp.t_cu_mutare(",
                         "  frag text := 'raport: ';\nBEGIN\n  v := pg_temp.t_cu_mutare("]
@@ -165,19 +172,24 @@ const mutanti = [
   // același mutant, cu T2 acceptând orice refuz: pică pe REZULTAT la cazurile pe care le vede doar comparația (proiect NULL / schimbat)
   ['M1b fără comparația proiectului, T2 relaxat (dovada pe rezultat)', 'T4', { [M]: [FARA_COMP], [HARNESS]: [T2_ORICE_REFUZ] }, /T4 FAIL: doar comparatia/],
   // fără comparație ȘI fără verificarea activității / obiectului: defectul revine pe RPC (liniile pe p1, șantierul în p2)
-  ['M11 fără comparație și fără verificarea activității / obiectului (defectul revine)', 'T2', { [M]: [FARA_COMP, FARA_ACT_OB] }, /T2 FAIL: raport nou: ok\|/],
-  ['M2 proiectul luat de pe linie, nu de pe șantier', 'T2', { [M]: [['  SELECT s.proiect_id INTO v_proiect FROM public.sites s WHERE s.id = v_site FOR SHARE OF s;\n',
-                                                                   '  PERFORM 1 FROM public.sites s WHERE s.id = v_site FOR SHARE OF s;\n  v_proiect := NEW.proiect_id;\n']] }],
-  ['M3 fără verificarea activității', 'T4', { [M]: [["    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n      RAISE EXCEPTION 'raport: activitatea", "    IF false THEN\n      RAISE EXCEPTION 'raport: activitatea"]] }, /T4 FAIL: doar verificarea activitatii/],
-  ['M4 fără verificarea obiectului', 'T4', { [M]: [["    IF FOUND AND v_p IS DISTINCT FROM v_proiect THEN\n      RAISE EXCEPTION 'raport: obiectul", "    IF false THEN\n      RAISE EXCEPTION 'raport: obiectul"]] }, /T4 FAIL: doar verificarea activitatii/],
-  ['M5 trigger-ul doar la INSERT (mutarea liniei pe alt proiect scapă)', 'post', { [M]: [['BEFORE INSERT OR UPDATE OF raport_id, proiect_id ON public.raport_lucrari\n', 'BEFORE INSERT ON public.raport_lucrari\n']] }],
+  ['M11 fără comparație și fără verificarea activității / obiectului (defectul revine)', 'T2', { [M]: [FARA_COMP, FARA_ACT, FARA_OB] }, /T2 FAIL: raport nou: ok\|/],
+  ['M2 proiectul luat de pe linie, nu de pe șantier', 'T2', { [M]: [['  SELECT s.proiect_id, pa.id IS NOT NULL, pa.proiect_id,', '  SELECT NEW.proiect_id, pa.id IS NOT NULL, pa.proiect_id,']] }],
+  ['M3 fără verificarea activității', 'T4', { [M]: [FARA_ACT] }, /T4 FAIL: doar verificarea activitatii/],
+  ['M4 fără verificarea obiectului', 'T4', { [M]: [FARA_OB] }, /T4 FAIL: doar verificarea activitatii/],
+  // r4: garda distribuției (T4d o probează SINGURĂ, cu trigger-ul vechi al tronsonului oprit în savepoint)
+  ['M12 distribuția fără verificarea tronsonului', 'T4d', { [M]: [["  IF v_are_ob AND v_ob IS DISTINCT FROM v_proiect THEN\n    RAISE EXCEPTION 'raport: tronsonul", "  IF false THEN\n    RAISE EXCEPTION 'raport: tronsonul"]] }, /T4d FAIL: garda distributiei singura/],
+  ['M13 distribuția: proiectul luat de pe tronson, nu de pe șantier', 'T4d', { [M]: [['  SELECT s.proiect_id, pu.id IS NOT NULL, pu.proiect_id\n', '  SELECT pu.proiect_id, pu.id IS NOT NULL, pu.proiect_id\n']] }, /T4d FAIL: garda distributiei singura/],
+  ['M14 distribuția: trigger-ul doar la INSERT (mutarea rândului pe alt tronson scapă)', 'post', { [M]: [['BEFORE INSERT OR UPDATE OF raport_id, unitate_id ON public.raport_distributie_linii\n', 'BEFORE INSERT ON public.raport_distributie_linii\n']] }],
+  ['M15 distribuția: EXECUTE lăsat clienților', 'post', { [M]: [['REVOKE ALL ON FUNCTION public.fn_raport_distributie_proiect_garda() FROM PUBLIC, anon, authenticated, service_role;',
+                                                                 'REVOKE ALL ON FUNCTION public.fn_raport_distributie_proiect_garda() FROM anon, service_role;']] }],  ['M5 trigger-ul doar la INSERT (mutarea liniei pe alt proiect scapă)', 'post', { [M]: [['BEFORE INSERT OR UPDATE OF raport_id, proiect_id ON public.raport_lucrari\n', 'BEFORE INSERT ON public.raport_lucrari\n']] }],
   ['M6 UPDATE verificat mereu (liniile istorice nu mai sunt editabile)', 'T3', { [M]: [[
     "  IF TG_OP = 'UPDATE' AND NEW.raport_id IS NOT DISTINCT FROM OLD.raport_id AND NEW.proiect_id IS NOT DISTINCT FROM OLD.proiect_id THEN\n    RETURN NEW;\n  END IF;\n", '']] }],
   ['M7 NULL tratat ca „orice proiect”', 'T4', { [M]: [['  IF NEW.proiect_id IS DISTINCT FROM v_proiect THEN\n', '  IF NEW.proiect_id <> v_proiect THEN\n']] }, /T4 FAIL: doar comparatia/],
   ['M8 EXECUTE lăsat clienților', 'post', { [M]: [['REVOKE ALL ON FUNCTION public.fn_raport_lucrari_proiect_garda() FROM PUBLIC, anon, authenticated, service_role;',
                                                    'REVOKE ALL ON FUNCTION public.fn_raport_lucrari_proiect_garda() FROM anon, service_role;']] }],
-  ['M9 revenirea nu verifică drepturile funcției', 'T6b', { [R]: [["                      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')\n", '']] }],
+  ['M9 revenirea nu verifică drepturile funcției', 'T6b', { [R]: [["                        AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')\n", '']] }],
   ['M10 revenirea nu scoate trigger-ul (postcondiția ei)', 'revenire-post', { [R]: [['  DROP TRIGGER trg_raport_lucrari_zz_proiect ON public.raport_lucrari;\n  DROP FUNCTION public.fn_raport_lucrari_proiect_garda();\n', '']] }],
+  ['M17 revenirea nu scoate garda distribuției (postcondiția ei)', 'revenire-post', { [R]: [['  DROP TRIGGER trg_raport_distributie_zz_proiect ON public.raport_distributie_linii;\n  DROP FUNCTION public.fn_raport_distributie_proiect_garda();\n', '']] }],
 ]
 let rau = 0
 for (const [nume, test, inl, motiv] of mutanti) {
@@ -206,7 +218,13 @@ await scenariu('S1 baseline necompletat = refuz', /20261217a: baseline L15 necom
   if (!/'[0-9a-f]{32}'\)/.test(PLACEHOLDER)) throw new Error('blocul BASELINE din repo nu are amprente de inlocuit')
   await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, PLACEHOLDER.replace(/'[0-9a-f]{32}'\)/g, "'DE_COMPLETAT')")]]))
 })
-await scenariu('S1p blocul din repo (producția) pe altă bază = refuz pe diferență', /starea de acces \(inainte\) difera de baseline/, async (db) => { await aplicaMig(db, citeste(MIG)) })
+// r4: blocul din repo are cele 47 de valori de producție + etichetele noi ale distribuției DE_COMPLETAT => refuz „necompletat”; cu ele
+//   completate (oricum) pe altă bază => refuz pe diferență
+await scenariu('S1p blocul din repo (47 din producție + DE_COMPLETAT) = refuz necompletat', /20261217a: baseline L15 necompletat/, async (db) => { await aplicaMig(db, citeste(MIG)) })
+await scenariu('S1q … cu etichetele noi completate, pe altă bază = refuz pe diferență', /starea de acces \(inainte\) difera de baseline/, async (db) => {
+  if (!PLACEHOLDER.includes("'DE_COMPLETAT')")) throw new Error('blocul BASELINE din repo nu are etichete DE_COMPLETAT')
+  await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, PLACEHOLDER.split("'DE_COMPLETAT')").join("'00000000000000000000000000000000')")]]))
+})
 await scenariu('S2 baseline cu o etichetă dublă = refuz', /20261217a: baseline L15 cu etichete duble/, async (db) => {
   await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, B0.map(r => r.linie_baseline).join('\n') + '\n  , ' + B0[0].linie_baseline.trim()]]))
 })
@@ -227,7 +245,12 @@ for (const [nume, strica, motiv] of [
      CREATE TRIGGER zz_s AFTER UPDATE ON public.sites FOR EACH ROW EXECUTE FUNCTION public.zz_s();`, /\(inainte\) difera.*tabel sites \| triggere/],
   ['S10 drept pe o coloană a liniilor pentru anon', `GRANT SELECT (cantitate) ON public.raport_lucrari TO anon;`, /\(inainte\) difera.*tabel raport_lucrari \| acl coloane/],
   ['S11 un trigger BEFORE ROW după garda noastră (ordinea numelui)', `CREATE FUNCTION public.zz_b() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $f$ BEGIN RETURN NEW; END $f$;
-     CREATE TRIGGER trg_zzz_dupa BEFORE INSERT ON public.raport_lucrari FOR EACH ROW EXECUTE FUNCTION public.zz_b();`, /trigger-e BEFORE ROW necunoscute dupa garda pe raport_lucrari: trg_zzz_dupa/],
+     CREATE TRIGGER trg_zzz_dupa BEFORE INSERT ON public.raport_lucrari FOR EACH ROW EXECUTE FUNCTION public.zz_b();`, /trigger-e BEFORE ROW necunoscute dupa garda: raport_lucrari\.trg_zzz_dupa/],
+  ['S11b un trigger BEFORE ROW după garda distribuției', `CREATE FUNCTION public.zz_b() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $f$ BEGIN RETURN NEW; END $f$;
+     CREATE TRIGGER trg_zzz_dupa BEFORE UPDATE ON public.raport_distributie_linii FOR EACH ROW EXECUTE FUNCTION public.zz_b();`, /trigger-e BEFORE ROW necunoscute dupa garda: raport_distributie_linii\.trg_zzz_dupa/],
+  ['S6b o politică în plus pe distribuție (tabel nou în amprentă)', `CREATE POLICY zz_toti ON public.raport_distributie_linii FOR SELECT TO anon USING (true);`, /\(inainte\) difera.*tabel raport_distributie_linii \| politici/],
+  ['S10b drept pe o coloană a distribuției pentru anon', `GRANT SELECT (observatii) ON public.raport_distributie_linii TO anon;`, /\(inainte\) difera.*tabel raport_distributie_linii \| acl coloane/],
+  ['S8b trigger-ul vechi al tronsonului oprit', `ALTER TABLE public.raport_distributie_linii DISABLE TRIGGER raport_distributie_linii_unitate_check;`, /\(inainte\) difera.*tabel raport_distributie_linii \| triggere/],
   ['S12 RPC-ul de salvare cu alt corp decât cel analizat', `CREATE OR REPLACE FUNCTION public.fn_raport_zilnic_salveaza(p_site bigint, p_data date, p_antet jsonb, p_linii jsonb, p_distributie jsonb, p_versiune integer, p_cheie uuid)
      RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NULL; END $f$;`, /RPC-ul de salvare difera de corpul analizat/],
 ]) await scenariu(`${nume} = refuz înainte`, motiv, async (db) => { await db.exec(strica); await aplicaMig(db, MIG_B) })
@@ -246,11 +269,15 @@ await scenariu('S15 aplicare → revenire → reaplicare (același baseline)', n
 await scenariu('S16 revenirea fără plafon = refuz', /revenire: PLAFON_TRANZACTIE lipsa/, async (db) => { await aplicaMig(db, MIG_B); await revino(db, citeste(REV), { marcajPlafon: false }) })
 for (const [nume, strica, scoate] of [
   ['corpul funcției schimbat', `CREATE OR REPLACE FUNCTION public.fn_raport_lucrari_proiect_garda() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NEW; END $f$;`,
-    ["                      AND md5(replace(p.prosrc, chr(13), '')) = '", "                      AND true OR md5(replace(p.prosrc, chr(13), '')) = '"]],
+    ["                        AND md5(replace(p.prosrc, chr(13), '')) = r.amp\n", "                        AND true OR md5(replace(p.prosrc, chr(13), '')) = r.amp\n"]],
+  ['corpul gărzii distribuției schimbat', `CREATE OR REPLACE FUNCTION public.fn_raport_distributie_proiect_garda() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN NEW; END $f$;`,
+    ["                        AND md5(replace(p.prosrc, chr(13), '')) = r.amp\n", "                        AND true OR md5(replace(p.prosrc, chr(13), '')) = r.amp\n"]],
   ['trigger oprit', 'ALTER TABLE public.raport_lucrari DISABLE TRIGGER trg_raport_lucrari_zz_proiect;',
-    ["                       AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgenabled = 'O'\n", "                       AND tg.tgqual IS NULL AND tg.tgnargs = 0\n"]],
+    ["                         AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgenabled = 'O'\n", "                         AND tg.tgqual IS NULL AND tg.tgnargs = 0\n"]],
+  ['trigger-ul distribuției oprit', 'ALTER TABLE public.raport_distributie_linii DISABLE TRIGGER trg_raport_distributie_zz_proiect;',
+    ["                         AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgenabled = 'O'\n", "                         AND tg.tgqual IS NULL AND tg.tgnargs = 0\n"]],
   ['configurația funcției (search_path)', 'ALTER FUNCTION public.fn_raport_lucrari_proiect_garda() SET search_path = public;',
-    ["AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']\n                      AND NOT has_function_privilege('anon'", "AND true\n                      AND NOT has_function_privilege('anon'"]],
+    ["AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']\n                        AND NOT has_function_privilege('anon'", "AND true\n                        AND NOT has_function_privilege('anon'"]],
 ]) {
   await scenariu(`S17 revenire refuză: ${nume}`, /20261217a revenire: starea nu e cea din 20261217a/, async (db) => { await aplicaMig(db, MIG_B); await db.exec(strica); await revino(db, citeste(REV)) })
   await scenariu(`S18 … cu verificarea scoasă, aceeași stare trece (${nume})`, null, async (db) => { await aplicaMig(db, MIG_B); await db.exec(strica); await revino(db, aplica(citeste(REV), [scoate])) })
@@ -270,10 +297,50 @@ const tineSantierul = async (db) => {
 }
 await scenariu('S19 calea directă ține rândul șantierului (FOR SHARE) până la COMMIT', null, async (db) => { await aplicaMig(db, MIG_B); await tineSantierul(db) })
 await scenariu('S19b … mutantul fără FOR SHARE pe șantier e prins', /rândul șantierului nu e blocat/, async (db) => {
-  await aplicaMig(db, migCu([['FROM public.sites s WHERE s.id = v_site FOR SHARE OF s;', 'FROM public.sites s WHERE s.id = v_site;']]))
+  await aplicaMig(db, migCu([['     FOR SHARE OF r, s SKIP LOCKED;\n', '     FOR SHARE OF r SKIP LOCKED;\n']]))
   await tineSantierul(db)
 })
 await scenariu('S19c … și fără migrare (azi) rândul șantierului NU e ținut de calea directă', /rândul șantierului nu e blocat/, async (db) => { await tineSantierul(db) })
+// r4: aceeași probă pe distribuție (rândul cu tronson ține șantierul; fără migrare, trigger-ul vechi al tronsonului nu-l ține)
+const tineSantierulDistributie = async (db) => {
+  await db.exec(`INSERT INTO public.proiect_unitati (proiect_id, tip, cod, nume, ordine) VALUES (1, 'tronson', 'TLK', 'Lock test', 1);
+                 INSERT INTO public.rapoarte_zilnice (site_id, data, probleme) VALUES (1, DATE '2026-11-11', 'Lock test');`)
+  await db.exec('BEGIN;')
+  try {
+    await db.exec(`INSERT INTO public.raport_distributie_linii (raport_id, tabel, nr_crt, unitate_id)
+                   SELECT z.id, 'conducta', 1, (SELECT id FROM public.proiect_unitati WHERE cod = 'TLK') FROM public.rapoarte_zilnice z WHERE z.site_id = 1 AND z.data = DATE '2026-11-11';`)
+    const r = (await db.query(`SELECT (SELECT xmax::text FROM public.sites WHERE id = 1) AS xm, (txid_current() % 4294967296)::text AS tx`)).rows[0]
+    if (r.xm !== r.tx) throw new Error(`rândul șantierului nu e blocat de scrierea distribuției (xmax ${r.xm}, tranzacția ${r.tx})`)
+  } finally { await db.exec('ROLLBACK;') }
+}
+await scenariu('S19d distribuția cu tronson ține rândul șantierului (FOR SHARE) până la COMMIT', null, async (db) => { await aplicaMig(db, MIG_B); await tineSantierulDistributie(db) })
+await scenariu('S19e … și fără migrare (azi) NU îl ține', /rândul șantierului nu e blocat/, async (db) => { await tineSantierulDistributie(db) })
+
+// ── r4 (review P2): costul salvărilor mari, cu scriptul coordonatorului (variantele lui), pe schema falsă — doar tipărit (PGlite e WASM:
+//    cifrele arată proporția, nu timpul de pe clonă). Fiecare rulare: o tranzacție anulată, nimic rămas.
+const COST = 'scripts/raport_linii_proiect_cost.sql'
+const ruleazaCost = async (db, varianta) => {
+  const sistem = (await db.query('SELECT system_identifier::text AS s FROM pg_control_system()')).rows[0].s
+  const st = []
+  const sql = citeste(COST).split('\n').filter((l) => !l.startsWith('\\')).join('\n').replace(":'sistem'", `'${sistem}'`).replace(":'varianta'", `'${varianta}'`)
+  await db.exec(sql, { onNotice: (n) => st.push(n.message) })
+  const n = (await db.query(`SELECT count(*)::int AS n FROM public.proiect_activitati WHERE nume LIKE 'Activitate cost linii %'`)).rows[0].n
+  if (n !== 0) throw new Error('scriptul de cost a lăsat activități: ' + n)
+  return st.filter((m) => m.startsWith('COST '))
+}
+await scenariu('S21 costul salvărilor mari: fără migrare / garda r4 / corpul r3 / garda oprită (50, 200, 500 de linii)', null, async (db) => {
+  const inainte = await ruleazaCost(db, 'curenta')
+  await aplicaMig(db, MIG_B)
+  const r4 = await ruleazaCost(db, 'curenta'), r3 = await ruleazaCost(db, 'r3'), fara = await ruleazaCost(db, 'fara_garda')
+  for (const [et, l] of [['fara migrare', inainte], ['r4', r4], ['r3', r3], ['garda oprita', fara]]) {
+    if (l.length !== 4) throw new Error(`cost ${et}: ${l.join(' | ')}`)
+    console.log(`       [${et}] ` + l.slice(1).map((m) => m.replace(/ \(5 salvari;.*$/, '')).join(' · '))
+  }
+  if (!/r3 \(in tranzactia anulata\)/.test(r3[0])) throw new Error('varianta r3 nu a pus corpul r3: ' + r3[0])
+})
+await scenariu('S22 scriptul de cost pe altă țintă = refuz, nimic scris', /REFUZ: system_identifier/, async (db) => {
+  await db.exec(citeste(COST).split('\n').filter((l) => !l.startsWith('\\')).join('\n').replace(":'sistem'", "'123'").replace(":'varianta'", "'curenta'"))
+})
 
 // ── 4. scriptul de date (DOAR citire): cazuri plantate, numărate independent (cazurile sunt construite aici, nu din script) ──
 await scenariu('S20 scriptul de date: categoriile pe cazuri plantate', null, async (db) => {

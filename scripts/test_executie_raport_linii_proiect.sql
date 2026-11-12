@@ -9,13 +9,14 @@
 -- trigger-ul citesc proiectul nou). Concurența reală (lock-uri, așteptări, mutanți): scripts/raport_linii_proiect_concurenta.sh.
 -- Ordinea: T0 date -> T1 defectul se REPRODUCE înainte de migrare (raport nou + raport existent fără rezumat) -> migrarea (\ir, cu plafonul
 -- runnerului) -> TB politici / drepturi neschimbate -> T2 aceeași fereastră = refuz, nimic scris -> T3 căile legitime ale aplicației ->
--- T4 căile directe -> T5 funcția nu e apelabilă -> T6 revenirea (nearmată = refuz; armată = scoate tot, defectul revine) -> re-aplicare.
+-- T4 căile directe -> T4d (r4) distribuția pe calea directă -> T5 funcțiile nu sunt apelabile -> T6 revenirea (nearmată = refuz; armată = scoate
+-- tot, defectul revine) -> re-aplicare. Fără concurență reală aici (o sesiune): refuzul „ocupat” (55P03, SKIP LOCKED) îl probează concurența.
 -- Fiecare test se termină cu NOTICE „Tn OK”; orice abatere oprește rularea (RAISE EXCEPTION).
 -- Migrarea cere BASELINE-ul L15 completat (scripts/raport_linii_proiect_amprente.sql pe clonă, copiat în blocul marcat; necompletat = refuz la \ir).
 \set ON_ERROR_STOP 1
 BEGIN ISOLATION LEVEL READ COMMITTED;
-SELECT set_config('tlp.pol0', (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s/%s', tablename, policyname, permissive, roles, cmd, coalesce(qual, ''), coalesce(with_check, '')), ';' ORDER BY tablename, policyname), '')) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('raport_lucrari', 'rapoarte_zilnice', 'sites')), true),
-       set_config('tlp.acl0', (SELECT md5(string_agg(c.relname || '=' || coalesce(c.relacl::text, '') || '/' || c.relrowsecurity || c.relforcerowsecurity, ';' ORDER BY c.relname)) FROM pg_class c WHERE c.oid IN ('public.raport_lucrari'::regclass, 'public.rapoarte_zilnice'::regclass, 'public.sites'::regclass)), true);
+SELECT set_config('tlp.pol0', (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s/%s', tablename, policyname, permissive, roles, cmd, coalesce(qual, ''), coalesce(with_check, '')), ';' ORDER BY tablename, policyname), '')) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('raport_lucrari', 'raport_distributie_linii', 'rapoarte_zilnice', 'sites')), true),
+       set_config('tlp.acl0', (SELECT md5(string_agg(c.relname || '=' || coalesce(c.relacl::text, '') || '/' || c.relrowsecurity || c.relforcerowsecurity, ';' ORDER BY c.relname)) FROM pg_class c WHERE c.oid IN ('public.raport_lucrari'::regclass, 'public.raport_distributie_linii'::regclass, 'public.rapoarte_zilnice'::regclass, 'public.sites'::regclass)), true);
 
 -- ── unelte ──
 -- identitatea: ambele surse JWT (auth.uid() citește întâi request.jwt.claim.sub), apoi rolul fără BYPASSRLS
@@ -165,8 +166,8 @@ SELECT set_config('transaction_timeout', '0', true), set_config('gazpet.plafon_t
 -- ── TB: migrarea nu schimbă politicile / drepturile tabelelor atinse ──
 DO $t$
 BEGIN
-  IF (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s/%s', tablename, policyname, permissive, roles, cmd, coalesce(qual, ''), coalesce(with_check, '')), ';' ORDER BY tablename, policyname), '')) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('raport_lucrari', 'rapoarte_zilnice', 'sites')) IS DISTINCT FROM pg_temp.t_g('pol0')
-     OR (SELECT md5(string_agg(c.relname || '=' || coalesce(c.relacl::text, '') || '/' || c.relrowsecurity || c.relforcerowsecurity, ';' ORDER BY c.relname)) FROM pg_class c WHERE c.oid IN ('public.raport_lucrari'::regclass, 'public.rapoarte_zilnice'::regclass, 'public.sites'::regclass)) IS DISTINCT FROM pg_temp.t_g('acl0') THEN
+  IF (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s/%s', tablename, policyname, permissive, roles, cmd, coalesce(qual, ''), coalesce(with_check, '')), ';' ORDER BY tablename, policyname), '')) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('raport_lucrari', 'raport_distributie_linii', 'rapoarte_zilnice', 'sites')) IS DISTINCT FROM pg_temp.t_g('pol0')
+     OR (SELECT md5(string_agg(c.relname || '=' || coalesce(c.relacl::text, '') || '/' || c.relrowsecurity || c.relforcerowsecurity, ';' ORDER BY c.relname)) FROM pg_class c WHERE c.oid IN ('public.raport_lucrari'::regclass, 'public.raport_distributie_linii'::regclass, 'public.rapoarte_zilnice'::regclass, 'public.sites'::regclass)) IS DISTINCT FROM pg_temp.t_g('acl0') THEN
     RAISE EXCEPTION 'TB FAIL: migrarea a schimbat politicile / drepturile';
   END IF;
   RAISE NOTICE 'TB OK';
@@ -300,13 +301,60 @@ BEGIN
   RAISE NOTICE 'T4 OK: căile directe (proiect / activitate / obiect străin, proiect NULL, mutarea liniei, raport inexistent)';
 END $t$;
 
--- ── T5: funcția gărzii nu e apelabilă din API ──
+-- ── T4d (r4): distribuția pe calea directă — căile legitime trec; tronsonul altui proiect = refuz. Trigger-ul vechi al tronsonului (20261027a)
+--    rulează ÎNAINTEA gărzii și, într-o singură sesiune, vede același proiect: ca garda nouă să fie probată SINGURĂ, el e oprit într-un
+--    SAVEPOINT anulat imediat (DDL doar în tranzacția harness-ului). Fereastra reală (mutare în zbor): L7 în raport_linii_proiect_concurenta.sh. ──
+DO $t$
+DECLARE z bigint; s1 bigint := pg_temp.t_g('s1')::bigint; u1 bigint := pg_temp.t_g('u1')::bigint; u9 bigint := pg_temp.t_g('u9')::bigint;
+  ins text := 'INSERT INTO public.raport_distributie_linii (raport_id, tabel, nr_crt, unitate_id) VALUES (%s, %L, %s, %s)';
+BEGIN
+  SELECT id INTO z FROM public.rapoarte_zilnice WHERE site_id = s1 AND data = DATE '2001-01-23';
+  IF z IS NULL THEN RAISE EXCEPTION 'T4d FAIL: raportul zilei 23 lipsește'; END IF;
+  -- legitime: tronsonul proiectului șantierului, rând fără tronson, editarea unui câmp care nu mută rândul, scoaterea tronsonului (SET NULL)
+  IF pg_temp.t_trece(format(ins, z, 'conducta', 1, u1)) <> 1 OR pg_temp.t_trece(format(ins, z, 'conducta', 2, 'NULL')) <> 1
+     OR pg_temp.t_trece(format('UPDATE public.raport_distributie_linii SET observatii = %L WHERE raport_id = %s', 'T4d', z)) <> 2
+     OR pg_temp.t_trece(format('UPDATE public.raport_distributie_linii SET unitate_id = NULL WHERE raport_id = %s AND nr_crt = 1', z)) <> 1 THEN
+    RAISE EXCEPTION 'T4d FAIL: o cale legitimă a distribuției a fost refuzată';
+  END IF;
+  -- tronsonul altui proiect: refuzat (de trigger-ul vechi sau de gardă)
+  IF pg_temp.t_trece(format(ins, z, 'conducta', 3, u9)) <> -1
+     OR pg_temp.t_trece(format('UPDATE public.raport_distributie_linii SET unitate_id = %s WHERE raport_id = %s AND nr_crt = 2', u9, z)) <> -1 THEN
+    RAISE EXCEPTION 'T4d FAIL: tronsonul altui proiect a trecut';
+  END IF;
+  RAISE NOTICE 'T4d căile legitime ale distribuției trec, tronsonul străin e refuzat';
+END $t$;
+SAVEPOINT t4d;
+ALTER TABLE public.raport_distributie_linii DISABLE TRIGGER raport_distributie_linii_unitate_check;
+DO $t$
+DECLARE z bigint := (SELECT id FROM public.rapoarte_zilnice WHERE site_id = pg_temp.t_g('s1')::bigint AND data = DATE '2001-01-23');
+  u1 bigint := pg_temp.t_g('u1')::bigint; u9 bigint := pg_temp.t_g('u9')::bigint;
+BEGIN
+  IF NOT pg_temp.t_refuza_msg(format('INSERT INTO public.raport_distributie_linii (raport_id, tabel, nr_crt, unitate_id) VALUES (%s, %L, 4, %s)', z, 'conducta', u9), '22023', 'tronsonul')
+     OR NOT pg_temp.t_refuza_msg(format('UPDATE public.raport_distributie_linii SET unitate_id = %s WHERE raport_id = %s AND nr_crt = 2', u9, z), '22023', 'tronsonul')
+     OR pg_temp.t_trece(format('INSERT INTO public.raport_distributie_linii (raport_id, tabel, nr_crt, unitate_id) VALUES (%s, %L, 5, %s)', z, 'conducta', u1)) <> 1 THEN
+    RAISE EXCEPTION 'T4d FAIL: garda distributiei singura: tronsonul altui proiect a trecut (sau refuz cu alt motiv / tronsonul corect refuzat)';
+  END IF;
+  RAISE NOTICE 'T4d garda distributiei singura: tronson strain = refuz 22023, tronsonul proiectului trece';
+END $t$;
+ROLLBACK TO SAVEPOINT t4d;
+DO $t$
+BEGIN
+  IF (SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'public.raport_distributie_linii'::regclass AND tgname = 'raport_distributie_linii_unitate_check') IS DISTINCT FROM 'O' THEN
+    RAISE EXCEPTION 'T4d FAIL: trigger-ul vechi al tronsonului nu a revenit';
+  END IF;
+  RAISE NOTICE 'T4d OK: distributia pe calea directa';
+END $t$;
+
+-- ── T5: funcțiile gărzilor nu sunt apelabile din API ──
 DO $t$
 BEGIN
   IF has_function_privilege('anon', 'public.fn_raport_lucrari_proiect_garda()', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_raport_lucrari_proiect_garda()', 'EXECUTE')
-     OR has_function_privilege('service_role', 'public.fn_raport_lucrari_proiect_garda()', 'EXECUTE') THEN
-    RAISE EXCEPTION 'T5 FAIL: EXECUTE pe funcția gărzii';
+     OR has_function_privilege('service_role', 'public.fn_raport_lucrari_proiect_garda()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.fn_raport_distributie_proiect_garda()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.fn_raport_distributie_proiect_garda()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.fn_raport_distributie_proiect_garda()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'T5 FAIL: EXECUTE pe funcția unei gărzi';
   END IF;
   RAISE NOTICE 'T5 OK';
 END $t$;
@@ -339,7 +387,8 @@ SELECT set_config('transaction_timeout', '0', true), set_config('gazpet.plafon_t
 DO $t$
 DECLARE v text; l jsonb := jsonb_build_array(jsonb_build_object('activitate_id', pg_temp.t_g('a1')::bigint, 'unitate_id', NULL, 'cantitate', 2));
 BEGIN
-  IF to_regprocedure('public.fn_raport_lucrari_proiect_garda()') IS NOT NULL OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_raport_lucrari_zz_proiect') THEN
+  IF to_regprocedure('public.fn_raport_lucrari_proiect_garda()') IS NOT NULL OR to_regprocedure('public.fn_raport_distributie_proiect_garda()') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_lucrari_zz_proiect', 'trg_raport_distributie_zz_proiect')) THEN
     RAISE EXCEPTION 'T6 FAIL: revenirea a lăsat obiecte';
   END IF;
   v := pg_temp.t_cu_mutare(DATE '2001-01-20', 0, l, pg_temp.t_g('p2')::bigint);

@@ -3,11 +3,13 @@
 --   psql -X -v ON_ERROR_STOP=1 -h <host> -p <port> -U <user> -d postgres -f scripts/raport_linii_proiect_amprente.sql > amprente_20261217a.txt
 -- Ce tipărește (același format ca scripts/raport_rezumat_amprente.sql / scripts/tichete_lot2_amprente.sql):
 --   eticheta | amprenta (md5 pe „detaliu”) | linie_baseline (de copiat în blocul BASELINE al migrării) | sursa | atentie | detaliu
---   * tabelele: raport_lucrari (pe el stă trigger-ul nou), rapoarte_zilnice și sites (rândurile lor sunt blocate de trigger; ordinea
---     lock-urilor se sprijină pe trigger-ele lor: garda rezumatului și mutarea șantierului, 20261216a) — drepturi pe tabel / coloane /
---     secvențe, proprietar, RLS + FORCE, TOATE politicile, inventarul triggerelor;
+--   * tabelele: raport_lucrari și (r4) raport_distributie_linii (pe ele stau trigger-ele noi), rapoarte_zilnice și sites (rândurile lor
+--     sunt blocate de trigger-e; ordinea lock-urilor se sprijină pe trigger-ele lor: garda rezumatului și mutarea șantierului, 20261216a) —
+--     drepturi pe tabel / coloane / secvențe, proprietar, RLS + FORCE, TOATE politicile, inventarul triggerelor;
+--     r4: cele 47 de etichete lipite pe 12.11.2026 trebuie să iasă IDENTIC; etichetele noi (raport_distributie_linii + funcțiile trigger-elor
+--     ei) iau locul rândurilor DE_COMPLETAT din migrare (blocul se lipește întreg, în ordinea afișată);
 --   * funcțiile: pornirea = fn_raport_zilnic_salveaza (singura cale a aplicației care scrie liniile), funcțiile din politicile / triggerele
---     celor trei tabele (le găsește catalogul) și „indiciile” = numele apare în corpul unei funcții din listă (callee tranzitiv; plpgsql nu
+--     celor patru tabele (le găsește catalogul) și „indiciile” = numele apare în corpul unei funcții din listă (callee tranzitiv; plpgsql nu
 --     lasă pg_depend). Indiciul e DOAR o propunere pentru revizor: poarta din migrare nu caută nimic în text, compară exact lista din BASELINE;
 --   * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, politici USING true,
 --     DEFINER fără search_path, EXECUTE în corp).
@@ -22,10 +24,10 @@ SET LOCAL search_path = public, pg_temp;
 SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;
 
 \echo
-\echo '=== 20261217a_executie_raport_linii_proiect — raport_lucrari, rapoarte_zilnice, sites + salvarea raportului ==='
+\echo '=== 20261217a_executie_raport_linii_proiect — raport_lucrari, raport_distributie_linii, rapoarte_zilnice, sites + salvarea raportului ==='
 WITH RECURSIVE
 -- >>> INTRARE 20261217a
-amp_tabele(oid) AS (VALUES ('public.raport_lucrari'::regclass::oid), ('public.rapoarte_zilnice'::regclass::oid), ('public.sites'::regclass::oid)),
+amp_tabele(oid) AS (VALUES ('public.raport_lucrari'::regclass::oid), ('public.raport_distributie_linii'::regclass::oid), ('public.rapoarte_zilnice'::regclass::oid), ('public.sites'::regclass::oid)),
 amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid)')::oid)),
 -- <<< INTRARE 20261217a
 amp_start(oid, sursa) AS (
