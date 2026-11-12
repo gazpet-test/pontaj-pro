@@ -95,15 +95,19 @@ export function filtreazaTransporturi(lista, statusFilter, azi) {
 export const TRANSPORTURI_INSTABILE = 'transporturi_instabile'
 export const PAGINA_TRANSPORTURI = 500
 
-const numarConfirmat = count => {
-  if (!Number.isInteger(count) || count < 0) throw new Error('Serverul nu a confirmat numărul total de transporturi.')
+// Textele erorilor depind de ce se citește (helperul e folosit și pentru fișele de service, TKT-2026-0380 r3).
+export const NUME_TRANSPORTURI = { pl: 'transporturi', plArt: 'transporturile', unul: 'un transport', art: 'transportul' }
+const mare = t => t.charAt(0).toUpperCase() + t.slice(1)
+
+const numarConfirmat = (count, nume = NUME_TRANSPORTURI) => {
+  if (!Number.isInteger(count) || count < 0) throw new Error(`Serverul nu a confirmat numărul total de ${nume.pl}.`)
   return count
 }
 
 // O trecere: { rows, anomalie }. interogare(optiuni) = builder cu .select(..., optiuni) + filtre,
 // FĂRĂ ordine / limită / cheie (le pune helperul). optiuni: { count: 'exact' } pe prima pagină,
 // {} pe următoarele, { count: 'exact', head: true } la numărarea finală.
-export async function citesteOTrecereDupaId(interogare, pagina = PAGINA_TRANSPORTURI) {
+export async function citesteOTrecereDupaId(interogare, pagina = PAGINA_TRANSPORTURI, nume = NUME_TRANSPORTURI) {
   const rows = [], ids = new Set()
   let total = null, ultim = null
   while (true) {
@@ -111,39 +115,39 @@ export async function citesteOTrecereDupaId(interogare, pagina = PAGINA_TRANSPOR
     if (ultim !== null) q = q.gt('id', ultim)
     const { data, error, count } = await q.order('id', { ascending: true }).limit(pagina)
     if (error) throw error
-    if (!Array.isArray(data)) throw new Error('Serverul a întors un răspuns invalid pentru transporturi.')
-    if (total === null) total = numarConfirmat(count)
+    if (!Array.isArray(data)) throw new Error(`Serverul a întors un răspuns invalid pentru ${nume.pl}.`)
+    if (total === null) total = numarConfirmat(count, nume)
     for (const row of data) {
       const id = row?.id
-      if (!Number.isSafeInteger(id)) throw new Error('Serverul a întors un transport fără ID valid; lista nu poate fi paginată sigur.')
-      if (ultim !== null && !(id > ultim)) throw new Error('Serverul a întors transporturile în altă ordine decât cea cerută.')
-      if (ids.has(id)) return { rows, anomalie: `transportul #${id} a apărut de două ori` }
+      if (!Number.isSafeInteger(id)) throw new Error(`Serverul a întors ${nume.unul} fără ID valid; lista nu poate fi paginată sigur.`)
+      if (ultim !== null && !(id > ultim)) throw new Error(`Serverul a întors ${nume.plArt} în altă ordine decât cea cerută.`)
+      if (ids.has(id)) return { rows, anomalie: `${nume.art} #${id} a apărut de două ori` }
       ids.add(id)
       rows.push(row)
       ultim = id
     }
-    if (rows.length > total) return { rows, anomalie: `au apărut transporturi noi în timpul citirii (${rows.length} față de ${total})` }
+    if (rows.length > total) return { rows, anomalie: `au apărut ${nume.pl} noi în timpul citirii (${rows.length} față de ${total})` }
     // Gata la pagina goală, sau la pagina scurtă care a atins totalul. O pagină scurtă sub total
     // poate fi plafonul de rânduri al serverului (sub `pagina`) → continui de la ultimul id.
     if (!data.length || (data.length < pagina && rows.length >= total)) break
   }
   const { error, count } = await interogare({ count: 'exact', head: true })
   if (error) throw error
-  const final = numarConfirmat(count)
+  const final = numarConfirmat(count, nume)
   if (rows.length !== total || final !== total) {
     return { rows, anomalie: `numărul s-a modificat în timpul citirii (la început ${total}, citite ${rows.length}, la final ${final})` }
   }
   return { rows, anomalie: null }
 }
 
-export async function citesteCompletDupaId(interogare, { pagina = PAGINA_TRANSPORTURI, incercari = 3 } = {}) {
+export async function citesteCompletDupaId(interogare, { pagina = PAGINA_TRANSPORTURI, incercari = 3, nume = NUME_TRANSPORTURI } = {}) {
   let anomalie = null
   for (let i = 0; i < incercari; i++) {
-    const r = await citesteOTrecereDupaId(interogare, pagina)
+    const r = await citesteOTrecereDupaId(interogare, pagina, nume)
     if (!r.anomalie) return r.rows
     anomalie = r.anomalie
   }
-  const e = new Error(`Transporturile s-au modificat în timpul încărcării la ${incercari} încercări consecutive (ultima: ${anomalie}). Reîncercați peste câteva momente.`)
+  const e = new Error(`${mare(nume.plArt)} s-au modificat în timpul încărcării la ${incercari} încercări consecutive (ultima: ${anomalie}). Reîncercați peste câteva momente.`)
   e.code = TRANSPORTURI_INSTABILE
   throw e
 }

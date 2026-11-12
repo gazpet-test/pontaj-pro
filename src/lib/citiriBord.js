@@ -145,6 +145,19 @@ export function textSursa(r, unit) {
   return `sursa nu a putut fi stabilită${de}`
 }
 
+// TKT-2026-0380 (r3): formularul de alimentare din Logistică, când citirea e sub valoarea de pe activ
+// (val = km_actuali / ore_functionare_actuale). Aceeași gardă ca în tabul Service (stabilesteSursa):
+// „scrisă direct pe fișa activului” DOAR când toate sursele s-au citit și niciun rând nu are exact
+// valoarea; dacă o sursă n-a putut fi citită → „sursa nu a putut fi stabilită”, nu trimitem omul la
+// ajustarea manuală. Textul continuă „Valoarea de X km …”.
+export function textSursaValoriiActiv(val, surse, tip) {
+  const r = stabilesteSursa(val, surse, tip, { faraManual: true })
+  if (r.seIncarca) return '— se caută sursa…'
+  if (r.stabilita) return textSursa(r, tip === 'km' ? 'km' : 'h')
+  if (r.erori.length) return `— ${textSursa(r, tip === 'km' ? 'km' : 'h')}`
+  return 'a fost scrisă direct pe fișa activului (ajustare manuală sau import)'
+}
+
 // TKT-2026-0380 (c) „softul nu ne lasă să modificăm km”: ajustarea manuală (fișa activului sau
 // fișa de service) scrie DOAR valoarea de pe activ, iar afișarea = maximul tuturor surselor. Dacă o
 // alimentare / fișă / telemetrie are o cifră mai mare, valoarea afișată nu scade.

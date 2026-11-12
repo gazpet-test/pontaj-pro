@@ -5,7 +5,7 @@ import { employeeFieldRead, withEmployeePersonal } from './employeesPersonal.js'
 
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
-import { confirmaCitiriAlimentari, confirmaAjustareManuala, incarcaSurseMaxime, sursaValoriiMari, descrieSursa } from './lib/citiriBord.js'
+import { confirmaCitiriAlimentari, confirmaAjustareManuala, incarcaSurseMaxime, textSursaValoriiActiv } from './lib/citiriBord.js'
 import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
 import { ziBucuresti } from './adminAlerte.js'
 import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT, SURSA_ROMPETROL_TOATE, surseRompetrol, potrivesteSursa } from './lib/arhivaAlimentari.js'
@@ -469,13 +469,9 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
       .catch(e => { if (curent) setSurseMari({ km: [], ore: [], erori: [e?.message || String(e)] }) })
     return () => { curent = false }
   }, [hasAnomalie, activ?.id])  // eslint-disable-line react-hooks/exhaustive-deps
-  // Sursa valorii din sistem: un rând din alimentări / fișe / telemetrie egal cu ea; altfel scrisă direct pe activ.
-  const sursaSistem = (val, tip) => {
-    if (!surseMari) return 'se caută sursa…'
-    const s = sursaValoriiMari(val, (surseMari[tip] || []).filter(c => c.sursa !== 'manual'))
-    if (s?.exact) return `vine din ${descrieSursa(s)}`
-    return 'a fost scrisă direct pe fișa activului (ajustare manuală sau import)' + (surseMari.erori?.length ? ` — unele surse nu s-au putut citi (${surseMari.erori.join('; ')})` : '')
-  }
+  // Sursa valorii din sistem: un rând din alimentări / fișe / telemetrie egal cu ea; „scrisă direct pe
+  // activ” doar dacă toate sursele s-au citit (r3: aceeași gardă ca în tabul Service).
+  const sursaSistem = (val, tip) => textSursaValoriiActiv(val, surseMari, tip)
 
   const isGazpet = isStatieGazpet(form.statie_combustibil)
   const rezervorActiv = useMemo(

@@ -20,7 +20,7 @@ import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
-import { calcUrmService, urmServiceLevel, urmServiceColor, acopeririScadente, scadenteDeschisePeActiv, aziBucuresti, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
+import { calcUrmService, urmServiceLevel, urmServiceColor, acopeririScadente, scadenteDeschisePeActiv, incarcaFiseService, aziBucuresti, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
 import { PRAG_CITIRI, MAX_ORE, MAX_KM, verificaCitire, incarcaSurseMaxime, stabilesteSursa, textSursa, descrieSursa, confirmaAjustareManuala } from './lib/citiriBord.js'
 import PieseCatalogSection from './PieseCatalogSection.jsx'
 import ImportFiseServiceModal from './ImportFiseServiceModal.jsx'
@@ -2132,14 +2132,18 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     setFise(p => p.filter(f => f.id !== fisa.id))
   }, [showToast])
 
+  // TKT-2026-0380 (r3): fișele se citesc COMPLET (incarcaFiseService: paginat, verificat prin numărare).
+  // Dacă nu se pot citi toate: eroareFise + KPI-ul / filtrul „Scadențe” nu arată o cifră parțială.
+  // genLoad: o încărcare veche (sau una terminată după demontare) nu mai scrie peste cea nouă (L24).
+  const [eroareFise, setEroareFise] = useState('')
+  const genLoad = useRef(0)
+  useEffect(() => () => { genLoad.current++ }, [])
   const loadAll = useCallback(async () => {
+    const gen = ++genLoad.current
     setLoad(true)
     const [fisRes, actRes, presetRes, kmOreRes] = await Promise.all([
-      supabase
-        .from('logistica_service_fise')
-        .select('*, logistica_active(id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)), logistica_service_intrari(id)')
-        .order('data_fisei', { ascending:false, nullsFirst:false })
-        .order('id', { ascending:false }),
+      incarcaFiseService(() => supabase.from('logistica_service_fise'))
+        .then(data => ({ data, error: null }), error => ({ data: null, error })),
       supabase
         .from('logistica_active')
         .select('id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, fara_service_gazpet, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)')
@@ -2152,10 +2156,13 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
         .from('v_active_km_ore')
         .select('activ_id, km_live, ore_live'),
     ])
-    if (fisRes.error) showToast(`Eroare la încărcare fișe: ${fisRes.error.message}`, 'error')
+    if (gen !== genLoad.current) return
+    const mesajFise = fisRes.error ? (fisRes.error.message || String(fisRes.error)) : ''
+    if (mesajFise) showToast(`Eroare la încărcare fișe: ${mesajFise}`, 'error')
     if (actRes.error) showToast(`Eroare la încărcare active: ${actRes.error.message}`, 'error')
     if (presetRes.error) showToast(`Eroare la preset itemi: ${presetRes.error.message}`, 'error')
     if (kmOreRes.error) showToast(`Eroare la km/ore live: ${kmOreRes.error.message}`, 'error')
+    setEroareFise(mesajFise)
     setFise(fisRes.data || [])
     setActiveFull((actRes.data || []).map(a => ({
       ...a,
@@ -2301,6 +2308,8 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
   const surseCerute = useRef(new Set())
   const genSurse = useRef(0)
   useEffect(() => { genSurse.current++; surseCerute.current = new Set(); setSurseMari({}) }, [kmOreMap])
+  // r3 (L24): la demontare generația se schimbă → bucla de mai jos nu mai pornește alt lot și nu mai scrie
+  useEffect(() => () => { genSurse.current++ }, [])
   useEffect(() => {
     const ids = []
     for (const f of filtered) {
@@ -2386,6 +2395,8 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     : kpi.scadAproape > 0
       ? `${kpi.scadAproape} aproape (≤${PRAG_ZILE}z / ${PRAG_KM}km / ${PRAG_ORE}h)`
       : 'Toate la zi'
+  // TKT-2026-0380 (r3): fără lista completă de fișe nu există o cifră corectă (nici „Toate la zi”)
+  const faraFise = !!eroareFise
 
   return (
     <>
@@ -2410,6 +2421,12 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
       {view === 'fise' && (
       <>
       <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
+        {faraFise ? (<>
+          <KPICard icon="📋" label="Total fișe" value="—" color={G.muted} sub="fișele nu s-au putut citi" />
+          <KPICard icon="💰" label="Sumă totală" value="—" color={G.muted} />
+          <KPICard icon="📊" label="Acoperire flotă" value="—" color={G.muted} />
+          <KPICard icon="⛔" label="Scadențe service" value="—" color={G.red} sub="necunoscut: fișele nu s-au putut citi complet" />
+        </>) : (<>
         <KPICard icon="📋" label="Total fișe" value={kpi.total} color={G.logistica}
           sub={`${kpi.programat} programate · ${kpi.in_lucru} în lucru · ${kpi.finalizat} finalizate`} />
         <KPICard icon="💰" label="Sumă totală" value={kpi.sumaTotala.toLocaleString('ro-RO', {maximumFractionDigits:0}) + ' RON'} color={G.green} />
@@ -2419,7 +2436,18 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
           onClick={() => setAcoperireModal(true)} />
         <KPICard icon={scadIcon} label="Scadențe service" value={scadValue} color={scadColor} sub={scadSub}
           onClick={scadValue > 0 ? handleClickScadente : undefined} />
+        </>)}
       </div>
+
+      {faraFise && (
+        <div style={{ ...S.card, padding:'10px 14px', marginBottom:14, borderLeft:`3px solid ${G.red}`, background: G.red + '11',
+          display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
+          <div style={{fontSize:13, color:G.text}}>
+            ⛔ <strong>Fișele de service nu s-au putut citi complet</strong> — lista, totalurile și scadențele nu se afișează ca să nu pară complete. Detalii: {eroareFise}
+          </div>
+          <button onClick={loadAll} style={{...S.btnS, padding:'5px 12px', fontSize:11}}>↻ Reîncarcă</button>
+        </div>
+      )}
 
       {/* ETAPA 8.6: banner activ scadențe */}
       {scadenteOnly && (
@@ -2535,6 +2563,10 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
         <div style={{display:'flex', justifyContent:'center', padding:80}}>
           <div style={{width:32, height:32, border:`3px solid ${G.border}`, borderTopColor:G.logistica, borderRadius:'50%', animation:'sp 0.8s linear infinite'}} />
           <style>{`@keyframes sp { to { transform: rotate(360deg) } }`}</style>
+        </div>
+      ) : faraFise ? (
+        <div style={{...S.card, padding:40, textAlign:'center', color:G.muted}}>
+          <div style={{fontSize:14}}>Lista fișelor nu e disponibilă până la o încărcare completă (vezi mesajul de mai sus).</div>
         </div>
       ) : filtered.length === 0 ? (
         <div style={{...S.card, padding:60, textAlign:'center', color:G.muted}}>

@@ -13,6 +13,27 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { PRAG_CITIRI, zi, zileIntre } from './citiriBord.js'
+import { citesteCompletDupaId } from './logisticaTransporturi.js'
+
+// TKT-2026-0380 (r3): lista fișelor din tabul Service (din ea se calculează KPI-ul și filtrul
+// „Scadențe”) se citește COMPLET: serverul taie orice răspuns la 1.000 de rânduri fără eroare, iar o
+// fișă veche cu scadența depășită, rămasă după tăietură, ar scoate utilajul din „depășite”. Aceeași
+// citire ca la Transporturi (#1069): keyset pe id, numărare la început și la final, reîncercare de la
+// zero la orice abatere, altfel EROARE (niciodată o listă parțială prezentată ca întreagă).
+export const SELECT_FISE_SERVICE = '*, logistica_active(id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)), logistica_service_intrari(id)'
+export const NUME_FISE_SERVICE = { pl: 'fișe de service', plArt: 'fișele de service', unul: 'o fișă de service', art: 'fișa' }
+// Ordinea listei de până acum: data_fisei descrescător (fără dată la final), apoi id descrescător.
+export const ordineListaFise = (a, b) => {
+  const da = a.data_fisei || null, db = b.data_fisei || null
+  if (da !== db) { if (da == null) return 1; if (db == null) return -1; return da < db ? 1 : -1 }
+  return b.id - a.id
+}
+// tabel = () => client.from('logistica_service_fise'). Aruncă la orice eroare / citire incompletă.
+export async function incarcaFiseService(tabel, { pagina = 1000, incercari = 3 } = {}) {
+  const rows = await citesteCompletDupaId(o => tabel().select(o.head ? 'id' : SELECT_FISE_SERVICE, o),
+    { pagina, incercari, nume: NUME_FISE_SERVICE })
+  return rows.sort(ordineListaFise)
+}
 
 // Praguri pentru a marca o scadență drept „aproape" (galben)
 export const PRAG_ZILE = 30
@@ -40,6 +61,10 @@ export function citireFisa(fisa, tip) {
 // referinte = [{ val, data, sursa: 'fisa' | 'alimentare', id }]. Telemetria NU e referință (odometrul
 // GPS poate porni de la altă valoare decât bordul), valoarea manuală nu are dată.
 // Întoarce null (plauzibilă / nu se poate judeca) sau { motiv: 'plafon' | 'ritm', ref, zile, posibil, crestere }.
+// Limită cunoscută (r3): nu există o reconciliere a înlocuirii contorului / bordului. Dacă un contor
+// nou pornește de la altă valoare decât cel vechi, citirile de dinainte rămân referință și eticheta
+// „citire de verificat” poate apărea pe nedrept până la primele citiri datate de după înlocuire.
+// Eticheta doar cere verificarea; nivelul (depășit / aproape) nu se schimbă din cauza ei.
 export function citireNeverosimila(tip, live, referinte, azi = aziBucuresti()) {
   const p = PRAG_CITIRI[tip], L = numar(live)
   if (!p || L == null) return null
