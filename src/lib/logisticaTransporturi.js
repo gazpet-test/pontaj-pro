@@ -41,12 +41,15 @@ export function intervalPerioada(perioada, azi) {
   return { start: null, end: null }
 }
 
-// Un transport încă deschis, planificat ÎNAINTEA perioadei afișate, rămâne în listă până pleacă /
-// e livrat / e anulat: filtrul implicit „Luna” nu are voie să ascundă un transport aprobat vechi.
+// Un transport încă deschis, planificat ÎNAINTEA perioadei afișate sau FĂRĂ dată, rămâne în listă
+// până pleacă / e livrat / e anulat: filtrul implicit „Luna” nu are voie să ascundă un transport
+// aprobat vechi sau unul aprobat căruia nu i s-a pus data (r2, P2). Fără dată nu înseamnă „blocat”
+// (esteTransportBlocat rămâne neschimbat), doar vizibil.
 // Pentru 'tot' nu e nevoie (start null) — lista le are deja pe toate.
 export function esteDeschisDinainte(t, start) {
-  const data = zi(t?.data_transport)
-  return !!start && !!data && data < start && STATUS_DESCHIS.includes(t.status)
+  if (!start || !STATUS_DESCHIS.includes(t?.status)) return false
+  const data = zi(t.data_transport)
+  return t.data_transport == null || (!!data && data < start)
 }
 
 // Același criteriu, ca filtru client pentru o listă deja încărcată (paritate cu interogările).
@@ -79,4 +82,101 @@ export function filtreazaTransporturi(lista, statusFilter, azi) {
     return urcator ? (da.localeCompare(db) || (a.id - b.id)) : (db.localeCompare(da) || (b.id - a.id))
   })
   return r
+}
+
+// ============================================================
+// Citirea completă a listei (r2, P1 / L23): același contract ca citesteArhivaCompleta
+// (src/lib/arhivaAlimentari.js) — numărare exactă pe prima pagină, keyset până la capăt,
+// numărare finală, reîncercare de la zero la orice abatere, altfel EROARE (nu listă parțială).
+// Diferența: cheia de paginare e doar `id` (unic, nu se schimbă), pentru că data_transport poate
+// lipsi (aprobatele fără dată trebuie citite și ele). Ordinea afișată o pune filtreazaTransporturi.
+// ============================================================
+
+export const TRANSPORTURI_INSTABILE = 'transporturi_instabile'
+export const PAGINA_TRANSPORTURI = 500
+
+const numarConfirmat = count => {
+  if (!Number.isInteger(count) || count < 0) throw new Error('Serverul nu a confirmat numărul total de transporturi.')
+  return count
+}
+
+// O trecere: { rows, anomalie }. interogare(optiuni) = builder cu .select(..., optiuni) + filtre,
+// FĂRĂ ordine / limită / cheie (le pune helperul). optiuni: { count: 'exact' } pe prima pagină,
+// {} pe următoarele, { count: 'exact', head: true } la numărarea finală.
+export async function citesteOTrecereDupaId(interogare, pagina = PAGINA_TRANSPORTURI) {
+  const rows = [], ids = new Set()
+  let total = null, ultim = null
+  while (true) {
+    let q = interogare(total === null ? { count: 'exact' } : {})
+    if (ultim !== null) q = q.gt('id', ultim)
+    const { data, error, count } = await q.order('id', { ascending: true }).limit(pagina)
+    if (error) throw error
+    if (!Array.isArray(data)) throw new Error('Serverul a întors un răspuns invalid pentru transporturi.')
+    if (total === null) total = numarConfirmat(count)
+    for (const row of data) {
+      const id = row?.id
+      if (!Number.isSafeInteger(id)) throw new Error('Serverul a întors un transport fără ID valid; lista nu poate fi paginată sigur.')
+      if (ultim !== null && !(id > ultim)) throw new Error('Serverul a întors transporturile în altă ordine decât cea cerută.')
+      if (ids.has(id)) return { rows, anomalie: `transportul #${id} a apărut de două ori` }
+      ids.add(id)
+      rows.push(row)
+      ultim = id
+    }
+    if (rows.length > total) return { rows, anomalie: `au apărut transporturi noi în timpul citirii (${rows.length} față de ${total})` }
+    // Gata la pagina goală, sau la pagina scurtă care a atins totalul. O pagină scurtă sub total
+    // poate fi plafonul de rânduri al serverului (sub `pagina`) → continui de la ultimul id.
+    if (!data.length || (data.length < pagina && rows.length >= total)) break
+  }
+  const { error, count } = await interogare({ count: 'exact', head: true })
+  if (error) throw error
+  const final = numarConfirmat(count)
+  if (rows.length !== total || final !== total) {
+    return { rows, anomalie: `numărul s-a modificat în timpul citirii (la început ${total}, citite ${rows.length}, la final ${final})` }
+  }
+  return { rows, anomalie: null }
+}
+
+export async function citesteCompletDupaId(interogare, { pagina = PAGINA_TRANSPORTURI, incercari = 3 } = {}) {
+  let anomalie = null
+  for (let i = 0; i < incercari; i++) {
+    const r = await citesteOTrecereDupaId(interogare, pagina)
+    if (!r.anomalie) return r.rows
+    anomalie = r.anomalie
+  }
+  const e = new Error(`Transporturile s-au modificat în timpul încărcării la ${incercari} încercări consecutive (ultima: ${anomalie}). Reîncercați peste câteva momente.`)
+  e.code = TRANSPORTURI_INSTABILE
+  throw e
+}
+
+// Filtrele celor (cel mult) trei citiri ale listei, ca funcții q => q (fără select / ordine):
+//  - 'perioada': transporturile din perioadă (la 'tot': toate, inclusiv cele fără dată);
+//  - 'deschise_dinainte': aprobat / programat / în tranzit planificate înainte de început;
+//  - 'deschise_fara_data': aceleași statusuri, fără dată (filtrul de perioadă nu le prinde).
+// „Doar ale mele” se aplică pe fiecare. Citiri separate, reunite pe id (fără .or() combinat).
+export function filtreTransporturi({ perioada, azi, meleId = null }) {
+  const { start, end } = intervalPerioada(perioada, azi)
+  const mele = q => meleId
+    ? q.or(`solicitant_id.eq.${meleId},manager_destinatie_id.eq.${meleId},manager_plecare_id.eq.${meleId}`)
+    : q
+  const filtre = [{
+    nume: 'perioada',
+    aplica: q => { if (start) q = q.gte('data_transport', start); if (end) q = q.lte('data_transport', end); return mele(q) },
+  }]
+  if (start) {
+    filtre.push({ nume: 'deschise_dinainte', aplica: q => mele(q.in('status', STATUS_DESCHIS).lt('data_transport', start)) })
+    filtre.push({ nume: 'deschise_fara_data', aplica: q => mele(q.in('status', STATUS_DESCHIS).is('data_transport', null)) })
+  }
+  return { start, end, filtre }
+}
+
+// Încarcă TOATĂ lista pentru perioadă (orice eroare / instabilitate = excepție; apelantul nu
+// publică nimic parțial). tabel() = supabase.from('logistica_transporturi'); select = coloanele.
+export async function incarcaTransporturi(tabel, { select, perioada, azi, meleId = null, pagina = PAGINA_TRANSPORTURI, incercari = 3 }) {
+  const { filtre } = filtreTransporturi({ perioada, azi, meleId })
+  const rezultate = await Promise.all(filtre.map(f => citesteCompletDupaId(
+    optiuni => f.aplica(tabel().select(optiuni.head ? 'id' : select, optiuni)),
+    { pagina, incercari },
+  )))
+  // Filtrul e pus de server; nu mai refiltrez în client (un rând aruncat aici ar dispărea tacit, L12).
+  return reunesteTransporturi(...rezultate)
 }

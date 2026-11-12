@@ -5,7 +5,7 @@ import { employeeFieldRead, withEmployeePersonal } from './employeesPersonal.js'
 
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
-import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, intervalPerioada, esteDeschisDinainte, reunesteTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
+import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
 import { ziBucuresti } from './adminAlerte.js'
 import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT } from './lib/arhivaAlimentari.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
@@ -7019,7 +7019,6 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
     setLoading(true)
     setLoadError('')
     const azi = ziBucuresti()
-    const { start, end } = intervalPerioada(perioadaFilter, azi)
     const select = `*,
         activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
         masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
@@ -7034,38 +7033,21 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
         manager_destinatie:profiles!manager_destinatie_id(id, name, role),
         confirmat_de:profiles!confirmat_primire_de(name)
       `
-    // Filtru "Doar ale mele" se aplică tot la DB, pe ambele interogări
-    const mele = q => (meleFilter && profile?.id)
-      ? q.or(`solicitant_id.eq.${profile.id},manager_destinatie_id.eq.${profile.id},manager_plecare_id.eq.${profile.id}`)
-      : q
-    // (1) transporturile din perioadă (filtru la nivel DB; cele mai recente întâi, ca plafonul
-    //     serverului de 1000 de rânduri să taie doar coada veche — semnalat mai jos)
-    let qPerioada = supabase.from('logistica_transporturi').select(select)
-    if (start) qPerioada = qPerioada.gte('data_transport', start)
-    if (end) qPerioada = qPerioada.lte('data_transport', end)
-    qPerioada = qPerioada.order('data_transport', { ascending: false }).order('id', { ascending: false })
-    // (2) cele încă deschise (aprobat / programat / în tranzit) planificate ÎNAINTEA perioadei
-    //     (la „Toate”: înainte de azi): rămân vizibile până pleacă / sunt livrate / anulate,
-    //     oricare ar fi perioada și oricât de lungă ar fi lista. Interogare separată (nu .or()
-    //     combinat cu „ale mele”), reunită pe id.
-    const pragDeschise = start || azi
-    const qDeschise = mele(supabase.from('logistica_transporturi').select(select)
-      .in('status', STATUS_DESCHIS).lt('data_transport', pragDeschise))
+    // Citire COMPLETĂ, paginată pe id, cu numărare la început și la final (incarcaTransporturi,
+    // src/lib/logisticaTransporturi.js; r2 / L23): (1) transporturile din perioadă, (2) cele încă
+    // deschise (aprobat / programat / în tranzit) planificate înainte de perioadă și (3) cele deschise
+    // fără dată — rămân vizibile până pleacă / sunt livrate / anulate. „Doar ale mele” pe fiecare.
+    // Orice eroare sau listă care nu se poate citi întreagă = mesaj vizibil, NU listă parțială.
     try {
-      const [rP, rD] = await Promise.all([mele(qPerioada), qDeschise])
+      const rows = await incarcaTransporturi(() => supabase.from('logistica_transporturi'), {
+        select, perioada: perioadaFilter, azi, meleId: (meleFilter && profile?.id) ? profile.id : null,
+      })
       if (req !== fetchReq.current) return
-      const err = rP.error || rD.error
-      if (err) {
-        // L18: eroarea nu se afișează ca „nicio cerere în această perioadă”
-        console.error('Eroare fetch transporturi:', err)
-        setAllInPeriod([])
-        setLoadError(err.message || String(err))
-      } else {
-        setAllInPeriod(reunesteTransporturi(rP.data, (rD.data || []).filter(t => esteDeschisDinainte(t, pragDeschise))))
-        if ((rP.data || []).length >= 1000) setLoadError('Lista din perioadă a atins plafonul de 1000 de rânduri: se văd doar cele mai recente (cele încă deschise apar oricum). Alegeți o perioadă mai scurtă pentru restul.')
-      }
+      setAllInPeriod(rows)
     } catch (e) {
       if (req !== fetchReq.current) return
+      // L18: eroarea nu se afișează ca „nicio cerere în această perioadă”
+      console.error('Eroare fetch transporturi:', e)
       setAllInPeriod([])
       setLoadError(e?.message || String(e))
     } finally {
