@@ -43,8 +43,9 @@ nefuncționale putea fi lungă → primele 3 + „+N”; temperatura cu zecimale
 
 ## Unde se generează (decizia de la pct. 3) — în baza de date, în aceeași tranzacție cu salvarea
 
-Coloanele noi pe `rapoarte_zilnice`: `rezumat_text`, `rezumat_sursa` (`automat` / `editat`), `rezumat_la`, `rezumat_de` (gol la automat),
-`rezumat_eroare` (r3: codul ultimei compuneri automate eșuate; gol = a reușit).
+Coloanele noi pe `rapoarte_zilnice`: `rezumat_text`, `rezumat_sursa` (`automat` / `editat` / r4: `de_recompus`), `rezumat_la`, `rezumat_de`
+(gol la automat), `rezumat_eroare` (r3: codul ultimei compuneri automate eșuate; gol = a reușit), `rezumat_proiect_id` (r4: proiectul pentru
+care s-a compus / corectat textul).
 
 **Ales: generarea pe server, prin trigger, nu în client.** Motivele:
 
@@ -73,6 +74,16 @@ Cum lucrează:
   salvează, rezumatul rămâne cel de dinainte (raport nou: fără rezumat), iar codul erorii se notează pe rând (`rezumat_eroare`, doar codul);
   rubrica arată „Rezumatul automat nu s-a putut reface la ultima salvare (cod …)”. La „Generează” / „Revino la automat” eroarea se arată omului.
 
+- (r4) **șantierul mutat în alt proiect**: textul salvat nu mai rămâne cu numele proiectului / activităților / obiectelor vechi. Pe raport se
+  ține și proiectul pentru care s-a compus textul (`rezumat_proiect_id`). La mutarea șantierului (trigger pe `sites`, în aceeași tranzacție):
+  - rezumatele **automate** devin „de refăcut” (`rezumat_sursa = 'de_recompus'`, text gol; versiunea raportului nu crește); rubrica spune
+    „Șantierul a fost mutat în alt proiect: rezumatul vechi a fost scos” și se reface la următoarea salvare sau cu „Generează”, pe proiectul nou;
+  - rezumatele **corectate de om** opresc mutarea: mesajul cere „Revino la automat” pe ele întâi. Textul omului descrie lucrările proiectului
+    vechi, deci pentru cel nou e oricum greșit; refuzul lasă decizia omului, fără să piardă nimic în tăcere;
+  - același lucru dacă un raport e mutat pe un șantier din alt proiect;
+  - mutarea așteaptă salvările de rapoarte în curs (cel mult 3 s, altfel nu trece) și invers, ca niciun raport salvat „în paralel” să nu
+    rămână cu textul vechi; costul: un `UPDATE` pe raport, fără recompunere (pe PGlite: 2000 de rapoarte în ~75 ms).
+
 Prețul: regula textului există în două limbaje — SQL (`fn_raport_rezumat_text`, cea care scrie în BD) și JS (`rezumatRaport` din
 `src/raportRezumat.js`, pentru proba pe date reale). Paritatea e verificată pe **același tabel de cazuri** (`src/raportRezumat.cazuri.json`,
 rezultatele scrise de mână), în vitest (JS) și în harness-ul SQL (T1), plus mutanți pe PGlite care trebuie să pice.
@@ -80,6 +91,18 @@ rezultatele scrise de mână), în vitest (JS) și în harness-ul SQL (T1), plus
 Rapoartele salvate înainte de migrare rămân fără rezumat până la prima lor salvare (sau „Generează” din rubrică). O generare în masă e un pas
 separat, pe date reale (preview → „da” → aplicare): `UPDATE rapoarte_zilnice SET rezumat_sursa = 'automat' WHERE rezumat_sursa IS NULL` — nu
 mărește versiunile (schimbă doar rezumatul automat).
+
+## Decizii pentru owner (fără cod în această migrare, r4)
+
+- **Drepturile de azi pe `rapoarte_zilnice` sunt înghețate în baseline-ul migrării, nu acceptate de ea.** Rolul `anon` (vizitator nelogat) are
+  pe tabel SELECT / INSERT / UPDATE / DELETE / REFERENCES / TRIGGER, iar pe secvența `rapoarte_zilnice_id_seq` SELECT / USAGE / UPDATE.
+  Politicile (RLS) nu-i dau niciun rând, dar RLS nu protejează secvența (un `anon` poate avansa numărătoarea id-urilor). Migrarea doar
+  verifică faptul că starea e exact cea de azi (înainte și după).
+- **Acceptarea lor sau curățarea (REVOKE pentru `anon`) e o decizie separată a lui Răzvan**, cu migrarea ei. O curățare făcută după
+  aplicarea acestei migrări nu o atinge; una făcută ÎNAINTE de aplicare schimbă baseline-ul: etichetele `tabel rapoarte_zilnice | acl`,
+  `tabel rapoarte_zilnice | secvente` (și `tabel rapoarte_zilnice | politici`, dacă se schimbă și politica `rapoarte_sel`), deci baseline-ul se
+  scoate din nou cu `scripts/raport_rezumat_amprente.sql` și intră iar în review. La fel pentru `tabel sites | …` (r4), dacă se curăță și
+  drepturile pe șantiere.
 
 ## În aplicație
 
@@ -160,13 +183,16 @@ Recomandare: **A** acum (rapid, fără risc), **B** când e nevoie de poze pe tr
 - `supabase/migrations/20261216a_executie_raport_rezumat.sql` (NEAPLICAT) + `supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql`
 - `scripts/raport_rezumat_amprente.sql` — (r3) amprenta L15 pentru blocul BASELINE al migrării, DOAR citire (coordonatorul, pe producție)
 - `scripts/raport_rezumat_vizibilitate.sql` — (r3) proba „cititorul vede tot ce intră în rezumat”, DOAR citire (clonă / producție)
-- `scripts/raport_rezumat_concurenta.sh` — (r3) două telefoane pe aceeași versiune, cu două sesiuni reale (DOAR clonă)
-- `scripts/test_executie_raport_rezumat.sql` — harness pentru clonă (T0–T11: paritate, salvare prin RPC, CAS, corectură, identitate, drepturi,
-  căile directe, eroare injectată în compunere, linii din alt proiect, revenire, re-aplicare)
-- `scripts/pglite/test_raport_rezumat_local.mjs` — același harness local (PGlite) + 31 de mutanți + scenariile de refuz (baseline, plafon, stare schimbată, revenire)
+- `scripts/raport_rezumat_concurenta.sh` — (r3) două telefoane pe aceeași versiune, cu două sesiuni reale (DOAR clonă); (r4) S4 / S5:
+  mutarea șantierului cu o salvare în zbor, în ambele ordini
+- `scripts/test_executie_raport_rezumat.sql` — harness pentru clonă (T0–T12: paritate, salvare prin RPC, CAS, corectură, identitate, drepturi,
+  căile directe, eroare injectată în compunere, linii din alt proiect, (r4) mutarea șantierului citită de un cont restrâns la proiectul nou,
+  revenire, re-aplicare)
+- `scripts/pglite/test_raport_rezumat_local.mjs` — același harness local (PGlite) + 39 de mutanți + scenariile de refuz (baseline, plafon, stare
+  schimbată, mutare în REPEATABLE READ, revenire fără plafon / armată vechi, costul mutării)
 - `scripts/raport_rezumat_proba.sql` + `.mjs` — proba pe 20 de rapoarte reale, DOAR citire, înainte de aplicare
 - **Livrarea** (r3): DOAR cu `scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000`, după ce blocul BASELINE e completat și revizuit
-  (pașii exacți: antetul migrării și raportul PR-ului).
+  (pașii exacți: antetul migrării și raportul PR-ului). (r4) Și **revenirea** trece prin același runner, cu același plafon (antetul ei).
 
 Proba pe date reale (coordonatorul):
 

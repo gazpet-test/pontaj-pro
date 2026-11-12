@@ -46,6 +46,28 @@
 --     raportului. Axa modulului (politicile de azi ale tabelelor-sursă, pe care repo-ul nu le are) se probează pe date:
 --     scripts/raport_rezumat_vizibilitate.sql (doar citire): pentru fiecare cont ne-owner, intrarea compusă CA EL (RLS-ul lui) = intrarea
 --     compusă ca proprietar, pe fiecare raport pe care îl vede; o diferență = NO-GO la aplicare.
+--   * r4 (Jakarinos r3 P1: textul SALVAT după mutarea șantierului în alt proiect). Varianta (a): INVALIDARE în aceeași tranzacție cu mutarea.
+--     - rezumat_proiect_id (nou) = proiectul șantierului pentru care s-a compus / corectat textul, pus DOAR de server (L08);
+--     - trigger AFTER UPDATE pe sites, doar când proiect_id se schimbă (trg_raport_rezumat_santier_mutat): rezumatele AUTOMATE ale rapoartelor
+--       șantierului compuse pentru alt proiect devin 'de_recompus' (text NULL, rezumat_la = momentul invalidării, fără compunere: costul e un
+--       UPDATE pe rând, prin indexul (site_id, data)); versiunea raportului NU crește (se schimbă doar derivatul). Următoarea salvare sau
+--       „Generează” îl refac pe proiectul NOU;
+--     - rezumatele CORECTATE de om (editat) pentru proiectul vechi OPRESC mutarea (55000, nimic schimbat), până la „Revino la automat” pe ele.
+--       De ce refuz și nu ascundere / mutare a textului: textul omului descrie lucrările proiectului vechi (pentru proiectul nou e greșit
+--       oricum); ascunderea la citire nu se poate impune în BD fără drepturi pe coloane (rupe select('*') din aplicație), iar o copie „doar
+--       pentru owner” = tabel nou + RLS nou pentru un caz rar. Refuzul nu pierde nimic în tăcere (L12) și lasă decizia omului, pe calea care
+--       există deja (identitate + drept pe șantier + CAS);
+--     - aceeași regulă pe rândul raportului (garda): o scriere fără rezumat pe un rând al cărui rezumat e pentru alt proiect decât cel de acum
+--       al șantierului (raport mutat pe alt șantier) = automat -> 'de_recompus', editat -> refuz 55000;
+--     - concurența (L06): mutarea ia, după rândul șantierului (luat de UPDATE), lock-ul EXCLUSIVE pe rapoarte_zilnice (așteptare ≤ 3 s, peste =
+--       55P03, mutarea nu trece). EXCLUSIVE intră în conflict și cu ROW SHARE (FOR UPDATE din RPC): o salvare în curs (care a citit proiectul
+--       vechi) se termină înainte, iar invalidarea o vede; o salvare care începe după așteaptă mutarea și compune pe proiectul nou. Fără
+--       lock, un raport NOU inserat în paralel (necomis, invizibil pentru UPDATE) ar rămâne cu textul proiectului vechi
+--       (scripts/raport_rezumat_concurenta.sh S4 / S5). Salvarea nu blochează niciodată rândul șantierului (FK-ul ia FOR KEY SHARE, compatibil
+--       cu UPDATE-ul lui proiect_id), deci nu există ciclu. Mutarea cere READ COMMITTED (altfel invalidarea n-ar vedea rândurile comise între
+--       timp): refuz 0A000. Trigger-ul de acces pe rapoarte (20261209a) verifică și aici dreptul celui care mută pe proiectul rapoartelor:
+--       un cont restrâns fără drept de scriere pe proiectul nou nu poate muta un șantier cu rezumate (42501).
+--     - Ce NU acoperă (date care nu se mută azi din aplicație): o activitate / un obiect / o linie mutată în alt proiect după compunere.
 -- De ce NU se schimbă fn_raport_zilnic_salveaza: 20261209a (acces pe proiect, neaplicată la scriere) îi ține amprenta corpului în inventar,
 --   iar 20261213a ține amprenta inventarului; o schimbare a RPC-ului le-ar opri pe amândouă. Funcțiile de aici nu sunt apelabile din API
 --   (fără EXECUTE pentru anon / authenticated / service_role), deci nici detectorul de catalog al lui 20261209a nu le cere clasificare.
@@ -60,15 +82,24 @@
 --   politicile, inventarul triggerelor; pe funcții: tip, limbaj, DEFINER, proprietar, configurația (search_path), drepturile, md5 pe corp.
 --   Corpul de calcul AMPRENTA_L15 v1 e IDENTIC (L19) cu cel din scripts/tichete_lot2_amprente.sql (testul src/raportRezumatAmprente.test.js).
 --   Valorile le scoate coordonatorul cu scripts/raport_rezumat_amprente.sql (tranzacție READ ONLY) și le copiază în blocul BASELINE;
---   necompletat = migrarea refuză. „După” = baseline-ul exact, cu DOUĂ excepții declarate: inventarul triggerelor celor două tabele are în
+--   necompletat = migrarea refuză. „După” = baseline-ul exact, cu DOUĂ excepții declarate: inventarul triggerelor celor TREI tabele are în
 --   plus EXACT triggerul nou al fiecăruia (restul liniilor, octet cu octet, ca înainte), iar lista de funcții are în plus EXACT funcțiile
---   celor două triggere noi (proprietățile lor: postcondițiile).
+--   celor trei triggere noi (proprietățile lor: postcondițiile).
+--   r4: tabelul sites intră în amprentă (trigger-ul nou de mutare stă pe el): etichetele „tabel sites | …” și funcțiile din politicile /
+--   triggerele lui sunt NOI în baseline, marcate DE_COMPLETAT (= refuz) până le scoate coordonatorul cu același script. Cele 29 de etichete
+--   deja lipite nu se schimbă (fiecare se calculează doar pe obiectul ei); scriptul rulat din nou trebuie să le dea identic.
+--   Decizie separată a owner-ului (r3 P2, fără cod aici): baseline-ul îngheață drepturile de AZI pe rapoarte_zilnice — rolul anon are
+--   SELECT / INSERT / UPDATE / DELETE / REFERENCES / TRIGGER pe tabel (RLS fără politică pentru anon blochează rândurile) și SELECT / USAGE /
+--   UPDATE pe secvența rapoarte_zilnice_id_seq (RLS nu protejează secvența). Migrarea nu le acceptă și nu le schimbă: o curățare ulterioară
+--   (REVOKE) schimbă etichetele „tabel rapoarte_zilnice | acl” și „tabel rapoarte_zilnice | secvente” (și „… | politici” dacă se atinge
+--   politica rapoarte_sel), deci baseline-ul se scoate din nou după ea (docs/RAPORT_REZUMAT_E1.md, „Decizii pentru owner”).
 --
 -- Livrare (r3, Jakarinos P1 la aplicare): DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (runnerul trimite toată
 --   tranzacția într-UN singur mesaj, PR #1072). Fără plafon migrarea refuză ($pre$ cere 2000/session citit calificat din pg_catalog +
 --   marcajul gazpet.plafon_tranzactie = '2000:<txid>' pus de prologul runnerului).
 --   Lock-urile (L06, ordinea RPC-ului de salvare): rapoarte_zilnice ACCESS EXCLUSIVE (cerut de ADD COLUMN / CREATE TRIGGER), apoi
---   raport_zilnic_salvari SHARE ROW EXCLUSIVE (cerut de CREATE TRIGGER), ținute până la COMMIT. Luate DUPĂ verificările care citesc doar
+--   raport_zilnic_salvari SHARE ROW EXCLUSIVE (cerut de CREATE TRIGGER), apoi (r4, tabelul altui modul, ULTIMUL) sites SHARE ROW EXCLUSIVE
+--   (cerut de CREATE TRIGGER: oprește scurt scrierile pe sites, nu și citirile), ținute până la COMMIT. Luate DUPĂ verificările care citesc doar
 --   catalogul (garda, amprenta L15 „înainte”), cu NOWAIT, într-o sub-tranzacție reîncercată la 50 ms până la 1 s de la BEGIN; peste =
 --   refuz 55P03, nimic schimbat (NOWAIT nu intră în coada lock-ului: citirile / salvările telefoanelor nu se așează în spatele migrării).
 --   lock_timeout 100 ms pentru orice altă așteptare. La rulare: trigger-ul de pe jurnal actualizează rândul raportului deja blocat de RPC
@@ -84,7 +115,7 @@
 --   (--plafon-tranzactie-ms 2000): NOTICE-ul „20261216a: lock-uri la X ms … sfarsit la Y ms de la BEGIN” al migrării + LIVRARE_TIMP /
 --   PLAFON_TIMP ale runnerului; țintă Y < 1000. Dacă Y ≥ 1500 pe clonă, NU se aplică: se cere altă valoare în review (nu se urcă singur).
 --   Garanția (formularea runnerului): ~2 s de la BEGIN până la intrarea în COMMIT; COMMIT-ul propriu-zis nu e plafonat.
--- Revenire: supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql. Test: scripts/test_executie_raport_rezumat.sql (clonă) +
+-- Revenire: supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql (r4: tot prin runner, cu --plafon-tranzactie-ms 2000). Test: scripts/test_executie_raport_rezumat.sql (clonă) +
 --   scripts/pglite/test_raport_rezumat_local.mjs (local, PGlite) + scripts/raport_rezumat_concurenta.sh (clonă, două sesiuni).
 DO $pre$
 DECLARE r record; v_tip text; v_plafon text;
@@ -113,10 +144,10 @@ BEGIN
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rapoarte_zilnice'
-               AND column_name IN ('rezumat_text', 'rezumat_sursa', 'rezumat_la', 'rezumat_de', 'rezumat_eroare'))
+               AND column_name IN ('rezumat_text', 'rezumat_sursa', 'rezumat_la', 'rezumat_de', 'rezumat_eroare', 'rezumat_proiect_id'))
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_raport\_rezumat\_%')
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_zilnic_zz_rezumat', 'trg_raport_zilnic_salvari_rezumat'))
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_raport_zilnic_zz_rezumat', 'trg_raport_zilnic_salvari_rezumat', 'trg_raport_rezumat_santier_mutat'))
      OR EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rapoarte_zilnice_rezumat_ck') THEN
     RAISE EXCEPTION '20261216a: obiectele exista deja (reaplicare)';
   END IF;
@@ -216,13 +247,22 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
     , ('tabel raport_zilnic_salvari | rls', '0a318f8ff8d8cc0bbd7b4b61a975f7b3')
     , ('tabel raport_zilnic_salvari | secvente', 'c682593c295df7f5bac08453a7869d18')
     , ('tabel raport_zilnic_salvari | triggere', '7fd4342f774415f814a99973b428be52')
+    -- r4: etichete NOI (tabelul sites intră în amprentă); DE_COMPLETAT = refuz. Coordonatorul rulează din nou scripts/raport_rezumat_amprente.sql
+    --     și lipește TOATĂ coloana linie_baseline (cele 29 de mai sus trebuie să iasă identic); scriptul dă în plus și funcțiile din
+    --     politicile / triggerele lui sites, care nu se pot ști de aici (etichete „functie …”).
+    , ('tabel sites | acl', 'DE_COMPLETAT')
+    , ('tabel sites | acl coloane', 'DE_COMPLETAT')
+    , ('tabel sites | politici', 'DE_COMPLETAT')
+    , ('tabel sites | rls', 'DE_COMPLETAT')
+    , ('tabel sites | secvente', 'DE_COMPLETAT')
+    , ('tabel sites | triggere', 'DE_COMPLETAT')
   ) v(eticheta, amprenta)
 $bl$;
 -- <<< BASELINE 20261216a
 CREATE FUNCTION pg_temp.amp_calc_20261216a() RETURNS TABLE (eticheta text, amprenta text, detaliu text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $amp$
 WITH
-amp_tabele(oid) AS (VALUES ('public.rapoarte_zilnice'::regclass::oid), ('public.raport_zilnic_salvari'::regclass::oid)),
+amp_tabele(oid) AS (VALUES ('public.rapoarte_zilnice'::regclass::oid), ('public.raport_zilnic_salvari'::regclass::oid), ('public.sites'::regclass::oid)),
 amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_20261216a() b WHERE b.eticheta LIKE 'functie %'),
 -- >>> AMPRENTA_L15 v1
 amp_functii(oid) AS (
@@ -322,22 +362,27 @@ BEGIN
     SELECT c.eticheta,
            CASE
              -- inventarul triggerelor DUPĂ: fără linia triggerului nou al tabelului (exact una, activă), restul în ordinea lor = cel de dinainte
-             WHEN p_moment = 'dupa' AND c.eticheta IN ('tabel rapoarte_zilnice | triggere', 'tabel raport_zilnic_salvari | triggere') THEN
+             -- (r4: și sites, cu triggerul de mutare; fiecare tabel are EXACT triggerul lui, nu al altuia)
+             WHEN p_moment = 'dupa' AND c.eticheta IN ('tabel rapoarte_zilnice | triggere', 'tabel raport_zilnic_salvari | triggere', 'tabel sites | triggere') THEN
                CASE WHEN (SELECT count(*) FROM unnest(string_to_array(c.detaliu, chr(10))) l
-                           WHERE l LIKE CASE WHEN c.eticheta LIKE 'tabel rapoarte_zilnice%' THEN 'trg\_raport\_zilnic\_zz\_rezumat | %'
-                                             ELSE 'trg\_raport\_zilnic\_salvari\_rezumat | %' END) = 1
+                           WHERE l LIKE 'trg\_raport\_zilnic\_zz\_rezumat | %' OR l LIKE 'trg\_raport\_zilnic\_salvari\_rezumat | %'
+                              OR l LIKE 'trg\_raport\_rezumat\_santier\_mutat | %') = 1
                          AND (SELECT count(*) FROM unnest(string_to_array(c.detaliu, chr(10))) l
-                               WHERE l LIKE 'trg\_raport\_zilnic\_zz\_rezumat | fn\_raport\_rezumat\_garda() | stare=O | %'
-                                  OR l LIKE 'trg\_raport\_zilnic\_salvari\_rezumat | fn\_raport\_rezumat\_dupa\_salvare() | stare=O | %') = 1
+                               WHERE l LIKE CASE c.eticheta
+                                 WHEN 'tabel rapoarte_zilnice | triggere' THEN 'trg\_raport\_zilnic\_zz\_rezumat | fn\_raport\_rezumat\_garda() | stare=O | %'
+                                 WHEN 'tabel raport_zilnic_salvari | triggere' THEN 'trg\_raport\_zilnic\_salvari\_rezumat | fn\_raport\_rezumat\_dupa\_salvare() | stare=O | %'
+                                 ELSE 'trg\_raport\_rezumat\_santier\_mutat | fn\_raport\_rezumat\_santier\_mutat() | stare=O | %' END) = 1
                     THEN md5(coalesce(nullif((SELECT string_agg(u.l, chr(10) ORDER BY u.o)
                                                 FROM unnest(string_to_array(c.detaliu, chr(10))) WITH ORDINALITY u(l, o)
                                                WHERE u.l NOT LIKE 'trg\_raport\_zilnic\_zz\_rezumat | %'
-                                                 AND u.l NOT LIKE 'trg\_raport\_zilnic\_salvari\_rezumat | %'), ''), '(fara triggere)'))
+                                                 AND u.l NOT LIKE 'trg\_raport\_zilnic\_salvari\_rezumat | %'
+                                                 AND u.l NOT LIKE 'trg\_raport\_rezumat\_santier\_mutat | %'), ''), '(fara triggere)'))
                     ELSE 'triggerul nou lipseste / e dublat / oprit' END
              ELSE c.amprenta END AS amprenta
       FROM pg_temp.amp_calc_20261216a() c
-     -- funcțiile celor două triggere noi există doar DUPĂ (proprietățile lor: postcondițiile)
-     WHERE NOT (p_moment = 'dupa' AND c.eticheta IN ('functie fn_raport_rezumat_garda()', 'functie fn_raport_rezumat_dupa_salvare()'))
+     -- funcțiile celor trei triggere noi există doar DUPĂ (proprietățile lor: postcondițiile)
+     WHERE NOT (p_moment = 'dupa' AND c.eticheta IN ('functie fn_raport_rezumat_garda()', 'functie fn_raport_rezumat_dupa_salvare()',
+                                                     'functie fn_raport_rezumat_santier_mutat()'))
   )
   SELECT string_agg(coalesce(c.eticheta, b.eticheta) || ' = ' || coalesce(c.amprenta, 'LIPSESTE') || ' (baseline ' || coalesce(b.amprenta, 'NU ARE') || ')',
                     '; ' ORDER BY coalesce(c.eticheta, b.eticheta) COLLATE "C")
@@ -364,10 +409,11 @@ BEGIN
     BEGIN
       LOCK TABLE public.rapoarte_zilnice IN ACCESS EXCLUSIVE MODE NOWAIT;
       LOCK TABLE public.raport_zilnic_salvari IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+      LOCK TABLE public.sites IN SHARE ROW EXCLUSIVE MODE NOWAIT;   -- r4: tabelul altui modul, ultimul (CREATE TRIGGER pe el)
       EXIT;
     EXCEPTION WHEN lock_not_available THEN
       IF clock_timestamp() >= now() + interval '1 second' THEN
-        RAISE EXCEPTION '20261216a: BUGET_LOCK: rapoarte_zilnice / raport_zilnic_salvari ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
+        RAISE EXCEPTION '20261216a: BUGET_LOCK: rapoarte_zilnice / raport_zilnic_salvari / sites ocupate; % incercari, % ms de la BEGIN; nimic schimbat',
           v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
       END IF;
       PERFORM pg_sleep(0.05);
@@ -383,14 +429,19 @@ ALTER TABLE public.rapoarte_zilnice
   ADD COLUMN rezumat_la timestamptz,
   ADD COLUMN rezumat_de uuid,
   ADD COLUMN rezumat_eroare text,
+  ADD COLUMN rezumat_proiect_id bigint,
   ADD CONSTRAINT rapoarte_zilnice_rezumat_ck CHECK (
-    ((rezumat_sursa IS NULL AND rezumat_text IS NULL AND rezumat_la IS NULL AND rezumat_de IS NULL)
+    ((rezumat_sursa IS NULL AND rezumat_text IS NULL AND rezumat_la IS NULL AND rezumat_de IS NULL AND rezumat_proiect_id IS NULL)
      OR (rezumat_sursa = 'automat' AND rezumat_text IS NOT NULL AND rezumat_la IS NOT NULL AND rezumat_de IS NULL)
-     OR (rezumat_sursa = 'editat' AND rezumat_text ~ '[^[:space:]]' AND char_length(rezumat_text) <= 4000 AND rezumat_la IS NOT NULL AND rezumat_de IS NOT NULL))
+     OR (rezumat_sursa = 'editat' AND rezumat_text ~ '[^[:space:]]' AND char_length(rezumat_text) <= 4000 AND rezumat_la IS NOT NULL AND rezumat_de IS NOT NULL)
+     OR (rezumat_sursa = 'de_recompus' AND rezumat_text IS NULL AND rezumat_la IS NOT NULL AND rezumat_de IS NULL AND rezumat_proiect_id IS NULL))
     AND (rezumat_eroare IS NULL OR rezumat_eroare ~ '^[0-9A-Z]{5}$')) NOT VALID;
 COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_text IS
   'Rezumatul scurt al raportului (WhatsApp / director). Automat = fn_raport_rezumat_text, refăcut de server la fiecare salvare; editat = corectat de om, nu se suprascrie. 20261216a.';
-COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_sursa IS 'automat / editat (NULL = raport salvat înainte de 20261216a, încă fără rezumat). 20261216a.';
+COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_sursa IS
+  'automat / editat / de_recompus (r4: șantierul s-a mutat în alt proiect, textul vechi a fost scos; se reface la următoarea salvare sau la „Generează”). NULL = raport salvat înainte de 20261216a, încă fără rezumat. 20261216a.';
+COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_proiect_id IS
+  'Proiectul șantierului pentru care s-a compus / corectat rezumatul (pus de server). Altul decât proiectul de acum al șantierului = rezumat de refăcut. 20261216a r4.';
 COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_la IS 'Când s-a schimbat ultima dată textul rezumatului (pus de server). 20261216a.';
 COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_de IS 'Cine a corectat rezumatul (auth.uid(), pus de server); NULL la automat. 20261216a.';
 COMMENT ON COLUMN public.rapoarte_zilnice.rezumat_eroare IS
@@ -617,18 +668,37 @@ REVOKE ALL ON FUNCTION public.fn_raport_rezumat_intrare(public.rapoarte_zilnice)
 -- Ramurile: (1) INSERT = automat; (2) scriere FĂRĂ schimbarea rezumatului = refacere automată (editat rămâne); (3) cerere 'editat' = corectura
 -- omului (identitate + drept); (4) cerere 'automat' = (re)generare (peste o corectură: identitate + drept). Compunerea (1)(2)(4) e izolată:
 -- pe (1)(2) eroarea ei NU anulează scrierea raportului (rezumat_eroare = SQLSTATE), pe (4) e eroare către om.
+-- r4: (2') pe o scriere fără rezumat, un rezumat compus / corectat pentru ALT proiect decât cel de acum al șantierului (șantier mutat — calea
+-- trigger-ului de pe sites —, raport mutat pe alt șantier) = automat -> 'de_recompus' fără compunere; editat -> refuz 55000.
+-- Proiectul citit aici e și cel pe care îl citește intrarea (aceeași interogare pe sites): o mutare comisă între cele două citiri nu e
+-- posibilă, pentru că mutarea cere EXCLUSIVE pe rapoarte_zilnice (vezi fn_raport_rezumat_santier_mutat), iar scrierea de aici ține ROW EXCLUSIVE.
 CREATE FUNCTION public.fn_raport_rezumat_garda() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_uid uuid := auth.uid(); v_text text; v_cerere boolean := false; v_om boolean := false; v_stare text;
-  v_cols text[] := ARRAY['versiune_salvare', 'rezumat_text', 'rezumat_sursa', 'rezumat_la', 'rezumat_de', 'rezumat_eroare'];
+DECLARE v_uid uuid := auth.uid(); v_text text; v_cerere boolean := false; v_om boolean := false; v_stare text; v_proiect bigint;
+  v_cols text[] := ARRAY['versiune_salvare', 'rezumat_text', 'rezumat_sursa', 'rezumat_la', 'rezumat_de', 'rezumat_eroare', 'rezumat_proiect_id'];
 BEGIN
-  -- codul erorii derivatului îl scrie DOAR serverul (L08): ce trimite clientul nu contează
+  -- codul erorii derivatului și proiectul rezumatului le scrie DOAR serverul (L08): ce trimite clientul nu contează
   NEW.rezumat_eroare := CASE WHEN TG_OP = 'UPDATE' THEN OLD.rezumat_eroare END;
+  NEW.rezumat_proiect_id := CASE WHEN TG_OP = 'UPDATE' THEN OLD.rezumat_proiect_id END;
+  -- proiectul ȘANTIERULUI de acum (NULL = șantier fără proiect sau inexistent)
+  v_proiect := (SELECT s.proiect_id FROM public.sites s WHERE s.id = NEW.site_id);
   IF TG_OP = 'INSERT' THEN
     -- raport nou: rezumatul automat (o corectură se face doar pe un raport existent); ce a trimis clientul nu contează (L08)
     NEW.rezumat_sursa := 'automat';
   ELSIF (NEW.rezumat_text, NEW.rezumat_sursa, NEW.rezumat_la, NEW.rezumat_de)
         IS NOT DISTINCT FROM (OLD.rezumat_text, OLD.rezumat_sursa, OLD.rezumat_la, OLD.rezumat_de) THEN
+    -- r4: rezumatul e pentru alt proiect decât cel de acum al șantierului: textul vechi nu mai rămâne pe raport
+    IF OLD.rezumat_sursa IN ('automat', 'editat') AND OLD.rezumat_proiect_id IS DISTINCT FROM v_proiect THEN
+      IF OLD.rezumat_sursa = 'editat' THEN
+        RAISE EXCEPTION 'rezumat: raportul are rezumatul corectat de om pentru alt proiect; „Revino la automat” pe el înainte de mutare'
+          USING ERRCODE = '55000';
+      END IF;
+      NEW.rezumat_text := NULL; NEW.rezumat_sursa := 'de_recompus'; NEW.rezumat_la := now(); NEW.rezumat_de := NULL;
+      NEW.rezumat_proiect_id := NULL; NEW.rezumat_eroare := NULL;
+      -- doar derivatul s-a schimbat: versiunea rămâne (ca la refacerea automată)
+      IF (to_jsonb(NEW) - v_cols) = (to_jsonb(OLD) - v_cols) THEN NEW.versiune_salvare := OLD.versiune_salvare; END IF;
+      RETURN NEW;
+    END IF;
     -- scriere fără rezumat (RPC-ul de salvare, telefonul vechi, alte module): textul corectat de om rămâne; altfel se reface
     IF OLD.rezumat_sursa = 'editat' THEN RETURN NEW; END IF;
     NEW.rezumat_sursa := 'automat';
@@ -649,9 +719,10 @@ BEGIN
     NEW.rezumat_la := now();
     NEW.rezumat_de := v_uid;
     NEW.rezumat_eroare := NULL;
+    NEW.rezumat_proiect_id := v_proiect;   -- r4: corectura e scrisă pentru proiectul de acum al șantierului
     RETURN NEW;   -- versiunea crește (trigger-ul de versiune): corectura e o decizie a omului
   ELSIF NEW.rezumat_sursa = 'automat' THEN
-    -- cerere de (re)generare; textul îl scrie serverul (mai jos)
+    -- cerere de (re)generare; textul îl scrie serverul (mai jos). r4: din 'de_recompus' = ca din NULL (generare, fără identitate)
     v_cerere := true;
     IF OLD.rezumat_sursa = 'editat' THEN
       -- „Revino la automat”: peste un text corectat de om, aceeași identitate + drept; e o decizie a omului => versiunea crește (r3)
@@ -661,6 +732,7 @@ BEGIN
       v_om := true;
     END IF;
   ELSE
+    -- (r4: și 'de_recompus' cerut de client: starea o pune doar serverul, la mutare)
     RAISE EXCEPTION 'rezumat: sursa rezumatului trebuie să fie automat sau editat' USING ERRCODE = '22023';
   END IF;
   -- textul automat: din câmpurile raportului (NEW) și liniile / distribuția lui de acum. Sub-tranzacție (r3): eroarea derivatului nu
@@ -675,10 +747,12 @@ BEGIN
   END;
   IF v_text IS NULL THEN
     -- scrierea RAPORTULUI trece; rezumatul rămâne cum era (raport nou: fără rezumat); doar codul erorii (fără text / valori din surse)
+    -- (r4: OLD e aici pentru proiectul de acum sau fără text — rezumatul pentru alt proiect a ieșit mai sus, fără compunere)
     IF TG_OP = 'INSERT' THEN
-      NEW.rezumat_text := NULL; NEW.rezumat_sursa := NULL; NEW.rezumat_la := NULL; NEW.rezumat_de := NULL;
+      NEW.rezumat_text := NULL; NEW.rezumat_sursa := NULL; NEW.rezumat_la := NULL; NEW.rezumat_de := NULL; NEW.rezumat_proiect_id := NULL;
     ELSE
       NEW.rezumat_text := OLD.rezumat_text; NEW.rezumat_sursa := OLD.rezumat_sursa; NEW.rezumat_la := OLD.rezumat_la; NEW.rezumat_de := OLD.rezumat_de;
+      NEW.rezumat_proiect_id := OLD.rezumat_proiect_id;
     END IF;
     NEW.rezumat_eroare := v_stare;
   ELSE
@@ -687,6 +761,7 @@ BEGIN
     NEW.rezumat_text := v_text;
     NEW.rezumat_de := NULL;
     NEW.rezumat_eroare := NULL;
+    NEW.rezumat_proiect_id := v_proiect;   -- r4: proiectul pentru care s-a compus textul
   END IF;
   -- scriere care schimbă DOAR derivatul (rezumatul automat / codul erorii): versiunea rămâne (CAS-ul salvării, 20261208a);
   -- „Revino la automat” (v_om) e o decizie a omului: versiunea crește
@@ -713,11 +788,48 @@ REVOKE ALL ON FUNCTION public.fn_raport_rezumat_dupa_salvare() FROM PUBLIC, anon
 CREATE TRIGGER trg_raport_zilnic_salvari_rezumat AFTER INSERT ON public.raport_zilnic_salvari
   FOR EACH ROW EXECUTE FUNCTION public.fn_raport_rezumat_dupa_salvare();
 
+-- ── r4 (Jakarinos r3 P1): șantierul trece în alt proiect => în ACEEAȘI tranzacție, rezumatele compuse pentru proiectul vechi ies de pe
+--    rapoartele lui (automat -> 'de_recompus', prin garda de mai sus; editat -> refuz, mutarea nu trece). DEFINER: vede și scrie toate
+--    rapoartele șantierului, oricare ar fi RLS-ul celui care mută (trigger-ul de acces pe rapoarte îi verifică totuși dreptul pe proiect).
+--    Ordinea lock-urilor (L06): rândul șantierului (UPDATE-ul care a pornit trigger-ul) -> rapoarte_zilnice EXCLUSIVE -> rândurile
+--    rapoartelor șantierului (UPDATE, prin indexul (site_id, data)). Salvarea raportului nu blochează niciodată rândul șantierului (FK =
+--    FOR KEY SHARE, compatibil cu UPDATE-ul lui proiect_id), deci nu se poate închide un ciclu. EXCLUSIVE (nu SHARE / SHARE ROW EXCLUSIVE):
+--    intră în conflict și cu ROW SHARE (FOR UPDATE, pasul 1 al RPC-ului), altfel o salvare care a luat deja rândul raportului ar aștepta
+--    mutarea la UPDATE, iar mutarea ar aștepta rândul ei (deadlock, lecția din PR #1045). Așteptarea lock-ului: cel mult 3 s
+--    (sau lock_timeout-ul apelantului, dacă e mai mic), peste = 55P03 și mutarea nu trece; citirile rapoartelor nu sunt oprite.
+--    READ COMMITTED obligatoriu: invalidarea trebuie să vadă și rapoartele comise după începutul tranzacției celui care mută. ──
+CREATE FUNCTION public.fn_raport_rezumat_santier_mutat() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_lt text := current_setting('lock_timeout');
+BEGIN
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'rezumat: mutarea unui șantier în alt proiect cere READ COMMITTED (acum %)', current_setting('transaction_isolation')
+      USING ERRCODE = '0A000';
+  END IF;
+  IF v_lt::interval = interval '0' OR v_lt::interval > interval '3 seconds' THEN PERFORM set_config('lock_timeout', '3s', true); END IF;
+  LOCK TABLE public.rapoarte_zilnice IN EXCLUSIVE MODE;
+  PERFORM set_config('lock_timeout', v_lt, true);
+  -- după lock: nicio scriere de raport nu mai e în zbor; citirile de mai jos văd tot ce s-a comis (READ COMMITTED, instrucțiuni noi)
+  IF EXISTS (SELECT 1 FROM public.rapoarte_zilnice r
+              WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'editat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id) THEN
+    RAISE EXCEPTION 'rezumat: șantierul are rapoarte cu rezumatul corectat de om pentru proiectul vechi; „Revino la automat” pe ele înainte de mutare'
+      USING ERRCODE = '55000';
+  END IF;
+  -- scriere „fără rezumat” pe rândurile vizate: garda le trece în 'de_recompus' (ramura 2'), fără compunere, fără să mărească versiunea
+  UPDATE public.rapoarte_zilnice r SET rezumat_sursa = r.rezumat_sursa
+   WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'automat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id;
+  RETURN NULL;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_raport_rezumat_santier_mutat() FROM PUBLIC, anon, authenticated, service_role;
+-- AFTER UPDATE (orice coloană) + WHEN pe rândul FINAL: prinde și un proiect_id schimbat de un trigger BEFORE al altui modul
+CREATE TRIGGER trg_raport_rezumat_santier_mutat AFTER UPDATE ON public.sites
+  FOR EACH ROW WHEN (OLD.proiect_id IS DISTINCT FROM NEW.proiect_id) EXECUTE FUNCTION public.fn_raport_rezumat_santier_mutat();
+
 -- ── postcondiții ──
 DO $post$
 DECLARE v_fn name[] := ARRAY['fn_raport_rezumat_curata', 'fn_raport_rezumat_curata_editat', 'fn_raport_rezumat_taie', 'fn_raport_rezumat_sir',
                              'fn_raport_rezumat_nr', 'fn_raport_rezumat_text', 'fn_raport_rezumat_intrare', 'fn_raport_rezumat_garda',
-                             'fn_raport_rezumat_dupa_salvare']::name[];
+                             'fn_raport_rezumat_dupa_salvare', 'fn_raport_rezumat_santier_mutat']::name[];
 BEGIN
   -- coloanele: tipul, nullable, FĂRĂ valoare implicită și fără „missing value” => toate rândurile existente au NULL (migrarea nu scrie
   -- date — dovedit din catalog, fără să citească tabelul sub lock), fără drepturi proprii pe coloană
@@ -725,18 +837,19 @@ BEGIN
         AND NOT a.attnotnull AND NOT a.atthasdef AND NOT a.atthasmissing AND a.attacl IS NULL
         AND ((a.attname IN ('rezumat_text', 'rezumat_sursa', 'rezumat_eroare') AND a.atttypid = 'text'::regtype)
              OR (a.attname = 'rezumat_la' AND a.atttypid = 'timestamptz'::regtype)
-             OR (a.attname = 'rezumat_de' AND a.atttypid = 'uuid'::regtype))) <> 5
+             OR (a.attname = 'rezumat_de' AND a.atttypid = 'uuid'::regtype)
+             OR (a.attname = 'rezumat_proiect_id' AND a.atttypid = 'bigint'::regtype))) <> 6
      OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.rapoarte_zilnice'::regclass AND conname = 'rapoarte_zilnice_rezumat_ck'
                      AND contype = 'c' AND NOT convalidated) THEN
     RAISE EXCEPTION '20261216a post: coloanele / constrangerea';
   END IF;
-  -- funcțiile: search_path fix; DEFINER doar garda; NICIUN EXECUTE pentru clienți (nu sunt apelabile din API)
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (v_fn)) <> 9
-     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_raport\_rezumat\_%') <> 9
+  -- funcțiile: search_path fix; DEFINER doar garda și (r4) mutarea șantierului; NICIUN EXECUTE pentru clienți (nu sunt apelabile din API)
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (v_fn)) <> 10
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_raport\_rezumat\_%') <> 10
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND p.proname = ANY (v_fn)
                    AND (p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
-                        OR p.prosecdef IS DISTINCT FROM (p.proname = 'fn_raport_rezumat_garda')
+                        OR p.prosecdef IS DISTINCT FROM (p.proname IN ('fn_raport_rezumat_garda', 'fn_raport_rezumat_santier_mutat'))
                         OR pg_get_userbyid(p.proowner) <> 'postgres'
                         OR has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
                         OR has_function_privilege('service_role', p.oid, 'EXECUTE')
@@ -750,6 +863,13 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.raport_zilnic_salvari'::regclass AND tg.tgname = 'trg_raport_zilnic_salvari_rezumat'
                    AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgfoid = 'public.fn_raport_rezumat_dupa_salvare()'::regprocedure
                    AND tg.tgtype = (1 | 4))   -- ROW, AFTER, INSERT
+     -- r4: pe sites, AFTER UPDATE pe rând, toate coloanele, cu condiția exactă pe proiect_id
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.sites'::regclass AND tg.tgname = 'trg_raport_rezumat_santier_mutat'
+                   AND tg.tgenabled = 'O' AND tg.tgnargs = 0 AND tg.tgfoid = 'public.fn_raport_rezumat_santier_mutat()'::regprocedure
+                   AND tg.tgtype = (1 | 16) AND tg.tgattr = ''::int2vector AND tg.tgqual IS NOT NULL
+                   AND pg_get_triggerdef(tg.oid) = 'CREATE TRIGGER trg_raport_rezumat_santier_mutat AFTER UPDATE ON public.sites FOR EACH ROW '
+                       || 'WHEN ((old.proiect_id IS DISTINCT FROM new.proiect_id)) EXECUTE FUNCTION fn_raport_rezumat_santier_mutat()')
+     OR (SELECT count(*) FROM pg_trigger tg WHERE tg.tgfoid = 'public.fn_raport_rezumat_santier_mutat()'::regprocedure) <> 1
      OR NOT ('trg_raport_zilnic_versiune' COLLATE "C" < 'trg_raport_zilnic_zz_rezumat' COLLATE "C") THEN
     RAISE EXCEPTION '20261216a post: trigger-ele';
   END IF;

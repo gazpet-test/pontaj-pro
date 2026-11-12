@@ -24,7 +24,13 @@ const MIG = 'supabase/migrations/20261216a_executie_raport_rezumat.sql'
 const REV = 'supabase/revenire/20261216a_executie_raport_rezumat_ROLLBACK.sql'
 const HARNESS = 'scripts/test_executie_raport_rezumat.sql'
 const AMPRENTE = 'scripts/raport_rezumat_amprente.sql'
-const PLACEHOLDER = "    ('DE_COMPLETAT: scripts/raport_rezumat_amprente.sql, sectiunea 20261216a', '-')"
+// r4: blocul BASELINE are valorile de PRODUCȚIE (lipite de coordonator) + etichetele noi DE_COMPLETAT; aici se înlocuiește TOT conținutul
+// listei VALUES cu baseline-ul calculat pe schema falsă (aceeași secțiune a scriptului coordonatorului)
+const BL_A = '  SELECT v.eticheta, v.amprenta FROM (VALUES\n', BL_B = '\n  ) v(eticheta, amprenta)'
+const PLACEHOLDER = (() => {
+  const t = citeste(MIG), i0 = t.indexOf('-- >>> BASELINE 20261216a'), i = t.indexOf(BL_A, i0) + BL_A.length
+  return t.slice(i, t.indexOf(BL_B, i))
+})()
 
 // mini-psql: blocurile SQL dintre meta-comenzi merg întregi la server (db.exec); \ir citește fișierul (cu înlocuirile mutantului)
 async function ruleazaPsql(db, text, fisier, inlocuiri, jurnal) {
@@ -96,10 +102,16 @@ async function aplicaMig(db, text, { plafon = 2000, marcajPlafon = true } = {}) 
   } catch (e) { try { await db.exec('ROLLBACK') } catch { /* deja anulată */ } throw e } finally { await db.exec('SET transaction_timeout = 0;') }
   return jurnal
 }
-async function revino(db, text) {
+// r4: revenirea tot ca runnerul, cu --plafon-tranzactie-ms 2000 (marcajul de livrare poartă numele fișierului de revenire)
+async function revino(db, text, { plafon = 2000, marcajPlafon = true } = {}) {
+  const pre = plafon ? `SET transaction_timeout = ${plafon};` : 'SET transaction_timeout = 0;'
+  const mp = marcajPlafon ? `SELECT set_config('gazpet.plafon_tranzactie', '${plafon}:' || txid_current(), true);` : ''
+  const jurnal = []
   try {
-    await db.exec(`BEGIN ISOLATION LEVEL READ COMMITTED; SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);\n${text}\nCOMMIT;`)
-  } catch (e) { try { await db.exec('ROLLBACK') } catch { /* deja anulată */ } throw e }
+    await db.exec(`${pre} BEGIN ISOLATION LEVEL READ COMMITTED; SELECT set_config('gazpet.livrare_migrare', '20261216a_executie_raport_rezumat_ROLLBACK:' || txid_current(), true); ${mp}\n${text}\nCOMMIT;`,
+      { onNotice: (n) => jurnal.push(n.message) })
+  } catch (e) { try { await db.exec('ROLLBACK') } catch { /* deja anulată */ } throw e } finally { await db.exec('SET transaction_timeout = 0;') }
+  return jurnal
 }
 
 // baseline-ul calculat o dată (schema falsă e aceeași în fiecare bază nouă)
@@ -129,7 +141,7 @@ const real = await ruleaza()
 const oke = real.jurnal.filter((m) => / OK|refuz confirmat|20261216a: (lock-uri|sfarsit)/.test(m))
 console.log(oke.map((m) => '  ' + m).join('\n'))
 if (!real.ok) { console.error('HARNESS PICAT: ' + real.eroare); process.exit(1) }
-for (const t of ['TB', 'T0', 'T1', 'T2', 'T3', 'T4a', 'T4', 'T4b', 'T5', 'T6a', 'T6', 'T6b', 'T7', 'T8', 'T10', 'T11', 'T9']) {
+for (const t of ['TB', 'T0', 'T1', 'T2', 'T3', 'T4a', 'T4', 'T4b', 'T5', 'T6a', 'T6', 'T6b', 'T7', 'T8', 'T10', 'T11', 'T12', 'T9']) {
   if (!oke.some((m) => m.startsWith(t + ' OK'))) { console.error('lipsește ' + t + ' OK'); process.exit(1) }
 }
 console.log('harness: OK pe migrarea reală')
@@ -205,7 +217,7 @@ const mutanti = [
   ['M13 EXECUTE lăsat clienților', 'post', { [M]: [['REVOKE ALL ON FUNCTION public.fn_raport_rezumat_text(jsonb) FROM PUBLIC, anon, authenticated, service_role;', 'REVOKE ALL ON FUNCTION public.fn_raport_rezumat_text(jsonb) FROM anon, service_role;']] }],
   // T8 singur (fără postcondiție): EXECUTE dat după migrare, ca o greșeală ulterioară
   ['M13b EXECUTE dat clienților după migrare', 'T8', { [HARNESS]: [["-- ── T8: funcțiile nu sunt apelabile din API", "GRANT EXECUTE ON FUNCTION public.fn_raport_rezumat_intrare(public.rapoarte_zilnice) TO authenticated;\n-- ── T8: funcțiile nu sunt apelabile din API"]] }],
-  ['M14 versiunea nu crește la corectura omului', 'T4', { [M]: [["    NEW.rezumat_de := v_uid;\n    NEW.rezumat_eroare := NULL;\n    RETURN NEW;", "    NEW.rezumat_de := v_uid;\n    NEW.rezumat_eroare := NULL;\n    NEW.versiune_salvare := OLD.versiune_salvare;\n    RETURN NEW;"]] }],
+  ['M14 versiunea nu crește la corectura omului', 'T4', { [M]: [["    NEW.rezumat_de := v_uid;\n    NEW.rezumat_eroare := NULL;\n", "    NEW.rezumat_de := v_uid;\n    NEW.rezumat_eroare := NULL;\n    NEW.versiune_salvare := OLD.versiune_salvare;\n"]] }],
   ['M15 scrierea fără rezumat nu reface rezumatul automat', 'T2', { [M]: [["    IF OLD.rezumat_sursa = 'editat' THEN RETURN NEW; END IF;\n    NEW.rezumat_sursa := 'automat';", "    RETURN NEW;"]] }],
   // r2: rubricile noi citite din raport; lista nefuncționalelor scurtată la 3
   ['M16 planul pentru mâine lipsă din intrare', 'T2', { [M]: [["      'plan_maine', z.plan_maine,\n      'poze', cardinality(z.poze))\n    -- INTRARE-END\n$f$;", "      'poze', cardinality(z.poze))\n    -- INTRARE-END\n$f$;"]] }],
@@ -225,6 +237,24 @@ const mutanti = [
   ['M28 fără plafonul total al textului automat', 'T1', { [M]: [['  IF length(t) > c_max THEN', '  IF false THEN']] }],
   // orice cerere „automat” tratată ca decizie a omului: o prinde întâi T7 (textul „automat” trimis de client nu mărește versiunea)
   ['M29 orice cerere „automat” mărește versiunea', 'T7', { [M]: [["    v_cerere := true;\n    IF OLD.rezumat_sursa = 'editat' THEN", "    v_cerere := true;\n    v_om := true;\n    IF OLD.rezumat_sursa = 'editat' THEN"]] }],
+  // r4: mutarea șantierului în alt proiect
+  ['M30 mutarea nu scoate rezumatele automate ale proiectului vechi', 'T12', { [M]: [[
+    "  UPDATE public.rapoarte_zilnice r SET rezumat_sursa = r.rezumat_sursa\n   WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'automat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id;\n", '']] }],
+  ['M31 mutarea nu refuză corecturile pentru proiectul vechi', 'T12', { [M]: [[
+    "              WHERE r.site_id = NEW.id AND r.rezumat_sursa = 'editat' AND r.rezumat_proiect_id IS DISTINCT FROM NEW.proiect_id) THEN",
+    "              WHERE false) THEN"]] }],
+  ['M32 garda nu deosebește rezumatul pentru alt proiect (îl recompune)', 'T12', { [M]: [[
+    "    IF OLD.rezumat_sursa IN ('automat', 'editat') AND OLD.rezumat_proiect_id IS DISTINCT FROM v_proiect THEN", '    IF false THEN']] }],
+  ['M33 proiectul rezumatului nepus la compunere', 'T2', { [M]: [['    NEW.rezumat_proiect_id := v_proiect;   -- r4: proiectul pentru care s-a compus textul\n', '']] }],
+  ['M34 corectura fără proiectul ei (rămâne cel vechi)', 'T12', { [M]: [['    NEW.rezumat_proiect_id := v_proiect;   -- r4: corectura e scrisă pentru proiectul de acum al șantierului\n', '']] }],
+  ['M35 raportul mutat cu corectura pentru alt proiect acceptat', 'T12', { [M]: [[
+    "      IF OLD.rezumat_sursa = 'editat' THEN\n        RAISE EXCEPTION 'rezumat: raportul are rezumatul corectat de om pentru alt proiect",
+    "      IF false THEN\n        RAISE EXCEPTION 'rezumat: raportul are rezumatul corectat de om pentru alt proiect"]] }],
+  ['M36 mutarea mărește versiunile rapoartelor', 'T12', { [M]: [[
+    '      IF (to_jsonb(NEW) - v_cols) = (to_jsonb(OLD) - v_cols) THEN NEW.versiune_salvare := OLD.versiune_salvare; END IF;\n', '']] }],
+  ['M37 clientul poate cere de_recompus', 'T12', { [M]: [[
+    "  ELSIF NEW.rezumat_sursa = 'automat' THEN\n    -- cerere de (re)generare;",
+    "  ELSIF NEW.rezumat_sursa = 'de_recompus' THEN\n    NEW.rezumat_text := NULL; NEW.rezumat_la := now(); NEW.rezumat_de := NULL; NEW.rezumat_proiect_id := NULL; RETURN NEW;\n  ELSIF NEW.rezumat_sursa = 'automat' THEN\n    -- cerere de (re)generare;"]] }],
 ]
 let rau = 0
 for (const [nume, test, inl] of mutanti) {
@@ -286,6 +316,10 @@ for (const [nume, strica, scoate] of [
   ['trigger oprit (tgenabled)', 'ALTER TABLE public.rapoarte_zilnice DISABLE TRIGGER trg_raport_zilnic_zz_rezumat;',
     ["                     AND tg.tgenabled = 'O')\n     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.raport_zilnic_salvari'::regclass",
      ")\n     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.raport_zilnic_salvari'::regclass"]],
+  // r4: trigger-ul de mutare refăcut fără condiția pe proiect_id
+  ['trigger-ul de pe sites fără condiție (WHEN)', `DROP TRIGGER trg_raport_rezumat_santier_mutat ON public.sites;
+     CREATE TRIGGER trg_raport_rezumat_santier_mutat AFTER UPDATE ON public.sites FOR EACH ROW EXECUTE FUNCTION public.fn_raport_rezumat_santier_mutat();`,
+    ["                     AND pg_get_triggerdef(tg.oid) = 'CREATE TRIGGER trg_raport_rezumat_santier_mutat AFTER UPDATE ON public.sites FOR EACH ROW '\n                         || 'WHEN ((old.proiect_id IS DISTINCT FROM new.proiect_id)) EXECUTE FUNCTION fn_raport_rezumat_santier_mutat()')", ')']],
   ['alt CHECK (definiția)', `ALTER TABLE public.rapoarte_zilnice DROP CONSTRAINT rapoarte_zilnice_rezumat_ck,
      ADD CONSTRAINT rapoarte_zilnice_rezumat_ck CHECK (rezumat_sursa IS NULL OR rezumat_sursa IN ('automat', 'editat')) NOT VALID;`,
     ["     OR (SELECT regexp_replace(pg_get_constraintdef(c.oid), ' NOT VALID$', '') FROM pg_constraint c",
@@ -299,5 +333,78 @@ for (const [nume, strica, scoate] of [
     await revino(db, aplica(citeste(REV), [scoate]))
   })
 }
+// ── r4 ──
+await scenariu('S1b doar etichetele noi (sites) necompletate = refuz', /20261216a: baseline L15 necompletat/, async (db) => {
+  await aplicaMig(db, aplica(citeste(MIG), [[PLACEHOLDER, B0.map(r => r.eticheta.startsWith('tabel sites')
+    ? r.linie_baseline.replace(/'[0-9a-f]{32}'\)$/, "'DE_COMPLETAT')") : r.linie_baseline).join('\n')]]))
+})
+await scenariu('S6b un trigger în plus pe sites = refuz înainte', /\(inainte\) difera.*tabel sites \| triggere/, async (db) => {
+  await db.exec(`CREATE FUNCTION public.zz_s() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NULL; END $f$;
+                 CREATE TRIGGER zz_s AFTER UPDATE ON public.sites FOR EACH ROW EXECUTE FUNCTION public.zz_s();`)
+  await aplicaMig(db, MIG_B)
+})
+// (un al doilea trigger cu funcția NOASTRĂ îl prinde deja postcondiția; aici unul cu altă funcție, pe care doar amprenta „după” îl vede)
+await scenariu('S13b un trigger străin strecurat pe sites = refuz la „după”', /\(dupa\) difera.*tabel sites \| triggere/, async (db) => {
+  await aplicaMig(db, migCu([['-- ── postcondiții ──', 'CREATE FUNCTION public.zz_s2() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $z$ BEGIN RETURN NULL; END $z$;\n' +
+    'CREATE TRIGGER zz_s2 AFTER UPDATE ON public.sites FOR EACH ROW EXECUTE FUNCTION public.zz_s2();\n-- ── postcondiții ──']]))
+})
+await scenariu('S13c un al doilea trigger cu funcția de mutare = refuz (postcondiția)', /20261216a post: trigger-ele/, async (db) => {
+  await aplicaMig(db, migCu([['-- ── postcondiții ──', 'CREATE TRIGGER trg_raport_rezumat_santier_mutat_2 AFTER UPDATE ON public.sites FOR EACH ROW EXECUTE FUNCTION public.fn_raport_rezumat_santier_mutat();\n-- ── postcondiții ──']]))
+})
+// mutarea șantierului în REPEATABLE READ = refuz 0A000 (invalidarea n-ar vedea rândurile comise după începutul tranzacției); cu verificarea
+// scoasă, aceeași mutare trece (dovada că ea refuză); lock_timeout-ul apelantului (100 ms) e păstrat după mutare
+const RAPORT_SITE1 = `INSERT INTO public.rapoarte_zilnice (site_id, data, probleme) VALUES (1, DATE '2026-11-10', 'Proba mutare');`
+await scenariu('S17 mutarea șantierului în REPEATABLE READ = refuz', /cere READ COMMITTED/, async (db) => {
+  await aplicaMig(db, MIG_B); await db.exec(RAPORT_SITE1)
+  try { await db.exec('BEGIN ISOLATION LEVEL REPEATABLE READ; UPDATE public.sites SET proiect_id = 2 WHERE id = 1; COMMIT;') }
+  catch (e) { await db.exec('ROLLBACK'); throw e }
+})
+await scenariu('S17b … cu verificarea scoasă, mutarea în REPEATABLE READ trece', null, async (db) => {
+  await aplicaMig(db, migCu([["  IF current_setting('transaction_isolation') <> 'read committed' THEN\n    RAISE EXCEPTION 'rezumat: mutarea",
+                              "  IF false THEN\n    RAISE EXCEPTION 'rezumat: mutarea"]]))
+  await db.exec(RAPORT_SITE1)
+  await db.exec('BEGIN ISOLATION LEVEL REPEATABLE READ; UPDATE public.sites SET proiect_id = 2 WHERE id = 1; COMMIT;')
+})
+await scenariu('S20 mutarea păstrează lock_timeout-ul apelantului; rezumatul trece în de_recompus', null, async (db) => {
+  await aplicaMig(db, MIG_B); await db.exec(RAPORT_SITE1)
+  let rand
+  try {
+    await db.exec(`BEGIN; SET LOCAL lock_timeout = '100ms'; UPDATE public.sites SET proiect_id = 2 WHERE id = 1;`)
+    rand = (await db.query(`SELECT current_setting('lock_timeout') AS lt,
+      (SELECT string_agg(DISTINCT coalesce(rezumat_sursa, '-'), ',') FROM public.rapoarte_zilnice WHERE site_id = 1) AS s`)).rows[0]
+    await db.exec('COMMIT')
+  } catch (e) { await db.exec('ROLLBACK'); throw e }
+  if (rand.lt !== '100ms' || rand.s !== 'de_recompus') throw new Error(`lock_timeout ${rand.lt} / surse ${rand.s}`)
+})
+await scenariu('S18 revenirea fără plafon (fără marcajul runnerului) = refuz', /revenire: PLAFON_TRANZACTIE lipsa/, async (db) => {
+  await aplicaMig(db, MIG_B); await revino(db, citeste(REV), { marcajPlafon: false })
+})
+await scenariu('S18b revenirea armată ca înainte de r4 (fără marcajul de livrare) = refuz', /revenire: garda invalida/, async (db) => {
+  await aplicaMig(db, MIG_B)
+  try {
+    await db.exec(`BEGIN ISOLATION LEVEL READ COMMITTED; SELECT set_config('gazpet.revenire_20261216a', 'SCOATE_REZUMAT_RAPORT:' || txid_current(), true);\n${citeste(REV)}\nCOMMIT;`)
+  } catch (e) { await db.exec('ROLLBACK'); throw e }
+})
+await scenariu('S18c revenirea corectă: NOTICE-urile de timp (SHARE, corecturi, exclusiv, sfârșit)', null, async (db) => {
+  await aplicaMig(db, MIG_B)
+  const j = await revino(db, citeste(REV))
+  for (const re of [/^20261216a revenire: SHARE la \d+ ms/, /^20261216a revenire: corecturi cautate la \d+ ms/, /^20261216a revenire: exclusiv la \d+ ms/, /^20261216a revenire: sfarsit la \d+ ms/]) {
+    if (!j.some(m => re.test(m))) throw new Error('lipsește NOTICE-ul ' + re + ': ' + j.join(' | '))
+  }
+  console.log('       ' + j.filter(m => /revenire: (SHARE|corecturi|exclusiv|sfarsit)/.test(m)).join(' · '))
+})
+// costul mutării (PGlite = WASM, mai lent decât PostgreSQL real): N rapoarte cu rezumat automat pe șantier, apoi mutarea
+await scenariu('S19 costul mutării: 2000 de rapoarte cu rezumat automat', null, async (db) => {
+  await aplicaMig(db, MIG_B)
+  const t0 = Date.now()
+  await db.exec(`INSERT INTO public.rapoarte_zilnice (site_id, data, probleme, personal_snapshot)
+                 SELECT 1, DATE '1990-01-01' + g, 'Raport ' || g, '{"total": 5, "sudori": 2}'::jsonb FROM generate_series(1, 2000) g;`)
+  const t1 = Date.now()
+  await db.exec('UPDATE public.sites SET proiect_id = 2 WHERE id = 1;')
+  const t2 = Date.now()
+  const r = (await db.query(`SELECT count(*) FILTER (WHERE rezumat_sursa = 'de_recompus')::int AS d, count(*)::int AS n FROM public.rapoarte_zilnice WHERE site_id = 1`)).rows[0]
+  if (r.d !== 2000 || r.n !== 2000) throw new Error(`după mutare: ${r.d} / ${r.n} de_recompus`)
+  console.log(`       2000 de rapoarte: inserate (cu rezumat) în ${t1 - t0} ms; mutarea șantierului (invalidare) în ${t2 - t1} ms`)
+})
 if (rau) { console.error(`${rau} mutanți / scenarii greșite`); process.exit(1) }
 console.log('mutanți: toți prinși la testul lor; scenariile de refuz: toate cu motivul lor')

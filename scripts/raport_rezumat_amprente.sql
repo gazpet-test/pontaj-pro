@@ -3,8 +3,10 @@
 --   psql -X -v ON_ERROR_STOP=1 -h <host> -p <port> -U <user> -d postgres -f scripts/raport_rezumat_amprente.sql > amprente_20261216a.txt
 -- Ce tipărește (același format ca scripts/tichete_lot2_amprente.sql, PR #1071):
 --   eticheta | amprenta (md5 pe „detaliu”) | linie_baseline (de copiat în blocul BASELINE al migrării) | sursa | atentie | detaliu
---   * tabelele: rapoarte_zilnice și raport_zilnic_salvari (drepturi pe tabel / coloane / secvențe, proprietar, RLS + FORCE, TOATE politicile,
---     inventarul triggerelor);
+--   * tabelele: rapoarte_zilnice, raport_zilnic_salvari și (r4) sites — pe el stă trigger-ul de mutare a șantierului — (drepturi pe tabel /
+--     coloane / secvențe, proprietar, RLS + FORCE, TOATE politicile, inventarul triggerelor);
+--     r4: rulat din nou, scriptul trebuie să dea IDENTIC cele 29 de linii deja lipite în migrare (rapoarte_zilnice, raport_zilnic_salvari și
+--     funcțiile lor); în plus apar „tabel sites | …” și funcțiile din politicile / triggerele lui sites (și indiciile lor);
 --   * funcțiile: punctul de plecare al migrării (fn_raport_zilnic_salveaza, fn_raport_zilnic_versiune, fn_raport_santier_drept cu CORPUL ei,
 --     auth.uid()), funcțiile din politicile / triggerele celor două tabele (le găsește catalogul) și „indiciile” = numele apare în corpul
 --     unei funcții din listă (callee tranzitiv; plpgsql nu lasă pg_depend). Indiciul e DOAR o propunere pentru revizor: poarta din migrare
@@ -22,10 +24,10 @@ SET LOCAL search_path = public, pg_temp;
 SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;
 
 \echo
-\echo '=== 20261216a_executie_raport_rezumat — rapoarte_zilnice, raport_zilnic_salvari + salvarea, versiunea, dreptul pe șantier ==='
+\echo '=== 20261216a_executie_raport_rezumat — rapoarte_zilnice, raport_zilnic_salvari, sites + salvarea, versiunea, dreptul pe șantier ==='
 WITH RECURSIVE
 -- >>> INTRARE 20261216a
-amp_tabele(oid) AS (VALUES ('public.rapoarte_zilnice'::regclass::oid), ('public.raport_zilnic_salvari'::regclass::oid)),
+amp_tabele(oid) AS (VALUES ('public.rapoarte_zilnice'::regclass::oid), ('public.raport_zilnic_salvari'::regclass::oid), ('public.sites'::regclass::oid)),
 amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid)')::oid),
                             (to_regprocedure('public.fn_raport_zilnic_versiune()')::oid),
                             (to_regprocedure('public.fn_raport_santier_drept(bigint)')::oid),

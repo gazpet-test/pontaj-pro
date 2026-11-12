@@ -37,7 +37,8 @@ describe('20261216a — AMPRENTA_L15: o singură definiție (PR #1071 = scriptul
   it('aceleași tabele în script și în migrare; pornirea are salvarea, versiunea, dreptul pe șantier și auth.uid()', () => {
     const intrare = SCRIPT.slice(SCRIPT.indexOf(`-- >>> INTRARE ${X}`), SCRIPT.indexOf(`-- <<< INTRARE ${X}`))
     const tab = intrare.split('\n').find(l => l.startsWith('amp_tabele('))
-    expect(tab).toBe("amp_tabele(oid) AS (VALUES ('public.rapoarte_zilnice'::regclass::oid), ('public.raport_zilnic_salvari'::regclass::oid)),")
+    // r4: și sites (trigger-ul de mutare a șantierului stă pe el)
+    expect(tab).toBe("amp_tabele(oid) AS (VALUES ('public.rapoarte_zilnice'::regclass::oid), ('public.raport_zilnic_salvari'::regclass::oid), ('public.sites'::regclass::oid)),")
     expect(MIG.split('\n').filter(l => l.startsWith('amp_tabele('))).toEqual([tab])
     for (const f of ["public.fn_raport_zilnic_salveaza(bigint, date, jsonb, jsonb, jsonb, integer, uuid)", 'public.fn_raport_zilnic_versiune()',
       'public.fn_raport_santier_drept(bigint)', 'auth.uid()']) expect(intrare).toContain(`to_regprocedure('${f}')`)
@@ -51,14 +52,22 @@ describe('20261216a — AMPRENTA_L15: o singură definiție (PR #1071 = scriptul
     expect(MIG).toContain(`amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_${X}() b WHERE b.eticheta LIKE 'functie %'),`)
     const linii = bloc.split('\n').map(l => l.trim()).filter(l => /^(, )?\('/.test(l))
     expect(linii.length).toBeGreaterThan(0)
-    if (linii.some(l => l.includes('DE_COMPLETAT'))) {
-      expect(linii).toEqual([`('DE_COMPLETAT: scripts/raport_rezumat_amprente.sql, sectiunea ${X}', '-')`])
-    } else {
-      linii.forEach((l, i) => expect(l).toMatch(i === 0 ? /^\('[^']+', '[0-9a-f]{32}'\)$/ : /^, \('[^']+', '[0-9a-f]{32}'\)$/))
-      const et = linii.map(l => l.match(/\('([^']+)'/)[1])
-      expect(new Set(et).size).toBe(et.length)
-    }
+    // r4: valorile lipite rămân (md5), etichetele NOI au DE_COMPLETAT (= refuz până le lipește coordonatorul); nicio etichetă dublă
+    linii.forEach((l, i) => expect(l).toMatch(i === 0 ? /^\('[^']+', '([0-9a-f]{32}|DE_COMPLETAT)'\)$/ : /^, \('[^']+', '([0-9a-f]{32}|DE_COMPLETAT)'\)$/))
+    const et = linii.map(l => l.match(/\('([^']+)'/)[1])
+    expect(new Set(et).size).toBe(et.length)
     expect(MIG).toContain(`RAISE EXCEPTION '${X}: baseline L15 necompletat sau invalid`)
+  })
+  it('r4: cele 29 de etichete din producție rămân cu valorile lipite; sites intră doar ca etichete noi DE_COMPLETAT', () => {
+    const bloc = MIG.slice(MIG.indexOf(`-- >>> BASELINE ${X}`), MIG.indexOf(`-- <<< BASELINE ${X}`))
+    const perechi = [...bloc.matchAll(/\('([^']+)', '([^']+)'\)/g)].map(m => [m[1], m[2]])
+    const lipite = perechi.filter(([, v]) => /^[0-9a-f]{32}$/.test(v))
+    const noi = perechi.filter(([, v]) => v === 'DE_COMPLETAT').map(([e]) => e)
+    expect(lipite).toHaveLength(29)
+    expect(lipite.find(([e]) => e === 'tabel rapoarte_zilnice | acl')[1]).toBe('565553b4fd23bff3761a45bfba76d27c')
+    expect(lipite.find(([e]) => e === 'functie fn_raport_santier_drept(bigint)')[1]).toBe('0d759c83376de45804392f28353a370d')
+    expect(lipite.some(([e]) => e.startsWith('tabel sites'))).toBe(false)
+    expect(noi).toEqual(['acl', 'acl coloane', 'politici', 'rls', 'secvente', 'triggere'].map(s => `tabel sites | ${s}`))
   })
   it('verificarea rulează ÎNAINTE (înaintea lock-urilor și a schimbării) și DUPĂ (după postcondiții), apoi funcțiile pg_temp se șterg', () => {
     const iInainte = MIG.indexOf(`PERFORM pg_temp.amp_verifica_${X}('inainte')`)
@@ -77,8 +86,9 @@ describe('20261216a — AMPRENTA_L15: o singură definiție (PR #1071 = scriptul
   })
   it('excepțiile „după” sunt EXACT cele declarate: triggerul nou al fiecărui tabel + funcțiile lor', () => {
     const f = MIG.slice(MIG.indexOf(`CREATE FUNCTION pg_temp.amp_verifica_${X}`), MIG.indexOf(`DO $l15_inainte$`))
-    expect(f).toContain("c.eticheta IN ('tabel rapoarte_zilnice | triggere', 'tabel raport_zilnic_salvari | triggere')")
-    expect(f).toContain("c.eticheta IN ('functie fn_raport_rezumat_garda()', 'functie fn_raport_rezumat_dupa_salvare()')")
+    expect(f).toContain("c.eticheta IN ('tabel rapoarte_zilnice | triggere', 'tabel raport_zilnic_salvari | triggere', 'tabel sites | triggere')")
+    expect(f).toContain("c.eticheta IN ('functie fn_raport_rezumat_garda()', 'functie fn_raport_rezumat_dupa_salvare()',\n" +
+      "                                                     'functie fn_raport_rezumat_santier_mutat()')")
     expect(nr(f, "p_moment = 'dupa'")).toBe(2)
   })
 })
