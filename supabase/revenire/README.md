@@ -213,6 +213,17 @@ COMMIT;
 ```
 Precondiție = exact obiectele patch-ului (coloana bigint, indexul, cele două funcții și cele două trigger-e; niciun view pe coloană); armare persistentă = refuz; `LOCK TABLE public.hr_documente_personale IN ACCESS EXCLUSIVE MODE` (cu `lock_timeout` 5 s) ÎNAINTEA numărării `sursa_inbox_id IS NOT NULL`; DROP fără CASCADE; `NOTIFY pgrst`; postcondiție = niciun obiect al patch-ului; dezarmare la final. Testat în `scripts/test_hr_doc_sursa_inbox.sh` pasul 4 (schelet: `supabase/tests/hr_doc_sursa_inbox_schelet.sql`).
 
+## 20261131e — „❓ Întreabă echipa” din cercetare (`20261131e_intrebari_cercetare_surse_ROLLBACK.sql`, NEAPLICAT)
+Readuce starea exactă de după `20261105a`: scoate coloanele `surse` / `de_verificat_la` / `interogari_web`, starea `de_verificat`, jurnalul `intrebari_preluari`, funcțiile `fn_intrebari_de_verificat` / `fn_intrebari_reia` și semnătura cu 8 parametri a lui `fn_intrebari_raspunde`; readuce verbatim corpurile din `20261105a` (`fn_intrebari_raspunde` cu 6 parametri, `fn_intrebari_preia`, `fn_intrebari_amana`, `fn_intrebari_inainte_insert`). Nu redeschide o gaură (fără reluare în UI, plafonul revine la numărarea din `preluat_la` / `raspuns_la`). Fără GO de execuție. Ordinea: întâi edge-ul v1 + workerul vechi, apoi fișierul.
+Două niveluri de armare: `SCOATE_CERCETARE` **refuză** dacă există date noi (surse / interogări nenule, `de_verificat`, `de_verificat_la`, preluări în jurnal după livrare); `SCOATE_CERCETARE_ARHIVEAZA` (decizie Răzvan) le copiază explicit în `intrebari_cercetare_arhiva_20261131e` (RLS, fără politici, SELECT doar `service_role`), trece `de_verificat` → `raspuns`, apoi scoate.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: la REPEATABLE READ / SERIALIZABLE fișierul refuză
+SELECT set_config('gazpet.revenire_20261131e', 'SCOATE_CERCETARE:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Armare legată de txid (în afara unei tranzacții explicite = refuz); armare persistentă = refuz; `LOCK TABLE intrebari_tehnice, intrebari_preluari IN ACCESS EXCLUSIVE MODE` (cu `lock_timeout` 5 s) ÎNAINTEA numărării datelor noi; precondiție = obiectele exacte ale lui 20261131e (semnături, coloane, constrângeri, corpurile noi recunoscute după jurnal, nicio vedere pe coloanele noi); DROP fără CASCADE; `NOTIFY pgrst`; postcondiție = starea 20261105a (semnături, ACL, corpuri fără jurnal, constrângerea cu 4 stări); dezarmare la final. Runda 3 (review r2 P2-4): postcondiția verifică arhiva DOAR prin OID-ul din `to_regclass()`, într-un bloc separat pe calea ARHIVEAZA (înainte, literalul `'…arhiva…'::regclass` făcea revenirea standard, fără arhivă, să pice). Netestat încă pe o clonă PG (sesiunea care l-a scris nu are acces la BD) — înainte de orice folosire: `supabase/tests/20261131e_intrebari_cercetare_surse_dryrun.sql` (T1 apply → revenire standard → re-apply, T2 revenire cu arhivă) pe clonă izolată.
+
 ## 20261103c — storage ai-documente-inbox (`20261103c_ai_inbox_storage_politici_ROLLBACK.sql`, NEAPLICAT)
 **Redeschide gaura de confidențialitate** (și rândul falsificat exploatabil prin edge-urile service_role): recreează exact `ai_inbox_obj_all` (FOR ALL TO authenticated, doar `bucket_id`) și scoate `ai_inbox_obj_insert` / `_select` / `_delete`, trigger-ele `trg_ai_inbox_fisier_legat` / `trg_ai_inbox_fisier_imutabil`, funcțiile `ai_inbox_fisier_legat()` / `ai_inbox_fisier_imutabil()` și indexul unic `idx_ai_inbox_fisier_path`. Fără GO de execuție; o cale de upload nouă refuzată se repară cu o migrare nouă (forward-fix), nu prin revenire. Fișierele șterse între timp nu se recuperează (bucket fără versionare).
 ```sql
@@ -284,6 +295,36 @@ COMMIT;
 RESET transaction_timeout;
 ```
 Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; r2: PostgreSQL 17 + plafonul `3000/session` (ceasul de tranzacție pornit la BEGIN: ~3 s de la BEGIN până la intrarea în COMMIT, altfel serverul închide sesiunea și nu se schimbă nimic); precondiție = cele 4 funcții (corp, securitate, drepturi) + funcțiile 20261209a pe care le cheamă politicile; un singur punct de blocare după verificările de catalog (din `pg_locks`: nimic din public / storage / auth blocat înaintea lui), `NOWAIT` pe toate (tabelele acoperite în ordinea numelui + `storage.objects` ACCESS EXCLUSIVE, tabelul de acces + `sites` ACCESS SHARE), reîncercare în subtranzacție până la 1 s de la BEGIN, apoi 55P03 `BUGET_LOCK`, nimic scris — ÎNAINTEA verificării: fiecare politică `executie_acces_*` a 20261209a (inclusiv `executie_acces_proiect_citire`) = exact forma 20261213a și nicio politică în plus cu prefixul nostru; `ALTER POLICY` înapoi la textul 20261209a din același generator; postcondiție = forma 20261209a exactă, nimic nu mai depinde de funcțiile de aici, celelalte politici neschimbate; DROP fără CASCADE; dezarmare. Testat în `scripts/test_executie_acces_perf.sql` (T9r: revenirea 20261209a refuzată cât timp 20261213a e aplicată, nearmată = refuz, politică schimbată = refuz, fără plafon = refuz, politica tabelului de acces ștearsă = refuz, armată = amprenta politicilor 20261209a + echivalența pe conturi + planul vechi, re-aplicare), `scripts/test_executie_acces_perf_revenire.sql` (T9z, după T3–T6) și `scripts/test_executie_acces_perf_concurenta.sh` (clona: refuz curat cu un tabel ocupat, plafonul închide sesiunea, revenirea reală măsurată sub trafic).
+
+## 20261215a — Achiziții: notițe interne pe comandă (`20261215a_achizitii_note_interne_ROLLBACK.sql`, NEAPLICAT)
+Scoate coloana `comenzi_furnizor.note_interne` și CHECK-ul ei de lungime (TKT-2026-0361). Nu redeschide nimic; **refuză dacă vreo comandă are o notiță scrisă** (notițele nu se pierd de aici — export + golire aprobată separat). Aplicația merge și fără coloană (câmpul se arată dezactivat). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215a', 'SCOATE_NOTE_INTERNE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = coloana text + CHECK-ul migrării; `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` (ocupat = 55P03, nimic scris) înaintea verificării „fără notițe”; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare, refuzuri) — pe clonă îl rulează chat-ul.
+
+## 20261215b — Ofertare: contactul la beneficiar pe oferta de probe (`20261215b_probe_oferte_contact_ROLLBACK.sql`, NEAPLICAT)
+Scoate coloanele `probe_oferte.client_contact_nume` / `_telefon` / `_email` și CHECK-urile lor de lungime (TKT-2026-0374). Nu redeschide nimic; **refuză dacă vreo ofertă are date de contact completate** (export + golire aprobată separat). Aplicația merge și fără coloane (câmpurile se arată dezactivate). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215b', 'SCOATE_CONTACT_PROBE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = cele 3 coloane text + cele 3 CHECK-uri ale migrării; `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` (ocupat = 55P03, nimic scris) înaintea verificării „fără date”; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare, refuzuri, RLS-ul existent pe cont fără acces) — pe clonă îl rulează chat-ul.
+
+## 20261215c — Izometrie: mută o piesă la început (`20261215c_izometrie_muta_pozitie_ROLLBACK.sql`, NEAPLICAT)
+Scoate RPC-ul `fn_executie_tevi_muta_pozitie` (TKT-2026-0388). Nu atinge date: ordinea pieselor rămâne cea de acum; butonul ⤒ revine la „disponibil după actualizarea bazei de date”, ↑ / ↓ rămân ca azi. Nu redeschide nimic. **Dacă se scot amândouă, se rulează ÎNAINTEA revenirii 20261209a.** Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT set_config('gazpet.revenire_20261215c', 'SCOATE_MUTA_POZITIE:' || txid_current(), true);
+-- conținutul exact al fișierului
+COMMIT;
+```
+Un singur bloc `DO`. Armare legată de txid, armare persistentă = refuz; precondiție = funcția migrării (INVOKER, jsonb) și nimic legat de ea în `pg_depend`; DROP fără CASCADE; postcondiție; dezarmare. Testat cu PGlite (aplicare → revenire → re-aplicare); scenariul pe clonă: `supabase/tests/20261215c_izometrie_muta_pozitie.sql`.
 
 ## 20261216a — Execuție: rezumatul scurt al raportului zilnic (`20261216a_executie_raport_rezumat_ROLLBACK.sql`, NEAPLICAT)
 Scoate cele 2 trigger-e (`trg_raport_zilnic_zz_rezumat` pe `rapoarte_zilnice`, `trg_raport_zilnic_salvari_rezumat` pe `raport_zilnic_salvari`), cele 8 funcții `fn_raport_rezumat_*`, constrângerea `rapoarte_zilnice_rezumat_ck` și coloanele `rezumat_text` / `rezumat_sursa` / `rezumat_la` / `rezumat_de`. Nu redeschide nicio gaură. **Refuză dacă există rezumate corectate de om** (`rezumat_sursa = 'editat'`): golirea lor e o decizie separată (preview → „da” Răzvan → export → apply). Rezumatele automate se pierd fără refuz (sunt derivate din raport). Rapoartele, liniile și jurnalul salvărilor nu se ating. Fără GO de execuție.
