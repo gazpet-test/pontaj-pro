@@ -384,6 +384,38 @@ rez_n() { grep -E "^N_audit_rezumat\|$1\|" "$TMP/porti_citire.out" | cut -d'|' -
 [[ "$(q "$STARE_DIAG")" == t ]] || fail 'porti_citire.sql: a ramas ceva'
 echo "PORTI_CITIRE: B=$(sect B_relatii 3) C=$(sect C_secvente 3) D=0 (= diagnosticul), ROLLBACK"
 q "DROP TABLE public.diag_poarta_fixture; DROP SEQUENCE public.diag_poarta_fixture_seq" >/dev/null
+# r25 (Jakarinos r24 P1): contraexemplul recenzentului pe PG17 real. Radacina (executabila de PUBLIC) = functie DEFINER a
+# lui r25_executor -> vedere a lui r25_view_owner -> bridge INVOKER (EXECUTE doar r25_executor) -> helper intr-o schema
+# vazuta doar de r25_executor -> scriere in coada pg_net. Functia din vedere ruleaza ca EXECUTANTUL (nu ca proprietarul
+# vederii): N trebuie sa dea drumul exact, iar apelul real (ca anon, tranzactie anulata) chiar scrie in coada. r24 dadea
+# 0 cai. Obiectele de proba stau in doua scheme proprii, sterse la final (impreuna cu rolurile).
+adm25() { "${ADMIN[@]}" -d "$DB" -c "$1" >/dev/null; }
+R25_COADA="$(q 'SELECT count(*) FROM net.http_request_queue')"
+adm25 'CREATE ROLE r25_executor NOLOGIN; CREATE ROLE r25_view_owner NOLOGIN'
+adm25 'CREATE SCHEMA r25_ascuns; GRANT USAGE ON SCHEMA r25_ascuns TO r25_executor; CREATE SCHEMA r25_proba; GRANT USAGE ON SCHEMA r25_proba TO PUBLIC'
+adm25 "CREATE FUNCTION r25_ascuns.step() RETURNS bigint LANGUAGE sql SET search_path TO 'pg_catalog', 'pg_temp' AS \$f\$ INSERT INTO net.http_request_queue (method, url, timeout_milliseconds) VALUES ('POST', 'https://exemplu.invalid/r25', 1) RETURNING id \$f\$"
+adm25 'REVOKE ALL ON FUNCTION r25_ascuns.step() FROM PUBLIC; GRANT EXECUTE ON FUNCTION r25_ascuns.step() TO r25_executor'
+adm25 "CREATE FUNCTION r25_proba.bridge() RETURNS bigint LANGUAGE plpgsql SET search_path TO 'r25_proba', 'pg_temp' AS \$f\$ BEGIN RETURN r25_ascuns.step(); END \$f\$"
+adm25 'REVOKE ALL ON FUNCTION r25_proba.bridge() FROM PUBLIC; GRANT EXECUTE ON FUNCTION r25_proba.bridge() TO r25_executor'
+adm25 'CREATE VIEW r25_proba.v AS SELECT r25_proba.bridge() AS id; ALTER VIEW r25_proba.v OWNER TO r25_view_owner; GRANT SELECT ON r25_proba.v TO r25_executor'
+adm25 "CREATE FUNCTION r25_proba.entry() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'r25_proba', 'pg_temp' AS \$f\$ BEGIN RETURN (SELECT id FROM r25_proba.v); END \$f\$"
+adm25 'ALTER FUNCTION r25_proba.entry() OWNER TO r25_executor'
+q "CREATE SCHEMA cron; CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, command text NOT NULL,
+   username text NOT NULL DEFAULT current_user, active boolean NOT NULL DEFAULT true, jobname text)" >/dev/null
+"${PSQL[@]}" -At -F '|' -f "$ROOT/scripts/portal/porti_citire.sql" >"$TMP/porti_citire_r25.out" 2>&1 \
+  || { cat "$TMP/porti_citire_r25.out"; fail 'porti_citire.sql pe contraexemplul r25'; }
+q "DROP TABLE cron.job; DROP SCHEMA cron" >/dev/null
+R25_DRUM='r25_proba.entry() {r25_executor} -[citire]-> r25_proba.v [SELECT] {r25_executor} -[vedere]-> r25_proba.bridge() {r25_executor} -[apel]-> r25_ascuns.step() {r25_executor} -[scriere INSERT]-> net.http_request_queue [INSERT] {r25_executor}'
+grep -qF "N_audit_cale|$R25_DRUM|" "$TMP/porti_citire_r25.out" \
+  || { grep -E '^N_audit_(cale|rezumat)' "$TMP/porti_citire_r25.out"; fail 'porti_citire.sql N (r25): drumul contraexemplului (functia din vedere ca executantul) lipseste'; }
+[[ "$("${ADMIN[@]}" -d "$DB" -At -c 'BEGIN' -c 'SET LOCAL ROLE anon' -c 'SELECT r25_proba.entry() IS NOT NULL' \
+     -c 'SELECT count(*) FROM net.http_request_queue' -c 'ROLLBACK' | paste -sd' ' -)" == "t $((R25_COADA + 1))" ]] \
+  || fail 'contraexemplul r25: apelul real ca anon nu a scris in coada (martorul independent al auditului)'
+adm25 'DROP SCHEMA r25_proba CASCADE; DROP SCHEMA r25_ascuns CASCADE; DROP ROLE r25_executor; DROP ROLE r25_view_owner'
+[[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'r25%'") $(q "SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'r25%'") $(q 'SELECT count(*) FROM net.http_request_queue')" == "0 0 $R25_COADA" ]] \
+  || fail 'contraexemplul r25: a ramas ceva (roluri, scheme sau randuri in coada)'
+[[ "$(q "$STARE_DIAG")" == t ]] || fail 'contraexemplul r25: a ramas ceva din 18a'
+echo "N_R25: contraexemplul recenzentului gasit de audit pe PG17 (vedere -> functie ca executantul), apelul real confirmat, curatat"
 rc="$(dry_e1 proba_curata --doar-18a)"
 [[ "$rc" == 0 ]] || { cat "$TMP/dry_proba_curata.log"; fail "dry_prod pe fixture curat: cod $rc, asteptat 0 (PROBA OK)"; }
 rc="$(dry_e1 diag_curat --diagnostic-porti)"
@@ -463,6 +495,27 @@ adm 'ALTER TABLE net._http_response ALTER COLUMN created SET DEFAULT now()'; poa
 adm 'ALTER SEQUENCE net.http_request_queue_id_seq OWNED BY NONE'
 poarta_are 'secventa:http_request_queue_id_seq' 'secventa fara coloana-proprietar'
 adm 'ALTER SEQUENCE net.http_request_queue_id_seq OWNED BY net.http_request_queue.id'; poarta_verde 'OWNED BY refacut'
+# r25 (Jakarinos r24 P1): mostenirea - un copil atasat (intr-o schema pe care teren nu o vede) se citeste prin
+# _http_response => poarta rosie; sters + ANALYZE (relhassubclass se curata lenes) => verde.
+adm 'CREATE TABLE portal_mut.copil () INHERITS (net._http_response)'; poarta_are 'relatie:_http_response' 'copil atasat (mostenire)'
+adm 'DROP TABLE portal_mut.copil'; adm 'ANALYZE net._http_response'; poarta_verde 'copil sters (dupa ANALYZE)'
+adm 'CREATE TABLE portal_mut.parinte (id bigint)'; adm 'ALTER TABLE net._http_response INHERIT portal_mut.parinte'
+poarta_are 'relatie:_http_response' '_http_response atasata la un parinte nou'
+adm 'ALTER TABLE net._http_response NO INHERIT portal_mut.parinte'; adm 'DROP TABLE portal_mut.parinte'; poarta_verde 'parinte scos'
+# r25: inchiderea tranzitiva - amprenta lui _http_response cu un trigger -> helper -> helper2; schimbarea lui helper2
+# (nivelul 2, fara atingerea triggerului) schimba amprenta (si valoarea inserata); refacut = aceeasi amprenta.
+adm 'CREATE FUNCTION portal_mut.helper2() RETURNS text LANGUAGE sql AS $f$ SELECT $$inainte$$::text $f$'
+adm "CREATE FUNCTION portal_mut.helper() RETURNS text LANGUAGE plpgsql SET search_path TO 'portal_mut', 'pg_temp' AS \$f\$ BEGIN RETURN helper2(); END \$f\$"
+adm 'CREATE FUNCTION portal_mut.relay() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN NEW.content := portal_mut.helper(); RETURN NEW; END $f$'
+adm 'CREATE TRIGGER portal_mut_relay BEFORE INSERT ON net._http_response FOR EACH ROW EXECUTE FUNCTION portal_mut.relay()'
+AMP_R="SELECT md5(public.fn_portal_net_rel_amprenta('net._http_response'::regclass))"
+H_INAINTE="$(q "$AMP_R")"
+adm 'CREATE OR REPLACE FUNCTION portal_mut.helper2() RETURNS text LANGUAGE sql AS $f$ SELECT $$dupa$$::text $f$'
+H_DUPA="$(q "$AMP_R")"
+adm 'CREATE OR REPLACE FUNCTION portal_mut.helper2() RETURNS text LANGUAGE sql AS $f$ SELECT $$inainte$$::text $f$'
+[[ -n "$H_INAINTE" && "$H_DUPA" != "$H_INAINTE" && "$(q "$AMP_R")" == "$H_INAINTE" ]] \
+  || fail "amprenta pg_net: helperul de nivel 2 al unui trigger nu schimba amprenta ($H_INAINTE / $H_DUPA)"
+adm 'DROP TRIGGER portal_mut_relay ON net._http_response'; poarta_verde 'trigger cu helperi sters'
 adm 'DROP SCHEMA portal_mut CASCADE'
 adm "ALTER ROLE authenticator SET pgrst.db_schemas = 'public, net'"; poarta_are 'teren PostgREST expune net' 'net in schemele PostgREST'
 adm 'ALTER ROLE authenticator RESET pgrst.db_schemas'; poarta_verde 'setarea PostgREST stearsa'

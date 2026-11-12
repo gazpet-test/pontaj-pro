@@ -53,6 +53,14 @@ CREATE FUNCTION public.sigur_a() RETURNS integer LANGUAGE sql SET search_path TO
 `
 const HP = 'net.http_post(text, integer)'
 const HG = 'net.http_get(text)'
+// r25: rolurile cazurilor de rol (executantul unei functii DEFINER, proprietarul unei vederi) + helperul ascuns: o schema
+// pe care doar executor o vede, cu o functie executabila doar de executor, care apeleaza pg_net
+const HID = `
+    CREATE ROLE executor NOLOGIN; CREATE ROLE view_owner NOLOGIN;
+    CREATE SCHEMA hidden; GRANT USAGE ON SCHEMA hidden TO executor;
+    CREATE FUNCTION hidden.step() RETURNS bigint LANGUAGE plpgsql SET search_path TO 'pg_catalog', 'pg_temp'
+      AS $f$ BEGIN RETURN net.http_post('https://exemplu.invalid/h'); END $f$;
+    REVOKE ALL ON FUNCTION hidden.step() FROM PUBLIC; GRANT EXECUTE ON FUNCTION hidden.step() TO executor;`
 
 // Cazurile: [nume, SQL suplimentar, verificare(rezultat)]. rezultat = { rez: {cheie: valoare}, cai: [{drum, detaliu}],
 // nerez: [{obiect, detaliu}], necun: [{obiect, detaliu}], nod: {eticheta: {...}}, rad: {eticheta: detaliu}, excl: [eticheta] }
@@ -225,8 +233,9 @@ const CAZURI = [
       AS $f$ SELECT count(*) FROM v_raspuns2 $f$;`,
   r => [
     faraCale(r, 'public.vf()'),
-    [are(r.cai, c => c.drum === 'public.vf2() {public} -[citire]-> public.v_raspuns2 [SELECT] {public} -[vedere]-> net._http_response [SELECT] {postgres}'),
-      `vf2 -> vedere -> _http_response (ca postgres): ${drumuri(r)}`],
+    // r25: relatia din vedere se verifica ca proprietarul vederii (postgres), functiile ar rula ca executantul (public)
+    [are(r.cai, c => c.drum === 'public.vf2() {public} -[citire]-> public.v_raspuns2 [SELECT] {public} -[vedere]-> net._http_response [SELECT] {postgres; exec public}'),
+      `vf2 -> vedere -> _http_response (verificata ca postgres, executie public): ${drumuri(r)}`],
   ]],
   ['corp BEGIN ATOMIC (dependentele din catalog)', `
     CREATE FUNCTION public.a1() RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT net.http_get('https://exemplu.invalid/a'); END;`,
@@ -310,12 +319,177 @@ const CAZURI = [
       `0 cai / 0 nerezolvate / 0 triggere executabile: ${r.rez.cai_spre_net} ${r.rez.nerezolvate} ${r.rez.functii_trigger_excluse}`],
     [r.rez.radacini_functii_net === '2' && r.rez.radacini_relatii_net === '3', 'radacinile net: functiile + coada / raspunsurile / secventa'],
   ]],
+  // r25 (Jakarinos r24 P1): rolul functiilor din vederi / politici / reguli / DEFAULT-uri / triggere / FK. Fiecare caz are
+  // si APELUL REAL (r.real: rulat ca rolul indicat dupa audit; r.coada = randuri puse in coada pg_net): sursa independenta
+  // de interogare (L25). Cazul trece doar daca auditul vede drumul exact SI apelul real chiar ajunge in coada.
+  ['r25 contraexemplul recenzentului: teren -> entry DEFINER(executor) -> vedere(view_owner) -> bridge INVOKER -> helper -> net', HID + `
+    CREATE ROLE teren NOLOGIN;
+    CREATE FUNCTION public.bridge() RETURNS bigint LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN hidden.step(); END $f$;
+    REVOKE ALL ON FUNCTION public.bridge() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.bridge() TO executor;
+    CREATE VIEW public.v AS SELECT public.bridge() AS id; ALTER VIEW public.v OWNER TO view_owner; GRANT SELECT ON public.v TO executor;
+    CREATE FUNCTION public.entry() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN (SELECT id FROM public.v); END $f$;
+    ALTER FUNCTION public.entry() OWNER TO executor; REVOKE ALL ON FUNCTION public.entry() FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION public.entry() TO teren;`,
+  r => [
+    [r.rez.rol_radacina === 'teren', `rol_radacina = teren: ${r.rez.rol_radacina}`],
+    [are(r.cai, c => c.drum === `public.entry() {executor} -[citire]-> public.v [SELECT] {executor} -[vedere]-> public.bridge() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact (functia din vedere ruleaza ca executor): ${drumuri(r)}`],
+    [r.rez.cai_spre_net !== '0', `cai_spre_net = ${r.rez.cai_spre_net} (r24 dadea 0)`],
+    [r.coada === 1 && !r.realEroare, `apelul real ca teren ajunge in coada: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'teren', sql: 'SELECT public.entry()' }],
+  ['r25 vedere security_invoker: functiile tot ca executantul, relatiile ca executantul (politica -> functie -> net)', HID + `
+    CREATE TABLE public.t_inv (id integer); INSERT INTO public.t_inv VALUES (1);
+    ALTER TABLE public.t_inv ENABLE ROW LEVEL SECURITY; GRANT SELECT ON public.t_inv TO executor;
+    CREATE FUNCTION public.pol_b() RETURNS boolean LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN PERFORM hidden.step(); RETURN true; END $f$;
+    REVOKE ALL ON FUNCTION public.pol_b() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.pol_b() TO executor;
+    CREATE POLICY t_inv_p ON public.t_inv FOR SELECT TO executor USING (public.pol_b());
+    CREATE VIEW public.v_inv WITH (security_invoker = on) AS SELECT id FROM public.t_inv;
+    ALTER VIEW public.v_inv OWNER TO view_owner; GRANT SELECT ON public.v_inv TO executor;
+    CREATE FUNCTION public.entry_inv() RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ SELECT count(*) FROM public.v_inv $f$;
+    ALTER FUNCTION public.entry_inv() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_inv() {executor} -[citire]-> public.v_inv [SELECT] {executor} -[vedere]-> public.t_inv [SELECT] {executor} -[politica]-> public.pol_b() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_inv()' }],
+  ['r25 vedere security_invoker citita dintr-o vedere fara: relatiile ei ca executantul (nu ca proprietarul vederii exterioare)', HID + `
+    CREATE TABLE public.t_n (id integer); INSERT INTO public.t_n VALUES (1);
+    ALTER TABLE public.t_n ENABLE ROW LEVEL SECURITY; GRANT SELECT ON public.t_n TO executor;
+    CREATE FUNCTION public.pol_n() RETURNS boolean LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN PERFORM hidden.step(); RETURN true; END $f$;
+    REVOKE ALL ON FUNCTION public.pol_n() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.pol_n() TO executor;
+    CREATE POLICY t_n_p ON public.t_n FOR SELECT TO executor USING (public.pol_n());
+    CREATE VIEW public.v_in WITH (security_invoker = on) AS SELECT id FROM public.t_n;
+    ALTER VIEW public.v_in OWNER TO view_owner; GRANT SELECT ON public.v_in TO view_owner;
+    CREATE VIEW public.v_out AS SELECT id FROM public.v_in; ALTER VIEW public.v_out OWNER TO view_owner;
+    GRANT SELECT ON public.v_out TO executor;
+    CREATE FUNCTION public.entry_n() RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ SELECT count(*) FROM public.v_out $f$;
+    ALTER FUNCTION public.entry_n() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_n() {executor} -[citire]-> public.v_out [SELECT] {executor} -[vedere]-> public.v_in [SELECT] {view_owner; exec executor} -[vedere]-> public.t_n [SELECT] {executor} -[politica]-> public.pol_n() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_n()' }],
+  ['r25 politica sub o vedere: aleasa ca proprietarul vederii, functia ei ruleaza ca executantul', HID + `
+    CREATE TABLE public.t_p (id integer); INSERT INTO public.t_p VALUES (1);
+    ALTER TABLE public.t_p ENABLE ROW LEVEL SECURITY; GRANT SELECT ON public.t_p TO view_owner;
+    CREATE FUNCTION public.pol_c() RETURNS boolean LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN PERFORM hidden.step(); RETURN true; END $f$;
+    REVOKE ALL ON FUNCTION public.pol_c() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.pol_c() TO executor;
+    CREATE POLICY t_p_p ON public.t_p FOR SELECT TO view_owner USING (public.pol_c());
+    CREATE VIEW public.v_p AS SELECT id FROM public.t_p; ALTER VIEW public.v_p OWNER TO view_owner;
+    GRANT SELECT ON public.v_p TO executor;
+    CREATE FUNCTION public.entry_p() RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ SELECT count(*) FROM public.v_p $f$;
+    ALTER FUNCTION public.entry_p() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_p() {executor} -[citire]-> public.v_p [SELECT] {executor} -[vedere]-> public.t_p [SELECT] {view_owner; exec executor} -[politica]-> public.pol_c() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_p()' }],
+  ['r25 regula: relatiile actiunii ca proprietarul relatiei, functia actiunii ca executantul', HID + `
+    CREATE ROLE rule_owner NOLOGIN;
+    CREATE TABLE public.t_r (x integer); CREATE TABLE public.t_r_log (b bigint);
+    ALTER TABLE public.t_r_log OWNER TO rule_owner; GRANT INSERT ON public.t_r TO executor;
+    CREATE FUNCTION public.bridge_r() RETURNS bigint LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN hidden.step(); END $f$;
+    REVOKE ALL ON FUNCTION public.bridge_r() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.bridge_r() TO executor;
+    CREATE RULE t_r_also AS ON INSERT TO public.t_r DO ALSO INSERT INTO public.t_r_log VALUES (public.bridge_r());
+    ALTER TABLE public.t_r OWNER TO rule_owner;
+    CREATE FUNCTION public.entry_r() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN INSERT INTO public.t_r VALUES (1); END $f$;
+    ALTER FUNCTION public.entry_r() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_r() {executor} -[scriere INSERT]-> public.t_r [INSERT] {executor} -[regula]-> public.bridge_r() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_r()' }],
+  ['r25 DEFAULT al tabelului de sub o vedere: functia ruleaza ca executantul', HID + `
+    CREATE FUNCTION public.def_b() RETURNS bigint LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN hidden.step(); END $f$;
+    REVOKE ALL ON FUNCTION public.def_b() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.def_b() TO executor;
+    CREATE TABLE public.t_d (id integer, d bigint DEFAULT public.def_b()); GRANT INSERT ON public.t_d TO view_owner;
+    CREATE VIEW public.v_d AS SELECT id FROM public.t_d; ALTER VIEW public.v_d OWNER TO view_owner;
+    GRANT INSERT ON public.v_d TO executor;
+    CREATE FUNCTION public.entry_d() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN INSERT INTO public.v_d (id) VALUES (1); END $f$;
+    ALTER FUNCTION public.entry_d() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_d() {executor} -[scriere INSERT]-> public.v_d [INSERT] {executor} -[vedere]-> public.t_d [INSERT] {view_owner; exec executor} -[default]-> public.def_b() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_d()' }],
+  ['r25 trigger pe tabelul de sub o vedere: functia triggerului ruleaza ca executantul', HID + `
+    CREATE FUNCTION public.tg_b() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN PERFORM hidden.step(); RETURN NEW; END $f$;
+    REVOKE ALL ON FUNCTION public.tg_b() FROM PUBLIC;
+    CREATE TABLE public.t_t (id integer); GRANT INSERT ON public.t_t TO view_owner;
+    CREATE TRIGGER t_t_ai AFTER INSERT ON public.t_t FOR EACH ROW EXECUTE FUNCTION public.tg_b();
+    CREATE VIEW public.v_t AS SELECT id FROM public.t_t; ALTER VIEW public.v_t OWNER TO view_owner;
+    GRANT INSERT ON public.v_t TO executor;
+    CREATE FUNCTION public.entry_t() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN INSERT INTO public.v_t (id) VALUES (1); END $f$;
+    ALTER FUNCTION public.entry_t() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_t() {executor} -[scriere INSERT]-> public.v_t [INSERT] {executor} -[vedere]-> public.t_t [INSERT] {view_owner; exec executor} -[trigger INSERT]-> public.tg_b() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_t()' }],
+  ['r25 trigger INSTEAD OF pe vedere: ruleaza ca executantul, fara EXECUTE', HID + `
+    CREATE FUNCTION public.tg_io() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN PERFORM hidden.step(); RETURN NEW; END $f$;
+    REVOKE ALL ON FUNCTION public.tg_io() FROM PUBLIC;
+    CREATE VIEW public.v_io AS SELECT 1 AS x; ALTER VIEW public.v_io OWNER TO view_owner; GRANT INSERT ON public.v_io TO executor;
+    CREATE TRIGGER v_io_ii INSTEAD OF INSERT ON public.v_io FOR EACH ROW EXECUTE FUNCTION public.tg_io();
+    CREATE FUNCTION public.entry_io() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN INSERT INTO public.v_io VALUES (1); END $f$;
+    ALTER FUNCTION public.entry_io() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_io() {executor} -[scriere INSERT]-> public.v_io [INSERT] {executor} -[trigger INSERT]-> public.tg_io() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_io()' }],
+  ['r25 FK CASCADE: triggerul AFTER al copilului ruleaza ca executantul (nu ca proprietarul copilului)', HID + `
+    CREATE ROLE child_owner NOLOGIN;
+    CREATE TABLE public.p_f (id integer PRIMARY KEY); INSERT INTO public.p_f VALUES (1); GRANT SELECT, DELETE ON public.p_f TO executor;
+    CREATE TABLE public.c_f (id integer, p integer REFERENCES public.p_f ON DELETE CASCADE); INSERT INTO public.c_f VALUES (1, 1);
+    ALTER TABLE public.c_f OWNER TO child_owner;
+    CREATE FUNCTION public.tg_c() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN PERFORM hidden.step(); RETURN OLD; END $f$;
+    REVOKE ALL ON FUNCTION public.tg_c() FROM PUBLIC;
+    CREATE TRIGGER c_f_ad AFTER DELETE ON public.c_f FOR EACH ROW EXECUTE FUNCTION public.tg_c();
+    CREATE FUNCTION public.entry_f() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN DELETE FROM public.p_f WHERE id = 1; END $f$;
+    ALTER FUNCTION public.entry_f() OWNER TO executor;`,
+  r => [
+    [are(r.cai, c => c.drum === `public.entry_f() {executor} -[scriere DELETE]-> public.p_f [DELETE] {executor} -[fk la stergere c]-> public.c_f [DELETE] {child_owner; exec executor} -[trigger DELETE]-> public.tg_c() {executor} -[apel]-> hidden.step() {executor} -[apel]-> ${HP} {executor}`),
+      `drumul exact: ${drumuri(r)}`],
+    [r.coada > 0 && !r.realEroare, `apelul real: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_f()' }],
+  ['r25 vedere: functia din vedere fara EXECUTE pentru executant => PostgreSQL refuza, fara cale (perechea negativa)', HID + `
+    CREATE FUNCTION public.bridge_x() RETURNS bigint LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN hidden.step(); END $f$;
+    REVOKE ALL ON FUNCTION public.bridge_x() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.bridge_x() TO view_owner;
+    CREATE VIEW public.v_x AS SELECT public.bridge_x() AS id; ALTER VIEW public.v_x OWNER TO view_owner;
+    GRANT SELECT ON public.v_x TO executor;
+    CREATE FUNCTION public.entry_x() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+      AS $f$ BEGIN RETURN (SELECT id FROM public.v_x); END $f$;
+    ALTER FUNCTION public.entry_x() OWNER TO executor;`,
+  r => [
+    faraCale(r, 'public.entry_x()'),
+    [r.coada === 0 && /permission denied for function bridge_x/.test(r.realEroare || ''), `apelul real refuzat: ${r.coada} ${r.realEroare || ''}`],
+  ], { rol: 'anon', sql: 'SELECT public.entry_x()' }],
 ]
 
 let esecuri = 0
 const ok = (cond, msg) => { console.log((cond ? 'OK   ' : 'PICA ') + msg); if (!cond) esecuri++ }
 
-async function ruleaza(extra, sql = SQL) {
+async function ruleaza(extra, sql = SQL, real = null) {
   const db = await PGlite.create()
   await db.exec(BAZA)
   // corpurile se verifica la rulare, nu la creare (ca pe productie dupa un restore: functia exista, apelul e static)
@@ -325,8 +499,15 @@ async function ruleaza(extra, sql = SQL) {
   let rez
   const t0 = Date.now()
   try { rez = await db.exec(sql) } catch (e) { await db.close(); return { eroare: e.message } }
+  const r = { rez: {}, cai: [], nerez: [], necun: [], nod: {}, rad: {}, excl: [], ms: Date.now() - t0, coada: null, realEroare: null }
+  // r25: apelul REAL (dupa audit, pe aceeasi baza): cate randuri ajung in coada pg_net, ca rolul indicat
+  if (real) {
+    try { await db.exec(`BEGIN; SET LOCAL ROLE ${real.rol}; ${real.sql}; COMMIT;`) } catch (e) {
+      r.realEroare = String(e.message || e); await db.exec('ROLLBACK').catch(() => {})
+    }
+    r.coada = Number((await db.query('SELECT count(*) AS n FROM net.http_request_queue')).rows[0].n)
+  }
   await db.close()
-  const r = { rez: {}, cai: [], nerez: [], necun: [], nod: {}, rad: {}, excl: [], ms: Date.now() - t0 }
   for (const set of rez) {
     for (const row of set.rows || []) {
       if (!row || typeof row.sectiune !== 'string') continue
@@ -343,9 +524,9 @@ async function ruleaza(extra, sql = SQL) {
 }
 
 const filtru = process.argv[2]
-for (const [nume, extra, verif] of CAZURI) {
+for (const [nume, extra, verif, real] of CAZURI) {
   if (filtru && !nume.includes(filtru)) continue
-  const r = await ruleaza(extra)
+  const r = await ruleaza(extra, SQL, real)
   if (r.eroare) { ok(false, `${nume}: porti_citire.sql a picat: ${r.eroare}`); continue }
   ok(Object.keys(r.rez).length === 17, `${nume}: rezumatul are 17 randuri (${r.ms} ms)`)
   for (const [c, m] of verif(r)) ok(c, `${nume}: ${m}`)
@@ -353,25 +534,50 @@ for (const [nume, extra, verif] of CAZURI) {
 // Mutantii auditului: fiecare scoate O regula a modelului; cazul care o dovedeste TREBUIE sa pice (altfel testul nu
 // prinde regula). [descriere, text original din porti_citire.sql, inlocuire, numele cazului]
 const MUTANTI = [
-  ['apel fara verificarea EXECUTE', 'JOIN exec x ON x.oid = g.oid\n       WHERE NOT g.trigger_fn',
-    'JOIN rol_cand x ON true\n       WHERE NOT g.trigger_fn', 'EXECUTE lipsa pe veriga din mijloc'],
+  ['apel fara verificarea EXECUTE', 'true AS cexec', 'false AS cexec', 'EXECUTE lipsa pe veriga din mijloc'],
   ['functiile de trigger ca radacini', "has_function_privilege((SELECT rol0 FROM par), f.oid, 'EXECUTE') AND NOT f.trigger_fn\n     AND NOT (f.schema",
     "has_function_privilege((SELECT rol0 FROM par), f.oid, 'EXECUTE')\n     AND NOT (f.schema", 'functie de trigger executabila de PUBLIC'],
   ['FK generic (orice stergere scrie in copil)', "CASE co.confdeltype WHEN 'c' THEN 'DELETE' WHEN 'n' THEN 'UPDATE' WHEN 'd' THEN 'UPDATE' END",
     "'DELETE'", 'FK NO ACTION'],
-  ['scriere fara verificarea dreptului', 'JOIN rel c ON c.nume = w.nume JOIN drept dr ON dr.oid = c.oid',
-    'JOIN rel c ON c.nume = w.nume JOIN (SELECT r9.rol, c9.oid, o9.op FROM rol_cand r9 CROSS JOIN rel c9 CROSS JOIN operatie o9) dr ON dr.oid = c.oid',
+  ['scriere fara verificarea dreptului', "false, true, NULL::oid\n        FROM cuvant w JOIN fn f", "false, false, NULL::oid\n        FROM cuvant w JOIN fn f",
     'scriere INVOKER intr-un tabel fara drept'],
   ['politica fara rolurile ei', "AND (0 = ANY (po.polroles) OR", "AND (true OR", 'politica evaluata la citirea'],
   ['triggerul declansat de orice operatie', '(tg.tgtype::integer & o.bit) <> 0', 'true', 'trigger pe alta operatie'],
+  // r25: fiecare regula de rol, intoarsa la forma gresita, trebuie prinsa de cazul ei (cu apelul real ca martor)
+  ['r24: functia din vedere ruleaza ca proprietarul vederii',
+    "CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,\n             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,\n             q.refclassid = 'pg_proc'::regclass, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type = '1'",
+    "CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' WHEN c.invoker THEN 'X' ELSE 'F' END,\n             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar WHEN c.invoker THEN NULL ELSE c.proprietar END,\n             q.refclassid = 'pg_proc'::regclass, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type = '1'",
+    'r25 contraexemplul recenzentului'],
+  ['vedere security_invoker interioara verificata ca rolul vederii exterioare',
+    "WHEN q.refclassid = 'pg_proc'::regclass OR c.invoker THEN 'X' ELSE 'F' END,",
+    "WHEN q.refclassid = 'pg_proc'::regclass THEN 'X' WHEN c.invoker THEN 'R' ELSE 'F' END,", 'r25 vedere security_invoker citita'],
+  ['functia din politica ruleaza ca rolul de verificare',
+    "CASE WHEN d.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,",
+    "CASE WHEN d.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'R' END,", 'r25 politica sub o vedere'],
+  ['functia din regula ruleaza ca proprietarul relatiei',
+    "CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,\n             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,\n             q.refclassid = 'pg_proc'::regclass, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type IN",
+    "CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'F' END,\n             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar ELSE c.proprietar END,\n             q.refclassid = 'pg_proc'::regclass, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type IN",
+    'r25 regula'],
+  ['functia din DEFAULT ruleaza ca rolul de verificare',
+    "CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,\n             CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,\n             a.refclassid = 'pg_proc'::regclass, false, NULL::oid",
+    "CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'R' END,\n             CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,\n             a.refclassid = 'pg_proc'::regclass, false, NULL::oid",
+    'r25 DEFAULT'],
+  ['functia triggerului ruleaza ca rolul de verificare',
+    "CASE WHEN g.definer THEN 'F' ELSE 'X' END, CASE WHEN g.definer THEN g.proprietar END, false, false, NULL::oid\n        FROM pg_trigger tg",
+    "CASE WHEN g.definer THEN 'F' ELSE 'R' END, CASE WHEN g.definer THEN g.proprietar END, false, false, NULL::oid\n        FROM pg_trigger tg",
+    'r25 trigger pe tabelul de sub o vedere'],
+  ['FK: doar starea BEFORE (proprietarul copilului)', 'CROSS JOIN (VALUES (false), (true)) AS v(dupa)', 'CROSS JOIN (VALUES (false)) AS v(dupa)', 'r25 FK CASCADE'],
+  ['functia din vedere fara verificarea EXECUTE',
+    "q.refclassid = 'pg_proc'::regclass, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type = '1'",
+    "false, false, NULL::oid\n        FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type = '1'", 'r25 vedere: functia din vedere fara EXECUTE'],
 ]
 for (const [desc, din, in_, caz] of MUTANTI) {
   if (filtru) break
   const k = SQL.split(din).length - 1
   if (k !== 1) { ok(false, `mutant „${desc}”: textul original apare de ${k} ori in porti_citire.sql`); continue }
-  const [nume, extra, verif] = CAZURI.find(c => c[0].startsWith(caz)) || []
+  const [nume, extra, verif, real] = CAZURI.find(c => c[0].startsWith(caz)) || []
   if (!nume) { ok(false, `mutant „${desc}”: cazul ${caz} lipseste`); continue }
-  const r = await ruleaza(extra, SQL.replace(din, in_))
+  const r = await ruleaza(extra, SQL.replace(din, in_), real)
   const picate = r.eroare ? 1 : verif(r).filter(([c]) => !c).length
   ok(picate > 0, `mutant „${desc}” RESPINS de cazul „${nume}” (${picate} verificari picate)`)
 }

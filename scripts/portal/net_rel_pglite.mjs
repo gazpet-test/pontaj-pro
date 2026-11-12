@@ -29,7 +29,9 @@ const M18 = citeste('../../supabase/migrations/20261118a_portal_teren_identitate
 const CITIRE = citeste('porti_citire.sql')
 
 // Productie, 12.11.2026, amprenta r21 (fara triggere / politici / DEFAULT-uri): nu mai trebuie sa iasa.
-const R21_VECHI = ['af629f9c5992f34ede3bc889d2db669c', 'e0e96a399d23c7eb05ca2216618e1b72', 'd7e907e6bf5f93c94b754f45839161d1']
+// r25: si valorile r22 lipite pe 12.11 seara (fara mostenire / inchiderea tranzitiva a functiilor) sunt vechi.
+const R21_VECHI = ['af629f9c5992f34ede3bc889d2db669c', 'e0e96a399d23c7eb05ca2216618e1b72', 'd7e907e6bf5f93c94b754f45839161d1',
+  '70a6f8fb4293956bcf7d186a2ff88061', 'c376cee77afa265287547fe22e19084d', 'a8957a09016363e60f6b877e27bd87ac']
 const CHEI = ['net._http_response', 'net.http_request_queue', 'net.http_request_queue_id_seq']
 const LISTA_GOALA = '{"net._http_response":"DE_COMPLETAT","net.http_request_queue":"DE_COMPLETAT","net.http_request_queue_id_seq":"DE_COMPLETAT"}'
 
@@ -154,6 +156,10 @@ const mutanti = [
   ['r22 secventa cu alt pas', ADM + 'ALTER SEQUENCE net.http_request_queue_id_seq INCREMENT BY 2;', S, 'RESPINS/accesibil'],
   ['r22 valoarea secventei (setval) NU e in amprenta (legitim)', "SELECT setval('net.http_request_queue_id_seq', 500);", S, 'acceptat/accesibil'],
   ['PUBLIC retras de proprietar (legitim: mai putin acces)', ADM + 'REVOKE ALL ON net.http_request_queue FROM PUBLIC;', Q, 'RESPINS/neaccesibil'],
+  // r25 (Jakarinos r24 P1): mostenire / partitionare
+  ['r25 copil atasat la _http_response (INHERITS, schema nevazuta de teren)', 'CREATE TABLE portal_mut.copil () INHERITS (net._http_response);', R, 'RESPINS/accesibil'],
+  ['r25 copil al copilului (nepot) atasat', 'CREATE TABLE portal_mut.copil () INHERITS (net._http_response); CREATE TABLE portal_mut.nepot () INHERITS (portal_mut.copil);', R, 'RESPINS/accesibil'],
+  ['r25 _http_response atasata la un parinte nou', 'CREATE TABLE portal_mut.parinte (id bigint); ALTER TABLE net._http_response INHERIT portal_mut.parinte;', R, 'RESPINS/accesibil'],
 ]
 for (const [nume, sql, tinta, asteptat] of mutanti) {
   await db.exec('BEGIN;' + sql + 'RESET ROLE;')
@@ -187,6 +193,73 @@ ok(sCorp[Q] === 'RESPINS/accesibil', `corpul functiei triggerului schimbat: ${sC
 ok(sRefacut[Q] === 'acceptat/accesibil', `corpul refacut: ${sRefacut[Q]}`)
 ok(sOff[Q] === 'RESPINS/accesibil', `triggerul dezactivat: ${sOff[Q]}`)
 ok(JSON.stringify(await stare()) === JSON.stringify(s0), 'dupa trigger: starea initiala (ROLLBACK + lista G)')
+
+// 3c. r25 (Jakarinos r24 P1): de ce conteaza mostenirea - teren citeste PRIN _http_response randurile unui copil atasat
+// intr-o schema pe care nu o vede (fara alt drept); amprenta trebuie sa se schimbe (mutantul de mai sus) si dupa
+// stergerea copilului + ANALYZE redevine cea revizuita (relhassubclass se curata lenes).
+await db.exec("BEGIN; CREATE TABLE portal_mut.copil () INHERITS (net._http_response); INSERT INTO portal_mut.copil (content) VALUES ('din copil'); SET LOCAL ROLE teren;")
+const prinParinte = (await q('SELECT count(*)::int AS n FROM net._http_response'))[0].n
+await db.exec('ROLLBACK;')
+ok(prinParinte === 1, `teren citeste randul copilului prin _http_response (fara drept pe copil): ${prinParinte}`)
+const ampR = async () => (await q(`SELECT md5(public.fn_portal_net_rel_amprenta('net._http_response'::regclass)) AS h`))[0].h
+await db.exec('BEGIN; CREATE TABLE portal_mut.copil () INHERITS (net._http_response);')
+const hCopil = await ampR()
+await db.exec('CREATE TABLE portal_mut.nepot () INHERITS (portal_mut.copil);')
+const hNepot = await ampR()
+await db.exec('GRANT SELECT ON portal_mut.nepot TO anon;')
+const hNepotDrept = await ampR()
+await db.exec('ROLLBACK;')
+ok(new Set([hCopil, hNepot, hNepotDrept, g[R]]).size === 4, `urmasii pe orice adancime, cu drepturile lor: copil / +nepot / +drept pe nepot dau amprente diferite`)
+await db.exec('CREATE TABLE portal_mut.copil () INHERITS (net._http_response); DROP TABLE portal_mut.copil;')
+const sDupaDrop = await stare()
+await db.exec('ANALYZE net._http_response;')
+const sDupaAnalyze = await stare()
+ok(sDupaDrop[R] === 'RESPINS/accesibil' && sDupaAnalyze[R] === 'acceptat/accesibil',
+  `copil sters: ${sDupaDrop[R]} (relhassubclass inca adevarat), dupa ANALYZE: ${sDupaAnalyze[R]}`)
+
+// 3d. r25 (Jakarinos r24 P1): inchiderea TRANZITIVA. Un trigger revizuit pe _http_response apeleaza helper -> helper2
+// (si un helper BEGIN ATOMIC); schimbarea corpului / drepturilor oricarui helper (fara atingerea triggerului) = RESPINS;
+// refacut = acceptat. Comportamentul chiar se schimba (valoarea inserata), ca in reproducerea recenzentului.
+await db.exec(`
+  CREATE FUNCTION portal_mut.helper2() RETURNS text LANGUAGE plpgsql AS $f$ BEGIN RETURN 'inainte'; END $f$;
+  CREATE FUNCTION portal_mut.helper() RETURNS text LANGUAGE plpgsql SET search_path TO 'portal_mut', 'pg_temp'
+    AS $f$ BEGIN RETURN helper2(); END $f$;
+  CREATE FUNCTION portal_mut.atomic3() RETURNS text LANGUAGE sql BEGIN ATOMIC SELECT 'x'::text; END;
+  CREATE FUNCTION portal_mut.atomic2() RETURNS text LANGUAGE sql BEGIN ATOMIC SELECT portal_mut.atomic3(); END;
+  CREATE FUNCTION portal_mut.relay() RETURNS trigger LANGUAGE plpgsql
+    AS $f$ BEGIN NEW.content := portal_mut.helper() || portal_mut.atomic2(); RETURN NEW; END $f$;
+  CREATE TRIGGER portal_mut_relay BEFORE INSERT ON net._http_response FOR EACH ROW EXECUTE FUNCTION portal_mut.relay();`)
+const gH = await citesteG()
+await aprobat(gH)
+const sH = await stare()
+const continut = async () => {
+  await db.exec("BEGIN; INSERT INTO net._http_response (content) VALUES ('intrare');")
+  const c = (await q("SELECT content FROM net._http_response WHERE content <> 'din copil' ORDER BY created DESC LIMIT 1"))[0]?.content
+  await db.exec('ROLLBACK;')
+  return c
+}
+const c0 = await continut()
+const varianta = async (sql, refac) => { await db.exec(sql); const s = (await stare())[R]; const c = await continut(); await db.exec(refac); return [s, c] }
+const [sH2, cH2] = await varianta("CREATE OR REPLACE FUNCTION portal_mut.helper2() RETURNS text LANGUAGE plpgsql AS $f$ BEGIN RETURN 'dupa'; END $f$;",
+  "CREATE OR REPLACE FUNCTION portal_mut.helper2() RETURNS text LANGUAGE plpgsql AS $f$ BEGIN RETURN 'inainte'; END $f$;")
+const sRef1 = (await stare())[R]
+const [sH1] = await varianta("CREATE OR REPLACE FUNCTION portal_mut.helper() RETURNS text LANGUAGE plpgsql SET search_path TO 'portal_mut', 'pg_temp' AS $f$ BEGIN RETURN helper2() || '!'; END $f$;",
+  "CREATE OR REPLACE FUNCTION portal_mut.helper() RETURNS text LANGUAGE plpgsql SET search_path TO 'portal_mut', 'pg_temp' AS $f$ BEGIN RETURN helper2(); END $f$;")
+const [sAt, cAt] = await varianta("CREATE OR REPLACE FUNCTION portal_mut.atomic3() RETURNS text LANGUAGE sql BEGIN ATOMIC SELECT 'y'::text; END;",
+  "CREATE OR REPLACE FUNCTION portal_mut.atomic3() RETURNS text LANGUAGE sql BEGIN ATOMIC SELECT 'x'::text; END;")
+const sRef2 = (await stare())[R]
+// ultimul: REVOKE + GRANT inapoi nu reface forma exacta a ACL-ului (implicit NULL -> lista explicita) => ramane RESPINS
+// (spre rosu); functiile se sterg imediat dupa
+const [sAcl] = await varianta('REVOKE EXECUTE ON FUNCTION portal_mut.helper2() FROM PUBLIC;', 'GRANT EXECUTE ON FUNCTION portal_mut.helper2() TO PUBLIC;')
+await db.exec('DROP TRIGGER portal_mut_relay ON net._http_response; DROP FUNCTION portal_mut.relay(), portal_mut.helper(), portal_mut.helper2(), portal_mut.atomic2(), portal_mut.atomic3();')
+await aprobat(g)
+ok(gH[R] !== g[R] && sH[R] === 'acceptat/accesibil' && c0 === 'inaintex', `trigger revizuit cu helperi (lista recitita cu el): ${sH[R]}, continut ${c0}`)
+ok(sH2 === 'RESPINS/accesibil' && cH2 === 'dupax', `helper2 (nivelul 2) schimbat: ${sH2}, continutul inserat devine ${cH2}`)
+ok(sRef1 === 'acceptat/accesibil' && sRef2 === 'acceptat/accesibil', `helperii refacuti: ${sRef1} / ${sRef2}`)
+ok(sH1 === 'RESPINS/accesibil', `helper (nivelul 1) schimbat: ${sH1}`)
+ok(sAcl === 'RESPINS/accesibil', `dreptul pe helper2 schimbat: ${sAcl}`)
+ok(sAt === 'RESPINS/accesibil' && cAt === 'inaintey', `functie BEGIN ATOMIC (nivelul 2) schimbata: ${sAt}, continut ${cAt}`)
+ok(JSON.stringify(await stare()) === JSON.stringify(s0), 'dupa helperi: starea initiala (lista G)')
 
 // 4. Ce poate teren la nivel SQL azi (prin PUBLIC), daca ar avea o cale de a rula SQL: scrie in coada, citeste raspunsurile.
 let er1 = '', er2 = '', idNou = null

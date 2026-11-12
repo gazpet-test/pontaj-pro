@@ -174,21 +174,71 @@ SELECT 'G_amprenta_net' AS sectiune, x.relatie, md5(x.amprenta) AS md5_amprenta,
                       ORDER BY dp.refobjid::regclass::text COLLATE "C", dp.refobjsubid)
        FROM pg_depend dp WHERE dp.classid = 'pg_class'::regclass AND dp.objid = c.oid
          AND dp.refclassid = 'pg_class'::regclass AND dp.deptype IN ('a', 'i')),
+    -- r25 (Jakarinos r24 P1): mostenire / partitionare. Un copil atasat (INHERITS / ATTACH PARTITION) se citeste PRIN
+    -- obiect fara alt drept: forma partitionarii, parintii directi si TOTI urmasii (orice adancime) cu proprietarul,
+    -- drepturile si RLS-ul lor. relhassubclass ramane adevarat dupa stergerea copilului pana la primul ANALYZE (zgomot
+    -- trecator, spre rosu).
+    jsonb_build_array(c.relispartition, c.relhassubclass, pg_get_partkeydef(c.oid), pg_get_expr(c.relpartbound, c.oid)),
+    (SELECT jsonb_agg(jsonb_build_array(ih.inhparent::regclass::text, ih.inhseqno) ORDER BY ih.inhseqno)
+       FROM pg_inherits ih WHERE ih.inhrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(uc.oid::regclass::text, uc.relkind::text, pg_get_userbyid(uc.relowner), uc.relacl::text,
+                                        uc.relispartition, uc.relrowsecurity, uc.relforcerowsecurity)
+                      ORDER BY uc.oid::regclass::text COLLATE "C")
+       FROM (WITH RECURSIVE urmas(oid) AS (SELECT ih.inhrelid FROM pg_inherits ih WHERE ih.inhparent = c.oid
+                                           UNION
+                                           SELECT ih.inhrelid FROM urmas u JOIN pg_inherits ih ON ih.inhparent = u.oid)
+             SELECT u.oid FROM urmas u) uu JOIN pg_class uc ON uc.oid = uu.oid),
+    -- functiile de care depind triggerele / politicile / DEFAULT-urile / constrangerile / regulile / indecsii obiectului
+    -- (pg_depend) + r25 INCHIDEREA TRANZITIVA: functiile apelate pe nume din corpul lor (REZOLVARE_APEL, aceeasi ca in
+    -- auditul N) si din corpurile BEGIN ATOMIC (pg_depend), pana la capat; fiecare cu definitia, DEFINER, proprietarul,
+    -- configuratia si drepturile. Functiile din nucleu (oid < 16384) nu se parcurg.
     (SELECT jsonb_agg(DISTINCT jsonb_build_array(fp.oid::regprocedure::text, fp.prosecdef, pg_get_userbyid(fp.proowner),
-                                                 fp.proconfig::text,
+                                                 fp.proconfig::text, fp.proacl::text,
                                                  CASE WHEN fp.prokind = 'a' THEN (SELECT md5(ag::text) FROM pg_aggregate ag
                                                                                    WHERE ag.aggfnoid = fp.oid)
                                                       ELSE md5(pg_get_functiondef(fp.oid)) END))
-       FROM pg_depend fd JOIN pg_proc fp ON fp.oid = fd.refobjid
-      WHERE fd.refclassid = 'pg_proc'::regclass AND fp.oid >= 16384
-        AND ((fd.classid = 'pg_trigger'::regclass AND fd.objid IN (SELECT tg.oid FROM pg_trigger tg WHERE tg.tgrelid = c.oid))
-          OR (fd.classid = 'pg_policy'::regclass AND fd.objid IN (SELECT po.oid FROM pg_policy po WHERE po.polrelid = c.oid))
-          OR (fd.classid = 'pg_attrdef'::regclass AND fd.objid IN (SELECT ad.oid FROM pg_attrdef ad WHERE ad.adrelid = c.oid))
-          OR (fd.classid = 'pg_constraint'::regclass AND fd.objid IN (SELECT co.oid FROM pg_constraint co
-                                                                       WHERE co.conrelid = c.oid))
-          OR (fd.classid = 'pg_rewrite'::regclass AND fd.objid IN (SELECT ru.oid FROM pg_rewrite ru WHERE ru.ev_class = c.oid))
-          OR (fd.classid = 'pg_class'::regclass AND fd.objid IN (SELECT ix.indexrelid FROM pg_index ix
-                                                                  WHERE ix.indrelid = c.oid)))))::text
+       FROM (WITH RECURSIVE inchidere(oid) AS (
+               SELECT fd.refobjid FROM pg_depend fd
+                WHERE fd.refclassid = 'pg_proc'::regclass
+                  AND ((fd.classid = 'pg_trigger'::regclass AND fd.objid IN (SELECT tg.oid FROM pg_trigger tg WHERE tg.tgrelid = c.oid))
+                    OR (fd.classid = 'pg_policy'::regclass AND fd.objid IN (SELECT po.oid FROM pg_policy po WHERE po.polrelid = c.oid))
+                    OR (fd.classid = 'pg_attrdef'::regclass AND fd.objid IN (SELECT ad.oid FROM pg_attrdef ad WHERE ad.adrelid = c.oid))
+                    OR (fd.classid = 'pg_constraint'::regclass AND fd.objid IN (SELECT co.oid FROM pg_constraint co
+                                                                                 WHERE co.conrelid = c.oid))
+                    OR (fd.classid = 'pg_rewrite'::regclass AND fd.objid IN (SELECT ru.oid FROM pg_rewrite ru WHERE ru.ev_class = c.oid))
+                    OR (fd.classid = 'pg_class'::regclass AND fd.objid IN (SELECT ix.indexrelid FROM pg_index ix
+                                                                            WHERE ix.indrelid = c.oid)))
+               UNION
+               SELECT x.la FROM inchidere i JOIN pg_proc p ON p.oid = i.oid
+                      CROSS JOIN LATERAL (
+                        SELECT rz.la FROM (
+                          -- REZOLVARE_APEL inceput
+                          SELECT DISTINCT m.q, m.nume, g.oid AS la
+                            FROM (SELECT CASE WHEN r.t[1] IS NULL THEN NULL WHEN left(r.t[1], 1) = '"' THEN btrim(r.t[1], '"')
+                                              ELSE lower(r.t[1]) END AS q,
+                                         CASE WHEN left(r.t[2], 1) = '"' THEN btrim(r.t[2], '"') ELSE lower(r.t[2]) END AS nume
+                                    FROM regexp_matches(p.prosrc, '(?:([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[.][[:space:]]*)?([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[(]', 'g') AS r(t)) m
+                                 LEFT JOIN LATERAL (
+                                   SELECT pg.oid FROM pg_proc pg JOIN pg_namespace gn ON gn.oid = pg.pronamespace
+                                    WHERE pg.proname = m.nume
+                                      AND ((m.q IS NOT NULL AND gn.nspname = m.q)
+                                        OR (m.q IS NULL AND (gn.nspname = 'pg_catalog'
+                                              OR NOT EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v) WHERE sc.v LIKE 'search_path=%')
+                                              OR EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v)
+                                                           CROSS JOIN LATERAL unnest(string_to_array(replace(replace(substr(sc.v, 13), ' ', ''), '"', ''), ',')) AS ss(s)
+                                                          WHERE sc.v LIKE 'search_path=%'
+                                                            AND (ss.s = gn.nspname
+                                                              OR (ss.s = '$user' AND EXISTS (SELECT FROM pg_roles ro WHERE ro.rolname = gn.nspname)))))))) g
+                                   ON true
+                          -- REZOLVARE_APEL sfarsit
+                          ) rz
+                        UNION
+                        SELECT dd.refobjid FROM pg_depend dd
+                         WHERE dd.classid = 'pg_proc'::regclass AND dd.objid = p.oid AND dd.refclassid = 'pg_proc'::regclass
+                           AND dd.deptype = 'n') x
+                WHERE i.oid >= 16384 AND x.la IS NOT NULL)
+             SELECT i.oid FROM inchidere i) ii JOIN pg_proc fp ON fp.oid = ii.oid
+      WHERE fp.oid >= 16384))::text
   -- AMPRENTA_NET_REL sfarsit
                AS amprenta,
                CASE WHEN c.relkind = 'S' THEN has_sequence_privilege('public', c.oid, 'USAGE,SELECT,UPDATE')
@@ -287,37 +337,50 @@ SELECT 'M_teren_executa' AS sectiune, x.schema, x.functie, x.security_definer, x
            AND NOT (n.nspname = 'information_schema' AND p.oid < 16384 AND NOT p.prosecdef AND p.proowner = n.nspowner)) x
  ORDER BY x.schema COLLATE "C", x.functie COLLATE "C";
 
--- N (r23, auditul precis; inlocuieste modelul r22). AUDITUL TRANZITIV al apelurilor, doar din catalog (fara randuri din
---    tabele de date, fara corpuri in iesire). Raspunde la: de la ce poate APELA efectiv teren, exista un drum spre net?
---    STAREA = (obiect, rolul efectiv cu care ruleaza, operatia pe relatie). rol0 = teren (dupa 18a) sau PUBLIC (inainte:
---    teren nu exista inca si ajunge la obiecte doar prin PUBLIC). Intrarea intr-o functie SECURITY DEFINER schimba rolul
---    in proprietarul ei; un trigger ruleaza cu rolul care face scrierea (sau proprietarul, daca e DEFINER).
+-- N (r23, auditul precis; inlocuieste modelul r22; r25: DOUA roluri pe stare). AUDITUL TRANZITIV al apelurilor, doar din
+--    catalog (fara randuri din tabele de date, fara corpuri in iesire). Raspunde la: de la ce poate APELA efectiv teren,
+--    exista un drum spre net?
+--    STAREA (r25, Jakarinos r24 P1) = (obiect, rol, rx, operatia pe relatie): rol = rolul cu care PostgreSQL verifica
+--    drepturile pe relatii si alege politicile RLS (checkAsUser); rx = rolul cu care RULEAZA functiile (current_user, cel
+--    verificat la EXECUTE). In interiorul unei functii rol = rx. Ele difera dupa o VEDERE fara security_invoker (relatiile
+--    ei se verifica ca proprietarul vederii, dar functiile din ea ruleaza tot ca executantul), dupa o REGULA (relatiile
+--    actiunii ca proprietarul relatiei) si dupa o actiune FK in cascada. Tabelul complet (constructie -> rol functie ->
+--    rol relatii -> sursa): E1_RAPORT.md r25. r23-r24 dadeau functiilor din vedere rolul proprietarului vederii: fals
+--    "0 cai" pe un drum real (contraexemplul recenzentului, testat in audit_tranzitiv_pglite.mjs).
+--    rol0 = teren (dupa 18a) sau PUBLIC (inainte: teren nu exista inca si ajunge la obiecte doar prin PUBLIC). Intrarea
+--    intr-o functie SECURITY DEFINER schimba ambele roluri in proprietarul ei.
 --    RADACINI: functiile pe care rol0 le poate executa (USAGE pe schema + EXECUTE), FARA functiile de trigger (o functie
 --      care intoarce trigger nu se poate apela direct: "trigger functions can only be called as triggers"; la declansare
 --      PostgreSQL nu verifica EXECUTE) + relatiile pe care rol0 are un drept (citire = politicile, scriere = triggerele).
 --      Radacinile din net sunt riscul acceptat (varianta c): listate, nu explorate.
---    MUCHII (fiecare cu motivul ei; supra-aproximare doar unde e scris):
---      apel: functie -> functie pentru fiecare nume urmat de "(" din corp (calificat sau rezolvat cu search_path-ul
---        functiei + pg_catalog; mostenit = toate schemele; toate supraincarcarile) + BEGIN ATOMIC prin pg_depend, NUMAI
---        daca rolul curent are EXECUTE pe tinta (PostgreSQL verifica EXECUTE la fiecare apel) si tinta nu e de trigger;
+--    MUCHII (fiecare cu motivul ei; supra-aproximare doar unde e scris). Orice functie atinsa altfel decat ca trigger cere
+--      EXECUTE pentru rx (PostgreSQL il verifica la fiecare apel, si in vederi, politici, reguli, DEFAULT-uri, GENERATED,
+--      CHECK, expresii de index); la declansarea unui trigger NU se verifica EXECUTE:
+--      apel: functie -> functie pentru fiecare nume urmat de "(" din corp (REZOLVARE_APEL: calificat sau rezolvat cu
+--        search_path-ul functiei + pg_catalog; mostenit = toate schemele; "$user" = orice schema cu nume de rol; toate
+--        supraincarcarile) + BEGIN ATOMIC prin pg_depend; tinta nu e de trigger;
 --      citire / scriere: functie -> relatie numita in corp (schemele caii sau o schema numita in corp), pentru fiecare
 --        operatie al carei cuvant apare in corp (INSERT / MERGE / COPY, UPDATE / MERGE, DELETE / MERGE, TRUNCATE; citirea
---        mereu) si NUMAI daca rolul curent are dreptul pe relatie pentru acea operatie (altfel: permission denied);
---      trigger: relatie + operatie de scriere -> functia triggerelor ne-interne declansate de acea operatie (tgtype);
---      politica: relatie cu RLS, rol care NU ocoleste RLS (nu e superuser / BYPASSRLS / proprietar fara FORCE), politica
---        pentru PUBLIC sau un rol al lui -> functiile si relatiile din expresie (citire; supra-aproximare: orice comanda,
---        fara verificarea EXECUTE / SELECT);
---      default / constrangere / index: INSERT / UPDATE -> functiile si relatiile din DEFAULT, GENERATED, CHECK, expresii de
---        index (supra-aproximare: fara verificarea EXECUTE);
---      vedere: vedere + operatie -> relatiile si functiile regulii _RETURN, cu rolul proprietarului vederii (sau al
---        apelantului la security_invoker); vederile materializate NU (citirea nu ruleaza interogarea);
---      regula: regula ne-SELECT a unei relatii, la operatia ei -> relatiile (orice operatie) si functiile actiunii, ca
---        proprietarul relatiei (supra-aproximare);
+--        mereu) si NUMAI daca rolul functiei are dreptul pe relatie pentru acea operatie (altfel: permission denied);
+--      trigger: relatie + operatie de scriere -> functia triggerelor ne-interne declansate de acea operatie (tgtype), ca rx
+--        (sau proprietarul, daca e DEFINER); la fel triggerele INSTEAD OF ale vederilor;
+--      politica: relatie cu RLS, rol (de verificare) care NU ocoleste RLS (nu e superuser / BYPASSRLS / proprietar fara
+--        FORCE), politica pentru PUBLIC sau un rol al lui -> functiile din expresie (ca rx) si relatiile din expresie (ca
+--        rol; supra-aproximare: orice comanda, relatiile fara verificarea SELECT);
+--      default / generat / constrangere / index: INSERT / UPDATE -> functiile (ca rx) si secventele / relatiile (ca rx,
+--        supra-aproximare: fara verificarea dreptului) din DEFAULT, GENERATED, CHECK, expresii de index;
+--      vedere: vedere + operatie -> functiile regulii _RETURN ca rx (si cu security_invoker) si relatiile ei ca
+--        proprietarul vederii (fara security_invoker) sau ca rx (cu security_invoker, chiar citita dintr-o alta vedere);
+--        vederile materializate NU (citirea nu ruleaza interogarea); relatiile fara verificarea dreptului (supra-aprox.);
+--      regula: regula ne-SELECT a unei relatii, la operatia ei -> relatiile actiunii (orice operatie, ca proprietarul
+--        relatiei) si functiile ei (ca rx) (supra-aproximare pe operatii);
 --      fk: stergerea / modificarea parintelui -> scrierea in copil DOAR pentru ON DELETE / ON UPDATE CASCADE, SET NULL,
---        SET DEFAULT (actiunea RI ruleaza ca proprietarul copilului); TRUNCATE ... CASCADE -> TRUNCATE pe copil. NU sunt
---        muchii (scris): verificarile RI la INSERT / UPDATE in copil (citesc parintele ca proprietarul lui, fara RLS, fara
---        triggere) si NO ACTION / RESTRICT (doar verifica);
---      mostenire: parinte (partitionat sau mostenit) -> copil, aceeasi operatie si acelasi rol.
+--        SET DEFAULT: interogarea RI ruleaza ca proprietarul copilului, deci triggerele BEFORE ale copilului ruleaza ca el,
+--        iar cele AFTER (puse in coada instructiunii) ca rx => doua stari: (proprietar, proprietar) si (proprietar, rx);
+--        TRUNCATE ... CASCADE -> TRUNCATE pe copil (rol, rx). NU sunt muchii (scris): verificarile RI la INSERT / UPDATE in
+--        copil (citesc parintele ca proprietarul lui, fara RLS, fara triggere) si NO ACTION / RESTRICT (doar verifica);
+--      mostenire: parinte (partitionat sau mostenit) -> copil, aceeasi operatie si aceleasi roluri (drepturile se verifica
+--        doar pe parinte).
 --    FARA LIMITA DE ADANCIME: inchiderea e completa (UNION pe stari; multimea starilor e finita, ciclurile se opresc
 --    singure); distanta pana la net = parcurgere in latime inversa, un strat pe iteratie, pana la stratul gol.
 --    TINTE: orice functie / relatie din schema net atinsa cu dreptul cerut. NEREZOLVAT (listat; ESEC al auditului daca nu
@@ -347,19 +410,15 @@ fn AS MATERIALIZED (
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang
    WHERE n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
 ),
+-- schemele caii unei functii; r25: "$user" = orice schema care poarta numele unui rol (rolul care ruleaza o functie
+-- INVOKER poate fi oricare), aceeasi regula ca in REZOLVARE_APEL
 cale AS MATERIALIZED (
   SELECT f.oid, u.schema
     FROM fn f CROSS JOIN LATERAL unnest(string_to_array(replace(replace(substr(f.sp, 13), ' ', ''), '"', ''), ',')) AS x(s)
-         CROSS JOIN LATERAL unnest(CASE WHEN x.s = '$user' THEN ARRAY[f.proprietar, 'teren'] ELSE ARRAY[x.s] END) AS u(schema)
+         CROSS JOIN LATERAL (SELECT x.s WHERE x.s <> '$user'
+                             UNION SELECT un.nspname::text FROM pg_namespace un JOIN pg_roles ur ON ur.rolname = un.nspname
+                                    WHERE x.s = '$user') AS u(schema)
    WHERE f.sp IS NOT NULL
-),
-apel AS MATERIALIZED (
-  SELECT DISTINCT f.oid,
-         CASE WHEN m.t[1] IS NULL THEN NULL WHEN left(m.t[1], 1) = '"' THEN btrim(m.t[1], '"') ELSE lower(m.t[1]) END AS q,
-         CASE WHEN left(m.t[2], 1) = '"' THEN btrim(m.t[2], '"') ELSE lower(m.t[2]) END AS nume
-    FROM fn f JOIN pg_proc p ON p.oid = f.oid
-         CROSS JOIN LATERAL regexp_matches(p.prosrc, '(?:([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[.][[:space:]]*)?([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[(]', 'g') AS m(t)
-   WHERE f.limbaj IN ('sql', 'plpgsql')
 ),
 cuvant AS MATERIALIZED (
   SELECT DISTINCT f.oid, CASE WHEN left(m.t[1], 1) = '"' THEN btrim(m.t[1], '"') ELSE lower(m.t[1]) END AS nume
@@ -375,15 +434,33 @@ rel AS MATERIALIZED (
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND n.nspname <> 'pg_catalog' AND n.nspname !~ '^pg_(toast|temp)_'
 ),
+-- r25 (L19): rezolvarea apelurilor = blocul REZOLVARE_APEL, text IDENTIC cu cel din amprenta pg_net (sectiunea G aici si
+-- fn_portal_net_rel_amprenta din 18a, inchiderea tranzitiva a functiilor dependente); testat static.
 apel_tinta AS MATERIALIZED (
-  SELECT a.oid, a.q, a.nume, g.oid AS la
-    FROM apel a JOIN fn f ON f.oid = a.oid
-         LEFT JOIN LATERAL (SELECT pg.oid FROM pg_proc pg JOIN pg_namespace gn ON gn.oid = pg.pronamespace
-                             WHERE pg.proname = a.nume
-                               AND ((a.q IS NOT NULL AND gn.nspname = a.q)
-                                 OR (a.q IS NULL AND (gn.nspname = 'pg_catalog' OR f.sp IS NULL
-                                       OR EXISTS (SELECT FROM cale k WHERE k.oid = a.oid AND k.schema = gn.nspname))))) g
-           ON true
+  SELECT f.oid, x.q, x.nume, x.la
+    FROM fn f JOIN pg_proc p ON p.oid = f.oid
+         CROSS JOIN LATERAL (
+                          -- REZOLVARE_APEL inceput
+                          SELECT DISTINCT m.q, m.nume, g.oid AS la
+                            FROM (SELECT CASE WHEN r.t[1] IS NULL THEN NULL WHEN left(r.t[1], 1) = '"' THEN btrim(r.t[1], '"')
+                                              ELSE lower(r.t[1]) END AS q,
+                                         CASE WHEN left(r.t[2], 1) = '"' THEN btrim(r.t[2], '"') ELSE lower(r.t[2]) END AS nume
+                                    FROM regexp_matches(p.prosrc, '(?:([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[.][[:space:]]*)?([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[(]', 'g') AS r(t)) m
+                                 LEFT JOIN LATERAL (
+                                   SELECT pg.oid FROM pg_proc pg JOIN pg_namespace gn ON gn.oid = pg.pronamespace
+                                    WHERE pg.proname = m.nume
+                                      AND ((m.q IS NOT NULL AND gn.nspname = m.q)
+                                        OR (m.q IS NULL AND (gn.nspname = 'pg_catalog'
+                                              OR NOT EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v) WHERE sc.v LIKE 'search_path=%')
+                                              OR EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v)
+                                                           CROSS JOIN LATERAL unnest(string_to_array(replace(replace(substr(sc.v, 13), ' ', ''), '"', ''), ',')) AS ss(s)
+                                                          WHERE sc.v LIKE 'search_path=%'
+                                                            AND (ss.s = gn.nspname
+                                                              OR (ss.s = '$user' AND EXISTS (SELECT FROM pg_roles ro WHERE ro.rolname = gn.nspname)))))))) g
+                                   ON true
+                          -- REZOLVARE_APEL sfarsit
+                          ) x
+   WHERE f.limbaj IN ('sql', 'plpgsql')
 ),
 -- rolurile posibile ale unei stari: rol0, proprietarii functiilor DEFINER, proprietarii relatiilor (vederi, actiuni RI)
 rol_cand AS MATERIALIZED (
@@ -422,101 +499,148 @@ regula AS MATERIALIZED (
     FROM pg_rewrite ru JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = ru.oid
    WHERE d.refclassid IN ('pg_proc'::regclass, 'pg_class'::regclass) AND d.refobjid <> ru.ev_class AND d.deptype = 'n'
 ),
--- MUCHIILE intre stari: (dk, de, dr, dop) -> (lk, la, lr, lop); k = 'f' functie / 'r' relatie; op '' la functii
+-- politicile care se aplica unui rol de verificare: rolul nu ocoleste RLS pe relatie (superuser / BYPASSRLS / proprietar
+-- fara FORCE) si politica e pentru PUBLIC sau pentru un rol al lui
+pol_rol AS MATERIALIZED (
+  SELECT po.oid AS pol, r.rol
+    FROM pg_policy po JOIN rel c ON c.oid = po.polrelid CROSS JOIN rol_cand r
+   WHERE c.relrowsecurity
+     -- PUBLIC nu are OID de rol: comparatia cu proprietarul ar fi NULL (L18) => coalesce la fals (nu ocoleste RLS)
+     AND NOT (r.ocoleste_rls OR coalesce(r.roid = c.relowner AND NOT c.relforcerowsecurity, false))
+     AND (0 = ANY (po.polroles) OR (r.roid IS NOT NULL AND EXISTS (SELECT FROM unnest(po.polroles) AS pr(x)
+                                                                  WHERE pr.x <> 0 AND pg_has_role(r.roid, pr.x, 'MEMBER'))))
+),
+-- MUCHIILE (r25): sabloane fara roluri; rolurile tintei se calculeaza in recursie din rolurile sursei:
+--   mr / mx = cum se obtine rol / rx al tintei: 'R' = rol-ul sursei, 'X' = rx-ul sursei, 'F' = rolul fix rf / xf
+--   (proprietarul functiei DEFINER, al vederii, al relatiei cu regula, al copilului FK);
+--   cexec = tinta (functie) cere EXECUTE pentru rx-ul sursei; cdrept = tinta (relatie) cere dreptul rol-ului sursei pe
+--   operatia lop; cpol = politica trebuie sa se aplice rol-ului sursei (pol_rol). k = 'f' functie / 'r' relatie; op '' la
+--   functii.
 muchie AS MATERIALIZED (
-  SELECT y.dk, y.de, y.dr, y.dop, y.lk, y.la, y.lr, y.lop, y.prin,
+  SELECT y.dk, y.de, y.dop, y.lk, y.la, y.lop, y.prin, y.mr, y.rf, y.mx, y.xf, y.cexec, y.cdrept, y.cpol,
          coalesce((y.lk = 'f' AND EXISTS (SELECT FROM fn g WHERE g.oid = y.la AND g.schema = 'net'))
            OR (y.lk = 'r' AND EXISTS (SELECT FROM rel cn WHERE cn.oid = y.la AND cn.schema = 'net')), false) AS lnet
     FROM (
-      -- apel (corp) si dependenta (BEGIN ATOMIC): EXECUTE al rolului curent pe tinta; tinta nu e functie de trigger
-      SELECT 'f'::text AS dk, t.oid AS de, x.rol AS dr, ''::text AS dop, 'f'::text AS lk, g.oid AS la,
-             CASE WHEN g.definer THEN g.proprietar ELSE x.rol END AS lr, ''::text AS lop, 'apel'::text AS prin
-        FROM apel_tinta t JOIN fn g ON g.oid = t.la JOIN exec x ON x.oid = g.oid
+      -- apel (corp, REZOLVARE_APEL) si dependenta (BEGIN ATOMIC): EXECUTE al rolului functiei; tinta nu e functie de trigger
+      SELECT 'f'::text AS dk, t.oid AS de, ''::text AS dop, 'f'::text AS lk, g.oid AS la, ''::text AS lop, 'apel'::text AS prin,
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END AS mr, CASE WHEN g.definer THEN g.proprietar END AS rf,
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END AS mx, CASE WHEN g.definer THEN g.proprietar END AS xf,
+             true AS cexec, false AS cdrept, NULL::oid AS cpol
+        FROM apel_tinta t JOIN fn g ON g.oid = t.la
        WHERE NOT g.trigger_fn
       UNION
-      SELECT 'f', d.objid, x.rol, '', 'f', g.oid, CASE WHEN g.definer THEN g.proprietar ELSE x.rol END, '', 'dependenta'
-        FROM pg_depend d JOIN fn f ON f.oid = d.objid JOIN fn g ON g.oid = d.refobjid JOIN exec x ON x.oid = g.oid
+      SELECT 'f', d.objid, '', 'f', g.oid, '', 'dependenta',
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END, CASE WHEN g.definer THEN g.proprietar END,
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END, CASE WHEN g.definer THEN g.proprietar END, true, false, NULL::oid
+        FROM pg_depend d JOIN fn f ON f.oid = d.objid JOIN fn g ON g.oid = d.refobjid
        WHERE d.classid = 'pg_proc'::regclass AND d.refclassid = 'pg_proc'::regclass AND d.deptype = 'n' AND NOT g.trigger_fn
       UNION
-      -- citire / scriere din corp: relatia numita, operatia al carei cuvant apare, dreptul rolului curent
-      SELECT 'f', w.oid, dr.rol, '', 'r', c.oid, dr.rol, dr.op,
-             CASE WHEN dr.op = 'SELECT' THEN 'citire' ELSE 'scriere ' || dr.op END
-        FROM cuvant w JOIN fn f ON f.oid = w.oid JOIN rel c ON c.nume = w.nume JOIN drept dr ON dr.oid = c.oid
+      -- citire / scriere din corp: relatia numita, operatia al carei cuvant apare, dreptul rolului functiei
+      SELECT 'f', w.oid, '', 'r', c.oid, o.op, CASE WHEN o.op = 'SELECT' THEN 'citire' ELSE 'scriere ' || o.op END,
+             'X', NULL::text, 'X', NULL::text, false, true, NULL::oid
+        FROM cuvant w JOIN fn f ON f.oid = w.oid JOIN rel c ON c.nume = w.nume CROSS JOIN operatie o
        WHERE (f.sp IS NULL OR EXISTS (SELECT FROM cale k WHERE k.oid = w.oid AND k.schema = c.schema)
               OR EXISTS (SELECT FROM cuvant w2 WHERE w2.oid = w.oid AND w2.nume = c.schema))
-         AND (dr.op = 'SELECT' OR (dr.op = 'INSERT' AND f.cuv_i) OR (dr.op = 'UPDATE' AND f.cuv_u)
-              OR (dr.op = 'DELETE' AND f.cuv_d) OR (dr.op = 'TRUNCATE' AND f.cuv_t))
+         AND (o.op = 'SELECT' OR (o.op = 'INSERT' AND f.cuv_i) OR (o.op = 'UPDATE' AND f.cuv_u)
+              OR (o.op = 'DELETE' AND f.cuv_d) OR (o.op = 'TRUNCATE' AND f.cuv_t))
       UNION
-      SELECT 'f', d.objid, dr.rol, '', 'r', c.oid, dr.rol, dr.op,
-             CASE WHEN dr.op = 'SELECT' THEN 'citire' ELSE 'scriere ' || dr.op END
-        FROM pg_depend d JOIN fn f ON f.oid = d.objid JOIN rel c ON c.oid = d.refobjid JOIN drept dr ON dr.oid = c.oid
+      SELECT 'f', d.objid, '', 'r', c.oid, o.op, CASE WHEN o.op = 'SELECT' THEN 'citire' ELSE 'scriere ' || o.op END,
+             'X', NULL::text, 'X', NULL::text, false, true, NULL::oid
+        FROM pg_depend d JOIN fn f ON f.oid = d.objid JOIN rel c ON c.oid = d.refobjid CROSS JOIN operatie o
        WHERE d.classid = 'pg_proc'::regclass AND d.refclassid = 'pg_class'::regclass AND d.deptype = 'n'
       UNION
-      -- trigger: operatia de scriere declanseaza triggerele ne-interne ale relatiei (bitii tgtype)
-      SELECT 'r', tg.tgrelid, r.rol, o.op, 'f', g.oid, CASE WHEN g.definer THEN g.proprietar ELSE r.rol END, '', 'trigger ' || o.op
-        FROM pg_trigger tg JOIN fn g ON g.oid = tg.tgfoid CROSS JOIN rol_cand r
+      -- trigger (si INSTEAD OF pe vederi): operatia de scriere declanseaza triggerele ne-interne ale relatiei (bitii
+      -- tgtype); functia ruleaza ca rx (cine face scrierea) sau ca proprietarul (DEFINER); fara EXECUTE la declansare
+      SELECT 'r', tg.tgrelid, o.op, 'f', g.oid, '', 'trigger ' || o.op,
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END, CASE WHEN g.definer THEN g.proprietar END,
+             CASE WHEN g.definer THEN 'F' ELSE 'X' END, CASE WHEN g.definer THEN g.proprietar END, false, false, NULL::oid
+        FROM pg_trigger tg JOIN fn g ON g.oid = tg.tgfoid
              CROSS JOIN LATERAL (VALUES ('INSERT', 4), ('DELETE', 8), ('UPDATE', 16), ('TRUNCATE', 32)) AS o(op, bit)
        WHERE NOT tg.tgisinternal AND (tg.tgtype::integer & o.bit) <> 0
       UNION
-      -- politica: doar pentru un rol care nu ocoleste RLS pe acea relatie
-      SELECT 'r', po.polrelid, r.rol, o.op, CASE WHEN d.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, d.refobjid,
-             CASE WHEN d.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar ELSE r.rol END,
-             CASE WHEN d.refclassid = 'pg_proc'::regclass THEN '' ELSE 'SELECT' END, 'politica'
+      -- politica: aleasa dupa rol (cel de verificare); functiile din expresie ruleaza ca rx (EXECUTE al lui rx), relatiile
+      -- din expresie se verifica tot ca rol
+      SELECT 'r', po.polrelid, o.op, CASE WHEN d.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, d.refobjid,
+             CASE WHEN d.refclassid = 'pg_proc'::regclass THEN '' ELSE 'SELECT' END, 'politica',
+             CASE WHEN d.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F'
+                  WHEN d.refclassid = 'pg_proc'::regclass THEN 'X' ELSE 'R' END,
+             CASE WHEN d.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,
+             CASE WHEN d.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,
+             CASE WHEN d.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,
+             d.refclassid = 'pg_proc'::regclass, false, po.oid
         FROM pg_policy po JOIN rel c ON c.oid = po.polrelid
              JOIN pg_depend d ON d.classid = 'pg_policy'::regclass AND d.objid = po.oid
                              AND d.refclassid IN ('pg_proc'::regclass, 'pg_class'::regclass) AND d.refobjid <> po.polrelid
              LEFT JOIN fn g ON d.refclassid = 'pg_proc'::regclass AND g.oid = d.refobjid
-             CROSS JOIN rol_cand r CROSS JOIN operatie o
+             CROSS JOIN operatie o
        WHERE c.relrowsecurity AND o.op <> 'TRUNCATE'
-         -- PUBLIC nu are OID de rol: comparatia cu proprietarul ar fi NULL (L18) => coalesce la fals (nu ocoleste RLS)
-         AND NOT (r.ocoleste_rls OR coalesce(r.roid = c.relowner AND NOT c.relforcerowsecurity, false))
-         AND (0 = ANY (po.polroles) OR (r.roid IS NOT NULL AND EXISTS (SELECT FROM unnest(po.polroles) AS pr(x)
-                                                                      WHERE pr.x <> 0 AND pg_has_role(r.roid, pr.x, 'MEMBER'))))
          AND (d.refclassid = 'pg_class'::regclass OR g.oid IS NOT NULL)
       UNION
-      -- default / constrangere / index: la INSERT / UPDATE, cu rolul curent
-      SELECT 'r', a.relid, r.rol, o.op, CASE WHEN a.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, a.refobjid,
-             CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar ELSE r.rol END,
-             CASE WHEN a.refclassid = 'pg_proc'::regclass THEN '' ELSE 'SELECT' END, a.prin
+      -- default / generat / constrangere / index: la INSERT / UPDATE, functiile ca rx (EXECUTE al lui rx), secventele /
+      -- relatiile ca rx
+      SELECT 'r', a.relid, o.op, CASE WHEN a.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, a.refobjid,
+             CASE WHEN a.refclassid = 'pg_proc'::regclass THEN '' ELSE 'SELECT' END, a.prin,
+             CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,
+             CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,
+             CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,
+             CASE WHEN a.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,
+             a.refclassid = 'pg_proc'::regclass, false, NULL::oid
         FROM atasat a LEFT JOIN fn g ON a.refclassid = 'pg_proc'::regclass AND g.oid = a.refobjid
-             CROSS JOIN rol_cand r CROSS JOIN operatie o
+             CROSS JOIN operatie o
        WHERE o.op IN ('INSERT', 'UPDATE') AND (a.refclassid = 'pg_class'::regclass OR g.oid IS NOT NULL)
       UNION
-      -- vedere (regula _RETURN): aceeasi operatie pe relatiile citite, ca proprietarul vederii (apelantul la security_invoker)
-      SELECT 'r', c.oid, r.rol, o.op, CASE WHEN q.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, q.refobjid,
+      -- vedere (regula _RETURN): functiile ruleaza ca rx (si cu security_invoker; EXECUTE al lui rx); relatiile, aceeasi
+      -- operatie, ca proprietarul vederii (fara security_invoker) sau ca rx (cu security_invoker)
+      SELECT 'r', c.oid, o.op, CASE WHEN q.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, q.refobjid,
+             CASE WHEN q.refclassid = 'pg_proc'::regclass THEN '' ELSE o.op END, 'vedere',
+             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F'
+                  WHEN q.refclassid = 'pg_proc'::regclass OR c.invoker THEN 'X' ELSE 'F' END,
              CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar
-                  WHEN c.invoker THEN r.rol ELSE c.proprietar END,
-             CASE WHEN q.refclassid = 'pg_proc'::regclass THEN '' ELSE o.op END, 'vedere'
+                  WHEN q.refclassid = 'pg_proc'::regclass OR c.invoker THEN NULL ELSE c.proprietar END,
+             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,
+             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,
+             q.refclassid = 'pg_proc'::regclass, false, NULL::oid
         FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type = '1'
              LEFT JOIN fn g ON q.refclassid = 'pg_proc'::regclass AND g.oid = q.refobjid
-             CROSS JOIN rol_cand r CROSS JOIN operatie o
+             CROSS JOIN operatie o
        WHERE c.relkind = 'v' AND (q.refclassid = 'pg_class'::regclass OR g.oid IS NOT NULL)
       UNION
-      -- regula ne-SELECT (2 UPDATE, 3 INSERT, 4 DELETE): actiunea, ca proprietarul relatiei, orice operatie
-      SELECT 'r', c.oid, r.rol, o.op, CASE WHEN q.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, q.refobjid,
-             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar ELSE c.proprietar END,
-             CASE WHEN q.refclassid = 'pg_proc'::regclass THEN '' ELSE t.op END, 'regula'
+      -- regula ne-SELECT (2 UPDATE, 3 INSERT, 4 DELETE): relatiile actiunii ca proprietarul relatiei (orice operatie),
+      -- functiile actiunii ca rx (EXECUTE al lui rx)
+      SELECT 'r', c.oid, o.op, CASE WHEN q.refclassid = 'pg_proc'::regclass THEN 'f' ELSE 'r' END, q.refobjid,
+             CASE WHEN q.refclassid = 'pg_proc'::regclass THEN '' ELSE t.op END, 'regula',
+             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F'
+                  WHEN q.refclassid = 'pg_proc'::regclass THEN 'X' ELSE 'F' END,
+             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar
+                  WHEN q.refclassid = 'pg_proc'::regclass THEN NULL ELSE c.proprietar END,
+             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN 'F' ELSE 'X' END,
+             CASE WHEN q.refclassid = 'pg_proc'::regclass AND g.definer THEN g.proprietar END,
+             q.refclassid = 'pg_proc'::regclass, false, NULL::oid
         FROM rel c JOIN regula q ON q.relid = c.oid AND q.ev_type IN ('2', '3', '4')
              LEFT JOIN fn g ON q.refclassid = 'pg_proc'::regclass AND g.oid = q.refobjid
-             CROSS JOIN rol_cand r
              CROSS JOIN LATERAL (VALUES (CASE q.ev_type WHEN '2' THEN 'UPDATE' WHEN '3' THEN 'INSERT' ELSE 'DELETE' END)) AS o(op)
              CROSS JOIN LATERAL (SELECT op FROM operatie WHERE op <> 'TRUNCATE') AS t(op)
        WHERE q.refclassid = 'pg_class'::regclass OR g.oid IS NOT NULL
       UNION
-      -- fk: actiunile RI care SCRIU in copil (ca proprietarul copilului); TRUNCATE ... CASCADE
-      SELECT 'r', co.confrelid, r.rol, x.op, 'r', co.conrelid,
-             CASE WHEN x.op = 'TRUNCATE' THEN r.rol ELSE ch.proprietar END, x.op2, 'fk ' || x.actiune
-        FROM pg_constraint co JOIN rel ch ON ch.oid = co.conrelid CROSS JOIN rol_cand r
+      -- fk: actiunile RI care SCRIU in copil; interogarea RI ruleaza ca proprietarul copilului (triggerele BEFORE ale
+      -- copilului ca el), triggerele AFTER ale copilului ruleaza la sfarsitul instructiunii, ca rx => doua stari tinta.
+      -- TRUNCATE ... CASCADE: aceleasi roluri.
+      SELECT 'r', co.confrelid, x.op, 'r', co.conrelid, x.op2, 'fk ' || x.actiune,
+             CASE WHEN x.op = 'TRUNCATE' THEN 'R' ELSE 'F' END, CASE WHEN x.op = 'TRUNCATE' THEN NULL ELSE ch.proprietar END,
+             CASE WHEN x.op = 'TRUNCATE' OR v.dupa THEN 'X' ELSE 'F' END,
+             CASE WHEN x.op = 'TRUNCATE' OR v.dupa THEN NULL ELSE ch.proprietar END, false, false, NULL::oid
+        FROM pg_constraint co JOIN rel ch ON ch.oid = co.conrelid
              CROSS JOIN LATERAL (VALUES
                ('DELETE', CASE co.confdeltype WHEN 'c' THEN 'DELETE' WHEN 'n' THEN 'UPDATE' WHEN 'd' THEN 'UPDATE' END,
                 'la stergere ' || co.confdeltype::text),
                ('UPDATE', CASE WHEN co.confupdtype IN ('c', 'n', 'd') THEN 'UPDATE' END, 'la modificare ' || co.confupdtype::text),
                ('TRUNCATE', 'TRUNCATE', 'cascade')) AS x(op, op2, actiune)
+             CROSS JOIN (VALUES (false), (true)) AS v(dupa)
        WHERE co.contype = 'f' AND x.op2 IS NOT NULL
       UNION
-      -- mostenire / partitii: aceeasi operatie, acelasi rol
-      SELECT 'r', ih.inhparent, r.rol, o.op, 'r', ih.inhrelid, r.rol, o.op, 'mostenire'
-        FROM pg_inherits ih CROSS JOIN rol_cand r CROSS JOIN operatie o) y
+      -- mostenire / partitii: aceeasi operatie, aceleasi roluri
+      SELECT 'r', ih.inhparent, o.op, 'r', ih.inhrelid, o.op, 'mostenire', 'R', NULL::text, 'X', NULL::text, false, false, NULL::oid
+        FROM pg_inherits ih CROSS JOIN operatie o) y
 ),
 radacina AS MATERIALIZED (
   SELECT 'f'::text AS k, f.oid AS id, CASE WHEN f.definer THEN f.proprietar ELSE (SELECT rol0 FROM par) END AS rol,
@@ -536,16 +660,25 @@ trigger_exclus AS (
    WHERE has_schema_privilege((SELECT rol0 FROM par), n.oid, 'USAGE')
      AND has_function_privilege((SELECT rol0 FROM par), f.oid, 'EXECUTE') AND f.trigger_fn
 ),
--- inchiderea completa (fara limita); nodurile din net sunt capete (tinte), nu se exploreaza mai departe
-atins(k, id, rol, op, net) AS (
-  SELECT r.k, r.id, r.rol, r.op, false FROM radacina r WHERE NOT r.net
+-- inchiderea completa (fara limita); nodurile din net sunt capete (tinte), nu se exploreaza mai departe. r25: fiecare rand
+-- poarta si cheia starii din care s-a ajuns (de_cheie) + motivul muchiei; UNION pe tot randul => fiecare stare e extinsa o
+-- data pentru fiecare muchie noua care ajunge la ea, multimea e finita, ciclurile se opresc singure.
+atins(k, id, rol, rx, op, net, de_cheie, prin) AS (
+  SELECT r.k, r.id, r.rol, r.rol, r.op, false, NULL::text, NULL::text FROM radacina r WHERE NOT r.net
   UNION
-  SELECT m.lk, m.la, m.lr, m.lop, m.lnet
-    FROM atins a JOIN muchie m ON m.dk = a.k AND m.de = a.id AND m.dr = a.rol AND m.dop = a.op
+  SELECT m.lk, m.la, t.rol, t.rx, m.lop, m.lnet,
+         (a.k || ':' || a.id::text || ':' || a.rol || ':' || a.rx || ':' || a.op) COLLATE "default", m.prin
+    FROM atins a JOIN muchie m ON m.dk = a.k AND m.de = a.id AND m.dop = a.op
+         CROSS JOIN LATERAL (SELECT CASE m.mr WHEN 'R' THEN a.rol WHEN 'X' THEN a.rx ELSE m.rf END AS rol,
+                                    CASE m.mx WHEN 'R' THEN a.rol WHEN 'X' THEN a.rx ELSE m.xf END AS rx) t
    WHERE NOT a.net
+     AND (NOT m.cexec OR EXISTS (SELECT FROM exec x WHERE x.oid = m.la AND x.rol = a.rx))
+     AND (NOT m.cdrept OR EXISTS (SELECT FROM drept dr WHERE dr.oid = m.la AND dr.op = m.lop AND dr.rol = a.rol))
+     AND (m.cpol IS NULL OR EXISTS (SELECT FROM pol_rol pr WHERE pr.pol = m.cpol AND pr.rol = a.rol))
 ),
 stare AS MATERIALIZED (
-  SELECT DISTINCT a.k, a.id, a.rol, a.op, a.net, a.k || ':' || a.id::text || ':' || a.rol || ':' || a.op AS cheie FROM atins a
+  SELECT DISTINCT a.k, a.id, a.rol, a.rx, a.op, a.net,
+         a.k || ':' || a.id::text || ':' || a.rol || ':' || a.rx || ':' || a.op AS cheie FROM atins a
 ),
 eticheta AS MATERIALIZED (
   SELECT 'f'::text AS k, p.oid AS id,
@@ -557,11 +690,10 @@ eticheta AS MATERIALIZED (
   SELECT 'r', c.oid, quote_ident(c.schema) || '.' || quote_ident(c.nume)
     FROM rel c WHERE c.oid IN (SELECT s.id FROM stare s WHERE s.k = 'r' UNION SELECT r.id FROM radacina r WHERE r.k = 'r')
 ),
--- muchiile dintre starile atinse (aceeasi definitie: muchie), cu cheile starilor
+-- muchiile dintre starile atinse: exact cele parcurse de recursie (de_cheie -> starea), cu motivul
 mr AS MATERIALIZED (
-  SELECT DISTINCT a.cheie AS de_cheie, b.cheie AS la_cheie, m.prin
-    FROM muchie m JOIN stare a ON a.k = m.dk AND a.id = m.de AND a.rol = m.dr AND a.op = m.dop AND NOT a.net
-         JOIN stare b ON b.k = m.lk AND b.id = m.la AND b.rol = m.lr AND b.op = m.lop
+  SELECT DISTINCT a.de_cheie, a.k || ':' || a.id::text || ':' || a.rol || ':' || a.rx || ':' || a.op AS la_cheie, a.prin
+    FROM atins a WHERE a.de_cheie IS NOT NULL
 ),
 -- distanta pana la net: parcurgere in latime INVERSA, un strat pe iteratie (vizitate + frontiera), pana la stratul gol
 latime(vizitate, frontiera, pas) AS (
@@ -576,14 +708,17 @@ dist_net AS MATERIALIZED (
   SELECT u.cheie, min(l.pas) AS dist FROM latime l CROSS JOIN LATERAL unnest(l.frontiera) AS u(cheie) GROUP BY u.cheie
 ),
 eticheta_stare AS MATERIALIZED (
+  -- r25: {rol} cand rol = rx; {rol; exec rx} cand relatiile se verifica ca rol, iar functiile ruleaza ca rx
   SELECT s.cheie, s.k, s.id, s.rol, s.op,
-         e.eticheta || CASE WHEN s.k = 'r' THEN ' [' || s.op || ']' ELSE '' END || ' {' || s.rol || '}' AS et
+         e.eticheta || CASE WHEN s.k = 'r' THEN ' [' || s.op || ']' ELSE '' END
+         || ' {' || s.rol || CASE WHEN s.rx <> s.rol THEN '; exec ' || s.rx ELSE '' END || '}' AS et
     FROM stare s JOIN eticheta e ON e.k = s.k AND e.id = s.id
 ),
 -- o cale martor pentru FIECARE radacina din afara net care ajunge la net (cel mai scurt drum, primul in ordine alfabetica)
 inainte(rcheie, cheie, rest, drum) AS (
   SELECT es.cheie, es.cheie, dn.dist, es.et
-    FROM (SELECT DISTINCT r.k || ':' || r.id::text || ':' || r.rol || ':' || r.op AS cheie FROM radacina r WHERE NOT r.net) rc
+    FROM (SELECT DISTINCT r.k || ':' || r.id::text || ':' || r.rol || ':' || r.rol || ':' || r.op AS cheie
+            FROM radacina r WHERE NOT r.net) rc
          JOIN dist_net dn ON dn.cheie = rc.cheie JOIN eticheta_stare es ON es.cheie = rc.cheie
    WHERE dn.dist > 0
   UNION ALL
@@ -598,7 +733,8 @@ inainte(rcheie, cheie, rest, drum) AS (
 ),
 nod AS MATERIALIZED (
   SELECT s.k, s.id, bool_or(s.net) AS net,
-         string_agg(DISTINCT s.rol, ',' ORDER BY s.rol) AS roluri,
+         string_agg(DISTINCT s.rol || CASE WHEN s.rx <> s.rol THEN '/exec ' || s.rx ELSE '' END, ','
+                    ORDER BY s.rol || CASE WHEN s.rx <> s.rol THEN '/exec ' || s.rx ELSE '' END) AS roluri,
          string_agg(DISTINCT nullif(s.op, ''), ',' ORDER BY nullif(s.op, '')) AS operatii,
          min(dn.dist) AS dist
     FROM stare s LEFT JOIN dist_net dn ON dn.cheie = s.cheie GROUP BY s.k, s.id
@@ -627,7 +763,7 @@ SELECT z.sectiune, z.obiect, z.adancime, z.security_definer, z.proprietar, z.det
     SELECT 'N_audit_rezumat' AS sectiune, s.cheie AS obiect, NULL::integer AS adancime, NULL::boolean AS security_definer,
            NULL::text AS proprietar, s.valoare AS detaliu, s.ord AS o1, ''::text AS o2
       FROM (VALUES
-        (1, 'model', 'r23: stare = obiect + rol efectiv + operatie; fara limita de adancime'),
+        (1, 'model', 'r25: stare = obiect + rol de verificare + rol de executie + operatie; fara limita de adancime'),
         (2, 'rol_radacina', (SELECT rol0 FROM par)),
         (3, 'radacini_functii_in_afara_net', (SELECT count(*) FROM radacina r WHERE r.k = 'f' AND NOT r.net)::text),
         (4, 'radacini_functii_net', (SELECT count(*) FROM radacina r WHERE r.k = 'f' AND r.net)::text),

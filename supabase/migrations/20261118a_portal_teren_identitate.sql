@@ -68,6 +68,10 @@
 --    declansare PostgreSQL nu verifica EXECUTE => niciun GRANT) + 3 apelabile (GRANT explicit catre authenticated si
 --    service_role, rolurile prin care le apeleaza azi aplicatia / API-ul). Clasificarea se verifica pe catalog
 --    (prorettype) inainte de orice schimbare: alta forma = refuz PORTAL_PUBLIC_CLASIFICARE_*;
+--    r25 (Jakarinos r24 P2): retragerea EXECUTE nu schimba DECLANSAREA triggerelor existente, dar schimba DDL-ul ulterior:
+--    CREATE TRIGGER (si CREATE OR REPLACE TRIGGER) cere EXECUTE pe functie => un rol care il avea doar prin PUBLIC
+--    primeste 42501 (si la o restaurare facuta ca acel rol). Proprietarul (postgres) ramane autorizat; migrarile noastre
+--    ruleaza ca postgres (runnerul cere current_user = postgres). Detaliile: E1_RAPORT.md r25.
 --  * $public_d$: REVOKE EXECUTE ... FROM PUBLIC pe toate 21; GRANT doar unde rolul nu are deja un drept explicit, iar ce
 --    s-a adaugat se inregistreaza in baseline (randul 'grant_d:'), ca revenirea sa retraga EXACT acele drepturi si sa
 --    redea PUBLIC (aceleasi drepturi ca inainte de 18a). Postconditia: niciuna din 21 cu PUBLIC, cele 3 apelabile
@@ -314,6 +318,13 @@ REVOKE ALL ON FUNCTION public.fn_portal_teren_rel_drept(oid) FROM PUBLIC,anon,au
 -- parametrii (fara valoarea curenta) si coloana care o detine; plus corpul / DEFINER / proprietarul / configuratia oricarei
 -- functii de aplicatie de care depind acestea (pg_depend). Paritatea textului: scripts/portal/test_static_net_rel.py;
 -- pe PostgreSQL: scripts/portal/net_rel_pglite.mjs + harness-ul PG17. Fara randuri din tabele.
+-- r25 (Jakarinos r24 P1): + mostenirea / partitionarea (parintii, toti urmasii cu proprietar / drepturi / RLS) + INCHIDEREA
+-- TRANZITIVA a functiilor dependente (apelurile pe nume din corp, cu blocul REZOLVARE_APEL comun cu auditul N din
+-- porti_citire.sql, si corpurile BEGIN ATOMIC), fiecare cu definitie / DEFINER / proprietar / configuratie / drepturi.
+-- CE ESTE (afirmatia exacta): amprenta STRUCTURII si a DREPTURILOR obiectului si a codului SQL care ruleaza la o scriere /
+-- citire a lui, urmarit pe nume. NU este o amprenta "completa" a comportamentului: nu vede apelurile prin operatori,
+-- cast-uri sau functiile de I/O ale tipurilor, SQL-ul construit din bucati la rulare (EXECUTE fara numele in text),
+-- codul C al extensiilor (aceeasi definitie SQL, alta biblioteca), datele din tabelele citite de functii, setarile (GUC).
 CREATE FUNCTION public.fn_portal_net_rel_amprenta(p_oid oid) RETURNS text
 LANGUAGE sql STABLE SET search_path TO 'pg_catalog','pg_temp' AS $fn$
  SELECT
@@ -351,21 +362,71 @@ LANGUAGE sql STABLE SET search_path TO 'pg_catalog','pg_temp' AS $fn$
                       ORDER BY dp.refobjid::regclass::text COLLATE "C", dp.refobjsubid)
        FROM pg_depend dp WHERE dp.classid = 'pg_class'::regclass AND dp.objid = c.oid
          AND dp.refclassid = 'pg_class'::regclass AND dp.deptype IN ('a', 'i')),
+    -- r25 (Jakarinos r24 P1): mostenire / partitionare. Un copil atasat (INHERITS / ATTACH PARTITION) se citeste PRIN
+    -- obiect fara alt drept: forma partitionarii, parintii directi si TOTI urmasii (orice adancime) cu proprietarul,
+    -- drepturile si RLS-ul lor. relhassubclass ramane adevarat dupa stergerea copilului pana la primul ANALYZE (zgomot
+    -- trecator, spre rosu).
+    jsonb_build_array(c.relispartition, c.relhassubclass, pg_get_partkeydef(c.oid), pg_get_expr(c.relpartbound, c.oid)),
+    (SELECT jsonb_agg(jsonb_build_array(ih.inhparent::regclass::text, ih.inhseqno) ORDER BY ih.inhseqno)
+       FROM pg_inherits ih WHERE ih.inhrelid = c.oid),
+    (SELECT jsonb_agg(jsonb_build_array(uc.oid::regclass::text, uc.relkind::text, pg_get_userbyid(uc.relowner), uc.relacl::text,
+                                        uc.relispartition, uc.relrowsecurity, uc.relforcerowsecurity)
+                      ORDER BY uc.oid::regclass::text COLLATE "C")
+       FROM (WITH RECURSIVE urmas(oid) AS (SELECT ih.inhrelid FROM pg_inherits ih WHERE ih.inhparent = c.oid
+                                           UNION
+                                           SELECT ih.inhrelid FROM urmas u JOIN pg_inherits ih ON ih.inhparent = u.oid)
+             SELECT u.oid FROM urmas u) uu JOIN pg_class uc ON uc.oid = uu.oid),
+    -- functiile de care depind triggerele / politicile / DEFAULT-urile / constrangerile / regulile / indecsii obiectului
+    -- (pg_depend) + r25 INCHIDEREA TRANZITIVA: functiile apelate pe nume din corpul lor (REZOLVARE_APEL, aceeasi ca in
+    -- auditul N) si din corpurile BEGIN ATOMIC (pg_depend), pana la capat; fiecare cu definitia, DEFINER, proprietarul,
+    -- configuratia si drepturile. Functiile din nucleu (oid < 16384) nu se parcurg.
     (SELECT jsonb_agg(DISTINCT jsonb_build_array(fp.oid::regprocedure::text, fp.prosecdef, pg_get_userbyid(fp.proowner),
-                                                 fp.proconfig::text,
+                                                 fp.proconfig::text, fp.proacl::text,
                                                  CASE WHEN fp.prokind = 'a' THEN (SELECT md5(ag::text) FROM pg_aggregate ag
                                                                                    WHERE ag.aggfnoid = fp.oid)
                                                       ELSE md5(pg_get_functiondef(fp.oid)) END))
-       FROM pg_depend fd JOIN pg_proc fp ON fp.oid = fd.refobjid
-      WHERE fd.refclassid = 'pg_proc'::regclass AND fp.oid >= 16384
-        AND ((fd.classid = 'pg_trigger'::regclass AND fd.objid IN (SELECT tg.oid FROM pg_trigger tg WHERE tg.tgrelid = c.oid))
-          OR (fd.classid = 'pg_policy'::regclass AND fd.objid IN (SELECT po.oid FROM pg_policy po WHERE po.polrelid = c.oid))
-          OR (fd.classid = 'pg_attrdef'::regclass AND fd.objid IN (SELECT ad.oid FROM pg_attrdef ad WHERE ad.adrelid = c.oid))
-          OR (fd.classid = 'pg_constraint'::regclass AND fd.objid IN (SELECT co.oid FROM pg_constraint co
-                                                                       WHERE co.conrelid = c.oid))
-          OR (fd.classid = 'pg_rewrite'::regclass AND fd.objid IN (SELECT ru.oid FROM pg_rewrite ru WHERE ru.ev_class = c.oid))
-          OR (fd.classid = 'pg_class'::regclass AND fd.objid IN (SELECT ix.indexrelid FROM pg_index ix
-                                                                  WHERE ix.indrelid = c.oid)))))::text
+       FROM (WITH RECURSIVE inchidere(oid) AS (
+               SELECT fd.refobjid FROM pg_depend fd
+                WHERE fd.refclassid = 'pg_proc'::regclass
+                  AND ((fd.classid = 'pg_trigger'::regclass AND fd.objid IN (SELECT tg.oid FROM pg_trigger tg WHERE tg.tgrelid = c.oid))
+                    OR (fd.classid = 'pg_policy'::regclass AND fd.objid IN (SELECT po.oid FROM pg_policy po WHERE po.polrelid = c.oid))
+                    OR (fd.classid = 'pg_attrdef'::regclass AND fd.objid IN (SELECT ad.oid FROM pg_attrdef ad WHERE ad.adrelid = c.oid))
+                    OR (fd.classid = 'pg_constraint'::regclass AND fd.objid IN (SELECT co.oid FROM pg_constraint co
+                                                                                 WHERE co.conrelid = c.oid))
+                    OR (fd.classid = 'pg_rewrite'::regclass AND fd.objid IN (SELECT ru.oid FROM pg_rewrite ru WHERE ru.ev_class = c.oid))
+                    OR (fd.classid = 'pg_class'::regclass AND fd.objid IN (SELECT ix.indexrelid FROM pg_index ix
+                                                                            WHERE ix.indrelid = c.oid)))
+               UNION
+               SELECT x.la FROM inchidere i JOIN pg_proc p ON p.oid = i.oid
+                      CROSS JOIN LATERAL (
+                        SELECT rz.la FROM (
+                          -- REZOLVARE_APEL inceput
+                          SELECT DISTINCT m.q, m.nume, g.oid AS la
+                            FROM (SELECT CASE WHEN r.t[1] IS NULL THEN NULL WHEN left(r.t[1], 1) = '"' THEN btrim(r.t[1], '"')
+                                              ELSE lower(r.t[1]) END AS q,
+                                         CASE WHEN left(r.t[2], 1) = '"' THEN btrim(r.t[2], '"') ELSE lower(r.t[2]) END AS nume
+                                    FROM regexp_matches(p.prosrc, '(?:([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[.][[:space:]]*)?([A-Za-z_][A-Za-z0-9_$]*|"[^"]+")[[:space:]]*[(]', 'g') AS r(t)) m
+                                 LEFT JOIN LATERAL (
+                                   SELECT pg.oid FROM pg_proc pg JOIN pg_namespace gn ON gn.oid = pg.pronamespace
+                                    WHERE pg.proname = m.nume
+                                      AND ((m.q IS NOT NULL AND gn.nspname = m.q)
+                                        OR (m.q IS NULL AND (gn.nspname = 'pg_catalog'
+                                              OR NOT EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v) WHERE sc.v LIKE 'search_path=%')
+                                              OR EXISTS (SELECT FROM unnest(p.proconfig) AS sc(v)
+                                                           CROSS JOIN LATERAL unnest(string_to_array(replace(replace(substr(sc.v, 13), ' ', ''), '"', ''), ',')) AS ss(s)
+                                                          WHERE sc.v LIKE 'search_path=%'
+                                                            AND (ss.s = gn.nspname
+                                                              OR (ss.s = '$user' AND EXISTS (SELECT FROM pg_roles ro WHERE ro.rolname = gn.nspname)))))))) g
+                                   ON true
+                          -- REZOLVARE_APEL sfarsit
+                          ) rz
+                        UNION
+                        SELECT dd.refobjid FROM pg_depend dd
+                         WHERE dd.classid = 'pg_proc'::regclass AND dd.objid = p.oid AND dd.refclassid = 'pg_proc'::regclass
+                           AND dd.deptype = 'n') x
+                WHERE i.oid >= 16384 AND x.la IS NOT NULL)
+             SELECT i.oid FROM inchidere i) ii JOIN pg_proc fp ON fp.oid = ii.oid
+      WHERE fp.oid >= 16384))::text
   -- AMPRENTA_NET_REL sfarsit
    FROM pg_class c WHERE c.oid = p_oid;
 $fn$;
@@ -374,13 +435,15 @@ REVOKE ALL ON FUNCTION public.fn_portal_net_rel_amprenta(oid) FROM PUBLIC,anon,a
 -- (porti_citire.sql sectiunea G; textul amprentei e in jurnalul citirii). Cheia = schema.nume (quote_ident).
 -- Se schimba DOAR prin review (SHA nou); nu se invata la apply.
 -- r22: amprenta s-a completat (triggere, politici, DEFAULT-uri ...), deci valorile din 12.11 nu mai sunt valabile.
+-- r25: amprenta are si mostenirea si inchiderea tranzitiva a functiilor => valorile r22 lipite pe 12.11 seara nu mai sunt
+-- valabile (refuzate de testul static); lista revine DE_COMPLETAT pana la recitirea G pe productie.
 -- DE_COMPLETAT = necitit inca pe productie => $public_pre$ refuza (PORTAL_NET_REL_LIST_NECOMPLETATA) si poarta e rosie.
 -- Coordonatorul reruleaza porti_citire.sql pe productie (doar citire) si lipeste cele trei valori din G cu
 -- scripts/portal/net_rel_completeaza.py (aceleasi valori ajung si in testul static).
 CREATE FUNCTION public.fn_portal_net_rel_aprobat() RETURNS jsonb
 LANGUAGE sql IMMUTABLE SET search_path TO 'public','pg_temp' AS $netrel$
  -- PORTAL_NET_REL_APROBAT: net._http_response, net.http_request_queue, net.http_request_queue_id_seq (amprenta r22, de citit pe productie)
- SELECT '{"net._http_response":"70a6f8fb4293956bcf7d186a2ff88061","net.http_request_queue":"c376cee77afa265287547fe22e19084d","net.http_request_queue_id_seq":"a8957a09016363e60f6b877e27bd87ac"}'::jsonb;
+ SELECT '{"net._http_response":"DE_COMPLETAT","net.http_request_queue":"DE_COMPLETAT","net.http_request_queue_id_seq":"DE_COMPLETAT"}'::jsonb;
 $netrel$;
 REVOKE ALL ON FUNCTION public.fn_portal_net_rel_aprobat() FROM PUBLIC,anon,authenticated,service_role,teren;
 -- r21 (varianta c): obiectul e in net, e in lista si amprenta lui de acum = md5-ul revizuit. Cheie lipsa / amprenta NULL =

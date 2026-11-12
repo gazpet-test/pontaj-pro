@@ -265,13 +265,19 @@ class TestPortiCitire(unittest.TestCase):
                                       "regexp_matches(p.prosrc, '(.*)', 'g')", 1), "coloana cu continut afisata")
 
     def test_mutant_prosrc_afisat_in_audit(self):
-        self._refuz(self.text.replace("SELECT DISTINCT f.oid, CASE WHEN left(m.t[1], 1)",
-                                      "SELECT DISTINCT f.oid, p.prosrc AS corp, CASE WHEN left(m.t[1], 1)", 1),
+        # r25: rezolvarea apelurilor e blocul REZOLVARE_APEL (in G si in N); corpul afisat din el = refuz
+        t = self.text.replace("\r\n", "\n")
+        self.assertEqual(t.count("SELECT DISTINCT m.q, m.nume, g.oid AS la"), 2)
+        self._refuz(t.replace("SELECT DISTINCT m.q, m.nume, g.oid AS la", "SELECT DISTINCT m.q, m.nume, g.oid AS la, p.prosrc AS corp", 1),
+                    "coloana cu continut afisata")
+        self._refuz(t[::-1].replace("SELECT DISTINCT m.q, m.nume, g.oid AS la"[::-1],
+                                    "SELECT DISTINCT m.q, m.nume, g.oid AS la, p.prosrc AS corp"[::-1], 1)[::-1],
                     "coloana cu continut afisata")
 
     def test_sectiunea_n_are_plafon_propriu(self):
+        # r25: G are si ea WITH RECURSIVE (in subinterogari); plafonul propriu e inaintea instructiunii N (WITH RECURSIVE par)
         t = curata(self.text.replace("\r\n", "\n"))[0]
-        k = t.index("WITH RECURSIVE")
+        k = re.search(r"WITH RECURSIVE\s+par AS", t).start()
         self.assertRegex(t[:k].rstrip(), r"SET LOCAL statement_timeout = \$L\d+\$;$")
 
     def test_mutant_c_din_r19(self):
@@ -307,11 +313,15 @@ class TestPortiCitire(unittest.TestCase):
     def test_n_fara_limita_de_adancime(self):
         n = curata(self._n())[0]
         self.assertNotIn("adancime_max", n)
-        self.assertRegex(n, r"atins\(k, id, rol, op, net\) AS \(\s*SELECT r\.k, r\.id, r\.rol, r\.op, false FROM radacina r WHERE NOT r\.net\s*UNION\s*SELECT")
+        # r25: doua roluri pe stare (rol de verificare + rx de executie), radacina cu rx = rol
+        self.assertRegex(n, r"atins\(k, id, rol, rx, op, net, de_cheie, prin\) AS \(\s*SELECT r\.k, r\.id, r\.rol, r\.rol, r\.op, false, NULL::text, NULL::text FROM radacina r WHERE NOT r\.net\s*UNION\s*SELECT")
 
     def test_n_apelul_cere_execute_si_triggerele_nu_sunt_radacini(self):
-        n = curata(self._n())[0]
-        self.assertIn("JOIN exec x ON x.oid = g.oid WHERE NOT g.trigger_fn", " ".join(n.split()))
+        n = " ".join(curata(self._n())[0].split())
+        # r25: EXECUTE verificat pentru rx (rolul cu care ruleaza apelantul) pe orice muchie spre functie, in afara triggerelor
+        self.assertIn("true AS cexec, false AS cdrept, NULL::oid AS cpol FROM apel_tinta t JOIN fn g ON g.oid = t.la WHERE NOT g.trigger_fn", n)
+        self.assertIn("AND (NOT m.cexec OR EXISTS (SELECT FROM exec x WHERE x.oid = m.la AND x.rol = a.rx))", n)
+        self.assertIn("AND (NOT m.cdrept OR EXISTS (SELECT FROM drept dr WHERE dr.oid = m.la AND dr.op = m.lop AND dr.rol = a.rol))", n)
         self.assertIn("has_function_privilege((SELECT rol0 FROM par), f.oid, $L", " ".join(n.split()))
         self.assertRegex(" ".join(n.split()), r"AND NOT f\.trigger_fn AND NOT \(f\.schema = \$L\d+\$ AND f\.oid < 16384")
 

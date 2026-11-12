@@ -47,7 +47,14 @@ R21_VECHI = {
     "net.http_request_queue": "e0e96a399d23c7eb05ca2216618e1b72",
     "net.http_request_queue_id_seq": "d7e907e6bf5f93c94b754f45839161d1",
 }
-PROD_R22 = {"net._http_response": "70a6f8fb4293956bcf7d186a2ff88061", "net.http_request_queue": "c376cee77afa265287547fe22e19084d", "net.http_request_queue_id_seq": "a8957a09016363e60f6b877e27bd87ac"}  # NET_REL_PROD_R22 (productie, porti_citire.sql G, amprenta r22)
+# r25: valorile r22 lipite pe 12.11 seara (amprenta fara mostenire si fara inchiderea tranzitiva) nu mai sunt valabile.
+R22_VECHI = {
+    "net._http_response": "70a6f8fb4293956bcf7d186a2ff88061",
+    "net.http_request_queue": "c376cee77afa265287547fe22e19084d",
+    "net.http_request_queue_id_seq": "a8957a09016363e60f6b877e27bd87ac",
+}
+VECHI = list(R21_VECHI.values()) + list(R22_VECHI.values())
+PROD_R22 = {}  # NET_REL_PROD_R22 (productie, porti_citire.sql G, amprenta r25; gol = necitit inca)
 HELPERI = ["fn_portal_net_rel_aprobat", "fn_portal_net_rel_amprenta", "fn_portal_net_rel_acceptat", "fn_portal_teren_rel_drept"]
 SEMNATURI = ["public.fn_portal_net_rel_aprobat()", "public.fn_portal_net_rel_amprenta(oid)",
              "public.fn_portal_net_rel_acceptat(oid)", "public.fn_portal_teren_rel_drept(oid)"]
@@ -67,6 +74,30 @@ def amprenta(text):
     if not a < b:
         raise AssertionError("marcajele AMPRENTA_NET_REL sunt inversate")
     return " ".join(text[a:b].split())
+
+
+RZ_INCEPUT, RZ_SFARSIT = "-- REZOLVARE_APEL inceput", "-- REZOLVARE_APEL sfarsit"
+
+
+def blocuri_rezolvare(text):
+    """r25: toate blocurile REZOLVARE_APEL (spatiile normalizate), in ordine; refuz la marcaje nepereche / inversate."""
+    if text.count(RZ_INCEPUT) != text.count(RZ_SFARSIT):
+        raise AssertionError("REZOLVARE_APEL: marcaje nepereche")
+    out, poz = [], 0
+    while True:
+        a = text.find(RZ_INCEPUT, poz)
+        if a < 0:
+            return out
+        b, urm = text.find(RZ_SFARSIT, a), text.find(RZ_INCEPUT, a + 1)
+        if b < 0 or 0 <= urm < b:
+            raise AssertionError("REZOLVARE_APEL: marcaje inversate / imbricate")
+        out.append(" ".join(text[a + len(RZ_INCEPUT):b].split()))
+        poz = b + len(RZ_SFARSIT)
+
+
+def corp_amp_text(text):
+    a = text.index(INCEPUT) + len(INCEPUT)
+    return " ".join(text[a:text.index(SFARSIT)].split())
 
 
 def functie(text, nume):
@@ -156,15 +187,35 @@ def verifica(m18, cit, r18, m19, r19, harn, prod=None):
             mot.append(f"lista aprobata completata pe jumatate: {lista}")
         if any(v in R21_VECHI.values() for v in valori) or any(v in m18 for v in R21_VECHI.values()):
             mot.append("valoare r21 (amprenta veche, fara triggere / politici / DEFAULT-uri) in 18a")
+        if any(v in R22_VECHI.values() for v in valori) or any(v in m18 for v in R22_VECHI.values()):
+            mot.append("valoare r22 (amprenta veche, fara mostenire / inchiderea tranzitiva a functiilor) in 18a")
+        if any(v in VECHI for v in prod.values()):
+            mot.append("PROD_R22 din test are o valoare veche (r21 / r22)")
+    except AssertionError as e:
+        mot.append(str(e))
+    # r25 (L19): blocul REZOLVARE_APEL = o singura implementare: o data in amprenta din 18a, de doua ori in porti_citire.sql
+    # (amprenta G + auditul N), text identic (spatiile normalizate)
+    try:
+        b18, bcit = blocuri_rezolvare(m18), blocuri_rezolvare(cit)
+        if len(b18) != 1 or len(bcit) != 2:
+            mot.append(f"REZOLVARE_APEL: cerut 1 bloc in 18a si 2 in porti_citire.sql (G + N), gasite {len(b18)} / {len(bcit)}")
+        elif len(set(b18 + bcit)) != 1:
+            mot.append("REZOLVARE_APEL: blocurile difera (amprenta 18a / G / auditul N)")
+        elif corp_amp_text(m18).find(b18[0]) < 0:
+            mot.append("REZOLVARE_APEL: blocul din 18a nu e in amprenta")
     except AssertionError as e:
         mot.append(str(e))
     if "PORTAL_NET_REL_LIST_NECOMPLETATA" not in m18[m18.find("DO $public_pre$"):m18.find("END $public_pre$;")]:
         mot.append("$public_pre$: refuzul listei necompletate lipseste")
     corp_amp = amprenta(m18) if m18.count(INCEPUT) == 1 and m18.count(SFARSIT) == 1 else ""
     for parte in ("pg_trigger", "pg_policy", "pg_attrdef", "pg_rewrite", "pg_constraint", "pg_index", "pg_sequence",
-                  "pg_get_triggerdef", "pg_get_functiondef", "tgenabled", "attidentity", "attgenerated", "deptype"):
+                  "pg_get_triggerdef", "pg_get_functiondef", "tgenabled", "attidentity", "attgenerated", "deptype",
+                  # r25: mostenire / partitionare si inchiderea tranzitiva a functiilor
+                  "pg_inherits", "ih.inhparent = c.oid", "ih.inhrelid = c.oid", "relispartition", "relhassubclass",
+                  "pg_get_partkeydef", "relpartbound", "WITH RECURSIVE urmas", "WITH RECURSIVE inchidere",
+                  "fp.proacl::text", "REZOLVARE_APEL inceput"):
         if corp_amp and parte not in corp_amp:
-            mot.append(f"amprenta: lipseste {parte} (L15: triggere, politici, DEFAULT-uri, secventa)")
+            mot.append(f"amprenta: lipseste {parte} (L15: triggere, politici, DEFAULT-uri, secventa, mostenire, inchidere)")
     # aceleasi predicate in poarta si in preconditie
     try:
         poarta = functie(m18, "fn_portal_porti_lipsa")
@@ -302,6 +353,35 @@ class NetRel(unittest.TestCase):
     def test_valori_r21_refuzate(self):
         self.refuz(0, self.LISTA, self.completata(R21_VECHI.values()), "valoare r21",
                    prod=dict(R21_VECHI))
+
+    def test_valori_r22_refuzate(self):
+        # r25: valorile lipite pe 12.11 seara (amprenta fara mostenire / inchidere) nu au voie inapoi, nici in test
+        self.refuz(0, self.LISTA, self.completata(R22_VECHI.values()), "valoare r22", prod=dict(R22_VECHI))
+        mot = verifica(*self.cu_lista(self.completata(R22_VECHI.values())), prod=dict(R22_VECHI))
+        self.assertTrue(any("PROD_R22 din test are o valoare veche" in m for m in mot), mot)
+
+    def test_rezolvare_apel_diferita_in_n(self):
+        # r25 (L19): o litera schimbata in blocul din auditul N (al doilea din porti_citire.sql) = refuz
+        f = list(self.f)
+        a = f[1].rindex(RZ_INCEPUT)
+        f[1] = f[1][:a] + f[1][a:].replace("gn.nspname = 'pg_catalog'", "gn.nspname = 'pg_catalogx'", 1)
+        mot = verifica(*f)
+        self.assertTrue(any("REZOLVARE_APEL: blocurile difera" in m for m in mot), mot)
+
+    def test_rezolvare_apel_lipsa_din_n(self):
+        f = list(self.f)
+        a = f[1].rindex(RZ_INCEPUT)
+        f[1] = f[1][:a] + f[1][a:].replace(RZ_INCEPUT, "-- alt bloc", 1).replace(RZ_SFARSIT, "-- alt sfarsit", 1)
+        mot = verifica(*f)
+        self.assertTrue(any("cerut 1 bloc in 18a si 2 in porti_citire.sql" in m for m in mot), mot)
+
+    def test_amprenta_fara_mostenire(self):
+        # in ambele fisiere (paritatea trece): completitudinea nu
+        f = list(self.f)
+        for i in (0, 1):
+            f[i] = f[i].replace("FROM pg_inherits ih WHERE ih.inhrelid = c.oid", "FROM pg_class ih WHERE false", 1)
+        mot = verifica(*f)
+        self.assertTrue(any("lipseste ih.inhrelid = c.oid" in m for m in mot), mot)
 
     def test_fara_refuz_necompletat(self):
         self.refuz(0, "RAISE EXCEPTION 'PORTAL_NET_REL_LIST_NECOMPLETATA", "RAISE EXCEPTION 'PORTAL_NET_REL_LIST_X",
