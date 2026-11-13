@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, createContext, useContext, useRef, la
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
+import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
@@ -519,20 +520,20 @@ export function NotificationBell({ doarModul = null, excludeModul = null, icon =
       .eq('profile_id', profile.id)
     if (doarModul) q = q.eq('modul', doarModul)
     if (excludeModul) q = q.neq('modul', excludeModul)
-    const { data, error } = await q.order('created_at', { ascending: false }).limit(30)
+    const { data, error, status } = await q.order('created_at', { ascending: false }).limit(30)
     if (!error) {
       setNotifs(data || [])
       setUnreadCount((data || []).filter(n => !n.read_at).length)
     }
     setLoading(false)
+    return { error, status }
   }, [profile?.id, doarModul, excludeModul])
-  
+
   useEffect(() => {
-    loadNotifs()
-    // Auto-refresh la 30s
-    const t = setInterval(loadNotifs, 30000)
-    return () => clearInterval(t)
-  }, [loadNotifs])
+    if (!profile?.id) return
+    // Auto-refresh la 30s; fără sesiune (401 / 403) se oprește și repornește când revine sesiunea (src/lib/sesiuneCereri.js)
+    return pornestePolling(loadNotifs, 30000, { client: supabase })
+  }, [loadNotifs, profile?.id])
   
   // Închiderea la click în afară o face overlay-ul din PopoverBara. Nu mai
   // punem handler pe document: panoul e randat prin portal în <body>, deci
@@ -787,11 +788,12 @@ function Layout({ children }) {
         supabase.from('tichete').select('id', { count:'exact', head:true })
           .eq('deschis_de', profile.id).in('status', DE_CONFIRMAT),
       ])
+      const eSes = [r1, r2, r3].find(r => eEroareSesiune(r.error, r.status))
+      if (eSes) return eSes   // fără sesiune: păstrăm cifrele de dinainte, polling-ul se oprește
       setTicheteMele({ deschise: r1.count || 0, asignate: r2.count || 0, deConfirmat: r3.count || 0 })
+      return {}
     }
-    load()
-    const t = setInterval(load, 60000)
-    return () => clearInterval(t)
+    return pornestePolling(load, 60000, { client: supabase })
   }, [profile?.id])
   // TKT-2026-0373: banda de taburi nu mai ascunde taburi fără semn — tabul paginii curente e adus în vedere, săgețile ‹ › apar
   // când mai sunt taburi ascunse pe o parte, iar rotița mouse-ului nu mai derulează banda (de acolo „dispăreau” Acasă/Panou/Pontaj)
@@ -1252,8 +1254,9 @@ function MesajCompanieBox() {
   useEffect(() => {
     let mounted = true
     const load = async () => {
-      const { data } = await supabase.from('settings').select('key, value')
+      const { data, error, status } = await supabase.from('settings').select('key, value')
         .in('key', ['mesaj_companie_text', 'mesaj_companie_activ', 'mesaj_companie_tip', 'mesaj_companie_data'])
+      if (eEroareSesiune(error, status)) return { error, status }
       if (!mounted || !data) return
       const map = Object.fromEntries(data.map(s => [s.key, s.value]))
       if (map.mesaj_companie_activ === 'true' && map.mesaj_companie_text?.trim()) {
@@ -1266,10 +1269,9 @@ function MesajCompanieBox() {
         setMesaj(null)
       }
     }
-    load()
-    // Reload la 60 sec dacă tab-ul e vizibil (mesaje noi)
-    const iv = setInterval(load, 60000)
-    return () => { mounted = false; clearInterval(iv) }
+    // Reload la 60 sec (mesaje noi); fără sesiune se oprește și repornește când revine sesiunea
+    const opreste = pornestePolling(load, 60000, { client: supabase })
+    return () => { mounted = false; opreste() }
   }, [])
   
   // Verifică dismiss state din sessionStorage

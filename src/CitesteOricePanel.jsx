@@ -65,6 +65,7 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { optiuniClient } from './lib/sesiuneCereri.js'
 // acces pe proiect (20261209a r13): contul restrâns în Execuție nu folosește coada
 import { useAccesProiectExecutie } from './ExecutieAccesProiect.jsx'
 import { verdictInbox, MESAJ_INBOX } from './executieAccesProiect.js'
@@ -77,7 +78,8 @@ import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucat
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  optiuniClient(import.meta.env.VITE_SUPABASE_ANON_KEY)
 ))
 
 const G = {
