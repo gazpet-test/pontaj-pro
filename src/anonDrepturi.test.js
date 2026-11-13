@@ -201,8 +201,12 @@ describe('L15 — BASELINE: un singur bloc marcat pe migrare, necompletat în re
       const t = citeste(MIG[k]), x = MIG[k].slice(20, 29)
       const bl = blocuri(t, `BASELINE ${x}`)
       expect(bl).toHaveLength(1)
-      expect(bl[0]).toContain(`    ('${T[k]}', NULL::integer, 'DE_COMPLETAT')\n  ) v(treapta, obiecte, amprenta)`)
-      expect(t.split('DE_COMPLETAT').length - 1).toBe(1)
+      // Blocul e fie necompletat, fie completat din citirea de pe producție (T1 și T3: 13.11.2026): un singur rând, în forma exactă.
+      const coada = '\n  ) v(treapta, obiecte, amprenta)'
+      const necompletat = bl[0].includes(`    ('${T[k]}', NULL::integer, 'DE_COMPLETAT')` + coada)
+      const completat = new RegExp(`    \\('${T[k]}', [0-9]+, '[0-9a-f]{32}'\\)\\n  \\) v\\(treapta, obiecte, amprenta\\)`).test(bl[0])
+      expect(completat !== necompletat).toBe(true)
+      expect(t.split("'DE_COMPLETAT'").length - 1).toBe(necompletat ? 1 : 0)
       expect(t).toContain(`BASELINE necompletat sau invalid (randul ${T[k]}`)
       expect(t).toContain(`difera de BASELINE-ul revizuit`)
     })
