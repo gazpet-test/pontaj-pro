@@ -102,7 +102,13 @@ END $pre$;
 CREATE FUNCTION pg_temp.amp_baseline_20261221a() RETURNS TABLE (eticheta text, amprenta text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
   SELECT v.eticheta, v.amprenta FROM (VALUES
-    ('DE_COMPLETAT', 'DE_COMPLETAT')
+    ('functie auth.uid()', '547eb1864858f1efce909a735a04d521')
+  , ('functie fn_executie_acces_lista(boolean)', '8dae19e2f5e53aeaec7d4a7d360f046b')
+  , ('functie fn_executie_acces_lista_cont(uuid,boolean)', '4f382e2182a748dd9790e9f65f9cd9a5')
+  , ('functie fn_executie_acces_nerestrans()', '53dbf0d75d3f7f5d17747fef20b674a7')
+  , ('functie fn_executie_acces_nerestrans_cont(uuid)', 'bba2d110bb9df2b16d9239156f3b3607')
+  , ('functie fn_executie_proiect_permis(bigint,boolean)', 'bb8d39285aee035d640af6f7371e5476')
+  , ('functie fn_raport_santier_drept(bigint)', '0d759c83376de45804392f28353a370d')
   ) v(eticheta, amprenta)
 $bl$;
 -- <<< BASELINE 20261221a
