@@ -73,7 +73,7 @@ END $pre$;
 CREATE FUNCTION pg_temp.anon_baseline_20261218c() RETURNS TABLE (treapta text, obiecte integer, amprenta text)
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $bl$
   SELECT v.treapta, v.obiecte, v.amprenta FROM (VALUES
-    ('T3', NULL::integer, 'DE_COMPLETAT')
+    ('T3', 2, '69a98b62bd75c1f9547a11a67e2ea56f')
   ) v(treapta, obiecte, amprenta)
 $bl$;
 -- <<< BASELINE 20261218c
