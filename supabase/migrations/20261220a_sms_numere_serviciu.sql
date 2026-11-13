@@ -1,4 +1,5 @@
 -- Version 20261220120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (DOAR cu plafon; marcajul gazpet.livrare_migrare legat de txid).
+-- r4: pe PRODUCȚIE DOAR prin runnerul cu amprenta GLOBALĂ L15 v2 (când va exista) + manifestul 20261220a_sms_numere_serviciu.l15.tsv (îl adaugă coordonatorul).
 -- 20261220a_sms_numere_serviciu — SMS intern: NUMERE DE SERVICIU (telefoane ale firmei care nu sunt ale unui angajat, ex. „Gazpet Redări”),
 --   afișate SEPARAT de angajați în „Selecție manuală” (cererea owner-ului, 13.11.2026). Fără angajați fictivi în employees (ar intra în
 --   pontaj, HR, salarii, numărători) și fără al doilea telefon pe fișa angajatului.
@@ -50,12 +51,22 @@
 --   ÎNAINTE și DUPĂ. r3 (P1, tiparul 20261221a): ÎNCHIDEREA tranzitivă se CALCULEAZĂ în migrare din catalog (blocul INCHIDERE_L15, identic
 --   cu cel din script; lanțul = blocul din 20261221a, octet cu octet), independent de baseline, și baseline-ul trebuie s-o aibă EXACT (o
 --   funcție lipsă sau în plus = refuz); EXECUTE dinamic / limbaj neanalizabil ORIUNDE în lanț = REFUZ (nu doar semnalat: ce cheamă un
---   EXECUTE nu se vede în text, deci nu se poate amprenta); postcondiția: funcțiile noi cheamă doar funcții din lista FOLOSITE și nimic
---   dinamic. Lista FOLOSITE trebuie să fie în baseline (testul static o compară cu apelurile din corpuri). Valorile le scoate coordonatorul
+--   EXECUTE nu se vede în text, deci nu se poate amprenta); [r3: postcondiția „funcțiile noi cheamă doar lista FOLOSITE și nimic
+--   dinamic” — SCOASĂ în r4, vezi mai jos]. Lista FOLOSITE trebuie să fie în baseline (testul static o compară cu apelurile din corpuri). Valorile le scoate coordonatorul
 --   cu scripts/sms_numere_serviciu_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz; scriptul arată separat și
 --   „funcții cu SQL dinamic în lanț: N” (N > 0 = migrarea va refuza). Excepțiile „după” (EXACT trei, toate verificate de postcondiții):
 --   'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)' (ștearsă), 'functie fn_sms_lot_intern_creeaza(text,text[],integer[],
 --   boolean,integer[])' (varianta nouă: corp, drepturi) și 'functie fn_sms_lot_destinatari(uuid)' (corp nou).
+-- r4 (review r3) — L15 v2: LIVRARE DOAR PRIN RUNNERUL CU AMPRENTA GLOBALĂ. Închiderea calculată aici NU urmărește funcțiile chemate prin
+--   VEDERI (contraexemplul review-ului r3: poarta owner citește o vedere care cheamă o funcție auxiliară; auxiliarul, lipsă din închidere,
+--   schimbat după baseline = migrarea singură acceptă). Blocul INCHIDERE_L15 rămâne IDENTIC cu 20261221a (L19; nu se adaugă aici
+--   traversarea vederilor): lanțul calculat e VIZIBILITATE pentru review, nu garanția completă. Garanția vine din runner: amprenta GLOBALĂ a
+--   tuturor cataloagelor cu cod / drepturi, verificată înainte și după migrare, în aceeași tranzacție (L15 v2, livrată separat). De aceea
+--   20261220a se aplică DOAR prin acel runner, când va exista; manifestul diferențelor declarate (20261220a_sms_numere_serviciu.l15.tsv)
+--   îl adaugă atunci coordonatorul. Contraexemplul cu vederea e test DOCUMENTAT al limitei (S44: migrarea singură îl acceptă). Refuzuri
+--   păstrate aici, independente de baseline: DEFINER din lanț fără search_path propriu; SQL dinamic / limbaj neanalizabil în lanț (regula
+--   20261221a). Postcondiția lexicală „funcțiile noi cheamă doar FOLOSITE” e scoasă (L20: respingea o migrare corectă); numele din corpurile
+--   noi potrivite cu funcții din afara listei sunt SEMNAL în scriptul coordonatorului (secțiunea 2), examinat și acceptat explicit în review.
 --
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$). Lock-uri (după
 --   verificările de catalog, NOWAIT, reîncercate la 50 ms până la 1 s de la BEGIN; peste = 55P03, nimic schimbat): sms_loturi SHARE UPDATE
@@ -269,8 +280,8 @@ amp_calc(eticheta, amprenta, detaliu) AS (
 -- <<< AMPRENTA_L15 v1
 SELECT c.eticheta, c.amprenta, c.detaliu FROM amp_calc c
 $amp$;
--- r3: lista FOLOSITE (funcțiile chemate de corpurile noi) o singură dată, aici; o folosesc verificarea (trebuie să fie în baseline) și
--- postcondiția (funcțiile noi nu cheamă nimic în afara ei). Aceeași mulțime e în pornirea închiderii (testul static le compară).
+-- r3: lista FOLOSITE (funcțiile chemate de corpurile noi) o singură dată, aici; o folosește verificarea (trebuie să fie în baseline;
+-- r4: postcondiția lexicală pe ea e scoasă, L20). Aceeași mulțime e în pornirea închiderii (testul static le compară).
 CREATE FUNCTION pg_temp.sms_folosite_20261220a() RETURNS SETOF text
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $fo$
   SELECT unnest(ARRAY[
@@ -752,19 +763,12 @@ BEGIN
   IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (v_expuse::oid[])) <> 6 OR to_regprocedure('public.fn_sms_numere_serviciu_reguli()') IS NULL THEN
     RAISE EXCEPTION '20261220a post: lipsesc functii';
   END IF;
-  -- r3 (L15, tiparul 20261221a): funcțiile NOI / schimbate cheamă (aceeași regulă de nume ca închiderea) DOAR funcții din lista FOLOSITE
-  -- (amprentate, în baseline) și nimic dinamic; altfel ar depinde de o funcție din afara amprentei
-  SELECT string_agg(DISTINCT p2.oid::regprocedure::text, ', ') INTO v_dif
-    FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
-    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1]) AND p2.oid <> p.oid
-   WHERE p.oid = ANY (v_expuse::oid[] || ARRAY['public.fn_sms_numere_serviciu_reguli()'::regprocedure::oid])
-     AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
-     AND p2.oid NOT IN (SELECT to_regprocedure(substr(f.e, 9))::oid FROM pg_temp.sms_folosite_20261220a() f(e) WHERE to_regprocedure(substr(f.e, 9)) IS NOT NULL);
-  IF v_dif IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = ANY (v_expuse::oid[] || ARRAY['public.fn_sms_numere_serviciu_reguli()'::regprocedure::oid])
-                  AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M') THEN
-    RAISE EXCEPTION '20261220a post: functiile noi cheama in afara listei FOLOSITE amprentate: %', coalesce(v_dif, 'EXECUTE dinamic');
-  END IF;
+  -- r4 (review r3, P2 / L20): refuzul LEXICAL „funcțiile noi cheamă doar lista FOLOSITE” (potrivire pe nume, fără schemă și semnătură,
+  -- și în comentarii / șiruri) a fost SCOS: respingea o migrare corectă (o funcție neapelată extensions.jsonb_build_object(integer) față
+  -- de constructorul de sistem jsonb_build_object din corpurile noi). Ce rămâne: corpurile noi sunt fixate prin md5 (mai jos, revizuite),
+  -- lista FOLOSITE = apelurile din corpuri (testul static) și trebuie să fie în baseline (amp_verifica), iar numele din corpurile noi
+  -- potrivite cu funcții din afara listei apar ca SEMNAL, cu schema fiecăreia, în scriptul coordonatorului (secțiunea 2), examinat și
+  -- acceptat explicit în review. Fără SQL dinamic în funcțiile expuse: verificarea 0e de mai sus.
   -- ACL-ul variantei noi = EXACT ACL-ul variantei vechi; fn_sms_lot_destinatari: ACL-ul neschimbat (CREATE OR REPLACE îl păstrează)
   IF (SELECT a.acl FROM sms_acl_inainte_20261220a a WHERE a.nume = 'intern_creeaza') IS NULL
      OR (SELECT a.acl FROM sms_acl_inainte_20261220a a WHERE a.nume = 'intern_creeaza')

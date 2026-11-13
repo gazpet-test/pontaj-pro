@@ -11,12 +11,17 @@
 --        două tabele, apoi orice funcție apelată „nume(” din corpurile sql / plpgsql ale lanțului și dependențele din pg_depend, fără limită
 --        de adâncime. Migrarea calculează ACEEAȘI mulțime și cere ca baseline-ul s-o aibă EXACT (sursa: pornire / inchidere);
 --      * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, politici USING true,
---        DEFINER fără search_path, EXECUTE în corp — pe acesta migrarea îl REFUZĂ).
---   2. „funcții cu SQL dinamic / limbaj neanalizabil în lanț: N” — aceeași regulă ca migrarea (amp_verifica); N > 0 = migrarea VA REFUZA
---      la aplicare (de rezolvat înainte, nu la aplicare).
---   3. „nume din corpurile noi care există ca funcții în afara pg_catalog și a listei FOLOSITE: N” — aceeași regulă de nume ca postcondiția
---      migrării; N > 0 = postcondiția VA REFUZA (un nume din corpurile noi potrivit cu o funcție din altă schemă).
---   4. verificările de start ale migrării pe ținta curentă (corpurile 20261130b, CHECK-ul, numele libere), ca un refuz să se vadă înainte.
+--        DEFINER fără search_path și EXECUTE în corp — pe acestea două migrarea le REFUZĂ).
+--   2. r4: UN rând de SEMNALE pentru review (afișare extinsă, o coloană pe linie):
+--      * REFUZURI (aceleași reguli ca migrarea, amp_verifica; > 0 = migrarea VA REFUZA la aplicare, de rezolvat înainte):
+--        refuz_definer_fara_search_path (DEFINER din lanț fără search_path propriu) și functii_cu_sql_dinamic_in_lant (EXECUTE /
+--        limbaj neanalizabil, regula 20261221a);
+--      * SEMNALE (NU refuză; se examinează și se ACCEPTĂ EXPLICIT în review, cu numele lor): semnal_nume_noi_in_afara_listei (funcțiile
+--        din afara listei FOLOSITE ale căror nume apar în corpurile noi, cu schema și semnătura fiecăreia — ex. o funcție omonimă din
+--        extensions, neapelată), semnal_vederi_citite_de_lant (ce cheamă o vedere NU intră în închidere), semnal_alt_limbaj_decat_sql_plpgsql;
+--        folosite_lipsa trebuie să fie 0.
+--      Limita (review r3): închiderea nu traversează vederile; garanția completă = amprenta GLOBALĂ a runnerului L15 v2 (antetul migrării).
+--   3. verificările de start ale migrării pe ținta curentă (corpurile 20261130b, CHECK-ul, numele libere), ca un refuz să se vadă înainte.
 -- Cum se folosește: coloana linie_baseline din (1), în ordinea afișată, se copiază ÎNTREAGĂ între marcajele „>>> BASELINE 20261220a” /
 --   „<<< BASELINE 20261220a” ale migrării (în locul rândului DE_COMPLETAT; singurul loc din migrare cu valori de producție), iar „detaliu”
 --   intră în review. Migrarea refuză până atunci și refuză orice diferență față de el, înainte și după schimbare (excepțiile „după”: antetul
@@ -173,7 +178,8 @@ SELECT c.eticheta, c.amprenta,
   FROM amp_calc c ORDER BY c.eticheta COLLATE "C";
 
 \echo
-\echo '=== 2. 20261220a — funcții cu SQL dinamic / limbaj neanalizabil în lanț (N > 0 = migrarea VA REFUZA la aplicare) ==='
+\x on
+\echo '=== 2. 20261220a — SEMNALE pentru review (r4): un rând; refuz_* > 0 = migrarea VA REFUZA, semnal_* = de examinat și acceptat explicit ==='
 WITH RECURSIVE
 amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_mesaje'::regclass::oid)),
 -- >>> INCHIDERE_L15 20261220a
@@ -225,15 +231,35 @@ amp_dinamic(functie, limbaj) AS (
    WHERE p.oid IN (SELECT f.oid FROM amp_functii_explicite f)
      AND (l.lanname NOT IN ('sql', 'plpgsql', 'internal', 'c')
           OR (l.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M'))
-)
-SELECT (SELECT count(*) FROM amp_dinamic) AS functii_cu_sql_dinamic_in_lant,
-       coalesce((SELECT string_agg(d.functie || ' (' || d.limbaj || ')', ', ' ORDER BY d.functie COLLATE "C") FROM amp_dinamic d), '(niciuna)') AS care,
-       (SELECT count(*) FROM amp_functii_explicite) AS functii_in_lant;
-
-\echo
-\echo '=== 3. 20261220a — nume din corpurile NOI care există ca funcții în afara pg_catalog și a listei FOLOSITE (N > 0 = postcondiția VA REFUZA) ==='
--- numele = ce potrivește regula de nume a postcondiției („nume(”) în corpurile noi din migrare (lista o ține la zi testul static)
-WITH nume_noi(n) AS (SELECT unnest(ARRAY[
+),
+-- DEFINER din lanț fără search_path propriu: aceeași regulă ca migrarea (amp_verifica), REFUZ
+amp_definer(functie) AS (
+  SELECT p.oid::regprocedure::text FROM pg_proc p
+   WHERE p.oid IN (SELECT f.oid FROM amp_functii_explicite f) AND p.prosecdef AND p.proconfig IS NULL
+),
+-- r4 SEMNALE (vizibilitate, NU refuz; review r3 + L15 v2): funcțiile lanțului în alt limbaj decât sql / plpgsql (internal / c = frunze,
+-- celelalte nu se pot citi) și vederile citite de lanț (nume de vedere în corpul unei funcții din lanț, plus dependențele din pg_depend
+-- ale corpurilor BEGIN ATOMIC). Ce cheamă o vedere NU intră în închidere: garanția vine din amprenta GLOBALĂ a runnerului (L15 v2)
+sem_limbaj(functie) AS (
+  SELECT p.oid::regprocedure::text || ' (' || l.lanname::text || ')'
+    FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid IN (SELECT f.oid FROM amp_functii_explicite f) AND l.lanname NOT IN ('sql', 'plpgsql')
+),
+sem_vederi(vedere) AS (
+  SELECT c.relnamespace::regnamespace::text || '.' || c.relname::text
+    FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)', 'g') w
+    JOIN pg_class c ON c.relkind IN ('v', 'm') AND lower(c.relname) = lower(w[1])
+   WHERE p.oid IN (SELECT f.oid FROM amp_functii_explicite f)
+     AND c.relnamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+  UNION
+  SELECT c.relnamespace::regnamespace::text || '.' || c.relname::text
+    FROM pg_depend d JOIN pg_class c ON c.oid = d.refobjid AND c.relkind IN ('v', 'm')
+   WHERE d.classid = 'pg_proc'::regclass AND d.refclassid = 'pg_class'::regclass AND d.objid IN (SELECT f.oid FROM amp_functii_explicite f)
+),
+-- numele „nume(” din corpurile NOI ale migrării (lista o ține la zi testul static) care există ca funcții în afara pg_catalog /
+-- information_schema și a listei FOLOSITE, CU SCHEMA și semnătura fiecăreia: un nume comun (ex. jsonb_build_object, apelat din
+-- pg_catalog) potrivit cu o funcție omonimă din altă schemă (ex. extensions) apare aici, pentru review, fără să refuze migrarea
+nume_noi(n) AS (SELECT unnest(ARRAY[
   -- >>> NUME-NOI 20261220a
   'activ', 'active', 'adăugare', 'and', 'any', 'array', 'array_agg', 'as',
   'btrim', 'candidatii', 'cardinality', 'client', 'coadă', 'coalesce', 'commit', 'count',
@@ -253,16 +279,27 @@ folosite(oid) AS (VALUES (to_regprocedure('auth.uid()')::oid), (to_regprocedure(
                          (to_regprocedure('public.fn_sms_test_coada_max()')::oid), (to_regprocedure('public.fn_sms_text_valid(text)')::oid),
                          (to_regprocedure('public.fn_sms_text_verifica(text)')::oid)),
 gasite(f) AS (
-  SELECT p.oid::regprocedure::text FROM pg_proc p JOIN nume_noi u ON lower(p.proname) = u.n
+  SELECT p.pronamespace::regnamespace::text || '.' || p.proname::text || '(' || pg_get_function_identity_arguments(p.oid) || ')'
+    FROM pg_proc p JOIN nume_noi u ON lower(p.proname) = u.n
    WHERE p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
      AND p.oid NOT IN (SELECT f.oid FROM folosite f WHERE f.oid IS NOT NULL)
 )
-SELECT (SELECT count(*) FROM gasite) AS nume_potrivite_in_afara_listei,
-       coalesce((SELECT string_agg(g.f, ', ' ORDER BY g.f COLLATE "C") FROM gasite g), '(niciunul)') AS care,
+SELECT (SELECT count(*) FROM amp_functii_explicite) AS functii_in_lant,
+       (SELECT count(*) FROM amp_definer) AS refuz_definer_fara_search_path,
+       coalesce((SELECT string_agg(d.functie, ', ' ORDER BY d.functie COLLATE "C") FROM amp_definer d), '(niciuna)') AS definer_care,
+       (SELECT count(*) FROM amp_dinamic) AS functii_cu_sql_dinamic_in_lant,
+       coalesce((SELECT string_agg(d.functie || ' (' || d.limbaj || ')', ', ' ORDER BY d.functie COLLATE "C") FROM amp_dinamic d), '(niciuna)') AS dinamic_care,
+       (SELECT count(*) FROM gasite) AS semnal_nume_noi_in_afara_listei,
+       coalesce((SELECT string_agg(g.f, ', ' ORDER BY g.f COLLATE "C") FROM gasite g), '(niciunul)') AS nume_care,
+       (SELECT count(*) FROM sem_vederi) AS semnal_vederi_citite_de_lant,
+       coalesce((SELECT string_agg(v.vedere, ', ' ORDER BY v.vedere COLLATE "C") FROM sem_vederi v), '(niciuna)') AS vederi_care,
+       (SELECT count(*) FROM sem_limbaj) AS semnal_alt_limbaj_decat_sql_plpgsql,
+       coalesce((SELECT string_agg(s.functie, ', ' ORDER BY s.functie COLLATE "C") FROM sem_limbaj s), '(niciuna)') AS limbaj_care,
        (SELECT count(*) FROM folosite f WHERE f.oid IS NULL) AS folosite_lipsa;
+\x off
 
 \echo
-\echo '=== 4. 20261220a — verificările de start pe ținta curentă (NU intră în baseline; toate „true” = migrarea trece de $pre$) ==='
+\echo '=== 3. 20261220a — verificările de start pe ținta curentă (NU intră în baseline; toate „true” = migrarea trece de $pre$) ==='
 SELECT
   (SELECT md5(replace(p.prosrc, chr(13), '')) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)'))
     = 'ee0e39daf80d5abd45412e4782d5d07b' AS crearea_lotului_20261130b,

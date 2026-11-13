@@ -265,22 +265,69 @@ describe('20261220a r2 — amprenta acoperă porțile și restul funcțiilor che
     expect(f).not.toContain('baseline L15 incomplet')
     expect(f).toMatch(/FROM amp_rez_20261220a x\n[\s\S]*?FULL JOIN \(SELECT y\.eticheta, y\.amprenta FROM pg_temp\.amp_baseline_20261220a\(\) y/)
   })
-  it('postcondiția: funcțiile noi cheamă doar lista FOLOSITE (aceeași regulă de nume ca închiderea) și nimic dinamic', () => {
+  // r4 (review r3, P2 / L20): refuzul lexical „funcțiile noi cheamă doar FOLOSITE” respingea o migrare corectă (o funcție omonimă
+  // neapelată din altă schemă) — scos; rămân md5-ul corpurilor noi, FOLOSITE în baseline și poarta 0e pe funcțiile expuse
+  it('r4: postcondiția NU mai are refuzul lexical FOLOSITE; corpurile noi rămân fixate prin md5, poarta 0e rămâne', () => {
     const p = MIG.slice(MIG.indexOf('DO $post$'), MIG.indexOf('END $post$;'))
-    expect(p).toContain(`regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\\(', 'g') w`)
-    expect(p).toContain(`AND p2.oid NOT IN (SELECT to_regprocedure(substr(f.e, 9))::oid FROM pg_temp.sms_folosite_${X}() f(e)`)
-    expect(p).toContain("RAISE EXCEPTION '20261220a post: functiile noi cheama in afara listei FOLOSITE amprentate: %', coalesce(v_dif, 'EXECUTE dinamic');")
+    expect(p).not.toContain('functiile noi cheama in afara listei FOLOSITE')
+    expect(p).not.toContain('regexp_matches(')
+    expect(p).not.toContain('sms_folosite_')
+    expect(p).toContain('contine o constructie interzisa de poarta 0e')
+    expect(p).toContain("RAISE EXCEPTION '20261220a post: corpurile noi difera de cele revizuite';")
+    expect(p).toContain("RAISE EXCEPTION '20261220a post: functiile noi difera de amprenta revizuita: %', v_dif;")
+    // lista FOLOSITE se folosește doar în verificare (trebuie să fie în baseline)
+    expect(nr(MIG, `pg_temp.sms_folosite_${X}()`)).toBe(3)   // creare + verificare + DROP final
   })
-  it('scriptul, secțiunea 3: lista NUME-NOI = exact numele „nume(” din corpurile noi (regula postcondiției), deci arată refuzul dinainte', () => {
+  it('r4: refuzurile păstrate în verificare = DEFINER fără search_path + SQL dinamic (regula 20261221a); nimic lexical pe nume', () => {
+    const f = MIG.slice(MIG.indexOf(`CREATE FUNCTION pg_temp.amp_verifica_${X}`), MIG.indexOf('DO $l15_inainte$'))
+    // necompletat, etichete duble, funcțiile schimbate, FOLOSITE în baseline, diferența față de baseline, DEFINER, SQL dinamic
+    expect([...f.matchAll(/RAISE EXCEPTION/g)]).toHaveLength(7)
+    expect(f).toContain("c.detaliu LIKE '%definer=true%' AND c.detaliu LIKE '%config=(mostenit)%'")
+    expect(f).not.toContain('regexp_matches(')
+  })
+  it('scriptul, secțiunea 2 (r4): lista NUME-NOI = exact numele „nume(” din corpurile noi; FOLOSITE = lista din migrare', () => {
     const nume = new Set()
     for (const a of ANTETE_NOI) for (const m of corp(MIG, a).matchAll(/([\p{L}_][\p{L}\p{N}_$]*)"?\s*\(/gu)) nume.add(m[1].toLowerCase())
     const bloc = SCRIPT.slice(SCRIPT.indexOf(`-- >>> NUME-NOI ${X}`), SCRIPT.indexOf(`-- <<< NUME-NOI ${X}`))
     const din = [...faraComentarii(bloc).matchAll(/'((?:[^']|'')*)'/g)].map(m => m[1].replace(/''/g, "'"))
     expect(new Set(din).size).toBe(din.length)
     expect([...din].sort()).toEqual([...nume].sort())
-    const s3 = SCRIPT.slice(SCRIPT.indexOf("\\echo '=== 3."), SCRIPT.indexOf("\\echo '=== 4."))
-    const fol = [...s3.matchAll(/to_regprocedure\('([^']+)'\)::oid/g)].map(m => m[1].replace(/^public\./, '').replace(/ /g, '').replace('public.sms_loturi', 'sms_loturi'))
+    const s2 = SCRIPT.slice(SCRIPT.indexOf("\\echo '=== 2."), SCRIPT.indexOf("\\echo '=== 3."))
+    expect(s2).toContain(`-- >>> NUME-NOI ${X}`)
+    const fl = s2.slice(s2.indexOf('folosite(oid) AS (VALUES'), s2.indexOf('gasite(f) AS ('))
+    const fol = [...fl.matchAll(/to_regprocedure\('([^']+)'\)::oid/g)].map(m => m[1].replace(/^public\./, '').replace(/ /g, '').replace('public.sms_loturi', 'sms_loturi'))
     expect([...fol].sort()).toEqual([...folosite()].sort())
+    expect(nr(SCRIPT, "\\echo '=== ")).toBe(3)
+  })
+  it('scriptul, secțiunea 2 (r4): UN rând de SEMNALE — refuzurile (DEFINER, SQL dinamic) și semnalele (nume cu schemă, vederi, limbaje)', () => {
+    const s2 = SCRIPT.slice(SCRIPT.indexOf("\\echo '=== 2."), SCRIPT.indexOf("\\echo '=== 3."))
+    for (const c of ['functii_in_lant', 'refuz_definer_fara_search_path', 'functii_cu_sql_dinamic_in_lant', 'semnal_nume_noi_in_afara_listei',
+                     'semnal_vederi_citite_de_lant', 'semnal_alt_limbaj_decat_sql_plpgsql', 'folosite_lipsa']) expect(s2).toContain(`AS ${c}`)
+    // numele găsite se afișează CU SCHEMA și semnătura (nu regprocedure, care ascunde schema din search_path)
+    expect(s2).toContain("p.pronamespace::regnamespace::text || '.' || p.proname::text || '(' || pg_get_function_identity_arguments(p.oid) || ')'")
+    // vederile: după nume în corpurile lanțului + pg_depend (BEGIN ATOMIC)
+    expect(s2).toContain("c.relkind IN ('v', 'm')")
+    expect(SCRIPT.indexOf('\\x on')).toBeLessThan(SCRIPT.indexOf("\\echo '=== 2."))
+    expect(SCRIPT.indexOf('\\x off')).toBeGreaterThan(SCRIPT.indexOf('AS folosite_lipsa'))
+    // interogarea secțiunii se termină la primul „;” de la capăt de rând (proba PGlite o extrage așa)
+    const q = s2.slice(s2.indexOf('\n') + 1)
+    expect(q.indexOf(';\n')).toBe(q.indexOf('AS folosite_lipsa;') + 'AS folosite_lipsa'.length)
+  })
+})
+
+// r4 (review r3, P1): închiderea nu traversează vederile; blocul rămâne identic cu 20261221a, garanția = runnerul cu amprenta GLOBALĂ
+describe('20261220a r4 — livrare doar prin runnerul L15 v2 (amprenta globală)', () => {
+  it('antetul spune: DOAR prin runnerul cu amprenta globală, manifestul .l15.tsv îl adaugă coordonatorul, limita vederilor = S44', () => {
+    const antet = MIG.slice(0, MIG.indexOf('DO $pre$'))
+    expect(antet.split('\n')[1]).toContain('DOAR prin runnerul cu amprenta GLOBALĂ L15 v2')
+    expect(antet).toContain('20261220a_sms_numere_serviciu.l15.tsv')
+    expect(antet).toContain('NU urmărește funcțiile chemate prin')
+    expect(antet).toContain('S44')
+    // blocul închiderii NU traversează vederile (identic cu 20261221a, testul L19 de mai sus)
+    expect(blocuri(MIG, IA, IB)[0]).not.toMatch(/relkind|pg_rewrite/)
+  })
+  it('manifestul .l15.tsv NU e în livrarea asta (îl adaugă coordonatorul odată cu runnerul)', () => {
+    expect(() => citeste('supabase/migrations/20261220a_sms_numere_serviciu.l15.tsv')).toThrow()
   })
 })
 
@@ -353,22 +400,45 @@ describe('20261220a r3 — proba cu două sesiuni (scripts/sms_numere_serviciu_c
   const CALE = fileURLToPath(new URL('../scripts/sms_numere_serviciu_concurenta.mjs', import.meta.url))
   const S = citeste('scripts/sms_numere_serviciu_concurenta.mjs')
   const ruleaza = (...a) => spawnSync(process.execPath, [CALE, ...a], { encoding: 'utf8', env: { ...process.env, PSQL: 'psql-inexistent-proba', PGHOST: '' } })
-  it('refuză ÎNAINTE de conexiune: fără „--” / --sistem (2), mutant necunoscut (2), gazdă Supabase (22)', () => {
+  const T = ['--ip', '192.0.2.10', '--port', '5432']   // adresă de documentație (RFC 5737), nu o gazdă reală
+  it('refuză ÎNAINTE de conexiune: fără „--” / --sistem / --ip / --port (2), mutant necunoscut (2), gazdă Supabase (22)', () => {
     expect(ruleaza('--sistem', '1').status).toBe(2)
     expect(ruleaza('--', '-h', 'clona').status).toBe(2)
-    expect(ruleaza('--sistem', '1', '--mutant', 'altul', '--', '-h', 'clona').status).toBe(2)
-    const r = ruleaza('--sistem', '1', '--', '-h', 'db.exemplu.supabase.co')
+    expect(ruleaza('--sistem', '1', '--', '-h', 'clona').status).toBe(2)
+    expect(ruleaza('--sistem', '1', '--ip', '192.0.2.10', '--', '-h', 'clona').status).toBe(2)
+    expect(ruleaza('--sistem', '1', '--port', '5432', '--', '-h', 'clona').status).toBe(2)
+    expect(ruleaza('--sistem', '1', '--ip', 'clona.exemplu', '--port', '5432', '--', '-h', 'clona').status).toBe(2)
+    expect(ruleaza('--sistem', '1', ...T, '--mutant', 'altul', '--', '-h', 'clona').status).toBe(2)
+    const r = ruleaza('--sistem', '1', ...T, '--', '-h', 'db.exemplu.supabase.co')
     expect(r.status).toBe(22)
     expect(r.stderr).toContain('proba rulează doar pe clonă')
   })
-  it('garda țintei (system_identifier + PG17) e prima interogare; starea de plecare cerută: aplicată, tabel gol', () => {
+  it('garda țintei: capătul EFECTIV văzut de server (inet_server_addr / inet_server_port), apoi system_identifier + PG17, în PRIMA interogare; starea de plecare: aplicată, tabel gol', () => {
     const iMain = S.indexOf('async function main()')
+    const iPrimaQ = S.indexOf('await unu(', iMain)
+    const iCapat = S.indexOf('if (ip !== IP || port !== PORT)', iMain)
     const iSis = S.indexOf('if (sis !== SISTEM)', iMain), iVer = S.indexOf('cere PostgreSQL 17', iMain)
     const iPrimaScriere = S.indexOf('const prep = await caOwner', iMain)
-    expect(iSis).toBeGreaterThan(iMain)
+    expect(S.slice(iPrimaQ, iCapat)).toContain("coalesce(host(inet_server_addr()), 'socket'), coalesce(inet_server_port(), current_setting('port')::integer)")
+    expect(iCapat).toBeGreaterThan(iPrimaQ)
+    expect(iSis).toBeGreaterThan(iCapat)
     expect(iVer).toBeGreaterThan(iSis)
     expect(iPrimaScriere).toBeGreaterThan(iVer)
     expect(S.slice(iMain, iPrimaScriere)).toContain("if (stTab !== '0 0 O')")
+  })
+  it('r4: curățenia șterge DOAR rândurile proprii (id + denumire), sub ACCESS EXCLUSIVE; secvența doar dacă rândurile = plecarea; final rând cu rând', () => {
+    expect(S).not.toMatch(/LIKE 'Proba concurenta %'/)
+    const c = S.slice(S.indexOf('export function sqlCuratenie'), S.indexOf('const ESTE_MAIN'))
+    const iLock = c.indexOf('LOCK TABLE public.sms_numere_serviciu IN ACCESS EXCLUSIVE MODE;')
+    const iDel = c.indexOf('DELETE FROM public.sms_numere_serviciu s USING unnest(')
+    const iSeq = c.indexOf('setval(')
+    expect(iLock).toBeGreaterThan(0)
+    expect(iDel).toBeGreaterThan(iLock)
+    expect(c).toContain('WHERE s.id = p.id AND s.denumire = p.denumire')
+    expect(iSeq).toBeGreaterThan(iDel)
+    expect(c.slice(c.lastIndexOf('SELECT CASE WHEN', iSeq), iSeq)).toContain('${SQL_RANDURI} = ${lit(randuriPlecare)}')
+    expect(S).toContain("for (const k of ['fn', 'tab', 'seq', 'randuri'])")
+    expect(S).toContain("md5(row(s.*)::text)")
   })
   it('apelurile ca PostgREST (JWT claim.sub + claims, SET LOCAL ROLE authenticated), prin RPC-ul calificat; mutantul doar pe server, reversibil', () => {
     expect(S).toContain("SELECT set_config('request.jwt.claim.sub', ${lit(uid)}, true), set_config('request.jwt.claims'")
