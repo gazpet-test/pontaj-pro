@@ -10,7 +10,9 @@
 //   5. Etichetă + filtru Gmail → corespondența pornește singură în max 15 min
 //      (Apps Script syncGmailConfig_ + edge gmail-config citesc executie_proiecte)
 //
-// Ordinea la salvare: site → proiect → back-link site → NAS → mutare PDF contract.
+// Ordinea la salvare: proiect → șantier nou (creat DIRECT cu proiect_id) → proiect.site_id → NAS → mutare PDF contract.
+// 20261222a (TKT-2026-0359): „Șantier nou” doar pentru owner sau contul cu dreptul „Creare șantiere” (prop poateCreaSantier);
+// contul cu drept poate doar CREA rândul din sites (nu și modifica), de aceea legătura spre proiect intră în INSERT, nu într-un UPDATE ulterior.
 // PDF-ul se încarcă întâi în `_nou/<uuid>/` (nu știm id-ul încă) și se mută la
 // `<id>/contract/` după INSERT; la abandon se șterge.
 // ════════════════════════════════════════════════════════════════
@@ -19,6 +21,7 @@ import { createClient } from '@supabase/supabase-js'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
 import { optiuniClient } from './lib/sesiuneCereri.js'
 import { norm } from './lib/diacritice.js'
+import { mesajRefuzSantier } from './lib/santiereDrept.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -84,7 +87,7 @@ function Sectiune({ nr, titlu, sub, children, culoare = G.executie }) {
   )
 }
 
-export default function ProiectNouWizard({ onClose, onCreated, showToast }) {
+export default function ProiectNouWizard({ onClose, onCreated, showToast, poateCreaSantier = false }) {
   const [f, setF] = useState({
     nume:'', cod_intern:'', beneficiar:'', beneficiar_final:'',
     nr_contract:'', data_contract:'', valoare_lei:'', valoare_eur:'',
@@ -109,7 +112,7 @@ export default function ProiectNouWizard({ onClose, onCreated, showToast }) {
   const [saving, setSaving] = useState(false)
 
   // ─── Șantier ────────────────────────────────────────────────────────────
-  const [siteMod, setSiteMod] = useState('nou')    // nou | existent | fara
+  const [siteMod, setSiteMod] = useState(poateCreaSantier ? 'nou' : 'existent')    // nou | existent | fara
   const [siteNume, setSiteNume] = useState('')
   const [siteId, setSiteId] = useState('')
 
@@ -241,21 +244,8 @@ export default function ProiectNouWizard({ onClose, onCreated, showToast }) {
     setSaving(true)
     const num = v => { const n = parseFloat(String(v).replace(',', '.')); return Number.isFinite(n) ? n : null }
     try {
-      // 1. Șantier nou (dacă e cazul) — proiect_id se completează după INSERT-ul proiectului.
-      // RLS pe sites permite INSERT doar owner-ului: dacă pică, proiectul se creează
-      // totuși, iar Razvan leagă șantierul ulterior din editare.
-      let siteFinal = siteMod === 'existent' && siteId ? parseInt(siteId) : null
-      let siteCreat = null
-      let siteEsuat = null
-      if (siteMod === 'nou') {
-        const { data, error } = await supabase.from('sites')
-          .insert({ name: siteNumeEfectiv, active: true, beneficiar_principal: f.beneficiar.trim() || null })
-          .select('id').single()
-        if (error) siteEsuat = error.message
-        else { siteFinal = data.id; siteCreat = data.id }
-      }
-
-      // 2. Proiectul
+      // 1. Proiectul (cu șantierul existent ales; un șantier NOU se leagă la pasul 2)
+      const siteFinal = siteMod === 'existent' && siteId ? parseInt(siteId) : null
       const { data: proiect, error: errP } = await supabase.from('executie_proiecte').insert({
         nume:            f.nume.trim(),
         cod_intern:      f.cod_intern.trim(),
@@ -281,11 +271,22 @@ export default function ProiectNouWizard({ onClose, onCreated, showToast }) {
       if (errP) throw new Error('Proiect: ' + errP.message)
 
       const pasi = []
-      if (siteEsuat) pasi.push(`⚠️ șantierul NU s-a creat (${siteEsuat}) — leagă-l din editare`)
-      // 3. Back-link șantier → proiect
-      if (siteCreat) {
-        const { error } = await supabase.from('sites').update({ proiect_id: proiect.id }).eq('id', siteCreat)
-        pasi.push(error ? `⚠️ șantier creat, dar nelegat (${error.message})` : '🏗️ șantier nou creat')
+      // 2. Șantier nou: creat DIRECT legat de proiect (proiect_id în INSERT); apoi proiectul primește site_id.
+      // Refuzul bazei (fără dreptul „Creare șantiere” / fără scriere pe proiect) nu oprește proiectul: se spune clar ce n-a mers.
+      if (siteMod === 'nou') {
+        const { data: site, error: errS } = await supabase.from('sites')
+          .insert({ name: siteNumeEfectiv, active: true, beneficiar_principal: f.beneficiar.trim() || null, proiect_id: proiect.id })
+          .select('id').single()
+        if (errS) {
+          pasi.push(`⚠️ ${mesajRefuzSantier(errS)} Proiectul s-a creat fără șantier.`)
+        } else {
+          // L18: UPDATE-ul cu 0 rânduri (RLS) nu e succes → se cere id-ul înapoi
+          const { data: leg, error: errL } = await supabase.from('executie_proiecte')
+            .update({ site_id: site.id }).eq('id', proiect.id).select('id')
+          pasi.push(errL || !leg?.length
+            ? `⚠️ șantier nou creat, dar proiectul nu l-a primit (${errL?.message || 'niciun rând actualizat'}) — leagă-l din editare`
+            : '🏗️ șantier nou creat')
+        }
       } else if (siteFinal) {
         pasi.push('🏗️ legat la șantierul existent')
       }
@@ -480,7 +481,7 @@ export default function ProiectNouWizard({ onClose, onCreated, showToast }) {
             sub="Pontajul, utilajele și rapoartele zilnice se leagă de șantier">
             <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
               {[
-                { k:'nou',      l:'🏗️ Șantier nou' },
+                ...(poateCreaSantier ? [{ k:'nou', l:'🏗️ Șantier nou' }] : []),
                 { k:'existent', l:'🔗 Șantier existent' },
                 { k:'fara',     l:'⏭️ Fără șantier acum' },
               ].map(o => (
@@ -492,7 +493,12 @@ export default function ProiectNouWizard({ onClose, onCreated, showToast }) {
                 }}>{o.l}</button>
               ))}
             </div>
-            {siteMod === 'nou' && (
+            {!poateCreaSantier && (
+              <div style={{ fontSize:11, color:G.dim, marginBottom:10 }}>
+                Un șantier nou îl poate crea doar un cont cu dreptul „Creare șantiere” (îl acordă owner-ul).
+              </div>
+            )}
+            {siteMod === 'nou' && poateCreaSantier && (
               <div>
                 <label style={S.lbl}>Denumire șantier</label>
                 <input value={siteNume} onChange={e => setSiteNume(e.target.value)} style={S.input}

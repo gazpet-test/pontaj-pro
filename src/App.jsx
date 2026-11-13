@@ -5,6 +5,7 @@ import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
+import { poateCreaSantier, mesajRefuzSantier } from './lib/santiereDrept.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -6735,7 +6736,8 @@ function AdminPage() {
     loadAll()
   }
 
-  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
+  // 20261222a: owner SAU contul cu dreptul „Creare șantiere”; refuzul bazei se arată cu motivul (nu un „Eroare” mut)
+  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast(mesajRefuzSantier(error),'error'); setAddingSite(false) }
   const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
   const saveSiteName=async()=>{ if(!editSiteItem||!editSiteName.trim()) return; const {error}=await supabase.from('sites').update({name:editSiteName.trim()}).eq('id',editSiteItem.id); if(!error){showToast(`✓ Redenumit: ${editSiteName}`);setEditSiteItem(null);loadAll()} else showToast('Eroare','error') }
   const deleteSite=async(s)=>{
@@ -7077,15 +7079,18 @@ function AdminPage() {
     ['semnaturi', '🖋️ Semnături'],
     ['settings',  '⚙️ Setări'],  // restricted is_owner only
   ]
+  // 20261222a: tab-ul Șantiere și pentru contul cu dreptul „Creare șantiere” — doar lista + formularul de adăugare
+  // (redenumirea, dezactivarea, ștergerea și depozitele rămân ale owner-ului; baza le refuză oricum)
+  const tabsNonOwner = poateCreaSantier(profile) ? ['employees','semnaturi','sites'] : ['employees','semnaturi']
   const tabs = allTabs.filter(([v]) => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(v)) return false
+    if (!isSuperAdmin && !tabsNonOwner.includes(v)) return false
     return true
   })
-  
+
   // non-owner (ex. Natalia cu can_modify_employees): redirect orice tab restricționat → 'employees'
   useEffect(() => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(tab)) setTab('employees')
-  }, [isSuperAdmin, tab])
+    if (!isSuperAdmin && !tabsNonOwner.includes(tab)) setTab('employees')
+  }, [isSuperAdmin, tab, tabsNonOwner.length])
 
   // 29.09.2026: link-uri directe din alerte — /admin?tab=managers&cont=<profile_id> deschide contul,
   // /admin?tab=employees&angajat=<id> deschide „Editează Angajat”. Se citesc după loadAll, apoi se șterg din URL.
@@ -7760,21 +7765,26 @@ function AdminPage() {
                 <tr key={s.id}><td style={{fontWeight:600}}>{s.name}</td>
                 <td><span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700,background:s.active?G.greenDim:G.redDim,color:s.active?G.green:G.red,border:`1px solid ${s.active?G.green:G.red}44`}}>{s.active?'● Activ':'○ Inactiv'}</span></td>
                 <td style={{display:'flex',gap:6}}>
+                  {isSuperAdmin ? <>
                   <button onClick={()=>{setEditSiteItem(s);setEditSiteName(s.name)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️</button>
                   <button onClick={()=>toggleSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{s.active?'Dezact.':'Activ.'}</button>
                   <button onClick={()=>setDeletingSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11,color:G.red,borderColor:G.red+'44'}}>🗑️</button>
+                  </> : <span style={{fontSize:11,color:G.muted}}>—</span>}
                 </td></tr>
               ))}{!sites.length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Niciun șantier</td></tr>}</tbody></table>
             )}
           </div>
+          {poateCreaSantier(profile) ? (
           <div style={{...S.card,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Adaugă Șantier</div>
             <div style={{marginBottom:14}}><Lbl>Nume</Lbl><input style={S.input} placeholder="ex: Șantier Ploiești" value={siteName} onChange={e=>setSiteName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSite()}/></div>
             <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={addSite} disabled={addingSite}>{addingSite?<><div className="sp"/>...</>:'+ Adaugă'}</button>
           </div>
+          ) : <div/>}
         </div>
 
-        {/* ═══════════ DEPOZITE MATERIALE ═══════════ */}
+        {/* ═══════════ DEPOZITE MATERIALE (doar owner) ═══════════ */}
+        {isSuperAdmin && (
         <div style={{marginTop:22}}>
           <div style={{fontSize:14,fontWeight:800,color:G.text,marginBottom:12,display:'flex',alignItems:'center',gap:8}}>
             🏭 Depozite materiale
@@ -7843,6 +7853,7 @@ function AdminPage() {
             </div>
           </div>
         </div>
+        )}
         </>
       )}
 
