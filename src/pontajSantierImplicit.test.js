@@ -4,8 +4,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
   esteZiLucrataCuSantier, ultimulSantierDinRanduri, santierImplicit, incarcaUltimulSantier,
-  stareZiInitiala, reducerZi, cheiaListei, raspunsAplicabil, randulZilei, stareIstoric, propuneSantier, verificaSalvare,
-  randPentruSalvare, treceFiltrulSantier, nealocati, incarcaRanduriZi, incarcaIstoricZi, salveazaRand, alocaSantierZi,
+  cheiaListei, randulZilei, arataSpinner, propuneSantier, verificaSalvare, randPentruSalvare, treceFiltrulSantier, nealocati,
+  creeazaControlorZi,
 } from './pontajSantierImplicit.js'
 
 // ── serverul fals: in / lt / not is null / or(check_in.not.is.null,norma.is.null) / order / limit, plafon de server 1000 ──
@@ -144,259 +144,416 @@ describe('citirea din BD: exactă și paginată', () => {
   })
 })
 
-// ══ r2 (review #1091): comportamentul paginii, pe aceleași funcții pe care le cheamă PontajPage ══
-// „Pagina” de test = starea din reducerZi (ca useReducer: fiecare dispatch se aplică pe starea CURENTĂ, în ordinea sosirii) +
-// pașii asincroni exportați, cu promisiuni pe care testul le rezolvă în ordinea aleasă de el.
+// ══ r3 (re-review #1091): CONTROLORUL zilei — același obiect pe care îl folosește PontajPage ══
+// Fiecare citire / scriere e o promisiune amânată, eliberată de test în ordinea aleasă de el (răspunsuri întârziate, inversate, eșuate).
 function amanat() {
   let rezolva, respinge
   const p = new Promise((a, b) => { rezolva = a; respinge = b })
   return { p, rezolva, respinge }
 }
 const asteapta = () => new Promise(res => setTimeout(res, 0))
-function pagina(ziInit, emps) {
-  const pg = { st: stareZiInitiala(ziInit), emps, ziRef: ziInit, scrieri: [] }
-  pg.dispatch = (a) => { pg.st = reducerZi(pg.st, a) }
-  pg.cheie = () => cheiaListei(pg.emps)
-  pg.schimbaZiua = (zi) => { pg.ziRef = zi; pg.dispatch({ tip: 'zi', zi }) }
-  // pornește citirile zilei afișate (ca efectele paginii); întoarce promisiunile amânate, rezolvate de test
-  pg.pornesteCitirile = () => {
-    const zi = pg.st.zi, cheie = pg.cheie(), ids = pg.emps.map(e => e.id)
-    const randuri = amanat(), istoric = amanat()
-    const pr = incarcaRanduriZi({ zi, ids, dispatch: pg.dispatch, citeste: () => randuri.p })
-    const pi = incarcaIstoricZi({ zi, cheie, ids, dispatch: pg.dispatch, citeste: () => istoric.p })
-    return { randuri, istoric, gata: Promise.all([pr, pi]) }
-  }
-  pg.prop = (emp) => propuneSantier({ st: pg.st, cheie: pg.cheie(), emp })
-  // salvarea: ca saveRecord (starea din momentul apăsării); scrie() = promisiune controlată sau răspuns imediat (ecoul rândului)
-  pg.salveaza = (emp, fields, scrie) => salveazaRand({
-    st: pg.st, cheie: pg.cheie(), emp, fields, dispatch: pg.dispatch, ziAfisata: () => pg.ziRef,
-    uid: async () => 'u1', acum: () => 'T', scrie: (rand) => { pg.scrieri.push(rand); return scrie ? scrie(rand) : Promise.resolve({ data: { id: 900, ...rand }, error: null }) },
+// scrieImediat: scrierea răspunde imediat cu ecoul rândului (id 900+); altfel e amânată (scrieri[i].rezolva(...))
+function banc(zi, emps, { scrieImediat = true } = {}) {
+  const cereriR = [], cereriI = [], scrieri = []
+  let idScris = 900
+  const ctrl = creeazaControlorZi({
+    zi,
+    citesteRanduri: (z, ids) => { const d = amanat(); cereriR.push({ zi: z, ids, ...d }); return d.p },
+    citesteIstoric: (ids, z) => { const d = amanat(); cereriI.push({ zi: z, ids, ...d }); return d.p },
+    scrieRand: (rand) => {
+      if (scrieImediat) { scrieri.push({ rand }); return Promise.resolve({ data: { id: idScris++, ...rand }, error: null }) }
+      const d = amanat(); scrieri.push({ rand, ...d }); return d.p
+    },
+    uid: async () => 'u1', acum: () => 'T',
   })
-  return pg
+  let notificari = 0
+  ctrl.aboneaza(() => { notificari++ })
+  if (emps) ctrl.seteazaAngajati(emps)
+  return { ctrl, cereriR, cereriI, scrieri, s: () => ctrl.getStare(), prop: (e) => propuneSantier(ctrl.getStare(), e), notificari: () => notificari }
 }
-const ore = (zi) => ({ check_in: `${zi}T05:00:00Z`, check_out: `${zi}T14:00:00Z`, norma: null, lunch_break: true, diurna: false, meal_supplement: false })
+const ore = (zi, hh = '05') => ({ check_in: `${zi}T${hh}:00:00Z`, check_out: `${zi}T14:00:00Z`, norma: null, lunch_break: true, diurna: false, meal_supplement: false })
+const harta = (...perechi) => new Map(perechi)
 const A = 20, B = 30
+const Z13 = '2026-11-13', Z12 = '2026-11-12'
 
-describe('(a) schimbarea zilei cu istoric întârziat + rând cu șantier NULL (P1-1)', () => {
-  it('salvarea e refuzată cât istoricul zilei noi nu e citit, apoi trece cu șantierul CORECT (B), nu cu al zilei vechi (A)', async () => {
+describe('(a) A → B → A cu alocare pe B (P1-1 din re-review)', () => {
+  it('la revenire, salvarea e refuzată până sosește istoricul NOU, apoi scrie șantierul nou (30), nu cel vechi (20)', async () => {
     const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-13', [emp])
-    const c13 = pg.pornesteCitirile()
-    c13.randuri.rezolva({ data: [], error: null })
-    c13.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-12' }]]))
-    await c13.gata
-    expect(pg.prop(emp)).toEqual({ site_id: A, sursa: 'precedent', data: '2026-11-12' })
-
-    // treci la 12.11: există un rând cu ore și șantier NULL; rândurile sosesc ÎNAINTEA istoricului
-    pg.schimbaZiua('2026-11-12')
-    const c12 = pg.pornesteCitirile()
-    expect(pg.prop(emp).sursa).toBe('incarc') // nici rândurile nu sunt încă citite: nu se arată A
-    c12.randuri.rezolva({ data: [{ id: 5, employee_id: 1, date: '2026-11-12', site_id: null, ...ore('2026-11-12') }], error: null })
+    const b = banc(Z13, [emp])
+    b.cereriR[0].rezolva({ data: [], error: null })
+    b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
     await asteapta()
-    expect(pg.prop(emp)).toEqual({ site_id: null, sursa: 'incarc', data: null, asteapta: 'istoric' })
-    const refuz = await pg.salveaza(emp, ore('2026-11-12'))
-    expect(refuz.ok).toBe(false)
-    expect(refuz.motiv).toMatch(/ultimul șantier pontat/)
-    expect(pg.scrieri.length).toBe(0) // nimic scris pe A
+    expect(b.prop(emp)).toEqual({ site_id: A, sursa: 'precedent', data: Z12 })
 
-    // istoricul corect al zilei 12 dă B
-    c12.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-10' }]]))
-    await c12.gata
-    expect(pg.prop(emp)).toEqual({ site_id: B, sursa: 'precedent', data: '2026-11-10' })
-    const ok = await pg.salveaza(emp, ore('2026-11-12'))
+    // pe 12.11 aloci 30
+    b.ctrl.seteazaZi(Z12)
+    b.cereriR[1].rezolva({ data: [], error: null })
+    b.cereriI[1].rezolva(harta([1, { site_id: 15, date: '2026-11-11' }]))
+    await asteapta()
+    const al = await b.ctrl.aloca(emp, B, { ctx: b.s().ctx })
+    expect(al).toMatchObject({ ok: true, zi: Z12, altaZi: false })
+    expect(b.prop(emp)).toEqual({ site_id: B, sursa: 'zi', data: null })
+
+    // revii pe 13.11 (fără rând): rândurile sosesc, istoricul nou încă se citește → refuz, nimic scris
+    b.ctrl.seteazaZi(Z13)
+    expect(b.prop(emp).sursa).toBe('incarc') // nimic din ce s-a citit pe 13.11 înainte nu mai e folosit
+    b.cereriR[2].rezolva({ data: [], error: null })
+    await asteapta()
+    expect(b.prop(emp)).toEqual({ site_id: null, sursa: 'incarc', data: null, asteapta: 'istoric' })
+    const refuz = await b.ctrl.salveaza(emp, ore(Z13))
+    expect(refuz).toMatchObject({ ok: false, scris: false })
+    expect(refuz.motiv).toMatch(/ultimul șantier pontat/)
+    expect(b.scrieri).toHaveLength(1) // doar alocarea
+
+    b.cereriI[2].rezolva(harta([1, { site_id: B, date: Z12 }]))
+    await asteapta()
+    expect(b.prop(emp)).toEqual({ site_id: B, sursa: 'precedent', data: Z12 })
+    const ok = await b.ctrl.salveaza(emp, ore(Z13))
+    expect(ok).toMatchObject({ ok: true, zi: Z13 })
+    expect(b.scrieri[1].rand).toMatchObject({ employee_id: 1, date: Z13, site_id: B })
+  })
+  it('alocarea pe B încă în zbor la revenirea pe A: istoricul citit ÎNAINTEA ei (20) e aruncat când alocarea reușește și se recitește', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    b.ctrl.seteazaZi(Z12)
+    b.cereriR[1].rezolva({ data: [], error: null }); b.cereriI[1].rezolva(new Map())
+    await asteapta()
+    const pAl = b.ctrl.aloca(emp, B, { ctx: b.s().ctx })
+    await asteapta()
+    b.ctrl.seteazaZi(Z13)
+    b.cereriR[2].rezolva({ data: [], error: null })
+    b.cereriI[2].rezolva(harta([1, { site_id: A, date: Z12 }])) // citit înainte ca alocarea să ajungă în BD
+    await asteapta()
+    expect(b.prop(emp).site_id).toBe(A)
+    // alocarea pe 12.11 (zi ANTERIOARĂ celei afișate) reușește → istoricul zilei 13 devine „se încarcă” și se recitește
+    b.scrieri[0].rezolva({ data: { id: 50, employee_id: 1, date: Z12, site_id: B }, error: null })
+    expect(await pAl).toMatchObject({ ok: true, zi: Z12, altaZi: true })
+    expect(b.prop(emp).sursa).toBe('incarc')
+    expect(b.cereriI).toHaveLength(4)
+    expect((await b.ctrl.salveaza(emp, ore(Z13))).ok).toBe(false)
+    b.cereriI[3].rezolva(harta([1, { site_id: B, date: Z12 }]))
+    await asteapta()
+    expect(b.prop(emp).site_id).toBe(B)
+  })
+  it('o scriere pe ziua afișată sau pe una ULTERIOARĂ nu atinge istoricul (nu-l invalidează degeaba)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    const ist = b.s().istoric
+    const p = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    b.scrieri[0].rezolva({ data: { id: 60, employee_id: 1, date: Z13, site_id: A }, error: null }); await p
+    expect(b.s().istoric).toBe(ist)
+    expect(b.cereriI).toHaveLength(1)
+  })
+})
+
+describe('(b) răspunsul vechi pentru A sosit după cel nou nu schimbă nimic', () => {
+  it('nici la rânduri, nici la istoric (A → B → A, răspunsurile primei vizite sosesc ultimele)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.ctrl.seteazaZi(Z12)
+    b.ctrl.seteazaZi(Z13)
+    expect(b.cereriR.map(c => c.zi)).toEqual([Z13, Z12, Z13])
+    // cererile noi (a treia) răspund primele
+    b.cereriR[2].rezolva({ data: [{ id: 7, employee_id: 1, date: Z13, site_id: 44 }], error: null })
+    b.cereriI[2].rezolva(harta([1, { site_id: B, date: Z12 }]))
+    await asteapta()
+    const dupaNou = b.s()
+    // răspunsurile vechi pentru ACEEAȘI zi (prima vizită) și pentru B sosesc după
+    b.cereriR[0].rezolva({ data: [{ id: 6, employee_id: 1, date: Z13, site_id: 99 }], error: null })
+    b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    b.cereriR[1].rezolva({ data: [], error: null })
+    b.cereriI[1].respinge(new Error('târziu'))
+    await asteapta()
+    expect(b.s()).toBe(dupaNou)
+    expect(b.prop(emp)).toEqual({ site_id: 44, sursa: 'zi', data: null })
+    expect(b.s().istoric.harta.get(1).site_id).toBe(B)
+  })
+  it('și eroarea vechii cereri (aceeași zi) nu pune ziua în eroare', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.ctrl.seteazaZi(Z12); b.ctrl.seteazaZi(Z13)
+    b.cereriR[2].rezolva({ data: [], error: null }); b.cereriI[2].rezolva(new Map())
+    await asteapta()
+    b.cereriR[0].rezolva({ data: null, error: { message: 'timeout' } }); b.cereriI[0].respinge(new Error('timeout'))
+    await asteapta()
+    expect(b.s().randuri.stare).toBe('gata')
+    expect(b.s().istoric.stare).toBe('gata')
+  })
+})
+
+describe('(c) aceeași zi, două liste de angajați, răspunsuri în ordine inversă', () => {
+  it('rămâne rezultatul cererii noi: pontajul angajatului 2 nu dispare, iar salvarea lui nu-i scrie orele implicite', async () => {
+    const e1 = { id: 1, site_id: 10 }, e2 = { id: 2, site_id: 10 }
+    const b = banc(Z13, [e1])
+    b.ctrl.seteazaAngajati([e1, e2])
+    expect(b.cereriR.map(c => c.ids)).toEqual([[1], [1, 2]])
+    const rand2 = { id: 8, employee_id: 2, date: Z13, site_id: 44, ...ore(Z13, '06') }
+    b.cereriR[1].rezolva({ data: [rand2], error: null })
+    b.cereriI[1].rezolva(harta([1, { site_id: A, date: Z12 }], [2, { site_id: B, date: Z12 }]))
+    await asteapta()
+    b.cereriR[0].rezolva({ data: [], error: null })
+    b.cereriI[0].rezolva(harta([1, { site_id: 99, date: Z12 }]))
+    await asteapta()
+    expect(randulZilei(b.s(), 2)).toBe(rand2)
+    expect(b.prop(e2)).toEqual({ site_id: 44, sursa: 'zi', data: null })
+    expect(b.prop(e1).site_id).toBe(A)
+  })
+  it('lista schimbată după ce rândurile listei vechi erau citite: istoricul nou sosit ÎNAINTEA rândurilor nu deblochează salvarea', async () => {
+    const e1 = { id: 1, site_id: 10 }, e2 = { id: 2, site_id: 10 }
+    const b = banc(Z13, [e1])
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(new Map())
+    await asteapta()
+    b.ctrl.seteazaAngajati([e1, e2])
+    b.cereriI[1].rezolva(harta([2, { site_id: B, date: Z12 }]))
+    await asteapta()
+    // angajatul 2 poate avea deja pontaj azi: până nu sosesc rândurile listei noi nu se știe → refuz, nu ore implicite peste orele lui
+    expect(b.prop(e2)).toEqual({ site_id: null, sursa: 'incarc', data: null, asteapta: 'randuri' })
+    expect((await b.ctrl.salveaza(e2, ore(Z13))).ok).toBe(false)
+    expect(b.scrieri).toHaveLength(0)
+  })
+  it('aceeași listă (alte obiecte, aceleași id-uri) = fără recitire; fișa nouă se folosește', async () => {
+    const e1 = { id: 1, site_id: null }
+    const b = banc(Z13, [e1])
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(new Map())
+    await asteapta()
+    const ctx = b.s().ctx
+    b.ctrl.seteazaAngajati([{ id: 1, site_id: 10 }])
+    expect(b.cereriR).toHaveLength(1)
+    expect(b.s().ctx).toBe(ctx)
+    expect(b.prop(b.s().emps[0])).toEqual({ site_id: 10, sursa: 'fisa', data: null }) // pagina redă lista din instantaneu
+  })
+})
+
+describe('(d) scrierile bat citirile plecate înaintea lor', () => {
+  it('citirea de fundal plecată înaintea unei salvări și sosită după ea nu înlocuiește rândul salvat; se recitește', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    b.ctrl.reimprospateaza({ editari: false }) // nu se așteaptă: rămâne în zbor
+    expect(b.cereriR).toHaveLength(2) // citirea de fundal a plecat
+    const s = await b.ctrl.salveaza(emp, ore(Z13))
+    expect(s.ok).toBe(true)
+    expect(randulZilei(b.s(), 1)).toMatchObject({ date: Z13, site_id: A })
+    expect(b.cereriR).toHaveLength(3) // citirea aruncată se reface
+    b.cereriR[1].rezolva({ data: [], error: null }) // răspunsul vechi (fără rândul salvat)
+    await asteapta()
+    expect(randulZilei(b.s(), 1)).toMatchObject({ date: Z13, site_id: A })
+    b.cereriR[2].rezolva({ data: [{ ...s.rand }], error: null })
+    await asteapta()
+    expect(randulZilei(b.s(), 1)).toMatchObject({ id: s.rand.id, site_id: A })
+  })
+  it('fără citire în zbor, salvarea nu pornește citiri inutile; citirea de fundal sare cât există editări (rânduri citite)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(new Map())
+    await asteapta()
+    await b.ctrl.salveaza(emp, ore(Z13))
+    expect(b.cereriR).toHaveLength(1)
+    await b.ctrl.reimprospateaza({ editari: true })
+    expect(b.cereriR).toHaveLength(1)
+  })
+  it('salvarea după ce ziua s-a schimbat de la apăsare (poarta de parolă) = refuz, nimic scris', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(new Map())
+    await asteapta()
+    const ctx = b.s().ctx
+    b.ctrl.seteazaZi(Z12)
+    // ziua nouă e deja citită complet când se termină poarta: fără verificarea ctx, orele zilei 13 s-ar scrie pe 12
+    b.cereriR[1].rezolva({ data: [], error: null }); b.cereriI[1].rezolva(harta([1, { site_id: B, date: '2026-11-11' }]))
+    await asteapta()
+    expect(b.prop(emp).sursa).toBe('precedent')
+    expect(await b.ctrl.salveaza(emp, ore(Z13), { ctx })).toMatchObject({ ok: false, scris: false })
+    expect(await b.ctrl.aloca(emp, B, { ctx })).toMatchObject({ ok: false })
+    expect(b.scrieri).toHaveLength(0)
+  })
+})
+
+describe('(e) eroare la citirea inițială + ore completate + „Reîncearcă”', () => {
+  it('fără spinner (rândurile rămân montate, completările rămân), salvarea refuzată până la citire, apoi salvează ce a completat utilizatorul', async () => {
+    const emp = { id: 1, site_id: 10 }, e2 = { id: 2, site_id: 10 }
+    const b = banc(Z13, [emp, e2])
+    expect(arataSpinner(b.s())).toBe(true) // prima citire a zilei
+    b.cereriR[0].rezolva({ data: null, error: { message: 'timeout' } })
+    b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    expect(b.s().randuri).toMatchObject({ stare: 'eroare', err: 'timeout' })
+    expect(arataSpinner(b.s())).toBe(false) // lista e afișată: utilizatorul completează orele
+    expect(b.prop(emp)).toMatchObject({ sursa: 'incarc', eroare: true })
+    const completat = ore(Z13, '04') // ce a tastat utilizatorul (04:00, nu ora implicită)
+    const refuz = await b.ctrl.salveaza(emp, completat)
+    expect(refuz).toMatchObject({ ok: false, scris: false })
+    expect(refuz.motiv).toMatch(/Reîncearcă/)
+    // citirea de fundal reîncearcă ORICUM, deși există editări
+    const pReinc = b.ctrl.reimprospateaza({ editari: true })
+    expect(b.cereriR).toHaveLength(2)
+    expect(b.s().randuri).toMatchObject({ stare: 'eroare', reincerc: true })
+    expect(arataSpinner(b.s())).toBe(false) // reîncercarea NU demontează rândurile
+    expect(randulZilei(b.s(), 1)).toBe(null) // rândul primit de PontajRow nu se schimbă → ce a tastat rămâne
+    // angajatul 2 avea deja pontaj: apare cu valorile salvate, iar pagina e anunțată (randuriNoi)
+    const rand2 = { id: 8, employee_id: 2, date: Z13, site_id: 44, ...ore(Z13, '06') }
+    b.cereriR[1].rezolva({ data: [rand2], error: null })
+    const rez = await pReinc
+    expect(rez).toEqual({ randuri: 'gata', istoric: 'gata', randuriNoi: [2] })
+    expect(randulZilei(b.s(), 1)).toBe(null)
+    const ok = await b.ctrl.salveaza(emp, completat)
     expect(ok.ok).toBe(true)
-    expect(pg.scrieri).toHaveLength(1)
-    expect(pg.scrieri[0]).toMatchObject({ employee_id: 1, date: '2026-11-12', site_id: B })
+    expect(b.scrieri[0].rand).toMatchObject({ employee_id: 1, date: Z13, site_id: A, check_in: `${Z13}T04:00:00Z` })
+  })
+  it('butonul „Reîncearcă” eșuat din nou rămâne în eroare (salvări oprite); istoricul în eroare se reîncearcă și el', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.cereriR[0].rezolva({ data: null, error: { message: 'timeout' } })
+    b.cereriI[0].respinge(new Error('cădere'))
+    await asteapta()
+    const p = b.ctrl.reincearca()
+    expect(b.cereriR).toHaveLength(2); expect(b.cereriI).toHaveLength(2)
+    b.cereriR[1].rezolva({ data: null, error: { message: 'iar' } })
+    b.cereriI[1].rezolva(harta([1, { site_id: B, date: Z12 }]))
+    expect(await p).toMatchObject({ randuri: 'eroare', istoric: 'gata', randuriNoi: [] })
+    expect(b.s().randuri).toMatchObject({ stare: 'eroare', err: 'iar', reincerc: false })
+    expect((await b.ctrl.salveaza(emp, ore(Z13))).ok).toBe(false)
+  })
+})
+
+describe('(f) cazurile din r2 rămân verzi, pe controlor', () => {
+  it('schimbarea simplă A → B: rândul cu șantier NULL așteaptă istoricul zilei noi, apoi scrie B (nu A)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    b.ctrl.seteazaZi(Z12)
+    expect(b.prop(emp).sursa).toBe('incarc')
+    b.cereriR[1].rezolva({ data: [{ id: 5, employee_id: 1, date: Z12, site_id: null, ...ore(Z12) }], error: null })
+    await asteapta()
+    expect(b.prop(emp)).toEqual({ site_id: null, sursa: 'incarc', data: null, asteapta: 'istoric' })
+    expect((await b.ctrl.salveaza(emp, ore(Z12))).ok).toBe(false)
+    expect(b.scrieri).toHaveLength(0)
+    b.cereriI[1].rezolva(harta([1, { site_id: B, date: '2026-11-10' }]))
+    await asteapta()
+    expect((await b.ctrl.salveaza(emp, ore(Z12))).ok).toBe(true)
+    expect(b.scrieri).toHaveLength(1)
+    expect(b.scrieri[0].rand).toMatchObject({ employee_id: 1, date: Z12, site_id: B })
   })
   it('salvarea „doar diurnă” (trimite tot rândul vechi, cu site_id NULL) nu scrie NULL peste șantierul afișat și nici altă zi', async () => {
     const emp = { id: 1, site_id: null }
-    const pg = pagina('2026-11-12', [emp])
-    const c = pg.pornesteCitirile()
-    const rand = { id: 5, employee_id: 1, date: '2026-11-12', site_id: null, check_in: null, check_out: null, norma: null }
-    c.randuri.rezolva({ data: [rand], error: null })
-    c.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-10' }]]))
-    await c.gata
-    await pg.salveaza(emp, { ...rand, date: '2026-11-11', diurna: true, meal_supplement: false })
-    expect(pg.scrieri[0]).toMatchObject({ employee_id: 1, date: '2026-11-12', site_id: B, diurna: true })
+    const b = banc(Z12, [emp])
+    const rand = { id: 5, employee_id: 1, date: Z12, site_id: null, check_in: null, check_out: null, norma: null, lunch_break: false, notes: 'n', meal_supplement: false }
+    b.cereriR[0].rezolva({ data: [rand], error: null })
+    b.cereriI[0].rezolva(harta([1, { site_id: B, date: '2026-11-10' }]))
+    await asteapta()
+    await b.ctrl.salveaza(emp, { ...rand, date: '2026-11-11', diurna: true })
+    expect(b.scrieri[0].rand).toMatchObject({ employee_id: 1, date: Z12, site_id: B, diurna: true, notes: 'n', lunch_break: false })
   })
   it('rândul zilei CU șantier nu depinde de istoric: se salvează și cât istoricul se citește', async () => {
     const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-12', [emp])
-    const c = pg.pornesteCitirile()
-    c.randuri.rezolva({ data: [{ id: 5, employee_id: 1, date: '2026-11-12', site_id: 77, ...ore('2026-11-12') }], error: null })
+    const b = banc(Z12, [emp])
+    b.cereriR[0].rezolva({ data: [{ id: 5, employee_id: 1, date: Z12, site_id: 77, ...ore(Z12) }], error: null })
     await asteapta()
-    expect(stareIstoric(pg.st, pg.cheie())).toBe('incarc')
-    const r = await pg.salveaza(emp, ore('2026-11-12'))
-    expect(r.ok).toBe(true)
-    expect(pg.scrieri[0].site_id).toBe(77)
+    expect(b.s().istoric.stare).toBe('incarc')
+    expect((await b.ctrl.salveaza(emp, ore(Z12))).ok).toBe(true)
+    expect(b.scrieri[0].rand.site_id).toBe(77)
   })
-  it('rândurile zilei necitite (sau citirea lor eșuată) = salvare refuzată, nu „fără rând”', async () => {
+  it('răspunsul unei salvări sosit după schimbarea zilei: scris pe ziua de plecare, ziua nouă neatinsă, pagina află', async () => {
     const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-12', [emp])
-    const c = pg.pornesteCitirile()
-    c.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-11' }]]))
-    c.randuri.rezolva({ data: null, error: { message: 'timeout' } })
-    await c.gata
-    expect(pg.st.recsErr).toBe('timeout')
-    const r = await pg.salveaza(emp, ore('2026-11-12'))
-    expect(r.ok).toBe(false)
-    expect(r.motiv).toMatch(/pontajul zilei/)
-    expect(pg.scrieri.length).toBe(0)
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    const p = b.ctrl.salveaza(emp, ore(Z13))
+    await asteapta()
+    expect(b.scrieri[0].rand).toMatchObject({ date: Z13, site_id: A })
+    b.ctrl.seteazaZi('2026-11-14')
+    b.cereriR[1].rezolva({ data: [], error: null }); b.cereriI[1].rezolva(harta([1, { site_id: B, date: Z13 }]))
+    await asteapta()
+    const inainte = b.s()
+    b.scrieri[0].rezolva({ data: { id: 901, employee_id: 1, date: Z13, site_id: A, ...ore(Z13) }, error: null })
+    expect(await p).toMatchObject({ ok: true, zi: Z13, altaZi: true })
+    // scrierea e pe 13.11 (ANTERIOARĂ zilei 14): rândurile zilei 14 neatinse; istoricul zilei 14 se recitește (poate depinde de 13.11)
+    expect(b.s().randuri).toBe(inainte.randuri)
+    expect(b.s().istoric.stare).toBe('incarc')
+    b.cereriI[2].rezolva(harta([1, { site_id: A, date: Z13 }]))
+    await asteapta()
+    expect(b.prop(emp)).toEqual({ site_id: A, sursa: 'precedent', data: Z13 })
   })
-})
-
-describe('(b) răspunsul unei salvări sosit după schimbarea zilei (P1-2)', () => {
-  it('scrierea rămâne pe ziua de plecare; starea zilei noi nu e atinsă; pagina află că s-a salvat pe altă zi', async () => {
+  it('un rând cu altă dată nu intră niciodată în ziua afișată (nici prin citire, nici prin scriere)', async () => {
     const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-13', [emp])
-    const c13 = pg.pornesteCitirile()
-    c13.randuri.rezolva({ data: [], error: null })
-    c13.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-12' }]]))
-    await c13.gata
-
-    const scriere = amanat()
-    const pending = pg.salveaza(emp, ore('2026-11-13'), () => scriere.p)
+    const b = banc('2026-11-14', [emp], { scrieImediat: false })
+    b.cereriR[0].rezolva({ data: [{ id: 3, employee_id: 1, date: Z13, site_id: A }], error: null })
+    b.cereriI[0].rezolva(new Map())
     await asteapta()
-    expect(pg.scrieri[0]).toMatchObject({ date: '2026-11-13', site_id: A })
-
-    pg.schimbaZiua('2026-11-14')
-    const c14 = pg.pornesteCitirile()
-    c14.randuri.rezolva({ data: [], error: null })
-    c14.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-13' }]]))
-    await c14.gata
-    const inainte = pg.st
-
-    scriere.rezolva({ data: { id: 901, employee_id: 1, date: '2026-11-13', site_id: A, ...ore('2026-11-13') }, error: null })
-    const r = await pending
-    expect(r).toMatchObject({ ok: true, zi: '2026-11-13', altaZi: true })
-    expect(pg.st).toBe(inainte) // nimic aplicat
-    expect(pg.st.recs[1]).toBeUndefined()
-    // următoarea salvare pe 14.11 nu preia șantierul rândului din 13.11
-    expect(pg.prop(emp).site_id).toBe(B)
-    await pg.salveaza(emp, ore('2026-11-14'))
-    expect(pg.scrieri[1]).toMatchObject({ date: '2026-11-14', site_id: B })
+    expect(randulZilei(b.s(), 1)).toBe(null)
+    const p = b.ctrl.aloca(emp, A); await asteapta()
+    b.scrieri[0].rezolva({ data: { id: 4, employee_id: 1, date: Z13, site_id: A }, error: null }) // ecou greșit
+    await p
+    expect(randulZilei(b.s(), 1)).toBe(null)
+    expect(b.prop(emp).site_id).toBe(10)
   })
-  it('alocarea sosită după schimbarea zilei: la fel (scrisă pe ziua ei, ignorată în ziua nouă)', async () => {
-    const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-13', [emp])
-    const scriere = amanat()
-    const pending = alocaSantierZi({ zi: '2026-11-13', emp, siteId: A, dispatch: pg.dispatch, ziAfisata: () => pg.ziRef, uid: async () => 'u1', scrie: () => scriere.p })
-    pg.schimbaZiua('2026-11-14')
-    scriere.rezolva({ data: { id: 902, employee_id: 1, date: '2026-11-13', site_id: A }, error: null })
-    expect(await pending).toMatchObject({ ok: true, zi: '2026-11-13', altaZi: true })
-    expect(pg.st.recs[1]).toBeUndefined()
-  })
-  it('un rând cu altă dată nu intră niciodată în ziua afișată (nici prin salvare, nici prin citire)', () => {
-    let st = stareZiInitiala('2026-11-14')
-    st = reducerZi(st, { tip: 'randSalvat', zi: '2026-11-14', rand: { employee_id: 1, date: '2026-11-13', site_id: A } })
-    expect(st.recs[1]).toBeUndefined()
-    st = reducerZi(st, { tip: 'randuri', zi: '2026-11-14', rows: [{ employee_id: 1, date: '2026-11-13', site_id: A }] })
-    expect(st.recs[1]).toBeUndefined()
-    // și dacă ar ajunge totuși (stare construită de mână), regula nu-l folosește
-    const st2 = { ...st, recs: { 1: { employee_id: 1, date: '2026-11-13', site_id: A } } }
-    expect(randulZilei(st2, 1)).toBe(null)
-    expect(propuneSantier({ st: { ...st2, ist: { zi: '2026-11-14', cheie: '1', stare: 'gata', harta: new Map(), err: null } }, cheie: '1', emp: { id: 1, site_id: 10 } }).site_id).toBe(10)
-  })
-  it('răspunsul unei citiri a rândurilor pentru ziua părăsită nu înlocuiește rândurile zilei afișate', async () => {
-    const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-13', [emp])
-    const c13 = pg.pornesteCitirile()
-    pg.schimbaZiua('2026-11-14')
-    const c14 = pg.pornesteCitirile()
-    c14.randuri.rezolva({ data: [{ id: 7, employee_id: 1, date: '2026-11-14', site_id: 44 }], error: null })
-    await asteapta()
-    c13.randuri.rezolva({ data: [{ id: 6, employee_id: 1, date: '2026-11-13', site_id: A }], error: null })
-    c13.istoric.rezolva(new Map())
-    await asteapta()
-    expect(pg.st.recs[1].site_id).toBe(44)
-    expect(pg.st.recsZi).toBe('2026-11-14')
-  })
-})
-
-describe('(c) două schimbări rapide de zi: contează doar ultima', () => {
-  it('istoricele sosite în orice ordine: doar cel al zilei afișate intră', async () => {
-    const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-13', [emp])
-    pg.schimbaZiua('2026-11-14'); const c14 = pg.pornesteCitirile()
-    pg.schimbaZiua('2026-11-15'); const c15 = pg.pornesteCitirile()
-    c15.randuri.rezolva({ data: [], error: null })
-    c14.randuri.rezolva({ data: [], error: null })
-    // al zilei 14 sosește primul: ignorat (ziua afișată e 15)
-    c14.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-13' }]]))
-    await asteapta()
-    expect(pg.prop(emp).sursa).toBe('incarc')
-    c15.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-14' }]]))
-    await asteapta()
-    expect(pg.prop(emp)).toEqual({ site_id: B, sursa: 'precedent', data: '2026-11-14' })
-  })
-  it('și invers: istoricul zilei vechi sosit DUPĂ cel al zilei afișate nu-l suprascrie', async () => {
-    const emp = { id: 1, site_id: 10 }
-    const pg = pagina('2026-11-13', [emp])
-    pg.schimbaZiua('2026-11-14'); const c14 = pg.pornesteCitirile()
-    pg.schimbaZiua('2026-11-15'); const c15 = pg.pornesteCitirile()
-    c15.randuri.rezolva({ data: [], error: null }); c14.randuri.rezolva({ data: [], error: null })
-    c15.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-14' }]]))
-    await asteapta()
-    c14.istoric.respinge(new Error('târziu')) // nici eroarea zilei vechi nu strică ziua afișată
-    await asteapta()
-    expect(pg.prop(emp).site_id).toBe(B)
-    expect(stareIstoric(pg.st, pg.cheie())).toBe('gata')
-  })
-  it('aceeași zi, lista de angajați schimbată: doar istoricul ultimei liste contează (cel vechi nu blochează și nu se folosește)', async () => {
-    const e1 = { id: 1, site_id: 10 }, e2 = { id: 2, site_id: null }
-    const pg = pagina('2026-11-13', [e1])
-    const c1 = pg.pornesteCitirile()
-    pg.emps = [e1, e2]
-    const c2 = pg.pornesteCitirile()
-    c2.randuri.rezolva({ data: [], error: null }); c1.randuri.rezolva({ data: [], error: null })
-    c2.istoric.rezolva(new Map([[1, { site_id: B, date: '2026-11-12' }], [2, { site_id: A, date: '2026-11-11' }]]))
-    await asteapta()
-    c1.istoric.rezolva(new Map([[1, { site_id: 99, date: '2026-11-12' }]]))
-    await asteapta()
-    expect(pg.prop(e1).site_id).toBe(B)
-    expect(pg.prop(e2).site_id).toBe(A)
-  })
-})
-
-describe('(d) istoric cu eroare: avertisment + fișa (comportamentul păstrat)', () => {
-  it('eroarea se vede (stare „eroare” + mesaj), propunerea e fișa marcată, salvarea pe fișă e permisă', async () => {
+  it('istoric cu eroare: avertisment + fișa (comportamentul păstrat), salvarea pe fișă permisă', async () => {
     const emp = { id: 1, site_id: 10 }, faraFisa = { id: 2, site_id: null }
-    const pg = pagina('2026-11-13', [emp, faraFisa])
-    const c = pg.pornesteCitirile()
-    c.randuri.rezolva({ data: [], error: null })
-    c.istoric.respinge(new Error('timeout'))
-    await c.gata
-    expect(stareIstoric(pg.st, pg.cheie())).toBe('eroare')
-    expect(pg.st.ist.err).toBe('timeout')
-    expect(pg.prop(emp)).toEqual({ site_id: 10, sursa: 'fisa', data: null, istoricEroare: true })
-    expect(pg.prop(faraFisa)).toEqual({ site_id: null, sursa: null, data: null, istoricEroare: true })
-    const r = await pg.salveaza(emp, ore('2026-11-13'))
-    expect(r.ok).toBe(true)
-    expect(pg.scrieri[0].site_id).toBe(10)
-    const r2 = await pg.salveaza(faraFisa, ore('2026-11-13'))
-    expect(r2).toMatchObject({ ok: false, motiv: 'Șantierul este obligatoriu pentru ore!' })
+    const b = banc(Z13, [emp, faraFisa])
+    b.cereriR[0].rezolva({ data: [], error: null })
+    b.cereriI[0].respinge(new Error('timeout'))
+    await asteapta()
+    expect(b.s().istoric).toMatchObject({ stare: 'eroare', err: 'timeout' })
+    expect(b.prop(emp)).toEqual({ site_id: 10, sursa: 'fisa', data: null, istoricEroare: true })
+    expect(b.prop(faraFisa)).toEqual({ site_id: null, sursa: null, data: null, istoricEroare: true })
+    expect((await b.ctrl.salveaza(emp, ore(Z13))).ok).toBe(true)
+    expect(b.scrieri[0].rand.site_id).toBe(10)
+    expect(await b.ctrl.salveaza(faraFisa, ore(Z13))).toMatchObject({ ok: false, motiv: 'Șantierul este obligatoriu pentru ore!' })
   })
-})
-
-describe('(e) „Nealocate” după regula nouă (P2) și filtrul pe șantier', () => {
-  it('nealocat = fără rând cu șantier pe zi, fără zi lucrată anterioară, fără fișă; cât se încarcă, nu se dă lista', async () => {
+  it('„Nealocate” după regula nouă; cât se încarcă, nu se dă lista', async () => {
     const precedent = { id: 1, name: 'P', site_id: null }   // fără fișă, dar a lucrat pe A
     const nimic = { id: 2, name: 'N', site_id: null }        // nimic nicăieri
     const randZi = { id: 3, name: 'R', site_id: null }       // rând cu șantier azi
     const fisa = { id: 4, name: 'F', site_id: 10 }           // doar fișa
     const randNull = { id: 5, name: 'Z', site_id: null }     // rând azi fără șantier, nimic altceva
-    const emps = [precedent, nimic, randZi, fisa, randNull]
-    const pg = pagina('2026-11-13', emps)
-    const c = pg.pornesteCitirile()
-    expect(nealocati({ st: pg.st, cheie: pg.cheie(), emps })).toEqual({ lista: [], inAsteptare: 5 })
-    c.randuri.rezolva({ data: [{ id: 8, employee_id: 3, date: '2026-11-13', site_id: B }, { id: 9, employee_id: 5, date: '2026-11-13', site_id: null, norma: 'CO', check_in: null }], error: null })
+    const b = banc(Z13, [precedent, nimic, randZi, fisa, randNull])
+    expect(nealocati(b.s())).toEqual({ lista: [], inAsteptare: 5 })
+    b.cereriR[0].rezolva({ data: [{ id: 8, employee_id: 3, date: Z13, site_id: B }, { id: 9, employee_id: 5, date: Z13, site_id: null, norma: 'CO', check_in: null }], error: null })
     await asteapta()
-    expect(nealocati({ st: pg.st, cheie: pg.cheie(), emps }).inAsteptare).toBe(4) // doar cel cu rând cu șantier e sigur
-    c.istoric.rezolva(new Map([[1, { site_id: A, date: '2026-11-12' }]]))
-    await c.gata
-    const n = nealocati({ st: pg.st, cheie: pg.cheie(), emps })
+    expect(nealocati(b.s()).inAsteptare).toBe(4)
+    b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    const n = nealocati(b.s())
     expect(n.inAsteptare).toBe(0)
     expect(n.lista.map(e => e.id)).toEqual([2, 5])
+  })
+  it('lista încă necitită = „se încarcă” (spinner), lista goală = gata fără cereri', () => {
+    const b = banc(Z13, null)
+    expect(arataSpinner(b.s())).toBe(true)
+    b.ctrl.seteazaZi(Z12)
+    expect(b.cereriR).toHaveLength(0)
+    b.ctrl.seteazaAngajati([])
+    expect(arataSpinner(b.s())).toBe(false)
+    expect(b.s().istoric.stare).toBe('gata')
+    expect(b.cereriR).toHaveLength(0)
+  })
+  it('abonații sunt anunțați la fiecare schimbare', async () => {
+    const b = banc(Z13, [{ id: 1, site_id: 10 }])
+    const n0 = b.notificari()
+    b.cereriR[0].rezolva({ data: [], error: null })
+    await asteapta()
+    expect(b.notificari()).toBeGreaterThan(n0)
+  })
+})
+
+describe('reguli mici', () => {
+  it('verificaSalvare: „se încarcă” = refuz; ore fără șantier = refuz; absență fără șantier = permisă', () => {
+    expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'istoric' }, ore(Z13)).ok).toBe(false)
+    expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'istoric' }, { norma: 'CO' }).ok).toBe(false)
+    expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'randuri' }, ore(Z13)).motiv).toMatch(/pontajul zilei/)
+    expect(verificaSalvare({ site_id: null, sursa: null }, ore(Z13)).ok).toBe(false)
+    expect(verificaSalvare({ site_id: null, sursa: null }, { norma: 'CO' })).toEqual({ ok: true, site_id: null })
+    expect(verificaSalvare({ site_id: A, sursa: 'precedent' }, ore(Z13))).toEqual({ ok: true, site_id: A })
+  })
+  it('randPentruSalvare: angajatul, ziua și șantierul decise nu pot fi suprascrise de câmpuri; restul câmpurilor trec', () => {
+    expect(randPentruSalvare({ empId: 1, zi: Z13, siteId: A, uid: 'u', acum: 'T', fields: { employee_id: 9, date: '2026-01-01', site_id: null, diurna: true, created_by: 'vechi' } }))
+      .toEqual({ employee_id: 1, date: Z13, site_id: A, created_by: 'vechi', updated_by: 'u', updated_at: 'T', diurna: true })
   })
   it('filtrul pe șantier: același șantier ca rândul; „se încarcă” rămâne vizibil', () => {
     expect(treceFiltrulSantier({ site_id: A, sursa: 'precedent' }, String(A))).toBe(true)
@@ -405,37 +562,39 @@ describe('(e) „Nealocate” după regula nouă (P2) și filtrul pe șantier', 
     expect(treceFiltrulSantier({ site_id: null, sursa: null }, String(B))).toBe(false)
     expect(treceFiltrulSantier({ site_id: null, sursa: null }, 'Toate')).toBe(true)
   })
-})
-
-describe('reguli mici', () => {
-  it('verificaSalvare: „se încarcă” = refuz; ore fără șantier = refuz; absență fără șantier = permisă', () => {
-    expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'istoric' }, ore('2026-11-13')).ok).toBe(false)
-    expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'istoric' }, { norma: 'CO' }).ok).toBe(false)
-    expect(verificaSalvare({ site_id: null, sursa: null }, ore('2026-11-13')).ok).toBe(false)
-    expect(verificaSalvare({ site_id: null, sursa: null }, { norma: 'CO' })).toEqual({ ok: true, site_id: null })
-    expect(verificaSalvare({ site_id: A, sursa: 'precedent' }, ore('2026-11-13'))).toEqual({ ok: true, site_id: A })
-  })
-  it('randPentruSalvare: angajatul, ziua și șantierul decise nu pot fi suprascrise de câmpuri; restul câmpurilor trec', () => {
-    expect(randPentruSalvare({ empId: 1, zi: '2026-11-13', siteId: A, uid: 'u', acum: 'T', fields: { employee_id: 9, date: '2026-01-01', site_id: null, diurna: true, created_by: 'vechi' } }))
-      .toEqual({ employee_id: 1, date: '2026-11-13', site_id: A, created_by: 'vechi', updated_by: 'u', updated_at: 'T', diurna: true })
-  })
-  it('raspunsAplicabil: doar aceeași zi', () => {
-    expect(raspunsAplicabil('2026-11-13', '2026-11-13')).toBe(true)
-    expect(raspunsAplicabil('2026-11-13', '2026-11-14')).toBe(false)
-    expect(raspunsAplicabil(null, null)).toBe(false)
+  it('cheiaListei: aceleași id-uri în altă ordine = aceeași listă', () => {
+    expect(cheiaListei([{ id: 2 }, { id: 1 }])).toBe(cheiaListei([{ id: 1 }, { id: 2 }]))
+    expect(cheiaListei([{ id: 1 }])).not.toBe(cheiaListei([{ id: 1 }, { id: 2 }]))
   })
 })
 
-// legătura minimă cu ecranul: pagina chiar cheamă funcțiile probate mai sus (comportamentul e testat pe ele, nu pe text)
-describe('PontajPage folosește funcțiile probate', () => {
+// Legătura cu ecranul. PontajPage nu se poate monta în vitest fără jsdom (nu e dependență) și fără să aducă tot App.jsx (Supabase, rute,
+// ~9000 de linii); de aceea comportamentul e probat pe controlor (mai sus), iar aici se verifică, pe text, că pagina NU mai face nimic
+// asincron pe rânduri / istoric în afara lui: doar îl creează, se abonează la el și îi cheamă metodele.
+describe('PontajPage folosește doar controlorul', () => {
   const APP = readFileSync(new URL('./App.jsx', import.meta.url), 'utf8').replace(/\r/g, '')
   const start = APP.indexOf('function PontajPage()')
   const PAG = APP.slice(start, APP.indexOf('\nfunction ', start + 10))
-  it('starea zilei prin reducer; nicio scriere directă în rânduri; toate căile prin funcțiile modulului', () => {
-    expect(PAG).toContain('useReducer(reducerZi')
-    expect(PAG).not.toContain('setRecs')
-    for (const f of ['incarcaRanduriZi(', 'incarcaIstoricZi(', 'salveazaRand(', 'alocaSantierZi(', 'propuneSantier(', 'nealocati(', 'treceFiltrulSantier(', 'randulZilei(stZi,emp.id)'])
+  it('controlorul creat o dată, abonare prin useSyncExternalStore; nicio stare / generație / zi proprie pentru rânduri și istoric', () => {
+    expect(PAG).toContain('creeazaControlorZi(')
+    expect(PAG).toContain('useSyncExternalStore(ctrl.aboneaza,ctrl.getStare)')
+    for (const interzis of ['setRecs', 'useReducer', 'ziRef', 'dispatchZi', 'setEmps', 'setLoad', 'emps.filter(e=>!e.site_id)', 'loadRecs'])
+      expect(PAG).not.toContain(interzis)
+  })
+  it('citirile / scrierile pe pontaj_records apar O SINGURĂ dată: în dependențele controlorului', () => {
+    const cereri = PAG.split("from('pontaj_records')").length - 1
+    expect(cereri).toBe(2) // citesteRanduri + scrieRand
+    const bloc = PAG.slice(PAG.indexOf('creeazaControlorZi('), PAG.indexOf('const ctrl=ctrlRef.current'))
+    expect(bloc.split("from('pontaj_records')").length - 1).toBe(2)
+  })
+  it('afișarea, filtrul, „Nealocate”, salvarea, alocarea și reîncercarea trec prin controlor / instantaneul lui', () => {
+    for (const f of ['propuneSantier(snap,emp)', 'nealocati(snap)', 'treceFiltrulSantier(', 'randulZilei(snap,emp.id)', 'arataSpinner(snap)',
+      'ctrl.salveaza(emp, fields, { ctx })', 'ctrl.aloca(emp, siteId, { ctx })', 'ctrl.reincearca()', 'ctrl.reimprospateaza(', 'ctrl.seteazaZi(', 'ctrl.seteazaAngajati('])
       expect(PAG).toContain(f)
-    expect(PAG).not.toContain('emps.filter(e=>!e.site_id)')
+    // contextul se ia la APĂSARE, înaintea porții de parolă
+    for (const fn of ['const saveRecord = async', 'const allocate = async']) {
+      const i = PAG.indexOf(fn)
+      expect(PAG.indexOf('const ctx = snap.ctx', i)).toBeLessThan(PAG.indexOf('requestPasswordIfExported', i))
+    }
   })
 })

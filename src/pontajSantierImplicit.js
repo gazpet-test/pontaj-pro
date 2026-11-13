@@ -38,88 +38,50 @@ export function santierImplicit({ rec, ultim, emp }) {
   return { site_id: null, sursa: null, data: null }
 }
 
-// ══ Starea ZILEI afișate (r2 după review #1091): rândurile zilei și istoricul sunt legate EXPLICIT de ziua pentru care au fost citite ══
-// Toate răspunsurile asincrone (rândurile zilei, istoricul, salvarea, alocarea) intră în stare DOAR prin reducerZi, care le ignoră dacă
-// ziua afișată nu mai e ziua pentru care a plecat cererea (L24). Pagina (PontajPage) ține starea cu useReducer(reducerZi) și citește
-// totul prin propuneSantier / verificaSalvare / nealocati / treceFiltrulSantier — aceleași funcții pe care le probează testele.
-const ISTORIC_GOL = Object.freeze({ zi: null, cheie: null, stare: 'incarc', harta: new Map(), err: null })
-
-export function stareZiInitiala(zi) {
-  // recsZi = ziua pentru care rândurile au fost citite (null = încă necitite); ist = istoricul + ziua și lista de angajați pentru care e valabil
-  return { zi, recs: {}, recsZi: null, recsErr: null, ist: ISTORIC_GOL, istCerut: { zi: null, cheie: null } }
-}
-
-// cheia listei de angajați pentru care s-a cerut istoricul (altă listă = alt istoric)
+// cheia listei de angajați (altă listă = alt context: rândurile și istoricul se recitesc)
 export const cheiaListei = (emps) => (emps || []).map(e => Number(e.id)).sort((a, b) => a - b).join(',')
 
-// un răspuns asincron se aplică stării paginii doar dacă ziua afișată e tot ziua cererii
-export const raspunsAplicabil = (ziCerere, ziAfisata) => ziCerere != null && ziCerere === ziAfisata
+// ══ Starea ZILEI afișate = un instantaneu (snapshot) imuabil al controlorului de mai jos ══
+// snap = { zi, emps (null = lista încă necitită), cheie, ctx (crește la orice schimbare de zi / listă),
+//          randuri: { stare: 'incarc'|'gata'|'eroare', recs, err, reincerc }, istoric: { stare, harta, err, reincerc } }
+// Funcțiile de mai jos citesc DOAR instantaneul: pagina, testele și controlorul (la salvare) decid la fel (L19).
 
-export function reducerZi(st, a) {
-  switch (a.tip) {
-    case 'zi':
-      // altă zi: rândurile vechi ies din stare (nu se mai folosesc nicăieri); istoricul vechi rămâne, dar e marcat cu ziua lui și nu mai e valabil
-      if (a.zi === st.zi) return st
-      return { ...st, zi: a.zi, recs: {}, recsZi: null, recsErr: null }
-    case 'randuri': {
-      if (!raspunsAplicabil(a.zi, st.zi)) return st
-      const m = {}
-      for (const r of a.rows || []) {
-        if (!r || r.date !== a.zi) continue // un rând al altei zile nu intră niciodată
-        const old = st.recs[r.employee_id]
-        // identitatea obiectelor nemodificate se păstrează (PontajRow nu-și resetează ce ai tastat)
-        m[r.employee_id] = (old && JSON.stringify(old) === JSON.stringify(r)) ? old : r
-      }
-      return { ...st, recs: m, recsZi: a.zi, recsErr: null }
-    }
-    case 'randuriEroare':
-      if (!raspunsAplicabil(a.zi, st.zi)) return st
-      return { ...st, recsErr: a.err || 'eroare' }
-    case 'randSalvat':
-      if (!raspunsAplicabil(a.zi, st.zi) || !a.rand || a.rand.date !== a.zi) return st
-      return { ...st, recs: { ...st.recs, [a.rand.employee_id]: a.rand } }
-    case 'istoricCerut':
-      if (!raspunsAplicabil(a.zi, st.zi)) return st
-      return { ...st, istCerut: { zi: a.zi, cheie: a.cheie } }
-    case 'istoric':
-      // doar răspunsul ULTIMEI cereri (zi + listă) pentru ziua afișată; cele vechi / pentru altă zi se ignoră
-      if (!raspunsAplicabil(a.zi, st.zi) || a.zi !== st.istCerut.zi || a.cheie !== st.istCerut.cheie) return st
-      return { ...st, ist: { zi: a.zi, cheie: a.cheie, stare: a.stare, harta: a.harta || new Map(), err: a.err || null } }
-    default:
-      return st
-  }
+// rândul angajatului DOAR dacă rândurile zilei afișate sunt citite și rândul e chiar al acestei zile
+export function randulZilei(snap, empId) {
+  if (snap.randuri.stare !== 'gata') return null
+  const r = snap.randuri.recs[empId]
+  return r && r.date === snap.zi ? r : null
 }
 
-// rândul angajatului DOAR dacă e al zilei afișate
-export const randulZilei = (st, empId) => {
-  const r = st.recs[empId]
-  return r && r.date === st.zi ? r : null
-}
-
-// starea istoricului pentru ziua și lista afișate: 'incarc' | 'gata' | 'eroare' (alt istoric decât al zilei afișate = 'incarc')
-export function stareIstoric(st, cheie) {
-  const ist = st.ist
-  if (ist.zi !== st.zi || ist.cheie !== cheie) return 'incarc'
-  return ist.stare
-}
+// spinnerul paginii (lista se demontează): DOAR cât contextul nou se citește prima oară. Reîncercarea după eroare și citirile de fundal
+// NU îl aprind — altfel rândurile s-ar demonta și s-ar pierde ce a completat utilizatorul.
+export const arataSpinner = (snap) => snap.randuri.stare === 'incarc'
 
 // Șantierul propus pentru angajat în ziua afișată (afișare, select, filtru, „Nealocate”, salvare).
-// sursa: 'zi' | 'precedent' | 'fisa' | null (nealocat) | 'incarc' (nu se știe încă: rândurile zilei sau istoricul zilei nu sunt citite)
-export function propuneSantier({ st, cheie, emp }) {
-  const rec = randulZilei(st, emp.id)
+// sursa: 'zi' | 'precedent' | 'fisa' | null (nealocat) | 'incarc' (nu se știe încă; eroare: true = citirea rândurilor a eșuat)
+export function propuneSantier(snap, emp) {
+  const rec = randulZilei(snap, emp.id)
   if (rec && rec.site_id != null) return { site_id: rec.site_id, sursa: 'zi', data: null }
-  if (st.recsZi !== st.zi) return { site_id: null, sursa: 'incarc', data: null, asteapta: 'randuri' }
-  const s = stareIstoric(st, cheie)
-  if (s === 'incarc') return { site_id: null, sursa: 'incarc', data: null, asteapta: 'istoric' }
+  if (snap.randuri.stare !== 'gata') {
+    const p = { site_id: null, sursa: 'incarc', data: null, asteapta: 'randuri' }
+    return snap.randuri.stare === 'eroare' ? { ...p, eroare: true } : p
+  }
+  const s = snap.istoric.stare
+  if (s !== 'gata' && s !== 'eroare') return { site_id: null, sursa: 'incarc', data: null, asteapta: 'istoric' }
   // eroare la citire ≠ fără pontaj anterior (L18): fișa, cu semnul că istoricul lipsește (ecranul o spune)
   if (s === 'eroare') return { ...santierImplicit({ rec, ultim: undefined, emp }), istoricEroare: true }
-  return santierImplicit({ rec, ultim: st.ist.harta.get(emp.id), emp })
+  return santierImplicit({ rec, ultim: snap.istoric.harta.get(emp.id), emp })
 }
 
 // Salvarea e permisă? Orice salvare al cărei șantier ar veni din istoric (rând lipsă SAU rând fără șantier) e refuzată cât timp
 // rândurile / istoricul zilei afișate nu sunt citite; pentru ore, șantierul e obligatoriu (regula de azi).
 export function verificaSalvare(prop, fields) {
-  if (prop.sursa === 'incarc') return { ok: false, nivel: 'warn', motiv: prop.asteapta === 'randuri' ? 'Se citește pontajul zilei — reîncearcă într-o secundă' : 'Se citește ultimul șantier pontat — reîncearcă într-o secundă' }
+  if (prop.sursa === 'incarc') {
+    const motiv = prop.eroare ? 'Pontajul zilei nu s-a putut citi — apasă „Reîncearcă” (ce ai completat rămâne), apoi salvează'
+      : prop.asteapta === 'randuri' ? 'Se citește pontajul zilei — salvează după ce se încarcă'
+        : 'Se citește ultimul șantier pontat — salvează după ce se încarcă'
+    return { ok: false, nivel: 'warn', motiv }
+  }
   if (!fields?.norma && prop.site_id == null) return { ok: false, nivel: 'error', motiv: 'Șantierul este obligatoriu pentru ore!' }
   return { ok: true, site_id: prop.site_id }
 }
@@ -135,64 +97,174 @@ export function randPentruSalvare({ empId, zi, siteId, uid, fields, acum }) {
 export const treceFiltrulSantier = (prop, siteF) => siteF === 'Toate' || prop.sursa === 'incarc' || String(prop.site_id) === String(siteF)
 
 // „Nealocate”: fără rând cu șantier pe zi, fără zi lucrată anterioară, fără fișă — aceeași regulă ca rândul. Cât se încarcă, lista nu se dă (inAsteptare > 0).
-export function nealocati({ st, cheie, emps }) {
+export function nealocati(snap) {
   const lista = []
   let inAsteptare = 0
-  for (const e of emps || []) {
-    const p = propuneSantier({ st, cheie, emp: e })
+  for (const e of snap.emps || []) {
+    const p = propuneSantier(snap, e)
     if (p.sursa === 'incarc') inAsteptare++
     else if (p.site_id == null) lista.push(e)
   }
   return { lista, inAsteptare }
 }
 
-// ── pașii asincroni ai paginii (aceleași funcții le cheamă PontajPage și testele, cu promisiuni controlate) ──
+// ══ Controlorul zilei (r3 după re-review #1091): TOATĂ orchestrarea asincronă a pontajului zilei, fără React ══
+// Pagina (PontajPage) doar se abonează (useSyncExternalStore(aboneaza, getStare)) și cheamă metodele. Garanții (L24, L03):
+//   * „ultima cerere câștigă, pe sursă”: rândurile și istoricul au fiecare generația lor, crescătoare; un răspuns se aplică DOAR dacă e al
+//     celei mai noi cereri a sursei lui — nicio comparație pe zi / listă nu ține loc de generație;
+//   * orice schimbare de context (zi SAU lista de angajați, inclusiv revenirea pe o zi văzută) → rândurile și istoricul devin imediat
+//     „se încarcă”; nimic citit înainte nu mai e folosit (fără memorie între zile);
+//   * scrierile bat citirile plecate înaintea lor: o salvare / alocare reușită pe ziua afișată crește generația rândurilor (citirea în zbor,
+//     inclusiv cea de fundal, e aruncată), își aplică rândul, apoi cere o citire nouă dacă a aruncat una; o scriere pe o zi ANTERIOARĂ celei
+//     afișate schimbă istoricul ei → istoricul zilei afișate se recitește;
+//   * salvarea se decide pe instantaneul curent și e refuzată dacă ziua / lista s-au schimbat de la apăsare (ctx), dacă rândurile nu sunt
+//     citite sau dacă șantierul ar veni din istoric și istoricul nu e citit;
+//   * eroarea la citirea rândurilor e o stare distinctă (L18); „Reîncearcă” recitește ce e în eroare FĂRĂ spinner (rândurile rămân montate,
+//     completările rămân), iar citirea de fundal reîncearcă și ea, indiferent de editările în curs.
+// Dependențe (injectate, ca testele să elibereze promisiunile în ordinea aleasă):
+//   citesteRanduri(zi, ids) → { data, error }; citesteIstoric(ids, zi) → Map (aruncă la eroare); scrieRand(rand) → { data, error }; uid() → id
+const RANDURI_INCARC = Object.freeze({ stare: 'incarc', recs: Object.freeze({}), err: null, reincerc: false })
+const ISTORIC_INCARC = Object.freeze({ stare: 'incarc', harta: new Map(), err: null, reincerc: false })
 
-// rândurile zilei: citeste(zi, ids) → { data, error }. Eroarea nu golește starea (≠ „fără rânduri”); refresh-ul tăcut nu o afișează.
-export async function incarcaRanduriZi({ zi, ids, citeste, dispatch, silent = false }) {
-  let res
-  try { res = await citeste(zi, ids) } catch (e) { res = { data: null, error: { message: e?.message || String(e) } } }
-  if (res?.error || !Array.isArray(res?.data)) {
-    if (!silent) dispatch({ tip: 'randuriEroare', zi, err: res?.error?.message || 'răspuns fără rânduri' })
-    return { ok: false }
+export function creeazaControlorZi({ zi, citesteRanduri, citesteIstoric, scrieRand, uid, acum = () => new Date().toISOString() }) {
+  let st = Object.freeze({ zi, emps: null, cheie: null, ctx: 0, randuri: RANDURI_INCARC, istoric: ISTORIC_INCARC })
+  let genR = 0          // generația ultimei cereri de rânduri (crește și la scrieri)
+  let genI = 0          // generația ultimei cereri de istoric
+  let zborR = false     // o citire de rânduri din generația curentă e în zbor
+  const abonati = new Set()
+  const pune = (patch) => { st = Object.freeze({ ...st, ...patch }) }
+  const notifica = () => { for (const f of [...abonati]) f() }
+  const idsCurente = () => (st.emps || []).map(e => e.id)
+
+  function citesteRand() {
+    const g = ++genR
+    const ziC = st.zi, ids = idsCurente()
+    if (!ids.length) { zborR = false; pune({ randuri: { stare: 'gata', recs: {}, err: null, reincerc: false } }); return Promise.resolve() }
+    zborR = true
+    let p
+    try { p = citesteRanduri(ziC, ids) } catch (e) { p = Promise.reject(e) }
+    return Promise.resolve(p)
+      .then(res => res, e => ({ data: null, error: { message: e?.message || String(e) } }))
+      .then(res => {
+        if (g !== genR) return // a venit între timp o cerere mai nouă sau o scriere: răspunsul e vechi
+        zborR = false
+        const r = st.randuri
+        if (res?.error || !Array.isArray(res?.data)) {
+          if (r.stare === 'gata') return // citire de fundal eșuată: rămâne ultima citire reușită a ACESTUI context
+          pune({ randuri: { stare: 'eroare', recs: {}, err: res?.error?.message || 'răspuns fără rânduri', reincerc: false } })
+        } else {
+          const m = {}
+          for (const x of res.data) {
+            if (!x || x.date !== ziC) continue // un rând al altei zile nu intră niciodată
+            const old = r.recs[x.employee_id]
+            // identitatea obiectelor nemodificate se păstrează (PontajRow nu-și resetează ce ai tastat)
+            m[x.employee_id] = (old && JSON.stringify(old) === JSON.stringify(x)) ? old : x
+          }
+          pune({ randuri: { stare: 'gata', recs: m, err: null, reincerc: false } })
+        }
+        notifica()
+      })
   }
-  dispatch({ tip: 'randuri', zi, rows: res.data })
-  return { ok: true }
-}
 
-// istoricul zilei: citeste(ids, zi) → Map (aruncă la eroare). Se marchează cererea înainte, ca doar răspunsul ultimei cereri să conteze.
-export async function incarcaIstoricZi({ zi, cheie, ids, citeste, dispatch }) {
-  dispatch({ tip: 'istoricCerut', zi, cheie })
-  if (!ids || !ids.length) { dispatch({ tip: 'istoric', zi, cheie, stare: 'gata', harta: new Map() }); return }
-  try {
-    const harta = await citeste(ids, zi)
-    dispatch({ tip: 'istoric', zi, cheie, stare: 'gata', harta })
-  } catch (e) {
-    dispatch({ tip: 'istoric', zi, cheie, stare: 'eroare', err: e?.message || String(e) })
+  function citesteIst() {
+    const g = ++genI
+    const ziC = st.zi, ids = idsCurente()
+    if (!ids.length) { pune({ istoric: { stare: 'gata', harta: new Map(), err: null, reincerc: false } }); return Promise.resolve() }
+    let p
+    try { p = citesteIstoric(ids, ziC) } catch (e) { p = Promise.reject(e) }
+    return Promise.resolve(p)
+      .then(h => ({ h }), e => ({ e: e || new Error('eroare') }))
+      .then(({ h, e }) => {
+        if (g !== genI) return
+        if (e || !(h instanceof Map)) pune({ istoric: { stare: 'eroare', harta: new Map(), err: e ? (e.message || String(e)) : 'răspuns fără rezultat', reincerc: false } })
+        else pune({ istoric: { stare: 'gata', harta: h, err: null, reincerc: false } })
+        notifica()
+      })
   }
-}
 
-// salvarea unui rând: decizia (șantier, voie / refuz) pe starea zilei de PLECARE; scrierea pe ziua de plecare; răspunsul intră în stare
-// doar dacă ziua afișată e tot aceea (altfel altaZi = true și pagina spune unde s-a salvat).
-// uid() → id-ul utilizatorului; scrie(rand) → { data, error }; ziAfisata() → ziua afișată ACUM.
-export async function salveazaRand({ st, cheie, emp, fields, uid, scrie, dispatch, ziAfisata, acum = () => new Date().toISOString() }) {
-  const zi = st.zi
-  const v = verificaSalvare(propuneSantier({ st, cheie, emp }), fields)
-  if (!v.ok) return { ok: false, scris: false, nivel: v.nivel, motiv: v.motiv }
-  const u = await uid()
-  const { data, error } = await scrie(randPentruSalvare({ empId: emp.id, zi, siteId: v.site_id, uid: u, fields, acum: acum() }))
-  if (error || !data) return { ok: false, scris: false, nivel: 'error', motiv: 'Eroare la salvare' }
-  dispatch({ tip: 'randSalvat', zi, rand: data })
-  return { ok: true, scris: true, zi, rand: data, altaZi: !raspunsAplicabil(zi, ziAfisata()) }
-}
+  // zi SAU listă nouă: tot ce s-a citit înainte iese din stare, răspunsurile în zbor devin vechi, se citește contextul nou
+  function schimbaContext(patch) {
+    pune({ ...patch, ctx: st.ctx + 1, randuri: RANDURI_INCARC, istoric: ISTORIC_INCARC })
+    genR++; genI++; zborR = false
+    if (st.emps) { citesteRand(); citesteIst() }
+    notifica()
+  }
 
-// alocarea pe zi (select-ul de șantier): aceeași regulă pentru răspuns
-export async function alocaSantierZi({ zi, emp, siteId, uid, scrie, dispatch, ziAfisata, acum = () => new Date().toISOString() }) {
-  const u = await uid()
-  const { data, error } = await scrie({ employee_id: emp.id, date: zi, site_id: siteId || null, updated_by: u, updated_at: acum() })
-  if (error || !data) return { ok: false, motiv: error?.message || 'răspuns gol' }
-  dispatch({ tip: 'randSalvat', zi, rand: data })
-  return { ok: true, zi, rand: data, altaZi: !raspunsAplicabil(zi, ziAfisata()) }
+  // după o scriere reușită pe `ziScrisa` (rândul întors de server = starea după scriere)
+  function dupaScriere(ziScrisa, rand) {
+    if (ziScrisa === st.zi) {
+      const aruncata = zborR
+      genR++; zborR = false // orice citire plecată înaintea acestui răspuns e aruncată (și cea de fundal)
+      if (st.randuri.stare === 'gata' && rand && rand.date === st.zi) {
+        pune({ randuri: { ...st.randuri, recs: { ...st.randuri.recs, [rand.employee_id]: rand } } })
+      }
+      if (aruncata) citesteRand() // ce aducea citirea aruncată (ex. modificările altora) se recitește; starea nu trece prin „se încarcă”
+    } else if (st.emps && ziScrisa < st.zi) {
+      // istoricul zilei afișate = zilele de DINAINTEA ei: o scriere acolo îl poate schimba → se recitește
+      pune({ istoric: ISTORIC_INCARC })
+      citesteIst()
+    }
+    notifica()
+  }
+
+  async function reincearca() {
+    const ctx0 = st.ctx
+    const ps = []
+    const dinEroareR = !!st.emps && st.randuri.stare === 'eroare'
+    if (dinEroareR) { pune({ randuri: { ...st.randuri, reincerc: true } }); ps.push(citesteRand()) }
+    if (st.emps && st.istoric.stare === 'eroare') { pune({ istoric: { ...st.istoric, reincerc: true } }); ps.push(citesteIst()) }
+    notifica()
+    await Promise.all(ps)
+    // angajații care AU deja pontaj în ziua asta (necunoscut până acum): pagina îi anunță, rândul lor arată acum valorile salvate
+    const randuriNoi = (dinEroareR && st.ctx === ctx0 && st.randuri.stare === 'gata') ? Object.values(st.randuri.recs).map(r => r.employee_id) : []
+    return { randuri: st.randuri.stare, istoric: st.istoric.stare, randuriNoi }
+  }
+
+  return {
+    getStare: () => st,
+    aboneaza(f) { abonati.add(f); return () => { abonati.delete(f) } },
+    seteazaZi(z) { if (z && z !== st.zi) schimbaContext({ zi: z }) },
+    // aceeași listă (aceleași id-uri) = doar fișele se actualizează (ex. șantierul din fișă după alocare), fără recitire
+    seteazaAngajati(emps) {
+      const lista = emps || []
+      const cheie = cheiaListei(lista)
+      if (st.emps && cheie === st.cheie) { pune({ emps: lista }); notifica(); return }
+      schimbaContext({ emps: lista, cheie })
+    },
+    reincearca,
+    // citirea de fundal (poll / focus): în eroare reîncearcă ORICUM (nu depinde de editări); altfel sare cât există editări nesalvate
+    reimprospateaza({ editari = false } = {}) {
+      if (!st.emps) return Promise.resolve(null)
+      if (st.randuri.stare === 'eroare' || st.istoric.stare === 'eroare') return reincearca()
+      if (editari || st.randuri.stare !== 'gata') return Promise.resolve(null)
+      return citesteRand().then(() => null)
+    },
+    // ctx = st.ctx din momentul apăsării (înaintea porții de parolă): dacă ziua / lista s-au schimbat între timp, nu se scrie nimic
+    async salveaza(emp, fields, { ctx } = {}) {
+      const u = await uid()
+      if (ctx != null && ctx !== st.ctx) return { ok: false, scris: false, nivel: 'warn', motiv: 'Ziua sau lista afișată s-a schimbat între timp — nu am salvat nimic; verifică rândul și apasă din nou 💾' }
+      const snap = st
+      const e = (snap.emps || []).find(x => x.id === emp.id) || emp
+      const v = verificaSalvare(propuneSantier(snap, e), fields)
+      if (!v.ok) return { ok: false, scris: false, nivel: v.nivel, motiv: v.motiv }
+      const ziS = snap.zi
+      let res
+      try { res = await scrieRand(randPentruSalvare({ empId: e.id, zi: ziS, siteId: v.site_id, uid: u, fields, acum: acum() })) } catch (err) { res = { data: null, error: err } }
+      if (res?.error || !res?.data) return { ok: false, scris: false, nivel: 'error', motiv: 'Eroare la salvare' }
+      dupaScriere(ziS, res.data)
+      return { ok: true, scris: true, zi: ziS, rand: res.data, altaZi: ziS !== st.zi }
+    },
+    async aloca(emp, siteId, { ctx } = {}) {
+      const u = await uid()
+      if (ctx != null && ctx !== st.ctx) return { ok: false, motiv: 'ziua afișată s-a schimbat între timp — nu am scris nimic' }
+      const ziS = st.zi
+      let res
+      try { res = await scrieRand({ employee_id: emp.id, date: ziS, site_id: siteId || null, updated_by: u, updated_at: acum() }) } catch (err) { res = { data: null, error: err } }
+      if (res?.error || !res?.data) return { ok: false, motiv: res?.error?.message || 'răspuns gol' }
+      dupaScriere(ziS, res.data)
+      return { ok: true, zi: ziS, rand: res.data, altaZi: ziS !== st.zi }
+    },
+  }
 }
 
 // Citirea din BD: pentru fiecare angajat, ultima zi lucrată cu șantier înainte de `zi`.
