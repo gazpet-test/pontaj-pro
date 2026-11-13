@@ -3,10 +3,12 @@
 --   psql -X -v ON_ERROR_STOP=1 -h <host> -p <port> -U <user> -d postgres -f scripts/tichete_clarificari_amprente.sql > amprente_20261223a.txt
 -- Ce tipărește:
 --   1. eticheta | amprenta (md5 pe „detaliu”) | linie_baseline (de copiat în blocul BASELINE al migrării) | sursa | atentie | detaliu
---      * tabelele în care scriu funcțiile noi: tichete, tichete_comentarii, notifications (drepturi, RLS + FORCE, TOATE politicile, TOATE
---        triggerele, secvențele);
+--      * tabelele existente atinse de funcțiile noi: tichete (citit, blocat pe rând), tichete_comentarii, notifications (scrise) — drepturi,
+--        RLS + FORCE, TOATE politicile, TOATE triggerele, secvențele (tabelul nou tichete_clarificari nu există înainte: îl verifică
+--        postcondițiile migrării);
 --      * funcțiile: ÎNCHIDEREA tranzitivă (blocul INCHIDERE_L15, IDENTIC cu cel din migrare): pornirea = funcțiile triggerelor care se
---        declanșează la scrierile noastre (UPDATE pe tichete; INSERT pe tichete_comentarii și notifications), apoi apelurile „nume(”,
+--        declanșează la scrierile noastre (INSERT pe tichete_comentarii și notifications; plus, CONSERVATOR din r1, cele de UPDATE pe
+--        tichete, deși din r2 funcțiile nu mai scriu în tichete: doar mai mult amprentat / verificat), apoi apelurile „nume(”,
 --        pg_depend și triggerele tabelelor în care lanțul scrie, fără limită de adâncime (sursa = „lant”); plus funcțiile politicilor și
 --        ale celorlalte triggere ale celor trei tabele, care NU rulează la scrierile noastre (sursa = „amprentat”: doar amprenta);
 --      * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul: drepturi pentru anon / PUBLIC, politici USING true,
@@ -15,7 +17,8 @@
 --      * definitie_lant = definiția întreagă (pg_get_functiondef) a fiecărei funcții din LANȚ: răspunsul la „ce face fiecare trigger la
 --        un UPDATE doar pe metadata și la un comentariu / o notificare nouă” (istoric umflat? notificări false? trimiteri în afară?).
 --   2. triggerele care se declanșează la scrierile noastre (tabel, nume, stare, definiția cu coloane / WHEN, funcția) — intră în review.
---   3. numărători fără conținut: tichetele eligibile pe status / subcategorie și câte au deja evidența clarificari_erp (cerut: 0).
+--   3. numărători fără conținut: tichetele eligibile pe status / subcategorie; dacă există deja tabelul de evidență / funcțiile
+--      fn_tichet_clarificare_* (cerut înainte de aplicare: nu / 0).
 -- Cum se folosește: coloana linie_baseline din secțiunea 1, în ordinea afișată, se copiază ÎNTREAGĂ între marcajele
 --   „>>> BASELINE 20261223a” / „<<< BASELINE 20261223a” ale migrării (în locul rândului DE_COMPLETAT; singurul loc din migrare cu valori de
 --   producție), iar „detaliu” + secțiunea 2 intră în review. Migrarea refuză până atunci și refuză orice diferență față de el, înainte și
@@ -195,10 +198,12 @@ SELECT tg.tgrelid::regclass::text AS tabel, tg.tgname AS trigger_nume, tg.tgenab
  ORDER BY 1, 2;
 
 \echo
-\echo '=== 3. numărători (fără conținut): tichete din butonul de raportare, pe status / subcategorie, și evidențe existente (cerut: 0) ==='
-SELECT x.status, x.subcategorie, count(*) AS tichete, count(*) FILTER (WHERE x.metadata -> 'clarificari_erp' IS NOT NULL) AS cu_clarificari
+\echo '=== 3. numărători (fără conținut): tichete din butonul de raportare, pe status / subcategorie; obiectele protocolului (cerut înainte de aplicare: nu / 0) ==='
+SELECT x.status, x.subcategorie, count(*) AS tichete
   FROM public.tichete x
  WHERE x.departament = 'it' AND x.subcategorie IN ('eroare_erp', 'cerere_functie') AND x.metadata ->> 'sursa' IN ('bug_report', 'feature_request')
  GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT to_regclass('public.tichete_clarificari') IS NOT NULL AS tabel_evidenta_exista,
+       (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_tichet\_clarificare\_%') AS functii_existente;
 
 ROLLBACK;

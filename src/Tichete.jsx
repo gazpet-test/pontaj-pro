@@ -4,7 +4,7 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
-import { AUTOR_AUTOMAT, ETICHETA_AUTOMAT, idsComentariiAutomate, autorComentariu, asteaptaRaspunsulTau } from './ticheteClarificari.js'
+import { AUTOR_AUTOMAT, ETICHETA_AUTOMAT, idsComentariiAutomate, autorComentariu, asteaptaRaspunsulTau, incarcaEvidenta, idsTichetePentruEvidenta } from './ticheteClarificari.js'
 
 const G = { bg:'#0D1117',surface:'#161B22',border:'#21262D',border2:'#30363D',text:'#E6EDF3',muted:'#8B949E',dim:'#6E7681',blue:'#58A6FF',green:'#3FB950',red:'#F85149',yellow:'#D29922',purple:'#BC8CFF',orange:'#F0883E',pink:'#F778BA',greenDim:'#1A3A1A',redDim:'#3A1A1A',yellowDim:'#3A2A0A',purpleDim:'#2A1F3A',blueDim:'#1A2A3A' }
 
@@ -134,6 +134,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [activeDep,setActiveDep]=useState(filterDepartament)
   const [tichete,setTichete]=useState([])
   const [asignatiMap,setAsignatiMap]=useState({}) // { tichet_id: [profile_id,...] } — echipă ad-hoc
+  const [evidentaClar,setEvidentaClar]=useState([]) // clarificări automate: rândurile din tichete_clarificari (gol fără migrare)
   const [summary,setSummary]=useState({})
   const [subcategorii,setSubcategorii]=useState([])
   const [profiles,setProfiles]=useState([])
@@ -177,6 +178,11 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
         ;(asg || []).forEach(a => { (aMap[a.tichet_id] = aMap[a.tichet_id] || []).push(a.profile_id) })
       }
       setAsignatiMap(aMap)
+      // clarificări automate (20261223a): evidența tichetelor din butonul de raportare; tabelul lipsă (migrare neaplicată) = nimic în plus;
+      // altă eroare = doar fără semnul „așteaptă răspunsul tău” (lista tichetelor rămâne)
+      const ev = await incarcaEvidenta(supabase, idsTichetePentruEvidenta(tk.data))
+      if (ev.eroare) console.warn('Clarificări: evidența nu s-a putut citi', ev.eroare)
+      setEvidentaClar(ev.randuri)
       const sMap = {}; (sm.data || []).forEach(s=>{ sMap[s.departament] = s })
       setSummary(sMap)
       setSubcategorii(sc.data || [])
@@ -395,7 +401,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {tichete.slice(0,10).map(t=>(
               <TichetRow key={t.id} t={t} profiles={profiles} echipaCount={(asignatiMap[t.id]||[]).length} onClick={()=>setOpenDetail(t)}
-                         profileId={profile?.id} canDelete={profile?.is_owner} onDelete={handleDelete} />
+                         profileId={profile?.id} evidentaClar={evidentaClar} canDelete={profile?.is_owner} onDelete={handleDelete} />
             ))}
           </div>
         </div>
@@ -510,7 +516,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {tichetFilt.map(t=>(
               <TichetRow key={t.id} t={t} profiles={profiles} echipaCount={(asignatiMap[t.id]||[]).length} onClick={()=>setOpenDetail(t)}
-                         showDep={!filterDepartament && !activeDep} profileId={profile?.id}
+                         showDep={!filterDepartament && !activeDep} profileId={profile?.id} evidentaClar={evidentaClar}
                          canDelete={profile?.is_owner} onDelete={handleDelete} />
             ))}
           </div>
@@ -564,13 +570,13 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
 // ════════════════════════════════════════════════════════════════
 // TICHET ROW (lista)
 // ════════════════════════════════════════════════════════════════
-function TichetRow({ t, profiles, echipaCount = 0, onClick, showDep = false, canDelete = false, onDelete, profileId = null }){
+function TichetRow({ t, profiles, echipaCount = 0, onClick, showDep = false, canDelete = false, onDelete, profileId = null, evidentaClar = [] }){
   const dep = getDep(t.departament)
   const urg = getUrg(t.urgenta)
   const st = getSt(t.status)
   const deschis = profiles.find(p=>p.id===t.deschis_de)
-  // clarificări automate: semn doar pentru autorul tichetului (din metadata deja încărcată, fără cereri în plus)
-  const asteaptaRaspuns = asteaptaRaspunsulTau(t, profileId)
+  // clarificări automate: semn doar pentru autorul tichetului (din evidența protejată, încărcată o dată pentru toată lista)
+  const asteaptaRaspuns = asteaptaRaspunsulTau(t, profileId, evidentaClar)
   return (
     <div onClick={onClick}
          style={{padding:'14px 16px',background:G.surface,border:`1px solid ${urg.cod==='urgent' && !['inchis','confirmat','respins'].includes(t.status) ? G.red+'66' : G.border}`,borderRadius:10,cursor:'pointer',transition:'all 0.15s',display:'flex',alignItems:'center',gap:14}}
@@ -1228,17 +1234,23 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
   const responsabil = profiles.find(p=>p.id===t.persoana_responsabila)
   const deschisDe = profiles.find(p=>p.id===t.deschis_de)
   const rezolvatDe = profiles.find(p=>p.id===t.rezolvat_de)
-  // id-urile comentariilor automate („Echipa ERP”), din metadata tichetului deja încărcat
-  const idsAutomate = useMemo(()=>idsComentariiAutomate(t), [t])
+  // clarificări automate: evidența protejată a tichetului (tichete_clarificari); id-urile comentariilor automate („Echipa ERP”)
+  const [evidentaT, setEvidentaT] = useState([])
+  const [evidentaEroare, setEvidentaEroare] = useState(false)
+  const idsAutomate = useMemo(()=>idsComentariiAutomate(evidentaT, t.id), [evidentaT, t.id])
 
   const reload = useCallback(async()=>{
-    const [tkRes, comRes, istRes, asgRes] = await Promise.all([
+    const [tkRes, comRes, istRes, asgRes, evRes] = await Promise.all([
       supabase.from('tichete').select('*').eq('id', t.id).maybeSingle(),
       supabase.from('tichete_comentarii').select('*').eq('tichet_id', t.id).order('created_at'),
       supabase.from('tichete_istoric').select('*').eq('tichet_id', t.id).order('created_at'),
-      supabase.from('tichete_asignati').select('profile_id').eq('tichet_id', t.id)
+      supabase.from('tichete_asignati').select('profile_id').eq('tichet_id', t.id),
+      // tabelul lipsă (migrare neaplicată) = nimic în plus; doar tichetele din butonul de raportare au evidență
+      incarcaEvidenta(supabase, idsTichetePentruEvidenta([t]))
     ])
     if(tkRes.data) setT(tkRes.data)
+    setEvidentaT(evRes.randuri)
+    setEvidentaEroare(!!evRes.eroare)
     setComentarii(comRes.data || [])
     setIstoric(istRes.data || [])
     setEchipaIds((asgRes.data || []).map(a => a.profile_id))
@@ -1521,6 +1533,7 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
       {/* TAB Comentarii */}
       {tab === 'comentarii' && (
         <div>
+          {evidentaEroare && <div style={{fontSize:11,color:G.yellow,marginBottom:8}}>Etichetele mesajelor automate nu s-au putut încărca (comentariile sunt afișate integral).</div>}
           <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:14,maxHeight:300,overflowY:'auto'}}>
             {comentarii.length === 0 ? (
               <div style={{padding:30,textAlign:'center',color:G.muted,fontSize:13}}>Nu sunt comentarii inca</div>
