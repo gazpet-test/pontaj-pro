@@ -94,7 +94,7 @@ function Previzualizare({ prev, nume, cuAtasamente }) {
       {nume.stare === 'incarca' ? 'Se încarcă lista de nume din platformă… ' : faraLista
         ? 'Lista de nume din platformă nu se poate citi din contul tău: aici se ascund doar tiparele și ce marchezi tu; pe server se ascund în plus numele din platformă. '
         : ''}
-      Nu prinde: nume necunoscute platformei scrise fără „dl.”, „ing.”, „colegul” în față, porecle, inițiale, nume scrise cu literă mică, firme fără SRL / SA și necunoscute platformei, localități și adrese.
+      Nu prinde: nume necunoscute platformei scrise fără „dl.”, „ing.”, „colegul” în față, porecle, inițiale, nume scrise cu literă mică, un prenume care e și cuvânt obișnuit scris singur („Ion”), firme fără SRL / SA și necunoscute platformei, adrese. Rămân vizibile intenționat: localitățile, operatorii de rețea și instituțiile publice (Transgaz, Delgaz, ANRE …) și Gazpet.
     </div>
     {cuAtasamente && <div style={{ color:G.yellow, fontSize:12, marginTop:6 }}>
       📎 Atașamentele rămân în ERP pentru colegi, dar NU se trimit la AI: numele din ele nu pot fi ascunse sigur. Scrie în speță ce e important din ele.</div>}

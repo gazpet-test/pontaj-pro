@@ -3,7 +3,11 @@
   "surse": [
     {"id": "C1", "titlu": "PT C9", "extras": "Responsabilul tehnic cu sudura este atestat de ISCIR. Proba de presiune se face la 6 bar, numai după verificarea sudurilor."},
     {"id": "W1", "titlu": "Legea 10/1995", "extras": "Recepția lucrărilor se face de comisia de recepție numită de investitor."},
-    {"id": "W2", "titlu": "Normativ sudură", "extras": "Lucrările de sudură pe conducta de oțel se execută de sudori autorizați ISCIR în toate cazurile."}
+    {"id": "W2", "titlu": "Normativ sudură", "extras": "Lucrările de sudură pe conducta de oțel se execută de sudori autorizați ISCIR în toate cazurile."},
+    {"id": "W3", "titlu": "Raport de verificare", "extras": "Documentatia nu contine avizul tehnic pentru conducta principala si raportul contine toate verificarile necesare pentru proba finala."},
+    {"id": "C2", "titlu": "Instrucțiune montaj", "extras": "Nu este corect ca robinetele de sectionare se monteaza inainte de proba de presiune a conductei."},
+    {"id": "C3", "titlu": "Caiet de sarcini", "extras": "Controlul nedistructiv al sudurilor este obligatoriu pentru toate conductele de otel din retea."},
+    {"id": "C4", "titlu": "Procedură reparații", "extras": "Sudurile se pot repara o singura data, iar conducta trebuie probata din nou dupa fiecare reparatie a sudurii."}
   ],
   "cazuri": [
     {"nume": "Da cu citat exact → rămâne Da",
@@ -50,6 +54,24 @@
      "motiv": "incert", "prima_linie": "Incert — de verificat: lipsește avizul.", "cere_citat": false},
     {"nume": "fără verdict → neschimbat (curata_raspuns pune deja Incert în față)",
      "text": "Câteva observații.\n- x",
-     "motiv": "fara_verdict", "prima_linie": "Câteva observații.", "cere_citat": false}
+     "motiv": "fara_verdict", "prima_linie": "Câteva observații.", "cere_citat": false},
+    {"nume": "r2 (contraexemplul recenzentului): negația MUTATĂ pe cealaltă afirmație → Incert",
+     "text": "Da — documentația conține avizul [W3].\nCitat [W3]: „Documentatia contine avizul tehnic pentru conducta principala si raportul nu contine toate verificarile necesare pentru proba finala.”",
+     "motiv": "fara_citat", "prima_linie": "Incert — de verificat: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.", "cere_citat": true, "mutant_vechi_trece": true},
+    {"nume": "r2: negația pe aceeași poziție ca în sursă → rămâne Nu",
+     "text": "Nu — documentația nu conține avizul [W3].\nCitat [W3]: „Documentatia nu contine avizul tehnic pentru conducta principala si raportul contine toate verificarile necesare pentru proba finala.”",
+     "motiv": "citat", "prima_linie": "Nu — documentația nu conține avizul [W3].", "cere_citat": false},
+    {"nume": "r2: fragmentul citat lasă afară negația propoziției („Nu este corect ca …”) → Incert",
+     "text": "Da — robinetele se montează înainte de probă [C2].\nCitat [C2]: „robinetele de sectionare se monteaza inainte de proba de presiune a conductei”",
+     "motiv": "fara_citat", "prima_linie": "Incert — de verificat: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.", "cere_citat": true},
+    {"nume": "r2: „obligatoriu” înlocuit cu „optional” (12/13 cuvinte, peste prag) → Incert",
+     "text": "Nu — controlul e opțional [C3].\nCitat [C3]: „Controlul nedistructiv al sudurilor este optional pentru toate conductele de otel din retea”",
+     "motiv": "fara_citat", "prima_linie": "Incert — de verificat: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.", "cere_citat": true, "mutant_vechi_trece": true},
+    {"nume": "r2: „trebuie” al sursei scos din mijlocul citatului → Incert",
+     "text": "Da — se reprobează [C4].\nCitat [C4]: „conducta probata din nou dupa fiecare reparatie a sudurii”",
+     "motiv": "fara_citat", "prima_linie": "Incert — de verificat: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.", "cere_citat": true, "mutant_vechi_trece": true},
+    {"nume": "r2: un modal al sursei în afara fragmentului citat („se pot repara”) nu contează → rămâne Da",
+     "text": "Da — se reprobează după fiecare reparație [C4].\nCitat [C4]: „conducta trebuie probata din nou dupa fiecare reparatie a sudurii”",
+     "motiv": "citat", "prima_linie": "Da — se reprobează după fiecare reparație [C4].", "cere_citat": false}
   ]
 }

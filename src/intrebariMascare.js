@@ -5,11 +5,22 @@
 // platformei (cât poate citi contul utilizatorului), tiparele (CNP, telefon, e-mail, IBAN, CUI, nr. auto, firme cu SRL / SA …) și
 // cuvintele ascunse manual între [[ și ]]. Pe server se ascunde cel puțin la fel (lista completă de nume + aceleași tipare).
 // Nimic din acest fișier nu trimite date nicăieri.
+// r2 (review PR #1086): genitivele scurte („Anei”), „dl. Ion” cu titlu, entitățile publice dintr-un singur loc
+// (worker/intrebari-tehnice/nemascate.json, decizia owner-ului 13.11.2026), demascarea strictă (demascheazaSigur).
 // ════════════════════════════════════════════════════════════════
+import NEMASCATE_JSON from '../worker/intrebari-tehnice/nemascate.json'
 
 export const CATEGORII = ['PERSOANA', 'FIRMA', 'CNP', 'CUI', 'TELEFON', 'EMAIL', 'IBAN', 'NR_AUTO', 'ASCUNS']
+// eticheta emisă, EXACT (majuscule) — doar așa se pune la loc
 const ETICHETA_SURSA = '\\[(PERSOANA|FIRMA|CNP|CUI|TELEFON|EMAIL|IBAN|NR_AUTO|ASCUNS)_([1-9][0-9]{0,3})(?:_F([1-9][0-9]{0,2}))?\\]'
-const eticheta = () => new RegExp(ETICHETA_SURSA, 'giu')
+const eticheta = () => new RegExp(ETICHETA_SURSA, 'gu')
+// orice „aproape etichetă” (vezi ASEMANATOR din mascare.py)
+const CAT_ASEM = '(?:PERSOAN[AĂ]|FIRM[AĂ]|CNP|CUI|TELEFON|E-?MAIL|IBAN|NR[ _.\\-]?AUTO|ASCUNS)'
+const ASEMANATOR_SURSA = '(?:\\[[ \\t]*' + CAT_ASEM + '[ \\t_\\-#]*[0-9]+|(?<![A-Za-z0-9\\[])' + CAT_ASEM + '[ \\t]*[_\\-#][ \\t]*[0-9]+)'
+  + '(?:[ \\t]*[_\\-][ \\t]*[A-Za-z]?[0-9]+)*(?:[ \\t]*\\])?'
+const asemanator = () => new RegExp(ASEMANATOR_SURSA, 'giu')
+/** Tot șirul e o „aproape etichetă” (pentru testele de paritate cu ASEMANATOR.fullmatch din mascare.py). */
+export const eAsemanator = s => new RegExp(`^(?:${ASEMANATOR_SURSA})$`, 'iu').test(String(s ?? ''))
 
 const L = '[\\p{L}\\p{M}]'
 const W = '[\\p{L}\\p{M}\\p{N}_]'
@@ -59,14 +70,14 @@ antreprenorului furnizorul furnizorului subcontractantul subcontractantului subc
 proiectantului executantul executantului ofertantul ofertantului consultantul oferta licitatia proiectul proiect lucrarea lucrare
 santierul etapa faza clasa zona lot lotul capitolul anexa anexei tip tipul categoria nivelul nivel treapta grupa varianta partea
 titlul sectiunea cartea volumul tronsonul tronson sectorul obiectul etajul articolul gradul plansa corp corpul bloc blocul strada str
-nr judetul jud comuna orasul municipiul satul romania ro cui cif`), ...FORME_JURIDICE, ...TITLURI_NORM])
+nr judetul jud comuna orasul municipiul satul romania ro cui cif comunei orasului municipiului primaria primariei consiliul
+consiliului judetean statul ministerul agentia directia administratia regia ocolul parohia asociatia mostenitorii mostenitor
+neidentificat`), ...FORME_JURIDICE, ...TITLURI_NORM])
 const COMUNE = setDin(`mare mic mica micu preda verde rosu negru alb albu bun buna lung lungu gros grosu scurt nou noua vechi ion ioni
 mai iunie iulie august tot toma`)
 const GENERICE_FIRMA = setDin(`construct constructii instal grup group impex trans service servicii com prod serv consult general
 proiect design tehnic tehnica gaz gaze energy energie`)
-export const NEMASCATE = new Set(`transgaz|sntgn transgaz|delgaz|delgaz grid|distrigaz|distrigaz sud retele|engie|engie romania|e on|eon|
-romgaz|sngn romgaz|premier energy|transelectrica|electrica|hidroelectrica|apa nova|apa nova bucuresti|gazpet|gazpet instal`
-  .replace(/\n/g, '').split('|'))
+export const CATEGORII_NEMASCATE = ['operator_retea', 'companie_publica', 'institutie_publica', 'societatea_noastra']
 
 const majuscula = t => /^\p{Lu}/u.test(t)
 const toateMari = t => t.toUpperCase() === t && t.toLowerCase() !== t
@@ -121,6 +132,44 @@ function tokeniFirmaLista(nume) {
   return out
 }
 
+/** Forma canonică a numelui unei firme (vezi cheie_entitate din mascare.py): fără forma juridică, inițialele lipite. */
+export function cheieEntitate(nume) {
+  const toks = tokeniFirmaLista(nume)
+  const out = []
+  let i = 0
+  while (i < toks.length) {
+    let j = i
+    while (j < toks.length && toks[j].length === 1 && /^\p{L}$/u.test(toks[j])) j++
+    if (j - i >= 2) { out.push(toks.slice(i, j).join('')); i = j } else { out.push(toks[i]); i++ }
+  }
+  return out.join(' ')
+}
+
+/** Formele canonice din nemascate.json, validate ca în incarca_nemascate (mascare.py); invalid → aruncă. */
+export function incarcaNemascate(date) {
+  if (!date || typeof date !== 'object' || !Array.isArray(date.entitati) || !date.entitati.length) throw new Error('entitati')
+  const cat = Object.keys(date.categorii || {}).sort()
+  if (cat.join('|') !== [...CATEGORII_NEMASCATE].sort().join('|')) throw new Error('categorii')
+  const out = new Set()
+  for (const e of date.entitati) {
+    if (!e || typeof e !== 'object' || Object.keys(e).sort().join('|') !== 'categorie|forme|nume') throw new Error('intrare')
+    if (typeof e.nume !== 'string' || !e.nume.trim() || !CATEGORII_NEMASCATE.includes(e.categorie)) throw new Error('intrare')
+    if (!Array.isArray(e.forme) || !e.forme.length) throw new Error('forme')
+    for (const f of e.forme) { if (typeof f !== 'string' || !f || cheieEntitate(f) !== f) throw new Error(`forma ${f}`); out.add(f) }
+  }
+  return out
+}
+export const NEMASCATE = incarcaNemascate(NEMASCATE_JSON)
+const NEMASCATE_UN_CUVANT = new Set([...NEMASCATE].filter(f => !f.includes(' ')))
+
+/** Bazele posibile ale unui genitiv / dativ de prenume feminin (vezi _baze_flexionare din mascare.py). */
+function bazeFlexionare(n) {
+  const out = []
+  if (n.length >= 4 && n.endsWith('ei')) out.push(n.slice(0, -2) + 'a', n.slice(0, -1) + 'a')
+  if (n.length >= 4 && n.endsWith('ai')) out.push(n.slice(0, -1))
+  return out.filter(c => c.length >= 3)
+}
+
 /** Numele cunoscute platformei, DOAR pentru căutare locală (vezi Dictionar din mascare.py). */
 export class Dictionar {
   constructor(persoane = [], firme = [], cui = []) {
@@ -133,7 +182,7 @@ export class Dictionar {
     const index = new Map()
     for (const nume of firme) {
       const tok = tokeniFirmaLista(nume)
-      if (!tok.length || NEMASCATE.has(tok.join(' '))) continue
+      if (!tok.length || NEMASCATE.has(cheieEntitate(nume))) continue
       if (tok.length === 1 && (tok[0].length < 4 || COMUNE.has(tok[0]) || GENERICE_FIRMA.has(tok[0]) || OPRIRE.has(tok[0]) || cifra(tok[0]))) continue
       if (!index.has(tok[0])) index.set(tok[0], new Map())
       index.get(tok[0]).set(tok.join('\u0001'), tok)
@@ -146,8 +195,7 @@ export class Dictionar {
   persoana(baza) {
     const n = norm(baza)
     if (this.persoane.has(n)) return n
-    if (n.length > 4 && n.endsWith('ei') && this.persoane.has(n.slice(0, -2) + 'a')) return n.slice(0, -2) + 'a'
-    return null
+    return bazeFlexionare(n).find(c => this.persoane.has(c)) ?? null
   }
 }
 
@@ -161,6 +209,7 @@ export class Mascare {
     this.tabel = new Map()
     this.ent = Object.fromEntries(CATEGORII.map(c => [c, []]))
     this.inlocuiri = 0
+    this.asemOm = new Set(); this.asemMasina = new Set()
   }
   contoare() { return Object.fromEntries(CATEGORII.filter(c => this.ent[c].length).map(c => [c, this.ent[c].length])) }
   total() { return CATEGORII.reduce((s, c) => s + this.ent[c].length, 0) }
@@ -189,15 +238,15 @@ export class Mascare {
 
   detecteaza(t, protejeaza) {
     const luate = [], out = []
-    const adauga = (s, e, cat, cheie) => {
+    const adauga = (s, e, cat, cheie, asem = false) => {
       if (s >= e || luate.some(([a, b]) => s < b && a < e)) return false
       luate.push([s, e])
-      if (cat) out.push([s, e, cat, cheie])
+      if (cat) out.push([s, e, cat, cheie, asem])
       return true
     }
-    for (const m of toate(eticheta(), t)) {
-      if (protejeaza && this.tabel.has(m[0].toUpperCase())) adauga(m.index, m.index + m[0].length, null, null)
-      else adauga(m.index, m.index + m[0].length, 'ASCUNS', m[0])
+    for (const m of toate(asemanator(), t)) {
+      if (protejeaza && this.tabel.has(m[0])) adauga(m.index, m.index + m[0].length, null, null)
+      else adauga(m.index, m.index + m[0].length, 'ASCUNS', m[0], true)
     }
     for (const m of toate(MANUAL, t)) adauga(m.index, m.index + m[0].length, 'ASCUNS', m[0])
     for (const m of toate(EMAIL, t)) adauga(m.index, m.index + m[0].length, 'EMAIL', m[0].toLowerCase())
@@ -240,7 +289,7 @@ export class Mascare {
       if (!cuvinte.length) continue
       if (m[1].startsWith('I') && (nume.length < 2 || cuvinte.length !== nume.length)) continue
       const cheie = nume.map(a => norm(a[2])).join(' ')
-      if (NEMASCATE.has(cheie)) continue
+      if (NEMASCATE.has(cheieEntitate(nume.map(a => a[2]).join(' ')))) continue   // numele ÎNTREG, nu un cuvânt din el
       let start = prefix !== null ? prefix : nume[0][0]
       if (prefix === null) { const p = PREFIX_FIRMA.exec(t.slice(Math.max(0, start - 12), start)); if (p) start -= p[0].length }
       adauga(start, m.index + m[0].length, 'FIRMA', cheie)
@@ -277,7 +326,8 @@ export class Mascare {
       while (i !== undefined && i < cuv.length && luat.length < 3) {
         const [s, e, tok] = cuv[i]
         const baza = desparte(tok), n = norm(baza), k = this.d.persoana(baza)
-        if (!(majuscula(baza) && !OPRIRE.has(n) && !COMUNE.has(n) && (titluCaz(baza) || k !== null || (toateMari(baza) && baza.length >= 6)))) break
+        // r2: după un titlu, un cuvânt din COMUNE se ascunde și el („dl. Ion”); entitățile publice dintr-un cuvânt nu sunt persoane
+        if (!(majuscula(baza) && !OPRIRE.has(n) && !NEMASCATE_UN_CUVANT.has(n) && (titluCaz(baza) || k !== null || (toateMari(baza) && baza.length >= 6)))) break
         luat.push([s, s + baza.length, k || n])
         if (baza !== tok || i + 1 >= cuv.length || !potriveste(SPATIU, t, e, cuv[i + 1][0])) break
         i++
@@ -315,25 +365,33 @@ export class Mascare {
   mascheaza(text, protejeaza = true) {
     const t = String(text ?? '')
     let out = '', poz = 0
-    for (const [s, e, cat, cheie] of this.detecteaza(t, protejeaza)) {
-      out += t.slice(poz, s) + this.eticheta(cat, cheie, t.slice(s, e))
+    for (const [s, e, cat, cheie, asem] of this.detecteaza(t, protejeaza)) {
+      const et = this.eticheta(cat, cheie, t.slice(s, e))
+      if (asem) (protejeaza ? this.asemMasina : this.asemOm).add(et)
+      out += t.slice(poz, s) + et
       poz = e
       this.inlocuiri++
     }
     return out + t.slice(poz)
   }
 
-  /** Etichetele puse la loc (doar pentru afișare). */
+  /** Etichetele EMISE, scrise exact, puse la loc; orice altceva rămâne cum e (nu se repară nimic). */
   demascheaza(text) {
-    return String(text ?? '').replace(eticheta(), (tot, cat, nr, f) => {
-      const c = cat.toUpperCase(), baza = `[${c}_${nr}]`
-      const e = f ? `[${c}_${nr}_F${f}]` : baza
-      return this.tabel.get(e) ?? this.tabel.get(baza) ?? tot
-    })
+    return String(text ?? '').replace(eticheta(), tot => this.tabel.get(tot) ?? tot)
+  }
+
+  /** {afisat, motiv}: motiv null = se poate publica (vezi demascheaza_sigur din mascare.py). */
+  demascheazaSigur(text) {
+    const t = String(text ?? '')
+    for (const m of toate(asemanator(), t)) {
+      if (!this.tabel.has(m[0])) return { afisat: null, motiv: 'eticheta_neemisa' }
+      if (this.asemMasina.has(m[0]) && !this.asemOm.has(m[0])) return { afisat: null, motiv: 'eticheta_din_model' }
+    }
+    return { afisat: this.demascheaza(t), motiv: null }
   }
 
   /** Câte etichete emise de această mascare apar în text (după demascare: 0). */
-  emiseIn(text) { return toate(eticheta(), String(text ?? '')).filter(m => this.tabel.has(m[0].toUpperCase())).length }
+  emiseIn(text) { return toate(eticheta(), String(text ?? '')).filter(m => this.tabel.has(m[0])).length }
 }
 
 /** Bucățile textului mascat pentru ecran: [{t: 'text' | 'eticheta', v}] — etichetele se evidențiază. */

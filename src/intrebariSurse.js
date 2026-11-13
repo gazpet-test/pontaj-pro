@@ -507,19 +507,42 @@ function lcs(a, b) {
   return prev[prev.length - 1]
 }
 
+// r2 (review PR #1086, P1-3): inversoarele de sens se perechează la aliniere — vezi _aliniere din cercetare.py (aceleași liste).
+const INVERSOARE_NEGATIE = /^(?:nu|nici|niciun\w*|nicio|niciodata|nimic|nimeni|fara|exceptand|exceptia|exceptie|decat|ne(?:admis|permis|conform|autorizat|obligatori|avizat|respect|indeplin|corespunz|valid|accept|receptio)\w*)$/
+const INVERSOARE_MODAL = /^(?:trebui\w*|poate|pot|obligatori\w*|optional\w*|facultativ\w*|interzi\w*|admis\w*|admit\w*|permis\w*|permit\w*|recomand\w*)$/
+const inversor = w => INVERSOARE_NEGATIE.test(w) ? 2 : INVERSOARE_MODAL.test(w) ? 1 : 0
+
+/** Câte cuvinte din citat se perechează, cu inversoarele obligatoriu perechate; -1 = nicio aliniere validă (vezi cercetare.py). */
+export function aliniere(q, p) {
+  const NU = -1, m = q.length, n = p.length
+  const tq = q.map(inversor), tp = p.map(inversor)
+  const f = Array.from({ length: m + 1 }, () => Array.from({ length: n + 1 }, () => [NU, NU, NU]))
+  f[0][0][0] = 0
+  for (let i = 0; i <= m; i++) for (let j = 0; j <= n; j++) for (let faza = 0; faza < 3; faza++) {
+    const v = f[i][j][faza]
+    if (v === NU) continue
+    if (faza === 1 && v > f[i][j][2]) f[i][j][2] = v
+    if (i < m && j < n && faza < 2 && q[i] === p[j] && v + 1 > f[i + 1][j + 1][1]) f[i + 1][j + 1][1] = v + 1
+    if (i < m && tq[i] === 0 && v > f[i + 1][j][faza]) f[i + 1][j][faza] = v
+    if (j < n && (tp[j] === 0 || (tp[j] === 1 && faza !== 1)) && v > f[i][j + 1][faza]) f[i][j + 1][faza] = v
+  }
+  return Math.max(...f[m][n])
+}
+
 /** Citatul trece pragul „aproape cuvânt cu cuvânt” față de o propoziție a uneia dintre sursele `ids` (Map-ul din hartaSurse). */
 function citatSustinut(citat, ids, harta) {
   const n = normalizeaza(citat)
   const q = n.match(CUVINTE_CITAT) || []
   if (q.length < CITAT_MIN_CUVINTE) return false
-  const neg = NEGATIE_SIMPLA.test(n), tok = tokeniNumerici(n)
+  const tok = tokeniNumerici(n)
   for (const i of ids) {
     if (!harta.has(i)) continue
     const v = harta.get(i)
     for (const p of propozitii(v.slice(v.indexOf('\n') + 1))) {
-      if (lcs(q, p.match(CUVINTE_CITAT) || []) < CITAT_PRAG * q.length) continue
+      const cp = p.match(CUVINTE_CITAT) || []
+      if (lcs(q, cp) < CITAT_PRAG * q.length) continue
       const tp = new Set(tokeniNumerici(p))
-      if (neg !== NEGATIE_SIMPLA.test(p) || !tok.every(x => tp.has(x))) continue
+      if (aliniere(q, cp) < CITAT_PRAG * q.length || !tok.every(x => tp.has(x))) continue
       if (restrictiiAcoperite(n, p)) return true
     }
   }

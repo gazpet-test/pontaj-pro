@@ -32,6 +32,9 @@ Din 13.11.2026 (deciziile owner-ului A și B, docs/intrebari/MASCARE_SI_VERDICT.
      trimite_http(). Asta acoperă toate apelurile: propunerea de interogări, căutările web, răspunsul și repararea. Atașamentele
      (PDF / poze) NU mai pleacă: numele din ele nu pot fi ascunse sigur. Demascarea se face DOAR pe textul afișat (raspuns_md);
      jurnalul primește doar numărul de înlocuiri (contoare), niciodată valorile.
+     r2 (review PR #1086): garda cere ca textul mascat să fie produs de mascarea ACESTEI spețe (Mascare.a_produs); demascarea e
+     strictă (Mascare.demascheaza_sigur — orice „aproape etichetă” rămasă oprește publicarea, nimic nu se repară tăcut); lista de
+     nume vine din toate registrele de terți (edge, logic.js SURSE_NUME); entitățile publice vizibile = nemascate.json.
   B. „Da” / „Nu” doar cu un citat aproape cuvânt cu cuvânt dintr-o sursă (cercetare.aplica_regula_b); altfel „Incert”, iar
      sursele consultate se salvează alăturate.
 
@@ -147,11 +150,14 @@ MODELE = (C.MODEL_NORMATIV, C.MODEL_GENERAL, C.MODEL_INTEROGARI)
 CHEI_CERERE = frozenset(('model', 'max_tokens', 'system', 'messages', 'tools'))
 
 
-def garda_cerere(corp):
+def garda_cerere(corp, mascare):
     """Garda (decizia A, pct. 2): verificată în COD, la fiecare apel, nu prin convenție. Trece doar o cerere cu cheile cunoscute,
     un model și un prompt de sistem din listele fixe (constantele noastre, aceleași obiecte), unealta web standard sau niciuna, și
     mesaje al căror conținut e EXACT de tip mascare.TextMascat (un text construit după mascare — concatenat, tăiat, formatat — e
-    str simplu și pică; un bloc de document / imagine pică). Ridică GardaMascare."""
+    str simplu și pică; un bloc de document / imagine pică) ȘI produs de mascarea ACESTEI spețe (r2, review P2-5:
+    mascare.a_produs — un str.__new__(TextMascat, …) sau textul mascat al altei spețe pică). Limita: e o gardă împotriva
+    greșelilor de program, nu împotriva unui cod rău-intenționat din același proces. Ridică GardaMascare."""
+    if not isinstance(mascare, M.Mascare): raise GardaMascare('mascare')
     if not isinstance(corp, dict) or not set(corp) <= CHEI_CERERE: raise GardaMascare('chei')
     if corp.get('model') not in MODELE: raise GardaMascare('model')
     if type(corp.get('max_tokens')) is not int: raise GardaMascare('max_tokens')
@@ -162,11 +168,12 @@ def garda_cerere(corp):
     for m in mesaje:
         if not isinstance(m, dict) or set(m) != {'role', 'content'} or m['role'] not in ('user', 'assistant'): raise GardaMascare('mesaj')
         if type(m['content']) is not M.TextMascat: raise GardaMascare('nemascat')
+        if not mascare.a_produs(m['content']): raise GardaMascare('provenienta')
 
 
-def apel(cheie, corp):
+def apel(cheie, corp, mascare):
     """SINGURA ieșire spre furnizorul modelului: garda ÎNTÂI (fără rețea dacă pică), apoi trimiterea."""
-    garda_cerere(corp)
+    garda_cerere(corp, mascare)
     return trimite_http(cheie, corp)
 
 
@@ -176,7 +183,7 @@ def cere(cheie, mascare, model, max_tokens, system, mesaje, tools=None):
     corp = {'model': model, 'max_tokens': max_tokens, 'system': system,
             'messages': [{'role': rol, 'content': mascare.mascheaza(text)} for rol, text in mesaje]}
     if tools is not None: corp['tools'] = tools
-    return apel(cheie, corp)
+    return apel(cheie, corp, mascare)
 
 
 def trimite_http(cheie, corp):
@@ -321,11 +328,19 @@ def proceseaza(secret, cheie, q, corpus, vocabular, dictionar):
         surse_finale = C.verifica_surse_finale(C.surse_citate(surse, ids_salvate), ids)
     except ValueError:
         return eroare('Sursele răspunsului nu au trecut verificarea finală. Pune întrebarea din nou.', tokeni=tok(), motiv='surse_invalide')
-    # demascarea: DOAR pe textul afișat utilizatorului. Garda „demascare lipsă”: dacă textul are etichete emise și afișatul a ieșit
-    # identic, demascarea n-a avut loc → nu se publică etichete în locul numelor (eroare de program, vizibilă).
-    afisat = masc.demascheaza(final)
-    if (masc.emise_in(final) and afisat == final) or len(afisat) > 60000:
-        return eroare('Eroare internă la pregătirea răspunsului. Pune întrebarea din nou.', tokeni=tok(), motiv='demascare')
+    # demascarea: DOAR pe textul afișat utilizatorului, STRICTĂ (r2, review P1-4): dacă în textul modelului rămâne orice secvență
+    # de forma unei etichete care nu e exact una emisă pentru această speță („[PERSOANA_999]”, „[persoana_1]”, „[PERSOANA_1_F9]”)
+    # sau o etichetă pusă pe o „aproape etichetă” a modelului, răspunsul NU se publică (nimic nu se repară tăcut). În jurnal intră
+    # doar motivul, niciodată textul modelului.
+    afisat, motiv_demascare = masc.demascheaza_sigur(final)
+    if motiv_demascare:
+        return eroare('Răspunsul conține etichete de nume care nu pot fi puse la loc sigur, deci nu a fost publicat. '
+                      'Pune întrebarea din nou.', tokeni=tok(), motiv='demascare', detaliu=motiv_demascare)
+    if masc.emise_in(final) and afisat == final:   # garda „demascare lipsă” (eroare de program): nu se publică etichete
+        return eroare('Eroare internă la pregătirea răspunsului. Pune întrebarea din nou.', tokeni=tok(), motiv='demascare',
+                      detaliu='demascare_lipsa')
+    if len(afisat) > 60000:
+        return eroare('Eroare internă la pregătirea răspunsului. Pune întrebarea din nou.', tokeni=tok(), motiv='lungime_afisat')
     tokeni = tok()
     st = scrie({'actiune': 'raspunde', 'id': qid, 'incercare': inc, 'raspuns_md': afisat, 'model': r.get('model') or model,
                 'tokeni': tokeni, 'surse': surse_finale, 'interogari': list(trimise)})

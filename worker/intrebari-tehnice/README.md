@@ -140,16 +140,23 @@ Pe înțelesul ownerului: `docs/intrebari/MASCARE_SI_VERDICT.md` (ce pleacă / c
   previzualizarea ecranului), apoi sursele; etichete stabile `[PERSOANA_1]`, `[FIRMA_1]`, `[CNP_1]`, `[CUI_1]`, `[TELEFON_1]`,
   `[EMAIL_1]`, `[IBAN_1]`, `[NR_AUTO_1]`, `[ASCUNS_1]`; altă formă scrisă a aceleiași entități = `_F2`, `_F3`. Tabelul etichetă →
   text e doar în obiect; jurnalul primește `contoare()` (câte valori pe categorie) și `inlocuiri`.
-- **Un singur drum spre furnizor**: `cere()` maschează fiecare mesaj → `apel()` rulează `garda_cerere()` (conținut EXACT de tip
-  `mascare.TextMascat`; sistem / model / unealtă din listele fixe; altfel `GardaMascare`, fără rețea) → `trimite_http()`. Testele AST
-  din `test_mascare.py` verifică drumul (cine cheamă `trimite_http`, `apel`, adresa API, `OPENER`).
+- **Un singur drum spre furnizor**: `cere()` maschează fiecare mesaj → `apel(cheie, corp, mascare)` rulează
+  `garda_cerere(corp, mascare)` (conținut EXACT de tip `mascare.TextMascat` ȘI produs de mascarea acestei preluări —
+  `Mascare.a_produs`, r2; sistem / model / unealtă din listele fixe; altfel `GardaMascare`, fără rețea) → `trimite_http()`. Testele
+  AST din `test_mascare.py` verifică drumul (cine cheamă `trimite_http`, `apel`, adresa API, `OPENER`). Garda e împotriva
+  greșelilor de program, nu a unui cod rău-intenționat din același proces.
 - **Atașamentele nu mai pleacă** (numele din ele nu se pot masca sigur): modelul primește doar numărul lor.
-- **Demascarea** doar pe `raspuns_md` (textul afișat); dacă textul avea etichete emise și a ieșit identic → eroare „Eroare internă
-  la pregătirea răspunsului”, nu se publică etichete.
+- **Demascarea** doar pe `raspuns_md` (textul afișat), STRICTĂ (r2): `Mascare.demascheaza_sigur` pune la loc doar etichetele emise,
+  exacte; orice „aproape etichetă” rămasă (`[PERSOANA_999]`, `[PERSOANA_1_F9]`, `[persoana_1]`, `PERSOANA_1`) sau o etichetă pusă pe
+  o „aproape etichetă” a modelului → eroare, nimic publicat (`motiv: demascare`, `detaliu: eticheta_neemisa` /
+  `eticheta_din_model`; textul modelului NU intră în jurnal). Dacă textul avea etichete emise și a ieșit identic → „Eroare internă
+  la pregătirea răspunsului” (`detaliu: demascare_lipsa`).
+- **Entitățile publice vizibile** (decizia owner-ului 13.11.2026): lista închisă din `nemascate.json` (singurul loc; citită și de
+  `src/intrebariMascare.js`), potrivire pe numele întreg. Fișier lipsă / stricat → `import mascare` pică, workerul nu pornește.
 - **Căutarea web**: neschimbată (interogări compuse din vocabular); o interogare pe care mascarea ar schimba-o nu se trimite
   (`cautari_cu_nume` în jurnal).
-- Ce NU prinde mascarea: vezi documentul pentru owner (nume necunoscute fără titlu, porecle, inițiale, literă mică, firme fără formă
-  juridică și necunoscute, localități). Firmele publice din `NEMASCATE` rămân intenționat.
+- Ce NU prinde mascarea: vezi documentul pentru owner (nume necunoscute fără titlu, porecle, inițiale, literă mică, un prenume care
+  e și cuvânt obișnuit scris singur, firme fără formă juridică și necunoscute; localitățile rămân vizibile prin decizie).
 Conform condițiilor comerciale ale API-ului, Anthropic nu folosește implicit aceste date la antrenarea modelelor; ele trec totuși prin
 serverele lui și pot fi păstrate o perioadă limitată.
 
@@ -190,13 +197,13 @@ serverele lui și pot fi păstrate o perioadă limitată.
 5. Întrebarea id 1 NU se reia automat: ownerul apasă „🔁 Reia cu cercetare” pe ea, după pașii 1–4.
 6. `registru_automatizari` + rândul din `public.automatizari`: fișa nouă (web pe domenii oficiale, Opus) — CLAUDE.md pct. 7.
 
-### Actualizarea „mascare + regula B” (13.11.2026) — fără migrare, fără secrete noi
-1. Merge, apoi deploy edge `intrebari-tehnice-worker` v3 (verify_jwt = false) — adaugă acțiunea `nume`; ÎNAINTE de worker.
-2. Pe server, din clona la zi pe `main`: copiezi `intrebari_worker.py`, `cercetare.py`, **`mascare.py` (nou)**, `vocabular_web.json`,
-   `corpus_manifest.json` în folderul workerului. Worker nou + edge vechi = `nume_indisponibile` în jurnal, nicio preluare.
-3. Proba: o întrebare de test a ownerului cu nume inventate → răspunsul afișat are numele la loc; jurnalul are `mascate`,
-   `inlocuiri`, `regula_b`, `atasamente_netrimise` (doar numere / coduri).
-4. `registru_automatizari` + `public.automatizari`: rândul propus în `docs/intrebari/MASCARE_SI_VERDICT.md`.
+### Actualizarea „mascare + regula B” (13.11.2026, r2) — fără migrare, fără secrete noi
+Pașii exacți, în ordine, sunt în `docs/intrebari/MASCARE_SI_VERDICT.md` („Pașii de pornire”). Pe scurt: **workerul OPRIT și
+verificat oprit ca prim pas** (edge nou + worker vechi ar trimite nemascat), merge, verificarea coloanelor `SURSE_NUME` în
+information_schema, deploy edge v3 (`index.ts` + `logic.js`), proba acțiunii `nume` (secret → 200, anon / JWT / secret greșit →
+401), copierea `intrebari_worker.py`, `cercetare.py`, **`mascare.py`**, **`nemascate.json`** (noi), `vocabular_web.json`,
+`corpus_manifest.json` cu sha256 comparat, testele Python pe `main`, abia apoi workerul repornit + proba cu nume inventate, apoi
+registrul.
 
 ## Verificare după livrare (teste negative, într-o tranzacție cu ROLLBACK)
 Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utilizator FĂRĂ cheia de modul și pentru autor:
@@ -229,10 +236,13 @@ al echipei Paw).
 ## Teste
 - `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariMascare.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs scripts/intrebari/interogari.test.mjs scripts/intrebari_cercetare_amprente.test.js`
 - 13.11.2026: mascarea are cazurile comune `teste_mascare.json` (Python `test_mascare.py` ↔ vitest `src/intrebariMascare.test.js`,
-  plus aceleași liste OPRIRE / COMUNE / NEMASCATE / TITLURI în ambele), regula B are `teste_regula_b.json` (`test_cercetare.py`
-  ↔ `src/intrebariSurse.test.js`). Garda: `test_mascare.py` (tipul `TextMascat`, AST — drumul unic spre furnizor, refuzurile
-  gărzii) și `test_worker.py` (nimic din valorile sensibile în nicio cerere, atașamentele nu pleacă, jurnalul fără valori,
-  mutanții „apel nemascat” și „demascare lipsă”, fără lista de nume nu se preia nimic).
+  plus aceleași liste OPRIRE / COMUNE / TITLURI în ambele și `nemascate.json` citit de amândouă), regula B are
+  `teste_regula_b.json` (`test_cercetare.py` ↔ `src/intrebariSurse.test.js`; r2: alinierea inversoarelor + mutantul „doar LCS”).
+  Garda: `test_mascare.py` (tipul `TextMascat` + proveniența pe instanță cu mutant, AST — drumul unic spre furnizor, refuzurile
+  gărzii, demascarea strictă) și `test_worker.py` (nimic din valorile sensibile în nicio cerere, atașamentele nu pleacă, jurnalul
+  fără valori, mutanții „apel nemascat” / „tip falsificat” / „altă speță” / „demascare lipsă”, demascarea parțială nu se publică,
+  fără lista de nume nu se preia nimic). Edge: `supabase/functions/intrebari-tehnice-worker/logic.test.js` (vitest — poarta pe
+  secret: anon / JWT de cont / secret greșit refuzate; sursele de nume, keyset int / uuid, fail closed).
 - `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` — **paritate Python ↔ JS pe aceleași fișiere**:
   validarea (`teste_validare.json`: verdict, fără sursă, cifre neconfirmate, nesusținute, temei, textul după curățare — runda 4:
   polaritatea, calificativele, negația, propozițiile, semnul și unitatea), tokenii numerici / tipul regulii / propozițiile

@@ -28,6 +28,39 @@ class RegulaB(unittest.TestCase):
                 self.assertEqual(c.cere_citat(caz['text'], REGULA_B['surse']), caz['cere_citat'])
                 self.assertIn(c.tip_verdict(text), ('da', 'nu', 'incert', None))        # după regulă: doar trei verdicte
 
+    def test_mutant_fara_aliniere_lasa_da_rasturnat(self):
+        """r2 (review P1-3): cu verificarea veche (doar LCS) cazurile marcate `mutant_vechi_trece` rămâneau „Da” / „Nu” —
+        testul de mai sus le prinde DOAR prin aliniere (mutantul înlocuiește _aliniere cu _lcs)."""
+        vechi = c._aliniere
+        try:
+            c._aliniere = c._lcs
+            marcate = [k for k in REGULA_B['cazuri'] if k.get('mutant_vechi_trece')]
+            self.assertGreaterEqual(len(marcate), 3)
+            for caz in marcate:
+                with self.subTest(caz['nume']):
+                    self.assertEqual(c.aplica_regula_b(caz['text'], REGULA_B['surse'])[1], 'citat')
+        finally:
+            c._aliniere = vechi
+
+    def test_aliniere(self):
+        q = 'documentatia contine avizul si raportul nu contine verificarile'.split()
+        p = 'documentatia nu contine avizul si raportul contine verificarile'.split()
+        self.assertEqual(c._lcs(q, p), 7)
+        self.assertLess(c._aliniere(q, p), 7 * 0.9)                                  # negația nu se poate muta
+        self.assertEqual(c._aliniere(p, p), len(p))
+        self.assertEqual(c._aliniere('a b c d'.split(), 'x nu a b c d'.split()), -1)  # negația sursei rămasă afară
+        self.assertEqual(c._aliniere('a b c d'.split(), 'poate a b c d'.split()), 4)   # modal în afara fragmentului
+        self.assertEqual(c._aliniere('a b c d'.split(), 'a b poate c d'.split()), 2)   # modal în mijloc: fragmentul se oprește
+                                                                                        # înaintea lui → 2 din 4, sub prag
+        self.assertEqual(c._aliniere('a b c d'.split(), 'a b c d fara'.split()), -1)
+        for w in ('nu', 'nici', 'niciun', 'nicio', 'niciodata', 'nimic', 'nimeni', 'fara', 'exceptand', 'exceptia', 'decat',
+                  'neconform', 'nepermis', 'neadmis', 'neautorizat'):
+            self.assertEqual(c._inversor(w), 2, w)
+        for w in ('trebuie', 'poate', 'pot', 'obligatoriu', 'optional', 'facultativ', 'interzis', 'interzice', 'admis', 'permite', 'recomandat'):
+            self.assertEqual(c._inversor(w), 1, w)
+        for w in ('necesar', 'nevoie', 'conform', 'proba', 'numai'):
+            self.assertEqual(c._inversor(w), 0, w)
+
     def test_pragul_documentat(self):
         self.assertEqual((c.CITAT_MIN_CUVINTE, c.CITAT_PRAG), (6, 0.9))
         self.assertEqual(c._lcs('a b c d'.split(), 'a x c d'.split()), 3)

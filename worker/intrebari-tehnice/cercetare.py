@@ -586,17 +586,67 @@ def _lcs(a, b):
     return prev[-1]
 
 
+# r2 (review PR #1086, P1-3): negația nu se mai verifică doar ca „există în propoziție” — un citat care MUTĂ negația de la o
+# afirmație la alta trecea. Acum citatul și propoziția se ALINIAZĂ cuvânt cu cuvânt (_aliniere), iar cuvintele care inversează
+# sensul NU pot rămâne nepereche (nu intră în toleranța de 1 cuvânt din 10):
+#   - INVERSOARE_NEGATIE (nu, nici, niciun / nicio, niciodată, nimic, nimeni, fără, exceptând, excepția, decât, ne- + admis /
+#     permis / conform / autorizat / obligatoriu / avizat / respectat / îndeplinit / corespunzător / valid / acceptat / recepționat):
+#     fiecare din citat se perechează cu ACELAȘI cuvânt din sursă, iar fiecare din TOATĂ propoziția sursei trebuie să fie în citat,
+#     pe aceeași poziție relativă — o negație din afara fragmentului citat poate răsturna fragmentul („Nu este adevărat că …”);
+#   - INVERSOARE_MODAL (trebuie, poate / pot, obligatoriu, opțional, facultativ, interzis, admis / admite, permis / permite,
+#     recomandat): fiecare din citat se perechează cu același cuvânt; cele din sursă trebuie perechate doar ÎNTRE primul și ultimul
+#     cuvânt citat (un „poate” dintr-o altă parte a propoziției nu contează, unul înlocuit în mijlocul citatului da).
+# Orice nepotrivire → citatul nu susține verdictul → „Incert”. Compromisul: o propoziție lungă cu o negație în altă parte decât
+# fragmentul citat cere citarea întregii propoziții (altfel „Incert”) — preferăm un „Incert” în plus unui „Da” răsturnat.
+INVERSOARE_NEGATIE = re.compile(r'(?:nu|nici|niciun\w*|nicio|niciodata|nimic|nimeni|fara|exceptand|exceptia|exceptie|decat'
+                                r'|ne(?:admis|permis|conform|autorizat|obligatori|avizat|respect|indeplin|corespunz|valid|accept|receptio)\w*)')
+INVERSOARE_MODAL = re.compile(r'(?:trebui\w*|poate|pot|obligatori\w*|optional\w*|facultativ\w*|interzi\w*|admis\w*|admit\w*'
+                              r'|permis\w*|permit\w*|recomand\w*)')
+
+
+def _inversor(w):
+    """2 = negație (pereche obligatorie în toată propoziția), 1 = modal (pereche obligatorie în fragmentul citat), 0 = alt cuvânt."""
+    if INVERSOARE_NEGATIE.fullmatch(w): return 2
+    if INVERSOARE_MODAL.fullmatch(w): return 1
+    return 0
+
+
+def _aliniere(q, p):
+    """Cel mai mare număr de cuvinte ale citatului `q` perechate, în ordine, cu cuvinte IDENTICE din propoziția `p`, cu regulile
+    inversoarelor de mai sus; -1 dacă nicio aliniere nu le respectă. Stări: faza 0 = înaintea primei perechi, 1 = în fragmentul
+    citat, 2 = după ultima pereche (un modal din sursă se poate sări doar în fazele 0 și 2; o negație din sursă niciodată)."""
+    NU = -1
+    tq, tp = [_inversor(w) for w in q], [_inversor(w) for w in p]
+    m, n = len(q), len(p)
+    f = [[[NU] * 3 for _ in range(n + 1)] for _ in range(m + 1)]
+    f[0][0][0] = 0
+    for i in range(m + 1):
+        for j in range(n + 1):
+            for faza in range(3):
+                v = f[i][j][faza]
+                if v == NU: continue
+                if faza == 1 and v > f[i][j][2]: f[i][j][2] = v                     # sfârșitul fragmentului citat
+                if i < m and j < n and faza < 2 and q[i] == p[j] and v + 1 > f[i + 1][j + 1][1]:
+                    f[i + 1][j + 1][1] = v + 1                                       # pereche
+                if i < m and tq[i] == 0 and v > f[i + 1][j][faza]: f[i + 1][j][faza] = v   # cuvânt din citat fără pereche
+                if j < n and (tp[j] == 0 or (tp[j] == 1 and faza != 1)) and v > f[i][j + 1][faza]:
+                    f[i][j + 1][faza] = v                                            # cuvânt din sursă fără pereche
+    return max(f[m][n])
+
+
 def citat_sustinut(citat, ids, harta):
-    """True dacă citatul trece pragul „aproape cuvânt cu cuvânt” față de o propoziție a uneia dintre sursele `ids` (vezi mai sus)."""
+    """True dacă citatul trece pragul „aproape cuvânt cu cuvânt” față de o propoziție a uneia dintre sursele `ids` (vezi mai sus):
+    aliniere (cu inversoarele perechate) ≥ CITAT_PRAG din cuvintele citatului, aceleași cifre, restricțiile sursei în citat."""
     n = normalizeaza(citat)
     q = CUVINTE_CITAT.findall(n)
     if len(q) < CITAT_MIN_CUVINTE: return False
-    neg, tok = bool(NEGATIE_SIMPLA.search(n)), set(tokeni_numerici(n))
+    tok = set(tokeni_numerici(n))
     for i in ids:
         if i not in harta: continue
         for p in propozitii(harta[i].partition('\n')[2]):
-            if _lcs(q, CUVINTE_CITAT.findall(p)) < CITAT_PRAG * len(q): continue
-            if neg != bool(NEGATIE_SIMPLA.search(p)) or not tok <= set(tokeni_numerici(p)): continue
+            cp = CUVINTE_CITAT.findall(p)
+            if _lcs(q, cp) < CITAT_PRAG * len(q): continue                  # filtru ieftin (aliniere ≤ lcs)
+            if _aliniere(q, cp) < CITAT_PRAG * len(q) or not tok <= set(tokeni_numerici(p)): continue
             if restrictii_acoperite(n, p): return True
     return False
 

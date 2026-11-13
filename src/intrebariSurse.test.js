@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { DOMENII_OFICIALE, STOP, GENERICE, analizeaza, curataRaspuns, verdict, urlOficial, surseAfisabile, imparteRaspuns, eDeclaratieLipsa,
   ancore, interogariAfisabile, termeniCheie, normalizeaza, tokeniNumerici, polaritati, propozitii, eAfirmatieNormativa,
   lipsesteMigrarea, actiuniIntrebare, restrictii, prezentareRaspuns, aplicaRegulaB, cereCitat, tipVerdict, CITAT_MIN_CUVINTE, CITAT_PRAG,
-  INCERT_REGULA_B } from './intrebariSurse.js'
+  INCERT_REGULA_B, aliniere } from './intrebariSurse.js'
 
 const CAZURI = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_validare.json', 'utf8'))
 const NORMATIVE = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_normative.json', 'utf8'))
@@ -228,6 +228,24 @@ describe('regula B: Da / Nu doar cu citat aproape cuvânt cu cuvânt, altfel Inc
     expect(py).toMatch(/^CITAT_MIN_CUVINTE = 6$/m)
     expect(py).toMatch(/^CITAT_PRAG = 0\.9$/m)
     expect(py).toContain(`INCERT_REGULA_B = f'{INCERT}: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.'`)
+  })
+  it('r2: alinierea perechează inversoarele (aceleași valori ca test_aliniere din test_cercetare.py)', () => {
+    const s = t => t.split(' ')
+    expect(aliniere(s('documentatia contine avizul si raportul nu contine verificarile'), s('documentatia nu contine avizul si raportul contine verificarile'))).toBeLessThan(7 * 0.9)
+    expect(aliniere(s('a b c d'), s('x nu a b c d'))).toBe(-1)
+    expect(aliniere(s('a b c d'), s('poate a b c d'))).toBe(4)
+    expect(aliniere(s('a b c d'), s('a b poate c d'))).toBe(2)
+    expect(aliniere(s('a b c d'), s('a b c d fara'))).toBe(-1)
+  })
+  it('r2: listele de inversoare sunt aceleași în cercetare.py și intrebariSurse.js', () => {
+    const py = readFileSync('worker/intrebari-tehnice/cercetare.py', 'utf8')
+    const js = readFileSync('src/intrebariSurse.js', 'utf8')
+    const corp = (sursa, re) => { const m = sursa.match(re); expect(m, String(re)).not.toBe(null); return m[1].replace(/'\s*\n\s*r'/g, '') }
+    for (const nume of ['INVERSOARE_NEGATIE', 'INVERSOARE_MODAL']) {
+      const p = corp(py, new RegExp(`^${nume} = re\\.compile\\(r'([\\s\\S]*?)'\\)`, 'm'))
+      const j = corp(js, new RegExp(`^const ${nume} = /\\^([\\s\\S]*?)\\$/$`, 'm'))
+      expect(j).toBe(p)
+    }
   })
   it('după curățare + regula B, un verdict ferm fără citat nu poate rămâne Da', () => {
     const s = [{ id: 'C1', titlu: 'PT C9', extras: 'Responsabilul tehnic cu sudura este atestat de ISCIR.' }]

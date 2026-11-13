@@ -294,9 +294,11 @@ class Flux(unittest.TestCase):
                 corp = {'model': model, 'max_tokens': max_tokens, 'system': system,
                         'messages': [{'role': rol, 'content': construieste(mascare, text)} for rol, text in mesaje]}
                 if tools is not None: corp['tools'] = tools
-                return W.apel(cheie, corp)
+                return W.apel(cheie, corp, mascare)
             return cere
-        for construieste in (lambda m, t: t, lambda m, t: str(m.mascheaza(t)), lambda m, t: m.mascheaza(t) + ''):
+        for construieste in (lambda m, t: t, lambda m, t: str(m.mascheaza(t)), lambda m, t: m.mascheaza(t) + '',
+                             lambda m, t: str.__new__(M.TextMascat, t),                     # r2: tipul falsificat, nemascat
+                             lambda m, t: M.Mascare(DICT).mascheaza(t)):                    # r2: mascat de ALTĂ instanță
             self.apeluri.clear()
             W.cere = mutant(construieste)
             with self.assertRaises(W.GardaMascare): self.proceseaza(Q_NUME)
@@ -312,7 +314,50 @@ class Flux(unittest.TestCase):
         self.proceseaza(Q_NUME)
         e = self._eroare()
         self.assertTrue(e['eroare'].startswith('Eroare internă la pregătirea răspunsului'))
-        self.assertEqual(self.jurnalul()[-1]['motiv'], 'demascare')
+        self.assertEqual((self.jurnalul()[-1]['motiv'], self.jurnalul()[-1]['detaliu']), ('demascare', 'demascare_lipsa'))
+
+    def test_demascare_incompleta_nu_se_publica(self):
+        """r2 (review P1-4): eticheta neemisă, combinația cunoscută + necunoscută, forma inventată, litere mici — nimic nu se
+        publică, nimic nu se repară tăcut, iar textul modelului NU ajunge în jurnal."""
+        for eticheta in ('[PERSOANA_999]', '[PERSOANA_1] și [PERSOANA_999]', '[PERSOANA_1_F9]', '[persoana_1]', 'PERSOANA_1'):
+            with self.subTest(eticheta):
+                self.scrieri.clear()
+                self.raspuns = f'Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru avizul cerut de {eticheta}.'
+                self.proceseaza(Q_NUME)
+                e = self._eroare()
+                self.assertTrue(e['eroare'].startswith('Răspunsul conține etichete de nume'), e['eroare'])
+                self.assertNotIn('PERSOANA', json.dumps(self.scrieri, ensure_ascii=False))
+                j = self.jurnalul()[-1]
+                self.assertEqual((j['motiv'], j['detaliu']), ('demascare', 'eticheta_neemisa'))
+                self.assertNotIn('avizul cerut', json.dumps(self.jurnalul(), ensure_ascii=False))
+                self.assertNotIn('ersoana', json.dumps(self.jurnalul(), ensure_ascii=False))
+
+    def test_eticheta_scrisa_de_om_ramane_a_lui(self):
+        """Textul utilizatorului conține el însuși „[PERSOANA_1]”: pleacă ascuns ([ASCUNS_n]) și, citat de model, se pune la loc
+        exact — nu se confundă cu persoana reală care primește tot [PERSOANA_1]."""
+        q = dict(Q, intrebare='Ce înseamnă [PERSOANA_1] din formularul vechi? A întrebat Ion Popescu.')
+        self.raspuns = 'Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru [ASCUNS_1] cerut de [PERSOANA_1].'
+        self.proceseaza(q)
+        trimis = [a for a in self.apeluri if a['system'] is C.SISTEM_RASPUNS][0]['messages'][0]['content']
+        self.assertIn('Ce înseamnă [ASCUNS_1] din formularul vechi? A întrebat [PERSOANA_1].', trimis)
+        self.assertIn('Nu am găsit sursa oficială pentru [PERSOANA_1] cerut de Ion Popescu.', self.raspunsul()['raspuns_md'])
+
+    def test_aproape_eticheta_a_modelului_nu_se_publica(self):
+        """Modelul scrie la primul răspuns o „aproape etichetă”; la reparare ea pleacă ascunsă ([ASCUNS_n]) și, dacă modelul o
+        folosește în răspunsul final, publicarea se oprește (altfel s-ar afișa „[persoana_9]”)."""
+        raspunsuri = iter(['Da.\nVezi [persoana_9].', 'Incert — de verificat: lipsește avizul.\nNu am găsit sursa pentru [ASCUNS_2].'])
+        self.raspuns = None
+        vechi = W.trimite_http
+        def trimite(cheie, corp):
+            if corp['system'] is C.SISTEM_RASPUNS: self.apeluri.append(corp); return r_ok(next(raspunsuri))
+            return vechi(cheie, corp)
+        W.trimite_http = trimite
+        self.proceseaza(Q_NUME)
+        reparare = [a for a in self.apeluri if a['system'] is C.SISTEM_RASPUNS and len(a['messages']) == 3]
+        self.assertEqual(len(reparare), 1)
+        self.assertIn('Vezi [ASCUNS_2].', reparare[0]['messages'][1]['content'])
+        self.assertEqual(self.jurnalul()[-1]['detaliu'], 'eticheta_din_model')
+        self._eroare()
 
     # ── decizia B: Da / Nu doar cu citat ──
     def test_da_ferm_fara_citat_cere_reparare_apoi_devine_incert_cu_sursele_alaturate(self):

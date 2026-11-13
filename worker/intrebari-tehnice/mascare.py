@@ -13,21 +13,41 @@ CUI cu „RO” / „CUI” / „cod fiscal” în față; numere de înmatricul
 
 Același algoritm în src/intrebariMascare.js (previzualizarea din ecran) — paritate pe teste_mascare.json (L19).
 Garda (pct. 2 din brief): TextMascat e SINGURUL tip de conținut pe care apel() din intrebari_worker.py îl lasă să plece spre
-furnizor; se obține doar din Mascare.mascheaza() (sigiliu privat; testul AST verifică că _SIGILIU nu e folosit în afara modulului).
+furnizor; se obține doar din Mascare.mascheaza() (sigiliu privat; testul AST verifică că _SIGILIU nu e folosit în afara modulului)
+și e legat de INSTANȚA care l-a produs (Mascare.a_produs: același obiect, ținut în registrul acelei mascări) — un
+str.__new__(TextMascat, …) făcut de mână nu trece. Limita: garda e împotriva GREȘELILOR de program, nu a unui cod rău-intenționat
+din același proces (acela poate oricum ocoli orice verificare din Python).
+
+Demascarea e STRICTĂ (r2, review P1-4): se pun la loc DOAR etichetele emise, scrise exact; demascheaza_sigur() refuză publicarea
+dacă textul modelului are orice secvență de forma unei etichete (ASEMANATOR) care nu e exact o etichetă emisă — „[PERSOANA_999]”,
+„[persoana_1]”, „[PERSOANA_1_F9]”, „PERSOANA_1” — sau o etichetă emisă pentru o „aproape etichetă” venită din textul modelului.
+Nimic nu se repară tăcut.
+
+Excepția pentru entitățile publice (decizia owner-ului 13.11.2026): lista ÎNCHISĂ din nemascate.json (un singur loc, citit și de
+src/intrebariMascare.js), pe numele ÎNTREG al entității — vezi NEMASCATE.
 
 Ce NU prinde (limite asumate, spuse și în ecran și în docs/intrebari/MASCARE_SI_VERDICT.md):
 - nume necunoscute platformei scrise fără titlu în față și fără formă juridică; porecle, inițiale („I. P.”), nume scrise cu
-  literă mică;
-- firme scrise fără formă juridică și care nu sunt în lista de terți; firmele publice din NEMASCATE rămân intenționat;
-- localități, adrese, numere de contract / CF / cadastru, CUI scris fără „RO” / „CUI” și necunoscut platformei;
-- conținutul atașamentelor (de aceea atașamentele NU se mai trimit la furnizor).
+  literă mică; un prenume din dicționar care e și cuvânt obișnuit („Ion”, „Mare”) scris SINGUR, fără titlu și fără alt nume lângă;
+- firme scrise fără formă juridică și care nu sunt în lista platformei; entitățile publice din nemascate.json rămân intenționat;
+- localități (rămân vizibile — decizia owner-ului), adrese, numere de contract / CF / cadastru, CUI scris fără „RO” / „CUI” și
+  necunoscut platformei;
+- conținutul atașamentelor (de aceea atașamentele NU se mai trimit la furnizor — decizia owner-ului).
 """
+import json
+import pathlib
 import re
 import unicodedata
 
 CATEGORII = ('PERSOANA', 'FIRMA', 'CNP', 'CUI', 'TELEFON', 'EMAIL', 'IBAN', 'NR_AUTO', 'ASCUNS')
-# eticheta emisă de noi; la demascare și la protejare se acceptă și scrisă cu litere mici (modelul o poate rescrie așa)
-ETICHETA = re.compile(r'\[(PERSOANA|FIRMA|CNP|CUI|TELEFON|EMAIL|IBAN|NR_AUTO|ASCUNS)_([1-9][0-9]{0,3})(?:_F([1-9][0-9]{0,2}))?\]', re.I)
+# eticheta emisă de noi, EXACT (majuscule): doar așa se pune la loc (r2: fără toleranță la litere mici / forme inventate)
+ETICHETA = re.compile(r'\[(PERSOANA|FIRMA|CNP|CUI|TELEFON|EMAIL|IBAN|NR_AUTO|ASCUNS)_([1-9][0-9]{0,3})(?:_F([1-9][0-9]{0,2}))?\]')
+# orice „aproape etichetă”: categoria (orice litere, cu / fără diacritice) + separator + cifre, cu sau fără paranteze —
+# „[persoana_1]”, „[PERSOANA 1]”, „[PERSOANA_1_F9]”, „PERSOANA_1”, „[FIRMA-2]”. În textul omului se ascunde (ASCUNS, dus-întors
+# exact); în textul modelului, dacă nu e EXACT o etichetă emisă, oprește publicarea (demascheaza_sigur). Aceeași în JS.
+_CAT_ASEM = r'(?:PERSOAN[AĂ]|FIRM[AĂ]|CNP|CUI|TELEFON|E-?MAIL|IBAN|NR[ _.\-]?AUTO|ASCUNS)'
+ASEMANATOR = re.compile(r'(?:\[[ \t]*' + _CAT_ASEM + r'[ \t_\-#]*[0-9]+|(?<![A-Za-z0-9\[])' + _CAT_ASEM + r'[ \t]*[_\-#][ \t]*[0-9]+)'
+                        r'(?:[ \t]*[_\-][ \t]*[A-Za-z]?[0-9]+)*(?:[ \t]*\])?', re.I)
 
 _L = r'(?:[^\W\d_]|[\u0300-\u036f])'      # literă (și semn diacritic combinat)
 _W = r'[\w\u0300-\u036f]'                 # caracter de cuvânt (literă, cifră, _)
@@ -78,23 +98,58 @@ antreprenorului furnizorul furnizorului subcontractantul subcontractantului subc
 proiectantului executantul executantului ofertantul ofertantului consultantul oferta licitatia proiectul proiect lucrarea lucrare
 santierul etapa faza clasa zona lot lotul capitolul anexa anexei tip tipul categoria nivelul nivel treapta grupa varianta partea
 titlul sectiunea cartea volumul tronsonul tronson sectorul obiectul etajul articolul gradul plansa corp corpul bloc blocul strada str
-nr judetul jud comuna orasul municipiul satul romania ro cui cif'''.split()) | FORME_JURIDICE | _TITLURI_NORM
+nr judetul jud comuna orasul municipiul satul romania ro cui cif comunei orasului municipiului primaria primariei consiliul
+consiliului judetean statul ministerul agentia directia administratia regia ocolul parohia asociatia mostenitorii mostenitor
+neidentificat'''.split()) | FORME_JURIDICE | _TITLURI_NORM
 # Nume din platformă care sunt și cuvinte obișnuite: singure (fără alt nume lângă) nu se ascund („Mare parte din …”).
 COMUNE = frozenset('''mare mic mica micu preda verde rosu negru alb albu bun buna lung lungu gros grosu scurt nou noua vechi ion ioni
 mai iunie iulie august tot toma'''.split())
 # Firme dintr-un singur cuvânt prea general ca să fie căutat singur.
 GENERICE_FIRMA = frozenset('''construct constructii instal grup group impex trans service servicii com prod serv consult general
 proiect design tehnic tehnica gaz gaze energy energie'''.split())
-# Firme publice / operatori de rețea / firma noastră: numele lor ține de normativ (cerințele Transgaz, avizul Delgaz) și nu e o
-# dată personală — NU se ascund. Listă închisă, versionată; o schimbare = PR (decizia owner-ului).
-NEMASCATE = frozenset('''transgaz|sntgn transgaz|delgaz|delgaz grid|distrigaz|distrigaz sud retele|engie|engie romania|e on|eon|
-romgaz|sngn romgaz|premier energy|transelectrica|electrica|hidroelectrica|apa nova|apa nova bucuresti|gazpet|gazpet instal'''
-                      .replace('\n', '').split('|'))
+# Entitățile care rămân VIZIBILE (decizia owner-ului 13.11.2026, după review-ul PR #1086): operatorii de rețea, companiile /
+# instituțiile publice și Gazpet — cerințele lor sunt chiar subiectul întrebărilor. Lista e ÎNCHISĂ și stă într-un SINGUR loc,
+# nemascate.json (citit și de src/intrebariMascare.js), fiecare intrare cu categoria ei; fără furnizori, subcontractori, clienți
+# privați sau persoane. Orice adăugare = decizia owner-ului, prin coordonator. Potrivirea e pe numele ÎNTREG (cheie_entitate),
+# niciodată pe un cuvânt din el. Fișier lipsă / stricat / intrare invalidă → importul pică (workerul nu pornește — fail closed).
+NEMASCATE_FILE = pathlib.Path(__file__).resolve().parent / 'nemascate.json'
+CATEGORII_NEMASCATE = ('operator_retea', 'companie_publica', 'institutie_publica', 'societatea_noastra')
+
+
+def cheie_entitate(nume):
+    """Forma canonică a numelui unei firme: cuvintele normalizate, fără forma juridică și fără „societatea comercială”, cu
+    inițialele lipite („S.N.T.G.N.” → „sntgn”, „E.ON” rămâne „e on”: o singură literă nu e un șir de inițiale)."""
+    toks = _tokeni_firma_lista(nume)
+    out, i = [], 0
+    while i < len(toks):
+        j = i
+        while j < len(toks) and len(toks[j]) == 1 and toks[j].isalpha(): j += 1
+        if j - i >= 2: out.append(''.join(toks[i:j])); i = j
+        else: out.append(toks[i]); i += 1
+    return ' '.join(out)
+
+
+def incarca_nemascate(date):
+    """Mulțimea formelor canonice din nemascate.json, validată: fiecare intrare are nume, o categorie din CATEGORII_NEMASCATE și
+    forme nevide, deja canonice (cheie_entitate(forma) == forma). Altfel ValueError."""
+    if not isinstance(date, dict) or not isinstance(date.get('entitati'), list) or not date['entitati']: raise ValueError('entitati')
+    if set(date.get('categorii') or {}) != set(CATEGORII_NEMASCATE): raise ValueError('categorii')
+    out = set()
+    for e in date['entitati']:
+        if not isinstance(e, dict) or set(e) != {'nume', 'categorie', 'forme'}: raise ValueError('intrare')
+        if not isinstance(e['nume'], str) or not e['nume'].strip() or e['categorie'] not in CATEGORII_NEMASCATE: raise ValueError('intrare')
+        if not isinstance(e['forme'], list) or not e['forme']: raise ValueError('forme')
+        for f in e['forme']:
+            if not isinstance(f, str) or not f or cheie_entitate(f) != f: raise ValueError(f'forma {f!r}')
+            out.add(f)
+    return frozenset(out)
 
 
 class TextMascat(str):
     """Text trecut prin Mascare.mascheaza(). Singurul tip de conținut acceptat de apel() spre furnizor. Orice operație pe el
-    (concatenare, felii, format) întoarce un str simplu — deci un text construit DUPĂ mascare nu mai trece garda."""
+    (concatenare, felii, format) întoarce un str simplu — deci un text construit DUPĂ mascare nu mai trece garda. Tipul singur nu
+    dovedește proveniența (str.__new__(TextMascat, …) ocolește constructorul): garda cere și Mascare.a_produs(x) — același obiect,
+    din registrul instanței care a mascat."""
     __slots__ = ()
 
     def __new__(cls, valoare, sigiliu=None):
@@ -163,6 +218,20 @@ def _tokeni_firma_lista(nume):
     return out
 
 
+NEMASCATE = incarca_nemascate(json.loads(NEMASCATE_FILE.read_text(encoding='utf-8')))
+# cuvintele-entitate dintr-un singur cuvânt („transgaz”, „anre”): după un titlu („directorul Transgaz”) nu sunt nume de persoană
+NEMASCATE_UN_CUVANT = frozenset(f for f in NEMASCATE if ' ' not in f)
+
+
+def _baze_flexionare(n):
+    """Formele de bază posibile ale unui genitiv / dativ de prenume feminin (normalizat): „anei” → ana, „mariei” → maria,
+    „andreei” → andreea, „olgai” (Olgăi) → olga. Doar candidați: se folosesc numai dacă baza e în dicționar."""
+    out = []
+    if len(n) >= 4 and n.endswith('ei'): out += [n[:-2] + 'a', n[:-1] + 'a']
+    if len(n) >= 4 and n.endswith('ai'): out.append(n[:-1])
+    return [c for c in out if len(c) >= 3]
+
+
 class Dictionar:
     """Numele cunoscute platformei (angajați, persoane de contact, terți), DOAR pentru căutare locală — nu pleacă nicăieri.
     persoane: cuvintele numelor (≥ 3 litere, normalizate; „Ana-Maria” și întreg, și pe bucăți); firme: secvențele de cuvinte ale
@@ -178,7 +247,7 @@ class Dictionar:
         index = {}
         for nume in firme:
             tok = _tokeni_firma_lista(nume)
-            if not tok or ' '.join(tok) in NEMASCATE: continue
+            if not tok or cheie_entitate(nume) in NEMASCATE: continue
             if len(tok) == 1 and (len(tok[0]) < 4 or tok[0] in COMUNE or tok[0] in GENERICE_FIRMA or tok[0] in OPRIRE or tok[0].isdigit()):
                 continue
             index.setdefault(tok[0], set()).add(tuple(tok))
@@ -189,14 +258,14 @@ class Dictionar:
             if 6 <= len(d) <= 10: self.cui.add(d)
 
     def persoana(self, baza):
-        """Cheia canonică a unui cuvânt-nume („Mariei” → „maria”), sau None dacă nu e cunoscut."""
+        """Cheia canonică a unui cuvânt-nume („Mariei” → „maria”, „Anei” → „ana” — r2: și genitivele scurte), sau None dacă nu e
+        cunoscut."""
         n = norm(baza)
         if n in self.persoane: return n
-        if len(n) > 4 and n.endswith('ei') and n[:-2] + 'a' in self.persoane: return n[:-2] + 'a'
-        return None
+        return next((c for c in _baze_flexionare(n) if c in self.persoane), None)
 
     @staticmethod
-    def din_raspuns(r, maxim=50000):
+    def din_raspuns(r, maxim=200000):   # = NUME_MAX_LISTA din supabase/functions/intrebari-tehnice-worker/logic.js
         """Dictionarul din răspunsul edge-ului („nume”). Formă greșită / gol → ValueError (workerul nu preia nimic — fail closed)."""
         if not isinstance(r, dict): raise ValueError('raspuns')
         liste = {}
@@ -216,6 +285,8 @@ class Mascare:
         self.tabel = {}                                 # eticheta → textul original (DOAR în memorie)
         self._ent = {c: [] for c in CATEGORII}          # entitățile pe categorii: {n, cheie, forme: {text: eticheta}}
         self.inlocuiri = 0                              # câte înlocuiri s-au făcut, în total (pentru jurnal)
+        self._produse = {}                              # id(TextMascat) → obiectul: proveniența (a_produs), DOAR în memorie
+        self._asem_om, self._asem_masina = set(), set() # etichetele ASCUNS puse pe „aproape etichete” din textul omului / al mașinii
 
     def contoare(self):
         """{categorie: câte valori diferite s-au ascuns} — singurul lucru despre mascare care ajunge în jurnal."""
@@ -248,22 +319,23 @@ class Mascare:
         return e
 
     def _emisa(self, e):
-        return e.upper() in self.tabel
+        return e in self.tabel
 
     # ── detectare ──
     def _detecteaza(self, t, protejeaza):
-        """[(start, end, categorie, cheie)] fără suprapuneri; detectoarele au prioritate în ordinea de mai jos (aceeași în JS)."""
+        """[(start, end, categorie, cheie, asemanator)] fără suprapuneri; detectoarele au prioritate în ordinea de mai jos (aceeași
+        în JS). `asemanator` = intervalul e o „aproape etichetă” ascunsă (vezi ASEMANATOR)."""
         luate, out = [], []
 
-        def adauga(s, e, cat, cheie):
+        def adauga(s, e, cat, cheie, asem=False):
             if s >= e or any(s < b and a < e for a, b in luate): return False
             luate.append((s, e))
-            if cat: out.append((s, e, cat, cheie))
+            if cat: out.append((s, e, cat, cheie, asem))
             return True
 
-        for m in ETICHETA.finditer(t):                  # 1. etichetele noastre rămân; o etichetă scrisă de om se ascunde
-            if protejeaza and self._emisa(m.group(0)): adauga(m.start(), m.end(), None, None)
-            else: adauga(m.start(), m.end(), 'ASCUNS', m.group(0))
+        for m in ASEMANATOR.finditer(t):                # 1. etichetele noastre EXACTE rămân (textul modelului); orice altă formă
+            if protejeaza and self._emisa(m.group(0)): adauga(m.start(), m.end(), None, None)   # de etichetă se ascunde
+            else: adauga(m.start(), m.end(), 'ASCUNS', m.group(0), True)
         for m in MANUAL.finditer(t): adauga(m.start(), m.end(), 'ASCUNS', m.group(0))       # 2. [[ascuns de om]]
         for m in EMAIL.finditer(t): adauga(m.start(), m.end(), 'EMAIL', m.group(0).lower())  # 3.
         for m in IBAN.finditer(t):                                                            # 4.
@@ -307,7 +379,7 @@ class Mascare:
             if not cuvinte: continue
             if m.group(1).startswith('I') and (len(nume) < 2 or len(cuvinte) != len(nume)): continue   # II / IF: Nume Prenume II
             cheie = ' '.join(norm(a[2]) for a in nume)
-            if cheie in NEMASCATE: continue
+            if cheie_entitate(' '.join(a[2] for a in nume)) in NEMASCATE: continue   # numele ÎNTREG, nu un cuvânt din el
             start = prefix if prefix is not None else nume[0][0]
             if prefix is None:
                 p = PREFIX_FIRMA.search(t[max(0, start - 12):start])
@@ -345,7 +417,9 @@ class Mascare:
                 s, e, tok = cuv[i]
                 baza = _desparte(tok)
                 n, k = norm(baza), self.d.persoana(baza)
-                if not (_majuscula(baza) and n not in OPRIRE and n not in COMUNE
+                # r2 (review P1-1): după un titlu, un cuvânt din COMUNE se ascunde și el („dl. Ion”, „ing. Mare”) — titlul e
+                # contextul care lipsește când cuvântul e singur; entitățile publice dintr-un cuvânt nu sunt persoane
+                if not (_majuscula(baza) and n not in OPRIRE and n not in NEMASCATE_UN_CUVANT
                         and (_titlu_caz(baza) or k is not None or (_toate_mari(baza) and len(baza) >= 6))): break
                 luat.append((s, s + len(baza), k or n))
                 if baza != tok or i + 1 >= len(cuv) or not SPATIU.fullmatch(t, e, cuv[i + 1][0]): break
@@ -383,25 +457,43 @@ class Mascare:
         speță, context): acolo o etichetă scrisă de mână se ascunde și ea (dus-întorsul rămâne exact)."""
         t = str(text or '')
         out, poz = [], 0
-        for s, e, cat, cheie in self._detecteaza(t, protejeaza):
+        for s, e, cat, cheie, asem in self._detecteaza(t, protejeaza):
             out.append(t[poz:s])
-            out.append(self._eticheta(cat, cheie, t[s:e]))
+            et = self._eticheta(cat, cheie, t[s:e])
+            if asem: (self._asem_masina if protejeaza else self._asem_om).add(et)
+            out.append(et)
             poz = e
             self.inlocuiri += 1
         out.append(t[poz:])
-        return TextMascat(''.join(out), _SIGILIU)
+        x = TextMascat(''.join(out), _SIGILIU)
+        self._produse[id(x)] = x                    # obiectul rămâne viu cât trăiește mascarea → id-ul nu se refolosește
+        return x
+
+    def a_produs(self, x):
+        """True DOAR pentru un TextMascat produs de ACEASTĂ instanță (același obiect). Un TextMascat făcut cu str.__new__ sau
+        produs de mascarea altei spețe → False (garda din intrebari_worker.py refuză)."""
+        return type(x) is TextMascat and self._produse.get(id(x)) is x
 
     def demascheaza(self, text):
-        """Etichetele puse la loc (DOAR pentru textul afișat utilizatorului). O formă necunoscută a unei etichete cunoscute
-        („[PERSOANA_1_F9]”) primește forma de bază; o etichetă necunoscută rămâne cum e."""
-        def inloc(m):
-            cat, nr, f = m.group(1).upper(), m.group(2), m.group(3)
-            e = f'[{cat}_{nr}_F{f}]' if f else f'[{cat}_{nr}]'
-            return self.tabel.get(e, self.tabel.get(f'[{cat}_{nr}]', m.group(0)))
-        return ETICHETA.sub(inloc, str(text or ''))
+        """Etichetele EMISE, scrise exact, puse la loc. Orice altceva (etichetă necunoscută, litere mici, formă inventată
+        „[PERSOANA_1_F9]”) rămâne cum e — nu se repară nimic. Pentru publicare se folosește demascheaza_sigur()."""
+        return ETICHETA.sub(lambda m: self.tabel.get(m.group(0), m.group(0)), str(text or ''))
+
+    def demascheaza_sigur(self, text):
+        """(afișat, None) sau (None, motiv) — pasul dinaintea publicării (review r2 P1-4). Refuz dacă în textul modelului rămâne
+        ORICE secvență de forma unei etichete (ASEMANATOR) care nu e EXACT o etichetă emisă ('eticheta_neemisa': „[PERSOANA_999]”,
+        „[persoana_1]”, „[PERSOANA_1_F9]”, „PERSOANA_1”), sau o etichetă emisă pentru o „aproape etichetă” venită din textul
+        modelului / al surselor, nu al omului ('eticheta_din_model'). Ce a scris OMUL de forma unei etichete a fost ascuns la
+        mascare ([ASCUNS_n]) și se pune la loc exact — rămâne al lui."""
+        t = str(text or '')
+        for m in ASEMANATOR.finditer(t):
+            e = m.group(0)
+            if not self._emisa(e): return None, 'eticheta_neemisa'
+            if e in self._asem_masina and e not in self._asem_om: return None, 'eticheta_din_model'
+        return self.demascheaza(t), None
 
     def emise_in(self, text):
-        """Câte etichete EMISE de această mascare apar în text (după demascare trebuie să fie 0 — garda „demascare lipsă”)."""
+        """Câte etichete EMISE de această mascare apar în text."""
         return sum(1 for m in ETICHETA.finditer(str(text or '')) if self._emisa(m.group(0)))
 
 
