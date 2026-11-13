@@ -61,6 +61,19 @@ describe('sursele de nume (review P1-1: furnizorii și ceilalți terți lipseau)
     expect(r.firme).toEqual(expect.arrayContaining(['Alfa Construct SRL', 'Gamma Feronerie SRL', 'Omega', 'Omega Utilaje SRL']))
     expect(r.cui).toEqual(expect.arrayContaining(['RO12345678', '34567890', 'RO 45678901']))
   })
+  it('r3: localitățile vin DOAR din red_uat (tabel deja citit): numele UAT și satele programate, separat de nume', async () => {
+    const { pagina, cereri } = bazaFalsa({
+      employees: [{ id: 1, name: 'POPESCU ION' }],
+      red_uat: [{ id: uuid(1), nume: 'Berceni', sate_zi1: 'Corlatesti, Berceni', sate_zi2: null, sate_zi3: '', reprezentant_uat_nume: 'Dobre Paul' }],
+    })
+    const r = await numeDinPlatforma(pagina)
+    expect(r.localitati.sort()).toEqual(['Berceni', 'Corlatesti, Berceni'])
+    expect(r.persoane).toContain('Dobre Paul')
+    expect(r.persoane).not.toContain('Berceni')
+    expect(SURSE_NUME.filter(s => s.localitati).map(s => s.tabel)).toEqual(['red_uat'])
+    expect(cereri.find(c => c.tabel === 'red_uat').col).toBe('id, reprezentant_uat_nume, nume, sate_zi1, sate_zi2, sate_zi3')
+    expect((await numeDinPlatforma(bazaFalsa({ employees: [{ id: 1, name: 'X' }] }).pagina)).localitati).toEqual([])
+  })
   it('doar coloane de nume / CUI — niciodată telefon, e-mail, CNP, IBAN, adresă', () => {
     for (const s of SURSE_NUME) {
       expect(coloane(s)).not.toMatch(/telefon|email|e_mail|cnp|iban|adresa|data_nasterii|parola|token/i)

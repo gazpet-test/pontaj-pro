@@ -102,11 +102,12 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    dacă pică → o singură reparare (cu motivul fiecărei linii); ce rămâne nesusținut se scoate (`curata_raspuns`). Sursele citate
    trec verificarea finală pe setul care se salvează (`verifica_surse_finale`: max 30, ID-uri unice dintre cele trimise,
    domenii / căi valide, < 80 KB) → `surse`.
-3b. **Regula B (decizia owner-ului 13.11.2026)** — `cercetare.aplica_regula_b`, ULTIMUL pas înainte de publicare (după
-   `curata_raspuns`): „Da” / „Nu” rămân doar dacă un rând cu marcajul sursei are un citat între ghilimele care trece pragul
-   `citat_sustinut`: ≥ `CITAT_MIN_CUVINTE` (6) cuvinte; ≥ `CITAT_PRAG` (90%) din ele, în aceeași ordine (cea mai lungă subsecvență
-   comună pe cuvinte normalizate), într-o SINGURĂ propoziție a sursei marcate; aceleași cifre (semn + număr + unitate), aceeași
-   negație, restricțiile propoziției păstrate (`restrictii_acoperite`). Altfel prima linie devine `INCERT_REGULA_B` și se salvează
+3b. **Regula B (decizia owner-ului 13.11.2026; r3)** — `cercetare.aplica_regula_b`, ULTIMUL pas înainte de publicare (după
+   `curata_raspuns`): „Da” / „Nu” rămân doar dacă un rând cu marcajul sursei are un citat între ghilimele IDENTIC (`forma_citat`:
+   fără majuscule / diacritice / ghilimele, liniuțe uniformizate, spații comprimate, fără punctuația de la capete) cu o propoziție
+   ÎNTREAGĂ a sursei marcate (`propozitii_citat`: „;” și rândul simplu nu despart, abrevierile nu despart) și are ≥
+   `CITAT_MIN_CUVINTE` (6) cuvinte — `citat_sustinut`. r3: fără prag de 90% și fără liste de negații / modale (o listă de opuși nu
+   se termină). Limita declarată: o excepție din ALTĂ propoziție a sursei nu e văzută. Altfel prima linie devine `INCERT_REGULA_B` și se salvează
    TOATE sursele consultate (ecranul le pune imediat sub verdict, „Surse alăturate”); la „Da” / „Nu” — doar cele citate. Un „Da” /
    „Nu” fără citat cere întâi repararea (`cere_citat` → `mesaj_reparare(..., fara_citat=True)`). Portarea JS (`aplicaRegulaB` în
    `src/intrebariSurse.js`) are aceleași cazuri (`teste_regula_b.json`).
@@ -133,11 +134,16 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
 
 ## Ce ajunge la furnizorul modelului (Anthropic) — decizia owner-ului 13.11.2026 (A: mascarea numelor)
 Pe înțelesul ownerului: `docs/intrebari/MASCARE_SI_VERDICT.md` (ce pleacă / ce nu, limite, pornire, fișa a–e). Tehnic:
-- **Lista de nume** (angajați `employees.name`, terți `beneficiari.nume` / `contact_nume` / `cif`): edge-ul o dă workerului la
-  pornire (`{"actiune": "nume"}`, keyset pe id, fără tăiere tăcută). Stă doar în memorie (`mascare.Dictionar`). Fără ea →
-  `nume_indisponibile` în jurnal și nicio preluare (fail closed).
-- **Mascarea** (`mascare.Mascare`, câte un obiect pe preluare): titlul, speța, contextul se maschează primele (în ordinea din
-  previzualizarea ecranului), apoi sursele; etichete stabile `[PERSOANA_1]`, `[FIRMA_1]`, `[CNP_1]`, `[CUI_1]`, `[TELEFON_1]`,
+- **Lista de nume** (toate sursele din `logic.js` `SURSE_NUME`; r3: plus `localitati` din `red_uat`, care NU se ascund): edge-ul
+  o dă workerului la pornire (`{"actiune": "nume"}`, keyset pe id, fără tăiere tăcută). Stă doar în memorie (`mascare.Dictionar`).
+  Fără ea → `nume_indisponibile` în jurnal și nicio preluare (fail closed). r3: intrările fără valoare de identificare se aruncă
+  la încărcare (`_firma_fara_valoare`, `FARA_VALOARE`) și se numără: jurnalul de pornire are `nume_incarcate` cu
+  `Dictionar.statistici()` (doar numere).
+- **Mascarea** (`mascare.Mascare`, câte un obiect pe preluare): r3 — întâi `invata(titlu, speță, context)` (numele recunoscute
+  într-unul se ascund în toate: `_propaga`), apoi titlul, speța, contextul se maschează (în ordinea din previzualizarea ecranului),
+  apoi sursele. r3: regula tulpinii (`_componenta`, `TERMINATII`), firmele din listă în orice scriere (`_firme_lista`, `GAP_FIRMA`),
+  entitățile publice rezervate (`_publice`), localitățile după marcaj (`_localitati_marcate`) sau cunoscute, caracterele de format
+  ignorate la detecție (`_fara_format`), forma largă de etichetă din textul omului ascunsă (`_larg`); etichete stabile `[PERSOANA_1]`, `[FIRMA_1]`, `[CNP_1]`, `[CUI_1]`, `[TELEFON_1]`,
   `[EMAIL_1]`, `[IBAN_1]`, `[NR_AUTO_1]`, `[ASCUNS_1]`; altă formă scrisă a aceleiași entități = `_F2`, `_F3`. Tabelul etichetă →
   text e doar în obiect; jurnalul primește `contoare()` (câte valori pe categorie) și `inlocuiri`.
 - **Un singur drum spre furnizor**: `cere()` maschează fiecare mesaj → `apel(cheie, corp, mascare)` rulează
@@ -149,7 +155,8 @@ Pe înțelesul ownerului: `docs/intrebari/MASCARE_SI_VERDICT.md` (ce pleacă / c
 - **Demascarea** doar pe `raspuns_md` (textul afișat), STRICTĂ (r2): `Mascare.demascheaza_sigur` pune la loc doar etichetele emise,
   exacte; orice „aproape etichetă” rămasă (`[PERSOANA_999]`, `[PERSOANA_1_F9]`, `[persoana_1]`, `PERSOANA_1`) sau o etichetă pusă pe
   o „aproape etichetă” a modelului → eroare, nimic publicat (`motiv: demascare`, `detaliu: eticheta_neemisa` /
-  `eticheta_din_model`; textul modelului NU intră în jurnal). Dacă textul avea etichete emise și a ieșit identic → „Eroare internă
+  `eticheta_din_model`; textul modelului NU intră în jurnal). r3: plus detectorul LARG (`_larg`, pe textul fără spații albe /
+  invizibile, cu majuscule): orice prefix de etichetă + cifre care nu e începutul unei etichete emise exacte → `eticheta_rupta`. Dacă textul avea etichete emise și a ieșit identic → „Eroare internă
   la pregătirea răspunsului” (`detaliu: demascare_lipsa`).
 - **Entitățile publice vizibile** (decizia owner-ului 13.11.2026): lista închisă din `nemascate.json` (singurul loc; citită și de
   `src/intrebariMascare.js`), potrivire pe numele întreg. Fișier lipsă / stricat → `import mascare` pică, workerul nu pornește.
@@ -197,13 +204,15 @@ serverele lui și pot fi păstrate o perioadă limitată.
 5. Întrebarea id 1 NU se reia automat: ownerul apasă „🔁 Reia cu cercetare” pe ea, după pașii 1–4.
 6. `registru_automatizari` + rândul din `public.automatizari`: fișa nouă (web pe domenii oficiale, Opus) — CLAUDE.md pct. 7.
 
-### Actualizarea „mascare + regula B” (13.11.2026, r2) — fără migrare, fără secrete noi
+### Actualizarea „mascare + regula B” (13.11.2026, r2 / r3) — fără migrare, fără secrete noi
 Pașii exacți, în ordine, sunt în `docs/intrebari/MASCARE_SI_VERDICT.md` („Pașii de pornire”). Pe scurt: **workerul OPRIT și
 verificat oprit ca prim pas** (edge nou + worker vechi ar trimite nemascat), merge, verificarea coloanelor `SURSE_NUME` în
 information_schema, deploy edge v3 (`index.ts` + `logic.js`), proba acțiunii `nume` (secret → 200, anon / JWT / secret greșit →
 401), copierea `intrebari_worker.py`, `cercetare.py`, **`mascare.py`**, **`nemascate.json`** (noi), `vocabular_web.json`,
-`corpus_manifest.json` cu sha256 comparat, testele Python pe `main`, abia apoi workerul repornit + proba cu nume inventate, apoi
-registrul.
+`corpus_manifest.json` cu sha256 comparat, testele Python pe `main`, apoi (r3) **testul de fum cu task-ul încă dezactivat** (o
+rulare pornită de mână, coada verificată), abia apoi reactivarea rulării periodice, apoi registrul. Dovada „workerul e oprit” =
+task dezactivat + niciun proces al lui + lacătul de sistem liber (comenzile sunt în document); fișierele / vechimea jurnalului nu
+dovedesc nimic.
 
 ## Verificare după livrare (teste negative, într-o tranzacție cu ROLLBACK)
 Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utilizator FĂRĂ cheia de modul și pentru autor:
@@ -237,7 +246,10 @@ al echipei Paw).
 - `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariMascare.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs scripts/intrebari/interogari.test.mjs scripts/intrebari_cercetare_amprente.test.js`
 - 13.11.2026: mascarea are cazurile comune `teste_mascare.json` (Python `test_mascare.py` ↔ vitest `src/intrebariMascare.test.js`,
   plus aceleași liste OPRIRE / COMUNE / TITLURI în ambele și `nemascate.json` citit de amândouă), regula B are
-  `teste_regula_b.json` (`test_cercetare.py` ↔ `src/intrebariSurse.test.js`; r2: alinierea inversoarelor + mutantul „doar LCS”).
+  `teste_regula_b.json` (`test_cercetare.py` ↔ `src/intrebariSurse.test.js`; r3: citat identic cu o propoziție întreagă + mutantul
+  „vechiul prag de 90%”, forma de comparare și despărțirea propozițiilor comune). r3, mascarea: cazurile recenzentului și căile
+  legitime în `teste_mascare.json` (tulpina, firmele în orice scriere, propagarea, localitățile, invizibilele, etichetele rupte,
+  intrările aruncate), mutanți pe fiecare regulă (`MutantiR3`), publicarea pe traseul complet `proceseaza()` în `test_worker.py`.
   Garda: `test_mascare.py` (tipul `TextMascat` + proveniența pe instanță cu mutant, AST — drumul unic spre furnizor, refuzurile
   gărzii, demascarea strictă) și `test_worker.py` (nimic din valorile sensibile în nicio cerere, atașamentele nu pleacă, jurnalul
   fără valori, mutanții „apel nemascat” / „tip falsificat” / „altă speță” / „demascare lipsă”, demascarea parțială nu se publică,

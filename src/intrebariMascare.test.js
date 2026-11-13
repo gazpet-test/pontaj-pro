@@ -1,16 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { Dictionar, Mascare, previzualizare, ascundeSelectia, bucatiMascate, dictionarDinRanduri, NEMASCATE, incarcaNemascate, cheieEntitate,
-  eAsemanator } from './intrebariMascare.js'
+  eAsemanator, larg } from './intrebariMascare.js'
 
 // Aceleași cazuri ca worker/intrebari-tehnice/test_mascare.py (paritate Python ↔ JS, L19). Date INVENTATE.
-const T = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_mascare.json', 'utf8'))
-const DICT = new Dictionar(T.dictionar.persoane, T.dictionar.firme, T.dictionar.cui)
+// {NBSP} / {ZW} / {SHY} din fixture → caracterele reale (ca invizibile() din test_mascare.py)
+const NBSP = String.fromCharCode(0xa0), ZW = String.fromCharCode(0x200b), SHY = String.fromCharCode(0xad)
+const T = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_mascare.json', 'utf8'),
+  (k, v) => typeof v === 'string' ? v.replaceAll('{NBSP}', NBSP).replaceAll('{ZW}', ZW).replaceAll('{SHY}', SHY) : v)
+const DICT = new Dictionar(T.dictionar.persoane, T.dictionar.firme, T.dictionar.cui, T.dictionar.localitati)
+const DICT_FARA_LOCALITATI = new Dictionar(T.dictionar.persoane, T.dictionar.firme, T.dictionar.cui)
+const dictionarul = c => c.dictionar_gol ? null : c.fara_localitati ? DICT_FARA_LOCALITATI : DICT
 
 describe('mascarea — cazurile comune cu workerul', () => {
   for (const c of T.cazuri) {
     it(c.nume, () => {
-      const m = new Mascare(c.dictionar_gol ? null : DICT)
+      const m = new Mascare(dictionarul(c))
+      if (c.invata) m.invata(...c.texte)
       const mascate = c.texte.map(t => m.mascheaza(t, false))
       expect(mascate).toEqual(c.mascate)
       expect(m.contoare()).toEqual(c.contoare)
@@ -34,10 +40,36 @@ describe('mascarea — proprietăți', () => {
       'ion.popescu@exemplu.ro', 'RO49 AAAA', '12345678', '87654321', '7654321', '23456789', 'PH 12 ABC', 'Vasilescu', 'Georgescu', 'Zbârcea',
       'ȚĂRANU', 'Ţăranu', 'Dumitrescu', 'Delta Proiect']
     for (const c of T.cazuri) {
-      if (c.nume.startsWith('text fără nume') || c.dictionar_gol) continue   // fără dicționar, numele necunoscute rămân (limita spusă în ecran)
-      const m = new Mascare(c.dictionar_gol ? null : DICT)
+      // fără dicționar, numele necunoscute rămân (limita spusă în ecran); „text fără nume” și „tulpina” au intenționat cuvinte care
+      // doar seamănă cu un nume („Popescuțu”) și rămân
+      if (c.nume.startsWith('text fără nume') || c.nume.startsWith('r3: tulpina') || c.dictionar_gol) continue
+      const m = new Mascare(dictionarul(c))
+      if (c.invata) m.invata(...c.texte)
       for (const x of c.texte.map(t => m.mascheaza(t, false))) for (const s of sensibile) expect(x.includes(s), `${s} în „${x}”`).toBe(false)
     }
+  })
+  it('r3: detectorul larg — aceleași intervale ca în test_mascare.py', () => {
+    for (const k of T.larg.cazuri) expect(larg(k.text), JSON.stringify(k.text)).toEqual(k.spatii)
+  })
+  it('r3: intrările fără valoare se aruncă și se numără (aceleași numere ca în test_mascare.py)', () => {
+    const a = T.aruncate
+    const d = new Dictionar(a.persoane, a.firme, [], a.localitati)
+    expect(d.statistici()).toEqual(a.statistici)
+    expect(new Mascare(d).mascheaza(a.text, false)).toBe(a.mascat)
+  })
+  it('r3: etichetele rupte ale recenzentului nu se publică', () => {
+    const m = new Mascare(DICT)
+    m.mascheaza('A sunat Popescu Ion de la Alfa Construct SRL.', false)
+    for (const x of ['[PERSOANA_\n999]', `[PERSOANA_${NBSP}1]`, '[PERSOANA_1] și [PERSOANA_\n1]', '[PERS\nOANA_1]', `[PERSOANA${ZW}_1]`,
+      '[PERSOANA_1]\n[FIRMA_\n1]', '[PERSOANA_\r\n1]', 'firma 2', 'CUI 12345678'])
+      expect(m.demascheazaSigur(`Da — ${x}.`), x).toEqual({ afisat: null, motiv: 'eticheta_rupta' })
+    for (const x of ['Vezi [C1] și [W2].', 'Persoana fizică [1]', 'Cnp-ul lipsește', 'Se confirma 2 bar.', 'Oricui 3 ore.'])
+      expect(m.demascheazaSigur(x).motiv, x).toBe(null)
+  })
+  it('r3: previzualizarea face pre-trecerea ca workerul (un nume din context se ascunde și în titlu)', () => {
+    const p = previzualizare({ titlu: 'Ion a cerut avizul', intrebare: 'Cine semnează?', context: 'Ion Mare, diriginte' }, DICT)
+    expect(p.titlu).toBe('[PERSOANA_1] a cerut avizul')
+    expect(p.context).toBe('[PERSOANA_1_F2], diriginte')
   })
   it('aceeași valoare în altă spețe primește eticheta de la zero (tabelul e per speță)', () => {
     const a = new Mascare(DICT), b = new Mascare(DICT)
@@ -146,7 +178,7 @@ describe('aceleași liste în mascare.py și intrebariMascare.js (L19)', () => {
   const py = readFileSync('worker/intrebari-tehnice/mascare.py', 'utf8')
   const js = readFileSync('src/intrebariMascare.js', 'utf8')
   const lista = (sursa, re) => { const m = sursa.match(re); expect(m, String(re)).not.toBe(null); return m[1].replace(/[|]/g, ' ').split(/\s+/).filter(Boolean).sort() }
-  for (const nume of ['OPRIRE', 'COMUNE', 'GENERICE_FIRMA', 'TITLURI']) {
+  for (const nume of ['OPRIRE', 'COMUNE', 'GENERICE_FIRMA', 'TITLURI', 'FARA_VALOARE', 'MARCAJE_LOCALITATE']) {
     it(nume, () => {
       const p = lista(py, new RegExp(`${nume} = (?:sorted\\()?(?:frozenset\\()?'''([\\s\\S]*?)'''`))
       const j = lista(js, new RegExp(`${nume} = (?:new Set\\(\\[\\.\\.\\.setDin\\(|setDin\\(|new Set\\()?\`([\\s\\S]*?)\``))
@@ -168,5 +200,14 @@ describe('aceleași liste în mascare.py și intrebariMascare.js (L19)', () => {
     // eticheta exactă e sensibilă la majuscule în ambele (r2: fără toleranță)
     expect(js).toContain("new RegExp(ETICHETA_SURSA, 'gu')")
     expect(py).toMatch(/^ETICHETA = re\.compile\(r'.*'\)$/m)
+    // r3: terminațiile (mulțimea închisă), pragul tulpinii, prefixele detectorului larg, abrevierile de localitate
+    expect(js).toContain("const TERMINATII = ['ului', 'ilor', 'ule', 'lui', 'lor', 'ul', 'le', 'ei', 'ii', 'e', 'i']")
+    expect(py).toContain("TERMINATII = ('ului', 'ilor', 'ule', 'lui', 'lor', 'ul', 'le', 'ei', 'ii', 'e', 'i')")
+    expect(js).toContain('const COMPONENTA_MIN_TULPINA = 4')
+    expect(py).toContain('COMPONENTA_MIN_TULPINA = 4')
+    expect(js).toContain("'(?:PERSOANA|FIRMA|CNP|CUI|TELEFON|E-?MAIL|IBAN|NR[_.-]?AUTO|ASCUNS)[_#.:()\\\\[\\\\]' + LINIUTE_LARG + '-]*[0-9]+'")
+    expect(py).toContain("r'(?:PERSOANA|FIRMA|CNP|CUI|TELEFON|E-?MAIL|IBAN|NR[_.-]?AUTO|ASCUNS)[_#.:()\\[\\]' + _LINIUTE_LARG + r'-]*[0-9]+'")
+    expect(js).toContain("new Set(['com', 'mun', 'loc', 'jud'])")
+    expect(py).toContain("frozenset(('com', 'mun', 'loc', 'jud'))")
   })
 })

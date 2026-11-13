@@ -6,8 +6,8 @@
 // ════════════════════════════════════════════════════════════════
 // 13.11.2026 (deciziile owner-ului): (A) numele de persoane / firme și datele personale se ASCUND înainte de trimiterea la AI —
 // mascarea reală o face workerul (worker/intrebari-tehnice/mascare.py); ecranul arată dinainte ce ar pleca (intrebariMascare.js),
-// iar colegul poate ascunde manual un cuvânt; atașamentele NU se mai trimit la AI. (B) „Da” / „Nu” doar cu citat aproape cuvânt cu
-// cuvânt dintr-o sursă; altfel „Incert”, cu sursele alăturate.
+// iar colegul poate ascunde manual un cuvânt; atașamentele NU se mai trimit la AI. (B, r3) „Da” / „Nu” doar cu un citat identic cu o
+// propoziție întreagă a unei surse; altfel „Incert”, cu sursele alăturate.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -65,7 +65,7 @@ function Surse({ surse, alaturate }) {
                        ...(alaturate ? { border:`1px solid ${G.yellow}`, borderRadius:8, padding:10 } : {}) }}>
       <div style={{ fontWeight:700, fontSize:14, marginBottom:6 }}>{alaturate ? 'Surse alăturate — citește-le tu' : 'Surse'}</div>
       {alaturate && <div style={{ fontSize:12, color:G.muted, marginBottom:6 }}>
-        Nicio sursă nu spune aproape cuvânt cu cuvânt același lucru, deci nu există un „Da” sau „Nu” sigur. Acestea sunt sursele consultate.</div>}
+        Niciun citat nu reproduce exact o propoziție întreagă dintr-o sursă, deci nu există un „Da” sau „Nu” sigur. Acestea sunt sursele consultate.</div>}
       <ol style={{ margin:0, paddingLeft:0, listStyle:'none', fontSize:13 }}>{surse.map(s => (
         <li key={s.id} style={{ margin:'0 0 8px' }}>
           <span style={{ color:G.acc, fontWeight:700, marginRight:6 }}>[{s.id}]</span>
@@ -302,7 +302,7 @@ export default function IntrebariTehnice({ profile }) {
           {' '}Numele de persoane și firme și datele personale se ascund înainte de trimiterea la AI (vezi previzualizarea de sub speță); atașamentele nu se trimit.
           {v2 === true ? <>
             {' '}Fiecare temei are un marcaj de sursă ([C…] = document intern de cercetare, [W…] = site oficial) — deschide sursa înainte să te bazezi pe ea.
-            „Da” sau „Nu” apar doar când o sursă spune aproape cuvânt cu cuvânt același lucru (citatul e în răspuns); altfel verdictul e „Incert”, cu sursele alăturate.
+            „Da” sau „Nu” apar doar când răspunsul citează exact o propoziție întreagă dintr-o sursă (citatul e în răspuns); altfel verdictul e „Incert”, cu sursele alăturate.
             Ce n-a fost găsit apare ca „Nu am găsit sursa oficială”.
             La răspunsurile mai vechi, fără surse, verifică temeiurile marcate „[DE VERIFICAT]”. Decizia e a ta.
           </> : <>

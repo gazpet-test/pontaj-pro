@@ -16,7 +16,7 @@ REGULA_B = json.loads((AICI / 'teste_regula_b.json').read_text(encoding='utf-8')
 
 
 class RegulaB(unittest.TestCase):
-    """Decizia owner-ului 13.11.2026 (B): Da / Nu doar cu citat aproape cuvânt cu cuvânt; altfel Incert. Aceleași cazuri în vitest."""
+    """Decizia owner-ului 13.11.2026 (B; r3): Da / Nu doar cu citat IDENTIC cu o propoziție întreagă; altfel Incert. Aceleași cazuri în vitest."""
 
     def test_cazuri_comune_cu_vitest(self):
         for caz in REGULA_B['cazuri']:
@@ -28,46 +28,49 @@ class RegulaB(unittest.TestCase):
                 self.assertEqual(c.cere_citat(caz['text'], REGULA_B['surse']), caz['cere_citat'])
                 self.assertIn(c.tip_verdict(text), ('da', 'nu', 'incert', None))        # după regulă: doar trei verdicte
 
-    def test_mutant_fara_aliniere_lasa_da_rasturnat(self):
-        """r2 (review P1-3): cu verificarea veche (doar LCS) cazurile marcate `mutant_vechi_trece` rămâneau „Da” / „Nu” —
-        testul de mai sus le prinde DOAR prin aliniere (mutantul înlocuiește _aliniere cu _lcs)."""
-        vechi = c._aliniere
+    def test_mutant_prag_90_lasa_da_rasturnat(self):
+        """r3 (review P1-2): vechea regulă („≥ 90% din cuvintele citatului, în ordine, într-o propoziție”) lăsa „Da” / „Nu” pe cazurile
+        marcate `mutant_prag_trece` (exclus → inclus, minimă → maximă, înainte → după, alt cuvânt) — testul comun de mai sus le prinde
+        DOAR prin identitate (mutantul înlocuiește citat_sustinut cu pragul de 90%)."""
+        def lcs(a, b):
+            prev = [0] * (len(b) + 1)
+            for x in a:
+                cur = [0]
+                for j, y in enumerate(b): cur.append(prev[j] + 1 if x == y else max(prev[j + 1], cur[j]))
+                prev = cur
+            return prev[-1]
+
+        def prag_90(citat, ids, harta):
+            q = c.CUVINTE_CITAT.findall(c.forma_citat(citat))
+            if len(q) < c.CITAT_MIN_CUVINTE: return False
+            return any(lcs(q, c.CUVINTE_CITAT.findall(c.forma_citat(p))) >= 0.9 * len(q)
+                       for i in ids if i in harta for p in c.propozitii_citat(harta[i].partition('\n')[2]))
+        vechi = c.citat_sustinut
         try:
-            c._aliniere = c._lcs
-            marcate = [k for k in REGULA_B['cazuri'] if k.get('mutant_vechi_trece')]
-            self.assertGreaterEqual(len(marcate), 3)
+            c.citat_sustinut = prag_90
+            marcate = [k for k in REGULA_B['cazuri'] if k.get('mutant_prag_trece')]
+            self.assertGreaterEqual(len(marcate), 6)
             for caz in marcate:
                 with self.subTest(caz['nume']):
                     self.assertEqual(c.aplica_regula_b(caz['text'], REGULA_B['surse'])[1], 'citat')
         finally:
-            c._aliniere = vechi
+            c.citat_sustinut = vechi
 
-    def test_aliniere(self):
-        q = 'documentatia contine avizul si raportul nu contine verificarile'.split()
-        p = 'documentatia nu contine avizul si raportul contine verificarile'.split()
-        self.assertEqual(c._lcs(q, p), 7)
-        self.assertLess(c._aliniere(q, p), 7 * 0.9)                                  # negația nu se poate muta
-        self.assertEqual(c._aliniere(p, p), len(p))
-        self.assertEqual(c._aliniere('a b c d'.split(), 'x nu a b c d'.split()), -1)  # negația sursei rămasă afară
-        self.assertEqual(c._aliniere('a b c d'.split(), 'poate a b c d'.split()), 4)   # modal în afara fragmentului
-        self.assertEqual(c._aliniere('a b c d'.split(), 'a b poate c d'.split()), 2)   # modal în mijloc: fragmentul se oprește
-                                                                                        # înaintea lui → 2 din 4, sub prag
-        self.assertEqual(c._aliniere('a b c d'.split(), 'a b c d fara'.split()), -1)
-        for w in ('nu', 'nici', 'niciun', 'nicio', 'niciodata', 'nimic', 'nimeni', 'fara', 'exceptand', 'exceptia', 'decat',
-                  'neconform', 'nepermis', 'neadmis', 'neautorizat'):
-            self.assertEqual(c._inversor(w), 2, w)
-        for w in ('trebuie', 'poate', 'pot', 'obligatoriu', 'optional', 'facultativ', 'interzis', 'interzice', 'admis', 'permite', 'recomandat'):
-            self.assertEqual(c._inversor(w), 1, w)
-        for w in ('necesar', 'nevoie', 'conform', 'proba', 'numai'):
-            self.assertEqual(c._inversor(w), 0, w)
+    def test_forma_si_propozitiile_comune_cu_vitest(self):
+        for intrare, forma in REGULA_B['forme']:
+            self.assertEqual(c.forma_citat(intrare), forma, intrare)
+        for k in REGULA_B['propozitii']:
+            self.assertEqual(c.propozitii_citat(k['text']), k['propozitii'], k['text'])
 
-    def test_pragul_documentat(self):
-        self.assertEqual((c.CITAT_MIN_CUVINTE, c.CITAT_PRAG), (6, 0.9))
-        self.assertEqual(c._lcs('a b c d'.split(), 'a x c d'.split()), 3)
-        self.assertEqual(c._lcs([], ['a']), 0)
+    def test_fara_praguri_si_fara_liste_de_cuvinte(self):
+        """r3: regula nu mai are prag de 90% și nici liste de negații / modale care să decidă."""
+        for nume in ('CITAT_PRAG', 'INVERSOARE_NEGATIE', 'INVERSOARE_MODAL', '_aliniere', '_lcs'):
+            self.assertFalse(hasattr(c, nume), nume)
+        self.assertEqual(c.CITAT_MIN_CUVINTE, 6)
 
     def test_promptul_spune_regula(self):
-        self.assertIn('„Da” sau „Nu” DOAR dacă o sursă din <surse> spune aproape cuvânt cu cuvânt același lucru', c.SISTEM_RASPUNS)
+        self.assertIn('„Da” sau „Nu” DOAR dacă o propoziție întreagă dintr-o sursă din <surse> spune acel lucru', c.SISTEM_RASPUNS)
+        self.assertIn('copiată EXACT, de la începutul propoziției până la punct', c.SISTEM_RASPUNS)
         self.assertIn('Citat [C1]:', c.SISTEM_RASPUNS)
         self.assertIn('[PERSOANA_1]', c.SISTEM_RASPUNS)
         self.assertNotIn('sau „Depinde de …” (ex.', c.SISTEM_RASPUNS)

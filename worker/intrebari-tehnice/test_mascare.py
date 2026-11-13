@@ -10,17 +10,40 @@ import cercetare as C  # noqa: E402
 import mascare as M  # noqa: E402
 import intrebari_worker as W  # noqa: E402
 
-T = json.loads((AICI / 'teste_mascare.json').read_text(encoding='utf-8'))
-DICT = M.Dictionar(T['dictionar']['persoane'], T['dictionar']['firme'], T['dictionar']['cui'])
+def invizibile(x):
+    """{NBSP} / {ZW} / {SHY} din teste_mascare.json → caracterele reale (aceeași funcție în src/intrebariMascare.test.js)."""
+    if isinstance(x, str): return x.replace('{NBSP}', chr(0xa0)).replace('{ZW}', chr(0x200b)).replace('{SHY}', chr(0xad))
+    if isinstance(x, list): return [invizibile(v) for v in x]
+    if isinstance(x, dict): return {k: invizibile(v) for k, v in x.items()}
+    return x
+
+
+T = invizibile(json.loads((AICI / 'teste_mascare.json').read_text(encoding='utf-8')))
+D = T['dictionar']
+DICT = M.Dictionar(D['persoane'], D['firme'], D['cui'], D['localitati'])
+DICT_FARA_LOCALITATI = M.Dictionar(D['persoane'], D['firme'], D['cui'])
 ETICHETA_SCRISA = re.compile(r'\[[A-Za-z_]+_[0-9]')
+
+
+def dictionarul(c):
+    return None if c.get('dictionar_gol') else DICT_FARA_LOCALITATI if c.get('fara_localitati') else DICT
+
+
+def caz(nume):
+    return next(c for c in T['cazuri'] if c['nume'].startswith(nume))
+
+
+def mascate_caz(c):
+    m = M.Mascare(dictionarul(c))
+    if c.get('invata'): m.invata(*c['texte'])
+    return m, [m.mascheaza(t, protejeaza=False) for t in c['texte']]
 
 
 class Paritate(unittest.TestCase):
     def test_cazurile_comune(self):
         for c in T['cazuri']:
             with self.subTest(c['nume']):
-                m = M.Mascare(None if c.get('dictionar_gol') else DICT)
-                mascate = [m.mascheaza(t, protejeaza=False) for t in c['texte']]
+                m, mascate = mascate_caz(c)
                 self.assertEqual(mascate, c['mascate'])
                 self.assertTrue(all(type(x) is M.TextMascat for x in mascate))
                 self.assertEqual(m.contoare(), c['contoare'])
@@ -37,6 +60,16 @@ class Paritate(unittest.TestCase):
     def test_aproape_etichete_comune_cu_vitest(self):
         for s in T['asemanatoare']['da']: self.assertIsNotNone(M.ASEMANATOR.fullmatch(s), s)
         for s in T['asemanatoare']['nu']: self.assertIsNone(M.ASEMANATOR.fullmatch(s), s)
+
+    def test_detectorul_larg_comun_cu_vitest(self):
+        for k in T['larg']['cazuri']:
+            self.assertEqual([list(x) for x in M._larg(k['text'])], k['spatii'], repr(k['text']))
+
+    def test_intrarile_fara_valoare_se_arunca_si_se_numara(self):
+        a = T['aruncate']
+        d = M.Dictionar(a['persoane'], a['firme'], [], a['localitati'])
+        self.assertEqual(d.statistici(), a['statistici'])
+        self.assertEqual(M.Mascare(d).mascheaza(a['text'], protejeaza=False), a['mascat'])
 
     def test_text_fara_nume_neschimbat_si_fara_inlocuiri(self):
         m = M.Mascare(DICT)
@@ -70,8 +103,99 @@ class DemascareStricta(unittest.TestCase):
         self.assertEqual(self.m.demascheaza_sigur('Da — [PERSOANA_1], [FIRMA_1].'), ('Da — Popescu Ion, Alfa Construct SRL.', None))
 
     def test_text_obisnuit_cu_paranteze_nu_e_eticheta(self):
-        for text in ('Vezi [C1] și [W2].', 'CUI 12345678 nu e etichetă', 'Persoana fizică [1]', 'firma 2', 'Cnp-ul lipsește'):
+        for text in ('Vezi [C1] și [W2].', 'Persoana fizică [1]', 'Cnp-ul lipsește', 'Se confirma 2 bar.', 'Oricui 3 ore.'):
             self.assertIsNone(self.m.demascheaza_sigur(text)[1], text)
+
+    def test_compromisul_detectorului_larg(self):
+        """r3: un prefix de etichetă urmat de cifre, scris de model, oprește publicarea chiar dacă e text obișnuit („firma 2”,
+        „CUI 12345678”) — direcția prudentă (în textul OMULUI aceeași formă se ascunde ca [ASCUNS_n] și se pune la loc exact)."""
+        for text in ('CUI 12345678 nu e etichetă', 'firma 2', 'persoana 1 semnează'):
+            self.assertEqual(self.m.demascheaza_sigur(text), (None, 'eticheta_rupta'), text)
+
+    def test_etichetele_rupte_ale_recenzentului(self):
+        """r3 (review P1-5): rând nou / NBSP / lățime zero în etichetă, și combinația etichetă corectă + etichetă ruptă."""
+        for text in ('[PERSOANA_\n999]', '[PERSOANA_' + chr(0xa0) + '1]', '[PERSOANA_1] și [PERSOANA_\n1]', '[PERS\nOANA_1]',
+                     '[PERSOANA' + chr(0x200b) + '_1]', '[PERSOANA_1]\n[FIRMA_\n1]', '[PERSOANA_\r\n1]'):
+            with self.subTest(repr(text)):
+                self.assertEqual(self.m.demascheaza_sigur('Da — ' + text + '.'), (None, 'eticheta_rupta'))
+
+
+class MutantiR3(unittest.TestCase):
+    """r3: fiecare regulă nouă are un mutant care o scoate — cazul comun corespunzător trebuie atunci să pice (testul chiar o prinde)."""
+
+    def pica_cu(self, obiect, nume, inlocuitor, nume_caz):
+        vechi = getattr(obiect, nume)
+        try:
+            setattr(obiect, nume, inlocuitor)
+            c = caz(nume_caz)
+            self.assertNotEqual(mascate_caz(c)[1], c['mascate'], nume)
+        finally:
+            setattr(obiect, nume, vechi)
+        c = caz(nume_caz)
+        self.assertEqual(mascate_caz(c)[1], c['mascate'])                  # fără mutant, cazul trece
+
+    def test_fara_tulpina(self):
+        self.pica_cu(M, '_componenta', lambda n, multime: n if n in multime else None, 'r3: tulpina')
+
+    def test_firme_doar_cu_majuscule(self):
+        vechi = M.Mascare._firme_lista
+        def mutant(self, t, atomi, adauga):
+            return vechi(self, t, [a for a in atomi if a[2][0].isupper() or a[2][0].isdigit()], adauga)
+        self.pica_cu(M.Mascare, '_firme_lista', mutant, 'r3: firmele din dicționar')
+
+    def test_firme_fara_punctuatie_intre_cuvinte(self):
+        self.pica_cu(M, 'GAP_FIRMA', M.GAP_NUME, 'r3: firmele din dicționar')
+
+    def test_fara_propagare(self):
+        self.pica_cu(M.Mascare, '_propaga', lambda self, t, cuv, adauga: None, 'r3: un nume recunoscut o dată')
+
+    def test_fara_pre_trecere(self):
+        self.pica_cu(M.Mascare, 'invata', lambda self, *texte: None, 'r3: un nume recunoscut o dată')
+
+    def test_fara_marcaj_de_localitate(self):
+        self.pica_cu(M.Mascare, '_localitati_marcate', lambda self, t, cuv, adauga: None, 'r3: fără lista de localități')
+
+    def test_fara_lista_de_localitati(self):
+        c = caz('r3: localitățile rămân vizibile')
+        m = M.Mascare(DICT_FARA_LOCALITATI)
+        self.assertNotEqual([m.mascheaza(t, protejeaza=False) for t in c['texte']], c['mascate'])
+
+    def test_fara_entitati_publice_rezervate(self):
+        """Fără rezervare, propagarea / persoanele ar rupe „Gazpet Instal” după ce „Beta Instal Grup” a fost recunoscut."""
+        m = M.Mascare(DICT)
+        self.assertEqual(m.mascheaza('Beta Instal Grup SRL și Apa Nova; Nova; Gazpet Instal.', protejeaza=False),
+                         '[FIRMA_1] și Apa Nova; Nova; Gazpet Instal.')
+        d = M.Dictionar([], ['Nova Grup SRL'], [])
+        self.assertEqual(M.Mascare(d).mascheaza('Nova Grup SRL; Apa Nova a cerut; Nova a livrat.', protejeaza=False),
+                         '[FIRMA_1]; Apa Nova a cerut; [FIRMA_1_F2] a livrat.')
+        vechi = M.Mascare._publice
+        try:
+            M.Mascare._publice = lambda self, t, simpli, adauga: None
+            self.assertEqual(M.Mascare(d).mascheaza('Nova Grup SRL; Apa Nova a cerut; Nova a livrat.', protejeaza=False),
+                             '[FIRMA_1]; Apa [FIRMA_1_F2] a cerut; [FIRMA_1_F2] a livrat.')
+        finally:
+            M.Mascare._publice = vechi
+
+    def test_fara_detector_larg(self):
+        m = M.Mascare(DICT)
+        m.mascheaza('Popescu Ion', protejeaza=False)
+        vechi = M._larg
+        try:
+            M._larg = lambda t: []
+            self.assertIsNone(m.demascheaza_sigur('Da — [PERSOANA_\n999].')[1])           # mutantul publică
+        finally:
+            M._larg = vechi
+        self.assertEqual(m.demascheaza_sigur('Da — [PERSOANA_\n999].'), (None, 'eticheta_rupta'))
+
+    def test_fara_aruncarea_intrarilor_fara_valoare(self):
+        a = T['aruncate']
+        vechi = M._firma_fara_valoare
+        try:
+            M._firma_fara_valoare = lambda tok: not tok
+            d = M.Dictionar(a['persoane'], a['firme'], [], a['localitati'])
+            self.assertNotEqual(M.Mascare(d).mascheaza(a['text'], protejeaza=False), a['mascat'])
+        finally:
+            M._firma_fara_valoare = vechi
 
 
 class TipMascat(unittest.TestCase):

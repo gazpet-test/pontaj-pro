@@ -106,7 +106,7 @@ class Flux(unittest.TestCase):
         self.web = lambda corp: (200, {'content': blocuri_web(interogarea_din(corp)), 'stop_reason': 'end_turn', 'usage': {'input_tokens': 7}})
         self.interogari = '{"interogari": ["responsabil tehnic cu sudura ISCIR", "RTS Popescu Mânăstirea", "probă 6 bar"]}'
         self.stop_interogari = 'end_turn'
-        # regula B: „Da” rămâne doar cu citatul aproape cuvânt cu cuvânt din sursă (aici W1)
+        # regula B (r3): „Da” rămâne doar cu citatul identic cu o propoziție întreagă a sursei (aici W1)
         self.raspuns = f'Da — e cerut [W1].\nCitat [W1]: „{CITAT_W1}”\n- Conform art. 12 din PT C9 [W1].'
 
         def trimite(cheie, corp):
@@ -359,6 +359,81 @@ class Flux(unittest.TestCase):
         self.assertEqual(self.jurnalul()[-1]['detaliu'], 'eticheta_din_model')
         self._eroare()
 
+    # ── r3 (review PR #1086 r2): verificarea publicării pe traseul complet ──
+    def test_r3_nume_flexionat_si_numele_ramas_singur_nu_pleaca(self):
+        """„Popescului” (tulpina) și „Ion” singur în titlu, după ce „Ion Popescu” apare în context (pre-trecerea invata): nimic
+        nu pleacă la furnizor; răspunsul publicat are numele puse la loc."""
+        q = dict(Q, titlu='Ion a cerut avizul', intrebare='Popescului îi revine avizul? Popescule, sună la 0722 123 456.',
+                 context='Ion Popescu, șantier')
+        self.raspuns = 'Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru avizul cerut de [PERSOANA_1].'
+        self.proceseaza(q)
+        for corp in self.apeluri:
+            for s in siruri(corp):
+                for x in ('Popescu', 'Ion a cerut', '0722'): self.assertNotIn(x, s)
+        trimis = [a for a in self.apeluri if a['system'] is C.SISTEM_RASPUNS][0]['messages'][0]['content']
+        self.assertIn('[PERSOANA_1] a cerut avizul', trimis)
+        self.assertIn('[PERSOANA_1_F2] îi revine avizul? [PERSOANA_1_F3], sună', trimis)
+        self.assertIn('avizul cerut de Ion.', self.raspunsul()['raspuns_md'])
+
+    def test_r3_doua_straturi_pentru_numele_ramas_singur(self):
+        """Fără pre-trecere (invata), „Ion” din titlu tot nu pleacă: cere() re-maschează fiecare mesaj, iar până la primul apel
+        contextul a fost deja mascat (numele învățat). Fără propagare (mutantul), „Ion a cerut avizul” pleacă."""
+        q = dict(Q, titlu='Ion a cerut avizul', context='Ion Popescu, șantier')
+        vechi = M.Mascare.invata
+        try:
+            M.Mascare.invata = lambda self, *texte: None
+            self.proceseaza(q)
+            self.assertNotIn('Ion a cerut avizul', json.dumps(self.apeluri, ensure_ascii=False))
+        finally:
+            M.Mascare.invata = vechi
+        self.apeluri.clear()
+        vechi = M.Mascare._propaga
+        try:
+            M.Mascare._propaga = lambda self, t, cuv, adauga: None
+            self.proceseaza(q)
+            self.assertIn('Ion a cerut avizul', json.dumps(self.apeluri[0], ensure_ascii=False))   # mutantul îl trimite
+        finally:
+            M.Mascare._propaga = vechi
+
+    def test_r3_eticheta_rupta_nu_se_publica(self):
+        """Rând nou / NBSP / lățime zero în etichetă, și combinația etichetă corectă + etichetă ruptă: nimic nu se publică, iar
+        textul modelului nu ajunge în jurnal."""
+        for eticheta in ('[PERSOANA_\n999]', '[PERSOANA_1] și [PERSOANA_' + chr(0xa0) + '1]', '[PERS' + chr(0x200b) + 'OANA_1]',
+                         '[FIRMA_\n1]'):
+            with self.subTest(repr(eticheta)):
+                self.scrieri.clear()
+                self.raspuns = f'Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru avizul cerut de {eticheta}.'
+                self.proceseaza(Q_NUME)
+                e = self._eroare()
+                self.assertTrue(e['eroare'].startswith('Răspunsul conține etichete de nume'), e['eroare'])
+                j = self.jurnalul()[-1]
+                self.assertEqual((j['motiv'], j['detaliu']), ('demascare', 'eticheta_rupta'))
+                self.assertNotIn('avizul cerut', json.dumps(self.jurnalul(), ensure_ascii=False))
+                self.assertNotIn('ERSOANA', json.dumps(self.scrieri, ensure_ascii=False))
+
+    def test_r3_mutant_fara_detector_larg_publica_eticheta_rupta(self):
+        vechi = M._larg
+        try:
+            M._larg = lambda t: []
+            self.raspuns = 'Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru avizul cerut de [PERSOANA_\n999].'
+            self.proceseaza(Q_NUME)
+            self.assertIn('[PERSOANA_\n999]', self.raspunsul()['raspuns_md'])                  # mutantul publică
+        finally:
+            M._larg = vechi
+
+    def test_r3_citat_cu_un_cuvant_schimbat_nu_ramane_da(self):
+        """Regula B pe traseul complet: citatul diferă de propoziția sursei printr-un singur cuvânt → nu se publică „Da”."""
+        schimbat = CITAT_W1.replace('atestat', 'autorizat')
+        self.assertNotEqual(schimbat, CITAT_W1)
+        self.raspuns = f'Da — e cerut [W1].\nCitat [W1]: „{schimbat}”\n- Conform art. 12 din PT C9 [W1].'
+        self.proceseaza()
+        r = self.raspunsul()
+        self.assertTrue(r['raspuns_md'].startswith(C.INCERT), r['raspuns_md'])
+        self.assertNotEqual(self.jurnalul()[-1]['regula_b'], 'citat')
+        reparari = [a for a in self.apeluri if a['system'] == C.SISTEM_RASPUNS and len(a['messages']) == 3]
+        self.assertEqual(len(reparari), 1)
+        self.assertIn('o propoziție ÎNTREAGĂ din sursă', reparari[0]['messages'][2]['content'])
+
     # ── decizia B: Da / Nu doar cu citat ──
     def test_da_ferm_fara_citat_cere_reparare_apoi_devine_incert_cu_sursele_alaturate(self):
         self.raspuns = 'Da — RTS atestat ISCIR [C1].\n- Responsabilul tehnic cu sudura (RTS) e atestat ISCIR, art. 12 [C1].'
@@ -419,6 +494,22 @@ class Pornire(unittest.TestCase):
         self.pregateste_pornire((200, {'persoane': ['POPESCU ION'], 'firme': [], 'cui': []}))
         self.assertEqual(W.main(), 0)
         self.assertEqual([a['actiune'] for a in self.apeluri], ['nume', 'preia'])
+
+    def test_r3_jurnalul_de_pornire_numara_intrarile_aruncate(self):
+        """L20: câte nume s-au încărcat și câte intrări fără valoare s-au aruncat — DOAR numere, niciun nume."""
+        self.pregateste_pornire((200, {'persoane': ['POPESCU ION', 'persoana fizica'], 'firme': ['diverse', 'Omega SRL', 'TRANSGAZ SA'],
+                                       'cui': [], 'localitati': ['Berceni']}))
+        self.assertEqual(W.main(), 0)
+        brut = (W.DIR / 'jurnal.jsonl').read_text(encoding='utf-8')
+        j = [json.loads(l) for l in brut.splitlines() if '"nume_incarcate"' in l][0]
+        self.assertEqual({k: j[k] for k in ('persoane', 'firme', 'cui', 'localitati', 'aruncate')},
+                         {'persoane': 2, 'firme': 1, 'cui': 0, 'localitati': 1, 'aruncate': {'persoane': 1, 'firme': 1, 'firme_publice': 1}})
+        for x in ('POPESCU', 'Omega', 'Berceni', 'diverse'): self.assertNotIn(x, brut)
+
+    def test_r3_localitati_cu_forma_gresita_nu_preia_nimic(self):
+        self.pregateste_pornire((200, {'persoane': ['POPESCU ION'], 'firme': [], 'cui': [], 'localitati': 'Berceni'}))
+        self.assertEqual(W.main(), 1)
+        self.assertEqual([a['actiune'] for a in self.apeluri], ['nume'])
 
     def manifest(self, h):
         W.MANIFEST_FILE.write_text(json.dumps({'index_sha256': h}), encoding='utf-8')

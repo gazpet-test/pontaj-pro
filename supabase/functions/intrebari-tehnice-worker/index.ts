@@ -19,6 +19,9 @@
 //   (logic.js, SURSE_NUME — furnizori, subcontractori, terți din contracte, personal extern, deținători Redări …); poarta și
 //   citirea sunt în logic.js, testate în vitest (logic.test.js). Coloanele „verificat: cod” se confirmă în information_schema
 //   ÎNAINTE de deploy (docs/intrebari/MASCARE_SI_VERDICT.md). LIVRARE: edge-ul nou se publică DOAR cu workerul OPRIT.
+//   v3 r3: răspunsul „nume” are și `localitati: string[]` (denumirile UAT + satele programate din red_uat, tabel deja citit) —
+//   workerul NU ascunde un cuvânt care e și localitate cunoscută, scris singur (decizia owner-ului: localitățile rămân vizibile).
+//   index.ts și logic.js se publică ÎMPREUNĂ.
 //
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 //  (a) conținut EXTERN: întrebările și atașamentele utilizatorilor trec prin edge spre worker — nu sunt interpretate aici;

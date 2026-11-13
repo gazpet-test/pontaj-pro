@@ -487,64 +487,59 @@ export function interogariAfisabile(x) {
   return Array.isArray(x) ? x.filter(q => typeof q === 'string' && q.trim()).slice(0, 20).map(q => q.slice(0, 200)) : []
 }
 
-// ─── Regula B (decizia owner-ului 13.11.2026) — aceeași ca aplica_regula_b din cercetare.py (paritate pe teste_regula_b.json).
-// „Da” / „Nu” DOAR cu un citat aproape cuvânt cu cuvânt: ≥ CITAT_MIN_CUVINTE cuvinte, ≥ 90% din ele în aceeași ordine într-o singură
-// propoziție a sursei marcate pe aceeași linie, aceleași cifre (semn + număr + unitate), aceeași negație, restricțiile sursei păstrate.
+// ─── Regula B (decizia owner-ului 13.11.2026; r3) — aceeași ca aplica_regula_b din cercetare.py (paritate pe teste_regula_b.json).
+// „Da” / „Nu” DOAR dacă citatul (formaCitat) e IDENTIC cu o PROPOZIȚIE ÎNTREAGĂ (propozitii) a sursei marcate pe aceeași linie, cu
+// ≥ CITAT_MIN_CUVINTE cuvinte; orice altceva → „Incert”. Fără praguri și fără liste de negații / opuși (r3: o listă nu se termină).
 // Workerul o aplică înainte de publicare; aici e portarea pentru teste (verificarea pe aceleași cazuri) și pentru o eventuală afișare.
 export const CITAT_MIN_CUVINTE = 6
-export const CITAT_PRAG = 0.9
 const CITAT = /[„“"«]([^„“”"«»\n]{8,800})[”“"»]/g
 const CUVINTE_CITAT = /[a-z]+|[0-9]+(?:[.,][0-9]+)?/g
-export const INCERT_REGULA_B = `${INCERT}: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.`
+export const INCERT_REGULA_B = `${INCERT}: niciun citat nu reproduce exact o propoziție întreagă dintr-o sursă — citește sursele alăturate.`
+const CITAT_GHILIMELE = /[„“”"«»‚‘’'`´]/g
+const CITAT_LINIUTE = new RegExp('[' + [0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212].map(c => String.fromCharCode(c)).join('') + ']', 'g')
+const CITAT_PUNCT = / ?([^a-z0-9 ]) ?/g
+const CITAT_CAPETE = /^[.,;:!?…\- ]+|[.,;:!?…\- ]+$/g
 
-function lcs(a, b) {
-  let prev = new Array(b.length + 1).fill(0)
-  for (const x of a) {
-    const cur = [0]
-    b.forEach((y, j) => cur.push(x === y ? prev[j] + 1 : Math.max(prev[j + 1], cur[j])))
-    prev = cur
-  }
-  return prev[prev.length - 1]
+/** Forma de comparare a unui citat și a unei propoziții din sursă (= forma_citat din cercetare.py). */
+export function formaCitat(s) {
+  const n = normalizeaza(s).replace(CITAT_GHILIMELE, '').replace(CITAT_LINIUTE, '-')
+  return n.replace(/\s+/g, ' ').replace(CITAT_PUNCT, '$1').replace(CITAT_CAPETE, '')
 }
 
-// r2 (review PR #1086, P1-3): inversoarele de sens se perechează la aliniere — vezi _aliniere din cercetare.py (aceleași liste).
-const INVERSOARE_NEGATIE = /^(?:nu|nici|niciun\w*|nicio|niciodata|nimic|nimeni|fara|exceptand|exceptia|exceptie|decat|ne(?:admis|permis|conform|autorizat|obligatori|avizat|respect|indeplin|corespunz|valid|accept|receptio)\w*)$/
-const INVERSOARE_MODAL = /^(?:trebui\w*|poate|pot|obligatori\w*|optional\w*|facultativ\w*|interzi\w*|admis\w*|admit\w*|permis\w*|permit\w*|recomand\w*)$/
-const inversor = w => INVERSOARE_NEGATIE.test(w) ? 2 : INVERSOARE_MODAL.test(w) ? 1 : 0
+const SEPARATOR_CITAT = /[.!?]|\n\s*\n/g
 
-/** Câte cuvinte din citat se perechează, cu inversoarele obligatoriu perechate; -1 = nicio aliniere validă (vezi cercetare.py). */
-export function aliniere(q, p) {
-  const NU = -1, m = q.length, n = p.length
-  const tq = q.map(inversor), tp = p.map(inversor)
-  const f = Array.from({ length: m + 1 }, () => Array.from({ length: n + 1 }, () => [NU, NU, NU]))
-  f[0][0][0] = 0
-  for (let i = 0; i <= m; i++) for (let j = 0; j <= n; j++) for (let faza = 0; faza < 3; faza++) {
-    const v = f[i][j][faza]
-    if (v === NU) continue
-    if (faza === 1 && v > f[i][j][2]) f[i][j][2] = v
-    if (i < m && j < n && faza < 2 && q[i] === p[j] && v + 1 > f[i + 1][j + 1][1]) f[i + 1][j + 1][1] = v + 1
-    if (i < m && tq[i] === 0 && v > f[i + 1][j][faza]) f[i + 1][j][faza] = v
-    if (j < n && (tp[j] === 0 || (tp[j] === 1 && faza !== 1)) && v > f[i][j + 1][faza]) f[i][j + 1][faza] = v
+/** Propozițiile ÎNTREGI ale unei surse, pentru regula B (= propozitii_citat din cercetare.py): „;” și rândul simplu NU despart. */
+export function propozitiiCitat(text) {
+  const n = normalizeaza(text)
+  const bucati = []
+  let start = 0
+  for (const m of n.matchAll(SEPARATOR_CITAT)) {
+    const k = m.index
+    if (m[0].length === 1) {
+      if (k + 1 < n.length && !/\s/.test(n[k + 1])) continue
+      if (n[k] === '.') {
+        const cuv = n.slice(start, k).match(/[a-z]+$/)
+        if (cuv && ABREVIERI.has(cuv[0])) continue
+      }
+      const urm = n.slice(k + 1).match(/^\s*(\S)/)
+      if (urm && /[0-9(]/.test(urm[1])) continue
+    }
+    if (INCEPE_CU_RESTRICTIE.test(n.slice(k + m[0].length))) continue
+    bucati.push(n.slice(start, k))
+    start = k + m[0].length
   }
-  return Math.max(...f[m][n])
+  bucati.push(n.slice(start))
+  return bucati.map(p => p.trim()).filter(Boolean)
 }
 
-/** Citatul trece pragul „aproape cuvânt cu cuvânt” față de o propoziție a uneia dintre sursele `ids` (Map-ul din hartaSurse). */
+/** Citatul e IDENTIC cu o propoziție întreagă a uneia dintre sursele `ids` (Map-ul din hartaSurse) — vezi citat_sustinut. */
 function citatSustinut(citat, ids, harta) {
-  const n = normalizeaza(citat)
-  const q = n.match(CUVINTE_CITAT) || []
-  if (q.length < CITAT_MIN_CUVINTE) return false
-  const tok = tokeniNumerici(n)
+  const f = formaCitat(citat)
+  if ((f.match(CUVINTE_CITAT) || []).length < CITAT_MIN_CUVINTE) return false
   for (const i of ids) {
     if (!harta.has(i)) continue
     const v = harta.get(i)
-    for (const p of propozitii(v.slice(v.indexOf('\n') + 1))) {
-      const cp = p.match(CUVINTE_CITAT) || []
-      if (lcs(q, cp) < CITAT_PRAG * q.length) continue
-      const tp = new Set(tokeniNumerici(p))
-      if (aliniere(q, cp) < CITAT_PRAG * q.length || !tok.every(x => tp.has(x))) continue
-      if (restrictiiAcoperite(n, p)) return true
-    }
+    if (propozitiiCitat(v.slice(v.indexOf('\n') + 1)).some(p => formaCitat(p) === f)) return true
   }
   return false
 }

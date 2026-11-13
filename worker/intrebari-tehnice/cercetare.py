@@ -30,9 +30,9 @@ Fluxul (intrebari_worker.py):
      cuvânt. Verdictul Da / Nu / Depinde rămâne DOAR dacă nicio afirmație normativă n-a fost scoasă (runda 4: verdictul se putea
      sprijini pe ea) și rămâne măcar o afirmație cu temei (runda 3, review r2 P2-3); altfel răspunsul devine
      „Incert — de verificat: nu am găsit o sursă care să susțină verdictul propus”.
-  5. regula B (decizia owner-ului 13.11.2026, aplica_regula_b): doar trei verdicte; „Da” / „Nu” rămân DOAR cu un citat aproape
-     cuvânt cu cuvânt dintr-o sursă (≥ 6 cuvinte, ≥ 90% în aceeași ordine într-o propoziție a sursei marcate, aceleași cifre,
-     aceeași negație, restricțiile păstrate); altfel „Incert”, cu sursele consultate alăturate.
+  5. regula B (decizia owner-ului 13.11.2026, aplica_regula_b; r3): doar trei verdicte; „Da” / „Nu” rămân DOAR dacă citatul
+     este IDENTIC (după forma_citat) cu o PROPOZIȚIE ÎNTREAGĂ a sursei marcate pe aceeași linie (≥ 6 cuvinte); altfel „Incert”,
+     cu sursele consultate alăturate.
   Validarea rulează pe textul MASCAT (decizia A, mascare.py): răspunsul modelului față de sursele mascate cu aceleași etichete.
   Limita asumată (runda 4): potrivirea e pe cuvinte, nu pe sens — o parafrază corectă cu alt cuvânt („personal competent” pentru
   sursa „personal calificat”, „impune” pentru sursa „se face”) e respinsă, iar răspunsul devine „Incert” (de verificat de om),
@@ -556,98 +556,77 @@ def curata_raspuns(text, surse):
     return rez, scoase
 
 
-# ─── Regula B (decizia owner-ului 13.11.2026): „Da” / „Nu” DOAR când o sursă spune aproape cuvânt cu cuvânt același lucru ───
+# ─── Regula B (decizia owner-ului 13.11.2026; r3 după review-ul PR #1086): „Da” / „Nu” DOAR cu un citat IDENTIC ───────────
 # Altfel verdictul e „Incert”, iar sursele consultate se salvează (și se afișează) alături. Sunt doar TREI verdicte: Da / Nu / Incert
-# („Depinde de X” devine „Incert — depinde de X”). Pragul „aproape cuvânt cu cuvânt” e MĂSURABIL (citat_sustinut):
+# („Depinde de X” devine „Incert — depinde de X”). r3: fără praguri și fără liste de cuvinte (o listă de negații / opuși nu se
+# termină: exclus / inclus, minim / maxim, peste / sub, înainte / după, lipsește …). Regula (citat_sustinut):
 #   - răspunsul are o linie cu un citat între ghilimele („…” sau "…") și marcajul sursei [Cn] / [Wn] pe aceeași linie;
-#   - citatul are cel puțin CITAT_MIN_CUVINTE cuvinte (cuvânt = șir de litere sau un număr, după normalizare: minuscule, fără
-#     diacritice);
-#   - cel puțin CITAT_PRAG (90%) din cuvintele citatului apar, ÎN ACEEAȘI ORDINE, într-o SINGURĂ propoziție a sursei marcate
-#     (cea mai lungă subsecvență comună pe cuvinte / numărul de cuvinte ale citatului) — deci cel mult 1 cuvânt din 10 diferit;
-#   - cifrele citatului (semn + număr + unitate, tokeni_numerici) apar toate în propoziție, negația e aceeași, iar restricțiile
-#     propoziției (dar / dacă / numai / cu excepția …) sunt în citat (restrictii_acoperite) — un fragment care taie condiția nu trece.
-# Un verdict ferm fără citat sau cu un citat care nu trece pragul → „Incert”. Verificarea e lexicală, ca restul validării: sensul
-# (dacă citatul chiar răspunde la întrebare) îl judecă omul, care vede citatul și sursa alăturate.
+#   - citatul, adus la forma_citat (minuscule, fără diacritice, fără ghilimele, liniuțele „–” / „—” / „−” = „-”, spațiile comprimate
+#     și scoase lângă punctuație, fără punctuația de la capete), este IDENTIC cu o PROPOZIȚIE ÎNTREAGĂ a sursei marcate, adusă la
+#     aceeași formă — niciun cuvânt lipsă, în plus sau schimbat, nicio virgulă schimbată în interior;
+#   - citatul are cel puțin CITAT_MIN_CUVINTE cuvinte (o propoziție mai scurtă → „Incert”: un titlu sau un fragment de 3 cuvinte
+#     nu susține un verdict).
+# Propozițiile sursei sunt cele din propozitii() (aceeași funcție ca la validare, aceeași în JS): se despart la . ! ? ; și rând nou;
+# NU după abrevieri (art. alin. pct. lit. nr. … din ABREVIERI), nici la punctul zecimal sau urmat de cifră / „(”, nici înaintea
+# unei bucăți care începe cu o restricție („; cu excepția …”, „. Dar …”) — acolo propoziția continuă. O enumerare cu „;” are
+# fiecare element ca propoziție. Orice despărțire greșită (o abreviere necunoscută, o enumerare citată întreagă) face doar ca
+# citatul să NU fie identic cu nicio propoziție → „Incert” (direcția prudentă), niciodată un „Da” în plus.
+# Limita rămasă, declarată: o excepție aflată în ALTĂ propoziție a sursei (propoziția următoare spune „Prevederea nu se aplică
+# în zona X.”) nu e văzută de regulă; omul vede citatul și sursa întreagă alăturate. Un citat cu ghilimele interioare (sursa
+# citează la rândul ei un nume între ghilimele) nu poate fi citat → „Incert”.
 CITAT_MIN_CUVINTE = 6
-CITAT_PRAG = 0.9
 CITAT = re.compile(r'[„“"«]([^„“”"«»\n]{8,800})[”“"»]')
 CUVINTE_CITAT = re.compile(r'[a-z]+|[0-9]+(?:[.,][0-9]+)?')
-INCERT_REGULA_B = f'{INCERT}: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.'
+INCERT_REGULA_B = f'{INCERT}: niciun citat nu reproduce exact o propoziție întreagă dintr-o sursă — citește sursele alăturate.'
+_CITAT_GHILIMELE = re.compile('[„“”"«»‚‘’\'`´]')
+_CITAT_LINIUTE = re.compile('[' + ''.join(map(chr, range(0x2010, 0x2016))) + chr(0x2212) + ']')   # ‐ ‑ ‒ – — ― −
+_CITAT_SPATII = re.compile(r'\s+')
+_CITAT_PUNCT = re.compile(r' ?([^a-z0-9 ]) ?')
+_CITAT_CAPETE = '.,;:!?…- '
 
 
-def _lcs(a, b):
-    """Lungimea celei mai lungi subsecvențe comune (pe cuvinte)."""
-    prev = [0] * (len(b) + 1)
-    for x in a:
-        cur = [0]
-        for j, y in enumerate(b):
-            cur.append(prev[j] + 1 if x == y else max(prev[j + 1], cur[j]))
-        prev = cur
-    return prev[-1]
+def forma_citat(s):
+    """Forma de comparare a unui citat și a unei propoziții din sursă (regula B, r3) — vezi mai sus."""
+    n = _CITAT_LINIUTE.sub('-', _CITAT_GHILIMELE.sub('', normalizeaza(s)))
+    n = _CITAT_PUNCT.sub(r'\1', _CITAT_SPATII.sub(' ', n))
+    return n.strip(_CITAT_CAPETE)
 
 
-# r2 (review PR #1086, P1-3): negația nu se mai verifică doar ca „există în propoziție” — un citat care MUTĂ negația de la o
-# afirmație la alta trecea. Acum citatul și propoziția se ALINIAZĂ cuvânt cu cuvânt (_aliniere), iar cuvintele care inversează
-# sensul NU pot rămâne nepereche (nu intră în toleranța de 1 cuvânt din 10):
-#   - INVERSOARE_NEGATIE (nu, nici, niciun / nicio, niciodată, nimic, nimeni, fără, exceptând, excepția, decât, ne- + admis /
-#     permis / conform / autorizat / obligatoriu / avizat / respectat / îndeplinit / corespunzător / valid / acceptat / recepționat):
-#     fiecare din citat se perechează cu ACELAȘI cuvânt din sursă, iar fiecare din TOATĂ propoziția sursei trebuie să fie în citat,
-#     pe aceeași poziție relativă — o negație din afara fragmentului citat poate răsturna fragmentul („Nu este adevărat că …”);
-#   - INVERSOARE_MODAL (trebuie, poate / pot, obligatoriu, opțional, facultativ, interzis, admis / admite, permis / permite,
-#     recomandat): fiecare din citat se perechează cu același cuvânt; cele din sursă trebuie perechate doar ÎNTRE primul și ultimul
-#     cuvânt citat (un „poate” dintr-o altă parte a propoziției nu contează, unul înlocuit în mijlocul citatului da).
-# Orice nepotrivire → citatul nu susține verdictul → „Incert”. Compromisul: o propoziție lungă cu o negație în altă parte decât
-# fragmentul citat cere citarea întregii propoziții (altfel „Incert”) — preferăm un „Incert” în plus unui „Da” răsturnat.
-INVERSOARE_NEGATIE = re.compile(r'(?:nu|nici|niciun\w*|nicio|niciodata|nimic|nimeni|fara|exceptand|exceptia|exceptie|decat'
-                                r'|ne(?:admis|permis|conform|autorizat|obligatori|avizat|respect|indeplin|corespunz|valid|accept|receptio)\w*)')
-INVERSOARE_MODAL = re.compile(r'(?:trebui\w*|poate|pot|obligatori\w*|optional\w*|facultativ\w*|interzi\w*|admis\w*|admit\w*'
-                              r'|permis\w*|permit\w*|recomand\w*)')
+SEPARATOR_CITAT = re.compile(r'[.!?]|\n\s*\n')
 
 
-def _inversor(w):
-    """2 = negație (pereche obligatorie în toată propoziția), 1 = modal (pereche obligatorie în fragmentul citat), 0 = alt cuvânt."""
-    if INVERSOARE_NEGATIE.fullmatch(w): return 2
-    if INVERSOARE_MODAL.fullmatch(w): return 1
-    return 0
-
-
-def _aliniere(q, p):
-    """Cel mai mare număr de cuvinte ale citatului `q` perechate, în ordine, cu cuvinte IDENTICE din propoziția `p`, cu regulile
-    inversoarelor de mai sus; -1 dacă nicio aliniere nu le respectă. Stări: faza 0 = înaintea primei perechi, 1 = în fragmentul
-    citat, 2 = după ultima pereche (un modal din sursă se poate sări doar în fazele 0 și 2; o negație din sursă niciodată)."""
-    NU = -1
-    tq, tp = [_inversor(w) for w in q], [_inversor(w) for w in p]
-    m, n = len(q), len(p)
-    f = [[[NU] * 3 for _ in range(n + 1)] for _ in range(m + 1)]
-    f[0][0][0] = 0
-    for i in range(m + 1):
-        for j in range(n + 1):
-            for faza in range(3):
-                v = f[i][j][faza]
-                if v == NU: continue
-                if faza == 1 and v > f[i][j][2]: f[i][j][2] = v                     # sfârșitul fragmentului citat
-                if i < m and j < n and faza < 2 and q[i] == p[j] and v + 1 > f[i + 1][j + 1][1]:
-                    f[i + 1][j + 1][1] = v + 1                                       # pereche
-                if i < m and tq[i] == 0 and v > f[i + 1][j][faza]: f[i + 1][j][faza] = v   # cuvânt din citat fără pereche
-                if j < n and (tp[j] == 0 or (tp[j] == 1 and faza != 1)) and v > f[i][j + 1][faza]:
-                    f[i][j + 1][faza] = v                                            # cuvânt din sursă fără pereche
-    return max(f[m][n])
+def propozitii_citat(text):
+    """Propozițiile ÎNTREGI ale unei surse, pentru regula B (normalizate): se despart la . ! ? urmate de spațiu și la rândul gol;
+    NU după o abreviere (ABREVIERI: art. alin. pct. lit. nr. …), nici înaintea unei cifre / „(” („art. 5”, „alin. (2)”), nici
+    înaintea unei bucăți care începe cu o restricție („. Dar numai …”). „;” și rândul simplu NU despart: o enumerare e o singură
+    propoziție împreună cu introducerea ei — introducerea poate nega elementele („Nu se admit: a) …; b) …”), deci un element citat
+    singur nu e o propoziție întreagă. O despărțire greșită face doar ca citatul să nu fie identic → „Incert”."""
+    n = normalizeaza(text)
+    bucati, start = [], 0
+    for m in SEPARATOR_CITAT.finditer(n):
+        k = m.start()
+        if len(m.group(0)) == 1:
+            if k + 1 < len(n) and not re.match(r'\s', n[k + 1]): continue
+            if n[k] == '.':
+                cuv = re.search(r'[a-z]+$', n[start:k])
+                if cuv and cuv.group(0) in ABREVIERI: continue
+            urm = re.match(r'\s*(\S)', n[k + 1:])
+            if urm and re.match(r'[0-9(]', urm.group(1)): continue
+        if INCEPE_CU_RESTRICTIE.match(n, m.end()): continue
+        bucati.append(n[start:k])
+        start = m.end()
+    bucati.append(n[start:])
+    return [p.strip() for p in bucati if p.strip()]
 
 
 def citat_sustinut(citat, ids, harta):
-    """True dacă citatul trece pragul „aproape cuvânt cu cuvânt” față de o propoziție a uneia dintre sursele `ids` (vezi mai sus):
-    aliniere (cu inversoarele perechate) ≥ CITAT_PRAG din cuvintele citatului, aceleași cifre, restricțiile sursei în citat."""
-    n = normalizeaza(citat)
-    q = CUVINTE_CITAT.findall(n)
-    if len(q) < CITAT_MIN_CUVINTE: return False
-    tok = set(tokeni_numerici(n))
+    """True DOAR dacă citatul (forma_citat) e IDENTIC cu o propoziție întreagă (propozitii_citat) a uneia dintre sursele `ids` și
+    are cel puțin CITAT_MIN_CUVINTE cuvinte. Orice altceva → False („Incert”)."""
+    f = forma_citat(citat)
+    if len(CUVINTE_CITAT.findall(f)) < CITAT_MIN_CUVINTE: return False
     for i in ids:
         if i not in harta: continue
-        for p in propozitii(harta[i].partition('\n')[2]):
-            cp = CUVINTE_CITAT.findall(p)
-            if _lcs(q, cp) < CITAT_PRAG * len(q): continue                  # filtru ieftin (aliniere ≤ lcs)
-            if _aliniere(q, cp) < CITAT_PRAG * len(q) or not tok <= set(tokeni_numerici(p)): continue
-            if restrictii_acoperite(n, p): return True
+        if any(f == forma_citat(p) for p in propozitii_citat(harta[i].partition('\n')[2])): return True
     return False
 
 
@@ -1082,7 +1061,7 @@ SISTEM_RASPUNS = """Ești consultantul tehnic al Gazpet Instal SRL (Ploiești) �
 
 Formatul răspunsului (obligatoriu):
 1. PRIMA LINIE = verdictul scurt, singur pe linie, începând exact cu „Da”, „Nu” sau „Incert” (ex. „Da — …”, „Nu, …”, „Incert — depinde de tipul instalației: …”). Fără titlu înaintea lui. Sunt DOAR trei verdicte: „Depinde de …” se scrie „Incert — depinde de …”.
-   „Da” sau „Nu” DOAR dacă o sursă din <surse> spune aproape cuvânt cu cuvânt același lucru. Atunci A DOUA LINIE e citatul, copiat exact din extrasul sursei: Citat [C1]: „propoziția întreagă din sursă, cu condițiile și excepțiile ei”. Fără un asemenea citat, prima linie e „Incert — …” și spui pe scurt ce surse trebuie citite (ecranul le arată alături). Un verdict ferm fără citat devine automat „Incert”.
+   „Da” sau „Nu” DOAR dacă o propoziție întreagă dintr-o sursă din <surse> spune acel lucru. Atunci A DOUA LINIE e citatul: Citat [C1]: „propoziția întreagă din sursă”, copiată EXACT, de la începutul propoziției până la punct — niciun cuvânt scos, adăugat sau schimbat, fără „…”, cu condițiile și excepțiile ei. Un fragment de propoziție sau o parafrază nu e citat. Fără un asemenea citat, prima linie e „Incert — …” și spui pe scurt ce surse trebuie citite (ecranul le arată alături). Un verdict ferm fără citat devine automat „Incert”.
 2. Apoi justificarea, pe puncte scurte. FIECARE afirmație normativă (act, articol, alineat, punct, standard, cifră, termen, presiune, distanță, obligație) are la final marcajul sursei din care vine, între paranteze drepte: [C1], [W2] sau [C1, W3]. Folosește doar ID-uri din <surse>.
 3. Dacă sursele nu acoperă o parte a întrebării, scrie pe linie separată DOAR „Nu am găsit sursa oficială pentru …” și ce document trebuie cerut (ex. textul consolidat al prescripției, avizul, contractul) — fără cifre, articole sau obligații în acea linie. NU completa din memorie, nu inventa articole, numere sau cifre, nu folosi „[DE VERIFICAT]”. Cifrele și articolele pe care le citezi trebuie să apară exact în extrasul sursei marcate, iar sursa marcată trebuie să spună chiar lucrul afirmat (termenii afirmației se regăsesc în extras) — nu pune un marcaj pe o afirmație pe care sursa n-o conține. La o obligație, interdicție, permisiune sau condiție („obligatoriu”, „trebuie”, „se interzice”, „nu se admite”, „este permis”, „numai dacă”, „cel puțin”, „cel mult”), aceeași propoziție din sursă trebuie să aibă același tip de regulă și toți termenii afirmației, inclusiv calificativele („autorizat”, „atestat”, „în scris”); cifrele se scriu cu același semn și aceeași unitate ca în sursă. Nu adăuga calificative sau condiții pe care sursa nu le are și nu le omite pe cele pe care le are. Dacă din surse nu rezultă un verdict, prima linie e „Incert — de verificat: …”.
 4. La final, dacă e util, „Ce aș face” — pași concreți, tot cu surse pentru partea normativă.
@@ -1103,9 +1082,10 @@ def mesaj_reparare(analiza, ids_valide, fara_citat=False):
         p.append('- Verdictul nu e susținut de nicio afirmație cu sursă (o afirmație ai cărei termeni sau cifre apar în sursa citată). '
                  'Susține-l din <surse> sau scrie pe prima linie „Incert — de verificat: …”.')
     if analiza['verdict'] and fara_citat:
-        p.append('- Verdictul „Da” / „Nu” cere pe a doua linie un citat copiat exact dintr-o sursă care spune aproape cuvânt cu cuvânt '
-                 'același lucru: Citat [C1]: „propoziția întreagă din sursă”. Dacă nicio sursă nu spune asta, prima linie devine '
-                 '„Incert — …”; „Depinde de …” se scrie „Incert — depinde de …”.')
+        p.append('- Verdictul „Da” / „Nu” cere pe a doua linie un citat: o propoziție ÎNTREAGĂ din sursă, copiată exact, de la '
+                 'început până la punct, fără niciun cuvânt scos, adăugat sau schimbat: Citat [C1]: „propoziția întreagă din sursă”. '
+                 'Dacă nicio propoziție a unei surse nu spune asta, prima linie devine „Incert — …”; „Depinde de …” se scrie '
+                 '„Incert — depinde de …”.')
     if fara:
         p.append('- Aceste afirmații normative (act, articol, cifră, obligație) nu au marcaj de sursă valid. Pune marcajul sursei din '
                  '<surse> din care vin, sau înlocuiește-le cu o linie separată „Nu am găsit sursa oficială pentru …” (doar declarația, '
