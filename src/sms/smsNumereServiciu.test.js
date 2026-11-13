@@ -1,14 +1,16 @@
 // 20261220a — numerele de serviciu în ecranul 📱 SMS: logica pură (argumentele RPC, filtrul, contorul, validarea din Setări) și apelurile API.
 // Date fictive. Comportamentul din BD: scripts/pglite/test_sms_numere_serviciu_local.mjs.
 import { describe, expect, it, vi } from 'vitest'
-import { argumenteIntern, filtreazaNumereServiciu, numarSelectati, valideazaNumarServiciu, mesajDezactivare, filtreazaAngajati } from './smsLogica.js'
+import { argumenteIntern, filtreazaNumereServiciu, numarSelectati, valideazaNumarServiciu, mesajDezactivare, filtreazaAngajati,
+  lipsaRpcNumereServiciu, listaNumereDinRaspuns, incarcaNumereServiciu, reconciliazaNumereAlese, mesajScoaseDinSelectie, MAX_NUMERE_SERVICIU } from './smsLogica.js'
+import { readFileSync } from 'node:fs'
 
 const apeluri = []
 vi.mock('../lib/supabase.js', () => ({
   supabase: {
     rpc: async (fn, args) => {
       apeluri.push([fn, args])
-      if (fn === 'fn_sms_numere_serviciu_lista') return { data: [{ id: 7, denumire: 'Telefon Test', telefon_mascat: '07** *** 201', optout: false }], error: null }
+      if (fn === 'fn_sms_numere_serviciu_lista') return { data: { total: 1, numere: [{ id: 7, denumire: 'Telefon Test', telefon_mascat: '07** *** 201', optout: false }] }, error: null }
       if (fn === 'fn_sms_numere_serviciu_admin') return { data: null, error: { code: '42501', message: 'sms: doar owner-ul (Razvan) foloseste modulul SMS' } }
       return { data: { ok: true }, error: null }
     },
@@ -99,5 +101,77 @@ describe('smsApi — numerele de serviciu', () => {
       ['fn_sms_numar_serviciu_dezactiveaza', { p_id: 7, p_versiune: 3 }],
     ])
     await expect(smsApi.numereServiciuAdmin()).rejects.toMatchObject({ code: '42501' })
+  })
+})
+
+// r2 (P1): migrarea neaplicată = funcția NOASTRĂ lipsește (forma reală a erorii PostgREST); orice altceva = eroare (L18)
+const LIPSA_LISTA = { code: 'PGRST202', message: 'Could not find the function public.fn_sms_numere_serviciu_lista without parameters in the schema cache',
+  details: 'Searched for the function public.fn_sms_numere_serviciu_lista without parameters or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.',
+  hint: 'Perhaps you meant to call the function public.fn_sms_angajati_lista' }
+const LIPSA_ADMIN = { code: 'PGRST202', message: 'Could not find the function public.fn_sms_numere_serviciu_admin without parameters in the schema cache', details: null, hint: null }
+describe('r2 — detectarea migrării 20261220a neaplicate (sonda)', () => {
+  it('lipsă = doar PGRST202 / 42883 care numesc o funcție 20261220a', () => {
+    expect(lipsaRpcNumereServiciu(LIPSA_LISTA)).toBe(true)
+    expect(lipsaRpcNumereServiciu(LIPSA_ADMIN)).toBe(true)
+    expect(lipsaRpcNumereServiciu({ code: '42883', message: 'function public.fn_sms_numere_serviciu_lista() does not exist' })).toBe(true)
+    expect(lipsaRpcNumereServiciu({ code: '42501', message: 'sms: nu ai acces la modulul SMS fn_sms_numere_serviciu_lista' })).toBe(false)
+    expect(lipsaRpcNumereServiciu({ code: 'PGRST202', message: 'Could not find the function public.fn_alta without parameters in the schema cache' })).toBe(false)
+    expect(lipsaRpcNumereServiciu({ code: '', message: 'Failed to fetch' })).toBe(false)
+    expect(lipsaRpcNumereServiciu(null)).toBe(false)
+    expect(lipsaRpcNumereServiciu('fn_sms_numere_serviciu_lista does not exist')).toBe(false)
+  })
+  it('„Perhaps you meant” către o funcție 20261220a = migrarea E acolo, contractul diferă → eroare, nu lipsă', () => {
+    expect(lipsaRpcNumereServiciu({ ...LIPSA_ADMIN, hint: 'Perhaps you meant to call the function public.fn_sms_numere_serviciu_lista' })).toBe(false)
+    expect(lipsaRpcNumereServiciu({ code: 'PGRST202', message: 'Could not find the function public.fn_sms_numar_serviciu_salveaza(p_id, p_denumire) in the schema cache',
+      hint: 'Perhaps you meant to call the function public.fn_sms_numar_serviciu_salveaza(p_denumire, p_id, p_nota, p_responsabil_employee_id, p_telefon, p_versiune)' })).toBe(false)
+  })
+  it('încărcarea: da / lipsa (doar la sondă) / eroare; nu aruncă', async () => {
+    const api = (r) => ({ numereServiciu: async () => { if (r?.code) throw r; return r } })
+    expect(await incarcaNumereServiciu(api([{ id: 7 }]))).toEqual({ stare: 'da', numere: [{ id: 7 }], err: null })
+    expect(await incarcaNumereServiciu(api(LIPSA_LISTA))).toEqual({ stare: 'lipsa', numere: [], err: null })
+    // după o listă primită, funcția care dispare e eroare (nu ascundem nimic în tăcere)
+    expect(await incarcaNumereServiciu(api(LIPSA_LISTA), { sonda: false })).toMatchObject({ stare: 'eroare', numere: null, err: LIPSA_LISTA })
+    const drept = { code: '42501', message: 'sms: nu ai acces la modulul SMS' }
+    expect(await incarcaNumereServiciu(api(drept))).toMatchObject({ stare: 'eroare', err: drept })
+  })
+})
+
+// r2 (L23): lista vine ca UN obiect {total, numere}; trunchierea nu trece drept listă scurtă
+describe('r2 — lista numerelor: total verificat, limita de active', () => {
+  it('numere.length = total → lista; altfel eroare vizibilă', () => {
+    expect(listaNumereDinRaspuns({ total: 0, numere: [] })).toEqual([])
+    expect(listaNumereDinRaspuns({ total: 2, numere: [{ id: 1 }, { id: 2 }] })).toHaveLength(2)
+    expect(() => listaNumereDinRaspuns({ total: 3, numere: [{ id: 1 }, { id: 2 }] })).toThrow(/incompletă \(2 din 3\)/)
+    expect(() => listaNumereDinRaspuns([{ id: 1 }])).toThrow(/formă neașteptată/)
+    expect(() => listaNumereDinRaspuns(null)).toThrow(/formă neașteptată/)
+    expect(() => listaNumereDinRaspuns({ total: -1, numere: [] })).toThrow()
+  })
+  it('limita din interfață = cea din migrare (100 de numere active)', () => {
+    const mig = readFileSync(new URL('../../supabase/migrations/20261220a_sms_numere_serviciu.sql', import.meta.url), 'utf8')
+    expect(MAX_NUMERE_SERVICIU).toBe(100)
+    expect(mig).toContain(`WHERE s.activ) >= ${MAX_NUMERE_SERVICIU} THEN`)
+  })
+})
+
+// r2 (P2): după reîncărcare, selecția păstrează doar numerele încă active și fără opt-out; ce iese e anunțat cu denumirea
+describe('r2 — reconcilierea selecției cu lista reîncărcată', () => {
+  const vechi = [{ id: 7, denumire: 'Telefon Depozit' }, { id: 8, denumire: 'Telefon Birou' }, { id: 9, denumire: 'Telefon Santier' }]
+  it('dezactivat (lipsă din listă) / opt-out = scos; activ = păstrat', () => {
+    const noua = [{ id: 7, denumire: 'Telefon Depozit', optout: false }, { id: 9, denumire: 'Telefon Santier', optout: true }]
+    const r = reconciliazaNumereAlese(new Set([7, 8, 9]), noua, vechi)
+    expect([...r.alese]).toEqual([7])
+    expect(r.scoase).toEqual([{ id: 8, denumire: 'Telefon Birou', motiv: 'inactiv' }, { id: 9, denumire: 'Telefon Santier', motiv: 'optout' }])
+  })
+  it('nimic schimbat = nimic scos; id necunoscut = „numărul #id”', () => {
+    expect(reconciliazaNumereAlese(new Set([7]), vechi, vechi)).toEqual({ alese: new Set([7]), scoase: [] })
+    expect(reconciliazaNumereAlese(new Set([42]), [], []).scoase).toEqual([{ id: 42, denumire: 'numărul #42', motiv: 'inactiv' }])
+    expect(reconciliazaNumereAlese(null, null).alese.size).toBe(0)
+  })
+  it('mesajul pentru om', () => {
+    expect(mesajScoaseDinSelectie([{ id: 8, denumire: 'Telefon Birou', motiv: 'inactiv' }]))
+      .toBe('Numărul de serviciu „Telefon Birou” nu mai e activ și a fost scos din selecție. Verifică destinatarii și previzualizează din nou.')
+    expect(mesajScoaseDinSelectie([{ id: 8, denumire: 'A', motiv: 'inactiv' }, { id: 9, denumire: 'B', motiv: 'inactiv' }])).toContain('„A”, „B” nu mai sunt active și au fost scoase')
+    expect(mesajScoaseDinSelectie([{ id: 9, denumire: 'B', motiv: 'optout' }])).toContain('„B” are opt-out și a fost scos din selecție.')
+    expect(mesajScoaseDinSelectie([])).toBe('')
   })
 })

@@ -6,7 +6,9 @@
 --   * tabelele: sms_loturi și sms_mesaje (pe sms_mesaje se reface CHECK-ul destinatar_tip; în ambele scrie crearea lotului, prin
 --     triggerele lor) — drepturi pe tabel / coloane / secvențe, proprietar, RLS + FORCE, TOATE politicile, inventarul triggerelor;
 --   * funcțiile: pornirea = fn_sms_lot_intern_creeaza (varianta cu 4 parametri, înlocuită), fn_sms_lot_destinatari (corp nou),
---     fn_sms_angajati_lista (oglinda listei noi a numerelor de serviciu); funcțiile din politicile / triggerele celor două tabele (le găsește
+--     fn_sms_angajati_lista (oglinda listei noi a numerelor de serviciu); r2 (P1): plus funcțiile chemate de corpurile NOI (porțile
+--     fn_sms_cere_owner / fn_sms_cere_nivel, normalizarea, textul, coada de test, accesul pe lot, auth.uid — lista FOLOSITE din migrare,
+--     care refuză un baseline fără ele și unul fără lanțul lor complet); funcțiile din politicile / triggerele celor două tabele (le găsește
 --     catalogul) și „indiciile” = numele apare în corpul unei funcții din listă (callee tranzitiv; plpgsql nu lasă pg_depend). Indiciul e
 --     DOAR o propunere pentru revizor: poarta din migrare nu caută nimic în text, compară exact lista din BASELINE;
 --   * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, politici USING true,
@@ -30,7 +32,13 @@ WITH RECURSIVE
 -- >>> INTRARE 20261220a
 amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_mesaje'::regclass::oid)),
 amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)')::oid),
-                            (to_regprocedure('public.fn_sms_lot_destinatari(uuid)')::oid), (to_regprocedure('public.fn_sms_angajati_lista()')::oid)),
+                            (to_regprocedure('public.fn_sms_lot_destinatari(uuid)')::oid), (to_regprocedure('public.fn_sms_angajati_lista()')::oid),
+                            -- r2 (P1): funcțiile chemate de corpurile NOI (lista FOLOSITE din migrare; ::regprocedure = lipsa ei oprește scriptul)
+                            ('auth.uid()'::regprocedure::oid), ('public.fn_sms_cere_nivel()'::regprocedure::oid), ('public.fn_sms_cere_owner()'::regprocedure::oid),
+                            ('public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean)'::regprocedure::oid), ('public.fn_sms_tel_normalizat(text)'::regprocedure::oid),
+                            ('public.fn_sms_test_coada(uuid)'::regprocedure::oid), ('public.fn_sms_test_coada_cere(uuid, integer)'::regprocedure::oid),
+                            ('public.fn_sms_test_coada_lock(uuid, boolean)'::regprocedure::oid), ('public.fn_sms_test_coada_max()'::regprocedure::oid),
+                            ('public.fn_sms_text_valid(text)'::regprocedure::oid), ('public.fn_sms_text_verifica(text)'::regprocedure::oid)),
 -- <<< INTRARE 20261220a
 amp_start(oid, sursa) AS (
   SELECT s.oid, 'pornire' FROM amp_pornire s

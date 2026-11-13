@@ -12,6 +12,8 @@
 // doar la „Selecție manuală” (grupul „📞 Numere de serviciu”, deasupra angajaților; căutarea și contorul le prind); la „Toți angajații” /
 // „Pe departament” nu intră (și BD-ul le refuză acolo). Le administrează doar owner-ul, din ⚙ Setări. În lista de aprobat și în
 // „Mesajele lotului” apar cu denumirea lor.
+// r2: până la aplicarea migrării 20261220a (RPC-urile noi lipsesc), ecranul merge ca înainte — o singură sondă, fără grup / secțiune și fără
+// erori; un număr bifat care nu mai e activ (sau are opt-out) iese din selecție la reîncărcarea listei, cu anunț.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { smsApi, mesajEroare } from './smsApi.js'
 import {
@@ -19,6 +21,7 @@ import {
   poateAproba, poateTrimite, poateAnula, valideazaAutorizare, valideazaPlafoane, fmtEur, fmtData, mascheazaTelefon,
   rezumatMesaje, mesajAnulare, poateActiona, notaNivel, areModulSms, NIVELURI, MAX_TEST, textSold,
   filtreazaNumereServiciu, numarSelectati, valideazaNumarServiciu, mesajDezactivare,
+  incarcaNumereServiciu, lipsaRpcNumereServiciu, reconciliazaNumereAlese, mesajScoaseDinSelectie, MAX_NUMERE_SERVICIU,
 } from './smsLogica.js'
 
 const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20' }
@@ -116,13 +119,30 @@ export function Compune({ panou, onCreat, setMesaj, angajatiInitiali = null, num
     smsApi.angajati().then(l => { if (activ) setAngajati(l) }).catch(e => { if (activ) { setAngajati([]); setMesaj({ tip: 'eroare', text: 'Angajați: ' + mesajEroare(e) }) } })
     return () => { activ = false }
   }, [setMesaj, angajatiInitiali])
-  const incarcaNumere = useCallback(() => {
-    let activ = true
-    smsApi.numereServiciu().then(l => { if (activ) { setNumere(l); setEroareNumere('') } })
-      .catch(e => { if (activ) { setNumere([]); setEroareNumere(mesajEroare(e)) } })
-    return () => { activ = false }
-  }, [])
-  useEffect(() => { if (!numereInitiale) return incarcaNumere() }, [numereInitiale, incarcaNumere])
+  // r2 (P1): SONDA o singură dată. Migrarea 20261220a neaplicată (RPC-ul lipsește) = ecranul merge ca înainte: fără grup, fără eroare,
+  // fără alte cereri către funcțiile noi. După o listă primită, o „lipsă” ulterioară e eroare (L18). L24: doar ultimul răspuns se aplică.
+  const sonda = useRef(numereInitiale ? 'da' : null)   // null = nesondat · 'da' · 'lipsa'
+  const montat = useRef(true)
+  const genNumere = useRef(0)
+  const numereRef = useRef(numere); numereRef.current = numere
+  const aleseRef = useRef(numereAlese); aleseRef.current = numereAlese
+  useEffect(() => { montat.current = true; return () => { montat.current = false } }, [])
+  const incarcaNumere = useCallback(async () => {
+    if (sonda.current === 'lipsa') return
+    const g = ++genNumere.current
+    const r = await incarcaNumereServiciu(smsApi, { sonda: sonda.current !== 'da' })
+    if (!montat.current || g !== genNumere.current) return
+    if (r.stare === 'lipsa') { sonda.current = 'lipsa'; setNumere([]); setEroareNumere(''); return }
+    // eroare: lista de până acum rămâne (bifele nu dispar în tăcere), eroarea se vede
+    if (r.stare === 'eroare') { setNumere(n => n || []); setEroareNumere(mesajEroare(r.err)); return }
+    sonda.current = 'da'
+    // r2 (P2): selecția se reconciliază cu lista nouă — un număr dezactivat / cu opt-out iese din selecție și omul e anunțat (altfel
+    // bifa dispărută ar rămâne în selecție, BD-ul ar refuza previzualizarea și nu s-ar mai putea debifa)
+    const { alese, scoase } = reconciliazaNumereAlese(aleseRef.current, r.numere, numereRef.current)
+    setNumere(r.numere); setEroareNumere('')
+    if (scoase.length) { setNumereAlese(alese); setMesaj({ tip: 'eroare', text: mesajScoaseDinSelectie(scoase) }) }
+  }, [setMesaj])
+  useEffect(() => { if (!numereInitiale) incarcaNumere() }, [numereInitiale, incarcaNumere])
   // orice schimbare de text / destinatari invalidează previzualizarea (lotul se creează exact din ce s-a văzut)
   useEffect(() => { setPreview(null) }, [text, mod, depAlese, selectati, numereAlese])
 
@@ -143,8 +163,8 @@ export function Compune({ panou, onCreat, setMesaj, angajatiInitiali = null, num
     try { setPreview(await smsApi.creeazaIntern({ ...args(), preview: true })) }
     catch (e) {
       setPreview(null); setMesaj({ tip: 'eroare', text: mesajEroare(e) })
-      // un număr de serviciu dezactivat între timp: lista se reîncarcă (bifa lui rămâne vizibilă doar dacă mai e activ)
-      if (/numar de serviciu/.test(mesajEroare(e))) incarcaNumere()
+      // un număr de serviciu dezactivat între timp: lista se reîncarcă și selecția se reconciliază (cu anunț)
+      if (/numar de serviciu/.test(mesajEroare(e))) await incarcaNumere()
     }
     finally { setLucru(false) }
   }
@@ -157,7 +177,10 @@ export function Compune({ panou, onCreat, setMesaj, angajatiInitiali = null, num
       setMesaj({ tip: 'ok', text: `Lot creat (draft): ${j.nr_destinatari} destinatari. Verifică lista fixată în lot și aprobă-l.` })
       setText(''); setPreview(null); setSelectati(new Set()); setNumereAlese(new Set())
       onCreat?.(j.lot_id)
-    } catch (e) { setMesaj({ tip: 'eroare', text: mesajEroare(e) }) }
+    } catch (e) {
+      setMesaj({ tip: 'eroare', text: mesajEroare(e) })
+      if (/numar de serviciu/.test(mesajEroare(e))) await incarcaNumere()
+    }
     finally { setLucru(false) }
   }
 
@@ -426,9 +449,12 @@ function Setari({ panou, reincarcaPanou, setMesaj }) {
 // ── 20261220a: Numere de serviciu (⚙ Setări, doar owner — și în BD: fn_sms_cere_owner) ──────────────────────────────────────
 const FORM_NUMAR = { id: null, denumire: '', telefon: '', responsabilId: '', nota: '', versiune: null }
 // *Initial*: doar pentru teste (randare fără rețea)
-export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitiali = null, formInitial = null }) {
+export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitiali = null, formInitial = null, lipsaInitiala = false }) {
   const [lista, setLista] = useState(listaInitiala)
   const [eroare, setEroare] = useState('')
+  // r2 (P1): migrarea 20261220a neaplicată = secțiunea nu apare (fără eroare); „lipsa” se acceptă doar la sonda (prima încărcare)
+  const [lipsa, setLipsa] = useState(lipsaInitiala)
+  const sondaGata = useRef(!!listaInitiala)
   const [angajati, setAngajati] = useState(angajatiInitiali)
   const [form, setForm] = useState(formInitial || FORM_NUMAR)
   const [lucru, setLucru] = useState(false)
@@ -436,12 +462,16 @@ export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitial
   // L24: doar ultimul răspuns se aplică (o reîncărcare după acțiune nu e suprascrisă de una mai veche)
   const incarca = useCallback(async () => {
     const g = ++gen.current
-    try { const l = await smsApi.numereServiciuAdmin(); if (g === gen.current) { setLista(l); setEroare('') } }
-    catch (e) { if (g === gen.current) setEroare(mesajEroare(e)) }
+    try { const l = await smsApi.numereServiciuAdmin(); if (g === gen.current) { sondaGata.current = true; setLista(l); setEroare('') } }
+    catch (e) {
+      if (g !== gen.current) return
+      if (!sondaGata.current && lipsaRpcNumereServiciu(e)) setLipsa(true)
+      else setEroare(mesajEroare(e))
+    }
   }, [])
-  useEffect(() => { if (!listaInitiala) incarca() }, [incarca, listaInitiala])
+  useEffect(() => { if (!listaInitiala && !lipsaInitiala) incarca() }, [incarca, listaInitiala, lipsaInitiala])
   useEffect(() => {
-    if (angajatiInitiali) return
+    if (angajatiInitiali || lipsaInitiala) return
     let activ = true
     smsApi.angajati().then(l => { if (activ) setAngajati(l) }).catch(() => { if (activ) setAngajati([]) })
     return () => { activ = false }
@@ -471,9 +501,14 @@ export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitial
   }
   const editeaza = n => setForm({ id: n.id, denumire: n.denumire, telefon: '', responsabilId: n.responsabil_employee_id == null ? '' : String(n.responsabil_employee_id), nota: n.nota || '', versiune: n.versiune })
   const activiAngajati = (angajati || [])
+  // r2 (L23): maximum MAX_NUMERE_SERVICIU active (BD-ul refuză oricum al 101-lea); lista de aici e un singur obiect JSON (netrunchiat)
+  const nActive = (lista || []).filter(n => n.activ).length
+  const plinNumere = nou && nActive >= MAX_NUMERE_SERVICIU
+  if (lipsa) return null
   return <div style={S.panel} aria-label="Numere de serviciu">
     <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>📞 Numere de serviciu</div>
-    <p style={{ ...S.small, margin: '0 0 8px' }}>Telefoane ale firmei care nu sunt ale unui angajat (ex. „Gazpet Redări”). Apar separat în „Compune” → „Selecție manuală”, cu denumirea lor; colegul care ține telefonul rămâne în listă cu numărul lui din fișă. La „Toți angajații” și „Pe departament” nu intră.</p>
+    <p style={{ ...S.small, margin: '0 0 8px' }}>Telefoane ale firmei care nu sunt ale unui angajat (ex. „Gazpet Redări”). Apar separat în „Compune” → „Selecție manuală”, cu denumirea lor; colegul care ține telefonul rămâne în listă cu numărul lui din fișă. La „Toți angajații” și „Pe departament” nu intră. Maximum {MAX_NUMERE_SERVICIU} numere active.</p>
+    {plinNumere && <p role="note" style={{ ...S.small, color: G.yellow, margin: '0 0 8px' }}>Sunt deja {nActive} numere active (maximum {MAX_NUMERE_SERVICIU}): dezactivează unul înainte să adaugi altul.</p>}
     <div style={S.row}>
       <input aria-label="Denumirea numărului de serviciu" value={form.denumire} onChange={camp('denumire')} placeholder="Denumire (ex. Gazpet Redări)" maxLength={60} style={{ ...S.input, minWidth: 200 }} />
       <input aria-label="Telefonul numărului de serviciu" value={form.telefon} onChange={camp('telefon')} placeholder={nou ? '07xx xxx xxx' : 'Telefon nou (gol = rămâne)'} style={{ ...S.input, minWidth: 160 }} />
@@ -481,7 +516,7 @@ export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitial
         <option value="">Fără responsabil</option>{activiAngajati.map(a => <option key={a.id} value={String(a.id)}>{a.nume}</option>)}
       </select>
       <input aria-label="Notă număr de serviciu" value={form.nota} onChange={camp('nota')} placeholder="Notă (opțional)" maxLength={300} style={{ ...S.input, minWidth: 180 }} />
-      <button type="button" style={{ ...S.primar, opacity: probleme.length ? 0.5 : 1 }} disabled={lucru || probleme.length > 0} onClick={salveaza}>{nou ? '＋ Adaugă numărul' : `✔ Salvează (versiunea ${form.versiune})`}</button>
+      <button type="button" style={{ ...S.primar, opacity: probleme.length || plinNumere ? 0.5 : 1 }} disabled={lucru || probleme.length > 0 || plinNumere} onClick={salveaza}>{nou ? '＋ Adaugă numărul' : `✔ Salvează (versiunea ${form.versiune})`}</button>
       {!nou && <button type="button" style={S.button} disabled={lucru} onClick={() => setForm(FORM_NUMAR)}>Renunță</button>}
     </div>
     {atins && probleme.length > 0 && <p style={{ ...S.small, color: G.yellow, margin: '6px 0 0' }}>{probleme.join(' ')}</p>}

@@ -14,6 +14,9 @@
 --     fn_sms_numar_serviciu_salveaza(...) (adaugă / modifică pe versiunea văzută, 40001 altfel), fn_sms_numar_serviciu_dezactiveaza(id, versiune);
 --   * lista pentru „Compune”: fn_sms_numere_serviciu_lista() — aceeași poartă ca fn_sms_angajati_lista (fn_sms_cere_nivel: owner /
 --     utilizator / test), doar cele active, telefon mascat, opt-out. fn_sms_angajati_lista rămâne NESCHIMBATĂ;
+--   * r2 (L23): lista vine ca UN obiect JSON {total, numere} (nu set de rânduri: plafonul de rânduri al PostgREST nu o taie), iar
+--     clientul verifică numere.length = total (altfel eroare vizibilă). Limita: maximum 100 de numere ACTIVE (la adăugare, sub lock
+--     consultativ: L01); cele dezactivate nu se numără;
 --   * crearea lotului intern: fn_sms_lot_intern_creeaza primește p_numere_serviciu integer[] DEFAULT NULL (ultimul parametru):
 --       - L09 / semnătura: varianta cu 4 parametri se ȘTERGE și se creează cea cu 5 în aceeași tranzacție (DROP + CREATE, nu supraîncărcare:
 --         două variante ar face apelul cu nume din clientul publicat ambiguu, PGRST203). Clientul publicat trimite 4 nume -> găsește varianta
@@ -28,18 +31,25 @@
 --       - corpul = corpul 20261130b + blocurile marcate „20261220a”;
 --   * sms_mesaje.destinatar_tip acceptă și 'serviciu' (CHECK-ul refăcut cu ACELAȘI nume, scanat sub lock);
 --   * fn_sms_lot_destinatari (lista de aprobat + „Mesajele lotului”): destinatarul 'serviciu' apare cu DENUMIREA numărului (nu cu numele
---     responsabilului); restul corpului 20261130b neschimbat, drepturile neschimbate (postcondiție).
+--     responsabilului); restul corpului 20261130b neschimbat, drepturile neschimbate (postcondiție). r2 (L03): denumirea e cea FIXATĂ la
+--     crearea lotului (sms_loturi.filtru.numere_serviciu_denumiri, id -> denumire; filtrul e imuabil după creare, triggerul fn_sms_loturi_reguli),
+--     nu cea din tabelul de azi: o redenumire ulterioară nu schimbă istoricul loturilor.
 -- Ce NU face: nicio dată (nici un număr de serviciu: le adaugă owner-ul din ⚙ Setări), niciun drept de modul, nimic pe employees, nicio
 --   schimbare în trimitere (fn_sms_rezerva / edge-ul nu se uită la destinatar_tip), în aprobare sau în Redări. Dezactivarea unui număr NU îl
 --   scoate dintr-un lot deja creat (lista e fixată la creare): se anulează lotul (fn_sms_numar_serviciu_dezactiveaza întoarce câte loturi
 --   active îl mai au).
 -- Ordinea lock-urilor (L06), fără ciclu: crearea lotului = rândurile numerelor alese FOR SHARE (ORDER BY id) -> contul de test (consultativ)
---   -> lot -> mesaje (ordinea 20261130b după primul pas); salveaza / dezactiveaza = DOAR rândul numărului FOR UPDATE (nimic altceva ținut).
+--   -> lot -> mesaje (ordinea 20261130b după primul pas); salveaza / dezactiveaza = DOAR rândul numărului FOR UPDATE (nimic altceva ținut);
+--   r2: adăugarea (salveaza cu p_id NULL) = DOAR lock-ul consultativ al adăugării, apoi insertul (niciun rând ținut înainte).
 --
 -- L15 (tiparul 20261217a, corpul AMPRENTA_L15 v1 IDENTIC, L19; testul src/smsNumereServiciuAmprente.test.js): amprenta COMPLETĂ a stării de
 --   acces a tabelelor sms_loturi și sms_mesaje (drepturi, proprietar, RLS + FORCE, politici, triggere, secvențe) și a funcțiilor din BASELINE
 --   (pornirea: fn_sms_lot_intern_creeaza cu 4 parametri, fn_sms_lot_destinatari, fn_sms_angajati_lista, cu callee-urile lor; plus funcțiile
---   din politicile / triggerele celor două tabele), comparată cu BASELINE-ul din producție ÎNAINTE și DUPĂ. Valorile le scoate coordonatorul cu
+--   din politicile / triggerele celor două tabele; r2 (P1): plus TOATE funcțiile chemate de corpurile NOI — porțile fn_sms_cere_owner /
+--   fn_sms_cere_nivel, normalizarea, textul, coada de test, accesul pe lot, auth.uid — cu lanțul lor), comparată cu BASELINE-ul din producție
+--   ÎNAINTE și DUPĂ. Completitudinea baseline-ului se impune aici, nu se presupune: (a) lista EXACTĂ a funcțiilor chemate de corpurile noi
+--   trebuie să fie în baseline (testul static o compară cu apelurile din corpuri); (b) închiderea tranzitivă: orice funcție numită în corpul
+--   unei funcții din amprentă e și ea în amprentă (doar REFUZĂ, nu adaugă și nu acceptă nimic). Valorile le scoate coordonatorul cu
 --   scripts/sms_numere_serviciu_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz. Excepțiile „după” (EXACT două):
 --   'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)' (ștearsă; varianta nouă: postcondițiile) și
 --   'functie fn_sms_lot_destinatari(uuid)' (corp nou; proprietățile și ACL-ul: postcondițiile).
@@ -49,7 +59,9 @@
 --   EXCLUSIVE (oprește doar DDL-ul: amprenta „după” rămâne adevărată), apoi sms_mesaje ACCESS EXCLUSIVE (cerut de CHECK; tabelul e mic,
 --   o trimitere în curs așteaptă sub plafon). Sub lock DOAR catalog + scanarea CHECK-ului pe sms_mesaje.
 -- Revenire: supabase/revenire/20261220a_sms_numere_serviciu_ROLLBACK.sql (refuză dacă există mesaje către numere de serviciu sau numere
---   salvate; ce se face în loc: în antetul ei).
+--   salvate; ce se face în loc: în antetul ei). r2 (L14 / L15): amprenta COMPLETĂ a celor cinci funcții noi (corp md5, DEFINER, proprietar,
+--   search_path, volatilitate, strict / leakproof, tipul întors, ACL exact) e scrisă în blocul „AMPRENTE-NOI 20261220a”, IDENTIC aici
+--   (postcondiția: așa se aplică) și în revenire (așa trebuie să fie ca să se revină); o funcție modificată după aplicare = revenire refuzată.
 -- Probe: scripts/pglite/test_sms_numere_serviciu_local.mjs (local, PGlite, cu mutanți) + src/smsNumereServiciuAmprente.test.js (static).
 DO $pre$
 DECLARE v_plafon text; v_tip text;
@@ -231,6 +243,39 @@ BEGIN
        WHERE b.eticheta IN ('functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)', 'functie fn_sms_lot_destinatari(uuid)')) <> 2 THEN
     RAISE EXCEPTION '20261220a: baseline L15 fara functiile schimbate (fn_sms_lot_intern_creeaza / fn_sms_lot_destinatari)';
   END IF;
+  -- r2 (P1): funcțiile pe care se sprijină corpurile NOI (porți, normalizare, text, coada de test, acces pe lot, identitate) trebuie să fie
+  -- în baseline — lista EXACTĂ (testul static o compară cu apelurile din corpurile noi; același set e în pornirea scriptului)
+  SELECT string_agg(o.e, ', ' ORDER BY o.e COLLATE "C") INTO v_dif
+    FROM unnest(ARRAY[
+      -- >>> FOLOSITE 20261220a
+      'functie auth.uid()', 'functie fn_sms_cere_nivel()', 'functie fn_sms_cere_owner()', 'functie fn_sms_lot_acces(uuid,text,sms_loturi,boolean)',
+      'functie fn_sms_tel_normalizat(text)', 'functie fn_sms_test_coada(uuid)', 'functie fn_sms_test_coada_cere(uuid,integer)',
+      'functie fn_sms_test_coada_lock(uuid,boolean)', 'functie fn_sms_test_coada_max()', 'functie fn_sms_text_valid(text)', 'functie fn_sms_text_verifica(text)'
+      -- <<< FOLOSITE 20261220a
+    ]) o(e)
+   WHERE NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261220a() b WHERE b.eticheta = o.e);
+  IF v_dif IS NOT NULL THEN
+    RAISE EXCEPTION '20261220a: baseline L15 fara functiile folosite de corpurile noi: % (scripts/sms_numere_serviciu_amprente.sql, versiunea r2)', v_dif;
+  END IF;
+  -- r2 (P1): lanțul complet (închiderea tranzitivă): orice funcție din public / auth / executie_acces_intern numită (cuvânt întreg) în
+  -- corpul unei funcții sql / plpgsql din amprentă e și ea în amprentă — aceeași regulă ca indiciile scriptului, dar aici DOAR refuză
+  -- (nu adaugă nimic în comparație și nu acceptă nimic). Cuvintele se extrag o dată pe corp (un singur regex fix, ieftin sub plafon).
+  IF p_moment = 'inainte' THEN
+    WITH f AS (
+      SELECT DISTINCT p.oid, p.prosrc FROM pg_temp.amp_calc_20261220a() c
+        JOIN pg_proc p ON c.eticheta LIKE 'functie %' AND p.oid = to_regprocedure(substr(c.eticheta, 9))
+       WHERE p.prolang IN (SELECT lg.oid FROM pg_language lg WHERE lg.lanname IN ('sql', 'plpgsql'))
+    ), w AS (
+      SELECT DISTINCT f.oid, m.c[1] AS cuvant FROM f CROSS JOIN LATERAL regexp_matches(lower(f.prosrc), '([[:alnum:]_]+)', 'g') AS m(c)
+    )
+    SELECT string_agg(DISTINCT p2.oid::regprocedure::text || ' (din ' || w.oid::regprocedure::text || ')', '; ') INTO v_dif
+      FROM w JOIN pg_proc p2 ON lower(p2.proname) = w.cuvant AND p2.oid <> w.oid
+       AND p2.pronamespace IN ('public'::regnamespace, to_regnamespace('auth'), to_regnamespace('executie_acces_intern'))
+     WHERE NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261220a() b WHERE b.eticheta = 'functie ' || p2.oid::regprocedure::text);
+    IF v_dif IS NOT NULL THEN
+      RAISE EXCEPTION '20261220a: baseline L15 incomplet: functii chemate din lantul de acces, lipsa din baseline: %', v_dif;
+    END IF;
+  END IF;
   SELECT string_agg(coalesce(c.eticheta, b.eticheta) || ' = ' || coalesce(c.amprenta, 'LIPSESTE') || ' (baseline ' || coalesce(b.amprenta, 'NU ARE') || ')',
                     '; ' ORDER BY coalesce(c.eticheta, b.eticheta) COLLATE "C")
     INTO v_dif
@@ -348,18 +393,22 @@ ALTER TABLE public.sms_mesaje DROP CONSTRAINT sms_mesaje_destinatar_tip_check,
   ADD CONSTRAINT sms_mesaje_destinatar_tip_check CHECK (destinatar_tip IN ('angajat', 'detinator', 'serviciu'));
 
 -- ─── 3. Lista pentru „Compune” (owner / utilizator / test) și administrarea (doar owner) ────────────────────────────────────
-CREATE FUNCTION public.fn_sms_numere_serviciu_lista() RETURNS TABLE (id integer, denumire text, telefon_mascat text, optout boolean)
+CREATE FUNCTION public.fn_sms_numere_serviciu_lista() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v jsonb;
 BEGIN
   PERFORM public.fn_sms_cere_nivel();
-  RETURN QUERY
-  SELECT s.id, s.denumire, '07** *** ' || right(s.telefon, 3),
-         EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = s.telefon AND o.activ)
+  -- r2 (L23): UN obiect JSON (nu set de rânduri: plafonul de rânduri al PostgREST nu-l taie); total = numărătoarea din același
+  -- instantaneu, verificată de client (numere.length = total, altfel eroare vizibilă). Active: maximum 100 (fn_sms_numar_serviciu_salveaza).
+  SELECT jsonb_build_object('total', count(*),
+           'numere', coalesce(jsonb_agg(jsonb_build_object('id', s.id, 'denumire', s.denumire, 'telefon_mascat', '07** *** ' || right(s.telefon, 3),
+                       'optout', EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = s.telefon AND o.activ)) ORDER BY s.denumire, s.id), '[]'::jsonb))
+    INTO v
     FROM public.sms_numere_serviciu s
-   WHERE s.activ
-   ORDER BY s.denumire, s.id;
+   WHERE s.activ;
+  RETURN v;
 END $fn$;
-COMMENT ON FUNCTION public.fn_sms_numere_serviciu_lista() IS 'SMS: numerele de serviciu ACTIVE pentru selectia manuala a unui lot intern (aceeasi poarta ca fn_sms_angajati_lista: owner / utilizator / test), telefon mascat, opt-out.';
+COMMENT ON FUNCTION public.fn_sms_numere_serviciu_lista() IS 'SMS: numerele de serviciu ACTIVE pentru selectia manuala a unui lot intern (aceeasi poarta ca fn_sms_angajati_lista: owner / utilizator / test), telefon mascat, opt-out. Un obiect {total, numere}: clientul verifica numere.length = total.';
 
 CREATE FUNCTION public.fn_sms_numere_serviciu_admin() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -410,6 +459,14 @@ BEGIN
      AND NOT EXISTS (SELECT 1 FROM public.employees e WHERE e.id = p_responsabil_employee_id AND e.active IS TRUE) THEN
     RAISE EXCEPTION 'sms: responsabilul ales nu e un angajat activ' USING ERRCODE = '22023';
   END IF;
+  -- r2 (L23 / L01): maximum 100 de numere ACTIVE. Adăugarea e singura cale care le crește numărul (modificarea nu schimbă „activ”, un
+  -- dezactivat nu se reactivează): lock consultativ pe adăugare (nimic altceva ținut înainte), apoi numărarea, apoi insertul.
+  IF p_id IS NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtextextended('sms_numere_serviciu:adaugare', 0));
+    IF (SELECT count(*) FROM public.sms_numere_serviciu s WHERE s.activ) >= 100 THEN
+      RAISE EXCEPTION 'sms: maximum 100 de numere de serviciu active (dezactiveaza unul inainte)' USING ERRCODE = '22023';
+    END IF;
+  END IF;
   BEGIN
     IF p_id IS NULL THEN
       INSERT INTO public.sms_numere_serviciu (denumire, telefon, responsabil_employee_id, nota)
@@ -455,7 +512,7 @@ RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_text text; v_lungime integer; v_tel text[]; v_ids text[]; v_cand integer; v_fara integer; v_opt integer; v_nr integer;
         v_lot uuid; v_ins integer; v_plafon integer; v_cost numeric; v_niv text;
-        v_ns integer[]; v_tip text[]; v_cand_s integer;
+        v_ns integer[]; v_tip text[]; v_cand_s integer; v_den jsonb;
 BEGIN
   v_niv := public.fn_sms_cere_nivel();
   v_text := public.fn_sms_text_valid(p_text);
@@ -476,23 +533,25 @@ BEGIN
   END IF;
   -- un singur instantaneu: candidatii (angajati activi din filtre + numerele de serviciu alese), excluderile si lista finala (un SMS per
   -- telefon; la acelasi telefon, angajatul are prioritate fata de numarul de serviciu)
+  -- r2 (L03): denumirea numerelor de serviciu din listă se fixează în filtrul lotului (imuabil după creare), din același instantaneu
   WITH c AS (
-    SELECT 'angajat'::text AS tip, e.id, public.fn_sms_tel_normalizat(e.telefon) AS tel
+    SELECT 'angajat'::text AS tip, e.id, public.fn_sms_tel_normalizat(e.telefon) AS tel, NULL::text AS den
       FROM public.employees e
      WHERE e.active IS TRUE
        AND (coalesce(cardinality(p_angajati), 0) = 0 OR e.id = ANY (p_angajati))
        AND (coalesce(cardinality(p_departamente), 0) = 0 OR e.department = ANY (p_departamente))
     UNION ALL
-    SELECT 'serviciu'::text, s.id, s.telefon FROM public.sms_numere_serviciu s WHERE s.activ AND s.id = ANY (v_ns)
+    SELECT 'serviciu'::text, s.id, s.telefon, s.denumire FROM public.sms_numere_serviciu s WHERE s.activ AND s.id = ANY (v_ns)
   ), b AS (
-    SELECT c.tip, c.id, c.tel, (c.tel IS NOT NULL AND EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = c.tel AND o.activ)) AS opt FROM c
+    SELECT c.tip, c.id, c.tel, c.den, (c.tel IS NOT NULL AND EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = c.tel AND o.activ)) AS opt FROM c
   ), d AS (
-    SELECT DISTINCT ON (b.tel) b.tel, b.tip, b.id FROM b WHERE b.tel IS NOT NULL AND NOT b.opt ORDER BY b.tel, (b.tip = 'serviciu'), b.id
+    SELECT DISTINCT ON (b.tel) b.tel, b.tip, b.id, b.den FROM b WHERE b.tel IS NOT NULL AND NOT b.opt ORDER BY b.tel, (b.tip = 'serviciu'), b.id
   )
   SELECT (SELECT count(*) FROM b), (SELECT count(*) FROM b WHERE b.tel IS NULL), (SELECT count(*) FROM b WHERE b.opt),
          (SELECT array_agg(d.tel ORDER BY d.tel) FROM d), (SELECT array_agg(d.id::text ORDER BY d.tel) FROM d),
-         (SELECT array_agg(d.tip ORDER BY d.tel) FROM d), (SELECT count(*) FROM b WHERE b.tip = 'serviciu')
-    INTO v_cand, v_fara, v_opt, v_tel, v_ids, v_tip, v_cand_s;
+         (SELECT array_agg(d.tip ORDER BY d.tel) FROM d), (SELECT count(*) FROM b WHERE b.tip = 'serviciu'),
+         (SELECT jsonb_object_agg(d.id::text, d.den ORDER BY d.id) FROM d WHERE d.tip = 'serviciu')
+    INTO v_cand, v_fara, v_opt, v_tel, v_ids, v_tip, v_cand_s, v_den;
   v_nr := coalesce(cardinality(v_tel), 0);
   IF v_cand = 0 THEN RAISE EXCEPTION 'sms: niciun angajat activ in selectie' USING ERRCODE = '22023'; END IF;
   IF v_nr = 0 THEN RAISE EXCEPTION 'sms: niciun destinatar cu mobil RO valid (dupa filtre si opt-out)' USING ERRCODE = '22023'; END IF;
@@ -512,7 +571,8 @@ BEGIN
     END IF;
     INSERT INTO public.sms_loturi (categorie, text, filtru, nr_destinatari, segmente, cost_estimat_eur, excluse_optout, excluse_fara_mobil)
     VALUES ('intern', v_text, jsonb_build_object('departamente', to_jsonb(p_departamente), 'angajati_selectati', coalesce(cardinality(p_angajati), 0),
-                                                 'numere_serviciu_selectate', cardinality(v_ns)),
+                                                 'numere_serviciu_selectate', cardinality(v_ns),
+                                                 'numere_serviciu_denumiri', coalesce(v_den, '{}'::jsonb)),
             v_nr, 1, v_cost, v_opt, v_fara)
     RETURNING id INTO v_lot;
     INSERT INTO public.sms_mesaje (lot_id, telefon, destinatar_tip, destinatar_id)
@@ -548,14 +608,14 @@ BEGIN
            'rezervat_la', x.rezervat_la, 'trimis_la', x.trimis_la, 'livrat_la', x.livrat_la) ORDER BY x.nume, x.id), '[]'::jsonb)
     INTO v_lista
     FROM (SELECT m.id, m.destinatar_tip, m.telefon, m.stare, m.cod_eroare, m.rezervat_la, m.trimis_la, m.livrat_la,
-                 coalesce(CASE m.destinatar_tip WHEN 'angajat' THEN e.name WHEN 'serviciu' THEN s.denumire ELSE d.nume END,
+                 -- 20261220a: numărul de serviciu apare cu denumirea lui (nu cu numele responsabilului); r2 (L03): denumirea FIXATĂ la
+                 -- crearea lotului (filtrul lotului, imuabil), nu cea de azi din tabel — o redenumire nu schimbă istoricul
+                 coalesce(CASE m.destinatar_tip WHEN 'angajat' THEN e.name WHEN 'serviciu' THEN l.filtru -> 'numere_serviciu_denumiri' ->> m.destinatar_id
+                               ELSE d.nume END,
                           '(destinatar indisponibil)') AS nume
             FROM public.sms_mesaje m
             LEFT JOIN public.employees e
               ON e.id = CASE WHEN m.destinatar_tip = 'angajat' AND m.destinatar_id ~ '^[0-9]{1,9}$' THEN m.destinatar_id::integer END
-            -- 20261220a: numărul de serviciu apare cu denumirea lui (nu cu numele responsabilului)
-            LEFT JOIN public.sms_numere_serviciu s
-              ON s.id = CASE WHEN m.destinatar_tip = 'serviciu' AND m.destinatar_id ~ '^[0-9]{1,9}$' THEN m.destinatar_id::integer END
             LEFT JOIN public.red_detinatori d
               ON d.id = CASE WHEN m.destinatar_tip = 'detinator' AND m.destinatar_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                              THEN m.destinatar_id::uuid END
@@ -579,7 +639,7 @@ GRANT EXECUTE ON FUNCTION public.fn_sms_numere_serviciu_lista(), public.fn_sms_n
 
 -- ── postcondiții ──
 DO $post$
-DECLARE v_o oid; v_acl text; v_t regclass := 'public.sms_numere_serviciu'::regclass; v_s regclass;
+DECLARE v_o oid; v_acl text; v_dif text; v_t regclass := 'public.sms_numere_serviciu'::regclass; v_s regclass;
   v_expuse regprocedure[] := ARRAY['public.fn_sms_numere_serviciu_lista()', 'public.fn_sms_numere_serviciu_admin()',
     'public.fn_sms_numar_serviciu_salveaza(integer,text,text,integer,text,integer)', 'public.fn_sms_numar_serviciu_dezactiveaza(integer,integer)',
     'public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])', 'public.fn_sms_lot_destinatari(uuid)']::regprocedure[];
@@ -653,15 +713,41 @@ BEGIN
   IF md5(replace((SELECT p.prosrc FROM pg_proc p WHERE p.oid = 'public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])'::regprocedure), chr(13), ''))
        IS DISTINCT FROM
        -- AMPRENTA-START crearea lotului
-       '1250caca0184bcc5176e6c268d1ba09a'
+       '4f2c94e800d629f783290971550298f6'
        -- AMPRENTA-END crearea lotului
      OR md5(replace((SELECT p.prosrc FROM pg_proc p WHERE p.oid = 'public.fn_sms_lot_destinatari(uuid)'::regprocedure), chr(13), ''))
        IS DISTINCT FROM
        -- AMPRENTA-START lista fixata
-       'c020b202f511ddd3e84cc7d8bd08da78'
+       '16b73cb340232b8eef78449102d565aa'
        -- AMPRENTA-END lista fixata
        THEN
     RAISE EXCEPTION '20261220a post: corpurile noi difera de cele revizuite';
+  END IF;
+  -- r2 (L14 / L15): amprenta COMPLETĂ a celor cinci funcții noi = EXACT cea cu care revenirea acceptă să le scoată (blocul e identic acolo)
+  -- >>> AMPRENTE-NOI 20261220a
+  SELECT string_agg(e.fn || ' = ' || coalesce(a.d, 'LIPSESTE'), '; ' ORDER BY e.fn COLLATE "C") INTO v_dif
+    FROM (VALUES
+      ('public.fn_sms_numar_serviciu_dezactiveaza(integer,integer)', 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=e45e7fc9f8d8c1bb9181acc508a6f098'),
+      ('public.fn_sms_numar_serviciu_salveaza(integer,text,text,integer,text,integer)', 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=bb417d0955884f0d1d5b760e555dec31'),
+      ('public.fn_sms_numere_serviciu_admin()', 'tip=f, limbaj=plpgsql, definer=true, volatil=s, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=fe18333d6e850487d1266088faf290f6'),
+      ('public.fn_sms_numere_serviciu_lista()', 'tip=f, limbaj=plpgsql, definer=true, volatil=s, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=720c72b8d1c097677055eb179e7ec2a3'),
+      ('public.fn_sms_numere_serviciu_reguli()', 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=trigger, acl=postgres:EXECUTE, variante=1, corp_md5=7fa25a176a6c1a54f8b809c44c7e7011')
+    ) e(fn, asteptat)
+    LEFT JOIN LATERAL (
+      SELECT 'tip=' || p.prokind::text || ', limbaj=' || l.lanname::text || ', definer=' || p.prosecdef::text || ', volatil=' || p.provolatile::text
+             || ', strict=' || p.proisstrict::text || ', leakproof=' || p.proleakproof::text || ', proprietar=' || pg_get_userbyid(p.proowner)
+             || ', config=' || coalesce(array_to_string(p.proconfig, '; '), '(mostenit)') || ', intoarce=' || coalesce(pg_get_function_result(p.oid), '-')
+             || ', acl=' || coalesce((SELECT string_agg(x.d, ', ' ORDER BY x.d COLLATE "C") FROM (
+                  SELECT CASE g.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(g.grantee) END || ':' || g.privilege_type
+                         || CASE WHEN g.is_grantable THEN '*' ELSE '' END AS d
+                    FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) g) x), '(niciun drept)')
+             || ', variante=' || (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname)::text
+             || ', corp_md5=' || md5(replace(p.prosrc, chr(13), '')) AS d
+        FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(e.fn)) a ON true
+   WHERE a.d IS DISTINCT FROM e.asteptat;
+  -- <<< AMPRENTE-NOI 20261220a
+  IF v_dif IS NOT NULL THEN
+    RAISE EXCEPTION '20261220a post: functiile noi difera de amprenta revizuita: %', v_dif;
   END IF;
   -- nimic scris: tabelul nou e gol, niciun mesaj către un număr de serviciu
   IF EXISTS (SELECT 1 FROM public.sms_numere_serviciu) OR EXISTS (SELECT 1 FROM public.sms_mesaje m WHERE m.destinatar_tip = 'serviciu') THEN

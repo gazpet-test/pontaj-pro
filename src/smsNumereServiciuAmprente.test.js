@@ -174,8 +174,83 @@ describe('20261220a — migrarea', () => {
     for (const antet of ['CREATE FUNCTION public.fn_sms_numere_serviciu_admin(', 'CREATE FUNCTION public.fn_sms_numar_serviciu_salveaza(', 'CREATE FUNCTION public.fn_sms_numar_serviciu_dezactiveaza(']) {
       expect(corp(MIG, antet)).toMatch(/^\s*\n(DECLARE[^\n]*\n)?BEGIN\n  PERFORM public\.fn_sms_cere_owner\(\);/)
     }
-    expect(corp(MIG, 'CREATE FUNCTION public.fn_sms_numere_serviciu_lista(')).toMatch(/^\s*\nBEGIN\n  PERFORM public\.fn_sms_cere_nivel\(\);/)
+    expect(corp(MIG, 'CREATE FUNCTION public.fn_sms_numere_serviciu_lista(')).toMatch(/^\s*\n(DECLARE[^\n]*\n)?BEGIN\n  PERFORM public\.fn_sms_cere_nivel\(\);/)
     expect(corp(B30, 'CREATE OR REPLACE FUNCTION public.fn_sms_angajati_lista(')).toMatch(/^\s*\nBEGIN\n  PERFORM public\.fn_sms_cere_nivel\(\);/)
+  })
+})
+
+// r2 (P1): funcțiile pe care se sprijină corpurile NOI (porțile owner / nivel și restul) sunt în amprentă — lista FOLOSITE din migrare =
+// EXACT apelurile din corpuri = pornirea scriptului coordonatorului (o funcție nouă chemată mâine fără să intre în listă = test picat)
+const ANTETE_NOI = ['CREATE FUNCTION public.fn_sms_numere_serviciu_reguli(', 'CREATE FUNCTION public.fn_sms_numere_serviciu_lista(',
+  'CREATE FUNCTION public.fn_sms_numere_serviciu_admin(', 'CREATE FUNCTION public.fn_sms_numar_serviciu_salveaza(',
+  'CREATE FUNCTION public.fn_sms_numar_serviciu_dezactiveaza(', 'CREATE FUNCTION public.fn_sms_lot_intern_creeaza(',
+  'CREATE OR REPLACE FUNCTION public.fn_sms_lot_destinatari(']
+const NOI5 = ['fn_sms_numar_serviciu_dezactiveaza', 'fn_sms_numar_serviciu_salveaza', 'fn_sms_numere_serviciu_admin', 'fn_sms_numere_serviciu_lista', 'fn_sms_numere_serviciu_reguli']
+const folosite = () => {
+  const bloc = MIG.slice(MIG.indexOf(`-- >>> FOLOSITE ${X}`), MIG.indexOf(`-- <<< FOLOSITE ${X}`))
+  return [...bloc.matchAll(/'functie ([^']+)'/g)].map(m => m[1])
+}
+const numeFn = s => s.replace(/^(public|auth)\./, '').replace(/\(.*$/, '')
+describe('20261220a r2 — amprenta acoperă porțile și restul funcțiilor chemate de corpurile noi', () => {
+  it('lista FOLOSITE (un singur bloc) = exact funcțiile din public / auth chemate în corpurile noi (fără cele create aici)', () => {
+    expect(nr(MIG, `-- >>> FOLOSITE ${X}`)).toBe(1)
+    const chemate = new Set()
+    for (const a of ANTETE_NOI) {
+      for (const m of faraComentarii(corp(MIG, a)).matchAll(/\b(public|auth)\.([a-z_][a-z0-9_]*)\(/g)) chemate.add(m[2])
+    }
+    for (const n of [...NOI5, 'fn_sms_lot_intern_creeaza', 'fn_sms_lot_destinatari']) chemate.delete(n)
+    const lista = folosite()
+    expect(new Set(lista).size).toBe(lista.length)
+    expect(lista.map(numeFn).sort()).toEqual([...chemate].sort())
+    for (const p of ['fn_sms_cere_owner', 'fn_sms_cere_nivel', 'uid']) expect(lista.map(numeFn)).toContain(p)
+  })
+  it('scriptul coordonatorului pornește și de la aceleași funcții (aceleași nume, același număr)', () => {
+    const intrare = SCRIPT.slice(SCRIPT.indexOf(`-- >>> INTRARE ${X}`), SCRIPT.indexOf(`-- <<< INTRARE ${X}`))
+    const din = [...faraComentarii(intrare).matchAll(/\('((public|auth)\.[a-z0-9_]+)\([^)]*\)'::regprocedure::oid\)/g)].map(m => numeFn(m[1]))
+    expect(din.sort()).toEqual(folosite().map(numeFn).sort())
+  })
+  it('verificarea „înainte” refuză un baseline fără ele și unul fără lanțul complet (închiderea), înaintea comparației', () => {
+    const f = MIG.slice(MIG.indexOf(`CREATE FUNCTION pg_temp.amp_verifica_${X}`), MIG.indexOf('DO $l15_inainte$'))
+    const iFol = f.indexOf('baseline L15 fara functiile folosite de corpurile noi')
+    const iLant = f.indexOf('baseline L15 incomplet: functii chemate din lantul de acces')
+    const iComp = f.indexOf('difera de baseline-ul L15 revizuit')
+    expect(iFol).toBeGreaterThan(0)
+    expect(iLant).toBeGreaterThan(iFol)
+    expect(iComp).toBeGreaterThan(iLant)
+  })
+})
+
+// r2 (P2, L14): amprenta completă a celor cinci funcții noi, aceeași în postcondiția migrării și în verificarea revenirii
+describe('20261220a r2 — AMPRENTE-NOI: migrare = revenire = corpurile din migrare', () => {
+  const bloc = t => {
+    const i = t.indexOf(`-- >>> AMPRENTE-NOI ${X}`)
+    return t.slice(t.indexOf('\n', i) + 1, t.indexOf(`-- <<< AMPRENTE-NOI ${X}`)).split('\n').map(l => l.trim()).filter(Boolean).join('\n')
+  }
+  it('un singur bloc în fiecare fișier, identic (fără spațiile de la început)', () => {
+    expect(nr(MIG, `-- >>> AMPRENTE-NOI ${X}`)).toBe(1)
+    expect(nr(REV, `-- >>> AMPRENTE-NOI ${X}`)).toBe(1)
+    expect(bloc(REV)).toBe(bloc(MIG))
+  })
+  it('cele cinci funcții, fiecare cu corp_md5 = md5 al corpului din migrare, DEFINER, search_path fix, o singură variantă', () => {
+    const b = bloc(MIG)
+    for (const n of NOI5) {
+      const linie = b.split('\n').find(l => l.startsWith(`('public.${n}(`))
+      expect(linie, n).toBeTruthy()
+      expect(linie).toContain(`corp_md5=${md5(corp(MIG, `CREATE FUNCTION public.${n}(`))}'`)
+      expect(linie).toContain('definer=true')
+      expect(linie).toContain('config=search_path=public, pg_temp,')
+      expect(linie).toContain('variante=1')
+      expect(linie).not.toMatch(/anon|service_role|PUBLIC/)
+    }
+    expect(b.split('\n').filter(l => /^\('public\./.test(l))).toHaveLength(5)
+  })
+  it('în revenire, verificarea e înaintea oricărei schimbări (DROP)', () => {
+    const iBloc = REV.indexOf(`-- >>> AMPRENTE-NOI ${X}`)
+    const iRefuz = REV.indexOf('functiile noi difera de amprenta de la aplicare')
+    expect(iBloc).toBeGreaterThan(0)
+    expect(iRefuz).toBeGreaterThan(iBloc)
+    expect(REV.indexOf('DROP TABLE public.sms_numere_serviciu;')).toBeGreaterThan(iRefuz)
+    expect(REV.indexOf('DROP FUNCTION')).toBeGreaterThan(iRefuz)
   })
 })
 

@@ -1,6 +1,7 @@
 // Apelurile ecranului 📱 SMS: RPC-urile din 20261130a_sms_mvp + 20261130b_sms_acces_modul (nivelul owner / utilizator / test îl verifică BD-ul) + edge-ul sms-trimite.
 // UI-ul nu vorbește niciodată cu furnizorul și nu scrie direct în tabele (n-are drept): schimbarea furnizorului nu atinge ecranele.
 import { supabase } from '../lib/supabase.js'
+import { listaNumereDinRaspuns } from './smsLogica.js'
 
 const date = ({ data, error }) => { if (error) throw error; return data }
 
@@ -24,7 +25,8 @@ export const smsApi = {
     date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview,
       ...(Array.isArray(p_numere_serviciu) && p_numere_serviciu.length ? { p_numere_serviciu } : {}) })),
   // 20261220a: numerele de serviciu — lista pentru „Compune” (orice nivel SMS) și administrarea (doar owner; BD-ul refuză pe ceilalți)
-  numereServiciu: async () => date(await supabase.rpc('fn_sms_numere_serviciu_lista')) || [],
+  // r2 (L23): un obiect {total, numere}; trunchierea / forma greșită = eroare (listaNumereDinRaspuns), nu listă scurtă
+  numereServiciu: async () => listaNumereDinRaspuns(date(await supabase.rpc('fn_sms_numere_serviciu_lista'))),
   numereServiciuAdmin: async () => date(await supabase.rpc('fn_sms_numere_serviciu_admin')) || [],
   salveazaNumarServiciu: async ({ id, denumire, telefon, responsabilId, nota, versiune }) =>
     date(await supabase.rpc('fn_sms_numar_serviciu_salveaza', { p_id: id ?? null, p_denumire: denumire, p_telefon: telefon || null,

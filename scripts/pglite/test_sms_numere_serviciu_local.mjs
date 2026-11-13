@@ -5,7 +5,7 @@
 //   „runner” (marcajul de livrare). Limită: 20261130c / 30d / 30i nu se aplică aici (cer schema Redări completă); ele NU ating funcțiile
 //   înlocuite de 20261220a (crearea lotului intern, lista fixată), iar trimiterea (fn_sms_rezerva) nu se uită la destinatar_tip.
 // 1. BASELINE-ul 20261220a calculat pe schema falsă cu scripts/sms_numere_serviciu_amprente.sql (tranzacție READ ONLY), pus în blocul marcat.
-// 2. SUITA funcțională T1–T17 pe migrarea reală (owner / utilizator / test / fără nivel / anon / service_role; SET LOCAL ROLE + JWT, ca PostgREST).
+// 2. SUITA funcțională T1–T19 pe migrarea reală (owner / utilizator / test / fără nivel / anon / service_role; SET LOCAL ROLE + JWT, ca PostgREST).
 // 3. MUTANȚI (migrare stricată intenționat): fiecare TREBUIE să pice la testul lui (L25); amprentele corpurilor se recalculează pe mutant,
 //    ca să pice testul de comportament, nu poarta de amprentă.
 // 4. SCENARII: refuzurile migrării (baseline, plafon, stare schimbată înainte / strecurată după, reaplicare), aplicare -> revenire ->
@@ -44,7 +44,12 @@ const corp = (t, start) => { const i = t.indexOf(start); const a = t.indexOf('AS
 const AMP_A = (t) => md5(corp(t, 'CREATE FUNCTION public.fn_sms_lot_intern_creeaza('))
 const AMP_B = (t) => md5(corp(t, 'CREATE OR REPLACE FUNCTION public.fn_sms_lot_destinatari('))
 const puneAmprente = (t, a, b) => t.replace(/(-- AMPRENTA-START crearea lotului\n\s*)'[^']*'/, `$1'${a}'`).replace(/(-- AMPRENTA-START lista fixata\n\s*)'[^']*'/, `$1'${b}'`)
-const recalculeaza = (t) => puneAmprente(t, AMP_A(t), AMP_B(t))
+// r2: cele cinci funcții noi au amprenta completă în blocul „AMPRENTE-NOI 20261220a” (postcondiția migrării = verificarea revenirii)
+const NOI = ['fn_sms_numar_serviciu_dezactiveaza', 'fn_sms_numar_serviciu_salveaza', 'fn_sms_numere_serviciu_admin', 'fn_sms_numere_serviciu_lista', 'fn_sms_numere_serviciu_reguli']
+const reNou = (n) => new RegExp(`(\\('public\\.${n}\\([^\\n]*?corp_md5=)([0-9a-f]{32})`)
+const AMP_NOU = (t, n) => md5(corp(t, `CREATE FUNCTION public.${n}(`))
+// pe mutant: amprentele recalculate din corpul mutat, în migrare (sursa) și în revenirea dată (ca să pice testul de comportament, nu poarta)
+const recalculeaza = (t) => NOI.reduce((x, n) => x.replace(reNou(n), `$1${AMP_NOU(t, n)}`), puneAmprente(t, AMP_A(t), AMP_B(t)))
 
 async function caRunner(db, nume, text, { plafon = 2000, marcajPlafon = true } = {}) {
   const pre = plafon ? `SET transaction_timeout = ${plafon};` : 'SET transaction_timeout = 0;'
@@ -107,6 +112,12 @@ const lot = (db, cine, { text = 'Test serviciu', dep = null, ang = null, ns = nu
   unu(db, cine, `SELECT public.fn_sms_lot_intern_creeaza(p_text => $1, p_departamente => $2::text[], p_angajati => $3::integer[], p_doar_preview => $4,
                  p_numere_serviciu => $5::integer[]) AS r`, [text, dep, ang, preview, ns]).then(x => x.r)
 const mesaje = async (db, lotId) => (await db.query(`SELECT telefon, destinatar_tip, destinatar_id FROM public.sms_mesaje WHERE lot_id = $1 ORDER BY telefon`, [lotId])).rows
+// r2 (L23): lista pentru „Compune” = UN obiect {total, numere}; verifică aici și coerența (numere.length = total)
+const listaNumere = async (db, cine) => {
+  const r = (await unu(db, cine, 'SELECT public.fn_sms_numere_serviciu_lista() AS r')).r
+  if (!r || !Array.isArray(r.numere) || r.total !== r.numere.length) throw new Error('lista fără forma {total, numere} coerentă: ' + JSON.stringify(r))
+  return r.numere
+}
 
 // ── suita funcțională: fiecare test aruncă „Tn FAIL: …” la prima abatere ──
 async function suita(db) {
@@ -136,12 +147,12 @@ async function suita(db) {
   })
   await T('T3', async () => {
     for (const cine of [OWNER, UTIL, TEST]) {
-      const l = await ca(db, cine, 'SELECT * FROM public.fn_sms_numere_serviciu_lista()')
-      egal(l, [{ id: s1, denumire: 'Gazpet Redări', telefon_mascat: '07** *** 201', optout: false }], 'lista pentru ' + cine)
+      const l = await listaNumere(db, cine)
+      egal(l, [{ id: s1, optout: false, denumire: 'Gazpet Redări', telefon_mascat: '07** *** 201' }], 'lista pentru ' + cine)
     }
-    await refuz(ca(db, FARA, 'SELECT * FROM public.fn_sms_numere_serviciu_lista()'), '42501', 'nu ai acces la modulul SMS')
-    await refuz(ca(db, REDV, 'SELECT * FROM public.fn_sms_numere_serviciu_lista()'), '42501', 'nu ai acces la modulul SMS')
-    await refuz(ca(db, 'anon', 'SELECT * FROM public.fn_sms_numere_serviciu_lista()'), '42501')
+    await refuz(listaNumere(db, FARA), '42501', 'nu ai acces la modulul SMS')
+    await refuz(listaNumere(db, REDV), '42501', 'nu ai acces la modulul SMS')
+    await refuz(listaNumere(db, 'anon'), '42501')
     // fn_sms_angajati_lista: neschimbată (aceleași coloane, fără numerele de serviciu)
     const a = await ca(db, UTIL, 'SELECT * FROM public.fn_sms_angajati_lista()')
     if (a.some(x => x.nume === 'Gazpet Redări') || Object.keys(a[0]).join() !== 'id,nume,departament,telefon_mascat,optout') throw new Error('fn_sms_angajati_lista s-a schimbat')
@@ -182,7 +193,7 @@ async function suita(db) {
   })
   await T('T7', async () => {
     await unu(db, OWNER, `SELECT public.fn_sms_optout_seteaza('0700 000 201', true, 'test') AS r`)
-    egal((await ca(db, UTIL, 'SELECT optout FROM public.fn_sms_numere_serviciu_lista() WHERE id = $1', [s1]))[0].optout, true, 'opt-out în listă')
+    egal((await listaNumere(db, UTIL)).find(x => x.id === s1).optout, true, 'opt-out în listă')
     const p = await lot(db, UTIL, { ang: [2], ns: [s1] })
     egal([p.nr_destinatari, p.excluse_optout, p.numere_serviciu], [1, 1, 0], 'opt-out exclus')
     await refuz(lot(db, UTIL, { ang: [-1], ns: [s1] }), '22023', 'niciun destinatar cu mobil RO valid')
@@ -216,7 +227,7 @@ async function suita(db) {
     const r = await dezactiveaza(db, OWNER, s3, 1)
     egal([r.activ, r.versiune, r.loturi_active], [false, 2, 1], 'dezactivarea (loturile active care îl mai au)')
     await refuz(lot(db, UTIL, { ang: [1], ns: [s3] }), '22023', 'a fost dezactivat')
-    egal((await ca(db, UTIL, 'SELECT id FROM public.fn_sms_numere_serviciu_lista()')).map(x => x.id).includes(s3), false, 'dezactivatul nu mai e în listă')
+    egal((await listaNumere(db, UTIL)).map(x => x.id).includes(s3), false, 'dezactivatul nu mai e în listă')
     egal((await mesaje(db, c.lot_id)).length, 1, 'lotul deja creat rămâne neatins')
   })
   await T('T11', async () => {
@@ -290,6 +301,33 @@ async function suita(db) {
     egal([s && s.nume, s && s.stare], ['Gazpet Redări', 'necunoscut'], 'mesajele lotului')
     await refuz(unu(db, FARA, 'SELECT public.fn_sms_lot_destinatari($1) AS r', [lotT5]), '42501')
   })
+  await T('T18', async () => {
+    // r2 (L03): denumirea e cea FIXATĂ la crearea lotului (filtrul lotului); o redenumire ulterioară nu schimbă istoricul
+    const f = (await db.query(`SELECT filtru FROM public.sms_loturi WHERE id = $1`, [lotT5])).rows[0].filtru
+    egal(f.numere_serviciu_denumiri, { [String(s1)]: 'Gazpet Redări' }, 'denumirile fixate în filtrul lotului')
+    const v = (await db.query(`SELECT versiune FROM public.sms_numere_serviciu WHERE id = $1`, [s1])).rows[0].versiune
+    egal((await salveaza(db, OWNER, s1, 'Telefon Redenumit', '', null, null, v)).denumire, 'Telefon Redenumit', 'redenumirea')
+    for (const cine of [OWNER, UTIL]) {
+      const d = (await unu(db, cine, 'SELECT public.fn_sms_lot_destinatari($1) AS r', [lotT5])).r
+      egal(d.destinatari.filter(x => x.destinatar_tip === 'serviciu').map(x => x.nume), ['Gazpet Redări'], 'istoricul după redenumire (' + cine + ')')
+    }
+    const c = await lot(db, UTIL, { ang: [-1], ns: [s1], preview: false })
+    const d = (await unu(db, UTIL, 'SELECT public.fn_sms_lot_destinatari($1) AS r', [c.lot_id])).r
+    egal(d.destinatari.map(x => x.nume), ['Telefon Redenumit'], 'un lot nou poartă denumirea de azi')
+    // filtrul e imuabil după creare (triggerul 20261130c): denumirea fixată nu se poate rescrie nici direct
+    await refuz(db.query(`UPDATE public.sms_loturi SET filtru = filtru || '{"numere_serviciu_denumiri": {}}'::jsonb WHERE id = $1`, [lotT5]))
+  })
+  await T('T19', async () => {
+    // r2 (L23): maximum 100 de numere ACTIVE; lista întreagă vine într-un obiect cu total (fără plafonul de rânduri al PostgREST)
+    const activ = (await db.query(`SELECT count(*)::int AS n FROM public.sms_numere_serviciu WHERE activ`)).rows[0].n
+    for (let i = activ; i < 100; i++) await salveaza(db, OWNER, null, `Numar test ${i}`, `07000004${String(i).padStart(2, '0')}`, null, null, null)
+    const l = await listaNumere(db, UTIL)
+    egal(l.length, 100, 'lista: toate cele 100 active, cu total')
+    await refuz(salveaza(db, OWNER, null, 'Al 101-lea', '0700000500', null, null, null), '22023', 'maximum 100')
+    const ultim = l.find(x => x.denumire === 'Numar test 99')
+    await dezactiveaza(db, OWNER, ultim.id, 1)
+    egal((await salveaza(db, OWNER, null, 'Dupa dezactivare', '0700000500', null, null, null)).activ, true, 'după o dezactivare se poate adăuga din nou')
+  })
 }
 
 // ── 0. baseline + amprentele corpurilor (migrarea și revenirea poartă exact md5-ul corpurilor din migrare) ──
@@ -297,8 +335,15 @@ const BAZA0 = await bazaNoua()
 const B0 = await baseline(BAZA0)
 await BAZA0.close()
 for (const e of ['functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)', 'functie fn_sms_lot_destinatari(uuid)', 'functie fn_sms_angajati_lista()',
-                 'functie fn_sms_mesaje_reguli()', 'functie fn_sms_loturi_reguli()', 'tabel sms_mesaje | triggere', 'tabel sms_loturi | politici']) {
+                 'functie fn_sms_mesaje_reguli()', 'functie fn_sms_loturi_reguli()', 'tabel sms_mesaje | triggere', 'tabel sms_loturi | politici',
+                 // r2 (P1): poarta owner a administrării și lanțul ei (fn_sms_e_owner -> auth.uid), poarta de nivel și lanțul ei
+                 'functie fn_sms_cere_owner()', 'functie fn_sms_e_owner()', 'functie auth.uid()', 'functie fn_sms_cere_nivel()', 'functie fn_sms_nivel_cont(uuid)']) {
   if (!B0.some(r => r.eticheta === e)) { console.error('baseline: lipsește ' + e + ' (am: ' + B0.map(r => r.eticheta).join(', ') + ')'); process.exit(1) }
+}
+// r2: amprentele complete ale celor cinci funcții noi, în migrare și în revenire = md5 al corpurilor din migrare
+for (const n of NOI) {
+  const m = AMP_NOU(citeste(MIG), n), dinM = (reNou(n).exec(citeste(MIG)) || [])[2], dinR = (reNou(n).exec(citeste(REV)) || [])[2]
+  if (dinM !== m || dinR !== m) { console.error(`amprenta funcției noi ${n}: corp ${m}, migrare ${dinM}, revenire ${dinR}`); process.exit(1) }
 }
 console.log(`baseline L15 20261220a (schema falsă): ${B0.length} etichete${B0.some(r => r.atentie) ? ' — atenție: ' + B0.filter(r => r.atentie).map(r => r.eticheta + ' [' + r.atentie + ']').join('; ') : ''}`)
 const cuBaseline = (randuri) => [PLACEHOLDER, randuri.map(r => r.linie_baseline).join('\n')]
@@ -317,7 +362,7 @@ let rau = 0
   const j = await aplicaMig(db, MIG_B)
   const corpuri = (await db.query(`SELECT md5(replace(prosrc, chr(13), '')) AS m FROM pg_proc WHERE oid IN ('public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])'::regprocedure, 'public.fn_sms_lot_destinatari(uuid)'::regprocedure) ORDER BY proname DESC`)).rows.map(r => r.m)
   egal(corpuri.sort(), [AMP_A(MIG_T), AMP_B(MIG_T)].sort(), 'md5 corpurilor aplicate = amprentele din fișier')
-  try { await suita(db); console.log('suita: T1–T17 OK pe migrarea reală · ' + j.filter(m => /^20261220a: (lock-uri|sfarsit)/.test(m)).join(' · ')) }
+  try { await suita(db); console.log('suita: T1–T19 OK pe migrarea reală · ' + j.filter(m => /^20261220a: (lock-uri|sfarsit)/.test(m)).join(' · ')) }
   catch (e) { console.error('SUITA PICATĂ: ' + e.message); process.exit(1) }
   finally { await db.close() }
 }
@@ -328,15 +373,15 @@ const CERE_OWNER_SALV = ["DECLARE r public.sms_numere_serviciu; v_den text; v_te
 const mutanti = [
   ['M1 salvarea fără poarta owner (orice nivel SMS)', 'T2', [CERE_OWNER_SALV]],
   ['M2 dezactivarea fără poarta owner', 'T2', [["DECLARE r public.sms_numere_serviciu; v_loturi integer;\nBEGIN\n  PERFORM public.fn_sms_cere_owner();", "DECLARE r public.sms_numere_serviciu; v_loturi integer;\nBEGIN\n  PERFORM public.fn_sms_cere_nivel();"]]],
-  ['M3 lista fără poarta de nivel', 'T3', [["BEGIN\n  PERFORM public.fn_sms_cere_nivel();\n  RETURN QUERY\n  SELECT s.id, s.denumire", "BEGIN\n  RETURN QUERY\n  SELECT s.id, s.denumire"]]],
+  ['M3 lista fără poarta de nivel', 'T3', [["DECLARE v jsonb;\nBEGIN\n  PERFORM public.fn_sms_cere_nivel();\n", "DECLARE v jsonb;\nBEGIN\n"]]],
   ['M4 deduplicarea pe (telefon, tip) în loc de telefon', 'T6', [['SELECT DISTINCT ON (b.tel) b.tel, b.tip, b.id', 'SELECT DISTINCT ON (b.tel, b.tip) b.tel, b.tip, b.id'], ['ORDER BY b.tel, (b.tip = \'serviciu\'), b.id', 'ORDER BY b.tel, b.tip, b.id']]],
   ['M5 numărul de serviciu are prioritate la același telefon', 'T6', [["ORDER BY b.tel, (b.tip = 'serviciu'), b.id", "ORDER BY b.tel, (b.tip = 'angajat'), b.id"]]],
-  ['M6 opt-out-ul ignorat la numerele de serviciu', 'T7', [["SELECT c.tip, c.id, c.tel, (c.tel IS NOT NULL AND EXISTS", "SELECT c.tip, c.id, c.tel, (c.tel IS NOT NULL AND c.tip = 'angajat' AND EXISTS"]]],
+  ['M6 opt-out-ul ignorat la numerele de serviciu', 'T7', [["SELECT c.tip, c.id, c.tel, c.den, (c.tel IS NOT NULL AND EXISTS", "SELECT c.tip, c.id, c.tel, c.den, (c.tel IS NOT NULL AND c.tip = 'angajat' AND EXISTS"]]],
   ['M7 limita contului de test numără doar angajații', 'T8', [["  IF v_niv = 'test' AND v_nr > 5 THEN", "  IF v_niv = 'test' AND v_nr - (SELECT count(*) FROM unnest(coalesce(v_tip, '{}'::text[])) k WHERE k = 'serviciu') > 5 THEN"]]],
   ['M8 numerele acceptate și la „toți” / „pe departament”', 'T9', [["    IF coalesce(cardinality(p_angajati), 0) = 0 OR coalesce(cardinality(p_departamente), 0) > 0 THEN\n      RAISE EXCEPTION 'sms: numerele de serviciu se aleg",
                                                                   "    IF false THEN\n      RAISE EXCEPTION 'sms: numerele de serviciu se aleg"]]],
   ['M9 un număr inexistent / dezactivat sărit tacit', 'T10', [['AND s.activ) IS DISTINCT FROM cardinality(v_ns)::bigint THEN', 'AND s.activ) IS NULL THEN']]],
-  ['M10 lista fixată fără denumirea numărului', 'T5', [["WHEN 'serviciu' THEN s.denumire ELSE d.nume END", "ELSE d.nume END"]]],
+  ['M10 lista fixată fără denumirea numărului', 'T5', [["WHEN 'serviciu' THEN l.filtru -> 'numere_serviciu_denumiri' ->> m.destinatar_id", "WHEN 'serviciu' THEN NULL"]]],
   ['M11 modificarea fără verificarea versiunii (CAS)', 'T11', [["    IF p_versiune IS DISTINCT FROM r.versiune THEN\n      RAISE EXCEPTION 'sms: numarul de serviciu s-a schimbat intre timp; reincarca lista' USING ERRCODE = '40001';\n    END IF;\n  END IF;\n  IF p_id IS NOT NULL AND",
                                                                "  END IF;\n  IF p_id IS NOT NULL AND"]]],
   ['M12 creare fără FOR SHARE pe numerele alese', 'T16', [['      PERFORM 1 FROM public.sms_numere_serviciu s WHERE s.id = ANY (v_ns) ORDER BY s.id FOR SHARE;\n', '']]],
@@ -347,6 +392,13 @@ const mutanti = [
   ['M17 varianta veche păstrată (supraîncărcare)', 'post', [['DROP FUNCTION public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean);\n', '']]],
   ['M18 o politică pentru authenticated pe tabelul nou', 'post', [['ALTER TABLE public.sms_numere_serviciu ENABLE ROW LEVEL SECURITY;\n', "ALTER TABLE public.sms_numere_serviciu ENABLE ROW LEVEL SECURITY;\nCREATE POLICY zz ON public.sms_numere_serviciu FOR SELECT TO authenticated USING (true);\n"]]],
   ['M19 lista fixată cu drepturi schimbate', 'post', [['  TO authenticated;\n\n-- ── postcondiții ──', '  TO authenticated;\nGRANT EXECUTE ON FUNCTION public.fn_sms_lot_destinatari(uuid) TO service_role;\n\n-- ── postcondiții ──']]],
+  // r2
+  ['M20 lista fixată citește denumirea de AZI din tabel (L03)', 'T18', [["l.filtru -> 'numere_serviciu_denumiri' ->> m.destinatar_id", '(SELECT s.denumire FROM public.sms_numere_serviciu s WHERE s.id::text = m.destinatar_id)']]],
+  ['M21 crearea nu fixează denumirile în lot', 'T5', [["'numere_serviciu_denumiri', coalesce(v_den, '{}'::jsonb)", "'numere_serviciu_denumiri', '{}'::jsonb"]]],
+  ['M22 fără limita de 100 de numere active', 'T19', [['WHERE s.activ) >= 100 THEN', 'WHERE s.activ) >= 100000 THEN']]],
+  ['M23 lista cu total greșit (trunchiere nedeclarată)', 'T3', [["SELECT jsonb_build_object('total', count(*),", "SELECT jsonb_build_object('total', count(*) + 1,"]]],
+  ['M24 o funcție nouă cu drept în plus (service_role pe administrare)', 'post', [['  TO authenticated;\n\n-- ── postcondiții ──', '  TO authenticated;\nGRANT EXECUTE ON FUNCTION public.fn_sms_numere_serviciu_admin() TO service_role;\n\n-- ── postcondiții ──']]],
+  ['M25 o funcție nouă fără STABLE (amprenta completă: volatilitatea)', 'post', [['CREATE FUNCTION public.fn_sms_numere_serviciu_admin() RETURNS jsonb\nLANGUAGE plpgsql STABLE SECURITY DEFINER', 'CREATE FUNCTION public.fn_sms_numere_serviciu_admin() RETURNS jsonb\nLANGUAGE plpgsql VOLATILE SECURITY DEFINER']]],
 ]
 for (const [nume, test, inl] of mutanti) {
   const db = await bazaNoua()
@@ -451,6 +503,46 @@ await scenariu('S23 revenirea cu un obiect străin care cheamă lista nouă = re
   await aplicaMig(db, MIG_B)
   await db.exec(`CREATE FUNCTION public.zz_cheama() RETURNS void LANGUAGE plpgsql SET search_path = public AS $f$ BEGIN PERFORM 1 FROM public.fn_sms_numere_serviciu_lista(); END $f$;`)
   await revino(db, REV_T)
+})
+// ── r2 (P1): poarta owner a administrării și lanțul ei în amprentă (reproducerea din review: baseline -> poartă permisivă -> migrarea trecea) ──
+await scenariu('S24 poarta owner (fn_sms_cere_owner) înlocuită cu un corp permisiv DUPĂ baseline = refuz înainte', /\(inainte\) difera.*functie fn_sms_cere_owner\(\)/, async (db) => {
+  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sms_cere_owner() RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN; END $f$;`)
+  await aplicaMig(db, MIG_B)
+})
+await scenariu('S25 nivelul 2 al porții owner (fn_sms_e_owner) permisiv DUPĂ baseline = refuz înainte', /\(inainte\) difera.*functie fn_sms_e_owner\(\)/, async (db) => {
+  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sms_e_owner() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`)
+  await aplicaMig(db, MIG_B)
+})
+await scenariu('S26 baseline din scriptul r1 (fără poarta owner) = refuz: lipsesc funcțiile folosite de corpurile noi', /baseline L15 fara functiile folosite de corpurile noi: functie fn_sms_cere_owner\(\) \(/, async (db) => {
+  await aplicaMig(db, aplica(MIG_T, [cuBaseline(B0.filter(r => r.eticheta !== 'functie fn_sms_cere_owner()'))]))
+})
+await scenariu('S27 baseline fără o verigă a lanțului (fn_sms_nivel_cont, sub poarta de nivel) = refuz: închiderea incompletă', /baseline L15 incomplet.*fn_sms_nivel_cont\(uuid\) \(din fn_sms_cere_nivel\(\)\)/, async (db) => {
+  await aplicaMig(db, aplica(MIG_T, [cuBaseline(B0.filter(r => r.eticheta !== 'functie fn_sms_nivel_cont(uuid)'))]))
+})
+await scenariu('S28 același baseline incomplet + veriga schimbată (permisivă) = tot refuz (nu scapă prin lipsă)', /baseline L15 incomplet.*fn_sms_nivel_cont/, async (db) => {
+  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sms_nivel_cont(p_uid uuid) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT 'owner'::text $f$;`)
+  await aplicaMig(db, aplica(MIG_T, [cuBaseline(B0.filter(r => r.eticheta !== 'functie fn_sms_nivel_cont(uuid)'))]))
+})
+// ── r2 (P2): revenirea cere amprenta completă de la aplicare a celor cinci funcții noi ──
+for (const [nume, strica, ce] of [
+  ['S29 corpul administrării schimbat (poarta owner scoasă)', `CREATE OR REPLACE FUNCTION public.fn_sms_numere_serviciu_admin() RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN '[]'::jsonb; END $f$;`, 'fn_sms_numere_serviciu_admin'],
+  ['S30 lista cu EXECUTE în plus pentru service_role', `GRANT EXECUTE ON FUNCTION public.fn_sms_numere_serviciu_lista() TO service_role;`, 'fn_sms_numere_serviciu_lista'],
+  ['S31 salvarea trecută pe SECURITY INVOKER', `ALTER FUNCTION public.fn_sms_numar_serviciu_salveaza(integer, text, text, integer, text, integer) SECURITY INVOKER;`, 'fn_sms_numar_serviciu_salveaza'],
+  ['S32 o a doua variantă a dezactivării', `CREATE FUNCTION public.fn_sms_numar_serviciu_dezactiveaza(p_id integer) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT NULL::jsonb $f$;`, 'fn_sms_numar_serviciu_dezactiveaza'],
+  ['S33 triggerul numerelor cu search_path schimbat', `ALTER FUNCTION public.fn_sms_numere_serviciu_reguli() SET search_path = public;`, 'fn_sms_numere_serviciu_reguli'],
+]) await scenariu(`${nume} = revenire refuzată, nimic schimbat`, new RegExp(`functiile noi difera de amprenta de la aplicare \\(pasul 1\\): public\\.${ce}\\(`), async (db) => {
+  await aplicaMig(db, MIG_B)
+  await db.exec(strica)
+  try { await revino(db, REV_T) } finally {
+    // nimic schimbat: tabelul și varianta cu 5 parametri sunt încă acolo
+    const r = (await db.query(`SELECT to_regclass('public.sms_numere_serviciu') IS NOT NULL AS t, to_regprocedure('public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])') IS NOT NULL AS f`)).rows[0]
+    if (!r.t || !r.f) throw new Error('revenirea refuzată a schimbat ceva')
+  }
+})
+await scenariu('S34 revenirea FĂRĂ blocul de amprente (mutant) pe corpul schimbat = ar fi trecut (dovada că blocul contează)', null, async (db) => {
+  await aplicaMig(db, MIG_B)
+  await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sms_numere_serviciu_admin() RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN '[]'::jsonb; END $f$;`)
+  await revino(db, aplica(REV_T, [["    IF v_dif IS NOT NULL THEN\n      RAISE EXCEPTION '20261220a revenire: functiile noi", "    IF false THEN\n      RAISE EXCEPTION '20261220a revenire: functiile noi"]]))
 })
 if (rau) { console.error(`${rau} mutanți / scenarii greșite`); process.exit(1) }
 console.log('mutanți: toți prinși la testul lor; scenariile: toate cu motivul lor')

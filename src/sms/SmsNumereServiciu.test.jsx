@@ -120,6 +120,20 @@ describe('⚙ Setări → Numere de serviciu (doar owner)', () => {
     expect(html).not.toMatch(/<button[^>]*disabled[^>]*>✔ Salvează/)
     expect(html).toContain('>Renunță<')
   })
+  it('r2 (P1): migrarea neaplicată (sonda a găsit RPC-ul lipsă) = secțiunea nu se randează deloc, fără eroare', () => {
+    expect(renderToStaticMarkup(<NumereServiciu setMesaj={() => {}} lipsaInitiala angajatiInitiali={angajati} />)).toBe('')
+  })
+  it('r2 (L23): cu 100 de numere active, adăugarea e blocată și omul vede de ce (BD-ul refuză oricum al 101-lea)', () => {
+    const o_suta = Array.from({ length: 100 }, (_, i) => ({ id: 100 + i, denumire: `Telefon ${i}`, telefon_mascat: '07** *** 2' + String(i).padStart(2, '0'), activ: true, versiune: 1, optout: false }))
+    const html = renderToStaticMarkup(<NumereServiciu setMesaj={() => {}} listaInitiala={o_suta} angajatiInitiali={angajati}
+      formInitial={{ id: null, denumire: 'Telefon Nou', telefon: '0700 000 999', responsabilId: '', nota: '', versiune: null }} />)
+    expect(html).toContain('Sunt deja 100 numere active (maximum 100)')
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>＋ Adaugă numărul/)
+    const sub = renderToStaticMarkup(<NumereServiciu setMesaj={() => {}} listaInitiala={o_suta.slice(1)} angajatiInitiali={angajati}
+      formInitial={{ id: null, denumire: 'Telefon Nou', telefon: '0700 000 999', responsabilId: '', nota: '', versiune: null }} />)
+    expect(sub).not.toContain('Sunt deja')
+    expect(sub).not.toMatch(/<button[^>]*disabled[^>]*>＋ Adaugă numărul/)
+  })
   it('secțiunea e în Setări, care se vede doar de owner; utilizatorul nu o vede', () => {
     const owner = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: true }} panouInitial={{ nivel: 'owner', kill_switch: true, plafon_zi: 200, plafon_luna: 1500, consum_zi: 0, consum_luna: 0, versiune: 1 }} />)
     expect(owner).toContain('>⚙ Setări<')

@@ -4,6 +4,8 @@
 -- fn_sms_lot_intern_creeaza -> înapoi varianta cu 4 parametri (corpul 20261130b, EXACT, cu drepturile ei: EXECUTE doar authenticated);
 -- fn_sms_lot_destinatari -> corpul 20261130b (drepturile neschimbate); CHECK-ul sms_mesaje.destinatar_tip -> ('angajat', 'detinator').
 -- Starea EXACTĂ a migrării se verifică înainte (amprentele corpurilor noi, drepturile, triggerul, CHECK-ul): altă stare = refuz, nimic schimbat.
+-- r2: și cele cinci funcții noi au amprenta COMPLETĂ de la aplicare (blocul „AMPRENTE-NOI 20261220a”, identic cu postcondiția migrării):
+--   corp, DEFINER, proprietar, search_path, volatilitate, tipul întors, ACL, o singură variantă; una modificată după aplicare = refuz.
 --
 -- REFUZĂ (nimic schimbat), verificat SUB lock-uri:
 --   * dacă există mesaje către numere de serviciu (sms_mesaje.destinatar_tip = 'serviciu', în orice lot, în orice stare): sunt jurnalul
@@ -25,7 +27,7 @@
 --   sms_loturi SHARE UPDATE EXCLUSIVE (doar DDL), sms_mesaje ACCESS EXCLUSIVE (CHECK); NOWAIT, reîncercat până la 1 s de la BEGIN.
 --   „Fără date” se verifică DUPĂ lock-uri (L14).
 DO $revenire$
-DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_n bigint;
+DECLARE v_plafon text; v_incercari integer := 0; v_pas integer; v_n bigint; v_dif text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
      OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261220a_sms_numere_serviciu_ROLLBACK:' || txid_current() THEN
@@ -74,7 +76,7 @@ BEGIN
                         AND p.prosecdef AND pg_get_userbyid(p.proowner) = 'postgres' AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']
                         AND md5(replace(p.prosrc, chr(13), '')) =
                             -- AMPRENTA-START crearea lotului
-                            '1250caca0184bcc5176e6c268d1ba09a'
+                            '4f2c94e800d629f783290971550298f6'
                             -- AMPRENTA-END crearea lotului
                         AND has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
                         AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
@@ -83,19 +85,42 @@ BEGIN
                         AND p.prosecdef AND pg_get_userbyid(p.proowner) = 'postgres'
                         AND md5(replace(p.prosrc, chr(13), '')) =
                             -- AMPRENTA-START lista fixata
-                            'c020b202f511ddd3e84cc7d8bd08da78'
+                            '16b73cb340232b8eef78449102d565aa'
                             -- AMPRENTA-END lista fixata
                         )
-       OR (SELECT count(*) FROM pg_proc p WHERE p.oid IN (to_regprocedure('public.fn_sms_numere_serviciu_lista()'), to_regprocedure('public.fn_sms_numere_serviciu_admin()'),
-             to_regprocedure('public.fn_sms_numar_serviciu_salveaza(integer,text,text,integer,text,integer)'),
-             to_regprocedure('public.fn_sms_numar_serviciu_dezactiveaza(integer,integer)'), to_regprocedure('public.fn_sms_numere_serviciu_reguli()'))
-             AND p.prosecdef AND pg_get_userbyid(p.proowner) = 'postgres') <> 5
        OR (SELECT count(*) FROM pg_trigger tg WHERE tg.tgrelid = 'public.sms_numere_serviciu'::regclass AND NOT tg.tgisinternal) <> 1
        OR (SELECT count(*) FROM pg_trigger tg WHERE tg.tgfoid = to_regprocedure('public.fn_sms_numere_serviciu_reguli()')) <> 1
        OR (SELECT string_agg(c.conname || ' ' || pg_get_constraintdef(c.oid), '; ') FROM pg_constraint c
             WHERE c.conrelid = 'public.sms_mesaje'::regclass AND c.contype = 'c' AND pg_get_constraintdef(c.oid) LIKE '%destinatar\_tip%')
           IS DISTINCT FROM 'sms_mesaje_destinatar_tip_check CHECK ((destinatar_tip = ANY (ARRAY[''angajat''::text, ''detinator''::text, ''serviciu''::text])))' THEN
       RAISE EXCEPTION '20261220a revenire: starea nu e cea din 20261220a (pasul %)', v_pas;
+    END IF;
+    -- r2 (P2, L14 / L15): cele cinci funcții noi = EXACT amprenta de la aplicare (corp md5, DEFINER, proprietar, search_path, volatilitate,
+    -- strict / leakproof, tipul întors, ACL, o singură variantă); blocul e IDENTIC cu postcondiția migrării. Modificată după aplicare = refuz.
+    -- >>> AMPRENTE-NOI 20261220a
+  SELECT string_agg(e.fn || ' = ' || coalesce(a.d, 'LIPSESTE'), '; ' ORDER BY e.fn COLLATE "C") INTO v_dif
+    FROM (VALUES
+      ('public.fn_sms_numar_serviciu_dezactiveaza(integer,integer)', 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=e45e7fc9f8d8c1bb9181acc508a6f098'),
+      ('public.fn_sms_numar_serviciu_salveaza(integer,text,text,integer,text,integer)', 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=bb417d0955884f0d1d5b760e555dec31'),
+      ('public.fn_sms_numere_serviciu_admin()', 'tip=f, limbaj=plpgsql, definer=true, volatil=s, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=fe18333d6e850487d1266088faf290f6'),
+      ('public.fn_sms_numere_serviciu_lista()', 'tip=f, limbaj=plpgsql, definer=true, volatil=s, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=jsonb, acl=authenticated:EXECUTE, postgres:EXECUTE, variante=1, corp_md5=720c72b8d1c097677055eb179e7ec2a3'),
+      ('public.fn_sms_numere_serviciu_reguli()', 'tip=f, limbaj=plpgsql, definer=true, volatil=v, strict=false, leakproof=false, proprietar=postgres, config=search_path=public, pg_temp, intoarce=trigger, acl=postgres:EXECUTE, variante=1, corp_md5=7fa25a176a6c1a54f8b809c44c7e7011')
+    ) e(fn, asteptat)
+    LEFT JOIN LATERAL (
+      SELECT 'tip=' || p.prokind::text || ', limbaj=' || l.lanname::text || ', definer=' || p.prosecdef::text || ', volatil=' || p.provolatile::text
+             || ', strict=' || p.proisstrict::text || ', leakproof=' || p.proleakproof::text || ', proprietar=' || pg_get_userbyid(p.proowner)
+             || ', config=' || coalesce(array_to_string(p.proconfig, '; '), '(mostenit)') || ', intoarce=' || coalesce(pg_get_function_result(p.oid), '-')
+             || ', acl=' || coalesce((SELECT string_agg(x.d, ', ' ORDER BY x.d COLLATE "C") FROM (
+                  SELECT CASE g.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(g.grantee) END || ':' || g.privilege_type
+                         || CASE WHEN g.is_grantable THEN '*' ELSE '' END AS d
+                    FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) g) x), '(niciun drept)')
+             || ', variante=' || (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = p.pronamespace AND q.proname = p.proname)::text
+             || ', corp_md5=' || md5(replace(p.prosrc, chr(13), '')) AS d
+        FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(e.fn)) a ON true
+   WHERE a.d IS DISTINCT FROM e.asteptat;
+  -- <<< AMPRENTE-NOI 20261220a
+    IF v_dif IS NOT NULL THEN
+      RAISE EXCEPTION '20261220a revenire: functiile noi difera de amprenta de la aplicare (pasul %): %; nimic schimbat', v_pas, v_dif;
     END IF;
     -- nimic altceva nu depinde de tabel / de funcțiile scoase (vederi, cheie străină, alte corpuri care le cheamă; plpgsql nu lasă dependențe)
     IF EXISTS (SELECT 1 FROM pg_depend d WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = 'public.sms_numere_serviciu'::regclass

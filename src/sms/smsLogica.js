@@ -135,6 +135,71 @@ export function valideazaNumarServiciu({ denumire, telefon, nota } = {}, { nou =
   return p
 }
 
+/** 20261220a r2 (L23): maximum de numere de serviciu ACTIVE (aceeași limită ca fn_sms_numar_serviciu_salveaza). */
+export const MAX_NUMERE_SERVICIU = 100
+
+// funcțiile 20261220a pe care le cheamă direct ecranul (cele noi; crearea lotului există și înainte, cu 4 parametri)
+const RPC_NUMERE = /\b(fn_sms_numere_serviciu_lista|fn_sms_numere_serviciu_admin|fn_sms_numar_serviciu_salveaza|fn_sms_numar_serviciu_dezactiveaza)\b/
+
+/** r2 (P1): migrarea 20261220a nu e (încă) aplicată sau cache-ul PostgREST nu o vede: funcția NOASTRĂ lipsește (PGRST202 / 42883).
+ *  Orice altă eroare (drepturi, rețea, alt obiect) rămâne eroare (L18); PGRST202 cu „Perhaps you meant” către aceeași funcție =
+ *  funcția există, argumentele nu se potrivesc (nepotrivire de contract, se arată ca eroare). Tiparul: lipsaReceptie (izoDocumenteLogica). */
+export function lipsaRpcNumereServiciu(error) {
+  if (!error || typeof error !== 'object') return false
+  const cod = String(error.code || '')
+  if (cod !== 'PGRST202' && cod !== '42883') return false
+  const mesaj = String(error.message || '')
+  if (!RPC_NUMERE.test(mesaj)) return false
+  // „Perhaps you meant … fn_sms_numer…”: o funcție 20261220a EXISTĂ (migrarea e acolo, contractul diferă) = eroare, nu „lipsă”
+  if (RPC_NUMERE.test(String(error.hint || ''))) return false
+  return /could not find the function|does not exist/i.test(mesaj)
+}
+
+/** r2 (L23 / L18): răspunsul fn_sms_numere_serviciu_lista = {total, numere}; numere.length ≠ total = trunchiere → eroare, nu listă scurtă. */
+export function listaNumereDinRaspuns(r) {
+  const total = Number(r?.total)
+  if (!r || !Array.isArray(r.numere) || !Number.isInteger(total) || total < 0) throw new Error('Lista numerelor de serviciu are o formă neașteptată (reîncarcă pagina).')
+  if (r.numere.length !== total) throw new Error(`Lista numerelor de serviciu e incompletă (${r.numere.length} din ${total}); reîncarcă pagina.`)
+  return r.numere
+}
+
+/** r2 (P1): încărcarea listei pentru „Compune”: 'da' (lista), 'lipsa' (migrarea neaplicată: ecranul merge ca înainte, fără grup și fără
+ *  eroare), 'eroare' (afișată, L18; `err` = eroarea brută). „Lipsa” se acceptă DOAR la sonda (prima încărcare): după o listă primită,
+ *  funcția care dispare e eroare. Nu aruncă. */
+export async function incarcaNumereServiciu(api, { sonda = true } = {}) {
+  try { return { stare: 'da', numere: await api.numereServiciu(), err: null } }
+  catch (e) {
+    if (sonda && lipsaRpcNumereServiciu(e)) return { stare: 'lipsa', numere: [], err: null }
+    return { stare: 'eroare', numere: null, err: e }
+  }
+}
+
+/** r2 (P2): după o reîncărcare a listei, selecția păstrează DOAR numerele încă active și fără opt-out (altfel o bifă dispărută / blocată
+ *  ar rămâne în selecție și BD-ul ar refuza previzualizarea fără ca omul să o poată debifa). Întoarce selecția nouă + ce s-a scos (cu
+ *  denumirea din lista de dinainte). */
+export function reconciliazaNumereAlese(alese, listaNoua, listaVeche = []) {
+  const noi = new Map((listaNoua || []).map(n => [n.id, n]))
+  const vechi = new Map((listaVeche || []).map(n => [n.id, n]))
+  const pastrate = new Set(), scoase = []
+  for (const id of alese || []) {
+    const n = noi.get(id)
+    if (n && !n.optout) { pastrate.add(id); continue }
+    scoase.push({ id, denumire: (n || vechi.get(id))?.denumire || `numărul #${id}`, motiv: n ? 'optout' : 'inactiv' })
+  }
+  return { alese: pastrate, scoase }
+}
+
+/** Mesajul pentru omul care avea bifate numerele scoase din selecție. */
+export function mesajScoaseDinSelectie(scoase) {
+  const lista = l => l.map(s => `„${s.denumire}”`).join(', ')
+  const inactive = (scoase || []).filter(s => s.motiv === 'inactiv'), opt = (scoase || []).filter(s => s.motiv === 'optout')
+  const p = []
+  if (inactive.length === 1) p.push(`Numărul de serviciu ${lista(inactive)} nu mai e activ și a fost scos din selecție.`)
+  else if (inactive.length) p.push(`Numerele de serviciu ${lista(inactive)} nu mai sunt active și au fost scoase din selecție.`)
+  if (opt.length) p.push(`${lista(opt)} ${opt.length === 1 ? 'are' : 'au'} opt-out și ${opt.length === 1 ? 'a fost scos' : 'au fost scoase'} din selecție.`)
+  return p.length ? p.join(' ') + ' Verifică destinatarii și previzualizează din nou.' : ''
+}
+
 /** Mesajul de după dezactivare: loturile deja create îl păstrează (lista e fixată la creare). */
 export function mesajDezactivare(r) {
   const n = Number(r?.loturi_active) || 0
