@@ -185,10 +185,14 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
 1. Citirea (`scripts/amprenta_globala_citire.sh --lista`) tipărește și rândurile `CONTEXT` (în aceeași fotografie): `server_version_num`,
    `current_user`, `session_user`.
 2. `scripts/l15_compara_liste.sh --a <citire clonă> --b <citire țintă> --manifest <NUME>.l15.tsv` ⇒ **`COMPARABIL`** (cod 0) doar dacă:
-   rândurile `CONTEXT` sunt egale; familiile `acl_implicit` și `sesiune` sunt egale; fiecare rând `schimbat` / `sters` din manifest există
-   în ambele liste cu ACEEAȘI amprentă; fiecare rând `creat` lipsește din ambele. Altfel `NECOMPARABIL` (cod 6) cu lista. Diferențele din
-   `extensie`, `colatie`, `limbaj`, `rol`, `membru`, `schema` se tipăresc ca `DE_EXPLICAT` (nu schimbă codul; coordonatorul le explică în
-   PR-ul de baseline). Fără opțiuni scriptul doar listează diferențele (doar în A / doar în B / altă amprentă, pe familii; 0 / 7).
+   rândurile `CONTEXT` sunt egale; familia `sesiune` e egală; privilegiile implicite ale **rolului de livrare** (rândurile
+   `acl_implicit <current_user> …` — el creează obiectele noi, deci ele le hotărăsc drepturile) sunt egale; fiecare rând `schimbat` /
+   `sters` din manifest există în ambele liste cu ACEEAȘI amprentă; fiecare rând `creat` lipsește din ambele. Altfel `NECOMPARABIL`
+   (cod 6) cu lista. Diferențele din `extensie`, `colatie`, `limbaj`, `rol`, `membru`, `schema` și privilegiile implicite ale ALTOR
+   creatori (rolurile platformei, în schemele lor — o clonă fără schemele platformei nu le are) se tipăresc ca `DE_EXPLICAT` (nu schimbă
+   codul; coordonatorul le explică în PR-ul de baseline). Dacă numele rolului de livrare nu e un identificator simplu, regula e cea
+   strictă: orice rând `acl_implicit` diferit = `NECOMPARABIL`. Fără opțiuni scriptul doar listează diferențele (doar în A / doar în B /
+   altă amprentă, pe familii; 0 / 7).
 3. **Proba cu ROLLBACK pe țintă** (`scripts/livrare_l15_manifest.sh --compara-cu <NUME>.l15.tsv [--amprenta-globala <md5>]`, în loc de
    `--iesire`): aceeași formă a livrării, nimic scris, diferența obținută pe țintă comparată cu manifestul ⇒ `IDENTIC` (0) sau lista
    `DOAR_AICI` / `DOAR_IN_MANIFEST` / `ALTA_AMPRENTA` (6), plus timpii; cu `--amprenta-globala` verifică și GLOBAL-ul dinainte. Se poate

@@ -118,6 +118,26 @@ citire "$TMP/m_acl" "$(printf '%s\n' "$R0" | sed "s/$(h 3)/$(h 13)/")"
 regula R_FAM 6 'acl_implicit diferit' --a "$TMP/a" --b "$TMP/m_acl" --manifest "$MAN"
 citire "$TMP/m_ses" "$(printf '%s\n' "$R0" | sed "s/$(h 4)/$(h 14)/")"
 ruleaza "$CMP" 6 'sesiune diferita' --a "$TMP/a" --b "$TMP/m_ses" --manifest "$MAN"
+# privilegiile implicite ale ALTUI creator decat rolul de livrare (un rol al platformei, alta schema): nu hotarasc drepturile
+# obiectelor create de livrare => COMPARABIL, linia apare ca DE_EXPLICAT (caz real: clona fara schemele platformei)
+citire "$TMP/m_acl_alt" "$R0
+acl_implicit${T}acl_implicit alt_creator alta_schema f${T}$(h 18)"
+ruleaza "$CMP" 0 'acl_implicit al altui creator' --a "$TMP/a" --b "$TMP/m_acl_alt" --manifest "$MAN"
+grep -qF '[ok] COMPARABIL' "$TMP/out" && grep -qx "DE_EXPLICAT${T}DOAR_B${T}acl_implicit${T}acl_implicit alt_creator alta_schema f${T}$(h 18)" "$TMP/out" \
+  || { cat "$TMP/out"; fail 'acl_implicit al altui creator: COMPARABIL + DE_EXPLICAT'; }
+# rolul de livrare in ALTA schema ramane refuz (tot el creeaza obiectele)
+citire "$TMP/m_acl_sch" "$R0
+acl_implicit${T}acl_implicit postgres alta_schema f${T}$(h 19)"
+ruleaza "$CMP" 6 'acl_implicit al rolului de livrare, alta schema' --a "$TMP/a" --b "$TMP/m_acl_sch" --manifest "$MAN"
+# un creator al carui nume doar INCEPE cu numele rolului de livrare nu e rolul de livrare
+citire "$TMP/m_acl_pre" "$R0
+acl_implicit${T}acl_implicit postgres_alt public f${T}$(h 20)"
+ruleaza "$CMP" 0 'creator cu nume care incepe cu rolul de livrare' --a "$TMP/a" --b "$TMP/m_acl_pre" --manifest "$MAN"
+# rol de livrare cu nume ne-simplu => regula stricta (fail-closed): orice acl_implicit diferit = NECOMPARABIL
+citire "$TMP/a_q" "$R0" '170101 Rol-Mare Rol-Mare'
+citire "$TMP/m_acl_q" "$R0
+acl_implicit${T}acl_implicit alt_creator alta_schema f${T}$(h 18)" '170101 Rol-Mare Rol-Mare'
+ruleaza "$CMP" 6 'rol de livrare cu nume ne-simplu: regula stricta' --a "$TMP/a_q" --b "$TMP/m_acl_q" --manifest "$MAN"
 citire "$TMP/m_sch" "$(printf '%s\n' "$R0" | sed "s/$(h 2)/$(h 17)/")"
 regula R_EXIST 6 'rand schimbat cu alta amprenta pe B' --a "$TMP/a" --b "$TMP/m_sch" --manifest "$MAN"
 ruleaza "$CMP" 6 'rand schimbat cu alta amprenta pe B (linia)' --a "$TMP/a" --b "$TMP/m_sch" --manifest "$MAN"

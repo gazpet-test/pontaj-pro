@@ -5,10 +5,14 @@
 #   bash scripts/l15_compara_liste.sh --a <citire_A.txt> --b <citire_B.txt> [--manifest <NUME>.l15.tsv | --recitire]
 # Fara optiuni: randurile doar in A, doar in B si cele cu alta amprenta, grupate pe familii, + totaluri.
 #   Cod 0 = identice, 7 = difera.
-# --manifest (A = clona, B = tinta): COMPARABIL (0) doar daca: randurile CONTEXT sunt egale; familiile acl_implicit si
-#   sesiune sunt egale; fiecare rand schimbat / sters din manifest exista in AMBELE liste cu ACEEASI amprenta; fiecare rand
-#   creat lipseste din ambele. Altfel NECOMPARABIL (6) cu lista. Diferentele din extensie, colatie, limbaj, rol, membru,
-#   schema se tiparesc ca DE_EXPLICAT (nu schimba codul: le explica coordonatorul in PR-ul de baseline).
+# --manifest (A = clona, B = tinta): COMPARABIL (0) doar daca: randurile CONTEXT sunt egale; familia sesiune e egala;
+#   privilegiile implicite ale ROLULUI DE LIVRARE (randurile "acl_implicit <current_user din CONTEXT> ...": creatorul
+#   obiectelor noi) sunt egale; fiecare rand schimbat / sters din manifest exista in AMBELE liste cu ACEEASI amprenta;
+#   fiecare rand creat lipseste din ambele. Altfel NECOMPARABIL (6) cu lista. Diferentele din extensie, colatie, limbaj,
+#   rol, membru, schema si privilegiile implicite ale ALTOR creatori (rolurile platformei: nu hotarasc drepturile
+#   obiectelor create de livrare) se tiparesc ca DE_EXPLICAT (nu schimba codul: le explica coordonatorul in PR-ul de
+#   baseline). Rol de livrare cu nume ne-simplu (ar aparea intre ghilimele in eticheta) => regula stricta: orice rand
+#   acl_implicit diferit = NECOMPARABIL (fail-closed).
 # --recitire (aceeasi baza, doua momente: A = citirea revizuita, B = cea din ziua livrarii): partea REVIZUITA trebuie sa
 #   fie IDENTICA - iesirea scriptului de amprente al migrarii (in ordine), randurile LANT, SEMNALE, INCREDERE, CONTEXT -
 #   altfel 6; restul diferentelor (RAND) se listeaza integral (cod 0 daca partea revizuita e identica).
@@ -110,8 +114,11 @@ if [ -n "$MAN" ]; then
   awk -F'\t' 'NF < 4 || $(NF-1) !~ /^(creat|schimbat|sters)$/ { print NR }' "$W/man" | head -n 3 >"$W/man_rau"
   [ ! -s "$W/man_rau" ] || refuz 2 "--manifest: linii fara formatul familie TAB eticheta TAB operatie TAB amprenta ($(tr '\n' ' ' <"$W/man_rau"))"
   cmp -s "$W/a.ctx" "$W/b.ctx" || nec R_CONTEXT "CONTEXT diferit: A [$(cut -f2,4 "$W/a.ctx" | tr '\t\n' '= ')] B [$(cut -f2,4 "$W/b.ctx" | tr '\t\n' '= ')]"   # M_R_CONTEXT
-  awk -F'\t' '$2 == "acl_implicit" || $2 == "sesiune"' "$W/dif" >"$W/fam"
-  [ ! -s "$W/fam" ] || nec R_FAM "familiile acl_implicit / sesiune difera ($(grep -c . "$W/fam") randuri)"   # M_R_FAM
+  # rolul de livrare = current_user din CONTEXT (A; B e egal sau R_CONTEXT a refuzat deja). Nume ne-simplu => "" => strict.
+  ROL_L="$(awk -F'\t' '$2 == "current_user" { print $4 }' "$W/a.ctx")"
+  [[ "$ROL_L" =~ ^[a-z_][a-z0-9_]*$ ]] || ROL_L=""
+  awk -F'\t' -v rol="$ROL_L" '$2 == "sesiune" || ($2 == "acl_implicit" && (rol == "" || index($3, "acl_implicit " rol " ") == 1))' "$W/dif" >"$W/fam"
+  [ ! -s "$W/fam" ] || nec R_FAM "sesiunea / privilegiile implicite ale rolului de livrare difera ($(grep -c . "$W/fam") randuri)"   # M_R_FAM
   sed 's/^/  /' "$W/fam"
   awk -F'\t' -v fe="$W/r_exist" -v fc="$W/r_creat" '
     function cheie_r(   k, i) { k = $1; for (i = 2; i < NF; i++) k = k FS $i; return k }
@@ -127,8 +134,10 @@ if [ -n "$MAN" ]; then
   [ ! -s "$W/r_exist" ] || nec R_EXIST "randuri schimbat / sters din manifest care nu exista in ambele liste cu aceeasi amprenta: $(grep -c . "$W/r_exist")"   # M_R_EXIST
   [ ! -s "$W/r_creat" ] || nec R_CREAT "randuri creat din manifest care exista deja: $(grep -c . "$W/r_creat")"   # M_R_CREAT
   sed 's/^/  /' "$W/r_exist" "$W/r_creat"
-  awk -F'\t' '$2 ~ /^(extensie|colatie|limbaj|rol|membru|schema)$/ { print "DE_EXPLICAT" FS $0 }' "$W/dif"
-  echo "diferente intre liste: $N_DIF randuri ($(awk -F'\t' '$2 ~ /^(extensie|colatie|limbaj|rol|membru|schema)$/' "$W/dif" | grep -c . || true) DE_EXPLICAT)"
+  # DE_EXPLICAT: familiile de context + privilegiile implicite ale altor creatori decat rolul de livrare
+  awk -F'\t' -v rol="$ROL_L" '$2 ~ /^(extensie|colatie|limbaj|rol|membru|schema)$/ || ($2 == "acl_implicit" && rol != "" && index($3, "acl_implicit " rol " ") != 1) { print "DE_EXPLICAT" FS $0 }' "$W/dif" >"$W/expl"
+  cat "$W/expl"
+  echo "diferente intre liste: $N_DIF randuri ($(grep -c . "$W/expl" || true) DE_EXPLICAT)"
   if [ "$NEC" = 0 ]; then echo "[ok] COMPARABIL: manifestul $(basename "$MAN") ($(grep -c . "$W/man" || true) randuri) se poate verifica pe B"; exit 0; fi
   echo "[x] NECOMPARABIL: vezi liniile NECOMPARABIL de mai sus"; exit 6
 fi
