@@ -211,4 +211,12 @@ livrare, recitirea din ziua livrării cu clasificarea diferențelor, mai multe p
 finală cel mult 1,5 s, verificarea „înainte” raportată separat). În plus, pentru această migrare, în jurnalul livrării se trec: momentul
 la care au fost luate lock-urile și cât au fost ținute (până la ROLLBACK / COMMIT), numărul de încercări și verificarea că proba nu a
 lăsat nimic în urmă (tabelul nou nu există, istoricul neschimbat, amprenta globală de după = cea dinainte). O singură probă `IDENTIC` nu
-ajunge pentru aplicare.
+ajunge pentru aplicare: se cer trei probe consecutive acceptate (prima rămâne în jurnal așa cum a ieșit), apoi o recitire comparată
+și clasificată imediat înaintea aplicării. La un refuz „BUGET_LOCK”: se confirmă că tranzacția s-a încheiat și că n-a rămas nimic, se
+caută cine ținea tabelele, se reia manual după eliberare și seria de trei reîncepe; refuzurile repetate cer altă fereastră, nu bugete
+mai mari.
+
+**Cum ajung lock-urile în jurnal.** Proba „diferența = manifestul” tipărește doar rândurile runnerului, nu și mesajele migrării
+(momentul luării lock-urilor și numărul de încercări). De aceea, la proba pe țintă, coordonatorul păstrează ieșirea întreagă a sesiunii
+și pornește alături un observator doar-citire al lock-urilor (când au fost văzute acordate și când au dispărut). Probat pe clonă:
+lock-urile luate la ≈ 0,48 s de la BEGIN, o încercare, ținute ≈ 0,48 s până la ROLLBACK; la aplicare ≈ 0,44 s până la COMMIT.
