@@ -18,6 +18,10 @@ definiție (§5).
 `FARA_DATE_LA_SURSA`: tabelele de bază ale vederii, găsite în catalog, citite efectiv ca `anon`) sau iese `CONSTANTA` / `DATE_CITIBILE` /
 `AMBIGUU` (§2); `STATISTICI` are `queryid` și o linie-rezumat de comparat între două citiri; `CONTROL` vede și politicile pentru `anon` /
 PUBLIC puse pe tabele fără drept.
+**Runda 6 (review #1090):** ieșirea citirii e o **probă**, nu o demonstrație. Întâi analiza din catalog, cu o listă albă de funcții:
+o relație cu o funcție din afara listei nu se mai execută (`NEEXECUTATA`). Simularea pune contextul unei cereri GET reale prin API
+(metoda, calea, revendicările cheii) și refuză setările pe care nu le modelează. `STATISTICI`: clase după forma API-ului, `stats_since`
+pe fiecare intrare, colectarea pornită, martorul API-ului; regula de comparare e pe fiecare intrare (§2).
 
 ## 1. Pe scurt
 
@@ -27,8 +31,9 @@ PUBLIC puse pe tabele fără drept.
 - **Ce are azi:** drepturi pe aproape toate tabelele, vederile și secvențele din schema `public`. Le are din setările implicite ale bazei
   (orice tabel nou le primește automat), nu pentru că le-ar folosi cineva.
 - **De ce nu e o breșă azi:** toate tabelele au RLS pornit și nicio politică nu-l lasă pe `anon` să vadă sau să scrie vreun rând (cele care îl
-  includ cer toate un cont logat). Vederile citesc cu drepturile celui care întreabă. Citirea de pe producție (13.11.2026) nu a găsit
-  date, dar a lăsat o vedere-contor nedovedită (un rând doar cu zerouri): runda 5 o judecă la sursă (§2).
+  includ cer toate un cont logat). Vederile citesc cu drepturile celui care întreabă. Citirile de pe producție (13.11.2026) nu au găsit
+  date; cea cu scriptul rundei 5 a ieșit „zero”, dar review-ul a arătat cazuri pe care scriptul le-ar fi trecut greșit: se reface cu
+  scriptul rundei 6 (§2).
 - **Ce câștigăm:**
   - un strat de apărare în plus: dacă mâine o politică e scrisă greșit, `anon` tot nu are drept pe tabel;
   - tabelele noi nu mai primesc automat drepturi pentru `anon` (T3);
@@ -80,49 +85,107 @@ deja dreptul de citire pentru `anon`). Lista exactă pe obiecte rămâne în rap
 fără sesiune și tratează explicit 401 / 403, fără bucle), pe producție (#1082, 13.11.2026); apoi **două dovezi** din scriptul de citire.
 Abia atunci T2. Tabelele nu se scot din T2.
 
-**Dovada 1 — zero date citibile ca `anon`** (secțiunea `SIMULARE`, linia `SIMULARE concluzie: ZERO …`). Scriptul citește ca `anon`
-valorile fiecărei relații pe care `anon` o poate citi:
-- **0 rânduri** = `GOL`; **un rând cu o valoare nenulă / nezero sau mai multe rânduri** = `DATE_CITIBILE`;
-- **un rând doar cu zero / NULL** nu dovedește nimic prin el însuși: un tabel cu un rând vizibil `(0)` arată la fel ca o vedere de contoare
-  fără date, iar `sum` peste `1` și `-1` dă tot zero (observația review-ului din runda 4). De aceea se verifică **sursa**: scriptul
-  urmărește în catalog de unde citește vederea (regula ei, apoi recursiv vederile citite, funcțiile cu corp analizabil și operatorii
-  definiți de utilizator) și citește **efectiv, ca `anon`**, fiecare tabel găsit. Clasa:
-  - `FARA_DATE_LA_SURSA` (**dovedit**): vedere care citește cu drepturile celui care întreabă (`security_invoker = on`), la fel toate vederile
-    pe care le citește; doar relații din `public`; cel puțin un tabel, iar fiecare tabel fie e interzis pentru `anon` (42501), fie îi arată
-    0 rânduri; nicio funcție care rulează cu drepturile proprietarului (SECURITY DEFINER) sau al cărei corp nu se poate citi din catalog.
-    Mesajul spune pe ce se sprijină: „N tabele de bază: K fără drept, M cu 0 rânduri vizibile”, fără valori;
-  - `CONSTANTA` (**dovedit**, nu e scurgere): aceleași condiții, dar vederea nu citește **niciun** tabel (ex. `sum` peste o listă de
-    constante, contraexemplul review-ului): valorile nu vin din date;
-  - `DATE_CITIBILE`: tabel; vedere materializată sau tabel străin (au date proprii, fără RLS); vedere fără `security_invoker` (la vârf sau
-    citită de vedere): citește ca proprietarul; sau un tabel de bază cu cel puțin un rând vizibil ca `anon`, chiar dacă vederea arată zero;
-  - `AMBIGUU`, cu numele în mesaj: o funcție SECURITY DEFINER (poate ocoli RLS), o funcție cu corpul citit la rulare (plpgsql, SQL clasic),
-    o relație din altă schemă, altă eroare decât 42501 la citirea unui tabel de bază.
-  
-  `auth.uid()` / `auth.role()` / `auth.jwt()` sunt acceptate explicit (potrivire exactă pe schemă, nume, fără argumente, fără DEFINER):
-  întorc revendicările din tokenul cererii (la `anon`: niciun utilizator), nu date din tabele, și rulează cu drepturile lui `anon`, deci
-  nu pot ocoli RLS. Politicile RLS ale tabelelor de bază nu se urmăresc: doar filtrează rândurile, iar filtrul e deja aplicat de citirea
-  ca `anon`.
-  **Limite** (ce nu vede urmărirea din catalog): SQL construit la rulare de funcții de sistem (ex. `query_to_xml('select …')`), conversiile
-  prin funcțiile de intrare / ieșire ale tipurilor și constrângerile domeniilor; funcțiile de sistem fixe nu apar în catalog și sunt
-  acceptate ca funcții de sistem. Toate rulează tot ca `anon` (RLS aplicat), dar tabelele citite așa nu sunt verificate.
-- Concluzia `ZERO date citibile ca anon` cere: **0 `DATE_CITIBILE`, 0 `AMBIGUU`, 0 erori necunoscute** (42501 = drept refuzat, se notează);
-  `FARA_DATE_LA_SURSA` și `CONSTANTA` contează ca dovedite. Citirea din 13.11.2026 (o vedere-contor „DATE_CITIBILE” după vechea regulă, de
-  forma: trei agregate fără GROUP BY peste tabele cu RLS și o vedere, unite într-un rând) trebuie **refăcută** cu scriptul nou.
+**Încadrarea (runda 6).** T2 doar **retrage** drepturi ale lui `anon` și se reface exact cu revenirea. O concluzie greșită a scriptului
+nu scurge date: în cel mai rău caz, o pagină publică primește „fără drept” după T2, ceea ce se vede imediat și se repară cu revenirea.
+De aceea ieșirea scriptului e **o probă, nu o demonstrație**: unde nu poate analiza, spune `NEEXECUTATA` / `AMBIGUU` / „lipsă de
+dovadă”, nu „dovedit”. Scriptul nu urmărește completitudinea teoretică; închide prin refuz conservator cazurile cunoscute (review #1090).
 
-**Dovada 2 — zero interogări directe ale lui `anon` pe tabele** (secțiunea `STATISTICI`). Fiecare linie are `queryid`, numărul de apeluri
-și începutul textului. La final, o linie stabilă:
+**Dovada 1 — zero date citibile ca `anon`** (secțiunea `SIMULARE`, linia `SIMULARE concluzie: ZERO …`). Pentru fiecare relație din
+`public` pe care `anon` o poate citi, în ordinea:
 
-`STATISTICI rezumat anon | directe: N interogari, S apeluri | rpc: … | resetare: <moment> | evacuari: <E> | ascunse: <H> | dovada: DA`
+1. **Analiza, fără execuție** (runda 6). Scriptul strânge din catalog **închiderea** relației, adică tot ce evaluează o citire ca `anon`:
+   - regula de citire a fiecărei vederi, recursiv prin vederi: relațiile, funcțiile și operatorii (cu funcțiile lor) se citesc din
+     **arborele intern** al regulii, nu doar din tabelul de dependențe (acolo funcțiile și tabelele sistemului nu apar deloc: de aici
+     venea contraexemplul cu `query_to_xml` și o vedere peste catalog ieșea „constantă”);
+   - politicile pe care `anon` le evaluează la citire (RLS pornit, SELECT / ALL, pentru `anon` sau PUBLIC), recursiv prin relațiile citite
+     de ele.
 
-- `directe` = interogările distincte ale lui `anon` (în baza curentă) care numesc o **relație** din `public` în forma API-ului
-  (`"public"."nume"` neurmat de paranteză); `rpc` = apelurile de funcții (`"public"."nume"(`), paginile publice, numărate separat;
-- **cum se compară:** coordonatorul rulează citirea azi (A) și peste câteva zile de lucru normal (B). Comparația e valabilă doar dacă
-  ambele au `dovada: DA` și au **aceeași** `resetare` și **aceleași** `evacuari` (o resetare sau o evacuare de intrări poate face suma să
-  scadă sau să nu crească deși au fost apeluri). Atunci: `S` din B **mai mare** decât `S` din A = „a crescut” = interfața tot face cereri
-  fără sesiune pe tabele (T2 nu se aplică; se caută `queryid`-urile noi în listă). `S` egal = nicio cerere directă nouă = dovada 2.
-  Dacă statisticile au fost resetate între A și B, B singură trebuie să arate `directe: 0 interogari, 0 apeluri`;
-- `dovada: LIPSA DE DOVADA` (textul unor interogări ascuns pentru cititor, momentul resetării necunoscut) și o secțiune **sărită**
-  (extensia lipsă sau neîncărcată, ca pe clona locală) = **lipsă de dovadă**, nu „zero apeluri”.
+   Corpurile funcțiilor **nu se mai urmăresc**. E admisă doar o **listă albă**:
+   - funcțiile sistemului (create la instalarea serverului), fără SECURITY DEFINER și fără SET în definiție, care fie sunt **imuabile**
+     (prin contract nu citesc baza, setări sau fișiere), fie sunt pe lista scurtă de funcții **stabile** pure (dată / oră, JSON, text:
+     depind doar de fusul orar, formate, limbă). Agregatele sistemului (`count`, `sum`, `max`, `string_agg`, `json_agg` …) intră aici;
+   - `current_setting`, doar dacă **fiecare** apel are ca cheie o constantă **modelată** (vezi contextul de mai jos); cheia se citește din
+     arborele intern, nu din text; o cheie calculată = refuz;
+   - `auth.uid()` / `auth.role()` (schema `auth`, fără argumente, fără DEFINER / SET), doar dacă tot ce citește corpul lor sunt setările
+     modelate (cu cheie literală) și nu citește tabele.
+
+   **Orice altă funcție** (a noastră, de extensie, cu SET în definiție, SECURITY DEFINER, volatilă, de sistem din afara listei: ex.
+   `query_to_xml`, `table_to_xml`, `pg_read_file`, `lo_get`, `pg_advisory_lock`; `auth.jwt()`) ⇒ relația **nu se execută deloc**: clasa
+   `NEEXECUTATA`, cu numele funcției și motivul. Contează ca `AMBIGUU` la concluzie. Așa nu mai rulează nimic cu efecte (un lock
+   consultativ luat de o funcție ar fi supraviețuit anulării tranzacției), iar o funcție cu `SET request.jwt.claims = …` (care schimbă
+   contextul RLS) nu mai poate face ca „0 rânduri văzute ca `anon`” să pară dovadă.
+2. **Execuția** (doar cu închiderea pe lista albă), în contextul unei cereri reale (mai jos). Se citesc valorile (cel mult 2 rânduri,
+   doar coloanele citibile de `anon`):
+   - **0 rânduri** = `GOL`; **un rând cu o valoare nenulă / nezero sau mai multe rânduri** = `DATE_CITIBILE`;
+   - **un rând doar cu zero / NULL** nu dovedește nimic prin el însuși (`sum` peste `1` și `-1` dă tot zero). Se judecă **sursa**, pe
+     calea de date a închiderii (vederile și relațiile citite de ele; relațiile citite doar de politici doar filtrează):
+     - `FARA_DATE_LA_SURSA`: vedere `security_invoker = on`, la fel toate vederile de pe calea de date; doar relații din `public`; cel
+       puțin un tabel, iar fiecare tabel, citit efectiv ca `anon`, e interzis (42501) sau arată 0 rânduri;
+     - `CONSTANTA (fără surse în catalog)`: aceleași condiții, dar nicio relație pe calea de date (ex. `VALUES`): valorile vin doar din
+       funcțiile listei albe. Nu scrie „dovedit”;
+     - `DATE_CITIBILE`: tabel; vedere materializată / tabel străin; vedere fără `security_invoker`; un tabel de bază cu cel puțin un rând
+       vizibil ca `anon`;
+     - `AMBIGUU`, cu numele: relație din altă schemă (inclusiv catalogul), dependență de alt fel, altă eroare decât 42501.
+
+**Contextul cererii simulate** (secțiunea `CONTEXT_POSTGREST`). O cerere GET prin API-ul bazei (PostgREST) cu cheia publică, fără
+sesiune, rulează într-o tranzacție în care PostgREST pune rolul, `search_path`, revendicările cheii (`request.jwt.claims`), metoda,
+calea, antetele și cookie-urile cererii (documentația PostgREST, „Transaction-scoped settings”). Simularea pune: rolul `anon`;
+`search_path = public, extensions` (valorile implicite Supabase); revendicările `{"iss":"supabase","role":"anon"}`; formele vechi
+`request.jwt.claim.sub` / `.role` goale (pentru `auth.uid()` / `auth.role()` echivalent cu „nepuse”); metoda `GET`; calea `/<relația>`;
+antetele și cookie-urile `{}`.
+- **Setări modelate** (valoarea simulată = cea reală a unei cereri fără sesiune): metoda, calea, `request.jwt.claim.sub` / `.role`; plus
+  `request.jwt.claims`, dar **doar** în corpul lui `auth.uid()` / `auth.role()` (din care ele citesc doar `sub` / `role`). Antetele,
+  cookie-urile, revendicările complete (`ref`, `iat`, `exp` nu sunt simulate, de aceea `auth.jwt()` și citirea directă a lui
+  `request.jwt.claims` sunt refuzate), cheile calculate și setările proprii ⇒ `NEEXECUTATA`, cu numele setării.
+- **Limite** (spuse și în ieșire): funcția „pre-request” a PostgREST și setările rolului `anon` pe care PostgREST le aplică (ex.
+  `statement_timeout`) **nu sunt simulate**. `CONTEXT_POSTGREST` arată ce se vede din bază: dacă rolurile `anon` / `authenticator` au
+  setări (doar numele, valorile pot fi secrete) și dacă printre ele e `pgrst.db_pre_request`. Configurarea din variabilele de mediu ale
+  serviciului (pre-request, scheme) nu se vede din bază: coordonatorul o confirmă separat. Alte limite cunoscute: conversiile prin
+  funcțiile de intrare / ieșire ale tipurilor (tipurile de bază le creează doar administratorul serverului), constrângerile domeniilor
+  (rulează doar la conversie și pot doar da eroare), politicile evaluate pentru proprietarul unei vederi fără `security_invoker` (care
+  oricum iese `DATE_CITIBILE` la un rând doar cu zero), recunoașterea corpului lui `auth.uid()` / `auth.role()` după text.
+
+**Concluzia** `ZERO date citibile ca anon (proba pe aceasta baza, in limitele din document)` cere: **0 `DATE_CITIBILE`, 0 `AMBIGUU`,
+0 `NEEXECUTATA`, 0 erori necunoscute** (42501 = drept refuzat, se notează). Valorile nu se afișează. Citirile din 13.11.2026 (clonă și
+producție, cu scriptul rundei 5) trebuie **refăcute** cu scriptul rundei 6. De așteptat pe producție: tabelele ale căror politici pentru
+`anon` / PUBLIC apelează funcții proprii (azi cel puțin o politică RESTRICTIVE) și vederile care le citesc ies `NEEXECUTATA`; acolo
+decide un om (funcția e citită și revizuită), nu scriptul.
+
+**Dovada 2 — zero interogări directe ale lui `anon` pe tabele** (secțiunea `STATISTICI`, din `pg_stat_statements`). Fiecare intrare a
+lui `anon` din baza curentă are o **clasă**:
+- `directa` = forma generată de PostgREST (textul începe cu `WITH pgrst_…`), fără apel de funcție, pe o relație din `public` (citire sau
+  scriere, inclusiv `INSERT` cu listă de coloane);
+- `rpc` = forma PostgREST cu apel de funcție (`pgrst_call`): paginile publice;
+- `alta` = tot restul (SQL scris de mână, citiri interne ale funcțiilor apelate de `anon` când colectarea e `all`, PostgREST pe alte
+  scheme); se tipăresc, dar nu intră la directe;
+- `proprie` = interogările acestui script (eticheta `anon_drepturi_citire`); `ascunsa` = textul nu e vizibil pentru cititor.
+
+Fiecare linie: `STATISTICI anon <clasa>: queryid Q | N apeluri | stats_since T | sus/imbricat | <text>`; `stats_since` (PostgreSQL 17)
+= momentul de la care curg contoarele **acelei** intrări. Directele se tipăresc primele. Apoi martorul și linia-rezumat:
+
+`STATISTICI rezumat anon | directe: N interogari, S apeluri | rpc: … | alte: … | proprii: P | resetare: <moment> | evacuari: <E> | ascunse: <H> | track: <top/all> | stats_since: da | martor: da | dovada: DA`
+
+- **`dovada: DA`** doar dacă: niciun text ascuns; colectarea e pornită (`pg_stat_statements.track` = `top` sau `all`; `none` = nu se
+  colectează nimic, contoarele stau pe loc); nicio setare `pg_stat_statements.*` pe rolurile `anon` / `authenticator`; intrările au
+  `stats_since`; momentul resetării globale și evacuările se cunosc; martorul există. Altfel `LIPSA DE DOVADA (<motivul>)`. O secțiune
+  **sărită** (extensia lipsă sau neîncărcată, ca pe clona locală) = lipsă de dovadă, nu „zero apeluri”.
+- **Martorul (proba de colectare):** interogarea de configurare pe care PostgREST o rulează **la începutul fiecărei cereri**
+  (`select set_config(…)`): există deja în statistici și e inofensivă. Statisticile o trec sub rolul cu care se termină (după schimbarea
+  rolului), deci la cererile fără sesiune apare sub `anon` (și e numărată la „alte”); scriptul o caută întâi la `anon`, apoi la
+  `authenticator`, fără interogările proprii. Linia `STATISTICI martor … rol R | queryid Q | N apeluri | stats_since T`. Între două citiri,
+  martorul trebuie să aibă **același** rol, `queryid` și `stats_since` și **mai multe** apeluri: așa se vede că cererile fără sesiune prin
+  API chiar sunt urmărite în intervalul comparat. Dacă în interval n-a fost nicio cerere fără sesiune (martorul nu crește), coordonatorul
+  poate deschide o pagină publică doar de citire (ex. informarea Redări) și reface citirea B.
+- **Regula de comparare** (citirea A azi, citirea B peste câteva zile de lucru normal; ambele cu `dovada: DA`):
+  1. martorul: același `queryid` și `stats_since`, apeluri B > A. Altfel comparația nu e probă;
+  2. pentru **fiecare** `queryid` direct din A: există și în B, cu **același** `stats_since` și apeluri B ≥ A. Altfel acea intrare e
+     „fără probă” (a fost resetată selectiv sau evacuată și readăugată: suma poate arăta la fel deși au fost apeluri — exemplul
+     review-ului: A = 100, resetare selectivă, încă 100 de apeluri, B = 100);
+  3. apeluri B > A pe o intrare directă, sau un `queryid` direct nou în B = **„a crescut”**: interfața tot face cereri fără sesiune pe
+     tabele, T2 nu se aplică (se caută intrarea în listă);
+  4. dovada 2 = martorul crește (1), nicio intrare „fără probă” (2) și nimic „a crescut” (3). Dacă statisticile au fost resetate global
+     între A și B (alt moment `resetare`), B singură trebuie să arate `directe: 0 interogari, 0 apeluri`.
+- Rezumatul din runda 6 numără altfel decât cel din runda 5 (clase noi): citirea A se reface cu scriptul nou, nu se compară cu cea veche.
 
 ## 3. Treptele
 
@@ -146,10 +209,11 @@ cu drepturi acordate de `postgres`. Restul apare la „rămâne”, cu motivul.
   părinte nu atinge partițiile și invers. O cerere pe părinte cere doar dreptul pe părinte; una direct pe partiție, doar dreptul pe partiție.
 - **Ce se strică dacă greșim:** o cerere fără cont pe un astfel de obiect primește 42501 / 401 în loc de listă goală. **Azi există astfel de
   cereri** (§2), deci T2 are condiția de la §2. La fel pentru o funcție fără SECURITY DEFINER apelată de `anon` care citește un obiect retras.
-- **Verificare înainte (citire):** `SIMULARE` (așteptat **0 relații cu date citibile** și 0 ambigue, linia `SIMULARE concluzie: ZERO …`;
-  cele dovedite la sursă și erorile de drept se listează separat), `FUNCTII_ANON` (niciuna folosită de o pagină publică), `STATISTICI`
-  (linia-rezumat: suma apelurilor directe nu crește între două citiri comparabile, §2) și jurnalele API. **`STATISTICI` sărită** (extensia
-  lipsă sau neîncărcată) = **lipsă de dovadă**, nu „zero apeluri”: condiția T2 nu e îndeplinită până nu se citesc efectiv.
+- **Verificare înainte (citire):** `SIMULARE` (așteptat **0 relații cu date citibile**, 0 ambigue, 0 neexecutate, linia
+  `SIMULARE concluzie: ZERO …`; cele fără date la sursă, constantele și erorile de drept se listează separat; o `NEEXECUTATA` se decide de
+  un om, după funcția numită), `FUNCTII_ANON` (niciuna folosită de o pagină publică), `STATISTICI` (regula de comparare pe fiecare
+  intrare + martorul, §2) și jurnalele API. **`STATISTICI` sărită** (extensia lipsă sau neîncărcată) = **lipsă de dovadă**, nu „zero
+  apeluri”: condiția T2 nu e îndeplinită până nu se citesc efectiv.
 - **Risc:** mic **după** condiția de la §2; înainte, regresie sigură în interfață.
 
 ### T3: drepturile implicite (`20261218c`)
@@ -249,11 +313,14 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
 1. Producție, doar citire: `scripts/anon_drepturi_citire.sql` (ieșirea rămâne pe server). Se verifică:
    - `RPC_PUBLIC`: toate cu `definer = true` și `anon_execute = true`;
    - `FUNCTII_ANON`: niciuna folosită de paginile publice;
-   - `SIMULARE`: **0 relații cu date citibile și 0 ambigue** (linia `SIMULARE concluzie: ZERO …`). „Un rând doar cu zero / NULL” se
-     judecă la sursă (§2): `FARA_DATE_LA_SURSA` / `CONSTANTA` = dovedit, se notează; un tabel cu un rând vizibil `(0)` iese „date
-     citibile”. Erorile de drept (42501) se notează, nu blochează; o altă eroare = necunoscut;
-   - `STATISTICI`: pentru T2, linia-rezumat comparată cu citirea anterioară (§2: aceeași resetare și aceleași evacuări, suma apelurilor
-     directe nu a crescut). Sărită sau `LIPSA DE DOVADA` = lipsă de dovadă;
+   - `CONTEXT_POSTGREST`: setările rolurilor `anon` / `authenticator` (doar nume) și `pre_request_in_baza`; separat, configurarea
+     serviciului API (pre-request) din panoul platformei: dacă există o funcție pre-request, concluzia `SIMULARE` nu o acoperă (§2);
+   - `SIMULARE`: **0 relații cu date citibile, 0 ambigue, 0 neexecutate** (linia `SIMULARE concluzie: ZERO …`). „Un rând doar cu zero /
+     NULL” se judecă la sursă (§2): `FARA_DATE_LA_SURSA` / `CONSTANTA (fără surse în catalog)` se notează; un tabel cu un rând vizibil `(0)`
+     iese „date citibile”. Erorile de drept (42501) se notează, nu blochează; o altă eroare = necunoscut. O `NEEXECUTATA` numește funcția
+     și motivul: se citește funcția și se decide (nu se ocolește);
+   - `STATISTICI`: pentru T2, regula de comparare din §2 (martorul crește; fiecare intrare directă din A e în B cu același `stats_since`
+     și aceleași apeluri; nicio intrare directă nouă). Sărită sau `LIPSA DE DOVADA` = lipsă de dovadă;
    - `OBIECT`: lista pe trepte; `CONTROL`: amprenta lui „rămâne” și a politicilor pentru `anon` / PUBLIC pe tabele fără drept.
 2. Clonă: proba de la §5 (pașii 1–4).
 3. Review pe diff-ul cu BASELINE-ul completat. Lista pe obiecte se revizuiește din ieșirea citirii.
@@ -277,23 +344,37 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
   așteptare 100 ms.
 - **L07** — regula se impune în bază, pe orice cale (dreptul lipsește, nu e doar ascuns în UI).
 - **L09** — fiecare obiect e verificat pe identitate + nume + tip înainte de REVOKE și la revenire; fiecare coloană pe număr + tip + nume.
-- **L12 / L18** — citirea separă „date citibile”, „ambiguu”, „fără date la sursă” și „constantă” (dovedite din catalog + citire efectivă ca
-  `anon`, nu din formă), „gol” și „eroare” (de drept / necunoscută); concluzia „zero” cere 0 date, 0 ambigue, 0 erori necunoscute;
-  statistici sărite, texte ascunse sau resetare necunoscută = lipsă de dovadă; o listă de lock-uri goală în proba locală = eșec, nu „ok”.
+- **L07 / L08** (runda 6) — simularea pune contextul real al unei cereri fără sesiune (rol, metodă, cale, revendicări fără utilizator);
+  o funcție care își schimbă singură identitatea (`SET request.jwt.claims` în definiție) sau citește setări nemodelate e refuzată, nu
+  evaluată; identitatea din simulare nu autorizează nimic, e doar contextul probei.
+- **L11 / L12 / L18** — citirea separă „date citibile”, „ambiguu”, „neexecutată” (funcție din afara listei albe), „fără date la sursă” și
+  „constantă (fără surse în catalog)” (din catalog + citire efectivă ca `anon`, nu din formă), „gol” și „eroare” (de drept / necunoscută);
+  nimic nu e „dovedit”: concluzia „zero” e o probă și cere 0 date, 0 ambigue, 0 neexecutate, 0 erori necunoscute; statistici sărite, texte
+  ascunse, colectare oprită, fără `stats_since`, fără martor sau resetare necunoscută = lipsă de dovadă; o listă de lock-uri goală în proba
+  locală = eșec, nu „ok”.
+- **L13** (runda 6) — tiparele sunt ancorate și pe forme fixe: câmpurile arborelui intern al catalogului (`:funcid N` …, cu spațiu și
+  cifre), cheia `current_setting` decodată din octeții constantei (nu din text deparsat), forma API-ului ancorată la început
+  (`^WITH pgrst_…`); fiecare are test pozitiv + negativ (cheie calculată, SQL scris de mână cu nume între ghilimele, `INSERT` cu listă de
+  coloane).
 - **L14** — o tranzacție prin runner, cu postcondiții; revenire testată aplicare → revenire → re-aplicare. Revenirea refuză la istoric nou.
 - **L15** — lista calculată din catalog comparată cu BASELINE-ul, înainte și sub blocare. Amprenta cuprinde identitatea, RLS / FORCE,
   politicile, corpul vederilor, DEFAULT-urile. Fără regex pe SQL. Un singur REVOKE pe nume citate din catalog.
 - **L20** — sunt testate și căile legitime: RPC-ul DEFINER al paginii publice merge, INSERT-ul permis de politică merge, obiectul declarat la
-  pct. 1 rămâne, partițiile păstrate se citesc.
+  pct. 1 rămâne, partițiile păstrate se citesc; în citire (runda 6): `auth.uid()`, funcțiile stabile din listă (`now`, `date_trunc`,
+  `to_char`, `jsonb_build_object`) și o politică pe metoda cererii (`GET`) trec, nu sunt refuzate.
 - **L24** — condiția T2: clientul nu mai pornește interogări fără sesiune (PR separat).
 - **L25** — verificări independente de regulă (instantaneul complet al drepturilor, cereri reale ca `anon`), mutanți pe migrări, reveniri și
   regulă; cursa: simulată determinist în PGlite + probă cu două sesiuni reale pe clona PG 17.6 (R1–R5 rulate 12.11.2026, comportamentele
   confirmate; R6–R9 și mutanții `blocare_public` / `fara_lock` noi în runda 4, de rulat pe clonă; proba compară pe nume calificate explicit și
-  iese „probă nefuncțională”, nu verdict, când starea așteptată e goală sau niciun scenariu n-a fost judecat).
+  iese „probă nefuncțională”, nu verdict, când starea așteptată e goală sau niciun scenariu n-a fost judecat). Citirea (runda 6):
+  contraexemplele review-ului #1090 sunt teste PGlite (funcția cu SET în definiție, `query_to_xml` peste altă schemă, lock-ul consultativ
+  verificat în `pg_locks`, politica pe metoda cererii, resetarea selectivă), fiecare regulă nouă are mutantul ei, iar regula de comparare a
+  statisticilor e scrisă în test independent de script. PGlite e PostgreSQL 18: citirea se rerulează pe clona PG 17.6 și pe producție.
 
 ## Deschis după review-ul rundei 4 (nu blochează merge-ul migrărilor neaplicate)
 
-- **SIMULARE, clasa „agregat fără date”**: **închis în runda 5** — clasa după formă a dispărut; un rând doar cu zero / NULL se dovedește la sursă (`FARA_DATE_LA_SURSA`) sau rămâne nedovedit (§2). Contraexemplul (`sum` peste `1` și `-1`, fără tabele) iese `CONSTANTA`.
+- **SIMULARE, clasa „agregat fără date”**: **închis în runda 5** — clasa după formă a dispărut; un rând doar cu zero / NULL se judecă la sursă (`FARA_DATE_LA_SURSA`) sau rămâne nedovedit (§2). Contraexemplul (`sum` peste `1` și `-1`, fără tabele) iese `CONSTANTA (fără surse în catalog)`.
+- **Review #1090 (runda 6)**: cele 5 P1 și P2 închise prin refuz conservator (§2): funcții cu SET în definiție / proprii / de sistem care execută SQL = `NEEXECUTATA`; analiza înaintea execuției; contextul cererii API + setările nemodelate refuzate; `stats_since`, colectarea pornită și martorul; forma API-ului la interogările directe. Fiecare regulă are contraexemplul review-ului ca test și un mutant. Rămân limitele scrise în §2 (pre-request, setările rolului, conversiile tipurilor, domeniile).
 - **POLITICI_ANON**: **închis în runda 5** — rândul `CONTROL POLITICI_ANON` (§4).
 - **ATTACH PARTITION** ia doar ShareUpdateExclusive pe părinte, deci nu e oprit de lock-ul ACCESS SHARE al treptei T2; nu acordă drepturi și nu redeschide cursa cu politicile.
 - **Înainte de aplicarea oricărei trepte**: probă prin runnerul real pe clonă (aplicare, revenire, reaplicare, sub 1500 ms), citire pe producție chiar înainte, BASELINE din aceeași citire, confirmarea atributului CREATEROLE și a triggerelor de eveniment pe producție, acordul owner-ului pentru fiecare treaptă.
