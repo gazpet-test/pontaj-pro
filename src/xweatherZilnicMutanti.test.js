@@ -49,6 +49,29 @@ async function incalcari(m) {
   const ex = new Map([['1', new Map([['2026-11-03', { versiune: 1 }]])]])
   const pr = m.planXweather(S, ex, new Map(), { mod: 'backfill', ieri: '2026-11-12', deLa: '2026-11-03', pana: '2026-11-03', reverifica: true })
   if (pr.sarcini.map(s => s.tip).join() !== 'verificare') out.push('reverificare: ziua existentă nu se reverifică')
+  // r3: garda reverificării (versiunea afișată nu se degradează) și rezultatul lotului
+  const SZ = { site_id: 1, lat: 44.94, lng: 26.02, zi: ZI }
+  const C = { status: 200, json: COND, cerere: 'conditions/summary/x' }
+  const O = { status: 200, cerere: 'observations/summary/x', json: { success: true, error: null, response: [{ id: 'LRBS', place: { name: 'Baneasa' },
+    relativeTo: { distanceKM: 12 }, periods: [{ summary: { dateTimeISO: '2026-11-12T00:00:00+02:00' } }] }] } }
+  const v1 = m.procesZi({ ...SZ, tip: 'nou' }, C, O).rand
+  if (!v1) { out.push('garda: prima versiune completă nu se scrie'); return out }
+  const ant = Object.fromEntries(['versiune', ...m.VALORI].map(k => [k, v1[k]]))
+  const V = { ...SZ, tip: 'verificare', anterior: ant }
+  const partial = { status: 200, cerere: C.cerere, json: { success: true, error: null, response: [{ periods: [{ dateTimeISO: PER.dateTimeISO, temp: { maxC: 9.46 } }] }] } }
+  const zp = m.procesZi(V, partial, O)
+  if (zp.rand || !zp.incomplet) out.push('garda: răspunsul parțial după versiunea completă devine versiune nouă')
+  if (m.zConfirmata({ incomplet: 'x' }, null) !== true) out.push('garda: incompletul blochează cursorul')
+  const z400 = m.procesZi({ ...V }, { ...C, json: { ...COND, response: [{ ...COND.response[0], periods: [{ ...PER, precip: { totalMM: 6.2 } }] }] } },
+    { status: 400, json: { success: false }, cerere: O.cerere })
+  if (z400.rand?.statie_id !== 'LRBS' || z400.rand?.observatii_stare !== 'ok' || z400.rand?.versiune !== 2) out.push('garda: observații 400 înlocuiesc stația cunoscută')
+  const z403 = m.procesZi(V, C, { status: 403, json: {}, cerere: O.cerere })
+  if (z403.neschimbat !== true || z403.statie_pastrata !== true) out.push('garda: observații neautorizate șterg stația cunoscută')
+  const zc = m.procesZi(V, { ...C, json: { ...COND, response: [{ ...COND.response[0], periods: [{ ...PER, temp: { minC: 1.2, maxC: 10 } }] }] } }, O)
+  if (zc.rand?.versiune !== 2 || zc.rand?.tmax_c !== 10) out.push('garda: corecția reală completă nu mai intră')
+  const lot = m.rezultatLot([], [{ site_id: 1, zi: ZI, motiv: 'tranzitoriu (se reia): conditions 503' }])
+  if (lot.ok !== false || lot.complet !== false || lot.nr_nesalvate !== 1) out.push('lot: zilele tranzitorii nesalvate raportează succes')
+  if (m.statusHttpXweather(lot) !== 207 || m.statusHttpXweather(m.rezultatLot([], [])) !== 200) out.push('lot: starea HTTP nu deosebește parțialul')
   return out
 }
 
@@ -57,8 +80,18 @@ const MUTANTI = [
   ['P2 perioada fără dată ignorată (formă greșită = „lipsă” tăcută)', [["if (d == null && y == null) return { motiv: `perioadă fără dată (formă neașteptată pentru ${forma}/summary)` }", 'if (d == null && y == null) continue']]],
   ['C1 cursorul din plan (nu din rezultate)', [['const prima = zile.find(z => !confirmate.has(z))', 'const prima = undefined']]],
   ['C2 rândul trimis = confirmat, fără rezultatul scrierii', [["return !!z?.rand && (scriere === 'ok' || scriere === 'deja')", 'return !!z?.rand']]],
-  ['C3 tranzitoriul = confirmat', [["if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa)) return true", 'if (z?.neschimbat === true || z?.lipsa || z?.tranzitoriu) return true']]],
+  ['C3 tranzitoriul = confirmat', [["if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa) ||", 'if (z?.neschimbat === true || z?.lipsa || z?.tranzitoriu ||']]],
   ['R1 reverificarea ignorată', [["if (!ex.has(d) || (mod === 'backfill' && reverifica)) z.push(d)", 'if (!ex.has(d)) z.push(d)']]],
+  // r3
+  ['G1 garda de pierdere scoasă (versiunea parțială se scrie)', [['if (pierdute.length) return', 'if (false) return']]],
+  ['G2 câmpurile pierdute nu se mai calculează', [['.filter(c => anterior[c] != null && nou[c] == null)', '.filter(c => false)']]],
+  ['G3 stația nu se mai păstrează (observații eșuate = „eroare” afișată)', [['if (ant && pastreazaStatia(ant, statie)) {', 'if (false) {']]],
+  ['G4 stația păstrată doar la „eroare” (neautorizat o șterge)', [["if (anterior.observatii_stare === 'ok') return statie.observatii_stare !== 'ok'", "if (anterior.observatii_stare === 'ok') return statie.observatii_stare === 'eroare'"]]],
+  ['G5 garda prea largă: orice reverificare = incompletă', [['if (pierdute.length) return', 'if (true) return']]],
+  ['G6 incompletul neconfirmat (cursorul blocat)', [["|| (typeof z?.incomplet === 'string' && z.incomplet)) return true", ') return true']]],
+  ['L1 ok din erori doar (condiția r2)', [['ok: complet && erori.length === 0', 'ok: erori.length === 0']]],
+  ['L2 complet mereu adevărat', [['const complet = nesalvate.length === 0', 'const complet = true']]],
+  ['L3 starea HTTP mereu 200', [["(xw != null && xw.ok !== true ? 207 : 200)", '(200)']]],
 ]
 
 describe('mutanții logicii Xweather (parser, cursor, reverificare)', () => {

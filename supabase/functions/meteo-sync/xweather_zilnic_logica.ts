@@ -17,6 +17,8 @@
 // LIMITE ASUMATE (spuse și în raportul livrării):
 //   - corecțiile furnizorului se prind automat doar pentru alaltăieri (reverificarea zilnică); o corecție mai târzie intră doar dacă owner-ul
 //     cere reverificarea intervalului: {xweather_backfill:true, site_id, de_la, pana, reverifica:true} (versiune nouă dacă diferă);
+//   - reverificarea lui alaltăieri e o singură încercare: dacă pică pe 5xx / rețea, ziua rămâne cu versiunea existentă (nu se mai
+//     reverifică automat; owner-ul o poate cere cu reverifica:true). Un răspuns MAI SĂRAC la reverificare nu se scrie (garda r3, procesZi);
 //   - pasul zilnic completează automat doar ultimele ZILE_AUTO zile; o zi mai veche rămasă nesalvată se recuperează cu comanda owner-ului
 //     {xweather_backfill:true, site_id, de_la, pana} pe acel șantier (reluabilă cu `pana` = continua_pana din răspuns).
 import { esteZi, adunaZile, aziBucuresti, coordValide } from './istoric_logica.ts'
@@ -88,6 +90,11 @@ export function clasificaRaspuns(status: number, j: any): Clasa {
 // ── maparea rezumatului ─────────────────────────────────────────────────────────────────────────────────────────
 // coloana din tabel → [căile acceptate în perioada zilei (prima prezentă câștigă), minim, maxim (exclusiv), zecimale]
 // ordinea: întâi numele în stilul endpoint-ului conditions (windSpeed / windGust / humidity), apoi variantele în stilul observations (wind / rh)
+// DOCUMENTAT vs TOLERAT (r3): PRIMA cale din fiecare listă (CAMPURI, CAI_DIRECTIE, CAI_DESCRIERE) e cea din documentația oficială
+//   conditions/summary (temp.minC / maxC / avgC, precip.totalMM, snow.totalCM, windSpeed.maxKPH, windGust.maxKPH, windSpeed.maxDirDEG,
+//   humidity.avg, windSpeed.maxDir, weather.phrase). Celelalte sunt ALIASURI TOLERATE, nedocumentate pentru acest endpoint (numele din
+//   stilul observations: snowDepth, wind.*, windDir.*, rh, `weather` ca șir). Un alias folosit efectiv se întoarce în `aliasuri` și se
+//   numără separat în rezultatul funcției (aliasuri_folosite), ca să-l vedem la prima rulare reală și să-l scoatem dacă nu apare.
 export const CAMPURI: Record<string, [string[], number, number, number]> = {
   tmin_c: [['temp.minC'], -60, 60.0001, 2],
   tmax_c: [['temp.maxC'], -60, 60.0001, 2],
@@ -143,41 +150,45 @@ function perioadaZilei(obj: any, zi: string, forma: Forma): { summary?: any; mot
 }
 
 // conditions/summary → valorile zilei. { valori } | { lipsa } (nicio valoare pentru zi) | { respins } (formă / valoare invalidă: ziua NU se scrie)
-export function valoriDinConditii(j: any, zi: string): { valori?: Record<string, unknown>; lipsa?: string; respins?: string } {
+export function valoriDinConditii(j: any, zi: string): { valori?: Record<string, unknown>; lipsa?: string; respins?: string; aliasuri?: string[] } {
   const obj = primul(j?.response)
   if (!obj || typeof obj !== 'object') return { respins: 'răspuns conditions fără response' }
   const { summary: s, motiv } = perioadaZilei(obj, zi, 'conditions')
   if (motiv) return { respins: motiv }
   if (!s) return { lipsa: 'nicio perioadă pentru ziua cerută' }
   const v: Record<string, unknown> = {}
+  const aliasuri: string[] = []   // căile tolerate (nedocumentate) folosite efectiv: indexul > 0 în listă
   for (const [col, [cai, min, max, zec]] of Object.entries(CAMPURI)) {
     v[col] = null
-    for (const c of cai) {
+    for (const [i, c] of cai.entries()) {
       const x = cale(s, c)
       if (x === null || x === undefined) continue
       if (typeof x !== 'number' || !Number.isFinite(x) || x < min || x >= max) return { respins: `valoare invalidă pentru ${col}` }
       const r = rotunjeste(x, zec)
       if (r < min || r >= max) return { respins: `valoare invalidă pentru ${col}` }
       v[col] = r
+      if (i > 0) aliasuri.push(c)
       break
     }
   }
   if (v.vant_dir_grade === 360) v.vant_dir_grade = 0
   v.vant_dir = null
-  for (const c of CAI_DIRECTIE) {
+  for (const [i, c] of CAI_DIRECTIE.entries()) {
     const x = cale(s, c)
     if (x === null || x === undefined) continue
     if (typeof x !== 'string' || !DIRECTII.includes(x)) return { respins: 'direcția vântului invalidă' }
     v.vant_dir = x
+    if (i > 0) aliasuri.push(c)
     break
   }
   v.descriere = null
-  for (const c of CAI_DESCRIERE) {
+  for (const [i, c] of CAI_DESCRIERE.entries()) {
     const x = cale(s, c)
     if (x === null || x === undefined || (typeof x === 'object' && c === 'weather')) continue
     const t = textScurt(x, 200)
     if (t === undefined) return { respins: 'descrierea vremii invalidă' }
     v.descriere = t
+    if (i > 0) aliasuri.push(c)
     break
   }
   const t = v as Record<string, number | null>
@@ -186,7 +197,7 @@ export function valoriDinConditii(j: any, zi: string): { valori?: Record<string,
   if (['tmin_c', 'tmax_c', 'tmed_c', 'precipitatii_mm', 'zapada_cm', 'vant_max_kmh', 'rafala_max_kmh', 'umiditate_med'].every(c => v[c] == null)) {
     return { lipsa: 'nicio valoare numerică pentru zi' }
   }
-  return { valori: v }
+  return aliasuri.length ? { valori: v, aliasuri } : { valori: v }
 }
 
 // observations/summary/closest → stația (id, nume, distanța dată de API). Lipsa stației NU e eroare: observatii_stare o spune.
@@ -329,13 +340,43 @@ export function continuaPana(sarcini: Sarcina[], confirmate: Set<string>, ramase
 }
 // rezultatul unei zile → confirmată sau nu (pentru continuaPana)
 // deno-lint-ignore no-explicit-any
+// Un răspuns mai sărac la reverificare (incomplet) e și el rezultat DOVEDIT: furnizorul a răspuns, versiunea afișată rămâne cea completă;
+// altfel cursorul completării s-ar bloca pe zi la nesfârșit.
 export function zConfirmata(z: any, scriere: 'ok' | 'deja' | 'eroare' | null): boolean {
-  if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa)) return true
+  if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa) || (typeof z?.incomplet === 'string' && z.incomplet)) return true
   return !!z?.rand && (scriere === 'ok' || scriere === 'deja')
 }
 
+// ── garda reverificării (r3): o versiune nouă nu are voie să piardă nimic față de cea afișată ─────────────────────────────
+// Câmpurile stației (în afara VALORI, comparate doar la pierdere): poziția stației, citită și ea din vedere ca versiune anterioară.
+export const STATIE_EXTRA = ['statie_lat', 'statie_lng']
+// câmpurile care aveau valoare în versiunea anterioară și ar deveni NULL în cea nouă (STATIE_EXTRA doar dacă anteriorul le are)
+export function campuriPierdute(anterior: Record<string, unknown>, nou: Record<string, unknown>): string[] {
+  return [...VALORI, ...STATIE_EXTRA.filter(c => c in anterior)].filter(c => anterior[c] != null && nou[c] == null)
+}
+// stația versiunii anterioare se păstrează când reverificarea observațiilor NU aduce o stație: anteriorul avea stație și acum nu mai e
+// (eroare 4xx, neautorizat, fără stație), sau acum e „eroare” peste o stare cunoscută (fara_statie / neautorizat). „eroare” nu e informație.
+export function pastreazaStatia(anterior: Record<string, unknown>, statie: Statie): boolean {
+  if (anterior.observatii_stare === 'ok') return statie.observatii_stare !== 'ok'
+  return statie.observatii_stare === 'eroare' && anterior.observatii_stare != null && anterior.observatii_stare !== 'eroare'
+}
+const statieAnterioara = (a: Record<string, unknown>): Statie => ({
+  observatii_stare: a.observatii_stare as Statie['observatii_stare'],
+  statie_id: (a.statie_id ?? null) as string | null, statie_nume: (a.statie_nume ?? null) as string | null,
+  statie_distanta_km: a.statie_distanta_km == null ? null : Number(a.statie_distanta_km),
+  statie_lat: a.statie_lat == null ? null : Number(a.statie_lat), statie_lng: a.statie_lng == null ? null : Number(a.statie_lng),
+})
+
 // ── o zi: din cele două răspunsuri → rândul de scris, sau motivul pentru care nu se scrie ────────────────────────────
-// { rand } | { lipsa } | { respins } | { tranzitoriu } | { eroare } | { neschimbat }
+// { rand } | { lipsa } | { respins } | { tranzitoriu } | { eroare } | { neschimbat } | { incomplet }
+//   + statie_pastrata (reverificarea observațiilor a eșuat, stația vine din versiunea anterioară) + aliasuri (căi tolerate folosite)
+// GARDA REVERIFICĂRII (r3): la tip 'verificare' o versiune nouă se scrie DOAR dacă nu pierde nimic față de cea afișată:
+//   - observațiile eșuate nu înlocuiesc stația cunoscută: se păstrează stația versiunii anterioare, iar dovada eșecului stă în
+//     raspuns_observatii (obiectul { statie_din_versiunea, reverificare_observatii: 'esuata', status, raspuns }) și în rezultatul funcției;
+//   - dacă vreun câmp care avea valoare ar deveni NULL → { incomplet } — NIMIC scris (tabelul nu admite UPDATE / DELETE, iar orice rând
+//     nou ar deveni versiunea afișată; un rând „marcat” ar cere coloană nouă în migrare), doar consemnat în rezultat (reverificari_incomplete);
+//   - o corecție reală (valori diferite, la fel de complete sau mai complete) = versiune nouă, ca până acum.
+// La tip 'nou' (prima versiune) nu există nimic de degradat: se scrie cu câmpurile lipsă NULL.
 export function procesZi(s: Sarcina, cond: { status: number; json: any; cerere: string }, obs: { status: number; json: any; cerere: string } | null) {
   const cc = clasificaRaspuns(cond.status, cond.json)
   if (cc === 'tranzitoriu') return { tranzitoriu: `conditions ${cond.status || 'rețea / timp depășit'}` }
@@ -344,14 +385,49 @@ export function procesZi(s: Sarcina, cond: { status: number; json: any; cerere: 
   const m = valoriDinConditii(cond.json, s.zi)
   if (m.respins) return { respins: m.respins }
   if (m.lipsa) return { lipsa: m.lipsa }
+  const al = m.aliasuri?.length ? { aliasuri: m.aliasuri } : {}
   if (!obs) return { eroare: 'cererea de observații lipsește' }
   const co = clasificaRaspuns(obs.status, obs.json)
   if (co === 'tranzitoriu') return { tranzitoriu: `observations ${obs.status || 'rețea / timp depășit'}` }
-  const statie = statieDinObservatii(co, obs.json, s.zi)
+  let statie = statieDinObservatii(co, obs.json, s.zi)
+  let jObs: unknown = obs.json
+  let pastrata = false
+  const ant = s.tip === 'verificare' ? s.anterior : undefined
+  if (ant && pastreazaStatia(ant, statie)) {
+    pastrata = true
+    jObs = { statie_din_versiunea: Number(ant.versiune), reverificare_observatii: 'esuata', status: obs.status, stare: statie.observatii_stare, raspuns: obs.json ?? null }
+    statie = statieAnterioara(ant)
+  }
+  const sp = pastrata ? { statie_pastrata: true } : {}
   const nou = { ...m.valori, ...statie }
-  if (s.tip === 'verificare' && s.anterior && valoriEgale(nou, s.anterior)) return { neschimbat: true }
-  const versiune = s.tip === 'verificare' && s.anterior ? Number(s.anterior.versiune) + 1 : 1
+  if (ant) {
+    const pierdute = campuriPierdute(ant, nou)
+    if (pierdute.length) return { incomplet: `răspuns incomplet la reverificare (ar pierde: ${pierdute.join(', ')})`, ...sp, ...al }
+    if (valoriEgale(nou, ant)) return { neschimbat: true, ...sp, ...al }
+  }
+  const versiune = ant ? Number(ant.versiune) + 1 : 1
   if (!Number.isInteger(versiune) || versiune < 1) return { eroare: 'versiunea anterioară invalidă' }
   return { rand: randXweather({ site_id: s.site_id, zi: s.zi, lat: s.lat, lng: s.lng, versiune, valori: m.valori!, statie,
-    cerCond: cond.cerere, cerObs: obs.cerere, jCond: cond.json, jObs: obs.json }) }
+    cerCond: cond.cerere, cerObs: obs.cerere, jCond: cond.json, jObs }), ...sp, ...al }
 }
+
+// ── rezultatul unui lot (r3): spune adevărul despre zilele nesalvate ─────────────────────────────────────────────────
+// motivul pentru care o zi neconfirmată nu s-a salvat (pentru zile_nesalvate)
+// deno-lint-ignore no-explicit-any
+export function motivNesalvat(z: any, scriere: 'ok' | 'deja' | 'eroare' | null): string {
+  if (z?.tranzitoriu) return 'tranzitoriu (se reia): ' + z.tranzitoriu
+  if (z?.respins) return 'respins: ' + z.respins
+  if (scriere === 'eroare') return 'scriere eșuată'
+  if (z?.eroare) return 'eroare: ' + z.eroare
+  return 'eroare'
+}
+export type Nesalvata = { site_id: number; zi: string; motiv: string }
+// complet = fiecare zi cerută are rezultat dovedit; ok = complet și fără erori. Un lot doar cu tranzitorii (5xx / 429 / rețea) = ok:false,
+// complet:false (înainte r2 dădea ok:true). Lista e plafonată (62), numărul nu.
+export function rezultatLot(erori: string[], nesalvate: Nesalvata[]) {
+  const complet = nesalvate.length === 0
+  return { ok: complet && erori.length === 0, complet, nr_nesalvate: nesalvate.length, zile_nesalvate: nesalvate.slice(0, 62) }
+}
+// starea HTTP a răspunsului funcției: 207 când pasul Xweather a rulat și nu e complet (rămâne 2xx pentru apelanții existenți, dar
+// se vede în net._http_response.status_code al cron-ului); 200 altfel
+export const statusHttpXweather = (xw: { ok?: unknown } | null | undefined) => (xw != null && xw.ok !== true ? 207 : 200)

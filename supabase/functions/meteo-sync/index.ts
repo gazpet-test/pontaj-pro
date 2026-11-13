@@ -27,7 +27,8 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { planCitire, intervale, urlArhiva, randuriDinRaspuns, ieriBucuresti, esteZi, adunaZile } from './istoric_logica.ts';
 import { planXweather, procesZi, clasificaRaspuns, valoriDinConditii, cerereConditii, cerereObservatii, cuCredentiale, ieriBuc,
-  continuaPana, zConfirmata, ZILE_AUTO, PRIMA_ZI_XW, MAX_ZILE_APEL, TIMP_CERERE_MS as TIMP_XW, VALORI } from './xweather_zilnic_logica.ts';
+  continuaPana, zConfirmata, ZILE_AUTO, PRIMA_ZI_XW, MAX_ZILE_APEL, TIMP_CERERE_MS as TIMP_XW, VALORI, STATIE_EXTRA,
+  motivNesalvat, rezultatLot, statusHttpXweather, type Nesalvata } from './xweather_zilnic_logica.ts';
 
 const API = 'https://data.api.xweather.com';
 const ORA_ISTORIC_UTC = 4;            // cron 5 */2 * * * → o singură rulare pe zi la 04:05 UTC
@@ -97,7 +98,7 @@ async function zileXweatherExistente(db: any, siteIds: number[], de: string, pan
   for (const s of siteIds) {
     const m = new Map<string, Record<string, unknown>>();
     for (let ultima: string | null = null; ;) {
-      let q = db.from('v_meteo_zilnic_xweather').select(['data', 'versiune', ...VALORI].join(',')).eq('site_id', s).gte('data', de).lte('data', pana);
+      let q = db.from('v_meteo_zilnic_xweather').select(['data', 'versiune', ...VALORI, ...STATIE_EXTRA].join(',')).eq('site_id', s).gte('data', de).lte('data', pana);
       if (ultima) q = q.gt('data', ultima);
       const { data, error } = await q.order('data', { ascending: true }).limit(1000);
       if (error) throw new Error('zilele Xweather existente nu se pot citi: ' + error.message);
@@ -147,12 +148,16 @@ async function sincronizeazaXweather(db: any, cid: string, csec: string,
       return { status: r.status, json: await r.json().catch(() => null), cerere };
     } catch { return { status: 0, json: null, cerere }; } finally { clearTimeout(t); }
   };
-  const r = { scrise: 0, versiuni_noi: 0, neschimbate: 0, deja: 0, lipsa: 0, respinse: 0, tranzitorii: 0, neajunse: 0, erori: [] as string[] };
+  const r = { scrise: 0, versiuni_noi: 0, neschimbate: 0, deja: 0, lipsa: 0, respinse: 0, tranzitorii: 0, neajunse: 0,
+    reverificari_incomplete: 0, statii_pastrate: 0, erori: [] as string[] };
+  // răspunsurile mai sărace la reverificare (nimic scris, versiunea afișată rămâne) și aliasurile tolerate folosite efectiv (r3)
+  const incomplete: Nesalvata[] = [];
+  const aliasuri: Record<string, number> = {};
   // zilele cu rezultat DOVEDIT (scrise / existente / neschimbate / „fără date” definitiv) — doar ele mută cursorul reluării (L05)
   const confirmate = new Set<string>();
-  const nesalvate: string[] = [];
+  const nesalvate: Nesalvata[] = [];
   for (const s of pl.sarcini) {
-    if (Date.now() - t0 > BUGET_XW_MS) { r.neajunse++; nesalvate.push(`${s.site_id} ${s.zi}: neajunsă (bugetul de timp)`); continue; }
+    if (Date.now() - t0 > BUGET_XW_MS) { r.neajunse++; nesalvate.push({ site_id: s.site_id, zi: s.zi, motiv: 'neajunsă (bugetul de timp)' }); continue; }
     let scriere: 'ok' | 'deja' | 'eroare' | null = null;
     // deno-lint-ignore no-explicit-any
     let z: any = null;
@@ -169,6 +174,7 @@ async function sincronizeazaXweather(db: any, cid: string, csec: string,
         else if (ei) { scriere = 'eroare'; r.erori.push(`site ${s.site_id} ${s.zi}: scrierea a eșuat (${ei.code || 'eroare'})`); }
         else { scriere = 'ok'; if (z.rand.versiune > 1) r.versiuni_noi++; else r.scrise++; }
       } else if ('neschimbat' in z) r.neschimbate++;
+      else if ('incomplet' in z) { r.reverificari_incomplete++; incomplete.push({ site_id: s.site_id, zi: s.zi, motiv: z.incomplet }); }
       else if ('lipsa' in z) r.lipsa++;
       else if ('respins' in z) { r.respinse++; r.erori.push(`site ${s.site_id} ${s.zi}: răspuns respins (${z.respins})`); }
       else if ('tranzitoriu' in z) r.tranzitorii++;
@@ -176,15 +182,19 @@ async function sincronizeazaXweather(db: any, cid: string, csec: string,
     } catch (e) {
       r.erori.push(`site ${s.site_id} ${s.zi}: ${(e as Error).message}`);
     }
+    if (z?.statie_pastrata && (scriere === 'ok' || 'neschimbat' in z)) r.statii_pastrate++;
+    for (const a of z?.aliasuri || []) aliasuri[a] = (aliasuri[a] || 0) + 1;
     if (z && zConfirmata(z, scriere)) confirmate.add(`${s.site_id}|${s.zi}`);
-    else nesalvate.push(`${s.site_id} ${s.zi}: ${z?.tranzitoriu ? 'tranzitoriu (se reia)' : z?.respins ? 'respins' : scriere === 'eroare' ? 'scriere eșuată' : 'eroare'}`);
+    else nesalvate.push({ site_id: s.site_id, zi: s.zi, motiv: motivNesalvat(z, scriere) });
   }
   // reluarea (doar completarea owner-ului, un șantier): de la cea mai nouă zi NECONFIRMATĂ, nu de la plan
   const cursor = mod === 'backfill'
     ? continuaPana(pl.sarcini, new Set([...confirmate].map(k => k.split('|')[1])), pl.ramase)
     : null;
-  return { ok: r.erori.length === 0 && r.neajunse === 0, mod, ieri, sarcini: pl.sarcini.length, ...r, erori: r.erori.slice(0, 30),
-    zile_nesalvate: nesalvate.slice(0, 62), sarite: pl.sarite, ramase: pl.ramase, continua_pana: cursor };
+  // ok / complet / nr_nesalvate / zile_nesalvate din rezultatele zilelor (r3): orice zi cerută și nesalvată → ok:false, complet:false
+  return { ...rezultatLot(r.erori, nesalvate), mod, ieri, sarcini: pl.sarcini.length, ...r, erori: r.erori.slice(0, 30),
+    reverificari_incomplete_lista: incomplete.slice(0, 62), aliasuri_folosite: aliasuri,
+    sarite: pl.sarite, ramase: pl.ramase, continua_pana: cursor };
 }
 
 
@@ -241,7 +251,9 @@ Deno.serve(async (req: Request) => {
     const reverifica = body.reverifica === true;
     const { data: cr } = await db.rpc('meteo_xweather_creds');
     if (!cr?.client_id || !cr?.client_secret) return json({ error: 'XWEATHER_CLIENT_ID / XWEATHER_CLIENT_SECRET lipsă în Vault' }, 500);
-    return json({ ok: true, xweather: await sincronizeazaXweather(db, cr.client_id, cr.client_secret, { mod: 'backfill', siteId, deLa, pana, maxZile, reverifica }) });
+    const xw = await sincronizeazaXweather(db, cr.client_id, cr.client_secret, { mod: 'backfill', siteId, deLa, pana, maxZile, reverifica });
+    // r3: ok-ul de sus spune adevărul (zile nesalvate → false, HTTP 207), nu doar că funcția a rulat
+    return json({ ok: xw.ok === true, xweather: xw }, statusHttpXweather(xw));
   }
 
   let istoric: unknown = null;
@@ -303,5 +315,8 @@ Deno.serve(async (req: Request) => {
       rez.push({ site: s.id, ok: false, eroare: (e as Error).message });
     }
   }
-  return json({ ok: true, n: rez.length, rez, istoric, xweather });
+  // r3: xweather_ok = null (pasul n-a rulat) / true (toate zilele cerute salvate) / false (parțial); parțial → HTTP 207, vizibil în
+  // net._http_response.status_code al cron-ului (cron.job_run_details arată doar că cererea a fost trimisă)
+  const xwOk = xweather == null ? null : (xweather as { ok?: unknown }).ok === true;
+  return json({ ok: true, n: rez.length, rez, istoric, xweather, xweather_ok: xwOk }, statusHttpXweather(xweather as { ok?: unknown } | null));
 });
