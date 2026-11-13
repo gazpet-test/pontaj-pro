@@ -76,29 +76,37 @@ INSERT INTO public.hr_personal_extern (id, nume, firma, cui_firma, telefon, emai
 INSERT INTO public.hr_autorizatii_tipuri (id, cod, denumire, categorie) VALUES
   (1, 'SUDOR_PEHD', 'Sudor PEHD', 'sudura'), (2, 'SUDOR_OTEL', 'Sudor oțel', 'sudura'), (3, 'ANRE', 'Autorizare ANRE', 'anre'), (4, 'RSVTI', 'RSVTI', 'iscir');
 INSERT INTO public.hr_autorizatii (id, employee_id, extern_id, tip_id, numar_autorizatie, emitent, data_emitere, data_expirare, fara_expirare,
-    procedeu_sudura, diametru_teava_mm, calitate_material, subcategorie, fisier_path, observatii, deleted_at, inlocuita_de_id) VALUES
-  (10, 1, NULL, 1, 'S-10', 'ISCIR', DATE '2024-01-10', DATE '${zi(30)}', false, 'electrofuziune', 315, 'PE100', 'cat. 1', '1/a.pdf', 'nota interna', NULL, NULL),
-  (11, 1, NULL, 2, 'S-11', 'ISCIR', DATE '2022-01-10', DATE '${zi(-1)}', false, '111', 508, 'L360', NULL, '1/b.pdf', NULL, NULL, NULL),
-  (12, 2, NULL, 1, 'S-12', 'ISCIR', NULL, NULL, true, 'cap la cap', 110, 'PE80', NULL, NULL, NULL, NULL, NULL),
-  (13, 2, NULL, 1, 'S-13', NULL, NULL, NULL, false, NULL, NULL, NULL, NULL, '   ', NULL, NULL, NULL),
-  (14, 1, NULL, 3, 'A-14', 'ANRE', NULL, DATE '${zi(100)}', false, NULL, NULL, NULL, NULL, '1/anre.pdf', NULL, NULL, NULL),
-  (15, 2, NULL, 1, 'S-15', 'ISCIR', NULL, DATE '${zi(100)}', false, NULL, NULL, NULL, NULL, '2/sters.pdf', NULL, now(), NULL),
-  (16, NULL, 1, 2, 'S-16', 'ISCIR', NULL, DATE '${zi(10)}', false, '141', 219, 'L245', NULL, 'extern-1/c.pdf', NULL, NULL, NULL),
-  (17, 1, NULL, 1, 'S-17', 'ISCIR', NULL, DATE '${AZI}', false, NULL, NULL, NULL, NULL, '1/azi.pdf', NULL, NULL, NULL),
-  (18, 3, NULL, 1, 'S-18', 'ISCIR', NULL, DATE '${zi(-200)}', false, NULL, NULL, NULL, NULL, '3/vechi.pdf', NULL, NULL, 10),
-  (19, 3, NULL, 4, 'R-19', 'ISCIR', NULL, NULL, true, NULL, NULL, NULL, NULL, '3/rsvti.pdf', NULL, NULL, NULL);`
-// așteptat, scris de mână: id → [titular, extern, firma, stare, inlocuita, are_scan]
+    procedeu_sudura, diametru_teava_mm, calitate_material, subcategorie, fisier_path, observatii, deleted_at, inlocuita_de_id, document_personal_id) VALUES
+  (10, 1, NULL, 1, 'S-10', 'ISCIR', DATE '2024-01-10', DATE '${zi(30)}', false, 'electrofuziune', 315, 'PE100', 'cat. 1', '1/a.pdf', 'nota interna', NULL, NULL, NULL),
+  (11, 1, NULL, 2, 'S-11', 'ISCIR', DATE '2022-01-10', DATE '${zi(-1)}', false, '111', 508, 'L360', NULL, '1/b.pdf', NULL, NULL, NULL, NULL),
+  (12, 2, NULL, 1, 'S-12', 'ISCIR', NULL, NULL, true, 'cap la cap', 110, 'PE80', NULL, NULL, NULL, NULL, NULL, NULL),
+  (13, 2, NULL, 1, 'S-13', NULL, NULL, NULL, false, NULL, NULL, NULL, NULL, '   ', NULL, NULL, NULL, NULL),
+  (14, 1, NULL, 3, 'A-14', 'ANRE', NULL, DATE '${zi(100)}', false, NULL, NULL, NULL, NULL, '1/anre.pdf', NULL, NULL, NULL, NULL),
+  (15, 2, NULL, 1, 'S-15', 'ISCIR', NULL, DATE '${zi(100)}', false, NULL, NULL, NULL, NULL, '2/sters.pdf', NULL, now(), NULL, NULL),
+  (16, NULL, 1, 2, 'S-16', 'ISCIR', NULL, DATE '${zi(10)}', false, '141', 219, 'L245', NULL, 'extern-1/c.pdf', NULL, NULL, NULL, NULL),
+  (17, 1, NULL, 1, 'S-17', 'ISCIR', NULL, DATE '${AZI}', false, NULL, NULL, NULL, NULL, '1/azi.pdf', NULL, NULL, NULL, NULL),
+  (18, 3, NULL, 1, 'S-18', 'ISCIR', NULL, DATE '${zi(-200)}', false, NULL, NULL, NULL, NULL, '3/vechi.pdf', NULL, NULL, 10, NULL),
+  (19, 3, NULL, 4, 'R-19', 'ISCIR', NULL, NULL, true, NULL, NULL, NULL, NULL, '3/rsvti.pdf', NULL, NULL, NULL, NULL),
+  (20, 3, NULL, 2, 'S-20', 'ISCIR', NULL, DATE '${zi(50)}', false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 7001),
+  (21, 2, NULL, 2, 'S-21', 'ISCIR', NULL, DATE '${zi(50)}', false, NULL, NULL, NULL, NULL, '2/si-dosar.pdf', NULL, NULL, NULL, 7002),
+  (22, 2, NULL, 2, 'S-22', 'ISCIR', NULL, DATE '${zi(50)}', false, NULL, NULL, NULL, NULL, ' ', NULL, NULL, NULL, 7003);`
+// așteptat, scris de mână: id → [titular, extern, firma, stare, inlocuita, scan]
+//   scan: 'atasat' = fișier pe autorizație (se deschide din CTC); 'dosar_personal' = doar documentul din dosarul personal (CTC nu îl deschide);
+//   'lipsa' = nimic. Fișierul pe autorizație are întâietate (21); o cale goală nu e scan (22 → dosarul personal).
 const ASTEPTAT = {
-  10: ['POPESCU ION', false, null, 'valabila', false, true],
-  11: ['POPESCU ION', false, null, 'expirata', false, true],
-  12: ['IONESCU VASILE', false, null, 'valabila', false, false],
-  13: ['IONESCU VASILE', false, null, 'fara_data', false, false],
-  16: ['EXTERN MIHAI', true, 'FIRMA SUDURA SRL', 'valabila', false, true],
-  17: ['POPESCU ION', false, null, 'valabila', false, true],
-  18: ['GEORGESCU DAN', false, null, 'expirata', true, true],
+  10: ['POPESCU ION', false, null, 'valabila', false, 'atasat'],
+  11: ['POPESCU ION', false, null, 'expirata', false, 'atasat'],
+  12: ['IONESCU VASILE', false, null, 'valabila', false, 'lipsa'],
+  13: ['IONESCU VASILE', false, null, 'fara_data', false, 'lipsa'],
+  16: ['EXTERN MIHAI', true, 'FIRMA SUDURA SRL', 'valabila', false, 'atasat'],
+  17: ['POPESCU ION', false, null, 'valabila', false, 'atasat'],
+  18: ['GEORGESCU DAN', false, null, 'expirata', true, 'atasat'],
+  20: ['GEORGESCU DAN', false, null, 'valabila', false, 'dosar_personal'],
+  21: ['IONESCU VASILE', false, null, 'valabila', false, 'atasat'],
+  22: ['IONESCU VASILE', false, null, 'valabila', false, 'dosar_personal'],
 }
-const CAMPURI = ['are_scan', 'calitate_material', 'data_emitere', 'data_expirare', 'diametru_teava_mm', 'emitent', 'extern', 'fara_expirare', 'firma', 'id',
-  'inlocuita', 'numar_autorizatie', 'procedeu_sudura', 'stare', 'subcategorie', 'tip', 'titular']
+const CAMPURI = ['calitate_material', 'data_emitere', 'data_expirare', 'diametru_teava_mm', 'emitent', 'extern', 'fara_expirare', 'firma', 'id',
+  'inlocuita', 'numar_autorizatie', 'procedeu_sudura', 'scan', 'stare', 'subcategorie', 'tip', 'titular']
 
 async function bazaNoua() {
   const db = new PGlite()
@@ -136,14 +144,14 @@ async function verifica(db) {
     for (const x of r.rows) {
       const a = ASTEPTAT[Number(x.id)]
       if (!a) continue
-      const am = [x.titular, x.extern, x.firma, x.stare, x.inlocuita, x.are_scan]
+      const am = [x.titular, x.extern, x.firma, x.stare, x.inlocuita, x.scan]
       if (JSON.stringify(am) !== JSON.stringify(a)) ab.push(`L ${cont} id ${x.id}: ${JSON.stringify(am)} (aștepta ${JSON.stringify(a)})`)
     }
     const s10 = r.rows.find(x => Number(x.id) === 10)
     if (s10 && (s10.procedeu_sudura !== 'electrofuziune' || Number(s10.diametru_teava_mm) !== 315 || s10.calitate_material !== 'PE100' || s10.tip !== 'Sudor PEHD'))
       ab.push('L câmpurile profesionale ale autorizației 10: ' + JSON.stringify(s10))
     const tot = JSON.stringify(r.rows)
-    for (const interzis of ['1800101000000', '0700000001', 'ion@exemplu.ro', 'RO00TEST', 'nota interna', '1/a.pdf', 'RO123', 'm@f.ro'])
+    for (const interzis of ['1800101000000', '0700000001', 'ion@exemplu.ro', 'RO00TEST', 'nota interna', '1/a.pdf', 'RO123', 'm@f.ro', '7001', '2/si-dosar.pdf'])
       if (tot.includes(interzis)) ab.push(`L ${cont}: a ieșit un câmp nepermis (${interzis})`)
   }
   // fără CTC: eroare 42501 (nu listă goală, L18)
@@ -156,8 +164,11 @@ async function verifica(db) {
   if (f.code || f.rows[0].c !== '1/a.pdf') ab.push('F CTC autorizația 10: ' + JSON.stringify(f))
   const fe = await ca(db, 'authenticated', U.CTC_SUB, `SELECT public.fn_ctc_autorizatie_fisier(16) AS c`)
   if (fe.code || fe.rows[0].c !== 'extern-1/c.pdf') ab.push('F CTC_SUB autorizația 16 (extern): ' + JSON.stringify(fe))
+  const fd = await ca(db, 'authenticated', U.CTC, `SELECT public.fn_ctc_autorizatie_fisier(21) AS c`)
+  if (fd.code || fd.rows[0].c !== '2/si-dosar.pdf') ab.push('F CTC autorizația 21 (fișier + dosar personal): ' + JSON.stringify(fd))
   const mesaje = new Set()
-  for (const [id, ce] of [[14, 'alt tip (ANRE)'], [19, 'alt tip (RSVTI)'], [15, 'ștearsă'], [12, 'fără scan'], [13, 'scan gol'], [999, 'inexistentă']]) {
+  for (const [id, ce] of [[14, 'alt tip (ANRE)'], [19, 'alt tip (RSVTI)'], [15, 'ștearsă'], [12, 'fără scan'], [13, 'scan gol'], [999, 'inexistentă'],
+                          [20, 'doar în dosarul personal'], [22, 'cale goală + dosarul personal']]) {
     const r = await ca(db, 'authenticated', U.CTC, `SELECT public.fn_ctc_autorizatie_fisier(${id}) AS c`)
     asteptCod(r, 'P0002', `F ${ce}`)
     if (r.message) mesaje.add(r.message)
@@ -189,6 +200,11 @@ console.log('1. aplicarea migrării (baseline pe schema falsă) + verificările'
   ok(/reaplicare/.test(m || ''), 'reaplicarea refuzată: ' + m)
   const b2 = await baseline(db)
   ok(JSON.stringify(b2) === JSON.stringify(B0), 'după aplicare, amprenta L15 = baseline-ul (nimic existent schimbat)')
+  // numărătorile scriptului coordonatorului: aceeași împărțire ca lista (scrise de mână: 10 de sudor = 6 atașat + 2 dosar personal + 2 lipsă)
+  const i0 = SCRIPT.indexOf('SELECT (SELECT count(*) FROM public.hr_autorizatii_tipuri'), i1 = SCRIPT.indexOf('AS conturi_ctc;', i0) + 'AS conturi_ctc'.length
+  const nr = (await db.query(SCRIPT.slice(i0, i1))).rows[0]
+  const nrAm = { tipuri_sudura: 2, autorizatii_sudor: 10, scan_atasat: 6, scan_dosar_personal: 2, scan_lipsa: 2, conturi_ctc: 2 }
+  ok(JSON.stringify(Object.fromEntries(Object.entries(nr).map(([k, v]) => [k, Number(v)]))) === JSON.stringify(nrAm), 'numărătorile scriptului: ' + JSON.stringify(nr))
   await db.close()
 }
 
@@ -231,15 +247,30 @@ console.log('3. revenirea')
   ok(ab.length === 0, `re-aplicarea după revenire + verificările (${ab.length} abateri)`)
   await db.close()
 }
+// deriva după livrare (r2): orice câmp al detaliului diferit = refuz, cu câmpul numit, și NIMIC șters
+const RAMAN_TREI = `SELECT count(*)::int AS n FROM pg_proc WHERE proname IN ('fn_ctc_autorizatii_drept', 'fn_ctc_autorizatii_sudori', 'fn_ctc_autorizatie_fisier')`
 for (const [nume, pregatire, re] of [
-  ['funcție schimbată', `CREATE OR REPLACE FUNCTION public.fn_ctc_autorizatie_fisier(p_id bigint) RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN 'x'; END $f$;`, /starea nu e cea din 20261222b \(fn_ctc_autorizatie_fisier\)/],
+  ['funcție schimbată', `CREATE OR REPLACE FUNCTION public.fn_ctc_autorizatie_fisier(p_id bigint) RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN 'x'; END $f$;`, /starea nu e cea din 20261222b \(fn_ctc_autorizatie_fisier\): corp_md5: are [0-9a-f]{32}, livrat [0-9a-f]{32}$/],
+  ['GRANT EXECUTE în plus către service_role', `GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatie_fisier(bigint) TO service_role;`,
+    /starea nu e cea din 20261222b \(fn_ctc_autorizatie_fisier\): acl: are authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE, livrat authenticated:EXECUTE, postgres:EXECUTE$/],
+  ['GRANT către PUBLIC pe predicatul intern', `GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatii_drept() TO PUBLIC;`,
+    /starea nu e cea din 20261222b \(fn_ctc_autorizatii_drept\): acl: are PUBLIC:EXECUTE, postgres:EXECUTE, livrat postgres:EXECUTE$/],
+  ['drept cu GRANT OPTION', `GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatii_sudori() TO authenticated WITH GRANT OPTION;`,
+    /\(fn_ctc_autorizatii_sudori\): acl: are authenticated:EXECUTE\*, postgres:EXECUTE, livrat authenticated:EXECUTE, postgres:EXECUTE$/],
+  ['volatilitatea schimbată', `ALTER FUNCTION public.fn_ctc_autorizatii_sudori() VOLATILE;`, /\(fn_ctc_autorizatii_sudori\): volatil: are v, livrat s$/],
+  ['leakproof', `ALTER FUNCTION public.fn_ctc_autorizatii_drept() LEAKPROOF;`, /\(fn_ctc_autorizatii_drept\): leakproof: are true, livrat false$/],
+  ['strict', `ALTER FUNCTION public.fn_ctc_autorizatie_fisier(bigint) STRICT;`, /\(fn_ctc_autorizatie_fisier\): strict: are true, livrat false$/],
+  ['search_path schimbat', `ALTER FUNCTION public.fn_ctc_autorizatie_fisier(bigint) SET search_path = public;`, /\(fn_ctc_autorizatie_fisier\): config: are search_path=public, livrat search_path=public, pg_temp$/],
+  ['SECURITY INVOKER', `ALTER FUNCTION public.fn_ctc_autorizatii_sudori() SECURITY INVOKER;`, /\(fn_ctc_autorizatii_sudori\): definer: are false, livrat true$/],
+  ['supraîncărcare în plus', `CREATE FUNCTION public.fn_ctc_autorizatie_fisier(p_id integer) RETURNS text LANGUAGE sql AS $f$ SELECT 'x' $f$;`, /\(fn_ctc_autorizatie_fisier: lipseste sau are supraincarcari\)/],
   ['alt obiect depinde de funcție', `CREATE FUNCTION public.zz_foloseste() RETURNS text LANGUAGE sql STABLE AS $f$ SELECT public.fn_ctc_autorizatie_fisier(10) $f$;`, /alte obiecte depind de functia fn_ctc_autorizatie_fisier/],
 ]) {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
   await db.exec(pregatire)
   let m = null; try { await revino(db) } catch (e) { m = e.message }
-  ok(re.test(m || ''), `revenirea refuză (${nume}): ${m}`)
+  const n = (await db.query(RAMAN_TREI)).rows[0].n
+  ok(re.test(m || '') && n >= 3, `revenirea refuză (${nume}), funcțiile rămân (${n}): ${m}`)
   await db.close()
 }
 
@@ -251,14 +282,24 @@ const MUTANTI = [
   ['M4 dreptul și pentru HR', [["(u.module = 'ctc' OR u.module LIKE 'ctc.%')", "(u.module IN ('ctc', 'hr') OR u.module LIKE 'ctc.%')"]]],
   ['M5 prefix fără punct (ctcx)', [["u.module LIKE 'ctc.%'", "u.module LIKE 'ctc%'"]]],
   ['M6 EXECUTE pentru anon', [['GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatii_sudori() TO authenticated;', 'GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatii_sudori() TO authenticated, anon;']]],
-  ['M7 lista întoarce și calea fișierului', [['calitate_material text, stare text, inlocuita boolean, are_scan boolean)', 'calitate_material text, stare text, inlocuita boolean, are_scan boolean, fisier_path text)'],
-    ["(a.inlocuita_de_id IS NOT NULL), (a.fisier_path IS NOT NULL AND a.fisier_path ~ '[^[:space:]]')", "(a.inlocuita_de_id IS NOT NULL), (a.fisier_path IS NOT NULL AND a.fisier_path ~ '[^[:space:]]'), a.fisier_path::text"]]],
+  ['M7 lista întoarce și calea fișierului', [['calitate_material text, stare text, inlocuita boolean, scan text)', 'calitate_material text, stare text, inlocuita boolean, scan text, fisier_path text)'],
+    ["               ELSE 'lipsa' END)::text\n", "               ELSE 'lipsa' END)::text, a.fisier_path::text\n"]]],
   ['M8 fără CTC = listă goală (fail-open)', [["  IF NOT public.fn_ctc_autorizatii_drept() THEN\n    RAISE EXCEPTION 'ctc: autorizațiile pentru cartea tehnică cer acces la modulul CTC' USING ERRCODE = '42501';\n  END IF;\n  RETURN QUERY",
     '  IF NOT public.fn_ctc_autorizatii_drept() THEN\n    RETURN;\n  END IF;\n  RETURN QUERY']]],
   ['M9 expiră azi = expirată (granița zilei)', [['WHEN a.data_expirare >= v_azi THEN', 'WHEN a.data_expirare > v_azi THEN']]],
   ['M10 predicatul intern chemabil de clienți', [["REVOKE ALL ON FUNCTION public.fn_ctc_autorizatii_drept() FROM PUBLIC, anon, authenticated, service_role;",
     "REVOKE ALL ON FUNCTION public.fn_ctc_autorizatii_drept() FROM PUBLIC, anon, authenticated, service_role;\nGRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatii_drept() TO authenticated;"]]],
   ['M11 lista include autorizațiile șterse', [["   WHERE a.deleted_at IS NULL AND t.categorie = 'sudura';\nEND $f$;", "   WHERE t.categorie = 'sudura';\nEND $f$;"]]],
+  // r2 — P2 scanurile din dosarul personal
+  ['M12 dosarul personal raportat „fără scan” (comportamentul r1)', [["               WHEN a.document_personal_id IS NOT NULL THEN 'dosar_personal'\n", '']]],
+  ['M13 dosarul personal înaintea fișierului de pe autorizație', [["         (CASE WHEN a.fisier_path IS NOT NULL AND a.fisier_path ~ '[^[:space:]]' THEN 'atasat'\n               WHEN a.document_personal_id IS NOT NULL THEN 'dosar_personal'\n",
+    "         (CASE WHEN a.document_personal_id IS NOT NULL THEN 'dosar_personal'\n               WHEN a.fisier_path IS NOT NULL AND a.fisier_path ~ '[^[:space:]]' THEN 'atasat'\n"]]],
+  ['M14 cale goală socotită scan atașat', [["         (CASE WHEN a.fisier_path IS NOT NULL AND a.fisier_path ~ '[^[:space:]]' THEN 'atasat'\n", "         (CASE WHEN a.fisier_path IS NOT NULL THEN 'atasat'\n"]]],
+  ['M15 RPC-ul de fișier dă o cale și pentru dosarul personal', [["  SELECT a.fisier_path INTO v_cale\n", "  SELECT coalesce(a.fisier_path, 'dosar/' || a.document_personal_id) INTO v_cale\n"]]],
+  ['M16 lista întoarce id-ul documentului personal', [['calitate_material text, stare text, inlocuita boolean, scan text)', 'calitate_material text, stare text, inlocuita boolean, scan text, document_personal_id bigint)'],
+    ["               ELSE 'lipsa' END)::text\n", "               ELSE 'lipsa' END)::text, a.document_personal_id::bigint\n"]]],
+  // r2 — drepturile EXACTE în postcondiție (aceleași pe care le cere revenirea)
+  ['M17 drept cu GRANT OPTION (has_function_privilege nu îl vede)', [['GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatie_fisier(bigint) TO authenticated;', 'GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatie_fisier(bigint) TO authenticated WITH GRANT OPTION;']]],
 ]
 for (const [nume, inl] of MUTANTI) {
   const db = await bazaNoua()
@@ -271,15 +312,23 @@ for (const [nume, inl] of MUTANTI) {
   ok(picat != null, `${nume} pică (${picat || 'NU a picat'})`)
   await db.close()
 }
-console.log('   mutantul revenirii')
-{
-  const pregatire = `CREATE OR REPLACE FUNCTION public.fn_ctc_autorizatie_fisier(p_id bigint) RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN 'x'; END $f$;`
+console.log('   mutanții revenirii (deriva o refuză originalul; mutantul o lasă să treacă și ȘTERGE funcțiile = verificarea e necesară)')
+const COMPARA = '     WHERE (v_are ->> k) IS DISTINCT FROM (r.livrat ->> k);\n'
+for (const [nume, pregatire, mutatie] of [
+  ['R1 fără corp_md5', `CREATE OR REPLACE FUNCTION public.fn_ctc_autorizatie_fisier(p_id bigint) RETURNS text LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN 'x'; END $f$;`,
+    [[COMPARA, "     WHERE k <> 'corp_md5' AND (v_are ->> k) IS DISTINCT FROM (r.livrat ->> k);\n"]]],
+  ['R2 fără acl (GRANT EXECUTE în plus către service_role)', `GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatie_fisier(bigint) TO service_role;`,
+    [[COMPARA, "     WHERE k <> 'acl' AND (v_are ->> k) IS DISTINCT FROM (r.livrat ->> k);\n"]]],
+  ['R3 fără volatil', `ALTER FUNCTION public.fn_ctc_autorizatii_sudori() VOLATILE;`,
+    [[COMPARA, "     WHERE k <> 'volatil' AND (v_are ->> k) IS DISTINCT FROM (r.livrat ->> k);\n"]]],
+]) {
   const db = await bazaNoua()
   await aplicaMig(db, MIG_B)
   await db.exec(pregatire)
   let mOrig = null; try { await revino(db, REV) } catch (e) { mOrig = e.message }
-  let mMut = null; try { await revino(db, aplica(REV, [["                      AND md5(replace(p.prosrc, chr(13), '')) = r.amp\n", '']])) } catch (e) { mMut = e.message }
-  ok(/starea nu e cea din 20261222b/.test(mOrig || '') && mMut == null, `R1 fără amprenta corpului: originalul refuză (${mOrig}), mutantul trece = verificarea e necesară`)
+  let mMut = null; try { await revino(db, aplica(REV, mutatie)) } catch (e) { mMut = e.message }
+  const n = (await db.query(RAMAN_TREI)).rows[0].n
+  ok(/starea nu e cea din 20261222b/.test(mOrig || '') && mMut == null && n === 0, `${nume}: originalul refuză (${mOrig}), mutantul trece (${mMut || 'a șters ' + (3 - n) + ' din 3'})`)
   await db.close()
 }
 

@@ -8,8 +8,8 @@
 --     cheamă predicatul nou fn_ctc_autorizatii_drept (tabelele le citește ca proprietar, deci politicile lor nu intră în decizie).
 -- Cum se folosește: coloana linie_baseline, în ordinea afișată, se copiază ÎNTREAGĂ între marcajele „>>> BASELINE 20261222b” /
 --   „<<< BASELINE 20261222b” ale migrării (în locul rândului DE_COMPLETAT), iar „detaliu” intră în review.
--- La final: numărători (doar cifre, fără nume sau date personale) — câte autorizații de sudor sunt, câte au scan, și dacă laboratoarele din
---   Ofertare au deja autorizații ISC ca date (sursa posibilă pentru firmele NDT, nefolosită de această migrare).
+-- La final: numărători (doar cifre, fără nume sau date personale) — câte autorizații de sudor sunt și cum le apare scanul în CTC
+--   (atasat / doar în dosarul personal / lipsă), aceeași regulă ca lista din migrare.
 -- Corpul de calcul dintre marcajele AMPRENTA_L15 e IDENTIC (octet cu octet, fără CR) cu cel din scripts/tichete_lot2_amprente.sql și din
 --   migrare (L19, testul src/ctcAutorizatiiMigrare.test.js); search_path fixat la public, pg_temp, ca numele să iasă la fel peste tot.
 \set ON_ERROR_STOP 1
@@ -154,12 +154,13 @@ SELECT (SELECT count(*) FROM public.hr_autorizatii_tipuri WHERE categorie = 'sud
        (SELECT count(*) FROM public.hr_autorizatii a JOIN public.hr_autorizatii_tipuri t ON t.id = a.tip_id
          WHERE a.deleted_at IS NULL AND t.categorie = 'sudura') AS autorizatii_sudor,
        (SELECT count(*) FROM public.hr_autorizatii a JOIN public.hr_autorizatii_tipuri t ON t.id = a.tip_id
-         WHERE a.deleted_at IS NULL AND t.categorie = 'sudura' AND a.fisier_path IS NOT NULL) AS cu_scan_in_autorizatii,
+         WHERE a.deleted_at IS NULL AND t.categorie = 'sudura' AND a.fisier_path ~ '[^[:space:]]') AS scan_atasat,
        (SELECT count(*) FROM public.hr_autorizatii a JOIN public.hr_autorizatii_tipuri t ON t.id = a.tip_id
-         WHERE a.deleted_at IS NULL AND t.categorie = 'sudura' AND a.fisier_path IS NULL AND a.document_personal_id IS NOT NULL) AS scan_doar_in_documente_personale,
-       (SELECT count(*) FROM public.ofertare_parteneri p WHERE p.tip_relatie = 'laborator') AS parteneri_laborator,
-       (SELECT count(*) FROM public.ofertare_parteneri_documente d JOIN public.ofertare_parteneri p ON p.id = d.partener_id
-         WHERE p.tip_relatie = 'laborator' AND d.categorie = 'autorizatie_isc') AS autorizatii_isc_laboratoare,
+         WHERE a.deleted_at IS NULL AND t.categorie = 'sudura' AND coalesce(a.fisier_path, '') !~ '[^[:space:]]'
+           AND a.document_personal_id IS NOT NULL) AS scan_dosar_personal,
+       (SELECT count(*) FROM public.hr_autorizatii a JOIN public.hr_autorizatii_tipuri t ON t.id = a.tip_id
+         WHERE a.deleted_at IS NULL AND t.categorie = 'sudura' AND coalesce(a.fisier_path, '') !~ '[^[:space:]]'
+           AND a.document_personal_id IS NULL) AS scan_lipsa,
        (SELECT count(DISTINCT u.profile_id) FROM public.user_module_access u WHERE u.module = 'ctc' OR u.module LIKE 'ctc.%') AS conturi_ctc;
 
 ROLLBACK;

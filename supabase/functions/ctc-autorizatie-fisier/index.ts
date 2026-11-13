@@ -1,6 +1,8 @@
 // ctc-autorizatie-fisier v1 (TKT-2026-0389, 13.11.2026) — link semnat de 60 s către scanul UNEI autorizații de sudor, pentru CTC (cartea
-// tehnică), fără acces la modulul HR și fără să deschidă bucket-ul autorizatii pentru CTC. NEDEPLOYATĂ: o deployează coordonatorul, după
-// migrarea 20261222b (fără ea răspunde 503). Deploy cu verify_jwt = true (implicit); poarta reală e verificarea din BD de mai jos.
+// tehnică), fără acces la modulul HR și fără să deschidă bucket-ul autorizatii pentru CTC. NEDEPLOYATĂ: o publică coordonatorul DUPĂ
+// migrarea 20261222b (fără ea răspunde 503) și ÎNAINTE de merge (docs/ctc/AUTORIZATII_CARTE_TEHNICA.md). Deploy cu verify_jwt = true;
+// poarta reală e verificarea din BD de mai jos. Semnează DOAR în bucket-ul autorizatii: dovada ținută doar în dosarul personal nu se
+// deschide de aici (RPC-ul o refuză generic, P0002 → 404; lista o arată ca „scanul e în dosarul personal”).
 //
 // Cerere:  POST { "autorizatie_id": <întreg> } cu Authorization: Bearer <JWT-ul utilizatorului> (supabase.functions.invoke din CTC).
 // Răspuns: 200 { url, expira_in_sec } · 400 corp invalid · 401 fără JWT · 403 fără CTC · 404 inexistentă / fără scan / alt tip ·

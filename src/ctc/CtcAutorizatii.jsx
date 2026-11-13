@@ -1,11 +1,12 @@
 // CtcAutorizatii.jsx — CTC · „🪪 Autorizații pentru cartea tehnică” (TKT-2026-0389, migrarea 20261222b), doar citire.
 // Autorizațiile SUDORILOR (valabile și expirate), cu câmpurile profesionale, pentru atașat la cartea tehnică — fără acces la modulul HR.
 // Lista: RPC fn_ctc_autorizatii_sudori (dreptul CTC verificat în BD). Scanul: edge fn ctc-autorizatie-fisier (link de 60 s, doar pentru
-// autorizații de sudor). Firmele de control nedistructiv (NDT) nu au încă autorizațiile ca date în platformă: se spune pe ecran.
+// autorizații de sudor, cu fișierul pe autorizație). Dovada ținută doar în dosarul personal NU se deschide de aici: rândul spune să o
+// atașeze HR la autorizație (r2). L24: încărcarea și cererea de scan au tokenuri de generație, invalidate la ieșirea din tab.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { G, inputSt, btnMic } from './ctcUi.jsx'
-import { STARI, fmtZi, filtreaza, ordoneaza, clasificaEroare, incarcaAutorizatii, cereScan } from './ctcAutorizatiiUtil.js'
+import { STARI, stareScan, generatii, fmtZi, filtreaza, ordoneaza, clasificaEroare, incarcaAutorizatii, cereScan } from './ctcAutorizatiiUtil.js'
 
 const th = { textAlign: 'left', padding: '7px 8px', fontSize: 11, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, whiteSpace: 'nowrap' }
 const td = { padding: '7px 8px', fontSize: 12, borderBottom: `1px solid ${G.border}`, verticalAlign: 'top' }
@@ -20,44 +21,54 @@ export default function CtcAutorizatii() {
   const [busy, setBusy] = useState(null)
   const [eroareScan, setEroareScan] = useState('')
   const [reload, setReload] = useState(0)
-  const gen = useRef(0)
-  const activ = useRef(false)
+  // L24: un token pentru încărcare și unul pentru cererea de scan; demontarea le invalidează pe amândouă (un răspuns întârziat nu mai
+  // scrie în stare și nu mai deschide un scan după ce utilizatorul a plecat din tab). Filtrele lucrează pe lista deja încărcată (fără cereri).
+  const genIncarcare = useRef(null)
+  const genScan = useRef(null)
+  if (!genIncarcare.current) { genIncarcare.current = generatii(); genScan.current = generatii() }
   const ferestre = useRef(new Set())
 
   useEffect(() => {
-    const g = ++gen.current   // L24: doar ultimul răspuns se aplică
-    activ.current = true
-    setStareInc('incarc'); setMesaj('')
+    const gi = genIncarcare.current, gs = genScan.current
+    const t = gi.nou()
+    setStareInc('incarc'); setMesaj(''); setBusy(null)   // o cerere de scan rămasă de la generația veche nu mai blochează butoanele
     incarcaAutorizatii(supabase)
-      .then(r => { if (g !== gen.current) return; setRows(r); setStareInc('gata') })
-      .catch(e => { if (g !== gen.current) return; const c = clasificaEroare(e); setRows([]); setStareInc(c.tip); setMesaj(c.mesaj) })
-    return () => { activ.current = false; for (const f of ferestre.current) f.close(); ferestre.current.clear() }
+      .then(r => { if (!gi.eCurent(t)) return; setRows(r); setStareInc('gata') })
+      .catch(e => { if (!gi.eCurent(t)) return; const c = clasificaEroare(e); setRows([]); setStareInc(c.tip); setMesaj(c.mesaj) })
+    return () => {
+      gi.invalideaza(); gs.invalideaza()
+      for (const f of ferestre.current) f.close()
+      ferestre.current.clear()
+    }
   }, [reload])
 
   const vizibile = useMemo(() => ordoneaza(filtreaza(rows, { text, stare, inlocuite })), [rows, text, stare, inlocuite])
   const nr = useMemo(() => ({
     valabila: rows.filter(r => r.stare === 'valabila').length,
     expirata: rows.filter(r => r.stare === 'expirata').length,
+    dosar: rows.filter(r => r.scan === 'dosar_personal').length,
   }), [rows])
 
   const deschide = async (r) => {
+    const gs = genScan.current
     // fereastra se deschide sincron (altfel blocată de browser după await)
     const f = window.open('about:blank', '_blank')
     if (!f) { setEroareScan('Permite deschiderea unei file noi pentru scan.'); return }
     f.opener = null
     ferestre.current.add(f)
+    const t = gs.nou()
     setBusy(r.id); setEroareScan('')
     try {
       const rez = await cereScan(supabase, r.id)
-      if (!activ.current || f.closed) return
+      if (!gs.eCurent(t) || f.closed) { f.close(); return }   // linkul nu se folosește dacă utilizatorul a plecat din tab
       if (rez.url) f.location.replace(rez.url)
       else { f.close(); setEroareScan(rez.eroare) }
     } catch (e) {
       f.close()
-      if (activ.current) setEroareScan(e?.message || 'Scanul nu poate fi deschis.')
+      if (gs.eCurent(t)) setEroareScan(e?.message || 'Scanul nu poate fi deschis.')
     } finally {
       ferestre.current.delete(f)
-      if (activ.current) setBusy(null)
+      if (gs.eCurent(t)) setBusy(null)
     }
   }
 
@@ -95,6 +106,12 @@ export default function CtcAutorizatii() {
           <div role="alert" style={{ color: G.red }}>{mesaj} <button onClick={() => setReload(x => x + 1)} style={btnMic(G.red)}>Reîncearcă</button></div>
         )}
         {eroareScan && <div role="alert" style={{ color: G.red, marginBottom: 8 }}>{eroareScan}</div>}
+        {stareInc === 'gata' && nr.dosar > 0 && (
+          <div style={{ color: G.yellow, fontSize: 12, marginBottom: 8 }}>
+            {nr.dosar === 1 ? 'O autorizație are' : `${nr.dosar} autorizații au`} scanul doar în dosarul personal al sudorului: nu se deschide de aici.
+            Cere HR să-l atașeze la autorizație.
+          </div>
+        )}
         {stareInc === 'gata' && !rows.length && <div style={{ color: G.muted }}>Nicio autorizație de sudor în evidență.</div>}
         {stareInc === 'gata' && rows.length > 0 && !vizibile.length && <div style={{ color: G.muted }}>Nicio autorizație nu corespunde filtrelor.</div>}
 
@@ -107,6 +124,7 @@ export default function CtcAutorizatii() {
               <tbody>
                 {vizibile.map(r => {
                   const st = STARI[r.stare] || { label: r.stare || '—', culoare: 'muted' }
+                  const sc = stareScan(r.scan)
                   return (
                     <tr key={r.id} style={{ opacity: r.inlocuita ? 0.6 : 1 }}>
                       <td style={td}>
@@ -126,9 +144,13 @@ export default function CtcAutorizatii() {
                         {r.inlocuita && <div style={{ fontSize: 11, color: G.muted }}>înlocuită de o reînnoire</div>}
                       </td>
                       <td style={td}>
-                        <button disabled={!r.are_scan || busy !== null} onClick={() => deschide(r)} style={btnMic(G.blue)}>
-                          {busy === r.id ? 'Se deschide…' : r.are_scan ? 'Deschide' : 'fără scan'}
-                        </button>
+                        {sc.deschide ? (
+                          <button disabled={busy !== null} onClick={() => deschide(r)} style={btnMic(G.blue)}>
+                            {busy === r.id ? 'Se deschide…' : sc.text}
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: 11, color: r.scan === 'dosar_personal' ? G.yellow : G.muted, display: 'inline-block', maxWidth: 190 }}>{sc.text}</span>
+                        )}
                       </td>
                     </tr>
                   )
@@ -139,13 +161,9 @@ export default function CtcAutorizatii() {
         )}
       </section>
 
-      <section style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, padding: 16 }}>
-        <h3 style={{ margin: '0 0 8px', color: G.ctc }}>🔬 Firmele de control nedistructiv (NDT)</h3>
-        <div style={{ fontSize: 12, color: G.muted, lineHeight: 1.5 }}>
-          Autorizațiile laboratoarelor NDT nu sunt încă ținute ca date în platformă. Până atunci, documentul primit de la laborator se încarcă
-          direct în cartea tehnică a lucrării, la poziția „Autorizație laborator NDT”.
-        </div>
-      </section>
+      <div style={{ fontSize: 12, color: G.muted }}>
+        Autorizațiile firmelor de control nedistructiv nu sunt încă în platformă.
+      </div>
     </div>
   )
 }

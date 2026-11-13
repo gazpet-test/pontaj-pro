@@ -8,21 +8,27 @@
 --     pentru clienți (îl cheamă doar cele două funcții de mai jos, ca proprietar).
 --   * fn_ctc_autorizatii_sudori() — lista autorizațiilor de SUDOR (tipul cu categoria 'sudura'), neșterse, valabile ȘI expirate, cu DOAR
 --     câmpurile profesionale: titularul (numele; la personal extern și firma), tipul, subcategoria, numărul, emitentul, datele, procedeul,
---     diametrul, materialul, starea (valabila / expirata / fara_data, după ziua din România), dacă a fost înlocuită, dacă are scan. NU întoarce
---     calea fișierului, observațiile, date de contact, CNP sau alte câmpuri din HR. Cont fără CTC = eroare 42501 (nu listă goală, L18).
+--     diametrul, materialul, starea (valabila / expirata / fara_data, după ziua din România), dacă a fost înlocuită și unde e scanul (r2):
+--     scan = 'atasat' (fișier pe autorizație, se deschide din CTC) / 'dosar_personal' (dovada e doar documentul din dosarul personal, legat
+--     prin document_personal_id: CTC NU îl deschide, HR îl atașează la autorizație) / 'lipsa'. NU întoarce calea fișierului, id-ul
+--     documentului personal, observațiile, date de contact, CNP sau alte câmpuri din HR. Cont fără CTC = eroare 42501 (nu listă goală, L18).
 --   * fn_ctc_autorizatie_fisier(id) — calea scanului, DOAR pentru o autorizație de sudor neștearsă, DOAR pentru apelantul cu CTC; altfel
---     același refuz generic (o autorizație de alt tip, inexistentă sau fără scan arată la fel: nimic de aflat despre alte fișiere). O
+--     același refuz generic (o autorizație de alt tip, inexistentă, fără scan sau cu dovada doar în dosarul personal arată la fel). O
 --     folosește edge fn ctc-autorizatie-fisier, cu JWT-ul utilizatorului (deci auth.uid() e utilizatorul), apoi semnează EXACT calea primită
 --     (60 s) în bucket-ul autorizatii. Bucket-ul NU primește nicio politică nouă: CTC nu are acces general la el.
 -- Ce NU face: nu acordă modulul hr; nu schimbă drepturile pe hr_autorizatii / bucket-ul autorizatii; nu atinge date.
--- Firmele de control nedistructiv (NDT): nu există în BD o structură dedicată pentru autorizațiile lor (vezi PR); nu sunt incluse.
+-- Autorizațiile firmelor de control nedistructiv nu sunt încă în platformă; nu sunt incluse.
 --
 -- L15: amprenta COMPLETĂ (corpul AMPRENTA_L15 v1 IDENTIC, L19; testul src/ctcAutorizatiiMigrare.test.js) a lanțului de identitate pe care se
 --   sprijină predicatul (închiderea tranzitivă din auth.uid(); funcțiile noi citesc tabelele ca proprietar, deci politicile lor nu intră în
 --   decizie), comparată cu BASELINE-ul din producție ÎNAINTE și DUPĂ (exact baseline-ul: migrarea nu schimbă nimic existent). Valorile le
 --   scoate coordonatorul cu scripts/ctc_autorizatii_amprente.sql (READ ONLY); necompletat = refuz. Postcondiția: funcțiile noi cheamă doar
 --   auth.uid() și predicatul nou.
+--   Notă: livrarea se va face prin runner cu amprenta GLOBALĂ (L15 v2, în lucru în alt PR); aici nu se adaugă verificări lexicale noi, iar
+--   blocul de amprentă de mai jos rămâne cel revizuit.
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000. Fără lock pe tabele (doar CREATE FUNCTION).
+--   Ordinea: migrarea → funcția edge ctc-autorizatie-fisier (verify_jwt = true) → merge; probele și stările intermediare:
+--   docs/ctc/AUTORIZATII_CARTE_TEHNICA.md. Postcondiția fixează și drepturile EXACTE ale funcțiilor (aceleași pe care le cere revenirea).
 -- Revenire: supabase/revenire/20261222b_ctc_autorizatii_citire_ROLLBACK.sql. Probe: scripts/pglite/test_ctc_autorizatii_local.mjs.
 DO $pre$
 DECLARE r record; v_tip text; v_plafon text;
@@ -58,6 +64,7 @@ BEGIN
       ('hr_autorizatii', 'fara_expirare', 'boolean'), ('hr_autorizatii', 'procedeu_sudura', 'text|character varying'),
       ('hr_autorizatii', 'diametru_teava_mm', 'numeric|integer|double precision|real'), ('hr_autorizatii', 'calitate_material', 'text|character varying'),
       ('hr_autorizatii', 'subcategorie', 'text|character varying'), ('hr_autorizatii', 'fisier_path', 'text|character varying'),
+      ('hr_autorizatii', 'document_personal_id', 'bigint|integer'),
       ('hr_autorizatii', 'deleted_at', 'timestamp with time zone|timestamp without time zone'), ('hr_autorizatii', 'inlocuita_de_id', 'bigint|integer'),
       ('hr_autorizatii_tipuri', 'id', 'integer|bigint'), ('hr_autorizatii_tipuri', 'denumire', 'text|character varying'),
       ('hr_autorizatii_tipuri', 'categorie', 'text|character varying'),
@@ -259,7 +266,7 @@ COMMENT ON FUNCTION public.fn_ctc_autorizatii_drept() IS 'CTC (intern): apelantu
 CREATE FUNCTION public.fn_ctc_autorizatii_sudori()
 RETURNS TABLE (id bigint, titular text, extern boolean, firma text, tip text, subcategorie text, numar_autorizatie text, emitent text,
                data_emitere date, data_expirare date, fara_expirare boolean, procedeu_sudura text, diametru_teava_mm numeric,
-               calitate_material text, stare text, inlocuita boolean, are_scan boolean)
+               calitate_material text, stare text, inlocuita boolean, scan text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;
 BEGIN
@@ -275,7 +282,10 @@ BEGIN
                WHEN a.data_expirare IS NULL THEN 'fara_data'
                WHEN a.data_expirare >= v_azi THEN 'valabila'
                ELSE 'expirata' END)::text,
-         (a.inlocuita_de_id IS NOT NULL), (a.fisier_path IS NOT NULL AND a.fisier_path ~ '[^[:space:]]')
+         (a.inlocuita_de_id IS NOT NULL),
+         (CASE WHEN a.fisier_path IS NOT NULL AND a.fisier_path ~ '[^[:space:]]' THEN 'atasat'
+               WHEN a.document_personal_id IS NOT NULL THEN 'dosar_personal'
+               ELSE 'lipsa' END)::text
     FROM public.hr_autorizatii a
     JOIN public.hr_autorizatii_tipuri t ON t.id = a.tip_id
     LEFT JOIN public.employees e ON e.id = a.employee_id
@@ -284,7 +294,7 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_ctc_autorizatii_sudori() FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_ctc_autorizatii_sudori() TO authenticated;
-COMMENT ON FUNCTION public.fn_ctc_autorizatii_sudori() IS 'CTC: autorizațiile de sudor (tip cu categoria sudura), neșterse, doar câmpurile profesionale, pentru cartea tehnică. Cont fără CTC = 42501. 20261222b.';
+COMMENT ON FUNCTION public.fn_ctc_autorizatii_sudori() IS 'CTC: autorizațiile de sudor (tip cu categoria sudura), neșterse, doar câmpurile profesionale, pentru cartea tehnică; scan = atasat / dosar_personal / lipsa. Cont fără CTC = 42501. 20261222b.';
 
 -- ── calea scanului: doar o autorizație de sudor neștearsă, doar pentru CTC; refuz generic altfel (fără oracol pe alte fișiere) ──
 CREATE FUNCTION public.fn_ctc_autorizatie_fisier(p_id bigint) RETURNS text
@@ -310,18 +320,24 @@ COMMENT ON FUNCTION public.fn_ctc_autorizatie_fisier(bigint) IS 'CTC: calea scan
 DO $post$
 DECLARE r record; v_alt text;
 BEGIN
+  -- drepturile EXACTE (aceeași formă ca amprenta: rol:drept, ordonat; r2): starea livrată = starea pe care o cere revenirea
   FOR r IN SELECT * FROM (VALUES
-      ('public.fn_ctc_autorizatii_drept()', 'sql', false),
-      ('public.fn_ctc_autorizatii_sudori()', 'plpgsql', true),
-      ('public.fn_ctc_autorizatie_fisier(bigint)', 'plpgsql', true)
-    ) v(fn, limbaj, exec_auth) LOOP
+      ('public.fn_ctc_autorizatii_drept()', 'sql', false, 'postgres:EXECUTE'),
+      ('public.fn_ctc_autorizatii_sudori()', 'plpgsql', true, 'authenticated:EXECUTE, postgres:EXECUTE'),
+      ('public.fn_ctc_autorizatie_fisier(bigint)', 'plpgsql', true, 'authenticated:EXECUTE, postgres:EXECUTE')
+    ) v(fn, limbaj, exec_auth, acl) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
                     WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = r.limbaj AND p.prosecdef AND p.provolatile = 's'
+                      AND p.prokind = 'f' AND NOT p.proisstrict AND NOT p.proleakproof
                       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
                       AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
                       AND has_function_privilege('authenticated', p.oid, 'EXECUTE') = r.exec_auth
-                      AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)) THEN
-      RAISE EXCEPTION '20261222b post: functia % (limbaj / definer / volatil / search_path / owner / EXECUTE)', r.fn;
+                      AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)
+                      AND (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+                             SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type
+                                    || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
+                               FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = r.acl) THEN
+      RAISE EXCEPTION '20261222b post: functia % (limbaj / definer / volatil / strict / leakproof / search_path / owner / drepturi exacte)', r.fn;
     END IF;
   END LOOP;
   -- funcțiile noi cheamă (aceeași regulă de nume ca închiderea) DOAR auth.uid() și predicatul nou; nimic dinamic
