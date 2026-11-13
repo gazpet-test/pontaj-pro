@@ -5,7 +5,7 @@ import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
-import { incarcaUltimulSantier, creeazaControlorZi, randulZilei, propuneSantier, treceFiltrulSantier, nealocati, arataSpinner } from './pontajSantierImplicit.js'
+import { incarcaUltimulSantier, creeazaControlorZi, randulZilei, propuneSantier, treceFiltrulSantier, nealocati, arataSpinner, valoriAfisate, stareRand } from './pontajSantierImplicit.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -1692,47 +1692,28 @@ function defaultOreFromNorma(h) {
 }
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
-function PontajRow({ emp, rec, santierImpl, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast, onDirty }) {
+function PontajRow({ emp, rec, valori, stareR, santierImpl, sites, selectedDate, onSave, onAllocate, onEdit, onRenunta, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast }) {
   // Norma angajatului (pentru auto-fill ore) — vine din v_employee_work_hours
   const normaH = emp.work_hours_per_day || 8
   const oreDefault = defaultOreFromNorma(normaH)
-  
-  // State init: dacă rec are check_in folosesc valorile lui; altfel auto-fill cu defaults bazat pe normă
-  const [ci,setCi]=useState(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare))
-  const [co,setCo]=useState(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
-  const [norma,setNorma]=useState(rec?.norma||'')
-  const [diurna,setDiurna]=useState(rec?.diurna||false)
-  const [supl,setSupl]=useState(rec?.meal_supplement||false)
-  const [mode,setMode]=useState(rec?.norma?'norma':'ore')
+  // TKT-2026-0360 r4: valorile din câmpuri NU mai sunt stare locală resetată la fiecare `rec` nou (un refresh de fundal ștergea ce tastai):
+  // editarea în curs (ciorna) e a controlorului zilei; rândul afișează `valori` (ciorna sau rândul salvat) și trimite modificările (onEdit).
+  const { ci, co, norma, diurna, supl, mode } = valori
+  const saving = stareR.salveaza
   const [exp,setExp]=useState(false)
 
   // Enforce regulă: supliment hrană DOAR dacă e bifată diurna
   const handleSuplToggle = (val) => {
     if (val && !diurna) { showToast?.('Bifează întâi diurna înainte de supliment','warn'); return }
-    setSupl(val)
+    onEdit(emp,{supl:val})
   }
   const handleDiurnaToggle = (val) => {
-    if (!val && supl) { setSupl(false); showToast?.('Suplimentul a fost debifat automat (necesită diurnă)','info') }
-    setDiurna(val)
+    if (!val && supl) { onEdit(emp,{diurna:false,supl:false}); showToast?.('Suplimentul a fost debifat automat (necesită diurnă)','info'); return }
+    onEdit(emp,{diurna:val})
   }
-  useEffect(()=>{
-    setCi(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare))
-    setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
-    setNorma(rec?.norma||''); setDiurna(rec?.diurna||false); setSupl(rec?.meal_supplement||false); setMode(rec?.norma?'norma':'ore')
-  },[rec])
-  // TKT-2026-0064: anunț planșa când rândul are modificări nesalvate, ca refresh-ul
-  // automat (poll/focus) să nu-mi șteargă ce am tastat. Baza de comparație e exact
-  // ce ar pune sync-ul de mai sus din rec (inclusiv auto-fill-ul pe rând gol).
-  const baseCi=rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare)
-  const baseCo=rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire)
   // TKT-2026-0136: concediul aprobat se scrie in pontaj in avans. O planificare arata identic cu o
   // constatare, deci cine face pontajul n-are cum sa stie ce merita verificat. Marcam.
   const planificata = esteAbsentaPlanificata(rec, selectedDate)
-  const isDirty=ci!==baseCi||co!==baseCo||norma!==(rec?.norma||'')||diurna!==(rec?.diurna||false)||supl!==(rec?.meal_supplement||false)
-  useEffect(()=>{
-    onDirty?.(emp.id,isDirty)
-    return ()=>onDirty?.(emp.id,false)
-  },[isDirty,emp.id,onDirty])
   const previewNet = () => { if(!ci) return null; const a=dateToISO(selectedDate,ci),b=co?dateToISO(selectedDate,co):null; return b?netMins(a,b,true):null }
   const pNet=previewNet()
   const recNet=netMins(rec?.check_in,rec?.check_out,rec?.lunch_break!==false)
@@ -1779,9 +1760,11 @@ function PontajRow({ emp, rec, santierImpl, sites, selectedDate, onSave, onAlloc
             :<span style={{fontSize:10,color:G.muted,display:'block',marginBottom:3}} title="Se citesc pontajul zilei și ultimul șantier pontat">⏳ se încarcă…</span>)
           :santierImpl.site_id!=null?<span className="badge bs" title={santierImpl.sursa==='precedent'?`Ultimul șantier pontat (${String(santierImpl.data).split('-').reverse().join('.')}); se salvează așa dacă nu alegi altul`:santierImpl.sursa==='fisa'?(santierImpl.istoricEroare?'Șantierul din fișă — ultimul șantier pontat nu s-a putut citi; verifică-l':'Șantierul din fișa angajatului (fără pontaj anterior)'):undefined} style={{fontSize:10,display:'block',marginBottom:3}}>{santierImpl.sursa==='precedent'?'↺ ':''}{sites.find(s=>s.id===santierImpl.site_id)?.name||(santierImpl.site_id===emp.site_id?emp.sites?.name:null)||'Șantier'}</span>
           :<span style={{fontSize:10,color:G.red,fontWeight:700,display:'block',marginBottom:3}}>⚠ Nealocate</span>}
-          {isAdmin&&santierImpl.sursa!=='incarc'&&<select value={santierImpl.site_id??''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
+          {/* r4: cât o alocare e în curs / așteaptă pe rândul ăsta, selectul arată ultima alegere cerută; scrierile pe rând se fac pe rând (controlorul) */}
+          {isAdmin&&santierImpl.sursa!=='incarc'&&<select value={(stareR.siteTinta!==undefined?stareR.siteTinta:santierImpl.site_id)??''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
             <option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
           </select>}
+          {saving&&<span style={{fontSize:9,color:G.muted,display:'block',marginTop:2}}>⏳ se salvează…</span>}
         </div>
 
         {/* Status actual */}
@@ -1818,6 +1801,17 @@ function PontajRow({ emp, rec, santierImpl, sites, selectedDate, onSave, onAlloc
         <button onClick={save} disabled={saving} style={{...S.btnP,padding:'6px 13px',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{saving?<div className="sp"/>:'💾'}</button>
       </div>
 
+      {/* TKT-2026-0360 r4: starea rândului, din controlor — rezultat necunoscut, rând modificat sub editare, conflict de versiune */}
+      {(stareR.necunoscut||stareR.schimbat||stareR.conflict||stareR.mesaj)&&<div style={{marginTop:6,fontSize:11,color:G.orange,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <span style={{flex:1,minWidth:200}}>
+          {stareR.necunoscut?'⚠ Rezultatul ultimei salvări nu e cunoscut — recitesc rândul din bază; verifică-l înainte să salvezi din nou.'
+            :stareR.conflict?`⚠ ${stareR.conflict}`
+            :stareR.schimbat?'⚠ Rândul a fost modificat între timp (de altcineva sau de o salvare anterioară) — valorile tale au rămas în câmpuri; verifică pontajul salvat și apasă din nou 💾.'
+            :`⚠ ${stareR.mesaj}`}
+        </span>
+        {(stareR.schimbat||stareR.conflict||stareR.mesaj)&&!stareR.necunoscut&&<button onClick={()=>onRenunta(emp)} style={{...S.btnS,fontSize:10,padding:'3px 9px'}}>↺ Ia valorile salvate</button>}
+      </div>}
+
       {exp&&<div style={{marginTop:11,padding:13,background:'#0D1117',borderRadius:8,border:`1px solid ${G.border}`}}>
         <div style={{display:'flex',gap:14,alignItems:'flex-start',flexWrap:'wrap'}}>
           <div>
@@ -1825,21 +1819,19 @@ function PontajRow({ emp, rec, santierImpl, sites, selectedDate, onSave, onAlloc
             <div style={{display:'flex',gap:12}}>
               <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
                 <input type="radio" name={`m${emp.id}`} checked={mode==='ore'} onChange={()=>{
-                  setMode('ore')
-                  setNorma('')
                   // Auto-fill ore default bazat pe norma angajatului (dacă nu sunt deja completate)
-                  if (!ci && !co) { setCi(oreDefault.intrare); setCo(oreDefault.iesire) }
+                  onEdit(emp,{mode:'ore',norma:'',...((!ci&&!co)?{ci:oreDefault.intrare,co:oreDefault.iesire}:{})})
                 }} style={{accentColor:G.blue}}/> Ore lucrate
               </label>
               <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
-                <input type="radio" name={`m${emp.id}`} checked={mode==='norma'} onChange={()=>{setMode('norma');setCi('');setCo('')}} style={{accentColor:G.yellow}}/> Normă specială
+                <input type="radio" name={`m${emp.id}`} checked={mode==='norma'} onChange={()=>onEdit(emp,{mode:'norma',ci:'',co:''})} style={{accentColor:G.yellow}}/> Normă specială
               </label>
             </div>
           </div>
           {mode==='ore'?(
             <>
-              <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>setCi(e.target.value)} style={{...S.input,width:140}}/></div>
-              <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>setCo(e.target.value)} style={{...S.input,width:140}}/></div>
+              <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>onEdit(emp,{ci:e.target.value})} style={{...S.input,width:140}}/></div>
+              <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>onEdit(emp,{co:e.target.value})} style={{...S.input,width:140}}/></div>
               {pNet!==null&&<div style={{paddingTop:18,fontSize:12,color:G.yellow,fontWeight:700}}>{minsToHM(pNet)} net</div>}
               {emp.work_hours_per_day && (
                 <div style={{paddingTop:18,fontSize:11,color:G.muted}}>
@@ -1849,7 +1841,7 @@ function PontajRow({ emp, rec, santierImpl, sites, selectedDate, onSave, onAlloc
             </>
           ):(
             <div><Lbl>Normă</Lbl>
-              <select value={norma} onChange={e=>setNorma(e.target.value)} style={{width:230}}>
+              <select value={norma} onChange={e=>onEdit(emp,{norma:e.target.value})} style={{width:230}}>
                 <option value="">— Selectează —</option>
                 {NORME.map(n=><option key={n} value={n}>{n} — {NORME_LABELS[n]}</option>)}
               </select>
@@ -1878,24 +1870,42 @@ function PontajPage() {
   // TKT-2026-0360 r3: ziua afișată, lista de angajați, rândurile zilei și istoricul (ultimul șantier pontat) — și TOATE citirile / scrierile
   // lor — stau în controlorul zilei (src/pontajSantierImplicit.js, creeazaControlorZi), fără React. Pagina doar redă instantaneul (snap)
   // și cheamă metodele; generațiile, invalidarea la schimbarea zilei / listei și „scrierea bate citirea” sunt ale controlorului (L24).
+  // r4: și starea „zi exportată / plătită”, poarta de parolă (ca dependență), editările în curs, coada scrierilor pe rând și termenele
+  // sunt în controlor; pagina nu mai decide nimic asincron despre ziua afișată.
+  const poartaRef=useRef(null)   // poarta de parolă / tichet a paginii (modalul), chemată DE controlor cu starea lui „zi plătită”
   const ctrlRef=useRef(null)
   if(!ctrlRef.current) ctrlRef.current=creeazaControlorZi({ zi:todayStr(),
     citesteRanduri:(z,ids)=>supabase.from('pontaj_records').select('*').eq('date',z).in('employee_id',ids),
     citesteIstoric:(ids,z)=>incarcaUltimulSantier(supabase, ids, z),
+    // Verific dacă ziua e în interiorul unei perioade exportate ca plată (RPC SECURITY DEFINER, merge pentru orice user authenticated)
+    citesteExport:(z)=>supabase.rpc('fn_get_export_period_for_date', { p_date: z }),
     scrieRand:rand=>supabase.from('pontaj_records').upsert(rand,{onConflict:'employee_id,date'}).select().single(),
-    uid:async()=>(await supabase.auth.getUser()).data.user?.id })
+    uid:async()=>(await supabase.auth.getUser()).data.user?.id,
+    poarta:(a)=>poartaRef.current(a),
+    // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi (ziua SCRISĂ), ce câmpuri.
+    noteaza:async({ tichet:t, emp, zi, campuri })=>{
+      const uid = (await supabase.auth.getUser()).data.user?.id
+      const { error } = await supabase.from('tichete_istoric').insert({
+        tichet_id: t.id, actiune: 'corectura_pontaj', autor: uid || null,
+        detalii: { employee_id: emp.id, angajat: emp.name, data: zi, campuri, termen: fmtZiPontaj(stareLuna(zi).termen) },
+      })
+      return error ? `Corectura e salvată, dar nu s-a putut nota în ${t.numar_tichet}: ${error.message}` : null
+    },
+    // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
+    scrieFisa:(empId,siteId)=>supabase.from('employees').update({site_id:siteId}).eq('id',empId),
+    oreImplicite:(emp)=>defaultOreFromNorma(emp.work_hours_per_day||8) })
   const ctrl=ctrlRef.current
   const snap=useSyncExternalStore(ctrl.aboneaza,ctrl.getStare)
   const date=snap.zi; const recs=snap.randuri.recs; const emps=snap.emps||[]
   const setDate=(d)=>ctrl.seteazaZi(d)
   const [search,setSearch]=useState(''); const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [onlyDiurna,setOnlyDiurna]=useState(false)
-  const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
-  // Password gate pe zile deja exportate ca diurna_payments (Razvan 22.05.2026)
-  const [isDateExported,setIsDateExported]=useState(false)
-  const [exportPeriodInfo,setExportPeriodInfo]=useState(null) // {period_from, period_to, payment_date, total_amount}
-  const [passwordPrompt,setPasswordPrompt]=useState(null) // {onConfirm, onCancel, employeeName}
+  // Password gate pe zile deja exportate ca diurna_payments (Razvan 22.05.2026) — r4: starea vine din controlor, legată de ziua afișată
+  const stExp=snap.exportZi
+  const isDateExported=stExp.stare==='gata'&&stExp.exportat===true
+  const exportPeriodInfo=isDateExported?stExp.info:null // {period_from, period_to, payment_date, total_amount}
+  const [passwordPrompt,setPasswordPrompt]=useState(null) // {onConfirm, onCancel, employeeName, zi, info, cereTichet, termen}
   const [pwdInput,setPwdInput]=useState('')
   const [tichetInput,setTichetInput]=useState('')   // nr. tichet HR pentru corecturi după termenul de 12
   const [pwdErr,setPwdErr]=useState('')
@@ -1908,45 +1918,19 @@ function PontajPage() {
   // nu apărea în plansa altuia până la refresh. Reîncarc înregistrările la revenirea
   // în tab (focus/visibilitychange) + poll ușor la 35s cât ești pe pagină.
   // TKT-2026-0064: refresh-ul e SILENT (fără spinner) — altfel lista se demontează la
-  // fiecare focus/poll și pierzi orele tastate. Sar și peste refresh cât un rând e în
-  // curs de editare (dirtyRef), ca să nu-i sufle valorile de sub degete.
-  // TKT-2026-0360 r3: refresh-ul îl face controlorul (ctrl.reimprospateaza): o salvare reușită aruncă orice citire plecată înaintea ei;
-  // dacă citirea zilei e în eroare, reîncearcă ORICUM (cu editări cu tot, fără spinner: completările rămân).
-  const dirtyRef=useRef(new Set())
-  const markDirty=useCallback((empId,isDirty)=>{ if(isDirty) dirtyRef.current.add(empId); else dirtyRef.current.delete(empId) },[])
-  // după o reîncercare reușită: cine avea DEJA pontaj în ziua asta și era în curs de completare vede acum valorile salvate — se spune
-  const anuntaRef=useRef(null)
-  anuntaRef.current=(r)=>{
-    if(!r) return
-    const atinsi=(r.randuriNoi||[]).filter(id=>dirtyRef.current.has(id))
-    if(atinsi.length) showToast(`${atinsi.length} ${atinsi.length===1?'angajat avea':'angajați aveau'} deja pontaj în ziua asta: rândul arată acum valorile salvate — verifică înainte de a salva`,'warn')
-  }
+  // fiecare focus/poll și pierzi orele tastate. (Până la r4 sărea peste refresh cât un rând
+  // era în editare; acum editările sunt protejate pe rând, în controlor — vezi mai jos.)
+  // TKT-2026-0360 r3/r4: refresh-ul îl face controlorul (ctrl.reimprospateaza) — pagina doar îl declanșează. O salvare reușită aruncă orice
+  // citire plecată înaintea ei; în eroare reîncearcă (fără spinner); editările în curs sunt ale controlorului și nu sunt suprascrise de
+  // răspunsul de fundal (rândul schimbat sub o editare e marcat pe rând), deci refresh-ul nu mai sare peste rândurile în lucru.
   useEffect(()=>{
-    const refresh=()=>{ if(document.visibilityState==='visible') ctrl.reimprospateaza({ editari:dirtyRef.current.size>0 }).then(r=>anuntaRef.current(r)) }
+    const refresh=()=>{ if(document.visibilityState==='visible') ctrl.reimprospateaza() }
     window.addEventListener('focus',refresh)
     document.addEventListener('visibilitychange',refresh)
     const iv=setInterval(refresh,35000)
     return ()=>{ window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); clearInterval(iv) }
   },[ctrl])
-  const reincearca=async()=>{ const r=await ctrl.reincearca(); anuntaRef.current(r); if(r.randuri==='eroare'||r.istoric==='eroare') showToast('Tot nu se poate citi — încearcă din nou peste puțin','error') }
-  // Verific dacă data afișată e în interiorul unei perioade exportate ca plată
-  // Folosesc RPC SECURITY DEFINER ca să funcționeze pentru orice user authenticated (RLS bypass controlat)
-  useEffect(() => {
-    let curent = true // L24: răspunsul pentru o zi părăsită între timp nu mai scrie starea zilei afișate
-    ;(async () => {
-      const { data } = await supabase
-        .rpc('fn_get_export_period_for_date', { p_date: date })
-      if (!curent) return
-      if (data && data.length > 0) {
-        setIsDateExported(true)
-        setExportPeriodInfo(data[0])
-      } else {
-        setIsDateExported(false)
-        setExportPeriodInfo(null)
-      }
-    })()
-    return () => { curent = false }
-  }, [date])
+  const reincearca=async()=>{ const r=await ctrl.reincearca(); if(r.randuri==='eroare'||r.istoric==='eroare'||r.export==='eroare') showToast('Tot nu se poate citi — încearcă din nou peste puțin','error') }
   const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)); const s=data?.find(x=>x.key==='meal_supplement_amount'); if(s) setSuplAmt(Number(s.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async(eCurent=()=>true)=>{
@@ -1981,38 +1965,32 @@ function PontajPage() {
   // Poarta întoarce {ok, tichet} pentru operația CONCRETĂ — tichetul nu stă într-un ref comun,
   // ca două salvări simultane să nu se noteze una pe tichetul alteia (Copilot P1-1).
   const promptActivRef = useRef(false)   // o singură poartă parolă/tichet activă (Copilot P2-1)
-  const requestPasswordIfExported = (empName) => new Promise((resolve) => {
-    if (!isDateExported && !lunaSt.cereTichet) { resolve({ ok: true, tichet: null }); return }
+  // TKT-2026-0360 r4: poarta e chemată DE controlor, cu ziua intenției și starea ei „zi plătită” (cunoscută — altfel controlorul refuză
+  // înainte). Cine are voie și ce i se cere rămân exact ca înainte; doar momentul deciziei e cel corect (nu starea zilei precedente).
+  poartaRef.current = ({ zi, exportat, info, numeAngajat }) => new Promise((resolve) => {
+    const lunaZ = stareLuna(zi)
+    if (!exportat && !lunaZ.cereTichet) { resolve({ ok: true, tichet: null }); return }
     if (promptActivRef.current) {
       showToast('Termină întâi confirmarea deschisă (parolă / tichet), apoi reia modificarea.', 'warn')
       resolve({ ok: false, tichet: null })
       return
     }
     if (!canEditRetroactivePontaj) {
-      showToast(lunaSt.cereTichet
-        ? `🚫 Luna e închisă și termenul de corecturi (${fmtZiPontaj(lunaSt.termen)}) a trecut — corectura se face doar prin tichet HR deschis de Natalia și aprobat de Marilena.`
+      showToast(lunaZ.cereTichet
+        ? `🚫 Luna e închisă și termenul de corecturi (${fmtZiPontaj(lunaZ.termen)}) a trecut — corectura se face doar prin tichet HR deschis de Natalia și aprobat de Marilena.`
         : '🚫 Modificare retroactivă blocată — doar Trusu Razvan, Marilena și Natalia pot modifica zile exportate. Contactează unul dintre ei.', 'error')
       resolve({ ok: false, tichet: null })
       return
     }
     promptActivRef.current = true
     setPasswordPrompt({
-      employeeName: empName,
-      cereTichet: lunaSt.cereTichet,
+      employeeName: numeAngajat,
+      zi, info: exportat ? info : null, termen: lunaZ.termen,
+      cereTichet: lunaZ.cereTichet,
       onConfirm: (tichet) => { promptActivRef.current = false; resolve({ ok: true, tichet: tichet || null }) },
       onCancel: () => { promptActivRef.current = false; resolve({ ok: false, tichet: null }) },
     })
   })
-  // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi, ce câmpuri.
-  const noteazaCorectura = async (emp, campuri, t) => {
-    if (!t) return
-    const uid = (await supabase.auth.getUser()).data.user?.id
-    const { error } = await supabase.from('tichete_istoric').insert({
-      tichet_id: t.id, actiune: 'corectura_pontaj', autor: uid || null,
-      detalii: { employee_id: emp.id, angajat: emp.name, data: date, campuri, termen: fmtZiPontaj(lunaSt.termen) },
-    })
-    if (error) showToast(`Corectura e salvată, dar nu s-a putut nota în ${t.numar_tichet}: ${error.message}`, 'warn')
-  }
 
   const handlePwdConfirm = async () => {
     if (!profile?.email) { setPwdErr('Lipsește email contul'); return }
@@ -2043,46 +2021,23 @@ function PontajPage() {
     setPasswordPrompt(null)
   }
 
+  // TKT-2026-0360 r3/r4 (ctrl.salveaza / ctrl.aloca): TOATĂ decizia e a controlorului — contextul de la apăsare (ctx), „zi plătită”
+  // cunoscută pentru ziua afișată, poarta de parolă / tichet (chemată de el), coada pe rând, versiunea rândului, termenul, nota pe tichet
+  // și fișa angajatului. Pagina doar spune rezultatul.
   const saveRecord = async (emp, fields) => {
-    const ctx = snap.ctx // contextul (ziua + lista) în care ai apăsat — înaintea porții de parolă
-    // Gate parolă dacă data afișată e în perioadă deja exportată
-    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
-    if (!okAuth) {
-      showToast('Modificare anulată — parolă necesară pentru zi plătită', 'warn')
-      return
-    }
-    // TKT-2026-0360 r3 (ctrl.salveaza): șantierul = aceeași regulă ca pe ecran, decisă pe starea CURENTĂ a controlorului; refuz dacă ziua /
-    // lista s-au schimbat de la apăsare, dacă pontajul zilei nu e citit sau dacă șantierul ar veni din istoric și istoricul nu e citit.
-    setSaving(emp.id)
-    const r = await ctrl.salveaza(emp, fields, { ctx })
-    if(!r.ok){ showToast(r.motiv, r.nivel); setSaving(null); return }
+    const r = await ctrl.salveaza(emp, fields, { ctx: snap.ctx })
+    if(!r.ok){ showToast(r.motiv, r.nivel); return }
     showToast(r.altaZi?`✓ Salvat pe ${String(r.zi).split('-').reverse().join('.')}: ${emp.name} (ziua afișată s-a schimbat între timp)`:`✓ Salvat: ${emp.name}`, r.altaZi?'warn':undefined)
-    await noteazaCorectura(emp, Object.keys(fields), tichet)
-    setSaving(null)
+    if(r.notaEroare) showToast(r.notaEroare,'warn')
   }
+  // Salvam site_id in pontaj_records pentru ziua selectata (nu global pe angajat)
   const allocate = async (emp, siteId) => {
-    const ctx = snap.ctx
-    // Gate parolă dacă data afișată e în perioadă deja exportată
-    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
-    if (!okAuth) {
-      showToast('Realocare anulată — parolă necesară pentru zi plătită', 'warn')
-      return
-    }
-    // Salvam site_id in pontaj_records pentru ziua selectata (nu global pe angajat)
-    // TKT-2026-0360 r3 (ctrl.aloca): scrierea pe ziua în care ai ales (refuz dacă ziua s-a schimbat de la alegere); răspunsul bate citirile
-    // plecate înaintea lui; o alocare pe o zi anterioară celei afișate face controlorul să recitească istoricul. Eroarea se spune (nu „✓”).
-    const r = await ctrl.aloca(emp, siteId, { ctx })
-    if(!r.ok){ showToast(`Eroare la alocare: ${r.motiv}`,'error'); return }
-    await noteazaCorectura(emp, ['site_id'], tichet)
-    // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
-    if(!emp.site_id&&siteId){
-      await supabase.from('employees').update({site_id:siteId}).eq('id',emp.id)
-      // aceeași listă de id-uri: controlorul actualizează doar fișa, fără recitire
-      const lista=ctrl.getStare().emps
-      if(lista) ctrl.seteazaAngajati(lista.map(e=>e.id===emp.id?{...e,site_id:siteId,sites:sites.find(s=>s.id===siteId)||null}:e))
-    }
+    const r = await ctrl.aloca(emp, siteId, { ctx: snap.ctx })
+    if(!r.ok){ showToast(r.anulat||r.conflict||r.inlocuita||r.necunoscut?r.motiv:`Eroare la alocare: ${r.motiv}`, r.nivel||'error'); return }
     const alta=r.altaZi?' — ziua afișată s-a schimbat între timp':''
     showToast(siteId?`✓ ${emp.name} → ${sites.find(s=>s.id===siteId)?.name} (doar ${r.zi})${alta}`:`Dezalocat zi (${r.zi})${alta}`,'warn')
+    if(r.notaEroare) showToast(r.notaEroare,'warn')
+    if(r.fisaEroare) showToast(`Alocarea pe zi e salvată, dar fișa angajatului nu s-a actualizat: ${r.fisaEroare}`,'warn')
   }
   const filtered=emps.filter(e=>{
     if(e.hire_date&&e.hire_date>date) return false
@@ -2176,6 +2131,14 @@ function PontajPage() {
         </div>
         <button onClick={reincearca} disabled={stIst.reincerc} style={{...S.btnS,fontSize:11,padding:'5px 12px'}}>{stIst.reincerc?'⏳ Reîncerc…':'↻ Reîncearcă'}</button>
       </div>}
+      {/* TKT-2026-0360 r4: dacă nu se știe dacă ziua e plătită, nu se salvează (eroarea NU înseamnă „neexportată”) */}
+      {stExp.stare==='eroare'&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:11,fontWeight:700}}>⚠️ Nu am putut verifica dacă ziua e plătită (exportată) ({stExp.err})</div>
+          <div style={{fontSize:11,color:G.text,marginTop:3}}>Salvările sunt oprite până la o verificare reușită. Ce ai completat rămâne pe ecran.</div>
+        </div>
+        <button onClick={reincearca} disabled={stExp.reincerc} style={{...S.btnS,fontSize:11,padding:'5px 12px'}}>{stExp.reincerc?'⏳ Reîncerc…':'↻ Reîncearcă'}</button>
+      </div>}
       {/* TKT-2026-0360 r3: rândurile zilei nu s-au putut citi — nu le arătăm ca „fără pontaj”, nu salvăm peste ele; „Reîncearcă” păstrează completările */}
       {stRand.stare==='eroare'&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
         <div style={{flex:1,minWidth:220}}>
@@ -2186,7 +2149,7 @@ function PontajPage() {
       </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={randulZilei(snap,emp.id)} santierImpl={santierPentru(emp)} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast} isDateExported={isDateExported} onDirty={markDirty}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={randulZilei(snap,emp.id)} valori={valoriAfisate(snap,emp,defaultOreFromNorma(emp.work_hours_per_day||8))} stareR={stareRand(snap,emp.id)} santierImpl={santierPentru(emp)} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} onEdit={ctrl.editeaza} onRenunta={ctrl.renuntaEditare} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
       {passwordPrompt && (
@@ -2201,16 +2164,16 @@ function PontajPage() {
             </div>
             <div style={{background:G.bg,border:`1px solid ${G.border}`,borderRadius:8,padding:'10px 14px',marginBottom:14,fontSize:12,lineHeight:1.5}}>
               <div><strong>Angajat:</strong> {passwordPrompt.employeeName}</div>
-              <div><strong>Data:</strong> {new Date(date).toLocaleDateString('ro-RO')}</div>
-              {exportPeriodInfo && (
+              <div><strong>Data:</strong> {new Date(passwordPrompt.zi).toLocaleDateString('ro-RO')}</div>
+              {passwordPrompt.info && (
                 <div style={{color:G.orange,marginTop:4}}>
-                  ⚠ Plătit deja în export {new Date(exportPeriodInfo.period_from).toLocaleDateString('ro-RO')} — {new Date(exportPeriodInfo.period_to).toLocaleDateString('ro-RO')}
+                  ⚠ Plătit deja în export {new Date(passwordPrompt.info.period_from).toLocaleDateString('ro-RO')} — {new Date(passwordPrompt.info.period_to).toLocaleDateString('ro-RO')}
                 </div>
               )}
             </div>
             {passwordPrompt.cereTichet && <>
               <div style={{fontSize:12,color:G.red,marginBottom:8,lineHeight:1.5}}>
-                Luna e închisă și termenul de corecturi ({fmtZiPontaj(lunaSt.termen)}) a trecut. Corectura se face doar pe baza tichetului HR deschis de Natalia și aprobat de Marilena; se notează în istoricul tichetului.
+                Luna e închisă și termenul de corecturi ({fmtZiPontaj(passwordPrompt.termen)}) a trecut. Corectura se face doar pe baza tichetului HR deschis de Natalia și aprobat de Marilena; se notează în istoricul tichetului.
                 <div style={{color:G.muted,marginTop:4}}>ERP-ul verifică doar că tichetul e de HR și nerespins — <strong>aprobarea Marilenei o confirmi tu în tichet</strong> înainte de corectură.</div>
               </div>
               <input value={tichetInput} onChange={e=>{setTichetInput(e.target.value); setPwdErr('')}} placeholder="Nr. tichet HR, ex. TKT-2026-0287" disabled={pwdVerifying}

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import {
   esteZiLucrataCuSantier, ultimulSantierDinRanduri, santierImplicit, incarcaUltimulSantier,
   cheiaListei, randulZilei, arataSpinner, propuneSantier, verificaSalvare, randPentruSalvare, treceFiltrulSantier, nealocati,
-  creeazaControlorZi,
+  creeazaControlorZi, amprenta, valoriDinRand, valoriAfisate, stareRand, verificaIntentie, eroareDeterminista,
 } from './pontajSantierImplicit.js'
 
 // ── serverul fals: in / lt / not is null / or(check_in.not.is.null,norma.is.null) / order / limit, plafon de server 1000 ──
@@ -152,24 +152,43 @@ function amanat() {
   return { p, rezolva, respinge }
 }
 const asteapta = () => new Promise(res => setTimeout(res, 0))
+const ORE = { intrare: '07:00', iesire: '16:00' }
 // scrieImediat: scrierea răspunde imediat cu ecoul rândului (id 900+); altfel e amânată (scrieri[i].rezolva(...))
-function banc(zi, emps, { scrieImediat = true } = {}) {
-  const cereriR = [], cereriI = [], scrieri = []
+// exportImediat: „zi exportată?” răspunde imediat „nu”; altfel e amânată (cereriE[i].rezolva(...))
+// uidManual: identitatea e amânată (uids[i].rezolva('u1')); timerele (termenele) se declanșează DOAR cu b.expira()
+function banc(zi, emps, { scrieImediat = true, exportImediat = true, uidManual = false, poarta, noteaza, scrieFisa } = {}) {
+  const cereriR = [], cereriI = [], cereriE = [], scrieri = [], uids = [], porti = [], timere = []
   let idScris = 900
+  let nUid = 0
   const ctrl = creeazaControlorZi({
     zi,
     citesteRanduri: (z, ids) => { const d = amanat(); cereriR.push({ zi: z, ids, ...d }); return d.p },
     citesteIstoric: (ids, z) => { const d = amanat(); cereriI.push({ zi: z, ids, ...d }); return d.p },
+    citesteExport: (z) => {
+      if (exportImediat) { cereriE.push({ zi: z }); return Promise.resolve({ data: [], error: null }) }
+      const d = amanat(); cereriE.push({ zi: z, ...d }); return d.p
+    },
     scrieRand: (rand) => {
       if (scrieImediat) { scrieri.push({ rand }); return Promise.resolve({ data: { id: idScris++, ...rand }, error: null }) }
       const d = amanat(); scrieri.push({ rand, ...d }); return d.p
     },
-    uid: async () => 'u1', acum: () => 'T',
+    uid: () => { nUid++; if (!uidManual) return Promise.resolve('u1'); const d = amanat(); uids.push(d); return d.p },
+    poarta: poarta || (async (a) => { porti.push(a); return { ok: true, tichet: null } }),
+    noteaza, scrieFisa,
+    oreImplicite: () => ORE,
+    timer: (ms, fn) => { const t = { ms, fn, activ: true }; timere.push(t); return () => { t.activ = false } },
+    acum: () => 'T',
   })
   let notificari = 0
   ctrl.aboneaza(() => { notificari++ })
   if (emps) ctrl.seteazaAngajati(emps)
-  return { ctrl, cereriR, cereriI, scrieri, s: () => ctrl.getStare(), prop: (e) => propuneSantier(ctrl.getStare(), e), notificari: () => notificari }
+  return {
+    ctrl, cereriR, cereriI, cereriE, scrieri, uids, porti, s: () => ctrl.getStare(), prop: (e) => propuneSantier(ctrl.getStare(), e),
+    notificari: () => notificari, nUid: () => nUid,
+    // termenele: toate cele încă active expiră acum (cererile lor nu au răspuns)
+    expira: () => { for (const t of timere.splice(0)) if (t.activ) { t.activ = false; t.fn() } },
+    termeneActive: () => timere.filter(t => t.activ).length,
+  }
 }
 const ore = (zi, hh = '05') => ({ check_in: `${zi}T${hh}:00:00Z`, check_out: `${zi}T14:00:00Z`, norma: null, lunch_break: true, diurna: false, meal_supplement: false })
 const harta = (...perechi) => new Map(perechi)
@@ -347,15 +366,14 @@ describe('(d) scrierile bat citirile plecate înaintea lor', () => {
     await asteapta()
     expect(randulZilei(b.s(), 1)).toMatchObject({ id: s.rand.id, site_id: A })
   })
-  it('fără citire în zbor, salvarea nu pornește citiri inutile; citirea de fundal sare cât există editări (rânduri citite)', async () => {
+  it('fără citire în zbor, salvarea nu pornește citiri inutile', async () => {
     const emp = { id: 1, site_id: 10 }
     const b = banc(Z13, [emp])
     b.cereriR[0].rezolva({ data: [], error: null }); b.cereriI[0].rezolva(new Map())
     await asteapta()
     await b.ctrl.salveaza(emp, ore(Z13))
     expect(b.cereriR).toHaveLength(1)
-    await b.ctrl.reimprospateaza({ editari: true })
-    expect(b.cereriR).toHaveLength(1)
+    // r4: citirea de fundal NU mai sare peste editări (ele sunt protejate pe rând, la aplicarea răspunsului — vezi r4 (e))
   })
   it('salvarea după ce ziua s-a schimbat de la apăsare (poarta de parolă) = refuz, nimic scris', async () => {
     const emp = { id: 1, site_id: 10 }
@@ -399,7 +417,7 @@ describe('(e) eroare la citirea inițială + ore completate + „Reîncearcă”
     const rand2 = { id: 8, employee_id: 2, date: Z13, site_id: 44, ...ore(Z13, '06') }
     b.cereriR[1].rezolva({ data: [rand2], error: null })
     const rez = await pReinc
-    expect(rez).toEqual({ randuri: 'gata', istoric: 'gata', randuriNoi: [2] })
+    expect(rez).toEqual({ randuri: 'gata', istoric: 'gata', export: 'gata', randuriNoi: [2] })
     expect(randulZilei(b.s(), 1)).toBe(null)
     const ok = await b.ctrl.salveaza(emp, completat)
     expect(ok.ok).toBe(true)
@@ -542,6 +560,392 @@ describe('(f) cazurile din r2 rămân verzi, pe controlor', () => {
   })
 })
 
+// ══ r4 (re-review #1091 r3): scrieri serializate, „zi plătită” în controlor, versiunea rândului, termene, editări protejate ══
+// pornire comună: rândurile și istoricul zilei citite (fără rând pentru angajat, istoric pe A)
+async function pornit(b, { randuri = [], ist = harta([1, { site_id: A, date: Z12 }]) } = {}) {
+  b.cereriR[0].rezolva({ data: randuri, error: null }); b.cereriI[0].rezolva(ist)
+  await asteapta()
+}
+const rand = (id, extra = {}) => ({ id, employee_id: 1, date: Z13, site_id: A, check_in: null, check_out: null, norma: null, lunch_break: true, diurna: false, meal_supplement: false, updated_at: 'v' + id, ...extra })
+
+describe('r4 (a) scrierile pe același rând se fac pe rând (P1-1)', () => {
+  it('două alocări 20 → 30 cu răspunsuri care ar sosi inversat: a doua pleacă doar după prima; ecranul și salvarea următoare = 30', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b)
+    const p1 = b.ctrl.aloca(emp, 20); await asteapta()
+    const p2 = b.ctrl.aloca(emp, 30); await asteapta()
+    // a doua NU a plecat: ordinea din bază = ordinea de pe ecran, iar răspunsul ei nu poate sosi înaintea primului
+    expect(b.scrieri).toHaveLength(1)
+    expect(b.scrieri[0].rand.site_id).toBe(20)
+    expect(stareRand(b.s(), 1)).toMatchObject({ salveaza: true, siteTinta: 30 })
+    b.scrieri[0].rezolva({ data: rand(70, { site_id: 20, updated_at: 't1' }), error: null })
+    expect(await p1).toMatchObject({ ok: true, scris: true })
+    await asteapta()
+    expect(b.scrieri).toHaveLength(2)
+    expect(b.scrieri[1].rand.site_id).toBe(30)
+    b.scrieri[1].rezolva({ data: rand(70, { site_id: 30, updated_at: 't2' }), error: null })
+    expect(await p2).toMatchObject({ ok: true, scris: true })
+    expect(b.prop(emp)).toEqual({ site_id: 30, sursa: 'zi', data: null })
+    expect(stareRand(b.s(), 1).salveaza).toBe(false)
+    const p3 = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    expect(b.scrieri[2].rand.site_id).toBe(30)
+    b.scrieri[2].rezolva({ data: { ...rand(70, { site_id: 30, updated_at: 't3' }), ...ore(Z13) }, error: null })
+    expect((await p3).ok).toBe(true)
+  })
+  it('o intenție nouă de același fel o înlocuiește pe cea nepornită (rămâne doar ultima); salvarea și alocarea așteaptă fiecare la rând', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b)
+    const p20 = b.ctrl.aloca(emp, 20); await asteapta()
+    const p30 = b.ctrl.aloca(emp, 30); await asteapta()
+    const pS = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    const p40 = b.ctrl.aloca(emp, 40); await asteapta()
+    expect(await p30).toMatchObject({ ok: false, scris: false, inlocuita: true })
+    expect(b.scrieri).toHaveLength(1)
+    b.scrieri[0].rezolva({ data: rand(71, { site_id: 20, updated_at: 't1' }), error: null }); await p20; await asteapta()
+    // ordinea sosirii: salvarea (cerută înaintea lui 40), apoi alocarea 40; 30 nu se mai scrie niciodată
+    expect(b.scrieri[1].rand).toMatchObject({ site_id: 20, check_in: `${Z13}T05:00:00Z` })
+    b.scrieri[1].rezolva({ data: { ...rand(71, { site_id: 20, updated_at: 't2' }), ...ore(Z13) }, error: null }); await pS; await asteapta()
+    expect(b.scrieri[2].rand.site_id).toBe(40)
+    b.scrieri[2].rezolva({ data: { ...rand(71, { site_id: 40, updated_at: 't3' }), ...ore(Z13) }, error: null })
+    expect((await p40).ok).toBe(true)
+    expect(b.scrieri.map(s => s.rand.site_id)).toEqual([20, 20, 40])
+    expect(b.prop(emp).site_id).toBe(40)
+  })
+  it('rânduri diferite nu se așteaptă între ele', async () => {
+    const e1 = { id: 1, site_id: 10 }, e2 = { id: 2, site_id: 10 }
+    const b = banc(Z13, [e1, e2], { scrieImediat: false })
+    await pornit(b)
+    b.ctrl.aloca(e1, 20); b.ctrl.aloca(e2, 30); await asteapta()
+    expect(b.scrieri.map(s => s.rand.employee_id)).toEqual([1, 2])
+  })
+})
+
+describe('r4 (b) poarta „zi plătită” folosește starea ZILEI AFIȘATE, din controlor (P1-2)', () => {
+  const PLATA = { period_from: '2026-11-01', period_to: '2026-11-12', payment_date: '2026-11-13', total_amount: 100 }
+  it('A neexportată → B exportată, cu răspunsul de export întârziat: refuz până vine, apoi poarta primește exportat=true și cere parola', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const porti = []
+    // poarta reală a paginii cere parola (aici: refuzată) DOAR când primește exportat=true
+    const poarta = async (a) => { porti.push(a); return a.exportat ? { ok: false, tichet: null } : { ok: true, tichet: null } }
+    const b = banc(Z13, [emp], { exportImediat: false, poarta })
+    b.cereriE[0].rezolva({ data: [], error: null })
+    await pornit(b)
+    expect((await b.ctrl.salveaza(emp, ore(Z13))).ok).toBe(true)
+    expect(porti[0]).toMatchObject({ zi: Z13, exportat: false })
+    b.ctrl.seteazaZi(Z12)
+    expect(b.s().exportZi.stare).toBe('incarc') // nimic din ziua precedentă
+    b.cereriR[1].rezolva({ data: [], error: null }); b.cereriI[1].rezolva(harta([1, { site_id: A, date: '2026-11-11' }]))
+    await asteapta()
+    // rândurile și istoricul lui B au sosit înaintea răspunsului despre export → refuz, fără poartă și fără scriere
+    const r = await b.ctrl.salveaza(emp, ore(Z12))
+    expect(r).toMatchObject({ ok: false, scris: false })
+    expect(r.motiv).toMatch(/Se verifică dacă ziua e plătită/)
+    expect(porti).toHaveLength(1)
+    expect(b.scrieri).toHaveLength(1)
+    expect((await b.ctrl.aloca(emp, B)).ok).toBe(false)
+    b.cereriE[1].rezolva({ data: [PLATA], error: null }); await asteapta()
+    expect(b.s().exportZi).toMatchObject({ stare: 'gata', exportat: true, info: PLATA })
+    const r2 = await b.ctrl.salveaza(emp, ore(Z12))
+    expect(porti[1]).toEqual({ zi: Z12, exportat: true, info: PLATA, numeAngajat: undefined })
+    expect(r2).toMatchObject({ ok: false, scris: false, anulat: true })
+    expect(b.scrieri).toHaveLength(1)
+  })
+  it('răspunsul de export al zilei părăsite (A, „neexportată”) sosit după cel al lui B nu schimbă nimic', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { exportImediat: false })
+    b.ctrl.seteazaZi(Z12)
+    b.cereriE[1].rezolva({ data: [PLATA], error: null }); await asteapta()
+    b.cereriE[0].rezolva({ data: [], error: null }); await asteapta()
+    expect(b.s().exportZi).toMatchObject({ stare: 'gata', exportat: true })
+  })
+  it('eroarea verificării NU e „neexportată”: refuz (fără poartă), „Reîncearcă” → abia apoi se poate salva', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { exportImediat: false })
+    b.cereriE[0].rezolva({ data: null, error: { message: 'cădere' } })
+    await pornit(b)
+    expect(b.s().exportZi).toMatchObject({ stare: 'eroare', err: 'cădere', exportat: null })
+    const r = await b.ctrl.salveaza(emp, ore(Z13))
+    expect(r).toMatchObject({ ok: false, scris: false, nivel: 'error' })
+    expect(r.motiv).toMatch(/Nu s-a putut verifica dacă ziua e plătită/)
+    expect(b.porti).toHaveLength(0)
+    // un răspuns fără listă (null fără eroare) e tot eroare, nu „neexportată”
+    const pR = b.ctrl.reimprospateaza()
+    expect(b.s().exportZi.reincerc).toBe(true)
+    b.cereriE[1].rezolva({ data: null, error: null })
+    expect((await pR).export).toBe('eroare')
+    const pR2 = b.ctrl.reincearca()
+    b.cereriE[2].rezolva({ data: [], error: null })
+    expect((await pR2).export).toBe('gata')
+    expect((await b.ctrl.salveaza(emp, ore(Z13))).ok).toBe(true)
+  })
+  it('poarta trecută cu tichet: nota se face pe ZIUA scrisă, cu câmpurile salvate; fișa goală primește șantierul la alocare', async () => {
+    const emp = { id: 1, site_id: null, name: 'X' }
+    const note = [], fise = []
+    const b = banc(Z13, [emp], {
+      poarta: async () => ({ ok: true, tichet: { id: 5, numar_tichet: 'TKT-1' } }),
+      noteaza: async (a) => { note.push(a); return null },
+      scrieFisa: async (id, s) => { fise.push([id, s]); return { error: null } },
+    })
+    await pornit(b, { ist: new Map() })
+    const r = await b.ctrl.aloca(emp, B)
+    expect(r.ok).toBe(true)
+    expect(note[0]).toMatchObject({ zi: Z13, campuri: ['site_id'], tichet: { id: 5 } })
+    expect(fise).toEqual([[1, B]])
+    expect(b.s().emps[0].site_id).toBe(B)
+    await b.ctrl.salveaza(emp, ore(Z13))
+    expect(note[1]).toMatchObject({ zi: Z13, campuri: Object.keys(ore(Z13)) })
+  })
+})
+
+describe('r4 (c) pontajul descoperit târziu, pe ACELAȘI angajat, nu e suprascris (P1-3)', () => {
+  it('identitatea întârzie, o citire de fundal găsește pontajul la 06:00: nimic scris, conflict pe rând, 04:00 rămâne; „salvează din nou” scrie', async () => {
+    const emp = { id: 1, site_id: 10, name: 'POP ION' }
+    const b = banc(Z13, [emp], { uidManual: true })
+    await pornit(b)
+    b.ctrl.editeaza(emp, { ci: '04:00' })
+    expect(valoriAfisate(b.s(), emp, ORE).ci).toBe('04:00')
+    const p = b.ctrl.salveaza(emp, ore(Z13, '04')); await asteapta()
+    expect(b.uids).toHaveLength(1) // intenția așteaptă identitatea
+    b.ctrl.reimprospateaza()
+    const r06 = rand(9, { check_in: `${Z13}T06:00:00Z`, check_out: `${Z13}T14:00:00Z` })
+    b.cereriR[1].rezolva({ data: [r06], error: null }); await asteapta()
+    expect(stareRand(b.s(), 1)).toMatchObject({ editat: true, schimbat: true })
+    b.uids[0].rezolva('u1')
+    const r = await p
+    expect(r).toMatchObject({ ok: false, scris: false, conflict: true })
+    expect(r.motiv).toMatch(/Există deja un pontaj salvat la .* pentru POP ION/)
+    expect(b.scrieri).toHaveLength(0)
+    expect(valoriAfisate(b.s(), emp, ORE).ci).toBe('04:00')
+    expect(stareRand(b.s(), 1).conflict).toMatch(/Există deja un pontaj salvat/)
+    // utilizatorul a văzut conflictul și salvează din nou: acum intenția se sprijină pe rândul văzut (06:00)
+    const p2 = b.ctrl.salveaza(emp, ore(Z13, '04')); await asteapta()
+    b.uids[1].rezolva('u1')
+    expect((await p2).ok).toBe(true)
+    expect(b.scrieri[0].rand.check_in).toBe(`${Z13}T04:00:00Z`)
+    expect(stareRand(b.s(), 1)).toMatchObject({ editat: false, conflict: null })
+  })
+  it('scenariul din verdict: citirea inițială eșuează, 04:00 completat; salvarea e refuzată ÎNAINTE de identitate; reîncercarea găsește 06:00 pe același angajat → conflict, nimic scris', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { uidManual: true })
+    b.cereriR[0].rezolva({ data: null, error: { message: 'timeout' } }); b.cereriI[0].rezolva(harta([1, { site_id: A, date: Z12 }]))
+    await asteapta()
+    b.ctrl.editeaza(emp, { ci: '04:00' })
+    expect(stareRand(b.s(), 1).editat).toBe(true)
+    expect((await b.ctrl.salveaza(emp, ore(Z13, '04'))).ok).toBe(false)
+    expect(b.nUid()).toBe(0) // refuzul e imediat: nicio intenție nu rămâne să aștepte identitatea
+    const pR = b.ctrl.reincearca()
+    b.cereriR[1].rezolva({ data: [rand(9, { check_in: `${Z13}T06:00:00Z` })], error: null })
+    await pR
+    expect(stareRand(b.s(), 1)).toMatchObject({ editat: true, schimbat: true })
+    expect(valoriAfisate(b.s(), emp, ORE).ci).toBe('04:00')
+    const r = await b.ctrl.salveaza(emp, ore(Z13, '04'))
+    expect(r).toMatchObject({ ok: false, scris: false, conflict: true })
+    expect(b.nUid()).toBe(0)
+    expect(b.scrieri).toHaveLength(0)
+  })
+  it('alocarea: rândul schimbat de altcineva între alegere și scriere = conflict, nimic scris', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { uidManual: true })
+    await pornit(b, { randuri: [rand(9)] })
+    const p = b.ctrl.aloca(emp, B); await asteapta()
+    b.ctrl.reimprospateaza()
+    b.cereriR[1].rezolva({ data: [rand(9, { site_id: 77, updated_at: 'altcineva' })], error: null }); await asteapta()
+    b.uids[0].rezolva('u1')
+    expect(await p).toMatchObject({ ok: false, scris: false, conflict: true })
+    expect(b.scrieri).toHaveLength(0)
+    expect(stareRand(b.s(), 1).mesaj).toMatch(/alege din nou/)
+  })
+  it('propria scriere nu e conflict pentru intenția care o așteaptă (baza trece pe rândul scris de noi)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b, { randuri: [rand(9)] })
+    b.ctrl.editeaza(emp, { co: '18:00' })
+    const pA = b.ctrl.aloca(emp, B); await asteapta()
+    const pS = b.ctrl.salveaza(emp, { ...ore(Z13), check_out: `${Z13}T18:00:00Z` }); await asteapta()
+    b.scrieri[0].rezolva({ data: rand(9, { site_id: B, updated_at: 'noi' }), error: null }); await pA; await asteapta()
+    expect(stareRand(b.s(), 1)).toMatchObject({ editat: true, schimbat: false })
+    expect(b.scrieri[1].rand).toMatchObject({ site_id: B, check_out: `${Z13}T18:00:00Z` })
+    b.scrieri[1].rezolva({ data: rand(9, { site_id: B, check_out: `${Z13}T18:00:00Z`, updated_at: 'noi2' }), error: null })
+    expect((await pS).ok).toBe(true)
+    expect(stareRand(b.s(), 1).editat).toBe(false)
+  })
+})
+
+describe('r4 (d) termene: nicio cerere nu blochează ziua (P2-4)', () => {
+  it('citirea rândurilor suspendată: după termen = eroare cu „Reîncearcă”; răspunsul târziu e aruncat', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    b.cereriI[0].rezolva(new Map()); await asteapta()
+    expect(b.s().randuri.stare).toBe('incarc')
+    b.expira(); await asteapta()
+    expect(b.s().randuri).toMatchObject({ stare: 'eroare', err: 'fără răspuns în 20 s' })
+    const pR = b.ctrl.reimprospateaza()
+    expect(b.cereriR).toHaveLength(2)
+    b.cereriR[1].rezolva({ data: [], error: null })
+    expect((await pR).randuri).toBe('gata')
+    const dupa = b.s()
+    b.cereriR[0].rezolva({ data: [rand(5, { site_id: 99 })], error: null }); await asteapta()
+    expect(b.s()).toBe(dupa)
+  })
+  it('istoricul și „zi exportată” suspendate: eroare după termen (fișa, respectiv salvare refuzată), reîncercare reușită', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { exportImediat: false })
+    b.cereriR[0].rezolva({ data: [], error: null }); await asteapta()
+    b.expira(); await asteapta()
+    expect(b.s().istoric.stare).toBe('eroare')
+    expect(b.s().exportZi.stare).toBe('eroare')
+    expect((await b.ctrl.salveaza(emp, ore(Z13))).motiv).toMatch(/Nu s-a putut verifica/)
+    const pR = b.ctrl.reincearca()
+    b.cereriI[1].rezolva(harta([1, { site_id: A, date: Z12 }])); b.cereriE[1].rezolva({ data: [], error: null })
+    expect(await pR).toMatchObject({ istoric: 'gata', export: 'gata' })
+    expect((await b.ctrl.salveaza(emp, ore(Z13))).ok).toBe(true)
+  })
+  it('scrierea expirată NU e eșec: rezultat necunoscut, recitire imediată, nicio altă scriere pe rând până la ea; răspunsul târziu recitește din nou', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b)
+    const p = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    expect(b.scrieri).toHaveLength(1)
+    b.expira()
+    const r = await p
+    expect(r).toMatchObject({ ok: false, scris: false, necunoscut: true })
+    expect(stareRand(b.s(), 1).necunoscut).toBe(true)
+    expect(b.cereriR).toHaveLength(2) // recitirea a plecat
+    const r2 = await b.ctrl.salveaza(emp, ore(Z13, '06'))
+    expect(r2).toMatchObject({ ok: false, scris: false })
+    expect(r2.motiv).toMatch(/nu e cunoscut/)
+    expect(b.scrieri).toHaveLength(1)
+    // recitirea arată că scrierea a ajuns în bază
+    const scris = rand(80, { ...ore(Z13) })
+    b.cereriR[1].rezolva({ data: [scris], error: null }); await asteapta()
+    expect(stareRand(b.s(), 1).necunoscut).toBe(false)
+    expect(randulZilei(b.s(), 1)).toEqual(scris)
+    // răspunsul târziu al scrierii: aruncat, dar pornește încă o recitire
+    b.scrieri[0].rezolva({ data: scris, error: null }); await asteapta()
+    expect(b.cereriR).toHaveLength(3)
+    const p3 = b.ctrl.salveaza(emp, ore(Z13, '06')); await asteapta()
+    expect(b.scrieri).toHaveLength(2)
+    b.scrieri[1].rezolva({ data: rand(80, { ...ore(Z13, '06'), updated_at: 'x' }), error: null })
+    expect((await p3).ok).toBe(true)
+  })
+  it('o citire pornită ÎNAINTE de expirare nu lămurește rezultatul necunoscut', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b)
+    const p = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    b.ctrl.reimprospateaza() // pleacă înaintea expirării (cereriR[1])
+    b.expira(); await p
+    b.cereriR[1].rezolva({ data: [], error: null }); await asteapta() // aruncată (generație veche)
+    expect(stareRand(b.s(), 1).necunoscut).toBe(true)
+    b.cereriR[2].rezolva({ data: [], error: null }); await asteapta()
+    expect(stareRand(b.s(), 1).necunoscut).toBe(false)
+  })
+  it('eroare de rețea (fără cod) = necunoscut; refuz al serverului (cu cod SQL) = eșec simplu', async () => {
+    expect(eroareDeterminista({ code: '42501' })).toBe(true)
+    expect(eroareDeterminista({ code: 'PGRST116' })).toBe(true)
+    expect(eroareDeterminista({ code: '', message: 'TypeError: Failed to fetch' })).toBe(false)
+    expect(eroareDeterminista(new Error('x'))).toBe(false)
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b)
+    const p = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    b.scrieri[0].rezolva({ data: null, error: { code: '42501', message: 'refuz' } })
+    expect(await p).toMatchObject({ ok: false, motiv: 'Eroare la salvare' })
+    expect(stareRand(b.s(), 1).necunoscut).toBe(false)
+    const p2 = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    b.scrieri[1].rezolva({ data: null, error: { code: '', message: 'Failed to fetch' } })
+    expect(await p2).toMatchObject({ ok: false, necunoscut: true })
+  })
+  it('identitatea suspendată nu blochează rândul: după termen, refuz fără scriere', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { uidManual: true })
+    await pornit(b)
+    const p = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    b.expira()
+    expect(await p).toMatchObject({ ok: false, scris: false })
+    expect(b.scrieri).toHaveLength(0)
+    expect(stareRand(b.s(), 1).salveaza).toBe(false)
+  })
+})
+
+describe('r4 (e) editările în curs nu sunt suprascrise de răspunsurile de fundal (P2-5)', () => {
+  it('răspuns de fundal cu rândul modificat de altcineva: câmpurile rămân, rândul e marcat, salvarea trece prin versiune', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    const r05 = rand(9, { ...ore(Z13) })
+    await pornit(b, { randuri: [r05] })
+    const p = b.ctrl.reimprospateaza() // citirea pleacă FĂRĂ editări
+    b.ctrl.editeaza(emp, { co: '18:00' }) // editarea începe după pornirea citirii
+    const v0 = valoriAfisate(b.s(), emp, ORE)
+    const r06 = rand(9, { ...ore(Z13, '06'), updated_at: 'altcineva' })
+    b.cereriR[1].rezolva({ data: [r06], error: null }); await p
+    expect(randulZilei(b.s(), 1)).toEqual(r06)               // starea salvată se vede (marcaj de stare)
+    expect(valoriAfisate(b.s(), emp, ORE)).toBe(v0)          // câmpurile NU sunt suprascrise
+    expect(stareRand(b.s(), 1)).toMatchObject({ editat: true, schimbat: true })
+    const r = await b.ctrl.salveaza(emp, { ...ore(Z13), check_out: `${Z13}T18:00:00Z` })
+    expect(r).toMatchObject({ ok: false, scris: false, conflict: true })
+    expect(b.scrieri).toHaveLength(0)
+    expect(valoriAfisate(b.s(), emp, ORE).co).toBe('18:00')
+    expect((await b.ctrl.salveaza(emp, { ...ore(Z13), check_out: `${Z13}T18:00:00Z` })).ok).toBe(true)
+  })
+  it('răspuns de fundal identic: editarea nu e marcată; „ia valorile salvate” renunță la editare', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    const r05 = rand(9, { ...ore(Z13) })
+    await pornit(b, { randuri: [r05] })
+    b.ctrl.editeaza(emp, { diurna: true })
+    b.ctrl.reimprospateaza(); b.cereriR[1].rezolva({ data: [{ ...r05 }], error: null }); await asteapta()
+    expect(stareRand(b.s(), 1)).toMatchObject({ editat: true, schimbat: false })
+    expect(valoriAfisate(b.s(), emp, ORE).diurna).toBe(true)
+    b.ctrl.renuntaEditare(emp)
+    expect(stareRand(b.s(), 1).editat).toBe(false)
+    expect(valoriAfisate(b.s(), emp, ORE).diurna).toBe(false)
+  })
+  it('editarea readusă la valorile salvate dispare; schimbarea zilei renunță la editări (ca înainte)', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    await pornit(b)
+    expect(valoriAfisate(b.s(), emp, ORE)).toEqual(valoriDinRand(null, ORE))
+    b.ctrl.editeaza(emp, { ci: '04:00' }); b.ctrl.editeaza(emp, { ci: '07:00' })
+    expect(stareRand(b.s(), 1).editat).toBe(false)
+    b.ctrl.editeaza(emp, { ci: '04:00' })
+    b.ctrl.seteazaZi(Z12)
+    expect(b.s().ciorne).toEqual({})
+  })
+  it('un rând cu scriere în zbor își păstrează valoarea la o citire de fundal; după răspuns, ce a văzut citirea se recitește', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b, { randuri: [rand(9)] })
+    const p = b.ctrl.aloca(emp, B); await asteapta()
+    b.ctrl.reimprospateaza()
+    b.cereriR[1].rezolva({ data: [rand(9, { site_id: 77, updated_at: 'altcineva' })], error: null }); await asteapta()
+    expect(randulZilei(b.s(), 1)).toEqual(rand(9)) // neatins cât scrierea e în zbor
+    b.scrieri[0].rezolva({ data: rand(9, { site_id: B, updated_at: 'noi' }), error: null }); await p
+    expect(b.cereriR).toHaveLength(3) // se recitește: ordinea reală din bază nu se ghicește
+  })
+})
+
+describe('r4 reguli pure', () => {
+  it('amprenta: aceleași valori în altă ordine a cheilor = aceeași versiune; orice câmp schimbat = altă versiune', () => {
+    expect(amprenta({ a: 1, b: 2 })).toBe(amprenta({ b: 2, a: 1 }))
+    expect(amprenta({ a: 1, b: 2 })).not.toBe(amprenta({ a: 1, b: 3 }))
+    expect(amprenta(null)).toBe('lipsa')
+  })
+  it('verificaIntentie: ordinea motivelor (zi → export → necunoscut → regula → versiune)', () => {
+    const snap = { zi: Z13, ctx: 1, emps: [{ id: 1, site_id: 10 }], randuri: { stare: 'gata', recs: {} }, istoric: { stare: 'gata', harta: new Map() },
+      exportZi: { stare: 'gata', exportat: false } }
+    const it0 = { tip: 'salveaza', empId: 1, zi: Z13, ctx: 1, fields: ore(Z13), baza: 'lipsa', exportat: false }
+    expect(verificaIntentie(snap, it0)).toEqual({ ok: true, site_id: 10 })
+    expect(verificaIntentie(snap, { ...it0, ctx: 0 }).motiv).toMatch(/s-a schimbat/)
+    expect(verificaIntentie({ ...snap, exportZi: { stare: 'incarc' } }, it0).motiv).toMatch(/Se verifică/)
+    expect(verificaIntentie({ ...snap, exportZi: { stare: 'gata', exportat: true } }, it0).motiv).toMatch(/„zi plătită” s-a schimbat/)
+    expect(verificaIntentie(snap, it0, { necunoscut: true }).motiv).toMatch(/nu e cunoscut/)
+    expect(verificaIntentie(snap, { ...it0, baza: 'altceva' }).conflict).toBe(true)
+  })
+})
+
 describe('reguli mici', () => {
   it('verificaSalvare: „se încarcă” = refuz; ore fără șantier = refuz; absență fără șantier = permisă', () => {
     expect(verificaSalvare({ site_id: null, sursa: 'incarc', asteapta: 'istoric' }, ore(Z13)).ok).toBe(false)
@@ -578,23 +982,36 @@ describe('PontajPage folosește doar controlorul', () => {
   it('controlorul creat o dată, abonare prin useSyncExternalStore; nicio stare / generație / zi proprie pentru rânduri și istoric', () => {
     expect(PAG).toContain('creeazaControlorZi(')
     expect(PAG).toContain('useSyncExternalStore(ctrl.aboneaza,ctrl.getStare)')
-    for (const interzis of ['setRecs', 'useReducer', 'ziRef', 'dispatchZi', 'setEmps', 'setLoad', 'emps.filter(e=>!e.site_id)', 'loadRecs'])
+    for (const interzis of ['setRecs', 'useReducer', 'ziRef', 'dispatchZi', 'setEmps', 'setLoad', 'emps.filter(e=>!e.site_id)', 'loadRecs',
+      // r4: nici „zi exportată”, nici editări, nici „se salvează” ca stare proprie a paginii
+      'setIsDateExported', 'setExportPeriodInfo', 'requestPasswordIfExported', 'dirtyRef', 'markDirty', 'setSaving', 'noteazaCorectura'])
       expect(PAG).not.toContain(interzis)
   })
-  it('citirile / scrierile pe pontaj_records apar O SINGURĂ dată: în dependențele controlorului', () => {
-    const cereri = PAG.split("from('pontaj_records')").length - 1
-    expect(cereri).toBe(2) // citesteRanduri + scrieRand
+  it('citirile / scrierile zilei (pontaj_records, „zi exportată”, nota pe tichet, fișa) apar DOAR în dependențele controlorului', () => {
     const bloc = PAG.slice(PAG.indexOf('creeazaControlorZi('), PAG.indexOf('const ctrl=ctrlRef.current'))
-    expect(bloc.split("from('pontaj_records')").length - 1).toBe(2)
+    const rest = PAG.replace(bloc, '')
+    for (const [ce, n] of [["from('pontaj_records')", 2], ["rpc('fn_get_export_period_for_date'", 1], ["from('tichete_istoric')", 1], ["from('employees').update(", 1]]) {
+      expect(bloc.split(ce).length - 1).toBe(n)
+      expect(rest).not.toContain(ce)
+    }
   })
-  it('afișarea, filtrul, „Nealocate”, salvarea, alocarea și reîncercarea trec prin controlor / instantaneul lui', () => {
+  it('afișarea, filtrul, „Nealocate”, salvarea, alocarea, editările și reîncercarea trec prin controlor / instantaneul lui', () => {
     for (const f of ['propuneSantier(snap,emp)', 'nealocati(snap)', 'treceFiltrulSantier(', 'randulZilei(snap,emp.id)', 'arataSpinner(snap)',
-      'ctrl.salveaza(emp, fields, { ctx })', 'ctrl.aloca(emp, siteId, { ctx })', 'ctrl.reincearca()', 'ctrl.reimprospateaza(', 'ctrl.seteazaZi(', 'ctrl.seteazaAngajati('])
+      'valoriAfisate(snap,emp,', 'stareRand(snap,emp.id)', 'onEdit={ctrl.editeaza}', 'onRenunta={ctrl.renuntaEditare}', 'poarta:(a)=>poartaRef.current(a)',
+      'ctrl.salveaza(emp, fields, { ctx: snap.ctx })', 'ctrl.aloca(emp, siteId, { ctx: snap.ctx })', 'ctrl.reincearca()', 'ctrl.reimprospateaza(', 'ctrl.seteazaZi(', 'ctrl.seteazaAngajati('])
       expect(PAG).toContain(f)
-    // contextul se ia la APĂSARE, înaintea porții de parolă
+    // salvarea / alocarea: primul lucru e apelul controlorului (contextul de la apăsare), fără nicio așteptare înainte
     for (const fn of ['const saveRecord = async', 'const allocate = async']) {
       const i = PAG.indexOf(fn)
-      expect(PAG.indexOf('const ctx = snap.ctx', i)).toBeLessThan(PAG.indexOf('requestPasswordIfExported', i))
+      const corp = PAG.slice(i, PAG.indexOf('\n  }', i))
+      expect(corp.indexOf('await ')).toBe(corp.indexOf('await ctrl.'))
     }
+  })
+  it('PontajRow nu mai ține câmpurile ca stare locală resetată la fiecare rând nou (refresh-ul nu mai poate șterge ce ai tastat)', () => {
+    const i = APP.indexOf('function PontajRow(')
+    const ROW = APP.slice(i, APP.indexOf('\nfunction ', i + 10))
+    for (const interzis of ['useState(rec', '},[rec])', 'setCi(', 'setCo(', 'setNorma(', 'setDiurna(', 'setSupl(', 'setMode(', 'onDirty'])
+      expect(ROW).not.toContain(interzis)
+    expect(ROW).toContain('const { ci, co, norma, diurna, supl, mode } = valori')
   })
 })
