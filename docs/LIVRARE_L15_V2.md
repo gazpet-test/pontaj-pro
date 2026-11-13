@@ -220,7 +220,8 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
    rândurile `CONTEXT` sunt egale; familia `sesiune` e egală; privilegiile implicite ale **rolului de livrare** (rândurile
    `acl_implicit <current_user> …`) sunt egale; fiecare rând `schimbat` /
    `sters` din manifest există în ambele liste cu ACEEAȘI amprentă; fiecare rând `creat` lipsește din ambele. Altfel `NECOMPARABIL`
-   (cod 6) cu lista. Diferențele din `extensie`, `colatie`, `limbaj`, `rol`, `membru`, `schema` și privilegiile implicite ale ALTOR
+   (cod 6) cu lista. Diferențele din `extensie`, `colatie`, `limbaj`, `rol`, `membru`, `schema`, `sistem_initdb` (rândul agregat al
+   funcțiilor de la initdb diferă când clona și ținta rulează alt build al serverului) și privilegiile implicite ale ALTOR
    creatori (rolurile platformei, în schemele lor — o clonă fără schemele platformei nu le are) se tipăresc ca `DE_EXPLICAT` (nu schimbă
    codul; coordonatorul le explică în PR-ul de baseline). Dacă numele rolului de livrare nu e un identificator simplu, regula e cea
    strictă: orice rând `acl_implicit` diferit = `NECOMPARABIL`. Fără opțiuni scriptul doar listează diferențele (doar în A / doar în B /
@@ -295,7 +296,8 @@ Celelalte **semnale** (EXECUTE dinamic, vederi, alt limbaj) nu sunt refuz automa
      semnal (secțiunea 6);
    - explicația **nominală** a fiecărei linii `DE_EXPLICAT`: privilegiile implicite ale altor creatori (care rol, ce schemă) și faptul că
      migrarea nu creează nimic sub ei (creare directă, fără SECURITY DEFINER care creează); fiecare diferență de extensii (care, ce
-     versiune); fiecare diferență de scheme; ce lipsește din clonă (de ex. stub-uri, tabele ale platformei, politici absente);
+     versiune); fiecare diferență de scheme; rândul `sistem_initdb`, dacă diferă (alt build al serverului: același `server_version_num`,
+     alte funcții de la initdb); ce lipsește din clonă (de ex. stub-uri, tabele ale platformei, politici absente);
    - diferențele rămase între liste, **grupate** (pe familii / scheme), fiecare grup cu motivul pentru care nu atinge traseul migrării;
    - proba integrală proprie pe clonă (cu concurență pe tabelele pe care migrarea le blochează) și criteriile de timp / concurență pentru
      proba pe țintă (pasul 7).

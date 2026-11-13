@@ -9,9 +9,9 @@
 #   privilegiile implicite ale ROLULUI DE LIVRARE (randurile "acl_implicit <current_user din CONTEXT> ...": creatorul
 #   obiectelor noi) sunt egale; fiecare rand schimbat / sters din manifest exista in AMBELE liste cu ACEEASI amprenta;
 #   fiecare rand creat lipseste din ambele. Altfel NECOMPARABIL (6) cu lista. Diferentele din extensie, colatie, limbaj,
-#   rol, membru, schema si privilegiile implicite ale ALTOR creatori (rolurile platformei: nu hotarasc drepturile
-#   obiectelor create de livrare) se tiparesc ca DE_EXPLICAT (nu schimba codul: le explica coordonatorul in PR-ul de
-#   baseline). Rol de livrare cu nume ne-simplu (ar aparea intre ghilimele in eticheta) => regula stricta: orice rand
+#   rol, membru, schema, sistem_initdb (functiile de la initdb: alt build al serverului intre clona si tinta) si
+#   privilegiile implicite ale ALTOR creatori (rolurile platformei: nu hotarasc drepturile obiectelor create de
+#   livrare) se tiparesc ca DE_EXPLICAT (nu schimba codul: le explica coordonatorul in PR-ul de baseline). Rol de livrare cu nume ne-simplu (ar aparea intre ghilimele in eticheta) => regula stricta: orice rand
 #   acl_implicit diferit = NECOMPARABIL (fail-closed).
 # --recitire (aceeasi baza, doua momente: A = citirea revizuita, B = cea din ziua livrarii): partea REVIZUITA trebuie sa
 #   fie IDENTICA - iesirea scriptului de amprente al migrarii (in ordine, cu momentul fotografiei deja inlocuit de citire
@@ -143,7 +143,7 @@ if [ -n "$MAN" ]; then
   [ ! -s "$W/r_creat" ] || nec R_CREAT "randuri creat din manifest care exista deja: $(grep -c . "$W/r_creat")"   # M_R_CREAT
   sed 's/^/  /' "$W/r_exist" "$W/r_creat"
   # DE_EXPLICAT: familiile de context + privilegiile implicite ale altor creatori decat rolul de livrare
-  awk -F'\t' -v rol="$ROL_L" '$2 ~ /^(extensie|colatie|limbaj|rol|membru|schema)$/ || ($2 == "acl_implicit" && rol != "" && index($3, "acl_implicit " rol " ") != 1) { print "DE_EXPLICAT" FS $0 }' "$W/dif" >"$W/expl"
+  awk -F'\t' -v rol="$ROL_L" '$2 ~ /^(extensie|colatie|limbaj|rol|membru|schema|sistem_initdb)$/ || ($2 == "acl_implicit" && rol != "" && index($3, "acl_implicit " rol " ") != 1) { print "DE_EXPLICAT" FS $0 }' "$W/dif" >"$W/expl"
   cat "$W/expl"
   echo "diferente intre liste: $N_DIF randuri ($(grep -c . "$W/expl" || true) DE_EXPLICAT)"
   if [ "$NEC" = 0 ]; then echo "[ok] COMPARABIL: manifestul $(basename "$MAN") ($(grep -c . "$W/man" || true) randuri) se poate verifica pe B"; exit 0; fi

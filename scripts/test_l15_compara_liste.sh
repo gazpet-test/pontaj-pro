@@ -139,6 +139,15 @@ citire "$TMP/a_q" "$R0" '170101 Rol-Mare Rol-Mare'
 citire "$TMP/m_acl_q" "$R0
 acl_implicit${T}acl_implicit alt_creator alta_schema f${T}$(h 18)" '170101 Rol-Mare Rol-Mare'
 ruleaza "$CMP" 6 'rol de livrare cu nume ne-simplu: regula stricta' --a "$TMP/a_q" --b "$TMP/m_acl_q" --manifest "$MAN"
+# randul agregat al functiilor de la initdb difera intre clona si tinta (alt build al serverului): COMPARABIL, linia apare
+# ca DE_EXPLICAT (caz real la proba pe marimea reala: clona pe alt sistem de operare decat tinta)
+citire "$TMP/a_ini" "$R0
+sistem_initdb${T}sistem_initdb functii${T}$(h 21)"
+citire "$TMP/m_ini" "$R0
+sistem_initdb${T}sistem_initdb functii${T}$(h 22)"
+ruleaza "$CMP" 0 'sistem_initdb diferit intre clona si tinta' --a "$TMP/a_ini" --b "$TMP/m_ini" --manifest "$MAN"
+grep -qF '[ok] COMPARABIL' "$TMP/out" && grep -qx "DE_EXPLICAT${T}DIFERA${T}sistem_initdb${T}sistem_initdb functii${T}$(h 21)${T}$(h 22)" "$TMP/out" \
+  || { cat "$TMP/out"; fail 'sistem_initdb diferit: COMPARABIL + DE_EXPLICAT'; }
 citire "$TMP/m_sch" "$(printf '%s\n' "$R0" | sed "s/$(h 2)/$(h 17)/")"
 regula R_EXIST 6 'rand schimbat cu alta amprenta pe B' --a "$TMP/a" --b "$TMP/m_sch" --manifest "$MAN"
 ruleaza "$CMP" 6 'rand schimbat cu alta amprenta pe B (linia)' --a "$TMP/a" --b "$TMP/m_sch" --manifest "$MAN"
