@@ -10,6 +10,10 @@ import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import LOGO_B64 from './logo.js'
 import { supabase } from './lib/supabase.js'
+// vremea zilei din Vaisala Xweather (20261221a): foaia Excel se construiește în rapoarteExcelVreme.js (coloanele de vreme + foaia de sursă);
+// citirea vremii e paginată, iar o eroare oprește exportul (L18, L23)
+import { zileXweather } from './meteoXweatherUtil.js'
+import { construiesteRapoarteXlsx, fmtData, utj, nefunc, alimentate } from './rapoarteExcelVreme.js'
 
 const BUCKET = 'rapoarte-zilnice'
 const blobToDataURL = (blob) => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob) })
@@ -29,55 +33,15 @@ const PERSONAL_CAT = [
   ['sudori', 'Sudori'], ['lacatusi', 'Lăcătuși'], ['operatori', 'Operatori'],
   ['soferi', 'Șoferi'], ['necalificati', 'Necalif.'], ['tesa', 'TESA'], ['altii', 'Alții'],
 ]
-const alimentate = (r) => utj(r).filter(u => u.alimentat).length
-const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
 const slug = (s) => String(s || 'santier').replace(/[^\w]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 34) || 'santier'
-const utj = (r) => Array.isArray(r.utilaje_snapshot) ? r.utilaje_snapshot : []
-const nefunc = (r) => utj(r).filter(u => u.stare === 'nefunctional')
 
 // ── EXCEL ──────────────────────────────────────────────────────────────────
-export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, to }) {
+export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, to, client = supabase }) {
   const XLSX = await import('xlsx-js-style')
-  const thin = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } }
-  const headerStyle = { fill: { fgColor: { rgb: '1F3A5F' } }, font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: thin }
-  const cellBase = { font: { name: 'Calibri', sz: 10 }, alignment: { vertical: 'top', wrapText: true }, border: thin }
-  const COLS = 19
-
-  const sorted = [...list].sort((a, b) => a.data.localeCompare(b.data))
-  const aoa = [
-    ['RAPOARTE ȘANTIER'],
-    [`${titluSite}  •  ${from} → ${to}  •  Generat: ${new Date().toLocaleString('ro-RO')}  •  ${sorted.length} rapoarte`],
-    [],
-    ['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'TESA', 'Alții', 'Total pers.', 'Utilaje/mașini', 'Alimentate', 'Nefuncț.', 'Lucrări efectuate', 'Subcontractori', 'Mașini', 'Probleme', 'Plan mâine'],
-  ]
-  sorted.forEach(r => {
-    const p = r.personal_snapshot || {}
-    aoa.push([
-      fmtData(r.data), siteNameOf(r.site_id), r.sef_santier || '—',
-      p.sudori || 0, p.lacatusi || 0, p.operatori || 0, p.soferi || 0, p.necalificati || 0, p.tesa || 0, p.altii || 0, p.total || 0,
-      utj(r).length, alimentate(r), nefunc(r).length,
-      r.lucrari_efectuate || '', r.subcontractori || '', r.masini || '', r.probleme || '', r.plan_maine || '',
-    ])
-  })
-
-  const ws = XLSX.utils.aoa_to_sheet(aoa)
-  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: COLS - 1 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: COLS - 1 } }]
-  ws['A1'] = { v: aoa[0][0], t: 's', s: { font: { sz: 14, bold: true, color: { rgb: '1F3A5F' } }, alignment: { horizontal: 'center' } } }
-  ws['A2'] = { v: aoa[1][0], t: 's', s: { font: { sz: 9, italic: true, color: { rgb: '666666' } }, alignment: { horizontal: 'center' } } }
-  for (let c = 0; c < COLS; c++) { const ref = XLSX.utils.encode_cell({ r: 3, c }); if (ws[ref]) ws[ref].s = headerStyle }
-  for (let r = 4; r < aoa.length; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const ref = XLSX.utils.encode_cell({ r, c })
-      if (!ws[ref]) continue
-      ws[ref].s = { ...cellBase }
-      if (c >= 3 && c <= 13) ws[ref].s.alignment = { ...cellBase.alignment, horizontal: 'center', vertical: 'center' }
-    }
-  }
-  ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 7 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 8 }, { wch: 6 }, { wch: 6 }, { wch: 9 }, { wch: 13 }, { wch: 10 }, { wch: 8 }, { wch: 42 }, { wch: 30 }, { wch: 22 }, { wch: 30 }, { wch: 30 }]
-
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Rapoarte')
+  // vremea zilelor exportate: toate rândurile (paginat); o eroare oprește exportul (nu se scoate un Excel cu „fără date” fals)
+  const vreme = await zileXweather(client, [...new Set(list.map(r => r.site_id))], { de: from, pana: to })
+  const wb = construiesteRapoarteXlsx({ XLSX, list, siteNameOf, titluSite, from, to, vreme, generatLa: new Date().toLocaleString('ro-RO') })
   XLSX.writeFile(wb, `Rapoarte_${slug(titluSite)}_${from}_${to}.xlsx`)
 }
 

@@ -12,8 +12,19 @@
 //    merge și dacă lipsesc credențialele Xweather (pasul e înaintea lor);
 //  - backfill-ul (o singură dată, de la data_start a proiectului fiecărui site sau de la `de_la`): DOAR owner-ul, cu {istoric_backfill:true};
 //  - răspunsul arhivei e conținut extern: doar numere validate (istoric_logica.ts); o eroare pe un site nu oprește bucla și se raportează.
+//
+// Rezumatul zilnic Vaisala Xweather (migrarea 20261221a → public.meteo_zilnic_xweather, NEMODIFICABIL), tot aici și în ACELAȘI cron:
+//  - pasul zilnic (rularea de la 04:05 UTC): pentru site-urile active cu meteo_activ și coordonate — ieri (zi încheiată, ora României),
+//    reverificarea lui alaltăieri (o corecție a furnizorului intră ca VERSIUNE NOUĂ, nu peste) și cel mult MAX_ZILE_AUTO zile lipsă din
+//    ultimele ZILE_AUTO (xweather_zilnic_logica.ts);
+//  - completarea zilelor vechi: DOAR owner-ul, cu {xweather_backfill:true, site_id, de_la?, pana?, max_zile?} — un șantier pe apel, cel
+//    mult MAX_ZILE_APEL zile, reluabilă cu `pana` = continua_pana din răspuns, idempotentă (o zi existentă nu se mai cere / scrie);
+//  - credențialele (XWEATHER_CLIENT_ID / XWEATHER_CLIENT_SECRET, Vault, prin RPC meteo_xweather_creds) se pun DOAR în URL-ul apelului;
+//    cererea salvată în tabel e fără ele; răspunsurile sunt conținut extern (doar numere validate + text scurt; brutul păstrat ca probă).
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { planCitire, intervale, urlArhiva, randuriDinRaspuns, ieriBucuresti, esteZi } from './istoric_logica.ts';
+import { planCitire, intervale, urlArhiva, randuriDinRaspuns, ieriBucuresti, esteZi, adunaZile } from './istoric_logica.ts';
+import { planXweather, procesZi, clasificaRaspuns, valoriDinConditii, cerereConditii, cerereObservatii, cuCredentiale, ieriBuc,
+  ZILE_AUTO, PRIMA_ZI_XW, MAX_ZILE_APEL, TIMP_CERERE_MS as TIMP_XW, VALORI } from './xweather_zilnic_logica.ts';
 
 const API = 'https://data.api.xweather.com';
 const ORA_ISTORIC_UTC = 4;            // cron 5 */2 * * * → o singură rulare pe zi la 04:05 UTC
@@ -73,6 +84,90 @@ async function sincronizeazaIstoric(db: any, { mod, deLa, siteId }: { mod: 'ziln
   return { ok: rez.every(x => x.ok), complet: rez.every(x => x.complet) && !sarite.length, mod, ieri, rez, sarite };
 }
 
+// ── rezumatul zilnic Vaisala Xweather (20261221a) ──
+// ultima versiune a fiecărei zile existente, pe chei (data, pe fiecare șantier, până la pagina goală; L23); eroarea se aruncă (L18)
+// deno-lint-ignore no-explicit-any
+async function zileXweatherExistente(db: any, siteIds: number[], de: string, pana: string) {
+  const out = new Map<string, Map<string, Record<string, unknown>>>();
+  for (const s of siteIds) {
+    const m = new Map<string, Record<string, unknown>>();
+    for (let ultima: string | null = null; ;) {
+      let q = db.from('v_meteo_zilnic_xweather').select(['data', 'versiune', ...VALORI].join(',')).eq('site_id', s).gte('data', de).lte('data', pana);
+      if (ultima) q = q.gt('data', ultima);
+      const { data, error } = await q.order('data', { ascending: true }).limit(1000);
+      if (error) throw new Error('zilele Xweather existente nu se pot citi: ' + error.message);
+      if (!data || !data.length) break;
+      const u = data[data.length - 1].data;
+      if (ultima != null && !(u > ultima)) throw new Error('zilele Xweather: paginare neordonată');
+      for (const r of data) m.set(r.data, r);
+      ultima = u;
+    }
+    out.set(String(s), m);
+  }
+  return out;
+}
+
+// deno-lint-ignore no-explicit-any
+async function sincronizeazaXweather(db: any, cid: string, csec: string,
+  { mod, siteId = null, deLa = null, pana = null, maxZile = MAX_ZILE_APEL }: { mod: 'zilnic' | 'backfill'; siteId?: number | null; deLa?: string | null; pana?: string | null; maxZile?: number }) {
+  const { data: sites, error } = await db.from('sites').select('id, name, lat, lng, proiect_id').eq('active', true).eq('meteo_activ', true);
+  if (error) return { ok: false, eroare: 'site-urile nu se pot citi: ' + error.message };
+  const tinte = (sites || []).filter((s: any) => siteId == null || s.id === siteId);
+  if (mod === 'backfill' && tinte.length !== 1) return { ok: false, eroare: `site ${siteId} inexistent, inactiv sau fără meteo_activ` };
+  const start = new Map<string, string | null>();
+  const ids = [...new Set(tinte.map((s: any) => s.proiect_id).filter((x: unknown) => x != null))];
+  if (ids.length) {
+    const { data: pr, error: ep } = await db.from('executie_proiecte').select('id, data_start').in('id', ids);
+    if (ep) return { ok: false, eroare: 'proiectele nu se pot citi: ' + ep.message };
+    for (const p of pr || []) start.set(String(p.id), p.data_start ?? null);
+  }
+  const ieri = ieriBuc();
+  let pl: ReturnType<typeof planXweather>;
+  try {
+    // fereastra citită din BD = fereastra planului (zilnic: ultimele ZILE_AUTO; backfill: [de_la sau start, pana sau ieri])
+    const st = tinte.length === 1 && tinte[0].proiect_id != null ? start.get(String(tinte[0].proiect_id)) ?? null : null;
+    const de = mod === 'zilnic' ? adunaZile(ieri, -(ZILE_AUTO - 1)) : (deLa ?? (st && esteZi(st) ? st : PRIMA_ZI_XW));
+    const existente = await zileXweatherExistente(db, tinte.map((s: any) => s.id), de < PRIMA_ZI_XW ? PRIMA_ZI_XW : de, pana ?? ieri);
+    pl = planXweather(tinte, existente, start, { mod, ieri, deLa, pana, maxZile });
+  } catch (e) { return { ok: false, eroare: (e as Error).message }; }
+
+  // un apel Xweather: credențialele doar în URL-ul cererii (niciodată în mesaje / tabel); rețea / timp depășit = status 0 (necunoscut, L05)
+  const cere = async (cerere: string) => {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), TIMP_XW);
+    try {
+      const r = await fetch(`${API}/${cuCredentiale(cerere, cid, csec)}`, { signal: ctl.signal });
+      return { status: r.status, json: await r.json().catch(() => null), cerere };
+    } catch { return { status: 0, json: null, cerere }; } finally { clearTimeout(t); }
+  };
+  const r = { scrise: 0, versiuni_noi: 0, neschimbate: 0, deja: 0, lipsa: 0, respinse: 0, tranzitorii: 0, erori: [] as string[] };
+  for (const s of pl.sarcini) {
+    try {
+      const cond = await cere(cerereConditii(s));
+      // observațiile (a doua cerere) doar dacă ziua are valori: o zi fără date nu consumă încă un apel
+      const ok = clasificaRaspuns(cond.status, cond.json) === 'ok' && !!valoriDinConditii(cond.json, s.zi).valori;
+      const obs = ok ? await cere(cerereObservatii(s)) : null;
+      const z = procesZi(s, cond, obs);
+      if ('rand' in z && z.rand) {
+        const { error: ei } = await db.from('meteo_zilnic_xweather').insert(z.rand);
+        // 23505: ziua / versiunea există deja (altă rulare) sau nicio schimbare față de versiunea anterioară — idempotent, nu eroare
+        if (ei && ei.code === '23505') r.deja++;
+        else if (ei) r.erori.push(`site ${s.site_id} ${s.zi}: scrierea a eșuat (${ei.code || 'eroare'})`);
+        else if (z.rand.versiune > 1) r.versiuni_noi++;
+        else r.scrise++;
+      } else if ('neschimbat' in z) r.neschimbate++;
+      else if ('lipsa' in z) r.lipsa++;
+      else if ('respins' in z) { r.respinse++; r.erori.push(`site ${s.site_id} ${s.zi}: răspuns respins (${z.respins})`); }
+      else if ('tranzitoriu' in z) r.tranzitorii++;
+      else if ('eroare' in z) r.erori.push(`site ${s.site_id} ${s.zi}: ${z.eroare}`);
+    } catch (e) {
+      r.erori.push(`site ${s.site_id} ${s.zi}: ${(e as Error).message}`);
+    }
+  }
+  return { ok: r.erori.length === 0, mod, ieri, sarcini: pl.sarcini.length, ...r, erori: r.erori.slice(0, 30), sarite: pl.sarite,
+    ramase: pl.ramase, continua_pana: pl.continua_pana };
+}
+
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -113,9 +208,25 @@ Deno.serve(async (req: Request) => {
     if (siteId != null && !Number.isInteger(siteId)) return json({ error: 'site_id invalid' }, 400);
     return json({ ok: true, istoric: await sincronizeazaIstoric(db, { mod: 'backfill', deLa, siteId }) });
   }
+  // ── rezumatul zilnic Xweather (20261221a): completarea zilelor vechi, DOAR owner-ul, un șantier pe apel ──
+  if (body.xweather_backfill) {
+    if (!esteOwner) return json({ error: 'doar owner-ul pornește completarea vremii zilnice (Xweather)' }, 403);
+    const siteId = Number(body.site_id);
+    if (!Number.isInteger(siteId) || siteId <= 0) return json({ error: 'site_id obligatoriu (un șantier pe apel)' }, 400);
+    const deLa = body.de_la == null ? null : String(body.de_la);
+    const pana = body.pana == null ? null : String(body.pana);
+    if ((deLa != null && !esteZi(deLa)) || (pana != null && !esteZi(pana)) || (deLa != null && pana != null && deLa > pana)) return json({ error: 'de_la / pana invalide (AAAA-LL-ZZ)' }, 400);
+    const maxZile = body.max_zile == null ? 31 : Number(body.max_zile);
+    if (!Number.isInteger(maxZile) || maxZile < 1 || maxZile > MAX_ZILE_APEL) return json({ error: `max_zile între 1 și ${MAX_ZILE_APEL}` }, 400);
+    const { data: cr } = await db.rpc('meteo_xweather_creds');
+    if (!cr?.client_id || !cr?.client_secret) return json({ error: 'XWEATHER_CLIENT_ID / XWEATHER_CLIENT_SECRET lipsă în Vault' }, 500);
+    return json({ ok: true, xweather: await sincronizeazaXweather(db, cr.client_id, cr.client_secret, { mod: 'backfill', siteId, deLa, pana, maxZile }) });
+  }
+
   let istoric: unknown = null;
   // o dată pe zi din cron; la cerere doar owner-ul (pasul scrie date preluate din exterior)
-  if ((sec && new Date().getUTCHours() === ORA_ISTORIC_UTC) || (body.istoric && (sec || esteOwner))) {
+  const pasZilnic = sec && new Date().getUTCHours() === ORA_ISTORIC_UTC;
+  if (pasZilnic || (body.istoric && (sec || esteOwner))) {
     istoric = await sincronizeazaIstoric(db, { mod: 'zilnic' });
   }
 
@@ -123,6 +234,12 @@ Deno.serve(async (req: Request) => {
   const cid = creds?.client_id, csec = creds?.client_secret;
   if (!cid || !csec) return json({ error: 'XWEATHER_CLIENT_ID / XWEATHER_CLIENT_SECRET lipsă în Vault', istoric }, 500);
   const auth = `client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(csec)}`;
+
+  // rezumatul zilnic Xweather: o dată pe zi din cron (ziua încheiată + reverificare + zile lipsă recente); la cerere doar owner-ul
+  let xweather: unknown = null;
+  if (pasZilnic || (body.xweather_zilnic && (sec || esteOwner))) {
+    xweather = await sincronizeazaXweather(db, cid, csec, { mod: 'zilnic' });
+  }
 
   const { data: sites } = await db.from('sites').select('id, name, lat, lng, localitate_meteo, tip_locatie, raport_zilnic_necesar, meteo_activ').eq('active', true).eq('meteo_activ', true);
   const tinte = (sites || []).filter(s => (s.lat && s.lng) || s.localitate_meteo).filter(s => s.tip_locatie === 'sediu' || s.raport_zilnic_necesar || body.toate);
@@ -165,5 +282,5 @@ Deno.serve(async (req: Request) => {
       rez.push({ site: s.id, ok: false, eroare: (e as Error).message });
     }
   }
-  return json({ ok: true, n: rez.length, rez, istoric });
+  return json({ ok: true, n: rez.length, rez, istoric, xweather });
 });

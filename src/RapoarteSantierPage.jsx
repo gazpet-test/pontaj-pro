@@ -9,12 +9,15 @@
 //   → doar șantierele lor (profile_sites). Zero scurgere de date.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { exportRapoarteExcel, exportRapoartePDF } from './rapoarteExport.js'
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 import { MeteoRaportChip, MeteoRaportText } from './Meteo.jsx'
+import MeteoZiXweather from './MeteoZiXweather.jsx'
+// rapoartele intervalului: citire paginată (L23), eroarea se arată (L18)
+import { toateRapoartele } from './rapoarteExcelVreme.js'
 import RubricaRezumat from './RubricaRezumat.jsx'
 // rezumatul ZILEI pe toate șantierele din ecran (r2): doar citire, text de copiat
 import RezumatZiModal from './RezumatZiModal.jsx'
@@ -98,16 +101,21 @@ export default function RapoarteSantierPage() {
   const siteName = useCallback((id) => (allSites.find(s => s.id === id) || sites.find(s => s.id === id))?.name || `#${id}`, [allSites, sites])
 
   // ── încarcă rapoartele pe interval ──
+  // toate rapoartele intervalului, paginat (peste 1000 nu se mai taie în tăcere); doar ultima cerere se aplică (L24)
+  const genRapoarte = useRef(0)
+  const [eroareRapoarte, setEroareRapoarte] = useState(null)
   const loadRapoarte = useCallback(async () => {
+    const gen = ++genRapoarte.current
     if (siteIds.length === 0) { setRapoarte([]); return }
-    setLoading(true)
-    let q = supabase.from('rapoarte_zilnice').select('*')
-      .in('site_id', siteIds).gte('data', from).lte('data', to)
-      .order('data', { ascending: false }).order('site_id')
-    if (filtruSite) q = q.eq('site_id', Number(filtruSite))
-    const { data } = await q
-    setRapoarte(data || [])
-    setLoading(false)
+    setLoading(true); setEroareRapoarte(null)
+    try {
+      const lista = await toateRapoartele(supabase, { siteIds, from, to, siteId: filtruSite ? Number(filtruSite) : null })
+      if (gen === genRapoarte.current) setRapoarte(lista)
+    } catch (e) {
+      if (gen === genRapoarte.current) { setRapoarte([]); setEroareRapoarte(e?.message || String(e)) }
+    } finally {
+      if (gen === genRapoarte.current) setLoading(false)
+    }
   }, [siteIds, from, to, filtruSite])
 
   useEffect(() => { if (!loadingInit) loadRapoarte() }, [loadingInit, loadRapoarte])
@@ -239,6 +247,11 @@ export default function RapoarteSantierPage() {
         </div>}
       </div>
 
+      {eroareRapoarte && (
+        <div style={{ background: G.red + '14', border: `1px solid ${G.red}33`, borderRadius: 8, padding: '9px 13px', marginBottom: 14, fontSize: 13, color: G.red }}>
+          Rapoartele nu s-au putut citi: {eroareRapoarte}
+        </div>
+      )}
       {exportErr && (
         <div style={{ background: G.red + '14', border: `1px solid ${G.red}33`, borderRadius: 8, padding: '9px 13px', marginBottom: 14, fontSize: 13, color: G.red }}>
           {exportErr} <span onClick={() => setExportErr(null)} style={{ cursor: 'pointer', marginLeft: 8, opacity: .7 }}>✕</span>
@@ -472,6 +485,8 @@ function ModalDetaliu({ raport, siteName, onClose, poateEdita, onRezumat }) {
           </Bloc>
         )}
 
+        {/* vremea ZILEI (20261221a): rezumatul Vaisala Xweather preluat automat după încheierea zilei, cu sursa scrisă explicit */}
+        <Bloc titlu="🌦 Vremea zilei (Vaisala Xweather)"><MeteoZiXweather siteId={raport.site_id} data={raport.data} /></Bloc>
         {raport.meteo?.temp != null && <Bloc titlu="🌤 Vremea la trimiterea raportului"><div style={{ fontSize: 13, color: G.text }}><MeteoRaportText meteo={raport.meteo} /></div></Bloc>}
         {raport.lucrari_efectuate && <Bloc titlu="🔧 Lucrări efectuate"><Text v={raport.lucrari_efectuate} /></Bloc>}
         {raport.subcontractori && <Bloc titlu="🤝 Subcontractori"><Text v={raport.subcontractori} /></Bloc>}
