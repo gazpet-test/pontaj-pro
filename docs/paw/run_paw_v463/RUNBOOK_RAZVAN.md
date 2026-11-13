@@ -64,11 +64,18 @@ $ErrorActionPreference = 'Continue'    # unittest scrie pe stderr; in unele gazd
 $cod = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 if ($cod -ne 0) { throw 'Testele gemini_pw.py au picat' }
+# copia markerului vechi, pentru rollback (ne-elevat: paw-data e scriibil de utilizatori, deci NU se atinge din consola admin)
+if (Test-Path -LiteralPath $GemMarker) { Copy-Item -LiteralPath $GemMarker -Destination ($GemMarker + '.v461') -Force }
 ```
 
 Asteptat: 16 linii diferite (5 vechi `<=`, 11 noi `=>`): antetul, nota v4.6.3 (4 linii),
 `MODEL_CERUT`, `MODEL_FORMA` + comentariul ei, cele doua linii din `verifica_model`,
 comentariul r7. Testele: `Ran 34 tests ... OK`.
+
+Regula pentru tot ce urmeaza: in consola admin (A) nu se scrie si nu se muta NIMIC sub
+`C:\Users\Public\paw-data` (cale controlabila de utilizatori: o operatie elevata ar putea fi
+redirectionata printr-o legatura). Markerul canalului se copiaza, se scrie si se restaureaza
+DOAR ne-elevat (N), ca in procedura v4.3.
 
 ## 3. Inlocuirea (A, dupa pasul 1)
 
@@ -97,8 +104,10 @@ try {
     if ((HashCdx "$Audit\gemini_pw.py.v461") -ine $GemHashVechi) { throw 'Fisierul instalat nu e gemini_pw.py din v4.6.1' }
     # (b) pachetul, in zona protejata, verificat acolo
     foreach ($n in 'gemini_pw.py', 'SHA256.json') {
+        $src = Join-Path $Source $n
+        [void](AssertCdxPath $src); AssertCdxSingleFile $src      # fara legaturi / reparse pe calea sursei
         $st = Join-Path $Audit ($n + '.v463')
-        Copy-Item -LiteralPath (Join-Path $Source $n) -Destination $st
+        Copy-Item -LiteralPath $src -Destination $st
         SetCdxAdminAcl $st $ReaderSid; AssertCdxSingleFile $st
     }
     if ((HashCdx "$Audit\SHA256.json.v463") -ine $ManifestHash) { throw 'Manifestul copiat nu e cel revizuit' }
@@ -108,27 +117,26 @@ try {
     foreach ($e in $manifest.PSObject.Properties) {
         if ($e.Name -ne 'gemini_pw.py' -and (HashCdx (Join-Path $Bin $e.Name)) -ine $e.Value) { throw "Instalat difera de manifest: $($e.Name)" }
     }
-    # (c) markerul vechi al canalului, retras (nu se sterge)
-    if (Test-Path -LiteralPath $GemMarker) { Move-Item -LiteralPath $GemMarker -Destination "$Audit\gem-marker-v461-retired" }
-    # (d) inlocuirea, din zona protejata
+    # (c) inlocuirea, din zona protejata
     foreach ($n in 'gemini_pw.py', 'SHA256.json') {
         $dest = Join-Path $Bin $n
         Copy-Item -LiteralPath (Join-Path $Audit ($n + '.v463')) -Destination $dest -Force
         AssertCdxAdminAcl $dest; AssertCdxSingleFile $dest
     }
-    # (e) starea finala: toate cele 12 fisiere din bin = manifestul revizuit
+    # (d) starea finala: toate cele 12 fisiere din bin = manifestul revizuit
     if ((HashCdx "$Bin\SHA256.json") -ine $ManifestHash) { throw 'Manifest instalat diferit de cel revizuit' }
     foreach ($e in $manifest.PSObject.Properties) {
         if ((HashCdx (Join-Path $Bin $e.Name)) -ine $e.Value) { throw "Dupa inlocuire difera: $($e.Name)" }
     }
     AssertCdxAdminAcl $Bin
-    'Inlocuit: gemini_pw.py + SHA256.json. Marker Gemini retras in ' + $Audit
+    'Inlocuit: gemini_pw.py + SHA256.json. Copiile de siguranta sunt in ' + $Audit
 } finally { $barrier.Dispose() }
 ```
 
 `Copy-Item -Force` rescrie continutul fisierului existent: ACL-ul si proprietarul lui raman
-(verificate inainte si dupa). Orice `throw` dupa (d): Rollback (mai jos). Un `throw` inainte de
-(d) nu a schimbat nimic in `bin`; daca markerul a fost deja retras la (c), il readuce Rollback.
+(verificate inainte si dupa). Orice `throw` dupa (c): Rollback (mai jos). Un `throw` inainte de
+(c) nu a schimbat nimic in `bin`. Markerul vechi nu se atinge aici: e legat de hash-ul vechi, deci
+dupa (c) lansatorul refuza oricum `gem` pana la markerul nou (pasul 5).
 
 ## 4. Legatura cdx neschimbata (N, consola noua, dupa pasul 1)
 
@@ -161,22 +169,35 @@ $GemBrief = "C:\Users\Public\paw-data\brief\gem-canal-$GemId.md"
    (daca arata 0: STOP, fara marker).
 3. Cu atasamentul in ciorna: `& $Python "$Bin\gemini_pw.py" trimite $GemBrief 120` - ultima linie
    `GEM_EROARE ciorna_cu_atasamente ...`; pe ecran nu a plecat niciun mesaj.
-4. Scoate atasamentul. Selecteaza de mana alt model (4 Hydrogen) si repeta `trimite`: ultima linie
+4. Scoate atasamentul de mana; `stare` din nou: `atasamente in ciorna: 0`.
+5. Selecteaza de mana alt model (4 Hydrogen) si repeta `trimite`: ultima linie
    `GEM_EROARE model_gresit afisat: '...Hydrogen...', cerut: Carbon`; nu a plecat niciun mesaj.
-5. Revino de mana la Carbon. `trimite` de doua ori: de fiecare data raspunsul contine
-   `PAW_GEM_TEST_OK`, in chat nou al ACELUIASI tab, fara taburi create / inchise.
-
-Numai dupa ce ai VAZUT rezultatele 1-5, markerul (A, dupa pasul 1):
+6. Revino de mana la Carbon si ruleaza blocul de mai jos: doua trimiteri, fiecare verificata
+   (cod de iesire 0, nicio linie `GEM_EROARE`, ultima linie `GEM_CHAT_URL ...`, raspunsul contine
+   `PAW_GEM_TEST_OK` - un raspuns partial urmat de timeout NU trece). Pe ecran: chat nou in
+   ACELASI tab de fiecare data, fara taburi create / inchise.
 
 ```powershell
-. "$Bin\cdx_security.ps1"
-$PAW_ROOT = $PawRoot
-$barrier = OpenCdxInstallBarrier $true
-try {
-    $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
-    if ($GemHash -ine $GemHashNou) { throw 'gemini_pw.py instalat nu e cel revizuit' }
-    Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v463') -Encoding ASCII
-} finally { $barrier.Dispose() }
+foreach ($i in 1, 2) {
+    $ErrorActionPreference = 'Continue'
+    $out = @(& $Python "$Bin\gemini_pw.py" trimite $GemBrief 120)
+    $cod = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    $out
+    if ($cod -ne 0) { throw "Trimiterea ${i}: cod de iesire $cod" }
+    if (@($out | Where-Object { $_ -match '^GEM_EROARE' }).Count) { throw "Trimiterea ${i}: GEM_EROARE" }
+    if ($out.Count -eq 0 -or $out[-1] -notmatch '^GEM_CHAT_URL https://gemini\.google\.com/app/[0-9a-fA-F]+$') { throw "Trimiterea ${i}: lipseste linia finala GEM_CHAT_URL" }
+    if (@($out | Where-Object { $_ -match 'PAW_GEM_TEST_OK' }).Count -eq 0) { throw "Trimiterea ${i}: raspunsul nu contine PAW_GEM_TEST_OK" }
+    "Trimiterea ${i}: OK"
+}
+```
+
+Numai dupa ce ai VAZUT rezultatele 1-6, markerul - **ne-elevat (N)**, nu din consola admin:
+
+```powershell
+$GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
+if ($GemHash -ine $GemHashNou) { throw 'gemini_pw.py instalat nu e cel revizuit' }
+Set-Content -LiteralPath $GemMarker -Value ('CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v463') -Encoding ASCII
 ```
 
 ## 6. Smoke prin lansator (N)
@@ -213,14 +234,14 @@ try {
         AssertCdxAdminAcl (Join-Path $Bin $n); AssertCdxSingleFile (Join-Path $Bin $n)
         if ((HashCdx (Join-Path $Bin $n)) -ine (HashCdx (Join-Path $Audit ($n + '.v461')))) { throw "Rollback incomplet: $n" }
     }
-    if (Test-Path -LiteralPath $GemMarker) {
-        Move-Item -LiteralPath $GemMarker -Destination ("$Audit\gem-marker-v463-retired-" + [guid]::NewGuid().ToString('N'))
-    }
-    if (Test-Path -LiteralPath "$Audit\gem-marker-v461-retired") {
-        Copy-Item -LiteralPath "$Audit\gem-marker-v461-retired" -Destination $GemMarker
-    }
 } finally { $barrier.Dispose() }
 Rename-Item -LiteralPath $Audit -NewName ('operator-v463-anulat-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+```
+
+Apoi markerul vechi, **ne-elevat (N)**, dupa pasul 1 (copia facuta la pasul 2):
+
+```powershell
+if (Test-Path -LiteralPath ($GemMarker + '.v461')) { Copy-Item -LiteralPath ($GemMarker + '.v461') -Destination $GemMarker -Force }
 ```
 
 Dupa rollback `gem` cere din nou "Argon" (model care nu mai exista: canalul ramane refuzat, ca
