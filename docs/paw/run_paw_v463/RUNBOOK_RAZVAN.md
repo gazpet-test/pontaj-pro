@@ -82,8 +82,10 @@ DOAR ne-elevat (N), ca in procedura v4.3.
 Niciun Paw pornit: spune-i sesiunii de chat sa nu lanseze nimic pana termini. Bariera de mai jos
 se ia exclusiv: daca ruleaza un lansator, deschiderea ei pica (STOP, reincearca dupa ce termina);
 cat timp o tii, niciun lansator nu poate porni. In consola admin NU se executa nimic din folderul
-de livrare: cele doua fisiere se copiaza intai in `$Audit` (scriibil doar de admin), se verifica
-ACOLO fata de hash-urile din raport si abia de acolo ajung in `bin`.
+de livrare (scriibil de utilizatori): fiecare dintre cele doua fisiere se citeste de acolo O SINGURA
+DATA, in memorie; hash-ul se verifica pe octetii cititi, fata de valorile din raport; doar acei octeti
+se scriu in `$Audit` (scriibil doar de admin) si abia de acolo ajung in `bin`. Un fisier inlocuit sau
+redirectionat printr-o legatura da alt hash si nu e scris nicaieri.
 
 ```powershell
 if ($ManifestHash -notmatch '^[A-Fa-f0-9]{64}$' -or $GemHashNou -notmatch '^[A-Fa-f0-9]{64}$') { throw 'Pune hash-urile din raport' }
@@ -102,14 +104,30 @@ try {
         SetCdxAdminAcl (Join-Path $Audit ($n + '.v461')) $ReaderSid
     }
     if ((HashCdx "$Audit\gemini_pw.py.v461") -ine $GemHashVechi) { throw 'Fisierul instalat nu e gemini_pw.py din v4.6.1' }
-    # (b) pachetul, in zona protejata, verificat acolo
-    foreach ($n in 'gemini_pw.py', 'SHA256.json') {
-        $src = Join-Path $Source $n
-        [void](AssertCdxPath $src); AssertCdxSingleFile $src      # fara legaturi / reparse pe calea sursei
-        $st = Join-Path $Audit ($n + '.v463')
-        Copy-Item -LiteralPath $src -Destination $st
-        SetCdxAdminAcl $st $ReaderSid; AssertCdxSingleFile $st
-    }
+    # (b) pachetul: fiecare sursa se citeste O SINGURA DATA in memorie, hash-ul se verifica pe octetii cititi si
+    #     doar acei octeti se scriu in zona protejata. Sursa nu se redeschide intre verificare si copiere, iar un
+    #     continut care nu e cel revizuit nu ajunge nicaieri (nici macar in $Audit).
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($n in 'gemini_pw.py', 'SHA256.json') {
+            $asteptat = if ($n -eq 'SHA256.json') { $ManifestHash } else { $GemHashNou }
+            $fs = [IO.File]::Open((Join-Path $Source $n), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            try {
+                if ($fs.Length -lt 1 -or $fs.Length -gt 1048576) { throw "Sursa cu marime neasteptata: $n" }
+                $octeti = New-Object byte[] ([int]$fs.Length)
+                $citit = 0
+                while ($citit -lt $octeti.Length) {
+                    $r = $fs.Read($octeti, $citit, $octeti.Length - $citit)
+                    if ($r -le 0) { throw "Citire incompleta: $n" }
+                    $citit += $r
+                }
+            } finally { $fs.Dispose() }
+            if (([BitConverter]::ToString($sha.ComputeHash($octeti))).Replace('-', '') -ine $asteptat) { throw "Sursa nu e cea revizuita: $n (nimic scris)" }
+            $st = Join-Path $Audit ($n + '.v463')
+            [IO.File]::WriteAllBytes($st, $octeti)
+            SetCdxAdminAcl $st $ReaderSid; AssertCdxSingleFile $st
+        }
+    } finally { $sha.Dispose() }
     if ((HashCdx "$Audit\SHA256.json.v463") -ine $ManifestHash) { throw 'Manifestul copiat nu e cel revizuit' }
     if ((HashCdx "$Audit\gemini_pw.py.v463") -ine $GemHashNou) { throw 'gemini_pw.py copiat nu e cel revizuit' }
     $manifest = Get-Content -LiteralPath "$Audit\SHA256.json.v463" -Raw | ConvertFrom-Json
