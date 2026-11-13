@@ -36,8 +36,10 @@ L13 Regex/parsere: ancorat ^...$, metacaractere escapate, alternativa lunga inta
 ## D. SQL si migrari
 L14 Migrari: o tranzactie (BEGIN/COMMIT sau psql --single-transaction) + postconditii; preflight pe date live inainte de CHECK/FK/UNIQUE; backfill pt markerii legacy inlocuiti.
     ROLLBACK: LOCK inainte de verificarea "fara date", refuza daca exista randuri/istoric/config noi, DROP la tot ce s-a creat; testat apply -> rollback -> re-apply.
-L15 Porti de schema: amprenta pe allow-list vs baseline revizuit in PR: corp + callee tranzitive, prosecdef, proowner, proconfig, ACL (si coloane/secvente), RLS+FORCE, toate politicile
-    (qual NULL = true), triggere (tgfoid, tgenabled, WHEN). Fara regex pe text SQL; EXECUTE dinamic/search_path mostenit = refuz; testat pe lanturi de 2-3 niveluri.
+L15 Porti noi: GLOBAL versionat pe metadatele de cod/drepturi, calculat identic si comparat cu baseline-ul live revizuit; lipsa/NULL/diferenta = refuz.
+    Baseline si detaliu din acelasi snapshot; DDL coordonat pana la COMMIT; dupa aplicare, diferente EXACT declarate si verificate prin postconditii.
+    Lantul este vizibilitate best-effort: corpuri, drepturi, dependente si semnale de indirectare revizuite explicit; DEFINER cere rezolvare sigura a numelor.
+    Perimetru, exceptii si riscuri reziduale declarate; probe PG real pe deriva, concurenta si cai legitime; bloc comun cu paritate verificata.
 L16 Unicitate: UNIQUE in BD pe cheia canonica completa + scope, coloane NOT NULL sau NULLS NOT DISTINCT, partial pe randurile vii (stare <> 'anulat'); aceeasi cheie in validare/dedup/UI.
     Hash-ul de dedup include toate campurile semantice; identitatea documentului = sha256 pe continut, nu nume/marime.
 ## E. Garzi, valori, reguli comune
