@@ -53,7 +53,9 @@ doar filtrează, nu se serializează). Schemele din perimetru: toate, în afară
   `proconfig`, numărul și expresiile argumentelor implicite, md5(`prosrc`), `probin`, md5(corpul BEGIN ATOMIC), funcția suport —, fără
   funcții de deparsare, ordonat (schema, nume `COLLATE "C"`, tipurile argumentelor). Prinde de ex. `ALTER FUNCTION
   pg_catalog.quote_nullable(text) STRICT` (contraexemplul recenzentului). La refuz arată doar „funcțiile de la initdb diferă”, nu care:
-  diagnosticul se face cu o interogare pe `pg_proc` (comparat cu o clonă de aceeași versiune);
+  diagnosticul se face cu o interogare pe `pg_proc` (comparat cu o clonă de aceeași versiune). Pe aceeași bază (înainte / după, citire /
+  recitire) rândul e stabil; între clonă și țintă poate diferi (câmpurile brute conțin OID-uri ale obiectelor create la initdb prin SQL —
+  `information_schema`, `plpgsql` — și depind de versiunea exactă), deci apare la diferențele rămase din PR-ul de baseline, nu în manifest;
 - **ACL-urile explicite** (`acl_sistem`): proprietarul + ACL-ul celor trei scheme de sistem (`pg_catalog`, `information_schema`,
   `pg_toast`) și fiecare obiect din ele cu ACL **explicit** (`relacl` / `attacl` / `proacl` / `typacl` nenul), cu grantor; relațiile
   TOAST se etichetează după tabelul-părinte (numele lor conține un OID). Un obiect creat după initdb cu ACL explicit apare și aici (redundant);
