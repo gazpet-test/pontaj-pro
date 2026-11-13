@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   miezulNoptiiUtc, intervalZi, cerereConditii, cerereObservatii, cuCredentiale, clasificaRaspuns, valoriDinConditii, statieDinObservatii,
-  planXweather, procesZi, valoriEgale, brut, continuaPana, zConfirmata, ZILE_AUTO, MAX_ZILE_AUTO, MAX_ZILE_APEL, RAZA_STATIE_KM, VALORI,
+  planXweather, procesZi, valoriEgale, brut, continuaPana, zConfirmata, MAX_ZILE_APEL, RAZA_STATIE_KM, VALORI,
 } from '../supabase/functions/meteo-sync/xweather_zilnic_logica.ts'
 
 const ZI = '2026-11-12'
@@ -175,17 +175,15 @@ describe('stația cea mai apropiată (observations/summary)', () => {
 describe('planul unei rulări', () => {
   const S = [{ id: 1, lat: 44.9, lng: 26, proiect_id: 7 }, { id: 2, lat: 45, lng: 25.9, proiect_id: null }, { id: 3, lat: null, lng: null }]
   const ex = (m) => new Map(Object.entries(m).map(([k, zile]) => [k, new Map(zile.map(z => [z, { versiune: 1, data: z }]))]))
-  it('zilnic: ieri nou + reverificarea lui alaltăieri (o singură dată), apoi zilele lipsă din ultimele 31, până la buget', () => {
-    const p = planXweather(S, ex({ 1: ['2026-11-11', '2026-11-12'] }), new Map([['7', '2026-11-05']]), { mod: 'zilnic', ieri: '2026-11-12' })
+  it('zilnic (r4): doar zile NOI ale șantierelor active (ieri + reluarea) și zilele cu raport fără vreme; fără reverificare', () => {
+    // site 1 activ (raport pe 12), proiect început pe 09; site 2 fără niciun raport → nimic; site 3 fără coordonate
+    const rap = new Map([['1', new Set(['2026-11-12'])], ['3', new Set(['2026-11-12'])]])
+    const p = planXweather(S, ex({ 1: ['2026-11-11', '2026-11-12'] }), new Map([['7', '2026-11-09']]), { mod: 'zilnic', ieri: '2026-11-12', rapoarte: rap })
     expect(p.sarite).toEqual([{ site_id: 3, motiv: 'fără coordonate (lat / lng)' }])
-    const s1 = p.sarcini.filter(s => s.site_id === 1)
-    // site 1: ieri există; alaltăieri (11) se reverifică; lipsesc 10 → 05 (de la data de start a proiectului)
-    expect(s1.map(s => `${s.zi}:${s.tip}`)).toEqual(['2026-11-11:verificare', '2026-11-10:nou', '2026-11-09:nou', '2026-11-08:nou', '2026-11-07:nou', '2026-11-06:nou', '2026-11-05:nou'])
-    const s2 = p.sarcini.filter(s => s.site_id === 2)
-    expect(s2.slice(0, 2).map(s => `${s.zi}:${s.tip}`)).toEqual(['2026-11-12:nou', '2026-11-11:nou'])
-    // zilele vechi: cel mult MAX_ZILE_AUTO pe toată rularea
-    expect(p.sarcini.filter(s => s.zi <= '2026-11-10').length).toBe(MAX_ZILE_AUTO)
-    expect(p.ramase).toBe(6 + (ZILE_AUTO - 2) - MAX_ZILE_AUTO)
+    // ieri și alaltăieri există (alaltăieri NU se mai reverifică); lipsesc 10 și 09 (de la data de start a proiectului)
+    expect(p.sarcini.map(s => `${s.site_id}:${s.zi}:${s.tip}:${s.tinta}`)).toEqual(['1:2026-11-10:nou:activ', '1:2026-11-09:nou:activ'])
+    expect(p.activi).toEqual([1])
+    expect(p.ramase).toBe(0)
     expect(p).not.toHaveProperty('continua_pana')   // cursorul nu-l mai dă planul (r2): îl dă continuaPana după rezultate
   })
   it('backfill: un șantier pe apel, de la cea mai nouă zi lipsă, max_zile; idempotent pe zilele existente', () => {
