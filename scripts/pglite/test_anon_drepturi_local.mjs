@@ -32,6 +32,14 @@ const REV = {
 const NUME = { a: '20261218a_securitate_anon_drepturi', b: '20261218b_securitate_anon_drepturi_tabele', c: '20261218c_securitate_anon_drepturi_implicite' }
 const TREAPTA = { a: 'T1', b: 'T2', c: 'T3' }
 const PLASARE = (t) => `    ('${t}', NULL::integer, 'DE_COMPLETAT')`
+// r5: blocul BASELINE din repo poate fi deja completat cu valorile de pe producție (T1 și T3, #1083): proba locală îl readuce la forma
+// necompletată (rândul exact, un singur rând pe migrare), apoi pune BASELINE-ul citit din baza PGlite
+for (const k of ['a', 'b', 'c']) {
+  const re = new RegExp(`    \\('${TREAPTA[k]}', [0-9]+, '[0-9a-f]{32}'\\)\\n  \\) v\\(treapta, obiecte, amprenta\\)`, 'g')
+  const n = (MIG[k].match(re) || []).length
+  if (n > 1 || (n === 0 && !MIG[k].includes(PLASARE(TREAPTA[k])))) throw new Error(`BASELINE ${k}: forma necunoscută (${n} rânduri completate)`)
+  MIG[k] = MIG[k].replace(re, PLASARE(TREAPTA[k]) + '\n  ) v(treapta, obiecte, amprenta)')
+}
 const PASTRATE_GOL = 'SELECT x.obiect, x.motiv FROM (VALUES (NULL::text, NULL::text)) x(obiect, motiv) WHERE x.obiect IS NOT NULL'
 const PASTRATE_FORMULAR = "SELECT x.obiect, x.motiv FROM (VALUES ('public.v_formular_public', 'pagina publica de test')) x(obiect, motiv) WHERE x.obiect IS NOT NULL"
 
@@ -46,7 +54,7 @@ function aplica(text, lista) {
 
 const SCHEMA = `
 CREATE ROLE anon NOLOGIN NOINHERIT; CREATE ROLE authenticated NOLOGIN NOINHERIT; CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
-CREATE ROLE supabase_admin NOLOGIN;
+CREATE ROLE supabase_admin NOLOGIN; CREATE ROLE authenticator NOLOGIN NOINHERIT;
 CREATE SCHEMA auth;
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $f$
   SELECT coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''),
@@ -194,8 +202,10 @@ verifica(/; oid=\d+;/.test(det('tabel public.t_identity')) && /; rls=true\/false
   && /; reguli=[0-9a-f]{32};/.test(det('vedere public.v_simplu')) && /; politici=[0-9a-f]{32};/.test(det('tabel public.t_fara_politici'))
   && /; implicite=[0-9a-f]{32}$/.test(det('secventa public.t_fara_politici_id_seq')) && /; parinti=\d+;/.test(det('tabel public.t_part_1')),
   'amprenta v2: oid, RLS / FORCE, corpul vederii, politicile, DEFAULT-urile (și la secvență), părintele partiției')
-verifica(sectiune(C0, 'CONTROL').length === 1 && /^\d+ obiecte$/.test(sectiune(C0, 'CONTROL')[0].detaliu) && sectiune(C0, 'BASELINE').length === 3,
-  'citirea: 3 rânduri BASELINE (T1 / T2 / T3) + 1 rând CONTROL (RAMANE)')
+const control = (c, t) => sectiune(c, 'CONTROL').find(r => r.treapta === t)
+verifica(sectiune(C0, 'CONTROL').length === 2 && /^\d+ obiecte$/.test(control(C0, 'RAMANE')?.detaliu) && control(C0, 'POLITICI_ANON')?.detaliu === '0 politici'
+  && sectiune(C0, 'BASELINE').length === 3,
+  'citirea: 3 rânduri BASELINE (T1 / T2 / T3) + 2 rânduri CONTROL (RAMANE; r5: POLITICI_ANON pe relații fără drept, azi 0)')
 verifica(ob.some(r => r.treapta === 'RAMANE' && r.eticheta === 'tabel public.formular_public'), 'RAMANE: tabelul cu politică INSERT pentru anon')
 verifica(JSON.stringify(tr('T3')) === JSON.stringify(['implicit postgres public S', 'implicit postgres public r']), 'T3 = implicitele lui postgres pe public (tabele + secvențe)')
 verifica(ob.some(r => r.treapta === 'RAMANE' && r.eticheta === 'tabel public.t_cu_politica' && /politici/.test(r.motiv)), 'RAMANE: tabelul cu politică pentru PUBLIC')
@@ -206,29 +216,207 @@ verifica(ob.find(r => r.eticheta === 'tabel public.t_coloane')?.detaliu.includes
 verifica(sectiune(C0, 'FUNCTII_ANON').some(r => r.functie === 'public.fn_invoker_citeste()') && !sectiune(C0, 'FUNCTII_ANON').some(r => /fn_pagina_publica/.test(r.functie)),
   'FUNCTII_ANON: funcția fără DEFINER apelabilă de anon (nu și RPC-ul DEFINER)')
 verifica(sectiune(C0, 'RAMANE').some(r => r.treapta === 'dupa T1+T2+T3' && r.eticheta === 'tabel'), 'RAMANE după toate treptele: tabelele cu politici / alt proprietar')
-verifica(C0.jurnal.some(m => /SIMULARE rezumat: rolul curent anon, 0 relatii cu date citibile, 0 ambigue neconfirmate, 1 agregate fara date \(confirmate\), \d+ goale, \d+ erori \(din care 0 necunoscute/.test(m))
-  && C0.jurnal.some(m => /^SIMULARE concluzie: ZERO date citibile/.test(m)),
-  'SIMULARE: rulează ca anon, 0 relații cu date citibile, 0 ambigue, vederea-contor = agregat fără date (confirmat); concluzia ZERO')
-verifica(C0.jurnal.some(m => /SIMULARE anon AGREGAT_FARA_DATE in public\.v_contor \(1 rand, doar NULL \/ zero; confirmat: vedere cu agregat fara GROUP BY\)/.test(m)),
-  'SIMULARE: vederea-contor (agregat fără GROUP BY) confirmată din definiție AGREGAT_FARA_DATE')
-// r4 (review r3 P2): „un rând, doar zero / NULL” e AMBIGUU, confirmat din definiție. Un tabel cu un rând vizibil (0), o vedere cu GROUP BY
-// și o vedere peste vederea-contor ies DATE_CITIBILE; concluzia devine NEDOVEDIT (totul anulat la final)
+verifica(C0.jurnal.some(m => /SIMULARE rezumat: rolul curent anon, 0 relatii cu date citibile, 0 ambigue, 0 neexecutate, 1 fara date la sursa, 0 constante \(fara surse in catalog\), \d+ goale, \d+ erori \(din care 0 necunoscute/.test(m))
+  && C0.jurnal.includes('SIMULARE concluzie: ZERO date citibile ca anon (proba pe aceasta baza, in limitele din document)'),
+  'SIMULARE: rulează ca anon, 0 date citibile / ambigue / neexecutate, vederea-contor = fără date la sursă; concluzia ZERO (probă, nu „dovedit”)')
+verifica(C0.jurnal.includes('SIMULARE anon FARA_DATE_LA_SURSA in public.v_contor (1 rand doar NULL / zero; 1 tabele de baza: 0 fara drept, 1 cu 0 randuri vizibile)'),
+  'SIMULARE: vederea-contor (count peste un tabel cu RLS, 0 rânduri vizibile ca anon) = FARA_DATE_LA_SURSA, cu numărătorile')
+// r5 + r6 (review r4, review #1090): „un rând doar NULL / zero” se judecă la SURSĂ, DUPĂ analiza închiderii cu lista albă de funcții (r6: orice
+// funcție din afara listei => NEEXECUTATA, relația nu se execută deloc). Fixture-uri (totul anulat la final):
+//   v_kpi = forma vederii-contor de pe producție (CTE-uri cu agregate peste tabele cu RLS + o vedere + o constantă regclass spre un tabel fără
+//     drept pentru anon) => FARA_DATE_LA_SURSA, 3 tabele de bază (1 fără drept, 2 cu 0 rânduri);
+//   v_fara_invoker / v_peste_fara_invoker, v_mat, t_zero, v_grup => DATE_CITIBILE; v_kpi_auth (auth.uid()), v_peste_contor, v_now (now(),
+//     date_trunc, to_char, jsonb_build_object: stabile din listă) => FARA_DATE_LA_SURSA; v_sum_const (sum peste VALUES (1), (-1)) => CONSTANTA;
+//   NEEXECUTATA, cu numele și motivul: v_kpi_fn (SECURITY DEFINER), v_kpi_atomic (funcție proprie BEGIN ATOMIC), v_kpi_plpgsql;
+//     contraexemplele review-ului #1090: v_probe_cfg (funcție INVOKER BEGIN ATOMIC cu SET request.jwt.claims = un utilizator: vede rândurile
+//     (1), (-1) ale lui t_probe prin politica auth.uid(), sum = 0), v_xml (query_to_xml peste un tabel din altă schemă, extras prin xpath);
+//     v_tabel_xml (table_to_xml: de sistem, stabilă, în afara listei); v_lacat (funcție volatilă cu pg_advisory_lock: lock-ul NU se ia);
+//     t_antet (politică pentru anon dependentă de request.headers, nemodelat); t_cheie_calc (cheie calculată, nu constantă); v_rol (auth.role() al cărui corp citește request.headers);
+//     v_jwt (auth.jwt(): revendicările complete nu sunt modelate);
+//   t_metoda (politică pentru anon: request.method = GET, cu un rând) => DATE_CITIBILE (contextul cererii GET e pus);
+//   AMBIGUU: v_alta_schema (tabel din altă schemă) și v_catalog (pg_catalog.pg_class: fix în sistem, invizibil în pg_depend, văzut în arbore).
 {
   await db.exec(`BEGIN; CREATE TABLE public.t_zero (n integer); INSERT INTO public.t_zero VALUES (0); GRANT SELECT ON public.t_zero TO anon;
     CREATE VIEW public.v_grup WITH (security_invoker = on) AS SELECT max(n) AS m FROM public.t_zero GROUP BY n; GRANT SELECT ON public.v_grup TO anon;
-    CREATE VIEW public.v_peste_contor WITH (security_invoker = on) AS SELECT * FROM public.v_contor; GRANT SELECT ON public.v_peste_contor TO anon;`)
+    CREATE VIEW public.v_peste_contor WITH (security_invoker = on) AS SELECT * FROM public.v_contor; GRANT SELECT ON public.v_peste_contor TO anon;
+    CREATE TABLE public.t_kpi_a (id serial PRIMARY KEY, x integer); ALTER TABLE public.t_kpi_a ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_kpi_a_p ON public.t_kpi_a FOR SELECT USING (auth.uid() IS NOT NULL);
+    CREATE TABLE public.t_kpi_b (id serial PRIMARY KEY, x integer); ALTER TABLE public.t_kpi_b ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_kpi_b_p ON public.t_kpi_b FOR SELECT USING (auth.uid() IS NOT NULL);
+    CREATE TABLE public.t_kpi_secret (id integer); REVOKE ALL ON public.t_kpi_secret FROM anon;
+    INSERT INTO public.t_kpi_a (x) VALUES (5), (7); INSERT INTO public.t_kpi_b (x) VALUES (3); INSERT INTO public.t_kpi_secret VALUES (1);
+    CREATE VIEW public.v_kpi_alerte WITH (security_invoker = on) AS SELECT id, x FROM public.t_kpi_b WHERE x > 0;
+    CREATE VIEW public.v_kpi WITH (security_invoker = on) AS
+      WITH a AS (SELECT count(*) AS n_active FROM public.t_kpi_a),
+           b AS (SELECT count(*) FILTER (WHERE x > 0) AS n_fise FROM public.t_kpi_b),
+           c AS (SELECT count(DISTINCT id) AS n_alerte FROM public.v_kpi_alerte)
+      SELECT a.n_active, b.n_fise, c.n_alerte, CASE WHEN 'public.t_kpi_secret'::regclass IS NULL THEN 1 ELSE 0 END AS z
+        FROM a CROSS JOIN b CROSS JOIN c;
+    CREATE VIEW public.v_fara_invoker AS SELECT count(*) FILTER (WHERE x > 100) AS n FROM public.t_kpi_b;
+    CREATE VIEW public.v_peste_fara_invoker WITH (security_invoker = on) AS SELECT n FROM public.v_fara_invoker;
+    CREATE FUNCTION public.fn_kpi_definer() RETURNS bigint LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+      BEGIN ATOMIC SELECT count(*) - count(*) FROM public.t_kpi_a; END;
+    CREATE VIEW public.v_kpi_fn WITH (security_invoker = on) AS SELECT public.fn_kpi_definer() AS n;
+    CREATE FUNCTION public.fn_kpi_atomic() RETURNS bigint LANGUAGE sql STABLE BEGIN ATOMIC SELECT count(*) FROM public.t_kpi_a; END;
+    CREATE VIEW public.v_kpi_atomic WITH (security_invoker = on) AS SELECT public.fn_kpi_atomic() AS n;
+    CREATE FUNCTION public.fn_kpi_plpgsql() RETURNS bigint LANGUAGE plpgsql STABLE AS $f$ BEGIN RETURN 0; END $f$;
+    CREATE VIEW public.v_kpi_plpgsql WITH (security_invoker = on) AS SELECT public.fn_kpi_plpgsql() AS n;
+    CREATE VIEW public.v_kpi_auth WITH (security_invoker = on) AS SELECT count(*) AS n FROM public.t_kpi_a WHERE auth.uid() IS NOT NULL;
+    CREATE VIEW public.v_sum_const WITH (security_invoker = on) AS SELECT sum(x) AS s FROM (VALUES (1), (-1)) v(x);
+    CREATE MATERIALIZED VIEW public.v_mat AS SELECT count(*) * 0 AS n FROM public.t_kpi_a; GRANT SELECT ON public.v_mat TO anon;
+    CREATE VIEW public.v_now WITH (security_invoker = on) AS
+      SELECT count(*) FILTER (WHERE date_trunc('day', now()) > to_timestamp(0) AND to_char(now(), 'YYYY') <> '' AND jsonb_build_object('a', x) IS NOT NULL) AS n
+        FROM public.t_kpi_a;
+    CREATE TABLE public.t_probe (x integer); ALTER TABLE public.t_probe ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_probe_p ON public.t_probe FOR SELECT TO anon USING (auth.uid() IS NOT NULL); INSERT INTO public.t_probe VALUES (1), (-1);
+    CREATE FUNCTION public.fn_probe_cfg() RETURNS bigint LANGUAGE sql STABLE
+      SET request.jwt.claims = '{"role":"anon","sub":"00000000-0000-0000-0000-000000000001"}'
+      BEGIN ATOMIC SELECT coalesce(sum(x), 0) FROM public.t_probe; END;
+    CREATE VIEW public.v_probe_cfg WITH (security_invoker = on) AS SELECT public.fn_probe_cfg() AS s;
+    CREATE SCHEMA sursa; GRANT USAGE ON SCHEMA sursa TO anon; CREATE TABLE sursa.t (x integer); INSERT INTO sursa.t VALUES (1), (-1);
+    GRANT SELECT ON sursa.t TO anon;
+    CREATE VIEW public.v_xml WITH (security_invoker = on) AS
+      SELECT ((xpath('/row/s/text()', query_to_xml('SELECT sum(x) AS s FROM sursa.t', false, true, '')))[1])::text::integer AS s;
+    CREATE VIEW public.v_tabel_xml WITH (security_invoker = on) AS SELECT length(table_to_xml('public.t_kpi_a', false, true, '')::text) * 0 AS n;
+    CREATE FUNCTION public.fn_lacat() RETURNS integer LANGUAGE sql VOLATILE AS $f$ SELECT pg_advisory_lock(4242); SELECT 0 $f$;
+    CREATE VIEW public.v_lacat WITH (security_invoker = on) AS SELECT public.fn_lacat() AS n;
+    CREATE TABLE public.t_metoda (x integer); ALTER TABLE public.t_metoda ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_metoda_p ON public.t_metoda FOR SELECT TO anon USING (current_setting('request.method', true) = 'GET');
+    INSERT INTO public.t_metoda VALUES (7);
+    CREATE TABLE public.t_antet (x integer); ALTER TABLE public.t_antet ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_antet_p ON public.t_antet FOR SELECT TO anon USING ((current_setting('request.headers', true)::jsonb ->> 'x-cheie') = 'da');
+    INSERT INTO public.t_antet VALUES (9);
+    CREATE TABLE public.t_cheie_calc (x integer); ALTER TABLE public.t_cheie_calc ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_cheie_calc_p ON public.t_cheie_calc FOR SELECT TO anon USING (current_setting('request.' || 'method', true) = 'GET');
+    CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $f$ SELECT current_setting('request.headers', true) $f$;
+    CREATE VIEW public.v_rol WITH (security_invoker = on) AS SELECT count(*) FILTER (WHERE auth.role() IS NULL) AS n FROM public.t_kpi_a;
+    CREATE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql STABLE AS $f$ SELECT nullif(current_setting('request.jwt.claims', true), '')::jsonb $f$;
+    CREATE VIEW public.v_jwt WITH (security_invoker = on) AS SELECT count(*) FILTER (WHERE auth.jwt() IS NULL) AS n FROM public.t_kpi_a;
+    CREATE VIEW public.v_alta_schema WITH (security_invoker = on) AS SELECT count(*) * 0 AS n FROM sursa.t;
+    CREATE VIEW public.v_catalog WITH (security_invoker = on) AS SELECT count(*) * 0 AS n FROM pg_catalog.pg_class;`)
   const SP = (t) => t.replace('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;', 'SAVEPOINT s_citire;').replace(/ROLLBACK;\s*$/, 'ROLLBACK TO SAVEPOINT s_citire;')
+  const lacate = async () => (await db.query(`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()`)).rows[0].n
   const cz = await citire(db, SP(CITIRE))
-  // mutant: arborele nu se mai recunoaște (câmp redenumit) => vederea-contor rămâne AMBIGUU, nu e ghicită
-  const cm = await citire(db, SP(aplica(CITIRE, [["position(' :hasAggs ' IN v_sus) = 0", "position(' :hasAggsX ' IN v_sus) = 0"]])))
+  const cls = (c, n) => (c.jurnal.find(m => m.startsWith(`SIMULARE anon `) && m.includes(` in public.${n} (`)) || '').replace(/^SIMULARE anon /, '')
+  console.log('   ' + cz.jurnal.filter(m => /SIMULARE (anon (DATE|FARA|CONST|AMBIGUU|NEEX)|rezumat|concluzie)/.test(m)).join('\n   '))
+  verifica(cls(cz, 'v_kpi') === 'FARA_DATE_LA_SURSA in public.v_kpi (1 rand doar NULL / zero; 3 tabele de baza: 1 fara drept, 2 cu 0 randuri vizibile)',
+    'vederea de forma vederii-contor de pe producție (CTE-uri cu agregate + CROSS JOIN + regclass) peste tabele cu RLS = FARA_DATE_LA_SURSA (1 fără drept, 2 cu 0 rânduri)')
+  verifica(['v_kpi_auth', 'v_peste_contor', 'v_now'].every(n => cls(cz, n).startsWith(`FARA_DATE_LA_SURSA in public.${n} (1 rand doar NULL / zero; 1 tabele de baza: 0 fara drept, 1 cu 0`)),
+    'L20: auth.uid() (corpul verificat), vedere peste vedere-contor și funcțiile stabile din listă (now, date_trunc, to_char, jsonb_build_object) = FARA_DATE_LA_SURSA')
+  verifica(cls(cz, 'v_fara_invoker') === 'DATE_CITIBILE in public.v_fara_invoker (1 rand doar NULL / zero; vedere fara security_invoker: citeste ca proprietarul)'
+    && cls(cz, 'v_peste_fara_invoker') === 'DATE_CITIBILE in public.v_peste_fara_invoker (1 rand doar NULL / zero; vedere intermediara fara security_invoker (citeste ca proprietarul): public.v_fara_invoker)',
+    'vedere fără security_invoker (la vârf sau intermediară) = DATE_CITIBILE')
+  verifica(cls(cz, 'v_kpi_fn') === 'NEEXECUTATA in public.v_kpi_fn (functie in afara listei: public.fn_kpi_definer() [SECURITY DEFINER])'
+    && cls(cz, 'v_kpi_atomic') === 'NEEXECUTATA in public.v_kpi_atomic (functie in afara listei: public.fn_kpi_atomic() [proprie / de extensie, limbaj sql, stabila])'
+    && cls(cz, 'v_kpi_plpgsql') === 'NEEXECUTATA in public.v_kpi_plpgsql (functie in afara listei: public.fn_kpi_plpgsql() [proprie / de extensie, limbaj plpgsql, stabila])',
+    'r6 P1.1: orice funcție a noastră (DEFINER, BEGIN ATOMIC, plpgsql) = NEEXECUTATA cu numele și motivul (corpurile nu se mai urmăresc)')
+  verifica(cls(cz, 'v_probe_cfg') === 'NEEXECUTATA in public.v_probe_cfg (functie in afara listei: public.fn_probe_cfg() [SET in definitie: request.jwt.claims])',
+    'r6 P1.1: contraexemplul review-ului (funcție INVOKER cu SET request.jwt.claims, sum peste (1), (-1)) = NEEXECUTATA, nu FARA_DATE_LA_SURSA')
+  verifica(cls(cz, 'v_xml').startsWith('NEEXECUTATA in public.v_xml (functie in afara listei: ') && cls(cz, 'v_xml').includes('pg_catalog.query_to_xml(') && cls(cz, 'v_xml').includes('[de sistem, volatila]')
+    && cls(cz, 'v_tabel_xml').startsWith('NEEXECUTATA in public.v_tabel_xml (functie in afara listei: pg_catalog.table_to_xml(') && cls(cz, 'v_tabel_xml').includes('[de sistem, stabila, in afara listei]'),
+    'r6 P1.2: contraexemplul review-ului (query_to_xml peste un tabel din altă schemă) și table_to_xml = NEEXECUTATA (funcții de sistem din afara listei), nu CONSTANTA')
+  verifica(cls(cz, 'v_lacat') === 'NEEXECUTATA in public.v_lacat (functie in afara listei: public.fn_lacat() [proprie / de extensie, limbaj sql, volatila])' && await lacate() === 0,
+    'r6 P1.5: funcția volatilă cu pg_advisory_lock NU se execută (NEEXECUTATA) și sesiunea nu ține niciun lock consultativ după citire')
+  verifica(cls(cz, 't_metoda') === 'DATE_CITIBILE in public.t_metoda (1 randuri citite, valorile nu se afiseaza)'
+    && cls(cz, 't_antet') === 'NEEXECUTATA in public.t_antet (functie in afara listei: pg_catalog.current_setting [setari nemodelate: request.headers])'
+    && cls(cz, 't_cheie_calc') === 'NEEXECUTATA in public.t_cheie_calc (functie in afara listei: pg_catalog.current_setting [setari nemodelate: cheie calculata])',
+    'r6 P1.3: politica dependentă de request.method = GET vede rândul (contextul cererii e pus); request.headers (nemodelat) sau o cheie calculată = NEEXECUTATA cu numele setării (cheia decodată din arborele intern)')
+  verifica(cls(cz, 'v_rol') === 'NEEXECUTATA in public.v_rol (functie in afara listei: auth.role() [corp in afara listei: setari request.headers])'
+    && cls(cz, 'v_jwt') === 'NEEXECUTATA in public.v_jwt (functie in afara listei: auth.jwt() [revendicarile complete ale cheii (ref / iat / exp) nu sunt modelate])',
+    'r6 P1.3: auth.role() al cărui corp citește o setare nemodelată și auth.jwt() = NEEXECUTATA cu motivul')
+  verifica(cls(cz, 'v_sum_const') === 'CONSTANTA (fara surse in catalog) in public.v_sum_const (1 rand doar NULL / zero; nicio relatie pe calea de date, doar functii din lista alba)',
+    'r6 P1.2: sum peste VALUES (1), (-1) = „CONSTANTA (fără surse în catalog)”, fără „dovedit”')
+  verifica(cls(cz, 'v_alta_schema') === 'AMBIGUU in public.v_alta_schema (1 rand doar NULL / zero; relatie in afara schemelor noastre: sursa.t)'
+    && cls(cz, 'v_catalog') === 'AMBIGUU in public.v_catalog (1 rand doar NULL / zero; relatie in afara schemelor noastre: pg_catalog.pg_class)',
+    'r6: relația din altă schemă și cea din catalog (fixă: văzută doar în arborele intern, nu în pg_depend) = AMBIGUU, nu CONSTANTA')
+  verifica(cls(cz, 't_zero') === 'DATE_CITIBILE in public.t_zero (1 rand doar NULL / zero; tabel: randul poate fi un rand de date)'
+    && cls(cz, 'v_grup') === 'DATE_CITIBILE in public.v_grup (1 rand doar NULL / zero; tabel de baza cu randuri vizibile ca anon: public.t_zero)'
+    && cls(cz, 'v_mat') === 'DATE_CITIBILE in public.v_mat (1 rand doar NULL / zero; vedere materializata: date proprii, fara RLS)',
+    'tabel cu un rând (0) vizibil, vedere peste el, vedere materializată = DATE_CITIBILE')
+  verifica(cz.jurnal.includes('SIMULARE concluzie: NEDOVEDIT: 6 cu date citibile, 2 ambigue, 11 neexecutate, 0 erori necunoscute - de analizat inainte de T2')
+    && cz.jurnal.some(m => /^SIMULARE rezumat: rolul curent anon, 6 relatii cu date citibile, 2 ambigue, 11 neexecutate, 5 fara date la sursa, 1 constante \(fara surse in catalog\)/.test(m)),
+    'rezumatul numără fiecare clasă (6 date, 2 ambigue, 11 neexecutate, 5 la sursă, 1 constantă); concluzia NEDOVEDIT')
+  // mutanți: fiecare scoate o regulă; verificările de mai sus îl prind (aici se arată defectul pe care l-ar lăsa să treacă)
+  const m1 = await citire(db, SP(aplica(CITIRE, [['              IF d.invoker IS NOT TRUE THEN', '              IF false THEN']])))
+  // (r7: tabelul de sub vederea obișnuită e citit doar ca proprietarul => garda cititorului îl face AMBIGUU, nu „fără date la sursă”)
+  verifica(cls(m1, 'v_fara_invoker').startsWith('AMBIGUU') && cls(m1, 'v_peste_fara_invoker').startsWith('AMBIGUU'),
+    `mutant fără verificarea security_invoker: vederile care citesc ca proprietarul nu mai ies DATE_CITIBILE (${cls(m1, 'v_fara_invoker').split(' (')[0]})`)
+  const LISTA = "ELSIF d.pro_schema = 'pg_catalog' AND d.sistem AND NOT d.prosecdef AND d.fara_config AND (d.volatil = 'i' OR d.proname = ANY (v_stabile)) THEN"
+  const mA = await citire(db, SP(aplica(CITIRE, [[LISTA, "ELSIF NOT d.prosecdef AND (d.pro_schema = 'pg_catalog' OR d.corp_atomic) THEN"]])))
+  verifica(/^(CONSTANTA|FARA_DATE_LA_SURSA)/.test(cls(mA, 'v_probe_cfg')) && /^(CONSTANTA|FARA_DATE_LA_SURSA)/.test(cls(mA, 'v_kpi_atomic')),
+    `mutant „regula r5” (funcții proprii cu corp analizat admise, fără proconfig): contraexemplul cu SET request.jwt.claims iese „dovedit” (${cls(mA, 'v_probe_cfg').split(' (')[0]})`)
+  const mB = await citire(db, SP(aplica(CITIRE, [[LISTA, "ELSIF d.pro_schema = 'pg_catalog' AND NOT d.prosecdef THEN"]])))
+  verifica(cls(mB, 'v_xml').startsWith('CONSTANTA') && cls(mB, 'v_catalog').startsWith('AMBIGUU'),
+    `mutant „orice funcție de sistem”: query_to_xml peste date reale iese CONSTANTA (${cls(mB, 'v_xml').split(' (')[0]})`)
+  const mC = await citire(db, SP(aplica(CITIRE, [['      IF v_neadmise IS NOT NULL THEN', '      IF false THEN']])))
+  const lC = await lacate()
+  await db.query('SELECT pg_advisory_unlock_all()')
+  verifica(lC === 1 && !cls(mC, 'v_lacat').startsWith('NEEXECUTATA'), `mutant „execuție fără poarta listei albe” (ordinea r5): funcția cu pg_advisory_lock rulează, lock-ul rămâne după ROLLBACK (${lC})`)
+  const mD = await citire(db, SP(aplica(CITIRE, [['        IF v_c1 = 0 OR v_c1 <> v_c2 THEN', '        IF false THEN']])))
+  verifica(!cls(mD, 't_antet').startsWith('NEEXECUTATA'), `mutant fără verificarea cheilor din current_setting: politica pe request.headers se execută (${cls(mD, 't_antet').split(' (')[0]})`)
+  const mE = await citire(db, SP(aplica(CITIRE, [["set_config('request.method', 'GET', true), ", '']])))
+  verifica(cls(mE, 't_metoda') === '', `mutant fără request.method: politica dependentă de metodă ascunde rândul văzut prin API (iese GOL, fără linie)`)
+  const mF = await citire(db, SP(aplica(CITIRE, [["IF v_c1 = 0 OR v_c1 <> v_c2 OR d.prosrc ~* '[[:<:]]from[[:>:]]' THEN", 'IF false THEN']])))
+  verifica(!cls(mF, 'v_rol').startsWith('NEEXECUTATA'), 'mutant fără verificarea corpului auth.uid / auth.role: auth.role() cu request.headers se execută')
+  // același v_kpi când un tabel de bază are un rând VIZIBIL ca anon (rezultatul vederii rămâne zero: filtrele x > 0)
+  await db.exec(`CREATE POLICY t_kpi_b_anon ON public.t_kpi_b FOR SELECT TO anon USING (x <= 0); INSERT INTO public.t_kpi_b (x) VALUES (0);`)
+  const cv = await citire(db, SP(CITIRE))
+  verifica(cls(cv, 'v_kpi') === 'DATE_CITIBILE in public.v_kpi (1 rand doar NULL / zero; tabel de baza cu randuri vizibile ca anon: public.t_kpi_b)',
+    'același v_kpi, cu un rând vizibil ca anon într-un tabel de bază (vederea tot zero) = DATE_CITIBILE')
+  const m2 = await citire(db, SP(aplica(CITIRE, [["              EXECUTE 'SELECT /* anon_drepturi_citire */ EXISTS (SELECT 1 FROM ' || v_b || ')' INTO v_ex;", '              v_ex := false;']])))
+  verifica(cls(m2, 'v_kpi').startsWith('FARA_DATE_LA_SURSA'), 'mutant fără citirea efectivă a tabelelor de bază: v_kpi cu rând vizibil iese „fără date la sursă”')
+  // r7 (review r2 #1090 P1): o vedere OBIȘNUITĂ citește tabelele cu drepturile și POLITICILE proprietarului ei. Fixture-uri:
+  //   v_prop = contraexemplul recenzentului: tabel cu RLS, politică TO v_owner care cheamă o funcție volatilă cu pg_advisory_lock, vedere
+  //     obișnuită a lui v_owner, SELECT pentru anon => NEEXECUTATA, funcția NU rulează; v_peste_prop (security_invoker peste v_prop) și
+  //     v_lant (obișnuită a lui postgres peste v_prop) = același lanț, proprietarul fiecărui nivel => NEEXECUTATA;
+  //   v_peste_inv: vedere obișnuită a lui v_owner peste o vedere security_invoker peste t_antet => t_antet tot ca anon (politica lui anon pe
+  //     request.headers) => NEEXECUTATA;
+  //   L20 (cazul legitim): v_ocolit = vedere obișnuită a lui postgres (ocolește RLS) peste un tabel a cărui politică pentru PUBLIC cheamă
+  //     aceeași funcție: PostgreSQL nu aplică politici proprietarului => se execută (DATE_CITIBILE: citește ca proprietarul), lock-ul nu se ia;
+  //     linia „SIMULARE cititori” spune că tabelul e citit ca postgres, fără politici de analizat (la fel v_fara_invoker, ca până acum).
+  await db.exec(`CREATE ROLE v_owner NOLOGIN NOINHERIT;
+    CREATE FUNCTION public.fn_lacat_prop() RETURNS integer LANGUAGE sql VOLATILE AS $f$ SELECT pg_advisory_lock(987654); SELECT 0 $f$;
+    CREATE TABLE public.t_prop (x integer); INSERT INTO public.t_prop VALUES (0); ALTER TABLE public.t_prop ENABLE ROW LEVEL SECURITY;
+    REVOKE ALL ON public.t_prop FROM anon; GRANT SELECT ON public.t_prop TO v_owner;
+    CREATE POLICY t_prop_p ON public.t_prop FOR SELECT TO v_owner USING (public.fn_lacat_prop() = 0);
+    CREATE VIEW public.v_prop AS SELECT x FROM public.t_prop; ALTER VIEW public.v_prop OWNER TO v_owner; GRANT SELECT ON public.v_prop TO anon;
+    CREATE VIEW public.v_peste_prop WITH (security_invoker = on) AS SELECT x FROM public.v_prop; GRANT SELECT ON public.v_peste_prop TO anon;
+    CREATE VIEW public.v_lant AS SELECT x FROM public.v_prop; GRANT SELECT ON public.v_lant TO anon;
+    CREATE VIEW public.v_antet_inv WITH (security_invoker = on) AS SELECT x FROM public.t_antet; GRANT SELECT ON public.v_antet_inv TO v_owner;
+    CREATE VIEW public.v_peste_inv AS SELECT count(*) * 0 AS n FROM public.v_antet_inv; ALTER VIEW public.v_peste_inv OWNER TO v_owner;
+    GRANT SELECT ON public.v_peste_inv TO anon;
+    CREATE TABLE public.t_ocolit (x integer); INSERT INTO public.t_ocolit VALUES (5); ALTER TABLE public.t_ocolit ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_ocolit_p ON public.t_ocolit FOR SELECT USING (public.fn_lacat_prop() = 0);
+    CREATE VIEW public.v_ocolit AS SELECT count(*) * 0 AS n FROM public.t_ocolit; GRANT SELECT ON public.v_ocolit TO anon;`)
+  const cp = await citire(db, SP(CITIRE))
+  const lP = await lacate()
+  const NEEX_PROP = 'functie in afara listei: public.fn_lacat_prop() [proprie / de extensie, limbaj sql, volatila])'
+  console.log('   ' + cp.jurnal.filter(m => /SIMULARE (cititori|anon \w+ in public\.(v_prop|v_peste_prop|v_lant|v_peste_inv|v_ocolit|v_fara_invoker) )/.test(m)).join('\n   '))
+  verifica(cls(cp, 'v_prop') === 'NEEXECUTATA in public.v_prop (' + NEEX_PROP && lP === 0
+    && cp.jurnal.includes('SIMULARE cititori pentru public.v_prop: public.t_prop citit ca v_owner (politicile lui analizate)'),
+    'r7 P1: contraexemplul recenzentului (politica proprietarului vederii cu pg_advisory_lock) = NEEXECUTATA, funcția NU rulează (pg_locks gol), cititorul spus')
+  verifica(cls(cp, 'v_peste_prop') === 'NEEXECUTATA in public.v_peste_prop (' + NEEX_PROP && cls(cp, 'v_lant') === 'NEEXECUTATA in public.v_lant (' + NEEX_PROP,
+    'r7 P1: pe lanț (vedere invoker / vedere a lui postgres peste vederea lui v_owner): proprietarul fiecărui nivel => NEEXECUTATA')
+  verifica(cls(cp, 'v_peste_inv') === 'NEEXECUTATA in public.v_peste_inv (functie in afara listei: pg_catalog.current_setting [setari nemodelate: request.headers])',
+    'r7 P1: vedere security_invoker imbricată într-o vedere obișnuită: tabelele ei se citesc tot ca anon (politica lui anon analizată)')
+  verifica(cls(cp, 'v_ocolit') === 'DATE_CITIBILE in public.v_ocolit (1 rand doar NULL / zero; vedere fara security_invoker: citeste ca proprietarul)'
+    && cp.jurnal.includes('SIMULARE cititori pentru public.v_ocolit: public.t_ocolit citit ca postgres (superuser: ocoleste RLS, fara politici de analizat)')
+    && cp.jurnal.includes('SIMULARE cititori pentru public.v_fara_invoker: public.t_kpi_b citit ca postgres (superuser: ocoleste RLS, fara politici de analizat)')
+    && cls(cp, 'v_fara_invoker').startsWith('DATE_CITIBILE') && lP === 0,
+    'r7 L20: vederea unui proprietar care ocolește RLS se execută ca până acum (politicile lui anon / PUBLIC nu se aplică, funcția din ele nu rulează); ieșirea o spune')
+  const mP1 = await citire(db, SP(aplica(CITIRE, [['                                ELSE vc.relowner END AS cititor', '                                ELSE v_anon END AS cititor']])))
+  const lP1 = await lacate()
+  await db.query('SELECT pg_advisory_unlock_all()')
+  verifica(lP1 === 1 && !cls(mP1, 'v_prop').startsWith('NEEXECUTATA'),
+    `mutant „analiza doar pe politicile lui anon” (r6): funcția din politica proprietarului rulează, lock-ul rămâne după ROLLBACK (${lP1}; ${cls(mP1, 'v_prop').split(' (')[0]})`)
+  const mP2 = await citire(db, SP(aplica(CITIRE, [["(cr.rolsuper OR cr.rolbypassrls OR (pg_has_role(i.cititor, tc.relowner, 'USAGE') AND NOT tc.relforcerowsecurity))", 'false']])))
+  verifica(cls(mP2, 'v_ocolit').startsWith('NEEXECUTATA'), 'mutant fără ocolirea RLS a cititorului: cazul legitim (L20) iese NEEXECUTATA')
+  const mP3 = await citire(db, SP(aplica(CITIRE, [['              IF v_anon = ANY (d.cititori) THEN v_baze', '              IF true THEN v_baze'],
+    ['        ELSIF v_m_date IS NULL THEN\n', '        ELSE\n']])))
+  const lP3 = await lacate()
+  await db.query('SELECT pg_advisory_unlock_all()')
+  verifica(lP3 === 1, `mutant fără ambele gărzi ale probei la sursă (r7): tabelul citit prin vedere doar ca proprietar e citit direct ca anon, politica lui anon rulează (lock: ${lP3})`)
   await db.exec('ROLLBACK')
-  console.log('   ' + cz.jurnal.filter(m => /SIMULARE (anon DATE|anon AGREGAT|anon AMBIGUU|rezumat|concluzie)/.test(m)).join(' | '))
-  verifica(['t_zero', 'v_grup', 'v_peste_contor'].every(n => cz.jurnal.some(m => m.startsWith(`SIMULARE anon DATE_CITIBILE in public.${n} (1 rand, doar NULL / zero, dar nu e vedere cu agregat`)))
-    && cz.jurnal.some(m => /SIMULARE anon AGREGAT_FARA_DATE in public\.v_contor/.test(m))
-    && cz.jurnal.some(m => /^SIMULARE concluzie: NEDOVEDIT: 3 cu date citibile, 0 ambigue/.test(m)),
-    'SIMULARE (review r3 P2): un rând (0) într-un tabel, o vedere cu GROUP BY și o vedere peste contor = DATE_CITIBILE; doar agregatul fără GROUP BY e confirmat')
-  verifica(cm.jurnal.some(m => /SIMULARE anon AMBIGUU in public\.v_contor/.test(m)) && cm.jurnal.some(m => /^SIMULARE concluzie: NEDOVEDIT: \d+ cu date citibile, [1-9]\d* ambigue/.test(m)),
-    'SIMULARE mutant (arbore nerecunoscut): vederea-contor rămâne AMBIGUU și concluzia e NEDOVEDIT, nu „zero”')
 }
 // SIMULARE deosebește datele citibile: o politică temporară care lasă anon să vadă un rând => DATE_CITIBILE (anulată la final)
 {
@@ -303,15 +491,126 @@ const jr = (await db.query(`SELECT migrare, count(*)::int n FROM securitate_inte
 verifica(JSON.stringify(jr) === JSON.stringify([{ migrare: '20261218a', n: 3 }, { migrare: '20261218b', n: 8 }, { migrare: '20261218c', n: 2 }]), 'jurnalul = listele: ' + JSON.stringify(jr))
 // controlul periodic pe RAMANE (r2): un obiect creat de platformă (supabase_admin, cu drepturile lui implicite pentru anon) după aplicare
 {
-  const k0 = sectiune(C1, 'CONTROL')[0]
+  const k0 = control(C1, 'RAMANE')
   await db.exec('SET ROLE supabase_admin; CREATE TABLE public.t_platforma (id integer); RESET ROLE;')
   const C2 = await citire(db)
-  const k1 = sectiune(C2, 'CONTROL')[0]
+  const k1 = control(C2, 'RAMANE')
   verifica(k1.amprenta !== k0.amprenta && Number(k1.detaliu.split(' ')[0]) === Number(k0.detaliu.split(' ')[0]) + 1
     && sectiune(C2, 'OBIECT').some(x => x.eticheta === 'tabel public.t_platforma' && x.treapta === 'RAMANE' && /proprietar supabase_admin/.test(x.motiv))
     && sectiune(C2, 'BASELINE').every(x => x.detaliu.includes(", 0, '")),
     'control periodic: obiectul nou al lui supabase_admin schimbă CONTROL RAMANE (+1, amprentă nouă) și apare în OBIECT; T1 / T2 / T3 rămân 0')
   await db.exec('DROP TABLE public.t_platforma;')
+}
+// r5 (review r4): o politică pentru anon / PUBLIC creată DUPĂ retragere, pe un tabel fără drept pentru anon: fără acces azi, dar CONTROL
+// POLITICI_ANON o vede (+1, amprentă nouă), iar RAMANE nu se schimbă; în POLITICI_ANON apare cu anon_are_drept = false
+{
+  const p0 = control(C1, 'POLITICI_ANON'), r0 = control(C1, 'RAMANE')
+  await db.exec('CREATE POLICY p_dupa ON public.t_identity FOR SELECT TO anon USING (true); CREATE POLICY p_dupa_pub ON public.t_fara_politici FOR SELECT USING (true);')
+  const C3 = await citire(db)
+  const p1 = control(C3, 'POLITICI_ANON'), r1 = control(C3, 'RAMANE')
+  const x = await caAnon(db, 'SELECT * FROM public.t_identity')
+  verifica(p0.detaliu === '0 politici' && p1.detaliu === '2 politici' && p1.amprenta !== p0.amprenta && r1.amprenta === r0.amprenta && !x.ok && x.code === '42501'
+    && ['p_dupa', 'p_dupa_pub'].every(n => sectiune(C3, 'POLITICI_ANON').some(r => r.politica === n && r.anon_are_drept === false)),
+    'CONTROL POLITICI_ANON: politicile noi pentru anon / PUBLIC pe tabele fără drept (fără acces: 42501) schimbă rândul (0 -> 2), RAMANE neschimbat')
+  await db.exec('ALTER POLICY p_dupa ON public.t_identity USING (id > 0);')
+  const p2 = control(await citire(db), 'POLITICI_ANON')
+  verifica(p2.detaliu === '2 politici' && p2.amprenta !== p1.amprenta, 'CONTROL POLITICI_ANON: expresia unei astfel de politici schimbată = amprentă nouă')
+  await db.exec('DROP POLICY p_dupa ON public.t_identity; DROP POLICY p_dupa_pub ON public.t_fara_politici;')
+  verifica(control(await citire(db), 'POLITICI_ANON').amprenta === p0.amprenta, 'CONTROL POLITICI_ANON: după ștergere, amprenta revine la cea dinainte')
+}
+// r5 + r6: STATISTICI pe o extensie FALSĂ (PGlite nu are pg_stat_statements): aceeași citire, cu schema extensiei înlocuită de o schemă cu
+// tabelele de aceeași formă (PG 17: toplevel, stats_since). Așteptat din fixture (L25), r6 (review #1090 P1.4 + P2):
+//   directe = forma PostgREST („WITH pgrst_…”) fără pgrst_call, pe "public"."…": 11 (105), 12 (17), 16 (INSERT cu listă de coloane: 4)
+//     => 3 interogări, 126 apeluri; rpc = pgrst_call: 13 (40), 17 (pgrst_args: 6) => 2, 46; alte: 14 (3) și 18 (SQL scris de mână cu
+//     "public"."t_a": 9) și 31 (martorul) => 3, 5012; proprii: 19 (eticheta scriptului); alt rol: nenumărat; martorul = 31: configurarea
+//     PostgREST (set_config), înregistrată sub anon, preferată celei sub authenticator (32).
+{
+  const SP = (t) => t.replace('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;', 'SAVEPOINT s_citire;').replace(/ROLLBACK;\s*$/, 'ROLLBACK TO SAVEPOINT s_citire;')
+  const EXT = ["SELECT n.nspname INTO v_schema FROM pg_extension x JOIN pg_namespace n ON n.oid = x.extnamespace WHERE x.extname = 'pg_stat_statements';",
+    "v_schema := 'stat_fals';"]
+  const FALS = aplica(CITIRE, [EXT])
+  await db.exec(`BEGIN; SET LOCAL pg_stat_statements.track = 'top'; CREATE SCHEMA stat_fals;
+    CREATE TABLE stat_fals.pg_stat_statements (userid oid, dbid oid, toplevel boolean, queryid bigint, calls bigint, query text, stats_since timestamptz);
+    CREATE TABLE stat_fals.pg_stat_statements_info (stats_reset timestamptz, dealloc bigint);
+    INSERT INTO stat_fals.pg_stat_statements SELECT r.oid, d.oid, true, q.id, q.c, q.t, q.s::timestamptz FROM pg_database d, pg_roles r, (VALUES
+      ('anon', 11, 105, 'WITH pgrst_source AS ( SELECT "public"."t_a".* FROM "public"."t_a" LIMIT $1 OFFSET $2 ) SELECT null', '2026-11-01 08:00:00+00'),
+      ('anon', 12, 17, 'WITH pgrst_source AS (SELECT "public"."t_b".* FROM "public"."t_b"   WHERE "public"."t_b"."id" = $1) SELECT null', '2026-11-01 08:00:00+00'),
+      ('anon', 16, 4, 'WITH pgrst_source AS (INSERT INTO "public"."t_c"("x") SELECT "pgrst_body"."x" FROM pgrst_body RETURNING 1) SELECT null', '2026-11-10 08:00:00+00'),
+      ('anon', 13, 40, 'WITH pgrst_source AS (SELECT "pgrst_call".* FROM "public"."fn_pagina"($1) pgrst_call) SELECT null', '2026-11-01 08:00:00+00'),
+      ('anon', 17, 6, 'WITH pgrst_args AS (SELECT * FROM json_to_recordset($1) AS _("p" text)), pgrst_source AS (SELECT "pgrst_call".* FROM "public"."fn_pagina2"("p" := (SELECT "p" FROM pgrst_args LIMIT $2)) pgrst_call) SELECT null', '2026-11-01 08:00:00+00'),
+      ('anon', 14, 3, 'SELECT $1', '2026-11-01 08:00:00+00'),
+      ('anon', 18, 9, 'SELECT * FROM "public"."t_a" WHERE "id" = $1', '2026-11-01 08:00:00+00'),
+      ('anon', 19, 1, 'DO $simulare$ BEGIN PERFORM /* anon_drepturi_citire */ 1; END $simulare$', '2026-11-13 09:00:00+00'),
+      ('authenticated', 21, 999, 'WITH pgrst_source AS (SELECT "public"."t_a".* FROM "public"."t_a") SELECT null', '2026-11-01 08:00:00+00'),
+      ('anon', 31, 5000, 'select set_config($1, $2, $3), set_config($4, $5, $6), set_config($7, $8, $9)', '2026-11-01 08:00:00+00'),
+      ('authenticator', 32, 7000, 'select set_config($1, $2, $3), set_config($4, $5, $6), set_config($7, $8, $9)', '2026-11-01 08:00:00+00')) q(rol, id, c, t, s)
+     WHERE d.datname = current_database() AND r.rolname = q.rol;
+    INSERT INTO stat_fals.pg_stat_statements_info VALUES ('2026-11-01 08:00:00+00', 0);`)
+  const rez = (c) => c.jurnal.find(m => m.startsWith('STATISTICI rezumat anon')) || ''
+  const directe = (c) => Object.fromEntries(c.jurnal.filter(m => m.startsWith('STATISTICI anon directa: '))
+    .map(m => /^STATISTICI anon directa: queryid (\d+) \| (\d+) apeluri \| stats_since ([^|]+) \|/.exec(m)).filter(Boolean).map(x => [x[1], { apeluri: Number(x[2]), since: x[3].trim() }]))
+  // regula de comparare din docs/SECURITATE_ANON_DREPTURI.md §2, scrisă independent de script (L25): pentru fiecare intrare directă din A,
+  // B trebuie să o aibă cu același stats_since și apeluri ≥; altfel „fără probă”. Intrare nouă în B sau apeluri crescute = „a crescut”.
+  const compara = (a, b) => {
+    const A = directe(a), B = directe(b), out = { fara_proba: [], crescut: [], nou: Object.keys(B).filter(q => !(q in A)) }
+    for (const [q, x] of Object.entries(A)) {
+      if (!(q in B) || B[q].since !== x.since || B[q].apeluri < x.apeluri) out.fara_proba.push(q)
+      else if (B[q].apeluri > x.apeluri) out.crescut.push(q)
+    }
+    return out
+  }
+  const s1 = await citire(db, SP(FALS))
+  console.log('   ' + rez(s1))
+  verifica(rez(s1) === 'STATISTICI rezumat anon | directe: 3 interogari, 126 apeluri | rpc: 2 interogari, 46 apeluri | alte: 3 interogari, 5012 apeluri | proprii: 1 | resetare: 2026-11-01 08:00:00+00 | evacuari: 0 | ascunse: 0 | track: top | stats_since: da | martor: da | dovada: DA',
+    'STATISTICI r6: clasele (directe = forma PostgREST fără pgrst_call, inclusiv INSERT cu listă de coloane; rpc; alte = SQL scris de mână; proprii), track, stats_since, martor')
+  verifica(s1.jurnal.includes('STATISTICI anon directa: queryid 16 | 4 apeluri | stats_since 2026-11-10 08:00:00+00 | sus | WITH pgrst_source AS (INSERT INTO "public"."t_c"("x") SELECT "pgrst_body"."x" FROM pgrst_body RETURNING 1) SELECT null')
+    && s1.jurnal.includes('STATISTICI anon alta: queryid 18 | 9 apeluri | stats_since 2026-11-01 08:00:00+00 | sus | SELECT * FROM "public"."t_a" WHERE "id" = $1')
+    && s1.jurnal.some(m => m.startsWith('STATISTICI anon proprie: queryid 19 '))
+    && s1.jurnal.includes('STATISTICI martor (configurarea fiecarei cereri PostgREST): rol anon | queryid 31 | 5000 apeluri | stats_since 2026-11-01 08:00:00+00')
+    && s1.jurnal.findIndex(m => m.startsWith('STATISTICI anon directa')) < s1.jurnal.findIndex(m => m.startsWith('STATISTICI anon alta')),
+    'STATISTICI r6: fiecare intrare are queryid | apeluri | stats_since | nivel; directele primele; martorul (sub anon, preferat celui sub authenticator) cu queryid și stats_since')
+  // r7 (review r2 #1090 P2): SQL intern unei funcții (toplevel = false, track = all) cu forma PostgREST și "public"."…" = alta, marcat imbricat
+  await db.exec(`INSERT INTO stat_fals.pg_stat_statements SELECT 'anon'::regrole, d.oid, false, 20, 7, 'WITH pgrst_source AS ( SELECT "public"."t_d".* FROM "public"."t_d" ) SELECT null', '2026-11-01 08:00:00+00' FROM pg_database d WHERE d.datname = current_database();`)
+  const sI = await citire(db, SP(FALS))
+  verifica(sI.jurnal.includes('STATISTICI anon alta: queryid 20 | 7 apeluri | stats_since 2026-11-01 08:00:00+00 | imbricat | WITH pgrst_source AS ( SELECT "public"."t_d".* FROM "public"."t_d" ) SELECT null')
+    && / directe: 3 interogari, 126 apeluri \| rpc: 2 interogari, 46 apeluri \| alte: 4 interogari, 5019 apeluri \|/.test(rez(sI)),
+    'STATISTICI r7: intrarea imbricată cu forma PostgREST = alta (marcată „imbricat”), nu directa; rezumatul directelor neschimbat')
+  const mI = await citire(db, SP(aplica(FALS, [["CASE WHEN v_top THEN 'WHEN s.toplevel IS NOT TRUE THEN ''alta'' ' ELSE '' END", "''"]])))
+  verifica(/ directe: 4 interogari, 133 apeluri /.test(rez(mI)) && mI.jurnal.some(m => m.startsWith('STATISTICI anon directa: queryid 20 ')),
+    'mutant fără toplevel în clasificare: SQL-ul intern unei funcții e numărat ca interogare directă (falsă dependență)')
+  await db.exec('DELETE FROM stat_fals.pg_stat_statements WHERE queryid = 20')
+  // P1.4 (b): resetare SELECTIVĂ a intrării 11 + încă 105 apeluri: sumele și rezumatul rămân identice, dar stats_since al intrării se schimbă
+  await db.exec(`UPDATE stat_fals.pg_stat_statements SET stats_since = '2026-11-12 08:00:00+00' WHERE queryid = 11; UPDATE stat_fals.pg_stat_statements SET calls = 5100 WHERE queryid = 31;`)
+  const s2 = await citire(db, SP(FALS))
+  const c12 = compara(s1, s2)
+  const dir = (c) => (/ directe: [^|]+\|/.exec(rez(c)) || [])[0]
+  verifica(dir(s1) && dir(s2) === dir(s1) && JSON.stringify(c12) === JSON.stringify({ fara_proba: ['11'], crescut: [], nou: [] }),
+    'STATISTICI r6: resetarea selectivă păstrează rezumatul directelor identic (fals liniștitor), dar regula pe stats_since o marchează „fără probă” (11)')
+  await db.exec(`UPDATE stat_fals.pg_stat_statements SET stats_since = '2026-11-01 08:00:00+00' WHERE queryid = 11; UPDATE stat_fals.pg_stat_statements SET calls = 18 WHERE queryid = 12;`)
+  verifica(JSON.stringify(compara(s1, await citire(db, SP(FALS)))) === JSON.stringify({ fara_proba: [], crescut: ['12'], nou: [] }), 'STATISTICI r6: un apel direct nou pe aceeași intrare = „a crescut”')
+  await db.exec(`UPDATE stat_fals.pg_stat_statements SET calls = 17 WHERE queryid = 12;`)
+  // P1.4 (a) track = none; setare pe rol; fără martor; fără stats_since; text ascuns; fără momentul resetării = LIPSĂ DE DOVADĂ
+  await db.exec(`SET LOCAL pg_stat_statements.track = 'none';`)
+  verifica(/ track: none \| .*dovada: LIPSA DE DOVADA \(track = none: interogarile nu se colecteaza\)$/.test(rez(await citire(db, SP(FALS)))), 'STATISTICI r6: track = none = LIPSĂ DE DOVADĂ (valoarea tipărită)')
+  const mT = await citire(db, SP(aplica(FALS, [["           WHEN v_track NOT IN ('top', 'all') THEN 'LIPSA DE DOVADA (track = ' || v_track || ': interogarile nu se colecteaza)'\n", '']])))
+  verifica(/ track: none \| .*dovada: DA$/.test(rez(mT)), 'mutant fără verificarea track: contoare care nu se mai colectează dau „dovada: DA”')
+  await db.exec(`SET LOCAL pg_stat_statements.track = 'top'; ALTER ROLE anon SET pg_stat_statements.track = 'none';`)
+  verifica(/dovada: LIPSA DE DOVADA \(setari pg_stat_statements pe roluri: anon:pg_stat_statements.track\)$/.test(rez(await citire(db, SP(FALS)))), 'STATISTICI r6: setare pg_stat_statements pe rolul anon = LIPSĂ DE DOVADĂ')
+  await db.exec(`ALTER ROLE anon RESET pg_stat_statements.track; DELETE FROM stat_fals.pg_stat_statements WHERE queryid IN (31, 32);`)
+  verifica(/ martor: absent \| dovada: LIPSA DE DOVADA \(martor absent/.test(rez(await citire(db, SP(FALS)))), 'STATISTICI r6: fără martor PostgREST = LIPSĂ DE DOVADĂ')
+  await db.exec(`INSERT INTO stat_fals.pg_stat_statements SELECT 'anon'::regrole, d.oid, true, 31, 5000, 'select set_config($1, $2, $3)', '2026-11-01 08:00:00+00' FROM pg_database d WHERE d.datname = current_database();`)
+  const mP = await citire(db, SP(aplica(FALS, [["'^WITH pgrst_[a-z]+ AS', 'pgrst_call', 'rpc', '^WITH pgrst_[a-z]+ AS'", "'.', 'pgrst_call', 'rpc', '.'"]])))
+  verifica(/ directe: 4 interogari, 135 apeluri /.test(rez(mP)), 'mutant fără forma PostgREST: SQL-ul scris de mână cu "public"."t_a" e numărat ca interogare directă')
+  await db.exec(`ALTER TABLE stat_fals.pg_stat_statements DROP COLUMN stats_since;`)
+  const s3 = await citire(db, SP(FALS))
+  verifica(/ stats_since: nu \| .*dovada: LIPSA DE DOVADA \(fara stats_since/.test(rez(s3)) && s3.jurnal.some(m => /^STATISTICI anon directa: queryid 11 \| 105 apeluri \| stats_since necunoscut \| sus \|/.test(m)),
+    'STATISTICI r6: fără stats_since pe intrări (PG < 17) = LIPSĂ DE DOVADĂ')
+  await db.exec(`ALTER TABLE stat_fals.pg_stat_statements ADD COLUMN stats_since timestamptz DEFAULT '2026-11-01 08:00:00+00';
+    INSERT INTO stat_fals.pg_stat_statements SELECT 'anon'::regrole, d.oid, true, 15, 2, '<insufficient privilege>' FROM pg_database d WHERE d.datname = current_database();`)
+  verifica(/ascunse: 1 \| .*dovada: LIPSA DE DOVADA \(texte ascunse/.test(rez(await citire(db, SP(FALS)))), 'STATISTICI: un text ascuns = LIPSĂ DE DOVADĂ (nu „0 directe”)')
+  await db.exec('DELETE FROM stat_fals.pg_stat_statements WHERE queryid = 15; DROP TABLE stat_fals.pg_stat_statements_info;')
+  verifica(/resetare: necunoscuta \| evacuari: necunoscut .*dovada: LIPSA DE DOVADA \(momentul resetarii/.test(rez(await citire(db, SP(FALS)))), 'STATISTICI: fără momentul resetării = LIPSĂ DE DOVADĂ')
+  await db.exec('ROLLBACK')
 }
 const acl = (await db.query(`SELECT has_table_privilege('anon', 'securitate_intern.anon_revocari', 'SELECT') a, has_schema_privilege('anon', 'securitate_intern', 'USAGE') s,
   has_table_privilege('authenticated', 'securitate_intern.anon_revocari', 'SELECT') b, has_table_privilege('service_role', 'securitate_intern.anon_revocari', 'SELECT') c`)).rows[0]
