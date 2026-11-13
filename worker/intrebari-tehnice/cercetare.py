@@ -30,10 +30,11 @@ Fluxul (intrebari_worker.py):
      cuvânt. Verdictul Da / Nu / Depinde rămâne DOAR dacă nicio afirmație normativă n-a fost scoasă (runda 4: verdictul se putea
      sprijini pe ea) și rămâne măcar o afirmație cu temei (runda 3, review r2 P2-3); altfel răspunsul devine
      „Incert — de verificat: nu am găsit o sursă care să susțină verdictul propus”.
-  5. regula B (decizia owner-ului 13.11.2026, aplica_regula_b; r3): doar trei verdicte; „Da” / „Nu” rămân DOAR dacă citatul
-     este IDENTIC (după forma_citat) cu o PROPOZIȚIE ÎNTREAGĂ a sursei marcate pe aceeași linie (≥ 6 cuvinte); altfel „Incert”,
-     cu sursele consultate alăturate.
-  Validarea rulează pe textul MASCAT (decizia A, mascare.py): răspunsul modelului față de sursele mascate cu aceleași etichete.
+  5. regula B (decizia owner-ului 13.11.2026): doar trei verdicte; „Da” / „Nu” rămân DOAR cu un citat identic cu o propoziție
+     întreagă și DE SINE STĂTĂTOARE a sursei marcate; altfel „Incert”, cu sursele consultate alăturate. r4: regula stă în MOTORUL
+     UNIC (src/intrebariMascare.js — aplicaRegulaB), chemat prin motor.py; aici rămân doar textele pentru model (SISTEM_RASPUNS,
+     mesaj_reparare) și marginile sigure ale extraselor (inceput_sigur / sfarsit_sigur, vezi pregateste_index).
+  Validarea rulează pe textul MASCAT (decizia A, motorul unic): răspunsul modelului față de sursele mascate cu aceleași etichete.
   Limita asumată (runda 4): potrivirea e pe cuvinte, nu pe sens — o parafrază corectă cu alt cuvânt („personal competent” pentru
   sursa „personal calificat”, „impune” pentru sursa „se face”) e respinsă, iar răspunsul devine „Incert” (de verificat de om),
   nu greșit. Nu adăugăm sinonime ghicite.
@@ -556,118 +557,8 @@ def curata_raspuns(text, surse):
     return rez, scoase
 
 
-# ─── Regula B (decizia owner-ului 13.11.2026; r3 după review-ul PR #1086): „Da” / „Nu” DOAR cu un citat IDENTIC ───────────
-# Altfel verdictul e „Incert”, iar sursele consultate se salvează (și se afișează) alături. Sunt doar TREI verdicte: Da / Nu / Incert
-# („Depinde de X” devine „Incert — depinde de X”). r3: fără praguri și fără liste de cuvinte (o listă de negații / opuși nu se
-# termină: exclus / inclus, minim / maxim, peste / sub, înainte / după, lipsește …). Regula (citat_sustinut):
-#   - răspunsul are o linie cu un citat între ghilimele („…” sau "…") și marcajul sursei [Cn] / [Wn] pe aceeași linie;
-#   - citatul, adus la forma_citat (minuscule, fără diacritice, fără ghilimele, liniuțele „–” / „—” / „−” = „-”, spațiile comprimate
-#     și scoase lângă punctuație, fără punctuația de la capete), este IDENTIC cu o PROPOZIȚIE ÎNTREAGĂ a sursei marcate, adusă la
-#     aceeași formă — niciun cuvânt lipsă, în plus sau schimbat, nicio virgulă schimbată în interior;
-#   - citatul are cel puțin CITAT_MIN_CUVINTE cuvinte (o propoziție mai scurtă → „Incert”: un titlu sau un fragment de 3 cuvinte
-#     nu susține un verdict).
-# Propozițiile sursei sunt cele din propozitii() (aceeași funcție ca la validare, aceeași în JS): se despart la . ! ? ; și rând nou;
-# NU după abrevieri (art. alin. pct. lit. nr. … din ABREVIERI), nici la punctul zecimal sau urmat de cifră / „(”, nici înaintea
-# unei bucăți care începe cu o restricție („; cu excepția …”, „. Dar …”) — acolo propoziția continuă. O enumerare cu „;” are
-# fiecare element ca propoziție. Orice despărțire greșită (o abreviere necunoscută, o enumerare citată întreagă) face doar ca
-# citatul să NU fie identic cu nicio propoziție → „Incert” (direcția prudentă), niciodată un „Da” în plus.
-# Limita rămasă, declarată: o excepție aflată în ALTĂ propoziție a sursei (propoziția următoare spune „Prevederea nu se aplică
-# în zona X.”) nu e văzută de regulă; omul vede citatul și sursa întreagă alăturate. Un citat cu ghilimele interioare (sursa
-# citează la rândul ei un nume între ghilimele) nu poate fi citat → „Incert”.
-CITAT_MIN_CUVINTE = 6
-CITAT = re.compile(r'[„“"«]([^„“”"«»\n]{8,800})[”“"»]')
-CUVINTE_CITAT = re.compile(r'[a-z]+|[0-9]+(?:[.,][0-9]+)?')
-INCERT_REGULA_B = f'{INCERT}: niciun citat nu reproduce exact o propoziție întreagă dintr-o sursă — citește sursele alăturate.'
-_CITAT_GHILIMELE = re.compile('[„“”"«»‚‘’\'`´]')
-_CITAT_LINIUTE = re.compile('[' + ''.join(map(chr, range(0x2010, 0x2016))) + chr(0x2212) + ']')   # ‐ ‑ ‒ – — ― −
-_CITAT_SPATII = re.compile(r'\s+')
-_CITAT_PUNCT = re.compile(r' ?([^a-z0-9 ]) ?')
-_CITAT_CAPETE = '.,;:!?…- '
-
-
-def forma_citat(s):
-    """Forma de comparare a unui citat și a unei propoziții din sursă (regula B, r3) — vezi mai sus."""
-    n = _CITAT_LINIUTE.sub('-', _CITAT_GHILIMELE.sub('', normalizeaza(s)))
-    n = _CITAT_PUNCT.sub(r'\1', _CITAT_SPATII.sub(' ', n))
-    return n.strip(_CITAT_CAPETE)
-
-
-SEPARATOR_CITAT = re.compile(r'[.!?]|\n\s*\n')
-
-
-def propozitii_citat(text):
-    """Propozițiile ÎNTREGI ale unei surse, pentru regula B (normalizate): se despart la . ! ? urmate de spațiu și la rândul gol;
-    NU după o abreviere (ABREVIERI: art. alin. pct. lit. nr. …), nici înaintea unei cifre / „(” („art. 5”, „alin. (2)”), nici
-    înaintea unei bucăți care începe cu o restricție („. Dar numai …”). „;” și rândul simplu NU despart: o enumerare e o singură
-    propoziție împreună cu introducerea ei — introducerea poate nega elementele („Nu se admit: a) …; b) …”), deci un element citat
-    singur nu e o propoziție întreagă. O despărțire greșită face doar ca citatul să nu fie identic → „Incert”."""
-    n = normalizeaza(text)
-    bucati, start = [], 0
-    for m in SEPARATOR_CITAT.finditer(n):
-        k = m.start()
-        if len(m.group(0)) == 1:
-            if k + 1 < len(n) and not re.match(r'\s', n[k + 1]): continue
-            if n[k] == '.':
-                cuv = re.search(r'[a-z]+$', n[start:k])
-                if cuv and cuv.group(0) in ABREVIERI: continue
-            urm = re.match(r'\s*(\S)', n[k + 1:])
-            if urm and re.match(r'[0-9(]', urm.group(1)): continue
-        if INCEPE_CU_RESTRICTIE.match(n, m.end()): continue
-        bucati.append(n[start:k])
-        start = m.end()
-    bucati.append(n[start:])
-    return [p.strip() for p in bucati if p.strip()]
-
-
-def citat_sustinut(citat, ids, harta):
-    """True DOAR dacă citatul (forma_citat) e IDENTIC cu o propoziție întreagă (propozitii_citat) a uneia dintre sursele `ids` și
-    are cel puțin CITAT_MIN_CUVINTE cuvinte. Orice altceva → False („Incert”)."""
-    f = forma_citat(citat)
-    if len(CUVINTE_CITAT.findall(f)) < CITAT_MIN_CUVINTE: return False
-    for i in ids:
-        if i not in harta: continue
-        if any(f == forma_citat(p) for p in propozitii_citat(harta[i].partition('\n')[2])): return True
-    return False
-
-
-def are_citat(text, surse):
-    """True dacă răspunsul are măcar un citat care trece pragul (pe o linie cu marcajul sursei citate)."""
-    harta = harta_surse(surse)
-    for linie in str(text or '').replace('\r', '').split('\n'):
-        ids = [i for i in marcaje(linie) if i in harta]
-        if ids and any(citat_sustinut(c, ids, harta) for c in CITAT.findall(linie)): return True
-    return False
-
-
-def tip_verdict(text):
-    """'da' / 'nu' / 'incert' / 'depinde' / None — după prima linie (verdict())."""
-    n = normalizeaza(verdict(text) or '')
-    for k in ('incert', 'depinde', 'da', 'nu'):
-        if re.match(rf'{k}\b', n): return k
-    return None
-
-
-def cere_citat(text, surse):
-    """True dacă verdictul e „Da” / „Nu” fără un citat care să treacă pragul (motiv de reparare; vezi mesaj_reparare)."""
-    return tip_verdict(text) in ('da', 'nu') and not are_citat(text, surse)
-
-
-def aplica_regula_b(text, surse):
-    """(text, motiv) — ultimul pas înainte de publicare (după curata_raspuns): „Da” / „Nu” rămân DOAR cu un citat care trece pragul
-    (motiv 'citat'); altfel prima linie devine INCERT_REGULA_B ('fara_citat'); „Depinde de X” → „Incert — depinde de X” ('depinde');
-    un „Incert” rămâne cum e ('incert'). Fără verdict (nu se întâmplă după curata_raspuns) → neschimbat ('fara_verdict')."""
-    tip = tip_verdict(text)
-    linii = str(text or '').replace('\r', '').split('\n')
-    i = next((k for k, l in enumerate(linii) if l.strip()), None)
-    if tip is None or i is None: return text, 'fara_verdict'
-    if tip == 'incert': return text, 'incert'
-    if tip == 'depinde':
-        v = verdict(text)
-        linii[i] = f'{INCERT} — {v[:1].lower()}{v[1:]}'
-        return '\n'.join(linii), 'depinde'
-    if are_citat(text, surse): return text, 'citat'
-    linii[i] = INCERT_REGULA_B
-    return '\n'.join(linii), 'fara_citat'
+# ─── Regula B: r4 — în MOTORUL UNIC (src/intrebariMascare.js: aplicaRegulaB / cereCitat), chemat prin motor.py ─────────────
+# Aici rămân doar textele pentru model (SISTEM_RASPUNS, mesaj_reparare). Python nu mai taie propoziții și nu mai compară citate.
 
 
 # ─── corpusul intern ──────────────────────────────────────────────────────
@@ -700,14 +591,24 @@ def index_verificat(octeti, manifest):
         return None
 
 
+BUCATA_MAX = 1500             # = BUCATA_MAX din scripts/intrebari/corpus.mjs (testul compară): un paragraf mai lung se taie în felii
+
+
 def pregateste_index(index):
-    """Indexul JSON (construieste_corpus.mjs) → bucăți cu frecvențe; idf calculat o dată."""
-    bucati = []
+    """Indexul JSON (construieste_corpus.mjs) → bucăți cu frecvențe; idf calculat o dată.
+    r4 (regula B — contextul tăiat la marginea extrasului dă „Incert”): fiecare bucată își declară marginile. Bucățile se fac pe
+    paragrafe întregi; DOAR un paragraf mai lung de BUCATA_MAX se taie „tare” în felii de exact BUCATA_MAX caractere. Deci: o bucată
+    de BUCATA_MAX caractere poate fi tăiată la sfârșit (sfarsit_sigur = False), iar bucata de după ea, din același fișier, poate
+    începe în mijlocul paragrafului (inceput_sigur = False). Ce înseamnă o margine nesigură o decide motorul (aplicaRegulaB)."""
+    bucati, anterior = [], None
     for b in (index or {}).get('bucati') or []:
         cale, text = str(b.get('cale') or ''), str(b.get('text') or '')
+        inceput_sigur = not (anterior is not None and anterior[0] == cale and anterior[1] >= BUCATA_MAX)
+        anterior = (cale, len(text))
         if not cale.startswith('docs/') or '..' in cale or not text.strip(): continue
         tf = Counter(tokeni((b.get('titlu') or '') + '\n' + text))
-        if tf: bucati.append({'cale': cale, 'titlu': str(b.get('titlu') or '')[:300], 'text': text, 'tf': tf, 'lung': sum(tf.values())})
+        if tf: bucati.append({'cale': cale, 'titlu': str(b.get('titlu') or '')[:300], 'text': text, 'tf': tf, 'lung': sum(tf.values()),
+                              'inceput_sigur': inceput_sigur, 'sfarsit_sigur': len(text) < BUCATA_MAX})
     df = Counter(t for b in bucati for t in b['tf'])
     n = len(bucati) or 1
     return {'bucati': bucati, 'idf': {t: math.log(1 + n / d) for t, d in df.items()},
@@ -734,7 +635,9 @@ def selecteaza_extrase(pregatit, intrebare, maxim=EXTRASE_MAX, buget=EXTRASE_BUG
         extras = b['text'].strip()[:EXTRAS_MAX]
         if folosit + len(extras) > buget: continue
         per[b['cale']] += 1; folosit += len(extras)
-        out.append({'id': f'C{len(out) + 1}', 'tip': 'corpus', 'cale': b['cale'], 'titlu': b['titlu'], 'extras': extras})
+        out.append({'id': f'C{len(out) + 1}', 'tip': 'corpus', 'cale': b['cale'], 'titlu': b['titlu'], 'extras': extras,
+                    'inceput_sigur': b.get('inceput_sigur') is True,
+                    'sfarsit_sigur': b.get('sfarsit_sigur') is True and len(b['text'].strip()) <= EXTRAS_MAX})
     return out
 
 
@@ -932,7 +835,9 @@ def surse_web(blocuri, start=1, maxim=SURSE_MAX):
                 s['extras'] = (s['extras'] + ' … ' + extras).strip(' …')[:600]
             return
         if len(out) >= maxim: return
-        s = {'id': f'W{start + len(out)}', 'tip': 'web', 'url': url, 'titlu': str(titlu or '')[:300], 'extras': str(extras or '')[:600]}
+        # r4: fragmentele web (cited_text) sunt mereu tăiate din pagină → margini nesigure (regula B le dă „Incert” la Da / Nu)
+        s = {'id': f'W{start + len(out)}', 'tip': 'web', 'url': url, 'titlu': str(titlu or '')[:300], 'extras': str(extras or '')[:600],
+             'inceput_sigur': False, 'sfarsit_sigur': False}
         vazute[url] = s; out.append(s)
     for b in blocuri or []:
         if b.get('type') == 'text':
@@ -1061,7 +966,7 @@ SISTEM_RASPUNS = """Ești consultantul tehnic al Gazpet Instal SRL (Ploiești) �
 
 Formatul răspunsului (obligatoriu):
 1. PRIMA LINIE = verdictul scurt, singur pe linie, începând exact cu „Da”, „Nu” sau „Incert” (ex. „Da — …”, „Nu, …”, „Incert — depinde de tipul instalației: …”). Fără titlu înaintea lui. Sunt DOAR trei verdicte: „Depinde de …” se scrie „Incert — depinde de …”.
-   „Da” sau „Nu” DOAR dacă o propoziție întreagă dintr-o sursă din <surse> spune acel lucru. Atunci A DOUA LINIE e citatul: Citat [C1]: „propoziția întreagă din sursă”, copiată EXACT, de la începutul propoziției până la punct — niciun cuvânt scos, adăugat sau schimbat, fără „…”, cu condițiile și excepțiile ei. Un fragment de propoziție sau o parafrază nu e citat. Fără un asemenea citat, prima linie e „Incert — …” și spui pe scurt ce surse trebuie citite (ecranul le arată alături). Un verdict ferm fără citat devine automat „Incert”.
+   „Da” sau „Nu” DOAR dacă o propoziție întreagă dintr-o sursă din <surse> spune acel lucru. Atunci A DOUA LINIE e citatul: Citat [C1]: „propoziția întreagă din sursă”, copiată EXACT, de la începutul propoziției până la punct — niciun cuvânt scos, adăugat sau schimbat, fără „…”, cu condițiile și excepțiile ei. Un fragment de propoziție sau o parafrază nu e citat. Propoziția trebuie să fie de sine stătătoare: un element dintr-o listă sau dintr-un tabel, o propoziție cu trimitere la alt text („conform art. …”, „aceste condiții”) sau cu o excepție / restricție în același paragraf nu susține singură un „Da” / „Nu”. Fără un asemenea citat, prima linie e „Incert — …” și spui pe scurt ce surse trebuie citite (ecranul le arată alături). Un verdict ferm fără citat devine automat „Incert”.
 2. Apoi justificarea, pe puncte scurte. FIECARE afirmație normativă (act, articol, alineat, punct, standard, cifră, termen, presiune, distanță, obligație) are la final marcajul sursei din care vine, între paranteze drepte: [C1], [W2] sau [C1, W3]. Folosește doar ID-uri din <surse>.
 3. Dacă sursele nu acoperă o parte a întrebării, scrie pe linie separată DOAR „Nu am găsit sursa oficială pentru …” și ce document trebuie cerut (ex. textul consolidat al prescripției, avizul, contractul) — fără cifre, articole sau obligații în acea linie. NU completa din memorie, nu inventa articole, numere sau cifre, nu folosi „[DE VERIFICAT]”. Cifrele și articolele pe care le citezi trebuie să apară exact în extrasul sursei marcate, iar sursa marcată trebuie să spună chiar lucrul afirmat (termenii afirmației se regăsesc în extras) — nu pune un marcaj pe o afirmație pe care sursa n-o conține. La o obligație, interdicție, permisiune sau condiție („obligatoriu”, „trebuie”, „se interzice”, „nu se admite”, „este permis”, „numai dacă”, „cel puțin”, „cel mult”), aceeași propoziție din sursă trebuie să aibă același tip de regulă și toți termenii afirmației, inclusiv calificativele („autorizat”, „atestat”, „în scris”); cifrele se scriu cu același semn și aceeași unitate ca în sursă. Nu adăuga calificative sau condiții pe care sursa nu le are și nu le omite pe cele pe care le are. Dacă din surse nu rezultă un verdict, prima linie e „Incert — de verificat: …”.
 4. La final, dacă e util, „Ce aș face” — pași concreți, tot cu surse pentru partea normativă.
@@ -1082,7 +987,8 @@ def mesaj_reparare(analiza, ids_valide, fara_citat=False):
         p.append('- Verdictul nu e susținut de nicio afirmație cu sursă (o afirmație ai cărei termeni sau cifre apar în sursa citată). '
                  'Susține-l din <surse> sau scrie pe prima linie „Incert — de verificat: …”.')
     if analiza['verdict'] and fara_citat:
-        p.append('- Verdictul „Da” / „Nu” cere pe a doua linie un citat: o propoziție ÎNTREAGĂ din sursă, copiată exact, de la '
+        p.append('- Verdictul „Da” / „Nu” cere pe a doua linie un citat: o propoziție ÎNTREAGĂ și de sine stătătoare din sursă (nu '
+                 'un element de listă sau de tabel, fără trimiteri la alt text), copiată exact, de la '
                  'început până la punct, fără niciun cuvânt scos, adăugat sau schimbat: Citat [C1]: „propoziția întreagă din sursă”. '
                  'Dacă nicio propoziție a unei surse nu spune asta, prima linie devine „Incert — …”; „Depinde de …” se scrie '
                  '„Incert — depinde de …”.')

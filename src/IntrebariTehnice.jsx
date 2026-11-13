@@ -5,9 +5,10 @@
 // Limita: 5 întrebări pe zi (owner 20), verificată în BD.
 // ════════════════════════════════════════════════════════════════
 // 13.11.2026 (deciziile owner-ului): (A) numele de persoane / firme și datele personale se ASCUND înainte de trimiterea la AI —
-// mascarea reală o face workerul (worker/intrebari-tehnice/mascare.py); ecranul arată dinainte ce ar pleca (intrebariMascare.js),
-// iar colegul poate ascunde manual un cuvânt; atașamentele NU se mai trimit la AI. (B, r3) „Da” / „Nu” doar cu un citat identic cu o
-// propoziție întreagă a unei surse; altfel „Incert”, cu sursele alăturate.
+// mascarea reală o face workerul, cu MOTORUL UNIC src/intrebariMascare.js (r4: același modul pe care îl folosește și acest ecran);
+// ecranul arată o previzualizare ORIENTATIVĂ (lista de nume pe care o poate citi contul, fără localități), iar colegul poate ascunde
+// manual un cuvânt; atașamentele NU se mai trimit la AI. (B) „Da” / „Nu” doar cu un citat identic cu o propoziție întreagă și de sine
+// stătătoare a unei surse; altfel „Incert”, cu sursele alăturate.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -65,7 +66,7 @@ function Surse({ surse, alaturate }) {
                        ...(alaturate ? { border:`1px solid ${G.yellow}`, borderRadius:8, padding:10 } : {}) }}>
       <div style={{ fontWeight:700, fontSize:14, marginBottom:6 }}>{alaturate ? 'Surse alăturate — citește-le tu' : 'Surse'}</div>
       {alaturate && <div style={{ fontSize:12, color:G.muted, marginBottom:6 }}>
-        Niciun citat nu reproduce exact o propoziție întreagă dintr-o sursă, deci nu există un „Da” sau „Nu” sigur. Acestea sunt sursele consultate.</div>}
+        Niciun citat nu reproduce exact o propoziție întreagă și de sine stătătoare dintr-o sursă, deci nu există un „Da” sau „Nu” sigur. Acestea sunt sursele consultate.</div>}
       <ol style={{ margin:0, paddingLeft:0, listStyle:'none', fontSize:13 }}>{surse.map(s => (
         <li key={s.id} style={{ margin:'0 0 8px' }}>
           <span style={{ color:G.acc, fontWeight:700, marginRight:6 }}>[{s.id}]</span>
@@ -78,12 +79,16 @@ function Surse({ surse, alaturate }) {
     </div>
 }
 
-// Decizia A — ce pleacă la AI, înainte de trimitere: textul mascat, câte nume / date s-au ascuns, ce NU prinde mascarea și cum
-// ascunzi manual un cuvânt. Mascarea reală o face workerul, cu lista completă de nume: pe server se ascunde cel puțin la fel.
+// Decizia A — previzualizare ORIENTATIVĂ (r4, review r3 P2-5): textul mascat cu lista de nume pe care o poate citi contul, câte nume
+// / date s-au ascuns, ce NU prinde mascarea și cum ascunzi manual un cuvânt. Mascarea reală o face workerul cu același motor, dar cu
+// lista completă din platformă și cu localitățile cunoscute — rezultatul poate diferi în ambele sensuri (textul de mai jos o spune).
+export const AVERTISMENT_PREVIZUALIZARE = 'Serverul folosește lista completă din platformă și poate ascunde nume suplimentare. Localitățile cunoscute rămân vizibile pe server, chiar dacă aici apar ascunse. Mascarea automată nu garantează eliminarea tuturor numelor.'
+export const IN_AFARA_CONTRACTULUI = 'Nu prinde: porecle, greșeli de scriere sau de citire automată, litere asemănătoare din alte alfabete, diminutive, alte ordini ale cuvintelor unei firme, nume de persoane scrise doar cu litere mici, nume pe care platforma nu le cunoaște (fără „dl.”, „ing.”, „colegul” în față sau SRL / SA după), adrese, un cuvânt obișnuit care e și nume („Ion”, „Alfa”) scris singur, fără numele întreg în speță.'
 function Previzualizare({ prev, nume, cuAtasamente }) {
   const faraLista = nume.stare === 'eroare' || (nume.stare === 'ok' && !nume.angajati)
   return <div style={{ marginTop:12, background:G.bg, border:`1px dashed ${G.yellow}`, borderRadius:8, padding:10, fontSize:13 }}>
-    <div style={{ fontWeight:700, marginBottom:4 }}>🙈 Ce pleacă la AI — verifică înainte de trimitere</div>
+    <div style={{ fontWeight:700, marginBottom:4 }}>🙈 Previzualizare orientativă — verifică înainte de trimitere</div>
+    <div style={{ color:G.text, fontSize:12, marginBottom:6 }}><strong>Previzualizare orientativă.</strong> {AVERTISMENT_PREVIZUALIZARE}</div>
     <div style={{ color: prev.total ? G.yellow : G.muted, fontSize:12, marginBottom:8 }}>
       {prev.total ? `Am ascuns ${prev.total} ${prev.total === 1 ? 'nume / dată' : 'nume și date'} (${prev.rezumat}).` : 'Nu am găsit nume sau date de ascuns.'}
       {' '}Ce nu e ascuns aici pleacă așa. Ca să ascunzi un cuvânt: selectează-l și apasă „Ascunde selecția”, sau scrie-l între [[ și ]].</div>
@@ -92,16 +97,16 @@ function Previzualizare({ prev, nume, cuAtasamente }) {
     {prev.intrebare && <div style={{ marginTop:4 }}><span style={{ color:G.muted }}>Speța: </span><Mascat text={prev.intrebare}/></div>}
     <div style={{ color:G.muted, fontSize:12, marginTop:8 }}>
       {nume.stare === 'incarca' ? 'Se încarcă lista de nume din platformă… ' : faraLista
-        ? 'Lista de nume din platformă nu se poate citi din contul tău: aici se ascund doar tiparele și ce marchezi tu; pe server se ascund în plus numele din platformă. '
+        ? 'Lista de nume din platformă nu se poate citi din contul tău: aici se ascund doar tiparele și ce marchezi tu. '
         : ''}
-      Nu prinde: nume necunoscute platformei scrise fără „dl.”, „ing.”, „colegul” în față, porecle, inițiale, nume scrise cu literă mică, un prenume care e și cuvânt obișnuit scris singur („Ion”), firme fără SRL / SA și necunoscute platformei, adrese. Rămân vizibile intenționat: localitățile, operatorii de rețea și instituțiile publice (Transgaz, Delgaz, ANRE …) și Gazpet.
+      {IN_AFARA_CONTRACTULUI} Rămân vizibile intenționat: localitățile, operatorii de rețea și instituțiile publice (Transgaz, Delgaz, ANRE …) și Gazpet.
     </div>
     {cuAtasamente && <div style={{ color:G.yellow, fontSize:12, marginTop:6 }}>
       📎 Atașamentele rămân în ERP pentru colegi, dar NU se trimit la AI: numele din ele nu pot fi ascunse sigur. Scrie în speță ce e important din ele.</div>}
   </div>
 }
 
-// Textul mascat, cu etichetele evidențiate (ce ar pleca la AI).
+// Textul mascat, cu etichetele evidențiate (previzualizarea orientativă).
 function Mascat({ text }) {
   return <span style={{ whiteSpace:'pre-wrap' }}>{bucatiMascate(text).map((b, i) => b.t === 'eticheta'
     ? <span key={i} style={{ background:'#3D2E00', color:G.yellow, borderRadius:4, padding:'0 3px', fontFamily:'monospace', fontSize:12 }}>{b.v}</span>

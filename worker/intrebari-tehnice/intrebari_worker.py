@@ -33,10 +33,14 @@ Din 13.11.2026 (deciziile owner-ului A și B, docs/intrebari/MASCARE_SI_VERDICT.
      (PDF / poze) NU mai pleacă: numele din ele nu pot fi ascunse sigur. Demascarea se face DOAR pe textul afișat (raspuns_md);
      jurnalul primește doar numărul de înlocuiri (contoare), niciodată valorile.
      r2 (review PR #1086): garda cere ca textul mascat să fie produs de mascarea ACESTEI spețe (Mascare.a_produs); demascarea e
-     strictă (Mascare.demascheaza_sigur — orice „aproape etichetă” rămasă oprește publicarea, nimic nu se repară tăcut); lista de
+     strictă (demascheaza_sigur din motor — orice „aproape etichetă” rămasă oprește publicarea, nimic nu se repară tăcut); lista de
      nume vine din toate registrele de terți (edge, logic.js SURSE_NUME); entitățile publice vizibile = nemascate.json.
-  B. „Da” / „Nu” doar cu un citat identic cu o propoziție întreagă a unei surse (cercetare.aplica_regula_b, r3); altfel „Incert”, iar
+  B. „Da” / „Nu” doar cu un citat identic cu o propoziție întreagă și de sine stătătoare a unei surse; altfel „Incert”, iar
      sursele consultate se salvează alăturate.
+  r4 (PR #1086, după review-ul r3): TOATE regulile (mascarea, învățarea / propagarea, etichetele, demascarea, regula B) stau într-UN
+     SINGUR motor JavaScript (src/intrebariMascare.js, același cu previzualizarea din ecran), chemat prin motor.py: un proces Node
+     pe speță, verificat cu motor_manifest.json la pornire. Aici rămâne doar orchestrarea (ce se trimite, ce se publică). Orice
+     eroare a motorului (MotorEroare) → nicio cerere nouă către model și nimic publicat (eroare vizibilă, cod în jurnal).
 
 Reguli (fișa în migrări): întrebarea, atașamentele, extrasele și paginile web sunt DATE pentru model, nu instrucțiuni; singura
 unealtă e căutarea web pe domeniile oficiale (server-side, la Anthropic); workerul nu execută nimic din conținut, nu trimite mail,
@@ -48,7 +52,7 @@ necunoscut (L22).
 import datetime, json, os, pathlib, sys, time, urllib.error, urllib.request
 
 import cercetare as C
-import mascare as M
+import motor as MO
 
 EDGE = 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/intrebari-tehnice-worker'
 API = 'https://api.anthropic.com/v1/messages'
@@ -153,11 +157,11 @@ CHEI_CERERE = frozenset(('model', 'max_tokens', 'system', 'messages', 'tools'))
 def garda_cerere(corp, mascare):
     """Garda (decizia A, pct. 2): verificată în COD, la fiecare apel, nu prin convenție. Trece doar o cerere cu cheile cunoscute,
     un model și un prompt de sistem din listele fixe (constantele noastre, aceleași obiecte), unealta web standard sau niciuna, și
-    mesaje al căror conținut e EXACT de tip mascare.TextMascat (un text construit după mascare — concatenat, tăiat, formatat — e
-    str simplu și pică; un bloc de document / imagine pică) ȘI produs de mascarea ACESTEI spețe (r2, review P2-5:
-    mascare.a_produs — un str.__new__(TextMascat, …) sau textul mascat al altei spețe pică). Limita: e o gardă împotriva
+    mesaje al căror conținut e EXACT de tip motor.TextMascat (un text construit după mascare — concatenat, tăiat, formatat — e
+    str simplu și pică; un bloc de document / imagine pică) ȘI produs de sesiunea motorului pentru ACEASTĂ speță (r2, review P2-5:
+    Sesiune.a_produs — un str.__new__(TextMascat, …) sau textul mascat al altei spețe pică). Limita: e o gardă împotriva
     greșelilor de program, nu împotriva unui cod rău-intenționat din același proces. Ridică GardaMascare."""
-    if not isinstance(mascare, M.Mascare): raise GardaMascare('mascare')
+    if not isinstance(mascare, MO.Sesiune): raise GardaMascare('mascare')
     if not isinstance(corp, dict) or not set(corp) <= CHEI_CERERE: raise GardaMascare('chei')
     if corp.get('model') not in MODELE: raise GardaMascare('model')
     if type(corp.get('max_tokens')) is not int: raise GardaMascare('max_tokens')
@@ -167,7 +171,7 @@ def garda_cerere(corp, mascare):
     if not isinstance(mesaje, list) or not mesaje: raise GardaMascare('messages')
     for m in mesaje:
         if not isinstance(m, dict) or set(m) != {'role', 'content'} or m['role'] not in ('user', 'assistant'): raise GardaMascare('mesaj')
-        if type(m['content']) is not M.TextMascat: raise GardaMascare('nemascat')
+        if type(m['content']) is not MO.TextMascat: raise GardaMascare('nemascat')
         if not mascare.a_produs(m['content']): raise GardaMascare('provenienta')
 
 
@@ -188,7 +192,7 @@ def cere(cheie, mascare, model, max_tokens, system, mesaje, tools=None):
 
 def trimite_http(cheie, corp):
     """(status, corp). status None = rezultat INCERT (timeout / rețea după trimitere): costul e necunoscut, nu se reia.
-    Se cheamă DOAR din apel() (testul AST din test_mascare.py verifică)."""
+    Se cheamă DOAR din apel() (testul AST din test_motor.py verifică)."""
     req = urllib.request.Request(API, data=json.dumps(corp).encode('utf-8'), method='POST',
                                  headers={'content-type': 'application/json', 'x-api-key': cheie, 'anthropic-version': '2023-06-01'})
     try:
@@ -200,32 +204,54 @@ def trimite_http(cheie, corp):
         return None, {}
 
 
-def proceseaza(secret, cheie, q, corpus, vocabular, dictionar):
+MESAJ_MOTOR = 'Eroare internă la ascunderea numelor, deci întrebarea NU a fost trimisă mai departe. Pune întrebarea din nou mai târziu.'
+
+
+def scrie_rezultat(secret, corp):
+    """Scrierea rezultatului se reîncearcă (max 3, fără să repete apelul AI); 409 = preluarea nu mai e a noastră."""
+    st = None
+    for i in range(3):
+        st, _ = edge(secret, corp)
+        if st in (200, 400, 409): return st
+        time.sleep(5 * (i + 1))
+    return st
+
+
+def tokeni_rezultat(total, incert=False):
+    t = dict(total)
+    if incert or (not t.get('input_tokens') and t.get('apeluri')): t['cost_necunoscut'] = True
+    return t or None
+
+
+def proceseaza(secret, cheie, q, corpus, vocabular, motor, nume):
+    """O speță. `motor` = motor.Motor (instalarea verificată), `nume` = răspunsul „nume” al edge-ului (dicționarul, neatins).
+    r4: orice MotorEroare (oriunde în flux) → eroare vizibilă, fără nicio cerere nouă către model și fără răspuns publicat; în
+    jurnal doar codul. Procesul motorului se închide la final, oricum s-ar termina."""
+    total, trimise, sesiune = {}, [], []
+    try:
+        return _proceseaza(secret, cheie, q, corpus, vocabular, motor, nume, total, trimise, sesiune)
+    except MO.MotorEroare as e:
+        tokeni = tokeni_rezultat(total)
+        corp = {'actiune': 'eroare', 'id': q['id'], 'incercare': q['incercare'], 'eroare': MESAJ_MOTOR, 'interogari': list(trimise)}
+        if tokeni: corp['tokeni'] = tokeni
+        st = scrie_rezultat(secret, corp)
+        jurnal(id=q['id'], stare='eroare', scriere=st, tokeni=tokeni, cautari=len(trimise), motiv='motor', detaliu=e.cod)
+    finally:
+        for s in sesiune: s.inchide()
+
+
+def _proceseaza(secret, cheie, q, corpus, vocabular, motor, nume, total, trimise, sesiune):
     t0, qid, inc = time.time(), q['id'], q['incercare']
-    total = {}            # consumul tuturor apelurilor acestei preluări (web + răspuns + reparare)
-    # Decizia A: tabelul etichetă → nume trăiește DOAR în acest obiect, în memorie, pe durata preluării. Titlul, speța, contextul se
-    # maschează primele, în această ordine (aceeași ca previzualizarea din ecran) → etichete stabile pe toată speța.
-    masc = M.Mascare(dictionar)
-    # r3 (review P2-4): un nume recunoscut în oricare dintre ele se ascunde în toate (și în titlul mascat înaintea contextului)
-    masc.invata(q.get('titlu'), q.get('intrebare'), q.get('context'))
-    qm = {'titlu': str(masc.mascheaza(q.get('titlu'), protejeaza=False)),
-          'intrebare': str(masc.mascheaza(q.get('intrebare'), protejeaza=False)),
-          'context': str(masc.mascheaza(q.get('context'), protejeaza=False)) if q.get('context') else None}
+    # total = consumul tuturor apelurilor acestei preluări (web + răspuns + reparare); trimise = interogările EFECTIV trimise la
+    # web_search — ajung în BD și la erori (audit)
     n_atasamente = len(q.get('atasamente') or [])
     def de_jurnal():   # despre mascare, în jurnal intră DOAR numere
-        return {'mascate': masc.contoare(), 'inlocuiri': masc.inlocuiri, 'atasamente_netrimise': n_atasamente}
+        c = sesiune[0].contoare_sigure() if sesiune else {}
+        return {'mascate': c.get('contoare'), 'inlocuiri': c.get('inlocuiri'), 'atasamente_netrimise': n_atasamente}
     def tok(incert=False):
-        t = dict(total)
-        if incert or (not t.get('input_tokens') and t.get('apeluri')): t['cost_necunoscut'] = True
-        return t or None
-    def scrie(corp):   # scrierea rezultatului se reîncearcă (max 3, fără să repete apelul AI); 409 = preluarea nu mai e a noastră
-        st = None
-        for i in range(3):
-            st, _ = edge(secret, corp)
-            if st in (200, 400, 409): return st
-            time.sleep(5 * (i + 1))
-        return st
-    trimise = []          # interogările EFECTIV trimise la web_search — ajung în BD și la erori (audit)
+        return tokeni_rezultat(total, incert)
+    def scrie(corp):
+        return scrie_rezultat(secret, corp)
     def eroare(mesaj, tokeni=None, **k):   # tokenii (sau „necunoscut”) ajung în BD și la erori — evidența costului (review r2 P1-2)
         corp = {'actiune': 'eroare', 'id': qid, 'incercare': inc, 'eroare': mesaj, 'interogari': list(trimise)}
         if tokeni: corp['tokeni'] = tokeni
@@ -248,6 +274,16 @@ def proceseaza(secret, cheie, q, corpus, vocabular, dictionar):
         mesaj = 'Limita lunară a contului API a fost atinsă' if 'credit' in brut or 'billing' in brut else f'Răspunsul AI a eșuat (HTTP {status})'
         # 4xx de validare/credit = respins înainte de generare; 5xx = incert (review r3 P2-4)
         return eroare(mesaj, tokeni=tok(incert=status >= 500), http=status, motiv=tip or 'http', faza=faza)
+
+    # Decizia A: tabelul etichetă → nume trăiește DOAR în procesul motorului pentru această speță. Titlul, speța, contextul se
+    # maschează primele, în această ordine (aceeași ca previzualizarea din ecran) → etichete stabile pe toată speța.
+    masc = motor.sesiune(nume)
+    sesiune.append(masc)
+    # r3 (review P2-4): un nume recunoscut în oricare dintre ele se ascunde în toate (și în titlul mascat înaintea contextului)
+    masc.invata(q.get('titlu'), q.get('intrebare'), q.get('context'))
+    qm = {'titlu': str(masc.mascheaza(q.get('titlu'), protejeaza=False)),
+          'intrebare': str(masc.mascheaza(q.get('intrebare'), protejeaza=False)),
+          'context': str(masc.mascheaza(q.get('context'), protejeaza=False)) if q.get('context') else None}
 
     # modelul și extrasele se aleg LOCAL, pe textul original (nu pleacă nicăieri)
     model = C.alege_model(q.get('titlu'), q.get('intrebare'), q.get('context'))
@@ -309,9 +345,9 @@ def proceseaza(secret, cheie, q, corpus, vocabular, dictionar):
         return eroare('Răspunsul AI a fost gol sau prea lung.', motiv='lungime', tokeni=tok())
 
     # 4. validare (în spațiul MASCAT: textul modelului față de sursele mascate) → o singură reparare → ce rămâne fără sursă se
-    # scoate → regula B: „Da” / „Nu” doar cu un citat identic cu o propoziție întreagă a sursei, altfel „Incert”
+    # scoate → regula B (motorul): „Da” / „Nu” doar cu un citat identic cu o propoziție întreagă și autonomă, altfel „Incert”
     analiza, reparat = C.analizeaza(text, surse_m), False
-    fara_citat = C.cere_citat(text, surse_m)
+    fara_citat = masc.cere_citat(text, surse_m)
     if (not analiza['verdict'] or analiza['fara_sursa'] or analiza['necunoscute'] or fara_citat
             or (not analiza['temei'] and not C.e_incert(text))):
         st2, r2 = cere(cheie, masc, model, MAX_TOKENS, C.SISTEM_RASPUNS,
@@ -323,9 +359,10 @@ def proceseaza(secret, cheie, q, corpus, vocabular, dictionar):
         elif st2 is None or st2 >= 500:
             total['cost_necunoscut'] = True   # repararea a eșuat incert; răspunsul inițial merge mai departe, curățat
     final, scoase = C.curata_raspuns(text, surse_m)
-    final, regula_b = C.aplica_regula_b(final, surse_m)
+    final, regula_b, tip_final = masc.regula_b(final, surse_m)
+    incert = tip_final == 'incert' if tip_final is not None else C.e_incert(final)
     # la „Incert” TOATE sursele consultate se salvează alăturate (regula B); la „Da” / „Nu” doar cele citate
-    ids_salvate = ids if C.e_incert(final) else C.analizeaza(final, surse_m)['citate']
+    ids_salvate = ids if incert else C.analizeaza(final, surse_m)['citate']
     try:   # verificarea finală pe setul care se persistă (P2 r2): nu se publică un set de surse invalid
         surse_finale = C.verifica_surse_finale(C.surse_citate(surse, ids_salvate), ids)
     except ValueError:
@@ -349,7 +386,7 @@ def proceseaza(secret, cheie, q, corpus, vocabular, dictionar):
     jurnal(id=qid, stare='raspuns' if st == 200 else f'scriere_{st}', model=r.get('model'), tokeni=tokeni, sec=round(time.time() - t0, 1),
            extrase=len(extrase), surse_web=len(web), interogari=len(interogari), termeni_aruncati=aruncati, cautari=len(trimise),
            cautari_ignorate=ignorate, cautari_cu_nume=cu_nume, vocabular=vocabular['versiune'], citate=len(surse_finale),
-           reparat=reparat, scoase=scoase, incert=C.e_incert(final), regula_b=regula_b, **de_jurnal())
+           reparat=reparat, scoase=scoase, incert=incert, regula_b=regula_b, **de_jurnal())
 
 
 def incarca_corpus(index_file=None, manifest_file=None):
@@ -374,13 +411,27 @@ def incarca_vocabular(vocabular_file=None):
         return None
 
 
-def incarca_dictionar(secret):
+def incarca_motor():
+    """r4: instalarea VERIFICATĂ a motorului unic (motor.Motor: manifest sha256, instantaneu, Node 24, salutul procesului). Codul
+    erorii (MotorEroare) sau motorul — fără motor workerul NU preia nimic (fail closed)."""
+    try:
+        return MO.Motor()
+    except MO.MotorEroare as e:
+        return e.cod
+    except Exception:
+        return 'motor_exceptie'
+
+
+def incarca_nume(secret, motor):
     """Numele din platformă pentru mascare (edge, acțiunea „nume”): DOAR în memorie, nu se scriu pe disc și nu pleacă la furnizor.
-    None dacă edge-ul nu răspunde, e o versiune fără „nume” sau forma e greșită — atunci workerul NU preia nimic (fail closed: fără
-    listă, numele cunoscute platformei ar pleca nemascate)."""
+    (răspunsul, statisticile) dacă motorul îl acceptă (o sesiune de probă: forma, listele, persoanele nevide — regulile stau în
+    motor); None dacă edge-ul nu răspunde, e o versiune fără „nume” sau motorul îl refuză — atunci workerul NU preia nimic (fail
+    closed: fără listă, numele cunoscute platformei ar pleca nemascate)."""
     try:
         st, r = edge(secret, {'actiune': 'nume'})
-        return M.Dictionar.din_raspuns(r) if st == 200 else None
+        if st != 200 or not isinstance(r, dict): return None
+        with motor.sesiune(r) as s:
+            return r, s.statistici
     except Exception:
         return None
 
@@ -393,6 +444,7 @@ def main():
         msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
     except OSError:
         f.close(); return 0   # altă rulare e în curs
+    motor = None
     try:
         # P2 r2: corpusul (verificat cu manifestul) și cheia API se încarcă ÎNAINTE de „preia” — un index lipsă/stricat/nepotrivit
         # sau o cheie lipsă nu consumă întrebări: ele rămân în coadă până se repară serverul.
@@ -402,20 +454,24 @@ def main():
         vocabular = incarca_vocabular()
         if vocabular is None:
             jurnal(stare='vocabular_invalid'); return 1
+        motor = incarca_motor()   # r4: motorul unic verificat (manifest + Node 24) ÎNAINTE de orice preluare
+        if not isinstance(motor, MO.Motor):
+            jurnal(stare='motor_invalid', cod=motor); return 1
         secret = SECRET_FILE.read_text(encoding='utf-8').strip()
         if len(secret) != 64: raise RuntimeError('secret')
         cheie = cheie_api()
-        dictionar = incarca_dictionar(secret)   # decizia A: fără lista de nume nu se preia nimic (întrebările rămân în coadă)
-        if dictionar is None:
+        nume = incarca_nume(secret, motor)   # decizia A: fără lista de nume nu se preia nimic (întrebările rămân în coadă)
+        if nume is None:
             jurnal(stare='nume_indisponibile'); return 1
-        jurnal(stare='nume_incarcate', **dictionar.statistici())   # r3 (L20): doar numere — câte nume și câte intrări aruncate
+        nume, statistici = nume
+        jurnal(stare='nume_incarcate', **statistici)   # r3 (L20): doar numere — câte nume și câte intrări aruncate
         for _ in range(MAX_PE_RULARE):
             st, r = edge(secret, {'actiune': 'preia'})
             if st != 200: jurnal(stare='preia_esuat', http=st); return 1
             q = r.get('intrebare')
             if not q: return 0
             try:
-                proceseaza(secret, cheie, q, corpus, vocabular, dictionar)
+                proceseaza(secret, cheie, q, corpus, vocabular, motor, nume)
             except Exception as e:   # neprevăzut: se închide cu eroare vizibilă; BD închide oricum după 30 min
                 jurnal(id=q.get('id'), stare='exceptie', eroare=type(e).__name__)
                 try: edge(secret, {'actiune': 'eroare', 'id': q['id'], 'incercare': q['incercare'], 'eroare': 'Eroare internă la procesare. Pune întrebarea din nou.'})
@@ -425,6 +481,7 @@ def main():
         jurnal(stare='exceptie_rulare', eroare=type(e).__name__)   # doar tipul: fără text care ar putea conține date
         return 1
     finally:
+        if isinstance(motor, MO.Motor): motor.inchide()   # r4: instantaneul motorului se șterge
         try: msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
         except OSError: pass
         f.close()

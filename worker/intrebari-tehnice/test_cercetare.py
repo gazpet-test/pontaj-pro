@@ -12,68 +12,42 @@ INTEROGARI = json.loads((AICI / 'teste_interogari.json').read_text(encoding='utf
 NORMATIVE = json.loads((AICI / 'teste_normative.json').read_text(encoding='utf-8'))
 VOC_BRUT = json.loads((AICI / 'vocabular_web.json').read_text(encoding='utf-8'))
 VOC = c.pregateste_vocabular(VOC_BRUT)
-REGULA_B = json.loads((AICI / 'teste_regula_b.json').read_text(encoding='utf-8'))
-
-
 class RegulaB(unittest.TestCase):
-    """Decizia owner-ului 13.11.2026 (B; r3): Da / Nu doar cu citat IDENTIC cu o propoziție întreagă; altfel Incert. Aceleași cazuri în vitest."""
+    """r4: regula B stă DOAR în motorul unic (src/intrebariMascare.js); cazurile ei sunt în teste_motor.json (vitest, procesul Node
+    real din test_motor.py, browser). Aici: Python nu mai are nicio bucată din ea, promptul o spune, extrasele își declară marginile."""
 
-    def test_cazuri_comune_cu_vitest(self):
-        for caz in REGULA_B['cazuri']:
-            with self.subTest(caz['nume']):
-                text, motiv = c.aplica_regula_b(caz['text'], REGULA_B['surse'])
-                self.assertEqual(motiv, caz['motiv'])
-                self.assertEqual(text.split('\n')[0], caz['prima_linie'])
-                self.assertEqual(text.split('\n')[1:], caz['text'].split('\n')[1:])     # doar prima linie se poate schimba
-                self.assertEqual(c.cere_citat(caz['text'], REGULA_B['surse']), caz['cere_citat'])
-                self.assertIn(c.tip_verdict(text), ('da', 'nu', 'incert', None))        # după regulă: doar trei verdicte
-
-    def test_mutant_prag_90_lasa_da_rasturnat(self):
-        """r3 (review P1-2): vechea regulă („≥ 90% din cuvintele citatului, în ordine, într-o propoziție”) lăsa „Da” / „Nu” pe cazurile
-        marcate `mutant_prag_trece` (exclus → inclus, minimă → maximă, înainte → după, alt cuvânt) — testul comun de mai sus le prinde
-        DOAR prin identitate (mutantul înlocuiește citat_sustinut cu pragul de 90%)."""
-        def lcs(a, b):
-            prev = [0] * (len(b) + 1)
-            for x in a:
-                cur = [0]
-                for j, y in enumerate(b): cur.append(prev[j] + 1 if x == y else max(prev[j + 1], cur[j]))
-                prev = cur
-            return prev[-1]
-
-        def prag_90(citat, ids, harta):
-            q = c.CUVINTE_CITAT.findall(c.forma_citat(citat))
-            if len(q) < c.CITAT_MIN_CUVINTE: return False
-            return any(lcs(q, c.CUVINTE_CITAT.findall(c.forma_citat(p))) >= 0.9 * len(q)
-                       for i in ids if i in harta for p in c.propozitii_citat(harta[i].partition('\n')[2]))
-        vechi = c.citat_sustinut
-        try:
-            c.citat_sustinut = prag_90
-            marcate = [k for k in REGULA_B['cazuri'] if k.get('mutant_prag_trece')]
-            self.assertGreaterEqual(len(marcate), 6)
-            for caz in marcate:
-                with self.subTest(caz['nume']):
-                    self.assertEqual(c.aplica_regula_b(caz['text'], REGULA_B['surse'])[1], 'citat')
-        finally:
-            c.citat_sustinut = vechi
-
-    def test_forma_si_propozitiile_comune_cu_vitest(self):
-        for intrare, forma in REGULA_B['forme']:
-            self.assertEqual(c.forma_citat(intrare), forma, intrare)
-        for k in REGULA_B['propozitii']:
-            self.assertEqual(c.propozitii_citat(k['text']), k['propozitii'], k['text'])
-
-    def test_fara_praguri_si_fara_liste_de_cuvinte(self):
-        """r3: regula nu mai are prag de 90% și nici liste de negații / modale care să decidă."""
-        for nume in ('CITAT_PRAG', 'INVERSOARE_NEGATIE', 'INVERSOARE_MODAL', '_aliniere', '_lcs'):
+    def test_python_nu_mai_are_regula_b(self):
+        for nume in ('aplica_regula_b', 'cere_citat', 'are_citat', 'citat_sustinut', 'forma_citat', 'propozitii_citat', 'tip_verdict',
+                     'CITAT', 'CITAT_MIN_CUVINTE', 'INCERT_REGULA_B', 'SEPARATOR_CITAT', 'CUVINTE_CITAT', 'CITAT_PRAG'):
             self.assertFalse(hasattr(c, nume), nume)
-        self.assertEqual(c.CITAT_MIN_CUVINTE, 6)
 
     def test_promptul_spune_regula(self):
         self.assertIn('„Da” sau „Nu” DOAR dacă o propoziție întreagă dintr-o sursă din <surse> spune acel lucru', c.SISTEM_RASPUNS)
         self.assertIn('copiată EXACT, de la începutul propoziției până la punct', c.SISTEM_RASPUNS)
+        self.assertIn('de sine stătătoare', c.SISTEM_RASPUNS)
         self.assertIn('Citat [C1]:', c.SISTEM_RASPUNS)
         self.assertIn('[PERSOANA_1]', c.SISTEM_RASPUNS)
         self.assertNotIn('sau „Depinde de …” (ex.', c.SISTEM_RASPUNS)
+
+    def test_marginile_extraselor(self):
+        """r4 (regula B: context tăiat la marginea extrasului → Incert): o bucată de corpus are margini sigure doar dacă nu e o
+        felie a unui paragraf prea lung (BUCATA_MAX din scripts/intrebari/corpus.mjs) și nu e tăiată la EXTRAS_MAX."""
+        corpus_mjs = (AICI.parent.parent / 'scripts/intrebari/corpus.mjs').read_text(encoding='utf-8')
+        self.assertIn(f'export const BUCATA_MAX = {c.BUCATA_MAX}', corpus_mjs)
+        lung = ('sudura conducta otel ' * 100)[:c.BUCATA_MAX]
+        self.assertEqual(len(lung), c.BUCATA_MAX)
+        p = c.pregateste_index({'bucati': [
+            {'cale': 'docs/a.md', 'titlu': 'A', 'text': 'Sudura se face de sudori autorizati.'},
+            {'cale': 'docs/b.md', 'titlu': 'B', 'text': lung},
+            {'cale': 'docs/b.md', 'titlu': 'B', 'text': 'sudura continuare a paragrafului lung.'}]})
+        self.assertEqual([(b['inceput_sigur'], b['sfarsit_sigur']) for b in p['bucati']], [(True, True), (True, False), (False, True)])
+        e = c.selecteaza_extrase(p, 'sudura')
+        self.assertTrue(all(isinstance(x['inceput_sigur'], bool) and isinstance(x['sfarsit_sigur'], bool) for x in e))
+        self.assertEqual({x['cale']: (x['inceput_sigur'], x['sfarsit_sigur']) for x in e if x['cale'] == 'docs/a.md'}, {'docs/a.md': (True, True)})
+        w = c.surse_web([{'type': 'text', 'citations': [{'type': 'web_search_result_location', 'url': 'https://anre.ro/a', 'title': 'T',
+                                                          'cited_text': 'Text.'}]}])
+        self.assertEqual((w[0]['inceput_sigur'], w[0]['sfarsit_sigur']), (False, False))   # fragmentele web: tăiate mereu
+        self.assertEqual(c.surse_citate(e + w, [x['id'] for x in e + w])[0].keys() & {'inceput_sigur', 'sfarsit_sigur'}, set())
 
 
 class Validare(unittest.TestCase):

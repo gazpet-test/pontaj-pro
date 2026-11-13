@@ -1,0 +1,25 @@
+{
+  "_despre": "„Întreabă echipa”, mascarea numelor r4 (PR #1086): cuvintele OBIȘNUITE care pot fi și componente de nume din dicționarul platformei (litere grecești, culori, luni, cuvinte des folosite în numele de firme). O componentă din această listă (sau din vocabular_web.json, sau din listele scurte din motor) e „comună”: SINGURĂ, fără context identificator, rămâne vizibilă — „Alfa este coeficientul”, „Romane sunt aceste norme”. Context = formă juridică alături, „SC” în față, titlu („dl.”), alt nume din dicționar lipit de ea sau numele întreg apărut deja în speță. Listă ÎNCHISĂ: ce nu e aici e tratat ca nume distinctiv (se ascunde și singur). Cuvinte cu litere mici, fără diacritice. Citită DOAR de src/intrebariMascare.js (motorul unic); schimbarea ei = PR (manifestul motorului se reface).",
+  "cuvinte": [
+    "alfa", "alpha", "beta", "gama", "gamma", "delta", "epsilon", "zeta", "eta", "teta", "theta", "iota", "kapa", "kappa", "lambda",
+    "miu", "niu", "omicron", "sigma", "tau", "ipsilon", "upsilon", "phi", "chi", "psi", "omega",
+    "roman", "romana", "romani", "romanesc", "romaneasca", "latin", "latina",
+    "mare", "mari", "mic", "mica", "mici", "micu", "lung", "lungu", "scurt", "scurtu", "gros", "grosu", "nou", "noua", "noi", "vechi",
+    "bun", "buna", "bunu", "rau", "dulce", "acru", "verde", "rosu", "rosie", "negru", "neagra", "alb", "alba", "albu", "albastru",
+    "galben", "sur", "suru", "cenusiu",
+    "ion", "ioni", "atom", "mai", "iunie", "iulie", "august", "tot", "toma", "craciun", "pasti", "duminica", "luni", "marti", "joi",
+    "vineri", "sambata",
+    "lup", "lupu", "urs", "ursu", "vulpe", "vulpea", "corb", "porumb", "soare", "luna", "stea", "munte", "muntele", "deal", "dealul",
+    "vale", "valea", "lunca", "padure", "codru", "camp", "campul", "lac", "lacul", "izvor", "piatra", "nisip", "lemn", "fier",
+    "aur", "argint", "cupru", "otel", "marin", "marina", "bucur", "preda", "sora", "frate", "fratele", "domnu", "voda",
+    "nord", "sud", "est", "vest", "centru", "centrul", "central", "centrala", "general", "generala", "national", "nationala",
+    "regional", "local", "locala", "standard", "normal", "normala", "total", "totala", "final", "finala", "unic", "unica",
+    "prim", "prima", "primul", "optim", "optima", "maxim", "maxima", "minim", "minima", "rapid", "rapida", "solid", "solida",
+    "expert", "perfect", "super", "mega", "max", "best", "top", "star", "nova", "terra", "agro", "auto", "moto", "eco", "bio",
+    "geo", "hidro", "electro", "termo", "tehno", "metal", "metalic", "industrial", "industriala", "comercial", "comerciala",
+    "tehnic", "tehnica", "proiect", "design", "consult", "serv", "service", "servicii", "prod", "impex", "trans", "construct",
+    "constructii", "instal", "grup", "group", "energy", "energie", "gaz", "gaze", "apa", "canal", "drum", "pod", "casa", "bloc",
+    "norma", "norme", "lege", "legea", "ordin", "cod", "codul", "aviz", "proba", "sudura", "teava", "conducta", "retea", "post",
+    "statie", "punct"
+  ]
+}
