@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ProbeTerenMobil from './ProbeTerenMobil.jsx'
 import { MeteoBadge } from './Meteo.jsx'
+import MeteoZiXweather from './MeteoZiXweather.jsx'
 import { combinaUtilaje } from './raportUtilaje.js'
 import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, antetImplicit } from './raportDistributie.js'
 import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
@@ -629,6 +630,8 @@ function RaportZilnic({ profile, sites, onBack }) {
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         {siteId && <div style={{ marginTop: 8 }}><MeteoBadge siteId={siteId} /></div>}
+        {/* vremea ZILEI raportului (20261221a): rezumatul Vaisala Xweather, preluat automat după miezul nopții; nimic de completat */}
+        {siteId && <MeteoZiXweather siteId={siteId} data={dataRaport} compact />}
       </div>
 
       {siteId && (loadingData ? (
