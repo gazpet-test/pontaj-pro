@@ -1,7 +1,8 @@
 // ════════════════════════════════════════════════════════════════
-// ❓ Întreabă echipa — MOTORUL UNIC de mascare și al regulii B (r5, PR #1086; deciziile owner-ului 13.11.2026: A = numele nu pleacă
+// ❓ Întreabă echipa — MOTORUL UNIC de mascare și al regulii B (r6, PR #1086; deciziile owner-ului 13.11.2026: A = numele nu pleacă
 // la furnizor, B = „Da” / „Nu” doar cu citat). Stau aici, o singură dată:
-//   - normalizarea (curata / norm — O SINGURĂ funcție pentru caracterele invizibile, de combinare și formele de compatibilitate);
+//   - normalizarea (curata / norm — O SINGURĂ funcție pentru caracterele invizibile, de combinare și formele de compatibilitate;
+//     r6: și O SINGURĂ reprezentare a textului pe care rulează TOATE etapele de recunoaștere);
 //   - mascarea numelor (dicționarul platformei + tipare), învățarea / propagarea în speță, etichetele, demascarea strictă;
 //   - regula B STRUCTURALĂ (r5): paragrafele sursei, paragraful dintr-o singură propoziție, elementul de listă, citatul = paragraful
 //     întreg.
@@ -27,7 +28,7 @@ import NEMASCATE_JSON from '../worker/intrebari-tehnice/nemascate.json' with { t
 import VOCABULAR_JSON from '../worker/intrebari-tehnice/vocabular_web.json' with { type: 'json' }
 import COMUNE_JSON from '../worker/intrebari-tehnice/cuvinte_comune.json' with { type: 'json' }
 
-export const MOTOR_VERSIUNE = '5.0.0'
+export const MOTOR_VERSIUNE = '6.0.0'
 export const NUME_MAX_LISTA = 200000      // = NUME_MAX_LISTA din supabase/functions/intrebari-tehnice-worker/logic.js (test)
 const U = (...c) => String.fromCharCode(...c)
 const NBSP = U(0xa0)
@@ -35,44 +36,58 @@ const CRATIME = '\\-' + U(0x2010, 0x2011)                              // cratim
 const LINIUTE = U(0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212)
 const RE_CRATIMA = new RegExp(`[${CRATIME}]`, 'u')
 
-// ─── 1. Normalizarea: O SINGURĂ funcție ─────────────────────────────────────────────────────────────────────────────
-// Caracterele care NU contează la recunoaștere: toate semnele de combinare (categoria M — diacritice descompuse, U+034F, selectorii
-// de variantă U+FE00–FE0F și U+E0100–E01EF) și toate caracterele de format (Cf — U+200B, U+00AD, U+FEFF, marcaje de direcție).
-// Recunoașterea rulează pe textul FĂRĂ ele, iar intervalele se pun înapoi pe textul original (ce se înlocuiește e bucata
-// ORIGINALĂ: dus-întorsul rămâne exact).
+// ─── 1. Normalizarea: O SINGURĂ funcție (r6: și O SINGURĂ reprezentare a textului pentru recunoaștere) ──────────────────
+// Reprezentarea de recunoaștere (`curata`): fiecare caracter al textului, pe rând, descompus de COMPATIBILITATE (NFKD — literele
+// late „ＳＲＬ” → „SRL”, ligaturile, diacriticele „ș” → „s” + semn), fără semnele de combinare (categoria M — diacritice, U+034F,
+// selectorii de variantă U+FE00–FE0F și U+E0100–E01EF) și fără caracterele de format (Cf — U+200B, U+00AD, U+FEFF, marcaje de
+// direcție). r6 (review r5 P1): TOATE etapele de recunoaștere (forma juridică despărțită / lipită, „SC”, titlurile, tiparele, CUI-ul,
+// etichetele, separatoarele, flexiunile, componentele) rulează pe ACEASTĂ reprezentare; intervalele găsite se pun înapoi pe textul
+// original prin harta de poziții (ce se înlocuiește e bucata ORIGINALĂ completă: dus-întorsul rămâne exact). Forma de comparare a
+// numelor (`norm`) e aceeași funcție, plus literele mici.
 const ELIMINABIL = /[\p{M}\p{Cf}]/u
-const ARE_ELIMINABIL = /[\p{M}\p{Cf}]/u
+const ASCII = /^[\x00-\x7f]*$/
 const MARCA = /^\p{M}$/u
 
-/** {s: textul fără caracterele M / Cf, idx: poziția în original a fiecărei unități din s (null dacă n-a fost nimic de scos)}. */
+/** {s: reprezentarea de recunoaștere, idx / sf: începutul / sfârșitul în original al caracterului din care vine fiecare unitate din s
+ *  (null = textul e ASCII, s e chiar textul)}. Un caracter descompus în mai multe (ligatura „ﬁ” → „fi”) dă unități cu același
+ *  interval original. */
 export function curata(text) {
   const t = String(text ?? '')
-  if (!ARE_ELIMINABIL.test(t)) return { s: t, idx: null }
+  if (ASCII.test(t)) return { s: t, idx: null, sf: null }
   let s = ''
-  const idx = []
+  const idx = [], sf = []
   for (let i = 0; i < t.length;) {
-    const ch = String.fromCodePoint(t.codePointAt(i))
-    if (!ELIMINABIL.test(ch)) { s += ch; for (let k = 0; k < ch.length; k++) idx.push(i + k) }
-    i += ch.length
+    const cp = t.codePointAt(i)
+    const ch = String.fromCodePoint(cp), n = ch.length
+    if (cp < 0x80) { s += ch; idx.push(i); sf.push(i + 1) }
+    else if (!ELIMINABIL.test(ch)) {
+      for (const c of ch.normalize('NFKD')) {
+        if (ELIMINABIL.test(c)) continue
+        s += c
+        for (let k = 0; k < c.length; k++) { idx.push(i); sf.push(i + n) }
+      }
+    }
+    i += n
   }
-  return { s, idx }
+  return { s, idx, sf }
 }
 
-/** Forma de comparare a numelor: minuscule, descompunere de COMPATIBILITATE (NFKD), fără M / Cf — „Șerban” = „Şerban” = „Serban”
- *  (și forma descompusă); r5: literele late și celelalte forme de compatibilitate („ＶＬĂＤＥＳＣＵ”, ligaturi) = literele obișnuite.
- *  Se folosește DOAR la comparare: ce se înlocuiește e mereu bucata originală (dus-întorsul rămâne exact). */
-export const norm = s => curata(String(s ?? '').normalize('NFKD').toLowerCase().normalize('NFKD')).s
+/** Forma de comparare a numelor: reprezentarea de recunoaștere (curata), cu litere mici — „Șerban” = „Şerban” = „Serban” (și forma
+ *  descompusă); literele late și celelalte forme de compatibilitate („ＶＬĂＤＥＳＣＵ”, ligaturi) = literele obișnuite. A doua trecere
+ *  prinde literele mici care se descompun („İ” → „i̇”). Se folosește DOAR la comparare. */
+export const norm = s => curata(curata(s).s.toLowerCase()).s
 
-/** Intervalul [s, e) din textul curățat → [a, b) în original; semnele de combinare lipite după ultima literă intră și ele. */
-function inapoi(t, idx, s, e) {
-  if (!idx) return [s, e]
-  let b = idx[e - 1] + 1
+/** Intervalul [s, e) din reprezentare → [a, b) în original (caracterele originale întregi); semnele de combinare lipite după ultima
+ *  literă intră și ele. */
+function inapoi(t, r, s, e) {
+  if (!r.idx) return [s, e]
+  let b = r.sf[e - 1]
   while (b < t.length) {
     const ch = String.fromCodePoint(t.codePointAt(b))
     if (!MARCA.test(ch)) break
     b += ch.length
   }
-  return [idx[s], b]
+  return [r.idx[s], b]
 }
 
 // ─── 2. Etichetele ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -91,7 +106,7 @@ const ASEM_GOL = '(?<![A-Za-z0-9\\[_])(?:PERSOANA|FIRMA|CNP|CUI|TELEFON|EMAIL|IB
 // Forma LARGĂ (eticheta „ruptă”): pe textul fără spații albe și caractere invizibile / de combinare, „[” + categoria + separatori
 // + cifre („[PERSOANA_\n999]”, NBSP sau U+200B în ea). Paranteza dreaptă e obligatorie; categoria, fără deosebire de majuscule.
 const LARG = new RegExp('\\[(?:PERSOANA|FIRMA|CNP|CUI|TELEFON|E-?MAIL|IBAN|NR[_.\\-]?AUTO|ASCUNS)[_#.:()\\[\\]' + LINIUTE + '\\-]*[0-9]+', 'gi')
-const INVIZIBIL_LARG = /^[\p{Z}\p{Cc}\p{Cf}\p{M}]$/u
+const ALB_LARG = /^[\p{Z}\p{Cc}]$/u
 
 const toate = (re, t) => [...t.matchAll(re)]
 
@@ -110,20 +125,17 @@ export const eAsemanator = s => {
   return new RegExp(`^(?:${ASEM_PARANTEZE})$`, 'iu').test(t) || new RegExp(`^(?:${ASEM_GOL})$`, 'u').test(t)
 }
 
-/** [[a, b)] în textul original ale aparițiilor LARGI (a = poziția lui „[”). */
+/** [[a, b)] în textul original ale aparițiilor LARGI (a = poziția lui „[”). r6: pe reprezentarea de recunoaștere (curata), din care
+ *  se scot în plus spațiile albe și caracterele de control. */
 export function larg(t) {
+  const r = curata(t)
   let s = ''
   const poz = [], sf = []
-  for (let i = 0; i < t.length;) {
-    const ch = String.fromCodePoint(t.codePointAt(i))
-    if (!INVIZIBIL_LARG.test(ch)) {
-      for (const c of ch.normalize('NFKD')) {
-        if (MARCA.test(c)) continue
-        s += c
-        for (let k = 0; k < c.length; k++) { poz.push(i); sf.push(i + ch.length) }
-      }
-    }
-    i += ch.length
+  for (let k = 0; k < r.s.length; k++) {
+    const c = r.s[k]
+    if (ALB_LARG.test(c)) continue
+    s += c
+    poz.push(r.idx ? r.idx[k] : k); sf.push(r.idx ? r.sf[k] : k + 1)
   }
   return toate(LARG, s).map(m => [poz[m.index], sf[m.index + m[0].length - 1]])
 }
@@ -312,6 +324,10 @@ export class Dictionar {
       }
     this.persoane = new Set()
     this.perechi = new Set()          // două componente ale ACELUIAȘI nume din listă („vladescu” + „ana”)
+    // r6 (review r5 P2): numele din listă, fiecare ca mulțimea componentelor lui, și componenta → numele în care apare
+    this.nume = []
+    this.numeDe = new Map()
+    const vazut = new Set()
     for (const nume of persoane) {
       const comp = new Set()
       for (const m of toate(RE_COMPUS, curata(nume).s))
@@ -323,6 +339,12 @@ export class Dictionar {
       for (const n of comp) this.persoane.add(n)
       const c = [...comp]
       for (let i = 0; i < c.length; i++) for (let j = i + 1; j < c.length; j++) this.perechi.add(cheiePereche(c[i], c[j]))
+      const k = cheiePers(comp)
+      if (vazut.has(k)) continue
+      vazut.add(k)
+      const id = this.nume.length
+      this.nume.push(comp)
+      for (const n of comp) { if (!this.numeDe.has(n)) this.numeDe.set(n, []); this.numeDe.get(n).push(id) }
     }
     const index = new Map()
     this.firmeCuContext = 0
@@ -353,6 +375,12 @@ export class Dictionar {
   comun(c) { return COMUN.has(c) || this.localitati.has(c) }
   /** `a` și `b` sunt componente ale aceluiași nume din listă. */
   pereche(a, b) { return a !== b && this.perechi.has(cheiePereche(a, b)) }
+  /** r6 — componentele `chei` (distincte) aparțin TOATE aceluiași nume din listă (și sunt cel mult câte componente are el). */
+  acelasiNume(chei) {
+    if (new Set(chei).size !== chei.length) return false
+    const cand = this.numeDe.get(chei[0])
+    return !!cand && cand.some(id => chei.every(c => this.nume[id].has(c)))
+  }
   /** O firmă dintr-un singur cuvânt comun / scurt / numeric / localitate cere context (formă juridică, „SC”, numele întreg văzut). */
   firmaComuna(tup) { return tup.length === 1 && (this.comun(tup[0]) || tup[0].length < 4 || /^[0-9]+$/.test(tup[0])) }
   /** r5 — componentă DISTINCTIVĂ de firmă privată (se ascunde și singură, scrisă cu majusculă sau cu formă juridică / „SC” lângă):
@@ -466,7 +494,7 @@ export class Mascare {
   /** [[s, e, categorie, cheie, asemanator, fel]] pe textul CURĂȚAT `t`, fără suprapuneri; prioritatea = ordinea de mai jos.
    *  `fel` (doar pentru învățare): 'firma_lista' = firma ÎNTREAGĂ din dicționar, 'nume_intreg' = două componente ale aceleiași
    *  persoane din listă, null = restul. */
-  detecteaza(t, protejeaza) {
+  detecteaza(t, protejeaza, exact = () => true) {
     const luate = [], out = []
     const ocupat = (s, e) => luate.some(([a, b]) => s < b && a < e)
     const adauga = (s, e, cat, cheie, asem = false, fel = null) => {
@@ -476,7 +504,7 @@ export class Mascare {
       return true
     }
     for (const m of asemanatoare(t)) {                    // 1. etichetele noastre EXACTE rămân (textul modelului); restul se ascund
-      if (protejeaza && this.tabel.has(m[0])) adauga(m.index, m.index + m[0].length, null, null)
+      if (protejeaza && this.tabel.has(m[0]) && exact(m.index, m.index + m[0].length)) adauga(m.index, m.index + m[0].length, null, null)
       else adauga(m.index, m.index + m[0].length, 'ASCUNS', m[0], true)
     }
     for (const m of toate(MANUAL, t)) adauga(m.index, m.index + m[0].length, 'ASCUNS', m[0])            // 2. [[ascuns de om]]
@@ -563,20 +591,23 @@ export class Mascare {
         k++
       }
       const [s, e, tok] = simpli[k]
-      let gasit = null, rang = 9          // prioritatea: cuvântul ca atare, apoi fără „SC” lipit, apoi cu forma juridică lipită
+      // r6: varianta care acoperă cel mai mult („VarnitecI.I.” = forma lipită, nu flexiunea „-i” + „.I.” rămas afară); la egalitate,
+      // cea cu context („alfaII” = „Alfa” + „II”, nu flexiunea „-ii”): forma juridică lipită, apoi „SC” lipit, apoi cuvântul ca atare
+      let gasit = null, rang = -1, fin = -1
       for (const v of this.variante(t, s, tok)) {
         if (v.sc && x !== 0) continue
         if (v.forma >= 0 && x !== ultim) continue
         if (!(v.n === tup[x] || (x === ultim && componentaFirma(v.n, tup[x], true) !== null))) continue
-        const r = v.forma >= 0 ? 2 : v.sc ? 1 : 0
-        if (r < rang) { gasit = v; rang = r }
+        const r = v.forma >= 0 ? 2 : v.sc ? 1 : 0, f = v.forma >= 0 ? v.forma : e
+        if (f > fin || (f === fin && r > rang)) { gasit = v; rang = r; fin = f }
       }
       if (!gasit) return null
       if (gasit.sc) context = true
-      if (gasit.forma >= 0) return this.prefixSC(t, start, gasit.forma, true)
+      if (gasit.forma >= 0) { end = gasit.forma; context = true; break }      // forma lipită e ultima componentă
       end = e
     }
-    FORMA_SEPARATA.lastIndex = end                                           // forma juridică despărțită: „Servicii, S.R.L.”
+    // forma juridică despărțită: „Servicii, S.R.L.”; r6: și după o formă lipită („SERVICIIII SRL” = flexiunea / forma „II” + „ SRL”)
+    FORMA_SEPARATA.lastIndex = end
     const f = FORMA_SEPARATA.exec(t)
     if (f && !(FORMA_AMBIGUA.has(f[1]) && f[1] === f[1].toLowerCase())) { end = f.index + f[0].length; context = true }
     return this.prefixSC(t, start, end, context)
@@ -618,20 +649,18 @@ export class Mascare {
       for (const p of parti(tok)) {
         const ps = s + tok.indexOf(p, poz)
         poz = ps - s + p.length
-        let gasit = null                                      // prioritatea: cuvântul ca atare, apoi fără „SC” lipit, apoi cu formă lipită
+        let gasit = null                // r6: varianta care acoperă cel mai mult; la egalitate, cea cu context (formă lipită, „SC” lipit)
         for (const v of this.variante(t, ps, p)) {
           const c = componenta(v.n, this.d.componenteFirma)
-          const rang = v.forma >= 0 ? 2 : v.sc ? 1 : 0
-          if (c !== null && (!gasit || rang < gasit.rang)) gasit = { c, v, rang }
+          const rang = v.forma >= 0 ? 2 : v.sc ? 1 : 0, fin = v.forma >= 0 ? v.forma : e
+          if (c !== null && (!gasit || fin > gasit.fin || (fin === gasit.fin && rang > gasit.rang))) gasit = { c, v, rang, fin }
         }
         if (!gasit) continue
         let end = Math.max(e, gasit.v.forma)
         let context = gasit.v.sc || gasit.v.forma >= 0
-        if (gasit.v.forma < 0) {                              // forma juridică despărțită după componentă („Pelorin, S.R.L.”)
-          FORMA_SEPARATA.lastIndex = e
-          const f = FORMA_SEPARATA.exec(t)
-          if (f && !(FORMA_AMBIGUA.has(f[1]) && f[1] === f[1].toLowerCase())) { end = f.index + f[0].length; context = true }
-        }
+        FORMA_SEPARATA.lastIndex = end                        // forma juridică despărțită după componentă („Pelorin, S.R.L.”; r6: și după una lipită)
+        const f = FORMA_SEPARATA.exec(t)
+        if (f && !(FORMA_AMBIGUA.has(f[1]) && f[1] === f[1].toLowerCase())) { end = f.index + f[0].length; context = true }
         const r = this.prefixSC(t, s, end, context)
         if (!(r.context || areMajuscula(p))) continue
         if (adauga(r.start, r.end, 'FIRMA', this.d.componenteFirma.get(gasit.c), false, null)) break
@@ -752,10 +781,11 @@ export class Mascare {
   }
 
   /** Persoanele din dicționar (contract: forma uzuală și integral cu majuscule, diacritice, flexiuni, cratimă, ambele ordini).
-   *  Cuvintele cunoscute despărțite de SPAȚII formează un nume (până la 4); prin celelalte separatoare ale contractului (virgulă,
-   *  ghilimele, paranteze, &, +) se leagă DOAR două componente ale aceluiași nume din listă („Vlădescu, Ana”) — o enumerare de
-   *  persoane diferite („Ana Vlădescu, Maria Zamfirescu”) rămâne pe etichete diferite. Cel mult un cuvânt necunoscut ÎNTRE două
-   *  cunoscute (al doilea prenume). O componentă COMUNĂ singură, fără context, rămâne vizibilă. */
+   *  r6: cuvintele cunoscute alăturate (spațiile și celelalte separatoare ale contractului: virgulă, ghilimele, paranteze, &, +, /)
+   *  formează un nume DOAR dacă toate componentele lor sunt ale ACELUIAȘI nume din listă („Vlădescu, Ana”); persoane diferite
+   *  alăturate („ana maria vladescu ion mare”, „Ana Vlădescu, Maria Zamfirescu”) primesc etichete diferite. Cel mult un cuvânt
+   *  „Ca Titlu” ÎNTRE două componente ale aceluiași nume (al doilea prenume: necunoscut sau componentă a altui nume). O componentă
+   *  COMUNĂ singură, fără context, rămâne vizibilă. */
   persoaneLista(t, cuv, adauga, ocupat) {
     const info = cuv.map(([s, e, tok]) => {
       const liber = !ocupat(s, e)
@@ -763,7 +793,6 @@ export class Mascare {
     })
     const n = info.length
     const pereche = (a, b) => !!(info[a].c && info[b].c) && info[a].c.chei.some(x => info[b].c.chei.some(y => this.d.pereche(x, y)))
-    const lipit = (a, b) => potriveste(SPATIU, t, info[a].e, info[b].s) || (potriveste(SEP_PERS, t, info[a].e, info[b].s) && pereche(a, b))
     const spatiu = (a, b) => potriveste(SPATIU, t, info[a].e, info[b].s)
     // r5: un cuvânt scris integral mic, care nu e componentă distinctivă, e nume DOAR lângă o altă componentă a ACELEIAȘI persoane din
     // listă (numele întreg, în orice scriere: „zamfirescu maria”, „mare ion”); altfel e un cuvânt obișnuit („mare parte”, „ion”)
@@ -774,23 +803,51 @@ export class Mascare {
     const fara = []
     for (let k = 0; k < n; k++) { const c = info[k].c; if (c && !c.mare && !c.distinct && !interna(c) && !vecinPereche(k)) fara.push(k) }
     for (const k of fara) info[k].c = null
-    let i = 0
-    while (i < n) {
-      if (!info[i].c) { i++; continue }
-      let j = i
-      const chei = [...info[i].c.chei]
-      let intreg = interna(info[i].c)
-      while (j - i < 3) {
-        if (j + 1 < n && info[j + 1].c && lipit(j, j + 1)) { intreg = intreg || pereche(j, j + 1); j++; chei.push(...info[j].c.chei); continue }
-        const mij = info[j + 1]
-        if (j + 2 < n && j + 2 - i <= 3 && mij.liber && !mij.c && info[j + 2].c && spatiu(j, j + 1) && spatiu(j + 1, j + 2)
-            && titluCaz(mij.tok) && !OPRIRE.has(norm(mij.tok)) && !COMUN.has(norm(mij.tok))) {
-          intreg = intreg || pereche(j, j + 2)
-          chei.push(norm(mij.tok), ...info[j + 2].c.chei); j += 2; continue
+    // r6 (review r5 P2): persoanele se DELIMITEAZĂ înaintea grupării. Un grup = cuvinte cunoscute alăturate (plus cel mult un cuvânt
+    // necunoscut între două cunoscute — al doilea prenume) ale căror componente aparțin TOATE aceluiași nume din listă, fiecare o
+    // singură dată (deci cel mult atâtea cuvinte câte componente are numele); după un nume complet începe alt grup. Un cuvânt
+    // singur e mereu un grup (componentele lui pot fi ale unor nume diferite: „Popescu-Ionescu”). Împărțirea unui șir de cuvinte
+    // cunoscute în grupuri: cea care lasă cele mai puține cuvinte vizibile (o componentă comună singură, fără context, rămâne
+    // vizibilă), apoi cea cu cele mai puține grupuri.
+    const grup = (i, j) => {               // [i..j] e un grup valid? → {chei, intreg} sau null
+      if (!info[i].c || !info[j].c) return null
+      const chei = [...info[i].c.chei], cunoscute = [...info[i].c.chei]
+      let mijloc = false
+      for (let k = i; k < j;) {
+        if (info[k + 1].c && potriveste(SEP_PERS, t, info[k].e, info[k + 1].s) && this.d.acelasiNume([...cunoscute, ...info[k + 1].c.chei])) { k++; chei.push(...info[k].c.chei); cunoscute.push(...info[k].c.chei); continue }
+        // al doilea prenume: un cuvânt scris „Ca Titlu” între două componente ale aceluiași nume, despărțit prin spații — necunoscut
+        // (și necomun) sau componentă a ALTUI nume din listă („Ana Gheorghe Vlădescu”, cu „Gheorghe” din alt nume)
+        const mij = info[k + 1]
+        if (!mijloc && k + 2 <= j && mij.liber && info[k + 2].c && spatiu(k, k + 1) && spatiu(k + 1, k + 2) && titluCaz(mij.tok)
+            && !OPRIRE.has(norm(mij.tok)) && (mij.c || !COMUN.has(norm(mij.tok)))) {
+          mijloc = true
+          chei.push(...(mij.c ? mij.c.chei : [norm(mij.tok)]), ...info[k + 2].c.chei); cunoscute.push(...info[k + 2].c.chei); k += 2; continue
         }
-        break
+        return null
       }
-      if (j > i || !info[i].c.comun || intreg) adauga(info[i].s, info[j].e, 'PERSOANA', new Set(chei), false, intreg ? 'nume_intreg' : null)
+      if (i === j) return { chei, intreg: interna(info[i].c) }
+      return this.d.acelasiNume(cunoscute) ? { chei, intreg: true } : null
+    }
+    const MAX = 6                          // cuvinte într-un grup (componentele unui nume + cuvântul din mijloc)
+    const cost = new Array(n + 1).fill(null)
+    const alege = new Array(n).fill(null)
+    cost[n] = [0, 0]
+    for (let i = n - 1; i >= 0; i--) {
+      if (!info[i].c) { cost[i] = cost[i + 1]; continue }
+      let best = null
+      for (let j = i; j < Math.min(n, i + MAX); j++) {
+        const g = grup(i, j)
+        if (!g) continue
+        const vizibil = i === j && info[i].c.comun && !g.intreg ? 1 : 0
+        const c = [vizibil + cost[j + 1][0], 1 + cost[j + 1][1]]
+        if (!best || c[0] < best.c[0] || (c[0] === best.c[0] && c[1] < best.c[1])) best = { c, j, g }
+      }
+      cost[i] = best.c; alege[i] = best
+    }
+    for (let i = 0; i < n;) {
+      if (!info[i].c) { i++; continue }
+      const { j, g } = alege[i]
+      if (j > i || !info[i].c.comun || g.intreg) adauga(info[i].s, info[j].e, 'PERSOANA', new Set(g.chei), false, g.intreg ? 'nume_intreg' : null)
       i = j + 1
     }
   }
@@ -845,10 +902,15 @@ export class Mascare {
   /** Textul cu etichete. `protejeaza = false` la textele scrise de om (o etichetă scrisă de mână se ascunde și ea). */
   mascheaza(text, protejeaza = true) {
     const t = String(text ?? '')
-    const { s: c, idx } = curata(t)
+    const r = curata(t)
+    // o etichetă emisă rămâne neatinsă DOAR dacă e scrisă exact așa în original (nu una cu litere late, care arată la fel în reprezentare)
+    const exact = (s0, e0) => { const [s, e] = inapoi(t, r, s0, e0); return t.slice(s, e) === r.s.slice(s0, e0) }
     let out = '', poz = 0
-    for (const [s0, e0, cat, cheie, asem] of this.detecteaza(c, protejeaza)) {
-      const [s, e] = inapoi(t, idx, s0, e0)
+    for (const [s0, e0, cat, cheie, asem] of this.detecteaza(r.s, protejeaza, exact)) {
+      let [s, e] = inapoi(t, r, s0, e0)
+      // două intervale din același caracter original descompus (o ligatură tăiată între două nume): al doilea începe după primul
+      if (s < poz) s = poz
+      if (e <= s) continue
       const et = this.eticheta(cat, cheie, t.slice(s, e))
       if (asem) (protejeaza ? this.asemMasina : this.asemOm).add(et)
       out += t.slice(poz, s) + et
@@ -946,7 +1008,8 @@ function areDinLista(text, set, expresii) {
 // Elementul de listă (structural, fără alfabete enumerate și fără plafon de lungime): după spațiile și ghilimelele de deschidere
 // („ “ " « ‚ ‘ ' `), paragraful începe cu
 //   - un șir de litere / cifre Unicode (orice capitalizare, cifre romane incluse, fără plafon de lungime) urmat de „)”, sau de „.” /
-//     „:” urmat de spațiu, de sfârșit sau DIRECT de o literă / cifră: „B) ”, „12345) ”, „iv. ”, „Art. ”, „B.Executarea”;
+//     „:” urmat de spațiu, de sfârșit sau DIRECT de o literă: „B) ”, „12345) ”, „iv. ”, „Art. ”, „B.Executarea”, „1.Executarea”
+//     (r6: NU și de o cifră — „6.5 bar …” nu e marcaj);
 //   - „(” + litere / cifre + „)”: „(b)”, „(12)”;
 //   - un semn de listă: U+2022 •, U+2023 ‣, U+2043 ⁃, U+2219 ∙, U+25AA ▪, U+25AB ▫, U+25A0 ■, U+25A1 □, U+25CF ●, U+25CB ○,
 //     U+25E6 ◦, U+25B8 ▸, U+25BA ►, U+00B7 · (punctul median), „*”, „+”, U+2212 − (minus), „§”, ORICE caracter din categoria
@@ -954,7 +1017,7 @@ function areDinLista(text, set, expresii) {
 export const SEMNE_LISTA = U(0x2022, 0x2023, 0x2043, 0x2219, 0x25aa, 0x25ab, 0x25a0, 0x25a1, 0x25cf, 0x25cb, 0x25e6, 0x25b8, 0x25ba, 0xb7, 0x2a, 0x2b, 0x2212, 0xa7)
 const inClasa = s => s.replace(/[\\\]\[\-^*+()]/g, '\\$&')        // caractere puse într-o clasă de caractere
 const DESCHIDERE = new RegExp(`^[\\s${inClasa(U(0x201e, 0x201c, 0x22, 0xab, 0x201a, 0x2018, 0x27, 0x60))}]*`, 'u')
-const MARCAJ_ELEMENT = new RegExp(`^(?:[\\p{L}\\p{M}\\p{N}]+(?:\\)|[.:](?=[\\s\\p{L}\\p{N}]|$))|\\([\\p{L}\\p{M}\\p{N}]+\\)|[\\p{Pd}${inClasa(SEMNE_LISTA)}])`, 'u')
+const MARCAJ_ELEMENT = new RegExp(`^(?:[\\p{L}\\p{M}\\p{N}]+(?:\\)|[.:](?=[\\s\\p{L}]|$))|\\([\\p{L}\\p{M}\\p{N}]+\\)|[\\p{Pd}${inClasa(SEMNE_LISTA)}])`, 'u')
 // sfârșitul unui paragraf, fără spațiile, ghilimelele / parantezele de închidere și semnele de evidențiere de după el
 const INCHIDERE = new RegExp(`[\\s${inClasa(U(0x201d, 0x201c, 0x22, 0xbb, 0x2019, 0x27, 0x29, 0x5d, 0x2a, 0x5f, 0x60))}]*$`, 'u')
 const ultimulSemn = s => String(s ?? '').replace(INCHIDERE, '').slice(-1)

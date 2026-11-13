@@ -32,7 +32,12 @@ describe('motorul unic — cazurile comune (contractul de acoperire, regresiile 
       expect(E.curata('a' + String.fromCodePoint(c) + 'b').s, c.toString(16)).toBe('ab')
     expect(E.norm('ȘERBAN')).toBe('serban')
     expect(E.norm('Ş' + 'erban')).toBe('serban')
-    expect(E.curata('fără nimic de scos').idx).toBe(null)
+    expect(E.curata('fara nimic de scos').idx).toBe(null)                                // ASCII: textul e chiar reprezentarea
+    // r6: aceeași funcție dă reprezentarea de recunoaștere (descompunerea de compatibilitate) și forma de comparare a numelor
+    const r = E.curata('ＶａｒｎｉｔｅｃＳ．Ｒ．Ｌ． și ﬁr')
+    expect(r.s).toBe('VarnitecS.R.L. si fir')
+    expect([r.idx[15], r.sf[15], r.idx[18], r.sf[18], r.idx[19], r.sf[19]]).toEqual([15, 16, 18, 19, 18, 19])  // „ș” → „s”; „ﬁ” → 2 unități
+    for (const x of ['ＶＬĂＤＥＳＣＵ', 'Vlădescu', 'İon', 'ﬁr', 'Șerban', 'Ｓ．Ｃ．']) expect(E.norm(x), x).toBe(E.curata(E.curata(x).s.toLowerCase()).s)
   })
   it('previzualizarea și workerul: același obiect Mascare (o etichetă dată în titlu e stabilă în speță)', () => {
     const p = E.previzualizare({ titlu: 'Mare a cerut avizul', intrebare: 'Cine semnează?', context: 'Ion Mare, diriginte' }, DICT)
@@ -47,6 +52,123 @@ describe('motorul unic — cazurile comune (contractul de acoperire, regresiile 
   })
 })
 
+// ── r6 (review r5 P1): O SINGURĂ reprezentare a textului pentru TOATE etapele de recunoaștere ──
+// Inventarul ÎNCHIS al funcțiilor motorului care aplică o expresie regulată (literal, `new RegExp`, o constantă-expresie, `toate` /
+// `potriveste`), fiecare cu reprezentarea pe care lucrează. O funcție nouă care aplică o expresie pică testul până e clasificată aici.
+const REPREZENTARE = 'reprezentarea de recunoaștere (curata): textul vine din detecteaza'
+const LISTE = 'intrările listelor (dicționar, nemascate.json, cuvinte_comune.json), trecute prin curata / norm'
+const ETICHETE = 'EXCEPȚIE: etichetele emise de motor, căutate EXACT în textul modelului (o etichetă scrisă altfel nu e etichetă → refuz)'
+const REGULA_B = 'EXCEPȚIE: regula B — structura surselor și a răspunsului (paragrafe, marcaje, citate), nu recunoașterea numelor (închisă în r5)'
+const INVENTAR_RECUNOASTERE = {
+  'curata': 'normalizarea însăși (construiește reprezentarea, caracter cu caracter)',
+  'inapoi': 'EXCEPȚIE: harta înapoi spre original — semnele de combinare de după un interval găsit (nu recunoaște nimic)',
+  'asemanatoare': `${REPREZENTARE}; în demascheazaSigur: ${ETICHETE}`,
+  'eAsemanator': 'EXCEPȚIE: predicat folosit doar de teste (motor_cazuri.mjs), pe o etichetă întreagă',
+  'larg': `${REPREZENTARE} (își face singură curata, apoi scoate spațiile albe); în demascheazaSigur: ${ETICHETE}`,
+  'doarCifre': REPREZENTARE, 'majuscula': REPREZENTARE, 'areMajuscula': REPREZENTARE, 'titluCaz': REPREZENTARE, 'cifra': REPREZENTARE,
+  'parti': REPREZENTARE,
+  'setDin': 'EXCEPȚIE: listele scurte scrise în cod (despărțirea pe spații)', '(modul)': LISTE, 'incarcaComune': LISTE,
+  'tokeniFirmaLista': LISTE, 'cheieEntitate': LISTE, 'Dictionar.constructor': LISTE, 'Dictionar.firmaComuna': LISTE,
+  'Dictionar.distinctivFirma': LISTE,
+  'Mascare.detecteaza': REPREZENTARE, 'Mascare.cuiLista': REPREZENTARE, 'Mascare.variante': REPREZENTARE,
+  'Mascare.potrivireFirma': REPREZENTARE, 'Mascare.prefixSC': REPREZENTARE, 'Mascare.firmeComponente': REPREZENTARE,
+  'Mascare.localitatiMarcate': REPREZENTARE, 'Mascare.publice': REPREZENTARE, 'Mascare.firmeForma': REPREZENTARE,
+  'Mascare.persoaneTitlu': REPREZENTARE, 'Mascare.persoaneLista.spatiu': REPREZENTARE, 'Mascare.persoaneLista.vecinPereche': REPREZENTARE,
+  'Mascare.persoaneLista.grup': REPREZENTARE, 'Mascare.invataDin': 'cheile normalizate ale numelor deja găsite (norm)',
+  'Mascare.demascheaza': ETICHETE, 'Mascare.demascheazaSigur': ETICHETE, 'Mascare.emiseIn': ETICHETE, 'bucatiMascate': ETICHETE,
+  'areDinLista': REGULA_B, 'inClasa': REGULA_B, 'ultimulSemn': REGULA_B, 'formaCitat': REGULA_B, 'paragrafeText': REGULA_B,
+  'motivParagraf': REGULA_B, 'verdict': REGULA_B, 'tipVerdict': REGULA_B, 'marcaje': REGULA_B, 'citatSustinut': REGULA_B,
+  'areCitat': REGULA_B, 'aplicaRegulaB': REGULA_B,
+  'ascundeSelectia': 'EXCEPȚIE: ecranul — selecția omului (spații, rânduri noi), nu recunoaștere',
+}
+/** {funcție → numărul aplicărilor de expresii regulate} și {metodă Mascare → apelanții ei} pe arborele sintactic al motorului. */
+function analizaMotor(sursa) {
+  const ast = parseAst(sursa)
+  const eRegex = n => n && ((n.type === 'Literal' && n.regex) || (n.type === 'NewExpression' && n.callee.name === 'RegExp'))
+  const ids = new Set()
+  for (const st of ast.body) {
+    const d = st.type === 'ExportNamedDeclaration' ? st.declaration : st
+    if (d?.type === 'VariableDeclaration') for (const v of d.declarations) if (eRegex(v.init)) ids.add(v.id.name)
+  }
+  const re = x => eRegex(x) || (x?.type === 'Identifier' && ids.has(x.name)) || (x?.type === 'CallExpression' && x.callee.name === 'eticheta')
+  const aplicari = new Map(), apelanti = new Map(), detecteaza = []
+  const viz = (n, fn, cls) => {
+    if (!n || typeof n.type !== 'string') return
+    if (n.type === 'ClassDeclaration') cls = n.id.name
+    if (n.type === 'FunctionDeclaration') fn = n.id.name
+    if (n.type === 'MethodDefinition') fn = `${cls}.${n.key.name}`
+    if (n.type === 'VariableDeclarator' && /FunctionExpression$/.test(n.init?.type || '')) fn = fn === '(modul)' ? n.id.name : `${fn}.${n.id.name}`
+    if (n.type === 'CallExpression') {
+      const c = n.callee
+      if ((c.type === 'MemberExpression' && re(c.object)) || n.arguments.some(re) || (c.type === 'Identifier' && ['toate', 'potriveste'].includes(c.name)))
+        aplicari.set(fn, (aplicari.get(fn) || 0) + 1)
+      if (c.type === 'MemberExpression' && c.object.type === 'ThisExpression' && cls === 'Mascare') {
+        const k = `Mascare.${c.property.name}`
+        if (!apelanti.has(k)) apelanti.set(k, new Set())
+        apelanti.get(k).add(fn.split('.').slice(0, 2).join('.'))
+        if (c.property.name === 'detecteaza') detecteaza.push(sursa.slice(n.arguments[0].start, n.arguments[0].end))
+      }
+    }
+    for (const [k, v] of Object.entries(n)) {
+      if (k === 'parent') continue
+      if (Array.isArray(v)) v.forEach(x => viz(x, fn, cls)); else if (v && typeof v === 'object' && typeof v.type === 'string') viz(v, fn, cls)
+    }
+  }
+  viz(ast, '(modul)', null)
+  return { aplicari, apelanti, detecteaza }
+}
+const latime = s => [...s].map(c => { const x = c.codePointAt(0); return x > 0x20 && x < 0x7f ? String.fromCodePoint(x + 0xfee0) : c }).join('')
+
+describe('r6 (review r5 P1): o singură reprezentare a textului pentru toate etapele de recunoaștere', () => {
+  const SURSA = readFileSync('src/intrebariMascare.js', 'utf8')
+  it('inventarul ÎNCHIS: fiecare funcție care aplică o expresie regulată e clasificată (reprezentare / liste / excepție cu motiv)', () => {
+    const { aplicari } = analizaMotor(SURSA)
+    expect([...aplicari.keys()].sort()).toEqual(Object.keys(INVENTAR_RECUNOASTERE).sort())
+  })
+  it('etapele de recunoaștere sunt atinse DOAR din detecteaza, iar detecteaza primește DOAR reprezentarea (curata)', () => {
+    const { apelanti, detecteaza } = analizaMotor(SURSA)
+    // etapele lui detecteaza (și cele care nu aplică direct o expresie, dar dau mai departe textul)
+    const etape = ['detecteaza', 'cuiLista', 'variante', 'potrivireFirma', 'prefixSC', 'firmeDictionar', 'firmeComponente', 'firmeFlexionate',
+      'localitatiMarcate', 'publice', 'firmeForma', 'componenteToken', 'persoaneTitlu', 'persoaneLista', 'invataDin', 'propaga'].map(x => `Mascare.${x}`)
+    for (const k of Object.keys(INVENTAR_RECUNOASTERE).filter(x => x.startsWith('Mascare.') && INVENTAR_RECUNOASTERE[x] === REPREZENTARE))
+      expect(etape, k).toContain(k.split('.').slice(0, 2).join('.'))
+    for (const k of etape.filter(x => x !== 'Mascare.detecteaza')) {
+      expect(apelanti.has(k), `${k} nu e apelată`).toBe(true)
+      for (const a of apelanti.get(k)) expect(etape, `${k} e apelată din ${a}`).toContain(a)
+    }
+    expect([...apelanti.get('Mascare.detecteaza')].sort()).toEqual(['Mascare.invata', 'Mascare.mascheaza'])
+    expect(detecteaza.sort()).toEqual(['curata(t).s', 'r.s'])
+    expect(SURSA.replace(/\r\n/g, '\n')).toContain('    const t = String(text ?? \'\')\n    const r = curata(t)\n')
+  })
+  it('contraexemplul inventarului: o etapă nouă care caută pe textul brut (în mascheaza) e o funcție neclasificată sau un apel în afara lui detecteaza', () => {
+    const lf = SURSA.replace(/\r\n/g, '\n'), ancora = "    let out = '', poz = 0\n"
+    expect(lf).toContain(ancora)
+    expect(analizaMotor(lf).aplicari.has('Mascare.mascheaza')).toBe(false)
+    expect(analizaMotor(lf.replace(ancora, ancora + '    FORMA_LIPITA.exec(t)\n')).aplicari.has('Mascare.mascheaza')).toBe(true)
+  })
+  it('invarianța la reprezentare (clasa, nu cazul): orice caz scris de mână, rescris cu litere late sau descompus (NFD), dă ACEEAȘI mascare', () => {
+    const T2 = inlocuiesteInvizibile(T)
+    let n = 0
+    for (const c of [...T2.contract, ...T2.cazuri]) {
+      const dict = c.dictionar === 'gol' ? new E.Dictionar() : E.Dictionar.dinRaspuns(c.dictionar === 'fara_localitati' ? { ...T2.dictionar, localitati: [] } : T2.dictionar)
+      const ruleaza = f => {
+        const m = new E.Mascare(dict)
+        if (c.invata) m.invata(...c.texte.map(f))
+        return c.texte.map(x => { const o = m.mascheaza(f(x), false); expect(m.demascheaza(o), c.nume).toBe(f(x)); return o })
+      }
+      const baza = ruleaza(x => x)
+      // indicele de formă (_F2…) numără scrierile ORIGINALE diferite: după NFD două scrieri pot deveni una → se compară entitatea
+      const fara = o => o.replace(/_F[0-9]+\]/g, ']')
+      for (const f of [latime, x => x.normalize('NFD')]) {
+        const asteptat = baza.map(o => fara(E.bucatiMascate(o).map(b => b.t === 'eticheta' ? b.v : f(b.v)).join('')))
+        expect(ruleaza(f).map(fara), c.nume).toEqual(asteptat)
+        n++
+      }
+    }
+    expect(n).toBeGreaterThan(100)
+  })
+})
+
 // ── Mutanți: fiecare rând al contractului (și fiecare excludere din regula B) are o regulă care, scoasă, face cazurile să pice ──
 const MUTANTI = [
   ['majuscule (firma întreagă doar cu majusculă)', '[majuscule]', 'for (let i = 0; i < simpli.length; i++) {\n      const chei = new Set(this.variante(',
@@ -56,14 +178,20 @@ const MUTANTI = [
   ['majuscule (r5: fără componenta distinctivă de firmă singură)', '[majuscule]', 'if (!(r.context || areMajuscula(p))) continue', 'continue'],
   ['majuscule (r5: doar prima literă mare, nu „orice majusculă”)', '[majuscule]', 'if (!(r.context || areMajuscula(p))) continue',
     'if (!(r.context || majuscula(p))) continue'],
-  ['diacritice', '[diacritice]', "String(s ?? '').normalize('NFKD').toLowerCase().normalize('NFKD')).s", "String(s ?? '').toLowerCase()).s"],
-  ['diacritice (r5: fără formele de compatibilitate — literele late)', 'r5 (F4)', "String(s ?? '').normalize('NFKD').toLowerCase().normalize('NFKD')).s",
-    "String(s ?? '').normalize('NFD').toLowerCase().normalize('NFD')).s"],
+  ['diacritice (reprezentarea fără descompunere)', '[diacritice]', "for (const c of ch.normalize('NFKD')) {", 'for (const c of ch) {'],
+  ['diacritice (r5: fără formele de compatibilitate — literele late)', 'r5 (F4)', "for (const c of ch.normalize('NFKD')) {", "for (const c of ch.normalize('NFD')) {"],
+  // r6 (review r5 P1): recunoașterea pe textul BRUT (forma juridică, „SC”, tiparele căutate în textul nenormalizat) — cazurile r6 pică
+  ['forme_juridice (r6: recunoașterea pe textul brut, nu pe reprezentare)', 'r6 (review r5 P1)', '    const r = curata(t)\n    // o etichetă emisă',
+    '    const r = { s: t, idx: null, sf: null }\n    // o etichetă emisă'],
+  ['forme_juridice (r6: forma juridică lipită căutată fără descompunerea de compatibilitate)', 'r6 (review r5 P1)',
+    "for (const c of ch.normalize('NFKD')) {", "for (const c of ch.normalize(cp >= 0xff01 && cp <= 0xff5e ? 'NFD' : 'NFKD')) {"],
   ['separatoare', '[separatoare]', 'const SEP_FIRMA = new RegExp(`^[${SEP_CLASA}]{1,6}$`, \'u\')', 'const SEP_FIRMA = /^ +$/u'],
   ['separatoare (r5: fără „/”)', '[separatoare]', "'„”“«»‚‘’()&+/", "'„”“«»‚‘’()&+"],
   ['forme_juridice (lipite)', '[forme_juridice]', 'if (f && !(f[0] === f[0].toLowerCase()', 'if (false && !(f[0] === f[0].toLowerCase()'],
   ['forme_juridice (r5: flexiune + formă lipită)', '[forme_juridice]', 'if (!(v.n === tup[x] || (x === ultim && componentaFirma(v.n, tup[x], true) !== null))) continue',
     'if (!(v.n === tup[x] || (x === ultim && v.forma < 0 && componentaFirma(v.n, tup[x], true) !== null))) continue'],
+  ['forme_juridice (r6: varianta cu flexiune câștigă în fața formei lipite care acoperă mai mult / are context)', 'găsite de matricea r6',
+    'if (f > fin || (f === fin && r > rang)) { gasit = v; rang = r; fin = f }', 'if (rang < 0 || r < rang) { gasit = v; rang = r; fin = f }'],
   ['forme_juridice („SC” în față)', '[forme_juridice]', 'if (p) return { start: start - p[1].length, end, context: true }', ''],
   ['flexiuni', '[flexiuni]', 'for (const t of TERMINATII) {\n    const b = n.slice(0, -t.length)', 'for (const t of []) {\n    const b = n.slice(0, -t.length)'],
   ['cratima', '[cratima]', 'const parti = tok => tok.split(RE_CRATIMA).filter(Boolean)', 'const parti = tok => [tok]'],
@@ -74,9 +202,12 @@ const MUTANTI = [
   ['exceptii (firma privată după fragmentul public)', '[exceptii]',
     '    this.firmeDictionar(t, simpli, adauga)          // 10.', '    this.publice(t, simpli, adauga); this.firmeDictionar(t, simpli, adauga) // 10.'],
   ['exceptii (firmă comună fără context)', '[exceptii]', 'if (this.d.firmaComuna(tup) && !r.context) continue', ''],
-  ['exceptii (persoană comună fără context)', '[exceptii]', 'if (j > i || !info[i].c.comun || intreg)', 'if (true)'],
+  ['exceptii (persoană comună fără context)', '[exceptii]', 'if (j > i || !info[i].c.comun || g.intreg)', 'if (true)'],
   ['exceptii (r5: cuvântul unei entități publice ar deveni componentă distinctivă)', '[exceptii]', ' && !CUVINTE_PUBLICE.has(c)', ''],
-  ['separatoare (virgula leagă orice)', '[separatoare]', '&& pereche(a, b))', '&& true)'],
+  // r6 (review r5 P2): fără delimitarea persoanelor (orice componente alăturate formează un nume) — enumerările și persoanele alăturate pică
+  ['separatoare (r6: componentele unor persoane diferite se combină)', 'r6 (review r5 P2)', '  acelasiNume(chei) {\n',
+    '  acelasiNume(chei) {\n    return true\n'],
+  ['separatoare (virgula leagă persoane diferite)', '[separatoare]', '  acelasiNume(chei) {\n', '  acelasiNume(chei) {\n    return true\n'],
   ['eticheta fără paranteză (L20)', 'demascare_sigura', "new RegExp('\\\\[(?:PERSOANA|FIRMA", "new RegExp('(?:PERSOANA|FIRMA"],
   // regula B (r5, structurală): câte un mutant pe fiecare regulă
   ['regula B: context tăiat', 'regula_b', 'if (taiat || ', 'if (false && '],
@@ -88,6 +219,9 @@ const MUTANTI = [
   ['regula B: marcaj — categoria Pd', 'regula_b', '[\\\\p{Pd}${inClasa(SEMNE_LISTA)}]', '[${inClasa(SEMNE_LISTA)}]'],
   ['regula B: marcaj — plafon de lungime', 'regula_b', '[\\\\p{L}\\\\p{M}\\\\p{N}]+(?:\\\\)', '[\\\\p{L}\\\\p{M}\\\\p{N}]{1,4}(?:\\\\)'],
   ['regula B: marcaj — doar litere mici', 'regula_b', '[\\\\p{L}\\\\p{M}\\\\p{N}]+(?:\\\\)', '[\\\\p{Ll}\\\\p{M}\\\\p{N}]+(?:\\\\)'],
+  // r6 (review r5 P4): „.” urmat de o CIFRĂ ar fi marcaj → „6.5 bar …” pică (L20)
+  ['regula B: marcaj — punct urmat de cifră (r6)', 'regula_b r6 (review r5 P4', '[.:](?=[\\\\s\\\\p{L}]|$)', '[.:](?=[\\\\s\\\\p{L}\\\\p{N}]|$)'],
+  ['regula B: marcaj — punct urmat direct de literă (r6)', 'regula_b r6: marcajul „1.”', '[.:](?=[\\\\s\\\\p{L}]|$)', '[.:](?=[\\\\s]|$)'],
   ['regula B: paragraf cu mai multe propoziții', 'regula_b', "if (GRANITA.test(text)) return 'mai_multe_propozitii'", ''],
   ['regula B: granița „;”', 'regula_b', 'const GRANITA = new RegExp(`[.!?;][', 'const GRANITA = new RegExp(`[.!?]['],
   ['regula B: granița „rând nou”', 'regula_b', "]*\\\\s|\\\\n`, 'u')", "]*\\\\s`, 'u')"],

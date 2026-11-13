@@ -543,6 +543,43 @@ class Flux(unittest.TestCase):
         self.assertIn('[FIRMA_1] poate monta conducte pe podurile din lemn? A întrebat [PERSOANA_1];', trimis)
         self.assertIn('avizul cerut de VarnitecSRL.', self.raspunsul()['raspuns_md'])
 
+    # ── r6 (review r5): cazurile recenzentului pe traseul complet (motorul real, furnizorul simulat) ──
+    LATE = 'ＶａｒｎｉｔｅｃＳＲＬ'
+    def test_r6_literele_late_si_persoanele_alaturate_textul_efectiv_trimis(self):
+        """P1: literele late + forma juridică lipită (și firma dintr-un cuvânt comun); P2: două persoane diferite alăturate, fără
+        separator, scrise mic. Nimic din ele în textul EFECTIV trimis furnizorului; etichete DIFERITE pentru cele două persoane;
+        răspunsul publicat are numele puse la loc exact (literele late rămân late)."""
+        nume = {'persoane': ['ANA MARIA VLADESCU', 'ION MARE', 'POPA DAN'], 'firme': ['Varnitec SRL', 'Alfa SRL'], 'cui': []}
+        q = dict(Q, titlu='Aviz montaj', context='',
+                 intrebare=self.LATE + ' poate monta conducte? ＡｌｆａＳＲＬ a livrat; ana maria vladescu ion mare a venit.')
+        self.raspuns = 'Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru [FIRMA_1] și [PERSOANA_2].'
+        W.proceseaza('s', 'k', q, CORPUS, VOC, MOTOR, nume)
+        self.assertTrue(self.apeluri)
+        for corp in self.apeluri:
+            for s in siruri(corp):
+                for x in ('varnitec', 'ｖａｒｎｉｔｅｃ', 'ａｌｆａ', 'vladescu', 'maria', 'ion mare', ' mare a venit'):
+                    self.assertNotIn(x, s.lower())
+        trimis = [a for a in self.apeluri if a['system'] is C.SISTEM_RASPUNS][0]['messages'][0]['content']
+        self.assertIn('[FIRMA_1] poate monta conducte? [FIRMA_2] a livrat; [PERSOANA_1] [PERSOANA_2] a venit.', trimis)
+        r = self.raspunsul()['raspuns_md']
+        self.assertIn(f'pentru {self.LATE} și ion mare.', r)
+
+    def test_r6_paragraful_care_incepe_cu_un_numar_zecimal_ramane_da(self):
+        """P4 (L20): „6.5 bar …” — paragraf autonom dintr-o propoziție, care începe cu un număr zecimal (punct urmat de cifră = nu e
+        marcaj de listă) → „Da” publicat; același paragraf după un „…:” rămâne „Incert”."""
+        text = '6.5 bar reprezinta presiunea maxima admisa pentru proba conductelor.'
+        q = dict(Q, titlu='Presiunea de proba', intrebare='Care e presiunea maxima admisa pentru proba conductelor?', context='')
+        self.raspuns = f'Da — 6.5 bar reprezinta presiunea maxima admisa pentru proba conductelor [C1].\nCitat [C1]: „{text}”'
+        self.proceseaza_r5(self.corpus_r5('Prevederi pentru proba conductelor.\n\n' + text), q=q)
+        r = self.raspunsul()['raspuns_md']
+        self.assertTrue(r.startswith('Da — 6.5 bar reprezinta presiunea maxima admisa'), r)
+        self.assertEqual(self.jurnalul()[-1]['regula_b'], 'citat')
+        self.apeluri.clear(); self.scrieri.clear()
+        self.proceseaza_r5(self.corpus_r5(text, 'Presiunile de proba sunt urmatoarele:'), q=q)
+        r = self.raspunsul()['raspuns_md']
+        self.assertTrue(r.startswith(C.INCERT), r)
+        self.assertNotEqual(self.jurnalul()[-1]['regula_b'], 'citat')
+
     # ── decizia B: Da / Nu doar cu citat ──
     def test_da_ferm_fara_citat_cere_reparare_apoi_devine_incert_cu_sursele_alaturate(self):
         self.raspuns = 'Da — RTS atestat ISCIR [C1].\n- Responsabilul tehnic cu sudura (RTS) e atestat ISCIR, art. 12 [C1].'

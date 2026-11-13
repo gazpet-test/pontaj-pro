@@ -8,7 +8,8 @@
 //   (a) intervalul așteptat e înlocuit INTEGRAL de o etichetă validă, iar restul textului e neatins;
 //   (b) forma normalizată a ieșirii nu conține componenta distinctivă;
 //   (c) demascarea dă textul inițial (restaurare exactă);
-//   (d) cazurile NEGATIVE rămân neschimbate.
+//   (d) cazurile NEGATIVE rămân neschimbate;
+//   (e) r6: la persoanele DIFERITE alăturate, fiecare interval are eticheta altei entități.
 // Toate numele sunt INVENTATE. Mărimea unui lot: cel mult LOT_MAX cazuri; numărul loturilor nu e plafonat.
 
 export const LOT_MAX = 100000
@@ -51,7 +52,16 @@ export const SEPARATOARE_FIRMA = [' ', NBSP, THIN, IDEO, '\t', '\r', '\n', ',', 
   ')', '&', '+', '/', '\\', '-', H2010, H2011, ' ,\t& /', '"\r\n( )']   // fiecare caracter + două combinații de 6
 export const SEPARATOARE_PERSOANA = [' ', NBSP, THIN, '\t', ',', ', ', '"', "'", '„', '”', '(', ')', '&', '+', '/', '\\', '-', H2010, H2011,
   ' ,& +/']
-export const FORME_JURIDICE = ['', ' SRL', ' S.R.L.', ' srl', ' SA', '+SRL', '+S.R.L.', '+srl', '+SA']   // „+” = lipită de nume
+// r6 (review r5 P3): FIECARE formă juridică din contract, cu / fără puncte, despărțită / lipită („+” = lipită de nume); scrise mic doar
+// cele care nu sunt și cuvinte („sa”, „ii”, „if” scrise mic sunt cuvinte / sufixe — contract)
+export const FORME_CONTRACT = ['SRL', 'SA', 'PFA', 'II', 'IF', 'SNC', 'SCS']
+export const FORME_JURIDICE = ['', ...FORME_CONTRACT.flatMap(f => { const p = f.split('').join('.') + '.'; return [' ' + f, ' ' + p, '+' + f, '+' + p] }),
+  ...['srl', 'pfa', 'snc', 'scs'].flatMap(f => [' ' + f, '+' + f])]
+// r6: reprezentarea — N = litere obișnuite; L = TOATĂ bucata (nume, separatoare, „SC”, forma juridică) cu litere late (U+FF01–FF5E; o
+// literă cu diacritic = litera lată + semnul de combinare); F = doar „SC” și forma juridică cu litere late
+export const REPREZENTARI = ['N', 'L', 'F']
+export const SEPARATOARE_REPREZENTARE = [' ', IDEO, ',', '/']                                // la „L”: „，” „／” (U+FF0C, U+FF0F)
+export const SEPARATOARE_INTRE_PERSOANE = [' ', NBSP, '  ', ', ', ' & ', ' și ', '/']      // între două persoane diferite (fără / cu separator)
 export const PREFIXE_SC = ['', 'SC ', 'S.C. ', '+SC', '+S.C.']                                       // „+” = lipit de nume
 export const FLEXIUNI = ['', 'ului', 'ilor', 'ule', 'lui', 'lor', 'ul', 'le', 'ei', 'ii', 'e', 'i']
 export const GENITIV = 'gen'                                                                         // -a → -ei (Ana → Anei)
@@ -67,6 +77,12 @@ function majuscule(s, m) {
   if (m === 'M') return s.slice(0, 1).toLowerCase() + s.slice(1).toUpperCase()
   return s
 }
+/** Literele late (scrise aici, separat de motor): caracterele ASCII vizibile → U+FF01–FF5E; o literă cu diacritic → litera lată + semnul. */
+export function lata(s) {
+  return [...s.normalize('NFD')].map(c => { const x = c.codePointAt(0); return x > 0x20 && x < 0x7f ? String.fromCodePoint(x + 0xfee0) : c }).join('')
+}
+/** Bucata firmei în reprezentarea `rep`: [sc, corp, forma] → text. */
+const inRep = (rep, sc, corp, fj) => rep === 'L' ? lata(sc + corp + fj) : rep === 'F' ? lata(sc) + corp + lata(fj) : sc + corp + fj
 const INV = { M: CGJ, C: ZW }
 /** Cuvântul: baza (cu / fără diacritice) + sufixul, cu majusculele cerute, cu un invizibil la începutul / mijlocul / sfârșitul bazei. */
 function cuvant(p, { d = 'cu', m = 'T', flex = '', inv = '' }) {
@@ -81,6 +97,9 @@ function cuvant(p, { d = 'cu', m = 'T', flex = '', inv = '' }) {
   return w
 }
 const lungBaza = p => p.f.replace(/-.*$/, '').length                  // baza fără diacritice (la cratimă: ultima parte decide flexiunea)
+/** Firma dintr-un cuvânt comun are context (contract): „SC”, o formă juridică, sau r6 — ambiguitatea declarată — sufixul „-ii” scris
+ *  cu MAJUSCULE („ALFAII”, „aLFAII”): se citește ca forma juridică „II” lipită (scrisă mare = formă juridică), direcția prudentă. */
+const contextComuna = (sc, forma, flex, m) => sc !== '' || forma !== '' || (flex === 'ii' && (m === 'U' || m === 'M'))
 const ultimaParte = p => p.f.split('-').pop()
 /** Flexiunile aplicabile ultimei componente (contract: UN sufix pe o bază de ≥ 4 litere; genitivul -a → -ei pe prenumele în -a). */
 function flexiuni(p, persoana) {
@@ -149,9 +168,26 @@ export const FAMILII = [
       const fj = forma.startsWith('+') ? forma.slice(1) : forma
       const r = scT + cuv.join(sep) + fj
       const comuna = f.comp.length === 1 && f.comp[0].com
-      const pozitiv = !comuna || sc !== '' || forma !== ''
+      const pozitiv = !comuna || contextComuna(sc, forma, flex, m)
       const dist = f.comp.filter(p => p.dist).map(p => plat(p.f))
       return caz(poz, [{ r, nume: pozitiv }], pozitiv ? dist : [])
+    },
+  },
+  {
+    // r6 (review r5 P1 / P3): literele late încrucișate cu formele lipite / despărțite, „SC”, flexiunile, invizibilele, majusculele
+    nume: 'firme_reprezentare',
+    descriere: '(firma × diacritice × separator: spațiu, U+3000, „,”, „/”) × reprezentare (L, F) × majuscule × formă juridică × „SC” × flexiune × invizibil × poziție',
+    dims: () => [
+      variante(FIRME, f => areDiacritice(f.comp) ? DIACRITICE : ['cu'], f => f.comp.length > 1 ? SEPARATOARE_REPREZENTARE : ['']),
+      REPREZENTARI.filter(x => x !== 'N'), MAJUSCULE, FORME_JURIDICE, PREFIXE_SC, FLEXIUNI, INVIZIBILE, POZITII],
+    aplicabil: () => true,
+    construieste([[f, d, sep], rep, m, forma, sc, flex, inv, poz]) {
+      const k = fi(f), ultim = f.comp.length - 1
+      const cuv = f.comp.map((p, i) => cuvant(p, { d, m, flex: i === ultim ? flex : '', inv: i === k ? inv : '' }))
+      const r = inRep(rep, sc.startsWith('+') ? sc.slice(1) : sc, cuv.join(sep), forma.startsWith('+') ? forma.slice(1) : forma)
+      const comuna = f.comp.length === 1 && f.comp[0].com
+      const pozitiv = !comuna || contextComuna(sc, forma, flex, m)
+      return caz(poz, [{ r, nume: pozitiv }], pozitiv ? f.comp.filter(p => p.dist).map(p => plat(p.f)) : [])
     },
   },
   {
@@ -167,14 +203,12 @@ export const FAMILII = [
   },
   {
     nume: 'firme_componenta_singura',
-    descriere: '(componenta distinctivă, oricare poziție în nume × diacritice) × majuscule × formă juridică × „SC” × flexiune × invizibil × poziție',
+    descriere: '(componenta distinctivă, oricare poziție în nume × diacritice) × reprezentare × majuscule × formă juridică × „SC” × flexiune × invizibil × poziție',
     dims: () => [variante(FIRME.flatMap(f => f.comp.length > 1 ? f.comp.filter(p => p.dist) : []), p => areDiacritice([p]) ? DIACRITICE : ['cu']),
-      MAJUSCULE, FORME_JURIDICE, PREFIXE_SC, FLEXIUNI, INVIZIBILE, POZITII],
+      REPREZENTARI, MAJUSCULE, FORME_JURIDICE, PREFIXE_SC, FLEXIUNI, INVIZIBILE, POZITII],
     aplicabil: () => true,
-    construieste([[p, d], m, forma, sc, flex, inv, poz]) {
-      const scT = sc.startsWith('+') ? sc.slice(1) : sc
-      const fj = forma.startsWith('+') ? forma.slice(1) : forma
-      const r = scT + cuvant(p, { d, m, flex, inv }) + fj
+    construieste([[p, d], rep, m, forma, sc, flex, inv, poz]) {
+      const r = inRep(rep, sc.startsWith('+') ? sc.slice(1) : sc, cuvant(p, { d, m, flex, inv }), forma.startsWith('+') ? forma.slice(1) : forma)
       // contract: cu o majusculă oriunde SAU cu context (formă juridică / „SC”); scrisă integral mic și fără context → doar prin propagare
       const pozitiv = m !== 'L' || sc !== '' || forma !== ''
       return caz(poz, [{ r, nume: pozitiv }], pozitiv ? [plat(p.f)] : [])
@@ -182,31 +216,75 @@ export const FAMILII = [
   },
   {
     nume: 'persoane_nume_intreg',
-    descriere: '(persoana × ordine × diacritice × flexiunea ultimei componente × cratimă) × majuscule × separator × invizibil × poziție',
+    descriere: '(persoana × ordine × diacritice × flexiunea ultimei componente × cratimă) × reprezentare (N, L) × majuscule × separator × invizibil × poziție',
     dims: () => [
       variante(PERSOANE, () => ORDINI, x => areDiacritice([x.nume, x.prenume]) ? DIACRITICE : ['cu'],
         (x, [, o]) => flexiuni(o === 'NP' ? x.prenume : x.nume, true), x => x.prenume.c.includes('-') ? CRATIME : ['-']),
-      MAJUSCULE, SEPARATOARE_PERSOANA, INVIZIBILE, POZITII],
+      ['N', 'L'], MAJUSCULE, SEPARATOARE_PERSOANA, INVIZIBILE, POZITII],
     aplicabil: () => true,
-    construieste([[x, o, d, flex, cr], m, sep, inv, poz]) {
+    construieste([[x, o, d, flex, cr], rep, m, sep, inv, poz]) {
       const [a, b] = o === 'NP' ? [x.nume, x.prenume] : [x.prenume, x.nume]
       const tinta = x.nume.dist ? x.nume : x.prenume
       const w = [a, b].map((p, i) => cuvant(p, { d, m, flex: i === 1 ? flex : '', inv: p === tinta ? inv : '' }).replace(/-/g, cr))
       const dist = [x.nume, x.prenume].filter(p => p.dist).map(p => plat(p.f.split('-')[0]))
-      return caz(poz, [{ r: w.join(sep), nume: true }], dist)
+      return caz(poz, [{ r: inRep(rep, '', w.join(sep), ''), nume: true }], dist)
     },
   },
   {
     nume: 'persoane_componenta_singura',
-    descriere: 'o componentă de persoană singură × majuscule × diacritice × flexiune × invizibil × poziție',
+    descriere: 'o componentă de persoană singură × reprezentare (N, L) × majuscule × diacritice × flexiune × invizibil × poziție',
     dims: () => [variante(PERSOANE.flatMap(x => [x.nume, x.prenume]), p => areDiacritice([p]) ? DIACRITICE : ['cu'], p => flexiuni(p, true)),
-      MAJUSCULE, INVIZIBILE, POZITII],
+      ['N', 'L'], MAJUSCULE, INVIZIBILE, POZITII],
     aplicabil: () => true,
-    construieste([[p, d, flex], m, inv, poz]) {
-      const r = cuvant(p, { d, m, flex, inv })
+    construieste([[p, d, flex], rep, m, inv, poz]) {
+      const r = inRep(rep, '', cuvant(p, { d, m, flex, inv }), '')
       // contract: necomună cu o majusculă → ascunsă; scrisă mic → doar componenta distinctivă (≥ 4 litere, în afara listelor); comună → rămâne
       const pozitiv = !p.com && (m !== 'L' || p.dist)
       return caz(poz, [{ r, nume: pozitiv }], pozitiv ? [plat(p.f.split('-')[0])] : [])
+    },
+  },
+  {
+    // r6 (review r5 P2): două persoane DIFERITE alăturate — fiecare intervalul ei, etichete de entități DIFERITE
+    nume: 'persoane_alaturate',
+    descriere: '(perechea ordonată de persoane diferite × ordinea fiecăreia × diacritice) × reprezentare (N, L) × majuscule × separatorul dintre ele × poziție',
+    dims: () => [
+      variante(PERSOANE.flatMap(a => PERSOANE.filter(b => b !== a).map(b => [a, b])), () => ORDINI, () => ORDINI,
+        ([a, b]) => areDiacritice([a.nume, a.prenume, b.nume, b.prenume]) ? DIACRITICE : ['cu']),
+      ['N', 'L'], MAJUSCULE, SEPARATOARE_INTRE_PERSOANE, POZITII],
+    aplicabil: () => true,
+    construieste([[[a, b], oa, ob, d], rep, m, sep, poz]) {
+      const scrie = (x, o) => inRep(rep, '', (o === 'NP' ? [x.nume, x.prenume] : [x.prenume, x.nume]).map(p => cuvant(p, { d, m })).join(' '), '')
+      const dist = [a, b].flatMap(x => [x.nume, x.prenume]).filter(p => p.dist).map(p => plat(p.f.split('-')[0]))
+      return caz(poz, [{ r: scrie(a, oa), nume: true }, { r: scrie(b, ob), nume: true, inainte: inRep(rep, '', sep, '') }], dist, { diferite: true })
+    },
+  },
+  {
+    nume: 'persoane_trei',
+    descriere: '(trei persoane diferite, în ordine × ordinea fiecăreia) × majuscule × separator (spațiu, „, ”) × poziție',
+    dims: () => [
+      variante(PERSOANE.flatMap(a => PERSOANE.flatMap(b => PERSOANE.filter(c => a !== b && b !== c && a !== c).map(c => [a, b, c]))),
+        () => ORDINI, () => ORDINI, () => ORDINI),
+      MAJUSCULE, [' ', ', '], POZITII],
+    aplicabil: () => true,
+    construieste([[tri, ...ord], m, sep, poz]) {
+      const reg = tri.map((x, i) => ({ r: (ord[i] === 'NP' ? [x.nume, x.prenume] : [x.prenume, x.nume]).map(p => cuvant(p, { m })).join(' '), nume: true,
+        inainte: sep }))
+      const dist = tri.flatMap(x => [x.nume, x.prenume]).filter(p => p.dist).map(p => plat(p.f.split('-')[0]))
+      return caz(poz, reg, dist, { diferite: true })
+    },
+  },
+  {
+    // o persoană lângă componenta COMUNĂ a alteia („Mare”, „Ion” din MARE ION), singură: componenta rămâne (nu e numele întreg al nimănui)
+    nume: 'persoana_si_componenta_comuna',
+    descriere: '(persoana × ordine) × componenta comună a altei persoane (Mare, Ion) × înainte / după × majuscule × separator (spațiu, „, ”) × poziție',
+    dims: () => [variante(PERSOANE.filter(x => x.id !== 'P5'), () => ORDINI), [PERSOANE[4].nume, PERSOANE[4].prenume], ['inainte', 'dupa'],
+      MAJUSCULE, [' ', ', '], POZITII],
+    aplicabil: () => true,
+    construieste([[x, o], comp, unde, m, sep, poz]) {
+      const pers = { r: (o === 'NP' ? [x.nume, x.prenume] : [x.prenume, x.nume]).map(p => cuvant(p, { m })).join(' '), nume: true }
+      const com = { r: cuvant(comp, { m }), nume: false }
+      const reg = unde === 'dupa' ? [pers, { ...com, inainte: sep }] : [com, { ...pers, inainte: sep }]
+      return caz(poz, reg, [x.nume, x.prenume].filter(p => p.dist).map(p => plat(p.f.split('-')[0])))
     },
   },
   {
@@ -242,6 +320,9 @@ export const FAMILII = [
       { r: 'Mare', nume: false }, { r: 'ion', nume: false }, { r: 'ana', nume: false },
       { r: '12345678', nume: true }, { r: '1234 5678', nume: true }, { r: '1234.5678', nume: true }, { r: '12-345-678', nume: true },
       { r: '1234' + NBSP + '5678', nume: true }, { r: '1234 56789', nume: false }, { r: '123 4567', nume: false },
+      // r6: literele late nu schimbă excepțiile (entitate publică, localitate, componentă comună / generică) și nici CUI-ul fragmentat
+      { r: lata('TRANSGAZ'), nume: false }, { r: lata('Transgaz'), nume: false }, { r: lata('Berceni'), nume: false }, { r: lata('Alfa'), nume: false },
+      { r: lata('Servicii'), nume: false }, { r: lata('Mare'), nume: false }, { r: lata('1234 5678'), nume: true }, { r: lata('1234.5678'), nume: true },
     ], POZITII],
     aplicabil: () => true,
     construieste([x, poz]) { return caz(poz, [{ r: x.r, nume: x.nume }], x.nume ? ['12345678'] : []) },
@@ -286,21 +367,26 @@ export function rezumat() {
 
 // ─── Oracolul (scris separat de motor) ───
 const ETICHETA = /^\[(?:PERSOANA|FIRMA|CNP|CUI|TELEFON|EMAIL|IBAN|NR_AUTO|ASCUNS)_[1-9][0-9]{0,3}(?:_F[1-9][0-9]{0,2})?\]/
-/** null = cazul trece; altfel motivul: 'restaurare', 'negativ_schimbat', 'in_afara_intervalului', 'interval_nemascat', 'scurgere:<x>'. */
+/** null = cazul trece; altfel motivul: 'restaurare', 'negativ_schimbat', 'in_afara_intervalului', 'interval_nemascat',
+ *  'aceeasi_entitate' (r6), 'scurgere:<x>'. */
 export function verifica(c, iesire, restaurat) {
   if (restaurat !== c.t) return 'restaurare'
   if (!c.spatii.length) return iesire === c.t ? null : 'negativ_schimbat'
   let p = 0, q = 0
+  const entitati = []
   for (const [a, b] of c.spatii) {
     const inainte = c.t.slice(q, a)
     if (iesire.slice(p, p + inainte.length) !== inainte) return 'in_afara_intervalului'
     p += inainte.length
     const m = ETICHETA.exec(iesire.slice(p))
     if (!m) return 'interval_nemascat'
+    entitati.push(m[0].replace(/_F[0-9]+\]$/, ']'))
     p += m[0].length
     q = b
   }
   if (iesire.slice(p) !== c.t.slice(q)) return 'in_afara_intervalului'
+  // r6: intervalele unor persoane DIFERITE au etichete de entități diferite (nu „o persoană” făcută din două)
+  if (c.diferite && new Set(entitati).size !== entitati.length) return 'aceeasi_entitate'
   // (b) pe cuvintele ieșirii, fără etichete (o etichetă „[PERSOANA_1]” conține și ea litere), după normalizare
   const cuvinte = iesire.replace(new RegExp(ETICHETA.source.slice(1), 'g'), ' ').normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '')
     .toLowerCase().split(/[^\p{L}\p{N}]+/u)

@@ -42,8 +42,9 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
   it('domeniul e finit și publicat; loturi de cel mult 100.000 de cazuri; fără plafon total (toate loturile rulează)', () => {
     expect(G.LOT_MAX).toBe(100000)
     const r = G.rezumat()
-    expect(r.map(x => x.familie)).toEqual(['firme_nume_intreg', 'conflict_entitate_publica', 'firme_componenta_singura', 'persoane_nume_intreg',
-      'persoane_componenta_singura', 'context_si_propagare', 'exceptii'])
+    expect(r.map(x => x.familie)).toEqual(['firme_nume_intreg', 'firme_reprezentare', 'conflict_entitate_publica', 'firme_componenta_singura',
+      'persoane_nume_intreg', 'persoane_componenta_singura', 'persoane_alaturate', 'persoane_trei', 'persoana_si_componenta_comuna',
+      'context_si_propagare', 'exceptii'])
     for (const f of r) {
       const loturi = LOTURI.filter(l => l.familie === f.familie)
       expect(loturi.length, f.familie).toBe(f.loturi)
@@ -52,6 +53,27 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
     }
     const doc = readFileSync('docs/intrebari/MASCARE_SI_VERDICT.md', 'utf8')
     for (const f of r) expect(doc, f.familie).toContain(`\`${f.familie}\``)
+    // r6 (review r5 P3): documentul declară domeniul EXACT — fiecare familie cu numărul ei de cazuri, plus totalul
+    const cifre = n => n.toLocaleString('de-DE')
+    for (const f of r) expect(doc, f.familie).toMatch(new RegExp('\\| `' + f.familie + '` \\|[^\\n]*\\| ' + cifre(f.produs).replace(/\./g, '\\.') + ' \\| ' + f.loturi + ' \\|'))
+    expect(doc).toContain(`| **Total** | | **${cifre(r.reduce((s, f) => s + f.produs, 0))}** | **${r.reduce((s, f) => s + f.loturi, 0)}** |`)
+  })
+  it('r6 (review r5 P3): domeniul conține ce declară — fiecare formă juridică din contract (despărțită / lipită, cu / fără puncte), literele late încrucișate cu formele lipite, „SC”, flexiunile și invizibilele, persoanele alăturate', () => {
+    for (const f of ['SRL', 'SA', 'PFA', 'II', 'IF', 'SNC', 'SCS']) {
+      const p = f.split('').join('.') + '.'
+      for (const v of [' ' + f, ' ' + p, '+' + f, '+' + p]) expect(G.FORME_JURIDICE, v).toContain(v)
+    }
+    expect(G.FORME_JURIDICE.length).toBe(37)
+    const fam = n => G.FAMILII.find(x => x.nume === n).dims()
+    const rep = fam('firme_reprezentare')
+    expect(rep[1]).toEqual(['L', 'F'])
+    for (const [i, d] of [[3, G.FORME_JURIDICE], [4, G.PREFIXE_SC], [5, G.FLEXIUNI], [6, G.INVIZIBILE]]) expect(rep[i]).toEqual(d)
+    expect(fam('firme_nume_intreg')[2]).toEqual(G.FORME_JURIDICE)
+    expect(fam('firme_componenta_singura')[1]).toEqual(G.REPREZENTARI)
+    expect(G.lata('Varnitec S.R.L.')).toBe('Ｖａｒｎｉｔｅｃ Ｓ．Ｒ．Ｌ．')
+    const { cazuri } = G.cazuriLot(G.loturi().find(l => l.familie === 'persoane_alaturate'))
+    expect(cazuri.every(c => c.diferite && c.spatii.length === 2)).toBe(true)
+    expect(cazuri.some(c => /vlădescu ana mare ion/.test(c.t))).toBe(true)          // fără separator, scrise mic (cazul recenzentului, în formă)
   })
 
   it('oracolul NU refolosește motorul: generativ.mjs nu are niciun import (static sau dinamic)', () => {
@@ -82,6 +104,12 @@ describe('matricea generativă r5 (L25): produsul complet al dimensiunilor contr
     const neg = { t: 'Ieri Alfa a livrat marfa.', spatii: [], distinctive: [] }
     expect(G.verifica(neg, neg.t, neg.t)).toBe(null)
     expect(G.verifica(neg, 'Ieri [FIRMA_1] a livrat marfa.', neg.t)).toBe('negativ_schimbat')
+    // (e) r6: două persoane diferite pe aceeași entitate (sau o „persoană” din patru cuvinte)
+    const dif = { t: 'ana maria ion mare a venit.', spatii: [[0, 9], [10, 18]], distinctive: [], diferite: true }
+    expect(G.verifica(dif, '[PERSOANA_1] [PERSOANA_2] a venit.', dif.t)).toBe(null)
+    expect(G.verifica(dif, '[PERSOANA_1] [PERSOANA_1_F2] a venit.', dif.t)).toBe('aceeasi_entitate')
+    expect(G.verifica(dif, '[PERSOANA_1] mare a venit.', dif.t)).toBe('interval_nemascat')
+    expect(G.verifica({ ...dif, spatii: [[0, 18]] }, '[PERSOANA_1] a venit.', dif.t)).toBe(null)   // oracolul cere intervalele declarate de caz
   })
 
   it('eșantion direct pe modulul importat de vitest (fiecare al 97-lea caz din fiecare lot): zero eșecuri', () => {

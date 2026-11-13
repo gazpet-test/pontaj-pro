@@ -280,8 +280,14 @@ al echipei Paw).
   produsul complet al dimensiunilor contractului pe domeniul publicat în `docs/intrebari/MASCARE_SI_VERDICT.md` (6.260.928 de
   cazuri în 68 de loturi de cel mult 100.000); `src/intrebariMascare.generativ.test.js` rulează ACELEAȘI loturi pe fire de lucru
   din vitest și în procese Node cu flagurile `motor.py` (`generativ_proces.mjs`), cere zero eșecuri ale oracolului în ambele și
-  aceeași amprentă sha256 a ieșirilor pe fiecare lot (≈ 1 minut pe serverul AI). Fluxul complet r5 (contraexemplele regulii B,
-  textul efectiv trimis, mutantul „worker care ignoră regula B”, termenul scrierii): `test_worker.py`, `test_motor.py`.
+  aceeași amprentă sha256 a ieșirilor pe fiecare lot. Fluxul complet r5 (contraexemplele regulii B, textul efectiv trimis,
+  mutantul „worker care ignoră regula B”, termenul scrierii): `test_worker.py`, `test_motor.py`.
+- r6 — matricea are acum FIECARE formă juridică din contract (37 de valori), reprezentarea (litere obișnuite / late, încrucișată cu
+  formele lipite, „SC”, flexiunile și invizibilele) și persoanele alăturate (perechi, triplete, persoană + componenta comună a
+  alteia): 32.862.408 de cazuri în 337 de loturi (≈ 4–5 minute pe serverul AI); domeniul exact și tăietura declarată sunt în
+  document. Motorul: o singură reprezentare a textului pentru toate etapele de recunoaștere (inventarul închis + invarianța la
+  reprezentare, în `src/intrebariMascare.test.js`), persoanele delimitate înaintea grupării. Fluxul complet r6 (literele late +
+  forma lipită, persoane alăturate, „6.5 bar …” rămâne Da): `test_worker.py`.
 - `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` — **paritate Python ↔ JS pe aceleași fișiere**:
   validarea (`teste_validare.json`: verdict, fără sursă, cifre neconfirmate, nesusținute, temei, textul după curățare — runda 4:
   polaritatea, calificativele, negația, propozițiile, semnul și unitatea), tokenii numerici / tipul regulii / propozițiile

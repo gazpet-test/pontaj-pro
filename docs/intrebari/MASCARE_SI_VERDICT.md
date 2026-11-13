@@ -90,11 +90,11 @@ intră în matricea generativă (secțiunea „Matricea generativă”).
 
 | Dimensiune | Ce se acoperă | Exemple (inventate) |
 |---|---|---|
-| **Majuscule** | Firme: numele întreg în orice capitalizare. Persoane (r5): numele întreg — două componente alăturate ale ACEEAȘI persoane din listă, în ambele ordini — în orice capitalizare, inclusiv integral cu litere mici sau amestecat; componentele a două persoane diferite nu se combină. „Cu majusculă” = cel puțin o literă mare ORIUNDE în cuvânt | `Lumivo Servicii`, `lumivo servicii`, `LuMiVo SeRvIcIi`; `ana vlădescu`, `zamfirescu maria`, `ZAMFIRESCU maria` |
+| **Majuscule** | Firme: numele întreg în orice capitalizare. Persoane (r5): numele întreg — două componente alăturate ale ACEEAȘI persoane din listă, în ambele ordini — în orice capitalizare, inclusiv integral cu litere mici sau amestecat; componentele a două persoane diferite nu se combină. r6: persoanele se DELIMITEAZĂ înaintea grupării — un grup de cuvinte alăturate e un nume doar dacă toate componentele lui sunt ale aceluiași nume din listă (fiecare o dată, deci cel mult câte componente are numele, plus cel mult un al doilea prenume „Ca Titlu” între două dintre ele); după un nume complet începe alt grup. „Cu majusculă” = cel puțin o literă mare ORIUNDE în cuvânt | `Lumivo Servicii`, `lumivo servicii`, `LuMiVo SeRvIcIi`; `ana vlădescu`, `zamfirescu maria`, `ZAMFIRESCU maria`; `ana vlădescu mare ion` → două persoane, două etichete |
 | **Componenta distinctivă singură (r5)** | Firme: ORICE componentă distinctivă a unei firme private din listă (nu doar prima) se ascunde și fără numele întreg când e scrisă cu cel puțin o majusculă sau are context (formă juridică despărțită / lipită după ea, „SC” / „S.C.” în față); scrisă integral cu litere mici și fără context: doar prin propagare (vezi „Ordine și propagare”). Persoane: o componentă distinctivă se ascunde și singură, în ORICE scriere, inclusiv cu litere mici. „Distinctivă” = baza normalizată (înainte de flexiune) are cel puțin 4 litere, nu e număr și NU e în listele închise (secțiunea „Listele închise”); o firmă dintr-un singur cuvânt distinctiv e numele întreg (orice scriere) | `Pelorin a facturat`, `pELORIN`, `pelorin srl`, `SC pelorin` (firma `Construct Pelorin SRL`); `ce drepturi are crângașu`, `vlădescului` |
-| **Diacritice și forme de compatibilitate** | Cu / fără diacritice, `ș / ş`, `ț / ţ`, forme Unicode compuse / descompuse; r5: literele late și celelalte forme de compatibilitate Unicode (descompunerea NFKD, doar la comparare — ce se ascunde e textul original, deci restaurarea rămâne exactă) | `Șerban`, `Şerban`, `Serban`, `ＶＬĂＤＥＳＣＵ ＡＮＡ`, `ｌｕｍｉｖｏ ｓｅｒｖｉｃｉｉ` |
-| **Separatoare** | Între componentele unei firme: 1–6 caractere din mulțimea închisă: orice spațiu din categoria Unicode Zs (inclusiv cel neîntreruptibil), tab, CR, LF, virgulă, punct, ghilimelele `"` `'` `„` `”` `“` `«` `»` `‚` `‘` `’`, parantezele rotunde, `&`, `+`, r5: `/` și `\`, cratimele de mai jos. La persoane: aceeași mulțime fără punct, CR și LF; spațiile leagă orice componente, celelalte separatoare leagă doar două componente ale **aceleiași** persoane din listă | `Lumivo, Servicii`, `Lumivo & Servicii`, `Lumivo/Servicii SRL`, `Lumivo\Servicii`, `Vlădescu/Ana` |
-| **Forme juridice** | `SRL, SA, PFA, II, IF, SNC, SCS`, cu / fără puncte, orice capitalizare, despărțite sau LIPITE după nume; r5: forma lipită se recunoaște pe tulpina componentei sau pe tulpina fără UN sufix de flexiune (`ServiciilorSRL`), pentru firma ÎNTREAGĂ, înaintea excepțiilor, iar eticheta acoperă intervalul original complet (de la prima componentă la sfârșitul formei); pentru o firmă dintr-un cuvânt comun forma lipită ESTE contextul. „SC” / „S.C.” în față, despărțit sau lipit. „sa”, „ii”, „if” scrise mic sunt cuvinte („să”, „îi”) sau sufixe („Lumivoii”): despărțite rămân în afara etichetei, lipite nu sunt formă juridică | `VarnitecSRL`, `VARNITECSRL`, `Varnitecsrl`, `VarnitecS.R.L.`, `AlfaSRL`, `Lumivo ServiciilorSRL`, `SCVarnitec SRL`, `S.C.Varnitec` |
+| **Diacritice și forme de compatibilitate** | Cu / fără diacritice, `ș / ş`, `ț / ţ`, forme Unicode compuse / descompuse; r5: literele late și celelalte forme de compatibilitate Unicode. r6: **toate etapele de recunoaștere** (forma juridică despărțită / lipită, „SC”, titlurile, tiparele RO / CUI / telefon / e-mail, cifrele CUI, etichetele, separatoarele, flexiunile, componentele) lucrează pe ACEEAȘI reprezentare a textului — fiecare caracter descompus NFKD, fără semnele de combinare și caracterele de format (`curata` în motor, aceeași funcție ca la compararea numelor) —, cu harta de poziții spre original: ce se ascunde e intervalul ORIGINAL complet, deci restaurarea rămâne exactă | `Șerban`, `Şerban`, `Serban`, `ＶＬĂＤＥＳＣＵ ＡＮＡ`, `ｌｕｍｉｖｏ ｓｅｒｖｉｃｉｉ`, `ＶａｒｎｉｔｅｃＳＲＬ`, `VarnitecＳ．Ｒ．Ｌ．`, `ｄｌ． Ｎｕｍｅ`, `ＲＯ１２３４５６７８` |
+| **Separatoare** | Între componentele unei firme: 1–6 caractere din mulțimea închisă: orice spațiu din categoria Unicode Zs (inclusiv cel neîntreruptibil), tab, CR, LF, virgulă, punct, ghilimelele `"` `'` `„` `”` `“` `«` `»` `‚` `‘` `’`, parantezele rotunde, `&`, `+`, r5: `/` și `\`, cratimele de mai jos. La persoane: aceeași mulțime fără punct, CR și LF; r6: și spațiile, și celelalte separatoare leagă doar componente ale **aceluiași** nume din listă (două persoane alăturate, cu sau fără separator, rămân pe etichete diferite) | `Lumivo, Servicii`, `Lumivo & Servicii`, `Lumivo/Servicii SRL`, `Lumivo\Servicii`, `Vlădescu/Ana` |
+| **Forme juridice** | `SRL, SA, PFA, II, IF, SNC, SCS`, cu / fără puncte, orice capitalizare, despărțite sau LIPITE după nume; r5: forma lipită se recunoaște pe tulpina componentei sau pe tulpina fără UN sufix de flexiune (`ServiciilorSRL`), pentru firma ÎNTREAGĂ, înaintea excepțiilor, iar eticheta acoperă intervalul original complet (de la prima componentă la sfârșitul formei); pentru o firmă dintr-un cuvânt comun forma lipită ESTE contextul; r6: când un cuvânt se poate citi în mai multe feluri, câștigă citirea care acoperă cel mai mult (`VarnitecI.I.` = firma + `I.I.`, nu flexiunea `-i` cu `.I.` rămas afară), iar la egalitate cea cu context (`alfaII` = `Alfa` + `II`, nu flexiunea `-ii`; ambiguitatea declarată: și `ALFAII` / `aLFAII` — sufixul `-ii` scris mare — se citesc ca forma `II` lipită, deci ascunse; după forma lipită se ia și o formă despărțită: `SERVICIIII SRL`). „SC” / „S.C.” în față, despărțit sau lipit. „sa”, „ii”, „if” scrise mic sunt cuvinte („să”, „îi”) sau sufixe („Lumivoii”): despărțite rămân în afara etichetei, lipite nu sunt formă juridică | `VarnitecSRL`, `VARNITECSRL`, `Varnitecsrl`, `VarnitecS.R.L.`, `AlfaSRL`, `Lumivo ServiciilorSRL`, `SCVarnitec SRL`, `S.C.Varnitec` |
 | **Flexiuni** | UN sufix din `{ului, ilor, ule, lui, lor, ul, le, ei, ii, e, i}` pe o componentă de cel puțin 4 litere (la firma întreagă: pe ultima componentă); plus genitivul feminin `Ana→Anei`, `Maria→Mariei`, `Andreea→Andreei`, `Olga→Olgăi`. Fără derivări în lanț (`VarnitecululSRL` rămâne) | `Vlădescului`, `Vlădescule`, `Crângașului`, `Varnitecului` |
 | **Cratimă** | `-`, U+2010, U+2011 la nume compuse și sufixe; se ascunde tot cuvântul compus | `Gheorghiu-Vlădescu`, `Vlădescu-ului`, `VLĂDESCU-ULUI` |
 | **Invizibile / de combinare** | Inserate în nume: toate caracterele de combinare (categoria Unicode M) și de format (Cf), inclusiv U+034F, U+FE0F, U+200B, U+00AD, U+FEFF și selectorii de variantă U+FE00–FE0F, U+E0100–E01EF. O SINGURĂ funcție de normalizare (`curata` / `norm` în motor), după tabelele Unicode ale lui Node 24.20 (Unicode 17.0) pe server și ale browserului în ecran | `Vlă` + U+034F + `descu` |
@@ -106,8 +106,9 @@ se ascunde întreg, `Transgaz` singur rămâne (un cuvânt al unei entități pu
 
 **Componentele comune cer context.** Un cuvânt din listă care e și cuvânt obișnuit rămâne vizibil când apare singur, fără context
 identificator: „Alfa este coeficientul, gamma este radiația”, „Mare parte din lucrare”, „ion e un atom” rămân, deși `Alfa SRL`,
-`Gamma SRL`, `MARE ION` sunt în listă. Context = formă juridică alături, „SC” în față, un titlu („dl.”), un alt nume din listă lipit
-de el sau **numele întreg apărut în aceeași întrebare**. **Compromisul declarat și testat:** după ce numele întreg a apărut,
+`Gamma SRL`, `MARE ION` sunt în listă. Context = formă juridică alături, „SC” în față, un titlu („dl.”), o altă componentă a
+**aceluiași** nume din listă lipită de el sau **numele întreg apărut în aceeași întrebare**. r6: numele ALTEI persoane lipit de el nu e
+context („Ana Vlădescu Mare a venit” → „[PERSOANA_1] Mare a venit”, dacă „Mare” e doar componenta comună a lui `MARE ION`). **Compromisul declarat și testat:** după ce numele întreg a apărut,
 propagarea ascunde și cuvântul comun scris cu majusculă („Alfa SRL a livrat. Alfa a facturat” → ambele ascunse); la persoane, din
 r5, și scris mic („Ion Mare a venit; mare parte e gata” → „mare” ascuns); la firme, cuvântul comun scris mic rămâne („alfa e
 coeficientul”). **Excesul conservator declarat:** motorul nu decide dacă un cuvânt e „obișnuit” — decide lista. Un nume din listă care
@@ -286,7 +287,9 @@ O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
      dintre condiții:
      - după spațiile și ghilimelele de deschidere (`„` `“` `"` `«` `‚` `‘` `'` `` ` ``), paragraful începe cu un șir de litere / cifre
        Unicode (orice capitalizare, cifre romane incluse) urmat de `)`, sau de `.` / `:` urmat de spațiu, de sfârșit sau direct de o
-       literă / cifră (`B) `, `12345) `, `iv. `, `IV) `, `Art. `, `B.Executarea`);
+       **literă** (`B) `, `12345) `, `iv. `, `IV) `, `Art. `, `B.Executarea`, `1.Executarea`); r6: `.` urmat de o **cifră** nu e
+       marcaj — `6.5 bar reprezinta presiunea maxima admisa pentru proba conductelor.` rămâne paragraf autonom (dacă nu e după un
+       paragraf terminat în `:` / `;`);
      - începe cu `(` + litere / cifre + `)` (`(b)`, `(12)`);
      - începe cu un semn de listă: U+2022 `•`, U+2023 `‣`, U+2043 `⁃`, U+2219 `∙`, U+25AA `▪`, U+25AB `▫`, U+25A0 `■`, U+25A1 `□`,
        U+25CF `●`, U+25CB `○`, U+25E6 `◦`, U+25B8 `▸`, U+25BA `►`, U+00B7 `·` (punctul median), `*`, `+`, U+2212 `−`, `§`, sau
@@ -351,15 +354,23 @@ O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
   mari din marcaj, paragraful cu mai multe propoziții, granițele „;” și „rând nou”, trimiteri, excepții, fragment, fără sfârșit,
   alinierea paragrafelor brute și mascate, compararea permisivă) — vitest; fiecare cale de eroare a procesului (procesul de test
   `test_motor_defect.mjs`, inclusiv cel care nu citește intrarea): zero cereri noi, zero răspunsuri publicate.
+- r6 (review r5): recunoașterea pe textul brut (mutantul pică pe cazurile cu litere late), persoanele nedelimitate (orice componente
+  alăturate = un nume), varianta lipită care acoperă mai puțin, marcajul „.” urmat de cifră — fiecare cu mutantul lui; **inventarul
+  închis** al funcțiilor care aplică o expresie regulată, fiecare clasificată (reprezentarea de recunoaștere / listele / excepție cu
+  motiv: etichetele emise, regula B, ecranul), plus verificarea că etapele de recunoaștere sunt apelate doar din `detecteaza`, iar
+  `detecteaza` primește doar reprezentarea; **invarianța la reprezentare**: fiecare caz scris de mână, rescris cu litere late sau
+  descompus (NFD), dă aceeași mascare.
 
 ### Matricea generativă (criteriul de acceptare L25)
 `worker/intrebari-tehnice/generativ.mjs` — fără niciun import și fără funcțiile motorului — generează PRODUSUL COMPLET al
 dimensiunilor de mai jos. Pentru fiecare caz știe intervalul exact al numelui în text, iar oracolul cere: (a) intervalul așteptat e
 înlocuit INTEGRAL de o etichetă validă și restul textului e neatins; (b) forma normalizată a ieșirii nu conține componenta
-distinctivă; (c) demascarea dă textul inițial; (d) cazurile negative rămân neschimbate. Fără (a), „AlfaSRL” (fără componentă
-distinctivă) ar trece nemascat. `src/intrebariMascare.generativ.test.js` rulează ACELEAȘI loturi pe fire de lucru din vitest și în
-procese Node cu flagurile din `motor.py`, cere zero eșecuri în ambele și aceeași amprentă sha256 a ieșirilor pe fiecare lot; loturi
-de cel mult 100.000 de cazuri, fără plafon total (toate loturile rulează; ≈ 1 minut pe serverul AI).
+distinctivă; (c) demascarea dă textul inițial; (d) cazurile negative rămân neschimbate; (e) r6: la persoanele diferite alăturate,
+fiecare interval are eticheta altei entități. Fără (a), „AlfaSRL” (fără componentă distinctivă) ar trece nemascat.
+`src/intrebariMascare.generativ.test.js` rulează ACELEAȘI loturi pe fire de lucru din vitest și în procese Node cu flagurile din
+`motor.py`, cere zero eșecuri în ambele și aceeași amprentă sha256 a ieșirilor pe fiecare lot; loturi de cel mult 100.000 de
+cazuri, fără plafon total (toate loturile rulează; r6: ≈ 4–5 minute pe serverul AI, 8 fire + 8 procese). Testul verifică și că
+tabelul de mai jos are exact cifrele generatorului.
 
 **Domeniul publicat** (dicționarul de test: persoanele VLĂDESCU ANA, ZAMFIRESCU MARIA, ȘERBĂNESCU OLGA, CRÂNGAȘU VIOREL, MARE ION,
 DUMBRĂVEANU ANDREEA-IOANA; firmele Lumivo Servicii SRL — distinctivă pe prima poziție, Varnitec SRL — un cuvânt distinctiv, Alfa SRL —
@@ -371,23 +382,40 @@ Transgaz Construct SRL — începe cu o entitate publică; CUI 12345678; localit
   `/` `\` `-` U+2010 U+2011 și două combinații de 6 caractere — 30 (fiecare caracter = limita 1, combinațiile = limita 6);
 - separatoare de persoană: spațiu, NBSP, U+2009, tab, `,`, „, ”, `"` `'` `„` `”` `(` `)` `&` `+` `/` `\` `-` U+2010 U+2011 și o
   combinație de 6 caractere — 20;
-- forme juridice: niciuna, „ SRL”, „ S.R.L.”, „ srl”, „ SA”, „SRL” lipit, „S.R.L.” lipit, „srl” lipit, „SA” lipit — 9;
+- separatoare de firmă în familia reprezentării (r6): spațiu, U+3000, `,`, `/` — 4 (la literele late `,` și `/` devin U+FF0C, U+FF0F);
+- separatoare între două persoane diferite (r6): spațiu, NBSP, două spații, „, ”, „ & ”, „ și ”, `/` — 7; între trei: spațiu, „, ” — 2;
+- forme juridice (r6: FIECARE formă din contract): niciuna; `SRL`, `SA`, `PFA`, `II`, `IF`, `SNC`, `SCS`, fiecare despărțită fără
+  puncte, despărțită cu puncte (`S.R.L.`, `I.I.`…), lipită fără puncte, lipită cu puncte (28); `srl`, `pfa`, `snc`, `scs` scrise mic,
+  despărțite și lipite (8; `sa`, `ii`, `if` scrise mic sunt cuvinte — contract) — 37;
 - „SC”: nimic, „SC ”, „S.C. ”, „SC” lipit, „S.C.” lipit — 5;
+- reprezentarea (r6): N = litere obișnuite; L = toată bucata (nume, separatoare, „SC”, forma juridică) cu litere late U+FF01–FF5E (o
+  literă cu diacritic = litera lată + semnul de combinare); F = doar „SC” și forma juridică cu litere late;
 - flexiuni: niciuna și fiecare din cele 11 sufixe (doar pe o bază de cel puțin 4 litere), plus genitivul feminin la prenumele în -a;
 - invizibile: niciunul, U+034F (M) și U+200B (Cf), fiecare la începutul, mijlocul și sfârșitul componentei distinctive — 7;
 - poziții în propoziție: început, interior, sfârșit — 3; ordinea persoanelor: Nume Prenume / Prenume Nume; cratimele prenumelui
   compus: `-`, U+2010, U+2011.
 
-| Familia | Dimensiuni (numărul de valori) | Cazuri | Loturi |
+| Familia | Dimensiuni (numărul de valori) | Produs | Loturi |
 |---|---|---|---|
-| `firme_nume_intreg` | (firma × diacritice × separator: 122 de variante aplicabile) × majuscule 4 × formă juridică 9 × „SC” 5 × flexiune 12 × invizibil 7 × poziție 3 | 5.533.920 | 56 |
-| `conflict_entitate_publica` | majuscule 4 × separator 30 × formă juridică 9 × poziție 3 (Transgaz Construct, întreagă) | 3.240 | 1 |
-| `firme_componenta_singura` | (componenta distinctivă, oricare poziție × diacritice: 4) × majuscule 4 × formă juridică 9 × „SC” 5 × flexiune 12 × invizibil 7 × poziție 3 | 181.440 | 2 |
-| `persoane_nume_intreg` | (persoana × ordine × diacritice × flexiunea ultimei componente × cratimă: 314) × majuscule 4 × separator 20 × invizibil 7 × poziție 3 | 527.520 | 6 |
-| `persoane_componenta_singura` | (componenta × diacritice × flexiune: 174) × majuscule 4 × invizibil 7 × poziție 3 | 14.616 | 1 |
-| `context_si_propagare` | 9 perechi (componenta singură scrisă mic / comună + numele întreg) × înainte / după × flexiune 3 × poziție 3 (24 de combinații neaplicabile: flexiune pe o bază sub 4 litere) | 138 | 1 |
-| `exceptii` | 18 cazuri (entități publice, localitate, componente generice și comune singure, CUI fragmentat și negative) × poziție 3 | 54 | 1 |
-| **Total** | | **6.260.928** | **68** |
+| `firme_nume_intreg` | (firma × diacritice × separator: 122 de variante aplicabile) × majuscule 4 × formă juridică 37 × „SC” 5 × flexiune 12 × invizibil 7 × poziție 3 | 22.750.560 | 228 |
+| `firme_reprezentare` | (firma × diacritice × separator spațiu / U+3000 / `,` / `/`: 18) × reprezentare L, F 2 × majuscule 4 × formă juridică 37 × „SC” 5 × flexiune 12 × invizibil 7 × poziție 3 | 6.713.280 | 68 |
+| `conflict_entitate_publica` | majuscule 4 × separator 30 × formă juridică 37 × poziție 3 (Transgaz Construct, întreagă) | 13.320 | 1 |
+| `firme_componenta_singura` | (componenta distinctivă, oricare poziție × diacritice: 4) × reprezentare N, L, F 3 × majuscule 4 × formă juridică 37 × „SC” 5 × flexiune 12 × invizibil 7 × poziție 3 | 2.237.760 | 23 |
+| `persoane_nume_intreg` | (persoana × ordine × diacritice × flexiunea ultimei componente × cratimă: 314) × reprezentare N, L 2 × majuscule 4 × separator 20 × invizibil 7 × poziție 3 | 1.055.040 | 11 |
+| `persoane_componenta_singura` | (componenta × diacritice × flexiune: 174) × reprezentare N, L 2 × majuscule 4 × invizibil 7 × poziție 3 | 29.232 | 1 |
+| `persoane_alaturate` | (perechea ordonată de persoane diferite × ordinea fiecăreia × diacritice: 232) × reprezentare N, L 2 × majuscule 4 × separatorul dintre ele 7 × poziție 3 | 38.976 | 1 |
+| `persoane_trei` | (trei persoane diferite, în ordine × ordinea fiecăreia: 960) × majuscule 4 × separator 2 × poziție 3 | 23.040 | 1 |
+| `persoana_si_componenta_comuna` | (persoana, alta decât MARE ION × ordine: 10) × componenta comună Mare / Ion 2 × înainte / după 2 × majuscule 4 × separator 2 × poziție 3 | 960 | 1 |
+| `context_si_propagare` | 9 perechi (componenta singură scrisă mic / comună + numele întreg) × înainte / după × flexiune 3 × poziție 3 (24 de combinații neaplicabile: flexiune pe o bază sub 4 litere → 138 de cazuri) | 162 | 1 |
+| `exceptii` | 26 de cazuri (entități publice, localitate, componente generice și comune singure, CUI fragmentat și negative; r6: și cu litere late) × poziție 3 | 78 | 1 |
+| **Total** | | **32.862.408** | **337** |
+
+**Tăietura declarată (r6).** Produsul complet al TUTUROR dimensiunilor într-o singură familie de firme (122 × 3 reprezentări × 4 × 37 ×
+5 × 12 × 7 × 3 = 68.251.680 de cazuri, ≈ 9–10 minute pe rulare) nu se rulează: reprezentarea (L, F) e încrucișată complet cu
+majusculele, formele juridice, „SC”, flexiunile, invizibilele și pozițiile, dar doar cu 4 separatoare (spațiu, U+3000, `,`, `/`), nu
+cu toate 30; cele 30 de separatoare sunt încrucișate complet cu restul în reprezentarea N. La persoane: perechile și tripletele de
+persoane alăturate nu au flexiuni și caractere invizibile (acestea sunt încrucișate în `persoane_nume_intreg`), iar `persoane_trei`
+e doar în reprezentarea N, cu diacritice.
 
 Ce NU acoperă matricea: combinațiile în afara domeniului de mai sus (alte nume, alte caractere, alte poziții); pentru ele rămân
 contractul, cazurile scrise de mână și mutanții. Matricea e dovada pentru combinațiile enumerate, nu o demonstrație universală.
