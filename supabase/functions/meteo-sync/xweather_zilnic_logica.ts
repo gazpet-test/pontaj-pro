@@ -390,8 +390,9 @@ export function planXweather(
 // „restanțe” (tot restul). Când există amândouă, partiCoada rezervă restanțelor cel puțin o treime din locurile rulării (⌈pas / 3⌉, minimum
 // o zi-șantier), iar restul rămâne lui „ieri”; partea nefolosită a uneia trece celeilalte. Plafon 10 (pas 5): 2 restanțe + 3 ieri; plafon 60
 // (pas 30): 10 + 20. La pas 1 locul alternează după paritatea zilei. Rotația (φ) rămâne în interiorul fiecărei părți, iar cele două părți se
-// împletesc uniform (Bresenham): în orice prefix al cozii, restanțele au partea lor, deci o tăiere la termen / cost mai mare le atinge pe
-// amândouă proporțional, nu doar pe cea de la coadă.
+// împletesc uniform în ORDINEA DE EXECUȚIE (r7: rotunjire, nu ⌊…⌋): în orice prefix al cozii fiecare parte e la cel mult ½ poziție de
+// proporția planificată, deci o oprire după oricâte poziții (gardă de cotă actualizată, termen, cost mai mare) le atinge pe amândouă
+// proporțional, nu doar pe cea de la coadă. (Nu garantează partea ÎNTREAGĂ: o oprire după 2 poziții servește 1 + 1, nu 3 + 2.)
 export const indexZi = (zi: string) => Math.round(Date.parse(zi + 'T00:00:00Z') / 864e5)
 const PHI = (Math.sqrt(5) - 1) / 2
 export const esteIeri = (s: { tinta?: string; zi: string }, ieri: string) => s.tinta === 'activ' && s.zi === ieri
@@ -418,8 +419,12 @@ export function rotesteCoada(sarcini: Sarcina[], ieri: string, pas: number): { s
   const R = roteste(rest, pt.restante), I = roteste(prime, pt.ieri)
   const tot = pt.ieri + pt.restante
   const out: Sarcina[] = []
+  // r7: restanțele din primele m poziții = round(m × restante / tot) (nu ⌊…⌋): în ORICE prefix (o oprire după k poziții, de gardă /
+  // termen / cost) fiecare parte e la cel mult ½ poziție de proporția planificată. Cu ⌊…⌋ restanțele erau mereu în urmă (pas 5, 3 + 2:
+  // „IIRIR” — o oprire după 2 poziții le lăsa la zero); acum „IRIRI”. La pas întreg, aceleași 2 + 3 (round(tot × r / tot) = r).
+  const pana = (m: number) => Math.floor((2 * m * pt.restante + tot) / (2 * tot))
   for (let k = 0, i = 0, r = 0; i < I.q.length || r < R.q.length; k++) {
-    const vreaRest = Math.floor((k + 1) * pt.restante / tot) > Math.floor(k * pt.restante / tot)
+    const vreaRest = pana(k + 1) > pana(k)
     if ((vreaRest && r < R.q.length) || i >= I.q.length) out.push(R.q[r++]); else out.push(I.q[i++])
   }
   return { sarcini: out, pornire: R.o }

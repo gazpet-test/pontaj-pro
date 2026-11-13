@@ -80,8 +80,53 @@ describe('partiCoada: cifrele alese', () => {
     const s = (site_id, zi, tinta) => ({ site_id, lat: 44, lng: 26, zi, tip: 'nou', tinta })
     const q = [...Array.from({ length: 10 }, (_, i) => s(i + 1, IERI0, 'activ')), ...Array.from({ length: 10 }, (_, i) => s(50, zi(-10 - i), 'raport'))]
     const o = rotesteCoada(q, IERI0, 5).sarcini.slice(0, 5)
-    // poziția k e restanță dacă ⌊(k + 1) × 2 / 5⌋ > ⌊k × 2 / 5⌋: k = 2 și 4 (calculat de mână)
-    expect(o.map(x => (esteIeri(x, IERI0) ? 'I' : 'R')).join('')).toBe('IIRIR')
+    // r7: restanțele din primele m poziții = round(m × 2 / 5): m = 1..5 → 0, 1, 1, 2, 2 → poziții 2 și 4 (calculat de mână): „IRIRI”
+    expect(o.map(x => (esteIeri(x, IERI0) ? 'I' : 'R')).join('')).toBe('IRIRI')
+  })
+})
+
+// r7 (re-review r6): rezervarea era pe capacitatea PLANIFICATĂ; o gardă de cotă actualizată după primele două poziții „ieri” putea opri
+// rularea înaintea primei restanțe. Acum împărțirea ține în ORDINEA DE EXECUȚIE: oprire după k poziții (k = 1..n) → fiecare parte e la cel mult
+// o poziție (de fapt ½) de proporția planificată pt.restante / (pt.ieri + pt.restante), până se epuizează una dintre părți.
+describe('r7 — oprire după k poziții: părțile servite proporțional în orice prefix', () => {
+  const s = (site_id, zi, tinta) => ({ site_id, lat: 44, lng: 26, zi, tip: 'nou', tinta })
+  const coada = (nI, nR, ieri = IERI0) => [...Array.from({ length: nI }, (_, i) => s(i + 1, ieri, 'activ')), ...Array.from({ length: nR }, (_, i) => s(500, zi(-10 - i), 'raport'))]
+  // abaterea maximă, pe toate prefixele, a numărului de restanțe față de proporția planificată (mărginită de epuizarea părților)
+  function abatereMax(roteste, nI, nR, pas, ieri = IERI0) {
+    const o = roteste(coada(nI, nR, ieri), ieri, pas).sarcini
+    if (nI + nR <= pas) return 0
+    const pt = partiCoada(nI, nR, pas, ieri)
+    const p = pt.restante / (pt.ieri + pt.restante)
+    let rest = 0, max = 0
+    for (let k = 1; k <= o.length; k++) {
+      if (!esteIeri(o[k - 1], ieri)) rest++
+      const asteptat = Math.min(nR, k, Math.max(k - nI, 0, k * p))
+      max = Math.max(max, Math.abs(rest - asteptat))
+    }
+    return max
+  }
+  const CAZURI = []
+  for (const pas of [1, 2, 3, 5, 7, 10, 30]) for (const nI of [0, 1, 2, 3, 10, 20]) for (const nR of [0, 1, 2, 5, 13, 50]) CAZURI.push([pas, nI, nR])
+  it(`oricare k = 1..n, ${CAZURI.length} combinații (pas, ieri, restanțe), două zile de pornire: abaterea ≤ ½ poziție (cerința: ≤ 1)`, () => {
+    for (const ieri of [IERI0, zi(1)]) for (const [pas, nI, nR] of CAZURI) expect(abatereMax(rotesteCoada, nI, nR, pas, ieri), `${pas}/${nI}/${nR}`).toBeLessThanOrEqual(0.5)
+  })
+  it('cazul recenzentului: plafon 10 (pas 5, 3 + 2), oprire după 2 poziții → deja o restanță servită (în r6: zero)', () => {
+    const o = rotesteCoada(coada(10, 10), IERI0, 5).sarcini.slice(0, 2)
+    expect(o.filter(x => !esteIeri(x, IERI0))).toHaveLength(1)
+  })
+  it('mutant (împletirea r6 cu ⌊…⌋): oprire după 2 poziții = zero restanțe, abaterea 0,8 > ½', () => {
+    const rotesteR6 = (sarcini, ieri, pas) => {
+      const I = sarcini.filter(x => esteIeri(x, ieri)), R = sarcini.filter(x => !esteIeri(x, ieri))
+      if (I.length + R.length <= pas) return { sarcini: [...I, ...R] }
+      const pt = partiCoada(I.length, R.length, pas, ieri), tot = pt.ieri + pt.restante, out = []
+      for (let k = 0, i = 0, r = 0; i < I.length || r < R.length; k++) {
+        const vrea = Math.floor((k + 1) * pt.restante / tot) > Math.floor(k * pt.restante / tot)
+        if ((vrea && r < R.length) || i >= I.length) out.push(R[r++]); else out.push(I[i++])
+      }
+      return { sarcini: out }
+    }
+    expect(rotesteR6(coada(10, 10), IERI0, 5).sarcini.slice(0, 2).filter(x => !esteIeri(x, IERI0))).toHaveLength(0)
+    expect(abatereMax(rotesteR6, 10, 10, 5)).toBeCloseTo(0.8, 5)
   })
 })
 

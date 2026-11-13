@@ -1,4 +1,4 @@
-# Vremea Vaisala Xweather: cota în unități de cost (r6)
+# Vremea Vaisala Xweather: cota în unități de cost (r7)
 
 Funcția `meteo-sync` (cron `meteo_sync_2h`, `5 */2 * * *`) folosește un singur cont Xweather pentru două lucruri:
 
@@ -85,10 +85,11 @@ O zi-șantier costă `conditions/summary` (1) plus, dacă ziua are valori, `obse
   - Când există amândouă părțile, restanțele au rezervat **cel puțin o treime: ⌈pas / 3⌉, minimum o zi-șantier**. Restul e al lui „ieri”. Plafon 10: **2 restanțe + 3 ieri**. Plafon 60: **10 restanțe + 20 ieri**. La `pas` 1, locul alternează zilnic.
   - Partea nefolosită a uneia trece celeilalte (de exemplu, 2 zile „ieri” la plafon 10 → 3 locuri pentru restanțe).
   - De ce o treime: în regimul normal (≈ 7–10 șantiere active, plafon 60) „ieri” încape integral în cele 20 de locuri ale lui. Cu plafonul mic, „ieri” păstrează majoritatea, iar restanțele nu mai stau pe loc.
-  - Cele două părți se împletesc uniform în coadă (nu una după alta). O tăiere la termen sau un cost mai mare decât cel rezervat le atinge pe amândouă proporțional.
+  - Cele două părți se împletesc uniform în **ordinea de execuție** (nu una după alta). r7: rezervarea e pe capacitatea planificată, dar oprirea poate veni oricând (garda de cotă actualizată după primele zile, termenul, un cost mai mare decât cel rezervat). De aceea, restanțele din primele `m` poziții = **round(m × restanțe / (ieri + restanțe))**. Plafon 10 (3 + 2): **I R I R I** (în r6: I I R I R, iar o oprire după 2 poziții lăsa restanțele la zero).
+  - Garanția (testată pentru k = 1..n, 252 de combinații pas / ieri / restanțe): o oprire după oricare k poziții lasă fiecare parte la **cel mult ½ poziție** de proporția planificată, până se epuizează una dintre părți. Nu garantează partea ÎNTREAGĂ: o oprire după 2 poziții servește 1 + 1, nu 3 + 2.
   - Rezultatul pasului arată împărțirea în `xweather.rotatie.parti` (`pas`, `rezervat_restante`, `rezervat_ieri`, `ieri`, `restante`).
 - **Rotația.** Rămâne în interiorul fiecărei părți: se parcurge circular, dintr-un punct de pornire care se mută cu ziua calendaristică: `⌊fracția(indexul zilei × φ) × lungimea părții⌋`, cu φ = 0,618… (raportul de aur).
-  - Coada care încape întreagă în rulare nu se rotește, deci ordinea rămâne „ieri, apoi cele mai noi”.
+  - Coada care încape întreagă în rulare nu se rotește și nu se împletește, deci ordinea rămâne „ieri, apoi cele mai noi”.
   - Prima variantă, „(index × pas) mod lungime”, ajungea la 70 de rulări cu plafonul mic, pentru că se decala când coada se scurta.
 - **Garanția, în cifre** (simulări pe planul și ordinea reale, zilele reușesc; `src/xweatherCoadaParti.test.js`):
 
@@ -105,10 +106,12 @@ O zi-șantier costă `conditions/summary` (1) plus, dacă ziua are valori, `obse
   - Cazul „70 fără date” e artificial (în realitate o zi fără date iese din fereastră după cel mult 31 de zile). Cu „ieri” prezent, restanțele au 54 din 60 de unități, respectiv 4 din 10, deci debitul scade, dar nu se oprește.
 - **Limita:** o zi-șantier iese singură din coadă când iese din fereastră. O zi fără date e reîncercată cel mult cât stă în fereastră: cel mult 31 de încercări, de 1 unitate fiecare. Pe șantierele active, zilele fără raport sunt reîncercate cel mult 7 zile.
 - **Restanțele ieșite din fereastră (r6, `xweather.restante_vechi`).** Un raport rămas fără vreme la ieșirea din fereastră nu mai e cerut automat. Ca să nu dispară, pasul zilnic (doar cu `XW_ZILNIC_ACTIV=1`) raportează la fiecare rulare:
-  - `numar` = zilele-șantier cu raport zilnic și fără vreme, mai vechi decât fereastra (`inainte_de` = prima zi a ferestrei); `cea_mai_veche`; `exemple` = cel mult 10 (`site_id`, `zi`), de la cea mai veche;
-  - `exact: false` dacă o pagină a fost plină (1.000 de rânduri): cifra e atunci un minim;
-  - `"neajuns (termen)"` dacă nu mai e timp (nu zero), `{ eroare }` dacă citirea a eșuat;
-  - două citiri mărginite, câte o pagină: rapoartele dinaintea ferestrei și vremea salvată pe aceleași zile. Fără paginare, fără cereri către furnizor. Se citesc DUPĂ zilele servite, sub termenul global;
+  - **Regula (r7).** „Are vreme” se stabilește pentru ACELEAȘI zile-șantier care au fost citite ca rapoarte. În r6 vremea era o singură pagină pe tot intervalul și putea omite zile care AU vreme. Contraexemplul recenzentului: rapoarte la 01.01.2023 și 01.10.2026, ambele cu vreme, plus 999 de zile cu vreme între ele. r6 raporta `numar: 1` (octombrie), deși realitatea era zero.
+  - Citirea: (1) o pagină de rapoarte dinaintea ferestrei, de la cea mai veche (ordinea data, id; cel mult 1.000 de rânduri). Acestea sunt zilele-șantier **verificate**. (2) Pentru fiecare șantier din pagină, vremea salvată pe intervalul zilelor lui din pagină, citită **până la capăt** (pe chei, până la pagina goală), sub termen. Perechea șantier-zi contează: vremea altui șantier în aceeași zi nu acoperă raportul.
+  - `numar` = restanțe **confirmate** (raport prezent, vreme absentă) printre zilele-șantier verificate. `verificate` = câte zile-șantier cu raport au fost verificate. `inainte_de` = prima zi a ferestrei. `cea_mai_veche`. `exemple` = cel mult 10 (`site_id`, `zi`), de la cea mai veche, fiecare verificat complet. `sens` = aceeași explicație, în răspuns;
+  - `exact: false` **doar** dacă pagina de rapoarte a fost plină, adică au rămas rapoarte neverificate. Atunci `numar` e un minim adevărat (nu poate supraestima);
+  - `"neajuns (termen)"` dacă nu mai e timp, inclusiv dacă citirea vremii nu se poate termina (niciodată o cifră parțială). `{ eroare }` dacă o citire a eșuat;
+  - fără cereri către furnizor. Se citesc DUPĂ zilele servite, sub termenul global;
   - le completează owner-ul cu `xweather_backfill` (șantierul din exemple, `pana` = ziua).
 
 ### „O dată pe zi” și limitele
@@ -128,7 +131,8 @@ O zi-șantier costă `conditions/summary` (1) plus, dacă ziua are valori, `obse
 
 - Ce nu mai are timp apare „neajuns (termen)”: pe site, în istoric sau în pasul zilnic.
 - **r6: TOATE așteptările handlerului trec printr-un singur ajutător de termen** (`cuTermen`): corpul cererii, autentificarea, credențialele, configurarea, fiecare citire / scriere BD și fiecare cerere de rețea (`cerereRetea`: fetch-ul ȘI citirea corpului răspunsului, Xweather și Open-Meteo, cu anulare la termen). Un test static verifică că în `index.ts` nu rămâne niciun `await` pe client sau pe rețea în afara lui; fiecare punct de așteptare are un test cu ceas simulat în care apelul nu se mai termină, iar răspunsul pleacă la cel mult 100 s.
-- Ajutătorul consumă builderul bazei O SINGURĂ dată (builderul e leneș: fiecare consumare ar fi o cerere nouă); testat cu un builder care își numără consumările.
+- **r7: garanția e structurală, nu doar lexicală.** Clientul bazei e creat într-un singur loc (adaptorul `bazaCuTermen`), iar handlerul primește doar adaptorul. Orice interogare / apel întors de el e mărginit singur la termen, oricum ar fi așteptat (`await`, `.then`, `Promise.all`). Recenzentul arătase că `await Promise.all([db.rpc(...)])` scăpa de testul static. Acum, și fără `cuTermen` în handler, răspunsul pleacă tot la cel mult 100 s (testat cu ceas simulat: `Promise.all`, `await` direct, `.then`). Testul static rămâne a doua plasă: clientul brut (`createClient`, `.auth`) și consumarea directă (`.then`) nu apar în afara adaptorului, iar `fetch` nu apare în afara `cerereRetea`.
+- Ajutătorul consumă builderul bazei O SINGURĂ dată (builderul e leneș: fiecare consumare ar fi o cerere nouă); testat cu un builder care își numără consumările, și prin adaptor.
 - O citire / scriere BD abandonată la termen nu se anulează pe server, doar nu mai e așteptată. **Scrierile abandonate se pot termina ulterior.** Unicitatea (23505) oprește dubla inserare a unei zile, dar NU oprește repetarea cererilor plătite: dacă scrierea unei zile n-a fost confirmată la termen, rularea următoare cere ziua din nou (2 unități).
 - Schimbare față de r4: vremea curentă rulează acum ÎNAINTEA istoricului și a pasului zilnic (înainte era ultima). Așa are prioritate la timp și aduce antetele pentru gardă.
 - Comanda owner-ului păstrează 100 s, tot sub termenul global.
@@ -219,3 +223,4 @@ Fără chei și fără URL-uri: antetele se citesc doar ca numere și text scurt
 | 13.11.2026 | r4: țintele după activitate, plafon 60 de accese pe rulare, termen 40 s, fără reverificare automată |
 | 13.11.2026 | r5: costul în unități din antete pentru toate cererile Xweather; blocul `cota`; `XW_ZILNIC_ACTIV` (publicare în două trepte); garda de cotă; 429 pe coduri; `XW_AER_PE_ZI`; termen global 100 s; fereastra de 31 de zile + rotația cozii; „nimic de făcut” = zero cereri |
 | 13.11.2026 | r6: termenul acoperă TOATE așteptările (autentificare, credențiale, corpul cererii și al răspunsurilor; 504 înaintea primului pas); restanțele au rezervată o treime din locuri; `restante_vechi`; `aer_pe_zi_sursa`; tipurile (`deno check` fără erori); contractul cronului |
+| 13.11.2026 | r7: `restante_vechi` numără doar restanțe confirmate (vremea citită până la capăt pe aceleași zile-șantier; `verificate`, `sens`; `exact: false` doar la pagina de rapoarte plină); adaptorul bazei mărginește orice consumare (garanție structurală; testul static = a doua plasă); părțile cozii împletite cu rotunjire în ordinea de execuție (orice oprire ≤ ½ poziție de proporție) |
