@@ -439,7 +439,15 @@ async function scenariu(nume, motiv, fn) {
   if (!bine) rau++
   console.log(`${bine ? 'OK    ' : 'GREȘIT'} ${nume}: ${eroare === null ? 'trecut' : 'refuz: ' + eroare.slice(0, 220)}`)
 }
-await scenariu('S1 blocul BASELINE din repo (DE_COMPLETAT) = refuz', /20261220a: baseline L15 necompletat/, async (db) => { await aplicaMig(db, MIG_T) })
+// „necompletat” se probează pe forma de livrare inițială (rândul DE_COMPLETAT), oricare ar fi conținutul blocului din repo: după PR-ul de
+// baseline blocul are valorile citite pe producție (tiparul din test_meteo_xweather_local.mjs / test_ctc_autorizatii_local.mjs)
+const MIG_NECOMPLETAT = MIG_T.split(PLACEHOLDER).join("    ('DE_COMPLETAT', 'DE_COMPLETAT')")
+await scenariu('S1 blocul BASELINE necompletat (DE_COMPLETAT) = refuz', /20261220a: baseline L15 necompletat/, async (db) => { await aplicaMig(db, MIG_NECOMPLETAT) })
+// S1p: blocul din repo, AȘA CUM E. Necompletat = același refuz; completat cu valorile de producție = refuz pe schema falsă (nu e
+// producția: starea de acces diferă de baseline) — un baseline de producție nu trece pe altă bază
+await scenariu('S1p blocul BASELINE din repo, neschimbat, pe schema falsă = refuz',
+  PLACEHOLDER.includes("'DE_COMPLETAT'") ? /20261220a: baseline L15 necompletat/ : /20261220a: starea de acces \(inainte\) difera de baseline-ul L15 revizuit/,
+  async (db) => { await aplicaMig(db, MIG_T) })
 await scenariu('S2 baseline fără funcțiile schimbate = refuz', /baseline L15 fara functiile schimbate/, async (db) => {
   await aplicaMig(db, aplica(MIG_T, [cuBaseline(B0.filter(r => r.eticheta !== 'functie fn_sms_lot_destinatari(uuid)'))]))
 })

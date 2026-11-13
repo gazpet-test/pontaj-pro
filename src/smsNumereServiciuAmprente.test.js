@@ -351,8 +351,36 @@ describe('20261220a r4 — livrare doar prin runnerul L15 v2 (amprenta globală)
     // blocul închiderii NU traversează vederile (identic cu 20261221a, testul L19 de mai sus)
     expect(blocuri(MIG, IA, IB)[0]).not.toMatch(/relkind|pg_rewrite/)
   })
-  it('manifestul .l15.tsv NU e în livrarea asta (îl adaugă coordonatorul odată cu runnerul)', () => {
-    expect(() => citeste('supabase/migrations/20261220a_sms_numere_serviciu.l15.tsv')).toThrow()
+  // PR-ul de baseline (coordonatorul, după ce runnerul L15 v2 a ajuns pe main): manifestul stă lângă migrare și e legat de ea prin sha256
+  it('manifestul .l15.tsv e în repo, generat cu EXACT migrarea din repo, cu obiectele declarate ale migrării', () => {
+    const MAN = citeste('supabase/migrations/20261220a_sms_numere_serviciu.l15.tsv')
+    const antet = MAN.split('\n').filter(l => l.startsWith('#'))
+    expect(antet[0]).toContain('manifestul diferentelor pentru 20261220a_sms_numere_serviciu (AMPRENTA_GLOBALA v2)')
+    // o migrare schimbată după generarea manifestului (inclusiv blocul BASELINE) = test picat: manifestul se regenerează pe clonă
+    expect(antet[1]).toContain('migrarea sha256 ' + createHash('sha256').update(MIG, 'utf8').digest('hex'))
+    const randuri = MAN.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t'))
+    expect(antet[antet.length - 1]).toContain(`; ${randuri.length} obiecte`)
+    for (const r of randuri) {
+      expect(r).toHaveLength(4)
+      expect(r[1].startsWith(r[0] + ' ')).toBe(true)
+      expect(['creat', 'schimbat', 'sters']).toContain(r[2])
+      expect(r[3]).toMatch(r[2] === 'sters' ? /^-$/ : /^[0-9a-f]{32}$/)
+      // doar obiecte SMS din `public`: tabelul nou (cu tipurile, secvența, indecșii, constrângerile, triggerul lui), funcțiile SMS și
+      // constrângerea CHECK lărgită de pe sms_mesaje — nimic din alt modul, nicio schemă a platformei
+      expect(r[1]).toMatch(/\bpublic\.(sms_|fn_sms_|ux_sms_)/)
+    }
+    const op = Object.fromEntries(randuri.map(r => [r[1], r[2]]))
+    expect(Object.keys(op)).toHaveLength(randuri.length)
+    // ce NU e creare: exact funcția înlocuită (4 parametri ștearsă, 5 creată), lista fixată și constrângerea CHECK a destinatarului
+    expect(randuri.filter(r => r[2] !== 'creat').map(r => r[2] + ' ' + r[1]).sort()).toEqual([
+      'schimbat constrangere tabel public.sms_mesaje.sms_mesaje_destinatar_tip_check',
+      'schimbat functie public.fn_sms_lot_destinatari(uuid)',
+      'sters functie public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)',
+    ])
+    expect(op['functie public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])']).toBe('creat')
+    expect(op['relatie public.sms_numere_serviciu']).toBe('creat')
+    // nicio politică și niciun drept implicit: tabelul nou se citește / scrie doar prin funcțiile DEFINER
+    expect(randuri.filter(r => ['politica', 'acl_implicit', 'schema', 'rol', 'extensie'].includes(r[0]))).toEqual([])
   })
 })
 
@@ -365,7 +393,11 @@ describe('20261220a r5 — documentul livrării (docs/sms/LIVRARE_20261220a_NUME
     expect(SCRIPT).toContain('docs/sms/LIVRARE_20261220a_NUMERE_SERVICIU.md')
     expect(nr(DOC, 'docs/LIVRARE_L15_V2.md')).toBeGreaterThanOrEqual(3)
     expect(DOC).toContain('Aplicarea fără amprenta globală NU e acceptată.')
-    expect(DOC).toMatch(/așteaptă ca PR-ul runnerului L15 v2 să fie pe\s+`main`/)
+    expect(DOC).toMatch(/Runnerul L15 v2 e pe\s+`main`/)
+    // baseline-ul completat (PR-ul de baseline): documentul îl consemnează, cu acceptarea pe nume a fiecărui semnal
+    expect(DOC).toContain('## 6. Baseline-ul: citirea pe producție')
+    expect(DOC).toContain('**SEMNALE acceptate: EXECUTE dinamic 0 · vederi 0 · alt limbaj 4')
+    for (const s of ['nume_care', 'vederi_care', 'sql_dinamic_care', 'limbaj_care']) expect(DOC.slice(DOC.indexOf('### 6.2'))).toContain(`\`${s}\``)
   })
   it('pașii 1–8 în ordine: citirea într-o SINGURĂ fotografie (script + GLOBAL + rădăcini), acceptarea nominală, manifestul, clona, ROLLBACK, aplicarea, REST, merge', () => {
     const titluri = ['**Citirea pe producție, într-o SINGURĂ fotografie.**', '**PR-ul de baseline: acceptarea NOMINALĂ a semnalelor.**', '**Manifestul**',
@@ -535,9 +567,18 @@ describe('20261220a r3 — proba cu două sesiuni (scripts/sms_numere_serviciu_c
 
 describe('20261220a — fără date sensibile în livrare (repo public)', () => {
   it('nicio cale de server, niciun telefon în afara celor fictive 0700…', () => {
-    for (const t of [MIG, REV, SCRIPT, citeste('scripts/sms_numere_serviciu_concurenta.mjs')]) {
+    for (const t of [MIG, REV, SCRIPT, citeste('scripts/sms_numere_serviciu_concurenta.mjs'), citeste('supabase/migrations/20261220a_sms_numere_serviciu.l15.tsv')]) {
       expect(t).not.toMatch(/[A-Z]:\\|\\\\gazpet|paw-data|Users[\\/]/i)
-      for (const m of t.match(/(\+?40|0)7\d{2}[ .]?\d{3}[ .]?\d{3}/g) || []) expect(m.replace(/\D/g, '')).toMatch(/^(40)?0?700/)
+      // amprentele (md5 = 32, sha256 = 64 de cifre hexazecimale: blocul BASELINE, amprentele corpurilor, manifestul) nu sunt telefoane: un
+      // șir de cifre din interiorul unui hash (ex. …2707405969…) nu se judecă drept număr; restul textului se verifică întreg
+      const faraAmprente = t.replace(/\b(?:[0-9a-f]{64}|[0-9a-f]{32})\b/g, '<amprenta>')
+      for (const m of faraAmprente.match(/(\+?40|0)7\d{2}[ .]?\d{3}[ .]?\d{3}/g) || []) expect(m.replace(/\D/g, '')).toMatch(/^(40)?0?700/)
     }
+    // contraproba regulii de mai sus: un telefon real rămâne prins și lângă o amprentă; o amprentă singură nu e prinsă
+    const proba = t => (t.replace(/\b(?:[0-9a-f]{64}|[0-9a-f]{32})\b/g, '<amprenta>').match(/(\+?40|0)7\d{2}[ .]?\d{3}[ .]?\d{3}/g) || [])
+      .filter(m => !/^(40)?0?700/.test(m.replace(/\D/g, '')))
+    expect(proba("('tabel x | acl', '95ee58415cf4aa3a2707405969598173')")).toEqual([])
+    expect(proba("('tabel x | acl', '95ee58415cf4aa3a2707405969598173') -- 0722 123 456")).toEqual(['0722 123 456'])
+    expect(proba('telefon 0722123456')).toEqual(['0722123456'])
   })
 })

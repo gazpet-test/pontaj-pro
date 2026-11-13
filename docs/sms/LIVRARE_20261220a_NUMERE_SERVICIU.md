@@ -1,9 +1,10 @@
 # Livrarea migrării 20261220a — SMS: numere de serviciu (PR #1084)
 
 **Stare: NEAPLICATĂ.** Pe producție se aplică **DOAR prin runnerul cu amprenta GLOBALĂ L15 v2**, cu plafonul de 2000 ms, după review
-și „da”-ul owner-ului. **Aplicarea fără amprenta globală NU e acceptată.** `20261220a` așteaptă ca PR-ul runnerului L15 v2 să fie pe
-`main`. Comenzile exacte (opțiuni, fișiere, coduri de ieșire) stau în `docs/LIVRARE_L15_V2.md` (PR-ul runnerului, în lucru — opțiunile
-se pot schimba); aici sunt doar pașii acestei migrări și ce e specific ei. Nu se copiază comenzile de acolo.
+și „da”-ul owner-ului. **Aplicarea fără amprenta globală NU e acceptată.** Runnerul L15 v2 e pe
+`main`; baseline-ul citit pe producție, acceptările și manifestul sunt în acest PR (pașii 1–4, secțiunea 6). Rămân pașii 5–8. Comenzile
+exacte (opțiuni, fișiere, coduri de ieșire) stau în `docs/LIVRARE_L15_V2.md`; aici sunt doar pașii acestei migrări și ce e specific ei.
+Nu se copiază comenzile de acolo.
 
 ## 1. Cine refuză ce
 
@@ -42,6 +43,10 @@ Pornirea închiderii din script (secțiunea 1, sursa `pornire`), fiecare cu sche
 plus funcțiile din politicile și triggerele tabelelor `sms_loturi` / `sms_mesaje`, așa cum le arată secțiunea 1 a scriptului în citirea
 respectivă (după migrările din repo: `public.fn_sms_e_owner()`, `public.fn_sms_loturi_reguli()`, `public.fn_sms_mesaje_reguli()`). Dacă
 secțiunea 1 arată alte funcții de politici / triggere, intră și ele.
+
+**Forma rădăcinii la citire.** Unealta de citire primește rădăcina fără paranteze drepte, deci tipurile tablou se scriu cu numele lor
+interne: crearea lotului se dă ca `fn_sms_lot_intern_creeaza(text,_text,_int4,boolean)` (cu schema în față). E aceeași funcție —
+în ieșire apare cu semnătura obișnuită, `text[]` / `integer[]`.
 
 ## 3. Regula DEFINER (rezolvarea sigură a numelor)
 
@@ -88,3 +93,93 @@ de baseline.
   porții L1–L6.
 - `src/smsNumereServiciuAmprente.test.js`: forma statică (blocurile identice, regulile din verificare, semnalele, antetul).
 - **Nu** dovedesc: comportamentul runnerului L15 v2 (amprenta globală), PostgreSQL 17, concurența reală, PostgREST real — pașii 3–7.
+
+## 6. Baseline-ul: citirea pe producție (13.11.2026), acceptările și probele pe clonă (pașii 1–4)
+
+Ieșirile întregi (lista catalogului, lanțul, coloana „detaliu”, detaliile manifestului, jurnalele probelor) stau în jurnalul livrării, la
+coordonator, și se dau recenzentului; nu se versionează. Aici e ce s-a constatat și ce s-a acceptat. Amprenta GLOBALĂ a producției nu se
+scrie în repo (se schimbă zilnic): cea folosită la aplicare e a recitirii din ziua livrării.
+
+### 6.1 Citirea (pasul 1)
+
+O singură fotografie, doar citire, cu uneltele de pe `main`, ca rolul de livrare, pe PostgreSQL 17.6.
+
+- Secțiunea 1: **53 de rânduri** = 41 de funcții + 12 rânduri ale tabelelor `sms_loturi` / `sms_mesaje` (drepturi, drepturi pe coloane,
+  politici, RLS, secvențe, triggere). Sunt în blocul BASELINE, în ordinea afișată.
+- Secțiunea 2: `refuz_definer_fara_search_path = 0`, `refuz_limbaj_neanalizabil = 0`, `folosite_lipsa = 0`. Secțiunea 3: toate `t`.
+- Lanțul citirii: aceleași 41 de funcții; 25 sunt SECURITY DEFINER, toate cu `cale=sigura` (calea proprie `public, pg_temp`). Rolurile cu
+  drept de creare în `public` (rândurile `INCREDERE`): proprietarul schemei, rolul de livrare și superuserul platformei — niciun rol al
+  aplicației.
+
+### 6.2 Acceptările nominale (pasul 2)
+
+**SEMNALE acceptate: EXECUTE dinamic 0 · vederi 0 · alt limbaj 4 (cele două agregate `sum` ale extensiei de vectori și funcțiile lor de
+tranziție) · DEFINER acceptate 0.**
+
+| Semnal | Ce arată citirea | Acceptarea |
+|---|---|---|
+| `nume_care` | niciunul | nimic de acceptat: corpurile noi nu potrivesc nicio funcție din afara listei FOLOSITE |
+| `vederi_care` | niciuna | nimic de acceptat: lanțul nu citește vederi |
+| `sql_dinamic_care` | niciuna | nimic de acceptat: niciun `EXECUTE` în corpurile lanțului, nici în comentarii |
+| `limbaj_care` | `extensions.sum(extensions.vector)`, `extensions.sum(extensions.halfvec)` (agregate), `extensions.vector_add(…)`, `extensions.halfvec_add(…)` (C) | acceptate, vezi mai jos |
+| „INVOKER fără search_path (de privit)” | `auth.uid()` și cele patru de mai sus | acceptate, vezi mai jos |
+
+- **Cele patru funcții ale extensiei de vectori** intră în lanț DOAR lexical: `fn_sms_consum_la(timestamptz)` și
+  `fn_sms_test_consum_zi_la(uuid, timestamptz)` adună segmentele mesajelor cu `sum(m.segmente)`, iar închiderea potrivește numele `sum` cu
+  orice funcție `sum` din afara `pg_catalog` (supra-aproximarea declarată); funcțiile de tranziție vin după ele, prin dependențe. Nu sunt
+  apelate și nu pot fi: `segmente` e număr întreg (apelul se rezolvă la `pg_catalog.sum`), iar schema `extensions` nu e în calea proprie a
+  celor două funcții (`public, pg_temp`). Sunt frunze (agregat / C, fără corp de analizat), ale platformei, cu drepturile obișnuite ale
+  extensiei. Stau în BASELINE: schimbarea oricăreia = refuz.
+- **`auth.uid()`** e funcția platformei (SQL, INVOKER, fără cale proprie). Corpul cheamă doar funcții din `pg_catalog`; apelanții din lanț
+  sunt SECURITY DEFINER cu calea `public, pg_temp`, în care `pg_catalog` se caută implicit primul. Stă în BASELINE (corp, proprietar, drepturi).
+- **Drepturile, din coloana „detaliu”:** `authenticated` are EXECUTE doar pe `fn_sms_angajati_lista()`, `fn_sms_e_owner()`,
+  `fn_sms_lot_destinatari(uuid)` și `fn_sms_lot_intern_creeaza(…)`; `service_role` doar pe `fn_sms_rezerva(…)` și pe cele două funcții de
+  cheie ale Redărilor; restul funcțiilor aplicației din lanț le poate chema doar proprietarul. PUBLIC / `anon` nu au drept pe nicio funcție
+  a aplicației din lanț. Tabelele `sms_loturi` / `sms_mesaje`: RLS pornit, câte o politică de citire pentru `authenticated` prin
+  `fn_sms_e_owner()`, `authenticated` are doar SELECT, câte un trigger de reguli (BEFORE INSERT OR UPDATE OR DELETE), fără drepturi pe
+  coloane, fără secvențe.
+
+### 6.3 Manifestul (pasul 3)
+
+`supabase/migrations/20261220a_sms_numere_serviciu.l15.tsv` — **32 de obiecte**, generat pe clonă cu migrarea din acest PR (antetul lui
+poartă sha256-ul migrării; testul static le leagă). Revizuit pe detaliile canonice:
+
+- tabelul nou `sms_numere_serviciu`: proprietarul = rolul de livrare, **drepturi doar pentru proprietar** (nimic pentru `anon` /
+  `authenticated` / `service_role`, cu toate privilegiile implicite ale schemei), RLS pornit, **nicio politică**; 11 coloane; cheia
+  primară; trei CHECK (denumire, notă, telefon în forma `+407` + 8 cifre); două indexuri unice parțiale (denumirea fără majuscule,
+  telefonul — doar pe rândurile active); secvența identității (drepturi doar pentru proprietar); tipul rând și tipul tablou; triggerul
+  de reguli;
+- funcțiile noi (crearea lotului cu 5 parametri, lista, administrarea, salvarea, dezactivarea): SECURITY DEFINER, calea
+  `public, pg_temp`, EXECUTE doar pentru `authenticated` și proprietar; funcția triggerului: doar proprietarul;
+- ce NU e creare: funcția de creare cu 4 parametri (ștearsă), `fn_sms_lot_destinatari(uuid)` (schimbată, aceleași drepturi) și
+  constrângerea CHECK a tipului de destinatar de pe `sms_mesaje` (lărgită cu `serviciu`).
+
+### 6.4 Clona și probele (pasul 4)
+
+Clona: PostgreSQL 17.6, aceeași versiune a extensiei de vectori și aceeași localizare a bazei ca producția, schema exportată din
+producție, identități sintetice. Pe ea, **secțiunea scriptului de amprente, lanțul, semnalele și contextul sunt identice cu ale producției**
+(diferă doar numărul de mesaje de scanat din secțiunea 3, o dată de conținut), iar plasa obiectelor de sistem e identică.
+
+- Comparatorul clonă ↔ producție, cu manifestul: **`COMPARABIL`**. Liniile `DE_EXPLICAT` (27), nominal:
+  - 15 privilegii implicite ale altor creatori — rolul de administrare al platformei în `cron`, `graphql`, `graphql_public`, `realtime` și
+    rolul de administrare al autentificării în `auth` (câte trei: tabele, secvențe, funcții). Sunt ale platformei; migrarea creează totul
+    direct, ca rolul de livrare, doar în `public`, și nu cheamă nicio funcție SECURITY DEFINER care creează obiecte;
+  - 8 extensii — cinci există doar pe producție (`pg_cron`, `pg_net`, `supabase_vault`, `hypopg`, `index_advisor`: ale platformei, clona
+    are funcții de înlocuire unde probele au nevoie), trei diferă doar prin proprietarul extensiei (`pgcrypto`, `uuid-ossp`,
+    `pg_stat_statements`). Corpurile noi nu cheamă nicio funcție de extensie (`nume_care` gol);
+  - 4 scheme care există doar pe producție (`cron`, `graphql`, `pgbouncer`, `realtime`): ale platformei, neatinse de migrare.
+- Restul diferențelor dintre liste (nimic care să existe doar pe clonă), pe grupuri: obiectele schemelor platformei (`auth`, `storage`,
+  `realtime`, `net`, `vault`, `cron`: tabele, coloane, constrângeri, politici, triggere, publicații, triggere de eveniment — clona are
+  doar ce le trebuie probelor), proprietarii și drepturile unor funcții de extensie, și 26 de constrângeri CHECK din `public` cu aceeași
+  regulă, dar altă formă a expresiei după export / restaurare (intervale desfăcute, ȘI-uri aplatizate). Niciuna nu e pe tabelele sau
+  funcțiile migrării: rândurile `schimbat` / `sters` din manifest au aceeași amprentă pe clonă și pe producție.
+- Proba „diferența obținută = manifestul” pe clonă: **`IDENTIC`**, nimic comis.
+- Aplicare → revenire → reaplicare → revenire, prin runner, cu amprenta globală verificată înainte și după: de fiecare dată 32 de
+  diferențe = manifestul; după fiecare revenire amprenta globală a clonei e cea dinainte. Timp: verificarea „înainte” ≈ 0,5 s, garda
+  finală ≈ 1,05 s din plafonul de 2 s.
+- Proba cu două sesiuni: `C1: OK`; cu mutantul fără lock: `mutant PRINS`.
+- **Schimbat după citire ⇒ refuz la «înainte»**, în trei variante, de fiecare dată cu amprenta globală, înaintea verificării proprii a
+  migrării și fără nicio schimbare: auxiliarul porții owner (`fn_sms_e_owner()`) cu alt corp; o funcție nouă, din afara lanțului (pe care
+  migrarea singură n-ar vedea-o); un drept schimbat pe un tabel din afara lanțului. După refacere, amprenta globală e cea dinainte.
+
+Pentru proba cu ROLLBACK pe țintă (pasul 5) rămân criteriile din `docs/LIVRARE_L15_V2.md`.
