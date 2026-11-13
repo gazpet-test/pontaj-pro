@@ -40,6 +40,7 @@ import ActivitatiProiectPanel from './ActivitatiProiectPanel.jsx'
 import MaterialeProiectPanel from './MaterialeProiectPanel.jsx'
 import UnitatiProiectPanel from './UnitatiProiectPanel.jsx'
 import ProiectNouWizard from './ProiectNouWizard.jsx'
+import { poateCreaSantier } from './lib/santiereDrept.js'
 import OfertarePF, { useAccesPF } from './OfertarePF.jsx'
 import { useDeciziiProiect, EtichetaDecizie, EchipaExtinsa, GeneratorProiect } from './ExecutieDeciziiEchipa.jsx'   // registrul deciziilor HR (PR3)
 // TKT-2026-0333: nr_contract scris doar în Execuție (fără contract_id) → semn + legare / înregistrare în Administrativ
@@ -999,6 +1000,7 @@ function DashboardProiectePage({ onSelectProiect, acces }) {
           onClose={() => setShowWizard(false)}
           onCreated={(id) => { setShowWizard(false); loadAll(); onSelectProiect(id, 'proiect') }}
           showToast={showToast}
+          poateCreaSantier={poateCreaSantier(profile)}
         />
       )}
     </div>
