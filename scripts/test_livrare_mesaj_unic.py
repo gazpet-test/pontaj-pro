@@ -11,8 +11,15 @@ Expected-ul vine din artefactul original (octetii lui) si din sha-ul dat, NU din
   * verificarea „un mesaj” (DO $mesaj_unic$, imediat dupa prolog): lungimea totala = len(M); felia „rest” incepe exact
     dupa ea si tine pana la capat, cu sha256 corect; felia copiei = octetii artefactului, la pozitia lor, sha = aprobat.
 Iesire 0 = OK (tipareste MESAJ_UNIC_OK ...); 1 = ESEC (motivul pe stderr).
+L15 v2 (13.11.2026, docs/LIVRARE_L15_V2.md): optional, la final, „--l15 <md5_aprobat> <manifest.l15.tsv>” cere in jurul
+copiei pasii AMPRENTA_GLOBALA: imediat dupa marcajul livrarii (set_config) si imediat inaintea copiei CREATE FUNCTION
+pg_temp.ag_cat_<T> (corpul = blocul AG_CATALOG v1 din scripts/amprenta_globala_v1.sql, extras aici independent), CREATE TEMP
+TABLE ag_ses_<T>, CREATE FUNCTION pg_temp.ag_inainte_<T> (cu md5-ul aprobat), DO $ag_pas_<T>$; imediat dupa inregistrare
+(DO $verif$) CREATE FUNCTION pg_temp.ag_dupa_<T> (md5-ul aprobat), DO $ag_pas_<T>$ cu manifestul EXACT (octetii fisierului),
+DROP-urile, apoi DO $lm_timp$. Acelasi <T> in toti pasii.
 """
 import hashlib
+import os
 import re
 import sys
 
@@ -82,7 +89,63 @@ def curat(t, a, b, scos):
     return " ".join(" ".join(parti).split())
 
 
+def bloc_catalog():
+    """Blocul AG_CATALOG v1 din fisierul versionat (fara CR), intre marcajele de linie intreaga."""
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amprenta_globala_v1.sql")
+    linii = open(f, "rb").read().decode("utf-8").replace("\r", "").split("\n")
+    a, b = "-- >>> AG_CATALOG v1", "-- <<< AG_CATALOG v1"
+    if linii.count(a) != 1 or linii.count(b) != 1:
+        esec("marcajele AG_CATALOG v1 nu apar exact o data in amprenta_globala_v1.sql")
+    return "\n".join(linii[linii.index(a) + 1:linii.index(b)])
+
+
+def verifica_l15(t, st, copie_t, md5, manifest):
+    """Pasii AMPRENTA_GLOBALA in jurul copiei (vezi docstring-ul modulului)."""
+    if not re.fullmatch(r"[0-9a-f]{32}", md5):
+        esec("--l15: md5 aprobat invalid")
+    man = open(manifest, "rb").read().decode("utf-8")
+    ct = t.find(copie_t)
+    # prima instructiune a copiei = cea care contine pozitia ct (incepe la LF-ul de dupa „;”-ul pasului dinainte)
+    i_cop = next((k for k, s in enumerate(st) if s[1] > ct), None)
+    if ct < 0 or i_cop is None or i_cop < 5:
+        esec("--l15: copia nu se gaseste in M")
+    ina = st[i_cop - 5:i_cop]
+    m = re.match(r"CREATE FUNCTION pg_temp\.ag_cat_([0-9a-f]{16})\(\)", ina[1][2])
+    if not ina[0][2].startswith("SELECT set_config('gazpet.livrare_migrare'") or not m:
+        esec("--l15: inaintea copiei trebuie: marcajul livrarii, apoi CREATE FUNCTION pg_temp.ag_cat_<T>()")
+    T = m.group(1)
+    if not (ina[2][2].startswith(f"CREATE TEMP TABLE ag_ses_{T} AS") and ina[3][2].startswith(f"CREATE FUNCTION pg_temp.ag_inainte_{T}()")
+            and ina[4][2] == f"DO $ag_pas_{T}$ BEGIN PERFORM pg_temp.ag_inainte_{T}(); END $ag_pas_{T}$"):
+        esec("--l15: pasul inainte nu e [ag_cat, ag_ses, ag_inainte, DO ag_pas] chiar inaintea copiei")
+    corp = t[ina[1][0]:ina[1][1]]
+    tag = f"$ag_cat_{T}$"
+    if corp.count(tag) != 2 or corp.split(tag)[1].strip("\n") != bloc_catalog():
+        esec("--l15: corpul ag_cat nu e EXACT blocul AG_CATALOG v1")
+    if f"IS DISTINCT FROM '{md5}'" not in t[ina[3][0]:ina[3][1]]:
+        esec("--l15: pasul inainte nu compara cu md5-ul aprobat")
+    i_ver = next((k for k in range(i_cop, len(st)) if st[k][2].startswith("DO $verif$")), None)
+    if i_ver is None or i_ver + 5 >= len(st):
+        esec("--l15: inregistrarea (DO $verif$) lipseste dupa copie")
+    d = st[i_ver + 1:i_ver + 7]
+    if not (d[0][2].startswith(f"CREATE FUNCTION pg_temp.ag_dupa_{T}(p_manifest pg_catalog.text)")
+            and d[1][2].startswith(f"DO $ag_pas_{T}$ BEGIN PERFORM pg_temp.ag_dupa_{T}($ag_man_{T}$")
+            and d[2][2].startswith(f"DROP FUNCTION pg_temp.ag_dupa_{T}(pg_catalog.text), pg_temp.ag_inainte_{T}(), pg_temp.ag_cat_{T}()")
+            and d[3][2].startswith(f"DROP TABLE pg_temp.ag_ses_{T},") and d[4][2] == f"DROP TABLE pg_temp.ag_man_{T}"
+            and d[5][2].startswith("DO $lm_timp$")):
+        esec("--l15: dupa inregistrare trebuie [ag_dupa, DO ag_pas(manifest), DROP-uri, DO lm_timp], acelasi tag")
+    if f"IS DISTINCT FROM '{md5}'" not in t[d[0][0]:d[0][1]]:
+        esec("--l15: pasul dupa nu verifica fotografia de dinainte cu md5-ul aprobat")
+    pas = t[d[1][0]:d[1][1]]
+    mt = f"$ag_man_{T}$"
+    if pas.count(mt) != 2 or pas.split(mt)[1] != man.rstrip("\n"):
+        esec("--l15: manifestul din mesaj nu e EXACT fisierul dat")
+    return T
+
+
 def main(a):
+    l15 = None
+    if len(a) >= 3 and a[-3] == "--l15":
+        l15, a = (a[-2], a[-1]), a[:-3]
     if len(a) not in (5, 6):
         print(__doc__, file=sys.stderr)
         return 2
@@ -169,8 +232,12 @@ def main(a):
             esec(f"garda nu contine {x!r}")
     if "\\" in t.replace(copie.decode("utf-8"), ""):
         esec("textul runnerului din M contine backslash (citirea literalilor ar depinde de standard_conforming_strings)")
+    l15_txt = ""
+    if l15:
+        T = verifica_l15(t, st, copie.decode("utf-8"), l15[0], l15[1])
+        l15_txt = f"; L15 v2: amprenta globala inainte / dupa in jurul copiei (tag {T}), md5 aprobat, manifest exact"
     print(f"MESAJ_UNIC_OK: {len(M)} octeti, {len(txt)} instructiuni intr-un mesaj, BEGIN prima, {final} ultima; "
-          f"verificarea: total + rest ({rlung} octeti) + {len(felii) - 1} copie/copii = artefactul aprobat")
+          f"verificarea: total + rest ({rlung} octeti) + {len(felii) - 1} copie/copii = artefactul aprobat{l15_txt}")
     return 0
 
 

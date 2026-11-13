@@ -61,6 +61,12 @@
 #   identica) | 1 diagnosticul nu s-a terminat (refuz / timeout / lista incompleta) | 2, 3, 5, 6, 22 ca mai sus.
 # --doar-genereaza <dosar_nou>: construieste si verifica local mesajul (oricare mod), il copiaza in dosar si iese cu 40,
 #   FARA nicio conexiune (pentru review-ul textului inainte de rulare; folosit de scripts/portal/test_diag_porti.sh).
+# L15 v2 (13.11.2026, docs/LIVRARE_L15_V2.md): --amprenta-globala-18a <md5> --diferente-globale-18a <20261118a_....l15.tsv>
+#   [--amprenta-globala-19a <md5> --diferente-globale-19a <20261119a_....l15.tsv>] = forma noua: runnerul genereaza si
+#   pasii AMPRENTA_GLOBALA (2_ag_inainte inaintea copiei, 4_ag_dupa dupa inregistrare) pentru fiecare migrare, iar mesajul
+#   ii include in aceeasi ordine ca livrarea. 19a vine dupa 18a in aceeasi tranzactie => GLOBAL-ul aprobat al lui 19a =
+#   GLOBAL-ul de DUPA 18a (tiparit de scripts/livrare_l15_manifest.sh pe clona). Perechile se dau impreuna (refuz 2 altfel);
+#   doar modul normal (nu --diagnostic-porti). Fara ele: mesajul de dinainte, neschimbat.
 # ============================================================================
 set -Eeuo pipefail
 umask 077
@@ -70,6 +76,7 @@ PLAFON_MS=2000
 M18="$ROOT/supabase/migrations/20261118a_portal_teren_identitate.sql"
 M19="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
 H="" P="" D="" SIS="" U="" V18=20261118120000 V19=20261119120000 DOAR18=0 JURNAL="" DIAG=0 GEN="" API_URL=""
+AG18="" AGM18="" AG19="" AGM19=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --doar-18a) DOAR18=1; shift; continue ;;
@@ -80,12 +87,20 @@ while [ $# -gt 0 ]; do
     --tinta-host) H="$2" ;; --tinta-port) P="$2" ;; --tinta-db) D="$2" ;; --tinta-sistem) SIS="$2" ;; --user) U="$2" ;;
     --versiune-18a) V18="$2" ;; --versiune-19a) V19="$2" ;; --jurnal) JURNAL="$2" ;; --doar-genereaza) GEN="$2" ;;
     --api-url) API_URL="$2" ;;
+    --amprenta-globala-18a) AG18="$2" ;; --diferente-globale-18a) AGM18="$2" ;;
+    --amprenta-globala-19a) AG19="$2" ;; --diferente-globale-19a) AGM19="$2" ;;
     *) refuz 2 "optiune nepermisa: $1" ;;
   esac
   shift 2
 done
 # r19: diagnosticul porneste DOAR 18a (19a cere postconditia 18a trecuta).
 [ "$DIAG" = 0 ] || DOAR18=1
+# L15 v2: perechile amprenta + manifest se dau impreuna; doar in modul normal; 19a cere si forma noua pentru 18a.
+{ [ -z "$AG18$AGM18" ] || { [ -n "$AG18" ] && [ -n "$AGM18" ]; }; } && { [ -z "$AG19$AGM19" ] || { [ -n "$AG19" ] && [ -n "$AGM19" ] && [ -n "$AG18" ]; }; } \
+  || refuz 2 "L15 v2: --amprenta-globala-XXa si --diferente-globale-XXa se dau impreuna (19a doar impreuna cu 18a)"
+[ -z "$AG18" ] || [ "$DIAG" = 0 ] || refuz 2 "L15 v2: forma noua nu se combina cu --diagnostic-porti"
+[ -z "$AG19" ] || [ "$DOAR18" = 0 ] || refuz 2 "L15 v2: --amprenta-globala-19a fara 19a (--doar-18a)"
+[ -z "$AG18" ] || [ -n "$AG19" ] || [ "$DOAR18" = 1 ] || refuz 2 "L15 v2: cu 18a in forma noua, 19a o cere si ea (sau --doar-18a)"
 if [ -n "$GEN" ]; then
   [ ! -e "$GEN" ] && [ -d "$(dirname "$GEN")" ] || refuz 2 "--doar-genereaza: dosarul trebuie sa fie NOU: $GEN"
 fi
@@ -126,15 +141,19 @@ SHA18="$(sha256sum "$M18" | cut -d' ' -f1)"; SHA19="$(sha256sum "$M19" | cut -d'
 echo "→ artefacte: 20261118a sha256 $SHA18; 20261119a sha256 $SHA19 (compara-le cu cele aprobate)"
 
 # 1. Generare cu runnerul oficial, fara conexiune (cod 40).
-genereaza() { # $1 artefactul, $2 sha, $3 versiunea, $4 dosarul (nou)
-  local rc=0
+genereaza() { # $1 artefactul, $2 sha, $3 versiunea, $4 dosarul (nou) [, $5 GLOBAL aprobat, $6 manifestul — L15 v2]
+  local rc=0 ag=()
+  [ -z "${5:-}" ] || ag=(--amprenta-globala "$5" --diferente-globale "$6")
   PSQL_BIN=/nu/se/foloseste bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$1" --sha256 "$2" --versiune "$3" \
     --tinta-db "$D" --tinta-sistem "$SIS" --tinta-host "$H" --tinta-port "$P" --user "$U" \
-    --plafon-tranzactie-ms "$PLAFON_MS" --genereaza-in "$4" >"$4.log" 2>&1 || rc=$?
+    --plafon-tranzactie-ms "$PLAFON_MS" --genereaza-in "$4" ${ag[@]+"${ag[@]}"} >"$4.log" 2>&1 || rc=$?
   [ "$rc" = 40 ] || { cat "$4.log" >&2; refuz 3 "generarea cu runnerul a esuat pentru $(basename "$1") (cod $rc, asteptat 40)"; }
 }
-genereaza "$M18" "$SHA18" "$V18" "$W/g18"
-[ "$DOAR18" = 1 ] || genereaza "$M19" "$SHA19" "$V19" "$W/g19"
+genereaza "$M18" "$SHA18" "$V18" "$W/g18" "$AG18" "$AGM18"
+[ "$DOAR18" = 1 ] || genereaza "$M19" "$SHA19" "$V19" "$W/g19" "$AG19" "$AGM19"
+# L15 v2: argumentele verificatorului local al mesajului (pasii amprentei, md5 + manifest) pentru fiecare migrare
+L15_18=(); [ -z "$AG18" ] || L15_18=(--l15 "$AG18" "$AGM18")
+L15_19=(); [ -z "$AG19" ] || L15_19=(--l15 "$AG19" "$AGM19")
 N18="$(basename "$M18" .sql)"; N19="$(basename "$M19" .sql)"
 
 # 2. Mesajul: aceeasi biblioteca ca livrarea; ROLLBACK in loc de COMMIT.
@@ -143,8 +162,9 @@ N18="$(basename "$M18" .sql)"; N19="$(basename "$M19" .sql)"
 REST="$W/m_rest.sql"; FELII=()
 adauga() { # $1 dosarul generat, $2 numele migrarii, $3 sha
   cat "$1/1_pre.sql" >>"$REST"
+  [ ! -f "$1/2_ag_inainte.sql" ] || cat "$1/2_ag_inainte.sql" >>"$REST"   # L15 v2: ca la livrare, inaintea copiei
   FELII+=("$(lm_octeti "$REST"):$(lm_octeti "$1/$2.sql"):$3")
-  { cat "$1/$2.sql"; lm_sep; cat "$1/3_inreg.sql"; lm_timp "$2"; } >>"$REST"
+  { cat "$1/$2.sql"; lm_sep; cat "$1/3_inreg.sql"; [ ! -f "$1/4_ag_dupa.sql" ] || cat "$1/4_ag_dupa.sql"; lm_timp "$2"; } >>"$REST"
 }
 : >"$REST"
 TAG_M="lm_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
@@ -155,9 +175,9 @@ if [ "$DIAG" = 0 ]; then
   lm_fin "$NUME_FIN" "$PLAFON_MS" ROLLBACK >>"$REST" || refuz 3 "garda finala"
   lm_mesaj "$W/g18/0_prolog.sql" "$REST" "$W/m_mesaj.sql" "$NUME_FIN" "${FELII[@]}" || refuz 3 "construirea mesajului"
   lm_trimite "$W/m_mesaj.sql" "$TAG_M" "$W/5_mesaj.sql" || refuz 3 "fisierul de trimitere"
-  python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" ROLLBACK \
+  python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g18/$N18.sql" "$SHA18" "$PLAFON_MS" ROLLBACK ${L15_18[@]+"${L15_18[@]}"} \
     || refuz 3 "verificarea locala a mesajului (18a)"
-  [ "$DOAR18" = 1 ] || python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g19/$N19.sql" "$SHA19" "$PLAFON_MS" ROLLBACK \
+  [ "$DOAR18" = 1 ] || python3 "$ROOT/scripts/test_livrare_mesaj_unic.py" "$W/5_mesaj.sql" "$W/g19/$N19.sql" "$SHA19" "$PLAFON_MS" ROLLBACK ${L15_19[@]+"${L15_19[@]}"} \
     || refuz 3 "verificarea locala a mesajului (19a)"
 else
   # r19: mesajul de DIAGNOSTIC (vezi antetul): 18a fara postconditie + lista portilor, fara inregistrare, ROLLBACK.
@@ -264,13 +284,13 @@ t0="$(date +%s%3N)"; rc=0
   >"$JURNAL/$OUT_J" 2>&1 || rc=$?
 t1="$(date +%s%3N)"
 echo "--- ${PFX}timpi (din jurnalul probei, ms de la BEGIN) ---"
-grep -E 'PORTAL_LOCKS|LIVRARE_TIMP|PLAFON_TIMP|PORTAL_1B_RECONCILIATE|PORTAL_NET_REL:' "$JURNAL/$OUT_J" | sed 's/^.*NOTICE: *//' || true
+grep -E 'PORTAL_LOCKS|LIVRARE_TIMP|PLAFON_TIMP|PORTAL_1B_RECONCILIATE|PORTAL_NET_REL:|AMPRENTA_GLOBALA' "$JURNAL/$OUT_J" | sed 's/^.*NOTICE: *//' || true
 echo "${PFX}total psql (conectare + SET + trimiterea mesajului + executie + RESET): $((t1 - t0)) ms; cod psql $rc"
 REZ=0
 if [ "$rc" != 0 ] || ! grep -q "PLAFON_TIMP $NUME_FIN: garda trecuta" "$JURNAL/$OUT_J"; then
   REZ=1
   echo "✗ ${PFX}PROBA PICATA (cod psql $rc). Motivul (ultimele linii ale jurnalului):" >&2
-  grep -E 'ERROR|FATAL|terminating|MESAJ_UNIC|PLAFON_|PORTAL_|DIAG_PORTI' "$JURNAL/$OUT_J" | tail -n 8 >&2 || tail -n 8 "$JURNAL/$OUT_J" >&2
+  grep -E 'ERROR|FATAL|terminating|MESAJ_UNIC|PLAFON_|PORTAL_|DIAG_PORTI|AMPRENTA_GLOBALA' "$JURNAL/$OUT_J" | tail -n 8 >&2 || tail -n 8 "$JURNAL/$OUT_J" >&2
   # r21: postconditia 18a / 19a numeste portile lipsa in mesaj => le scriem o poarta pe linie (porti_postconditie.txt).
   tr -d '\r' <"$JURNAL/$OUT_J" | sed -nE 's/^.*PORTAL_(POSTCONDITION_FAILED|1B_POSTCONDITION): [0-9]+ porti: //p' | head -n 1 \
     | awk -F'; ' '{ for (i = 1; i <= NF; i++) print $i }' >"$JURNAL/porti_postconditie.txt" || true
