@@ -1,7 +1,7 @@
 // Vremea zilei din Vaisala Xweather (20261221a): verificări statice ale livrării.
 // (1) L15 + L19: amprenta funcțiilor de drept folosește O SINGURĂ definiție — corpul AMPRENTA_L15 v1 din scripts/tichete_lot2_amprente.sql,
-//     copiat octet cu octet (fără CR) în scriptul coordonatorului (scripts/meteo_xweather_amprente.sql) și în migrare; BASELINE într-un singur
-//     bloc marcat (DE_COMPLETAT = refuz până îl lipește coordonatorul). (2) Revenirea poartă amprenta EXACTĂ a corpului fiecărei funcții create.
+//     copiat octet cu octet (fără CR) în scriptul coordonatorului (scripts/meteo_xweather_amprente.sql) și în migrare; închiderea tranzitivă
+//     (INCHIDERE_L15) tot o singură dată, identică în script și migrare; BASELINE într-un singur bloc marcat (DE_COMPLETAT = refuz). (2) Revenirea poartă amprenta EXACTĂ a corpului fiecărei funcții create.
 // (3) Drepturile și nemodificarea, scrise explicit; anon nimic. (4) Edge fn: credențialele nu ajung în cererea salvată / mesaje.
 // Comportamentul: scripts/pglite/test_meteo_xweather_local.mjs.
 import { describe, it, expect } from 'vitest'
@@ -37,17 +37,36 @@ describe('20261221a — AMPRENTA_L15: o singură definiție', () => {
     expect(blocuri(SCRIPT, A, B)).toEqual([canonic])
     expect(blocuri(MIG, A, B)).toEqual([canonic])
   })
-  it('restul secțiunii scriptului (lanțul de callee, linia de baseline, atenționările) = cel din sursă', () => {
-    const coada = t => t.slice(t.indexOf('amp_start(oid, sursa) AS ('), t.indexOf('ORDER BY c.eticheta COLLATE "C";') + 32)
-    expect(coada(SCRIPT)).toBe(coada(SURSA))
+  // r2 (review P1): închiderea tranzitivă se CALCULEAZĂ în migrare (nu se ia din BASELINE), cu același bloc ca scriptul coordonatorului
+  const IA = `-- >>> INCHIDERE_L15 ${X}`, IB = `-- <<< INCHIDERE_L15 ${X}`
+  it('închiderea: un singur bloc, identic în script și în migrare, înaintea corpului v1', () => {
+    const inch = blocuri(SCRIPT, IA, IB)
+    expect(inch.length).toBe(1)
+    expect(blocuri(MIG, IA, IB)).toEqual(inch)
+    for (const t of [SCRIPT, MIG]) expect(t.indexOf(IB)).toBeLessThan(t.indexOf(A))
+    // pornirea = tot ce cheamă direct predicatul nou (auth.uid() inclus)
+    for (const f of ["to_regprocedure('auth.uid()')", "to_regprocedure('public.fn_raport_santier_drept(bigint)')", "to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')"]) {
+      expect(inch[0]).toContain(f)
+    }
+    // fără limită de adâncime, fără restricție la câteva scheme
+    expect(inch[0]).not.toMatch(/adancime|regnamespace IN \(|'public'::regnamespace/)
+    expect(inch[0]).toContain('WHERE d.classid = \'pg_proc\'::regclass AND d.objid = l.oid')
+    expect(inch[0]).toContain('amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),')
+    // migrarea NU mai ia lista funcțiilor din BASELINE
+    expect(MIG).not.toMatch(/amp_functii_explicite\(oid\) AS \(SELECT to_regprocedure\(substr\(b\.eticheta/)
+    expect(MIG).toContain('WITH RECURSIVE\namp_tabele(oid)')
   })
-  it('intrarea: niciun tabel existent; pornirea = funcțiile de drept ale predicatului; aceeași în migrare', () => {
+  it('EXECUTE dinamic / limbaj neanalizabil în lanț = REFUZ în migrare (nu doar semnalat); funcțiile noi cheamă doar pornirea', () => {
+    expect(MIG).toContain("RAISE EXCEPTION '20261221a: lantul de acces are EXECUTE dinamic / limbaj neanalizabil (amprenta statica imposibila): %', v_exec;")
+    expect(MIG).toContain("RAISE EXCEPTION '20261221a post: functiile noi cheama in afara pornirii amprentate: %'")
+    expect(MIG).toContain("OR NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261221a() b WHERE b.eticheta = 'functie auth.uid()')")
+    expect(SCRIPT).toContain("'EXECUTE in corp (migrarea refuza)'")
+  })
+  it('intrarea: niciun tabel existent; aceeași în migrare; scriptul e doar citire', () => {
     const intrare = SCRIPT.slice(SCRIPT.indexOf(`-- >>> INTRARE ${X}`), SCRIPT.indexOf(`-- <<< INTRARE ${X}`))
     const tab = intrare.split('\n').find(l => l.startsWith('amp_tabele('))
     expect(tab).toBe('amp_tabele(oid) AS (SELECT c.oid FROM pg_class c WHERE false),')
     expect(MIG.split('\n').filter(l => l.startsWith('amp_tabele('))).toEqual([tab])
-    expect(intrare).toContain("to_regprocedure('public.fn_raport_santier_drept(bigint)')")
-    expect(intrare).toContain("to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')")
     expect(SCRIPT).toMatch(/BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;/)
     expect(SCRIPT.trim().endsWith('ROLLBACK;')).toBe(true)
   })
@@ -134,5 +153,11 @@ describe('edge fn meteo-sync: credențialele nu ies din apel', () => {
     expect(EDGE).toMatch(/if \(body\.xweather_backfill\) \{\n\s*if \(!esteOwner\) return json\(/)
     expect(EDGE).toContain("await db.from('meteo_zilnic_xweather').insert(z.rand)")
     expect(EDGE).not.toMatch(/meteo_zilnic_xweather'\)\.(upsert|update|delete)/)
+  })
+  it('reluarea completării: cursorul din rezultate (continuaPana), nu din plan; reverifica doar boolean, doar la owner', () => {
+    expect(EDGE).toContain('continuaPana(pl.sarcini, new Set([...confirmate].map(k => k.split(\'|\')[1])), pl.ramase)')
+    expect(EDGE).not.toContain('pl.continua_pana')
+    expect(EDGE).toContain("if (z && zConfirmata(z, scriere)) confirmate.add(`${s.site_id}|${s.zi}`);")
+    expect(EDGE).toContain("if (body.reverifica != null && typeof body.reverifica !== 'boolean')")
   })
 })

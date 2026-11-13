@@ -4,12 +4,12 @@
 -- Ce tipărește (același format ca scripts/raport_linii_proiect_amprente.sql / scripts/tichete_lot2_amprente.sql):
 --   eticheta | amprenta (md5 pe „detaliu”) | linie_baseline (de copiat în blocul BASELINE al migrării) | sursa | atentie | detaliu
 --   * niciun tabel existent nu se schimbă (migrarea creează doar obiecte noi; cheia străină spre sites nu depinde de drepturi / politici);
---   * funcțiile: pornirea = cele două funcții de drept pe care le cheamă predicatul nou fn_meteo_vede_site (fn_raport_santier_drept și
---     fn_executie_proiect_permis) și „indiciile” = numele apare în corpul unei funcții din listă (callee tranzitiv; plpgsql nu lasă
---     pg_depend: auth.uid(), fn_executie_acces_nerestrans / _cont, fn_executie_acces_lista / _cont …). Indiciul e DOAR o propunere pentru
---     revizor: poarta din migrare nu caută nimic în text, compară exact lista din BASELINE;
+--   * funcțiile: ÎNCHIDEREA tranzitivă (blocul INCHIDERE_L15, IDENTIC cu cel din migrare — r2): pornirea = ce cheamă direct predicatul nou
+--     fn_meteo_vede_site (auth.uid(), fn_raport_santier_drept, fn_executie_proiect_permis), apoi orice funcție apelată „nume(” din corpurile
+--     sql / plpgsql ale lanțului și dependențele din pg_depend, fără limită de adâncime. Migrarea calculează ACEEAȘI mulțime și cere ca
+--     baseline-ul s-o aibă EXACT (sursa: pornire / inchidere);
 --   * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, DEFINER fără search_path,
---     EXECUTE în corp).
+--     EXECUTE în corp — pe acesta migrarea îl REFUZĂ).
 -- Cum se folosește: coloana linie_baseline, în ordinea afișată, se copiază ÎNTREAGĂ între marcajele „>>> BASELINE 20261221a” /
 --   „<<< BASELINE 20261221a” ale migrării (în locul rândului DE_COMPLETAT; singurul loc din migrare cu valori de producție), iar „detaliu”
 --   intră în review. Migrarea refuză până atunci și refuză orice diferență față de el, înainte și după schimbare.
@@ -25,25 +25,42 @@ SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_sys
 WITH RECURSIVE
 -- >>> INTRARE 20261221a
 amp_tabele(oid) AS (SELECT c.oid FROM pg_class c WHERE false),
-amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_raport_santier_drept(bigint)')::oid), (to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')::oid)),
 -- <<< INTRARE 20261221a
-amp_start(oid, sursa) AS (
-  SELECT s.oid, 'pornire' FROM amp_pornire s
+-- >>> INCHIDERE_L15 20261221a
+-- Pornirea = tot ce cheamă DIRECT predicatul nou fn_meteo_vede_site: auth.uid() și cele două funcții de drept (postcondiția verifică
+--   că funcțiile noi nu cheamă nimic altceva). Închiderea se CALCULEAZĂ aici, din catalog, nu se ia din BASELINE (r2, review P1): orice
+--   funcție (în afara pg_catalog / information_schema) al cărei nume apare ca apel „nume(” în corpul unei funcții sql / plpgsql din lanț
+--   (supra-aproximare: un nume potrivit în plus doar intră în amprentă), numele neobișnuite prin căutare de text, plus dependențele din
+--   pg_depend (corpurile BEGIN ATOMIC). Fără limită de adâncime: UNION oprește ciclurile. BASELINE-ul trebuie să aibă EXACT această
+--   mulțime (o funcție lipsă sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz (amp_verifica).
+amp_pornire(oid) AS (VALUES (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_raport_santier_drept(bigint)')::oid),
+                            (to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')::oid)),
+amp_lant(oid) AS (
+  SELECT s.oid FROM amp_pornire s WHERE s.oid IS NOT NULL
   UNION
-  SELECT d.refobjid, 'politica' FROM pg_depend d JOIN pg_policy pol ON pol.oid = d.objid
+  SELECT d.refobjid FROM pg_depend d JOIN pg_policy pol ON pol.oid = d.objid
    WHERE d.classid = 'pg_policy'::regclass AND d.refclassid = 'pg_proc'::regclass AND pol.polrelid IN (SELECT t.oid FROM amp_tabele t)
   UNION
-  SELECT tg.tgfoid, 'trigger' FROM pg_trigger tg WHERE tg.tgrelid IN (SELECT t.oid FROM amp_tabele t) AND NOT tg.tgisinternal
-),
-amp_lant(oid, adancime) AS (
-  SELECT s.oid, 0 FROM amp_start s
+  SELECT tg.tgfoid FROM pg_trigger tg WHERE tg.tgrelid IN (SELECT t.oid FROM amp_tabele t) AND NOT tg.tgisinternal
   UNION
-  SELECT p2.oid, l.adancime + 1 FROM amp_lant l JOIN pg_proc p ON p.oid = l.oid
-    JOIN pg_proc p2 ON p2.oid <> p.oid AND p2.pronamespace IN ('public'::regnamespace, to_regnamespace('auth'), to_regnamespace('executie_acces_intern'))
-     AND p.prolang IN (SELECT lg.oid FROM pg_language lg WHERE lg.lanname IN ('sql', 'plpgsql')) AND p.prosrc ~* ('\m' || p2.proname || '\M')
-   WHERE l.adancime < 6
+  SELECT x.oid FROM amp_lant l CROSS JOIN LATERAL (
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
+      JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1])
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      JOIN pg_proc p2 ON p2.proname !~ '^[[:alpha:]_][[:alnum:]_$]*$'
+       AND (strpos(lower(p.prosrc), lower(p2.proname)) > 0 OR strpos(lower(p.prosrc), lower(replace(p2.proname, '"', '""'))) > 0)
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT d.refobjid FROM pg_depend d JOIN pg_proc p2 ON p2.oid = d.refobjid
+     WHERE d.classid = 'pg_proc'::regclass AND d.objid = l.oid AND d.refclassid = 'pg_proc'::regclass
+       AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+  ) x
 ),
 amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),
+-- <<< INCHIDERE_L15 20261221a
 -- >>> AMPRENTA_L15 v1
 amp_functii(oid) AS (
   SELECT f.oid FROM amp_functii_explicite f WHERE f.oid IS NOT NULL
@@ -125,7 +142,7 @@ amp_calc(eticheta, amprenta, detaliu) AS (
 SELECT c.eticheta, c.amprenta,
        CASE WHEN row_number() OVER (ORDER BY c.eticheta COLLATE "C") = 1 THEN '    ' ELSE '  , ' END || format('(%L, %L)', c.eticheta, c.amprenta) AS linie_baseline,
        CASE WHEN c.eticheta LIKE 'functie %' THEN
-              coalesce((SELECT string_agg(DISTINCT s.sursa, ', ') FROM amp_start s WHERE s.oid = to_regprocedure(substr(c.eticheta, 9))), 'indiciu')
+              CASE WHEN to_regprocedure(substr(c.eticheta, 9))::oid IN (SELECT s.oid FROM amp_pornire s) THEN 'pornire' ELSE 'inchidere' END
             ELSE 'tabel' END AS sursa,
        concat_ws('; ',
          CASE WHEN c.eticheta LIKE '% | acl%' AND c.detaliu ~ '(^|[ ,;])(anon|PUBLIC):' THEN 'drepturi pentru anon / PUBLIC' END,
@@ -133,7 +150,8 @@ SELECT c.eticheta, c.amprenta,
          CASE WHEN c.eticheta LIKE '% | politici' AND c.detaliu ~ 'roluri=([^|]*,)?(PUBLIC|anon)[,| ]' THEN 'politica pentru PUBLIC / anon' END,
          CASE WHEN c.eticheta LIKE 'functie %' AND c.detaliu LIKE '%definer=true%' AND c.detaliu LIKE '%config=(mostenit)%' THEN 'DEFINER fara search_path (migrarea refuza)' END,
          CASE WHEN c.eticheta LIKE 'functie %' AND c.detaliu LIKE '%definer=false%' AND c.detaliu LIKE '%config=(mostenit)%' THEN 'INVOKER fara search_path (de privit)' END,
-         CASE WHEN c.eticheta LIKE 'functie %' AND (SELECT p.prosrc FROM pg_proc p WHERE p.oid = to_regprocedure(substr(c.eticheta, 9))) ~* '\mexecute\M' THEN 'EXECUTE in corp (de privit)' END
+         CASE WHEN c.eticheta LIKE 'functie %' AND (SELECT regexp_replace(p.prosrc, '''execute''', '', 'gi') FROM pg_proc p
+                                                     WHERE p.oid = to_regprocedure(substr(c.eticheta, 9))) ~* '\mexecute\M' THEN 'EXECUTE in corp (migrarea refuza)' END
        ) AS atentie,
        c.detaliu
   FROM amp_calc c ORDER BY c.eticheta COLLATE "C";

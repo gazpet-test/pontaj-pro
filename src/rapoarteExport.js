@@ -11,9 +11,9 @@ import html2canvas from 'html2canvas'
 import LOGO_B64 from './logo.js'
 import { supabase } from './lib/supabase.js'
 // vremea zilei din Vaisala Xweather (20261221a): foaia Excel se construiește în rapoarteExcelVreme.js (coloanele de vreme + foaia de sursă);
-// citirea vremii e paginată, iar o eroare oprește exportul (L18, L23)
-import { zileXweather } from './meteoXweatherUtil.js'
-import { construiesteRapoarteXlsx, fmtData, utj, nefunc, alimentate } from './rapoarteExcelVreme.js'
+// citirea vremii e paginată, iar o eroare oprește exportul (L18, L23). Vederea încă inexistentă (migrarea neaplicată) = exportul de dinainte,
+// fără coloanele de vreme și fără foaia nouă, fără eroare.
+import { registruRapoarteXlsx, fmtData, utj, nefunc, alimentate } from './rapoarteExcelVreme.js'
 
 const BUCKET = 'rapoarte-zilnice'
 const blobToDataURL = (blob) => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob) })
@@ -39,9 +39,8 @@ const slug = (s) => String(s || 'santier').replace(/[^\w]+/g, '_').replace(/^_+|
 // ── EXCEL ──────────────────────────────────────────────────────────────────
 export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, to, client = supabase }) {
   const XLSX = await import('xlsx-js-style')
-  // vremea zilelor exportate: toate rândurile (paginat); o eroare oprește exportul (nu se scoate un Excel cu „fără date” fals)
-  const vreme = await zileXweather(client, [...new Set(list.map(r => r.site_id))], { de: from, pana: to })
-  const wb = construiesteRapoarteXlsx({ XLSX, list, siteNameOf, titluSite, from, to, vreme, generatLa: new Date().toLocaleString('ro-RO') })
+  // vremea zilelor exportate (paginat) + registrul; vederea inexistentă încă = exportul ca înainte; altă eroare oprește exportul
+  const wb = await registruRapoarteXlsx({ XLSX, client, list, siteNameOf, titluSite, from, to, generatLa: new Date().toLocaleString('ro-RO') })
   XLSX.writeFile(wb, `Rapoarte_${slug(titluSite)}_${from}_${to}.xlsx`)
 }
 

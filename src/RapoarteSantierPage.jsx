@@ -486,7 +486,8 @@ function ModalDetaliu({ raport, siteName, onClose, poateEdita, onRezumat }) {
         )}
 
         {/* vremea ZILEI (20261221a): rezumatul Vaisala Xweather preluat automat după încheierea zilei, cu sursa scrisă explicit */}
-        <Bloc titlu="🌦 Vremea zilei (Vaisala Xweather)"><MeteoZiXweather siteId={raport.site_id} data={raport.data} /></Bloc>
+        {/* cadrul (titlul) e dat componentei: dacă funcția nu e încă activă (vederea lipsește), nu apare nici titlul */}
+        <MeteoZiXweather siteId={raport.site_id} data={raport.data} cadru={(c) => <Bloc titlu="🌦 Vremea zilei (Vaisala Xweather)">{c}</Bloc>} />
         {raport.meteo?.temp != null && <Bloc titlu="🌤 Vremea la trimiterea raportului"><div style={{ fontSize: 13, color: G.text }}><MeteoRaportText meteo={raport.meteo} /></div></Bloc>}
         {raport.lucrari_efectuate && <Bloc titlu="🔧 Lucrări efectuate"><Text v={raport.lucrari_efectuate} /></Bloc>}
         {raport.subcontractori && <Bloc titlu="🤝 Subcontractori"><Text v={raport.subcontractori} /></Bloc>}

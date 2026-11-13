@@ -1,7 +1,7 @@
 // Rapoarte Șantier → exportul Excel: coloanele de vreme pe fiecare raport / zi și foaia „Vremea — sursă și metodă” (20261221a), plus
 // citirea PAGINATĂ a rapoartelor (L23: max-rows 1000 pe server; keyset pe id până la pagina goală, eroarea se aruncă).
 // Logica e aici (fără jsPDF / html2canvas / clientul Supabase), ca s-o poată testa vitest; rapoarteExport.js o folosește (și helperii de format).
-import { SURSA, RAZA_STATIE_KM, cheie, descriereRo, sursaScurta, textStatie, fmtMoment } from './meteoXweatherUtil.js'
+import { SURSA, RAZA_STATIE_KM, cheie, descriereRo, sursaScurta, textStatie, fmtMoment, vremeExport } from './meteoXweatherUtil.js'
 
 // helperii de format ai exportului (aceiași pentru Excel și PDF)
 export const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
@@ -74,20 +74,24 @@ export async function toateRapoartele(client, { siteIds, from, to, siteId = null
 }
 
 // Foaia „Rapoarte” (un rând pe raport) + coloanele de vreme pe fiecare raport / zi + foaia „Vremea — sursă și metodă”.
-// vreme = rândurile din v_meteo_zilnic_xweather pentru șantierele și intervalul exportat (citite paginat de exportRapoarteExcel).
+// vreme = rândurile din v_meteo_zilnic_xweather pentru șantierele și intervalul exportat (citite paginat), sau null = funcția nu e încă activă
+// (vederea nu există: migrarea 20261221a neaplicată) → registrul EXACT de dinainte: fără coloanele de vreme, fără foaia nouă, antetul vechi.
+export const CAP_RAPOARTE = ['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'TESA', 'Alții', 'Total pers.', 'Utilaje/mașini', 'Alimentate', 'Nefuncț.', 'Lucrări efectuate', 'Subcontractori', 'Mașini', 'Probleme', 'Plan mâine']
 export function construiesteRapoarteXlsx({ XLSX, list, siteNameOf, titluSite, from, to, vreme, generatLa }) {
+  const cuVreme = vreme != null
   const thin = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } }
   const headerStyle = { fill: { fgColor: { rgb: '1F3A5F' } }, font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: thin }
   const cellBase = { font: { name: 'Calibri', sz: 10 }, alignment: { vertical: 'top', wrapText: true }, border: thin }
-  const CAP = ['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'TESA', 'Alții', 'Total pers.', 'Utilaje/mașini', 'Alimentate', 'Nefuncț.', 'Lucrări efectuate', 'Subcontractori', 'Mașini', 'Probleme', 'Plan mâine', ...CAP_VREME]
+  const CAP = cuVreme ? [...CAP_RAPOARTE, ...CAP_VREME] : [...CAP_RAPOARTE]
   const COLS = CAP.length
-  const V0 = CAP.length - CAP_VREME.length   // prima coloană de vreme
+  const V0 = CAP_RAPOARTE.length   // prima coloană de vreme (doar cu vreme)
   const harta = new Map((vreme || []).map(v => [cheie(v.site_id, v.data), v]))
 
   const sorted = [...list].sort((a, b) => a.data.localeCompare(b.data))
+  const antet = `${titluSite}  •  ${from} → ${to}  •  Generat: ${generatLa}  •  ${sorted.length} rapoarte`
   const aoa = [
     ['RAPOARTE ȘANTIER'],
-    [`${titluSite}  •  ${from} → ${to}  •  Generat: ${generatLa}  •  ${sorted.length} rapoarte  •  vremea: ${harta.size ? 'Vaisala Xweather (vezi foaia „' + FOAIE_VREME + '”)' : 'fără date Vaisala Xweather în interval'}`],
+    [cuVreme ? `${antet}  •  vremea: ${harta.size ? 'Vaisala Xweather (vezi foaia „' + FOAIE_VREME + '”)' : 'fără date Vaisala Xweather în interval'}` : antet],
     [],
     CAP,
   ]
@@ -98,7 +102,7 @@ export function construiesteRapoarteXlsx({ XLSX, list, siteNameOf, titluSite, fr
       p.sudori || 0, p.lacatusi || 0, p.operatori || 0, p.soferi || 0, p.necalificati || 0, p.tesa || 0, p.altii || 0, p.total || 0,
       utj(r).length, alimentate(r), nefunc(r).length,
       r.lucrari_efectuate || '', r.subcontractori || '', r.masini || '', r.probleme || '', r.plan_maine || '',
-      ...celuleVreme(harta.get(cheie(r.site_id, r.data))),
+      ...(cuVreme ? celuleVreme(harta.get(cheie(r.site_id, r.data))) : []),
     ])
   })
 
@@ -112,13 +116,17 @@ export function construiesteRapoarteXlsx({ XLSX, list, siteNameOf, titluSite, fr
       const ref = XLSX.utils.encode_cell({ r, c })
       if (!ws[ref]) continue
       ws[ref].s = { ...cellBase }
-      if ((c >= 3 && c <= 13) || (c >= V0 && c < V0 + 5)) ws[ref].s.alignment = { ...cellBase.alignment, horizontal: 'center', vertical: 'center' }
+      if ((c >= 3 && c <= 13) || (cuVreme && c >= V0 && c < V0 + 5)) ws[ref].s.alignment = { ...cellBase.alignment, horizontal: 'center', vertical: 'center' }
     }
   }
   ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 7 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 8 }, { wch: 6 }, { wch: 6 }, { wch: 9 }, { wch: 13 }, { wch: 10 }, { wch: 8 }, { wch: 42 }, { wch: 30 }, { wch: 22 }, { wch: 30 }, { wch: 30 },
-    { wch: 8 }, { wch: 8 }, { wch: 11 }, { wch: 9 }, { wch: 10 }, { wch: 22 }, { wch: 60 }]
+    ...(cuVreme ? [{ wch: 8 }, { wch: 8 }, { wch: 11 }, { wch: 9 }, { wch: 10 }, { wch: 22 }, { wch: 60 }] : [])]
 
-  const sursa = foaieSursaVreme({ list: sorted, vreme: vreme || [], siteNameOf, from, to, generatLa })
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Rapoarte')
+  if (!cuVreme) return wb
+
+  const sursa = foaieSursaVreme({ list: sorted, vreme, siteNameOf, from, to, generatLa })
   const wsV = XLSX.utils.aoa_to_sheet(sursa)
   sursa.forEach((row, r) => row.forEach((_, c) => {
     const ref = XLSX.utils.encode_cell({ r, c })
@@ -126,9 +134,12 @@ export function construiesteRapoarteXlsx({ XLSX, list, siteNameOf, titluSite, fr
     wsV[ref].s = (r === 0 || row[0] === 'Șantier') ? headerStyle : { ...cellBase, font: { ...cellBase.font, bold: c === 0 } }
   }))
   wsV['!cols'] = [{ wch: 30 }, { wch: 120 }]
-
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Rapoarte')
   XLSX.utils.book_append_sheet(wb, wsV, FOAIE_VREME)
   return wb
+}
+
+// citirea vremii + registrul (folosit de exportRapoarteExcel): vederea inexistentă încă = registrul de dinainte; altă eroare se aruncă (L18)
+export async function registruRapoarteXlsx({ XLSX, client, list, siteNameOf, titluSite, from, to, generatLa }) {
+  const vreme = await vremeExport(client, [...new Set(list.map(r => r.site_id))], { de: from, pana: to })
+  return construiesteRapoarteXlsx({ XLSX, list, siteNameOf, titluSite, from, to, vreme, generatLa })
 }

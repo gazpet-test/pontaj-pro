@@ -2,9 +2,10 @@
 // Valorile așteptate sunt scrise de mână din cerere (L25); clientul Supabase e un fals care imită plafonul max-rows și filtrele PostgREST.
 import { describe, it, expect } from 'vitest'
 import * as XLSX_mod from 'xlsx-js-style'
-import { zileXweather, ziXweather, stareZi, textValori, textStatie, textSursa, sursaScurta, descriereRo, directieRo, TEXT_IN_CURS, TEXT_FARA }
-  from './meteoXweatherUtil.js'
-import { celuleVreme, foaieSursaVreme, construiesteRapoarteXlsx, toateRapoartele, CAP_VREME, FARA_DATE, FOAIE_VREME } from './rapoarteExcelVreme.js'
+import { zileXweather, ziXweather, stareZi, textValori, textStatie, textSursa, sursaScurta, descriereRo, directieRo, TEXT_IN_CURS, TEXT_FARA,
+  lipsaVedereXw, vremeExport } from './meteoXweatherUtil.js'
+import { celuleVreme, foaieSursaVreme, construiesteRapoarteXlsx, registruRapoarteXlsx, toateRapoartele, CAP_VREME, CAP_RAPOARTE, FARA_DATE, FOAIE_VREME }
+  from './rapoarteExcelVreme.js'
 const XLSX = XLSX_mod.default || XLSX_mod
 
 const R = {
@@ -15,6 +16,7 @@ const R = {
 }
 
 // client fals: un tabel în memorie, filtre eq / gte / lte / gt / in, ordonare, limită plafonată la 1000 (ca max-rows)
+// eroare: text (eroare generică pe orice tabel) sau { tabel: obiectEroare } (eroare doar pe acel tabel, ex. vederea încă inexistentă)
 function clientFals(tabele, { eroare = null, plafon = 1000 } = {}) {
   const apeluri = []
   return {
@@ -28,7 +30,8 @@ function clientFals(tabele, { eroare = null, plafon = 1000 } = {}) {
         order(c) { ord = c; return q }, limit(n) { lim = n; return q },
         then(res, rej) {
           apeluri.push(t)
-          if (eroare) return Promise.resolve({ data: null, error: { message: eroare } }).then(res, rej)
+          if (typeof eroare === 'string') return Promise.resolve({ data: null, error: { message: eroare } }).then(res, rej)
+          if (eroare && eroare[t]) return Promise.resolve({ data: null, error: eroare[t] }).then(res, rej)
           let d = (tabele[t] || []).filter(r => f.every(fn => fn(r)))
           if (ord) d = [...d].sort((a, b) => (a[ord] < b[ord] ? -1 : a[ord] > b[ord] ? 1 : 0))
           d = d.slice(0, Math.min(lim ?? Infinity, plafon))
@@ -134,6 +137,60 @@ describe('exportul Excel pe lucrare', () => {
     expect(text).toMatch(/Automat, o dată pe zi/)
     expect(text).toMatch(/Santier A \| coordonate: 44\.94, 26\.02 · stația de observație cea mai apropiată: Bucuresti\/Baneasa \(LRBS\), la 12,4 km · 2 zile cu rapoarte: 1 cu date, 1 fără date/)
     expect(text).not.toMatch(/\bAI\b|Claude|generat automat/i)
+  })
+  it('cu migrarea APLICATĂ (vederea există): registrul are coloanele de vreme și foaia nouă', async () => {
+    const wb = await registruRapoarteXlsx({ XLSX, client: clientFals({ v_meteo_zilnic_xweather: [R] }), list, siteNameOf: nume, titluSite: 'Santier A',
+      from: '2026-11-01', to: '2026-11-13', generatLa: 'x' })
+    expect(wb.SheetNames).toEqual(['Rapoarte', FOAIE_VREME])
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets.Rapoarte, { header: 1, defval: '' })
+    expect(aoa[3]).toEqual([...CAP_RAPOARTE, ...CAP_VREME])
+    expect(aoa[4].slice(-7, -2)).toEqual([1.2, 9.46, 4.6, 0, 31.5])
+  })
+  it('cu migrarea NEAPLICATĂ (vederea lipsește): exportul de dinainte, fără coloanele de vreme, fără foaia nouă, fără eroare', async () => {
+    for (const lipsa of [
+      { code: 'PGRST205', message: "Could not find the table 'public.v_meteo_zilnic_xweather' in the schema cache", details: null, hint: null },
+      { code: '42P01', message: 'relation "public.v_meteo_zilnic_xweather" does not exist' },
+    ]) {
+      const c = clientFals({}, { eroare: { v_meteo_zilnic_xweather: lipsa } })
+      const wb = await registruRapoarteXlsx({ XLSX, client: c, list, siteNameOf: nume, titluSite: 'Santier A', from: '2026-11-01', to: '2026-11-13', generatLa: '13.11.2026, 10:00' })
+      expect(wb.SheetNames).toEqual(['Rapoarte'])
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets.Rapoarte, { header: 1, defval: '' })
+      // exact antetul și capul de tabel de pe main (19 coloane), un rând pe raport, nimic despre vreme
+      expect(aoa[1][0]).toBe('Santier A  •  2026-11-01 → 2026-11-13  •  Generat: 13.11.2026, 10:00  •  2 rapoarte')
+      expect(aoa[3]).toEqual(['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'TESA', 'Alții', 'Total pers.', 'Utilaje/mașini', 'Alimentate', 'Nefuncț.', 'Lucrări efectuate', 'Subcontractori', 'Mașini', 'Probleme', 'Plan mâine'])
+      expect(aoa.slice(4).every(r => r.length === 19)).toBe(true)
+      expect(wb.Sheets.Rapoarte['!cols'].length).toBe(19)
+      expect(wb.Sheets.Rapoarte['!merges'][0].e.c).toBe(18)
+      expect(JSON.stringify(aoa)).not.toMatch(/Xweather|fără date|vreme/i)
+    }
+  })
+  it('altă eroare la citirea vremii (drepturi, rețea, alt obiect): exportul se OPREȘTE cu eroare (L18), nu iese fără vreme', async () => {
+    for (const alta of [
+      { code: '42501', message: 'permission denied for view v_meteo_zilnic_xweather' },
+      { code: 'PGRST205', message: "Could not find the table 'public.v_meteo_zilnic_xweather_vechi' in the schema cache" },
+      { code: '42P01', message: 'relation "public.alt_tabel" does not exist' },
+      { message: 'Failed to fetch' },
+    ]) {
+      const c = clientFals({}, { eroare: { v_meteo_zilnic_xweather: alta } })
+      await expect(registruRapoarteXlsx({ XLSX, client: c, list, siteNameOf: nume, titluSite: 'A', from: 'a', to: 'b', generatLa: 'x' })).rejects.toThrow(/nu se poate citi/)
+    }
+  })
+  it('recunoașterea „vederea nu există încă”: doar codul de relație lipsă + numele EXACT al vederii', async () => {
+    expect(lipsaVedereXw({ code: 'PGRST205', message: "Could not find the table 'public.v_meteo_zilnic_xweather' in the schema cache" })).toBe(true)
+    expect(lipsaVedereXw({ code: '42P01', message: 'relation "v_meteo_zilnic_xweather" does not exist' })).toBe(true)
+    expect(lipsaVedereXw({ code: '42501', message: 'permission denied for view v_meteo_zilnic_xweather' })).toBe(false)
+    expect(lipsaVedereXw({ code: 'PGRST205', message: "Could not find the table 'public.v_meteo_zilnic_xweather2' in the schema cache" })).toBe(false)
+    expect(lipsaVedereXw({ code: 'PGRST205', message: "Could not find the table 'public.meteo_cache' in the schema cache" })).toBe(false)
+    expect(lipsaVedereXw(null)).toBe(false)
+    // vremeExport: null doar la vederea lipsă; ziXweather marchează eroarea pentru blocul din raport (care atunci nu apare)
+    const lipsa = { v_meteo_zilnic_xweather: { code: 'PGRST205', message: "Could not find the table 'public.v_meteo_zilnic_xweather' in the schema cache" } }
+    expect(await vremeExport(clientFals({}, { eroare: lipsa }), [10], { de: 'a', pana: 'b' })).toBeNull()
+    expect(await vremeExport(clientFals({ v_meteo_zilnic_xweather: [R] }), [10], {})).toEqual([R])
+    const e = await ziXweather(clientFals({}, { eroare: lipsa }), 10, '2026-11-13').catch(x => x)
+    expect(e.vedereLipsa).toBe(true)
+    const e2 = await ziXweather(clientFals({}, { eroare: { v_meteo_zilnic_xweather: { code: '42501', message: 'permission denied' } } }), 10, '2026-11-13').catch(x => x)
+    expect(e2.vedereLipsa).toBeUndefined()
+    expect(e2.message).toMatch(/nu se poate citi: permission denied/)
   })
   it('fără niciun rând de vreme: exportul merge, cu „fără date” peste tot', () => {
     const wb = construiesteRapoarteXlsx({ XLSX, list, siteNameOf: nume, titluSite: 'Santier A', from: '2026-11-01', to: '2026-11-13', vreme: [], generatLa: 'x' })

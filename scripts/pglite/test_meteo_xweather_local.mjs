@@ -112,13 +112,22 @@ async function bazaNoua() {
 const BAZA0 = await bazaNoua()
 const B0 = await baseline(BAZA0)
 await BAZA0.close()
-for (const e of ['functie fn_raport_santier_drept(bigint)', 'functie fn_executie_proiect_permis(bigint,boolean)', 'functie auth.uid()',
-                 'functie fn_executie_acces_nerestrans()', 'functie fn_executie_acces_lista(boolean)']) {
-  if (!B0.some(r => r.eticheta === e)) { console.error('baseline: lipsește ' + e + ' (am: ' + B0.map(r => r.eticheta).join(', ') + ')'); process.exit(1) }
+// închiderea tranzitivă pe schema falsă = EXACT lanțul real (scris de mână din 20261209a: predicat → drept → nerestrâns / listă → _cont → auth.uid)
+const LANT = ['functie auth.uid()', 'functie fn_executie_acces_lista(boolean)', 'functie fn_executie_acces_lista_cont(uuid,boolean)',
+  'functie fn_executie_acces_nerestrans()', 'functie fn_executie_acces_nerestrans_cont(uuid)', 'functie fn_executie_proiect_permis(bigint,boolean)',
+  'functie fn_raport_santier_drept(bigint)']
+if (JSON.stringify(B0.map(r => r.eticheta)) !== JSON.stringify(LANT)) {
+  console.error('baseline: închiderea nu e lanțul așteptat: ' + B0.map(r => r.eticheta).join(', ')); process.exit(1)
+}
+const SURSE = Object.fromEntries(B0.map(r => [r.eticheta, r.sursa]))
+if (!['functie auth.uid()', 'functie fn_raport_santier_drept(bigint)', 'functie fn_executie_proiect_permis(bigint,boolean)'].every(e => SURSE[e] === 'pornire')
+    || SURSE['functie fn_executie_acces_lista_cont(uuid,boolean)'] !== 'inchidere') {
+  console.error('baseline: sursele (pornire / inchidere) greșite: ' + JSON.stringify(SURSE)); process.exit(1)
 }
 console.log(`baseline L15 20261221a (schema falsă): ${B0.length} etichete — ${B0.map(r => r.eticheta + (r.atentie ? ' [' + r.atentie + ']' : '')).join('; ')}`)
-const CU_BASELINE = [PLACEHOLDER, B0.map(r => r.linie_baseline).join('\n')]
-const MIG_B = aplica(MIG, [CU_BASELINE])
+const linii = (rows) => rows.map((r, i) => (i === 0 ? '    ' : '  , ') + r.linie_baseline.replace(/^\s*,?\s*/, ''))
+const cuBaseline = (text, rows) => aplica(text, [[PLACEHOLDER, linii(rows).join('\n')]])
+const MIG_B = cuBaseline(MIG, B0)
 
 // ── un rând valid (ca edge-ul) ──
 const RAW = `'{"success": true, "error": null, "response": [{"periods": [{"summary": {"temp": {"minC": 2}}}]}]}'::jsonb`
@@ -239,6 +248,77 @@ for (const [nume, fn, re] of [
   const ramas = (await db.query(`SELECT to_regclass('public.meteo_zilnic_xweather') IS NULL AS gol`)).rows[0].gol
   ok(re.test(m || '') && ramas, `${nume}: ${m}`)
   await db.close()
+}
+
+// ── 2b. L15 (r2, review P1): închiderea calculată în migrare, EXECUTE refuzat, schimbarea între verificări, funcțiile noi ──
+console.log('2b. L15: închiderea tranzitivă și ce nu se poate amprenta')
+const CORP_CONT = functie('CREATE FUNCTION public.fn_executie_acces_lista_cont(').replace(/^CREATE FUNCTION/, 'CREATE OR REPLACE FUNCTION')
+// lista de proiecte a ORICUI devine {1,2}: o schimbare de drept adâncă în lanț
+const CONT_SCHIMBAT = aplica(CORP_CONT, [["'{}'::bigint[])", "'{1,2}'::bigint[])"]])
+const UID_SCHIMBAT = `CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT '${U.OWNER}'::uuid $$;`
+const CONT_EXECUTE = `CREATE OR REPLACE FUNCTION public.fn_executie_acces_lista_cont(p_profile uuid, p_scriere boolean) RETURNS bigint[]
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
+DECLARE r bigint[];
+BEGIN
+  EXECUTE 'SELECT coalesce(array_agg(a.proiect_id ORDER BY a.proiect_id), ''{}''::bigint[]) FROM public.executie_acces_proiect a WHERE a.profile_id = $1'
+    INTO r USING p_profile;
+  RETURN r;
+END $f$;`
+// șirul 'EXECUTE' ca argument (nu SQL dinamic): NU trebuie refuzat
+const CONT_SIR_EXECUTE = aplica(CORP_CONT, [['WHERE p_profile IS NOT NULL', "WHERE has_function_privilege('authenticated', 'public.fn_executie_acces_nerestrans()', 'EXECUTE') IS NOT NULL AND p_profile IS NOT NULL"]])
+const MIG_PREDICAT_LARG = [['  SELECT auth.uid() IS NOT NULL AND p_site IS NOT NULL\n    AND (public.fn_raport_santier_drept(p_site)',
+  '  SELECT auth.uid() IS NOT NULL AND p_site IS NOT NULL AND public.fn_executie_acces_nerestrans_cont(auth.uid()) IS NOT NULL\n    AND (public.fn_raport_santier_drept(p_site)']]
+const INTRE_VERIFICARI = (sql) => [['-- ── punctul UNIC de blocare (L06)', sql + '\n-- ── punctul UNIC de blocare (L06)']]
+// fiecare scenariu: pregătirea înainte de baseline (intră în el), baseline-ul (eventual trunchiat), pregătirea după baseline, textul migrării
+const SCEN = {
+  lantFaraCallee: { dupa: CONT_SCHIMBAT, rows: (b) => b.filter(r => r.eticheta !== 'functie fn_executie_acces_lista_cont(uuid,boolean)') },
+  // baseline-ul pe care l-ar da o închidere de UN nivel (fără funcțiile de la adâncimea 2: _cont), cu un _cont schimbat
+  lantAdanc: { dupa: CONT_SCHIMBAT, rows: (b) => b.filter(r => !/_cont\(/.test(r.eticheta)) },
+  uidFara: { dupa: UID_SCHIMBAT, rows: (b) => b.filter(r => r.eticheta !== 'functie auth.uid()') },
+  calleeSchimbat: { dupa: CONT_SCHIMBAT },
+  execute: { inainte: CONT_EXECUTE },
+  sirExecute: { inainte: CONT_SIR_EXECUTE },
+  intreVerificari: { mig: INTRE_VERIFICARI(CONT_SCHIMBAT) },
+  predicatLarg: { mig: MIG_PREDICAT_LARG },
+}
+async function ruleazaScen(s, migMutanti = []) {
+  const db = await bazaNoua()
+  try {
+    if (s.inainte) await db.exec(s.inainte)
+    const rows = (s.rows || ((b) => b))(await baseline(db))
+    if (s.dupa) await db.exec(s.dupa)
+    const text = aplica(cuBaseline(MIG, rows), [...(s.mig || []), ...migMutanti])
+    try { await aplicaMig(db, text); return null } catch (e) { return e.message }
+  } finally { await db.close() }
+}
+for (const [nume, sc, re] of [
+  ['callee din închidere lipsă din baseline + corp schimbat (reproducerea review-ului pe lanț)', SCEN.lantFaraCallee,
+    /starea de acces \(inainte\) difera de baseline-ul L15 revizuit: functie fn_executie_acces_lista_cont\(uuid,boolean\) = [0-9a-f]{32} \(baseline NU ARE\)/],
+  ['auth.uid() lipsă din baseline + corp schimbat (reproducerea review-ului)', SCEN.uidFara, /baseline L15 fara functiile de pornire/],
+  ['callee adânc schimbat (în baseline)', SCEN.calleeSchimbat, /difera de baseline-ul L15 revizuit: functie fn_executie_acces_lista_cont/],
+  ['EXECUTE dinamic în lanț (baseline recalculat = identic): REFUZ, nu semnalare', SCEN.execute, /EXECUTE dinamic \/ limbaj neanalizabil .*fn_executie_acces_lista_cont\(uuid,boolean\) \(plpgsql\)/],
+  ['funcție din lanț schimbată după verificarea „înainte”, înainte de blocare', SCEN.intreVerificari, /starea de acces \(dupa\) difera de baseline-ul L15/],
+  ['predicatul nou cheamă o funcție în afara pornirii', SCEN.predicatLarg, /functiile noi cheama in afara pornirii amprentate: fn_executie_acces_nerestrans_cont\(uuid\)/],
+]) {
+  const m = await ruleazaScen(sc)
+  ok(re.test(m || ''), `${nume}: ${m || 'NU a refuzat'}`)
+}
+{
+  const m = await ruleazaScen(SCEN.sirExecute)
+  ok(m == null, `șirul 'EXECUTE' ca argument (has_function_privilege) nu e SQL dinamic: migrarea trece (${m || 'aplicată'})`)
+}
+console.log('   mutanții porții L15 (originalul refuză, mutantul trece = verificarea e necesară)')
+for (const [nume, sc, mut] of [
+  ['L1 închiderea luată din BASELINE (forma r1)', SCEN.lantFaraCallee, [['amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),',
+    "amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_20261221a() b WHERE b.eticheta LIKE 'functie %'),"]]],
+  ['L2 închiderea doar pe un nivel', SCEN.lantAdanc, [['  SELECT x.oid FROM amp_lant l CROSS JOIN LATERAL (', '  SELECT x.oid FROM amp_pornire l CROSS JOIN LATERAL (']]],
+  ['L3 EXECUTE doar semnalat', SCEN.execute, [['  IF v_exec IS NOT NULL THEN', '  IF false THEN']]],
+  ['L4 fără verificarea „după”', SCEN.intreVerificari, [["  PERFORM pg_temp.amp_verifica_20261221a('dupa');\n", '']]],
+  ['L5 fără postcondiția pornirii', SCEN.predicatLarg, [['  IF v_alt IS NOT NULL\n', '  IF false AND v_alt IS NOT NULL\n']]],
+]) {
+  const mOrig = await ruleazaScen(sc)
+  const mMut = await ruleazaScen(sc, mut)
+  ok(mOrig != null && mMut == null, `${nume}: originalul refuză (${(mOrig || 'NU').slice(0, 90)}), mutantul ${mMut == null ? 'trece' : 'refuză și el: ' + mMut.slice(0, 90)}`)
 }
 
 // ── 3. revenirea: refuzuri + aplicare -> revenire -> re-aplicare ──

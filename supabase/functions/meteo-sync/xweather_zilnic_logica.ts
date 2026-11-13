@@ -7,10 +7,18 @@
 // Răspunsurile sunt conținut EXTERN: se iau doar numere validate (intervale ca în CHECK-urile tabelului) și text scurt fără caractere de
 // control; răspunsul brut se păstrează întreg ca probă. Lipsa unei valori = NULL, niciodată 0 („0 mm” doar dacă API-ul a spus 0, L18).
 //
+// FORMA răspunsurilor (r2, după review): la conditions/summary valorile zilei stau DIRECT pe fiecare element din response[].periods[]
+//   (periods[].dateTimeISO, periods[].temp.maxC …); doar la observations/summary sunt sub periods[].summary. O perioadă fără dată
+//   (dateTimeISO / ymd) în locul așteptat = formă neașteptată → ziua RESPINSĂ cu motiv (vizibil în erori), nu „lipsă” tăcută.
 // DE CONFIRMAT LA PRIMA RULARE (fără apel real nu se poate verifica; răspunsul brut rămâne în tabel, deci valorile se pot reface):
-//   - numele exacte ale câmpurilor din periods[].summary (CAMPURI: lista căilor acceptate, în ordinea priorității);
+//   - numele exacte ale câmpurilor fiecărei perioade (CAMPURI: lista căilor acceptate, în ordinea priorității — întâi forma conditions);
 //   - parametrii from / to ca timestamp UNIX pentru o zi locală și „closest” + radius pe observations/summary;
 //   - dacă abonamentul dă observations/summary (altfel observatii_stare = 'neautorizat', fără eroare pe zi).
+// LIMITE ASUMATE (spuse și în raportul livrării):
+//   - corecțiile furnizorului se prind automat doar pentru alaltăieri (reverificarea zilnică); o corecție mai târzie intră doar dacă owner-ul
+//     cere reverificarea intervalului: {xweather_backfill:true, site_id, de_la, pana, reverifica:true} (versiune nouă dacă diferă);
+//   - pasul zilnic completează automat doar ultimele ZILE_AUTO zile; o zi mai veche rămasă nesalvată se recuperează cu comanda owner-ului
+//     {xweather_backfill:true, site_id, de_la, pana} pe acel șantier (reluabilă cu `pana` = continua_pana din răspuns).
 import { esteZi, adunaZile, aziBucuresti, coordValide } from './istoric_logica.ts'
 
 export const SURSA_XW = 'Vaisala Xweather'
@@ -78,19 +86,20 @@ export function clasificaRaspuns(status: number, j: any): Clasa {
 }
 
 // ── maparea rezumatului ─────────────────────────────────────────────────────────────────────────────────────────
-// coloana din tabel → [căile acceptate în periods[].summary (prima prezentă câștigă), minim, maxim (exclusiv), zecimale]
+// coloana din tabel → [căile acceptate în perioada zilei (prima prezentă câștigă), minim, maxim (exclusiv), zecimale]
+// ordinea: întâi numele în stilul endpoint-ului conditions (windSpeed / windGust / humidity), apoi variantele în stilul observations (wind / rh)
 export const CAMPURI: Record<string, [string[], number, number, number]> = {
   tmin_c: [['temp.minC'], -60, 60.0001, 2],
   tmax_c: [['temp.maxC'], -60, 60.0001, 2],
   tmed_c: [['temp.avgC'], -60, 60.0001, 2],
   precipitatii_mm: [['precip.totalMM'], 0, 1000, 2],
   zapada_cm: [['snow.totalCM', 'snowDepth.totalCM'], 0, 1000, 2],
-  vant_max_kmh: [['wind.maxKPH', 'windSpeed.maxKPH'], 0, 400, 2],
-  rafala_max_kmh: [['wind.gustKPH', 'wind.gustMaxKPH', 'windGust.maxKPH'], 0, 400, 2],
-  vant_dir_grade: [['wind.maxDirDEG', 'wind.dirMaxDEG', 'windDir.maxDEG'], 0, 360.0001, 0],
-  umiditate_med: [['rh.avg', 'humidity.avg'], 0, 100.0001, 2],
+  vant_max_kmh: [['windSpeed.maxKPH', 'wind.maxKPH'], 0, 400, 2],
+  rafala_max_kmh: [['windGust.maxKPH', 'wind.gustKPH', 'wind.gustMaxKPH'], 0, 400, 2],
+  vant_dir_grade: [['windSpeed.maxDirDEG', 'windDir.maxDEG', 'wind.maxDirDEG', 'wind.dirMaxDEG'], 0, 360.0001, 0],
+  umiditate_med: [['humidity.avg', 'rh.avg'], 0, 100.0001, 2],
 }
-export const CAI_DIRECTIE = ['wind.maxDir', 'wind.dirMax', 'windDir.max']
+export const CAI_DIRECTIE = ['windSpeed.maxDir', 'windDir.max', 'wind.maxDir', 'wind.dirMax']
 export const CAI_DESCRIERE = ['weather.phrase', 'weather']
 export const DIRECTII = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
 // coloanele de VALORI (ce compară reverificarea; o diferență = versiune nouă, nu suprascriere)
@@ -110,29 +119,34 @@ function textScurt(x: unknown, max: number): string | null | undefined {
 const rotunjeste = (x: number, zec: number) => Number(x.toFixed(zec))
 const primul = (r: any) => (Array.isArray(r) ? r[0] : r)
 
-// perioada zilei cerute din răspuns: ziua din dateTimeISO (ora locală a punctului) sau ymd; fusul orar, dacă e dat, trebuie să fie al României
-function perioadaZilei(obj: any, zi: string): { summary?: any; motiv?: string } {
+// perioada zilei cerute din răspuns: ziua din dateTimeISO (ora locală a punctului) sau ymd; fusul orar, dacă e dat, trebuie să fie al României.
+// forma: 'conditions' = valorile direct pe periods[i]; 'observations' = sub periods[i].summary. O perioadă care nu are dată în locul formei
+// cerute = formă neașteptată → motiv (respins), nu „nicio perioadă” (altfel o formă greșită ar trece drept zi fără date).
+export type Forma = 'conditions' | 'observations'
+function perioadaZilei(obj: any, zi: string, forma: Forma): { summary?: any; motiv?: string } {
   const tz = obj?.profile?.tz
   if (tz != null && tz !== 'Europe/Bucharest') return { motiv: 'fus orar neașteptat: ' + String(tz).slice(0, 40) }
   const per = Array.isArray(obj?.periods) ? obj.periods : null
   if (!per) return { motiv: 'răspuns fără periods' }
   const ymd = zi.replace(/-/g, '')
-  const ale = per.filter((p: any) => {
-    const s = p?.summary
-    if (!s || typeof s !== 'object') return false
-    const d = typeof s.dateTimeISO === 'string' ? s.dateTimeISO.slice(0, 10) : null
-    return d === zi || (d == null && String(s.ymd ?? '') === ymd)
-  })
+  const ale: any[] = []
+  for (const p of per) {
+    const s = forma === 'conditions' ? p : p?.summary
+    const d = s && typeof s === 'object' && typeof s.dateTimeISO === 'string' && /^\d{4}-\d{2}-\d{2}/.test(s.dateTimeISO) ? s.dateTimeISO.slice(0, 10) : null
+    const y = s && typeof s === 'object' && (typeof s.ymd === 'number' || typeof s.ymd === 'string') ? String(s.ymd) : null
+    if (d == null && y == null) return { motiv: `perioadă fără dată (formă neașteptată pentru ${forma}/summary)` }
+    if (d === zi || (d == null && y === ymd)) ale.push(s)
+  }
   if (ale.length > 1) return { motiv: 'mai multe perioade pentru aceeași zi' }
   if (!ale.length) return {}
-  return { summary: ale[0].summary }
+  return { summary: ale[0] }
 }
 
 // conditions/summary → valorile zilei. { valori } | { lipsa } (nicio valoare pentru zi) | { respins } (formă / valoare invalidă: ziua NU se scrie)
 export function valoriDinConditii(j: any, zi: string): { valori?: Record<string, unknown>; lipsa?: string; respins?: string } {
   const obj = primul(j?.response)
   if (!obj || typeof obj !== 'object') return { respins: 'răspuns conditions fără response' }
-  const { summary: s, motiv } = perioadaZilei(obj, zi)
+  const { summary: s, motiv } = perioadaZilei(obj, zi, 'conditions')
   if (motiv) return { respins: motiv }
   if (!s) return { lipsa: 'nicio perioadă pentru ziua cerută' }
   const v: Record<string, unknown> = {}
@@ -188,7 +202,7 @@ export function statieDinObservatii(clasa: Clasa, j: any, zi: string): Statie {
   const id = typeof obj.id === 'string' && /^[A-Za-z0-9_.:-]{1,40}$/.test(obj.id) ? obj.id : null
   if (!id) return { observatii_stare: 'eroare', ...FARA }
   // stația trebuie să aibă rezumat pentru ziua cerută; altfel nu e „stația zilei”
-  const { summary, motiv } = perioadaZilei(obj, zi)
+  const { summary, motiv } = perioadaZilei(obj, zi, 'observations')
   if (motiv) return { observatii_stare: 'eroare', ...FARA }
   if (!summary) return { observatii_stare: 'fara_statie', ...FARA }
   const nume = textScurt(obj.place?.name, 120)
@@ -234,29 +248,33 @@ export function valoriEgale(a: Record<string, unknown>, b: Record<string, unknow
 // existente: site_id → (zi → ultima versiune a zilei, cu valorile). start: site_id → prima zi de luat în calcul (data_start a proiectului).
 // zilnic : ieri (dacă lipsește) + reverificarea lui alaltăieri (o singură dată în viața zilei: mâine nu mai e alaltăieri) pentru fiecare
 //          șantier, apoi zilele lipsă din ultimele ZILE_AUTO, de la cea mai nouă, cel mult MAX_ZILE_AUTO pe toate șantierele.
-// backfill (owner): zilele lipsă din [de, pana], de la cea mai nouă, cel mult maxZile; `continua_pana` = ziua de unde se reia (reluabil,
-//          idempotent: o zi existentă nu se mai cere).
+// backfill (owner): zilele lipsă din [de, pana], de la cea mai nouă, cel mult maxZile (reluabil, idempotent: o zi existentă nu se mai cere);
+//          cu reverifica = true și zilele EXISTENTE din interval se reverifică (o corecție târzie a furnizorului = versiune nouă).
+//          Ziua de reluare NU o dă planul: o dă continuaPana(), după rezultatele scrierii (L05).
 export type Sarcina = { site_id: number; lat: number; lng: number; zi: string; tip: 'nou' | 'verificare'; anterior?: Record<string, unknown> }
 export function planXweather(
   sites: { id: number; lat: unknown; lng: unknown; proiect_id?: number | null }[],
   existente: Map<string, Map<string, Record<string, unknown>>>,
   start: Map<string, string | null>,
-  { mod, ieri, deLa = null, pana = null, maxZile = MAX_ZILE_APEL }: { mod: 'zilnic' | 'backfill'; ieri: string; deLa?: string | null; pana?: string | null; maxZile?: number },
+  { mod, ieri, deLa = null, pana = null, maxZile = MAX_ZILE_APEL, reverifica = false }:
+    { mod: 'zilnic' | 'backfill'; ieri: string; deLa?: string | null; pana?: string | null; maxZile?: number; reverifica?: boolean },
 ) {
   if (!esteZi(ieri)) throw new Error('ieri invalid')
   if (deLa != null && (!esteZi(deLa) || deLa < PRIMA_ZI_XW || deLa > ieri)) throw new Error('de_la invalid')
   if (pana != null && (!esteZi(pana) || pana < PRIMA_ZI_XW || pana > ieri)) throw new Error('pana invalid')
   if (!Number.isInteger(maxZile) || maxZile < 1 || maxZile > MAX_ZILE_APEL) throw new Error('max_zile invalid')
   if (mod === 'backfill' && sites.length !== 1) throw new Error('completarea pornită de owner: un singur șantier pe apel (site_id)')
-  if (mod === 'zilnic' && (deLa != null || pana != null)) throw new Error('pasul zilnic nu primește interval')
+  if (mod === 'zilnic' && (deLa != null || pana != null || reverifica)) throw new Error('pasul zilnic nu primește interval / reverificare')
   const sarcini: Sarcina[] = []
   const sarite: { site_id: number; motiv: string }[] = []
-  const lipsa = new Map<number, string[]>()   // site → zile lipsă, de la cea mai nouă
+  const lipsa = new Map<number, string[]>()   // site → zilele de cerut (lipsă, plus existente la reverificare), de la cea mai nouă
   const valide: { id: number; lat: number; lng: number }[] = []
+  const exSite = new Map<number, Map<string, Record<string, unknown>>>()
   for (const s of sites) {
     if (!coordValide(s.lat, s.lng)) { sarite.push({ site_id: s.id, motiv: 'fără coordonate (lat / lng)' }); continue }
     valide.push({ id: s.id, lat: s.lat as number, lng: s.lng as number })
     const ex = existente.get(String(s.id)) || new Map()
+    exSite.set(s.id, ex)
     let de: string, sus: string
     const st = s.proiect_id != null ? start.get(String(s.proiect_id)) ?? null : null
     if (mod === 'zilnic') {
@@ -269,7 +287,7 @@ export function planXweather(
       de = d0 < PRIMA_ZI_XW ? PRIMA_ZI_XW : d0
     }
     const z: string[] = []
-    for (let d = sus; d >= de; d = adunaZile(d, -1)) if (!ex.has(d)) z.push(d)
+    for (let d = sus; d >= de; d = adunaZile(d, -1)) if (!ex.has(d) || (mod === 'backfill' && reverifica)) z.push(d)
     lipsa.set(s.id, z)
     if (mod === 'zilnic') {
       if (!ex.has(ieri) && (!st || !esteZi(st) || st <= ieri)) sarcini.push({ site_id: s.id, lat: s.lat as number, lng: s.lng as number, zi: ieri, tip: 'nou' })
@@ -287,20 +305,33 @@ export function planXweather(
     for (const s of valide) {
       const z = lipsa.get(s.id) || [], i = idx.get(s.id) || 0
       if (i >= z.length || luate >= buget) continue
-      sarcini.push({ site_id: s.id, lat: s.lat, lng: s.lng, zi: z[i], tip: 'nou' })
+      const ant = exSite.get(s.id)?.get(z[i])
+      sarcini.push(ant ? { site_id: s.id, lat: s.lat, lng: s.lng, zi: z[i], tip: 'verificare', anterior: ant }
+                       : { site_id: s.id, lat: s.lat, lng: s.lng, zi: z[i], tip: 'nou' })
       idx.set(s.id, i + 1); luate++; progres = true
     }
   }
   let ramase = 0
-  let continuaPana: string | null = null
-  for (const s of valide) {
-    const z = lipsa.get(s.id) || [], i = idx.get(s.id) || 0
-    ramase += Math.max(0, z.length - i)
-    // reluarea (backfill, un singur șantier pe apel): de la ziua de dinaintea celei mai vechi luate acum — o zi fără date la furnizor
-    // nu blochează reluarea (apelul următor cu `pana` = continua_pana nu o mai cere)
-    if (mod === 'backfill' && i < z.length) continuaPana = i > 0 ? adunaZile(z[i - 1], -1) : z[0]
-  }
-  return { sarcini, sarite, ramase, continua_pana: ramase > 0 ? continuaPana : null }
+  for (const s of valide) ramase += Math.max(0, (lipsa.get(s.id) || []).length - (idx.get(s.id) || 0))
+  return { sarcini, sarite, ramase }
+}
+
+// ── reluarea completării (backfill, un șantier pe apel): DUPĂ rezultate, nu după plan (L05) ─────────────────────────────
+// confirmate = zilele cu rezultat DOVEDIT: scrierea a reușit, rândul există deja (23505), reverificarea a găsit aceleași valori, sau
+// furnizorul a spus definitiv „fără date” pentru zi. Orice altceva (rețea / timp depășit / 5xx, răspuns respins, eroare de scriere, sarcină
+// neajunsă din cauza bugetului de timp) e NECONFIRMAT: reluarea pornește de la cea mai nouă zi neconfirmată, ca ea să fie cerută din nou.
+// Toate confirmate: ziua dinaintea celei mai vechi luate (dacă mai rămân zile în interval), altfel null (gata).
+export function continuaPana(sarcini: Sarcina[], confirmate: Set<string>, ramase: number): string | null {
+  const zile = [...new Set(sarcini.map(s => s.zi))].sort().reverse()
+  const prima = zile.find(z => !confirmate.has(z))
+  if (prima) return prima
+  return ramase > 0 && zile.length ? adunaZile(zile[zile.length - 1], -1) : null
+}
+// rezultatul unei zile → confirmată sau nu (pentru continuaPana)
+// deno-lint-ignore no-explicit-any
+export function zConfirmata(z: any, scriere: 'ok' | 'deja' | 'eroare' | null): boolean {
+  if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa)) return true
+  return !!z?.rand && (scriere === 'ok' || scriere === 'deja')
 }
 
 // ── o zi: din cele două răspunsuri → rândul de scris, sau motivul pentru care nu se scrie ────────────────────────────

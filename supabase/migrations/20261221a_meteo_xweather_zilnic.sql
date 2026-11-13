@@ -29,10 +29,12 @@
 -- Ce NU face: nicio dată (o aduce meteo-sync după deploy), nicio automatizare nouă (pasul stă în cron-ul existent), nimic schimbat pe tabelele
 --   sau funcțiile existente (doar FK spre sites).
 --
--- L15: amprenta COMPLETĂ (corpul AMPRENTA_L15 v1 IDENTIC, L19; testul src/meteoXweatherMigrare.test.js) a funcțiilor de care depinde predicatul
---   (pornirea: fn_raport_santier_drept și fn_executie_proiect_permis, cu callee-urile lor), comparată cu BASELINE-ul din producție ÎNAINTE și
---   DUPĂ. Valorile le scoate coordonatorul cu scripts/meteo_xweather_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz.
---   „După” = baseline-ul exact (migrarea nu schimbă nicio funcție existentă).
+-- L15: amprenta COMPLETĂ (corpul AMPRENTA_L15 v1 IDENTIC, L19; testul src/meteoXweatherMigrare.test.js) a funcțiilor de care depinde predicatul,
+--   pe ÎNCHIDEREA TRANZITIVĂ calculată în migrare din catalog (blocul INCHIDERE_L15, identic cu cel din script; pornirea: auth.uid(),
+--   fn_raport_santier_drept, fn_executie_proiect_permis), comparată cu BASELINE-ul din producție ÎNAINTE și DUPĂ: o funcție din lanț lipsă
+--   din baseline sau în plus = refuz; EXECUTE dinamic / limbaj neanalizabil în lanț = refuz; postcondiția: funcțiile noi cheamă doar pornirea.
+--   Valorile le scoate coordonatorul cu scripts/meteo_xweather_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz.
+--   „După” = baseline-ul exact (migrarea nu schimbă nicio funcție existentă; o schimbare între cele două verificări = refuz la „după”).
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$).
 --   Lock (L06): UN singur lock pe un tabel existent — sites SHARE ROW EXCLUSIVE (cerut de cheia străină), NOWAIT, reîncercat la 50 ms până la
 --   1 s de la BEGIN (peste = 55P03, nimic schimbat), după verificările de catalog. Oprește scurt doar scrierile în sites (nu citirile, nu
@@ -106,9 +108,43 @@ $bl$;
 -- <<< BASELINE 20261221a
 CREATE FUNCTION pg_temp.amp_calc_20261221a() RETURNS TABLE (eticheta text, amprenta text, detaliu text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $amp$
-WITH
+WITH RECURSIVE
 amp_tabele(oid) AS (SELECT c.oid FROM pg_class c WHERE false),
-amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_20261221a() b WHERE b.eticheta LIKE 'functie %'),
+-- >>> INCHIDERE_L15 20261221a
+-- Pornirea = tot ce cheamă DIRECT predicatul nou fn_meteo_vede_site: auth.uid() și cele două funcții de drept (postcondiția verifică
+--   că funcțiile noi nu cheamă nimic altceva). Închiderea se CALCULEAZĂ aici, din catalog, nu se ia din BASELINE (r2, review P1): orice
+--   funcție (în afara pg_catalog / information_schema) al cărei nume apare ca apel „nume(” în corpul unei funcții sql / plpgsql din lanț
+--   (supra-aproximare: un nume potrivit în plus doar intră în amprentă), numele neobișnuite prin căutare de text, plus dependențele din
+--   pg_depend (corpurile BEGIN ATOMIC). Fără limită de adâncime: UNION oprește ciclurile. BASELINE-ul trebuie să aibă EXACT această
+--   mulțime (o funcție lipsă sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz (amp_verifica).
+amp_pornire(oid) AS (VALUES (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_raport_santier_drept(bigint)')::oid),
+                            (to_regprocedure('public.fn_executie_proiect_permis(bigint, boolean)')::oid)),
+amp_lant(oid) AS (
+  SELECT s.oid FROM amp_pornire s WHERE s.oid IS NOT NULL
+  UNION
+  SELECT d.refobjid FROM pg_depend d JOIN pg_policy pol ON pol.oid = d.objid
+   WHERE d.classid = 'pg_policy'::regclass AND d.refclassid = 'pg_proc'::regclass AND pol.polrelid IN (SELECT t.oid FROM amp_tabele t)
+  UNION
+  SELECT tg.tgfoid FROM pg_trigger tg WHERE tg.tgrelid IN (SELECT t.oid FROM amp_tabele t) AND NOT tg.tgisinternal
+  UNION
+  SELECT x.oid FROM amp_lant l CROSS JOIN LATERAL (
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
+      JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1])
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      JOIN pg_proc p2 ON p2.proname !~ '^[[:alpha:]_][[:alnum:]_$]*$'
+       AND (strpos(lower(p.prosrc), lower(p2.proname)) > 0 OR strpos(lower(p.prosrc), lower(replace(p2.proname, '"', '""'))) > 0)
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT d.refobjid FROM pg_depend d JOIN pg_proc p2 ON p2.oid = d.refobjid
+     WHERE d.classid = 'pg_proc'::regclass AND d.objid = l.oid AND d.refclassid = 'pg_proc'::regclass
+       AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+  ) x
+),
+amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),
+-- <<< INCHIDERE_L15 20261221a
 -- >>> AMPRENTA_L15 v1
 amp_functii(oid) AS (
   SELECT f.oid FROM amp_functii_explicite f WHERE f.oid IS NOT NULL
@@ -189,11 +225,13 @@ amp_calc(eticheta, amprenta, detaliu) AS (
 -- <<< AMPRENTA_L15 v1
 SELECT c.eticheta, c.amprenta, c.detaliu FROM amp_calc c
 $amp$;
--- „înainte” și „după”: exact baseline-ul (migrarea nu schimbă nicio funcție / tabel existent)
+-- „înainte” și „după”: exact baseline-ul (migrarea nu schimbă nicio funcție / tabel existent). Amprenta se calculează O DATĂ pe apel
+-- (tabel temporar), apoi se compară cu baseline-ul și se verifică lanțul.
 CREATE FUNCTION pg_temp.amp_verifica_20261221a(p_moment text) RETURNS void
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $vf$
-DECLARE v_dif text;
+DECLARE v_dif text; v_exec text;
 BEGIN
+  CREATE TEMP TABLE amp_rez_20261221a ON COMMIT DROP AS SELECT * FROM pg_temp.amp_calc_20261221a();
   IF NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261221a())
      OR EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261221a() b
                  WHERE b.eticheta IS NULL OR b.amprenta IS NULL OR b.amprenta !~ '^[0-9a-f]{32}$'
@@ -205,22 +243,37 @@ BEGIN
   END IF;
   -- pornirea trebuie să fie în baseline (altfel predicatul ar depinde de funcții neamprentate)
   IF NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261221a() b WHERE b.eticheta = 'functie fn_raport_santier_drept(bigint)')
-     OR NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261221a() b WHERE b.eticheta = 'functie fn_executie_proiect_permis(bigint,boolean)') THEN
+     OR NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261221a() b WHERE b.eticheta = 'functie fn_executie_proiect_permis(bigint,boolean)')
+     OR NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261221a() b WHERE b.eticheta = 'functie auth.uid()') THEN
     RAISE EXCEPTION '20261221a: baseline L15 fara functiile de pornire ale predicatului';
   END IF;
+  -- mulțimea calculată (închiderea) = EXACT baseline-ul: o funcție din lanț lipsă din baseline sau una în plus = refuz (FULL JOIN)
   SELECT string_agg(coalesce(c.eticheta, b.eticheta) || ' = ' || coalesce(c.amprenta, 'LIPSESTE') || ' (baseline ' || coalesce(b.amprenta, 'NU ARE') || ')',
                     '; ' ORDER BY coalesce(c.eticheta, b.eticheta) COLLATE "C")
     INTO v_dif
-    FROM pg_temp.amp_calc_20261221a() c FULL JOIN pg_temp.amp_baseline_20261221a() b ON b.eticheta = c.eticheta
+    FROM amp_rez_20261221a c FULL JOIN pg_temp.amp_baseline_20261221a() b ON b.eticheta = c.eticheta
    WHERE c.amprenta IS DISTINCT FROM b.amprenta;
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261221a: starea de acces (%) difera de baseline-ul L15 revizuit: %', p_moment, v_dif;
   END IF;
   -- independent de baseline: o funcție SECURITY DEFINER din lanț fără search_path propriu = refuz (L15)
-  IF EXISTS (SELECT 1 FROM pg_temp.amp_calc_20261221a() c
+  IF EXISTS (SELECT 1 FROM amp_rez_20261221a c
               WHERE c.eticheta LIKE 'functie %' AND c.detaliu LIKE '%definer=true%' AND c.detaliu LIKE '%config=(mostenit)%') THEN
     RAISE EXCEPTION '20261221a: o functie SECURITY DEFINER din lantul de acces nu are search_path propriu';
   END IF;
+  -- independent de baseline: ce nu se poate amprenta static = REFUZ (nu doar semnalat): EXECUTE în corpul unei funcții sql / plpgsql din lanț
+  -- (SQL dinamic: ce cheamă nu se vede în text; șirul 'EXECUTE' ca argument, ex. la has_function_privilege, nu contează) sau un limbaj al
+  -- cărui corp nu se poate citi (în afara sql / plpgsql; internal / c sunt frunze: nu cheamă funcții SQL după nume)
+  SELECT string_agg(p.oid::regprocedure::text || ' (' || l.lanname || ')', ', ' ORDER BY p.oid::regprocedure::text COLLATE "C")
+    INTO v_exec
+    FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid IN (SELECT to_regprocedure(substr(c.eticheta, 9))::oid FROM amp_rez_20261221a c WHERE c.eticheta LIKE 'functie %')
+     AND (l.lanname NOT IN ('sql', 'plpgsql', 'internal', 'c')
+          OR (l.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M'));
+  IF v_exec IS NOT NULL THEN
+    RAISE EXCEPTION '20261221a: lantul de acces are EXECUTE dinamic / limbaj neanalizabil (amprenta statica imposibila): %', v_exec;
+  END IF;
+  DROP TABLE amp_rez_20261221a;
 END $vf$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.amp_verifica_20261221a('inainte'); END $l15_inainte$;
 
@@ -374,7 +427,7 @@ GRANT SELECT ON public.v_meteo_zilnic_xweather TO authenticated, service_role;
 
 -- ── postcondiții ──
 DO $post$
-DECLARE r record;
+DECLARE r record; v_alt text;
 BEGIN
   -- RLS activ (fără FORCE: proprietarul e oprit de trigger-e, nu de politici), proprietar postgres, o singură politică, exact cea de citire
   IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.meteo_zilnic_xweather'::regclass AND c.relrowsecurity AND NOT c.relforcerowsecurity
@@ -451,6 +504,19 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM public.meteo_zilnic_xweather) THEN
     RAISE EXCEPTION '20261221a post: tabelul nou are randuri';
+  END IF;
+  -- L15: funcțiile NOI cheamă (aceeași regulă de nume ca închiderea) DOAR pornirea amprentată — auth.uid() și cele două funcții de drept —
+  -- și nimic dinamic; altfel predicatul ar depinde de o funcție din afara amprentei
+  SELECT string_agg(DISTINCT p2.oid::regprocedure::text, ', ') INTO v_alt
+    FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
+    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1]) AND p2.oid <> p.oid
+   WHERE p.oid IN ('public.fn_meteo_vede_site(bigint)'::regprocedure, 'public.fn_meteo_xw_inserare()'::regprocedure, 'public.fn_meteo_xw_nemodificabil()'::regprocedure)
+     AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+     AND p2.oid NOT IN ('auth.uid()'::regprocedure, 'public.fn_raport_santier_drept(bigint)'::regprocedure, 'public.fn_executie_proiect_permis(bigint, boolean)'::regprocedure);
+  IF v_alt IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN ('public.fn_meteo_vede_site(bigint)'::regprocedure, 'public.fn_meteo_xw_inserare()'::regprocedure,
+                  'public.fn_meteo_xw_nemodificabil()'::regprocedure) AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M') THEN
+    RAISE EXCEPTION '20261221a post: functiile noi cheama in afara pornirii amprentate: %', coalesce(v_alt, 'EXECUTE dinamic');
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261221a_meteo_xweather_zilnic:' || txid_current() THEN
     RAISE EXCEPTION '20261221a: garda final invalida';

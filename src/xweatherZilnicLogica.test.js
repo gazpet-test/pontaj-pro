@@ -1,24 +1,36 @@
 // Logica pură a rezumatului zilnic Vaisala Xweather din edge fn meteo-sync (supabase/functions/meteo-sync/xweather_zilnic_logica.ts).
-// Răspunsurile sunt fixture-uri SCRISE DE MÂNĂ în forma documentată (success / error / response[] cu loc, place, profile, relativeTo,
-// periods[].summary); valorile așteptate sunt scrise de mână (L25), nu calculate cu codul testat.
+// Răspunsurile sunt fixture-uri SCRISE DE MÂNĂ (L25), în cele DOUĂ forme diferite ale endpoint-urilor (r2, după review):
+//   * conditions/summary  — valorile zilei DIRECT pe fiecare element din response[].periods[] (periods[].dateTimeISO, periods[].temp.maxC …);
+//   * observations/summary — valorile sub response[].periods[].summary (forma folosită pentru stația cea mai apropiată).
+// Valorile așteptate sunt scrise de mână, nu calculate cu codul testat.
 import { describe, it, expect } from 'vitest'
 import {
   miezulNoptiiUtc, intervalZi, cerereConditii, cerereObservatii, cuCredentiale, clasificaRaspuns, valoriDinConditii, statieDinObservatii,
-  planXweather, procesZi, valoriEgale, brut, ZILE_AUTO, MAX_ZILE_AUTO, MAX_ZILE_APEL, RAZA_STATIE_KM, VALORI,
+  planXweather, procesZi, valoriEgale, brut, continuaPana, zConfirmata, ZILE_AUTO, MAX_ZILE_AUTO, MAX_ZILE_APEL, RAZA_STATIE_KM, VALORI,
 } from '../supabase/functions/meteo-sync/xweather_zilnic_logica.ts'
 
 const ZI = '2026-11-12'
-const summary = (o = {}) => ({
+// o perioadă de conditions/summary (forma conditions: numele windSpeed / windGust / humidity)
+const perioada = (o = {}) => ({
   dateTimeISO: '2026-11-12T00:00:00+02:00', timestamp: 1762898400,
-  temp: { maxC: 9.46, minC: 1.2, avgC: 5.04 }, precip: { totalMM: 4.6 }, snow: { totalCM: 0 },
-  wind: { maxKPH: 31.5, gustKPH: 52.3, maxDir: 'NW', maxDirDEG: 315 }, rh: { avg: 81.4 }, weather: { phrase: 'Mostly Cloudy with Light Rain' },
+  range: { minTimestamp: 1762898400, maxTimestamp: 1762984740, count: 24 },
+  temp: { maxC: 9.46, maxF: 49.03, minC: 1.2, minF: 34.16, avgC: 5.04, avgF: 41.07 }, precip: { totalMM: 4.6, totalIN: 0.18 }, snow: { totalCM: 0, totalIN: 0 },
+  windSpeed: { maxKPH: 31.5, maxMPH: 19.57, minKPH: 3.2, avgKPH: 14.1, maxDir: 'NW', maxDirDEG: 315 }, windGust: { maxKPH: 52.3, maxMPH: 32.5 },
+  humidity: { max: 96, min: 62, avg: 81.4 }, weather: { phrase: 'Mostly Cloudy with Light Rain', primary: 'Light Rain' },
   ...o,
 })
-const conditii = (s = summary(), extra = {}) => ({ success: true, error: null, response: [{ loc: { lat: 44.94, long: 26.02 }, profile: { tz: 'Europe/Bucharest' }, periods: [{ summary: s }], ...extra }] })
+const summary = perioada   // numele vechi din teste: aceeași perioadă (forma conditions)
+const conditii = (p = perioada(), extra = {}) => ({ success: true, error: null,
+  response: [{ loc: { lat: 44.94, long: 26.02 }, place: { name: 'domnesti', state: 'if', country: 'ro' }, profile: { tz: 'Europe/Bucharest', elevM: 80 },
+    periods: [p], ...extra }] })
+// observations/summary/closest: forma cu periods[].summary
+const obsSummary = (o = {}) => ({ dateTimeISO: '2026-11-12T00:00:00+02:00', ymd: 20261112, timestamp: 1762898400,
+  temp: { maxC: 9, minC: 1, avgC: 5 }, precip: { totalMM: 4.2 }, wind: { maxKPH: 30, gustKPH: 50 }, rh: { avg: 80 }, ...o })
 const observatii = (o = {}) => ({
   success: true, error: null,
-  response: [{ id: 'LRBS', loc: { lat: 44.5, long: 26.08 }, place: { name: 'Bucuresti/Baneasa', country: 'ro' }, profile: { tz: 'Europe/Bucharest' },
-    relativeTo: { lat: 44.94, long: 26.02, distanceKM: 12.37, bearing: 170 }, periods: [{ summary: { dateTimeISO: '2026-11-12T00:00:00+02:00', temp: { maxC: 9 } } }], ...o }],
+  response: [{ id: 'LRBS', dataSource: 'METAR_NOAA', loc: { lat: 44.5, long: 26.08 }, place: { name: 'Bucuresti/Baneasa', country: 'ro' },
+    profile: { tz: 'Europe/Bucharest' }, relativeTo: { lat: 44.94, long: 26.02, distanceKM: 12.37, bearing: 170 },
+    periods: [{ summary: obsSummary() }], ...o }],
 })
 
 describe('ziua locală (Europe/Bucharest) — granițele de fus orar', () => {
@@ -76,37 +88,62 @@ describe('maparea conditions/summary', () => {
       vant_dir_grade: 315, umiditate_med: 81.4, vant_dir: 'NW', descriere: 'Mostly Cloudy with Light Rain',
     } })
   })
+  it('forma reală conditions/summary: câmpurile direct pe periods[] (reproducerea din review → valori, nu „nicio perioadă”)', () => {
+    // exact răspunsul din reproducerea review-ului (temperaturi + precipitații valide, fără .summary)
+    const j = { success: true, error: null, response: [{ loc: { lat: 44.94, long: 26.02 }, periods: [{ dateTimeISO: '2026-11-12T00:00:00+02:00',
+      temp: { minC: 1.2, maxC: 9.46, avgC: 5.04 }, precip: { totalMM: 4.6 }, snow: { totalCM: 0 }, windSpeed: { maxKPH: 31.5, maxDir: 'NW', maxDirDEG: 315 },
+      windGust: { maxKPH: 52.3 }, humidity: { avg: 81.4 }, weather: { phrase: 'Light Rain' } }] }] }
+    expect(valoriDinConditii(j, ZI)).toEqual({ valori: {
+      tmin_c: 1.2, tmax_c: 9.46, tmed_c: 5.04, precipitatii_mm: 4.6, zapada_cm: 0, vant_max_kmh: 31.5, rafala_max_kmh: 52.3,
+      vant_dir_grade: 315, umiditate_med: 81.4, vant_dir: 'NW', descriere: 'Light Rain',
+    } })
+    // ziua după ymd (fără dateTimeISO), număr sau text
+    expect(valoriDinConditii(conditii(perioada({ dateTimeISO: undefined, ymd: 20261112 })), ZI).valori.tmax_c).toBe(9.46)
+    expect(valoriDinConditii(conditii(perioada({ dateTimeISO: undefined, ymd: '20261112' })), ZI).valori.tmax_c).toBe(9.46)
+  })
+  it('forma observations (periods[].summary) dată la conditions = RESPINS cu motiv (nu „lipsă” tăcută, care s-ar relua la nesfârșit)', () => {
+    const gresit = { success: true, error: null, response: [{ loc: { lat: 44.94, long: 26.02 }, profile: { tz: 'Europe/Bucharest' }, periods: [{ summary: perioada() }] }] }
+    const r = valoriDinConditii(gresit, ZI)
+    expect(r.valori).toBeUndefined()
+    expect(r.respins).toBe('perioadă fără dată (formă neașteptată pentru conditions/summary)')
+    // și invers: la observations, o perioadă fără .summary = stația „eroare” (nu „ok” cu date inventate)
+    expect(statieDinObservatii('ok', observatii({ periods: [perioada()] }), ZI).observatii_stare).toBe('eroare')
+  })
+  it('variantele de nume în stilul observations (wind / rh) sunt acceptate ca a doua alegere', () => {
+    const v = valoriDinConditii(conditii(perioada({ windSpeed: undefined, windGust: undefined, humidity: undefined,
+      wind: { maxKPH: 18, gustKPH: 33, maxDir: 'SW', maxDirDEG: 225 }, rh: { avg: 70 }, weather: 'Cloudy' })), ZI).valori
+    expect([v.vant_max_kmh, v.rafala_max_kmh, v.umiditate_med, v.descriere, v.vant_dir, v.vant_dir_grade]).toEqual([18, 33, 70, 'Cloudy', 'SW', 225])
+  })
   it('rotunjirea la scara coloanei înainte de scriere (BD nu mai rotunjește în tăcere): 9,456 → 9,46; 359,6° → 0°', () => {
-    const v = valoriDinConditii(conditii(summary({ temp: { maxC: 9.456, minC: 1.2 }, wind: { maxKPH: 10, maxDirDEG: 359.6 } })), ZI).valori
+    const v = valoriDinConditii(conditii(summary({ temp: { maxC: 9.456, minC: 1.2 }, windSpeed: { maxKPH: 10, maxDirDEG: 359.6 } })), ZI).valori
     expect(v.tmax_c).toBe(9.46)
     expect(v.vant_dir_grade).toBe(0)
   })
   it('lipsă ≠ 0: un câmp absent sau null rămâne null („0 mm” doar dacă API-ul a spus 0)', () => {
-    const v = valoriDinConditii(conditii(summary({ precip: undefined, snow: { totalCM: null }, wind: { maxKPH: 20 } })), ZI).valori
+    const v = valoriDinConditii(conditii(summary({ precip: undefined, snow: { totalCM: null }, windSpeed: { maxKPH: 20 }, windGust: undefined })), ZI).valori
     expect(v.precipitatii_mm).toBeNull()
     expect(v.zapada_cm).toBeNull()
     expect(v.rafala_max_kmh).toBeNull()
     expect(v.vant_dir).toBeNull()
     expect(valoriDinConditii(conditii(summary({ precip: { totalMM: 0 } })), ZI).valori.precipitatii_mm).toBe(0)
   })
-  it('căile alternative documentate (windSpeed / windGust / humidity / weather ca text)', () => {
-    const v = valoriDinConditii(conditii(summary({ wind: undefined, windSpeed: { maxKPH: 18 }, windGust: { maxKPH: 33 }, rh: undefined, humidity: { avg: 70 }, weather: 'Cloudy' })), ZI).valori
-    expect([v.vant_max_kmh, v.rafala_max_kmh, v.umiditate_med, v.descriere]).toEqual([18, 33, 70, 'Cloudy'])
-  })
   it('valori invalide = ziua respinsă (nu tăiată, nu scrisă)', () => {
     expect(valoriDinConditii(conditii(summary({ temp: { maxC: '9', minC: 1 } })), ZI).respins).toMatch(/tmax_c/)
     expect(valoriDinConditii(conditii(summary({ precip: { totalMM: -1 } })), ZI).respins).toMatch(/precipitatii_mm/)
     expect(valoriDinConditii(conditii(summary({ temp: { maxC: 1, minC: 5 } })), ZI).respins).toBe('Tmin > Tmax')
     expect(valoriDinConditii(conditii(summary({ temp: { maxC: 10, minC: 1, avgC: 12 } })), ZI).respins).toMatch(/Tmedie/)
-    expect(valoriDinConditii(conditii(summary({ wind: { maxKPH: 10, maxDir: 'NORD' } })), ZI).respins).toMatch(/direcția/)
+    expect(valoriDinConditii(conditii(summary({ windSpeed: { maxKPH: 10, maxDir: 'NORD' } })), ZI).respins).toMatch(/direcția/)
     expect(valoriDinConditii(conditii(summary({ weather: { phrase: 'a\u0007b' } })), ZI).respins).toMatch(/descrierea/)
     expect(valoriDinConditii(conditii(summary({ weather: { phrase: 'x'.repeat(201) } })), ZI).respins).toMatch(/descrierea/)
   })
   it('ziua: alt fus orar = respins; perioadă din altă zi = lipsă; două perioade pentru zi = respins', () => {
     expect(valoriDinConditii(conditii(summary(), { profile: { tz: 'Europe/Kiev' } }), ZI).respins).toMatch(/fus orar/)
     expect(valoriDinConditii(conditii(summary({ dateTimeISO: '2026-11-11T00:00:00+02:00' })), ZI).lipsa).toBeTruthy()
-    const dublu = conditii(); dublu.response[0].periods.push({ summary: summary() })
+    const dublu = conditii(); dublu.response[0].periods.push(perioada())
     expect(valoriDinConditii(dublu, ZI).respins).toMatch(/mai multe/)
+    // o perioadă pentru altă zi lângă cea cerută: se ia doar ziua cerută
+    const doua = conditii(); doua.response[0].periods.unshift(perioada({ dateTimeISO: '2026-11-11T00:00:00+02:00', temp: { maxC: 3, minC: 0 } }))
+    expect(valoriDinConditii(doua, ZI).valori.tmax_c).toBe(9.46)
     expect(valoriDinConditii({ success: true, response: [] }, ZI).respins).toBeTruthy()
   })
   it('nicio valoare numerică = lipsă (nu un rând gol)', () => {
@@ -149,17 +186,52 @@ describe('planul unei rulări', () => {
     // zilele vechi: cel mult MAX_ZILE_AUTO pe toată rularea
     expect(p.sarcini.filter(s => s.zi <= '2026-11-10').length).toBe(MAX_ZILE_AUTO)
     expect(p.ramase).toBe(6 + (ZILE_AUTO - 2) - MAX_ZILE_AUTO)
-    expect(p.continua_pana).toBeNull()
+    expect(p).not.toHaveProperty('continua_pana')   // cursorul nu-l mai dă planul (r2): îl dă continuaPana după rezultate
   })
-  it('backfill: un șantier pe apel, de la cea mai nouă zi lipsă, max_zile, reluabil cu continua_pana; idempotent pe zilele existente', () => {
+  it('backfill: un șantier pe apel, de la cea mai nouă zi lipsă, max_zile; idempotent pe zilele existente', () => {
     const p = planXweather([S[0]], ex({ 1: ['2026-11-01'] }), new Map([['7', '2026-10-01']]), { mod: 'backfill', ieri: '2026-11-12', pana: '2026-11-03', maxZile: 3 })
-    expect(p.sarcini.map(s => s.zi)).toEqual(['2026-11-03', '2026-11-02', '2026-10-31'])
-    expect(p.continua_pana).toBe('2026-10-30')
-    const p2 = planXweather([S[0]], ex({ 1: ['2026-11-01'] }), new Map([['7', '2026-10-01']]), { mod: 'backfill', ieri: '2026-11-12', pana: p.continua_pana, maxZile: MAX_ZILE_APEL })
+    expect(p.sarcini.map(s => `${s.zi}:${s.tip}`)).toEqual(['2026-11-03:nou', '2026-11-02:nou', '2026-10-31:nou'])
+    // toate trei confirmate → reluarea de la ziua dinaintea celei mai vechi luate
+    expect(continuaPana(p.sarcini, new Set(['2026-11-03', '2026-11-02', '2026-10-31']), p.ramase)).toBe('2026-10-30')
+    const p2 = planXweather([S[0]], ex({ 1: ['2026-11-01', '2026-11-02', '2026-11-03', '2026-10-31'] }), new Map([['7', '2026-10-01']]),
+      { mod: 'backfill', ieri: '2026-11-12', pana: '2026-10-30', maxZile: MAX_ZILE_APEL })
     expect(p2.sarcini[0].zi).toBe('2026-10-30')
     expect(p2.sarcini.at(-1).zi).toBe('2026-10-01')
     expect(p2.ramase).toBe(0)
-    expect(p2.continua_pana).toBeNull()
+    expect(continuaPana(p2.sarcini, new Set(p2.sarcini.map(s => s.zi)), p2.ramase)).toBeNull()
+  })
+  it('reluarea DUPĂ rezultate (review P2): o zi eșuată (timp depășit / scriere) NU e sărită, reluarea pornește de la ea', () => {
+    const p = planXweather([S[0]], ex({}), new Map([['7', '2026-10-01']]), { mod: 'backfill', ieri: '2026-11-12', pana: '2026-11-05', maxZile: 4 })
+    expect(p.sarcini.map(s => s.zi)).toEqual(['2026-11-05', '2026-11-04', '2026-11-03', '2026-11-02'])
+    // 04 a picat (rețea), restul confirmate: reluarea de la 04 (planul ar fi spus 01 și ar fi sărit-o)
+    expect(continuaPana(p.sarcini, new Set(['2026-11-05', '2026-11-03', '2026-11-02']), p.ramase)).toBe('2026-11-04')
+    // bugetul de timp a oprit bucla după prima zi: reluarea de la a doua
+    expect(continuaPana(p.sarcini, new Set(['2026-11-05']), p.ramase)).toBe('2026-11-04')
+    // nimic confirmat: de la prima
+    expect(continuaPana(p.sarcini, new Set(), p.ramase)).toBe('2026-11-05')
+    // ultima sarcină eșuată, fără zile rămase în interval: tot ea (nu null = „gata”)
+    expect(continuaPana(p.sarcini, new Set(['2026-11-05', '2026-11-04', '2026-11-03']), 0)).toBe('2026-11-02')
+  })
+  it('ce înseamnă „confirmat”: scris / existent (23505) / neschimbat / fără date definitiv; nu: tranzitoriu, respins, eroare, scriere eșuată', () => {
+    expect(zConfirmata({ rand: { versiune: 1 } }, 'ok')).toBe(true)
+    expect(zConfirmata({ rand: { versiune: 1 } }, 'deja')).toBe(true)
+    expect(zConfirmata({ rand: { versiune: 1 } }, 'eroare')).toBe(false)
+    expect(zConfirmata({ rand: { versiune: 1 } }, null)).toBe(false)
+    expect(zConfirmata({ neschimbat: true }, null)).toBe(true)
+    expect(zConfirmata({ lipsa: 'Xweather nu are rezumat pentru zi' }, null)).toBe(true)
+    expect(zConfirmata({ tranzitoriu: 'conditions rețea / timp depășit' }, null)).toBe(false)
+    expect(zConfirmata({ respins: 'Tmin > Tmax' }, null)).toBe(false)
+    expect(zConfirmata({ eroare: 'conditions: eroare (400)' }, null)).toBe(false)
+    expect(zConfirmata(null, null)).toBe(false)
+  })
+  it('reverificarea unui interval (owner, corecții târzii): zilele existente devin verificări cu valorile anterioare; doar la backfill', () => {
+    const e = ex({ 1: ['2026-11-03', '2026-11-01'] })
+    const p = planXweather([S[0]], e, new Map([['7', '2026-10-01']]), { mod: 'backfill', ieri: '2026-11-12', deLa: '2026-11-01', pana: '2026-11-03', reverifica: true })
+    expect(p.sarcini.map(s => `${s.zi}:${s.tip}`)).toEqual(['2026-11-03:verificare', '2026-11-02:nou', '2026-11-01:verificare'])
+    expect(p.sarcini[0].anterior).toEqual({ versiune: 1, data: '2026-11-03' })
+    // fără reverifica: doar ziua lipsă
+    expect(planXweather([S[0]], e, new Map(), { mod: 'backfill', ieri: '2026-11-12', deLa: '2026-11-01', pana: '2026-11-03' }).sarcini.map(s => s.zi)).toEqual(['2026-11-02'])
+    expect(() => planXweather(S, new Map(), new Map(), { mod: 'zilnic', ieri: '2026-11-12', reverifica: true })).toThrow(/reverificare/)
   })
   it('refuzuri: interval / max_zile invalide, backfill pe mai multe șantiere, fără dată de început', () => {
     expect(() => planXweather(S, new Map(), new Map(), { mod: 'backfill', ieri: '2026-11-12' })).toThrow(/un singur șantier/)

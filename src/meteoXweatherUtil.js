@@ -17,17 +17,34 @@ export const aziBuc = (ms = Date.now()) => new Intl.DateTimeFormat('sv-SE', { ti
 // ziua raportului: 'date' (există rezumat) | 'in_curs' (ziua nu s-a încheiat: rezumatul vine după miezul nopții) | 'fara_date'
 export const stareZi = (rand, data, azi = aziBuc()) => (rand ? 'date' : data >= azi ? 'in_curs' : 'fara_date')
 
+// Vederea încă inexistentă (migrarea 20261221a neaplicată): DOAR „relația nu există” pe EXACT această vedere (PostgREST PGRST205 / Postgres
+// 42P01, cu numele ei în mesaj). Atunci funcția nu e încă activă: exportul merge ca înainte, blocul din raport nu apare — fără eroare.
+// Orice altă eroare (drepturi, rețea, alt obiect) rămâne eroare (L18).
+export const VEDERE_XW = 'v_meteo_zilnic_xweather'
+export function lipsaVedereXw(error) {
+  if (!error) return false
+  const cod = String(error.code || '')
+  const text = [error.message, error.details, error.hint].filter(Boolean).join(' ')
+  return (cod === 'PGRST205' || cod === '42P01') && new RegExp(`(^|[^A-Za-z0-9_])(public\\.)?${VEDERE_XW}([^A-Za-z0-9_]|$)`).test(text)
+}
+// eroarea de citire: marcată `vedereLipsa` când e cazul de mai sus (apelantul decide ce arată)
+function eroareCitire(prefix, error) {
+  const e = new Error(prefix + (error?.message || 'eroare'))
+  if (lipsaVedereXw(error)) e.vedereLipsa = true
+  return e
+}
+
 // toate zilele șantierelor din [de, pana], ultima versiune a fiecăreia; pe chei până la pagina goală
 export async function zileXweather(client, siteIds, { de, pana, pas = 1000 } = {}) {
   const out = []
   for (const s of [...new Set(siteIds)]) {
     for (let ultima = null; ;) {
-      let q = client.from('v_meteo_zilnic_xweather').select(COLOANE_XW).eq('site_id', s)
+      let q = client.from(VEDERE_XW).select(COLOANE_XW).eq('site_id', s)
       if (de) q = q.gte('data', de)
       if (pana) q = q.lte('data', pana)
       if (ultima) q = q.gt('data', ultima)
       const { data, error } = await q.order('data', { ascending: true }).limit(pas)
-      if (error) throw new Error('vremea zilnică (Vaisala Xweather) nu se poate citi: ' + (error.message || 'eroare'))
+      if (error) throw eroareCitire('vremea zilnică (Vaisala Xweather) nu se poate citi: ', error)
       if (!data || !data.length) break
       const u = data[data.length - 1].data
       if (ultima != null && !(u > ultima)) throw new Error('vremea zilnică: paginare neordonată')
@@ -37,10 +54,20 @@ export async function zileXweather(client, siteIds, { de, pana, pas = 1000 } = {
   }
   return out
 }
-// o zi a unui șantier: rândul sau null (fără rezumat); eroarea se aruncă
+// vremea pentru exportul Excel: rândurile, sau null = funcția nu e încă activă (vederea nu există) → exportul ca înainte de 20261221a.
+// Orice altă eroare oprește exportul (nu se scoate un Excel cu „fără date” fals, L18).
+export async function vremeExport(client, siteIds, { de, pana } = {}) {
+  try {
+    return await zileXweather(client, siteIds, { de, pana })
+  } catch (e) {
+    if (e?.vedereLipsa) return null
+    throw e
+  }
+}
+// o zi a unui șantier: rândul sau null (fără rezumat); eroarea se aruncă (cu `vedereLipsa` dacă vederea nu există încă)
 export async function ziXweather(client, siteId, data) {
-  const { data: rows, error } = await client.from('v_meteo_zilnic_xweather').select(COLOANE_XW).eq('site_id', siteId).eq('data', data).limit(2)
-  if (error) throw new Error('vremea zilei nu se poate citi: ' + (error.message || 'eroare'))
+  const { data: rows, error } = await client.from(VEDERE_XW).select(COLOANE_XW).eq('site_id', siteId).eq('data', data).limit(2)
+  if (error) throw eroareCitire('vremea zilei nu se poate citi: ', error)
   if ((rows || []).length > 1) throw new Error('vremea zilei: mai multe rânduri pentru aceeași zi')
   return rows?.[0] || null
 }
