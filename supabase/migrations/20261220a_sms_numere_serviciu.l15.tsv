@@ -1,7 +1,7 @@
 # L15 v2 - manifestul diferentelor pentru 20261220a_sms_numere_serviciu (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
 # generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 a290bf3c6cc2bbbe0664fbf2d540a80f61846dee8b881ef100ef32d5338194d5
 # clona: server_version_num 170006, rol postgres
-# clona: GLOBAL inainte 72ebc034c0f5781605eec98533469ae8 (26138 randuri), dupa 5540da4ba9865ef3baa398f23c93f979 (26166 randuri); 32 obiecte
+# clona: GLOBAL inainte 14dfa03488fe782dbf98b1777fd51702 (26150 randuri), dupa 059c956f07ab17222a6201fbb830b343 (26178 randuri); 32 obiecte
 coloana	coloana public.sms_numere_serviciu.activ	creat	d52478660c55605ce2aea2824df741f0
 coloana	coloana public.sms_numere_serviciu.creat_de	creat	79018454964c1ef38d38cbae39265d11
 coloana	coloana public.sms_numere_serviciu.creat_la	creat	7f110a98f3c179d7aeefca49900a0d10

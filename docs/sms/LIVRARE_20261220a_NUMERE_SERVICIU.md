@@ -169,17 +169,46 @@ producție, identități sintetice. Pe ea, **secțiunea scriptului de amprente, 
     `pg_stat_statements`). Corpurile noi nu cheamă nicio funcție de extensie (`nume_care` gol);
   - 4 scheme care există doar pe producție (`cron`, `graphql`, `pgbouncer`, `realtime`): ale platformei, neatinse de migrare.
 - Restul diferențelor dintre liste (nimic care să existe doar pe clonă), pe grupuri: obiectele schemelor platformei (`auth`, `storage`,
-  `realtime`, `net`, `vault`, `cron`: tabele, coloane, constrângeri, politici, triggere, publicații, triggere de eveniment — clona are
-  doar ce le trebuie probelor), proprietarii și drepturile unor funcții de extensie, și 26 de constrângeri CHECK din `public` cu aceeași
-  regulă, dar altă formă a expresiei după export / restaurare (intervale desfăcute, ȘI-uri aplatizate). Niciuna nu e pe tabelele sau
-  funcțiile migrării: rândurile `schimbat` / `sters` din manifest au aceeași amprentă pe clonă și pe producție.
+  `realtime`, `net`, `vault`, `cron`: tabele, coloane, constrângeri, politici, triggere, publicații — clona are doar ce le trebuie
+  probelor), proprietarii și drepturile unor funcții de extensie, și 26 de constrângeri CHECK din `public` a căror expresie are altă
+  formă după export / restaurare (intervale desfăcute, ȘI-uri aplatizate; comparația e pe amprente — echivalența expresiilor nu e
+  dovedită de ea, doar faptul că sunt pe alte tabele). Niciuna nu e pe tabelele sau funcțiile migrării: rândurile `schimbat` / `sters`
+  din manifest au aceeași amprentă pe clonă și pe producție.
 - Proba „diferența obținută = manifestul” pe clonă: **`IDENTIC`**, nimic comis.
-- Aplicare → revenire → reaplicare → revenire, prin runner, cu amprenta globală verificată înainte și după: de fiecare dată 32 de
-  diferențe = manifestul; după fiecare revenire amprenta globală a clonei e cea dinainte. Timp: verificarea „înainte” ≈ 0,5 s, garda
-  finală ≈ 1,05 s din plafonul de 2 s.
-- Proba cu două sesiuni: `C1: OK`; cu mutantul fără lock: `mutant PRINS`.
+- Aplicare → revenire → reaplicare → revenire. **Aplicările**: prin runner, cu amprenta globală verificată înainte și după — de
+  fiecare dată 32 de diferențe = manifestul. **Revenirile**: prin runner, cu plafon, fără amprenta globală (fișierul de revenire nu are
+  manifest); că au readus catalogul la starea dinainte s-a verificat separat, prin recitire — după fiecare revenire amprenta globală a
+  clonei e cea dinainte. Timp la aplicare, pe clonă: verificarea „înainte” ≈ 0,4 s, lock-urile luate la ≈ 0,45 s, garda finală ≈ 0,9 s
+  din plafonul de 2 s. Clona are altă arhitectură și mai puține obiecte: cifrele NU spun cât durează pe producție (asta o arată pasul 5).
+- Proba cu două sesiuni (limita de 100 de numere active, după aplicare): `C1: OK`; cu mutantul fără lock: `mutant PRINS`.
+- **Lock-urile migrării** (`sms_loturi` în SHARE UPDATE EXCLUSIVE, `sms_mesaje` în ACCESS EXCLUSIVE — fără așteptare, cu reîncercări
+  până la 1 s de la BEGIN), cu o a doua sesiune care ține un lock incompatibil:
+  - ținut peste termen — un lock de tip DDL pe `sms_loturi`; un **cititor** pe `sms_mesaje` (un SELECT într-o tranzacție deschisă); un
+    scriitor pe `sms_mesaje`: de fiecare dată refuz `55P03` („BUGET_LOCK”) la ≈ 1,0 s de la BEGIN, după 12 încercări, nimic aplicat;
+  - eliberat înainte de termen (la ≈ 0,65 s) — cititorul de pe `sms_mesaje`, apoi lock-ul de pe `sms_loturi`: proba „diferența =
+    manifestul” `IDENTIC`, garda la ≈ 1,1 s; aceeași situație prin runner: lock-urile luate la 0,67 s (5 încercări), aplicat, garda la ≈ 1,1 s;
+  - un scriitor obișnuit pe `sms_loturi`, ținut tot timpul: migrarea NU e blocată (lock-ul ei pe loturi oprește doar DDL-ul) — `IDENTIC`.
+
+  Cât ține migrarea lock-urile: de la luarea lor până la COMMIT (pe clonă ≈ 0,45 s). În acest interval citirile și scrierile pe
+  `sms_mesaje` așteaptă; pe `sms_loturi` așteaptă doar DDL-ul.
+- **Triggerele de eveniment ale platformei** — șase pe producție; pe clonă sunt aceleași, cu funcțiile lor identice (eveniment,
+  etichete, stare, corp), iar probele de mai sus au rulat cu ele active:
+  - patru pornesc doar la crearea / ștergerea unei EXTENSII (`issue_pg_cron_access`, `issue_pg_graphql_access`, `issue_pg_net_access`
+    la CREATE EXTENSION; `issue_graphql_placeholder` la DROP EXTENSION). Migrarea nu creează și nu șterge extensii: nu pornesc;
+  - două pornesc la orice comandă de schemă: `pgrst_ddl_watch` (la sfârșitul comenzii) și `pgrst_drop_watch` (la ștergeri). Funcțiile
+    lor (ale platformei, INVOKER, cu calea goală) fac un singur lucru: `NOTIFY pgrst, 'reload schema'` pentru comenzile pe tabele,
+    funcții, triggere, tipuri și comentarii, în afara obiectelor temporare. Nu scriu în catalog și nu ating tabele — diferența obținută
+    rămâne exact manifestul;
+  - efectul extern e doar notificarea către serviciul REST, care își reîncarcă schema. Notificarea e tranzacțională; verificat pe
+    clonă, cu o sesiune care ascultă canalul: la proba cu ROLLBACK **nicio** notificare, la aplicare una, la revenire una. Deci proba
+    cu ROLLBACK pe țintă nu are efect extern, iar aplicarea are exact efectul cerut oricum de pasul 7.
 - **Schimbat după citire ⇒ refuz la «înainte»**, în trei variante, de fiecare dată cu amprenta globală, înaintea verificării proprii a
   migrării și fără nicio schimbare: auxiliarul porții owner (`fn_sms_e_owner()`) cu alt corp; o funcție nouă, din afara lanțului (pe care
   migrarea singură n-ar vedea-o); un drept schimbat pe un tabel din afara lanțului. După refacere, amprenta globală e cea dinainte.
 
-Pentru proba cu ROLLBACK pe țintă (pasul 5) rămân criteriile din `docs/LIVRARE_L15_V2.md`.
+Pentru proba cu ROLLBACK pe țintă (pasul 5) rămân criteriile din `docs/LIVRARE_L15_V2.md` (același punct de acces și rol ca la
+livrare, recitirea din ziua livrării cu clasificarea diferențelor, mai multe probe aprobate — inclusiv prima —, toate `IDENTIC`, garda
+finală cel mult 1,5 s, verificarea „înainte” raportată separat). În plus, pentru această migrare, în jurnalul livrării se trec: momentul
+la care au fost luate lock-urile și cât au fost ținute (până la ROLLBACK / COMMIT), numărul de încercări și verificarea că proba nu a
+lăsat nimic în urmă (tabelul nou nu există, istoricul neschimbat, amprenta globală de după = cea dinainte). O singură probă `IDENTIC` nu
+ajunge pentru aplicare.
