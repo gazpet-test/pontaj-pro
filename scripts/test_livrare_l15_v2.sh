@@ -78,7 +78,7 @@ migrare() { # $1 numele, $2 corpul (dupa garda de start) => calea
   echo "$f"
 }
 manifest() { # $1 migrarea, $2 versiunea, restul = optiuni (ex. plafonul) => manifestul in $TMP/man_<nume>/
-  local n; n="$(basename "$1" .sql)"; mkdir -p "$TMP/man_$n"
+  local n; n="$(basename "$1" .sql)"; mkdir -p "$TMP/man_$n"; rm -f -- "$TMP/man_$n/$n.l15.tsv"   # generatorul cere fisier NOU (cazul d regenereaza)
   PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/livrare_l15_manifest.sh" --migrare "$1" --versiune "$2" "${CONN_OPT[@]}" "${@:3}" \
     --iesire "$TMP/man_$n/$n.l15.tsv" >"$TMP/man_$n.log" 2>&1 || { cat "$TMP/man_$n.log"; fail "generarea manifestului $n"; }
   echo "$TMP/man_$n/$n.l15.tsv"
@@ -147,7 +147,7 @@ CREATE TABLE public.t_bariera_$BI (id int);")"
   "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" -c "SELECT pg_advisory_lock($BAR), pg_sleep(120)" >/dev/null 2>&1 &
   h=$!; PIDS+=("$h")
   for k in $(seq 1 100); do [[ "$(q "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $BAR AND granted")" == 1 ]] && break; sleep 0.1; done
-  ( runner "$v" "$m" --amprenta-globala "$g" --diferente-globale "$man" "$@" >"$TMP/b_$et.log" 2>&1; echo $? >"$TMP/b_$et.rc" ) &
+  ( c=0; runner "$v" "$m" --amprenta-globala "$g" --diferente-globale "$man" "$@" >"$TMP/b_$et.log" 2>&1 || c=$?; echo "$c" >"$TMP/b_$et.rc" ) &
   PIDS+=("$!")
   # livrarea a trecut de pasul „inainte” si asteapta la bariera
   for k in $(seq 1 300); do [[ "$(q "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $BAR AND NOT granted")" == 1 ]] && break; sleep 0.1; done
