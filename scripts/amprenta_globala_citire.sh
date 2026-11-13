@@ -6,7 +6,9 @@
 #   2. [--amprente-migrare scripts/<x>_amprente.sql] scriptul de amprente EXISTENT al migrarii, nemodificat in repo:
 #      se ruleaza o COPIE din care se scot exact linia "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;" si
 #      linia "ROLLBACK;" (fiecare trebuie sa apara EXACT o data, altfel refuz) => ruleaza in tranzactia de aici; iesirea lui
-#      sta intre liniile "=== scriptul de amprente al migrarii ..." si "=== sfarsit scriptul de amprente al migrarii ===";
+#      (format nealiniat, separator " | ") sta intre liniile "=== scriptul de amprente al migrarii ..." si
+#      "=== sfarsit scriptul de amprente al migrarii ==="; momentul fotografiei (now(), randul MOMENT, tiparit o data) e
+#      inlocuit in ea, EXACT acel sir, cu marcajul fix "<momentul fotografiei>" (doua citiri fara DDL = sectiuni identice);
 #   3. contextul canonic (SET LOCAL, ca functia runnerului), apoi GLOBAL + numarul de randuri + md5 pe familii + validarea
 #      (etichete unice, randuri valide) [+ --lista: toate randurile familie / eticheta / amprenta, pentru
 #      scripts/l15_compara_liste.sh];
@@ -38,7 +40,8 @@
 #        --user <U> [--amprente-migrare scripts/<x>_amprente.sql] [--radacina 'public.fn(bigint)' ...] [--lista] \
 #        [--rol-de-incredere <rol> ...] [--definer-verificat 'public.fn(bigint)=<md5>' ...] [--doar-genereaza <dosar_nou>] > citire.txt
 # Iesire (stdout): sectiunea scriptului migrarii (daca e dat), apoi, separate prin TAB:
-#   TINTA - - 1 - | GLOBAL - - <md5> <randuri> | FAMILIE <familie> - <md5> <randuri> | VALIDARE - - ok|<problema> <n>
+#   TINTA - - 1 - | MOMENT - - <now() al fotografiei> - | GLOBAL - - <md5> <randuri> | FAMILIE <familie> - <md5> <randuri> |
+#   VALIDARE - - ok|<problema> <n>
 #   [RAND <familie> <eticheta> <amprenta> -] | CONTEXT <nume> - <valoare> -
 #   [LANT <tip> <obiect> <detalii> - - | INCREDERE <schema> <rol> <motiv> - - | SEMNALE <executie_dinamica> <vederi>
 #    <limbaj_altul> <definer_nesigure> <definer_acceptate>] | FOTOGRAFIE - - aceeasi -
@@ -142,10 +145,17 @@ SELECT 'TINTA', '-', '-', CAST(CASE WHEN pg_catalog.current_database() OPERATOR(
          AND NOT pg_catalog.pg_is_in_recovery() THEN '1' ELSE 'AG_CITIRE_TINTA_NECONFIRMATA' END AS pg_catalog.int4)::pg_catalog.text, '-'
 -- <<< AG_CITIRE tinta
 ;
+-- >>> AG_CITIRE moment
+SELECT 'MOMENT', '-', '-', pg_catalog.now()::pg_catalog.text, '-'
+-- <<< AG_CITIRE moment
+;
 SQL
   if [ -n "$AMP_MIG" ]; then
-    printf '%s\n' '\pset format aligned' '\pset tuples_only off' "\\echo '=== scriptul de amprente al migrarii ($(basename "$AMP_MIG")), in aceeasi tranzactie ==='" \
-      '\ir mig_amprente.sql' "\\echo '=== sfarsit scriptul de amprente al migrarii ==='" '\pset format unaligned' '\pset tuples_only on'
+    # format NEALINIAT: in formatul aliniat latimea coloanelor depinde de lungimea momentului (zerourile de la final ale
+    # fractiunii de secunda nu se tiparesc), deci si liniile de antet / separator s-ar schimba de la o citire la alta
+    printf '%s\n' '\pset format unaligned' "\\pset fieldsep ' | '" '\pset tuples_only off' \
+      "\\echo '=== scriptul de amprente al migrarii ($(basename "$AMP_MIG")), in aceeasi tranzactie ==='" \
+      '\ir mig_amprente.sql' "\\echo '=== sfarsit scriptul de amprente al migrarii ==='" "\\pset fieldsep '\\t'" '\pset tuples_only on'
   fi
   ag_guc_local
   cat <<SQL
@@ -339,13 +349,29 @@ PSQL="${PSQL_BIN:-psql}"
 export PGCLIENTENCODING=UTF8
 RC=0
 ( cd "$W" && "$PSQL" -X -v ON_ERROR_STOP=1 -f citire.sql -h "$H" -p "$P" -U "$U" -d "$D" ) >"$W/iesire.txt" 2>"$W/erori.txt" || RC=$?
-tr -d '\r' <"$W/iesire.txt"
 if [ "$RC" != 0 ]; then
+  tr -d '\r' <"$W/iesire.txt"
   sed 's/^/  /' "$W/erori.txt" >&2
   if grep -q 'AG_CITIRE_TINTA_NECONFIRMATA' "$W/erori.txt"; then echo "[x] TINTA NECONFIRMATA (db / system_identifier / in_recovery)" >&2; exit 22; fi
   echo "[x] citirea a esuat (psql $RC), nimic schimbat (tranzactie READ ONLY)" >&2; exit 1
 fi
-OUT="$(tr -d '\r' <"$W/iesire.txt")"
+# Momentul fotografiei (now() al tranzactiei unice, in forma text a sesiunii) se tipareste O DATA, pe randul MOMENT (in afara
+# partii revizuite). In sectiunea scriptului migrarii EXACT acest sir se inlocuieste cu marcajul fix "<momentul fotografiei>"
+# (scripturile *_amprente.sql existente tiparesc now() in antet); nimic altceva nu se normalizeaza.
+tr -d '\r' <"$W/iesire.txt" >"$W/iesire_lf.txt"
+[ "$(grep -c $'^MOMENT\t' "$W/iesire_lf.txt" || true)" = 1 ] || { cat "$W/iesire_lf.txt"; echo "[x] randul MOMENT lipsa / repetat" >&2; exit 1; }
+AG_MOMENT="$(awk -F'\t' '$1 == "MOMENT" { print $4 }' "$W/iesire_lf.txt")"
+[ -n "$AG_MOMENT" ] || { cat "$W/iesire_lf.txt"; echo "[x] randul MOMENT gol" >&2; exit 1; }
+AG_MOMENT="$AG_MOMENT" AG_NR="$W/nr_moment" awk '
+  BEGIN { m = ENVIRON["AG_MOMENT"]; mk = "<momentul fotografiei>"; mig = 0; n = 0 }
+  index($0, "=== scriptul de amprente al migrarii ") == 1 { mig = 1; print; next }
+  $0 == "=== sfarsit scriptul de amprente al migrarii ===" { mig = 0; print; next }
+  mig { s = $0; o = ""; while ((i = index(s, m)) > 0) { o = o substr(s, 1, i - 1) mk; s = substr(s, i + length(m)); n++ }; $0 = o s }   # M_CIT_MOMENT
+  { print }
+  END { print n > ENVIRON["AG_NR"] }
+' "$W/iesire_lf.txt" >"$W/iesire_norm.txt"
+cat "$W/iesire_norm.txt"
+OUT="$(cat "$W/iesire_norm.txt")"
 grep -qx $'FOTOGRAFIE\t-\t-\taceeasi\t-' <<<"$OUT" || { echo "[x] verificarea fotografiei comune lipseste" >&2; exit 1; }
 grep -qE $'^GLOBAL\t-\t-\t[0-9a-f]{32}\t[0-9]+$' <<<"$OUT" || { echo "[x] GLOBAL lipsa / nerecunoscut" >&2; exit 1; }
 [ "$(grep -c $'^CONTEXT\t' <<<"$OUT" || true)" = 3 ] || { echo "[x] CONTEXT lipsa / incomplet" >&2; exit 1; }
@@ -367,5 +393,5 @@ if [ ${#RAD[@]} -gt 0 ]; then
     echo "[x] REFUZ: $S_NES functie(i) SECURITY DEFINER din lant cu search_path nesigur (L15) - nu se face baseline (sau --definer-verificat dupa verificarea corpului)" >&2; exit 4
   fi
 fi
-echo "[ok] citit intr-o singura fotografie (REPEATABLE READ READ ONLY): $(grep -E $'^GLOBAL\t' <<<"$OUT" | cut -f4,5 | tr '\t' ' ') randuri; $(grep -E $'^CONTEXT\t' <<<"$OUT" | cut -f2,4 | tr '\t\n' '= ')" >&2
+echo "[ok] citit intr-o singura fotografie (REPEATABLE READ READ ONLY): $(grep -E $'^GLOBAL\t' <<<"$OUT" | cut -f4,5 | tr '\t' ' ') randuri; $(grep -E $'^CONTEXT\t' <<<"$OUT" | cut -f2,4 | tr '\t\n' '= ')MOMENT $AG_MOMENT (inlocuit in sectiunea scriptului migrarii de $(cat "$W/nr_moment" 2>/dev/null || echo '?') ori)" >&2
 exit 0

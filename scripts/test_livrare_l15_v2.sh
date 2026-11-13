@@ -23,7 +23,9 @@
 #   i  citirea cu o functie DEFINER cu search_path = pg_temp, public in lant => 4 (nesigura); cu --definer-verificat
 #      '<functie>=<md5 tiparit>' => 0 (acceptata); cu alt md5 => 4;
 #   j  contraexemplul grantorului pe PG17, prin runner: dreptul transferat de la g1 la g2 DUPA citire => refuz la „inainte”
-#      (AMPRENTA_GLOBALA_INAINTE, familia relatie), NEAPLICAT (10).
+#      (AMPRENTA_GLOBALA_INAINTE, familia relatie), NEAPLICAT (10);
+#   k  (r3) doua citiri reale consecutive cu --amprente-migrare scripts/meteo_xweather_amprente.sql (tipareste now()), fara DDL
+#      intre ele => l15_compara_liste.sh --recitire 0.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SLOT="${1:-0}"; [[ "$SLOT" =~ ^[0-9]$ ]] || { echo 'MEDIU: slot 0-9'; exit 2; }
@@ -232,6 +234,17 @@ asteapta 'i alt md5' 4 "$TMP/i_rau.log" citeste_def --definer-verificat "public.
 q 'DROP FUNCTION public.d_nesigura()' >/dev/null
 echo 'L15_I: DEFINER cu search_path = pg_temp, public => 4; acceptat cu md5-ul tiparit => 0 (SEMNALE acceptate 1); alt md5 => 4'
 
+# k. r3 (P2): doua citiri REALE consecutive cu scriptul de amprente al migrarii (tipareste now() in antet), fara DDL intre
+#    ele => --recitire 0; momentul inlocuit in sectiune, randurile MOMENT diferite.
+citeste_mig() { PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/amprenta_globala_citire.sh" "${CONN_OPT[@]}" --lista \
+  --amprente-migrare "$ROOT/scripts/meteo_xweather_amprente.sql" >"$1" 2>"$1.err" || { cat "$1" "$1.err"; fail "k: citirea $1"; }; }
+citeste_mig "$TMP/k1.txt"; sleep 1; citeste_mig "$TMP/k2.txt"
+[[ "$(grep $'^MOMENT\t' "$TMP/k1.txt")" != "$(grep $'^MOMENT\t' "$TMP/k2.txt")" ]] || fail 'k: MOMENT identic in doua citiri'
+grep -qF '<momentul fotografiei>' "$TMP/k1.txt" || { cat "$TMP/k1.txt"; fail 'k: momentul nu e inlocuit in sectiunea migrarii'; }
+asteapta 'k recitire' 0 "$TMP/k.log" bash "$ROOT/scripts/l15_compara_liste.sh" --a "$TMP/k1.txt" --b "$TMP/k2.txt" --recitire
+grep -qF '[ok] partea revizuita IDENTICA' "$TMP/k.log" || { cat "$TMP/k.log"; fail 'k: mesajul recitirii'; }
+echo 'L15_K: doua citiri reale consecutive cu meteo_xweather_amprente.sql => --recitire 0 (momentul in afara partii revizuite)'
+
 # j. Contraexemplul grantorului pe PG17, prin runner: transferul g1 -> g2 dupa citire => refuz la „inainte”.
 qa "CREATE ROLE g1; CREATE ROLE g2; CREATE ROLE r_gr; CREATE TABLE public.t_gr (id int); ALTER TABLE public.t_gr OWNER TO postgres;
 GRANT SELECT ON public.t_gr TO g1, g2 WITH GRANT OPTION; SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; RESET ROLE;" >/dev/null
@@ -267,4 +280,4 @@ timp() { # $1 eticheta, $2 numele migrarii, $3 versiunea
 }
 timp rece 20990204a_l15_timp_rece 20990204000001
 timp cald 20990204b_l15_timp_cald 20990204000002
-echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, f timpii (mai sus)'
+echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, k recitirea reala, f timpii (mai sus)'

@@ -2,15 +2,15 @@
 -- prin scripts/livrare_amprenta.sh), citirea coordonatorului (scripts/amprenta_globala_citire.sh), generatorul de manifest
 -- (scripts/livrare_l15_manifest.sh) si testele. Nu se ruleaza direct: blocurile dintre marcaje se extrag exact.
 -- Ce aduce v2 (istoria versiunilor: docs/LIVRARE_L15_V2.md, "Versionare"): grantorul in fiecare ACL; dependentele OWNED BY /
--- identity ale secventelor; familiile sistem_adaugat si acl_sistem (schemele de sistem nu mai sunt excluse cu totul);
--- server_version_num in baza; obiectele mari cate un rand pe obiect.
+-- identity ale secventelor; schemele de sistem (obiectele create dupa initdb prin ACELEASI familii, plasa sistem_initdb pe
+-- functiile de la initdb, acl_sistem); server_version_num in baza; obiectele mari cate un rand pe obiect.
 --
 -- Doua blocuri, fiecare = O interogare (fara ";"), coloanele (familie, eticheta, amprenta, detaliu):
 --   AG_SESIUNE v2  profilul scurt al sesiunii de livrare; se evalueaza in contextul APELANTULUI (inaintea fixarii GUC-urilor),
 --                  scris fara operatori si cu nume calificate, deci nu depinde de search_path. NU dovedeste configuratia
 --                  sesiunilor PostgREST (aceea e in familiile setare_rol + rol.rolconfig).
---   AG_CATALOG v2  toate obiectele cu cod executabil sau drepturi din afara schemelor de sistem + ce s-a adaugat / acordat in
---                  schemele de sistem; se evalueaza DOAR in
+--   AG_CATALOG v2  toate obiectele cu cod executabil sau drepturi din perimetru (mai jos) + plasa pe functiile de la initdb +
+--                  ACL-urile explicite din schemele de sistem; se evalueaza DOAR in
 --                  contextul canonic (garda ag_garda refuza altfel): search_path = pg_catalog, pg_temp; TimeZone UTC;
 --                  DateStyle ISO, YMD; IntervalStyle postgres; extra_float_digits 1; bytea_output hex;
 --                  quote_all_identifiers off; standard_conforming_strings on; lc_monetary C.
@@ -21,17 +21,25 @@
 --   mari, numele lor public), numere de coloana, relfilenode, statistici, valori de secvente sau date din tabele.
 --   Fiecare ACL = [beneficiar | null pentru PUBLIC, privilegiu, delegabil, grantor]. Optiunile care pot contine secrete
 --   (FDW, servere, mapari, setarile de rol / baza) intra doar ca md5.
--- Perimetru: schemele in afara pg_catalog, information_schema, pg_toast, pg_temp_N, pg_toast_temp_N (nicio schema de
---   platforma exclusa); obiectele temporare (relpersistence t, schemele temporare) nu intra. Cataloagele fara schema
---   (roluri, membri, limbaje, cast-uri, metode de acces, extensii, triggere de eveniment, publicatii, acl implicite,
---   tablespace-uri, parametri) intra INTREGI; baza = doar baza curenta. Din schemele de sistem: obiectele create dupa
---   initdb (sistem_adaugat, oid >= 16384 = FirstNormalObjectId, OID-ul doar ca filtru) si ACL-urile explicite (acl_sistem).
+-- Perimetru, definit O DATA (CTE-ul ag_per + CTE-urile de perimetru pe catalog, ag_rel ... ag_tsc; familiile nu au
+--   predicate proprii): un obiect intra daca schema lui e in perimetru SAU schema e de sistem (pg_catalog,
+--   information_schema) SI obiectul e creat dupa initdb (oid >= 16384 = FirstNormalObjectId; OID-ul doar filtreaza, nu se
+--   serializeaza) - acesta trece prin ACELEASI familii si ACELEASI expresii ca obiectele aplicatiei. Schemele din perimetru:
+--   toate in afara pg_catalog, information_schema, pg_toast, pg_temp_N, pg_toast_temp_N (nicio schema de platforma
+--   exclusa); obiectele temporare (relpersistence t, schemele temporare) nu intra. Cataloagele fara schema (roluri, membri,
+--   limbaje, cast-uri, metode de acces, extensii, triggere de eveniment, publicatii, acl implicite, tablespace-uri,
+--   parametri) intra INTREGI; baza = doar baza curenta.
+--   Obiectele de la initdb din schemele de sistem (oid < 16384) NU sunt in perimetru: din ele intra doar functiile, AGREGAT
+--   (sistem_initdb: un rand, md5 peste campurile brute din pg_proc), ACL-urile explicite (acl_sistem, si pg_toast), proprietarul
+--   celor trei scheme si server_version_num (baza). Definitiile lor de relatii, coloane, tipuri, operatori, clase,
+--   colatii etc. nu intra (un ALTER facut pe ele de superuserul platformei nu se vede; limita declarata in document).
 -- Familii (v2): schema relatie coloana constrangere trigger regula politica functie tip operator familie_operatori
 --   clasa_operatori amop amproc metoda_acces cast limbaj transformare conversie colatie ts_parser ts_sablon ts_dictionar
 --   ts_config extensie trigger_eveniment mostenire acl_implicit baza parametru_acl tablespace rol membru setare_rol fdw
 --   server_extern mapare_utilizator publicatie publicatie_tabel publicatie_schema obiect_mare eticheta_securitate
---   sistem_adaugat acl_sistem sesiune
--- Orice schimbare a listei, a campurilor sau a perimetrului = alta versiune (v3: alt fisier, alt marcaj), cu motiv.
+--   sistem_initdb acl_sistem sesiune
+-- Orice schimbare a listei, a campurilor sau a perimetrului DUPA ce forma a intrat pe main = alta versiune (v3: alt fisier,
+--   alt marcaj), cu motiv. Rundele de review dinaintea intrarii pe main nu sunt versiuni (docs/LIVRARE_L15_V2.md, "Versionare").
 
 -- >>> AG_SESIUNE v2
 SELECT 'sesiune'::pg_catalog.text AS familie,
@@ -56,20 +64,24 @@ ag_garda AS (
                     AND pg_catalog.current_setting('lc_monetary') OPERATOR(pg_catalog.=) 'C'
                THEN '1' ELSE 'AG_V2_CONTEXT_NECANONIC' END AS pg_catalog.int4) AS ok
 ),
--- schemele din perimetru
-ag_ns AS (
-  SELECT n.oid, n.nspname, quote_ident(n.nspname) AS q
+-- PERIMETRUL (singura definitie): schema + pragul de OID al obiectelor ei care intra. Schemele aplicatiei / platformei:
+-- prag 0 (tot); pg_catalog si information_schema: prag 16384 = FirstNormalObjectId (doar ce s-a creat dupa initdb).
+-- pg_toast si schemele temporare nu sunt in perimetru. CTE-urile de perimetru de mai jos (ag_rel ... ag_tsc) aplica
+-- TOATE aceeasi conditie (x.oid >= s.prag); familiile folosesc doar CTE-urile de perimetru.
+ag_per AS (
+  SELECT n.oid, quote_ident(n.nspname) AS q,
+         CAST(CASE WHEN n.nspname IN ('pg_catalog', 'information_schema') THEN 16384 ELSE 0 END AS oid) AS prag
     FROM pg_namespace n CROSS JOIN ag_garda g
-   WHERE g.ok = 1 AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-     AND n.nspname !~ '^pg_(toast_)?temp_[0-9]+$'
+   WHERE g.ok = 1 AND n.nspname <> 'pg_toast' AND n.nspname !~ '^pg_(toast_)?temp_[0-9]+$'
 ),
--- schemele de sistem: ag_sis (unde se pot adauga obiecte gasite inaintea celor ale aplicatiei), ag_sis3 (+ pg_toast, pentru ACL)
+-- schemele ca obiecte (familia schema): cele ale aplicatiei; cele trei de sistem sunt in acl_sistem
+ag_ns AS (SELECT s.oid, s.q FROM ag_per s WHERE s.prag = 0),
+-- schemele de sistem, pentru acl_sistem (+ pg_toast)
 ag_sis3 AS (
   SELECT n.oid, n.nspname, quote_ident(n.nspname) AS q
     FROM pg_namespace n CROSS JOIN ag_garda g
    WHERE g.ok = 1 AND n.nspname IN ('pg_catalog', 'information_schema', 'pg_toast')
 ),
-ag_sis AS (SELECT s.oid, s.q FROM ag_sis3 s WHERE s.nspname <> 'pg_toast'),
 -- relatiile din schemele de sistem; cele TOAST etichetate dupa tabelul-parinte (numele lor contine un OID)
 ag_rel_sis AS (
   SELECT c.oid, CASE WHEN s.nspname = 'pg_toast' THEN 'toast ' || coalesce(p.oid::regclass::text, '-') ELSE c.oid::regclass::text END AS et
@@ -77,10 +89,19 @@ ag_rel_sis AS (
     LEFT JOIN pg_class p ON s.nspname = 'pg_toast' AND p.reltoastrelid = c.oid
    WHERE c.relpersistence <> 't'
 ),
-ag_rel AS (
-  SELECT c.oid, c.relkind FROM pg_class c WHERE c.relnamespace IN (SELECT s.oid FROM ag_ns s) AND c.relpersistence <> 't'
-),
-ag_typ AS (SELECT t.oid FROM pg_type t WHERE t.typnamespace IN (SELECT s.oid FROM ag_ns s)),
+-- CTE-urile de perimetru, cate unul pe catalog cu schema; forma fixa: legatura cu ag_per pe schema si x.oid >= prag
+ag_rel AS (SELECT c.oid, c.relkind FROM pg_class c JOIN ag_per s ON s.oid = c.relnamespace WHERE c.oid >= s.prag AND c.relpersistence <> 't'),
+ag_typ AS (SELECT t.oid FROM pg_type t JOIN ag_per s ON s.oid = t.typnamespace WHERE t.oid >= s.prag),
+ag_fn AS (SELECT p.oid FROM pg_proc p JOIN ag_per s ON s.oid = p.pronamespace WHERE p.oid >= s.prag),
+ag_opr AS (SELECT o.oid FROM pg_operator o JOIN ag_per s ON s.oid = o.oprnamespace WHERE o.oid >= s.prag),
+ag_opf_p AS (SELECT f.oid FROM pg_opfamily f JOIN ag_per s ON s.oid = f.opfnamespace WHERE f.oid >= s.prag),
+ag_opc_p AS (SELECT c.oid FROM pg_opclass c JOIN ag_per s ON s.oid = c.opcnamespace WHERE c.oid >= s.prag),
+ag_col AS (SELECT co.oid, s.q FROM pg_collation co JOIN ag_per s ON s.oid = co.collnamespace WHERE co.oid >= s.prag),
+ag_conv AS (SELECT cv.oid, s.q FROM pg_conversion cv JOIN ag_per s ON s.oid = cv.connamespace WHERE cv.oid >= s.prag),
+ag_tsp AS (SELECT pr.oid, s.q FROM pg_ts_parser pr JOIN ag_per s ON s.oid = pr.prsnamespace WHERE pr.oid >= s.prag),
+ag_tst AS (SELECT tm.oid, s.q FROM pg_ts_template tm JOIN ag_per s ON s.oid = tm.tmplnamespace WHERE tm.oid >= s.prag),
+ag_tsd AS (SELECT dc.oid, s.q FROM pg_ts_dict dc JOIN ag_per s ON s.oid = dc.dictnamespace WHERE dc.oid >= s.prag),
+ag_tsc AS (SELECT cf.oid, s.q FROM pg_ts_config cf JOIN ag_per s ON s.oid = cf.cfgnamespace WHERE cf.oid >= s.prag),
 -- etichetele familiilor / claselor de operatori (si din pg_catalog, pentru referinte)
 ag_opf AS (
   SELECT f.oid, f.opfnamespace, quote_ident(n.nspname) || '.' || quote_ident(f.opfname) || ' ' || quote_ident(a.amname) AS et
@@ -204,7 +225,7 @@ ag_rand(familie, eticheta, d) AS (
                      CASE WHEN g.aggsortop <> 0 THEN g.aggsortop::regoperator::text END, g.aggtranstype::regtype::text, g.aggtransspace,
                      CASE WHEN g.aggmtranstype <> 0 THEN g.aggmtranstype::regtype::text END, g.aggmtransspace, g.agginitval, g.aggminitval)
               FROM pg_aggregate g WHERE g.aggfnoid = p.oid))
-    FROM pg_proc p JOIN ag_ns s ON s.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang
+    FROM ag_fn x JOIN pg_proc p ON p.oid = x.oid JOIN pg_language l ON l.oid = p.prolang
   UNION ALL
   -- tip: TOATE tipurile din perimetru (de baza, compuse / randul tabelelor, domenii, enum, range, multirange, pseudo, tablouri)
   SELECT 'tip', 'tip ' || t.oid::regtype::text,
@@ -233,27 +254,28 @@ ag_rand(familie, eticheta, d) AS (
          jsonb_build_array(o.oprowner::regrole::text, o.oprkind::text, o.oprcanmerge, o.oprcanhash, o.oprresult::regtype::text,
            o.oprcode::oid::regprocedure::text, o.oprrest::oid::regprocedure::text, o.oprjoin::oid::regprocedure::text,
            CASE WHEN o.oprcom <> 0 THEN o.oprcom::regoperator::text END, CASE WHEN o.oprnegate <> 0 THEN o.oprnegate::regoperator::text END)
-    FROM pg_operator o WHERE o.oprnamespace IN (SELECT s.oid FROM ag_ns s)
+    FROM ag_opr x JOIN pg_operator o ON o.oid = x.oid
   UNION ALL
   SELECT 'familie_operatori', 'familie_operatori ' || f.et, jsonb_build_array(pf.opfowner::regrole::text)
-    FROM ag_opf f JOIN pg_opfamily pf ON pf.oid = f.oid WHERE f.opfnamespace IN (SELECT s.oid FROM ag_ns s)
+    FROM ag_opf_p x JOIN ag_opf f ON f.oid = x.oid JOIN pg_opfamily pf ON pf.oid = f.oid
   UNION ALL
   SELECT 'clasa_operatori', 'clasa_operatori ' || c.et,
          jsonb_build_array(pc.opcowner::regrole::text, (SELECT f.et FROM ag_opf f WHERE f.oid = pc.opcfamily), pc.opcintype::regtype::text,
            pc.opcdefault, CASE WHEN pc.opckeytype <> 0 THEN pc.opckeytype::regtype::text END)
-    FROM ag_opc c JOIN pg_opclass pc ON pc.oid = c.oid WHERE c.opcnamespace IN (SELECT s.oid FROM ag_ns s)
+    FROM ag_opc_p x JOIN ag_opc c ON c.oid = x.oid JOIN pg_opclass pc ON pc.oid = c.oid
   UNION ALL
-  -- membrii familiilor: ai familiilor din perimetru SI cei adaugati de extensii la familiile sistemului (oid >= 16384)
+  -- membrii familiilor: ai familiilor din perimetru SI membrii (pg_amop / pg_amproc) adaugati dupa initdb la familiile de
+  -- la initdb (de ex. de extensii; oid-ul randului de membru >= 16384)
   SELECT 'amop', 'amop ' || f.et || ' ' || ao.amoplefttype::regtype::text || ',' || ao.amoprighttype::regtype::text || ' ' || ao.amopstrategy,
          jsonb_build_array(ao.amoppurpose::text, ao.amopopr::regoperator::text,
            (SELECT f2.et FROM ag_opf f2 WHERE f2.oid = ao.amopsortfamily), (SELECT quote_ident(m.amname) FROM pg_am m WHERE m.oid = ao.amopmethod))
     FROM pg_amop ao JOIN ag_opf f ON f.oid = ao.amopfamily
-   WHERE f.opfnamespace IN (SELECT s.oid FROM ag_ns s) OR ao.oid >= 16384
+   WHERE f.oid IN (SELECT x.oid FROM ag_opf_p x) OR ao.oid >= 16384
   UNION ALL
   SELECT 'amproc', 'amproc ' || f.et || ' ' || ap.amproclefttype::regtype::text || ',' || ap.amprocrighttype::regtype::text || ' ' || ap.amprocnum,
          jsonb_build_array(ap.amproc::oid::regprocedure::text)
     FROM pg_amproc ap JOIN ag_opf f ON f.oid = ap.amprocfamily
-   WHERE f.opfnamespace IN (SELECT s.oid FROM ag_ns s) OR ap.oid >= 16384
+   WHERE f.oid IN (SELECT x.oid FROM ag_opf_p x) OR ap.oid >= 16384
   UNION ALL
   SELECT 'metoda_acces', 'metoda_acces ' || quote_ident(m.amname), jsonb_build_array(m.amtype::text, m.amhandler::oid::regprocedure::text)
     FROM pg_am m
@@ -278,27 +300,27 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'conversie', 'conversie ' || s.q || '.' || quote_ident(cv.conname),
          jsonb_build_array(cv.conowner::regrole::text, pg_encoding_to_char(cv.conforencoding), pg_encoding_to_char(cv.contoencoding),
            cv.conproc::oid::regprocedure::text, cv.condefault)
-    FROM pg_conversion cv JOIN ag_ns s ON s.oid = cv.connamespace
+    FROM ag_conv s JOIN pg_conversion cv ON cv.oid = s.oid
   UNION ALL
   SELECT 'colatie', 'colatie ' || s.q || '.' || quote_ident(co.collname) || ' ' || co.collencoding,
          jsonb_build_array(co.collowner::regrole::text, co.collprovider::text, co.collisdeterministic, co.collcollate, co.collctype,
            co.colllocale, co.collicurules)
-    FROM pg_collation co JOIN ag_ns s ON s.oid = co.collnamespace
+    FROM ag_col s JOIN pg_collation co ON co.oid = s.oid
   UNION ALL
   SELECT 'ts_parser', 'ts_parser ' || s.q || '.' || quote_ident(pr.prsname),
          jsonb_build_array(pr.prsstart::oid::regprocedure::text, pr.prstoken::oid::regprocedure::text, pr.prsend::oid::regprocedure::text,
            pr.prsheadline::oid::regprocedure::text, pr.prslextype::oid::regprocedure::text)
-    FROM pg_ts_parser pr JOIN ag_ns s ON s.oid = pr.prsnamespace
+    FROM ag_tsp s JOIN pg_ts_parser pr ON pr.oid = s.oid
   UNION ALL
   SELECT 'ts_sablon', 'ts_sablon ' || s.q || '.' || quote_ident(tm.tmplname),
          jsonb_build_array(tm.tmplinit::oid::regprocedure::text, tm.tmpllexize::oid::regprocedure::text)
-    FROM pg_ts_template tm JOIN ag_ns s ON s.oid = tm.tmplnamespace
+    FROM ag_tst s JOIN pg_ts_template tm ON tm.oid = s.oid
   UNION ALL
   SELECT 'ts_dictionar', 'ts_dictionar ' || s.q || '.' || quote_ident(dc.dictname),
          jsonb_build_array(dc.dictowner::regrole::text,
            (SELECT quote_ident(n2.nspname) || '.' || quote_ident(t2.tmplname) FROM pg_ts_template t2 JOIN pg_namespace n2 ON n2.oid = t2.tmplnamespace
              WHERE t2.oid = dc.dicttemplate), dc.dictinitoption)
-    FROM pg_ts_dict dc JOIN ag_ns s ON s.oid = dc.dictnamespace
+    FROM ag_tsd s JOIN pg_ts_dict dc ON dc.oid = s.oid
   UNION ALL
   SELECT 'ts_config', 'ts_config ' || s.q || '.' || quote_ident(cf.cfgname),
          jsonb_build_array(cf.cfgowner::regrole::text,
@@ -306,7 +328,7 @@ ag_rand(familie, eticheta, d) AS (
              WHERE p2.oid = cf.cfgparser),
            (SELECT jsonb_agg(jsonb_build_array(m.maptokentype, m.mapseqno, m.mapdict::regdictionary::text) ORDER BY m.maptokentype, m.mapseqno)
               FROM pg_ts_config_map m WHERE m.mapcfg = cf.oid))
-    FROM pg_ts_config cf JOIN ag_ns s ON s.oid = cf.cfgnamespace
+    FROM ag_tsc s JOIN pg_ts_config cf ON cf.oid = s.oid
   UNION ALL
   SELECT 'extensie', 'extensie ' || quote_ident(e.extname),
          jsonb_build_array(e.extowner::regrole::text, e.extnamespace::regnamespace::text, e.extrelocatable, e.extversion,
@@ -420,62 +442,27 @@ ag_rand(familie, eticheta, d) AS (
   UNION ALL
   SELECT 'eticheta_securitate', 'eticheta_securitate ' || quote_ident(sl.provider) || ' ' || sl.objtype || ' ' || sl.objname || ' ' || sl.objsubid,
          jsonb_build_array(sl.label)
-    FROM pg_seclabels sl
-   WHERE sl.objnamespace IS NULL OR sl.objnamespace IN (SELECT s.oid FROM ag_ns s)
+    FROM pg_seclabels sl LEFT JOIN ag_per s ON s.oid = sl.objnamespace
+   WHERE sl.objnamespace IS NULL OR sl.objoid >= s.prag
   UNION ALL
-  -- sistem_adaugat: obiectele din pg_catalog / information_schema create DUPA initdb (oid >= 16384, FirstNormalObjectId;
-  -- OID-ul doar filtreaza, nu se serializeaza). Un obiect de aici e gasit INAINTEA celui din schemele aplicatiei.
-  SELECT 'sistem_adaugat', 'sistem_adaugat functie ' || p.oid::regprocedure::text,
-         jsonb_build_array(p.prokind::text, l.lanname::text, p.proowner::regrole::text, p.prosecdef, to_jsonb(p.proconfig), p.probin,
-           md5(p.prosrc), CASE WHEN p.prosqlbody IS NOT NULL THEN md5(pg_get_function_sqlbody(p.oid)) END, pg_get_function_result(p.oid),
-           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
-                FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a) z))
-    FROM pg_proc p JOIN ag_sis s ON s.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang
-   WHERE p.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat relatie ' || c.oid::regclass::text,
-         jsonb_build_array(c.relkind::text, c.relowner::regrole::text,
-           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
-                FROM aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner))) a) z),
-           CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid) END)
-    FROM pg_class c JOIN ag_sis s ON s.oid = c.relnamespace
-   WHERE c.oid >= 16384 AND c.relpersistence <> 't'
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat tip ' || t.oid::regtype::text, jsonb_build_array(t.typowner::regrole::text)
-    FROM pg_type t JOIN ag_sis s ON s.oid = t.typnamespace WHERE t.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat operator ' || o.oid::regoperator::text, jsonb_build_array(o.oprowner::regrole::text)
-    FROM pg_operator o JOIN ag_sis s ON s.oid = o.oprnamespace WHERE o.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat familie_operatori ' || f.et, jsonb_build_array(pf.opfowner::regrole::text)
-    FROM ag_opf f JOIN pg_opfamily pf ON pf.oid = f.oid JOIN ag_sis s ON s.oid = f.opfnamespace WHERE f.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat clasa_operatori ' || c.et, jsonb_build_array(pc.opcowner::regrole::text)
-    FROM ag_opc c JOIN pg_opclass pc ON pc.oid = c.oid JOIN ag_sis s ON s.oid = c.opcnamespace WHERE c.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat colatie ' || s.q || '.' || quote_ident(co.collname) || ' ' || co.collencoding,
-         jsonb_build_array(co.collowner::regrole::text)
-    FROM pg_collation co JOIN ag_sis s ON s.oid = co.collnamespace WHERE co.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat conversie ' || s.q || '.' || quote_ident(cv.conname), jsonb_build_array(cv.conowner::regrole::text)
-    FROM pg_conversion cv JOIN ag_sis s ON s.oid = cv.connamespace WHERE cv.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat ts_parser ' || s.q || '.' || quote_ident(pr.prsname), jsonb_build_array()
-    FROM pg_ts_parser pr JOIN ag_sis s ON s.oid = pr.prsnamespace WHERE pr.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat ts_sablon ' || s.q || '.' || quote_ident(tm.tmplname), jsonb_build_array()
-    FROM pg_ts_template tm JOIN ag_sis s ON s.oid = tm.tmplnamespace WHERE tm.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat ts_dictionar ' || s.q || '.' || quote_ident(dc.dictname), jsonb_build_array(dc.dictowner::regrole::text)
-    FROM pg_ts_dict dc JOIN ag_sis s ON s.oid = dc.dictnamespace WHERE dc.oid >= 16384
-  UNION ALL
-  SELECT 'sistem_adaugat', 'sistem_adaugat ts_config ' || s.q || '.' || quote_ident(cf.cfgname), jsonb_build_array(cf.cfgowner::regrole::text)
-    FROM pg_ts_config cf JOIN ag_sis s ON s.oid = cf.cfgnamespace WHERE cf.oid >= 16384
+  -- sistem_initdb: PLASA pe functiile de la initdb din schemele de sistem (schema in ag_per, oid < prag = in afara
+  -- perimetrului). UN rand [numar, md5] peste campurile BRUTE din pg_proc care le hotarasc comportamentul, fara functii de
+  -- deparsare (cost fix, nu creste cu aplicatia). Identitatea = schema (oid) + nume + tipurile argumentelor (oidvector):
+  -- pentru obiectele de la initdb OID-urile sunt fixate la initdb (server_version_num e in baza). Ordinea: schema, numele
+  -- COLLATE "C", tipurile argumentelor (unica in pg_proc).
+  SELECT 'sistem_initdb', 'sistem_initdb functii',
+         jsonb_build_array(count(*), md5(string_agg(
+           ROW(p.pronamespace, p.proname, p.proargtypes, p.prokind, p.prolang, p.proowner, p.prosecdef, p.proisstrict,
+               p.provolatile, p.proleakproof, p.proparallel, p.proretset, p.prorettype, p.provariadic, p.proallargtypes,
+               p.proargmodes, p.proargnames, p.proconfig, p.pronargdefaults, p.proargdefaults, md5(p.prosrc), p.probin,
+               md5(p.prosqlbody::text), p.prosupport::oid)::text,
+           chr(10) ORDER BY p.pronamespace, p.proname COLLATE "C", p.proargtypes)))
+    FROM pg_proc p JOIN ag_per s ON s.oid = p.pronamespace
+   WHERE p.oid < s.prag
   UNION ALL
   -- acl_sistem: proprietarul + ACL-ul celor trei scheme de sistem si fiecare obiect din ele cu ACL EXPLICIT (relacl / attacl /
-  -- proacl / typacl nenul), cu grantor; relatiile TOAST etichetate dupa tabelul-parinte
+  -- proacl / typacl nenul), cu grantor; relatiile TOAST etichetate dupa tabelul-parinte. Tinta: obiectele de la initdb si
+  -- pg_toast (in afara perimetrului); un obiect creat dupa initdb cu ACL explicit apare aici SI in familia lui (redundant).
   SELECT 'acl_sistem', 'acl_sistem schema ' || s.q,
          jsonb_build_array(n.nspowner::regrole::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (

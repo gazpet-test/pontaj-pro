@@ -46,14 +46,16 @@ describe('AMPRENTA_GLOBALA v2 — blocul unic (L19)', () => {
       .replace(/-- ?/g, ' ').replace('Familii (v2):', '').split(/\s+/).filter(Boolean)
     expect([...antet].sort()).toEqual([...FAMILII].sort())
     expect(FAMILII.length).toBe(45)
-    for (const f of ['sistem_adaugat', 'acl_sistem']) expect(FAMILII).toContain(f)
+    for (const f of ['sistem_initdb', 'acl_sistem']) expect(FAMILII).toContain(f)
+    expect(FAMILII).not.toContain('sistem_adaugat')
     const tabel = DOC.slice(DOC.indexOf('| Familie | Catalog'), DOC.indexOf('**NU intră:**'))
     for (const f of FAMILII) expect(tabel.includes(f), `familia ${f} lipseste din tabelul documentului`).toBe(true)
   })
   it('grantorul: fiecare aclexplode( are serializarea cu grantor; nicio serializare ACL fara el (P1)', () => {
     const acl = (CAT.match(/aclexplode\(/g) || []).length
     const cuGrantor = (CAT.match(/jsonb_build_array\(CASE WHEN (\w)\.grantee = 0 THEN NULL ELSE \1\.grantee::regrole::text END, \1\.privilege_type, \1\.is_grantable, \1\.grantor::regrole::text\)/g) || []).length
-    expect(acl).toBeGreaterThanOrEqual(20)
+    // r3: 18 (cele 2 ale familiei sumare sistem_adaugat au iesit; obiectele create in schemele de sistem au ACL-ul in familiile lor)
+    expect(acl).toBeGreaterThanOrEqual(18)
     expect(cuGrantor).toBe(acl)
     expect(/is_grantable\)/.test(CAT)).toBe(false)
     expect((CAT.match(/privilege_type/g) || []).length).toBe(acl)
@@ -66,18 +68,45 @@ describe('AMPRENTA_GLOBALA v2 — blocul unic (L19)', () => {
     }
     expect(CAT.includes('AG_V2_CONTEXT_NECANONIC')).toBe(true)
   })
-  it('perimetrul: aplicatia = tot in afara schemelor de sistem; din sistem: adaugatele dupa initdb + ACL-urile explicite', () => {
-    const ns = CAT.slice(CAT.indexOf('ag_ns AS ('), CAT.indexOf('ag_sis3 AS ('))
-    expect(ns).toContain("NOT IN ('pg_catalog', 'information_schema', 'pg_toast')")
-    expect(ns).toContain("!~ '^pg_(toast_)?temp_[0-9]+$'")
-    for (const s of ['auth', 'storage', 'realtime', 'extensions', 'vault', 'cron', 'net', 'graphql']) expect(ns.includes(`'${s}'`), s).toBe(false)
-    expect(CAT).toContain("n.nspname IN ('pg_catalog', 'information_schema', 'pg_toast')")
-    for (const et of ['functie', 'relatie', 'tip', 'operator', 'familie_operatori', 'clasa_operatori', 'colatie', 'conversie',
-      'ts_parser', 'ts_sablon', 'ts_dictionar', 'ts_config']) {
-      const r = ramura('sistem_adaugat', `sistem_adaugat ${et}`)
-      expect(r, et).not.toBeNull()
-      expect(r.includes('>= 16384') && r.includes('JOIN ag_sis '), et).toBe(true)
+  it('perimetrul (r3): O definitie (ag_per) + CTE-urile de perimetru; obiectele de sistem create dupa initdb prin familiile obisnuite', () => {
+    const per = CAT.slice(CAT.indexOf('ag_per AS ('), CAT.indexOf('ag_ns AS ('))
+    expect(per).toContain("CAST(CASE WHEN n.nspname IN ('pg_catalog', 'information_schema') THEN 16384 ELSE 0 END AS oid) AS prag")
+    expect(per).toContain("n.nspname <> 'pg_toast' AND n.nspname !~ '^pg_(toast_)?temp_[0-9]+$'")
+    for (const s of ['auth', 'storage', 'realtime', 'extensions', 'vault', 'cron', 'net', 'graphql']) expect(per.includes(`'${s}'`), s).toBe(false)
+    expect((CAT.match(/ag_per AS \(/g) || []).length).toBe(1)
+    expect(CAT).toContain('ag_ns AS (SELECT s.oid, s.q FROM ag_per s WHERE s.prag = 0)')
+    // CTE-urile de perimetru: aceeasi forma pe fiecare catalog cu schema
+    const PER = { ag_rel: ['pg_class', 'relnamespace'], ag_typ: ['pg_type', 'typnamespace'], ag_fn: ['pg_proc', 'pronamespace'],
+      ag_opr: ['pg_operator', 'oprnamespace'], ag_opf_p: ['pg_opfamily', 'opfnamespace'], ag_opc_p: ['pg_opclass', 'opcnamespace'],
+      ag_col: ['pg_collation', 'collnamespace'], ag_conv: ['pg_conversion', 'connamespace'], ag_tsp: ['pg_ts_parser', 'prsnamespace'],
+      ag_tst: ['pg_ts_template', 'tmplnamespace'], ag_tsd: ['pg_ts_dict', 'dictnamespace'], ag_tsc: ['pg_ts_config', 'cfgnamespace'] }
+    for (const [cte, [cat, col]] of Object.entries(PER)) {
+      const linie = CAT.split('\n').find(l => l.startsWith(`${cte} AS (`))
+      expect(linie, cte).toBeTruthy()
+      expect(new RegExp(`FROM ${cat} (\\w+) JOIN ag_per s ON s\\.oid = \\1\\.${col} WHERE \\1\\.oid >= s\\.prag`).test(linie), cte).toBe(true)
     }
+    // familiile folosesc CTE-urile de perimetru (nu predicate proprii)
+    for (const [fam, cte] of [['functie', 'ag_fn'], ['operator', 'ag_opr'], ['familie_operatori', 'ag_opf_p'], ['clasa_operatori', 'ag_opc_p'],
+      ['colatie', 'ag_col'], ['conversie', 'ag_conv'], ['ts_parser', 'ag_tsp'], ['ts_sablon', 'ag_tst'], ['ts_dictionar', 'ag_tsd'],
+      ['ts_config', 'ag_tsc'], ['relatie', 'ag_rel'], ['tip', 'ag_typ']]) expect(ramura(fam).includes(`${cte} `), fam).toBe(true)
+    // ag_per e folosit DOAR de CTE-urile de perimetru, ag_ns, plasa sistem_initdb (complementul) si eticheta_securitate
+    const COD = CAT.replace(/--.*$/gm, '')
+    expect((COD.match(/ag_per s\b/g) || []).length).toBe(Object.keys(PER).length + 3)
+    expect(ramura('sistem_initdb')).toContain('JOIN ag_per s ON s.oid = p.pronamespace')
+    expect(ramura('eticheta_securitate')).toContain('LEFT JOIN ag_per s ON s.oid = sl.objnamespace')
+    // nicio lista de campuri separata pentru obiectele din schemele de sistem: nici sistem_adaugat, nici alt prag in familii
+    expect(BLOC).not.toContain('sistem_adaugat')
+    expect(/\bag_sis\b/.test(CAT)).toBe(false)
+    expect((COD.match(/16384/g) || []).length).toBe(3)   // ag_per + membrii amop / amproc adaugati la familiile de la initdb
+    // plasa pe functiile de la initdb: campurile brute (fara deparsare), complementul perimetrului, ordonata
+    const pl = ramura('sistem_initdb')
+    for (const c of ['p.prokind', 'p.prolang', 'p.proowner', 'p.prosecdef', 'p.proisstrict', 'p.provolatile', 'p.proleakproof', 'p.proparallel',
+      'p.proretset', 'p.proconfig', 'p.pronargdefaults', 'p.proargdefaults', 'md5(p.prosrc)', 'p.probin', 'p.prosupport::oid', 'p.proargtypes'])
+      expect(pl.includes(c), c).toBe(true)
+    expect(pl).toContain('WHERE p.oid < s.prag')
+    expect(pl).toContain('ORDER BY p.pronamespace, p.proname COLLATE "C", p.proargtypes')
+    expect(/pg_get_|::reg|format_type/.test(pl)).toBe(false)
+    expect(CAT).toContain("n.nspname IN ('pg_catalog', 'information_schema', 'pg_toast')")
     for (const et of ['schema', 'relatie', 'coloana', 'functie', 'tip']) expect(ramura('acl_sistem', `acl_sistem ${et}`), et).not.toBeNull()
     for (const c of ['c.relacl IS NOT NULL', 'at.attacl IS NOT NULL', 'p.proacl IS NOT NULL', 't.typacl IS NOT NULL']) expect(CAT).toContain(c)
     expect(CAT).toContain("THEN 'toast ' || coalesce(p.oid::regclass::text, '-')")
@@ -119,6 +148,15 @@ describe('citirea coordonatorului — regula DEFINER si CONTEXT', () => {
     expect(CIT).toContain("=== sfarsit scriptul de amprente al migrarii ===")
     expect(CIT.indexOf('-- >>> AG_CITIRE context')).toBeLessThan(CIT.indexOf('-- >>> AG_CITIRE fotografie'))
   })
+  it('r3 (P2): MOMENT tiparit o data, inainte de sectiunea migrarii; sectiunea nealiniata; inlocuirea exacta, cu marcaj de mutant', () => {
+    expect(sectiune(CIT, 'AG_CITIRE moment')).toBe("SELECT 'MOMENT', '-', '-', pg_catalog.now()::pg_catalog.text, '-'")
+    expect(CIT.indexOf('-- >>> AG_CITIRE moment')).toBeLessThan(CIT.indexOf("'\\ir mig_amprente.sql'"))
+    expect(CIT).toContain(`printf '%s\\n' '\\pset format unaligned' "\\\\pset fieldsep ' | '" '\\pset tuples_only off'`)
+    expect(CIT).not.toContain("'\\pset format aligned'")
+    expect((CIT.match(/# M_CIT_MOMENT$/gm) || []).length).toBe(1)
+    expect(CIT).toContain('mk = "<momentul fotografiei>"')
+    expect(CIT).toContain('while ((i = index(s, m)) > 0)')   // sir literal, nu expresie regulata
+  })
 })
 
 describe('manifestul si comparatorul de liste', () => {
@@ -135,7 +173,7 @@ describe('manifestul si comparatorul de liste', () => {
     expect(LIB).toContain("RAISE NOTICE 'L15_DET %'")
   })
   it('comparatorul: doar bash / awk, fiecare regula cu marcajul ei de mutant', () => {
-    for (const m of ['DOAR_A', 'DOAR_B', 'DIFERA', 'R_CONTEXT', 'R_FAM', 'R_EXIST', 'R_CREAT', 'R_MIG', 'R_REV'])
+    for (const m of ['DOAR_A', 'DOAR_B', 'DIFERA', 'R_CONTEXT', 'R_FAM', 'R_EXIST', 'R_CREAT', 'R_MIG', 'R_REV', 'MOMENT'])
       expect((CMP.match(new RegExp(`# M_${m}$`, 'gm')) || []).length, m).toBe(1)
     expect(/python|psql/.test(CMP.replace(/^#.*$/gm, ''))).toBe(false)
     expect(CMP).not.toContain('FNR == NR')

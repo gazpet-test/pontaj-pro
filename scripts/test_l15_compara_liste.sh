@@ -13,14 +13,15 @@ h() { printf '%032d' "$1" | tr '0-9' 'abcdef0123'; }   # amprenta de proba: 32 h
 N=0
 
 # citire <fisier> <randuri RAND (familie TAB eticheta TAB amprenta, cate unul pe linie)> [context] [extra: LANT / INCREDERE /
-# SEMNALE] [sectiunea migrarii]
+# SEMNALE] [sectiunea migrarii] [momentul fotografiei: randul MOMENT, tiparit cand exista sectiunea migrarii]
 citire() {
-  local f="$1" r="$2" ctx="${3:-170101 postgres postgres}" extra="${4:-}" mig="${5:-}" n sv cu su
+  local f="$1" r="$2" ctx="${3:-170101 postgres postgres}" extra="${4:-}" mig="${5:-}" mom="${6:-2026-11-13 08:00:00.5+00}" n sv cu su
   read -r sv cu su <<<"$ctx"
   n="$(printf '%s' "$r" | grep -c . || true)"
   {
-    [ -z "$mig" ] || printf '=== scriptul de amprente al migrarii (x_amprente.sql), in aceeasi tranzactie ===\n%s\n=== sfarsit scriptul de amprente al migrarii ===\n' "$mig"
     printf 'TINTA\t-\t-\t1\t-\n'
+    [ -z "$mig" ] || printf 'MOMENT\t-\t-\t%s\t-\n' "$mom"
+    [ -z "$mig" ] || printf '=== scriptul de amprente al migrarii (x_amprente.sql), in aceeasi tranzactie ===\n%s\n=== sfarsit scriptul de amprente al migrarii ===\n' "$mig"
     printf 'GLOBAL\t-\t-\t%s\t%s\n' "$(h 99)" "$n"
     printf 'FAMILIE\trelatie\t-\t%s\t1\n' "$(h 98)"
     printf 'VALIDARE\t-\t-\tok\t0\n'
@@ -179,4 +180,73 @@ ruleaza "$CMP" 6 'INCREDERE difera' --a "$TMP/ra" --b "$TMP/ri" --recitire
 citire "$TMP/rc" "$R0" '170102 postgres postgres' "$EXTRA" "$MIGOUT"
 ruleaza "$CMP" 6 'CONTEXT difera' --a "$TMP/ra" --b "$TMP/rc" --recitire
 echo "   ok: doar RAND => 0 cu lista; scriptul migrarii / LANT / SEMNALE / INCREDERE / CONTEXT => 6 (+ mutantii)"
+
+echo '5. MOMENT: momentul fotografiei e in afara partii revizuite (r3, P2)'
+# sectiunea migrarii asa cum o lasa citirea: momentul inlocuit cu marcajul fix
+MIGM=' baza | la
+ postgres | <momentul fotografiei>
+(1 row)'
+citire "$TMP/ma" "$R0" '' "$EXTRA" "$MIGM" '2026-11-13 20:12:16.123456+00'
+citire "$TMP/mb" "$R0" '' "$EXTRA" "$MIGM" '2026-11-14 07:00:01.5+00'
+ruleaza "$CMP" 0 'doua fotografii care difera doar prin MOMENT' --a "$TMP/ma" --b "$TMP/mb" --recitire
+grep -qF '[ok] partea revizuita IDENTICA; 0 randuri RAND difera' "$TMP/out" || { cat "$TMP/out"; fail 'MOMENT: mesajul'; }
+# MUTANT: comparatorul care pune MOMENT in partea revizuita => refuzul fals din runda 2 (6)
+MM="$TMP/mutant_MOMENT_rev.sh"
+sed 's/{ nm++; mom = \$4;/{ print > (p ".rev"); nm++; mom = $4;/' "$CMP" >"$MM"
+! cmp -s "$MM" "$CMP" || fail 'mutantul MOMENT nu a schimbat comparatorul'
+ruleaza "$MM" 6 'mutant: MOMENT in partea revizuita' --a "$TMP/ma" --b "$TMP/mb" --recitire
+citire "$TMP/mc" "$R0" '' "$EXTRA" "$(printf '%s\n' "$MIGM" | sed 's/postgres |/alta_baza |/')" '2026-11-14 07:00:01.5+00'
+ruleaza "$CMP" 6 'MOMENT diferit SI sectiunea migrarii diferita' --a "$TMP/ma" --b "$TMP/mc" --recitire
+grep -v '^MOMENT' "$TMP/ma" >"$TMP/m_fara"
+ruleaza "$CMP" 2 'sectiunea migrarii fara MOMENT' --a "$TMP/m_fara" --b "$TMP/mb" --recitire
+{ grep '^MOMENT' "$TMP/ma"; cat "$TMP/ma"; } >"$TMP/m_dublu"
+ruleaza "$CMP" 2 'doua randuri MOMENT' --a "$TMP/m_dublu" --b "$TMP/mb" --recitire
+citire "$TMP/m_brut" "$R0" '' "$EXTRA" "$(printf '%s\n' "$MIGM" | sed 's/<momentul fotografiei>/2026-11-13 20:12:16.123456+00/')" '2026-11-13 20:12:16.123456+00'
+ruleaza "$CMP" 2 'momentul neinlocuit in sectiunea migrarii' --a "$TMP/m_brut" --b "$TMP/mb" --recitire
+echo "   ok: doar MOMENT difera => 0 (mutantul cu MOMENT revizuit => 6); si sectiunea difera => 6; MOMENT lipsa / dublu / neinlocuit => 2"
+
+echo '6. citirea cu psql simulat: momentul inlocuit EXACT in sectiunea scriptului migrarii'
+FP="$TMP/psql_simulat"
+cat >"$FP" <<'EOF'
+#!/usr/bin/env bash
+# psql simulat: iesirea unei citiri --lista --amprente-migrare (formatul nealiniat al sectiunii), momentul din SIM_MOMENT
+grep -qF "\\pset fieldsep ' | '" citire.sql || { echo 'citire.sql fara formatul nealiniat al sectiunii migrarii' >&2; exit 3; }
+grep -qF "SELECT 'MOMENT', '-', '-', pg_catalog.now()::pg_catalog.text, '-'" citire.sql || { echo 'citire.sql fara MOMENT' >&2; exit 3; }
+m="$SIM_MOMENT"; h=0123456789abcdef0123456789abcdef
+printf 'TINTA\t-\t-\t1\t-\n'
+printf 'MOMENT\t-\t-\t%s\t-\n' "$m"
+printf '%s\n' '=== scriptul de amprente al migrarii (meteo_xweather_amprente.sql), in aceeasi tranzactie ===' \
+  'baza | sistem | versiune | la' "postgres | 1 | PostgreSQL 17 | $m" '(1 row)' '' "${SIM_MIG:-eticheta | amprenta}" \
+  '=== sfarsit scriptul de amprente al migrarii ==='
+printf 'GLOBAL\t-\t-\t%s\t1\nFAMILIE\trelatie\t-\t%s\t1\nVALIDARE\t-\t-\tok\t0\n' "$h" "$h"
+printf 'RAND\trelatie\trelatie public.sites\t%s\t-\n' "$h"
+printf 'CONTEXT\tserver_version_num\t-\t170101\t-\nCONTEXT\tcurrent_user\t-\tpostgres\t-\nCONTEXT\tsession_user\t-\tpostgres\t-\n'
+printf 'FOTOGRAFIE\t-\t-\taceeasi\t-\n'
+EOF
+chmod +x "$FP"
+# o copie a citirii fara inlocuire (MUTANT), in aceeasi asezare de fisiere (scripts/ + biblioteca + blocul)
+mkdir -p "$TMP/mutcit/scripts"
+cp "$ROOT/scripts/livrare_amprenta.sh" "$ROOT/scripts/amprenta_globala_v2.sql" "$TMP/mutcit/scripts/"
+[ "$(grep -c '# M_CIT_MOMENT$' "$ROOT/scripts/amprenta_globala_citire.sh")" = 1 ] || fail 'marcajul M_CIT_MOMENT nu apare exact o data'
+grep -v '# M_CIT_MOMENT$' "$ROOT/scripts/amprenta_globala_citire.sh" >"$TMP/mutcit/scripts/amprenta_globala_citire.sh"
+cit() { # <script> <iesire> <moment> [sectiune] => codul citirii
+  local rc=0
+  PSQL_BIN="$FP" SIM_MOMENT="$3" SIM_MIG="${4:-}" bash "$1" --tinta-host h --tinta-port 5432 --tinta-db postgres --tinta-sistem 1 \
+    --user postgres --lista --amprente-migrare "$ROOT/scripts/meteo_xweather_amprente.sql" >"$2" 2>"$2.err" || rc=$?
+  [ "$rc" = 0 ] || { cat "$2" "$2.err"; fail "citirea simulata: cod $rc"; }
+}
+C1='2026-11-13 20:12:16.123456+00'; C2='2026-11-13 20:12:17.12+00'
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/c1" "$C1"
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/c2" "$C2"
+grep -qx "postgres | 1 | PostgreSQL 17 | <momentul fotografiei>" "$TMP/c1" && grep -qx "MOMENT${T}-${T}-${T}${C1}${T}-" "$TMP/c1" \
+  && [ "$(grep -cF "$C1" "$TMP/c1")" = 1 ] || { cat "$TMP/c1"; fail 'citirea: momentul nu e inlocuit exact o data in sectiune / MOMENT lipsa'; }
+grep -q 'inlocuit in sectiunea scriptului migrarii de 1 ori' "$TMP/c1.err" || { cat "$TMP/c1.err"; fail 'citirea: numarul inlocuirilor'; }
+ruleaza "$CMP" 0 'doua citiri fara DDL (momente de lungimi diferite)' --a "$TMP/c1" --b "$TMP/c2" --recitire
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/c3" "$C2" 'eticheta | alta_amprenta'
+ruleaza "$CMP" 6 'a doua citire cu alta iesire a scriptului migrarii' --a "$TMP/c1" --b "$TMP/c3" --recitire
+cit "$TMP/mutcit/scripts/amprenta_globala_citire.sh" "$TMP/m1" "$C1"
+cit "$TMP/mutcit/scripts/amprenta_globala_citire.sh" "$TMP/m2" "$C2"
+ruleaza "$CMP" 2 'mutant: citirea fara inlocuire => intrare refuzata' --a "$TMP/m1" --b "$TMP/m2" --recitire
+grep -q 'momentul fotografiei apare neinlocuit' "$TMP/out" || { cat "$TMP/out"; fail 'mutantul citirii: motivul'; }
+echo "   ok: citire reala x2 => 0; alta iesire a scriptului => 6; MUTANT fara inlocuire => 2 (refuz)"
 echo "PASS test_l15_compara_liste ($N rulari)"

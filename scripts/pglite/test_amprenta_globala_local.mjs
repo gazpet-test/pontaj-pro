@@ -25,7 +25,11 @@
 //  10. v2: grantorul (contraexemplul pe TABEL si pe COLOANA + mutantul fara grantor), dependenta OWNED BY a secventelor
 //      (+ mutant), obiectele mari cate unul (permutarea ACL-urilor; agregatul fara identitate din forma veche n-o vedea), contextul si detaliul
 //      tiparite de generatorul de manifest (md5(detaliu) = amprenta);
-//  11. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi): pasul „inainte” si „dupa”, rece si cald.
+//  11. r3: obiectele create dupa initdb in schemele de sistem trec prin familiile obisnuite — contraexemplele recenzentului
+//      (auxiliar din pg_catalog cu DEFAULT schimbat / STRICT: poarta isi schimba rezultatul => GLOBAL difera, familia functie),
+//      schimbari minime pe tabel / coloana / tip / operator create in pg_catalog; MUTANTUL perimetrului (fara ramura „creat
+//      dupa initdb”) nu le mai prinde; plasa sistem_initdb (quote_nullable ... STRICT, + mutantul fara STRICT); limita declarata;
+//  12. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi): pasul „inainte” si „dupa”, rece si cald.
 // Rulare (din radacina repo-ului; cere bash in PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_amprenta_globala_local.mjs
 // Limite: PGlite = PostgreSQL 18 (productia e 17: in 18 NOT NULL sunt si in pg_constraint — testul le asteapta doar pe 18);
 //   fara concurenta reala si fara timere (probele cu doua sesiuni si plafonul: scripts/test_livrare_l15_v2.sh pe PG17);
@@ -273,10 +277,13 @@ async function main() {
     ['publicatie_tabel', 'ALTER PUBLICATION pub_ag ADD TABLE public.sites'],
     ['publicatie_schema', 'ALTER PUBLICATION pub_ag ADD TABLES IN SCHEMA extensions'],
     ['obiect_mare', 'SELECT lo_create(0)'],
-    // v2: schemele de sistem nu mai sunt o gaura
-    ['sistem_adaugat', 'CREATE FUNCTION pg_catalog.ag_umbra(bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT true $f$'],
-    ['sistem_adaugat', 'SET LOCAL allow_system_table_mods = on; CREATE TABLE pg_catalog.ag_umbra_t (x int)'],
-    ['sistem_adaugat', 'CREATE OPERATOR pg_catalog.=== (LEFTARG = int4, RIGHTARG = int4, FUNCTION = int4eq)'],
+    // v2: schemele de sistem nu mai sunt o gaura. Obiectele create dupa initdb in pg_catalog intra prin familiile LOR
+    // obisnuite (r3: nu mai exista o reprezentare sumara separata)
+    ['functie', 'CREATE FUNCTION pg_catalog.ag_umbra(bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT true $f$'],
+    ['relatie', 'SET LOCAL allow_system_table_mods = on; CREATE TABLE pg_catalog.ag_umbra_t (x int)'],
+    ['operator', 'CREATE OPERATOR pg_catalog.=== (LEFTARG = int4, RIGHTARG = int4, FUNCTION = int4eq)'],
+    // plasa pe functiile de la initdb (contraexemplul recenzentului: metadate modificabile prin DDL, nu doar cu versiunea)
+    ['sistem_initdb', 'ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT'],
     ['acl_sistem', 'REVOKE EXECUTE ON FUNCTION pg_catalog.now() FROM PUBLIC'],
     ['acl_sistem', 'GRANT EXECUTE ON FUNCTION pg_catalog.pg_reload_conf() TO anon'],
     ['acl_sistem', 'GRANT SELECT ON pg_catalog.pg_authid TO anon'],
@@ -604,12 +611,95 @@ SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; GRANT UPDATE (c) ON public.t_g
     // D. server_version_num in baza (nu se poate schimba in PGlite: doar prezenta)
     const bz = (await catalogIn(db)).d.find(r => r.familie === 'baza')
     ok(bz && JSON.parse(bz.detaliu)[0] === String(ver), `baza: primul camp = server_version_num (${bz && JSON.parse(bz.detaliu)[0]})`)
-    // E. sistem_adaugat: nimic adaugat dupa initdb in PGlite (catalogul de baza), randurile apar doar la adaugare
-    const sa = (await catalogIn(db)).d.filter(r => r.familie === 'sistem_adaugat').map(r => r.eticheta)
-    ok(sa.length === 0, `sistem_adaugat pe catalogul de baza: ${sa.length} randuri [${sa.slice(0, 5)}]`)
+    // E. catalogul de baza: niciun obiect din pg_catalog creat dupa initdb (nicio eticheta necalificata in afara celor de
+    // sistem), iar plasa sistem_initdb are un singur rand, peste toate functiile de la initdb
+    const bz2 = await catalogIn(db)
+    const si = bz2.d.filter(r => r.familie === 'sistem_initdb')
+    const nFn = Number((await db.query("SELECT count(*) AS n FROM pg_proc WHERE pronamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND oid < 16384")).rows[0].n)
+    ok(si.length === 1 && si[0].eticheta === 'sistem_initdb functii' && JSON.parse(si[0].detaliu)[0] === nFn && nFn > 2000,
+      `sistem_initdb: un rand, ${si[0] && JSON.parse(si[0].detaliu)[0]} functii (catalogul are ${nFn} functii de la initdb in schemele de sistem)`)
+    ok(!bz2.d.some(r => r.familie === 'sistem_adaugat'), 'familia sumara sistem_adaugat nu mai exista')
   }
 
-  console.log('11. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi)')
+  console.log('11. r3: obiectele create dupa initdb in schemele de sistem = familiile obisnuite; plasa pe functiile de la initdb')
+  {
+    // starea + rezultatul unor porti, dupa sql (totul in tranzactie, ROLLBACK)
+    const cuPorti = async (sql, porti, cat = CAT) => {
+      const c = await catalogIn(db, sql, cat)
+      await db.exec('BEGIN')
+      try {
+        await db.exec(sql)
+        const r = []
+        for (const p of porti) r.push((await db.query(`SELECT (${p})::text AS v`)).rows[0].v)
+        return { ...c, porti: r }
+      } finally { await db.exec('ROLLBACK') }
+    }
+    // MUTANTUL perimetrului: ag_per fara schemele de sistem (predicatul fara ramura „creat dupa initdb”)
+    const PER = "WHERE g.ok = 1 AND n.nspname <> 'pg_toast' AND n.nspname !~ '^pg_(toast_)?temp_[0-9]+$'"
+    if (CAT.split(PER).length !== 2) throw new Error('mutantul perimetrului: linia ag_per nu apare exact o data')
+    const faraRamura = CAT.split(PER).join(PER + " AND n.nspname NOT IN ('pg_catalog', 'information_schema')")
+    // contraexemplul recenzentului: auxiliar in pg_catalog cu argument implicit, chemat de o poarta din schema aplicatiei
+    const AUX = `CREATE FUNCTION pg_catalog.l15_helper(x boolean DEFAULT false) RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$ SELECT coalesce(x, true) $f$;
+CREATE FUNCTION public.l15_gate() RETURNS boolean LANGUAGE sql AS $f$ SELECT pg_catalog.l15_helper() $f$;
+CREATE FUNCTION public.l15_gate_n() RETURNS boolean LANGUAGE sql AS $f$ SELECT pg_catalog.l15_helper(NULL::boolean) $f$;`
+    const TAB = `SET LOCAL allow_system_table_mods = on; CREATE TABLE pg_catalog.l15_t (x int, y text);
+CREATE TYPE pg_catalog.l15_e AS ENUM ('a'); CREATE OPERATOR pg_catalog.=== (LEFTARG = int4, RIGHTARG = int4, FUNCTION = int4eq);`
+    for (const [nume, baza, schimbare, fam, porti, astept] of [
+      ['DEFAULT schimbat (CREATE OR REPLACE)', AUX,
+        'CREATE OR REPLACE FUNCTION pg_catalog.l15_helper(x boolean DEFAULT true) RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$ SELECT coalesce(x, true) $f$',
+        'functie', ['public.l15_gate()'], [['false'], ['true']]],
+      ['ALTER FUNCTION ... STRICT', AUX, 'ALTER FUNCTION pg_catalog.l15_helper(boolean) STRICT', 'functie', ['public.l15_gate_n()'], [['true'], [null]]],
+      ['tabel in pg_catalog: FORCE RLS', TAB, 'ALTER TABLE pg_catalog.l15_t FORCE ROW LEVEL SECURITY', 'relatie', [], [[], []]],
+      ['coloana in pg_catalog: DEFAULT', TAB, 'ALTER TABLE pg_catalog.l15_t ALTER COLUMN x SET DEFAULT 5', 'coloana', [], [[], []]],
+      ['tip in pg_catalog: valoare enum noua', TAB, "ALTER TYPE pg_catalog.l15_e ADD VALUE 'b'", 'tip', [], [[], []]],
+      ['operator in pg_catalog: RESTRICT', TAB, 'ALTER OPERATOR pg_catalog.=== (int4, int4) SET (RESTRICT = eqsel)', 'operator', [], [[], []]],
+    ]) {
+      const a = await cuPorti(baza, porti), b = await cuPorti(baza + '\n' + schimbare, porti)
+      const sch = familiiSchimbate(a, b)
+      const ma = await catalogIn(db, baza, faraRamura), mb = await catalogIn(db, baza + '\n' + schimbare, faraRamura)
+      const portiOk = JSON.stringify(a.porti) === JSON.stringify(astept[0]) && JSON.stringify(b.porti) === JSON.stringify(astept[1])
+      ok(portiOk && a.global !== b.global && sch.length === 1 && sch[0] === fam && ma.global === mb.global,
+        `${nume}: porti ${JSON.stringify(a.porti)} -> ${JSON.stringify(b.porti)}; GLOBAL schimbat, familia [${sch}] (asteptat ${fam}); mutant fara ramura „creat dupa initdb”: GLOBAL ${ma.global === mb.global ? 'neschimbat (pica)' : 'TOT schimbat'}`)
+    }
+    {
+      // obiectele create in pg_catalog au eticheta familiei lor (necalificata: pg_catalog e pe search_path-ul canonic)
+      const c = await catalogIn(db, AUX + '\n' + TAB)
+      const et = ['functie l15_helper(boolean)', 'relatie l15_t', 'coloana l15_t.x', 'tip l15_e', 'operator ===(integer,integer)']
+      const lipsa = et.filter(e => !c.d.some(r => r.eticheta === e))
+      const det = c.d.find(r => r.eticheta === 'functie l15_helper(boolean)')
+      ok(lipsa.length === 0 && det && det.detaliu.includes('x boolean DEFAULT false'), `etichetele obisnuite pentru obiectele din pg_catalog (lipsa [${lipsa}]); detaliul functiei are argumentul implicit`)
+    }
+    // plasa sistem_initdb: contraexemplul quote_nullable ... STRICT (functie de la initdb, metadate schimbate prin DDL)
+    {
+      const poarta = ['pg_catalog.quote_nullable(NULL::text) IS NULL']
+      const a = await cuPorti('', poarta), b = await cuPorti('ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT', poarta)
+      const sch = familiiSchimbate(a, b)
+      // MUTANT: plasa fara campul strict
+      const faraStrict = CAT.split(' p.prosecdef, p.proisstrict,\n').join(' p.prosecdef,\n')
+      if (faraStrict === CAT) throw new Error('mutantul plasei: campul proisstrict nu s-a gasit')
+      const ma = await catalogIn(db, '', faraStrict), mb = await catalogIn(db, 'ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT', faraStrict)
+      ok(a.porti[0] === 'false' && b.porti[0] === 'true' && a.global !== b.global && sch.join() === 'sistem_initdb' && ma.global === mb.global,
+        `quote_nullable STRICT: poarta ${a.porti[0]} -> ${b.porti[0]}; GLOBAL schimbat, familia [${sch}]; mutant fara proisstrict in plasa: GLOBAL ${ma.global === mb.global ? 'neschimbat (pica)' : 'TOT schimbat'}`)
+      for (const [nume, sql] of [
+        ['volatilitate', 'ALTER FUNCTION pg_catalog.lower(text) VOLATILE'],
+        ['SECURITY DEFINER', 'ALTER FUNCTION pg_catalog.quote_nullable(text) SECURITY DEFINER'],
+        ['proconfig', "ALTER FUNCTION pg_catalog.quote_nullable(text) SET search_path = public"],
+        ['proprietar', 'ALTER FUNCTION pg_catalog.quote_nullable(text) OWNER TO anon'],
+      ]) {
+        let x
+        try { x = await catalogIn(db, sql) } catch (e) { ok(false, `plasa, ${nume}: ${String(e.message).slice(0, 80)}`); continue }
+        ok(familiiSchimbate(a, x).join() === 'sistem_initdb', `plasa, ${nume}: familia [${familiiSchimbate(a, x)}]`)
+      }
+    }
+    // relatiile / coloanele / tipurile de la initdb: definitiile NU intra (limita declarata), doar ACL-ul explicit
+    {
+      const oidT = Number((await db.query("SELECT 'information_schema.sql_features'::regclass::oid AS o")).rows[0].o)
+      const a = await catalogIn(db), b = await catalogIn(db, "ALTER TABLE information_schema.sql_features ALTER COLUMN comments SET DEFAULT 'x'")
+      ok(oidT < 16384 && a.global === b.global, `limita declarata: un ALTER pe definitia unei relatii de la initdb (oid ${oidT}) nu se vede (GLOBAL neschimbat)`)
+    }
+  }
+
+  console.log('12. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi)')
   {
     const mare = new PGlite()
     await mare.exec(FIXTURE)
