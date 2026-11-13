@@ -88,7 +88,7 @@ END $pre$;
 CREATE FUNCTION pg_temp.amp_baseline_20261222b() RETURNS TABLE (eticheta text, amprenta text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $bl$
   SELECT v.eticheta, v.amprenta FROM (VALUES
-    ('DE_COMPLETAT', 'DE_COMPLETAT')
+    ('functie auth.uid()', '547eb1864858f1efce909a735a04d521')
   ) v(eticheta, amprenta)
 $bl$;
 -- <<< BASELINE 20261222b
