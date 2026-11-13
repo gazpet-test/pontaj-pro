@@ -1,9 +1,11 @@
-"""Adaptorul workerului către MOTORUL UNIC de reguli (r4, PR #1086; deciziile owner-ului 13.11.2026: A și B).
+"""Adaptorul workerului către MOTORUL UNIC de mascare și al regulii B (r4 / r5, PR #1086; deciziile owner-ului 13.11.2026: A și B).
 
-Toate regulile (mascarea numelor, învățarea / propagarea, etichetele, demascarea, regula B) stau într-un singur loc:
-src/intrebariMascare.js — același modul pe care îl folosește și ecranul pentru previzualizare. Aici NU e nicio regulă: doar
-transportul către un proces Node (worker/intrebari-tehnice/motor_cli.mjs) și verificările lui. Python nu face „mici corecții”
-nici înainte, nici după motor: ce întoarce motorul se folosește ca atare sau, la orice abatere, nimic (MotorEroare).
+Regulile de mascare (numele, învățarea / propagarea, etichetele, demascarea) și regula B stau într-un singur loc:
+src/intrebariMascare.js — același modul pe care îl folosește și ecranul pentru previzualizare. Aici nu e nicio regulă de mascare
+sau de regula B: doar transportul către un proces Node (worker/intrebari-tehnice/motor_cli.mjs) și verificările lui. Python nu face
+„mici corecții” nici înainte, nici după motor: ce întoarce motorul se folosește ca atare sau, la orice abatere, nimic (MotorEroare).
+Validarea răspunsului (susținere, polaritate, curata_raspuns) NU e în motor: rămâne în cercetare.py, cu perechea ei din
+src/intrebariSurse.js (granița declarată în r5; mutarea ei în motor = lucrare separată).
 
 Livrarea verificabilă:
 - motor_manifest.json (din repo, copiat lângă script) = sha256 (cu LF) pentru motor și TOATE fișierele lui locale (protocolul,
@@ -21,18 +23,24 @@ nu ca argument. Un proces = o speță: starea (dicționarul, etichetele, ce s-a 
 altă speță, nici la rulări concurente.
 
 Fail-closed: Node lipsă, versiune greșită, amprentă greșită, proces căzut, timp depășit, JSON trunchiat, schemă greșită, ieșire
-prea mare → MotorEroare (cu un cod scurt, fără text). Workerul nu mai trimite nicio cerere către model și nu publică nimic;
-textul original nu ia niciodată locul celui mascat.
+prea mare → MotorEroare (cu un cod scurt, fără text). Workerul oprește procesarea: nu mai trimite nicio cerere nouă către model
+și nu publică răspunsul; textul original nu ia niciodată locul celui mascat. r5: termenul unei operații acoperă și scrierea cererii
+(un proces care nu citește nu blochează workerul), iar oprirea are pași mărginiți.
 
-Fără rețea în motor: Node rulează cu --permission (fără scriere pe disc, fără procese copil, fără workeri / module native,
-citire doar din instantaneu); Node 24 nu are încă permisiune pentru rețea, așa că motorul și protocolul sunt verificați STATIC
-(src/intrebariMascare.motor.test.js: nu importă nimic în afara propriilor fișiere, nu folosesc fetch / socket / eval), iar
-motor_cli.mjs scoate funcțiile de rețea globale înainte să încarce motorul.
+Fără apeluri de rețea în CODUL motorului (nu o izolare a procesului): Node rulează cu --permission (fără scriere pe disc, fără
+procese copil, fără workeri / module native, citire doar din instantaneu); Node 24 nu are o permisiune pentru rețea, așa că
+motorul și protocolul sunt verificați STATIC pe arborele sintactic (src/intrebariMascare.test.js: importuri doar din propriile
+fișiere, fără import dinamic, fără identificatorii process / globalThis / fetch / require …), iar motor_cli.mjs scoate funcțiile
+de rețea globale și încărcătoarele alternative (process.getBuiltinModule / binding / _linkedBinding / dlopen) înainte să încarce
+motorul.
+
+Instantaneul NU e imutabil absolut: pe Windows, atributul doar-citire (chmod) nu e o interdicție ACL — contul care rulează
+workerul îl poate schimba; de aceea se reverifică înaintea fiecărui proces, iar procesul își raportează amprentele în salut.
 
 Garda spre furnizor (decizia A, pct. 2): TextMascat e SINGURUL tip de conținut pe care apel() din intrebari_worker.py îl lasă
 să plece; se obține doar din Sesiune.mascheaza() (sigiliu privat) și e legat de SESIUNEA care l-a produs (Sesiune.a_produs).
 """
-import hashlib, json, os, pathlib, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time  # noqa: F401
+import hashlib, io, json, os, pathlib, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time  # noqa: F401
 
 AICI = pathlib.Path(__file__).resolve().parent
 MANIFEST_FILE = AICI / 'motor_manifest.json'
@@ -52,7 +60,7 @@ MOTIVE_REGULA_B = frozenset(('citat', 'fara_citat', 'depinde', 'incert', 'fara_v
 TIPURI_VERDICT = frozenset(('da', 'nu', 'incert', None))
 CATEGORII = frozenset(('PERSOANA', 'FIRMA', 'CNP', 'CUI', 'TELEFON', 'EMAIL', 'IBAN', 'NR_AUTO', 'ASCUNS'))
 COD_EROARE = re.compile(r'[a-z_]{1,40}')
-CHEI_SURSA = ('id', 'titlu', 'extras', 'inceput_sigur', 'sfarsit_sigur')
+CHEI_SURSA = ('id', 'titlu', 'extras', 'brut', 'inceput_sigur', 'sfarsit_sigur', 'precedent')
 
 
 class MotorEroare(Exception):
@@ -179,15 +187,19 @@ class Sesiune:
         self._sfarsit = time.monotonic() + termen_sesiune
         self._id, self._stricata, self._produse, self.statistici = 0, False, {}, None
         self._coada = queue.Queue()
+        self._scriitor = self._fir_cititor = None
         try:
+            # bufsize=0: scrierea merge direct în pipe (fără tamponul cu lacăt al lui BufferedWriter, pe care închiderea l-ar aștepta)
             self._p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, shell=False,
                                        env=_mediu_minim(), cwd=str(cwd if cwd is not None else pathlib.Path(argv[-1]).parent),
-                                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), bufsize=0)
         except OSError:
             self._stricata = True
             raise MotorEroare('pornire') from None
-        threading.Thread(target=self._cititor, daemon=True).start()
-        salut = self._raspuns(termen_init)
+        self._iesire = io.BufferedReader(self._p.stdout, buffer_size=1 << 16)   # citirea pe linii rămâne cu tampon (doar firul cititor)
+        self._fir_cititor = threading.Thread(target=self._cititor, daemon=True)
+        self._fir_cititor.start()
+        salut = self._raspuns(self._termen(termen_init))
         if (not isinstance(salut, dict) or set(salut) != {'v', 'tip', 'protocol', 'motor', 'node', 'unicode', 'amprente'}
                 or salut['v'] != asteptat['protocol'] or salut['tip'] != 'salut' or salut['protocol'] != asteptat['protocol']):
             self._esec('salut')
@@ -201,10 +213,20 @@ class Sesiune:
             self.statistici = rez['statistici']
 
     # ── transport ──
+    # r5 (review r4 P2): UN SINGUR termen monoton pe operație acoperă scrierea cererii, golirea ei și citirea răspunsului, plafonat
+    # de termenul sesiunii (`_termen`). Scrierea rulează pe un fir separat: dacă procesul nu citește, apelul NU rămâne blocat — la
+    # termen procesul e oprit (`_opreste`), ceea ce închide capătul lui de pipe și eliberează firul de scriere (scrierea eșuează);
+    # oprirea are și ea pași mărginiți, deci apelul revine într-un interval MĂRGINIT, cu MotorEroare (nimic nu se publică).
+    OPRIRE_ASTEPTARE = 5.0      # secunde: cât așteaptă oprirea procesul și fiecare fir, înainte să renunțe (nemărginit = niciodată)
+
+    def _termen(self, termen):
+        """Momentul (monoton) până la care trebuie să se termine operația: min(acum + termen, sfârșitul sesiunii)."""
+        return min(time.monotonic() + termen, self._sfarsit)
+
     def _cititor(self):
         try:
             while True:
-                linie = self._p.stdout.readline(self._max_iesire + 1)
+                linie = self._iesire.readline(self._max_iesire + 1)
                 if not linie:
                     self._coada.put(('eof', None)); return
                 if len(linie) > self._max_iesire:
@@ -215,30 +237,52 @@ class Sesiune:
         except Exception:
             self._coada.put(('eof', None))
 
+    def _scrie(self, octeti, rezultat):
+        """Firul de scriere: toți octeții cererii, apoi gata; orice eroare (proces oprit, pipe închis) se notează, nu se ridică."""
+        try:
+            mv, f = memoryview(octeti), self._p.stdin
+            while mv:
+                n = f.write(mv)
+                if not n: raise OSError('scriere')
+                mv = mv[n:]
+            rezultat.append('ok')
+        except Exception:
+            rezultat.append('eroare')
+
     def _opreste(self):
+        """Oprește procesul și eliberează firele — fiecare pas MĂRGINIT (OPRIRE_ASTEPTARE). Un pipe se închide doar după ce firul
+        care îl folosește s-a terminat (altfel închiderea l-ar aștepta)."""
         p = getattr(self, '_p', None)
         if p is None: return
         try:
             if p.poll() is None: p.kill()
-            p.wait(timeout=10)
+            p.wait(timeout=self.OPRIRE_ASTEPTARE)
         except Exception:
             pass
-        for f in (p.stdin, p.stdout):
-            try: f.close()
-            except Exception: pass
+        for fir, fisiere in ((self._scriitor, (p.stdin,)), (self._fir_cititor, (getattr(self, '_iesire', None), p.stdout))):
+            if fir is not None and fir is not threading.current_thread():
+                fir.join(self.OPRIRE_ASTEPTARE)
+                if fir.is_alive(): continue          # nu se închide sub un fir încă blocat (rămâne daemon; procesul e deja oprit)
+            for f in fisiere:
+                try:
+                    if f is not None: f.close()
+                except Exception:
+                    pass
 
     def _esec(self, cod):
         self._stricata = True
         self._opreste()
         raise MotorEroare(cod)
 
-    def _raspuns(self, termen):
-        ramas = self._sfarsit - time.monotonic()
-        if ramas <= 0: self._esec('timp_sesiune')
+    def _raspuns(self, sfarsit):
+        """Următoarea linie a procesului, până la momentul monoton `sfarsit` (vezi _termen)."""
+        cod_timp = 'timp_sesiune' if sfarsit >= self._sfarsit else 'timp'   # termenul operației a fost plafonat de cel al sesiunii?
+        ramas = sfarsit - time.monotonic()
+        if ramas <= 0: self._esec(cod_timp)
         try:
-            tip, linie = self._coada.get(timeout=min(termen, ramas))
+            tip, linie = self._coada.get(timeout=ramas)
         except queue.Empty:
-            self._esec('timp')
+            self._esec(cod_timp)
         if tip == 'eof': self._esec('proces_oprit')
         if tip == 'mare': self._esec('iesire_mare')
         if tip == 'trunchiat': self._esec('json_trunchiat')
@@ -258,11 +302,16 @@ class Sesiune:
         except (UnicodeEncodeError, ValueError, TypeError):   # surogat singur, valoare care nu e JSON
             self._esec('intrare_invalida')
         if len(octeti) > MAX_INTRARE: self._esec('intrare_mare')
-        try:
-            self._p.stdin.write(octeti); self._p.stdin.flush()
-        except (OSError, ValueError):
-            self._esec('proces_oprit')
-        r = self._raspuns(termen or self._termen_cerere)
+        if time.monotonic() >= self._sfarsit: self._esec('timp_sesiune')
+        sfarsit = self._termen(termen or self._termen_cerere)        # ACELAȘI termen: scriere + golire + citire
+        rezultat = []
+        self._scriitor = threading.Thread(target=self._scrie, args=(octeti, rezultat), daemon=True)
+        self._scriitor.start()
+        self._scriitor.join(max(0.0, sfarsit - time.monotonic()))
+        if self._scriitor.is_alive():                                # procesul nu citește: oprire (eliberează firul), fără publicare
+            self._esec('timp_sesiune' if sfarsit >= self._sfarsit else 'timp')
+        if rezultat != ['ok']: self._esec('proces_oprit')
+        r = self._raspuns(sfarsit)
         if not isinstance(r, dict) or r.get('v') != self._protocol or r.get('id') != self._id or type(r.get('ok')) is not bool: self._esec('schema')
         if not r['ok']:
             if set(r) != {'v', 'id', 'ok', 'eroare'} or not isinstance(r['eroare'], str) or not COD_EROARE.fullmatch(r['eroare']): self._esec('schema')
@@ -318,8 +367,13 @@ class Sesiune:
 
     @staticmethod
     def _surse(surse):
-        return [{k: (s.get(k) is True if k in ('inceput_sigur', 'sfarsit_sigur') else str(s.get(k) or '')) for k in CHEI_SURSA}
-                for s in surse or []]
+        """Sursele pentru regula B, în forma exactă a protocolului. `brut` lipsă → '' (paragrafele nu se mai potrivesc cu extrasul
+        mascat → motorul dă „context necunoscut”, deci Incert); `precedent` care nu e text → None (necunoscut)."""
+        def camp(s, k):
+            if k in ('inceput_sigur', 'sfarsit_sigur'): return s.get(k) is True
+            if k == 'precedent': return s.get(k) if isinstance(s.get(k), str) else None
+            return str(s.get(k) or '')
+        return [{k: camp(s, k) for k in CHEI_SURSA} for s in surse or []]
 
     def regula_b(self, text, surse):
         """(text, motiv, tip) — regula B din motor."""

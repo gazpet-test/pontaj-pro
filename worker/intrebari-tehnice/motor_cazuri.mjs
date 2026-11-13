@@ -4,7 +4,8 @@
 
 /** Caracterele scrise în cazuri ca nume între acolade (vezi „_despre” din teste_motor.json). */
 export const INVIZIBILE = { NBSP: 0xa0, ZW: 0x200b, SHY: 0xad, BOM: 0xfeff, CGJ: 0x34f, VS16: 0xfe0f, VS1: 0xfe00, VS17: 0xe0100,
-  ZWJ: 0x200d, VIRGULA_JOS: 0x326, SEDILA: 0x327, U2010: 0x2010, U2011: 0x2011, LINIUTA_EN: 0x2013 }
+  ZWJ: 0x200d, VIRGULA_JOS: 0x326, SEDILA: 0x327, U2010: 0x2010, U2011: 0x2011, LINIUTA_EN: 0x2013, U2012: 0x2012, U2014: 0x2014,
+  U2E3A: 0x2e3a, BULINA: 0x2022, MINUS: 0x2212 }
 
 export function inlocuiesteInvizibile(x) {
   if (typeof x === 'string') return x.replace(/\{([A-Z0-9_]+)\}/g, (tot, n) => Object.hasOwn(INVIZIBILE, n) ? String.fromCodePoint(INVIZIBILE[n]) : tot)
@@ -60,7 +61,7 @@ export function ruleazaCazuri(E, brut) {
   const R = T.regula_b
   verifica('regula_b', 'textul Incert', R.incert_regula_b, E.INCERT_REGULA_B)
   for (const [intrare, forma] of R.forme) verifica('regula_b forme', intrare, forma, E.formaCitat(intrare))
-  for (const p of R.propozitii) verifica('regula_b propozitii', p.sursa, p.propozitii, E.propozitiiSursa(R.surse.find(s => s.id === p.sursa)).map(x => [x.text, x.motiv]))
+  for (const p of R.paragrafe) verifica('regula_b paragrafe', p.sursa, p.paragrafe, E.paragrafeSursa(R.surse.find(s => s.id === p.sursa)).map(x => [x.text, x.motiv]))
   for (const c of R.cazuri) {
     const r = E.aplicaRegulaB(c.text, R.surse)
     const prima = c.prima_linie ?? (c.motiv === 'fara_citat' ? R.incert_regula_b : c.text.split('\n')[0])

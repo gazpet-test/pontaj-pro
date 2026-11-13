@@ -2,7 +2,7 @@
 rulează MEREU, iar mascarea / regula B rulează în MOTORUL UNIC real (procesul Node, r4). Rulare (Node 24 în PATH):
 python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py". Date INVENTATE.
 """
-import hashlib, json, pathlib, re, sys, tempfile, unittest
+import ast, hashlib, json, pathlib, re, sys, tempfile, types, unittest
 
 AICI = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(AICI))
@@ -13,7 +13,7 @@ import intrebari_worker as W  # noqa: E402
 VOC = C.pregateste_vocabular(json.loads((AICI / 'vocabular_web.json').read_text(encoding='utf-8')))
 NUME = {'persoane': ['POPESCU ION', 'IONESCU MARIA'], 'firme': ['Alfa Construct SRL'], 'cui': []}   # răspunsul „nume” al edge-ului
 MOTOR = None
-INCERT_B = 'Incert — de verificat: niciun citat nu reproduce exact o propoziție întreagă și de sine stătătoare dintr-o sursă — citește sursele alăturate.'
+INCERT_B = 'Incert — de verificat: niciun citat nu reproduce exact un paragraf întreg și de sine stătător dintr-o sursă — citește sursele alăturate.'
 
 
 def setUpModule():
@@ -430,7 +430,7 @@ class Flux(unittest.TestCase):
         self.assertNotEqual(self.jurnalul()[-1]['regula_b'], 'citat')
         reparari = [a for a in self.apeluri if a['system'] == C.SISTEM_RASPUNS and len(a['messages']) == 3]
         self.assertEqual(len(reparari), 1)
-        self.assertIn('o propoziție ÎNTREAGĂ și de sine stătătoare din sursă', reparari[0]['messages'][2]['content'])
+        self.assertIn('un PARAGRAF ÎNTREG și de sine stătător din sursă', reparari[0]['messages'][2]['content'])
 
     def test_r4_fragmentul_web_citat_exact_nu_tine_da(self):
         """r4 (regula B conservatoare): fragmentul web e tăiat din pagină — citatul lui exact nu mai ține un „Da”."""
@@ -438,6 +438,110 @@ class Flux(unittest.TestCase):
         self.proceseaza()
         self.assertTrue(self.raspunsul()['raspuns_md'].startswith(INCERT_B), self.raspunsul()['raspuns_md'])
         self.assertEqual(self.jurnalul()[-1]['regula_b'], 'fara_citat')
+
+    # ── r5 (review r4): regula B STRUCTURALĂ și mascarea pe traseul complet (motorul real, furnizorul simulat) ──
+    PODURI = 'Montajul conductelor pe poduri este permis. Montajul conductelor pe podurile din lemn este interzis.'
+
+    def corpus_r5(self, text, precedent=''):
+        """Un corpus cu o singură bucată (C1), cu paragraful precedent din sursă (r5; '' = începutul fișierului)."""
+        return C.pregateste_index({'bucati': [{'cale': 'docs/cercetare/registre_evidenta.md', 'titlu': 'Poduri', 'text': text,
+                                               'precedent': precedent}]})
+
+    def proceseaza_r5(self, corpus, q=None, nume=NUME, worker=W):
+        q = q or dict(Q, titlu='Montaj pe poduri', intrebare='Se poate monta conducta pe podurile din lemn?', context='')
+        worker.proceseaza('s', 'k', q, corpus, VOC, MOTOR, nume)
+
+    def test_r5_contraexemplul_restrictia_din_acelasi_paragraf(self):
+        """Contraexemplul r4 (publicat „Da”): validarea îl lasă să treacă (prima propoziție chiar spune „este permis”), regula B
+        structurală din motor îl oprește (paragraful are două propoziții) → „Incert”, cu sursele alăturate."""
+        self.raspuns = 'Da.\nCitat [C1]: „Montajul conductelor pe poduri este permis.”'
+        self.proceseaza_r5(self.corpus_r5(self.PODURI))
+        r = self.raspunsul()
+        self.assertTrue(r['raspuns_md'].startswith(INCERT_B), r['raspuns_md'])
+        self.assertEqual(self.jurnalul()[-1]['regula_b'], 'fara_citat')
+        self.assertIn('C1', [s['id'] for s in r['surse']])                       # la „Incert”: sursele alăturate
+
+    def test_r5_contraexemplele_listelor_nu_publica_da(self):
+        """Enumerarea cu litere mari (pe rânduri și în paragrafe separate), marcajul lung, paragraful de după „…:” → niciodată „Da”."""
+        for nume_caz, text, citat, precedent in (
+            ('litere mari, pe rânduri', 'Nu se admit urmatoarele lucrari:\nA) Montajul conductelor in zona de protectie.\n'
+             'B) Montajul conductelor pe podurile din lemn aflate in exploatare.', 'B) Montajul conductelor pe podurile din lemn aflate in exploatare.', ''),
+            ('litere mari, paragrafe separate', 'Nu se admit urmatoarele lucrari:\n\nA) Montajul conductelor in zona de protectie.\n\n'
+             'B) Montajul conductelor pe podurile din lemn aflate in exploatare.', 'B) Montajul conductelor pe podurile din lemn aflate in exploatare.', ''),
+            ('marcaj lung', '12345) Montajul conductelor pe podurile din lemn este permis.', '12345) Montajul conductelor pe podurile din lemn este permis.', ''),
+            ('după „…:” din sursă', 'Montajul conductelor pe podurile din lemn este permis.', 'Montajul conductelor pe podurile din lemn este permis.',
+             'Nu se admit urmatoarele lucrari:'),
+        ):
+            with self.subTest(nume_caz):
+                self.apeluri.clear(); self.scrieri.clear()
+                self.raspuns = f'Da.\nCitat [C1]: „{citat}”'
+                self.proceseaza_r5(self.corpus_r5(text, precedent))
+                r = self.raspunsul()['raspuns_md']
+                self.assertTrue(r.startswith(C.INCERT), r)
+                self.assertNotEqual(self.jurnalul()[-1]['regula_b'], 'citat')
+
+    def test_r5_legitim_paragraf_dintr_o_propozitie_ramane_da(self):
+        """L20: paragraful dintr-o singură propoziție, citat întreg, cu paragraful precedent terminat cu „.” → „Da” publicat."""
+        text = 'Montajul conductelor pe podurile metalice este permis.'
+        self.raspuns = f'Da — montajul conductelor pe podurile metalice este permis [C1].\nCitat [C1]: „{text}”'
+        self.proceseaza_r5(self.corpus_r5('Prevederi pentru poduri.\n\n' + text))
+        r = self.raspunsul()['raspuns_md']
+        self.assertTrue(r.startswith('Da — montajul conductelor pe podurile metalice este permis'), r)
+        self.assertEqual(self.jurnalul()[-1]['regula_b'], 'citat')
+
+    def test_r5_autonomia_e_necesara_nu_suficienta(self):
+        """Paragraful autonom „exclusiv pe podurile metalice” trece regula B, dar nu susține „Da” pentru podurile din lemn: validarea
+        (cercetare.py) scoate afirmația → răspunsul publicat nu e „Da”."""
+        text = 'Montajul conductelor este permis exclusiv pe podurile metalice.'
+        self.raspuns = f'Da — montajul conductelor este permis pe podurile din lemn [C1].\nCitat [C1]: „{text}”'
+        self.proceseaza_r5(self.corpus_r5(text))
+        r = self.raspunsul()['raspuns_md']
+        self.assertTrue(r.startswith(C.INCERT), r)
+        self.assertNotIn('permis pe podurile din lemn [C1]', r)
+
+    def test_r5_niciun_pas_python_nu_intoarce_refuzul_regulii_b(self):
+        """Static: în _proceseaza, după apelul regulii B, `final` nu mai e reatribuit (după el vin doar demascarea și publicarea).
+        Mutant: un worker care IGNORĂ rezultatul regulii B publică „Da” pe contraexemplul recenzentului — deci testul de flux
+        (test_r5_contraexemplul_restrictia_din_acelasi_paragraf) prinde orice pas Python care ar întoarce refuzul."""
+        sursa = (AICI / 'intrebari_worker.py').read_text(encoding='utf-8')
+        f = next(n for n in ast.walk(ast.parse(sursa)) if isinstance(n, ast.FunctionDef) and n.name == '_proceseaza')
+        linii_b = [n.lineno for n in ast.walk(f) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'regula_b']
+        self.assertEqual(len(linii_b), 1)
+        dupa = [n.lineno for n in ast.walk(f) if isinstance(n, ast.Name) and n.id == 'final' and isinstance(n.ctx, ast.Store)
+                and n.lineno > linii_b[0]]
+        self.assertEqual(dupa, [])
+        linie = 'final, regula_b, tip_final = masc.regula_b(final, surse_b)'
+        self.assertEqual(sursa.count(linie), 1)
+        mutant = types.ModuleType('intrebari_worker_mutant')
+        mutant.__file__ = str(AICI / 'intrebari_worker.py')
+        exec(compile(sursa.replace(linie, '_, regula_b, tip_final = masc.regula_b(final, surse_b)'), 'intrebari_worker_mutant', 'exec'),
+             mutant.__dict__)
+        mutant.trimite_http, mutant.edge, mutant.DIR = W.trimite_http, W.edge, W.DIR
+        self.raspuns = 'Da.\nCitat [C1]: „Montajul conductelor pe poduri este permis.”'
+        self.proceseaza_r5(self.corpus_r5(self.PODURI), worker=mutant)
+        self.assertTrue(self.raspunsul()['raspuns_md'].startswith('Da.'))         # mutantul ar publica „Da”
+        self.apeluri.clear(); self.scrieri.clear()
+        self.proceseaza_r5(self.corpus_r5(self.PODURI))
+        self.assertTrue(self.raspunsul()['raspuns_md'].startswith(INCERT_B))     # workerul real nu
+
+    def test_r5_mascarea_pe_fluxul_complet_textul_efectiv_trimis(self):
+        """Pct. 2–3 din brief pe traseul complet: forma juridică lipită (și după flexiune), separatorul „/”, componenta distinctivă
+        singură (oricare poziție), litere late, persoana scrisă mic, CUI fragmentat — nimic din ele în textul EFECTIV trimis
+        furnizorului; răspunsul publicat are numele puse la loc."""
+        nume = {'persoane': ['ZAMFIRESCU MARIA', 'POPESCU ION'], 'firme': ['Varnitec SRL', 'Lumivo Servicii SRL', 'Construct Pelorin SRL'],
+                'cui': ['23456789']}
+        q = dict(Q, titlu='Aviz VarnitecSRL', context='VARNITECSRL și ' + 'ＶＡＲＮＩＴＥＣ' + ' au semnat',
+                 intrebare=('VarnitecSRL poate monta conducte pe podurile din lemn? A întrebat zamfirescu maria; Lumivo ServiciilorSRL și '
+                            'Lumivo/Servicii SRL au livrat, iar Pelorin a facturat (CUI 2345 6789).'))
+        self.raspuns = 'Incert — de verificat: lipsește avizul.\nNu am găsit sursa oficială pentru avizul cerut de [FIRMA_1].'
+        W.proceseaza('s', 'k', q, CORPUS, VOC, MOTOR, nume)
+        self.assertTrue(self.apeluri)
+        for corp in self.apeluri:
+            for s in siruri(corp):
+                for x in ('varnitec', 'lumivo', 'zamfirescu', 'pelorin', '2345 6789', 'ｖａｒｎｉｔｅｃ'): self.assertNotIn(x, s.lower())
+        trimis = [a for a in self.apeluri if a['system'] is C.SISTEM_RASPUNS][0]['messages'][0]['content']
+        self.assertIn('[FIRMA_1] poate monta conducte pe podurile din lemn? A întrebat [PERSOANA_1];', trimis)
+        self.assertIn('avizul cerut de VarnitecSRL.', self.raspunsul()['raspuns_md'])
 
     # ── decizia B: Da / Nu doar cu citat ──
     def test_da_ferm_fara_citat_cere_reparare_apoi_devine_incert_cu_sursele_alaturate(self):

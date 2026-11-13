@@ -22,9 +22,14 @@ class RegulaB(unittest.TestCase):
             self.assertFalse(hasattr(c, nume), nume)
 
     def test_promptul_spune_regula(self):
-        self.assertIn('„Da” sau „Nu” DOAR dacă o propoziție întreagă dintr-o sursă din <surse> spune acel lucru', c.SISTEM_RASPUNS)
-        self.assertIn('copiată EXACT, de la începutul propoziției până la punct', c.SISTEM_RASPUNS)
-        self.assertIn('de sine stătătoare', c.SISTEM_RASPUNS)
+        # r5 (regula B structurală): citatul = paragraful ÎNTREG, exact, dintr-o singură propoziție
+        self.assertIn('„Da” sau „Nu” DOAR dacă un PARAGRAF ÎNTREG dintr-o sursă din <surse> spune acel lucru', c.SISTEM_RASPUNS)
+        self.assertIn('copiat EXACT, de la începutul paragrafului până la sfârșitul lui', c.SISTEM_RASPUNS)
+        self.assertIn('O SINGURĂ propoziție', c.SISTEM_RASPUNS)
+        self.assertIn('de sine stătător', c.SISTEM_RASPUNS)
+        self.assertNotIn('propoziția întreagă din sursă', c.SISTEM_RASPUNS)
+        self.assertIn('un PARAGRAF ÎNTREG și de sine stătător din sursă', c.mesaj_reparare(
+            {'verdict': 'Da.', 'fara_sursa': [], 'neconfirmate': [], 'nesustinute': [], 'necunoscute': [], 'temei': True}, ['C1'], True))
         self.assertIn('Citat [C1]:', c.SISTEM_RASPUNS)
         self.assertIn('[PERSOANA_1]', c.SISTEM_RASPUNS)
         self.assertNotIn('sau „Depinde de …” (ex.', c.SISTEM_RASPUNS)
@@ -48,6 +53,26 @@ class RegulaB(unittest.TestCase):
                                                           'cited_text': 'Text.'}]}])
         self.assertEqual((w[0]['inceput_sigur'], w[0]['sfarsit_sigur']), (False, False))   # fragmentele web: tăiate mereu
         self.assertEqual(c.surse_citate(e + w, [x['id'] for x in e + w])[0].keys() & {'inceput_sigur', 'sfarsit_sigur'}, set())
+
+    def test_r5_paragraful_precedent_din_sursa(self):
+        """r5: indexul (construieste_corpus.mjs) dă fiecărei bucăți paragraful PRECEDENT din fișier ('' = începutul fișierului); lipsă
+        sau alt tip → None (necunoscut). Extrasul îl poartă doar când începutul lui e o margine de paragraf; web → None; nu se salvează."""
+        p = c.pregateste_index({'bucati': [
+            {'cale': 'docs/a.md', 'titlu': 'A', 'text': 'Sudura se face de sudori autorizati.', 'precedent': '## Nu se admit:'},
+            {'cale': 'docs/b.md', 'titlu': 'B', 'text': 'Sudura conductelor se verifica.', 'precedent': ''},
+            {'cale': 'docs/c.md', 'titlu': 'C', 'text': 'Sudura de proba se pastreaza.'},
+            {'cale': 'docs/d.md', 'titlu': 'D', 'text': 'Sudura cu electrozi bazici.', 'precedent': 5}]})
+        self.assertEqual([b['precedent'] for b in p['bucati']], ['## Nu se admit:', '', None, None])
+        e = c.selecteaza_extrase(p, 'sudura')
+        self.assertEqual({x['cale']: x['precedent'] for x in e}, {'docs/a.md': '## Nu se admit:', 'docs/b.md': '', 'docs/c.md': None, 'docs/d.md': None})
+        lung = ('sudura conducta otel ' * 100)[:c.BUCATA_MAX]
+        q = c.pregateste_index({'bucati': [{'cale': 'docs/b.md', 'titlu': 'B', 'text': lung, 'precedent': ''},
+                                           {'cale': 'docs/b.md', 'titlu': 'B', 'text': 'sudura continuare.', 'precedent': None}]})
+        self.assertEqual([x['precedent'] for x in c.selecteaza_extrase(q, 'sudura') if x['inceput_sigur'] is False], [None])
+        w = c.surse_web([{'type': 'text', 'citations': [{'type': 'web_search_result_location', 'url': 'https://anre.ro/a', 'title': 'T',
+                                                          'cited_text': 'Text.'}]}])
+        self.assertIsNone(w[0]['precedent'])
+        self.assertNotIn('precedent', c.surse_citate(e + w, [x['id'] for x in e + w])[0])
 
 
 class Validare(unittest.TestCase):

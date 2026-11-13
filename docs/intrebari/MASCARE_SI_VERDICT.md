@@ -6,45 +6,67 @@ persoane și de firme private din exemple sunt INVENTATE; entitățile publice s
 ## Ce s-a decis
 - **A. Numele nu pleacă la furnizorul modelului.** Numele de persoane și de firme din întrebare se ascund înainte de trimitere și
   se pun la loc în răspunsul afișat. Variantele respinse: răspuns doar din documentele noastre; trimitere integrală cu avertisment.
-- **B. „Da” / „Nu” doar când o sursă spune exact acel lucru, de sine stătător** — citatul trebuie să fie o propoziție întreagă a
-  sursei, copiată identic, care nu depinde de alt text. Altfel răspunsul e „Incert”, cu sursele alăturate ca să le citească omul.
+- **B. „Da” / „Nu” doar când o sursă spune exact acel lucru, de sine stătător** — citatul trebuie să fie un PARAGRAF ÎNTREG al
+  sursei, copiat identic, paragraf care are o singură propoziție și nu depinde de alt text (r5). Altfel răspunsul e „Incert”, cu
+  sursele alăturate ca să le citească omul.
 - Owner, după review-ul PR #1086 (neschimbat): operatorii de rețea, instituțiile publice și Gazpet rămân vizibili; atașamentele nu se
   trimit la AI; localitățile rămân vizibile; doar trei verdicte (Da / Nu / Incert).
 
-## r4: UN SINGUR MOTOR de reguli
-Până în r3 regulile existau de două ori (în worker, în Python, și în ecran, în JavaScript) și fiecare rundă de review a găsit o
-diferență între ele (în r3: un caracter invizibil pe care ecranul îl scotea, iar workerul nu, deci numele pleca). De acum:
-- **toate regulile stau într-un singur fișier**, `src/intrebariMascare.js`: mascarea, învățarea numelor în speță, etichetele,
-  demascarea și regula B (tăierea surselor în propoziții, compararea citatului), cu listele și normalizarea lor;
+## r4 / r5: UN SINGUR MOTOR pentru mascare și regula B — și granița lui
+Până în r3 regulile de mascare existau de două ori (în worker, în Python, și în ecran, în JavaScript) și fiecare rundă de review a
+găsit o diferență între ele. De la r4:
+- **mascarea și regula B stau într-un singur fișier**, `src/intrebariMascare.js`: normalizarea, mascarea, învățarea numelor în
+  speță, etichetele, demascarea și regula B (paragrafele sursei, numărul de propoziții, listele, compararea citatului), cu listele
+  lor;
 - **ecranul** îl folosește direct, pentru previzualizare;
-- **workerul** îl cheamă printr-un proces Node separat, câte unul pe întrebare (`motor.py` → `motor_cli.mjs`). Python nu mai conține
-  nicio regulă și nu „corectează” nimic înainte sau după motor: ce dă motorul se folosește ca atare, iar la orice problemă nu se
-  folosește nimic.
+- **workerul** îl cheamă printr-un proces Node separat, câte unul pe întrebare (`motor.py` → `motor_cli.mjs`); Python nu „corectează”
+  nimic înainte sau după motor: ce dă motorul se folosește ca atare, iar la orice problemă nu se folosește nimic.
+- **Granița (r5, corectată):** validarea răspunsului (susținere, polaritate, `curata_raspuns`) rămâne în `cercetare.py`, cu perechea
+  ei din `src/intrebariSurse.js`, ținute la fel de setul comun de teste (`teste_validare.json`, `teste_normative.json`, extins cu
+  cazurile rundei 5). Validarea scoate liniile pe care sursa nu le susține; regula B rulează DUPĂ ea și e ultimul pas pe text (după
+  ea vine doar demascarea), deci nimic din Python nu poate întoarce refuzul regulii B într-un „Da” / „Nu” (test pe flux + mutant).
+  Mutarea validării în motor = lucrare separată, declarată, nu face parte din r5.
 
 ### Cum e păzit procesul motorului
 - **Fișiere verificate:** `worker/intrebari-tehnice/motor_manifest.json` are amprenta sha256 a motorului și a TUTUROR fișierelor
   lui (protocolul, intrarea, `nemascate.json`, `vocabular_web.json`, `cuvinte_comune.json`), plus versiunea Node (24, ca în
   `package.json`) și versiunea Unicode a lui Node (pe server: Node 24.20 = Unicode 17.0). La pornire, workerul verifică fiecare
-  fișier, îl copiază într-un dosar privat (doar citire) și pornește toate procesele de acolo — o copiere nouă din repo cât rulează
-  workerul nu schimbă motorul folosit; înainte de fiecare proces dosarul se verifică din nou. Procesul trimite la pornire amprentele
-  fișierelor pe care le încarcă și versiunile lui; orice diferență oprește tot.
+  fișier, îl copiază într-un dosar privat (atributul doar-citire) și pornește toate procesele de acolo; înainte de fiecare proces
+  dosarul se verifică din nou, iar procesul trimite la pornire amprentele fișierelor pe care le încarcă — orice diferență oprește
+  tot. **Instantaneul NU e imutabil absolut:** pe Windows, atributul doar-citire nu e o interdicție ACL; contul care rulează workerul
+  îl poate schimba. Reverificarea prinde o schimbare de dinaintea pornirii unui proces, nu una făcută cu intenție între verificare și
+  încărcare (în afara modelului de amenințare). Pașii de pornire spun ce ACL se acceptă.
 - **Protocol strict:** câte un mesaj JSON pe linie, UTF-8, cu versiunea protocolului și câmpurile verificate exact la ambele capete;
   ieșirea standard e doar pentru protocol; erorile sunt coduri scurte, fără text din întrebare sau din lista de nume; nimic în
   jurnalele de eroare ale procesului. Procesul se pornește direct (fără linie de comandă intermediară), cu un mediu minim, iar lista
   de nume îi vine pe intrarea standard, nu ca argument.
 - **O întrebare = un proces:** ce s-a învățat, etichetele și tabelul „etichetă → nume” stau doar în procesul acelei întrebări, de la
   prima mascare până la demascarea finală; două întrebări nu împart nimic, nici când rulează în paralel.
-- **Limite:** mărimea maximă a unui mesaj (64 MB la intrare, 16 MB la ieșire), 30 de secunde pe operație, 30 de minute pe întrebare;
-  la depășire procesul e oprit.
+- **Limite și termene (r5):** mărimea maximă a unui mesaj (64 MB la intrare, 16 MB la ieșire); 30 de secunde pe operație și 30 de
+  minute pe întrebare. ACELAȘI termen monoton al operației acoperă scrierea cererii, golirea ei și citirea răspunsului și e
+  plafonat de termenul întrebării. Scrierea rulează pe un fir separat: dacă procesul nu citește, la termen procesul e oprit, ceea ce
+  eliberează firul de scriere; oprirea are și ea pași mărginiți (5 secunde pentru proces și pentru fiecare fir), deci apelul revine
+  într-un interval mărginit, cu eroare, și nimic nu se publică. Testat cu un proces care nu citește și o cerere de 1 MB, la 100 ms
+  pe operație.
 - **Fail-closed:** Node lipsă, versiune greșită, amprentă greșită, proces căzut, timp depășit, răspuns trunchiat sau cu altă formă,
-  răspuns prea mare → **nicio cerere nouă către model și nimic publicat**; colegul vede „Eroare internă la ascunderea numelor, deci
-  întrebarea NU a fost trimisă mai departe”, jurnalul are doar codul. Textul original nu ia niciodată locul celui mascat.
-- **Fără rețea:** procesul rulează cu permisiunile Node pornite — nu poate scrie pe disc, nu poate porni alte programe sau fire de
-  lucru și citește doar din dosarul lui. Node 24 nu are încă o permisiune pentru rețea, așa că lipsa rețelei se verifică separat:
-  un test static (vitest) pică dacă motorul, protocolul sau intrarea importă altceva decât propriile fișiere (doar `node:crypto`,
-  `node:fs`, `node:path`, `node:url` la intrare, pentru amprente) sau folosesc `fetch`, socket-uri, `eval` etc.; în plus, intrarea
-  scoate funcțiile de rețea globale înainte să încarce motorul. Ajunge pentru că motorul primește doar text și întoarce text: fără
-  un import și fără funcțiile globale de rețea, nu are pe unde să trimită.
+  răspuns prea mare → **procesarea se oprește: nu se mai trimite nicio cerere către model, iar răspunsul nu se publică**; colegul
+  vede „Eroare internă la ascunderea numelor: procesarea s-a oprit, nu se mai trimite nicio cerere, iar răspunsul nu se publică”,
+  jurnalul are doar codul. (Cererile trimise ÎNAINTE de eroare, cu text mascat, au plecat deja — mesajul din r4, „întrebarea NU a
+  fost trimisă”, nu era adevărat în acest caz.) Textul original nu ia niciodată locul celui mascat.
+- **„Fără rețea” — formularea exactă:** codul fixat prin manifest nu conține apeluri de rețea — NU o proprietate de izolare a
+  procesului. Node 24 nu are o permisiune pentru rețea; procesul rulează cu permisiunile Node pornite (nu poate scrie pe disc, nu
+  poate porni alte programe, fire de lucru sau module native și citește doar din dosarul lui). Ce se verifică:
+  - **pe arborele sintactic** al motorului și al protocolului (`parseAst` din `vite`, deja dependență; testul din
+    `src/intrebariMascare.test.js`): importurile doar din fișierele manifestului, niciun import dinamic, niciun `import.meta`, niciun
+    identificator din lista închisă a testului (`process`, `globalThis`, `global`, `self`, `window`, `frames`, `require`, `module`,
+    `exports`, `eval`, `Function`, `fetch`, `WebSocket`, `XMLHttpRequest`, `EventSource`, `Worker`, `SharedWorker`, `importScripts`,
+    `navigator`, `Deno`, `Bun`, `WebAssembly`), nicio accesare a proprietății `constructor`. Un filtru pe text nu ajungea:
+    `globalThis["pro" + "cess"]` trecea de el, de arbore nu. Excepțiile, enumerate, sunt doar pentru intrarea `motor_cli.mjs`, care
+    gestionează procesul: importurile `node:crypto`, `node:fs`, `node:path`, `node:url`, cele două importuri dinamice ale motorului și
+    identificatorii `process` și `globalThis`;
+  - **în procesul real:** intrarea scoate, ÎNAINTEA importului motorului, funcțiile de rețea globale și încărcătoarele alternative
+    de module (`process.getBuiltinModule`, `process.binding`, `process._linkedBinding`, `process.dlopen`); un test pornește procesul
+    cu aceleași flaguri și o sondă în locul protocolului, care confirmă că ele lipsesc.
 
 ## Ce pleacă și ce nu pleacă în afară
 | | Pleacă la furnizorul modelului? |
@@ -53,7 +75,7 @@ diferență între ele (în r3: un caracter invizibil pe care ecranul îl scotea
 | Tabelul „etichetă → nume” | NU. Stă doar în procesul motorului, cât se lucrează la o întrebare; nu se scrie nici pe disc, nici în jurnal |
 | Lista de nume din platformă (angajați, terți, CUI-uri) | NU. Workerul o primește de la ERP și o dă procesului motorului, doar ca să găsească numele în text |
 | Atașamentele (PDF / poze) | NU. Numele din ele nu pot fi ascunse sigur. Rămân în ERP pentru colegi; modelul află doar că există |
-| Extrasele din documentele noastre de cercetare și din paginile oficiale | DA (trec și ele prin mascare) |
+| Extrasele din documentele noastre de cercetare și din paginile oficiale | DA (trec și ele prin mascare). Textul lor brut și paragraful precedent din sursă ajung doar la procesul local al motorului (regula B) |
 | Căutarea pe web | DA, doar căutarea compusă de program din lista aprobată de cuvinte (fără nume, fără speță) |
 | Jurnalul workerului | Rămâne pe server și are doar numere: câte nume / date s-au ascuns, pe categorii; la pornire câte nume s-au încărcat și câte intrări fără valoare s-au aruncat. Nu are valori |
 
@@ -62,39 +84,58 @@ Ana”, „Mariei”, firma cu sau fără „SC”) primește același număr cu
 
 ## Contractul de acoperire (închis) — ce TREBUIE ascuns
 Un nume de persoană sau o firmă care **există în lista platformei** se ascunde în orice scriere de mai jos, **inclusiv când scrierile
-se combină** (ex. `lUMIVO,` + caracter invizibil + ` serviciiS.R.L.`). Fiecare rând are cazuri în
-`worker/intrebari-tehnice/teste_motor.json` (rezultatul scris de mână) și un test „mutant” care scoate regula și arată că
-cazurile pică.
+se combină** (ex. `SCLumivo/Servi` + caracter invizibil + `ciilorS.R.L.`). Fiecare rând are cazuri scrise de mână în
+`worker/intrebari-tehnice/teste_motor.json` și teste „mutant” care scot regula și arată că cazurile pică; în plus, toate rândurile
+intră în matricea generativă (secțiunea „Matricea generativă”).
 
 | Dimensiune | Ce se acoperă | Exemple (inventate) |
 |---|---|---|
-| **Majuscule** | Firme: orice combinație. Persoane: forma uzuală (prima literă mare) și integral cu majuscule. Persoanele scrise integral cu litere mici sunt **în afara contractului** | `Lumivo Servicii`, `LUMIVO SERVICII`, `lumivo servicii`, `LuMiVo SeRvIcIi`; `Ana Vlădescu`, `ANA VLĂDESCU` |
-| **Diacritice** | Cu / fără diacritice, `ș / ş`, `ț / ţ`, forme Unicode compuse / descompuse | `Șerban`, `Şerban`, `Serban`, `S` + virgula de dedesubt separată |
-| **Separatoare** | Între componentele unei firme: 1–6 caractere din mulțimea închisă: spațiu (orice fel, inclusiv neîntreruptibil), tab, rând nou (CR / LF), virgulă, punct, ghilimele, paranteze rotunde, `&`, `+`, cratimele de mai jos. La persoane: spațiile leagă orice componente; celelalte separatoare leagă doar două componente ale **aceluiași** nume din listă („Vlădescu, Ana”) — o enumerare de persoane diferite („Ana Vlădescu, Maria Zamfirescu”) primește etichete diferite, iar fiecare componentă distinctivă se ascunde oricum | `Lumivo, Servicii`, `Lumivo & Servicii`, `Lumivo` + rând nou + `Servicii`, `Vlădescu, Ana` |
-| **Forme juridice** | `SRL, SA, PFA, II, IF, SNC, SCS`, cu / fără puncte, orice capitalizare, despărțite sau LIPITE după nume; „SC” / „S.C.” în față, despărțit sau lipit. Firma din listă se potrivește ÎNAINTEA detectorului de formă juridică (P1 din r3). „sa” / „îi” scrise mic și despărțite sunt cuvinte și rămân în afara etichetei (firma se ascunde) | `Lumivo ServiciiSRL`, `Lumivo ServiciiS.R.L.`, `SCLumivo Servicii`, `S.C. Lumivo Servicii S.A.`, `Lumivo, Servicii SRL` |
-| **Flexiuni** | UN sufix din `{ului, ilor, ule, lui, lor, ul, le, ei, ii, e, i}` pe o componentă de cel puțin 4 litere (la firme: pe ultima componentă); plus genitivul feminin `Ana→Anei`, `Maria→Mariei`, `Andreea→Andreei`, `Olga→Olgăi`. Fără derivări în lanț | `Vlădescului`, `Vlădescule`, `Crângașului`, `Varnitecului` |
+| **Majuscule** | Firme: numele întreg în orice capitalizare. Persoane (r5): numele întreg — două componente alăturate ale ACEEAȘI persoane din listă, în ambele ordini — în orice capitalizare, inclusiv integral cu litere mici sau amestecat; componentele a două persoane diferite nu se combină. „Cu majusculă” = cel puțin o literă mare ORIUNDE în cuvânt | `Lumivo Servicii`, `lumivo servicii`, `LuMiVo SeRvIcIi`; `ana vlădescu`, `zamfirescu maria`, `ZAMFIRESCU maria` |
+| **Componenta distinctivă singură (r5)** | Firme: ORICE componentă distinctivă a unei firme private din listă (nu doar prima) se ascunde și fără numele întreg când e scrisă cu cel puțin o majusculă sau are context (formă juridică despărțită / lipită după ea, „SC” / „S.C.” în față); scrisă integral cu litere mici și fără context: doar prin propagare (vezi „Ordine și propagare”). Persoane: o componentă distinctivă se ascunde și singură, în ORICE scriere, inclusiv cu litere mici. „Distinctivă” = baza normalizată (înainte de flexiune) are cel puțin 4 litere, nu e număr și NU e în listele închise (secțiunea „Listele închise”); o firmă dintr-un singur cuvânt distinctiv e numele întreg (orice scriere) | `Pelorin a facturat`, `pELORIN`, `pelorin srl`, `SC pelorin` (firma `Construct Pelorin SRL`); `ce drepturi are crângașu`, `vlădescului` |
+| **Diacritice și forme de compatibilitate** | Cu / fără diacritice, `ș / ş`, `ț / ţ`, forme Unicode compuse / descompuse; r5: literele late și celelalte forme de compatibilitate Unicode (descompunerea NFKD, doar la comparare — ce se ascunde e textul original, deci restaurarea rămâne exactă) | `Șerban`, `Şerban`, `Serban`, `ＶＬĂＤＥＳＣＵ ＡＮＡ`, `ｌｕｍｉｖｏ ｓｅｒｖｉｃｉｉ` |
+| **Separatoare** | Între componentele unei firme: 1–6 caractere din mulțimea închisă: orice spațiu din categoria Unicode Zs (inclusiv cel neîntreruptibil), tab, CR, LF, virgulă, punct, ghilimelele `"` `'` `„` `”` `“` `«` `»` `‚` `‘` `’`, parantezele rotunde, `&`, `+`, r5: `/` și `\`, cratimele de mai jos. La persoane: aceeași mulțime fără punct, CR și LF; spațiile leagă orice componente, celelalte separatoare leagă doar două componente ale **aceleiași** persoane din listă | `Lumivo, Servicii`, `Lumivo & Servicii`, `Lumivo/Servicii SRL`, `Lumivo\Servicii`, `Vlădescu/Ana` |
+| **Forme juridice** | `SRL, SA, PFA, II, IF, SNC, SCS`, cu / fără puncte, orice capitalizare, despărțite sau LIPITE după nume; r5: forma lipită se recunoaște pe tulpina componentei sau pe tulpina fără UN sufix de flexiune (`ServiciilorSRL`), pentru firma ÎNTREAGĂ, înaintea excepțiilor, iar eticheta acoperă intervalul original complet (de la prima componentă la sfârșitul formei); pentru o firmă dintr-un cuvânt comun forma lipită ESTE contextul. „SC” / „S.C.” în față, despărțit sau lipit. „sa”, „ii”, „if” scrise mic sunt cuvinte („să”, „îi”) sau sufixe („Lumivoii”): despărțite rămân în afara etichetei, lipite nu sunt formă juridică | `VarnitecSRL`, `VARNITECSRL`, `Varnitecsrl`, `VarnitecS.R.L.`, `AlfaSRL`, `Lumivo ServiciilorSRL`, `SCVarnitec SRL`, `S.C.Varnitec` |
+| **Flexiuni** | UN sufix din `{ului, ilor, ule, lui, lor, ul, le, ei, ii, e, i}` pe o componentă de cel puțin 4 litere (la firma întreagă: pe ultima componentă); plus genitivul feminin `Ana→Anei`, `Maria→Mariei`, `Andreea→Andreei`, `Olga→Olgăi`. Fără derivări în lanț (`VarnitecululSRL` rămâne) | `Vlădescului`, `Vlădescule`, `Crângașului`, `Varnitecului` |
 | **Cratimă** | `-`, U+2010, U+2011 la nume compuse și sufixe; se ascunde tot cuvântul compus | `Gheorghiu-Vlădescu`, `Vlădescu-ului`, `VLĂDESCU-ULUI` |
 | **Invizibile / de combinare** | Inserate în nume: toate caracterele de combinare (categoria Unicode M) și de format (Cf), inclusiv U+034F, U+FE0F, U+200B, U+00AD, U+FEFF și selectorii de variantă U+FE00–FE0F, U+E0100–E01EF. O SINGURĂ funcție de normalizare (`curata` / `norm` în motor), după tabelele Unicode ale lui Node 24.20 (Unicode 17.0) pe server și ale browserului în ecran | `Vlă` + U+034F + `descu` |
-| **Ordine și propagare** | Persoane: ambele ordini. Componenta izolată se ascunde înainte și după apariția numelui întreg, în toate câmpurile întrebării (titlu, speță, context — citite toate înainte de mascare). Ordinea cuvintelor unei firme rămâne fixă | `Ana Vlădescu` / `Vlădescu Ana`; „Mare a cerut avizul” + „Ion Mare răspunde” → ambele ascunse |
+| **Ordine și propagare** | Persoane: ambele ordini. Componenta izolată se ascunde înainte și după apariția numelui întreg, în toate câmpurile întrebării (titlu, speță, context — citite toate înainte de mascare). r5, scrisă integral cu litere mici, prin propagare: la firme, componentele distinctive ale firmei întregi din listă; la persoane, orice componentă a numelui întreg apărut în întrebare (și cea comună). Ordinea cuvintelor unei firme rămâne fixă pentru numele întreg (componenta distinctivă se ascunde oricum) | `Ana Vlădescu` / `Vlădescu Ana`; `lumivo a cerut` + `Lumivo Servicii SRL a livrat` → ambele ascunse; `Ion Mare a venit; mare parte e gata` → „mare” ascuns |
 
 **Excepțiile au prioritate explicită** — entitățile publice aprobate (`nemascate.json`) și localitățile rămân vizibile; dar
 **potrivirea completă a unei firme private din listă vine înaintea excepției** pentru un fragment public: `Transgaz Construct SRL`
-se ascunde întreg, `Transgaz` singur rămâne.
+se ascunde întreg, `Transgaz` singur rămâne (un cuvânt al unei entități publice nu e niciodată componentă distinctivă).
 
-**Componentele comune cer context.** Un cuvânt din listă care e și cuvânt obișnuit (lista închisă `cuvinte_comune.json` — litere
-grecești, culori, luni, cuvinte des folosite în numele de firme —, termenii tehnici din `vocabular_web.json` și câteva cuvinte scurte
-din motor; plus localitățile cunoscute) rămâne vizibil când apare singur, fără context identificator: „Alfa este coeficientul, gamma
-este radiația” și „Romane sunt aceste norme” rămân, deși `Alfa SRL`, `Gamma SRL` și persoana `Roman Stan` sunt în listă. Context =
-formă juridică alături, „SC” în față, un titlu („dl.”), un alt nume din listă lipit de el sau **numele întreg apărut în aceeași
-întrebare**. **Compromisul declarat și testat:** după ce numele întreg a apărut, propagarea ascunde și cuvântul comun scris cu
-majusculă („Alfa SRL a livrat. Alfa a facturat” → ambele ascunse; „Roman Stan … Romane sunt aceste norme” → „Romane” ascuns), dar nu
-și scris mic („alfa e coeficientul” rămâne). O firmă dintr-un singur cuvânt comun nu se mai aruncă din listă (ca în r3): rămâne, dar
-cere context.
+**Componentele comune cer context.** Un cuvânt din listă care e și cuvânt obișnuit rămâne vizibil când apare singur, fără context
+identificator: „Alfa este coeficientul, gamma este radiația”, „Mare parte din lucrare”, „ion e un atom” rămân, deși `Alfa SRL`,
+`Gamma SRL`, `MARE ION` sunt în listă. Context = formă juridică alături, „SC” în față, un titlu („dl.”), un alt nume din listă lipit
+de el sau **numele întreg apărut în aceeași întrebare**. **Compromisul declarat și testat:** după ce numele întreg a apărut,
+propagarea ascunde și cuvântul comun scris cu majusculă („Alfa SRL a livrat. Alfa a facturat” → ambele ascunse); la persoane, din
+r5, și scris mic („Ion Mare a venit; mare parte e gata” → „mare” ascuns); la firme, cuvântul comun scris mic rămâne („alfa e
+coeficientul”). **Excesul conservator declarat:** motorul nu decide dacă un cuvânt e „obișnuit” — decide lista. Un nume din listă care
+nu e în lista de cuvinte comune se ascunde și ca substantiv („busuioc pentru grădină”, dacă `Busuioc` e o persoană din listă);
+„pădure” și „munte” sunt în listă și rămân.
+
+### Listele închise (versionate, în fișiere din manifest)
+O componentă e „comună” (cere context) sau ne-distinctivă dacă e în una dintre listele de mai jos; orice altă componentă de cel puțin
+4 litere e distinctivă. Schimbarea unei liste = PR, iar manifestul motorului se reface.
+- `worker/intrebari-tehnice/cuvinte_comune.json` — cuvintele obișnuite care pot fi și nume: litere grecești, culori, luni și zile,
+  animale, plante și forme de relief, meserii și obiecte uzuale care sunt și nume de familie frecvente, cuvintele generice din
+  numele de firme (r5: extinse);
+- `worker/intrebari-tehnice/vocabular_web.json` — vocabularul tehnic;
+- `worker/intrebari-tehnice/nemascate.json` — entitățile publice (orice cuvânt din numele lor);
+- `src/intrebariMascare.js` — listele scurte ale motorului: cuvintele scurte comune (`COMUN`), componentele generice de firmă
+  (`GENERICE_FIRMA`), intrările fără valoare de identificare (`FARA_VALOARE`), cuvintele de legătură, rolurile, documentele și
+  titlurile (`OPRIRE`, `TITLURI`), formele juridice (`FORME_JURIDICE`);
+- localitățile cunoscute platformei (lista `localitati` din edge, din `red_uat`).
 
 **În afara contractului** (spus și în ecran): porecle, greșeli de scriere sau de citire automată (OCR), litere asemănătoare din alte
-alfabete, diminutive, alte ordini ale cuvintelor unei firme, nume de persoane scrise doar cu litere mici, nume pe care platforma nu
-le cunoaște (nu le cunoaște = nu sunt în lista ei; se prind doar cu „dl.”, „ing.”, „colegul” … în față, sau cu SRL / SA după),
-adrese, numere de contract / carte funciară, CUI scris fără „RO” / „CUI” și necunoscut platformei.
+alfabete, litere despărțite prin spații („N u m e”), diminutive, un cuvânt al unei firme scris integral cu litere mici fără numele
+întreg al firmei în întrebare (și fără formă juridică / „SC” lângă el), un cuvânt obișnuit care e și nume scris singur, fără numele
+întreg în întrebare, nume pe care platforma nu le cunoaște (nu le cunoaște = nu sunt în lista ei; se prind doar cu un titlu în față
+— „dl.”, „ing.”, „colegul” și ceilalți din `TITLURI` — sau cu SRL / SA după), adrese, numere de contract / carte funciară, un CUI
+necunoscut platformei scris fără „RO” / „CUI”. **Acoperite din r5** (cu teste): literele late și celelalte forme de compatibilitate,
+numele scrise cu litere mici (regulile de mai sus), CUI-ul cunoscut scris cu spații sau cu puncte / cratime între grupe de cifre
+(„2345 6789”, „2345.6789”, „23-456-789”; intervalul ascuns merge de la prima la ultima cifră, iar „RO” lipit sau despărțit printr-un
+spațiu intră și el).
 
 **NU sunt „limite”** și nu se acceptă: ocolirea motorului (garda din worker refuză orice text care nu vine din sesiunea motorului
 pentru acea întrebare), o listă de nume incompletă tratată ca succes (lista goală sau cu altă formă oprește preluarea), trimiterea
@@ -102,19 +143,20 @@ textului nemascat la o eroare (vezi fail-closed).
 
 ## Ce mai prinde mascarea (tipare, fără listă)
 - **Nume după un titlu**: „dl.”, „dna”, „ing.”, „arh.”, „dr.”, „colegul”, „șeful”, „dirigintele”, „maistrul”, „sudorul”, „șoferul”
-  … (și când numele e un cuvânt obișnuit: „dl. Ion”).
+  și celelalte forme din `TITLURI` (și când numele e un cuvânt obișnuit: „dl. Ion”).
 - **Firme necunoscute cu formă juridică**: orice nume cu majusculă urmat de SRL / SA / PFA / II / IF / SNC / SCS.
 - **Date personale**: CNP (cu cifra de control), CUI cu „RO” / „CUI” / „cod fiscal” în față sau cunoscut platformei, telefoane
   românești, e-mailuri, IBAN (cu verificarea de control), numere de înmatriculare.
 - **Ce ascunde omul**: orice cuvânt între `[[` și `]]` (sau selectat și ascuns cu „🙈 Ascunde selecția”), și orice formă de
   etichetă scrisă de el între paranteze drepte — pleacă `[ASCUNS_n]` și se pune la loc exact.
-- **Intrările fără valoare** din listă („diverse”, „persoana fizica”, „furnizor”, „client necunoscut” …) se aruncă la încărcare și
-  se numără în jurnalul de pornire.
+- **Intrările fără valoare** din listă („diverse”, „persoana fizica”, „furnizor”, „client necunoscut” și celelalte din
+  `FARA_VALOARE`) se aruncă la încărcare și se numără în jurnalul de pornire.
 
 ## Localitățile rămân vizibile (decizia owner-ului)
 - Cuvântul de după un **marcaj de localitate** rămâne („comuna”, „com.”, „satul”, „orașul”, „municipiul”, „localitatea”, „județul”,
-  „jud.”, „UAT” …), plus cel mult două cuvinte cu majusculă lipite de el care nu sunt nume din listă („comuna Valea Călugărească”).
-  Un nume de după localitate se ascunde în continuare („comuna Berceni Ana Vlădescu” → „comuna Berceni [PERSOANA_1]”).
+  „jud.”, „UAT” și celelalte din `MARCAJE_LOCALITATE`), plus cel mult două cuvinte cu majusculă lipite de el care nu sunt nume din
+  listă („comuna Valea Călugărească”). Un nume de după localitate se ascunde în continuare („comuna Berceni Ana Vlădescu” →
+  „comuna Berceni [PERSOANA_1]”).
 - Un cuvânt care e **localitate cunoscută platformei** (denumirile UAT și satele din `red_uat`) rămâne când apare fără titlu și
   fără alt nume din listă lângă el. Conflictul nume de familie = localitate: cu titlu sau prenume lângă = persoană („dl. Berceni”,
   „Berceni Ana”), altfel = localitate („Berceni are teren”, „Primăria Berceni”).
@@ -135,9 +177,10 @@ textului nemascat la o eroare (vezi fail-closed).
 - Sub speță apare **„🙈 Previzualizare orientativă — verifică înainte de trimitere”**, cu textul cerut de recenzent, lângă ea:
   **„Previzualizare orientativă.** Serverul folosește lista completă din platformă și poate ascunde nume suplimentare. Localitățile
   cunoscute rămân vizibile pe server, chiar dacă aici apar ascunse. Mascarea automată nu garantează eliminarea tuturor numelor.”
-  Ecranul nu mai spune că „pe server se ascunde cel puțin la fel” (exemplul localităților arată că nu e adevărat).
-- Textul cu etichetele evidențiate, rezumatul („Am ascuns 3 nume și date …”) și lista „Nu prinde” (clasele din afara
-  contractului).
+- Textul cu etichetele evidențiate, rezumatul („Am ascuns 3 nume și date”), lista „Nu prinde” (la zi în r5: clasele din afara
+  contractului, cu limitele de mai sus scrise distinct, și ce se prinde nou) și formularea exactă despre rețea: „Pe server, mascarea
+  rulează local, într-un proces separat; codul ei, fixat prin amprente, nu conține apeluri de rețea (verificare a codului, nu o
+  izolare a procesului).”
 - Butonul **„🙈 Ascunde selecția”** pune cuvântul selectat între `[[ ]]`.
 - Dacă colegul atașează fișiere: „Atașamentele rămân în ERP pentru colegi, dar NU se trimit la AI.”
 
@@ -206,7 +249,7 @@ WHERE c.column_name IS NULL;   -- trebuie să întoarcă 0 rânduri
 r3: lista are 4 coloane noi, toate din `red_uat` (`nume`, `sate_zi1`, `sate_zi2`, `sate_zi3`, din migrarea 20261126a) — interogarea
 se rulează din nou pe lista de mai sus, chiar dacă cea din r2 a întors 0.
 Plus tipul cheii `id` (întreg pentru toate, `uuid` pentru `red_*`):
-`SELECT table_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'id' AND table_name IN (…)`.
+`SELECT table_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'id' AND table_name IN (<tabelele de mai sus>)`.
 O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
 
 ## Garda (verificată în cod, nu prin convenție)
@@ -219,47 +262,135 @@ O coloană lipsă se scoate din `SURSE_NUME` (PR), nu se publică edge-ul cu ea.
 - **Demascarea e strictă:** se pun la loc doar etichetele emise pentru întrebarea aceea, scrise exact. Răspunsul **nu se publică**
   dacă în textul modelului rămâne o „aproape etichetă” care nu e una emisă (`[PERSOANA_999]`, `[PERSOANA_1_F9]`, `[persoana_1]`,
   `PERSOANA_1`) sau o etichetă ruptă (rând nou, spațiu neîntreruptibil sau caracter invizibil în ea: `[PERSOANA_` + rând nou +
-  `999]`). **r4 (pct. 5 din brief):** „aproape etichetă” înseamnă doar ce nu poate fi proză: între **paranteze drepte**, sau fără
-  paranteze dar cu categoria **exactă, cu majuscule, și „_”** (`PERSOANA_1`). „firma 2 a contractat lucrarea”, „persoana 2”,
-  „CUI 12345678” nu mai opresc publicarea (în r3 le opreau — refuz fals). Între paranteze, categoria contează în orice scriere
-  („[persoană_` + rând nou + `1]” rămâne oprit), pentru că un text obișnuit nu se scrie așa.
+  `999]`). „Aproape etichetă” înseamnă doar ce nu poate fi proză: între **paranteze drepte**, sau fără paranteze dar cu categoria
+  **exactă, cu majuscule, și „_”** (`PERSOANA_1`). „firma 2 a contractat lucrarea”, „persoana 2”, „CUI 12345678” nu opresc
+  publicarea. Între paranteze, categoria contează în orice scriere („[persoană_` + rând nou + `1]” rămâne oprit).
 - Dacă răspunsul ar ieși cu etichete în locul numelor (demascarea n-a avut loc), nu se publică.
 
-## Regula B: „Da” / „Nu” / „Incert” (r4 — conservatoare)
-- Sunt doar trei verdicte. „Depinde de …” devine „Incert — depinde de …”.
-- **„Da” / „Nu” trec numai cu un citat INTEGRAL dintr-o propoziție AUTONOMĂ** a sursei marcate pe același rând (`[C1]`, `[W2]`);
-  orice dependență structurală pe care programul n-o poate reconstitui dă **„Incert”**. Propoziția NU e autonomă dacă:
-  - e un **element de listă** (numerotată, cu litere, cu liniuțe / buline), **introducerea** unei liste („…:”), are „;”, sau e o
-    **celulă de tabel** — chiar dacă introducerea conține „nu”. Contraexemplul din r3 („Nu se admit următoarele lucrări: 1. …;
-    2. Executarea sudurilor …” cu doar elementul 2 citat) dă acum „Incert”; la fel enumerarea citată întreagă (validarea sigură a
-    unui bloc de listă poate veni ulterior);
-  - are o **trimitere** („conform alin. (2)”, „potrivit anexei …”, „art.”, „lit.”, „prevăzut la”) sau o expresie care se sprijină pe
-    alt text („aceste condiții”, „acesta”, „respectiv”, „prezentul”, „de mai sus”);
-  - are o **excepție / derogare** („prin derogare”, „cu excepția”, „nu se aplică”), sau **altă propoziție din același paragraf**
-    are o restricție (excepție, derogare, „numai / doar dacă”, „cu condiția”, „dar numai”) — „Montajul pe poduri este permis cu tub
-    de protecție. Prin derogare, montajul este interzis pe podurile din lemn.” dă „Incert” pentru oricare dintre ele;
-  - paragraful ei e **tăiat la marginea extrasului**: lipsa vecinului nu înseamnă lipsa restricției. Extrasele din documentele
-    noastre sunt bucăți de paragrafe întregi (marginile sunt sigure), afară de feliile unui paragraf prea lung; **fragmentele web
-    sunt mereu tăiate din pagină**, deci nu susțin singure un „Da” / „Nu”; „…” într-un extras e tot o tăietură;
-  - începe cu literă mică (fragment) sau nu se termină cu „.”, „!”, „?”.
+## Regula B: „Da” / „Nu” / „Incert” (r5 — STRUCTURALĂ)
+- Sunt doar trei verdicte. „Depinde de X” devine „Incert — depinde de X”.
+- **Contractul exact.** „Da” / „Nu” trec numai dacă pe un rând al răspunsului, lângă marcajul sursei (`[C1]`, `[W2]`), e un citat
+  (între ghilimele, cel puțin 6 cuvinte) EGAL cu un PARAGRAF ÎNTREG al acelei surse, iar paragraful e autonom. Ce înseamnă:
+  1. **Paragraful** se stabilește ÎN SURSĂ, înainte de extragere și de mascare, fără a elimina rândurile noi: paragrafele sunt
+     despărțite de un rând gol (unul sau mai multe, cu spații / tab-uri). Orchestrarea (Python) dă motorului, pentru fiecare extras,
+     textul brut cu rândurile noi, dacă marginile extrasului sunt margini reale de paragraf (`inceput_sigur` / `sfarsit_sigur`) și
+     paragraful PRECEDENT din sursă — text brut, `''` dacă extrasul e la începutul fișierului, `null` dacă nu se cunoaște (indexul
+     corpusului îl scrie pentru fiecare bucată: rândurile de titlu din documente („## Titlu”) sunt și ele paragrafe; înregistrările JSON și
+     fragmentele web nu au precedent cunoscut). Citatul se compară cu paragraful corespunzător din textul mascat (cel văzut de model);
+     dacă mascarea a schimbat numărul de paragrafe, toate paragrafele acelei surse sunt „context necunoscut”.
+  2. **O singură propoziție.** Granițele de propoziție sunt voit excesive: orice „.”, „!”, „?”, „;” urmat (eventual după ghilimele
+     sau paranteze de închidere) de un spațiu, și orice rând nou din interiorul paragrafului. Un paragraf cu două sau mai multe
+     propoziții nu susține niciodată singur un „Da” / „Nu” — și nici citat întreg, nici o propoziție din el (motivul
+     `mai_multe_propozitii`). Abrevierile („art. 5”) dau granițe false, deci „Incert”: e partea sigură.
+  3. **Element de listă** (motivul `element_lista`), definit structural, fără alfabete enumerate și fără plafon de lungime — oricare
+     dintre condiții:
+     - după spațiile și ghilimelele de deschidere (`„` `“` `"` `«` `‚` `‘` `'` `` ` ``), paragraful începe cu un șir de litere / cifre
+       Unicode (orice capitalizare, cifre romane incluse) urmat de `)`, sau de `.` / `:` urmat de spațiu, de sfârșit sau direct de o
+       literă / cifră (`B) `, `12345) `, `iv. `, `IV) `, `Art. `, `B.Executarea`);
+     - începe cu `(` + litere / cifre + `)` (`(b)`, `(12)`);
+     - începe cu un semn de listă: U+2022 `•`, U+2023 `‣`, U+2043 `⁃`, U+2219 `∙`, U+25AA `▪`, U+25AB `▫`, U+25A0 `■`, U+25A1 `□`,
+       U+25CF `●`, U+25CB `○`, U+25E6 `◦`, U+25B8 `▸`, U+25BA `►`, U+00B7 `·` (punctul median), `*`, `+`, U+2212 `−`, `§`, sau
+       ORICE caracter din categoria Unicode Pd (toate cratimele și liniuțele);
+     - paragraful PRECEDENT din sursă se termină cu `:` sau `;` (după spații, ghilimele, paranteze și semne de evidențiere de
+       închidere);
+     - paragraful însuși se termină cu `:` sau `;`.
+  4. **Listele închise**, căutate ca cuvinte întregi în propoziția unică (forme normalizate: litere mici, fără diacritice; enumerate
+     integral în `src/intrebariMascare.js`, constantele `TRIMITERI`, `TRIMITERI_EXPRESII`, `EXCEPTII`, `EXCEPTII_EXPRESII`):
+     - **trimiteri** (motivul `trimitere`): conform, conformitate, potrivit; prevazut, prevazuta, prevazute, prevazuti, prevazutul,
+       prevazutei, prevazutului, prevazutelor, prevazutilor; mentionat, mentionata, mentionate, mentionati, mentionatul, mentionatei,
+       mentionatului, mentionatelor, mentionatilor; precedent, precedenta, precedente, precedenti, precedentul, precedentei,
+       precedentului, precedentelor, precedentilor; anterior, anterioara, anterioare, anteriori, anteriorul, anterioarei,
+       anteriorului, anterioarelor, anteriorilor; urmator, urmatoare, urmatori, urmatorul, urmatoarea, urmatoarele, urmatorii,
+       urmatorului, urmatoarei, urmatorilor; acest, aceasta, acesta, aceste, acestea, acesti, acestia, acestui, acestei, acestor,
+       acestuia, acesteia, acestora; acel, acela, acea, aceea, acei, aceia, acele, acelea, acelui, acelei, acelor, aceluia, aceleia,
+       acelora; respectiv, respectiva, respective, respectivi, respectivul, respectivei, respectivului, respectivelor,
+       respectivilor; prezentul, prezenta, prezentele, prezentului, prezentei, prezentelor; art, articol, articolul, articolului,
+       articole, articolele, articolelor; alin, alineat, alineatul, alineatului, alineate, alineatele, alineatelor; lit, litera,
+       literei, literele, literelor; pct, punctul, punctului, punctele, punctelor; anexa, anexe, anexei, anexele, anexelor, anexat,
+       anexata, anexate, anexati; capitol, capitolul, capitolului, capitole, capitolele, capitolelor; sectiune, sectiunea,
+       sectiunii, sectiuni, sectiunile, sectiunilor; tabel, tabelul, tabelului, tabele, tabelele, tabelelor, tabela, tabelei;
+       figura, figurii, figuri, figurile, figurilor; el, ea, ei, ele; expresiile „mai sus”, „mai jos”;
+     - **deschideri de excepție** (motivul `exceptie`): derogare, derogarea, derogari, derogarile, derogarii, derogarilor, deroga,
+       derogat, derogata, derogate, exceptand, exceptie, exceptia, exceptii, exceptiile, exceptiei, exceptiilor; expresiile „prin
+       derogare”, „cu exceptia”, „nu se aplica”, „nu sunt aplicabile”, „nu este aplicabil”, „nu este aplicabila”, „nu sunt
+       aplicabili”, „in afara de”, „in afara cazului”, „in afara situatiei”, „sub rezerva”, „fara a aduce atingere”.
+     Altă formulare a unei trimiteri sau a unei excepții = limită declarată (mai jos).
+  5. **Refuzurile păstrate:** marginea extrasului care nu e margine de paragraf sau „…” / „...” în paragraf (`context_taiat`; toate
+     fragmentele web sunt tăiate din pagină); paragraful precedent necunoscut (`context_necunoscut`); „|” sau tab — celulă de tabel
+     (`tabel`); paragraful nu începe cu majusculă sau cifră (`fragment`) sau nu se termină cu „.”, „!”, „?” (`fara_sfarsit`); citatul
+     are sub 6 cuvinte sau nu e pe un rând cu marcajul sursei.
+  6. **Autonomia e NECESARĂ, nu suficientă.** Un paragraf autonom poate totuși să nu susțină concluzia: „Montajul conductelor este
+     permis exclusiv pe podurile metalice.” trece regula B, dar nu susține un „Da” pentru podurile din lemn — acolo îl oprește
+     validarea răspunsului (susținerea și polaritatea, în `cercetare.py` / `src/intrebariSurse.js`, cazul e în setul comun). Regula B
+     rulează după validare și e ultimul pas pe text: niciun pas din Python nu poate transforma refuzul ei într-un „Da” / „Nu” (test pe
+     fluxul complet + mutantul „worker care ignoră rezultatul regulii B”).
 - **Compararea citatului nu folosește normalizarea permisivă a numelor:** semnele, cifrele, operatorii și diacriticele cu sens se
   păstrează (`-5 ≠ 5`, `≤ ≠ <`, `sau ≠ său`). Contează doar: majusculele, spațiile, ghilimelele, sedila / virgula de sub ș / ț, felul
-  liniuței (o liniuță tipografică în fața unei cifre rămâne semn minus) și punctuația de la sfârșit. Citatul are cel puțin 6 cuvinte.
-- Fără un asemenea citat, verdictul devine **„Incert — de verificat: niciun citat nu reproduce exact o propoziție întreagă și de
-  sine stătătoare dintr-o sursă — citește sursele alăturate.”**, iar ecranul pune toate sursele consultate imediat sub verdict.
-  Înainte, modelul primește o singură dată cererea să pună citatul; promptul îi spune regula de la început.
-- **Limita declarată:** regula verifică integritatea și autonomia textului, nu sensul. Un citat autonom și autentic poate totuși
-  susține o concluzie greșită pentru speța concretă; o restricție aflată în ALT paragraf al documentului nu e văzută. Omul vede
+  liniuței (o liniuță tipografică în fața unei cifre rămâne semn minus) și punctuația de la sfârșit.
+- **Cererea către model** spune exact: „Da” / „Nu” doar cu un PARAGRAF ÎNTREG, copiat exact de la începutul la sfârșitul lui, cu o
+  singură propoziție; repararea (o singură dată) repetă cerința.
+- Fără un asemenea citat, verdictul devine **„Incert — de verificat: niciun citat nu reproduce exact un paragraf întreg și de sine
+  stătător dintr-o sursă — citește sursele alăturate.”**, iar ecranul pune toate sursele consultate imediat sub verdict.
+- **Costul (acceptat):** mai puține „Da” / „Nu” — orice paragraf cu două propoziții, orice abreviere urmată de spațiu, orice listă,
+  orice trimitere sau excepție din listele închise și orice paragraf al cărui precedent nu se cunoaște dau „Incert”.
+- **Limitele declarate:** regula verifică integritatea și autonomia STRUCTURALĂ a textului, nu sensul. Dependențele pe care nu le
+  recunoaște rămân nevăzute: o restricție aflată în ALT paragraf decât cel precedent (mai sus în document, într-un tabel, într-o
+  notă), o trimitere sau o excepție scrisă altfel decât în listele închise, o listă fără marcaj și fără „:” / „;” înainte. Omul vede
   citatul și sursa alăturate.
 
 ## Testele (pe scurt)
-- Un singur set de cazuri, `worker/intrebari-tehnice/teste_motor.json`, rulat de trei ori: **vitest** pe motor
+- Un set de cazuri scrise de mână, `worker/intrebari-tehnice/teste_motor.json`, rulat de trei ori: **vitest** pe motor
   (`src/intrebariMascare.test.js`), **procesul Node real** prin `motor.py` (`test_motor.py`, `test_worker.py` — transportul spre
   model e simulat, motorul nu) și un **browser real** (`worker/intrebari-tehnice/motor_browser.html`: din rădăcina repo-ului
   `python -m http.server 8765 --bind 127.0.0.1`, apoi `http://127.0.0.1:8765/worker/intrebari-tehnice/motor_browser.html` — rezultatul
-  în pagină și în `window.REZULTAT_MOTOR`).
-- Mutanți: câte o regulă scoasă pentru fiecare rând al contractului și pentru fiecare excludere din regula B (vitest); fiecare cale
-  de eroare a procesului (procesul de test `test_motor_defect.mjs`): zero cereri noi, zero răspunsuri publicate.
+  în pagină și în `window.REZULTAT_MOTOR`). r5: așteptările din r4 care lăsau vizibile componente acum contractate (persoane scrise
+  mic, componenta distinctivă singură, „gama de feronerie” după firma întreagă) sunt ÎNLOCUITE; probele pozitive legitime („Da”
+  păstrat) și cele pentru entitățile publice / localități rămân.
+- Mutanți: câte o regulă scoasă pentru fiecare rând al contractului și pentru fiecare regulă a regulii B (context tăiat,
+  context necunoscut, tabel, cele trei condiții ale elementului de listă, categoria Pd, plafonul de lungime al marcajului, literele
+  mari din marcaj, paragraful cu mai multe propoziții, granițele „;” și „rând nou”, trimiteri, excepții, fragment, fără sfârșit,
+  alinierea paragrafelor brute și mascate, compararea permisivă) — vitest; fiecare cale de eroare a procesului (procesul de test
+  `test_motor_defect.mjs`, inclusiv cel care nu citește intrarea): zero cereri noi, zero răspunsuri publicate.
+
+### Matricea generativă (criteriul de acceptare L25)
+`worker/intrebari-tehnice/generativ.mjs` — fără niciun import și fără funcțiile motorului — generează PRODUSUL COMPLET al
+dimensiunilor de mai jos. Pentru fiecare caz știe intervalul exact al numelui în text, iar oracolul cere: (a) intervalul așteptat e
+înlocuit INTEGRAL de o etichetă validă și restul textului e neatins; (b) forma normalizată a ieșirii nu conține componenta
+distinctivă; (c) demascarea dă textul inițial; (d) cazurile negative rămân neschimbate. Fără (a), „AlfaSRL” (fără componentă
+distinctivă) ar trece nemascat. `src/intrebariMascare.generativ.test.js` rulează ACELEAȘI loturi pe fire de lucru din vitest și în
+procese Node cu flagurile din `motor.py`, cere zero eșecuri în ambele și aceeași amprentă sha256 a ieșirilor pe fiecare lot; loturi
+de cel mult 100.000 de cazuri, fără plafon total (toate loturile rulează; ≈ 1 minut pe serverul AI).
+
+**Domeniul publicat** (dicționarul de test: persoanele VLĂDESCU ANA, ZAMFIRESCU MARIA, ȘERBĂNESCU OLGA, CRÂNGAȘU VIOREL, MARE ION,
+DUMBRĂVEANU ANDREEA-IOANA; firmele Lumivo Servicii SRL — distinctivă pe prima poziție, Varnitec SRL — un cuvânt distinctiv, Alfa SRL —
+un cuvânt comun, Construct Pelorîn SRL — distinctivă pe a doua poziție, cu diacritice, Barzeni Instal Grup SRL — trei cuvinte,
+Transgaz Construct SRL — începe cu o entitate publică; CUI 12345678; localitatea Berceni). Valorile:
+- majuscule: ca în listă, MAJUSCULE, litere mici, mixt (prima literă mică, restul mari) — 4;
+- diacritice: cu / fără (doar unde numele are diacritice);
+- separatoare de firmă: spațiu, NBSP, U+2009, U+3000, tab, CR, LF, `,` `.` `"` `'` `„` `”` `“` `«` `»` `‚` `‘` `’` `(` `)` `&` `+`
+  `/` `\` `-` U+2010 U+2011 și două combinații de 6 caractere — 30 (fiecare caracter = limita 1, combinațiile = limita 6);
+- separatoare de persoană: spațiu, NBSP, U+2009, tab, `,`, „, ”, `"` `'` `„` `”` `(` `)` `&` `+` `/` `\` `-` U+2010 U+2011 și o
+  combinație de 6 caractere — 20;
+- forme juridice: niciuna, „ SRL”, „ S.R.L.”, „ srl”, „ SA”, „SRL” lipit, „S.R.L.” lipit, „srl” lipit, „SA” lipit — 9;
+- „SC”: nimic, „SC ”, „S.C. ”, „SC” lipit, „S.C.” lipit — 5;
+- flexiuni: niciuna și fiecare din cele 11 sufixe (doar pe o bază de cel puțin 4 litere), plus genitivul feminin la prenumele în -a;
+- invizibile: niciunul, U+034F (M) și U+200B (Cf), fiecare la începutul, mijlocul și sfârșitul componentei distinctive — 7;
+- poziții în propoziție: început, interior, sfârșit — 3; ordinea persoanelor: Nume Prenume / Prenume Nume; cratimele prenumelui
+  compus: `-`, U+2010, U+2011.
+
+| Familia | Dimensiuni (numărul de valori) | Cazuri | Loturi |
+|---|---|---|---|
+| `firme_nume_intreg` | (firma × diacritice × separator: 122 de variante aplicabile) × majuscule 4 × formă juridică 9 × „SC” 5 × flexiune 12 × invizibil 7 × poziție 3 | 5.533.920 | 56 |
+| `conflict_entitate_publica` | majuscule 4 × separator 30 × formă juridică 9 × poziție 3 (Transgaz Construct, întreagă) | 3.240 | 1 |
+| `firme_componenta_singura` | (componenta distinctivă, oricare poziție × diacritice: 4) × majuscule 4 × formă juridică 9 × „SC” 5 × flexiune 12 × invizibil 7 × poziție 3 | 181.440 | 2 |
+| `persoane_nume_intreg` | (persoana × ordine × diacritice × flexiunea ultimei componente × cratimă: 314) × majuscule 4 × separator 20 × invizibil 7 × poziție 3 | 527.520 | 6 |
+| `persoane_componenta_singura` | (componenta × diacritice × flexiune: 174) × majuscule 4 × invizibil 7 × poziție 3 | 14.616 | 1 |
+| `context_si_propagare` | 9 perechi (componenta singură scrisă mic / comună + numele întreg) × înainte / după × flexiune 3 × poziție 3 (24 de combinații neaplicabile: flexiune pe o bază sub 4 litere) | 138 | 1 |
+| `exceptii` | 18 cazuri (entități publice, localitate, componente generice și comune singure, CUI fragmentat și negative) × poziție 3 | 54 | 1 |
+| **Total** | | **6.260.928** | **68** |
+
+Ce NU acoperă matricea: combinațiile în afara domeniului de mai sus (alte nume, alte caractere, alte poziții); pentru ele rămân
+contractul, cazurile scrise de mână și mutanții. Matricea e dovada pentru combinațiile enumerate, nu o demonstrație universală.
 
 ## Pașii de pornire (pentru coordonator — după review și „da”-ul lui Răzvan)
 Nu e nevoie de migrare și nici de secrete noi. **Merge-ul NU publică funcția edge și NU pornește workerul.** Workerul stă OPRIT pe
@@ -273,53 +404,68 @@ toată livrarea; testul de fum se face cu rularea periodică încă dezactivată
    - lacătul de sistem e liber: cu Python-ul workerului, în folderul workerului,
      `python -c "import msvcrt; f=open('worker.lock','a+b'); msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1); print('LIBER')"` → `LIBER`.
    Fără toate trei nu se trece mai departe. Workerul rămâne dezactivat până la pasul 10.
-2. Merge PR-ul (motor + ecran + worker; edge-ul din PR-ul anterior, neschimbat aici).
+2. Merge PR-ul (motor + ecran + worker + corpus; edge-ul din PR-ul anterior, neschimbat aici).
 3. Interogarea de verificare a coloanelor (secțiunea „De unde vin numele”) → 0 rânduri lipsă. Altfel: stop.
 4. Dacă edge-ul `intrebari-tehnice-worker` nu e încă publicat cu acțiunea `nume` (verdictul r3: „GO cu condiții”): deploy cu
    workerul oprit, **`index.ts` și `logic.js` împreună**, `verify_jwt = false`, aceleași setări (`SUPABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, secretul din Vault `INTREBARI_WORKER_SECRET`).
 5. Verificarea acțiunii `nume` FĂRĂ worker: cu secretul → **200** cu `persoane`, `firme`, `cui` nevide și `localitati` (doar numărul
    lor se notează); fără antet / cu cheia anon / cu un JWT de cont obișnuit / cu un secret greșit → **401**. Altfel: stop.
-6. **Node pe server:** `node --version` → `v24.x` (pe 13.11.2026: `v24.20.0`), iar
-   `node -p "process.versions.unicode"` → aceeași valoare ca `unicode` din `motor_manifest.json` (`17.0`). Altfel: stop — fie se
-   instalează versiunea fixată, fie se reface manifestul printr-un PR (`node scripts/intrebari/manifest_motor.mjs`) și se rulează
-   din nou testele. Dacă `node` nu e în PATH-ul contului care rulează task-ul, se setează `INTREBARI_NODE` (calea completă) în
-   acțiunea task-ului.
+6. **Node, Python și drepturile pe server (r5: rezultatele acceptate sunt scrise; la orice neconformitate workerul NU pornește):**
+   - `node --version` → `v24.x` (pe 13.11.2026: `v24.20.0`) și `node -p "process.versions.unicode"` → aceeași valoare ca `unicode`
+     din `motor_manifest.json` (`17.0`). Altfel: stop — fie se instalează versiunea fixată, fie se reface manifestul printr-un PR
+     (`node scripts/intrebari/manifest_motor.mjs`) și se rulează din nou testele. Dacă `node` nu e în PATH-ul contului care rulează
+     task-ul, se setează `INTREBARI_NODE` (calea completă) în acțiunea task-ului;
+   - Python-ul task-ului (calea din acțiunea task-ului) `--version` → `3.12.x` sau `3.13.x` (cel cu care au trecut testele de la
+     pasul 8). Altă versiune: stop, până se rulează testele cu ea;
+   - ACL-ul dosarului workerului și al subdosarului lui `motor\` (`icacls` pe fiecare) și al dosarului temporar al contului
+     task-ului (unde se face instantaneul: `icacls $env:TEMP`, rulat ca acel cont) → **acceptat**:
+     drept de scriere (`F`, `M` sau `W`) DOAR pentru contul task-ului, `NT AUTHORITY\SYSTEM` și `BUILTIN\Administrators`. Orice alt
+     cont sau grup cu drept de scriere (`Everyone`, `BUILTIN\Users`, `Authenticated Users`, alt utilizator) → stop: workerul nu
+     pornește până când ACL-ul e corectat (decizia coordonatorului, cu „da”-ul lui Răzvan). Instantaneul nu e imutabil absolut (vezi
+     „Cum e păzit procesul motorului”), de aceea contează cine poate scrie acolo.
 7. Pe serverul AI, cu workerul oprit, copierea fișierelor din `main` în folderul workerului (`C:\Users\Public\intrebari_worker\`):
    - lângă script: `intrebari_worker.py`, `cercetare.py`, **`motor.py`**, `corpus_manifest.json`, **`motor_manifest.json`**,
      `vocabular_web.json` (din `worker/intrebari-tehnice/`);
    - motorul, în subfolderul **`motor\`**, **păstrând căile din repo** (exact lista din `motor_manifest.json`):
-     `motor\src\intrebariMascare.js`, `motor\worker\intrebari-tehnice\motor_protocol.mjs`, `…\motor_cli.mjs`, `…\nemascate.json`,
-     `…\vocabular_web.json`, `…\cuvinte_comune.json` (workerul caută motorul în `motor\` de lângă el; altă locație = variabila
+     `motor\src\intrebariMascare.js`, `motor\worker\intrebari-tehnice\motor_protocol.mjs`, `motor\worker\intrebari-tehnice\motor_cli.mjs`,
+     `motor\worker\intrebari-tehnice\nemascate.json`, `motor\worker\intrebari-tehnice\vocabular_web.json`,
+     `motor\worker\intrebari-tehnice\cuvinte_comune.json` (workerul caută motorul în `motor\` de lângă el; altă locație = variabila
      `INTREBARI_MOTOR_RADACINA`);
+   - **indexul corpusului se reface** (r5: fiecare bucată are acum și paragraful precedent din sursă): din clona de pe `main`,
+     `node scripts/intrebari/construieste_corpus.mjs C:\Users\Public\intrebari_worker\corpus_index.json`; amprenta lui trebuie să
+     fie cea din `corpus_manifest.json` (workerul o verifică la pornire; altfel nu preia nimic);
    - **`mascare.py` vechi se șterge** din folderul workerului (nu mai e folosit; rămas acolo ar crea confuzie).
    Verificarea: `node scripts/intrebari/manifest_motor.mjs --verifica` în clona de pe `main` → „la zi”; workerul verifică singur,
    la pornire, amprentele fișierelor copiate (cu finaluri de linie LF) — o diferență = `motor_invalid` în jurnal, nicio preluare.
-8. Testele pe `main`, în clona repo-ului de pe server: `npm install` + `npx vitest run src/intrebariMascare.test.js` și
+8. Testele pe `main`, în clona repo-ului de pe server: `npm install` + `npx vitest run src/intrebariMascare.test.js
+   src/intrebariMascare.generativ.test.js src/intrebariSurse.test.js scripts/intrebari/corpus.test.mjs` și
    `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` (aceeași versiune de Python ca workerul, Node 24
    în PATH) — toate OK. Opțional, testul în browser (secțiunea „Testele”).
 9. **Testul de fum controlat, cu task-ul încă DEZACTIVAT:** coada are doar întrebarea de test a ownerului (nume inventate, un
-   genitiv, o localitate, un nume cu un caracter invizibil copiat). Se pornește workerul **o singură dată, de mână**; se verifică:
-   răspunsul afișat are numele la loc și nicio etichetă; jurnalul are `nume_incarcate` (doar numere), apoi `mascate`, `inlocuiri`,
-   `regula_b` — fără valori; niciun proces `motor_cli.mjs` rămas (verificarea din pasul 1). Orice abatere: stop, se raportează.
+   genitiv, o localitate, un nume cu un caracter invizibil copiat, un nume scris cu litere mici). Se pornește workerul **o singură
+   dată, de mână**; se verifică: răspunsul afișat are numele la loc și nicio etichetă; jurnalul are `nume_incarcate` (doar numere),
+   apoi `mascate`, `inlocuiri`, `regula_b` — fără valori; niciun proces `motor_cli.mjs` rămas (verificarea din pasul 1). Orice
+   abatere: stop, se raportează.
 10. Abia acum se reactivează rularea periodică: `schtasks /Change /TN "Intrebari tehnice worker (Gazpet)" /ENABLE` → `Ready`.
 11. Registrul: rândul de mai jos în `registru_automatizari` și în `public.automatizari` (fără valori de secrete).
 
-Revenirea: workerul se oprește întâi (pasul 1), apoi fișierele workerului și ale motorului se întorc împreună la versiunea
-anterioară (edge-ul poate rămâne: lista de nume e aceeași).
+Revenirea: workerul se oprește întâi (pasul 1), apoi fișierele workerului, ale motorului și indexul corpusului se întorc împreună la
+versiunea anterioară (edge-ul poate rămâne: lista de nume e aceeași).
 
 ## Rândul propus pentru `registru_automatizari` (înlocuiește fișa „Întreabă echipa”)
-**Întreabă echipa (intrebari-tehnice-worker) — actualizare 13.11.2026: mascarea numelor (A) + regula „Da / Nu / Incert” (B), r4
-motorul unic.**
+**Întreabă echipa (intrebari-tehnice-worker) — actualizare 13.11.2026: mascarea numelor (A) + regula „Da / Nu / Incert” (B), r5
+motorul unic, regula B structurală.**
 - **Ce**: spețe tehnice din ERP (`/intrebari`) → răspuns AI informativ, din cercetare, vizibil doar autorului și ownerului. Numele de
   persoane / firme și datele personale se ascund înainte de orice apel la furnizor (motorul unic, un proces Node local pe
   întrebare) și se pun la loc doar în textul afișat; atașamentele nu se trimit la furnizor; „Da” / „Nu” doar cu un citat identic cu
-  o propoziție întreagă și de sine stătătoare a sursei, altfel „Incert” cu sursele alăturate.
+  un paragraf întreg, dintr-o singură propoziție și de sine stătător, al sursei, altfel „Incert” cu sursele alăturate.
 - **(a) Conținut extern**: textul spețelor (scris de colegi), paginile oficiale găsite de căutarea web (domenii fixe), extrasele din
   corpusul intern. Intern: numele angajaților și ale terților (citite de edge din BD, doar coloanele de nume / CUI, plus
   localitățile din `red_uat`) — folosite doar pentru mascare, în memoria procesului motorului.
 - **(b) Ce poate scrie / face**: doar răspunsul sau eroarea pe rândul întrebării preluate + jurnalul de preluări. Procesul motorului:
-  nimic (fără scriere pe disc, fără rețea, fără alte procese — permisiunile Node + testul static). Fără mail, bani sau drepturi.
+  nu scrie pe disc și nu pornește alte procese (permisiunile Node); codul fixat prin manifest nu conține apeluri de rețea (verificare
+  a codului, nu izolare a procesului). Fără mail, bani sau drepturi.
 - **(c) Identitate**: edge cu `service_role` (coloane fixe, doar către worker); workerul apelează furnizorul cu cheia API a firmei.
   Fiecare cerere spre furnizor trece prin motor și prin garda tipului „text mascat”.
 - **(d) Cine pornește**: doar deținătorul `INTREBARI_WORKER_SECRET` (verificat în BD, fail closed). Întrebările le pun doar cei cu

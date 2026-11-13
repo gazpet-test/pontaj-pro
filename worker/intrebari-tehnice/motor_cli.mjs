@@ -1,8 +1,11 @@
-// Procesul MOTORULUI UNIC (r4, PR #1086) — pornit de motor.py, câte unul pe speță, DIRECT (fără shell), cu
+// Procesul MOTORULUI UNIC (r4 / r5, PR #1086) — pornit de motor.py, câte unul pe speță, DIRECT (fără shell), cu
 //   node --permission --allow-fs-read=<instantaneul> --disallow-code-generation-from-strings motor_cli.mjs
 // (permisiunile Node opresc scrierea pe disc, procesele copil, workerii și modulele native; citirea e doar din instantaneul
-// verificat). Rețeaua: motorul și protocolul nu importă nimic în afara propriilor fișiere (testul static din motor.test.js), iar
-// aici, ÎNAINTE de importul motorului, se scot și funcțiile de rețea globale.
+// verificat). Rețeaua: Node 24 nu are o permisiune pentru ea. Ce se garantează e o proprietate a CODULUI fixat prin manifest, NU o
+// izolare a procesului: motorul și protocolul nu conțin apeluri de rețea (verificarea statică pe arborele sintactic din
+// src/intrebariMascare.test.js — importuri, importuri dinamice, identificatori ca `process` / `globalThis` / `fetch`), iar aici,
+// ÎNAINTE de importul motorului, se scot funcțiile de rețea globale și încărcătoarele alternative de module
+// (`process.getBuiltinModule`, `process.binding`, `process._linkedBinding`, `process.dlopen`).
 // Ieșirea standard e DOAR pentru protocol; în stderr nu se scrie nimic (nici la erori neprevăzute: ieșire cu cod, fără mesaj).
 // La pornire: versiunea Node (24.x, ca package.json) și amprentele sha256 (LF) ale fișierelor citite, trimise în salut —
 // motor.py le compară cu motor_manifest.json și oprește procesul la orice diferență.
@@ -15,6 +18,12 @@ process.on('uncaughtException', () => process.exit(70))
 process.on('unhandledRejection', () => process.exit(70))
 for (const k of ['fetch', 'WebSocket', 'EventSource', 'XMLHttpRequest', 'Request', 'Response', 'Headers']) {
   try { delete globalThis[k] } catch { process.exit(70) }
+  if (k in globalThis) process.exit(70)
+}
+export const NEUTRALIZATE = ['getBuiltinModule', 'binding', '_linkedBinding', 'dlopen']
+for (const k of NEUTRALIZATE) {
+  try { Object.defineProperty(process, k, { value: undefined, writable: false, configurable: false, enumerable: false }) } catch { process.exit(70) }
+  if (process[k] !== undefined) process.exit(70)
 }
 
 export const NODE_MAJOR = 24

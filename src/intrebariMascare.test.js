@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { parseAst } from 'vite'
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
@@ -48,29 +49,53 @@ describe('motorul unic — cazurile comune (contractul de acoperire, regresiile 
 
 // ── Mutanți: fiecare rând al contractului (și fiecare excludere din regula B) are o regulă care, scoasă, face cazurile să pice ──
 const MUTANTI = [
-  ['majuscule', '[majuscule]', 'for (let i = 0; i < simpli.length; i++) {\n      const n = norm(simpli[i][2])',
-    'for (let i = 0; i < simpli.length; i++) {\n      if (!/^\\p{Lu}/u.test(simpli[i][2])) continue\n      const n = norm(simpli[i][2])'],
-  ['diacritice', '[diacritice]', ".toLowerCase().normalize('NFD')).s", '.toLowerCase()).s'],
+  ['majuscule (firma întreagă doar cu majusculă)', '[majuscule]', 'for (let i = 0; i < simpli.length; i++) {\n      const chei = new Set(this.variante(',
+    'for (let i = 0; i < simpli.length; i++) {\n      if (!/^\\p{Lu}/u.test(simpli[i][2])) continue\n      const chei = new Set(this.variante('],
+  ['majuscule (r5: persoanele scrise mic nu mai sunt nume)', '[majuscule]', 'if (c && !c.mare && !c.distinct && !interna(c) && !vecinPereche(k)) fara.push(k)',
+    'if (c && !c.mare) fara.push(k)'],
+  ['majuscule (r5: fără componenta distinctivă de firmă singură)', '[majuscule]', 'if (!(r.context || areMajuscula(p))) continue', 'continue'],
+  ['majuscule (r5: doar prima literă mare, nu „orice majusculă”)', '[majuscule]', 'if (!(r.context || areMajuscula(p))) continue',
+    'if (!(r.context || majuscula(p))) continue'],
+  ['diacritice', '[diacritice]', "String(s ?? '').normalize('NFKD').toLowerCase().normalize('NFKD')).s", "String(s ?? '').toLowerCase()).s"],
+  ['diacritice (r5: fără formele de compatibilitate — literele late)', 'r5 (F4)', "String(s ?? '').normalize('NFKD').toLowerCase().normalize('NFKD')).s",
+    "String(s ?? '').normalize('NFD').toLowerCase().normalize('NFD')).s"],
   ['separatoare', '[separatoare]', 'const SEP_FIRMA = new RegExp(`^[${SEP_CLASA}]{1,6}$`, \'u\')', 'const SEP_FIRMA = /^ +$/u'],
-  ['forme_juridice (lipite)', '[forme_juridice]', 'const p = prefixNorm(corp, tup[x])', 'const p = -1'],
+  ['separatoare (r5: fără „/”)', '[separatoare]', "'„”“«»‚‘’()&+/", "'„”“«»‚‘’()&+"],
+  ['forme_juridice (lipite)', '[forme_juridice]', 'if (f && !(f[0] === f[0].toLowerCase()', 'if (false && !(f[0] === f[0].toLowerCase()'],
+  ['forme_juridice (r5: flexiune + formă lipită)', '[forme_juridice]', 'if (!(v.n === tup[x] || (x === ultim && componentaFirma(v.n, tup[x], true) !== null))) continue',
+    'if (!(v.n === tup[x] || (x === ultim && v.forma < 0 && componentaFirma(v.n, tup[x], true) !== null))) continue'],
   ['forme_juridice („SC” în față)', '[forme_juridice]', 'if (p) return { start: start - p[1].length, end, context: true }', ''],
   ['flexiuni', '[flexiuni]', 'for (const t of TERMINATII) {\n    const b = n.slice(0, -t.length)', 'for (const t of []) {\n    const b = n.slice(0, -t.length)'],
   ['cratima', '[cratima]', 'const parti = tok => tok.split(RE_CRATIMA).filter(Boolean)', 'const parti = tok => [tok]'],
   ['invizibile (doar Cf)', '[invizibile]', 'const ELIMINABIL = /[\\p{M}\\p{Cf}]/u', 'const ELIMINABIL = /[\\p{Cf}]/u'],
   ['ordine_si_propagare (fără propagare)', '[ordine_si_propagare]', '    if (!this.vazute.size) return\n', '    return\n'],
   ['ordine_si_propagare (fără pre-trecere)', '[ordine_si_propagare]', 'invata(...texte) { for (const t of texte) this.detecteaza(curata(t).s, false) }', 'invata() {}'],
+  ['ordine_si_propagare (r5: fără propagarea scrisă mic)', '[ordine_si_propagare]', '(!areMajuscula(p) && !this.vazuteMici.has(c))', '!areMajuscula(p)'],
   ['exceptii (firma privată după fragmentul public)', '[exceptii]',
     '    this.firmeDictionar(t, simpli, adauga)          // 10.', '    this.publice(t, simpli, adauga); this.firmeDictionar(t, simpli, adauga) // 10.'],
   ['exceptii (firmă comună fără context)', '[exceptii]', 'if (this.d.firmaComuna(tup) && !r.context) continue', ''],
-  ['exceptii (persoană comună fără context)', '[exceptii]', 'if (j > i || !info[i].c.comun)', 'if (true)'],
+  ['exceptii (persoană comună fără context)', '[exceptii]', 'if (j > i || !info[i].c.comun || intreg)', 'if (true)'],
+  ['exceptii (r5: cuvântul unei entități publice ar deveni componentă distinctivă)', '[exceptii]', ' && !CUVINTE_PUBLICE.has(c)', ''],
   ['separatoare (virgula leagă orice)', '[separatoare]', '&& pereche(a, b))', '&& true)'],
   ['eticheta fără paranteză (L20)', 'demascare_sigura', "new RegExp('\\\\[(?:PERSOANA|FIRMA", "new RegExp('(?:PERSOANA|FIRMA"],
-  ['regula B: liste', 'regula_b', "motiv = 'lista_sau_tabel'", 'motiv = null'],
-  ['regula B: trimiteri', 'regula_b', "motiv = 'trimitere'", 'motiv = null'],
-  ['regula B: excepții', 'regula_b', "motiv = 'exceptie'", 'motiv = null'],
-  ['regula B: restricție în paragraf', 'regula_b', "motiv = 'restrictie_in_paragraf'", 'motiv = null'],
-  ['regula B: context tăiat', 'regula_b', "motiv = 'context_taiat'", 'motiv = null'],
-  ['regula B: fragment', 'regula_b', "motiv = 'fragment'", 'motiv = null'],
+  // regula B (r5, structurală): câte un mutant pe fiecare regulă
+  ['regula B: context tăiat', 'regula_b', 'if (taiat || ', 'if (false && '],
+  ['regula B: context necunoscut', 'regula_b', "if (typeof precedent !== 'string') return 'context_necunoscut'", ''],
+  ['regula B: tabel', 'regula_b', "if (/[|\\t]/.test(text)) return 'tabel'", ''],
+  ['regula B: element de listă (marcajul)', 'regula_b', "MARCAJ_ELEMENT.test(text.replace(DESCHIDERE, ''))", 'false'],
+  ['regula B: element de listă (paragraful precedent „…:”)', 'regula_b', '/[:;]/.test(ultimulSemn(precedent))', 'false'],
+  ['regula B: element de listă (se termină el însuși cu „:”)', 'regula_b', "|| /[:;]/.test(ultimulSemn(text))) return 'element_lista'", ") return 'element_lista'"],
+  ['regula B: marcaj — categoria Pd', 'regula_b', '[\\\\p{Pd}${inClasa(SEMNE_LISTA)}]', '[${inClasa(SEMNE_LISTA)}]'],
+  ['regula B: marcaj — plafon de lungime', 'regula_b', '[\\\\p{L}\\\\p{M}\\\\p{N}]+(?:\\\\)', '[\\\\p{L}\\\\p{M}\\\\p{N}]{1,4}(?:\\\\)'],
+  ['regula B: marcaj — doar litere mici', 'regula_b', '[\\\\p{L}\\\\p{M}\\\\p{N}]+(?:\\\\)', '[\\\\p{Ll}\\\\p{M}\\\\p{N}]+(?:\\\\)'],
+  ['regula B: paragraf cu mai multe propoziții', 'regula_b', "if (GRANITA.test(text)) return 'mai_multe_propozitii'", ''],
+  ['regula B: granița „;”', 'regula_b', 'const GRANITA = new RegExp(`[.!?;][', 'const GRANITA = new RegExp(`[.!?]['],
+  ['regula B: granița „rând nou”', 'regula_b', "]*\\\\s|\\\\n`, 'u')", "]*\\\\s`, 'u')"],
+  ['regula B: trimiteri', 'regula_b', "if (areDinLista(text, SET_TRIMITERI, TRIMITERI_EXPRESII)) return 'trimitere'", ''],
+  ['regula B: excepții', 'regula_b', "if (areDinLista(text, SET_EXCEPTII, EXCEPTII_EXPRESII)) return 'exceptie'", ''],
+  ['regula B: fragment', 'regula_b', "return 'fragment'", 'return null'],
+  ['regula B: fără sfârșit', 'regula_b', "return 'fara_sfarsit'", 'return null'],
+  ['regula B: paragrafele brute și mascate nealiniate', 'regula_b', 'const aliniat = brute.length === mascate.length', 'const aliniat = true'],
   ['regula B: comparare permisivă (semne, diacritice)', 'regula_b', ".trim().replace(/[.;:!?]+$/, '')",
     ".trim().replace(/[.;:!?]+$/, '').normalize('NFD').replace(/\\p{M}/gu, '').replace(/(^|[ (])-/g, '$1')"],
 ]
@@ -108,30 +133,118 @@ describe('mutanți pe fiecare rând al contractului (motorul copiat cu o regulă
   it('curățenie', () => rmSync(dir, { recursive: true, force: true }))
 })
 
-// ── Fără rețea: motorul, protocolul și intrarea nu importă nimic în afara propriilor fișiere ──
-describe('fără rețea, fără procese, fără fișiere (verificare statică — Node 24 nu are permisiune pentru rețea)', () => {
-  const PERMISE_CLI = new Set(['node:crypto', 'node:fs', 'node:path', 'node:url'])
-  const INTERZISE = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|require|eval|Function|child_process|process\.binding|dlopen|Worker|importScripts)\s*\(|node:(?:net|http|https|http2|dgram|dns|tls|child_process|worker_threads|vm|inspector)|new Function/
+// ── „Fără rețea” (r5, review r4 P2): o proprietate a CODULUI fixat prin manifest, NU o izolare a procesului. Verificarea e pe
+// ARBORELE SINTACTIC (parseAst din vite, deja dependență directă — fără librării noi), nu pe text: un filtru textual nu vede
+// `globalThis["pro" + "cess"]`. Reguli pentru motor și protocol (orice fișier .js / .mjs din manifest, afară de intrare):
+//   - importurile statice / re-exporturile: doar căi relative care sunt fișiere din manifest;
+//   - niciun import dinamic, niciun `import.meta`;
+//   - niciun identificator din IDENTIFICATORI_INTERZISI, oriunde (și ca nume de proprietate — prudent);
+//   - nicio accesare a proprietății `constructor` (calea spre Function), nici cu nume calculat literal.
+// Excepțiile, enumerate, DOAR pentru intrarea care gestionează procesul (motor_cli.mjs): importurile node:crypto / node:fs /
+// node:path / node:url; importurile dinamice cu text literal './motor_protocol.mjs' și '../../src/intrebariMascare.js';
+// identificatorii `process` și `globalThis`; `import.meta`.
+const IDENTIFICATORI_INTERZISI = ['process', 'globalThis', 'global', 'self', 'window', 'frames', 'require', 'module', 'exports', 'eval', 'Function',
+  'fetch', 'WebSocket', 'XMLHttpRequest', 'EventSource', 'Worker', 'SharedWorker', 'importScripts', 'navigator', 'Deno', 'Bun', 'WebAssembly']
+const EXCEPTII_INTRARE = { importuri: ['node:crypto', 'node:fs', 'node:path', 'node:url'], dinamice: ['./motor_protocol.mjs', '../../src/intrebariMascare.js'],
+  identificatori: ['process', 'globalThis'], meta: true }
+/** Încălcările regulilor de mai sus într-o sursă (lista goală = în regulă). `cale` = fișierul (pentru căile relative). */
+function incalcari(sursa, cale, exceptii = null) {
+  const out = []
+  const ast = parseAst(sursa)
+  const relativ = s => {
+    if (!s.startsWith('.')) return false
+    return FISIERE_GENERATOR.includes(join(cale, '..', s).replace(/\\/g, '/'))
+  }
+  const viziteaza = n => {
+    if (!n || typeof n.type !== 'string') return
+    switch (n.type) {
+      case 'ImportDeclaration': case 'ExportAllDeclaration': case 'ExportNamedDeclaration':
+        if (n.source && !relativ(n.source.value) && !(exceptii?.importuri.includes(n.source.value))) out.push(`import „${n.source.value}”`)
+        break
+      case 'ImportExpression':
+        if (!(exceptii && n.source.type === 'Literal' && exceptii.dinamice.includes(n.source.value))) out.push('import dinamic')
+        break
+      case 'MetaProperty':
+        if (!exceptii?.meta) out.push('import.meta')
+        break
+      case 'Identifier':
+        if (IDENTIFICATORI_INTERZISI.includes(n.name) && !exceptii?.identificatori.includes(n.name)) out.push(`identificator „${n.name}”`)
+        break
+      case 'MemberExpression':
+        if ((!n.computed && n.property.name === 'constructor') || (n.computed && n.property.type === 'Literal' && n.property.value === 'constructor'))
+          out.push('proprietatea constructor')
+        break
+    }
+    for (const [k, v] of Object.entries(n)) {
+      if (k === 'parent') continue
+      if (Array.isArray(v)) v.forEach(viziteaza)
+      else if (v && typeof v === 'object' && typeof v.type === 'string') viziteaza(v)
+    }
+  }
+  viziteaza(ast)
+  return out
+}
+describe('„fără rețea” = codul fixat prin manifest nu conține apeluri de rețea (arborele sintactic; NU izolarea procesului)', () => {
   for (const f of FISIERE_GENERATOR.filter(x => /\.m?js$/.test(x))) {
     it(f, () => {
-      const t = readFileSync(f, 'utf8').replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '')
-      const importuri = [...t.matchAll(/(?:import|export)\s[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)|import\s+['"]([^'"]+)['"]/g)]
-        .map(m => m[1] || m[2] || m[3])
-      for (const i of importuri) {
-        if (i.startsWith('.')) expect(FISIERE_GENERATOR, `${f}: ${i}`).toContain(join(f, '..', i).replace(/\\/g, '/'))
-        else expect(f === INTRARE && PERMISE_CLI.has(i), `${f}: import „${i}”`).toBe(true)
-      }
-      expect(t.match(INTERZISE), f).toBe(null)
-      expect(/import\s*\(\s*[^'"\s]/.test(t), `${f}: import dinamic din variabilă`).toBe(false)
+      expect(incalcari(readFileSync(f, 'utf8'), f, f === INTRARE ? EXCEPTII_INTRARE : null), f).toEqual([])
     })
   }
-  it('intrarea scoate funcțiile de rețea globale ÎNAINTE de a încărca motorul (import dinamic, după amprente)', () => {
+  it('contraexemplele unui filtru textual sunt prinse (ocolirea prin nume calculat, încărcătoare alternative, constructor)', () => {
+    const f = 'src/intrebariMascare.js'
+    for (const [sursa, asteptat] of [
+      ['const p = globalThis["pro" + "cess"]', 'identificator „globalThis”'],
+      ["process.getBuiltinModule('net').createConnection(1)", 'identificator „process”'],
+      ['const x = (() => 1).constructor', 'proprietatea constructor'],
+      ["const x = ''['constructor']", 'proprietatea constructor'],
+      ["const m = await import('node:' + 'net')", 'import dinamic'],
+      ["import net from 'node:net'", 'import „node:net”'],
+      ["export * from 'node:dns'", 'import „node:dns”'],
+      ['const u = import.meta.url', 'import.meta'],
+      ['const e = (0, eval)', 'identificator „eval”'],
+      ['const w = new WebAssembly.Module(b)', 'identificator „WebAssembly”'],
+    ]) expect(incalcari(sursa, f), sursa).toContain(asteptat)
+    expect(incalcari("import { x } from './App.jsx'\nconst y = x.constructor2", f)).toEqual(['import „./App.jsx”'])   // relativ, dar în afara manifestului
+    expect(incalcari("import N from '../worker/intrebari-tehnice/nemascate.json' with { type: 'json' }", f)).toEqual([])
+  })
+  it('excepțiile intrării sunt exact cele enumerate (un import nou în intrare pică)', () => {
     const t = readFileSync(INTRARE, 'utf8')
-    const scoate = t.indexOf("for (const k of ['fetch', 'WebSocket'"), importMotor = t.indexOf("await import('./motor_protocol.mjs')")
+    expect(incalcari(t + "\nimport 'node:net'", INTRARE, EXCEPTII_INTRARE)).toEqual(['import „node:net”'])
+    expect(incalcari(t + "\nawait import('./alt.mjs')", INTRARE, EXCEPTII_INTRARE)).toEqual(['import dinamic'])
+    expect(incalcari(t + '\nfetch(1)', INTRARE, EXCEPTII_INTRARE)).toEqual(['identificator „fetch”'])
+  })
+  it('intrarea scoate funcțiile de rețea globale și încărcătoarele alternative ÎNAINTE de a încărca motorul (import dinamic, după amprente)', () => {
+    const t = readFileSync(INTRARE, 'utf8')
+    const scoate = t.indexOf("for (const k of ['fetch', 'WebSocket'"), neutralizeaza = t.indexOf('for (const k of NEUTRALIZATE)')
+    const importMotor = t.indexOf("await import('./motor_protocol.mjs')")
     expect(scoate).toBeGreaterThan(0)
+    expect(neutralizeaza).toBeGreaterThan(scoate)
+    expect(t).toContain("export const NEUTRALIZATE = ['getBuiltinModule', 'binding', '_linkedBinding', 'dlopen']")
     expect(importMotor).toBeGreaterThan(t.indexOf('amprente[f] = createHash'))
-    expect(importMotor).toBeGreaterThan(scoate)
+    expect(importMotor).toBeGreaterThan(neutralizeaza)
     expect(t).not.toMatch(/^import .*(?:intrebariMascare|motor_protocol)/m)
+  })
+  it('în PROCESUL real (aceleași flaguri), după neutralizare: getBuiltinModule / binding / _linkedBinding / dlopen și funcțiile de rețea globale lipsesc', () => {
+    // copie a intrării + fișierele manifestului, cu protocolul înlocuit de o sondă care raportează ce vede codul încărcat după intrare
+    const dir = mkdtempSync(join(tmpdir(), 'motor_sonda_'))
+    try {
+      for (const f of FISIERE_GENERATOR) { mkdirSync(join(dir, f, '..'), { recursive: true }); copyFileSync(join(RAD, f), join(dir, f)) }
+      writeFileSync(join(dir, 'worker/intrebari-tehnice/motor_protocol.mjs'), [
+        "export const PROTOCOL = 1",
+        "const g = globalThis",
+        "const sonda = { getBuiltinModule: typeof process.getBuiltinModule, binding: typeof process.binding, _linkedBinding: typeof process._linkedBinding,",
+        "  dlopen: typeof process.dlopen, fetch: typeof g.fetch, WebSocket: typeof g.WebSocket, Request: typeof g.Request }",
+        "export function creeazaSesiune() { return { gata: false } }",
+        "export function trateaza(s, c) { s.gata = true; return { v: 1, id: c.id, ok: true, rez: sonda } }",
+      ].join('\n'))
+      const r = spawnSync(process.execPath, ['--permission', `--allow-fs-read=${dir}`, '--disallow-code-generation-from-strings',
+        join(dir, INTRARE)], { input: '{"v":1,"id":1,"op":"gata"}\n', encoding: 'utf8', timeout: 60000, env: {} })
+      const linii = r.stdout.split('\n').filter(Boolean).map(x => JSON.parse(x))
+      expect(linii[1]?.rez, r.stderr).toEqual({ getBuiltinModule: 'undefined', binding: 'undefined', _linkedBinding: 'undefined', dlopen: 'undefined',
+        fetch: 'undefined', WebSocket: 'undefined', Request: 'undefined' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -329,16 +442,33 @@ describe('ecranul: previzualizare ORIENTATIVĂ (review r3 P2-5)', () => {
     expect(jsx).toContain("'Serverul folosește lista completă din platformă și poate ascunde nume suplimentare. Localitățile cunoscute rămân vizibile pe server, chiar dacă aici apar ascunse. Mascarea automată nu garantează eliminarea tuturor numelor.'")
     for (const x of ['cel puțin la fel', 'Ce pleacă la AI', 'se ascund în plus']) expect(jsx, x).not.toContain(x)
   })
-  it('ecranul spune ce e în afara contractului (aceleași clase ca în document)', () => {
+  it('ecranul spune ce e în afara contractului (aceleași clase ca în document; r5: lista la zi + limitele F4 distinct)', () => {
     const doc = readFileSync('docs/intrebari/MASCARE_SI_VERDICT.md', 'utf8').replace(/\s+/g, ' ')
-    for (const x of ['porecle', 'greșeli de scriere', 'alte alfabete', 'diminutive', 'doar cu litere mici', 'nu le cunoaște']) {
+    for (const x of ['porecle', 'greșeli de scriere', 'alte alfabete', 'litere despărțite prin spații', 'diminutive',
+      'integral cu litere mici fără numele întreg', 'nu le cunoaște', 'literele late', 'CUI-ul cunoscut scris cu spații']) {
       expect(jsx, x).toContain(x)
       expect(doc, x).toContain(x)
     }
+    expect(jsx).not.toContain('nume de persoane scrise doar cu litere mici')          // r4: nu mai e o limită
+  })
+  it('ecranul și documentul spun exact garanția „fără rețea”: o proprietate a codului, nu o izolare a procesului', () => {
+    const doc = readFileSync('docs/intrebari/MASCARE_SI_VERDICT.md', 'utf8').replace(/\s+/g, ' ')
+    expect(jsx).toContain('nu conține apeluri de rețea (verificare a codului, nu o izolare a procesului)')
+    expect(doc).toContain('codul fixat prin manifest nu conține apeluri de rețea')
+    expect(doc).toContain('NU o proprietate de izolare a procesului')
+    for (const f of ['docs/intrebari/MASCARE_SI_VERDICT.md', 'worker/intrebari-tehnice/README.md', 'worker/intrebari-tehnice/motor.py',
+      'worker/intrebari-tehnice/motor_cli.mjs', 'src/intrebariMascare.js'])
+      expect(readFileSync(f, 'utf8').replace(/\s+/g, ' '), f).not.toMatch(/nu are pe unde să trimită/)
   })
 })
 
-describe('Python nu mai are reguli (r4: un singur motor)', () => {
+describe('granița Python (r5): mascarea și regula B în motor; validarea răspunsului în cercetare.py + intrebariSurse.js', () => {
+  it('nicio afirmație „Python nu mai conține nicio regulă” în cod sau documente', () => {
+    for (const f of ['docs/intrebari/MASCARE_SI_VERDICT.md', 'worker/intrebari-tehnice/README.md', 'worker/intrebari-tehnice/motor.py',
+      'worker/intrebari-tehnice/intrebari_worker.py', 'worker/intrebari-tehnice/cercetare.py', 'src/intrebariMascare.js', 'src/IntrebariTehnice.jsx'])
+      expect(readFileSync(f, 'utf8').replace(/\s+/g, ' '), f).not.toMatch(/Python (?:NU|nu) mai (?:conține|are) (?:nicio regulă|reguli)|Python NU mai conține/)
+    expect(readFileSync('docs/intrebari/MASCARE_SI_VERDICT.md', 'utf8').replace(/\s+/g, ' ')).toContain('validarea răspunsului (susținere, polaritate, `curata_raspuns`) rămâne în `cercetare.py`')
+  })
   it('mascare.py nu mai există; motor.py / cercetare.py / workerul nu taie, nu normalizează și nu compară nume sau citate', () => {
     expect(() => readFileSync('worker/intrebari-tehnice/mascare.py')).toThrow()
     const motor = readFileSync('worker/intrebari-tehnice/motor.py', 'utf8')

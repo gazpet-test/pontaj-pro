@@ -14,7 +14,8 @@ import motor as MO  # noqa: E402
 import intrebari_worker as W  # noqa: E402
 
 INVIZIBILE = {'NBSP': 0xa0, 'ZW': 0x200b, 'SHY': 0xad, 'BOM': 0xfeff, 'CGJ': 0x34f, 'VS16': 0xfe0f, 'VS1': 0xfe00, 'VS17': 0xe0100,
-              'ZWJ': 0x200d, 'VIRGULA_JOS': 0x326, 'SEDILA': 0x327, 'U2010': 0x2010, 'U2011': 0x2011, 'LINIUTA_EN': 0x2013}
+              'ZWJ': 0x200d, 'VIRGULA_JOS': 0x326, 'SEDILA': 0x327, 'U2010': 0x2010, 'U2011': 0x2011, 'LINIUTA_EN': 0x2013, 'U2012': 0x2012,
+              'U2014': 0x2014, 'U2E3A': 0x2e3a, 'BULINA': 0x2022, 'MINUS': 0x2212}
 
 
 def invizibile(x):
@@ -162,6 +163,31 @@ class CaiDeEroare(unittest.TestCase):
         self.eroare('proces_oprit', lambda: sesiune_defecta('cade', 1))
         self.eroare('motor_motor', lambda: sesiune_defecta('eroare', 1))
         self.eroare('motor_motor', lambda: MOTOR.sesiune({'persoane': [], 'firme': [], 'cui': []}))   # dicționar gol = refuz în motor
+
+    def test_r5_termenul_acopera_scrierea_procesul_care_nu_citeste(self):
+        """Review r4 P2: proces cu salut valid care NU citește intrarea, cerere de 1 MB, termen de 100 ms pe operație. Același termen
+        acoperă scrierea, golirea și citirea: apelul revine într-un interval MĂRGINIT cu MotorEroare('timp'), procesul e oprit, firul
+        de scriere e eliberat; sesiunea rămâne oprită (nimic nu se mai trimite, nimic nu se publică)."""
+        import time
+        s = sesiune_defecta('nu_citeste', -1, nume=None, termen_cerere=0.1)
+        t0 = time.monotonic()
+        self.eroare('timp', lambda: s.mascheaza('x' * (1024 * 1024)))
+        durata = time.monotonic() - t0
+        self.assertLess(durata, 0.1 + 3 * MO.Sesiune.OPRIRE_ASTEPTARE + 1)       # mărginit: termenul + pașii mărginiți ai opririi
+        self.assertIsNotNone(s._p.poll())                                       # procesul nu mai trăiește
+        self.assertFalse(s._scriitor.is_alive())                                # firul de scriere e eliberat
+        self.eroare('sesiune_oprita', lambda: s.mascheaza('x'))
+
+    def test_r5_termenul_sesiunii_plafoneaza_si_scrierea(self):
+        """Termenul operației e plafonat de cel al sesiunii: o cerere mare spre un proces care nu citește, cu termen de operație lung
+        și sesiune scurtă, se oprește la sfârșitul sesiunii ('timp_sesiune')."""
+        import time
+        s = sesiune_defecta('nu_citeste', -1, nume=None, termen_cerere=30, termen_sesiune=1.0)
+        t0 = time.monotonic()
+        self.eroare('timp_sesiune', lambda: s.mascheaza('x' * (1024 * 1024)))
+        self.assertLess(time.monotonic() - t0, 1.0 + 3 * MO.Sesiune.OPRIRE_ASTEPTARE + 1)
+        self.assertIsNotNone(s._p.poll())
+        self.assertFalse(s._scriitor.is_alive())
 
     def test_termenul_total_al_sesiunii(self):
         import time

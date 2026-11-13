@@ -4,7 +4,8 @@
 // Argumente: <mod> <la> <salut.json> <url motor_protocol.mjs> [jurnalul operațiilor]
 //   la = 0: defectul e chiar la salut; la = -1: niciun defect (mod „numara”: scrie operațiile în jurnal).
 //   moduri: cade, doarme, trunchiat, schema, mare, json, utf8, id, eroare, salut_protocol, salut_node, salut_unicode,
-//           salut_amprenta, salut_chei, numara
+//           salut_amprenta, salut_chei, numara, nu_citeste (r5: salut valid, apoi NU citește deloc intrarea — scrierea cererii
+//           se blochează când se umple pipe-ul)
 import { appendFileSync } from 'node:fs'
 
 const [mod, laText, salutText, urlProtocol, jurnal] = process.argv.slice(2)
@@ -40,8 +41,9 @@ else scrie(JSON.stringify(SALUTURI[mod] || salut) + '\n')
 
 const sesiune = creeazaSesiune()
 let n = 0, buf = ''
-process.stdin.setEncoding('utf8')
-process.stdin.on('data', d => {
+if (mod === 'nu_citeste') setInterval(() => {}, 1000)          // trăiește, dar nu atașează niciun cititor pe intrare
+else process.stdin.setEncoding('utf8')
+if (mod !== 'nu_citeste') process.stdin.on('data', d => {
   buf += d
   let k
   while ((k = buf.indexOf('\n')) >= 0) {
@@ -55,4 +57,4 @@ process.stdin.on('data', d => {
     scrie(JSON.stringify(r) + '\n')
   }
 })
-process.stdin.on('end', () => process.exit(0))
+if (mod !== 'nu_citeste') process.stdin.on('end', () => process.exit(0))

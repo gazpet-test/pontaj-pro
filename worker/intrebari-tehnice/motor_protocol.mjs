@@ -1,4 +1,4 @@
-// Protocolul MOTORULUI UNIC (r4, PR #1086): o sesiune = o speță = un proces Node (motor_cli.mjs), pornit de motor.py.
+// Protocolul MOTORULUI UNIC (r4, PR #1086; r5: sursele regulii B au și `brut` și `precedent`): o sesiune = o speță = un proces Node (motor_cli.mjs), pornit de motor.py.
 // Câte un obiect JSON pe linie, UTF-8. Cererea: {v, id, op, ...câmpurile operației}; răspunsul: {v, id, ok: true, rez} sau
 // {v, id, ok: false, eroare: '<cod>'}. Câmpurile se validează EXACT (fără câmpuri în plus, tipuri, mărimi); orice abatere = eroare
 // cu cod, fără text din speță sau din dicționar. Starea (dicționarul, etichetele, ce s-a învățat, tabelul de demascare) trăiește
@@ -13,10 +13,13 @@ const MOTIVE_DEMASCARE = new Set(['eticheta_neemisa', 'eticheta_din_model', 'eti
 export { MOTIVE_DEMASCARE }
 
 const eText = x => typeof x === 'string' && x.length <= MAX_TEXT
+// sursa pentru regula B (r5): extras = textul MASCAT (văzut de model, cu el se compară citatul); brut = același extras înainte de
+// mascare (structura paragrafelor se stabilește pe el); precedent = paragraful de dinaintea extrasului în sursă (text brut),
+// '' = nu există, null = necunoscut
 const eSursa = s => s && typeof s === 'object' && !Array.isArray(s)
-  && Object.keys(s).sort().join('|') === 'extras|id|inceput_sigur|sfarsit_sigur|titlu'
-  && typeof s.id === 'string' && /^[CW][0-9]{1,2}$/.test(s.id) && eText(s.titlu) && eText(s.extras)
-  && typeof s.inceput_sigur === 'boolean' && typeof s.sfarsit_sigur === 'boolean'
+  && Object.keys(s).sort().join('|') === 'brut|extras|id|inceput_sigur|precedent|sfarsit_sigur|titlu'
+  && typeof s.id === 'string' && /^[CW][0-9]{1,2}$/.test(s.id) && eText(s.titlu) && eText(s.extras) && eText(s.brut)
+  && typeof s.inceput_sigur === 'boolean' && typeof s.sfarsit_sigur === 'boolean' && (s.precedent === null || eText(s.precedent))
 const TIPURI = {
   text: eText,
   bool: x => typeof x === 'boolean',
