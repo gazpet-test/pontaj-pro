@@ -172,14 +172,16 @@ class Sesiune:
     """Un proces Node = o speță. Orice abatere oprește procesul și sesiunea (toate apelurile următoare: MotorEroare)."""
 
     def __init__(self, argv, asteptat, dictionar, termen_cerere=TERMEN_CERERE, termen_init=TERMEN_INIT,
-                 termen_sesiune=TERMEN_SESIUNE, max_iesire=MAX_IESIRE):
+                 termen_sesiune=TERMEN_SESIUNE, max_iesire=MAX_IESIRE, cwd=None):
+        # cwd: directorul de lucru al procesului; implicit = directorul ultimului argument (intrarea motorului, la Motor.argv()).
+        # Un apelant cu alte argumente la coadă (procesul defect din teste) îl dă explicit.
         self._termen_cerere, self._max_iesire = termen_cerere, max_iesire
         self._sfarsit = time.monotonic() + termen_sesiune
         self._id, self._stricata, self._produse, self.statistici = 0, False, {}, None
         self._coada = queue.Queue()
         try:
             self._p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, shell=False,
-                                       env=_mediu_minim(), cwd=str(pathlib.Path(argv[-1]).parent),
+                                       env=_mediu_minim(), cwd=str(cwd if cwd is not None else pathlib.Path(argv[-1]).parent),
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         except OSError:
             self._stricata = True

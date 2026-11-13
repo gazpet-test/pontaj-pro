@@ -51,7 +51,8 @@ def tearDownModule():
 def sesiune_defecta(mod, la, nume=NUME, jurnal=None, **limite):
     """O sesiune pe procesul de test_motor_defect.mjs (motorul real, stricat la cererea `la`)."""
     argv = [NODE, str(DEFECT), mod, str(la), json.dumps(SALUT), (AICI / 'motor_protocol.mjs').as_uri()] + ([str(jurnal)] if jurnal else [])
-    return MO.Sesiune(argv, ASTEPTAT, nume, **{'termen_cerere': 5, 'termen_init': 20, **limite})
+    # cwd explicit: ultimul argument de aici e un URL sau jurnalul, nu intrarea motorului (fără el procesul nu pornea deloc)
+    return MO.Sesiune(argv, ASTEPTAT, nume, **{'termen_cerere': 5, 'termen_init': 20, 'cwd': AICI, **limite})
 
 
 class MotorDefect:
