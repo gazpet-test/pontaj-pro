@@ -268,7 +268,7 @@ class ListaNemascate(unittest.TestCase):
     def test_intrari_invalide_sunt_refuzate(self):
         bun = json.loads((AICI / 'nemascate.json').read_text(encoding='utf-8'))
         for strica in (lambda d: d['entitati'][0].update(categorie='furnizor'), lambda d: d['entitati'][0].update(forme=[]),
-                       lambda d: d['entitati'][0].update(forme=['SNTGN Transgaz SA'])), lambda d: d.update(entitati=[]),
+                       lambda d: d['entitati'][0].update(forme=['SNTGN Transgaz SA']), lambda d: d.update(entitati=[]),
                        lambda d: d['entitati'][0].update(motiv='x'), lambda d: d['categorii'].update(furnizor='x')):
             d = json.loads(json.dumps(bun)); strica(d)
             with self.assertRaises(ValueError): M.incarca_nemascate(d)
