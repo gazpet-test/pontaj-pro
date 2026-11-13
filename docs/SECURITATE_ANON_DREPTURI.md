@@ -181,14 +181,18 @@ Nota NEEXECUTATA <n> / <total> — citirea din <data, ora> (rezumatul SIMULARE +
 1. Vederea: <identificare> | security_invoker: <da/nu> | proprietar: <rol> | amprenta regulii (md5 din OBIECT): <md5>
 2. Funcțiile din închidere (linia NEEXECUTATA) și apelurile lor TRANZITIVE, fiecare cu:
    - identitate (schemă, nume, argumente) | proprietar | DEFINER / INVOKER | proconfig (inclusiv search_path) | volatilitate
-   - amprenta corpului: md5(replace(prosrc, chr(13), '')) | momentul citirii
+   - amprenta definiției COMPLETE: md5(replace(pg_get_functiondef(oid), chr(13), '')) | momentul citirii
+     (nu md5(prosrc): la o funcție SQL cu corp BEGIN ATOMIC / RETURN corpul stă în prosqlbody, prosrc e gol, iar schimbarea
+     corpului nu ar schimba amprenta)
+   - proprietarul și drepturile de EXECUTE (ACL-ul, cu grantor) se notează și se compară SEPARAT: definiția completă nu le conține
    - sursele citite (tabele / vederi / setări) și verificările de identitate din corp (auth.uid(), rolul, profilul)
 3. Cititorul efectiv al fiecărui tabel (linia „SIMULARE cititori”) și politicile aplicate lui
 4. Concluzia motivată: ce poate întoarce vederea unei cereri fără sesiune (fără date / doar date publice / date private) și de ce
 5. Paginile publice care depind de vedere (din cod) și ce se întâmplă cu ele după T2
 6. Verificarea fără sesiune prin API (GET cu cheia publică, fără sesiune): codul HTTP, numărul de rânduri, data; fără valori
 7. Revizuit de: <om> | data
-8. Obligație: dacă vreo definiție de la 1–3 se schimbă (altă amprentă) înaintea aplicării T2, nota se reface
+8. Obligație: dacă vreo definiție de la 1–3 se schimbă înaintea aplicării T2 (altă amprentă a definiției complete, alt proprietar
+   sau alte drepturi de EXECUTE), nota se reface
 ```
 
 **Dovada 2 — zero interogări directe ale lui `anon` pe tabele** (secțiunea `STATISTICI`, din `pg_stat_statements`). Fiecare intrare a

@@ -374,4 +374,13 @@ describe('documentul pentru owner', () => {
   it('fără căi de pe server sau din rețea', () => {
     expect(d).not.toMatch(/[A-Za-z]:\\|\\\\|paw-data|Users\\|Users\//)
   })
+  it('review r3: șablonul notei amprentează definiția COMPLETĂ a funcției (corpul BEGIN ATOMIC stă în prosqlbody, nu în prosrc)', () => {
+    const inceput = d.indexOf('Nota NEEXECUTATA <n>')
+    const sablon = d.slice(inceput, d.indexOf('**Dovada 2', inceput))
+    expect(inceput).toBeGreaterThan(0)
+    expect(sablon).toContain("md5(replace(pg_get_functiondef(oid), chr(13), ''))")
+    expect(sablon).not.toMatch(/amprenta corpului: md5\(replace\(prosrc/)
+    expect(sablon).toMatch(/proprietarul și drepturile de EXECUTE[^\n]*SEPARAT/)
+    expect(sablon).toMatch(/altă amprentă a definiției complete, alt proprietar/)
+  })
 })
