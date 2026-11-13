@@ -158,14 +158,14 @@ describe('reluarea (r4): rularea următoare recuperează zilele nesalvate ale ș
     const p = planXweather(S, ex, new Map(), { mod: 'zilnic', ieri: '2026-11-13', rapoarte: rap('2026-11-10') })
     expect(p.sarcini.filter(s => s.zi === '2026-11-12').map(s => `${s.tip}:${s.tinta}`)).toEqual(['nou:activ'])
   })
-  it('o zi fără vreme acum 10 zile: cu raport → în plan (oricât de veche); fără raport → nu (doar completarea owner-ului)', () => {
+  it('o zi fără vreme din fereastra de 31 de zile: cu raport → în plan; fără raport → nu; r5: cu raport, dar mai veche → nu (doar owner-ul)', () => {
     const ex = new Map([['10', new Map()]])
     const zile = []
     for (let d = new Date('2026-10-01T12:00:00Z'); d <= new Date('2026-11-13T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)) zile.push(d.toISOString().slice(0, 10))
-    for (const z of zile) if (!['2026-11-03', '2026-10-04', '2026-10-05'].includes(z)) ex.get('10').set(z, { versiune: 1 })
-    const p = planXweather(S, ex, new Map(), { mod: 'zilnic', ieri: '2026-11-13', rapoarte: rap('2026-11-12', '2026-10-04') })
-    expect(p.sarcini.map(s => `${s.zi}:${s.tinta}`)).toEqual(['2026-10-04:raport'])
-    expect(p.sarcini.some(s => s.zi === '2026-11-03' || s.zi === '2026-10-05')).toBe(false)
+    for (const z of zile) if (!['2026-11-03', '2026-10-20', '2026-10-21', '2026-10-04'].includes(z)) ex.get('10').set(z, { versiune: 1 })
+    const p = planXweather(S, ex, new Map(), { mod: 'zilnic', ieri: '2026-11-13', rapoarte: rap('2026-11-12', '2026-10-20', '2026-10-04') })
+    expect(p.sarcini.map(s => `${s.zi}:${s.tinta}`)).toEqual(['2026-10-20:raport'])
+    expect(p.sarcini.some(s => s.zi === '2026-11-03' || s.zi === '2026-10-21' || s.zi === '2026-10-04')).toBe(false)
   })
   it('completarea owner-ului: cursorul pornește de la ziua tranzitorie, nu o sare', () => {
     const p = planXweather(S, new Map(), new Map(), { mod: 'backfill', ieri: '2026-11-13', deLa: '2026-11-01', pana: '2026-11-05', maxZile: 5 })

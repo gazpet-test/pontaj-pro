@@ -1,111 +1,177 @@
-# Vremea Vaisala Xweather: cota de accese (r4)
+# Vremea Vaisala Xweather: cota în unități de cost (r5)
 
-Contul Xweather are o cotă de **15.000 de accese pe lună**. Un acces = o cerere trimisă furnizorului, reușită sau nu.
-Funcția `meteo-sync` (cron `meteo_sync_2h`, `5 */2 * * *`) face două lucruri pe același cont:
+Funcția `meteo-sync` (cron `meteo_sync_2h`, `5 */2 * * *`) folosește un singur cont Xweather pentru două lucruri:
 
-1. **vremea curentă** (neschimbată în r4): 19 ținte la fiecare rulare;
-2. **vremea zilei ca dovadă în rapoarte** (tabelul `meteo_zilnic_xweather`, migrarea `20261221a`): o dată pe zi, la rularea de la 04:05 UTC.
+1. **vremea curentă** (tabelul `meteo_cache`): 19 ținte la fiecare rulare, adică 12 rulări pe zi, dintre care 4 „complete” (UTC 04 / 10 / 16 / 22);
+2. **vremea zilei ca dovadă în rapoarte** (tabelul `meteo_zilnic_xweather`, migrarea `20261221a`): o dată pe zi, la rularea de la 04:05 UTC, doar cu `XW_ZILNIC_ACTIV=1`.
 
-Regulile pasului zilnic stau într-un singur loc: constantele din `supabase/functions/meteo-sync/xweather_zilnic_logica.ts`.
+Regulile stau în două fișiere: `supabase/functions/meteo-sync/xweather_cota_logica.ts` (costuri, antete, gardă, configurare) și `xweather_zilnic_logica.ts` (țintele, fereastra, rotația).
 
-## Consumul vremii curente (azi, din cod și din răspunsurile cron-ului)
+## Ce spune documentația oficială Xweather
 
-| Ce | Calcul | Accese / zi |
+| Fapt | Sursa |
+|---|---|
+| Costul unei cereri = produsul multiplicatorilor (endpoint × timp × spațiu). Îl raportează antetul `X-Cost-Tokens`, însoțit de `X-Cost-Endpoint` și `X-Cost-Multipliers`. | [Cost Headers](https://www.xweather.com/docs/weather-api/getting-started/cost-headers) |
+| O altă pagină oficială scrie antetul la singular, `X-Cost-Multiplier`. Codul le acceptă pe amândouă. | [Responses](https://www.xweather.com/docs/weather-api/getting-started/responses) |
+| Antetele de cost apar la răspunsurile 2xx. Răspunsurile 4xx / 5xx NU consumă. | [Cost Headers](https://www.xweather.com/docs/weather-api/getting-started/cost-headers) |
+| Multiplicatori: `conditions` 1, `forecasts` 1, `alerts` 1, **`airquality` 5**. | [Tarife](https://www.xweather.com/pricing/weather-api-pay-as-you-go), [Air Quality](https://www.xweather.com/docs/weather-api/endpoints/airquality) |
+| `conditions/summary`: 1 unitate pe zi (și pe zi parțială). | [Conditions Summary](https://www.xweather.com/docs/weather-api/endpoints/conditions-summary) |
+| `observations/summary`: multiplicator **nespecificat**. În cod e estimat la 1, până îl arată antetul. | [Observations Summary](https://www.xweather.com/docs/weather-api/endpoints/observations-summary) |
+| Antetele de cotă: `X-RateLimit-Limit-Minute`, `-Remaining-Minute`, `-Reset-Minute`, `-Limit-Period-Type`, `-Limit-Period`, `-Remaining-Period`, `-Reset-Period`. | [Rate Limiting](https://www.xweather.com/docs/weather-api/getting-started/rate-limiting) |
+| Depășirea dă HTTP 429 cu codul `maxhits` (perioada abonamentului), `maxhits_daily` (până la 00:00 UTC) sau `maxhits_min` (minutul). Un 429 NU înseamnă neapărat cota lunară. | [Responses](https://www.xweather.com/docs/weather-api/getting-started/responses), [Changelog](https://www.xweather.com/docs/weather-api/changelog) |
+| Cererile `/batch` se numără subcerere cu subcerere, deci nu aduc economie. | [Batch](https://www.xweather.com/docs/weather-api/getting-started/batch) |
+
+**Ce NU știm încă:** cota reală a contului, restul ei și data resetării. Le spun doar antetele (după treapta I, mai jos) sau pagina contului. Cifra de 15.000 din versiunile anterioare e o presupunere, nu o valoare citită.
+
+## Consumul vremii curente, în unități
+
+Pe zi: 12 rulări × 19 × `conditions` + 4 rulări complete × 19 × (`forecasts` + `alerts`) + **N** rulări × 19 × `airquality` (5).
+N este `XW_AER_PE_ZI`, adică de câte ori pe zi se cere calitatea aerului.
+
+| `XW_AER_PE_ZI` | Când se cere aerul | Unități / zi | 30 de zile | 31 de zile | Față de 15.000 (dacă asta e cota), 31 de zile |
+|---|---|---:|---:|---:|---:|
+| 4 (implicit, ca azi) | 04 / 10 / 16 / 22 UTC | 228 + 152 + 380 = **760** | 22.800 | 23.560 | **−8.560 (peste)** |
+| 2 | 04 / 16 UTC | **570** | 17.100 | 17.670 | −2.670 (peste) |
+| 1 | 04 UTC | **475** | 14.250 | 14.725 | +275 |
+| 0 | niciodată | **380** | 11.400 | 11.780 | +3.220 |
+
+- Dacă și contul nostru ar avea 15.000 pe lună, schema de azi (4) ar opri singură vremea curentă spre sfârșitul fiecărei perioade.
+- O reîmprospătare manuală completă (`forta`) costă 19 × (1 + 1 + 1 + 5) = 152 de unități (cu aerul; 57 fără).
+- `XW_AER_PE_ZI` **nu se schimbă în r5**: owner-ul decide valoarea după ce vedem cota reală (treapta I).
+
+## Pasul zilnic, în unități
+
+O zi-șantier costă `conditions/summary` (1) plus, dacă ziua are valori, `observations/summary` (estimat 1). Deci 2 unități, sau 1 pentru o zi fără date.
+
+| Ce | Regula | Unități |
 |---|---|---|
-| `conditions` la fiecare rulare | 12 rulări × 19 | 228 |
-| `forecasts` + `alerts` + `airquality` la rulările „complete” (UTC 04 / 10 / 16 / 22) | 4 × 19 × 3 | 228 |
-| **Total** | | **≈ 456** |
+| Regim normal | Șantierele active (raport zilnic în ultimele 14 zile): ieri. ≈ 7–10 șantiere × 2. | **≈ 14–20 / zi** |
+| Abaterea A, umplerea inițială | La prima activare, pe fiecare șantier activ, zilele lipsă din ultimele 7: până la 7 × șantierele active × 2. Cu 10 șantiere: ≈ 140. | O singură dată. Se întinde pe ≥ 3 rulări (plafonul de 60), cu garda de cotă. |
+| Fereastra de 31 de zile | Zilele-șantier cu raport și fără vreme din ultimele 31 de zile. La prima activare: ≈ (rapoartele lunii) × 2. Cu ≈ 10 șantiere × ≈ 22 de zile lucrate: ≈ 440. | O singură dată. Se întinde pe ≈ 8 rulări, cu garda de cotă. |
+| Ce e mai vechi de 31 de zile | Inclusiv istoricul de la 21.07.2026, ≈ 331 de zile-șantier. Se face **doar** cu comanda owner-ului, pe câte un șantier (≈ 662 de unități în total), când cota o permite. | 0 automat |
 
-Pe lună: ≈ 13.680 (30 de zile) / ≈ 14.136 (31 de zile). Rămân ≈ 1.320 / ≈ 864. Fiecare reîmprospătare manuală `{forta:true}` mai costă 19 × 4 = 76 de accese.
+### Plafonul, garda, numărătoarea
 
-## Pasul zilnic: înainte și după r4
+- **Plafonul pe rulare: `MAX_UNITATI_XW_RULARE` = 60 de unități**, adică ≈ 30 de zile-șantier.
+  - Ajunge pentru regimul normal (≈ 20) cu rezervă și pentru umplerea inițială în câteva zile.
+  - Plafonul limitează ziua. Luna o protejează garda.
+- **Garda de cotă.** Pasul zilnic rulează DUPĂ vremea curentă, care aduce antetele. Ziua-șantier următoare începe doar dacă:
 
-**Înainte (main, nepublicat):** 19 șantiere × (ieri: 2 cereri + reverificarea lui alaltăieri: 2) = 76 pe zi, plus până la 20 de zile vechi pe rulare (40 de accese).
-Asta înseamnă 76–116 pe zi, adică ≈ 2.356–3.596 pe lună (31 de zile). **Cota ar fi fost depășită**, iar spre sfârșitul lunii s-ar fi putut opri și vremea curentă.
+  restul perioadei − (unitățile pe zi ale vremii curente × zilele până la resetare, rotunjite în sus) − marja ≥ costul unei zile
 
-**După r4:**
+  - Marja `MARJA_COTA` = 300 (≈ două reîmprospătări manuale complete).
+  - Unitățile pe zi se calculează din program: numărul de ținte × multiplicatori. Dacă antetele arată un cost mai mare, se folosește acela.
+  - Restul se citește din antetele cele mai noi, deci și pe parcursul pasului.
+  - Când nu ajunge: zilele apar „neajunsă (rezerva de cotă pentru vremea curentă)”, cu cifrele în `xweather.garda_cota`, fără nicio cerere. Vremea curentă are mereu prioritate.
+- **Fără antete de cotă:** plafon mic declarat, **`PLAFON_COTA_NECUNOSCUTA` = 10 unități** (5 zile-șantier) pentru toată rularea. Rezultatul are `xweather.cota_necunoscuta: true` și `cota.cota_necunoscuta: true`.
+- **Comanda owner-ului** (`xweather_backfill`) are plafonul `MAX_UNITATI_XW_APEL` = 62 (= `max_zile` 31 × 2). Garda se aplică din antetele primite, începând cu a doua zi a apelului.
+- **Numărătoarea.** Fiecare cerere TRIMISĂ intră în contor:
+  - 2xx: costul din `X-Cost-Tokens`; fără el, produsul din antetul de multiplicatori; fără niciunul, multiplicatorul documentat, marcat „estimat”;
+  - 4xx / 5xx / rețea / timp depășit: după documentație nu consumă, dar pentru plafon se socotesc prudent cu multiplicatorul documentat, tot ca „estimat”;
+  - rezerva unei zile-șantier = 2. Crește dacă un antet arată mai mult (de exemplu observații la 3 → 4 pe zi).
+- **Oprirea:**
+  - `maxhits` / `maxhits_daily` (și un 429 fără cod, tratat prudent): oprește tot ce e Xweather în rulare. Restul vremii curente, pasul zilnic și comanda owner-ului nu mai trimit nimic;
+  - `maxhits_min`: se așteaptă resetarea minutului (`X-RateLimit-Reset-Minute`, altfel 60 s) **o singură dată pe rulare**, doar dacă încape până la termen. Apoi se continuă, iar la a doua limită pe minut se oprește;
+  - un HTTP 200 cu `maxhits` în corp (de exemplu la ultima sarcină) nu mai salvează ziua: apare „oprită: …”, iar rezultatul e `complet: false` / 207.
 
-| Țintă | Regula | Accese / zi (regim normal) |
+### Coada nu se mai poate înfometa
+
+- Pasul automat se ocupă doar de fereastra mărginită:
+  - șantierele active × zilele lipsă din ultimele 7;
+  - zilele-șantier cu raport și fără vreme din **ultimele 31 de zile** (`FEREASTRA_RAPOARTE_ZILE`).
+- Ce e mai vechi rămâne doar la comanda owner-ului. Comanda are cursor (`continua_pana`), iar zilele fără date sunt sărite de cursor și listate în `zile_fara_date`.
+- **Rotația.** „Ieri” pe șantierele active rămâne mereu primul. Restul cozii se parcurge circular, dintr-un punct de pornire care se mută cu ziua calendaristică: `⌊fracția(indexul zilei × φ) × lungimea cozii⌋`, cu φ = 0,618… (raportul de aur).
+  - Coada care încape întreagă în rulare nu se rotește, deci ordinea rămâne „cele mai noi întâi”.
+  - Testul: 70 de zile fără date în fața a 10 bune, plafon 60. Cele 10 bune sunt servite în **cel mult N = 2 rulări**, oricare ar fi ziua de pornire (400 încercate).
+  - Cu plafonul mic (10): cel mult 26 de rulări. Limita vine din debit, fiindcă intră ≤ 9 zile pe rulare.
+  - Prima variantă, „(index × pas) mod lungime”, ajungea la 70 de rulări cu plafonul mic, pentru că se decala când coada se scurta.
+- **Limita:** o zi-șantier iese singură din coadă când iese din fereastră. O zi fără date e reîncercată cel mult cât stă în fereastră: cel mult 31 de încercări, de 1 unitate fiecare. Pe șantierele active, zilele fără raport sunt reîncercate cel mult 7 zile.
+
+### „O dată pe zi” și limitele
+
+- Dacă toate țintele ferestrei au deja vreme, pasul nu face nicio cerere (`nimic_de_facut: true`). O a doua rulare din aceeași zi nu mai consumă nimic pentru zilele salvate. Reîncearcă doar zilele încă nesalvate, în limita plafonului.
+- **Două rulări SIMULTANE** (cronul + un apel manual al owner-ului în aceeași clipă) pot dubla consumul unei rulări, adică cel mult 2 × 60 de unități. Scrierea rămâne idempotentă (23505). O garanție atomică ar cere schemă nouă (un rând de „rulare în curs” cu blocare). **Decizia owner-ului; neimplementată.**
+
+## Timpul: un singur termen
+
+| Pas | Ordinea | Limita |
 |---|---|---|
-| (a) șantierele active | Raport zilnic cu data ≥ ieri − 13 (`ZILE_ACTIVITATE` = 14). Se cere ieri, chiar dacă ieri n-a existat raport. Se cer și zilele lipsă din ultimele 7 (`ZILE_RELUARE_ACTIVE`), dar acestea apar doar după un eșec. | 7–10 șantiere × 2 = **14–20** |
-| (b) zile cu raport și fără vreme | Rapoarte întârziate și istoricul de la 21.07.2026. Cele mai noi întâi. | ≈ 0–2 (după terminarea istoricului) |
-| (c) altceva | Nimic automat. Restul îl completează owner-ul cu comanda lui. | 0 |
-| Reverificarea lui alaltăieri | **Scoasă.** Rămâne la cerere: owner-ul cu `reverifica: true`. | 0 |
+| Termenul global | De la intrarea în handler | **100 s** (`TERMEN_HANDLER_MS`). Cronul așteaptă 120 s, deci rămân 20 s pentru răspuns și pentru o citire / scriere BD aflată în zbor. |
+| 1. Vremea curentă | Prima (prioritară; aduce antetele de cotă) | Fiecare cerere ≤ 25 s și tăiată la termen. Un site nou începe doar cu ≥ 5 s rămase. |
+| 2. Istoricul Open-Meteo | A doua | ≤ **30 s** (`BUGET_ISTORIC_ZILNIC_MS`) și sub termen. Fiecare cerere ≤ 25 s, tăiată la termen. Un site nou începe doar cu ≥ 5 s rămase. Recenzentul măsurase 124,5 s doar aici; acum cel mult 30 s. |
+| 3. Pasul zilnic Xweather | A treia | ≤ **40 s** (`BUGET_XW_ZILNIC_MS`) și sub termen. O zi nouă începe doar cu ≥ 5 s rămase. |
 
-- **Regim normal:** ≈ 20 de accese pe zi, adică ≈ 620 pe lună (× 31). Total cu vremea curentă: ≈ 476 pe zi.
-  - Pe 30 de zile: ≈ 14.280, rămân ≈ 720.
-  - Pe 31 de zile: ≈ 14.756, rămân ≈ 244.
-- **Istoricul, o singură dată:** 331 de zile-șantier cu raport (de la 21.07.2026) × 2 = **≈ 662 de accese**.
-  - Plafonul de rulare e 60, iar (a) ia ≈ 20 din el. Rămân ≈ 20 de zile de istoric pe zi, deci istoricul se termină în ≈ 17 rulări.
-  - În lunile cu istoric: ≈ 60 de accese pe zi, adică 516 pe zi cu tot cu vremea curentă.
-  - Dacă publicarea are loc în a doua jumătate a lui noiembrie (30 de zile): noiembrie ≈ 13.680 + 16 × 60 = **≈ 14.640**, iar decembrie (31 de zile, ultimele 1–2 zile de istoric) ≈ **14.830**.
-  - Dacă istoricul ar cădea întreg într-o lună de 31 de zile: ≈ 14.136 + 17 × 60 + 14 × 20 ≈ **15.436, adică PESTE cotă**. Concluzie: istoricul trebuie pornit într-o lună cu marjă (noiembrie). Altfel, întâi se reduce consumul vremii curente (variantele de mai jos).
-- **Cel mai rău caz pe rulare:** 60 de accese. Pe toată luna, 60 × 31 = 1.860, cât ar însemna o lună întreagă cu istoric (peste cotă). Plafonul limitează ziua, nu luna. Luna o limitează faptul că (b) se termină: zilele cu raport sunt finite.
+- Ce nu mai are timp apare „neajuns (termen)”: pe site, în istoric sau în pasul zilnic.
+- Citirile și scrierile BD sunt așteptate cel mult până la termen. Cererea în zbor nu se anulează, dar handlerul nu o mai așteaptă.
+- Schimbare față de r4: vremea curentă rulează acum ÎNAINTEA istoricului și a pasului zilnic (înainte era ultima). Așa are prioritate la timp și aduce antetele pentru gardă.
+- Comanda owner-ului păstrează 100 s, tot sub termenul global.
 
-### Plafonul, numărătoarea, oprirea
+## Variabilele de mediu noi (fără secrete)
 
-- `MAX_ACCESE_XW_RULARE` = **60**, pentru tot pasul zilnic.
-  - O zi-șantier începe doar dacă încape întreagă: are nevoie de 2 accese (`ACCESE_MAX_ZI`). Rularea nu trece niciodată de 60.
-  - O zi fără date costă un singur acces, pentru că observațiile se cer doar dacă ziua are valori.
-- **Ce nu încape** apare în `zile_nesalvate` cu motivul „neajunsă (plafonul de accese)” și se reia a doua zi. Răspunsul are atunci HTTP **207** și `complet: false`, ca în r3.
-- **Numărătoarea:** fiecare cerere TRIMISĂ se numără înainte de `fetch`, fie că reușește, primește 5xx sau dă rețea / timp depășit. Rezultatul are `xweather.accese_xweather`, iar răspunsul cron-ului are aceeași cifră și la vârf, în `accese_xweather`.
-- **Oprirea:** un 429 sau `maxhits_*` (limita furnizorului), sau un cont neautorizat la `conditions`, oprește toată rularea. Zilele rămase apar „neajunsă (oprit: …)”, ca să nu se consume accese degeaba.
-- **Comanda owner-ului** (`xweather_backfill`) are plafonul `MAX_ACCESE_XW_APEL` = **62**, adică exact apelul implicit (`max_zile` 31 × 2). Cu `max_zile` > 31 restul rămâne „neajunsă”, iar `continua_pana` arată de unde se reia. Întoarce aceeași numărătoare. Drepturile sunt neschimbate: doar owner-ul, altfel 403.
-
-### Timpul
-
-- `meteo_cron_tick()` așteaptă răspunsul **120 s**. Rulările existente durează 15–55 s; pentru calcul se ia prudent 60 s.
-- Bucla Xweather are termenul `BUGET_XW_ZILNIC_MS` = **40 s**, socotit de la începutul pasului, cu tot cu citirile din BD:
-  - o zi nouă începe doar dacă mai sunt cel puțin 5 s;
-  - fiecare cerere e tăiată la termen: cel mult 25 s și niciodată după termen;
-  - după termen nu se mai trimite nimic.
-- Total: ≈ 60 + 40 = **100 s < 120 s**. La asta se adaugă doar scrierea ultimei zile și pasul Open-Meteo, care are câteva cereri.
-- Ce nu încape = „neajunsă (bugetul de timp)”, se reia a doua zi.
-- Comanda owner-ului (apel separat, nu din cron) păstrează 100 s.
-
-### Stația cea mai apropiată: de ce `observations` la fiecare zi-șantier
-
-Coordonatorul a recomandat, pentru istoric, reutilizarea stației cunoscute. Varianta nu se poate face fără migrare:
-
-- `observatii_stare` admite doar `ok` / `fara_statie` / `neautorizat` / `eroare` (CHECK în `20261221a`), deci nu poate spune „reutilizată din <zi>”;
-- `(observatii_stare = 'ok') = (statie_id IS NOT NULL)` și `cerere_observatii IS NOT NULL OR (observatii_stare <> 'ok' AND raspuns_observatii IS NULL)` obligă ca un rând cu stație să aibă starea `ok` și o cerere de observații;
-- marcajul „reutilizată” ar sta doar în `raspuns_observatii`, pe care vederea `v_meteo_zilnic_xweather` (raportul / exportul) nu o arată. Raportul ar prezenta stația ca verificată pentru zi, ceea ce nu e acceptabil ca dovadă.
-
-Așa că și istoricul cere `observations/summary/closest` la fiecare zi-șantier. Costul: +331 de accese o singură dată (662 în loc de 331) și ≈ +1 acces pe fiecare raport întârziat. Reutilizarea ar cere o migrare nouă (o stare `reutilizata` + afișarea ei), separată de `20261221a`.
-
-### Limite asumate
-
-- Corecțiile furnizorului nu se mai prind automat. Owner-ul le cere pe interval cu `reverifica: true`.
-- O zi FĂRĂ raport, mai veche de 7 zile, sau orice zi a unui șantier inactiv, se completează doar cu comanda owner-ului.
-- O zi pentru care Xweather răspunde definitiv „fără date” nu se scrie (tabelul cere cel puțin o valoare). Dacă are raport, se cere din nou la fiecare rulare: 1 acces pe zi pentru fiecare astfel de zi. Apare în rezultat la `lipsa`.
-- `ZILE_RELUARE_ACTIVE` = 7 e o abatere conștientă de la „doar ieri”. Fără ea, ieri neajuns din cauza plafonului, a termenului sau a unui 5xx s-ar pierde dacă n-a existat raport, exact ziua nelucrată din cauza vremii. Costul e 0 în regim normal. Cu valoarea 1 se revine strict la „ieri”.
-
-## Variante pentru vremea curentă (decizia owner-ului, NEIMPLEMENTATE)
-
-Marja lunară rămâne mică (≈ 244 de accese în lunile de 31 de zile), iar o singură reîmprospătare manuală costă 76. Variante:
-
-| Variantă | Ce se schimbă | Economie / zi | Economie / lună (31 de zile) |
+| Nume | Valori | Implicit | Cine o pune |
 |---|---|---|---|
-| V1 | Calitatea aerului o dată pe zi (04:05), nu de 4 ori | 3 × 19 = 57 | ≈ 1.770 |
-| V2 | Prognoza + alertele + aerul de 2 ori pe zi, nu de 4 | 2 × 57 = 114 | ≈ 3.530 |
-| V3 | Vremea curentă doar pe sediu + șantierele active (≈ 11 ținte în loc de 19) | 456 − 264 = 192 | ≈ 5.950 |
+| `XW_ZILNIC_ACTIV` | exact `1` = pornit; orice altceva sau lipsă = oprit | lipsă = **oprit** | Coordonatorul (chat), cu „da”-ul lui Răzvan, în secretele funcției Edge `meteo-sync` (Supabase → Edge Functions → Secrets), **după** migrarea `20261221a` |
+| `XW_AER_PE_ZI` | `0`, `1`, `2`, `3`, `4` (altă valoare = 4, semnalată în `cota.aer_pe_zi_invalid`) | 4 (ca azi) | Coordonatorul, după decizia owner-ului pe cota reală |
 
-V1 e cea mai mică schimbare și singură aduce marja la ≈ 2.000 pe lună. V3 folosește aceeași regulă de activitate ca pasul zilnic.
+Cu `XW_ZILNIC_ACTIV` oprit:
 
-## Ce se vede în răspunsul cron-ului
+- funcția nu face nicio cerere `conditions/summary` / `observations/summary`;
+- nu citește tabelul nou și nici rapoartele zilnice;
+- rezultatul pasului e `xweather: { activ: false, motiv: "pas zilnic oprit (configurare)" }`, cu HTTP 200 și `xweather_ok: null`;
+- comanda owner-ului răspunde 409 cu același motiv.
 
-În `net._http_response`, la rularea de la 04:05 UTC:
+## Publicarea în două trepte
 
-- `status_code`: 200 când toate zilele cerute sunt salvate, 207 când e parțial (plafon / termen / 5xx);
-- `content`:
-  - `accese_xweather` (la vârf);
-  - `xweather.accese_xweather`, `xweather.plafon_accese`, `xweather.buget_ms`, `xweather.durata_ms`;
-  - `xweather.sarcini_pe_tinta` (`activ` / `raport`), `xweather.santiere_active`;
-  - `xweather.scrise`, `xweather.neajunse`, `xweather.nr_nesalvate`, `xweather.zile_nesalvate` (motivele);
-  - `xweather.oprit`.
+**Treapta I — doar vizibilitatea costului (înaintea migrării):**
+
+1. Se publică funcția `meteo-sync` (r5) **fără** `XW_ZILNIC_ACTIV` și cu `XW_AER_PE_ZI` nesetat (4, ca azi). Comportamentul vremii curente rămâne același; în plus apar costul și cota în răspuns.
+2. După prima rulare a cronului, coordonatorul citește `net._http_response.content` (răspunsul cronului) și notează:
+   - `cota.perioada.limita`, `cota.perioada.rest`, `cota.perioada.resetare`, `cota.perioada.tip` = cota reală, restul, data resetării, tipul perioadei;
+   - `cota.minut.limita` / `rest` = limita pe minut;
+   - `cota.pe_endpoint.<endpoint>.unitati` / `cost_max` / `estimate` = costul real pe endpoint (mai ales `airquality`; dacă e 5, calculul de mai sus e confirmat);
+   - `cota.multiplicatori` = textul antetului de multiplicatori, ca dovadă;
+   - `cota.estimate` = câte costuri n-au venit din antete (0 = antetele sunt prezente);
+   - `cota.unitati` pe rulare × 12 ≈ consumul pe zi (aproximativ, rulările complete costă mai mult).
+3. Cu cifrele acestea, owner-ul decide `XW_AER_PE_ZI` după tabelul de mai sus. Valoarea se pune ca variabilă și se verifică în `cota.aer_pe_zi`.
+
+**Treapta II — vremea zilei în rapoarte:**
+
+1. Se aplică migrarea `20261221a` (fișierul cu amprenta fixată, neschimbat în r5).
+2. Se pune `XW_ZILNIC_ACTIV=1`.
+3. Prima rulare de la 04:05 UTC. Se verifică în `net._http_response`:
+   - `status_code` 200 (toate zilele cerute salvate) sau 207 (parțial: plafon / gardă / termen / 5xx). La prima activare e de așteptat 207, din cauza umplerii inițiale (abaterea A + fereastra);
+   - `xweather.garda_cota`: `cunoscuta: true`, `rest`, `rezerva`, `disponibil`, `plafon`. Dacă `disponibil` < 2, pasul nu face nimic, iar vremea curentă e protejată;
+   - `xweather.unitati_xweather` ≤ `xweather.plafon_unitati`;
+   - `xweather.cost_zi_santier` (2 dacă observațiile costă 1; altfel costul real) și `cota.pe_endpoint["observations/summary"].cost_max`;
+   - `xweather.scrise`, `neajunse`, `zile_nesalvate` (motivele), `zile_fara_date`, `aliasuri_folosite`, `oprit`;
+   - `termen.durata_ms` < 100.000;
+   - în zilele următoare: `nimic_de_facut: true` sau doar ieri + rapoartele întârziate, ≈ 14–20 de unități.
+
+## Ce se vede în răspunsul cronului (după r5)
+
+În `net._http_response.content`:
+
+- `cota`: `cereri`, `unitati` (din antete), `unitati_estimate`, `estimate`, `total_prudent`, `pe_endpoint`, `multiplicatori`, `perioada` {`limita`, `rest`, `resetare`, `tip`}, `minut` {…}, `cota_necunoscuta`, `oprit`, `asteptari_minut`, `aer_pe_zi`, `aer_pe_zi_invalid`, `pas_zilnic_activ`;
+- `termen`: `ms`, `durata_ms`;
+- `rez[]`: vremea curentă pe site (`ok`, `aer`, sau `eroare`: „neajuns (termen)”, „oprit: …”);
+- `istoric`: `neajunse` și pe site `eroare: "neajuns (termen)"`;
+- `xweather` (pasul zilnic): `accese_xweather` (cereri), `unitati_xweather`, `plafon_unitati`, `cost_zi_santier`, `garda_cota`, `cota_necunoscuta`, `rotatie` {`pornire`, `pas`}, `nimic_de_facut`, `scrise`, `neajunse`, `oprite`, `nr_nesalvate`, `zile_nesalvate`, `zile_fara_date`, `oprit`, `buget_ms`, `durata_ms`;
+- la vârf: `xweather_ok`, `accese_xweather`.
+
+Fără chei și fără URL-uri: antetele se citesc doar ca numere și text scurt, dintr-un alfabet restrâns.
+
+## Limite asumate
+
+- Costul `observations/summary` e estimat la 1 până la prima rulare. Dacă e mai mare, prima zi a unei rulări poate depăși rezerva cu diferența. După primul antet, rezerva se corectează.
+- Un 429 fără cod e tratat ca limita perioadei: rularea se oprește, deși poate fi doar limita pe minut.
+- Așteptarea minutului e o pauză reală de cel mult 61 s, în termen, o dată pe rulare.
+- Corecțiile furnizorului nu se mai prind automat. Owner-ul le cere pe interval cu `reverifica: true`.
+- Stația cea mai apropiată se cere la fiecare zi-șantier. Reutilizarea ei ar cere o migrare nouă; motivele sunt neschimbate față de r4: CHECK-urile din `20261221a` și vederea care n-ar arăta marcajul.
+- Autentificarea (secretul cronului / JWT) e înaintea primului pas și nu e tăiată de termen. E scurtă.
 
 ## Istoric
 
 | Data | Ce |
 |---|---|
 | 13.11.2026 | r4: țintele după activitate, plafon 60 de accese pe rulare, termen 40 s, fără reverificare automată |
+| 13.11.2026 | r5: costul în unități din antete pentru toate cererile Xweather; blocul `cota`; `XW_ZILNIC_ACTIV` (publicare în două trepte); garda de cotă; 429 pe coduri; `XW_AER_PE_ZI`; termen global 100 s; fereastra de 31 de zile + rotația cozii; „nimic de făcut” = zero cereri |

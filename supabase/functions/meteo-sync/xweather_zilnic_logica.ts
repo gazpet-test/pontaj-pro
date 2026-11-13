@@ -15,15 +15,15 @@
 //   - parametrii from / to ca timestamp UNIX pentru o zi locală și „closest” + radius pe observations/summary;
 //   - dacă abonamentul dă observations/summary (altfel observatii_stare = 'neautorizat', fără eroare pe zi).
 // LIMITE ASUMATE (spuse și în raportul livrării; detaliile și cifrele cotei: docs/METEO_XWEATHER_COTA.md):
-//   - r4: corecțiile furnizorului NU se mai prind automat (reverificarea zilnică a lui alaltăieri s-a scos, ca pasul să încapă în cota de
-//     15.000 de accese / lună); o corecție intră doar dacă owner-ul cere reverificarea intervalului:
+//   - r4: corecțiile furnizorului NU se mai prind automat (reverificarea zilnică a lui alaltăieri s-a scos, ca pasul să încapă în cotă);
+//     o corecție intră doar dacă owner-ul cere reverificarea intervalului:
 //     {xweather_backfill:true, site_id, de_la, pana, reverifica:true} (versiune nouă dacă diferă). Un răspuns MAI SĂRAC la reverificare
 //     nu se scrie (garda r3, procesZi);
-//   - r4: pasul zilnic cere vremea DOAR pentru (a) șantierele active (raport zilnic în ultimele ZILE_ACTIVITATE zile): ieri + zilele lipsă
-//     din ultimele ZILE_RELUARE_ACTIVE, și (b) zilele-șantier care au raport zilnic și n-au încă vreme, cele mai noi întâi; plafonul
-//     MAX_ACCESE_XW_RULARE și termenul BUGET_XW_ZILNIC_MS opresc rularea, restul se reia a doua zi. O zi FĂRĂ raport, mai veche de
-//     ZILE_RELUARE_ACTIVE (sau pe un șantier inactiv), se recuperează doar cu comanda owner-ului {xweather_backfill:true, site_id, de_la, pana}
-//     (reluabilă cu `pana` = continua_pana din răspuns).
+//   - r4 / r5: pasul zilnic cere vremea DOAR pentru (a) șantierele active (raport zilnic în ultimele ZILE_ACTIVITATE zile): ieri + zilele
+//     lipsă din ultimele ZILE_RELUARE_ACTIVE, și (b) zilele-șantier cu raport zilnic și fără vreme din ultimele FEREASTRA_RAPOARTE_ZILE zile;
+//     ordinea se rotește (rotesteCoada); plafonul în unități, garda de cotă și termenul opresc rularea, restul se reia a doua zi. O zi mai
+//     veche de fereastră (cu sau fără raport) sau a unui șantier inactiv se recuperează doar cu comanda owner-ului
+//     {xweather_backfill:true, site_id, de_la, pana} (reluabilă cu `pana` = continua_pana din răspuns; zilele fără date sunt sărite și listate).
 import { esteZi, adunaZile, aziBucuresti, coordValide } from './istoric_logica.ts'
 
 export const SURSA_XW = 'Vaisala Xweather'
@@ -35,19 +35,20 @@ export const MAX_ZILE_APEL = 62          // completarea pornită de owner: cel m
 export const MAX_RASPUNS_OCTETI = 200_000
 export const TIMP_CERERE_MS = 25_000
 
-// ── r4: cota Xweather (15.000 de accese / lună; vremea curentă consumă deja ≈ 456 / zi) — TOATE regulile pasului zilnic stau aici ─────────
-// Un „acces” = o cerere trimisă furnizorului (reușită sau nu). O zi-șantier = conditions/summary + (dacă ziua are valori) observations.
+// ── cota Xweather — TOATE regulile pasului zilnic stau aici (r5: în UNITĂȚI DE COST din antete, xweather_cota_logica.ts) ─────────
+// O zi-șantier = conditions/summary (1 unitate / zi, documentat) + (dacă ziua are valori) observations/summary (nespecificat, estimat 1).
 export const ZILE_ACTIVITATE = 14        // șantier ACTIV = cel puțin un raport zilnic cu data ≥ ieri − 13 (ultimele 14 zile încheiate, plus azi)
 export const ZILE_RELUARE_ACTIVE = 7     // pe șantierele active: ieri + zilele lipsă din ultimele 7 (reluarea după 5xx / plafon / termen);
                                          // cu 1 = strict „ieri” (o zi neajunsă fără raport s-ar pierde)
-export const MAX_ACCESE_XW_RULARE = 60   // pasul zilnic (cron, o dată pe zi): plafonul de accese pe toată rularea
-export const MAX_ACCESE_XW_APEL = 62     // comanda owner-ului (completare / reverificare, un șantier): plafonul pe apel = exact apelul
-                                         // implicit (max_zile 31 × 2); cu max_zile > 31 restul rămâne „neajunsă” → continua_pana
-export const ACCESE_MAX_ZI = 2           // cât poate costa o zi-șantier; o zi începe doar dacă încape întreagă sub plafon
-export const BUGET_XW_ZILNIC_MS = 40_000 // pasul zilnic: termenul buclei Xweather (cron-ul așteaptă 120 s; vremea curentă ≈ 60 s după el)
-export const BUGET_XW_APEL_MS = 100_000  // comanda owner-ului (apel separat, nu din cron)
+export const FEREASTRA_RAPOARTE_ZILE = 31 // r5: zilele-șantier cu raport și fără vreme intră automat doar din ultimele 31 de zile (≥ ieri − 30);
+                                          // mai vechi = DOAR comanda owner-ului. O zi fără date e reîncercată cel mult cât stă în fereastră.
+export const MAX_UNITATI_XW_APEL = 62    // comanda owner-ului (completare / reverificare, un șantier): plafonul pe apel, în unități = exact apelul
+                                         // implicit (max_zile 31 × 2 cu costurile documentate); peste el restul rămâne „neajunsă” → continua_pana
+export const ACCESE_MAX_ZI = 2           // costul rezervat implicit pentru o zi-șantier (r5: crește dacă antetele arată mai mult, costZiSantier)
+export const BUGET_XW_ZILNIC_MS = 40_000 // pasul zilnic: termenul propriu al buclei Xweather (și termenul global al handlerului, index.ts)
+export const BUGET_XW_APEL_MS = 100_000  // comanda owner-ului (apel separat, nu din cron); tot sub termenul global
 export const MIN_TIMP_ZI_MS = 5_000      // o zi-șantier nouă începe doar dacă mai sunt cel puțin 5 s până la termen
-export const NEAJUNSA_PLAFON = 'neajunsă (plafonul de accese)'
+export const NEAJUNSA_PLAFON = 'neajunsă (plafonul de unități)'
 export const NEAJUNSA_TIMP = 'neajunsă (bugetul de timp)'
 
 // ── timp: ziua locală Europe/Bucharest ──────────────────────────────────────────────────────────────────────────
@@ -277,9 +278,10 @@ export function valoriEgale(a: Record<string, unknown>, b: Record<string, unknow
 // zilnic (r4, cota): DOAR zile NOI (fără reverificare automată), în ordinea:
 //   (a) „activ”  — șantierele active (santierActiv): ieri + zilele lipsă din ultimele ZILE_RELUARE_ACTIVE (≥ data de start a proiectului),
 //                  chiar fără raport în ziua aceea (o zi nelucrată din cauza vremii e exact ziua pentru care vrem dovada); cele mai noi întâi;
-//   (b) „raport” — zilele-șantier cu raport zilnic și fără vreme (rapoarte întârziate, istoricul), oricât de vechi (≥ PRIMA_ZI_XW, ≤ ieri),
-//                  cele mai noi întâi; fără dubluri cu (a);
-//   nimic altceva. Planul NU taie: plafonul de accese și termenul le aplică bucla (index.ts), restul apare „neajunsă” și se reia.
+//   (b) „raport” — zilele-șantier cu raport zilnic și fără vreme (rapoarte întârziate) din fereastra de FEREASTRA_RAPOARTE_ZILE zile
+//                  (r5; mai vechi = doar comanda owner-ului), cele mai noi întâi; fără dubluri cu (a);
+//   nimic altceva. Planul NU taie: plafonul, garda de cotă și termenul le aplică bucla (index.ts), restul apare „neajunsă” și se reia;
+//   ordinea parcurgerii o rotește rotesteCoada (r5), ca zilele care eșuează mereu să nu ocupe plafonul în fiecare zi.
 // backfill (owner): zilele lipsă din [de, pana], de la cea mai nouă, cel mult maxZile (reluabil, idempotent: o zi existentă nu se mai cere);
 //          cu reverifica = true și zilele EXISTENTE din interval se reverifică (o corecție târzie a furnizorului = versiune nouă).
 //          Ziua de reluare NU o dă planul: o dă continuaPana(), după rezultatele scrierii (L05).
@@ -292,10 +294,10 @@ export function santierActiv(zile: Set<string> | undefined, ieri: string): boole
   for (const z of zile) if (esteZi(z) && z >= de) return true
   return false
 }
-// fereastra de citit din BD pentru planul zilnic: de la cea mai veche zi cu raport (≥ PRIMA_ZI_XW) sau începutul reluării, până la ieri
-export function fereastraZilnica(rapoarte: Map<string, Set<string>>, ieri: string): string {
-  let de = adunaZile(ieri, -(ZILE_RELUARE_ACTIVE - 1))
-  for (const zile of rapoarte.values()) for (const z of zile) if (esteZi(z) && z >= PRIMA_ZI_XW && z < de) de = z
+// fereastra pasului zilnic (r5, mărginită): [ieri − (FEREASTRA_RAPOARTE_ZILE − 1), ieri] — cuprinde și reluarea șantierelor active (7 zile)
+// și activitatea (14 zile); rapoartele și vremea existentă se citesc din BD doar pe ea
+export function fereastraZilnica(ieri: string): string {
+  const de = adunaZile(ieri, -(Math.max(FEREASTRA_RAPOARTE_ZILE, ZILE_RELUARE_ACTIVE, ZILE_ACTIVITATE) - 1))
   return de < PRIMA_ZI_XW ? PRIMA_ZI_XW : de
 }
 const maiNouIntai = (a: Sarcina, b: Sarcina) => (a.zi < b.zi ? 1 : a.zi > b.zi ? -1 : a.site_id - b.site_id)
@@ -338,8 +340,9 @@ export function planXweather(
           activ.push({ site_id: s.id, lat, lng, zi: d, tip: 'nou', tinta: 'activ' }); luate.add(d)
         }
       }
+      const josRap = fereastraZilnica(ieri)
       for (const d of zr || []) {
-        if (!esteZi(d) || d > ieri || d < PRIMA_ZI_XW || ex.has(d) || luate.has(d)) continue
+        if (!esteZi(d) || d > ieri || d < PRIMA_ZI_XW || d < josRap || ex.has(d) || luate.has(d)) continue
         dinRaport.push({ site_id: s.id, lat, lng, zi: d, tip: 'nou', tinta: 'raport' })
       }
       continue
@@ -373,11 +376,31 @@ export function planXweather(
   return { sarcini, sarite, ramase, activi: [] as number[] }
 }
 
-// ── r4: plafonul de accese, termenul și oprirea rulării (aplicate de bucla din index.ts) ─────────────────────────────────
-// o zi-șantier începe doar dacă (1) încape ÎNTREAGĂ sub plafon (ACCESE_MAX_ZI) — rularea se oprește exact la plafon, niciodată peste —
-// și (2) mai sunt cel puțin MIN_TIMP_ZI_MS până la termen. null = poate începe; altfel motivul („neajunsă …”, se reia la rularea următoare).
-export function poateIncepeZi(accese: number, plafon: number, acum: number, termen: number): string | null {
-  if (accese + ACCESE_MAX_ZI > plafon) return NEAJUNSA_PLAFON
+// ── r5: coada nu se mai poate înfometa ─────────────────────────────────────────────────────────────────────────────
+// Prioritatea rămâne „ieri” pe șantierele active (ziua nouă, mereu prima). Restul cozii (zilele lipsă ale șantierelor active + zilele cu raport
+// din fereastră, cele mai noi întâi) se parcurge circular dintr-un punct de pornire care se mută determinist cu ziua calendaristică:
+//   pornire = ⌊ fracția(indexul zilei `ieri` × φ) × lungimea cozii ⌋, φ = (√5 − 1) / 2 (șirul lui Weyl / raportul de aur).
+// Fracțiile succesive acoperă uniform [0, 1) oricât s-ar scurta coada între rulări (zilele servite ies din ea), deci zilele care eșuează mereu
+// („furnizorul nu are date”, coordonate greșite) nu mai pot ocupa plafonul în fiecare zi înaintea celorlalte. O pornire „(index × pas) mod
+// lungime” s-a dovedit mai slabă în simulare: se decalează când coada se scurtează (plafon 10: 70 de rulări în cel mai rău caz, față de 26).
+// Dacă toată coada încape sigur în rulare (≤ pas = plafon / costul unei zile), ordinea rămâne „cele mai noi întâi” (nu e nimic de împărțit).
+export const indexZi = (zi: string) => Math.round(Date.parse(zi + 'T00:00:00Z') / 864e5)
+const PHI = (Math.sqrt(5) - 1) / 2
+export function rotesteCoada(sarcini: Sarcina[], ieri: string, pas: number): { sarcini: Sarcina[]; pornire: number } {
+  if (!esteZi(ieri)) throw new Error('ieri invalid')
+  const prime = sarcini.filter(s => s.tinta === 'activ' && s.zi === ieri)
+  const rest = sarcini.filter(s => !(s.tinta === 'activ' && s.zi === ieri))
+  if (rest.length <= Math.max(1, Math.floor(pas))) return { sarcini: [...prime, ...rest], pornire: 0 }
+  const pornire = Math.min(rest.length - 1, Math.floor(((indexZi(ieri) * PHI) % 1) * rest.length))
+  return { sarcini: [...prime, ...rest.slice(pornire), ...rest.slice(0, pornire)], pornire }
+}
+
+// ── plafonul de unități, termenul și oprirea rulării (aplicate de bucla din index.ts) ─────────────────────────────────
+// o zi-șantier începe doar dacă (1) încape ÎNTREAGĂ sub plafon (costZi: implicit ACCESE_MAX_ZI = 2; r5: maximul văzut în antete) — rularea
+// nu trece de plafon decât dacă un antet arată un cost peste cel rezervat — și (2) mai sunt cel puțin MIN_TIMP_ZI_MS până la termen.
+// null = poate începe; altfel motivul („neajunsă …”, se reia la rularea următoare).
+export function poateIncepeZi(unitati: number, plafon: number, acum: number, termen: number, costZi = ACCESE_MAX_ZI): string | null {
+  if (unitati + costZi > plafon) return NEAJUNSA_PLAFON
   if (acum + MIN_TIMP_ZI_MS > termen) return NEAJUNSA_TIMP
   return null
 }

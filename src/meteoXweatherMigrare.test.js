@@ -151,7 +151,9 @@ describe('edge fn meteo-sync: credențialele nu ies din apel', () => {
     expect(EDGE).toContain('fetch(`${API}/${cuCredentiale(cerere, cid, csec)}`')
     expect(nr(EDGE, 'cuCredentiale(')).toBe(1)
     expect(EDGE).toMatch(/if \(body\.xweather_backfill\) \{\n\s*if \(!esteOwner\) return json\(/)
-    expect(EDGE).toContain("await db.from('meteo_zilnic_xweather').insert(z.rand)")
+    // r5: scrierea e așteptată cel mult până la termenul global (cuTermen); rândul scris e tot z.rand (fără credențiale)
+    expect(EDGE).toContain("await cuTermen(db.from('meteo_zilnic_xweather').insert(z.rand), termenGlobal, 'scrierea zilei')")
+    expect(nr(EDGE, "from('meteo_zilnic_xweather')")).toBe(1)
     expect(EDGE).not.toMatch(/meteo_zilnic_xweather'\)\.(upsert|update|delete)/)
   })
   it('reluarea completării: cursorul din rezultate (continuaPana), nu din plan; reverifica doar boolean, doar la owner', () => {
