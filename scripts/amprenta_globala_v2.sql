@@ -1,40 +1,47 @@
--- AMPRENTA_GLOBALA v1 (L15 v2, docs/LIVRARE_L15_V2.md). SINGURA definitie (L19): o folosesc runnerul (scripts/livrare_migrare.sh
+-- AMPRENTA_GLOBALA v2 (L15 v2, docs/LIVRARE_L15_V2.md). SINGURA definitie (L19): o folosesc runnerul (scripts/livrare_migrare.sh
 -- prin scripts/livrare_amprenta.sh), citirea coordonatorului (scripts/amprenta_globala_citire.sh), generatorul de manifest
 -- (scripts/livrare_l15_manifest.sh) si testele. Nu se ruleaza direct: blocurile dintre marcaje se extrag exact.
+-- Ce aduce v2 (istoria versiunilor: docs/LIVRARE_L15_V2.md, "Versionare"): grantorul in fiecare ACL; dependentele OWNED BY /
+-- identity ale secventelor; familiile sistem_adaugat si acl_sistem (schemele de sistem nu mai sunt excluse cu totul);
+-- server_version_num in baza; obiectele mari cate un rand pe obiect.
 --
 -- Doua blocuri, fiecare = O interogare (fara ";"), coloanele (familie, eticheta, amprenta, detaliu):
---   AG_SESIUNE v1  profilul scurt al sesiunii de livrare; se evalueaza in contextul APELANTULUI (inaintea fixarii GUC-urilor),
+--   AG_SESIUNE v2  profilul scurt al sesiunii de livrare; se evalueaza in contextul APELANTULUI (inaintea fixarii GUC-urilor),
 --                  scris fara operatori si cu nume calificate, deci nu depinde de search_path. NU dovedeste configuratia
 --                  sesiunilor PostgREST (aceea e in familiile setare_rol + rol.rolconfig).
---   AG_CATALOG v1  toate obiectele cu cod executabil sau drepturi din afara schemelor de sistem; se evalueaza DOAR in
+--   AG_CATALOG v2  toate obiectele cu cod executabil sau drepturi din afara schemelor de sistem + ce s-a adaugat / acordat in
+--                  schemele de sistem; se evalueaza DOAR in
 --                  contextul canonic (garda ag_garda refuza altfel): search_path = pg_catalog, pg_temp; TimeZone UTC;
 --                  DateStyle ISO, YMD; IntervalStyle postgres; extra_float_digits 1; bytea_output hex;
 --                  quote_all_identifiers off; standard_conforming_strings on; lc_monetary C.
 --                  Cu search_path fixat, numele din pg_catalog apar NECALIFICATE, toate celelalte CALIFICATE cu schema
 --                  (reg*::text, format_type, pg_get_*def); constantele deparsate (date, intervale, numere) nu depind de sesiune.
 -- Canonicalizare: detaliu = jsonb_build_array(...)::text (JSON: fara separatori ambigui, NULL = null distinct de ""),
---   listele ordonate COLLATE "C"; amprenta = md5(detaliu); fara OID-uri, numere de coloana, relfilenode, statistici,
---   valori de secvente sau date din tabele. Optiunile care pot contine secrete (FDW, servere, mapari, setarile de rol / baza)
---   intra doar ca md5.
+--   listele ordonate COLLATE "C"; amprenta = md5(detaliu); fara OID-uri (singura exceptie: identificatorul obiectelor
+--   mari, numele lor public), numere de coloana, relfilenode, statistici, valori de secvente sau date din tabele.
+--   Fiecare ACL = [beneficiar | null pentru PUBLIC, privilegiu, delegabil, grantor]. Optiunile care pot contine secrete
+--   (FDW, servere, mapari, setarile de rol / baza) intra doar ca md5.
 -- Perimetru: schemele in afara pg_catalog, information_schema, pg_toast, pg_temp_N, pg_toast_temp_N (nicio schema de
 --   platforma exclusa); obiectele temporare (relpersistence t, schemele temporare) nu intra. Cataloagele fara schema
 --   (roluri, membri, limbaje, cast-uri, metode de acces, extensii, triggere de eveniment, publicatii, acl implicite,
---   tablespace-uri, parametri) intra INTREGI; baza = doar baza curenta.
--- Familii (v1): schema relatie coloana constrangere trigger regula politica functie tip operator familie_operatori
+--   tablespace-uri, parametri) intra INTREGI; baza = doar baza curenta. Din schemele de sistem: obiectele create dupa
+--   initdb (sistem_adaugat, oid >= 16384 = FirstNormalObjectId, OID-ul doar ca filtru) si ACL-urile explicite (acl_sistem).
+-- Familii (v2): schema relatie coloana constrangere trigger regula politica functie tip operator familie_operatori
 --   clasa_operatori amop amproc metoda_acces cast limbaj transformare conversie colatie ts_parser ts_sablon ts_dictionar
 --   ts_config extensie trigger_eveniment mostenire acl_implicit baza parametru_acl tablespace rol membru setare_rol fdw
---   server_extern mapare_utilizator publicatie publicatie_tabel publicatie_schema obiect_mare eticheta_securitate sesiune
--- Orice schimbare a listei sau a campurilor = v2 (alt fisier, alt marcaj), cu motiv.
+--   server_extern mapare_utilizator publicatie publicatie_tabel publicatie_schema obiect_mare eticheta_securitate
+--   sistem_adaugat acl_sistem sesiune
+-- Orice schimbare a listei, a campurilor sau a perimetrului = alta versiune (v3: alt fisier, alt marcaj), cu motiv.
 
--- >>> AG_SESIUNE v1
+-- >>> AG_SESIUNE v2
 SELECT 'sesiune'::pg_catalog.text AS familie,
        pg_catalog.concat('sesiune ', g.n) AS eticheta,
        pg_catalog.md5(pg_catalog.jsonb_build_array(pg_catalog.current_setting(g.n))::pg_catalog.text) AS amprenta,
        pg_catalog.jsonb_build_array(pg_catalog.current_setting(g.n))::pg_catalog.text AS detaliu
   FROM pg_catalog.unnest(ARRAY['DateStyle', 'TimeZone', 'row_security', 'search_path', 'session_replication_role']::pg_catalog.text[]) AS g(n)
--- <<< AG_SESIUNE v1
+-- <<< AG_SESIUNE v2
 
--- >>> AG_CATALOG v1
+-- >>> AG_CATALOG v2
 WITH
 ag_garda AS (
   -- search_path: aceeasi cale si in forma cu ghilimele (o scrie SET-ul cand quote_all_identifiers era on la momentul lui)
@@ -47,7 +54,7 @@ ag_garda AS (
                     AND pg_catalog.current_setting('quote_all_identifiers') OPERATOR(pg_catalog.=) 'off'
                     AND pg_catalog.current_setting('standard_conforming_strings') OPERATOR(pg_catalog.=) 'on'
                     AND pg_catalog.current_setting('lc_monetary') OPERATOR(pg_catalog.=) 'C'
-               THEN '1' ELSE 'AG_V1_CONTEXT_NECANONIC' END AS pg_catalog.int4) AS ok
+               THEN '1' ELSE 'AG_V2_CONTEXT_NECANONIC' END AS pg_catalog.int4) AS ok
 ),
 -- schemele din perimetru
 ag_ns AS (
@@ -55,6 +62,20 @@ ag_ns AS (
     FROM pg_namespace n CROSS JOIN ag_garda g
    WHERE g.ok = 1 AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
      AND n.nspname !~ '^pg_(toast_)?temp_[0-9]+$'
+),
+-- schemele de sistem: ag_sis (unde se pot adauga obiecte gasite inaintea celor ale aplicatiei), ag_sis3 (+ pg_toast, pentru ACL)
+ag_sis3 AS (
+  SELECT n.oid, n.nspname, quote_ident(n.nspname) AS q
+    FROM pg_namespace n CROSS JOIN ag_garda g
+   WHERE g.ok = 1 AND n.nspname IN ('pg_catalog', 'information_schema', 'pg_toast')
+),
+ag_sis AS (SELECT s.oid, s.q FROM ag_sis3 s WHERE s.nspname <> 'pg_toast'),
+-- relatiile din schemele de sistem; cele TOAST etichetate dupa tabelul-parinte (numele lor contine un OID)
+ag_rel_sis AS (
+  SELECT c.oid, CASE WHEN s.nspname = 'pg_toast' THEN 'toast ' || coalesce(p.oid::regclass::text, '-') ELSE c.oid::regclass::text END AS et
+    FROM pg_class c JOIN ag_sis3 s ON s.oid = c.relnamespace
+    LEFT JOIN pg_class p ON s.nspname = 'pg_toast' AND p.reltoastrelid = c.oid
+   WHERE c.relpersistence <> 't'
 ),
 ag_rel AS (
   SELECT c.oid, c.relkind FROM pg_class c WHERE c.relnamespace IN (SELECT s.oid FROM ag_ns s) AND c.relpersistence <> 't'
@@ -74,7 +95,7 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'schema', 'schema ' || s.q,
          jsonb_build_array(n.nspowner::regrole::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a) z))
     FROM ag_ns s JOIN pg_namespace n ON n.oid = s.oid
   UNION ALL
@@ -82,7 +103,7 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'relatie', 'relatie ' || c.oid::regclass::text,
          jsonb_build_array(c.relkind::text, c.relowner::regrole::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner))) a) z),
            c.relrowsecurity, c.relforcerowsecurity, c.relpersistence::text, am.amname::text,
            (SELECT jsonb_agg(o ORDER BY o COLLATE "C") FROM unnest(c.reloptions) o),
@@ -94,8 +115,15 @@ ag_rand(familie, eticheta, d) AS (
            CASE WHEN c.relkind IN ('i', 'I') THEN jsonb_build_array(pg_get_indexdef(c.oid), i.indisunique, i.indnullsnotdistinct,
                   i.indisprimary, i.indisexclusion, i.indimmediate, i.indisclustered, i.indisvalid, i.indisready, i.indislive,
                   i.indisreplident) END,
+           -- secvente: parametrii + legatura cu coloana (pg_depend: a = OWNED BY, i = identity) [tip, tabel, coloana]
            CASE WHEN c.relkind = 'S' THEN jsonb_build_array(sq.seqtypid::regtype::text, sq.seqstart, sq.seqincrement, sq.seqmax,
-                  sq.seqmin, sq.seqcache, sq.seqcycle) END,
+                  sq.seqmin, sq.seqcache, sq.seqcycle,
+                  (SELECT jsonb_agg(jsonb_build_array(d.deptype::text, d.refobjid::regclass::text,
+                            (SELECT quote_ident(a2.attname) FROM pg_attribute a2 WHERE a2.attrelid = d.refobjid AND a2.attnum = d.refobjsubid))
+                            ORDER BY d.deptype, d.refobjid::regclass::text COLLATE "C", d.refobjsubid)
+                     FROM pg_depend d
+                    WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.objsubid = 0
+                      AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i'))) END,
            CASE WHEN c.relkind = 'f' THEN jsonb_build_array(fs.srvname::text,
                   (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(ft.ftoptions) o)) END)
     FROM ag_rel r JOIN pg_class c ON c.oid = r.oid
@@ -114,7 +142,7 @@ ag_rand(familie, eticheta, d) AS (
            CASE WHEN a.attcollation <> 0 THEN a.attcollation::regcollation::text END, a.attnotnull, a.attidentity::text,
            a.attgenerated::text, pg_get_expr(ad.adbin, ad.adrelid),
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN x.grantee = 0 THEN NULL ELSE x.grantee::regrole::text END, x.privilege_type, x.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN x.grantee = 0 THEN NULL ELSE x.grantee::regrole::text END, x.privilege_type, x.is_grantable, x.grantor::regrole::text) AS v
                 FROM aclexplode(a.attacl) x) z),
            a.attstorage::text, a.attcompression::text, a.attislocal, a.attinhcount,
            (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(a.attfdwoptions) o))
@@ -167,7 +195,7 @@ ag_rand(familie, eticheta, d) AS (
            CASE WHEN p.prosqlbody IS NOT NULL THEN md5(pg_get_function_sqlbody(p.oid)) END,
            (SELECT jsonb_agg(u.x::regtype::text ORDER BY u.o) FROM unnest(p.protrftypes) WITH ORDINALITY u(x, o)),
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a) z),
            (SELECT jsonb_build_array(g.aggkind::text, g.aggnumdirectargs, g.aggtransfn::oid::regprocedure::text,
                      g.aggfinalfn::oid::regprocedure::text, g.aggcombinefn::oid::regprocedure::text, g.aggserialfn::oid::regprocedure::text,
@@ -182,7 +210,7 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'tip', 'tip ' || t.oid::regtype::text,
          jsonb_build_array(t.typtype::text, t.typcategory::text, t.typispreferred, t.typowner::regrole::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(t.typacl, acldefault('T', t.typowner))) a) z),
            t.typlen, t.typbyval, t.typalign::text, t.typstorage::text, t.typdelim::text, t.typnotnull,
            CASE WHEN t.typbasetype <> 0 THEN format_type(t.typbasetype, t.typtypmod) END,
@@ -239,7 +267,7 @@ ag_rand(familie, eticheta, d) AS (
          jsonb_build_array(l.lanowner::regrole::text, l.lanispl, l.lanpltrusted, l.lanplcallfoid::regprocedure::text,
            l.laninline::regprocedure::text, l.lanvalidator::regprocedure::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(l.lanacl, acldefault('l', l.lanowner))) a) z))
     FROM pg_language l
   UNION ALL
@@ -297,29 +325,31 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'acl_implicit', 'acl_implicit ' || da.defaclrole::regrole::text || ' '
            || CASE WHEN da.defaclnamespace = 0 THEN '*' ELSE da.defaclnamespace::regnamespace::text END || ' ' || da.defaclobjtype::text,
          jsonb_build_array((SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(da.defaclacl) a) z))
     FROM pg_default_acl da
   UNION ALL
-  -- baza: doar baza curenta (numele ei = identitatea tintei, verificata de runner, nu intra aici)
+  -- baza: doar baza curenta (numele ei = identitatea tintei, verificata de runner, nu intra aici); server_version_num: o
+  -- versiune minora noua poate schimba deparsarea si codul sistemului => refuz conservator, recitire
   SELECT 'baza', 'baza curenta',
-         jsonb_build_array(db.datdba::regrole::text, pg_encoding_to_char(db.encoding), db.datlocprovider::text, db.datcollate, db.datctype,
+         jsonb_build_array(current_setting('server_version_num'),
+           db.datdba::regrole::text, pg_encoding_to_char(db.encoding), db.datlocprovider::text, db.datcollate, db.datctype,
            db.datlocale, db.daticurules, db.datistemplate, db.datallowconn, db.datconnlimit,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(db.datacl, acldefault('d', db.datdba))) a) z))
     FROM pg_database db WHERE db.datname = current_database()
   UNION ALL
   SELECT 'parametru_acl', 'parametru_acl ' || pa.parname,
          jsonb_build_array((SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(pa.paracl) a) z))
     FROM pg_parameter_acl pa
   UNION ALL
   SELECT 'tablespace', 'tablespace ' || quote_ident(sp.spcname),
          jsonb_build_array(sp.spcowner::regrole::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(sp.spcacl, acldefault('t', sp.spcowner))) a) z),
            (SELECT jsonb_agg(o ORDER BY o COLLATE "C") FROM unnest(sp.spcoptions) o))
     FROM pg_tablespace sp
@@ -347,7 +377,7 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'fdw', 'fdw ' || quote_ident(w.fdwname),
          jsonb_build_array(w.fdwowner::regrole::text, w.fdwhandler::regprocedure::text, w.fdwvalidator::regprocedure::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(w.fdwacl, acldefault('F', w.fdwowner))) a) z),
            (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(w.fdwoptions) o))
     FROM pg_foreign_data_wrapper w
@@ -355,7 +385,7 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'server_extern', 'server_extern ' || quote_ident(sv.srvname),
          jsonb_build_array(sv.srvowner::regrole::text, w.fdwname::text, sv.srvtype, sv.srvversion,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
                 FROM aclexplode(coalesce(sv.srvacl, acldefault('S', sv.srvowner))) a) z),
            (SELECT md5(jsonb_agg(o ORDER BY o COLLATE "C")::text) FROM unnest(sv.srvoptions) o))
     FROM pg_foreign_server sv JOIN pg_foreign_data_wrapper w ON w.oid = sv.srvfdw
@@ -379,22 +409,112 @@ ag_rand(familie, eticheta, d) AS (
   SELECT 'publicatie_schema', 'publicatie_schema ' || quote_ident(pb.pubname) || ' ' || pn.pnnspid::regnamespace::text, jsonb_build_array()
     FROM pg_publication_namespace pn JOIN pg_publication pb ON pb.oid = pn.pnpubid
   UNION ALL
-  -- obiectele mari: agregat (proprietar + ACL), fara OID-uri
-  SELECT 'obiect_mare', 'obiect_mare (toate)',
-         jsonb_build_array((SELECT count(*) FROM pg_largeobject_metadata),
+  -- obiectele mari: un rand pe obiect, etichetat cu identificatorul lui (loid = numele public; exceptia declarata de la
+  -- "fara OID-uri"): proprietar + ACL
+  SELECT 'obiect_mare', 'obiect_mare ' || lo.oid::text,
+         jsonb_build_array(lo.lomowner::regrole::text,
            (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
-              SELECT jsonb_build_array(lo.lomowner::regrole::text,
-                       (SELECT jsonb_agg(y.v ORDER BY y.v::text COLLATE "C") FROM (
-                          SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable) AS v
-                            FROM aclexplode(coalesce(lo.lomacl, acldefault('L', lo.lomowner))) a) y)) AS v
-                FROM pg_largeobject_metadata lo) z))
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(coalesce(lo.lomacl, acldefault('L', lo.lomowner))) a) z))
+    FROM pg_largeobject_metadata lo
   UNION ALL
   SELECT 'eticheta_securitate', 'eticheta_securitate ' || quote_ident(sl.provider) || ' ' || sl.objtype || ' ' || sl.objname || ' ' || sl.objsubid,
          jsonb_build_array(sl.label)
     FROM pg_seclabels sl
    WHERE sl.objnamespace IS NULL OR sl.objnamespace IN (SELECT s.oid FROM ag_ns s)
+  UNION ALL
+  -- sistem_adaugat: obiectele din pg_catalog / information_schema create DUPA initdb (oid >= 16384, FirstNormalObjectId;
+  -- OID-ul doar filtreaza, nu se serializeaza). Un obiect de aici e gasit INAINTEA celui din schemele aplicatiei.
+  SELECT 'sistem_adaugat', 'sistem_adaugat functie ' || p.oid::regprocedure::text,
+         jsonb_build_array(p.prokind::text, l.lanname::text, p.proowner::regrole::text, p.prosecdef, to_jsonb(p.proconfig), p.probin,
+           md5(p.prosrc), CASE WHEN p.prosqlbody IS NOT NULL THEN md5(pg_get_function_sqlbody(p.oid)) END, pg_get_function_result(p.oid),
+           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a) z))
+    FROM pg_proc p JOIN ag_sis s ON s.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat relatie ' || c.oid::regclass::text,
+         jsonb_build_array(c.relkind::text, c.relowner::regrole::text,
+           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner))) a) z),
+           CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid) END)
+    FROM pg_class c JOIN ag_sis s ON s.oid = c.relnamespace
+   WHERE c.oid >= 16384 AND c.relpersistence <> 't'
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat tip ' || t.oid::regtype::text, jsonb_build_array(t.typowner::regrole::text)
+    FROM pg_type t JOIN ag_sis s ON s.oid = t.typnamespace WHERE t.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat operator ' || o.oid::regoperator::text, jsonb_build_array(o.oprowner::regrole::text)
+    FROM pg_operator o JOIN ag_sis s ON s.oid = o.oprnamespace WHERE o.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat familie_operatori ' || f.et, jsonb_build_array(pf.opfowner::regrole::text)
+    FROM ag_opf f JOIN pg_opfamily pf ON pf.oid = f.oid JOIN ag_sis s ON s.oid = f.opfnamespace WHERE f.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat clasa_operatori ' || c.et, jsonb_build_array(pc.opcowner::regrole::text)
+    FROM ag_opc c JOIN pg_opclass pc ON pc.oid = c.oid JOIN ag_sis s ON s.oid = c.opcnamespace WHERE c.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat colatie ' || s.q || '.' || quote_ident(co.collname) || ' ' || co.collencoding,
+         jsonb_build_array(co.collowner::regrole::text)
+    FROM pg_collation co JOIN ag_sis s ON s.oid = co.collnamespace WHERE co.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat conversie ' || s.q || '.' || quote_ident(cv.conname), jsonb_build_array(cv.conowner::regrole::text)
+    FROM pg_conversion cv JOIN ag_sis s ON s.oid = cv.connamespace WHERE cv.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat ts_parser ' || s.q || '.' || quote_ident(pr.prsname), jsonb_build_array()
+    FROM pg_ts_parser pr JOIN ag_sis s ON s.oid = pr.prsnamespace WHERE pr.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat ts_sablon ' || s.q || '.' || quote_ident(tm.tmplname), jsonb_build_array()
+    FROM pg_ts_template tm JOIN ag_sis s ON s.oid = tm.tmplnamespace WHERE tm.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat ts_dictionar ' || s.q || '.' || quote_ident(dc.dictname), jsonb_build_array(dc.dictowner::regrole::text)
+    FROM pg_ts_dict dc JOIN ag_sis s ON s.oid = dc.dictnamespace WHERE dc.oid >= 16384
+  UNION ALL
+  SELECT 'sistem_adaugat', 'sistem_adaugat ts_config ' || s.q || '.' || quote_ident(cf.cfgname), jsonb_build_array(cf.cfgowner::regrole::text)
+    FROM pg_ts_config cf JOIN ag_sis s ON s.oid = cf.cfgnamespace WHERE cf.oid >= 16384
+  UNION ALL
+  -- acl_sistem: proprietarul + ACL-ul celor trei scheme de sistem si fiecare obiect din ele cu ACL EXPLICIT (relacl / attacl /
+  -- proacl / typacl nenul), cu grantor; relatiile TOAST etichetate dupa tabelul-parinte
+  SELECT 'acl_sistem', 'acl_sistem schema ' || s.q,
+         jsonb_build_array(n.nspowner::regrole::text,
+           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a) z))
+    FROM ag_sis3 s JOIN pg_namespace n ON n.oid = s.oid
+  UNION ALL
+  SELECT 'acl_sistem', 'acl_sistem relatie ' || r.et,
+         jsonb_build_array(c.relkind::text, c.relowner::regrole::text,
+           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(c.relacl) a) z))
+    FROM ag_rel_sis r JOIN pg_class c ON c.oid = r.oid
+   WHERE c.relacl IS NOT NULL
+  UNION ALL
+  SELECT 'acl_sistem', 'acl_sistem coloana ' || r.et || '.' || quote_ident(at.attname),
+         jsonb_build_array((SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(at.attacl) a) z))
+    FROM ag_rel_sis r JOIN pg_attribute at ON at.attrelid = r.oid
+   WHERE at.attacl IS NOT NULL AND NOT at.attisdropped
+  UNION ALL
+  SELECT 'acl_sistem', 'acl_sistem functie ' || p.oid::regprocedure::text,
+         jsonb_build_array(p.proowner::regrole::text,
+           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(p.proacl) a) z))
+    FROM pg_proc p JOIN ag_sis3 s ON s.oid = p.pronamespace
+   WHERE p.proacl IS NOT NULL
+  UNION ALL
+  SELECT 'acl_sistem', 'acl_sistem tip ' || t.oid::regtype::text,
+         jsonb_build_array(t.typowner::regrole::text,
+           (SELECT jsonb_agg(z.v ORDER BY z.v::text COLLATE "C") FROM (
+              SELECT jsonb_build_array(CASE WHEN a.grantee = 0 THEN NULL ELSE a.grantee::regrole::text END, a.privilege_type, a.is_grantable, a.grantor::regrole::text) AS v
+                FROM aclexplode(t.typacl) a) z))
+    FROM pg_type t JOIN ag_sis3 s ON s.oid = t.typnamespace
+   WHERE t.typacl IS NOT NULL
 )
 SELECT r.familie, r.eticheta, md5(r.d::text) AS amprenta, r.d::text AS detaliu
   FROM ag_rand r CROSS JOIN ag_garda g
  WHERE g.ok = 1
--- <<< AG_CATALOG v1
+-- <<< AG_CATALOG v2

@@ -6,7 +6,7 @@
 #   argumente: o optiune fara cealalta, md5 invalid, manifest cu alt nume, PGTZ / PGDATESTYLE din mediu => refuz 2, niciun
 #     apel psql; manifest cu format gresit / backslash => refuz 3; --aprobare fara randul manifestului / cu alt sha => 3;
 #   cu plafon: UN apel de livrare (00_sesiune, 5_mesaj, 9_reset), iar mesajul trece verificatorul independent CU --l15
-#     (pasii inainte imediat inaintea copiei, dupa imediat dupa inregistrare, corpul = blocul AG_CATALOG v1, md5-ul aprobat,
+#     (pasii inainte imediat inaintea copiei, dupa imediat dupa inregistrare, corpul = blocul AG_CATALOG v2, md5-ul aprobat,
 #     manifestul exact); control: alt md5 / alt manifest dat verificatorului => respins;
 #   fara plafon: psql --single-transaction cu 0_prolog, 1_pre, 2_ag_inainte, copia, 3_inreg, 4_ag_dupa (in ordinea asta);
 #   --genereaza-in: si 2_ag_inainte.sql, 4_ag_dupa.sql si copia manifestului, cod 40, niciun apel psql;

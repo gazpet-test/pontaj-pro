@@ -3,7 +3,7 @@
 # textului). Nu se conecteaza nicaieri; scrie SQL pe stdout.
 #   bash scripts/livrare_amprenta_gen.sh inainte <T 16 hex> <md5_aprobat|->
 #   bash scripts/livrare_amprenta_gen.sh dupa <T 16 hex> <md5_aprobat|-> <manifest|->
-#   bash scripts/livrare_amprenta_gen.sh bloc 'AG_CATALOG v1' | bloc 'AG_SESIUNE v1'
+#   bash scripts/livrare_amprenta_gen.sh bloc 'AG_CATALOG v2' | bloc 'AG_SESIUNE v2'
 #   bash scripts/livrare_amprenta_gen.sh global <relatie> | familii <relatie> | guc_local
 #   bash scripts/livrare_amprenta_gen.sh manifest_valid <fisier>
 set -Eeuo pipefail

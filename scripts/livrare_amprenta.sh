@@ -4,13 +4,13 @@
 # `source`); folosite de scripts/livrare_migrare.sh (doar cu --amprenta-globala + --diferente-globale), de
 # scripts/livrare_l15_manifest.sh (generarea manifestului pe clona, ROLLBACK), de scripts/amprenta_globala_citire.sh
 # (citirea coordonatorului) si de scripts/portal/dry_prod_e1.sh (proba cu ROLLBACK). Textul SQL vine DOAR din
-# scripts/amprenta_globala_v1.sql (blocurile AG_SESIUNE v1 / AG_CATALOG v1, L19) + fragmentele de mai jos.
+# scripts/amprenta_globala_v2.sql (blocurile AG_SESIUNE v2 / AG_CATALOG v2, L19) + fragmentele de mai jos.
 #
-# Pasii generati (fara backslash, ASCII; in forma „un mesaj” intra in mesajul verificat prin current_query()):
+# Pasii generati (fara backslash, ASCII; in forma "un mesaj" intra in mesajul verificat prin current_query()):
 #   2_ag_inainte.sql  (dupa 1_pre = lock consultativ + tinta + istoric + marcaj; INAINTEA artefactului)
-#     pg_temp.ag_cat_<T>()      functia SQL STABLE cu blocul AG_CATALOG v1 si GUC-urile canonice pe functie (SET ... la
+#     pg_temp.ag_cat_<T>()      functia SQL STABLE cu blocul AG_CATALOG v2 si GUC-urile canonice pe functie (SET ... la
 #                               iesire valorile apelantului revin singure: artefactul nu vede nicio schimbare de sesiune);
-#     pg_temp.ag_ses_<T>        tabel temporar: profilul sesiunii (AG_SESIUNE v1), citit in contextul livrarii;
+#     pg_temp.ag_ses_<T>        tabel temporar: profilul sesiunii (AG_SESIUNE v2), citit in contextul livrarii;
 #     pg_temp.ag_inainte_<T>()  calculeaza setul O DATA (CREATE TEMP TABLE ... AS: o singura fotografie), il valideaza
 #                               (randuri valide, etichete unice) si compara GLOBAL cu valoarea APROBATA; diferit = refuz cu
 #                               md5-ul pe familii in mesaj, inaintea artefactului, nimic schimbat.
@@ -21,14 +21,15 @@
 #                               orice rand in plus / in minus / cu alta amprenta = refuz, nimic comis. Fara wildcard-uri.
 #     DROP pe functiile si tabelele temporare ale pasului (nimic ramas in sesiune).
 # <T> = 16 hex aleatoare per livrare (artefactul, fixat inainte, nu poate numi obiectele pasului).
-# Familia „sesiune” se citeste O DATA (inainte) si se copiaza in setul de dupa: SET LOCAL-urile artefactului dispar la
+# Familia "sesiune" se citeste O DATA (inainte) si se copiaza in setul de dupa: SET LOCAL-urile artefactului dispar la
 # COMMIT (nu sunt stare persistenta); ce persista (ALTER ROLE / DATABASE ... SET) e in familiile rol / setare_rol.
-# Modul „-” (generatorul de manifest): fara valoare aprobata, pasii TIPARESC (NOTICE) GLOBAL si diferenta in loc sa compare.
+# Modul "-" (generatorul de manifest): fara valoare aprobata, pasii TIPARESC (NOTICE) GLOBAL, contextul (server_version_num,
+# rolul), diferenta (L15_DIF) si detaliul canonic al fiecarui rand din ea (L15_DET; la "sters" detaliul de dinainte).
 # ============================================================================
 
-AG_V1_FISIER="$(dirname "${BASH_SOURCE[0]}")/amprenta_globala_v1.sql"
+AG_V2_FISIER="$(dirname "${BASH_SOURCE[0]}")/amprenta_globala_v2.sql"
 
-# GUC-urile contextului canonic (aceleasi verificate de garda ag_garda din blocul AG_CATALOG v1).
+# GUC-urile contextului canonic (aceleasi verificate de garda ag_garda din blocul AG_CATALOG v2).
 ag_guc_functie() {
   printf "SET quote_all_identifiers = off SET search_path = pg_catalog, pg_temp SET TimeZone = 'UTC' SET DateStyle = 'ISO, YMD'"
   printf " SET IntervalStyle = 'postgres' SET extra_float_digits = 1 SET bytea_output = 'hex' SET standard_conforming_strings = on"
@@ -40,28 +41,28 @@ ag_guc_local() {
     "SET LOCAL bytea_output = 'hex';" "SET LOCAL standard_conforming_strings = on;" "SET LOCAL lc_monetary = 'C';"
 }
 
-# ag_bloc <MARCAJ> — textul dintre „-- >>> MARCAJ” si „-- <<< MARCAJ” (fiecare EXACT o data, linie intreaga), fara CR.
+# ag_bloc <MARCAJ> - textul dintre "-- >>> MARCAJ" si "-- <<< MARCAJ" (fiecare EXACT o data, linie intreaga), fara CR.
 ag_bloc() {
   local m="$1" a b
-  [ -f "$AG_V1_FISIER" ] || { echo "ag_bloc: lipseste $AG_V1_FISIER" >&2; return 3; }
-  a="$(tr -d '\r' <"$AG_V1_FISIER" | grep -cxF -- "-- >>> $m" || true)"
-  b="$(tr -d '\r' <"$AG_V1_FISIER" | grep -cxF -- "-- <<< $m" || true)"
+  [ -f "$AG_V2_FISIER" ] || { echo "ag_bloc: lipseste $AG_V2_FISIER" >&2; return 3; }
+  a="$(tr -d '\r' <"$AG_V2_FISIER" | grep -cxF -- "-- >>> $m" || true)"
+  b="$(tr -d '\r' <"$AG_V2_FISIER" | grep -cxF -- "-- <<< $m" || true)"
   [ "$a" = 1 ] && [ "$b" = 1 ] || { echo "ag_bloc: marcajele $m nu apar exact o data ($a / $b)" >&2; return 3; }
-  tr -d '\r' <"$AG_V1_FISIER" | awk -v a="-- >>> $m" -v b="-- <<< $m" '$0 == b { p = 0 } p { print } $0 == a { p = 1 }'
+  tr -d '\r' <"$AG_V2_FISIER" | awk -v a="-- >>> $m" -v b="-- <<< $m" '$0 == b { p = 0 } p { print } $0 == a { p = 1 }'
 }
 
-# ag_sql_global <relatie> — O interogare: global_md5, randuri. Codificare fara ambiguitati: pentru fiecare rand, in ordinea
+# ag_sql_global <relatie> - O interogare: global_md5, randuri. Codificare fara ambiguitati: pentru fiecare rand, in ordinea
 # (familie, eticheta) COLLATE "C": lungime(familie) ":" familie lungime(eticheta) ":" eticheta amprenta (32 hex).
 # Fara operatori (functii calificate), deci nu depinde de search_path. Set gol => global_md5 NULL (refuz la apelant).
 ag_sql_global() {
   printf '%s' "SELECT pg_catalog.md5(pg_catalog.string_agg(pg_catalog.concat(pg_catalog.length(a.familie), ':', a.familie, pg_catalog.length(a.eticheta), ':', a.eticheta, a.amprenta), '' ORDER BY a.familie COLLATE \"C\", a.eticheta COLLATE \"C\")) AS global_md5, pg_catalog.count(*) AS randuri FROM $1 a"
 }
-# ag_sql_familii <relatie> — md5 pe familie (aceeasi codificare, fara familie), pentru diagnostic: CE familie difera.
+# ag_sql_familii <relatie> - md5 pe familie (aceeasi codificare, fara familie), pentru diagnostic: CE familie difera.
 ag_sql_familii() {
   printf '%s' "SELECT a.familie, pg_catalog.md5(pg_catalog.string_agg(pg_catalog.concat(pg_catalog.length(a.eticheta), ':', a.eticheta, a.amprenta), '' ORDER BY a.eticheta COLLATE \"C\")) AS md5, pg_catalog.count(*) AS randuri FROM $1 a GROUP BY a.familie"
 }
 
-# ag_sql_valid <tabel> <moment> — instructiuni plpgsql: randuri valide + etichete unice (altfel FULL JOIN-ul ar fi ambiguu).
+# ag_sql_valid <tabel> <moment> - instructiuni plpgsql: randuri valide + etichete unice (altfel FULL JOIN-ul ar fi ambiguu).
 ag_sql_valid() {
   local t="$1" mo="$2"
   cat <<SQL
@@ -75,19 +76,20 @@ ag_sql_valid() {
 SQL
 }
 
-# ag_tag — 16 hex aleatoare
+# ag_tag - 16 hex aleatoare
 ag_tag() { od -An -N8 -tx1 /dev/urandom | tr -d ' \n'; }
 
-# ag_inainte <T> <md5_aprobat|-> — fisierul 2_ag_inainte.sql (stdout).
+# ag_inainte <T> <md5_aprobat|-> - fisierul 2_ag_inainte.sql (stdout).
 ag_inainte() {
   local T="$1" A="$2" cat_sql ses_sql cmp
   [[ "$T" =~ ^[0-9a-f]{16}$ ]] || { echo "ag_inainte: tag invalid" >&2; return 2; }
   [[ "$A" =~ ^([0-9a-f]{32}|-)$ ]] || { echo "ag_inainte: md5 aprobat invalid" >&2; return 2; }
-  cat_sql="$(ag_bloc 'AG_CATALOG v1')" || return 3
-  ses_sql="$(ag_bloc 'AG_SESIUNE v1')" || return 3
+  cat_sql="$(ag_bloc 'AG_CATALOG v2')" || return 3
+  ses_sql="$(ag_bloc 'AG_SESIUNE v2')" || return 3
   if [ "$A" = - ]; then
     cmp="  RAISE NOTICE 'AMPRENTA_GLOBALA_CITITA inainte: % (% randuri), calcul % ms, la % ms de la BEGIN; familii: %', v_g, v_n,
-    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000), v_f;"
+    round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000), v_f;
+  RAISE NOTICE 'AMPRENTA_GLOBALA_CONTEXT server_version_num % rol %', current_setting('server_version_num'), current_user;"
   else
     cmp="  IF v_g IS DISTINCT FROM '$A' THEN
     RAISE EXCEPTION 'AMPRENTA_GLOBALA_INAINTE: GLOBAL % (% randuri) diferit de cel aprobat $A - catalogul nu mai e cel citit si revizuit (recitire baseline); familii acum: % - refuz inaintea artefactului, nimic comis', coalesce(v_g, 'NULL'), v_n, v_f;
@@ -118,9 +120,9 @@ DO \$ag_pas_$T\$ BEGIN PERFORM pg_temp.ag_inainte_$T(); END \$ag_pas_$T\$;
 SQL
 }
 
-# ag_manifest_valid <fisier> — formatul manifestului, verificat local (inainte de orice conexiune). O linie pe obiect:
-#   familie TAB eticheta TAB operatie TAB amprenta   (operatie: creat | schimbat | sters; amprenta: 32 hex, „-” la sters)
-# Linii goale si comentarii „#” ignorate; CR final tolerat (checkout Windows). Refuz: alt format, backslash (textul
+# ag_manifest_valid <fisier> - formatul manifestului, verificat local (inainte de orice conexiune). O linie pe obiect:
+#   familie TAB eticheta TAB operatie TAB amprenta   (operatie: creat | schimbat | sters; amprenta: 32 hex, "-" la sters)
+# Linii goale si comentarii "#" ignorate; CR final tolerat (checkout Windows). Refuz: alt format, backslash (textul
 # runnerului din mesaj nu are backslash-uri), perechi familie + eticheta duble.
 ag_manifest_valid() {
   local f="$1" l nr=0 re t=$'\t'
@@ -140,7 +142,7 @@ ag_manifest_valid() {
   fi
 }
 
-# ag_dupa <T> <md5_aprobat|-> <manifest|-> — fisierul 4_ag_dupa.sql (stdout). Cu „-” la manifest: TIPARESTE diferenta
+# ag_dupa <T> <md5_aprobat|-> <manifest|-> - fisierul 4_ag_dupa.sql (stdout). Cu "-" la manifest: TIPARESTE diferenta
 # (NOTICE L15_DIF, generatorul de manifest), altfel o compara EXACT cu manifestul.
 ag_dupa() {
   local T="$1" A="$2" M="$3" integ man_lit verif
@@ -156,6 +158,13 @@ ag_dupa() {
     RAISE EXCEPTION 'AMPRENTA_GLOBALA_DUPA: eticheta cu CR / LF in diferenta - nu se poate scrie in manifest'; END IF;
   FOR r IN SELECT d.familie, d.eticheta, d.operatie, d.amprenta FROM pg_temp.ag_dif_$T d ORDER BY d.familie COLLATE \"C\", d.eticheta COLLATE \"C\" LOOP
     RAISE NOTICE 'L15_DIF %', concat(r.familie, chr(9), r.eticheta, chr(9), r.operatie, chr(9), r.amprenta);
+  END LOOP;
+  FOR r IN SELECT d.familie, d.eticheta, d.operatie, coalesce(b.detaliu, a.detaliu) AS detaliu
+             FROM pg_temp.ag_dif_$T d
+             LEFT JOIN pg_temp.ag_dup_$T b ON b.familie = d.familie AND b.eticheta = d.eticheta
+             LEFT JOIN pg_temp.ag_ina_$T a ON a.familie = d.familie AND a.eticheta = d.eticheta
+            ORDER BY d.familie COLLATE \"C\", d.eticheta COLLATE \"C\" LOOP
+    RAISE NOTICE 'L15_DET %', concat(r.familie, chr(9), r.eticheta, chr(9), r.operatie, chr(9), CASE WHEN r.operatie = 'sters' THEN 'inainte' ELSE 'dupa' END, chr(9), r.detaliu);
   END LOOP;
   RAISE NOTICE 'L15_DIF_TOTAL % GLOBAL_DUPA % (% randuri), calcul % ms, la % ms de la BEGIN', v_nd, v_g, v_n,
     round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000);"

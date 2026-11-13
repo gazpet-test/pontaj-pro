@@ -1,10 +1,10 @@
-// L15 v2 (docs/LIVRARE_L15_V2.md): proba LOCALA a blocului AMPRENTA_GLOBALA v1 si a pasilor runnerului „inainte” / „dupa”
+// L15 v2 (docs/LIVRARE_L15_V2.md): proba LOCALA a blocului AMPRENTA_GLOBALA v2 si a pasilor runnerului „inainte” / „dupa”
 // pe PGlite (Postgres in WASM, in memorie) — NU atinge nicio baza reala.
-// Textul SQL vine EXCLUSIV din fisierele livrate (L19): blocurile din scripts/amprenta_globala_v1.sql si pasii generati de
+// Textul SQL vine EXCLUSIV din fisierele livrate (L19): blocurile din scripts/amprenta_globala_v2.sql si pasii generati de
 // scripts/livrare_amprenta.sh (prin scripts/livrare_amprenta_gen.sh) + sectiunile citirii generate de
-// scripts/amprenta_globala_citire.sh --doar-genereaza. Testul doar le ruleaza.
+// scripts/amprenta_globala_citire.sh --doar-genereaza (cu optiunile fiecarui caz). Testul doar le ruleaza.
 // Ce dovedeste (expected scris aici, din cerere / catalogul PostgreSQL, nu din codul testat — L25):
-//   1. garda: blocul in afara contextului canonic = eroare AG_V1_CONTEXT_NECANONIC;
+//   1. garda: blocul in afara contextului canonic = eroare AG_V2_CONTEXT_NECANONIC;
 //   2. paritate: GLOBAL din citirea coordonatorului = GLOBAL calculat de pasul runnerului (acelasi set);
 //   3. independenta de sesiune: alt search_path / TimeZone / DateStyle / IntervalStyle / extra_float_digits /
 //      quote_all_identifiers in afara => aceleasi md5 pe familiile de catalog (doar familia „sesiune” se schimba);
@@ -20,11 +20,18 @@
 //      operatie = refuz; DDL nedeclarat in tranzactie = refuz; schimbarile de sesiune si obiectele temporare ale migrarii
 //      nu apar; o functie noua care cheama jsonb_build_object, cu extensions.jsonb_build_object existent, trece;
 //   8. secretele (setari de rol / baza, optiuni FDW / mapari) nu apar in detaliu;
-//   9. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi): pasul „inainte” si „dupa”, rece si cald.
+//   9. semnalele citirii + regula DEFINER (calea sigura / nesigura, increderea, acceptarea legata de md5) cu MUTANT pe
+//      fiecare regula;
+//  10. v2: grantorul (contraexemplul pe TABEL si pe COLOANA + mutantul fara grantor), dependenta OWNED BY a secventelor
+//      (+ mutant), obiectele mari cate unul (permutarea ACL-urilor; agregatul fara identitate din forma veche n-o vedea), contextul si detaliul
+//      tiparite de generatorul de manifest (md5(detaliu) = amprenta);
+//  11. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi): pasul „inainte” si „dupa”, rece si cald.
 // Rulare (din radacina repo-ului; cere bash in PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_amprenta_globala_local.mjs
 // Limite: PGlite = PostgreSQL 18 (productia e 17: in 18 NOT NULL sunt si in pg_constraint — testul le asteapta doar pe 18);
 //   fara concurenta reala si fara timere (probele cu doua sesiuni si plafonul: scripts/test_livrare_l15_v2.sh pe PG17);
-//   fara furnizor de etichete de securitate (familia eticheta_securitate nu se poate schimba aici).
+//   fara furnizor de etichete de securitate (familia eticheta_securitate nu se poate schimba aici); server_version_num nu
+//   se poate schimba (doar verificarea statica: e in familia baza); un singur utilizator (superuser), deci rolurile „altora”
+//   sunt simulate cu SET ROLE.
 import { PGlite } from '@electric-sql/pglite'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
@@ -34,27 +41,40 @@ import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const TMP = mkdtempSync(join(tmpdir(), 'ag_v1_'))
+const TMP = mkdtempSync(join(tmpdir(), 'ag_v2_'))
 let esecuri = 0
 const ok = (c, m) => { if (c) console.log('  ok  ' + m); else { esecuri++; console.log('  ESEC ' + m) } }
 const gen = (...a) => execFileSync('bash', [join(ROOT, 'scripts/livrare_amprenta_gen.sh'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-const CAT = gen('bloc', 'AG_CATALOG v1')
-const SES = gen('bloc', 'AG_SESIUNE v1')
+const CAT = gen('bloc', 'AG_CATALOG v2')
+const SES = gen('bloc', 'AG_SESIUNE v2')
 const GUC = gen('guc_local')
 const lit = (s) => "'" + String(s).split("'").join("''") + "'"
 
-// citirea coordonatorului: textul generat de scripts/amprenta_globala_citire.sh (sectiunile dintre marcaje)
-const DIR_CIT = join(TMP, 'citire')
-const rc = spawnSync('bash', [join(ROOT, 'scripts/amprenta_globala_citire.sh'), '--tinta-host', 'localhost', '--tinta-port', '5432',
-  '--tinta-db', 'postgres', '--tinta-sistem', '1', '--user', 'postgres', '--lista', '--radacina', 'public.poarta(bigint)',
-  '--doar-genereaza', DIR_CIT], { encoding: 'utf8' })
-if (rc.status !== 40) { console.error('citirea nu s-a generat:', rc.status, rc.stderr); process.exit(1) }
-const CIT = readFileSync(join(DIR_CIT, 'citire.sql'), 'utf8').split('\r').join('')
-const sectiune = (n) => {
-  const a = `-- >>> AG_CITIRE ${n}\n`, b = `\n-- <<< AG_CITIRE ${n}`
-  const i = CIT.indexOf(a), j = CIT.indexOf(b)
-  if (i < 0 || j < 0 || CIT.indexOf(a, i + 1) >= 0) throw new Error('sectiunea citirii lipseste: ' + n)
-  return CIT.slice(i + a.length, j)
+// citirea coordonatorului: textul generat de scripts/amprenta_globala_citire.sh (sectiunile dintre marcaje), cu optiunile date
+let nCit = 0
+function genCitire(opt = []) {
+  const dir = join(TMP, 'citire_' + (nCit++))
+  const rc = spawnSync('bash', [join(ROOT, 'scripts/amprenta_globala_citire.sh'), '--tinta-host', 'localhost', '--tinta-port', '5432',
+    '--tinta-db', 'postgres', '--tinta-sistem', '1', '--user', 'postgres', '--lista', ...opt, '--doar-genereaza', dir], { encoding: 'utf8' })
+  if (rc.status !== 40) throw new Error('citirea nu s-a generat: ' + rc.status + ' ' + rc.stderr)
+  const text = readFileSync(join(dir, 'citire.sql'), 'utf8').split('\r').join('')
+  return (n) => {
+    const a = `-- >>> AG_CITIRE ${n}\n`, b = `\n-- <<< AG_CITIRE ${n}`
+    const i = text.indexOf(a), j = text.indexOf(b)
+    if (i < 0 || j < 0 || text.indexOf(a, i + 1) >= 0) throw new Error('sectiunea citirii lipseste: ' + n)
+    return text.slice(i + a.length, j)
+  }
+}
+const sectiune = genCitire(['--radacina', 'public.poarta(bigint)'])
+// semnalele (randurile sectiunii, ca tablouri) pentru radacinile / increderile / acceptarile date; mut(text) = mutant
+async function semnale(db, { rad, incr = [], acc = [], mut = (s) => s }) {
+  const opt = []
+  for (const r of rad) opt.push('--radacina', r)
+  for (const r of incr) opt.push('--rol-de-incredere', r)
+  for (const r of acc) opt.push('--definer-verificat', r)
+  const sql = mut(genCitire(opt)('semnale'))
+  await db.exec('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+  try { await db.exec(GUC); return (await db.query(sql, [], { rowMode: 'array' })).rows } finally { await db.exec('ROLLBACK') }
 }
 
 // --- calcule ----------------------------------------------------------------------------------------------------------
@@ -162,7 +182,7 @@ async function main() {
   console.log('1. garda contextului canonic')
   let err = ''
   try { await db.query(CAT) } catch (e) { err = String(e.message) }
-  ok(err.includes('AG_V1_CONTEXT_NECANONIC'), `blocul fara SET-urile canonice => eroare AG_V1_CONTEXT_NECANONIC (${err.slice(0, 80)})`)
+  ok(err.includes('AG_V2_CONTEXT_NECANONIC'), `blocul fara SET-urile canonice => eroare AG_V2_CONTEXT_NECANONIC (${err.slice(0, 80)})`)
 
   console.log('2. paritate citire <-> pasul runnerului; validare; etichete unice')
   const c0 = await citeste(db)
@@ -253,6 +273,18 @@ async function main() {
     ['publicatie_tabel', 'ALTER PUBLICATION pub_ag ADD TABLE public.sites'],
     ['publicatie_schema', 'ALTER PUBLICATION pub_ag ADD TABLES IN SCHEMA extensions'],
     ['obiect_mare', 'SELECT lo_create(0)'],
+    // v2: schemele de sistem nu mai sunt o gaura
+    ['sistem_adaugat', 'CREATE FUNCTION pg_catalog.ag_umbra(bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT true $f$'],
+    ['sistem_adaugat', 'SET LOCAL allow_system_table_mods = on; CREATE TABLE pg_catalog.ag_umbra_t (x int)'],
+    ['sistem_adaugat', 'CREATE OPERATOR pg_catalog.=== (LEFTARG = int4, RIGHTARG = int4, FUNCTION = int4eq)'],
+    ['acl_sistem', 'REVOKE EXECUTE ON FUNCTION pg_catalog.now() FROM PUBLIC'],
+    ['acl_sistem', 'GRANT EXECUTE ON FUNCTION pg_catalog.pg_reload_conf() TO anon'],
+    ['acl_sistem', 'GRANT SELECT ON pg_catalog.pg_authid TO anon'],
+    ['acl_sistem', 'GRANT SELECT (rolname) ON pg_catalog.pg_authid TO anon'],
+    ['acl_sistem', 'GRANT SELECT ON information_schema.tables TO anon WITH GRANT OPTION'],
+    ['acl_sistem', 'GRANT USAGE ON TYPE pg_catalog.int4 TO anon'],
+    ['acl_sistem', 'GRANT CREATE ON SCHEMA pg_catalog TO anon'],
+    ['acl_sistem', "DO $d$ BEGIN EXECUTE 'GRANT SELECT ON ' || (SELECT c.reltoastrelid::regclass::text FROM pg_class c WHERE c.oid = 'pg_catalog.pg_proc'::regclass) || ' TO anon'; END $d$"],
   ]
   const acoperite = new Set(), sarite = []
   for (const [f, sql] of MUT) {
@@ -338,6 +370,20 @@ DROP TABLE tmp_migrare;`
   ok(g.ok && lipsa.length === 0 && plus.length === 0, `diferenta generata = lista de mana (${real.length} obiecte); lipsa [${lipsa}] in plus [${plus}]`)
   const total = g.notices.find(m => m.startsWith('L15_DIF_TOTAL'))
   ok(total && Number(total.split(' ')[1]) === real.length, `L15_DIF_TOTAL anunta ${total && total.split(' ')[1]} = ${real.length} linii (completitudine)`)
+  {
+    // detaliul (--detalii al generatorului): un L15_DET pe fiecare rand din diferenta, md5(detaliu) = amprenta din manifest
+    const det = g.notices.filter(m => m.startsWith('L15_DET ')).map(m => m.slice('L15_DET '.length).split('\t'))
+    const amp = new Map(manifest.trim().split('\n').map(l => { const p = l.split('\t'); return [p.slice(0, -2).join('\t'), p[p.length - 1]] }))
+    let bune = 0
+    for (const p of det) {
+      const cheie = p.slice(0, -3).join('\t'), detaliu = p[p.length - 1]
+      const md5 = (await db.query(`SELECT md5(${lit(detaliu)}) AS m`)).rows[0].m
+      if (amp.get(cheie) === md5 && p[p.length - 2] === 'dupa') bune++
+    }
+    ok(det.length === real.length && bune === real.length, `L15_DET: ${det.length} detalii, ${bune} cu md5(detaliu) = amprenta din manifest (din ${real.length})`)
+    const ctx = g.notices.find(m => m.startsWith('AMPRENTA_GLOBALA_CONTEXT '))
+    ok(ctx === `AMPRENTA_GLOBALA_CONTEXT server_version_num ${ver} rol postgres`, `contextul pentru antetul manifestului: ${ctx}`)
+  }
   const bun = await livrare(db, { aprobat: G, manifest, migrare: MIG, final: 'ROLLBACK' })
   ok(bun.ok && bun.notices.some(m => m.startsWith(`AMPRENTA_GLOBALA dupa: ${real.length} diferente = manifestul`)), `drumul bun: diferenta = manifestul (${(bun.err || '').slice(0, 80)})`)
   const linii = manifest.trim().split('\n')
@@ -374,7 +420,7 @@ DROP TABLE tmp_migrare;`
     ok(/^[0-9a-f]{32}$/.test(G2), 'eticheta cu LF in catalog nu strica citirea')
   }
 
-  console.log('9. semnalele citirii (lantul portii prin vedere)')
+  console.log('9. semnalele citirii (lantul portii prin vedere) + regula DEFINER (calea proprie trebuie sa fie SIGURA)')
   {
     await db.exec('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
     await db.exec(GUC)
@@ -384,10 +430,186 @@ DROP TABLE tmp_migrare;`
     const sem = rows.find(r => r[0] === 'SEMNALE')
     ok(lant.includes('functie public.poarta(bigint)') && lant.includes('relatie public.v_drept') && lant.includes('functie public.aux_drept()') && lant.includes('functie auth.uid()'),
       `lantul vede poarta -> vederea -> auxiliarul + auth.uid(): [${lant}]`)
-    ok(sem && sem[2] === '1' && sem[4] === '0', `SEMNALE: vederi citite = ${sem && sem[2]} (asteptat 1), DEFINER fara search_path = ${sem && sem[4]} (asteptat 0)`)
+    ok(sem && sem.length === 6 && sem[2] === '1' && sem[4] === '0' && sem[5] === '0',
+      `SEMNALE [${sem}]: vederi citite 1, DEFINER nesigure 0, acceptate 0 (poarta are search_path = public, pg_temp)`)
+  }
+  // fixture-ul cazurilor DEFINER (comis): fiecare functie DEFINER citeste NECALIFICAT gate_flag
+  await db.exec(`
+CREATE TABLE public.gate_flag (v boolean); INSERT INTO public.gate_flag VALUES (false); GRANT SELECT ON public.gate_flag TO PUBLIC;
+CREATE SCHEMA s_cr; GRANT USAGE ON SCHEMA s_cr TO PUBLIC; CREATE ROLE creator_cr; GRANT CREATE ON SCHEMA s_cr TO creator_cr;
+CREATE SCHEMA s_pub; GRANT CREATE ON SCHEMA s_pub TO PUBLIC;
+CREATE SCHEMA s_mem; CREATE ROLE creator_mem; GRANT CREATE ON SCHEMA s_mem TO creator_mem; GRANT creator_mem TO authenticated;
+CREATE SCHEMA "Schema Mare";
+CREATE FUNCTION public.d_temp_intai() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_temp, public AS $f$ SELECT v FROM gate_flag $f$;
+CREATE FUNCTION public.d_fara_temp() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $f$ SELECT v FROM gate_flag $f$;
+CREATE FUNCTION public.d_user() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = "$user", public, pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_inexistenta() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nu_exista, public, pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_create() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = s_cr, public, pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_public_create() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = s_pub, pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_membru() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = s_mem, pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_ghilimele() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = "Schema Mare", public, pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_virgula() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = "a,b", pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_gol() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_temp_dublu() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_temp, public, pg_temp AS $f$ SELECT v FROM gate_flag $f$;
+CREATE FUNCTION public.d_fara_cale() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $f$ SELECT v FROM public.gate_flag $f$;
+CREATE FUNCTION public.d_sigura() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT v FROM public.gate_flag $f$;
+`)
+  {
+    // contraexemplul recenzentului chiar functioneaza (aici, ca proba ca regula apara ceva real)
+    await db.exec('BEGIN')
+    await db.exec('CREATE TEMP TABLE gate_flag (v boolean); INSERT INTO pg_temp.gate_flag VALUES (true)')
+    const pacalit = (await db.query('SELECT public.d_temp_intai() AS v')).rows[0].v
+    await db.exec('ROLLBACK')
+    ok(pacalit === true, `contraexemplul: DEFINER cu search_path = pg_temp, public citeste tabelul TEMPORAR (intoarce ${pacalit}, tabelul real are false)`)
+  }
+  const calea = (rows, fn) => { const r = rows.find(x => x[0] === 'LANT' && x[2] === `functie ${fn}`); const m = r && r[3].match(/cale=(.*)$/); return m ? m[1] : null }
+  const md5Corp = (rows, fn) => { const r = rows.find(x => x[0] === 'LANT' && x[2] === `functie ${fn}`); const m = r && r[3].match(/DEFINER md5=([0-9a-f]{32})/); return m ? m[1] : null }
+  const semRand = (rows) => rows.find(x => x[0] === 'SEMNALE')
+  // fiecare caz: functia, asteptarea (sigura | motivul), optiunile; MUTANTUL regulii (textul semnalelor fara regula) => sigura
+  const MUT_D = {
+    fara_cale: (s) => s.split("THEN 'fara search_path propriu' END").join('THEN NULL END'),
+    neanalizabil: (s) => s.split("THEN 'element neanalizabil' END").join('THEN NULL END'),
+    user: (s) => s.split(`THEN 'contine "$user"' END`).join('THEN NULL END'),
+    pg_temp: (s) => s.split("THEN 'pg_temp lipseste sau nu e ultimul' END").join('THEN NULL END'),
+    inexistenta: (s) => s.split('WHERE e.oid = d.oid AND s.nsp IS NULL ORDER BY e.nr').join('WHERE false ORDER BY e.nr'),
+    create: (s) => s.split('WHERE e.oid = d.oid AND c.motiv IS NULL) q').join('WHERE false) q'),
+  }
+  {
+    const t = sectiune('semnale')
+    const neschimbati = Object.entries(MUT_D).filter(([, m]) => m(t) === t).map(([k]) => k)
+    ok(neschimbati.length === 0, `fiecare mutant DEFINER chiar schimba textul semnalelor (neschimbati: [${neschimbati}])`)
+  }
+  for (const [fn, astept, mut, opt] of [
+    ['public.d_temp_intai()', 'pg_temp lipseste sau nu e ultimul', 'pg_temp', {}],
+    ['public.d_fara_temp()', 'pg_temp lipseste sau nu e ultimul', 'pg_temp', {}],
+    ['public.d_temp_dublu()', 'pg_temp lipseste sau nu e ultimul', 'pg_temp', {}],
+    ['public.d_gol()', 'pg_temp lipseste sau nu e ultimul', 'pg_temp', {}],
+    ['public.d_user()', 'contine "$user"', 'user', {}],
+    ['public.d_inexistenta()', 'schema inexistenta nu_exista', 'inexistenta', {}],
+    ['public.d_create()', 'CREATE pe s_cr pentru creator_cr', 'create', {}],
+    ['public.d_public_create()', 'CREATE pe s_pub pentru anon', 'create', {}],
+    ['public.d_membru()', 'CREATE pe s_mem pentru authenticated', 'create', {}],
+    ['public.d_membru()', 'CREATE pe s_mem pentru authenticated', 'create', { incr: ['creator_mem'] }],
+    ['public.d_virgula()', 'element neanalizabil', 'neanalizabil', {}],
+    ['public.d_fara_cale()', 'fara search_path propriu', 'fara_cale', {}],
+  ]) {
+    const rows = await semnale(db, { rad: [fn], ...opt })
+    const c = calea(rows, fn), s = semRand(rows)
+    const mrows = await semnale(db, { rad: [fn], ...opt, mut: MUT_D[mut] })
+    const cm = calea(mrows, fn)
+    ok(c && c.startsWith('nesigura: ') && c.includes(astept) && s[4] === '1' && cm === 'sigura',
+      `${fn}${opt.incr ? ' (+ --rol-de-incredere ' + opt.incr + ')' : ''}: cale=${c}; SEMNALE nesigure ${s && s[4]}; mutant fara regula „${mut}”: cale=${cm}`)
+  }
+  {
+    const r1 = await semnale(db, { rad: ['public.d_create()'], incr: ['creator_cr'] })
+    const inc = r1.filter(x => x[0] === 'INCREDERE').map(x => x.slice(1, 4).join(' '))
+    ok(calea(r1, 'public.d_create()') === 'sigura' && inc.includes('s_cr creator_cr optiune'),
+      `aceeasi schema cu --rol-de-incredere creator_cr => sigura; INCREDERE [${inc.join('; ')}]`)
+    const r2 = await semnale(db, { rad: ['public.d_ghilimele()'] })
+    const pc = (await db.query("SELECT array_to_string(proconfig, '|') AS c FROM pg_proc WHERE oid = 'public.d_ghilimele()'::regprocedure")).rows[0].c
+    ok(calea(r2, 'public.d_ghilimele()') === 'sigura' && r2.some(x => x[0] === 'INCREDERE' && x[1] === '"Schema Mare"'),
+      `nume intre ghilimele / cu majuscule (${pc}) => sigura, schema analizata`)
+    const r3 = await semnale(db, { rad: ['public.d_sigura()'] })
+    const inc3 = r3.filter(x => x[0] === 'INCREDERE').map(x => x.slice(1, 4).join(' '))
+    ok(calea(r3, 'public.d_sigura()') === 'sigura' && semRand(r3)[4] === '0' && inc3.length > 0 && inc3.every(x => /^public \S+ (super|proprietar|rolul citirii)$/.test(x)),
+      `drumul legitim (L20): public, pg_temp cu creatori de incredere => sigura; INCREDERE [${inc3.join('; ')}]`)
+  }
+  {
+    // acceptarea explicita, legata de corpul exact (md5 [prosrc, proconfig] tiparit pe randul LANT)
+    const fn = 'public.d_temp_intai()'
+    const m = md5Corp(await semnale(db, { rad: [fn] }), fn)
+    const ra = await semnale(db, { rad: [fn], acc: [`${fn}=${m}`] })
+    ok(m && calea(ra, fn) === 'acceptata' && semRand(ra)[4] === '0' && semRand(ra)[5] === '1' && !ra.some(x => x[0] === 'ACCEPTARE_INVALIDA'),
+      `acceptare cu md5 corect => cale=acceptata, SEMNALE acceptate ${semRand(ra)[5]}, nesigure ${semRand(ra)[4]}`)
+    const rg = await semnale(db, { rad: [fn], acc: [`${fn}=${'0'.repeat(32)}`] })
+    const rgm = await semnale(db, { rad: [fn], acc: [`${fn}=${'0'.repeat(32)}`], mut: (s) => s.split('AND a.md5 = d.md5_corp').join('') })
+    ok(calea(rg, fn).startsWith('nesigura') && rg.some(x => x[0] === 'ACCEPTARE_INVALIDA' && x[3].startsWith('md5 diferit')) && calea(rgm, fn) === 'acceptata',
+      `md5 gresit => tot nesigura + ACCEPTARE_INVALIDA (md5 diferit); mutant fara verificarea md5: ${calea(rgm, fn)}`)
+    await db.exec("ALTER FUNCTION public.d_temp_intai() SET search_path = pg_temp, public, extensions")
+    const rc2 = await semnale(db, { rad: [fn], acc: [`${fn}=${m}`] })
+    ok(calea(rc2, fn).startsWith('nesigura') && rc2.some(x => x[0] === 'ACCEPTARE_INVALIDA'), 'calea schimbata dupa acceptare => alt md5 => iar refuz')
+    await db.exec("ALTER FUNCTION public.d_temp_intai() SET search_path = pg_temp, public")
+    for (const [nume, a, motiv] of [
+      ['functie deja sigura', 'public.d_sigura()', 'calea e deja sigura'],
+      ['functie din afara lantului', 'public.d_user()', 'nu e in lant'],
+      ['functie ne-DEFINER din lant', 'public.aux_drept()', 'nu e SECURITY DEFINER'],
+      ['functie inexistenta', 'public.nu_exista()', 'functie inexistenta'],
+    ]) {
+      const rad = a === 'public.d_sigura()' ? [a] : a === 'public.aux_drept()' ? ['public.poarta(bigint)'] : [fn]
+      const md5a = a === 'public.d_sigura()' ? md5Corp(await semnale(db, { rad }), a) : m
+      const r = await semnale(db, { rad, acc: [`${a}=${md5a}`] })
+      const inv = r.find(x => x[0] === 'ACCEPTARE_INVALIDA')
+      ok(inv && inv[1] === a && inv[3] === motiv, `acceptare pentru ${nume} => ACCEPTARE_INVALIDA (${inv && inv[3]})`)
+    }
+    const rl = await semnale(db, { rad: [fn], incr: ['rol_inexistent'] })
+    ok(rl.some(x => x[0] === 'ROL_INCREDERE_LIPSA' && x[1] === 'rol_inexistent'), '--rol-de-incredere inexistent => ROL_INCREDERE_LIPSA (refuz 2 in script)')
   }
 
-  console.log('10. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi)')
+  console.log('10. v2: grantorul, OWNED BY, obiectele mari')
+  {
+    // A. contraexemplul grantorului, pe tabel si pe coloana (autoritatea de revocare se schimba, accesul ramane)
+    await db.exec(`CREATE ROLE g1; CREATE ROLE g2; CREATE ROLE r_gr;
+CREATE TABLE public.t_gr (id int, c int);
+GRANT SELECT ON public.t_gr TO g1, g2 WITH GRANT OPTION; GRANT UPDATE (c) ON public.t_gr TO g1, g2 WITH GRANT OPTION;
+SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; GRANT UPDATE (c) ON public.t_gr TO r_gr; RESET ROLE;`)
+    const faraGrantor = (fam) => {
+      // mutantul: grantorul scos din serializarea ACL a familiei date (relatie / coloana)
+      const i = CAT.indexOf(`SELECT '${fam}', '${fam} `), j = CAT.indexOf('UNION ALL', i)
+      const bucata = CAT.slice(i, j), fara = bucata.replace(/, (\w)\.grantor::regrole::text\)/, ')')
+      if (fara === bucata) throw new Error('mutantul grantorului nu a schimbat nimic: ' + fam)
+      return CAT.slice(0, i) + fara + CAT.slice(j)
+    }
+    for (const [fam, transfer, acces] of [
+      ['relatie', 'SET ROLE g1; REVOKE SELECT ON public.t_gr FROM r_gr; RESET ROLE; SET ROLE g2; GRANT SELECT ON public.t_gr TO r_gr; RESET ROLE;',
+        "has_table_privilege('r_gr', 'public.t_gr', 'SELECT')"],
+      ['coloana', 'SET ROLE g1; REVOKE UPDATE (c) ON public.t_gr FROM r_gr; RESET ROLE; SET ROLE g2; GRANT UPDATE (c) ON public.t_gr TO r_gr; RESET ROLE;',
+        "has_column_privilege('r_gr', 'public.t_gr', 'c', 'UPDATE')"],
+    ]) {
+      const b0 = await catalogIn(db), b1 = await catalogIn(db, transfer)
+      const sch = familiiSchimbate(b0, b1)
+      const mb0 = await catalogIn(db, '', faraGrantor(fam)), mb1 = await catalogIn(db, transfer, faraGrantor(fam))
+      // dupa transfer, REVOKE facut ca g1 nu mai scoate accesul (asta e ce amprenta trebuie sa vada)
+      await db.exec('BEGIN'); await db.exec(transfer)
+      await db.exec(`SET ROLE g1; REVOKE ${fam === 'relatie' ? 'SELECT' : 'UPDATE (c)'} ON public.t_gr FROM r_gr; RESET ROLE;`)
+      const ramas = (await db.query(`SELECT ${acces} AS a`)).rows[0].a
+      await db.exec('ROLLBACK')
+      ok(b0.global !== b1.global && sch.length === 1 && sch[0] === fam && ramas === true && mb0.global === mb1.global,
+        `grantor pe ${fam}: transferul g1 -> g2 schimba GLOBAL, familia [${sch}]; REVOKE ca g1 lasa accesul (${ramas}); mutant fara grantor in ${fam}: GLOBAL neschimbat`)
+    }
+    // B. OWNED BY: legatura secventei cu coloana (pg_get_serial_sequence, DROP TABLE o ia cu el)
+    await db.exec('CREATE TABLE public.t_own (id int); CREATE SEQUENCE public.s_own OWNED BY public.t_own.id;')
+    const faraDep = (() => {
+      const i = CAT.indexOf(',\n                  (SELECT jsonb_agg(jsonb_build_array(d.deptype::text')
+      const j = CAT.indexOf("d.deptype IN ('a', 'i'))", i)
+      if (i < 0 || j < 0) throw new Error('subinterogarea OWNED BY nu s-a gasit')
+      return CAT.slice(0, i) + CAT.slice(j + "d.deptype IN ('a', 'i'))".length)
+    })()
+    const o0 = await catalogIn(db), o1 = await catalogIn(db, 'ALTER SEQUENCE public.s_own OWNED BY NONE')
+    const om0 = await catalogIn(db, '', faraDep), om1 = await catalogIn(db, 'ALTER SEQUENCE public.s_own OWNED BY NONE', faraDep)
+    const det = o0.d.find(r => r.eticheta === 'relatie public.s_own')
+    ok(o0.global !== o1.global && familiiSchimbate(o0, o1).join() === 'relatie' && om0.global === om1.global && det && det.detaliu.includes('["a", "public.t_own", "id"]'),
+      `OWNED BY NONE schimba GLOBAL (familia relatie; detaliul secventei are ["a", "public.t_own", "id"]); mutant fara pg_depend: GLOBAL neschimbat`)
+    const id0 = (await catalogIn(db)).d.find(r => r.eticheta === 'relatie public.meteo_nou_id_seq')
+    ok(id0 && id0.detaliu.includes('["i", "public.meteo_nou", "id"]'), 'secventa identity are legatura i -> public.meteo_nou.id')
+    // C. obiectele mari: permutarea ACL-urilor intre doua obiecte (forma veche le agrega fara identitate => nu vedea)
+    await db.exec('SELECT lo_create(424201), lo_create(424202); GRANT SELECT ON LARGE OBJECT 424201 TO anon;')
+    const perm = 'REVOKE SELECT ON LARGE OBJECT 424201 FROM anon; GRANT SELECT ON LARGE OBJECT 424202 TO anon;'
+    const l0 = await catalogIn(db), l1 = await catalogIn(db, perm)
+    const agregatVechi = `SELECT md5(jsonb_agg(z.v ORDER BY z.v::text COLLATE "C")::text) AS m FROM (SELECT jsonb_build_array(lo.lomowner::regrole::text,
+      (SELECT jsonb_agg(jsonb_build_array(a.grantee, a.privilege_type, a.is_grantable) ORDER BY a.grantee, a.privilege_type) FROM aclexplode(coalesce(lo.lomacl, acldefault('L', lo.lomowner))) a)) AS v
+      FROM pg_largeobject_metadata lo) z`
+    await db.exec('BEGIN'); const veA = (await db.query(agregatVechi)).rows[0].m; await db.exec(perm); const veB = (await db.query(agregatVechi)).rows[0].m; await db.exec('ROLLBACK')
+    ok(l0.global !== l1.global && familiiSchimbate(l0, l1).join() === 'obiect_mare' && veA === veB && l0.d.some(r => r.eticheta === 'obiect_mare 424201'),
+      `obiecte mari: permutarea ACL 424201 -> 424202 schimba GLOBAL (familia obiect_mare, un rand pe obiect); agregatul vechi ramanea identic (${veA === veB})`)
+    // D. server_version_num in baza (nu se poate schimba in PGlite: doar prezenta)
+    const bz = (await catalogIn(db)).d.find(r => r.familie === 'baza')
+    ok(bz && JSON.parse(bz.detaliu)[0] === String(ver), `baza: primul camp = server_version_num (${bz && JSON.parse(bz.detaliu)[0]})`)
+    // E. sistem_adaugat: nimic adaugat dupa initdb in PGlite (catalogul de baza), randurile apar doar la adaugare
+    const sa = (await catalogIn(db)).d.filter(r => r.familie === 'sistem_adaugat').map(r => r.eticheta)
+    ok(sa.length === 0, `sistem_adaugat pe catalogul de baza: ${sa.length} randuri [${sa.slice(0, 5)}]`)
+  }
+
+  console.log('11. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi)')
   {
     const mare = new PGlite()
     await mare.exec(FIXTURE)

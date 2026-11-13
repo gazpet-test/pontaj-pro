@@ -13,7 +13,7 @@ Expected-ul vine din artefactul original (octetii lui) si din sha-ul dat, NU din
 Iesire 0 = OK (tipareste MESAJ_UNIC_OK ...); 1 = ESEC (motivul pe stderr).
 L15 v2 (13.11.2026, docs/LIVRARE_L15_V2.md): optional, la final, „--l15 <md5_aprobat> <manifest.l15.tsv>” cere in jurul
 copiei pasii AMPRENTA_GLOBALA: imediat dupa marcajul livrarii (set_config) si imediat inaintea copiei CREATE FUNCTION
-pg_temp.ag_cat_<T> (corpul = blocul AG_CATALOG v1 din scripts/amprenta_globala_v1.sql, extras aici independent), CREATE TEMP
+pg_temp.ag_cat_<T> (corpul = blocul AG_CATALOG v2 din scripts/amprenta_globala_v2.sql, extras aici independent), CREATE TEMP
 TABLE ag_ses_<T>, CREATE FUNCTION pg_temp.ag_inainte_<T> (cu md5-ul aprobat), DO $ag_pas_<T>$; imediat dupa inregistrare
 (DO $verif$) CREATE FUNCTION pg_temp.ag_dupa_<T> (md5-ul aprobat), DO $ag_pas_<T>$ cu manifestul EXACT (octetii fisierului),
 DROP-urile, apoi DO $lm_timp$. Acelasi <T> in toti pasii.
@@ -90,12 +90,12 @@ def curat(t, a, b, scos):
 
 
 def bloc_catalog():
-    """Blocul AG_CATALOG v1 din fisierul versionat (fara CR), intre marcajele de linie intreaga."""
-    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amprenta_globala_v1.sql")
+    """Blocul AG_CATALOG v2 din fisierul versionat (fara CR), intre marcajele de linie intreaga."""
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amprenta_globala_v2.sql")
     linii = open(f, "rb").read().decode("utf-8").replace("\r", "").split("\n")
-    a, b = "-- >>> AG_CATALOG v1", "-- <<< AG_CATALOG v1"
+    a, b = "-- >>> AG_CATALOG v2", "-- <<< AG_CATALOG v2"
     if linii.count(a) != 1 or linii.count(b) != 1:
-        esec("marcajele AG_CATALOG v1 nu apar exact o data in amprenta_globala_v1.sql")
+        esec("marcajele AG_CATALOG v2 nu apar exact o data in amprenta_globala_v2.sql")
     return "\n".join(linii[linii.index(a) + 1:linii.index(b)])
 
 
@@ -120,7 +120,7 @@ def verifica_l15(t, st, copie_t, md5, manifest):
     corp = t[ina[1][0]:ina[1][1]]
     tag = f"$ag_cat_{T}$"
     if corp.count(tag) != 2 or corp.split(tag)[1].strip("\n") != bloc_catalog():
-        esec("--l15: corpul ag_cat nu e EXACT blocul AG_CATALOG v1")
+        esec("--l15: corpul ag_cat nu e EXACT blocul AG_CATALOG v2")
     if f"IS DISTINCT FROM '{md5}'" not in t[ina[3][0]:ina[3][1]]:
         esec("--l15: pasul inainte nu compara cu md5-ul aprobat")
     i_ver = next((k for k in range(i_cop, len(st)) if st[k][2].startswith("DO $verif$")), None)

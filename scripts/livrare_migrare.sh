@@ -176,8 +176,8 @@
 #   plafon; un backend refolosit de pooler nu le poate impune unul rămas).
 #   Runda 15 (13.11.2026, L15 v2, docs/LIVRARE_L15_V2.md): --amprenta-globala <md5> + --diferente-globale <NUME.l15.tsv>
 #   (ÎMPREUNĂ; una fără cealaltă = refuz 2). Pași generați de runner (scripts/livrare_amprenta.sh, blocul unic
-#   scripts/amprenta_globala_v1.sql), în aceeași tranzacție:
-#     2_ag_inainte.sql  după 1_pre (lock consultativ, țintă, istoric, marcaj), ÎNAINTEA copiei: setul AMPRENTA_GLOBALA v1
+#   scripts/amprenta_globala_v2.sql), în aceeași tranzacție:
+#     2_ag_inainte.sql  după 1_pre (lock consultativ, țintă, istoric, marcaj), ÎNAINTEA copiei: setul AMPRENTA_GLOBALA v2
 #                       calculat O DATĂ, materializat; GLOBAL ≠ cel aprobat ⇒ refuz (md5 pe familii în mesaj), nimic schimbat;
 #     4_ag_dupa.sql     după 3_inreg, înaintea timpului și a gărzii finale: setul recalculat O DATĂ; diferența rând cu rând
 #                       trebuie să fie EXACT manifestul (familie, etichetă, creat / schimbat / sters, amprenta finală) ⇒

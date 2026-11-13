@@ -1,33 +1,50 @@
 #!/usr/bin/env bash
 # ============================================================================
-# L15 v2 (docs/LIVRARE_L15_V2.md): CITIREA coordonatorului — DOAR CITIRE, pe productie (si pe clona). Intr-O SINGURA
-# tranzactie REPEATABLE READ READ ONLY (aceeasi fotografie MVCC pentru tot):
-#   1. profilul sesiunii (AG_SESIUNE v1) + verificarea tintei (db, system_identifier, in_recovery = false);
+# L15 v2 (docs/LIVRARE_L15_V2.md): CITIREA coordonatorului - DOAR CITIRE, pe productie (si pe clona). Intr-O SINGURA
+# tranzactie REPEATABLE READ READ ONLY (aceeasi fotografie MVCC pentru interogarile de aici):
+#   1. profilul sesiunii (AG_SESIUNE v2) + verificarea tintei (db, system_identifier, in_recovery = false);
 #   2. [--amprente-migrare scripts/<x>_amprente.sql] scriptul de amprente EXISTENT al migrarii, nemodificat in repo:
-#      se ruleaza o COPIE din care se scot exact linia „BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;” si
-#      linia „ROLLBACK;” (fiecare trebuie sa apara EXACT o data, altfel refuz) => ruleaza in tranzactia de aici;
+#      se ruleaza o COPIE din care se scot exact linia "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;" si
+#      linia "ROLLBACK;" (fiecare trebuie sa apara EXACT o data, altfel refuz) => ruleaza in tranzactia de aici; iesirea lui
+#      sta intre liniile "=== scriptul de amprente al migrarii ..." si "=== sfarsit scriptul de amprente al migrarii ===";
 #   3. contextul canonic (SET LOCAL, ca functia runnerului), apoi GLOBAL + numarul de randuri + md5 pe familii + validarea
-#      (etichete unice, randuri valide) [+ --lista: toate randurile familie / eticheta / amprenta, pentru comparatia
-#      clona <-> productie];
-#   4. [--radacina <functie(argumente)> ...] SEMNALELE pentru review pe lantul portilor (cel mai bun efort, lexical +
-#      pg_depend, prin vederi): functii cu EXECUTE dinamic, vederi citite, functii in alt limbaj decat sql / plpgsql,
-#      functii SECURITY DEFINER fara search_path propriu (acestea din urma = REFUZ: cod 4);
-#   5. verificarea ca 1-4 au rulat in ACEEASI tranzactie (acelasi transaction_timestamp, acelasi backend, RR, READ ONLY);
+#      (etichete unice, randuri valide) [+ --lista: toate randurile familie / eticheta / amprenta, pentru
+#      scripts/l15_compara_liste.sh];
+#   4. CONTEXT: server_version_num, current_user, session_user;
+#   5. [--radacina <functie(argumente)> ...] SEMNALELE pentru review pe lantul portilor (cel mai bun efort, lexical +
+#      pg_depend, prin vederi): functii cu EXECUTE dinamic, vederi citite, functii in alt limbaj decat sql / plpgsql, si
+#      calea (search_path) fiecarei functii SECURITY DEFINER din lant, clasificata "sigura" sau "nesigura: <motiv>".
+#      "Are search_path propriu" NU ajunge: o cale fara pg_temp la final cauta INTAI in schema temporara (relatii, tipuri),
+#      iar TEMP e acordat implicit lui PUBLIC; o schema in care altcineva are CREATE poate umbri un nume necalificat.
+#      E "sigura" DOAR daca: (1) are search_path propriu; (2) fiecare element e un identificator simplu sau intre ghilimele,
+#      fara virgule / ghilimele in nume (altfel "element neanalizabil", fail-closed); (3) nu contine "$user"; (4) pg_temp
+#      apare explicit, o data, ULTIMUL (deci search_path="" e nesigura); (5) fiecare alta schema exista si niciun rol in
+#      afara celor de incredere nu are CREATE pe ea (has_schema_privilege pe TOATE rolurile din pg_roles: apartenente +
+#      PUBLIC). De incredere: superuserii, proprietarul schemei, rolul citirii (current_user) si --rol-de-incredere <rol>
+#      (repetabila); fiecare rol de incredere cu CREATE apare ca INCREDERE <schema> <rol> <motiv>, pentru review.
+#      "nesigura" = REFUZ (cod 4). Singura iesire: --definer-verificat '<functie(argumente)>=<md5>' (repetabila), md5 =
+#      md5(jsonb [prosrc, proconfig]) tiparit pe randul LANT al fiecarei functii DEFINER: "un om a verificat ca toate
+#      referintele din ACEST corp sunt calificate cu schema" (se consemneaza in PR-ul de baseline). Corp / cale schimbate =>
+#      alt md5 => iar refuz. Acceptare pentru o functie inexistenta, din afara lantului, ne-DEFINER, deja sigura sau cu
+#      alt md5 = REFUZ (cod 4: acceptarile vechi nu raman agatate);
+#   6. verificarea ca 1-5 au rulat in ACEEASI tranzactie (acelasi transaction_timestamp, acelasi backend, RR, READ ONLY);
 #      ROLLBACK.
-# Limita: functiile de deparsare (pg_get_viewdef / indexdef / ...) citesc cache-ul de catalog (ultima stare comisa), nu
-# fotografia MVCC; un DDL comis in timpul citirii poate amesteca stari => GLOBAL nu se va potrivi la livrare (refuz,
-# recitire), nu o acceptare gresita. Citirea se face cand nu ruleaza alte DDL.
+# Limita: REPEATABLE READ da o fotografie interogarilor explicite, nu tuturor citirilor interne de catalog (deparsarea,
+# cache-urile); citirea se face FARA DDL concurent (cerinta de procedura). Un amestec ar da cel mai probabil o valoare care
+# nu se potriveste la livrare (refuz, recitire), dar asta nu e demonstrat.
 #
 # Utilizare (parola DOAR din ~/.pgpass / PGPASSFILE; PSQL_BIN = psql-ul folosit la livrare):
 #   bash scripts/amprenta_globala_citire.sh --tinta-host <H> --tinta-port <P> --tinta-db <D> --tinta-sistem <system_identifier> \
 #        --user <U> [--amprente-migrare scripts/<x>_amprente.sql] [--radacina 'public.fn(bigint)' ...] [--lista] \
-#        [--doar-genereaza <dosar_nou>] > citire.txt
-# Iesire (stdout): liniile scriptului migrarii (daca e dat), apoi, separate prin TAB:
-#   GLOBAL - - <md5> <randuri> | FAMILIE <familie> - <md5> <randuri> | VALIDARE - - ok|<problema> <n>
-#   [RAND <familie> <eticheta> <amprenta> -] | LANT <tip> <obiect> <detalii> | SEMNALE <executie_dinamica> <vederi> <limbaj_altul>
-#   <definer_fara_search_path> | FOTOGRAFIE - - aceeasi -
-# Coduri: 0 citit | 1 psql / interogare esuata | 2 argumente | 3 local (fisier, generare) | 4 REFUZ: DEFINER fara
-#   search_path in lant | 5 validare esuata (dubluri / randuri invalide) | 22 tinta neconfirmata | 40 doar generat.
+#        [--rol-de-incredere <rol> ...] [--definer-verificat 'public.fn(bigint)=<md5>' ...] [--doar-genereaza <dosar_nou>] > citire.txt
+# Iesire (stdout): sectiunea scriptului migrarii (daca e dat), apoi, separate prin TAB:
+#   TINTA - - 1 - | GLOBAL - - <md5> <randuri> | FAMILIE <familie> - <md5> <randuri> | VALIDARE - - ok|<problema> <n>
+#   [RAND <familie> <eticheta> <amprenta> -] | CONTEXT <nume> - <valoare> -
+#   [LANT <tip> <obiect> <detalii> - - | INCREDERE <schema> <rol> <motiv> - - | SEMNALE <executie_dinamica> <vederi>
+#    <limbaj_altul> <definer_nesigure> <definer_acceptate>] | FOTOGRAFIE - - aceeasi -
+# Coduri: 0 citit | 1 psql / interogare esuata | 2 argumente (si rol de incredere inexistent) | 3 local (fisier, generare) |
+#   4 REFUZ: DEFINER cu cale nesigura in lant / acceptare invalida | 5 validare esuata (dubluri / randuri invalide) |
+#   22 tinta neconfirmata | 40 doar generat.
 # ============================================================================
 set -Eeuo pipefail
 umask 077
@@ -36,13 +53,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=livrare_amprenta.sh
 . "$ROOT/scripts/livrare_amprenta.sh"
 
-H="" P="" D="" SIS="" U="" AMP_MIG="" LISTA=0 GEN="" RAD=()
+H="" P="" D="" SIS="" U="" AMP_MIG="" LISTA=0 GEN="" RAD=() INCR=() ACC=()
 while [ $# -gt 0 ]; do
   case "$1" in --lista) LISTA=1; shift; continue ;; esac
   [ $# -ge 2 ] || refuz 2 "optiunea $1 fara valoare"
   case "$1" in
     --tinta-host) H="$2" ;; --tinta-port) P="$2" ;; --tinta-db) D="$2" ;; --tinta-sistem) SIS="$2" ;; --user) U="$2" ;;
     --amprente-migrare) AMP_MIG="$2" ;; --radacina) RAD+=("$2") ;; --doar-genereaza) GEN="$2" ;;
+    --rol-de-incredere) INCR+=("$2") ;; --definer-verificat) ACC+=("$2") ;;
     *) refuz 2 "optiune nepermisa: $1" ;;
   esac
   shift 2
@@ -56,9 +74,21 @@ unset PGHOST PGPORT
 [[ "$D" =~ ^[A-Za-z0-9_]{1,63}$ ]] || refuz 2 "--tinta-db obligatoriu"
 [[ "$SIS" =~ ^[0-9]{1,20}$ ]] || refuz 2 "--tinta-sistem obligatoriu (system_identifier)"
 [[ "$U" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--user obligatoriu"
+RE_FN='^[A-Za-z0-9_."(), ]{1,250}$'
+RE_ACC='^([A-Za-z0-9_."(), ]{1,250})=([0-9a-f]{32})$'
 for r in ${RAD[@]+"${RAD[@]}"}; do
-  [[ "$r" =~ ^[A-Za-z0-9_.\"\(\),\ ]{1,250}$ ]] || refuz 2 "--radacina invalida (forma functie(argumente), fara apostrof): $r"
+  [[ "$r" =~ $RE_FN ]] || refuz 2 "--radacina invalida (forma functie(argumente), fara apostrof): $r"
 done
+for r in ${INCR[@]+"${INCR[@]}"}; do
+  [[ "$r" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--rol-de-incredere invalid: $r"
+done
+for r in ${ACC[@]+"${ACC[@]}"}; do
+  [[ "$r" =~ $RE_ACC ]] || refuz 2 "--definer-verificat invalid (forma 'functie(argumente)=<md5 32 hex>'): $r"
+done
+if [ ${#ACC[@]} -gt 0 ] && [ -n "$(printf '%s\n' "${ACC[@]}" | sed 's/=[0-9a-f]*$//' | sort | uniq -d)" ]; then
+  refuz 2 "--definer-verificat: aceeasi functie de doua ori"
+fi
+[ ${#RAD[@]} -gt 0 ] || [ $((${#INCR[@]} + ${#ACC[@]})) = 0 ] || refuz 2 "--rol-de-incredere / --definer-verificat cer --radacina (se aplica lantului)"
 if [ -n "$GEN" ]; then
   [ ! -e "$GEN" ] && [ -d "$(dirname "$GEN")" ] || refuz 2 "--doar-genereaza: dosarul trebuie sa fie NOU: $GEN"
 fi
@@ -76,10 +106,17 @@ if [ -n "$AMP_MIG" ]; then
   ! grep -qiE '^[[:space:]]*(BEGIN|COMMIT|ROLLBACK|END|ABORT|START)[[:space:]]*(TRANSACTION|WORK)?[[:space:]]*;' "$W/mig_amprente.sql" \
     || refuz 3 "--amprente-migrare: alt control de tranzactie in script"
 fi
-SES="$(ag_bloc 'AG_SESIUNE v1')" || refuz 3 "blocul AG_SESIUNE v1"
-CAT="$(ag_bloc 'AG_CATALOG v1')" || refuz 3 "blocul AG_CATALOG v1"
+SES="$(ag_bloc 'AG_SESIUNE v2')" || refuz 3 "blocul AG_SESIUNE v2"
+CAT="$(ag_bloc 'AG_CATALOG v2')" || refuz 3 "blocul AG_CATALOG v2"
 RAND_SQL=""
 [ "$LISTA" = 0 ] || RAND_SQL="  UNION ALL SELECT 3, 'RAND', a.familie, a.eticheta, a.amprenta, '-' FROM ag_tot a"
+# listele VALUES (literal SQL; valorile sunt validate mai sus, fara apostrof)
+valori() { local s="" x; for x in "$@"; do s="${s:+$s, }($x)"; done; printf '%s' "$s"; }
+L_RAD=(); for r in ${RAD[@]+"${RAD[@]}"}; do L_RAD+=("'$r'"); done
+L_INCR=(); for r in ${INCR[@]+"${INCR[@]}"}; do L_INCR+=("'$r'"); done
+L_ACC=(); for r in ${ACC[@]+"${ACC[@]}"}; do [[ "$r" =~ $RE_ACC ]]; L_ACC+=("'${BASH_REMATCH[1]}', '${BASH_REMATCH[2]}'"); done
+V_INCR="SELECT NULL::text WHERE false"; [ ${#L_INCR[@]} = 0 ] || V_INCR="VALUES $(valori "${L_INCR[@]}")"
+V_ACC="SELECT NULL::text, NULL::text WHERE false"; [ ${#L_ACC[@]} = 0 ] || V_ACC="VALUES $(valori "${L_ACC[@]}")"
 
 {
   cat <<SQL
@@ -108,7 +145,7 @@ SELECT 'TINTA', '-', '-', CAST(CASE WHEN pg_catalog.current_database() OPERATOR(
 SQL
   if [ -n "$AMP_MIG" ]; then
     printf '%s\n' '\pset format aligned' '\pset tuples_only off' "\\echo '=== scriptul de amprente al migrarii ($(basename "$AMP_MIG")), in aceeasi tranzactie ==='" \
-      '\ir mig_amprente.sql' '\pset format unaligned' '\pset tuples_only on'
+      '\ir mig_amprente.sql' "\\echo '=== sfarsit scriptul de amprente al migrarii ==='" '\pset format unaligned' '\pset tuples_only on'
   fi
   ag_guc_local
   cat <<SQL
@@ -137,14 +174,22 @@ $RAND_SQL
 ) x ORDER BY x.o, x.familie COLLATE "C", x.eticheta COLLATE "C"
 -- <<< AG_CITIRE global
 ;
+-- >>> AG_CITIRE context
+SELECT 'CONTEXT', x.n, '-', x.v, '-'
+  FROM (VALUES (1, 'server_version_num', current_setting('server_version_num')), (2, 'current_user', current_user::text),
+               (3, 'session_user', session_user::text)) AS x(o, n, v)
+ ORDER BY x.o
+-- <<< AG_CITIRE context
+;
 SQL
   if [ ${#RAD[@]} -gt 0 ]; then
-    VALORI=""
-    for r in "${RAD[@]}"; do VALORI="${VALORI:+$VALORI, }('$r')"; done
     cat <<SQL
 -- >>> AG_CITIRE semnale
 WITH RECURSIVE
-ag_rad(nume, oid) AS (SELECT v.n, to_regprocedure(v.n)::oid FROM (VALUES $VALORI) v(n)),
+ag_rad(nume, oid) AS (SELECT v.n, to_regprocedure(v.n)::oid FROM (VALUES $(valori "${L_RAD[@]}")) v(n)),
+ag_incr(rol) AS ($V_INCR),
+ag_acc0(nume, md5) AS ($V_ACC),
+ag_acc AS (SELECT a.nume, a.md5, to_regprocedure(a.nume)::oid AS oid FROM ag_acc0 a),
 ag_sistem(oid) AS (SELECT n.oid FROM pg_namespace n WHERE n.nspname IN ('pg_catalog', 'information_schema')),
 ag_lant(tip, oid) AS (
   SELECT 'f'::text, r.oid FROM ag_rad r WHERE r.oid IS NOT NULL
@@ -177,28 +222,96 @@ ag_lant(tip, oid) AS (
          OR (c2.oid IS NOT NULL AND c2.relkind IN ('v', 'm') AND c2.relnamespace NOT IN (SELECT s.oid FROM ag_sistem s)))
   ) x
 ),
+-- functiile SECURITY DEFINER din lant: valoarea PROPRIE a caii (din proconfig) + md5-ul acceptarii [prosrc, proconfig]
+ag_def AS (
+  SELECT p.oid, (SELECT substr(c, 13) FROM unnest(p.proconfig) c WHERE c LIKE 'search_path=%' LIMIT 1) AS cale,
+         md5(jsonb_build_array(p.prosrc, to_jsonb(p.proconfig))::text) AS md5_corp
+    FROM (SELECT DISTINCT l.oid FROM ag_lant l WHERE l.tip = 'f') f JOIN pg_proc p ON p.oid = f.oid
+   WHERE p.prosecdef
+),
+-- elementele caii; nume = identificatorul analizat (NULL = neanalizabil); search_path="" = lista goala
+ag_el AS (
+  SELECT d.oid, s.nr, e.x AS el,
+         CASE WHEN e.x ~ '^[a-z_][a-z0-9_]*\$' THEN e.x WHEN e.x ~ '^"[^",]+"\$' THEN substr(e.x, 2, length(e.x) - 2) END AS nume,
+         max(s.nr) OVER (PARTITION BY d.oid) AS ultim
+    FROM ag_def d CROSS JOIN LATERAL regexp_split_to_table(d.cale, ',') WITH ORDINALITY AS s(x0, nr)
+    CROSS JOIN LATERAL (SELECT btrim(s.x0, ' ') AS x) e
+   WHERE d.cale IS NOT NULL AND d.cale <> '""'
+),
+-- schemele din cai (in afara de pg_temp si "\$user") si rolurile cu CREATE pe ele + motivul increderii (NULL = neincredere)
+ag_sch AS (
+  SELECT DISTINCT e.nume, n.oid AS nsp, n.nspowner FROM ag_el e LEFT JOIN pg_namespace n ON n.nspname = e.nume
+   WHERE e.nume IS NOT NULL AND e.nume NOT IN ('pg_temp', '\$user')
+),
+ag_cr AS (
+  SELECT s.nume, r.rolname::text AS rol,
+         CASE WHEN r.rolsuper THEN 'super' WHEN r.oid = s.nspowner THEN 'proprietar' WHEN r.rolname = current_user THEN 'rolul citirii'
+              WHEN r.rolname IN (SELECT i.rol FROM ag_incr i) THEN 'optiune' END AS motiv
+    FROM ag_sch s CROSS JOIN pg_roles r
+   WHERE s.nsp IS NOT NULL AND has_schema_privilege(r.oid, s.nsp, 'CREATE')
+),
+ag_motive AS (
+  SELECT d.oid, array_remove(ARRAY[
+           CASE WHEN d.cale IS NULL THEN 'fara search_path propriu' END,
+           CASE WHEN EXISTS (SELECT 1 FROM ag_el e WHERE e.oid = d.oid AND e.nume IS NULL) THEN 'element neanalizabil' END,
+           CASE WHEN EXISTS (SELECT 1 FROM ag_el e WHERE e.oid = d.oid AND e.nume = '\$user') THEN 'contine "\$user"' END,
+           CASE WHEN d.cale IS NOT NULL AND NOT ((SELECT count(*) FROM ag_el e WHERE e.oid = d.oid AND e.nume = 'pg_temp') = 1
+                  AND EXISTS (SELECT 1 FROM ag_el e WHERE e.oid = d.oid AND e.nr = e.ultim AND e.nume = 'pg_temp'))
+                THEN 'pg_temp lipseste sau nu e ultimul' END]
+         || ARRAY(SELECT 'schema inexistenta ' || quote_ident(e.nume) FROM ag_el e JOIN ag_sch s ON s.nume = e.nume
+                   WHERE e.oid = d.oid AND s.nsp IS NULL ORDER BY e.nr)
+         || ARRAY(SELECT q.t FROM (SELECT DISTINCT 'CREATE pe ' || quote_ident(c.nume) || ' pentru ' || quote_ident(c.rol) AS t
+                                     FROM ag_el e JOIN ag_cr c ON c.nume = e.nume WHERE e.oid = d.oid AND c.motiv IS NULL) q
+                   ORDER BY q.t COLLATE "C"), NULL) AS m
+    FROM ag_def d
+),
 ag_det AS (
-  SELECT l.tip, CASE l.tip WHEN 'f' THEN 'functie ' || l.oid::regprocedure::text ELSE 'relatie ' || l.oid::regclass::text END AS obiect,
+  SELECT l.tip, l.oid, CASE l.tip WHEN 'f' THEN 'functie ' || l.oid::regprocedure::text ELSE 'relatie ' || l.oid::regclass::text END AS obiect,
          lg.lanname::text AS limbaj, p.prosecdef AS definer,
          EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c LIKE 'search_path=%') AS are_search_path,
-         (lg.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '[[:<:]]execute[[:>:]]') AS executie_dinamica
+         (lg.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '[[:<:]]execute[[:>:]]') AS executie_dinamica,
+         d.md5_corp,
+         CASE WHEN NOT p.prosecdef THEN NULL WHEN cardinality(m.m) = 0 THEN 'sigura'
+              WHEN EXISTS (SELECT 1 FROM ag_acc a WHERE a.oid = l.oid AND a.md5 = d.md5_corp) THEN 'acceptata'
+              ELSE 'nesigura: ' || array_to_string(m.m, '; ') END AS cale
     FROM (SELECT DISTINCT tip, oid FROM ag_lant) l
     LEFT JOIN pg_proc p ON l.tip = 'f' AND p.oid = l.oid
     LEFT JOIN pg_language lg ON lg.oid = p.prolang
+    LEFT JOIN ag_def d ON d.oid = l.oid
+    LEFT JOIN ag_motive m ON m.oid = l.oid
+),
+ag_acc_rau AS (
+  SELECT a.nume, CASE WHEN a.oid IS NULL THEN 'functie inexistenta'
+                      WHEN NOT EXISTS (SELECT 1 FROM ag_det d WHERE d.tip = 'f' AND d.oid = a.oid) THEN 'nu e in lant'
+                      WHEN NOT (SELECT d.definer FROM ag_det d WHERE d.tip = 'f' AND d.oid = a.oid) THEN 'nu e SECURITY DEFINER'
+                      WHEN (SELECT d.cale FROM ag_det d WHERE d.tip = 'f' AND d.oid = a.oid) = 'sigura' THEN 'calea e deja sigura'
+                      WHEN a.md5 IS DISTINCT FROM (SELECT d.md5_corp FROM ag_det d WHERE d.tip = 'f' AND d.oid = a.oid)
+                        THEN 'md5 diferit (corp sau cale schimbate)' END AS motiv
+    FROM ag_acc a
 )
-SELECT 'RADACINA_LIPSA', r.nume, '-', '-', '-' FROM ag_rad r WHERE r.oid IS NULL
-UNION ALL
-SELECT 'LANT', d.tip, d.obiect,
-       CASE WHEN d.tip = 'f' THEN concat_ws(' ', 'limbaj=' || d.limbaj, CASE WHEN d.definer THEN 'DEFINER' END,
-              CASE WHEN NOT d.are_search_path THEN 'search_path=mostenit' END, CASE WHEN d.executie_dinamica THEN 'EXECUTE_DINAMIC' END)
-            ELSE 'vedere' END, '-'
-  FROM ag_det d
-UNION ALL
-SELECT 'SEMNALE',
-       (SELECT count(*) FROM ag_det d WHERE d.executie_dinamica)::text,
-       (SELECT count(*) FROM ag_det d WHERE d.tip = 'v')::text,
-       (SELECT count(*) FROM ag_det d WHERE d.tip = 'f' AND d.limbaj NOT IN ('sql', 'plpgsql'))::text,
-       (SELECT count(*) FROM ag_det d WHERE d.tip = 'f' AND d.definer AND NOT d.are_search_path)::text
+SELECT y.tip, y.a, y.b, y.c, y.d, y.e FROM (
+  SELECT 0 AS o, 'RADACINA_LIPSA' AS tip, r.nume AS a, '-' AS b, '-' AS c, '-' AS d, '-' AS e FROM ag_rad r WHERE r.oid IS NULL
+  UNION ALL
+  SELECT 1, 'ROL_INCREDERE_LIPSA', i.rol, '-', '-', '-', '-' FROM ag_incr i WHERE NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = i.rol)
+  UNION ALL
+  SELECT 2, 'ACCEPTARE_INVALIDA', a.nume, '-', a.motiv, '-', '-' FROM ag_acc_rau a WHERE a.motiv IS NOT NULL
+  UNION ALL
+  SELECT 3, 'LANT', d.tip, d.obiect,
+         CASE WHEN d.tip = 'f' THEN concat_ws(' ', 'limbaj=' || d.limbaj, CASE WHEN d.definer THEN 'DEFINER md5=' || d.md5_corp END,
+                CASE WHEN NOT d.definer AND NOT d.are_search_path THEN 'search_path=mostenit' END,
+                CASE WHEN d.executie_dinamica THEN 'EXECUTE_DINAMIC' END, CASE WHEN d.definer THEN 'cale=' || d.cale END)
+              ELSE 'vedere' END, '-', '-'
+    FROM ag_det d
+  UNION ALL
+  SELECT DISTINCT 4, 'INCREDERE', quote_ident(c.nume), quote_ident(c.rol), c.motiv, '-', '-' FROM ag_cr c WHERE c.motiv IS NOT NULL
+  UNION ALL
+  SELECT 5, 'SEMNALE',
+         (SELECT count(*) FROM ag_det d WHERE d.executie_dinamica)::text,
+         (SELECT count(*) FROM ag_det d WHERE d.tip = 'v')::text,
+         (SELECT count(*) FROM ag_det d WHERE d.tip = 'f' AND d.limbaj NOT IN ('sql', 'plpgsql'))::text,
+         (SELECT count(*) FROM ag_det d WHERE d.cale LIKE 'nesigura%')::text,
+         (SELECT count(*) FROM ag_det d WHERE d.cale = 'acceptata')::text
+) y ORDER BY y.o, y.a COLLATE "C", y.b COLLATE "C", y.c COLLATE "C"
 -- <<< AG_CITIRE semnale
 ;
 SQL
@@ -218,7 +331,7 @@ SQL
 
 if [ -n "$GEN" ]; then
   mkdir -- "$GEN" && cp -- "$W"/*.sql "$GEN"/ || refuz 3 "--doar-genereaza: copierea"
-  echo "✓ GENERAT (fara conexiune): $GEN ($(cd "$GEN" && ls | tr '\n' ' '))"
+  echo "[ok] GENERAT (fara conexiune): $GEN ($(cd "$GEN" && ls | tr '\n' ' '))"
   exit 40
 fi
 
@@ -229,19 +342,30 @@ RC=0
 tr -d '\r' <"$W/iesire.txt"
 if [ "$RC" != 0 ]; then
   sed 's/^/  /' "$W/erori.txt" >&2
-  if grep -q 'AG_CITIRE_TINTA_NECONFIRMATA' "$W/erori.txt"; then echo "✗ TINTA NECONFIRMATA (db / system_identifier / in_recovery)" >&2; exit 22; fi
-  echo "✗ citirea a esuat (psql $RC), nimic schimbat (tranzactie READ ONLY)" >&2; exit 1
+  if grep -q 'AG_CITIRE_TINTA_NECONFIRMATA' "$W/erori.txt"; then echo "[x] TINTA NECONFIRMATA (db / system_identifier / in_recovery)" >&2; exit 22; fi
+  echo "[x] citirea a esuat (psql $RC), nimic schimbat (tranzactie READ ONLY)" >&2; exit 1
 fi
 OUT="$(tr -d '\r' <"$W/iesire.txt")"
-grep -qx $'FOTOGRAFIE\t-\t-\taceeasi\t-' <<<"$OUT" || { echo "✗ verificarea fotografiei comune lipseste" >&2; exit 1; }
-grep -qE $'^GLOBAL\t-\t-\t[0-9a-f]{32}\t[0-9]+$' <<<"$OUT" || { echo "✗ GLOBAL lipsa / nerecunoscut" >&2; exit 1; }
-grep -qx $'VALIDARE\t-\t-\tok\t0' <<<"$OUT" || { echo "✗ VALIDARE esuata (etichete duble / randuri invalide) — nu se foloseste ca baseline" >&2; exit 5; }
+grep -qx $'FOTOGRAFIE\t-\t-\taceeasi\t-' <<<"$OUT" || { echo "[x] verificarea fotografiei comune lipseste" >&2; exit 1; }
+grep -qE $'^GLOBAL\t-\t-\t[0-9a-f]{32}\t[0-9]+$' <<<"$OUT" || { echo "[x] GLOBAL lipsa / nerecunoscut" >&2; exit 1; }
+[ "$(grep -c $'^CONTEXT\t' <<<"$OUT" || true)" = 3 ] || { echo "[x] CONTEXT lipsa / incomplet" >&2; exit 1; }
+grep -qx $'VALIDARE\t-\t-\tok\t0' <<<"$OUT" || { echo "[x] VALIDARE esuata (etichete duble / randuri invalide) - nu se foloseste ca baseline" >&2; exit 5; }
 if [ ${#RAD[@]} -gt 0 ]; then
-  ! grep -q $'^RADACINA_LIPSA\t' <<<"$OUT" || { echo "✗ radacina inexistenta in baza (vezi RADACINA_LIPSA)" >&2; exit 1; }
-  S="$(grep -E $'^SEMNALE\t' <<<"$OUT")" || { echo "✗ SEMNALE lipsa" >&2; exit 1; }
-  IFS=$'\t' read -r _ S_EX S_VED S_LIMB S_DEF <<<"$S"
-  echo "SEMNALE (de examinat si acceptat explicit in PR-ul de baseline): EXECUTE dinamic $S_EX, vederi citite $S_VED, alt limbaj $S_LIMB, DEFINER fara search_path $S_DEF" >&2
-  [ "$S_DEF" = 0 ] || { echo "✗ REFUZ: $S_DEF functie(i) SECURITY DEFINER din lant fara search_path propriu (L15) — nu se face baseline" >&2; exit 4; }
+  ! grep -q $'^RADACINA_LIPSA\t' <<<"$OUT" || { echo "[x] radacina inexistenta in baza (vezi RADACINA_LIPSA)" >&2; exit 1; }
+  ! grep -q $'^ROL_INCREDERE_LIPSA\t' <<<"$OUT" || { echo "[x] --rol-de-incredere: rol inexistent in baza (vezi ROL_INCREDERE_LIPSA)" >&2; exit 2; }
+  S="$(grep -E $'^SEMNALE\t' <<<"$OUT")" || { echo "[x] SEMNALE lipsa" >&2; exit 1; }
+  IFS=$'\t' read -r _ S_EX S_VED S_LIMB S_NES S_ACC <<<"$S"
+  [[ "$S_EX$S_VED$S_LIMB$S_NES$S_ACC" =~ ^[0-9]+$ ]] || { echo "[x] SEMNALE nerecunoscut" >&2; exit 1; }
+  N_INCR="$(grep -c $'^INCREDERE\t' <<<"$OUT" || true)"
+  echo "SEMNALE (de examinat si acceptat explicit in PR-ul de baseline): EXECUTE dinamic $S_EX, vederi citite $S_VED, alt limbaj $S_LIMB, DEFINER cu cale nesigura $S_NES, DEFINER acceptate explicit $S_ACC; roluri de incredere cu CREATE pe caile DEFINER: $N_INCR (randurile INCREDERE)" >&2
+  if grep -q $'^ACCEPTARE_INVALIDA\t' <<<"$OUT"; then
+    grep $'^ACCEPTARE_INVALIDA\t' <<<"$OUT" | cut -f2,4 | sed 's/^/  /' >&2
+    echo "[x] REFUZ: --definer-verificat invalid (functie inexistenta / din afara lantului / ne-DEFINER / deja sigura / alt md5) - nu se face baseline" >&2; exit 4
+  fi
+  if [ "$S_NES" != 0 ]; then
+    grep $'^LANT\t' <<<"$OUT" | grep 'cale=nesigura' | cut -f3,4 | sed 's/^/  /' >&2
+    echo "[x] REFUZ: $S_NES functie(i) SECURITY DEFINER din lant cu search_path nesigur (L15) - nu se face baseline (sau --definer-verificat dupa verificarea corpului)" >&2; exit 4
+  fi
 fi
-echo "✓ citit intr-o singura fotografie (REPEATABLE READ READ ONLY): $(grep -E $'^GLOBAL\t' <<<"$OUT" | cut -f4,5 | tr '\t' ' ') randuri" >&2
+echo "[ok] citit intr-o singura fotografie (REPEATABLE READ READ ONLY): $(grep -E $'^GLOBAL\t' <<<"$OUT" | cut -f4,5 | tr '\t' ' ') randuri; $(grep -E $'^CONTEXT\t' <<<"$OUT" | cut -f2,4 | tr '\t\n' '= ')" >&2
 exit 0
