@@ -182,8 +182,8 @@ describe('r2 — citirea: SIMULARE pe valori, CONTROL pentru RAMANE', () => {
     expect(t).not.toContain('AGREGAT_FARA_DATE')
     expect(corp).not.toContain(':hasAggs')
     expect(t).not.toMatch(/\(dovedit/)
-    for (const s of ['WITH RECURSIVE /* anon_drepturi_citire */ inchidere(fel, cls, obj, cale)', "rw.ev_action::text AS arbore",
-      "coalesce(pol.polqual::text, ''), 'pg_catalog.pg_policy'::regclass::oid, pol.oid, 'politica'",
+    for (const s of ['WITH RECURSIVE /* anon_drepturi_citire */ inchidere(fel, cls, obj, cale, cititor)', "rw.ev_action::text AS arbore",
+      "coalesce(pol.polqual::text, ''), 'pg_catalog.pg_policy'::regclass::oid, pol.oid, 'politica', i.cititor",
       "v_re_noduri text := ':(relid|funcid|opfuncid|hashfuncid|negfuncid|aggfnoid|winfnoid|tsmhandler|startInRangeFunc|endInRangeFunc|opno|eqop|sortop) ([0-9]+)';",
       "v_re_liste text := ':opnos [(]o([ 0-9]*)[)]';", 'IF d.invoker IS NOT TRUE THEN',
       "EXECUTE 'SELECT /* anon_drepturi_citire */ EXISTS (SELECT 1 FROM ' || v_b || ')' INTO v_ex;", 'WHEN insufficient_privilege THEN v_fara_drept := v_fara_drept + 1;',
@@ -210,6 +210,27 @@ describe('r2 — citirea: SIMULARE pe valori, CONTROL pentru RAMANE', () => {
     expect(t).toContain('RESET /* anon_drepturi_citire */ ROLE;')
     expect(corp).not.toMatch(/pg_get_viewdef|pg_get_ruledef|pg_get_expr/)
     expect(t).not.toContain('\\')
+  })
+  it('r7 (review r2 #1090 P1): politicile analizate = cele ale CITITORULUI EFECTIV (proprietarul unei vederi obișnuite), înaintea execuției', () => {
+    const corp = t.slice(t.indexOf('DO $simulare$'), t.indexOf('END $simulare$;'))
+    // vedere security_invoker => anon; altfel proprietarul vederii; politicile: aceeași ocolire RLS ca PostgreSQL și rolurile moștenite
+    for (const s of ["THEN v_anon\n                                ELSE vc.relowner END AS cititor",
+      "AND NOT coalesce((SELECT (cr.rolsuper OR cr.rolbypassrls OR (pg_has_role(i.cititor, tc.relowner, 'USAGE') AND NOT tc.relforcerowsecurity))",
+      "OR EXISTS (SELECT 1 FROM unnest(pol.polroles) pr(o) WHERE pr.o <> 0 AND pg_has_role(i.cititor, pr.o, 'USAGE'))",
+      "SELECT pol.polqual::text FROM pg_policy pol WHERE pol.oid = ANY (v_politici) AND pol.polqual IS NOT NULL",
+      "IF v_anon = ANY (d.cititori) THEN v_baze := v_baze || d.rel_nume;", '        ELSIF v_m_date IS NULL THEN',
+      "RAISE NOTICE 'SIMULARE cititori pentru %: %', r.nume, v_cititori;"])
+      expect(corp, s).toContain(s)
+    // politicile nu se mai aleg după anon într-un loc separat (o singură regulă: cea din închidere)
+    expect(corp).not.toContain('v_anon = ANY (pol.polroles)')
+    expect(corp.indexOf("RAISE NOTICE 'SIMULARE cititori")).toBeLessThan(corp.indexOf("EXECUTE 'SELECT /* anon_drepturi_citire */ coalesce(jsonb_agg"))
+  })
+  it('r7 (review r2 #1090 P2): intrările imbricate (toplevel = false) nu pot fi directa / rpc', () => {
+    expect(t).toContain("CASE WHEN v_top THEN 'WHEN s.toplevel IS NOT TRUE THEN ''alta'' ' ELSE '' END")
+    // toplevel se verifică înaintea formelor directa / rpc
+    const c = t.indexOf("v_clasa := format('CASE WHEN s.query IS NULL")
+    expect(c).toBeGreaterThan(0)
+    expect(t.slice(c, c + 400)).toMatch(/THEN %L %s'\s+'WHEN s\.query ~ %L/)
   })
   it('r6: fiecare instrucțiune SQL rulată ca anon în simulare poartă eticheta scriptului (STATISTICI o numără ca „proprie”)', () => {
     const corp = t.slice(t.indexOf('DO $simulare$'), t.indexOf('END $simulare$;'))

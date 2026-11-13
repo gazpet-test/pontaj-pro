@@ -338,8 +338,9 @@ verifica(C0.jurnal.includes('SIMULARE anon FARA_DATE_LA_SURSA in public.v_contor
     'rezumatul numără fiecare clasă (6 date, 2 ambigue, 11 neexecutate, 5 la sursă, 1 constantă); concluzia NEDOVEDIT')
   // mutanți: fiecare scoate o regulă; verificările de mai sus îl prind (aici se arată defectul pe care l-ar lăsa să treacă)
   const m1 = await citire(db, SP(aplica(CITIRE, [['              IF d.invoker IS NOT TRUE THEN', '              IF false THEN']])))
-  verifica(cls(m1, 'v_fara_invoker').startsWith('FARA_DATE_LA_SURSA') && cls(m1, 'v_peste_fara_invoker').startsWith('FARA_DATE_LA_SURSA'),
-    'mutant fără verificarea security_invoker: vederile care citesc ca proprietarul ies „fără date la sursă”')
+  // (r7: tabelul de sub vederea obișnuită e citit doar ca proprietarul => garda cititorului îl face AMBIGUU, nu „fără date la sursă”)
+  verifica(cls(m1, 'v_fara_invoker').startsWith('AMBIGUU') && cls(m1, 'v_peste_fara_invoker').startsWith('AMBIGUU'),
+    `mutant fără verificarea security_invoker: vederile care citesc ca proprietarul nu mai ies DATE_CITIBILE (${cls(m1, 'v_fara_invoker').split(' (')[0]})`)
   const LISTA = "ELSIF d.pro_schema = 'pg_catalog' AND d.sistem AND NOT d.prosecdef AND d.fara_config AND (d.volatil = 'i' OR d.proname = ANY (v_stabile)) THEN"
   const mA = await citire(db, SP(aplica(CITIRE, [[LISTA, "ELSIF NOT d.prosecdef AND (d.pro_schema = 'pg_catalog' OR d.corp_atomic) THEN"]])))
   verifica(/^(CONSTANTA|FARA_DATE_LA_SURSA)/.test(cls(mA, 'v_probe_cfg')) && /^(CONSTANTA|FARA_DATE_LA_SURSA)/.test(cls(mA, 'v_kpi_atomic')),
@@ -364,6 +365,57 @@ verifica(C0.jurnal.includes('SIMULARE anon FARA_DATE_LA_SURSA in public.v_contor
     'același v_kpi, cu un rând vizibil ca anon într-un tabel de bază (vederea tot zero) = DATE_CITIBILE')
   const m2 = await citire(db, SP(aplica(CITIRE, [["              EXECUTE 'SELECT /* anon_drepturi_citire */ EXISTS (SELECT 1 FROM ' || v_b || ')' INTO v_ex;", '              v_ex := false;']])))
   verifica(cls(m2, 'v_kpi').startsWith('FARA_DATE_LA_SURSA'), 'mutant fără citirea efectivă a tabelelor de bază: v_kpi cu rând vizibil iese „fără date la sursă”')
+  // r7 (review r2 #1090 P1): o vedere OBIȘNUITĂ citește tabelele cu drepturile și POLITICILE proprietarului ei. Fixture-uri:
+  //   v_prop = contraexemplul recenzentului: tabel cu RLS, politică TO v_owner care cheamă o funcție volatilă cu pg_advisory_lock, vedere
+  //     obișnuită a lui v_owner, SELECT pentru anon => NEEXECUTATA, funcția NU rulează; v_peste_prop (security_invoker peste v_prop) și
+  //     v_lant (obișnuită a lui postgres peste v_prop) = același lanț, proprietarul fiecărui nivel => NEEXECUTATA;
+  //   v_peste_inv: vedere obișnuită a lui v_owner peste o vedere security_invoker peste t_antet => t_antet tot ca anon (politica lui anon pe
+  //     request.headers) => NEEXECUTATA;
+  //   L20 (cazul legitim): v_ocolit = vedere obișnuită a lui postgres (ocolește RLS) peste un tabel a cărui politică pentru PUBLIC cheamă
+  //     aceeași funcție: PostgreSQL nu aplică politici proprietarului => se execută (DATE_CITIBILE: citește ca proprietarul), lock-ul nu se ia;
+  //     linia „SIMULARE cititori” spune că tabelul e citit ca postgres, fără politici de analizat (la fel v_fara_invoker, ca până acum).
+  await db.exec(`CREATE ROLE v_owner NOLOGIN NOINHERIT;
+    CREATE FUNCTION public.fn_lacat_prop() RETURNS integer LANGUAGE sql VOLATILE AS $f$ SELECT pg_advisory_lock(987654); SELECT 0 $f$;
+    CREATE TABLE public.t_prop (x integer); INSERT INTO public.t_prop VALUES (0); ALTER TABLE public.t_prop ENABLE ROW LEVEL SECURITY;
+    REVOKE ALL ON public.t_prop FROM anon; GRANT SELECT ON public.t_prop TO v_owner;
+    CREATE POLICY t_prop_p ON public.t_prop FOR SELECT TO v_owner USING (public.fn_lacat_prop() = 0);
+    CREATE VIEW public.v_prop AS SELECT x FROM public.t_prop; ALTER VIEW public.v_prop OWNER TO v_owner; GRANT SELECT ON public.v_prop TO anon;
+    CREATE VIEW public.v_peste_prop WITH (security_invoker = on) AS SELECT x FROM public.v_prop; GRANT SELECT ON public.v_peste_prop TO anon;
+    CREATE VIEW public.v_lant AS SELECT x FROM public.v_prop; GRANT SELECT ON public.v_lant TO anon;
+    CREATE VIEW public.v_antet_inv WITH (security_invoker = on) AS SELECT x FROM public.t_antet; GRANT SELECT ON public.v_antet_inv TO v_owner;
+    CREATE VIEW public.v_peste_inv AS SELECT count(*) * 0 AS n FROM public.v_antet_inv; ALTER VIEW public.v_peste_inv OWNER TO v_owner;
+    GRANT SELECT ON public.v_peste_inv TO anon;
+    CREATE TABLE public.t_ocolit (x integer); INSERT INTO public.t_ocolit VALUES (5); ALTER TABLE public.t_ocolit ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY t_ocolit_p ON public.t_ocolit FOR SELECT USING (public.fn_lacat_prop() = 0);
+    CREATE VIEW public.v_ocolit AS SELECT count(*) * 0 AS n FROM public.t_ocolit; GRANT SELECT ON public.v_ocolit TO anon;`)
+  const cp = await citire(db, SP(CITIRE))
+  const lP = await lacate()
+  const NEEX_PROP = 'functie in afara listei: public.fn_lacat_prop() [proprie / de extensie, limbaj sql, volatila])'
+  console.log('   ' + cp.jurnal.filter(m => /SIMULARE (cititori|anon \w+ in public\.(v_prop|v_peste_prop|v_lant|v_peste_inv|v_ocolit|v_fara_invoker) )/.test(m)).join('\n   '))
+  verifica(cls(cp, 'v_prop') === 'NEEXECUTATA in public.v_prop (' + NEEX_PROP && lP === 0
+    && cp.jurnal.includes('SIMULARE cititori pentru public.v_prop: public.t_prop citit ca v_owner (politicile lui analizate)'),
+    'r7 P1: contraexemplul recenzentului (politica proprietarului vederii cu pg_advisory_lock) = NEEXECUTATA, funcția NU rulează (pg_locks gol), cititorul spus')
+  verifica(cls(cp, 'v_peste_prop') === 'NEEXECUTATA in public.v_peste_prop (' + NEEX_PROP && cls(cp, 'v_lant') === 'NEEXECUTATA in public.v_lant (' + NEEX_PROP,
+    'r7 P1: pe lanț (vedere invoker / vedere a lui postgres peste vederea lui v_owner): proprietarul fiecărui nivel => NEEXECUTATA')
+  verifica(cls(cp, 'v_peste_inv') === 'NEEXECUTATA in public.v_peste_inv (functie in afara listei: pg_catalog.current_setting [setari nemodelate: request.headers])',
+    'r7 P1: vedere security_invoker imbricată într-o vedere obișnuită: tabelele ei se citesc tot ca anon (politica lui anon analizată)')
+  verifica(cls(cp, 'v_ocolit') === 'DATE_CITIBILE in public.v_ocolit (1 rand doar NULL / zero; vedere fara security_invoker: citeste ca proprietarul)'
+    && cp.jurnal.includes('SIMULARE cititori pentru public.v_ocolit: public.t_ocolit citit ca postgres (superuser: ocoleste RLS, fara politici de analizat)')
+    && cp.jurnal.includes('SIMULARE cititori pentru public.v_fara_invoker: public.t_kpi_b citit ca postgres (superuser: ocoleste RLS, fara politici de analizat)')
+    && cls(cp, 'v_fara_invoker').startsWith('DATE_CITIBILE') && lP === 0,
+    'r7 L20: vederea unui proprietar care ocolește RLS se execută ca până acum (politicile lui anon / PUBLIC nu se aplică, funcția din ele nu rulează); ieșirea o spune')
+  const mP1 = await citire(db, SP(aplica(CITIRE, [['                                ELSE vc.relowner END AS cititor', '                                ELSE v_anon END AS cititor']])))
+  const lP1 = await lacate()
+  await db.query('SELECT pg_advisory_unlock_all()')
+  verifica(lP1 === 1 && !cls(mP1, 'v_prop').startsWith('NEEXECUTATA'),
+    `mutant „analiza doar pe politicile lui anon” (r6): funcția din politica proprietarului rulează, lock-ul rămâne după ROLLBACK (${lP1}; ${cls(mP1, 'v_prop').split(' (')[0]})`)
+  const mP2 = await citire(db, SP(aplica(CITIRE, [["(cr.rolsuper OR cr.rolbypassrls OR (pg_has_role(i.cititor, tc.relowner, 'USAGE') AND NOT tc.relforcerowsecurity))", 'false']])))
+  verifica(cls(mP2, 'v_ocolit').startsWith('NEEXECUTATA'), 'mutant fără ocolirea RLS a cititorului: cazul legitim (L20) iese NEEXECUTATA')
+  const mP3 = await citire(db, SP(aplica(CITIRE, [['              IF v_anon = ANY (d.cititori) THEN v_baze', '              IF true THEN v_baze'],
+    ['        ELSIF v_m_date IS NULL THEN\n', '        ELSE\n']])))
+  const lP3 = await lacate()
+  await db.query('SELECT pg_advisory_unlock_all()')
+  verifica(lP3 === 1, `mutant fără ambele gărzi ale probei la sursă (r7): tabelul citit prin vedere doar ca proprietar e citit direct ca anon, politica lui anon rulează (lock: ${lP3})`)
   await db.exec('ROLLBACK')
 }
 // SIMULARE deosebește datele citibile: o politică temporară care lasă anon să vadă un rând => DATE_CITIBILE (anulată la final)
@@ -517,6 +569,16 @@ verifica(JSON.stringify(jr) === JSON.stringify([{ migrare: '20261218a', n: 3 }, 
     && s1.jurnal.includes('STATISTICI martor (configurarea fiecarei cereri PostgREST): rol anon | queryid 31 | 5000 apeluri | stats_since 2026-11-01 08:00:00+00')
     && s1.jurnal.findIndex(m => m.startsWith('STATISTICI anon directa')) < s1.jurnal.findIndex(m => m.startsWith('STATISTICI anon alta')),
     'STATISTICI r6: fiecare intrare are queryid | apeluri | stats_since | nivel; directele primele; martorul (sub anon, preferat celui sub authenticator) cu queryid și stats_since')
+  // r7 (review r2 #1090 P2): SQL intern unei funcții (toplevel = false, track = all) cu forma PostgREST și "public"."…" = alta, marcat imbricat
+  await db.exec(`INSERT INTO stat_fals.pg_stat_statements SELECT 'anon'::regrole, d.oid, false, 20, 7, 'WITH pgrst_source AS ( SELECT "public"."t_d".* FROM "public"."t_d" ) SELECT null', '2026-11-01 08:00:00+00' FROM pg_database d WHERE d.datname = current_database();`)
+  const sI = await citire(db, SP(FALS))
+  verifica(sI.jurnal.includes('STATISTICI anon alta: queryid 20 | 7 apeluri | stats_since 2026-11-01 08:00:00+00 | imbricat | WITH pgrst_source AS ( SELECT "public"."t_d".* FROM "public"."t_d" ) SELECT null')
+    && / directe: 3 interogari, 126 apeluri \| rpc: 2 interogari, 46 apeluri \| alte: 4 interogari, 5019 apeluri \|/.test(rez(sI)),
+    'STATISTICI r7: intrarea imbricată cu forma PostgREST = alta (marcată „imbricat”), nu directa; rezumatul directelor neschimbat')
+  const mI = await citire(db, SP(aplica(FALS, [["CASE WHEN v_top THEN 'WHEN s.toplevel IS NOT TRUE THEN ''alta'' ' ELSE '' END", "''"]])))
+  verifica(/ directe: 4 interogari, 133 apeluri /.test(rez(mI)) && mI.jurnal.some(m => m.startsWith('STATISTICI anon directa: queryid 20 ')),
+    'mutant fără toplevel în clasificare: SQL-ul intern unei funcții e numărat ca interogare directă (falsă dependență)')
+  await db.exec('DELETE FROM stat_fals.pg_stat_statements WHERE queryid = 20')
   // P1.4 (b): resetare SELECTIVĂ a intrării 11 + încă 105 apeluri: sumele și rezumatul rămân identice, dar stats_since al intrării se schimbă
   await db.exec(`UPDATE stat_fals.pg_stat_statements SET stats_since = '2026-11-12 08:00:00+00' WHERE queryid = 11; UPDATE stat_fals.pg_stat_statements SET calls = 5100 WHERE queryid = 31;`)
   const s2 = await citire(db, SP(FALS))
@@ -541,7 +603,7 @@ verifica(JSON.stringify(jr) === JSON.stringify([{ migrare: '20261218a', n: 3 }, 
   verifica(/ directe: 4 interogari, 135 apeluri /.test(rez(mP)), 'mutant fără forma PostgREST: SQL-ul scris de mână cu "public"."t_a" e numărat ca interogare directă')
   await db.exec(`ALTER TABLE stat_fals.pg_stat_statements DROP COLUMN stats_since;`)
   const s3 = await citire(db, SP(FALS))
-  verifica(/ stats_since: nu \| .*dovada: LIPSA DE DOVADA \(fara stats_since/.test(rez(s3)) && s3.jurnal.some(m => /^STATISTICI anon directa: queryid 11 \| 105 apeluri \| stats_since necunoscut \| \? \|/.test(m)),
+  verifica(/ stats_since: nu \| .*dovada: LIPSA DE DOVADA \(fara stats_since/.test(rez(s3)) && s3.jurnal.some(m => /^STATISTICI anon directa: queryid 11 \| 105 apeluri \| stats_since necunoscut \| sus \|/.test(m)),
     'STATISTICI r6: fără stats_since pe intrări (PG < 17) = LIPSĂ DE DOVADĂ')
   await db.exec(`ALTER TABLE stat_fals.pg_stat_statements ADD COLUMN stats_since timestamptz DEFAULT '2026-11-01 08:00:00+00';
     INSERT INTO stat_fals.pg_stat_statements SELECT 'anon'::regrole, d.oid, true, 15, 2, '<insufficient privilege>' FROM pg_database d WHERE d.datname = current_database();`)

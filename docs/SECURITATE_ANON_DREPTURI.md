@@ -22,6 +22,9 @@ PUBLIC puse pe tabele fără drept.
 o relație cu o funcție din afara listei nu se mai execută (`NEEXECUTATA`). Simularea pune contextul unei cereri GET reale prin API
 (metoda, calea, revendicările cheii) și refuză setările pe care nu le modelează. `STATISTICI`: clase după forma API-ului, `stats_since`
 pe fiecare intrare, colectarea pornită, martorul API-ului; regula de comparare e pe fiecare intrare (§2).
+**Runda 7 (review r2 #1090):** analiza ia politicile **cititorului efectiv** (proprietarul unei vederi obișnuite, pe fiecare nivel), nu
+doar pe ale lui `anon`, și spune când cititorul ocolește RLS; intrările imbricate din statistici nu mai pot fi „directe”; șablonul notei
+umane pentru relațiile `NEEXECUTATA` (§2).
 
 ## 1. Pe scurt
 
@@ -97,8 +100,22 @@ dovadă”, nu „dovedit”. Scriptul nu urmărește completitudinea teoretică
    - regula de citire a fiecărei vederi, recursiv prin vederi: relațiile, funcțiile și operatorii (cu funcțiile lor) se citesc din
      **arborele intern** al regulii, nu doar din tabelul de dependențe (acolo funcțiile și tabelele sistemului nu apar deloc: de aici
      venea contraexemplul cu `query_to_xml` și o vedere peste catalog ieșea „constantă”);
-   - politicile pe care `anon` le evaluează la citire (RLS pornit, SELECT / ALL, pentru `anon` sau PUBLIC), recursiv prin relațiile citite
-     de ele.
+   - politicile aplicate de **cititorul efectiv** al fiecărui tabel (runda 7, review r2 #1090 P1), recursiv prin relațiile citite de ele.
+
+   **Cine citește efectiv** (regula PostgreSQL, probată pe PG 18 în testul local):
+   - relația citită direct și relațiile unei vederi `security_invoker = on` (oriunde în lanț, chiar sub o vedere obișnuită): `anon`;
+   - relațiile unei vederi **obișnuite** (fără `security_invoker`): **proprietarul vederii**, cu drepturile și **politicile lui**; pe lanț,
+     proprietarul fiecărui nivel (vedere peste vedere);
+   - relațiile citite dintr-o politică: același cititor ca tabelul politicii.
+
+   Politicile analizate pe un tabel = cele pe care PostgreSQL le aplică acelui cititor: RLS pornit, SELECT / ALL, pentru PUBLIC sau pentru
+   un rol ale cărui drepturi le are cititorul (direct sau moștenit). **Niciuna** dacă cititorul ocolește RLS: superuser, `BYPASSRLS`,
+   proprietarul tabelului (sau membru al lui) fără `FORCE ROW LEVEL SECURITY`. Ieșirea o spune, înaintea oricărei execuții, într-o linie
+   `SIMULARE cititori pentru <relație>: <tabel> citit ca <rol> (<superuser / BYPASSRLS / proprietarul tabelului, fără FORCE>: ocolește
+   RLS, fără politici de analizat | politicile lui analizate)`, pentru fiecare tabel cu RLS citit ca alt rol decât `anon` sau fără
+   politici. Contraexemplul review-ului (politică `TO <proprietarul vederii>` care cheamă o funcție cu `pg_advisory_lock`, vedere
+   obișnuită a acelui proprietar, cu SELECT pentru `anon`) iese acum `NEEXECUTATA`, iar funcția nu rulează. Proba „la sursă” (mai jos)
+   citește un tabel direct ca `anon` doar dacă politicile lui `anon` pe el sunt în analiză.
 
    Corpurile funcțiilor **nu se mai urmăresc**. E admisă doar o **listă albă**:
    - funcțiile sistemului (create la instalarea serverului), fără SECURITY DEFINER și fără SET în definiție, care fie sunt **imuabile**
@@ -125,7 +142,8 @@ dovadă”, nu „dovedit”. Scriptul nu urmărește completitudinea teoretică
        funcțiile listei albe. Nu scrie „dovedit”;
      - `DATE_CITIBILE`: tabel; vedere materializată / tabel străin; vedere fără `security_invoker`; un tabel de bază cu cel puțin un rând
        vizibil ca `anon`;
-     - `AMBIGUU`, cu numele: relație din altă schemă (inclusiv catalogul), dependență de alt fel, altă eroare decât 42501.
+     - `AMBIGUU`, cu numele: relație din altă schemă (inclusiv catalogul), dependență de alt fel, altă eroare decât 42501, tabel pe
+       calea de date citit doar ca alt rol decât `anon`.
 
 **Contextul cererii simulate** (secțiunea `CONTEXT_POSTGREST`). O cerere GET prin API-ul bazei (PostgREST) cu cheia publică, fără
 sesiune, rulează într-o tranzacție în care PostgREST pune rolul, `search_path`, revendicările cheii (`request.jwt.claims`), metoda,
@@ -142,14 +160,36 @@ antetele și cookie-urile `{}`.
   setări (doar numele, valorile pot fi secrete) și dacă printre ele e `pgrst.db_pre_request`. Configurarea din variabilele de mediu ale
   serviciului (pre-request, scheme) nu se vede din bază: coordonatorul o confirmă separat. Alte limite cunoscute: conversiile prin
   funcțiile de intrare / ieșire ale tipurilor (tipurile de bază le creează doar administratorul serverului), constrângerile domeniilor
-  (rulează doar la conversie și pot doar da eroare), politicile evaluate pentru proprietarul unei vederi fără `security_invoker` (care
-  oricum iese `DATE_CITIBILE` la un rând doar cu zero), recunoașterea corpului lui `auth.uid()` / `auth.role()` după text.
+  (rulează doar la conversie și pot doar da eroare), recunoașterea corpului lui `auth.uid()` / `auth.role()` după text. (Politicile
+  proprietarului unei vederi obișnuite **nu** mai sunt o limită: din runda 7 se analizează, vezi mai sus.)
 
 **Concluzia** `ZERO date citibile ca anon (proba pe aceasta baza, in limitele din document)` cere: **0 `DATE_CITIBILE`, 0 `AMBIGUU`,
 0 `NEEXECUTATA`, 0 erori necunoscute** (42501 = drept refuzat, se notează). Valorile nu se afișează. Citirile din 13.11.2026 (clonă și
 producție, cu scriptul rundei 5) trebuie **refăcute** cu scriptul rundei 6. De așteptat pe producție: tabelele ale căror politici pentru
 `anon` / PUBLIC apelează funcții proprii (azi cel puțin o politică RESTRICTIVE) și vederile care le citesc ies `NEEXECUTATA`; acolo
-decide un om (funcția e citită și revizuită), nu scriptul.
+decide un om (funcția e citită și revizuită), nu scriptul. Runda 7 analizează în plus politicile proprietarilor vederilor obișnuite:
+citirea de pe producție se reface cu scriptul rundei 7 (numărul de `NEEXECUTATA` poate crește, niciodată scădea pe aceeași bază).
+
+**Nota umană pentru relațiile `NEEXECUTATA` (varianta A, recomandată în review-ul r2 #1090).** Pe producție, citirea rundei 6 a dat
+`NEDOVEDIT` cu 5 vederi `NEEXECUTATA` (toate implică funcții SECURITY DEFINER proprii). Pentru fiecare, un om scrie o notă **în PR-ul
+T2**, înaintea aplicării. Nota **completează** proba; **nu** transformă ieșirea scriptului în `ZERO` (concluzia scriptului rămâne
+`NEDOVEDIT`). Repo-ul e public: nota din PR referă obiectele prin numărul de ordine și amprentă, iar numele, corpurile și detaliile
+stau în raportul intern al coordonatorului, cu aceeași structură. Șablonul:
+
+```
+Nota NEEXECUTATA <n> / <total> — citirea din <data, ora> (rezumatul SIMULARE + CONTROL de atunci)
+1. Vederea: <identificare> | security_invoker: <da/nu> | proprietar: <rol> | amprenta regulii (md5 din OBIECT): <md5>
+2. Funcțiile din închidere (linia NEEXECUTATA) și apelurile lor TRANZITIVE, fiecare cu:
+   - identitate (schemă, nume, argumente) | proprietar | DEFINER / INVOKER | proconfig (inclusiv search_path) | volatilitate
+   - amprenta corpului: md5(replace(prosrc, chr(13), '')) | momentul citirii
+   - sursele citite (tabele / vederi / setări) și verificările de identitate din corp (auth.uid(), rolul, profilul)
+3. Cititorul efectiv al fiecărui tabel (linia „SIMULARE cititori”) și politicile aplicate lui
+4. Concluzia motivată: ce poate întoarce vederea unei cereri fără sesiune (fără date / doar date publice / date private) și de ce
+5. Paginile publice care depind de vedere (din cod) și ce se întâmplă cu ele după T2
+6. Verificarea fără sesiune prin API (GET cu cheia publică, fără sesiune): codul HTTP, numărul de rânduri, data; fără valori
+7. Revizuit de: <om> | data
+8. Obligație: dacă vreo definiție de la 1–3 se schimbă (altă amprentă) înaintea aplicării T2, nota se reface
+```
 
 **Dovada 2 — zero interogări directe ale lui `anon` pe tabele** (secțiunea `STATISTICI`, din `pg_stat_statements`). Fiecare intrare a
 lui `anon` din baza curentă are o **clasă**:
@@ -157,7 +197,9 @@ lui `anon` din baza curentă are o **clasă**:
   scriere, inclusiv `INSERT` cu listă de coloane);
 - `rpc` = forma PostgREST cu apel de funcție (`pgrst_call`): paginile publice;
 - `alta` = tot restul (SQL scris de mână, citiri interne ale funcțiilor apelate de `anon` când colectarea e `all`, PostgREST pe alte
-  scheme); se tipăresc, dar nu intră la directe;
+  scheme); se tipăresc, dar nu intră la directe. Runda 7 (review r2 #1090 P2): o intrare **imbricată** (`toplevel = false`: SQL rulat
+  din interiorul unei funcții) e mereu `alta`, cu marcajul `imbricat` pe linie, chiar dacă textul ei are forma PostgREST și numește
+  `"public"."…"` — nu e o cerere prin API. Fără coloana `toplevel` (PostgreSQL < 14), clasa se dă prudent după text (nivelul `?`);
 - `proprie` = interogările acestui script (eticheta `anon_drepturi_citire`); `ascunsa` = textul nu e vizibil pentru cititor.
 
 Fiecare linie: `STATISTICI anon <clasa>: queryid Q | N apeluri | stats_since T | sus/imbricat | <text>`; `stats_since` (PostgreSQL 17)
@@ -318,7 +360,8 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
    - `SIMULARE`: **0 relații cu date citibile, 0 ambigue, 0 neexecutate** (linia `SIMULARE concluzie: ZERO …`). „Un rând doar cu zero /
      NULL” se judecă la sursă (§2): `FARA_DATE_LA_SURSA` / `CONSTANTA (fără surse în catalog)` se notează; un tabel cu un rând vizibil `(0)`
      iese „date citibile”. Erorile de drept (42501) se notează, nu blochează; o altă eroare = necunoscut. O `NEEXECUTATA` numește funcția
-     și motivul: se citește funcția și se decide (nu se ocolește);
+     și motivul: se citește funcția și se decide (nu se ocolește), cu nota umană din §2 în PR-ul T2. Liniile `SIMULARE cititori` arată
+     tabelele citite ca proprietarul unei vederi obișnuite sau fără politici (cititor care ocolește RLS);
    - `STATISTICI`: pentru T2, regula de comparare din §2 (martorul crește; fiecare intrare directă din A e în B cu același `stats_since`
      și aceleași apeluri; nicio intrare directă nouă). Sărită sau `LIPSA DE DOVADA` = lipsă de dovadă;
    - `OBIECT`: lista pe trepte; `CONTROL`: amprenta lui „rămâne” și a politicilor pentru `anon` / PUBLIC pe tabele fără drept.
@@ -361,7 +404,11 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
   politicile, corpul vederilor, DEFAULT-urile. Fără regex pe SQL. Un singur REVOKE pe nume citate din catalog.
 - **L20** — sunt testate și căile legitime: RPC-ul DEFINER al paginii publice merge, INSERT-ul permis de politică merge, obiectul declarat la
   pct. 1 rămâne, partițiile păstrate se citesc; în citire (runda 6): `auth.uid()`, funcțiile stabile din listă (`now`, `date_trunc`,
-  `to_char`, `jsonb_build_object`) și o politică pe metoda cererii (`GET`) trec, nu sunt refuzate.
+  `to_char`, `jsonb_build_object`) și o politică pe metoda cererii (`GET`) trec, nu sunt refuzate; runda 7: vederea obișnuită a unui
+  proprietar care ocolește RLS se execută ca până acum (politicile lui `anon` / PUBLIC de pe tabelul de sub ea nu se aplică, iar funcția
+  din ele nu rulează: verificat în `pg_locks`), iar ieșirea spune de ce.
+- **L07 / L08** (runda 7) — contextul de acces e cel real pe fiecare nivel: `anon` sau proprietarul vederii obișnuite (cu politicile și
+  ocolirea RLS ale lui), nu doar `anon` peste tot.
 - **L24** — condiția T2: clientul nu mai pornește interogări fără sesiune (PR separat).
 - **L25** — verificări independente de regulă (instantaneul complet al drepturilor, cereri reale ca `anon`), mutanți pe migrări, reveniri și
   regulă; cursa: simulată determinist în PGlite + probă cu două sesiuni reale pe clona PG 17.6 (R1–R5 rulate 12.11.2026, comportamentele
@@ -375,6 +422,10 @@ Controlul se poate muta în poarta automată a runnerului (cere aprobare separat
 
 - **SIMULARE, clasa „agregat fără date”**: **închis în runda 5** — clasa după formă a dispărut; un rând doar cu zero / NULL se judecă la sursă (`FARA_DATE_LA_SURSA`) sau rămâne nedovedit (§2). Contraexemplul (`sum` peste `1` și `-1`, fără tabele) iese `CONSTANTA (fără surse în catalog)`.
 - **Review #1090 (runda 6)**: cele 5 P1 și P2 închise prin refuz conservator (§2): funcții cu SET în definiție / proprii / de sistem care execută SQL = `NEEXECUTATA`; analiza înaintea execuției; contextul cererii API + setările nemodelate refuzate; `stats_since`, colectarea pornită și martorul; forma API-ului la interogările directe. Fiecare regulă are contraexemplul review-ului ca test și un mutant. Rămân limitele scrise în §2 (pre-request, setările rolului, conversiile tipurilor, domeniile).
+- **Review r2 #1090 (runda 7)**: P1 (vederile obișnuite aplică politicile proprietarului) închis — închiderea poartă cititorul efectiv
+  pe fiecare nivel, funcțiile din politicile proprietarului sunt pe aceeași listă albă înaintea execuției, ocolirea RLS e spusă în
+  ieșire; contraexemplul review-ului (lock consultativ) e test + mutant. P2 (`toplevel`) închis — intrările imbricate sunt `alta`.
+  Cele 5 vederi `NEEXECUTATA` de pe producție: nota umană (§2) în PR-ul T2.
 - **POLITICI_ANON**: **închis în runda 5** — rândul `CONTROL POLITICI_ANON` (§4).
 - **ATTACH PARTITION** ia doar ShareUpdateExclusive pe părinte, deci nu e oprit de lock-ul ACCESS SHARE al treptei T2; nu acordă drepturi și nu redeschide cursa cu politicile.
 - **Înainte de aplicarea oricărei trepte**: probă prin runnerul real pe clonă (aplicare, revenire, reaplicare, sub 1500 ms), citire pe producție chiar înainte, BASELINE din aceeași citire, confirmarea atributului CREATEROLE și a triggerelor de eveniment pe producție, acordul owner-ului pentru fiecare treaptă.
