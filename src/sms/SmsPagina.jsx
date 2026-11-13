@@ -21,7 +21,7 @@ import {
   poateAproba, poateTrimite, poateAnula, valideazaAutorizare, valideazaPlafoane, fmtEur, fmtData, mascheazaTelefon,
   rezumatMesaje, mesajAnulare, poateActiona, notaNivel, areModulSms, NIVELURI, MAX_TEST, textSold,
   filtreazaNumereServiciu, numarSelectati, valideazaNumarServiciu, mesajDezactivare,
-  incarcaNumereServiciu, lipsaRpcNumereServiciu, reconciliazaNumereAlese, mesajScoaseDinSelectie, MAX_NUMERE_SERVICIU,
+  incarcaNumereServiciu, capabilitateNumere, reconciliazaNumereAlese, mesajScoaseDinSelectie, MAX_NUMERE_SERVICIU,
 } from './smsLogica.js'
 
 const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20' }
@@ -95,7 +95,8 @@ function StarePanou({ panou, soldInitial }) {
 
 // ── Compune: text + destinatari → previzualizare din BD → lot draft ────────────────────────────────────────────────────────
 // *Initial*: doar pentru teste (randare fără rețea)
-export function Compune({ panou, onCreat, setMesaj, angajatiInitiali = null, numereInitiale = null, modInitial = null, selectatiInitiali = null,
+// capNumere: capabilitatea „numere de serviciu” a PAGINII (r3, P2: supraviețuiește schimbării tabului); fără ea (teste), una proprie
+export function Compune({ panou, onCreat, setMesaj, capNumere = null, angajatiInitiali = null, numereInitiale = null, modInitial = null, selectatiInitiali = null,
   numereAleseInitiale = null, cautaInitial = '', eroareNumereInitiala = '' }) {
   const test = panou?.nivel === 'test'
   const [text, setText] = useState('')
@@ -119,29 +120,31 @@ export function Compune({ panou, onCreat, setMesaj, angajatiInitiali = null, num
     smsApi.angajati().then(l => { if (activ) setAngajati(l) }).catch(e => { if (activ) { setAngajati([]); setMesaj({ tip: 'eroare', text: 'Angajați: ' + mesajEroare(e) }) } })
     return () => { activ = false }
   }, [setMesaj, angajatiInitiali])
-  // r2 (P1): SONDA o singură dată. Migrarea 20261220a neaplicată (RPC-ul lipsește) = ecranul merge ca înainte: fără grup, fără eroare,
-  // fără alte cereri către funcțiile noi. După o listă primită, o „lipsă” ulterioară e eroare (L18). L24: doar ultimul răspuns se aplică.
-  const sonda = useRef(numereInitiale ? 'da' : null)   // null = nesondat · 'da' · 'lipsa'
+  // r2 (P1) / r3 (P2): SONDA o singură dată pe PAGINĂ (capabilitatea vine de la SmsPagina, nu se pierde la schimbarea tabului). Migrarea
+  // 20261220a neaplicată (RPC-ul lipsește) = ecranul merge ca înainte: fără grup, fără eroare, fără alte cereri către funcțiile noi. După o
+  // listă primită (în orice tab), o „lipsă” ulterioară e eroare (L18). L24: doar ultimul răspuns se aplică.
+  const capLocal = useRef(null)
+  if (!capNumere && !capLocal.current) capLocal.current = capabilitateNumere(numereInitiale ? 'exista' : 'necunoscut')
+  const cap = capNumere || capLocal.current
   const montat = useRef(true)
   const genNumere = useRef(0)
   const numereRef = useRef(numere); numereRef.current = numere
   const aleseRef = useRef(numereAlese); aleseRef.current = numereAlese
   useEffect(() => { montat.current = true; return () => { montat.current = false } }, [])
   const incarcaNumere = useCallback(async () => {
-    if (sonda.current === 'lipsa') return
     const g = ++genNumere.current
-    const r = await incarcaNumereServiciu(smsApi, { sonda: sonda.current !== 'da' })
+    // capabilitatea 'lipsa' (aflată de sonda paginii, eventual în alt tab): nicio cerere, grupul nu apare
+    const r = cap.stare === 'lipsa' ? { stare: 'lipsa' } : await incarcaNumereServiciu(smsApi, cap)
     if (!montat.current || g !== genNumere.current) return
-    if (r.stare === 'lipsa') { sonda.current = 'lipsa'; setNumere([]); setEroareNumere(''); return }
+    if (r.stare === 'lipsa') { setNumere([]); setEroareNumere(''); return }
     // eroare: lista de până acum rămâne (bifele nu dispar în tăcere), eroarea se vede
     if (r.stare === 'eroare') { setNumere(n => n || []); setEroareNumere(mesajEroare(r.err)); return }
-    sonda.current = 'da'
     // r2 (P2): selecția se reconciliază cu lista nouă — un număr dezactivat / cu opt-out iese din selecție și omul e anunțat (altfel
     // bifa dispărută ar rămâne în selecție, BD-ul ar refuza previzualizarea și nu s-ar mai putea debifa)
     const { alese, scoase } = reconciliazaNumereAlese(aleseRef.current, r.numere, numereRef.current)
     setNumere(r.numere); setEroareNumere('')
     if (scoase.length) { setNumereAlese(alese); setMesaj({ tip: 'eroare', text: mesajScoaseDinSelectie(scoase) }) }
-  }, [setMesaj])
+  }, [setMesaj, cap])
   useEffect(() => { if (!numereInitiale) incarcaNumere() }, [numereInitiale, incarcaNumere])
   // orice schimbare de text / destinatari invalidează previzualizarea (lotul se creează exact din ce s-a văzut)
   useEffect(() => { setPreview(null) }, [text, mod, depAlese, selectati, numereAlese])
@@ -384,7 +387,7 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
 }
 
 // ── Setări: kill-switch, plafoane, comutatorul Redări (cu nr. + data autorizării scrise Transgaz) ───────────────────────────
-function Setari({ panou, reincarcaPanou, setMesaj }) {
+function Setari({ panou, reincarcaPanou, setMesaj, capNumere }) {
   const [zi, setZi] = useState(String(panou?.plafon_zi ?? ''))
   const [luna, setLuna] = useState(String(panou?.plafon_luna ?? ''))
   const [nr, setNr] = useState('')
@@ -442,19 +445,22 @@ function Setari({ panou, reincarcaPanou, setMesaj }) {
         </div>
       </>}
     </div>
-    <NumereServiciu setMesaj={setMesaj} />
+    <NumereServiciu setMesaj={setMesaj} capNumere={capNumere} />
   </section>
 }
 
 // ── 20261220a: Numere de serviciu (⚙ Setări, doar owner — și în BD: fn_sms_cere_owner) ──────────────────────────────────────
 const FORM_NUMAR = { id: null, denumire: '', telefon: '', responsabilId: '', nota: '', versiune: null }
 // *Initial*: doar pentru teste (randare fără rețea)
-export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitiali = null, formInitial = null, lipsaInitiala = false }) {
+export function NumereServiciu({ setMesaj, capNumere = null, listaInitiala = null, angajatiInitiali = null, formInitial = null, lipsaInitiala = false }) {
+  // r2 (P1) / r3 (P2): migrarea 20261220a neaplicată = secțiunea nu apare (fără eroare); „lipsa” se acceptă doar la sonda PAGINII
+  // (capabilitatea vine de la SmsPagina: o listă primită în „Compune” face ca o lipsă de aici să fie eroare, și invers)
+  const capLocal = useRef(null)
+  if (!capNumere && !capLocal.current) capLocal.current = capabilitateNumere(listaInitiala ? 'exista' : lipsaInitiala ? 'lipsa' : 'necunoscut')
+  const cap = capNumere || capLocal.current
   const [lista, setLista] = useState(listaInitiala)
   const [eroare, setEroare] = useState('')
-  // r2 (P1): migrarea 20261220a neaplicată = secțiunea nu apare (fără eroare); „lipsa” se acceptă doar la sonda (prima încărcare)
-  const [lipsa, setLipsa] = useState(lipsaInitiala)
-  const sondaGata = useRef(!!listaInitiala)
+  const [lipsa, setLipsa] = useState(lipsaInitiala || cap.stare === 'lipsa')
   const [angajati, setAngajati] = useState(angajatiInitiali)
   const [form, setForm] = useState(formInitial || FORM_NUMAR)
   const [lucru, setLucru] = useState(false)
@@ -462,16 +468,16 @@ export function NumereServiciu({ setMesaj, listaInitiala = null, angajatiInitial
   // L24: doar ultimul răspuns se aplică (o reîncărcare după acțiune nu e suprascrisă de una mai veche)
   const incarca = useCallback(async () => {
     const g = ++gen.current
-    try { const l = await smsApi.numereServiciuAdmin(); if (g === gen.current) { sondaGata.current = true; setLista(l); setEroare('') } }
-    catch (e) {
-      if (g !== gen.current) return
-      if (!sondaGata.current && lipsaRpcNumereServiciu(e)) setLipsa(true)
-      else setEroare(mesajEroare(e))
-    }
-  }, [])
-  useEffect(() => { if (!listaInitiala && !lipsaInitiala) incarca() }, [incarca, listaInitiala, lipsaInitiala])
+    if (cap.stare === 'lipsa') { setLipsa(true); return }
+    const r = await cap.cere(() => smsApi.numereServiciuAdmin())
+    if (g !== gen.current) return
+    if (r.stare === 'lipsa') setLipsa(true)
+    else if (r.stare === 'eroare') setEroare(mesajEroare(r.err))
+    else { setLista(r.valoare); setEroare('') }
+  }, [cap])
+  useEffect(() => { if (!listaInitiala && !lipsa) incarca() }, [incarca, listaInitiala])
   useEffect(() => {
-    if (angajatiInitiali || lipsaInitiala) return
+    if (angajatiInitiali || lipsa) return
     let activ = true
     smsApi.angajati().then(l => { if (activ) setAngajati(l) }).catch(() => { if (activ) setAngajati([]) })
     return () => { activ = false }
@@ -579,6 +585,10 @@ export default function SmsPagina({ profile, panouInitial = null, soldInitial = 
   const [faraAcces, setFaraAcces] = useState(false)
   const [mesaj, setMesaj] = useState(null)
   const [evidentiat, setEvidentiat] = useState(null)
+  // r3 (P2): „există numerele de serviciu?” (migrarea 20261220a) se află O DATĂ pe încărcarea paginii și se păstrează între taburi
+  // (taburile își demontează componentele; o sondă pe tab ar ascunde o funcție dispărută după o listă primită)
+  const capNumere = useRef(null)
+  if (!capNumere.current) capNumere.current = capabilitateNumere()
   const areModul = areModulSms(profile)
   const reincarcaPanou = useCallback(() => {
     smsApi.panou().then(p => { setPanou(p); setFaraAcces(false) }).catch(e => {
@@ -602,9 +612,9 @@ export default function SmsPagina({ profile, panouInitial = null, soldInitial = 
         <button key={k} type="button" aria-pressed={tab === k} onClick={() => { setTab(k); setMesaj(null) }} style={{ ...S.button, fontWeight: 600, color: tab === k ? G.blue : G.muted, borderColor: tab === k ? G.blue : G.border }}>{l}</button>)}
     </nav>
     <Mesaj m={mesaj} />
-    {tab === 'compune' && <Compune panou={panou} setMesaj={setMesaj} onCreat={id => { setEvidentiat(id); setTab('istoric') }} />}
+    {tab === 'compune' && <Compune panou={panou} setMesaj={setMesaj} capNumere={capNumere.current} onCreat={id => { setEvidentiat(id); setTab('istoric') }} />}
     {tab === 'istoric' && <Istoric panou={panou} reincarcaPanou={reincarcaPanou} evidentiat={evidentiat} setMesaj={setMesaj} />}
-    {owner && tab === 'setari' && <Setari panou={panou} reincarcaPanou={reincarcaPanou} setMesaj={setMesaj} />}
+    {owner && tab === 'setari' && <Setari panou={panou} reincarcaPanou={reincarcaPanou} setMesaj={setMesaj} capNumere={capNumere.current} />}
     {owner && tab === 'optout' && <Optout setMesaj={setMesaj} />}
     <p style={{ ...S.small, marginTop: 18 }}>Furnizor: SMSLink (adaptor unic în edge). Fără date personale în texte. SMS-ul nu înlocuiește convocarea scrisă din Redări — e doar informare.</p>
   </div>

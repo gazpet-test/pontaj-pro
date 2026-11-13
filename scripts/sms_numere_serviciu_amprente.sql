@@ -1,21 +1,23 @@
 -- Amprenta L15 pentru migrarea 20261220a_sms_numere_serviciu — DOAR CITIRE, pentru coordonator, pe PRODUCȚIE (și pe clonă).
 -- Rulare (o tranzacție READ ONLY, nimic scris; parola din pgpass, niciodată în comandă):
 --   psql -X -v ON_ERROR_STOP=1 -h <host> -p <port> -U <user> -d postgres -f scripts/sms_numere_serviciu_amprente.sql > amprente_20261220a.txt
--- Ce tipărește (același format ca scripts/raport_linii_proiect_amprente.sql / scripts/tichete_lot2_amprente.sql):
---   eticheta | amprenta (md5 pe „detaliu”) | linie_baseline (de copiat în blocul BASELINE al migrării) | sursa | atentie | detaliu
---   * tabelele: sms_loturi și sms_mesaje (pe sms_mesaje se reface CHECK-ul destinatar_tip; în ambele scrie crearea lotului, prin
---     triggerele lor) — drepturi pe tabel / coloane / secvențe, proprietar, RLS + FORCE, TOATE politicile, inventarul triggerelor;
---   * funcțiile: pornirea = fn_sms_lot_intern_creeaza (varianta cu 4 parametri, înlocuită), fn_sms_lot_destinatari (corp nou),
---     fn_sms_angajati_lista (oglinda listei noi a numerelor de serviciu); r2 (P1): plus funcțiile chemate de corpurile NOI (porțile
---     fn_sms_cere_owner / fn_sms_cere_nivel, normalizarea, textul, coada de test, accesul pe lot, auth.uid — lista FOLOSITE din migrare,
---     care refuză un baseline fără ele și unul fără lanțul lor complet); funcțiile din politicile / triggerele celor două tabele (le găsește
---     catalogul) și „indiciile” = numele apare în corpul unei funcții din listă (callee tranzitiv; plpgsql nu lasă pg_depend). Indiciul e
---     DOAR o propunere pentru revizor: poarta din migrare nu caută nimic în text, compară exact lista din BASELINE;
---   * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, politici USING true,
---     DEFINER fără search_path, EXECUTE în corp).
---   * la final, separat (NU intră în baseline): verificările de start ale migrării pe ținta curentă (corpurile 20261130b, CHECK-ul,
---     numele libere), ca un refuz să se vadă înainte de livrare.
--- Cum se folosește: coloana linie_baseline, în ordinea afișată, se copiază ÎNTREAGĂ între marcajele „>>> BASELINE 20261220a” /
+-- Ce tipărește (același format ca scripts/meteo_xweather_amprente.sql):
+--   1. eticheta | amprenta (md5 pe „detaliu”) | linie_baseline (de copiat în blocul BASELINE al migrării) | sursa | atentie | detaliu
+--      * tabelele: sms_loturi și sms_mesaje (pe sms_mesaje se reface CHECK-ul destinatar_tip; în ambele scrie crearea lotului, prin
+--        triggerele lor) — drepturi pe tabel / coloane / secvențe, proprietar, RLS + FORCE, TOATE politicile, inventarul triggerelor;
+--      * funcțiile: ÎNCHIDEREA tranzitivă (blocul INCHIDERE_L15, IDENTIC cu cel din migrare — r3; lanțul = blocul din 20261221a): pornirea =
+--        crearea lotului (varianta cu 4 parametri), lista fixată, lista angajaților și lista FOLOSITE (porțile fn_sms_cere_owner /
+--        fn_sms_cere_nivel, normalizarea, textul, coada de test, accesul pe lot, auth.uid), plus funcțiile din politicile / triggerele celor
+--        două tabele, apoi orice funcție apelată „nume(” din corpurile sql / plpgsql ale lanțului și dependențele din pg_depend, fără limită
+--        de adâncime. Migrarea calculează ACEEAȘI mulțime și cere ca baseline-ul s-o aibă EXACT (sursa: pornire / inchidere);
+--      * „atentie” = ce trebuie privit cu ochii înainte de a accepta baseline-ul (drepturi pentru anon / PUBLIC, politici USING true,
+--        DEFINER fără search_path, EXECUTE în corp — pe acesta migrarea îl REFUZĂ).
+--   2. „funcții cu SQL dinamic / limbaj neanalizabil în lanț: N” — aceeași regulă ca migrarea (amp_verifica); N > 0 = migrarea VA REFUZA
+--      la aplicare (de rezolvat înainte, nu la aplicare).
+--   3. „nume din corpurile noi care există ca funcții în afara pg_catalog și a listei FOLOSITE: N” — aceeași regulă de nume ca postcondiția
+--      migrării; N > 0 = postcondiția VA REFUZA (un nume din corpurile noi potrivit cu o funcție din altă schemă).
+--   4. verificările de start ale migrării pe ținta curentă (corpurile 20261130b, CHECK-ul, numele libere), ca un refuz să se vadă înainte.
+-- Cum se folosește: coloana linie_baseline din (1), în ordinea afișată, se copiază ÎNTREAGĂ între marcajele „>>> BASELINE 20261220a” /
 --   „<<< BASELINE 20261220a” ale migrării (în locul rândului DE_COMPLETAT; singurul loc din migrare cu valori de producție), iar „detaliu”
 --   intră în review. Migrarea refuză până atunci și refuză orice diferență față de el, înainte și după schimbare (excepțiile „după”: antetul
 --   migrării).
@@ -27,36 +29,54 @@ SET LOCAL search_path = public, pg_temp;
 SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;
 
 \echo
-\echo '=== 20261220a_sms_numere_serviciu — sms_loturi, sms_mesaje + crearea lotului intern, lista fixată, lista angajaților ==='
+\echo '=== 1. 20261220a_sms_numere_serviciu — sms_loturi, sms_mesaje + închiderea funcțiilor (crearea lotului, lista fixată, porțile) ==='
 WITH RECURSIVE
 -- >>> INTRARE 20261220a
 amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_mesaje'::regclass::oid)),
-amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)')::oid),
-                            (to_regprocedure('public.fn_sms_lot_destinatari(uuid)')::oid), (to_regprocedure('public.fn_sms_angajati_lista()')::oid),
-                            -- r2 (P1): funcțiile chemate de corpurile NOI (lista FOLOSITE din migrare; ::regprocedure = lipsa ei oprește scriptul)
-                            ('auth.uid()'::regprocedure::oid), ('public.fn_sms_cere_nivel()'::regprocedure::oid), ('public.fn_sms_cere_owner()'::regprocedure::oid),
-                            ('public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean)'::regprocedure::oid), ('public.fn_sms_tel_normalizat(text)'::regprocedure::oid),
-                            ('public.fn_sms_test_coada(uuid)'::regprocedure::oid), ('public.fn_sms_test_coada_cere(uuid, integer)'::regprocedure::oid),
-                            ('public.fn_sms_test_coada_lock(uuid, boolean)'::regprocedure::oid), ('public.fn_sms_test_coada_max()'::regprocedure::oid),
-                            ('public.fn_sms_text_valid(text)'::regprocedure::oid), ('public.fn_sms_text_verifica(text)'::regprocedure::oid)),
 -- <<< INTRARE 20261220a
-amp_start(oid, sursa) AS (
-  SELECT s.oid, 'pornire' FROM amp_pornire s
+-- >>> INCHIDERE_L15 20261220a
+-- Pornirea (r3): crearea lotului (varianta cu 4 parametri ÎNAINTE, cea cu 5 DUPĂ: to_regprocedure lasă doar pe cea existentă), lista fixată,
+--   lista angajaților și lista FOLOSITE (funcțiile chemate de corpurile noi: porțile owner / nivel, normalizarea, textul, coada de test,
+--   accesul pe lot, auth.uid). Lanțul (amp_lant, amp_functii_explicite) = EXACT blocul din 20261221a (L19): orice funcție (în afara
+--   pg_catalog / information_schema) al cărei nume apare ca apel „nume(” în corpul unei funcții sql / plpgsql din lanț (supra-aproximare:
+--   un nume potrivit în plus doar intră în amprentă), numele neobișnuite prin căutare de text, plus dependențele din pg_depend (corpurile
+--   BEGIN ATOMIC); fără limită de adâncime (UNION oprește ciclurile). BASELINE-ul trebuie să aibă EXACT această mulțime (o funcție lipsă
+--   sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz (amp_verifica).
+amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean, integer[])')::oid),
+                            (to_regprocedure('public.fn_sms_lot_destinatari(uuid)')::oid), (to_regprocedure('public.fn_sms_angajati_lista()')::oid),
+                            (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_sms_cere_nivel()')::oid),
+                            (to_regprocedure('public.fn_sms_cere_owner()')::oid), (to_regprocedure('public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_tel_normalizat(text)')::oid), (to_regprocedure('public.fn_sms_test_coada(uuid)')::oid),
+                            (to_regprocedure('public.fn_sms_test_coada_cere(uuid, integer)')::oid), (to_regprocedure('public.fn_sms_test_coada_lock(uuid, boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_test_coada_max()')::oid), (to_regprocedure('public.fn_sms_text_valid(text)')::oid),
+                            (to_regprocedure('public.fn_sms_text_verifica(text)')::oid)),
+amp_lant(oid) AS (
+  SELECT s.oid FROM amp_pornire s WHERE s.oid IS NOT NULL
   UNION
-  SELECT d.refobjid, 'politica' FROM pg_depend d JOIN pg_policy pol ON pol.oid = d.objid
+  SELECT d.refobjid FROM pg_depend d JOIN pg_policy pol ON pol.oid = d.objid
    WHERE d.classid = 'pg_policy'::regclass AND d.refclassid = 'pg_proc'::regclass AND pol.polrelid IN (SELECT t.oid FROM amp_tabele t)
   UNION
-  SELECT tg.tgfoid, 'trigger' FROM pg_trigger tg WHERE tg.tgrelid IN (SELECT t.oid FROM amp_tabele t) AND NOT tg.tgisinternal
-),
-amp_lant(oid, adancime) AS (
-  SELECT s.oid, 0 FROM amp_start s
+  SELECT tg.tgfoid FROM pg_trigger tg WHERE tg.tgrelid IN (SELECT t.oid FROM amp_tabele t) AND NOT tg.tgisinternal
   UNION
-  SELECT p2.oid, l.adancime + 1 FROM amp_lant l JOIN pg_proc p ON p.oid = l.oid
-    JOIN pg_proc p2 ON p2.oid <> p.oid AND p2.pronamespace IN ('public'::regnamespace, to_regnamespace('auth'), to_regnamespace('executie_acces_intern'))
-     AND p.prolang IN (SELECT lg.oid FROM pg_language lg WHERE lg.lanname IN ('sql', 'plpgsql')) AND p.prosrc ~* ('\m' || p2.proname || '\M')
-   WHERE l.adancime < 6
+  SELECT x.oid FROM amp_lant l CROSS JOIN LATERAL (
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
+      JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1])
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      JOIN pg_proc p2 ON p2.proname !~ '^[[:alpha:]_][[:alnum:]_$]*$'
+       AND (strpos(lower(p.prosrc), lower(p2.proname)) > 0 OR strpos(lower(p.prosrc), lower(replace(p2.proname, '"', '""'))) > 0)
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT d.refobjid FROM pg_depend d JOIN pg_proc p2 ON p2.oid = d.refobjid
+     WHERE d.classid = 'pg_proc'::regclass AND d.objid = l.oid AND d.refclassid = 'pg_proc'::regclass
+       AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+  ) x
 ),
 amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),
+-- <<< INCHIDERE_L15 20261220a
 -- >>> AMPRENTA_L15 v1
 amp_functii(oid) AS (
   SELECT f.oid FROM amp_functii_explicite f WHERE f.oid IS NOT NULL
@@ -138,7 +158,7 @@ amp_calc(eticheta, amprenta, detaliu) AS (
 SELECT c.eticheta, c.amprenta,
        CASE WHEN row_number() OVER (ORDER BY c.eticheta COLLATE "C") = 1 THEN '    ' ELSE '  , ' END || format('(%L, %L)', c.eticheta, c.amprenta) AS linie_baseline,
        CASE WHEN c.eticheta LIKE 'functie %' THEN
-              coalesce((SELECT string_agg(DISTINCT s.sursa, ', ') FROM amp_start s WHERE s.oid = to_regprocedure(substr(c.eticheta, 9))), 'indiciu')
+              CASE WHEN to_regprocedure(substr(c.eticheta, 9))::oid IN (SELECT s.oid FROM amp_pornire s) THEN 'pornire' ELSE 'inchidere' END
             ELSE 'tabel' END AS sursa,
        concat_ws('; ',
          CASE WHEN c.eticheta LIKE '% | acl%' AND c.detaliu ~ '(^|[ ,;])(anon|PUBLIC):' THEN 'drepturi pentru anon / PUBLIC' END,
@@ -146,13 +166,103 @@ SELECT c.eticheta, c.amprenta,
          CASE WHEN c.eticheta LIKE '% | politici' AND c.detaliu ~ 'roluri=([^|]*,)?(PUBLIC|anon)[,| ]' THEN 'politica pentru PUBLIC / anon' END,
          CASE WHEN c.eticheta LIKE 'functie %' AND c.detaliu LIKE '%definer=true%' AND c.detaliu LIKE '%config=(mostenit)%' THEN 'DEFINER fara search_path (migrarea refuza)' END,
          CASE WHEN c.eticheta LIKE 'functie %' AND c.detaliu LIKE '%definer=false%' AND c.detaliu LIKE '%config=(mostenit)%' THEN 'INVOKER fara search_path (de privit)' END,
-         CASE WHEN c.eticheta LIKE 'functie %' AND (SELECT p.prosrc FROM pg_proc p WHERE p.oid = to_regprocedure(substr(c.eticheta, 9))) ~* '\mexecute\M' THEN 'EXECUTE in corp (de privit)' END
+         CASE WHEN c.eticheta LIKE 'functie %' AND (SELECT regexp_replace(p.prosrc, '''execute''', '', 'gi') FROM pg_proc p
+                                                     WHERE p.oid = to_regprocedure(substr(c.eticheta, 9))) ~* '\mexecute\M' THEN 'EXECUTE in corp (migrarea refuza)' END
        ) AS atentie,
        c.detaliu
   FROM amp_calc c ORDER BY c.eticheta COLLATE "C";
 
 \echo
-\echo '=== 20261220a — verificările de start pe ținta curentă (NU intră în baseline; toate „true” = migrarea trece de $pre$) ==='
+\echo '=== 2. 20261220a — funcții cu SQL dinamic / limbaj neanalizabil în lanț (N > 0 = migrarea VA REFUZA la aplicare) ==='
+WITH RECURSIVE
+amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_mesaje'::regclass::oid)),
+-- >>> INCHIDERE_L15 20261220a
+-- Pornirea (r3): crearea lotului (varianta cu 4 parametri ÎNAINTE, cea cu 5 DUPĂ: to_regprocedure lasă doar pe cea existentă), lista fixată,
+--   lista angajaților și lista FOLOSITE (funcțiile chemate de corpurile noi: porțile owner / nivel, normalizarea, textul, coada de test,
+--   accesul pe lot, auth.uid). Lanțul (amp_lant, amp_functii_explicite) = EXACT blocul din 20261221a (L19): orice funcție (în afara
+--   pg_catalog / information_schema) al cărei nume apare ca apel „nume(” în corpul unei funcții sql / plpgsql din lanț (supra-aproximare:
+--   un nume potrivit în plus doar intră în amprentă), numele neobișnuite prin căutare de text, plus dependențele din pg_depend (corpurile
+--   BEGIN ATOMIC); fără limită de adâncime (UNION oprește ciclurile). BASELINE-ul trebuie să aibă EXACT această mulțime (o funcție lipsă
+--   sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz (amp_verifica).
+amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean, integer[])')::oid),
+                            (to_regprocedure('public.fn_sms_lot_destinatari(uuid)')::oid), (to_regprocedure('public.fn_sms_angajati_lista()')::oid),
+                            (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_sms_cere_nivel()')::oid),
+                            (to_regprocedure('public.fn_sms_cere_owner()')::oid), (to_regprocedure('public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_tel_normalizat(text)')::oid), (to_regprocedure('public.fn_sms_test_coada(uuid)')::oid),
+                            (to_regprocedure('public.fn_sms_test_coada_cere(uuid, integer)')::oid), (to_regprocedure('public.fn_sms_test_coada_lock(uuid, boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_test_coada_max()')::oid), (to_regprocedure('public.fn_sms_text_valid(text)')::oid),
+                            (to_regprocedure('public.fn_sms_text_verifica(text)')::oid)),
+amp_lant(oid) AS (
+  SELECT s.oid FROM amp_pornire s WHERE s.oid IS NOT NULL
+  UNION
+  SELECT d.refobjid FROM pg_depend d JOIN pg_policy pol ON pol.oid = d.objid
+   WHERE d.classid = 'pg_policy'::regclass AND d.refclassid = 'pg_proc'::regclass AND pol.polrelid IN (SELECT t.oid FROM amp_tabele t)
+  UNION
+  SELECT tg.tgfoid FROM pg_trigger tg WHERE tg.tgrelid IN (SELECT t.oid FROM amp_tabele t) AND NOT tg.tgisinternal
+  UNION
+  SELECT x.oid FROM amp_lant l CROSS JOIN LATERAL (
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
+      JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1])
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      JOIN pg_proc p2 ON p2.proname !~ '^[[:alpha:]_][[:alnum:]_$]*$'
+       AND (strpos(lower(p.prosrc), lower(p2.proname)) > 0 OR strpos(lower(p.prosrc), lower(replace(p2.proname, '"', '""'))) > 0)
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT d.refobjid FROM pg_depend d JOIN pg_proc p2 ON p2.oid = d.refobjid
+     WHERE d.classid = 'pg_proc'::regclass AND d.objid = l.oid AND d.refclassid = 'pg_proc'::regclass
+       AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+  ) x
+),
+amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),
+-- <<< INCHIDERE_L15 20261220a
+amp_dinamic(functie, limbaj) AS (
+  SELECT p.oid::regprocedure::text, l.lanname::text
+    FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid IN (SELECT f.oid FROM amp_functii_explicite f)
+     AND (l.lanname NOT IN ('sql', 'plpgsql', 'internal', 'c')
+          OR (l.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M'))
+)
+SELECT (SELECT count(*) FROM amp_dinamic) AS functii_cu_sql_dinamic_in_lant,
+       coalesce((SELECT string_agg(d.functie || ' (' || d.limbaj || ')', ', ' ORDER BY d.functie COLLATE "C") FROM amp_dinamic d), '(niciuna)') AS care,
+       (SELECT count(*) FROM amp_functii_explicite) AS functii_in_lant;
+
+\echo
+\echo '=== 3. 20261220a — nume din corpurile NOI care există ca funcții în afara pg_catalog și a listei FOLOSITE (N > 0 = postcondiția VA REFUZA) ==='
+-- numele = ce potrivește regula de nume a postcondiției („nume(”) în corpurile noi din migrare (lista o ține la zi testul static)
+WITH nume_noi(n) AS (SELECT unnest(ARRAY[
+  -- >>> NUME-NOI 20261220a
+  'activ', 'active', 'adăugare', 'and', 'any', 'array', 'array_agg', 'as',
+  'btrim', 'candidatii', 'cardinality', 'client', 'coadă', 'coalesce', 'commit', 'count',
+  'destinatari', 'dezactivat', 'efectiva', 'exists', 'finala', 'fn_sms_cere_nivel', 'fn_sms_cere_owner', 'fn_sms_lot_acces',
+  'fn_sms_tel_normalizat', 'fn_sms_test_coada', 'fn_sms_test_coada_cere', 'fn_sms_test_coada_lock', 'fn_sms_test_coada_max', 'fn_sms_text_valid', 'fn_sms_text_verifica', 'from',
+  'greatest', 'hashtextextended', 'if', 'in', 'json', 'jsonb_agg', 'jsonb_build_object', 'jsonb_object_agg',
+  'length', 'lotului', 'lui', 'manuala', 'manuală', 'modifica', 'normalizat', 'now',
+  'nullif', 'numărul', 'on', 'pg_advisory_xact_lock', 'păstrează', 'r2', 'r3', 'regexp_replace',
+  'right', 'round', 'schimbă', 'select', 'sms_loturi', 'sms_mesaje', 'sms_numere_serviciu', 'sterg',
+  'to_jsonb', 'u', 'uid', 'unnest', 'valid', 'values'
+  -- <<< NUME-NOI 20261220a
+]::text[])),
+folosite(oid) AS (VALUES (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_sms_cere_nivel()')::oid),
+                         (to_regprocedure('public.fn_sms_cere_owner()')::oid), (to_regprocedure('public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean)')::oid),
+                         (to_regprocedure('public.fn_sms_tel_normalizat(text)')::oid), (to_regprocedure('public.fn_sms_test_coada(uuid)')::oid),
+                         (to_regprocedure('public.fn_sms_test_coada_cere(uuid, integer)')::oid), (to_regprocedure('public.fn_sms_test_coada_lock(uuid, boolean)')::oid),
+                         (to_regprocedure('public.fn_sms_test_coada_max()')::oid), (to_regprocedure('public.fn_sms_text_valid(text)')::oid),
+                         (to_regprocedure('public.fn_sms_text_verifica(text)')::oid)),
+gasite(f) AS (
+  SELECT p.oid::regprocedure::text FROM pg_proc p JOIN nume_noi u ON lower(p.proname) = u.n
+   WHERE p.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+     AND p.oid NOT IN (SELECT f.oid FROM folosite f WHERE f.oid IS NOT NULL)
+)
+SELECT (SELECT count(*) FROM gasite) AS nume_potrivite_in_afara_listei,
+       coalesce((SELECT string_agg(g.f, ', ' ORDER BY g.f COLLATE "C") FROM gasite g), '(niciunul)') AS care,
+       (SELECT count(*) FROM folosite f WHERE f.oid IS NULL) AS folosite_lipsa;
+
+\echo
+\echo '=== 4. 20261220a — verificările de start pe ținta curentă (NU intră în baseline; toate „true” = migrarea trece de $pre$) ==='
 SELECT
   (SELECT md5(replace(p.prosrc, chr(13), '')) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)'))
     = 'ee0e39daf80d5abd45412e4782d5d07b' AS crearea_lotului_20261130b,

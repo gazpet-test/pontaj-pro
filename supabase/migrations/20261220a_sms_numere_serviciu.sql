@@ -47,12 +47,15 @@
 --   (pornirea: fn_sms_lot_intern_creeaza cu 4 parametri, fn_sms_lot_destinatari, fn_sms_angajati_lista, cu callee-urile lor; plus funcțiile
 --   din politicile / triggerele celor două tabele; r2 (P1): plus TOATE funcțiile chemate de corpurile NOI — porțile fn_sms_cere_owner /
 --   fn_sms_cere_nivel, normalizarea, textul, coada de test, accesul pe lot, auth.uid — cu lanțul lor), comparată cu BASELINE-ul din producție
---   ÎNAINTE și DUPĂ. Completitudinea baseline-ului se impune aici, nu se presupune: (a) lista EXACTĂ a funcțiilor chemate de corpurile noi
---   trebuie să fie în baseline (testul static o compară cu apelurile din corpuri); (b) închiderea tranzitivă: orice funcție numită în corpul
---   unei funcții din amprentă e și ea în amprentă (doar REFUZĂ, nu adaugă și nu acceptă nimic). Valorile le scoate coordonatorul cu
---   scripts/sms_numere_serviciu_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz. Excepțiile „după” (EXACT două):
---   'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)' (ștearsă; varianta nouă: postcondițiile) și
---   'functie fn_sms_lot_destinatari(uuid)' (corp nou; proprietățile și ACL-ul: postcondițiile).
+--   ÎNAINTE și DUPĂ. r3 (P1, tiparul 20261221a): ÎNCHIDEREA tranzitivă se CALCULEAZĂ în migrare din catalog (blocul INCHIDERE_L15, identic
+--   cu cel din script; lanțul = blocul din 20261221a, octet cu octet), independent de baseline, și baseline-ul trebuie s-o aibă EXACT (o
+--   funcție lipsă sau în plus = refuz); EXECUTE dinamic / limbaj neanalizabil ORIUNDE în lanț = REFUZ (nu doar semnalat: ce cheamă un
+--   EXECUTE nu se vede în text, deci nu se poate amprenta); postcondiția: funcțiile noi cheamă doar funcții din lista FOLOSITE și nimic
+--   dinamic. Lista FOLOSITE trebuie să fie în baseline (testul static o compară cu apelurile din corpuri). Valorile le scoate coordonatorul
+--   cu scripts/sms_numere_serviciu_amprente.sql (tranzacție READ ONLY) în blocul marcat; necompletat = refuz; scriptul arată separat și
+--   „funcții cu SQL dinamic în lanț: N” (N > 0 = migrarea va refuza). Excepțiile „după” (EXACT trei, toate verificate de postcondiții):
+--   'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)' (ștearsă), 'functie fn_sms_lot_intern_creeaza(text,text[],integer[],
+--   boolean,integer[])' (varianta nouă: corp, drepturi) și 'functie fn_sms_lot_destinatari(uuid)' (corp nou).
 --
 -- Livrare: DOAR cu plafon — scripts/livrare_migrare.sh … --plafon-tranzactie-ms 2000 (fără plafon = refuz în $pre$). Lock-uri (după
 --   verificările de catalog, NOWAIT, reîncercate la 50 ms până la 1 s de la BEGIN; peste = 55P03, nimic schimbat): sms_loturi SHARE UPDATE
@@ -141,9 +144,51 @@ $bl$;
 -- <<< BASELINE 20261220a
 CREATE FUNCTION pg_temp.amp_calc_20261220a() RETURNS TABLE (eticheta text, amprenta text, detaliu text)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $amp$
-WITH
+WITH RECURSIVE
 amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_mesaje'::regclass::oid)),
-amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_20261220a() b WHERE b.eticheta LIKE 'functie %'),
+-- >>> INCHIDERE_L15 20261220a
+-- Pornirea (r3): crearea lotului (varianta cu 4 parametri ÎNAINTE, cea cu 5 DUPĂ: to_regprocedure lasă doar pe cea existentă), lista fixată,
+--   lista angajaților și lista FOLOSITE (funcțiile chemate de corpurile noi: porțile owner / nivel, normalizarea, textul, coada de test,
+--   accesul pe lot, auth.uid). Lanțul (amp_lant, amp_functii_explicite) = EXACT blocul din 20261221a (L19): orice funcție (în afara
+--   pg_catalog / information_schema) al cărei nume apare ca apel „nume(” în corpul unei funcții sql / plpgsql din lanț (supra-aproximare:
+--   un nume potrivit în plus doar intră în amprentă), numele neobișnuite prin căutare de text, plus dependențele din pg_depend (corpurile
+--   BEGIN ATOMIC); fără limită de adâncime (UNION oprește ciclurile). BASELINE-ul trebuie să aibă EXACT această mulțime (o funcție lipsă
+--   sau în plus = refuz). EXECUTE dinamic / limbaj neanalizabil în lanț = refuz (amp_verifica).
+amp_pornire(oid) AS (VALUES (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean, integer[])')::oid),
+                            (to_regprocedure('public.fn_sms_lot_destinatari(uuid)')::oid), (to_regprocedure('public.fn_sms_angajati_lista()')::oid),
+                            (to_regprocedure('auth.uid()')::oid), (to_regprocedure('public.fn_sms_cere_nivel()')::oid),
+                            (to_regprocedure('public.fn_sms_cere_owner()')::oid), (to_regprocedure('public.fn_sms_lot_acces(uuid, text, public.sms_loturi, boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_tel_normalizat(text)')::oid), (to_regprocedure('public.fn_sms_test_coada(uuid)')::oid),
+                            (to_regprocedure('public.fn_sms_test_coada_cere(uuid, integer)')::oid), (to_regprocedure('public.fn_sms_test_coada_lock(uuid, boolean)')::oid),
+                            (to_regprocedure('public.fn_sms_test_coada_max()')::oid), (to_regprocedure('public.fn_sms_text_valid(text)')::oid),
+                            (to_regprocedure('public.fn_sms_text_verifica(text)')::oid)),
+amp_lant(oid) AS (
+  SELECT s.oid FROM amp_pornire s WHERE s.oid IS NOT NULL
+  UNION
+  SELECT d.refobjid FROM pg_depend d JOIN pg_policy pol ON pol.oid = d.objid
+   WHERE d.classid = 'pg_policy'::regclass AND d.refclassid = 'pg_proc'::regclass AND pol.polrelid IN (SELECT t.oid FROM amp_tabele t)
+  UNION
+  SELECT tg.tgfoid FROM pg_trigger tg WHERE tg.tgrelid IN (SELECT t.oid FROM amp_tabele t) AND NOT tg.tgisinternal
+  UNION
+  SELECT x.oid FROM amp_lant l CROSS JOIN LATERAL (
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
+      JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1])
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT p2.oid FROM pg_proc p JOIN pg_language lg ON lg.oid = p.prolang AND lg.lanname IN ('sql', 'plpgsql')
+      JOIN pg_proc p2 ON p2.proname !~ '^[[:alpha:]_][[:alnum:]_$]*$'
+       AND (strpos(lower(p.prosrc), lower(p2.proname)) > 0 OR strpos(lower(p.prosrc), lower(replace(p2.proname, '"', '""'))) > 0)
+     WHERE p.oid = l.oid AND p2.oid <> p.oid AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+    UNION
+    SELECT d.refobjid FROM pg_depend d JOIN pg_proc p2 ON p2.oid = d.refobjid
+     WHERE d.classid = 'pg_proc'::regclass AND d.objid = l.oid AND d.refclassid = 'pg_proc'::regclass
+       AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+  ) x
+),
+amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),
+-- <<< INCHIDERE_L15 20261220a
 -- >>> AMPRENTA_L15 v1
 amp_functii(oid) AS (
   SELECT f.oid FROM amp_functii_explicite f WHERE f.oid IS NOT NULL
@@ -224,11 +269,25 @@ amp_calc(eticheta, amprenta, detaliu) AS (
 -- <<< AMPRENTA_L15 v1
 SELECT c.eticheta, c.amprenta, c.detaliu FROM amp_calc c
 $amp$;
--- „înainte”: exact baseline-ul. „după”: exact baseline-ul fără cele două etichete declarate în antet (proprietățile lor: postcondițiile).
+-- r3: lista FOLOSITE (funcțiile chemate de corpurile noi) o singură dată, aici; o folosesc verificarea (trebuie să fie în baseline) și
+-- postcondiția (funcțiile noi nu cheamă nimic în afara ei). Aceeași mulțime e în pornirea închiderii (testul static le compară).
+CREATE FUNCTION pg_temp.sms_folosite_20261220a() RETURNS SETOF text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $fo$
+  SELECT unnest(ARRAY[
+    -- >>> FOLOSITE 20261220a
+    'functie auth.uid()', 'functie fn_sms_cere_nivel()', 'functie fn_sms_cere_owner()', 'functie fn_sms_lot_acces(uuid,text,sms_loturi,boolean)',
+    'functie fn_sms_tel_normalizat(text)', 'functie fn_sms_test_coada(uuid)', 'functie fn_sms_test_coada_cere(uuid,integer)',
+    'functie fn_sms_test_coada_lock(uuid,boolean)', 'functie fn_sms_test_coada_max()', 'functie fn_sms_text_valid(text)', 'functie fn_sms_text_verifica(text)'
+    -- <<< FOLOSITE 20261220a
+  ]::text[])
+$fo$;
+-- „înainte”: exact baseline-ul. „după”: exact baseline-ul fără cele trei etichete declarate în antet (proprietățile lor: postcondițiile).
+-- r3 (tiparul 20261221a): amprenta se calculează O DATĂ pe apel (tabel temporar), apoi se compară cu baseline-ul și se verifică lanțul.
 CREATE FUNCTION pg_temp.amp_verifica_20261220a(p_moment text) RETURNS void
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $vf$
-DECLARE v_dif text;
+DECLARE v_dif text; v_exec text;
 BEGIN
+  CREATE TEMP TABLE amp_rez_20261220a ON COMMIT DROP AS SELECT * FROM pg_temp.amp_calc_20261220a();
   IF NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261220a())
      OR EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261220a() b
                  WHERE b.eticheta IS NULL OR b.amprenta IS NULL OR b.amprenta !~ '^[0-9a-f]{32}$'
@@ -246,53 +305,45 @@ BEGIN
   -- r2 (P1): funcțiile pe care se sprijină corpurile NOI (porți, normalizare, text, coada de test, acces pe lot, identitate) trebuie să fie
   -- în baseline — lista EXACTĂ (testul static o compară cu apelurile din corpurile noi; același set e în pornirea scriptului)
   SELECT string_agg(o.e, ', ' ORDER BY o.e COLLATE "C") INTO v_dif
-    FROM unnest(ARRAY[
-      -- >>> FOLOSITE 20261220a
-      'functie auth.uid()', 'functie fn_sms_cere_nivel()', 'functie fn_sms_cere_owner()', 'functie fn_sms_lot_acces(uuid,text,sms_loturi,boolean)',
-      'functie fn_sms_tel_normalizat(text)', 'functie fn_sms_test_coada(uuid)', 'functie fn_sms_test_coada_cere(uuid,integer)',
-      'functie fn_sms_test_coada_lock(uuid,boolean)', 'functie fn_sms_test_coada_max()', 'functie fn_sms_text_valid(text)', 'functie fn_sms_text_verifica(text)'
-      -- <<< FOLOSITE 20261220a
-    ]) o(e)
+    FROM pg_temp.sms_folosite_20261220a() o(e)
    WHERE NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261220a() b WHERE b.eticheta = o.e);
   IF v_dif IS NOT NULL THEN
-    RAISE EXCEPTION '20261220a: baseline L15 fara functiile folosite de corpurile noi: % (scripts/sms_numere_serviciu_amprente.sql, versiunea r2)', v_dif;
+    RAISE EXCEPTION '20261220a: baseline L15 fara functiile folosite de corpurile noi: % (scripts/sms_numere_serviciu_amprente.sql, versiunea r3)', v_dif;
   END IF;
-  -- r2 (P1): lanțul complet (închiderea tranzitivă): orice funcție din public / auth / executie_acces_intern numită (cuvânt întreg) în
-  -- corpul unei funcții sql / plpgsql din amprentă e și ea în amprentă — aceeași regulă ca indiciile scriptului, dar aici DOAR refuză
-  -- (nu adaugă nimic în comparație și nu acceptă nimic). Cuvintele se extrag o dată pe corp (un singur regex fix, ieftin sub plafon).
-  IF p_moment = 'inainte' THEN
-    WITH f AS (
-      SELECT DISTINCT p.oid, p.prosrc FROM pg_temp.amp_calc_20261220a() c
-        JOIN pg_proc p ON c.eticheta LIKE 'functie %' AND p.oid = to_regprocedure(substr(c.eticheta, 9))
-       WHERE p.prolang IN (SELECT lg.oid FROM pg_language lg WHERE lg.lanname IN ('sql', 'plpgsql'))
-    ), w AS (
-      SELECT DISTINCT f.oid, m.c[1] AS cuvant FROM f CROSS JOIN LATERAL regexp_matches(lower(f.prosrc), '([[:alnum:]_]+)', 'g') AS m(c)
-    )
-    SELECT string_agg(DISTINCT p2.oid::regprocedure::text || ' (din ' || w.oid::regprocedure::text || ')', '; ') INTO v_dif
-      FROM w JOIN pg_proc p2 ON lower(p2.proname) = w.cuvant AND p2.oid <> w.oid
-       AND p2.pronamespace IN ('public'::regnamespace, to_regnamespace('auth'), to_regnamespace('executie_acces_intern'))
-     WHERE NOT EXISTS (SELECT 1 FROM pg_temp.amp_baseline_20261220a() b WHERE b.eticheta = 'functie ' || p2.oid::regprocedure::text);
-    IF v_dif IS NOT NULL THEN
-      RAISE EXCEPTION '20261220a: baseline L15 incomplet: functii chemate din lantul de acces, lipsa din baseline: %', v_dif;
-    END IF;
-  END IF;
+  -- r3: mulțimea calculată (închiderea, independentă de baseline) = EXACT baseline-ul: o funcție din lanț lipsă din baseline sau una în
+  -- plus = refuz (FULL JOIN); „după”: fără cele trei etichete declarate în antet
   SELECT string_agg(coalesce(c.eticheta, b.eticheta) || ' = ' || coalesce(c.amprenta, 'LIPSESTE') || ' (baseline ' || coalesce(b.amprenta, 'NU ARE') || ')',
                     '; ' ORDER BY coalesce(c.eticheta, b.eticheta) COLLATE "C")
     INTO v_dif
-    FROM (SELECT x.eticheta, x.amprenta FROM pg_temp.amp_calc_20261220a() x
-           WHERE NOT (p_moment = 'dupa' AND x.eticheta IN ('functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)', 'functie fn_sms_lot_destinatari(uuid)'))) c
+    FROM (SELECT x.eticheta, x.amprenta FROM amp_rez_20261220a x
+           WHERE NOT (p_moment = 'dupa' AND x.eticheta IN ('functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)',
+                        'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])', 'functie fn_sms_lot_destinatari(uuid)'))) c
     FULL JOIN (SELECT y.eticheta, y.amprenta FROM pg_temp.amp_baseline_20261220a() y
-                WHERE NOT (p_moment = 'dupa' AND y.eticheta IN ('functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)', 'functie fn_sms_lot_destinatari(uuid)'))) b
+                WHERE NOT (p_moment = 'dupa' AND y.eticheta IN ('functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)',
+                             'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])', 'functie fn_sms_lot_destinatari(uuid)'))) b
       ON b.eticheta = c.eticheta
    WHERE c.amprenta IS DISTINCT FROM b.amprenta;
   IF v_dif IS NOT NULL THEN
     RAISE EXCEPTION '20261220a: starea de acces (%) difera de baseline-ul L15 revizuit: %', p_moment, v_dif;
   END IF;
   -- independent de baseline: o funcție SECURITY DEFINER din lanț fără search_path propriu = refuz (L15)
-  IF EXISTS (SELECT 1 FROM pg_temp.amp_calc_20261220a() c
+  IF EXISTS (SELECT 1 FROM amp_rez_20261220a c
               WHERE c.eticheta LIKE 'functie %' AND c.detaliu LIKE '%definer=true%' AND c.detaliu LIKE '%config=(mostenit)%') THEN
     RAISE EXCEPTION '20261220a: o functie SECURITY DEFINER din lantul de acces nu are search_path propriu';
   END IF;
+  -- independent de baseline: ce nu se poate amprenta static = REFUZ (nu doar semnalat): EXECUTE în corpul unei funcții sql / plpgsql din lanț
+  -- (SQL dinamic: ce cheamă nu se vede în text; șirul 'EXECUTE' ca argument, ex. la has_function_privilege, nu contează) sau un limbaj al
+  -- cărui corp nu se poate citi (în afara sql / plpgsql; internal / c sunt frunze: nu cheamă funcții SQL după nume)
+  SELECT string_agg(p.oid::regprocedure::text || ' (' || l.lanname || ')', ', ' ORDER BY p.oid::regprocedure::text COLLATE "C")
+    INTO v_exec
+    FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid IN (SELECT to_regprocedure(substr(c.eticheta, 9))::oid FROM amp_rez_20261220a c WHERE c.eticheta LIKE 'functie %')
+     AND (l.lanname NOT IN ('sql', 'plpgsql', 'internal', 'c')
+          OR (l.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M'));
+  IF v_exec IS NOT NULL THEN
+    RAISE EXCEPTION '20261220a: lantul de acces are EXECUTE dinamic / limbaj neanalizabil (amprenta statica imposibila): %', v_exec;
+  END IF;
+  DROP TABLE amp_rez_20261220a;
 END $vf$;
 DO $l15_inainte$ BEGIN PERFORM pg_temp.amp_verifica_20261220a('inainte'); END $l15_inainte$;
 -- ACL-ul celor două funcții schimbate, ÎNAINTE (postcondiția: varianta nouă / corpul nou au EXACT aceleași drepturi)
@@ -701,6 +752,19 @@ BEGIN
   IF (SELECT count(*) FROM pg_proc p WHERE p.oid = ANY (v_expuse::oid[])) <> 6 OR to_regprocedure('public.fn_sms_numere_serviciu_reguli()') IS NULL THEN
     RAISE EXCEPTION '20261220a post: lipsesc functii';
   END IF;
+  -- r3 (L15, tiparul 20261221a): funcțiile NOI / schimbate cheamă (aceeași regulă de nume ca închiderea) DOAR funcții din lista FOLOSITE
+  -- (amprentate, în baseline) și nimic dinamic; altfel ar depinde de o funcție din afara amprentei
+  SELECT string_agg(DISTINCT p2.oid::regprocedure::text, ', ') INTO v_dif
+    FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\(', 'g') w
+    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1]) AND p2.oid <> p.oid
+   WHERE p.oid = ANY (v_expuse::oid[] || ARRAY['public.fn_sms_numere_serviciu_reguli()'::regprocedure::oid])
+     AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+     AND p2.oid NOT IN (SELECT to_regprocedure(substr(f.e, 9))::oid FROM pg_temp.sms_folosite_20261220a() f(e) WHERE to_regprocedure(substr(f.e, 9)) IS NOT NULL);
+  IF v_dif IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = ANY (v_expuse::oid[] || ARRAY['public.fn_sms_numere_serviciu_reguli()'::regprocedure::oid])
+                  AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\mexecute\M') THEN
+    RAISE EXCEPTION '20261220a post: functiile noi cheama in afara listei FOLOSITE amprentate: %', coalesce(v_dif, 'EXECUTE dinamic');
+  END IF;
   -- ACL-ul variantei noi = EXACT ACL-ul variantei vechi; fn_sms_lot_destinatari: ACL-ul neschimbat (CREATE OR REPLACE îl păstrează)
   IF (SELECT a.acl FROM sms_acl_inainte_20261220a a WHERE a.nume = 'intern_creeaza') IS NULL
      OR (SELECT a.acl FROM sms_acl_inainte_20261220a a WHERE a.nume = 'intern_creeaza')
@@ -763,4 +827,4 @@ DO $l15_dupa$ BEGIN
   PERFORM pg_temp.amp_verifica_20261220a('dupa');
   RAISE NOTICE '20261220a: sfarsit la % ms de la BEGIN', round(extract(epoch FROM clock_timestamp() - now()) * 1000);
 END $l15_dupa$;
-DROP FUNCTION pg_temp.amp_verifica_20261220a(text), pg_temp.amp_calc_20261220a(), pg_temp.amp_baseline_20261220a(), pg_temp.sms_acl_20261220a(oid);
+DROP FUNCTION pg_temp.amp_verifica_20261220a(text), pg_temp.amp_calc_20261220a(), pg_temp.amp_baseline_20261220a(), pg_temp.sms_acl_20261220a(oid), pg_temp.sms_folosite_20261220a();

@@ -1,6 +1,7 @@
 // 20261220a r2 — ecranul 📱 SMS montat cu react-dom în jsdom, cu un client Supabase FALS (fără rețea, date fictive):
 //   P1: migrarea neaplicată (RPC-urile noi lipsesc) = „Compune” și ⚙ Setări merg ca înainte, fără grup / secțiune și fără erori; sonda o dată;
 //   P2: un număr bifat și dezactivat între timp iese din selecție la reîncărcare, cu anunț, iar previzualizarea următoare trece.
+//   r3 (P2): pagina întreagă, navigare între taburi: o singură sondă pe pagină; după o listă primită, o funcție dispărută = eroare.
 // jsdom nu e dependență a proiectului (ca la ContractProiectTab.test.jsx): se caută în node_modules sau în REDARI_JSDOM_DIR. Fără el,
 // suita e SĂRITĂ VIZIBIL.
 import React from 'react'
@@ -20,7 +21,7 @@ vi.mock('../lib/supabase.js', () => ({
     from: t => { throw new Error('citire directă interzisă: ' + t) },
   },
 }))
-import { Compune, NumereServiciu } from './SmsPagina.jsx'
+import SmsPagina, { Compune, NumereServiciu } from './SmsPagina.jsx'
 
 let JSDOM = null
 const surse = [import.meta.url, process.env.REDARI_JSDOM_DIR && path.join(process.env.REDARI_JSDOM_DIR, 'package.json')].filter(Boolean)
@@ -146,5 +147,56 @@ dom('r2 P2 — selecția se reconciliază cu lista reîncărcată', () => {
     await u.apasa(u.buton('Previzualizează'))
     expect(u.d.querySelector('[role="alert"]').textContent).toContain('Numerele de serviciu nu s-au putut citi')
     expect(u.bifaNumar('Telefon Depozit').checked).toBe(true)
+  })
+})
+
+// r3 (P2): capabilitatea se ține la nivelul PAGINII — taburile își demontează componentele, sonda nu se reia la fiecare revenire
+dom('r3 P2 — pagina întreagă, navigare între taburi (ambele sensuri)', () => {
+  const panouOwner = { nivel: 'owner', kill_switch: true, plafon_zi: 200, plafon_luna: 1500, consum_zi: 0, consum_luna: 0, versiune: 1, ramas_zi: 200 }
+  const COMUNE = { fn_sms_angajati_lista: { data: angajati, error: null }, fn_sms_loturi_lista: { data: [], error: null }, fn_sold_sms_citeste: { data: null, error: null } }
+  const TELEFON = { id: 7, denumire: 'Telefon Depozit', telefon_mascat: '07** *** 201', optout: false }
+  const pagina = () => monteaza(<SmsPagina profile={{ id: 'o', is_owner: true }} panouInitial={panouOwner} soldInitial={{ sold: 1 }} />)
+  const alerta = u => [...u.d.querySelectorAll('[role="alert"]')].map(a => a.textContent).join(' | ')
+  it('scenariul review-ului: lista a mers → Istoric → RPC-ul dispare → înapoi în Compune = EROARE vizibilă (nu „lipsă” tăcută)', async () => {
+    srv.raspunsuri = { ...COMUNE, fn_sms_numere_serviciu_lista: [lista([TELEFON]), LIPSA('fn_sms_numere_serviciu_lista')] }
+    const u = await pagina()
+    expect(u.d.body.textContent).toContain('Numerele de serviciu (1)')
+    await u.apasa(u.buton('📋 Istoric'))
+    await u.apasa(u.buton('✍ Compune'))
+    expect(apeluriLa('fn_sms_numere_serviciu_lista')).toHaveLength(2)
+    expect(alerta(u)).toContain('Numerele de serviciu nu s-au putut citi')
+  })
+  it('Compune → Setări: lista a mers în Compune, administrarea lipsă în Setări = EROARE vizibilă, secțiunea rămâne', async () => {
+    srv.raspunsuri = { ...COMUNE, fn_sms_numere_serviciu_lista: lista([TELEFON]), fn_sms_numere_serviciu_admin: LIPSA('fn_sms_numere_serviciu_admin') }
+    const u = await pagina()
+    await u.apasa(u.buton('⚙ Setări'))
+    expect(u.d.body.textContent).toContain('📞 Numere de serviciu')
+    expect(alerta(u)).toContain('Lista numerelor de serviciu nu s-a putut citi')
+  })
+  it('migrarea absentă: O SINGURĂ sondă pe pagină — Compune ↔ Istoric ↔ Setări, fără nicio altă cerere către funcțiile noi, fără erori', async () => {
+    srv.raspunsuri = { ...COMUNE, fn_sms_numere_serviciu_lista: LIPSA('fn_sms_numere_serviciu_lista'), fn_sms_numere_serviciu_admin: LIPSA('fn_sms_numere_serviciu_admin') }
+    const u = await pagina()
+    expect(apeluriLa('fn_sms_numere_serviciu_lista')).toHaveLength(1)
+    for (const t of ['📋 Istoric', '✍ Compune', '⚙ Setări', '✍ Compune', '⚙ Setări']) await u.apasa(u.buton(t))
+    expect(u.d.body.textContent).not.toContain('📞 Numere de serviciu')
+    await u.apasa(u.buton('✍ Compune'))
+    expect(u.d.body.textContent).not.toContain('Numerele de serviciu (')
+    expect(apeluriLa('fn_sms_numere_serviciu_lista')).toHaveLength(1)
+    expect(apeluriLa('fn_sms_numere_serviciu_admin')).toHaveLength(0)
+    expect(alerta(u)).toBe('')
+  })
+  it('Setări → Compune: sonda făcută de Setări (administrarea a mers) face ca o lipsă în Compune să fie EROARE', async () => {
+    // tabul implicit e Compune: prima lui cerere pică din alt motiv (rețea → starea rămâne „necunoscut”, eroare vizibilă), apoi Setări
+    // face sonda cu succes, iar la revenirea în Compune lista lipsă nu mai poate fi „lipsă” tăcută
+    srv.raspunsuri = { ...COMUNE, fn_sms_numere_serviciu_admin: { data: [], error: null },
+      fn_sms_numere_serviciu_lista: [{ data: null, error: { code: '', message: 'Failed to fetch' } }, LIPSA('fn_sms_numere_serviciu_lista')] }
+    const u = await pagina()
+    expect(alerta(u)).toContain('Failed to fetch')
+    await u.apasa(u.buton('⚙ Setări'))
+    expect(u.d.body.textContent).toContain('Niciun număr de serviciu încă.')
+    expect(apeluriLa('fn_sms_numere_serviciu_admin')).toHaveLength(1)
+    await u.apasa(u.buton('✍ Compune'))
+    expect(apeluriLa('fn_sms_numere_serviciu_lista')).toHaveLength(2)
+    expect(alerta(u)).toContain('Numerele de serviciu nu s-au putut citi')
   })
 })

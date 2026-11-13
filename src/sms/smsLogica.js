@@ -163,15 +163,43 @@ export function listaNumereDinRaspuns(r) {
   return r.numere
 }
 
-/** r2 (P1): încărcarea listei pentru „Compune”: 'da' (lista), 'lipsa' (migrarea neaplicată: ecranul merge ca înainte, fără grup și fără
- *  eroare), 'eroare' (afișată, L18; `err` = eroarea brută). „Lipsa” se acceptă DOAR la sonda (prima încărcare): după o listă primită,
- *  funcția care dispare e eroare. Nu aruncă. */
-export async function incarcaNumereServiciu(api, { sonda = true } = {}) {
-  try { return { stare: 'da', numere: await api.numereServiciu(), err: null } }
-  catch (e) {
-    if (sonda && lipsaRpcNumereServiciu(e)) return { stare: 'lipsa', numere: [], err: null }
-    return { stare: 'eroare', numere: null, err: e }
+/** r3 (P2): capabilitatea „numere de serviciu” (migrarea 20261220a e aplicată?) ținută la nivelul PAGINII, nu al tabului (taburile își
+ *  demontează componentele): stare 'necunoscut' | 'exista' | 'lipsa'. O SINGURĂ sondă pe încărcarea paginii: prima cerere cu starea
+ *  'necunoscut' e sonda; o cerere pornită cât sonda e în curs o așteaptă (nu sondează a doua oară). 'lipsa' = nicio cerere nouă către
+ *  funcțiile 20261220a (ecranul merge ca înainte); 'exista' = o lipsă ulterioară e EROARE (L18), nu se mai ascunde nimic. O sondă picată
+ *  din alt motiv (rețea, drepturi) lasă starea 'necunoscut' (nu s-a aflat nimic) și se arată ca eroare. */
+export function capabilitateNumere(stareInitiala = 'necunoscut') {
+  if (!['necunoscut', 'exista', 'lipsa'].includes(stareInitiala)) throw new Error('capabilitateNumere: stare invalidă ' + stareInitiala)
+  let stare = stareInitiala, sonda = null
+  const cap = {
+    get stare() { return stare },
+    /** fn = apelul RPC (întoarce o promisiune); rezultatul: { stare: 'da' | 'lipsa' | 'eroare', valoare, err }. Nu aruncă. */
+    async cere(fn) {
+      while (stare === 'necunoscut' && sonda) await sonda
+      if (stare === 'lipsa') return { stare: 'lipsa', valoare: null, err: null }
+      const eSonda = stare === 'necunoscut'
+      const p = (async () => {
+        try { const valoare = await fn(); stare = 'exista'; return { stare: 'da', valoare, err: null } }
+        catch (e) {
+          if (eSonda && stare === 'necunoscut' && lipsaRpcNumereServiciu(e)) { stare = 'lipsa'; return { stare: 'lipsa', valoare: null, err: null } }
+          return { stare: 'eroare', valoare: null, err: e }
+        }
+      })()
+      if (eSonda) { sonda = p; p.then(() => { if (sonda === p) sonda = null }) }
+      return p
+    },
   }
+  return cap
+}
+
+/** r2 (P1) / r3 (P2): încărcarea listei pentru „Compune”, prin capabilitatea paginii: 'da' (lista), 'lipsa' (migrarea neaplicată: ecranul
+ *  merge ca înainte, fără grup și fără eroare), 'eroare' (afișată, L18; `err` = eroarea brută). „Lipsa” se acceptă DOAR la sonda paginii:
+ *  după o listă primită (în orice tab), funcția care dispare e eroare. Nu aruncă. */
+export async function incarcaNumereServiciu(api, cap = capabilitateNumere()) {
+  const r = await cap.cere(() => api.numereServiciu())
+  if (r.stare === 'da') return { stare: 'da', numere: r.valoare, err: null }
+  if (r.stare === 'lipsa') return { stare: 'lipsa', numere: [], err: null }
+  return { stare: 'eroare', numere: null, err: r.err }
 }
 
 /** r2 (P2): după o reîncărcare a listei, selecția păstrează DOAR numerele încă active și fără opt-out (altfel o bifă dispărută / blocată

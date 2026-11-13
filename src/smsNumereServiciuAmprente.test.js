@@ -8,6 +8,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 const citeste = p => readFileSync(new URL('../' + p, import.meta.url), 'utf8').replace(/\r/g, '')
 const SURSA = citeste('scripts/tichete_lot2_amprente.sql')
@@ -15,8 +17,11 @@ const SCRIPT = citeste('scripts/sms_numere_serviciu_amprente.sql')
 const MIG = citeste('supabase/migrations/20261220a_sms_numere_serviciu.sql')
 const REV = citeste('supabase/revenire/20261220a_sms_numere_serviciu_ROLLBACK.sql')
 const B30 = citeste('supabase/migrations/20261130b_sms_acces_modul.sql')
+const MIG21 = citeste('supabase/migrations/20261221a_meteo_xweather_zilnic.sql')
+const SCRIPT21 = citeste('scripts/meteo_xweather_amprente.sql')
 const X = '20261220a'
 const A = '-- >>> AMPRENTA_L15 v1', B = '-- <<< AMPRENTA_L15 v1'
+const IA = `-- >>> INCHIDERE_L15 ${X}`, IB = `-- <<< INCHIDERE_L15 ${X}`
 const md5 = s => createHash('md5').update(s, 'utf8').digest('hex')
 const nr = (t, s) => t.split(s).length - 1
 const blocuri = (t, a, b) => {
@@ -29,7 +34,7 @@ const faraComentarii = t => t.replace(/--[^\n]*/g, '')
 const functie = (t, antet) => { const i = t.indexOf(antet); if (i < 0) return null; return t.slice(i, t.indexOf('END $fn$;', i) + 'END $fn$;'.length) }
 const corp = (t, antet) => { const f = functie(t, antet); const a = f.indexOf('AS $fn$') + 'AS $fn$'.length; return f.slice(a, f.lastIndexOf('$fn$;')) }
 // codul de nivel sus al migrării (fără corpurile funcțiilor și fără blocurile DO / pg_temp)
-const nivelSus = t => faraComentarii(t).replace(/\$(fn|amp|bl|vf|acl|pre|post|lock|l15_inainte|l15_dupa|revenire)\$[\s\S]*?\$\1\$/g, '$$…$$')
+const nivelSus = t => faraComentarii(t).replace(/\$(fn|fo|amp|bl|vf|acl|pre|post|lock|l15_inainte|l15_dupa|revenire)\$[\s\S]*?\$\1\$/g, '$$…$$')
 
 describe('20261220a — AMPRENTA_L15: o singură definiție (sursa = scriptul coordonatorului = migrarea)', () => {
   const canonic = blocuri(SURSA, A, B)[0]
@@ -38,21 +43,53 @@ describe('20261220a — AMPRENTA_L15: o singură definiție (sursa = scriptul co
     expect(blocuri(SCRIPT, A, B)).toEqual([canonic])
     expect(blocuri(MIG, A, B)).toEqual([canonic])
   })
-  it('restul secțiunii scriptului (lanțul de callee, linia de baseline, atenționările) = cel din sursă', () => {
-    const coada = t => t.slice(t.indexOf('amp_start(oid, sursa) AS ('), t.indexOf('ORDER BY c.eticheta COLLATE "C";') + 32)
-    expect(coada(SCRIPT)).toBe(coada(SURSA))
+  it('linia de baseline, sursa (pornire / inchidere) și atenționările = cele din scriptul 20261221a (r3: același tipar)', () => {
+    const coada = t => t.slice(t.indexOf('SELECT c.eticheta, c.amprenta,\n'), t.indexOf('ORDER BY c.eticheta COLLATE "C";') + 32)
+    expect(coada(SCRIPT).length).toBeGreaterThan(500)
+    expect(coada(SCRIPT)).toBe(coada(SCRIPT21))
   })
-  it('aceleași tabele în script și în migrare; pornirea = cele trei funcții (crearea cu 4 parametri, lista fixată, lista angajaților)', () => {
-    const intrare = SCRIPT.slice(SCRIPT.indexOf(`-- >>> INTRARE ${X}`), SCRIPT.indexOf(`-- <<< INTRARE ${X}`))
-    const tab = intrare.split('\n').find(l => l.startsWith('amp_tabele('))
-    expect(tab).toBe("amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_mesaje'::regclass::oid)),")
+  it('aceleași tabele în script (ambele interogări) și în migrare; pornirea = crearea (4 și 5 parametri), lista fixată, lista angajaților', () => {
+    const tab = "amp_tabele(oid) AS (VALUES ('public.sms_loturi'::regclass::oid), ('public.sms_mesaje'::regclass::oid)),"
+    expect(SCRIPT.split('\n').filter(l => l.startsWith('amp_tabele('))).toEqual([tab, tab])
     expect(MIG.split('\n').filter(l => l.startsWith('amp_tabele('))).toEqual([tab])
-    for (const f of ["'public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)'", "'public.fn_sms_lot_destinatari(uuid)'", "'public.fn_sms_angajati_lista()'"]) expect(intrare).toContain(f)
+    const inch = blocuri(MIG, IA, IB)[0]
+    for (const f of ["'public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean)'", "'public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean, integer[])'",
+                     "'public.fn_sms_lot_destinatari(uuid)'", "'public.fn_sms_angajati_lista()'"]) expect(inch).toContain(`to_regprocedure(${f})`)
+  })
+  // r3 (review P1): închiderea tranzitivă se CALCULEAZĂ în migrare (nu se ia din BASELINE) — tiparul 20261221a
+  it('închiderea: un bloc în migrare, două în script (secțiunile 1 și 2), toate identice, înaintea corpului v1', () => {
+    const inch = blocuri(MIG, IA, IB)
+    expect(inch).toHaveLength(1)
+    expect(blocuri(SCRIPT, IA, IB)).toEqual([inch[0], inch[0]])
+    expect(MIG.indexOf(IB)).toBeLessThan(MIG.indexOf(A))
+    expect(SCRIPT.indexOf(IB)).toBeLessThan(SCRIPT.indexOf(A))
+    expect(MIG).not.toMatch(/amp_functii_explicite\(oid\) AS \(SELECT to_regprocedure\(substr\(b\.eticheta/)
+    expect(MIG).toContain('WITH RECURSIVE\namp_tabele(oid)')
+  })
+  it('L19: lanțul (amp_lant + amp_functii_explicite) = EXACT blocul din 20261221a, octet cu octet', () => {
+    const lant = t => { const b = t.slice(t.indexOf('-- >>> INCHIDERE_L15'), t.indexOf('-- <<< INCHIDERE_L15')); return b.slice(b.indexOf('amp_lant(oid) AS (\n')) }
+    expect(lant(MIG).length).toBeGreaterThan(1000)
+    expect(lant(MIG)).toBe(lant(MIG21))
+    expect(lant(MIG)).toBe(lant(SCRIPT21))
+  })
+  it('EXECUTE dinamic / limbaj neanalizabil în lanț = REFUZ în migrare (aceeași regulă ca 20261221a) și numărat în script (secțiunea 2)', () => {
+    const regula = "(l.lanname NOT IN ('sql', 'plpgsql', 'internal', 'c')\n          OR (l.lanname IN ('sql', 'plpgsql') AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '\\mexecute\\M'))"
+    expect(nr(MIG21, regula)).toBe(1)
+    expect(nr(MIG, regula)).toBe(1)
+    expect(nr(SCRIPT, regula)).toBe(1)
+    const f = MIG.slice(MIG.indexOf(`CREATE FUNCTION pg_temp.amp_verifica_${X}`), MIG.indexOf('DO $l15_inainte$'))
+    expect(f).toContain(`  IF v_exec IS NOT NULL THEN\n    RAISE EXCEPTION '${X}: lantul de acces are EXECUTE dinamic / limbaj neanalizabil (amprenta statica imposibila): %', v_exec;`)
+    expect(f).toContain(`WHERE p.oid IN (SELECT to_regprocedure(substr(c.eticheta, 9))::oid FROM amp_rez_${X} c WHERE c.eticheta LIKE 'functie %')`)
+    const s2 = SCRIPT.slice(SCRIPT.indexOf("\\echo '=== 2."), SCRIPT.indexOf("\\echo '=== 3."))
+    expect(s2).toContain('WHERE p.oid IN (SELECT f.oid FROM amp_functii_explicite f)')
+    expect(s2).toContain('AS functii_cu_sql_dinamic_in_lant')
+    expect(SCRIPT).toContain("'EXECUTE in corp (migrarea refuza)'")
   })
   it('scriptul coordonatorului e DOAR citire: o tranzacție READ ONLY, încheiată cu ROLLBACK, fără scrieri', () => {
     expect(SCRIPT).toContain('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;')
     expect(SCRIPT.trim().endsWith('ROLLBACK;')).toBe(true)
-    expect(faraComentarii(SCRIPT)).not.toMatch(/\b(INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE|GRANT|REVOKE|CREATE|ALTER|DROP|COMMIT)\b/i)
+    // fără comentarii și fără șirurile '…' (lista NUME-NOI conține cuvinte ca 'commit' din comentariile corpurilor, ca date, nu instrucțiuni)
+    expect(faraComentarii(SCRIPT).replace(/'(?:[^']|'')*'/g, "''")).not.toMatch(/\b(INSERT INTO|UPDATE public\.|DELETE FROM|TRUNCATE|GRANT|REVOKE|CREATE|ALTER|DROP|COMMIT)\b/i)
   })
   it('BASELINE într-un singur loc marcat: necompletat (DE_COMPLETAT = refuz) sau linii valide din script, în ordinea afișată', () => {
     expect(nr(MIG, `-- >>> BASELINE ${X}`)).toBe(1)
@@ -60,7 +97,7 @@ describe('20261220a — AMPRENTA_L15: o singură definiție (sursa = scriptul co
     const bloc = MIG.slice(MIG.indexOf(`-- >>> BASELINE ${X}`), MIG.indexOf(`-- <<< BASELINE ${X}`))
     expect(bloc).toContain(`CREATE FUNCTION pg_temp.amp_baseline_${X}()`)
     expect(nr(MIG, `CREATE FUNCTION pg_temp.amp_baseline_${X}()`)).toBe(1)
-    expect(MIG).toContain(`amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_${X}() b WHERE b.eticheta LIKE 'functie %'),`)
+    expect(MIG).toContain('amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),')
     const linii = bloc.split('\n').map(l => l.trim()).filter(l => /^(, )?\('/.test(l))
     if (linii.length === 1 && linii[0] === "('DE_COMPLETAT', 'DE_COMPLETAT')") return
     linii.forEach((l, i) => expect(l).toMatch(i === 0 ? /^\('(tabel|functie) [^']+', '[0-9a-f]{32}'\)$/ : /^, \('(tabel|functie) [^']+', '[0-9a-f]{32}'\)$/))
@@ -77,7 +114,7 @@ describe('20261220a — AMPRENTA_L15: o singură definiție (sursa = scriptul co
     const iDrop = MIG.indexOf('DROP FUNCTION public.fn_sms_lot_intern_creeaza(text, text[], integer[], boolean);')
     const iPost = MIG.indexOf('DO $post$')
     const iDupa = MIG.indexOf(`PERFORM pg_temp.amp_verifica_${X}('dupa')`)
-    const iFinal = MIG.indexOf(`DROP FUNCTION pg_temp.amp_verifica_${X}(text), pg_temp.amp_calc_${X}(), pg_temp.amp_baseline_${X}(), pg_temp.sms_acl_${X}(oid);`)
+    const iFinal = MIG.indexOf(`DROP FUNCTION pg_temp.amp_verifica_${X}(text), pg_temp.amp_calc_${X}(), pg_temp.amp_baseline_${X}(), pg_temp.sms_acl_${X}(oid), pg_temp.sms_folosite_${X}();`)
     expect(iInainte).toBeGreaterThan(MIG.indexOf('DO $pre$'))
     expect(iAcl).toBeGreaterThan(iInainte)
     expect(iLock).toBeGreaterThan(iAcl)
@@ -88,11 +125,14 @@ describe('20261220a — AMPRENTA_L15: o singură definiție (sursa = scriptul co
     expect(iFinal).toBeGreaterThan(iDupa)
     expect(MIG.slice(iFinal).trim().split('\n')).toHaveLength(1)
   })
-  it('excepțiile „după” sunt EXACT cele două declarate (crearea cu 4 parametri, ștearsă; lista fixată, corp nou)', () => {
+  it('excepțiile „după” sunt EXACT cele trei declarate (crearea cu 4 parametri, ștearsă; cea cu 5, nouă; lista fixată, corp nou)', () => {
     const f = MIG.slice(MIG.indexOf(`CREATE FUNCTION pg_temp.amp_verifica_${X}`), MIG.indexOf('DO $l15_inainte$'))
-    const exc = "x.eticheta IN ('functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)', 'functie fn_sms_lot_destinatari(uuid)')"
-    expect(f).toContain(`WHERE NOT (p_moment = 'dupa' AND ${exc}))`)
-    expect(f).toContain(`WHERE NOT (p_moment = 'dupa' AND ${exc.replace('x.', 'y.')}))`)
+    const exc = [...f.matchAll(/WHERE NOT \(p_moment = 'dupa' AND ([xy])\.eticheta IN \(([^)]*\)[^)]*\)[^)]*\)[^)]*\))\)\)/g)]
+    expect(exc.map(m => m[1])).toEqual(['x', 'y'])
+    for (const m of exc) {
+      expect([...m[2].matchAll(/'([^']+)'/g)].map(x => x[1])).toEqual(['functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)',
+        'functie fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])', 'functie fn_sms_lot_destinatari(uuid)'])
+    }
     expect(nr(f, "p_moment = 'dupa'")).toBe(2)
   })
 })
@@ -204,19 +244,43 @@ describe('20261220a r2 — amprenta acoperă porțile și restul funcțiilor che
     expect(lista.map(numeFn).sort()).toEqual([...chemate].sort())
     for (const p of ['fn_sms_cere_owner', 'fn_sms_cere_nivel', 'uid']) expect(lista.map(numeFn)).toContain(p)
   })
-  it('scriptul coordonatorului pornește și de la aceleași funcții (aceleași nume, același număr)', () => {
-    const intrare = SCRIPT.slice(SCRIPT.indexOf(`-- >>> INTRARE ${X}`), SCRIPT.indexOf(`-- <<< INTRARE ${X}`))
-    const din = [...faraComentarii(intrare).matchAll(/\('((public|auth)\.[a-z0-9_]+)\([^)]*\)'::regprocedure::oid\)/g)].map(m => numeFn(m[1]))
-    expect(din.sort()).toEqual(folosite().map(numeFn).sort())
+  it('pornirea închiderii (migrare = script) = lista FOLOSITE + crearea (4 / 5), lista fixată, lista angajaților (aceleași semnături)', () => {
+    const inch = faraComentarii(blocuri(MIG, IA, IB)[0])
+    const pornire = inch.slice(inch.indexOf('amp_pornire(oid) AS ('), inch.indexOf('amp_lant(oid) AS ('))
+    const din = [...pornire.matchAll(/to_regprocedure\('([^']+)'\)::oid/g)].map(m => m[1].replace(/^public\./, '').replace(/ /g, '').replace('public.sms_loturi', 'sms_loturi'))
+    expect(new Set(din).size).toBe(din.length)
+    const baza = ['fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)', 'fn_sms_lot_intern_creeaza(text,text[],integer[],boolean,integer[])', 'fn_sms_lot_destinatari(uuid)', 'fn_sms_angajati_lista()']
+    expect([...din].sort()).toEqual([...baza, ...folosite()].sort())
   })
-  it('verificarea „înainte” refuză un baseline fără ele și unul fără lanțul complet (închiderea), înaintea comparației', () => {
+  it('verificarea: FOLOSITE în baseline, apoi închiderea = baseline (FULL JOIN), DEFINER fără search_path, apoi EXECUTE dinamic; fără regula veche pe cuvinte', () => {
     const f = MIG.slice(MIG.indexOf(`CREATE FUNCTION pg_temp.amp_verifica_${X}`), MIG.indexOf('DO $l15_inainte$'))
     const iFol = f.indexOf('baseline L15 fara functiile folosite de corpurile noi')
-    const iLant = f.indexOf('baseline L15 incomplet: functii chemate din lantul de acces')
     const iComp = f.indexOf('difera de baseline-ul L15 revizuit')
+    const iDef = f.indexOf('nu are search_path propriu')
+    const iExec = f.indexOf('EXECUTE dinamic / limbaj neanalizabil')
     expect(iFol).toBeGreaterThan(0)
-    expect(iLant).toBeGreaterThan(iFol)
-    expect(iComp).toBeGreaterThan(iLant)
+    expect(iComp).toBeGreaterThan(iFol)
+    expect(iDef).toBeGreaterThan(iComp)
+    expect(iExec).toBeGreaterThan(iDef)
+    expect(f).not.toContain('baseline L15 incomplet')
+    expect(f).toMatch(/FROM amp_rez_20261220a x\n[\s\S]*?FULL JOIN \(SELECT y\.eticheta, y\.amprenta FROM pg_temp\.amp_baseline_20261220a\(\) y/)
+  })
+  it('postcondiția: funcțiile noi cheamă doar lista FOLOSITE (aceeași regulă de nume ca închiderea) și nimic dinamic', () => {
+    const p = MIG.slice(MIG.indexOf('DO $post$'), MIG.indexOf('END $post$;'))
+    expect(p).toContain(`regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*\\(', 'g') w`)
+    expect(p).toContain(`AND p2.oid NOT IN (SELECT to_regprocedure(substr(f.e, 9))::oid FROM pg_temp.sms_folosite_${X}() f(e)`)
+    expect(p).toContain("RAISE EXCEPTION '20261220a post: functiile noi cheama in afara listei FOLOSITE amprentate: %', coalesce(v_dif, 'EXECUTE dinamic');")
+  })
+  it('scriptul, secțiunea 3: lista NUME-NOI = exact numele „nume(” din corpurile noi (regula postcondiției), deci arată refuzul dinainte', () => {
+    const nume = new Set()
+    for (const a of ANTETE_NOI) for (const m of corp(MIG, a).matchAll(/([\p{L}_][\p{L}\p{N}_$]*)"?\s*\(/gu)) nume.add(m[1].toLowerCase())
+    const bloc = SCRIPT.slice(SCRIPT.indexOf(`-- >>> NUME-NOI ${X}`), SCRIPT.indexOf(`-- <<< NUME-NOI ${X}`))
+    const din = [...faraComentarii(bloc).matchAll(/'((?:[^']|'')*)'/g)].map(m => m[1].replace(/''/g, "'"))
+    expect(new Set(din).size).toBe(din.length)
+    expect([...din].sort()).toEqual([...nume].sort())
+    const s3 = SCRIPT.slice(SCRIPT.indexOf("\\echo '=== 3."), SCRIPT.indexOf("\\echo '=== 4."))
+    const fol = [...s3.matchAll(/to_regprocedure\('([^']+)'\)::oid/g)].map(m => m[1].replace(/^public\./, '').replace(/ /g, '').replace('public.sms_loturi', 'sms_loturi'))
+    expect([...fol].sort()).toEqual([...folosite()].sort())
   })
 })
 
@@ -284,9 +348,46 @@ describe('20261220a — revenirea', () => {
   })
 })
 
+// r3: proba cu două sesiuni pentru coordonator (clonă PG17) — gărzile înaintea oricărei conexiuni + forma apelurilor
+describe('20261220a r3 — proba cu două sesiuni (scripts/sms_numere_serviciu_concurenta.mjs)', () => {
+  const CALE = fileURLToPath(new URL('../scripts/sms_numere_serviciu_concurenta.mjs', import.meta.url))
+  const S = citeste('scripts/sms_numere_serviciu_concurenta.mjs')
+  const ruleaza = (...a) => spawnSync(process.execPath, [CALE, ...a], { encoding: 'utf8', env: { ...process.env, PSQL: 'psql-inexistent-proba', PGHOST: '' } })
+  it('refuză ÎNAINTE de conexiune: fără „--” / --sistem (2), mutant necunoscut (2), gazdă Supabase (22)', () => {
+    expect(ruleaza('--sistem', '1').status).toBe(2)
+    expect(ruleaza('--', '-h', 'clona').status).toBe(2)
+    expect(ruleaza('--sistem', '1', '--mutant', 'altul', '--', '-h', 'clona').status).toBe(2)
+    const r = ruleaza('--sistem', '1', '--', '-h', 'db.exemplu.supabase.co')
+    expect(r.status).toBe(22)
+    expect(r.stderr).toContain('proba rulează doar pe clonă')
+  })
+  it('garda țintei (system_identifier + PG17) e prima interogare; starea de plecare cerută: aplicată, tabel gol', () => {
+    const iMain = S.indexOf('async function main()')
+    const iSis = S.indexOf('if (sis !== SISTEM)', iMain), iVer = S.indexOf('cere PostgreSQL 17', iMain)
+    const iPrimaScriere = S.indexOf('const prep = await caOwner', iMain)
+    expect(iSis).toBeGreaterThan(iMain)
+    expect(iVer).toBeGreaterThan(iSis)
+    expect(iPrimaScriere).toBeGreaterThan(iVer)
+    expect(S.slice(iMain, iPrimaScriere)).toContain("if (stTab !== '0 0 O')")
+  })
+  it('apelurile ca PostgREST (JWT claim.sub + claims, SET LOCAL ROLE authenticated), prin RPC-ul calificat; mutantul doar pe server, reversibil', () => {
+    expect(S).toContain("SELECT set_config('request.jwt.claim.sub', ${lit(uid)}, true), set_config('request.jwt.claims'")
+    expect(S).toContain('SET LOCAL ROLE authenticated;')
+    expect(S).toContain('SELECT public.fn_sms_numar_serviciu_salveaza(NULL, ')
+    expect(S).not.toMatch(/INSERT INTO public\.sms_numere_serviciu/)
+    expect(S).toContain('inlocuiesteCorp(APEL_LOCK, MARCAJ)')
+    expect(S).toContain('inlocuiesteCorp(MARCAJ, APEL_LOCK)')
+    // apelul lock-ului din probă = cel din migrare (altfel mutantul n-ar găsi ce să scoată)
+    expect(MIG).toContain(`    PERFORM pg_advisory_xact_lock(hashtextextended('sms_numere_serviciu:adaugare', 0));`)
+    expect(S).toContain(`const APEL_LOCK = "PERFORM pg_advisory_xact_lock(hashtextextended('sms_numere_serviciu:adaugare', 0));"`)
+    expect(S).toContain('/maximum 100 de numere de serviciu active/')
+    expect(MIG).toContain("RAISE EXCEPTION 'sms: maximum 100 de numere de serviciu active (dezactiveaza unul inainte)' USING ERRCODE = '22023';")
+  })
+})
+
 describe('20261220a — fără date sensibile în livrare (repo public)', () => {
   it('nicio cale de server, niciun telefon în afara celor fictive 0700…', () => {
-    for (const t of [MIG, REV, SCRIPT]) {
+    for (const t of [MIG, REV, SCRIPT, citeste('scripts/sms_numere_serviciu_concurenta.mjs')]) {
       expect(t).not.toMatch(/[A-Z]:\\|\\\\gazpet|paw-data|Users[\\/]/i)
       for (const m of t.match(/(\+?40|0)7\d{2}[ .]?\d{3}[ .]?\d{3}/g) || []) expect(m.replace(/\D/g, '')).toMatch(/^(40)?0?700/)
     }

@@ -10,6 +10,9 @@
 //    ca să pice testul de comportament, nu poarta de amprentă.
 // 4. SCENARII: refuzurile migrării (baseline, plafon, stare schimbată înainte / strecurată după, reaplicare), aplicare -> revenire ->
 //    reaplicare, refuzurile revenirii (mesaje / numere salvate / stare schimbată / fără plafon).
+// 5. r3 (L15, tiparul 20261221a): S35–S38 scriptul coordonatorului (secțiunile 1–3: SQL dinamic în lanț numărat ÎNAINTE de aplicare),
+//    S39 contraexemplul review-ului (poarta owner prin EXECUTE, auxiliarul schimbat după baseline = REFUZ), S40–S43 închiderea calculată,
+//    adâncimea 2, postcondiția FOLOSITE, șirul 'EXECUTE' ca argument; mutanții porții L1–L4 (L1 arată și exploatarea: non-owner adaugă).
 // Rulare (din rădăcina repo-ului): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_sms_numere_serviciu_local.mjs
 // Limită: PGlite nu are concurență reală (FOR SHARE la creare vs dezactivare: verificat doar că se ia, prin xmax), e PG 18 (producția: 17).
 import { PGlite } from '@electric-sql/pglite'
@@ -77,9 +80,11 @@ async function bazaNoua() {
   await db.exec(`INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${UTIL}', 'sms', 'editor'), ('${TEST}', 'sms', 'viewer');`)
   return db
 }
-async function baseline(db) {
+// r3: scriptMut = aceeași schimbare aplicată și blocului de închidere al scriptului (proba mutantului „un singur nivel”: baseline-ul
+// dat de aceeași închidere slăbită, ca singura diferență să fie mutația)
+async function baseline(db, scriptMut = []) {
   await db.exec('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL search_path = public, pg_temp;')
-  try { return (await db.query(sectiune(SCRIPT))).rows } finally { await db.exec('ROLLBACK') }
+  try { return (await db.query(aplica(sectiune(SCRIPT), scriptMut))).rows } finally { await db.exec('ROLLBACK') }
 }
 
 // apel ca PostgREST: tranzacție, JWT (claim.sub + claims), SET LOCAL ROLE; cine = uid | 'anon' | 'service_role'
@@ -516,10 +521,10 @@ await scenariu('S25 nivelul 2 al porții owner (fn_sms_e_owner) permisiv DUPĂ b
 await scenariu('S26 baseline din scriptul r1 (fără poarta owner) = refuz: lipsesc funcțiile folosite de corpurile noi', /baseline L15 fara functiile folosite de corpurile noi: functie fn_sms_cere_owner\(\) \(/, async (db) => {
   await aplicaMig(db, aplica(MIG_T, [cuBaseline(B0.filter(r => r.eticheta !== 'functie fn_sms_cere_owner()'))]))
 })
-await scenariu('S27 baseline fără o verigă a lanțului (fn_sms_nivel_cont, sub poarta de nivel) = refuz: închiderea incompletă', /baseline L15 incomplet.*fn_sms_nivel_cont\(uuid\) \(din fn_sms_cere_nivel\(\)\)/, async (db) => {
+await scenariu('S27 baseline fără o verigă a lanțului (fn_sms_nivel_cont, sub poarta de nivel) = refuz: închiderea (calculată, r3) ≠ baseline', /\(inainte\) difera de baseline-ul L15 revizuit: functie fn_sms_nivel_cont\(uuid\) = [0-9a-f]{32} \(baseline NU ARE\)/, async (db) => {
   await aplicaMig(db, aplica(MIG_T, [cuBaseline(B0.filter(r => r.eticheta !== 'functie fn_sms_nivel_cont(uuid)'))]))
 })
-await scenariu('S28 același baseline incomplet + veriga schimbată (permisivă) = tot refuz (nu scapă prin lipsă)', /baseline L15 incomplet.*fn_sms_nivel_cont/, async (db) => {
+await scenariu('S28 același baseline incomplet + veriga schimbată (permisivă) = tot refuz (nu scapă prin lipsă)', /\(inainte\) difera de baseline-ul L15 revizuit: functie fn_sms_nivel_cont\(uuid\) = [0-9a-f]{32} \(baseline NU ARE\)/, async (db) => {
   await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sms_nivel_cont(p_uid uuid) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT 'owner'::text $f$;`)
   await aplicaMig(db, aplica(MIG_T, [cuBaseline(B0.filter(r => r.eticheta !== 'functie fn_sms_nivel_cont(uuid)'))]))
 })
@@ -544,5 +549,109 @@ await scenariu('S34 revenirea FĂRĂ blocul de amprente (mutant) pe corpul schim
   await db.exec(`CREATE OR REPLACE FUNCTION public.fn_sms_numere_serviciu_admin() RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ BEGIN RETURN '[]'::jsonb; END $f$;`)
   await revino(db, aplica(REV_T, [["    IF v_dif IS NOT NULL THEN\n      RAISE EXCEPTION '20261220a revenire: functiile noi", "    IF false THEN\n      RAISE EXCEPTION '20261220a revenire: functiile noi"]]))
 })
+// ── r3 (P1, tiparul 20261221a): închiderea calculată în migrare, SQL dinamic în lanț = REFUZ, funcțiile noi cheamă doar FOLOSITE ──
+// Contraexemplul din review-ul r3: ÎNAINTEA baseline-ului poarta owner verifică printr-un EXECUTE spre o funcție auxiliară (numele construit
+// din bucăți: nu se vede în text, deci auxiliarul nu intră în închidere / baseline); DUPĂ baseline se schimbă doar auxiliarul în „true”.
+const AUX_OWNER = `CREATE FUNCTION public.zz_owner_hidden() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE) $f$;`
+const OWNER_DINAMIC = `CREATE OR REPLACE FUNCTION public.fn_sms_cere_owner() RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v boolean;
+BEGIN
+  EXECUTE 'SELECT public.' || 'zz_owner_' || 'hidden()' INTO v;
+  IF v IS NOT TRUE THEN RAISE EXCEPTION 'sms: doar owner-ul (Razvan) foloseste modulul SMS' USING ERRCODE = '42501'; END IF;
+END $f$;`
+const AUX_PERMISIV = `CREATE OR REPLACE FUNCTION public.zz_owner_hidden() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`
+// șirul 'EXECUTE' ca argument (nu SQL dinamic): NU trebuie refuzat
+const OWNER_SIR_EXECUTE = `CREATE OR REPLACE FUNCTION public.fn_sms_cere_owner() RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF NOT public.fn_sms_e_owner() OR has_function_privilege('authenticated', 'public.fn_sms_e_owner()', 'EXECUTE') IS NULL THEN
+    RAISE EXCEPTION 'sms: doar owner-ul (Razvan) foloseste modulul SMS' USING ERRCODE = '42501';
+  END IF;
+END $f$;`
+// o verigă la adâncimea 2 (poarta owner -> fn_sms_e_owner -> zz_adanc), lipsă din baseline și schimbată după
+const ADANC = `CREATE FUNCTION public.zz_adanc(p uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT EXISTS (SELECT 1 FROM public.profiles x WHERE x.id = p AND x.is_owner IS TRUE) $f$;
+CREATE OR REPLACE FUNCTION public.fn_sms_e_owner() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT auth.uid() IS NOT NULL AND public.zz_adanc(auth.uid()) $f$;`
+const ADANC_PERMISIV = `CREATE OR REPLACE FUNCTION public.zz_adanc(p uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$;`
+const NIVEL_PERMISIV = `CREATE OR REPLACE FUNCTION public.fn_sms_nivel_cont(p_uid uuid) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT 'owner'::text $f$;`
+// o funcție nouă care cheamă în afara listei FOLOSITE (fn_sms_e_owner nu e în listă: e în lanț doar prin poarta owner)
+const MIG_LISTA_LARGA = [["DECLARE v jsonb;\nBEGIN\n  PERFORM public.fn_sms_cere_nivel();\n", "DECLARE v jsonb;\nBEGIN\n  PERFORM public.fn_sms_cere_nivel();\n  PERFORM public.fn_sms_e_owner();\n"]]
+const UN_NIVEL = [['  SELECT x.oid FROM amp_lant l CROSS JOIN LATERAL (', '  SELECT x.oid FROM amp_pornire l CROSS JOIN LATERAL (']]
+const SCEN3 = {
+  dinamic: { inainte: AUX_OWNER + '\n' + OWNER_DINAMIC, dupa: AUX_PERMISIV },
+  sirExecute: { inainte: OWNER_SIR_EXECUTE },
+  lantFaraVeriga: { dupa: NIVEL_PERMISIV, rows: (b) => b.filter(r => r.eticheta !== 'functie fn_sms_nivel_cont(uuid)') },
+  adanc: { inainte: ADANC, dupa: ADANC_PERMISIV, rows: (b) => b.filter(r => r.eticheta !== 'functie zz_adanc(uuid)') },
+  listaLarga: { mig: MIG_LISTA_LARGA },
+}
+// secțiunea k a scriptului coordonatorului (interogarea de după „=== k.”), rulată ca el: READ ONLY
+const interogare = (k) => { const t = citeste(SCRIPT), i = t.indexOf(`\\echo '=== ${k}.`), a = t.indexOf('\n', i) + 1; return t.slice(a, t.indexOf(';\n', a)) }
+async function citesteSectiune(db, k) {
+  await db.exec('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL search_path = public, pg_temp;')
+  try { return (await db.query(interogare(k))).rows } finally { await db.exec('ROLLBACK') }
+}
+// pregătirea înainte de baseline (intră în el), baseline-ul (eventual trunchiat), pregătirea după baseline, migrarea (+ mutanți), apoi proba
+async function ruleazaScen3(s, mutanti = [], dupaAplicare = null) {
+  const db = await bazaNoua()
+  try {
+    if (s.inainte) await db.exec(s.inainte)
+    const rows = (s.rows || ((b) => b))(await baseline(db, s.scriptMut || []))
+    if (s.dupa) await db.exec(s.dupa)
+    const text = recalculeaza(aplica(aplica(MIG_T, [cuBaseline(rows)]), [...(s.mig || []), ...mutanti]))
+    try { await aplicaMig(db, text) } catch (e) { return { eroare: e.message } }
+    return { eroare: null, proba: dupaAplicare ? await dupaAplicare(db) : null }
+  } finally { await db.close() }
+}
+const verifica = (bine, text) => { if (!bine) rau++; console.log(`${bine ? 'OK    ' : 'GREȘIT'} ${text}`) }
+{
+  // scriptul coordonatorului ARATĂ refuzul înainte de aplicare: secțiunea 2 pe ținta cu poarta dinamică; secțiunile 2 și 3 = 0 pe schema curată
+  const db = await bazaNoua()
+  try {
+    const s2 = (await citesteSectiune(db, 2))[0], s3 = (await citesteSectiune(db, 3))[0]
+    verifica(Number(s2.functii_cu_sql_dinamic_in_lant) === 0 && Number(s2.functii_in_lant) === B0.filter(r => r.eticheta.startsWith('functie ')).length,
+      `S35 scriptul, secțiunea 2 pe schema curată: ${s2.functii_cu_sql_dinamic_in_lant} funcții cu SQL dinamic (din ${s2.functii_in_lant} în lanț = ${B0.filter(r => r.eticheta.startsWith('functie ')).length} în baseline)`)
+    verifica(Number(s3.nume_potrivite_in_afara_listei) === 0 && Number(s3.folosite_lipsa) === 0, `S36 scriptul, secțiunea 3 pe schema curată: ${s3.nume_potrivite_in_afara_listei} nume în afara listei (${s3.care}), FOLOSITE lipsă ${s3.folosite_lipsa}`)
+    await db.exec(AUX_OWNER + '\n' + OWNER_DINAMIC)
+    const d2 = (await citesteSectiune(db, 2))[0]
+    verifica(Number(d2.functii_cu_sql_dinamic_in_lant) === 1 && d2.care === 'fn_sms_cere_owner() (plpgsql)', `S37 scriptul, secțiunea 2 cu poarta owner dinamică: N = ${d2.functii_cu_sql_dinamic_in_lant} (${d2.care})`)
+    const b = await baseline(db)
+    verifica(b.some(r => r.eticheta === 'functie fn_sms_cere_owner()' && /EXECUTE in corp \(migrarea refuza\)/.test(r.atentie || '')) && !b.some(r => /zz_owner_hidden/.test(r.eticheta)),
+      'S38 scriptul, secțiunea 1: poarta dinamică marcată „migrarea refuza”, auxiliarul invizibil în închidere')
+  } finally { await db.close() }
+}
+for (const [nume, sc, re] of [
+  ['S39 contraexemplul review-ului: poarta owner prin EXECUTE, auxiliarul schimbat DUPĂ baseline = REFUZ (nu doar semnalat)', SCEN3.dinamic,
+    /EXECUTE dinamic \/ limbaj neanalizabil \(amprenta statica imposibila\): fn_sms_cere_owner\(\) \(plpgsql\)/],
+  ['S40 veriga lanțului lipsă din baseline + schimbată (permisivă) = refuz: închiderea calculată ≠ baseline', SCEN3.lantFaraVeriga,
+    /starea de acces \(inainte\) difera de baseline-ul L15 revizuit: functie fn_sms_nivel_cont\(uuid\) = [0-9a-f]{32} \(baseline NU ARE\)/],
+  ['S41 o verigă la adâncimea 2 lipsă din baseline + schimbată = refuz', SCEN3.adanc, /\(inainte\) difera de baseline-ul L15 revizuit: functie zz_adanc\(uuid\) = [0-9a-f]{32} \(baseline NU ARE\)/],
+  ['S42 o funcție nouă cheamă în afara listei FOLOSITE = refuz în postcondiție', SCEN3.listaLarga, /functiile noi cheama in afara listei FOLOSITE amprentate: fn_sms_e_owner\(\)/],
+]) {
+  const r = await ruleazaScen3(sc)
+  verifica(re.test(r.eroare || ''), `${nume}: ${r.eroare ? 'refuz: ' + r.eroare.slice(0, 200) : 'NU a refuzat'}`)
+}
+{
+  const r = await ruleazaScen3(SCEN3.sirExecute)
+  verifica(r.eroare === null, `S43 șirul 'EXECUTE' ca argument (has_function_privilege) nu e SQL dinamic: migrarea trece (${r.eroare || 'aplicată'})`)
+}
+// mutanții porții: originalul refuză, mutantul trece (verificarea e necesară); la contraexemplu, mutantul arată și exploatarea (non-owner adaugă)
+const exploatare = async (db) => {
+  try { const r = await salveaza(db, UTIL, null, 'Strecurat', '0700000299', null, null, null); return 'non-owner a adăugat numărul ' + r.id } catch (e) { return 'refuzat: ' + e.message.slice(0, 60) }
+}
+for (const [nume, sc, mut, cuExpl] of [
+  ['L1 EXECUTE dinamic doar semnalat (nu refuzat)', SCEN3.dinamic, [['  IF v_exec IS NOT NULL THEN', '  IF false THEN']], true],
+  ['L2 închiderea luată din BASELINE (forma r1)', SCEN3.lantFaraVeriga, [['amp_functii_explicite(oid) AS (SELECT DISTINCT l.oid FROM amp_lant l),',
+    "amp_functii_explicite(oid) AS (SELECT to_regprocedure(substr(b.eticheta, 9))::oid FROM pg_temp.amp_baseline_20261220a() b WHERE b.eticheta LIKE 'functie %'),"]], false],
+  ['L3 închiderea doar pe un nivel (baseline-ul dat de aceeași închidere de un nivel)', { ...SCEN3.adanc, rows: null, scriptMut: UN_NIVEL },
+    UN_NIVEL, false],
+  ['L4 fără postcondiția listei FOLOSITE', SCEN3.listaLarga, [['  IF v_dif IS NOT NULL\n     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = ANY (v_expuse::oid[]', '  IF false AND v_dif IS NOT NULL\n     OR false AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = ANY (v_expuse::oid[]']], false],
+]) {
+  const o = await ruleazaScen3(sc)
+  const m = await ruleazaScen3(sc, mut, cuExpl ? exploatare : null)
+  const expl = cuExpl ? (m.proba || '') : ''
+  verifica(o.eroare != null && m.eroare == null && (!cuExpl || /^non-owner a adăugat/.test(expl)),
+    `${nume}: originalul refuză (${(o.eroare || 'NU').slice(0, 90)}), mutantul ${m.eroare == null ? 'trece' : 'refuză și el: ' + m.eroare.slice(0, 90)}${cuExpl ? ' — ' + expl : ''}`)
+}
 if (rau) { console.error(`${rau} mutanți / scenarii greșite`); process.exit(1) }
 console.log('mutanți: toți prinși la testul lor; scenariile: toate cu motivul lor')

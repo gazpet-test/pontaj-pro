@@ -2,7 +2,7 @@
 // Date fictive. Comportamentul din BD: scripts/pglite/test_sms_numere_serviciu_local.mjs.
 import { describe, expect, it, vi } from 'vitest'
 import { argumenteIntern, filtreazaNumereServiciu, numarSelectati, valideazaNumarServiciu, mesajDezactivare, filtreazaAngajati,
-  lipsaRpcNumereServiciu, listaNumereDinRaspuns, incarcaNumereServiciu, reconciliazaNumereAlese, mesajScoaseDinSelectie, MAX_NUMERE_SERVICIU } from './smsLogica.js'
+  lipsaRpcNumereServiciu, listaNumereDinRaspuns, incarcaNumereServiciu, capabilitateNumere, reconciliazaNumereAlese, mesajScoaseDinSelectie, MAX_NUMERE_SERVICIU } from './smsLogica.js'
 import { readFileSync } from 'node:fs'
 
 const apeluri = []
@@ -130,9 +130,63 @@ describe('r2 — detectarea migrării 20261220a neaplicate (sonda)', () => {
     expect(await incarcaNumereServiciu(api([{ id: 7 }]))).toEqual({ stare: 'da', numere: [{ id: 7 }], err: null })
     expect(await incarcaNumereServiciu(api(LIPSA_LISTA))).toEqual({ stare: 'lipsa', numere: [], err: null })
     // după o listă primită, funcția care dispare e eroare (nu ascundem nimic în tăcere)
-    expect(await incarcaNumereServiciu(api(LIPSA_LISTA), { sonda: false })).toMatchObject({ stare: 'eroare', numere: null, err: LIPSA_LISTA })
+    expect(await incarcaNumereServiciu(api(LIPSA_LISTA), capabilitateNumere('exista'))).toMatchObject({ stare: 'eroare', numere: null, err: LIPSA_LISTA })
     const drept = { code: '42501', message: 'sms: nu ai acces la modulul SMS' }
     expect(await incarcaNumereServiciu(api(drept))).toMatchObject({ stare: 'eroare', err: drept })
+  })
+})
+
+// r3 (P2): capabilitatea „numere de serviciu” a PAGINII — o singură sondă, păstrată între taburi
+describe('r3 — capabilitateNumere: o sondă pe pagină, „lipsă” doar la sondă', () => {
+  const lipsa = async () => { throw LIPSA_LISTA }
+  it('sonda „lipsă” → nicio cerere ulterioară (în orice tab: aceeași capabilitate)', async () => {
+    const cap = capabilitateNumere()
+    const fn = vi.fn(lipsa)
+    expect(await cap.cere(fn)).toEqual({ stare: 'lipsa', valoare: null, err: null })
+    expect(cap.stare).toBe('lipsa')
+    expect(await cap.cere(fn)).toEqual({ stare: 'lipsa', valoare: null, err: null })
+    expect(await cap.cere(async () => { throw new Error('nu trebuia chemată') })).toMatchObject({ stare: 'lipsa' })
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+  it('după o listă primită, o funcție dispărută = EROARE (nu lipsă), iar starea rămâne „exista”', async () => {
+    const cap = capabilitateNumere()
+    expect(await cap.cere(async () => [1])).toEqual({ stare: 'da', valoare: [1], err: null })
+    expect(cap.stare).toBe('exista')
+    expect(await cap.cere(lipsa)).toEqual({ stare: 'eroare', valoare: null, err: LIPSA_LISTA })
+    expect(cap.stare).toBe('exista')
+  })
+  it('o sondă picată din alt motiv (drepturi / rețea) = eroare, starea rămâne „necunoscut” (următoarea cerere sondează din nou)', async () => {
+    const cap = capabilitateNumere()
+    const retea = { code: '', message: 'Failed to fetch' }
+    expect(await cap.cere(async () => { throw retea })).toEqual({ stare: 'eroare', valoare: null, err: retea })
+    expect(cap.stare).toBe('necunoscut')
+    expect(await cap.cere(lipsa)).toMatchObject({ stare: 'lipsa' })
+  })
+  it('două cereri simultane cât starea e necunoscută: UNA singură e sonda, cealaltă o așteaptă (lipsă → a doua nu mai cheamă nimic)', async () => {
+    const cap = capabilitateNumere()
+    let elibereaza
+    const prima = vi.fn(() => new Promise((_, rej) => { elibereaza = () => rej(LIPSA_LISTA) }))
+    const adoua = vi.fn(async () => [1])
+    const p1 = cap.cere(prima), p2 = cap.cere(adoua)
+    await Promise.resolve()
+    elibereaza()
+    expect(await p1).toMatchObject({ stare: 'lipsa' })
+    expect(await p2).toMatchObject({ stare: 'lipsa' })
+    expect(adoua).not.toHaveBeenCalled()
+  })
+  it('două cereri simultane, sonda reușește: a doua pleacă după ea, ca cerere obișnuită (lipsa ei = eroare)', async () => {
+    const cap = capabilitateNumere()
+    let elibereaza
+    const p1 = cap.cere(() => new Promise(res => { elibereaza = () => res([7]) }))
+    const p2 = cap.cere(lipsa)
+    await Promise.resolve()
+    elibereaza()
+    expect(await p1).toMatchObject({ stare: 'da', valoare: [7] })
+    expect(await p2).toMatchObject({ stare: 'eroare', err: LIPSA_LISTA })
+  })
+  it('starea inițială validată', () => {
+    expect(capabilitateNumere('exista').stare).toBe('exista')
+    expect(() => capabilitateNumere('da')).toThrow(/stare invalidă/)
   })
 })
 
