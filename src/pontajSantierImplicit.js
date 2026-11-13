@@ -146,6 +146,9 @@ export function stareRand(snap, empId) {
     editat: !!c, schimbat: !!c?.schimbat, conflict: c?.conflict || null,
     salveaza: !!op?.salveaza, siteTinta: op?.salveaza ? op.siteTinta : undefined,
     necunoscut: !!op?.necunoscut, mesaj: snap.mesaje[k] || null,
+    // r5: rezultat necunoscut + recitirea de fundal a eșuat = eroarea pe rând, cu „Reîncearcă” (reincerc = recitirea e în curs)
+    recitireEsuata: (op?.necunoscut && snap.randuri.stare === 'gata' && snap.randuri.errFundal) || null,
+    reincerc: !!(op?.necunoscut && snap.randuri.reincerc),
   }
 }
 
@@ -213,7 +216,8 @@ export const eroareDeterminista = (err) => typeof err?.code === 'string' && /^([
 //   scrieRand(rand) → { data, error }; uid() → id; poarta({ zi, exportat, info, numeAngajat }) → { ok, tichet } (parola / tichetul HR);
 //   noteaza({ tichet, emp, zi, campuri }) → mesaj de eroare | null; scrieFisa(empId, siteId) → { error }; oreImplicite(emp) → { intrare, iesire };
 //   termenMs; timer(ms, fn) → anulare.
-const RANDURI_INCARC = Object.freeze({ stare: 'incarc', recs: Object.freeze({}), err: null, reincerc: false })
+// errFundal (r5): ultima recitire de FUNDAL a eșuat (rândurile rămân cele din ultima citire reușită); rândurile cu rezultat necunoscut o arată
+const RANDURI_INCARC = Object.freeze({ stare: 'incarc', recs: Object.freeze({}), err: null, errFundal: null, reincerc: false })
 const ISTORIC_INCARC = Object.freeze({ stare: 'incarc', harta: new Map(), err: null, reincerc: false })
 const EXPORT_INCARC = Object.freeze({ stare: 'incarc', exportat: null, info: null, err: null, reincerc: false })
 export const TERMEN_MS = 20000
@@ -248,12 +252,20 @@ export function creeazaControlorZi({
     cuHarta('operatii', k, (v.salveaza || v.necunoscut) ? v : null)
   }
 
-  // promisiunea cu termen: { v } | { e } | { expirat: true } — se rezolvă O SINGURĂ dată
+  // r5 (re-review #1091 r4, L05 / L19): rezultatul unei dependențe devine promisiune NATIVĂ o singură dată, AICI, în momentul apelului —
+  // singurul loc din controlor care atinge obiectul întors de o dependență. Pagina dă builder-e PostgREST: „thenable” LENEȘE, care trimit
+  // câte o cerere HTTP la FIECARE .then() (r4 consuma builder-ul de scriere de două ori la expirare = upsert trimis de două ori).
+  // Termenul, răspunsul normal și observatorul răspunsului târziu folosesc toate promisiunea întoarsă de aici. Excepția sincronă = respingere.
+  function apel(dep, ...args) {
+    try { return Promise.resolve(dep(...args)) } catch (e) { return Promise.reject(e) }
+  }
+
+  // promisiunea cu termen: { v } | { e } | { expirat: true } — se rezolvă O SINGURĂ dată. `p` = promisiunea nativă din apel()
   function cuTermen(p) {
     return new Promise(res => {
       let gata = false
       const anuleaza = timer(termenMs, () => { if (!gata) { gata = true; res({ expirat: true }) } })
-      Promise.resolve(p).then(
+      p.then(
         v => { if (!gata) { gata = true; anuleaza(); res({ v }) } },
         e => { if (!gata) { gata = true; anuleaza(); res({ e: e || new Error('eroare') }) } })
     })
@@ -263,19 +275,20 @@ export function creeazaControlorZi({
   function citesteRand() {
     const g = ++genR
     const ziC = st.zi, ids = idsCurente()
-    if (!ids.length) { zborR = false; pune({ randuri: { stare: 'gata', recs: {}, err: null, reincerc: false } }); return Promise.resolve() }
+    if (!ids.length) { zborR = false; pune({ randuri: { stare: 'gata', recs: {}, err: null, errFundal: null, reincerc: false } }); return Promise.resolve() }
     zborR = true
-    let p
-    try { p = citesteRanduri(ziC, ids) } catch (e) { p = Promise.reject(e) }
-    return cuTermen(p).then(({ v, e, expirat }) => {
+    return cuTermen(apel(citesteRanduri, ziC, ids)).then(({ v, e, expirat }) => {
       if (g !== genR) return // a venit între timp o cerere mai nouă sau o scriere: răspunsul e vechi
       zborR = false
       if (expirat) genR++ // răspunsul târziu al acestei cereri e aruncat prin generație
       const res = expirat ? { data: null, error: { message: mesajTermen() } } : e ? { data: null, error: { message: e?.message || String(e) } } : v
       const r = st.randuri
       if (res?.error || !Array.isArray(res?.data)) {
-        if (r.stare === 'gata') return // citire de fundal eșuată: rămâne ultima citire reușită a ACESTUI context
-        pune({ randuri: { stare: 'eroare', recs: {}, err: res?.error?.message || 'răspuns fără rânduri', reincerc: false } })
+        const msg = res?.error?.message || 'răspuns fără rânduri'
+        // citire de fundal eșuată: rămâne ultima citire reușită a ACESTUI context, dar eroarea se ține minte (r5): un rând cu rezultat
+        // necunoscut o arată, cu „Reîncearcă” pe rând — altfel ar sta pe „recitesc” fără ieșire proprie
+        if (r.stare === 'gata') pune({ randuri: { ...r, errFundal: msg, reincerc: false } })
+        else pune({ randuri: { stare: 'eroare', recs: {}, err: msg, errFundal: null, reincerc: false } })
       } else {
         const m = {}
         for (const x of res.data) {
@@ -305,7 +318,7 @@ export function creeazaControlorZi({
           prag.delete(k)
           if (o.salveaza) operatii[k] = Object.freeze({ ...o, necunoscut: false }); else delete operatii[k]
         }
-        pune({ randuri: { stare: 'gata', recs: m, err: null, reincerc: false }, ciorne: Object.freeze(ciorne), operatii: Object.freeze(operatii) })
+        pune({ randuri: { stare: 'gata', recs: m, err: null, errFundal: null, reincerc: false }, ciorne: Object.freeze(ciorne), operatii: Object.freeze(operatii) })
       }
       notifica()
     })
@@ -315,9 +328,7 @@ export function creeazaControlorZi({
     const g = ++genI
     const ziC = st.zi, ids = idsCurente()
     if (!ids.length) { pune({ istoric: { stare: 'gata', harta: new Map(), err: null, reincerc: false } }); return Promise.resolve() }
-    let p
-    try { p = citesteIstoric(ids, ziC) } catch (e) { p = Promise.reject(e) }
-    return cuTermen(p).then(({ v: h, e, expirat }) => {
+    return cuTermen(apel(citesteIstoric, ids, ziC)).then(({ v: h, e, expirat }) => {
       if (g !== genI) return
       if (expirat) genI++
       if (expirat || e || !(h instanceof Map)) pune({ istoric: { stare: 'eroare', harta: new Map(), err: expirat ? mesajTermen() : e ? (e.message || String(e)) : 'răspuns fără rezultat', reincerc: false } })
@@ -330,9 +341,7 @@ export function creeazaControlorZi({
   function citesteExp() {
     const g = ++genE
     const ziC = st.zi
-    let p
-    try { p = citesteExport(ziC) } catch (e) { p = Promise.reject(e) }
-    return cuTermen(p).then(({ v, e, expirat }) => {
+    return cuTermen(apel(citesteExport, ziC)).then(({ v, e, expirat }) => {
       if (g !== genE) return
       if (expirat) genE++
       if (expirat || e || v?.error || !Array.isArray(v?.data)) {
@@ -387,7 +396,7 @@ export function creeazaControlorZi({
 
   // o singură scriere, cu verificarea finală chiar înaintea ei
   async function executa(k, it) {
-    const idR = await cuTermen(uid())
+    const idR = await cuTermen(apel(uid))
     if (idR.expirat || idR.e) return { ok: false, scris: false, nivel: 'error', motiv: 'Nu s-a putut afla utilizatorul conectat — nu am salvat nimic; încearcă din nou' }
     const v = verificaIntentie(st, it, { necunoscut: !!st.operatii[k]?.necunoscut })
     if (!v.ok) {
@@ -399,8 +408,7 @@ export function creeazaControlorZi({
       ? randPentruSalvare({ empId: it.empId, zi: it.zi, siteId: v.site_id, uid: u, fields: it.fields, acum: acum() })
       : { employee_id: it.empId, date: it.zi, site_id: it.siteId || null, updated_by: u, updated_at: acum() }
     inZbor.set(k, { empId: it.empId, zi: it.zi })
-    let p
-    try { p = scrieRand(rand) } catch (e) { p = Promise.reject(e) }
+    const p = apel(scrieRand, rand) // O SINGURĂ cerere de scriere; mai jos se folosește doar promisiunea `p`
     const { v: res, e, expirat } = await cuTermen(p)
     inZbor.delete(k)
     const err = e || res?.error
@@ -410,8 +418,8 @@ export function creeazaControlorZi({
       prag.set(k, genR)
       puneOp(k, { necunoscut: true, empId: it.empId, zi: it.zi })
       if (st.zi === it.zi && st.emps) citesteRand()
-      Promise.resolve(p).catch(() => {}).then(() => {
-        // răspunsul târziu: dacă rezultatul e încă necunoscut, doar o citire pornită DUPĂ el îl lămurește; ecranul se recitește oricum
+      p.catch(() => {}).then(() => {
+        // răspunsul târziu AL ACELEIAȘI cereri (nu o retrimitere): dacă rezultatul e încă necunoscut, doar o citire pornită DUPĂ el îl lămurește; ecranul se recitește oricum
         if (st.operatii[k]?.necunoscut) prag.set(k, genR)
         if (st.zi === it.zi && st.emps) citesteRand()
       })
@@ -493,21 +501,21 @@ export function creeazaControlorZi({
       return { ok: false, scris: false, conflict: !!v0.conflict, nivel: v0.nivel, motiv: v0.motiv }
     }
     let g
-    try { g = await poarta({ zi: it.zi, exportat: it.exportat, info: st.exportZi.info, numeAngajat: empDin(it.empId, it.emp)?.name }) } catch (e) { g = null }
+    try { g = await apel(poarta, { zi: it.zi, exportat: it.exportat, info: st.exportZi.info, numeAngajat: empDin(it.empId, it.emp)?.name }) } catch (e) { g = null }
     if (!g?.ok) return { ok: false, scris: false, anulat: true, nivel: 'warn', motiv: it.tip === 'salveaza' ? 'Modificare anulată — parolă necesară pentru zi plătită' : 'Realocare anulată — parolă necesară pentru zi plătită' }
     it.tichet = g.tichet || null
     const rez = await programeaza(k, it)
     if (!rez.ok) return rez
     // după o corectură pe lună închisă (după termen): nota în istoricul tichetului, pe ZIUA scrisă
     if (it.tichet) {
-      try { rez.notaEroare = await noteaza({ tichet: it.tichet, emp: empDin(it.empId, it.emp), zi: it.zi, campuri: it.tip === 'salveaza' ? Object.keys(it.fields || {}) : ['site_id'] }) } catch (e) { rez.notaEroare = e?.message || 'nota pe tichet a eșuat' }
+      try { rez.notaEroare = await apel(noteaza, { tichet: it.tichet, emp: empDin(it.empId, it.emp), zi: it.zi, campuri: it.tip === 'salveaza' ? Object.keys(it.fields || {}) : ['site_id'] }) } catch (e) { rez.notaEroare = e?.message || 'nota pe tichet a eșuat' }
     }
     // alocarea pe zi a unui angajat fără șantier în fișă îl scoate și din „nealocați” (fișa din lista CURENTĂ, nu cea de la apăsare)
     if (it.tip === 'aloca' && it.siteId && scrieFisa) {
       const e = empDin(it.empId, null)
       if (e && e.site_id == null) {
         let r
-        try { r = await scrieFisa(it.empId, it.siteId) } catch (err) { r = { error: err } }
+        try { r = await apel(scrieFisa, it.empId, it.siteId) } catch (err) { r = { error: err } }
         if (r?.error) rez.fisaEroare = r.error.message || 'eroare'
         else if (st.emps) { pune({ emps: st.emps.map(x => x.id === it.empId ? { ...x, site_id: it.siteId } : x) }); notifica() }
       }
@@ -523,12 +531,16 @@ export function creeazaControlorZi({
     if (st.emps && st.istoric.stare === 'eroare') { pune({ istoric: { ...st.istoric, reincerc: true } }); ps.push(citesteIst()) }
     if (st.exportZi.stare === 'eroare') { pune({ exportZi: { ...st.exportZi, reincerc: true } }); ps.push(citesteExp()) }
     // rânduri cu rezultat necunoscut pe ziua afișată: o recitire le lămurește
-    if (!dinEroareR && st.emps && st.randuri.stare === 'gata' && Object.values(st.operatii).some(o => o.necunoscut && o.zi === st.zi)) ps.push(citesteRand())
+    const recitNec = !dinEroareR && !!st.emps && st.randuri.stare === 'gata' && Object.values(st.operatii).some(o => o.necunoscut && o.zi === st.zi)
+    if (recitNec) {
+      pune({ randuri: { ...st.randuri, reincerc: true } }) // butonul de pe rând arată „Reîncerc…” până la răspuns
+      ps.push(citesteRand())
+    }
     notifica()
     await Promise.all(ps)
     // angajații care AU deja pontaj în ziua asta (necunoscut până acum); cei cu editări sunt marcați pe rând („modificat între timp”)
     const randuriNoi = (dinEroareR && st.ctx === ctx0 && st.randuri.stare === 'gata') ? Object.values(st.randuri.recs).map(r => r.employee_id) : []
-    return { randuri: st.randuri.stare, istoric: st.istoric.stare, export: st.exportZi.stare, randuriNoi }
+    return { randuri: st.randuri.stare, istoric: st.istoric.stare, export: st.exportZi.stare, randuriNoi, fundalEroare: recitNec && st.ctx === ctx0 && !!st.randuri.errFundal }
   }
 
   return {
@@ -568,6 +580,36 @@ export function creeazaControlorZi({
     // ctx = st.ctx din momentul apăsării: dacă ziua / lista s-au schimbat între timp, nu se scrie nimic
     salveaza(emp, fields, { ctx } = {}) { return trimite({ tip: 'salveaza', empId: emp.id, emp, zi: st.zi, ctx: ctx ?? st.ctx, fields }) },
     aloca(emp, siteId, { ctx } = {}) { return trimite({ tip: 'aloca', empId: emp.id, emp, zi: st.zi, ctx: ctx ?? st.ctx, siteId: siteId || null }) },
+  }
+}
+
+// ══ r5 (re-review #1091 r4): dependențele controlorului = cererile către bază ale paginii, într-o funcție pură, testată pe biblioteca reală ══
+// Pagina doar o cheamă (cu clientul Supabase și cele trei ajutoare ale ei); testele o cheamă cu un client real peste `fetch` simulat și
+// rulează controlorul REAL cu ele (câte cereri HTTP pleacă, cu ce conținut, în ce ordine). Cererile sunt OCTET CU OCTET cele din pagina r4
+// (aceleași tabele, coloane, filtre, onConflict, apeluri). Ce întorc (builder-e PostgREST = thenable leneșe) NU se consumă aici: controlorul
+// le transformă în promisiune o singură dată (apel()).
+//   ajutoare: poarta(a) → { ok, tichet } (modalul paginii); oreImplicite(emp) → { intrare, iesire }; termenCorectura(zi) → text (nota pe tichet)
+export function creeazaDependentePontaj(client, { poarta, oreImplicite, termenCorectura }) {
+  return {
+    citesteRanduri: (z, ids) => client.from('pontaj_records').select('*').eq('date', z).in('employee_id', ids),
+    citesteIstoric: (ids, z) => incarcaUltimulSantier(client, ids, z),
+    // Verific dacă ziua e în interiorul unei perioade exportate ca plată (RPC SECURITY DEFINER, merge pentru orice user authenticated)
+    citesteExport: (z) => client.rpc('fn_get_export_period_for_date', { p_date: z }),
+    scrieRand: (rand) => client.from('pontaj_records').upsert(rand, { onConflict: 'employee_id,date' }).select().single(),
+    uid: async () => (await client.auth.getUser()).data.user?.id,
+    poarta,
+    // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi (ziua SCRISĂ), ce câmpuri.
+    noteaza: async ({ tichet: t, emp, zi, campuri }) => {
+      const uid = (await client.auth.getUser()).data.user?.id
+      const { error } = await client.from('tichete_istoric').insert({
+        tichet_id: t.id, actiune: 'corectura_pontaj', autor: uid || null,
+        detalii: { employee_id: emp.id, angajat: emp.name, data: zi, campuri, termen: termenCorectura(zi) },
+      })
+      return error ? `Corectura e salvată, dar nu s-a putut nota în ${t.numar_tichet}: ${error.message}` : null
+    },
+    // Dacă angajatul nu are niciun șantier implicit, îl setăm și pe fișă (îl scoate din „nealocați”)
+    scrieFisa: (empId, siteId) => client.from('employees').update({ site_id: siteId }).eq('id', empId),
+    oreImplicite,
   }
 }
 

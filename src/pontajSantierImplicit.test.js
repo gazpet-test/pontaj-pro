@@ -5,8 +5,10 @@ import { readFileSync } from 'node:fs'
 import {
   esteZiLucrataCuSantier, ultimulSantierDinRanduri, santierImplicit, incarcaUltimulSantier,
   cheiaListei, randulZilei, arataSpinner, propuneSantier, verificaSalvare, randPentruSalvare, treceFiltrulSantier, nealocati,
-  creeazaControlorZi, amprenta, valoriDinRand, valoriAfisate, stareRand, verificaIntentie, eroareDeterminista,
+  creeazaControlorZi, amprenta, valoriDinRand, valoriAfisate, stareRand, verificaIntentie, eroareDeterminista, creeazaDependentePontaj,
 } from './pontajSantierImplicit.js'
+// r5: biblioteca REALĂ a clientului bazei (deja dependență a aplicației), cu `fetch` simulat — nicio dependență nouă
+import { createClient } from '@supabase/supabase-js'
 
 // ── serverul fals: in / lt / not is null / or(check_in.not.is.null,norma.is.null) / order / limit, plafon de server 1000 ──
 function serverFals(randuri, { maxRows = 1000, strica = null } = {}) {
@@ -417,7 +419,7 @@ describe('(e) eroare la citirea inițială + ore completate + „Reîncearcă”
     const rand2 = { id: 8, employee_id: 2, date: Z13, site_id: 44, ...ore(Z13, '06') }
     b.cereriR[1].rezolva({ data: [rand2], error: null })
     const rez = await pReinc
-    expect(rez).toEqual({ randuri: 'gata', istoric: 'gata', export: 'gata', randuriNoi: [2] })
+    expect(rez).toEqual({ randuri: 'gata', istoric: 'gata', export: 'gata', randuriNoi: [2], fundalEroare: false })
     expect(randulZilei(b.s(), 1)).toBe(null)
     const ok = await b.ctrl.salveaza(emp, completat)
     expect(ok.ok).toBe(true)
@@ -972,6 +974,316 @@ describe('reguli mici', () => {
   })
 })
 
+// ══ r5 (re-review #1091 r4): dependențele sunt thenable LENEȘE, ca builder-ul PostgREST — fiecare .then() „trimite” încă o cerere ══
+// thenableLenes nu are .catch / .finally (ca PromiseLike): controlorul nu are voie să-l atingă decât o dată, prin apel().
+function bancLenes(zi, emps) {
+  const trimise = []   // o intrare la FIECARE consumare: { nume, args, rezolva, respinge }
+  const timere = []
+  const lenes = (nume, args) => ({ then(res, rej) { const d = amanat(); trimise.push({ nume, args, ...d }); return d.p.then(res, rej) } })
+  const ctrl = creeazaControlorZi({
+    zi,
+    citesteRanduri: (z, ids) => lenes('randuri', [z, ids]),
+    citesteIstoric: (ids, z) => lenes('istoric', [ids, z]),
+    citesteExport: (z) => lenes('export', [z]),
+    scrieRand: (rand) => lenes('scrie', [rand]),
+    uid: () => lenes('uid', []),
+    poarta: (a) => lenes('poarta', [a]),
+    noteaza: (a) => lenes('noteaza', [a]),
+    scrieFisa: (empId, siteId) => lenes('fisa', [empId, siteId]),
+    oreImplicite: () => ORE,
+    timer: (ms, fn) => { const t = { fn, activ: true }; timere.push(t); return () => { t.activ = false } },
+    acum: () => 'T',
+  })
+  if (emps) ctrl.seteazaAngajati(emps)
+  const ale = (nume) => trimise.filter(x => x.nume === nume)
+  return {
+    ctrl, trimise, ale, s: () => ctrl.getStare(),
+    nr: () => Object.fromEntries(['randuri', 'istoric', 'export', 'scrie', 'uid', 'poarta', 'noteaza', 'fisa'].map(n => [n, ale(n).length])),
+    // răspunde ultimei cereri trimise de felul `nume`
+    raspunde: async (nume, val) => { const l = ale(nume); l[l.length - 1].rezolva(val); await asteapta() },
+    expira: () => { for (const t of timere.splice(0)) if (t.activ) { t.activ = false; t.fn() } },
+  }
+}
+const nul = { randuri: 0, istoric: 0, export: 0, scrie: 0, uid: 0, poarta: 0, noteaza: 0, fisa: 0 }
+
+describe('r5 (1) fiecare cerere logică consumă dependența EXACT o dată (L05 / L19)', () => {
+  it('citirile (rânduri, istoric, „zi plătită”) și identitatea: o consumare pe cerere, și la expirare, și la răspunsul târziu', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = bancLenes(Z13, [emp]); await asteapta()
+    expect(b.nr()).toEqual({ ...nul, randuri: 1, istoric: 1, export: 1 })
+    b.expira(); await asteapta()
+    expect(b.s().randuri.stare).toBe('eroare'); expect(b.s().istoric.stare).toBe('eroare'); expect(b.s().exportZi.stare).toBe('eroare')
+    // răspunsurile târzii ale acelorași cereri: aruncate, fără nicio altă consumare
+    b.ale('randuri')[0].rezolva({ data: [], error: null }); b.ale('istoric')[0].rezolva(new Map()); b.ale('export')[0].rezolva({ data: [], error: null })
+    await asteapta()
+    expect(b.nr()).toEqual({ ...nul, randuri: 1, istoric: 1, export: 1 })
+    const pR = b.ctrl.reincearca(); await asteapta()
+    expect(b.nr()).toEqual({ ...nul, randuri: 2, istoric: 2, export: 2 })
+    await b.raspunde('randuri', { data: [], error: null }); await b.raspunde('istoric', harta([1, { site_id: A, date: Z12 }])); await b.raspunde('export', { data: [], error: null })
+    expect(await pR).toMatchObject({ randuri: 'gata', istoric: 'gata', export: 'gata' })
+    // identitatea expiră: o consumare, refuz fără scriere; răspunsul ei târziu nu mai consumă nimic
+    const p = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    await b.raspunde('poarta', { ok: true, tichet: null })
+    expect(b.nr()).toMatchObject({ uid: 1, poarta: 1, scrie: 0 })
+    b.expira()
+    expect(await p).toMatchObject({ ok: false, scris: false })
+    await b.raspunde('uid', 'u1')
+    expect(b.nr()).toEqual({ ...nul, randuri: 2, istoric: 2, export: 2, uid: 1, poarta: 1 })
+  })
+  it('scrierea expirată: O SINGURĂ cerere de scriere, și după răspunsul ei târziu; recitirile sunt câte o cerere fiecare', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = bancLenes(Z13, [emp]); await asteapta()
+    await b.raspunde('randuri', { data: [], error: null }); await b.raspunde('istoric', harta([1, { site_id: A, date: Z12 }])); await b.raspunde('export', { data: [], error: null })
+    const p = b.ctrl.salveaza(emp, ore(Z13, '04')); await asteapta()
+    await b.raspunde('poarta', { ok: true, tichet: null }); await b.raspunde('uid', 'u1')
+    expect(b.nr()).toMatchObject({ scrie: 1, randuri: 1 })
+    b.expira()
+    expect(await p).toMatchObject({ ok: false, necunoscut: true })
+    await asteapta()
+    expect(b.nr()).toMatchObject({ scrie: 1, randuri: 2 }) // recitirea pornită la expirare, fără nicio retrimitere
+    b.ale('scrie')[0].rezolva({ data: rand(80, { ...ore(Z13, '04') }), error: null }); await asteapta()
+    expect(b.nr()).toMatchObject({ scrie: 1, randuri: 3 }) // răspunsul târziu = încă o recitire, nu încă o scriere
+  })
+  it('alocarea cu tichet pe un angajat fără fișă: poarta, identitatea, scrierea, nota pe tichet și fișa — câte o consumare fiecare', async () => {
+    const emp = { id: 1, site_id: null, name: 'POP ION' }
+    const b = bancLenes(Z13, [emp]); await asteapta()
+    await b.raspunde('randuri', { data: [], error: null }); await b.raspunde('istoric', new Map()); await b.raspunde('export', { data: [], error: null })
+    const p = b.ctrl.aloca(emp, B); await asteapta()
+    await b.raspunde('poarta', { ok: true, tichet: { id: 7, numar_tichet: 'TKT-1' } })
+    await b.raspunde('uid', 'u1')
+    await b.raspunde('scrie', { data: rand(50, { site_id: B }), error: null })
+    await b.raspunde('noteaza', null)
+    await b.raspunde('fisa', { error: null })
+    expect(await p).toMatchObject({ ok: true, scris: true, notaEroare: null })
+    expect(b.nr()).toEqual({ ...nul, randuri: 1, istoric: 1, export: 1, poarta: 1, uid: 1, scrie: 1, noteaza: 1, fisa: 1 })
+    expect(b.ale('noteaza')[0].args[0]).toMatchObject({ tichet: { id: 7 }, zi: Z13, campuri: ['site_id'] })
+    expect(b.ale('fisa')[0].args).toEqual([1, B])
+  })
+  it('scenariul recenzentului, pas cu pas: 04:00 expiră → o cerere; recitire; 06:00 salvat; răspunsul târziu al cererii ORIGINALE recitește; 04:00 nu mai pleacă', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = bancLenes(Z13, [emp]); await asteapta()
+    await b.raspunde('randuri', { data: [], error: null }); await b.raspunde('istoric', harta([1, { site_id: A, date: Z12 }])); await b.raspunde('export', { data: [], error: null })
+    // 1. salvarea 04:00 expiră: O singură cerere
+    b.ctrl.editeaza(emp, { ci: '04:00' })
+    const p04 = b.ctrl.salveaza(emp, ore(Z13, '04')); await asteapta()
+    await b.raspunde('poarta', { ok: true, tichet: null }); await b.raspunde('uid', 'u1')
+    const original = b.ale('scrie')[0]
+    b.expira()
+    expect(await p04).toMatchObject({ ok: false, necunoscut: true })
+    expect(b.ale('scrie')).toHaveLength(1)
+    // 2. recitirea (pornită după expirare): scrierea n-a ajuns încă → rândul se deblochează
+    await b.raspunde('randuri', { data: [], error: null })
+    expect(stareRand(b.s(), 1).necunoscut).toBe(false)
+    // 3. utilizatorul salvează 06:00
+    const p06 = b.ctrl.salveaza(emp, ore(Z13, '06')); await asteapta()
+    await b.raspunde('poarta', { ok: true, tichet: null }); await b.raspunde('uid', 'u1')
+    expect(b.ale('scrie')).toHaveLength(2)
+    const r06 = rand(80, { ...ore(Z13, '06'), updated_at: 'v06' })
+    await b.raspunde('scrie', { data: r06, error: null })
+    expect((await p06).ok).toBe(true)
+    expect(randulZilei(b.s(), 1)).toEqual(r06)
+    // 4. răspunsul târziu al cererii ORIGINALE: pornește încă o recitire (observatorul urmărește cererea originală, nu o copie)
+    const nRand = b.ale('randuri').length
+    original.rezolva({ data: rand(80, { ...ore(Z13, '04') }), error: null }); await asteapta()
+    expect(b.ale('randuri')).toHaveLength(nRand + 1)
+    await b.raspunde('randuri', { data: [r06], error: null })
+    for (let i = 0; i < 5; i++) { b.expira(); await asteapta() }
+    // nicio a doua scriere 04:00 nu pleacă vreodată: exact două scrieri, 04:00 apoi 06:00
+    expect(b.ale('scrie').map(x => x.args[0].check_in)).toEqual([`${Z13}T04:00:00Z`, `${Z13}T06:00:00Z`])
+    expect(randulZilei(b.s(), 1)).toEqual(r06)
+  })
+})
+
+describe('r5 (3) recitirea de FUNDAL eșuată pe un rând cu rezultat necunoscut se vede pe rând, cu „Reîncearcă”', () => {
+  it('rezultat necunoscut + recitire eșuată: eroarea pe rând; reîncercarea arată „Reîncerc…”, apoi lămurește rândul', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp], { scrieImediat: false })
+    await pornit(b)
+    const p = b.ctrl.salveaza(emp, ore(Z13)); await asteapta()
+    b.expira(); await p
+    expect(stareRand(b.s(), 1)).toMatchObject({ necunoscut: true, recitireEsuata: null, reincerc: false })
+    b.cereriR[1].rezolva({ data: null, error: { message: 'rețea căzută' } }); await asteapta()
+    expect(b.s().randuri.stare).toBe('gata') // ultima citire reușită rămâne
+    expect(stareRand(b.s(), 1)).toMatchObject({ necunoscut: true, recitireEsuata: 'rețea căzută', reincerc: false })
+    const pR = b.ctrl.reincearca()
+    expect(stareRand(b.s(), 1).reincerc).toBe(true)
+    b.cereriR[2].rezolva({ data: null, error: { message: 'tot căzută' } })
+    expect(await pR).toMatchObject({ fundalEroare: true })
+    expect(stareRand(b.s(), 1)).toMatchObject({ necunoscut: true, recitireEsuata: 'tot căzută', reincerc: false })
+    const pR2 = b.ctrl.reincearca()
+    b.cereriR[3].rezolva({ data: [], error: null })
+    expect(await pR2).toMatchObject({ fundalEroare: false })
+    expect(stareRand(b.s(), 1)).toMatchObject({ necunoscut: false, recitireEsuata: null, reincerc: false })
+  })
+  it('fără rezultat necunoscut, o recitire de fundal eșuată nu schimbă rândurile și nu apare pe rând', async () => {
+    const emp = { id: 1, site_id: 10 }
+    const b = banc(Z13, [emp])
+    const r05 = rand(9, { ...ore(Z13) })
+    await pornit(b, { randuri: [r05] })
+    b.ctrl.reimprospateaza(); b.cereriR[1].rezolva({ data: null, error: { message: 'x' } }); await asteapta()
+    expect(randulZilei(b.s(), 1)).toBe(r05)
+    expect(stareRand(b.s(), 1)).toMatchObject({ necunoscut: false, recitireEsuata: null })
+  })
+})
+
+// ══ r5 (2) cererile, pe biblioteca REALĂ (supabase-js + postgrest-js instalate) cu `fetch` simulat ══
+// Fiecare apel HTTP se înregistrează (metodă, cale, parametri, corp, antete); răspunsurile pot fi ținute în loc (amânate) de test.
+function clientReal(raspuns = () => ({ body: [] })) {
+  const http = []
+  const fetchFals = async (url, init = {}) => {
+    const u = new URL(String(url))
+    const antete = Object.fromEntries([...new Headers(init.headers)].filter(([k]) => k !== 'x-client-info'))
+    const c = { metoda: init.method || 'GET', cale: u.pathname, param: [...u.searchParams], corp: init.body ?? null, antete }
+    http.push(c)
+    const r = await raspuns(c)
+    if (r.status === 204 || r.status === 201) return new Response(null, { status: r.status })
+    return new Response(JSON.stringify(r.body), { status: r.status || 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  const client = createClient('http://bd.test', 'cheie-anon-test', {
+    global: { fetch: fetchFals, headers: { Authorization: 'Bearer jeton-test' } },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  })
+  return { client, http }
+}
+// răspunsurile serverului fals, după cerere
+const serverPontaj = (randuri = []) => (c) => {
+  if (c.cale === '/auth/v1/user') return { body: { id: 'u1', aud: 'authenticated' } }
+  if (c.cale === '/rest/v1/rpc/fn_get_export_period_for_date') return { body: [] }
+  if (c.cale === '/rest/v1/pontaj_records' && c.metoda === 'GET') return { body: c.param.some(([k, v]) => k === 'date' && v.startsWith('eq.')) ? randuri : [] }
+  if (c.cale === '/rest/v1/pontaj_records' && c.metoda === 'POST') return { body: { id: 80, ...JSON.parse(c.corp) } }
+  if (c.cale === '/rest/v1/tichete_istoric') return { status: 201 }
+  if (c.cale === '/rest/v1/employees') return { status: 204 }
+  throw new Error('cerere neașteptată: ' + c.metoda + ' ' + c.cale)
+}
+const asteaptaMult = async () => { for (let i = 0; i < 20; i++) await asteapta() }
+const TERMEN = (zi) => `termen-${zi}`
+// Dependențele din PAGINA r4 (src/App.jsx @ a48325eb), copiate LITERAL (doar `supabase` = clientul de test, `fmtZiPontaj(stareLuna(zi).termen)`
+// = TERMEN(zi)): referința „octet cu octet” față de care se compară creeazaDependentePontaj.
+const depR4 = (supabase) => ({
+  citesteRanduri:(z,ids)=>supabase.from('pontaj_records').select('*').eq('date',z).in('employee_id',ids),
+  citesteIstoric:(ids,z)=>incarcaUltimulSantier(supabase, ids, z),
+  citesteExport:(z)=>supabase.rpc('fn_get_export_period_for_date', { p_date: z }),
+  scrieRand:rand=>supabase.from('pontaj_records').upsert(rand,{onConflict:'employee_id,date'}).select().single(),
+  uid:async()=>(await supabase.auth.getUser()).data.user?.id,
+  noteaza:async({ tichet:t, emp, zi, campuri })=>{
+    const uid = (await supabase.auth.getUser()).data.user?.id
+    const { error } = await supabase.from('tichete_istoric').insert({
+      tichet_id: t.id, actiune: 'corectura_pontaj', autor: uid || null,
+      detalii: { employee_id: emp.id, angajat: emp.name, data: zi, campuri, termen: TERMEN(zi) },
+    })
+    return error ? `Corectura e salvată, dar nu s-a putut nota în ${t.numar_tichet}: ${error.message}` : null
+  },
+  scrieFisa:(empId,siteId)=>supabase.from('employees').update({site_id:siteId}).eq('id',empId),
+})
+const depR5 = (client, extra = {}) => creeazaDependentePontaj(client, { poarta: async () => ({ ok: true, tichet: null }), oreImplicite: () => ORE, termenCorectura: TERMEN, ...extra })
+
+describe('r5 (2) creeazaDependentePontaj: aceleași cereri HTTP ca pagina r4, pe biblioteca reală', () => {
+  const RAND = { created_by: 'u1', updated_by: 'u1', updated_at: 'T', check_in: `${Z13}T04:00:00Z`, check_out: null, norma: null, employee_id: 1, date: Z13, site_id: A }
+  const cazuri = [
+    ['citesteRanduri', [Z13, [1, 2]]], ['citesteIstoric', [[1, 2], Z13]], ['citesteExport', [Z13]], ['scrieRand', [RAND]], ['uid', []],
+    ['noteaza', [{ tichet: { id: 7, numar_tichet: 'TKT-1' }, emp: { id: 1, name: 'POP ION' }, zi: Z13, campuri: ['site_id'] }]], ['scrieFisa', [1, B]],
+  ]
+  for (const [dep, args] of cazuri) {
+    it(`${dep}: cererile r5 = cererile r4 (metodă, cale, parametri, corp, antete), același rezultat`, async () => {
+      const v = clientReal(serverPontaj()), n = clientReal(serverPontaj())
+      const rv = await depR4(v.client)[dep](...args)
+      const rn = await depR5(n.client)[dep](...args)
+      expect(n.http.length).toBeGreaterThan(0)
+      expect(n.http).toEqual(v.http)
+      expect(rn).toEqual(rv)
+    })
+  }
+  it('valorile scrise de mână (din codul de dinainte): tabele, coloane, filtre, onConflict, apeluri', async () => {
+    const { client, http } = clientReal(serverPontaj())
+    const d = depR5(client)
+    await d.citesteRanduri(Z13, [1, 2])
+    await d.citesteIstoric([1, 2], Z13)
+    await d.citesteExport(Z13)
+    expect(await d.scrieRand(RAND)).toMatchObject({ data: { id: 80, site_id: A }, error: null })
+    expect(await d.uid()).toBe('u1')
+    expect(await d.noteaza({ tichet: { id: 7, numar_tichet: 'TKT-1' }, emp: { id: 1, name: 'POP ION' }, zi: Z13, campuri: ['site_id'] })).toBe(null)
+    expect((await d.scrieFisa(1, B)).error).toBe(null)
+    const pe = http.map(c => [c.metoda, c.cale, c.param, c.corp])
+    expect(pe).toEqual([
+      ['GET', '/rest/v1/pontaj_records', [['select', '*'], ['date', `eq.${Z13}`], ['employee_id', 'in.(1,2)']], null],
+      ['GET', '/rest/v1/pontaj_records', [['select', 'id,employee_id,date,site_id,check_in,norma'], ['employee_id', 'in.(1,2)'], ['date', `lt.${Z13}`],
+        ['site_id', 'not.is.null'], ['or', '(check_in.not.is.null,norma.is.null)'], ['order', 'date.desc,id.desc'], ['limit', '1000']], null],
+      ['POST', '/rest/v1/rpc/fn_get_export_period_for_date', [], JSON.stringify({ p_date: Z13 })],
+      ['POST', '/rest/v1/pontaj_records', [['on_conflict', 'employee_id,date'], ['select', '*']], JSON.stringify(RAND)],
+      ['GET', '/auth/v1/user', [], null],
+      ['GET', '/auth/v1/user', [], null],
+      ['POST', '/rest/v1/tichete_istoric', [], JSON.stringify({ tichet_id: 7, actiune: 'corectura_pontaj', autor: 'u1', detalii: { employee_id: 1, angajat: 'POP ION', data: Z13, campuri: ['site_id'], termen: `termen-${Z13}` } })],
+      ['PATCH', '/rest/v1/employees', [['id', 'eq.1']], JSON.stringify({ site_id: B })],
+    ])
+    // upsert: „merge-duplicates” + rândul întors, un singur obiect
+    expect(http[3].antete.prefer).toMatch(/resolution=merge-duplicates/)
+    expect(http[3].antete.prefer).toMatch(/return=representation/)
+    expect(http[3].antete.accept).toBe('application/vnd.pgrst.object+json')
+  })
+})
+
+describe('r5 (2) controlorul REAL cu dependențele REALE (supabase-js + fetch simulat)', () => {
+  // timer manual pentru termene (ca în banc); `opreste` = cererile ținute în loc de test
+  function bancReal({ randuri = [], opreste = () => false } = {}) {
+    const tinute = []
+    let tichet = null
+    const srv = serverPontaj(randuri)
+    const { client, http } = clientReal((c) => opreste(c) ? new Promise(res => tinute.push({ c, elibereaza: () => res(srv(c)) })) : srv(c))
+    const timere = []
+    const porti = []
+    const ctrl = creeazaControlorZi({
+      zi: Z13, ...depR5(client, { poarta: async (a) => { porti.push(a); return { ok: true, tichet } } }),
+      timer: (ms, fn) => { const t = { fn, activ: true }; timere.push(t); return () => { t.activ = false } },
+      acum: () => 'T',
+    })
+    return { ctrl, http, tinute, porti, s: () => ctrl.getStare(), cuTichet: (t) => { tichet = t }, expira: () => { for (const t of timere.splice(0)) if (t.activ) { t.activ = false; t.fn() } } }
+  }
+  const scrieri = (http) => http.filter(c => c.cale === '/rest/v1/pontaj_records' && c.metoda === 'POST')
+  it('pornirea, salvarea și alocarea: câte cereri HTTP, cu ce conținut, în ce ordine', async () => {
+    const emp = { id: 1, site_id: null, name: 'POP ION' }
+    const b = bancReal()
+    b.ctrl.seteazaAngajati([emp]); await asteaptaMult()
+    expect(b.s()).toMatchObject({ randuri: { stare: 'gata' }, istoric: { stare: 'gata' }, exportZi: { stare: 'gata', exportat: false } })
+    expect(b.http.map(c => c.metoda + ' ' + c.cale).sort()).toEqual(['GET /rest/v1/pontaj_records', 'GET /rest/v1/pontaj_records', 'POST /rest/v1/rpc/fn_get_export_period_for_date'])
+    b.http.length = 0
+    // salvare fără tichet (angajat nealocat: o absență, care nu cere șantier) = identitatea, apoi upsert-ul
+    expect(await b.ctrl.salveaza(emp, { norma: 'CO', check_in: null, check_out: null, lunch_break: false, diurna: false, meal_supplement: false })).toMatchObject({ ok: true })
+    expect(b.http.map(c => [c.metoda, c.cale])).toEqual([['GET', '/auth/v1/user'], ['POST', '/rest/v1/pontaj_records']])
+    expect(JSON.parse(b.http[1].corp)).toEqual({ created_by: 'u1', updated_by: 'u1', updated_at: 'T', norma: 'CO', check_in: null, check_out: null, lunch_break: false, diurna: false, meal_supplement: false, employee_id: 1, date: Z13, site_id: null })
+    expect(b.http[1].param).toEqual([['on_conflict', 'employee_id,date'], ['select', '*']])
+    b.http.length = 0
+    // alocare cu tichet, angajat fără fișă: identitate, scriere, (nota: identitate + insert), fișa
+    b.cuTichet({ id: 7, numar_tichet: 'TKT-1' })
+    expect(await b.ctrl.aloca(emp, B)).toMatchObject({ ok: true, notaEroare: null })
+    await asteaptaMult()
+    expect(b.http.map(c => [c.metoda, c.cale])).toEqual([['GET', '/auth/v1/user'], ['POST', '/rest/v1/pontaj_records'], ['GET', '/auth/v1/user'], ['POST', '/rest/v1/tichete_istoric'], ['PATCH', '/rest/v1/employees']])
+    expect(JSON.parse(b.http[1].corp)).toEqual({ employee_id: 1, date: Z13, site_id: B, updated_by: 'u1', updated_at: 'T' })
+    expect(JSON.parse(b.http[3].corp)).toMatchObject({ tichet_id: 7, actiune: 'corectura_pontaj', detalii: { employee_id: 1, data: Z13, campuri: ['site_id'] } })
+    expect(b.http[4]).toMatchObject({ param: [['id', 'eq.1']], corp: JSON.stringify({ site_id: B }) })
+    expect(b.porti).toHaveLength(2)
+  })
+  it('scenariul recenzentului pe biblioteca reală: 04:00 expiră → UN SINGUR POST; 06:00 salvat; răspunsul târziu nu mai trimite 04:00', async () => {
+    const emp = { id: 1, site_id: 10 }
+    let tine04 = true
+    const b = bancReal({ opreste: (c) => tine04 && c.metoda === 'POST' && c.cale === '/rest/v1/pontaj_records' && c.corp.includes('T04:00') })
+    b.ctrl.seteazaAngajati([emp]); await asteaptaMult()
+    const p04 = b.ctrl.salveaza(emp, ore(Z13, '04')); await asteaptaMult()
+    expect(scrieri(b.http)).toHaveLength(1)
+    b.expira()
+    expect(await p04).toMatchObject({ ok: false, necunoscut: true })
+    await asteaptaMult()
+    expect(scrieri(b.http)).toHaveLength(1)                       // r4: aici plecau DOUĂ cereri cu același conținut
+    expect(stareRand(b.s(), 1).necunoscut).toBe(false)             // recitirea (pornită după expirare) a deblocat rândul
+    tine04 = false
+    expect(await b.ctrl.salveaza(emp, ore(Z13, '06'))).toMatchObject({ ok: true })
+    const nGet = b.http.filter(c => c.metoda === 'GET' && c.cale === '/rest/v1/pontaj_records').length
+    b.tinute[0].elibereaza(); await asteaptaMult()                // răspunsul târziu al cererii ORIGINALE
+    expect(b.http.filter(c => c.metoda === 'GET' && c.cale === '/rest/v1/pontaj_records').length).toBe(nGet + 1) // încă o recitire
+    expect(scrieri(b.http).map(c => JSON.parse(c.corp).check_in)).toEqual([`${Z13}T04:00:00Z`, `${Z13}T06:00:00Z`])
+    expect(b.tinute).toHaveLength(1)
+  })
+})
+
 // Legătura cu ecranul. PontajPage nu se poate monta în vitest fără jsdom (nu e dependență) și fără să aducă tot App.jsx (Supabase, rute,
 // ~9000 de linii); de aceea comportamentul e probat pe controlor (mai sus), iar aici se verifică, pe text, că pagina NU mai face nimic
 // asincron pe rânduri / istoric în afara lui: doar îl creează, se abonează la el și îi cheamă metodele.
@@ -987,13 +1299,11 @@ describe('PontajPage folosește doar controlorul', () => {
       'setIsDateExported', 'setExportPeriodInfo', 'requestPasswordIfExported', 'dirtyRef', 'markDirty', 'setSaving', 'noteazaCorectura'])
       expect(PAG).not.toContain(interzis)
   })
-  it('citirile / scrierile zilei (pontaj_records, „zi exportată”, nota pe tichet, fișa) apar DOAR în dependențele controlorului', () => {
+  it('r5: dependențele vin DOAR din creeazaDependentePontaj (testată mai sus cu biblioteca reală); pagina nu mai construiește nicio cerere a zilei', () => {
     const bloc = PAG.slice(PAG.indexOf('creeazaControlorZi('), PAG.indexOf('const ctrl=ctrlRef.current'))
-    const rest = PAG.replace(bloc, '')
-    for (const [ce, n] of [["from('pontaj_records')", 2], ["rpc('fn_get_export_period_for_date'", 1], ["from('tichete_istoric')", 1], ["from('employees').update(", 1]]) {
-      expect(bloc.split(ce).length - 1).toBe(n)
-      expect(rest).not.toContain(ce)
-    }
+    expect(bloc).toContain('...creeazaDependentePontaj(supabase, {')
+    for (const ce of ["from('pontaj_records')", "rpc('fn_get_export_period_for_date'", "from('tichete_istoric')", "from('employees').update(", 'incarcaUltimulSantier(', 'auth.getUser'])
+      expect(PAG).not.toContain(ce)
   })
   it('afișarea, filtrul, „Nealocate”, salvarea, alocarea, editările și reîncercarea trec prin controlor / instantaneul lui', () => {
     for (const f of ['propuneSantier(snap,emp)', 'nealocati(snap)', 'treceFiltrulSantier(', 'randulZilei(snap,emp.id)', 'arataSpinner(snap)',

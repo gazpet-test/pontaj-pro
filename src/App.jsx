@@ -5,7 +5,7 @@ import { tintaRedirectHostPublic } from './redari/domeniuPublic.js'
 import { supabase } from './lib/supabase.js'
 import { pornestePolling, eEroareSesiune } from './lib/sesiuneCereri.js'
 import { logoutProtejat } from './lib/izoLogoutBrowser.js'
-import { incarcaUltimulSantier, creeazaControlorZi, randulZilei, propuneSantier, treceFiltrulSantier, nealocati, arataSpinner, valoriAfisate, stareRand } from './pontajSantierImplicit.js'
+import { creeazaDependentePontaj, creeazaControlorZi, randulZilei, propuneSantier, treceFiltrulSantier, nealocati, arataSpinner, valoriAfisate, stareRand } from './pontajSantierImplicit.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -1692,7 +1692,7 @@ function defaultOreFromNorma(h) {
 }
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
-function PontajRow({ emp, rec, valori, stareR, santierImpl, sites, selectedDate, onSave, onAllocate, onEdit, onRenunta, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast }) {
+function PontajRow({ emp, rec, valori, stareR, santierImpl, sites, selectedDate, onSave, onAllocate, onEdit, onRenunta, onReincearca, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast }) {
   // Norma angajatului (pentru auto-fill ore) — vine din v_employee_work_hours
   const normaH = emp.work_hours_per_day || 8
   const oreDefault = defaultOreFromNorma(normaH)
@@ -1804,12 +1804,16 @@ function PontajRow({ emp, rec, valori, stareR, santierImpl, sites, selectedDate,
       {/* TKT-2026-0360 r4: starea rândului, din controlor — rezultat necunoscut, rând modificat sub editare, conflict de versiune */}
       {(stareR.necunoscut||stareR.schimbat||stareR.conflict||stareR.mesaj)&&<div style={{marginTop:6,fontSize:11,color:G.orange,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
         <span style={{flex:1,minWidth:200}}>
-          {stareR.necunoscut?'⚠ Rezultatul ultimei salvări nu e cunoscut — recitesc rândul din bază; verifică-l înainte să salvezi din nou.'
+          {stareR.necunoscut?(stareR.recitireEsuata
+            ?`⚠ Rezultatul ultimei salvări nu e cunoscut, iar recitirea rândului din bază a eșuat (${stareR.recitireEsuata}) — apasă „Reîncearcă”; până atunci nu salvez nimic pe rând.`
+            :'⚠ Rezultatul ultimei salvări nu e cunoscut — recitesc rândul din bază; verifică-l înainte să salvezi din nou.')
             :stareR.conflict?`⚠ ${stareR.conflict}`
             :stareR.schimbat?'⚠ Rândul a fost modificat între timp (de altcineva sau de o salvare anterioară) — valorile tale au rămas în câmpuri; verifică pontajul salvat și apasă din nou 💾.'
             :`⚠ ${stareR.mesaj}`}
         </span>
         {(stareR.schimbat||stareR.conflict||stareR.mesaj)&&!stareR.necunoscut&&<button onClick={()=>onRenunta(emp)} style={{...S.btnS,fontSize:10,padding:'3px 9px'}}>↺ Ia valorile salvate</button>}
+        {/* r5: rândul cu rezultat necunoscut are mereu ieșirea lui (recitirea poate eșua în fundal fără banner de zi) */}
+        {stareR.necunoscut&&<button onClick={onReincearca} disabled={stareR.reincerc} style={{...S.btnS,fontSize:10,padding:'3px 9px'}}>{stareR.reincerc?'⏳ Reîncerc…':'↻ Reîncearcă'}</button>}
       </div>}
 
       {exp&&<div style={{marginTop:11,padding:13,background:'#0D1117',borderRadius:8,border:`1px solid ${G.border}`}}>
@@ -1874,26 +1878,12 @@ function PontajPage() {
   // sunt în controlor; pagina nu mai decide nimic asincron despre ziua afișată.
   const poartaRef=useRef(null)   // poarta de parolă / tichet a paginii (modalul), chemată DE controlor cu starea lui „zi plătită”
   const ctrlRef=useRef(null)
-  if(!ctrlRef.current) ctrlRef.current=creeazaControlorZi({ zi:todayStr(),
-    citesteRanduri:(z,ids)=>supabase.from('pontaj_records').select('*').eq('date',z).in('employee_id',ids),
-    citesteIstoric:(ids,z)=>incarcaUltimulSantier(supabase, ids, z),
-    // Verific dacă ziua e în interiorul unei perioade exportate ca plată (RPC SECURITY DEFINER, merge pentru orice user authenticated)
-    citesteExport:(z)=>supabase.rpc('fn_get_export_period_for_date', { p_date: z }),
-    scrieRand:rand=>supabase.from('pontaj_records').upsert(rand,{onConflict:'employee_id,date'}).select().single(),
-    uid:async()=>(await supabase.auth.getUser()).data.user?.id,
+  // r5: cererile către bază (rânduri, istoric, „zi plătită”, salvare, alocare, identitate, nota pe tichet, fișa) le construiește
+  // creeazaDependentePontaj (src/pontajSantierImplicit.js), testată cu biblioteca Supabase reală; pagina dă doar clientul și ajutoarele ei.
+  if(!ctrlRef.current) ctrlRef.current=creeazaControlorZi({ zi:todayStr(), ...creeazaDependentePontaj(supabase, {
     poarta:(a)=>poartaRef.current(a),
-    // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi (ziua SCRISĂ), ce câmpuri.
-    noteaza:async({ tichet:t, emp, zi, campuri })=>{
-      const uid = (await supabase.auth.getUser()).data.user?.id
-      const { error } = await supabase.from('tichete_istoric').insert({
-        tichet_id: t.id, actiune: 'corectura_pontaj', autor: uid || null,
-        detalii: { employee_id: emp.id, angajat: emp.name, data: zi, campuri, termen: fmtZiPontaj(stareLuna(zi).termen) },
-      })
-      return error ? `Corectura e salvată, dar nu s-a putut nota în ${t.numar_tichet}: ${error.message}` : null
-    },
-    // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
-    scrieFisa:(empId,siteId)=>supabase.from('employees').update({site_id:siteId}).eq('id',empId),
-    oreImplicite:(emp)=>defaultOreFromNorma(emp.work_hours_per_day||8) })
+    oreImplicite:(emp)=>defaultOreFromNorma(emp.work_hours_per_day||8),
+    termenCorectura:(zi)=>fmtZiPontaj(stareLuna(zi).termen) }) })
   const ctrl=ctrlRef.current
   const snap=useSyncExternalStore(ctrl.aboneaza,ctrl.getStare)
   const date=snap.zi; const recs=snap.randuri.recs; const emps=snap.emps||[]
@@ -1930,7 +1920,7 @@ function PontajPage() {
     const iv=setInterval(refresh,35000)
     return ()=>{ window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); clearInterval(iv) }
   },[ctrl])
-  const reincearca=async()=>{ const r=await ctrl.reincearca(); if(r.randuri==='eroare'||r.istoric==='eroare'||r.export==='eroare') showToast('Tot nu se poate citi — încearcă din nou peste puțin','error') }
+  const reincearca=async()=>{ const r=await ctrl.reincearca(); if(r.randuri==='eroare'||r.istoric==='eroare'||r.export==='eroare'||r.fundalEroare) showToast('Tot nu se poate citi — încearcă din nou peste puțin','error') }
   const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)); const s=data?.find(x=>x.key==='meal_supplement_amount'); if(s) setSuplAmt(Number(s.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async(eCurent=()=>true)=>{
@@ -2149,7 +2139,7 @@ function PontajPage() {
       </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={randulZilei(snap,emp.id)} valori={valoriAfisate(snap,emp,defaultOreFromNorma(emp.work_hours_per_day||8))} stareR={stareRand(snap,emp.id)} santierImpl={santierPentru(emp)} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} onEdit={ctrl.editeaza} onRenunta={ctrl.renuntaEditare} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={randulZilei(snap,emp.id)} valori={valoriAfisate(snap,emp,defaultOreFromNorma(emp.work_hours_per_day||8))} stareR={stareRand(snap,emp.id)} santierImpl={santierPentru(emp)} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} onEdit={ctrl.editeaza} onRenunta={ctrl.renuntaEditare} onReincearca={reincearca} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
       {passwordPrompt && (
