@@ -81,7 +81,7 @@ const MUTANTI = [
   ['C1 cursorul din plan (nu din rezultate)', [['const prima = zile.find(z => !confirmate.has(z))', 'const prima = undefined']]],
   ['C2 rândul trimis = confirmat, fără rezultatul scrierii', [["return !!z?.rand && (scriere === 'ok' || scriere === 'deja')", 'return !!z?.rand']]],
   ['C3 tranzitoriul = confirmat', [["if (z?.neschimbat === true || (typeof z?.lipsa === 'string' && z.lipsa) ||", 'if (z?.neschimbat === true || z?.lipsa || z?.tranzitoriu ||']]],
-  ['R1 reverificarea ignorată', [["if (!ex.has(d) || (mod === 'backfill' && reverifica)) z.push(d)", 'if (!ex.has(d)) z.push(d)']]],
+  ['R1 reverificarea ignorată', [['if (!ex.has(d) || reverifica) z.push(d)', 'if (!ex.has(d)) z.push(d)']]],
   // r3
   ['G1 garda de pierdere scoasă (versiunea parțială se scrie)', [['if (pierdute.length) return', 'if (false) return']]],
   ['G2 câmpurile pierdute nu se mai calculează', [['.filter(c => anterior[c] != null && nou[c] == null)', '.filter(c => false)']]],

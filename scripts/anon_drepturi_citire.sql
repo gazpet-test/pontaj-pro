@@ -7,9 +7,12 @@
 -- Rulare (ieșirea rămâne pe server, NU în repo: conține lista completă a obiectelor):
 --   psql -X -v ON_ERROR_STOP=1 -P pager=off -A -F '<TAB>' -f scripts/anon_drepturi_citire.sql > <dosarul de rapoarte>/anon_drepturi_citire_<data>.tsv 2>&1
 -- Secțiunile (prima coloană): CONTEXT, INVENTAR, OBIECT (un rând pe obiect: treapta, eticheta, amprenta, detaliu, motiv), BASELINE (rândul de
---   lipit în fiecare migrare), CONTROL (numărul + amprenta lui RAMANE, pentru controlul periodic), RAMANE (ce mai are anon după fiecare
---   treaptă), RPC_PUBLIC, FUNCTII_ANON, POLITICI_ANON; apoi NOTICE-urile SIMULARE (ce citește anon azi, ca anon, doar citire) și STATISTICI
---   (interogările rulate ca anon, dacă extensia de statistici e instalată).
+--   lipit în fiecare migrare), CONTROL (numărul + amprenta lui RAMANE și, r5, a politicilor pentru anon / PUBLIC pe relații fără niciun drept
+--   pentru anon, pentru controlul periodic), RAMANE (ce mai are anon după fiecare treaptă), RPC_PUBLIC, FUNCTII_ANON, POLITICI_ANON,
+--   CONTEXT_POSTGREST (r6: contextul cererii simulate); apoi NOTICE-urile SIMULARE (ce citește anon azi, ca anon, în contextul unei cereri
+--   PostgREST fără sesiune; r6: întâi analiza din catalog cu lista albă de funcții, apoi execuția; ieșirea e o PROBĂ, nu o demonstrație) și
+--   STATISTICI (interogările rulate ca anon, pe clase, cu queryid + stats_since, martorul PostgREST și linia-rezumat de comparat între două
+--   citiri, dacă extensia de statistici e încărcată).
 -- Lista revizuită = secțiunea OBIECT. Migrarea calculează aceeași listă (blocul REGULA_ANON v2, identic octet cu octet) și o compară cu
 --   numărul + amprenta din BASELINE: orice diferență (obiect nou, șters, RECREAT, alte drepturi, alte politici / RLS / corp de vedere /
 --   DEFAULT-uri) = refuz, iar migrarea își scrie lista în NOTICE. Amprenta conține oid-uri: BASELINE-ul se ia din ACEEAȘI bază pe care se
@@ -212,6 +215,20 @@ SELECT y.sectiune, y.treapta, y.eticheta, y.amprenta, y.detaliu, y.motiv FROM (
   SELECT 'CONTROL', 2, 4, a.treapta, 'ramane dupa toate treptele', a.amprenta, a.obiecte::text || ' obiecte', 'se compara cu ultima citire revizuita'
     FROM anon_agregat a WHERE a.treapta = 'RAMANE'
   UNION ALL
+  -- r5 (review r4): politicile care numesc anon / PUBLIC pe relații din public unde anon NU are niciun drept efectiv (direct, prin PUBLIC
+  -- sau prin apartenență; pe obiect sau pe coloane). Azi fără efect, dar un GRANT ulterior le-ar activa; RAMANE nu le vede (regula ia doar
+  -- obiectele cu drepturi pentru anon). Număr + amprentă (oid, nume, comandă, fel, roluri, expresiile USING / CHECK din catalog); lista:
+  -- secțiunea POLITICI_ANON, coloana anon_are_drept = false. Un rând mereu (0 politici = md5('')).
+  SELECT 'CONTROL', 2, 5, 'POLITICI_ANON', 'politici anon / PUBLIC pe relatii fara drept anon', md5(coalesce(string_agg(p.l, chr(10) ORDER BY p.l COLLATE "C"), '')),
+         count(p.l)::text || ' politici', 'se compara cu ultima citire revizuita'
+    FROM (SELECT c.oid::text || ' ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || ' ' || quote_ident(pol.polname) || ':' || pol.polcmd::text
+                 || ':' || pol.polpermissive::text || ':' || pol.polroles::text || ':' || coalesce(pol.polqual::text, '-') || ':' || coalesce(pol.polwithcheck::text, '-') AS l
+            FROM pg_catalog.pg_policy pol JOIN pg_catalog.pg_class c ON c.oid = pol.polrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace, anon_id a
+           WHERE n.nspname = 'public' AND (0::oid = ANY (pol.polroles) OR a.oid = ANY (pol.polroles))
+             -- lista de drepturi = ORICARE dintre ele: NOT = niciunul
+             AND NOT has_table_privilege(a.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+             AND NOT has_any_column_privilege(a.oid, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) p
+  UNION ALL
   -- ce mai are anon după fiecare treaptă (cumulat), pe categorie și motiv; detaliu = numărul de obiecte
   SELECT 'RAMANE', 3, e.ordine, e.etapa, split_part(g.eticheta, ' ', 1), NULL, count(*)::text,
          coalesce(g.motiv, 'de retras in ' || g.treapta)
@@ -241,9 +258,12 @@ SELECT 'FUNCTII_ANON' AS sectiune, n.nspname::text AS schema, p.oid::regprocedur
  ORDER BY 2, 3;
 
 -- ── POLITICI_ANON: politicile care includ anon sau PUBLIC (tabelele lor rămân în afara T2). Pentru o eventuală treaptă ulterioară:
---    dacă TOATE cer cont (auth.uid() nenul / profil) și SIMULARE arată 0 rânduri, se pot adăuga cu o migrare separată ──
+--    dacă TOATE cer cont (auth.uid() nenul / profil) și SIMULARE arată 0 rânduri, se pot adăuga cu o migrare separată.
+--    r5: anon_are_drept = false => politica e pe o relație fără niciun drept pentru anon (numărate în CONTROL POLITICI_ANON) ──
 SELECT 'POLITICI_ANON' AS sectiune, c.oid::regclass::text AS tabel, pol.polname::text AS politica, pol.polcmd::text AS comanda,
        CASE WHEN pol.polpermissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END AS fel,
+       (has_table_privilege('anon', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+        OR has_any_column_privilege('anon', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) AS anon_are_drept,
        (SELECT string_agg(CASE ro WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(ro) END, ',' ORDER BY 1) FROM unnest(pol.polroles) ro) AS roluri,
        coalesce(pg_get_expr(pol.polqual, pol.polrelid), 'true') AS using_expr,
        coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '(= USING)') AS check_expr
@@ -251,86 +271,337 @@ SELECT 'POLITICI_ANON' AS sectiune, c.oid::regclass::text AS tabel, pol.polname:
  WHERE n.nspname = 'public' AND (0::oid = ANY (pol.polroles) OR 'anon'::regrole::oid = ANY (pol.polroles))
  ORDER BY 2, 3;
 
--- ── SIMULARE (NOTICE): ca anon (JWT fără utilizator), doar citire — ce CITEȘTE anon efectiv din relațiile pe care are drept de citire? ──
---    Se citesc VALORILE (cel mult 2 rânduri, doar coloanele pe care anon le poate citi), nu doar existența unui rând (r2, review #1081 P2:
---    EXISTS nu evaluează valorile, iar o vedere-agregat dă un rând chiar fără date). Fiecare relație primește UNA din clasele:
+-- ── CONTEXT_POSTGREST (r6, review #1090): contextul pus de simulare și ce se vede din bază despre configurarea PostgREST ──
+--    O cerere GET prin PostgREST cu cheia publică, fără sesiune, rulează într-o tranzacție în care PostgREST pune: rolul (anon), search_path
+--    (schemele configurate + cele „extra”), request.jwt.claims (revendicările cheii), request.method, request.path, request.headers,
+--    request.cookies; apoi funcția pre-request (dacă e configurată) și, din v12, setările rolului anon. SIMULARE pune: rolul anon;
+--    search_path = public, extensions (valorile implicite Supabase); request.jwt.claims = {"iss":"supabase","role":"anon"}; formele vechi
+--    request.jwt.claim.sub / .role = '' (pentru auth.uid / auth.role = „nepuse”); request.method = GET; request.path = /<relatia>;
+--    request.headers = request.cookies = {} (puse, dar NEMODELATE: valorile reale nu se cunosc).
+--    Setările MODELATE (valoarea simulată = cea reală): citite direct (current_setting) în vederi / politici: request.method, request.path,
+--    request.jwt.claim.sub, request.jwt.claim.role; în plus, DOAR în corpul lui auth.uid() / auth.role(): request.jwt.claims (din care ele
+--    citesc doar sub / role). Orice altă setare citită (request.jwt.claims direct, request.headers, chei calculate, setări proprii) => relația
+--    e NEEXECUTATA, cu numele setării. Aici: setările din bază ale rolurilor anon / authenticator (DOAR numele: valorile pot conține secrete)
+--    și dacă printre ele e pgrst.db_pre_request. LIMITĂ: configurarea PostgREST din afara bazei (variabile de mediu: pre-request, scheme) și
+--    setările rolului anon aplicate de PostgREST (ex. statement_timeout) nu sunt simulate (vezi docs/SECURITATE_ANON_DREPTURI.md §2).
+SELECT 'CONTEXT_POSTGREST' AS sectiune,
+       EXISTS (SELECT 1 FROM pg_roles ro WHERE ro.rolname = 'authenticator') AS rol_authenticator,
+       (SELECT coalesce(string_agg(k.c, ',' ORDER BY k.c), '-') FROM (
+          SELECT DISTINCT split_part(x.s, '=', 1) AS c FROM pg_db_role_setting rs JOIN pg_roles ro ON ro.oid = rs.setrole, unnest(rs.setconfig) x(s)
+           WHERE ro.rolname = 'anon' AND rs.setdatabase IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database()))) k) AS setari_rol_anon,
+       (SELECT coalesce(string_agg(k.c, ',' ORDER BY k.c), '-') FROM (
+          SELECT DISTINCT split_part(x.s, '=', 1) AS c FROM pg_db_role_setting rs JOIN pg_roles ro ON ro.oid = rs.setrole, unnest(rs.setconfig) x(s)
+           WHERE ro.rolname = 'authenticator' AND rs.setdatabase IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database()))) k) AS setari_rol_authenticator,
+       EXISTS (SELECT 1 FROM pg_db_role_setting rs JOIN pg_roles ro ON ro.oid = rs.setrole, unnest(rs.setconfig) x(s)
+                WHERE ro.rolname = 'authenticator' AND split_part(x.s, '=', 1) = 'pgrst.db_pre_request') AS pre_request_in_baza,
+       'public, extensions' AS search_path_simulat, 'GET' AS metoda_simulata, '{"iss":"supabase","role":"anon"}' AS revendicari_simulate;
+
+-- ── SIMULARE (NOTICE): ca anon, în contextul unei cereri GET PostgREST fără sesiune (CONTEXT_POSTGREST), doar citire — ce CITEȘTE anon? ──
+--    Ieșirea e o PROBĂ, nu o demonstrație: unde scriptul nu poate analiza, spune NEEXECUTATA / AMBIGUU, nu „dovedit”. T2 doar retrage
+--    drepturi și se reface exact cu revenirea: o concluzie greșită aici nu scurge date, ci duce la o pagină cu „fără drept” după T2.
+--    Pentru fiecare relație din public pe care anon o poate citi, în ordinea:
+--    1. ANALIZA, FĂRĂ EXECUȚIE (r6, review #1090 P1.5): ÎNCHIDEREA relației = tot ce evaluează o citire ca anon, din catalog: regula de citire
+--       a fiecărei vederi (arborele intern din pg_rewrite: relațiile :relid, funcțiile :funcid / :opfuncid / :aggfnoid / :winfnoid / ...,
+--       operatorii :opno / :eqop / :sortop / :opnos -> funcția lor; plus pg_depend), recursiv prin vederi, și politicile pe care le aplică
+--       CITITORUL EFECTIV al fiecărui tabel (r7, review r2 #1090 P1), recursiv prin relațiile citite de ele. Cititorul efectiv: anon pentru
+--       relația citită direct și pentru relațiile unei vederi security_invoker (oriunde în lanț); PROPRIETARUL vederii pentru relațiile unei
+--       vederi obișnuite (fiecare nivel); relațiile din politicile unui tabel = același cititor ca tabelul (probat pe PG 18). Politicile
+--       aplicate: RLS pornit, SELECT / ALL, pentru PUBLIC sau pentru un rol ale cărui drepturi le are cititorul; niciuna dacă cititorul ocolește
+--       RLS (superuser, BYPASSRLS, proprietarul tabelului fără FORCE) — linia „SIMULARE cititori pentru …” spune, înaintea execuției, ce tabel
+--       e citit ca alt rol decât anon sau fără politici. Funcțiile din sistem nu
+--       apar în pg_depend (sunt fixe), de aceea se citesc din arborele intern. Corpurile funcțiilor NU se urmăresc: e admisă DOAR LISTA ALBĂ:
+--         - funcții de sistem (pg_catalog, create la initdb: oid < 16384), fără SECURITY DEFINER, fără SET în definiție, IMUABILE (prin
+--           contract nu citesc baza, setări sau fișiere) sau STABILE de pe lista v_stabile (dată / oră, JSON, text: depind doar de fusul
+--           orar / formate / limbă). Agregatele de sistem intră aici (count, sum, max, string_agg, json_agg ...);
+--         - current_setting, doar dacă TOATE apelurile din vederile / politicile închiderii au cheie literală MODELATĂ (CONTEXT_POSTGREST);
+--         - auth.uid() / auth.role() (schema auth, fără argumente, SQL, fără DEFINER / SET, corp citit la rulare): doar dacă tot ce citește
+--           corpul sunt setările modelate, cu cheie literală, și nu citește tabele (fără FROM).
+--       ORICE altă funcție (a noastră, de extensie, cu SET în definiție, SECURITY DEFINER, volatilă, de sistem stabilă din afara listei, ex.
+--       query_to_xml / table_to_xml / pg_read_file / lo_get / pg_advisory_lock, auth.jwt()), inclusiv într-o politică a proprietarului unei
+--       vederi obișnuite => relația NU SE EXECUTĂ deloc: clasa
+--       NEEXECUTATA, cu numele funcției și motivul; contează ca AMBIGUU la concluzie.
+--    2. EXECUȚIA (doar cu închiderea pe lista albă): se citesc VALORILE (cel mult 2 rânduri, doar coloanele citibile de anon). Clasa:
 --      GOL                = 0 rânduri;
---      un rând cu TOATE valorile NULL / zero = AMBIGUU (r4, review r3 P2: un tabel obișnuit cu un rând vizibil „(0)” arată la fel ca o vedere
---                           de contoare fără date), confirmat apoi separat, din DEFINIȚIA relației:
---        AGREGAT_FARA_DATE  = vedere (relkind v) a cărei interogare de vârf (arborele din pg_rewrite, citit fără deparsare) e UNA singură,
---                             SELECT, cu agregate, FĂRĂ GROUP BY / GROUPING SETS / HAVING / operații de mulțimi / funcții-mulțime în listă:
---                             o astfel de interogare dă mereu exact un rând, oricâte date ar vedea anon (zero = nimic vizibil);
---        DATE_CITIBILE      = orice altceva (tabel, vedere materializată, tabel străin, vedere fără agregat de vârf sau cu GROUP BY): rândul
---                             poate fi chiar un rând de date;
---        AMBIGUU            = rămâne așa doar dacă definiția nu se poate citi / descifra (lipsă, altă formă decât cea știută): neconfirmat;
---      DATE_CITIBILE      = orice alt rezultat (un rând cu o valoare nenulă / nezero sau ≥ 2 rânduri) => o pagină / un client poate depinde de
---                           acel drept: se analizează ÎNAINTE de T2;
---      EROARE             = cererea pică (SQLSTATE + mesaj); 42501 = drept refuzat (nimic citit), altă eroare = rezultat NECUNOSCUT.
---    Concluzia „zero date citibile” cere 0 DATE_CITIBILE, 0 AMBIGUU neconfirmate și 0 erori necunoscute (linia „SIMULARE concluzie”). O vedere
---    peste o altă vedere-agregat (SELECT * FROM v_contor) iese prudent DATE_CITIBILE: se analizează de mână. Valorile NU se afișează (doar clasa
---    și numele relației). Politicile care cer cont sunt filtre constante. Tot blocul are plafon 120 s; la depășire = eroare, se rulează pe clonă.
+--      DATE_CITIBILE      = un rând cu o valoare nenulă / nezero sau ≥ 2 rânduri;
+--      un rând cu TOATE valorile NULL / zero: forma rezultatului nu dovedește nimic; se judecă SURSA, pe calea de date a închiderii (vederi și
+--                           relațiile citite de ele, fără relațiile citite doar de politici, care doar filtrează):
+--        FARA_DATE_LA_SURSA = relația e o vedere security_invoker; pe calea de date doar relații din public: vederi security_invoker și cel
+--                             puțin un tabel, fiecare citit EFECTIV ca anon (EXISTS): 42501 = fără drept, altfel 0 rânduri vizibile;
+--        CONSTANTA (fără surse în catalog) = aceleași condiții, dar nicio relație pe calea de date (ex. VALUES): valorile vin doar din
+--                             funcțiile listei albe;
+--        DATE_CITIBILE      = tabel (rândul poate fi un rând de date); vedere materializată / tabel străin (la vârf sau pe calea de date);
+--                             vedere fără security_invoker (citește ca proprietarul); un tabel de bază cu ≥ 1 rând vizibil ca anon;
+--        AMBIGUU            = relație în afara schemelor noastre (inclusiv catalogul), dependență de alt fel, altă eroare decât 42501;
+--      EROARE             = cererea pică (SQLSTATE + mesaj); 42501 = drept refuzat (nimic citit), altă eroare = NECUNOSCUT.
+--    Concluzia „ZERO date citibile ca anon (proba pe aceasta baza, in limitele din document)” cere 0 DATE_CITIBILE, 0 AMBIGUU,
+--    0 NEEXECUTATE și 0 erori necunoscute. LIMITE: docs/SECURITATE_ANON_DREPTURI.md §2. Valorile NU se afișează. Plafon 120 s pe tot blocul.
+--    Interogările proprii ale scriptului poartă eticheta anon_drepturi_citire (STATISTICI le numără separat, ca „proprii”).
 SET LOCAL statement_timeout = '120s';
+SET LOCAL search_path = public, extensions;
 SET LOCAL ROLE anon;
-SELECT set_config('request.jwt.claims', '{"role":"anon"}', true), set_config('request.jwt.claim.role', 'anon', true),
-       set_config('request.jwt.claim.sub', '', true);
 DO $simulare$
-DECLARE r record; v_cols text; v_j jsonb; v_date integer := 0; v_agregat integer := 0; v_gol integer := 0; v_err integer := 0;
-        v_ambiguu integer := 0; v_err_necunoscut integer := 0; v_def text; v_sus text; v_ad integer; v_q integer; v_esc boolean; v_ch text;
-        v_clasa text;
+DECLARE
+  r record; d record; v_b text; v_cols text; v_j jsonb;
+  v_date integer := 0; v_sursa integer := 0; v_const integer := 0; v_gol integer := 0; v_err integer := 0; v_ambiguu integer := 0;
+  v_neexec integer := 0; v_err_necunoscut integer := 0;
+  v_baza integer; v_fara_drept integer; v_zero integer; v_ex boolean; v_m_date text; v_m_amb text; v_neadmise text; v_setari boolean;
+  v_baze text[]; v_vederi oid[]; v_politici oid[]; v_cititori text; v_c1 bigint; v_c2 bigint; v_chei text; v_anon oid;
+  v_scheme text[] := ARRAY['public'];   -- schemele noastre (lărgite doar prin review)
+  -- lista albă a funcțiilor de sistem STABILE (în afara celor imuabile): rezultatul depinde doar de fusul orar / formate / limbă
+  v_stabile text[] := ARRAY['now', 'statement_timestamp', 'transaction_timestamp', 'age', 'date', 'date_add', 'date_subtract', 'date_part',
+    'date_trunc', 'extract', 'generate_series', 'make_timestamptz', 'overlaps', 'time', 'timetz', 'timestamp', 'timestamptz', 'timezone',
+    'to_char', 'to_date', 'to_number', 'to_timestamp', 'interval_pl_timestamptz', 'timestamptz_pl_interval', 'timestamptz_mi_interval',
+    'date_cmp_timestamptz', 'date_eq_timestamptz', 'date_ge_timestamptz', 'date_gt_timestamptz', 'date_le_timestamptz', 'date_lt_timestamptz',
+    'date_ne_timestamptz', 'timestamp_cmp_timestamptz', 'timestamp_eq_timestamptz', 'timestamp_ge_timestamptz', 'timestamp_gt_timestamptz',
+    'timestamp_le_timestamptz', 'timestamp_lt_timestamptz', 'timestamp_ne_timestamptz', 'timestamptz_cmp_date', 'timestamptz_eq_date',
+    'timestamptz_ge_date', 'timestamptz_gt_date', 'timestamptz_le_date', 'timestamptz_lt_date', 'timestamptz_ne_date',
+    'timestamptz_cmp_timestamp', 'timestamptz_eq_timestamp', 'timestamptz_ge_timestamp', 'timestamptz_gt_timestamp',
+    'timestamptz_le_timestamp', 'timestamptz_lt_timestamp', 'timestamptz_ne_timestamp',
+    'to_json', 'to_jsonb', 'array_to_json', 'row_to_json', 'json_agg', 'json_agg_strict', 'jsonb_agg', 'jsonb_agg_strict', 'json_object_agg',
+    'json_object_agg_strict', 'json_object_agg_unique', 'json_object_agg_unique_strict', 'json_build_array', 'json_build_object',
+    'jsonb_build_array', 'jsonb_build_object', 'json_populate_record', 'json_populate_recordset', 'json_to_record', 'json_to_recordset',
+    'jsonb_populate_record', 'jsonb_populate_recordset', 'jsonb_to_record', 'jsonb_to_recordset', 'jsonb_path_exists_tz',
+    'jsonb_path_match_tz', 'jsonb_path_query_tz', 'jsonb_path_query_array_tz', 'jsonb_path_query_first_tz',
+    'array_to_string', 'concat', 'concat_ws', 'format', 'quote_literal', 'quote_nullable', 'anytextcat', 'textanycat', 'length', 'numeric',
+    'money', 'to_tsvector', 'to_tsquery', 'plainto_tsquery', 'phraseto_tsquery', 'websearch_to_tsquery', 'ts_headline', 'json_to_tsvector',
+    'jsonb_to_tsvector'];
+  -- setările modelate, citite DIRECT (current_setting) în vederi / politici; auth.uid / auth.role pot citi în plus request.jwt.claims
+  v_modelate text[] := ARRAY['request.method', 'request.path', 'request.jwt.claim.sub', 'request.jwt.claim.role'];
+  v_re_noduri text := ':(relid|funcid|opfuncid|hashfuncid|negfuncid|aggfnoid|winfnoid|tsmhandler|startInRangeFunc|endInRangeFunc|opno|eqop|sortop) ([0-9]+)';
+  v_re_liste text := ':opnos [(]o([ 0-9]*)[)]';
 BEGIN
-  FOR r IN SELECT c.oid, c.relkind::text AS tip, quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS nume FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  SELECT /* anon_drepturi_citire */ ro.oid INTO v_anon FROM pg_roles ro WHERE ro.rolname = 'anon';
+  -- contextul cererii (CONTEXT_POSTGREST); request.path se pune pentru fiecare relație, înainte de citire
+  PERFORM /* anon_drepturi_citire */ set_config('request.jwt.claims', '{"iss":"supabase","role":"anon"}', true),
+          set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true),
+          set_config('request.method', 'GET', true), set_config('request.headers', '{}', true), set_config('request.cookies', '{}', true);
+  FOR r IN SELECT /* anon_drepturi_citire */ c.oid, c.relkind::text AS tip, c.relname::text AS relname,
+                  quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS nume
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
               AND (has_table_privilege(c.oid, 'SELECT') OR has_any_column_privilege(c.oid, 'SELECT'))
-            ORDER BY 2 LOOP
+            ORDER BY 2, 4 LOOP
     BEGIN
+      -- ── 1. ANALIZA (fără execuție): închiderea + lista albă ──
+      v_neadmise := NULL; v_m_date := NULL; v_m_amb := NULL; v_setari := false; v_baze := '{}'; v_vederi := '{}'; v_politici := '{}';
+      v_cititori := NULL;
+      FOR d IN
+        -- r7 (review r2 #1090 P1): fiecare relație din închidere poartă CITITORUL EFECTIV (cititor = rolul cu ale cărui drepturi și politici
+        -- e citită): anon la vârf; relațiile din regula unei vederi: anon dacă vederea e security_invoker (chiar imbricată într-o vedere
+        -- obișnuită), altfel PROPRIETARUL vederii (fiecare nivel, pe lanț); relațiile din politicile unui tabel: același cititor ca tabelul.
+        -- Politicile analizate = cele aplicate de PostgreSQL acelui cititor: RLS pornit, fără ocolire (superuser, BYPASSRLS, proprietarul
+        -- tabelului / membru al lui fără FORCE), SELECT / ALL, pentru PUBLIC sau pentru un rol ale cărui drepturi le are (pg_has_role USAGE).
+        WITH RECURSIVE /* anon_drepturi_citire */ inchidere(fel, cls, obj, cale, cititor) AS (
+          SELECT 'rel'::text, 'pg_catalog.pg_class'::regclass::oid, r.oid, 'date'::text, v_anon
+          UNION
+          SELECT x.fel, x.cls, x.obj, x.cale, x.cititor FROM inchidere i CROSS JOIN LATERAL (
+            -- arborii evaluați: regula de citire a unei vederi (cale = cea a vederii) și politicile aplicate cititorului (cale = politica)
+            SELECT m.fel, m.cls, m.obj, s.cale, s.cititor
+              FROM (SELECT rw.ev_action::text AS arbore, 'pg_catalog.pg_rewrite'::regclass::oid AS dcls, rw.oid AS dobj, i.cale,
+                           CASE WHEN coalesce((SELECT o.option_value::boolean FROM pg_options_to_table(vc.reloptions) o
+                                                WHERE o.option_name = 'security_invoker'), false) THEN v_anon
+                                ELSE vc.relowner END AS cititor
+                      FROM pg_rewrite rw JOIN pg_class vc ON vc.oid = rw.ev_class AND vc.relkind = 'v'
+                     WHERE i.fel = 'rel' AND rw.ev_class = i.obj AND rw.ev_type = '1'
+                    UNION ALL
+                    SELECT coalesce(pol.polqual::text, ''), 'pg_catalog.pg_policy'::regclass::oid, pol.oid, 'politica', i.cititor
+                      FROM pg_policy pol JOIN pg_class tc ON tc.oid = pol.polrelid AND tc.relrowsecurity
+                     WHERE i.fel = 'rel' AND pol.polrelid = i.obj AND pol.polcmd IN ('r', '*')
+                       AND NOT coalesce((SELECT (cr.rolsuper OR cr.rolbypassrls OR (pg_has_role(i.cititor, tc.relowner, 'USAGE') AND NOT tc.relforcerowsecurity))
+                                           FROM pg_roles cr WHERE cr.oid = i.cititor), false)
+                       AND (0::oid = ANY (pol.polroles)
+                            OR EXISTS (SELECT 1 FROM unnest(pol.polroles) pr(o) WHERE pr.o <> 0 AND pg_has_role(i.cititor, pr.o, 'USAGE')))) s
+              CROSS JOIN LATERAL (
+                -- din arborele intern (vede și obiectele de sistem, pe care pg_depend nu le înregistrează)
+                SELECT CASE WHEN e.k[1] = 'relid' THEN 'rel' WHEN e.k[1] IN ('opno', 'eqop', 'sortop') THEN 'op' ELSE 'fn' END AS fel,
+                       CASE WHEN e.k[1] = 'relid' THEN 'pg_catalog.pg_class'::regclass::oid
+                            WHEN e.k[1] IN ('opno', 'eqop', 'sortop') THEN 'pg_catalog.pg_operator'::regclass::oid
+                            ELSE 'pg_catalog.pg_proc'::regclass::oid END AS cls,
+                       e.k[2]::oid AS obj
+                  FROM regexp_matches(s.arbore, v_re_noduri, 'g') e(k) WHERE e.k[2] <> '0'
+                UNION ALL
+                SELECT 'op', 'pg_catalog.pg_operator'::regclass::oid, o.x::oid
+                  FROM regexp_matches(s.arbore, v_re_liste, 'g') e(k), regexp_split_to_table(btrim(e.k[1]), ' +') o(x) WHERE o.x <> ''
+                UNION ALL
+                -- din pg_depend (obiectele utilizatorilor, inclusiv constantele regclass)
+                SELECT CASE dp.refclassid WHEN 'pg_catalog.pg_class'::regclass::oid THEN 'rel' WHEN 'pg_catalog.pg_proc'::regclass::oid THEN 'fn'
+                                          WHEN 'pg_catalog.pg_operator'::regclass::oid THEN 'op' ELSE 'alt' END,
+                       dp.refclassid, dp.refobjid
+                  FROM pg_depend dp WHERE dp.classid = s.dcls AND dp.objid = s.dobj
+                UNION ALL
+                -- politica însăși (verificarea cheilor din current_setting se face pe exact politicile aplicate)
+                SELECT 'pol', s.dcls, s.dobj WHERE s.dcls = 'pg_catalog.pg_policy'::regclass::oid
+              ) m
+            UNION ALL
+            -- operator: funcția lui
+            SELECT 'fn', 'pg_catalog.pg_proc'::regclass::oid, o.oprcode::oid, i.cale, i.cititor
+              FROM pg_operator o WHERE i.fel = 'op' AND o.oid = i.obj AND o.oprcode::oid <> 0
+          ) x
+          WHERE NOT (x.fel = i.fel AND x.obj = i.obj)
+        )
+        SELECT i.fel, i.cls, i.obj, i.cale, i.cititori, c.relkind::text AS relkind, cn.nspname::text AS rel_schema,
+               -- tabel cu RLS citit de alt rol decât anon sau de un rol care ocolește RLS: cine îl citește și ce politici se aplică
+               CASE WHEN c.relkind IN ('r', 'p') AND c.relrowsecurity THEN
+                 (SELECT string_agg(pg_get_userbyid(cr.oid) || ' ('
+                           || CASE WHEN cr.rolsuper THEN 'superuser: ocoleste RLS, fara politici de analizat'
+                                   WHEN cr.rolbypassrls THEN 'BYPASSRLS: ocoleste RLS, fara politici de analizat'
+                                   WHEN pg_has_role(cr.oid, c.relowner, 'USAGE') AND NOT c.relforcerowsecurity
+                                     THEN 'proprietarul tabelului, fara FORCE: ocoleste RLS, fara politici de analizat'
+                                   ELSE 'politicile lui analizate' END || ')', ', ' ORDER BY cr.rolname)
+                    FROM pg_roles cr WHERE cr.oid = ANY (i.cititori)
+                     AND (cr.oid <> v_anon OR cr.rolsuper OR cr.rolbypassrls OR (pg_has_role(cr.oid, c.relowner, 'USAGE') AND NOT c.relforcerowsecurity)))
+               END AS cititori_info,
+               quote_ident(cn.nspname) || '.' || quote_ident(c.relname) AS rel_nume,
+               (SELECT o.option_value::boolean FROM pg_options_to_table(c.reloptions) o WHERE o.option_name = 'security_invoker') AS invoker,
+               p.oid IS NOT NULL AS e_functie, p.prosecdef, p.proconfig IS NULL AS fara_config,
+               (SELECT string_agg(split_part(cf.s, '=', 1), ',') FROM unnest(p.proconfig) cf(s)) AS config_chei,
+               p.provolatile::text AS volatil, pn.nspname::text AS pro_schema, p.proname::text AS proname, p.pronargs,
+               l.lanname::text AS limbaj, p.prosrc, p.prosqlbody IS NOT NULL AS corp_atomic, p.oid < 16384 AS sistem,
+               quote_ident(pn.nspname) || '.' || quote_ident(p.proname) || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS functie
+          FROM (SELECT j.fel, j.cls, j.obj, min(j.cale) AS cale, array_agg(DISTINCT j.cititor) AS cititori FROM inchidere j GROUP BY j.fel, j.cls, j.obj) i
+          LEFT JOIN pg_class c ON i.fel = 'rel' AND c.oid = i.obj
+          LEFT JOIN pg_namespace cn ON cn.oid = c.relnamespace
+          LEFT JOIN pg_proc p ON i.fel = 'fn' AND p.oid = i.obj
+          LEFT JOIN pg_namespace pn ON pn.oid = p.pronamespace
+          LEFT JOIN pg_language l ON l.oid = p.prolang
+         ORDER BY i.fel, i.cale, i.obj
+      LOOP
+        IF d.fel = 'fn' THEN
+          IF NOT d.e_functie THEN
+            v_neadmise := concat_ws('; ', v_neadmise, 'functie inexistenta in catalog (oid ' || d.obj::text || ')');
+          ELSIF d.pro_schema = 'pg_catalog' AND d.sistem AND NOT d.prosecdef AND d.fara_config AND (d.volatil = 'i' OR d.proname = ANY (v_stabile)) THEN
+            NULL;   -- lista albă: funcție de sistem imuabilă sau stabilă din v_stabile
+          ELSIF d.pro_schema = 'pg_catalog' AND d.sistem AND NOT d.prosecdef AND d.fara_config AND d.proname = 'current_setting' THEN
+            v_setari := true;   -- admisă doar dacă toate cheile sunt literale și modelate (după închidere)
+          ELSIF d.pro_schema = 'auth' AND d.proname IN ('uid', 'role') AND d.pronargs = 0 AND NOT d.prosecdef AND d.fara_config
+                AND d.limbaj = 'sql' AND d.volatil IN ('i', 's') AND NOT d.corp_atomic THEN
+            -- corpul: doar current_setting cu cheie literală modelată (+ request.jwt.claims), fără citiri din tabele
+            SELECT /* anon_drepturi_citire */ count(*) INTO v_c1 FROM regexp_matches(d.prosrc, 'current_setting[[:space:]]*[(]', 'gi') m;
+            SELECT /* anon_drepturi_citire */ count(*) FILTER (WHERE m.k[1] = ANY (v_modelate || 'request.jwt.claims'::text)),
+                   string_agg(DISTINCT m.k[1], ',') FILTER (WHERE NOT (m.k[1] = ANY (v_modelate || 'request.jwt.claims'::text)))
+              INTO v_c2, v_chei FROM regexp_matches(d.prosrc, 'current_setting[[:space:]]*[(][[:space:]]*''([^'']*)''', 'gi') m(k);
+            IF v_c1 = 0 OR v_c1 <> v_c2 OR d.prosrc ~* '[[:<:]]from[[:>:]]' THEN
+              v_neadmise := concat_ws('; ', v_neadmise, d.functie || ' [corp in afara listei: setari ' || coalesce(v_chei, 'calculate / tabele') || ']');
+            END IF;
+          ELSE
+            v_neadmise := concat_ws('; ', v_neadmise, d.functie || ' [' ||
+              CASE WHEN d.prosecdef THEN 'SECURITY DEFINER'
+                   WHEN NOT d.fara_config THEN 'SET in definitie: ' || d.config_chei
+                   WHEN d.pro_schema = 'auth' AND d.proname = 'jwt' THEN 'revendicarile complete ale cheii (ref / iat / exp) nu sunt modelate'
+                   WHEN d.pro_schema = 'pg_catalog' AND d.sistem AND d.volatil = 'v' THEN 'de sistem, volatila'
+                   WHEN d.pro_schema = 'pg_catalog' AND d.sistem THEN 'de sistem, stabila, in afara listei'
+                   ELSE 'proprie / de extensie, limbaj ' || coalesce(d.limbaj, '?') || ', '
+                        || CASE d.volatil WHEN 'i' THEN 'imuabila' WHEN 's' THEN 'stabila' ELSE 'volatila' END END || ']');
+          END IF;
+        ELSIF d.fel = 'pol' THEN
+          v_politici := v_politici || d.obj;
+        ELSIF d.fel = 'rel' THEN
+          IF d.relkind = 'v' THEN v_vederi := v_vederi || d.obj; END IF;
+          IF d.cititori_info IS NOT NULL THEN v_cititori := concat_ws('; ', v_cititori, d.rel_nume || ' citit ca ' || d.cititori_info); END IF;
+          IF d.cale = 'date' THEN
+            -- calea de date (vederi și ce citesc ele): pentru „un rând doar NULL / zero”; primul motiv de DATE_CITIBILE câștigă, apoi AMBIGUU
+            IF d.relkind IS NULL THEN
+              v_m_amb := coalesce(v_m_amb, 'relatie inexistenta in catalog (oid ' || d.obj::text || ')');
+            ELSIF NOT (d.rel_schema = ANY (v_scheme)) THEN
+              v_m_amb := coalesce(v_m_amb, 'relatie in afara schemelor noastre: ' || d.rel_nume);
+            ELSIF d.relkind = 'v' THEN
+              IF d.invoker IS NOT TRUE THEN
+                v_m_date := coalesce(v_m_date, CASE WHEN d.obj = r.oid THEN 'vedere fara security_invoker: citeste ca proprietarul'
+                                                    ELSE 'vedere intermediara fara security_invoker (citeste ca proprietarul): ' || d.rel_nume END);
+              END IF;
+            ELSIF d.relkind IN ('r', 'p') THEN
+              -- proba la sursă citește tabelul DIRECT ca anon: doar dacă politicile lui anon pe el sunt în analiză (anon e printre cititori)
+              IF v_anon = ANY (d.cititori) THEN v_baze := v_baze || d.rel_nume;
+              ELSE v_m_amb := coalesce(v_m_amb, 'tabel de baza citit doar ca alt rol decat anon: ' || d.rel_nume); END IF;
+            ELSE
+              v_m_date := coalesce(v_m_date, 'relatie cu date proprii fara RLS in inchidere (tip ' || d.relkind || '): ' || d.rel_nume);
+            END IF;
+          END IF;
+        ELSIF d.fel = 'alt' THEN
+          IF d.cls NOT IN ('pg_catalog.pg_type'::regclass, 'pg_catalog.pg_namespace'::regclass, 'pg_catalog.pg_collation'::regclass,
+                           'pg_catalog.pg_language'::regclass, 'pg_catalog.pg_extension'::regclass) THEN
+            v_m_amb := coalesce(v_m_amb, 'dependenta de alt fel: ' || d.cls::regclass::text);
+          END IF;
+        END IF;   -- operator: funcția lui e deja în închidere
+      END LOOP;
+      -- current_setting în închidere: fiecare apel din arborii vederilor / politicilor închiderii trebuie să aibă ca prim argument o
+      -- CONSTANTĂ text cu o cheie MODELATĂ. Cheia se decodează din arborele intern (octeții constantei, fără antetul varlena), fără
+      -- deparsare; o cheie calculată nu e o constantă => numărătorile diferă => refuz.
+      IF v_setari THEN
+        WITH /* anon_drepturi_citire */ t(x) AS (
+          SELECT rw.ev_action::text FROM pg_rewrite rw WHERE rw.ev_class = ANY (v_vederi) AND rw.ev_type = '1'
+          UNION ALL
+          SELECT pol.polqual::text FROM pg_policy pol WHERE pol.oid = ANY (v_politici) AND pol.polqual IS NOT NULL),
+        f(o) AS (SELECT p.oid::text FROM pg_proc p WHERE p.proname = 'current_setting' AND p.pronamespace = 'pg_catalog'::regnamespace),
+        apel(cheie) AS (
+          SELECT (SELECT convert_from(decode(string_agg(lpad(to_hex((o.b::integer + 256) % 256), 2, '0'), '' ORDER BY o.n), 'hex'), 'UTF8')
+                    FROM regexp_split_to_table(btrim(m.k[3]), ' +') WITH ORDINALITY o(b, n)
+                   WHERE o.n > CASE WHEN (split_part(btrim(m.k[3]), ' ', 1)::integer & 1) = 1 THEN 1 ELSE 4 END)
+            FROM t, regexp_matches(t.x, '[{]FUNCEXPR :funcid (' || (SELECT string_agg(f.o, '|') FROM f) || ') [^{]*:args [(]'
+                                        || '([{]CONST :consttype 25 [^[}]*:constvalue [0-9]+ [[] ([-0-9 ]+) []])?', 'g') m(k))
+        SELECT (SELECT count(*) FROM apel), (SELECT count(*) FROM apel a WHERE a.cheie = ANY (v_modelate)),
+               (SELECT string_agg(DISTINCT coalesce(a.cheie, 'cheie calculata'), ',') FROM apel a WHERE a.cheie IS NULL OR NOT (a.cheie = ANY (v_modelate)))
+          INTO v_c1, v_c2, v_chei;
+        IF v_c1 = 0 OR v_c1 <> v_c2 THEN
+          v_neadmise := concat_ws('; ', v_neadmise, 'pg_catalog.current_setting [setari nemodelate: ' || coalesce(v_chei, 'cheie calculata') || ']');
+        END IF;
+      END IF;
+      -- cine citește efectiv tabelele cu RLS ale închiderii, când nu e anon cu politicile lui (înaintea oricărei execuții)
+      IF v_cititori IS NOT NULL THEN
+        RAISE NOTICE 'SIMULARE cititori pentru %: %', r.nume, v_cititori;
+      END IF;
+      IF v_neadmise IS NOT NULL THEN
+        v_neexec := v_neexec + 1;
+        RAISE NOTICE 'SIMULARE anon NEEXECUTATA in % (functie in afara listei: %)', r.nume, v_neadmise;
+        CONTINUE;
+      END IF;
+      -- ── 2. EXECUȚIA (închiderea e toată pe lista albă) ──
+      PERFORM /* anon_drepturi_citire */ set_config('request.path', '/' || r.relname, true);
       -- doar coloanele citibile de anon (cu drepturi doar pe unele coloane, SELECT * ar da 42501 fără să spună nimic despre date)
-      SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) INTO v_cols FROM pg_attribute a
+      SELECT /* anon_drepturi_citire */ string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) INTO v_cols FROM pg_attribute a
        WHERE a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped AND has_column_privilege(r.oid, a.attnum, 'SELECT');
       IF v_cols IS NULL THEN
         v_err := v_err + 1; RAISE NOTICE 'SIMULARE anon EROARE la % (-): nicio coloana citibila', r.nume; CONTINUE;
       END IF;
       -- „alias.*” = rândul întreg (un „to_jsonb(x)” simplu ar lua coloana x, dacă relația are una cu acest nume)
-      EXECUTE 'SELECT coalesce(jsonb_agg(to_jsonb(anon_sim_q.*)), ''[]''::jsonb) FROM (SELECT ' || v_cols || ' FROM ' || r.nume || ' LIMIT 2) anon_sim_q' INTO v_j;
+      EXECUTE 'SELECT /* anon_drepturi_citire */ coalesce(jsonb_agg(to_jsonb(anon_sim_q.*)), ''[]''::jsonb) FROM (SELECT ' || v_cols || ' FROM ' || r.nume || ' LIMIT 2) anon_sim_q' INTO v_j;
       IF jsonb_array_length(v_j) = 0 THEN
         v_gol := v_gol + 1;
       ELSIF jsonb_array_length(v_j) = 1
-            AND NOT EXISTS (SELECT 1 FROM jsonb_each(v_j -> 0) e
+            AND NOT EXISTS (SELECT /* anon_drepturi_citire */ 1 FROM jsonb_each(v_j -> 0) e
                              WHERE NOT (jsonb_typeof(e.value) = 'null' OR (jsonb_typeof(e.value) = 'number' AND e.value::text::numeric = 0))) THEN
-        -- AMBIGUU (un rând, doar NULL / zero): confirmat din definiție. Câmpurile interogării de VÂRF din arborele vederii (pg_rewrite,
-        -- „({QUERY :camp valoare …})”): se păstrează doar textul de la adâncimea 2 (în interiorul primei acolade), fără subarbori; caracterul
-        -- de după un backslash (chr(92), escape-ul din arbore) nu deschide / închide nimic.
-        v_clasa := 'DATE_CITIBILE';
-        IF r.tip = 'v' THEN
-          v_def := (SELECT rw.ev_action::text FROM pg_rewrite rw WHERE rw.ev_class = r.oid AND rw.rulename = '_RETURN');
-          v_sus := ''; v_ad := 0; v_q := 0; v_esc := false;
-          IF v_def IS NOT NULL THEN
-            FOREACH v_ch IN ARRAY regexp_split_to_array(v_def, '') LOOP
-              IF v_esc THEN v_esc := false; IF v_ad = 2 THEN v_sus := v_sus || 'x'; END IF;
-              ELSIF v_ch = chr(92) THEN v_esc := true;
-              ELSIF v_ch IN ('{', '(') THEN v_ad := v_ad + 1; IF v_ad = 2 THEN v_q := v_q + 1; END IF;
-              ELSIF v_ch IN ('}', ')') THEN v_ad := v_ad - 1;
-              ELSIF v_ad = 2 THEN v_sus := v_sus || v_ch;
-              END IF;
-            END LOOP;
-            v_sus := ' ' || v_sus || ' ';
-          END IF;
-          IF v_def IS NULL OR v_q <> 1 OR v_ad <> 0 OR position('QUERY ' IN v_sus) <> 2
-             OR position(' :hasAggs ' IN v_sus) = 0 OR position(' :groupClause ' IN v_sus) = 0 OR position(' :groupingSets ' IN v_sus) = 0
-             OR position(' :havingQual ' IN v_sus) = 0 OR position(' :setOperations ' IN v_sus) = 0 OR position(' :hasTargetSRFs ' IN v_sus) = 0 THEN
-            v_clasa := 'AMBIGUU';   -- forma arborelui nu e cea știută: neconfirmat (nu se ghicește)
-          ELSIF position(' :commandType 1 ' IN v_sus) > 0 AND position(' :hasAggs true ' IN v_sus) > 0
-                AND position(' :groupClause <> ' IN v_sus) > 0 AND position(' :groupingSets <> ' IN v_sus) > 0
-                AND position(' :havingQual <> ' IN v_sus) > 0 AND position(' :setOperations <> ' IN v_sus) > 0
-                AND position(' :hasTargetSRFs false ' IN v_sus) > 0 THEN
-            v_clasa := 'AGREGAT_FARA_DATE';
-          END IF;
+        -- un rând, doar NULL / zero: proba la SURSĂ, pe calea de date a închiderii
+        v_baza := 0; v_fara_drept := 0; v_zero := 0;
+        IF r.tip <> 'v' THEN
+          v_m_amb := NULL;
+          v_m_date := CASE r.tip WHEN 'm' THEN 'vedere materializata: date proprii, fara RLS' WHEN 'f' THEN 'tabel strain: date proprii, fara RLS'
+                                 ELSE 'tabel: randul poate fi un rand de date' END;
+        ELSIF v_m_date IS NULL THEN
+          -- (r7: cu motivul de DATE_CITIBILE deja stabilit, tabelele nu se mai citesc)
+          FOREACH v_b IN ARRAY v_baze LOOP
+            -- tabel de bază: citire EFECTIVĂ ca anon (RLS aplicat, politicile lui sunt deja pe lista albă); 42501 = fără drept
+            v_baza := v_baza + 1;
+            BEGIN
+              EXECUTE 'SELECT /* anon_drepturi_citire */ EXISTS (SELECT 1 FROM ' || v_b || ')' INTO v_ex;
+              IF v_ex THEN v_m_date := coalesce(v_m_date, 'tabel de baza cu randuri vizibile ca anon: ' || v_b);
+              ELSE v_zero := v_zero + 1; END IF;
+            EXCEPTION
+              WHEN insufficient_privilege THEN v_fara_drept := v_fara_drept + 1;
+              WHEN OTHERS THEN v_m_amb := coalesce(v_m_amb, 'eroare ' || SQLSTATE || ' la citirea tabelului de baza ' || v_b);
+            END;
+          END LOOP;
         END IF;
-        IF v_clasa = 'AGREGAT_FARA_DATE' THEN
-          v_agregat := v_agregat + 1; RAISE NOTICE 'SIMULARE anon AGREGAT_FARA_DATE in % (1 rand, doar NULL / zero; confirmat: vedere cu agregat fara GROUP BY)', r.nume;
-        ELSIF v_clasa = 'AMBIGUU' THEN
-          v_ambiguu := v_ambiguu + 1; RAISE NOTICE 'SIMULARE anon AMBIGUU in % (1 rand, doar NULL / zero; definitia nu s-a putut confirma - de analizat)', r.nume;
+        IF v_m_date IS NOT NULL THEN
+          v_date := v_date + 1; RAISE NOTICE 'SIMULARE anon DATE_CITIBILE in % (1 rand doar NULL / zero; %)', r.nume, v_m_date;
+        ELSIF v_m_amb IS NOT NULL THEN
+          v_ambiguu := v_ambiguu + 1; RAISE NOTICE 'SIMULARE anon AMBIGUU in % (1 rand doar NULL / zero; %)', r.nume, v_m_amb;
+        ELSIF v_baza > 0 THEN
+          v_sursa := v_sursa + 1;
+          RAISE NOTICE 'SIMULARE anon FARA_DATE_LA_SURSA in % (1 rand doar NULL / zero; % tabele de baza: % fara drept, % cu 0 randuri vizibile)',
+            r.nume, v_baza, v_fara_drept, v_zero;
         ELSE
-          v_date := v_date + 1; RAISE NOTICE 'SIMULARE anon DATE_CITIBILE in % (1 rand, doar NULL / zero, dar nu e vedere cu agregat fara GROUP BY: poate fi un rand de date)', r.nume;
+          v_const := v_const + 1;
+          RAISE NOTICE 'SIMULARE anon CONSTANTA (fara surse in catalog) in % (1 rand doar NULL / zero; nicio relatie pe calea de date, doar functii din lista alba)', r.nume;
         END IF;
       ELSE
         v_date := v_date + 1; RAISE NOTICE 'SIMULARE anon DATE_CITIBILE in % (% randuri citite, valorile nu se afiseaza)', r.nume, jsonb_array_length(v_j);
@@ -341,30 +612,95 @@ BEGIN
       RAISE NOTICE 'SIMULARE anon EROARE la % (%): %', r.nume, SQLSTATE, SQLERRM;
     END;
   END LOOP;
-  RAISE NOTICE 'SIMULARE rezumat: rolul curent %, % relatii cu date citibile, % ambigue neconfirmate, % agregate fara date (confirmate), % goale, % erori (din care % necunoscute, altele decat 42501)',
-    current_user, v_date, v_ambiguu, v_agregat, v_gol, v_err, v_err_necunoscut;
-  RAISE NOTICE 'SIMULARE concluzie: %', CASE WHEN v_date = 0 AND v_ambiguu = 0 AND v_err_necunoscut = 0 THEN 'ZERO date citibile ca anon (dovedit pe aceasta baza)'
-    ELSE 'NEDOVEDIT: ' || v_date || ' cu date citibile, ' || v_ambiguu || ' ambigue, ' || v_err_necunoscut || ' erori necunoscute - de analizat inainte de T2' END;
+  RAISE NOTICE 'SIMULARE rezumat: rolul curent %, % relatii cu date citibile, % ambigue, % neexecutate, % fara date la sursa, % constante (fara surse in catalog), % goale, % erori (din care % necunoscute, altele decat 42501)',
+    current_user, v_date, v_ambiguu, v_neexec, v_sursa, v_const, v_gol, v_err, v_err_necunoscut;
+  RAISE NOTICE 'SIMULARE concluzie: %', CASE WHEN v_date = 0 AND v_ambiguu = 0 AND v_neexec = 0 AND v_err_necunoscut = 0
+    THEN 'ZERO date citibile ca anon (proba pe aceasta baza, in limitele din document)'
+    ELSE 'NEDOVEDIT: ' || v_date || ' cu date citibile, ' || v_ambiguu || ' ambigue, ' || v_neexec || ' neexecutate, ' || v_err_necunoscut
+         || ' erori necunoscute - de analizat inainte de T2' END;
 END $simulare$;
-RESET ROLE;
+RESET /* anon_drepturi_citire */ ROLE;
 
--- ── STATISTICI (NOTICE): interogările rulate ca anon de la ultima resetare a statisticilor (dacă extensia e instalată) ──
---    Așteptat: doar apelurile RPC ale paginilor publice (fn_red_*, fn_sedinte_rsvp_submit) și ce face platforma; un SELECT / INSERT direct
---    pe un tabel din public = de analizat înainte de T2. Jurnalele API (cererile /rest/v1 fără utilizator) le citește coordonatorul separat.
+-- ── STATISTICI (NOTICE): interogările rulate ca anon, din pg_stat_statements (dacă extensia e instalată și încărcată) ──
+--    Fiecare intrare a lui anon din baza curentă, cu clasa ei (r6, review #1090 P2): forma generată de PostgREST începe cu
+--    „WITH pgrst_<nume> AS” (pgrst_source, pgrst_args); cu „pgrst_call” = rpc (apel de funcție), altfel, dacă numește "public"."…" =
+--    directa (citire / scriere pe o relație din public), DOAR la intrările de la nivelul de sus (r7: toplevel = false = imbricat => alta).
+--    Restul = alta (SQL scris de mână, citiri interne din funcții cu track = all, oricare le-ar fi textul, PostgREST pe alte scheme);
+--    eticheta anon_drepturi_citire = proprie (interogările acestui script); textul ascuns = ascunsa.
+--    Linia fiecărei intrări: queryid | apeluri | stats_since (PG 17: momentul de la care curg contoarele ACELEI intrări) | sus / imbricat.
+--    Rezumatul de comparat între două citiri (regula: docs/SECURITATE_ANON_DREPTURI.md §2):
+--      „STATISTICI rezumat anon | directe: N interogari, S apeluri | rpc: … | alte: … | proprii: P | resetare | evacuari | ascunse | track |
+--       stats_since | martor | dovada: …”
+--    Martorul = interogarea de configurare pe care PostgREST o rulează la începutul FIECĂREI cereri (select set_config(...)), înregistrată
+--    sub anon la cererile fără sesiune: crește la orice cerere fără sesiune, deci arată că sesiunile PostgREST chiar sunt urmărite (e
+--    numărată și la „alte”). LIPSĂ DE DOVADĂ: text ascuns, track ≠ top / all, setări
+--    pg_stat_statements pe rolurile anon / authenticator, fără stats_since, resetare / evacuări necunoscute, martor absent.
 DO $statistici$
-DECLARE r record; v_schema text;
+DECLARE r record; s record; v_schema text; v_reset text; v_dealloc text; v_track text; v_cfg text; v_martor text; v_clasa text;
+        v_since boolean := true; v_top boolean := true; v_db oid;
 BEGIN
   SELECT n.nspname INTO v_schema FROM pg_extension x JOIN pg_namespace n ON n.oid = x.extnamespace WHERE x.extname = 'pg_stat_statements';
   -- r4: sărit = LIPSĂ DE DOVADĂ, nu „zero apeluri ca anon” (condiția T2 cere statistici citite efectiv)
   IF v_schema IS NULL THEN RAISE NOTICE 'STATISTICI: extensia pg_stat_statements nu e instalata - LIPSA DE DOVADA (nu inseamna zero apeluri ca anon)'; RETURN; END IF;
+  SELECT dd.oid INTO v_db FROM pg_database dd WHERE dd.datname = current_database();
+  v_track := coalesce(current_setting('pg_stat_statements.track', true), 'necunoscut');
+  SELECT string_agg(DISTINCT ro.rolname || ':' || split_part(x.s, '=', 1), ',') INTO v_cfg
+    FROM pg_db_role_setting rs JOIN pg_roles ro ON ro.oid = rs.setrole, unnest(rs.setconfig) x(s)
+   WHERE ro.rolname IN ('anon', 'authenticator') AND rs.setdatabase IN (0, v_db) AND starts_with(split_part(x.s, '=', 1), 'pg_stat_statements.');
   BEGIN  -- extensia poate fi instalata fara sa fie incarcata (clona locala): nu e eroare a citirii
-  FOR r IN EXECUTE format('SELECT s.calls, left(regexp_replace(s.query, %L, %L, %L), 300) AS q FROM %I.pg_stat_statements s '
-                          'WHERE s.userid = %L::regrole ORDER BY s.calls DESC LIMIT 300', '[[:space:]]+', ' ', 'g', v_schema, 'anon') LOOP
-    RAISE NOTICE 'STATISTICI anon: % apeluri | %', r.calls, r.q;
-  END LOOP;
-  FOR r IN EXECUTE format('SELECT stats_reset FROM %I.pg_stat_statements_info', v_schema) LOOP
-    RAISE NOTICE 'STATISTICI: resetate ultima data la %', r.stats_reset;
-  END LOOP;
+    BEGIN
+      EXECUTE format('SELECT 1 FROM %I.pg_stat_statements s WHERE s.stats_since IS NULL LIMIT 0', v_schema);
+    EXCEPTION WHEN undefined_column THEN v_since := false;
+    END;
+    BEGIN
+      EXECUTE format('SELECT 1 FROM %I.pg_stat_statements s WHERE s.toplevel LIMIT 0', v_schema);
+    EXCEPTION WHEN undefined_column THEN v_top := false;
+    END;
+    -- r7 (review r2 #1090 P2): o intrare imbricată (toplevel = false: SQL rulat din interiorul unei funcții, cu track = all) nu e o cerere
+    -- PostgREST, oricât ar semăna textul => alta (linia ei poartă marcajul „imbricat”). Fără coloana toplevel (PG < 14): prudent, după text.
+    v_clasa := format('CASE WHEN s.query IS NULL OR s.query = %L THEN %L WHEN strpos(s.query, %L) > 0 THEN %L %s'
+                      'WHEN s.query ~ %L AND strpos(s.query, %L) > 0 THEN %L WHEN s.query ~ %L AND strpos(s.query, %L) > 0 THEN %L ELSE %L END',
+                      '<insufficient privilege>', 'ascunsa', 'anon_drepturi_citire', 'proprie',
+                      CASE WHEN v_top THEN 'WHEN s.toplevel IS NOT TRUE THEN ''alta'' ' ELSE '' END,
+                      '^WITH pgrst_[a-z]+ AS', 'pgrst_call', 'rpc', '^WITH pgrst_[a-z]+ AS', '"public"."', 'directa', 'alta');
+    FOR r IN EXECUTE format('SELECT z.* FROM (SELECT s.queryid, s.calls, %s AS since, %s AS nivel, %s AS clasa, '
+                            '       left(regexp_replace(coalesce(s.query, %L), %L, %L, %L), 300) AS q '
+                            '  FROM %I.pg_stat_statements s WHERE s.userid = %L::regrole AND s.dbid = %s) z '
+                            ' ORDER BY z.clasa <> %L, z.clasa, z.calls DESC, z.queryid LIMIT 1000',
+                            CASE WHEN v_since THEN 's.stats_since::text' ELSE 'NULL::text' END,
+                            CASE WHEN v_top THEN 'CASE WHEN s.toplevel THEN ''sus'' ELSE ''imbricat'' END' ELSE '''?''' END,
+                            v_clasa, '', '[[:space:]]+', ' ', 'g', v_schema, 'anon', v_db, 'directa') LOOP
+      RAISE NOTICE 'STATISTICI anon %: queryid % | % apeluri | stats_since % | % | %', r.clasa, r.queryid, r.calls, coalesce(r.since, 'necunoscut'), r.nivel, r.q;
+    END LOOP;
+    BEGIN
+      EXECUTE format('SELECT stats_reset::text, dealloc::text FROM %I.pg_stat_statements_info', v_schema) INTO v_reset, v_dealloc;
+    EXCEPTION WHEN undefined_table OR undefined_column THEN v_reset := NULL; v_dealloc := NULL;
+    END;
+    -- martorul: pg_stat_statements înregistrează interogarea sub rolul de la sfârșitul ei (după set_config('role', ...) = anon la
+    -- cererile fără sesiune); se caută întâi la anon, apoi la authenticator; interogările proprii ale scriptului nu contează
+    EXECUTE format('SELECT %L || ro.rolname || %L || s.queryid::text || %L || s.calls::text || %L || coalesce(%s, %L) '
+                   '  FROM %I.pg_stat_statements s JOIN pg_roles ro ON ro.oid = s.userid '
+                   ' WHERE ro.rolname IN (%L, %L) AND s.dbid = %s AND strpos(coalesce(s.query, %L), %L) > 0 AND strpos(coalesce(s.query, %L), %L) = 0 '
+                   ' ORDER BY ro.rolname = %L DESC, s.calls DESC, s.queryid LIMIT 1',
+                   'rol ', ' | queryid ', ' | ', ' apeluri | stats_since ', CASE WHEN v_since THEN 's.stats_since::text' ELSE 'NULL::text' END, 'necunoscut',
+                   v_schema, 'anon', 'authenticator', v_db, '', 'set_config(', '', 'anon_drepturi_citire', 'anon') INTO v_martor;
+    RAISE NOTICE 'STATISTICI martor (configurarea fiecarei cereri PostgREST): %', coalesce(v_martor, 'absent');
+    EXECUTE format('SELECT count(*) FILTER (WHERE z.clasa = %L) AS n_dir, coalesce(sum(z.calls) FILTER (WHERE z.clasa = %L), 0) AS s_dir, '
+                   '       count(*) FILTER (WHERE z.clasa = %L) AS n_rpc, coalesce(sum(z.calls) FILTER (WHERE z.clasa = %L), 0) AS s_rpc, '
+                   '       count(*) FILTER (WHERE z.clasa = %L) AS n_alt, coalesce(sum(z.calls) FILTER (WHERE z.clasa = %L), 0) AS s_alt, '
+                   '       count(*) FILTER (WHERE z.clasa = %L) AS n_prop, count(*) FILTER (WHERE z.clasa = %L) AS n_asc '
+                   '  FROM (SELECT s.calls, %s AS clasa FROM %I.pg_stat_statements s WHERE s.userid = %L::regrole AND s.dbid = %s) z',
+                   'directa', 'directa', 'rpc', 'rpc', 'alta', 'alta', 'proprie', 'ascunsa', v_clasa, v_schema, 'anon', v_db) INTO s;
+    RAISE NOTICE 'STATISTICI rezumat anon | directe: % interogari, % apeluri | rpc: % interogari, % apeluri | alte: % interogari, % apeluri | proprii: % | resetare: % | evacuari: % | ascunse: % | track: % | stats_since: % | martor: % | dovada: %',
+      s.n_dir, s.s_dir, s.n_rpc, s.s_rpc, s.n_alt, s.s_alt, s.n_prop, coalesce(v_reset, 'necunoscuta'), coalesce(v_dealloc, 'necunoscut'), s.n_asc,
+      v_track, CASE WHEN v_since THEN 'da' ELSE 'nu' END, CASE WHEN v_martor IS NULL THEN 'absent' ELSE 'da' END,
+      CASE WHEN s.n_asc > 0 THEN 'LIPSA DE DOVADA (texte ascunse: cititorul nu vede toate interogarile)'
+           WHEN v_track NOT IN ('top', 'all') THEN 'LIPSA DE DOVADA (track = ' || v_track || ': interogarile nu se colecteaza)'
+           WHEN v_cfg IS NOT NULL THEN 'LIPSA DE DOVADA (setari pg_stat_statements pe roluri: ' || v_cfg || ')'
+           WHEN NOT v_since THEN 'LIPSA DE DOVADA (fara stats_since pe intrari: resetarile selective nu se vad)'
+           WHEN v_reset IS NULL OR v_dealloc IS NULL THEN 'LIPSA DE DOVADA (momentul resetarii / evacuarile necunoscute)'
+           WHEN v_martor IS NULL THEN 'LIPSA DE DOVADA (martor absent: colectarea pentru sesiunile PostgREST nu se vede)'
+           ELSE 'DA' END;
   EXCEPTION WHEN object_not_in_prerequisite_state THEN
     RAISE NOTICE 'STATISTICI: pg_stat_statements instalata, dar neincarcata (shared_preload_libraries) - sectiune sarita = LIPSA DE DOVADA (nu inseamna zero apeluri ca anon)';
   END;
