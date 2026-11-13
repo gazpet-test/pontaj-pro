@@ -1,0 +1,387 @@
+// ════════════════════════════════════════════════════════════════
+// ❓ Întreabă echipa — mascarea numelor (decizia owner-ului 13.11.2026, A): PREVIZUALIZAREA din ecran.
+// Același algoritm ca worker/intrebari-tehnice/mascare.py (care face mascarea REALĂ, pe server, înainte de orice apel către
+// furnizorul modelului) — paritate pe worker/intrebari-tehnice/teste_mascare.json (L19). Ecranul arată ce ar pleca: numele cunoscute
+// platformei (cât poate citi contul utilizatorului), tiparele (CNP, telefon, e-mail, IBAN, CUI, nr. auto, firme cu SRL / SA …) și
+// cuvintele ascunse manual între [[ și ]]. Pe server se ascunde cel puțin la fel (lista completă de nume + aceleași tipare).
+// Nimic din acest fișier nu trimite date nicăieri.
+// ════════════════════════════════════════════════════════════════
+
+export const CATEGORII = ['PERSOANA', 'FIRMA', 'CNP', 'CUI', 'TELEFON', 'EMAIL', 'IBAN', 'NR_AUTO', 'ASCUNS']
+const ETICHETA_SURSA = '\\[(PERSOANA|FIRMA|CNP|CUI|TELEFON|EMAIL|IBAN|NR_AUTO|ASCUNS)_([1-9][0-9]{0,3})(?:_F([1-9][0-9]{0,2}))?\\]'
+const eticheta = () => new RegExp(ETICHETA_SURSA, 'giu')
+
+const L = '[\\p{L}\\p{M}]'
+const W = '[\\p{L}\\p{M}\\p{N}_]'
+const SP = '[ \\t\\u00a0]'
+const CUVANT = new RegExp(`(?<!${W})${L}+(?:-${L}+)*(?!${W})`, 'gu')
+const NUMAR = /(?<![0-9])[0-9]+(?![0-9])/g
+const SPATIU = new RegExp(`^${SP}+$`, 'u')
+const GAP_NUME = new RegExp(`^(?:${SP}+|${SP}*[&+\\-]${SP}*)$`, 'u')
+const GAP_FORMA_SURSA = `[”"»“]?${SP}*,?${SP}*`
+const GAP_FORMA = new RegExp(`^${GAP_FORMA_SURSA}$`, 'u')
+const PREFIX_FIRMA = new RegExp(`(?:(?<![\\p{L}\\p{M}\\p{N}_.])(?:S\\.C\\.?|SC)${SP}*)?[„"«“]?$`, 'u')
+const MANUAL = /\[\[[^[\]\n]{1,200}\]\]/g
+const EMAIL = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g
+const IBAN = /(?<![A-Za-z0-9])[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?(?![A-Za-z0-9])/g
+const CNP = /(?<![0-9])[1-9][0-9]{12}(?![0-9])/g
+const CUI_RO = /(?<![A-Za-z0-9])RO[ \t]?[0-9]{4,10}(?![0-9])/g
+const CUI_CUVANT = new RegExp('(?<![A-Za-z0-9])(?:CUI|C\\.U\\.I\\.?|Cui|CIF|C\\.I\\.F\\.?|[Cc]if|[Cc][Oo][Dd](?:[Uu][Ll])?[ \\t]+(?:[Ff][Ii][Ss][Cc][Aa][Ll]'
+  + '|[Uu][Nn][Ii][Cc][ \\t]+[Dd][Ee][ \\t]+[IiÎî][Nn][Rr][Ee][Gg][Ii][Ss][Tt][Rr][Aa][Rr][Ee]))'
+  + '[ \\t]*(?:[Nn][Rr]\\.?)?[ \\t]*[:.\\-]?[ \\t]*(?<v>(?:RO[ \\t]?)?[0-9]{2,10})(?![0-9])', 'gd')
+const CUI_LISTA = /(?<![0-9])[0-9]{6,10}(?![0-9])/g
+const TELEFON = /(?<![0-9A-Za-z+])(?:\+40|0040|0)[ \t.\-/]?[237](?:[ \t.\-/]?[0-9]){8}(?![0-9])/g
+const JUDETE = 'AB AG AR BC BH BN BR BT BV BZ CJ CL CS CT CV DB DJ GJ GL GR HD HR IF IL IS MH MM MS NT OT PH SB SJ SM SV TL TM TR VL VN VS'
+const NR_AUTO = new RegExp(`(?<![A-Za-z0-9])(?:B[ \\t\\-]?[0-9]{2,3}|(?:${JUDETE.split(' ').join('|')})[ \\t\\-]?[0-9]{2})[ \\t\\-]?([A-Z]{3})(?![A-Za-z0-9])`, 'g')
+const NR_AUTO_EXCLUSE = new Set('BAR SDR PEH PVC MPA KPA ISO DIN OTL PEX PPR HDP'.split(' '))
+const FORMA_SURSA = '(?<![\\p{L}\\p{M}\\p{N}_.])(S\\.R\\.L\\.?|S\\.A\\.?|P\\.F\\.A\\.?|I\\.I\\.?|I\\.F\\.?|S\\.N\\.C\\.?|S\\.C\\.S\\.?|SRL|Srl|srl|SA|PFA|II|IF|SNC|SCS)'
+  + '(?![\\p{L}\\p{M}\\p{N}_])'
+const FORMA = new RegExp(FORMA_SURSA, 'gu')
+const FORMA_DUPA = new RegExp(GAP_FORMA_SURSA + FORMA_SURSA, 'yu')
+const SUFIXE_CRATIMA = new Set(['ului', 'ul', 'lui', 'ei', 'le', 'a', 'i'])
+const FORME_JURIDICE = new Set(['sc', 'srl', 'sa', 'pfa', 'ii', 'if', 'snc', 'scs'])
+const ordine = (a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0)
+const TITLURI = `d-l d-lui d-na d-nei dl dlui dna dnei domnul domnului doamna doamnei domni[sș]oara domni[sș]oarei ing inginerul
+inginerului inginera inginerei arh arhitectul arhitecta dr colegul colegului colega colegei [sș]eful [sș]efului [sș]efa [sș]efei
+directorul directorului directoarea directoarei dirigintele dirigintelui diriginta maistrul maistrului sudorul sudorului
+[sș]oferul [sș]oferului numitul numitului numita numitei`.split(/\s+/).sort(ordine)
+const TITLU = new RegExp(`(?<!${W})(?:${TITLURI.join('|')})\\.?${SP}+`, 'giu')
+
+/** minuscule, fără diacritice — ca norm() din mascare.py. */
+export const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
+
+const setDin = s => new Set(s.split(/\s+/).filter(Boolean))
+const TITLURI_NORM = new Set(TITLURI.map(x => norm(x.replace('[sș]', 's'))))
+const OPRIRE = new Set([...setDin(`si sau de la din cu pe in pentru catre prin despre fara dupa intre sub peste al ale a ai un o unei unui cel cea cei
+cele acest aceasta acesta aceste acestui acestei el ea ei ele noi voi dar iar ca ce care cand unde daca nu da firma firmei firme
+societatea societatii societate contractul contractului contract beneficiarul beneficiarului beneficiar antreprenorul
+antreprenorului furnizorul furnizorului subcontractantul subcontractantului subcontractorul clientul clientului proiectantul
+proiectantului executantul executantului ofertantul ofertantului consultantul oferta licitatia proiectul proiect lucrarea lucrare
+santierul etapa faza clasa zona lot lotul capitolul anexa anexei tip tipul categoria nivelul nivel treapta grupa varianta partea
+titlul sectiunea cartea volumul tronsonul tronson sectorul obiectul etajul articolul gradul plansa corp corpul bloc blocul strada str
+nr judetul jud comuna orasul municipiul satul romania ro cui cif`), ...FORME_JURIDICE, ...TITLURI_NORM])
+const COMUNE = setDin(`mare mic mica micu preda verde rosu negru alb albu bun buna lung lungu gros grosu scurt nou noua vechi ion ioni
+mai iunie iulie august tot toma`)
+const GENERICE_FIRMA = setDin(`construct constructii instal grup group impex trans service servicii com prod serv consult general
+proiect design tehnic tehnica gaz gaze energy energie`)
+export const NEMASCATE = new Set(`transgaz|sntgn transgaz|delgaz|delgaz grid|distrigaz|distrigaz sud retele|engie|engie romania|e on|eon|
+romgaz|sngn romgaz|premier energy|transelectrica|electrica|hidroelectrica|apa nova|apa nova bucuresti|gazpet|gazpet instal`
+  .replace(/\n/g, '').split('|'))
+
+const majuscula = t => /^\p{Lu}/u.test(t)
+const toateMari = t => t.toUpperCase() === t && t.toLowerCase() !== t
+const titluCaz = t => majuscula(t) && /\p{Ll}/u.test(t.slice(1))
+const cifra = t => /^[0-9]/.test(t)
+function desparte(t) {
+  const i = t.lastIndexOf('-')
+  return i > 0 && SUFIXE_CRATIMA.has(t.slice(i + 1)) ? t.slice(0, i) : t
+}
+const potriveste = (re, t, a, b) => re.test(t.slice(a, b))
+const toate = (re, t) => [...t.matchAll(re)]
+const doarCifre = s => s.replace(/[^0-9]/g, '')
+
+function cnpValid(c) {
+  let s = 0
+  for (let i = 0; i < 12; i++) s += Number(c[i]) * Number('279146358279'[i])
+  s %= 11
+  return (s === 10 ? 1 : s) === Number(c[12])
+}
+function ibanValid(v) {
+  if (v.length < 15 || v.length > 34) return false
+  let rest = 0
+  for (const ch of v.slice(4) + v.slice(0, 4)) {
+    const val = ch >= '0' && ch <= '9' ? Number(ch) : ch.charCodeAt(0) - 55
+    rest = (rest * (val >= 10 ? 100 : 10) + val) % 97
+  }
+  return rest === 1
+}
+function ibanLungime(s) {
+  const compact = [...s].map((ch, i) => ch === ' ' ? -1 : i).filter(i => i >= 0)
+  for (let n = compact.length; n > 14; n--) if (ibanValid(compact.slice(0, n).map(i => s[i]).join(''))) return compact[n - 1] + 1
+  return 0
+}
+function atomi(t, cuNumere) {
+  const a = toate(CUVANT, t).map(m => [m.index, m.index + m[0].length, m[0]])
+  if (cuNumere) for (const m of toate(NUMAR, t)) a.push([m.index, m.index + m[0].length, m[0]])
+  return a.sort((x, y) => x[0] - y[0])
+}
+function tokeniFirmaLista(nume) {
+  const toks = atomi(String(nume ?? ''), true).map(x => norm(x[2]))
+  const out = []
+  let i = 0
+  while (i < toks.length) {
+    const t = toks[i]
+    let j = i
+    while (j < toks.length && toks[j].length === 1 && /^\p{L}$/u.test(toks[j])) j++
+    if (j - i >= 2 && FORME_JURIDICE.has(toks.slice(i, j).join(''))) { i = j; continue }
+    if (FORME_JURIDICE.has(t)) { i++; continue }
+    if (t === 'societatea' && toks[i + 1] === 'comerciala') { i += 2; continue }
+    out.push(t); i++
+  }
+  return out
+}
+
+/** Numele cunoscute platformei, DOAR pentru căutare locală (vezi Dictionar din mascare.py). */
+export class Dictionar {
+  constructor(persoane = [], firme = [], cui = []) {
+    this.persoane = new Set()
+    for (const nume of persoane) for (const [, , t] of atomi(String(nume ?? ''), false))
+      for (const p of [t, ...(t.includes('-') ? t.split('-') : [])]) {
+        const n = norm(p)
+        if (n.length >= 3 && !OPRIRE.has(n)) this.persoane.add(n)
+      }
+    const index = new Map()
+    for (const nume of firme) {
+      const tok = tokeniFirmaLista(nume)
+      if (!tok.length || NEMASCATE.has(tok.join(' '))) continue
+      if (tok.length === 1 && (tok[0].length < 4 || COMUNE.has(tok[0]) || GENERICE_FIRMA.has(tok[0]) || OPRIRE.has(tok[0]) || cifra(tok[0]))) continue
+      if (!index.has(tok[0])) index.set(tok[0], new Map())
+      index.get(tok[0]).set(tok.join('\u0001'), tok)
+    }
+    const cmpTup = (a, b) => b.length - a.length || (a.join('\u0001') < b.join('\u0001') ? -1 : a.join('\u0001') > b.join('\u0001') ? 1 : 0)
+    this.firme = new Map([...index].map(([k, v]) => [k, [...v.values()].sort(cmpTup)]))
+    this.cui = new Set()
+    for (const c of cui) { const d = doarCifre(String(c ?? '')); if (d.length >= 6 && d.length <= 10) this.cui.add(d) }
+  }
+  persoana(baza) {
+    const n = norm(baza)
+    if (this.persoane.has(n)) return n
+    if (n.length > 4 && n.endsWith('ei') && this.persoane.has(n.slice(0, -2) + 'a')) return n.slice(0, -2) + 'a'
+    return null
+  }
+}
+
+const cheiePers = set => [...set].sort().join('\u0001')
+const subset = (a, b) => [...a].every(x => b.has(x))
+
+/** Mascarea unei spețe — etichete stabile pe durata obiectului (vezi Mascare din mascare.py). */
+export class Mascare {
+  constructor(dictionar = null) {
+    this.d = dictionar || new Dictionar()
+    this.tabel = new Map()
+    this.ent = Object.fromEntries(CATEGORII.map(c => [c, []]))
+    this.inlocuiri = 0
+  }
+  contoare() { return Object.fromEntries(CATEGORII.filter(c => this.ent[c].length).map(c => [c, this.ent[c].length])) }
+  total() { return CATEGORII.reduce((s, c) => s + this.ent[c].length, 0) }
+
+  entitate(cat, cheie) {
+    const lista = this.ent[cat]
+    const egal = x => cat === 'PERSOANA' ? cheiePers(x.cheie) === cheiePers(cheie) : x.cheie === cheie
+    const gasit = lista.find(egal)
+    if (gasit) return gasit
+    if (cat === 'PERSOANA') {
+      const cand = lista.filter(x => subset(x.cheie, cheie) || subset(cheie, x.cheie))
+      if (cand.length === 1) { cand[0].cheie = new Set([...cand[0].cheie, ...cheie]); return cand[0] }
+    }
+    const x = { n: lista.length + 1, cheie, forme: new Map() }
+    lista.push(x)
+    return x
+  }
+  eticheta(cat, cheie, text) {
+    const x = this.entitate(cat, cheie)
+    if (x.forme.has(text)) return x.forme.get(text)
+    const k = x.forme.size + 1
+    const e = k === 1 ? `[${cat}_${x.n}]` : `[${cat}_${x.n}_F${k}]`
+    x.forme.set(text, e); this.tabel.set(e, text)
+    return e
+  }
+
+  detecteaza(t, protejeaza) {
+    const luate = [], out = []
+    const adauga = (s, e, cat, cheie) => {
+      if (s >= e || luate.some(([a, b]) => s < b && a < e)) return false
+      luate.push([s, e])
+      if (cat) out.push([s, e, cat, cheie])
+      return true
+    }
+    for (const m of toate(eticheta(), t)) {
+      if (protejeaza && this.tabel.has(m[0].toUpperCase())) adauga(m.index, m.index + m[0].length, null, null)
+      else adauga(m.index, m.index + m[0].length, 'ASCUNS', m[0])
+    }
+    for (const m of toate(MANUAL, t)) adauga(m.index, m.index + m[0].length, 'ASCUNS', m[0])
+    for (const m of toate(EMAIL, t)) adauga(m.index, m.index + m[0].length, 'EMAIL', m[0].toLowerCase())
+    for (const m of toate(IBAN, t)) {
+      const n = ibanLungime(m[0])
+      if (n) adauga(m.index, m.index + n, 'IBAN', m[0].slice(0, n).replace(/ /g, ''))
+    }
+    for (const m of toate(CNP, t)) if (cnpValid(m[0])) adauga(m.index, m.index + m[0].length, 'CNP', m[0])
+    for (const m of toate(CUI_RO, t)) adauga(m.index, m.index + m[0].length, 'CUI', doarCifre(m[0]))
+    for (const m of toate(CUI_CUVANT, t)) { const [a, b] = m.indices.groups.v; adauga(a, b, 'CUI', doarCifre(m.groups.v)) }
+    for (const m of toate(TELEFON, t)) adauga(m.index, m.index + m[0].length, 'TELEFON', '0' + doarCifre(m[0]).slice(-9))
+    for (const m of toate(CUI_LISTA, t)) if (this.d.cui.has(m[0])) adauga(m.index, m.index + m[0].length, 'CUI', m[0])
+    for (const m of toate(NR_AUTO, t)) if (!NR_AUTO_EXCLUSE.has(m[1])) adauga(m.index, m.index + m[0].length, 'NR_AUTO', m[0].replace(/[ \t-]/g, ''))
+
+    const cuv = atomi(t, false), at = atomi(t, true)
+    this.firmeForma(t, at, adauga)
+    this.firmeLista(t, at, adauga)
+    this.persoaneTitlu(t, cuv, adauga)
+    this.persoaneLista(t, cuv, adauga)
+    return out.sort((a, b) => a[0] - b[0])
+  }
+
+  firmeForma(t, at, adauga) {
+    for (const m of toate(FORMA, t)) {
+      let j = -1
+      for (let x = 0; x < at.length && at[x][1] <= m.index; x++) j = x
+      if (j < 0 || !potriveste(GAP_FORMA, t, at[j][1], m.index)) continue
+      const nume = []
+      let k = j, prefix = null
+      while (k >= 0 && nume.length < 6) {
+        const [s, , tok] = at[k]
+        const n = norm(tok)
+        if (n === 'sc') { prefix = s; break }
+        if (!(cifra(tok) || majuscula(tok)) || OPRIRE.has(n)) break
+        nume.unshift(at[k])
+        if (k === 0 || !potriveste(GAP_NUME, t, at[k - 1][1], s)) break
+        k--
+      }
+      const cuvinte = nume.filter(a => !cifra(a[2]))
+      if (!cuvinte.length) continue
+      if (m[1].startsWith('I') && (nume.length < 2 || cuvinte.length !== nume.length)) continue
+      const cheie = nume.map(a => norm(a[2])).join(' ')
+      if (NEMASCATE.has(cheie)) continue
+      let start = prefix !== null ? prefix : nume[0][0]
+      if (prefix === null) { const p = PREFIX_FIRMA.exec(t.slice(Math.max(0, start - 12), start)); if (p) start -= p[0].length }
+      adauga(start, m.index + m[0].length, 'FIRMA', cheie)
+    }
+  }
+
+  firmeLista(t, at, adauga) {
+    at.forEach(([s, , tok], i) => {
+      if (!majuscula(tok)) return
+      for (const tup of this.d.firme.get(norm(desparte(tok))) || []) {
+        let k = i, ok = true
+        for (let idx = 1; idx < tup.length; idx++) {
+          if (k + 1 >= at.length || !potriveste(GAP_NUME, t, at[k][1], at[k + 1][0])) { ok = false; break }
+          const urm = at[k + 1][2]
+          if (norm(desparte(urm)) !== tup[idx] || !(cifra(urm) || majuscula(urm))) { ok = false; break }
+          k++
+        }
+        if (!ok) continue
+        let start = s, end = at[k][0] + desparte(at[k][2]).length
+        if (i > 0 && norm(at[i - 1][2]) === 'sc' && potriveste(SPATIU, t, at[i - 1][1], s)) start = at[i - 1][0]
+        else { const p = PREFIX_FIRMA.exec(t.slice(Math.max(0, start - 12), start)); if (p) start -= p[0].length }
+        if (end === at[k][1]) { FORMA_DUPA.lastIndex = end; const f = FORMA_DUPA.exec(t); if (f) end = f.index + f[0].length }
+        adauga(start, end, 'FIRMA', tup.join(' '))
+        break
+      }
+    })
+  }
+
+  persoaneTitlu(t, cuv, adauga) {
+    const dupaStart = new Map(cuv.map((c, i) => [c[0], i]))
+    for (const m of toate(TITLU, t)) {
+      let i = dupaStart.get(m.index + m[0].length)
+      const luat = []
+      while (i !== undefined && i < cuv.length && luat.length < 3) {
+        const [s, e, tok] = cuv[i]
+        const baza = desparte(tok), n = norm(baza), k = this.d.persoana(baza)
+        if (!(majuscula(baza) && !OPRIRE.has(n) && !COMUNE.has(n) && (titluCaz(baza) || k !== null || (toateMari(baza) && baza.length >= 6)))) break
+        luat.push([s, s + baza.length, k || n])
+        if (baza !== tok || i + 1 >= cuv.length || !potriveste(SPATIU, t, e, cuv[i + 1][0])) break
+        i++
+      }
+      if (luat.length) adauga(luat[0][0], luat[luat.length - 1][1], 'PERSOANA', new Set(luat.map(x => x[2])))
+    }
+  }
+
+  persoaneLista(t, cuv, adauga) {
+    const info = cuv.map(([s, e, tok]) => {
+      const baza = desparte(tok)
+      return { s, e, eb: s + baza.length, baza, sufix: baza !== tok, k: majuscula(baza) ? this.d.persoana(baza) : null }
+    })
+    const lipit = (a, b) => potriveste(SPATIU, t, info[a].e, info[b].s)
+    const n = info.length
+    let i = 0
+    while (i < n) {
+      if (info[i].k === null) { i++; continue }
+      let j = i
+      const chei = [info[i].k]
+      while (j - i < 3 && !info[j].sufix) {
+        if (j + 1 < n && lipit(j, j + 1) && info[j + 1].k) { j++; chei.push(info[j].k); continue }
+        if (j + 2 < n && j + 2 - i <= 3 && lipit(j, j + 1) && lipit(j + 1, j + 2) && info[j + 1].k === null && !info[j + 1].sufix
+            && titluCaz(info[j + 1].baza) && info[j + 2].k && !OPRIRE.has(norm(info[j + 1].baza)) && !COMUNE.has(norm(info[j + 1].baza))) {
+          chei.push(norm(info[j + 1].baza), info[j + 2].k); j += 2; continue
+        }
+        break
+      }
+      if (!(j === i && COMUNE.has(chei[0]))) adauga(info[i].s, info[j].eb, 'PERSOANA', new Set(chei))
+      i = j + 1
+    }
+  }
+
+  /** Textul cu etichete (string). `protejeaza = false` la textele scrise de om (vezi mascheaza din mascare.py). */
+  mascheaza(text, protejeaza = true) {
+    const t = String(text ?? '')
+    let out = '', poz = 0
+    for (const [s, e, cat, cheie] of this.detecteaza(t, protejeaza)) {
+      out += t.slice(poz, s) + this.eticheta(cat, cheie, t.slice(s, e))
+      poz = e
+      this.inlocuiri++
+    }
+    return out + t.slice(poz)
+  }
+
+  /** Etichetele puse la loc (doar pentru afișare). */
+  demascheaza(text) {
+    return String(text ?? '').replace(eticheta(), (tot, cat, nr, f) => {
+      const c = cat.toUpperCase(), baza = `[${c}_${nr}]`
+      const e = f ? `[${c}_${nr}_F${f}]` : baza
+      return this.tabel.get(e) ?? this.tabel.get(baza) ?? tot
+    })
+  }
+
+  /** Câte etichete emise de această mascare apar în text (după demascare: 0). */
+  emiseIn(text) { return toate(eticheta(), String(text ?? '')).filter(m => this.tabel.has(m[0].toUpperCase())).length }
+}
+
+/** Bucățile textului mascat pentru ecran: [{t: 'text' | 'eticheta', v}] — etichetele se evidențiază. */
+export function bucatiMascate(text) {
+  const out = []
+  let poz = 0
+  for (const m of toate(eticheta(), String(text ?? ''))) {
+    if (m.index > poz) out.push({ t: 'text', v: text.slice(poz, m.index) })
+    out.push({ t: 'eticheta', v: m[0] })
+    poz = m.index + m[0].length
+  }
+  if (poz < String(text ?? '').length) out.push({ t: 'text', v: String(text).slice(poz) })
+  return out
+}
+
+const NUME_CATEGORII = { PERSOANA: ['persoană', 'persoane'], FIRMA: ['firmă', 'firme'], CNP: ['CNP', 'CNP-uri'], CUI: ['CUI', 'CUI-uri'],
+  TELEFON: ['telefon', 'telefoane'], EMAIL: ['e-mail', 'e-mailuri'], IBAN: ['IBAN', 'IBAN-uri'], NR_AUTO: ['nr. auto', 'nr. auto'],
+  ASCUNS: ['cuvânt ascuns de tine', 'cuvinte ascunse de tine'] }
+
+/** Previzualizarea a ce pleacă la furnizor: titlu, speță, context mascate în ACEEAȘI ordine ca workerul + rezumatul pentru ecran. */
+export function previzualizare({ titlu, intrebare, context }, dictionar) {
+  const m = new Mascare(dictionar)
+  const rez = {
+    titlu: m.mascheaza(titlu, false),
+    intrebare: m.mascheaza(intrebare, false),
+    context: context ? m.mascheaza(context, false) : '',
+  }
+  const c = m.contoare()
+  const parti = CATEGORII.filter(k => c[k]).map(k => `${c[k]} ${NUME_CATEGORII[k][c[k] === 1 ? 0 : 1]}`)
+  return { ...rez, total: m.total(), contoare: c, rezumat: parti.join(', ') }
+}
+
+/** Ascunde manual selecția dintr-un câmp: o înconjoară cu [[ ]] (fără rânduri noi, max 200 de caractere). null = nimic de ascuns. */
+export function ascundeSelectia(text, start, end) {
+  const t = String(text ?? '')
+  let a = Math.max(0, Math.min(start, end)), b = Math.min(t.length, Math.max(start, end))
+  while (a < b && /\s/.test(t[a])) a++
+  while (b > a && /\s/.test(t[b - 1])) b--
+  const sel = t.slice(a, b)
+  if (!sel || sel.length > 200 || /[\n[\]]/.test(sel)) return null
+  return { text: t.slice(0, a) + '[[' + sel + ']]' + t.slice(b), cursor: b + 4 }
+}
+
+/** Dicționarul din rândurile citite în ecran (angajați: name; terți: nume, contact_nume, cif) — ce poate citi contul curent. */
+export function dictionarDinRanduri(angajati, terti) {
+  return new Dictionar(
+    [...(angajati || []).map(r => r?.name), ...(terti || []).map(r => r?.contact_nume)].filter(x => typeof x === 'string' && x.trim()),
+    (terti || []).map(r => r?.nume).filter(x => typeof x === 'string' && x.trim()),
+    (terti || []).map(r => r?.cif).filter(x => typeof x === 'string' || typeof x === 'number').map(String),
+  )
+}

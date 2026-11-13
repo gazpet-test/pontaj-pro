@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { DOMENII_OFICIALE, STOP, GENERICE, analizeaza, curataRaspuns, verdict, urlOficial, surseAfisabile, imparteRaspuns, eDeclaratieLipsa,
   ancore, interogariAfisabile, termeniCheie, normalizeaza, tokeniNumerici, polaritati, propozitii, eAfirmatieNormativa,
-  lipsesteMigrarea, actiuniIntrebare, restrictii, prezentareRaspuns } from './intrebariSurse.js'
+  lipsesteMigrarea, actiuniIntrebare, restrictii, prezentareRaspuns, aplicaRegulaB, cereCitat, tipVerdict, CITAT_MIN_CUVINTE, CITAT_PRAG,
+  INCERT_REGULA_B } from './intrebariSurse.js'
 
 const CAZURI = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_validare.json', 'utf8'))
 const NORMATIVE = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_normative.json', 'utf8'))
@@ -203,5 +204,35 @@ describe('domenii oficiale', () => {
       { id: 'X', tip: 'web', url: 'https://anre.ro/' },
     ]).map(s => s.id)).toEqual(['W1', 'C1'])
     expect(surseAfisabile(null)).toEqual([])
+  })
+})
+
+// Regula B (decizia owner-ului 13.11.2026) — aceleași cazuri ca aplica_regula_b din test_cercetare.py.
+const REGULA_B = JSON.parse(readFileSync('worker/intrebari-tehnice/teste_regula_b.json', 'utf8'))
+describe('regula B: Da / Nu doar cu citat aproape cuvânt cu cuvânt, altfel Incert', () => {
+  for (const c of REGULA_B.cazuri) {
+    it(c.nume, () => {
+      const [text, motiv] = aplicaRegulaB(c.text, REGULA_B.surse)
+      expect(motiv).toBe(c.motiv)
+      expect(text.split('\n')[0]).toBe(c.prima_linie)
+      expect(text.split('\n').slice(1)).toEqual(c.text.split('\n').slice(1))   // doar prima linie se poate schimba
+      expect(cereCitat(c.text, REGULA_B.surse)).toBe(c.cere_citat)
+      expect(['da', 'nu', 'incert', null]).toContain(tipVerdict(text))          // după regulă: doar trei verdicte
+      if (c.motiv === 'fara_citat') expect(imparteRaspuns(text).incert).toBe(true)
+    })
+  }
+  it('pragul e cel documentat (6 cuvinte, 90%)', () => {
+    expect(CITAT_MIN_CUVINTE).toBe(6)
+    expect(CITAT_PRAG).toBe(0.9)
+    const py = readFileSync('worker/intrebari-tehnice/cercetare.py', 'utf8')
+    expect(py).toMatch(/^CITAT_MIN_CUVINTE = 6$/m)
+    expect(py).toMatch(/^CITAT_PRAG = 0\.9$/m)
+    expect(py).toContain(`INCERT_REGULA_B = f'{INCERT}: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.'`)
+  })
+  it('după curățare + regula B, un verdict ferm fără citat nu poate rămâne Da', () => {
+    const s = [{ id: 'C1', titlu: 'PT C9', extras: 'Responsabilul tehnic cu sudura este atestat de ISCIR.' }]
+    const [curat] = curataRaspuns('Da — RTS e atestat de ISCIR [C1].', s)
+    expect(curat.startsWith('Da')).toBe(true)                                   // validarea veche îl lăsa
+    expect(aplicaRegulaB(curat, s)[0].startsWith(INCERT_REGULA_B)).toBe(true)    // regula B îl face Incert
   })
 })

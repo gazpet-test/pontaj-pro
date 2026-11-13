@@ -15,7 +15,7 @@ dupa fara intre sub peste cum cand daca acest aceasta aceste acestui acesta cel 
 am ne va vor iar deci doar tot toate fie unde cine cat cate the of and or for to is are be pe`.split(/\s+/))
 export const GENERICE = new Set(`verdict depinde este sunt fie face fac facut facute aplica aplic aplicat aplicabil aplicabila cere cerut ceruta
 cer exista poate pot alt alta alte altul altei acel acea aceea astfel privind referitor caz cazul orice toti fiecare art articol
-articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele`.split(/\s+/))
+articolul articolului alin alineat alineatul pct punct punctul lit litera anexa sursa sursei sursele citat citatul citate`.split(/\s+/))
 const FARA_SURSA = 'nu am gasit sursa oficiala'
 
 export const normalizeaza = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -485,4 +485,78 @@ export function prezentareRaspuns({ v2, surse, interogari }) {
 /** Interogările web trimise (audit, doar ownerul le vede): listă de șiruri, max 20 × 200 de caractere. */
 export function interogariAfisabile(x) {
   return Array.isArray(x) ? x.filter(q => typeof q === 'string' && q.trim()).slice(0, 20).map(q => q.slice(0, 200)) : []
+}
+
+// ─── Regula B (decizia owner-ului 13.11.2026) — aceeași ca aplica_regula_b din cercetare.py (paritate pe teste_regula_b.json).
+// „Da” / „Nu” DOAR cu un citat aproape cuvânt cu cuvânt: ≥ CITAT_MIN_CUVINTE cuvinte, ≥ 90% din ele în aceeași ordine într-o singură
+// propoziție a sursei marcate pe aceeași linie, aceleași cifre (semn + număr + unitate), aceeași negație, restricțiile sursei păstrate.
+// Workerul o aplică înainte de publicare; aici e portarea pentru teste (verificarea pe aceleași cazuri) și pentru o eventuală afișare.
+export const CITAT_MIN_CUVINTE = 6
+export const CITAT_PRAG = 0.9
+const CITAT = /[„“"«]([^„“”"«»\n]{8,800})[”“"»]/g
+const CUVINTE_CITAT = /[a-z]+|[0-9]+(?:[.,][0-9]+)?/g
+export const INCERT_REGULA_B = `${INCERT}: nicio sursă nu spune aproape cuvânt cu cuvânt același lucru — citește sursele alăturate.`
+
+function lcs(a, b) {
+  let prev = new Array(b.length + 1).fill(0)
+  for (const x of a) {
+    const cur = [0]
+    b.forEach((y, j) => cur.push(x === y ? prev[j] + 1 : Math.max(prev[j + 1], cur[j])))
+    prev = cur
+  }
+  return prev[prev.length - 1]
+}
+
+/** Citatul trece pragul „aproape cuvânt cu cuvânt” față de o propoziție a uneia dintre sursele `ids` (Map-ul din hartaSurse). */
+function citatSustinut(citat, ids, harta) {
+  const n = normalizeaza(citat)
+  const q = n.match(CUVINTE_CITAT) || []
+  if (q.length < CITAT_MIN_CUVINTE) return false
+  const neg = NEGATIE_SIMPLA.test(n), tok = tokeniNumerici(n)
+  for (const i of ids) {
+    if (!harta.has(i)) continue
+    const v = harta.get(i)
+    for (const p of propozitii(v.slice(v.indexOf('\n') + 1))) {
+      if (lcs(q, p.match(CUVINTE_CITAT) || []) < CITAT_PRAG * q.length) continue
+      const tp = new Set(tokeniNumerici(p))
+      if (neg !== NEGATIE_SIMPLA.test(p) || !tok.every(x => tp.has(x))) continue
+      if (restrictiiAcoperite(n, p)) return true
+    }
+  }
+  return false
+}
+
+/** Răspunsul are măcar un citat care trece pragul, pe o linie cu marcajul sursei citate. */
+export function areCitat(text, surse) {
+  const harta = hartaSurse(surse)
+  for (const linie of String(text ?? '').replace(/\r/g, '').split('\n')) {
+    const ids = marcaje(linie).filter(i => harta.has(i))
+    if (ids.length && [...linie.matchAll(CITAT)].some(m => citatSustinut(m[1], ids, harta))) return true
+  }
+  return false
+}
+
+/** 'da' / 'nu' / 'incert' / 'depinde' / null — după prima linie. */
+export function tipVerdict(text) {
+  const n = normalizeaza(verdict(text) || '')
+  return ['incert', 'depinde', 'da', 'nu'].find(k => new RegExp(`^${k}\\b`).test(n)) || null
+}
+
+export const cereCitat = (text, surse) => ['da', 'nu'].includes(tipVerdict(text)) && !areCitat(text, surse)
+
+/** [text, motiv] — ca aplica_regula_b din cercetare.py. */
+export function aplicaRegulaB(text, surse) {
+  const tip = tipVerdict(text)
+  const linii = String(text ?? '').replace(/\r/g, '').split('\n')
+  const i = linii.findIndex(l => l.trim())
+  if (tip === null || i < 0) return [text, 'fara_verdict']
+  if (tip === 'incert') return [text, 'incert']
+  if (tip === 'depinde') {
+    const v = verdict(text)
+    linii[i] = `${INCERT} — ${v.slice(0, 1).toLowerCase()}${v.slice(1)}`
+    return [linii.join('\n'), 'depinde']
+  }
+  if (areCitat(text, surse)) return [text, 'citat']
+  linii[i] = INCERT_REGULA_B
+  return [linii.join('\n'), 'fara_citat']
 }

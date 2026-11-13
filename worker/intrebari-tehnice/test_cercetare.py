@@ -12,6 +12,32 @@ INTEROGARI = json.loads((AICI / 'teste_interogari.json').read_text(encoding='utf
 NORMATIVE = json.loads((AICI / 'teste_normative.json').read_text(encoding='utf-8'))
 VOC_BRUT = json.loads((AICI / 'vocabular_web.json').read_text(encoding='utf-8'))
 VOC = c.pregateste_vocabular(VOC_BRUT)
+REGULA_B = json.loads((AICI / 'teste_regula_b.json').read_text(encoding='utf-8'))
+
+
+class RegulaB(unittest.TestCase):
+    """Decizia owner-ului 13.11.2026 (B): Da / Nu doar cu citat aproape cuvânt cu cuvânt; altfel Incert. Aceleași cazuri în vitest."""
+
+    def test_cazuri_comune_cu_vitest(self):
+        for caz in REGULA_B['cazuri']:
+            with self.subTest(caz['nume']):
+                text, motiv = c.aplica_regula_b(caz['text'], REGULA_B['surse'])
+                self.assertEqual(motiv, caz['motiv'])
+                self.assertEqual(text.split('\n')[0], caz['prima_linie'])
+                self.assertEqual(text.split('\n')[1:], caz['text'].split('\n')[1:])     # doar prima linie se poate schimba
+                self.assertEqual(c.cere_citat(caz['text'], REGULA_B['surse']), caz['cere_citat'])
+                self.assertIn(c.tip_verdict(text), ('da', 'nu', 'incert', None))        # după regulă: doar trei verdicte
+
+    def test_pragul_documentat(self):
+        self.assertEqual((c.CITAT_MIN_CUVINTE, c.CITAT_PRAG), (6, 0.9))
+        self.assertEqual(c._lcs('a b c d'.split(), 'a x c d'.split()), 3)
+        self.assertEqual(c._lcs([], ['a']), 0)
+
+    def test_promptul_spune_regula(self):
+        self.assertIn('„Da” sau „Nu” DOAR dacă o sursă din <surse> spune aproape cuvânt cu cuvânt același lucru', c.SISTEM_RASPUNS)
+        self.assertIn('Citat [C1]:', c.SISTEM_RASPUNS)
+        self.assertIn('[PERSOANA_1]', c.SISTEM_RASPUNS)
+        self.assertNotIn('sau „Depinde de …” (ex.', c.SISTEM_RASPUNS)
 
 
 class Validare(unittest.TestCase):

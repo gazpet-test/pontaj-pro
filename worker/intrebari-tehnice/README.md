@@ -12,6 +12,7 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
 | Cercetare (06.11.2026) | `cercetare.py` (corpus, web oficial, validare); index: `scripts/intrebari/construieste_corpus.mjs` → `corpus_index.json` |
 | Surse + `de_verificat` + reluare | `supabase/migrations/20261131e_intrebari_cercetare_surse.sql` (edge v2 o cere) |
 | Ecran | `src/IntrebariTehnice.jsx` + `src/intrebariSurse.js`, cheia de modul `intrebari_tehnice` |
+| Mascarea numelor + regula „Da / Nu / Incert” (13.11.2026) | `mascare.py` (worker) + `src/intrebariMascare.js` (previzualizarea din ecran), `cercetare.aplica_regula_b`; edge v3 (acțiunea `nume`). Pentru owner: `docs/intrebari/MASCARE_SI_VERDICT.md` |
 
 ## Răspuns din cercetare (cerere Silviu + Răzvan, 06.11.2026)
 1. **Corpus intern** — `scripts/intrebari/corpus.mjs` (`CORPUS`): cercetarea normativă din `docs/cercetare` (baza normativă,
@@ -46,7 +47,8 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    ÎNAINTE de generare. **Rezultat web incomplet** (`max_tokens`, `pause_turn`, `web_search_tool_result_error`, propunerea de
    interogări tăiată) → NU se publică nimic: eroare „Cercetare incompletă: …”.
 3. **Răspunsul** — fără unelte, doar din `<surse>` (conținutul speței, al extraselor și al paginilor e neutralizat: `<`/`>` →
-   `‹`/`›`, deci nu poate închide `<surse>` / `<speta>`): prima linie = verdict (Da / Nu / Depinde de … / Incert — de verificat),
+   `‹`/`›`, deci nu poate închide `<surse>` / `<speta>`): prima linie = verdict (Da / Nu / Incert — de la 13.11.2026 doar trei;
+   „Depinde de …” devine „Incert — depinde de …”, vezi pct. 3b),
    fiecare afirmație normativă cu marcaj `[C1]` / `[W2]`. `cercetare.analizeaza` (aceleași reguli în `src/intrebariSurse.js`,
    cazuri comune în `teste_validare.json`):
    - normativă = act / articol / standard / cifră cu unitate **sau o regulă**: obligație, interdicție, permisiune, condiție,
@@ -100,6 +102,14 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    dacă pică → o singură reparare (cu motivul fiecărei linii); ce rămâne nesusținut se scoate (`curata_raspuns`). Sursele citate
    trec verificarea finală pe setul care se salvează (`verifica_surse_finale`: max 30, ID-uri unice dintre cele trimise,
    domenii / căi valide, < 80 KB) → `surse`.
+3b. **Regula B (decizia owner-ului 13.11.2026)** — `cercetare.aplica_regula_b`, ULTIMUL pas înainte de publicare (după
+   `curata_raspuns`): „Da” / „Nu” rămân doar dacă un rând cu marcajul sursei are un citat între ghilimele care trece pragul
+   `citat_sustinut`: ≥ `CITAT_MIN_CUVINTE` (6) cuvinte; ≥ `CITAT_PRAG` (90%) din ele, în aceeași ordine (cea mai lungă subsecvență
+   comună pe cuvinte normalizate), într-o SINGURĂ propoziție a sursei marcate; aceleași cifre (semn + număr + unitate), aceeași
+   negație, restricțiile propoziției păstrate (`restrictii_acoperite`). Altfel prima linie devine `INCERT_REGULA_B` și se salvează
+   TOATE sursele consultate (ecranul le pune imediat sub verdict, „Surse alăturate”); la „Da” / „Nu” — doar cele citate. Un „Da” /
+   „Nu” fără citat cere întâi repararea (`cere_citat` → `mesaj_reparare(..., fara_citat=True)`). Portarea JS (`aplicaRegulaB` în
+   `src/intrebariSurse.js`) are aceleași cazuri (`teste_regula_b.json`).
 4. **Model**: întrebările cu temei normativ / juridic (detectate după cuvinte-cheie: lege, normativ, articol, ISCIR, ANRE,
    autorizare, recepție, sudură, contract, achiziții …) merg **implicit pe Opus** — `MODEL_NORMATIV` = `claude-opus-5-5`, cel mai
    scump model, pentru pașii de căutare, răspuns și reparare; restul pe `MODEL_GENERAL` = `claude-sonnet-5-5`. Propunerea de
@@ -121,27 +131,27 @@ autorului (și ownerului). Primul utilizator: Silviu Stănescu (Director Tehnic)
    avertizarea despre „[DE VERIFICAT]”); cu migrarea, eticheta „din cercetare” apare doar pe răspunsurile cu surse sau
    interogări salvate (`prezentareRaspuns`).
 
-## Ce ajunge la furnizorul modelului (Anthropic) — pe înțelesul ownerului
-Întrebările trec prin modelele Claude (Anthropic), prin API-ul firmei. Pe pași, ce pleacă din ERP:
-- **(a) propunerea de căutări**: titlul și textul întrebării, curățate de e-mailuri, linkuri, telefoane și numere lungi.
-  Numele de persoane, firme sau localități scrise în întrebare **rămân** în acest pas (nu le putem deosebi sigur de termeni).
-- **(b) scrierea răspunsului**: **întrebarea întreagă**, contextul (proiect, localitate), atașamentele (PDF / poze), extrasele
-  din documentele noastre de cercetare și din paginile oficiale găsite și rezumatul căutării web. **Repararea** (o singură dată,
-  doar dacă răspunsul n-a trecut verificarea): din nou întrebarea, contextul, extrasele și primul răspuns — fără atașamente.
-- **(c) căutarea pe web**: DOAR căutarea compusă de program din lista aprobată de cuvinte (de ex. „responsabil tehnic sudura
-  iscir”) — fără nume, fără întrebare, fără context. Căutările trimise le vezi la fiecare răspuns („🔎 Interogări”).
-Ce nu pleacă: date din alte module, alte întrebări, parole sau chei. Conform condițiilor comerciale ale API-ului, Anthropic nu
-folosește implicit aceste date la antrenarea modelelor; ele trec totuși prin serverele lui și pot fi păstrate o perioadă limitată.
-**Dacă (b) nu e acceptabil**, variantele (decizia lui Răzvan):
-- **A — mascarea numelor** înainte de trimitere (persoane, firme, localități înlocuite cu „[NUME 1]”, „[LOCALITATE 1]”).
-  Pierdem: răspunsurile care depind de loc (zonă, distribuitor, aviz local) devin mai generale, iar mascarea automată poate
-  scăpa nume scrise neobișnuit; atașamentele (PDF / poze) nu se pot masca sigur — ar trebui oprite.
-- **B — răspuns doar din documentele noastre**, fără model extern: căutare în corpus și afișarea extraselor găsite, fără text
-  scris de AI. Pierdem: verdictul „Da / Nu / Depinde”, explicația și căutarea pe site-urile oficiale; colegul citește singur
-  extrasele.
-- **C — acceptăm cum e**, cu o notă în ecran pentru cine pune întrebarea („întrebarea, contextul și atașamentele se trimit la
-  Anthropic pentru răspuns; nu scrie date personale care nu sunt necesare”).
-Până la decizie, codul rămâne cum e (varianta C fără notă); nimic nu se schimbă automat.
+## Ce ajunge la furnizorul modelului (Anthropic) — decizia owner-ului 13.11.2026 (A: mascarea numelor)
+Pe înțelesul ownerului: `docs/intrebari/MASCARE_SI_VERDICT.md` (ce pleacă / ce nu, limite, pornire, fișa a–e). Tehnic:
+- **Lista de nume** (angajați `employees.name`, terți `beneficiari.nume` / `contact_nume` / `cif`): edge-ul o dă workerului la
+  pornire (`{"actiune": "nume"}`, keyset pe id, fără tăiere tăcută). Stă doar în memorie (`mascare.Dictionar`). Fără ea →
+  `nume_indisponibile` în jurnal și nicio preluare (fail closed).
+- **Mascarea** (`mascare.Mascare`, câte un obiect pe preluare): titlul, speța, contextul se maschează primele (în ordinea din
+  previzualizarea ecranului), apoi sursele; etichete stabile `[PERSOANA_1]`, `[FIRMA_1]`, `[CNP_1]`, `[CUI_1]`, `[TELEFON_1]`,
+  `[EMAIL_1]`, `[IBAN_1]`, `[NR_AUTO_1]`, `[ASCUNS_1]`; altă formă scrisă a aceleiași entități = `_F2`, `_F3`. Tabelul etichetă →
+  text e doar în obiect; jurnalul primește `contoare()` (câte valori pe categorie) și `inlocuiri`.
+- **Un singur drum spre furnizor**: `cere()` maschează fiecare mesaj → `apel()` rulează `garda_cerere()` (conținut EXACT de tip
+  `mascare.TextMascat`; sistem / model / unealtă din listele fixe; altfel `GardaMascare`, fără rețea) → `trimite_http()`. Testele AST
+  din `test_mascare.py` verifică drumul (cine cheamă `trimite_http`, `apel`, adresa API, `OPENER`).
+- **Atașamentele nu mai pleacă** (numele din ele nu se pot masca sigur): modelul primește doar numărul lor.
+- **Demascarea** doar pe `raspuns_md` (textul afișat); dacă textul avea etichete emise și a ieșit identic → eroare „Eroare internă
+  la pregătirea răspunsului”, nu se publică etichete.
+- **Căutarea web**: neschimbată (interogări compuse din vocabular); o interogare pe care mascarea ar schimba-o nu se trimite
+  (`cautari_cu_nume` în jurnal).
+- Ce NU prinde mascarea: vezi documentul pentru owner (nume necunoscute fără titlu, porecle, inițiale, literă mică, firme fără formă
+  juridică și necunoscute, localități). Firmele publice din `NEMASCATE` rămân intenționat.
+Conform condițiilor comerciale ale API-ului, Anthropic nu folosește implicit aceste date la antrenarea modelelor; ele trec totuși prin
+serverele lui și pot fi păstrate o perioadă limitată.
 
 ## Identitate
 - Claude prin **API** (cheia din Credential Manager `anthropic-claude-code` / `api`, workspace-ul cu plafon lunar), NU abonamentul:
@@ -180,6 +190,14 @@ Până la decizie, codul rămâne cum e (varianta C fără notă); nimic nu se s
 5. Întrebarea id 1 NU se reia automat: ownerul apasă „🔁 Reia cu cercetare” pe ea, după pașii 1–4.
 6. `registru_automatizari` + rândul din `public.automatizari`: fișa nouă (web pe domenii oficiale, Opus) — CLAUDE.md pct. 7.
 
+### Actualizarea „mascare + regula B” (13.11.2026) — fără migrare, fără secrete noi
+1. Merge, apoi deploy edge `intrebari-tehnice-worker` v3 (verify_jwt = false) — adaugă acțiunea `nume`; ÎNAINTE de worker.
+2. Pe server, din clona la zi pe `main`: copiezi `intrebari_worker.py`, `cercetare.py`, **`mascare.py` (nou)**, `vocabular_web.json`,
+   `corpus_manifest.json` în folderul workerului. Worker nou + edge vechi = `nume_indisponibile` în jurnal, nicio preluare.
+3. Proba: o întrebare de test a ownerului cu nume inventate → răspunsul afișat are numele la loc; jurnalul are `mascate`,
+   `inlocuiri`, `regula_b`, `atasamente_netrimise` (doar numere / coduri).
+4. `registru_automatizari` + `public.automatizari`: rândul propus în `docs/intrebari/MASCARE_SI_VERDICT.md`.
+
 ## Verificare după livrare (teste negative, într-o tranzacție cu ROLLBACK)
 Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utilizator FĂRĂ cheia de modul și pentru autor:
 - străinul: INSERT în `intrebari_tehnice` refuzat; SELECT pe întrebările altuia = 0 rânduri; SELECT pe `storage.objects` din bucket = 0;
@@ -192,7 +210,8 @@ Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utili
 - O rulare preia max 3 întrebări; lock `C:\Users\Public\intrebari_worker\worker.lock`.
 - Jurnal local: `C:\Users\Public\intrebari_worker\jurnal.jsonl` — doar id, stare, tokeni, durată, numărul de extrase / surse web /
   interogări / căutări / citate, `reparat`, `scoase`, `incert`, motivul erorii (fără conținut, fără textul interogărilor, fără
-  secrete). Textul interogărilor trimise stă DOAR în BD (`interogari_web`, `intrebari_preluari`), vizibil ownerului.
+  secrete). De la 13.11.2026 și: `mascate` (câte valori ascunse pe categorie), `inlocuiri`, `cautari_cu_nume`, `regula_b`
+  (`citat` / `fara_citat` / `depinde` / `incert`), `atasamente_netrimise` — numere / coduri, niciodată numele sau valorile. Textul interogărilor trimise stă DOAR în BD (`interogari_web`, `intrebari_preluari`), vizibil ownerului.
 - Jurnalul de preluări din BD (`intrebari_preluari`, 20261131e): un rând la fiecare preluare (încercare, rezultat, tokeni,
   interogări). RLS fără politici, SELECT doar `service_role`; scris doar de funcțiile workerului; reluarea nu-l atinge.
 - API supraîncărcat / limită de rată → întrebarea rămâne „în lucru”, BD o redă după 30 min (max 3 încercări, apoi „eroare”).
@@ -200,7 +219,7 @@ Simulat cu `SET LOCAL ROLE authenticated` + `request.jwt.claims` pentru un utili
 - Credit API terminat → „eroare” cu mesaj clar pentru utilizator.
 
 ## Ce NU face
-Nu caută pe web în afara domeniilor oficiale fixe (decizia Silviu + Răzvan 06.11.2026 lărgește regula 27.10.2026 doar pentru
+Nu trimite la furnizor nume, date personale sau atașamente (decizia A, 13.11.2026 — vezi mai sus). Nu caută pe web în afara domeniilor oficiale fixe (decizia Silviu + Răzvan 06.11.2026 lărgește regula 27.10.2026 doar pentru
 acest worker: apelul cu web nu primește speța, atașamente, context de proiect sau extrase interne — doar câte o interogare compusă
 de cod din vocabularul aprobat —
 iar ieșirea e limitată la `allowed_domains`), nu deschide pagini în afara căutării, nu trimite mail, nu scrie în alte tabele
@@ -208,7 +227,12 @@ decât rândul întrebării și jurnalul ei de preluări, nu vede ERP-ul, nu fol
 al echipei Paw).
 
 ## Teste
-- `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs scripts/intrebari/interogari.test.mjs scripts/intrebari_cercetare_amprente.test.js`
+- `node node_modules/vitest/vitest.mjs run src/intrebariSurse.test.js src/intrebariMascare.test.js src/intrebariUtil.test.js scripts/intrebari/corpus.test.mjs scripts/intrebari/interogari.test.mjs scripts/intrebari_cercetare_amprente.test.js`
+- 13.11.2026: mascarea are cazurile comune `teste_mascare.json` (Python `test_mascare.py` ↔ vitest `src/intrebariMascare.test.js`,
+  plus aceleași liste OPRIRE / COMUNE / NEMASCATE / TITLURI în ambele), regula B are `teste_regula_b.json` (`test_cercetare.py`
+  ↔ `src/intrebariSurse.test.js`). Garda: `test_mascare.py` (tipul `TextMascat`, AST — drumul unic spre furnizor, refuzurile
+  gărzii) și `test_worker.py` (nimic din valorile sensibile în nicio cerere, atașamentele nu pleacă, jurnalul fără valori,
+  mutanții „apel nemascat” și „demascare lipsă”, fără lista de nume nu se preia nimic).
 - `python -I -B -m unittest discover -s worker/intrebari-tehnice -p "test_*.py"` — **paritate Python ↔ JS pe aceleași fișiere**:
   validarea (`teste_validare.json`: verdict, fără sursă, cifre neconfirmate, nesusținute, temei, textul după curățare — runda 4:
   polaritatea, calificativele, negația, propozițiile, semnul și unitatea), tokenii numerici / tipul regulii / propozițiile

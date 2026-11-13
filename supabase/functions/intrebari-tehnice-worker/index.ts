@@ -10,11 +10,17 @@
 //   { "actiune": "eroare",   "id": n, "incercare": uuid, "eroare": "...", "interogari": ["..."] }                 → 200 / 409
 //   { "actiune": "amana",    "id": n, "incercare": uuid }  — doar refuz CERT fără cost (429/529)                 → 200 / 409
 // 409 = preluarea nu mai e cea curentă (expirată / finalizată): rezultatul întârziat nu închide altă preluare.
+//   v3 (13.11.2026, decizia owner-ului A — numele nu pleacă la furnizorul modelului; fără migrare):
+//   { "actiune": "nume" } → 200 { persoane: string[], firme: string[], cui: string[] } — numele din platformă (employees.name,
+//   beneficiari.contact_nume / nume / cif) pentru MASCAREA din worker. Rămân pe serverul nostru (memoria workerului), nu pleacă la
+//   furnizor și nu se scriu pe disc. Citire keyset pe id până la pagina goală (L23); peste NUME_MAX sau o eroare de citire → 500,
+//   iar workerul nu preia nimic (fail closed) — niciodată o listă tăiată în tăcere.
 //
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 //  (a) conținut EXTERN: întrebările și atașamentele utilizatorilor trec prin edge spre worker — nu sunt interpretate aici;
 //  (b) scrie DOAR răspunsul/eroarea pe rândul „în lucru” (fn_intrebari_raspunde) + notificarea autorului; emite URL-uri semnate de citire
-//      (300 s) doar pentru atașamentele întrebării preluate; fără mail, bani sau drepturi;
+//      (300 s) doar pentru atașamentele întrebării preluate (v3: workerul nu le mai descarcă); v3: CITEȘTE numele angajaților și ale
+//      terților (doar coloanele de nume / CUI) și le dă DOAR workerului, pentru mascare; fără mail, bani sau drepturi;
 //  (c) service_role: apelantul (serverul AI) n-are cont Supabase; RPC-urile și createSignedUrl îl cer;
 //  (d) cine pornește: doar deținătorul INTREBARI_WORKER_SECRET (fn_verifica_secret, fail closed);
 //  (e) confirmare umană: nu e cazul — răspunsul e informativ, ajunge doar la autor.
@@ -69,6 +75,35 @@ function curataInterogari(x: unknown): string[] {
   return x.filter(q => typeof q === 'string' && q.trim()).slice(0, INTEROGARI_MAX).map(q => String(q).trim().slice(0, 200))
 }
 
+// v3: numele din platformă, pentru mascarea din worker. Keyset pe id (pagini de 1000 — plafonul max-rows), până la pagina goală;
+// null = eroare / id lipsă sau neordonat / peste NUME_MAX (fără tăiere tăcută — L12, L18).
+const NUME_MAX = 50000
+type Rand = Record<string, unknown>
+async function toateRandurile(sb: ReturnType<typeof createClient>, tabel: string, coloane: string): Promise<Rand[] | null> {
+  const out: Rand[] = []
+  let dupa: number | null = null
+  for (;;) {
+    let q = sb.from(tabel).select(coloane).order('id', { ascending: true }).limit(1000)
+    if (dupa !== null) q = q.gt('id', dupa)
+    const { data, error } = await q
+    if (error || !Array.isArray(data)) return null
+    if (!data.length) return out
+    for (const r of data as Rand[]) out.push(r)
+    if (out.length > NUME_MAX) return null
+    const u = Number((data[data.length - 1] as Rand).id)
+    if (!Number.isFinite(u) || (dupa !== null && !(u > dupa))) return null
+    dupa = u
+  }
+}
+function texte(randuri: Rand[], camp: string): string[] {
+  const s = new Set<string>()
+  for (const r of randuri) {
+    const v = r[camp]
+    if ((typeof v === 'string' || typeof v === 'number') && String(v).trim()) s.add(String(v).trim().slice(0, 300))
+  }
+  return [...s]
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return raspuns(405, { error: 'Doar POST' })
   const url = Deno.env.get('SUPABASE_URL'), cheie = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -104,6 +139,16 @@ Deno.serve(async (req: Request) => {
     }
     return raspuns(200, { intrebare: { id: data.id, incercare: data.incercare, titlu: data.titlu, intrebare: data.intrebare, context: data.context ?? null,
                                        creat_la: data.creat_la, atasamente } })
+  }
+
+  if (corp.actiune === 'nume') {
+    try {
+      const angajati = await toateRandurile(sb, 'employees', 'id, name')
+      const terti = await toateRandurile(sb, 'beneficiari', 'id, nume, contact_nume, cif')
+      if (!angajati || !terti || !angajati.length) return raspuns(500, { error: 'Eroare internă' })
+      return raspuns(200, { persoane: [...new Set([...texte(angajati, 'name'), ...texte(terti, 'contact_nume')])],
+                            firme: texte(terti, 'nume'), cui: texte(terti, 'cif') })
+    } catch (_) { return raspuns(500, { error: 'Eroare internă' }) }
   }
 
   if ((corp.actiune === 'raspunde' || corp.actiune === 'eroare' || corp.actiune === 'amana')
