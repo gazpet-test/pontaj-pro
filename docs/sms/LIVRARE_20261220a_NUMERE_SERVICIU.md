@@ -201,7 +201,8 @@ producție, identități sintetice. Pe ea, **secțiunea scriptului de amprente, 
     rămâne exact manifestul;
   - efectul extern e doar notificarea către serviciul REST, care își reîncarcă schema. Notificarea e tranzacțională; verificat pe
     clonă, cu o sesiune care ascultă canalul: la proba cu ROLLBACK **nicio** notificare, la aplicare una, la revenire una. Deci proba
-    cu ROLLBACK pe țintă nu are efect extern, iar aplicarea are exact efectul cerut oricum de pasul 7.
+    cu ROLLBACK pe țintă nu trimite notificarea (efectul ei asupra traficului rămâne așteptarea pe lock-uri), iar aplicarea are exact
+    efectul cerut oricum de pasul 7.
 - **Schimbat după citire ⇒ refuz la «înainte»**, în trei variante, de fiecare dată cu amprenta globală, înaintea verificării proprii a
   migrării și fără nicio schimbare: auxiliarul porții owner (`fn_sms_e_owner()`) cu alt corp; o funcție nouă, din afara lanțului (pe care
   migrarea singură n-ar vedea-o); un drept schimbat pe un tabel din afara lanțului. După refacere, amprenta globală e cea dinainte.
@@ -218,5 +219,6 @@ mai mari.
 
 **Cum ajung lock-urile în jurnal.** Proba „diferența = manifestul” tipărește doar rândurile runnerului, nu și mesajele migrării
 (momentul luării lock-urilor și numărul de încercări). De aceea, la proba pe țintă, coordonatorul păstrează ieșirea întreagă a sesiunii
-și pornește alături un observator doar-citire al lock-urilor (când au fost văzute acordate și când au dispărut). Probat pe clonă:
+și pornește alături un observator doar-citire al lock-urilor, legat de sesiunea livrării — nu de orice sesiune care ține același
+lock — (când au fost văzute acordate și când au dispărut); un jurnal incomplet = probă neacceptată. Probat pe clonă:
 lock-urile luate la ≈ 0,48 s de la BEGIN, o încercare, ținute ≈ 0,48 s până la ROLLBACK; la aplicare ≈ 0,44 s până la COMMIT.
