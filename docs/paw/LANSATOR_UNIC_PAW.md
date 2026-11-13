@@ -207,6 +207,18 @@ Fișierul nou moștenește ACL-ul din `bin` (Users doar citire + execuție) — 
    - e pornit doar de sesiunile Claude, prin lansator;
    - nicio acțiune automată pe baza răspunsului.
 
+### v4.6.3 — modelul Gemini devine „Carbon” (13.11.2026; pachet NEINSTALAT până la procedura lui Răzvan)
+
+- **De ce.** Pe 13.11.2026 „Argon” a dispărut din lista de modele Gemini (acum: 4 Hydrogen, 4 Hydrogen Thinking, 4 Carbon). `gemini_pw.py` din v4.6.1 cere „Argon”, deci orice rulare `gem` se oprește cu `model_gresit afisat: 'Carbon', cerut: Argon`. Răzvan a aprobat „Carbon” ca model de consultant (același rol: a doua / a treia opinie, NU poartă GO / NO-GO).
+- **Ce se schimbă.** Doar `gemini_pw.py` (și linia lui din `SHA256.json`), în `docs/paw/run_paw_v463/`:
+  - `MODEL_CERUT = "Carbon"`;
+  - potrivire EXACTĂ a etichetei afișate, după normalizarea spațiilor: `Carbon`, opțional precedat de `Gemini` și / sau de numărul versiunii (`4 Carbon`, `Gemini 4 Carbon`). Orice sufix (`Carbon Thinking`) sau alt model = `model_gresit`, fără Enter. Înainte era „conține Argon” (ar fi acceptat și o variantă cu sufix).
+- **Ce NU se schimbă.** `run_paw.ps1` și celelalte 10 fișiere sunt copii octet cu octet ale celor instalate (v4.6.1). Legătura din `cdx_sandbox_validat.json` (`GetCdxBinding`) nu conține `gemini_pw.py` și nici `SHA256.json`, deci certificatul cdx rămâne valabil: fără Install, fără WFP, fără Run / Seal.
+- **Eticheta din lansator rămâne `argon`.** `run_paw.cmd gem <brief> <iesire> argon` și `argon:<lucrare>` sunt numele istorice ale canalului; modelul real e cel verificat de `gemini_pw.py`. Redenumirea cere schimbarea `run_paw.ps1` (deci recertificare cdx) și se face la următoarea instalare completă.
+- **Instalare.** `docs/paw/run_paw_v463/RUNBOOK_RAZVAN.md`: verificări ne-elevate (hash-uri, diff de exact 16 linii, 34 de teste) → înlocuirea celor două fișiere sub bariera de instalare, prin zona protejată `operator-v463` (în consola admin nu se execută nimic din folderul de livrare) → verificarea legăturii cdx → **testul de canal** (pașii de mai sus, cu „Carbon”, plus proba cu alt model selectat) → markerul `gem_canal_validat` (îl scrie doar Răzvan) → smoke prin lansator. Rollback: cele două fișiere din `operator-v463` înapoi.
+- **Teste.** `python -I docs\paw\run_paw_v463\teste\test_gemini_pw.py`: 34 de teste, fără browser. Valorile așteptate sunt scrise de mână din ce afișează Gemini. Doi mutanți verificați: fișierul vechi (Argon) și potrivirea „conține” cu Carbon — amândoi picați de teste.
+- **Pachetele neinstalate v4.6.2 (mil) și v4.7 (cxw)** pornesc de la v4.6.1 și au `gemini_pw.py` cu „Argon”: înainte de instalarea oricăruia, `gemini_pw.py` se ia din v4.6.3, manifestul lor se regenerează și diff-ul trece din nou prin review.
+
 ## v4.4 - cdx, politica de valabilitate #028, livrabil pentru review
 
 ### Utilizare cdx (operare)
