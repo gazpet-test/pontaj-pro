@@ -29,7 +29,11 @@
 //      (auxiliar din pg_catalog cu DEFAULT schimbat / STRICT: poarta isi schimba rezultatul => GLOBAL difera, familia functie),
 //      schimbari minime pe tabel / coloana / tip / operator create in pg_catalog; MUTANTUL perimetrului (fara ramura „creat
 //      dupa initdb”) nu le mai prinde; plasa sistem_initdb (quote_nullable ... STRICT, + mutantul fara STRICT); limita declarata;
-//  12. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi): pasul „inainte” si „dupa”, rece si cald.
+//  12. timpul pe un catalog sintetic (~1.500 functii, ~300 tabele, ~50 vederi): pasul „inainte” si „dupa”, rece si cald;
+//  13. r4: randurile atasate dupa initdb unui parinte de la initdb, plasa functii + agregate si relatii, detaliul plasei;
+//  14. r5: limita unei partitii de la initdb (contraexemplul recenzentului, + mutantul fara relpartbound), limita partitiilor
+//      aplicatiei si cheia de partitionare (deja in familia relatie), COST pe o functie de la initdb (+ mutant), lista inchisa
+//      a coloanelor pg_class / pg_proc / pg_aggregate pe catalogul real (+ mutantii listei).
 // Rulare (din radacina repo-ului; cere bash in PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_amprenta_globala_local.mjs
 // Limite: PGlite = PostgreSQL 18 (productia e 17: in 18 NOT NULL sunt si in pg_constraint — testul le asteapta doar pe 18);
 //   fara concurenta reala si fara timere (probele cu doua sesiuni si plafonul: scripts/test_livrare_l15_v2.sh pe PG17);
@@ -874,6 +878,95 @@ CREATE TYPE pg_catalog.l15_e AS ENUM ('a'); CREATE OPERATOR pg_catalog.=== (LEFT
       if (sm === s) throw new Error('mutantul detaliului: textul plasei nu s-a schimbat')
       await db.exec('BEGIN'); await db.exec(GUC); const rm = (await db.query(sm, [], { rowMode: 'array' })).rows; await db.exec('ROLLBACK')
       ok(rm.filter(x => x[0] === 'relatii').length === 0, 'detaliul cu alta definitie (fara relatii) nu poate reproduce randul relatii (verificarea citirii il refuza)')
+    }
+
+    console.log('14. r5: limita partitiei de la initdb (contraexemplul recenzentului); partitiile aplicatiei; lista inchisa a coloanelor plasei')
+    {
+      // (a) contraexemplul: information_schema.sql_features = partitie a unui tabel al aplicatiei, apoi detasata si reatasata cu
+      //     alta limita => INSERT ... RETURNING trece de la eroare la succes; perechea din pg_inherits ramane aceeasi
+      const PROBA = 'CREATE TABLE public.l15_partition_probe (LIKE information_schema.sql_features) PARTITION BY RANGE (feature_id);\n' +
+        "ALTER TABLE public.l15_partition_probe ATTACH PARTITION information_schema.sql_features FOR VALUES FROM (MINVALUE) TO ('ZZZ');"
+      const REATAS = 'ALTER TABLE public.l15_partition_probe DETACH PARTITION information_schema.sql_features;\n' +
+        'ALTER TABLE public.l15_partition_probe ATTACH PARTITION information_schema.sql_features FOR VALUES FROM (MINVALUE) TO (MAXVALUE);'
+      const P_PART = { q: "INSERT INTO public.l15_partition_probe (feature_id) VALUES ('ZZZZ') RETURNING feature_id::text AS v" }
+      const PB = 'pg_get_expr(c.relpartbound, c.oid), c.relisshared'
+      if (CAT.split(PB).length !== 2) throw new Error('mutantul limitei: campul din plasa nu apare exact o data')
+      const faraLimita = CAT.split(PB).join('c.relisshared')
+      let a, b
+      try { a = await cuPoarta(PROBA, P_PART); b = await cuPoarta(PROBA + '\n' + REATAS, P_PART) } catch (e) { ok(false, `partitia: ${String(e.message).slice(0, 120)}`) }
+      if (a && b) {
+        const ma = await catalogIn(db, PROBA, faraLimita), mb = await catalogIn(db, PROBA + '\n' + REATAS, faraLimita)
+        const sch = familiiSchimbate(a, b)
+        ok(a.v === 'eroare' && b.v === 'ZZZZ' && a.global !== b.global && sch.join() === 'sistem_initdb' && ma.global === mb.global,
+          `contraexemplul r4 (partitia de la initdb reatasata cu alta limita): poarta ${a.v} -> ${b.v}; GLOBAL ${a.global === b.global ? 'IDENTIC' : 'schimbat'}, familii [${sch}]; mutant fara relpartbound in plasa: GLOBAL ${ma.global === mb.global ? 'identic (pica)' : 'TOT schimbat'}`)
+        // detaliul plasei: limita in forma canonica (deparsata), nu arborele brut
+        const sPl = genCitire(['--detalii-plasa', join(TMP, 'plasa_r5.tsv')])('plasa')
+        const rand = async (sql) => {
+          await db.exec('BEGIN')
+          try { await db.exec(sql); await db.exec(GUC); return (await db.query(sPl, [], { rowMode: 'array' })).rows.find(x => x[1] === 'information_schema.sql_features')[3] }
+          finally { await db.exec('ROLLBACK') }
+        }
+        const r0 = await rand(PROBA), r1 = await rand(PROBA + '\n' + REATAS)
+        ok(r0.includes("FOR VALUES FROM (MINVALUE) TO ('ZZZ')") && r1.includes('FOR VALUES FROM (MINVALUE) TO (MAXVALUE)') && !/:location|PARTITIONBOUNDSPEC/i.test(r0 + r1),
+          `detaliul plasei: limita canonica ("FOR VALUES FROM (MINVALUE) TO ('ZZZ')" -> "... TO (MAXVALUE)"), fara arborele brut`)
+      }
+      // (b) verificare (fara camp nou): limita unei partitii a APLICATIEI e deja in familia relatie (pg_get_expr(relpartbound))
+      const APP = 'CREATE TABLE public.l15_pp (id int) PARTITION BY RANGE (id); CREATE TABLE public.l15_pp1 PARTITION OF public.l15_pp FOR VALUES FROM (0) TO (10);'
+      const APP2 = 'ALTER TABLE public.l15_pp DETACH PARTITION public.l15_pp1; ALTER TABLE public.l15_pp ATTACH PARTITION public.l15_pp1 FOR VALUES FROM (0) TO (100);'
+      const RB = 'c.relispartition, pg_get_expr(c.relpartbound, c.oid), c.relreplident::text'
+      if (CAT.split(RB).length !== 2) throw new Error('mutantul relatiei: limita nu apare exact o data in familia relatie')
+      const faraLimitaApp = CAT.split(RB).join('c.relispartition, c.relreplident::text')
+      const P_APP = { q: 'INSERT INTO public.l15_pp VALUES (50) RETURNING id::text AS v' }
+      const x0 = await cuPoarta(APP, P_APP), x1 = await cuPoarta(APP + '\n' + APP2, P_APP)
+      const mx0 = await catalogIn(db, APP, faraLimitaApp), mx1 = await catalogIn(db, APP + '\n' + APP2, faraLimitaApp)
+      const schX = familiiSchimbate(x0, x1)
+      ok(x0.v === 'eroare' && x1.v === '50' && schX.join() === 'relatie' && mx0.global === mx1.global,
+        `partitia aplicatiei reatasata cu alta limita: poarta ${x0.v} -> ${x1.v}; familii [${schX}] (deja in relatie); mutant fara limita in relatie: GLOBAL ${mx0.global === mx1.global ? 'identic (pica)' : 'TOT schimbat'}`)
+      // (c) verificare: cheia de partitionare a unui tabel al aplicatiei cu o partitie de la initdb (pg_partitioned_table) e in
+      //     randul relatie al parintelui (pg_get_partkeydef); alta cheie, aceeasi limita => familia relatie
+      const K1 = 'CREATE TABLE public.l15_pk (LIKE information_schema.sql_features) PARTITION BY RANGE (feature_id);\n' +
+        'ALTER TABLE public.l15_pk ATTACH PARTITION information_schema.sql_features FOR VALUES FROM (MINVALUE) TO (MAXVALUE);'
+      const K2 = 'ALTER TABLE public.l15_pk DETACH PARTITION information_schema.sql_features; DROP TABLE public.l15_pk;\n' +
+        'CREATE TABLE public.l15_pk (LIKE information_schema.sql_features) PARTITION BY RANGE (feature_name);\n' +
+        'ALTER TABLE public.l15_pk ATTACH PARTITION information_schema.sql_features FOR VALUES FROM (MINVALUE) TO (MAXVALUE);'
+      const k0 = await catalogIn(db, K1), k1 = await catalogIn(db, K1 + '\n' + K2)
+      const dk0 = (k0.d.find(r => r.eticheta === 'relatie public.l15_pk') || {}).detaliu || '', dk1 = (k1.d.find(r => r.eticheta === 'relatie public.l15_pk') || {}).detaliu || ''
+      const schK = familiiSchimbate(k0, k1)
+      ok(dk0.includes('RANGE (feature_id)') && dk1.includes('RANGE (feature_name)') && schK.join() === 'relatie',
+        `cheia de partitionare a parintelui (partitie de la initdb): familii [${schK}]; randul relatie public.l15_pk are cheia (RANGE (feature_id) -> RANGE (feature_name))`)
+      // (d) un camp nou din plasa functiilor: COST pe o functie de la initdb => doar sistem_initdb; mutant fara procost => identic
+      const COST = 'ALTER FUNCTION pg_catalog.quote_nullable(text) COST 7'
+      const faraCost = CAT.split('p.procost, p.prorows,').join('p.prorows,')
+      if (faraCost === CAT) throw new Error('mutantul costului: campul nu s-a gasit')
+      const c0 = await catalogIn(db), c1 = await catalogIn(db, COST), mc0 = await catalogIn(db, '', faraCost), mc1 = await catalogIn(db, COST, faraCost)
+      ok(familiiSchimbate(c0, c1).join() === 'sistem_initdb' && mc0.global === mc1.global,
+        `ALTER FUNCTION quote_nullable COST 7: familii [${familiiSchimbate(c0, c1)}]; mutant fara procost: GLOBAL ${mc0.global === mc1.global ? 'identic (pica)' : 'TOT schimbat'}`)
+      // (e) lista inchisa: coloanele catalogului REAL = „plasa” ∪ „exclus”, fara rest si fara suprapunere (lista din fisier)
+      const SQLF = readFileSync(join(ROOT, 'scripts/amprenta_globala_v2.sql'), 'utf8').split('\r').join('').split('\n')
+      const ia = SQLF.indexOf('-- >>> AG_PLASA_COLOANE v2'), ib = SQLF.indexOf('-- <<< AG_PLASA_COLOANE v2')
+      if (ia < 0 || ib < ia) throw new Error('lista AG_PLASA_COLOANE lipseste')
+      const LISTA = SQLF.slice(ia + 1, ib).map(l => l.match(/^-- (pg_class|pg_proc|pg_aggregate) ([a-z]+) (plasa|exclus) /) || l.match(/^-- (pg_class|pg_proc|pg_aggregate) ([a-z]+) (plasa)$/)).filter(Boolean)
+        .map(m => ({ cat: m[1], col: m[2], k: m[3] }))
+      const inchidere = (lista, coloane) => {
+        const rez = {}
+        for (const cat of ['pg_class', 'pg_proc', 'pg_aggregate']) {
+          const cl = lista.filter(x => x.cat === cat), nume = cl.map(x => x.col)
+          rez[cat] = { rest: coloane[cat].filter(c => !nume.includes(c)), inPlus: nume.filter(c => !coloane[cat].includes(c)),
+            dubluri: nume.filter((c, i) => nume.indexOf(c) !== i), plasa: cl.filter(x => x.k === 'plasa').length, exclus: cl.filter(x => x.k === 'exclus').length }
+        }
+        return rez
+      }
+      const coloane = {}
+      for (const cat of ['pg_class', 'pg_proc', 'pg_aggregate'])
+        coloane[cat] = (await db.query(`SELECT attname::text AS c FROM pg_attribute WHERE attrelid = 'pg_catalog.${cat}'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum`)).rows.map(r => r.c)
+      const z = inchidere(LISTA, coloane)
+      const curat = (r) => Object.values(r).every(v => v.rest.length === 0 && v.inPlus.length === 0 && v.dubluri.length === 0)
+      ok(curat(z), `lista inchisa pe catalogul real: ${Object.entries(z).map(([k, v]) => `${k} ${coloane[k].length} coloane = ${v.plasa} plasa + ${v.exclus} exclus (rest [${v.rest}], in plus [${v.inPlus}], dubluri [${v.dubluri}])`).join('; ')}`)
+      // mutantii listei: o coloana neclasificata (ca o coloana noua a unei versiuni viitoare) / o clasificare dubla => testul pica
+      const zm1 = inchidere(LISTA.filter(x => !(x.cat === 'pg_class' && x.col === 'relpartbound')), coloane)
+      const zm2 = inchidere([...LISTA, { cat: 'pg_proc', col: 'procost', k: 'exclus' }], coloane)
+      ok(!curat(zm1) && zm1.pg_class.rest.join() === 'relpartbound' && !curat(zm2) && zm2.pg_proc.dubluri.join() === 'procost',
+        `mutantii listei: coloana neclasificata => rest [${zm1.pg_class.rest}]; clasificare dubla => dubluri [${zm2.pg_proc.dubluri}]`)
     }
   }
 

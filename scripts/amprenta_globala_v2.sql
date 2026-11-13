@@ -146,12 +146,14 @@ ag_opc AS (
 -- agregatului) au valori atribuite la compilare (< 12000, aceleasi pe aceeasi versiune: verificat de testul PGlite).
 --   functii: identitate schema.nume(tipurile argumentelor); kind, limbaj, proprietar, DEFINER, STRICT, volatilitate, LEAKPROOF,
 --     PARALLEL, SETOF, rezultat, VARIADIC, argumentele (tipuri, moduri, nume), proconfig, implicitele (numar + deparsate),
---     md5(prosrc), probin, md5(BEGIN ATOMIC deparsat), functia suport + campurile pg_aggregate ale agregatelor (CREATE OR
---     REPLACE AGGREGATE pastreaza pg_proc);
+--     md5(prosrc), probin, md5(BEGIN ATOMIC deparsat), functia suport, cost, rows, numarul argumentelor, transformarile +
+--     campurile pg_aggregate ale agregatelor (CREATE OR REPLACE AGGREGATE pastreaza pg_proc);
 --   relatii: identitate schema.nume; kind, proprietar (nume), persistenta, relnatts, relchecks, RLS, FORCE RLS, replica
---     identity, partitie, reloptions + NUMARUL randurilor atasate din cataloage (triggere, reguli, politici, constrangeri,
---     valori implicite, indecsi, mostenire in ambele sensuri, statistici extinse, publicatii). NU steagurile lenese ale
---     relatiei (le stinge VACUUM) si nimic din statistici / stocare (lista exacta: documentul, sectiunea 2).
+--     identity, partitie + LIMITA ei (pg_get_expr(relpartbound): forma canonica, nu arborele brut), reloptions, partajata,
+--     populata, tipul tabelului tipizat, metoda de acces si tablespace-ul (dupa nume) + NUMARUL randurilor atasate din
+--     cataloage (triggere, reguli, politici, constrangeri, valori implicite, indecsi, mostenire in ambele sensuri, statistici
+--     extinse, publicatii). Fiecare coloana a lui pg_class / pg_proc / pg_aggregate e ori aici, ori in lista de excluderi cu
+--     motiv (marcajul AG_PLASA_COLOANE la sfarsitul fisierului; testul PGlite o compara cu catalogul real).
 ag_plasa(plasa, identitate, campuri) AS (
     SELECT 'functii' AS plasa, s.q || '.' || p.proname || '(' || p.proargtypes::text || ')' AS identitate,
            ROW(s.q, p.proname, p.proargtypes, p.prokind, p.prolang, p.proowner, p.prosecdef, p.proisstrict, p.provolatile,
@@ -159,6 +161,7 @@ ag_plasa(plasa, identitate, campuri) AS (
                p.proargnames, p.proconfig, p.pronargdefaults,
                CASE WHEN p.proargdefaults IS NOT NULL THEN pg_get_expr(p.proargdefaults, 0) END, md5(p.prosrc), p.probin,
                CASE WHEN p.prosqlbody IS NOT NULL THEN md5(pg_get_function_sqlbody(p.oid)) END, p.prosupport::oid,
+               p.procost, p.prorows, p.pronargs, p.protrftypes,
                CASE WHEN p.prokind = 'a' THEN (
                  SELECT ROW(g.aggkind, g.aggnumdirectargs, g.aggtransfn::oid, g.aggfinalfn::oid, g.aggcombinefn::oid, g.aggserialfn::oid,
                             g.aggdeserialfn::oid, g.aggmtransfn::oid, g.aggminvtransfn::oid, g.aggmfinalfn::oid, g.aggfinalextra,
@@ -171,6 +174,9 @@ ag_plasa(plasa, identitate, campuri) AS (
     SELECT 'relatii', s.q || '.' || c.relname,
            ROW(s.q, c.relname, c.relkind, c.relowner::regrole::text, c.relpersistence, c.relnatts, c.relchecks, c.relrowsecurity,
                c.relforcerowsecurity, c.relreplident, c.relispartition, c.reloptions,
+               pg_get_expr(c.relpartbound, c.oid), c.relisshared, c.relispopulated,
+               CASE WHEN c.reloftype <> 0 THEN c.reloftype::regtype::text END,
+               am.amname, ts.spcname,
                (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = c.oid), (SELECT count(*) FROM pg_rewrite rw WHERE rw.ev_class = c.oid),
                (SELECT count(*) FROM pg_policy po WHERE po.polrelid = c.oid), (SELECT count(*) FROM pg_constraint co WHERE co.conrelid = c.oid),
                (SELECT count(*) FROM pg_attrdef ad WHERE ad.adrelid = c.oid), (SELECT count(*) FROM pg_index i WHERE i.indrelid = c.oid),
@@ -178,6 +184,7 @@ ag_plasa(plasa, identitate, campuri) AS (
                (SELECT count(*) FROM pg_statistic_ext st WHERE st.stxrelid = c.oid),
                (SELECT count(*) FROM pg_publication_rel pr WHERE pr.prrelid = c.oid))::text
       FROM pg_class c JOIN ag_per s ON s.oid = c.relnamespace
+      LEFT JOIN pg_am am ON am.oid = c.relam LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
      WHERE c.oid < s.prag
 )
 -- <<< AG_PLASA v2
@@ -588,3 +595,98 @@ SELECT r.familie, r.eticheta, md5(r.d::text) AS amprenta, r.d::text AS detaliu
   FROM ag_rand r CROSS JOIN ag_garda g
  WHERE g.ok = 1
 -- <<< AG_CATALOG v2
+
+-- >>> AG_PLASA_COLOANE v2
+-- NU se ruleaza (comentarii). Clasificarea FIECAREI coloane a cataloagelor din care se citesc plasele sistem_initdb: o linie
+-- "<catalog> <coloana> plasa" (valoarea e in campurile plasei, ag_plasa) sau "<catalog> <coloana> exclus <motiv>". Testul
+-- PGlite cere: coloanele catalogului real = plasa + exclus, fara rest si fara suprapunere (o coloana noua intr-o versiune
+-- viitoare a serverului pica testul pana e clasificata); fiecare "plasa" apare in ramura ei din ag_plasa (alias c / p / g),
+-- niciun "exclus" nu apare acolo ca valoare (doar cheile oid / aggfnoid, folosite la cautari). Documentul, sectiunea 2 (ii),
+-- are aceeasi lista de excluderi.
+-- pg_class oid exclus identificator atribuit la initdb; obiectul e identificat dupa schema.nume
+-- pg_class relname plasa
+-- pg_class relnamespace exclus identificator; inlocuit de numele schemei (s.q) in identitate si in campuri
+-- pg_class reltype exclus identificator al tipului rand; tipurile de la initdb modificate pe loc = limita declarata
+-- pg_class reloftype plasa
+-- pg_class relowner plasa
+-- pg_class relam plasa
+-- pg_class relfilenode exclus stocare (se schimba la VACUUM FULL, TRUNCATE, CLUSTER, REINDEX)
+-- pg_class reltablespace plasa
+-- pg_class relpages exclus statistici (VACUUM / ANALYZE)
+-- pg_class reltuples exclus statistici (VACUUM / ANALYZE)
+-- pg_class relallvisible exclus statistici (VACUUM)
+-- pg_class relallfrozen exclus statistici (VACUUM; coloana exista de la PostgreSQL 18)
+-- pg_class reltoastrelid exclus identificator al relatiei TOAST din pg_toast (in afara perimetrului, limita 15)
+-- pg_class relhasindex exclus steag lenes (il stinge VACUUM); numarul indecsilor e in plasa
+-- pg_class relisshared plasa
+-- pg_class relpersistence plasa
+-- pg_class relkind plasa
+-- pg_class relnatts plasa
+-- pg_class relchecks plasa
+-- pg_class relhasrules exclus steag lenes; numarul regulilor e in plasa
+-- pg_class relhastriggers exclus steag lenes (il stinge VACUUM); numarul triggerelor e in plasa
+-- pg_class relhassubclass exclus steag lenes (il stinge VACUUM); numarul copiilor (pg_inherits) e in plasa
+-- pg_class relrowsecurity plasa
+-- pg_class relforcerowsecurity plasa
+-- pg_class relispopulated plasa
+-- pg_class relreplident plasa
+-- pg_class relispartition plasa
+-- pg_class relrewrite exclus intretinere (nenul doar pe relatia tranzitorie a unei rescrieri in curs)
+-- pg_class relfrozenxid exclus intretinere (VACUUM / freeze)
+-- pg_class relminmxid exclus intretinere (VACUUM / freeze)
+-- pg_class relacl exclus ACL: familia acl_sistem (cu grantor)
+-- pg_class reloptions plasa
+-- pg_class relpartbound plasa
+-- pg_proc oid exclus identificator; functia e identificata dupa schema.nume(tipurile argumentelor)
+-- pg_proc proname plasa
+-- pg_proc pronamespace exclus identificator; inlocuit de numele schemei (s.q) in identitate si in campuri
+-- pg_proc proowner plasa
+-- pg_proc prolang plasa
+-- pg_proc procost plasa
+-- pg_proc prorows plasa
+-- pg_proc provariadic plasa
+-- pg_proc prosupport plasa
+-- pg_proc prokind plasa
+-- pg_proc prosecdef plasa
+-- pg_proc proleakproof plasa
+-- pg_proc proisstrict plasa
+-- pg_proc proretset plasa
+-- pg_proc provolatile plasa
+-- pg_proc proparallel plasa
+-- pg_proc pronargs plasa
+-- pg_proc pronargdefaults plasa
+-- pg_proc prorettype plasa
+-- pg_proc proargtypes plasa
+-- pg_proc proallargtypes plasa
+-- pg_proc proargmodes plasa
+-- pg_proc proargnames plasa
+-- pg_proc proargdefaults plasa
+-- pg_proc protrftypes plasa
+-- pg_proc prosrc plasa
+-- pg_proc probin plasa
+-- pg_proc prosqlbody plasa
+-- pg_proc proconfig plasa
+-- pg_proc proacl exclus ACL: familia acl_sistem (cu grantor)
+-- pg_aggregate aggfnoid exclus cheia legaturii cu pg_proc (functia e identificata in plasa functiilor)
+-- pg_aggregate aggkind plasa
+-- pg_aggregate aggnumdirectargs plasa
+-- pg_aggregate aggtransfn plasa
+-- pg_aggregate aggfinalfn plasa
+-- pg_aggregate aggcombinefn plasa
+-- pg_aggregate aggserialfn plasa
+-- pg_aggregate aggdeserialfn plasa
+-- pg_aggregate aggmtransfn plasa
+-- pg_aggregate aggminvtransfn plasa
+-- pg_aggregate aggmfinalfn plasa
+-- pg_aggregate aggfinalextra plasa
+-- pg_aggregate aggmfinalextra plasa
+-- pg_aggregate aggfinalmodify plasa
+-- pg_aggregate aggmfinalmodify plasa
+-- pg_aggregate aggsortop plasa
+-- pg_aggregate aggtranstype plasa
+-- pg_aggregate aggtransspace plasa
+-- pg_aggregate aggmtranstype plasa
+-- pg_aggregate aggmtransspace plasa
+-- pg_aggregate agginitval plasa
+-- pg_aggregate aggminitval plasa
+-- <<< AG_PLASA_COLOANE v2

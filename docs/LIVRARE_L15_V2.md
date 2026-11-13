@@ -4,7 +4,8 @@ Versiune: AMPRENTA_GLOBALA **v2** (13.11.2026). Decizie: propunerea coordonatoru
 apoi runda 2 după review (grantorii ACL, regula DEFINER, schemele de sistem, comparabilitatea clonă ↔ țintă), runda 3 (obiectele
 create în schemele de sistem prin familiile obișnuite, plasa pe funcțiile de la initdb, momentul fotografiei la recitire) și runda 4
 (rândurile atașate după initdb unui părinte de la initdb, plasa independentă de build pe funcții + agregate și relații, detaliul
-plasei, momentul înlocuit doar în antetul standard).
+plasei, momentul înlocuit doar în antetul standard) și runda 5 (limita partițiilor de la initdb în plasa relațiilor, lista închisă a
+coloanelor cataloagelor plasei, antetul standard identificat o singură dată).
 Fișiere: blocul unic `scripts/amprenta_globala_v2.sql` (L19), pașii runnerului `scripts/livrare_amprenta.sh` (+ CLI `scripts/livrare_amprenta_gen.sh`),
 runnerul `scripts/livrare_migrare.sh` (runda 15), citirea `scripts/amprenta_globala_citire.sh`, comparatorul de liste
 `scripts/l15_compara_liste.sh`, manifestul și proba pe țintă `scripts/livrare_l15_manifest.sh`, proba pe producție
@@ -66,7 +67,8 @@ aplicației). Contraexemplul recenzentului din runda 3 — un trigger `BEFORE IN
   - `sistem_initdb functii` — funcțiile + agregatele: identitatea (schema DUPĂ NUME, numele, tipurile argumentelor), kind, limbaj,
     proprietar, SECURITY DEFINER, STRICT, volatilitate, LEAKPROOF, PARALLEL, SETOF, rezultatul, VARIADIC, argumentele (toate tipurile,
     modurile, numele), `proconfig`, numărul argumentelor implicite + expresiile lor **deparsate** (`pg_get_expr`, doar unde există),
-    md5(`prosrc`), `probin`, md5(corpul BEGIN ATOMIC **deparsat**, doar unde există), funcția suport, iar la agregate câmpurile din
+    md5(`prosrc`), `probin`, md5(corpul BEGIN ATOMIC **deparsat**, doar unde există), funcția suport, costul și `prorows`, numărul
+    argumentelor, transformările (`protrftypes`), iar la agregate câmpurile din
     `pg_aggregate` (funcțiile de tranziție / finală / combinare / serializare și varianta „moving”, extra / modify, operatorul de sortare,
     tipurile și spațiul de stare, valorile inițiale — `CREATE OR REPLACE AGGREGATE` păstrează rândul din `pg_proc`). Celelalte câmpuri
     OID (limbaj, proprietar, tipuri, funcția suport, câmpurile agregatului) au la funcțiile de la initdb valori atribuite la compilare
@@ -74,12 +76,31 @@ aplicației). Contraexemplul recenzentului din runda 3 — un trigger `BEFORE IN
     de câte colații importă initdb pe acel sistem), de aceea e scrisă după nume. Prinde de ex. `ALTER FUNCTION
     pg_catalog.quote_nullable(text) STRICT` și `CREATE OR REPLACE AGGREGATE pg_catalog.bool_and(boolean) (… INITCOND = 'true')`;
   - `sistem_initdb relatii` — relațiile din `pg_catalog` / `information_schema`: identitatea (schema.nume), kind, proprietar (după nume),
-    persistență, `relnatts`, `relchecks`, RLS, FORCE RLS, replica identity, partiție, `reloptions` + **numărul rândurilor atașate**,
-    calculat din cataloage: triggere, reguli, politici, constrângeri, valori implicite, indecși, moștenire (ca copil și ca părinte),
-    statistici extinse, publicații. NU intră steagurile leneșe `relhasindex` / `relhasrules` / `relhastriggers` / `relhassubclass` (le
-    stinge VACUUM — ar da refuz fals, L20) și nimic din statistici / stocare (`relpages`, `reltuples`, `relallvisible`, `relfrozenxid`,
-    `relminmxid`, `relfilenode`). Prinde o schimbare PE LOC (de ex. `ENABLE ROW LEVEL SECURITY` pe un tabel de la initdb, fără obiect nou)
-    și e plasa de siguranță pentru orice clasă de rând atașat scăpată de regula de mai sus (numărul se schimbă);
+    persistență, `relnatts`, `relchecks`, RLS, FORCE RLS, replica identity, partiție + **limita partiției** (`relpartbound` în forma
+    canonică, `pg_get_expr(relpartbound, oid)` — nu arborele brut, care conține poziții din textul sursă), `reloptions`, `relisshared`,
+    `relispopulated`, tipul tabelului tipizat (`reloftype`, după nume), metoda de acces (`relam`) și tablespace-ul (`reltablespace`), după
+    nume + **numărul rândurilor atașate**, calculat din cataloage: triggere, reguli, politici, constrângeri, valori implicite, indecși,
+    moștenire (ca copil și ca părinte), statistici extinse, publicații. Prinde o schimbare PE LOC (de ex. `ENABLE ROW LEVEL SECURITY` pe un
+    tabel de la initdb, fără obiect nou; contraexemplul rundei 4: o partiție de la initdb a unui tabel al aplicației, detașată și reatașată
+    cu altă limită — perechea din `pg_inherits` rămâne aceeași, limita nu) și e plasa de siguranță pentru orice clasă de rând atașat
+    scăpată de regula de mai sus (numărul se schimbă);
+  - **lista închisă a coloanelor** (runda 5): fiecare coloană a cataloagelor din care se citesc plasele — `pg_class` (plasa relațiilor),
+    `pg_proc` + `pg_aggregate` (plasa funcțiilor) — e ORI în plasă, ORI în lista de excluderi de mai jos, cu motivul. Lista stă o singură
+    dată în `scripts/amprenta_globala_v2.sql` (marcajul `AG_PLASA_COLOANE v2`, comentarii, nu se rulează); testul PGlite cere ca mulțimea
+    coloanelor catalogului real să fie exact reuniunea „în plasă” ∪ „exclusă”, fără rest și fără suprapunere (o coloană nouă într-o
+    versiune viitoare a serverului pică testul până e clasificată), iar testul static, ca fiecare coloană „în plasă” să apară în ramura ei
+    și nicio coloană exclusă să nu apară acolo ca valoare. **Excluderile, exact:**
+    - `pg_class`: `oid` (identificatorul atribuit la initdb; relația e identificată după schema.nume); `relnamespace` (înlocuit de numele
+      schemei); `reltype` (identificatorul tipului rând; tipurile de la initdb modificate pe loc = limita din (iii)); `reltoastrelid`
+      (identificatorul relației TOAST, în `pg_toast`, limita 15); `relfilenode` (stocare: se schimbă la VACUUM FULL, TRUNCATE, CLUSTER,
+      REINDEX); `relpages`, `reltuples`, `relallvisible`, `relallfrozen` (statistici, VACUUM / ANALYZE; ultima există de la PostgreSQL 18);
+      `relfrozenxid`, `relminmxid` (întreținere: freeze); `relrewrite` (întreținere: nenul doar pe relația tranzitorie a unei rescrieri în
+      curs); steagurile leneșe `relhasindex`, `relhasrules`, `relhastriggers`, `relhassubclass` (le stinge VACUUM — ar da refuz fals,
+      L20; numărul indecșilor, regulilor, triggerelor, copiilor e în plasă); `relacl` (ACL-ul: familia `acl_sistem`, cu grantor);
+    - `pg_proc`: `oid` (identificatorul; funcția e identificată după schema.nume(tipurile argumentelor)); `pronamespace` (înlocuit de numele
+      schemei); `proacl` (ACL-ul: familia `acl_sistem`);
+    - `pg_aggregate`: `aggfnoid` (cheia legăturii cu `pg_proc`; funcția e identificată în plasa funcțiilor).
+    Câmpuri „doar de planificare” nu sunt excluse: `procost`, `prorows` intră (o schimbare a lor dă refuz conservator, recitire);
   - plus **ACL-urile explicite** (`acl_sistem`): proprietarul + ACL-ul celor trei scheme de sistem (`pg_catalog`, `information_schema`,
     `pg_toast`) și fiecare obiect din ele cu ACL **explicit** (`relacl` / `attacl` / `proacl` / `typacl` nenul), cu grantor; relațiile
     TOAST se etichetează după tabelul-părinte (numele lor conține un OID). Un obiect creat după initdb cu ACL explicit apare și aici
@@ -88,8 +109,10 @@ aplicației). Contraexemplul recenzentului din runda 3 — un trigger `BEFORE IN
   initdb** (regula `_RETURN` a unei vederi de la initdb are OID < 16384; `CREATE OR REPLACE VIEW` o rescrie pe loc); **coloanele relațiilor
   de la initdb** dincolo de numărul lor (nume, tip, NOT NULL, stocare — de ex. o redenumire nu se vede; o valoare implicită nouă se vede);
   **tipurile, operatorii, clasele / familiile de operatori, colațiile, conversiile și configurațiile de căutare text de la initdb modificate
-  PE LOC** (de ex. o mapare nouă într-o configurație de căutare de la initdb); **comentariile** (pentru niciun obiect); tot `pg_toast` în
-  afara ACL-urilor explicite (limita 15). Limita 10.
+  PE LOC** (de ex. o mapare nouă într-o configurație de căutare de la initdb); **definiția statisticilor extinse** (pe tabelele de la
+  initdb doar numărul lor, în plasă; nu sunt familie nici pentru aplicație); **comentariile** (pentru niciun obiect); tot `pg_toast` în
+  afara ACL-urilor explicite (limita 15). Din `pg_class` / `pg_proc` / `pg_aggregate` ale obiectelor de la initdb lipsesc DOAR coloanele
+  din lista de excluderi de la (ii). Limita 10.
 
 **Detaliul plasei** (`scripts/amprenta_globala_citire.sh --lista --detalii-plasa <fișier nou>`): în ACEEAȘI fotografie, câte un rând pe
 obiect de la initdb — `plasa TAB identitate TAB md5(campuri) TAB campuri` — din ACEEAȘI definiție (blocul `AG_PLASA v2` = începutul
@@ -166,7 +189,12 @@ valorile calculate cu ciornele rundelor anterioare (de ex. probele coordonatorul
   (valoarea implicită), `amop`, `amproc` (care înainte aveau propria condiție pe 16384); moștenirea pe pereche (oricare capăt);
   `sistem_initdb` are două rânduri (`functii` — reprezentare independentă de build, plus agregatele — și `relatii` — nou), calculate din
   CTE-ul `ag_plasa`, iar blocul `AG_PLASA v2` (începutul blocului catalogului) dă detaliul plasei în citire (`--detalii-plasa`). Lista de
-  familii nu se schimbă (45). În citire: momentul fotografiei se înlocuiește doar în antetul standard (secțiunea 6).
+  familii nu se schimbă (45). În citire: momentul fotografiei se înlocuiește doar în antetul standard (secțiunea 6);
+- runda 5: plasa relațiilor primește limita partiției în forma canonică (`pg_get_expr(relpartbound, oid)`) și coloanele stabile care
+  lipseau (`relisshared`, `relispopulated`, `reloftype`, `relam`, `reltablespace` — ultimele trei după nume); plasa funcțiilor primește
+  `procost`, `prorows`, `pronargs`, `protrftypes`; lista închisă a coloanelor `pg_class` / `pg_proc` / `pg_aggregate` (în plasă sau
+  excluse cu motiv, marcajul `AG_PLASA_COLOANE v2`, secțiunea 2 (ii)). Lista de familii nu se schimbă (45). În citire și în comparator:
+  antetul standard se identifică o singură dată (prima apariție, secțiunea 6).
 O excepție (de ex. o schemă de platformă care se schimbă singură) se face DOAR așa, explicit, ca reducere declarată a garanției.
 
 ## 3. Ce NU acoperă (limite declarate)
@@ -296,12 +324,18 @@ extensiile, versiunea serverului (și cea minoră: deparsarea). Pentru obiectele
    **Momentul fotografiei** (`now()` al tranzacției unice, în forma text a sesiunii) se tipărește O DATĂ, pe rândul `MOMENT` (în afara
    părții revizuite). În secțiunea scriptului migrării se înlocuiește cu marcajul fix `<momentul fotografiei>` **DOAR câmpul identificat
    al antetului standard**: rândul de date de imediat după linia exactă `baza | sistem | versiune | la` (formatul nealiniat al citirii),
-   ultimul câmp, și numai dacă e EXACT momentul. Orice altă apariție a aceluiași șir rămâne (o valoare reală egală întâmplător cu momentul
-   nu devine marcaj: două valori reale diferite nu mai pot da secțiuni normalizate identice); antet absent sau în alt format ⇒ nimic nu se
-   normalizează, iar `--recitire` arată diferența (partea sigură). Comparatorul refuză intrarea (cod 2) doar dacă momentul a rămas
-   neînlocuit în acel câmp. **Forma de antet cerută scripturilor de amprente ale migrărilor viitoare**: prima interogare după `SET LOCAL
-   search_path`, exact `SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS
-   versiune, now() AS la;`. Dintre scripturile existente, cinci au această formă (testul static le numără); **două nu**:
+   ultimul câmp, și numai dacă e EXACT momentul. **Antetul se identifică o singură dată** (runda 5): contează DOAR prima apariție a liniei
+   exacte de antet din secțiunea migrării; o apariție ulterioară (un script care tipărește în date o linie identică cu antetul) e dată
+   obișnuită — ea și rândul de după ea rămân cum sunt și se compară. Orice altă apariție a momentului rămâne și ea: în afara acelui câmp
+   unic, o valoare reală egală întâmplător cu momentul nu devine marcaj, deci două valori reale diferite nu pot da secțiuni normalizate
+   identice prin această înlocuire (testat: coliziunea în date și antetul repetat în date ⇒ `--recitire` 6). Antet absent sau în alt
+   format ⇒ nimic nu se normalizează, iar `--recitire` arată diferența (partea sigură). Comparatorul folosește aceeași regulă (prima
+   apariție) și refuză intrarea (cod 2) doar dacă momentul a rămas neînlocuit în acel câmp. **Forma de antet cerută scripturilor de
+   amprente ale migrărilor viitoare**: antetul de sesiune se tipărește ÎNAINTEA oricărei alte ieșiri de date — prima interogare după `SET
+   LOCAL search_path`, exact `SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version()
+   AS versiune, now() AS la;` (un script care ar tipări altceva înainte cu aceleași nume de coloane și-ar normaliza alt rând; testul static
+   verifică ordinea în cele existente). Dintre scripturile existente, cinci au această formă (testul static le numără și verifică că
+   antetul e prima lor ieșire); **două nu**:
    `scripts/ofertare_inchidere_garda_amprente.sql` și `scripts/intrebari_cercetare_amprente.sql` tipăresc
    `to_char(statement_timestamp(), …)`, pe care mecanismul NU îl normalizează (sunt ale unor migrări deja livrate; o recitire cu ele arată
    momentul ca diferență, de explicat în jurnal). Formatul nealiniat e necesar: în cel aliniat lățimea coloanei depinde de lungimea
@@ -411,6 +445,11 @@ la mărimea reală, pe interogări de probă (aceeași valoare pe clonă și pe 
 se reverifică la citirea de baseline (rândurile `sistem_initdb` identice clonă ↔ țintă). Cifra reală a costului total o dă proba
 cu ROLLBACK pe țintă (pasul 7) și `scripts/test_livrare_l15_v2.sh` (cazul f). Costul rundei 4 trece de pragul de ~2% pe catalogul
 sintetic: **folosirea lui cere acordul coordonatorului** (variantele de reducere sunt în raportul rundei).
+**Runda 5, pe PGlite, același catalog sintetic, de două ori câte 60 de rulări alternate r4 / r5 (mediane):** plasa singură (blocul
+`AG_PLASA` + `SELECT` pe `ag_plasa`) ~17,2 → ~18,1 ms, adică **+0,8 ms** (cost fix: ~337 de relații și ~3.400 de funcții de la initdb,
+nu crește cu aplicația); pe calculul complet diferența se pierde în zgomotul măsurătorii (+0,2 ms și +1,4 ms la două serii, mediane
+~173 ms). Metoda de acces și tablespace-ul se iau prin `LEFT JOIN`, nu prin subinterogări pe fiecare rând (varianta cu subinterogări
+costa încă ~0,3 ms). Cifra reală o dă tot proba cu ROLLBACK pe țintă.
 
 **Recomandare:** pentru livrările cu amprentă globală plafonul rămâne parametrul runnerului; 2000 ms ajunge doar dacă proba pe țintă arată
 `PLAFON_TIMP` ≤ ~1.500 ms (marjă pentru rețea și lock-uri). **20261221a** cere exact `2000/session` (nu se schimbă): calculul „înainte”
@@ -466,9 +505,10 @@ bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261221a_meteo_xw
 |---|---|---|
 | Blocul + pașii pe PGlite: garda; paritate citire ↔ runner; independența de sesiune; etichete unice; temporare / date / nextval / ANALYZE fără efect; **o schimbare minimă pe fiecare familie** (inclusiv obiecte noi în `pg_catalog` — funcție, tabel, operator — prinse de familiile lor; `sistem_initdb`: `quote_nullable … STRICT`; `acl_sistem`: GRANT / REVOKE pe funcții, relații, coloane, tipuri, schema de sistem, tabelul TOAST al unui catalog) + **mutantul** fiecărei familii; **r3:** contraexemplele recenzentului (auxiliar din `pg_catalog` cu DEFAULT schimbat și cu STRICT: poarta își schimbă rezultatul ⇒ GLOBAL diferă, familia `functie`), câte o schimbare minimă pe un tabel, o coloană, un tip și un operator create în `pg_catalog` (familiile lor), **mutantul perimetrului** (fără ramura „creat după initdb” ⇒ nimic prins), plasa pe `quote_nullable … STRICT` (poarta `false → true`, familia `sistem_initdb`) + mutantul plasei fără STRICT, volatilitate / DEFINER / `proconfig` / proprietar pe funcții de la initdb, limita declarată (ALTER pe o relație de la initdb nevăzut); secretele nu apar; contraexemplul vederii; manifestul scris de mână = diferența reală + detaliile (md5(detaliu) = amprenta) + contextul antetului; drumul bun; manifest cu rând lipsă / în plus / altă amprentă / altă operație; DDL nedeclarat; **regula DEFINER** (contraexemplul `pg_temp, public` chiar funcționează; fără `pg_temp` / dublu / `""`; `"$user"`; schemă inexistentă; CREATE direct / prin PUBLIC / prin apartenență; nume între ghilimele; `public, pg_temp` legitim; `--rol-de-incredere`; acceptarea cu md5 corect / greșit / după schimbarea căii / pentru funcție sigură, din afara lanțului, ne-DEFINER, inexistentă) cu **mutant pe fiecare regulă**; **grantorul** pe tabel și pe coloană (+ mutantul fără grantor); OWNED BY (+ mutant); obiectele mari (permutarea ACL); timpi. Nu se pot rula aici: o versiune minoră nouă (`server_version_num`), etichetele de securitate (fără furnizor) | `node scripts/pglite/test_amprenta_globala_local.mjs` | rulat la livrare (PASS) |
 | **r4, pe PGlite:** contraexemplul recenzentului (trigger `BEFORE INSERT` pe `information_schema.sql_features` cu o funcție existentă: `INSERT` întoarce 1 → 0 rânduri ⇒ GLOBAL diferă, familiile `trigger` + `sistem_initdb`); câte un caz minim pe un părinte de la initdb pentru regulă, politică, constrângere pe tabel, constrângere pe domeniu (`information_schema.cardinal_number`), valoare implicită (poziția corectă printre coloane), `amop` / `amproc` pe o familie de la initdb, index nou, moștenire în ambele sensuri — cu poarta reală acolo unde există; **mutantul regulii** (`ag_par` fără ramura „rând atașat după initdb”) ⇒ familia nu se mai schimbă, pe FIECARE caz (indexul: mutantul perimetrului; moștenirea: mutantul fiecărui capăt); mutantul dublu (și fără plasa relațiilor) ⇒ GLOBAL identic, ca în r3; plasa relațiilor: RLS pe un tabel de la initdb ⇒ doar `sistem_initdb` (+ mutant), VACUUM + ANALYZE între citiri (cu `relhastriggers` stins) ⇒ GLOBAL identic; agregatele: `CREATE OR REPLACE AGGREGATE bool_and … INITCOND` (pg_proc identic, poarta null → true) ⇒ `sistem_initdb` (+ mutant); câmpurile OID ale plasei funcțiilor sub 12000 în afara schemei; detaliul plasei recalculat independent = rândurile plasei, două detalii diferite ⇒ exact obiectele schimbate; limita declarată (redenumirea unei coloane de la initdb nevăzută) | `node scripts/pglite/test_amprenta_globala_local.mjs` (secțiunile 11 și 13) | rulat la livrare (PASS) |
-| Comparatorul de liste: fără opțiuni, `--manifest`, `--recitire`, intrări invalide, eticheta cu TAB; mutant pe fiecare regulă; **r3:** două fotografii care diferă doar prin `MOMENT` ⇒ 0 (mutantul cu `MOMENT` în partea revizuită ⇒ 6), și secțiunea diferă ⇒ 6, `MOMENT` lipsă / dublu / neînlocuit ⇒ 2; citirea reală cu un psql simulat (momente de lungimi diferite) ⇒ secțiunea cu marcajul, `--recitire` 0; mutantul citirii fără înlocuire ⇒ refuz; **r4:** coliziunea (aceeași valoare și într-un rând de date ⇒ rămâne; două citiri în care ea diferă ⇒ 6; mutantul cu înlocuirea globală ⇒ 0), momentul în alt format și antetul în alt format ⇒ nenormalizate, 6; `--detalii-plasa`: detaliul scris și recalculat = `RAND`, alt obiect ⇒ diferența îl numește, detaliu nereproductibil ⇒ 1 (mutantul fără verificare ⇒ 0), fără `--lista` / fișier existent ⇒ 2, fără opțiune nimic în plus | `bash scripts/test_l15_compara_liste.sh` (doar bash; rulat și de vitest) | CI + livrare |
+| **r5, pe PGlite:** contraexemplul recenzentului (`information_schema.sql_features` partiție a unui tabel al aplicației, reatașată cu altă limită: `INSERT … RETURNING` eroare → succes ⇒ GLOBAL diferă, doar `sistem_initdb`; **mutantul** plasei fără `relpartbound` ⇒ GLOBAL identic); detaliul plasei arată limita canonică (`FOR VALUES FROM (MINVALUE) TO ('ZZZ')`), fără arborele brut; verificări fără câmp nou: limita unei partiții a **aplicației** e deja în familia `relatie` (+ mutant), cheia de partiționare a părintelui (aplicație) cu o partiție de la initdb e în rândul `relatie` al părintelui; `ALTER FUNCTION … COST` pe o funcție de la initdb ⇒ `sistem_initdb` (+ mutant); **lista închisă**: coloanele `pg_class` / `pg_proc` / `pg_aggregate` ale catalogului real = „în plasă” ∪ „exclusă”, fără rest și fără suprapunere (34 = 17 + 17; 30 = 27 + 3; 22 = 21 + 1), cu mutanții listei (coloană neclasificată, clasificare dublă) | `node scripts/pglite/test_amprenta_globala_local.mjs` (secțiunea 14) | rulat la livrare (PASS) |
+| Comparatorul de liste: fără opțiuni, `--manifest`, `--recitire`, intrări invalide, eticheta cu TAB; mutant pe fiecare regulă; **r3:** două fotografii care diferă doar prin `MOMENT` ⇒ 0 (mutantul cu `MOMENT` în partea revizuită ⇒ 6), și secțiunea diferă ⇒ 6, `MOMENT` lipsă / dublu / neînlocuit ⇒ 2; citirea reală cu un psql simulat (momente de lungimi diferite) ⇒ secțiunea cu marcajul, `--recitire` 0; mutantul citirii fără înlocuire ⇒ refuz; **r4:** coliziunea (aceeași valoare și într-un rând de date ⇒ rămâne; două citiri în care ea diferă ⇒ 6; mutantul cu înlocuirea globală ⇒ 0), momentul în alt format și antetul în alt format ⇒ nenormalizate, 6; `--detalii-plasa`: detaliul scris și recalculat = `RAND`, alt obiect ⇒ diferența îl numește, detaliu nereproductibil ⇒ 1 (mutantul fără verificare ⇒ 0), fără `--lista` / fișier existent ⇒ 2, fără opțiune nimic în plus; **r5:** antetul repetat în date (a doua pereche antet + rând cu momentul ⇒ rândul rămâne, o singură înlocuire; două citiri în care el diferă ⇒ 6, diferența arătată), mutantul citirii (rearmarea la fiecare antet) ⇒ 0, mutantul comparatorului ⇒ 2 (refuz fals), cele 5 scripturi cu antet standard ⇒ `--recitire` 0 | `bash scripts/test_l15_compara_liste.sh` (doar bash; rulat și de vitest) | CI + livrare |
 | Forma runnerului fără PostgreSQL: argumente, `--aprobare`, mesajul unic cu `--l15`, forma fără plafon, `--genereaza-in`, fără opțiuni | `bash scripts/test_livrare_l15_forma.sh` | coordonatorul (cere python3) |
 | Paritatea căii vechi cu main: aceleași fișiere generate, octet cu octet, cu și fără plafon, cu `--aprobare` | `bash scripts/test_livrare_l15_paritate.sh [<ref>]` | coordonatorul (cere python3) |
-| PostgreSQL 17 real: (a) contraexemplul vederii, (b) DDL concurent cu barieră (cu și fără plafon) + control, (c) manifest greșit, (d) drumul bun, (e) fără opțiuni, (f) timpi rece / cald, (g) `--compara-cu`, (h) `--detalii`, (i) DEFINER nesigur / acceptat, (j) grantorul prin runner, **(k) r3: două citiri reale consecutive cu `--amprente-migrare scripts/meteo_xweather_amprente.sql` ⇒ `--recitire` 0**, **(l) r4: triggerul recenzentului creat între două citiri reale ⇒ GLOBAL diferă (familia `trigger`), apoi RLS pe același tabel ⇒ `sistem_initdb`; (m) VACUUM + ANALYZE între două citiri ⇒ GLOBAL identic; (n) `--detalii-plasa` pe două citiri reale, înainte / după `quote_nullable … STRICT` ⇒ diferența = acea funcție** | `bash scripts/test_livrare_l15_v2.sh <slot>` (WSL, ca postgres) | coordonatorul pe clonă |
+| PostgreSQL 17 real: (a) contraexemplul vederii, (b) DDL concurent cu barieră (cu și fără plafon) + control, (c) manifest greșit, (d) drumul bun, (e) fără opțiuni, (f) timpi rece / cald, (g) `--compara-cu`, (h) `--detalii`, (i) DEFINER nesigur / acceptat, (j) grantorul prin runner, **(k) r3: două citiri reale consecutive cu `--amprente-migrare scripts/meteo_xweather_amprente.sql` ⇒ `--recitire` 0**, **(l) r4: triggerul recenzentului creat între două citiri reale ⇒ GLOBAL diferă (familia `trigger`), apoi RLS pe același tabel ⇒ `sistem_initdb`; (m) VACUUM + ANALYZE între două citiri ⇒ GLOBAL identic; (n) `--detalii-plasa` pe două citiri reale, înainte / după `quote_nullable … STRICT` ⇒ diferența = acea funcție**, **(o) r5: contraexemplul partiției între două citiri reale ⇒ GLOBAL diferă, doar `sistem_initdb`, detaliul = `information_schema.sql_features`; lista închisă pe catalogul PG17 (în plus doar `relallfrozen`, coloană PG18)** | `bash scripts/test_livrare_l15_v2.sh <slot>` (WSL, ca postgres) | coordonatorul pe clonă |
 | Regresiile runnerului (neschimbate) | `test_livrare_forma_fin.sh`, `test_livrare_plafon.sh`, `test_portal_e1.sh` (PASS în mediul coordonatorului); `test_sec_rsvti.sh` = regresie **PARȚIALĂ** în mediul coordonatorului: verificarea statică a fluxurilor CI din harness e depășită pe main, iar pasul cu ceasul fix cere o bibliotecă lipsă (n-a rulat) — nu e PASS integral; problemele sunt preexistente, nereparate aici | coordonatorul |
-| Static (CI): bloc ASCII fără backslash, marcaje v2, familii = document, **nicio serializare ACL fără grantor**, perimetrul de sistem, **r4:** regula rândurilor atașate definită o dată (`ag_par`) și folosită de exact cele 7 familii atașate, plasa (câmpurile, independența de build, rândurile din `ag_plasa`, blocul `AG_PLASA` = începutul catalogului), antetul standard același în citire și comparator, cele 5 scripturi cu antet standard / cele 2 fără, `--detalii-plasa`; regula DEFINER în citire, opțiunile manifestului, marcajele de mutant, L15 în LECTII | `src/amprentaGlobalaL15v2.test.js` (vitest) | CI |
+| Static (CI): bloc ASCII fără backslash, marcaje v2, familii = document, **nicio serializare ACL fără grantor**, perimetrul de sistem, **r4:** regula rândurilor atașate definită o dată (`ag_par`) și folosită de exact cele 7 familii atașate, plasa (câmpurile, independența de build, rândurile din `ag_plasa`, blocul `AG_PLASA` = începutul catalogului), antetul standard același în citire și comparator, cele 5 scripturi cu antet standard / cele 2 fără, `--detalii-plasa`; **r5:** limita partiției în plasă în forma canonică, lista `AG_PLASA_COLOANE` (fiecare coloană „în plasă” apare în ramura ei, nicio coloană exclusă nu apare ca valoare, fiecare excludere numită în secțiunea 2 (ii)), antetul identificat o dată în citire și comparator (marcajele de mutant), antetul = prima ieșire în cele 5 scripturi; regula DEFINER în citire, opțiunile manifestului, marcajele de mutant, L15 în LECTII | `src/amprentaGlobalaL15v2.test.js` (vitest) | CI |

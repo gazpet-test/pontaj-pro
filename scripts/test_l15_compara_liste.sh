@@ -309,6 +309,51 @@ grep -q 'inlocuit in sectiunea scriptului migrarii de 0 ori' "$TMP/a1.err" && gr
 ruleaza "$CMP" 6 'antet in alt format: nenormalizat' --a "$TMP/a1" --b "$TMP/a2" --recitire
 echo "   ok: coliziune => 6 (MUTANT inlocuirea globala => 0); alt format al momentului / alt antet => nenormalizat, 6"
 
+echo '6c. r5 (P2): antetul standard identificat O DATA (prima aparitie); o a doua pereche antet + rand in date ramane'
+# cazul recenzentului: dupa antetul legitim, scriptul tipareste in date o linie identica cu antetul, urmata de un rand al
+# carui ultim camp e momentul => randul ramane (valoare reala), doua citiri in care el difera => 6, diferenta aratata
+RDAT=$'baza | sistem | versiune | la\nx | y | z | @M@'
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/u1" "$C1" "$RDAT"
+cit "$ROOT/scripts/amprenta_globala_citire.sh" "$TMP/u2" "$C2" "$RDAT"
+grep -qx "x | y | z | $C1" "$TMP/u1" && grep -qx "postgres | 1 | PostgreSQL 17 | <momentul fotografiei>" "$TMP/u1" \
+  && [ "$(grep -cx 'baza | sistem | versiune | la' "$TMP/u1")" = 2 ] && grep -q 'inlocuit in sectiunea scriptului migrarii de 1 ori' "$TMP/u1.err" \
+  || { cat "$TMP/u1" "$TMP/u1.err"; fail 'antet repetat in date: randul de dupa a doua aparitie trebuia sa ramana (1 inlocuire)'; }
+ruleaza "$CMP" 6 'antet repetat in date: valoarea reala difera intre citiri' --a "$TMP/u1" --b "$TMP/u2" --recitire
+grep -q "x | y | z | $C2" "$TMP/out" || { cat "$TMP/out"; fail 'antet repetat: diferenta nu arata randul de date'; }
+# MUTANTUL citirii: rearmarea la fiecare antet (forma r4) => randul de date devine marcaj in ambele => 0 (diferenta ratata)
+mkdir -p "$TMP/mutantet/scripts"
+cp "$ROOT/scripts/livrare_amprenta.sh" "$ROOT/scripts/amprenta_globala_v2.sql" "$TMP/mutantet/scripts/"
+[ "$(grep -c '# M_CIT_ANTET_UNIC$' "$ROOT/scripts/amprenta_globala_citire.sh")" = 1 ] || fail 'marcajul M_CIT_ANTET_UNIC nu apare exact o data'
+awk -v r='  mig { dupa = ($0 == ant) }   # M_CIT_ANTET_UNIC' '/# M_CIT_ANTET_UNIC$/ { print r; next } { print }' \
+  "$ROOT/scripts/amprenta_globala_citire.sh" >"$TMP/mutantet/scripts/amprenta_globala_citire.sh"
+! cmp -s "$TMP/mutantet/scripts/amprenta_globala_citire.sh" "$ROOT/scripts/amprenta_globala_citire.sh" || fail 'mutantul antetului nu a schimbat citirea'
+cit "$TMP/mutantet/scripts/amprenta_globala_citire.sh" "$TMP/v1" "$C1" "$RDAT"
+cit "$TMP/mutantet/scripts/amprenta_globala_citire.sh" "$TMP/v2" "$C2" "$RDAT"
+grep -q 'inlocuit in sectiunea scriptului migrarii de 2 ori' "$TMP/v1.err" || { cat "$TMP/v1.err"; fail 'mutantul antetului: trebuia sa inlocuiasca de 2 ori'; }
+ruleaza "$CMP" 0 'mutant (rearmarea la fiecare antet): valoarea reala inlocuita, diferenta ratata - de aceea pica' --a "$TMP/v1" --b "$TMP/v2" --recitire
+# comparatorul e consecvent cu citirea: MUTANTUL lui (rearmarea la fiecare antet) refuza fals iesirea reala (2)
+[ "$(grep -c '# M_CMP_ANTET_UNIC$' "$CMP")" = 1 ] || fail 'marcajul M_CMP_ANTET_UNIC nu apare exact o data'
+awk -v r='    mig { print > (p ".mig"); if (dupa) ml[++nl] = $0; dupa = ($0 == ant); next }   # M_CMP_ANTET_UNIC' \
+  '/# M_CMP_ANTET_UNIC$/ { print r; next } { print }' "$CMP" >"$TMP/mutant_cmp_antet.sh"
+! cmp -s "$TMP/mutant_cmp_antet.sh" "$CMP" || fail 'mutantul comparatorului nu a schimbat nimic'
+ruleaza "$TMP/mutant_cmp_antet.sh" 2 'mutant comparator (rearmarea la fiecare antet): refuz fals al citirii reale' --a "$TMP/u1" --b "$TMP/u2" --recitire
+# cele 5 scripturi de amprente cu antetul standard: doua citiri (simulate) cu fiecare => --recitire 0, o inlocuire
+STD='SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;'
+N5=0
+for f in "$ROOT"/scripts/*_amprente.sql; do
+  grep -qxF "$STD" "$f" || continue
+  N5=$((N5 + 1)); b="$(basename "$f" .sql)"
+  for i in 1 2; do
+    mm="$C1"; [ "$i" = 1 ] || mm="$C2"; rc=0
+    PSQL_BIN="$FP" SIM_MOMENT="$mm" bash "$ROOT/scripts/amprenta_globala_citire.sh" --tinta-host h --tinta-port 5432 --tinta-db postgres --tinta-sistem 1 \
+      --user postgres --lista --amprente-migrare "$f" >"$TMP/s5_${b}_$i" 2>"$TMP/s5_${b}_$i.err" || rc=$?
+    [ "$rc" = 0 ] && grep -q 'inlocuit in sectiunea scriptului migrarii de 1 ori' "$TMP/s5_${b}_$i.err" || { cat "$TMP/s5_${b}_$i.err"; fail "$b: citirea simulata"; }
+  done
+  ruleaza "$CMP" 0 "$b: doua citiri" --a "$TMP/s5_${b}_1" --b "$TMP/s5_${b}_2" --recitire
+done
+[ "$N5" = 5 ] || fail "scripturile cu antetul standard: $N5 (asteptat 5)"
+echo "   ok: antet repetat in date => ramane, 6 (MUTANT citire => 0; MUTANT comparator => 2); cele $N5 scripturi cu antet standard => 0"
+
 echo '7. --detalii-plasa: detaliul plasei sistem_initdb, in aceeasi fotografie, verificat fata de randurile RAND'
 citp() { # <script> <iesire> <fisier detaliu> [VAR=valoare ...] [-- optiuni] => codul pe stdout
   local s="$1" o="$2" d="$3" rc=0; shift 3

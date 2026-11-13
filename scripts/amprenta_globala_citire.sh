@@ -383,7 +383,9 @@ fi
 # partii revizuite). In sectiunea scriptului migrarii se inlocuieste cu marcajul fix "<momentul fotografiei>" DOAR campul
 # identificat al antetului standard (forma ceruta scripturilor de amprente: primul SELECT = current_database() AS baza,
 # system_identifier AS sistem, version() AS versiune, now() AS la): randul de date de IMEDIAT dupa linia exacta
-# "baza | sistem | versiune | la", ultimul camp (dupa ultimul separator " | "), numai daca e EXACT momentul. Orice alta
+# "baza | sistem | versiune | la", ultimul camp (dupa ultimul separator " | "), numai daca e EXACT momentul. Antetul se
+# identifica O DATA: doar PRIMA aparitie a liniei exacte in sectiune (scripturile tiparesc antetul de sesiune inaintea
+# oricarei alte iesiri); o aparitie ulterioara e data obisnuita (ramane si se compara), la fel randul de dupa ea. Orice alta
 # aparitie a aceluiasi sir ramane (o valoare reala egala intamplator cu momentul nu devine marcaj); nimic altceva nu se
 # normalizeaza (de ex. to_char(statement_timestamp(), ...) din scripturile mai vechi ramane cum e).
 tr -d '\r' <"$W/iesire.txt" >"$W/iesire_lf.txt"
@@ -391,11 +393,11 @@ tr -d '\r' <"$W/iesire.txt" >"$W/iesire_lf.txt"
 AG_MOMENT="$(awk -F'\t' '$1 == "MOMENT" { print $4 }' "$W/iesire_lf.txt")"
 [ -n "$AG_MOMENT" ] || { cat "$W/iesire_lf.txt"; echo "[x] randul MOMENT gol" >&2; exit 1; }
 AG_MOMENT="$AG_MOMENT" AG_NR="$W/nr_moment" awk '
-  BEGIN { m = ENVIRON["AG_MOMENT"]; mk = "<momentul fotografiei>"; suf = " | " m; ls = length(suf); ant = "baza | sistem | versiune | la"; mig = 0; dupa = 0; n = 0 }
-  index($0, "=== scriptul de amprente al migrarii ") == 1 { mig = 1; dupa = 0; print; next }
+  BEGIN { m = ENVIRON["AG_MOMENT"]; mk = "<momentul fotografiei>"; suf = " | " m; ls = length(suf); ant = "baza | sistem | versiune | la"; mig = 0; dupa = 0; va = 0; n = 0 }
+  index($0, "=== scriptul de amprente al migrarii ") == 1 { mig = 1; dupa = 0; va = 0; print; next }
   $0 == "=== sfarsit scriptul de amprente al migrarii ===" { mig = 0; dupa = 0; print; next }
   mig && dupa && length($0) > ls && substr($0, length($0) - ls + 1) == suf { $0 = substr($0, 1, length($0) - ls) " | " mk; n++ }   # M_CIT_MOMENT
-  mig { dupa = ($0 == ant) }
+  mig { dupa = (!va && $0 == ant); if (dupa) va = 1 }   # M_CIT_ANTET_UNIC
   { print }
   END { print n > ENVIRON["AG_NR"] }
 ' "$W/iesire_lf.txt" >"$W/iesire_norm.txt"

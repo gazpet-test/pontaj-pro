@@ -52,12 +52,13 @@ parse() {
   : >"$2.rand"; : >"$2.ctx"; : >"$2.rev"; : >"$2.mig"
   tr -d '\r' <"$1" | awk -F'\t' -v p="$2" '
     function md5ok(x) { return length(x) == 32 && x ~ /^[0-9a-f]+$/ }
-    BEGIN { mig = 0; nb = 0; ne = 0; ng = 0; nv = 0; nf = 0; nc = 0; nr = 0; gn = -1; nrau = 0; nm = 0; mom = ""; nl = 0; dupa = 0
+    BEGIN { mig = 0; nb = 0; ne = 0; ng = 0; nv = 0; nf = 0; nc = 0; nr = 0; gn = -1; nrau = 0; nm = 0; mom = ""; nl = 0; dupa = 0; va = 0
             ant = "baza | sistem | versiune | la" }
-    index($0, "=== scriptul de amprente al migrarii ") == 1 { if (mig || nb) prob("marcaj de inceput repetat"); mig = 1; nb++; dupa = 0; print > (p ".mig"); next }
+    index($0, "=== scriptul de amprente al migrarii ") == 1 { if (mig || nb) prob("marcaj de inceput repetat"); mig = 1; nb++; dupa = 0; va = 0; print > (p ".mig"); next }
     $0 == "=== sfarsit scriptul de amprente al migrarii ===" { if (!mig) prob("marcaj de sfarsit fara inceput"); mig = 0; ne++; print > (p ".mig"); next }
-    # ml = randurile de date de imediat dupa antetul standard (campul momentului: ultimul, dupa " | ")
-    mig { print > (p ".mig"); if (dupa) ml[++nl] = $0; dupa = ($0 == ant); next }
+    # ml = randul de date de imediat dupa antetul standard (campul momentului: ultimul, dupa " | "); antetul = DOAR prima
+    # aparitie a liniei exacte in sectiune (ca in citire); o aparitie ulterioara e data obisnuita
+    mig { print > (p ".mig"); if (dupa) ml[++nl] = $0; dupa = (!va && $0 == ant); if (dupa) va = 1; next }   # M_CMP_ANTET_UNIC
     # MOMENT: momentul fotografiei, in afara partii revizuite (nu intra in .rev / .mig)
     $1 == "MOMENT" && NF == 5 { nm++; mom = $4; if (mom == "") prob("MOMENT gol"); next }   # M_MOMENT
     $1 == "RAND" && NF >= 5 {

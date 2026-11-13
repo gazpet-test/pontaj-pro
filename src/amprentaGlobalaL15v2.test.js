@@ -160,6 +160,42 @@ describe('AMPRENTA_GLOBALA v2 — blocul unic (L19)', () => {
     expect(ramura('sistem_initdb')).toContain('FROM ag_plasa x')
     expect((CAT.match(/FROM ag_plasa x/g) || []).length).toBe(1)
   })
+  it('r5 (P1): limita partitiei in plasa relatiilor (forma canonica); lista inchisa a coloanelor pg_class / pg_proc / pg_aggregate', () => {
+    const PL = sectiune(BLOC, 'AG_PLASA v2')
+    const sel = (de, pana) => { const i = PL.indexOf(de), j = PL.indexOf(pana, i); expect(i >= 0 && j > i, de).toBe(true); return PL.slice(i, j) }
+    // R = lista de valori a ramurii (pana la FROM); B = ramura intreaga (cu FROM-ul: metoda de acces / tablespace prin LEFT JOIN)
+    const R = { pg_class: sel("SELECT 'relatii'", 'FROM pg_class c JOIN ag_per s'), pg_proc: sel("SELECT 'functii'", 'FROM pg_proc p JOIN ag_per s') }
+    R.pg_aggregate = R.pg_proc.slice(R.pg_proc.indexOf("CASE WHEN p.prokind = 'a'"))
+    const B = { ...R, pg_class: sel("SELECT 'relatii'", '     WHERE c.oid < s.prag\n)') }
+    expect(R.pg_class).toContain('pg_get_expr(c.relpartbound, c.oid)')
+    expect(R.pg_class).not.toMatch(/c\.relpartbound(?!, c\.oid\))/)   // arborele brut nu intra (contine pozitii)
+    for (const c of ['c.relisshared, c.relispopulated', 'CASE WHEN c.reloftype <> 0 THEN c.reloftype::regtype::text END', 'am.amname, ts.spcname,'])
+      expect(R.pg_class, c).toContain(c)
+    expect(B.pg_class).toContain('LEFT JOIN pg_am am ON am.oid = c.relam LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace')
+    expect(R.pg_proc).toContain('p.procost, p.prorows, p.pronargs, p.protrftypes,')
+    // lista (o singura definitie, in afara blocurilor executate): o linie pe coloana, fara dubluri
+    const LC = sectiune(BLOC, 'AG_PLASA_COLOANE v2')
+    expect(LC).not.toBeNull()
+    expect(CAT.includes('-- >>> AG_PLASA_COLOANE') || /^-- pg_(class|proc|aggregate) /m.test(CAT)).toBe(false)   // lista e in afara blocului rulat
+    const ln = LC.split('\n').filter(l => /^-- pg_(class|proc|aggregate) /.test(l))
+    const cl = ln.map(l => l.match(/^-- (pg_class|pg_proc|pg_aggregate) ([a-z]+) (plasa|exclus [^ ].*)$/))
+    expect(cl.every(Boolean)).toBe(true)
+    const chei = cl.map(m => m[1] + '.' + m[2])
+    expect(new Set(chei).size).toBe(chei.length)
+    const AL = { pg_class: 'c', pg_proc: 'p', pg_aggregate: 'g' }
+    const CHEI = ['pg_class.oid', 'pg_proc.oid', 'pg_aggregate.aggfnoid']   // folosite doar la cautari (legaturi), nu ca valori
+    const refera = (X, cat, col) => new RegExp(`\\b${AL[cat]}\\.${col}\\b`).test(X[cat].replace(/--.*$/gm, ''))
+    for (const [, cat, col, k] of cl) {
+      if (k === 'plasa') expect(refera(B, cat, col), `${cat}.${col} plasa`).toBe(true)
+      else if (!CHEI.includes(`${cat}.${col}`)) expect(refera(R, cat, col), `${cat}.${col} exclus`).toBe(false)
+    }
+    // in ramura relatii nu apare nicio coloana c.rel* neclasificata ca plasa (si invers, mai sus)
+    const folosite = [...new Set((R.pg_class.replace(/--.*$/gm, '').match(/\bc\.rel[a-z]+/g) || []).map(x => x.slice(2)))]
+    expect(folosite.filter(x => !cl.some(m => m[1] === 'pg_class' && m[2] === x && m[3] === 'plasa'))).toEqual([])
+    // documentul, sectiunea 2 (ii): fiecare coloana exclusa, numita
+    const D2 = DOC.slice(DOC.indexOf('**(ii) din obiectele de la initdb**'), DOC.indexOf('- **(iii)'))
+    for (const m of cl.filter(m => m[3] !== 'plasa')) expect(D2.includes('`' + m[2] + '`'), `document: ${m[1]}.${m[2]}`).toBe(true)
+  })
   it('v2: secventele cu legatura OWNED BY / identity, baza cu server_version_num, obiectele mari cate unul', () => {
     expect(CAT).toContain("d.deptype IN ('a', 'i')")
     expect(ramura('baza')).toContain("current_setting('server_version_num')")
@@ -209,9 +245,15 @@ describe('citirea coordonatorului — regula DEFINER si CONTEXT', () => {
     const linie = CIT.split('\n').find(l => l.endsWith('# M_CIT_MOMENT'))
     expect(linie).toContain('mig && dupa && length($0) > ls && substr($0, length($0) - ls + 1) == suf')
     expect(CIT).toContain('suf = " | " m')
-    expect(CIT).toContain('mig { dupa = ($0 == ant) }')
+    // r5: antetul = DOAR prima aparitie a liniei exacte din sectiune (citire si comparator), cu marcaj de mutant pe fiecare
+    expect(CIT.split('\n').find(l => l.endsWith('# M_CIT_ANTET_UNIC'))).toContain('mig { dupa = (!va && $0 == ant); if (dupa) va = 1 }')
+    expect(CIT).not.toContain('mig { dupa = ($0 == ant) }')
+    expect((CIT.match(/# M_CIT_ANTET_UNIC$/gm) || []).length).toBe(1)
+    expect(CIT).toContain('{ mig = 1; dupa = 0; va = 0; print; next }')
     expect(CIT).not.toContain('while ((i = index(s, m)) > 0)')   // inlocuirea globala din r3 a iesit
-    expect(CMP).toContain('if (dupa) ml[++nl] = $0; dupa = ($0 == ant)')
+    expect(CMP.split('\n').find(l => l.endsWith('# M_CMP_ANTET_UNIC'))).toContain('if (dupa) ml[++nl] = $0; dupa = (!va && $0 == ant); if (dupa) va = 1; next }')
+    expect((CMP.match(/# M_CMP_ANTET_UNIC$/gm) || []).length).toBe(1)
+    expect(CMP).toContain('mig = 1; nb++; dupa = 0; va = 0;')
     // scripturile de amprente existente: cinci cu antetul standard (normalizat), doua cu to_char(statement_timestamp()) (nu)
     const STD = 'SELECT current_database() AS baza, (SELECT system_identifier FROM pg_control_system()) AS sistem, version() AS versiune, now() AS la;'
     const dir = fileURLToPath(new URL('../scripts/', import.meta.url))
@@ -219,6 +261,14 @@ describe('citirea coordonatorului — regula DEFINER si CONTEXT', () => {
     const std = toate.filter(f => citeste('scripts/' + f).split('\n').includes(STD))
     const vechi = toate.filter(f => !std.includes(f))
     expect(std.length).toBe(5)
+    // r5: in cele 5, antetul e PRIMA iesire de date (inaintea lui doar comentarii, \set, BEGIN, SET LOCAL) si apare o data
+    const INAINTE = ['\\set ON_ERROR_STOP 1', 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;', 'SET LOCAL search_path = public, pg_temp;']
+    for (const f of std) {
+      const ls = citeste('scripts/' + f).split('\n').map(l => l.replace(/\r$/, ''))
+      const i = ls.indexOf(STD)
+      expect(ls.filter(l => l === STD).length, f).toBe(1)
+      expect(ls.slice(0, i).filter(l => l.trim() !== '' && !l.startsWith('--')).every(l => INAINTE.includes(l)), f).toBe(true)
+    }
     expect(vechi).toEqual(['intrebari_cercetare_amprente.sql', 'ofertare_inchidere_garda_amprente.sql'])
     for (const f of vechi) {
       expect(citeste('scripts/' + f)).toContain('to_char(statement_timestamp()')

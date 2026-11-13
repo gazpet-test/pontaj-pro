@@ -32,7 +32,10 @@
 #   m  (r4) VACUUM + ANALYZE intre doua citiri, dupa un trigger creat si sters (steagul lenes relhastriggers ramas aprins,
 #      stins de VACUUM) => GLOBAL identic;
 #   n  (r4) --detalii-plasa pe doua citiri reale, inainte / dupa ALTER FUNCTION pg_catalog.quote_nullable(text) STRICT:
-#      citirea reproduce randurile plasei din detaliu (cod 0), iar diferenta celor doua detalii arata exact acea functie.
+#      citirea reproduce randurile plasei din detaliu (cod 0), iar diferenta celor doua detalii arata exact acea functie;
+#   o  (r5) contraexemplul recenzentului: information_schema.sql_features partitie a unui tabel al aplicatiei, reatasata cu alta
+#      limita intre doua citiri reale (INSERT ... RETURNING: eroare -> succes) => GLOBAL difera, doar sistem_initdb, detaliul
+#      plasei arata acel tabel; lista inchisa a coloanelor pg_class / pg_proc / pg_aggregate pe catalogul PG17.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SLOT="${1:-0}"; [[ "$SLOT" =~ ^[0-9]$ ]] || { echo 'MEDIU: slot 0-9'; exit 2; }
@@ -293,6 +296,38 @@ DIF_N="$(diff <(cut -f1-3 "$TMP/n1.tsv") <(cut -f1-3 "$TMP/n2.tsv") | grep '^[<>
   || { printf '%s\n' "$DIF_N"; fail 'n: diferenta detaliilor trebuia sa arate exact pg_catalog.quote_nullable(25)'; }
 echo "L15_N: --detalii-plasa: $(grep -c . "$TMP/n1.tsv") obiecte, reproduce randurile plasei; diferenta = pg_catalog.quote_nullable(25)"
 
+# o. r5 (P1): contraexemplul recenzentului pe PG17 - o partitie de la initdb reatasata cu alta limita intre doua citiri reale;
+#    apoi lista inchisa a coloanelor plasei pe catalogul PG17 (fiecare coloana a pg_class / pg_proc / pg_aggregate clasificata).
+ins_o() { qa "BEGIN; INSERT INTO public.l15_partition_probe (feature_id) VALUES ('ZZZZ') RETURNING feature_id; ROLLBACK" 2>&1 || true; }
+fam_o() { awk -F'\t' '$1 == "FAMILIE" { print $2 "\t" $4 }' "$1"; }
+qa 'CREATE TABLE public.l15_partition_probe (LIKE information_schema.sql_features) PARTITION BY RANGE (feature_id)' >/dev/null
+qa "ALTER TABLE public.l15_partition_probe ATTACH PARTITION information_schema.sql_features FOR VALUES FROM (MINVALUE) TO ('ZZZ')" >/dev/null
+INS_O0="$(ins_o)"
+grep -q 'no partition of relation' <<<"$INS_O0" || { printf '%s\n' "$INS_O0"; fail 'o: INSERT-ul trebuia sa pice inainte (23514)'; }
+citeste_pl "$TMP/o1.tsv"
+qa 'ALTER TABLE public.l15_partition_probe DETACH PARTITION information_schema.sql_features' >/dev/null
+qa 'ALTER TABLE public.l15_partition_probe ATTACH PARTITION information_schema.sql_features FOR VALUES FROM (MINVALUE) TO (MAXVALUE)' >/dev/null
+[[ "$(ins_o)" == ZZZZ ]] || { ins_o; fail 'o: INSERT ... RETURNING trebuia sa treaca dupa reatasare (proba nu dovedeste nimic)'; }
+citeste_pl "$TMP/o2.tsv"
+G_O1="$(awk -F'\t' '$1 == "GLOBAL" {print $4}' "$TMP/o1.tsv.out")"; G_O2="$(awk -F'\t' '$1 == "GLOBAL" {print $4}' "$TMP/o2.tsv.out")"
+[[ -n "$G_O1" && "$G_O1" != "$G_O2" ]] || fail 'o: GLOBAL identic dupa reatasarea partitiei cu alta limita (P1 r4)'
+FAM_O="$( { diff <(fam_o "$TMP/o1.tsv.out") <(fam_o "$TMP/o2.tsv.out") || true; } | { grep '^[<>]' || true; } | cut -c3- | cut -f1 | sort -u | tr '\n' ' ')"
+[[ "$FAM_O" == 'sistem_initdb ' ]] || fail "o: familiile schimbate [$FAM_O] (asteptat doar sistem_initdb)"
+DIF_O="$(diff <(cut -f1-3 "$TMP/o1.tsv") <(cut -f1-3 "$TMP/o2.tsv") | grep '^[<>]' || true)"
+[[ "$(printf '%s\n' "$DIF_O" | grep -c .)" == 2 && "$(printf '%s\n' "$DIF_O" | grep -c 'relatii.information_schema.sql_features')" == 2 ]] \
+  || { printf '%s\n' "$DIF_O"; fail 'o: diferenta detaliilor trebuia sa arate exact information_schema.sql_features'; }
+grep -F "information_schema.sql_features" "$TMP/o1.tsv" | grep -qF "FOR VALUES FROM (MINVALUE) TO ('ZZZ')" || fail 'o: limita canonica lipseste din detaliul plasei'
+qa 'ALTER TABLE public.l15_partition_probe DETACH PARTITION information_schema.sql_features' >/dev/null
+qa 'DROP TABLE public.l15_partition_probe' >/dev/null
+# lista inchisa pe PG17: fiecare coloana a catalogului e clasificata; in lista, in plus fata de PG17, doar coloanele PG18 numite
+LST_O="$(tr -d '\r' <"$ROOT/scripts/amprenta_globala_v2.sql" | awk '$0 == "-- <<< AG_PLASA_COLOANE v2" { p = 0 } p && $2 ~ /^pg_(class|proc|aggregate)$/ { print $2 "." $3 } $0 == "-- >>> AG_PLASA_COLOANE v2" { p = 1 }' | sort)"
+COL_O="$(qa "SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.oid IN ('pg_catalog.pg_class'::regclass, 'pg_catalog.pg_proc'::regclass, 'pg_catalog.pg_aggregate'::regclass) AND a.attnum > 0 AND NOT a.attisdropped" | sort)"
+REST_O="$(comm -23 <(printf '%s\n' "$COL_O") <(printf '%s\n' "$LST_O") | tr '\n' ' ')"
+PLUS_O="$(comm -13 <(printf '%s\n' "$COL_O") <(printf '%s\n' "$LST_O") | tr '\n' ' ')"
+DUBL_O="$(printf '%s\n' "$LST_O" | uniq -d | tr '\n' ' ')"
+[[ -z "$REST_O" && -z "$DUBL_O" && "$PLUS_O" == 'pg_class.relallfrozen ' ]] || fail "o: lista inchisa pe PG17: neclasificate [$REST_O], dubluri [$DUBL_O], in plus [$PLUS_O] (asteptat doar pg_class.relallfrozen, PG18)"
+echo "L15_O: partitia de la initdb reatasata cu alta limita (INSERT 23514 -> ZZZZ) => GLOBAL difera, doar sistem_initdb, detaliul = information_schema.sql_features; lista inchisa: $(printf '%s\n' "$COL_O" | grep -c .) coloane PG17 clasificate (in plus doar relallfrozen, PG18)"
+
 # j. Contraexemplul grantorului pe PG17, prin runner: transferul g1 -> g2 dupa citire => refuz la „inainte”.
 qa "CREATE ROLE g1; CREATE ROLE g2; CREATE ROLE r_gr; CREATE TABLE public.t_gr (id int); ALTER TABLE public.t_gr OWNER TO postgres;
 GRANT SELECT ON public.t_gr TO g1, g2 WITH GRANT OPTION; SET ROLE g1; GRANT SELECT ON public.t_gr TO r_gr; RESET ROLE;" >/dev/null
@@ -328,4 +363,4 @@ timp() { # $1 eticheta, $2 numele migrarii, $3 versiunea
 }
 timp rece 20990204a_l15_timp_rece 20990204000001
 timp cald 20990204b_l15_timp_cald 20990204000002
-echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, k recitirea reala, l triggerul / RLS pe un tabel de la initdb, m VACUUM / ANALYZE, n detaliul plasei, f timpii (mai sus)'
+echo 'PASS test_livrare_l15_v2: a contraexemplul vederii (inainte), b DDL concurent cu bariera (dupa, cu si fara plafon), c manifest gresit, d drumul bun, e fara optiuni, g proba --compara-cu, h --detalii, i DEFINER nesigur / acceptat, j grantorul, k recitirea reala, l triggerul / RLS pe un tabel de la initdb, m VACUUM / ANALYZE, n detaliul plasei, o limita partitiei de la initdb + lista inchisa, f timpii (mai sus)'
