@@ -182,7 +182,8 @@ Cu `XW_ZILNIC_ACTIV` oprit:
 
 **Treapta II — vremea zilei în rapoarte:**
 
-1. Se aplică migrarea `20261221a` (fișierul cu amprenta fixată, neschimbat în r5).
+1. Se aplică migrarea `20261221a` (fișierul cu amprenta fixată, neschimbat în r5) — doar prin runnerul cu amprenta globală; citirea,
+   manifestul, probele de pe clonă și ce rămâne de făcut pe țintă: `docs/METEO_XWEATHER_LIVRARE_20261221a.md`.
 2. Se pune `XW_ZILNIC_ACTIV=1`.
 3. Prima rulare de la 04:05 UTC. Se verifică în `net._http_response`:
    - `status_code` 200 (toate zilele cerute salvate) sau 207 (parțial: plafon / gardă / termen / 5xx). La prima activare e de așteptat 207, din cauza umplerii inițiale (abaterea A + fereastra);
